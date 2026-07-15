@@ -359,6 +359,16 @@ setup_integration_worktree() {
 }
 setup_integration_worktree
 BASE="$INTEGRATION"   # lanes cut from + merge into integration (all existing lane code unchanged)
+
+# ── gate cadence: cheap per-lane gate lands on integration; the AUTHORITATIVE full
+# gate (full_gate/certify_batch) runs every $FULL_GATE_EVERY CYCLES *or* the moment
+# no pending work remains, whichever comes first. Master advances ONLY to a
+# full-gate-certified sha ($LAST_FULL_GREEN). $BATCH = items cheap-landed but not yet
+# certified (kept claimed; closed on full-green, re-queued on full-red).
+FULL_GATE_EVERY="${PROGDEV_FULL_GATE_EVERY:-10}"   # cycles between full gates
+LAST_FULL_GREEN="$(git -C "$GATE_WT" rev-parse HEAD)"   # == $MASTER at start (setup reset integration to it)
+CYCLES_SINCE_FULL=0
+BATCH=()
 mkdir -p "$(dirname "$QUEUE")"; touch "$QUEUE"
 log "start: master=$MASTER integration=$INTEGRATION start=$START_SHA max_cycles=$MAX_CYCLES lanes=$LANES"
 
@@ -374,13 +384,14 @@ resync_integration() {   # cycle START: pull any human commits on $MASTER into i
     [ "$rc" -eq 0 ] || log "resync: $MASTER conflicts with integration (human overlap) — skipping cycle"
     return "$rc"
 }
-advance_master() {   # cycle END: fast-forward $MASTER to integration (never disturbs the human)
+advance_master() {   # fast-forward $MASTER to the LAST FULL-GATE-CERTIFIED sha (never uncertified integration HEAD)
+    [ -n "$LAST_FULL_GREEN" ] || return 0
     ( flock 9
       local head; head="$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null)"
       if [ "$head" = "$MASTER" ]; then
-          git -C "$REPO" merge --ff-only "$INTEGRATION" >/dev/null 2>&1    # ff keeps the human's uncommitted non-overlapping edits
+          git -C "$REPO" merge --ff-only "$LAST_FULL_GREEN" >/dev/null 2>&1    # ff keeps the human's uncommitted non-overlapping edits
       else
-          git -C "$REPO" push --quiet . "$INTEGRATION:$MASTER" >/dev/null 2>&1   # $MASTER not checked out → advance the ref only, ff-only
+          git -C "$REPO" push --quiet . "$LAST_FULL_GREEN:$MASTER" >/dev/null 2>&1   # $MASTER not checked out → advance the ref only, ff-only
       fi
     ) 9>"$MERGE_LOCK" \
       && log "advance: $MASTER ← integration (ff)" \
@@ -549,7 +560,7 @@ lane_author() {
     # IMPL — in the lane worktree, own cargo target
     phase impl opus
     ( cd "$gwt"; CARGO_TARGET_DIR="$tgt" \
-      agent "$AUTHOR_MODEL" "You are the IMPLEMENTER. READ the DESIGN plan at $dfile FIRST, then follow it EXACTLY — do NOT redesign or deviate from it. Obey the operating contract (6 principles + 2 rules + the seal). Item: $gdesc .$(resume_hint "$gdesc") Boundary: the Rust-port crates + runtime; ../sky is READ-ONLY. Implement the fix + the regression test the design names. SELF-CHECK (do NOT run the full workspace test suite — the integration gate runs that once): (1) 'cargo clippy --workspace --all-targets -- -D warnings' is clean; (2) 'cargo build -p skyc', then rebuild the failing example and confirm its ORIGINAL diagnostic is GONE. Iterate until BOTH pass (cap ~3 tries). Then 'git add -A && git commit'. Final line: 'IMPL: DONE' or 'IMPL: STUCK <why>'." ) >"$glog" 2>&1
+      agent "$AUTHOR_MODEL" "You are the IMPLEMENTER. READ the DESIGN plan at $dfile FIRST, then follow it EXACTLY — do NOT redesign or deviate from it. Obey the operating contract (6 principles + 2 rules + the seal). Item: $gdesc .$(resume_hint "$gdesc") Boundary: the Rust-port crates + runtime; ../sky is READ-ONLY. Implement the fix + the regression test the design names. SELF-CHECK (do NOT run the full workspace test suite — the integration gate runs that once): (1) 'cargo clippy --workspace --all-targets -- -D warnings' is clean; (2) 'cargo build -p skyc', then rebuild the failing example and confirm its ORIGINAL diagnostic is GONE; (3) if your fix LEGITIMATELY changes the emitted Rust for an EXISTING golden (a tests/golden/** byte-identical assertion now fails BECAUSE your codegen change is correct — not a regression), REGENERATE that golden's oracle with 'cargo run -p refresh-oracle -- <golden_name>' and include the refreshed files in the commit — NEVER hand-edit oracle.meta / expected_go.txt, and refresh ONLY the goldens your change explains (never blanket-refresh; a stale un-refreshed golden red-gates, a wrongly-refreshed one hides a regression the reviewer will REJECT). Iterate until all pass (cap ~3 tries). Then 'git add -A && git commit'. Final line: 'IMPL: DONE' or 'IMPL: STUCK <why>'." ) >"$glog" 2>&1
     ahead="$(git rev-list --count "$BASE..$gbr" 2>/dev/null || echo 0)"
     if [ "$ahead" -eq 0 ]; then
         printf 'NOCOMMIT impl no-commit. notes: %s\n' "$(tail -10 "$glog" 2>/dev/null | tr '\n' ' ' | cut -c1-300)" > "$res"; return 0
@@ -558,7 +569,7 @@ lane_author() {
     # REVIEW — adversarial, in the lane worktree, own cargo target
     phase review opus
     review="$( ( cd "$gwt"; CARGO_TARGET_DIR="$tgt" \
-      agent "$REVIEW_MODEL" "You are an ADVERSARIAL reviewer of a $class change on branch $gbr (diff: git diff $BASE..$gbr). REFUTE it — $(reviewer_angle "$class"). Read the diff + the added tests, THEN VERIFY WITH YOUR OWN HANDS: build skyc from THIS branch and cargo-build your OWN probe programs — confirm skyc-exit-0 ⇒ cargo-exit-0 (THE SEAL) yourself. The impl's self-report is NOT evidence (a fix can report green while a buried guard disabled it, or while it emits skyc-0-then-cargo-fail on a shape the impl never tested). Cache-hits on unchanged code are fine — recompiling identical source is zero-signal; integrity comes from RUNNING the committed source + your probes. If you find ANY unsoundness / behaviour change vs the ../sky reference / disguised hack / skyc-0-then-cargo-fail, print 'REVIEW: REJECT <why + the exact repro>'. Only if you cannot break it after genuine effort, print 'REVIEW: ACCEPT'. Default to REJECT when uncertain." ) | tee "$rlog")"
+      agent "$REVIEW_MODEL" "You are an ADVERSARIAL reviewer of a $class change on branch $gbr (diff: git diff $BASE..$gbr). REFUTE it — $(reviewer_angle "$class"). Read the diff + the added tests, THEN VERIFY WITH YOUR OWN HANDS: build skyc from THIS branch and cargo-build your OWN probe programs — confirm skyc-exit-0 ⇒ cargo-exit-0 (THE SEAL) yourself. The impl's self-report is NOT evidence (a fix can report green while a buried guard disabled it, or while it emits skyc-0-then-cargo-fail on a shape the impl never tested). Cache-hits on unchanged code are fine — recompiling identical source is zero-signal; integrity comes from RUNNING the committed source + your probes. If the diff REFRESHES any golden (tests/golden/**, oracle.meta / expected_go.txt), that refresh is AUTHORISED only when it contains ONLY the emit deltas THIS codegen change explains — inspect the refreshed bytes yourself and REJECT if a golden refresh hides an unrelated change, silences a real regression, or looks blanket-regenerated. If you find ANY unsoundness / behaviour change vs the ../sky reference / disguised hack / skyc-0-then-cargo-fail / illegitimate golden refresh, print 'REVIEW: REJECT <why + the exact repro>'. Only if you cannot break it after genuine effort, print 'REVIEW: ACCEPT'. Default to REJECT when uncertain." ) | tee "$rlog")"
     if ! printf '%s' "$review" | rg -q 'REVIEW: ACCEPT'; then
         printf 'REJECT review REJECT: %s\n' "$(reason_of "$review")" > "$res"; return 0
     fi
@@ -569,40 +580,78 @@ lane_author() {
 # on the shared checkout (single-writer): merge → nextest+doc+clippy+fuzz → close
 # or revert. A merge CONFLICT (this lane was cut from the pre-cycle base and an
 # earlier lane advanced HEAD into the same files) → abort + requeue, no attempt burned.
+# lane_gate <i> — per-lane CHEAP gate (fast): merge the lane into integration, then
+# build skyc + run ONLY the touched crates' tests + clippy. A cheap-green item lands
+# on integration but stays CLAIMED and is added to $BATCH — the authoritative full
+# workspace gate (+ E2E + fuzz) runs every $FULL_GATE_EVERY cycles via certify_batch(),
+# which is the ONLY thing that closes items and advances master. So master never sees
+# uncertified code, but per-item iteration is minutes, not ~30.
 lane_gate() {
     local i="$1"
     local class="${lane_class[$i]}" gdesc="${lane_desc[$i]}" gbr="${lane_br[$i]}" gid="${lane_id[$i]}"
-    local GRF SKY_SHARE gpre
+    local GRF gpre touched pflags
     GRF="-C link-arg=-fuse-ld=mold -Zthreads=8"
     STATUS="$(status_file "$i")"
-    # item #187: pin the oracle E2E builds to the SHARED runtime target (compiled
-    # once) EXCEPT when this change vendors a different runtime/ (then isolate).
-    if git diff --name-only "$BASE..$gbr" 2>/dev/null | rg -q '^runtime/'; then SKY_SHARE=""; else SKY_SHARE="$HOME/.cache/sky-rust-target"; fi
     phase gate ·
-    # Integrate + gate in the DEDICATED worktree — the MAIN checkout is never touched.
     git -C "$GATE_WT" switch "$INTEGRATION" >/dev/null 2>&1
-    gpre="$(git -C "$GATE_WT" rev-parse HEAD)"   # pre-merge sha on integration; a failed gate reverts HERE
+    gpre="$(git -C "$GATE_WT" rev-parse HEAD)"
     if ! git -C "$GATE_WT" merge --no-ff -m "autopilot: $class fix — $gdesc" "$gbr" >/dev/null 2>&1; then
         git -C "$GATE_WT" merge --abort 2>/dev/null
         log "lane [$class] · merge race with a landed lane — requeued (no penalty): $gdesc"
         bk unclaim "$gid"; return 0
     fi
-    if ( cd "$GATE_WT"; touch runtime/tests/*.rs crates/skyc/tests/*.rs 2>/dev/null; \
-         RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" SKY_ORACLE_SHARED_TARGET="$SKY_SHARE" timeout 3000 cargo +nightly nextest run --workspace >/tmp/autopilot-gate.log 2>&1 \
-         && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" SKY_ORACLE_SHARED_TARGET="$SKY_SHARE" timeout 1800 cargo +nightly nextest run -p sky-runtime-rust --features full >>/tmp/autopilot-gate.log 2>&1 \
-         && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 600 cargo +nightly test --workspace --doc >>/tmp/autopilot-gate.log 2>&1 \
-         && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 1200 cargo +nightly clippy --workspace --no-deps --jobs 4 -- -D warnings >>/tmp/autopilot-gate.log 2>&1 ) \
-       && ( cd "$GATE_WT"; "$FUZZ" --iters "$FUZZ_ITERS" --quiet >>/tmp/autopilot-gate.log 2>&1 ); then
-        log "lane [$class] · LANDED on integration (gate-green + fuzz-clean)"; mark LANDED "$class" "$gdesc"
-        bk close "$gid" --done-at "$(date +%F)"
+    # scope the cheap gate to the crates this change touched (+ always build skyc).
+    touched="$(git -C "$GATE_WT" diff --name-only "$gpre..HEAD" 2>/dev/null)"
+    pflags="$(printf '%s\n' "$touched" | sed -nE 's#^crates/([^/]+)/.*#-p \1#p; s#^runtime/.*#-p sky-runtime-rust#p; s#^tools/([^/]+)/.*#-p \1#p' | sort -u | tr '\n' ' ')"
+    [ -z "$pflags" ] && pflags="-p skyc"
+    if ( cd "$GATE_WT"; touch crates/skyc/tests/*.rs 2>/dev/null; \
+         RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 1200 cargo +nightly build -p skyc >/tmp/autopilot-gate.log 2>&1 \
+         && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 1500 cargo +nightly nextest run $pflags >>/tmp/autopilot-gate.log 2>&1 \
+         && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 900 cargo +nightly clippy $pflags --all-targets --no-deps -- -D warnings >>/tmp/autopilot-gate.log 2>&1 ); then
+        log "lane [$class] · landed on integration (cheap-green; pending full-gate cert)"; mark LANDED "$class" "$gdesc"
+        BATCH+=("$gid|$class|$gdesc")   # stays claimed; certify_batch closes on full-green / re-queues on full-red
     else
-        log "lane [$class] · gate RED — reverting integration to $gpre"
+        log "lane [$class] · cheap-gate RED — reverting integration to $gpre"
         git -C "$GATE_WT" merge --abort 2>/dev/null; git -C "$GATE_WT" reset --hard "$gpre" >/dev/null 2>&1
-        # Surface the ACTUAL failure, not a blind tail: the gate concatenates all 4
-        # steps + fuzz into one log, so `tail` shows only the LAST step (e.g. a
-        # passing nextest) and hides an earlier clippy/build error (this masked
-        # #187 for 2 attempts). Grep the real error signatures across the whole log.
-        item_failed "$class" "$gdesc" "$gbr" "gate failed. errors: $(rg -N -e 'error\[' -e '^error:' -e 'FAILED' -e 'panicked' -e 'could not compile' -e 'Killed' /tmp/autopilot-gate.log 2>/dev/null | tail -6 | tr '\n' ' ' | cut -c1-520) · tail: $(tail -4 /tmp/autopilot-gate.log 2>/dev/null | tr '\n' ' ' | cut -c1-200)"
+        item_failed "$class" "$gdesc" "$gbr" "cheap-gate failed. errors: $(rg -N -e 'error\[' -e '^error:' -e 'FAILED' -e 'panicked' -e 'could not compile' -e 'Killed' /tmp/autopilot-gate.log 2>/dev/null | tail -6 | tr '\n' ' ' | cut -c1-520)"
+    fi
+}
+
+# full_gate — the AUTHORITATIVE workspace gate (nextest + --features full + doctest
+# + clippy + fuzz) on integration HEAD. Returns 0 green / 1 red. Run only by
+# certify_batch, every $FULL_GATE_EVERY cycles (or when pending hits 0).
+full_gate() {
+    local GRF SKY_SHARE
+    GRF="-C link-arg=-fuse-ld=mold -Zthreads=8"
+    if git -C "$GATE_WT" diff --name-only "$LAST_FULL_GREEN..HEAD" 2>/dev/null | rg -q '^runtime/'; then SKY_SHARE=""; else SKY_SHARE="$HOME/.cache/sky-rust-target"; fi
+    ( cd "$GATE_WT"; touch runtime/tests/*.rs crates/skyc/tests/*.rs 2>/dev/null; \
+      RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" SKY_ORACLE_SHARED_TARGET="$SKY_SHARE" timeout 3000 cargo +nightly nextest run --workspace >/tmp/autopilot-gate.log 2>&1 \
+      && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" SKY_ORACLE_SHARED_TARGET="$SKY_SHARE" timeout 1800 cargo +nightly nextest run -p sky-runtime-rust --features full >>/tmp/autopilot-gate.log 2>&1 \
+      && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 600 cargo +nightly test --workspace --doc >>/tmp/autopilot-gate.log 2>&1 \
+      && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 1200 cargo +nightly clippy --workspace --no-deps --jobs 4 -- -D warnings >>/tmp/autopilot-gate.log 2>&1 ) \
+      && ( cd "$GATE_WT"; "$FUZZ" --iters "$FUZZ_ITERS" --quiet >>/tmp/autopilot-gate.log 2>&1 )
+}
+
+# certify_batch — full-gate the accumulated $BATCH. GREEN: close every batch item,
+# mark this the new LAST_FULL_GREEN, advance master to it. RED: reset integration to
+# the last certified sha + re-queue every batch item (the full-gate error is logged;
+# next attempts + the per-error grep pinpoint the culprit). Coarse-but-safe: master
+# only ever advances to a fully-gated sha.
+certify_batch() {
+    [ "${#BATCH[@]}" -gt 0 ] || return 0
+    phase certify ·
+    log "certify: full gate over ${#BATCH[@]} cheap-landed item(s)…"
+    local e id
+    if full_gate; then
+        log "certify: full gate GREEN — ${#BATCH[@]} item(s) certified"
+        for e in "${BATCH[@]}"; do id="${e%%|*}"; bk close "$id" --done-at "$(date +%F)"; done
+        LAST_FULL_GREEN="$(git -C "$GATE_WT" rev-parse HEAD)"; BATCH=()
+        advance_master
+    else
+        log "certify: full gate RED — reverting batch to $LAST_FULL_GREEN + re-queuing ${#BATCH[@]}. errors: $(rg -N -e 'error\[' -e '^error:' -e 'FAILED' -e 'panicked' -e 'could not compile' -e 'Killed' /tmp/autopilot-gate.log 2>/dev/null | tail -6 | tr '\n' ' ' | cut -c1-500)"
+        git -C "$GATE_WT" reset --hard "$LAST_FULL_GREEN" >/dev/null 2>&1
+        for e in "${BATCH[@]}"; do id="${e%%|*}"; bk unclaim "$id"; done
+        BATCH=()
     fi
 }
 
@@ -626,6 +675,13 @@ while :; do
     # convergence: did the PREVIOUS cycle make progress? (integration advanced, or work remains)
     cur_head="$(git -C "$GATE_WT" rev-parse HEAD)"
     act="$(pending | wc -l | tr -d ' ')"
+    # full-gate cadence: certify the cheap-landed batch every $FULL_GATE_EVERY cycles,
+    # OR the moment pending work is exhausted (act==0) — whichever comes first. certify
+    # green → close batch + advance master; red → reset integration + re-queue batch.
+    if [ "${#BATCH[@]}" -gt 0 ] && { [ "$CYCLES_SINCE_FULL" -ge "$FULL_GATE_EVERY" ] || [ "$act" -eq 0 ]; }; then
+        certify_batch; CYCLES_SINCE_FULL=0
+        cur_head="$(git -C "$GATE_WT" rev-parse HEAD)"; act="$(pending | wc -l | tr -d ' ')"
+    fi
     if [ -n "$prev_head" ] && [ "$cur_head" = "$prev_head" ] && [ "$act" -eq 0 ]; then
         dry=$((dry+1)); log "no-progress pass $dry/2 (nothing landed, no tractable findings)"
         [ "$dry" -ge 2 ] && { log "converged — 2 dry passes; work done or human-blocked. stopping."; break; }
@@ -708,7 +764,7 @@ For each, \`git show <sha>\`. If you find a violation, print AUDIT: VIOLATION <s
         esac
         git worktree remove --force "${lane_wt[$k]}" 2>/dev/null; git branch -D "${lane_br[$k]}" 2>/dev/null
     done
-    advance_master   # cycle END: fast-forward $MASTER to integration (under the lock)
+    CYCLES_SINCE_FULL=$((CYCLES_SINCE_FULL+1))   # full gate fires every $FULL_GATE_EVERY of these (or when pending hits 0)
     reclaim_disk
     git worktree prune
 
