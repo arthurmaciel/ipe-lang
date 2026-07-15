@@ -73,13 +73,13 @@ fn quoted_identifier_literals(src: &str) -> BTreeSet<String> {
     let bytes = src.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'"' {
+        if bytes.get(i) == Some(&b'"') {
             let start = i + 1;
             let mut j = start;
-            while j < bytes.len() && bytes[j] != b'"' {
+            while j < bytes.len() && bytes.get(j) != Some(&b'"') {
                 // A raw/escaped-string body would break the identifier shape
                 // check below anyway; a backslash means "not a plain name".
-                if bytes[j] == b'\\' {
+                if bytes.get(j) == Some(&b'\\') {
                     j += 2;
                     continue;
                 }
@@ -112,6 +112,10 @@ fn byte_diffs_a_golden_main_rs(src: &str, golden_root: &Path) -> bool {
         .any(|name| golden_root.join(name).join("main.rs").is_file())
 }
 
+// The lone `panic!` is this gate's deliberate failure-reporting mechanism: an
+// unreadable `tests/` dir must hard-fail rather than pass vacuously (guardian
+// ruling — a gate that "couldn't look" is not a gate). See the inline comment.
+#[allow(clippy::panic)]
 #[test]
 fn every_byte_diffing_golden_test_calls_the_shared_helper() {
     let dir = tests_dir();
@@ -141,7 +145,10 @@ fn every_byte_diffing_golden_test_calls_the_shared_helper() {
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        if !name.starts_with("golden_") || !name.ends_with(".rs") {
+        let is_rs = Path::new(name)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"));
+        if !name.starts_with("golden_") || !is_rs {
             continue;
         }
         // This gate's own file never calls the helper — it checks for it.

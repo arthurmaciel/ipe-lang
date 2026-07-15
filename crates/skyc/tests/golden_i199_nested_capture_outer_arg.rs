@@ -1,6 +1,6 @@
 //! #199 nested-capture + outer-by-value-arg SEAL lock.
 //!
-//! A non-Copy (CloneOk) binding used BOTH as a closure-capture into a NESTED
+//! A non-Copy (`CloneOk`) binding used BOTH as a closure-capture into a NESTED
 //! `move` closure (a `Task.map`/`Task.andThen` continuation nested inside the
 //! pipeline eta-lambda, OR the auto-forced `let _ = … in <use sym>` `TaskSeq`
 //! continuation the emitter wraps in `Box::new(move |_| …)`) AND as an outer
@@ -13,7 +13,7 @@
 //! `Fn` closure"). The fix:
 //!   * `rewrite_multiuse_clones`'s `Lambda`/`SharedLambda` arms now descend via
 //!     `force_shared_capture_clones`, wrapping every nested capturing lambda;
-//!   * `lower_lambda` runs the CloneOk multi-use rewrite over its OWN params
+//!   * `lower_lambda` runs the `CloneOk` multi-use rewrite over its OWN params
 //!     (the `\rows -> … rows … rows` shape);
 //!   * `force_shared_capture_clones`'s `TaskSeq` arm pre-clones the continuation
 //!     capture OUTSIDE the emitter-synthesised `move |_|` closure.
@@ -52,8 +52,8 @@ fn entry_path(root: &Path) -> PathBuf {
 fn i199_skyc_accepts_and_hoists() {
     let root = repo_root();
     let entry = entry_path(&root);
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("i199_nested_capture_outer_arg_skyc_out");
+    let out =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i199_nested_capture_outer_arg_skyc_out");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = skyc::resolve_runtime() else {

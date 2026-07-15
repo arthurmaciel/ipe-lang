@@ -196,8 +196,7 @@ fn webview_counter_tier_b() -> Result<(), BoxError> {
     let xvfb_available = std::process::Command::new("which")
         .arg("xvfb-run")
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+        .is_ok_and(|o| o.status.success());
 
     if !xvfb_available {
         println!(
