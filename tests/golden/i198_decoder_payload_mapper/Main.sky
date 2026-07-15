@@ -1,0 +1,47 @@
+module Main exposing (main)
+
+import Sky.Core.Json.Decode as JsonDec exposing (Decoder)
+import Sky.Core.Prelude exposing (..)
+import Std.Log exposing (println)
+
+
+addN : Int -> Int -> Int
+addN base x =
+    base + x
+
+
+-- A decoder whose PAYLOAD is a function `Int -> Int`: `succeed` of a partial
+-- application. The runtime represents this payload as the Send-only curry chain
+-- `Box<dyn FnOnce(Int) -> Int + Send>` (#195 renders the `Decoder<Fun>` type).
+adderDecoder : Decoder (Int -> Int)
+adderDecoder =
+    JsonDec.succeed (addN 5)
+
+
+-- #198 (map surface): map over a function-payload decoder with a lambda that
+-- INVOKES the payload. The lambda's param `f` is the decoder payload (a
+-- function). Pre-fix it rendered as `Box<dyn Fn(Int)->Int + Send + Sync>` — the
+-- wrong trait + an unsatisfiable `+ Sync` vs the producer's `FnOnce + Send`.
+appliedDecoder : Decoder Int
+appliedDecoder =
+    JsonDec.map (\f -> f 10) adderDecoder
+
+
+-- #198 (andThen surface): andThen whose callback invokes the function payload
+-- and returns a `succeed` decoder.
+appliedViaAndThen : Decoder Int
+appliedViaAndThen =
+    JsonDec.andThen (\f -> JsonDec.succeed (f 100)) adderDecoder
+
+
+main =
+    let
+        j = "{\"base\":5}"
+        r1 = JsonDec.decodeString appliedDecoder j
+        r2 = JsonDec.decodeString appliedViaAndThen j
+    in
+    println
+        (String.fromInt (Result.withDefault 0 r1)
+            ++ " "
+            ++ String.fromInt (Result.withDefault 0 r2)
+        )
