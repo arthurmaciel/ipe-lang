@@ -1,0 +1,55 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Task as Task
+import Std.Html as Html
+import Std.Ui as Ui exposing (Element)
+import Std.Log exposing (println)
+
+
+-- BACKLOG #172 regression, shape (2): a promoted Arc-root handler and a
+-- SIBLING top-level function reference (`Expr::FuncValue`) unified at ONE Rust
+-- type slot inside an `if`.
+--
+-- `handler` is a function-typed `let` binding flowing DIRECTLY into the
+-- `Ui.onSubmit` kernel (a `requires_sync_capture` consumer), so the lowerer
+-- promotes it to `Expr::SharedLambda` — its reads render
+-- `Arc<dyn Fn + Send + Sync>`. The SIBLING `else` branch is `signIn`, a bare
+-- top-level function REFERENCE (`Expr::FuncValue`), rendered at the default
+-- `Box<dyn Fn + Send + Sync>` carrier. `Arc` and `Box` are distinct Rust types
+-- even with identical trait bounds, so the two `if` branches cannot unify at
+-- one slot → cargo `E0308` AFTER `skyc` exit 0 (SEAL break). This is the exact
+-- reviewer repro that refuted the prior inline-lambda-only fix.
+
+
+type alias SignInForm =
+    { email : String
+    , password : String
+    }
+
+
+type Msg
+    = DoSignIn SignInForm
+    | Noop
+
+
+-- A top-level function value used as a handler — lowers to `Expr::FuncValue`.
+signIn : SignInForm -> Msg
+signIn form =
+    DoSignIn form
+
+
+loginForm : Bool -> Element Msg
+loginForm flag =
+    let
+        handler =
+            \form -> DoSignIn form
+    in
+    Ui.form
+        [ Ui.onSubmit (if flag then handler else signIn) ]
+        [ Ui.text "sign in" ]
+
+
+main : Task Error ()
+main =
+    println (Html.render (Ui.layout [] (loginForm True)))
