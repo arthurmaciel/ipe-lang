@@ -259,6 +259,10 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::WebSocketServerCfg
         | IrType::LiveReq
         | IrType::LiveRoute(_)
+        // #210: Cache config / stats are kernel-boundary data records, not serde,
+        // never persisted to a session store — not valid Model leaves.
+        | IrType::CacheCfg
+        | IrType::CacheStats
         // `SqlFragment` (backlog #61) is a query-building value, never
         // persisted to a Live session store — not a valid Model leaf.
         | IrType::SqlFragment
