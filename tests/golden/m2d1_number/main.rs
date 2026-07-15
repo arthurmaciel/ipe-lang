@@ -236,7 +236,7 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 }
 
 pub fn main_double<T1: ::core::ops::Add<Output = T1> + Copy + Clone>(x: T1) -> T1 {
-    (x + x)
+    (x.clone() + x)
 }
 pub fn main_double_float(x: f64) -> f64 {
     main_double(x)

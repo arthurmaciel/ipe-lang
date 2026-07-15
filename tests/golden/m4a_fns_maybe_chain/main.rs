@@ -236,7 +236,7 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 }
 
 pub fn sky_main() -> SkyTask<()> {
-    log_println(string_from_int(maybe_with_default(0, sky_maybe_and_then(sky_maybe_map(SkyMaybe::Just(5), { let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + 'static> = Box::new(move |x: i64| -> i64 { (x * 10) }); __sky_fn }), { let __sky_fn: Box<dyn Fn(i64) -> SkyMaybe<i64> + Send + 'static> = Box::new(move |x: i64| -> SkyMaybe<i64> { SkyMaybe::Just((x + 1)) }); __sky_fn }))))
+    log_println(string_from_int(maybe_with_default(0, sky_maybe_and_then(sky_maybe_map(SkyMaybe::Just(5), { let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> = Box::new(move |x: i64| -> i64 { (x * 10) }); __sky_fn }), { let __sky_fn: Box<dyn Fn(i64) -> SkyMaybe<i64> + Send + Sync + 'static> = Box::new(move |x: i64| -> SkyMaybe<i64> { SkyMaybe::Just((x + 1)) }); __sky_fn }))))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;
