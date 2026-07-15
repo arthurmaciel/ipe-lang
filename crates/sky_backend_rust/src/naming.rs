@@ -764,6 +764,12 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::CompressionGunzip => "compression_gunzip",
         KernelFn::CompressionZstdCompress => "compression_zstd_compress",
         KernelFn::CompressionZstdDecompress => "compression_zstd_decompress",
+        // ── #197: Std.Csv kernels (`sky_runtime::csv::*`) ────────────────────
+        KernelFn::CsvParse => "csv_parse",
+        KernelFn::CsvParseWithDelimiter => "csv_parse_with_delimiter",
+        KernelFn::CsvEncode => "csv_encode",
+        KernelFn::CsvEncodeWithDelimiter => "csv_encode_with_delimiter",
+        KernelFn::CsvParseStreamFromFile => "csv_parse_stream_from_file",
         // ── M5c: TEA Cmd / Sub / Time kernels (wired) ────────────────────────
         KernelFn::CmdNone => "cmd_none",
         KernelFn::CmdBatch => "cmd_batch",
