@@ -770,6 +770,15 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::CsvEncode => "csv_encode",
         KernelFn::CsvEncodeWithDelimiter => "csv_encode_with_delimiter",
         KernelFn::CsvParseStreamFromFile => "csv_parse_stream_from_file",
+        // ── #210: Std.Cache kernels (`sky_runtime::cache::*`) ────────────────
+        // Names MUST match the runtime fns exactly (`cache_new_raw`).
+        KernelFn::CacheNewRaw => "cache_new_raw",
+        KernelFn::CacheGet => "cache_get",
+        KernelFn::CachePut => "cache_put",
+        KernelFn::CacheRemove => "cache_remove",
+        KernelFn::CacheClear => "cache_clear",
+        KernelFn::CacheSize => "cache_size",
+        KernelFn::CacheStats => "cache_stats",
         // ── M5c: TEA Cmd / Sub / Time kernels (wired) ────────────────────────
         KernelFn::CmdNone => "cmd_none",
         KernelFn::CmdBatch => "cmd_batch",
