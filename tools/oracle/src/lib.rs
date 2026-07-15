@@ -495,8 +495,50 @@ fn find_executable(json_stdout: &str, unique_pkg: &str) -> Option<String> {
     found
 }
 
-/// Build the emitted Rust project at `emitted_dir` into the shared cargo target
-/// and run the resulting binary, returning its stdout + exit code.
+/// Decide the emitted-project cargo target, decoupling it from the ambient
+/// `CARGO_TARGET_DIR` the caller (orchestrator/autopilot) set for the isolated
+/// COMPILER-crate build.
+///
+/// `shared` is the raw `SKY_ORACLE_SHARED_TARGET` value (an explicit input the
+/// harness owns — the library cannot reliably infer "does this change edit
+/// `runtime/`?" from the working dir, so the decision is passed in).
+///
+/// Fail-safe contract — absence or malformation degrades to ISOLATE, NEVER to
+/// share. Returns `Some(path)` (→ pin the emitted build to that shared target,
+/// overriding the ambient env so the ~8GB runtime deps are compiled once and
+/// reused) ONLY when `shared` is a non-empty ABSOLUTE path. Empty / whitespace /
+/// relative / unset all return `None` (→ inherit the ambient env untouched =
+/// isolate). This is load-bearing security: a runtime/-editing lane vendors a
+/// DIFFERENT `sky_runtime`, so it must NOT reuse the shared target; isolating by
+/// omission keeps that lane correct even if the orchestrator forgets to clear
+/// the flag, whereas sharing-by-omission would risk validating the gate against
+/// the wrong vendored runtime (a silent green over a possibly-regressed guard).
+fn resolve_emitted_target(shared: Option<&str>) -> Option<String> {
+    let trimmed = shared?.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if !Path::new(trimmed).is_absolute() {
+        // Present-but-malformed → fail loud-and-safe (isolate), not silent.
+        eprintln!(
+            "sky-oracle: ignoring SKY_ORACLE_SHARED_TARGET={trimmed:?} \
+             (not an absolute path); isolating emitted build in ambient CARGO_TARGET_DIR"
+        );
+        return None;
+    }
+    Some(trimmed.to_owned())
+}
+
+/// Build the emitted Rust project at `emitted_dir` and run the resulting binary,
+/// returning its stdout + exit code.
+///
+/// The emitted build's cargo target is chosen by [`resolve_emitted_target`] from
+/// `SKY_ORACLE_SHARED_TARGET`: when the harness opts in with an absolute path the
+/// build is pinned to that shared target (runtime deps compiled once, reused),
+/// overriding whatever ambient `CARGO_TARGET_DIR` was set for the isolated
+/// compiler-crate build; otherwise the ambient env is inherited untouched
+/// (isolate — the fail-safe default). Do NOT re-add a "no override" claim here:
+/// the ambient env DOES override `~/.cargo/config.toml`, which was the #187 bug.
 ///
 /// This is the Result-returning core shared by the test harness (which wraps it
 /// in test assertions) and the `refresh-oracle` tool (which uses it to capture
@@ -509,12 +551,15 @@ fn find_executable(json_stdout: &str, unique_pkg: &str) -> Option<String> {
 pub fn build_and_run_rust(golden_name: &str, emitted_dir: &Path) -> Result<RunResult, String> {
     let unique_pkg = rewrite_package_name(emitted_dir, golden_name)?;
 
-    // No CARGO_TARGET_DIR override: the build inherits the global shared target
-    // from ~/.cargo/config.toml, so deps are reused, not recompiled per golden.
-    let build = Command::new("cargo")
-        .arg("build")
+    let shared = std::env::var("SKY_ORACLE_SHARED_TARGET").ok();
+    let mut cmd = Command::new("cargo");
+    cmd.arg("build")
         .arg("--message-format=json")
-        .current_dir(emitted_dir)
+        .current_dir(emitted_dir);
+    if let Some(p) = resolve_emitted_target(shared.as_deref()) {
+        cmd.env("CARGO_TARGET_DIR", p);
+    }
+    let build = cmd
         .output()
         .map_err(|e| format!("{golden_name}: failed to spawn `cargo build`: {e}"))?;
     if !build.status.success() {
@@ -538,8 +583,8 @@ pub fn build_and_run_rust(golden_name: &str, emitted_dir: &Path) -> Result<RunRe
     })
 }
 
-/// Build the emitted Rust project at `emitted_dir` into the shared cargo target
-/// and return the path of the resulting binary WITHOUT running it.
+/// Build the emitted Rust project at `emitted_dir` and return the path of the
+/// resulting binary WITHOUT running it.
 ///
 /// This is the build-only companion to [`build_and_run_rust`]. It is used by
 /// the E2E test harness when the test needs to control how the binary is
@@ -549,9 +594,13 @@ pub fn build_and_run_rust(golden_name: &str, emitted_dir: &Path) -> Result<RunRe
 /// The function:
 /// 1. Rewrites the emitted `Cargo.toml` package name to a golden-unique string
 ///    so binaries from different goldens can coexist in the shared cargo target.
-/// 2. Runs `cargo build --message-format=json` in the emitted directory (no
-///    `CARGO_TARGET_DIR` override — the global `~/.cargo/config.toml` shared
-///    target is used so deps are not recompiled per golden).
+/// 2. Runs `cargo build --message-format=json` in the emitted directory. The
+///    cargo target is chosen by [`resolve_emitted_target`] from
+///    `SKY_ORACLE_SHARED_TARGET`: an absolute opt-in path pins the build to the
+///    shared target (runtime deps reused, overriding the ambient
+///    `CARGO_TARGET_DIR`); absence/malformation inherits the ambient env
+///    (isolate — the fail-safe default). Do NOT re-add a "no override" claim:
+///    the ambient env DOES override `~/.cargo/config.toml` (the #187 bug).
 /// 3. Parses the JSON output to locate the `compiler-artifact` line for the
 ///    unique package and returns the `executable` path.
 ///
@@ -562,10 +611,15 @@ pub fn build_and_run_rust(golden_name: &str, emitted_dir: &Path) -> Result<RunRe
 pub fn build_rust_binary(golden_name: &str, emitted_dir: &Path) -> Result<String, String> {
     let unique_pkg = rewrite_package_name(emitted_dir, golden_name)?;
 
-    let build = Command::new("cargo")
-        .arg("build")
+    let shared = std::env::var("SKY_ORACLE_SHARED_TARGET").ok();
+    let mut cmd = Command::new("cargo");
+    cmd.arg("build")
         .arg("--message-format=json")
-        .current_dir(emitted_dir)
+        .current_dir(emitted_dir);
+    if let Some(p) = resolve_emitted_target(shared.as_deref()) {
+        cmd.env("CARGO_TARGET_DIR", p);
+    }
+    let build = cmd
         .output()
         .map_err(|e| format!("{golden_name}: failed to spawn `cargo build`: {e}"))?;
     if !build.status.success() {
@@ -584,9 +638,43 @@ pub fn build_rust_binary(golden_name: &str, emitted_dir: &Path) -> Result<String
 #[cfg(test)]
 mod tests {
     use super::{
-        Meta, ParityError, check_parity, sanctioned_reason, sha256_hex, tag_divergence_reason,
+        Meta, ParityError, check_parity, resolve_emitted_target, sanctioned_reason, sha256_hex,
+        tag_divergence_reason,
     };
     use std::path::PathBuf;
+
+    // #187: the emitted-project build must decouple from the ambient
+    // CARGO_TARGET_DIR. `resolve_emitted_target` is the decision, with an
+    // env-independent signature so these lock the fail-safe semantics purely.
+
+    #[test]
+    fn shared_absolute_path_overrides_ambient() {
+        // Opt-in absolute path → pin to the shared target (the decouple).
+        assert_eq!(
+            resolve_emitted_target(Some("/home/x/.cache/sky-rust-target")),
+            Some("/home/x/.cache/sky-rust-target".to_owned())
+        );
+    }
+
+    #[test]
+    fn unset_inherits_ambient_isolate() {
+        // Absence → inherit ambient env = isolate (the safe default).
+        assert_eq!(resolve_emitted_target(None), None);
+    }
+
+    #[test]
+    fn empty_or_whitespace_fails_safe() {
+        // Explicitly-cleared flag → isolate, never share.
+        assert_eq!(resolve_emitted_target(Some("")), None);
+        assert_eq!(resolve_emitted_target(Some("   ")), None);
+    }
+
+    #[test]
+    fn relative_path_fails_safe() {
+        // Non-absolute → isolate (do not silently pollute the emitted dir).
+        assert_eq!(resolve_emitted_target(Some("relative/target")), None);
+        assert_eq!(resolve_emitted_target(Some("./target")), None);
+    }
 
     /// A throwaway directory unique to one test, holding a synthetic golden.
     fn fresh_golden(tag: &str) -> PathBuf {
@@ -597,8 +685,7 @@ mod tests {
             // in the same process never collide.
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
+                .map_or(0, |d| d.as_nanos())
         ));
         let _ = std::fs::remove_dir_all(&dir);
         let created = std::fs::create_dir_all(&dir);
