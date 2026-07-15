@@ -372,6 +372,11 @@ if [ "$WATCH" != 0 ] && [ -t 1 ] && [ -x "$HERE/watch.sh" ]; then
     log "live monitor: watch.sh pid $watch_pid (one terminal; --no-watch / PROGDEV_WATCH=0 to disable)"
 fi
 trap 'rm -f "$LOCK"; command -v advance_master >/dev/null 2>&1 && advance_master; [ "${#CUR_CLAIMS[@]}" -gt 0 ] && for _c in "${CUR_CLAIMS[@]}"; do "$BACKLOG_SH" unclaim "$_c" >/dev/null 2>&1; done; [ -n "$watch_pid" ] && { kill "$watch_pid" 2>/dev/null; pkill -P "$watch_pid" 2>/dev/null; }; log "exit"' EXIT
+# SIGTERM/SIGINT → request the SAME emergency-graceful stop as `touch autopilot.stop`:
+# the Phase-A poll (and the cycle-top / Phase-B checks) pick up the flag, salvage
+# in-flight lane work, and exit via the EXIT trap. Turns `kill <pid>` / Ctrl-C into a
+# graceful wind-down instead of an abrupt SIGKILL that orphans children + skips salvage.
+trap 'touch "$STOP" 2>/dev/null; log "signal received — emergency-graceful stop requested (finishing safe point)"' TERM INT
 
 MASTER="$(git rev-parse --abbrev-ref HEAD)"   # the human-facing branch autopilot advances (e.g. master)
 START_SHA="$(git rev-parse HEAD)"
@@ -640,7 +645,12 @@ lane_gate() {
     if ( cd "$GATE_WT"; touch crates/skyc/tests/*.rs 2>/dev/null; \
          RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 1200 cargo +nightly build -p skyc >/tmp/autopilot-gate.log 2>&1 \
          && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 1500 cargo +nightly nextest run $pflags >>/tmp/autopilot-gate.log 2>&1 \
-         && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 900 cargo +nightly clippy $pflags --all-targets --no-deps -- -D warnings >>/tmp/autopilot-gate.log 2>&1 ); then
+         && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 900 cargo +nightly clippy $pflags --no-deps -- -D warnings >>/tmp/autopilot-gate.log 2>&1 ); then
+        # NB: no --all-targets — the authoritative full gate (full_gate) lints
+        # lib+bins only (clippy --workspace, no --all-targets), so a stricter cheap
+        # gate would false-RED skyc-touching lanes on pre-existing test-file lint
+        # debt the full gate never checks (this false-escalated #194/#197). Adopting
+        # --all-targets in BOTH gates after the test-lint sweep is #203 (DEVELOPMENT §3b).
         log "lane [$class] · landed on integration (cheap-green; pending full-gate cert)"; mark LANDED "$class" "$gdesc"
         BATCH+=("$gid|$class|$gdesc")   # stays claimed; certify_batch closes on full-green / re-queues on full-red
     else
@@ -686,6 +696,29 @@ certify_batch() {
         for e in "${BATCH[@]}"; do id="${e%%|*}"; bk unclaim "$id"; done
         BATCH=()
     fi
+}
+
+# EMERGENCY-GRACEFUL stop helper: after the in-flight lanes' process groups are
+# killed, preserve every lane's work so a mid-cycle stop loses NOTHING — committed
+# work → a durable salvage/ ref; uncommitted worktree edits → a patch under
+# $RESUME_DIR — then release each claim. Reads the cycle-local lane_* arrays (bash
+# globals). The EXIT trap still runs advance_master afterward.
+salvage_lanes() {
+    local k br gid pf
+    for ((k=0; k<n; k++)); do
+        br="${lane_br[$k]}"; gid="${lane_id[$k]}"
+        if git rev-parse --verify -q "$br" >/dev/null 2>&1 && [ -n "$(git log --oneline "$BASE..$br" 2>/dev/null)" ]; then
+            git branch -f "salvage/stopped-i$gid-c$cycle" "$br" 2>/dev/null \
+              && log "  salvaged committed work: $br → salvage/stopped-i$gid-c$cycle"
+        fi
+        if [ -d "${lane_wt[$k]}" ]; then
+            pf="$RESUME_DIR/stopped-i$gid-c$cycle.patch"; mkdir -p "$RESUME_DIR" 2>/dev/null
+            ( cd "${lane_wt[$k]}" && git add -A 2>/dev/null && git diff --cached ) > "$pf" 2>/dev/null
+            [ -s "$pf" ] && log "  salvaged uncommitted edits → $pf"
+        fi
+        bk unclaim "$gid" 2>/dev/null
+    done
+    log "emergency-graceful stop: $n lane(s) salvaged + claims released; exiting via cleanup"
 }
 
 # ── the loop: run until DONE (2 passes, no new tractable findings) ────────────
@@ -780,10 +813,33 @@ For each, \`git show <sha>\`. If you find a violation, print AUDIT: VIOLATION <s
     [ "$n" -eq 0 ] && continue
     log "${#guard[@]} actionable; authoring $n lane(s) concurrently (design→impl→review)…"
 
-    # ── Phase A: author CONCURRENTLY (one bg subshell per lane), then barrier ──
+    # ── Phase A: author CONCURRENTLY, then barrier — but POLL the stop flag so an
+    #    emergency stop responds in seconds instead of waiting out slow authoring.
+    #    `set -m` puts each lane in its OWN process group so a stop can SIGTERM the
+    #    whole subtree (subshell + timeout + claude + cargo) cleanly — no orphans,
+    #    and Lane-3 / other agents (different groups) are untouched.
+    set -m
     apids=()
     for ((k=0; k<n; k++)); do lane_author "$k" & apids+=("$!"); done
-    for p in "${apids[@]}"; do wait "$p"; done
+    set +m
+    STOP_MIDCYCLE=0
+    while :; do
+        alive=0
+        for p in "${apids[@]}"; do kill -0 "$p" 2>/dev/null && alive=1; done
+        [ "$alive" -eq 0 ] && break
+        if [ -f "$STOP" ]; then
+            log "emergency-graceful stop: winding down $n in-flight lane(s) (SIGTERM process groups)…"
+            for p in "${apids[@]}"; do kill -TERM -- -"$p" 2>/dev/null; done
+            sleep 3
+            for p in "${apids[@]}"; do kill -KILL -- -"$p" 2>/dev/null; done
+            STOP_MIDCYCLE=1; break
+        fi
+        sleep 2
+    done
+    for p in "${apids[@]}"; do wait "$p" 2>/dev/null; done
+    # mid-cycle stop → salvage every lane's work (committed branch + uncommitted edits),
+    # release claims, then break the loop into the EXIT trap. Nothing is lost.
+    if [ "$STOP_MIDCYCLE" = 1 ]; then salvage_lanes; break; fi
 
     # ── Phase B: integrate SERIALLY (single-writer git) ──
     for ((k=0; k<n; k++)); do
