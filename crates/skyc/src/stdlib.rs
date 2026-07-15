@@ -62,9 +62,22 @@ const FILE: &str = include_str!("../stdlib/Sky/Core/File.sky");
 /// `Sky.Core.Http` — outbound HTTP client kernels + pure builders (M5b).
 const HTTP: &str = include_str!("../stdlib/Sky/Core/Http.sky");
 
-/// `Sky.Core.Path` — pure filesystem-path helpers (M5b).
+/// `Sky.Core.Path` — pure filesystem-path helpers, compiled-source Layer-3 (#202).
+///
+/// The members are point-free `Ffi.kernel "Path_*"` aliases resolved by the
+/// #196 kernel-alias mechanism (`sky_canon::resolve::detect_kernel_alias`) to
+/// the pure `PathBase`/`PathDir`/`PathExt`/`PathIsAbsolute` `StdlibKernel`
+/// variants. Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`) so its body
+/// is actually compiled; NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
+/// invariant holds.
 const PATH: &str = include_str!("../stdlib/Sky/Core/Path.sky");
-/// `Sky.Core.Regex` — RE2 regex helpers (M5b).
+/// `Sky.Core.Regex` — RE2 regex helpers, compiled-source Layer-3 (#194).
+///
+/// The members are point-free `Ffi.kernel "Regex_*"` aliases resolved by the
+/// #196 kernel-alias mechanism (`sky_canon::resolve::detect_kernel_alias`) to
+/// the pure `RegexMatch`/`RegexFind`/… `StdlibKernel` variants. Registered in
+/// [`COMPILED_STD_MODULES`] (NOT `MODULES`) so its body is actually compiled;
+/// NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
 const REGEX: &str = include_str!("../stdlib/Sky/Core/Regex.sky");
 
 /// Every embedded `Sky.Core` module, keyed by its dotted import name.
@@ -140,14 +153,6 @@ pub const MODULES: &[StdModule] = &[
     StdModule {
         name: "Sky.Core.Http",
         source: HTTP,
-    },
-    StdModule {
-        name: "Sky.Core.Path",
-        source: PATH,
-    },
-    StdModule {
-        name: "Sky.Core.Regex",
-        source: REGEX,
     },
 ];
 
@@ -498,6 +503,18 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
         dotted: "Std.Ui.Events",
         source: STD_UI_EVENTS,
+    },
+    // #194: Sky.Core.Regex — Layer-3 source, `Ffi.kernel "Regex_*"` aliases route
+    // to the registered pure `Regex*` kernels (`sky_runtime::regex_kernel::*`).
+    CompiledStdModule {
+        dotted: "Sky.Core.Regex",
+        source: REGEX,
+    },
+    // #202: Sky.Core.Path — Layer-3 source, `Ffi.kernel "Path_*"` aliases route
+    // to the registered pure `Path*` kernels (`sky_runtime::path::*`).
+    CompiledStdModule {
+        dotted: "Sky.Core.Path",
+        source: PATH,
     },
 ];
 

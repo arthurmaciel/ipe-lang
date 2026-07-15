@@ -337,7 +337,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::BasicsToString => "basics_to_string",
         // ── Basics numerics (#115) ──────────────────────────────────────────
         KernelFn::BasicsNegate => "basics_negate",
-        KernelFn::BasicsAbs    => "basics_abs",
+        KernelFn::BasicsAbs => "basics_abs",
         // BasicsSqrt / BasicsMin / BasicsMax reuse the existing Math runtime
         // helpers: `math_sqrt(f64->f64)`, `math_min<T:PartialOrd>`,
         // `math_max<T:PartialOrd>`. No new runtime symbol needed.
@@ -399,8 +399,8 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // comparable (a -> a -> a). Rationale: Elm-conformance.
         // ── Basics numerics (#115): BasicsSqrt / BasicsMin / BasicsMax merged here ──
         KernelFn::BasicsSqrt | KernelFn::MathSqrt => "math_sqrt",
-        KernelFn::BasicsMin  | KernelFn::MathMin  => "math_min",
-        KernelFn::BasicsMax  | KernelFn::MathMax  => "math_max",
+        KernelFn::BasicsMin | KernelFn::MathMin => "math_min",
+        KernelFn::BasicsMax | KernelFn::MathMax => "math_max",
         // ── Math constants ───────────────────────────────────────────────────
         KernelFn::MathPi => "math_pi",
         KernelFn::MathE => "math_e",
@@ -720,9 +720,11 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // each is a Sky-level type narrowing of the same generic
         // `sql_param::<T: Into<SqlParam>>`, so no separate runtime fn exists.
         KernelFn::SqlColumn => "sql_column",
-        KernelFn::SqlParam | KernelFn::SqlInt | KernelFn::SqlString | KernelFn::SqlFloat | KernelFn::SqlBool => {
-            "sql_param"
-        }
+        KernelFn::SqlParam
+        | KernelFn::SqlInt
+        | KernelFn::SqlString
+        | KernelFn::SqlFloat
+        | KernelFn::SqlBool => "sql_param",
         KernelFn::SqlEq => "sql_eq",
         KernelFn::SqlNe => "sql_ne",
         KernelFn::SqlGt => "sql_gt",
@@ -740,6 +742,28 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::SecretFromString => "secret_from_string",
         KernelFn::SecretReveal => "secret_reveal",
         KernelFn::SecretRedacted => "secret_redacted",
+        // ── #194: Sky.Core.Regex kernels (pure; ungated runtime re-export) ────
+        // Names MUST match `sky_runtime::regex_kernel::*` exactly.
+        KernelFn::RegexMatch => "regex_match",
+        KernelFn::RegexFind => "regex_find",
+        KernelFn::RegexFindAll => "regex_find_all",
+        KernelFn::RegexReplace => "regex_replace",
+        KernelFn::RegexSplit => "regex_split",
+        // ── #202: Sky.Core.Path kernels (pure; ungated runtime re-export) ─────
+        // Names MUST match `sky_runtime::path::*` exactly.
+        KernelFn::PathBase => "path_base",
+        KernelFn::PathDir => "path_dir",
+        KernelFn::PathExt => "path_ext",
+        KernelFn::PathIsAbsolute => "path_is_absolute",
+        // ── #197: Std.Trace kernels (Task; runtime `sky_runtime::trace::*`) ───
+        KernelFn::TraceSpan => "trace_span",
+        KernelFn::TraceEvent => "trace_event",
+        KernelFn::TraceAttr => "trace_attr",
+        // ── #197: Std.Compression kernels (`sky_runtime::compression::*`) ─────
+        KernelFn::CompressionGzip => "compression_gzip",
+        KernelFn::CompressionGunzip => "compression_gunzip",
+        KernelFn::CompressionZstdCompress => "compression_zstd_compress",
+        KernelFn::CompressionZstdDecompress => "compression_zstd_decompress",
         // ── M5c: TEA Cmd / Sub / Time kernels (wired) ────────────────────────
         KernelFn::CmdNone => "cmd_none",
         KernelFn::CmdBatch => "cmd_batch",
@@ -1162,55 +1186,55 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::WsBroadcast => "ws_server_broadcast",
         KernelFn::WsCloseClient => "ws_server_close_client",
         // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────────
-        KernelFn::LazyLazy  => "lazy_lazy_",
+        KernelFn::LazyLazy => "lazy_lazy_",
         KernelFn::LazyLazy2 => "lazy_lazy2_",
         KernelFn::LazyLazy3 => "lazy_lazy3_",
         KernelFn::LazyLazy4 => "lazy_lazy4_",
         KernelFn::LazyLazy5 => "lazy_lazy5_",
         // ── Std.Ui.Keyed ──────────────────────────────────────────────────────
         KernelFn::KeyedColumn => "keyed_column_",
-        KernelFn::KeyedRow    => "keyed_row_",
+        KernelFn::KeyedRow => "keyed_row_",
         // ── Std.Decimal ───────────────────────────────────────────────────────
-        KernelFn::DecZero        => "decimal_zero",
-        KernelFn::DecOne         => "decimal_one",
-        KernelFn::DecOneHundred  => "decimal_one_hundred",
-        KernelFn::DecFromString  => "decimal_from_string",
-        KernelFn::DecFromInt     => "decimal_from_int",
-        KernelFn::DecFromFloat   => "decimal_from_float",
-        KernelFn::DecFromMinor   => "decimal_from_minor",
-        KernelFn::DecToString    => "decimal_to_string",
+        KernelFn::DecZero => "decimal_zero",
+        KernelFn::DecOne => "decimal_one",
+        KernelFn::DecOneHundred => "decimal_one_hundred",
+        KernelFn::DecFromString => "decimal_from_string",
+        KernelFn::DecFromInt => "decimal_from_int",
+        KernelFn::DecFromFloat => "decimal_from_float",
+        KernelFn::DecFromMinor => "decimal_from_minor",
+        KernelFn::DecToString => "decimal_to_string",
         KernelFn::DecToStringFixed => "decimal_to_string_fixed",
-        KernelFn::DecToFloat     => "decimal_to_float",
-        KernelFn::DecToInt       => "decimal_to_int",
-        KernelFn::DecToMinor     => "decimal_to_minor",
-        KernelFn::DecAdd         => "decimal_add",
-        KernelFn::DecSub         => "decimal_sub",
-        KernelFn::DecMul         => "decimal_mul",
-        KernelFn::DecDiv         => "decimal_div",
-        KernelFn::DecMod         => "decimal_mod",
-        KernelFn::DecNeg         => "decimal_neg",
-        KernelFn::DecAbs         => "decimal_abs",
-        KernelFn::DecFloor       => "decimal_floor",
-        KernelFn::DecCeil        => "decimal_ceil",
-        KernelFn::DecRound       => "decimal_round",
+        KernelFn::DecToFloat => "decimal_to_float",
+        KernelFn::DecToInt => "decimal_to_int",
+        KernelFn::DecToMinor => "decimal_to_minor",
+        KernelFn::DecAdd => "decimal_add",
+        KernelFn::DecSub => "decimal_sub",
+        KernelFn::DecMul => "decimal_mul",
+        KernelFn::DecDiv => "decimal_div",
+        KernelFn::DecMod => "decimal_mod",
+        KernelFn::DecNeg => "decimal_neg",
+        KernelFn::DecAbs => "decimal_abs",
+        KernelFn::DecFloor => "decimal_floor",
+        KernelFn::DecCeil => "decimal_ceil",
+        KernelFn::DecRound => "decimal_round",
         KernelFn::DecRoundHalfUp => "decimal_round_half_up",
-        KernelFn::DecTruncate    => "decimal_truncate",
-        KernelFn::DecCompare     => "decimal_compare",
-        KernelFn::DecEq          => "decimal_eq",
-        KernelFn::DecNeq         => "decimal_neq",
-        KernelFn::DecLt          => "decimal_lt",
-        KernelFn::DecLte         => "decimal_lte",
-        KernelFn::DecGt          => "decimal_gt",
-        KernelFn::DecGte         => "decimal_gte",
-        KernelFn::DecMin         => "decimal_min",
-        KernelFn::DecMax         => "decimal_max",
-        KernelFn::DecIsZero      => "decimal_is_zero",
-        KernelFn::DecIsPositive  => "decimal_is_positive",
-        KernelFn::DecIsNegative  => "decimal_is_negative",
-        KernelFn::DecPercentOf   => "decimal_percent_of",
-        KernelFn::DecAddPercent  => "decimal_add_percent",
-        KernelFn::DecSubPercent  => "decimal_sub_percent",
-        KernelFn::DecFormatWith  => "decimal_format_with",
+        KernelFn::DecTruncate => "decimal_truncate",
+        KernelFn::DecCompare => "decimal_compare",
+        KernelFn::DecEq => "decimal_eq",
+        KernelFn::DecNeq => "decimal_neq",
+        KernelFn::DecLt => "decimal_lt",
+        KernelFn::DecLte => "decimal_lte",
+        KernelFn::DecGt => "decimal_gt",
+        KernelFn::DecGte => "decimal_gte",
+        KernelFn::DecMin => "decimal_min",
+        KernelFn::DecMax => "decimal_max",
+        KernelFn::DecIsZero => "decimal_is_zero",
+        KernelFn::DecIsPositive => "decimal_is_positive",
+        KernelFn::DecIsNegative => "decimal_is_negative",
+        KernelFn::DecPercentOf => "decimal_percent_of",
+        KernelFn::DecAddPercent => "decimal_add_percent",
+        KernelFn::DecSubPercent => "decimal_sub_percent",
+        KernelFn::DecFormatWith => "decimal_format_with",
     }
 }
 
@@ -1257,17 +1281,17 @@ mod tests {
         );
         // A multi-word ctor stays verbatim (never `main_user_profile`, which a
         // value `userProfile` could also produce).
-        assert_eq!(
-            module_value(&["Main"], "UserProfile"),
-            "main_UserProfile"
-        );
+        assert_eq!(module_value(&["Main"], "UserProfile"), "main_UserProfile");
         assert_ne!(
             module_value(&["Main"], "UserProfile"),
             module_value(&["Main"], "userProfile"),
         );
         // Multi-segment module prefix is still snake-cased; only the ctor name
         // is preserved.
-        assert_eq!(module_value(&["Lib", "State"], "Widget"), "lib_state_Widget");
+        assert_eq!(
+            module_value(&["Lib", "State"], "Widget"),
+            "lib_state_Widget"
+        );
     }
 
     #[test]
