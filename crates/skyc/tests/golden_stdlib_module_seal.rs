@@ -259,3 +259,43 @@ fn csv_resolves_and_emits() {
 fn csv_builds_and_runs() {
     seal_module("csv", CSV_MAIN, "a|b");
 }
+
+// ── #210: Std.Cache ──────────────────────────────────────────────────────────
+// Exercises the full surface example 36-composite-server uses: `defaultCfg` +
+// `withMaxEntries`/`withTTL` builders → `new` (a `CacheCfg` record literal
+// consumed by `Cache_newRaw`), `put`, then `get` (a `Cache String String`
+// value pattern-matched through the `Cache k v` ADT). Proves the three emit
+// fixes together: the phantom `k`/`v` enum params (E0392), the `CacheCfg`
+// record → runtime-struct fold (E0308), and the `PartialEq` generic bound the
+// runtime `cache_put`/`cache_get` require.
+
+const CACHE_MAIN: &str = "module Main exposing (main)\n\
+    import Sky.Core.Prelude exposing (..)\n\
+    import Sky.Core.Task as Task\n\
+    import Std.Log exposing (println)\n\
+    import Std.Cache as Cache\n\n\
+    program : Task Error String\n\
+    program =\n\
+    \x20   let\n\
+    \x20       cfg = Cache.defaultCfg |> Cache.withMaxEntries 64 |> Cache.withTTL 30000\n\
+    \x20   in\n\
+    \x20   Cache.new cfg\n\
+    \x20       |> Task.andThen\n\
+    \x20           (\\cache ->\n\
+    \x20               Cache.put cache \"k\" \"hit\"\n\
+    \x20                   |> Task.andThen (\\_ -> Cache.get cache \"k\")\n\
+    \x20                   |> Task.map (\\found -> Maybe.withDefault \"miss\" found)\n\
+    \x20           )\n\n\
+    main =\n\
+    \x20   program |> Task.andThen (\\v -> println (\"CACHE:\" ++ v))\n";
+
+#[test]
+fn cache_resolves_and_emits() {
+    let _ = compile_module_probe("cache", CACHE_MAIN);
+}
+
+#[test]
+fn cache_builds_and_runs() {
+    // put "k"="hit" then get "k" → Just "hit"; withDefault → "hit".
+    seal_module("cache", CACHE_MAIN, "CACHE:hit");
+}
