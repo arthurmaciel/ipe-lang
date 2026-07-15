@@ -598,7 +598,11 @@ lane_gate() {
     else
         log "lane [$class] · gate RED — reverting integration to $gpre"
         git -C "$GATE_WT" merge --abort 2>/dev/null; git -C "$GATE_WT" reset --hard "$gpre" >/dev/null 2>&1
-        item_failed "$class" "$gdesc" "$gbr" "gate failed after merge. tail: $(tail -12 /tmp/autopilot-gate.log 2>/dev/null | tr '\n' ' ' | cut -c1-400)"
+        # Surface the ACTUAL failure, not a blind tail: the gate concatenates all 4
+        # steps + fuzz into one log, so `tail` shows only the LAST step (e.g. a
+        # passing nextest) and hides an earlier clippy/build error (this masked
+        # #187 for 2 attempts). Grep the real error signatures across the whole log.
+        item_failed "$class" "$gdesc" "$gbr" "gate failed. errors: $(rg -N -e 'error\[' -e '^error:' -e 'FAILED' -e 'panicked' -e 'could not compile' -e 'Killed' /tmp/autopilot-gate.log 2>/dev/null | tail -6 | tr '\n' ' ' | cut -c1-520) · tail: $(tail -4 /tmp/autopilot-gate.log 2>/dev/null | tr '\n' ' ' | cut -c1-200)"
     fi
 }
 
