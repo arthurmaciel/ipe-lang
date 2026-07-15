@@ -10063,6 +10063,70 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// #198 — re-type a decode-combinator mapper lambda's function-typed
+    /// parameter from the SHARED-callback [`IrType::Fun`] shape to the OWNED,
+    /// Send-only [`IrType::FnOnceChain`] shape when that parameter IS a decoder
+    /// payload that happens to be a function.
+    ///
+    /// A `Decoder (a -> b)` payload is represented at runtime as an owned,
+    /// linear curry chain — `Box<dyn FnOnce(a) -> b + Send>` (what `curryN`
+    /// builds and `decode_succeed`'s `A` is inferred to), never the re-callable
+    /// `Box<dyn Fn(a) -> b + Send + Sync>`. #195 already renders that shape at
+    /// the `Decoder<Fun>` TYPE position (the producer side —
+    /// `emit_types::render_type`'s `Decoder(Fun)` arm). But when the payload
+    /// flows OUT of the decoder into a mapper's parameter — `JsonDec.map (\f ->
+    /// f x) d`, `map2 (\g h -> …) da db`, `andThen (\f -> …) d` — that
+    /// parameter's inferred type is a bare `Ty::Fun`, so [`Self::lower_lambda`]
+    /// stamps it as [`IrType::Fun`], which `render_type` emits as the SHARED
+    /// `Box<dyn Fn + Send + Sync>`. The producer supplies `FnOnce + Send`; the
+    /// consumer expects `Fn + Send + Sync` → wrong trait (`Fn` vs `FnOnce`) AND
+    /// an unsatisfiable `+ Sync` → skyc-0-then-cargo-fail (E0308 / E0277).
+    ///
+    /// In every `map` / `map2` / `map3` / `map4` / `andThen` combinator the
+    /// mapper's PARAMETERS are exactly the decoded payload value(s), so any
+    /// parameter whose IR type is a function type is, by construction, a decoder
+    /// payload and must carry the owned `FnOnceChain` shape to match the
+    /// producer. This is the same owned-fn-value-vs-shared-callback
+    /// classification as #195, applied at the lambda-PARAM emission site rather
+    /// than the `Decoder<T>` type site — closing the whole class, not the one
+    /// failing program.
+    ///
+    /// The mapper is always the FIRST argument in these combinators (canon arg
+    /// order `[fn, decoders…]`). Only single-parameter payloads are retyped: a
+    /// `FnOnceChain` is a NESTED curry chain (`Box<FnOnce(a) -> Box<FnOnce(b) ->
+    /// r>>`), which a body applying the value with all args at once (`(f)(a,
+    /// b)`, `emit_apply`'s flat call) would not match; a multi-parameter payload
+    /// therefore stays untouched (a distinct, rarer surface) rather than being
+    /// silently mis-lowered.
+    fn retype_decoder_payload_mapper(resolved: &Callee, lowered_args: &mut [Expr]) {
+        if !matches!(
+            resolved,
+            Callee::Kernel(
+                KernelFn::JsonDecMap
+                    | KernelFn::JsonDecMap2
+                    | KernelFn::JsonDecMap3
+                    | KernelFn::JsonDecMap4
+                    | KernelFn::JsonDecAndThen
+                    | KernelFn::DbDecMap
+                    | KernelFn::DbDecMap2
+                    | KernelFn::DbDecMap3
+                    | KernelFn::DbDecMap4
+                    | KernelFn::DbDecAndThen
+            )
+        ) {
+            return;
+        }
+        if let Some(Expr::Lambda { params, .. }) = lowered_args.first_mut() {
+            for (_, ty) in params.iter_mut() {
+                if let IrType::Fun(fn_params, ret) = ty
+                    && fn_params.len() == 1
+                {
+                    *ty = IrType::FnOnceChain(fn_params.clone(), ret.clone());
+                }
+            }
+        }
+    }
+
     fn lower_call_uniform(
         &self,
         callee: &canon::Expr,
@@ -10155,6 +10219,7 @@ impl<'a> Lowerer<'a> {
                         // an exit-0-then-cargo-fail SEAL breach).
                         let mut lowered_args = lowered_args;
                         Self::retype_result_map_error_handler(&resolved, &mut lowered_args);
+                        Self::retype_decoder_payload_mapper(&resolved, &mut lowered_args);
                         Ok(Expr::Call {
                             callee: resolved,
                             args: lowered_args,
