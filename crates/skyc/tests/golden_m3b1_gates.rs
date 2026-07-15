@@ -57,6 +57,10 @@ fn build_ok(fixture: &str, out_suffix: &str) -> Option<PathBuf> {
 /// non-exhaustive match arm would make cargo reject the crate (or change the
 /// printed value), so a green here proves the lowering is correct, not merely
 /// diagnostic-free.
+// The `expect` guards a test-support invariant: `cargo` must spawn for the
+// E2E gate. A spawn failure means the toolchain/environment is broken, not the
+// lowering under test, so aborting is the correct failure signal.
+#[allow(clippy::expect_used)]
 fn assert_e2e_prints_three(out: &Path) {
     if std::env::var("SKY_E2E").is_err() {
         return;

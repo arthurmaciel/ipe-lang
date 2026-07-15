@@ -5,14 +5,14 @@
 //! must fire with `SKY-L0127`.
 //!
 //! If `count_fn_value_uses`'s Match arm were accidentally changed to MAX (as
-//! the CloneOk counter `count_var_uses` was), `max(1,1)=1` → gate silently
-//! accepts → the NonClone fn-value would be emitted as a double-move in the
+//! the `CloneOk` counter `count_var_uses` was), `max(1,1)=1` → gate silently
+//! accepts → the `NonClone` fn-value would be emitted as a double-move in the
 //! pattern the runtime cannot execute (only one arm runs, but the compiler does
 //! not know which at codegen time and cannot guarantee soundness without the
 //! gate).
 //!
 //! This golden asserts the compiler REJECTS the program with `SKY-L0127`,
-//! pinning that the fn-value gate kept SUM after the #193 CloneOk counter
+//! pinning that the fn-value gate kept SUM after the #193 `CloneOk` counter
 //! change.
 //!
 //! Run:
@@ -54,9 +54,8 @@ fn i193_nonclone_fn_once_per_arm_rejected() {
 
     let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
 
-    use skyc::CliError;
     let code = match &built {
-        Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
+        Err(skyc::CliError::Pipeline { diag, .. }) => Some(diag.code()),
         _ => None,
     };
     assert_eq!(
