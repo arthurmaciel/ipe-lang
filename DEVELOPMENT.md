@@ -97,6 +97,18 @@ pgrep -f mem-guard.sh >/dev/null || (nohup ./scripts/mem-guard.sh > /tmp/mem-gua
 **Prefer the Monitor tool** over `run_in_background` + polling — delivers
 events without leaving a wait-loop subprocess.
 
+### 2c. Caveman-ultra output — mandatory in EVERY agent brief
+
+Token discipline (non-negotiable). EVERY dispatched agent runs **caveman-ultra**
+output — autopilot lanes get it via `context.md §7`; every HAND-dispatched `Agent`
+MUST carry the same directive in its brief. Rules: terse; drop articles, filler
+(just/really/basically), hedging, pleasantries; fragments fine; one line where one
+line does; `X -> Y` for causality. **Code, paths, identifiers, and error text stay
+EXACT and verbatim — never abbreviate those.** No preamble ("I'll now…", "Let me…").
+Final line is always the verdict (`DONE`/`STUCK`/`PARTIAL`/`REVIEW:`/…). Terseness
+never trades away correctness, the gate, or a required verdict line. When you spawn
+an agent, adding the caveman-ultra directive is not optional.
+
 ### 3. Test / build timeout gate — every long-running command MUST be timeout-bounded
 
 A hung test/build is a silent task waster (already lost 7h waiting on a
