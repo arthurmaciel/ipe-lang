@@ -33,6 +33,7 @@ Read PRINCIPLES.md fully and also follow the practical rules below.
 1. **Test-first** — every new feature/bug becomes a regression test before the fix lands; the failing test is the discovery artefact.
 2. **No deferral** — "pre-existing" / "known edge case" is never a shipping excuse. Root-cause it, or escalate it; never paper over it.
 3. **Structural fix, not symptom** — repair the generative cause (the missing invariant, the drifting table, the special-case that should be a general rule) so the WHOLE class cannot recur; an ad-hoc patch that silences the visible symptom resurfaces one shape over (the next match arm, the next kernel, another call site). Ask "what structural property, if it held, would make this class impossible?" and establish it.
+4. **No shortcuts.** Removing/skipping the file, example, test, or line that TRIGGERS a bug is NOT a fix — it hides it. Never edit a reference example/fixture/`.sky` to dodge a compiler gap, weaken a gate, or `#[allow]` a real violation. Two acceptable outcomes only: root-cause it, or report it as an honest tracked blocker. A green obtained by deleting the red is a FAILURE. Every task serves the larger goal — making Ipê a better language per PRINCIPLES.md; "make the sweep green" means make the programs actually compile+run, not make red rows disappear.
 
 ## 4. Resource non-negotiables (loop preconditions)
 `mem-guard.sh` MUST be running. Every build/test wrapped in `timeout`. No
