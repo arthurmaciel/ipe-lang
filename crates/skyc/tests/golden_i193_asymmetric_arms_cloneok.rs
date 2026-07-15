@@ -1,7 +1,7 @@
-//! #193 regression — asymmetric-arm clone-hoist for CloneOk bindings with
+//! #193 regression — asymmetric-arm clone-hoist for `CloneOk` bindings with
 //! post-match tail uses (T≥1), per-arm snapshot/restore (v3).
 //!
-//! **The bug (pre-fix):** `count_var_uses` SUMed arm bodies for `Match`/`If`,
+//! **The bug (pre-fix):** `count_var_uses` summed arm bodies for `Match`/`If`,
 //! seeding the shared `remaining` counter too high.  `rewrite_multiuse_clones`
 //! then threaded that single counter across arms sequentially, so arm A's
 //! genuine last use was spuriously cloned (remaining from 4→3 → emits
@@ -15,7 +15,7 @@
 //!
 //! **T≥1 requirement (v3 C4):** the goldens MUST include a post-match tail use
 //! of the reused binding at the same IR level.  A tail-free shape passes even
-//! with the buggy per-arm seed (arm_count alone = 0 tail uses → phantom=0 →
+//! with the buggy per-arm seed (`arm_count` alone = 0 tail uses → phantom=0 →
 //! arm's last use is bare → sound for that arm but leaves the tail dangling).
 //! Only the T≥1 shape catches the arm+tail E0382 hole.
 //!
@@ -52,7 +52,7 @@ fn entry_path(root: &Path) -> PathBuf {
 ///
 /// `format_tag` (once-A True / twice-B False / tail):
 /// - arm A (True): `string_to_upper(label.clone())` — arm use clones because
-///   tail is live (phantom +1 makes arm_remaining=2; single use → remaining 2→1
+///   tail is live (phantom +1 makes `arm_remaining`=2; single use → remaining 2→1
 ///   → `CloneVar`).
 /// - arm B (False): two clones then bare, OR two uses both clone — correct as
 ///   long as cargo builds (the exact form depends on IR ordering).
@@ -116,15 +116,15 @@ fn i193_skyc_accepts_asymmetric_arms() {
 /// building the same source twice into different output dirs) must produce
 /// byte-identical `main.rs` output.  The per-arm snapshot is a pure function
 /// of the (unchanged) arm use-counts, so re-running over already-rewritten IR
-/// (CloneVar counts as a use) must reproduce the same result.
+/// (`CloneVar` counts as a use) must reproduce the same result.
 #[test]
 fn i193_idempotent() {
     let root = repo_root();
     let entry = entry_path(&root);
-    let out1 = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("i193_asymmetric_arms_idempotent_pass1");
-    let out2 = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("i193_asymmetric_arms_idempotent_pass2");
+    let out1 =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i193_asymmetric_arms_idempotent_pass1");
+    let out2 =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i193_asymmetric_arms_idempotent_pass2");
     let _ = std::fs::remove_dir_all(&out1);
     let _ = std::fs::remove_dir_all(&out2);
 
@@ -168,11 +168,7 @@ fn i193_cargo_builds_and_runs() {
     let Ok(runtime) = runtime else { return };
 
     let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
-    assert!(
-        built.is_ok(),
-        "skyc build must succeed: {:?}",
-        built.err()
-    );
+    assert!(built.is_ok(), "skyc build must succeed: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted("i193_asymmetric_arms_cloneok", &out);
     assert_eq!(
