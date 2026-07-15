@@ -41,17 +41,17 @@
 #
 # Config (env): PROGDEV_MAX_CYCLES (100 backstop) · PROGDEV_LANES (2 items/cycle,
 #   sequential) · PROGDEV_AUTHOR_MODEL (opus 4.8) · PROGDEV_GUARDIAN_MODEL /
-#   PROGDEV_RECONCILE_MODEL (opus) · touch autopilot.stop to halt after the cycle.
+#   touch autopilot.stop to halt after the current phase.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 REPO="$(pwd)"
 HERE="scripts/progressive-development"
 
 MAX_CYCLES="${PROGDEV_MAX_CYCLES:-100}"   # runaway backstop only; real stop = 2-dry-pass convergence
-# PROGDEV_LANES = items dispatched per cycle. autopilot is single-writer by design
-# (the gate does git switch/merge/nextest on the ONE shared checkout, and
-# context.md §6b relies on "exactly one writer"), so lanes run SEQUENTIALLY — this
-# is a per-cycle throughput cap, not concurrent authoring (that is orchestrate.sh).
+# PROGDEV_LANES = concurrent authoring lanes per cycle. Each lane authors
+# (design→impl→review) in its OWN worktree + OWN cargo target, in parallel; the
+# GATE (git switch/merge/nextest) is SERIAL — one lane integrates at a time, so
+# the shared checkout stays single-writer. 2 is the safe max on a ~15 GB box.
 LANES="${PROGDEV_LANES:-2}"
 MAX_GUARDIAN="${PROGDEV_MAX_GUARDIAN:-$LANES}"   # back-compat override; defaults to PROGDEV_LANES
 FUZZ_ITERS="${PROGDEV_FUZZ_ITERS:-30}"       # no-panic fuzzer iters (measure sweep + guardian gate)
@@ -67,7 +67,7 @@ QUEUE="docs/architecture/progressive-development-queue.tsv"   # ATTEMPT LEDGER o
 BACKLOG="$HERE/backlog.jsonl"                                 # THE work source: pending items (SSOT)
 BACKLOG_SH="$HERE/backlog.sh"                                 # claim/unclaim/close/defer (flock-serialized JSONL edits)
 CLAIM_TTL="${PROGDEV_CLAIM_TTL:-14400}"                       # 4h lease: a claim older than this is stale → auto-reclaimed
-CUR_CLAIM=""                                                  # id of the item this run is mid-dispatch on (released by EXIT trap)
+CUR_CLAIMS=()                                                 # ids this cycle's lanes hold (released by EXIT trap; reset per cycle)
 # Every pending backlog item runs the SAME pipeline (design→impl→review→gate) —
 # there is NO mechanical-vs-guardian tier. This heuristic only tailors the
 # design/review FOCUS + preserves the security HARD-RULE scrutiny.
@@ -114,16 +114,31 @@ KEEP_TARGETS="$(basename "$GATE_TARGET") $(basename "$GUARDIAN_TARGET") sky-rust
 LEDGER="docs/architecture/progdev-cost-ledger.tsv"   # persistent per-cycle agent-cost ledger (survives /tmp overwrite across runs)
 SHIMDIR="/tmp/autopilot-shims"                        # rg-enforcement: grep/egrep/fgrep shims prepended to the agent PATH
 
-log()  { printf '%s | autopilot | %s\n' "$(date +%H:%M)" "$*"; }
-die()  { log "ABORT: $*"; exit 1; }
+# log() writes to a NARRATOR file (watch.sh tails it). It prints to the terminal
+# ONLY when NO watch is attached — an auto-launched watch owns the tty with a
+# scroll-region pinned header, and a second writer (raw log lines) truncates it.
+NARRATOR="docs/architecture/progdev-narrator.log"
+log()  {
+    local line; line="$(date +%H:%M) | autopilot | $*"
+    printf '%s\n' "$line" >> "$NARRATOR" 2>/dev/null
+    { [ "${WATCH:-1}" != 1 ] || [ ! -t 1 ]; } && printf '%s\n' "$line"
+    return 0
+}
+die()  {   # aborts always show on the terminal, watched or not
+    local line; line="$(date +%H:%M) | autopilot | ABORT: $*"
+    printf '%s\n' "$line" >> "$NARRATOR" 2>/dev/null; printf '%s\n' "$line"; exit 1
+}
 
-# v4 status header — current task / phase / model, rewritten on each transition.
-# watch.sh shows it fixed at top; `cat docs/architecture/progdev-status.txt` any time.
-STATUS="docs/architecture/progdev-status.txt"
-set_task() { CUR_TYPE="$1"; CUR_TASK="$(printf '%.110s' "$2")"; CUR_START="$(date +%H:%M)"; CUR_ATT="${3:-·}"; }
+# PER-LANE status header — one file per concurrent lane so lane subshells never
+# race on a shared file. watch.sh renders one row per LIVE lane (by file mtime).
+# A lane context sets STATUS locally to its own file (default = lane 0, covers
+# serial phases). start_epoch drives watch's elapsed-time column.
+status_file() { printf 'docs/architecture/progdev-status-lane%s.txt' "$1"; }
+STATUS="$(status_file 0)"
+set_task() { CUR_TYPE="$1"; CUR_TASK="$(printf '%.110s' "$2")"; CUR_START="$(date +%H:%M)"; CUR_START_EPOCH="$(date +%s)"; CUR_ATT="${3:-·}"; }
 phase() {  # <phase-name> <model>
     { printf 'task    %s\n' "${CUR_TASK:-·}"
-      printf 'type    %s   attempt %s   started %s\n' "${CUR_TYPE:-·}" "${CUR_ATT:-·}" "${CUR_START:-·}"
+      printf 'type    %s   attempt %s   started %s   start_epoch %s\n' "${CUR_TYPE:-·}" "${CUR_ATT:-·}" "${CUR_START:-·}" "${CUR_START_EPOCH:-0}"
       printf 'phase   %-11s model %-8s now %s\n' "$1" "${2:-·}" "$(date +%H:%M)"; } > "$STATUS" 2>/dev/null
     log "· $1 (${2:-·})"
 }
@@ -150,7 +165,7 @@ Env vars (defaults):
   PROGDEV_WATCH           (1)      auto-launch watch.sh alongside (one terminal); 0 = don't (== --no-watch)
   PROGDEV_AUTHOR_MODEL    (claude-opus-4-8)     implementer (impl-stage) model
   PROGDEV_GUARDIAN_MODEL  (claude-opus-4-8)     guardian / triage / audit / review model
-  PROGDEV_RECONCILE_MODEL (claude-opus-4-8)     merge-conflict reconcile model (via orchestrate.sh)
+  PROGDEV_LANES_DISK_MIN  (30)     free-GB floor below which a cycle drops to 1 lane
   MASTER_GATE_TARGET      (~/.cache/master-gate-target)   isolated gate target dir
 
 Control:  touch autopilot.stop  → halt cleanly after the current cycle
@@ -208,13 +223,17 @@ reclaim_disk() {
     log "disk reclaim (free $(disk_free_gb)G) — keeping only [$KEEP_TARGETS]"
     for d in "$HOME"/.cache/*target*; do
         [ -d "$d" ] || continue
-        local keep=0 k; for k in $KEEP_TARGETS; do [ "$(basename "$d")" = "$k" ] && keep=1; done
+        local keep=0 k bn; bn="$(basename "$d")"
+        for k in $KEEP_TARGETS; do [ "$bn" = "$k" ] && keep=1; done
+        # per-lane cargo targets (guardian-target-0, -1, …) stay WARM across cycles;
+        # NORMAL reclaim keeps them — they are purged only at DISK_CRIT (ensure_disk).
+        case "$bn" in guardian-target*) keep=1 ;; esac
         [ "$keep" -eq 1 ] && continue
         # 2026-07-13: this call site is now UNCONDITIONAL (fired proactively
         # after every landed mechanical batch / guardian item, not just when
         # disk_free_gb dips below DISK_FLOOR) — see the two call sites'
         # comments. That makes the pre-existing no-liveness-check gap a real
-        # hazard it wasn't before: a concurrent orchestrate.sh lane can have
+        # hazard it wasn't before: a concurrent autopilot authoring lane can have
         # its OWN CARGO_TARGET_DIR (not in $KEEP_TARGETS) actively open at
         # the exact moment a DIFFERENT lane's completion triggers this
         # reclaim. Skip anything a live process still references — mirrors
@@ -234,6 +253,18 @@ reclaim_disk() {
 ensure_disk() {
     [ "$(disk_free_gb)" -ge "$DISK_FLOOR" ] && return 0
     log "low disk ($(disk_free_gb)G < ${DISK_FLOOR}G)"; reclaim_disk
+    # CRITICAL tier: if a NORMAL reclaim (which keeps the warm per-lane targets)
+    # left us still below DISK_CRIT, the per-lane guardian targets are the last
+    # thing to sacrifice — purge them (skipping any a live build still holds).
+    # This is the "each lane its own target, deleted ONLY on disk ENOSPC" rule.
+    if [ "$(disk_free_gb)" -lt "$DISK_CRIT" ]; then
+        log "still critical ($(disk_free_gb)G < ${DISK_CRIT}G) — purging warm per-lane targets"
+        for d in "$HOME"/.cache/guardian-target-*; do
+            [ -d "$d" ] || continue
+            pgrep -f -- "$d" >/dev/null 2>&1 && { log "  keep $(basename "$d") (live)"; continue; }
+            log "  rm $(basename "$d")"; rm -rf "$d"
+        done
+    fi
     [ "$(disk_free_gb)" -lt "$DISK_CRIT" ] && return 1 || return 0
 }
 
@@ -289,7 +320,7 @@ if [ "$WATCH" != 0 ] && [ -t 1 ] && [ -x "$HERE/watch.sh" ]; then
     "$HERE/watch.sh" & watch_pid=$!
     log "live monitor: watch.sh pid $watch_pid (one terminal; --no-watch / PROGDEV_WATCH=0 to disable)"
 fi
-trap 'rm -f "$LOCK"; [ -n "$CUR_CLAIM" ] && "$BACKLOG_SH" unclaim "$CUR_CLAIM" >/dev/null 2>&1; [ -n "$watch_pid" ] && { kill "$watch_pid" 2>/dev/null; pkill -P "$watch_pid" 2>/dev/null; }; log "exit"' EXIT
+trap 'rm -f "$LOCK"; [ "${#CUR_CLAIMS[@]}" -gt 0 ] && for _c in "${CUR_CLAIMS[@]}"; do "$BACKLOG_SH" unclaim "$_c" >/dev/null 2>&1; done; [ -n "$watch_pid" ] && { kill "$watch_pid" 2>/dev/null; pkill -P "$watch_pid" 2>/dev/null; }; log "exit"' EXIT
 
 BASE="$(git rev-parse --abbrev-ref HEAD)"
 START_SHA="$(git rev-parse HEAD)"
@@ -370,7 +401,7 @@ guardian_failed() { # <class> <desc> <branch> <reason>
     mark ATTEMPTED "$1" "$2"
     # release the backlog lease so the item is claimable again next pass (the
     # $QUEUE ledger still suppresses it if this was the ESCALATED attempt).
-    local _gid; _gid="$(id_of "$2")"; bk unclaim "$_gid"; [ "$CUR_CLAIM" = "$_gid" ] && CUR_CLAIM=""
+    local _gid; _gid="$(id_of "$2")"; bk unclaim "$_gid"   # release the backlog lease (EXIT-trap over-unclaim is harmless)
     if [ "$n" -ge "$GUARDIAN_ATTEMPTS" ]; then
         mark ESCALATED "$1" "$2"; log "guardian [$1] exhausted $GUARDIAN_ATTEMPTS attempts — ESCALATED to human (resume at $RESUME_DIR/$(slug_of "$2").md)"
     else
@@ -395,6 +426,95 @@ reviewer_angle() { case "$1" in
   guardian-security)   printf '%s' "ATTACK it, assume malice: can a secret leak via logs/errors/timing? is any compare non-constant-time? does it weaken an existing gate or open an injection? AUTO-REJECT if the diff adds ANY new \`unsafe\`." ;;
   *)                   printf '%s' "try to find any unsoundness, behaviour change, or disguised hack." ;;
 esac; }
+
+# ── lane_author <i> — CONCURRENT authoring for one lane (own worktree + own cargo
+# target). Runs design→impl→review; writes a one-line verdict to ${lane_res[i]}:
+# OK / ESCALATE / NOCOMMIT / REJECT (+reason). Touches ONLY per-lane artifacts
+# (logs, its own status file, its own resume plan) — NO $QUEUE/bk/shared-status
+# writes; those are serial (Phase B). Runs as a background subshell, so its local
+# STATUS override + cwd changes never leak to siblings.
+lane_author() {
+    local i="$1"
+    local class="${lane_class[$i]}" gdesc="${lane_desc[$i]}" gbr="${lane_br[$i]}"
+    local gwt="${lane_wt[$i]}" tgt="${lane_tgt[$i]}" glog="${lane_glog[$i]}" res="${lane_res[$i]}"
+    local dlog="/tmp/autopilot-guardian-design-c$cycle-$i.log"
+    local rlog="/tmp/autopilot-guardian-review-c$cycle-$i.log"
+    local dfile="/tmp/autopilot-guardian-design-plan-c$cycle-$i.md"
+    local dplan="$RESUME_DIR/$(slug_of "$gdesc").design.md"
+    local datt design design_text review ahead
+    STATUS="$(status_file "$i")"                       # this lane's header (local to the subshell)
+    datt="$(( $(attempts_of "$gdesc") + 1 ))"
+    set_task "$class" "$gdesc" "$datt/$GUARDIAN_ATTEMPTS"
+
+    # DESIGN — reuse the saved plan on a retry, else fresh (Opus)
+    if [ "$datt" -ge 2 ] && [ -s "$dplan" ]; then
+        phase design reused
+        design_text="$(cat "$dplan")"; cp -f "$dplan" "$dfile"; : > "$dlog"
+    else
+        phase design opus
+        design="$(agent "$DESIGN_MODEL" "You are a compiler guardian DESIGNER specialising in $class. Do NOT write code. Produce a concise root-cause + fix PLAN: (a) the root cause, (b) the exact crates/files/functions to change, (c) the approach — matching the ../sky READ-ONLY reference, root-cause only, NEVER a hack/fixture-edit/gate-weakening, (d) the regression test to add. FOCUS: $(guardian_focus "$class"). Item: $gdesc .$(resume_hint "$gdesc") If there is NO sound fix (needs a human decision, genuinely multi-session, or would require a hack), print exactly 'DESIGN: ESCALATE <why>' and nothing else. Otherwise print 'DESIGN: <the plan>'." | tee "$dlog")"
+        if printf '%s' "$design" | rg -q 'DESIGN: ESCALATE'; then
+            printf 'ESCALATE design escalate: %s\n' "$(reason_of "$design")" > "$res"; return 0
+        fi
+        design_text="$(printf '%s' "$design" | jq -rj 'select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text' 2>/dev/null)"
+        [ -z "$design_text" ] && design_text="$design"
+        mkdir -p "$RESUME_DIR"; printf '%s\n' "$design_text" > "$dplan"; printf '%s\n' "$design_text" > "$dfile"
+    fi
+
+    # IMPL — in the lane worktree, own cargo target
+    phase impl opus
+    ( cd "$gwt"; CARGO_TARGET_DIR="$tgt" \
+      agent "$AUTHOR_MODEL" "You are the IMPLEMENTER. READ the DESIGN plan at $dfile FIRST, then follow it EXACTLY — do NOT redesign or deviate from it. Obey the operating contract (6 principles + 2 rules + the seal). Item: $gdesc .$(resume_hint "$gdesc") Boundary: the Rust-port crates + runtime; ../sky is READ-ONLY. Implement the fix + the regression test the design names. SELF-CHECK (do NOT run the full workspace test suite — the integration gate runs that once): (1) 'cargo clippy --workspace --all-targets -- -D warnings' is clean; (2) 'cargo build -p skyc', then rebuild the failing example and confirm its ORIGINAL diagnostic is GONE. Iterate until BOTH pass (cap ~3 tries). Then 'git add -A && git commit'. Final line: 'IMPL: DONE' or 'IMPL: STUCK <why>'." ) >"$glog" 2>&1
+    ahead="$(git rev-list --count "$BASE..$gbr" 2>/dev/null || echo 0)"
+    if [ "$ahead" -eq 0 ]; then
+        printf 'NOCOMMIT impl no-commit. notes: %s\n' "$(tail -10 "$glog" 2>/dev/null | tr '\n' ' ' | cut -c1-300)" > "$res"; return 0
+    fi
+
+    # REVIEW — adversarial, in the lane worktree, own cargo target
+    phase review opus
+    review="$( ( cd "$gwt"; CARGO_TARGET_DIR="$tgt" \
+      agent "$GUARDIAN_MODEL" "You are an ADVERSARIAL reviewer of a $class change on branch $gbr (diff: git diff $BASE..$gbr). REFUTE it — $(reviewer_angle "$class"). Read the diff + the added tests, THEN VERIFY WITH YOUR OWN HANDS: build skyc from THIS branch and cargo-build your OWN probe programs — confirm skyc-exit-0 ⇒ cargo-exit-0 (THE SEAL) yourself. The impl's self-report is NOT evidence (a fix can report green while a buried guard disabled it, or while it emits skyc-0-then-cargo-fail on a shape the impl never tested). Cache-hits on unchanged code are fine — recompiling identical source is zero-signal; integrity comes from RUNNING the committed source + your probes. If you find ANY unsoundness / behaviour change vs the ../sky reference / disguised hack / skyc-0-then-cargo-fail, print 'REVIEW: REJECT <why + the exact repro>'. Only if you cannot break it after genuine effort, print 'REVIEW: ACCEPT'. Default to REJECT when uncertain." ) | tee "$rlog")"
+    if ! printf '%s' "$review" | rg -q 'REVIEW: ACCEPT'; then
+        printf 'REJECT review REJECT: %s\n' "$(reason_of "$review")" > "$res"; return 0
+    fi
+    printf 'OK\n' > "$res"
+}
+
+# ── lane_gate <i> — SERIAL integrate for a lane whose author verdict was OK. Runs
+# on the shared checkout (single-writer): merge → nextest+doc+clippy+fuzz → close
+# or revert. A merge CONFLICT (this lane was cut from the pre-cycle base and an
+# earlier lane advanced HEAD into the same files) → abort + requeue, no attempt burned.
+lane_gate() {
+    local i="$1"
+    local class="${lane_class[$i]}" gdesc="${lane_desc[$i]}" gbr="${lane_br[$i]}" gid="${lane_id[$i]}"
+    local GRF SKY_SHARE gpre
+    GRF="-C link-arg=-fuse-ld=mold -Zthreads=8"
+    STATUS="$(status_file "$i")"
+    # item #187: pin the oracle E2E builds to the SHARED runtime target (compiled
+    # once) EXCEPT when this change vendors a different runtime/ (then isolate).
+    if git diff --name-only "$BASE..$gbr" 2>/dev/null | rg -q '^runtime/'; then SKY_SHARE=""; else SKY_SHARE="$HOME/.cache/sky-rust-target"; fi
+    phase gate ·
+    git switch "$BASE" >/dev/null 2>&1
+    gpre="$(git rev-parse HEAD)"   # pre-merge sha; a failed gate reverts HERE
+    if ! git merge --no-ff -m "autopilot: $class fix — $gdesc" "$gbr" >/dev/null 2>&1; then
+        git merge --abort 2>/dev/null
+        log "guardian [$class] · merge race with a landed lane — requeued (no penalty): $gdesc"
+        bk unclaim "$gid"; return 0
+    fi
+    if ( touch runtime/tests/*.rs crates/skyc/tests/*.rs 2>/dev/null; \
+         RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" SKY_ORACLE_SHARED_TARGET="$SKY_SHARE" timeout 3000 cargo +nightly nextest run --workspace >/tmp/autopilot-gate.log 2>&1 \
+         && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" SKY_ORACLE_SHARED_TARGET="$SKY_SHARE" timeout 1800 cargo +nightly nextest run -p sky-runtime-rust --features full >>/tmp/autopilot-gate.log 2>&1 \
+         && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 600 cargo +nightly test --workspace --doc >>/tmp/autopilot-gate.log 2>&1 \
+         && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 1200 cargo +nightly clippy --workspace --no-deps --jobs 4 -- -D warnings >>/tmp/autopilot-gate.log 2>&1 ) \
+       && ( "$FUZZ" --iters "$FUZZ_ITERS" --quiet >>/tmp/autopilot-gate.log 2>&1 ); then
+        log "guardian [$class] · LANDED (gate-green + fuzz-clean)"; mark LANDED "$class" "$gdesc"
+        bk close "$gid" --done-at "$(date +%F)"
+    else
+        log "guardian [$class] · gate RED — reverting to $gpre"
+        git merge --abort 2>/dev/null; git reset --hard "$gpre" >/dev/null 2>&1
+        guardian_failed "$class" "$gdesc" "$gbr" "gate failed after merge. tail: $(tail -12 /tmp/autopilot-gate.log 2>/dev/null | tr '\n' ' ' | cut -c1-400)"
+    fi
+}
 
 # ── the loop: run until DONE (2 passes, no new tractable findings) ────────────
 # Converged = 2 consecutive cycles where nothing landed AND nothing actionable
@@ -422,7 +542,7 @@ while :; do
     log "cycle $cycle (dry=$dry, actionable=$act)"
 
     # 1 ── (mechanical tier ABOLISHED) — every backlog item runs the SAME
-    #       design→impl→review→gate pipeline below; no orchestrate.sh fast-path.
+    #       design→impl→review→gate pipeline below; no mechanical fast-path.
 
     # 2 ── audit what landed (adversarial soundness review of new commits) ────
     if [ "$(git rev-parse HEAD)" != "$START_SHA" ] && [ "$(git rev-parse HEAD)" != "$last_audit" ]; then
@@ -439,122 +559,64 @@ For each, \`git show <sha>\`. If you find a violation, print AUDIT: VIOLATION <s
 
     # 2b ── (remeasure sweep + fuzz + triage ABOLISHED) — the work source is
     #        backlog.jsonl, so there is no sweep to discover/refill items.
-    # 3 ── dispatch: the UNIFIED pipeline over pending backlog items ──────────
-    mapfile -t guard < <(pending)   # each entry: "<class>\t#<id> <task>" (class = focus only)
+    # 3 ── dispatch: up to LANES items — author CONCURRENTLY, integrate SERIALLY ──
+    mapfile -t guard < <(pending)
     if [ "${#guard[@]}" -eq 0 ]; then log "nothing actionable this pass"; continue; fi
-    log "${#guard[@]} backlog item(s) actionable. Dispatching up to $MAX_GUARDIAN this run (same pipeline for all)."
-    done_guard=0
+    CUR_CLAIMS=()          # reset the per-cycle lease list (EXIT trap releases whatever is in flight)
+    # lane count this cycle: LANES, dropped to 1 when disk is tight — two concurrent
+    # cargo targets need headroom (guards against the ENOSPC crisis).
+    want="$MAX_GUARDIAN"   # = PROGDEV_LANES (primary), or PROGDEV_MAX_GUARDIAN if set (back-compat)
+    if [ "$(disk_free_gb)" -lt "${PROGDEV_LANES_DISK_MIN:-30}" ]; then
+        want=1; log "disk $(disk_free_gb)G < ${PROGDEV_LANES_DISK_MIN:-30}G — 1 lane this cycle"
+    fi
+    rm -f docs/architecture/progdev-status-lane*.txt 2>/dev/null   # clear last cycle's lane rows for watch
+
+    # ── setup (SERIAL): claim + worktree + per-lane arrays ──
+    lane_class=(); lane_desc=(); lane_br=(); lane_wt=(); lane_tgt=(); lane_glog=(); lane_res=(); lane_id=()
+    n=0
     for g in "${guard[@]}"; do
-        [ "$done_guard" -ge "$MAX_GUARDIAN" ] && break
+        [ "$n" -ge "$want" ] && break
         [ -f "$STOP" ] && break
-        class="${g%%$'\t'*}"; gdesc="${g#*$'\t'}"
-        [ -z "$class" ] && class="guardian-typesystem"
-        done_guard=$((done_guard+1))
-        CUR_CLAIM="$(id_of "$gdesc")"; bk claim "$CUR_CLAIM"   # lease it so a parallel hand-dispatched agent skips it
-        set_task "$class" "$gdesc" "$(( $(attempts_of "$gdesc") + 1 ))/$GUARDIAN_ATTEMPTS"
-        log "guardian [$class] · $gdesc"
-        gbr="progressive-development/guardian-c$cycle-$done_guard"
-        gwt="$REPO/.progressive-development-wt/guardian-$done_guard"
-        glog="/tmp/autopilot-guardian-c$cycle-$done_guard.log"
-        dlog="/tmp/autopilot-guardian-design-c$cycle-$done_guard.log"   # tee'd so watch.sh follows the design stream live
-        rlog="/tmp/autopilot-guardian-review-c$cycle-$done_guard.log"   # tee'd so watch.sh follows the review stream live
-        # Collision-proof: a SIGKILLed prior run leaves the worktree registration
-        # AND the branch behind, so a plain `-b` add fails 'branch already exists'
-        # and the item is wrongly marked BLOCKED. Force-clear both first — the
-        # branch is ephemeral scratch (any real prior attempt's diff is preserved
-        # by save_resume), so deleting it loses nothing.
-        git worktree remove --force "$gwt" 2>/dev/null || true
-        rm -rf "$gwt"
-        git branch -D "$gbr" 2>/dev/null || true
-        git worktree add --quiet -b "$gbr" "$gwt" "$BASE" || { mark BLOCKED "$class" "$gdesc"; continue; }
-
-        # ── v4 stage 1: DESIGN — Opus on the FIRST attempt; REUSED from the saved
-        # plan on a RETRY. A REVIEW: REJECT usually means the impl was wrong, not the
-        # plan, and re-designing every attempt was the single biggest cost lane. On a
-        # retry the impl gets the rejection reason (resume_hint) so it fixes the
-        # specific defect against the SAME plan. (If the plan itself was wrong, the
-        # 2nd attempt escalates anyway — bounded at GUARDIAN_ATTEMPTS.)
-        dplan="$RESUME_DIR/$(slug_of "$gdesc").design.md"
-        dfile="/tmp/autopilot-guardian-design-plan-c$cycle-$done_guard.md"
-        datt="$(( $(attempts_of "$gdesc") + 1 ))"
-        if [ "$datt" -ge 2 ] && [ -s "$dplan" ]; then
-            phase design reused
-            log "guardian [$class] · design REUSED (attempt $datt — impl refines the prior plan against the rejection)"
-            design_text="$(cat "$dplan")"; cp -f "$dplan" "$dfile"; : > "$dlog"
-        else
-            phase design opus
-            design="$(agent "$DESIGN_MODEL" "You are a compiler guardian DESIGNER specialising in $class. Do NOT write code. Produce a concise root-cause + fix PLAN: (a) the root cause, (b) the exact crates/files/functions to change, (c) the approach — matching the ../sky READ-ONLY reference, root-cause only, NEVER a hack/fixture-edit/gate-weakening, (d) the regression test to add. FOCUS: $(guardian_focus "$class"). Item: $gdesc .$(resume_hint "$gdesc") If there is NO sound fix (needs a human decision, genuinely multi-session, or would require a hack), print exactly 'DESIGN: ESCALATE <why>' and nothing else. Otherwise print 'DESIGN: <the plan>'." | tee "$dlog")"
-            if printf '%s' "$design" | rg -q 'DESIGN: ESCALATE'; then
-                log "guardian [$class] · design → ESCALATE"
-                guardian_failed "$class" "$gdesc" "$gbr" "design escalate: $(reason_of "$design")"
-                git worktree remove --force "$gwt" 2>/dev/null; git branch -D "$gbr" 2>/dev/null; continue
-            fi
-            design_text="$(printf '%s' "$design" | jq -rj 'select(.type=="assistant") | .message.content[]? | select(.type=="text") | .text' 2>/dev/null)"
-            [ -z "$design_text" ] && design_text="$design"   # STREAM=0 (already plain text) or jq absent
-            mkdir -p "$RESUME_DIR"; printf '%s\n' "$design_text" > "$dplan"   # persist so a retry REUSES it
-            printf '%s\n' "$design_text" > "$dfile"
+        class="${g%%$'\t'*}"; gdesc="${g#*$'\t'}"; [ -z "$class" ] && class="guardian-typesystem"
+        gid="$(id_of "$gdesc")"; bk claim "$gid"; CUR_CLAIMS+=("$gid")
+        gbr="progressive-development/guardian-c$cycle-$n"
+        gwt="$REPO/.progressive-development-wt/guardian-$n"
+        # collision-proof: a SIGKILLed prior run leaves the worktree registration AND
+        # branch behind; force-clear both (branch is scratch, resume artifact preserved).
+        git worktree remove --force "$gwt" 2>/dev/null || true; rm -rf "$gwt"; git branch -D "$gbr" 2>/dev/null || true
+        if ! git worktree add --quiet -b "$gbr" "$gwt" "$BASE"; then
+            mark BLOCKED "$class" "$gdesc"; bk unclaim "$gid"; continue
         fi
-
-        # ── v4 stage 2: IMPL (Opus) — follows the plan FILE ($dfile), never argv
-        # (PROGDEV_STREAM=1 $design is many-KB stream-json → ARG_MAX E2BIG). On a
-        # retry resume_hint points impl at the prior diff + why it was rejected.
-        phase impl opus
-        ( cd "$gwt"; CARGO_TARGET_DIR="$GUARDIAN_TARGET" \
-          agent "$AUTHOR_MODEL" "You are the IMPLEMENTER. READ the DESIGN plan at $dfile FIRST, then follow it EXACTLY — do NOT redesign or deviate from it. Obey the operating contract (6 principles + 2 rules + the seal). Item: $gdesc .$(resume_hint "$gdesc") Boundary: the Rust-port crates + runtime; ../sky is READ-ONLY. Implement the fix + the regression test the design names. SELF-CHECK (do NOT run the full workspace test suite — the integration gate runs that once): (1) 'cargo clippy --workspace --all-targets -- -D warnings' is clean; (2) 'cargo build -p skyc', then rebuild the failing example and confirm its ORIGINAL diagnostic is GONE. Iterate until BOTH pass (cap ~3 tries). Then 'git add -A && git commit'. Final line: 'IMPL: DONE' or 'IMPL: STUCK <why>'." ) >"$glog" 2>&1
-        ahead="$(git rev-list --count "$BASE..$gbr" 2>/dev/null || echo 0)"
-        if [ "$ahead" -eq 0 ]; then
-            log "guardian [$class] · impl made no commit"
-            guardian_failed "$class" "$gdesc" "$gbr" "impl no-commit. design: $(printf '%s' "$design_text" | tr '\n' ' ' | cut -c1-200) · notes: $(tail -10 "$glog" 2>/dev/null | tr '\n' ' ' | cut -c1-300)"
-            git worktree remove --force "$gwt" 2>/dev/null; git branch -D "$gbr" 2>/dev/null; continue
-        fi
-
-        # ── v4 stage 3: Opus REVIEW — BEFORE the expensive gate (failures are review-dominated) ──
-        phase review opus
-        review="$(agent "$GUARDIAN_MODEL" "You are an ADVERSARIAL reviewer of a $class change on branch $gbr (diff: git diff $BASE..$gbr). REFUTE it — $(reviewer_angle "$class"). Read the diff + the added tests, THEN VERIFY WITH YOUR OWN HANDS: build skyc from THIS branch and cargo-build your OWN probe programs — confirm skyc-exit-0 ⇒ cargo-exit-0 (THE SEAL) yourself. The impl's self-report is NOT evidence (a fix can report green while a buried guard disabled it, or while it emits skyc-0-then-cargo-fail on a shape the impl never tested). Cache-hits on unchanged code are fine — recompiling identical source is zero-signal; integrity comes from RUNNING the committed source + your probes. If you find ANY unsoundness / behaviour change vs the ../sky reference / disguised hack / skyc-0-then-cargo-fail, print 'REVIEW: REJECT <why + the exact repro>'. Only if you cannot break it after genuine effort, print 'REVIEW: ACCEPT'. Default to REJECT when uncertain." | tee "$rlog")"
-        if ! printf '%s' "$review" | rg -q 'REVIEW: ACCEPT'; then
-            log "guardian [$class] · review → REJECT"
-            guardian_failed "$class" "$gdesc" "$gbr" "review REJECT: $(reason_of "$review")"
-            git worktree remove --force "$gwt" 2>/dev/null; git branch -D "$gbr" 2>/dev/null; continue
-        fi
-
-        # ── v4 stage 4: INTEGRATE — nextest + doctests + clippy + fuzz, on NIGHTLY ──
-        # nextest run replaces `cargo test` (faster scheduler + better isolation) but
-        # does NOT run doctests → a `--doc` pass follows. The `--features full`
-        # runtime lane is LOAD-BEARING (gate blind spot, 2026-07-11): the runtime's
-        # `default = []` and workspace feature-unification never enables `live`/
-        # `db`/`tui`/…, so the workspace run silently skips every feature-gated
-        # test — incl. the whole `sky_runtime::live::*` surface (style_inject
-        # CSS-injection sink gates, SSE/session/dispatch) and the spawn_blocking
-        # regressions. Mirrors CI's `runtime-full-features` job. Gate runs on nightly
-        # with RUSTFLAGS="mold link + -Zthreads=8" (parallel rustc frontend — which IS
-        # clippy — so it speeds clippy AND the test builds; mold speeds the link).
-        # GRF replaces the config's rustflags (must re-include mold). clippy dropped
-        # --all-targets (tests already run via nextest) + --no-deps + --jobs 4.
-        # NOTE: gate is nightly; impl self-checks are stable — a nightly-only lint on
-        # agent code can red a gate (rare drift), then re-queues. GATE_TARGET rebuilds
-        # once on the stable→nightly switch, then stays nightly.
-        GRF="-C link-arg=-fuse-ld=mold -Zthreads=8"
-        phase gate ·
-        git switch "$BASE" >/dev/null 2>&1
-        gpre="$(git rev-parse HEAD)"   # pre-merge sha; a failed gate reverts HERE, never a stale HEAD
-        if git merge --no-ff -m "autopilot: $class fix — $gdesc" "$gbr" >/dev/null 2>&1 \
-           && ( touch runtime/tests/*.rs crates/skyc/tests/*.rs 2>/dev/null; \
-                RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 3000 cargo +nightly nextest run --workspace >/tmp/autopilot-gate.log 2>&1 \
-                && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 1800 cargo +nightly nextest run -p sky-runtime-rust --features full >>/tmp/autopilot-gate.log 2>&1 \
-                && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 600 cargo +nightly test --workspace --doc >>/tmp/autopilot-gate.log 2>&1 \
-                && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 1200 cargo +nightly clippy --workspace --no-deps --jobs 4 -- -D warnings >>/tmp/autopilot-gate.log 2>&1 ) \
-           && ( "$FUZZ" --iters "$FUZZ_ITERS" --quiet >>/tmp/autopilot-gate.log 2>&1 ); then
-            log "guardian [$class] · LANDED (gate-green + fuzz-clean)"; mark LANDED "$class" "$gdesc"
-            bk close "$CUR_CLAIM" --done-at "$(date +%F)"; CUR_CLAIM=""   # fix landed → backlog done (keeps SSOT truthful; no manual sync)
-        else
-            log "guardian [$class] · gate RED — reverting to $gpre"
-            git merge --abort 2>/dev/null; git reset --hard "$gpre" >/dev/null 2>&1
-            guardian_failed "$class" "$gdesc" "$gbr" "gate failed after merge. tail: $(tail -12 /tmp/autopilot-gate.log 2>/dev/null | tr '\n' ' ' | cut -c1-400)"
-        fi
-        git worktree remove --force "$gwt" 2>/dev/null; git branch -D "$gbr" 2>/dev/null
-        reclaim_disk   # proactive per-item hygiene — see the mechanical-batch call site's comment
+        lane_class+=("$class"); lane_desc+=("$gdesc"); lane_br+=("$gbr"); lane_wt+=("$gwt")
+        lane_tgt+=("$GUARDIAN_TARGET-$n"); lane_glog+=("/tmp/autopilot-guardian-c$cycle-$n.log")
+        lane_res+=("/tmp/autopilot-lane-c$cycle-$n.result"); lane_id+=("$gid")
+        : > "/tmp/autopilot-lane-c$cycle-$n.result"
+        n=$((n+1))
     done
+    [ "$n" -eq 0 ] && continue
+    log "${#guard[@]} actionable; authoring $n lane(s) concurrently (design→impl→review)…"
+
+    # ── Phase A: author CONCURRENTLY (one bg subshell per lane), then barrier ──
+    apids=()
+    for ((k=0; k<n; k++)); do lane_author "$k" & apids+=("$!"); done
+    for p in "${apids[@]}"; do wait "$p"; done
+
+    # ── Phase B: integrate SERIALLY (single-writer git) ──
+    for ((k=0; k<n; k++)); do
+        [ -f "$STOP" ] && break
+        v="$(head -1 "${lane_res[$k]}" 2>/dev/null)"; verdict="${v%% *}"; vreason="${v#* }"
+        case "$verdict" in
+            OK) lane_gate "$k" ;;
+            ESCALATE|NOCOMMIT|REJECT)
+                log "guardian [${lane_class[$k]}] · $verdict · ${lane_desc[$k]}"
+                guardian_failed "${lane_class[$k]}" "${lane_desc[$k]}" "${lane_br[$k]}" "$vreason" ;;
+            *)  log "guardian [${lane_class[$k]}] · no verdict (author died) — requeued"; bk unclaim "${lane_id[$k]}" ;;
+        esac
+        git worktree remove --force "${lane_wt[$k]}" 2>/dev/null; git branch -D "${lane_br[$k]}" 2>/dev/null
+    done
+    reclaim_disk
     git worktree prune
+
     # persistent per-cycle cost ledger — cumulative agent $ from this run's logs,
     # recorded each cycle so a later run's /tmp overwrite can't erase the trend.
     { printf '%s\t%s\tc%s\t' "$(date +%FT%H:%M)" "${START_SHA:0:7}" "$cycle"
