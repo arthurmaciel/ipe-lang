@@ -25,7 +25,24 @@ to reclaim and fills the disk"), not the story of the day it was learned.
 
 ## Non-negotiables
 
-### 0. Understand before you change — `ipe-index` + reference-first (MANDATORY)
+### 0. No shortcuts — fix the root cause, in service of the language (MANDATORY)
+
+Removing the file, example, test, or line that *triggers* a bug is NOT fixing the
+bug — it hides it. NEVER delete/skip the failing thing, edit a reference example or
+fixture or `.sky` to dodge a compiler gap, weaken a gate, `#[allow]` a real
+violation, or invent a workaround so a symptom disappears. There are exactly two
+acceptable outcomes for any defect: **root-cause it** (in the compiler/runtime), or
+**report it honestly as a tracked blocker**. A green result obtained by deleting the
+red is a FAILURE, not a success.
+
+Every task is a means, never the end. Interpret each request within the larger goal:
+**making Ipê a better language for its developers and users, per `PRINCIPLES.md`.**
+"Make the sweep green" means *make the programs actually compile and run correctly* —
+not *make the red rows disappear*. When a shortcut would satisfy the literal ask but
+betray that goal, do the harder correct thing, or surface the tradeoff — do not take
+the shortcut silently.
+
+### 0a. Understand before you change — `ipe-index` + reference-first (MANDATORY)
 
 Before writing or changing ANY compiler/runtime code, you MUST understand both the
 code you are about to touch AND how the reference already handles the task. A fix
