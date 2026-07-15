@@ -45,7 +45,7 @@ fn assert_byte_identical(name: &str) {
     // harness helper.
     support::assert_emitted_project_matches_golden_dir(
         &out,
-        golden.parent().expect("golden has a parent dir"),
+        support::golden_dir_of(&golden),
     );
 }
 
