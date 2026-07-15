@@ -337,8 +337,14 @@ const SKY_CORE_WEBSOCKET: &str = include_str!("../stdlib/Sky/Core/WebSocket.sky"
 
 /// `Std.Cache` — in-memory LRU + TTL cache (compiled source).
 ///
-/// Defines `type Cache k v = Cache Int` ADT.  KERNEL-BLOCKED (#196): no
-/// `Cache_*` kernel variants exist, so a member use fails closed with SKY-N0028.
+/// Defines `type Cache k v = Cache Int` ADT.  RESOLVES (#210, skyc-0 AND
+/// cargo-0): the seven `Cache_*` kernels are registered
+/// (`sky_runtime::cache::*`; a faithful port of the reference's Go+Rust cache
+/// kernels).  The opaque `Cache k v` is backed by the non-generic runtime
+/// `SkyCacheHandle` (the phantom `k`/`v` are dropped, mirroring the reference's
+/// `runtimeOpaqueTypes` mapping); `CacheCfg` / the `stats` return record fold to
+/// the runtime `CacheCfg` / `CacheStats` structs (mirroring the reference's
+/// struct-alias registry).
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_CACHE: &str = include_str!("../stdlib/Std/Cache.sky");
 

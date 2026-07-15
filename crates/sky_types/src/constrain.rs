@@ -494,6 +494,19 @@ struct Builtins {
     csv_f_header: Symbol,
     /// `"rows"` — `Std.Csv.Csv.rows : List (List String)`.
     csv_f_rows: Symbol,
+    // ── #210 Std.Cache record field symbols ───────────────────────────────────
+    /// `"maxEntries"` — `Std.Cache.CacheCfg.maxEntries : Int`.
+    cache_f_max_entries: Symbol,
+    /// `"ttlMs"` — `Std.Cache.CacheCfg.ttlMs : Int`.
+    cache_f_ttl_ms: Symbol,
+    /// `"maxBytes"` — `Std.Cache.CacheCfg.maxBytes : Int`.
+    cache_f_max_bytes: Symbol,
+    /// `"hits"` — `Std.Cache.stats` return field `hits : Int`.
+    cache_f_hits: Symbol,
+    /// `"misses"` — `Std.Cache.stats` return field `misses : Int`.
+    cache_f_misses: Symbol,
+    /// `"evictions"` — `Std.Cache.stats` return field `evictions : Int`.
+    cache_f_evictions: Symbol,
 }
 
 impl Builtins {
@@ -638,6 +651,13 @@ impl Builtins {
             stream_id: interner.intern("StreamId")?,
             csv_f_header: interner.intern("header")?,
             csv_f_rows: interner.intern("rows")?,
+            // ── #210 Std.Cache record field symbols ──────────────────────────
+            cache_f_max_entries: interner.intern("maxEntries")?,
+            cache_f_ttl_ms: interner.intern("ttlMs")?,
+            cache_f_max_bytes: interner.intern("maxBytes")?,
+            cache_f_hits: interner.intern("hits")?,
+            cache_f_misses: interner.intern("misses")?,
+            cache_f_evictions: interner.intern("evictions")?,
             // ── Order ADT (#123) ─────────────────────────────────────────────
             order: interner.intern("Order")?,
             lt: interner.intern("LT")?,
@@ -2476,6 +2496,14 @@ impl<'a> Builder<'a> {
         match k.decl().qualifier {
             "Set" => Some(TyBounds::set_elem()),
             "Dict" => Some(TyBounds::dict_key()),
+            // #210: `Std.Cache`'s key variable is raw scheme-var 0 in `get` /
+            // `put` / `remove` (`Int -> k -> …`), and the runtime scans keys by
+            // `PartialEq` (`cache_get`/`cache_put`/`cache_remove` bound
+            // `K: PartialEq`). Attaching the EQ obligation lifts `PartialEq`
+            // onto the emitted `Std.Cache` wrapper's key type parameter. The
+            // key-less kernels (`newRaw`/`clear`/`size`/`stats`) have no
+            // scheme-var 0, so the `vars.get(&0)` tie is a no-op for them.
+            "Cache" => Some(TyBounds::eq()),
             _ => None,
         }
     }
@@ -3531,6 +3559,29 @@ impl<'a> Builder<'a> {
             let mut m = BTreeMap::new();
             m.insert(self.builtins.csv_f_header, list(string()));
             m.insert(self.builtins.csv_f_rows, list(list(string())));
+            Ty::Record(m, RowTail::Closed)
+        };
+        // #210: `CacheCfg` — closed record `{ maxEntries : Int, ttlMs : Int,
+        // maxBytes : Int }`. The lowerer folds a value of this exact shape to the
+        // nominal `IrType::CacheCfg` (`sky_runtime::cache::CacheCfg`) so a
+        // `Cache.defaultCfg`-built record literal constructs the runtime struct
+        // the `cache_new_raw` kernel takes (mirrors the `HttpRequest` fold).
+        let cachecfg_rec = || {
+            let mut m = BTreeMap::new();
+            m.insert(self.builtins.cache_f_max_entries, int());
+            m.insert(self.builtins.cache_f_ttl_ms, int());
+            m.insert(self.builtins.cache_f_max_bytes, int());
+            Ty::Record(m, RowTail::Closed)
+        };
+        // #210: `Cache.stats` return — closed record `{ hits : Int,
+        // misses : Int, evictions : Int }` (runtime `sky_runtime::cache::
+        // CacheStats`). Consumed by field access on the kernel result, exactly
+        // like `Csv`'s `CsvDoc` return, so no lowerer fold is needed on this side.
+        let cache_stats_rec = || {
+            let mut m = BTreeMap::new();
+            m.insert(self.builtins.cache_f_hits, int());
+            m.insert(self.builtins.cache_f_misses, int());
+            m.insert(self.builtins.cache_f_evictions, int());
             Ty::Record(m, RowTail::Closed)
         };
         let attr = |m: Ty| Ty::Con {
@@ -5727,6 +5778,19 @@ impl<'a> Builder<'a> {
             K::CsvEncodeWithDelimiter => fun(string(), fun(csv_rec(), string())),
             K::CsvParseStreamFromFile => fun(string(), task(list(list(string())))),
 
+            // ── #210: Std.Cache (7 kernels) ─────────────────────────────────────
+            // All take the raw `Int` handle. `k`/`v` are the surface key/value
+            // type variables (`var(0)`/`var(1)`); the runtime scans keys by
+            // `PartialEq`. `newRaw` takes the `CacheCfg` record, `stats` returns
+            // the `{ hits, misses, evictions }` record.
+            K::CacheNewRaw => fun(cachecfg_rec(), task(int())),
+            K::CacheGet => fun(int(), fun(var(0), task(maybe(var(1))))),
+            K::CachePut => fun(int(), fun(var(0), fun(var(1), task_unit()))),
+            K::CacheRemove => fun(int(), fun(var(0), task_unit())),
+            K::CacheClear => fun(int(), task_unit()),
+            K::CacheSize => fun(int(), task(int())),
+            K::CacheStats => fun(int(), task(cache_stats_rec())),
+
             // ── Ui.link ──────────────────────────────────────────────────────────
             // link : List (Attribute msg) -> { url : String, label : Element msg }
             //      -> Element msg
@@ -7583,6 +7647,14 @@ mod registry_phase_c_tests {
             K::CsvEncode,
             K::CsvEncodeWithDelimiter,
             K::CsvParseStreamFromFile,
+            // ── Std.Cache (#210; 7) ──────────────────────────────────────────
+            K::CacheNewRaw,
+            K::CacheGet,
+            K::CachePut,
+            K::CacheRemove,
+            K::CacheClear,
+            K::CacheSize,
+            K::CacheStats,
         ]
     };
 

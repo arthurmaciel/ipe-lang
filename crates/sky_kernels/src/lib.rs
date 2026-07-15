@@ -1403,6 +1403,28 @@ pub enum StdlibKernel {
     CsvEncodeWithDelimiter,
     /// `Csv.parseStreamFromFile : String -> Task Error (List (List String))`.
     CsvParseStreamFromFile,
+
+    // ── Std.Cache — in-memory LRU + TTL cache (#210) ─────────────────────────
+    // Task-effectful; runtime `sky_runtime::cache::*` (the emitted `mod.rs`
+    // declares `cache` unconditionally — same ungated-vendoring posture as
+    // Csv/Compression). Routed via the compiled-source `Std.Cache` Layer-3
+    // surface + `Ffi.kernel "Cache_*"` aliases. Class `Pure` (the effect lives
+    // in the `Task` scheme, same as File/Io/Http). All kernels take the raw
+    // `Int` handle; the surface `Cache k v` ADT is unwrapped in Sky source.
+    /// `Cache.newRaw : CacheCfg -> Task Error Int` — allocate, return the handle.
+    CacheNewRaw,
+    /// `Cache.getRaw : Int -> k -> Task Error (Maybe v)` — look up a key.
+    CacheGet,
+    /// `Cache.putRaw : Int -> k -> v -> Task Error ()` — insert / update.
+    CachePut,
+    /// `Cache.removeRaw : Int -> k -> Task Error ()` — delete a key (idempotent).
+    CacheRemove,
+    /// `Cache.clearRaw : Int -> Task Error ()` — purge every entry.
+    CacheClear,
+    /// `Cache.sizeRaw : Int -> Task Error Int` — current entry count.
+    CacheSize,
+    /// `Cache.statsRaw : Int -> Task Error { hits, misses, evictions }`.
+    CacheStats,
 }
 
 impl StdlibKernel {
@@ -2605,6 +2627,18 @@ impl StdlibKernel {
             Self::CsvParseStreamFromFile => {
                 d("Csv", "parseStreamFromFile", 1, Pure, "csv_parse_stream_from_file")
             }
+            // ── Std.Cache (#210) ─────────────────────────────────────────────
+            // Runtime names MUST match `sky_runtime::cache::*` exactly. Alias
+            // strings `Cache_newRaw`/`Cache_get`/… split to qualifier `Cache` +
+            // the `*Raw`-stripped `name` written here; the emit column is the
+            // runtime fn (`cache_new_raw` for `newRaw`).
+            Self::CacheNewRaw => d("Cache", "newRaw", 1, Pure, "cache_new_raw"),
+            Self::CacheGet => d("Cache", "get", 2, Pure, "cache_get"),
+            Self::CachePut => d("Cache", "put", 3, Pure, "cache_put"),
+            Self::CacheRemove => d("Cache", "remove", 2, Pure, "cache_remove"),
+            Self::CacheClear => d("Cache", "clear", 1, Pure, "cache_clear"),
+            Self::CacheSize => d("Cache", "size", 1, Pure, "cache_size"),
+            Self::CacheStats => d("Cache", "stats", 1, Pure, "cache_stats"),
         }
     }
 
@@ -3560,6 +3594,14 @@ impl StdlibKernel {
         Self::CsvEncode,
         Self::CsvEncodeWithDelimiter,
         Self::CsvParseStreamFromFile,
+        // ── Std.Cache (#210) ─────────────────────────────────────────────────
+        Self::CacheNewRaw,
+        Self::CacheGet,
+        Self::CachePut,
+        Self::CacheRemove,
+        Self::CacheClear,
+        Self::CacheSize,
+        Self::CacheStats,
     ];
 
     // ── Classification predicates (moved from sky_ir::KernelFn) ─────────────

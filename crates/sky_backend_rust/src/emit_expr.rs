@@ -7338,6 +7338,13 @@ const HTTP_REQUEST_FIELDS: &[&str] = &[
     "url",
 ];
 
+/// #210: the sorted `Std.Cache.CacheCfg` field-name set — a record literal with
+/// exactly these names (and no registered synthesised struct, because the
+/// lowerer folded the shape to `IrType::CacheCfg`) constructs the runtime
+/// `sky_runtime::cache::CacheCfg` struct. Mirrors [`HTTP_REQUEST_FIELDS`]; kept
+/// in sync with `sky_lower::lower::CACHE_CFG_FIELDS`.
+const CACHE_CFG_FIELDS: &[&str] = &["maxBytes", "maxEntries", "ttlMs"];
+
 /// Emit a record literal `{ x = e1, ... }` as a named struct literal
 /// `RecXY { x: <e1>, ... }`. `depth` is the literal's own IR-nesting level; its
 /// field values are emitted one level deeper. Kept out of the `emit_expr_at`
@@ -7383,8 +7390,18 @@ fn emit_record(
                     .iter()
                     .zip(HTTP_REQUEST_FIELDS.iter())
                     .all(|(a, b)| a.as_str() == *b);
+            // #210: same fall-through as HttpRequest — a `CacheCfg`-shaped literal
+            // has no registered struct (folded to `IrType::CacheCfg`), so it
+            // constructs the runtime `CacheCfg` (re-exported bare via the glob).
+            let is_cache_cfg = sorted.len() == CACHE_CFG_FIELDS.len()
+                && sorted
+                    .iter()
+                    .zip(CACHE_CFG_FIELDS.iter())
+                    .all(|(a, b)| a.as_str() == *b);
             if is_http_request {
                 "HttpRequest".to_owned()
+            } else if is_cache_cfg {
+                "CacheCfg".to_owned()
             } else {
                 ctx.record_name_for_literal(&key)?.to_owned()
             }
