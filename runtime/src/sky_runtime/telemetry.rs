@@ -365,10 +365,10 @@ pub fn metric_observe(name: &str, labels: &[(&str, &str)], v: f64) {
     } = entry
     {
         for (i, b) in boundaries.iter().enumerate() {
-            if v <= *b {
-                if let Some(c) = buckets.get_mut(i) {
-                    *c = c.saturating_add(1);
-                }
+            if v <= *b
+                && let Some(c) = buckets.get_mut(i)
+            {
+                *c = c.saturating_add(1);
             }
         }
         *sum += v;

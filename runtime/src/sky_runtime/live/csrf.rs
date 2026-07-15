@@ -107,10 +107,10 @@ pub fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     let raw = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
     for part in raw.split(';') {
         let part = part.trim();
-        if let Some((k, v)) = part.split_once('=') {
-            if k.trim() == name {
-                return Some(v.to_string());
-            }
+        if let Some((k, v)) = part.split_once('=')
+            && k.trim() == name
+        {
+            return Some(v.to_string());
         }
     }
     None

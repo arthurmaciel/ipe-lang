@@ -117,12 +117,11 @@ fn header_authorizes(auth: &str, tok: &str) -> bool {
     }
     if let Some(b64) = auth.strip_prefix("Basic ") {
         use base64::{Engine, engine::general_purpose::STANDARD as B64};
-        if let Ok(raw) = B64.decode(b64.trim()) {
-            if let Ok(creds) = std::str::from_utf8(&raw) {
-                if let Some((_user, pw)) = creds.split_once(':') {
-                    return bool::from(pw.as_bytes().ct_eq(tok.as_bytes()));
-                }
-            }
+        if let Ok(raw) = B64.decode(b64.trim())
+            && let Ok(creds) = std::str::from_utf8(&raw)
+            && let Some((_user, pw)) = creds.split_once(':')
+        {
+            return bool::from(pw.as_bytes().ct_eq(tok.as_bytes()));
         }
     }
     false
@@ -467,7 +466,8 @@ mod tests {
     // would race other threads. Sets then clears the var within the test.
     #[test]
     fn ingest_token_gate() {
-        std::env::remove_var("SKY_INGEST_TOKEN");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::remove_var("SKY_INGEST_TOKEN") };
         // Unset → endpoint open regardless of header, when same-origin (or no
         // Origin at all — curl / non-browser caller).
         let h = axum::http::HeaderMap::new();
@@ -493,7 +493,8 @@ mod tests {
             "same-origin request still open in dev"
         );
 
-        std::env::set_var("SKY_INGEST_TOKEN", "secret123");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::set_var("SKY_INGEST_TOKEN", "secret123") };
         // Missing header → blocked.
         let h = axum::http::HeaderMap::new();
         assert!(ingest_token_blocked(&h).is_some(), "missing header blocked");
@@ -512,6 +513,7 @@ mod tests {
             "correct token allowed even cross-origin"
         );
 
-        std::env::remove_var("SKY_INGEST_TOKEN");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::remove_var("SKY_INGEST_TOKEN") };
     }
 }

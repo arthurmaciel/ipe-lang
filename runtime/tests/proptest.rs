@@ -114,7 +114,8 @@ mod task_tests {
     // so a chained Task fails identically on both backends.
     #[test]
     fn system_getenv_present_is_ok() {
-        std::env::set_var("SKY_TEST_GETENV_PRESENT", "hello");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::set_var("SKY_TEST_GETENV_PRESENT", "hello") };
         let t: SkyTask<SkyError, String> =
             system_getenv::<SkyError>("SKY_TEST_GETENV_PRESENT".to_string());
         assert_eq!(run(t), SkyResult::Ok("hello".to_string()));
@@ -122,7 +123,8 @@ mod task_tests {
 
     #[test]
     fn system_getenv_unset_is_err() {
-        std::env::remove_var("SKY_TEST_GETENV_UNSET_XYZ_42");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::remove_var("SKY_TEST_GETENV_UNSET_XYZ_42") };
         let t: SkyTask<SkyError, String> =
             system_getenv::<SkyError>("SKY_TEST_GETENV_UNSET_XYZ_42".to_string());
         assert!(run(t).is_err());
@@ -133,9 +135,12 @@ mod task_tests {
     // and is out-of-range → Ok Nothing, never Err).
     #[test]
     fn system_getenv_int_ok_and_errs() {
-        std::env::set_var("SKY_TEST_INT_OK", "42");
-        std::env::set_var("SKY_TEST_INT_BAD", "abc");
-        std::env::remove_var("SKY_TEST_INT_UNSET");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::set_var("SKY_TEST_INT_OK", "42") };
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::set_var("SKY_TEST_INT_BAD", "abc") };
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::remove_var("SKY_TEST_INT_UNSET") };
         assert_eq!(
             run(system_getenv_int::<SkyError>("SKY_TEST_INT_OK".to_string())),
             SkyResult::Ok(42)
@@ -156,10 +161,14 @@ mod task_tests {
 
     #[test]
     fn system_getenv_bool_truthy_falsy_unset() {
-        std::env::set_var("SKY_TEST_BOOL_T", "yes");
-        std::env::set_var("SKY_TEST_BOOL_F", "0");
-        std::env::set_var("SKY_TEST_BOOL_BAD", "maybe");
-        std::env::remove_var("SKY_TEST_BOOL_UNSET");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::set_var("SKY_TEST_BOOL_T", "yes") };
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::set_var("SKY_TEST_BOOL_F", "0") };
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::set_var("SKY_TEST_BOOL_BAD", "maybe") };
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::remove_var("SKY_TEST_BOOL_UNSET") };
         assert_eq!(
             run(system_getenv_bool::<SkyError>(
                 "SKY_TEST_BOOL_T".to_string()

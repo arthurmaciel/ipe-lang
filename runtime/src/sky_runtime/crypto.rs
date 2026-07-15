@@ -169,16 +169,18 @@ pub fn crypto_rsa_sha256_sign<E: From<String>>(
     use sha2::Sha256;
 
     // Try PKCS#8 first (the openssl default), then fall back to PKCS#1 — mirrors Go.
-    let priv_key = if let Ok(k) = rsa::RsaPrivateKey::from_pkcs8_pem(&key_pem) {
-        k
-    } else if let Ok(k) = rsa::RsaPrivateKey::from_pkcs1_pem(&key_pem) {
-        k
-    } else {
-        return SkyResult::Err(
-            "Crypto.rsaSha256Sign: could not parse the private key"
-                .to_string()
-                .into(),
-        );
+    let priv_key = match rsa::RsaPrivateKey::from_pkcs8_pem(&key_pem) {
+        Ok(k) => k,
+        _ => match rsa::RsaPrivateKey::from_pkcs1_pem(&key_pem) {
+            Ok(k) => k,
+            _ => {
+                return SkyResult::Err(
+                    "Crypto.rsaSha256Sign: could not parse the private key"
+                        .to_string()
+                        .into(),
+                );
+            }
+        },
     };
     let signing_key = SigningKey::<Sha256>::new(priv_key);
     // try_sign (not sign): `Signer::sign` PANICS on an internal signing failure
@@ -212,12 +214,14 @@ pub fn crypto_rsa_sha256_verify(key_pem: String, msg: String, sig_b64: String) -
     use sha2::Sha256;
 
     // Try SPKI/PKIX first (-----BEGIN PUBLIC KEY-----), then PKCS#1 — mirrors Go.
-    let pub_key = if let Ok(k) = rsa::RsaPublicKey::from_public_key_pem(&key_pem) {
-        k
-    } else if let Ok(k) = rsa::RsaPublicKey::from_pkcs1_pem(&key_pem) {
-        k
-    } else {
-        return false;
+    let pub_key = match rsa::RsaPublicKey::from_public_key_pem(&key_pem) {
+        Ok(k) => k,
+        _ => match rsa::RsaPublicKey::from_pkcs1_pem(&key_pem) {
+            Ok(k) => k,
+            _ => {
+                return false;
+            }
+        },
     };
     // Go decodes with base64.StdEncoding (standard base64, with padding) — match exactly.
     let sig_bytes = match STANDARD.decode(sig_b64.as_bytes()) {
@@ -470,28 +474,43 @@ pub fn crypto_chacha_key_from_password(password: String, salt: String) -> String
 // up-front, eliminating the ambiguity without changing runtime semantics.
 
 /// Generated-code alias for `crypto_aes_gcm_encrypt` with `E = String`.
-pub fn sky_aes_gcm_encrypt(key: String, plaintext: String) -> SkyResult<crate::sky_runtime::error::SkyError, String> {
+pub fn sky_aes_gcm_encrypt(
+    key: String,
+    plaintext: String,
+) -> SkyResult<crate::sky_runtime::error::SkyError, String> {
     crypto_aes_gcm_encrypt(key, plaintext)
 }
 
 /// Generated-code alias for `crypto_aes_gcm_decrypt` with `E = String`.
-pub fn sky_aes_gcm_decrypt(key: String, encoded: String) -> SkyResult<crate::sky_runtime::error::SkyError, String> {
+pub fn sky_aes_gcm_decrypt(
+    key: String,
+    encoded: String,
+) -> SkyResult<crate::sky_runtime::error::SkyError, String> {
     crypto_aes_gcm_decrypt(key, encoded)
 }
 
 /// Generated-code alias for `crypto_chacha20_encrypt` with `E = String`.
-pub fn sky_chacha20_encrypt(key: String, plaintext: String) -> SkyResult<crate::sky_runtime::error::SkyError, String> {
+pub fn sky_chacha20_encrypt(
+    key: String,
+    plaintext: String,
+) -> SkyResult<crate::sky_runtime::error::SkyError, String> {
     crypto_chacha20_encrypt(key, plaintext)
 }
 
 /// Generated-code alias for `crypto_chacha20_decrypt` with `E = String`.
-pub fn sky_chacha20_decrypt(key: String, encoded: String) -> SkyResult<crate::sky_runtime::error::SkyError, String> {
+pub fn sky_chacha20_decrypt(
+    key: String,
+    encoded: String,
+) -> SkyResult<crate::sky_runtime::error::SkyError, String> {
     crypto_chacha20_decrypt(key, encoded)
 }
 
 /// Generated-code alias for `crypto_rsa_sha256_sign` with `E = String`.
 #[cfg(feature = "crypto")]
-pub fn sky_crypto_rsa_sha256_sign(key_pem: String, msg: String) -> SkyResult<crate::sky_runtime::error::SkyError, String> {
+pub fn sky_crypto_rsa_sha256_sign(
+    key_pem: String,
+    msg: String,
+) -> SkyResult<crate::sky_runtime::error::SkyError, String> {
     crypto_rsa_sha256_sign(key_pem, msg)
 }
 

@@ -350,16 +350,16 @@ async fn read_body_capped<E: From<String> + Send + 'static>(
 ) -> SkyResult<E, String> {
     use futures_util::StreamExt;
     let cap = http_body_cap();
-    if let Some(len) = resp.content_length() {
-        if len as usize > cap {
-            return SkyResult::Err(
+    if let Some(len) = resp.content_length()
+        && len as usize > cap
+    {
+        return SkyResult::Err(
                 format!(
                     "http: response body too large ({} > {} bytes; raise SKY_HTTP_MAX_BODY_BYTES or use Http.Stream)",
                     len, cap
                 )
                 .into(),
             );
-        }
     }
     let mut buf: Vec<u8> = Vec::new();
     let mut stream = resp.bytes_stream();
