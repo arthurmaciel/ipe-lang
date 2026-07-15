@@ -902,6 +902,25 @@ unify against (a soundness hazard). Dropping it matches `IrType::Db`,
 `crates/sky_backend_rust/src/emit_types.rs` (`WsServerCfg<SkyError>` render).
 *Sanctioned:* yes (`divergence:`).
 
+### A19 — Emitted project targets Rust edition 2024
+Every generated project (`Cargo.toml` `edition = "2024"`) compiles under the same
+Rust edition as the compiler and runtime crates, rather than the reference's
+Go output (which has no Rust-edition analogue). The emitted project vendors the
+`sky_runtime` source tree verbatim (`build_emit_manifest` copies
+`runtime/src/sky_runtime/` into `src/sky_runtime/`), so the emitted edition must
+match the edition that source is written for: the runtime is edition 2024, and
+its `db.rs` uses the 2024-only `expr_2021` macro-fragment specifier — vendoring
+it into an edition-2021 project would be a parse error the moment a program uses
+Db kernels (a seal violation: `skyc` accepts, `cargo build` fails). Pinning the
+emitted edition to 2024 keeps vendored-source acceptance and downstream
+`cargo build` structurally in agreement. *Rationale:* the seal — the emitted
+project and the runtime source it embeds must share one edition; there is no
+Go-parity oracle for a Rust edition, so this is a Rust-only property with no
+reference behaviour to match. *Verified:* the four checked-in golden manifests
+`tests/golden/{m0,mm_diamond,mm_local_pkg,multi_mod_split_pilot}/Cargo.toml`
+(`edition = "2024"`), byte-compared against emitted output by
+`crates/skyc/tests/support/mod.rs`. *Sanctioned:* yes (`divergence:`).
+
 ---
 
 ## 4. Stdlib / surface divergences

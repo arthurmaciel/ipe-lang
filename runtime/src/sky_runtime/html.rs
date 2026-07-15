@@ -309,11 +309,11 @@ fn render_into_ctx<M>(
             // back as escaped text content after the open tag when there are no
             // explicit children. Mirrors Go `renderVNode` (live.go).
             let mut textarea_value: Option<String> = None;
-            if tag == "textarea" || tag == "select" {
-                if let Some(pos) = pairs.iter().position(|(k, _)| *k == "value") {
-                    let (_, v) = pairs.remove(pos);
-                    textarea_value = Some(v);
-                }
+            if (tag == "textarea" || tag == "select")
+                && let Some(pos) = pairs.iter().position(|(k, _)| *k == "value")
+            {
+                let (_, v) = pairs.remove(pos);
+                textarea_value = Some(v);
             }
             // <option selected> flip: when rendered as a direct child of a
             // <select> with a value, set `selected` on the value-matching option
@@ -321,12 +321,12 @@ fn render_into_ctx<M>(
             // don't-mutate). We touch only the local `pairs`, never the caller's
             // tree (it is the diff baseline — mutating it would corrupt the next
             // diff). Added before the sort so byte order matches Go's map+sort.
-            if tag == "option" {
-                if let Some(sv) = select_value {
-                    pairs.retain(|(k, _)| *k != "selected");
-                    if pairs.iter().any(|(k, v)| *k == "value" && v == sv) {
-                        pairs.push(("selected", "selected".to_string()));
-                    }
+            if tag == "option"
+                && let Some(sv) = select_value
+            {
+                pairs.retain(|(k, _)| *k != "selected");
+                if pairs.iter().any(|(k, v)| *k == "value" && v == sv) {
+                    pairs.push(("selected", "selected".to_string()));
                 }
             }
             pairs.sort_by(|a, b| a.0.cmp(b.0));
@@ -394,12 +394,12 @@ fn render_into_ctx<M>(
             // escaped text content. Explicit children take precedence (a user who
             // wrote `textarea [] [ text "hi" ]` keeps that), matching Go's
             // `isTextarea && value != "" && len(children) == 0` guard.
-            if tag == "textarea" {
-                if let Some(v) = &textarea_value {
-                    if !v.is_empty() && kids.is_empty() {
-                        s.push_str(&escape_text(v));
-                    }
-                }
+            if tag == "textarea"
+                && let Some(v) = &textarea_value
+                && !v.is_empty()
+                && kids.is_empty()
+            {
+                s.push_str(&escape_text(v));
             }
             // <script>/<style> emit text children verbatim (rawBody); a
             // <select> threads its value to option children for the `selected`
@@ -717,20 +717,18 @@ fn assign_sky_ids_depth<M>(node: &mut Html<M>, path: &str, depth: usize) {
 /// Any matched value is sanitised so it can't corrupt the sky-id grammar.
 /// Mirrors Go `skyIDKey`.
 fn sky_id_key<M>(tag: &str, attrs: &[Attribute<M>]) -> Option<String> {
-    if let Some(k) = attr_value(attrs, "sky-key") {
-        if !k.is_empty() {
-            return Some(sanitise_sky_id_key(k));
-        }
+    if let Some(k) = attr_value(attrs, "sky-key")
+        && !k.is_empty()
+    {
+        return Some(sanitise_sky_id_key(k));
     }
     if matches!(
         tag,
         "input" | "textarea" | "select" | "form" | "button" | "fieldset"
-    ) {
-        if let Some(k) = attr_value(attrs, "name") {
-            if !k.is_empty() {
-                return Some(sanitise_sky_id_key(k));
-            }
-        }
+    ) && let Some(k) = attr_value(attrs, "name")
+        && !k.is_empty()
+    {
+        return Some(sanitise_sky_id_key(k));
     }
     None
 }
@@ -759,11 +757,11 @@ fn sanitise_sky_id_key(s: &str) -> String {
 
 fn set_attr<M>(attrs: &mut Vec<Attribute<M>>, key: &str, val: &str) {
     for a in attrs.iter_mut() {
-        if let Attribute::Attr(k, v) = a {
-            if k == key {
-                *v = val.to_string();
-                return;
-            }
+        if let Attribute::Attr(k, v) = a
+            && k == key
+        {
+            *v = val.to_string();
+            return;
         }
     }
     attrs.push(Attribute::Attr(key.to_string(), val.to_string()));
@@ -1654,7 +1652,10 @@ mod tests {
         let t: Html<()> =
             crate::sky_runtime::ui::helpers::html_title_node_("<script>x</script>".to_owned());
         let out = render_html(&t);
-        assert!(!out.contains("<script>"), "title text must be escaped: {out}");
+        assert!(
+            !out.contains("<script>"),
+            "title text must be escaped: {out}"
+        );
     }
 
     #[test]

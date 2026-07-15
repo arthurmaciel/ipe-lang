@@ -294,15 +294,15 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
             }
             Attribute::AttrGridTracks(cols, rows) => {
                 // Fixed property names; user-supplied values go through SafeCssValue.
-                if !cols.is_empty() {
-                    if let Some(pv) = SafeCssValue::parse(cols) {
-                        decl!("grid-template-columns:{}", pv.as_str());
-                    }
+                if !cols.is_empty()
+                    && let Some(pv) = SafeCssValue::parse(cols)
+                {
+                    decl!("grid-template-columns:{}", pv.as_str());
                 }
-                if !rows.is_empty() {
-                    if let Some(pv) = SafeCssValue::parse(rows) {
-                        decl!("grid-template-rows:{}", pv.as_str());
-                    }
+                if !rows.is_empty()
+                    && let Some(pv) = SafeCssValue::parse(rows)
+                {
+                    decl!("grid-template-rows:{}", pv.as_str());
                 }
             }
             Attribute::AttrAnimation(name, spec, keyframes, _respect) => {
@@ -863,7 +863,9 @@ mod tests {
     fn ui_padding_each_renders_four_distinct_sides() {
         // `Ui.paddingEach { top = 1, right = 2, bottom = 3, left = 4 }` — each
         // side distinct proves the record fields are NOT swapped/aliased.
-        let attrs = vec![super::super::helpers::ui_padding_each_::<TestMsg>(1, 2, 3, 4)];
+        let attrs = vec![super::super::helpers::ui_padding_each_::<TestMsg>(
+            1, 2, 3, 4,
+        )];
         let elem: Element<TestMsg> = Element::Empty;
         let html = ui_layout(attrs, elem);
         let s = render_html(&html);
@@ -1087,8 +1089,14 @@ mod tests {
         let attr: Attribute<TestMsg> =
             Attribute::AttrOverflow("auto }".to_owned(), "hidden".to_owned());
         let css = build_style_string(std::slice::from_ref(&attr));
-        assert!(!css.contains("overflow-x"), "poisoned axis must drop: {css}");
-        assert!(css.contains("overflow-y:hidden"), "legit axis must stay: {css}");
+        assert!(
+            !css.contains("overflow-x"),
+            "poisoned axis must drop: {css}"
+        );
+        assert!(
+            css.contains("overflow-y:hidden"),
+            "legit axis must stay: {css}"
+        );
     }
 
     /// Legitimate values must render byte-for-byte — the gate's charset is
@@ -1105,7 +1113,10 @@ mod tests {
                 Attribute::AttrTransition("all 200ms ease-in-out".to_owned(), true),
                 "transition:all 200ms ease-in-out",
             ),
-            (Attribute::AttrFontAlign("center".to_owned()), "text-align:center"),
+            (
+                Attribute::AttrFontAlign("center".to_owned()),
+                "text-align:center",
+            ),
             (
                 Attribute::AttrBorderStyle("dashed".to_owned()),
                 "border-style:dashed",
@@ -1202,7 +1213,9 @@ mod tests {
             Attribute::AttrEvent(HtmlAttr::EventAttr(Event::OnString(name, _))) => {
                 assert_eq!(name, "sky-file", "onFile must wire as event name sky-file");
             }
-            other => panic!("expected AttrEvent(EventAttr(OnString(\"sky-file\", _))), got {other:?}"),
+            other => {
+                panic!("expected AttrEvent(EventAttr(OnString(\"sky-file\", _))), got {other:?}")
+            }
         }
     }
 }

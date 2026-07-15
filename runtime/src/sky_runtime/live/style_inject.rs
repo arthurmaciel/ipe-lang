@@ -91,10 +91,10 @@ pub fn apply_style_injections<M>(node: &mut Html<M>) {
     // post-condition. Strip them here. The CSS is necessarily dropped — a void
     // root has nowhere to carry a <style> node. (A void node WITH a parent is
     // unaffected: the parent's loop still finds its markers intact and hoists.)
-    if let Html::HElement(t, attrs, _) = node {
-        if is_void(t) {
-            strip_markers(attrs, ALL_MARKERS);
-        }
+    if let Html::HElement(t, attrs, _) = node
+        && is_void(t)
+    {
+        strip_markers(attrs, ALL_MARKERS);
     }
 }
 
@@ -119,10 +119,10 @@ fn inject_pass<M>(
     };
     // Non-void self: build + prepend the style child (build_style_node strips
     // the markers regardless of outcome).
-    if !is_void(tag) {
-        if let Some(style) = build_style_node(attrs, markers, style_attr, build) {
-            kids.insert(0, style);
-        }
+    if !is_void(tag)
+        && let Some(style) = build_style_node(attrs, markers, style_attr, build)
+    {
+        kids.insert(0, style);
     }
     // Walk children, recursing into each and hoisting a sibling style block
     // after any void child that still carries a marker.
@@ -212,11 +212,13 @@ fn build_mq<M>(sky_id: &str, attrs: &[Attribute<M>]) -> String {
     // `SafeCssMediaQuery` / `SafeCssValue` gates — so validate at THIS boundary
     // and drop the whole block fail-closed on any breakout. `strip_style_close`
     // stays as sink-final belt-and-braces below.
-    let (safe_query, safe_rules) =
-        match (SafeCssMediaQuery::parse(&query), sink_safe_declaration_list(&rules)) {
-            (Some(q), Some(r)) => (q.as_str().to_owned(), strip_style_close(r)),
-            _ => return String::new(),
-        };
+    let (safe_query, safe_rules) = match (
+        SafeCssMediaQuery::parse(&query),
+        sink_safe_declaration_list(&rules),
+    ) {
+        (Some(q), Some(r)) => (q.as_str().to_owned(), strip_style_close(r)),
+        _ => return String::new(),
+    };
     let selector = format!("[sky-id=\"{sky_id}\"]");
     format!("@media {safe_query} {{ {selector} {{ {safe_rules} }} }}")
 }
@@ -738,7 +740,10 @@ mod tests {
             !s.contains("data-sky-pc-rules"),
             "marker must be consumed, never leak into final HTML: {s}"
         );
-        assert!(s.contains("<style"), "scoped <style> block must render: {s}");
+        assert!(
+            s.contains("<style"),
+            "scoped <style> block must render: {s}"
+        );
         assert!(
             s.contains(":hover") && s.contains("background-color:rgba(0,92,215,1)"),
             "hover rule with the exact CSS must render: {s}"
@@ -766,7 +771,9 @@ mod tests {
         let evil = "s } body { display:none } .x:hover {".to_owned();
         let pseudo = ui_on_pseudo_::<()>(
             ui_hover_(),
-            vec![crate::sky_runtime::ui::element::Attribute::AttrFontFamily(evil)],
+            vec![crate::sky_runtime::ui::element::Attribute::AttrFontFamily(
+                evil,
+            )],
         );
         let mut html = ui_layout(vec![pseudo], Element::Text("hi".to_owned()));
         assign_sky_ids(&mut html, "r");
@@ -787,10 +794,13 @@ mod tests {
         use crate::sky_runtime::ui::helpers::{ui_hover_, ui_on_pseudo_};
         use crate::sky_runtime::ui::render::ui_layout;
 
-        let evil = "x) } @import url(\"https://evil.example/x.css\") ; .y:hover { background:url(x".to_owned();
+        let evil = "x) } @import url(\"https://evil.example/x.css\") ; .y:hover { background:url(x"
+            .to_owned();
         let pseudo = ui_on_pseudo_::<()>(
             ui_hover_(),
-            vec![crate::sky_runtime::ui::element::Attribute::AttrBgImage(evil)],
+            vec![crate::sky_runtime::ui::element::Attribute::AttrBgImage(
+                evil,
+            )],
         );
         let mut html = ui_layout(vec![pseudo], Element::Text("hi".to_owned()));
         assign_sky_ids(&mut html, "r");
@@ -886,8 +896,7 @@ mod tests {
         use crate::sky_runtime::ui::render::ui_layout;
 
         let elem = ui_media_query_::<()>(
-            "(min-width: 1px) </style><script>alert(1)</script> { } @import url(evil)"
-                .to_owned(),
+            "(min-width: 1px) </style><script>alert(1)</script> { } @import url(evil)".to_owned(),
             vec![Attribute::AttrBgColor(Color::Rgba(1, 2, 3, 1.0))],
             Element::Text("still here".to_owned()),
         );
@@ -896,9 +905,15 @@ mod tests {
         apply_style_injections(&mut html);
         let s = render_html(&html);
         let low = s.to_ascii_lowercase();
-        assert!(!low.contains("</style><script"), "breakout must not form: {s}");
+        assert!(
+            !low.contains("</style><script"),
+            "breakout must not form: {s}"
+        );
         assert!(!low.contains("<script"), "script must never render: {s}");
-        assert!(!low.contains("@media"), "gated query must emit no rule: {s}");
+        assert!(
+            !low.contains("@media"),
+            "gated query must emit no rule: {s}"
+        );
         assert!(!low.contains("@import"), "at-rule must not survive: {s}");
         assert!(s.contains("still here"), "child must still render: {s}");
     }

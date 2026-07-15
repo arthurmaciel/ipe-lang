@@ -1,7 +1,7 @@
 [package]
 name = "sky-ffi-inspect-rs"
 version = "0.2.0"
-edition = "2021"
+edition = "2024"
 license = "Apache-2.0"
 description = "Rust crate inspector for Sky FFI — uses rustdoc JSON for complete API discovery including macro-generated items"
 

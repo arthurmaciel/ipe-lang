@@ -50,11 +50,11 @@ static CHILD: Mutex<Option<Child>> = Mutex::new(None);
 /// exists (→ the caller falls back to the in-process console; first build
 /// before the console is pre-built, or a build env where it couldn't be).
 pub fn console_bin_path() -> Option<std::path::PathBuf> {
-    if let Ok(p) = crate::sky_runtime::system::read_env_var(CONSOLE_BIN_ENV) {
-        if !p.is_empty() {
-            let pb = std::path::PathBuf::from(p);
-            return if pb.is_file() { Some(pb) } else { None };
-        }
+    if let Ok(p) = crate::sky_runtime::system::read_env_var(CONSOLE_BIN_ENV)
+        && !p.is_empty()
+    {
+        let pb = std::path::PathBuf::from(p);
+        return if pb.is_file() { Some(pb) } else { None };
     }
     // Key on the SKY compiler version (same source as `/_sky/buildinfo`), NOT
     // the generated crate's CARGO_PKG_VERSION (always "0.1.0"). The sky build
@@ -522,31 +522,39 @@ mod tests {
 
     #[test]
     fn gate_skips_in_subapp_context() {
-        std::env::set_var("SKY_LIVE_BASE_PATH", "/billing");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::set_var("SKY_LIVE_BASE_PATH", "/billing") };
         assert!(!gate_allows());
-        std::env::remove_var("SKY_LIVE_BASE_PATH");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::remove_var("SKY_LIVE_BASE_PATH") };
     }
 
     #[test]
     fn gate_skips_on_explicit_off() {
-        std::env::set_var("SKY_CONSOLE_EMBED", "off");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::set_var("SKY_CONSOLE_EMBED", "off") };
         assert!(!gate_allows());
-        std::env::remove_var("SKY_CONSOLE_EMBED");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::remove_var("SKY_CONSOLE_EMBED") };
     }
 
     #[test]
     fn bin_path_none_when_absent() {
-        std::env::set_var(CONSOLE_BIN_ENV, "/nonexistent/sky-console-xyz");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::set_var(CONSOLE_BIN_ENV, "/nonexistent/sky-console-xyz") };
         assert!(console_bin_path().is_none());
-        std::env::remove_var(CONSOLE_BIN_ENV);
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::remove_var(CONSOLE_BIN_ENV) };
     }
 
     #[test]
     fn spawn_returns_none_without_binary() {
         // No binary at the override path → None (caller falls back), no panic.
-        std::env::set_var(CONSOLE_BIN_ENV, "/nonexistent/sky-console-xyz");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::set_var(CONSOLE_BIN_ENV, "/nonexistent/sky-console-xyz") };
         assert!(spawn_console(9931, "", false).is_none());
-        std::env::remove_var(CONSOLE_BIN_ENV);
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::remove_var(CONSOLE_BIN_ENV) };
     }
 
     #[test]

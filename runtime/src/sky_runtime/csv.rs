@@ -250,12 +250,15 @@ mod tests {
             rows: vec![vec!["=SUM(A1)".into()]],
         };
         // Default OFF: lossless (formula cell emitted verbatim, just CSV-quoted).
-        std::env::remove_var("SKY_CSV_SANITIZE_FORMULAS");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::remove_var("SKY_CSV_SANITIZE_FORMULAS") };
         assert!(encode_delim(&doc, b',').contains("=SUM(A1)"));
         // ON: dangerous-leading cell is prefixed with a single quote.
-        std::env::set_var("SKY_CSV_SANITIZE_FORMULAS", "1");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::set_var("SKY_CSV_SANITIZE_FORMULAS", "1") };
         assert!(encode_delim(&doc, b',').contains("'=SUM(A1)"));
-        std::env::remove_var("SKY_CSV_SANITIZE_FORMULAS");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::remove_var("SKY_CSV_SANITIZE_FORMULAS") };
     }
 
     #[test]
@@ -323,13 +326,14 @@ mod tests {
 
     #[test]
     fn parse_stream_from_file_respects_row_cap() {
-        let p =
-            std::env::temp_dir().join(format!("sky_csv_stream_cap_{}.csv", std::process::id()));
+        let p = std::env::temp_dir().join(format!("sky_csv_stream_cap_{}.csv", std::process::id()));
         std::fs::write(&p, "a\n1\n2\n3\n4\n5\n").unwrap();
-        std::env::set_var("SKY_CSV_MAX_ROWS", "2");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::set_var("SKY_CSV_MAX_ROWS", "2") };
         let res: SkyResult<String, Vec<Vec<String>>> =
             block(csv_parse_stream_from_file(p.to_string_lossy().into_owned()));
-        std::env::remove_var("SKY_CSV_MAX_ROWS");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::remove_var("SKY_CSV_MAX_ROWS") };
         let _ = std::fs::remove_file(&p);
         assert!(
             matches!(res, SkyResult::Err(_)),

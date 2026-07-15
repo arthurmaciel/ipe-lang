@@ -43,7 +43,12 @@ pub(crate) fn locked_set_var(key: &str, val: &str) {
         return;
     }
     let _guard = ENV_LOCK.write().unwrap_or_else(|p| p.into_inner());
-    std::env::set_var(key, val);
+    // SAFETY: `set_var` is `unsafe` in Rust 2024 because a concurrent reader
+    // walking `environ` can race the mutation. The exclusive `ENV_LOCK` write
+    // guard held here excludes every Sky-originated reader (all route through
+    // `read_env_var`/`read_env_var_os`, which take the shared read lock), so no
+    // such reader can run during this write.
+    unsafe { std::env::set_var(key, val) };
 }
 
 /// Set an environment variable ONLY if it is currently absent, performing the
@@ -57,7 +62,10 @@ pub(crate) fn locked_set_var_if_absent(key: &str, val: &str) {
     }
     let _guard = ENV_LOCK.write().unwrap_or_else(|p| p.into_inner());
     if std::env::var_os(key).is_none() {
-        std::env::set_var(key, val);
+        // SAFETY: held under the exclusive `ENV_LOCK` write guard, which excludes
+        // every Sky-originated reader (all take the shared read lock) — see
+        // `locked_set_var`. The presence check and set share this one acquisition.
+        unsafe { std::env::set_var(key, val) };
     }
 }
 
@@ -68,7 +76,10 @@ pub(crate) fn locked_remove_var(key: &str) {
         return;
     }
     let _guard = ENV_LOCK.write().unwrap_or_else(|p| p.into_inner());
-    std::env::remove_var(key);
+    // SAFETY: held under the exclusive `ENV_LOCK` write guard, which excludes
+    // every Sky-originated reader (all take the shared read lock) — see
+    // `locked_set_var`.
+    unsafe { std::env::remove_var(key) };
 }
 
 pub fn system_args<E: Send + 'static>(_: ()) -> SkyTask<E, Vec<String>> {
