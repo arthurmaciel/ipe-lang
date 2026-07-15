@@ -670,6 +670,26 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::SecretFromString => "Secret.fromString",
         KernelFn::SecretReveal => "Secret.reveal",
         KernelFn::SecretRedacted => "Secret.redacted",
+        // #194: Sky.Core.Regex
+        KernelFn::RegexMatch => "Regex.match",
+        KernelFn::RegexFind => "Regex.find",
+        KernelFn::RegexFindAll => "Regex.findAll",
+        KernelFn::RegexReplace => "Regex.replace",
+        KernelFn::RegexSplit => "Regex.split",
+        // #202: Sky.Core.Path
+        KernelFn::PathBase => "Path.base",
+        KernelFn::PathDir => "Path.dir",
+        KernelFn::PathExt => "Path.ext",
+        KernelFn::PathIsAbsolute => "Path.isAbsolute",
+        // #197: Std.Trace
+        KernelFn::TraceSpan => "Trace.span",
+        KernelFn::TraceEvent => "Trace.event",
+        KernelFn::TraceAttr => "Trace.attr",
+        // #197: Std.Compression
+        KernelFn::CompressionGzip => "Compression.gzip",
+        KernelFn::CompressionGunzip => "Compression.gunzip",
+        KernelFn::CompressionZstdCompress => "Compression.zstdCompress",
+        KernelFn::CompressionZstdDecompress => "Compression.zstdDecompress",
         // M5c: TEA Cmd / Sub / Time.every (wired)
         KernelFn::CmdNone => "Cmd.none",
         KernelFn::CmdBatch => "Cmd.batch",

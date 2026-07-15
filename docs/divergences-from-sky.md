@@ -85,6 +85,11 @@ recorded reference.
   silently corrupt non-UTF-8 binary payloads. A lossless byte buffer makes the
   invalid state (non-UTF-8 in a `String`) unrepresentable.
 - **Sanctioned:** yes (`divergence:`). Goldens `m4e_bytes_*`.
+- **Downstream:** `Std.Compression` (`gzip`/`gunzip`/`zstdCompress`/
+  `zstdDecompress`) takes + returns `Bytes` rather than the Go surface's
+  `String`, to line up with the Rust runtime `compression_*(Vec<u8>) ->
+  SkyTask<_, Vec<u8>>`. Same B2 rationale (a compressed payload is arbitrary
+  binary, not UTF-8). Seal probe `compression_builds_and_runs`.
 
 ### B3 — `Encoding.base64Encode` / `hexEncode` over non-ASCII text — ~~divergence~~ RETIRED (task #55a)
 - **Was:** ipê's runtime used a Latin-1 char-as-byte model that silently
