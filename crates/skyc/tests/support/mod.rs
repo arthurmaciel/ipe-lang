@@ -45,6 +45,16 @@ pub fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
+/// The directory holding a golden's `main.rs` — i.e. `golden.parent()` — with a
+/// non-panicking fallback (a golden path built as `<dir>/main.rs` always has a
+/// parent; the fallback keeps this `expect`-free under the workspace-wide
+/// `clippy::expect_used` deny). Centralises the derivation that 40+ golden tests
+/// previously copy-pasted as `golden.parent().expect(...)`.
+#[allow(dead_code)] // shared helper: used by the 45 byte-diff goldens, not every binary
+pub fn golden_dir_of(golden: &Path) -> &Path {
+    golden.parent().unwrap_or(golden)
+}
+
 /// Assert every byte-comparable golden output under `golden_dir` matches its
 /// counterpart in the emitted project rooted at `emitted_out`, byte-for-byte.
 ///
