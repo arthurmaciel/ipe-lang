@@ -582,6 +582,28 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   specific bug class independent review found is closed and re-verified,
   and that the two fixes are structurally defense-in-depth (a gap in one
   does not silently defeat the other).
+- **#201 follow-up — a promoted element-polymorphic recursion was rejected at
+  LOWERING, not inference.** A cross-module untyped recursive function
+  polymorphic in its LIST-ELEMENT type (`evenLen`/`oddLen`/`listLen : List a ->
+  Bool`, fuzzer seed 31348 `mmrecpair`) was correctly generalized by
+  `sky_types` (`untyped_type_params` listed the element var), yet `skyc` FAILED
+  with SKY-L0102 at the `[] ->` arm. Root cause was NOT the boundary scheme but
+  a stale gate in `sky_lower::lower_case`: it rejected ANY list `case` binding a
+  value (`_ :: rest`) whose element lowered to `IrType::Generic(_)`, on the now-
+  false premise that "function generics emit bound-free" so the owned-rebind
+  (`rest.to_vec()` / `x.clone()`) would `cargo`-fail. Every emitted function
+  type parameter in fact carries a `Clone` bound (`render_fn_generics`'s
+  `bounds.with_clone()`), and `list_elem_ir` returns `IrType::Generic(sym)` ONLY
+  for a var that IS one of the enclosing function's declared type parameters (a
+  free var maps to `IrType::Json`), so the emitted
+  `fn f<T1: Clone>(xs: Vec<T1>) -> …` with `rest.to_vec()` builds. The gate
+  rejected sound programs (an exit-1 where the backend would have built cleanly)
+  — removed. This turns a spurious under-acceptance into acceptance; the emitted
+  Rust is a `Clone`-bounded generic monomorphized per use site. Re-verified via
+  a real `cargo build` + `cargo run` golden
+  (`crates/skyc/tests/golden_i201_cross_module_poly_recursion.rs`, `SKY_E2E=1`,
+  prints `EO`) and the fuzzer (`scripts/fuzz-well-typed.sh --seed 31348`, now
+  green).
 
 ### B24 — Prescriptive TEA `init` signature (Live → `LiveReq`; Tui/Webview → `()`) (#180)
 - **Reference:** `../sky/src/Sky/Type/Constrain/Expression.hs:2665-2695` leaves
@@ -707,6 +729,24 @@ slot — so it caused a skyc-0-then-cargo-fail (E0308 wrong-trait + E0277
 → Send-only) at the decoder-payload position rather than diverging from it.
 Regression: `golden_i195_json_decode_pipeline`; the `+ Sync` forwarding path is
 pinned by `golden_i190_static_bound` / `golden_i191_input_arc_capture`.
+
+**#198 refinement — decode-combinator mapper payload parameters are Send-only
+too.** #195 renders the Send-only `FnOnce` chain at the `Decoder<Fun>` TYPE
+position (the producer). When that payload flows OUT of the decoder into a
+mapper's PARAMETER — `JsonDec.map (\f -> f x) d`, `andThen (\f -> …) d`, and the
+`map2`/`map3`/`map4` + `Db.Decode` equivalents — the parameter's inferred type is
+a bare `Ty::Fun`, so `lower_lambda` stamped it as `IrType::Fun`, which
+`render_type` emits as the shared `Box<dyn Fn + Send + Sync>`: wrong trait (`Fn`
+vs the producer's `FnOnce`) plus an unsatisfiable `+ Sync` → skyc-0-then-cargo-
+fail (E0308 / E0277), the same class as #195 one surface deeper. In every
+`map`/`mapN`/`andThen` combinator the mapper's parameters ARE, by construction,
+the decoded payload value(s), so `sky_lower::retype_decoder_payload_mapper`
+retypes any single-parameter function-typed mapper param from `IrType::Fun` to
+the owned `IrType::FnOnceChain` at the combinator call site — matching the
+producer shape rather than diverging. Single-parameter only: a `FnOnceChain` is a
+nested curry chain the flat body application (`(f)(a, b)`) does not match, so a
+multi-parameter payload stays a distinct surface. Regression:
+`golden_i198_decoder_payload_mapper` (skyc-0 render assertion + cargo-0 E2E).
 
 ### A9 — Crate-version SSOT as a typed `const` table + drift test
 ipê holds crate name+version in a typed `const CrateSpec` table
