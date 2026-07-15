@@ -114,6 +114,45 @@ Rules:
 If a process runs >30 min unjustified, kill it and file a bug. Never wait
 it out.
 
+### 3b. The progressive-development two-tier gate (cheap per-lane / full every-N)
+
+`scripts/progressive-development/autopilot.sh` gates landed work at two tiers.
+Master only ever advances to a **full-gate-certified** sha.
+
+**Cheap gate (`lane_gate`) — per lane, fast (~minutes).** Merges the lane into
+the integration worktree, then builds + lints ONLY the crates the change touched:
+- `cargo +nightly build -p skyc`
+- `cargo +nightly nextest run <-p touched-crates>` (scoped; no `SKY_E2E`)
+- `cargo +nightly clippy <-p touched-crates> --no-deps -- -D warnings`
+
+A cheap-green lane lands on integration but stays *uncertified* (added to the
+batch, kept claimed).
+
+**Full gate (`full_gate` via `certify_batch`) — every `PROGDEV_FULL_GATE_EVERY`
+cycles (default 10) OR the instant pending work drains, whichever first.** The
+authoritative check over the whole accumulated batch:
+- `cargo +nightly nextest run --workspace` (+ `SKY_ORACLE_SHARED_TARGET` for E2E)
+- `cargo +nightly nextest run -p sky-runtime-rust --features full` (LOAD-BEARING —
+  `default=[]` means the workspace run skips every `#[cfg(feature)]`-gated test,
+  incl. the whole `live::*` surface; mirror of CI's `runtime-full-features`)
+- `cargo +nightly test --workspace --doc`
+- `cargo +nightly clippy --workspace --all-targets -- -D warnings`
+- fuzz (`scripts/fuzz-well-typed.sh`)
+
+Full-green → close the batch + fast-forward master to that sha. Full-red → reset
+integration to the last certified sha + re-queue the batch.
+
+**`--all-targets` policy (2026-07-15).** The two gates MUST agree on lint scope,
+and the cheap gate must never be *stricter* than the full gate (else it rejects
+lanes the authority would accept). Target end-state: **both** gates run clippy
+`--all-targets` (so test-binary lint debt — `clippy::panic`/`expect_used`/
+`map_unwrap_or`/`doc_markdown` in `tests/*.rs` helpers — is caught, per
+PRINCIPLES §comply-by-construction). Because that debt accumulated while the gate
+ran `--workspace` only, `--all-targets` goes into the FULL gate ONLY once the
+test-file clippy-debt sweep is clean (else the full gate reds); until then the
+cheap gate stays `--all-targets`-free to match. Do not add `--all-targets` to one
+gate without the other.
+
 ### 4. No-deferral principle — every known bug enters the pipeline
 
 > Sky Lang aspires to be industrial best-in-class language+toolchain for
