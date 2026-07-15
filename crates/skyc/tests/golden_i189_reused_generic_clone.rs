@@ -80,10 +80,12 @@ fn i189_skyc_accepts_and_clones_reused_generic() {
 
     // The reused generic param `x` must carry a `Clone` bound (the invariant
     // that makes the inserted `.clone()` type-check).
-    let sig_line = emitted
-        .lines()
-        .find(|l| l.contains("fn main_dup<"))
-        .unwrap_or_else(|| panic!("emitted must define `main_dup`; got main.rs:\n{emitted}"));
+    let sig_line = emitted.lines().find(|l| l.contains("fn main_dup<"));
+    assert!(
+        sig_line.is_some(),
+        "emitted must define `main_dup`; got main.rs:\n{emitted}"
+    );
+    let sig_line = sig_line.unwrap_or_default();
     assert!(
         sig_line.contains("Clone"),
         "the reused generic param must carry a `Clone` bound (#189); got: {sig_line}"

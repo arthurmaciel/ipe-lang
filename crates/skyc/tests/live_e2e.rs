@@ -1315,7 +1315,7 @@ fn live_onsubmit_bare_msg_build_only() -> Result<(), BoxError> {
 /// is not merely a compile-time patch that leaves the handler
 /// undispatchable (or, worse, silently swallowed by a decode failure — see
 /// `html_on_raw_fixed_`'s doc for why it deliberately does NOT route
-/// through `decode_form_or_warn`). The POSTed form body deliberately
+/// through `decode_form_or_warn`). The posted form body deliberately
 /// carries a REAL field value (`name=alice`, matching the `<input
 /// name="name">` in the view) to prove the fixed dispatch survives
 /// non-empty form data, not just the trivial empty-body case.
