@@ -1,0 +1,67 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Task as Task
+import Std.Html as Html
+import Std.Ui as Ui exposing (Element)
+import Std.Log exposing (println)
+
+
+-- BACKLOG #172 regression, shape (4): a promoted Arc-root handler and a SIBLING
+-- top-level function reference (`Expr::FuncValue`) unified across a `case`/
+-- `match` (not an `if`) — one arm reads the promoted handler, another arm reads
+-- a `FuncValue`.
+--
+-- `handler` flows DIRECTLY into `Ui.onSubmit` → promoted to `SharedLambda`
+-- (`Arc`). The `case mode of` scrutinee selects between the promoted `handler`
+-- (one arm) and `signIn`, a top-level function REFERENCE (`Expr::FuncValue`,
+-- another arm). The match arms must unify at one Rust carrier: `Arc` vs `Box` →
+-- cargo `E0308` AFTER `skyc` exit 0. Fix: `promote_unification_sibling_lambdas`
+-- reaches the `Match` group and coerces every arm's function-value leaf to the
+-- `Arc` carrier (the promoted arm to `Arc::clone`, the `FuncValue` arm by
+-- eta-expansion).
+
+
+type alias SignInForm =
+    { email : String
+    , password : String
+    }
+
+
+type Msg
+    = DoSignIn SignInForm
+    | Noop
+
+
+type Mode
+    = Primary
+    | Secondary
+
+
+signIn : SignInForm -> Msg
+signIn form =
+    DoSignIn form
+
+
+loginForm : Mode -> Element Msg
+loginForm mode =
+    let
+        handler =
+            \form -> DoSignIn form
+    in
+    Ui.form
+        [ Ui.onSubmit
+            (case mode of
+                Primary ->
+                    handler
+
+                Secondary ->
+                    signIn
+            )
+        ]
+        [ Ui.text "sign in" ]
+
+
+main : Task Error ()
+main =
+    println (Html.render (Ui.layout [] (loginForm Primary)))
