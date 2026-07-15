@@ -235,8 +235,8 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
     sky_runtime::http_client::http_parse_query(raw)
 }
 
-pub fn main_f(a: i64) -> Box<dyn Fn(i64, i64) -> i64 + Send + 'static> {
-    { let __sky_fn: Box<dyn Fn(i64, i64) -> i64 + Send + 'static> = Box::new(move |b: i64, c: i64| -> i64 { ((a + b) + c) }); __sky_fn }
+pub fn main_f(a: i64) -> Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> {
+    { let __sky_fn: Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> = Box::new(move |b: i64, c: i64| -> i64 { ((a + b) + c) }); __sky_fn }
 }
 pub fn sky_main() -> SkyTask<()> {
     ({ let h = main_f(1); ({ let exact = (h)(2, 3); ({ let over = (main_f(1))(2, 3); log_println(string_from_int((if (exact == over) { exact } else { 0 }))) }) }) })
