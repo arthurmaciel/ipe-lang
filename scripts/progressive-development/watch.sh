@@ -23,7 +23,11 @@ set -uo pipefail
 SELFDIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SELFDIR/../.."
 b="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
-STATUS="docs/architecture/progdev-status.txt"
+STATUS="docs/architecture/progdev-status.txt"            # legacy single-file (kept; lanes use per-lane files)
+LANE_STATUS_PRE="docs/architecture/progdev-status-lane"  # + <i>.txt per concurrent autopilot lane
+NARRATOR="docs/architecture/progdev-narrator.log"        # autopilot's log() sink — we tail it; autopilot stays off our tty
+SEL_LANE=""            # "" = auto-follow newest log; "0"/"1"/… = pinned to that lane's stream (1/2 keys)
+LANE_LIVE_MIN=2        # a lane status file untouched for > this many minutes is treated as dead
 BACKLOG_JSONL="scripts/progressive-development/backlog.jsonl"
 LANE_GUARD_LOG_FILE="${LANE_GUARD_LOG:-/tmp/lane-guard.log}"
 RENDER="$SELFDIR/render-stream.sh"
@@ -48,9 +52,8 @@ active_tool() {
     if pid="$(cat "$LOCK" 2>/dev/null)" && [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
         return 0
     fi
-    # Fallback for orchestrate.sh / run.sh (they hold no autopilot lock) or a
-    # path-launched autopilot whose lock we somehow can't read.
-    pgrep -f 'progressive-development/(autopilot|orchestrate|run)\.sh' >/dev/null 2>&1
+    # Fallback: a path-launched autopilot whose lock we somehow can't read.
+    pgrep -f 'progressive-development/autopilot\.sh' >/dev/null 2>&1
 }
 now_hm()    { date +%H:%M; }
 mtime()     { stat -c %Y "$1" 2>/dev/null || echo 0; }
@@ -184,7 +187,7 @@ print_status_block() {
 
 # ── startup summary (scrolls; transient orientation) ──────────────────────────
 tool="idle"
-for t in autopilot.sh orchestrate.sh run.sh; do
+for t in autopilot.sh; do
     pgrep -f "progressive-development/$t" >/dev/null 2>&1 && { tool="$t"; break; }
 done
 printf '  %s-- progressive-development monitor --%s\n' "$HDRC" "$C0"
@@ -199,9 +202,32 @@ print_status_block
 # ── pinned header machinery (scroll-region) ───────────────────────────────────
 FRAMES='⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏'; read -r -a SPIN <<< "$FRAMES"; spin_i=0
 LINES_N="$(term_rows)"
-HEADER_LINES=6      # l1 spinner/phase, l2 task, l3 guards+backlog, l4 worktrees, l5 logs, l6 stalled
+# Header = 1 narrator row + MAX_LANES lane rows + 4 (guards/worktrees/logs/stalled).
+# Fixed at MAX_LANES so the scroll-region math is STABLE (never resizes mid-run);
+# dead lanes render as an em-dash placeholder.
+MAX_LANES="${PROGDEV_LANES:-2}"
+HEADER_LINES=$(( 1 + MAX_LANES + 4 ))
 SLOW_REFRESH_SEC=5  # situational-awareness data (git/jq/pgrep/df) redraws at most this often
 slow_last=0
+
+# ── per-lane status helpers (autopilot writes docs/architecture/progdev-status-lane<i>.txt) ──
+narrator_line() { tail -n 1 "$NARRATOR" 2>/dev/null; }
+lane_is_live()  { find "${LANE_STATUS_PRE}${1}.txt" -mmin -"$LANE_LIVE_MIN" >/dev/null 2>&1; }
+lane_row() {   # <i> → "[i+1] <task> · <phase>/<model> · <mm:ss elapsed>" (1-based for the user)
+    local i="$1" f="${LANE_STATUS_PRE}${1}.txt" task phase model se now el
+    [ -s "$f" ] || { printf '[%s] —' "$(( i + 1 ))"; return; }
+    task="$(awk '/^task/{ $1=""; sub(/^ +/,""); print; exit}' "$f")"
+    phase="$(awk '/^phase/{print $2; exit}' "$f")"
+    model="$(awk '/^phase/{for(j=1;j<=NF;j++) if($j=="model"){print $(j+1); exit}}' "$f")"
+    se="$(awk '/^type/{for(j=1;j<=NF;j++) if($j=="start_epoch"){print $(j+1); exit}}' "$f")"
+    now="$(date +%s)"; el=$(( now - ${se:-$now} )); [ "$el" -lt 0 ] && el=0
+    printf '[%s] %s · %s/%s · %02d:%02d' "$(( i + 1 ))" "${task:-·}" "${phase:-·}" "${model:-·}" "$(( el/60 ))" "$(( el%60 ))"
+}
+lane_log() {   # <i> → newest live log stream for that lane (design/impl/review), else empty
+    local i="$1" f
+    f="$(ls -t /tmp/autopilot-guardian*-"$i".log 2>/dev/null | head -1)"
+    [ -n "$f" ] && [ -n "$(find "$f" -mmin -5 2>/dev/null)" ] && echo "$f"
+}
 
 setup_pane() {
     [ "$PIN" = 1 ] || return 0
@@ -214,35 +240,34 @@ setup_pane() {
 draw_header() {
     [ "$PIN" = 1 ] || return 0
     local f="${SPIN[$((spin_i % ${#SPIN[@]}))]}"; spin_i=$((spin_i+1))
-    local task type att phase model idle cols l1 l2 now_ts
-    if [ -s "$STATUS" ]; then
-        task="$(awk '/^task/{ $1=""; sub(/^ +/,""); print; exit}' "$STATUS")"
-        type="$(awk '/^type/{print $2; exit}' "$STATUS")"
-        att="$(awk '/^type/{for(i=1;i<=NF;i++) if($i=="attempt"){print $(i+1); exit}}' "$STATUS")"
-        phase="$(awk '/^phase/{print $2; exit}' "$STATUS")"
-        model="$(awk '/^phase/{for(i=1;i<=NF;i++) if($i=="model"){print $(i+1); exit}}' "$STATUS")"
-    fi
-    idle='-'; [ -n "${cur:-}" ] && idle=$(( $(date +%s) - $(mtime "$cur") ))
+    local cols now_ts k r col row narr sel
     cols="$(term_cols)"
-    l1="$f ${phase:-·}/${model:-·} · ${type:-·} · attempt ${att:-·} · idle ${idle}s · $(now_hm)"
-    l2="task: ${task:-·}"
-
     now_ts="$(date +%s)"
     if [ $(( now_ts - slow_last )) -ge "$SLOW_REFRESH_SEC" ] || [ -z "${GL_L3:-}" ]; then
         compute_status_lines
         slow_last="$now_ts"
     fi
-
+    sel="auto"; [ -n "$SEL_LANE" ] && sel="lane $(( SEL_LANE + 1 ))"
+    narr="$(narrator_line)"
     printf '\0337'                                          # save cursor
-    printf '\033[1;1H\033[2K%s%.*s%s' "$BANC" "$((cols-1))" "$l1" "$C0"
-    printf '\033[2;1H\033[2K%s%.*s%s' "$DIMC" "$((cols-1))" "$l2" "$C0"
-    printf '\033[3;1H\033[2K%s%.*s%s' "$DIMC" "$((cols-1))" "$GL_L3" "$C0"
-    printf '\033[4;1H\033[2K%s%.*s%s' "$DIMC" "$((cols-1))" "$GL_L4" "$C0"
-    printf '\033[5;1H\033[2K%s%.*s%s' "$DIMC" "$((cols-1))" "$GL_L5" "$C0"
+    # row 1 — narrator (autopilot's latest log line) + spinner + key hint
+    printf '\033[1;1H\033[2K%s%.*s%s' "$BANC" "$((cols-1))" \
+        "$f ${narr:-autopilot} · [1/2 lane · a auto → follow: $sel]" "$C0"
+    # rows 2..(1+MAX_LANES) — one per lane (task · phase/model · elapsed); selected highlighted
+    for (( k=0; k<MAX_LANES; k++ )); do
+        r=$(( 2 + k ))
+        if lane_is_live "$k"; then row="$(lane_row "$k")"; else row="[$(( k + 1 ))] —"; fi
+        [ "$SEL_LANE" = "$k" ] && col="$BANC" || col="$DIMC"
+        printf '\033[%d;1H\033[2K%s%.*s%s' "$r" "$col" "$((cols-1))" "$row" "$C0"
+    done
+    # remaining rows — guards / worktrees / logs / stalled
+    printf '\033[%d;1H\033[2K%s%.*s%s' "$(( 2+MAX_LANES ))" "$DIMC" "$((cols-1))" "$GL_L3" "$C0"
+    printf '\033[%d;1H\033[2K%s%.*s%s' "$(( 3+MAX_LANES ))" "$DIMC" "$((cols-1))" "$GL_L4" "$C0"
+    printf '\033[%d;1H\033[2K%s%.*s%s' "$(( 4+MAX_LANES ))" "$DIMC" "$((cols-1))" "$GL_L5" "$C0"
     if [ "$STALL_ACTIVE" = 1 ]; then
-        printf '\033[6;1H\033[2K%s%.*s%s' "$WARNC" "$((cols-1))" "$GL_L6" "$C0"
+        printf '\033[%d;1H\033[2K%s%.*s%s' "$(( 5+MAX_LANES ))" "$WARNC" "$((cols-1))" "$GL_L6" "$C0"
     else
-        printf '\033[6;1H\033[2K%s%.*s%s' "$DIMC" "$((cols-1))" "$GL_L6" "$C0"
+        printf '\033[%d;1H\033[2K%s%.*s%s' "$(( 5+MAX_LANES ))" "$DIMC" "$((cols-1))" "$GL_L6" "$C0"
     fi
     printf '\0338'                                          # restore cursor
 }
@@ -290,15 +315,28 @@ follow() {
     TAIL_PID=$!
 }
 
+# Key-switching needs a FOREGROUND controlling tty (a backgrounded auto-launched
+# watch can't read keys — they go to autopilot). Detect once: foreground iff the
+# terminal's foreground process group == ours. trap '' TTIN belt-and-suspenders so
+# even a mis-detected background read fails instead of stopping us.
+trap '' TTIN TTOU
+KEYS=0
+if [ "$PIN" = 1 ] && [ -r /dev/tty ]; then
+    _tpgid="$(ps -o tpgid= -p $$ 2>/dev/null | tr -d ' ')"
+    _pgid="$(ps -o pgid=  -p $$ 2>/dev/null | tr -d ' ')"
+    [ -n "$_tpgid" ] && [ "$_tpgid" = "$_pgid" ] && KEYS=1
+fi
+
 setup_pane
-printf '  %s-- monitoring (auto-follows newest log; exits when run ends; Ctrl-C) --%s\n' "$DIMC" "$C0"
+printf '  %s-- monitoring (1/2 = follow lane · a = auto-newest · Ctrl-C quits) --%s\n' "$DIMC" "$C0"
 cur=""; idle=0; plain_last=0
 while :; do
     if active_tool; then idle=0; else
         idle=$((idle+1))
         [ "$idle" -ge 4 ] && { teardown; printf '  %s-- run ended - monitor done --%s\n' "$DIMC" "$C0"; exit 0; }
     fi
-    n="$(newest_log)"
+    # which stream to follow: the pinned lane's log (fall back to newest), else newest
+    if [ -n "$SEL_LANE" ]; then n="$(lane_log "$SEL_LANE")"; [ -z "$n" ] && n="$(newest_log)"; else n="$(newest_log)"; fi
     if [ -n "$n" ] && [ "$n" != "$cur" ]; then stop_tail; cur="$n"; follow "$cur"; fi
     if [ "$PIN" = 0 ]; then
         now_ts="$(date +%s)"
@@ -308,5 +346,15 @@ while :; do
         fi
     fi
     draw_header
-    sleep 1
+    if [ "$KEYS" = 1 ]; then
+        # 1s read doubles as the tick; a keypress returns early. 1/2 pin a lane,
+        # a/0 restore auto. Re-pick the followed log next iteration (stop_tail + cur="").
+        key=""; read -t 1 -n 1 -s key </dev/tty 2>/dev/null || key=""
+        case "$key" in
+            [1-9]) SEL_LANE=$(( key - 1 )); stop_tail; cur="" ;;
+            a|A|0) SEL_LANE="";             stop_tail; cur="" ;;
+        esac
+    else
+        sleep 1
+    fi
 done
