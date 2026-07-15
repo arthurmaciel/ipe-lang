@@ -1336,6 +1336,59 @@ pub enum StdlibKernel {
     /// what `toString` / interpolation gives automatically — see
     /// `sky_runtime::secret`'s hand-written `SkyStringify` impl).
     SecretRedacted,
+
+    // ── Sky.Core.Regex — RE2 helpers (#194) ──────────────────────────────────
+    // Pure, total kernels routed via the compiled-source `Sky.Core.Regex`
+    // Layer-3 surface + `Ffi.kernel "Regex_*"` aliases (#196). Runtime fns
+    // (`sky_runtime::regex_kernel::*`) are re-exported ungated — no feature gate
+    // and no `project.rs` thread needed (the emitted `mod.rs` declares
+    // `regex_kernel` unconditionally, deps always present).
+    /// `Regex.match : String -> String -> Bool` — does the pattern match anywhere?
+    RegexMatch,
+    /// `Regex.find : String -> String -> Maybe String` — first match, if any.
+    RegexFind,
+    /// `Regex.findAll : String -> String -> List String` — every match, in order.
+    RegexFindAll,
+    /// `Regex.replace : String -> String -> String -> String` — replace every match.
+    RegexReplace,
+    /// `Regex.split : String -> String -> List String` — split on every match.
+    RegexSplit,
+
+    // ── Sky.Core.Path — pure filesystem-path helpers (#202) ───────────────────
+    // Pure, total kernels routed via the compiled-source `Sky.Core.Path`
+    // Layer-3 surface + `Ffi.kernel "Path_*"` aliases. Runtime fns
+    // (`sky_runtime::path::*`) are re-exported ungated (same posture as Regex).
+    /// `Path.base : String -> String` — final path component.
+    PathBase,
+    /// `Path.dir : String -> String` — everything but the final component.
+    PathDir,
+    /// `Path.ext : String -> String` — file extension (with the dot), or empty.
+    PathExt,
+    /// `Path.isAbsolute : String -> Bool` — does the path start from the root?
+    PathIsAbsolute,
+
+    // ── Std.Trace — opt-in tracing spans (#197) ──────────────────────────────
+    // Task-effectful; runtime fns `sky_runtime::trace::*` are re-exported
+    // (emitted `mod.rs` declares `trace` unconditionally). Class `Pure` (the
+    // effect lives in the `Task` scheme, same as File/Io/Http).
+    /// `Trace.span : String -> Task e a -> Task e a` — wrap a Task in a named span.
+    TraceSpan,
+    /// `Trace.event : String -> Task Error ()` — record an instantaneous event.
+    TraceEvent,
+    /// `Trace.attr : String -> String -> Task Error ()` — annotate the span.
+    TraceAttr,
+
+    // ── Std.Compression — gzip + zstd (#197) ─────────────────────────────────
+    // Task-effectful; runtime `sky_runtime::compression::*`. Operates on `Bytes`
+    // (`Vec<u8>`) to match the runtime `compression_*(Vec<u8>) -> Vec<u8>` shape.
+    /// `Compression.gzip : Bytes -> Task Error Bytes`.
+    CompressionGzip,
+    /// `Compression.gunzip : Bytes -> Task Error Bytes`.
+    CompressionGunzip,
+    /// `Compression.zstdCompress : Bytes -> Task Error Bytes`.
+    CompressionZstdCompress,
+    /// `Compression.zstdDecompress : Bytes -> Task Error Bytes`.
+    CompressionZstdDecompress,
 }
 
 impl StdlibKernel {
@@ -2495,6 +2548,37 @@ impl StdlibKernel {
             Self::SecretFromString => d("Secret", "fromString", 1, Pure, "secret_from_string"),
             Self::SecretReveal => d("Secret", "reveal", 1, Pure, "secret_reveal"),
             Self::SecretRedacted => d("Secret", "redacted", 1, Pure, "secret_redacted"),
+            // ── Sky.Core.Regex (#194) ────────────────────────────────────────
+            // Runtime names MUST match `sky_runtime::regex_kernel::*` exactly
+            // (note `regex_find_all`). Class `Pure` — the kernels are total/pure
+            // (no effect); the HM scheme carries no `Task`.
+            Self::RegexMatch => d("Regex", "match", 2, Pure, "regex_match"),
+            Self::RegexFind => d("Regex", "find", 2, Pure, "regex_find"),
+            Self::RegexFindAll => d("Regex", "findAll", 2, Pure, "regex_find_all"),
+            Self::RegexReplace => d("Regex", "replace", 3, Pure, "regex_replace"),
+            Self::RegexSplit => d("Regex", "split", 2, Pure, "regex_split"),
+            // ── Sky.Core.Path (#202) ─────────────────────────────────────────
+            // Runtime names MUST match `sky_runtime::path::*` exactly
+            // (`path_is_absolute`). Pure/total, no effect.
+            Self::PathBase => d("Path", "base", 1, Pure, "path_base"),
+            Self::PathDir => d("Path", "dir", 1, Pure, "path_dir"),
+            Self::PathExt => d("Path", "ext", 1, Pure, "path_ext"),
+            Self::PathIsAbsolute => d("Path", "isAbsolute", 1, Pure, "path_is_absolute"),
+            // ── Std.Trace (#197) ─────────────────────────────────────────────
+            // Runtime names MUST match `sky_runtime::trace::*` exactly.
+            Self::TraceSpan => d("Trace", "span", 2, Pure, "trace_span"),
+            Self::TraceEvent => d("Trace", "event", 1, Pure, "trace_event"),
+            Self::TraceAttr => d("Trace", "attr", 2, Pure, "trace_attr"),
+            // ── Std.Compression (#197) ───────────────────────────────────────
+            // Runtime names MUST match `sky_runtime::compression::*` exactly.
+            Self::CompressionGzip => d("Compression", "gzip", 1, Pure, "compression_gzip"),
+            Self::CompressionGunzip => d("Compression", "gunzip", 1, Pure, "compression_gunzip"),
+            Self::CompressionZstdCompress => {
+                d("Compression", "zstdCompress", 1, Pure, "compression_zstd_compress")
+            }
+            Self::CompressionZstdDecompress => {
+                d("Compression", "zstdDecompress", 1, Pure, "compression_zstd_decompress")
+            }
         }
     }
 
@@ -3424,6 +3508,26 @@ impl StdlibKernel {
         Self::SecretFromString,
         Self::SecretReveal,
         Self::SecretRedacted,
+        // ── Sky.Core.Regex (#194) ────────────────────────────────────────────
+        Self::RegexMatch,
+        Self::RegexFind,
+        Self::RegexFindAll,
+        Self::RegexReplace,
+        Self::RegexSplit,
+        // ── Sky.Core.Path (#202) ─────────────────────────────────────────────
+        Self::PathBase,
+        Self::PathDir,
+        Self::PathExt,
+        Self::PathIsAbsolute,
+        // ── Std.Trace (#197) ─────────────────────────────────────────────────
+        Self::TraceSpan,
+        Self::TraceEvent,
+        Self::TraceAttr,
+        // ── Std.Compression (#197) ───────────────────────────────────────────
+        Self::CompressionGzip,
+        Self::CompressionGunzip,
+        Self::CompressionZstdCompress,
+        Self::CompressionZstdDecompress,
     ];
 
     // ── Classification predicates (moved from sky_ir::KernelFn) ─────────────
