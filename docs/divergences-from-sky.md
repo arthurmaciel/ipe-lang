@@ -708,6 +708,24 @@ slot — so it caused a skyc-0-then-cargo-fail (E0308 wrong-trait + E0277
 Regression: `golden_i195_json_decode_pipeline`; the `+ Sync` forwarding path is
 pinned by `golden_i190_static_bound` / `golden_i191_input_arc_capture`.
 
+**#198 refinement — decode-combinator mapper payload parameters are Send-only
+too.** #195 renders the Send-only `FnOnce` chain at the `Decoder<Fun>` TYPE
+position (the producer). When that payload flows OUT of the decoder into a
+mapper's PARAMETER — `JsonDec.map (\f -> f x) d`, `andThen (\f -> …) d`, and the
+`map2`/`map3`/`map4` + `Db.Decode` equivalents — the parameter's inferred type is
+a bare `Ty::Fun`, so `lower_lambda` stamped it as `IrType::Fun`, which
+`render_type` emits as the shared `Box<dyn Fn + Send + Sync>`: wrong trait (`Fn`
+vs the producer's `FnOnce`) plus an unsatisfiable `+ Sync` → skyc-0-then-cargo-
+fail (E0308 / E0277), the same class as #195 one surface deeper. In every
+`map`/`mapN`/`andThen` combinator the mapper's parameters ARE, by construction,
+the decoded payload value(s), so `sky_lower::retype_decoder_payload_mapper`
+retypes any single-parameter function-typed mapper param from `IrType::Fun` to
+the owned `IrType::FnOnceChain` at the combinator call site — matching the
+producer shape rather than diverging. Single-parameter only: a `FnOnceChain` is a
+nested curry chain the flat body application (`(f)(a, b)`) does not match, so a
+multi-parameter payload stays a distinct surface. Regression:
+`golden_i198_decoder_payload_mapper` (skyc-0 render assertion + cargo-0 E2E).
+
 ### A9 — Crate-version SSOT as a typed `const` table + drift test
 ipê holds crate name+version in a typed `const CrateSpec` table
 (`crates/sky_backend_rust/src/crate_specs.rs`) read by every manifest-emitting
