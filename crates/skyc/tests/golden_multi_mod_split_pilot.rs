@@ -51,20 +51,38 @@ fn runtime() -> PathBuf {
 /// per-module files, so the multi-file output is proven byte-for-byte, not
 /// merely that `main.rs` shrank. Under-emission (a golden module file with no
 /// emitted counterpart) and content drift both fail loudly.
+// The lone `panic!` guards a test-support invariant: the checked-in golden
+// `sky_mods/` dir must be readable, or the fixture itself is broken. Per-entry
+// and per-file errors fold into `mismatches`/`assert!`; only the missing-dir
+// case aborts, which IS the correct failure-reporting mechanism here.
+#[allow(clippy::panic)]
 fn assert_module_files_match_golden(out: &Path, golden_dir: &Path) {
     let golden_mods = golden_dir.join("sky_mods");
     let emitted_mods = out.join("src").join("sky_mods");
-    let entries = std::fs::read_dir(&golden_mods).unwrap_or_else(|e| {
-        panic!(
-            "golden sky_mods dir unreadable at {}: {e}",
-            golden_mods.display()
-        )
-    });
-
     let mut mismatches = Vec::new();
     let mut compared = 0usize;
+
+    // Missing/unreadable golden dir is a broken-fixture invariant → abort
+    // (see the function-level `#[allow(clippy::panic)]` justification). Per-entry
+    // errors below fold into `mismatches` and surface through the final `assert!`.
+    let entries = match std::fs::read_dir(&golden_mods) {
+        Ok(entries) => entries,
+        Err(e) => {
+            panic!(
+                "golden sky_mods dir unreadable at {}: {e}",
+                golden_mods.display()
+            )
+        }
+    };
+
     for entry in entries {
-        let entry = entry.unwrap_or_else(|e| panic!("golden sky_mods entry unreadable: {e}"));
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                mismatches.push(format!("sky_mods entry unreadable: {e}"));
+                continue;
+            }
+        };
         let name = entry.file_name();
         let want_path = golden_mods.join(&name);
         let got_path = emitted_mods.join(&name);

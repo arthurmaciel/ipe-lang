@@ -1,4 +1,4 @@
-//! #193 taskseq/pipeline reuse lock — `lower_let_pvar` covers TaskSeq.
+//! #193 taskseq/pipeline reuse lock — `lower_let_pvar` covers `TaskSeq`.
 //!
 //! A `CloneOk` binding (`String`) captured inside a `Task.andThen` continuation
 //! lambda AND used again after it (the 07-todo-cli `conn`/`rows` shape).
@@ -7,7 +7,7 @@
 //! full accumulator `acc`, which recurses into `TaskSeq` (`:3386`) and `Call`
 //! (`:3298`/`:3303`) — so this shape is covered on HEAD.  This golden is a
 //! **regression lock**: if a future change accidentally removes or gates that
-//! driver path, the E2E test (SKY_E2E=1) catches the E0382.
+//! driver path, the E2E test (`SKY_E2E=1`) catches the E0382.
 //!
 //! Run:
 //! ```text
@@ -39,8 +39,7 @@ fn entry_path(root: &Path) -> PathBuf {
 fn i193_taskseq_skyc_accepts() {
     let root = repo_root();
     let entry = entry_path(&root);
-    let out =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i193_taskseq_reuse_skyc_out");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i193_taskseq_reuse_skyc_out");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = skyc::resolve_runtime() else {
@@ -84,11 +83,7 @@ fn i193_taskseq_cargo_builds_and_runs() {
     let Ok(runtime) = runtime else { return };
 
     let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
-    assert!(
-        built.is_ok(),
-        "skyc build must succeed: {:?}",
-        built.err()
-    );
+    assert!(built.is_ok(), "skyc build must succeed: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted("i193_taskseq_reuse", &out);
     assert_eq!(
