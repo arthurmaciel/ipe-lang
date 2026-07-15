@@ -4464,7 +4464,16 @@ impl StdlibKernel {
     pub const fn is_live(self) -> bool {
         matches!(
             self,
-            Self::LiveApp | Self::LiveAppRouted | Self::LiveRoute | Self::LiveRenderStatic
+            Self::LiveApp
+                | Self::LiveAppRouted
+                | Self::LiveRoute
+                | Self::LiveRenderStatic
+                // PubSub.publish / publishNoEcho live in `sky_runtime::live::pubsub`
+                // (gated by the `live` Cargo feature). A program that uses either —
+                // even without a Live.app — must have the `live` feature enabled so
+                // `pubsub_publish` / `pubsub_publish_no_echo` are in scope.
+                | Self::PubSubPublish
+                | Self::PubSubPublishNoEcho
         )
     }
 
