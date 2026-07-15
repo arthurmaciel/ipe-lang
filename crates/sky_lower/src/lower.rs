@@ -14270,25 +14270,23 @@ impl<'a> Lowerer<'a> {
 
         // A list `case` that BINDS a value (a head element or a rest list) needs
         // the backend's owned-rebind (`x.clone()` / `rest.to_vec()`), which
-        // requires the element type to be `Clone`. Every CONCRETE element type
-        // the backend emits derives `Clone`; a still-generic element type carries
-        // no such bound (function generics emit bound-free, M2a), so binding one
-        // would emit Rust that fails `go build` — a polymorphic-element list
-        // pattern is a not-yet gap (SKY-L0102, feature: polymorphism) rather than
-        // broken Rust. A non-binding list `case` (`[] -> … ; _ :: _ -> …`) clones
-        // nothing and is unaffected.
-        let is_list_case = branches.iter().any(|br| {
-            matches!(
-                br.pat.value,
-                canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _)
-            )
-        });
-        if is_list_case
-            && arms.iter().any(|a| Self::pat_binds_value(&a.pat))
-            && matches!(self.list_elem_ir(scrut.span)?, IrType::Generic(_))
-        {
-            return Err(unsupported(first.pat.span, Feature::Polymorphism));
-        }
+        // requires the element type to be `Clone`. A GENERIC element type is
+        // sound here: `list_elem_ir` returns `IrType::Generic(sym)` ONLY when
+        // `sym` is one of the enclosing function's declared type parameters
+        // (`poly_tvar_symbol` matched `current_poly_tvars` — a free var NOT in
+        // that map maps to `IrType::Json`, never `Generic`), and every emitted
+        // function type parameter carries a `Clone` bound
+        // (`render_fn_generics`'s `bounds.with_clone()`). So the emitted
+        // `fn f<T1: Clone>(xs: Vec<T1>) -> …` supports `rest.to_vec()` /
+        // `x.clone()` and `cargo`-builds. This holds for a Boundary-Scheme-
+        // Promoted untyped def (`listLen xs = case xs of [] -> … ; _ :: rest ->
+        // …`, a cross-module polymorphic recursion, #201) exactly as for an
+        // annotated generic — both route the element var through the same
+        // `current_poly_tvars` generic path. A non-binding list `case`
+        // (`[] -> … ; _ :: _ -> …`) clones nothing and was never affected. The
+        // former SKY-L0102 gate here predated the universal `Clone`-bound
+        // injection and rejected sound programs (an exit-1 where the backend
+        // would build) — removed.
 
         if all_ctor {
             // The scrutinee's enum is one this module declared (the type checker
@@ -14758,23 +14756,6 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Whether an IR pattern introduces a value-binding name (a [`Pat::Var`] or a
-    /// [`Pat::Alias`]) anywhere within it. A wildcard / literal binds nothing.
-    /// Used by [`Self::lower_case`] to decide whether a list `case` needs the
-    /// backend's owned-rebind (and so the element type's `Clone` bound).
-    fn pat_binds_value(pat: &Pat) -> bool {
-        match pat {
-            Pat::Var(_) | Pat::Alias(_, _) => true,
-            Pat::Wildcard | Pat::Int(_) | Pat::Bool(_) | Pat::Char(_) | Pat::Str(_) => false,
-            Pat::Tuple(subs) => subs.iter().any(Self::pat_binds_value),
-            Pat::Ctor { args, .. } => args.iter().any(Self::pat_binds_value),
-            Pat::Record(fields) => fields.iter().any(|(_, p)| Self::pat_binds_value(p)),
-            Pat::Slice { prefix, rest } => {
-                prefix.iter().any(Self::pat_binds_value)
-                    || rest.as_deref().is_some_and(Self::pat_binds_value)
-            }
-        }
-    }
 }
 
 /// Recursively collect every [`IrType::Generic`] symbol that appears
