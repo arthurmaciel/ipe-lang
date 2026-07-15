@@ -52,13 +52,19 @@ fn compile_module_probe(slug: &str, main: &str) -> Option<PathBuf> {
     let Ok(runtime) = skyc::resolve_runtime() else {
         return None; // runtime unavailable in this environment — caller skips
     };
-    let tmp = std::env::temp_dir().join(format!("skyc_stdlib_seal_{slug}"));
+    // Unique dir PER CALL: the `_resolves_and_emits` and `_builds_and_runs` tests for
+    // one module share a slug and run concurrently under nextest, so a shared temp dir
+    // races (write vs remove_dir_all) and flakily fails write_project. A monotonic
+    // counter makes every probe dir distinct.
+    static PROBE_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let uid = PROBE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = std::env::temp_dir().join(format!("skyc_stdlib_seal_{slug}_{uid}"));
     assert!(
         write_project(&tmp, main),
         "must write the {slug} fixture project"
     );
     let entry = tmp.join("src").join("Main.sky");
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("stdlib_seal_{slug}_out"));
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("stdlib_seal_{slug}_{uid}_out"));
     let _ = fs::remove_dir_all(&out);
 
     let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
