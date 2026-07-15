@@ -3982,4 +3982,44 @@ mod tests {
             );
         }
     }
+
+    /// #201 diagnostic: a cross-module untyped recursive function polymorphic in
+    /// its LIST-ELEMENT type (`listLen : List a -> Int`) must generalize its
+    /// element var at the boundary so the lowerer can emit a Rust generic — NOT
+    /// leave it a residual flex that hits SKY-L0102.
+    #[test]
+    fn i201_polymorphic_list_element_cross_module_generalizes() {
+        let lib = (
+            "Lib1",
+            "module Lib1 exposing (listLen)\n\n\
+             import Sky.Core.Prelude exposing (..)\n\n\
+             listLen xs =\n    case xs of\n        [] -> 0\n        _ :: rest -> 1 + listLen rest\n",
+        );
+        let main = (
+            "Main",
+            "module Main exposing (main)\n\n\
+             import Sky.Core.Prelude exposing (..)\n\
+             import Lib1 exposing (listLen)\n\n\
+             main =\n    println (String.fromInt (listLen [ 90, 35 ]))\n",
+        );
+        let Some((m, mut i)) = link_modules(&[lib, main]) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        assert!(
+            r.is_ok(),
+            "a polymorphic-list-element cross-module untyped def must typecheck: {r:?}"
+        );
+        let Ok(solved) = r else { return };
+        let Ok(lib1) = i.intern("Lib1") else { return };
+        let Ok(list_len) = i.intern("listLen") else {
+            return;
+        };
+        let quantified = solved.untyped_type_params.get(&(vec![lib1], list_len));
+        assert!(
+            quantified.is_some_and(|v| v.len() == 1),
+            "listLen's promoted scheme must quantify EXACTLY the list-element \
+             var so the lowerer emits a Rust generic instead of SKY-L0102; got: {quantified:?}"
+        );
+    }
 }

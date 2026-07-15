@@ -582,6 +582,28 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   specific bug class independent review found is closed and re-verified,
   and that the two fixes are structurally defense-in-depth (a gap in one
   does not silently defeat the other).
+- **#201 follow-up — a promoted element-polymorphic recursion was rejected at
+  LOWERING, not inference.** A cross-module untyped recursive function
+  polymorphic in its LIST-ELEMENT type (`evenLen`/`oddLen`/`listLen : List a ->
+  Bool`, fuzzer seed 31348 `mmrecpair`) was correctly generalized by
+  `sky_types` (`untyped_type_params` listed the element var), yet `skyc` FAILED
+  with SKY-L0102 at the `[] ->` arm. Root cause was NOT the boundary scheme but
+  a stale gate in `sky_lower::lower_case`: it rejected ANY list `case` binding a
+  value (`_ :: rest`) whose element lowered to `IrType::Generic(_)`, on the now-
+  false premise that "function generics emit bound-free" so the owned-rebind
+  (`rest.to_vec()` / `x.clone()`) would `cargo`-fail. Every emitted function
+  type parameter in fact carries a `Clone` bound (`render_fn_generics`'s
+  `bounds.with_clone()`), and `list_elem_ir` returns `IrType::Generic(sym)` ONLY
+  for a var that IS one of the enclosing function's declared type parameters (a
+  free var maps to `IrType::Json`), so the emitted
+  `fn f<T1: Clone>(xs: Vec<T1>) -> …` with `rest.to_vec()` builds. The gate
+  rejected sound programs (an exit-1 where the backend would have built cleanly)
+  — removed. This turns a spurious under-acceptance into acceptance; the emitted
+  Rust is a `Clone`-bounded generic monomorphized per use site. Re-verified via
+  a real `cargo build` + `cargo run` golden
+  (`crates/skyc/tests/golden_i201_cross_module_poly_recursion.rs`, `SKY_E2E=1`,
+  prints `EO`) and the fuzzer (`scripts/fuzz-well-typed.sh --seed 31348`, now
+  green).
 
 ### B24 — Prescriptive TEA `init` signature (Live → `LiveReq`; Tui/Webview → `()`) (#180)
 - **Reference:** `../sky/src/Sky/Type/Constrain/Expression.hs:2665-2695` leaves
