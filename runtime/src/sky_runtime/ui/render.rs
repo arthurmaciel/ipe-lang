@@ -388,10 +388,8 @@ fn collect_html_attrs<M: Clone>(attrs: &[Attribute<M>]) -> Vec<HtmlAttribute<M>>
                     _ => {}
                 }
             }
-            Attribute::AttrPseudoRule(pc, css) => {
-                if !css.is_empty() {
-                    pseudo_rules.push(format!("{}|{css}", pc.wire_tag()));
-                }
+            Attribute::AttrPseudoRule(pc, css) if !css.is_empty() => {
+                pseudo_rules.push(format!("{}|{css}", pc.wire_tag()));
             }
             // Style and nearby handled separately.
             _ => {}
