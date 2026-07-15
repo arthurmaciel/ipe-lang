@@ -9432,6 +9432,39 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// #183 — re-align a `Result.mapError` error-HANDLER wildcard-lambda param
+    /// that defaulted to `IrType::Json` onto the value side's `IrType::Error`
+    /// (`SkyError`) default.
+    ///
+    /// `Result.mapError : (e -> f) -> Result e a -> Result f a` keeps `e`
+    /// polymorphic. A wildcard `\_ -> …` handler over a genuinely-free `e`
+    /// lowers its `PAnything` binder via `ir_type_from_ty_json` (`lower_lambda`),
+    /// and a bare free `Ty::Var` there defaults to `IrType::Json`. But the
+    /// `Ok "concrete"` value side pins the SAME free `e` to `IrType::Error`
+    /// (`ok_res` / `ResultOkDefault`). One var, two defaults → emitted
+    /// `FnOnce(JsonVal)` closure vs `SkyResult<SkyError, _>` value → E0277
+    /// (exit-0-then-cargo-fail SEAL breach).
+    ///
+    /// Fix — "one defaulting policy, both sides": when the handler is the
+    /// wildcard lambda whose single binder defaulted to `IrType::Json`, retype
+    /// that binder to `IrType::Error`. The `PAnything` binder is never read, so
+    /// the binder-only rewrite is sound with no body change. Fires ONLY when the
+    /// param is exactly `IrType::Json`: a resolved/annotated `e`
+    /// (`Result String a` handler → `IrType::Str`, or a named-function handler
+    /// like `tag : String -> String`) is left untouched. Canon arg order is
+    /// `[fn, r]`, so the handler is `args[0]`.
+    fn retype_result_map_error_handler(resolved: &Callee, lowered_args: &mut [Expr]) {
+        if !matches!(resolved, Callee::Kernel(KernelFn::ResultMapError)) {
+            return;
+        }
+        if let Some(Expr::Lambda { params, .. }) = lowered_args.first_mut()
+            && let [(_, ty)] = params.as_mut_slice()
+            && *ty == IrType::Json
+        {
+            *ty = IrType::Error;
+        }
+    }
+
     fn lower_call_uniform(
         &self,
         callee: &canon::Expr,
@@ -9516,6 +9549,14 @@ impl<'a> Lowerer<'a> {
                         // free parameter is not an enclosing generic (which would
                         // already pin it — see `kernel_turbofish_pin`).
                         let pin = self.kernel_turbofish_pin(&resolved, args, call_span);
+                        // #183: re-align a `Result.mapError` wildcard-handler
+                        // binder that defaulted to `IrType::Json` onto the
+                        // value side's `IrType::Error` (`SkyError`) default,
+                        // so the emitted closure's `FnOnce(SkyError)` unifies
+                        // with the `SkyResult<SkyError, _>` value (else E0277,
+                        // an exit-0-then-cargo-fail SEAL breach).
+                        let mut lowered_args = lowered_args;
+                        Self::retype_result_map_error_handler(&resolved, &mut lowered_args);
                         Ok(Expr::Call {
                             callee: resolved,
                             args: lowered_args,
