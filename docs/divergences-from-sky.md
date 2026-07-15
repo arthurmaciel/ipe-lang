@@ -1493,9 +1493,10 @@ API-shape review):
     `Std.Cache`, `Std.Csv`, `Std.Email`, `Std.Compression`, `Std.Config`,
     `Sky.Core.WebSocket` (incl. its `Sub_subscribeWebSocket`).
   - **Lowering-blocked (kernel in the registry but no lower/emit arm, SKY-L0108
-    / emit `CompilerBug`):** `Std.PubSub` (`PubSub_publish` /
-    `PubSub_publishNoEcho` — the runtime `pubsub_publish` exists, the compiler
-    lower/emit arm does not).
+    / emit `CompilerBug`):** *(none — backlog #215 resolved `Std.PubSub`: it now
+    emits `pubsub_publish::<_, SkyError>(topic, payload)` with scheme
+    `String -> a -> Task Error Int`; skyc-0 AND cargo-0 guaranteed.  The payload
+    `a` is a genuine monomorphized type var, never erased.)*
   - **Arity-blocked (SKY-T0001):** `Sky.Core.Pure`'s internal `uuidV4Kernel` /
     `uuidV7Kernel` helpers annotate an arity-0 `Task Error String` value over the
     arity-1 `Uuid_v4`/`Uuid_v7` kernels (`() -> Task Error String`). Go's
