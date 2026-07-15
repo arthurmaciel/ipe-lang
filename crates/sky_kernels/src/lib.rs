@@ -1389,6 +1389,20 @@ pub enum StdlibKernel {
     CompressionZstdCompress,
     /// `Compression.zstdDecompress : Bytes -> Task Error Bytes`.
     CompressionZstdDecompress,
+
+    // ── Std.Csv — RFC 4180 encode/decode (#197) ──────────────────────────────
+    // Runtime `sky_runtime::csv::*`. `Csv` is the record
+    // `{ header : List String, rows : List (List String) }`.
+    /// `Csv.parse : String -> Result Error Csv`.
+    CsvParse,
+    /// `Csv.parseWithDelimiter : String -> String -> Result Error Csv`.
+    CsvParseWithDelimiter,
+    /// `Csv.encode : Csv -> String`.
+    CsvEncode,
+    /// `Csv.encodeWithDelimiter : String -> Csv -> String`.
+    CsvEncodeWithDelimiter,
+    /// `Csv.parseStreamFromFile : String -> Task Error (List (List String))`.
+    CsvParseStreamFromFile,
 }
 
 impl StdlibKernel {
@@ -2579,6 +2593,18 @@ impl StdlibKernel {
             Self::CompressionZstdDecompress => {
                 d("Compression", "zstdDecompress", 1, Pure, "compression_zstd_decompress")
             }
+            // ── Std.Csv (#197) ───────────────────────────────────────────────
+            Self::CsvParse => d("Csv", "parse", 1, Pure, "csv_parse"),
+            Self::CsvParseWithDelimiter => {
+                d("Csv", "parseWithDelimiter", 2, Pure, "csv_parse_with_delimiter")
+            }
+            Self::CsvEncode => d("Csv", "encode", 1, Pure, "csv_encode"),
+            Self::CsvEncodeWithDelimiter => {
+                d("Csv", "encodeWithDelimiter", 2, Pure, "csv_encode_with_delimiter")
+            }
+            Self::CsvParseStreamFromFile => {
+                d("Csv", "parseStreamFromFile", 1, Pure, "csv_parse_stream_from_file")
+            }
         }
     }
 
@@ -3528,6 +3554,12 @@ impl StdlibKernel {
         Self::CompressionGunzip,
         Self::CompressionZstdCompress,
         Self::CompressionZstdDecompress,
+        // ── Std.Csv (#197) ───────────────────────────────────────────────────
+        Self::CsvParse,
+        Self::CsvParseWithDelimiter,
+        Self::CsvEncode,
+        Self::CsvEncodeWithDelimiter,
+        Self::CsvParseStreamFromFile,
     ];
 
     // ── Classification predicates (moved from sky_ir::KernelFn) ─────────────

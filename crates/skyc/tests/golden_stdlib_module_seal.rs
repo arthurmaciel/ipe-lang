@@ -230,3 +230,26 @@ fn compression_resolves_and_emits() {
 fn compression_builds_and_runs() {
     seal_module("compression", COMPRESSION_MAIN, "GZ:hello");
 }
+
+// ── #197: Std.Csv ────────────────────────────────────────────────────────────
+
+const CSV_MAIN: &str = "module Main exposing (main)\n\
+    import Sky.Core.Prelude exposing (..)\n\
+    import Std.Log exposing (println)\n\
+    import Std.Csv as Csv\n\n\
+    headerLine : String\n\
+    headerLine =\n\
+    \x20   case Csv.parse \"a,b\\n1,2\" of\n\
+    \x20       Ok doc -> String.join \"|\" doc.header\n\
+    \x20       Err _ -> \"ERR\"\n\n\
+    main = println headerLine\n";
+
+#[test]
+fn csv_resolves_and_emits() {
+    let _ = compile_module_probe("csv", CSV_MAIN);
+}
+
+#[test]
+fn csv_builds_and_runs() {
+    seal_module("csv", CSV_MAIN, "a|b");
+}

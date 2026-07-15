@@ -690,6 +690,12 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::CompressionGunzip => "Compression.gunzip",
         KernelFn::CompressionZstdCompress => "Compression.zstdCompress",
         KernelFn::CompressionZstdDecompress => "Compression.zstdDecompress",
+        // #197: Std.Csv
+        KernelFn::CsvParse => "Csv.parse",
+        KernelFn::CsvParseWithDelimiter => "Csv.parseWithDelimiter",
+        KernelFn::CsvEncode => "Csv.encode",
+        KernelFn::CsvEncodeWithDelimiter => "Csv.encodeWithDelimiter",
+        KernelFn::CsvParseStreamFromFile => "Csv.parseStreamFromFile",
         // M5c: TEA Cmd / Sub / Time.every (wired)
         KernelFn::CmdNone => "Cmd.none",
         KernelFn::CmdBatch => "Cmd.batch",

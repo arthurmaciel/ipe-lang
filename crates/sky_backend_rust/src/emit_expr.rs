@@ -5924,7 +5924,23 @@ pub fn emit_expr_at(
             // unpinned call stays byte-identical to the pre-#181 emission. The
             // suffix goes between the kernel name and its `(` argument list:
             // `dict_empty::<String, i64>(…)`.
-            let turbofish = pin.turbofish();
+            let pin_turbofish = pin.turbofish();
+            // #197: `Std.Csv` parse kernels are generic over the error channel
+            // (`csv_parse<E: From<String>>(...) -> SkyResult<E, CsvDoc>`); a
+            // `Result`-returning call whose `Err` arm is often discarded leaves
+            // `E` unconstrained (E0283). Anchor it to `SkyError`, mirroring the
+            // network kernels (`http_get::<SkyError>`) and the arity-0 JSON
+            // decoders. Only the `E`-free parse entries need it; `encode`
+            // returns a bare `String` (no `E`).
+            let turbofish: &str = if pin_turbofish.is_empty()
+                && matches!(
+                    callee,
+                    Callee::Kernel(KernelFn::CsvParse | KernelFn::CsvParseWithDelimiter)
+                ) {
+                "::<SkyError>"
+            } else {
+                pin_turbofish
+            };
             let mut parts = Vec::with_capacity(args.len());
             for arg in args {
                 parts.push(emit_expr_at(ctx, arg, indent, child, generics)?);
