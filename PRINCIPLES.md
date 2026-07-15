@@ -14,15 +14,17 @@ The Rust backend development is guided by the following principles:
   
 **The ordering is a strict tie-breaker, not a weighting**: whenever two principles conflict at a specific decision, the higher-numbered one yields to the lower — a faster path that opens a soundness hole is rejected, a more readable form that breaks correctness is rejected — so a lower principle can never justify compromising a higher one.
 
-## The two fundamental rules
+## The three fundamental rules
 
-Independent of and beneath the ranked principles, every design and every code pass must obey two non-negotiable laws:
+Independent of and beneath the ranked principles, every design and every code pass must obey three non-negotiable laws:
 
 - **Parse, don't validate.** Convert untrusted or untyped input into a precise typed value at the boundary, once, so downstream code cannot re-encounter the unvalidated form. A function that takes a broad type and re-checks it everywhere is a smell; the check should happen once and produce a narrower type that makes the checked property structurally true thereafter. In this compiler: foreign/JSON/config values enter through a typed decode point; error channels are typed (`Diagnostic`/`Error`), never `String`.
 
 - **Make invalid states unrepresentable.** Encode invariants in the types so an illegal combination cannot be constructed at all, rather than relying on a runtime guard or convention. Prefer a sum type over a bool-pair that admits impossible combinations; prefer an exhaustive `match` (no wildcard that silently swallows a new variant) so an unhandled case is a compile error; prefer a smart constructor over a public field that could hold an out-of-range value. In this compiler specifically: a kernel that the resolver recognises but the type-scheme table does not cover must be a compile-time error, never a silent flexible type variable that lets an ill-typed program pass the type-checker and fail only at the downstream Rust build (the "exit-0-then-cargo-fail" class).
 
-These two rules are the structural machinery by which the ranked principles — especially Soundness and Correctness — are actually achieved: the ordering says *what wins in a conflict*; these two rules say *how you build code that doesn't create the conflict*.
+- **Fix the structure, not the symptom.** When a defect appears, repair the structural cause — the missing invariant, the drifting table, the untyped boundary, the special-case that should have been a general rule — so the *entire class* of that defect cannot recur, rather than patching the one instance you observed. An ad-hoc fix that silences the visible symptom while leaving the generative structure intact is a smell: the same bug resurfaces one shape over — the next `match` arm, the next kernel, another call site. Before writing the fix, ask *"what structural property, if it held, would make this whole class of failure impossible?"* and establish that property. This rule generalises the two above (parsing-not-validating and unrepresentable-invalid-states are each structural fixes) and is why the seal is closed at the resolver/type-scheme level, not by special-casing each failing program. Concretely (backlog #172): a fix that coerces only *inline-lambda* sibling branches to the `Arc` carrier is ad-hoc — the identical `E0308` returns the moment the sibling is a top-level function reference; the structural fix coerces *every function-typed leaf* (via eta-expansion over the group's arrow type), closing the class.
+
+These three rules are the structural machinery by which the ranked principles — especially Soundness and Correctness — are actually achieved: the ordering says *what wins in a conflict*; these three rules say *how you build code that doesn't create the conflict*.
 
 ## The seal — no exit-0-then-cargo-fail
 
