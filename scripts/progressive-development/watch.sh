@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# watch.sh - live monitor for progressive-development (run/orchestrate/autopilot).
+# watch.sh - live monitor for autopilot.sh (the progressive-development loop).
 # Follows the freshest live log, re-picks as work moves, self-terminates when the
 # run ends.
 #
@@ -225,7 +225,7 @@ lane_row() {   # <i> → "[i+1] <task> · <phase>/<model> · <mm:ss elapsed>" (1
 }
 lane_log() {   # <i> → newest live log stream for that lane (design/impl/review), else empty
     local i="$1" f
-    f="$(ls -t /tmp/autopilot-guardian*-"$i".log 2>/dev/null | head -1)"
+    f="$(ls -t /tmp/autopilot-lane*-"$i".log 2>/dev/null | head -1)"
     [ -n "$f" ] && [ -n "$(find "$f" -mmin -5 2>/dev/null)" ] && echo "$f"
 }
 
@@ -296,9 +296,9 @@ tag_for() {
     case "$1" in
         progressive-development-lane-*)          tag="lane${1//[^0-9]/}" ;;
         progressive-development-iter-*)          tag="iter${1//[^0-9]/}" ;;
-        autopilot-guardian-design-*)             tag="design" ;;
-        autopilot-guardian-review-*)             tag="review" ;;
-        autopilot-guardian-*)                    tag="impl" ;;
+        autopilot-lane-design-*)             tag="design" ;;
+        autopilot-lane-review-*)             tag="review" ;;
+        autopilot-lane-*)                    tag="impl" ;;
         autopilot-triage-*)                      tag="triage" ;;
         autopilot-audit-*)                       tag="audit" ;;
         autopilot-fuzz-*)                        tag="fuzz" ;;
