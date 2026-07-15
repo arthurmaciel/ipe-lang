@@ -184,6 +184,28 @@ operational state outside the compiler repo.
 
 ### 6. Disk hygiene — unused build caches MUST be pruned
 
+**Write-boundary — the ONLY two locations anything (agent or human) may write
+(MANDATORY, 2026-07-15).** Cargo targets and scratch build state go under
+`~/.cache/ipe/` and NOWHERE else; source/doc/test edits go under the repo working
+tree and nowhere else. Concretely:
+
+- **`CARGO_TARGET_DIR` MUST live under `~/.cache/ipe/`** — never `/tmp`, never
+  `$HOME` root, never a bare `~/.cache/<name>-target`. The loop's targets are
+  `~/.cache/ipe/{gate-target, oracle-target, lane-<N>-target}`; a hand-dispatched
+  agent or a manual verify build uses `~/.cache/ipe/<purpose>-target`.
+- **Why:** the disk-prune logic scans exactly two roots — `~/.cache/ipe/` (the
+  sanctioned targets) and, as a safety net, strays. A target written *outside*
+  `~/.cache/ipe/` is invisible to the normal prune, so it grows unbounded and
+  fills the disk. This actually happened (2026-07-15): a 41 GB gate target plus
+  ~50 GB of `/tmp/*-target` and `$HOME`-root targets from past agents filled a
+  217 GB disk to 100 %, crashing the loop mid-run. In an emergency you now prune
+  ONE place: `rm -rf ~/.cache/ipe/*` (rebuilds warm).
+- **Enforced in `autopilot.sh`**: `IPE_CACHE=~/.cache/ipe`; `reclaim_disk` keeps
+  the gate + oracle + warm `lane-*` targets there and reaps the rest, AND sweeps
+  stray cargo targets found under `~/.cache/*target*` or `/tmp` (pgrep-guarded) so
+  a boundary violation can never fill the disk again. Every dispatched-agent brief
+  MUST set `CARGO_TARGET_DIR` (and `SKY_ORACLE_SHARED_TARGET`) under `~/.cache/ipe/`.
+
 **Pre-build disk check — run BEFORE any full build/test suite/example
 sweep.** Check free space (`df -h /`); if low (rule of thumb: <~15-20 GB
 free, else the run rebuilds a freshly-cleaned go-build cache), reclaim
