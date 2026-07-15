@@ -201,10 +201,10 @@ fn decode_char(buf: &[u8]) -> (TuiKey, usize) {
         None => {
             // Try the maximal valid prefix; else consume 1 byte as "other".
             for n in (1..=buf.len().min(4)).rev() {
-                if let Some(s) = buf.get(..n).and_then(|b| std::str::from_utf8(b).ok()) {
-                    if let Some(c) = s.chars().next() {
-                        return (TuiKey::val("char", c.to_string()), c.len_utf8());
-                    }
+                if let Some(s) = buf.get(..n).and_then(|b| std::str::from_utf8(b).ok())
+                    && let Some(c) = s.chars().next()
+                {
+                    return (TuiKey::val("char", c.to_string()), c.len_utf8());
                 }
             }
             (TuiKey::val("other", lossy(buf.get(..1).unwrap_or(&[]))), 1)

@@ -657,15 +657,15 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
             1,
         );
 
-        if !patches.is_empty() {
-            if let Some(sse) = sse {
-                let env = PatchEnvelope {
-                    global_seq: seq,
-                    patches: &patches,
-                };
-                if let Ok(json) = serde_json::to_string(&env) {
-                    let _ = sse.send(SsePatch(sse::frame("patches", &json))).await;
-                }
+        if !patches.is_empty()
+            && let Some(sse) = sse
+        {
+            let env = PatchEnvelope {
+                global_seq: seq,
+                patches: &patches,
+            };
+            if let Ok(json) = serde_json::to_string(&env) {
+                let _ = sse.send(SsePatch(sse::frame("patches", &json))).await;
             }
         }
 
@@ -1904,10 +1904,10 @@ fn sid_from_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
     let raw = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
     for c in raw.split(';') {
         let c = c.trim();
-        if let Some((k, v)) = c.split_once('=') {
-            if k.trim() == name {
-                return Some(v.trim().to_string());
-            }
+        if let Some((k, v)) = c.split_once('=')
+            && k.trim() == name
+        {
+            return Some(v.trim().to_string());
         }
     }
     None
@@ -2232,14 +2232,19 @@ mod admission_control_tests {
     // max_sessions(): env override, default, and the 0=unlimited opt-out.
     #[test]
     fn max_sessions_parsing() {
-        std::env::remove_var("SKY_LIVE_MAX_SESSIONS");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::remove_var("SKY_LIVE_MAX_SESSIONS") };
         assert_eq!(max_sessions(), 50_000);
-        std::env::set_var("SKY_LIVE_MAX_SESSIONS", "7");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::set_var("SKY_LIVE_MAX_SESSIONS", "7") };
         assert_eq!(max_sessions(), 7);
-        std::env::set_var("SKY_LIVE_MAX_SESSIONS", "0");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::set_var("SKY_LIVE_MAX_SESSIONS", "0") };
         assert_eq!(max_sessions(), 0, "0 = unlimited opt-out");
-        std::env::set_var("SKY_LIVE_MAX_SESSIONS", "garbage");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::set_var("SKY_LIVE_MAX_SESSIONS", "garbage") };
         assert_eq!(max_sessions(), 50_000, "unparseable falls back to default");
-        std::env::remove_var("SKY_LIVE_MAX_SESSIONS");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::remove_var("SKY_LIVE_MAX_SESSIONS") };
     }
 }

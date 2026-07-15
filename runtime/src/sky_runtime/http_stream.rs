@@ -156,10 +156,10 @@ pub fn http_stream_open<E: From<String> + Send + 'static>(
             let mut map = client_streams().lock().unwrap_or_else(|e| e.into_inner());
             // Evict the oldest (lowest id) entry when the cap is reached, so the
             // registry stays bounded under abandoned-stream workloads.
-            if map.len() >= CLIENT_STREAMS_MAX {
-                if let Some(&oldest) = map.keys().min() {
-                    map.remove(&oldest);
-                }
+            if map.len() >= CLIENT_STREAMS_MAX
+                && let Some(&oldest) = map.keys().min()
+            {
+                map.remove(&oldest);
             }
             map.insert(id, resp);
         }

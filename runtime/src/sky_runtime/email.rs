@@ -375,16 +375,15 @@ async fn send_ses<E: From<String>>(cfg: &SesConfig, m: &EmailMessage) -> SkyResu
         "Subject": { "Data": m.subject, "Charset": "UTF-8" },
         "Body": { "Text": { "Data": m.textBody, "Charset": "UTF-8" } },
     });
-    if !m.htmlBody.is_empty() {
-        if let Some(b) = simple
+    if !m.htmlBody.is_empty()
+        && let Some(b) = simple
             .get_mut("Body")
             .and_then(serde_json::Value::as_object_mut)
-        {
-            b.insert(
-                "Html".to_string(),
-                serde_json::json!({ "Data": m.htmlBody, "Charset": "UTF-8" }),
-            );
-        }
+    {
+        b.insert(
+            "Html".to_string(),
+            serde_json::json!({ "Data": m.htmlBody, "Charset": "UTF-8" }),
+        );
     }
     let mut destination = serde_json::json!({ "ToAddresses": m.to });
     if !m.cc.is_empty() {
@@ -588,9 +587,8 @@ async fn send_smtp<E: From<String>>(cfg: &SmtpConfig, m: &EmailMessage) -> SkyRe
                 .parse::<ContentType>()
                 .unwrap_or(ContentType::TEXT_PLAIN);
             // `att.content` is `Vec<u8>` — pass the raw bytes directly.
-            mixed = mixed.singlepart(
-                Attachment::new(att.filename.clone()).body(att.content.clone(), ct),
-            );
+            mixed = mixed
+                .singlepart(Attachment::new(att.filename.clone()).body(att.content.clone(), ct));
         }
         builder.multipart(mixed)
     };
@@ -667,7 +665,8 @@ mod tests {
 
     #[tokio::test]
     async fn dry_run_returns_synthetic_id() {
-        std::env::set_var("SKY_EMAIL_DRY_RUN", "1");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::set_var("SKY_EMAIL_DRY_RUN", "1") };
         let msg = EmailMessage {
             from: "a@example.com".into(),
             to: vec!["b@example.com".into()],
@@ -685,7 +684,8 @@ mod tests {
             SkyResult::Ok(id) => assert!(id.starts_with("dry-run-")),
             SkyResult::Err(e) => panic!("dry-run failed: {}", e),
         }
-        std::env::remove_var("SKY_EMAIL_DRY_RUN");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::remove_var("SKY_EMAIL_DRY_RUN") };
     }
 
     #[test]
