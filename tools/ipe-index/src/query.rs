@@ -31,10 +31,15 @@ pub fn cmd_parity(db: &str, gaps: bool) -> Result<()> {
     for row in rows {
         let (n, p, g, ru, hs_loc, go_loc, rust_loc) = row?;
         let route_str = hs_loc.as_deref().unwrap_or("<no-route>");
-        let go_str    = go_loc.as_deref().unwrap_or("<missing>");
-        let rust_str  = rust_loc.as_deref().unwrap_or("<missing>");
-        if let Err(e) = writeln!(locked, "{p:<12} {n:<28} go={g} rust={ru}  route={route_str}  go={go_str}  rust={rust_str}") {
-            if e.kind() == std::io::ErrorKind::BrokenPipe { return Ok(()); }
+        let go_str = go_loc.as_deref().unwrap_or("<missing>");
+        let rust_str = rust_loc.as_deref().unwrap_or("<missing>");
+        if let Err(e) = writeln!(
+            locked,
+            "{p:<12} {n:<28} go={g} rust={ru}  route={route_str}  go={go_str}  rust={rust_str}"
+        ) {
+            if e.kind() == std::io::ErrorKind::BrokenPipe {
+                return Ok(());
+            }
             return Err(e.into());
         }
     }
@@ -58,12 +63,12 @@ pub fn cmd_locate(db: &str, name: &str) -> Result<()> {
 
     // Look up symbols
     let sym_rows: Vec<(String, i64, i64, String)> = {
-        let mut st = s.conn.prepare(
-            "SELECT file, line, col, kind FROM symbols WHERE name=? ORDER BY file"
-        )?;
-        let x = st.query_map([name], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
-            .collect::<std::result::Result<_, _>>()?;
-        x
+        let mut st = s
+            .conn
+            .prepare("SELECT file, line, col, kind FROM symbols WHERE name=? ORDER BY file")?;
+
+        st.query_map([name], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .collect::<std::result::Result<_, _>>()?
     };
     let mut found = false;
     for (file, line, col, kind) in sym_rows {
@@ -72,17 +77,26 @@ pub fn cmd_locate(db: &str, name: &str) -> Result<()> {
     }
     // Also show kernel info if the name matches a kernel.
     // `(name, parity, hs_route_loc, go_impl_loc, rust_impl_loc)`.
-    type KernRow = (String, String, Option<String>, Option<String>, Option<String>);
+    type KernRow = (
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
     let kern_rows: Vec<KernRow> = {
         let mut kst = s.conn.prepare(
             "SELECT name, parity, hs_route_loc, go_impl_loc, rust_impl_loc FROM kernels WHERE name LIKE ?1 OR hs_route LIKE ?1"
         )?;
-        let x = kst.query_map([format!("%{name}%")], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
-            .collect::<std::result::Result<_, _>>()?;
-        x
+
+        kst.query_map([format!("%{name}%")], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })?
+        .collect::<std::result::Result<_, _>>()?
     };
     for (kname, parity, hs_loc, go_loc, rust_loc) in kern_rows {
-        writeln_bp!("kernel:{kname}  parity={parity}  route={}  go={}  rust={}",
+        writeln_bp!(
+            "kernel:{kname}  parity={parity}  route={}  go={}  rust={}",
             hs_loc.as_deref().unwrap_or("<unknown>"),
             go_loc.as_deref().unwrap_or("<missing>"),
             rust_loc.as_deref().unwrap_or("<missing>"),
@@ -157,7 +171,9 @@ pub fn cmd_rdeps(db: &str, module: &str, count: bool, subtree: bool) -> Result<(
             (&sql_and_params.0, &sql_and_params.1)
         };
         let mut st = s.conn.prepare(sql)?;
-        let rows = st.query_map(rusqlite::params_from_iter(params.iter()), |r| r.get::<_, String>(0))?;
+        let rows = st.query_map(rusqlite::params_from_iter(params.iter()), |r| {
+            r.get::<_, String>(0)
+        })?;
         let mut locked = stdout.lock();
         for r in rows {
             let src = r?;
@@ -240,15 +256,14 @@ pub fn cmd_wakeup(db: &str) -> Result<()> {
     );
     // Real gaps exclude `go-kernel-opt` (Go optimisation over pure-Sky stdlib functions;
     // not a Rust deficiency) and `ok`.
-    let gaps: i64 =
-        s.conn
-            .query_row("SELECT COUNT(*) FROM kernels WHERE parity!='ok' AND parity!='go-kernel-opt'", [], |r| {
-                r.get(0)
-            })?;
+    let gaps: i64 = s.conn.query_row(
+        "SELECT COUNT(*) FROM kernels WHERE parity!='ok' AND parity!='go-kernel-opt'",
+        [],
+        |r| r.get(0),
+    )?;
     println!("parity gaps: {gaps}  (run `ipe-index parity --gaps`)");
     cmd_roles(db)
 }
-
 
 /// Resolution pass: for every import edge, try to resolve `dst` to a canonical
 /// file path within the repo. Updates `edges.resolved` in a single transaction.
@@ -270,17 +285,18 @@ pub fn resolve_edges(s: &Store, repo: &str) -> Result<()> {
     // Connection simultaneously; the buffer is bounded by import-edge count).
     let to_update: Vec<(i64, String, String, String)> = {
         let mut st = s.conn.prepare(
-            "SELECT rowid, src, dst, kind FROM edges WHERE kind='import' AND resolved IS NULL"
+            "SELECT rowid, src, dst, kind FROM edges WHERE kind='import' AND resolved IS NULL",
         )?;
-        let rows = st.query_map([], |r| {
+
+        st.query_map([], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, String>(1)?,
                 r.get::<_, String>(2)?,
                 r.get::<_, String>(3)?,
             ))
-        })?.collect::<std::result::Result<Vec<_>, _>>()?;
-        rows
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?
     };
 
     // Use unchecked_transaction only if not already inside a transaction.
@@ -408,7 +424,9 @@ fn normalise_path(p: &std::path::Path) -> String {
         use std::path::Component::*;
         match comp {
             Normal(s) => parts.push(s.to_str().unwrap_or("")),
-            ParentDir => { parts.pop(); }
+            ParentDir => {
+                parts.pop();
+            }
             CurDir => {}
             RootDir => parts.clear(),
             Prefix(_) => {}
@@ -445,7 +463,8 @@ fn resolve_go_import(dst: &str, _repo: &str, known: &HashSet<String>) -> Option<
 fn resolve_rust_import(src: &str, dst: &str, known: &HashSet<String>) -> Option<String> {
     // External crate reference: doesn't start with crate/super/self.
     let first_seg = dst.split("::").next().unwrap_or("");
-    if first_seg != "crate" && first_seg != "super" && first_seg != "self" && !first_seg.is_empty() {
+    if first_seg != "crate" && first_seg != "super" && first_seg != "self" && !first_seg.is_empty()
+    {
         return None;
     }
 
@@ -490,7 +509,11 @@ fn find_crate_root(src_file: &std::path::Path) -> Option<String> {
         if dir.file_name().and_then(|n| n.to_str()) == Some("src") {
             let parent = dir.parent().unwrap_or(std::path::Path::new(""));
             let parent_str = parent.to_str().unwrap_or("");
-            return Some(if parent_str.is_empty() { "src".to_string() } else { format!("{parent_str}/src") });
+            return Some(if parent_str.is_empty() {
+                "src".to_string()
+            } else {
+                format!("{parent_str}/src")
+            });
         }
         // Stopping condition: we've hit the root.
         if dir_str.is_empty() || dir == std::path::Path::new("") {

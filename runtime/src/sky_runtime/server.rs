@@ -528,10 +528,9 @@ async fn build_request(
         .iter()
         .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
         .and_then(|(_, v)| v.trim().parse::<usize>().ok())
+        && declared > cap
     {
-        if declared > cap {
-            return Err(413);
-        }
+        return Err(413);
     }
     let body = match axum::body::to_bytes(body, cap).await {
         Ok(b) => String::from_utf8_lossy(&b).into_owned(),
@@ -844,8 +843,7 @@ async fn ws_loop<E: From<String> + Send + 'static>(
     // `wsDefaultPingInterval = 30s` + `wsPingTimeout = 10s` pattern in
     // `runtime-go/rt/server_websocket.go`.  axum auto-replies to incoming Pong
     // frames on our behalf, so we only need to send the Ping here.
-    let mut heartbeat =
-        tokio::time::interval(Duration::from_secs(ws_heartbeat_secs()));
+    let mut heartbeat = tokio::time::interval(Duration::from_secs(ws_heartbeat_secs()));
     heartbeat.tick().await; // consume the immediate first tick
     loop {
         tokio::select! {
@@ -1112,10 +1110,10 @@ pub fn server_web_socket_broadcast<E: From<String> + Send + 'static>(
         {
             let reg = ws_registry().lock().unwrap_or_else(|e| e.into_inner());
             for id in &ids {
-                if let Some(tx) = reg.get(id) {
-                    if tx.try_send(WsOut::Text(msg.clone())).is_ok() {
-                        any_ok = true;
-                    }
+                if let Some(tx) = reg.get(id)
+                    && tx.try_send(WsOut::Text(msg.clone())).is_ok()
+                {
+                    any_ok = true;
                 }
             }
         }
@@ -1208,10 +1206,7 @@ pub fn ws_server_with_on_close<E>(
 where
     E: From<String> + Send + 'static,
 {
-    WsServerCfg {
-        onClose: cb,
-        ..cfg
-    }
+    WsServerCfg { onClose: cb, ..cfg }
 }
 
 /// `Ws.withOnError` — replace the `onError` callback.
@@ -1224,10 +1219,7 @@ pub fn ws_server_with_on_error<E>(
 where
     E: From<String> + Send + 'static,
 {
-    WsServerCfg {
-        onError: cb,
-        ..cfg
-    }
+    WsServerCfg { onError: cb, ..cfg }
 }
 
 /// `Ws.withMaxMessageBytes` — set per-message size cap (0 → 1 MiB default
@@ -1351,7 +1343,11 @@ mod ws_adapter_tests {
         // with other tests; it just confirms the fallback constant.
         // (env-mutation tests use std::env::set_var which is not thread-safe
         // in parallel test harnesses — we test the parsing logic separately.)
-        let parsed = "256".parse::<usize>().ok().filter(|n| *n > 0).unwrap_or(256);
+        let parsed = "256"
+            .parse::<usize>()
+            .ok()
+            .filter(|n| *n > 0)
+            .unwrap_or(256);
         assert_eq!(parsed, 256);
     }
 
@@ -2119,13 +2115,17 @@ mod tests {
 
     #[test]
     fn max_body_env_override() {
-        std::env::remove_var("SKY_LIVE_MAX_BODY_BYTES");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::remove_var("SKY_LIVE_MAX_BODY_BYTES") };
         assert_eq!(max_body(), DEFAULT_MAX_BODY);
-        std::env::set_var("SKY_LIVE_MAX_BODY_BYTES", "1024");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::set_var("SKY_LIVE_MAX_BODY_BYTES", "1024") };
         assert_eq!(max_body(), 1024);
-        std::env::set_var("SKY_LIVE_MAX_BODY_BYTES", "0"); // invalid → default
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::set_var("SKY_LIVE_MAX_BODY_BYTES", "0") }; // invalid → default
         assert_eq!(max_body(), DEFAULT_MAX_BODY);
-        std::env::remove_var("SKY_LIVE_MAX_BODY_BYTES");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::remove_var("SKY_LIVE_MAX_BODY_BYTES") };
     }
 
     #[tokio::test]
@@ -2285,8 +2285,10 @@ mod tests {
         // (per-process under nextest, so mutating ENV here is safe).
         let tok = "a".repeat(64);
 
-        std::env::remove_var("ENV");
-        std::env::remove_var("SKY_ENV");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::remove_var("ENV") };
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::remove_var("SKY_ENV") };
         // (a) not production, request IS https -> Secure.
         assert!(
             csrf_set_cookie_value(&tok, true).contains("; Secure"),
@@ -2309,10 +2311,12 @@ mod tests {
         // || request_is_https(headers)` — production forces Secure
         // unconditionally; the request-scoped signal only ADDS Secure in
         // the non-production case).
-        std::env::set_var("ENV", "production");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::set_var("ENV", "production") };
         let tok = "b".repeat(64);
         let cookie = csrf_set_cookie_value(&tok, false);
-        std::env::remove_var("ENV");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::remove_var("ENV") };
         assert!(
             cookie.contains("; Secure"),
             "ENV=production must force Secure even when this request isn't TLS-detected: {cookie}"
@@ -2321,10 +2325,12 @@ mod tests {
 
     #[test]
     fn csrf_cookie_secure_production_and_tls_signal_both_true() {
-        std::env::set_var("ENV", "production");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::set_var("ENV", "production") };
         let tok = "c".repeat(64);
         let cookie = csrf_set_cookie_value(&tok, true);
-        std::env::remove_var("ENV");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::remove_var("ENV") };
         assert!(cookie.contains("; Secure"));
     }
 

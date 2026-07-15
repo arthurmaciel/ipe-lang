@@ -85,10 +85,10 @@ impl Grid {
 
     /// Total write — a position outside the grid is a no-op.
     pub fn set(&mut self, col: usize, row: usize, cell: Cell) {
-        if let Some(i) = self.idx(col, row) {
-            if let Some(slot) = self.cells.get_mut(i) {
-                *slot = cell;
-            }
+        if let Some(i) = self.idx(col, row)
+            && let Some(slot) = self.cells.get_mut(i)
+        {
+            *slot = cell;
         }
     }
 

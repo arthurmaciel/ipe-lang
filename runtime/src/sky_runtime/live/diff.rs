@@ -53,10 +53,10 @@ pub fn diff<M>(old: &Html<M>, new: &Html<M>) -> Vec<Patch> {
 fn sky_id<M>(n: &Html<M>) -> Option<&str> {
     if let Html::HElement(_, attrs, _) = n {
         for a in attrs {
-            if let Attribute::Attr(k, v) = a {
-                if k == "sky-id" {
-                    return Some(v);
-                }
+            if let Attribute::Attr(k, v) = a
+                && k == "sky-id"
+            {
+                return Some(v);
             }
         }
     }
@@ -97,15 +97,16 @@ fn diff_node<M>(old: &Html<M>, new: &Html<M>, out: &mut Vec<Patch>) {
     }
 
     // Sole text-child fast path (common for buttons / spans).
-    if ok.len() == 1 && nk.len() == 1 {
-        if let (Some(Html::HText(o)), Some(Html::HText(n))) = (ok.first(), nk.first()) {
-            if o != n && !id.is_empty() {
-                let mut tp = Patch::for_id(id);
-                tp.text = Some(n.clone());
-                out.push(tp);
-            }
-            return;
+    if ok.len() == 1
+        && nk.len() == 1
+        && let (Some(Html::HText(o)), Some(Html::HText(n))) = (ok.first(), nk.first())
+    {
+        if o != n && !id.is_empty() {
+            let mut tp = Patch::for_id(id);
+            tp.text = Some(n.clone());
+            out.push(tp);
         }
+        return;
     }
 
     // Child-count change → replace the whole subtree.

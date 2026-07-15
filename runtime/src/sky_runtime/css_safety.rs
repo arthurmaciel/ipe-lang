@@ -133,10 +133,10 @@ fn css_unescape(s: &str) -> String {
             if matches!(chars.peek(), Some(w) if w.is_whitespace()) {
                 chars.next();
             }
-            if let Ok(cp) = u32::from_str_radix(&hex, 16) {
-                if let Some(ch) = char::from_u32(cp) {
-                    out.push(ch);
-                }
+            if let Ok(cp) = u32::from_str_radix(&hex, 16)
+                && let Some(ch) = char::from_u32(cp)
+            {
+                out.push(ch);
             }
             continue;
         }
@@ -501,7 +501,10 @@ mod tests {
                 SafeCssMediaQuery::parse(q).is_some(),
                 "valid media query must pass: {q}"
             );
-            assert_eq!(SafeCssMediaQuery::parse(q).map(|v| v.as_str().to_owned()), Some(q.to_owned()));
+            assert_eq!(
+                SafeCssMediaQuery::parse(q).map(|v| v.as_str().to_owned()),
+                Some(q.to_owned())
+            );
         }
     }
 
