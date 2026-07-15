@@ -111,6 +111,14 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
             {
                 return Ok("ChunkEvent<SkyError>".to_owned());
             }
+            // #210: `Std.Cache.Cache k v` is backed by the NON-generic runtime
+            // enum `SkyCacheHandle` — drop the phantom `k`/`v` args (they live
+            // only on the kernel calls), else the render would emit an invalid
+            // `SkyCacheHandle<T1, T2>` (E0107). `enum_name` returns the runtime
+            // name; here we skip appending the arg list.
+            if ctx.is_cache_handle_type(home, *name) {
+                return Ok("SkyCacheHandle".to_owned());
+            }
             let base = ctx.enum_name(home, *name)?.to_owned();
             if args.is_empty() {
                 // A non-generic enum renders as the bare Rust type name —
@@ -193,6 +201,10 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // #127: Sky.Http.Server.WebSocket opaque handles.
         IrType::WebSocketServer => "WsHandle".to_owned(),
         IrType::WebSocketServerCfg => "WsServerCfg<SkyError>".to_owned(),
+        // #210: Std.Cache config / stats records — re-exported (ungated) from
+        // sky_runtime::cache, so the bare name resolves via the crate glob use.
+        IrType::CacheCfg => "CacheCfg".to_owned(),
+        IrType::CacheStats => "CacheStats".to_owned(),
         // M7 Std.Ui / Std.Html parametric types.  Use fully-qualified Rust paths
         // (T2 soundness: `Attribute` exists in BOTH Std.Ui and Std.Html namespaces;
         // qualified paths keep them unambiguous and prevent glob-import shadowing).

@@ -1039,6 +1039,20 @@ impl<'a> EmitCtx<'a> {
         Ok(naming::mangle_reserved(self.resolve_ident(sym)?.to_owned()))
     }
 
+    /// #210: is this the `Std.Cache.Cache` opaque handle type — home
+    /// `["Std", "Cache"]`, name `Cache`, and NOT a user-declared enum of the
+    /// same name (absent from `enum_names`)? Backed by the runtime
+    /// `SkyCacheHandle`; the render/ctor/pattern paths route there.
+    pub(crate) fn is_cache_handle_type(&self, home: &ModPath, ty: Symbol) -> bool {
+        self.interner.resolve(ty) == Some("Cache")
+            && !self.enum_names.contains_key(&(home.clone(), ty))
+            && matches!(
+                home.0.as_slice(),
+                [a, b] if self.interner.resolve(*a) == Some("Std")
+                    && self.interner.resolve(*b) == Some("Cache")
+            )
+    }
+
     fn enum_name(&self, home: &ModPath, ty: Symbol) -> DResult<&str> {
         // `StreamId` is a builtin opaque Http.Stream type backed by the runtime
         // struct `SkyStreamId`.  It has no synthetic `EnumDef` injection (unlike
@@ -1048,6 +1062,13 @@ impl<'a> EmitCtx<'a> {
             // SAFETY: this literal has 'static lifetime; the returned &str
             // is valid for the duration of the emit pass.
             return Ok("SkyStreamId");
+        }
+        // #210: `Std.Cache.Cache` → the non-generic runtime enum `SkyCacheHandle`
+        // (its `EnumDef` is suppressed in `sky_lower`, so it is absent from
+        // `enum_names`). The type-position render drops the phantom `k`/`v` args
+        // via a dedicated `render_type` arm before reaching here.
+        if self.is_cache_handle_type(home, ty) {
+            return Ok("SkyCacheHandle");
         }
         self.enum_names
             .get(&(home.clone(), ty))
@@ -1104,6 +1125,13 @@ impl<'a> EmitCtx<'a> {
             // `FfiPanic` / `TypeMismatch` / `HttpStatus` / `JsonDecode` /
             // `Custom`.
             Some("ErrorDetails") => Some("SkyErrorDetails"),
+            // #210: `Std.Cache.Cache` is backed by the non-generic runtime enum
+            // `SkyCacheHandle { Cache(i64) }`. Its `EnumDef` is suppressed in
+            // `sky_lower` (no `enum_names` entry, so the guard above lets this
+            // fire), so the `Cache` ctor + `case … of Cache raw` pattern route
+            // to `SkyCacheHandle::Cache`. A user's own `type Cache …` DOES get an
+            // `EnumDef` (registered in `enum_names`) and short-circuits above.
+            Some("Cache") => Some("SkyCacheHandle"),
             _ => None,
         }
     }
@@ -1244,7 +1272,11 @@ fn collect_record_shapes(
         // `Secret` (backlog #44) is an opaque sealed string wrapper — no
         // record shape.
         | IrType::SqlFragment
-        | IrType::Secret => {}
+        | IrType::Secret
+        // #210: Cache config / stats are folded to nominal runtime structs — no
+        // structural record shape to synthesise.
+        | IrType::CacheCfg
+        | IrType::CacheStats => {}
         // `LiveRoute page` is page-parametric — descend in case the page type
         // carries a nested record shape.
         IrType::LiveRoute(page) => {
@@ -1379,7 +1411,11 @@ fn type_reaches_enum(
         // `Secret` (backlog #44) is a heap-backed newtype (String) — no
         // size-cycle risk.
         | IrType::SqlFragment
-        | IrType::Secret => false,
+        | IrType::Secret
+        // #210: Cache config / stats are monomorphic runtime structs — no
+        // reachable enum edge to `target`.
+        | IrType::CacheCfg
+        | IrType::CacheStats => false,
         // `Route<Page>` stores its `not_found`/built pages by value — a page
         // type reaching `target` through a route is a genuine size edge.
         IrType::LiveRoute(page) => type_reaches_enum(page, target, enums, visited),
@@ -1447,7 +1483,10 @@ fn contains_generic(ty: &IrType) -> bool {
         // `SqlFragment` (backlog #61) is monomorphic — no generic parameters.
         // `Secret` (backlog #44) is monomorphic — no generic parameters.
         | IrType::SqlFragment
-        | IrType::Secret => false,
+        | IrType::Secret
+        // #210: Cache config / stats are monomorphic — no generic parameters.
+        | IrType::CacheCfg
+        | IrType::CacheStats => false,
         // `LiveRoute page` is parametric on `page`; check if it carries a
         // generic.
         IrType::LiveRoute(page) => contains_generic(page),
@@ -1541,7 +1580,10 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         // `SqlFragment` (backlog #61) is monomorphic — no generics to collect.
         // `Secret` (backlog #44) is monomorphic — no generics to collect.
         | IrType::SqlFragment
-        | IrType::Secret => {}
+        | IrType::Secret
+        // #210: Cache config / stats are monomorphic — no generics to collect.
+        | IrType::CacheCfg
+        | IrType::CacheStats => {}
         // `LiveRoute page` may carry generic parameters through `page`.
         IrType::LiveRoute(page) => collect_generics(page, out),
         // M7: `Ui { ctor, msg }` may carry generic parameters through `msg`.
@@ -1839,7 +1881,10 @@ fn match_template(
         // `SqlFragment` (backlog #61) is a monomorphic opaque leaf.
         // `Secret` (backlog #44) is a monomorphic opaque leaf.
         | IrType::SqlFragment
-        | IrType::Secret => {
+        | IrType::Secret
+        // #210: Cache config / stats are monomorphic runtime-struct leaves.
+        | IrType::CacheCfg
+        | IrType::CacheStats => {
             if template == concrete {
                 Ok(())
             } else {

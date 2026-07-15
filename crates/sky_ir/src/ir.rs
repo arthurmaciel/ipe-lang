@@ -944,6 +944,29 @@ pub enum IrType {
     /// `"<redacted>"` placeholder, never the wrapped value — see
     /// `sky_runtime::secret`'s module doc for the full design.
     Secret,
+
+    /// `Std.Cache`'s configuration record `{ maxEntries : Int, ttlMs : Int,
+    /// maxBytes : Int }` (#210). Renders as `sky_runtime::cache::CacheCfg`.
+    ///
+    /// The lowerer folds any solved / annotated record matching that exact
+    /// 3-field shape to this opaque variant (same mechanism as
+    /// [`IrType::HttpRequest`]) so a `Cache.defaultCfg`-built record literal
+    /// constructs the runtime struct the `cache_new_raw` kernel takes, rather
+    /// than a backend-synthesised `RecMaxBytes…` struct that would mismatch it
+    /// (E0308). Fully `Clone` (derivable on the runtime struct); never stored in
+    /// a Sky.Live Model.
+    CacheCfg,
+
+    /// `Std.Cache.stats`'s return record `{ hits : Int, misses : Int,
+    /// evictions : Int }` (#210). Renders as `sky_runtime::cache::CacheStats`.
+    ///
+    /// Folded the same way as [`IrType::CacheCfg`]: the `statsRaw` kernel
+    /// alias's annotated return type is this record shape, and the runtime
+    /// `cache_stats` returns `CacheStats`, so folding the annotation to this
+    /// nominal type keeps the wrapper's declared return type in step with the
+    /// kernel (otherwise E0308). Fields are read via `.hits`/`.misses`/
+    /// `.evictions` on the runtime struct's pub fields.
+    CacheStats,
 }
 
 /// Tag enum for the message-parametric `Std.Ui` / `Std.Html` types.
@@ -1079,6 +1102,9 @@ pub fn ir_type_is_derivable(
         | IrType::TypeInfo
         | IrType::SqlFragment
         | IrType::Secret
+        // #210: Cache config / stats runtime structs derive Clone+Debug+PartialEq.
+        | IrType::CacheCfg
+        | IrType::CacheStats
         | IrType::Generic(_)
         | IrType::UiPlain(_) => true,
         // The fully-derivable Std.Ui / Std.Html carriers vs the two Clone-only
@@ -1240,6 +1266,11 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         // field of type `Secret` a compile-time SKY-L0120, not a session-store
         // leak (backlog #44).
         | IrType::Secret
+        // #210: Cache config / stats are kernel-boundary data records — derivable
+        // (see `ir_type_is_derivable`) but never persisted to a session store, so
+        // not serde (the runtime structs carry no serde derive).
+        | IrType::CacheCfg
+        | IrType::CacheStats
         // #127: `WsHandle` / `WsServerCfg` are opaque handles; not serde.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
