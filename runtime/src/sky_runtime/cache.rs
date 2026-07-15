@@ -33,19 +33,24 @@ pub enum SkyCacheHandle {
     Cache(i64),
 }
 
-/// Mirrors Sky's `CacheCfg` record (field names match → the codegen maps
-/// `Std.Cache.CacheCfg` to this struct, EmailMessage-style).
+/// Mirrors Sky's `CacheCfg` record (field names match → the codegen folds the
+/// `{ maxEntries, ttlMs, maxBytes }` record shape to this struct, so a
+/// `Cache.defaultCfg` literal constructs it directly — `IrType::CacheCfg`).
+/// `Debug + PartialEq` so the emitted-side nominal type is fully derivable
+/// (mirrors `CsvDoc`), matching the compiler's `ir_type_is_derivable` decision.
 #[allow(non_snake_case)]
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CacheCfg {
     pub maxEntries: i64,
     pub ttlMs: i64,
     pub maxBytes: i64,
 }
 
-/// Mirrors Sky's `stats` return record `{ hits, misses, evictions }`.
+/// Mirrors Sky's `stats` return record `{ hits, misses, evictions }`
+/// (`IrType::CacheStats`). `Debug + PartialEq` for the same fully-derivable
+/// reason as `CacheCfg`.
 #[allow(non_snake_case)]
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CacheStats {
     pub hits: i64,
     pub misses: i64,
