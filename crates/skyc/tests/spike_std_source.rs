@@ -47,8 +47,13 @@ fn spike_project_builds_and_injects_compiled_source() {
         res.err()
     );
 
-    let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
-        .expect("emitted main.rs must exist");
+    // Read `main.rs` PLUS every `sky_mods/*.rs` the per-Sky-module split
+    // (Phase 5 Milestone C) may have written: the compiled `Std.Palette` source
+    // is now emitted into its own `sky_mods/sky_mod_std_palette.rs`, not inline
+    // in `main.rs`. The shared helper keeps the substring assertions below
+    // robust to WHICH file the split placed each symbol in (same discrimination
+    // the golden harness uses).
+    let emitted = support::read_all_emitted_src(&out);
     // The Std.Palette function is homed + prefixed as compiled source.
     assert!(
         emitted.contains("std_palette_to_hex"),

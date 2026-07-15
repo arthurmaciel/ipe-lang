@@ -76,8 +76,17 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Sky", "Core", "Random"], "Random"),
     (&["Sky", "Core", "File"], "File"),
     (&["Sky", "Core", "Http"], "Http"),
-    (&["Sky", "Core", "Path"], "Path"),
-    (&["Sky", "Core", "Regex"], "Regex"),
+    // NOTE — `Sky.Core.Path` and `Sky.Core.Regex` are DELIBERATELY absent here.
+    // Commit 45504c6 ("port 13 missing .sky modules") added them to this table
+    // without registering any members in `install_prelude_qualifiers`'s QUALIFIERS
+    // array (no `StdlibKernel` enum variant, no `constrain`/`lower` arms either),
+    // so the anti-drift invariant (`stdlib_module_paths_target_a_known_qualifier`)
+    // — every claimed qualifier is wired — was violated. The runtime kernels DO
+    // exist (`runtime/src/sky_runtime/{path.rs,regex_kernel.rs}`), so wiring them
+    // is a proper follow-up kernel-registration item; the claim is removed here
+    // rather than left dangling. The shadow `.sky` parse fixtures in
+    // `skyc::stdlib::MODULES` are harmless and stay as the raw material for that
+    // future wiring. Nothing currently imports either module.
     // ── Sky.Http.* server surface ───────────────────────────────────────────
     (&["Sky", "Http", "Server"], "Server"),
     (&["Sky", "Http", "Middleware"], "Middleware"),
