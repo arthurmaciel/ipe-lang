@@ -84,6 +84,7 @@ LANE_TARGET_BASE="$HOME/.cache/sky-rust-lane"
 DISK_FLOOR="${PROGDEV_DISK_FLOOR_GB:-20}"    # reclaim when free drops below this
 DISK_CRIT="${PROGDEV_DISK_CRIT_GB:-10}"      # graceful-stop when still below this after reclaim
 LANE_TARGET_MAX_GB="${PROGDEV_LANE_TARGET_MAX_GB:-60}"   # per-lane target hard size cap (regardless of total disk; 0 = off)
+GATE_TARGET_MAX_GB="${PROGDEV_GATE_TARGET_MAX_GB:-30}"   # gate-target hard size cap — the full gate's incremental cruft grows UNBOUNDED across runs (hit 41G → 100%-disk crash 2026-07-15); purge past cap, rebuilds warm (0 = off)
 # The loop's ENTIRE cargo-target footprint — everything else under ~/.cache is
 # reclaimable. Bounds disk to these two + the shared dev target.
 #
@@ -266,6 +267,24 @@ prune_oversize_lane_targets() {
             rm -rf "$d"
         fi
     done
+}
+# Hard size cap on the GATE target — the full-gate build (whole-workspace nextest +
+# --features full + doctest + clippy + E2E emitted projects) accumulates incremental
+# artefacts UNBOUNDED across cycles (bloated to 41G → filled a 217G disk to 100% and
+# crashed the loop, 2026-07-15). reclaim_disk KEEPS the gate target (it is load-bearing
+# during a gate), so nothing else bounds it. Purge past the cap at cycle top, when no
+# gate is running (the pgrep guard is belt-and-suspenders); it rebuilds warm next full
+# gate. Runs BEFORE the disk floor is consulted so a slow bloat never reaches ENOSPC.
+prune_oversize_gate_target() {
+    [ "${GATE_TARGET_MAX_GB:-0}" -gt 0 ] 2>/dev/null || return 0
+    [ -d "$GATE_TARGET" ] || return 0
+    pgrep -f -- "$GATE_TARGET" >/dev/null 2>&1 && return 0    # never delete a live gate's target
+    local sz; sz="$(du -sBG "$GATE_TARGET" 2>/dev/null | cut -f1 | tr -dc '0-9')"
+    [ -n "$sz" ] || return 0
+    if [ "$sz" -ge "$GATE_TARGET_MAX_GB" ]; then
+        log "gate target = ${sz}G ≥ ${GATE_TARGET_MAX_GB}G cap — purging (rebuilds warm at next full gate)"
+        rm -rf "$GATE_TARGET"
+    fi
 }
 # reclaim if below floor; return 1 (caller stops) if still critical afterwards.
 ensure_disk() {
@@ -669,6 +688,7 @@ while :; do
 
     reclaim_stale_claims   # return leases whose owner died (before convergence reads pending)
     prune_oversize_lane_targets   # hard per-lane-target size cap (independent of total disk)
+    prune_oversize_gate_target    # hard gate-target size cap — bounds the full-gate cruft that filled the disk 2026-07-15
     # cycle START: pull any human commits on $MASTER into integration (under the lock).
     # A genuine overlap conflict needs a human — stop + escalate rather than spin.
     resync_integration || { log "STOP: integration ⇄ $MASTER conflict — resolve in $GATE_WT, then restart"; break; }
