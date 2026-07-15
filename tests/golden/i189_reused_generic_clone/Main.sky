@@ -1,0 +1,39 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Task as Task
+import Std.Log exposing (println)
+
+
+-- BACKLOG #189 regression — a reused-by-value generic param clone gap (SEAL).
+--
+-- Pre-fix: `skyc build` exits 0, but the emitted Rust fails `cargo build` with
+-- E0382 (`use of moved value: x`) in the body of a function whose only generic
+-- is used MORE THAN ONCE in a by-value consuming position. `dup x =
+-- toString x ++ toString x` emits `basics_to_string(x)` TWICE with no
+-- intervening `.clone()`, moving `x` on the first call.
+--
+-- Root cause: `clone_class(IrType::Generic(_))` returned `NonClone`, so the T5
+-- multi-use-clone param pass (fires only for `CloneOk`) skipped generic params,
+-- while `reject_fn_value_reuse` is a no-op for a bare `Generic`
+-- (`ir_contains_fun(Generic) == false`) — so a reused generic silently moved
+-- twice.
+--
+-- Fix (`param_is_multiuse_clonable`, `crates/sky_lower/src/lower.rs`): the T5
+-- loop treats a reused bare `IrType::Generic(_)` param as clonable, inserting
+-- `.clone()` on all-but-last use. Sound because `render_fn_generics` stamps
+-- `T: Clone` on EVERY emitted generic fn type-param unconditionally — the
+-- `T: Clone` bound is the gate, a non-Clone instantiation fails at the caller
+-- before the inserted `.clone()` is reached.
+--
+-- The explicit `a -> String` annotation pins `x : Generic(a)` (no numeric
+-- defaulting), and the two call sites (`dup 42`, `dup "hi"`) instantiate the
+-- generic at two distinct types, exercising the `Clone` bound at both.
+dup : a -> String
+dup x =
+    toString x ++ toString x
+
+
+main : Task Error ()
+main =
+    println (dup 42 ++ dup "hi")

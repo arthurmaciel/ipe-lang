@@ -1418,7 +1418,7 @@ impl<'a> Parser<'a> {
         }
         // Lower-case head: a local var with a chain of field accesses.
         let mut expr = Located::new(span, Expr_::VarLocal(self.interner.intern(first)?));
-        for (seg_count, seg) in (0_u32..).zip(rest.into_iter()) {
+        for (seg_count, seg) in (0_u32..).zip(rest) {
             if seg_count > MAX_DEPTH {
                 return Err(self.too_deep(Construct::Expression));
             }
