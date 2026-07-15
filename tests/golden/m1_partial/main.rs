@@ -238,14 +238,14 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 pub fn main_add(a: i64, b: i64) -> i64 {
     (a + b)
 }
-pub fn main_apply_twice(f: Box<dyn Fn(i64) -> i64 + Send + 'static>, x: i64) -> i64 {
+pub fn main_apply_twice(f: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>, x: i64) -> i64 {
     (f)((f)(x))
 }
-pub fn main_over(a: i64) -> Box<dyn Fn(i64) -> i64 + Send + 'static> {
-    { let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + 'static> = Box::new(move |b: i64| -> i64 { (a + b) }); __sky_fn }
+pub fn main_over(a: i64) -> Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> {
+    { let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> = Box::new(move |b: i64| -> i64 { (a + b) }); __sky_fn }
 }
 pub fn sky_main() -> SkyTask<()> {
-    ({ let f = { let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + 'static> = Box::new(move |eta_0: i64| -> i64 { main_add(2, eta_0) }); __sky_fn }; ({ let p = (f)(3); ({ let o = (main_over(1))(2); ({ let h = main_apply_twice({ let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + 'static> = Box::new(move |eta_0: i64| -> i64 { main_add(1, eta_0) }); __sky_fn }, 5); log_println(string_from_int(((p + o) + h))) }) }) }) })
+    ({ let f = { let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> = Box::new(move |eta_0: i64| -> i64 { main_add(2, eta_0) }); __sky_fn }; ({ let p = (f)(3); ({ let o = (main_over(1))(2); ({ let h = main_apply_twice({ let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> = Box::new(move |eta_0: i64| -> i64 { main_add(1, eta_0) }); __sky_fn }, 5); log_println(string_from_int(((p + o) + h))) }) }) }) })
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;
