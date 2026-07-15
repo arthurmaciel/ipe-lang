@@ -338,12 +338,79 @@ if [ "$WATCH" != 0 ] && [ -t 1 ] && [ -x "$HERE/watch.sh" ]; then
     "$HERE/watch.sh" & watch_pid=$!
     log "live monitor: watch.sh pid $watch_pid (one terminal; --no-watch / PROGDEV_WATCH=0 to disable)"
 fi
-trap 'rm -f "$LOCK"; [ "${#CUR_CLAIMS[@]}" -gt 0 ] && for _c in "${CUR_CLAIMS[@]}"; do "$BACKLOG_SH" unclaim "$_c" >/dev/null 2>&1; done; [ -n "$watch_pid" ] && { kill "$watch_pid" 2>/dev/null; pkill -P "$watch_pid" 2>/dev/null; }; log "exit"' EXIT
+trap 'rm -f "$LOCK"; command -v advance_master >/dev/null 2>&1 && advance_master; [ "${#CUR_CLAIMS[@]}" -gt 0 ] && for _c in "${CUR_CLAIMS[@]}"; do "$BACKLOG_SH" unclaim "$_c" >/dev/null 2>&1; done; [ -n "$watch_pid" ] && { kill "$watch_pid" 2>/dev/null; pkill -P "$watch_pid" 2>/dev/null; }; log "exit"' EXIT
 
-BASE="$(git rev-parse --abbrev-ref HEAD)"
+MASTER="$(git rev-parse --abbrev-ref HEAD)"   # the human-facing branch autopilot advances (e.g. master)
 START_SHA="$(git rev-parse HEAD)"
+# autopilot integrates on its OWN branch in a dedicated worktree — the MAIN checkout
+# is NEVER switched/merged/reset, so a human can edit $MASTER during a run. Master
+# advances only by a fast-forward at cycle end (advance_master), under $MERGE_LOCK.
+INTEGRATION="progressive-development/integration"
+GATE_WT="$REPO/.progressive-development-wt/integration"
+MERGE_LOCK="$REPO/.git/pd-master-merge.lock"
+setup_integration_worktree() {
+    if git -C "$GATE_WT" rev-parse --git-dir >/dev/null 2>&1; then
+        git -C "$GATE_WT" reset --hard "$MASTER" >/dev/null 2>&1 && git -C "$GATE_WT" clean -fdq >/dev/null 2>&1
+    else
+        git worktree remove --force "$GATE_WT" 2>/dev/null || true; rm -rf "$GATE_WT"
+        git worktree add --quiet -B "$INTEGRATION" "$GATE_WT" "$MASTER" \
+          || die "could not create integration worktree at $GATE_WT"
+    fi
+}
+setup_integration_worktree
+BASE="$INTEGRATION"   # lanes cut from + merge into integration (all existing lane code unchanged)
 mkdir -p "$(dirname "$QUEUE")"; touch "$QUEUE"
-log "start: base=$BASE start=$START_SHA max_cycles=$MAX_CYCLES lanes=$LANES"
+log "start: master=$MASTER integration=$INTEGRATION start=$START_SHA max_cycles=$MAX_CYCLES lanes=$LANES"
+
+# ── master-ref safety: autopilot advances $MASTER ONLY by fast-forward, at cycle
+# boundaries, under $MERGE_LOCK — the one place it touches the main checkout.
+resync_integration() {   # cycle START: pull any human commits on $MASTER into integration
+    ( flock 9
+      if ! git -C "$GATE_WT" merge --no-ff -m "autopilot: resync $MASTER into integration" "$MASTER" >/dev/null 2>&1; then
+          git -C "$GATE_WT" merge --abort 2>/dev/null; exit 1
+      fi
+    ) 9>"$MERGE_LOCK"
+    local rc=$?
+    [ "$rc" -eq 0 ] || log "resync: $MASTER conflicts with integration (human overlap) — skipping cycle"
+    return "$rc"
+}
+advance_master() {   # cycle END: fast-forward $MASTER to integration (never disturbs the human)
+    ( flock 9
+      local head; head="$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+      if [ "$head" = "$MASTER" ]; then
+          git -C "$REPO" merge --ff-only "$INTEGRATION" >/dev/null 2>&1    # ff keeps the human's uncommitted non-overlapping edits
+      else
+          git -C "$REPO" push --quiet . "$INTEGRATION:$MASTER" >/dev/null 2>&1   # $MASTER not checked out → advance the ref only, ff-only
+      fi
+    ) 9>"$MERGE_LOCK" \
+      && log "advance: $MASTER ← integration (ff)" \
+      || log "advance: ff DEFERRED ($MASTER moved mid-cycle or working-tree overlap) — next cycle's resync absorbs it"
+}
+# Opt-in mutual lock: a pre-commit hook that makes a HUMAN commit wait out
+# autopilot's brief cycle-boundary ff (flocks the same $MERGE_LOCK). Correctness
+# does NOT depend on it — advance_master already DEFERS if master moves — so it is
+# pure window-narrowing. Skips a pre-existing non-ours hook (never clobbers).
+install_merge_hook() {
+    [ "${PROGDEV_INSTALL_MERGE_HOOK:-1}" = 0 ] && return 0
+    command -v flock >/dev/null 2>&1 || return 0
+    local hookdir hook; hookdir="$(git -C "$REPO" rev-parse --git-path hooks 2>/dev/null)" || return 0
+    hook="$hookdir/pre-commit"
+    if [ -e "$hook" ] && ! grep -q 'pd-master-merge.lock' "$hook" 2>/dev/null; then
+        log "merge-hook: an existing pre-commit hook is present — NOT overwriting (add the flock line by hand, or PROGDEV_INSTALL_MERGE_HOOK=0)"; return 0
+    fi
+    mkdir -p "$hookdir"
+    cat > "$hook" <<'HOOK'
+#!/usr/bin/env bash
+# progressive-development merge lock — serialize this commit with autopilot's brief
+# cycle-boundary master fast-forward. Waits up to 30s for the lock, then proceeds.
+L="$(git rev-parse --git-path pd-master-merge.lock 2>/dev/null)"
+[ -e "$L" ] && command -v flock >/dev/null 2>&1 && flock -w 30 "$L" true 2>/dev/null
+exit 0
+HOOK
+    chmod +x "$hook"
+    log "merge-hook: installed pre-commit lock (opt out: PROGDEV_INSTALL_MERGE_HOOK=0)"
+}
+install_merge_hook
 
 # Ledger helpers ($QUEUE is now ONLY the attempt ledger, NOT the work source —
 # the work source is $BACKLOG). Every item gets up to MAX_ATTEMPTS *thoughtful*
@@ -512,24 +579,25 @@ lane_gate() {
     # once) EXCEPT when this change vendors a different runtime/ (then isolate).
     if git diff --name-only "$BASE..$gbr" 2>/dev/null | rg -q '^runtime/'; then SKY_SHARE=""; else SKY_SHARE="$HOME/.cache/sky-rust-target"; fi
     phase gate ·
-    git switch "$BASE" >/dev/null 2>&1
-    gpre="$(git rev-parse HEAD)"   # pre-merge sha; a failed gate reverts HERE
-    if ! git merge --no-ff -m "autopilot: $class fix — $gdesc" "$gbr" >/dev/null 2>&1; then
-        git merge --abort 2>/dev/null
+    # Integrate + gate in the DEDICATED worktree — the MAIN checkout is never touched.
+    git -C "$GATE_WT" switch "$INTEGRATION" >/dev/null 2>&1
+    gpre="$(git -C "$GATE_WT" rev-parse HEAD)"   # pre-merge sha on integration; a failed gate reverts HERE
+    if ! git -C "$GATE_WT" merge --no-ff -m "autopilot: $class fix — $gdesc" "$gbr" >/dev/null 2>&1; then
+        git -C "$GATE_WT" merge --abort 2>/dev/null
         log "lane [$class] · merge race with a landed lane — requeued (no penalty): $gdesc"
         bk unclaim "$gid"; return 0
     fi
-    if ( touch runtime/tests/*.rs crates/skyc/tests/*.rs 2>/dev/null; \
+    if ( cd "$GATE_WT"; touch runtime/tests/*.rs crates/skyc/tests/*.rs 2>/dev/null; \
          RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" SKY_ORACLE_SHARED_TARGET="$SKY_SHARE" timeout 3000 cargo +nightly nextest run --workspace >/tmp/autopilot-gate.log 2>&1 \
          && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" SKY_ORACLE_SHARED_TARGET="$SKY_SHARE" timeout 1800 cargo +nightly nextest run -p sky-runtime-rust --features full >>/tmp/autopilot-gate.log 2>&1 \
          && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 600 cargo +nightly test --workspace --doc >>/tmp/autopilot-gate.log 2>&1 \
          && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 1200 cargo +nightly clippy --workspace --no-deps --jobs 4 -- -D warnings >>/tmp/autopilot-gate.log 2>&1 ) \
-       && ( "$FUZZ" --iters "$FUZZ_ITERS" --quiet >>/tmp/autopilot-gate.log 2>&1 ); then
-        log "lane [$class] · LANDED (gate-green + fuzz-clean)"; mark LANDED "$class" "$gdesc"
+       && ( cd "$GATE_WT"; "$FUZZ" --iters "$FUZZ_ITERS" --quiet >>/tmp/autopilot-gate.log 2>&1 ); then
+        log "lane [$class] · LANDED on integration (gate-green + fuzz-clean)"; mark LANDED "$class" "$gdesc"
         bk close "$gid" --done-at "$(date +%F)"
     else
-        log "lane [$class] · gate RED — reverting to $gpre"
-        git merge --abort 2>/dev/null; git reset --hard "$gpre" >/dev/null 2>&1
+        log "lane [$class] · gate RED — reverting integration to $gpre"
+        git -C "$GATE_WT" merge --abort 2>/dev/null; git -C "$GATE_WT" reset --hard "$gpre" >/dev/null 2>&1
         item_failed "$class" "$gdesc" "$gbr" "gate failed after merge. tail: $(tail -12 /tmp/autopilot-gate.log 2>/dev/null | tr '\n' ' ' | cut -c1-400)"
     fi
 }
@@ -548,8 +616,11 @@ while :; do
 
     reclaim_stale_claims   # return leases whose owner died (before convergence reads pending)
     prune_oversize_lane_targets   # hard per-lane-target size cap (independent of total disk)
-    # convergence: did the PREVIOUS cycle make progress? (HEAD advanced, or work remains)
-    cur_head="$(git rev-parse HEAD)"
+    # cycle START: pull any human commits on $MASTER into integration (under the lock).
+    # A genuine overlap conflict needs a human — stop + escalate rather than spin.
+    resync_integration || { log "STOP: integration ⇄ $MASTER conflict — resolve in $GATE_WT, then restart"; break; }
+    # convergence: did the PREVIOUS cycle make progress? (integration advanced, or work remains)
+    cur_head="$(git -C "$GATE_WT" rev-parse HEAD)"
     act="$(pending | wc -l | tr -d ' ')"
     if [ -n "$prev_head" ] && [ "$cur_head" = "$prev_head" ] && [ "$act" -eq 0 ]; then
         dry=$((dry+1)); log "no-progress pass $dry/2 (nothing landed, no tractable findings)"
@@ -564,10 +635,10 @@ while :; do
     #       design→impl→review→gate pipeline below; no mechanical fast-path.
 
     # 2 ── audit what landed (adversarial soundness review of new commits) ────
-    if [ "$(git rev-parse HEAD)" != "$START_SHA" ] && [ "$(git rev-parse HEAD)" != "$last_audit" ]; then
-        last_audit="$(git rev-parse HEAD)"
+    if [ "$(git -C "$GATE_WT" rev-parse HEAD)" != "$START_SHA" ] && [ "$(git -C "$GATE_WT" rev-parse HEAD)" != "$last_audit" ]; then
+        last_audit="$(git -C "$GATE_WT" rev-parse HEAD)"
         log "digest audit: adversarial review of landed commits (Opus)"
-        landed="$(git log --oneline "$START_SHA"..HEAD)"
+        landed="$(git -C "$GATE_WT" log --oneline "$START_SHA"..HEAD)"
         agent "$REVIEW_MODEL" "You are AUDITING autonomous commits for soundness. Review the diffs of these commits on the current branch and answer: did ANY of them land a HACK rather than a root-cause fix — e.g. editing a reference-identical example fixture to satisfy our type-checker, weakening/removing a gate or soundness check, adding a \`_ =>\` catch-all to dodge exhaustiveness, or a \`#[allow]\`/\`unwrap\` that hides a contract violation? Commits:
 $landed
 For each, \`git show <sha>\`. If you find a violation, print AUDIT: VIOLATION <sha> <why> and STOP (do not fix). If all are genuine root-cause work, print AUDIT: CLEAN. Be adversarial; err toward flagging." | tee /tmp/autopilot-audit-c$cycle.log | show_agent audit
@@ -633,6 +704,7 @@ For each, \`git show <sha>\`. If you find a violation, print AUDIT: VIOLATION <s
         esac
         git worktree remove --force "${lane_wt[$k]}" 2>/dev/null; git branch -D "${lane_br[$k]}" 2>/dev/null
     done
+    advance_master   # cycle END: fast-forward $MASTER to integration (under the lock)
     reclaim_disk
     git worktree prune
 
