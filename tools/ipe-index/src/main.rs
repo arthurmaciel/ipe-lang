@@ -123,10 +123,10 @@ fn parse_repo(spec: &str) -> Result<(String, String)> {
 }
 
 fn cmd_index(repo_specs: &[String], db: &str) -> Result<()> {
-    if let Some(parent) = std::path::Path::new(db).parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).ok();
-        }
+    if let Some(parent) = std::path::Path::new(db).parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).ok();
     }
     // `index` builds from scratch. The non-PK `symbols`/`edges` tables would
     // accumulate duplicate rows across re-index if opened against a stale DB, so
@@ -137,7 +137,8 @@ fn cmd_index(repo_specs: &[String], db: &str) -> Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(anyhow::anyhow!("cannot remove stale index db {db}: {e}")),
     }
-    let repos: Vec<(String, String)> = repo_specs.iter()
+    let repos: Vec<(String, String)> = repo_specs
+        .iter()
         .map(|s| parse_repo(s))
         .collect::<Result<_>>()?;
     let store = store::Store::open(db)?;
@@ -165,7 +166,13 @@ fn cmd_index(repo_specs: &[String], db: &str) -> Result<()> {
             // known), so an Ipê `crates/*.rs` mis-lands as `other`. Recompute the
             // role on the tagged path so the repo-aware classifier fires.
             let role = model::role_of(&tagged);
-            store.put_file(&tagged, f.lang.as_str(), role.as_str(), src.len() as i64, "")?;
+            store.put_file(
+                &tagged,
+                f.lang.as_str(),
+                role.as_str(),
+                src.len() as i64,
+                "",
+            )?;
             extract::extract_file(&store, &tagged, f.lang, &src)?;
             pipeline::record_stage(&store, &tagged)?;
             // Parity inputs (union across repos).
@@ -205,7 +212,10 @@ fn cmd_index(repo_specs: &[String], db: &str) -> Result<()> {
 
     // Cross-repo parity reconcile: Sky-Go kernels vs Ipê-Rust kernels, keyed by
     // the Sky Ffi.kernel decl set + Kernel.hs routes from either repo.
-    let pairs: Vec<(&str, &str)> = kernel_hs_sources.iter().map(|(p, s)| (p.as_str(), s.as_str())).collect();
+    let pairs: Vec<(&str, &str)> = kernel_hs_sources
+        .iter()
+        .map(|(p, s)| (p.as_str(), s.as_str()))
+        .collect();
     let routes = parity::parse_routes_with_locs(&pairs);
     for k in parity::reconcile_with_locs(&routes, &go_fns, &rust_fns, &sky_kernel_decls) {
         let go_impl_loc = if k.go_impl {
@@ -221,10 +231,14 @@ fn cmd_index(repo_specs: &[String], db: &str) -> Result<()> {
         store.conn.execute(
             "INSERT OR REPLACE INTO kernels VALUES (?,?,?,?,?,?,?,?,?)",
             rusqlite::params![
-                k.name, k.sky_decl as i64, k.rust_fn,
+                k.name,
+                k.sky_decl as i64,
+                k.rust_fn,
                 k.hs_route_loc.as_deref(),
-                k.go_impl as i64, k.rust_impl as i64,
-                go_impl_loc, rust_impl_loc,
+                k.go_impl as i64,
+                k.rust_impl as i64,
+                go_impl_loc,
+                rust_impl_loc,
                 k.parity
             ],
         )?;
@@ -232,7 +246,10 @@ fn cmd_index(repo_specs: &[String], db: &str) -> Result<()> {
     // Resolution pass over the merged store (tagged paths). Best-effort across tags.
     query::resolve_edges(&store, ".")?;
     store.commit()?;
-    eprintln!("ipe-index: indexed {total_files} files across {} repo(s)", repos.len());
+    eprintln!(
+        "ipe-index: indexed {total_files} files across {} repo(s)",
+        repos.len()
+    );
     Ok(())
 }
 
@@ -240,7 +257,8 @@ fn cmd_index(repo_specs: &[String], db: &str) -> Result<()> {
 /// excluding test and example files.
 fn lookup_sym_loc_lang(store: &store::Store, name: &str, lang: &str) -> Result<Option<String>> {
     let hits = store.symbols_named_in_lang(name, lang)?;
-    Ok(hits.into_iter()
+    Ok(hits
+        .into_iter()
         .map(|(file, line, _)| format!("{file}:{line}"))
         .next())
 }
@@ -249,7 +267,10 @@ fn lookup_sym_loc_lang(store: &store::Store, name: &str, lang: &str) -> Result<O
 /// back to its repo root. Returns `None` for an unknown tag or unreadable file.
 fn read_tagged(repos: &[(String, String)], tagged: &str) -> Option<String> {
     let (tag, rel) = model::split_tag(tagged);
-    let root = repos.iter().find(|(t, _)| t == tag).map(|(_, r)| r.as_str())?;
+    let root = repos
+        .iter()
+        .find(|(t, _)| t == tag)
+        .map(|(_, r)| r.as_str())?;
     read_capped(root, rel)
 }
 
@@ -268,31 +289,38 @@ fn reconcile_from_store(store: &store::Store, repos: &[(String, String)]) -> Res
         let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         for row in rows {
             let (name, lang) = row?;
-            if lang == "go" { go_fns.insert(name); }
-            else if lang == "rs" { rust_fns.insert(name); }
+            if lang == "go" {
+                go_fns.insert(name);
+            } else if lang == "rs" {
+                rust_fns.insert(name);
+            }
         }
     }
     // Sky Ffi.kernel decls — re-scan the small stdlib-sky file set from disk.
     let stdlib_paths: Vec<String> = {
-        let mut st = store.conn.prepare(
-            "SELECT path FROM files WHERE role IN ('stdlib-sky','ipe-stdlib-sky')",
-        )?;
-        let v = st.query_map([], |r| r.get::<_, String>(0))?
-            .collect::<std::result::Result<_, _>>()?;
-        v
+        let mut st = store
+            .conn
+            .prepare("SELECT path FROM files WHERE role IN ('stdlib-sky','ipe-stdlib-sky')")?;
+
+        st.query_map([], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<_, _>>()?
     };
     let mut sky_kernel_decls: HashSet<String> = HashSet::new();
     for tagged in &stdlib_paths {
         if let Some(src) = read_tagged(repos, tagged) {
-            for k in extract::sky::scan_sky(&src).kernels { sky_kernel_decls.insert(k); }
+            for k in extract::sky::scan_sky(&src).kernels {
+                sky_kernel_decls.insert(k);
+            }
         }
     }
     // Kernel.hs route sources from disk.
     let kernel_paths: Vec<String> = {
-        let mut st = store.conn.prepare("SELECT path FROM files WHERE path LIKE '%Kernel.hs'")?;
-        let v = st.query_map([], |r| r.get::<_, String>(0))?
-            .collect::<std::result::Result<_, _>>()?;
-        v
+        let mut st = store
+            .conn
+            .prepare("SELECT path FROM files WHERE path LIKE '%Kernel.hs'")?;
+
+        st.query_map([], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<_, _>>()?
     };
     let mut kernel_hs_sources: Vec<(String, String)> = Vec::new();
     for tagged in kernel_paths {
@@ -302,16 +330,34 @@ fn reconcile_from_store(store: &store::Store, repos: &[(String, String)]) -> Res
     }
     // Rebuild from scratch (stale rows must not linger across an update).
     store.conn.execute("DELETE FROM kernels", [])?;
-    let pairs: Vec<(&str, &str)> = kernel_hs_sources.iter().map(|(p, s)| (p.as_str(), s.as_str())).collect();
+    let pairs: Vec<(&str, &str)> = kernel_hs_sources
+        .iter()
+        .map(|(p, s)| (p.as_str(), s.as_str()))
+        .collect();
     let routes = parity::parse_routes_with_locs(&pairs);
     for k in parity::reconcile_with_locs(&routes, &go_fns, &rust_fns, &sky_kernel_decls) {
-        let go_impl_loc = if k.go_impl { lookup_sym_loc_lang(store, &k.name.replace('.', "_"), "go")? } else { None };
-        let rust_impl_loc = if k.rust_impl { lookup_sym_loc_lang(store, &k.rust_fn, "rs")? } else { None };
+        let go_impl_loc = if k.go_impl {
+            lookup_sym_loc_lang(store, &k.name.replace('.', "_"), "go")?
+        } else {
+            None
+        };
+        let rust_impl_loc = if k.rust_impl {
+            lookup_sym_loc_lang(store, &k.rust_fn, "rs")?
+        } else {
+            None
+        };
         store.conn.execute(
             "INSERT OR REPLACE INTO kernels VALUES (?,?,?,?,?,?,?,?,?)",
             rusqlite::params![
-                k.name, k.sky_decl as i64, k.rust_fn, k.hs_route_loc.as_deref(),
-                k.go_impl as i64, k.rust_impl as i64, go_impl_loc, rust_impl_loc, k.parity
+                k.name,
+                k.sky_decl as i64,
+                k.rust_fn,
+                k.hs_route_loc.as_deref(),
+                k.go_impl as i64,
+                k.rust_impl as i64,
+                go_impl_loc,
+                rust_impl_loc,
+                k.parity
             ],
         )?;
     }
@@ -325,7 +371,8 @@ fn cmd_update(repo_specs: &[String], db: &str) -> Result<()> {
     if !std::path::Path::new(db).exists() {
         return cmd_index(repo_specs, db);
     }
-    let repos: Vec<(String, String)> = repo_specs.iter()
+    let repos: Vec<(String, String)> = repo_specs
+        .iter()
         .map(|s| parse_repo(s))
         .collect::<Result<_>>()?;
     let store = store::Store::open(db)?;
@@ -339,7 +386,9 @@ fn cmd_update(repo_specs: &[String], db: &str) -> Result<()> {
     store.begin()?;
     let mut changed_count = 0usize;
     for (tag, root) in &repos {
-        let since = store.get_meta(&format!("last_sha:{tag}"))?.unwrap_or_default();
+        let since = store
+            .get_meta(&format!("last_sha:{tag}"))?
+            .unwrap_or_default();
         let (ups, dels) = walk::changed(root, &since)?;
         for d in &dels {
             store.drop_file(&format!("{tag}:{d}"))?;
@@ -347,9 +396,17 @@ fn cmd_update(repo_specs: &[String], db: &str) -> Result<()> {
         for f in &ups {
             let tagged = format!("{tag}:{}", f.path);
             store.drop_file(&tagged)?;
-            let Some(src) = read_capped(root, &f.path) else { continue };
+            let Some(src) = read_capped(root, &f.path) else {
+                continue;
+            };
             let role = model::role_of(&tagged);
-            store.put_file(&tagged, f.lang.as_str(), role.as_str(), src.len() as i64, "")?;
+            store.put_file(
+                &tagged,
+                f.lang.as_str(),
+                role.as_str(),
+                src.len() as i64,
+                "",
+            )?;
             extract::extract_file(&store, &tagged, f.lang, &src)?;
             pipeline::record_stage(&store, &tagged)?;
             if role == model::Role::Fixture || role == model::Role::Example {
@@ -365,10 +422,12 @@ fn cmd_update(repo_specs: &[String], db: &str) -> Result<()> {
     reconcile_from_store(&store, &repos)?;
     query::resolve_edges(&store, ".")?;
     store.commit()?;
-    eprintln!("ipe-index: updated {changed_count} changed path(s) across {} repo(s)", repos.len());
+    eprintln!(
+        "ipe-index: updated {changed_count} changed path(s) across {} repo(s)",
+        repos.len()
+    );
     Ok(())
 }
-
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -382,6 +441,11 @@ fn main() -> Result<()> {
         Cmd::Covers { kernel, db } => query::cmd_covers(&db, &kernel),
         Cmd::Wakeup { db } => query::cmd_wakeup(&db),
         Cmd::Locate { name, db } => query::cmd_locate(&db, &name),
-        Cmd::Rdeps { module, db, count, subtree } => query::cmd_rdeps(&db, &module, count, subtree),
+        Cmd::Rdeps {
+            module,
+            db,
+            count,
+            subtree,
+        } => query::cmd_rdeps(&db, &module, count, subtree),
     }
 }

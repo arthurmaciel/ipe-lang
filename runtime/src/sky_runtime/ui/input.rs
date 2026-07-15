@@ -196,10 +196,10 @@ fn input_base_<M: Clone>(
         base_attrs.push(ui_html_attribute_("autocomplete".into(), ac.into()));
     }
     base_attrs.push(ui_on_input_(on_change));
-    if let SkyMaybe::Just(ph) = placeholder {
-        if let Some(ph_text) = placeholder_text_of(&ph.content) {
-            base_attrs.push(ui_html_attribute_("placeholder".into(), ph_text));
-        }
+    if let SkyMaybe::Just(ph) = placeholder
+        && let Some(ph_text) = placeholder_text_of(&ph.content)
+    {
+        base_attrs.push(ui_html_attribute_("placeholder".into(), ph_text));
     }
     base_attrs.extend(control_attrs);
     base_attrs.extend(implicit_fill_if_hoisted(&layout_attrs));
@@ -315,10 +315,10 @@ pub fn input_multiline_<M: Clone>(
         ui_html_attribute_("value".into(), text),
         ui_on_input_(on_change),
     ];
-    if let SkyMaybe::Just(ph) = placeholder {
-        if let Some(ph_text) = placeholder_text_of(&ph.content) {
-            base_attrs.push(ui_html_attribute_("placeholder".into(), ph_text));
-        }
+    if let SkyMaybe::Just(ph) = placeholder
+        && let Some(ph_text) = placeholder_text_of(&ph.content)
+    {
+        base_attrs.push(ui_html_attribute_("placeholder".into(), ph_text));
     }
     base_attrs.extend(control_attrs);
     base_attrs.extend(implicit_fill_if_hoisted(&layout_attrs));

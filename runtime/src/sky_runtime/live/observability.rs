@@ -89,11 +89,11 @@ pub async fn track(
     // Gate the console + metrics surface (off / production-auth) before serving.
     let path = req.uri().path().to_string();
     let method = req.method().as_str().to_string();
-    if path == "/_sky/metrics" || path.starts_with("/_sky/console") {
-        if let Some(blocked) = super::console::gate_blocked(req.headers()) {
-            super::super::telemetry::record_request(blocked.status().as_u16());
-            return blocked;
-        }
+    if (path == "/_sky/metrics" || path.starts_with("/_sky/console"))
+        && let Some(blocked) = super::console::gate_blocked(req.headers())
+    {
+        super::super::telemetry::record_request(blocked.status().as_u16());
+        return blocked;
     }
     let start = std::time::Instant::now();
     let resp = next.run(req).await;

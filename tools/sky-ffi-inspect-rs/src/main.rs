@@ -904,21 +904,20 @@ fn run_rustdoc(
     // A version requirement is spliced into the same TOML value position, so gate it
     // to the semver charset (digits, letters, `.`, `-`, `+`, `*`, comparison ops,
     // spaces, commas) — closes the same TOML-injection vector as the name check.
-    if let Some(v) = req_version {
-        if v.is_empty()
+    if let Some(v) = req_version
+        && (v.is_empty()
             || !v.chars().all(|c| {
                 c.is_ascii_alphanumeric()
                     || matches!(
                         c,
                         '.' | '-' | '+' | '*' | '=' | '>' | '<' | '~' | '^' | ',' | ' '
                     )
-            })
-        {
-            return Err(format!(
-                "invalid version requirement {:?} for crate {:?}: only semver chars allowed",
-                v, crate_name
-            ));
-        }
+            }))
+    {
+        return Err(format!(
+            "invalid version requirement {:?} for crate {:?}: only semver chars allowed",
+            v, crate_name
+        ));
     }
 
     let tmp = tempfile::tempdir().map_err(|e| format!("tempdir: {}", e))?;
@@ -1079,16 +1078,13 @@ edition = "2021"
     // facade (e.g. `clap` is just `pub use clap_builder::*`).  Detect glob
     // re-exports in the JSON and re-run on the underlying crate.
     let has_fns = json_has_functions(&json_content);
-    if !has_fns {
-        if let Some(underlying) = find_glob_reexport_source(&json_content) {
-            let under_safe = underlying.replace('-', "_");
-            if let Ok((under_json, under_ver)) =
-                run_rustdoc_package(&underlying, &manifest_str, &target_dir, &under_safe, false)
-            {
-                if json_has_functions(&under_json) {
-                    return Ok((under_json, under_ver, transitive_deps, effective_features));
-                }
-            }
+    if !has_fns && let Some(underlying) = find_glob_reexport_source(&json_content) {
+        let under_safe = underlying.replace('-', "_");
+        if let Ok((under_json, under_ver)) =
+            run_rustdoc_package(&underlying, &manifest_str, &target_dir, &under_safe, false)
+            && json_has_functions(&under_json)
+        {
+            return Ok((under_json, under_ver, transitive_deps, effective_features));
         }
     }
 
@@ -1241,12 +1237,12 @@ fn run_rustdoc_package(
 
 /// Return true if the rustdoc JSON contains at least one public function.
 fn json_has_functions(json: &str) -> bool {
-    if let Ok(doc) = serde_json::from_str::<serde_json::Value>(json) {
-        if let Some(index) = doc["index"].as_object() {
-            return index
-                .values()
-                .any(|item| item.get("inner").and_then(|i| i.get("function")).is_some());
-        }
+    if let Ok(doc) = serde_json::from_str::<serde_json::Value>(json)
+        && let Some(index) = doc["index"].as_object()
+    {
+        return index
+            .values()
+            .any(|item| item.get("inner").and_then(|i| i.get("function")).is_some());
     }
     false
 }
@@ -1257,17 +1253,13 @@ fn find_glob_reexport_source(json: &str) -> Option<String> {
     let doc: serde_json::Value = serde_json::from_str(json).ok()?;
     let index = doc["index"].as_object()?;
     for item in index.values() {
-        if let Some(use_inner) = item.get("inner").and_then(|i| i.get("use")) {
-            if use_inner["is_glob"].as_bool().unwrap_or(false) {
-                if let Some(src) = use_inner["source"].as_str() {
-                    // Skip stdlib-style re-exports (e.g. re-exporting from std::)
-                    if !src.starts_with("std")
-                        && !src.starts_with("core")
-                        && !src.starts_with("alloc")
-                    {
-                        return Some(src.to_string());
-                    }
-                }
+        if let Some(use_inner) = item.get("inner").and_then(|i| i.get("use"))
+            && use_inner["is_glob"].as_bool().unwrap_or(false)
+            && let Some(src) = use_inner["source"].as_str()
+        {
+            // Skip stdlib-style re-exports (e.g. re-exporting from std::)
+            if !src.starts_with("std") && !src.starts_with("core") && !src.starts_with("alloc") {
+                return Some(src.to_string());
             }
         }
     }
@@ -1447,10 +1439,9 @@ fn fetch_dep(manifest_str: &str) -> Result<(), String> {
     if let Ok(o) = Command::new("cargo")
         .args(["fetch", "--offline", "--manifest-path", manifest_str])
         .output()
+        && o.status.success()
     {
-        if o.status.success() {
-            return Ok(());
-        }
+        return Ok(());
     }
     // Fall back to network
     let o = Command::new("cargo")
@@ -1620,10 +1611,10 @@ fn enumerate_crate_features(manifest_str: &str, crate_name: &str) -> Vec<String>
         return Vec::new();
     };
     for p in pkgs {
-        if p.get("name").and_then(|n| n.as_str()) == Some(crate_name) {
-            if let Some(feats) = p.get("features").and_then(|f| f.as_object()) {
-                return feats.keys().filter(|k| *k != "default").cloned().collect();
-            }
+        if p.get("name").and_then(|n| n.as_str()) == Some(crate_name)
+            && let Some(feats) = p.get("features").and_then(|f| f.as_object())
+        {
+            return feats.keys().filter(|k| *k != "default").cloned().collect();
         }
     }
     Vec::new()
@@ -1766,11 +1757,11 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
     for (_, item) in index {
         let inner = &item["inner"];
         for kind in ["impl", "trait"] {
-            if let Some(block) = inner.get(kind) {
-                if let Some(items) = block.get("items").and_then(|i| i.as_array()) {
-                    for mid in items {
-                        associated_ids.insert(item_id_to_str(mid));
-                    }
+            if let Some(block) = inner.get(kind)
+                && let Some(items) = block.get("items").and_then(|i| i.as_array())
+            {
+                for mid in items {
+                    associated_ids.insert(item_id_to_str(mid));
                 }
             }
         }
@@ -1855,25 +1846,23 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
 
         // Free function — must be public AND not an associated item of an
         // impl/trait (those are handled by the impl-block walk with a receiver).
-        if let Some(fn_data) = inner.get("function") {
-            if is_public(item) && !associated_ids.contains(item_id.as_str()) {
-                if let Some(mut f) = parse_fn_item(&name, fn_data, &aliases, None) {
-                    // [#109] If this free fn lives in a submodule, emit its crate-relative
-                    // public path (`civil::date`) so codegen calls `::<crate>::civil::date`
-                    // instead of `::<crate>::date` (E0425). Strip the leading crate segment;
-                    // set ONLY when a real module segment remains (else byte-identical fallback).
-                    if let Some(full) =
-                        REACHABLE_FN_PATHS.with(|c| c.borrow().get(item_id.as_str()).cloned())
-                    {
-                        if let Some((_crate_seg, rest)) = full.split_once("::") {
-                            if rest.contains("::") {
-                                f.call_path = rest.to_string();
-                            }
-                        }
-                    }
-                    functions.push(f);
-                }
+        if let Some(fn_data) = inner.get("function")
+            && is_public(item)
+            && !associated_ids.contains(item_id.as_str())
+            && let Some(mut f) = parse_fn_item(&name, fn_data, &aliases, None)
+        {
+            // [#109] If this free fn lives in a submodule, emit its crate-relative
+            // public path (`civil::date`) so codegen calls `::<crate>::civil::date`
+            // instead of `::<crate>::date` (E0425). Strip the leading crate segment;
+            // set ONLY when a real module segment remains (else byte-identical fallback).
+            if let Some(full) =
+                REACHABLE_FN_PATHS.with(|c| c.borrow().get(item_id.as_str()).cloned())
+                && let Some((_crate_seg, rest)) = full.split_once("::")
+                && rest.contains("::")
+            {
+                f.call_path = rest.to_string();
             }
+            functions.push(f);
         }
 
         // Impl block — includes derive-generated trait impls.
@@ -2243,59 +2232,57 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
             if !is_inherent_impl
                 && trait_self_concrete
                 && (self_mono_subst.is_some() || trait_node.is_some())
-            {
-                if let Some(projected) =
+                && let Some(projected) =
                     project_trait_default_methods(trait_node, impl_data, for_val, index)
-                {
-                    // [WALL-F / #81 (b)] Receiver async-Send proof: a trait with a
-                    // `Send` supertrait (`FirebaseAuthService: Send + Sync`)
-                    // GUARANTEES every impl's `Self: Send` — the impl would not
-                    // compile otherwise. So the concrete Self is a provably-Send
-                    // receiver; register it so the async Send gate (C1c) admits the
-                    // spawned `async move` future. SOUND: the compiler already proved
-                    // `Self: Send` to accept the impl. (Reuses the #52
-                    // `SEND_SUPERTRAIT_TRAIT_IDS` source.)
-                    let trait_has_send_supertrait = trait_node
-                        .and_then(|tn| tn.get("id"))
-                        .map(|id| {
-                            let key = item_id_to_str(id);
-                            SEND_SUPERTRAIT_TRAIT_IDS.with(|s| s.borrow().contains(&key))
-                        })
-                        .unwrap_or(false);
-                    if trait_has_send_supertrait && !self_rust.is_empty() {
-                        PROVABLY_SEND_RECV_NAMES.with(|c| c.borrow_mut().insert(self_rust.clone()));
-                    }
-                    for (pm_name, pm_fn_data) in projected {
-                        // de-async (RPITIT #81 / async_trait #64) then route concrete-Self.
-                        let de = de_async_clone(&pm_fn_data);
-                        let fn_data: &serde_json::Value = de.as_ref().unwrap_or(&pm_fn_data);
-                        let bound_source = match route_concrete_method(
-                            trait_node, &pm_name, for_val, impl_data, index,
-                        ) {
-                            Ok(bs) => bs,
-                            Err(drop) => {
-                                record_generic_drop(&pm_name, drop);
-                                continue;
-                            }
-                        };
-                        match try_parametric_stub(
-                            &pm_name,
-                            fn_data,
-                            Some((&self_sky, &self_rust)),
-                            impl_generics,
-                            struct_generics,
-                            bound_source.ctx(),
-                        ) {
-                            Ok(generic) => {
-                                record_generic_bound();
-                                if let Some(f) = parametric_function(
-                                    &pm_name, fn_data, &self_sky, &self_rust, generic,
-                                ) {
-                                    functions.push(f);
-                                }
-                            }
-                            Err(drop) => record_generic_drop(&pm_name, drop),
+            {
+                // [WALL-F / #81 (b)] Receiver async-Send proof: a trait with a
+                // `Send` supertrait (`FirebaseAuthService: Send + Sync`)
+                // GUARANTEES every impl's `Self: Send` — the impl would not
+                // compile otherwise. So the concrete Self is a provably-Send
+                // receiver; register it so the async Send gate (C1c) admits the
+                // spawned `async move` future. SOUND: the compiler already proved
+                // `Self: Send` to accept the impl. (Reuses the #52
+                // `SEND_SUPERTRAIT_TRAIT_IDS` source.)
+                let trait_has_send_supertrait = trait_node
+                    .and_then(|tn| tn.get("id"))
+                    .map(|id| {
+                        let key = item_id_to_str(id);
+                        SEND_SUPERTRAIT_TRAIT_IDS.with(|s| s.borrow().contains(&key))
+                    })
+                    .unwrap_or(false);
+                if trait_has_send_supertrait && !self_rust.is_empty() {
+                    PROVABLY_SEND_RECV_NAMES.with(|c| c.borrow_mut().insert(self_rust.clone()));
+                }
+                for (pm_name, pm_fn_data) in projected {
+                    // de-async (RPITIT #81 / async_trait #64) then route concrete-Self.
+                    let de = de_async_clone(&pm_fn_data);
+                    let fn_data: &serde_json::Value = de.as_ref().unwrap_or(&pm_fn_data);
+                    let bound_source = match route_concrete_method(
+                        trait_node, &pm_name, for_val, impl_data, index,
+                    ) {
+                        Ok(bs) => bs,
+                        Err(drop) => {
+                            record_generic_drop(&pm_name, drop);
+                            continue;
                         }
+                    };
+                    match try_parametric_stub(
+                        &pm_name,
+                        fn_data,
+                        Some((&self_sky, &self_rust)),
+                        impl_generics,
+                        struct_generics,
+                        bound_source.ctx(),
+                    ) {
+                        Ok(generic) => {
+                            record_generic_bound();
+                            if let Some(f) = parametric_function(
+                                &pm_name, fn_data, &self_sky, &self_rust, generic,
+                            ) {
+                                functions.push(f);
+                            }
+                        }
+                        Err(drop) => record_generic_drop(&pm_name, drop),
                     }
                 }
             }
@@ -2739,10 +2726,10 @@ fn facade_guidance(crate_name: &str, fn_count: usize, doc: &serde_json::Value) -
                 let target_key = target_id.to_string();
                 index.get(&target_key).and_then(|t| t["crate_id"].as_u64())
             });
-        if let Some(ext_id) = target_crate_id {
-            if ext_id > 0 {
-                ext_ids.insert(ext_id);
-            }
+        if let Some(ext_id) = target_crate_id
+            && ext_id > 0
+        {
+            ext_ids.insert(ext_id);
         }
     }
 
@@ -2806,19 +2793,17 @@ fn collect_public_modules(doc: &serde_json::Value) -> Vec<String> {
         if inner.get("module").is_some()
             && item["crate_id"].as_u64().unwrap_or(1) == 0
             && is_public(item)
-        {
-            if let Some(segs) = paths
+            && let Some(segs) = paths
                 .and_then(|m| m.get(id))
                 .and_then(|e| e.get("path"))
                 .and_then(|p| p.as_array())
-            {
-                let joined: Vec<String> = segs
-                    .iter()
-                    .filter_map(|s| s.as_str().map(String::from))
-                    .collect();
-                if !joined.is_empty() {
-                    mods.push(joined.join("::"));
-                }
+        {
+            let joined: Vec<String> = segs
+                .iter()
+                .filter_map(|s| s.as_str().map(String::from))
+                .collect();
+            if !joined.is_empty() {
+                mods.push(joined.join("::"));
             }
         }
     }
@@ -3286,10 +3271,10 @@ fn field_type_eligible(
     clone_ids: &HashSet<String>,
 ) -> Result<(), &'static str> {
     // See through a crate-local non-generic alias first (uuid::Bytes-style).
-    if let Some(rp) = ty.get("resolved_path") {
-        if let Some(aliased) = rp.get("id").and_then(resolve_alias) {
-            return field_type_eligible(&aliased, index, clone_ids);
-        }
+    if let Some(rp) = ty.get("resolved_path")
+        && let Some(aliased) = rp.get("id").and_then(resolve_alias)
+    {
+        return field_type_eligible(&aliased, index, clone_ids);
     }
 
     // Primitive types (ints / floats / bool). Strings arrive as a resolved_path
@@ -3651,16 +3636,14 @@ fn emit_enum_bindings(
         // here the variant is exhaustive-constructible iff the ENUM is.
         let constructible = !enum_non_exhaustive && fields_eligible;
 
-        if constructible {
-            if let Some(fields) = &resolved_fields {
-                pending.push(make_enum_ctor(
-                    &variant_name,
-                    kind,
-                    fields,
-                    &enum_sky,
-                    &enum_rust,
-                ));
-            }
+        if constructible && let Some(fields) = &resolved_fields {
+            pending.push(make_enum_ctor(
+                &variant_name,
+                kind,
+                fields,
+                &enum_sky,
+                &enum_rust,
+            ));
         }
 
         // ── Payload extractor(s) (R6, multi-field generalisation) ──────
@@ -3684,30 +3667,30 @@ fn emit_enum_bindings(
         // A single-variant exhaustive enum's `E::Only(x) => Just(x)` is already
         // exhaustive, so emitting the wildcard would be `unreachable_patterns`
         // (clippy). Gate it precisely (mirrors the tag's R3 gating).
-        if kind != "unit" {
-            if let Some(fields) = resolved_fields.as_ref() {
-                let n_fields = fields.len();
-                let single = n_fields == 1;
-                let extract_wildcard = enum_non_exhaustive || variant_ids.len() > 1;
-                for (idx, field) in fields.iter().enumerate() {
-                    // Per-field eligibility — a sibling's ineligibility never
-                    // suppresses THIS field's extractor (independent of the
-                    // ctor's all-fields `fields_eligible` gate above).
-                    if field_type_eligible(&field.1, index, clone_ids).is_err() {
-                        continue;
-                    }
-                    pending.push(make_enum_extract(
-                        &variant_name,
-                        kind,
-                        field,
-                        idx,
-                        n_fields,
-                        single,
-                        &enum_sky,
-                        &enum_rust,
-                        extract_wildcard,
-                    ));
+        if kind != "unit"
+            && let Some(fields) = resolved_fields.as_ref()
+        {
+            let n_fields = fields.len();
+            let single = n_fields == 1;
+            let extract_wildcard = enum_non_exhaustive || variant_ids.len() > 1;
+            for (idx, field) in fields.iter().enumerate() {
+                // Per-field eligibility — a sibling's ineligibility never
+                // suppresses THIS field's extractor (independent of the
+                // ctor's all-fields `fields_eligible` gate above).
+                if field_type_eligible(&field.1, index, clone_ids).is_err() {
+                    continue;
                 }
+                pending.push(make_enum_extract(
+                    &variant_name,
+                    kind,
+                    field,
+                    idx,
+                    n_fields,
+                    single,
+                    &enum_sky,
+                    &enum_rust,
+                    extract_wildcard,
+                ));
             }
         }
     }
@@ -4190,15 +4173,15 @@ fn parse_fn_item(
     // can generate `arg0.method(rest...)`.  For static/associated functions
     // in an impl block (recv.is_some() but no self input): don't push a
     // receiver param — FfiGen will use `RecvType::fn(args)` via isStaticFn.
-    if let Some((sky_ty, rust_ty)) = recv {
-        if has_self_in_inputs {
-            params.push(Param {
-                name: "self".into(),
-                ty: sky_ty.to_string(),
-                sky_type: sky_ty.to_string(),
-                rust_type: rust_ty.to_string(),
-            });
-        }
+    if let Some((sky_ty, rust_ty)) = recv
+        && has_self_in_inputs
+    {
+        params.push(Param {
+            name: "self".into(),
+            ty: sky_ty.to_string(),
+            sky_type: sky_ty.to_string(),
+            rust_type: rust_ty.to_string(),
+        });
     }
 
     // Ordinary parameters: inputs is [(name, type_json)].
@@ -5027,10 +5010,9 @@ fn collect_provably_send_recv_names(
         if let Some(fid) = for_val
             .and_then(|v| v.get("resolved_path"))
             .and_then(|rp| rp.get("id"))
+            && let Some(nm) = rendered_name_for_id(index, &item_id_to_str(fid))
         {
-            if let Some(nm) = rendered_name_for_id(index, &item_id_to_str(fid)) {
-                insert_name(&mut out, &nm);
-            }
+            insert_name(&mut out, &nm);
         }
     }
     out
@@ -5529,17 +5511,17 @@ fn reachable_local_path(id: &serde_json::Value) -> Option<String> {
 fn external_trait_path(id: &serde_json::Value) -> Option<String> {
     let key = item_id_to_str(id);
     // (1) std/core/alloc confirmed-by-canonical-path → recover its canonical path.
-    if let Some(tag) = STD_TRAIT_BY_ID.with(|m| m.borrow().get(&key).copied()) {
-        if let Some((path, _)) = STD_TRAIT_CANONICAL.iter().find(|(_, t)| *t == tag) {
-            // [WALL-B / #75] `STD_TRAIT_CANONICAL` lists the `alloc::` form FIRST
-            // for the heap traits (`alloc::string::ToString`, `alloc::borrow::
-            // ToOwned`), so `.find` returns it — but `alloc` is not importable in a
-            // normal `std`-linked crate (`::alloc::string::ToString` → E0433
-            // `could not find alloc`). Remap `alloc::`→`std::` (std re-exports the
-            // alloc heap items), matching `collect_external_trait_paths`.
-            let path = remap_alloc_to_std(path);
-            return Some(path);
-        }
+    if let Some(tag) = STD_TRAIT_BY_ID.with(|m| m.borrow().get(&key).copied())
+        && let Some((path, _)) = STD_TRAIT_CANONICAL.iter().find(|(_, t)| *t == tag)
+    {
+        // [WALL-B / #75] `STD_TRAIT_CANONICAL` lists the `alloc::` form FIRST
+        // for the heap traits (`alloc::string::ToString`, `alloc::borrow::
+        // ToOwned`), so `.find` returns it — but `alloc` is not importable in a
+        // normal `std`-linked crate (`::alloc::string::ToString` → E0433
+        // `could not find alloc`). Remap `alloc::`→`std::` (std re-exports the
+        // alloc heap items), matching `collect_external_trait_paths`.
+        let path = remap_alloc_to_std(path);
+        return Some(path);
     }
     // (2) Any external trait recorded in `doc["paths"]` (KNOWN-CORRECT path).
     EXTERNAL_TRAIT_PATH_BY_ID.with(|m| m.borrow().get(&key).cloned())
@@ -6108,19 +6090,21 @@ fn walk_module_with_path(
         // A `pub use private::*` re-exports ONLY the public items of `private`;
         // registering a `pub(crate)` child would publish a path unreachable
         // from outside the crate → E0603 cargo-fail.
-        if item_is_type(it) && is_public(it) {
-            if let Some(n) = it["name"].as_str() {
-                insert_shorter_path(out, cid.clone(), format!("{}::{}", mp, n));
-            }
+        if item_is_type(it)
+            && is_public(it)
+            && let Some(n) = it["name"].as_str()
+        {
+            insert_shorter_path(out, cid.clone(), format!("{}::{}", mp, n));
         }
         // [#109] Register a public FREE FUNCTION at its reachable path (mirrors the
         // type branch; same is_public gate). Sound ONLY because rustdoc runs WITHOUT
         // --document-private-items (same precondition as the #57 type walk) — adding
         // that flag would reopen E0603 for fns just as for types.
-        if it["inner"].get("function").is_some() && is_public(it) {
-            if let Some(n) = it["name"].as_str() {
-                insert_shorter_path(fn_out, cid.clone(), format!("{}::{}", mp, n));
-            }
+        if it["inner"].get("function").is_some()
+            && is_public(it)
+            && let Some(n) = it["name"].as_str()
+        {
+            insert_shorter_path(fn_out, cid.clone(), format!("{}::{}", mp, n));
         }
         if let Some(u) = it["inner"].get("use") {
             let tid = u.get("id").map(item_id_to_str);
@@ -6186,10 +6170,9 @@ fn collect_reachable_paths(
         if item["inner"].get("module").is_some()
             && item["crate_id"].as_u64().unwrap_or(1) == 0
             && is_public(item)
+            && let Some(mp) = mpath_from_doc(id)
         {
-            if let Some(mp) = mpath_from_doc(id) {
-                walk_module_with_path(id, &mp, index, &mut out, &mut fn_out, &mut seen);
-            }
+            walk_module_with_path(id, &mp, index, &mut out, &mut fn_out, &mut seen);
         }
     }
     (out, fn_out)
@@ -6361,12 +6344,11 @@ fn is_async_send_seq(rt: &str) -> bool {
     } else {
         (false, t)
     };
-    if !is_ref {
-        if let Some(rest) = body.strip_prefix("Vec<") {
-            if let Some(elem) = rest.strip_suffix('>') {
-                return is_async_send_output(elem.trim());
-            }
-        }
+    if !is_ref
+        && let Some(rest) = body.strip_prefix("Vec<")
+        && let Some(elem) = rest.strip_suffix('>')
+    {
+        return is_async_send_output(elem.trim());
     }
     if let Some(inner) = body.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
         if let Some((elem, n_str)) = inner.split_once(';') {
@@ -6399,12 +6381,11 @@ fn is_coercible_seq(rt: &str) -> bool {
     };
 
     // Vec<T> (no leading &)
-    if !is_ref {
-        if let Some(rest) = body.strip_prefix("Vec<") {
-            if let Some(elem) = rest.strip_suffix('>') {
-                return is_sky_coercible_elem(elem.trim());
-            }
-        }
+    if !is_ref
+        && let Some(rest) = body.strip_prefix("Vec<")
+        && let Some(elem) = rest.strip_suffix('>')
+    {
+        return is_sky_coercible_elem(elem.trim());
     }
 
     // [T] (slice, only valid behind &) or [T; N] (array)
@@ -6429,12 +6410,11 @@ fn is_coercible_seq(rt: &str) -> bool {
 fn has_lifetime(ty: &str) -> bool {
     let bytes = ty.as_bytes();
     for i in 0..bytes.len() {
-        if bytes[i] == b'\'' {
-            if let Some(&next) = bytes.get(i + 1) {
-                if next.is_ascii_alphanumeric() || next == b'_' {
-                    return true;
-                }
-            }
+        if bytes[i] == b'\''
+            && let Some(&next) = bytes.get(i + 1)
+            && (next.is_ascii_alphanumeric() || next == b'_')
+        {
+            return true;
         }
     }
     false
@@ -7397,21 +7377,21 @@ fn serde_occurrence_admissible_in(
             // HashMap / BTreeMap / IndexMap: key (arg[0]) is fine; value
             // (arg[1]) is INADMISSIBLE for T (no Sky coercion for map values).
             "HashMap" | "BTreeMap" | "IndexMap" | "AHashMap" => {
-                if let Some(key_t) = type_args.first() {
-                    if !serde_occurrence_admissible_in(key_t, name, ctx, false) {
-                        return false;
-                    }
+                if let Some(key_t) = type_args.first()
+                    && !serde_occurrence_admissible_in(key_t, name, ctx, false)
+                {
+                    return false;
                 }
                 // value position → inadmissible
-                if let Some(val_t) = type_args.get(1) {
-                    if !serde_occurrence_admissible_in(
+                if let Some(val_t) = type_args.get(1)
+                    && !serde_occurrence_admissible_in(
                         val_t,
                         name,
                         OccurrenceCtx::Inadmissible,
                         false,
-                    ) {
-                        return false;
-                    }
+                    )
+                {
+                    return false;
                 }
                 return true;
             }
@@ -8041,17 +8021,16 @@ fn classify_param_bound(bound: &serde_json::Value) -> Result<Option<String>, Gen
             .get("trait_bound")
             .and_then(|tb| tb.get("trait"))
             .unwrap_or(&serde_json::Value::Null),
-    ) {
-        if is_modellable_5(std_tag) {
-            // super-closure of every modellable-5 trait is marker/modellable.
-            debug_assert!(modellable_5_superclosure_ok(std_tag));
-            return Ok(Some(std_tag.to_string()));
-        }
-        // A confirmed std trait that is NOT modellable-5 (Display / FromStr /
-        // ToString / PartialEq / PartialOrd). PartialEq/PartialOrd are markers
-        // (contribute no `<T: …>` bound); the rest are unmodellable as a param
-        // bound. Both reach the right outcome below via the marker check + drop.
+    ) && is_modellable_5(std_tag)
+    {
+        // super-closure of every modellable-5 trait is marker/modellable.
+        debug_assert!(modellable_5_superclosure_ok(std_tag));
+        return Ok(Some(std_tag.to_string()));
     }
+    // A confirmed std trait that is NOT modellable-5 (Display / FromStr /
+    // ToString / PartialEq / PartialOrd). PartialEq/PartialOrd are markers
+    // (contribute no `<T: …>` bound); the rest are unmodellable as a param
+    // bound. Both reach the right outcome below via the marker check + drop.
     if MARKER_TRAITS.contains(&name.as_str()) && !is_modellable_5(&name) {
         // A pure auto/marker trait (Sized/Send/Sync/Copy/Debug/Unpin/…) that is
         // NOT one of the modellable-5 contributes no Sky-facing `<T: …>` bound.
@@ -8228,10 +8207,10 @@ fn full_union_bounds(
         }
         let mut names: Vec<String> = Vec::new();
         for b in bounds {
-            if let Some(n) = classify_param_bound(b)? {
-                if !names.contains(&n) {
-                    names.push(n);
-                }
+            if let Some(n) = classify_param_bound(b)?
+                && !names.contains(&n)
+            {
+                names.push(n);
             }
         }
         names.sort();
@@ -8265,15 +8244,14 @@ fn subst_assoc_json(
     val: &serde_json::Value,
     assoc: &std::collections::HashMap<String, serde_json::Value>,
 ) -> serde_json::Value {
-    if let Some(qp) = val.get("qualified_path") {
-        if let Some(name) = qp.get("name").and_then(|n| n.as_str()) {
-            if let Some(concrete) = assoc.get(name) {
-                // Recurse into the binding too (in case it nests further) — but a
-                // concrete impl binding (`i64`) has no projection, so this is a
-                // clone in the common case.
-                return subst_assoc_json(concrete, assoc);
-            }
-        }
+    if let Some(qp) = val.get("qualified_path")
+        && let Some(name) = qp.get("name").and_then(|n| n.as_str())
+        && let Some(concrete) = assoc.get(name)
+    {
+        // Recurse into the binding too (in case it nests further) — but a
+        // concrete impl binding (`i64`) has no projection, so this is a
+        // clone in the common case.
+        return subst_assoc_json(concrete, assoc);
     }
     match val {
         serde_json::Value::Object(o) => serde_json::Value::Object(
@@ -8393,13 +8371,13 @@ fn type_to_typeref(
         // depend on the id being in the index. An EXTERNAL std type (`Vec`/`String`
         // — always-nameable; `Duration`/`NaiveDate` — in EXTERNAL_TYPE_IDS) still
         // binds. Discrimination is by crate_id/index-provenance, NOT name-casing.
-        if let Some(id) = rp.get("id") {
-            if !resolved_path_is_bindable(id, raw_name) {
-                return Err(GenericDrop::NotBindable(format!(
-                    "unnameable type `{raw_name}` (no reachable public path; \
+        if let Some(id) = rp.get("id")
+            && !resolved_path_is_bindable(id, raw_name)
+        {
+            return Err(GenericDrop::NotBindable(format!(
+                "unnameable type `{raw_name}` (no reachable public path; \
                      not a known external/std type)"
-                )));
-            }
+            )));
         }
         let qualified = rp.get("id").and_then(reachable_local_path);
         let ext_path = rp.get("id").and_then(reachable_external_type_path);
@@ -8446,16 +8424,15 @@ fn type_to_typeref(
         // best-effort, substituting the SkyError-normalized sentinel (`String`, the
         // #34 path) ONLY when its own nameability fails. A nameable error
         // (firestore `FirestoreError`) keeps its rendering — byte-identical.
-        if raw_name.rsplit("::").next().unwrap_or(raw_name) == "Result" {
-            if let Some(arr) = args {
-                let types: Vec<&serde_json::Value> =
-                    arr.iter().filter_map(|a| a.get("type")).collect();
-                if types.len() == 2 {
-                    let ok_tref = type_to_typeref(types[0], param_idx)?;
-                    let err_tref = type_to_typeref(types[1], param_idx)
-                        .unwrap_or_else(|_| TypeRef::Prim("String".to_string()));
-                    return Ok(TypeRef::Ctor(path, vec![ok_tref, err_tref]));
-                }
+        if raw_name.rsplit("::").next().unwrap_or(raw_name) == "Result"
+            && let Some(arr) = args
+        {
+            let types: Vec<&serde_json::Value> = arr.iter().filter_map(|a| a.get("type")).collect();
+            if types.len() == 2 {
+                let ok_tref = type_to_typeref(types[0], param_idx)?;
+                let err_tref = type_to_typeref(types[1], param_idx)
+                    .unwrap_or_else(|_| TypeRef::Prim("String".to_string()));
+                return Ok(TypeRef::Ctor(path, vec![ok_tref, err_tref]));
             }
         }
         let mut trefs: Vec<TypeRef> = Vec::new();
@@ -8515,10 +8492,10 @@ fn type_to_typeref(
     // `TRCtor("()", [])`: `sky_of_typeref` yields `"()"` (so `parametric_function`
     // emits no result Param → Sky `Task Error ()`) and `renderTypeRef` yields
     // the Rust `()`. A NON-empty tuple stays unbindable (no Sky product-coercion).
-    if let Some(items) = val.get("tuple").and_then(|t| t.as_array()) {
-        if items.is_empty() {
-            return Ok(TypeRef::Ctor("()".to_string(), Vec::new()));
-        }
+    if let Some(items) = val.get("tuple").and_then(|t| t.as_array())
+        && items.is_empty()
+    {
+        return Ok(TypeRef::Ctor("()".to_string(), Vec::new()));
     }
     // dyn_trait / impl_trait / function_pointer / non-empty tuple / slice /
     // array / qualified_path / raw_pointer → outside the bindable subset.
@@ -8553,8 +8530,8 @@ fn type_to_typeref_toplevel(
     val: &serde_json::Value,
     param_idx: &HashMap<String, usize>,
 ) -> Result<TypeRef, GenericDrop> {
-    if let Some(p) = val.get("primitive").and_then(|p| p.as_str()) {
-        if matches!(
+    if let Some(p) = val.get("primitive").and_then(|p| p.as_str())
+        && matches!(
             p,
             "i8" | "i16"
                 | "i32"
@@ -8567,9 +8544,9 @@ fn type_to_typeref_toplevel(
                 | "usize"
                 | "f32"
                 | "f64"
-        ) {
-            return Ok(TypeRef::Prim(p.to_string()));
-        }
+        )
+    {
+        return Ok(TypeRef::Prim(p.to_string()));
     }
     type_to_typeref(val, param_idx)
 }
@@ -8698,13 +8675,11 @@ fn classify_closure_param(
 
     // A by-ref closure whose borrowed element is a concrete non-Clone type breaks
     // the owned-clone bridge → closure-by-ref-noclone.
-    if by_ref {
-        if let Some(bad) = arg_types.iter().find(|tr| !typeref_is_clone(tr)) {
-            return Err(GenericDrop::ClosureDrop(
-                ClosureDropTag::ByRefNoClone,
-                format!("by-ref {trait_name} over a non-Clone arg: {bad:?}"),
-            ));
-        }
+    if by_ref && let Some(bad) = arg_types.iter().find(|tr| !typeref_is_clone(tr)) {
+        return Err(GenericDrop::ClosureDrop(
+            ClosureDropTag::ByRefNoClone,
+            format!("by-ref {trait_name} over a non-Clone arg: {bad:?}"),
+        ));
     }
 
     Ok(TypeRef::Closure {
@@ -9464,10 +9439,10 @@ fn try_parametric_stub(
                 // [Wall-3b] If the original was a non-mut borrowed_ref and
                 // type_to_typeref accepted it (only possible via the Wall-3b
                 // String-coercible arm), record for `.as_ref()` at the call site.
-                if let Some(br) = input[1].get("borrowed_ref") {
-                    if !is_mutable(br) {
-                        borrow_as_ref_args.push(next_arg);
-                    }
+                if let Some(br) = input[1].get("borrowed_ref")
+                    && !is_mutable(br)
+                {
+                    borrow_as_ref_args.push(next_arg);
                 }
                 tref
             }
@@ -9746,12 +9721,11 @@ fn impl_assoc_bindings(
         // concrete RHS is under `type` (newer) or `default` (the impl's binding).
         let inner = &member["inner"];
         let assoc = inner.get("assoc_type").or_else(|| inner.get("type"));
-        if let Some(a) = assoc {
-            if let Some(rhs) = a.get("type").or_else(|| a.get("default")) {
-                if !rhs.is_null() {
-                    out.insert(name.to_string(), rhs.clone());
-                }
-            }
+        if let Some(a) = assoc
+            && let Some(rhs) = a.get("type").or_else(|| a.get("default"))
+            && !rhs.is_null()
+        {
+            out.insert(name.to_string(), rhs.clone());
         }
     }
     out
@@ -9847,21 +9821,20 @@ fn subst_self_projections(
             .and_then(|st| st.get("generic"))
             .and_then(|g| g.as_str())
             == Some("Self");
-        if is_self {
-            if let (Some(trait_id), Some(assoc)) = (
+        if is_self
+            && let (Some(trait_id), Some(assoc)) = (
                 qp.get("trait")
                     .and_then(|t| t.get("id"))
                     .map(item_id_to_str),
                 qp.get("name").and_then(|n| n.as_str()),
-            ) {
-                if let Some(concrete) = sibling_impl_assoc(index, &trait_id, self_id, assoc) {
-                    *changed = true;
-                    // Recurse into the binding in case it nests a further projection.
-                    return subst_self_projections(&concrete, self_id, index, changed, depth + 1);
-                }
-            }
-            // Unresolved Self-projection → leave as-is (fail-closed).
+            )
+            && let Some(concrete) = sibling_impl_assoc(index, &trait_id, self_id, assoc)
+        {
+            *changed = true;
+            // Recurse into the binding in case it nests a further projection.
+            return subst_self_projections(&concrete, self_id, index, changed, depth + 1);
         }
+        // Unresolved Self-projection → leave as-is (fail-closed).
     }
     match val {
         serde_json::Value::Object(o) => serde_json::Value::Object(
@@ -10860,16 +10833,16 @@ fn string_key_impl_substitute(
         }
         let for_ty = impl_data.get("for").or_else(|| impl_data.get("for_"));
         // accept ONLY a direct resolved_path whose last segment is "String"
-        if let Some(ft) = for_ty {
-            if let Some(rp) = ft.get("resolved_path") {
-                let p = rp
-                    .get("path")
-                    .or_else(|| rp.get("name"))
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("");
-                if p.rsplit("::").next() == Some("String") {
-                    return Some(ft.clone());
-                }
+        if let Some(ft) = for_ty
+            && let Some(rp) = ft.get("resolved_path")
+        {
+            let p = rp
+                .get("path")
+                .or_else(|| rp.get("name"))
+                .and_then(|s| s.as_str())
+                .unwrap_or("");
+            if p.rsplit("::").next() == Some("String") {
+                return Some(ft.clone());
             }
         }
     }
@@ -10906,19 +10879,17 @@ fn monomorphize_concrete_impl_params(
     let mut where_bounds: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
     if let Some(wps) = fn_data["generics"]["where_predicates"].as_array() {
         for wp in wps {
-            if let Some(bp) = wp.get("bound_predicate") {
-                if let Some(g) = bp
+            if let Some(bp) = wp.get("bound_predicate")
+                && let Some(g) = bp
                     .get("type")
                     .and_then(|t| t.get("generic"))
                     .and_then(|g| g.as_str())
-                {
-                    if let Some(bs) = bp.get("bounds").and_then(|b| b.as_array()) {
-                        where_bounds
-                            .entry(g.to_string())
-                            .or_default()
-                            .extend(bs.iter().cloned());
-                    }
-                }
+                && let Some(bs) = bp.get("bounds").and_then(|b| b.as_array())
+            {
+                where_bounds
+                    .entry(g.to_string())
+                    .or_default()
+                    .extend(bs.iter().cloned());
             }
         }
     }
@@ -10972,13 +10943,13 @@ fn monomorphize_concrete_impl_params(
                 // monomorphize to owned String. Gate on C3 (param by-value everywhere)
                 // to exclude `fn f<I>(&self, x: &I)` shapes. Covers
                 // toml/serde_json `Value::get<I: Index>(String)`.
-                if fn_serde_param_all_admissible(fn_data, name) {
-                    if let Some(string_node) = string_key_impl_substitute(&trait_key, index) {
-                        subst.insert(name.to_string(), string_node);
-                        matched_send_keys.push((name.to_string(), trait_key));
-                        removed.insert(name.to_string());
-                        continue; // resolved to String — proceed to next param
-                    }
+                if fn_serde_param_all_admissible(fn_data, name)
+                    && let Some(string_node) = string_key_impl_substitute(&trait_key, index)
+                {
+                    subst.insert(name.to_string(), string_node);
+                    matched_send_keys.push((name.to_string(), trait_key));
+                    removed.insert(name.to_string());
+                    continue; // resolved to String — proceed to next param
                 }
                 // 0 or >1 concrete impls and no String fallback → never guess.
                 record_generic_drop(
@@ -11145,19 +11116,17 @@ fn impl_self_mono_subst(
     }
     if let Some(wps) = generics.get("where_predicates").and_then(|w| w.as_array()) {
         for wp in wps {
-            if let Some(bp) = wp.get("bound_predicate") {
-                if let Some(g) = bp
+            if let Some(bp) = wp.get("bound_predicate")
+                && let Some(g) = bp
                     .get("type")
                     .and_then(|t| t.get("generic"))
                     .and_then(|g| g.as_str())
-                {
-                    if let Some(bs) = bp.get("bounds").and_then(|b| b.as_array()) {
-                        param_bounds
-                            .entry(g.to_string())
-                            .or_default()
-                            .extend(bs.iter().cloned());
-                    }
-                }
+                && let Some(bs) = bp.get("bounds").and_then(|b| b.as_array())
+            {
+                param_bounds
+                    .entry(g.to_string())
+                    .or_default()
+                    .extend(bs.iter().cloned());
             }
         }
     }
@@ -11237,16 +11206,15 @@ fn projected_method_has_unverifiable_where(
         return false;
     };
     for wp in wps {
-        if let Some(bp) = wp.get("bound_predicate") {
-            if let Some(g) = bp
+        if let Some(bp) = wp.get("bound_predicate")
+            && let Some(g) = bp
                 .get("type")
                 .and_then(|t| t.get("generic"))
                 .and_then(|g| g.as_str())
-            {
-                if g != "Self" && proj.contains_key(g) {
-                    return true; // a where-bound on a monomorphized param → drop.
-                }
-            }
+            && g != "Self"
+            && proj.contains_key(g)
+        {
+            return true; // a where-bound on a monomorphized param → drop.
         }
     }
     false
@@ -11322,12 +11290,11 @@ fn project_trait_default_methods(
     let mut impl_methods: HashSet<String> = HashSet::new();
     if let Some(items) = impl_data.get("items").and_then(|i| i.as_array()) {
         for id in items {
-            if let Some(mi) = index.get(&item_id_to_str(id)) {
-                if mi.get("inner").and_then(|i| i.get("function")).is_some() {
-                    if let Some(n) = mi.get("name").and_then(|n| n.as_str()) {
-                        impl_methods.insert(n.to_string());
-                    }
-                }
+            if let Some(mi) = index.get(&item_id_to_str(id))
+                && mi.get("inner").and_then(|i| i.get("function")).is_some()
+                && let Some(n) = mi.get("name").and_then(|n| n.as_str())
+            {
+                impl_methods.insert(n.to_string());
             }
         }
     }
@@ -11489,19 +11456,19 @@ fn subst_generic_json(
     map: &std::collections::HashMap<String, serde_json::Value>,
     pos: BoundPos,
 ) -> serde_json::Value {
-    if let Some(g) = val.get("generic").and_then(|g| g.as_str()) {
-        if let Some(concrete) = map.get(g) {
-            return concrete.clone();
-        }
+    if let Some(g) = val.get("generic").and_then(|g| g.as_str())
+        && let Some(concrete) = map.get(g)
+    {
+        return concrete.clone();
     }
     // impl Trait: replace with the concrete the bounds resolve to (if any).
     // POSITION-AWARE ([C-R]): in RETURN position an iterator-trait impl Trait
     // resolves to `None`, so it stays an unresolved impl_trait node — the
     // `impl_traits_resolvable(output)` gate then drops the whole fn.
-    if let Some(bounds) = val.get("impl_trait").and_then(|b| b.as_array()) {
-        if let Some(concrete) = resolve_param_bounds(bounds, pos) {
-            return concrete;
-        }
+    if let Some(bounds) = val.get("impl_trait").and_then(|b| b.as_array())
+        && let Some(concrete) = resolve_param_bounds(bounds, pos)
+    {
+        return concrete;
     }
     match val {
         serde_json::Value::Object(obj) => serde_json::Value::Object(
@@ -11537,19 +11504,17 @@ fn resolve_generics(
         std::collections::HashMap::new();
     if let Some(wps) = fn_data["generics"]["where_predicates"].as_array() {
         for wp in wps {
-            if let Some(bp) = wp.get("bound_predicate") {
-                if let Some(g) = bp
+            if let Some(bp) = wp.get("bound_predicate")
+                && let Some(g) = bp
                     .get("type")
                     .and_then(|t| t.get("generic"))
                     .and_then(|g| g.as_str())
-                {
-                    if let Some(bs) = bp.get("bounds").and_then(|b| b.as_array()) {
-                        where_bounds
-                            .entry(g.to_string())
-                            .or_default()
-                            .extend(bs.iter().cloned());
-                    }
-                }
+                && let Some(bs) = bp.get("bounds").and_then(|b| b.as_array())
+            {
+                where_bounds
+                    .entry(g.to_string())
+                    .or_default()
+                    .extend(bs.iter().cloned());
             }
         }
     }
@@ -11615,14 +11580,13 @@ fn resolve_generics(
 /// drop to the specific `iterator-return-undecidable` coverage tag ([C-R])
 /// rather than the generic silent impl-trait drop.
 fn contains_iterator_impl_trait(val: &serde_json::Value) -> bool {
-    if let Some(bounds) = val.get("impl_trait").and_then(|b| b.as_array()) {
-        if bounds
+    if let Some(bounds) = val.get("impl_trait").and_then(|b| b.as_array())
+        && bounds
             .iter()
             .filter_map(trait_bound_name)
             .any(|n| is_iterator_trait_name(&n))
-        {
-            return true;
-        }
+    {
+        return true;
     }
     match val {
         serde_json::Value::Object(obj) => obj.values().any(contains_iterator_impl_trait),
@@ -11632,10 +11596,10 @@ fn contains_iterator_impl_trait(val: &serde_json::Value) -> bool {
 }
 
 fn impl_traits_resolvable(val: &serde_json::Value, pos: BoundPos) -> bool {
-    if let Some(bounds) = val.get("impl_trait").and_then(|b| b.as_array()) {
-        if resolve_param_bounds(bounds, pos).is_none() {
-            return false;
-        }
+    if let Some(bounds) = val.get("impl_trait").and_then(|b| b.as_array())
+        && resolve_param_bounds(bounds, pos).is_none()
+    {
+        return false;
     }
     match val {
         serde_json::Value::Object(obj) => obj.values().all(|v| impl_traits_resolvable(v, pos)),
@@ -12148,7 +12112,10 @@ mod tests {
             panic!("expected refusal without --allow-build-scripts, got: {result:?}");
         };
         assert!(msg.contains("openssl-sys"), "must name openssl-sys: {msg}");
-        assert!(msg.contains("serde_derive"), "must name serde_derive: {msg}");
+        assert!(
+            msg.contains("serde_derive"),
+            "must name serde_derive: {msg}"
+        );
         assert!(
             msg.contains("--allow-build-scripts"),
             "must name the opt-in flag: {msg}"

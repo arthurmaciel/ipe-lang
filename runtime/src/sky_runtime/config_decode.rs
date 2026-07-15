@@ -261,15 +261,16 @@ mod load_from_file_tests {
 
     #[test]
     fn over_cap_file_errs() {
-        let p =
-            std::env::temp_dir().join(format!("sky_cfg_over_cap_{}.json", std::process::id()));
+        let p = std::env::temp_dir().join(format!("sky_cfg_over_cap_{}.json", std::process::id()));
         std::fs::write(&p, vec![b'a'; 8192]).unwrap();
-        std::env::set_var("SKY_CONFIG_MAX_BYTES", "1024");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::set_var("SKY_CONFIG_MAX_BYTES", "1024") };
         let res: SkyResult<String, String> = block(config_load_from_file(
             p.to_string_lossy().into_owned(),
             name_decoder(),
         ));
-        std::env::remove_var("SKY_CONFIG_MAX_BYTES");
+        // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
+        unsafe { std::env::remove_var("SKY_CONFIG_MAX_BYTES") };
         let _ = std::fs::remove_file(&p);
         assert!(
             matches!(res, SkyResult::Err(_)),
