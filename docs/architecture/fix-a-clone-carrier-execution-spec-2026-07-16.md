@@ -807,3 +807,219 @@ exercised for the S4b Arc-promotion sub-case; the ordinary `Fun` capture needs
 no sibling coercion at all because every `Fun` renders the same Arc carrier
 unconditionally. Position-independence is a THEOREM of the single-carrier +
 single-classifier design, not a per-site patch.
+
+---
+
+## Implementation outcome — the universal-Arc premise is UNSOUND; adopt the reference's lean position-typed carrier
+
+This section is the authoritative correction. It SUPERSEDES the universal
+Box→Arc carrier flip in §1–§3 and the "zero runtime signature edits" claim in
+§5. The universal flip was implemented and empirically FALSIFIED at the cargo
+build (THE SEAL), then reverted. The correct target is the reference's
+lean, position-typed carrier model. Evidence and design below.
+
+### B1. `Arc<dyn Fn>` does NOT satisfy `impl Fn` — the SEAL break the spec missed
+
+Spec §5 asserts "an `Arc<dyn Fn>` satisfies `impl Fn` (blanket `impl Fn for
+Arc<F: Fn>` via `Deref`)". **That blanket impl does not exist in std.** std
+provides `impl<A, F: Fn<A> + ?Sized> Fn<A> for Box<F>` and `... for &F`, but
+NOT for `Arc<F>`. Verified by a standalone `rustc` probe:
+
+* `Box<dyn Fn(i64)->i64>` as an `impl Fn` arg → compiles.
+* `Arc<dyn Fn(i64)->i64>` as an `impl Fn` arg → `E0277: expected a Fn(_) closure,
+  found Arc<dyn Fn…>`.
+* `&*arc` (`&dyn Fn`) as an `impl Fn` arg → compiles.
+
+Consequence: after the universal flip, EVERY HOF-kernel call whose function
+argument is `impl Fn` (`list_map`, `list_filter`, `list_foldl`, `list_foldr`,
+`task_map`, `task_and_then`, … — 53 `impl Fn`/`impl FnOnce` param sites across
+the runtime) fails `cargo build` with E0277. Confirmed by ISOLATED clean builds
+(fresh per-golden target, no cache contamination) of the freshly-emitted
+`m4a_fns_map` and `m4a_fns_foldl`: both `error[E0277]` — `Arc<dyn Fn>` where the
+kernel wants `impl Fn`. This is a skyc-exit-0-then-cargo-fail across the entire
+HOF surface — the exact class THE SEAL forbids. The universal-Arc flip is
+therefore rejected outright.
+
+(Caution recorded for the implementer: a SHARED cargo target gives FALSE PASSes
+here — the emitted binary artifact name (`sky-app`) collides across goldens, so
+cargo reuses a stale prior compile and never rebuilds the changed `main.rs`.
+Only an ISOLATED per-golden target reveals the real E0277. This masked the break
+on the first pass.)
+
+### B2. The reference does NOT use a universal Arc carrier — it is position-typed and lean
+
+`../sky/src/Sky/Generate/Rust/Builder/ExprEmitter.hs` renders a function value
+by POSITION, in the leanest form each position admits — matching the user
+directive "if we don't need Arc or Box, don't use it":
+
+* **HOF `impl Fn` arg (the common case):** a lambda renders as a BARE `move
+  |..| ..` closure — no `Box`, no `Arc`, zero heap indirection. Captured non-Copy
+  vars inside still `.clone()` at use (`ecCloneVars`). This is `argToRustString
+  ctx noCloneFn a`; the `isListHofClosurePos` / kernel list (`list_map`,
+  `list_filter`, `list_foldl`, …) marks these arg slots.
+* **Stored into an `Arc<dyn Fn>` field / event-callback / Handler slot:**
+  `wrapStoredFn` Arc-wraps (`Arc::new(move ..)` + pre-clone captures) — ONLY when
+  the slot type is genuinely `Arc<dyn Fn>` (`isHandlerArcParam` / `isEventCbParam`
+  gate on the rendered param type).
+* **A function VALUE (an already-built `Arc<dyn Fn>`, e.g. a `Handler` binding)
+  flowing into an `impl Fn` slot:** RE-DISPATCH through a fresh concrete closure
+  `{ let __hcb = v.clone(); move |a| __hcb(a) }` (ExprEmitter.hs ~2118-2137).
+  The fresh closure `impl Fn`s; it captures the `Clone` Arc. (Probe-verified:
+  `move |a,b| (arc.clone())(a,b)` satisfies `impl Fn + Clone`.)
+* **Captured function value forwarded across a closure boundary (the #221
+  shape):** `arcWrapClosure` — Arc-wrap + pre-clone the captured outer vars, so
+  the Arc owns `'static` captures and the outer closure stays re-callable.
+
+So the reference's Arc is applied ONLY where a value is STORED or CAPTURED-AND-
+FORWARDED — never at a bare HOF-arg position. Our current tree pins `Box<dyn
+Fn>` universally (which happens to satisfy `impl Fn`), with Arc special-cases at
+Server/WS slots. The correct move is toward the reference's leaner model, not a
+universal Arc.
+
+### B3. The narrow #221 fix and WHY the carrier alone cannot deliver it
+
+#221 (`36-composite-server`, minimal `wrap`/`guarded`) is a CAPTURE problem: a
+function value `wrap` is captured as a callee at lambda-nesting depth 1 inside
+`guarded`'s eta-expanded residual. At depth 1 a bare `Box<dyn Fn>` capture is
+unsound (the inner `move` closure steals it from the outer env → E0525), so the
+lowerer fail-closes SKY-L0126. The ONLY sound bare position is a depth-0 callee.
+
+The lean fix is to Arc-promote a fn-value captured at depth ≥ 1 (Arc is `Clone`,
+so each capturing closure clones the pointer — a refcount bump). The tree
+ALREADY has this machinery for `let`-bound lambda LITERALS: `needs_shared_capture`
+→ `Expr::SharedLambda` (Arc) + `force_shared_capture_clones` (the pre-clone
+relay). Two structural blockers were found by probing, and BOTH must be solved
+for a sound fix:
+
+1. **Ordering / look-ahead.** The capture classifier (`rewrite_captured_clones`
+   in `lower_lambda`) runs when `guarded` is lowered and classifies `wrap` via
+   `clone_class(Fun) = NonClone` → L0126 — BEFORE `lower_let_pvar` ever promotes
+   `wrap`. So `wrap`'s Arc promotion is decided too late to inform the classifier.
+   Widening `needs_shared_capture` to fire on any depth ≥ 1 does NOT fix this:
+   the L0126 still fires first. **The classifier must KNOW, when it classifies a
+   capture, that the captured symbol will be Arc-carried.** This needs a lowerer
+   pre-pass that computes the Arc-promotion set for a scope's fn-typed bindings
+   BEFORE lowering the bindings that capture them, threaded into `captured_locals`
+   so a promotion-bound symbol classifies `CloneOk` (→ `CloneVar`) not `NonClone`.
+
+2. **Promotion must cover NON-lambda-literal fn-values.** Probe: widening
+   `needs_shared_capture` alone made `force_shared_capture_clones` emit a
+   pre-clone `{ let g = g.clone(); … }` for `g = f 1` (a partial-app VALUE, a
+   `Call` not an `Expr::Lambda`). The `SharedLambda` promotion is gated `if let
+   Expr::Lambda = value`, so `g` stayed `Box<dyn Fn>` — and `g.clone()` on a
+   `Box<dyn Fn>` is `E0599` (Box<dyn Fn> is not `Clone`). Confirmed by isolated
+   build of `i216_partial_app`. So the promotion path must be generalised to
+   change the CARRIER of any captured fn-value (lambda literal, partial-app
+   `Call` result, top-level fn-item reference) to `Arc<dyn Fn>` — not just
+   lambda literals — before any `.clone()` relay is minted on it.
+
+These two are the real work #221 needs. Both are sound and bounded but exceed a
+mechanical carrier flip: they rearchitect the fn-value promotion + capture-
+classification path. A partial version (either alone) is SEAL-UNSOUND
+(E0599/E0126), so it must land whole.
+
+### B4. Corrected design (supersedes §1–§3)
+
+Do NOT flip the general `Fun` carrier to Arc. Instead:
+
+1. **Keep the default fn-value carrier lean.** Long-term target: bare closures at
+   `impl Fn` HOF-arg positions (drop the `Box` pin there too — the reference
+   does), matching the user directive. Minimum for #221: keep today's `Box`
+   default (it satisfies `impl Fn`) EXCEPT at capture-and-forward positions.
+2. **Arc ONLY at capture-and-forward positions.** Generalise the S4b promotion:
+   a fn-typed binding captured at lambda-depth ≥ 1 (any fn-value shape, not only
+   lambda literals) is promoted to an `Arc<dyn Fn>` carrier at its binding site,
+   and every capturing closure reads it via `CloneVar` (`Arc::clone`).
+3. **Look-ahead pre-pass.** In `lower_let` (and the top-level-def path for
+   `36`'s `kont`/handler shapes), compute the depth-≥1-captured fn-typed symbol
+   set from the CANON scope BEFORE lowering the capturing bindings; thread it
+   into `captured_locals`'s classifier so those symbols route to `clone_set`
+   (CloneVar), never `noncl_set` (L0126). This is the structural discharge of
+   the ordering blocker (B3.1).
+4. **`carrier_is_clone` stays** (already landed in `sky_ir`) as the single
+   authority for "does this carrier implement `Clone`", consulted by both the
+   classifier and the (position-typed) emitter. `Fun`'s carrier-clone-ness is now
+   POSITION-DEPENDENT (Arc at capture positions → Clone; bare/Box at HOF-arg →
+   not `Clone` but also never captured), so `carrier_is_clone` describes the
+   Arc-capture carrier specifically; the HOF-arg bare closure is a distinct
+   position the classifier never asks about (it is consumed, not captured).
+5. **HOF-arg re-dispatch for Arc VALUES.** Where an already-Arc fn VALUE flows
+   into an `impl Fn` kernel slot, emit the reference's re-dispatch `{ let v =
+   v.clone(); move |a..| (v)(a..) }` so the concrete closure satisfies `impl Fn`.
+
+The `l0127_*_reuse_gated` re-classification (A1) still holds in spirit but its
+mechanism changes: a `Maybe (Int -> Int)` reused compiles once the inner `Fun`
+is Arc-carried AT THE CAPTURE/STORE position; the reuse gate narrows the same
+way. Re-audit against the position-typed carrier, not the universal one.
+
+### B5. Status, and why this is an honest escalation (§0)
+
+The universal-Arc approach the spec prescribed is unsound (B1) and was reverted
+to a green baseline. The correct fix (B3/B4) is a bounded but substantial
+rearchitecture of the fn-value promotion + capture-classification path — a
+multi-stage change with its own golden sweep and SEAL gate — not the one-atomic-
+commit carrier flip the spec scoped. Landing a partial version is SEAL-unsound
+(proven: E0277 HOF-arg break, E0599 Box-clone break). Per PRINCIPLES §"root
+causes only" and DEVELOPMENT.md §0 (an honest tracked block beats a fake seal),
+`36-composite-server` remains RED pending the B4 rearchitecture; the diagnosis,
+the falsification of the universal-Arc premise, and the corrected reference-
+faithful design are the durable artifacts delivered here. The `carrier_is_clone`
+predicate (sound, additive, unused-until-B4) is retained in `sky_ir`.
+
+### B6. What WAS landed (partial, sound) and the exact blocker for the rest
+
+Implemented and verified in `sky_lower` (byte-neutral across all 67 goldens,
+`sky_lower`+`sky_ir` tests green, workspace `cargo check` green):
+
+* `sky_ir::carrier_is_clone` — the single 2-valued carrier-`Clone` authority
+  (exhaustive, no `_`), plus a `clone_class == !NonClone` agreement test.
+* A **per-`let` canon look-ahead pre-pass** (`lower_let`): a fn-typed lambda
+  `let` binding that is captured at lambda-depth ≥ 1 OR reused (> 1 non-callee
+  use) IN ITS OWN CANON `let` SCOPE is recorded in `arc_promoted_fn_syms`. The
+  capture classifier (`captured_locals` in `lower_lambda`) routes those symbols
+  to `clone_set` (`CloneVar`) instead of SKY-L0126, and `lower_let_pvar` routes
+  them to `rewrite_multiuse_clones` + the `SharedLambda` (Arc) promotion instead
+  of `reject_fn_value_reuse` — one set drives all three, so the carrier and the
+  `.clone()`s agree (no E0599/E0126). Helpers: `canon_sym_captured_at_depth_ge1`,
+  `canon_fn_value_uses`.
+
+This GREENS the DIRECT (non-eta-synthesized) #221 shape — the minimal
+`wrap`/`guarded` trigger where the capturing lambda exists verbatim in canon:
+`skyc` exit 0, emitted Rust cargo-builds, runs to the reference value. `wrap` is
+Arc only where captured; `guarded` and the eta-lambdas stay `Box`. That is the
+leanest correct carrier, exactly the user directive.
+
+**The remaining blocker — proven by instrumentation, the reason `36` is still
+red:** in `36-composite-server`, `wrap` trips SKY-L0127 with `count=2` NON-callee
+uses that DO NOT EXIST IN CANON. They are SYNTHESIZED by eta-expansion DURING
+lowering: `guarded h = wrap (rateLimit … h)` supplies 1 of `wrap`'s 2 flattened
+args, so `eta_expand_value_partial` builds a residual `\eta_0 -> wrap(<partial>,
+eta_0)` that CAPTURES `wrap` as a value inside a new lambda. A canon-level scan
+(the pre-pass) cannot see these — they are not in the source AST. Probe:
+`PREPASS-DECIDE name=wrap captured=false reuse_n=0`, yet post-eta
+`reject_fn_value_reuse(wrap) count=2`. So a canon pre-pass is STRUCTURALLY
+insufficient for the eta-synthesized capture/reuse; the promotion decision must
+be made on the LOWERED IR, after eta-expansion, but the capture classification
+currently runs DURING lowering — the ordering problem, now proven unfixable by a
+pre-pass.
+
+**The complete fix (for the next agent) is one of:**
+
+1. **Lowered-IR promotion post-pass (recommended, lean).** After lowering a def
+   body (before TCO), run a whole-`Func`-body pass that: (a) finds every fn-typed
+   IR binding captured at closure-depth ≥ 1 or reused as a value > 1× (reusing
+   the existing IR walkers `collect_lambda_capture_depths` / `count_fn_value_uses`
+   — these see the eta-synthesized closures because they run post-lowering), (b)
+   flips those bindings' carrier to `Arc<dyn Fn>` (`SharedLambda`), and (c)
+   rewrites their reads to `CloneVar`. This is the def-level generalisation of the
+   per-`let` pre-pass already landed — same logic, moved to post-lowering so it
+   sees eta-synthesized captures. Keeps the lean carrier (Arc only where needed).
+   Must also cover non-lambda fn-VALUES (`g = f 1`, B3.2) by minting the Arc
+   carrier for any promoted fn binding, not only `Expr::Lambda` literals.
+2. **Reference uniform-Arc + HOF-arg discipline (B2/B4).** Bigger: Arc every fn
+   carrier, then add the `impl Fn` HOF-arg re-dispatch (`move |a| (v.clone())(a)`)
+   + bare-closure-at-HOF-arg so the 53 `impl Fn` kernel sites still compile.
+
+Option 1 is smaller, matches the lean directive, and directly extends the landed
+per-`let` pre-pass; prefer it. The per-`let` pre-pass can be REPLACED by the
+def-level post-pass (not kept alongside) once (1) lands.
