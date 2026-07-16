@@ -1,0 +1,45 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- SKY-L0110 (#216) seal: partial + over-application of a first-class function
+-- VALUE. The named-callee path already eta-expands (`add 2` -> `\n -> add(2,
+-- n)`); this fixture pins the VALUE path the reference (`../sky`) handles by
+-- emitting curried single-arg closures. Our IR flattens the curried chain into
+-- one multi-parameter closure, so a value applied to too-few args must be
+-- eta-expanded into a residual closure `\eta... -> (value)(supplied..., eta...)`.
+--
+-- Three shapes, each producing the value full application would:
+--   1. bound partial:  `g = f 1` (full-applies f, arity 1, returns a 2-closure)
+--                      then `h = g 2` — value partial, residual Int -> Int.
+--   2. over-application `f 10 20` — f's one param saturates, surplus `20`
+--      under-saturates the returned 2-closure, residual Int -> Int.
+--   3. pipe partial: `100 |> add3 1 2` == `(add3 1 2) 100`, a named partial that
+--      eta-expands and is applied to the piped value.
+--
+-- Go oracle (`sky run`): prints `6`, `33`, `103`, exit 0.
+
+
+f : Int -> Int -> Int -> Int
+f a =
+    \b -> \c -> a + b + c
+
+
+add3 : Int -> Int -> Int -> Int
+add3 a b c =
+    a + b + c
+
+
+main =
+    let
+        g = f 1
+        h = g 2
+        boundPartial = h 3
+
+        overPartial = (f 10 20) 3
+
+        pipePartial = 100 |> add3 1 2
+
+        _ = println (String.fromInt boundPartial)
+        _ = println (String.fromInt overPartial)
+    in
+    println (String.fromInt pipePartial)
