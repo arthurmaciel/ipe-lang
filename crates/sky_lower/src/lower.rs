@@ -4743,7 +4743,7 @@ fn pat_binds_symbol(pat: &Pat, target: Symbol) -> bool {
 /// and [`rewrite_destructure_read`] (#125). Factoring the walk out keeps the
 /// two rewrites' shadow handling provably identical instead of two chances
 /// to drift (spec §2.5,
-/// `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md`).
+/// `docs/adr/0011-emitter-clone-borrow-discipline.md`).
 ///
 /// Shadow-safe: stops rewriting into any scope where `target` is rebound by:
 /// * `Expr::Let { name, … }` — `name == target` shadows in `body`
@@ -6421,7 +6421,7 @@ impl<'a> Lowerer<'a> {
                 // `SkyStringify` impl renders a non-derivable field as the
                 // `<fn>` placeholder instead of calling a derive. No gate
                 // needed at declaration time; see
-                // `docs/architecture/ctor-payload-function-design.md`.
+                // `docs/adr/0015-constructor-payload-functions-narrowed-gates.md`.
                 fields.push(ir);
             }
             variants.push(Variant {
@@ -9578,7 +9578,7 @@ impl<'a> Lowerer<'a> {
     /// fully-applied value, and finishing it needs a nested-closure
     /// (`curryN`-style) lowering this Stage does not implement (Stage 2,
     /// tracked separately — see
-    /// `docs/architecture/ctor-payload-function-design.md` §3). Fail closed
+    /// `docs/adr/0015-constructor-payload-functions-narrowed-gates.md` §3). Fail closed
     /// here rather than let an unfinished chain reach a use site with no
     /// sound lowering.
     ///
@@ -12688,7 +12688,7 @@ impl<'a> Lowerer<'a> {
     /// BACKSTOP (Tier 1) behind the primary type-checker obligation
     /// (`sky_types::constrain::constrain_var_kernel`'s `hof_kernel_result`
     /// `TyBounds` tie, Tier 2 — see
-    /// `docs/architecture/ctor-payload-andmap-arity-gate-design.md` §3.2):
+    /// `docs/adr/0016-andmap-arity-gate-type-obligation.md` §3.2):
     /// Tier 2 already rejects the hazard as a type error (`SKY-T0014`)
     /// before lowering ever runs; this backstop gives a second, independent
     /// line of defense keyed on the ACTUAL kernel-call resolution boundary
@@ -14293,7 +14293,7 @@ impl<'a> Lowerer<'a> {
     /// binder binds gets its free reads rewritten to a fresh, masked
     /// re-destructure of a thunk call
     /// (`{ let (d1, _) = (destr_thunk_N)(); d1 }`) — see
-    /// `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md` §2.
+    /// `docs/adr/0011-emitter-clone-borrow-discipline.md` §2.
     /// Sound for the same reason Fix C is sound: Decoders are pure values, so
     /// re-evaluating the construction per read is semantics-neutral.
     /// Uniformly thunking ALL bound names (Decoder-typed or not) mirrors Fix
@@ -15370,7 +15370,7 @@ mod tests {
     /// [`Lowerer`] — [`decl_equiv_legacy_match`] and
     /// [`callee_arity_matches_decl_arity`] both call this rather than
     /// hand-rolling their own copy of the ~35-symbol interning block (see
-    /// `docs/architecture/class3-kernel-registry-fix-spec-2026-07-09.md`
+    /// `docs/adr/0009-kernel-registry-single-source-and-sealed-match.md`
     /// Item 3, Step 1: "Reuse the exact `BuiltinCtors` construction ...
     /// verbatim — do not hand-roll a second copy").
     fn build_test_builtin_ctors(interner: &mut Interner) -> BuiltinCtors {

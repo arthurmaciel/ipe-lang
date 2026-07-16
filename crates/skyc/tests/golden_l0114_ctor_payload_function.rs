@@ -2,8 +2,8 @@
 //! `Maybe`/`Result`/user-union constructor payloads) + the T3 `andMap`
 //! curried-payload gate + the T4 fn-value-reuse gate.
 //!
-//! See `docs/architecture/ctor-payload-function-design.md` (Stage 1 overview)
-//! and `docs/architecture/ctor-payload-andmap-arity-gate-design.md` (the
+//! See `docs/adr/0015-constructor-payload-functions-narrowed-gates.md` (Stage 1 overview)
+//! and `docs/adr/0016-andmap-arity-gate-type-obligation.md` (the
 //! revised, two-tier T3 design implemented here, after three same-day revert
 //! incidents on 2026-07-10 — see `BACKLOG.md`'s `#90` row for the incident
 //! log).

@@ -183,7 +183,7 @@ struct Builtins {
     ed_custom: Symbol,
     /// `PanicInfo` / `TypeInfo` / `ErrorInfo` — NOMINAL type-constructor
     /// symbols (SEAL fix 2026-07-11, `docs/architecture/
-    /// error-record-literal-seal-fix-2026-07-11.md`). The three payload
+    /// docs/adr/0017-error-payload-nominal-identity.md`). The three payload
     /// record types are opaque nominal Cons (like the server `Request`), NOT
     /// structural records: a bare record literal must not unify with them —
     /// the runtime backs them with concrete structs (`SkyPanicInfo` /
@@ -1239,7 +1239,7 @@ pub struct Builder<'a> {
     /// placeholder here, discharged post-solve by `promote_untyped_boundaries`
     /// against the source binding's *generalized* scheme — see the "Boundary
     /// Scheme Promotion" design at
-    /// `docs/architecture/class1-inference-fix-spec-2026-07-09.md`.
+    /// `docs/adr/0008-untyped-binding-module-boundary-generalization.md`.
     pending_instantiations: Vec<PendingInstantiation>,
 }
 
@@ -2711,7 +2711,7 @@ impl<'a> Builder<'a> {
             }
             // Higher-order-kernel callback-result obligation (#90 T3,
             // primary/Tier-2 mechanism — see
-            // `docs/architecture/ctor-payload-andmap-arity-gate-design.md`).
+            // `docs/adr/0016-andmap-arity-gate-type-obligation.md`).
             // Every `Maybe`/`Result` higher-order kernel FULLY APPLIES its
             // callback at runtime (`FnOnce(..) -> R` with an exact arity),
             // while the IR flattens a curried Sky function into one
@@ -3194,7 +3194,7 @@ impl<'a> Builder<'a> {
                         // already does (identical precedent in `constrain_lambda`, the
                         // `regions.insert` on every lambda-parameter span below).
                         // Class 4 item C (#158) —
-                        // docs/architecture/class4-pattern-lowering-fix-spec-2026-07-09.md.
+                        // docs/adr/0010-pattern-and-lowering-completeness.md.
                         self.regions
                             .insert((self.current_home.clone(), sub.span), av);
                     }
@@ -4418,8 +4418,8 @@ impl<'a> Builder<'a> {
             // `"ISO_CODE AMOUNT"` TEXT column (the lossless serialisation
             // `SqlMoney` writes on INSERT) back into its amount/currency-code
             // pair. Deliberately NOT `Decoder Money`: `Money`/`Currency` are
-            // project-generated types unnameable from this crate (see #34 spec,
-            // `docs/architecture/class7-sql-db-fix-spec-2026-07-09.md` §6) — a
+            // project-generated types unnameable from this crate (see #34;
+            // `docs/adr/0013-multi-driver-db-compile-time-selection.md`) — a
             // recorded divergence from the Go backend's `Decoder Money`,
             // documented in `docs/divergences-from-sky.md`.
             K::DbDecMoney => fun(string(), dec(tuple2(decimal(), string()))),
@@ -4900,7 +4900,7 @@ impl<'a> Builder<'a> {
             // genuine `Ty::Var(u32::MAX)` hole (legacy `kernel_ty` has no Html/
             // Ui/Background/Border/Font arm), so all land in FIRST_SCHEMED.
             // Verified vs runtime fn params + lower `callee_arity` per
-            // docs/architecture/html-ui-live-scheme-table.md. `Live.appRouted`
+            // docs/adr/0020-html-ui-live-kernel-arity-tripwire.md. `Live.appRouted`
             // is EXCLUDED (REACHABLE_BUT_UNLOWERED) — its lowering is
             // `Feature::RoutedLiveApp` unsupported, so a caller fails closed.
 
@@ -5913,7 +5913,7 @@ impl<'a> Builder<'a> {
 // ===========================================================================
 // Boundary Scheme Promotion — untyped top-level binding generalization.
 //
-// See `docs/architecture/class1-inference-fix-spec-2026-07-09.md` for the
+// See `docs/adr/0008-untyped-binding-module-boundary-generalization.md` for the
 // full design. Summary: an unannotated top-level binding is monomorphic
 // *within its home module* (unchanged), but is generalized into a scheme at
 // its module's boundary, so each cross-module reference instantiates it
@@ -6205,7 +6205,7 @@ fn mint_synth_symbol(interner: &mut Interner, next: &mut u32) -> DResult<Symbol>
 /// reference and generalize every untyped def at its home module's boundary.
 ///
 /// Runs once, over the WHOLE linked program, between `solve_attributed` and
-/// `resolve_deferred` (see `docs/architecture/class1-inference-fix-spec-2026-07-09.md`'s
+/// `resolve_deferred` (see `docs/adr/0008-untyped-binding-module-boundary-generalization.md`'s
 /// algorithm section). Walks `module_order` (dependency-first topo order): for
 /// each module, first discharges its own OUTGOING pending instantiations
 /// (against schemes already computed for modules it depends on — always
@@ -7222,7 +7222,7 @@ mod registry_phase_c_tests {
             // Std.Html / Std.Ui / Sky.Live rendering family (42 — task #74).
             // All genuine `Ty::Var(u32::MAX)` holes (legacy `kernel_ty` has no
             // Html/Ui/Background/Border/Font arm). Verified vs runtime + lower
-            // `callee_arity` in docs/architecture/html-ui-live-scheme-table.md.
+            // `callee_arity` in docs/adr/0020-html-ui-live-kernel-arity-tripwire.md.
             // `LiveAppRouted` is EXCLUDED here — it is `REACHABLE_BUT_UNLOWERED`.
             K::HtmlRender,
             K::HtmlEscapeText,

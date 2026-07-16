@@ -19,7 +19,7 @@
 //!    type-checks and lowers to `(req).path.clone()`, reading
 //!    `sky_runtime::live::LiveReq` directly — no synthesised record.
 //!
-//! Full design: `docs/architecture/tea-shape-matrix-and-init-design-2026-07-13.md`;
+//! Full design: `docs/adr/0021-tea-state-engine-and-prescriptive-init.md`;
 //! divergence B24 in `docs/divergences-from-sky.md`.
 //!
 //! Compile-only assertions always run; the cargo build is `SKY_E2E=1`-gated

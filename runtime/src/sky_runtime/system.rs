@@ -99,7 +99,7 @@ pub fn system_args<E: Send + 'static>(_: ()) -> SkyTask<E, Vec<String>> {
 // dependency, so `tokio` is not guaranteed present here. Same
 // `#[cfg(feature = "tokio")]` / fallback split `file.rs` uses for its own
 // `run_blocking` helper (real generated Sky projects always have `tokio` —
-// see `docs/architecture/class9-kernel-robustness-fix-spec-2026-07-09.md`
+// see `docs/adr/0014-kernel-robustness-blocking-offload-and-toctou.md`
 // §2.2 — so the fallback only matters for this crate's own narrow-feature
 // standalone builds).
 #[cfg(feature = "tokio")]
