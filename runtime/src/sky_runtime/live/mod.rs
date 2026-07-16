@@ -321,6 +321,10 @@ fn value_to_string(v: &serde_json::Value) -> String {
 type RouteResolver<Model> = Arc<dyn Fn(Model, &str) -> Model + Send + Sync>;
 /// Boxed param resolver: a GET path → the matched route's `:name`→value params.
 type ParamResolver = Arc<dyn Fn(&str) -> crate::sky_runtime::dict::SkyDict<String> + Send + Sync>;
+/// Boxed route predicate: does a GET path match a declared route? (Go
+/// `matchAnyRoute` parity.) Gates the page handler's browser-noise 404 and
+/// the unrouted-GET-against-a-live-session 404 — see `page`.
+type RouteMatched = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
 /// Shared axum state: the session store + Arc'd TEA callbacks.
 struct LiveState<Model, Msg, FInit, FUpdate, FView, FSubs> {
@@ -340,6 +344,13 @@ struct LiveState<Model, Msg, FInit, FUpdate, FView, FSubs> {
     /// BEFORE calling `init`. `live_app` returns empty; `live_app_routed`
     /// captures the route table.
     param_resolver: ParamResolver,
+    /// Does a GET path match a declared route? (Go `matchAnyRoute` parity —
+    /// `live_app` treats only `/` as routed; `live_app_routed` captures the
+    /// route table.) An unrouted GET must never re-route a live session's
+    /// model or rebuild its handler index: that wipes the handlers of the
+    /// page the browser is showing, silently killing every subsequent event
+    /// (form submits included).
+    route_matched: RouteMatched,
     /// Live driver count for admission control. Each spawned `drive_session`
     /// holds a `SessionSlot` that decrements this on exit; a cookieless GET that
     /// would push it past `max_sessions()` is rejected (503) instead of minting
@@ -361,6 +372,7 @@ impl<Model, Msg, FInit, FUpdate, FView, FSubs> Clone
             subs: self.subs.clone(),
             route_resolver: self.route_resolver.clone(),
             param_resolver: self.param_resolver.clone(),
+            route_matched: self.route_matched.clone(),
             session_count: self.session_count.clone(),
         }
     }
@@ -1144,6 +1156,9 @@ where
             // No routing: GET serves the freshly-init'd model unchanged; no params.
             route_resolver: Arc::new(|m, _path| m),
             param_resolver: Arc::new(|_path| crate::sky_runtime::dict::dict_empty()),
+            // Go `matchAnyRoute` parity: with no route table only `/` is a
+            // page URL.
+            route_matched: Arc::new(|path| path == "/"),
             session_count: Arc::new(AtomicUsize::new(0)),
         };
         serve_live(state).await
@@ -1189,10 +1204,13 @@ where
         let not_found = Arc::new(not_found);
         let set_page = Arc::new(set_page);
         let routes_for_params = routes.clone();
+        let routes_for_match = routes.clone();
         let resolver: RouteResolver<Model> =
             Arc::new(move |m, path| (set_page)(route::match_routes(&routes, &not_found, path), m));
         let param_resolver: ParamResolver =
             Arc::new(move |path| route::match_params(&routes_for_params, path));
+        let route_matched: RouteMatched =
+            Arc::new(move |path| route::matches_any(&routes_for_match, path));
         let store = store::choose_store::<Model, Msg>(&store_kind, &store_path, live_ttl()).await;
         let state = LiveState {
             store,
@@ -1202,10 +1220,97 @@ where
             subs: Arc::new(subscriptions),
             route_resolver: resolver,
             param_resolver,
+            route_matched,
             session_count: Arc::new(AtomicUsize::new(0)),
         };
         serve_live(state).await
     })
+}
+
+/// Go parity (live.go `isBrowserNoisePath`): a path a browser or crawler
+/// requests automatically (favicon, service-worker probe, source-map fetch,
+/// `.well-known` discovery, static asset by extension). When unrouted, these
+/// must never touch session state: they'd otherwise race the real `GET /`
+/// for session creation (double `init`) or — worse — re-route a LIVE
+/// session's model and rebuild its handler index from the `notFound` view,
+/// orphaning every handler on the page the browser is actually showing (all
+/// subsequent events, form submits included, would silently resolve to
+/// nothing).
+fn is_browser_noise_path(p: &str) -> bool {
+    if matches!(
+        p,
+        "/favicon.ico"
+            | "/robots.txt"
+            | "/sitemap.xml"
+            | "/apple-touch-icon.png"
+            | "/apple-touch-icon-precomposed.png"
+            | "/service-worker.js"
+            | "/sw.js"
+            | "/manifest.json"
+    ) || p.starts_with("/.well-known/")
+    {
+        return true;
+    }
+    // Requests for assets by well-known extension are browser noise — real
+    // page routes never end in these suffixes.
+    [
+        ".ico", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".css", ".js", ".map", ".woff",
+        ".woff2", ".ttf",
+    ]
+    .iter()
+    .any(|ext| p.ends_with(ext))
+}
+
+/// Go parity (live.go `handleInitial`): serve an unrouted browser-noise file
+/// from the static dir's ROOT when it exists there. Browsers always probe
+/// `/favicon.ico` (and friends) at the origin root, never under `/static/`,
+/// so without this shortcut an author with a configured static dir has no
+/// way to suppress the 404. `None` → the caller 404s.
+///
+/// Security: the path is attacker-shaped. Any non-plain segment (empty, `.`,
+/// `..`) is rejected BEFORE the join — stricter than Go's `filepath.Clean`,
+/// no traversal can escape the dir. A directory (or unreadable file) reads
+/// as `Err` → `None` → 404.
+async fn serve_noise_from_static_root(path: &str) -> Option<axum::response::Response> {
+    use axum::response::IntoResponse;
+    let dir = crate::sky_runtime::system::read_env_var("SKY_LIVE_STATIC_DIR")
+        .ok()
+        .filter(|d| !d.is_empty())?;
+    let rel = path.trim_start_matches('/');
+    if rel.is_empty()
+        || rel
+            .split('/')
+            .any(|seg| seg.is_empty() || seg == "." || seg == "..")
+    {
+        return None;
+    }
+    let candidate = std::path::Path::new(&dir).join(rel);
+    let bytes = tokio::fs::read(&candidate).await.ok()?;
+    let mime = match rel.rsplit('.').next().unwrap_or("") {
+        "ico" => "image/x-icon",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        "webp" => "image/webp",
+        "css" => "text/css; charset=utf-8",
+        "js" => "application/javascript; charset=utf-8",
+        "map" | "json" => "application/json",
+        "txt" => "text/plain; charset=utf-8",
+        "xml" => "application/xml",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "ttf" => "font/ttf",
+        _ => "application/octet-stream",
+    };
+    Some(
+        (
+            axum::http::StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, mime)],
+            bytes,
+        )
+            .into_response(),
+    )
 }
 
 /// Shared server setup for `live_app` / `live_app_routed`: nested HTTP
@@ -1262,10 +1367,33 @@ where
             let csrf_tok = csrf::cookie_value(&headers, csrf::csrf_cookie_name())
                 .filter(|t| csrf::token_is_well_formed(t))
                 .unwrap_or_else(csrf::gen_token);
+
+            // Go parity (handleInitial): unrouted browser-noise paths 404 (or
+            // serve from the static root) BEFORE any session work — they must
+            // never run `init` (double-init race against the real `GET /`) and
+            // never touch an existing session (see the routed guards below).
+            let routed = (st.route_matched)(uri.path());
+            if !routed && is_browser_noise_path(uri.path()) {
+                if let Some(resp) = serve_noise_from_static_root(uri.path()).await {
+                    return resp;
+                }
+                return (StatusCode::NOT_FOUND, "404 page not found").into_response();
+            }
+
             let hit = match cookie_sid.as_ref() {
                 Some(s) => st.store.get(s).await.map(|h| (s.clone(), h)),
                 None => None,
             };
+
+            // Go parity (handleInitial): an unrouted GET against an EXISTING
+            // session (live or persisted) 404s WITHOUT touching it. Re-routing
+            // here would write the `notFound` page into the model and rebuild
+            // the handler index from that view, orphaning every handler on the
+            // page the browser is still showing — the next event POST (form
+            // submit, click, input) would silently resolve to nothing.
+            if !routed && hit.is_some() {
+                return (StatusCode::NOT_FOUND, "404 page not found").into_response();
+            }
 
             let (sid, model, cmd0) = match hit {
                 Some((sid, store::StoreHit::Live(handle))) => {
