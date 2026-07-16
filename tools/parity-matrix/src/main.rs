@@ -100,6 +100,9 @@ const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     "live_route",
     "sky_cli_program_",
     "ui_layout_with",
+    // #217: emit_expr's DbDefaultMigration arm emits the `Migration` record
+    // struct literal inline; this name string is never emitted.
+    "db_default_migration",
     "list_map_consume",
 ];
 
@@ -221,6 +224,11 @@ impl Row {
             // Canon check: skip empty qualifier (no decl), internal qualifiers
             // (starting with '_'), and known non-canon qualifiers (Log, Html, Ui,
             // PubSub — installed through other mechanisms, not in QUALIFIERS table).
+            // `Regex`/`Path` are DELIBERATELY absent from QUALIFIERS: they route
+            // via `detect_kernel_alias`'s `Ffi.kernel "Regex_*"`/`"Path_*"` aliases
+            // (documented at `sky_canon/src/env.rs:79-83`), so `canon_missing` is a
+            // false positive for them — mirror the same skip the other
+            // alias-routed modules already receive.
             let skip_canon = self.qualifier.is_empty()
                 || self.qualifier.starts_with('_')
                 || matches!(
@@ -231,6 +239,7 @@ impl Row {
                     | "Trace" | "Email" | "Cache" | "Compression" | "Csv"
                     | "Config" | "ToString" | "Pure" | "WebSocket"
                     | "CssSafety" | "Middleware" | "Db.Decode"
+                    | "Regex" | "Path"
                 );
             if !skip_canon && !self.in_canon_qual {
                 issues.push("canon_missing");

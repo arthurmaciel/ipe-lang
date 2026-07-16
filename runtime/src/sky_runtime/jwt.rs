@@ -410,11 +410,14 @@ pub fn sky_jwt_jwt_id(jti: String, claims: JsonValue) -> JsonValue {
     claims_set(claims, "jti", JsonValue::String(jti))
 }
 
-/// `Jwt.withClaim : String -> String -> Claims -> Claims` — inserts an
-/// arbitrary string-valued claim.  Both key and value are strings; the value
-/// is stored as a JSON string.
-pub fn sky_jwt_with_claim(key: String, value: String, claims: JsonValue) -> JsonValue {
-    claims_set(claims, &key, JsonValue::String(value))
+/// `Jwt.withClaim : String -> JsonEnc.Value -> Claims -> Claims` — inserts an
+/// arbitrary claim whose value is any encoded JSON node.  Matches the reference
+/// `Sky/Core/Jwt.sky:79`: the value is a `JsonEnc.Value` (itself a
+/// `serde_json::Value` at runtime, exactly like `Claims`), so it is inserted
+/// directly — a string / int / bool / nested object all round-trip with the
+/// correct token bytes.
+pub fn sky_jwt_with_claim(key: String, value: JsonValue, claims: JsonValue) -> JsonValue {
+    claims_set(claims, &key, value)
 }
 
 /// `Jwt.encode : Algorithm -> Claims -> Result Error String` — signs the claims

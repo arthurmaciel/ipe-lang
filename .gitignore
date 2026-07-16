@@ -3,6 +3,11 @@ sky-out/
 .skycache/
 .skydeps/
 /tmp-parity/
+# Default SQLite DB written by `Db.connect ()` when an emitted binary is run
+# by the E2E test harness in the crate/repo cwd — a run artifact, never source.
+sky.db
+sky.db-shm
+sky.db-wal
 
 # Playwright browser-scenario stack deps (scripts/web-verify.mjs).
 # package-lock.json IS committed (reproducible installs, matches ../sky's

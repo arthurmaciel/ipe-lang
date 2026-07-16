@@ -1,0 +1,42 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Dict as Dict
+import Sky.Core.Task as Task
+import Sky.Core.Error exposing (Error)
+import Sky.Http.Server as Server
+import Sky.Http.Server exposing (Request, Response)
+import Std.Log exposing (println)
+
+
+-- #217 contract-drift regression: `Sky.Http.Server.Response` is a record
+-- alias `{ status : Int, body : String, headers : Dict String String,
+-- contentType : String }` (reference `Sky/Http/Server.sky:66`), NOT an
+-- opaque nominal. Ported verbatim from the reference idiom: build a
+-- `Response` as a record literal, and read a field back off it.
+
+-- A hand-built response record literal (the exact reference idiom the
+-- example's `rateLimitedResponse` uses).
+custom : Response
+custom =
+    { status = 429
+    , body = "{\"error\":\"rate limit exceeded\"}"
+    , headers = Dict.empty
+    , contentType = "application/json"
+    }
+
+
+-- A handler that returns a record literal directly (no builder).
+handler : Request -> Task Error Response
+handler _ =
+    Task.succeed custom
+
+
+-- Field read off a `Response` value — proves the record projection type-checks.
+statusOf : Response -> Int
+statusOf r =
+    r.status
+
+
+main =
+    println (String.fromInt (statusOf custom))
