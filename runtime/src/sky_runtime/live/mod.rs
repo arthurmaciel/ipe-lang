@@ -1120,6 +1120,7 @@ pub fn live_app<E, Model, Msg, FInit, FUpdate, FView, FSubs>(
     subscriptions: FSubs,
     store_kind: String,
     store_path: String,
+    schema_tag: [u8; 32],
 ) -> SkyTask<E, ()>
 where
     E: From<String> + Send + 'static,
@@ -1134,7 +1135,9 @@ where
     FSubs: Fn(Model) -> SkySub<Msg> + Send + Sync + 'static,
 {
     Box::pin(async move {
-        let store = store::choose_store::<Model, Msg>(&store_kind, &store_path, live_ttl()).await;
+        let store =
+            store::choose_store::<Model, Msg>(&store_kind, &store_path, live_ttl(), schema_tag)
+                .await;
         let state = LiveState {
             store,
             init: Arc::new(init),
@@ -1169,6 +1172,7 @@ pub fn live_app_routed<E, Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPa
     set_page: FSetPage,
     store_kind: String,
     store_path: String,
+    schema_tag: [u8; 32],
 ) -> SkyTask<E, ()>
 where
     E: From<String> + Send + 'static,
@@ -1193,7 +1197,9 @@ where
             Arc::new(move |m, path| (set_page)(route::match_routes(&routes, &not_found, path), m));
         let param_resolver: ParamResolver =
             Arc::new(move |path| route::match_params(&routes_for_params, path));
-        let store = store::choose_store::<Model, Msg>(&store_kind, &store_path, live_ttl()).await;
+        let store =
+            store::choose_store::<Model, Msg>(&store_kind, &store_path, live_ttl(), schema_tag)
+                .await;
         let state = LiveState {
             store,
             init: Arc::new(init),
