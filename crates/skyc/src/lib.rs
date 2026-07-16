@@ -1070,6 +1070,7 @@ pub fn resolve_runtime() -> Result<PathBuf, CliError> {
 /// The top-level usage hint, listing every subcommand and flag.
 const USAGE: &str = "usage:\n  \
      skyc build <entry.sky|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]\n  \
+     skyc run   <entry.sky|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [-- <args>...]\n  \
      skyc watch <entry.sky|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [--port <n>]\n  \
      skyc explain [<CODE>]\n  \
      skyc fix <entry.sky> [--yes]";
@@ -1081,6 +1082,7 @@ const USAGE: &str = "usage:\n  \
 pub fn run_cli(args: &[String]) -> Result<(), CliError> {
     match args.split_first() {
         Some((cmd, rest)) if cmd == "build" => run_build(rest),
+        Some((cmd, rest)) if cmd == "run" => run_run(rest),
         Some((cmd, rest)) if cmd == "watch" => run_watch(rest),
         Some((cmd, rest)) if cmd == "explain" => run_explain(rest),
         Some((cmd, rest)) if cmd == "fix" => run_fix(rest),
@@ -1195,6 +1197,120 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
         || build_with_sibling_discovery(&entry_path, &out_dir, &runtime_dir),
         |m| build_project(&m, &out_dir, &runtime_dir),
     )
+}
+
+/// `skyc run <entry.sky|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [-- <args>...]`
+///
+/// One-shot build + run: compiles the entry to `out_dir` (same routing as
+/// [`run_build`]), then invokes `cargo build` on the emitted project and
+/// execs the resulting `sky-app` binary, forwarding any arguments supplied
+/// after `--` and propagating the binary's exit code.
+///
+/// Build failures (skyc compile step or cargo build step) surface as
+/// [`CliError`] and print to stderr via the normal error path. The binary
+/// exec step replaces the current process (Unix) or propagates the child's
+/// exit code (all platforms) so the caller sees it as `skyc run`'s own exit.
+fn run_run(rest: &[String]) -> Result<(), CliError> {
+    // Split on "--": everything before is skyc flags; everything after is
+    // forwarded to the emitted binary.
+    let dash_dash = rest.iter().position(|a| a == "--");
+    let (skyc_args, bin_args) = match dash_dash {
+        Some(pos) => (&rest[..pos], &rest[pos + 1..]),
+        None => (rest, [].as_slice()),
+    };
+
+    let mut it = skyc_args.iter();
+    let entry = it.next().ok_or(CliError::Usage(USAGE))?.clone();
+    let mut out: Option<String> = None;
+    let mut runtime: Option<String> = None;
+    while let Some(flag) = it.next() {
+        match flag.as_str() {
+            "--out" => out = Some(it.next().ok_or(CliError::Usage(USAGE))?.clone()),
+            "--runtime" => runtime = Some(it.next().ok_or(CliError::Usage(USAGE))?.clone()),
+            _ => return Err(CliError::Usage(USAGE)),
+        }
+    }
+
+    let entry_path = PathBuf::from(&entry);
+    let out_dir = out.map_or_else(|| PathBuf::from("sky-out").join("rust"), PathBuf::from);
+    let runtime_dir = match runtime {
+        Some(r) => PathBuf::from(r),
+        None => resolve_runtime()?,
+    };
+
+    // --- Step 1: skyc compile → emit the Rust project ---
+    let manifest = if entry_path.is_dir() {
+        let candidate = entry_path.join("sky.toml");
+        if candidate.is_file() {
+            Some(candidate)
+        } else {
+            return Err(CliError::Usage(
+                "directory supplied but no sky.toml found inside it",
+            ));
+        }
+    } else if entry_path.extension().and_then(|e| e.to_str()) == Some("toml") {
+        Some(entry_path.clone())
+    } else {
+        find_manifest_for_sky_file(&entry_path)
+    };
+
+    manifest.map_or_else(
+        || build_with_sibling_discovery(&entry_path, &out_dir, &runtime_dir),
+        |m| build_project(&m, &out_dir, &runtime_dir),
+    )?;
+
+    // --- Step 2: cargo build the emitted project ---
+    let cargo_status = std::process::Command::new("cargo")
+        .arg("build")
+        .current_dir(&out_dir)
+        .status()
+        .map_err(|e| CliError::Io {
+            path: out_dir.clone(),
+            source: e,
+        })?;
+    if !cargo_status.success() {
+        let code = cargo_status.code().unwrap_or(1);
+        return Err(CliError::UsageOwned(format!(
+            "cargo build failed with exit code {code}"
+        )));
+    }
+
+    // --- Step 3: exec the emitted binary, forwarding args and exit code ---
+    // The binary name is always `sky-app` (the default package name used by
+    // `write_emitted_project`; see `sky_backend_rust::EmittedProject`).
+    let bin = out_dir.join("target").join("debug").join("sky-app");
+    let mut cmd = std::process::Command::new(&bin);
+    cmd.args(bin_args);
+
+    // On Unix, replace the current process image (exec) so signals and
+    // process-group membership propagate cleanly. On other platforms (Windows),
+    // spawn-and-wait is the only option.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        // `exec` does not return on success; any returned error is an OS failure.
+        let err = cmd.exec();
+        return Err(CliError::Io { path: bin, source: err });
+    }
+    #[cfg(not(unix))]
+    {
+        let status = cmd.status().map_err(|e| CliError::Io {
+            path: bin,
+            source: e,
+        })?;
+        // Propagate the child's exit code.  `CliError` only models failure, so
+        // a non-zero exit is surfaced as a usage-owned message; the caller
+        // (main.rs) prints it to stderr and exits 1.  For a richer exit-code
+        // passthrough the caller would need to call `std::process::exit`
+        // directly, but that is out of scope for this driver library.
+        if !status.success() {
+            let code = status.code().unwrap_or(1);
+            return Err(CliError::UsageOwned(format!(
+                "sky-app exited with code {code}"
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// `skyc explain [<CODE>]`. No argument prints the one-line index of every code

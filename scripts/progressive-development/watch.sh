@@ -213,15 +213,23 @@ slow_last=0
 # ── per-lane status helpers (autopilot writes docs/architecture/progdev-status-lane<i>.txt) ──
 narrator_line() { tail -n 1 "$NARRATOR" 2>/dev/null; }
 lane_is_live()  { find "${LANE_STATUS_PRE}${1}.txt" -mmin -"$LANE_LIVE_MIN" >/dev/null 2>&1; }
-lane_row() {   # <i> → "[i+1] <task> · <phase>/<model> · <mm:ss elapsed>" (1-based for the user)
-    local i="$1" f="${LANE_STATUS_PRE}${1}.txt" task phase model se now el
+lane_row() {   # <i> → "[i+1] · att n/M · mm:ss total · phase/model · task" (1-based for the user)
+    local i="$1" f="${LANE_STATUS_PRE}${1}.txt" task phase model att se fse now el tel
     [ -s "$f" ] || { printf '[%s] —' "$(( i + 1 ))"; return; }
     task="$(awk '/^task/{ $1=""; sub(/^ +/,""); print; exit}' "$f")"
     phase="$(awk '/^phase/{print $2; exit}' "$f")"
     model="$(awk '/^phase/{for(j=1;j<=NF;j++) if($j=="model"){print $(j+1); exit}}' "$f")"
+    att="$(awk '/^type/{for(j=1;j<=NF;j++) if($j=="attempt"){print $(j+1); exit}}' "$f")"
     se="$(awk '/^type/{for(j=1;j<=NF;j++) if($j=="start_epoch"){print $(j+1); exit}}' "$f")"
-    now="$(date +%s)"; el=$(( now - ${se:-$now} )); [ "$el" -lt 0 ] && el=0
-    printf '[%s] %s · %s/%s · %02d:%02d' "$(( i + 1 ))" "${task:-·}" "${phase:-·}" "${model:-·}" "$(( el/60 ))" "$(( el%60 ))"
+    # first_seen_epoch: written by autopilot ≥ this patch; falls back to start_epoch
+    # for status files written by an older autopilot (total=current in that case).
+    fse="$(awk '/^type/{for(j=1;j<=NF;j++) if($j=="first_seen_epoch"){print $(j+1); exit}}' "$f")"
+    now="$(date +%s)"
+    el=$(( now - ${se:-$now} ));              [ "$el"  -lt 0 ] && el=0
+    tel=$(( now - ${fse:-${se:-$now}} ));     [ "$tel" -lt 0 ] && tel=0
+    printf '[%s] · att %s · %02d:%02d total · %s/%s · %s' \
+        "$(( i + 1 ))" "${att:-·}" "$(( tel/60 ))" "$(( tel%60 ))" \
+        "${phase:-·}" "${model:-·}" "${task:-·}"
 }
 lane_log() {   # <i> → newest live log stream for that lane (design/impl/review), else empty
     local i="$1" f
