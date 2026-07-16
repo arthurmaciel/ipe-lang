@@ -95,12 +95,17 @@ command -v node >/dev/null 2>&1          || WEB_OK=0
 [ -d "$REPO/node_modules/playwright" ]    || WEB_OK=0
 
 # ── scenario_for <example-name>: the browser scenario key for an example ────
+# Emits the resolved scenario key on stdout. When no per-app scenario matches
+# and the example degrades to the `smoke` boot-only check, a diagnostic is
+# written to stderr so a live example verified by boot-alone (NOT by a real
+# interaction) is visible in the sweep log instead of passing silently.
 scenario_for() {
   local ex="$1" key
   key="$(echo "$ex" | sed -E 's/^[0-9]+-//')"
   if [ -f "$SCENARIOS" ] && rg -q "async '?${key}'?\(" "$SCENARIOS" 2>/dev/null; then
     echo "$key"
   else
+    echo "NOTE: no interaction scenario for '$ex' — degrading to 'smoke' (boot + non-empty body only; no user action asserted)" >&2
     echo smoke
   fi
 }
