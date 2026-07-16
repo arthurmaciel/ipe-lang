@@ -13,7 +13,7 @@
 //! call previously ran INLINE on the calling thread before the future was
 //! even polled, blocking every other task scheduled on that worker for the
 //! call's full duration. See
-//! `docs/architecture/class9-kernel-robustness-fix-spec-2026-07-09.md` §2.
+//! `docs/adr/0014-kernel-robustness-blocking-offload-and-toctou.md` §2.
 //!
 //! # Decompression bomb protection
 //!

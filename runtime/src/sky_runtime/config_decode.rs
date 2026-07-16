@@ -111,7 +111,7 @@ pub fn config_decode_yaml<E: From<String> + 'static, T>(
 // "serde_yaml"]`, runtime/Cargo.toml), which does NOT pull in `tokio`, so
 // `tokio` is not guaranteed present here — same constraint `file.rs`
 // documents for its own `run_blocking` helper (see
-// `docs/architecture/class9-kernel-robustness-fix-spec-2026-07-09.md` §2.2).
+// `docs/adr/0014-kernel-robustness-blocking-offload-and-toctou.md` §2.2).
 #[cfg(feature = "tokio")]
 async fn run_blocking<T, F>(f: F) -> Result<T, String>
 where
