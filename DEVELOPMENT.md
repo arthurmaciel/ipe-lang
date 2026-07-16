@@ -69,6 +69,61 @@ that doesn't match the reference's proven logic is a guess — **port, don't inv
   change. This is the discovery step that turns a "guess-and-check" lane into a
   faithful port.
 
+### 0b. Infrastructure at a glance — read this, don't re-learn it
+
+**Compiler pipeline (acyclic crate stages):** `sky_parse` → `sky_canon` (name
+resolve) → `sky_types` (HM infer/constrain) → `sky_lower` (AST→IR) → `sky_ir` →
+`sky_backend_rust` (emit Rust). Support crates: `sky_kernels` (kernel table),
+`sky_diagnostics` (SKY-* codes + `explain/*.md`), `sky_db` (salsa incremental DB),
+`sky_intern`, `sky_watch`; `skyc` = driver + CLI. Runtime impls live in
+`runtime/src/sky_runtime/`. Query FIRST: `scripts/ipe-index def|refs|kind <sym>`
+(our fork's Rust) and `skydex locate|parity|rdeps|covers <sym>` (`../sky` READ-ONLY
+reference; Sky↔Haskell↔Go↔Rust routes) — don't grep to rediscover structure.
+
+**skyc CLI:** subcommands `build` / `watch` / `explain` / `fix` (no `run` yet —
+#213). `skyc build <src/Main.sky | sky.toml> --out sky-out/rust`. Binary =
+`target/release/skyc` (`cargo build --release -p skyc`); `source scripts/lib/env.sh`
+sets `SKYC_BIN` + `SKY_RUNTIME_DIR`.
+
+**Registering a kernel = update ALL anti-drift sites** (type-checker enforces most;
+miss one → SKY-N0028 / SKY-L0108 / a drift test): `sky_kernels` (enum + `decl()` +
+`ALL`), `sky_types::constrain` (type-scheme + `FIRST_SCHEMED`, out of the
+`KNOWN_UNBACKED` bucket), `sky_lower` (arity table + `REGISTRY_ONLY_ALLOWLIST` for
+alias-only kernels), `sky_backend_rust/naming.rs`, `sky_ir::pretty`,
+`crates/skyc/src/stdlib.rs` (module registration). Template to seal a new stdlib
+module: `crates/skyc/tests/golden_stdlib_module_seal.rs`.
+
+**Examples + sweep:** an example = `examples/NN-name/src/Main.sky` (+ other `.sky`
+modules, `sky.toml`). The `build_set` is **disk-derived** (`scripts/lib/examples.sh`)
+— every `examples/NN-*/src/Main.sky` whose imports resolve is auto-included; adding
+the dir IS the registration (no hardcoded list). `scripts/examples-sweep.sh`, per
+example: `skyc build … --out sky-out/rust` → `cargo build --manifest-path
+sky-out/rust/Cargo.toml` → run `sky-out/rust/target/debug/sky-app`. VERDICT PASS iff
+zero red rows. Modes: `SKY_SWEEP_BUILD_ONLY=1` (compile only), `SKY_SWEEP_NO_EQUIV=1`
+(build+run, no Go), default (+ Go≡Rust via cached `expected_go.txt`).
+
+**Emitted project:** `sky-out/rust/` = a Cargo project with the runtime vendored
+into `src/sky_runtime/` (skyc copies from `SKY_RUNTIME_DIR`), default binary
+`sky-app`, edition 2024.
+
+**Golden tests** (`crates/skyc/tests/golden_*.rs`): a golden = `tests/golden/<name>/
+Main.sky` + `main.rs` (expected emit, **byte-compared**) + a cached Go oracle
+(`expected_go.txt` / `oracle.meta`). Default run = byte-identity of the emit (fast,
+no cargo). `SKY_E2E=1` = build+run the emitted project (THE SEAL: skyc-0 ⇒ cargo-0).
+Oracle files are regenerated ONLY by `cargo run -p refresh-oracle -- <golden>` —
+NEVER hand-edited.
+
+**Build & cache (8 cores / 15 GB RAM / swapping → RAM-BOUND, not core-bound):**
+`~/.cargo/config.toml` sets `rustc-wrapper = sccache` (content-addressed compile
+cache), the `mold` linker, `incremental = false`, and `jobs = 2` — an OOM guard,
+**per cargo invocation** (so 2 concurrent lanes already ≈ 4 parallel `rustc`, near
+the RAM ceiling; raising `jobs` multiplies per lane → OOM). **Never override
+`RUSTFLAGS`** — the config's `mold`-only flags ARE the sccache cache key; adding
+`-Zthreads`/other flags forks the key → cache misses (cold recompiles) + more RAM
+pressure. All cargo targets live under `~/.cache/ipe/` (write-boundary, §6); E2E
+emitted builds use `SKY_ORACLE_SHARED_TARGET`. `cargo nextest run -p skyc`
+recompiles ALL ~155 skyc test binaries — scope to `--test <name>` when you need one.
+
 ### 1. Memory safety — `scripts/mem-guard.sh` MUST run during dev
 
 A runaway `sky`/`cabal`/`ghc`/`haskell-language-server` process previously
