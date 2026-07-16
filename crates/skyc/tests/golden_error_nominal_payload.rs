@@ -1,5 +1,5 @@
 //! SEAL fix 2026-07-11 (`docs/architecture/
-//! error-record-literal-seal-fix-2026-07-11.md`) — positive golden for the
+//! docs/adr/0017-error-payload-nominal-identity.md`) — positive golden for the
 //! NOMINAL `PanicInfo` / `TypeInfo` / `ErrorInfo` payload types.
 //!
 //! Pins the coherence half of the fix (the negative half lives in

@@ -210,7 +210,7 @@ impl TyBounds {
     /// (only the head, never nested — see [`Self::has_hof_kernel_result`]):
     /// a collection-of-functions payload is a different, already-gated
     /// hazard. Fails CLOSED on a bare variable, exactly like every sibling
-    /// bit. See `docs/architecture/ctor-payload-andmap-arity-gate-design.md`.
+    /// bit. See `docs/adr/0016-andmap-arity-gate-type-obligation.md`.
     const HOF_KERNEL_RESULT: u16 = 1 << 9;
     /// The SQL-bind-parameter obligation: this variable is the ELEMENT type of
     /// a `List a` argument bound into `Db.exec` / `Db.query` / `Db.queryDecode`'s

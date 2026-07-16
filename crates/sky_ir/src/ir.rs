@@ -788,7 +788,7 @@ pub enum IrType {
     ///
     /// Constructed by `Ws.defaultCfg` and threaded through the `Ws.with*`
     /// builder chain; consumed by `Ws.upgrade`.  Phantom `msg` type parameter
-    /// dropped (D2 — see docs/architecture/websocket-server-design.md).
+    /// dropped (D2 — see docs/adr/0023-websocket-server-kernel-only-typed-handles.md).
     WebSocketServerCfg,
     // ── M7: Std.Ui / Std.Html parametric types ──────────────────────────────
     /// A parametric `Std.Ui` or `Std.Html` type — one that carries a message type
@@ -891,7 +891,7 @@ pub enum IrType {
     /// The built-in NOMINAL `ErrorInfo` type — `Error`'s second constructor
     /// argument, `{ message : String, details : Maybe ErrorDetails }` at the
     /// field level (SEAL fix 2026-07-11 — see `docs/architecture/
-    /// error-record-literal-seal-fix-2026-07-11.md`).
+    /// docs/adr/0017-error-payload-nominal-identity.md`).
     ///
     /// Renders as `sky_runtime::error::SkyErrorInfo`. NOT a structural
     /// record: a bare record literal cannot construct it (the type checker
@@ -1464,7 +1464,7 @@ pub enum Expr {
     /// textual heuristic, whether the read needs a `.clone()` (a heap-backed
     /// field) or can skip it (a Rust-`Copy` scalar) — see #142/AUD-09's
     /// type-directed Copy-elision fix,
-    /// `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md` §3.
+    /// `docs/adr/0011-emitter-clone-borrow-discipline.md` §3.
     /// When the lowerer cannot resolve a concrete field type (a still-generic
     /// field inside a polymorphic body), it falls back to
     /// [`IrType::Generic`], which the backend classifies as non-`Copy` and
@@ -1902,7 +1902,7 @@ pub fn is_irrefutable(pat: &Pat) -> bool {
 /// position (SKY-L0128) rather than let it reach the backend, where
 /// honoring it soundly would require matching the scrutinee by reference
 /// throughout — a materially larger redesign. See
-/// `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md` §1.
+/// `docs/adr/0011-emitter-clone-borrow-discipline.md` §1.
 #[must_use]
 pub fn is_dispatch_free(pat: &Pat) -> bool {
     match pat {

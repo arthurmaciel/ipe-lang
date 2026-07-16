@@ -27,7 +27,7 @@
 //! record struct's `let Rec { nameDecoder, .. } = …;`; the case fixture's
 //! names the single-arm `case`'s tuple binder — identical E0382 class.)
 //!
-//! Spec: `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md` §2.
+//! Spec: `docs/adr/0011-emitter-clone-borrow-discipline.md` §2.
 //!
 //! Run: `SKY_E2E=1 cargo test -p skyc --test golden_i125_decoder_destructure_thunk`
 

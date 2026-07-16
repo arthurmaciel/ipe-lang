@@ -23,7 +23,7 @@ use super::*;
 // `tests/golden/m0/Cargo.toml`), so the `#[cfg(not(feature = "tokio"))]`
 // fallback below only matters for the standalone `sky-runtime-rust` crate's
 // own narrow-feature builds, never for a real Sky program. See
-// `docs/architecture/class9-kernel-robustness-fix-spec-2026-07-09.md` §2.2.
+// `docs/adr/0014-kernel-robustness-blocking-offload-and-toctou.md` §2.2.
 #[cfg(feature = "tokio")]
 async fn run_blocking<T, F>(f: F) -> Result<T, String>
 where

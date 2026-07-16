@@ -8,7 +8,7 @@
 //! `List.indexedMap` was worse: absent from the qualifier member array, it
 //! failed even earlier at canon with `SKY-N0005` (no such member).
 //!
-//! The fix (design: `docs/architecture/list-ops-lower-wiring.md`) wires all nine
+//! The fix (design: `docs/adr/0024-list-ops-kernel-wiring.md`) wires all nine
 //! as kernels — `KernelFn` variant + `d(...)` decl + lower arm + fail-closed
 //! `stdlib_scheme` entry — reusing the existing iterative runtime fns where they
 //! already existed (`list_drop`/`list_zip`/`list_concat_map`/`list_indexed_map`/

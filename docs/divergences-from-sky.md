@@ -473,8 +473,8 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   (upstream's choice) would silently forbid that. `Box<dyn Fn>` is the sound
   direction, and the machinery to keep it seal-safe (#87/#93/#91/type-checker
   equatable gate) already ships. See
-  `docs/architecture/ctor-payload-function-design.md` for the full hazard
-  analysis and `docs/architecture/ctor-payload-andmap-arity-gate-design.md`
+  `docs/adr/0015-constructor-payload-functions-narrowed-gates.md` for the full
+  hazard analysis and `docs/adr/0016-andmap-arity-gate-type-obligation.md`
   for the T3 two-tier design.
 - **Sanctioned:** yes (`sanctioned:` for the Go-succeeds-but-differs shapes;
   Go-failure divergence for the shapes that don't `go build`). Goldens
@@ -528,7 +528,7 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
 - **Context:** an unannotated top-level binding is monomorphic *within its
   home module* (unchanged); at its module's boundary it is now generalized
   into a scheme, and each cross-module reference instantiates it fresh — see
-  `docs/architecture/class1-inference-fix-spec-2026-07-09.md`. Empirically
+  `docs/adr/0008-untyped-binding-module-boundary-generalization.md`. Empirically
   verified against the reference `sky v0.16.29`: a cross-module untyped
   helper used at two different concrete types from two different importers,
   and an untyped zero-param value binding used at two different element

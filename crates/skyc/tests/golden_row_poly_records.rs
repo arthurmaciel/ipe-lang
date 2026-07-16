@@ -1,6 +1,6 @@
 //! #56 gate — row-poly subset/superset record resolution (A7 watch).
 //!
-//! `docs/architecture/row-poly-subset-superset-design.md` records the
+//! `docs/adr/0018-row-poly-records-pinned-before-lowering.md` records the
 //! 2026-07-10 investigation's verdict: **no defect found**. Every
 //! row-polymorphic subset/superset record shape reachable through ipê's
 //! surface today either resolves end-to-end in parity with the reference
@@ -273,7 +273,7 @@ fn closed_superset_is_sky_t0001() {
 /// to accept without adding per-record-shape callee monomorphisation to the
 /// backend would reintroduce the A7 exact-key miss as an ICE (best case) or
 /// a seal-violating emitted-code type error. See
-/// docs/architecture/row-poly-subset-superset-design.md "Coupling
+/// docs/adr/0018-row-poly-records-pinned-before-lowering.md "Coupling
 /// tripwire" for the ORIGINAL (broader) framing of that risk — the fixture
 /// here covers only the local-let-binding instance of it.
 #[test]
@@ -315,7 +315,7 @@ fn two_different_supersets_is_sky_t0001() {
 /// do the per-shape monomorphisation the syntax would require, so the
 /// syntax stays fail-closed at parse rather than accepting a program the
 /// backend cannot emit. This test is the canary named in
-/// docs/architecture/row-poly-subset-superset-design.md "Gap filed" — it
+/// docs/adr/0018-row-poly-records-pinned-before-lowering.md "Gap filed" — it
 /// MUST start failing (and force a re-read of that section) the moment the
 /// syntax begins to parse.
 #[test]
