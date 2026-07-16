@@ -1195,6 +1195,34 @@ pub fn ui_on_submit_<M, T, F: Fn(T) -> M>(_f: F) -> Attribute<M> {
     Attribute::NoAttribute
 }
 
+/// `Ui.onSubmit` BARE-VALUE shape — dispatch a FIXED `msg`, ignoring the
+/// submitted `FormData`. The `Std.Ui` mirror of
+/// [`crate::sky_runtime::html::html_on_raw_fixed_`]: the "form fields are
+/// already synced into Model via `onInput`/`onChange`; submit just triggers a
+/// fixed action" idiom (`Ui.onSubmit DoSignUp` where `DoSignUp : Msg`, or a
+/// `let`-bound `m : Msg`). Selected by the lowerer's type-directed
+/// `OnFormKind::FixedValue` verdict when the handler's solved type is a
+/// non-arrow value, so the codegen never emits a `(m)(_x)` call against a
+/// non-callable value (the #228 cargo `E0618` after `skyc` exit 0).
+///
+/// Deliberately does NOT route through `decode_form_or_warn` — there is no
+/// payload type to decode into, and a spurious decode failure on a real form's
+/// fields would silently swallow the submit. Always fires. `M: Clone` is not a
+/// new requirement — every Sky.Live `Msg` is already `Clone` by construction.
+#[cfg(feature = "live")]
+pub fn ui_on_submit_fixed_<M: Clone + Send + Sync + 'static>(msg: M) -> Attribute<M> {
+    Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnForm(
+        "submit".into(),
+        std::sync::Arc::new(move |_fd: crate::sky_runtime::html::FormData| Some(msg.clone())),
+    )))
+}
+
+/// Non-`live` builds — same degrade-to-no-op rationale as `ui_on_submit_`.
+#[cfg(not(feature = "live"))]
+pub fn ui_on_submit_fixed_<M>(_msg: M) -> Attribute<M> {
+    Attribute::NoAttribute
+}
+
 // ── Nearby attribute builders ────────────────────────────────────────────────
 
 /// `Ui.above : Element msg -> Attribute msg`
