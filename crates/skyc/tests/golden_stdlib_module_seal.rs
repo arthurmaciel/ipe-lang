@@ -49,14 +49,15 @@ fn e2e_enabled() -> bool {
 /// emitted Rust project rooted at a per-`slug` temp dir. Asserts skyc exit 0 —
 /// a resolution/seal regression fails loudly. Returns the emitted-project dir.
 fn compile_module_probe(slug: &str, main: &str) -> Option<PathBuf> {
-    let Ok(runtime) = skyc::resolve_runtime() else {
-        return None; // runtime unavailable in this environment — caller skips
-    };
     // Unique dir PER CALL: the `_resolves_and_emits` and `_builds_and_runs` tests for
     // one module share a slug and run concurrently under nextest, so a shared temp dir
     // races (write vs remove_dir_all) and flakily fails write_project. A monotonic
-    // counter makes every probe dir distinct.
+    // counter makes every probe dir distinct. Declared at scope top (before any
+    // statement) to satisfy clippy::items_after_statements.
     static PROBE_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        return None; // runtime unavailable in this environment — caller skips
+    };
     let uid = PROBE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let tmp = std::env::temp_dir().join(format!("skyc_stdlib_seal_{slug}_{uid}"));
     assert!(
@@ -64,7 +65,8 @@ fn compile_module_probe(slug: &str, main: &str) -> Option<PathBuf> {
         "must write the {slug} fixture project"
     );
     let entry = tmp.join("src").join("Main.sky");
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("stdlib_seal_{slug}_{uid}_out"));
+    let out =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("stdlib_seal_{slug}_{uid}_out"));
     let _ = fs::remove_dir_all(&out);
 
     let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
