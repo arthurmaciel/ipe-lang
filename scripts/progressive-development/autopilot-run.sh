@@ -11,9 +11,9 @@
 # don't have to type the PROGDEV_* env prefixes. (autopilot.sh itself dispatches
 # mem-guard.sh when it isn't up, so the launcher doesn't need to.)
 set -uo pipefail
-cd "$(dirname "$0")"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-AP="scripts/progressive-development/autopilot.sh"
+AP="$(dirname "${BASH_SOURCE[0]}")/autopilot.sh"
 [ -x "$AP" ] || { echo "autopilot-run: $AP missing or not executable" >&2; exit 1; }
 
 # Pass --help / -h straight through (autopilot prints its own reference).
@@ -21,7 +21,7 @@ case "${1:-}" in -h|--help) exec "$AP" --help ;; esac
 
 # Clear a leftover graceful-stop flag from a previous run (else autopilot's
 # startup precondition would refuse to launch). ./autopilot-stop.sh sets it.
-[ -f autopilot.stop ] && { rm -f autopilot.stop; echo "autopilot-run: cleared stale autopilot.stop"; }
+[ -f "$REPO/autopilot.stop" ] && { rm -f "$REPO/autopilot.stop"; echo "autopilot-run: cleared stale autopilot.stop"; }
 
 # Runs until DONE: autopilot converges on its own when nothing tractable remains
 # (2 passes with no new findings; escalated/blocked items are suppressed so they
