@@ -6219,9 +6219,21 @@ impl<'a> Lowerer<'a> {
         self.types.regions.get(&(home, span))
     }
 
-    /// Run the pass, producing the single-module program.
+    /// Run the pass, producing the single-module program. On error, returns the
+    /// diagnostic paired with the `home` (module byte-namespace path) of the def
+    /// that produced it, so the driver attributes a lowering diagnostic to the
+    /// correct SOURCE FILE rather than guessing from a bare byte span (the #221
+    /// misattribution class: a Server.sky lowering span numerically overlapping
+    /// a Main.sky def range was blamed on Main.sky). Mirrors
+    /// [`sky_types::infer_attributed`]'s `(Diagnostic, Vec<Symbol>)` contract
+    /// exactly. A pre-/post-def error (union lowering, record collection, module
+    /// assembly) carries an EMPTY home — the driver falls back to the byte-offset
+    /// heuristic for those, as it already does for homeless type errors. Every
+    /// `?` below yields a bare `Diagnostic`; the per-def `lower_def` boundary is
+    /// the one site that attaches a non-empty home.
     #[allow(clippy::similar_names)] // `uses_ui` / `uses_tui` are intentionally similar
-    pub fn run(self) -> DResult<Program> {
+    #[allow(clippy::too_many_lines)] // the module-assembly tail is one linear pass
+    pub fn run(self) -> Result<Program, (Diagnostic, Vec<Symbol>)> {
         let mut types_ir: Vec<TypeDef> = Vec::with_capacity(self.m.unions.len());
         for u in &self.m.unions {
             // #210: `Std.Cache`'s opaque `type Cache k v = Cache Int` is backed
@@ -6234,7 +6246,11 @@ impl<'a> Lowerer<'a> {
             // instead (mirrors the reference's `runtimeOpaqueTypes` mapping). We
             // still call `lower_enum` for its side effect of validating the ctor
             // payload (a `Task`-arity / polymorphism error must still surface).
-            let def = self.lower_enum(u)?;
+            // Union lowering carries no per-def home; a failure here is homeless
+            // (empty `Vec`) → driver heuristic fallback. In practice a union home
+            // equals its defining module, but the lowerer does not thread it here
+            // and enum-shape errors are rare + already span-precise.
+            let def = self.lower_enum(u).map_err(|d| (d, Vec::new()))?;
             if self.is_cache_handle_union(u) {
                 continue;
             }
@@ -6250,7 +6266,14 @@ impl<'a> Lowerer<'a> {
             // id — passing it spares `lower_def` a throwaway `Vec<Symbol>`
             // key allocation per def (efficiency-audit §3 low).
             let id = FuncId::from_raw(u32::try_from(idx).unwrap_or(u32::MAX));
-            let mut func = self.lower_def(def, id)?;
+            // #221 fix B: attach THIS def's home to any lowering diagnostic it
+            // raises, so the driver resolves the owning source file exactly
+            // (via `home_to_source`) instead of byte-guessing across merged
+            // modules. `def.home()` is the def's defining-module byte-namespace
+            // path — the same key `home_to_source` is built on.
+            let mut func = self
+                .lower_def(def, id)
+                .map_err(|d| (d, def.home().to_vec()))?;
             // #181 context suppression, applied UNIFORMLY to every lowered body
             // regardless of which `lower_def` branch produced it (typed / untyped
             // fn / nullary binding). Clears a `task_fail` turbofish pin whose
@@ -6299,7 +6322,7 @@ impl<'a> Lowerer<'a> {
             types_ir.push(TypeDef::Enum(self.synthetic_sqlfield_enum()));
         }
 
-        let records = self.collect_record_types()?;
+        let records = self.collect_record_types().map_err(|d| (d, Vec::new()))?;
 
         // M5c: detect whether any TEA kernel call is present. The backend uses
         // this flag to append `pub mod tea; pub use tea::*;` to mod.rs and to
@@ -7505,7 +7528,6 @@ impl<'a> Lowerer<'a> {
     /// resolves to neither a builtin nor a declared union, or a `Type::Var`
     /// missing from the binding's free-variable set), so no node `span` is
     /// threaded — those are [`bug`]s, not span-carrying feature gaps.
-    #[allow(clippy::too_many_lines)] // declarative type-constructor dispatch — each builtin listed explicitly for safety
     /// The IR type of `Std.Db.Migration` — the record `{ name : String, sql :
     /// String }` (reference `Std/Db.sky:237`). Both field names appear in every
     /// program that annotates `Migration` (the record literals / `defaultMigration`
@@ -7522,6 +7544,7 @@ impl<'a> Lowerer<'a> {
         IrType::Record(fields)
     }
 
+    #[allow(clippy::too_many_lines)] // declarative type-constructor dispatch — each builtin listed explicitly for safety
     fn ir_type_from_canon(&self, t: &canon::Type, generics: &[Symbol]) -> DResult<IrType> {
         match t {
             // A type-constructor application. A builtin (`Int`, `Bool`, …) carries
