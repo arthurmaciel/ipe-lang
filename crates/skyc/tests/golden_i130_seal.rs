@@ -289,3 +289,57 @@ fn c05_streamwriter_capture_forward() {
         built.err()
     );
 }
+
+// ── c06 — Stream.stream handler capturing enclosing non-Copy Strings (#233) ──
+
+/// `Stream.stream (\writer -> Stream.emit header writer |> ...)` where
+/// `header`/`body` are `String`s bound in the handler-constructing function —
+/// the exact shape of examples/36-composite-server's Csv-stream export.
+///
+/// Pre-fix: the `StreamStream` emit arm's `move |_x| (handler)(_x)` re-wrap
+/// (which rebuilds the box per call to recover the runtime's `+Sync` bound)
+/// captured `header`/`body`, and the re-embedded box MOVED them out on the
+/// first call → the wrapper degraded to `FnOnce` → `server_stream_stream`'s
+/// `Fn` bound rejected it (2x `E0507: cannot move out of a captured variable
+/// in an Fn closure`, AFTER `skyc` exit 0 — a SEAL break).
+///
+/// Fix: the arm pre-clones every free local the handler captures INSIDE the
+/// wrapper body, so the box moves fresh clones and the wrapper stays `Fn`.
+///
+/// Unlike `c05` (skyc exit-0 only), this asserts the EMITTED CRATE cargo-builds
+/// — the layer that surfaced #233. A listening-server fixture cannot
+/// run-to-exit, so a successful `cargo build` IS the acceptance. E2E-gated
+/// (`SKY_E2E=1`) so the default fast pass stays emit-only.
+#[test]
+fn c06_stream_string_capture_seal() {
+    let root = repo_root();
+    let entry = root
+        .join("tests")
+        .join("golden")
+        .join("i233_stream_string_capture")
+        .join("Main.sky");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i233_stream_string_capture");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        return; // runtime unavailable — skip silently rather than fail
+    };
+    let built = skyc::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "Stream.stream String-capture must pass skyc: {:?}",
+        built.err()
+    );
+
+    if std::env::var("SKY_E2E").is_err() {
+        return;
+    }
+    // Build-only: the fixture is a listening server, so it cannot run-to-exit.
+    // A successful cargo build is the #233 seal (skyc-0 ⇒ cargo builds).
+    let built_bin = oracle::build_rust_binary("i233_stream_string_capture", &out);
+    assert!(
+        built_bin.is_ok(),
+        "emitted crate must cargo-build (was 2x E0507 on the stream handler): {}",
+        built_bin.as_ref().err().map_or("", String::as_str)
+    );
+}
