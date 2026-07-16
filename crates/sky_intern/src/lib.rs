@@ -159,6 +159,16 @@ impl Interner {
     pub fn contains(&self, s: &str) -> bool {
         self.map.contains_key(s)
     }
+
+    /// Read-only string → [`Symbol`] lookup: returns the existing symbol for
+    /// `s`, or `None` if it was never interned. Unlike [`Self::intern`] this
+    /// takes `&self` and never mints — for a caller that must reference an
+    /// already-interned identifier (e.g. a record field name known to appear in
+    /// the program) without a `&mut Interner`.
+    #[must_use]
+    pub fn lookup(&self, s: &str) -> Option<Symbol> {
+        self.map.get(s).copied()
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -1783,16 +1783,36 @@ fn emit_db_call(
             let fn_name = crate::naming::kernel_name(*k);
             Ok(Some(format!("{fn_name}({conn_s}.clone(), {body_s})")))
         }
-        // ── DbMigrate: (conn, List (String, String)) → Task e (List String) ──
-        // `List (String, String)` lowers to `Vec<(String, String)>` — no
-        // conversion needed; the runtime `db_migrate_apply` takes exactly that.
+        // ── DbMigrate: (conn, List Migration) → Task e (List String) ──
+        // `Migration` is the record alias `{ name : String, sql : String }`
+        // (reference `Std/Db.sky:237`), lowered to the synthesised struct with
+        // those two fields. The runtime `db_migrate_apply` takes `Vec<(String,
+        // String)>`, so map each record to a `(name, sql)` tuple — the exact
+        // shape the reference's pure-Sky `migrate` produces via `List.map (\m ->
+        // (m.name, m.sql))`.
         KernelFn::DbMigrate => {
             let conn_e = arg!(0, "conn")?;
             let migrations_e = arg!(1, "migrations")?;
             let conn_s = emit_expr_at(ctx, conn_e, indent, child, generics)?;
             let migrations_s = emit_expr_at(ctx, migrations_e, indent, child, generics)?;
             let fn_name = crate::naming::kernel_name(*k);
-            Ok(Some(format!("{fn_name}({conn_s}.clone(), {migrations_s})")))
+            Ok(Some(format!(
+                "{fn_name}({conn_s}.clone(), {migrations_s}.into_iter()\
+                 .map(|__m| (__m.name, __m.sql)).collect::<Vec<(String, String)>>())"
+            )))
+        }
+        // ── DbDefaultMigration: String -> Migration ──────────────────────────
+        // Pure record builder — a `Migration` named with an empty SQL body
+        // (reference `Std/Db.sky:246`). Emitted inline as the synthesised
+        // `{ name, sql }` struct literal so no runtime kernel is required.
+        KernelFn::DbDefaultMigration => {
+            let name_e = arg!(0, "name")?;
+            let name_s = emit_expr_at(ctx, name_e, indent, child, generics)?;
+            let key = vec!["name".to_owned(), "sql".to_owned()];
+            let struct_name = ctx.record_name_for_literal(&key)?.to_owned();
+            Ok(Some(format!(
+                "{struct_name} {{ name: {name_s}, sql: String::new() }}"
+            )))
         }
         // ── DbGetById: (conn, table, id) ────────────────────────────────────
         // Conn must be cloned so subsequent Db calls in the same continuation
@@ -7349,6 +7369,15 @@ const HTTP_REQUEST_FIELDS: &[&str] = &[
 /// in sync with `sky_lower::lower::CACHE_CFG_FIELDS`.
 const CACHE_CFG_FIELDS: &[&str] = &["maxBytes", "maxEntries", "ttlMs"];
 
+/// #217: the sorted `Sky.Http.Server.Response` field-name set. A record literal
+/// with exactly these names (and no registered synthesised struct, because the
+/// lowerer folded the shape to `IrType::ServerResponse`) constructs the runtime
+/// `sky_runtime::server::ServerResponse` struct. That struct carries one EXTRA
+/// runtime-only field, `cookies: Vec<String>` (multi-`Set-Cookie` support),
+/// which the Sky record alias does not expose — so the literal must default it
+/// to `Vec::new()`. Kept in sync with `sky_lower::lower::SERVER_RESPONSE_FIELD_TYPES`.
+const SERVER_RESPONSE_FIELDS: &[&str] = &["body", "contentType", "headers", "status"];
+
 /// Emit a record literal `{ x = e1, ... }` as a named struct literal
 /// `RecXY { x: <e1>, ... }`. `depth` is the literal's own IR-nesting level; its
 /// field values are emitted one level deeper. Kept out of the `emit_expr_at`
@@ -7369,6 +7398,9 @@ fn emit_record(
     for (sym, _) in fields {
         key.push(ctx.resolve_ident(*sym)?.to_owned());
     }
+    // `true` when the shape folds to the runtime `ServerResponse` struct, which
+    // carries an extra `cookies: Vec<String>` field the Sky record alias omits.
+    let mut is_server_response = false;
     let struct_name: String = {
         // Prefer an actual synthesised struct when one is registered for
         // this exact field-name set — that reflects `sky_lower`'s
@@ -7402,20 +7434,36 @@ fn emit_record(
                     .iter()
                     .zip(CACHE_CFG_FIELDS.iter())
                     .all(|(a, b)| a.as_str() == *b);
+            // #217: same fall-through — a `Response`-shaped literal has no
+            // registered struct (folded to `IrType::ServerResponse`), so it
+            // constructs the runtime `ServerResponse` (re-exported bare via the
+            // `pub use server::*` glob).
+            is_server_response = sorted.len() == SERVER_RESPONSE_FIELDS.len()
+                && sorted
+                    .iter()
+                    .zip(SERVER_RESPONSE_FIELDS.iter())
+                    .all(|(a, b)| a.as_str() == *b);
             if is_http_request {
                 "HttpRequest".to_owned()
             } else if is_cache_cfg {
                 "CacheCfg".to_owned()
+            } else if is_server_response {
+                "ServerResponse".to_owned()
             } else {
                 ctx.record_name_for_literal(&key)?.to_owned()
             }
         }
     };
-    let mut parts = Vec::with_capacity(fields.len());
+    let mut parts = Vec::with_capacity(fields.len() + usize::from(is_server_response));
     for (sym, value) in fields {
         let field_ident = ctx.emit_ident(*sym)?;
         let rendered = emit_expr_at(ctx, value, indent, child, generics)?;
         parts.push(format!("{field_ident}: {rendered}"));
+    }
+    if is_server_response {
+        // The runtime struct's multi-`Set-Cookie` field is not part of the Sky
+        // record alias; default it so the struct literal is complete.
+        parts.push("cookies: Vec::new()".to_owned());
     }
     Ok(format!("{struct_name} {{ {} }}", parts.join(", ")))
 }

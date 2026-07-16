@@ -467,7 +467,7 @@ pub enum StdlibKernel {
     JwtIssuedAt,
     /// `Jwt.jwtId : String -> Claims -> Claims` — sets the `jti` claim.
     JwtJwtId,
-    /// `Jwt.withClaim : String -> String -> Claims -> Claims` — adds an arbitrary claim.
+    /// `Jwt.withClaim : String -> JsonEnc.Value -> Claims -> Claims` — adds an arbitrary claim.
     JwtWithClaim,
     /// `Jwt.encode : Algorithm -> Claims -> Result Error String` — signs the claims.
     JwtEncode,
@@ -607,6 +607,9 @@ pub enum StdlibKernel {
     DbInsertFieldsReturning,
     DbWithTransaction,
     DbMigrate,
+    /// `Db.defaultMigration : String -> Migration` — a Migration named with an
+    /// empty SQL body (reference `Std/Db.sky:246`).
+    DbDefaultMigration,
     // ── Db.Decode ───────────────────────────────────────────────────────────
     DbDecString,
     DbDecInt,
@@ -1980,6 +1983,12 @@ impl StdlibKernel {
             ),
             Self::DbWithTransaction => d("Db", "withTransaction", 2, Db, "db_with_transaction"),
             Self::DbMigrate => d("Db", "migrate", 2, Db, "db_migrate_apply"),
+            // Pure record builder — emitted inline as a `Migration` struct
+            // literal (see the `DbDefaultMigration` arm in `emit_expr`), so the
+            // runtime-fn name is a never-called placeholder.
+            Self::DbDefaultMigration => {
+                d("Db", "defaultMigration", 1, Pure, "db_default_migration")
+            }
             // ── Db.Decode ───────────────────────────────────────────────────
             Self::DbDecString => d("Db.Decode", "string", 1, Db, "db_decode_string"),
             Self::DbDecInt => d("Db.Decode", "int", 1, Db, "db_decode_int"),
@@ -3063,6 +3072,7 @@ impl StdlibKernel {
         Self::DbInsertFieldsReturning,
         Self::DbWithTransaction,
         Self::DbMigrate,
+        Self::DbDefaultMigration,
         // Db.Decode
         Self::DbDecString,
         Self::DbDecInt,

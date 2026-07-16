@@ -159,6 +159,11 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
     // Std.Decimal opaque arbitrary-precision decimal type.
     // Lowerer arm: `ir_type_from_canon` `"Decimal" => IrType::Decimal`.
     "Decimal",
+    // `Std.Db.Migration` record alias `{ name : String, sql : String }`
+    // (reference `Std/Db.sky:237`). Structural record — `normalize_annotation_ty`
+    // expands the name to the record; the lowerer keeps it a synthesised struct
+    // (no opaque arm), so it is user-shadowable-safe like `HttpRequest`.
+    "Migration",
     // `Sky.Core.Error`'s `ErrorDetails` union (backlog #85 follow-up).
     // Lowerer arm: `ir_type_from_canon` `"ErrorDetails" => IrType::ErrorDetails`.
     // (`ErrorKind` — registered the same way at the same lowerer site — is a

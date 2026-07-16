@@ -100,6 +100,9 @@ const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     "live_route",
     "sky_cli_program_",
     "ui_layout_with",
+    // #217: emit_expr's DbDefaultMigration arm emits the `Migration` record
+    // struct literal inline; this name string is never emitted.
+    "db_default_migration",
     "list_map_consume",
 ];
 
@@ -236,6 +239,7 @@ impl Row {
                     | "Border" | "Font" | "Region" | "Input" | "Attr"
                     | "Event" | "Lazy" | "Keyed"
                     | "CssSafety" | "Middleware" | "Db.Decode"
+                    | "Regex" | "Path"
                 );
             if !skip_canon && !self.in_canon_qual {
                 issues.push("canon_missing");

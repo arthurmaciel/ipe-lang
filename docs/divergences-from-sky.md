@@ -171,9 +171,21 @@ recorded reference.
   Go-parity primitives; byte equality asserted in `golden_m5b_uuid_jwt.rs`'s
   `jwt_decode_now` test, which exercises the builder syntax end to end;
   RS256/PKCS#1 v1.5 is deterministic).
+- **`withClaim` value type converged (#217).** The builder API originally
+  authored `Jwt.withClaim : String -> String -> Claims -> Claims`, an
+  UNSANCTIONED narrowing of the reference `withClaim : String -> JsonEnc.Value
+  -> Claims -> Claims` (`Sky/Core/Jwt.sky:79`). This both rejected valid
+  reference programs (`Jwt.withClaim "email" (JsonEnc.string e)` → SKY-T0001)
+  and lost expressiveness (an `Int`/`Bool`/nested-object claim was
+  inexpressible, and even the string case stored the value as a JSON *string* —
+  wrong token bytes). Now converged: the scheme, kernel signature
+  (`sky_jwt_with_claim(key, value: JsonValue, claims)`), and runtime insert all
+  take the encoded JSON value directly (`Value` and `Claims` are both
+  `serde_json::Value`). Regression: `golden_i217_stdlib_contract_drift.rs`.
 - **Go-oracle relationship:** byte-identical, both call surfaces.
 - **Sanctioned:** yes (`divergence:` — offering both surfaces is strictly
-  additive over Go). Goldens `m5b_jwt_*`, `m_jwt_decode_now`.
+  additive over Go). Goldens `m5b_jwt_*`, `m_jwt_decode_now`,
+  `i217_jwt_withclaim_value`.
 
 ### B10 — `Std.Db` emits Rust + `sqlx` (vs Go + SQLite/cgo)
 - **Differs:** the full `Std.Db` surface is shared, but Go emits Go+SQLite (cgo)

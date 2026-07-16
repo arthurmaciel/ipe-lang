@@ -1018,6 +1018,7 @@ impl Env {
                     "insertFieldsReturning",
                     "withTransaction",
                     "migrate",
+                    "defaultMigration",
                 ],
             ),
             // `Std.Db.Sql` — typed, parameterized WHERE-fragment builder
