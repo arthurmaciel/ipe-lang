@@ -1226,7 +1226,7 @@ fn canonicalise_with_env(
     // cleanly but this one silently mis-registered the environment (the local
     // ctors won, but the type-home map kept pointing at the dep's home),
     // surfacing three functions later as an unrelated SKY-T0001 type mismatch
-    // (docs/architecture/class4-pattern-lowering-fix-spec-2026-07-09.md, item D).
+    // (docs/adr/0010-pattern-and-lowering-completeness.md, item D).
     //
     // This standalone pre-pass READS `type_home_map` but does NOT yet write this
     // module's own entries — the two loops below still own that. Running it first

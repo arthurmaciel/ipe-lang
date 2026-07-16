@@ -1677,7 +1677,7 @@ mod tests {
     // #102 — a LOCAL `type X` / `type alias X` shadowing a dep-imported `X`
     // must be rejected at the declaration with SKY-N0012 (`DuplicateType`),
     // not a downstream SKY-T0001. See `canonicalise_with_env`'s dep-shadow
-    // pre-pass and docs/architecture/class4-pattern-lowering-fix-spec-2026-07-09.md
+    // pre-pass and docs/adr/0010-pattern-and-lowering-completeness.md
     // (item D).
     // ---------------------------------------------------------------------
 
