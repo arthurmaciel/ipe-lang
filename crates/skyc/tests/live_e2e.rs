@@ -1809,3 +1809,183 @@ fn live_onsubmit_let_alias_chain_build_only() -> Result<(), BoxError> {
     )?;
     Ok(())
 }
+
+/// Fixture for the unrouted-GET session-wipe regression: a ROUTED app whose
+/// `/` page carries a typed-record `onSubmit` form and whose `notFound` page
+/// does NOT. The two pages must render DIFFERENT trees so a spurious
+/// re-route visibly destroys the form's handler index (same shape as
+/// `examples/12-skyvote`: form at `/auth/signup`, `notFound` = board).
+const SKY_ONSUBMIT_ROUTED_FORM: &str = r#"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Ui as Ui
+
+type Page
+    = FormPage
+    | AboutPage
+
+type alias Creds =
+    { username : String
+    , password : String
+    }
+
+type Msg
+    = DoSignIn Creds
+
+type alias Model =
+    { page : Page
+    , lastUsername : String
+    }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { page = FormPage, lastUsername = "" }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        DoSignIn creds ->
+            ( { model | lastUsername = creds.username }, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    case model.page of
+        AboutPage ->
+            Ui.layout [] (Ui.text "about")
+
+        FormPage ->
+            Ui.layout []
+                (Ui.column []
+                    [ Ui.form
+                        [ Ui.onSubmit DoSignIn ]
+                        [ Ui.input [ Ui.name "username" ]
+                        , Ui.input [ Ui.name "password" ]
+                        , Ui.input [ Ui.htmlAttribute "type" "submit" ]
+                        ]
+                    , Ui.text model.lastUsername
+                    ])
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Live.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = [ Live.route "/" FormPage, Live.route "/about" AboutPage ]
+        , notFound = AboutPage
+        }
+"#;
+
+/// Regression — FULL E2E for the live-reproduced "form submission does
+/// nothing" break. A real browser interleaves an automatic unrouted GET
+/// (`/favicon.ico` — headless Chromium fetches it without surfacing a
+/// request event, so browserless wire tests never saw it) between the page
+/// load and the user's submit. Before the fix, the page handler's Live-hit
+/// branch re-routed the session model for that GET (`/favicon.ico` matches
+/// no route → `notFound` page), re-rendered THAT view, and replaced the
+/// session's handler index + last_view — every subsequent event from the
+/// page the browser was actually showing (the form submit included)
+/// resolved against the wrong index and was silently dropped.
+///
+/// Go parity (live.go `handleInitial`): unrouted browser-noise paths 404
+/// before touching session state; an unrouted GET against an existing
+/// session 404s without re-routing it.
+///
+/// Wire sequence (mirrors the real browser):
+///  1. `GET /`             → session + typed-record form page.
+///  2. `GET /favicon.ico`  (same cookie) → MUST 404 and leave the session
+///                           untouched (this is the step that used to wipe
+///                           the handler index).
+///  3. `POST /_sky/event`  submit with form data → Msg must dispatch.
+///  4. `GET /`             → re-rendered page must show the decoded value.
+///
+/// # Errors
+///
+/// Propagates any pipeline, spawn, or HTTP failure as a test error.
+#[test]
+fn live_unrouted_get_does_not_wipe_form_handlers() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+
+    let test_name = "live_unrouted_get_wipe";
+    let exe = compile_and_build(test_name, SKY_ONSUBMIT_ROUTED_FORM)?;
+    let port = pick_ephemeral_port()?;
+    let _guard = spawn_and_wait_ready(test_name, &exe, port)?;
+    let addr = format!("127.0.0.1:{port}");
+
+    // ── Step 1: GET / — session cookie + the form page's handler id ────────
+    let (raw_headers, body) = http_send(test_name, &addr, "GET", "/", &[], None)?;
+    let sid = extract_cookie(&raw_headers, "sky_sid").ok_or_else(|| -> BoxError {
+        format!("{test_name}: no sky_sid cookie in GET / response").into()
+    })?;
+    let hid = extract_hid_for_open_tag(&body, "form").ok_or_else(|| -> BoxError {
+        format!(
+            "{test_name}: could not find data-sky-hid on <form> in GET / body\n\
+             --- first 2000 bytes ---\n{}",
+            &body[..body.len().min(2000)]
+        )
+        .into()
+    })?;
+    let cookie_header = format!("sky_sid={sid}");
+
+    // ── Step 2: GET /favicon.ico with the session cookie ───────────────────
+    // The browser-noise probe. Must 404 (Go parity) and must NOT re-route
+    // the session (asserted indirectly by steps 3–4 dispatching).
+    let (noise_headers, _) = http_send(
+        test_name,
+        &addr,
+        "GET",
+        "/favicon.ico",
+        &[("Cookie", &cookie_header)],
+        None,
+    )?;
+    assert!(
+        noise_headers.starts_with("HTTP/1.1 404"),
+        "{test_name}: GET /favicon.ico must 404 (browser-noise gate), got:\n{noise_headers}"
+    );
+
+    // ── Step 3: POST /_sky/event — submit the typed-record form ────────────
+    let event_body = format!(
+        r#"{{"id":"{hid}","event":"submit","args":[{{"username":"alice","password":"s3cr3t"}}],"sessionId":""}}"#
+    );
+    let (_, post_body) = http_send(
+        test_name,
+        &addr,
+        "POST",
+        "/_sky/event",
+        &[
+            ("Content-Type", "application/json"),
+            ("Cookie", &cookie_header),
+        ],
+        Some(event_body.as_bytes()),
+    )?;
+    assert!(
+        post_body.contains("patches"),
+        "{test_name}: POST /_sky/event (submit) did not return a patches ACK\nbody: {post_body}"
+    );
+
+    // ── Step 4: the Msg must have dispatched (model re-rendered) ───────────
+    std::thread::sleep(Duration::from_millis(200));
+    let (_, body2) = http_send(
+        test_name,
+        &addr,
+        "GET",
+        "/",
+        &[("Cookie", &cookie_header)],
+        None,
+    )?;
+    assert!(
+        body2.contains(">alice<"),
+        "{test_name}: the submit after GET /favicon.ico did not dispatch — \
+         the unrouted GET wiped the session's handler index (the exact \
+         examples/12-skyvote break)\n--- first 2000 bytes of second GET / ---\n{}",
+        &body2[..body2.len().min(2000)]
+    );
+
+    Ok(())
+}
