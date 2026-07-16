@@ -329,3 +329,57 @@ fn pubsub_resolves_and_emits() {
 fn pubsub_builds_and_runs() {
     seal_module("pubsub", PUBSUB_MAIN, "PUBSUB_OK");
 }
+
+// ── #210: Std.Config ─────────────────────────────────────────────────────────
+// Exercises the 16 `Config_*` kernels over the SHARED `Decoder` carrier: the
+// four primitives (string/int/float/bool), `field`/`at`/`list`/`nullable`,
+// `map`/`andThen`/`succeed`/`fail`, and all three format front-ends
+// (`decodeToml`/`decodeYaml`/`decodeJson`). Proves the two #210 fixes together:
+// the `type Decoder a` re-declaration resolves (SKY-N0026 carrier exemption) with
+// no competing enum emitted, and every kernel emits the shared JSON `decode_*` /
+// `config_decode_*` runtime fns (skyc-0 ⇒ cargo-0). Uses SINGLE-decoder
+// composition — the multi-parameter applicative `succeed (\a b -> …)` builder is
+// the same documented distinct surface `Sky.Core.Json.Decode` has (divergences
+// §A8/#198), not a Config-specific gap.
+
+const CONFIG_MAIN: &str = "module Main exposing (main)\n\
+    import Sky.Core.Prelude exposing (..)\n\
+    import Std.Config as Config\n\
+    import Std.Log exposing (println)\n\n\
+    hostD : Config.Decoder String\n\
+    hostD = Config.field \"host\" Config.string\n\n\
+    portD : Config.Decoder Int\n\
+    portD = Config.at [\"db\", \"port\"] Config.int\n\n\
+    tagsD : Config.Decoder (List String)\n\
+    tagsD = Config.field \"tags\" (Config.list Config.string)\n\n\
+    noteD : Config.Decoder (Maybe String)\n\
+    noteD = Config.nullable (Config.field \"note\" Config.string)\n\n\
+    ratioD : Config.Decoder Float\n\
+    ratioD = Config.map (\\r -> r) (Config.field \"ratio\" Config.float)\n\n\
+    checkedPortD : Config.Decoder Int\n\
+    checkedPortD =\n\
+    \x20   Config.andThen\n\
+    \x20       (\\p -> if p > 0 then Config.succeed p else Config.fail \"bad\")\n\
+    \x20       portD\n\n\
+    main =\n\
+    \x20   let\n\
+    \x20       toml = \"host = \\\"h\\\"\\ntags = [\\\"a\\\"]\\nratio = 1.0\\n\\n[db]\\nport = 5\\n\"\n\
+    \x20       yaml = \"note: hi\\n\"\n\
+    \x20       json = \"{\\\"host\\\": \\\"j\\\"}\"\n\
+    \x20       h = Result.withDefault \"?\" (Config.decodeToml toml hostD)\n\
+    \x20       p = Result.withDefault 0 (Config.decodeToml toml checkedPortD)\n\
+    \x20       t = String.fromInt (List.length (Result.withDefault [] (Config.decodeToml toml tagsD)))\n\
+    \x20       n = Maybe.withDefault \"none\" (Result.withDefault Nothing (Config.decodeYaml yaml noteD))\n\
+    \x20       j = Result.withDefault \"?\" (Config.decodeJson json hostD)\n\
+    \x20   in\n\
+    \x20   println (\"CONFIG:\" ++ h ++ \":\" ++ String.fromInt p ++ \":\" ++ t ++ \":\" ++ n ++ \":\" ++ j)\n";
+
+#[test]
+fn config_resolves_and_emits() {
+    let _ = compile_module_probe("config", CONFIG_MAIN);
+}
+
+#[test]
+fn config_builds_and_runs() {
+    seal_module("config", CONFIG_MAIN, "CONFIG:h:5:1:hi:j");
+}

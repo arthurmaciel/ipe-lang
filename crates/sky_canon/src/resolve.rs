@@ -255,13 +255,38 @@ const STDLIB_DEFINABLE_UI_TYPES: &[&str] = &[
     "LiveReq",
 ];
 
+/// The subset of [`RESERVED_BUILTIN_TYPES`] that a trusted
+/// [`ModuleOrigin::EmbeddedStdlib`] module may DEFINE as the source-level
+/// re-declaration of a shared opaque BOXED-WRAPPER carrier — as opposed to the
+/// nullary Std.Ui plain names in [`STDLIB_DEFINABLE_UI_TYPES`].
+///
+/// `Decoder` is the shared row-decoder carrier (`IrType::Decoder`, runtime
+/// `sky_runtime::json::Decoder<E, T>`). `Sky.Core.Json.Decode` names it as a
+/// bare reserved builtin (no source declaration — it is a qualifier-only kernel
+/// module). `Std.Config` is a compiled-source module that `exposing (Decoder)`
+/// and re-declares `type Decoder a = Decoder` to put the name in its export set,
+/// exactly as the Go/Haskell reference does — Config's decoders and JSON's share
+/// one carrier, differing only in the parse front-end.
+///
+/// Unlike [`STDLIB_DEFINABLE_UI_TYPES`] (below-guard nullary names that must
+/// lower to the module's OWN enum), this re-declaration is SOUND precisely
+/// because `Decoder`'s lowerer arm sits ABOVE the `enum_variants` guard AND
+/// `sky_lower::is_opaque_boxed_wrapper` recognises it: every `Decoder a`
+/// annotation lowers to the shared `IrType::Decoder(a)` carrier and the
+/// `type Decoder a = Decoder` declaration injects no competing enum. A
+/// [`ModuleOrigin::User`] module stays rejected (SKY-N0026), so the shared
+/// security-tier carrier cannot be shadowed by user code.
+const STDLIB_DEFINABLE_CARRIER_TYPES: &[&str] = &["Decoder"];
+
 /// Reject a `type` / `type alias` whose name shadows a reserved built-in type
 /// constructor. See [`RESERVED_BUILTIN_TYPES`].
 ///
 /// A [`ModuleOrigin::EmbeddedStdlib`] module is exempt for the
-/// [`STDLIB_DEFINABLE_UI_TYPES`] subset only — it is the canonical definer of
-/// those types (`Std.Css`). A [`ModuleOrigin::User`] module is gated against the
-/// full reserved set, so the default user-facing behaviour is byte-identical.
+/// [`STDLIB_DEFINABLE_UI_TYPES`] subset (nullary Std.Ui plain names — `Std.Css`)
+/// and the [`STDLIB_DEFINABLE_CARRIER_TYPES`] subset (shared opaque boxed-wrapper
+/// carriers — `Std.Config`'s `Decoder`). A [`ModuleOrigin::User`] module is gated
+/// against the full reserved set, so the default user-facing behaviour is
+/// byte-identical.
 fn reject_reserved_builtin_type(
     name: Symbol,
     span: Span,
@@ -272,7 +297,8 @@ fn reject_reserved_builtin_type(
         Some(resolved)
             if RESERVED_BUILTIN_TYPES.contains(&resolved)
                 && !(origin == ModuleOrigin::EmbeddedStdlib
-                    && STDLIB_DEFINABLE_UI_TYPES.contains(&resolved)) =>
+                    && (STDLIB_DEFINABLE_UI_TYPES.contains(&resolved)
+                        || STDLIB_DEFINABLE_CARRIER_TYPES.contains(&resolved))) =>
         {
             Err(Diagnostic::Name {
                 span,
