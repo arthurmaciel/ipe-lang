@@ -1,0 +1,30 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Task as Task
+import Sky.Core.Crypto as Crypto
+import Std.Log exposing (println)
+
+
+-- #225 leanness (efficiency, ADR-0002): a param captured ONCE into a SINGLE
+-- (depth-0) `move` closure that is its LAST use must stay a BARE move — the
+-- reference clones it, so no depth-0 pre-clone shadow is needed. Pre-fix the
+-- open-coded `n == 1` branch called `force_shared_capture_clones` directly,
+-- which wrapped EVERY directly-referencing lambda including the outermost
+-- (depth-0) one, minting a spurious `let msg = msg.clone()` around a last-use
+-- single-boundary capture — an over-clone.
+--
+-- The fix routes the param through `apply_move_ownership`, whose
+-- `rewrite_multiuse_clones(remaining = 1)` leaves the depth-0 boundary bare
+-- (last use) and only relays at depth >= 1. `msg` here is read once, at the
+-- last use, one boundary deep — so no depth-0 relay shadow may appear before
+-- the closure.
+report : String -> Task Error String
+report msg =
+    Crypto.randomToken 4
+        |> Task.andThen (\errId -> Task.succeed (msg ++ " " ++ errId))
+
+
+main : Task Error ()
+main =
+    Task.andThen (\s -> println s) (report "hello")
