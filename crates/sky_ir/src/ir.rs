@@ -1290,17 +1290,26 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
     }
 }
 
-/// Does this type's emitted Rust carrier implement `Clone`?
+/// Does this type's DEFAULT emitted Rust carrier implement `Clone`?
 ///
 /// The SINGLE authority both the lowerer's capture classifier and the backend's
 /// carrier choice consult, so a shape that renders a `Clone` carrier can never be
-/// classified `NonClone` (or vice-versa) — the two tables cannot drift. A
-/// first-class function value renders `Arc<dyn Fn(..) -> R + Send + Sync +
-/// 'static>` (a `Clone` reference-counted carrier), so [`IrType::Fun`] is `true`
-/// here; a captured function value therefore clones per call (an `Arc::clone`
-/// refcount bump) exactly like every other `Clone` capture.
+/// classified `NonClone` (or vice-versa) — the two tables cannot drift.
 ///
-/// The `false` set is the carriers that genuinely do NOT implement `Clone`:
+/// The carrier model is POSITION-TYPED (mirroring the reference backend): a
+/// first-class function value's default carrier is `Box<dyn Fn(..) -> R + Send +
+/// 'static>` — NOT `Clone` — so [`IrType::Fun`] is `false` here. `Arc<dyn Fn>`
+/// does not satisfy an `impl Fn` bound (std has no `impl Fn for Arc<F>`), so a
+/// universal Arc carrier is unsound across the HOF-kernel surface; instead the
+/// lowerer promotes exactly the fn-value BINDINGS that are captured at closure
+/// depth ≥ 1 or reused as values (`Expr::SharedLambda`, an `Arc<dyn Fn + Send +
+/// Sync>` carrier that IS `Clone`) and re-dispatches Arc-carried values through
+/// fresh closures where a `Box`/`impl Fn` slot needs them. Which shapes are
+/// eligible for that promotion is [`fun_value_arc_promotable`] — the companion
+/// authority.
+///
+/// The `false` set is the default carriers that do NOT implement `Clone`:
+/// * [`IrType::Fun`] — the default `Box<dyn Fn>` first-class carrier (see above).
 /// * [`IrType::FnOnceChain`] — a curried `Box<dyn FnOnce>` tower, consume-once by
 ///   type (the decode/db-decode pipeline `next_decoder` slots require it); a
 ///   `FnOnce` cannot be re-called, so it is never `Clone`.
@@ -1355,13 +1364,12 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::UiPlain(_)
         | IrType::LiveReq
         | IrType::CacheCfg
-        | IrType::CacheStats
-        // A first-class function value renders `Arc<dyn Fn>` — reference-counted,
-        // `Clone`. This is the carrier flip that dissolves the non-`Clone`-capture
-        // fail-close family.
-        | IrType::Fun(_, _) => true,
-        // Genuinely non-`Clone` carriers.
-        IrType::FnOnceChain(_, _)
+        | IrType::CacheStats => true,
+        // Non-`Clone` default carriers. `Fun`'s default carrier is `Box<dyn Fn>`
+        // (position-typed model — the `Clone` `Arc` carrier exists only at
+        // promoted binding sites, see [`fun_value_arc_promotable`]).
+        IrType::Fun(_, _)
+        | IrType::FnOnceChain(_, _)
         | IrType::Task(_)
         | IrType::Cmd(_)
         | IrType::Sub(_)
@@ -1378,6 +1386,33 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         IrType::Ui { msg, .. } => carrier_is_clone(msg),
         IrType::LiveRoute(page) => carrier_is_clone(page),
     }
+}
+
+/// Is a BINDING of this type eligible for the `Arc<dyn Fn>` carrier promotion
+/// ([`Expr::SharedLambda`]) when it is captured at closure depth ≥ 1 or reused
+/// as a function value?
+///
+/// The single authority the lowerer's capture classifier, reuse gate, and
+/// promotion pass all consult — no per-site shape enumeration. The eligible set
+/// is exactly the pure [`IrType::Fun`] shapes: the whole binding is one
+/// first-class function, so flipping its own carrier from `Box<dyn Fn>` to
+/// `Arc<dyn Fn + Send + Sync>` is a local, sound change (every capture clones
+/// the pointer; `impl Fn` / `Box` consumer slots receive a fresh re-dispatch
+/// closure).
+///
+/// Deliberately EXCLUDED, each for a structural reason:
+/// * [`IrType::FnOnceChain`] — consume-once by type; an `Arc<dyn Fn>` cannot
+///   satisfy the runtime's `Box<dyn FnOnce>` pipeline slots.
+/// * [`IrType::Decoder`] — a nominal runtime struct, not a first-class function
+///   value; its inner `Box<dyn Fn>` field is a runtime implementation detail.
+/// * Composites carrying a `Fun` (`Maybe (Int -> Int)`, tuples, records, …) —
+///   their carrier is the composite (`SkyMaybe<Box<dyn Fn>>`); promoting the
+///   inner slot would require type-position carrier changes across every
+///   constructor and consumer, so their capture/reuse stays fail-closed
+///   (SKY-L0126 / SKY-L0127).
+#[must_use]
+pub const fn fun_value_arc_promotable(ty: &IrType) -> bool {
+    matches!(ty, IrType::Fun(_, _))
 }
 
 /// An expression in the typed IR.

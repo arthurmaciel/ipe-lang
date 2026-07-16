@@ -223,6 +223,7 @@ recorded reference.
   - `Std.Ui` with `Html.htmlRender` — not exposed by the Go oracle (`sky dev`), which exits 1; ipê compiles and runs. Goldens `m7_stdui_onclick` / `m7_stdui_oninput_closure`.
   - `Set` generic / member on shapes the Go oracle exits 1 on. Goldens `m4d_set_generic` / `m4d_set_member`.
   - Invalid-encoding decode input where the Go oracle exits 1; ipê returns `Err`. Golden `m4f_encoding_invalid`.
+  - Partial application of a sibling **let-bound** function value (`wrap f x = f x + 1; guarded f = wrap (inc f)`) — Go emits `wrap(oneArg)` against the flattened 2-arity local and fails `go build` (`not enough arguments in call to wrap`); ipê eta-expands the residual and Arc-promotes the captured value. Golden `i221_fn_capture_eta_promoted` (output `4`, hand-computed language semantics).
 - **Go-oracle relationship:** Go-failure (auto kind-1); ipê handles the shape.
 - **Rationale:** capability/coverage; ipê's output is correct on these shapes.
 - **Sanctioned:** yes (auto Go-failure).

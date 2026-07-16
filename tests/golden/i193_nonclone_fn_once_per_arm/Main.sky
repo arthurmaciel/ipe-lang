@@ -5,16 +5,17 @@ import Sky.Core.Task as Task
 import Std.Log exposing (println)
 
 
--- #193 D3 seal: a NonClone fn-value passed as argument (consuming position)
--- in each of two case arms — one use per arm, two arms total.
+-- #193 D3 seal: a fn-value passed as argument (consuming position) in each of
+-- two case arms — one use per arm, two arms total.
 --
 -- `count_fn_value_uses` must keep SUM (not MAX) so that sum(1,1)=2 triggers
--- `reject_fn_value_reuse` (SKY-L0127).  If the counter were accidentally MAXed,
--- max(1,1)=1 → gate silently accepts → unsound double-move of a Box<dyn Fn>.
+-- the #221 Arc-carrier promotion of `f` (this compiles and runs). If the
+-- counter were accidentally MAXed, max(1,1)=1 would skip the promotion and
+-- leave an unsound per-arm double-move of a bare Box<dyn Fn> (cargo E0382).
 --
 -- The function `wrap` takes an `Int -> Int` argument (consuming position).
 -- `applyEither` passes `f` to `wrap` once per arm — each arm has 1 consuming
--- use; two arms sum to 2 → SKY-L0127.
+-- use; two arms sum to 2 → Arc promotion.
 wrap : (Int -> Int) -> Int
 wrap f =
     f 42
@@ -23,6 +24,7 @@ wrap f =
 applyEither : Bool -> (Int -> Int) -> Int
 applyEither flag f =
     case flag of
+
         True ->
             -- arm A: `f` passed as argument to `wrap` (consuming position)
             wrap f
