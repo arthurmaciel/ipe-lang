@@ -200,7 +200,7 @@ fn emit_live_route(
         } else {
             // Partial-ctor with N payload fields.
             //
-            // Item 1 (#120): static arity check — count ':param' segments in
+            // Item 1: static arity check — count ':param' segments in
             // the pattern and compare against the constructor's payload count.
             // A mismatch is a compile-time error (SKY-L0122): the route can
             // never deliver the right arguments.  Only checked when the pattern
@@ -325,7 +325,7 @@ fn emit_live_app_inner(
     let view_e = lookup_field(ctx, fields, "view")?;
     let subs_e = lookup_field(ctx, fields, "subscriptions")?;
 
-    // #91 seal: gate the Model type against `live_app`'s serde+Clone+PartialEq
+    // seal: gate the Model type against `live_app`'s serde+Clone+PartialEq
     // bound BEFORE emitting. A non-serialisable Model (e.g. a field of type
     // `Cmd`/`Sub`/`Task`/`Decoder`/`Db`/function, or `Html`/`Element`/`Color`)
     // would otherwise `skyc`-succeed and then `cargo`-fail on the missing trait.
@@ -338,7 +338,7 @@ fn emit_live_app_inner(
         )?;
     }
 
-    // #94 seal: gate the Msg type against `live_app`'s Clone+Send+Sync+Debug
+    // seal: gate the Msg type against `live_app`'s Clone+Send+Sync+Debug
     // bound. The predicate is ir_type_is_derivable (NOT serde) — Msg is never
     // persisted, so Html-carrying Msg is accepted. A Cmd/Sub/Task/function in
     // Msg would cargo-fail; the gate makes it a fail-closed SKY-L0122 error.
@@ -439,7 +439,7 @@ fn route_param_get(field_ty: &IrType, i: usize) -> DResult<String> {
         }
         IrType::Bool => format!("params.get({i}).map(|s| s == \"true\").unwrap_or_default()"),
         other => {
-            // Item 3b (#120): upgrade to SKY-L0123. Item 4 (#120): replace
+            // Item 3b: upgrade to SKY-L0123. Item 4: replace
             // `{other:?}` (which leaks internal IR representation like
             // `Enum { home: ModPath([…]) }`) with a user-facing type name.
             return Err(Diagnostic::Lower {
@@ -621,7 +621,7 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::ServerCookie => "Cookie",
         IrType::StreamWriter => "StreamWriter",
         IrType::HttpRequest => "HttpRequest",
-        // #127: Sky.Http.Server.WebSocket opaque handles.
+        // Sky.Http.Server.WebSocket opaque handles.
         IrType::WebSocketServer => "WebSocketServer",
         IrType::WebSocketServerCfg => "WebSocketServerCfg",
         IrType::Ui { .. } => "Element",

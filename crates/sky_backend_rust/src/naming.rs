@@ -198,7 +198,7 @@ pub fn module_value(module: &[&str], name: &str) -> String {
     if name == "main" && module == ["Main"] {
         return "sky_main".to_owned();
     }
-    // A record type-alias auto-constructor (#82) is the ONLY top-level value
+    // A record type-alias auto-constructor is the ONLY top-level value
     // whose Sky name begins with an uppercase letter (the parser forces every
     // other value / function name lowercase). Snake-casing it would fold the
     // case and could COLLIDE with a same-spelled lowercase value in the same
@@ -324,7 +324,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::ListAny => "list_any",
         KernelFn::ListAll => "list_all",
         KernelFn::ListFind => "list_find",
-        // ── List batch (#119) ────────────────────────────────────────────────
+        // ── List batch ────────────────────────────────────────────────
         KernelFn::ListFilterMap => "list_filter_map",
         KernelFn::ListSortBy => "list_sort_by",
         KernelFn::BasicsNot => "basics_not",
@@ -335,15 +335,15 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::BasicsModBy => "basics_mod_by",
         KernelFn::BasicsClamp => "basics_clamp",
         KernelFn::BasicsToString => "basics_to_string",
-        // ── Basics numerics (#115) ──────────────────────────────────────────
+        // ── Basics numerics ──────────────────────────────────────────
         KernelFn::BasicsNegate => "basics_negate",
         KernelFn::BasicsAbs => "basics_abs",
         // BasicsSqrt / BasicsMin / BasicsMax reuse the existing Math runtime
         // helpers: `math_sqrt(f64->f64)`, `math_min<T:PartialOrd>`,
         // `math_max<T:PartialOrd>`. No new runtime symbol needed.
         // These arms are merged with their Math.* counterparts below.
-        // ── end Basics numerics (#115) ──────────────────────────────────────
-        // ── Error kernels (Sky.Core.Error — real Error/ErrorKind ADT, #85/#160) ──
+        // ── end Basics numerics ──────────────────────────────────────
+        // ── Error kernels (Sky.Core.Error — real Error/ErrorKind ADT) ──
         // Each message constructor classifies its own `ErrorKind` at
         // construction (`sky_runtime::error::SkyError`, no longer a shared
         // string-identity). `toString` reuses the existing `errorToString`
@@ -356,7 +356,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::ErrorDecode => "sky_error_decode",
         KernelFn::ErrorConflict => "sky_error_conflict",
         KernelFn::ErrorUnavailable => "sky_error_unavailable",
-        // ── CssSafety (Sky.Core.CssSafety — Std.Css leaf kernels, #47) ──────
+        // ── CssSafety (Sky.Core.CssSafety — Std.Css leaf kernels) ──────
         // The bare runtime fn names, re-exported at the `sky_runtime` root via
         // `pub use css::*`. `safe_value`/`safe_prop_name`/`safe_selector` return
         // `SkyMaybe<String>`; `strip_style_close_kernel` returns `String`.
@@ -394,10 +394,10 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // `Math.min` / `Math.max` map to the runtime's generic
         // `math_min<T: PartialOrd>` / `math_max<T: PartialOrd>`: a real
         // polymorphic compare at the argument's actual type — NO `Int`
-        // coercion, NO float truncation. Divergence from Sky (PR #136):
+        // coercion, NO float truncation. Divergence from Sky:
         // Sky routes args through AsInt; Sky-Rust follows Elm's polymorphic
         // comparable (a -> a -> a). Rationale: Elm-conformance.
-        // ── Basics numerics (#115): BasicsSqrt / BasicsMin / BasicsMax merged here ──
+        // ── Basics numerics: BasicsSqrt / BasicsMin / BasicsMax merged here ──
         KernelFn::BasicsSqrt | KernelFn::MathSqrt => "math_sqrt",
         KernelFn::BasicsMin | KernelFn::MathMin => "math_min",
         KernelFn::BasicsMax | KernelFn::MathMax => "math_max",
@@ -469,7 +469,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::SetUnion => "set_union",
         KernelFn::SetIntersect => "set_intersect",
         KernelFn::SetDiff => "set_diff",
-        // ── Bytes kernels (M4e) ─────────────────────────────────────────────
+        // ── Bytes kernels ─────────────────────────────────────────────
         KernelFn::BytesEmpty => "bytes_empty",
         KernelFn::BytesLength => "bytes_length",
         KernelFn::BytesIsEmpty => "bytes_is_empty",
@@ -481,7 +481,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::BytesToBase64 => "bytes_to_base64",
         KernelFn::BytesAppend => "bytes_append",
         KernelFn::BytesSlice => "bytes_slice",
-        // ── Encoding kernels (M4f) ──────────────────────────────────────────
+        // ── Encoding kernels ──────────────────────────────────────────
         // Encoders are total (infallible) — no type-inference issue.
         KernelFn::EncodingBase64Encode => "base64_encode",
         KernelFn::EncodingUrlEncode => "url_encode",
@@ -494,7 +494,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::EncodingBase64Decode => "sky_base64_decode",
         KernelFn::EncodingUrlDecode => "sky_url_decode",
         KernelFn::EncodingHexDecode => "sky_encoding_hex_decode",
-        // ── JsonEnc kernels (M4g) ────────────────────────────────────────────
+        // ── JsonEnc kernels ────────────────────────────────────────────
         KernelFn::JsonEncString => "json_enc_string",
         KernelFn::JsonEncInt => "json_enc_int",
         KernelFn::JsonEncFloat => "json_enc_float",
@@ -503,7 +503,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::JsonEncList => "json_enc_list",
         KernelFn::JsonEncObject => "json_enc_object",
         KernelFn::JsonEncEncode => "json_enc_encode",
-        // ── JsonDec kernels (M4h) ────────────────────────────────────────────
+        // ── JsonDec kernels ────────────────────────────────────────────
         KernelFn::JsonDecString => "json_decode_string",
         KernelFn::JsonDecInt => "json_decode_int",
         KernelFn::JsonDecFloat => "json_decode_float",
@@ -521,12 +521,12 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::JsonDecMap2 | KernelFn::DbDecMap2 => "decode_map2",
         KernelFn::JsonDecMap3 | KernelFn::DbDecMap3 => "decode_map3",
         KernelFn::JsonDecMap4 | KernelFn::DbDecMap4 => "decode_map4",
-        // ── JsonDecP pipeline kernels (M4h) ──────────────────────────────────
+        // ── JsonDecP pipeline kernels ──────────────────────────────────
         KernelFn::JsonDecPRequired => "decode_pipeline_required",
         KernelFn::JsonDecPOptional => "decode_pipeline_optional",
         KernelFn::JsonDecPCustom => "decode_pipeline_custom",
         KernelFn::JsonDecPRequiredAt => "decode_pipeline_required_at",
-        // ── Crypto kernels (M5a) ─────────────────────────────────────────────
+        // ── Crypto kernels ─────────────────────────────────────────────
         KernelFn::CryptoSha256 => "crypto_sha256",
         KernelFn::CryptoSha512 => "crypto_sha512",
         KernelFn::CryptoSha1 => "crypto_sha1",
@@ -547,22 +547,22 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::CryptoChachaKeyFromPassword => "crypto_chacha_key_from_password",
         KernelFn::CryptoRandomBytes => "crypto_random_bytes",
         KernelFn::CryptoRandomToken => "crypto_random_token",
-        // ── Uuid kernels (M5b) ──────────────────────────────────────────────
-        // uuid_v4 / uuid_v7 are `() -> Task Error String` (task #54): entropy is
+        // ── Uuid kernels ──────────────────────────────────────────────
+        // uuid_v4 / uuid_v7 are `() -> Task Error String`: entropy is
         // an effect, so they return `SkyTask<E, String>` (E inferred from the
         // enclosing Task chain, like `crypto_random_token`).
         KernelFn::UuidV4 => "uuid_v4",
         KernelFn::UuidV7 => "uuid_v7",
         // uuid_parse returns SkyMaybe<String> — no E type, no concretisation.
         KernelFn::UuidParse => "uuid_parse",
-        // ── Jwt kernels (M5b) ───────────────────────────────────────────────
+        // ── Jwt kernels ───────────────────────────────────────────────
         // Concrete aliases pin E=String so Rust can infer the error type at
         // call sites where the Err arm is discarded (matches the Crypto pattern).
         KernelFn::JwtEncodeHs256 => "sky_jwt_encode_hs256",
         KernelFn::JwtDecodeHs256 => "sky_jwt_decode_hs256",
         KernelFn::JwtEncodeRs256 => "sky_jwt_encode_rs256",
         KernelFn::JwtDecodeRs256 => "sky_jwt_decode_rs256",
-        // ── Jwt builder API (D-00, #152) ────────────────────────────────────
+        // ── Jwt builder API ────────────────────────────────────
         KernelFn::JwtClaims => "sky_jwt_claims",
         KernelFn::JwtHs256 => "sky_jwt_hs256",
         KernelFn::JwtRs256 => "sky_jwt_rs256",
@@ -576,7 +576,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::JwtWithClaim => "sky_jwt_with_claim",
         KernelFn::JwtEncode => "sky_jwt_encode",
         KernelFn::JwtDecode => "sky_jwt_decode",
-        // ── Task combinators (M5a) ────────────────────────────────────────────
+        // ── Task combinators ────────────────────────────────────────────
         KernelFn::TaskSucceed => "task_succeed",
         KernelFn::TaskFail => "task_fail",
         KernelFn::TaskMap => "task_map",
@@ -604,18 +604,18 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::TaskWithMaxAttempts => "task_with_max_attempts",
         KernelFn::TaskWithBaseMs => "task_with_base_ms",
         KernelFn::TaskWithKind => "task_with_kind",
-        // ── Io kernels (M5a) ──────────────────────────────────────────────────
+        // ── Io kernels ──────────────────────────────────────────────────
         KernelFn::IoReadLine => "io_read_line",
         KernelFn::IoWriteStdout => "io_write_stdout",
         KernelFn::IoWriteStderr => "io_write_stderr",
-        // ── Time kernels (M5a) ────────────────────────────────────────────────
+        // ── Time kernels ────────────────────────────────────────────────
         KernelFn::TimeNow => "time_now",
         KernelFn::TimeSleep => "time_sleep",
         KernelFn::TimeUnixMillis => "time_unix_millis",
         KernelFn::TimeTimeString => "time_time_string",
         KernelFn::TimeIsLeapYear => "time_is_leap_year",
         KernelFn::TimeDaysInMonth => "time_days_in_month",
-        // ── System kernels (M5a) ──────────────────────────────────────────────
+        // ── System kernels ──────────────────────────────────────────────
         KernelFn::SystemArgs => "system_args",
         KernelFn::SystemGetenv => "system_getenv",
         KernelFn::SystemGetenvOr => "system_getenv_or",
@@ -627,11 +627,11 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::SystemCwd => "system_cwd",
         KernelFn::SystemLoadEnv => "system_load_env",
         KernelFn::SystemExit => "system_exit",
-        // ── Random kernels (M5a) ──────────────────────────────────────────────
+        // ── Random kernels ──────────────────────────────────────────────
         KernelFn::RandomInt => "random_int",
         KernelFn::RandomFloat => "random_float",
         KernelFn::RandomChoice => "random_choice",
-        // ── File kernels (M5a) ────────────────────────────────────────────────
+        // ── File kernels ────────────────────────────────────────────────
         KernelFn::FileReadFile => "file_read_file",
         KernelFn::FileWriteFile => "file_write_file",
         KernelFn::FileExists => "file_exists",
@@ -647,7 +647,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::FileCopy => "file_copy",
         KernelFn::FileRename => "file_rename",
         KernelFn::FileDelete => "file_delete",
-        // ── Http kernels (M5b) ──────────────────────────────────────────────
+        // ── Http kernels ──────────────────────────────────────────────
         // `HttpParseQuery` maps to `http_parse_query` (pure, no E type).
         // `HttpGet` / `HttpPost` / `HttpRequest` emit through `emit_http_call`
         // (not the standard callee_name path) because they need a `task_map`
@@ -668,7 +668,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::HttpWithUrl => "http_with_url",
         KernelFn::HttpWithFollowRedirects => "http_with_follow_redirects",
         KernelFn::HttpWithMaxRedirects => "http_with_max_redirects",
-        // ── Db kernels (M5b-db) ─────────────────────────────────────────────
+        // ── Db kernels ─────────────────────────────────────────────
         // `DbExec`/`DbQuery`/`DbQueryDecode` → `db_exec_params` / `db_query_params` /
         // `db_query_decode_params`.  The Sky surface type is polymorphic
         // (`exec : Db -> String -> List a -> Task Error Int`) so `a` may be
@@ -706,7 +706,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // Never emitted as a call — `emit_expr` intercepts it into an inline
         // `Migration` struct literal. Name kept for completeness/`sky doc`.
         KernelFn::DbDefaultMigration => "db_default_migration",
-        // ── Db.Decode kernels (M5b-db) ───────────────────────────────────────
+        // ── Db.Decode kernels ───────────────────────────────────────
         KernelFn::DbDecString => "db_decode_string",
         KernelFn::DbDecInt => "db_decode_int",
         KernelFn::DbDecFloat => "db_decode_float",
@@ -718,7 +718,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::DbDecRequired => "db_decode_required",
         KernelFn::DbDecOptional => "db_decode_optional",
         KernelFn::DbDecMoney => "db_decode_money",
-        // ── Std.Db.Sql — SqlFragment builder (backlog #61) ───────────────────
+        // ── Std.Db.Sql — SqlFragment builder ───────────────────
         // `int`/`string`/`float`/`bool` share `sql_param`'s runtime symbol —
         // each is a Sky-level type narrowing of the same generic
         // `sql_param::<T: Into<SqlParam>>`, so no separate runtime fn exists.
@@ -741,39 +741,39 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::SqlIsNotNull => "sql_is_not_null",
         KernelFn::SqlInList => "sql_in_list",
         KernelFn::SqlLike => "sql_like",
-        // ── Sky.Core.Secret — opaque secret-string wrapper (backlog #44) ─────
+        // ── Sky.Core.Secret — opaque secret-string wrapper ─────
         KernelFn::SecretFromString => "secret_from_string",
         KernelFn::SecretReveal => "secret_reveal",
         KernelFn::SecretRedacted => "secret_redacted",
-        // ── #194: Sky.Core.Regex kernels (pure; ungated runtime re-export) ────
+        // ── Sky.Core.Regex kernels (pure; ungated runtime re-export) ────
         // Names MUST match `sky_runtime::regex_kernel::*` exactly.
         KernelFn::RegexMatch => "regex_match",
         KernelFn::RegexFind => "regex_find",
         KernelFn::RegexFindAll => "regex_find_all",
         KernelFn::RegexReplace => "regex_replace",
         KernelFn::RegexSplit => "regex_split",
-        // ── #202: Sky.Core.Path kernels (pure; ungated runtime re-export) ─────
+        // ── Sky.Core.Path kernels (pure; ungated runtime re-export) ─────
         // Names MUST match `sky_runtime::path::*` exactly.
         KernelFn::PathBase => "path_base",
         KernelFn::PathDir => "path_dir",
         KernelFn::PathExt => "path_ext",
         KernelFn::PathIsAbsolute => "path_is_absolute",
-        // ── #197: Std.Trace kernels (Task; runtime `sky_runtime::trace::*`) ───
+        // ── Std.Trace kernels (Task; runtime `sky_runtime::trace::*`) ───
         KernelFn::TraceSpan => "trace_span",
         KernelFn::TraceEvent => "trace_event",
         KernelFn::TraceAttr => "trace_attr",
-        // ── #197: Std.Compression kernels (`sky_runtime::compression::*`) ─────
+        // ── Std.Compression kernels (`sky_runtime::compression::*`) ─────
         KernelFn::CompressionGzip => "compression_gzip",
         KernelFn::CompressionGunzip => "compression_gunzip",
         KernelFn::CompressionZstdCompress => "compression_zstd_compress",
         KernelFn::CompressionZstdDecompress => "compression_zstd_decompress",
-        // ── #197: Std.Csv kernels (`sky_runtime::csv::*`) ────────────────────
+        // ── Std.Csv kernels (`sky_runtime::csv::*`) ────────────────────
         KernelFn::CsvParse => "csv_parse",
         KernelFn::CsvParseWithDelimiter => "csv_parse_with_delimiter",
         KernelFn::CsvEncode => "csv_encode",
         KernelFn::CsvEncodeWithDelimiter => "csv_encode_with_delimiter",
         KernelFn::CsvParseStreamFromFile => "csv_parse_stream_from_file",
-        // ── #210: Std.Cache kernels (`sky_runtime::cache::*`) ────────────────
+        // ── Std.Cache kernels (`sky_runtime::cache::*`) ────────────────
         // Names MUST match the runtime fns exactly (`cache_new_raw`).
         KernelFn::CacheNewRaw => "cache_new_raw",
         KernelFn::CacheGet => "cache_get",
@@ -782,7 +782,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::CacheClear => "cache_clear",
         KernelFn::CacheSize => "cache_size",
         KernelFn::CacheStats => "cache_stats",
-        // ── M5c: TEA Cmd / Sub / Time kernels (wired) ────────────────────────
+        // ── TEA Cmd / Sub / Time kernels (wired) ────────────────────────
         KernelFn::CmdNone => "cmd_none",
         KernelFn::CmdBatch => "cmd_batch",
         KernelFn::CmdPerform => "cmd_perform",
@@ -797,7 +797,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::SubSubscribeTopic => "sub_subscribe_topic",
         KernelFn::PubSubPublish => "pubsub_publish",
         KernelFn::PubSubPublishNoEcho => "pubsub_publish_no_echo",
-        // ── M6: Sky.Http.Server kernels (wired) ─────────────────────────────────
+        // ── Sky.Http.Server kernels (wired) ─────────────────────────────────
         KernelFn::ServerGet => "server_get",
         KernelFn::ServerPost => "server_post",
         KernelFn::ServerPut => "server_put",
@@ -827,7 +827,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::MiddlewareWithRateLimit => "middleware_with_rate_limit",
         KernelFn::MiddlewareWithCsrf => "middleware_with_csrf",
         KernelFn::RateLimitAllow => "rate_limit_allow",
-        // ── M7: Std.Ui / Std.Html render kernels (Phase 0 — fully wired) ────
+        // ── Std.Ui / Std.Html render kernels (Phase 0 — fully wired) ────
         KernelFn::UiLayout => "ui_layout",
         KernelFn::UiLayoutWith => "ui_layout_with",
         // `Html.toString` is a distinct kernel sharing `HtmlRender`'s runtime fn.
@@ -835,17 +835,17 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::HtmlEscapeText => "html_escape_text_",
         KernelFn::HtmlEscapeAttr => "html_escape_attr_",
         KernelFn::HtmlAttrToString => "html_attr_to_string_",
-        // ── M7: Std.Live app-entry kernels (Phase 0 — stubs, emit CompilerBug) ──
+        // ── Std.Live app-entry kernels (Phase 0 — stubs, emit CompilerBug) ──
         KernelFn::LiveApp => "live_app",
         KernelFn::LiveAppRouted => "live_app_routed",
         KernelFn::LiveRoute => "live_route",
         KernelFn::LiveRenderStatic => "live_render_static",
-        // ── M7: Std.Tui app-entry kernels (Phase 0 — stubs) ─────────────────
+        // ── Std.Tui app-entry kernels (Phase 0 — stubs) ─────────────────
         KernelFn::TuiProgram => "tui_app",
         KernelFn::TuiApp => "tui_app_ui",
-        // ── M7: Std.Webview app-entry kernel (Phase 0 — stub) ───────────────
+        // ── Std.Webview app-entry kernel (Phase 0 — stub) ───────────────
         KernelFn::WebviewApp => "webview_app",
-        // ── M7: Std.Ui element builders ──────────────────────────────────────
+        // ── Std.Ui element builders ──────────────────────────────────────
         KernelFn::UiNone => "ui_none_",
         KernelFn::UiText => "ui_text_",
         KernelFn::UiHtml => "ui_html_",
@@ -866,7 +866,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::UiOnRight => "ui_on_right_",
         KernelFn::UiInFront => "ui_in_front_",
         KernelFn::UiBehind => "ui_behind_",
-        // ── M7: Std.Ui attribute builders ────────────────────────────────────
+        // ── Std.Ui attribute builders ────────────────────────────────────
         KernelFn::UiSpacing => "ui_spacing_",
         KernelFn::UiPadding => "ui_padding_",
         KernelFn::UiPaddingXY => "ui_padding_xy_",
@@ -887,7 +887,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::UiScrollbarX => "ui_scrollbar_x_",
         KernelFn::UiScrollbarY => "ui_scrollbar_y_",
         KernelFn::UiGridColumns => "ui_grid_columns_",
-        // ── M7: Std.Ui Length builders ───────────────────────────────────────
+        // ── Std.Ui Length builders ───────────────────────────────────────
         KernelFn::UiPx => "ui_px_",
         KernelFn::UiFill => "ui_fill_",
         KernelFn::UiContent => "ui_content_",
@@ -897,14 +897,14 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::UiVw => "ui_vw_",
         KernelFn::UiMinimum => "ui_minimum_",
         KernelFn::UiMaximum => "ui_maximum_",
-        // ── M7: Std.Ui Color builders ────────────────────────────────────────
+        // ── Std.Ui Color builders ────────────────────────────────────────
         KernelFn::UiRgb => "ui_rgb_",
         KernelFn::UiRgba => "ui_rgba_",
         KernelFn::UiWhite => "ui_white_",
         KernelFn::UiBlack => "ui_black_",
         KernelFn::UiTransparent => "ui_transparent_",
         KernelFn::UiColorCss => "ui_color_css_",
-        // ── M7: Background / Border / Font sub-modules ───────────────────────
+        // ── Background / Border / Font sub-modules ───────────────────────
         KernelFn::BackgroundColor => "ui_background_color_",
         KernelFn::BackgroundImage => "ui_background_image_",
         KernelFn::BackgroundLinearGradient => "ui_background_linear_gradient_",
@@ -920,7 +920,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::FontFamily => "ui_font_family_",
         KernelFn::FontBold => "ui_font_bold_",
         KernelFn::FontItalic => "ui_font_italic_",
-        // ── #76 Tier 1: extended Std.Ui / Font / Background / Border builders ──
+        // ── extended Std.Ui / Font / Background / Border builders ──
         KernelFn::UiSquare => "ui_square_",
         KernelFn::UiWidescreen => "ui_widescreen_",
         KernelFn::UiCinemascope => "ui_cinemascope_",
@@ -932,7 +932,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::UiTransitionRaw => "ui_transition_raw_",
         KernelFn::UiGridTracksRaw => "ui_grid_tracks_raw_",
         KernelFn::UiAnimateRaw => "ui_animate_raw_",
-        // #154: Breakpoint constants + wrapper
+        // Breakpoint constants + wrapper
         KernelFn::UiBreakpoint => "ui_breakpoint_",
         KernelFn::UiMediaQuery => "ui_media_query_",
         KernelFn::UiMobile => "ui_mobile_",
@@ -985,7 +985,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::FontHoverSize => "ui_font_hover_size_",
         KernelFn::HtmlAttrTabindex => "html_attr_tabindex_",
         KernelFn::HtmlAttrRows => "html_attr_rows_",
-        // ── Std.Ui.Region (#117) ──────────────────────────────────────────────
+        // ── Std.Ui.Region ──────────────────────────────────────────────
         KernelFn::RegionMainContent => "ui_region_main_content_",
         KernelFn::RegionNavigation => "ui_region_navigation_",
         KernelFn::RegionFooter => "ui_region_footer_",
@@ -1005,7 +1005,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::UiDescLiveAssertive => "ui_desc_live_assertive_",
         KernelFn::UiDescHeading => "ui_desc_heading_",
         KernelFn::UiDescLabel => "ui_desc_label_",
-        // ── Std.Ui.Input (#124) ───────────────────────────────────────────────
+        // ── Std.Ui.Input ───────────────────────────────────────────────
         KernelFn::InputLabelAbove => "input_label_above_",
         KernelFn::InputLabelBelow => "input_label_below_",
         KernelFn::InputLabelLeft => "input_label_left_",
@@ -1024,7 +1024,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::InputOption => "input_option_",
         KernelFn::InputRadio => "input_radio_",
         KernelFn::InputRadioRow => "input_radio_row_",
-        // ── M7: Html element builders ────────────────────────────────────────
+        // ── Html element builders ────────────────────────────────────────
         KernelFn::HtmlTextNode => "html_text_node_",
         KernelFn::HtmlRawNode => "html_raw_node_",
         KernelFn::HtmlDoctype => "html_doctype_",
@@ -1037,10 +1037,10 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::HtmlP => "html_p_",
         KernelFn::HtmlInput => "html_input_",
         KernelFn::HtmlImg => "html_img_",
-        // #76 batch 2: Std.Html element builders — tag-as-data, all share the
+        // batch 2: Std.Html element builders — tag-as-data, all share the
         // generic `html_node_` sink (the wire tag is injected by `emit_ui_call`).
         // `Html.node` itself shares this bare helper name (same sink).
-        // `Html.voidNode` (#76) shares it too — tag is a real runtime arg, empty
+        // `Html.voidNode` shares it too — tag is a real runtime arg, empty
         // children vec baked at the emit site.
         KernelFn::HtmlNode
         | KernelFn::HtmlVoidNode
@@ -1112,7 +1112,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         | KernelFn::HtmlSource
         | KernelFn::HtmlTrack
         | KernelFn::HtmlWbr => "html_node_",
-        // #76: Std.Html.Attributes builders. The full call (including the fixed
+        // Std.Html.Attributes builders. The full call (including the fixed
         // key literal) is produced by `emit_ui_call`; these names are the bare
         // runtime helpers, kept for the exhaustive match / any generic path.
         KernelFn::HtmlAttrClass
@@ -1151,7 +1151,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::UiOnBool => "ui_on_bool_",
         KernelFn::UiOnSubmit => "ui_on_submit_",
         KernelFn::UiOnFile => "ui_on_file_",
-        // #107: Std.Html.Events builders — emitted via the dedicated
+        // Std.Html.Events builders — emitted via the dedicated
         // `emit_ui_call` arm (`html_event_shape().is_some()`), so this generic
         // name map is not consulted at emit time; the arms are here to keep the
         // match exhaustive and the name faithful to each runtime constructor.
@@ -1166,11 +1166,11 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         | KernelFn::HtmlOnKeyUp => "html_on_string_",
         KernelFn::HtmlOnBool => "html_on_bool_",
         KernelFn::HtmlOnSubmit => "html_on_raw_",
-        // ── #111: Cli app-entry ───────────────────────────────────────────────
+        // ── Cli app-entry ───────────────────────────────────────────────
         // CliProgram is emitted via the dedicated emit_cli_call path;
         // kernel_name is kept for match exhaustiveness.
         KernelFn::CliProgram => "sky_cli_program_",
-        // ── #111: Std.Auth runtime function names (auth.rs) ──────────────────
+        // ── Std.Auth runtime function names (auth.rs) ──────────────────
         KernelFn::AuthHashPassword => "auth_hash_password",
         KernelFn::AuthHashPasswordCost => "auth_hash_password_cost",
         KernelFn::AuthVerifyPassword => "auth_verify_password",
@@ -1180,17 +1180,17 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::AuthRegister => "auth_register",
         KernelFn::AuthLogin => "auth_login",
         KernelFn::AuthSetRole => "auth_set_role",
-        // ── #111: Sky.Http.Server.Stream runtime function names (server_stream.rs)
+        // ── Sky.Http.Server.Stream runtime function names (server_stream.rs)
         KernelFn::StreamStream => "server_stream_stream",
         KernelFn::StreamEmit => "server_stream_emit",
         KernelFn::StreamFinish => "server_stream_finish",
         KernelFn::StreamWithContentType => "server_stream_with_content_type",
-        // ── #111: Sky.Core.Http.Stream runtime function names (http_stream.rs) ─
+        // ── Sky.Core.Http.Stream runtime function names (http_stream.rs) ─
         KernelFn::HttpStreamOpen => "http_stream_open",
         KernelFn::HttpStreamForEachChunk => "http_stream_for_each_chunk",
         KernelFn::HttpStreamClose => "http_stream_close",
         KernelFn::HttpStreamChunks => "sub_subscribe_stream",
-        // ── #127: Sky.Http.Server.WebSocket runtime function names (server.rs) ─
+        // ── Sky.Http.Server.WebSocket runtime function names (server.rs) ─
         KernelFn::WsDefaultCfg => "ws_server_default_cfg",
         KernelFn::WsWithOnConnect => "ws_server_with_on_connect",
         KernelFn::WsWithOnMessage => "ws_server_with_on_message",
@@ -1203,7 +1203,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::WsSendBinaryToClient => "ws_server_send_binary_to_client",
         KernelFn::WsBroadcast => "ws_server_broadcast",
         KernelFn::WsCloseClient => "ws_server_close_client",
-        // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────────
+        // ── Std.Ui.Lazy ────────────────────────────────────────────────
         KernelFn::LazyLazy => "lazy_lazy_",
         KernelFn::LazyLazy2 => "lazy_lazy2_",
         KernelFn::LazyLazy3 => "lazy_lazy3_",
@@ -1288,7 +1288,7 @@ mod tests {
 
     #[test]
     fn record_ctor_name_is_case_preserved_and_collision_free() {
-        // #82: a record-alias auto-constructor's uppercase Sky name must NOT
+        // a record-alias auto-constructor's uppercase Sky name must NOT
         // snake-case-fold into a same-spelled lowercase value's ident.
         assert_eq!(module_value(&["Main"], "Row"), "main_Row");
         assert_eq!(module_value(&["Main"], "row"), "main_row");
@@ -1317,7 +1317,7 @@ mod tests {
         assert_eq!(kernel_name(KernelFn::StringFromInt), "string_from_int");
         assert_eq!(kernel_name(KernelFn::StringFromFloat), "string_from_float");
         assert_eq!(kernel_name(KernelFn::LogPrintln), "log_println");
-        // ── Http kernels (M5b) ──────────────────────────────────────────────
+        // ── Http kernels ──────────────────────────────────────────────
         assert_eq!(kernel_name(KernelFn::HttpGet), "http_get");
         assert_eq!(kernel_name(KernelFn::HttpPost), "http_post");
         assert_eq!(kernel_name(KernelFn::HttpRequest), "http_request");

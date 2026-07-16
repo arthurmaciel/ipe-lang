@@ -1,4 +1,4 @@
-//! Tail-recursion detection + rewrite units (task #49).
+//! Tail-recursion detection + rewrite units.
 //!
 //! IR is built by hand (no full lower pipeline) so each shape is isolated. The
 //! detection mirrors the reference implementation (`Sky.Build.TailCallOpt`).

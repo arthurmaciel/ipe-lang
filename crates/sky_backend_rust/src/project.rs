@@ -47,7 +47,7 @@ const RUNTIME_MOD_RS: &str = include_str!("../../../tests/golden/m0/sky_runtime/
 /// The generated `sky_runtime/config.rs` (DB/config bindings — empty for M0).
 const RUNTIME_CONFIG_RS: &str = include_str!("../../../tests/golden/m0/sky_runtime/config.rs");
 
-// ── M5b-db: db-enabled manifest fragments ──────────────────────────────────
+// ── db-enabled manifest fragments ──────────────────────────────────
 
 /// Lines appended to `sky_runtime/mod.rs` when the program uses Db kernels.
 ///
@@ -56,7 +56,7 @@ const RUNTIME_CONFIG_RS: &str = include_str!("../../../tests/golden/m0/sky_runti
 /// module namespace so the generated `main.rs` can call the db functions.
 const RUNTIME_MOD_RS_DB_APPEND: &str = "pub mod db;\npub use db::*;\npub mod telemetry_spill;\n";
 
-// ── M5c: TEA Cmd / Sub ─────────────────────────────────────────────────────
+// ── TEA Cmd / Sub ─────────────────────────────────────────────────────
 
 /// Lines appended to `sky_runtime/mod.rs` when the program uses TEA kernels
 /// (`Cmd.none / batch / perform`, `Sub.none / batch / every`, `Time.every`).
@@ -66,7 +66,7 @@ const RUNTIME_MOD_RS_DB_APPEND: &str = "pub mod db;\npub use db::*;\npub mod tel
 /// emitted `main.rs` namespace via `pub use sky_runtime::*`.
 const RUNTIME_MOD_RS_TEA_APPEND: &str = "pub mod tea;\npub use tea::*;\n";
 
-// ── M6: Sky.Http.Server ──────────────────────────────────────────────────────
+// ── Sky.Http.Server ──────────────────────────────────────────────────────
 
 /// Lines appended to `sky_runtime/mod.rs` when the program uses
 /// Sky.Http.Server kernels.
@@ -91,7 +91,7 @@ const RUNTIME_MOD_RS_SERVER_APPEND: &str = "pub mod server;\npub use server::*;\
 // conditional append was removed — re-adding one would emit a duplicate
 // `pub mod http_header;` (E0428) for server/live programs.
 
-// ── #111: Std.Auth ──────────────────────────────────────────────────────────
+// ── Std.Auth ──────────────────────────────────────────────────────────
 
 /// Lines appended to `sky_runtime/mod.rs` when the program uses Std.Auth
 /// kernels (`Auth.hashPassword` / `verifyPassword` / `signToken` /
@@ -103,7 +103,7 @@ const RUNTIME_MOD_RS_SERVER_APPEND: &str = "pub mod server;\npub use server::*;\
 /// features), so no manifest surgery is needed — only a `mod.rs` declaration.
 const RUNTIME_MOD_RS_AUTH_APPEND: &str = "pub mod auth;\npub use auth::*;\n";
 
-// ── M7: Std.Ui / Std.Html ───────────────────────────────────────────────────
+// ── Std.Ui / Std.Html ───────────────────────────────────────────────────
 
 /// Lines appended to `sky_runtime/mod.rs` when the program uses Std.Ui /
 /// Std.Html render kernels.
@@ -123,7 +123,7 @@ const RUNTIME_MOD_RS_AUTH_APPEND: &str = "pub mod auth;\npub use auth::*;\n";
 /// `sky_runtime` top level, so it MUST be declared before this UI append or
 /// those imports fail (E0432) — the caller preserves that ordering. Splitting
 /// css out lets a pure-`Std.Css` program (no render kernel ⇒ no `uses_ui`) still
-/// get the css declarations via `uses_css` alone (#47).
+/// get the css declarations via `uses_css` alone.
 const RUNTIME_MOD_RS_UI_APPEND: &str = "pub mod html;\npub use html::*;\npub mod ui;\n";
 
 /// Lines appended to `sky_runtime/mod.rs` when the program uses the `Std.Css`
@@ -193,7 +193,7 @@ const RUNTIME_MOD_RS_WEBVIEW_APPEND: &str = "#[cfg(feature = \"webview\")]\npub 
 /// `sub_subscribe_topic`, `LiveReq`) into the module namespace so the generated
 /// `main.rs` can call them.
 ///
-/// `sub_subscribe_topic` is the `Sub.subscribeTopic` runtime kernel (M5d); it
+/// `sub_subscribe_topic` is the `Sub.subscribeTopic` runtime kernel; it
 /// lives in `live/pubsub.rs` because it needs the session-aware broker.
 ///
 /// `LiveReq` MUST be re-exported here (transitive-closure invariant). The
@@ -217,7 +217,7 @@ const RUNTIME_MOD_RS_LIVE_APPEND: &str = "#[cfg(feature = \"live\")]\npub mod li
 const TEA_TYPE_ALIASES: &str = "pub type SkyCmd<M> = sky_runtime::tea::SkyCmd<M>;\n\
      pub type SkySub<M> = sky_runtime::tea::SkySub<M>;\n";
 
-// ── #111: Std.Auth — concrete wrappers emitted when uses_auth is true ────────
+// ── Std.Auth — concrete wrappers emitted when uses_auth is true ────────
 
 /// Concrete wrappers appended to `main.rs` when the program uses Std.Auth
 /// kernels.  Each wrapper specialises the generic `E` type parameter to
@@ -506,7 +506,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
             out.push_str(&emit_record_struct(ctx, rec)?);
         }
 
-        // M5b-db: boundary-projection impl blocks.  When the program uses Db
+        // boundary-projection impl blocks.  When the program uses Db
         // kernels, the lowerer injected synthetic `SqlValue` / `SqlField`
         // enums.  The Db call sites need to project Sky ADT values to the
         // runtime's concrete `SqlParam` / `Option<SqlParam>`.
@@ -519,11 +519,11 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         // Fixed kernel-wrapper prelude (SkyError, SkyTask<A>, Decoder<T>, …).
         out.push_str(runtime_bindings()?);
 
-        // M5c: TEA kernels → the SkyCmd<M> / SkySub<M> type aliases.
+        // TEA kernels → the SkyCmd<M> / SkySub<M> type aliases.
         if ctx.uses_tea {
             out.push_str(TEA_TYPE_ALIASES);
         }
-        // #111: Std.Auth kernels → concrete E = SkyError wrappers.
+        // Std.Auth kernels → concrete E = SkyError wrappers.
         if ctx.uses_auth {
             out.push_str(AUTH_WRAPPERS);
         }
@@ -676,14 +676,14 @@ fn assemble_project_files(
         if ctx.uses_server {
             mod_rs.push_str(RUNTIME_MOD_RS_SERVER_APPEND);
         }
-        // #111: Std.Auth — append auth module when any Auth kernel is used.
+        // Std.Auth — append auth module when any Auth kernel is used.
         if ctx.uses_auth {
             mod_rs.push_str(RUNTIME_MOD_RS_AUTH_APPEND);
         }
         // `http_header` is now part of the M0 BASE `mod.rs` (#33 §6.1 made the
         // base `http_client` module depend on it), so it needs no conditional
         // append here — see the retired-append note at the top of this file.
-        // #47: Std.Css leaf security kernels — declared for any render-capable
+        // Std.Css leaf security kernels — declared for any render-capable
         // program (`uses_ui`, whose html/ui/live runtime modules import
         // `css_safety`) OR a pure-`Std.Css` program (`uses_css`, no render
         // kernel). Pushed BEFORE the UI append because `html.rs` /
@@ -702,7 +702,7 @@ fn assemble_project_files(
         if ctx.uses_ui || ctx.uses_css || ctx.uses_tui || ctx.uses_live || ctx.uses_webview {
             mod_rs.push_str(RUNTIME_MOD_RS_CSS_APPEND);
         }
-        // M7: Std.Ui / Std.Html render kernels (+ Tui + Live transitive dep).
+        // Std.Ui / Std.Html render kernels (+ Tui + Live transitive dep).
         // `live/mod.rs` unconditionally re-exports `crate::sky_runtime::html::*`;
         // `live/style_inject.rs` imports `super::html` — so `html` must be
         // declared whenever live is enabled, even without explicit Std.Ui use.
@@ -1211,7 +1211,7 @@ fn live_cargo_toml(base: &str) -> DResult<String> {
     // golden emits `net`+`sync` for the HTTP server, so add the two missing features.
     const TOKIO_NET_SYNC_FEATURES: &str = "\"time\", \"net\", \"sync\"]";
     const TOKIO_LIVE_FEATURES: &str = "\"time\", \"net\", \"sync\", \"signal\", \"process\"]";
-    // Transitive-closure invariant (#137): the runtime's `live/store.rs` defines
+    // Transitive-closure invariant: the runtime's `live/store.rs` defines
     // `PostgresStore` gated on `#[cfg(feature = "db")]`, which uses `sqlx::PgPool`.
     // `sqlx::PgPool` requires the `postgres` sqlx feature.  When a program uses
     // BOTH Db and Live, `db_cargo_toml` has already injected the sqlx dep with
@@ -1694,7 +1694,7 @@ mod tests {
         );
     }
 
-    // ── #137 seal tests: Db+Live closure ─────────────────────────────────────
+    // ── seal tests: Db+Live closure ─────────────────────────────────────
 
     /// `live_cargo_toml` on a DB+Server base manifest must extend the sqlx dep
     /// with the `"postgres"` feature.
@@ -1786,7 +1786,7 @@ mod tests {
     /// `"sqlite"` MUST stay enabled too — this is additive, not exclusive.
     /// An earlier version of this fix dropped `"sqlite"` when the driver was
     /// Postgres; that produced an exit-0-then-cargo-fail SEAL violation
-    /// (found by independent review, 2026-07-10) because the always-emitted
+    /// (found by independent review) because the always-emitted
     /// `telemetry_spill`/`live::hub`/`live::store` runtime modules hardcode
     /// `SqlitePool` for their local spill/session persistence, independent
     /// of the app's `[database]` driver choice.

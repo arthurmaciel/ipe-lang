@@ -358,14 +358,14 @@ fn is_http_request_canon_shape(fields: &mut [(&str, &canon::Type)], interner: &I
     )
 }
 
-/// #210: the canonical `Std.Cache.CacheCfg` field-name set, alphabetically
+/// the canonical `Std.Cache.CacheCfg` field-name set, alphabetically
 /// sorted: `maxBytes`, `maxEntries`, `ttlMs` — all `Int`. Folded to the nominal
 /// `IrType::CacheCfg` (`sky_runtime::cache::CacheCfg`) so a `Cache.defaultCfg`
 /// record literal constructs the runtime struct the `cache_new_raw` kernel
 /// takes (same mechanism as the `HttpRequest` fold above).
 const CACHE_CFG_FIELDS: &[&str] = &["maxBytes", "maxEntries", "ttlMs"];
 
-/// #210: the canonical `Std.Cache.stats` return field-name set, alphabetically
+/// the canonical `Std.Cache.stats` return field-name set, alphabetically
 /// sorted: `evictions`, `hits`, `misses` — all `Int`. Folded to the nominal
 /// `IrType::CacheStats` (`sky_runtime::cache::CacheStats`).
 const CACHE_STATS_FIELDS: &[&str] = &["evictions", "hits", "misses"];
@@ -451,7 +451,7 @@ fn ty_contains_fun(ty: &Ty) -> bool {
     }
 }
 
-/// #181 context suppression (let-bound shape). Recursively clear a
+/// context suppression (let-bound shape). Recursively clear a
 /// [`CallPin::DefaultI64`] from any `task_fail(…)` call that is the VALUE of a
 /// `let` / `Destructure` binding: the binding slot's type (emitted as an
 /// explicit `let eta_N: SkyTask<T> = …` annotation) already fixes the phantom
@@ -710,7 +710,7 @@ fn embeds_nonderivable_function(interner: &Interner, ty: &Ty) -> bool {
         // payload behind a trait object and derives nothing over it — a function
         // there is legitimate, so it is NOT a non-derivable carrier.
         Ty::Con { name, .. } if is_opaque_boxed_wrapper(interner, *name) => false,
-        // #90: an ENUM-LIKE head (built-in `Maybe`/`Result` or a user union) —
+        // an ENUM-LIKE head (built-in `Maybe`/`Result` or a user union) —
         // the runtime/derive machinery already tolerates a function argument
         // directly under it (see `is_enum_like_con_head`); only recurse for a
         // NESTED non-derivable carrier under the argument (e.g. a `List (a->b)`
@@ -805,7 +805,7 @@ fn collect_type_vars(t: &canon::Type, out: &mut BTreeSet<Symbol>) {
 /// Does `ty` mention any opaque `Sky.Http.Server` runtime type
 /// (`ServerRequest` / `ServerResponse` / `ServerRoute` / `ServerCookie`)?
 ///
-/// #217: `Sky.Http.Server.Response` is a record alias that folds to
+/// `Sky.Http.Server.Response` is a record alias that folds to
 /// `IrType::ServerResponse`, so a program can *use* the server types — build a
 /// `Response` record literal, annotate `Request -> Task Error Response` — WITHOUT
 /// ever calling a server kernel. The `server` runtime module (which defines
@@ -865,18 +865,18 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::StreamWriter
         // `HttpRequest` is an opaque handle — not a function type.
         | IrType::HttpRequest
-        // #127: `WsHandle` / `WsServerCfg` are opaque handles — not function types.
+        // `WsHandle` / `WsServerCfg` are opaque handles — not function types.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::Generic(_)
-        // M7: nullary plain types (`Length`, `Color`, etc.) trivially contain no
+        // nullary plain types (`Length`, `Color`, etc.) trivially contain no
         // functions.  `LiveReq` is an opaque handle with no `Fn` fields.
         | IrType::UiPlain(_)
         | IrType::LiveReq
         // `Order` (LT/EQ/GT) is a primitive leaf — no embedded function.
         // `Decimal` is a Copy newtype — no embedded function.
         // `ErrorKind`/`Error`/`ErrorDetails` and the nominal error-payload
-        // leaves (`ErrorInfo`/`PanicInfo`/`TypeInfo`, SEAL fix 2026-07-11)
+        // leaves (`ErrorInfo`/`PanicInfo`/`TypeInfo`, SEAL fix)
         // are leaves — no embedded function.
         | IrType::Order
         | IrType::Decimal
@@ -890,7 +890,7 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         // `Secret` is an opaque sealed string wrapper — no embedded function.
         | IrType::SqlFragment
         | IrType::Secret
-        // #210: Cache config / stats are plain data records — no function.
+        // Cache config / stats are plain data records — no function.
         | IrType::CacheCfg
         | IrType::CacheStats => false,
         // `LiveRoute page` carries the page type it builds — recurse (the
@@ -903,12 +903,12 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         IrType::Set(a) => ir_contains_fun(a),
         IrType::Tuple(elems) => elems.iter().any(ir_contains_fun),
         IrType::Record(fields) => fields.values().any(ir_contains_fun),
-        // M7: `Element<M>` / `Html<M>` carry a msg type parameter — recurse.
+        // `Element<M>` / `Html<M>` carry a msg type parameter — recurse.
         IrType::Ui { msg, .. } => ir_contains_fun(msg),
     }
 }
 
-// ── Capture-clone classification (#121) ──────────────────────────────────────
+// ── Capture-clone classification ──────────────────────────────────────
 //
 // Classifies an `IrType` for the capture-clone rewrite that makes closures
 // `Fn` (not `FnOnce`). Rules:
@@ -935,7 +935,7 @@ fn clone_class(t: &IrType) -> CloneClass {
         // `Decimal` is `#[derive(Copy)]` — treat as CopyLeaf.
         // StreamWriter is `#[derive(Clone, Copy)]` — an i64 id wrapper
         // (server_stream.rs:38). Bare capture is sound.
-        // #127: `WsHandle` is `#[derive(Clone, Copy)]` — an i64 id wrapper.
+        // `WsHandle` is `#[derive(Clone, Copy)]` — an i64 id wrapper.
         IrType::Int
         | IrType::Float
         | IrType::Bool
@@ -958,12 +958,12 @@ fn clone_class(t: &IrType) -> CloneClass {
         // `Secret` is `#[derive(Clone)]` (no Copy — carries a heap-allocated
         // `String`; hand-written `PartialEq`, not derived — see its own doc).
         // The nominal error-payload types derive Clone (not Copy — each
-        // carries heap-allocated `String`s; SEAL fix 2026-07-11).
-        // Runtime-verified Clone server/http opaques (audited 2026-07-05):
+        // carries heap-allocated `String`s; SEAL fix).
+        // Runtime-verified Clone server/http opaques (audited):
         // ServerRequest/ServerResponse/ServerCookie (server.rs:33/50/59),
         // ServerRoute (server.rs:136), HttpRequest (http_client.rs:64) all
         // `#[derive(Clone, …)]`.
-        // #127: `WsServerCfg` holds Arc<dyn Fn> callbacks — Clone via Arc.
+        // `WsServerCfg` holds Arc<dyn Fn> callbacks — Clone via Arc.
         IrType::Str
         | IrType::Bytes
         | IrType::Json
@@ -983,7 +983,7 @@ fn clone_class(t: &IrType) -> CloneClass {
         | IrType::ServerCookie
         | IrType::HttpRequest
         | IrType::WebSocketServerCfg
-        // #210: Cache config / stats runtime structs are `Clone` (no `Copy`).
+        // Cache config / stats runtime structs are `Clone` (no `Copy`).
         | IrType::CacheCfg
         | IrType::CacheStats => CloneClass::CloneOk,
         // Non-Clone: function-typed, task, decoder, Cmd, Sub.
@@ -1022,7 +1022,7 @@ fn clone_class(t: &IrType) -> CloneClass {
     }
 }
 
-/// T5 multi-use-clone eligibility for a by-value fn/def PARAMETER (#189).
+/// T5 multi-use-clone eligibility for a by-value fn/def PARAMETER.
 ///
 /// A `CloneOk` param clones per the general multi-use rule. A bare
 /// [`IrType::Generic`] param is ALSO eligible even though [`clone_class`] floors
@@ -1084,7 +1084,7 @@ fn clone_class_named_composite<'a>(parts: impl Iterator<Item = &'a IrType>) -> C
     }
 }
 
-// ── Capture-clone rewrite helpers, T3 (#121) ─────────────────────────────────
+// ── Capture-clone rewrite helpers, T3 ─────────────────────────────────
 //
 // Three helpers drive the capture-clone rewrite that makes closures `Fn`
 // (not `FnOnce`):
@@ -1294,7 +1294,7 @@ fn rewrite_captured_clones(
         // inner closure would move it out of the outer env on the first call,
         // making the outer closure `FnOnce` (E0525).
         //
-        // Args discipline (#151): a lambda that appears as a CALLBACK ARGUMENT
+        // Args discipline: a lambda that appears as a CALLBACK ARGUMENT
         // (e.g. `task_and_then(task, \ts -> insertRow db ts)`) has already been
         // fully processed by its own `lower_lambda` pass at depth 0, including
         // the callee-position exemption for NonClone symbols.  Propagating
@@ -1452,7 +1452,7 @@ fn rewrite_captured_clones(
         // `task_and_then(task, \ts -> insertRow db ts)` — is handled one level
         // up in the `Apply` arm: arg-position lambdas receive an empty
         // `noncl_set` before entering this arm, so `inner_noncl` below is
-        // already empty and no spurious L0126 is emitted (#151).
+        // already empty and no spurious L0126 is emitted.
         Expr::Lambda { params, ret, body } => {
             let param_names: BTreeSet<Symbol> = params.iter().map(|(s, _)| *s).collect();
             let inner_clone: BTreeSet<Symbol> = clone_set
@@ -1477,7 +1477,7 @@ fn rewrite_captured_clones(
                 )?),
             })
         }
-        // #164: `Expr::SharedLambda` is produced by `lower_let` strictly
+        // `Expr::SharedLambda` is produced by `lower_let` strictly
         // AFTER every `rewrite_captured_clones` call for its scope has
         // already run, so this arm is never actually reached in practice —
         // kept total (mirroring the `Lambda` arm exactly) so a future
@@ -1557,7 +1557,7 @@ fn rewrite_captured_clones(
         }),
         // Call: kernel / top-level function application.
         //
-        // Same Lambda-in-args discipline as `Expr::Apply` (#151): a lambda
+        // Same Lambda-in-args discipline as `Expr::Apply`: a lambda
         // passed as a callback to a kernel (e.g. `List.map (\m -> f m) xs` or
         // `task_and_then(task, \ts -> insertRow db ts)`) is already fully
         // processed by its own `lower_lambda` pass at depth 0.  Propagating
@@ -1753,7 +1753,7 @@ fn rewrite_captured_clones(
     }
 }
 
-// ── Multi-use-clone rewrite, T5 (#104 / #112) ────────────────────────────────
+// ── Multi-use-clone rewrite, T5 ────────────────────────────────
 //
 // A `CloneOk` local used more than once in a BY-VALUE consuming position causes
 // the Rust backend to emit bare identifier moves for each occurrence.  In Rust,
@@ -2483,7 +2483,7 @@ fn unify_group_value_leaves(
     }
 }
 
-/// #172 companion pass to the `Expr::SharedLambda` promotion in
+/// companion pass to the `Expr::SharedLambda` promotion in
 /// [`Lowerer::lower_let_pvar`]: walk `expr` exhaustively and, at every
 /// `If`/`Match` **unification group** whose one branch's value-position leaf
 /// reads the just-promoted `name` (`Arc<dyn Fn + Send + Sync>`), coerce every
@@ -2954,7 +2954,7 @@ fn force_shared_capture_clones(sym: Symbol, expr: Expr) -> Expr {
             variant,
             args: force_shared_capture_clones_all(sym, args),
         },
-        // #199: `TaskSeq` (auto-forced `let _ = <task>` continuation) emits as
+        // `TaskSeq` (auto-forced `let _ = <task>` continuation) emits as
         // `task_and_then(effect, Box::new(move |_| { rest }))` — the emitter
         // synthesises a `move` closure around `rest` that is NOT an `Expr::Lambda`
         // in the IR, so the ordinary `Lambda`-arm wrap never sees it. When `rest`
@@ -2992,7 +2992,7 @@ fn force_shared_capture_clones(sym: Symbol, expr: Expr) -> Expr {
     }
 }
 
-/// #199: wrap a (already recursively-processed) `TaskSeq` node in a pre-clone
+/// wrap a (already recursively-processed) `TaskSeq` node in a pre-clone
 /// `let sym = sym.clone() in <TaskSeq>` IFF its `rest` continuation directly
 /// references `sym`. The emitter renders `TaskSeq { effect, rest }` as
 /// `task_and_then(effect, Box::new(move |_| { rest }))`; placing the pre-clone
@@ -3407,8 +3407,8 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
 // (#177 SkyRow, #186 Display — one shared walk, a kernel→bound map.)
 //
 // Some runtime kernels are generic over a type parameter with a Rust trait bound
-// — `db_get_*<R: SkyRow>(field: String, row: &R)` (#177),
-// `basics_to_string<T: std::fmt::Display>(v: T)` (#186). When such a kernel is
+// — `db_get_*<R: SkyRow>(field: String, row: &R)`,
+// `basics_to_string<T: std::fmt::Display>(v: T)`. When such a kernel is
 // applied to a value whose Sky type is a generic/wildcard type-param, the
 // enclosing emitted function must carry the kernel's Rust bound on THAT generic
 // — otherwise the body's `db_get_string(_, &payload)` / `basics_to_string(x)`
@@ -3464,7 +3464,7 @@ const fn is_db_row_accessor(k: KernelFn) -> bool {
 /// arg — `let r = payload in Db.getString _ r`, where `r` is a pure alias of the
 /// param — still obliges the bound, exactly as a direct `Db.getString _ payload`
 /// does. See [`flows_into_sync_kernel_call`] for the same alias-chain-resolution
-/// pattern (#168).
+/// pattern.
 fn body_calls_kernel_on_param(
     param: Symbol,
     expr: &Expr,
@@ -3585,7 +3585,7 @@ fn body_calls_kernel_on_param(
 /// Is `args[idx]` a direct `Var`/`CloneVar` reference to `tracked`? The shared
 /// "the param sits in the bound-obliging arg position" test for every
 /// direct-arg-position kernel→bound matcher (Shape A: #177 `SkyRow` at arg 1,
-/// #186 `Display` at arg 0).
+/// `Display` at arg 0).
 fn arg_is_tracked_var(args: &[Expr], idx: usize, tracked: Symbol) -> bool {
     matches!(args.get(idx), Some(Expr::Var(s) | Expr::CloneVar(s)) if *s == tracked)
 }
@@ -3606,7 +3606,7 @@ fn is_wildcard_any_tv(interner: &Interner, tv: Symbol) -> bool {
 /// leaves (`Int`, `Str`, `ServerRequest`, …) and the non-parametric `UiPlain`
 /// never mention a Sky type variable. Used by [`body_boxes_generic_callback`] to
 /// decide whether a boxed callback's type still depends on the enclosing
-/// generic (#190).
+/// generic.
 fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
     match ty {
         IrType::Generic(g) => *g == tv,
@@ -3659,7 +3659,7 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::TypeInfo
         | IrType::SqlFragment
         | IrType::Secret
-        // #210: Cache config / stats are non-parametric — mention no type var.
+        // Cache config / stats are non-parametric — mention no type var.
         | IrType::CacheCfg
         | IrType::CacheStats => false,
     }
@@ -3669,7 +3669,7 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
 /// [`Expr::Lambda`] / [`Expr::SharedLambda`] — whose OWN type still mentions the
 /// type variable `tv`?
 ///
-/// #190: such a callback is emitted boxed as `Box<dyn Fn(..) -> .. + Send +
+/// such a callback is emitted boxed as `Box<dyn Fn(..) -> .. + Send +
 /// 'static>` (or `Arc<.. + Send + Sync + 'static>`) — typically the mapper
 /// argument to a higher-order kernel like `List.map`. Coercing the concrete
 /// (but `tv`-generic) `fn`/closure to that `+ 'static` trait object requires
@@ -3812,15 +3812,15 @@ fn apply_kernel_type_param_bounds(
                     && body_calls_kernel_on_param(*binder, body, matcher)
             })
         };
-        // SkyRow — wildcard-only (#177).
+        // SkyRow — wildcard-only.
         if is_wildcard && fires_on(&sky_row_matcher) {
             *bounds = bounds.with_sky_row();
         }
-        // Display — wildcard OR named (#186).
+        // Display — wildcard OR named.
         if fires_on(&display_matcher) {
             *bounds = bounds.with_display();
         }
-        // `'static` — wildcard OR named (#190). NOT a kernel-on-param obligation:
+        // `'static` — wildcard OR named. NOT a kernel-on-param obligation:
         // the tvar appears in the TYPE of a boxed callback (a `FuncValue` /
         // lambda passed to a HOF like `List.map`), not as an accessed value
         // binder, so it has its own structural walk over the whole body. `List.map
@@ -3833,7 +3833,7 @@ fn apply_kernel_type_param_bounds(
     }
 }
 
-// ── Fn-value reuse gate, T4 (#90) ─────────────────────────────────────────────
+// ── Fn-value reuse gate, T4 ─────────────────────────────────────────────
 //
 // A binding whose type embeds a function (`IrType::Fun`, or a `Maybe`/
 // `Result`/user-union carrying one) renders as (or contains) `Box<dyn Fn(..)
@@ -3967,7 +3967,7 @@ fn count_fn_value_uses_apply(sym: Symbol, func: &Expr, args: &[Expr]) -> usize {
             .sum::<usize>()
 }
 
-/// T4 (#90): fail closed with [`Feature::FunctionValueReuse`] (SKY-L0127) if
+/// T4: fail closed with [`Feature::FunctionValueReuse`] (SKY-L0127) if
 /// `sym` — a binding whose IR type embeds a function ([`ir_contains_fun`])
 /// and does not derive `Clone` ([`CloneClass::NonClone`]) — is CONSUMED more
 /// than once in `body`.
@@ -3977,7 +3977,7 @@ fn count_fn_value_uses_apply(sym: Symbol, func: &Expr, args: &[Expr]) -> usize {
 /// function — e.g. a bare `Task`/`Decoder`, which #90 does not touch and
 /// which the multi-use-clone rewrite already handles for `CloneOk`), so
 /// callers may invoke it unconditionally wherever that rewrite does not
-/// apply. See the "Fn-value reuse gate, T4 (#90)" module doc block above
+/// apply. See the "Fn-value reuse gate, T4" module doc block above
 /// [`count_fn_value_uses`] for why a direct-callee use is exempt.
 /// The ONE sanctioned way to make a freshly-bound owned symbol move-safe in the
 /// scope it is visible over. Every binder kind — def param, lambda param, `let`
@@ -4004,7 +4004,7 @@ fn count_fn_value_uses_apply(sym: Symbol, func: &Expr, args: &[Expr]) -> usize {
 /// * `n == 1` — the sole occurrence stays bare (no depth-0 over-clone), and its
 ///   `Lambda`/`SharedLambda` arm runs `force_shared_capture_clones` over the
 ///   body, installing the inner relays (the #218 obligation) WITHOUT the
-///   spurious depth-0 pre-clone the old open-coded `else` branch added (#225).
+///   spurious depth-0 pre-clone the old open-coded `else` branch added.
 /// * `n == 0` — an unused binder: [`rewrite_multiuse_clones`] no-ops at
 ///   `remaining == 0`, so unused pattern vars stay byte-identical.
 ///
@@ -4092,7 +4092,7 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
         // captures the clone and the outer `sym` stays alive.
         Expr::Lambda { params, ret, body } => {
             if lambda_body_refs_sym(sym, &body) {
-                // #199: a FURTHER-nested `move` closure inside this lambda's
+                // a FURTHER-nested `move` closure inside this lambda's
                 // body that ALSO captures `sym` would move `sym` out of THIS
                 // closure's captured environment on the first call, turning a
                 // `Box<dyn Fn>` into a de-facto `FnOnce` (E0507). This arm only
@@ -4127,12 +4127,12 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
                 Expr::Lambda { params, ret, body }
             }
         }
-        // #164: `Expr::SharedLambda` mirrors `Expr::Lambda` here — it is
+        // `Expr::SharedLambda` mirrors `Expr::Lambda` here — it is
         // ALSO a `move` closure literal that may capture `sym`, so it needs
         // the same pre-clone treatment when it is not the last use.
         Expr::SharedLambda { params, ret, body } => {
             if lambda_body_refs_sym(sym, &body) {
-                // #199: same nested-capture descent as the `Lambda` arm above.
+                // same nested-capture descent as the `Lambda` arm above.
                 let body = Box::new(force_shared_capture_clones(sym, *body));
                 if *remaining > 1 {
                     *remaining -= 1;
@@ -4388,7 +4388,7 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
     }
 }
 
-// ── TCO (#49): tail-recursion detection + rewrite ────────────────────────────
+// ── TCO: tail-recursion detection + rewrite ────────────────────────────
 //
 // Mirrors the reference implementation (`Sky.Build.TailCallOpt`:
 // `isTailRecursive` / `rewriteTailCalls`), improving the jump transport (a typed
@@ -4414,7 +4414,7 @@ enum NestedTail {
 }
 
 /// The flattened shape of a SUPPORTABLE list / cons sub-pattern nested inside a
-/// constructor payload, for the Class 4 item C2 (#158) desugaring. `prefix`
+/// constructor payload, for the Class 4 item C2 desugaring. `prefix`
 /// holds one binder per leading element; `tail` records whether the pattern is
 /// closed (exact length) or open (a rest binder).
 struct FlatNestedList {
@@ -4432,7 +4432,7 @@ impl FlatNestedList {
 }
 
 /// Classify a single list-element / tail sub-pattern as a plain binder for the
-/// #158 C2 desugaring: a `PVar` / `PAnything`. Any refutable sub-pattern is
+/// C2 desugaring: a `PVar` / `PAnything`. Any refutable sub-pattern is
 /// `None` (the whole nested list is then not desugarable).
 const fn nested_simple_binder(p: &canon::Pattern) -> Option<NestedBinder> {
     match &p.value {
@@ -4719,22 +4719,22 @@ struct KernelUsage {
     /// Any `Db*` (including `DbDec*`) kernel — gates the synthetic
     /// `SqlValue`/`SqlField` enum injection and the db-enabled backend files.
     db: bool,
-    /// Any TEA (`Cmd*` / `Sub*` / `TimeEvery`) kernel (M5c).
+    /// Any TEA (`Cmd*` / `Sub*` / `TimeEvery`) kernel.
     tea: bool,
-    /// Any Sky.Http.Server kernel (M6).
+    /// Any Sky.Http.Server kernel.
     server: bool,
-    /// Any Std.Ui render kernel (M7).
+    /// Any Std.Ui render kernel.
     ui: bool,
-    /// Any Std.Css (Sky.Core.CssSafety) leaf kernel (#47) — independent of
+    /// Any Std.Css (Sky.Core.CssSafety) leaf kernel — independent of
     /// `ui`: a pure-Std.Css program uses no render kernel.
     css: bool,
-    /// Any Std.Auth kernel (#111).
+    /// Any Std.Auth kernel.
     auth: bool,
-    /// Any Std.Live kernel (M7).
+    /// Any Std.Live kernel.
     live: bool,
-    /// Any Std.Tui kernel (M7).
+    /// Any Std.Tui kernel.
     tui: bool,
-    /// Any Std.Webview kernel (M7).
+    /// Any Std.Webview kernel.
     webview: bool,
 }
 
@@ -4909,7 +4909,7 @@ fn pat_binds_symbol(pat: &Pat, target: Symbol) -> bool {
 
 /// Rewrite every FREE `Expr::Var(target)` in `expr` to `on_hit(target)` —
 /// the shared shadow-aware tree walk behind [`rewrite_var_to_apply`] (#89 F2)
-/// and [`rewrite_destructure_read`] (#125). Factoring the walk out keeps the
+/// and [`rewrite_destructure_read`]. Factoring the walk out keeps the
 /// two rewrites' shadow handling provably identical instead of two chances
 /// to drift (spec §2.5,
 /// `docs/adr/0011-emitter-clone-borrow-discipline.md`).
@@ -5262,7 +5262,7 @@ fn mask_pattern_except(pat: &Pat, keep: Symbol) -> Pat {
 
 /// Shadow-aware rewrite: replace every FREE `Expr::Var(target)` in `expr`
 /// with a fresh, masked re-destructure of `thunk_name`'s call result — the
-/// #125 generalization of [`rewrite_var_to_apply`] (which only ever needs a
+/// generalization of [`rewrite_var_to_apply`] (which only ever needs a
 /// bare `Apply`, since a `PVar` binder has exactly one name that directly
 /// names the re-buildable value). A `Tuple`/`Record` binder introduces
 /// MULTIPLE names from ONE value, so each read must also RE-PROJECT the
@@ -5311,14 +5311,14 @@ pub struct Lowerer<'a> {
     /// `(home, type name)`. Keyed by `(home, name)`, not `name` alone, so two
     /// modules each declaring `type Color` keep DISTINCT variant sets: a collapsed
     /// `Symbol`-only key would hand a `case` on one `Color` the other's ctor set,
-    /// tripping the [`Match::new`] cover backstop (#100).
+    /// tripping the [`Match::new`] cover backstop.
     enum_variants: BTreeMap<(ModPath, Symbol), Vec<Symbol>>,
     /// Each constructor's declared payload arity, keyed by its enum's nominal
     /// identity paired with the constructor name `(home, ctor name)`. A saturated
     /// construction passes exactly this many arguments; a bare or partially-applied
     /// payload constructor is the constructor-as-function gap. Keyed by
     /// `(home, ctor name)` so two same-short-named types whose constructors share a
-    /// name but differ in arity do not collapse (#100).
+    /// name but differ in arity do not collapse.
     ctor_arity: BTreeMap<(ModPath, Symbol), usize>,
     /// Pre-minted, collision-free parameter names for eta-expanding a partial
     /// application into a boxed closure. Sized in [`crate::lower`] to the widest
@@ -5386,7 +5386,7 @@ pub struct Lowerer<'a> {
     /// mirroring [`Self::param_cursor`]'s shape exactly.
     destructure_thunk_cursor: Cell<usize>,
     /// Pre-minted, collision-free `Vec` binder names for the Class 4 item C2
-    /// (#158) nested-cons desugaring — a `PList` / `PCons` sub-pattern nested in
+    /// nested-cons desugaring — a `PList` / `PCons` sub-pattern nested in
     /// a `PCtor` arm payload (`Just (h :: t)`) lowers to a fresh `Vec` binder in
     /// that ctor-arg slot plus an arm guard, with the named head / tail bindings
     /// recovered in the body prelude. Sized by [`count_nested_cons_payload_sites`]
@@ -5457,7 +5457,7 @@ pub struct Lowerer<'a> {
 /// count a saturated `Just x` / `Ok x` passes) for them, exactly as it does for a
 /// user enum.
 ///
-/// Also carries the `SqlValue` / `SqlField` ADT symbols (M5b-db). These are not
+/// Also carries the `SqlValue` / `SqlField` ADT symbols. These are not
 /// user declarations either — they are synthesised by the lowerer into
 /// `module.types` when any Db kernel call is detected, so the backend can emit
 /// the concrete Rust enum and its `into_sql_param()` / `into_field_param()`
@@ -5469,7 +5469,7 @@ pub struct BuiltinCtors {
     pub nothing: Symbol,
     pub ok: Symbol,
     pub err: Symbol,
-    // ── SqlValue / SqlField (M5b-db) ─────────────────────────────────────────
+    // ── SqlValue / SqlField ─────────────────────────────────────────
     pub sqlvalue: Symbol,
     pub sqlfield: Symbol,
     pub sql_string: Symbol,
@@ -5483,12 +5483,12 @@ pub struct BuiltinCtors {
     pub sql_null: Symbol,
     pub set_field: Symbol,
     pub omit_field: Symbol,
-    // ── Order ADT (#123) ─────────────────────────────────────────────────────
+    // ── Order ADT ─────────────────────────────────────────────────────
     pub order: Symbol,
     pub lt: Symbol,
     pub eq: Symbol,
     pub gt: Symbol,
-    // ── Error / ErrorKind ADTs (E-12, #152) ──────────────────────────────────
+    // ── Error / ErrorKind ADTs ──────────────────────────────────
     // `Error` has one constructor also named `Error` (arity 2).
     // `ErrorKind` has 11 nullary constructors.
     pub error: Symbol,
@@ -5727,7 +5727,7 @@ pub fn count_destructure_thunk_sites(m: &canon::Module) -> usize {
 }
 
 /// Count `case`-arm sites that need a fresh payload binder for the Class 4
-/// item C2 (#158) nested-cons desugaring: a `PList` / `PCons` sub-pattern that
+/// item C2 nested-cons desugaring: a `PList` / `PCons` sub-pattern that
 /// is a DIRECT argument of a `PCtor` arm head (`Just (h :: t)`, `Ok [a, b]`).
 /// Each such argument lowers to one fresh `Vec` binder plus an arm guard.
 ///
@@ -5946,7 +5946,7 @@ impl<'a> Lowerer<'a> {
         let mut ctor_arity = BTreeMap::new();
         for union in &m.unions {
             // Key by the union's HOME `(home, name)` so same-short-named types from
-            // different source modules keep distinct variant/arity entries (#100).
+            // different source modules keep distinct variant/arity entries.
             let uhome = ModPath(union.home.clone());
             enum_variants.insert(
                 (uhome.clone(), union.name),
@@ -5963,7 +5963,7 @@ impl<'a> Lowerer<'a> {
         // Prelude built-ins carry the empty canon home (`home: Vec::new()` in
         // `Env`), so they key the identity map under the empty `ModPath` — the
         // same home the lowered `Expr::Ctor` / `Pat::Ctor` for `Just` / `Ok` / …
-        // carry (#100).
+        // carry.
         let prelude_home = ModPath(Vec::new());
         enum_variants.insert(
             (prelude_home.clone(), builtins.maybe),
@@ -5978,7 +5978,7 @@ impl<'a> Lowerer<'a> {
         ctor_arity.insert((prelude_home.clone(), builtins.ok), 1);
         ctor_arity.insert((prelude_home.clone(), builtins.err), 1);
 
-        // Seed `SqlValue` / `SqlField` variant sets + arities (M5b-db).
+        // Seed `SqlValue` / `SqlField` variant sets + arities.
         // These are Prelude built-ins (like Maybe/Result) — no user `type`
         // declaration; the symbols must be present here so any `case v of
         // SqlString s -> … ; SqlInt i -> …` pattern is exhaustively validated and
@@ -6012,7 +6012,7 @@ impl<'a> Lowerer<'a> {
         ctor_arity.insert((prelude_home.clone(), builtins.sql_null), 1); // SqlNull(SqlValue)
         ctor_arity.insert((prelude_home.clone(), builtins.set_field), 1); // SetField(SqlValue)
         ctor_arity.insert((prelude_home.clone(), builtins.omit_field), 0);
-        // ── Order ADT (#123) ─────────────────────────────────────────────────
+        // ── Order ADT ─────────────────────────────────────────────────
         enum_variants.insert(
             (prelude_home.clone(), builtins.order),
             vec![builtins.lt, builtins.eq, builtins.gt],
@@ -6020,7 +6020,7 @@ impl<'a> Lowerer<'a> {
         ctor_arity.insert((prelude_home.clone(), builtins.lt), 0);
         ctor_arity.insert((prelude_home.clone(), builtins.eq), 0);
         ctor_arity.insert((prelude_home.clone(), builtins.gt), 0);
-        // ── Error / ErrorKind ADTs (E-12, #152) ─────────────────────────────────
+        // ── Error / ErrorKind ADTs ─────────────────────────────────
         // `Error` is a single-constructor ADT: `Error ErrorKind ErrorInfo`.
         // `ErrorKind` has 11 nullary variants.
         // Both are Prelude built-ins — no user `type` declaration in Sky source.
@@ -6158,7 +6158,7 @@ impl<'a> Lowerer<'a> {
         Ok(sym)
     }
 
-    /// Hand out the next globally-unique Class 4 item C2 (#158) nested-cons
+    /// Hand out the next globally-unique Class 4 item C2 nested-cons
     /// payload binder from [`Self::nested_cons_binders`]. Mirrors
     /// [`Self::fresh_param_binder`] exactly; sized by
     /// [`count_nested_cons_payload_sites`] (an upper bound), so an overrun is an
@@ -6236,7 +6236,7 @@ impl<'a> Lowerer<'a> {
     pub fn run(self) -> Result<Program, (Diagnostic, Vec<Symbol>)> {
         let mut types_ir: Vec<TypeDef> = Vec::with_capacity(self.m.unions.len());
         for u in &self.m.unions {
-            // #210: `Std.Cache`'s opaque `type Cache k v = Cache Int` is backed
+            // `Std.Cache`'s opaque `type Cache k v = Cache Int` is backed
             // by the NON-generic runtime enum `SkyCacheHandle { Cache(i64) }` —
             // the handle carries no type args (`k`/`v` live only on the kernel
             // calls). Skip its `EnumDef` entirely so the backend never emits a
@@ -6266,7 +6266,7 @@ impl<'a> Lowerer<'a> {
             // id — passing it spares `lower_def` a throwaway `Vec<Symbol>`
             // key allocation per def (efficiency-audit §3 low).
             let id = FuncId::from_raw(u32::try_from(idx).unwrap_or(u32::MAX));
-            // #221 fix B: attach THIS def's home to any lowering diagnostic it
+            // fix B: attach THIS def's home to any lowering diagnostic it
             // raises, so the driver resolves the owning source file exactly
             // (via `home_to_source`) instead of byte-guessing across merged
             // modules. `def.home()` is the def's defining-module byte-namespace
@@ -6274,7 +6274,7 @@ impl<'a> Lowerer<'a> {
             let mut func = self
                 .lower_def(def, id)
                 .map_err(|d| (d, def.home().to_vec()))?;
-            // #181 context suppression, applied UNIFORMLY to every lowered body
+            // context suppression, applied UNIFORMLY to every lowered body
             // regardless of which `lower_def` branch produced it (typed / untyped
             // fn / nullary binding). Clears a `task_fail` turbofish pin whose
             // phantom success type a `let` or `Apply` slot already supplies (the
@@ -6290,7 +6290,7 @@ impl<'a> Lowerer<'a> {
             funcs.push(func);
         }
 
-        // M5b-db: when any Db kernel call is present, inject the synthetic
+        // when any Db kernel call is present, inject the synthetic
         // `SqlValue` and `SqlField` `EnumDef`s into `module.types`.  They are
         // Prelude built-ins — not user `type` declarations — but the backend
         // needs real `EnumDef`s in the module to:
@@ -6324,12 +6324,12 @@ impl<'a> Lowerer<'a> {
 
         let records = self.collect_record_types().map_err(|d| (d, Vec::new()))?;
 
-        // M5c: detect whether any TEA kernel call is present. The backend uses
+        // detect whether any TEA kernel call is present. The backend uses
         // this flag to append `pub mod tea; pub use tea::*;` to mod.rs and to
         // add `SkyCmd<M>` / `SkySub<M>` type aliases.
         let uses_tea = kernel_usage.tea;
 
-        // M6: detect whether any Sky.Http.Server kernel call is present, OR any
+        // detect whether any Sky.Http.Server kernel call is present, OR any
         // function signature references a server type (#217: a `Response` record
         // literal / `Request`-typed handler uses the server structs without
         // necessarily calling a server kernel). Either pulls in the `server`
@@ -6344,7 +6344,7 @@ impl<'a> Lowerer<'a> {
                     || f.params.iter().any(|(_, t)| ir_type_mentions_server(t))
             });
 
-        // M7: detect Std.Ui / Std.Html / Std.Live / Std.Tui / Std.Webview usage.
+        // detect Std.Ui / Std.Html / Std.Live / Std.Tui / Std.Webview usage.
         // TUI runtime files (tui/app.rs, tui/layout.rs, tui/focus.rs) import
         // `super::super::ui` and `super::super::html` unconditionally, so
         // `uses_ui` must be true whenever `uses_tui` is true — even when the
@@ -6356,11 +6356,11 @@ impl<'a> Lowerer<'a> {
         let uses_live = kernel_usage.live;
         let uses_webview = kernel_usage.webview;
 
-        // #47: detect Std.Css (Sky.Core.CssSafety) leaf-kernel usage. Independent
+        // detect Std.Css (Sky.Core.CssSafety) leaf-kernel usage. Independent
         // of `uses_ui` — a pure-Std.Css program uses no render kernel.
         let uses_css = kernel_usage.css;
 
-        // #111: detect Std.Auth kernel usage — any of hashPassword, verifyPassword,
+        // detect Std.Auth kernel usage — any of hashPassword, verifyPassword,
         // signToken, verifyToken, register, login, setRole, and companions.  The
         // backend uses this flag to append `pub mod auth; pub use auth::*;` to
         // the emitted `sky_runtime/mod.rs`.
@@ -6512,7 +6512,7 @@ impl<'a> Lowerer<'a> {
     /// ([`Feature::Polymorphism`]).
     ///
     /// A field whose type embeds a function (`type Retryish e = RetryWhen (e ->
-    /// Bool)`) is NOT gated here (#90) — #87's derive-demotion fixpoint keeps
+    /// Bool)`) is NOT gated here — #87's derive-demotion fixpoint keeps
     /// the emitted enum sound (see the field-loop comment below).
     /// Search a canonical constructor-payload type for a mis-arity `Task`
     /// application (any arity other than the internal unary `Task a` or the
@@ -6558,7 +6558,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// #210: is `u` the `Std.Cache.Cache` opaque handle union — home
+    /// is `u` the `Std.Cache.Cache` opaque handle union — home
     /// `["Std", "Cache"]`, name `Cache`? Its `EnumDef` is suppressed (the type
     /// is backed by the runtime `SkyCacheHandle`); the backend routes the type +
     /// ctor + pattern there via `builtin_runtime_enum`/`enum_name` overrides.
@@ -6566,7 +6566,7 @@ impl<'a> Lowerer<'a> {
         self.is_cache_handle_con(&u.home, u.name)
     }
 
-    /// #210: is `(module, name)` the `Std.Cache.Cache` opaque handle type —
+    /// is `(module, name)` the `Std.Cache.Cache` opaque handle type —
     /// module `["Std", "Cache"]`, name `Cache`? Its `k`/`v` args are dropped at
     /// lowering (backed by the non-generic runtime `SkyCacheHandle`).
     fn is_cache_handle_con(&self, module: &[Symbol], name: Symbol) -> bool {
@@ -6613,7 +6613,7 @@ impl<'a> Lowerer<'a> {
                     return Err(unsupported(ctor.span, Feature::Polymorphism));
                 }
                 let ir = self.ir_type_from_canon(arg, &type_params)?;
-                // #90: a function-bearing payload field (`type Retryish e =
+                // a function-bearing payload field (`type Retryish e =
                 // RetryWhen (e -> Bool)`) is SOUND to declare — #87's
                 // derive-demotion fixpoint (`enum_is_derivable`,
                 // `sky_backend_rust::emit_types`) drops the enum's
@@ -6634,7 +6634,7 @@ impl<'a> Lowerer<'a> {
             name: u.name,
             // Carry the union's DEFINING module (its home) so the backend derives
             // the emitted Rust enum name from the home, not the merged entry module
-            // (#100): `Std.Palette.Shade` → `StdPaletteShade`, `Lib.Color` →
+            // `Std.Palette.Shade` → `StdPaletteShade`, `Lib.Color` →
             // `LibColor`, `Main.Msg` → `MainMsg` (single-module unchanged).
             home: ModPath(u.home.clone()),
             type_params,
@@ -7162,7 +7162,7 @@ impl<'a> Lowerer<'a> {
                     let mut type_params =
                         compute_type_params(quantified_syms, var_bounds, &params, &ret);
                     // General kernel→type-param-bound propagation (#177 SkyRow +
-                    // #186 Display) — see `apply_kernel_type_param_bounds`.
+                    // Display) — see `apply_kernel_type_param_bounds`.
                     apply_kernel_type_param_bounds(
                         self.interner,
                         &mut type_params,
@@ -7275,7 +7275,7 @@ impl<'a> Lowerer<'a> {
         if b.has_dict_key() {
             set = set.with_hash().with_ord_total().with_clone();
         }
-        // SQL-bind-parameter obligation (#165): a `List a` argument forwarded
+        // SQL-bind-parameter obligation: a `List a` argument forwarded
         // into `Db.exec` / `Db.query` / `Db.queryDecode`'s params position
         // needs the backend's `Into<sky_runtime::db::SqlParam>` bound so a
         // generic Sky wrapper around those kernels (`Database.exec label sql
@@ -7522,7 +7522,7 @@ impl<'a> Lowerer<'a> {
     /// Convert a canonical annotation type (no `Task`/unit appears in M0
     /// annotations) into an [`IrType`]. `generics` is the enclosing binding's
     /// quantified type-variable set: a `Type::Var` it contains is a parametric
-    /// pass-through and lowers to [`IrType::Generic`] (M2a).
+    /// pass-through and lowers to [`IrType::Generic`].
     ///
     /// Every failure here is an internal-invariant violation (a `Type::Con` that
     /// resolves to neither a builtin nor a declared union, or a `Type::Var`
@@ -7555,21 +7555,21 @@ impl<'a> Lowerer<'a> {
                 "Int" => Ok(IrType::Int),
                 "Float" => Ok(IrType::Float),
                 "Bool" => Ok(IrType::Bool),
-                // `Order` is the built-in three-way comparison result type (#123).
+                // `Order` is the built-in three-way comparison result type.
                 // Backed by `sky_runtime::SkyOrder` (repr(u8) enum: LT/EQ/GT).
                 "Order" => Ok(IrType::Order),
                 // `Decimal` is the Std.Decimal arbitrary-precision type.
                 // Backed by `sky_runtime::decimal::Decimal` (rust_decimal newtype).
                 "Decimal" => Ok(IrType::Decimal),
                 // `SqlFragment` is `Std.Db.Sql`'s opaque WHERE-fragment type
-                // (backlog #61). Backed by `sky_runtime::db::SqlFragment`.
+                // Backed by `sky_runtime::db::SqlFragment`.
                 "SqlFragment" => Ok(IrType::SqlFragment),
                 // `Secret` is `Sky.Core.Secret`'s opaque sealed secret-string
-                // type (backlog #44). Backed by `sky_runtime::secret::Secret`.
+                // type. Backed by `sky_runtime::secret::Secret`.
                 "Secret" => Ok(IrType::Secret),
                 "String" => Ok(IrType::Str),
                 // `Error` is Sky's fixed error-channel type — backed by the real
-                // `sky_runtime::error::SkyError` ADT (backlog #85/#160), no
+                // `sky_runtime::error::SkyError` ADT, no
                 // longer merged with `String`. `ErrorKind` mirrors `Order`.
                 "Error" => Ok(IrType::Error),
                 "ErrorKind" => Ok(IrType::ErrorKind),
@@ -7577,7 +7577,7 @@ impl<'a> Lowerer<'a> {
                 // `ErrorInfo.details : Maybe ErrorDetails` (backlog #85
                 // follow-up). Backed by `sky_runtime::error::SkyErrorDetails`.
                 "ErrorDetails" => Ok(IrType::ErrorDetails),
-                // The NOMINAL error-payload types (SEAL fix 2026-07-11) —
+                // The NOMINAL error-payload types (SEAL fix) —
                 // annotatable via canon's `EXTRA_BUILTIN_TYPE_NAMES`. Backed
                 // by `sky_runtime::error::{SkyErrorInfo, SkyPanicInfo,
                 // SkyTypeInfo}`.
@@ -7693,7 +7693,7 @@ impl<'a> Lowerer<'a> {
                     )?;
                     Ok(IrType::Sub(Box::new(inner)))
                 }
-                // ── M7: Std.Ui / Std.Html parametric type constructors ────────────
+                // ── Std.Ui / Std.Html parametric type constructors ────────────
                 // These are kernel types that carry a message type parameter `msg`.
                 // They appear in user annotations like `staticView : Msg -> Html Msg`
                 // and are lowered to `IrType::Ui { ctor, msg }` so the backend can
@@ -7792,23 +7792,23 @@ impl<'a> Lowerer<'a> {
                     name: *name,
                     args: Vec::new(),
                 }),
-                // `StreamWriter` — opaque server-side stream writer handle (#111).
+                // `StreamWriter` — opaque server-side stream writer handle.
                 // Mirrors `ir_type_from_ty`'s "StreamWriter" arm.
                 "StreamWriter" => Ok(IrType::StreamWriter),
-                // `HttpRequest` — opaque HTTP request descriptor (#111).
+                // `HttpRequest` — opaque HTTP request descriptor.
                 // Sky users write this as a structural record literal, but the
                 // annotation `HttpRequest` maps directly to the runtime type via
                 // this opaque variant.
                 "HttpRequest" => Ok(IrType::HttpRequest),
-                // #217: `Std.Db.Migration` — the record alias `{ name : String,
+                // `Std.Db.Migration` — the record alias `{ name : String,
                 // sql : String }` (reference `Std/Db.sky:237`). Annotated
                 // directly (`migrations : List Db.Migration`), so expand it to
                 // the synthesised record here — mirrors how the type-checker's
                 // `normalize_annotation_ty` expands the same name.
                 "Migration" => Ok(self.migration_record_ir()),
-                // #127: `WebSocketServer` — opaque per-peer WsHandle.
+                // `WebSocketServer` — opaque per-peer WsHandle.
                 "WebSocketServer" => Ok(IrType::WebSocketServer),
-                // #127: `WebSocketServerCfg` — opaque WsServerCfg<SkyError>.
+                // `WebSocketServerCfg` — opaque WsServerCfg<SkyError>.
                 "WebSocketServerCfg" => Ok(IrType::WebSocketServerCfg),
                 // `LiveRoute page` is parametric on the page type it builds
                 // (#108 round 4) — a bare `LiveRoute` annotation cannot
@@ -7827,7 +7827,7 @@ impl<'a> Lowerer<'a> {
                     )?;
                     Ok(IrType::LiveRoute(Box::new(page)))
                 }
-                // ── Std.Ui.Input parametric types (#124) ──────────────────────────
+                // ── Std.Ui.Input parametric types ──────────────────────────
                 "Label" if args.len() == 1 => {
                     let msg = self.ir_type_from_canon(
                         args.first().ok_or_else(|| {
@@ -7877,7 +7877,7 @@ impl<'a> Lowerer<'a> {
                     .enum_variants
                     .contains_key(&(ModPath(home.clone()), *name)) =>
                 {
-                    // #210: drop the phantom `k`/`v` of `Std.Cache.Cache k v`
+                    // drop the phantom `k`/`v` of `Std.Cache.Cache k v`
                     // (backed by the non-generic `SkyCacheHandle`) — twin of the
                     // solved-Ty arm; see its comment for the E0283 rationale.
                     let ir_args = if self.is_cache_handle_con(home, *name) {
@@ -7903,7 +7903,7 @@ impl<'a> Lowerer<'a> {
                 // consistency. Added by #138 to support bare `Value` annotations
                 // on user functions (kernel-implicit Prelude type, #576).
                 // `Claims` (D-00) maps to the same opaque JSON accumulator.
-                // ── Kernel-implicit opaque server / Sky.Live types (#152) ────────
+                // ── Kernel-implicit opaque server / Sky.Live types ────────
                 // These names are registered in `KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES`
                 // in sky_canon so they pass N0002 without an explicit import.
                 // They all carry zero type arguments at the annotation level.
@@ -7915,11 +7915,11 @@ impl<'a> Lowerer<'a> {
                 "Value" | "Claims" | "Handler" | "Middleware" | "Session" | "Store" | "VNode" => {
                     Ok(IrType::Json)
                 }
-                // ── JWT builder types (#152 / D-00) ─────────────────────────────
+                // ── JWT builder types ─────────────────────────────
                 // `Algorithm` — JWT signing algorithm descriptor encoded as a
                 // `String` ("HS256:<secret>" or "RS256:<pem>").
                 "Algorithm" => Ok(IrType::Str),
-                // ── M7: Nullary Std.Ui plain types (no message parameter) ─────
+                // ── Nullary Std.Ui plain types (no message parameter) ─────
                 // Mirror of the `ir_type_from_ty` arms below.  Reached when a
                 // type annotation writes `Color`, `Length`, etc. at a position
                 // where canon emits a `Con { home: [], name, args: [] }` node —
@@ -8004,7 +8004,7 @@ impl<'a> Lowerer<'a> {
             // Each field type is lowered under the same generic scope, so a field
             // typed by a quantified variable becomes an [`IrType::Generic`]
             // pass-through and the backend synthesises a GENERIC struct for the
-            // shape (M2c). Keyed by field name in a [`BTreeMap`] to match the
+            // shape. Keyed by field name in a [`BTreeMap`] to match the
             // backend's field-set canonicalisation.
             //
             // Special case: apply the SAME `HttpRequest`-shape test as
@@ -8026,13 +8026,13 @@ impl<'a> Lowerer<'a> {
                 if is_http_request_canon_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::HttpRequest);
                 }
-                // #217: fold the `Response` record annotation shape to the
+                // fold the `Response` record annotation shape to the
                 // opaque runtime `IrType::ServerResponse` — twin of the
                 // solved-Ty fold above.
                 if is_server_response_canon_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::ServerResponse);
                 }
-                // #210: fold the two nominal Std.Cache record shapes (annotation
+                // fold the two nominal Std.Cache record shapes (annotation
                 // path — e.g. `newRaw : CacheCfg -> …` / `statsRaw : … -> Task
                 // Error { hits, misses, evictions }`) — twin of the solved-Ty fold.
                 if is_all_int_canon_record_shape(&mut named_fields, CACHE_CFG_FIELDS, self.interner)
@@ -8123,7 +8123,7 @@ impl<'a> Lowerer<'a> {
         // still supply a parameter type.
         let mut cur_params: &[canon::Pattern] = params;
         let mut cur_body: &canon::Expr = body;
-        // T3 (#121): accumulate all flattened canon param patterns to build
+        // T3: accumulate all flattened canon param patterns to build
         // the outer-bound set for the capture-clone free-variable walk.
         let mut all_param_pats: Vec<&canon::Pattern> = Vec::new();
         loop {
@@ -8198,7 +8198,7 @@ impl<'a> Lowerer<'a> {
         self.fn_is_async.set(matches!(ret, IrType::Task(_)));
         let mut body = self.lower_expr(cur_body)?;
         self.fn_is_async.set(prev_async);
-        // T3 (#121): Capture-clone rewrite — classify free locals captured
+        // T3: Capture-clone rewrite — classify free locals captured
         // by this closure and replace CloneOk reads with `.clone()`, emitting
         // SKY-L0125 for NonClone captures outside callee position.
         {
@@ -8234,7 +8234,7 @@ impl<'a> Lowerer<'a> {
         // the def-head param rewrite in `lower_def`, through the ONE shared
         // `apply_move_ownership` entry point. This folds the two former loops
         // (the CloneOk multi-use/relay rewrite #199/#218 and the separate
-        // #90 T4 fn-value-reuse gate) into one per-param call:
+        // T4 fn-value-reuse gate) into one per-param call:
         // `apply_move_ownership` runs the lean `rewrite_multiuse_clones`
         // (`remaining = n`, correct for every n ≥ 1) for CloneOk / bare-Generic
         // params and fails closed on fn-value reuse for the rest. Upgrading
@@ -8297,7 +8297,7 @@ impl<'a> Lowerer<'a> {
     /// [`Self::current_poly_tvars`], tolerating either tagged or untagged
     /// input.
     ///
-    /// SEAL fix (#164): `SolvedTypes::poly_var_map` populates
+    /// SEAL fix: `SolvedTypes::poly_var_map` populates
     /// `current_poly_tvars` two different ways depending on the enclosing
     /// binding's shape — see the doc comment on
     /// [`sky_types::untag_solver_var`] for the full rationale. In short: a
@@ -8341,7 +8341,7 @@ impl<'a> Lowerer<'a> {
             // The nullary Std.Ui / Sky.Live opaque names (`Length` / `Color` /
             // `HAlign` / `VAlign` / `Location` / `PseudoClass` / `Description` /
             // `LayoutContext` / `LiveReq`) and `Value` are the exceptions:
-            // #101 moved them BELOW the `enum_variants` guard so a program union
+            // moved them BELOW the `enum_variants` guard so a program union
             // of the same name (a user ADT or a compiled-source `Std.Css` type)
             // wins by its `(home, name)` identity, and only a genuine opaque
             // builtin (no union entry) falls through to the `UiPlain` arm. This
@@ -8351,22 +8351,22 @@ impl<'a> Lowerer<'a> {
                 "Int" => Ok(IrType::Int),
                 "Float" => Ok(IrType::Float),
                 "Bool" => Ok(IrType::Bool),
-                // `Order` is the built-in three-way comparison result type (#123).
+                // `Order` is the built-in three-way comparison result type.
                 // Backed by `sky_runtime::SkyOrder` (repr(u8) enum: LT/EQ/GT).
                 "Order" => Ok(IrType::Order),
                 // `Decimal` is the Std.Decimal arbitrary-precision type.
                 // Backed by `sky_runtime::decimal::Decimal` (rust_decimal newtype).
                 "Decimal" => Ok(IrType::Decimal),
                 // `SqlFragment` is `Std.Db.Sql`'s opaque WHERE-fragment type
-                // (backlog #61). Backed by `sky_runtime::db::SqlFragment`.
+                // Backed by `sky_runtime::db::SqlFragment`.
                 "SqlFragment" => Ok(IrType::SqlFragment),
                 // `Secret` is `Sky.Core.Secret`'s opaque sealed secret-string
-                // type (backlog #44). Backed by `sky_runtime::secret::Secret`.
+                // type. Backed by `sky_runtime::secret::Secret`.
                 "Secret" => Ok(IrType::Secret),
                 // `Algorithm` (D-00) shares the `String` IR representation.
                 "String" | "Algorithm" => Ok(IrType::Str),
                 // `Error` — backed by the real `sky_runtime::error::SkyError` ADT
-                // (backlog #85/#160), no longer merged with `String`. Lambda
+                // no longer merged with `String`. Lambda
                 // parameters typed as `Error` (e.g. the `e` in `\e -> ...` when
                 // `onError`/`mapError` pins the handler) lower here too.
                 "Error" => Ok(IrType::Error),
@@ -8374,7 +8374,7 @@ impl<'a> Lowerer<'a> {
                 // `ErrorDetails` — mirrors the `ir_type_from_canon` arm added at
                 // the same time (backlog #85 follow-up).
                 "ErrorDetails" => Ok(IrType::ErrorDetails),
-                // The NOMINAL error-payload types (SEAL fix 2026-07-11) —
+                // The NOMINAL error-payload types (SEAL fix) —
                 // backed by `sky_runtime::error::{SkyErrorInfo, SkyPanicInfo,
                 // SkyTypeInfo}`. Pattern-bound payloads (`Error _ info ->` /
                 // `FfiPanic p ->`) get these solved Cons, so unannotated
@@ -8384,7 +8384,7 @@ impl<'a> Lowerer<'a> {
                 "PanicInfo" => Ok(IrType::PanicInfo),
                 "TypeInfo" => Ok(IrType::TypeInfo),
                 "Char" => Ok(IrType::Char),
-                // ── Kernel-implicit opaque server / Sky.Live types (#152) ────────
+                // ── Kernel-implicit opaque server / Sky.Live types ────────
                 // Mirror of the `ir_type_from_canon` arms added at the same
                 // time: these are the HM-solved-type counterparts that fire when
                 // the type is propagated via the region map rather than read from
@@ -8396,7 +8396,7 @@ impl<'a> Lowerer<'a> {
                 // `Bytes` is a built-in distinct primitive (Vec<u8> on Rust).
                 // Divergence from Sky: Sky aliases Bytes = String.
                 "Bytes" => Ok(IrType::Bytes),
-                // M5a: all `Task a` shapes are now supported — `Task ()` →
+                // all `Task a` shapes are now supported — `Task ()` →
                 // `IrType::Task(Unit)`, `Task Int` → `IrType::Task(Int)`, etc.
                 "Task" if args.len() == 1 => {
                     let inner = self.ir_type_from_ty(
@@ -8506,7 +8506,7 @@ impl<'a> Lowerer<'a> {
                     Ok(IrType::Sub(Box::new(inner)))
                 }
                 // `SqlValue` / `SqlField` — the builtin-injected ADT enums for
-                // typed SQL parameters (M5b-db). Resolved as `IrType::Enum` so the
+                // typed SQL parameters. Resolved as `IrType::Enum` so the
                 // backend emits the generated `StdDbSqlValue` / `StdDbSqlField`
                 // Rust enum name at use sites.
                 // `StreamId` / `ChunkEvent` — builtin-registered Http.Stream ADTs.
@@ -8526,20 +8526,20 @@ impl<'a> Lowerer<'a> {
                 "Response" => Ok(IrType::ServerResponse),
                 "Route" => Ok(IrType::ServerRoute),
                 "Cookie" => Ok(IrType::ServerCookie),
-                // `StreamWriter` — opaque stream writer handle (#111).
+                // `StreamWriter` — opaque stream writer handle.
                 "StreamWriter" => Ok(IrType::StreamWriter),
-                // `HttpRequest` — opaque HTTP request descriptor (#111).
+                // `HttpRequest` — opaque HTTP request descriptor.
                 // Mirrors `ir_type_from_canon`'s "HttpRequest" arm.
                 "HttpRequest" => Ok(IrType::HttpRequest),
-                // #217: `Std.Db.Migration` record alias — mirrors
+                // `Std.Db.Migration` record alias — mirrors
                 // `ir_type_from_canon`'s "Migration" arm (defensive; the solved
                 // type of a migration value is normally a `Ty::Record`).
                 "Migration" => Ok(self.migration_record_ir()),
-                // #127: `WebSocketServer` — opaque per-peer WsHandle.
+                // `WebSocketServer` — opaque per-peer WsHandle.
                 "WebSocketServer" => Ok(IrType::WebSocketServer),
-                // #127: `WebSocketServerCfg` — opaque WsServerCfg<SkyError>.
+                // `WebSocketServerCfg` — opaque WsServerCfg<SkyError>.
                 "WebSocketServerCfg" => Ok(IrType::WebSocketServerCfg),
-                // ── M7: Std.Ui / Std.Html parametric type constructors ────────
+                // ── Std.Ui / Std.Html parametric type constructors ────────
                 // Mirror of `ir_type_from_canon` (which handles user-written
                 // type ANNOTATIONS).  This path handles SOLVED types from the
                 // HM region map — `list_elem_ir` calls here when lowering a
@@ -8626,7 +8626,7 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
-                // ── Std.Ui.Input parametric types (#124) ───────────────────────
+                // ── Std.Ui.Input parametric types ───────────────────────
                 // `Label msg` and `Placeholder msg` are kernel-reserved type
                 // names produced by `constrain`'s `label_t` / `placeholder_t`
                 // helper closures.  They are NOT user ADTs, so they precede the
@@ -8685,7 +8685,7 @@ impl<'a> Lowerer<'a> {
                 //
                 // A program-defined `type Color` — a user ADT OR a compiled-source
                 // `Std.Css` type — is keyed in `enum_variants` under its real HOME
-                // (#100), so it resolves to ITS OWN enum (`MainColor` /
+                // so it resolves to ITS OWN enum (`MainColor` /
                 // `StdCssColor`) instead of being hijacked to the opaque
                 // `UiPlain::Color`. A genuine Std.Ui builtin (`Length` / `Color` /
                 // … that is NOT a program union — the real runtime `UiPlain`
@@ -8702,9 +8702,9 @@ impl<'a> Lowerer<'a> {
                     // `Opt Int` → `Enum { Opt, [Int] }` (rendered `MainOpt<i64>`).
                     // `module` is the type's HOME (the solver threads it on
                     // `Ty::Con`), which is the same identity the union was keyed
-                    // under (#100).
+                    // under.
                     //
-                    // #210: `Std.Cache.Cache k v` is backed by the NON-generic
+                    // `Std.Cache.Cache k v` is backed by the NON-generic
                     // runtime `SkyCacheHandle`, so drop its `k`/`v` args here —
                     // otherwise they surface as unused generic params on the
                     // `Std.Cache` wrapper fns (`new : CacheCfg -> Task Error
@@ -8725,7 +8725,7 @@ impl<'a> Lowerer<'a> {
                         args: ir_args,
                     })
                 }
-                // ── M7: Nullary Std.Ui plain types (no message parameter) ─────
+                // ── Nullary Std.Ui plain types (no message parameter) ─────
                 // Reached ONLY when `(home, name)` is NOT a program-defined enum
                 // (guard above) — i.e. the genuine opaque Std.Ui builtin. A
                 // program `type Color` / `type Length` never lands here.
@@ -8737,10 +8737,10 @@ impl<'a> Lowerer<'a> {
                 "PseudoClass" => Ok(IrType::UiPlain(UiPlain::PseudoClass)),
                 "Description" => Ok(IrType::UiPlain(UiPlain::Description)),
                 "LayoutContext" => Ok(IrType::UiPlain(UiPlain::LayoutContext)),
-                // ── M7: Sky.Live opaque types ─────────────────────────────────
+                // ── Sky.Live opaque types ─────────────────────────────────
                 "LiveReq" => Ok(IrType::LiveReq),
                 // `LiveRoute page` — the route descriptor produced by
-                // `Live.route`, parametric on the page type it builds (#108).
+                // `Live.route`, parametric on the page type it builds.
                 // The solver's `LiveRoute` Con always carries exactly one
                 // argument (constrain's `live_route(page)` builder), so the
                 // page type is threaded into the IR and rendered as
@@ -8837,7 +8837,7 @@ impl<'a> Lowerer<'a> {
                 if is_http_request_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::HttpRequest);
                 }
-                // #217: fold the `Sky.Http.Server.Response` record shape to the
+                // fold the `Sky.Http.Server.Response` record shape to the
                 // opaque runtime `IrType::ServerResponse` — same rationale as
                 // HttpRequest: the server kernels produce/consume the runtime
                 // `sky_runtime::ServerResponse` struct, so a synthesised `Rec…`
@@ -8846,7 +8846,7 @@ impl<'a> Lowerer<'a> {
                 if is_server_response_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::ServerResponse);
                 }
-                // #210: fold the two nominal Std.Cache record shapes to their
+                // fold the two nominal Std.Cache record shapes to their
                 // runtime structs (CacheCfg / CacheStats) — same rationale as
                 // HttpRequest: the kernel takes/returns the runtime struct, so a
                 // synthesised `Rec…` struct would mismatch it (E0308).
@@ -8961,7 +8961,7 @@ impl<'a> Lowerer<'a> {
     /// type arm and maps each `Ty::Var` leaf to [`IrType::Json`] rather than
     /// failing with [`Feature::Polymorphism`] (SKY-L0102).
     ///
-    /// SEAL fix (#164): a `Ty::Var` leaf must first be checked against
+    /// SEAL fix: a `Ty::Var` leaf must first be checked against
     /// `current_poly_tvars` — the SAME check `ir_type_from_ty` (line ~6176)
     /// and `ir_type_from_ty_ui_msg` (line ~6224) already perform — before
     /// falling back to `IrType::Json`. A lambda nested in a polymorphic
@@ -9547,7 +9547,7 @@ impl<'a> Lowerer<'a> {
                 // infers the concrete return type from the Rust function's
                 // own declared signature.
                 if matches!(&callee, Callee::Kernel(_)) && self.callee_arity(&callee)? == 0 {
-                    // ── M5c TEA gate: `Cmd.none` / `Sub.none` carry an opaque
+                    // ── TEA gate: `Cmd.none` / `Sub.none` carry an opaque
                     // `msg` type-parameter (`SkyCmd<M>` / `SkySub<M>`).  When the
                     // HM solver leaves `msg` as a free `Ty::Var` — the common
                     // shape in M5c since there is no update loop to anchor `msg`
@@ -9573,7 +9573,7 @@ impl<'a> Lowerer<'a> {
                         // Return value discarded — only the error path matters.
                         let _ = self.ir_type_from_ty(ty, e.span)?;
                     }
-                    // #181: an arity-0 polymorphic kernel referenced bare
+                    // an arity-0 polymorphic kernel referenced bare
                     // (`Dict.empty` / `Set.empty`) whose free key/value/element
                     // the solver left unconstrained needs a turbofish default —
                     // otherwise `dict_empty()` / `set_empty()` hits E0282/E0283.
@@ -9602,7 +9602,7 @@ impl<'a> Lowerer<'a> {
                 } else {
                     self.ir_type_from_ty(ty, e.span)?
                 };
-                // T6 (#121): arity-exact invariant — when def-arity is less
+                // T6: arity-exact invariant — when def-arity is less
                 // than the flattened `Fun` param count at this reify site, the
                 // callee is curried and cannot be boxed directly into
                 // `Box<dyn Fn(T0,T1,…)->R>` (Rust would reject it with E0593).
@@ -9760,7 +9760,7 @@ impl<'a> Lowerer<'a> {
         )
     }
 
-    /// #90 T3 (Tier 1 backstop — see [`Self::lower_callee`]'s doc comment):
+    /// T3 (Tier 1 backstop — see [`Self::lower_callee`]'s doc comment):
     /// `Maybe.andMap` / `Result.andMap` resolved to a CURRIED (arity ≥ 2)
     /// payload function.
     ///
@@ -10020,7 +10020,7 @@ impl<'a> Lowerer<'a> {
                 //   value (no functions); `lower_app_entry_cfg` additionally
                 //   requires that record — and its `size` tuple — to be inline
                 //   literals (the G4 emit gates).
-                // #111: CliProgram — 5-field cfg (init/update/view/subscriptions/
+                // CliProgram — 5-field cfg (init/update/view/subscriptions/
                 //   onLine), all function-typed; without this arm every real
                 //   `Cli.program` call would trip SKY-L0107 and the emit_cli
                 //   path could never fire.
@@ -10044,7 +10044,7 @@ impl<'a> Lowerer<'a> {
                 }
                 // ── Input.text / email / username / search / currentPassword /
                 //    newPassword / multiline / checkbox cfg literal
-                //    (L0107 exemption, #124) ──
+                //    (L0107 exemption) ──
                 //
                 // Input kernels take TWO arguments: `(attrs : List Attr, cfg : Cfg)`.
                 // The cfg record contains function-valued fields (e.g. `onChange :
@@ -10092,7 +10092,7 @@ impl<'a> Lowerer<'a> {
                         }));
                     }
                 }
-                // T4 (#108): `Live.appRouted` is a vestigial alias — the
+                // T4: `Live.appRouted` is a vestigial alias — the
                 // reference has ONE `Live.app` that branches at emit time
                 // (emit_live.rs T5).  Route it through the same
                 // `lower_app_entry_cfg` path as `Live.app` so any code that
@@ -10109,7 +10109,7 @@ impl<'a> Lowerer<'a> {
                         }));
                     }
                 }
-                // ── #108 round 4: `Live.route pattern PageCtor` builder peephole ──
+                // ── `Live.route pattern PageCtor` builder peephole ──
                 //
                 // The canonical param-route shape passes a BARE payload
                 // constructor as the page builder (`Live.route "/u/:id"
@@ -10161,7 +10161,7 @@ impl<'a> Lowerer<'a> {
         matches!(ty, Ty::Var(raw) if self.poly_tvar_symbol(*raw).is_none())
     }
 
-    /// The turbofish pin (#181) for a polymorphic kernel whose free result type
+    /// The turbofish pin for a polymorphic kernel whose free result type
     /// parameter the HM solver left unconstrained at THIS call site. Returns
     /// [`CallPin::None`] for every non-affected kernel and for every affected
     /// kernel whose relevant parameter came out concrete (rustc infers it) or
@@ -10534,7 +10534,7 @@ impl<'a> Lowerer<'a> {
                 let arity = self.callee_arity(&resolved)?;
                 match args.len().cmp(&arity) {
                     std::cmp::Ordering::Equal => {
-                        // #181: pin a polymorphic kernel's genuinely-free result
+                        // pin a polymorphic kernel's genuinely-free result
                         // type parameter so the emitted Rust does not hit
                         // `E0282`/`E0283` "type annotations needed" (an exit-0-
                         // then-cargo-fail SEAL violation). The pin fires ONLY for
@@ -10542,7 +10542,7 @@ impl<'a> Lowerer<'a> {
                         // free parameter is not an enclosing generic (which would
                         // already pin it — see `kernel_turbofish_pin`).
                         let pin = self.kernel_turbofish_pin(&resolved, args, call_span);
-                        // #183: re-align a `Result.mapError` wildcard-handler
+                        // re-align a `Result.mapError` wildcard-handler
                         // binder that defaulted to `IrType::Json` onto the
                         // value side's `IrType::Error` (`SkyError`) default,
                         // so the emitted closure's `FnOnce(SkyError)` unifies
@@ -10656,7 +10656,7 @@ impl<'a> Lowerer<'a> {
         // The missing parameters are argument positions `supplied..arity`.
         let mut params: Vec<(Symbol, IrType)> = Vec::with_capacity(arity - supplied);
         let mut call_args = lowered_args;
-        // T4 (#121/#130): the supplied args are captured inside the emitted closure.
+        // T4: the supplied args are captured inside the emitted closure.
         // A non-Copy CloneOk arg (e.g. a String-typed var) must be cloned on
         // each call so the closure is `Fn` (re-callable), not `FnOnce`.
         //
@@ -10670,7 +10670,7 @@ impl<'a> Lowerer<'a> {
         // captured binding rather than re-evaluating the expression —
         // closing both the re-evaluation and the FnOnce hazard (T4).
         //
-        // T7 (#130): unknown type (`ir_type_from_ty` returns Err) is treated
+        // T7: unknown type (`ir_type_from_ty` returns Err) is treated
         // conservatively: if the slot type is a top-level function arrow
         // (`Ty::Fun`) the resolution failure is due to a nested polymorphic type
         // variable (e.g. `Error -> Task Error a` in a `String -> Task Error a
@@ -10710,9 +10710,9 @@ impl<'a> Lowerer<'a> {
                     //   transfer — no E0525 (move-out-of-captured-env).  HOF
                     //   callbacks like `task_and_then` / `cmd_perform` take
                     //   `impl FnOnce`, so consuming the moved value once is
-                    //   correct (#149).
+                    //   correct.
                     Some(CloneClass::CopyLeaf | CloneClass::NonClone) => {}
-                    // None — T7 (#130): the slot type is genuinely indeterminate
+                    // None — T7: the slot type is genuinely indeterminate
                     // (a non-Fun type whose resolution failed).  Conservatively
                     // fail-close with SKY-L0126: we cannot prove the Var is
                     // Copy-safe, and a NonClone value would produce E0525 at cargo.
@@ -10805,7 +10805,7 @@ impl<'a> Lowerer<'a> {
         // instead — a sound stand-in since the eta-lambda's return slot is
         // type-unified by the kernel signature at the call site.
         //
-        // #164: the SAME five pipeline kernels also need this treatment on
+        // the SAME five pipeline kernels also need this treatment on
         // the wrapper's OWN return type (`Decoder b`) whenever the pipeline
         // has more `required`/`optional` stages after this one — `b` is
         // then itself a function type, and this wrapper's return value
@@ -10823,7 +10823,7 @@ impl<'a> Lowerer<'a> {
             callee: resolved,
             args: call_args,
             // Eta-expanded partial application: the residual arrow's param/ret
-            // types (from the lambda) pin every generic, so no turbofish (#181).
+            // types (from the lambda) pin every generic, so no turbofish.
             pin: CallPin::None,
         };
         let lambda = Expr::Lambda {
@@ -10831,7 +10831,7 @@ impl<'a> Lowerer<'a> {
             ret,
             body: Box::new(body),
         };
-        // T4 (#130): wrap any hoisted let-bindings around the lambda.
+        // T4: wrap any hoisted let-bindings around the lambda.
         // hoisted = [(cap_sym_0, expr_0), (cap_sym_1, expr_1), ...] in source
         // order.  Folding in reverse yields:
         //   let cap_0 = expr_0 in let cap_1 = expr_1 in <lambda>
@@ -11049,7 +11049,7 @@ impl<'a> Lowerer<'a> {
         let mut params: Vec<(Symbol, IrType)> = Vec::with_capacity(arity - supplied);
         let mut call_args = lowered_args;
 
-        // T4 (#121/#130): classify every supplied arg slot and apply capture-clone
+        // T4: classify every supplied arg slot and apply capture-clone
         // discipline so the emitted closure is `Fn` (re-callable), not `FnOnce`.
         let slot_classes: Vec<Option<CloneClass>> = arg_tys
             .iter()
@@ -11120,7 +11120,7 @@ impl<'a> Lowerer<'a> {
             ret,
             body: Box::new(body),
         };
-        // T4 (#130): wrap any hoisted let-bindings around the lambda.
+        // T4: wrap any hoisted let-bindings around the lambda.
         // Folding in reverse preserves left-to-right evaluation order.
         let result = hoisted
             .into_iter()
@@ -11133,7 +11133,7 @@ impl<'a> Lowerer<'a> {
         Ok(result)
     }
 
-    /// T6 (#121): emit an eta-adapter `Lambda` when a callee's def-arity is
+    /// T6: emit an eta-adapter `Lambda` when a callee's def-arity is
     /// less than the flattened `IrType::Fun` param count at its reify site.
     ///
     /// The invariant this enforces: every `Expr::FuncValue`'s callee has a
@@ -11204,7 +11204,7 @@ impl<'a> Lowerer<'a> {
             callee,
             args: direct_args,
             // Eta adapter: the adapter closure's declared param/ret types pin
-            // the callee's generics, so no turbofish (#181).
+            // the callee's generics, so no turbofish.
             pin: CallPin::None,
         };
         // Apply: pass the remaining eta params to the returned closure.
@@ -11456,27 +11456,27 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::SetEmpty
                 // ── Bytes arity-0 ────────────────────────────────────────────
                 | KernelFn::BytesEmpty
-                // ── JsonEnc arity-0 (M4g) ────────────────────────────────────
+                // ── JsonEnc arity-0 ────────────────────────────────────
                 | KernelFn::JsonEncNull
-                // ── JsonDec primitive decoders — arity 0 (M4h) ────────────────
+                // ── JsonDec primitive decoders — arity 0 ────────────────
                 | KernelFn::JsonDecString
                 | KernelFn::JsonDecInt
                 | KernelFn::JsonDecFloat
                 | KernelFn::JsonDecBool
-                // ── TEA arity-0 (M5c) ─────────────────────────────────────────
+                // ── TEA arity-0 ─────────────────────────────────────────
                 // `Cmd.none : Cmd msg`
                 | KernelFn::CmdNone
                 // `Sub.none : Sub msg`
                 | KernelFn::SubNone
-                // ── Error nullary constructors (#86) : `Error` ────────────────
+                // ── Error nullary constructors : `Error` ────────────────
                 | KernelFn::ErrorTimeout
                 | KernelFn::ErrorNotFound
                 | KernelFn::ErrorPermissionDenied
                 // ── Task.defaultRetryPolicy — arity 0 ────────────────────────
                 | KernelFn::TaskDefaultRetryPolicy
-                // ── #127: Sky.Http.Server.WebSocket arity-0 ──────────────────
+                // ── Sky.Http.Server.WebSocket arity-0 ──────────────────
                 | KernelFn::WsDefaultCfg
-                // ── Jwt builder: claims arity-0 (D-00, #152) ─────────────────
+                // ── Jwt builder: claims arity-0 ─────────────────
                 | KernelFn::JwtClaims,
             ) => Ok(0),
             Callee::Kernel(
@@ -11525,13 +11525,13 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::BasicsIdentity
                 | KernelFn::BasicsFst
                 | KernelFn::BasicsSnd
-                // ── Basics numerics (#115) — arity 1 ────────────────────────
+                // ── Basics numerics — arity 1 ────────────────────────
                 | KernelFn::BasicsNegate
                 | KernelFn::BasicsAbs
                 | KernelFn::BasicsSqrt
-                // ── end Basics numerics (#115) ──────────────────────────────
+                // ── end Basics numerics ──────────────────────────────
                 | KernelFn::ResultOkDefault
-                // ── Result/Maybe combine — arity 1 (#88) ─────────────────────
+                // ── Result/Maybe combine — arity 1 ─────────────────────
                 | KernelFn::ResultCombine
                 | KernelFn::MaybeCombine
                 // ── Dict arity-1 ─────────────────────────────────────────────
@@ -11554,20 +11554,20 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::BytesToHex
                 | KernelFn::BytesFromBase64
                 | KernelFn::BytesToBase64
-                // ── Encoding arity-1 (M4f) ────────────────────────────────────
+                // ── Encoding arity-1 ────────────────────────────────────
                 | KernelFn::EncodingBase64Encode
                 | KernelFn::EncodingBase64Decode
                 | KernelFn::EncodingUrlEncode
                 | KernelFn::EncodingUrlDecode
                 | KernelFn::EncodingHexEncode
                 | KernelFn::EncodingHexDecode
-                // ── JsonEnc arity-1 (M4g) ─────────────────────────────────────
+                // ── JsonEnc arity-1 ─────────────────────────────────────
                 | KernelFn::JsonEncString
                 | KernelFn::JsonEncInt
                 | KernelFn::JsonEncFloat
                 | KernelFn::JsonEncBool
                 | KernelFn::JsonEncObject
-                // ── JsonDec arity-1 combinators (M4h) ─────────────────────────
+                // ── JsonDec arity-1 combinators ─────────────────────────
                 | KernelFn::JsonDecList
                 | KernelFn::JsonDecSucceed
                 | KernelFn::JsonDecFail
@@ -11601,21 +11601,21 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::MathTrunc
                 // ── Math arity-1 (Float → Bool) ──────────────────────────────
                 | KernelFn::MathIsNaN
-                // ── Crypto arity-1 (M5a) ─────────────────────────────────────
+                // ── Crypto arity-1 ─────────────────────────────────────
                 | KernelFn::CryptoSha256
                 | KernelFn::CryptoSha512
                 | KernelFn::CryptoSha1
                 | KernelFn::CryptoMd5
                 | KernelFn::CryptoRandomBytes
                 | KernelFn::CryptoRandomToken
-                // ── Uuid arity-1 (M5b) ────────────────────────────────────────
-                // `v4`/`v7` are `() -> Task Error String` (task #54): they take
+                // ── Uuid arity-1 ────────────────────────────────────────
+                // `v4`/`v7` are `() -> Task Error String`: they take
                 // the unit argument, exactly like `Time.now`. `parse` is the
                 // pure `String -> Maybe String` parser.
                 | KernelFn::UuidV4
                 | KernelFn::UuidV7
                 | KernelFn::UuidParse
-                // ── Task combinators arity-1 (M5a) ────────────────────────────
+                // ── Task combinators arity-1 ────────────────────────────
                 | KernelFn::TaskSucceed
                 | KernelFn::TaskFail
                 | KernelFn::TaskFromResult
@@ -11626,17 +11626,17 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::TaskLazy
                 // ── Task.withJitter — arity 1 ────────────────────────────────
                 | KernelFn::TaskWithJitter
-                // ── Io arity-1 (M5a) ──────────────────────────────────────────
+                // ── Io arity-1 ──────────────────────────────────────────
                 | KernelFn::IoReadLine
                 | KernelFn::IoWriteStdout
                 | KernelFn::IoWriteStderr
-                // ── Time arity-1 (M5a) ────────────────────────────────────────
+                // ── Time arity-1 ────────────────────────────────────────
                 | KernelFn::TimeNow
                 | KernelFn::TimeSleep
                 | KernelFn::TimeUnixMillis
                 | KernelFn::TimeTimeString
                 | KernelFn::TimeIsLeapYear
-                // ── System arity-1 (M5a) ──────────────────────────────────────
+                // ── System arity-1 ──────────────────────────────────────
                 | KernelFn::SystemArgs
                 | KernelFn::SystemGetenv
                 | KernelFn::SystemGetArg
@@ -11646,9 +11646,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::SystemCwd
                 | KernelFn::SystemLoadEnv
                 | KernelFn::SystemExit
-                // ── Random arity-1 (M5a) ──────────────────────────────────────
+                // ── Random arity-1 ──────────────────────────────────────
                 | KernelFn::RandomChoice
-                // ── File arity-1 (M5a) ────────────────────────────────────────
+                // ── File arity-1 ────────────────────────────────────────
                 | KernelFn::FileReadFile
                 | KernelFn::FileExists
                 | KernelFn::FileRemove
@@ -11659,7 +11659,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::FileTempFile
                 | KernelFn::FileTempDir
                 | KernelFn::FileDelete
-                // ── Http arity-1 (M5b) ────────────────────────────────────────
+                // ── Http arity-1 ────────────────────────────────────────
                 // `HttpGet` : String -> Task Error HttpResponse
                 // `HttpRequest` : HttpRequest -> Task Error HttpResponse
                 // `HttpParseQuery` : String -> Dict String String (pure)
@@ -11668,14 +11668,14 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HttpRequest
                 | KernelFn::HttpParseQuery
                 | KernelFn::HttpDefaultRequest
-                // ── Db arity-1 (M5b-db) ───────────────────────────────────────
+                // ── Db arity-1 ───────────────────────────────────────
                 // `DbConnect : () -> Task Error Db` — takes unit
                 | KernelFn::DbConnect
                 // `DbClose : Db -> Task Error ()` — takes the pool handle
                 | KernelFn::DbClose
                 // `DbDefaultMigration : String -> Migration` — pure record builder
                 | KernelFn::DbDefaultMigration
-                // ── Db.Decode arity-1 (M5b-db) ────────────────────────────────
+                // ── Db.Decode arity-1 ────────────────────────────────
                 // Primitive column decoders: `String -> Decoder T`
                 | KernelFn::DbDecString
                 | KernelFn::DbDecInt
@@ -11687,14 +11687,14 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DbDecSucceed
                 // `fail : String -> Decoder a`
                 | KernelFn::DbDecFail
-                // `money : String -> Decoder (Decimal, String)` (#34)
+                // `money : String -> Decoder (Decimal, String)`
                 | KernelFn::DbDecMoney
-                // ── TEA arity-1 (M5c) ─────────────────────────────────────────
+                // ── TEA arity-1 ─────────────────────────────────────────
                 // `Cmd.batch : List (Cmd msg) -> Cmd msg`
                 | KernelFn::CmdBatch
                 // `Sub.batch : List (Sub msg) -> Sub msg`
                 | KernelFn::SubBatch
-                // ── Server arity-1 (M6) ───────────────────────────────────────
+                // ── Server arity-1 ───────────────────────────────────────
                 // `Server.text / json / html / redirect : String -> Response`
                 | KernelFn::ServerText
                 | KernelFn::ServerJson
@@ -11708,7 +11708,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::MiddlewareWithLogging
                 // `Middleware.withCsrf : Handler -> Handler`
                 | KernelFn::MiddlewareWithCsrf
-                // ── Error message constructors (#86) : `String -> Error` ──────
+                // ── Error message constructors : `String -> Error` ──────
                 | KernelFn::ErrorUnexpected
                 | KernelFn::ErrorInvalidInput
                 | KernelFn::ErrorIo
@@ -11719,16 +11719,16 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ErrorUnavailable
                 // `Error.toString : Error -> String`
                 | KernelFn::ErrorToString
-                // `Error.isRetryable : Error -> Bool` (#85/#160)
+                // `Error.isRetryable : Error -> Bool`
                 | KernelFn::ErrorIsRetryable
-                // ── CssSafety arity-1 (Std.Css leaf kernels, #47) ─────────────
+                // ── CssSafety arity-1 (Std.Css leaf kernels) ─────────────
                 // `safeValue`/`safePropName`/`safeSelector : String -> Maybe String`
                 // `stripStyleClose : String -> String`
                 | KernelFn::CssSafetySafeValue
                 | KernelFn::CssSafetySafePropName
                 | KernelFn::CssSafetySafeSelector
                 | KernelFn::CssSafetyStripStyleClose
-                // ── Jwt builder arity-1 (D-00, #152) ─────────────────────────
+                // ── Jwt builder arity-1 ─────────────────────────
                 // `hs256 : String -> Algorithm`
                 // `rs256 : String -> Algorithm`
                 | KernelFn::JwtHs256
@@ -11762,7 +11762,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ListAny
                 | KernelFn::ListAll
                 | KernelFn::ListFind
-                // ── List batch (#119) ────────────────────────────────────────
+                // ── List batch ────────────────────────────────────────
                 | KernelFn::ListFilterMap
                 | KernelFn::ListSortBy
                 | KernelFn::BasicsAlways
@@ -11778,18 +11778,18 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ResultMap
                 | KernelFn::ResultAndThen
                 | KernelFn::ResultMapError
-                // ── Result/Maybe andMap + Result.traverse — arity 2 (#88) ────
+                // ── Result/Maybe andMap + Result.traverse — arity 2 ────
                 | KernelFn::ResultAndMap
                 | KernelFn::ResultTraverse
                 | KernelFn::MaybeAndMap
                 | KernelFn::MathMin
                 | KernelFn::MathMax
-                // ── Basics numerics (#115) — arity 2 ────────────────────────
+                // ── Basics numerics — arity 2 ────────────────────────
                 | KernelFn::BasicsMin
                 | KernelFn::BasicsMax
-                // `compare : comparable -> comparable -> Order` — arity 2 (#123)
+                // `compare : comparable -> comparable -> Order` — arity 2
                 | KernelFn::BasicsCompare
-                // ── end Basics numerics (#115) ──────────────────────────────
+                // ── end Basics numerics ──────────────────────────────
                 // ── Dict arity-2 ─────────────────────────────────────────────
                 | KernelFn::DictGet
                 | KernelFn::DictMember
@@ -11805,10 +11805,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::SetDiff
                 // ── Bytes arity-2 ────────────────────────────────────────────
                 | KernelFn::BytesAppend
-                // ── JsonEnc arity-2 (M4g) ─────────────────────────────────────
+                // ── JsonEnc arity-2 ─────────────────────────────────────
                 | KernelFn::JsonEncList
                 | KernelFn::JsonEncEncode
-                // ── JsonDec arity-2 (M4h) ─────────────────────────────────────
+                // ── JsonDec arity-2 ─────────────────────────────────────
                 | KernelFn::JsonDecDecodeString
                 | KernelFn::JsonDecField
                 | KernelFn::JsonDecAt
@@ -11824,7 +11824,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::MathAtan2
                 | KernelFn::MathMod
                 | KernelFn::MathRemainder
-                // ── Crypto arity-2 (M5a) ─────────────────────────────────────
+                // ── Crypto arity-2 ─────────────────────────────────────
                 | KernelFn::CryptoHmacSha256
                 | KernelFn::CryptoHmacSha512
                 | KernelFn::CryptoRsaSha256Sign
@@ -11835,12 +11835,12 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::CryptoChacha20Decrypt
                 | KernelFn::CryptoAesKeyFromPassword
                 | KernelFn::CryptoChachaKeyFromPassword
-                // ── Jwt arity-2 (M5b) ─────────────────────────────────────────
+                // ── Jwt arity-2 ─────────────────────────────────────────
                 | KernelFn::JwtEncodeHs256
                 | KernelFn::JwtDecodeHs256
                 | KernelFn::JwtEncodeRs256
                 | KernelFn::JwtDecodeRs256
-                // ── Jwt builder arity-2 (D-00, #152) ──────────────────────────
+                // ── Jwt builder arity-2 ──────────────────────────
                 | KernelFn::JwtSubject
                 | KernelFn::JwtIssuer
                 | KernelFn::JwtAudience
@@ -11849,7 +11849,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::JwtIssuedAt
                 | KernelFn::JwtJwtId
                 | KernelFn::JwtEncode
-                // ── Task combinators arity-2 (M5a) ────────────────────────────
+                // ── Task combinators arity-2 ────────────────────────────
                 | KernelFn::TaskMap
                 | KernelFn::TaskAndThen
                 | KernelFn::TaskMapError
@@ -11864,19 +11864,19 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::TaskWithMaxAttempts
                 | KernelFn::TaskWithBaseMs
                 | KernelFn::TaskWithKind
-                // ── System arity-2 (M5a) ──────────────────────────────────────
+                // ── System arity-2 ──────────────────────────────────────
                 | KernelFn::SystemGetenvOr
                 | KernelFn::SystemSetenv
-                // ── Random arity-2 (M5a) ──────────────────────────────────────
+                // ── Random arity-2 ──────────────────────────────────────
                 | KernelFn::RandomInt
                 | KernelFn::RandomFloat
-                // ── File arity-2 (M5a) ────────────────────────────────────────
+                // ── File arity-2 ────────────────────────────────────────
                 | KernelFn::FileWriteFile
                 | KernelFn::FileReadFileLimit
                 | KernelFn::FileAppend
                 | KernelFn::FileCopy
                 | KernelFn::FileRename
-                // ── Http arity-2 (M5b) ────────────────────────────────────────
+                // ── Http arity-2 ────────────────────────────────────────
                 // `HttpPost` : String -> String -> Task Error HttpResponse
                 // `HttpWithMethod` / `HttpWithTimeout` / `HttpWithBody` /
                 // `HttpWithUrl` / `HttpWithFollowRedirects` /
@@ -11888,7 +11888,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HttpWithUrl
                 | KernelFn::HttpWithFollowRedirects
                 | KernelFn::HttpWithMaxRedirects
-                // ── Db arity-2 (M5b-db) ───────────────────────────────────────
+                // ── Db arity-2 ───────────────────────────────────────
                 // `DbOpen : String -> String -> Task Error Db`
                 | KernelFn::DbOpen
                 // `DbExecRaw : Db -> String -> Task Error Int`
@@ -11902,7 +11902,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DbWithTransaction
                 // `DbMigrate : Db -> List (String, String) -> Task Error (List String)`
                 | KernelFn::DbMigrate
-                // ── Db.Decode arity-2 (M5b-db) ────────────────────────────────
+                // ── Db.Decode arity-2 ────────────────────────────────
                 // `map : (a -> b) -> Decoder a -> Decoder b`
                 | KernelFn::DbDecMap
                 // `andThen : (a -> Decoder b) -> Decoder a -> Decoder b`
@@ -11925,7 +11925,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::PubSubPublish
                 // `PubSub.publishNoEcho : String -> a -> Task Error ()`
                 | KernelFn::PubSubPublishNoEcho
-                // ── Server arity-2 (M6) ───────────────────────────────────────
+                // ── Server arity-2 ───────────────────────────────────────
                 // `Server.get/post/put/delete/any/api : String -> Handler -> Route`
                 | KernelFn::ServerGet
                 | KernelFn::ServerPost
@@ -11950,7 +11950,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ServerWithCookie
                 // `Middleware.withCors : List String -> Handler -> Handler`
                 | KernelFn::MiddlewareWithCors
-                // `Error.withMessage : String -> Error -> Error` (#86)
+                // `Error.withMessage : String -> Error -> Error`
                 | KernelFn::ErrorWithMessage
                 // `Error.withDetails : ErrorDetails -> Error -> Error` (#85 follow-up)
                 | KernelFn::ErrorWithDetails,
@@ -11968,19 +11968,19 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DictFoldl
                 // ── Bytes arity-3 ────────────────────────────────────────────
                 | KernelFn::BytesSlice
-                // ── JsonDec arity-3 (M4h) ─────────────────────────────────────
+                // ── JsonDec arity-3 ─────────────────────────────────────
                 | KernelFn::JsonDecMap2
                 | KernelFn::JsonDecPRequired
                 | KernelFn::JsonDecPRequiredAt
-                // ── Result/Maybe map2 — arity 3 (#88) ────────────────────────
+                // ── Result/Maybe map2 — arity 3 ────────────────────────
                 | KernelFn::ResultMap2
                 | KernelFn::MaybeMap2
-                // ── Crypto arity-3 (M5a) ─────────────────────────────────────
+                // ── Crypto arity-3 ─────────────────────────────────────
                 | KernelFn::CryptoRsaSha256Verify
-                // ── Http arity-3 (M5b) ───────────────────────────────────────
+                // ── Http arity-3 ───────────────────────────────────────
                 // `HttpWithHeader` : String -> String -> HttpRequest -> HttpRequest
                 | KernelFn::HttpWithHeader
-                // ── Db arity-3 (M5b-db) ───────────────────────────────────────
+                // ── Db arity-3 ───────────────────────────────────────
                 // `DbExec : Db -> String -> List SqlValue -> Task Error Int`
                 | KernelFn::DbExec
                 // `DbQuery : Db -> String -> List SqlValue -> Task Error (List Row)`
@@ -11995,30 +11995,30 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DbFindByConditions
                 // `DbInsertFields : Db -> String -> List (String, SqlField) -> Task Error Int`
                 | KernelFn::DbInsertFields
-                // ── Db.Decode arity-3 (M5b-db) ────────────────────────────────
+                // ── Db.Decode arity-3 ────────────────────────────────
                 // `map2 : (a -> b -> c) -> Decoder a -> Decoder b -> Decoder c`
                 | KernelFn::DbDecMap2
                 // `required : String -> Decoder a -> Decoder (a -> b) -> Decoder b`
                 | KernelFn::DbDecRequired
-                // ── Server arity-3 (M6) ───────────────────────────────────────
+                // ── Server arity-3 ───────────────────────────────────────
                 // `Server.withHeader : String -> String -> Response -> Response`
                 | KernelFn::ServerWithHeader
                 // `Middleware.withBasicAuth : String -> String -> Handler -> Handler`
                 | KernelFn::MiddlewareWithBasicAuth
-                // ── Jwt builder arity-3 (D-00, #152) ─────────────────────────
+                // ── Jwt builder arity-3 ─────────────────────────
                 // `withClaim : String -> String -> Claims -> Claims`
                 | KernelFn::JwtWithClaim
                 // `Jwt.decode : Algorithm -> Int -> String -> Result Error String`
                 | KernelFn::JwtDecode,
             ) => Ok(3),
-            // ── JsonDec arity-4 (M4h) ─────────────────────────────────────────
+            // ── JsonDec arity-4 ─────────────────────────────────────────
             Callee::Kernel(
                 KernelFn::JsonDecMap3
-                // ── Result/Maybe map3 — arity 4 (#88) ────────────────────────
+                // ── Result/Maybe map3 — arity 4 ────────────────────────
                 | KernelFn::ResultMap3
                 | KernelFn::MaybeMap3
                 | KernelFn::JsonDecPOptional
-                // ── Db arity-4 (M5b-db) ───────────────────────────────────────
+                // ── Db arity-4 ───────────────────────────────────────
                 // `DbQueryDecode : Db -> String -> List SqlValue -> Decoder a -> Task Error (List a)`
                 | KernelFn::DbQueryDecode
                 // `DbUpdateById : Db -> String -> String -> Dict String String -> Task Error Int`
@@ -12029,32 +12029,32 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DbFindManyByField
                 // `DbUpdateFields : Db -> String -> List (String, SqlValue) -> List (String, SqlField) -> Task Error Int`
                 | KernelFn::DbUpdateFields
-                // ── Db.Decode arity-4 (M5b-db) ────────────────────────────────
+                // ── Db.Decode arity-4 ────────────────────────────────
                 // `map3 : (a->b->c->d) -> Decoder a -> Decoder b -> Decoder c -> Decoder d`
                 | KernelFn::DbDecMap3
                 // `optional : String -> Decoder a -> a -> Decoder (a->b) -> Decoder b`
                 | KernelFn::DbDecOptional
-                // ── Server arity-4 (M6) ───────────────────────────────────────
+                // ── Server arity-4 ───────────────────────────────────────
                 // `Middleware.withRateLimit : String -> Int -> Int -> Handler -> Handler`
                 | KernelFn::MiddlewareWithRateLimit
                 // `RateLimit.allow : String -> String -> Int -> Int -> Bool`
                 | KernelFn::RateLimitAllow,
             ) => Ok(4),
-            // ── JsonDec arity-5 (M4h) ─────────────────────────────────────────
+            // ── JsonDec arity-5 ─────────────────────────────────────────
             Callee::Kernel(
                 KernelFn::JsonDecMap4
-                // ── Db arity-5 (M5b-db) ───────────────────────────────────────
+                // ── Db arity-5 ───────────────────────────────────────
                 // `DbInsertFieldsReturning : Db -> String -> List (String, SqlField) -> String -> Decoder a -> Task Error (List a)`
                 | KernelFn::DbInsertFieldsReturning
                 // `map4 : (a->b->c->d->e) -> Da -> Db -> Dc -> Dd -> De`
                 | KernelFn::DbDecMap4
-                // ── Result/Maybe map4 — arity 5 (#88) ────────────────────────
+                // ── Result/Maybe map4 — arity 5 ────────────────────────
                 | KernelFn::ResultMap4
                 | KernelFn::MaybeMap4,
             ) => Ok(5),
-            // ── Result/Maybe map5 — arity 6 (#88) ────────────────────────────
+            // ── Result/Maybe map5 — arity 6 ────────────────────────────
             Callee::Kernel(KernelFn::ResultMap5 | KernelFn::MaybeMap5) => Ok(6),
-            // ── M7: Std.Ui / Std.Html render kernels ─────────────────────────
+            // ── Std.Ui / Std.Html render kernels ─────────────────────────
             // Arity 0: nullary constants — no arguments.
             Callee::Kernel(
                 // `Ui.none : Element msg`
@@ -12101,9 +12101,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::FontBold
                 // `Font.italic : Attribute msg`
                 | KernelFn::FontItalic
-                // `Attr.noAttr : Attribute msg` (#76)
+                // `Attr.noAttr : Attribute msg`
                 | KernelFn::HtmlNoAttr
-                // ── #76 Tier 1 — nullary attrs ────────────────────────────────
+                // ── nullary attrs ────────────────────────────────
                 | KernelFn::UiSquare
                 | KernelFn::UiWidescreen
                 | KernelFn::UiCinemascope
@@ -12127,7 +12127,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::FontSansSerif
                 | KernelFn::FontSerif
                 | KernelFn::FontMonospace
-                // ── Std.Ui.Region (#117) — arity-0 attrs ─────────────────────────
+                // ── Std.Ui.Region — arity-0 attrs ─────────────────────────
                 | KernelFn::RegionMainContent
                 | KernelFn::RegionNavigation
                 | KernelFn::RegionFooter
@@ -12141,14 +12141,14 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiDescComplementary
                 | KernelFn::UiDescLivePolite
                 | KernelFn::UiDescLiveAssertive
-                // ── #154: Breakpoint constants — return String, arity 0 ──────
+                // ── Breakpoint constants — return String, arity 0 ──────
                 | KernelFn::UiMobile
                 | KernelFn::UiTablet
                 | KernelFn::UiDesktop
                 | KernelFn::UiDarkMode
                 | KernelFn::UiLightMode
                 | KernelFn::UiReducedMotion
-                // ── #76: PseudoClass constants — return PseudoClass, arity 0 ──
+                // ── PseudoClass constants — return PseudoClass, arity 0 ──
                 | KernelFn::UiHover
                 | KernelFn::UiFocus
                 | KernelFn::UiFocusVisible
@@ -12165,12 +12165,12 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlEscapeAttr
                 // `Html.attrToString : Attribute msg -> String`
                 | KernelFn::HtmlAttrToString
-                // ── M7: Ui element builders — arity 1 ────────────────────────
+                // ── Ui element builders — arity 1 ────────────────────────
                 // `Ui.text : String -> Element msg`
                 | KernelFn::UiText
                 // `Ui.html : Html msg -> Element msg`
                 | KernelFn::UiHtml
-                // ── M7: Ui attribute builders — arity 1 ──────────────────────
+                // ── Ui attribute builders — arity 1 ──────────────────────
                 // `Ui.spacing : Int -> Attribute msg`
                 | KernelFn::UiSpacing
                 // `Ui.padding : Int -> Attribute msg`
@@ -12181,7 +12181,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiHeight
                 // `Ui.gridColumns : Int -> Attribute msg`
                 | KernelFn::UiGridColumns
-                // ── M7: Std.Ui nearby attribute builders — arity 1 ───────────
+                // ── Std.Ui nearby attribute builders — arity 1 ───────────
                 // `Ui.above/below/onLeft/onRight/inFront/behind : Element msg -> Attribute msg`
                 | KernelFn::UiAbove
                 | KernelFn::UiBelow
@@ -12189,7 +12189,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiOnRight
                 | KernelFn::UiInFront
                 | KernelFn::UiBehind
-                // ── M7: Ui Length builders — arity 1 ─────────────────────────
+                // ── Ui Length builders — arity 1 ─────────────────────────
                 // `Ui.px : Int -> Length`
                 | KernelFn::UiPx
                 // `Ui.fillPortion : Int -> Length`
@@ -12198,12 +12198,12 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiVh
                 // `Ui.vw : Int -> Length`
                 | KernelFn::UiVw
-                // ── M7: Background — arity 1 ─────────────────────────────────
+                // ── Background — arity 1 ─────────────────────────────────
                 // `Background.color : Color -> Attribute msg`
                 | KernelFn::BackgroundColor
                 // `Background.image : String -> Attribute msg`
                 | KernelFn::BackgroundImage
-                // ── M7: Border — arity 1 ─────────────────────────────────────
+                // ── Border — arity 1 ─────────────────────────────────────
                 // `Border.width : Int -> Attribute msg`
                 | KernelFn::BorderWidth
                 // `Border.rounded : Int -> Attribute msg`
@@ -12216,14 +12216,14 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::BorderShadow
                 // `Border.innerShadow : { offsetX, offsetY, blur, spread : Int, color : Color } -> Attribute msg`
                 | KernelFn::BorderInnerShadow
-                // ── M7: Font — arity 1 ───────────────────────────────────────
+                // ── Font — arity 1 ───────────────────────────────────────
                 // `Font.size : Int -> Attribute msg`
                 | KernelFn::FontSize
                 // `Font.color : Color -> Attribute msg`
                 | KernelFn::FontColor
                 // `Font.family : List String -> Attribute msg`
                 | KernelFn::FontFamily
-                // ── M7: Html element builders — arity 1 ──────────────────────
+                // ── Html element builders — arity 1 ──────────────────────
                 // `Html.text : String -> Html msg`
                 | KernelFn::HtmlTextNode
                 // `Html.raw : String -> Html msg`
@@ -12232,7 +12232,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlInput
                 // `Html.img : List (Attribute msg) -> Html msg` (void element)
                 | KernelFn::HtmlImg
-                // ── #76 batch 2: Std.Html void element builders — arity 1 ────
+                // ── Std.Html void element builders — arity 1 ────
                 // `Html.br : List (Attribute msg) -> Html msg` (void element)
                 | KernelFn::HtmlBr
                 // `Html.hr : List (Attribute msg) -> Html msg` (void element)
@@ -12257,7 +12257,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlTrack
                 // `Html.wbr : List (Attribute msg) -> Html msg` (void element)
                 | KernelFn::HtmlWbr
-                // ── M7: Phase-1a event-attribute builders — arity 1 ──────────
+                // ── Phase-1a event-attribute builders — arity 1 ──────────
                 // `Ui.onClick : msg -> Attribute msg`
                 | KernelFn::UiOnClick
                 // `Ui.onFocus : msg -> Attribute msg`
@@ -12280,7 +12280,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiOnBool
                 // `Ui.onSubmit : (a -> msg) -> Attribute msg`
                 | KernelFn::UiOnSubmit
-                // ── #107: Std.Html.Events builders — arity 1 (all shapes) ────
+                // ── Std.Html.Events builders — arity 1 (all shapes) ────
                 | KernelFn::HtmlOnClick
                 | KernelFn::HtmlOnFocus
                 | KernelFn::HtmlOnBlur
@@ -12292,7 +12292,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlOnKeyDown
                 | KernelFn::HtmlOnKeyUp
                 | KernelFn::HtmlOnBool
-                // ── M7: app-entry stubs — arity 1 ────────────────────────────
+                // ── app-entry stubs — arity 1 ────────────────────────────
                 // `Live.app : LiveAppCfg model msg -> Task Error ()`
                 | KernelFn::LiveApp
                 // `Live.appRouted : LiveAppCfg model msg -> Task Error ()`
@@ -12303,9 +12303,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::TuiApp
                 // `Webview.app : WebviewCfg model msg -> Task Error ()`
                 | KernelFn::WebviewApp
-                // `Cli.program : CliCfg model msg -> Task Error ()` (#111)
+                // `Cli.program : CliCfg model msg -> Task Error ()`
                 | KernelFn::CliProgram
-                // #76: Std.Html.Attributes fixed-key builders (`String`/`Bool`
+                // Std.Html.Attributes fixed-key builders (`String`/`Bool`
                 // -> Attribute msg).
                 | KernelFn::HtmlAttrClass
                 | KernelFn::HtmlAttrId
@@ -12327,7 +12327,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlAttrSelected
                 | KernelFn::HtmlAttrAutofocus
                 | KernelFn::HtmlAttrAutocomplete
-                // ── #76 Tier 1 — arity 1 ────────────────────────────────────
+                // ── arity 1 ────────────────────────────────────
                 | KernelFn::UiAspectRatio
                 | KernelFn::UiName
                 | KernelFn::BackgroundHoverColor
@@ -12349,7 +12349,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::FontHoverSize
                 | KernelFn::HtmlAttrTabindex
                 | KernelFn::HtmlAttrRows
-                // ── Std.Ui.Region (#117) — arity-1 attrs ─────────────────────────
+                // ── Std.Ui.Region — arity-1 attrs ─────────────────────────
                 | KernelFn::RegionHeading
                 | KernelFn::RegionLabel
                 // ── Ui.input + Ui.describe + desc* arity-1 ──────────────────────
@@ -12357,10 +12357,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiDescribe
                 | KernelFn::UiDescHeading
                 | KernelFn::UiDescLabel
-                // ── Std.Ui.Input (#124) — arity-1 constructors ───────────────────
+                // ── Std.Ui.Input — arity-1 constructors ───────────────────
                 // `Input.labelHidden : String -> Label msg`
                 | KernelFn::InputLabelHidden
-                // ── #76: 20-kernel wiring batch — arity 1 ─────────────────────
+                // ── 20-kernel wiring batch — arity 1 ─────────────────────
                 // `Ui.paddingEach : { top, right, bottom, left : Int } -> Attribute msg`
                 | KernelFn::UiPaddingEach
                 // `Ui.onFile : (String -> msg) -> Attribute msg`
@@ -12379,7 +12379,7 @@ impl<'a> Lowerer<'a> {
                 KernelFn::UiLayout
                 // `Ui.layoutWith : { wrapperAttrs, rootAttrs } -> Element msg -> Html msg`
                 | KernelFn::UiLayoutWith
-                // ── M7: Ui element builders — arity 2 ────────────────────────
+                // ── Ui element builders — arity 2 ────────────────────────
                 // `Ui.el : List (Attribute msg) -> Element msg -> Element msg`
                 | KernelFn::UiEl
                 // `Ui.row : List (Attribute msg) -> List (Element msg) -> Element msg`
@@ -12408,7 +12408,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiMinimum
                 // `Ui.maximum : Int -> Length -> Length`
                 | KernelFn::UiMaximum
-                // ── M7: Html element builders — arity 2 ──────────────────────
+                // ── Html element builders — arity 2 ──────────────────────
                 // `Html.styleNode : List (Attribute msg) -> String -> Html msg`
                 | KernelFn::HtmlStyleNode
                 // `Html.div : List (Attribute msg) -> List (Html msg) -> Html msg`
@@ -12421,7 +12421,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlButton
                 // `Html.p : List (Attribute msg) -> List (Html msg) -> Html msg`
                 | KernelFn::HtmlP
-                // ── #76 batch 2: Std.Html container element builders — arity 2 ─
+                // ── Std.Html container element builders — arity 2 ─
                 // `Html.h1 : List (Attribute msg) -> List (Html msg) -> Html msg`
                 | KernelFn::HtmlH1
                 // `Html.h2 : List (Attribute msg) -> List (Html msg) -> Html msg`
@@ -12540,7 +12540,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::LiveRoute
                 // `Live.renderStatic : LiveAppCfg model msg -> String -> Task Error String`
                 | KernelFn::LiveRenderStatic
-                // #76: generic `Attr.attribute k v` / `Attr.boolAttribute k b`.
+                // generic `Attr.attribute k v` / `Attr.boolAttribute k b`.
                 | KernelFn::HtmlAttribute
                 | KernelFn::HtmlBoolAttribute
                 // -- #76 Tier 1 -- arity 2
@@ -12551,7 +12551,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiTransitionRaw
                 // `Ui.gridTracksRaw : String -> String -> Attribute msg`
                 | KernelFn::UiGridTracksRaw
-                // ── Std.Ui.Input (#124) — arity-2 constructors ───────────────────
+                // ── Std.Ui.Input — arity-2 constructors ───────────────────
                 // `Input.labelAbove : List (Attribute msg) -> Element msg -> Label msg`
                 | KernelFn::InputLabelAbove
                 // `Input.labelBelow : List (Attribute msg) -> Element msg -> Label msg`
@@ -12586,7 +12586,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::InputRadio
                 // `Input.radioRow : List (Attribute msg) -> { onChange, options, selected, label } -> Element msg`
                 | KernelFn::InputRadioRow
-                // ── #76: 20-kernel wiring batch — arity 2 ─────────────────────
+                // ── 20-kernel wiring batch — arity 2 ─────────────────────
                 // `Ui.image : List (Attribute msg) -> { src : String, description : String } -> Element msg`
                 | KernelFn::UiImage
                 // `Background.linearGradient : Float -> List (Float, Color) -> Attribute msg`
@@ -12621,7 +12621,7 @@ impl<'a> Lowerer<'a> {
                 // respect-`prefers-reduced-motion` flag (see ui_animate_raw_).
                 | KernelFn::UiAnimateRaw,
             ) => Ok(4),
-            // ── #111: Std.Auth / Stream / HttpStream — fail-closed kernels ──
+            // ── Std.Auth / Stream / HttpStream — fail-closed kernels ──
             // These kernels are registered in the qualifier table but have no
             // lower arm (they hit SKY-L0108).  callee_arity is consulted
             // before lowering, so each variant must declare its correct arity
@@ -12633,7 +12633,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HttpStreamOpen
                 | KernelFn::HttpStreamClose
                 | KernelFn::UiColorCss
-                // ── #127: Sky.Http.Server.WebSocket arity-1 ──────────────────
+                // ── Sky.Http.Server.WebSocket arity-1 ──────────────────
                 | KernelFn::WsCloseClient,
             ) => Ok(1),
             Callee::Kernel(
@@ -12645,7 +12645,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StreamWithContentType
                 | KernelFn::HttpStreamForEachChunk
                 | KernelFn::HttpStreamChunks
-                // ── #127: Sky.Http.Server.WebSocket arity-2 ──────────────────
+                // ── Sky.Http.Server.WebSocket arity-2 ──────────────────
                 | KernelFn::WsWithOnConnect
                 | KernelFn::WsWithOnMessage
                 | KernelFn::WsWithOnClose
@@ -12663,7 +12663,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::AuthLogin
                 | KernelFn::AuthSetRole,
             ) => Ok(3),
-            // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────
+            // ── Std.Ui.Lazy ────────────────────────────────────────────
             // lazy  : (a -> Element msg) -> a -> Element msg          — arity 2
             Callee::Kernel(KernelFn::LazyLazy) => Ok(2),
             // Keyed.column/row : List Attr -> List (String, Element) -> Element — arity 2
@@ -12727,7 +12727,7 @@ impl<'a> Lowerer<'a> {
             // ── Std.Decimal — arity 4 ────────────────────────────────────────
             // `Decimal.formatWith : String -> String -> Int -> Decimal -> String`
             Callee::Kernel(KernelFn::DecFormatWith) => Ok(4),
-            // ── Std.Db.Sql — SqlFragment builder, arity 1 (backlog #61) ──────
+            // ── Std.Db.Sql — SqlFragment builder, arity 1 ──────
             // `column : String -> SqlFragment`, `param : SqlValue -> SqlFragment`,
             // `int`/`string`/`float`/`bool : _ -> SqlFragment` (sugar over
             // `param`), `not`/`isNull`/`isNotNull : SqlFragment -> SqlFragment`.
@@ -12758,17 +12758,17 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::SqlInList
                 | KernelFn::SqlLike,
             ) => Ok(2),
-            // ── Db.findWhere / Db.deleteWhere — arity 3 (backlog #61) ─────────
+            // ── Db.findWhere / Db.deleteWhere — arity 3 ─────────
             // `findWhere : Db -> String -> SqlFragment -> Task Error (List Row)`
             // `deleteWhere : Db -> String -> SqlFragment -> Task Error Int`
             Callee::Kernel(KernelFn::DbFindWhere | KernelFn::DbDeleteWhere) => Ok(3),
-            // ── Sky.Core.Secret — opaque secret-string wrapper, arity 1 (#44) ──
+            // ── Sky.Core.Secret — opaque secret-string wrapper, arity 1 ──
             // `fromString : String -> Secret`, `reveal : Secret -> String`,
             // `redacted : Secret -> String`.
             Callee::Kernel(
                 KernelFn::SecretFromString | KernelFn::SecretReveal | KernelFn::SecretRedacted,
             ) => Ok(1),
-            // ── #194: Sky.Core.Regex ─────────────────────────────────────────
+            // ── Sky.Core.Regex ─────────────────────────────────────────
             // `match`/`find`/`findAll`/`split : String -> String -> _` (arity 2);
             // `replace : String -> String -> String -> String` (arity 3).
             Callee::Kernel(
@@ -12778,25 +12778,25 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::RegexSplit,
             ) => Ok(2),
             Callee::Kernel(KernelFn::RegexReplace) => Ok(3),
-            // ── #202: Sky.Core.Path — all four are `String -> _` (arity 1). ───
+            // ── Sky.Core.Path — all four are `String -> _` (arity 1). ───
             Callee::Kernel(
                 KernelFn::PathBase
                 | KernelFn::PathDir
                 | KernelFn::PathExt
                 | KernelFn::PathIsAbsolute,
             ) => Ok(1),
-            // ── #197: Std.Trace — `span : String -> Task -> Task` (arity 2);
+            // ── Std.Trace — `span : String -> Task -> Task` (arity 2);
             // `event : String -> Task ()` (1); `attr : String -> String -> Task ()` (2).
             Callee::Kernel(KernelFn::TraceSpan | KernelFn::TraceAttr) => Ok(2),
             Callee::Kernel(KernelFn::TraceEvent) => Ok(1),
-            // ── #197: Std.Compression — all four `String -> Task String` (arity 1).
+            // ── Std.Compression — all four `String -> Task String` (arity 1).
             Callee::Kernel(
                 KernelFn::CompressionGzip
                 | KernelFn::CompressionGunzip
                 | KernelFn::CompressionZstdCompress
                 | KernelFn::CompressionZstdDecompress,
             ) => Ok(1),
-            // ── #197: Std.Csv ────────────────────────────────────────────────
+            // ── Std.Csv ────────────────────────────────────────────────
             // parse/encode/parseStreamFromFile → 1; parseWithDelimiter/
             // encodeWithDelimiter → 2.
             Callee::Kernel(
@@ -12805,7 +12805,7 @@ impl<'a> Lowerer<'a> {
             Callee::Kernel(
                 KernelFn::CsvParseWithDelimiter | KernelFn::CsvEncodeWithDelimiter,
             ) => Ok(2),
-            // ── #210: Std.Cache ──────────────────────────────────────────────
+            // ── Std.Cache ──────────────────────────────────────────────
             // newRaw/clear/size/stats take one arg (a `CacheCfg` or the `Int`
             // handle); get/remove take (handle, key); put takes (handle, key, val).
             Callee::Kernel(
@@ -12996,7 +12996,7 @@ impl<'a> Lowerer<'a> {
                     ("List", "any") => Ok(Callee::Kernel(KernelFn::ListAny)),
                     ("List", "all") => Ok(Callee::Kernel(KernelFn::ListAll)),
                     ("List", "find") => Ok(Callee::Kernel(KernelFn::ListFind)),
-                    // ── List batch (#119) ────────────────────────────────────
+                    // ── List batch ────────────────────────────────────
                     ("List", "filterMap") => Ok(Callee::Kernel(KernelFn::ListFilterMap)),
                     ("List", "sortBy") => Ok(Callee::Kernel(KernelFn::ListSortBy)),
                     ("Basics", "not") => Ok(Callee::Kernel(KernelFn::BasicsNot)),
@@ -13007,17 +13007,17 @@ impl<'a> Lowerer<'a> {
                     ("Basics", "modBy") => Ok(Callee::Kernel(KernelFn::BasicsModBy)),
                     ("Basics", "clamp") => Ok(Callee::Kernel(KernelFn::BasicsClamp)),
                     ("Basics", "toString") => Ok(Callee::Kernel(KernelFn::BasicsToString)),
-                    // ── Basics numerics (#115) ────────────────────────────────
+                    // ── Basics numerics ────────────────────────────────
                     ("Basics", "negate") => Ok(Callee::Kernel(KernelFn::BasicsNegate)),
                     ("Basics", "abs") => Ok(Callee::Kernel(KernelFn::BasicsAbs)),
                     ("Basics", "sqrt") => Ok(Callee::Kernel(KernelFn::BasicsSqrt)),
                     ("Basics", "min") => Ok(Callee::Kernel(KernelFn::BasicsMin)),
                     ("Basics", "max") => Ok(Callee::Kernel(KernelFn::BasicsMax)),
-                    // `compare : comparable -> comparable -> Order` (#123)
+                    // `compare : comparable -> comparable -> Order`
                     ("Basics", "compare") => Ok(Callee::Kernel(KernelFn::BasicsCompare)),
-                    // ── end Basics numerics (#115) ────────────────────────────
+                    // ── end Basics numerics ────────────────────────────
                     // ── Error kernels (Sky.Core.Error — minimal `Error = String`
-                    //    slice, #86) ─────────────────────────────────────────
+                    //    slice) ─────────────────────────────────────────
                     ("Error", "unexpected") => Ok(Callee::Kernel(KernelFn::ErrorUnexpected)),
                     ("Error", "invalidInput") => Ok(Callee::Kernel(KernelFn::ErrorInvalidInput)),
                     ("Error", "io") => Ok(Callee::Kernel(KernelFn::ErrorIo)),
@@ -13040,7 +13040,7 @@ impl<'a> Lowerer<'a> {
                     ("Error", "isRetryable") => Ok(Callee::Kernel(KernelFn::ErrorIsRetryable)),
                     ("Error", "withDetails") => Ok(Callee::Kernel(KernelFn::ErrorWithDetails)),
                     // ── CssSafety kernels (Sky.Core.CssSafety — Std.Css leaf
-                    //    security kernels, #47) ──────────────────────────────
+                    //    security kernels) ──────────────────────────────
                     ("CssSafety", "safeValue") => Ok(Callee::Kernel(KernelFn::CssSafetySafeValue)),
                     ("CssSafety", "safePropName") => {
                         Ok(Callee::Kernel(KernelFn::CssSafetySafePropName))
@@ -13076,7 +13076,7 @@ impl<'a> Lowerer<'a> {
                     // ── Math kernels ───────────────────────────────────────
                     // `min` / `max` are polymorphic `a -> a -> a` — lowered to
                     // the runtime's generic compare, NOT through any `Int`
-                    // coercion. Divergence from Sky (PR #136): Sky routes args
+                    // coercion. Divergence from Sky: Sky routes args
                     // through AsInt; Sky-Rust follows Elm's polymorphic
                     // comparable. Rationale: Elm-conformance. The args keep
                     // their solved type, so `math_min`/`math_max` infer `T` and
@@ -13151,7 +13151,7 @@ impl<'a> Lowerer<'a> {
                     ("Set", "union") => Ok(Callee::Kernel(KernelFn::SetUnion)),
                     ("Set", "intersect") => Ok(Callee::Kernel(KernelFn::SetIntersect)),
                     ("Set", "diff") => Ok(Callee::Kernel(KernelFn::SetDiff)),
-                    // ── Bytes kernels (M4e) ────────────────────────────────
+                    // ── Bytes kernels ────────────────────────────────
                     // Divergence from Sky: Bytes is Vec<u8> not String alias.
                     ("Bytes", "empty") => Ok(Callee::Kernel(KernelFn::BytesEmpty)),
                     ("Bytes", "length") => Ok(Callee::Kernel(KernelFn::BytesLength)),
@@ -13164,7 +13164,7 @@ impl<'a> Lowerer<'a> {
                     ("Bytes", "toBase64") => Ok(Callee::Kernel(KernelFn::BytesToBase64)),
                     ("Bytes", "append") => Ok(Callee::Kernel(KernelFn::BytesAppend)),
                     ("Bytes", "slice") => Ok(Callee::Kernel(KernelFn::BytesSlice)),
-                    // ── Encoding kernels (M4f) ─────────────────────────────
+                    // ── Encoding kernels ─────────────────────────────
                     ("Encoding", "base64Encode") => {
                         Ok(Callee::Kernel(KernelFn::EncodingBase64Encode))
                     }
@@ -13175,7 +13175,7 @@ impl<'a> Lowerer<'a> {
                     ("Encoding", "urlDecode") => Ok(Callee::Kernel(KernelFn::EncodingUrlDecode)),
                     ("Encoding", "hexEncode") => Ok(Callee::Kernel(KernelFn::EncodingHexEncode)),
                     ("Encoding", "hexDecode") => Ok(Callee::Kernel(KernelFn::EncodingHexDecode)),
-                    // ── JsonEnc kernels (M4g) ──────────────────────────────────
+                    // ── JsonEnc kernels ──────────────────────────────────
                     ("JsonEnc", "string") => Ok(Callee::Kernel(KernelFn::JsonEncString)),
                     ("JsonEnc", "int") => Ok(Callee::Kernel(KernelFn::JsonEncInt)),
                     ("JsonEnc", "float") => Ok(Callee::Kernel(KernelFn::JsonEncFloat)),
@@ -13184,7 +13184,7 @@ impl<'a> Lowerer<'a> {
                     ("JsonEnc", "list") => Ok(Callee::Kernel(KernelFn::JsonEncList)),
                     ("JsonEnc", "object") => Ok(Callee::Kernel(KernelFn::JsonEncObject)),
                     ("JsonEnc", "encode") => Ok(Callee::Kernel(KernelFn::JsonEncEncode)),
-                    // ── Json.Decode (M4h) ─────────────────────────────────────
+                    // ── Json.Decode ─────────────────────────────────────
                     ("JsonDec", "string") => Ok(Callee::Kernel(KernelFn::JsonDecString)),
                     ("JsonDec", "int") => Ok(Callee::Kernel(KernelFn::JsonDecInt)),
                     ("JsonDec", "float") => Ok(Callee::Kernel(KernelFn::JsonDecFloat)),
@@ -13204,12 +13204,12 @@ impl<'a> Lowerer<'a> {
                     ("JsonDec", "map2") => Ok(Callee::Kernel(KernelFn::JsonDecMap2)),
                     ("JsonDec", "map3") => Ok(Callee::Kernel(KernelFn::JsonDecMap3)),
                     ("JsonDec", "map4") => Ok(Callee::Kernel(KernelFn::JsonDecMap4)),
-                    // ── Json.Decode.Pipeline (M4h) ────────────────────────────
+                    // ── Json.Decode.Pipeline ────────────────────────────
                     ("JsonDecP", "required") => Ok(Callee::Kernel(KernelFn::JsonDecPRequired)),
                     ("JsonDecP", "optional") => Ok(Callee::Kernel(KernelFn::JsonDecPOptional)),
                     ("JsonDecP", "custom") => Ok(Callee::Kernel(KernelFn::JsonDecPCustom)),
                     ("JsonDecP", "requiredAt") => Ok(Callee::Kernel(KernelFn::JsonDecPRequiredAt)),
-                    // ── Crypto kernels (M5a) ──────────────────────────────────
+                    // ── Crypto kernels ──────────────────────────────────
                     ("Crypto", "sha256") => Ok(Callee::Kernel(KernelFn::CryptoSha256)),
                     ("Crypto", "sha512") => Ok(Callee::Kernel(KernelFn::CryptoSha512)),
                     ("Crypto", "sha1") => Ok(Callee::Kernel(KernelFn::CryptoSha1)),
@@ -13245,16 +13245,16 @@ impl<'a> Lowerer<'a> {
                     }
                     ("Crypto", "randomBytes") => Ok(Callee::Kernel(KernelFn::CryptoRandomBytes)),
                     ("Crypto", "randomToken") => Ok(Callee::Kernel(KernelFn::CryptoRandomToken)),
-                    // ── Uuid kernels (M5b) ────────────────────────────────────
+                    // ── Uuid kernels ────────────────────────────────────
                     ("Uuid", "v4") => Ok(Callee::Kernel(KernelFn::UuidV4)),
                     ("Uuid", "v7") => Ok(Callee::Kernel(KernelFn::UuidV7)),
                     ("Uuid", "parse") => Ok(Callee::Kernel(KernelFn::UuidParse)),
-                    // ── Jwt kernels (M5b) ─────────────────────────────────────
+                    // ── Jwt kernels ─────────────────────────────────────
                     ("Jwt", "encodeHs256") => Ok(Callee::Kernel(KernelFn::JwtEncodeHs256)),
                     ("Jwt", "decodeHs256") => Ok(Callee::Kernel(KernelFn::JwtDecodeHs256)),
                     ("Jwt", "encodeRs256") => Ok(Callee::Kernel(KernelFn::JwtEncodeRs256)),
                     ("Jwt", "decodeRs256") => Ok(Callee::Kernel(KernelFn::JwtDecodeRs256)),
-                    // ── Jwt builder API (D-00, #152) ──────────────────────────
+                    // ── Jwt builder API ──────────────────────────
                     ("Jwt", "claims") => Ok(Callee::Kernel(KernelFn::JwtClaims)),
                     ("Jwt", "hs256") => Ok(Callee::Kernel(KernelFn::JwtHs256)),
                     ("Jwt", "rs256") => Ok(Callee::Kernel(KernelFn::JwtRs256)),
@@ -13268,7 +13268,7 @@ impl<'a> Lowerer<'a> {
                     ("Jwt", "withClaim") => Ok(Callee::Kernel(KernelFn::JwtWithClaim)),
                     ("Jwt", "encode") => Ok(Callee::Kernel(KernelFn::JwtEncode)),
                     ("Jwt", "decode") => Ok(Callee::Kernel(KernelFn::JwtDecode)),
-                    // ── Task combinators (M5a) ────────────────────────────────
+                    // ── Task combinators ────────────────────────────────
                     ("Task", "succeed") => Ok(Callee::Kernel(KernelFn::TaskSucceed)),
                     ("Task", "fail") => Ok(Callee::Kernel(KernelFn::TaskFail)),
                     ("Task", "map") => Ok(Callee::Kernel(KernelFn::TaskMap)),
@@ -13282,7 +13282,7 @@ impl<'a> Lowerer<'a> {
                     ("Task", "run") => Ok(Callee::Kernel(KernelFn::TaskRun)),
                     ("Task", "perform") => Ok(Callee::Kernel(KernelFn::TaskPerform)),
                     ("Task", "lazy") => Ok(Callee::Kernel(KernelFn::TaskLazy)),
-                    // ── Task retry surface (M5a) ──────────────────────────────
+                    // ── Task retry surface ──────────────────────────────
                     ("Task", "retryWith") => Ok(Callee::Kernel(KernelFn::TaskRetryWith)),
                     ("Task", "linearBackoff") => Ok(Callee::Kernel(KernelFn::TaskLinearBackoff)),
                     ("Task", "exponentialBackoff") => {
@@ -13299,18 +13299,18 @@ impl<'a> Lowerer<'a> {
                     }
                     ("Task", "withBaseMs") => Ok(Callee::Kernel(KernelFn::TaskWithBaseMs)),
                     ("Task", "withKind") => Ok(Callee::Kernel(KernelFn::TaskWithKind)),
-                    // ── Io kernels (M5a) ──────────────────────────────────────
+                    // ── Io kernels ──────────────────────────────────────
                     ("Io", "readLine") => Ok(Callee::Kernel(KernelFn::IoReadLine)),
                     ("Io", "writeStdout") => Ok(Callee::Kernel(KernelFn::IoWriteStdout)),
                     ("Io", "writeStderr") => Ok(Callee::Kernel(KernelFn::IoWriteStderr)),
-                    // ── Time kernels (M5a) ────────────────────────────────────
+                    // ── Time kernels ────────────────────────────────────
                     ("Time", "now") => Ok(Callee::Kernel(KernelFn::TimeNow)),
                     ("Time", "sleep") => Ok(Callee::Kernel(KernelFn::TimeSleep)),
                     ("Time", "unixMillis") => Ok(Callee::Kernel(KernelFn::TimeUnixMillis)),
                     ("Time", "timeString") => Ok(Callee::Kernel(KernelFn::TimeTimeString)),
                     ("Time", "isLeapYear") => Ok(Callee::Kernel(KernelFn::TimeIsLeapYear)),
                     ("Time", "daysInMonth") => Ok(Callee::Kernel(KernelFn::TimeDaysInMonth)),
-                    // ── System kernels (M5a) ──────────────────────────────────
+                    // ── System kernels ──────────────────────────────────
                     ("System", "args") => Ok(Callee::Kernel(KernelFn::SystemArgs)),
                     ("System", "getenv") => Ok(Callee::Kernel(KernelFn::SystemGetenv)),
                     ("System", "getenvOr") => Ok(Callee::Kernel(KernelFn::SystemGetenvOr)),
@@ -13322,11 +13322,11 @@ impl<'a> Lowerer<'a> {
                     ("System", "cwd") => Ok(Callee::Kernel(KernelFn::SystemCwd)),
                     ("System", "loadEnv") => Ok(Callee::Kernel(KernelFn::SystemLoadEnv)),
                     ("System", "exit") => Ok(Callee::Kernel(KernelFn::SystemExit)),
-                    // ── Random kernels (M5a) ──────────────────────────────────
+                    // ── Random kernels ──────────────────────────────────
                     ("Random", "int") => Ok(Callee::Kernel(KernelFn::RandomInt)),
                     ("Random", "float") => Ok(Callee::Kernel(KernelFn::RandomFloat)),
                     ("Random", "choice") => Ok(Callee::Kernel(KernelFn::RandomChoice)),
-                    // ── File kernels (M5a) ────────────────────────────────────
+                    // ── File kernels ────────────────────────────────────
                     ("File", "readFile") => Ok(Callee::Kernel(KernelFn::FileReadFile)),
                     ("File", "writeFile") => Ok(Callee::Kernel(KernelFn::FileWriteFile)),
                     ("File", "exists") => Ok(Callee::Kernel(KernelFn::FileExists)),
@@ -13342,7 +13342,7 @@ impl<'a> Lowerer<'a> {
                     ("File", "copy") => Ok(Callee::Kernel(KernelFn::FileCopy)),
                     ("File", "rename") => Ok(Callee::Kernel(KernelFn::FileRename)),
                     ("File", "delete") => Ok(Callee::Kernel(KernelFn::FileDelete)),
-                    // ── Http kernels (M5b) ────────────────────────────────────
+                    // ── Http kernels ────────────────────────────────────
                     ("Http", "get") => Ok(Callee::Kernel(KernelFn::HttpGet)),
                     ("Http", "post") => Ok(Callee::Kernel(KernelFn::HttpPost)),
                     ("Http", "request") => Ok(Callee::Kernel(KernelFn::HttpRequest)),
@@ -13359,7 +13359,7 @@ impl<'a> Lowerer<'a> {
                     ("Http", "withMaxRedirects") => {
                         Ok(Callee::Kernel(KernelFn::HttpWithMaxRedirects))
                     }
-                    // ── Db kernels (M5b-db) ──────────────────────────────────
+                    // ── Db kernels ──────────────────────────────────
                     // ── Sql kernels (#61 SqlFragment combinators) ──────────
                     ("Sql", "column") => Ok(Callee::Kernel(KernelFn::SqlColumn)),
                     ("Sql", "param") => Ok(Callee::Kernel(KernelFn::SqlParam)),
@@ -13382,7 +13382,7 @@ impl<'a> Lowerer<'a> {
                     ("Sql", "like") => Ok(Callee::Kernel(KernelFn::SqlLike)),
                     ("Db", "findWhere") => Ok(Callee::Kernel(KernelFn::DbFindWhere)),
                     ("Db", "deleteWhere") => Ok(Callee::Kernel(KernelFn::DbDeleteWhere)),
-                    // ── Secret kernels (backlog #44) ──────────────────────────
+                    // ── Secret kernels ──────────────────────────
                     ("Secret", "fromString") => Ok(Callee::Kernel(KernelFn::SecretFromString)),
                     ("Secret", "reveal") => Ok(Callee::Kernel(KernelFn::SecretReveal)),
                     ("Secret", "redacted") => Ok(Callee::Kernel(KernelFn::SecretRedacted)),
@@ -13412,7 +13412,7 @@ impl<'a> Lowerer<'a> {
                     ("Db", "withTransaction") => Ok(Callee::Kernel(KernelFn::DbWithTransaction)),
                     ("Db", "migrate") => Ok(Callee::Kernel(KernelFn::DbMigrate)),
                     ("Db", "defaultMigration") => Ok(Callee::Kernel(KernelFn::DbDefaultMigration)),
-                    // ── Db.Decode kernels (M5b-db) ────────────────────────────
+                    // ── Db.Decode kernels ────────────────────────────
                     ("Db.Decode", "string") => Ok(Callee::Kernel(KernelFn::DbDecString)),
                     ("Db.Decode", "int") => Ok(Callee::Kernel(KernelFn::DbDecInt)),
                     ("Db.Decode", "float") => Ok(Callee::Kernel(KernelFn::DbDecFloat)),
@@ -13432,16 +13432,16 @@ impl<'a> Lowerer<'a> {
                     ("Cmd", "none") => Ok(Callee::Kernel(KernelFn::CmdNone)),
                     ("Cmd", "batch") => Ok(Callee::Kernel(KernelFn::CmdBatch)),
                     ("Cmd", "perform") => Ok(Callee::Kernel(KernelFn::CmdPerform)),
-                    // `Cmd.publish : String -> Dict String String -> Cmd msg` (M5e)
+                    // `Cmd.publish : String -> Dict String String -> Cmd msg`
                     ("Cmd", "publish") => Ok(Callee::Kernel(KernelFn::CmdPublish)),
-                    // `Cmd.publishNoEcho : String -> Dict String String -> Cmd msg` (M5e)
+                    // `Cmd.publishNoEcho : String -> Dict String String -> Cmd msg`
                     ("Cmd", "publishNoEcho") => Ok(Callee::Kernel(KernelFn::CmdPublishNoEcho)),
                     ("Sub", "none") => Ok(Callee::Kernel(KernelFn::SubNone)),
                     ("Sub", "batch") => Ok(Callee::Kernel(KernelFn::SubBatch)),
                     ("Sub", "every") => Ok(Callee::Kernel(KernelFn::SubEvery)),
                     ("Sub", "subscribeTopic") => Ok(Callee::Kernel(KernelFn::SubSubscribeTopic)),
                     ("Time", "every") => Ok(Callee::Kernel(KernelFn::TimeEvery)),
-                    // ── Sky.Http.Server kernels (M6) ─────────────────────────────
+                    // ── Sky.Http.Server kernels ─────────────────────────────
                     ("Server", "get") => Ok(Callee::Kernel(KernelFn::ServerGet)),
                     ("Server", "post") => Ok(Callee::Kernel(KernelFn::ServerPost)),
                     ("Server", "put") => Ok(Callee::Kernel(KernelFn::ServerPut)),
@@ -13477,7 +13477,7 @@ impl<'a> Lowerer<'a> {
                     }
                     ("Middleware", "withCsrf") => Ok(Callee::Kernel(KernelFn::MiddlewareWithCsrf)),
                     ("RateLimit", "allow") => Ok(Callee::Kernel(KernelFn::RateLimitAllow)),
-                    // ── M7: Std.Ui / Std.Html render kernels ─────────────────
+                    // ── Std.Ui / Std.Html render kernels ─────────────────
                     ("Ui", "layout") => Ok(Callee::Kernel(KernelFn::UiLayout)),
                     ("Ui", "layoutWith") => Ok(Callee::Kernel(KernelFn::UiLayoutWith)),
                     ("Html", "render") => Ok(Callee::Kernel(KernelFn::HtmlRender)),
@@ -13491,7 +13491,7 @@ impl<'a> Lowerer<'a> {
                     }
                     ("Html", "escapeAttr") => Ok(Callee::Kernel(KernelFn::HtmlEscapeAttr)),
                     ("Html", "attrToString") => Ok(Callee::Kernel(KernelFn::HtmlAttrToString)),
-                    // ── M7: Std.Ui element builders ───────────────────────────
+                    // ── Std.Ui element builders ───────────────────────────
                     ("Ui", "none") => Ok(Callee::Kernel(KernelFn::UiNone)),
                     ("Ui", "text") => Ok(Callee::Kernel(KernelFn::UiText)),
                     ("Ui", "html") => Ok(Callee::Kernel(KernelFn::UiHtml)),
@@ -13506,14 +13506,14 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "button") => Ok(Callee::Kernel(KernelFn::UiButton)),
                     ("Ui", "link") => Ok(Callee::Kernel(KernelFn::UiLink)),
                     ("Ui", "image") => Ok(Callee::Kernel(KernelFn::UiImage)),
-                    // ── M7: Std.Ui nearby attribute builders ───────────────────
+                    // ── Std.Ui nearby attribute builders ───────────────────
                     ("Ui", "above") => Ok(Callee::Kernel(KernelFn::UiAbove)),
                     ("Ui", "below") => Ok(Callee::Kernel(KernelFn::UiBelow)),
                     ("Ui", "onLeft") => Ok(Callee::Kernel(KernelFn::UiOnLeft)),
                     ("Ui", "onRight") => Ok(Callee::Kernel(KernelFn::UiOnRight)),
                     ("Ui", "inFront") => Ok(Callee::Kernel(KernelFn::UiInFront)),
                     ("Ui", "behind") => Ok(Callee::Kernel(KernelFn::UiBehind)),
-                    // ── M7: Std.Ui attribute builders ─────────────────────────
+                    // ── Std.Ui attribute builders ─────────────────────────
                     ("Ui", "spacing") => Ok(Callee::Kernel(KernelFn::UiSpacing)),
                     ("Ui", "padding") => Ok(Callee::Kernel(KernelFn::UiPadding)),
                     ("Ui", "paddingXY") => Ok(Callee::Kernel(KernelFn::UiPaddingXY)),
@@ -13528,7 +13528,7 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "alignBottom") => Ok(Callee::Kernel(KernelFn::UiAlignBottom)),
                     ("Ui", "pointer") => Ok(Callee::Kernel(KernelFn::UiPointer)),
                     ("Ui", "clip") => Ok(Callee::Kernel(KernelFn::UiClip)),
-                    // ── #76: clipX/clipY/scrollbarX/scrollbarY are distinct
+                    // ── clipX/clipY/scrollbarX/scrollbarY are distinct
                     // per-axis kernels (different `AttrOverflow` values than
                     // `clip`/`scrollbars`) — the former combined arm above
                     // silently folded them onto the wrong (both-axes) semantics.
@@ -13538,7 +13538,7 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "scrollbarX") => Ok(Callee::Kernel(KernelFn::UiScrollbarX)),
                     ("Ui", "scrollbarY") => Ok(Callee::Kernel(KernelFn::UiScrollbarY)),
                     ("Ui", "gridColumns") => Ok(Callee::Kernel(KernelFn::UiGridColumns)),
-                    // ── M7: Std.Ui Length builders ────────────────────────────
+                    // ── Std.Ui Length builders ────────────────────────────
                     ("Ui", "px") => Ok(Callee::Kernel(KernelFn::UiPx)),
                     ("Ui", "fill") => Ok(Callee::Kernel(KernelFn::UiFill)),
                     ("Ui", "content") => Ok(Callee::Kernel(KernelFn::UiContent)),
@@ -13548,20 +13548,20 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "vw") => Ok(Callee::Kernel(KernelFn::UiVw)),
                     ("Ui", "minimum") => Ok(Callee::Kernel(KernelFn::UiMinimum)),
                     ("Ui", "maximum") => Ok(Callee::Kernel(KernelFn::UiMaximum)),
-                    // ── M7: Std.Ui Color builders ─────────────────────────────
+                    // ── Std.Ui Color builders ─────────────────────────────
                     ("Ui", "rgb") => Ok(Callee::Kernel(KernelFn::UiRgb)),
                     ("Ui", "rgba") => Ok(Callee::Kernel(KernelFn::UiRgba)),
                     ("Ui", "white") => Ok(Callee::Kernel(KernelFn::UiWhite)),
                     ("Ui", "black") => Ok(Callee::Kernel(KernelFn::UiBlack)),
                     ("Ui", "transparent") => Ok(Callee::Kernel(KernelFn::UiTransparent)),
                     ("Ui", "colorCss") => Ok(Callee::Kernel(KernelFn::UiColorCss)),
-                    // ── M7: Background sub-module ─────────────────────────────
+                    // ── Background sub-module ─────────────────────────────
                     ("Background", "color") => Ok(Callee::Kernel(KernelFn::BackgroundColor)),
                     ("Background", "image") => Ok(Callee::Kernel(KernelFn::BackgroundImage)),
                     ("Background", "linearGradient") => {
                         Ok(Callee::Kernel(KernelFn::BackgroundLinearGradient))
                     }
-                    // ── M7: Border sub-module ─────────────────────────────────
+                    // ── Border sub-module ─────────────────────────────────
                     ("Border", "width") => Ok(Callee::Kernel(KernelFn::BorderWidth)),
                     ("Border", "rounded") => Ok(Callee::Kernel(KernelFn::BorderRounded)),
                     ("Border", "color") => Ok(Callee::Kernel(KernelFn::BorderColor)),
@@ -13569,13 +13569,13 @@ impl<'a> Lowerer<'a> {
                     ("Border", "shadow") => Ok(Callee::Kernel(KernelFn::BorderShadow)),
                     ("Border", "glow") => Ok(Callee::Kernel(KernelFn::BorderGlow)),
                     ("Border", "innerShadow") => Ok(Callee::Kernel(KernelFn::BorderInnerShadow)),
-                    // ── M7: Font sub-module ───────────────────────────────────
+                    // ── Font sub-module ───────────────────────────────────
                     ("Font", "size") => Ok(Callee::Kernel(KernelFn::FontSize)),
                     ("Font", "color") => Ok(Callee::Kernel(KernelFn::FontColor)),
                     ("Font", "family") => Ok(Callee::Kernel(KernelFn::FontFamily)),
                     ("Font", "bold") => Ok(Callee::Kernel(KernelFn::FontBold)),
                     ("Font", "italic") => Ok(Callee::Kernel(KernelFn::FontItalic)),
-                    // ── M7: Html element builders ─────────────────────────────
+                    // ── Html element builders ─────────────────────────────
                     ("Html", "text") => Ok(Callee::Kernel(KernelFn::HtmlTextNode)),
                     ("Html", "raw") => Ok(Callee::Kernel(KernelFn::HtmlRawNode)),
                     // `styleNode : List Attr -> String -> Html msg` is arity-2 —
@@ -13583,7 +13583,7 @@ impl<'a> Lowerer<'a> {
                     // dedicated kernel close-tag-neutralises the CSS body (F7).
                     ("Html", "styleNode") => Ok(Callee::Kernel(KernelFn::HtmlStyleNode)),
                     ("Html", "node") => Ok(Callee::Kernel(KernelFn::HtmlNode)),
-                    // ── #76: 20-kernel wiring batch — each of these 5 is now its
+                    // ── 20-kernel wiring batch — each of these 5 is now its
                     // own dedicated `KernelFn` variant (distinct arity from the
                     // generic arity-3 `Html.node`); the former combined arm
                     // above silently mis-arities them onto `HtmlNode`.
@@ -13599,7 +13599,7 @@ impl<'a> Lowerer<'a> {
                     ("Html", "p") => Ok(Callee::Kernel(KernelFn::HtmlP)),
                     ("Html", "input") => Ok(Callee::Kernel(KernelFn::HtmlInput)),
                     ("Html", "img") => Ok(Callee::Kernel(KernelFn::HtmlImg)),
-                    // ── #76 batch 2: Std.Html element builders (canonical tag →
+                    // ── Std.Html element builders (canonical tag →
                     //    dedicated variant; the emit arm bakes the wire tag via
                     //    `html_element_tag`). Replaces the old wrong-render fold
                     //    (nav→<p>, h1→<p>, br→<img>, header→<div>, link→<a>). ──
@@ -13669,7 +13669,7 @@ impl<'a> Lowerer<'a> {
                     ("Html", "source") => Ok(Callee::Kernel(KernelFn::HtmlSource)),
                     ("Html", "track") => Ok(Callee::Kernel(KernelFn::HtmlTrack)),
                     ("Html", "wbr") => Ok(Callee::Kernel(KernelFn::HtmlWbr)),
-                    // ── #76: Std.Html.Attributes builders (legacy arm; the
+                    // ── Std.Html.Attributes builders (legacy arm; the
                     //    id-fast-path handles these in practice, this arm keeps
                     //    decl() ⇔ legacy parity per `decl_equiv_legacy_match`). ──
                     ("Attr", "class") => Ok(Callee::Kernel(KernelFn::HtmlAttrClass)),
@@ -13695,7 +13695,7 @@ impl<'a> Lowerer<'a> {
                     ("Attr", "attribute") => Ok(Callee::Kernel(KernelFn::HtmlAttribute)),
                     ("Attr", "boolAttribute") => Ok(Callee::Kernel(KernelFn::HtmlBoolAttribute)),
                     ("Attr", "noAttr") => Ok(Callee::Kernel(KernelFn::HtmlNoAttr)),
-                    // ── M7: Phase-1a event-attribute builders (Std.Ui qualifier) ──
+                    // ── Phase-1a event-attribute builders (Std.Ui qualifier) ──
                     // `Ui.onClick` etc. produce the `Std.Ui.Attribute` variant.
                     // NB: the primary resolution path is the id fast-path above
                     // (env.rs threads the pre-resolved kernel id); these string
@@ -13715,7 +13715,7 @@ impl<'a> Lowerer<'a> {
                     }
                     ("Ui", "onSubmit") => Ok(Callee::Kernel(KernelFn::UiOnSubmit)),
                     ("Ui", "onFile") => Ok(Callee::Kernel(KernelFn::UiOnFile)),
-                    // ── #107: Std.Html.Events builders (Event qualifier) — produce
+                    // ── Std.Html.Events builders (Event qualifier) — produce
                     // the `Std.Html.Attribute` variant so they compose with the
                     // Std.Html element + attribute builders. Same fallback note
                     // as the `Ui` arms above (id fast-path is primary).
@@ -13730,7 +13730,7 @@ impl<'a> Lowerer<'a> {
                     ("Event", "onKeyDown") => Ok(Callee::Kernel(KernelFn::HtmlOnKeyDown)),
                     ("Event", "onKeyUp") => Ok(Callee::Kernel(KernelFn::HtmlOnKeyUp)),
                     ("Event", "onBool") => Ok(Callee::Kernel(KernelFn::HtmlOnBool)),
-                    // ── #76 Tier 1: extended Std.Ui attribute builders ────────
+                    // ── extended Std.Ui attribute builders ────────
                     ("Ui", "square") => Ok(Callee::Kernel(KernelFn::UiSquare)),
                     ("Ui", "widescreen") => Ok(Callee::Kernel(KernelFn::UiWidescreen)),
                     ("Ui", "cinemascope") => Ok(Callee::Kernel(KernelFn::UiCinemascope)),
@@ -13742,7 +13742,7 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "transitionRaw") => Ok(Callee::Kernel(KernelFn::UiTransitionRaw)),
                     ("Ui", "gridTracksRaw") => Ok(Callee::Kernel(KernelFn::UiGridTracksRaw)),
                     ("Ui", "animateRaw") => Ok(Callee::Kernel(KernelFn::UiAnimateRaw)),
-                    // #154: Ui.breakpoint + Breakpoint constants
+                    // Ui.breakpoint + Breakpoint constants
                     ("Ui", "breakpoint") => Ok(Callee::Kernel(KernelFn::UiBreakpoint)),
                     ("Ui", "mediaQuery") => Ok(Callee::Kernel(KernelFn::UiMediaQuery)),
                     ("Ui", "mobile") => Ok(Callee::Kernel(KernelFn::UiMobile)),
@@ -13751,7 +13751,7 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "darkMode") => Ok(Callee::Kernel(KernelFn::UiDarkMode)),
                     ("Ui", "lightMode") => Ok(Callee::Kernel(KernelFn::UiLightMode)),
                     ("Ui", "reducedMotion") => Ok(Callee::Kernel(KernelFn::UiReducedMotion)),
-                    // ── #76: PseudoClass constants + Ui.onPseudo ──────────────
+                    // ── PseudoClass constants + Ui.onPseudo ──────────────
                     ("Ui", "onPseudo") => Ok(Callee::Kernel(KernelFn::UiOnPseudo)),
                     ("Ui", "hover") => Ok(Callee::Kernel(KernelFn::UiHover)),
                     ("Ui", "focus") => Ok(Callee::Kernel(KernelFn::UiFocus)),
@@ -13804,7 +13804,7 @@ impl<'a> Lowerer<'a> {
                     ("Font", "hoverSize") => Ok(Callee::Kernel(KernelFn::FontHoverSize)),
                     ("Attr", "tabindex") => Ok(Callee::Kernel(KernelFn::HtmlAttrTabindex)),
                     ("Attr", "rows") => Ok(Callee::Kernel(KernelFn::HtmlAttrRows)),
-                    // ── #117: Std.Ui.Region sub-module ───────────────────────
+                    // ── Std.Ui.Region sub-module ───────────────────────
                     ("Region", "mainContent") => Ok(Callee::Kernel(KernelFn::RegionMainContent)),
                     ("Region", "navigation") => Ok(Callee::Kernel(KernelFn::RegionNavigation)),
                     ("Region", "footer") => Ok(Callee::Kernel(KernelFn::RegionFooter)),
@@ -13830,7 +13830,7 @@ impl<'a> Lowerer<'a> {
                     }
                     ("Ui", "descHeading") => Ok(Callee::Kernel(KernelFn::UiDescHeading)),
                     ("Ui", "descLabel") => Ok(Callee::Kernel(KernelFn::UiDescLabel)),
-                    // ── Std.Ui.Input (#124) ───────────────────────────────────
+                    // ── Std.Ui.Input ───────────────────────────────────
                     ("Input", "labelAbove") => Ok(Callee::Kernel(KernelFn::InputLabelAbove)),
                     ("Input", "labelBelow") => Ok(Callee::Kernel(KernelFn::InputLabelBelow)),
                     ("Input", "labelLeft") => Ok(Callee::Kernel(KernelFn::InputLabelLeft)),
@@ -13851,7 +13851,7 @@ impl<'a> Lowerer<'a> {
                     ("Input", "option") => Ok(Callee::Kernel(KernelFn::InputOption)),
                     ("Input", "radio") => Ok(Callee::Kernel(KernelFn::InputRadio)),
                     ("Input", "radioRow") => Ok(Callee::Kernel(KernelFn::InputRadioRow)),
-                    // ── #146: Std.Ui.Lazy sub-module ──────────────────────────
+                    // ── Std.Ui.Lazy sub-module ──────────────────────────
                     ("Lazy", "lazy") => Ok(Callee::Kernel(KernelFn::LazyLazy)),
                     ("Lazy", "lazy2") => Ok(Callee::Kernel(KernelFn::LazyLazy2)),
                     ("Lazy", "lazy3") => Ok(Callee::Kernel(KernelFn::LazyLazy3)),
@@ -13860,19 +13860,19 @@ impl<'a> Lowerer<'a> {
                     // ── Std.Ui.Keyed ──────────────────────────────────────────
                     ("Keyed", "column") => Ok(Callee::Kernel(KernelFn::KeyedColumn)),
                     ("Keyed", "row") => Ok(Callee::Kernel(KernelFn::KeyedRow)),
-                    // ── M7: Std.Live / Sky.Live app-entry kernels ─────────────
+                    // ── Std.Live / Sky.Live app-entry kernels ─────────────
                     ("Live", "app") => Ok(Callee::Kernel(KernelFn::LiveApp)),
                     ("Live", "appRouted") => Ok(Callee::Kernel(KernelFn::LiveAppRouted)),
                     ("Live", "route") => Ok(Callee::Kernel(KernelFn::LiveRoute)),
                     ("Live", "renderStatic") => Ok(Callee::Kernel(KernelFn::LiveRenderStatic)),
-                    // ── M7: Std.Tui / Sky.Tui app-entry kernels ──────────────
+                    // ── Std.Tui / Sky.Tui app-entry kernels ──────────────
                     ("Tui", "program") => Ok(Callee::Kernel(KernelFn::TuiProgram)),
                     ("Tui", "app") => Ok(Callee::Kernel(KernelFn::TuiApp)),
-                    // ── M7: Std.Webview / Sky.Webview app-entry kernel ────────
+                    // ── Std.Webview / Sky.Webview app-entry kernel ────────
                     ("Webview", "app") => Ok(Callee::Kernel(KernelFn::WebviewApp)),
-                    // ── #111: Std.Cli / Sky.Cli app-entry kernel ──────────────
+                    // ── Std.Cli / Sky.Cli app-entry kernel ──────────────
                     ("Cli", "program") => Ok(Callee::Kernel(KernelFn::CliProgram)),
-                    // ── #111: Std.Auth / Sky.Auth — auth helpers ──────────────
+                    // ── Std.Auth / Sky.Auth — auth helpers ──────────────
                     ("Auth", "hashPassword") => Ok(Callee::Kernel(KernelFn::AuthHashPassword)),
                     ("Auth", "hashPasswordCost") => {
                         Ok(Callee::Kernel(KernelFn::AuthHashPasswordCost))
@@ -13886,21 +13886,21 @@ impl<'a> Lowerer<'a> {
                     ("Auth", "register") => Ok(Callee::Kernel(KernelFn::AuthRegister)),
                     ("Auth", "login") => Ok(Callee::Kernel(KernelFn::AuthLogin)),
                     ("Auth", "setRole") => Ok(Callee::Kernel(KernelFn::AuthSetRole)),
-                    // ── #111: Sky.Http.Server.Stream — server-side streaming ───
+                    // ── Sky.Http.Server.Stream — server-side streaming ───
                     ("Stream", "stream") => Ok(Callee::Kernel(KernelFn::StreamStream)),
                     ("Stream", "emit") => Ok(Callee::Kernel(KernelFn::StreamEmit)),
                     ("Stream", "finish") => Ok(Callee::Kernel(KernelFn::StreamFinish)),
                     ("Stream", "withContentType") => {
                         Ok(Callee::Kernel(KernelFn::StreamWithContentType))
                     }
-                    // ── #111: Sky.Core.Http.Stream — client-side streaming ─────
+                    // ── Sky.Core.Http.Stream — client-side streaming ─────
                     ("HttpStream", "open") => Ok(Callee::Kernel(KernelFn::HttpStreamOpen)),
                     ("HttpStream", "forEachChunk") => {
                         Ok(Callee::Kernel(KernelFn::HttpStreamForEachChunk))
                     }
                     ("HttpStream", "close") => Ok(Callee::Kernel(KernelFn::HttpStreamClose)),
                     ("HttpStream", "chunks") => Ok(Callee::Kernel(KernelFn::HttpStreamChunks)),
-                    // ── #127: Sky.Http.Server.WebSocket (12 kernels) ─────────────
+                    // ── Sky.Http.Server.WebSocket (12 kernels) ─────────────
                     ("Ws", "defaultCfg") => Ok(Callee::Kernel(KernelFn::WsDefaultCfg)),
                     ("Ws", "withOnConnect") => Ok(Callee::Kernel(KernelFn::WsWithOnConnect)),
                     ("Ws", "withOnMessage") => Ok(Callee::Kernel(KernelFn::WsWithOnMessage)),
@@ -14036,7 +14036,7 @@ impl<'a> Lowerer<'a> {
         match &p.value {
             canon::Pattern_::PVar(s) => Ok(Pat::Var(*s)),
             canon::Pattern_::PAnything => Ok(Pat::Wildcard),
-            // Literal leaves (M3b-3) lower to the matching refutable IR leaf.
+            // Literal leaves lower to the matching refutable IR leaf.
             // Int / Bool / Char are `Copy` — a literal pattern against an owned
             // FIELD of one of those types is ordinary, sound Rust regardless of
             // nesting depth, so they lower unconditionally.
@@ -14071,7 +14071,7 @@ impl<'a> Lowerer<'a> {
                     .collect::<DResult<Vec<_>>>()?;
                 Ok(Pat::Tuple(subs))
             }
-            // M3b-2: a nested constructor sub-pattern (`Just (Just a)`,
+            // a nested constructor sub-pattern (`Just (Just a)`,
             // `Node (Node …) x r`). The canonical pattern already carries the
             // resolved `type_name` / variant / sub-patterns, so the IR
             // `Pat::Ctor` is built directly and recurses. Whether the resulting
@@ -14301,7 +14301,7 @@ impl<'a> Lowerer<'a> {
         // The by-value whole path (non-literal scrutinee) matches the tuple value
         // directly and applies NO per-column `.as_slice()` coercion at any depth.
         //
-        // A STRING-literal column (`PStr`) IS supported here (#182): the backend
+        // A STRING-literal column (`PStr`) IS supported here: the backend
         // replaces each `PStr` leaf with a fresh binder plus an
         // `if __sgN.as_str() == "lit"` match guard — a by-value destructure whose
         // string equality is checked in the guard, sound for a variable scrutinee
@@ -14366,7 +14366,7 @@ impl<'a> Lowerer<'a> {
     /// fail-closed. (#174 fix-up: probe G — a `PCons` nested inside a nested-`PTuple`
     /// column slipped through a top-level-only check; this recurses.)
     ///
-    /// A STRING-literal column (`PStr`) is NOT flagged here (#182): the backend
+    /// A STRING-literal column (`PStr`) is NOT flagged here: the backend
     /// renders each `PStr` leaf as a fresh binder plus an `if __sgN.as_str() ==
     /// "lit"` match guard, which is sound by value regardless of scrutinee shape
     /// (mirrors the reference's `renderPatGuarded`), so it needs no coerced-column
@@ -14504,7 +14504,7 @@ impl<'a> Lowerer<'a> {
     ///
     /// `canon_value` is the CANON (pre-lowering) expression the binding
     /// evaluates — [`Self::captured_locals`] needs it (not the lowered
-    /// `value`) for the T3 (#121) capture-clone analysis on the thunk body,
+    /// `value`) for the T3 capture-clone analysis on the thunk body,
     /// exactly as [`Self::lower_let`]'s `PVar` Decoder arm does.
     fn build_destructure_or_decoder_thunk(
         &self,
@@ -14519,7 +14519,7 @@ impl<'a> Lowerer<'a> {
             .region_ty(value_span)
             .and_then(|ty| self.ir_type_from_ty(ty, value_span).ok());
         let Some(ir_ty) = value_ir_ty.filter(ir_type_contains_decoder) else {
-            // #224: a destructure binder (`let (a, b) = pair in …`, single-arm
+            // a destructure binder (`let (a, b) = pair in …`, single-arm
             // `case p of (a, b) -> …`) whose value type contains NO Decoder used
             // to emit a bare `Destructure` with NO move-ownership discipline on
             // its bound component symbols — a live E0382/E0507 SEAL breach the
@@ -14555,7 +14555,7 @@ impl<'a> Lowerer<'a> {
             });
         };
 
-        // T3 (#121)-style capture-clone rewrite on the thunk body, mirroring
+        // T3-style capture-clone rewrite on the thunk body, mirroring
         // the PVar arm exactly: the thunk has zero params, so every free
         // VarLocal in `canon_value` is an outer capture.
         let thunk_body = {
@@ -14612,7 +14612,7 @@ impl<'a> Lowerer<'a> {
         // rebuilt on each use, and rewrite every `Var(name)` read in the body
         // to `Apply(Var(name), [])` (emitted as `(d)()`).
         if let Some(dec_ty) = self.decoder_ir_type(b.body.span) {
-            // T3 (#121): apply capture-clone rewrite to the thunk body before
+            // T3: apply capture-clone rewrite to the thunk body before
             // wrapping. The thunk has zero params so all free VarLocals in
             // b.body are outer captures. CloneOk captures must `.clone()` to
             // keep the thunk `Fn`; NonClone captures in callee position are
@@ -14646,7 +14646,7 @@ impl<'a> Lowerer<'a> {
                 body: Box::new(thunked_body),
             })
         } else {
-            // T5 (#104 / #112): multi-use-clone rewrite for CloneOk
+            // T5: multi-use-clone rewrite for CloneOk
             // let-bindings.  When the bound value is of `CloneOk` type (e.g.
             // String) and the body references it more than once, rewrite all
             // but the last occurrence to `CloneVar(name)`. This prevents
@@ -14663,7 +14663,7 @@ impl<'a> Lowerer<'a> {
                 // `apply_move_ownership`): the lean `rewrite_multiuse_clones`
                 // (`remaining = n`, correct for every n ≥ 1) for CloneOk /
                 // bare-Generic values — its `n == 1` Lambda arm installs the
-                // #218 per-boundary relay without the old depth-0 over-clone —
+                // per-boundary relay without the old depth-0 over-clone —
                 // and a fail-closed #90 T4 gate for fn-value reuse. The
                 // `Fun`-typed `Arc`-promotion path below (`needs_shared_capture`
                 // / `flows_into_sync_kernel_call`) is orthogonal and untouched.
@@ -14672,7 +14672,7 @@ impl<'a> Lowerer<'a> {
                 acc
             };
 
-            // #164 E0507 fix: a NonClone function-typed binding referenced
+            // E0507 fix: a NonClone function-typed binding referenced
             // across 2+ nested `move`-closure boundaries (or 2+ separate
             // closures) in the rest of this scope cannot be a bare
             // `Box<dyn Fn>` — see `needs_shared_capture`'s doc comment for
@@ -14683,7 +14683,7 @@ impl<'a> Lowerer<'a> {
             // common, already-sound case), is untouched — byte-identical to
             // the pre-fix lowering.
             //
-            // #168 fix (same `Arc` promotion, a DIFFERENT trigger): a
+            // fix (same `Arc` promotion, a DIFFERENT trigger): a
             // NonClone function-typed binding passed — even a SINGLE,
             // non-nested time, and through any number of `let`-alias hops —
             // into a kernel-call argument whose runtime consumer itself
@@ -14691,7 +14691,7 @@ impl<'a> Lowerer<'a> {
             // `Std.Html.Events.on*` / `Stream.stream`, see
             // `KernelFn::requires_sync_capture`) has the same soundness gap:
             // the emit-site "re-wrap in a freshly-declared closure" technique
-            // (#162) only launders the missing `+Sync` bound when the payload
+            // only launders the missing `+Sync` bound when the payload
             // is built INLINE at the call site, never when it is a `Var` read
             // of an already-built `Box<dyn Fn + Send>` local (capturing an
             // already-non-Sync value cannot make the capturing wrapper `Sync`).
@@ -14706,7 +14706,7 @@ impl<'a> Lowerer<'a> {
             {
                 acc = force_shared_capture_clones(name, acc);
                 if let Expr::Lambda { params, ret, body } = value {
-                    // #172: `name`'s reads now render `Arc<dyn Fn + Send + Sync>`.
+                    // `name`'s reads now render `Arc<dyn Fn + Send + Sync>`.
                     // A read sitting in one branch of an `if`/`match` whose
                     // sibling branch renders a function value at the default
                     // `Box` carrier (an inline lambda, a `FuncValue` top-level
@@ -14745,7 +14745,7 @@ impl<'a> Lowerer<'a> {
             // counts from the last binding, so the source index of `b` is
             // `bindings.len() - 1 - rev_i` and its successors are the tail slice
             // starting one past it. Used by the destructure move-ownership pass
-            // (#224) to find each component symbol's first use-site type.
+            // to find each component symbol's first use-site type.
             let b_src_idx = bindings.len() - 1 - rev_i;
             let value = self.lower_expr(&b.body)?;
             acc = match &b.pat.value {
@@ -14785,7 +14785,7 @@ impl<'a> Lowerer<'a> {
                         }
                     }
                 }
-                // #125: a destructure binder (tuple / record / alias) whose
+                // a destructure binder (tuple / record / alias) whose
                 // bound value's type contains a Decoder anywhere gets the
                 // whole-destructure thunk treatment; every other shape falls
                 // through to the plain (byte-identical) `Destructure`.
@@ -14832,7 +14832,7 @@ impl<'a> Lowerer<'a> {
         // a destructure even under one or more `as` aliases.
         if Self::is_destructure_head(&first.pat.value) {
             if branches.len() == 1 {
-                // #125: same Decoder-thunk gate as `lower_let`'s destructure
+                // same Decoder-thunk gate as `lower_let`'s destructure
                 // catch-all — `case buildPair () of (d1, d2) -> …` reusing a
                 // Decoder-typed component is the identical E0382 gap.
                 let binder = self.lower_binder_pat(&first.pat, scrut)?;
@@ -14887,7 +14887,7 @@ impl<'a> Lowerer<'a> {
         // shape). Without the truncation `Match::new_flat`'s structural
         // backstop sees a non-trailing catch-all and raises a CompilerBug.
         //
-        // #136 seal fix: use the canonical `is_irrefutable` predicate, not a
+        // seal fix: use the canonical `is_irrefutable` predicate, not a
         // hand-rolled `PAnything | PVar` match — the hand-rolled form missed
         // `PAlias` over an irrefutable inner (`_ as w` / `v as w`), which the
         // exhaustiveness pass treats as a catch-all, so post-alias arms
@@ -14908,7 +14908,7 @@ impl<'a> Lowerer<'a> {
         let arms = branches
             .iter()
             .map(|br| {
-                // #158 C2: a ctor arm head nesting a supportable list / cons
+                // C2: a ctor arm head nesting a supportable list / cons
                 // sub-pattern (`Just (h :: t)`) OR a string-literal sub-pattern
                 // (`Just "live"`) desugars to a fresh binder in that arg slot PLUS
                 // an arm guard PLUS (for the list case) body-prelude bindings.
@@ -14932,7 +14932,7 @@ impl<'a> Lowerer<'a> {
                 // use-site; the FIRST use-site of `sym` in the canon arm body
                 // carries the HM type that `ir_type_from_ty` maps to an IR type.
                 //
-                // #222: type resolution is HOISTED OUT of the former `n > 1`
+                // type resolution is HOISTED OUT of the former `n > 1`
                 // guard so it runs at `n == 1` too. An arm var read exactly
                 // once but through TWO OR MORE nested `move`-closure boundaries
                 // still needs the per-boundary relay (the intermediate closure
@@ -14955,7 +14955,7 @@ impl<'a> Lowerer<'a> {
                     }
                 }
 
-                // #158 C2: prepend the nested-list head / tail bindings as a
+                // C2: prepend the nested-list head / tail bindings as a
                 // right-nested `Expr::Let` chain (built after T5 so the
                 // multi-use clones in the body are already inserted). Head
                 // element clones BORROW the fresh `Vec`; the tail `List.drop`
@@ -14981,7 +14981,7 @@ impl<'a> Lowerer<'a> {
         // match positions before they reach the backend.
         Self::gate_by_value_dispatch_needing_aliases(&arms, branches)?;
 
-        // #158 C2: a guarded arm (the nested-cons desugaring) is REFUTABLE to
+        // C2: a guarded arm (the nested-cons desugaring) is REFUTABLE to
         // rustc — its guard may fall through — so the arm set is only Rust-
         // exhaustive when a trailing irrefutable catch-all follows. Every
         // reachable Sky program of the repro shape (`Just (h::t) -> … ; _ -> …`)
@@ -15042,7 +15042,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// #99: does this BY-VALUE (whole-scrutinee, non-str/non-list) arm
+    /// does this BY-VALUE (whole-scrutinee, non-str/non-list) arm
     /// pattern contain an `as`-alias whose inner shape needs Rust-level
     /// runtime dispatch anywhere? Such an alias cannot be honored soundly by
     /// value: `name @ inner` double-moves a non-`Copy` payload (E0382), and
@@ -15077,7 +15077,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// #99 fail-closed gate (SKY-L0128). Mirrors the backend's per-match mode
+    /// fail-closed gate (SKY-L0128). Mirrors the backend's per-match mode
     /// decision (`emit_match_scrutinee` / `tuple_col_modes`) EXACTLY: STR and
     /// LIST modes match the scrutinee by REFERENCE (`.as_str()` /
     /// `.as_slice()`), where Rust's default binding modes make `name @ inner`
@@ -15197,12 +15197,12 @@ impl<'a> Lowerer<'a> {
             // multi-arm record shape remains the tuple-pattern gap (SKY-L0115).
             canon::Pattern_::PRecord(_) => Err(unsupported(p.span, Feature::TuplePatternMatch)),
             // A list (`[a, b]`) or cons (`x :: xs`) case-arm head flattens to the
-            // slice-shaped IR [`Pat::Slice`] (M4a).
+            // slice-shaped IR [`Pat::Slice`].
             canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _) => self.lower_list_arm_pat(p),
         }
     }
 
-    /// Class 4 item C2 (#158) — desugar a `case`-arm HEAD that nests, DIRECTLY
+    /// Class 4 item C2 — desugar a `case`-arm HEAD that nests, DIRECTLY
     /// inside a constructor payload, either:
     ///
     /// * a list / cons sub-pattern (`Just (h :: t)`, `Ok [a, b]`) into a fresh
@@ -15299,7 +15299,7 @@ impl<'a> Lowerer<'a> {
                 // `Clone`-bounded at the emitted call site — rejecting it was
                 // stale defence-in-depth, not a real soundness gap.
                 //
-                // #164 regression (`m158::nested_cons_generic_elem_accepted`):
+                // regression (`m158::nested_cons_generic_elem_accepted`):
                 // before the `poly_tvar_symbol` SEAL fix, `ir_type_from_ty_json`
                 // unconditionally mapped every free `Ty::Var` to `IrType::Json`
                 // with no `current_poly_tvars` check — so `list_elem_ir` never
@@ -15559,7 +15559,7 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::ErrorKind
         | IrType::Error
         | IrType::ErrorDetails
-        // Nominal error-payload leaves (SEAL fix 2026-07-11) — monomorphic,
+        // Nominal error-payload leaves (SEAL fix) — monomorphic,
         // no generics to collect.
         | IrType::ErrorInfo
         | IrType::PanicInfo
@@ -15577,7 +15577,7 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::LiveReq
         | IrType::SqlFragment
         | IrType::Secret
-        // #210: Cache config / stats are non-parametric — no generic syms.
+        // Cache config / stats are non-parametric — no generic syms.
         | IrType::CacheCfg
         | IrType::CacheStats => {}
     }
@@ -15630,12 +15630,12 @@ mod tests {
         let sql_null = interner.intern("SqlNull").unwrap();
         let set_field = interner.intern("SetField").unwrap();
         let omit_field = interner.intern("OmitField").unwrap();
-        // ── Order ADT (#123) ─────────────────────────────────────────────────
+        // ── Order ADT ─────────────────────────────────────────────────
         let order = interner.intern("Order").unwrap();
         let lt = interner.intern("LT").unwrap();
         let eq = interner.intern("EQ").unwrap();
         let gt = interner.intern("GT").unwrap();
-        // ── Error / ErrorKind ADTs (E-12, #152) ─────────────────────────────
+        // ── Error / ErrorKind ADTs ─────────────────────────────
         let error = interner.intern("Error").unwrap();
         let errorkind = interner.intern("ErrorKind").unwrap();
         let ek_io = interner.intern("Io").unwrap();
@@ -15677,12 +15677,12 @@ mod tests {
             sql_null,
             set_field,
             omit_field,
-            // ── Order ADT (#123) ─────────────────────────────────────────────
+            // ── Order ADT ─────────────────────────────────────────────
             order,
             lt,
             eq,
             gt,
-            // ── Error / ErrorKind (E-12, #152) ───────────────────────────────
+            // ── Error / ErrorKind ───────────────────────────────
             error,
             errorkind,
             ek_io,
@@ -15745,7 +15745,7 @@ mod tests {
     // decl-equiv-legacy test skips them.
     // The #194/#197/#202/#210/#215 stdlib families (Regex / Path / Trace /
     // Compression / Csv / Cache / PubSub) are resolved EXCLUSIVELY through the
-    // #196 `Ffi.kernel "Mod_fn"` alias fast-path (`id = Some`, set by
+    // `Ffi.kernel "Mod_fn"` alias fast-path (`id = Some`, set by
     // `sky_canon::resolve::detect_kernel_alias`): their qualifiers are compiled-
     // source module names, never legacy `QUALIFIERS`, so no user program ever
     // produces a `VarKernel { id = None, module = "Regex", … }` node. They have
@@ -15753,33 +15753,33 @@ mod tests {
     const REGISTRY_ONLY_ALLOWLIST: &[KernelFn] = &[
         KernelFn::PubSubPublish,
         KernelFn::PubSubPublishNoEcho,
-        // #194: Sky.Core.Regex
+        // Sky.Core.Regex
         KernelFn::RegexMatch,
         KernelFn::RegexFind,
         KernelFn::RegexFindAll,
         KernelFn::RegexReplace,
         KernelFn::RegexSplit,
-        // #202: Sky.Core.Path
+        // Sky.Core.Path
         KernelFn::PathBase,
         KernelFn::PathDir,
         KernelFn::PathExt,
         KernelFn::PathIsAbsolute,
-        // #197: Std.Trace
+        // Std.Trace
         KernelFn::TraceSpan,
         KernelFn::TraceEvent,
         KernelFn::TraceAttr,
-        // #197: Std.Compression
+        // Std.Compression
         KernelFn::CompressionGzip,
         KernelFn::CompressionGunzip,
         KernelFn::CompressionZstdCompress,
         KernelFn::CompressionZstdDecompress,
-        // #197: Std.Csv
+        // Std.Csv
         KernelFn::CsvParse,
         KernelFn::CsvParseWithDelimiter,
         KernelFn::CsvEncode,
         KernelFn::CsvEncodeWithDelimiter,
         KernelFn::CsvParseStreamFromFile,
-        // #210: Std.Cache
+        // Std.Cache
         KernelFn::CacheNewRaw,
         KernelFn::CacheGet,
         KernelFn::CachePut,

@@ -202,12 +202,12 @@ pub(crate) struct RecordStruct {
     /// The fields as `(Sky field name, field type)`, sorted by field name. The
     /// Rust field identifier is the keyword-mangled field name.
     ///
-    /// For a GENERIC record shape (M2c), a field's type may be an
+    /// For a GENERIC record shape, a field's type may be an
     /// [`IrType::Generic`]; the carried [`Symbol`] is the canonical template's
     /// source type-variable, resolved to its Rust generic name (`T1`, `T2`, …)
     /// through a [`crate::emit_types::GenericScope`] over [`Self::type_params`].
     pub fields: Vec<(String, IrType)>,
-    /// The struct's generic type parameters (M2c): the distinct
+    /// The struct's generic type parameters: the distinct
     /// [`IrType::Generic`] symbols appearing in [`Self::fields`], in
     /// first-occurrence field order. Empty for a monomorphic record — that path
     /// stays byte-identical to b3.
@@ -324,7 +324,7 @@ pub(crate) struct EmitCtx<'a> {
     /// Type nominal identity `(home, name)` → Rust type name (e.g.
     /// `(["Main"], Msg)` → `MainMsg`, `(["Lib"], Color)` → `LibColor`). Keyed by
     /// `(home, name)` — not `name` alone — so two modules each declaring `type
-    /// Color` map to distinct Rust enums instead of colliding (#100).
+    /// Color` map to distinct Rust enums instead of colliding.
     enum_names: BTreeMap<(ModPath, Symbol), String>,
     /// `((enum home, enum name), variant symbol)` → that variant's declared
     /// payload field types, in source (positional) order. Empty vector for a
@@ -404,7 +404,7 @@ impl<'a> EmitCtx<'a> {
                 // A type's nominal identity is `(home, name)`. Two modules each
                 // declaring `type Color` share the bare `name` `Symbol` but differ
                 // in `home`, so they no longer collide — each keys a distinct Rust
-                // enum (#100). A genuine duplicate `(home, name)` (the SAME type
+                // enum. A genuine duplicate `(home, name)` (the SAME type
                 // declared twice) is caught upstream by the link-level gate; this
                 // stays as a fail-closed defence-in-depth backstop (SKY-I0202).
                 let key = (def.home.clone(), def.name);
@@ -493,7 +493,7 @@ impl<'a> EmitCtx<'a> {
         // Each field-name set maps to the LIST of distinct field-type shapes seen
         // for it. A set may carry both a generic template (`{ value : a }`, from a
         // parametric signature) and concrete instantiations (`{ value : Int }`):
-        // [`canonicalise_shape`] reconciles them into a single struct (M2c).
+        // [`canonicalise_shape`] reconciles them into a single struct.
         let mut shapes: BTreeMap<Vec<String>, ShapeOccurrences> = BTreeMap::new();
         for module in &program.modules {
             for func in &module.funcs {
@@ -519,7 +519,7 @@ impl<'a> EmitCtx<'a> {
                 }
             }
         }
-        // #87 seal: whole-program enum-derivability fixpoint. Every user enum
+        // seal: whole-program enum-derivability fixpoint. Every user enum
         // starts optimistic (derivable), then is monotonically demoted to
         // non-derivable if any variant payload reaches a non-derivable leaf (a
         // first-class function, an opaque effect/handle wrapper, or a — by the
@@ -563,7 +563,7 @@ impl<'a> EmitCtx<'a> {
             }
         }
 
-        // #91 seal: whole-program enum-serde fixpoint, computed identically to
+        // seal: whole-program enum-serde fixpoint, computed identically to
         // `enum_derivable` above but through `ir_type_is_serde` (whose serde-OK
         // leaf set is a strict subset — the UI value/carrier types are `Clone`
         // but not `serde`). Every user enum starts optimistic (serde) and is
@@ -608,7 +608,7 @@ impl<'a> EmitCtx<'a> {
         for (key, occurrences) in shapes {
             let (fields, type_params) = canonicalise_shape(&key, &occurrences)?;
             let name = unique_struct_name(naming::record_struct_name(&key), &mut used_names);
-            // #87 seal: a record struct is derivable iff every field type is,
+            // seal: a record struct is derivable iff every field type is,
             // consulting the enum fixpoint for referenced user enums.
             let is_derivable = {
                 let lookup = |home: &ModPath, name: Symbol| {
@@ -621,7 +621,7 @@ impl<'a> EmitCtx<'a> {
                     .iter()
                     .all(|(_, ty)| sky_ir::ir_type_is_derivable(ty, &lookup))
             };
-            // #93 seal: a record struct is serde-OK iff every field type is,
+            // seal: a record struct is serde-OK iff every field type is,
             // consulting the parallel enum-serde fixpoint. Strictly implies
             // `is_derivable` (serde-OK leaves ⊂ derivable leaves), so a record
             // never gets serde without CDPeq. Gates the serde derive under
@@ -648,7 +648,7 @@ impl<'a> EmitCtx<'a> {
             });
         }
 
-        // M5b-db: detect whether the lowerer injected SqlValue / SqlField.
+        // detect whether the lowerer injected SqlValue / SqlField.
         // The lowerer injects them iff any Db kernel is used. Detecting here
         // (rather than re-scanning Func bodies) avoids a duplicate walk and
         // keeps the "what's in the type list?" answer canonical.
@@ -691,14 +691,14 @@ impl<'a> EmitCtx<'a> {
             None
         };
 
-        // M5c: detect whether any TEA kernel is used, from the flag the lowerer
+        // detect whether any TEA kernel is used, from the flag the lowerer
         // set on the module.
         let uses_tea = program.modules.iter().any(|m| m.uses_tea);
 
-        // M6: detect whether any Sky.Http.Server kernel is used.
+        // detect whether any Sky.Http.Server kernel is used.
         let uses_server = program.modules.iter().any(|m| m.uses_server);
 
-        // M7: detect Std.Ui / Std.Html / Std.Live / Std.Tui / Std.Webview usage.
+        // detect Std.Ui / Std.Html / Std.Live / Std.Tui / Std.Webview usage.
         let (uses_ui, uses_live, uses_tui, uses_webview) = (
             program.modules.iter().any(|m| m.uses_ui),
             program.modules.iter().any(|m| m.uses_live),
@@ -706,10 +706,10 @@ impl<'a> EmitCtx<'a> {
             program.modules.iter().any(|m| m.uses_webview),
         );
 
-        // #47: detect Std.Css (Sky.Core.CssSafety) leaf-kernel usage.
+        // detect Std.Css (Sky.Core.CssSafety) leaf-kernel usage.
         let uses_css = program.modules.iter().any(|m| m.uses_css);
 
-        // #111: detect Std.Auth kernel usage.
+        // detect Std.Auth kernel usage.
         let uses_auth = program.modules.iter().any(|m| m.uses_auth);
 
         Ok(Self {
@@ -757,7 +757,7 @@ impl<'a> EmitCtx<'a> {
     /// Resolved from the whole-program serde fixpoint computed at
     /// [`Self::build`]. A symbol that is not a user enum defaults to `true`
     /// (builtins are distinct `IrType` variants and never reach this lookup as a
-    /// bare enum name). Used by the Sky.Live Model-admissibility gate (#91).
+    /// bare enum name). Used by the Sky.Live Model-admissibility gate.
     pub(crate) fn enum_is_serde(&self, home: &ModPath, sym: Symbol) -> bool {
         self.enum_serde
             .get(&(home.clone(), sym))
@@ -768,7 +768,7 @@ impl<'a> EmitCtx<'a> {
     /// The per-variant payload field-type lists of user enum `sym`, in variant
     /// order. Empty when `sym` is not a known user enum. Read by the Model-
     /// admissibility gate to walk a non-admissible enum down to its offending
-    /// leaf (#91).
+    /// leaf.
     pub(crate) fn enum_variant_payloads(&self, home: &ModPath, sym: Symbol) -> &[Vec<IrType>] {
         self.enum_variants
             .get(&(home.clone(), sym))
@@ -1039,7 +1039,7 @@ impl<'a> EmitCtx<'a> {
         Ok(naming::mangle_reserved(self.resolve_ident(sym)?.to_owned()))
     }
 
-    /// #210: is this the `Std.Cache.Cache` opaque handle type — home
+    /// is this the `Std.Cache.Cache` opaque handle type — home
     /// `["Std", "Cache"]`, name `Cache`, and NOT a user-declared enum of the
     /// same name (absent from `enum_names`)? Backed by the runtime
     /// `SkyCacheHandle`; the render/ctor/pattern paths route there.
@@ -1063,7 +1063,7 @@ impl<'a> EmitCtx<'a> {
             // is valid for the duration of the emit pass.
             return Ok("SkyStreamId");
         }
-        // #210: `Std.Cache.Cache` → the non-generic runtime enum `SkyCacheHandle`
+        // `Std.Cache.Cache` → the non-generic runtime enum `SkyCacheHandle`
         // (its `EnumDef` is suppressed in `sky_lower`, so it is absent from
         // `enum_names`). The type-position render drops the phantom `k`/`v` args
         // via a dedicated `render_type` arm before reaching here.
@@ -1097,12 +1097,12 @@ impl<'a> EmitCtx<'a> {
         match self.interner.resolve(ty) {
             Some("Maybe") => Some("SkyMaybe"),
             Some("Result") => Some("SkyResult"),
-            // `Order` is backed by `SkyOrder` (#123) — the `#[repr(u8)]` enum
+            // `Order` is backed by `SkyOrder` — the `#[repr(u8)]` enum
             // from the runtime crate, in scope via `pub use sky_runtime::*`.
             // Constructor emission: `SkyOrder::LT` / `SkyOrder::EQ` / `SkyOrder::GT`.
             Some("Order") => Some("SkyOrder"),
             // `ChunkEvent` — the builtin `Sky.Core.Http.Stream` chunk event enum
-            // backed by `sky_runtime::http_stream::ChunkEvent<SkyError>` (#148).
+            // backed by `sky_runtime::http_stream::ChunkEvent<SkyError>`.
             // Constructor names match Sky's verbatim: `Chunk` / `Done` / `Errored`.
             // NOTE: This returns the bare name "ChunkEvent" (without generic args)
             // so that pattern paths emit `ChunkEvent::Chunk(...)`, not
@@ -1110,7 +1110,7 @@ impl<'a> EmitCtx<'a> {
             // Type-position rendering adds the `<SkyError>` via a special arm in
             // `emit_types::render_type` BEFORE the general `ctx.enum_name` path.
             Some("ChunkEvent") => Some("ChunkEvent"),
-            // `Error` is backed by `SkyError` (backlog #85/#160) — a single
+            // `Error` is backed by `SkyError` — a single
             // tuple-variant enum whose constructor shares the type's name
             // (`enum_variants[(Prelude, error)] = [error]`, set in
             // `sky_lower`), so this emits `SkyError::Error(kind, info)` via
@@ -1125,7 +1125,7 @@ impl<'a> EmitCtx<'a> {
             // `FfiPanic` / `TypeMismatch` / `HttpStatus` / `JsonDecode` /
             // `Custom`.
             Some("ErrorDetails") => Some("SkyErrorDetails"),
-            // #210: `Std.Cache.Cache` is backed by the non-generic runtime enum
+            // `Std.Cache.Cache` is backed by the non-generic runtime enum
             // `SkyCacheHandle { Cache(i64) }`. Its `EnumDef` is suppressed in
             // `sky_lower` (no `enum_names` entry, so the guard above lets this
             // fire), so the `Cache` ctor + `case … of Cache raw` pattern route
@@ -1246,12 +1246,12 @@ fn collect_record_shapes(
         | IrType::StreamWriter
         // `HttpRequest` is an opaque handle — no record shape.
         | IrType::HttpRequest
-        // #127: `WsHandle` / `WsServerCfg` are opaque handles — no record shape.
+        // `WsHandle` / `WsServerCfg` are opaque handles — no record shape.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         // A generic type variable carries no concrete record shape of its own.
         | IrType::Generic(_)
-        // M7: nullary plain types (`Length`, `Color`, …) and the opaque live
+        // nullary plain types (`Length`, `Color`, …) and the opaque live
         // request handle carry no record shapes of their own.
         | IrType::UiPlain(_)
         | IrType::LiveReq
@@ -1262,18 +1262,18 @@ fn collect_record_shapes(
         | IrType::ErrorKind
         | IrType::Error
         | IrType::ErrorDetails
-        // Nominal error-payload leaves (SEAL fix 2026-07-11) — monomorphic
+        // Nominal error-payload leaves (SEAL fix) — monomorphic
         // runtime structs, same classification as `Error`/`ErrorDetails`.
         | IrType::ErrorInfo
         | IrType::PanicInfo
         | IrType::TypeInfo
-        // `SqlFragment` (backlog #61) is an opaque query-building value — no
+        // `SqlFragment` is an opaque query-building value — no
         // record shape.
-        // `Secret` (backlog #44) is an opaque sealed string wrapper — no
+        // `Secret` is an opaque sealed string wrapper — no
         // record shape.
         | IrType::SqlFragment
         | IrType::Secret
-        // #210: Cache config / stats are folded to nominal runtime structs — no
+        // Cache config / stats are folded to nominal runtime structs — no
         // structural record shape to synthesise.
         | IrType::CacheCfg
         | IrType::CacheStats => {}
@@ -1282,7 +1282,7 @@ fn collect_record_shapes(
         IrType::LiveRoute(page) => {
             collect_record_shapes(interner, page, shapes)?;
         }
-        // M7: `Ui { ctor, msg }` is a msg-parametric wrapper — descend into
+        // `Ui { ctor, msg }` is a msg-parametric wrapper — descend into
         // `msg` in case it carries a nested record (e.g. `Element { x : Int }`).
         IrType::Ui { msg, .. } => {
             collect_record_shapes(interner, msg, shapes)?;
@@ -1382,7 +1382,7 @@ fn type_reaches_enum(
         | IrType::StreamWriter
         // `HttpRequest` is a pointer-sized opaque handle — no size cycle.
         | IrType::HttpRequest
-        // #127: `WsHandle` / `WsServerCfg` are opaque handles — no size cycle.
+        // `WsHandle` / `WsServerCfg` are opaque handles — no size cycle.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::Fun(_, _)
@@ -1390,7 +1390,7 @@ fn type_reaches_enum(
         // `Fun` — pointer-sized, no size-cycle risk.
         | IrType::FnOnceChain(_, _)
         | IrType::Generic(_)
-        // M7: nullary plain types and the opaque live request handle are
+        // nullary plain types and the opaque live request handle are
         // pointer-sized — they cannot form an infinite-size cycle.
         | IrType::UiPlain(_)
         | IrType::LiveReq
@@ -1401,25 +1401,25 @@ fn type_reaches_enum(
         | IrType::ErrorKind
         | IrType::Error
         | IrType::ErrorDetails
-        // Nominal error-payload leaves (SEAL fix 2026-07-11) — monomorphic
+        // Nominal error-payload leaves (SEAL fix) — monomorphic
         // runtime structs, same classification as `Error`/`ErrorDetails`.
         | IrType::ErrorInfo
         | IrType::PanicInfo
         | IrType::TypeInfo
-        // `SqlFragment` (backlog #61) is a heap-backed struct (String +
+        // `SqlFragment` is a heap-backed struct (String +
         // Vec<SqlParam>) — no size-cycle risk.
-        // `Secret` (backlog #44) is a heap-backed newtype (String) — no
+        // `Secret` is a heap-backed newtype (String) — no
         // size-cycle risk.
         | IrType::SqlFragment
         | IrType::Secret
-        // #210: Cache config / stats are monomorphic runtime structs — no
+        // Cache config / stats are monomorphic runtime structs — no
         // reachable enum edge to `target`.
         | IrType::CacheCfg
         | IrType::CacheStats => false,
         // `Route<Page>` stores its `not_found`/built pages by value — a page
         // type reaching `target` through a route is a genuine size edge.
         IrType::LiveRoute(page) => type_reaches_enum(page, target, enums, visited),
-        // M7: `Ui { ctor, msg }` — descend into `msg`.
+        // `Ui { ctor, msg }` — descend into `msg`.
         IrType::Ui { msg, .. } => type_reaches_enum(msg, target, enums, visited),
     }
 }
@@ -1461,10 +1461,10 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::StreamWriter
         // `HttpRequest` is monomorphic — no generic parameters.
         | IrType::HttpRequest
-        // #127: `WsHandle` / `WsServerCfg` are monomorphic — no generic parameters.
+        // `WsHandle` / `WsServerCfg` are monomorphic — no generic parameters.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
-        // M7: nullary plain types and the opaque live request handle are
+        // nullary plain types and the opaque live request handle are
         // monomorphic.
         | IrType::UiPlain(_)
         | IrType::LiveReq
@@ -1475,22 +1475,22 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::ErrorKind
         | IrType::Error
         | IrType::ErrorDetails
-        // Nominal error-payload leaves (SEAL fix 2026-07-11) — monomorphic
+        // Nominal error-payload leaves (SEAL fix) — monomorphic
         // runtime structs, same classification as `Error`/`ErrorDetails`.
         | IrType::ErrorInfo
         | IrType::PanicInfo
         | IrType::TypeInfo
-        // `SqlFragment` (backlog #61) is monomorphic — no generic parameters.
-        // `Secret` (backlog #44) is monomorphic — no generic parameters.
+        // `SqlFragment` is monomorphic — no generic parameters.
+        // `Secret` is monomorphic — no generic parameters.
         | IrType::SqlFragment
         | IrType::Secret
-        // #210: Cache config / stats are monomorphic — no generic parameters.
+        // Cache config / stats are monomorphic — no generic parameters.
         | IrType::CacheCfg
         | IrType::CacheStats => false,
         // `LiveRoute page` is parametric on `page`; check if it carries a
         // generic.
         IrType::LiveRoute(page) => contains_generic(page),
-        // M7: `Ui { ctor, msg }` is parametric on `msg`; check if `msg` carries
+        // `Ui { ctor, msg }` is parametric on `msg`; check if `msg` carries
         // a generic.
         IrType::Ui { msg, .. } => contains_generic(msg),
     }
@@ -1558,10 +1558,10 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::StreamWriter
         // `HttpRequest` is monomorphic — no generics to collect.
         | IrType::HttpRequest
-        // #127: `WsHandle` / `WsServerCfg` are monomorphic — no generics to collect.
+        // `WsHandle` / `WsServerCfg` are monomorphic — no generics to collect.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
-        // M7: nullary plain types and the opaque live request handle
+        // nullary plain types and the opaque live request handle
         // contribute no generics.
         | IrType::UiPlain(_)
         | IrType::LiveReq
@@ -1572,21 +1572,21 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::ErrorKind
         | IrType::Error
         | IrType::ErrorDetails
-        // Nominal error-payload leaves (SEAL fix 2026-07-11) — monomorphic
+        // Nominal error-payload leaves (SEAL fix) — monomorphic
         // runtime structs, same classification as `Error`/`ErrorDetails`.
         | IrType::ErrorInfo
         | IrType::PanicInfo
         | IrType::TypeInfo
-        // `SqlFragment` (backlog #61) is monomorphic — no generics to collect.
-        // `Secret` (backlog #44) is monomorphic — no generics to collect.
+        // `SqlFragment` is monomorphic — no generics to collect.
+        // `Secret` is monomorphic — no generics to collect.
         | IrType::SqlFragment
         | IrType::Secret
-        // #210: Cache config / stats are monomorphic — no generics to collect.
+        // Cache config / stats are monomorphic — no generics to collect.
         | IrType::CacheCfg
         | IrType::CacheStats => {}
         // `LiveRoute page` may carry generic parameters through `page`.
         IrType::LiveRoute(page) => collect_generics(page, out),
-        // M7: `Ui { ctor, msg }` may carry generic parameters through `msg`.
+        // `Ui { ctor, msg }` may carry generic parameters through `msg`.
         IrType::Ui { msg, .. } => collect_generics(msg, out),
     }
 }
@@ -1648,7 +1648,7 @@ fn skeleton_ty(ty: &IrType, idx: &mut BTreeMap<Symbol, usize>, out: &mut String)
             // (possibly generic) type args, so `Maybe a` and `Maybe Int`
             // skeletonise distinctly while `Maybe a` and `Maybe b`
             // (alpha-equivalent) coincide. Home is included so two same-short-named
-            // types from different modules do not conflate record shapes (#100).
+            // types from different modules do not conflate record shapes.
             out.push('E');
             for seg in &home.0 {
                 out.push_str(&seg.as_raw().to_string());
@@ -1783,7 +1783,7 @@ fn match_template(
         } => match concrete {
             // Nominal identity is (home, name): a template enum reconciles with a
             // concrete enum only when BOTH match, so two same-short-named types
-            // from different modules never cross-reconcile (#100).
+            // from different modules never cross-reconcile.
             IrType::Enum {
                 home: ch,
                 name: cn,
@@ -1859,10 +1859,10 @@ fn match_template(
         | IrType::StreamWriter
         // `HttpRequest` is a monomorphic opaque handle.
         | IrType::HttpRequest
-        // #127: `WsHandle` / `WsServerCfg` are monomorphic opaque handles.
+        // `WsHandle` / `WsServerCfg` are monomorphic opaque handles.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
-        // M7: nullary plain types (`Length`, `Color`, …) and the opaque live
+        // nullary plain types (`Length`, `Color`, …) and the opaque live
         // request handle are monomorphic — must equal exactly.
         | IrType::UiPlain(_)
         | IrType::LiveReq
@@ -1873,16 +1873,16 @@ fn match_template(
         | IrType::ErrorKind
         | IrType::Error
         | IrType::ErrorDetails
-        // Nominal error-payload leaves (SEAL fix 2026-07-11) — monomorphic
+        // Nominal error-payload leaves (SEAL fix) — monomorphic
         // runtime structs, same classification as `Error`/`ErrorDetails`.
         | IrType::ErrorInfo
         | IrType::PanicInfo
         | IrType::TypeInfo
-        // `SqlFragment` (backlog #61) is a monomorphic opaque leaf.
-        // `Secret` (backlog #44) is a monomorphic opaque leaf.
+        // `SqlFragment` is a monomorphic opaque leaf.
+        // `Secret` is a monomorphic opaque leaf.
         | IrType::SqlFragment
         | IrType::Secret
-        // #210: Cache config / stats are monomorphic runtime-struct leaves.
+        // Cache config / stats are monomorphic runtime-struct leaves.
         | IrType::CacheCfg
         | IrType::CacheStats => {
             if template == concrete {
@@ -1897,7 +1897,7 @@ fn match_template(
             IrType::LiveRoute(cp) => match_template(tp, cp, subst),
             _ => Err(mismatch()),
         },
-        // M7: `Ui { ctor, msg }` is parametric on `msg`; match the ctor tag
+        // `Ui { ctor, msg }` is parametric on `msg`; match the ctor tag
         // then recurse into the msg argument.
         IrType::Ui { ctor: tc, msg: tm } => match concrete {
             IrType::Ui { ctor: cc, msg: cm } if tc == cc => match_template(tm, cm, subst),
@@ -1908,7 +1908,7 @@ fn match_template(
 
 /// Reconcile every distinct field-type shape observed for one field-name set
 /// into a single synthesised struct: its canonical `(field name, type)` template
-/// and its generic parameter list (M2c).
+/// and its generic parameter list.
 ///
 /// * No occurrence carries a type variable → a MONOMORPHIC struct (empty
 ///   parameter list). All occurrences must be identical, exactly as b3 required;

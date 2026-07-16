@@ -22,7 +22,7 @@
 
 mod lower;
 
-/// Test-only surface: the crate-private TCO analysis/rewrite (task #49),
+/// Test-only surface: the crate-private TCO analysis/rewrite,
 /// re-exported so the integration-test binary can drive them directly. Hidden
 /// from the public docs; not part of the stable API.
 #[doc(hidden)]
@@ -106,7 +106,7 @@ pub fn lower(
     let any_param_binders = interner
         .fresh_symbols("anyp_", any_param_site_count)
         .map_err(homeless)?;
-    // #125: one fresh thunk-binder symbol per syntactic destructure-binder
+    // one fresh thunk-binder symbol per syntactic destructure-binder
     // `let` / single-arm product `case` site, consumed only when the bound
     // value's solved type contains a Decoder (the type gate runs post-solve,
     // inside the lowerer; this count is purely syntactic, so it over-counts
@@ -114,7 +114,7 @@ pub fn lower(
     let destructure_thunk_binders = interner
         .fresh_symbols("destr_thunk_", lower::count_destructure_thunk_sites(m))
         .map_err(homeless)?;
-    // #158 C2: one fresh `Vec` payload binder per `case`-arm site that nests a
+    // C2: one fresh `Vec` payload binder per `case`-arm site that nests a
     // list / cons sub-pattern inside a constructor payload. `fresh_symbols`
     // (mutable-mint) runs after the count (immutable borrow), same two-borrow
     // ordering the `anyp_` pool documents above.
@@ -161,12 +161,12 @@ pub fn lower(
         sqlfield: interner.intern("SqlField").map_err(homeless)?,
         set_field: interner.intern("SetField").map_err(homeless)?,
         omit_field: interner.intern("OmitField").map_err(homeless)?,
-        // ── Order ADT (#123) ─────────────────────────────────────────────────
+        // ── Order ADT ─────────────────────────────────────────────────
         order: interner.intern("Order").map_err(homeless)?,
         lt: interner.intern("LT").map_err(homeless)?,
         eq: interner.intern("EQ").map_err(homeless)?,
         gt: interner.intern("GT").map_err(homeless)?,
-        // ── Error / ErrorKind (E-12, #152) ────────────────────────────────────
+        // ── Error / ErrorKind ────────────────────────────────────
         error: interner.intern("Error").map_err(homeless)?,
         errorkind: interner.intern("ErrorKind").map_err(homeless)?,
         ek_io: interner.intern("Io").map_err(homeless)?,
@@ -546,7 +546,7 @@ mod tests {
         let Some(&(param_sym, bounds)) = func.type_params.first() else {
             return;
         };
-        // A structurally-parametric variable carries no bounds (M2a).
+        // A structurally-parametric variable carries no bounds.
         assert!(bounds.is_unbounded(), "wrap's `a` is an unbounded generic");
         // The single parameter is `IrType::Generic(a)`.
         assert!(

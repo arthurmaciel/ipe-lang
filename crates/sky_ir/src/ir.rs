@@ -143,7 +143,7 @@ pub enum TypeDef {
 
 /// An enum (algebraic data type) declaration.
 ///
-/// A variant may carry payload fields (M3a) and the type may be generic over a
+/// A variant may carry payload fields and the type may be generic over a
 /// list of type parameters (`type Maybe a = Just a | Nothing`). A nullary-only,
 /// non-generic enum (`type Msg = Increment | Decrement`) has every variant's
 /// `fields` empty and an empty `type_params` — that path stays byte-identical to
@@ -248,7 +248,7 @@ impl BoundSet {
     const ORD_TOTAL: u16 = 1 << 7;
     const HASH: u16 = 1 << 8;
     const SHOW: u16 = 1 << 9;
-    /// The SQL-bind-parameter bound (#165): realises the type checker's
+    /// The SQL-bind-parameter bound: realises the type checker's
     /// `TyBounds::sql_param` obligation as Rust `Into<sky_runtime::db::SqlParam>`
     /// — a generic wrapper around `Db.exec` / `Db.query` / `Db.queryDecode`
     /// (`Database.exec label sql args` in `examples/17-skymon`'s `Std.Db`
@@ -257,7 +257,7 @@ impl BoundSet {
     /// concrete element type, not just the one instantiation the function
     /// happened to be lowered against.
     const SQL_PARAM: u16 = 1 << 10;
-    /// The `SkyRow` bound (#177): a wildcard `any` generic that flows into a
+    /// The `SkyRow` bound: a wildcard `any` generic that flows into a
     /// `Db.get*` field accessor (`Db.getString`/`getInt`/`getBool`/`getField`)
     /// gains `sky_runtime::db::SkyRow` so the generic body type-checks and
     /// monomorphises per call site against the row's real shape (a query result
@@ -268,14 +268,14 @@ impl BoundSet {
     /// wildcard `any` variable and ONLY when the body actually calls a `db_get_*`
     /// — no blast radius on genuine named type variables (`a`, `msg`).
     const SKY_ROW: u16 = 1 << 11;
-    /// The `std::fmt::Display` bound (#186): a generic type-param that flows into
+    /// The `std::fmt::Display` bound: a generic type-param that flows into
     /// a `Basics.toString` kernel application (runtime `basics_to_string<T:
     /// std::fmt::Display>`) gains `std::fmt::Display` so the emitted body's
     /// `basics_to_string(x)` call type-checks and monomorphises per call site.
     /// Without it the enclosing generic carries only `<T{n}: Clone>` and the
     /// body's `basics_to_string(x)` cannot prove `T{n}: Display` (E0277).
     ///
-    /// This is the SAME structural machinery as [`Self::SKY_ROW`] (#177) — a
+    /// This is the SAME structural machinery as [`Self::SKY_ROW`] — a
     /// kernel applied, alias-transparently, to a Var/CloneVar reference to a
     /// param whose type is `Generic(tv)` obliges the kernel's Rust bound on that
     /// tv — generalised to a kernel→bound map. Unlike `SKY_ROW`, the bound lands
@@ -292,7 +292,7 @@ impl BoundSet {
     /// to the caller's instantiation, never introducing one where there was
     /// none.
     const DISPLAY: u16 = 1 << 12;
-    /// The `'static` lifetime bound (#190): a generic type-param that flows,
+    /// The `'static` lifetime bound: a generic type-param that flows,
     /// INSIDE the function body, into a value boxed as a boxed `dyn Fn` trait
     /// object (`Box<dyn Fn(..) -> .. + Send + 'static>`, or the `Arc` +Sync
     /// variant) — a callback (`FuncValue` / lambda) passed to a higher-order
@@ -529,7 +529,7 @@ pub struct Func {
     /// parameters / return / body; its `BoundSet` records the Rust trait bounds
     /// the body's use of the variable demands. A monomorphic function has an
     /// empty list, so existing M0 / M1 functions are unchanged. A
-    /// structurally-parametric variable (M2a) carries [`BoundSet::UNBOUNDED`],
+    /// structurally-parametric variable carries [`BoundSet::UNBOUNDED`],
     /// so its emitted generic stays a bare `T1`.
     ///
     /// The order is load-bearing: the backend derives each variable's Rust
@@ -650,7 +650,7 @@ pub enum IrType {
     FnOnceChain(Vec<Self>, Box<Self>),
     /// A generic type parameter — a Sky type variable used STRUCTURALLY
     /// (pass-through, no operation applied to it) in a fully-parametric
-    /// top-level function (M2a). The carried [`Symbol`] is the source type
+    /// top-level function. The carried [`Symbol`] is the source type
     /// variable's name (e.g. interned `"a"`).
     ///
     /// The backend renders this as the function's corresponding Rust generic
@@ -662,7 +662,7 @@ pub enum IrType {
     /// it never appears in a program-level position (enum / record-struct
     /// declaration). Constrained type variables (those needing a Rust trait
     /// bound — `Number` / `Comparable` / `Appendable`) are NOT representable
-    /// here: they are rejected at lowering (M2c).
+    /// here: they are rejected at lowering.
     ///
     /// The wildcard `any` is a SEPARATE case, not genuine polymorphism: the
     /// checker gives every `any` occurrence in an annotation its own fresh flex
@@ -738,7 +738,7 @@ pub enum IrType {
     /// `pub type SkySub<M> = sky_runtime::tea::SkySub<M>`.
     /// The inner type is the message type `M`.
     Sub(Box<Self>),
-    // ── M6: Sky.Http.Server opaque types ────────────────────────────────────
+    // ── Sky.Http.Server opaque types ────────────────────────────────────
     /// `Request` — opaque HTTP server request.  Renders as `ServerRequest`.
     ///
     /// Corresponds to `sky_runtime::server::ServerRequest`.  Never synthesised
@@ -775,7 +775,7 @@ pub enum IrType {
     /// that pass the value to `http_stream_open` / `http_request` kernels see
     /// the correct runtime type.  Never stored in a Sky.Live Model.
     HttpRequest,
-    // ── #127: Sky.Http.Server.WebSocket opaque type handles ──────────────────
+    // ── Sky.Http.Server.WebSocket opaque type handles ──────────────────
     /// `WebSocketServer` — opaque per-peer WebSocket handle.  Renders as
     /// `WsHandle`.
     ///
@@ -790,7 +790,7 @@ pub enum IrType {
     /// builder chain; consumed by `Ws.upgrade`.  Phantom `msg` type parameter
     /// dropped (D2 — see docs/adr/0023-websocket-server-kernel-only-typed-handles.md).
     WebSocketServerCfg,
-    // ── M7: Std.Ui / Std.Html parametric types ──────────────────────────────
+    // ── Std.Ui / Std.Html parametric types ──────────────────────────────
     /// A parametric `Std.Ui` or `Std.Html` type — one that carries a message type
     /// parameter `msg`.  The `ctor` field identifies which of the five
     /// message-parametric types this is; `msg` is the message type.
@@ -857,7 +857,6 @@ pub enum IrType {
     Decimal,
 
     /// The built-in `ErrorKind` type — `Error`'s 11-variant classification
-    /// (backlog #85/#160).
     ///
     /// Renders as `sky_runtime::error::SkyErrorKind` (a `#[repr(u8)]` enum,
     /// same convention as [`IrType::Order`]). Constructors (`Io` / `Network` /
@@ -890,7 +889,7 @@ pub enum IrType {
 
     /// The built-in NOMINAL `ErrorInfo` type — `Error`'s second constructor
     /// argument, `{ message : String, details : Maybe ErrorDetails }` at the
-    /// field level (SEAL fix 2026-07-11 — see `docs/architecture/
+    /// field level (SEAL fix — see `docs/architecture/
     /// docs/adr/0017-error-payload-nominal-identity.md`).
     ///
     /// Renders as `sky_runtime::error::SkyErrorInfo`. NOT a structural
@@ -904,14 +903,14 @@ pub enum IrType {
 
     /// The built-in NOMINAL `PanicInfo` type — `FfiPanic`'s payload,
     /// `{ message : String, stack : List String }` at the field level (SEAL
-    /// fix 2026-07-11; same design as [`IrType::ErrorInfo`]).
+    /// fix; same design as [`IrType::ErrorInfo`]).
     ///
     /// Renders as `sky_runtime::error::SkyPanicInfo`.
     PanicInfo,
 
     /// The built-in NOMINAL `TypeInfo` type — `TypeMismatch`'s payload,
     /// `{ expected : String, actual : String }` at the field level (SEAL fix
-    /// 2026-07-11; same design as [`IrType::ErrorInfo`]).
+    /// same design as [`IrType::ErrorInfo`]).
     ///
     /// Renders as `sky_runtime::error::SkyTypeInfo`.
     TypeInfo,
@@ -946,7 +945,7 @@ pub enum IrType {
     Secret,
 
     /// `Std.Cache`'s configuration record `{ maxEntries : Int, ttlMs : Int,
-    /// maxBytes : Int }` (#210). Renders as `sky_runtime::cache::CacheCfg`.
+    /// maxBytes : Int }`. Renders as `sky_runtime::cache::CacheCfg`.
     ///
     /// The lowerer folds any solved / annotated record matching that exact
     /// 3-field shape to this opaque variant (same mechanism as
@@ -958,7 +957,7 @@ pub enum IrType {
     CacheCfg,
 
     /// `Std.Cache.stats`'s return record `{ hits : Int, misses : Int,
-    /// evictions : Int }` (#210). Renders as `sky_runtime::cache::CacheStats`.
+    /// evictions : Int }`. Renders as `sky_runtime::cache::CacheStats`.
     ///
     /// Folded the same way as [`IrType::CacheCfg`]: the `statsRaw` kernel
     /// alias's annotated return type is this record shape, and the runtime
@@ -1026,7 +1025,7 @@ pub enum UiPlain {
 /// full `#[derive(Clone, Debug, PartialEq)]` set the backend stamps on every
 /// generated enum / record struct?
 ///
-/// This is the authoritative soundness gate (#87) that keeps the *unconditional*
+/// This is the authoritative soundness gate that keeps the *unconditional*
 /// derive off any type whose rendered Rust form lacks one of those traits, so a
 /// well-typed program that stores such a value in a record field or enum payload
 /// can never `skyc`-succeed and then `cargo`-fail on a missing `Clone` / `Debug`
@@ -1083,10 +1082,10 @@ pub fn ir_type_is_derivable(
         // heap-allocated `String` message; not `Eq` — its `SkyErrorInfo`
         // field carries a `SkyMaybe`, which is `PartialEq`-only).
         // `SkyErrorDetails` derives Clone + PartialEq + Eq + Debug (backlog
-        // #85 follow-up).
+        // follow-up).
         // `SkyErrorInfo` derives Clone + PartialEq + Debug (not Eq — carries
         // a `SkyMaybe`); `SkyPanicInfo`/`SkyTypeInfo` derive Clone +
-        // PartialEq + Eq + Debug (SEAL fix 2026-07-11).
+        // PartialEq + Eq + Debug (SEAL fix).
         // `SqlFragment` derives Clone + PartialEq (hand-written Debug; see
         // its own doc) — fully derivable, not serde (see `ir_type_is_serde`).
         // `Secret` derives Clone; `PartialEq`/`Debug` are hand-written
@@ -1102,7 +1101,7 @@ pub fn ir_type_is_derivable(
         | IrType::TypeInfo
         | IrType::SqlFragment
         | IrType::Secret
-        // #210: Cache config / stats runtime structs derive Clone+Debug+PartialEq.
+        // Cache config / stats runtime structs derive Clone+Debug+PartialEq.
         | IrType::CacheCfg
         | IrType::CacheStats
         | IrType::Generic(_)
@@ -1138,7 +1137,7 @@ pub fn ir_type_is_derivable(
         | IrType::StreamWriter
         // `HttpRequest` is an opaque handle — not fully derivable.
         | IrType::HttpRequest
-        // #127: `WsHandle` / `WsServerCfg` are opaque handles — not fully derivable.
+        // `WsHandle` / `WsServerCfg` are opaque handles — not fully derivable.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::LiveReq
@@ -1223,7 +1222,7 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         // must serialize to round-trip through a Live session store (e.g. a
         // Model's `historyError : Maybe Error` field). The nominal payload
         // types `SkyErrorInfo`/`SkyPanicInfo`/`SkyTypeInfo` derive serde for
-        // the same reason (they ride inside `Error`; SEAL fix 2026-07-11).
+        // the same reason (they ride inside `Error`; SEAL fix).
         | IrType::Order
         | IrType::Decimal
         | IrType::ErrorKind
@@ -1264,14 +1263,14 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         // encode, anything) — derivable (see `ir_type_is_derivable`) but not
         // serde. This is the load-bearing gate that makes a `Std.Live` Model
         // field of type `Secret` a compile-time SKY-L0120, not a session-store
-        // leak (backlog #44).
+        // leak.
         | IrType::Secret
-        // #210: Cache config / stats are kernel-boundary data records — derivable
+        // Cache config / stats are kernel-boundary data records — derivable
         // (see `ir_type_is_derivable`) but never persisted to a session store, so
         // not serde (the runtime structs carry no serde derive).
         | IrType::CacheCfg
         | IrType::CacheStats
-        // #127: `WsHandle` / `WsServerCfg` are opaque handles; not serde.
+        // `WsHandle` / `WsServerCfg` are opaque handles; not serde.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::LiveReq
@@ -1393,7 +1392,7 @@ pub enum Expr {
         /// parameter the HM solver left GENUINELY UNCONSTRAINED at this call
         /// site (a discarded / empty / phantom position). Without it the
         /// emitted Rust hits `E0282`/`E0283` "type annotations needed" — the
-        /// SEAL-violating exit-0-then-cargo-fail class (#181).
+        /// SEAL-violating exit-0-then-cargo-fail class.
         ///
         /// The lowerer sets a non-[`CallPin::None`] value ONLY when the
         /// relevant parameter's solved type is a free type variable that is
@@ -1428,7 +1427,7 @@ pub enum Expr {
     },
     /// Clone the element at a CONSTANT index of a list value: `<list>[<index>].clone()`.
     ///
-    /// Introduced for Class 4 item C2 (#158). A cons / list sub-pattern nested in
+    /// Introduced for Class 4 item C2. A cons / list sub-pattern nested in
     /// a constructor payload lowers to a fresh `Vec` binder plus an arm-level
     /// length GUARD ([`Arm::guard`]); the named head elements are then recovered
     /// in the arm-body prelude via this node, one per prefix position. It is ONLY
@@ -1441,7 +1440,7 @@ pub enum Expr {
         list: Box<Self>,
         index: usize,
     },
-    /// A borrowing list-length CHECK for a Class 4 item C2 (#158) arm guard:
+    /// A borrowing list-length CHECK for a Class 4 item C2 arm guard:
     /// `<list>.len() >= <len>` (`exact == false`, an OPEN cons chain
     /// `a :: b :: rest`) or `<list>.len() == <len>` (`exact == true`, a CLOSED
     /// list literal `[a, b]`). `.len()` borrows the bound `Vec` — a match guard
@@ -1611,7 +1610,7 @@ pub enum Callee {
     Kernel(KernelFn),
 }
 
-/// A per-call-site turbofish pin for a polymorphic kernel (#181).
+/// A per-call-site turbofish pin for a polymorphic kernel.
 ///
 /// Set when the HM solver left the kernel's free result type parameter
 /// genuinely unconstrained. Each variant names the SEMANTIC default the emitter
@@ -1681,7 +1680,7 @@ impl CallPin {
 /// [`sky_kernels::StdlibKernel::decl`] for per-variant metadata.
 pub type KernelFn = sky_kernels::StdlibKernel;
 
-/// Re-export of the `Std.Html.Events` payload-shape ADT (#107), so backend
+/// Re-export of the `Std.Html.Events` payload-shape ADT, so backend
 /// crates that already depend on `sky_ir` (for `KernelFn`) can match on it
 /// without taking a direct `sky_kernels` dependency.
 pub use sky_kernels::HtmlEventShape;
@@ -1730,7 +1729,7 @@ pub struct Arm {
     /// for every pre-existing arm shape (byte-identical emission — the backend
     /// renders `{pat} => …` unchanged, only adding `if {guard}` when `Some`).
     ///
-    /// Introduced for Class 4 item C2 (#158) — a cons / list sub-pattern nested
+    /// Introduced for Class 4 item C2 — a cons / list sub-pattern nested
     /// in a constructor payload lowers to a plain [`Pat::Var`] binder for that
     /// position PLUS a guard checking the bound `Vec`'s length, with the named
     /// sub-bindings (`h`, `t`) recovered via indexing / slicing in the arm
@@ -1759,7 +1758,7 @@ impl Arm {
 ///
 /// M3a supports a constructor pattern whose payload sub-patterns bind to a
 /// variable ([`Pat::Var`]) or are ignored ([`Pat::Wildcard`]). Nullary
-/// constructor patterns (M0) are [`Pat::Ctor`] with an empty `args`. M3b-1 adds
+/// constructor patterns are [`Pat::Ctor`] with an empty `args`. M3b-1 adds
 /// the tuple pattern [`Pat::Tuple`]. M3b-2 adds the record pattern
 /// [`Pat::Record`] and makes every sub-position fully recursive: ANY [`Pat`] may
 /// appear as a constructor payload, a tuple element, or a record-field
@@ -1831,7 +1830,7 @@ pub enum Pat {
     /// set resolves the synthesised struct unambiguously, exactly as a record
     /// literal does. The backend stays total over any entry vector it receives.
     Record(Vec<(Symbol, Self)>),
-    /// A list / cons pattern, flattened to a Rust slice-pattern shape (M4a): a
+    /// A list / cons pattern, flattened to a Rust slice-pattern shape: a
     /// `prefix` of fixed leading element sub-patterns plus an optional `rest`
     /// tail binder.
     ///
@@ -3369,7 +3368,7 @@ mod tests {
         Ok(())
     }
 
-    // ── #91 seal: ir_type_is_serde ─────────────────────────────────────────
+    // ── seal: ir_type_is_serde ─────────────────────────────────────────
 
     /// `true` for every referenced enum — the leaf-level predicate under test.
     fn all_serde(_: &ModPath, _: Symbol) -> bool {
@@ -3436,7 +3435,7 @@ mod tests {
         }
     }
 
-    /// `SqlFragment` (backlog #61): fully derivable (Clone + `PartialEq`) but
+    /// `SqlFragment`: fully derivable (Clone + `PartialEq`) but
     /// deliberately NOT serde — it is a query-building value, never persisted
     /// to a Live session store.
     #[test]
@@ -3452,7 +3451,7 @@ mod tests {
         );
     }
 
-    /// `Secret` (backlog #44): fully derivable (Clone + `PartialEq`) but
+    /// `Secret`: fully derivable (Clone + `PartialEq`) but
     /// deliberately NOT serde — a `Secret` must never round-trip through a
     /// Live session store or any other serialisation path. This is also the
     /// #45/#70 derive-blast-radius regression: a record containing a `Secret`
@@ -3471,7 +3470,7 @@ mod tests {
         );
     }
 
-    /// #44 derive-blast-radius regression: a record `{ apiKey : Secret, label :
+    /// derive-blast-radius regression: a record `{ apiKey : Secret, label :
     /// String }` must still be derivable (Clone/Debug/PartialEq) even though
     /// its `Secret` field is not serde — marking a leaf non-derivable (rather
     /// than merely non-serde) would have made the WHOLE record lose ALL

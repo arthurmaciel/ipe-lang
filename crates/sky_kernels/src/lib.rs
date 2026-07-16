@@ -30,26 +30,26 @@ pub enum KernelClass {
     Pure,
     /// `Std.Db` / `Db.Decode` kernels (M5b-db / M6).
     Db,
-    /// `Sky.Http.Server` / Middleware / `RateLimit` kernels (M6).
+    /// `Sky.Http.Server` / Middleware / `RateLimit` kernels.
     Server,
     /// `Cmd` / `Sub` / `Time.every` TEA wiring kernels (M5c, including M6
     /// reserved pub/sub variants).
     Tea,
-    /// `Std.Ui` / `Std.Html` element and attribute builders (M7).
+    /// `Std.Ui` / `Std.Html` element and attribute builders.
     Ui,
-    /// `Std.Live` app-entry kernels (M7).
+    /// `Std.Live` app-entry kernels.
     Live,
-    /// `Std.Tui` app-entry kernels (M7).
+    /// `Std.Tui` app-entry kernels.
     Tui,
-    /// `Std.Webview` app-entry kernel (M7).
+    /// `Std.Webview` app-entry kernel.
     Webview,
-    /// `Std.Cli` / `Sky.Cli` app-entry kernel (#111).
+    /// `Std.Cli` / `Sky.Cli` app-entry kernel.
     Cli,
     /// Reserved for the FFI kernel tier (Phase B+).
     Ffi,
 }
 
-/// The event-payload shape of a `Std.Html.Events` builder (#107).
+/// The event-payload shape of a `Std.Html.Events` builder.
 ///
 /// Drives both the constrain scheme (the argument type) and the backend emit
 /// arm (which `html::Event` variant to construct). Making the shape an ADT —
@@ -72,7 +72,7 @@ pub enum HtmlEventShape {
     /// the Sky/HM level only; the codegen-side runtime constructor
     /// (`html_on_raw_`) now builds `Event::OnForm` with the concrete payload
     /// type recovered via Rust generic inference — never `Arc<dyn Any>` at
-    /// runtime (#109/#156).
+    /// runtime.
     Raw,
 }
 
@@ -195,7 +195,7 @@ pub enum StdlibKernel {
     ListAny,
     ListAll,
     ListFind,
-    // ── List batch (#119) ───────────────────────────────────────────────────
+    // ── List batch ───────────────────────────────────────────────────
     ListFilterMap,
     ListSortBy,
     // ── Basics (core Prelude) ────────────────────────────────────────────────
@@ -210,7 +210,7 @@ pub enum StdlibKernel {
     /// the `Comparable a` (Ord) obligation via `constrain_var_kernel`, exactly
     /// like `Math.min` / `Math.max`.
     BasicsClamp,
-    // ── Basics numerics (#115) ──────────────────────────────────────────────
+    // ── Basics numerics ──────────────────────────────────────────────
     /// `negate : number -> number` — unary negation on Int or Float.
     /// Also the runtime target for the `-x` desugar (`negate x`).
     BasicsNegate,
@@ -228,12 +228,12 @@ pub enum StdlibKernel {
     /// `-1 / 0 / 1` int on the Go/Sky backend — sanctioned divergence).
     /// The `comparable` (`Ord`) constraint is enforced via `constrain_var_kernel`.
     BasicsCompare,
-    // ── end Basics numerics (#115) ──────────────────────────────────────────
-    // ── Error (Sky.Core.Error — minimal `Error = String` slice, #86) ─────────
+    // ── end Basics numerics ──────────────────────────────────────────
+    // ── Error (Sky.Core.Error — minimal `Error = String` slice) ─────────
     // Message-carrying constructors: `String -> Error`. With `SkyError = String`
     // the message IS the error value, so all eight collapse to one identity
     // runtime symbol (`sky_error_from_message`); the distinct Sky-level names are
-    // preserved for the rich-ADT upgrade (#85).
+    // preserved for the rich-ADT upgrade.
     ErrorUnexpected,
     ErrorInvalidInput,
     ErrorIo,
@@ -255,7 +255,7 @@ pub enum StdlibKernel {
     // Modifier (backlog #85 follow-up): `ErrorDetails -> Error -> Error`
     // (attaches the `ErrorDetails` union to `ErrorInfo.details`).
     ErrorWithDetails,
-    // ── CssSafety (Sky.Core.CssSafety — Std.Css leaf security kernels, #47) ───
+    // ── CssSafety (Sky.Core.CssSafety — Std.Css leaf security kernels) ───
     // The FOUR primitive leaf shims over the audited `css_safety` policy that the
     // compiled-source `Std.Css` funnels every free-string entry through (PARSE,
     // DON'T VALIDATE). `safeValue`/`safePropName`/`safeSelector` are the
@@ -271,14 +271,14 @@ pub enum StdlibKernel {
     MaybeMap,
     MaybeAndThen,
     /// `Maybe.map2` .. `Maybe.map5` — apply an N-ary function across N `Maybe`s;
-    /// the first `Nothing` short-circuits (#88).
+    /// the first `Nothing` short-circuits.
     MaybeMap2,
     MaybeMap3,
     MaybeMap4,
     MaybeMap5,
-    /// `Maybe.andMap : Maybe a -> Maybe (a -> b) -> Maybe b` (#88).
+    /// `Maybe.andMap : Maybe a -> Maybe (a -> b) -> Maybe b`.
     MaybeAndMap,
-    /// `Maybe.combine : List (Maybe a) -> Maybe (List a)` (#88).
+    /// `Maybe.combine : List (Maybe a) -> Maybe (List a)`.
     MaybeCombine,
     // ── Result ──────────────────────────────────────────────────────────────
     ResultWithDefault,
@@ -286,14 +286,14 @@ pub enum StdlibKernel {
     ResultAndThen,
     ResultMapError,
     /// `Result.map2` .. `Result.map5` — apply an N-ary function across N
-    /// `Result`s over a shared error channel; the first `Err` short-circuits (#88).
+    /// `Result`s over a shared error channel; the first `Err` short-circuits.
     ResultMap2,
     ResultMap3,
     ResultMap4,
     ResultMap5,
-    /// `Result.andMap : Result e a -> Result e (a -> b) -> Result e b` (#88).
+    /// `Result.andMap : Result e a -> Result e (a -> b) -> Result e b`.
     ResultAndMap,
-    /// `Result.combine : List (Result e a) -> Result e (List a)` (#88).
+    /// `Result.combine : List (Result e a) -> Result e (List a)`.
     ResultCombine,
     /// `Result.traverse : (a -> Result e b) -> List a -> Result e (List b)`
     /// — one-pass map+collect; first `Err` short-circuits (#88, runtime fn
@@ -446,7 +446,7 @@ pub enum StdlibKernel {
     JwtDecodeHs256,
     JwtEncodeRs256,
     JwtDecodeRs256,
-    // ── Jwt builder API (D-00, #152) ─────────────────────────────────────────
+    // ── Jwt builder API ─────────────────────────────────────────
     /// `Jwt.claims` — arity 0; returns an empty `Claims` accumulator.
     JwtClaims,
     /// `Jwt.hs256 : String -> Algorithm` — builds an HS256 algorithm descriptor.
@@ -676,14 +676,14 @@ pub enum StdlibKernel {
     MiddlewareWithRateLimit,
     MiddlewareWithCsrf,
     RateLimitAllow,
-    // ── M7: Std.Ui / Std.Html render kernels ─────────────────────────────────
+    // ── Std.Ui / Std.Html render kernels ─────────────────────────────────
     UiLayout,
     UiLayoutWith,
     HtmlRender,
     HtmlEscapeText,
     HtmlEscapeAttr,
     HtmlAttrToString,
-    // ── M7: Std.Ui element builders ──────────────────────────────────────────
+    // ── Std.Ui element builders ──────────────────────────────────────────
     UiNone,
     UiText,
     UiHtml,
@@ -701,7 +701,7 @@ pub enum StdlibKernel {
     /// `Ui.image : List Attr -> { src : String, description : String } -> Element msg`
     /// — renders `<img src=… alt=…>` (a void `TaggedNode`, no children).
     UiImage,
-    // ── M7: Std.Ui nearby attribute builders (absolute-positioned overlays) ──
+    // ── Std.Ui nearby attribute builders (absolute-positioned overlays) ──
     /// `Ui.above : Element msg -> Attribute msg`
     UiAbove,
     /// `Ui.below : Element msg -> Attribute msg`
@@ -714,7 +714,7 @@ pub enum StdlibKernel {
     UiInFront,
     /// `Ui.behind : Element msg -> Attribute msg`
     UiBehind,
-    // ── M7: Std.Ui attribute builders ────────────────────────────────────────
+    // ── Std.Ui attribute builders ────────────────────────────────────────
     UiSpacing,
     UiPadding,
     UiPaddingXY,
@@ -741,7 +741,7 @@ pub enum StdlibKernel {
     /// `Ui.scrollbarY : Attribute msg` — `AttrOverflow "hidden" "auto"`.
     UiScrollbarY,
     UiGridColumns,
-    // ── M7: Std.Ui Length builders ───────────────────────────────────────────
+    // ── Std.Ui Length builders ───────────────────────────────────────────
     UiPx,
     UiFill,
     UiContent,
@@ -751,7 +751,7 @@ pub enum StdlibKernel {
     UiVw,
     UiMinimum,
     UiMaximum,
-    // ── M7: Std.Ui Color builders ────────────────────────────────────────────
+    // ── Std.Ui Color builders ────────────────────────────────────────────
     UiRgb,
     UiRgba,
     UiWhite,
@@ -759,7 +759,7 @@ pub enum StdlibKernel {
     UiTransparent,
     /// `Ui.colorCss color` — convert a `Color` to its CSS string representation.
     UiColorCss,
-    // ── M7: Background / Border / Font sub-modules ───────────────────────────
+    // ── Background / Border / Font sub-modules ───────────────────────────
     BackgroundColor,
     BackgroundImage,
     /// `Background.linearGradient : Float -> List (Float, Color) -> Attribute msg`
@@ -778,7 +778,7 @@ pub enum StdlibKernel {
     FontFamily,
     FontBold,
     FontItalic,
-    // ── M7: Html element builders ────────────────────────────────────────────
+    // ── Html element builders ────────────────────────────────────────────
     HtmlTextNode,
     HtmlRawNode,
     HtmlNode,
@@ -810,7 +810,7 @@ pub enum StdlibKernel {
     HtmlP,
     HtmlInput,
     HtmlImg,
-    // ── #76 batch 2: Std.Html ELEMENT builders (tag-as-data) ──────────
+    // ── Std.Html ELEMENT builders (tag-as-data) ──────────
     // Container elements (arity-2 attrs->children) and void elements (arity-1
     // attrs) that all route through the generic `html_node_` runtime sink with
     // their wire tag from `html_element_tag`. See `is_html_container`/`is_html_void`.
@@ -890,7 +890,7 @@ pub enum StdlibKernel {
     HtmlSource,
     HtmlTrack,
     HtmlWbr,
-    // ── #76: Std.Html.Attributes builders (corpus-used direct-backing) ───────
+    // ── Std.Html.Attributes builders (corpus-used direct-backing) ───────
     // String fixed-key attributes (`String -> Attribute msg`). The wire key is
     // the member name except `type_`→`type` / `for_`→`for` (see `html_attr_key`).
     HtmlAttrClass,
@@ -918,17 +918,17 @@ pub enum StdlibKernel {
     HtmlAttribute,     // `attribute : String -> String -> Attribute msg`
     HtmlBoolAttribute, // `boolAttribute : String -> Bool -> Attribute msg`
     HtmlNoAttr,        // `noAttr : Attribute msg`
-    // ── M7: Std.Live app-entry kernels ───────────────────────────────────────
+    // ── Std.Live app-entry kernels ───────────────────────────────────────
     LiveApp,
     LiveAppRouted,
     LiveRoute,
     LiveRenderStatic,
-    // ── M7: Std.Tui app-entry kernels ────────────────────────────────────────
+    // ── Std.Tui app-entry kernels ────────────────────────────────────────
     TuiProgram,
     TuiApp,
-    // ── M7: Std.Webview app-entry kernel ─────────────────────────────────────
+    // ── Std.Webview app-entry kernel ─────────────────────────────────────
     WebviewApp,
-    // ── M7: event-attribute builders (Phase-1a) ──────────────────────────────
+    // ── event-attribute builders (Phase-1a) ──────────────────────────────
     UiOnClick,
     UiOnFocus,
     UiOnBlur,
@@ -944,7 +944,7 @@ pub enum StdlibKernel {
     /// `"sky-file"`; the browser-side driver reads the chosen file, base64
     /// data-URL-encodes it, and dispatches the URL string to the handler.
     UiOnFile,
-    // ── #107: Std.Html.Events builders — produce `Std.Html.Attribute msg`
+    // ── Std.Html.Events builders — produce `Std.Html.Attribute msg`
     // (`html_attr`), so they unify with `Std.Html.Attributes` builders and the
     // element builders' `List (Std.Html.Attribute msg)` slot. Distinct from the
     // `UiOn*` kernels above, which produce the `Std.Ui.Attribute` variant for
@@ -960,7 +960,7 @@ pub enum StdlibKernel {
     HtmlOnKeyDown,
     HtmlOnKeyUp,
     HtmlOnBool,
-    // ── #76 Tier 1: Std.Ui extended attribute builders ───────────────────────
+    // ── Std.Ui extended attribute builders ───────────────────────
     // Ui namespace — aspect-ratio + htmlAttribute + name/style/cinemascope
     UiSquare,         // nullary Attr: "1 / 1"
     UiWidescreen,     // nullary Attr: "16 / 9"
@@ -973,7 +973,7 @@ pub enum StdlibKernel {
     UiTransitionRaw,  // String → Bool → Attr (CSS transition shorthand + respect-reduced-motion flag)
     UiGridTracksRaw,  // String → String → Attr (grid-template-columns + grid-template-rows)
     UiAnimateRaw,     // String → String → String → Bool → Attr (name + shorthand-tail + @keyframes body + respect flag)
-    // ── #154: Breakpoint opaque constants + Ui.breakpoint wrapper ────────────
+    // ── Breakpoint opaque constants + Ui.breakpoint wrapper ────────────
     /// `Ui.breakpoint : Breakpoint -> List (Attribute msg) -> Element msg -> Element msg`
     ///
     /// Delegates to `Ui.mediaQuery` at runtime (`ui_breakpoint_` →
@@ -1002,7 +1002,7 @@ pub enum StdlibKernel {
     UiDarkMode,      // Breakpoint constant: "(prefers-color-scheme: dark)"
     UiLightMode,     // Breakpoint constant: "(prefers-color-scheme: light)"
     UiReducedMotion, // Breakpoint constant: "(prefers-reduced-motion: reduce)"
-    // ── #76: PseudoClass opaque constants + Ui.onPseudo generic escape hatch ──
+    // ── PseudoClass opaque constants + Ui.onPseudo generic escape hatch ──
     // `PseudoClass` is a genuine 5-constructor opaque runtime type (mirrors
     // `sky_runtime::ui::element::PseudoClass` byte-for-byte — the SAME enum
     // `Background.hoverColor` / `Border.hoverColor` / `Font.hoverColor` already
@@ -1077,7 +1077,7 @@ pub enum StdlibKernel {
     // Html.Attributes — tabindex, rows
     HtmlAttrTabindex, // Int → HtmlAttr
     HtmlAttrRows,     // Int → HtmlAttr  (<textarea rows="N">)
-    // ── #111: Effect stdlib modules ────────────────────────────────────────
+    // ── Effect stdlib modules ────────────────────────────────────────
     // Std.Cli / Sky.Cli — line-oriented TEA app-entry (fully wired).
     CliProgram,
     // Std.Auth / Sky.Auth — authentication helpers (fail-closed: no lower arm
@@ -1103,7 +1103,7 @@ pub enum StdlibKernel {
     /// `Http.Stream.chunks sid toMsg` — subscribes to stream chunks; returns `Sub msg`.
     /// Classified as TEA (not server) because it returns `SkySub<M>`.
     HttpStreamChunks,
-    // ── #127: Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
+    // ── Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
     WsDefaultCfg,           // WebSocketServerCfg (arity 0)
     WsWithOnConnect,        // (WebSocketServer -> Task Error ()) -> WebSocketServerCfg -> WebSocketServerCfg (arity 2)
     WsWithOnMessage,        // (WebSocketServer -> String -> Task Error ()) -> WebSocketServerCfg -> WebSocketServerCfg (arity 2)
@@ -1116,7 +1116,7 @@ pub enum StdlibKernel {
     WsSendBinaryToClient,   // WebSocketServer -> Bytes -> Task Error () (arity 2)
     WsBroadcast,            // List WebSocketServer -> String -> Task Error () (arity 2)
     WsCloseClient,          // WebSocketServer -> Task Error () (arity 1)
-    // ── Std.Ui.Region (#117) ──────────────────────────────────────────────
+    // ── Std.Ui.Region ──────────────────────────────────────────────
     RegionMainContent,   // Attribute msg (arity 0)
     RegionNavigation,    // Attribute msg (arity 0)
     RegionFooter,        // Attribute msg (arity 0)
@@ -1136,7 +1136,7 @@ pub enum StdlibKernel {
     UiDescLiveAssertive, // Description (arity 0)
     UiDescHeading,       // Int -> Description (arity 1)
     UiDescLabel,         // String -> Description (arity 1)
-    // ── Std.Ui.Input (#124) ──────────────────────────────────────────────────
+    // ── Std.Ui.Input ──────────────────────────────────────────────────
     /// `Input.labelAbove : List (Attribute msg) -> Element msg -> Label msg`
     InputLabelAbove,
     /// `Input.labelBelow : List (Attribute msg) -> Element msg -> Label msg`
@@ -1173,7 +1173,7 @@ pub enum StdlibKernel {
     InputRadio,
     /// `Input.radioRow : List (Attribute msg) -> { onChange, options, selected, label } -> Element msg`
     InputRadioRow,
-    // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────────────
+    // ── Std.Ui.Lazy ────────────────────────────────────────────────────
     /// `Lazy.lazy : (a -> Element msg) -> a -> Element msg`
     ///
     /// **Eager in v1.** Sky's Go runtime memoises the subtree; ipê evaluates
@@ -1275,7 +1275,7 @@ pub enum StdlibKernel {
     DecSubPercent,
     /// `Decimal.formatWith : String -> String -> Int -> Decimal -> String`
     DecFormatWith,
-    // ── Std.Db.Sql — SqlFragment builder (backlog #61) ───────────────────────
+    // ── Std.Db.Sql — SqlFragment builder ───────────────────────
     // Typed, parameterized WHERE-fragment combinators. Replace the removed
     // `Db.unsafeFindWhere` raw-string escape hatch: a `SqlFragment` can only be
     // constructed through these kernels, so SQL injection via a hand-built
@@ -1328,7 +1328,7 @@ pub enum StdlibKernel {
     DbFindWhere,
     /// `Db.deleteWhere : Db -> String -> SqlFragment -> Task Error Int`
     DbDeleteWhere,
-    // ── Sky.Core.Secret — opaque secret-string wrapper (backlog #44) ─────────
+    // ── Sky.Core.Secret — opaque secret-string wrapper ─────────
     // The ONLY public constructor: every `Secret` value traces back to one of
     // these calls. Never derivable from a bare `String` implicitly.
     /// `Secret.fromString : String -> Secret` — the seal; construction boundary.
@@ -1340,9 +1340,9 @@ pub enum StdlibKernel {
     /// `sky_runtime::secret`'s hand-written `SkyStringify` impl).
     SecretRedacted,
 
-    // ── Sky.Core.Regex — RE2 helpers (#194) ──────────────────────────────────
+    // ── Sky.Core.Regex — RE2 helpers ──────────────────────────────────
     // Pure, total kernels routed via the compiled-source `Sky.Core.Regex`
-    // Layer-3 surface + `Ffi.kernel "Regex_*"` aliases (#196). Runtime fns
+    // Layer-3 surface + `Ffi.kernel "Regex_*"` aliases. Runtime fns
     // (`sky_runtime::regex_kernel::*`) are re-exported ungated — no feature gate
     // and no `project.rs` thread needed (the emitted `mod.rs` declares
     // `regex_kernel` unconditionally, deps always present).
@@ -1357,7 +1357,7 @@ pub enum StdlibKernel {
     /// `Regex.split : String -> String -> List String` — split on every match.
     RegexSplit,
 
-    // ── Sky.Core.Path — pure filesystem-path helpers (#202) ───────────────────
+    // ── Sky.Core.Path — pure filesystem-path helpers ───────────────────
     // Pure, total kernels routed via the compiled-source `Sky.Core.Path`
     // Layer-3 surface + `Ffi.kernel "Path_*"` aliases. Runtime fns
     // (`sky_runtime::path::*`) are re-exported ungated (same posture as Regex).
@@ -1370,7 +1370,7 @@ pub enum StdlibKernel {
     /// `Path.isAbsolute : String -> Bool` — does the path start from the root?
     PathIsAbsolute,
 
-    // ── Std.Trace — opt-in tracing spans (#197) ──────────────────────────────
+    // ── Std.Trace — opt-in tracing spans ──────────────────────────────
     // Task-effectful; runtime fns `sky_runtime::trace::*` are re-exported
     // (emitted `mod.rs` declares `trace` unconditionally). Class `Pure` (the
     // effect lives in the `Task` scheme, same as File/Io/Http).
@@ -1381,7 +1381,7 @@ pub enum StdlibKernel {
     /// `Trace.attr : String -> String -> Task Error ()` — annotate the span.
     TraceAttr,
 
-    // ── Std.Compression — gzip + zstd (#197) ─────────────────────────────────
+    // ── Std.Compression — gzip + zstd ─────────────────────────────────
     // Task-effectful; runtime `sky_runtime::compression::*`. Operates on `Bytes`
     // (`Vec<u8>`) to match the runtime `compression_*(Vec<u8>) -> Vec<u8>` shape.
     /// `Compression.gzip : Bytes -> Task Error Bytes`.
@@ -1393,7 +1393,7 @@ pub enum StdlibKernel {
     /// `Compression.zstdDecompress : Bytes -> Task Error Bytes`.
     CompressionZstdDecompress,
 
-    // ── Std.Csv — RFC 4180 encode/decode (#197) ──────────────────────────────
+    // ── Std.Csv — RFC 4180 encode/decode ──────────────────────────────
     // Runtime `sky_runtime::csv::*`. `Csv` is the record
     // `{ header : List String, rows : List (List String) }`.
     /// `Csv.parse : String -> Result Error Csv`.
@@ -1407,7 +1407,7 @@ pub enum StdlibKernel {
     /// `Csv.parseStreamFromFile : String -> Task Error (List (List String))`.
     CsvParseStreamFromFile,
 
-    // ── Std.Cache — in-memory LRU + TTL cache (#210) ─────────────────────────
+    // ── Std.Cache — in-memory LRU + TTL cache ─────────────────────────
     // Task-effectful; runtime `sky_runtime::cache::*` (the emitted `mod.rs`
     // declares `cache` unconditionally — same ungated-vendoring posture as
     // Csv/Compression). Routed via the compiled-source `Std.Cache` Layer-3
@@ -1543,7 +1543,7 @@ impl StdlibKernel {
             Self::ListAny => d("List", "any", 2, Pure, "list_any"),
             Self::ListAll => d("List", "all", 2, Pure, "list_all"),
             Self::ListFind => d("List", "find", 2, Pure, "list_find"),
-            // ── List batch (#119) ────────────────────────────────────────────
+            // ── List batch ────────────────────────────────────────────
             Self::ListFilterMap => d("List", "filterMap", 2, Pure, "list_filter_map"),
             Self::ListSortBy => d("List", "sortBy", 2, Pure, "list_sort_by"),
             Self::BasicsNot => d("Basics", "not", 1, Pure, "basics_not"),
@@ -1554,15 +1554,15 @@ impl StdlibKernel {
             Self::BasicsModBy => d("Basics", "modBy", 2, Pure, "basics_mod_by"),
             Self::BasicsClamp => d("Basics", "clamp", 3, Pure, "basics_clamp"),
             Self::BasicsToString => d("Basics", "toString", 1, Pure, "basics_to_string"),
-            // ── Basics numerics (#115) ──────────────────────────────────────────
+            // ── Basics numerics ──────────────────────────────────────────
             Self::BasicsNegate => d("Basics", "negate", 1, Pure, "basics_negate"),
             Self::BasicsAbs    => d("Basics", "abs",    1, Pure, "basics_abs"),
             Self::BasicsSqrt   => d("Basics", "sqrt",   1, Pure, "math_sqrt"),
             Self::BasicsMin    => d("Basics", "min",    2, Pure, "math_min"),
             Self::BasicsMax    => d("Basics", "max",    2, Pure, "math_max"),
             Self::BasicsCompare => d("Basics", "compare", 2, Pure, "basics_compare"),
-            // ── end Basics numerics (#115) ──────────────────────────────────────
-            // ── Error (Sky.Core.Error — real Error/ErrorKind ADT, #85/#160) ──
+            // ── end Basics numerics ──────────────────────────────────────
+            // ── Error (Sky.Core.Error — real Error/ErrorKind ADT) ──
             // Each message constructor classifies its own `ErrorKind` at
             // construction (`sky_runtime::error::SkyError`, no longer a
             // shared string-identity). `toString` reuses the existing
@@ -1590,7 +1590,7 @@ impl StdlibKernel {
             Self::ErrorWithDetails => {
                 d("Error", "withDetails", 2, Pure, "sky_error_with_details")
             }
-            // ── CssSafety (Sky.Core.CssSafety — Std.Css leaf kernels, #47) ────
+            // ── CssSafety (Sky.Core.CssSafety — Std.Css leaf kernels) ────
             // The `emit` symbols are the bare runtime fn names re-exported at the
             // `sky_runtime` root (`pub use css::*`): `safe_value` /
             // `safe_prop_name` / `safe_selector` / `strip_style_close_kernel`.
@@ -1842,7 +1842,7 @@ impl StdlibKernel {
             Self::JwtDecodeHs256 => d("Jwt", "decodeHs256", 2, Pure, "sky_jwt_decode_hs256"),
             Self::JwtEncodeRs256 => d("Jwt", "encodeRs256", 2, Pure, "sky_jwt_encode_rs256"),
             Self::JwtDecodeRs256 => d("Jwt", "decodeRs256", 2, Pure, "sky_jwt_decode_rs256"),
-            // ── Jwt builder API (D-00, #152) ──────────────────────────────────
+            // ── Jwt builder API ──────────────────────────────────
             Self::JwtClaims => d("Jwt", "claims", 0, Pure, "sky_jwt_claims"),
             Self::JwtHs256 => d("Jwt", "hs256", 1, Pure, "sky_jwt_hs256"),
             Self::JwtRs256 => d("Jwt", "rs256", 1, Pure, "sky_jwt_rs256"),
@@ -2078,14 +2078,14 @@ impl StdlibKernel {
                 d("Middleware", "withCsrf", 1, Server, "middleware_with_csrf")
             }
             Self::RateLimitAllow => d("RateLimit", "allow", 4, Server, "rate_limit_allow"),
-            // ── M7: Std.Ui / Std.Html render kernels ─────────────────────────
+            // ── Std.Ui / Std.Html render kernels ─────────────────────────
             Self::UiLayout => d("Ui", "layout", 2, Ui, "ui_layout"),
             Self::UiLayoutWith => d("Ui", "layoutWith", 2, Ui, "ui_layout_with"),
             Self::HtmlRender => d("Html", "render", 1, Ui, "html_render_"),
             Self::HtmlEscapeText => d("Html", "escapeHtml", 1, Ui, "html_escape_text_"),
             Self::HtmlEscapeAttr => d("Html", "escapeAttr", 1, Ui, "html_escape_attr_"),
             Self::HtmlAttrToString => d("Html", "attrToString", 1, Ui, "html_attr_to_string_"),
-            // ── M7: Std.Ui element builders ──────────────────────────────────
+            // ── Std.Ui element builders ──────────────────────────────────
             Self::UiNone => d("Ui", "none", 0, Ui, "ui_none_"),
             Self::UiText => d("Ui", "text", 1, Ui, "ui_text_"),
             Self::UiHtml => d("Ui", "html", 1, Ui, "ui_html_"),
@@ -2100,14 +2100,14 @@ impl StdlibKernel {
             Self::UiLink => d("Ui", "link", 2, Ui, "ui_link_"),
             Self::UiForm => d("Ui", "form", 2, Ui, "ui_form_"),
             Self::UiImage => d("Ui", "image", 2, Ui, "ui_image_"),
-            // ── M7: Std.Ui nearby attribute builders ───────────────────────
+            // ── Std.Ui nearby attribute builders ───────────────────────
             Self::UiAbove => d("Ui", "above", 1, Ui, "ui_above_"),
             Self::UiBelow => d("Ui", "below", 1, Ui, "ui_below_"),
             Self::UiOnLeft => d("Ui", "onLeft", 1, Ui, "ui_on_left_"),
             Self::UiOnRight => d("Ui", "onRight", 1, Ui, "ui_on_right_"),
             Self::UiInFront => d("Ui", "inFront", 1, Ui, "ui_in_front_"),
             Self::UiBehind => d("Ui", "behind", 1, Ui, "ui_behind_"),
-            // ── M7: Std.Ui attribute builders ────────────────────────────────
+            // ── Std.Ui attribute builders ────────────────────────────────
             Self::UiSpacing => d("Ui", "spacing", 1, Ui, "ui_spacing_"),
             Self::UiPadding => d("Ui", "padding", 1, Ui, "ui_padding_"),
             Self::UiPaddingXY => d("Ui", "paddingXY", 2, Ui, "ui_padding_xy_"),
@@ -2128,7 +2128,7 @@ impl StdlibKernel {
             Self::UiScrollbarX => d("Ui", "scrollbarX", 0, Ui, "ui_scrollbar_x_"),
             Self::UiScrollbarY => d("Ui", "scrollbarY", 0, Ui, "ui_scrollbar_y_"),
             Self::UiGridColumns => d("Ui", "gridColumns", 1, Ui, "ui_grid_columns_"),
-            // ── M7: Std.Ui Length builders ───────────────────────────────────
+            // ── Std.Ui Length builders ───────────────────────────────────
             Self::UiPx => d("Ui", "px", 1, Ui, "ui_px_"),
             Self::UiFill => d("Ui", "fill", 0, Ui, "ui_fill_"),
             Self::UiContent => d("Ui", "content", 0, Ui, "ui_content_"),
@@ -2138,14 +2138,14 @@ impl StdlibKernel {
             Self::UiVw => d("Ui", "vw", 1, Ui, "ui_vw_"),
             Self::UiMinimum => d("Ui", "minimum", 2, Ui, "ui_minimum_"),
             Self::UiMaximum => d("Ui", "maximum", 2, Ui, "ui_maximum_"),
-            // ── M7: Std.Ui Color builders ────────────────────────────────────
+            // ── Std.Ui Color builders ────────────────────────────────────
             Self::UiRgb => d("Ui", "rgb", 3, Ui, "ui_rgb_"),
             Self::UiRgba => d("Ui", "rgba", 4, Ui, "ui_rgba_"),
             Self::UiWhite => d("Ui", "white", 0, Ui, "ui_white_"),
             Self::UiBlack => d("Ui", "black", 0, Ui, "ui_black_"),
             Self::UiTransparent => d("Ui", "transparent", 0, Ui, "ui_transparent_"),
             Self::UiColorCss => d("Ui", "colorCss", 1, Ui, "ui_color_css_"),
-            // ── M7: Background / Border / Font sub-modules ───────────────────
+            // ── Background / Border / Font sub-modules ───────────────────
             Self::BackgroundColor => d("Background", "color", 1, Ui, "ui_background_color_"),
             Self::BackgroundImage => d("Background", "image", 1, Ui, "ui_background_image_"),
             Self::BackgroundLinearGradient => d(
@@ -2169,7 +2169,7 @@ impl StdlibKernel {
             Self::FontFamily => d("Font", "family", 1, Ui, "ui_font_family_"),
             Self::FontBold => d("Font", "bold", 0, Ui, "ui_font_bold_"),
             Self::FontItalic => d("Font", "italic", 0, Ui, "ui_font_italic_"),
-            // ── M7: Html element builders ────────────────────────────────────
+            // ── Html element builders ────────────────────────────────────
             Self::HtmlTextNode => d("Html", "text", 1, Ui, "html_text_node_"),
             Self::HtmlRawNode => d("Html", "raw", 1, Ui, "html_raw_node_"),
             Self::HtmlNode => d("Html", "node", 3, Ui, "html_node_"),
@@ -2178,7 +2178,7 @@ impl StdlibKernel {
             Self::HtmlTitleNode => d("Html", "titleNode", 1, Ui, "html_title_node_"),
             Self::HtmlToString => d("Html", "toString", 1, Ui, "html_render_"),
             Self::HtmlStyleNode => d("Html", "styleNode", 2, Ui, "html_style_node_"),
-            // Arity corrected 3→2 / 2→1 (task #74): the tag is a baked literal,
+            // Arity corrected 3→2 / 2→1: the tag is a baked literal,
             // not a parameter — `html_div_` etc. take (attrs, children) = 2, the
             // void `html_input_`/`html_img_` take (attrs) = 1. Runtime fn params
             // AND lower `callee_arity` (2/1) are the authorities; the old decl
@@ -2190,7 +2190,7 @@ impl StdlibKernel {
             Self::HtmlP => d("Html", "p", 2, Ui, "html_p_"),
             Self::HtmlInput => d("Html", "input", 1, Ui, "html_input_"),
             Self::HtmlImg => d("Html", "img", 1, Ui, "html_img_"),
-            // ── #76 batch 2: Std.Html element builders (tag baked via decl name) ─
+            // ── Std.Html element builders (tag baked via decl name) ─
             Self::HtmlH1 => d("Html", "h1", 2, Ui, "html_node_"),
             Self::HtmlH2 => d("Html", "h2", 2, Ui, "html_node_"),
             Self::HtmlH3 => d("Html", "h3", 2, Ui, "html_node_"),
@@ -2259,7 +2259,7 @@ impl StdlibKernel {
             Self::HtmlSource => d("Html", "source", 1, Ui, "html_node_"),
             Self::HtmlTrack => d("Html", "track", 1, Ui, "html_node_"),
             Self::HtmlWbr => d("Html", "wbr", 1, Ui, "html_node_"),
-            // ── #76: Std.Html.Attributes builders ────────────────────────────
+            // ── Std.Html.Attributes builders ────────────────────────────
             // Qualifier "Attr" matches the `QUALIFIERS` table in env.rs. Emit
             // routes through the two generic runtime helpers; the fixed key is
             // supplied by the emit arm (see `html_attr_key`).
@@ -2286,17 +2286,17 @@ impl StdlibKernel {
             Self::HtmlAttribute => d("Attr", "attribute", 2, Ui, "html_named_attr_"),
             Self::HtmlBoolAttribute => d("Attr", "boolAttribute", 2, Ui, "html_bool_named_attr_"),
             Self::HtmlNoAttr => d("Attr", "noAttr", 0, Ui, "html_no_attr_"),
-            // ── M7: Std.Live app-entry kernels ───────────────────────────────
+            // ── Std.Live app-entry kernels ───────────────────────────────
             Self::LiveApp => d("Live", "app", 1, Live, "live_app"),
             Self::LiveAppRouted => d("Live", "appRouted", 1, Live, "live_app_routed"),
             Self::LiveRoute => d("Live", "route", 2, Live, "live_route"),
             Self::LiveRenderStatic => d("Live", "renderStatic", 2, Live, "live_render_static"),
-            // ── M7: Std.Tui app-entry kernels ────────────────────────────────
+            // ── Std.Tui app-entry kernels ────────────────────────────────
             Self::TuiProgram => d("Tui", "program", 1, Tui, "tui_app"),
             Self::TuiApp => d("Tui", "app", 1, Tui, "tui_app_ui"),
-            // ── M7: Std.Webview app-entry kernel ─────────────────────────────
+            // ── Std.Webview app-entry kernel ─────────────────────────────
             Self::WebviewApp => d("Webview", "app", 1, Webview, "webview_app"),
-            // ── M7: event-attribute builders ─────────────────────────────────
+            // ── event-attribute builders ─────────────────────────────────
             Self::UiOnClick => d("Ui", "onClick", 1, Ui, "ui_on_click_"),
             Self::UiOnFocus => d("Ui", "onFocus", 1, Ui, "ui_on_focus_"),
             Self::UiOnBlur => d("Ui", "onBlur", 1, Ui, "ui_on_blur_"),
@@ -2309,7 +2309,7 @@ impl StdlibKernel {
             Self::UiOnBool => d("Ui", "onBool", 1, Ui, "ui_on_bool_"),
             Self::UiOnSubmit => d("Ui", "onSubmit", 1, Ui, "ui_on_submit_"),
             Self::UiOnFile => d("Ui", "onFile", 1, Ui, "ui_on_file_"),
-            // ── #107: Std.Html.Events builders (qualifier "Event" — matches the
+            // ── Std.Html.Events builders (qualifier "Event" — matches the
             // `QUALIFIERS` table in env.rs). Each produces `html::Attribute<M>`
             // via a dedicated runtime constructor (family `Ui` so emit routes
             // through `emit_ui_call`). The emit arm supplies the fixed wire
@@ -2325,7 +2325,6 @@ impl StdlibKernel {
             Self::HtmlOnKeyDown => d("Event", "onKeyDown", 1, Ui, "html_on_string_"),
             Self::HtmlOnKeyUp => d("Event", "onKeyUp", 1, Ui, "html_on_string_"),
             Self::HtmlOnBool => d("Event", "onBool", 1, Ui, "html_on_bool_"),
-            // ── #76 Tier 1 ────────────────────────────────────────────────────
             // Ui namespace
             Self::UiSquare => d("Ui", "square", 0, Ui, "ui_square_"),
             Self::UiWidescreen => d("Ui", "widescreen", 0, Ui, "ui_widescreen_"),
@@ -2344,7 +2343,7 @@ impl StdlibKernel {
             Self::UiAnimateRaw => {
                 d("Ui", "animateRaw", 4, Ui, "ui_animate_raw_")
             }
-            // #154: Breakpoint
+            // Breakpoint
             Self::UiBreakpoint => d("Ui", "breakpoint", 3, Ui, "ui_breakpoint_"),
             Self::UiMediaQuery => d("Ui", "mediaQuery", 3, Ui, "ui_media_query_"),
             Self::UiMobile => d("Ui", "mobile", 0, Ui, "ui_mobile_"),
@@ -2353,7 +2352,7 @@ impl StdlibKernel {
             Self::UiDarkMode => d("Ui", "darkMode", 0, Ui, "ui_dark_mode_"),
             Self::UiLightMode => d("Ui", "lightMode", 0, Ui, "ui_light_mode_"),
             Self::UiReducedMotion => d("Ui", "reducedMotion", 0, Ui, "ui_reduced_motion_"),
-            // #76: PseudoClass opaque constants + Ui.onPseudo
+            // PseudoClass opaque constants + Ui.onPseudo
             Self::UiOnPseudo => d("Ui", "onPseudo", 2, Ui, "ui_on_pseudo_"),
             Self::UiHover => d("Ui", "hover", 0, Ui, "ui_hover_"),
             Self::UiFocus => d("Ui", "focus", 0, Ui, "ui_focus_"),
@@ -2418,7 +2417,7 @@ impl StdlibKernel {
             // Html.Attributes
             Self::HtmlAttrTabindex => d("Attr", "tabindex", 1, Ui, "html_attr_tabindex_"),
             Self::HtmlAttrRows => d("Attr", "rows", 1, Ui, "html_attr_rows_"),
-            // ── #111: Effect stdlib modules ────────────────────────────────────
+            // ── Effect stdlib modules ────────────────────────────────────
             // Std.Cli / Sky.Cli app-entry (fully wired, Phase 1).
             Self::CliProgram => d("Cli", "program", 1, KernelClass::Cli, "cli_program"),
             // Std.Auth / Sky.Auth (fail-closed: qual-registered only, no lower arm).
@@ -2449,7 +2448,7 @@ impl StdlibKernel {
             }
             Self::HttpStreamClose => d("HttpStream", "close", 1, Pure, "http_stream_close"),
             Self::HttpStreamChunks => d("HttpStream", "chunks", 2, Pure, "sub_subscribe_stream"),
-            // ── #127: Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
+            // ── Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
             Self::WsDefaultCfg => d("Ws", "defaultCfg", 0, Server, "ws_server_default_cfg"),
             Self::WsWithOnConnect => d("Ws", "withOnConnect", 2, Server, "ws_server_with_on_connect"),
             Self::WsWithOnMessage => d("Ws", "withOnMessage", 2, Server, "ws_server_with_on_message"),
@@ -2468,7 +2467,7 @@ impl StdlibKernel {
             }
             Self::WsBroadcast => d("Ws", "broadcast", 2, Server, "ws_server_broadcast"),
             Self::WsCloseClient => d("Ws", "closeClient", 1, Server, "ws_server_close_client"),
-            // ── Std.Ui.Region (#117) ──────────────────────────────────────────────
+            // ── Std.Ui.Region ──────────────────────────────────────────────
             Self::RegionMainContent => d("Region", "mainContent", 0, Ui, "ui_region_main_content_"),
             Self::RegionNavigation => d("Region", "navigation", 0, Ui, "ui_region_navigation_"),
             Self::RegionFooter => d("Region", "footer", 0, Ui, "ui_region_footer_"),
@@ -2494,7 +2493,7 @@ impl StdlibKernel {
             }
             Self::UiDescHeading => d("Ui", "descHeading", 1, Ui, "ui_desc_heading_"),
             Self::UiDescLabel => d("Ui", "descLabel", 1, Ui, "ui_desc_label_"),
-            // ── Std.Ui.Input (#124) ───────────────────────────────────────────
+            // ── Std.Ui.Input ───────────────────────────────────────────
             Self::InputLabelAbove => d("Input", "labelAbove", 2, Ui, "input_label_above_"),
             Self::InputLabelBelow => d("Input", "labelBelow", 2, Ui, "input_label_below_"),
             Self::InputLabelLeft => d("Input", "labelLeft", 2, Ui, "input_label_left_"),
@@ -2514,7 +2513,7 @@ impl StdlibKernel {
             Self::InputOption => d("Input", "option", 2, Ui, "input_option_"),
             Self::InputRadio => d("Input", "radio", 2, Ui, "input_radio_"),
             Self::InputRadioRow => d("Input", "radioRow", 2, Ui, "input_radio_row_"),
-            // ── Std.Ui.Lazy (#146) ─────────────────────────────────────��──────
+            // ── Std.Ui.Lazy ─────────────────────────────────────��──────
             Self::LazyLazy  => d("Lazy", "lazy",  2, Ui, "lazy_lazy_"),
             Self::LazyLazy2 => d("Lazy", "lazy2", 3, Ui, "lazy_lazy2_"),
             Self::LazyLazy3 => d("Lazy", "lazy3", 4, Ui, "lazy_lazy3_"),
@@ -2564,7 +2563,7 @@ impl StdlibKernel {
             Self::DecAddPercent  => d("Decimal", "addPercent",  2, Pure, "decimal_add_percent"),
             Self::DecSubPercent  => d("Decimal", "subPercent",  2, Pure, "decimal_sub_percent"),
             Self::DecFormatWith  => d("Decimal", "formatWith",  4, Pure, "decimal_format_with"),
-            // ── Std.Db.Sql — SqlFragment builder (backlog #61) ───────────────
+            // ── Std.Db.Sql — SqlFragment builder ───────────────
             Self::SqlColumn => d("Sql", "column", 1, Db, "sql_column"),
             // `int` / `string` / `float` / `bool` are Sky-level type
             // narrowings of `param`; all five share the `sql_param` runtime
@@ -2589,11 +2588,11 @@ impl StdlibKernel {
             Self::SqlLike => d("Sql", "like", 2, Db, "sql_like"),
             Self::DbFindWhere => d("Db", "findWhere", 3, Db, "db_find_where"),
             Self::DbDeleteWhere => d("Db", "deleteWhere", 3, Db, "db_delete_where"),
-            // ── Sky.Core.Secret — opaque secret-string wrapper (backlog #44) ─
+            // ── Sky.Core.Secret — opaque secret-string wrapper ─
             Self::SecretFromString => d("Secret", "fromString", 1, Pure, "secret_from_string"),
             Self::SecretReveal => d("Secret", "reveal", 1, Pure, "secret_reveal"),
             Self::SecretRedacted => d("Secret", "redacted", 1, Pure, "secret_redacted"),
-            // ── Sky.Core.Regex (#194) ────────────────────────────────────────
+            // ── Sky.Core.Regex ────────────────────────────────────────
             // Runtime names MUST match `sky_runtime::regex_kernel::*` exactly
             // (note `regex_find_all`). Class `Pure` — the kernels are total/pure
             // (no effect); the HM scheme carries no `Task`.
@@ -2602,19 +2601,19 @@ impl StdlibKernel {
             Self::RegexFindAll => d("Regex", "findAll", 2, Pure, "regex_find_all"),
             Self::RegexReplace => d("Regex", "replace", 3, Pure, "regex_replace"),
             Self::RegexSplit => d("Regex", "split", 2, Pure, "regex_split"),
-            // ── Sky.Core.Path (#202) ─────────────────────────────────────────
+            // ── Sky.Core.Path ─────────────────────────────────────────
             // Runtime names MUST match `sky_runtime::path::*` exactly
             // (`path_is_absolute`). Pure/total, no effect.
             Self::PathBase => d("Path", "base", 1, Pure, "path_base"),
             Self::PathDir => d("Path", "dir", 1, Pure, "path_dir"),
             Self::PathExt => d("Path", "ext", 1, Pure, "path_ext"),
             Self::PathIsAbsolute => d("Path", "isAbsolute", 1, Pure, "path_is_absolute"),
-            // ── Std.Trace (#197) ─────────────────────────────────────────────
+            // ── Std.Trace ─────────────────────────────────────────────
             // Runtime names MUST match `sky_runtime::trace::*` exactly.
             Self::TraceSpan => d("Trace", "span", 2, Pure, "trace_span"),
             Self::TraceEvent => d("Trace", "event", 1, Pure, "trace_event"),
             Self::TraceAttr => d("Trace", "attr", 2, Pure, "trace_attr"),
-            // ── Std.Compression (#197) ───────────────────────────────────────
+            // ── Std.Compression ───────────────────────────────────────
             // Runtime names MUST match `sky_runtime::compression::*` exactly.
             Self::CompressionGzip => d("Compression", "gzip", 1, Pure, "compression_gzip"),
             Self::CompressionGunzip => d("Compression", "gunzip", 1, Pure, "compression_gunzip"),
@@ -2624,7 +2623,7 @@ impl StdlibKernel {
             Self::CompressionZstdDecompress => {
                 d("Compression", "zstdDecompress", 1, Pure, "compression_zstd_decompress")
             }
-            // ── Std.Csv (#197) ───────────────────────────────────────────────
+            // ── Std.Csv ───────────────────────────────────────────────
             Self::CsvParse => d("Csv", "parse", 1, Pure, "csv_parse"),
             Self::CsvParseWithDelimiter => {
                 d("Csv", "parseWithDelimiter", 2, Pure, "csv_parse_with_delimiter")
@@ -2636,7 +2635,7 @@ impl StdlibKernel {
             Self::CsvParseStreamFromFile => {
                 d("Csv", "parseStreamFromFile", 1, Pure, "csv_parse_stream_from_file")
             }
-            // ── Std.Cache (#210) ─────────────────────────────────────────────
+            // ── Std.Cache ─────────────────────────────────────────────
             // Runtime names MUST match `sky_runtime::cache::*` exactly. Alias
             // strings `Cache_newRaw`/`Cache_get`/… split to qualifier `Cache` +
             // the `*Raw`-stripped `name` written here; the emit column is the
@@ -2747,7 +2746,7 @@ impl StdlibKernel {
         Self::ListAny,
         Self::ListAll,
         Self::ListFind,
-        // ── List batch (#119) ────────────────────────────────────────────────
+        // ── List batch ────────────────────────────────────────────────
         Self::ListFilterMap,
         Self::ListSortBy,
         // Basics
@@ -2759,14 +2758,14 @@ impl StdlibKernel {
         Self::BasicsModBy,
         Self::BasicsClamp,
         Self::BasicsToString,
-        // ── Basics numerics (#115) ──────────────────────────────────────────
+        // ── Basics numerics ──────────────────────────────────────────
         Self::BasicsNegate,
         Self::BasicsAbs,
         Self::BasicsSqrt,
         Self::BasicsMin,
         Self::BasicsMax,
         Self::BasicsCompare,
-        // ── end Basics numerics (#115) ──────────────────────────────────────
+        // ── end Basics numerics ──────────────────────────────────────
         // Error (Sky.Core.Error — minimal `Error = String` slice, #86)
         Self::ErrorUnexpected,
         Self::ErrorInvalidInput,
@@ -3134,14 +3133,14 @@ impl StdlibKernel {
         Self::MiddlewareWithRateLimit,
         Self::MiddlewareWithCsrf,
         Self::RateLimitAllow,
-        // M7: Ui / Html render kernels
+        // Ui / Html render kernels
         Self::UiLayout,
         Self::UiLayoutWith,
         Self::HtmlRender,
         Self::HtmlEscapeText,
         Self::HtmlEscapeAttr,
         Self::HtmlAttrToString,
-        // M7: Ui element builders
+        // Ui element builders
         Self::UiNone,
         Self::UiText,
         Self::UiHtml,
@@ -3156,14 +3155,14 @@ impl StdlibKernel {
         Self::UiLink,
         Self::UiForm,
         Self::UiImage,
-        // M7: Ui nearby attribute builders
+        // Ui nearby attribute builders
         Self::UiAbove,
         Self::UiBelow,
         Self::UiOnLeft,
         Self::UiOnRight,
         Self::UiInFront,
         Self::UiBehind,
-        // M7: Ui attribute builders
+        // Ui attribute builders
         Self::UiSpacing,
         Self::UiPadding,
         Self::UiPaddingXY,
@@ -3184,7 +3183,7 @@ impl StdlibKernel {
         Self::UiScrollbarX,
         Self::UiScrollbarY,
         Self::UiGridColumns,
-        // M7: Ui Length builders
+        // Ui Length builders
         Self::UiPx,
         Self::UiFill,
         Self::UiContent,
@@ -3194,14 +3193,14 @@ impl StdlibKernel {
         Self::UiVw,
         Self::UiMinimum,
         Self::UiMaximum,
-        // M7: Ui Color builders
+        // Ui Color builders
         Self::UiRgb,
         Self::UiRgba,
         Self::UiWhite,
         Self::UiBlack,
         Self::UiTransparent,
         Self::UiColorCss,
-        // M7: Background / Border / Font
+        // Background / Border / Font
         Self::BackgroundColor,
         Self::BackgroundImage,
         Self::BackgroundLinearGradient,
@@ -3217,7 +3216,7 @@ impl StdlibKernel {
         Self::FontFamily,
         Self::FontBold,
         Self::FontItalic,
-        // M7: Html element builders
+        // Html element builders
         Self::HtmlTextNode,
         Self::HtmlRawNode,
         Self::HtmlNode,
@@ -3232,7 +3231,7 @@ impl StdlibKernel {
         Self::HtmlP,
         Self::HtmlInput,
         Self::HtmlImg,
-        // #76 batch 2: Std.Html element builders (container + void).
+        // batch 2: Std.Html element builders (container + void).
         Self::HtmlH1,
         Self::HtmlH2,
         Self::HtmlH3,
@@ -3301,7 +3300,7 @@ impl StdlibKernel {
         Self::HtmlSource,
         Self::HtmlTrack,
         Self::HtmlWbr,
-        // #76: Std.Html.Attributes builders (all registered under "Attr" in
+        // Std.Html.Attributes builders (all registered under "Attr" in
         // env.rs QUALIFIERS).
         Self::HtmlAttrClass,
         Self::HtmlAttrId,
@@ -3334,17 +3333,17 @@ impl StdlibKernel {
         // consulted — without this it would regress to fail-closed once kernel_ty
         // is deleted (Task 1c).
         Self::HtmlStyleNode,
-        // M7: Live
+        // Live
         Self::LiveApp,
         Self::LiveAppRouted,
         Self::LiveRoute,
         Self::LiveRenderStatic,
-        // M7: Tui
+        // Tui
         Self::TuiProgram,
         Self::TuiApp,
-        // M7: Webview
+        // Webview
         Self::WebviewApp,
-        // M7: event-attribute builders
+        // event-attribute builders
         Self::UiOnClick,
         Self::UiOnFocus,
         Self::UiOnBlur,
@@ -3357,7 +3356,7 @@ impl StdlibKernel {
         Self::UiOnBool,
         Self::UiOnSubmit,
         Self::UiOnFile,
-        // #107: Std.Html.Events builders (produce html_attr)
+        // Std.Html.Events builders (produce html_attr)
         Self::HtmlOnClick,
         Self::HtmlOnFocus,
         Self::HtmlOnBlur,
@@ -3369,7 +3368,6 @@ impl StdlibKernel {
         Self::HtmlOnKeyDown,
         Self::HtmlOnKeyUp,
         Self::HtmlOnBool,
-        // ── #76 Tier 1 ────────────────────────────────────────────────────────
         Self::UiSquare,
         Self::UiWidescreen,
         Self::UiCinemascope,
@@ -3433,7 +3431,7 @@ impl StdlibKernel {
         Self::FontHoverSize,
         Self::HtmlAttrTabindex,
         Self::HtmlAttrRows,
-        // ── #111: Effect stdlib modules ────────────────────────────────────────
+        // ── Effect stdlib modules ────────────────────────────────────────
         Self::CliProgram,
         Self::AuthHashPassword,
         Self::AuthHashPasswordCost,
@@ -3452,7 +3450,7 @@ impl StdlibKernel {
         Self::HttpStreamForEachChunk,
         Self::HttpStreamClose,
         Self::HttpStreamChunks,
-        // ── #127: Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
+        // ── Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
         Self::WsDefaultCfg,
         Self::WsWithOnConnect,
         Self::WsWithOnMessage,
@@ -3465,7 +3463,7 @@ impl StdlibKernel {
         Self::WsSendBinaryToClient,
         Self::WsBroadcast,
         Self::WsCloseClient,
-        // ── Std.Ui.Region (#117) ──────────────────────────────────────────────
+        // ── Std.Ui.Region ──────────────────────────────────────────────
         Self::RegionMainContent,
         Self::RegionNavigation,
         Self::RegionFooter,
@@ -3485,7 +3483,7 @@ impl StdlibKernel {
         Self::UiDescLiveAssertive,
         Self::UiDescHeading,
         Self::UiDescLabel,
-        // ── Std.Ui.Input (#124) ───────────────────────────────────────────────
+        // ── Std.Ui.Input ───────────────────────────────────────────────
         Self::InputLabelAbove,
         Self::InputLabelBelow,
         Self::InputLabelLeft,
@@ -3504,7 +3502,7 @@ impl StdlibKernel {
         Self::InputOption,
         Self::InputRadio,
         Self::InputRadioRow,
-        // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────────
+        // ── Std.Ui.Lazy ────────────────────────────────────────────────
         Self::LazyLazy,
         Self::LazyLazy2,
         Self::LazyLazy3,
@@ -3578,33 +3576,33 @@ impl StdlibKernel {
         Self::SecretFromString,
         Self::SecretReveal,
         Self::SecretRedacted,
-        // ── Sky.Core.Regex (#194) ────────────────────────────────────────────
+        // ── Sky.Core.Regex ────────────────────────────────────────────
         Self::RegexMatch,
         Self::RegexFind,
         Self::RegexFindAll,
         Self::RegexReplace,
         Self::RegexSplit,
-        // ── Sky.Core.Path (#202) ─────────────────────────────────────────────
+        // ── Sky.Core.Path ─────────────────────────────────────────────
         Self::PathBase,
         Self::PathDir,
         Self::PathExt,
         Self::PathIsAbsolute,
-        // ── Std.Trace (#197) ─────────────────────────────────────────────────
+        // ── Std.Trace ─────────────────────────────────────────────────
         Self::TraceSpan,
         Self::TraceEvent,
         Self::TraceAttr,
-        // ── Std.Compression (#197) ───────────────────────────────────────────
+        // ── Std.Compression ───────────────────────────────────────────
         Self::CompressionGzip,
         Self::CompressionGunzip,
         Self::CompressionZstdCompress,
         Self::CompressionZstdDecompress,
-        // ── Std.Csv (#197) ───────────────────────────────────────────────────
+        // ── Std.Csv ───────────────────────────────────────────────────
         Self::CsvParse,
         Self::CsvParseWithDelimiter,
         Self::CsvEncode,
         Self::CsvEncodeWithDelimiter,
         Self::CsvParseStreamFromFile,
-        // ── Std.Cache (#210) ─────────────────────────────────────────────────
+        // ── Std.Cache ─────────────────────────────────────────────────
         Self::CacheNewRaw,
         Self::CacheGet,
         Self::CachePut,
@@ -3661,7 +3659,7 @@ impl StdlibKernel {
                 | Self::DbDecRequired
                 | Self::DbDecOptional
                 | Self::DbDecMoney
-                // ── Std.Db.Sql (backlog #61) — classified `Db` like
+                // ── Std.Db.Sql — classified `Db` like
                 // `Db.Decode.*` above: no live connection is touched by the
                 // combinators, but the runtime types they build on
                 // (`SqlFragment` / `SqlParam`) live in this crate's
@@ -3748,16 +3746,16 @@ impl StdlibKernel {
                 | Self::MiddlewareWithRateLimit
                 | Self::MiddlewareWithCsrf
                 | Self::RateLimitAllow
-                // ── #111: Sky.Http.Server.Stream (server-side) ───────────────────
+                // ── Sky.Http.Server.Stream (server-side) ───────────────────
                 | Self::StreamStream
                 | Self::StreamEmit
                 | Self::StreamFinish
                 | Self::StreamWithContentType
-                // ── #111: Sky.Core.Http.Stream (client-side relay) ───────────────
+                // ── Sky.Core.Http.Stream (client-side relay) ───────────────
                 | Self::HttpStreamOpen
                 | Self::HttpStreamForEachChunk
                 | Self::HttpStreamClose
-                // ── #127: Sky.Http.Server.WebSocket (12 kernels) ─────────────
+                // ── Sky.Http.Server.WebSocket (12 kernels) ─────────────
                 | Self::WsDefaultCfg
                 | Self::WsWithOnConnect
                 | Self::WsWithOnMessage
@@ -4007,7 +4005,6 @@ impl StdlibKernel {
                 | Self::HtmlOnKeyDown
                 | Self::HtmlOnKeyUp
                 | Self::HtmlOnBool
-                // ── #76 Tier 1 ────────────────────────────────────────────────
                 | Self::UiSquare
                 | Self::UiWidescreen
                 | Self::UiCinemascope
@@ -4019,7 +4016,7 @@ impl StdlibKernel {
                 | Self::UiTransitionRaw
                 | Self::UiGridTracksRaw
                 | Self::UiAnimateRaw
-                // ── #154: Breakpoint ──────────────────────────────────────────
+                // ── Breakpoint ──────────────────────────────────────────
                 | Self::UiBreakpoint
                 | Self::UiMediaQuery
                 | Self::UiMobile
@@ -4028,7 +4025,7 @@ impl StdlibKernel {
                 | Self::UiDarkMode
                 | Self::UiLightMode
                 | Self::UiReducedMotion
-                // ── #76: PseudoClass opaque constants + Ui.onPseudo ────────────
+                // ── PseudoClass opaque constants + Ui.onPseudo ────────────
                 | Self::UiOnPseudo
                 | Self::UiHover
                 | Self::UiFocus
@@ -4073,7 +4070,7 @@ impl StdlibKernel {
                 | Self::FontHoverSize
                 | Self::HtmlAttrTabindex
                 | Self::HtmlAttrRows
-                // ── Std.Ui.Region (#117) ──────────────────────────────────────
+                // ── Std.Ui.Region ──────────────────────────────────────
                 | Self::RegionMainContent
                 | Self::RegionNavigation
                 | Self::RegionFooter
@@ -4093,7 +4090,7 @@ impl StdlibKernel {
                 | Self::UiDescLiveAssertive
                 | Self::UiDescHeading
                 | Self::UiDescLabel
-                // ── Std.Ui.Input (#124) ───────────────────────────────────────
+                // ── Std.Ui.Input ───────────────────────────────────────
                 | Self::InputLabelAbove
                 | Self::InputLabelBelow
                 | Self::InputLabelLeft
@@ -4112,7 +4109,7 @@ impl StdlibKernel {
                 | Self::InputOption
                 | Self::InputRadio
                 | Self::InputRadioRow
-                // ── Std.Ui.Lazy (#146) ────────────────────────────────────────
+                // ── Std.Ui.Lazy ────────────────────────────────────────
                 | Self::LazyLazy
                 | Self::LazyLazy2
                 | Self::LazyLazy3
@@ -4499,7 +4496,7 @@ impl StdlibKernel {
         matches!(self, Self::WebviewApp)
     }
 
-    /// `true` when this variant is the `Std.Cli` / `Sky.Cli` app-entry kernel (#111).
+    /// `true` when this variant is the `Std.Cli` / `Sky.Cli` app-entry kernel.
     #[must_use]
     pub const fn is_cli(self) -> bool {
         matches!(self, Self::CliProgram)
