@@ -20,9 +20,6 @@ mod emit_cli;
 mod emit_expr;
 mod emit_live;
 mod emit_model_gate;
-// Stage-A inert: computed but not yet wired into emission (the emit_live
-// call lands with the schema-tag threading) — dead_code allowed until then.
-#[allow(dead_code)]
 mod emit_model_schema;
 mod emit_tui;
 mod emit_types;
