@@ -891,7 +891,7 @@ pub enum IrType {
     /// The built-in NOMINAL `ErrorInfo` type — `Error`'s second constructor
     /// argument, `{ message : String, details : Maybe ErrorDetails }` at the
     /// field level (SEAL fix 2026-07-11 — see `docs/architecture/
-    /// error-record-literal-seal-fix-2026-07-11.md`).
+    /// docs/adr/0017-error-payload-nominal-identity.md`).
     ///
     /// Renders as `sky_runtime::error::SkyErrorInfo`. NOT a structural
     /// record: a bare record literal cannot construct it (the type checker

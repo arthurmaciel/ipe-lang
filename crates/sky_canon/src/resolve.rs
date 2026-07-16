@@ -166,7 +166,7 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
     // strictly additive.)
     "ErrorDetails",
     // `Sky.Core.Error`'s NOMINAL payload types (SEAL fix 2026-07-11 —
-    // `docs/architecture/error-record-literal-seal-fix-2026-07-11.md`).
+    // `docs/adr/0017-error-payload-nominal-identity.md`).
     // Previously anonymous structural records; now opaque nominal Cons backed
     // by `sky_runtime::error::{SkyPanicInfo, SkyTypeInfo, SkyErrorInfo}`, so
     // annotations such as `describePanic : PanicInfo -> String` must resolve.

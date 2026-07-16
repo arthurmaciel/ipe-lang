@@ -585,7 +585,7 @@ fn emitted_bound_satisfied(interner: &Interner, bounds: TyBounds, ty: &Ty) -> bo
     // is also rejected) is the SAME documented loss every sibling bound
     // accepts; genuine cross-binding obligation propagation is a follow-up
     // design for ALL bounds at once — see
-    // `docs/architecture/ctor-payload-andmap-arity-gate-design.md` §6.
+    // `docs/adr/0016-andmap-arity-gate-type-obligation.md` §6.
     let not_curried_ok = !matches!(ty, Ty::Fun(_, _) | Ty::Var(_));
     // SQL-bind-parameter obligation (#165): satisfied by exactly the Sky
     // types the runtime has a `From<T> for SqlParam` impl for — the bare
@@ -969,7 +969,7 @@ enum ErrFieldTy {
 
 /// Fixed field tables for the NOMINAL error-payload types `PanicInfo` /
 /// `TypeInfo` / `ErrorInfo` (SEAL fix 2026-07-11 — see `docs/architecture/
-/// error-record-literal-seal-fix-2026-07-11.md`).
+/// docs/adr/0017-error-payload-nominal-identity.md`).
 ///
 /// These three types are opaque `Con`s at the type level (so a bare record
 /// literal cannot masquerade as the runtime's concrete `SkyPanicInfo` /
