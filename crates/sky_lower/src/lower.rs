@@ -22,8 +22,8 @@ use sky_diagnostics::{DResult, Diagnostic, Feature, Located, LowerError, Span};
 use sky_intern::{Interner, Symbol};
 use sky_ir::{
     Arm, BinOp, BoundSet, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match,
-    ModPath, Module, Pat, Program, TypeDef, UiCtor, UiPlain, Variant, fun_value_arc_promotable,
-    is_dispatch_free, is_irrefutable,
+    ModPath, Module, OnFormKind, Pat, Program, TypeDef, UiCtor, UiPlain, Variant,
+    fun_value_arc_promotable, is_dispatch_free, is_irrefutable,
 };
 use sky_types::{SolvedTypes, Ty, TyBounds};
 
@@ -471,6 +471,7 @@ fn clear_let_bound_task_fail_pins(expr: Expr) -> Expr {
                 callee: Callee::Kernel(KernelFn::TaskFail),
                 args,
                 pin: CallPin::DefaultI64,
+                on_form,
             } => Expr::Call {
                 callee: Callee::Kernel(KernelFn::TaskFail),
                 args: args
@@ -478,6 +479,7 @@ fn clear_let_bound_task_fail_pins(expr: Expr) -> Expr {
                     .map(clear_let_bound_task_fail_pins)
                     .collect(),
                 pin: CallPin::None,
+                on_form,
             },
             other => clear_let_bound_task_fail_pins(other),
         }
@@ -506,10 +508,16 @@ fn clear_let_bound_task_fail_pins(expr: Expr) -> Expr {
         Expr::Match(m) => {
             Expr::Match(m.map_bodies(recur, |_, body, guard| (recur(body), guard.map(recur))))
         }
-        Expr::Call { callee, args, pin } => Expr::Call {
+        Expr::Call {
+            callee,
+            args,
+            pin,
+            on_form,
+        } => Expr::Call {
             callee,
             args: args.into_iter().map(recur).collect(),
             pin,
+            on_form,
         },
         Expr::Ctor {
             home,
@@ -1566,7 +1574,7 @@ fn rewrite_captured_clones(
         // Non-lambda args keep the full `noncl_set` so forwarding a NonClone
         // value in arg position (e.g. `applyTwice f x` where `f` is non-callee)
         // is still rejected.
-        Expr::Call { callee, args, pin } => Ok(Expr::Call {
+        Expr::Call { callee, args, pin, on_form } => Ok(Expr::Call {
             callee,
             args: args
                 .into_iter()
@@ -1580,6 +1588,7 @@ fn rewrite_captured_clones(
                 })
                 .collect::<DResult<Vec<_>>>()?,
             pin,
+            on_form,
         }),
         Expr::Tuple(items) => Ok(Expr::Tuple(
             items
@@ -2664,10 +2673,11 @@ fn promote_unification_sibling_lambdas(
             lhs: Box::new(recur(*lhs)?),
             rhs: Box::new(recur(*rhs)?),
         }),
-        Expr::Call { callee, args, pin } => Ok(Expr::Call {
+        Expr::Call { callee, args, pin, on_form } => Ok(Expr::Call {
             callee,
             args: args.into_iter().map(recur).collect::<DResult<Vec<_>>>()?,
             pin,
+            on_form,
         }),
         Expr::Apply { func, args } => Ok(Expr::Apply {
             func: Box::new(recur(*func)?),
@@ -2902,10 +2912,11 @@ fn force_shared_capture_clones(sym: Symbol, expr: Expr) -> Expr {
             then_: Box::new(force_shared_capture_clones(sym, *then_)),
             else_: Box::new(force_shared_capture_clones(sym, *else_)),
         },
-        Expr::Call { callee, args, pin } => Expr::Call {
+        Expr::Call { callee, args, pin, on_form } => Expr::Call {
             callee,
             args: force_shared_capture_clones_all(sym, args),
             pin,
+            on_form,
         },
         Expr::Apply { func, args } => Expr::Apply {
             func: Box::new(force_shared_capture_clones(sym, *func)),
@@ -4331,15 +4342,16 @@ fn shim_fn_value_reads(
                 args: recurse_all(args)?,
             })
         }
-        Expr::Call { callee, args, pin } => {
+        Expr::Call { callee, args, pin, on_form } => {
             // Sync-capture kernel args stay untouched (see the fn doc).
             if matches!(&callee, Callee::Kernel(k) if k.requires_sync_capture()) {
-                Ok(Expr::Call { callee, args, pin })
+                Ok(Expr::Call { callee, args, pin, on_form })
             } else {
                 Ok(Expr::Call {
                     callee,
                     args: recurse_all(args)?,
                     pin,
+                    on_form,
                 })
             }
         }
@@ -4719,13 +4731,14 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
             *remaining = after_scrut.saturating_sub(peak);
             Expr::Match(m)
         }
-        Expr::Call { callee, args, pin } => Expr::Call {
+        Expr::Call { callee, args, pin, on_form } => Expr::Call {
             callee,
             args: args
                 .into_iter()
                 .map(|a| rewrite_multiuse_clones(sym, remaining, a))
                 .collect(),
             pin,
+            on_form,
         },
         Expr::Apply { func, args } => {
             let new_func = Box::new(rewrite_multiuse_clones(sym, remaining, *func));
@@ -5467,13 +5480,14 @@ fn rewrite_var_free_occurrences(
                 (new_body, new_guard)
             },
         )),
-        Expr::Call { callee, args, pin } => Expr::Call {
+        Expr::Call { callee, args, pin, on_form } => Expr::Call {
             callee,
             args: args
                 .into_iter()
                 .map(|a| rewrite_var_free_occurrences(target, a, on_hit))
                 .collect(),
             pin,
+            on_form,
         },
         Expr::Tuple(items) => Expr::Tuple(
             items
@@ -10081,6 +10095,7 @@ impl<'a> Lowerer<'a> {
                             callee: Callee::Kernel(KernelFn::ListAppend),
                             args: vec![lowered_lhs, lowered_rhs],
                             pin: CallPin::None,
+                            on_form: OnFormKind::NotForm,
                         })
                     } else {
                         Ok(Expr::BinOp {
@@ -10224,6 +10239,7 @@ impl<'a> Lowerer<'a> {
                         callee,
                         args: Vec::new(),
                         pin,
+                        on_form: OnFormKind::NotForm,
                     });
                 }
                 let ty = self.region_ty(e.span).ok_or_else(|| {
@@ -10291,6 +10307,7 @@ impl<'a> Lowerer<'a> {
                         callee,
                         args: Vec::new(),
                         pin: CallPin::None,
+                        on_form: OnFormKind::NotForm,
                     })
                 }
             }
@@ -10646,6 +10663,7 @@ impl<'a> Lowerer<'a> {
                             callee: peek,
                             args: vec![lowered_cfg],
                             pin: CallPin::None,
+                            on_form: OnFormKind::NotForm,
                         }));
                     }
                 }
@@ -10679,6 +10697,7 @@ impl<'a> Lowerer<'a> {
                             callee: peek,
                             args: vec![lowered_cfg],
                             pin: CallPin::None,
+                            on_form: OnFormKind::NotForm,
                         }));
                     }
                 }
@@ -10729,6 +10748,7 @@ impl<'a> Lowerer<'a> {
                             callee: peek,
                             args: vec![lowered_attrs, lowered_cfg],
                             pin: CallPin::None,
+                            on_form: OnFormKind::NotForm,
                         }));
                     }
                 }
@@ -10746,6 +10766,7 @@ impl<'a> Lowerer<'a> {
                             callee: peek,
                             args: vec![lowered_cfg],
                             pin: CallPin::None,
+                            on_form: OnFormKind::NotForm,
                         }));
                     }
                 }
@@ -10771,6 +10792,7 @@ impl<'a> Lowerer<'a> {
                             callee: peek,
                             args: vec![lowered_pattern, lowered_builder],
                             pin: CallPin::None,
+                            on_form: OnFormKind::NotForm,
                         }));
                     }
                 }
@@ -11142,6 +11164,7 @@ impl<'a> Lowerer<'a> {
                             callee: Callee::Kernel(KernelFn::ResultOkDefault),
                             args: lowered_args,
                             pin: CallPin::None,
+                            on_form: OnFormKind::NotForm,
                         });
                     }
                     Ok(Expr::Ctor {
@@ -11191,10 +11214,20 @@ impl<'a> Lowerer<'a> {
                         let mut lowered_args = lowered_args;
                         Self::retype_result_map_error_handler(&resolved, &mut lowered_args);
                         Self::retype_decoder_payload_mapper(&resolved, &mut lowered_args);
+                        // Type-directed `onSubmit` handler classification. The
+                        // decision (decode-the-form vs dispatch-a-fixed-value)
+                        // is a property of the handler's SOLVED type — an arrow
+                        // `T -> Msg` vs a bare `Msg` — and is unrecoverable from
+                        // the payload's syntax downstream (a `Var` bound to a
+                        // bare `Msg` reads identically to one bound to a decoder
+                        // fn). Resolve it here, where the solver's region type
+                        // is available, and record the verdict on the `Call`.
+                        let on_form = self.classify_on_form(&resolved, args)?;
                         Ok(Expr::Call {
                             callee: resolved,
                             args: lowered_args,
                             pin,
+                            on_form,
                         })
                     }
                     std::cmp::Ordering::Less => {
@@ -11258,6 +11291,53 @@ impl<'a> Lowerer<'a> {
             cur = rest.as_ref();
         }
         n
+    }
+
+    /// Classify an `onSubmit`-family call's handler by its SOLVED type, so the
+    /// backend dispatches the runtime `Event::OnForm` slot correctly without
+    /// re-deriving callability from the payload's syntax (the #228 unsound
+    /// gate). Mirrors the reference's `formTargetRustType` decision
+    /// (`../sky` `ExprEmitter.hs`): the FIRST param of the handler's arrow type
+    /// is the form-record `T` to decode; a non-arrow handler is a bare `Msg`
+    /// value dispatched verbatim.
+    ///
+    /// * [`OnFormKind::NotForm`] — the callee is not `Ui.onSubmit` /
+    ///   `Std.Html.Events.onSubmit`. The field is inert; emission is
+    ///   byte-identical.
+    /// * [`OnFormKind::Decoder`] — the handler's solved type is an arrow
+    ///   (`T -> Msg`): decode the form into `T`, map to `Msg`.
+    /// * [`OnFormKind::FixedValue`] — the handler's solved type is a non-arrow
+    ///   value (bare `Msg`): dispatch the fixed value, ignore the form.
+    ///
+    /// A saturated `onSubmit` call always has exactly one argument; a missing
+    /// solved region type for that argument is unreachable for well-typed
+    /// input and fails closed as a [`Diagnostic::CompilerBug`] rather than
+    /// silently defaulting to a shape that might cargo-fail (SEAL discipline —
+    /// never guess the callability of a form handler).
+    fn classify_on_form(&self, callee: &Callee, args: &[canon::Expr]) -> DResult<OnFormKind> {
+        if !matches!(
+            callee,
+            Callee::Kernel(KernelFn::UiOnSubmit | KernelFn::HtmlOnSubmit)
+        ) {
+            return Ok(OnFormKind::NotForm);
+        }
+        let [handler] = args else {
+            return Err(bug(
+                "sky_lower::classify_on_form",
+                "onSubmit reached saturated lowering without exactly one handler argument",
+            ));
+        };
+        let handler_ty = self.region_ty(handler.span).ok_or_else(|| {
+            bug(
+                "sky_lower::classify_on_form",
+                "no solved type for an onSubmit handler argument",
+            )
+        })?;
+        Ok(if matches!(handler_ty, Ty::Fun(_, _)) {
+            OnFormKind::Decoder
+        } else {
+            OnFormKind::FixedValue
+        })
     }
 
     /// Eta-expand a partial application `f a0 … a_{k-1}` (with `k < arity`) into a
@@ -11465,6 +11545,9 @@ impl<'a> Lowerer<'a> {
             // Eta-expanded partial application: the residual arrow's param/ret
             // types (from the lambda) pin every generic, so no turbofish.
             pin: CallPin::None,
+            // A partially-applied kernel is never `onSubmit` (arity-1, always
+            // saturated) — this residual call carries no form-handler verdict.
+            on_form: OnFormKind::NotForm,
         };
         let lambda = Expr::Lambda {
             params,
@@ -11846,6 +11929,8 @@ impl<'a> Lowerer<'a> {
             // Eta adapter: the adapter closure's declared param/ret types pin
             // the callee's generics, so no turbofish.
             pin: CallPin::None,
+            // Eta adapter over an under-applied callee — never `onSubmit`.
+            on_form: OnFormKind::NotForm,
         };
         // Apply: pass the remaining eta params to the returned closure.
         // `def_arity == 0` ⇒ `apply_args == eta_syms[0..]` (all params).
@@ -11931,6 +12016,8 @@ impl<'a> Lowerer<'a> {
                 // further applied; the affected #181 kernels never take this
                 // shape, so no turbofish.
                 pin: CallPin::None,
+                // Over-applied kernel base call — never `onSubmit`.
+                on_form: OnFormKind::NotForm,
             }),
             args: rest,
         })
@@ -12054,6 +12141,8 @@ impl<'a> Lowerer<'a> {
                 callee: resolved,
                 args: head,
                 pin: CallPin::None,
+                // Over-applied kernel base call — never `onSubmit`.
+                on_form: OnFormKind::NotForm,
             }),
             args: apply_args,
         };
@@ -16125,6 +16214,7 @@ impl<'a> Lowerer<'a> {
                                 Expr::Var(fresh),
                             ],
                             pin: CallPin::None,
+                            on_form: OnFormKind::NotForm,
                         },
                     ));
                 }

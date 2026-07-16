@@ -5,7 +5,7 @@
 
 use sky_diagnostics::DResult;
 use sky_intern::{Interner, Symbol};
-use sky_ir::{BinOp, CallPin, Callee, Expr, FuncId, IrType};
+use sky_ir::{OnFormKind, BinOp, CallPin, Callee, Expr, FuncId, IrType};
 use sky_lower::tco_analysis::{TailRecursion, analyze_tail_recursion, rewrite_tail_calls};
 
 const SELF: FuncId = FuncId::from_raw(7);
@@ -41,7 +41,7 @@ fn build_count(i: &mut Interner) -> DResult<BuiltFn> {
                 },
             ],
             pin: CallPin::None,
-        }),
+            on_form: OnFormKind::NotForm,        }),
     };
     Ok((SELF, 2, params, body))
 }
@@ -117,9 +117,9 @@ fn foldr_shape_is_not_tail_recursive() -> DResult<()> {
             callee: Callee::Func(SELF),
             args: vec![Expr::Var(x)],
             pin: CallPin::None,
-        }],
+            on_form: OnFormKind::NotForm,        }],
         pin: CallPin::None,
-    };
+        on_form: OnFormKind::NotForm,    };
     assert_eq!(
         analyze_tail_recursion(SELF, 1, &body),
         TailRecursion::NotTailRecursive
@@ -140,7 +140,7 @@ fn self_call_in_lambda_is_not_tail() -> DResult<()> {
             callee: Callee::Func(SELF),
             args: vec![Expr::Var(x)],
             pin: CallPin::None,
-        }),
+            on_form: OnFormKind::NotForm,        }),
     };
     assert_eq!(
         analyze_tail_recursion(SELF, 1, &body),
@@ -158,7 +158,7 @@ fn wrong_arity_self_call_disqualifies() -> DResult<()> {
         callee: Callee::Func(SELF),
         args: vec![Expr::Var(x)],
         pin: CallPin::None,
-    };
+        on_form: OnFormKind::NotForm,    };
     assert_eq!(
         analyze_tail_recursion(SELF, 2, &body),
         TailRecursion::NotTailRecursive
