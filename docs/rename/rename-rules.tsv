@@ -1,0 +1,41 @@
+finding	class	where	rename_to	approved
+sky_parse	crate	crates/sky_parse (dir + Cargo pkg + every `use sky_parse`)	ipe_parse
+sky_syntax	crate	crates/sky_syntax	ipe_syntax
+sky_canon	crate	crates/sky_canon	ipe_canon
+sky_types	crate	crates/sky_types	ipe_types
+sky_lower	crate	crates/sky_lower	ipe_lower
+sky_ir	crate	crates/sky_ir	ipe_ir
+sky_backend	crate	crates/sky_backend	ipe_backend
+sky_backend_rust	crate	crates/sky_backend_rust	ipe_backend_rust
+sky_kernels	crate	crates/sky_kernels	ipe_kernels
+sky_diagnostics	crate	crates/sky_diagnostics	ipe_diagnostics
+sky_db	crate	crates/sky_db	ipe_db
+sky_intern	crate	crates/sky_intern	ipe_intern
+sky_watch	crate	crates/sky_watch	ipe_watch
+skyc	crate+binary	crates/skyc (CLI crate); the produced binary `skyc`	crate `ipe`, binary `ipe` (single-binary per roadmap)
+sky-runtime-rust	crate	runtime/Cargo.toml pkg name + every dep ref	ipe-runtime-rust
+SkyError	rust-ident	error type across crates/**/*.rs + runtime	IpeError
+Sky* (other Rust idents)	rust-ident	SkyCall / SkyVal / Sky-prefixed types+fns in crates/** + runtime (case-preserving)	Ipe* (Sky->Ipe verbatim)
+SKY-NNNN	diag-code	every diagnostic code (SKY-L*/N*/T*/I*) in emit_*.rs + diagnostics + tests + docs + memory	IPE-NNNN
+SKY_RUNTIME_DIR	env-var	scripts/lib/env.sh + skyc/src/lib.rs + all E2E tests (BUILD-HARNESS CONTRACT — rename scripts in lockstep)	IPE_RUNTIME_DIR
+SKY_E2E	env-var	build-harness gate flag (scripts + tests + memory)	IPE_E2E
+SKYC_BIN	env-var	scripts/lib/env.sh	IPE_BIN
+SKY_* (all remaining)	env-var	SKY_LIVE_STORE(_PATH), SKY_DB_URL, SKY_BUILD_CACHE(_DIR), SKY_CONSOLE_AUTH, SKY_ENV, SKY_TUI_QUIET, SKY_UI_LAZY_CAP, SKY_LIVE_PORT, SKY_SERVER_PORT, SKY_TEST, SKY_CORE_PURE, SKY_CORE_WEBSOCKET, ...	IPE_* (SKY_->IPE_ verbatim)
+.sky	source-ext	examples/**/*.sky, tests/golden/**/Main.sky, crates/skyc/stdlib/**/*.sky, compiler file-discovery, sky.toml `entry` (HIGH-IMPACT: regenerates every golden)	.ipe
+sky.toml	manifest	project manifest filename + its parser in skyc	ipe.toml
+sky-out/	build-dir	emitted-project output dir (skyc + scripts + .gitignore)	ipe-out/
+.skycache	build-dir	build cache dir (skyc/src/cache.rs + .gitignore)	.ipecache
+SKY_BUILD_CACHE(_DIR)	env-var	skyc/src/cache.rs	IPE_BUILD_CACHE(_DIR)
+Sky (doc prose)	doc-prose	*.md prose naming the language (accented target)	Ipê
+sky (doc prose)	doc-prose	*.md lowercase prose / commands	ipe
+CLAUDE.md Sky.* refs	doc-ref	authoring reference — reconcile to code after the code rename	per stdlib-ns decision
+Sky.Core.*	stdlib-ns	crates/skyc/stdlib/Sky/Core/** + every import	DEFER -> namespace-redesign phase (flatten Sky.Core+Std into one namespace; do NOT mechanically rename now, it is thrown away by the flatten)
+Sky.Ffi	stdlib-ns	stdlib FFI namespace	DEFER -> namespace-redesign
+Sky.Build.*	stdlib-ns	stdlib build hints (TailCallOpt, ...)	DEFER -> namespace-redesign
+Sky.Http / Sky.Live / Sky.Tui / Sky.Webview / Sky.Cli	stdlib-ns	app-shape namespaces	DEFER -> namespace-redesign
+Std.*	stdlib-ns	the Std namespace	DEFER -> namespace-redesign (flatten with Sky.Core)
+../sky	must-stay	358 refs to the upstream Haskell/Go reference repo	KEEP
+docs/divergences-from-sky.md	must-stay	filename + content compares Ipê to the ancestor language Sky	KEEP
+README ancestry line	must-stay	the single sanctioned line naming the Sky ancestor	KEEP
+Sky (upstream language in prose)	must-stay	divergence / roadmap / comparison docs describing the ancestor	KEEP
+skydex	review	tool indexing the upstream ../sky reference (our fork uses ipe-index)	REVIEW (skydex stays for sky: rows; confirm split vs ipe-index)
