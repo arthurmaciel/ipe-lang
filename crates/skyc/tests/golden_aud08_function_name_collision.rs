@@ -9,7 +9,10 @@
 //! `["UiBorder"]/"rounded"` and `["Ui"]/"borderRounded"` both fold to
 //! `ui_border_rounded` (verified against `to_snake_case`'s exact algorithm —
 //! an interior uppercase char always emits a `_` boundary, so `UiBorder_rounded`
-//! and `Ui_borderRounded` produce byte-identical output). Mirrors the sibling
+//! and `Ui_borderRounded` produce byte-identical output). Because `ui` is a
+//! kernel namespace, both names are further disambiguated with a `user_` prefix
+//! (the user-module-vs-kernel guard), so the shared identifier the collision
+//! guard reports is `user_ui_border_rounded`. Mirrors the sibling
 //! enum-name collision guard (`crates/sky_backend_rust/src/lib.rs`, the
 //! `enum_names.values().any(...)` check ~10 lines above the fix this
 //! regression covers).
@@ -84,7 +87,7 @@ fn distinct_functions_folding_to_the_same_rust_name_are_rejected() {
         assert!(
             false_marker(),
             "expected a DuplicateValue rejection for UiBorder.rounded vs \
-             Ui.borderRounded (both fold to `ui_border_rounded`), but skyc \
+             Ui.borderRounded (both fold to `user_ui_border_rounded`), but skyc \
              build SUCCEEDED — the collision would silently emit two Rust \
              fns sharing one name"
         );
@@ -105,7 +108,7 @@ fn distinct_functions_folding_to_the_same_rust_name_are_rejected() {
         );
         return;
     };
-    assert_eq!(&**name, "ui_border_rounded");
+    assert_eq!(&**name, "user_ui_border_rounded");
 }
 
 /// Positive control: two functions in different modules whose names do NOT
