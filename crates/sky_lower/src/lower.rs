@@ -6829,7 +6829,7 @@ impl<'a> Lowerer<'a> {
             // equals its defining module, but the lowerer does not thread it here
             // and enum-shape errors are rare + already span-precise.
             let def = self.lower_enum(u).map_err(|d| (d, Vec::new()))?;
-            if self.is_cache_handle_union(u) {
+            if self.is_cache_handle_union(u) || self.is_config_decoder_union(u) {
                 continue;
             }
             types_ir.push(TypeDef::Enum(def));
@@ -7142,6 +7142,25 @@ impl<'a> Lowerer<'a> {
     /// ctor + pattern there via `builtin_runtime_enum`/`enum_name` overrides.
     fn is_cache_handle_union(&self, u: &canon::Union) -> bool {
         self.is_cache_handle_con(&u.home, u.name)
+    }
+
+    /// is `u` the `Std.Config.Decoder` opaque carrier re-declaration —
+    /// module `["Std", "Config"]`, name `Decoder`? `Std.Config` re-declares
+    /// `type Decoder a = Decoder` only to put the name in its export set (matching
+    /// the reference); the type IS the shared `IrType::Decoder` carrier
+    /// (`sky_runtime::json::Decoder<E, T>`), and every `Decoder a` annotation
+    /// already lowers to it via the ABOVE-guard `Decoder` arm. Skip its `EnumDef`
+    /// so the backend never emits a phantom-param `enum StdConfigDecoder<T1>`
+    /// (E0392) — the nullary `Decoder` ctor is opaque (never constructed or
+    /// matched in Sky source), so no enum is needed. Same shape as
+    /// [`Self::is_cache_handle_union`].
+    fn is_config_decoder_union(&self, u: &canon::Union) -> bool {
+        self.interner.resolve(u.name) == Some("Decoder")
+            && matches!(
+                u.home.as_slice(),
+                [a, b] if self.interner.resolve(*a) == Some("Std")
+                    && self.interner.resolve(*b) == Some("Config")
+            )
     }
 
     /// is `(module, name)` the `Std.Cache.Cache` opaque handle type —
@@ -11200,6 +11219,11 @@ impl<'a> Lowerer<'a> {
                     | KernelFn::DbDecMap3
                     | KernelFn::DbDecMap4
                     | KernelFn::DbDecAndThen
+                    // Std.Config shares the decoder carrier + `decode_map` /
+                    // `decode_and_then` runtime fns, so its single-parameter
+                    // payload mappers need the same `Fun` → `FnOnceChain` retype.
+                    | KernelFn::ConfigMap
+                    | KernelFn::ConfigAndThen
             )
         ) {
             return;
@@ -13640,6 +13664,33 @@ impl<'a> Lowerer<'a> {
             ) => Ok(1),
             Callee::Kernel(KernelFn::CacheGet | KernelFn::CacheRemove) => Ok(2),
             Callee::Kernel(KernelFn::CachePut) => Ok(3),
+            // ── Std.Config ─────────────────────────────────────────────
+            // Primitive decoders (string/int/float/bool) are arity-0 bare
+            // decoders; nullable/list/succeed/fail take one arg; field/at/map/
+            // andThen and the format/load entry points take two (the source
+            // `String` FIRST for decode*/load, the decoder SECOND).
+            Callee::Kernel(
+                KernelFn::ConfigString
+                | KernelFn::ConfigInt
+                | KernelFn::ConfigFloat
+                | KernelFn::ConfigBool,
+            ) => Ok(0),
+            Callee::Kernel(
+                KernelFn::ConfigNullable
+                | KernelFn::ConfigList
+                | KernelFn::ConfigSucceed
+                | KernelFn::ConfigFail,
+            ) => Ok(1),
+            Callee::Kernel(
+                KernelFn::ConfigField
+                | KernelFn::ConfigAt
+                | KernelFn::ConfigMap
+                | KernelFn::ConfigAndThen
+                | KernelFn::ConfigDecodeToml
+                | KernelFn::ConfigDecodeYaml
+                | KernelFn::ConfigDecodeJson
+                | KernelFn::ConfigLoadFromFile,
+            ) => Ok(2),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
                 let def = self.m.defs.get(idx).ok_or_else(|| {
@@ -16754,6 +16805,23 @@ mod tests {
         KernelFn::CacheClear,
         KernelFn::CacheSize,
         KernelFn::CacheStats,
+        // Std.Config
+        KernelFn::ConfigString,
+        KernelFn::ConfigInt,
+        KernelFn::ConfigFloat,
+        KernelFn::ConfigBool,
+        KernelFn::ConfigNullable,
+        KernelFn::ConfigField,
+        KernelFn::ConfigAt,
+        KernelFn::ConfigList,
+        KernelFn::ConfigSucceed,
+        KernelFn::ConfigFail,
+        KernelFn::ConfigMap,
+        KernelFn::ConfigAndThen,
+        KernelFn::ConfigDecodeToml,
+        KernelFn::ConfigDecodeYaml,
+        KernelFn::ConfigDecodeJson,
+        KernelFn::ConfigLoadFromFile,
     ];
 
     /// Verifies that for every non-excluded variant in `KernelFn::ALL`, the

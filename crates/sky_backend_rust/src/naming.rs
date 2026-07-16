@@ -558,20 +558,24 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::JsonEncList => "json_enc_list",
         KernelFn::JsonEncObject => "json_enc_object",
         KernelFn::JsonEncEncode => "json_enc_encode",
-        // ── JsonDec kernels ────────────────────────────────────────────
-        KernelFn::JsonDecString => "json_decode_string",
-        KernelFn::JsonDecInt => "json_decode_int",
-        KernelFn::JsonDecFloat => "json_decode_float",
-        KernelFn::JsonDecBool => "json_decode_bool",
+        // ── JsonDec kernels (shared by Std.Config over the same carrier) ─
+        KernelFn::JsonDecString | KernelFn::ConfigString => "json_decode_string",
+        KernelFn::JsonDecInt | KernelFn::ConfigInt => "json_decode_int",
+        KernelFn::JsonDecFloat | KernelFn::ConfigFloat => "json_decode_float",
+        KernelFn::JsonDecBool | KernelFn::ConfigBool => "json_decode_bool",
         KernelFn::JsonDecDecodeString => "decode_from_json_string",
-        KernelFn::JsonDecField => "decode_field",
-        KernelFn::JsonDecAt => "decode_at",
+        KernelFn::JsonDecField | KernelFn::ConfigField => "decode_field",
+        KernelFn::JsonDecAt | KernelFn::ConfigAt => "decode_at",
         KernelFn::JsonDecIndex => "decode_index",
-        KernelFn::JsonDecList => "decode_list",
-        KernelFn::JsonDecMap | KernelFn::DbDecMap => "decode_map",
-        KernelFn::JsonDecAndThen | KernelFn::DbDecAndThen => "decode_and_then",
-        KernelFn::JsonDecSucceed | KernelFn::DbDecSucceed => "decode_succeed",
-        KernelFn::JsonDecFail | KernelFn::DbDecFail => "decode_fail",
+        KernelFn::JsonDecList | KernelFn::ConfigList => "decode_list",
+        KernelFn::JsonDecMap | KernelFn::DbDecMap | KernelFn::ConfigMap => "decode_map",
+        KernelFn::JsonDecAndThen | KernelFn::DbDecAndThen | KernelFn::ConfigAndThen => {
+            "decode_and_then"
+        }
+        KernelFn::JsonDecSucceed | KernelFn::DbDecSucceed | KernelFn::ConfigSucceed => {
+            "decode_succeed"
+        }
+        KernelFn::JsonDecFail | KernelFn::DbDecFail | KernelFn::ConfigFail => "decode_fail",
         KernelFn::JsonDecOneOf => "decode_one_of",
         KernelFn::JsonDecMap2 | KernelFn::DbDecMap2 => "decode_map2",
         KernelFn::JsonDecMap3 | KernelFn::DbDecMap3 => "decode_map3",
@@ -837,6 +841,15 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::CacheClear => "cache_clear",
         KernelFn::CacheSize => "cache_size",
         KernelFn::CacheStats => "cache_stats",
+        // ── Std.Config format/nullable/load kernels (Config-own fns) ────
+        // The 11 combinator/primitive `Config_*` kernels reuse the shared JSON
+        // `decode_*` / `json_decode_*` fns (merged into the `JsonDec*` arms
+        // above); only these five have Config-specific runtime fns.
+        KernelFn::ConfigNullable => "config_nullable",
+        KernelFn::ConfigDecodeToml => "config_decode_toml",
+        KernelFn::ConfigDecodeYaml => "config_decode_yaml",
+        KernelFn::ConfigDecodeJson => "config_decode_json",
+        KernelFn::ConfigLoadFromFile => "config_load_from_file",
         // ── TEA Cmd / Sub / Time kernels (wired) ────────────────────────
         KernelFn::CmdNone => "cmd_none",
         KernelFn::CmdBatch => "cmd_batch",
