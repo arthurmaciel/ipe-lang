@@ -81,7 +81,7 @@ fn expr_value_is_non_clone(expr: &Expr) -> bool {
 ///
 /// Used by the `Expr::Access` emission arm for #142/AUD-09's type-directed
 /// Copy elision — see
-/// `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md` §3.
+/// `docs/adr/0011-emitter-clone-borrow-discipline.md` §3.
 const fn ir_type_is_definitely_copy(ty: &IrType) -> bool {
     matches!(
         ty,
@@ -6006,7 +6006,7 @@ pub fn emit_expr_at(
             // misparsed; the field ident is keyword-mangled to match the struct.
             //
             // Type-directed Copy elision (#142/AUD-09 — see
-            // `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md`
+            // `docs/adr/0011-emitter-clone-borrow-discipline.md`
             // §3): Sky is a purely-functional language with value semantics,
             // so every field read is logically a copy.  A field whose solved
             // type is UNCONDITIONALLY `Copy` in the emitted Rust (Int / Float

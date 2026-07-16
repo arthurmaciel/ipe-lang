@@ -3194,7 +3194,7 @@ impl<'a> Builder<'a> {
                         // already does (identical precedent in `constrain_lambda`, the
                         // `regions.insert` on every lambda-parameter span below).
                         // Class 4 item C (#158) —
-                        // docs/architecture/class4-pattern-lowering-fix-spec-2026-07-09.md.
+                        // docs/adr/0010-pattern-and-lowering-completeness.md.
                         self.regions
                             .insert((self.current_home.clone(), sub.span), av);
                     }

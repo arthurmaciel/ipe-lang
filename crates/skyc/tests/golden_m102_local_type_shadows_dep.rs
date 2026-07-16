@@ -2,7 +2,7 @@
 //! rejected AT THE DECLARATION with a clean SKY-N0012 (`DuplicateType`), not a
 //! confusing downstream SKY-T0001 type mismatch three functions later.
 //!
-//! Root cause (see `docs/architecture/class4-pattern-lowering-fix-spec-2026-07-09.md`,
+//! Root cause (see `docs/adr/0010-pattern-and-lowering-completeness.md`,
 //! item D): `canonicalise_with_env`'s `type_home_map.entry(..).or_insert_with(..)`
 //! loop was a silent no-op when a dep import (`inject_dep_exports`) had already
 //! registered a `Color` entry, so `type_home_map["Color"]` kept pointing at the
