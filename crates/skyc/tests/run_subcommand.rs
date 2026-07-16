@@ -13,6 +13,9 @@ use std::path::PathBuf;
 
 /// `assert!(false_marker())` fails the test without tripping
 /// `clippy::assertions_on_constants`.
+// `const` is rejected on purpose: a const-known `false` would re-trip
+// `assertions_on_constants` at the call site, defeating the `black_box`.
+#[allow(clippy::missing_const_for_fn)]
 fn false_marker() -> bool {
     std::hint::black_box(false)
 }
