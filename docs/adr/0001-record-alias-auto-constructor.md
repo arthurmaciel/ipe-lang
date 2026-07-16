@@ -1,30 +1,35 @@
-# Record type-alias auto-constructor (SKY-N0001 / task #82)
+Status: Accepted
+Date: 2026-07-10
 
-Conciliated design. Guardian-reviewed against the strict principle order
-**security > correctness > soundness > efficiency > completeness > readability**
-and the two rules *PARSE, DON'T VALIDATE* and *MAKE INVALID STATES
-UNREPRESENTABLE*.
+# 0001. Record type-alias auto-constructor is a synthesized typed function
 
-## Problem
+## Context
 
 `type alias UserProfile = { username : String, age : Int, active : Bool }`
 should, per Elm-family semantics, introduce an in-scope **value**
 `UserProfile : String -> Int -> Bool -> { username, age, active }` (positional,
-in *declared* field order). Today the alias is registered only in the *type*
-namespace, so a value use — the dominant sweep shape
-`Decode.succeed UserProfile |> required "username" string |> …` — fails name
-resolution with SKY-N0001 ("cannot find this value in scope"). This blocks the
+in *declared* field order). Before this decision the alias was registered only
+in the *type* namespace, so a value use — the dominant sweep shape
+`Decode.succeed UserProfile |> required "username" string |> …` — failed name
+resolution with SKY-N0001 ("cannot find this value in scope"). This blocked the
 Live / Http / Db examples in the skyc sweep.
 
-## Chosen approach — "the auto-constructor is a synthesized typed function"
+The decision was guardian-reviewed against the strict principle order
+**security > correctness > soundness > efficiency > completeness > readability**
+and the two rules *PARSE, DON'T VALIDATE* and *MAKE INVALID STATES
+UNREPRESENTABLE*. It is implemented (`golden_m82_record_ctor.rs`, task #82 /
+SKY-N0001); the code in `sky_canon` is now the source of truth for the *how*.
+This ADR preserves the *why*.
 
-At the single canon site where a record alias's source-order fields are known,
-**parse the alias into an ordinary `canon::Def::Typed` that IS the
-constructor**. Register the alias name in the value namespace
-(`VarHome::TopLevel`) so `resolve_var("UserProfile")` succeeds. From that point
-on **every downstream stage receives a plain, fully-typed top-level function** —
-HM, lowering, and the Rust backend need **zero** special-casing and **no new
-IR node**.
+## Decision
+
+**The auto-constructor is a synthesized typed function.** At the single canon
+site where a record alias's source-order fields are known, parse the alias into
+an ordinary `canon::Def::Typed` that IS the constructor. Register the alias name
+in the value namespace (`VarHome::TopLevel`) so `resolve_var("UserProfile")`
+succeeds. From that point on every downstream stage receives a plain,
+fully-typed top-level function — HM, lowering, and the Rust backend need **zero**
+special-casing and **no new IR node**.
 
 This is the fresh design labelled *"correctness + field-order"* (source A,
 proposal 1), grafted with the genuinely-superior ../sky ADOPT learnings (real
@@ -196,51 +201,14 @@ interning order (`{ zebra : Int, apple : String }`) still binds `T 1 "a"` to
   DCE-eligible so an *unused* cfg-alias ctor is pruned rather than force-lowering
   a function-field body.
 
-## Ordered build tasks
+## Consequences
 
-1. **Canon registration** (`sky_canon/src/resolve.rs`,
-   `sky_canon/src/env.rs`). In `canonicalise_with_env`, after the alias map is
-   built and in the same pre-pass that registers top-level value names
-   (resolve.rs:465-479): for each alias whose **canonicalised body is
-   `canon::Type::Record`**, take the source-order field vec, canonicalise each
-   field type through the existing `canonicalise_type` (alias params fall
-   through to `Type::Var`), synthesize the `Def::Typed` above, `push` it onto
-   `Module::defs`, insert `env.vars.insert(name, VarHome::TopLevel(home))`, and
-   fold the name into `seen_values` (⇒ `DuplicateValue` on user collision).
-   Non-record aliases: no binding.
-2. **HM scheme** (`sky_types/src/constrain.rs`) — **no code change**; add a
-   *test* pinning the behaviour. The synthesized `Def::Typed` is collected at
-   constrain.rs:781 and instantiated fresh per `VarTopLevel` reference, so field
-   types are already checked at call sites and generic aliases already
-   generalise. Verify a param symbol canonicalises to `Type::Var` (not
-   `UnknownType`).
-3. **Cross-module exposure** (`sky_canon/src/lib.rs`, `resolve.rs`,
-   `link.rs`). When a record alias is exposed, insert its name into
-   `exports.values`; the synthesized def already lives in the dep's `defs`, so
-   the importer's existing `check_and_inject_value` path registers it as
-   `TopLevel(dep_path)` — no re-synthesis, no new injection code. `link` already
-   concatenates `defs`.
-4. **Lowering** (`sky_lower/src/lower.rs`) — **no code change**; add a *test*.
-   The synthesized def lowers as a normal typed function; saturated calls,
-   `eta_expand_partial`, and `Expr::FuncValue` bare-ref reification all already
-   handle `VarTopLevel`. Confirm the ctor participates in DCE.
-5. **Backend struct emission** (`sky_backend_rust`). One-line hardening: ensure
-   the uppercase ctor name mangles to a valid emitted Rust ident (module-prefix
-   snake-casing already applies to every `Def`; add `#[allow(non_snake_case)]`
-   only if the mangler preserves case). The output struct is the **same**
-   fieldset-resolved struct as an equivalent `{ … }` literal (no duplicate
-   struct).
-6. **Golden test — the 06-json shape.** Fixture mirroring
-   `Decode.succeed UserProfile |> required "username" string |> required "age"
-   int |> …`, plus (a) a **field-order** fixture with non-alphabetical declared
-   order (`{ zebra, apple }`) whose emitted binary is *run* to assert binding,
-   (b) a **cross-module** alias-defined-in-`State`-used-in-`Main` fixture, and
-   (c) a **negative** fixture asserting `type alias Count = Int` used as a value
-   still errors SKY-N0001. Golden-diff a hand-written `{ … }` literal against its
-   auto-ctor form to prove byte-identical output.
-7. **Full example sweep** green as the release gate.
-
-## Rejected & why
+The auto-constructor requires no new IR vocabulary and inherits every existing
+stage's handling of a typed top-level function; the invariant that must keep
+holding is that a record alias's field order is captured *once* (source
+`TRecord` vec) and projected into patterns/body/arrow together — never
+re-derived at a second site. The following alternatives were considered and
+**rejected**:
 
 * **Dedicated `Expr_::RecordCtor` canon node + `CtorScheme` registration + new
   constrain/lower/backend arms** (fresh designs A2, A3). Sound, but reintroduces
