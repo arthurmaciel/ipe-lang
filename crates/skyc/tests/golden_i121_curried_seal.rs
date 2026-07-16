@@ -349,17 +349,43 @@ fn f5_capture_fn_called_control() {
     );
 }
 
-// ── F6 — gate: fn-typed capture forwarded (non-callee) → SKY-L0126 ───────────
+// ── F6 — fn-typed capture forwarded (non-callee) → Arc-promoted, ACCEPTED ────
 
-/// `compose f = \x -> applyTwice f x` — `f : Int -> Int` in non-callee
-/// position.  T3 must surface SKY-L0126 at skyc time (never cargo-fail).
+/// `compose f = \x -> applyTwice f x` — `f : Int -> Int` forwarded in a
+/// non-callee position. RE-CLASSIFIED by the #221 fn-value `Arc`-carrier
+/// promotion: the param is shadow-rebound to the `Clone` `Arc<dyn Fn>` carrier
+/// and the read re-dispatched through a fresh `Box` closure, so the program
+/// compiles and runs (`compose (+1) 3` = `(+1)((+1) 3)` = `5`). The old
+/// SKY-L0125/6 gate was sound only while the sole carrier was a non-`Clone`
+/// `Box<dyn Fn>` — the state it rejected is no longer invalid, so keeping it
+/// would be over-rejection, not soundness.
 #[test]
-fn f6_capture_fn_forwarded_gate_l0125() {
-    assert_skyc_gate(
-        "i121_capture_fn_forwarded",
-        "i121_capture_fn_forwarded_gate",
-        sky_diagnostics::SKY_L0126,
+fn f6_capture_fn_forwarded_promoted_accepts() {
+    let root = repo_root();
+    let entry = root
+        .join("tests")
+        .join("golden")
+        .join("i121_capture_fn_forwarded")
+        .join("Main.sky");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i121_capture_fn_forwarded_accept");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        return;
+    };
+    let built = skyc::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "forwarded fn-typed param must Arc-promote and build: {:?}",
+        built.err()
     );
+
+    if std::env::var("SKY_E2E").is_err() {
+        return;
+    }
+    let outcome = support::build_and_run_emitted("i121_capture_fn_forwarded", &out);
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
+    assert_eq!(outcome.stdout.trim(), "5", "applyTwice (+1) 3 = 5");
 }
 
 // ── F7 — curried fn in JsonDec.succeed pipeline ───────────────────────────────
