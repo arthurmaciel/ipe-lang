@@ -153,9 +153,17 @@ runWithPrefix prefix tests =
             tests)
 
 
+println : String -> Task Error ()
+println =
+    Ffi.kernel "Log_println"
+
+
 summarise : List ( String, TestResult ) -> Bool
 summarise results =
     let
+        total =
+            List.length results
+
         failures =
             List.concatMap
                 (\pair ->
@@ -169,6 +177,18 @@ summarise results =
 
         failCount =
             List.length failures
+
+        passCount =
+            total - failCount
+
+        _ =
+            println
+                (String.fromInt passCount
+                    ++ " passed, "
+                    ++ String.fromInt failCount
+                    ++ " failed ("
+                    ++ String.fromInt total
+                    ++ " total)")
     in
     failCount == 0
 
