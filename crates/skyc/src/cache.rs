@@ -672,7 +672,7 @@ mod tests {
     fn sample_ir_program(i: &mut Interner) -> sky_diagnostics::DResult<Program> {
         use sky_ir::{
             Arm, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath,
-            Module, Pat, TypeDef, Variant,
+            Module, OnFormKind, Pat, TypeDef, Variant,
         };
 
         let msg_ty = i.intern("Msg")?;
@@ -696,6 +696,7 @@ mod tests {
                         callee: Callee::Kernel(KernelFn::LogPrintln),
                         args: vec![],
                         pin: CallPin::None,
+                        on_form: OnFormKind::NotForm,
                     },
                 ),
                 Arm::new(
@@ -709,6 +710,7 @@ mod tests {
                         callee: Callee::Kernel(KernelFn::LogPrintln),
                         args: vec![],
                         pin: CallPin::None,
+                        on_form: OnFormKind::NotForm,
                     },
                 ),
             ],
