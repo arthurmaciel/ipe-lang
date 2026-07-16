@@ -215,24 +215,43 @@ fn c13_complex_arg_hoist_t4() {
     );
 }
 
-// ── c14 — nested-lambda NonClone callee gate (Fix 2) ─────────────────────────
+// ── c14 — nested-lambda fn callee → Arc-promoted, ACCEPTED ───────────────────
 
-/// `composed f = \p -> (\x -> f x) p` — `f : Int -> Int` (`NonClone`) is used
-/// as the direct callee of `Apply` INSIDE a nested lambda (`\x -> f x`),
-/// which is at depth 1 relative to the outer lambda `\p -> ...`.
-///
-/// Pre-fix: the callee-position exemption fired at any depth, so `Var(f)` was
-/// allowed bare inside the inner lambda → inner `move` closure consumed `f`
-/// from the outer env → outer `FnOnce` → E0525 at cargo.
-///
-/// Fix 2: exemption fires only at depth == 0; at depth > 0 → SKY-L0126.
+/// `composed f = \p -> (\x -> f x) p` — `f : Int -> Int` called as the direct
+/// callee INSIDE a nested lambda (depth ≥ 2 from the param's scope).
+/// RE-CLASSIFIED by the #221 fn-value `Arc`-carrier promotion: `f` is
+/// shadow-rebound to the `Clone` `Arc<dyn Fn>` carrier and a clone relayed
+/// across each closure boundary, so the shape compiles and runs
+/// (`composed (*2) 3` = `6`). The old SKY-L0126 gate was sound only under the
+/// bare `Box<dyn Fn>` carrier (whose inner `move` closure consumed `f` per
+/// call, E0525); the state it rejected is no longer invalid.
 #[test]
-fn c14_nested_lambda_noncopy_gate() {
-    assert_skyc_gate(
-        "i130_nested_lambda_noncopy",
-        "i130_nested_lambda_noncopy_gate",
-        sky_diagnostics::SKY_L0126,
+fn c14_nested_lambda_noncopy_promoted_accepts() {
+    let root = repo_root();
+    let entry = root
+        .join("tests")
+        .join("golden")
+        .join("i130_nested_lambda_noncopy")
+        .join("Main.sky");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i130_nested_lambda_noncopy_accept");
+    let _ = std::fs::remove_dir_all(&out);
+
+    let Ok(runtime) = skyc::resolve_runtime() else {
+        return;
+    };
+    let built = skyc::build(&entry, &out, &runtime);
+    assert!(
+        built.is_ok(),
+        "nested-lambda fn callee must Arc-promote and build: {:?}",
+        built.err()
     );
+
+    if std::env::var("SKY_E2E").is_err() {
+        return;
+    }
+    let outcome = support::build_and_run_emitted("i130_nested_lambda_noncopy", &out);
+    assert_eq!(outcome.exit_code, Some(0), "exit 0");
+    assert_eq!(outcome.stdout.trim(), "6", "composed (*2) 3 = 6");
 }
 
 // ── c05 — StreamWriter capture-forward (clone_class opaque audit) ────────────

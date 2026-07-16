@@ -1,0 +1,26 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+
+
+-- #221 fn-typed PARAM captured by an eta-synthesized closure: `apply f`
+-- (1 of 2 args) synthesizes `\eta_0 -> apply(f, eta_0)`, which forwards the
+-- param `f` in a NON-callee position per call — unsound for a bare
+-- `Box<dyn Fn>` (E0507 at cargo, invisible to skyc before this promotion).
+-- The param is shadow-rebound to the `Arc` carrier at function entry and the
+-- read re-dispatched through a fresh closure; the SIGNATURE stays `Box`.
+apply : (Int -> Int) -> Int -> Int
+apply f x =
+    f x
+
+
+compose2 : (Int -> Int) -> Int -> Int -> Int
+compose2 f a b =
+    let
+        g = apply f
+    in
+        g a + g b
+
+
+main =
+    println (String.fromInt (compose2 (\n -> n + 5) 1 2))
