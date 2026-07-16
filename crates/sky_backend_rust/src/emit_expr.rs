@@ -962,8 +962,10 @@ const fn kernel_swaps_first_two(k: sky_ir::KernelFn) -> bool {
             | KernelFn::ResultAndThen
             | KernelFn::ResultMapError
             // `JsonDec.andThen f decoder` — Sky passes fn first; Rust runtime
-            // `decode_and_then(decoder, f)` expects decoder first.
+            // `decode_and_then(decoder, f)` expects decoder first. `Config.andThen`
+            // shares `decode_and_then`, so it needs the same reorder.
             | KernelFn::JsonDecAndThen
+            | KernelFn::ConfigAndThen
             // `Task.andThen f task` — Sky passes continuation first; Rust runtime
             // `task_and_then(task, f)` expects effect first so Rust evaluates the
             // effect expression BEFORE the continuation closure captures shared Db
@@ -5711,16 +5713,25 @@ fn emit_json_decoder_call(
                     | sky_ir::KernelFn::JsonDecInt
                     | sky_ir::KernelFn::JsonDecFloat
                     | sky_ir::KernelFn::JsonDecBool
+                    // `Config.{string,int,float,bool}` share the JSON primitive
+                    // decoder fns — same arity-0 turbofish treatment.
+                    | sky_ir::KernelFn::ConfigString
+                    | sky_ir::KernelFn::ConfigInt
+                    | sky_ir::KernelFn::ConfigFloat
+                    | sky_ir::KernelFn::ConfigBool
             )
         )
     {
         let name = callee_name(ctx, callee)?;
         return Ok(Some(format!("{name}::<SkyError>()")));
     }
-    // ── succeed(arg) — JsonDecSucceed and DbDecSucceed share decode_succeed ───
+    // ── succeed(arg) — JsonDecSucceed / DbDecSucceed / ConfigSucceed share
+    //    decode_succeed (Config over the same carrier).
     if matches!(
         callee,
-        Callee::Kernel(KernelFn::JsonDecSucceed | KernelFn::DbDecSucceed)
+        Callee::Kernel(
+            KernelFn::JsonDecSucceed | KernelFn::DbDecSucceed | KernelFn::ConfigSucceed
+        )
     ) && let Some(arg) = args.first()
     {
         match arg {
@@ -5762,9 +5773,12 @@ fn emit_json_decoder_call(
             }
         }
     }
-    // ── JsonDecList — wrap argument in factory closure ────────────────────────
-    if matches!(callee, Callee::Kernel(sky_ir::KernelFn::JsonDecList))
-        && let Some(inner) = args.first()
+    // ── JsonDecList / ConfigList — wrap argument in factory closure ───────────
+    // `decode_list` expects `impl Fn() -> Decoder<E, T>`; Config shares the fn.
+    if matches!(
+        callee,
+        Callee::Kernel(sky_ir::KernelFn::JsonDecList | sky_ir::KernelFn::ConfigList)
+    ) && let Some(inner) = args.first()
     {
         let inner_s = emit_expr_at(ctx, inner, indent, child, generics)?;
         return Ok(Some(format!("decode_list(move || {{ {inner_s} }})")));
