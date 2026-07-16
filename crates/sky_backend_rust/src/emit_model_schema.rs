@@ -378,18 +378,18 @@ mod tests {
         let z = interner.intern("z")?;
         let program = empty_program();
 
-        let a = hash_record(
+        let tag_before = hash_record(
             &interner,
             &program,
             BTreeMap::from([(x, IrType::Int), (y, IrType::Int)]),
         )?;
-        let b = hash_record(
+        let tag_renamed = hash_record(
             &interner,
             &program,
             BTreeMap::from([(x, IrType::Int), (z, IrType::Int)]),
         )?;
         assert_ne!(
-            a, b,
+            tag_before, tag_renamed,
             "renaming a Model field (y -> z) must change the schema tag"
         );
         Ok(())
@@ -582,6 +582,30 @@ mod tests {
             a, b,
             "swapping two zero-payload variants changes the serialized \
              discriminant assignment and must change the schema tag"
+        );
+        Ok(())
+    }
+
+    /// Termination proof for the fuel bound: a type nested far past the
+    /// 64-level budget still RETURNS (Ok or a propagated Err — the property
+    /// under test is termination, not success). The fuel bound guarantees
+    /// O(64) work, so completion within the harness's own timeout IS the
+    /// assertion.
+    #[test]
+    fn deeply_nested_type_never_hangs() -> DResult<()> {
+        let mut interner = Interner::new();
+        let field = interner.intern("deep")?;
+        let program = empty_program();
+
+        let mut ty = IrType::Int;
+        for _ in 0..200 {
+            ty = IrType::Maybe(Box::new(ty));
+        }
+        let result = hash_record(&interner, &program, BTreeMap::from([(field, ty)]));
+        assert!(
+            result.is_ok(),
+            "a fuel-exhausted walk degrades to the exhaustion marker, never \
+             an error or a hang: {result:?}"
         );
         Ok(())
     }

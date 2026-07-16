@@ -20,6 +20,9 @@ mod emit_cli;
 mod emit_expr;
 mod emit_live;
 mod emit_model_gate;
+// Stage-A inert: computed but not yet wired into emission (the emit_live
+// call lands with the schema-tag threading) — dead_code allowed until then.
+#[allow(dead_code)]
 mod emit_model_schema;
 mod emit_tui;
 mod emit_types;
@@ -179,6 +182,10 @@ impl Backend for RustBackend<'_> {
         project::emit_program(&ctx, program)
     }
 }
+
+/// One enum's variants as `(variant name, payload field types)`, in
+/// declaration order — the value shape of [`EmitCtx::enum_variants`].
+type VariantList = Vec<(Symbol, Vec<IrType>)>;
 
 /// A canonical record field list: `(Sky field name, field type)` pairs sorted by
 /// field name. The order is the struct's declaration / `SkyStringify` read order.
@@ -341,7 +348,7 @@ pub(crate) struct EmitCtx<'a> {
     /// tag ([`emit_model_schema`]) folds variant NAMES from at their declared
     /// positions (the serialized discriminant is assigned by declaration
     /// index, so a variant rename AND a reorder are both wire-format-relevant).
-    enum_variants: BTreeMap<(ModPath, Symbol), Vec<(Symbol, Vec<IrType>)>>,
+    enum_variants: BTreeMap<(ModPath, Symbol), VariantList>,
     /// Enum type symbol → whether that user enum's rendered Rust type supports
     /// the full `#[derive(Clone, Debug, PartialEq)]` set. Computed by a monotone
     /// whole-program fixpoint at [`EmitCtx::build`]: an enum is non-derivable iff
@@ -376,8 +383,7 @@ impl<'a> EmitCtx<'a> {
     fn build(interner: &'a Interner, program: &Program, db_driver: DbDriver) -> DResult<Self> {
         let mut enum_names: BTreeMap<(ModPath, Symbol), String> = BTreeMap::new();
         let mut variant_fields: BTreeMap<(ModPath, Symbol, Symbol), Vec<IrType>> = BTreeMap::new();
-        let mut enum_variants: BTreeMap<(ModPath, Symbol), Vec<(Symbol, Vec<IrType>)>> =
-            BTreeMap::new();
+        let mut enum_variants: BTreeMap<(ModPath, Symbol), VariantList> = BTreeMap::new();
         let mut func_names = BTreeMap::new();
         for module in &program.modules {
             let segs = module
@@ -1319,7 +1325,7 @@ fn collect_record_shapes(
 fn type_reaches_enum(
     ty: &IrType,
     target: (&ModPath, Symbol),
-    enums: &BTreeMap<(ModPath, Symbol), Vec<(Symbol, Vec<IrType>)>>,
+    enums: &BTreeMap<(ModPath, Symbol), VariantList>,
     visited: &mut BTreeSet<(ModPath, Symbol)>,
 ) -> bool {
     match ty {
