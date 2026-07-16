@@ -1001,6 +1001,53 @@ async fn flush_exporters() {
     hub_exporter::flush_now(CAP_MS).await;
 }
 
+/// Push a bounded `event: reload` frame to every session THIS PROCESS is
+/// currently serving over SSE, so a connected browser skips its own
+/// reconnect-wait and refetches immediately instead of waiting out the
+/// retry backoff ladder. Dev-mode only — see H23 ("dev-only reload channel
+/// ABSENT, not disabled, in production"): the production gate lives at the
+/// ONE call site chain ([`maybe_push_reload_to_live_sessions`], called from
+/// `live_shutdown_signal`), never inside this helper — a caller that
+/// reaches this function has already decided dev-mode applies. Delivery is
+/// best-effort, at-most-once, never retried: a full/closed channel just
+/// drops that one session's frame (the browser's own reconnect logic
+/// already covers the restart-detection floor; this only shaves latency),
+/// and a session that disconnects between the enumerate and the push
+/// misses a frame it can't act on anyway.
+async fn push_reload_to_live_sessions<Model, Msg>(store: &Arc<dyn store::SessionStore<Model, Msg>>)
+where
+    Model: Send + 'static,
+    Msg: Send + 'static,
+{
+    for handle in store.live_sessions().await {
+        let tx = handle
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .sse_tx
+            .clone();
+        if let Some(tx) = tx {
+            let _ = tx.send(SsePatch(sse::frame("reload", "{}"))).await;
+        }
+    }
+}
+
+/// The H23 production gate over [`push_reload_to_live_sessions`]: in
+/// production (`ENV`/`SKY_ENV` set to a non-dev marker) the push path is
+/// UNREACHABLE — same one-`if` shape every other production gate in this
+/// module uses (dev-console mount, metrics auth). Split from
+/// `live_shutdown_signal` so the gate itself is unit-testable without
+/// delivering a real signal.
+async fn maybe_push_reload_to_live_sessions<Model, Msg>(
+    store: &Arc<dyn store::SessionStore<Model, Msg>>,
+) where
+    Model: Send + 'static,
+    Msg: Send + 'static,
+{
+    if !crate::sky_runtime::telemetry::production_from_env() {
+        push_reload_to_live_sessions(store).await;
+    }
+}
+
 /// Await the FIRST shutdown signal (SIGINT or SIGTERM), then run the graceful
 /// teardown and return so axum's `with_graceful_shutdown` drains in-flight
 /// connections and the serve future resolves `Ok(())` (→ the SkyTask is `Ok` →
@@ -1016,7 +1063,11 @@ async fn flush_exporters() {
 ///
 /// Robustness: a failed SIGTERM registration must NOT crash — it degrades to
 /// SIGINT-only (`ctrl_c`). On non-unix only `ctrl_c` is available.
-async fn live_shutdown_signal() {
+async fn live_shutdown_signal<Model, Msg>(store: Arc<dyn store::SessionStore<Model, Msg>>)
+where
+    Model: Send + 'static,
+    Msg: Send + 'static,
+{
     // First press: block until SIGINT or SIGTERM arrives.
     wait_for_term_or_int().await;
 
@@ -1027,6 +1078,12 @@ async fn live_shutdown_signal() {
     // Flip readyz → draining so orchestrators stop routing new traffic while
     // in-flight requests finish (Go: `SetReady(false)`).
     observability::mark_draining();
+
+    // Dev-only proactive `event: reload` push to every locally-live SSE
+    // session, fired once the shutdown is committed and BEFORE the bounded
+    // grace-timer drain begins — a connected browser refetches immediately
+    // instead of waiting out its reconnect backoff. Production-gated (H23).
+    maybe_push_reload_to_live_sessions(&store).await;
 
     // Tear down the console child (Go: `ShutdownSubApps`; here the pre-built
     // console child, if one was spawned). Idempotent no-op when none exists.
@@ -1717,6 +1774,10 @@ where
             )
         }
 
+        // Cloned for the shutdown path's dev-only reload push — the router's
+        // `.with_state(state)` takes ownership of `state` below.
+        let shutdown_store = state.store.clone();
+
         let mut router = Router::new()
             .route(
                 "/_sky/sse",
@@ -1852,7 +1913,7 @@ where
         // the SkyTask resolves Ok → the generated entry exits 0 (NOT 130). A
         // SECOND signal force-exits 130 via the watchdog inside live_shutdown_signal.
         match axum::serve(listener, app)
-            .with_graceful_shutdown(live_shutdown_signal())
+            .with_graceful_shutdown(live_shutdown_signal(shutdown_store))
             .await
         {
             Ok(()) => ok_res(()),
@@ -1883,6 +1944,90 @@ fn sid_from_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
 // standalone top-level `sky_runtime::html` module (re-exported here via
 // `use super::*`), so a non-Live Std.Html / Std.Ui render doesn't pull this
 // server module in.
+
+#[cfg(test)]
+mod reload_push_tests {
+    use super::*;
+    use crate::sky_runtime::live::store::{MemoryStore, SessionHandle, SessionStore};
+    use std::time::Duration;
+    use tokio::sync::mpsc::channel;
+
+    fn handle_with(sse_tx: Option<SseTx>) -> SessionHandle<(), ()> {
+        let (tx, _rx) = channel::<()>(1);
+        let tree: Html<()> = Html::HText(String::new());
+        let index = build_index(&tree);
+        Arc::new(Mutex::new(SessionEntry {
+            model: (),
+            last_view: tree,
+            index,
+            seq: 0,
+            sse_tx,
+            msg_tx: tx,
+        }))
+    }
+
+    /// Every SSE-attached live session receives exactly ONE `event: reload`
+    /// frame; a session with no SSE connection is skipped without panicking.
+    #[tokio::test]
+    async fn push_reload_to_live_sessions_sends_one_frame_per_live_session() {
+        let store_impl: MemoryStore<(), ()> = MemoryStore::new(Duration::from_secs(60));
+        let (sse_tx, mut sse_rx) = sse::channel();
+        store_impl.set("with_sse", handle_with(Some(sse_tx))).await;
+        store_impl.set("without_sse", handle_with(None)).await;
+        let store: Arc<dyn SessionStore<(), ()>> = Arc::new(store_impl);
+
+        push_reload_to_live_sessions(&store).await;
+
+        let frame = sse_rx
+            .try_recv()
+            .expect("the SSE-attached session must receive a reload frame");
+        assert_eq!(frame.0, sse::frame("reload", "{}"));
+        assert!(
+            sse_rx.try_recv().is_err(),
+            "exactly one frame per live session, never more"
+        );
+    }
+
+    /// H23: with `ENV=production` the reload push is UNREACHABLE — the
+    /// gated path pushes nothing; in dev it pushes. (The gate is tested via
+    /// `maybe_push_reload_to_live_sessions`, the exact call
+    /// `live_shutdown_signal` makes right after `mark_draining` — split out
+    /// so no real OS signal is needed here.)
+    #[tokio::test]
+    async fn live_shutdown_signal_skips_the_reload_push_in_production() {
+        use crate::sky_runtime::system::{locked_remove_var, locked_set_var};
+        let prior_env = std::env::var("ENV").ok();
+        let prior_sky_env = std::env::var("SKY_ENV").ok();
+
+        let store_impl: MemoryStore<(), ()> = MemoryStore::new(Duration::from_secs(60));
+        let (sse_tx, mut sse_rx) = sse::channel();
+        store_impl.set("s", handle_with(Some(sse_tx))).await;
+        let store: Arc<dyn SessionStore<(), ()>> = Arc::new(store_impl);
+
+        locked_set_var("ENV", "production");
+        maybe_push_reload_to_live_sessions(&store).await;
+        assert!(
+            sse_rx.try_recv().is_err(),
+            "production must have NO reachable path that pushes the reload frame"
+        );
+
+        locked_set_var("ENV", "dev");
+        maybe_push_reload_to_live_sessions(&store).await;
+        assert!(
+            sse_rx.try_recv().is_ok(),
+            "dev mode must push the reload frame"
+        );
+
+        match prior_env {
+            Some(v) => locked_set_var("ENV", &v),
+            None => locked_remove_var("ENV"),
+        }
+        match prior_sky_env {
+            Some(v) => locked_set_var("SKY_ENV", &v),
+            None => locked_remove_var("SKY_ENV"),
+        }
+    }
+}
 
 #[cfg(test)]
 mod dev_banner_tests {
