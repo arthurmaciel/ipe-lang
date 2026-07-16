@@ -3979,6 +3979,50 @@ fn count_fn_value_uses_apply(sym: Symbol, func: &Expr, args: &[Expr]) -> usize {
 /// callers may invoke it unconditionally wherever that rewrite does not
 /// apply. See the "Fn-value reuse gate, T4 (#90)" module doc block above
 /// [`count_fn_value_uses`] for why a direct-callee use is exempt.
+/// The ONE sanctioned way to make a freshly-bound owned symbol move-safe in the
+/// scope it is visible over. Every binder kind — def param, lambda param, `let`
+/// name, match-arm pattern var, destructure component — routes through this
+/// single entry point rather than open-coding its own count/clone/relay
+/// dispatch, so a binder kind cannot silently ship without the discipline.
+///
+/// **Invariant established here — every move-closure boundary owns what it
+/// captures.** A Rust `move` closure takes each free variable by value at
+/// construction, and a closure constructed *inside* another closure's body is
+/// re-constructed per call of the outer closure — so its capture-move consumes
+/// an outer env field through `&self` → E0507, every call. The only fix is a
+/// fresh owned copy minted inside the outer body before the construction: the
+/// per-boundary clone relay. `apply_move_ownership` guarantees, for the scope
+/// it is given, that every closure boundary a captured `sym` crosses at
+/// lambda-nesting depth ≥ 1 gets that relay, while the outermost (depth-0)
+/// capture stays bare when it is the last consuming use (ADR-0002's lean
+/// last-use divergence — N−1 clones, not the reference's blanket N).
+///
+/// Mechanism (no per-site `n > 1` / `n == 1` branch): the single call
+/// [`rewrite_multiuse_clones`] with `remaining = count_var_uses(sym, scope)`
+/// is already correct and lean for **every** `n ≥ 1`:
+/// * `n > 1` — clone all but the last occurrence (T5, #104/#112/#199).
+/// * `n == 1` — the sole occurrence stays bare (no depth-0 over-clone), and its
+///   `Lambda`/`SharedLambda` arm runs `force_shared_capture_clones` over the
+///   body, installing the inner relays (the #218 obligation) WITHOUT the
+///   spurious depth-0 pre-clone the old open-coded `else` branch added (#225).
+/// * `n == 0` — an unused binder: [`rewrite_multiuse_clones`] no-ops at
+///   `remaining == 0`, so unused pattern vars stay byte-identical.
+///
+/// Eligibility mirrors [`param_is_multiuse_clonable`] (`CloneOk` ∪ bare
+/// `Generic`, #189); a fn-carrying `NonClone` binder has no sound clone rewrite,
+/// so it fails closed on reuse via [`reject_fn_value_reuse`] (self-guarding on
+/// non-fn-carrying / `CloneOk` types, so calling it for every ineligible binder
+/// is safe — a `CopyLeaf` scalar or wildcard binder is a no-op).
+fn apply_move_ownership(sym: Symbol, ir_ty: &IrType, scope: Expr, span: Span) -> DResult<Expr> {
+    if param_is_multiuse_clonable(ir_ty) {
+        let mut remaining = count_var_uses(sym, &scope);
+        Ok(rewrite_multiuse_clones(sym, &mut remaining, scope))
+    } else {
+        reject_fn_value_reuse(sym, ir_ty, &scope, span)?;
+        Ok(scope)
+    }
+}
+
 fn reject_fn_value_reuse(sym: Symbol, ir_ty: &IrType, body: &Expr, span: Span) -> DResult<()> {
     if !ir_contains_fun(ir_ty) || !matches!(clone_class(ir_ty), CloneClass::NonClone) {
         return Ok(());
@@ -6923,39 +6967,16 @@ impl<'a> Lowerer<'a> {
                     .chain(any_syms_minted.iter().copied())
                     .map(|v| (v, Self::bounds_for(var_bounds, v)))
                     .collect();
-                // T5 (#104 / #112): multi-use-clone rewrite for CloneOk params.
-                // When a function parameter of `CloneOk` type (e.g. String) is used
-                // N > 1 times in the body, all but the syntactically last occurrence
-                // must clone — otherwise Rust emits E0382 (use of moved value).
-                // Run BEFORE TCO so the loop-rewrite sees already-correct clone nodes.
-                // #189: a reused bare `IrType::Generic(_)` param is treated as
-                // clonable here too (see `param_is_multiuse_clonable`) — the
-                // emitted `T: Clone` bound makes the inserted `.clone()` sound.
+                // Move-ownership discipline for CloneOk / bare-Generic params
+                // (T5, #104/#112/#189) — the ONE entry point every binder kind
+                // shares. Run BEFORE TCO so the loop-rewrite sees already-correct
+                // clone nodes. `apply_move_ownership` collapses the former
+                // per-site `n > 1 { multiuse } else { relay }` split into a
+                // single `rewrite_multiuse_clones(remaining = n)` call (lean and
+                // correct for every n ≥ 1) and fails closed on fn-value reuse
+                // for ineligible params.
                 for (sym, ir_ty) in &params {
-                    if param_is_multiuse_clonable(ir_ty) {
-                        let n = count_var_uses(*sym, &lowered_body);
-                        if n > 1 {
-                            let mut remaining = n;
-                            lowered_body =
-                                rewrite_multiuse_clones(*sym, &mut remaining, lowered_body);
-                        } else {
-                            // #218: at `n == 1` the multi-use pass is skipped,
-                            // but a single read sitting behind TWO OR MORE
-                            // `move`-closure boundaries still needs the
-                            // per-boundary clone relay (the def-head sibling of
-                            // the lambda-param fix in `lower_lambda`). The
-                            // intermediate closure would otherwise move the param
-                            // out of the enclosing `Fn` env (E0507).
-                            // `force_shared_capture_clones` is a documented no-op
-                            // when no nested capturing lambda is present, so
-                            // steady-state params stay byte-identical.
-                            lowered_body = force_shared_capture_clones(*sym, lowered_body);
-                        }
-                    } else {
-                        // T4 (#90): a fn-carrying, non-Clone param has no sound
-                        // multi-use rewrite — fail closed on reuse instead.
-                        reject_fn_value_reuse(*sym, ir_ty, &lowered_body, sig_span)?;
-                    }
+                    lowered_body = apply_move_ownership(*sym, ir_ty, lowered_body, sig_span)?;
                 }
                 // TCO: if every self-call is a tail call, rewrite the body to a
                 // loop so the Rust stack stays flat (mirrors Sky's TailCallOpt).
@@ -7103,27 +7124,11 @@ impl<'a> Lowerer<'a> {
                             body: Box::new(lowered_body),
                         };
                     }
-                    // T5 (#104 / #112): same param multi-use-clone pass as the
-                    // Typed path above (see comment there for rationale).
-                    // #189: reused bare `IrType::Generic(_)` param also clonable
-                    // (see `param_is_multiuse_clonable`).
+                    // Same move-ownership discipline as the Typed path above —
+                    // one `apply_move_ownership` per param (see that call site
+                    // and the fn doc for the collapsed-branch rationale).
                     for (sym, ir_ty) in &params {
-                        if param_is_multiuse_clonable(ir_ty) {
-                            let n = count_var_uses(*sym, &lowered_body);
-                            if n > 1 {
-                                let mut remaining = n;
-                                lowered_body =
-                                    rewrite_multiuse_clones(*sym, &mut remaining, lowered_body);
-                            } else {
-                                // #218: single read behind >= 2 move-closure
-                                // boundaries still needs the per-boundary relay;
-                                // see the Typed-path comment above.
-                                lowered_body = force_shared_capture_clones(*sym, lowered_body);
-                            }
-                        } else {
-                            // T4 (#90): see the Typed-path comment above.
-                            reject_fn_value_reuse(*sym, ir_ty, &lowered_body, sig_span)?;
-                        }
+                        lowered_body = apply_move_ownership(*sym, ir_ty, lowered_body, sig_span)?;
                     }
                     let arity = params.len();
                     if analyze_tail_recursion(id, arity, &lowered_body)
@@ -8202,61 +8207,20 @@ impl<'a> Lowerer<'a> {
                 body: Box::new(body),
             };
         }
-        // T5 (#199): multi-use-clone rewrite for CloneOk LAMBDA params — the
-        // exact analogue of the def-head param rewrite in `lower_def`. A lambda
-        // parameter of `CloneOk` type (e.g. `\rows -> …`, `rows : List Row`)
-        // used N > 1 times by value in the body must clone all but the
-        // syntactically-last occurrence, else Rust emits E0382 (use of moved
-        // value). This site was previously blind to it: `lower_lambda` ran the
-        // capture-clone rewrite for CAPTURED free locals and `reject_fn_value_reuse`
-        // for non-Clone params, but never the CloneOk multi-use pass its
-        // def-head sibling has (07-todo-cli's `listTodos`:
-        // `\rows -> if List.isEmpty rows then … else … List.map f rows`).
-        // `rewrite_multiuse_clones`'s own `Lambda` arm carries the #199
-        // nested-capture descent, so a param captured into a further-nested
-        // closure is covered by the same walk.
-        //
-        // #218: the multi-use pass only fires at `n > 1`, but the
-        // nested-capture relay is needed whenever the param's read sits behind
-        // TWO OR MORE `move`-closure boundaries — even at `n == 1`. Shape:
-        // `report e = randomToken 4 |> Task.andThen (\errId -> logAndFail e errId)`.
-        // Here `e` (a `CloneOk` `Error`) is read exactly once, but through the
-        // pipeline-synthesized intermediate `move |eta_0|` closure AND the inner
-        // `\errId ->` closure; the intermediate boundary must pre-clone `e` too
-        // or it moves `e` out of `report`'s `Fn` env (E0507). At `n == 1` the
-        // multi-use pass is skipped, so run the relay directly:
-        // `force_shared_capture_clones` gives every intermediate move-closure
-        // boundary its own `let sym = sym.clone()` and is a documented no-op
-        // when there is no nested capturing lambda (steady-state single-closure
-        // params stay byte-identical). At `n > 1` the multi-use pass already
-        // performs this exact relay via its `Lambda` arm, so the two are
-        // mutually exclusive — never double-applied.
+        // Move-ownership discipline for LAMBDA params — the exact analogue of
+        // the def-head param rewrite in `lower_def`, through the ONE shared
+        // `apply_move_ownership` entry point. This folds the two former loops
+        // (the CloneOk multi-use/relay rewrite #199/#218 and the separate
+        // #90 T4 fn-value-reuse gate) into one per-param call:
+        // `apply_move_ownership` runs the lean `rewrite_multiuse_clones`
+        // (`remaining = n`, correct for every n ≥ 1) for CloneOk / bare-Generic
+        // params and fails closed on fn-value reuse for the rest. Upgrading
+        // eligibility from `CloneOk`-only to `param_is_multiuse_clonable`
+        // (#189's bare-`Generic` admission) also closes the latent S3-generic
+        // double-move — a reused bare-`Generic` lambda param now clones under
+        // its emitted `T: Clone` bound instead of double-moving.
         for (sym, ir_ty) in &ir_params {
-            if matches!(clone_class(ir_ty), CloneClass::CloneOk) {
-                let n = count_var_uses(*sym, &body);
-                if n > 1 {
-                    let mut remaining = n;
-                    body = rewrite_multiuse_clones(*sym, &mut remaining, body);
-                } else {
-                    body = force_shared_capture_clones(*sym, body);
-                }
-            }
-        }
-        // T4 (#90, revert-incident Bug 1): a fn-carrying, non-Clone LAMBDA
-        // parameter has no sound multi-use rewrite — fail closed on reuse,
-        // same as the Def-head / let-binding / match-arm gates above.  This
-        // call site was the one the first #90 landing (f80f05a, reverted)
-        // missed entirely: `lower_lambda` builds its own `ir_params` here but
-        // never ran them through `reject_fn_value_reuse`, so
-        // `\mf -> consume mf + consume mf` with `mf : Maybe (Int -> Int)`
-        // reused the boxed closure twice and reached `cargo build` as
-        // E0382 use-of-moved-value instead of a clean SKY-L0127 diagnostic.
-        // `reject_fn_value_reuse` self-guards on non-fn-carrying / CloneOk
-        // params, so it is safe to call unconditionally for every param
-        // (including a `PAnything` wildcard's fresh synthetic binder, which
-        // by construction is referenced zero times).
-        for (sym, ir_ty) in &ir_params {
-            reject_fn_value_reuse(*sym, ir_ty, &body, span)?;
+            body = apply_move_ownership(*sym, ir_ty, body, span)?;
         }
         Ok(Expr::Lambda {
             params: ir_params,
@@ -14526,15 +14490,45 @@ impl<'a> Lowerer<'a> {
         value_span: Span,
         body: Expr,
         canon_value: &canon::Expr,
+        canon_scope: &[&canon::Expr],
     ) -> DResult<Expr> {
         let value_ir_ty = self
             .region_ty(value_span)
             .and_then(|ty| self.ir_type_from_ty(ty, value_span).ok());
         let Some(ir_ty) = value_ir_ty.filter(ir_type_contains_decoder) else {
+            // #224: a destructure binder (`let (a, b) = pair in …`, single-arm
+            // `case p of (a, b) -> …`) whose value type contains NO Decoder used
+            // to emit a bare `Destructure` with NO move-ownership discipline on
+            // its bound component symbols — a live E0382/E0507 SEAL breach the
+            // per-binder-kind architecture predicted (destructure was the one
+            // binder kind that never invoked the machinery). Route every bound
+            // component through the ONE shared `apply_move_ownership` entry
+            // point over the body, exactly as arm-bound vars do (S5): resolve
+            // each component's type from its first use-site span anywhere in the
+            // scope the binder is visible over (`canon_scope` = the let/case
+            // body plus, for a `let`, the values of subsequent siblings), then
+            // apply the lean multi-use/relay rewrite (or the fail-closed T4 gate
+            // for fn-value reuse). Unused components have no use-site span →
+            // skipped (byte-identical); a Decoder-containing value still takes
+            // the thunk path below.
+            let mut bound: BTreeSet<Symbol> = BTreeSet::new();
+            pat_bound_symbols(&binder, &mut bound);
+            let mut disciplined_body = body;
+            for sym in &bound {
+                if let Some(span) = canon_scope
+                    .iter()
+                    .find_map(|e| find_first_varlocal_span(*sym, e))
+                    && let Some(ty) = self.region_ty(span)
+                    && let Ok(comp_ir_ty) = self.ir_type_from_ty(ty, span)
+                {
+                    disciplined_body =
+                        apply_move_ownership(*sym, &comp_ir_ty, disciplined_body, span)?;
+                }
+            }
             return Ok(Expr::Destructure {
                 binder,
                 value: Box::new(value),
-                body: Box::new(body),
+                body: Box::new(disciplined_body),
             });
         };
 
@@ -14642,27 +14636,15 @@ impl<'a> Lowerer<'a> {
                 .region_ty(b.body.span)
                 .and_then(|ty| self.ir_type_from_ty(ty, b.body.span).ok());
             let mut acc = if let Some(ref ir_ty) = ty_opt {
-                if matches!(clone_class(ir_ty), CloneClass::CloneOk) {
-                    let n = count_var_uses(name, &acc);
-                    if n > 1 {
-                        let mut remaining = n;
-                        rewrite_multiuse_clones(name, &mut remaining, acc)
-                    } else {
-                        // #218: a single read of a non-function `CloneOk`
-                        // let-binding behind >= 2 move-closure boundaries still
-                        // needs the per-boundary clone relay. The `Fun`-typed
-                        // `Arc`-promotion path below (`needs_shared_capture`)
-                        // handles function-typed bindings; this covers the
-                        // ordinary-value siblings. `force_shared_capture_clones`
-                        // is a documented no-op absent a nested capturing lambda.
-                        force_shared_capture_clones(name, acc)
-                    }
-                } else {
-                    // T4 (#90): a fn-carrying, non-Clone let-binding has no
-                    // sound multi-use rewrite — fail closed on reuse instead.
-                    reject_fn_value_reuse(name, ir_ty, &acc, b.body.span)?;
-                    acc
-                }
+                // The ONE shared move-ownership entry point (see
+                // `apply_move_ownership`): the lean `rewrite_multiuse_clones`
+                // (`remaining = n`, correct for every n ≥ 1) for CloneOk /
+                // bare-Generic values — its `n == 1` Lambda arm installs the
+                // #218 per-boundary relay without the old depth-0 over-clone —
+                // and a fail-closed #90 T4 gate for fn-value reuse. The
+                // `Fun`-typed `Arc`-promotion path below (`needs_shared_capture`
+                // / `flows_into_sync_kernel_call`) is orthogonal and untouched.
+                apply_move_ownership(name, ir_ty, acc, b.body.span)?
             } else {
                 acc
             };
@@ -14734,7 +14716,14 @@ impl<'a> Lowerer<'a> {
 
     fn lower_let(&self, bindings: &[canon::LetBinding], body: &canon::Expr) -> DResult<Expr> {
         let mut acc = self.lower_expr(body)?;
-        for b in bindings.iter().rev() {
+        for (rev_i, b) in bindings.iter().rev().enumerate() {
+            // Scope the binder is visible over, in source order: the let body
+            // plus the values of every binding that appears AFTER `b`. `rev_i`
+            // counts from the last binding, so the source index of `b` is
+            // `bindings.len() - 1 - rev_i` and its successors are the tail slice
+            // starting one past it. Used by the destructure move-ownership pass
+            // (#224) to find each component symbol's first use-site type.
+            let b_src_idx = bindings.len() - 1 - rev_i;
             let value = self.lower_expr(&b.body)?;
             acc = match &b.pat.value {
                 canon::Pattern_::PVar(name) => self.lower_let_pvar(*name, b, value, acc)?,
@@ -14779,12 +14768,20 @@ impl<'a> Lowerer<'a> {
                 // through to the plain (byte-identical) `Destructure`.
                 _ => {
                     let binder = self.lower_binder_pat(&b.pat, &b.body)?;
+                    // Scope = the let body + the values of every later sibling
+                    // binding (source order) — where the destructured components
+                    // may be read (see #224 pass in the thunk builder).
+                    let mut scope: Vec<&canon::Expr> = vec![body];
+                    if let Some(later) = bindings.get(b_src_idx + 1..) {
+                        scope.extend(later.iter().map(|lb| &lb.body));
+                    }
                     self.build_destructure_or_decoder_thunk(
                         binder,
                         value,
                         b.body.span,
                         acc,
                         &b.body,
+                        &scope,
                     )?
                 }
             };
@@ -14817,8 +14814,15 @@ impl<'a> Lowerer<'a> {
                 // Decoder-typed component is the identical E0382 gap.
                 let binder = self.lower_binder_pat(&first.pat, scrut)?;
                 let body = self.lower_expr(&first.body)?;
+                // Scope = the single arm body — where the destructured
+                // components are read (see #224 pass in the thunk builder).
                 return self.build_destructure_or_decoder_thunk(
-                    binder, scrutinee, scrut.span, body, scrut,
+                    binder,
+                    scrutinee,
+                    scrut.span,
+                    body,
+                    scrut,
+                    &[&first.body],
                 );
             }
             // A MULTI-arm product `case`. A tuple scrutinee whose arms are tuple
@@ -14894,48 +14898,37 @@ impl<'a> Lowerer<'a> {
                     };
                 let mut arm_body = self.lower_expr(&br.body)?;
 
-                // T5 for arm-bound variables.  Each symbol the canon pattern
-                // introduces is owned in the arm body (after the backend's
-                // `rebind_clone` / `rebind_to_vec` prologue, or after a PCtor
-                // destructure).  When a symbol is used more than once, Rust's
-                // move semantics would reject the second use (E0382).  Insert
-                // `.clone()` for all but the syntactically-last occurrence,
-                // exactly as T5 does for function parameters and let-bindings.
+                // Move-ownership discipline for arm-bound variables — each
+                // symbol the canon pattern introduces is owned in the arm body
+                // (after the backend's `rebind_clone` / `rebind_to_vec`
+                // prologue, or after a PCtor destructure), so it routes through
+                // the ONE shared `apply_move_ownership` entry point exactly as
+                // def params / lambda params / let-bindings do.
                 //
                 // Type source: the solver records a type for EVERY `VarLocal`
-                // use-site.  The first use-site of `sym` in the canon arm body
-                // carries the HM type that `ir_type_from_ty` then maps to an
-                // IR type.  We skip symbols where the type is unavailable or
-                // does not need cloning (`CopyLeaf` = Rust `Copy` scalars,
-                // `NonClone` = function-typed / Cmd / Sub — these should not
-                // appear in arm patterns in practice).
+                // use-site; the FIRST use-site of `sym` in the canon arm body
+                // carries the HM type that `ir_type_from_ty` maps to an IR type.
+                //
+                // #222: type resolution is HOISTED OUT of the former `n > 1`
+                // guard so it runs at `n == 1` too. An arm var read exactly
+                // once but through TWO OR MORE nested `move`-closure boundaries
+                // still needs the per-boundary relay (the intermediate closure
+                // would otherwise move it out of the enclosing `Fn` env →
+                // E0507). `apply_move_ownership`'s `rewrite_multiuse_clones`
+                // (`remaining = n`) installs that relay via its Lambda arm at
+                // `n == 1` and stays lean (bare last-use at depth 0). Unused
+                // pattern vars have no use-site span → `find_first_varlocal_span`
+                // returns `None` → skipped, byte-identical to before.
+                // `ir_type_from_ty` can legitimately fail for
+                // unsupported / not-yet-modelled types — treat any error as
+                // "skip the discipline for this symbol" (documented `Unknown`
+                // residual, same as before).
                 for sym in collect_arm_pat_pvars(&br.pat.value) {
-                    let n = count_var_uses(sym, &arm_body);
-                    // `ir_type_from_ty` can legitimately fail for
-                    // unsupported / not-yet-modelled types — treat
-                    // any error as "skip T5 for this symbol".
-                    if n > 1
-                        && let Some(span) = find_first_varlocal_span(sym, &br.body)
+                    if let Some(span) = find_first_varlocal_span(sym, &br.body)
                         && let Some(ty) = self.region_ty(span)
                         && let Ok(ir_ty) = self.ir_type_from_ty(ty, span)
                     {
-                        match clone_class(&ir_ty) {
-                            CloneClass::CloneOk => {
-                                let mut remaining = n;
-                                arm_body = rewrite_multiuse_clones(sym, &mut remaining, arm_body);
-                            }
-                            // T4 (#90): a fn-carrying, non-Clone arm-bound
-                            // variable (`case Just f of Just f -> …`) has no
-                            // sound multi-use rewrite — fail closed on reuse.
-                            // `count_var_uses`'s `n` over-counts a direct-call
-                            // position (`f x` borrows, never moves), so
-                            // `reject_fn_value_reuse` recomputes the precise
-                            // consuming-use count rather than trusting `n`.
-                            CloneClass::NonClone if ir_contains_fun(&ir_ty) => {
-                                reject_fn_value_reuse(sym, &ir_ty, &arm_body, span)?;
-                            }
-                            CloneClass::NonClone | CloneClass::CopyLeaf => {}
-                        }
+                        arm_body = apply_move_ownership(sym, &ir_ty, arm_body, span)?;
                     }
                 }
 
