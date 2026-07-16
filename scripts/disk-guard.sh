@@ -91,6 +91,19 @@ CACHE_ROOT="${HOME}/.cache"
 SCCACHE_DIR="${CACHE_ROOT}/sccache"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# The build lanes + master gate keep their cargo target dirs under ~/.cache/ipe/,
+# one level deeper than the historical ~/.cache/* scratch dirs — so this script
+# scans BOTH ~/.cache/* and ~/.cache/ipe/* (discover_target_dirs) and safe_rm_rf
+# accepts a direct child of either root.
+IPE_ROOT="${CACHE_ROOT}/ipe"
+
+# Durable keep-list (exact basename match): the ONLY target dirs never reclaimed
+# except at PANIC — the 2 warm build-lane caches + the master gate. EVERYTHING
+# else under ~/.cache or ~/.cache/ipe is disposable scratch, reclaimed largest-
+# first when disk drops. (2026-07-16: built into the script so the 3-keep policy
+# survives without a protect-file; the live protect-file still adds names on top.)
+PROTECTED_DEFAULTS=("master-gate-target" "lane-1-target" "lane-2-target")
+
 log() {
     printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$LOG" >&2
 }
@@ -130,7 +143,7 @@ looks_like_cargo_target_dir() {
 # maintenance required going forward.
 discover_target_dirs() {
     local dir
-    for dir in "$CACHE_ROOT"/*/; do
+    for dir in "$CACHE_ROOT"/*/ "$IPE_ROOT"/*/; do
         dir="${dir%/}"
         [[ -d "$dir" ]] || continue
         [[ "$(basename -- "$dir")" == "sccache" ]] && continue   # handled as its own tier
@@ -141,6 +154,12 @@ discover_target_dirs() {
 # Substring-match $1 (a dir basename) against every line in PROTECT_FILE.
 is_protected() {
     local name="$1"
+    # Durable built-in keep-list (EXACT basename match): the 3 lane/gate targets.
+    local keep
+    for keep in "${PROTECTED_DEFAULTS[@]}"; do
+        [[ "$name" == "$keep" ]] && return 0
+    done
+    # Extra ad-hoc protection via the live-editable protect file (substring match).
     [[ -f "$PROTECT_FILE" ]] || return 1
     local pat
     while IFS= read -r pat; do
@@ -201,8 +220,9 @@ safe_rm_rf() {
     fi
 
     parent="$(dirname -- "$real")"
-    if [[ "$parent" != "$cache_real" ]]; then
-        log "REFUSED (resolved path '$real' is not a direct child of '$cache_real') reason=$reason"
+    local ipe_real; ipe_real="$(realpath -m -- "$IPE_ROOT" 2>/dev/null)"
+    if [[ "$parent" != "$cache_real" && "$parent" != "$ipe_real" ]]; then
+        log "REFUSED (resolved path '$real' is not a direct child of '$cache_real' or '$ipe_real') reason=$reason"
         return 1
     fi
 
