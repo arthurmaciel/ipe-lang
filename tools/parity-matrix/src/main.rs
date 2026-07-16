@@ -204,7 +204,7 @@ struct Row {
 }
 
 impl Row {
-    fn compute_status(&mut self) {
+    fn compute_status(&mut self, compiled_source_quals: &HashSet<String>) {
         let mut issues: Vec<&str> = Vec::new();
 
         // Only flag MISMATCH (bugs) for wired variants.
@@ -219,17 +219,22 @@ impl Row {
                 issues.push("lower_arm_missing");
             }
             // Canon check: skip empty qualifier (no decl), internal qualifiers
-            // (starting with '_'), and known non-canon qualifiers (Log, Html, Ui,
-            // PubSub — installed through other mechanisms, not in QUALIFIERS table).
+            // (starting with '_'), qualifiers of COMPILED-SOURCE Layer-3 modules
+            // (e.g. Regex, Path, ToString, Pure — their members are point-free
+            // `Ffi.kernel "…"` aliases routed by `detect_kernel_alias`, so they
+            // are DELIBERATELY absent from the `QUALIFIERS` kernel-qualifier table
+            // per the `compiled_vs_kernel_qualifier_disjoint` invariant — derived
+            // from `COMPILED_STD_MODULES` so future compiled modules never drift),
+            // and the remaining kernel qualifiers installed through other
+            // mechanisms (Log, Html, Ui, PubSub — not in the QUALIFIERS table).
             let skip_canon = self.qualifier.is_empty()
                 || self.qualifier.starts_with('_')
+                || compiled_source_quals.contains(&self.qualifier)
                 || matches!(
                     self.qualifier.as_str(),
                     "Log" | "Html" | "Ui" | "PubSub" | "Background"
                     | "Border" | "Font" | "Region" | "Input" | "Attr"
-                    | "Event" | "Lazy" | "Keyed" | "Responsive" | "Head"
-                    | "Trace" | "Email" | "Cache" | "Compression" | "Csv"
-                    | "Config" | "ToString" | "Pure" | "WebSocket"
+                    | "Event" | "Lazy" | "Keyed"
                     | "CssSafety" | "Middleware" | "Db.Decode"
                 );
             if !skip_canon && !self.in_canon_qual {
@@ -310,6 +315,13 @@ fn run_extract(cfg: &Config) -> Result<String, String> {
     let env_src = read_file(&env_lib)?;
     let canon_qual_set = scan_canon_qualifiers(&env_src); // (qualifier, member)
 
+    // Compiled-source Layer-3 module qualifiers (Regex, Path, ToString, Pure, …)
+    // are DELIBERATELY absent from the QUALIFIERS table (they route via
+    // `detect_kernel_alias`), so the canon-parity check must skip them.
+    let stdlib_lib = our.join("crates/skyc/src/stdlib.rs");
+    let stdlib_src = read_file(&stdlib_lib)?;
+    let compiled_source_quals = scan_compiled_source_qualifiers(&stdlib_src);
+
     // ── Layer 5: lower dispatch arms ─────────────────────────────────────────
     let lower_lib = our.join("crates/sky_lower/src/lower.rs");
     let lower_src = read_file(&lower_lib)?;
@@ -362,7 +374,7 @@ fn run_extract(cfg: &Config) -> Result<String, String> {
             row.ref_runtime_sym_exists = ref_fns.contains(sym.as_str());
         }
 
-        row.compute_status();
+        row.compute_status(&compiled_source_quals);
         rows.push(row);
     }
 
@@ -763,6 +775,57 @@ fn scan_kernel_name(src: &str) -> HashMap<String, String> {
         }
     }
     map
+}
+
+/// Scan `COMPILED_STD_MODULES` from `crates/skyc/src/stdlib.rs` and return the
+/// set of canonical qualifier short-names for compiled-source Layer-3 modules.
+///
+/// A compiled-source module's members are point-free `Ffi.kernel "…"` aliases
+/// resolved by `detect_kernel_alias`, so — by the
+/// `compiled_vs_kernel_qualifier_disjoint` invariant — the module is
+/// DELIBERATELY absent from the `QUALIFIERS` kernel-qualifier table in
+/// `sky_canon`.  The canon-parity check must therefore skip these qualifiers.
+///
+/// The qualifier short-name is the last dotted segment (`Sky.Core.Regex` →
+/// `Regex`, `Std.Ui.Responsive` → `Responsive`), which matches the qualifier
+/// carried by the corresponding `StdlibKernel::decl()` arm.
+fn scan_compiled_source_qualifiers(src: &str) -> HashSet<String> {
+    let mut set = HashSet::new();
+
+    let marker = "COMPILED_STD_MODULES";
+    let Some(start) = src.find(marker) else {
+        return set;
+    };
+    let Some(body) = src.get(start..) else {
+        return set;
+    };
+
+    // Each entry is `dotted: "Sky.Core.Regex",` — pull the last segment of
+    // every `dotted:` string literal in the slice.
+    for (idx, _) in body.match_indices("dotted:") {
+        let Some(after) = body.get(idx..) else {
+            continue;
+        };
+        // Locate the opening and closing quotes of the string literal.
+        let Some(q1) = after.find('"') else {
+            continue;
+        };
+        let Some(rest) = after.get(q1 + 1..) else {
+            continue;
+        };
+        let Some(q2) = rest.find('"') else {
+            continue;
+        };
+        let Some(dotted) = rest.get(..q2) else {
+            continue;
+        };
+        if let Some(last) = dotted.rsplit('.').next()
+            && !last.is_empty()
+        {
+            set.insert(last.to_string());
+        }
+    }
+    set
 }
 
 /// Scan the `QUALIFIERS` table from sky_canon/src/env.rs.
