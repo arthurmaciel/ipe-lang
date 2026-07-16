@@ -52,6 +52,9 @@ const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     "http_with_url",
     "http_with_follow_redirects",
     "http_with_max_redirects",
+    // ── Dead: emit_expr's DbDefaultMigration arm (#217) emits the `Migration`
+    //         record struct literal inline; this name string is never emitted.
+    "db_default_migration",
     // ── Dead: emit_live_route generates a closure expression, not a function
     //         call. ──────────────────────────────────────────────────────────
     "live_route",

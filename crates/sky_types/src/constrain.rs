@@ -222,6 +222,12 @@ struct Builtins {
     http_f_follow_redirects: Symbol,
     /// `"maxRedirects"` — `HttpRequest` only (camelCase Sky field name).
     http_f_max_redirects: Symbol,
+    /// `"contentType"` — `Sky.Http.Server.Response` record field (camelCase).
+    server_f_content_type: Symbol,
+    /// `"name"` — `Std.Db.Migration` record field.
+    migration_f_name: Symbol,
+    /// `"sql"` — `Std.Db.Migration` record field.
+    migration_f_sql: Symbol,
     // ── Db type symbols (M5b-db) ─────────────────────────────────────────────
     /// `"Db"` — the opaque database connection pool type constructor.
     db: Symbol,
@@ -559,6 +565,9 @@ impl Builtins {
             http_f_body: interner.intern("body")?,
             http_f_headers: interner.intern("headers")?,
             http_f_status: interner.intern("status")?,
+            server_f_content_type: interner.intern("contentType")?,
+            migration_f_name: interner.intern("name")?,
+            migration_f_sql: interner.intern("sql")?,
             http_f_method: interner.intern("method")?,
             http_f_url: interner.intern("url")?,
             http_f_timeout: interner.intern("timeout")?,
@@ -2379,6 +2388,46 @@ impl<'a> Builder<'a> {
                     resp_fields.insert(self.builtins.http_f_headers, dict(string(), string()));
                     resp_fields.insert(self.builtins.http_f_status, int());
                     Ok(Ty::Record(resp_fields, RowTail::Closed))
+                } else if args.is_empty() && self.interner.resolve(name) == Some("Response") {
+                    // `Sky.Http.Server.Response` is a record alias
+                    // `{ status : Int, body : String, headers : Dict String
+                    // String, contentType : String }` (reference
+                    // `Sky/Http/Server.sky:66`). Expand structurally — same
+                    // mechanism as `HttpResponse` above — so a handler can build
+                    // it as a record literal and read fields off it.
+                    let mk = |n: Symbol| Ty::Con {
+                        module: Vec::new(),
+                        name: n,
+                        args: Vec::new(),
+                    };
+                    let string = || mk(self.builtins.string);
+                    let int = || mk(self.builtins.int);
+                    let dict = |k: Ty, v: Ty| Ty::Con {
+                        module: Vec::new(),
+                        name: self.builtins.dict,
+                        args: vec![k, v],
+                    };
+                    let mut resp_fields = BTreeMap::new();
+                    resp_fields.insert(self.builtins.http_f_body, string());
+                    resp_fields.insert(self.builtins.server_f_content_type, string());
+                    resp_fields.insert(self.builtins.http_f_headers, dict(string(), string()));
+                    resp_fields.insert(self.builtins.http_f_status, int());
+                    Ok(Ty::Record(resp_fields, RowTail::Closed))
+                } else if args.is_empty() && self.interner.resolve(name) == Some("Migration") {
+                    // `Std.Db.Migration` is a record alias
+                    // `{ name : String, sql : String }` (reference
+                    // `Std/Db.sky:237`). Expand structurally so a program can
+                    // build migrations as record literals in a `List Migration`.
+                    let mk = |n: Symbol| Ty::Con {
+                        module: Vec::new(),
+                        name: n,
+                        args: Vec::new(),
+                    };
+                    let string = || mk(self.builtins.string);
+                    let mut m_fields = BTreeMap::new();
+                    m_fields.insert(self.builtins.migration_f_name, string());
+                    m_fields.insert(self.builtins.migration_f_sql, string());
+                    Ok(Ty::Record(m_fields, RowTail::Closed))
                 } else {
                     // Non-Task constructor: recurse into type arguments.
                     let args = args
@@ -3478,6 +3527,23 @@ impl<'a> Builder<'a> {
             name: self.builtins.db,
             args: Vec::new(),
         };
+        // `Std.Db.Migration` is a record alias `{ name : String, sql : String }`
+        // (reference `Std/Db.sky:237`). `Db.migrate` schemes over `List
+        // Migration`, and `Db.defaultMigration` returns one — so a program can
+        // build migrations as record literals. The record folds to a synthesised
+        // `Rec…` struct; the `DbMigrate` emit converts each to a `(name, sql)`
+        // tuple for the `db_migrate_apply` runtime kernel.
+        let migration = || {
+            let string = || Ty::Con {
+                module: Vec::new(),
+                name: self.builtins.string,
+                args: Vec::new(),
+            };
+            let mut m_fields = BTreeMap::new();
+            m_fields.insert(self.builtins.migration_f_name, string());
+            m_fields.insert(self.builtins.migration_f_sql, string());
+            Ty::Record(m_fields, RowTail::Closed)
+        };
         let sqlvalue = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.sqlvalue,
@@ -3505,10 +3571,40 @@ impl<'a> Builder<'a> {
             name: self.builtins.server_request,
             args: Vec::new(),
         };
-        let resp = || Ty::Con {
-            module: Vec::new(),
-            name: self.builtins.server_response,
-            args: Vec::new(),
+        // `Sky.Http.Server.Response` is a record alias `{ status : Int, body :
+        // String, headers : Dict String String, contentType : String }`
+        // (reference `Sky/Http/Server.sky:66`), NOT an opaque nominal. Every
+        // server kernel that produces/consumes a `Response` schemes over this
+        // record so a handler-built record literal — and a field read off a
+        // `Response` — unify with the kernel signatures. The record folds to the
+        // runtime `IrType::ServerResponse` struct at lowering (see
+        // `sky_lower::is_server_response_shape`).
+        let resp = || {
+            let string = || Ty::Con {
+                module: Vec::new(),
+                name: self.builtins.string,
+                args: Vec::new(),
+            };
+            let mut resp_fields = BTreeMap::new();
+            resp_fields.insert(self.builtins.http_f_body, string());
+            resp_fields.insert(self.builtins.server_f_content_type, string());
+            resp_fields.insert(
+                self.builtins.http_f_headers,
+                Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.dict,
+                    args: vec![string(), string()],
+                },
+            );
+            resp_fields.insert(
+                self.builtins.http_f_status,
+                Ty::Con {
+                    module: Vec::new(),
+                    name: self.builtins.int,
+                    args: Vec::new(),
+                },
+            );
+            Ty::Record(resp_fields, RowTail::Closed)
         };
         let route = || Ty::Con {
             module: Vec::new(),
@@ -4373,10 +4469,17 @@ impl<'a> Builder<'a> {
                 ),
             ),
             K::DbWithTransaction => fun(db(), fun(fun(db(), task(var(0))), task(var(0)))),
+            // `Db.migrate : Db -> List Migration -> Task Error (List String)`
+            // (reference `Std/Db.sky:300`). The record-shaped `Migration` API is
+            // the surface; the `db_migrate_apply` runtime kernel still takes
+            // `(name, sql)` pairs — the emitter converts at the call site.
             K::DbMigrate => fun(
                 db(),
-                fun(list(tuple2(string(), string())), task(list(string()))),
+                fun(list(migration()), task(list(string()))),
             ),
+            // `Db.defaultMigration : String -> Migration` (reference
+            // `Std/Db.sky:246`) — a Migration named with an empty SQL body.
+            K::DbDefaultMigration => fun(string(), migration()),
 
             // ── Db.Decode ──
             K::DbDecString => fun(string(), dec(string())),
@@ -4874,8 +4977,13 @@ impl<'a> Builder<'a> {
             K::JwtExpiresAt | K::JwtNotBefore | K::JwtIssuedAt => {
                 fun(int(), fun(claims_ty(), claims_ty()))
             }
-            // `Jwt.withClaim : String -> String -> Claims -> Claims`
-            K::JwtWithClaim => fun(string(), fun(string(), fun(claims_ty(), claims_ty()))),
+            // `Jwt.withClaim : String -> JsonEnc.Value -> Claims -> Claims`
+            // Matches the reference `Sky/Core/Jwt.sky:79` — the value is any
+            // encoded JSON node (`JsonEnc.string`/`.int`/`.object`/…), so an
+            // `Int`/`Bool`/nested-object custom claim round-trips with the right
+            // token bytes. Both `Value` and `Claims` are `serde_json::Value` at
+            // runtime, so the runtime insert is a direct move.
+            K::JwtWithClaim => fun(string(), fun(value(), fun(claims_ty(), claims_ty()))),
             // `Jwt.encode : Algorithm -> Claims -> Result Error String`
             K::JwtEncode => fun(algorithm_ty(), fun(claims_ty(), result(error_ty(), string()))),
             // `Jwt.decode : Algorithm -> Int -> String -> Result Error String`
@@ -6843,6 +6951,7 @@ mod registry_phase_c_tests {
             K::DbInsertFieldsReturning,
             K::DbWithTransaction,
             K::DbMigrate,
+            K::DbDefaultMigration,
             // Db.Decode (15)
             K::DbDecString,
             K::DbDecInt,

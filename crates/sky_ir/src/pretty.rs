@@ -634,6 +634,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::DbInsertFieldsReturning => "Db.insertFieldsReturning",
         KernelFn::DbWithTransaction => "Db.withTransaction",
         KernelFn::DbMigrate => "Db.migrate",
+        KernelFn::DbDefaultMigration => "Db.defaultMigration",
         // ── Db.Decode kernels (M5b-db) ───────────────────────────────────────
         KernelFn::DbDecString => "Db.Decode.string",
         KernelFn::DbDecInt => "Db.Decode.int",
