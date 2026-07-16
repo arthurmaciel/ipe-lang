@@ -151,9 +151,10 @@ hack is never a "divergence".
 
 Master only ever advances to a full-gate-certified sha.
 
-- **Cheap gate — per landed lane (~minutes):** `cargo build -p skyc` + scoped
+- **Cheap gate — per landed lane (~minutes):** `cargo check -p skyc` + scoped
   `nextest` on the touched crates + scoped clippy `-D warnings`; for a
-  sweep/example blocker, also rebuild that example with the fresh `skyc` and
+  sweep/example blocker, build the fresh `skyc` (`cargo build -p skyc` — a build,
+  not a check, since the SEAL step needs the binary) and rebuild that example to
   confirm the original diagnostic is gone (THE SEAL on the specific example).
   A cheap-green lane lands but stays uncertified.
 - **Full gate — the ONE authoritative run per batch** (every N cycles or when

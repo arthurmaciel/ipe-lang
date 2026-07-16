@@ -676,12 +676,12 @@ lane_gate() {
         log "lane [$class] · merge race with a landed lane — requeued (no penalty): $gdesc"
         bk unclaim "$gid"; return 0
     fi
-    # scope the cheap gate to the crates this change touched (+ always build skyc).
+    # scope the cheap gate to the crates this change touched (+ always check skyc).
     touched="$(git -C "$GATE_WT" diff --name-only "$gpre..HEAD" 2>/dev/null)"
     pflags="$(printf '%s\n' "$touched" | sed -nE 's#^crates/([^/]+)/.*#-p \1#p; s#^runtime/.*#-p sky-runtime-rust#p; s#^tools/([^/]+)/.*#-p \1#p' | sort -u | tr '\n' ' ')"
     [ -z "$pflags" ] && pflags="-p skyc"
     if ( cd "$GATE_WT"; touch crates/skyc/tests/*.rs 2>/dev/null; \
-         RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 1200 cargo +nightly build -p skyc >/tmp/autopilot-gate.log 2>&1 \
+         RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 1200 cargo +nightly check -p skyc >/tmp/autopilot-gate.log 2>&1 \
          && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 1500 cargo +nightly nextest run $pflags >>/tmp/autopilot-gate.log 2>&1 \
          && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 900 cargo +nightly clippy $pflags --no-deps -- -D warnings >>/tmp/autopilot-gate.log 2>&1 ); then
         # NB: no --all-targets — the authoritative full gate (full_gate) lints
