@@ -21,7 +21,7 @@ use super::*;
 // `mod.rs`), NOT the composite `csv_kernel = ["csv", "tokio"]` feature, so
 // `tokio` is not guaranteed present — same constraint `file.rs` documents
 // for its own `run_blocking` helper (see
-// `docs/architecture/class9-kernel-robustness-fix-spec-2026-07-09.md` §2.2).
+// `docs/adr/0014-kernel-robustness-blocking-offload-and-toctou.md` §2.2).
 #[cfg(feature = "tokio")]
 async fn run_blocking<T, F>(f: F) -> Result<T, String>
 where
