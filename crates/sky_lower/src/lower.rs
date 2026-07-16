@@ -420,6 +420,82 @@ fn is_all_int_canon_record_shape(
         .all(|((name, ty), expected_name)| *name == *expected_name && canon_ty_is_int(ty, interner))
 }
 
+/// The canonical `Std.Csv.Csv` record field-name set, alphabetically sorted:
+/// `header`, `rows`. A record of exactly this shape (NAMES *and* the field
+/// TYPES `header : List String`, `rows : List (List String)`) folds to the
+/// nominal `IrType::CsvDoc` (`sky_runtime::csv::CsvDoc`) so a record literal fed
+/// to `Csv.encode` constructs the runtime struct the `csv_encode` kernel takes,
+/// and a `csv_parse` result is field-accessed on that struct's pub fields (same
+/// mechanism as the `HttpRequest` / `CacheCfg` folds above). Kept in sync with
+/// the backend's `CSV_DOC_FIELDS` and `sky_types`' `csv_rec` type scheme.
+const CSV_DOC_FIELDS: &[&str] = &["header", "rows"];
+
+/// Is `ty` the built-in `List String` — a `List` `Con` whose single arg is the
+/// built-in `String`? The inner-element depth is selected by `list_depth`
+/// (1 = `List String`, 2 = `List (List String)`).
+fn ty_is_list_of_string(ty: &Ty, list_depth: u8, interner: &Interner) -> bool {
+    match ty {
+        Ty::Con { module, name, args }
+            if module.is_empty() && interner.resolve(*name) == Some("List") =>
+        {
+            match args.as_slice() {
+                [inner] if list_depth > 1 => ty_is_list_of_string(inner, list_depth - 1, interner),
+                [inner] => matches!(inner, Ty::Con { module: m, name: n, args: a }
+                    if m.is_empty() && a.is_empty() && interner.resolve(*n) == Some("String")),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// The [`canon::Type`] twin of [`ty_is_list_of_string`].
+fn canon_ty_is_list_of_string(ty: &canon::Type, list_depth: u8, interner: &Interner) -> bool {
+    match ty {
+        canon::Type::Con { home, name, args }
+            if home.is_empty() && interner.resolve(*name) == Some("List") =>
+        {
+            match args.as_slice() {
+                [inner] if list_depth > 1 => {
+                    canon_ty_is_list_of_string(inner, list_depth - 1, interner)
+                }
+                [inner] => matches!(inner, canon::Type::Con { home: h, name: n, args: a }
+                    if h.is_empty() && a.is_empty() && interner.resolve(*n) == Some("String")),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Does `fields` match the canonical `Csv` shape — field NAMES `header`/`rows`
+/// AND field TYPES `List String` / `List (List String)`? Sorts `fields` in
+/// place (`BTreeMap` callers iterate in Symbol-intern order, not alphabetical).
+/// The field TYPES are checked alongside the NAMES so an unrelated 2-field
+/// `{ header, rows }` record with different types does not fold to `CsvDoc`.
+fn is_csv_doc_shape(fields: &mut [(&str, &Ty)], interner: &Interner) -> bool {
+    if fields.len() != CSV_DOC_FIELDS.len() {
+        return false;
+    }
+    fields.sort_unstable_by_key(|(name, _)| *name);
+    matches!(fields, [(h, hty), (r, rty)]
+        if *h == "header" && *r == "rows"
+            && ty_is_list_of_string(hty, 1, interner)
+            && ty_is_list_of_string(rty, 2, interner))
+}
+
+/// The [`canon::Type`] twin of [`is_csv_doc_shape`].
+fn is_csv_doc_canon_shape(fields: &mut [(&str, &canon::Type)], interner: &Interner) -> bool {
+    if fields.len() != CSV_DOC_FIELDS.len() {
+        return false;
+    }
+    fields.sort_unstable_by_key(|(name, _)| *name);
+    matches!(fields, [(h, hty), (r, rty)]
+        if *h == "header" && *r == "rows"
+            && canon_ty_is_list_of_string(hty, 1, interner)
+            && canon_ty_is_list_of_string(rty, 2, interner))
+}
+
 /// Does this solved [`Ty`] contain a free type variable anywhere? Used to keep
 /// the lowerer's record-shape collection to fully-concrete shapes — a
 /// variable-bearing (generic) record reaches the backend through a signature,
@@ -890,9 +966,11 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         // `Secret` is an opaque sealed string wrapper — no embedded function.
         | IrType::SqlFragment
         | IrType::Secret
-        // Cache config / stats are plain data records — no function.
+        // Cache config / stats + Csv document are plain data records — no
+        // function.
         | IrType::CacheCfg
-        | IrType::CacheStats => false,
+        | IrType::CacheStats
+        | IrType::CsvDoc => false,
         // `LiveRoute page` carries the page type it builds — recurse (the
         // route's own builder closure is runtime-internal, not a Sky `Fn`).
         IrType::LiveRoute(page) => ir_contains_fun(page),
@@ -983,9 +1061,11 @@ fn clone_class(t: &IrType) -> CloneClass {
         | IrType::ServerCookie
         | IrType::HttpRequest
         | IrType::WebSocketServerCfg
-        // Cache config / stats runtime structs are `Clone` (no `Copy`).
+        // Cache config / stats + Csv document runtime structs are `Clone` (no
+        // `Copy`).
         | IrType::CacheCfg
-        | IrType::CacheStats => CloneClass::CloneOk,
+        | IrType::CacheStats
+        | IrType::CsvDoc => CloneClass::CloneOk,
         // Non-Clone: function-typed, task, decoder, Cmd, Sub.
         // Also Generic(_) until T5 (which injects `T: Clone`).
         IrType::Fun(_, _)
@@ -3659,9 +3739,11 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::TypeInfo
         | IrType::SqlFragment
         | IrType::Secret
-        // Cache config / stats are non-parametric — mention no type var.
+        // Cache config / stats + Csv document are non-parametric — mention no
+        // type var.
         | IrType::CacheCfg
-        | IrType::CacheStats => false,
+        | IrType::CacheStats
+        | IrType::CsvDoc => false,
     }
 }
 
@@ -8545,6 +8627,11 @@ impl<'a> Lowerer<'a> {
                 ) {
                     return Ok(IrType::CacheStats);
                 }
+                // fold the nominal Std.Csv record annotation shape to the
+                // opaque runtime `IrType::CsvDoc` — twin of the solved-Ty fold.
+                if is_csv_doc_canon_shape(&mut named_fields, self.interner) {
+                    return Ok(IrType::CsvDoc);
+                }
                 let mut ir_fields = BTreeMap::new();
                 for (name, fty) in fields {
                     ir_fields.insert(*name, self.ir_type_from_canon(fty, generics)?);
@@ -9495,6 +9582,14 @@ impl<'a> Lowerer<'a> {
                 }
                 if is_all_int_record_shape(&mut named_fields, CACHE_STATS_FIELDS, self.interner) {
                     return Ok(IrType::CacheStats);
+                }
+                // fold the nominal Std.Csv record shape to the runtime `CsvDoc`
+                // struct — same rationale: `csv_encode` takes it and `csv_parse`
+                // returns it, so a synthesised `Rec…` struct would mismatch
+                // (E0308). A record literal fed to `Csv.encode` thus emits the
+                // runtime struct (see `emit_record`).
+                if is_csv_doc_shape(&mut named_fields, self.interner) {
+                    return Ok(IrType::CsvDoc);
                 }
                 let mut lowered = BTreeMap::new();
                 for (name, field_ty) in fields {
@@ -16357,9 +16452,11 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::LiveReq
         | IrType::SqlFragment
         | IrType::Secret
-        // Cache config / stats are non-parametric — no generic syms.
+        // Cache config / stats + Csv document are non-parametric — no generic
+        // syms.
         | IrType::CacheCfg
-        | IrType::CacheStats => {}
+        | IrType::CacheStats
+        | IrType::CsvDoc => {}
     }
 }
 

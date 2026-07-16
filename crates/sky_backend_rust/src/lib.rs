@@ -1287,10 +1287,11 @@ fn collect_record_shapes(
         // record shape.
         | IrType::SqlFragment
         | IrType::Secret
-        // Cache config / stats are folded to nominal runtime structs — no
-        // structural record shape to synthesise.
+        // Cache config / stats + Csv document are folded to nominal runtime
+        // structs — no structural record shape to synthesise.
         | IrType::CacheCfg
-        | IrType::CacheStats => {}
+        | IrType::CacheStats
+        | IrType::CsvDoc => {}
         // `LiveRoute page` is page-parametric — descend in case the page type
         // carries a nested record shape.
         IrType::LiveRoute(page) => {
@@ -1426,10 +1427,11 @@ fn type_reaches_enum(
         // size-cycle risk.
         | IrType::SqlFragment
         | IrType::Secret
-        // Cache config / stats are monomorphic runtime structs — no
-        // reachable enum edge to `target`.
+        // Cache config / stats + Csv document are monomorphic runtime structs
+        // — no reachable enum edge to `target`.
         | IrType::CacheCfg
-        | IrType::CacheStats => false,
+        | IrType::CacheStats
+        | IrType::CsvDoc => false,
         // `Route<Page>` stores its `not_found`/built pages by value — a page
         // type reaching `target` through a route is a genuine size edge.
         IrType::LiveRoute(page) => type_reaches_enum(page, target, enums, visited),
@@ -1498,9 +1500,11 @@ fn contains_generic(ty: &IrType) -> bool {
         // `Secret` is monomorphic — no generic parameters.
         | IrType::SqlFragment
         | IrType::Secret
-        // Cache config / stats are monomorphic — no generic parameters.
+        // Cache config / stats + Csv document are monomorphic — no generic
+        // parameters.
         | IrType::CacheCfg
-        | IrType::CacheStats => false,
+        | IrType::CacheStats
+        | IrType::CsvDoc => false,
         // `LiveRoute page` is parametric on `page`; check if it carries a
         // generic.
         IrType::LiveRoute(page) => contains_generic(page),
@@ -1595,9 +1599,11 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         // `Secret` is monomorphic — no generics to collect.
         | IrType::SqlFragment
         | IrType::Secret
-        // Cache config / stats are monomorphic — no generics to collect.
+        // Cache config / stats + Csv document are monomorphic — no generics to
+        // collect.
         | IrType::CacheCfg
-        | IrType::CacheStats => {}
+        | IrType::CacheStats
+        | IrType::CsvDoc => {}
         // `LiveRoute page` may carry generic parameters through `page`.
         IrType::LiveRoute(page) => collect_generics(page, out),
         // `Ui { ctor, msg }` may carry generic parameters through `msg`.
@@ -1896,9 +1902,11 @@ fn match_template(
         // `Secret` is a monomorphic opaque leaf.
         | IrType::SqlFragment
         | IrType::Secret
-        // Cache config / stats are monomorphic runtime-struct leaves.
+        // Cache config / stats + Csv document are monomorphic runtime-struct
+        // leaves.
         | IrType::CacheCfg
-        | IrType::CacheStats => {
+        | IrType::CacheStats
+        | IrType::CsvDoc => {
             if template == concrete {
                 Ok(())
             } else {

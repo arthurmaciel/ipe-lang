@@ -7369,6 +7369,13 @@ const HTTP_REQUEST_FIELDS: &[&str] = &[
 /// in sync with `sky_lower::lower::CACHE_CFG_FIELDS`.
 const CACHE_CFG_FIELDS: &[&str] = &["maxBytes", "maxEntries", "ttlMs"];
 
+/// the sorted `Std.Csv.Csv` field-name set — a record literal with exactly
+/// these names (and no registered synthesised struct, because the lowerer
+/// folded the shape to `IrType::CsvDoc`) constructs the runtime
+/// `sky_runtime::csv::CsvDoc` struct. Mirrors [`CACHE_CFG_FIELDS`]; kept in
+/// sync with `sky_lower::lower::CSV_DOC_FIELDS`.
+const CSV_DOC_FIELDS: &[&str] = &["header", "rows"];
+
 /// the sorted `Sky.Http.Server.Response` field-name set. A record literal
 /// with exactly these names (and no registered synthesised struct, because the
 /// lowerer folded the shape to `IrType::ServerResponse`) constructs the runtime
@@ -7434,6 +7441,14 @@ fn emit_record(
                     .iter()
                     .zip(CACHE_CFG_FIELDS.iter())
                     .all(|(a, b)| a.as_str() == *b);
+            // same fall-through — a `Csv`-shaped literal has no registered
+            // struct (folded to `IrType::CsvDoc`), so it constructs the runtime
+            // `CsvDoc` (re-exported bare via the `pub use csv::*` glob).
+            let is_csv_doc = sorted.len() == CSV_DOC_FIELDS.len()
+                && sorted
+                    .iter()
+                    .zip(CSV_DOC_FIELDS.iter())
+                    .all(|(a, b)| a.as_str() == *b);
             // same fall-through — a `Response`-shaped literal has no
             // registered struct (folded to `IrType::ServerResponse`), so it
             // constructs the runtime `ServerResponse` (re-exported bare via the
@@ -7447,6 +7462,8 @@ fn emit_record(
                 "HttpRequest".to_owned()
             } else if is_cache_cfg {
                 "CacheCfg".to_owned()
+            } else if is_csv_doc {
+                "CsvDoc".to_owned()
             } else if is_server_response {
                 "ServerResponse".to_owned()
             } else {
