@@ -11,7 +11,7 @@
 //! nested in a ctor payload) is SKY-L0128 fail-closed — the clone-rebuild
 //! repair is only sound for dispatch-free inners.
 //!
-//! Spec: `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md` §1.
+//! Spec: `docs/adr/0011-emitter-clone-borrow-discipline.md` §1.
 //!
 //! Run: `SKY_E2E=1 cargo test golden_i99`
 

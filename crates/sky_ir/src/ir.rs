@@ -1464,7 +1464,7 @@ pub enum Expr {
     /// textual heuristic, whether the read needs a `.clone()` (a heap-backed
     /// field) or can skip it (a Rust-`Copy` scalar) — see #142/AUD-09's
     /// type-directed Copy-elision fix,
-    /// `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md` §3.
+    /// `docs/adr/0011-emitter-clone-borrow-discipline.md` §3.
     /// When the lowerer cannot resolve a concrete field type (a still-generic
     /// field inside a polymorphic body), it falls back to
     /// [`IrType::Generic`], which the backend classifies as non-`Copy` and
@@ -1902,7 +1902,7 @@ pub fn is_irrefutable(pat: &Pat) -> bool {
 /// position (SKY-L0128) rather than let it reach the backend, where
 /// honoring it soundly would require matching the scrutinee by reference
 /// throughout — a materially larger redesign. See
-/// `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md` §1.
+/// `docs/adr/0011-emitter-clone-borrow-discipline.md` §1.
 #[must_use]
 pub fn is_dispatch_free(pat: &Pat) -> bool {
     match pat {
