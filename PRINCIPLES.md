@@ -1,58 +1,214 @@
-The Rust backend development is guided by the following principles:
+# PRINCIPLES.md — enforcement SSOT
 
-1. **Security** — generated code and runtime must give an attacker no foothold: no injection (SQL, shell, path, header, log), no secret leakage into logs or errors, no authentication or CSRF bypass, no timing oracle on a secret comparison, and no unbounded resource a remote party can exhaust. When a program handles untrusted input, the safe outcome must be the only reachable outcome.
+Every enforced rule of the Rust-backend project lives here, stated once. The
+other governance docs — `CLAUDE.md` (Ipê language authoring reference),
+`DEVELOPMENT.md` (dev-ops workflow), `scripts/progressive-development/context.md`
+(autonomous-lane contract) — reference this file rather than restate it.
 
-2. **Correctness** — the backend must produce the right answer: for the same well-typed Sky program and the same input, the Rust output must match the Go reference's observable behaviour (ideally byte-for-byte), and any deliberate divergence must be documented rather than silently wrong. A program that compiles and runs but yields a value different from what the language semantics specify is incorrect.
+## The six principles (strict order)
 
-3. **Soundness** — a well-typed Sky program must never be able to trigger a runtime failure in the generated Rust: no panic, no .unwrap()/.expect() blowup, no out-of-bounds index, no integer-overflow abort, no unchecked downcast, and no undefined behaviour. Where correctness is "the result is right," soundness is the stronger structural guarantee that "no input can make the program fall over" — the type system's promise is honoured all the way down to the binary.
+1. **Security** — generated code and runtime give an attacker no foothold: no
+   injection (SQL, shell, path, header, log), no secret leakage into logs or
+   errors, no auth/CSRF bypass, no timing oracle on a secret comparison, no
+   unbounded resource a remote party can exhaust. On untrusted input the safe
+   outcome is the only reachable outcome.
+2. **Correctness** — same well-typed Sky program + same input ⇒ the Rust output
+   matches the Go reference's observable behaviour (ideally byte-for-byte).
+   Deliberate divergence is documented, never silent.
+3. **Soundness** — a well-typed Sky program can never trigger a runtime failure
+   in the generated Rust: no panic, no `.unwrap()`/`.expect()` blowup, no
+   out-of-bounds index, no integer-overflow abort, no unchecked downcast, no
+   UB. Correctness is "the result is right"; soundness is the stronger
+   structural guarantee that no input can make the program fall over.
+4. **Efficiency** — within the bounds of 1–3: no needless allocation or
+   cloning, no hot-path recomputation, no O(n²) where O(n) is trivial, small
+   binary and memory footprint. Never bought by trading a higher principle.
+5. **Completeness** — cover as much of the language + stdlib as possible. A
+   missing kernel/feature is a documented limitation, not a bug; the goal is
+   to keep shrinking that set.
+6. **Readability** — codegen and generated Rust are clear, well-named,
+   maintainable. Everything else equal, the clearer form wins.
 
-4. **Efficiency** — within the bounds set by the three principles above, the code should be fast and lean: no needless allocation or cloning, no re-computation on hot paths, no O(n²) where O(n) is trivial, and a small binary and memory footprint. Efficiency is pursued only after security, correctness, and soundness, never by trading one of them away.
-
-5. **Completeness** — the backend should cover as much of the Sky language and standard library as possible, so that real programs build and run without hitting an "unsupported" wall. A missing kernel or unimplemented feature is a completeness gap; it is a legitimate, documented limitation rather than a bug, but the goal is to keep shrinking that set.
-
-6. **Readability** — The code (both the Haskell codegen and the generated Rust) should be clear, well-named, and maintainable, so the next person — human or agent — can understand and safely change it. It ranks last only in the sense that a readable name is never allowed to break correctness or a clean abstraction is never allowed to open a soundness hole; everything else being equal, the clearer form wins.
-  
-**The ordering is a strict tie-breaker, not a weighting**: whenever two principles conflict at a specific decision, the higher-numbered one yields to the lower — a faster path that opens a soundness hole is rejected, a more readable form that breaks correctness is rejected — so a lower principle can never justify compromising a higher one.
+**The ordering is a strict tie-breaker, not a weighting:** at any conflicting
+decision the higher-numbered principle yields — a faster path that opens a
+soundness hole is rejected, a more readable form that breaks correctness is
+rejected. A lower principle can never justify compromising a higher one.
 
 ## The three fundamental rules
 
-Independent of and beneath the ranked principles, every design and every code pass must obey three non-negotiable laws:
+Beneath the ranked principles, every design and code pass obeys:
 
-- **Parse, don't validate.** Convert untrusted or untyped input into a precise typed value at the boundary, once, so downstream code cannot re-encounter the unvalidated form. A function that takes a broad type and re-checks it everywhere is a smell; the check should happen once and produce a narrower type that makes the checked property structurally true thereafter. In this compiler: foreign/JSON/config values enter through a typed decode point; error channels are typed (`Diagnostic`/`Error`), never `String`.
+- **Parse, don't validate.** Convert untrusted/untyped input into a precise
+  typed value ONCE at the boundary, so downstream code never re-encounters the
+  unvalidated form. Foreign/JSON/config values enter through a typed decode
+  point; error channels are typed (`Diagnostic`/`Error`), never `String`.
+- **Make invalid states unrepresentable.** Encode invariants in types: a sum
+  type over a bool-pair admitting impossible combinations; an exhaustive
+  `match` (no wildcard that silently swallows a new variant); a smart
+  constructor over an open field. A kernel the resolver recognises but the
+  type-scheme table does not cover MUST be a compile-time error — never a
+  silent flexible type variable that defers failure to the downstream Rust
+  build.
+- **Fix the structure, not the symptom.** Repair the generative cause — the
+  missing invariant, the drifting table, the untyped boundary, the
+  special-case that should be a general rule — so the whole defect class
+  cannot recur. Before writing a fix, ask "what structural property, if it
+  held, would make this class of failure impossible?" and establish it. An
+  ad-hoc patch that silences the visible symptom resurfaces one shape over
+  (the next `match` arm, the next kernel, another call site). Example:
+  coercing only inline-lambda sibling branches to the `Arc` carrier is ad-hoc
+  — the identical `E0308` returns when the sibling is a top-level function
+  reference; the structural fix eta-expands every function-typed leaf over the
+  group's arrow type, closing the class.
 
-- **Make invalid states unrepresentable.** Encode invariants in the types so an illegal combination cannot be constructed at all, rather than relying on a runtime guard or convention. Prefer a sum type over a bool-pair that admits impossible combinations; prefer an exhaustive `match` (no wildcard that silently swallows a new variant) so an unhandled case is a compile error; prefer a smart constructor over a public field that could hold an out-of-range value. In this compiler specifically: a kernel that the resolver recognises but the type-scheme table does not cover must be a compile-time error, never a silent flexible type variable that lets an ill-typed program pass the type-checker and fail only at the downstream Rust build (the "exit-0-then-cargo-fail" class).
+The ordering says what wins in a conflict; these three rules say how to build
+code that doesn't create the conflict.
 
-- **Fix the structure, not the symptom.** When a defect appears, repair the structural cause — the missing invariant, the drifting table, the untyped boundary, the special-case that should have been a general rule — so the *entire class* of that defect cannot recur, rather than patching the one instance you observed. An ad-hoc fix that silences the visible symptom while leaving the generative structure intact is a smell: the same bug resurfaces one shape over — the next `match` arm, the next kernel, another call site. Before writing the fix, ask *"what structural property, if it held, would make this whole class of failure impossible?"* and establish that property. This rule generalises the two above (parsing-not-validating and unrepresentable-invalid-states are each structural fixes) and is why the seal is closed at the resolver/type-scheme level, not by special-casing each failing program. Concretely (backlog #172): a fix that coerces only *inline-lambda* sibling branches to the `Arc` carrier is ad-hoc — the identical `E0308` returns the moment the sibling is a top-level function reference; the structural fix coerces *every function-typed leaf* (via eta-expansion over the group's arrow type), closing the class.
+## THE SEAL — no exit-0-then-cargo-fail
 
-These three rules are the structural machinery by which the ranked principles — especially Soundness and Correctness — are actually achieved: the ordering says *what wins in a conflict*; these three rules say *how you build code that doesn't create the conflict*.
+**If `skyc` accepts a program (exit 0), the emitted Rust MUST `cargo build`.
+Never emit codegen that type-checks in skyc but fails cargo.** This is
+make-invalid-states-unrepresentable applied to the pipeline itself: an
+unschemed-but-resolved kernel, an arity table drifted from its callee table, a
+generic where a concrete was required — each is a representable-but-illegal
+pipeline state whose symptom is exit-0-then-cargo-fail. Every new acceptance
+path (kernel, scheme, lowering arm, emitter case) fails closed at skyc time,
+never open at cargo time.
 
-## The seal — no exit-0-then-cargo-fail
+## §0 No shortcuts — root cause or honest blocker
 
-THE SEAL is the project's core compiler mandate: **"If `skyc` accepts a program (exit 0), the emitted Rust MUST `cargo build`. Never emit codegen that type-checks in skyc but fails cargo."**
+Removing or skipping the file, example, test, fixture, golden, or line that
+*triggers* a bug is NOT a fix — it hides it. NEVER edit a reference example,
+fixture, or golden to dodge a compiler gap; never weaken a gate; never
+`#[allow]` a real violation; never fake a seal. Exactly two acceptable
+outcomes for any defect: **root-cause it**, or **report it honestly as a
+tracked blocker**. A green obtained by deleting the red is a FAILURE.
 
-The seal is the make-invalid-states-unrepresentable rule applied to the compiler pipeline itself: a kernel the resolver recognises but the type-scheme table does not cover, an arity table that drifts from its callee table, a generic emitted where a concrete type was required — each of these is a representable-but-illegal pipeline state whose symptom is precisely an exit-0-then-cargo-fail. Closing that gap — making acceptance by `skyc` a structural proof that the downstream `cargo build` succeeds — is the point of most mechanical hardening items, and any new acceptance path (kernel, scheme, lowering arm, emitter case) must be sealed the same way: fail closed at `skyc` time, never open at `cargo` time.
+- **Root causes only.** Never suppress a type error or warning; a defensive
+  cover-up that hides a contract violation IS a violation.
+- **Outcome ladder** (governs every change): clean → proceed; a principle is
+  hurt → rethink and reimplement within the boundary; no adequate in-boundary
+  fix exists → revert, log why, signal the user. Never ship a silent
+  workaround.
+- **No deferral.** "Pre-existing" / "known edge case" is never a shipping
+  excuse: any bug surfacing during dev/sweep/CI/testing — introduced or
+  pre-existing — enters the task pipeline on the spot. Only an explicit user
+  override ("ship without fixing X") permits shipping a known unfixed issue.
+- Every task is a means to the larger goal — making Ipê a better language for
+  its developers and users. "Make the sweep green" means make the programs
+  actually compile and run correctly, not make red rows disappear. When a
+  shortcut would satisfy the literal ask but betray that goal, do the harder
+  correct thing or surface the tradeoff — never take the shortcut silently.
 
-## Security & soundness enforcement
+## Mechanical enforcement — comply by construction
 
-The principles above are not aspirational — they are mechanically enforced at the crate level. The enforcement posture is **comply by construction**: when a lint fires, fix the code, never the lint level.
+When a lint or gate fires, fix the code — never the lint level, never the gate.
 
-### Crate-level deny lints
+- **Clippy deny-set** (root `Cargo.toml` `[workspace.lints.clippy]`, all
+  `"deny"`): `unwrap_used`, `expect_used`, `panic`, `indexing_slicing`,
+  `unreachable`, `todo`, `unimplemented`, `pedantic`, `nursery`. `pedantic`
+  includes `doc_markdown`: code identifiers in doc (`///`/`//!`) and `//`
+  comments MUST be backticked (`` `CloneOk` ``, `` `Vec<T>` ``,
+  `` `--all-targets` ``). Applies to `tests/*.rs` too (the `--all-targets`
+  end-state). `runtime/src/lib.rs` additionally carries
+  `#![cfg_attr(not(test), deny(clippy::indexing_slicing, clippy::panic,
+  clippy::unreachable, clippy::todo, clippy::unimplemented,
+  clippy::panic_in_result_fn))]`.
+- **Escape hatch:** per-site `#[allow(lint)] // one-line why` ONLY — the 3
+  INFALLIBLE-tagged HMAC sites in `runtime/`, the 2 `ffi_polyfills`
+  dynamic-dispatch `clippy::panic` fallbacks, a shared-test-helper
+  `dead_code`. Never a crate- or gate-wide relaxation.
+- **`unsafe` is forbidden.** Exactly ONE sanctioned `unsafe` block exists —
+  `prctl(PR_SET_PDEATHSIG)` in `live::console_proxy` — the only reason the
+  runtime is not crate-wide `forbid(unsafe_code)`. Every other module is
+  `unsafe`-free and stays that way.
+- **Edition 2024** — workspace crates and every emitted project.
 
-- Root `Cargo.toml` `[workspace.lints.clippy]`: `unwrap_used`, `expect_used`, `panic`, `indexing_slicing`, `unreachable`, `todo`, `unimplemented`, `pedantic`, `nursery` — all `"deny"`.
-- `runtime/Cargo.toml` `[lints.clippy]`: `unwrap_used`, `expect_used` deny; the only permitted exceptions are the 3 INFALLIBLE-tagged HMAC `#[allow]` sites.
-- `runtime/src/lib.rs`: `#![cfg_attr(not(test), deny(clippy::indexing_slicing, clippy::panic, clippy::unreachable, clippy::todo, clippy::unimplemented, clippy::panic_in_result_fn))]`. The only `#[allow(clippy::panic)]` sites are the 2 `ffi_polyfills` dynamic-dispatch fallbacks.
-- Exactly ONE sanctioned `unsafe` block exists in the runtime — `prctl(PR_SET_PDEATHSIG)` in `live::console_proxy` — which is the reason there is no crate-wide `forbid(unsafe_code)`; every other module is `unsafe`-free.
+## No `dyn Any` — concrete over generic
 
-### No `dyn Any` in emitted code — concrete over generic
+The backend NEVER emits `dyn Any` / `.downcast` / type-erasure. Wildcard `any`
+is not polymorphism — it has exactly ONE concrete lowering (an opaque carrier
+type chosen per position, e.g. `Dict String String` in pub/sub payload
+position), emitted at EVERY position (enum field, pattern binder, fn/decoder
+param, Db row arg, eta lambda param, return). Only genuine named type
+variables (`a`, `msg`) become Rust generics, monomorphized by rustc. A generic
+emitted where a concrete was possible passes a mechanical gate but can ship a
+silent runtime bug (e.g. a `TypeId`-keyed broker needs publisher and
+subscriber on the same concrete `T`) — always emit concrete when concrete is
+possible. Sanctioned runtime-internal *container* exceptions (payload itself
+never erased or downcast): `runtime/src/sky_runtime/cache.rs` and
+`runtime/src/sky_runtime/live/pubsub.rs`.
 
-The backend NEVER emits `dyn Any` / `.downcast` / type-erasure. Wildcard `any` is not polymorphism — it has exactly ONE concrete lowering (an opaque carrier type chosen per position, e.g. `Dict String String` in pub/sub payload position); only genuine named type variables (`a`, `msg`) become Rust generics, monomorphized by rustc at compile time. A generic emitted where a concrete type was possible passes a mechanical gate but can ship a silent runtime bug — always emit concrete when concrete is possible.
+## Match the reference
 
-Current state: zero `dyn Any` in emitted-code paths (the former `OnRaw` `Arc<dyn Any>` exception was removed by #109/#156). Two documented runtime-internal *container* uses remain, both named exceptions: `runtime/src/sky_runtime/cache.rs` (value-erased `Box<dyn Any + Send>` store, downcast on `get`, documented infallible) and `runtime/src/sky_runtime/live/pubsub.rs` (TypeId-keyed broker registry container — the payload itself is never erased or downcast).
+Go/Haskell (`../sky`) parity is the default contract; `../sky` is READ-ONLY.
+Diverge ONLY where the divergence is strictly better under the principle order
+(Rust semantics, Unicode correctness, modern security posture) AND it is
+recorded in `docs/divergences-from-sky.md` with rationale and its own tests. A
+hack is never a "divergence".
 
-### Root causes only — no fake solutions
+## The two-tier gate
 
-Never suppress a type error or warning; a defensive cover-up that hides a contract violation IS a violation. The guardian pre-final-gate outcome ladder governs every change: **clean → proceed**; **a principle is hurt → rethink and reimplement within the boundary**; **no adequate in-boundary fix exists → revert, log why, and signal the user** — never ship a silent workaround. "Pre-existing" / "known edge case" is never a shipping excuse (no-deferral): root-cause it or escalate it, never paper over it.
+Master only ever advances to a full-gate-certified sha.
 
-### Match the reference
+- **Cheap gate — per landed lane (~minutes):** `cargo build -p skyc` + scoped
+  `nextest` on the touched crates + scoped clippy `-D warnings`; for a
+  sweep/example blocker, also rebuild that example with the fresh `skyc` and
+  confirm the original diagnostic is gone (THE SEAL on the specific example).
+  A cheap-green lane lands but stays uncertified.
+- **Full gate — the ONE authoritative run per batch** (every N cycles or when
+  pending work drains): `cargo nextest run --workspace`; `cargo nextest run
+  -p sky-runtime-rust --features full` (LOAD-BEARING — the runtime's
+  `default = []` means the workspace run skips every feature-gated test,
+  including the entire `live::*` surface); `cargo test --workspace --doc`;
+  `cargo clippy --workspace --all-targets -- -D warnings`; fuzz + full
+  examples sweep. Full-green → certify the batch + advance master. Full-red →
+  reset to the last certified sha + re-queue.
+- The two gates MUST agree on lint scope, and the cheap gate is never
+  *stricter* than the full gate. Exact commands: `context.md` §6 and
+  `scripts/progressive-development/autopilot.sh`.
 
-Go/Haskell (`../sky`) parity is the default contract. Diverge ONLY where the divergence is strictly better under the principle order (Rust semantics, Unicode correctness, modern security posture) AND it is recorded in `docs/divergences-from-sky.md` with rationale and its own tests. A hack is never a "divergence".
+## Write-boundary
+
+Exactly two writable locations, for everyone (agent or human):
+
+- **Cargo targets + scratch build state → under `~/.cache/ipe/` ONLY.** Never
+  `/tmp`, never `$HOME` root, never a bare `~/.cache/<name>-target`. A target
+  outside this root is invisible to disk-reclaim and fills the disk to 100%.
+  Emergency prune is one place: `rm -rf ~/.cache/ipe/*` (rebuilds warm).
+- **Source/doc/test edits → the repo working tree ONLY.** Boundary: `crates/`,
+  `runtime/`, sky-stdlib compiled-source, `examples/` fixtures, `docs/`.
+  `../sky` is READ-ONLY reference — never edit the Haskell/Go backend or
+  upstream.
+
+## Agent-lane operational rules
+
+Every dispatched lane (autopilot or hand-dispatched):
+
+- **Foreground only.** No background processes: no `&`, no `nohup`, no
+  `run_in_background`, no Monitor/self-poll on your own build — a detached
+  monitor outlives the lane and resurrects killed builds.
+- **Every build/test wrapped in `timeout`.** A hung command is killed and
+  filed, never waited out.
+- **Own `CARGO_TARGET_DIR` per lane** under `~/.cache/ipe/` whenever the
+  change touches compiled code — parallel lanes sharing a target race
+  (phantom errors). Leaf-only/doc edits may share.
+- **No sub-agent dispatch.** A dispatched lane never spawns its own
+  sub-agents; the orchestrator is the only dispatcher.
+- **Understand before changing — port, don't invent.** Query the indexes
+  BEFORE `rg`: `scripts/ipe-index` for our Rust (`def`/`refs`/`kind`/
+  `locate`/`parity`), `skydex` for the `../sky` reference (`locate`/`rdeps`/
+  `covers`/`parity`). Learn how the reference handles the construct across
+  compiler + backend + runtime before designing the fix.
+
+## Documentation & code standards
+
+- **No archaeology.** Docs and comments state what the rule or design IS now,
+  never how it got there: no dates, no task numbers, no phase/milestone/
+  campaign labels, no "was X, now Y", no incident stories (ADRs are the one
+  sanctioned history home). Git history already records when and why. A
+  rationale, when needed, is structural ("a target outside the prune root is
+  invisible to reclaim"), not narrative.
+- **Comments say WHAT, not HOW — and only when non-obvious.** Names are
+  self-explaining to a first-time reader; a comment restating the code, or a
+  name that needs a comment, is a smell.

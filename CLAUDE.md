@@ -1,12 +1,12 @@
 # CLAUDE.md — Ipê language authoring reference
 
-> **Ipê** — an Elm-family, pure-functional language whose compiler + stdlib
-> modules are currently `Sky.*`-prefixed pending a final rename, so use those
-> names verbatim in code. Source language is Elm-shaped; the compiler emits
-> Rust. This document is a self-contained authoring reference: everything an
-> agent needs to write correct, compiling Ipê programs. Every import path,
-> module name, kernel name, type name, and function name below is the exact
-> identifier the current compiler accepts.
+> **Ipê** — an Elm-family, pure-functional language compiling to Rust;
+> compiler + stdlib modules are currently `Sky.*`-prefixed pending a final
+> rename, so use those names verbatim in code. Self-contained authoring
+> reference: every import path, module, kernel, type, and function name below
+> is the exact identifier the current compiler accepts. Compiler/runtime
+> *development* rules live in `PRINCIPLES.md` (enforcement SSOT) +
+> `DEVELOPMENT.md`, not here.
 
 ## Language syntax
 
@@ -540,17 +540,11 @@ view model =
         ]
 ```
 
-Three reasons:
-
-1. **Password managers** watch DOM mutations on password inputs.
-   Server-driven re-render w/ `value=…` triggers a re-prompt/re-fill cycle.
-2. **The secret never lives in Model** — no `onInput UpdatePassword` Msg →
-   no Model field → never serialised into the session store.
-3. **Race-free submit** — form submit reads the live DOM value, not a
-   debounced keystroke.
-
-The `DoSignIn AuthCreds` ctor takes a typed record; form data is decoded
-directly into it, case-insensitively. No per-Msg decoder boilerplate.
+Why: password managers re-prompt on server-driven `value=…` mutations; the
+secret never enters Model (no `onInput UpdatePassword` Msg → no Model field →
+never serialised into the session store); submit reads the live DOM value,
+race-free. The `DoSignIn AuthCreds` ctor takes a typed record — form data
+decodes into it case-insensitively, no per-Msg decoder boilerplate.
 
 ### Connection status banner
 
@@ -872,7 +866,7 @@ String, size : (Int, Int) }`) today; macOS is supported first.
 
 ## Active limitations
 
-Real current compiler limitations you must work around when writing code.
+Current compiler limitations to work around when writing code.
 
 1. **No higher-kinded types.** HM only.
 2. **No `where` clauses.** Use `let…in`.
