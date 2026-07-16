@@ -63,6 +63,7 @@ module Sky.Core.WebSocket exposing
     )
 
 import Sky.Ffi as Ffi
+import Sky.Core.Bytes exposing (Bytes)
 import Sky.Core.Error exposing (Error)
 import Sky.Core.Task as Task
 
@@ -182,14 +183,15 @@ send sock msg =
             sendRaw raw msg
 
 
-sendBinaryRaw : Int -> String -> Task Error ()
+sendBinaryRaw : Int -> Bytes -> Task Error ()
 sendBinaryRaw =
     Ffi.kernel "WebSocket_sendBinary"
 
 
--- | `sendBinary sock bytes` — write a binary frame.  The String
--- carries raw bytes (Sky.Core.Bytes alias = String for v0.15.x).
-sendBinary : WebSocket -> String -> Task Error ()
+-- | `sendBinary sock bytes` — write a binary frame.  Takes `Bytes`
+-- (a distinct primitive in this backend, unlike the reference's
+-- String alias — see `docs/divergences-from-sky.md` §B18).
+sendBinary : WebSocket -> Bytes -> Task Error ()
 sendBinary sock msg =
     case sock of
 

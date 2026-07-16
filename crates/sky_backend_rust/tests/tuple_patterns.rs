@@ -145,6 +145,7 @@ fn wrap_program(i: &mut Interner) -> DResult<Program> {
             uses_webview: false,
             uses_css: false,
             uses_auth: false,
+            uses_websocket: false,
         }],
     })
 }
@@ -198,6 +199,7 @@ fn unit_value_and_type_render() -> DResult<()> {
             uses_webview: false,
             uses_css: false,
             uses_auth: false,
+            uses_websocket: false,
         }],
     };
     let src = emit(&i, &prog)?;

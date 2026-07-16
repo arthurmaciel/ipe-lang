@@ -320,6 +320,14 @@ pub(crate) struct EmitCtx<'a> {
     /// When set, [`crate::project::emit_program`] appends
     /// `pub mod auth; pub use auth::*;` to the emitted `sky_runtime/mod.rs`.
     pub(crate) uses_auth: bool,
+    /// `true` when the program uses at least one outbound `Sky.Core.WebSocket`
+    /// client kernel (`WebSocket.connect` / `send` / `close` / … or an `on*`
+    /// subscription).  When set, [`crate::project::assemble_project_files`] adds
+    /// the `websocket_client` feature (+ `tokio-tungstenite` dep) to the emitted
+    /// `Cargo.toml` and appends `pub mod ws_client; pub use ws_client::*;` to the
+    /// emitted `sky_runtime/mod.rs` — the `ws_client` module is feature-gated and
+    /// NOT part of the M0 base module set.
+    pub(crate) uses_websocket: bool,
     /// The Rust type name for the emitted `SqlValue` enum (e.g. `MainSqlValue`).
     /// `None` when `uses_db` is `false`.
     pub(crate) sqlvalue_rust_name: Option<String>,
@@ -408,7 +416,20 @@ impl<'a> EmitCtx<'a> {
                         .map(|s| resolve_sym(interner, *s))
                         .collect::<DResult<Vec<&str>>>()?
                 };
-                let rust_name = naming::enum_name(&home_segs, resolve_sym(interner, def.name)?);
+                // Sky.Core.WebSocket's `WebSocketMessage` / `CloseCode` ADTs are
+                // BRIDGED to the runtime enums `WsClientMessage` / `WsCloseCode`
+                // (the `sub_subscribe_ws_*` fns take/produce those). Overriding the
+                // emitted enum name here makes every reference — the type in a
+                // handler's `WebSocketMessage -> msg` param, a `Text s` / `Normal`
+                // constructor, a `case … of Text t ->` pattern — resolve to the
+                // runtime enum, whose variant names + field types match 1:1. The
+                // Sky enum DECL is suppressed in `emit_enum` (a bridged type has no
+                // user-emitted body). Same intent as the reference `Types.hs` map.
+                let def_name = resolve_sym(interner, def.name)?;
+                let rust_name = match websocket_bridge_rust_name(&home_segs, def_name) {
+                    Some(runtime_name) => runtime_name.to_owned(),
+                    None => naming::enum_name(&home_segs, def_name),
+                };
                 // A type's nominal identity is `(home, name)`. Two modules each
                 // declaring `type Color` share the bare `name` `Symbol` but differ
                 // in `home`, so they no longer collide — each keys a distinct Rust
@@ -720,6 +741,9 @@ impl<'a> EmitCtx<'a> {
         // detect Std.Auth kernel usage.
         let uses_auth = program.modules.iter().any(|m| m.uses_auth);
 
+        // detect outbound Sky.Core.WebSocket client usage.
+        let uses_websocket = program.modules.iter().any(|m| m.uses_websocket);
+
         Ok(Self {
             interner,
             uses_db,
@@ -732,6 +756,7 @@ impl<'a> EmitCtx<'a> {
             uses_webview,
             uses_css,
             uses_auth,
+            uses_websocket,
             sqlvalue_rust_name,
             sqlfield_rust_name,
             enum_names,
@@ -1093,6 +1118,20 @@ impl<'a> EmitCtx<'a> {
             })
     }
 
+    /// `true` when `(home, ty)` is a `Sky.Core.WebSocket` ADT bridged to a
+    /// runtime enum (`WebSocketMessage` / `CloseCode`) — its Sky decl is
+    /// suppressed because the runtime already defines the type. See
+    /// [`websocket_bridge_rust_name`].
+    pub(crate) fn is_websocket_bridged_enum(&self, home: &ModPath, ty: Symbol) -> DResult<bool> {
+        let name = resolve_sym(self.interner, ty)?;
+        let home_segs = home
+            .0
+            .iter()
+            .map(|s| resolve_sym(self.interner, *s))
+            .collect::<DResult<Vec<&str>>>()?;
+        Ok(websocket_bridge_rust_name(&home_segs, name).is_some())
+    }
+
     /// The runtime enum path for a built-in constructor's type, or `None` for a
     /// user-declared enum. `Maybe` / `Result` are not user `type` declarations —
     /// their constructors (`Just` / `Nothing` / `Ok` / `Err`) are Prelude
@@ -1290,6 +1329,7 @@ fn collect_record_shapes(
         // Cache config / stats + Csv document are folded to nominal runtime
         // structs — no structural record shape to synthesise.
         | IrType::CacheCfg
+        | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc => {}
         // `LiveRoute page` is page-parametric — descend in case the page type
@@ -1430,6 +1470,7 @@ fn type_reaches_enum(
         // Cache config / stats + Csv document are monomorphic runtime structs
         // — no reachable enum edge to `target`.
         | IrType::CacheCfg
+        | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc => false,
         // `Route<Page>` stores its `not_found`/built pages by value — a page
@@ -1503,6 +1544,7 @@ fn contains_generic(ty: &IrType) -> bool {
         // Cache config / stats + Csv document are monomorphic — no generic
         // parameters.
         | IrType::CacheCfg
+        | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc => false,
         // `LiveRoute page` is parametric on `page`; check if it carries a
@@ -1602,6 +1644,7 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         // Cache config / stats + Csv document are monomorphic — no generics to
         // collect.
         | IrType::CacheCfg
+        | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc => {}
         // `LiveRoute page` may carry generic parameters through `page`.
@@ -1905,6 +1948,7 @@ fn match_template(
         // Cache config / stats + Csv document are monomorphic runtime-struct
         // leaves.
         | IrType::CacheCfg
+        | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc => {
             if template == concrete {
@@ -2034,6 +2078,30 @@ fn resolve_sym(interner: &Interner, sym: Symbol) -> DResult<&str> {
         })
 }
 
+/// The runtime enum name a `Sky.Core.WebSocket` ADT is BRIDGED to, or `None`
+/// for any other type.
+///
+/// `WebSocketMessage` and `CloseCode` are declared in the stdlib with
+/// constructors, but the `sub_subscribe_ws_{message,close}` runtime fns
+/// take/produce `sky_runtime::ws_client::{WsClientMessage, WsCloseCode}` — whose
+/// variant names (`Text`/`Binary`, `Normal`/`GoingAway`/`UnsupportedData`/
+/// `InternalError`/`Custom`) and field types match the Sky ADTs 1:1. Emitting
+/// the enum name AS the runtime type makes every constructor / pattern / typed
+/// param resolve to the runtime enum (so the user's `toMsg` closure has the
+/// exact `Fn(WsClientMessage) -> M` shape the runtime fn requires), and the Sky
+/// enum's own decl is suppressed in [`crate::emit_types::emit_enum`]. Keyed on
+/// the type's HOME module so a user's unrelated `type CloseCode` never folds.
+pub(crate) fn websocket_bridge_rust_name(home_segs: &[&str], name: &str) -> Option<&'static str> {
+    if home_segs != ["Sky", "Core", "WebSocket"] {
+        return None;
+    }
+    match name {
+        "WebSocketMessage" => Some("WsClientMessage"),
+        "CloseCode" => Some("WsCloseCode"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod record_struct_namespace_tests {
     use sky_ir::{EnumDef, Module, Variant};
@@ -2095,6 +2163,7 @@ mod record_struct_namespace_tests {
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_websocket: false,
             }],
         };
 
@@ -2160,6 +2229,7 @@ mod record_struct_namespace_tests {
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_websocket: false,
             }],
         };
 
