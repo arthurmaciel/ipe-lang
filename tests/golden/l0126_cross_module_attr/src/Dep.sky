@@ -1,0 +1,30 @@
+module Dep exposing (composed)
+
+import Sky.Core.Prelude exposing (..)
+
+
+applyTwice : (Int -> Int) -> Int -> Int
+applyTwice g x =
+    g (g x)
+
+
+-- `composed` is a LARGE def whose body starts far above the failing span:
+-- the leading `let` padding pushes the SKY-L0126 forwarding site deep inside
+-- the def body, so this def's `body_span.lo` is a poor (large-`lo_dist`) match
+-- for the failing span. That is the exact condition (mirroring #221's
+-- `Server.run` enclosing `guarded`) under which the pre-fix-B byte-offset
+-- heuristic prefers a numerically-closer Main.sky def and mis-blames it. Fix B
+-- threads `Dep.composed`'s home so the diagnostic renders against Dep.sky.
+composed : (Int -> Int) -> (Int -> Int)
+composed f =
+    let
+        pad0 = 0
+        pad1 = 0
+        pad2 = 0
+        pad3 = 0
+        pad4 = 0
+        pad5 = 0
+        pad6 = 0
+        pad7 = 0
+    in
+    \x -> applyTwice f x

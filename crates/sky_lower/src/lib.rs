@@ -29,7 +29,7 @@ mod lower;
 pub use lower::tco_analysis;
 
 use sky_canon::ast as canon;
-use sky_diagnostics::DResult;
+use sky_diagnostics::Diagnostic;
 use sky_intern::Interner;
 use sky_types::SolvedTypes;
 
@@ -49,7 +49,19 @@ pub fn lower(
     m: &canon::Module,
     types: &SolvedTypes,
     interner: &mut Interner,
-) -> DResult<sky_ir::Program> {
+) -> Result<sky_ir::Program, (Diagnostic, Vec<sky_intern::Symbol>)> {
+    // Widest callable arity — the ceiling for the eta / capture pools below.
+    // Declared first (an item before any statement) so the `homeless` closure
+    // that follows does not trip `clippy::items_after_statements`.
+    const MAX_CALLEE_ARITY: usize = 16;
+    // Pre-lowering setup below (fresh-symbol pool minting + Prelude built-in
+    // interning) raises only homeless `CompilerBug`/intern diagnostics — each
+    // such `?` is mapped to an EMPTY home via `homeless`, so the driver falls
+    // back to its byte-offset heuristic for those (as it already does for
+    // homeless type errors). The per-def home attribution that fixes #221's
+    // cross-module misattribution lives inside `Lowerer::run`, at the
+    // `lower_def` boundary.
+    let homeless = |d: Diagnostic| (d, Vec::<sky_intern::Symbol>::new());
     // Eta-expansion of a partial application needs fresh parameter symbols that
     // cannot capture any name free in the supplied arguments. Mint a pool up
     // front through the one `&mut Interner` the entry point owns, so the
@@ -66,11 +78,12 @@ pub fn lower(
     // needs an eta param). Cover the widest callable arity; no stdlib function
     // exceeds this ceiling, and `eta_expand_partial` fails closed (CompilerBug)
     // if a gap ever did — never silently, never unsound.
-    const MAX_CALLEE_ARITY: usize = 16;
-    let eta_params =
-        interner.fresh_symbols("eta_", lower::max_def_arity(m).max(MAX_CALLEE_ARITY))?;
-    let cap_params =
-        interner.fresh_symbols("cap_", lower::max_def_arity(m).max(MAX_CALLEE_ARITY))?;
+    let eta_params = interner
+        .fresh_symbols("eta_", lower::max_def_arity(m).max(MAX_CALLEE_ARITY))
+        .map_err(homeless)?;
+    let cap_params = interner
+        .fresh_symbols("cap_", lower::max_def_arity(m).max(MAX_CALLEE_ARITY))
+        .map_err(homeless)?;
     // A destructuring parameter (tuple / record / alias / wildcard) has no single
     // source name; the lowerer gives it a synthetic binder from this pool and
     // (for the destructuring shapes) prepends a `Destructure` to the body. Sized
@@ -79,8 +92,9 @@ pub fn lower(
     // so each site gets a GLOBALLY-unique name — a def param and a lambda param
     // inside its body can never collide on `arg_i` (no reliance on shadowing).
     // Minted through the same owned `&mut Interner`.
-    let param_binders =
-        interner.fresh_symbols("arg_", lower::count_destructure_param_sites(m))?;
+    let param_binders = interner
+        .fresh_symbols("arg_", lower::count_destructure_param_sites(m))
+        .map_err(homeless)?;
     // AUD-01 seal fix: one fresh symbol per bare `any`-in-param-position
     // occurrence, so `split_typed_sig` never shares the single interned
     // `"any"` Symbol across two occurrences the checker independently pinned
@@ -89,26 +103,33 @@ pub fn lower(
     // from the `fresh_symbols` mutable-mint call — the two borrows would
     // otherwise conflict within one expression.
     let any_param_site_count = lower::count_any_param_sites(m, interner);
-    let any_param_binders = interner.fresh_symbols("anyp_", any_param_site_count)?;
+    let any_param_binders = interner
+        .fresh_symbols("anyp_", any_param_site_count)
+        .map_err(homeless)?;
     // #125: one fresh thunk-binder symbol per syntactic destructure-binder
     // `let` / single-arm product `case` site, consumed only when the bound
     // value's solved type contains a Decoder (the type gate runs post-solve,
     // inside the lowerer; this count is purely syntactic, so it over-counts
     // harmlessly).
-    let destructure_thunk_binders =
-        interner.fresh_symbols("destr_thunk_", lower::count_destructure_thunk_sites(m))?;
+    let destructure_thunk_binders = interner
+        .fresh_symbols("destr_thunk_", lower::count_destructure_thunk_sites(m))
+        .map_err(homeless)?;
     // #158 C2: one fresh `Vec` payload binder per `case`-arm site that nests a
     // list / cons sub-pattern inside a constructor payload. `fresh_symbols`
     // (mutable-mint) runs after the count (immutable borrow), same two-borrow
     // ordering the `anyp_` pool documents above.
     let nested_cons_site_count = lower::count_nested_cons_payload_sites(m);
-    let nested_cons_binders = interner.fresh_symbols("ncons_", nested_cons_site_count)?;
+    let nested_cons_binders = interner
+        .fresh_symbols("ncons_", nested_cons_site_count)
+        .map_err(homeless)?;
     // Sibling desugaring: one fresh `String` payload binder per `case`-arm site
     // that nests a string-literal sub-pattern directly inside a constructor
     // payload (`Just "live"`). Same two-borrow ordering as the `ncons_` pool
     // above.
     let nested_strlit_site_count = lower::count_nested_strlit_payload_sites(m);
-    let nested_strlit_binders = interner.fresh_symbols("nstrlit_", nested_strlit_site_count)?;
+    let nested_strlit_binders = interner
+        .fresh_symbols("nstrlit_", nested_strlit_site_count)
+        .map_err(homeless)?;
     // The built-in `Maybe` / `Result` types + constructors are Prelude
     // built-ins (no `type` declaration), so the lowerer needs their symbols to
     // seed the variant-set / arity tables it would otherwise read from
@@ -119,53 +140,53 @@ pub fn lower(
     // `type` declaration in any Sky source file — the compiler synthesises their
     // `EnumDef`s at lowering time when a Db kernel call is detected.
     let builtins = lower::BuiltinCtors {
-        maybe: interner.intern("Maybe")?,
-        result: interner.intern("Result")?,
-        just: interner.intern("Just")?,
-        nothing: interner.intern("Nothing")?,
-        ok: interner.intern("Ok")?,
-        err: interner.intern("Err")?,
+        maybe: interner.intern("Maybe").map_err(homeless)?,
+        result: interner.intern("Result").map_err(homeless)?,
+        just: interner.intern("Just").map_err(homeless)?,
+        nothing: interner.intern("Nothing").map_err(homeless)?,
+        ok: interner.intern("Ok").map_err(homeless)?,
+        err: interner.intern("Err").map_err(homeless)?,
         // ── SqlValue ──────────────────────────────────────────────────────────
-        sqlvalue: interner.intern("SqlValue")?,
-        sql_string: interner.intern("SqlString")?,
-        sql_int: interner.intern("SqlInt")?,
-        sql_float: interner.intern("SqlFloat")?,
-        sql_bool: interner.intern("SqlBool")?,
-        sql_bytes: interner.intern("SqlBytes")?,
-        sql_time: interner.intern("SqlTime")?,
-        sql_decimal: interner.intern("SqlDecimal")?,
-        sql_money: interner.intern("SqlMoney")?,
-        sql_null: interner.intern("SqlNull")?,
+        sqlvalue: interner.intern("SqlValue").map_err(homeless)?,
+        sql_string: interner.intern("SqlString").map_err(homeless)?,
+        sql_int: interner.intern("SqlInt").map_err(homeless)?,
+        sql_float: interner.intern("SqlFloat").map_err(homeless)?,
+        sql_bool: interner.intern("SqlBool").map_err(homeless)?,
+        sql_bytes: interner.intern("SqlBytes").map_err(homeless)?,
+        sql_time: interner.intern("SqlTime").map_err(homeless)?,
+        sql_decimal: interner.intern("SqlDecimal").map_err(homeless)?,
+        sql_money: interner.intern("SqlMoney").map_err(homeless)?,
+        sql_null: interner.intern("SqlNull").map_err(homeless)?,
         // ── SqlField ──────────────────────────────────────────────────────────
-        sqlfield: interner.intern("SqlField")?,
-        set_field: interner.intern("SetField")?,
-        omit_field: interner.intern("OmitField")?,
+        sqlfield: interner.intern("SqlField").map_err(homeless)?,
+        set_field: interner.intern("SetField").map_err(homeless)?,
+        omit_field: interner.intern("OmitField").map_err(homeless)?,
         // ── Order ADT (#123) ─────────────────────────────────────────────────
-        order: interner.intern("Order")?,
-        lt: interner.intern("LT")?,
-        eq: interner.intern("EQ")?,
-        gt: interner.intern("GT")?,
+        order: interner.intern("Order").map_err(homeless)?,
+        lt: interner.intern("LT").map_err(homeless)?,
+        eq: interner.intern("EQ").map_err(homeless)?,
+        gt: interner.intern("GT").map_err(homeless)?,
         // ── Error / ErrorKind (E-12, #152) ────────────────────────────────────
-        error: interner.intern("Error")?,
-        errorkind: interner.intern("ErrorKind")?,
-        ek_io: interner.intern("Io")?,
-        ek_network: interner.intern("Network")?,
-        ek_ffi: interner.intern("Ffi")?,
-        ek_decode: interner.intern("Decode")?,
-        ek_timeout: interner.intern("Timeout")?,
-        ek_not_found: interner.intern("NotFound")?,
-        ek_permission_denied: interner.intern("PermissionDenied")?,
-        ek_invalid_input: interner.intern("InvalidInput")?,
-        ek_conflict: interner.intern("Conflict")?,
-        ek_unavailable: interner.intern("Unavailable")?,
-        ek_unexpected: interner.intern("Unexpected")?,
+        error: interner.intern("Error").map_err(homeless)?,
+        errorkind: interner.intern("ErrorKind").map_err(homeless)?,
+        ek_io: interner.intern("Io").map_err(homeless)?,
+        ek_network: interner.intern("Network").map_err(homeless)?,
+        ek_ffi: interner.intern("Ffi").map_err(homeless)?,
+        ek_decode: interner.intern("Decode").map_err(homeless)?,
+        ek_timeout: interner.intern("Timeout").map_err(homeless)?,
+        ek_not_found: interner.intern("NotFound").map_err(homeless)?,
+        ek_permission_denied: interner.intern("PermissionDenied").map_err(homeless)?,
+        ek_invalid_input: interner.intern("InvalidInput").map_err(homeless)?,
+        ek_conflict: interner.intern("Conflict").map_err(homeless)?,
+        ek_unavailable: interner.intern("Unavailable").map_err(homeless)?,
+        ek_unexpected: interner.intern("Unexpected").map_err(homeless)?,
         // ── ErrorDetails (backlog #85 follow-up) ──────────────────────────────
-        errordetails: interner.intern("ErrorDetails")?,
-        ed_ffi_panic: interner.intern("FfiPanic")?,
-        ed_type_mismatch: interner.intern("TypeMismatch")?,
-        ed_http_status: interner.intern("HttpStatus")?,
-        ed_json_decode: interner.intern("JsonDecode")?,
-        ed_custom: interner.intern("Custom")?,
+        errordetails: interner.intern("ErrorDetails").map_err(homeless)?,
+        ed_ffi_panic: interner.intern("FfiPanic").map_err(homeless)?,
+        ed_type_mismatch: interner.intern("TypeMismatch").map_err(homeless)?,
+        ed_http_status: interner.intern("HttpStatus").map_err(homeless)?,
+        ed_json_decode: interner.intern("JsonDecode").map_err(homeless)?,
+        ed_custom: interner.intern("Custom").map_err(homeless)?,
     };
     lower::Lowerer::new(
         m,
@@ -492,14 +513,18 @@ mod tests {
         );
     }
 
-    /// Lower a free-standing module, returning the lowering [`DResult`] so a test
-    /// can assert a not-yet gap surfaces as a `Diagnostic::Lower`.
-    fn lower_result(source: &str) -> DResult<()> {
+    /// Lower a free-standing module, returning just the lowering diagnostic so a
+    /// test can assert a not-yet gap surfaces as a `Diagnostic::Lower`. The
+    /// `home` half of `lower`'s error tuple is irrelevant to these single-module
+    /// gap assertions, so it is dropped here.
+    fn lower_result(source: &str) -> Result<(), Diagnostic> {
         let mut i = Interner::new();
         let src = sky_parse::parse_module(source, &mut i)?;
         let m = sky_canon::canonicalise(&src, &mut i)?;
         let types = sky_types::infer(&m, &mut i)?;
-        lower(&m, &types, &mut i).map(|_| ())
+        lower(&m, &types, &mut i)
+            .map(|_| ())
+            .map_err(|(d, _home)| d)
     }
 
     #[test]

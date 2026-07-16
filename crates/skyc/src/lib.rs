@@ -210,7 +210,10 @@ pub fn build_with_sibling_discovery(
     // Ensure the entry itself is always in the discovered set, even when its
     // file name doesn't match the module-segment validation (e.g. a temp
     // path). This prevents the entry from being silently dropped.
-    if !discovered.iter().any(|m| m.module_path == entry_module_path) {
+    if !discovered
+        .iter()
+        .any(|m| m.module_path == entry_module_path)
+    {
         discovered.push(project::DiscoveredModule {
             path: entry.to_path_buf(),
             module_path: entry_module_path.clone(),
@@ -221,7 +224,10 @@ pub fn build_with_sibling_discovery(
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
     for m in &discovered {
         if m.module_path == entry_module_path {
-            sources.insert(entry_module_path.clone(), (entry.to_path_buf(), source.clone()));
+            sources.insert(
+                entry_module_path.clone(),
+                (entry.to_path_buf(), source.clone()),
+            );
         } else {
             let src = fs::read_to_string(&m.path).map_err(|e| io_err(&m.path, e))?;
             sources.insert(m.module_path.clone(), (m.path.clone(), src));
@@ -423,7 +429,8 @@ fn compile_modules_observed(
     // re-demands `emit_project` against a second config instance.
     let config = sky_db::BuildConfig::new(&db, db_driver);
 
-    let emitted = match compile_prepared(&db, source_root, &sources, entry_path, blame_path, config) {
+    let emitted = match compile_prepared(&db, source_root, &sources, entry_path, blame_path, config)
+    {
         Ok(emitted) => emitted,
         Err(e) => return (Err(e), CacheOutcome::Miss),
     };
@@ -532,13 +539,12 @@ pub fn compile_prepared(
 
     // Dep-first module order (memoized; cycle = N0021, blamed on the
     // caller-supplied blame path since no single file owns a cycle).
-    let topo = sky_db::topo_order(db, source_root, entry_file).map_err(|diag| {
-        CliError::Pipeline {
+    let topo =
+        sky_db::topo_order(db, source_root, entry_file).map_err(|diag| CliError::Pipeline {
             file: blame_path.to_path_buf(),
             src: String::new(),
             diag,
-        }
-    })?;
+        })?;
 
     // Canonicalise each module in dep-first order through the salsa query
     // graph (incremental Phase 2). Each `canonicalize` demand runs
@@ -564,12 +570,10 @@ pub fn compile_prepared(
         // no guard may be live here). A dep's own diagnostic never surfaces
         // here mis-blamed: deps precede the module in topo order, so a red
         // dep already errored at its own iteration with its own file.
-        sky_db::canonicalize(db, source_root, file_handle).map_err(|diag| {
-            CliError::Pipeline {
-                file: path.clone(),
-                src: src.clone(),
-                diag,
-            }
+        sky_db::canonicalize(db, source_root, file_handle).map_err(|diag| CliError::Pipeline {
+            file: path.clone(),
+            src: src.clone(),
+            diag,
         })?;
     }
 
@@ -622,8 +626,7 @@ pub fn compile_prepared(
         interner.set_fresh_avoid(fresh_avoid);
         let mut map = BTreeMap::new();
         for (str_path, (file, src)) in sources {
-            let sym_path: Result<Vec<_>, _> =
-                str_path.iter().map(|s| interner.intern(s)).collect();
+            let sym_path: Result<Vec<_>, _> = str_path.iter().map(|s| interner.intern(s)).collect();
             if let Ok(sym_path) = sym_path {
                 map.insert(sym_path, (file.clone(), src.clone()));
             }
@@ -740,10 +743,26 @@ pub fn compile_prepared(
     // SKY-L0115 shown at an unrelated Main.sky line. `source_for_span` maps the
     // span back to its owning def's file, the same heuristic already used for
     // constraint-gen / exhaustiveness type errors.
-    let span_attributed_err = |diag: sky_diagnostics::Diagnostic| {
-        let (file, src) = source_for_span(diag_span(&diag));
-        CliError::Pipeline { file, src, diag }
-    };
+    // #221 fix B: lowering (and emit) errors now carry the owning def's `home`,
+    // exactly like `typecheck` above. When `home` is non-empty we resolve the
+    // source file DIRECTLY via `home_to_source` (O(log N), exact) — this is what
+    // makes a Server.sky SKY-L0126 render against Server.sky, not against a
+    // Main.sky def whose byte range coincidentally overlaps the failing span
+    // (the misattribution `Main.sky:73` sighting). An empty `home` (homeless
+    // backend diagnostic, or a pre-def lowering error) falls back to the
+    // byte-offset heuristic `source_for_span`, preserving prior behaviour.
+    let span_attributed_err =
+        |(diag, home): (sky_diagnostics::Diagnostic, Vec<sky_intern::Symbol>)| {
+            let (file, src) = if home.is_empty() {
+                source_for_span(diag_span(&diag))
+            } else {
+                home_to_source
+                    .get(&home)
+                    .cloned()
+                    .unwrap_or_else(|| source_for_span(diag_span(&diag)))
+            };
+            CliError::Pipeline { file, src, diag }
+        };
     // `sky_db::program_metadata` (Phase 5, plan Task 14) — the whole-program
     // DCE-reachability seam over `lower_program` (Phase 4, plan Task 13).
     // Its own dependency on `lower_program` is what forces the lowering pass
@@ -773,8 +792,8 @@ pub fn compile_prepared(
     // need zero changes (§4.4). The no-op-rebuild + `db_driver`-only
     // memoization properties `phase6_build_config.rs` proves still hold — the
     // config field flows through unchanged.
-    let emitted = sky_db::emit_manifest(db, source_root, entry_file, config)
-        .map_err(span_attributed_err)?;
+    let emitted =
+        sky_db::emit_manifest(db, source_root, entry_file, config).map_err(span_attributed_err)?;
     Ok((*emitted).clone())
 }
 
@@ -1106,9 +1125,9 @@ fn run_watch(rest: &[String]) -> Result<(), CliError> {
             "--runtime" => runtime = Some(it.next().ok_or(CliError::Usage(USAGE))?.clone()),
             "--port" => {
                 let raw = it.next().ok_or(CliError::Usage(USAGE))?;
-                port = raw
-                    .parse()
-                    .map_err(|_| CliError::UsageOwned(format!("watch: invalid --port value: {raw}")))?;
+                port = raw.parse().map_err(|_| {
+                    CliError::UsageOwned(format!("watch: invalid --port value: {raw}"))
+                })?;
             }
             _ => return Err(CliError::Usage(USAGE)),
         }
@@ -1214,10 +1233,13 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     // Split on "--": everything before is skyc flags; everything after is
     // forwarded to the emitted binary.
     let dash_dash = rest.iter().position(|a| a == "--");
-    let (skyc_args, bin_args) = match dash_dash {
-        Some(pos) => (&rest[..pos], &rest[pos + 1..]),
-        None => (rest, [].as_slice()),
-    };
+    let (skyc_args, bin_args) = dash_dash.map_or((rest, [].as_slice()), |pos| {
+        // `pos` is a valid index returned by `position`, and `pos + 1 <=
+        // rest.len()` (a trailing `--` yields an empty tail), so both splits are
+        // in-bounds — `split_at` proves it without an indexing panic path.
+        let (before, after_incl) = rest.split_at(pos);
+        (before, after_incl.get(1..).unwrap_or(&[]))
+    });
 
     let mut it = skyc_args.iter();
     let entry = it.next().ok_or(CliError::Usage(USAGE))?.clone();
@@ -1289,8 +1311,13 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     {
         use std::os::unix::process::CommandExt as _;
         // `exec` does not return on success; any returned error is an OS failure.
+        // This block is the function tail on Unix (the `#[cfg(not(unix))]` arm is
+        // absent), so the `Err` is the tail expression — no `return` needed.
         let err = cmd.exec();
-        return Err(CliError::Io { path: bin, source: err });
+        Err(CliError::Io {
+            path: bin,
+            source: err,
+        })
     }
     #[cfg(not(unix))]
     {
@@ -1455,7 +1482,10 @@ pub fn emit_ir_text(entry: &Path) -> Result<String, CliError> {
     let module = sky_parse::parse_module(&source, &mut interner).map_err(&pipeline_err)?;
     let canonical = sky_canon::canonicalise(&module, &mut interner).map_err(&pipeline_err)?;
     let types = sky_types::infer(&canonical, &mut interner).map_err(&pipeline_err)?;
-    let program = sky_lower::lower(&canonical, &types, &mut interner).map_err(&pipeline_err)?;
+    // Single-module IR dump: this path has one source file, so the home carried
+    // by the lowering error is redundant — drop it and blame the entry file.
+    let program = sky_lower::lower(&canonical, &types, &mut interner)
+        .map_err(|(diag, _home)| pipeline_err(diag))?;
     Ok(sky_ir::pretty(&program, &interner))
 }
 
@@ -1479,7 +1509,11 @@ fn pipeline_first_diagnostic(source: &str) -> Option<Diagnostic> {
         Ok(t) => t,
         Err(d) => return Some(d),
     };
-    sky_lower::lower(&canonical, &types, &mut interner).err()
+    // `--fix` diagnostic probe: single source, home is irrelevant — take just
+    // the diagnostic.
+    sky_lower::lower(&canonical, &types, &mut interner)
+        .err()
+        .map(|(diag, _home)| diag)
 }
 
 /// Collect every [`Applicability::MachineApplicable`] suggestion a diagnostic
@@ -2024,8 +2058,7 @@ mod tests {
         let toml = tmp.join("sky.toml");
         fs::write(&toml, "name = \"test\"\n").expect("write sky.toml");
         let main_sky = src.join("Main.sky");
-        fs::write(&main_sky, "module Main exposing (main)\nmain = 0\n")
-            .expect("write Main.sky");
+        fs::write(&main_sky, "module Main exposing (main)\nmain = 0\n").expect("write Main.sky");
 
         let found = find_manifest_for_sky_file(&main_sky);
         assert_eq!(
@@ -2149,15 +2182,16 @@ main =
 
         // Read the emitted main.rs and verify the signature.
         let main_rs = out.join("src").join("main.rs");
-        let emitted =
-            fs::read_to_string(&main_rs).expect("emitted main.rs must exist after build");
+        let emitted = fs::read_to_string(&main_rs).expect("emitted main.rs must exist after build");
 
         assert!(
             emitted.contains("fn sky_main() -> SkyTask<"),
             "sky_main must return SkyTask<…>, got signature region:\n{}",
             emitted
                 .lines()
-                .filter(|l| l.contains("sky_main") || l.contains("SkyTask") || l.contains("SkyResult"))
+                .filter(|l| l.contains("sky_main")
+                    || l.contains("SkyTask")
+                    || l.contains("SkyResult"))
                 .collect::<Vec<_>>()
                 .join("\n")
         );
@@ -2283,7 +2317,8 @@ main =
         // The file blamed must be Helper.sky, not Main.sky.
         let file_name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
         assert_eq!(
-            file_name, "Helper.sky",
+            file_name,
+            "Helper.sky",
             "#144 regression: type error in dep module must blame `Helper.sky`, \
              not `{file_name}`; full path: {}",
             file.display()
@@ -2389,7 +2424,8 @@ main =
         // would pick.
         let file_name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
         assert_eq!(
-            file_name, "Lib.sky",
+            file_name,
+            "Lib.sky",
             "home-discriminant regression: type error in Lib must blame `Lib.sky`, \
              not `{file_name}`; full path: {}",
             file.display()
@@ -2772,7 +2808,11 @@ main =
             None,
         );
         assert!(result.is_ok(), "compile must succeed: {:?}", result.err());
-        assert_eq!(outcome, CacheOutcome::Miss, "a disabled cache is always reported as a miss");
+        assert_eq!(
+            outcome,
+            CacheOutcome::Miss,
+            "a disabled cache is always reported as a miss"
+        );
         assert!(
             !tmp.join(".skyc-cache").exists(),
             "no cache directory should be created when caching is disabled"
