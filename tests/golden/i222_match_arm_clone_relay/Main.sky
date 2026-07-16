@@ -1,0 +1,39 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Task as Task
+import Std.Log exposing (println)
+
+
+-- #222 SEAL breach: a match-arm-bound variable (`name`, CloneOk `String`) read
+-- EXACTLY ONCE but through TWO nested `move`-closure boundaries. The outer
+-- `\a -> …` closure move-captures `name` only because the inner `\b -> …`
+-- closure reads it, so the outer boundary needs a pre-clone relay
+-- (`let name = name.clone()` before the inner lambda) — else it moves `name`
+-- out of the enclosing `Fn` env → cargo E0507 after skyc exit 0.
+--
+-- Pre-fix the 5th binder site (match arms) nested type resolution inside an
+-- `if n > 1` guard, so at `n == 1` the arm var never resolved its type and the
+-- relay never ran. Hoisting type resolution out of that guard and routing the
+-- arm var through the shared `apply_move_ownership` (whose
+-- `rewrite_multiuse_clones` installs the relay at n == 1 via its Lambda arm)
+-- closes the gap.
+handle : Maybe String -> Task Error String
+handle m =
+    case m of
+        Just name ->
+            Task.andThen
+                (\a ->
+                    Task.andThen
+                        (\b -> Task.succeed (name ++ a ++ b))
+                        (Task.succeed "B")
+                )
+                (Task.succeed "A")
+
+        Nothing ->
+            Task.succeed "none"
+
+
+main : Task Error ()
+main =
+    Task.andThen (\s -> println s) (handle (Just "bob"))
