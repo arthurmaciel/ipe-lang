@@ -42,7 +42,7 @@ use sky_backend::Backend;
 use sky_backend_rust::RustBackend;
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::{Interner, Symbol};
-use sky_ir::{
+use sky_ir::{OnFormKind, 
     Arm, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Pat,
     Program, TypeDef, Variant,
 };
@@ -149,11 +149,11 @@ fn tag_program(interner: &mut Interner, payload: Pat) -> DResult<Program> {
                         args: vec![Expr::Int(0)],
                     }],
                     pin: CallPin::None,
-                }],
+                    on_form: OnFormKind::NotForm,                }],
                 pin: CallPin::None,
-            }],
+                on_form: OnFormKind::NotForm,            }],
             pin: CallPin::None,
-        },
+            on_form: OnFormKind::NotForm,        },
     };
 
     Ok(Program {
@@ -314,11 +314,11 @@ fn alias_program(interner: &mut Interner) -> DResult<(Program, Symbol, Symbol)> 
                         args: vec![Expr::Int(7)],
                     }],
                     pin: CallPin::None,
-                }],
+                    on_form: OnFormKind::NotForm,                }],
                 pin: CallPin::None,
-            }],
+                on_form: OnFormKind::NotForm,            }],
             pin: CallPin::None,
-        },
+            on_form: OnFormKind::NotForm,        },
     };
 
     Ok((

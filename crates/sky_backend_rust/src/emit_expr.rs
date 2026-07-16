@@ -351,13 +351,19 @@ fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
                 (new_body, new_guard)
             },
         )),
-        Expr::Call { callee, args, pin } => Expr::Call {
+        Expr::Call {
+            callee,
+            args,
+            pin,
+            on_form,
+        } => Expr::Call {
             callee,
             args: args
                 .into_iter()
                 .map(|a| clone_free_target(a, target))
                 .collect(),
             pin,
+            on_form,
         },
         Expr::Tuple(items) => Expr::Tuple(
             items
@@ -717,13 +723,19 @@ fn substitute_var(expr: Expr, target: Symbol, replacement: &Expr) -> Expr {
                 (new_body, new_guard)
             },
         )),
-        Expr::Call { callee, args, pin } => Expr::Call {
+        Expr::Call {
+            callee,
+            args,
+            pin,
+            on_form,
+        } => Expr::Call {
             callee,
             args: args
                 .into_iter()
                 .map(|a| substitute_var(a, target, replacement))
                 .collect(),
             pin,
+            on_form,
         },
         Expr::Tuple(items) => Expr::Tuple(
             items
@@ -2463,6 +2475,7 @@ fn emit_ui_call(
     ctx: &EmitCtx,
     callee: &Callee,
     args: &[Expr],
+    on_form: sky_ir::OnFormKind,
     indent: usize,
     child: u16,
     generics: GenericScope,
@@ -5190,9 +5203,28 @@ fn emit_ui_call(
                 });
             };
             let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
-            Ok(Some(format!(
-                "sky_runtime::ui::helpers::ui_on_submit_(move |_x| ({f_s})(_x))"
-            )))
+            // Type-directed dispatch (#228). The lowerer classified the handler
+            // by its SOLVED type; a non-arrow value routes to the fixed-dispatch
+            // runtime helper (no `(m)(_x)` call against a non-callable value —
+            // the reported cargo `E0618` after `skyc` exit 0). An arrow handler
+            // keeps the decode-and-map path. `NotForm` is unreachable for the
+            // onSubmit kernel and fails closed rather than guessing.
+            let call = match on_form {
+                sky_ir::OnFormKind::Decoder => {
+                    format!("sky_runtime::ui::helpers::ui_on_submit_(move |_x| ({f_s})(_x))")
+                }
+                sky_ir::OnFormKind::FixedValue => {
+                    format!("sky_runtime::ui::helpers::ui_on_submit_fixed_({f_s})")
+                }
+                sky_ir::OnFormKind::NotForm => {
+                    return Err(Diagnostic::CompilerBug {
+                        where_: "sky_backend_rust::emit_ui_call::UiOnSubmit",
+                        detail: "Ui.onSubmit lowered without a form-handler classification"
+                            .to_owned(),
+                    });
+                }
+            };
+            Ok(Some(call))
         }
 
         // ── Std.Html.Events builders ────────────────────────────────────
@@ -5286,12 +5318,38 @@ fn emit_ui_call(
                 // today's wrap-and-call path unchanged — conservative
                 // default, since those CAN legitimately be a function
                 // value (a let-bound handler, a named decoder function).
-                sky_ir::HtmlEventShape::Raw if is_definitely_not_callable(payload_e) => format!(
-                    "sky_runtime::html::html_on_raw_fixed_({name:?}.to_owned(), {payload_s})"
-                ),
-                sky_ir::HtmlEventShape::Raw => format!(
-                    "sky_runtime::html::html_on_raw_({name:?}.to_owned(), move |_x| ({payload_s})(_x))"
-                ),
+                // `onSubmit` (the only `Raw`-shape kernel). The
+                // decode-vs-fixed decision is TYPE-DIRECTED: the lowerer read
+                // the handler's SOLVED type and recorded the verdict on the
+                // `Call` (`on_form`), so acceptance never depends on the
+                // payload's syntactic shape — a `Var` bound to a bare `Msg`
+                // (#228) and a `Var` bound to a decoder fn read identically
+                // here, but the solver told them apart upstream.
+                //
+                // FixedValue → dispatch the value directly via
+                // `html_on_raw_fixed_` (no `(payload_s)(_x)` call against a
+                // non-callable value — the reported cargo `E0618` after `skyc`
+                // exit 0). Decoder → the wrap-and-call path: `payload_s` (a
+                // `Box<dyn Fn(T) -> M + Send + 'static>` trait object) is
+                // re-embedded as SOURCE inside a freshly-declared wrapper
+                // closure so its box is rebuilt per call rather than captured,
+                // laundering the missing `+Sync` the `html_on_raw_` bound
+                // (`F: Fn(T) -> M + Send + Sync + 'static`) requires.
+                sky_ir::HtmlEventShape::Raw => match on_form {
+                    sky_ir::OnFormKind::FixedValue => format!(
+                        "sky_runtime::html::html_on_raw_fixed_({name:?}.to_owned(), {payload_s})"
+                    ),
+                    sky_ir::OnFormKind::Decoder => format!(
+                        "sky_runtime::html::html_on_raw_({name:?}.to_owned(), move |_x| ({payload_s})(_x))"
+                    ),
+                    sky_ir::OnFormKind::NotForm => {
+                        return Err(Diagnostic::CompilerBug {
+                            where_: "sky_backend_rust::emit_ui_call::HtmlOnSubmit",
+                            detail: "onSubmit lowered without a form-handler classification"
+                                .to_owned(),
+                        });
+                    }
+                },
             };
             Ok(Some(call))
         }
@@ -5554,49 +5612,6 @@ fn emit_ui_call(
             ),
         }),
     }
-}
-
-/// #167 — is `e` PROVABLY not a callable value, so `(e)(_x)` cannot possibly
-/// compile? Used to route `HtmlEventShape::Raw` (`onSubmit`)'s argument to
-/// `html_on_raw_fixed_` (dispatch the value directly) instead of
-/// `html_on_raw_` (call it as a decoder).
-///
-/// [`Expr::Ctor`] is always a SATURATED constructor application regardless of
-/// arity (its doc: "args are the payload expressions, one per declared
-/// field") — `lower_expr`'s `VarCtor` arm eta-expands any *unsaturated*
-/// payload-constructor reference into a genuine [`Expr::Lambda`] before it
-/// ever reaches here, so an `Expr::Ctor` at this position is a concrete enum
-/// VALUE, never a function. The leaf literals are equally obviously not
-/// callable. The three COMPOUND literal shapes — a record literal
-/// (`Expr::Record`), a tuple literal (`Expr::Tuple`), and a list literal
-/// (`Expr::List`) — are structural data constructors too: a `{ … }` /
-/// `(…, …)` / `[…]` VALUE is never a function, so `(payload_s)(_x)` on one is
-/// the same E0618 "expected function" cargo-fail the nullary-`Ctor` case hit
-/// `HtmlOnSubmit`'s payload type is `var(1)` in `constrain.rs`'s
-/// `HtmlEventShape::Raw` arm — fully decoupled from `msg`, hence UNCONSTRAINED
-/// — so a record / tuple / list literal type-checks in skyc as legitimately as
-/// the bare-`Ctor` case did, and (when the app's `Msg` type IS that record /
-/// tuple / list shape) must lower to the same `html_on_raw_fixed_`
-/// fixed-dispatch path rather than the wrap-and-call one. Every other shape
-/// (`Lambda`, `SharedLambda`, `FuncValue`, `Var`, `Apply`, `Call`, …) is left
-/// alone — conservative default, since those CAN legitimately be a function
-/// value (a let-bound handler, a named decoder function, a lambda literal) and
-/// mis-classifying one as "not callable" would regress the working
-/// typed-record decode idiom.
-const fn is_definitely_not_callable(e: &Expr) -> bool {
-    matches!(
-        e,
-        Expr::Ctor { .. }
-            | Expr::Int(_)
-            | Expr::Bool(_)
-            | Expr::Float(_)
-            | Expr::Str(_)
-            | Expr::Char(_)
-            | Expr::Unit
-            | Expr::Record(_)
-            | Expr::Tuple(_)
-            | Expr::List { .. }
-    )
 }
 
 /// Emit an expression. `indent` is the indentation level (in 4-space units) of
@@ -5868,7 +5883,12 @@ pub fn emit_expr_at(
             let else_ = emit_expr_at(ctx, else_, indent, child, generics)?;
             Ok(format!("(if {cond} {{ {then_} }} else {{ {else_} }})"))
         }
-        Expr::Call { callee, args, pin } => {
+        Expr::Call {
+            callee,
+            args,
+            pin,
+            on_form,
+        } => {
             // Kernel-dispatch special cases apply ONLY to `Callee::Kernel` —
             // every probe below starts with a `let Callee::Kernel(..) = callee
             // else { return Ok(None) }` gate, so a plain user-function call
@@ -5923,7 +5943,9 @@ pub fn emit_expr_at(
                     return Ok(result);
                 }
                 // Std.Ui / Std.Html / Std.Live / Std.Tui / Std.Webview kernels.
-                if let Some(result) = emit_ui_call(ctx, callee, args, indent, child, generics)? {
+                if let Some(result) =
+                    emit_ui_call(ctx, callee, args, *on_form, indent, child, generics)?
+                {
                     return Ok(result);
                 }
                 // Dict.get borrows semantics: the runtime takes the HashMap by
