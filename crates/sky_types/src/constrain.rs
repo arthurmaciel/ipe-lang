@@ -513,6 +513,15 @@ struct Builtins {
     cache_f_misses: Symbol,
     /// `"evictions"` — `Std.Cache.stats` return field `evictions : Int`.
     cache_f_evictions: Symbol,
+    // ── #210 Sky.Core.WebSocket.WebSocketCfg record field symbols ─────────────
+    /// `"url"` — `Sky.Core.WebSocket.WebSocketCfg.url : String`.
+    ws_f_url: Symbol,
+    /// `"headers"` — `WebSocketCfg.headers : List (String, String)`.
+    ws_f_headers: Symbol,
+    /// `"timeout"` — `WebSocketCfg.timeout : Int`.
+    ws_f_timeout: Symbol,
+    /// `"pingInterval"` — `WebSocketCfg.pingInterval : Int`.
+    ws_f_ping_interval: Symbol,
 }
 
 impl Builtins {
@@ -667,6 +676,11 @@ impl Builtins {
             cache_f_hits: interner.intern("hits")?,
             cache_f_misses: interner.intern("misses")?,
             cache_f_evictions: interner.intern("evictions")?,
+            // ── #210 Sky.Core.WebSocket.WebSocketCfg record field symbols ────
+            ws_f_url: interner.intern("url")?,
+            ws_f_headers: interner.intern("headers")?,
+            ws_f_timeout: interner.intern("timeout")?,
+            ws_f_ping_interval: interner.intern("pingInterval")?,
             // ── Order ADT (#123) ─────────────────────────────────────────────
             order: interner.intern("Order")?,
             lt: interner.intern("LT")?,
@@ -3680,6 +3694,24 @@ impl<'a> Builder<'a> {
             m.insert(self.builtins.cache_f_evictions, int());
             Ty::Record(m, RowTail::Closed)
         };
+        // #210: `WebSocketCfg` — closed record `{ url : String, headers :
+        // List (String, String), timeout : Int, pingInterval : Int }`. The
+        // lowerer folds a value of this exact shape to the nominal
+        // `IrType::WebSocketClientCfg` (`sky_runtime::ws_client::WsClientCfg`) so
+        // a `WebSocket.defaultCfg`-built record literal constructs the runtime
+        // struct the `web_socket_connect_with` kernel takes (mirrors the
+        // `HttpRequest` / `CacheCfg` folds).
+        let wsclientcfg = || {
+            let mut m = BTreeMap::new();
+            m.insert(self.builtins.ws_f_url, string());
+            m.insert(
+                self.builtins.ws_f_headers,
+                list(tuple2(string(), string())),
+            );
+            m.insert(self.builtins.ws_f_timeout, int());
+            m.insert(self.builtins.ws_f_ping_interval, int());
+            Ty::Record(m, RowTail::Closed)
+        };
         let attr = |m: Ty| Ty::Con {
             module: Vec::new(),
             name: self.builtins.attribute,
@@ -5865,6 +5897,42 @@ impl<'a> Builder<'a> {
             // closeClient : WebSocketServer -> Task Error ()
             K::WsCloseClient => fun(wsh(), task_unit()),
 
+            // ── #210: Sky.Core.WebSocket — outbound WebSocket client ─────────────
+            // The Task-tier six take/return a raw `Int` socket id (the stdlib
+            // wraps it in the `WebSocket` ADT). `connectWith` takes the nominal
+            // `WebSocketCfg` record (`{ url, headers, timeout, pingInterval }`),
+            // which the lowerer folds to the runtime `WsClientCfg` struct.
+            //
+            // connect : String -> Task Error Int
+            K::WebSocketConnect => fun(string(), task(int())),
+            // connectWith : WebSocketCfg -> Task Error Int
+            K::WebSocketConnectWith => fun(wsclientcfg(), task(int())),
+            // send : Int -> String -> Task Error ()
+            K::WebSocketSend => fun(int(), fun(string(), task_unit())),
+            // sendBinary : Int -> Bytes -> Task Error ()
+            // Our fork's `Bytes` is a distinct primitive (`Vec<u8>`), matching the
+            // runtime `web_socket_send_binary`'s `Vec<u8>` payload (the server-side
+            // `sendBinaryToClient` uses the same `bytes()` scheme). Divergence from
+            // the reference's stale `String` alias, recorded in the stdlib source.
+            K::WebSocketSendBinary => fun(int(), fun(bytes(), task_unit())),
+            // close : Int -> Task Error ()
+            K::WebSocketClose => fun(int(), task_unit()),
+            // closeWithCode : Int -> String -> Int -> Task Error ()
+            K::WebSocketCloseWithCode => {
+                fun(int(), fun(string(), fun(int(), task_unit())))
+            }
+            // subscribeWebSocket : Int -> String -> any -> Sub msg
+            // The heterogeneous 3rd arg (a bare `msg` for onOpen, or a
+            // `WebSocketMessage -> msg` / `CloseCode -> msg` / `Error -> msg`
+            // handler for the other three) is modelled as bare `any` (`var(0)`) —
+            // matching the stdlib's `subscribeWebSocketRaw` signature so all four
+            // on* wrappers unify. `var(1)` is the Sub's msg. The backend peephole
+            // splits on the literal `kind` into the four typed `sub_subscribe_ws_*`
+            // runtime fns, each with its own concrete 3rd-arg contract.
+            K::SubSubscribeWebSocket => {
+                fun(int(), fun(string(), fun(var(0), sub(var(1)))))
+            }
+
             // ── #194: Sky.Core.Regex (5 kernels) ────────────────────────────────
             // Concrete, monomorphic schemes (no type vars): RE2 helpers over
             // `String`. `match` returns `Bool`; `find` a `Maybe String`;
@@ -7605,6 +7673,14 @@ mod registry_phase_c_tests {
             K::WsSendBinaryToClient,
             K::WsBroadcast,
             K::WsCloseClient,
+            // ── Sky.Core.WebSocket — outbound WebSocket client (7 kernels) ──
+            K::WebSocketConnect,
+            K::WebSocketConnectWith,
+            K::WebSocketSend,
+            K::WebSocketSendBinary,
+            K::WebSocketClose,
+            K::WebSocketCloseWithCode,
+            K::SubSubscribeWebSocket,
             // ── Std.Ui.Region (#117) — all 8 landmark/live-region attrs ──
             K::RegionMainContent,
             K::RegionNavigation,

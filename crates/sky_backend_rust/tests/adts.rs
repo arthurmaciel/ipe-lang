@@ -173,6 +173,7 @@ fn maybe_program(i: &mut Interner) -> DResult<Program> {
             uses_webview: false,
             uses_css: false,
             uses_auth: false,
+            uses_websocket: false,
         }],
     })
 }
@@ -343,6 +344,7 @@ fn tree_program(interner: &mut Interner) -> DResult<Program> {
             uses_webview: false,
             uses_css: false,
             uses_auth: false,
+            uses_websocket: false,
         }],
     })
 }
@@ -482,6 +484,7 @@ fn concrete_multi_field_enum_emits() -> DResult<()> {
             uses_webview: false,
             uses_css: false,
             uses_auth: false,
+            uses_websocket: false,
         }],
     };
     let out = emit(&interner, &prog)?;

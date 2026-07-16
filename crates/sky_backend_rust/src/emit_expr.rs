@@ -2146,6 +2146,57 @@ fn emit_tea_call(
             let name = kernel_name(*k); // "pubsub_publish" / "pubsub_publish_no_echo"
             Ok(Some(format!("{name}::<_, SkyError>({topic_s}, {payload_s})")))
         }
+        // ── Sky.Core.WebSocket: onOpen / onMessage / onClose / onError ───────────
+        // `Sub_subscribeWebSocket : Int -> String -> (any -> msg) -> Sub msg`.
+        //
+        // The four `on*` stdlib wrappers all funnel through this single
+        // `any`-typed kernel with a compile-time-literal `kind`
+        // ("open" / "message" / "close" / "error"), because their heterogeneous
+        // toMsg shapes (bare `msg` / `WebSocketMessage -> msg` / `CloseCode -> msg`
+        // / `Error -> msg`) can't share one bounded Rust fn. This peephole does the
+        // split a stdlib override would otherwise do: route by the literal `kind`
+        // to a per-kind TYPED runtime fn (`sub_subscribe_ws_{open,message,close,
+        // error}`), passing only the socket id + toMsg (the `kind` arg is consumed
+        // here, never emitted). Mirrors the Go/Haskell reference's
+        // `ExprEmitter.hs` peephole. Each runtime fn moves `to_msg` into exactly
+        // one detached `tokio::spawn` task (never behind a shared `Arc`), so the
+        // generic `Box<dyn Fn(..) -> .. + Send + 'static>` codegen value passes
+        // straight through — no re-wrap needed (unlike `StreamStream`).
+        KernelFn::SubSubscribeWebSocket => {
+            let raw_e = arg!(0, "socketId")?;
+            let kind_e = arg!(1, "kind")?;
+            let to_msg_e = arg!(2, "toMsg")?;
+            // The `kind` MUST be a compile-time string literal — the four stdlib
+            // wrappers always pass one. A non-literal is a malformed call the
+            // stdlib can't produce; fail closed (SEAL) rather than guess a kind.
+            let Expr::Str(kind) = kind_e else {
+                return Err(Diagnostic::CompilerBug {
+                    where_: "sky_backend_rust::emit_tea_call::SubSubscribeWebSocket",
+                    detail: "Sub.subscribeWebSocket requires a compile-time-literal kind \
+                             (\"open\"/\"message\"/\"close\"/\"error\") — the four on* stdlib \
+                             wrappers always pass one"
+                        .to_owned(),
+                });
+            };
+            let fn_name = match kind.as_str() {
+                "open" => "sub_subscribe_ws_open",
+                "message" => "sub_subscribe_ws_message",
+                "close" => "sub_subscribe_ws_close",
+                "error" => "sub_subscribe_ws_error",
+                other => {
+                    return Err(Diagnostic::CompilerBug {
+                        where_: "sky_backend_rust::emit_tea_call::SubSubscribeWebSocket",
+                        detail: format!(
+                            "Sub.subscribeWebSocket got unknown kind {other:?} — \
+                             expected \"open\"/\"message\"/\"close\"/\"error\""
+                        ),
+                    });
+                }
+            };
+            let raw_s = emit_expr_at(ctx, raw_e, indent, child, generics)?;
+            let to_msg_s = emit_expr_at(ctx, to_msg_e, indent, child, generics)?;
+            Ok(Some(format!("{fn_name}({raw_s}, {to_msg_s})")))
+        }
         // Any other `k.is_tea()` variant not listed above is a new wired variant
         // that needs an explicit arm.  The `is_tea()` guard at the top of this
         // function means this arm is a hard compile-time-visible gap rather than
@@ -7446,6 +7497,14 @@ const CACHE_CFG_FIELDS: &[&str] = &["maxBytes", "maxEntries", "ttlMs"];
 /// sync with `sky_lower::lower::CSV_DOC_FIELDS`.
 const CSV_DOC_FIELDS: &[&str] = &["header", "rows"];
 
+/// the sorted `Sky.Core.WebSocket.WebSocketCfg` field-name set — a record
+/// literal with exactly these names (and no registered synthesised struct,
+/// because the lowerer folded the shape to `IrType::WebSocketClientCfg`)
+/// constructs the runtime `sky_runtime::ws_client::WsClientCfg` struct. Mirrors
+/// [`CACHE_CFG_FIELDS`]; kept in sync with
+/// `sky_lower::lower::WEBSOCKET_CFG_FIELD_TYPES`.
+const WEBSOCKET_CFG_FIELDS: &[&str] = &["headers", "pingInterval", "timeout", "url"];
+
 /// the sorted `Sky.Http.Server.Response` field-name set. A record literal
 /// with exactly these names (and no registered synthesised struct, because the
 /// lowerer folded the shape to `IrType::ServerResponse`) constructs the runtime
@@ -7519,6 +7578,15 @@ fn emit_record(
                     .iter()
                     .zip(CSV_DOC_FIELDS.iter())
                     .all(|(a, b)| a.as_str() == *b);
+            // same fall-through — a `WebSocketCfg`-shaped literal has no
+            // registered struct (folded to `IrType::WebSocketClientCfg`), so it
+            // constructs the runtime `WsClientCfg` (re-exported bare via the
+            // `pub use ws_client::*` glob).
+            let is_websocket_cfg = sorted.len() == WEBSOCKET_CFG_FIELDS.len()
+                && sorted
+                    .iter()
+                    .zip(WEBSOCKET_CFG_FIELDS.iter())
+                    .all(|(a, b)| a.as_str() == *b);
             // same fall-through — a `Response`-shaped literal has no
             // registered struct (folded to `IrType::ServerResponse`), so it
             // constructs the runtime `ServerResponse` (re-exported bare via the
@@ -7534,6 +7602,8 @@ fn emit_record(
                 "CacheCfg".to_owned()
             } else if is_csv_doc {
                 "CsvDoc".to_owned()
+            } else if is_websocket_cfg {
+                "WsClientCfg".to_owned()
             } else if is_server_response {
                 "ServerResponse".to_owned()
             } else {
@@ -8014,6 +8084,14 @@ fn render_bounds(bounds: BoundSet, n: usize) -> String {
         // Satisfied by every concrete Sky type (emitted values never borrow),
         // so no caller-side failure — see `BoundSet::STATIC`.
         traits.push("'static".to_owned());
+    }
+    if bounds.has_send() {
+        // `Send` auto-trait: a bare `msg` value moved into a `SkySub::Source`
+        // closure (`Box<dyn FnOnce(..) + Send>`) — e.g. `WebSocket.onOpen`'s
+        // `msg` into `sub_subscribe_ws_open<M: Send + 'static>`. Pushed after the
+        // `'static` lifetime bound (a lifetime must precede trait bounds).
+        // Satisfied by every concrete Sky type (owned, never borrows).
+        traits.push("Send".to_owned());
     }
     if bounds.has_add() {
         traits.push(format!("::core::ops::Add<Output = T{n}>"));

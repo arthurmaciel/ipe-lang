@@ -205,6 +205,9 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // sky_runtime::cache, so the bare name resolves via the crate glob use.
         IrType::CacheCfg => "CacheCfg".to_owned(),
         IrType::CacheStats => "CacheStats".to_owned(),
+        // Sky.Core.WebSocket connect-config record — re-exported (feature-gated
+        // on `websocket_client`) from sky_runtime::ws_client, bare via the glob.
+        IrType::WebSocketClientCfg => "WsClientCfg".to_owned(),
         // Std.Csv document record — re-exported (ungated) from sky_runtime::csv,
         // so the bare name resolves via the crate glob use.
         IrType::CsvDoc => "CsvDoc".to_owned(),
@@ -433,6 +436,15 @@ fn render_fn_once_chain(
 /// construction and pattern emitters balance that boxing. See
 /// [`crate::EmitCtx::is_cyclic_self_field`].
 pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
+    // A `Sky.Core.WebSocket` ADT bridged to a runtime enum
+    // (`WebSocketMessage` → `WsClientMessage`, `CloseCode` → `WsCloseCode`) has
+    // NO user-emitted decl — its definition lives in `sky_runtime::ws_client`,
+    // and emitting a second enum with the same name would trip E0428. The
+    // `enum_name` override in `EmitCtx::build` already routes every reference to
+    // the runtime type. Suppress the body here.
+    if ctx.is_websocket_bridged_enum(&def.home, def.name)? {
+        return Ok(String::new());
+    }
     let name = ctx.enum_name(&def.home, def.name)?.to_owned();
     // The enum's own generic scope: each type parameter → `T1`, `T2`, … by
     // position. Empty for a non-generic enum (byte-identical to M0).

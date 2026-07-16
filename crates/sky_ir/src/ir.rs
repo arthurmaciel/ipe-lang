@@ -131,6 +131,18 @@ pub struct Module {
     /// whether to append `pub mod auth; pub use auth::*;` to the emitted
     /// `sky_runtime/mod.rs`.
     pub uses_auth: bool,
+    /// `true` when the lowerer detected at least one outbound
+    /// `Sky.Core.WebSocket` client kernel call (`WebSocket.connect` /
+    /// `connectWith` / `send` / `sendBinary` / `close` / `closeWithCode`, or an
+    /// `onOpen` / `onMessage` / `onClose` / `onError` subscription).
+    ///
+    /// Set by `sky_lower` when any call site resolves to a
+    /// `KernelFn::is_websocket_client()` variant.  The backend reads this flag
+    /// to add the `websocket_client` feature to the emitted `Cargo.toml` (plus
+    /// the `tokio-tungstenite` dep) and to append `pub mod ws_client; pub use
+    /// ws_client::*;` to the emitted `sky_runtime/mod.rs` — the `ws_client`
+    /// runtime module is feature-gated and NOT part of the M0 base module set.
+    pub uses_websocket: bool,
 }
 
 /// A user-declared type. The IR models user types as enums (Sky's `type`
@@ -317,6 +329,17 @@ impl BoundSet {
     /// relocates the pre-existing E0310 from the callee body to a bound that
     /// makes acceptance-by-`skyc` prove the box coercion type-checks.
     const STATIC: u16 = 1 << 13;
+    /// The `Send` auto-trait bound: a generic type-param whose VALUE is moved
+    /// into a runtime consumer that requires `Send` — a `Sub` message value
+    /// stored in a `SkySub::Source` closure that is itself `Box<dyn FnOnce(..) +
+    /// Send>` (e.g. `Sky.Core.WebSocket.onOpen`'s bare `msg`, which flows into
+    /// `sub_subscribe_ws_open<M: Send + 'static>`). Unlike the boxed-CALLBACK
+    /// `'static` bound ([`Self::STATIC`]), the value here is a bare `msg`, not a
+    /// callback — so it has its own kernel-on-param matcher. Always paired with
+    /// `STATIC` (a moved value that must be `Send` for a spawned/boxed consumer
+    /// is also `'static`). Satisfied by every concrete Sky type (emitted values
+    /// own their data and never borrow), so no caller-side failure.
+    const SEND: u16 = 1 << 14;
 
     /// The empty bound set: an unconstrained, structurally-parametric variable.
     pub const UNBOUNDED: Self = Self(0);
@@ -427,6 +450,19 @@ impl BoundSet {
     #[must_use]
     pub const fn with_static(self) -> Self {
         Self(self.0 | Self::STATIC)
+    }
+
+    /// This set with the `Send` auto-trait bound (and `'static`, its always-paired
+    /// companion) — see [`Self::SEND`].
+    #[must_use]
+    pub const fn with_send(self) -> Self {
+        Self(self.0 | Self::SEND | Self::STATIC)
+    }
+
+    /// Whether the `Send` bound is set — see [`Self::SEND`].
+    #[must_use]
+    pub const fn has_send(self) -> bool {
+        self.0 & Self::SEND != 0
     }
 
     /// Whether the `Add` bound is set.
@@ -967,6 +1003,19 @@ pub enum IrType {
     /// `.evictions` on the runtime struct's pub fields.
     CacheStats,
 
+    /// `Sky.Core.WebSocket`'s connect-configuration record `{ url : String,
+    /// headers : List (String, String), timeout : Int, pingInterval : Int }`.
+    /// Renders as `sky_runtime::ws_client::WsClientCfg`.
+    ///
+    /// The lowerer folds any solved / annotated record matching that exact
+    /// 4-field shape to this opaque variant (same mechanism as
+    /// [`IrType::CacheCfg`]) so a `WebSocket.defaultCfg`-built record literal
+    /// constructs the runtime struct the `web_socket_connect_with` kernel takes,
+    /// rather than a backend-synthesised `RecHeaders…` struct that would mismatch
+    /// it (E0308). Fully `Clone` (derivable on the runtime struct); never stored
+    /// in a Sky.Live Model.
+    WebSocketClientCfg,
+
     /// `Std.Csv`'s document record `{ header : List String, rows : List (List
     /// String) }`. Renders as `sky_runtime::csv::CsvDoc`.
     ///
@@ -1117,6 +1166,7 @@ pub fn ir_type_is_derivable(
         // Cache config / stats + Csv document runtime structs derive
         // Clone+Debug+PartialEq.
         | IrType::CacheCfg
+        | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc
         | IrType::Generic(_)
@@ -1285,6 +1335,7 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         // session store, so not serde (the runtime structs carry no serde
         // derive).
         | IrType::CacheCfg
+        | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc
         // `WsHandle` / `WsServerCfg` are opaque handles; not serde.
@@ -1381,6 +1432,7 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::UiPlain(_)
         | IrType::LiveReq
         | IrType::CacheCfg
+        | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc => true,
         // Non-`Clone` default carriers. `Fun`'s default carrier is `Box<dyn Fn>`
@@ -3323,6 +3375,7 @@ mod tests {
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_websocket: false,
             }],
         };
         let clone = program.clone();
@@ -3815,6 +3868,7 @@ mod serde_persistence_tests {
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_websocket: false,
             }],
         })
     }
@@ -3878,6 +3932,7 @@ mod serde_persistence_tests {
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_websocket: false,
             }],
         };
         let json = {
