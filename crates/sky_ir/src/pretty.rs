@@ -212,6 +212,8 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         // Std.Cache config / stats records.
         IrType::CacheCfg => "CacheCfg".to_owned(),
         IrType::CacheStats => "CacheStats".to_owned(),
+        // Std.Csv document record.
+        IrType::CsvDoc => "Csv".to_owned(),
     }
 }
 
