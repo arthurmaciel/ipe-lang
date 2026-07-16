@@ -4,10 +4,8 @@
 > fundamental rules, THE SEAL, §0 no-shortcuts, clippy deny-set, the two-tier
 > gate, write-boundary, agent-lane rules, doc/code standards) and **CLAUDE.md**
 > (the Ipê *language* authoring reference). This file holds the operational
-> HOW: infrastructure, commands, checklists. Some items still name the pre-port
-> Haskell/Go toolchain (`cabal`, SkyDeploy, `go build`); adapt to the Rust port
-> (`cargo`, `crates/`, `runtime/`) as it matures — the tool-agnostic rules
-> carry over unchanged. Autonomous-loop lanes follow
+> HOW: infrastructure, commands, checklists — the Rust toolchain (`cargo`,
+> `crates/`, `runtime/`, `skyc`). Autonomous-loop lanes follow
 > `scripts/progressive-development/context.md`.
 
 Documentation hygiene: no archaeology — see `PRINCIPLES.md`
@@ -52,8 +50,8 @@ table), `sky_diagnostics` (SKY-* codes + `explain/*.md`), `sky_db` (salsa
 incremental DB), `sky_intern`, `sky_watch`; `skyc` = driver + CLI. Runtime
 impls live in `runtime/src/sky_runtime/`.
 
-**skyc CLI:** subcommands `build` / `watch` / `explain` / `fix` (no `run`
-yet). `skyc build <src/Main.sky | sky.toml> --out sky-out/rust`. Binary =
+**skyc CLI:** subcommands `build` / `run` / `watch` / `explain` / `fix`.
+`skyc build <src/Main.sky | sky.toml> --out sky-out/rust`. Binary =
 `target/release/skyc` (`cargo build --release -p skyc`);
 `source scripts/lib/env.sh` sets `SKYC_BIN` + `SKY_RUNTIME_DIR`.
 
@@ -109,9 +107,9 @@ disown                                # survives shell exit
 ```
 
 Defaults (16 GB host): per-process kill at 6 GB RSS for compiler tooling
-(`sky`/`cabal`/`ghc`/`ghc-iserv`/`cc1`/`ld`/`haskell-language-server`/
-`hls-wrapper`/`gopls`/`sky-ffi-inspect`); 10 GB panic tier for dev-session
-hosts (`claude`/`node`/`ghostty`); system-pressure floor at <1.2 GB free.
+(`cargo`/`rustc`/`cc1`/`cc1plus`/`cc`/`collect2`/`ld`/`ld.lld`/`lld`/`skyc`/
+`sky-ffi-inspect`/`rust-analyzer`); 10 GB panic tier for dev-session hosts
+(`claude`/`node`/`ghostty`); system-pressure floor at <1.2 GB free.
 Tune via `MEM_GUARD_PROC_MB` / `MEM_GUARD_PANIC_MB` / `MEM_GUARD_SYS_FLOOR_MB`;
 `MEM_GUARD_DRY=1` = log-only. Never silence a kill by raising a threshold — a
 kill means the process was on a path to OOM the machine; fix the underlying
@@ -153,17 +151,20 @@ Terseness never trades away correctness, the gate, or a required verdict line.
 
 A hung test/build is a silent task waster. Rules:
 
-- **`cabal test` under `timeout 3600`** (60 min hard ceiling). Not enough →
-  that's a flaky test; bisect it, don't widen the ceiling.
-- **Per-spec timeouts.** Specs that exec subprocesses (`sky build` /
-  `sky watch` / `sky test`) wrap the child in `timeout 60` or a timeout
-  combinator. A test that doesn't time out cannot be re-run.
-- **Example sweep** already enforces `run_with_timeout 10` in
-  `scripts/example-sweep.sh` — don't remove or widen without a real reason.
+- **The full gate under a timeout.** Every `cargo nextest run` / `cargo test`
+  in the gate is wrapped (`autopilot.sh` uses `timeout 3000` for the workspace
+  run). Not enough → that's a flaky test; bisect it, don't widen the ceiling.
+- **Per-step timeouts.** Any step that execs a subprocess (`skyc build` /
+  `skyc run` / `skyc watch`) wraps the child in `timeout`. A step that doesn't
+  time out cannot be re-run.
+- **Example sweep** already bounds every stage: skyc build `timeout
+  ${SKY_SWEEP_BUILD_TIMEOUT:-900}`, `cargo build` `timeout 900`, emitted-app
+  run `timeout 8` (`exercise_cli` in `scripts/lib/checks.sh`) — don't remove or
+  widen without a real reason.
 - **Background shell commands** waiting on a process MUST `kill -KILL` after a
   finite wait (default 600 s). Never `wait $PID` unbounded.
-- **Monitors** in dev-loop tooling (sky watch, sky doctor) need a
-  heartbeat/max-wait so a wedged child doesn't poison the parent.
+- **Monitors** in dev-loop tooling (`skyc watch`) need a heartbeat/max-wait so
+  a wedged child doesn't poison the parent.
 
 A process running >30 min unjustified: kill it and file a bug. Never wait it
 out.
@@ -220,30 +221,7 @@ explicit user override ships a known issue) is `PRINCIPLES.md` §0. Mechanics:
 - A hard problem is a reason to START (root cause → architecturally correct
   approach → execute, even across sessions), not to defer.
 
-### 5. SkyDeploy redeploy follows every Sky release
-
-Every tagged (`vX.Y.Z`) release pairs with a SkyDeploy redeploy of the
-matching version:
-
-```bash
-cd ~/works/playground/skydeploy
-# 1. Bump SKY_VERSION in all 5 refs: sky-tools/Dockerfile, deploy/Dockerfile,
-#    agent-service/Dockerfile, build-image/Dockerfile,
-#    control-plane/deploy/setup-remote.sh
-# 2. Commit + push origin main.
-# 3. Bounded redeploy:
-timeout 1200 bash control-plane/deploy/deploy.sh
-```
-
-**Graceful degradation on auth failure:** if `gcloud` auth is expired or any
-deploy-side blocker fires, do NOT retry indefinitely — the pushed bump commit
-is the durable artifact. Park the redeploy, tell the user exactly which
-command to re-run (`gcloud auth login` + `control-plane/deploy/deploy.sh`),
-and continue compiler work. The release (tag + GitHub release) is the
-authoritative artifact; Sky's flow never blocks on operational state outside
-the repo.
-
-### 6. Disk hygiene — unused build caches MUST be pruned
+### 5. Disk hygiene — unused build caches MUST be pruned
 
 **Write-boundary** (the ONLY two writable locations — cargo targets under
 `~/.cache/ipe/`, edits under the repo tree) is `PRINCIPLES.md`
@@ -259,60 +237,56 @@ the repo.
   (and `SKY_ORACLE_SHARED_TARGET`) under `~/.cache/ipe/`.
 
 **Pre-build disk check — BEFORE any full build/test suite/example sweep.**
-`df -h /`; if <~15–20 GB free, reclaim first: `go clean -cache`,
-`rm -rf "$CARGO_TARGET_DIR"`, prune example artifacts
-(`sky-out`/`.skycache`/`.skydeps`/`target`). A near-full disk dies mid-run
-with ENOSPC *after* type-check+codegen succeed, surfacing as a
-file-copy/"build failed" error that **masquerades as a codegen regression**
-and wastes the whole run on mis-diagnosis — always read the actual build log
-before blaming a code change.
+`df -h /`; if <~15–20 GB free, reclaim first: `rm -rf "$CARGO_TARGET_DIR"`,
+prune stray targets under `~/.cache/ipe/`, prune per-example artifacts
+(`sky-out/`). A near-full disk dies mid-run with ENOSPC *after*
+type-check+codegen succeed, surfacing as a file-copy/"build failed" error that
+**masquerades as a codegen regression** and wastes the whole run on
+mis-diagnosis — always read the actual build log before blaming a code change.
 
-The Go toolchain does NOT auto-prune its build cache; unchecked it can fill
-the disk and block every subsequent build.
+`scripts/disk-guard.sh` (sibling to mem-guard) polls free disk and reclaims
+disposable caches BEFORE the disk fills, in a fixed safety order:
+`~/.cache/sccache` first (self-healing), then orphaned cargo target dirs
+(identified by their `CACHEDIR.TAG` content, not by name), never a dir with a
+live rustc/cargo process still writing to it.
 
 End-of-mission checklist (BEFORE declaring a release shipped when a sweep has
 run):
 
 ```bash
-# 1. Worktrees from finished agents (each ≈1.5 GB) — after the cherry-pick is
-#    on main; check TaskList for active agents before bulk-removing.
+# 1. Worktrees from finished agents (each ≈1.5 GB) — after the work is on
+#    main; check TaskList for active agents before bulk-removing.
 rm -rf .claude/worktrees/agent-<sha-of-completed-agent>
 git worktree prune --verbose
 
-# 2. Go build cache — safe; rebuilds on next `go build`.
-go clean -cache
+# 2. Dead cargo targets under the sanctioned root — rebuild warm via sccache.
+rm -rf ~/.cache/ipe/<dead-purpose>-target
 
 # 3. /tmp leftovers
-rm -f /tmp/sky-build-*.log /tmp/cabal-*.log /tmp/skydeploy-cp-linux /tmp/skydeploy-*.log
+rm -f /tmp/autopilot-gate.log /tmp/mem-guard.log
 
 # 4. Sanity check
 df -h /
 ```
 
-NOT to do without explicit user ask:
-
-- `go clean -modcache` — every project re-downloads modules next build.
-- `rm -rf dist-newstyle/` — cabal full rebuild ≈5 min.
-- Wiping `.skycache/ffi/` in `examples/13-skyshop/` — 15+ min Stripe SDK
-  re-introspection.
-
-**Automatic hygiene:** `scripts/build.sh` and `scripts/example-sweep.sh` end
-with a 5-GB-threshold check on the go-build cache and auto-run
-`go clean -cache` over threshold. Worktree cleanup after every agent
-cherry-pick remains manual.
+**Automatic hygiene:** `scripts/examples-sweep.sh` aborts with a `< 5G free`
+guard before it starts; the loop's `reclaim_disk` (`autopilot.sh`) keeps the
+gate + shared-oracle + warm `lane-*` targets and reaps the rest. Worktree
+cleanup after every finished agent remains manual.
 
 Host <5 GB free → ABORT the next agent spawn until cleanup completes — ENOSPC
 mid-build leaves half-written artifacts worse than a clean rebuild.
 
-### 7. Project qualities
+### 6. Project qualities
 
 (The six principles, three rules, seal, and root-cause-only live in
 `PRINCIPLES.md`.)
 
 1. **If it compiles, it works.** Every known runtime panic class has a
-   regression test in `runtime-go/rt/*_test.go` or `test/Sky/**Spec.hs`.
-   Defence in depth (panic recovery + `Err`-return at Task boundaries) is the
-   floor, not the foundation.
+   regression test in `runtime/tests/*.rs` (e.g. `core_soundness.rs`,
+   `kernel_soundness.rs`) or a `crates/*/tests/` golden. Defence in depth
+   (panic recovery + `Err`-return at Task boundaries) is the floor, not the
+   foundation.
 2. **Dev experience first.** Clear errors, predictable behaviour, no
    user-written FFI.
 3. **Production-grade architecture.** Scales to the Stripe SDK (76k FFI
@@ -320,68 +294,71 @@ mid-build leaves half-written artifacts worse than a clean rebuild.
 4. **AI-written Sky code defaults to Std.Ui + Std.Auth + Std.Db** — each
    reviewed for security+scalability; UI/UX/DX/security are not afterthoughts.
 
-### 8. Non-regression rules (enforced by `cabal test`)
+### 7. Non-regression rules (enforced by the workspace test suite)
 
 - **No `Result String a` / `Task String a`** in public surfaces — use
   `Result Error a` / `Task Error a`.
-- **No `Std.IoError`, no `RemoteData`** — both deleted pre-v1.
 - **No runtime panic from well-typed Sky code.**
-- **No silent numeric coercion** — `AsIntChecked` is the fallible variant;
-  `OrZero` suffix marks display-only lenient helpers.
-- **No raw `.(T)` assertions on any-typed thunks** — route via `rt.Coerce[T]`.
-- **Record field enumeration sorts by `_fieldIndex`** before any emission that
+- **No silent numeric coercion** — the fallible checked variant is the default;
+  lenient display-only helpers are marked as such.
+- **No `dyn Any` / `.downcast` / type-erasure** in the backend — concrete over
+  generic (`PRINCIPLES.md` §No `dyn Any`). Wildcard `any` has exactly one
+  concrete lowering per position.
+- **Record field enumeration sorts by field index** before any emission that
   depends on field order.
-- **Secrets are typed** — `Auth.signToken` / `verifyToken` take `String`, not
-  `any`; `fmt.Sprintf("%v", secret)` is forbidden.
-- **`sky check` ≡ `sky build`** — both invoke the backend build on the emitted
-  code.
-- **New AST nodes require explicit walker arms** in
-  `Canonicalise/{Expression,Pattern,Type}.hs`,
-  `Type/Constrain/{Expression,Pattern}.hs`, `Type/Exhaustiveness.hs`,
-  `Format/Format.hs`, `Build/Compile.hs`, and the LSP's `exprTokens` /
-  `exprIdents` / `exprAllRefs` / `refsInExpr` / `collectSemTokens` /
-  `collectReferences`. Never rely on `_ -> []` catchalls.
+- **Secrets are typed** — `Auth.signToken` / `verifyToken` take `String`; no
+  `Debug`/`Display`-formatting a secret into a log or error.
+- **`skyc build` ⇒ the emitted Rust `cargo build`s** (THE SEAL — every
+  acceptance path fails closed at skyc time, never open at cargo time).
+- **Registering a kernel or new acceptance path updates ALL anti-drift sites**
+  (enumerated in §0b: `sky_kernels`, `sky_types::constrain`, `sky_lower`,
+  `sky_backend_rust/naming.rs`, `sky_ir::pretty`, `crates/skyc/src/stdlib.rs`).
+  A resolved-but-unschemed kernel is a compile-time error, never a deferred
+  cargo failure — never a silent `_` catchall.
 
-### 9. Testing rules
+### 8. Testing rules
 
 - **Every new feature / bug becomes a regression test** before the fix lands;
   the failing test is the discovery artefact.
-- **Cabal specs** for compile-time behaviour; `runtime-go/rt/*_test.go` for
-  runtime helpers; `tests/**/*Test.sky` for stdlib semantics; `sky test
-  <file>` is the user-facing runner.
-- **Runtime verification on every push.** `sky verify` builds AND runs each
-  example; `scripts/verify-all-web.sh` drives Sky.Live + Sky.Http.Server via
-  Playwright; `scripts/verify-cli.sh` covers CLI/Sky.Cli/Sky.Tui.
-  `--build-only` doesn't catch the "click is a no-op" regression class.
+- **`crates/*/tests/*.rs`** (incl. `crates/skyc/tests/golden_*.rs`) for
+  compile-time + codegen behaviour; **`runtime/tests/*.rs`** for runtime-kernel
+  soundness/parity; goldens are byte-compared and `SKY_E2E=1` builds+runs the
+  emitted project (THE SEAL).
+- **Runtime verification.** The example sweep (`scripts/examples-sweep.sh`)
+  builds AND runs each example, then diffs Rust≡Go stdout/body via the cached
+  oracle; web scenarios drive Sky.Live + Sky.Http.Server through Playwright
+  (`scripts/web-verify.mjs`, `scripts/verify-scenarios.mjs`). A build-only
+  check doesn't catch the "click is a no-op" regression class.
 
 ### Release checklist (non-negotiable)
 
-1. Rebuild: `cabal install --overwrite-policy=always --installdir=./sky-out --install-method=copy exe:sky`
-2. Smoke-test: `sky-out/sky --version` (must print version, not start a server)
-3. `cabal test` — zero failures, pending count matches prior
-4. Clean-build every example: loop over `examples/*/`,
-   `rm -rf sky-out .skycache .skydeps`, `sky build src/Main.sky`
-5. Web runtime verify — `scripts/verify-all-web.sh`
-6. CLI/Tui verify — `scripts/verify-cli.sh`
-7. `sky check` on the largest example: `cd examples/12-skyvote && sky check`
-8. From-scratch flow — `sky init mytest` in a temp dir, `sky build && sky
-   run`, `sky add fmt`, `sky remove fmt`, `sky upgrade`
-9. CI parity — `.github/workflows/ci.yml` matches the local verify scripts
+1. Rebuild the driver: `cargo build --release -p skyc`; `source
+   scripts/lib/env.sh` exports `SKYC_BIN` + `SKY_RUNTIME_DIR`.
+2. Full gate green — the ONE authoritative run (§3b): `cargo +nightly nextest
+   run --workspace`, `cargo +nightly nextest run -p sky-runtime-rust --features
+   full`, `cargo +nightly test --workspace --doc`, `cargo +nightly clippy
+   --workspace --all-targets -- -D warnings`, fuzz.
+3. Example sweep green — `scripts/examples-sweep.sh` (per example: skyc build →
+   `cargo build` the emitted crate → run `sky-app` → Rust≡Go equiv). VERDICT
+   PASS iff zero red rows (THE SEAL end-to-end).
+4. CI parity — `.github/workflows/{ci,examples-sweep,security}.yml` runs the
+   same gate; cancel superseded in-progress `main` runs before pushing (see
+   Workflow rules).
 
-Step 5/6 failure → fix root cause, re-run from step 1. Never tag with a known
-runtime failure.
+Any step failing → fix root cause, re-run from step 1. Never tag with a known
+build or runtime failure.
 
 ## Workflow rules
 
 - **Always run mem-guard** (§1).
 - **Always clean up background tasks** before declaring "done" (§2).
-- **`sky fmt` after editing `.sky`/`.skyi` files** (idempotent — two passes
-  byte-identical).
+- **`cargo fmt --all` after editing Rust source** (CI gates on `cargo fmt
+  --all -- --check`).
 - **`-f` flag with `rm`/`cp`** to avoid interactive prompts.
 - **Never add co-author wording** to commits.
 - **Never tag a release** without explicit user ask.
-- **Never run `sky build` from repo root** — overwrites the compiler binary in
-  `sky-out/`.
+- **Run `skyc build` on an example from its own dir** (`cd examples/NN-name`),
+  never from the repo root — `--out sky-out/rust` writes relative to the cwd.
 - **Cancel in-progress CI runs on `main` before pushing** (a newer commit
   supersedes them; never cancel release/tag runs):
 
@@ -390,22 +367,5 @@ gh run list --branch main --status in_progress --workflow CI --json databaseId -
     | xargs -I{} gh run cancel {} 2>/dev/null
 git push origin main
 ```
-
-## Template sync (non-negotiable)
-
-When stdlib, syntax, Sky.Live APIs, or CLI commands change,
-**`templates/CLAUDE.md`** + the matching `docs/*` files MUST update in the
-same commit — AI assistants use these to write Sky code in user projects.
-
-| Concern | User doc |
-|---|---|
-| Stdlib reference | `docs/stdlib.md` |
-| `Std.Auth` | `docs/skyauth/overview.md` |
-| `Std.Db` | `docs/skydb/overview.md` |
-| Sky.Live runtime | `docs/skylive/overview.md` + `docs/skylive/architecture.md` |
-| `Std.Ui` | `docs/skyui/overview.md` |
-| Sky.Tui | `docs/skytui/overview.md` |
-| CLI commands | `docs/tooling/cli.md` |
-| LSP capabilities | `docs/tooling/lsp.md` |
-| `sky.toml` schema | `docs/sky-toml.md` |
-| Brand-new module | "What's in the box" in `README.md` |
+- **`CLAUDE.md` tracks language surface.** When stdlib, syntax, or the CLI
+  change, update the Ipê authoring reference (`CLAUDE.md`) in the same commit.
