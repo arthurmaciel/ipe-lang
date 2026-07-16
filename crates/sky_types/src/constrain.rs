@@ -5605,6 +5605,33 @@ impl<'a> Builder<'a> {
             ),
             K::JsonDecPCustom => fun(dec(var(0)), fun(dec(fun(var(0), var(1))), dec(var(1)))),
 
+            // ── Std.Config (16) — the shared `Decoder a` carrier (`dec(a)`),
+            //    over TOML/YAML/JSON. Combinator/primitive schemes are identical
+            //    to `Json.Decode`'s (same runtime `decode_*` fns); the format
+            //    front-ends put the source `String` FIRST, then the decoder. ──
+            K::ConfigString => dec(string()),
+            K::ConfigInt => dec(int()),
+            K::ConfigFloat => dec(float()),
+            K::ConfigBool => dec(bool_ty()),
+            K::ConfigNullable => fun(dec(var(0)), dec(maybe(var(0)))),
+            K::ConfigField => fun(string(), fun(dec(var(0)), dec(var(0)))),
+            K::ConfigAt => fun(list(string()), fun(dec(var(0)), dec(var(0)))),
+            K::ConfigList => fun(dec(var(0)), dec(list(var(0)))),
+            K::ConfigSucceed => fun(var(0), dec(var(0))),
+            K::ConfigFail => fun(string(), dec(var(0))),
+            K::ConfigMap => fun(fun(var(0), var(1)), fun(dec(var(0)), dec(var(1)))),
+            K::ConfigAndThen => fun(fun(var(0), dec(var(1))), fun(dec(var(0)), dec(var(1)))),
+            K::ConfigDecodeToml => {
+                fun(string(), fun(dec(var(0)), result(error_ty(), var(0))))
+            }
+            K::ConfigDecodeYaml => {
+                fun(string(), fun(dec(var(0)), result(error_ty(), var(0))))
+            }
+            K::ConfigDecodeJson => {
+                fun(string(), fun(dec(var(0)), result(error_ty(), var(0))))
+            }
+            K::ConfigLoadFromFile => fun(string(), fun(dec(var(0)), task(var(0)))),
+
             // ── Result (internal) — `okDefault : a -> Result e a`, the Ok-wrap
             //    used during lowering (runtime `ok_res(a) -> Result e a`). ──
             K::ResultOkDefault => fun(var(0), result(var(1), var(0))),
@@ -7770,6 +7797,23 @@ mod registry_phase_c_tests {
             K::CacheClear,
             K::CacheSize,
             K::CacheStats,
+            // ── Std.Config (#210; 16) ────────────────────────────────────
+            K::ConfigString,
+            K::ConfigInt,
+            K::ConfigFloat,
+            K::ConfigBool,
+            K::ConfigNullable,
+            K::ConfigField,
+            K::ConfigAt,
+            K::ConfigList,
+            K::ConfigSucceed,
+            K::ConfigFail,
+            K::ConfigMap,
+            K::ConfigAndThen,
+            K::ConfigDecodeToml,
+            K::ConfigDecodeYaml,
+            K::ConfigDecodeJson,
+            K::ConfigLoadFromFile,
             // ── Std.PubSub (#215; 2) ─────────────────────────────────────
             // Moved from KNOWN_UNBACKED: runtime exists, emit arm wired
             // (`pubsub_publish::<_, SkyError>`), scheme `String -> a -> Task Error Int`.
