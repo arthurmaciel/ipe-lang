@@ -103,6 +103,23 @@ const RUNTIME_MOD_RS_SERVER_APPEND: &str = "pub mod server;\npub use server::*;\
 /// features), so no manifest surgery is needed — only a `mod.rs` declaration.
 const RUNTIME_MOD_RS_AUTH_APPEND: &str = "pub mod auth;\npub use auth::*;\n";
 
+// ── Sky.Core.WebSocket — outbound WebSocket client ──────────────────────────
+
+/// Lines appended to `sky_runtime/mod.rs` when the program uses outbound
+/// `Sky.Core.WebSocket` client kernels.
+///
+/// `ws_client.rs` is gated by the `websocket_client` Cargo feature in the
+/// runtime source; this addition wires it into the module namespace so the
+/// generated `main.rs` can call `web_socket_connect` / `web_socket_send` / … and
+/// the `sub_subscribe_ws_*` subscription fns via `pub use sky_runtime::*`.
+///
+/// `ssrf.rs` (`ws_client`'s SSRF validators) is already part of the M0 base
+/// `mod.rs` (the always-present `http_client` module also needs it), so no
+/// `ssrf` append is required here. `tea.rs` (whose `SkySub<M>` the
+/// `sub_subscribe_ws_*` fns return) is force-appended alongside this in
+/// [`assemble_project_files`], mirroring the `uses_server` rule.
+const RUNTIME_MOD_RS_WEBSOCKET_APPEND: &str = "pub mod ws_client;\npub use ws_client::*;\n";
+
 // ── Std.Ui / Std.Html ───────────────────────────────────────────────────
 
 /// Lines appended to `sky_runtime/mod.rs` when the program uses Std.Ui /
@@ -657,6 +674,14 @@ fn assemble_project_files(
     } else {
         cargo_toml
     };
+    // Sky.Core.WebSocket client: promote the `websocket_client` feature +
+    // add tokio-tungstenite + tokio `"sync"`. Applied last; idempotent on the
+    // tokio `"sync"` step so it composes with any prior server/live/tui surgery.
+    let cargo_toml = if ctx.uses_websocket {
+        websocket_cargo_toml(&cargo_toml)?
+    } else {
+        cargo_toml
+    };
     // mod.rs starts from the M0 default and gains extra `pub mod` lines for
     // each kernel group the program uses.
     let runtime_mod_rs = {
@@ -670,11 +695,20 @@ fn assemble_project_files(
         // Guarded as a union so a program using both emits `pub mod tea;` exactly
         // once (E0428). Transitive-closure invariant: any module depended on by an
         // included module MUST itself be included (same rule as http_header).
-        if ctx.uses_tea || ctx.uses_server {
+        // `uses_websocket` also forces `tea`: `ws_client.rs`'s `sub_subscribe_ws_*`
+        // fns return `SkySub<M>` (from `tea.rs`) via `use super::*`, so a
+        // connect/send-only program (no explicit Sub kernel ⇒ no `uses_tea`) still
+        // needs `tea` declared — same transitive-closure rule as `uses_server`.
+        if ctx.uses_tea || ctx.uses_server || ctx.uses_websocket {
             mod_rs.push_str(RUNTIME_MOD_RS_TEA_APPEND);
         }
         if ctx.uses_server {
             mod_rs.push_str(RUNTIME_MOD_RS_SERVER_APPEND);
+        }
+        // Sky.Core.WebSocket client — declare `ws_client` (its `ssrf` dep is
+        // already in the M0 base, its `tea` dep forced above).
+        if ctx.uses_websocket {
+            mod_rs.push_str(RUNTIME_MOD_RS_WEBSOCKET_APPEND);
         }
         // Std.Auth — append auth module when any Auth kernel is used.
         if ctx.uses_auth {
@@ -1499,6 +1533,96 @@ fn webview_cargo_toml(base: &str) -> DResult<String> {
     let mut result = String::with_capacity(step2.len() + webview_native_deps.len());
     result.push_str(step2.get(..anchor_pos).unwrap_or(""));
     result.push_str(&webview_native_deps);
+    result.push_str(step2.get(anchor_pos..).unwrap_or(""));
+    Ok(result)
+}
+
+/// Build the websocket-client-enabled `Cargo.toml` from the given base manifest
+/// by:
+///
+/// 1. Adding `"websocket_client"` to the `default` feature list — the empty
+///    `websocket_client = []` feature is a pure `#[cfg]` gate over `ws_client.rs`
+///    (its deps are plain, not `dep:`-activated, so promoting it activates the
+///    module without any feature→dep wiring).
+/// 2. Adding `"sync"` to tokio (the `ws_client` writer/reader tasks use
+///    `tokio::sync::mpsc` / `broadcast`) when not already present — idempotent,
+///    same strategy as `tui_cargo_toml`.
+/// 3. Appending `tokio-tungstenite` as a plain dependency before `[profile.dev]`
+///    (`futures-util` and `url`, its other deps, are already in the M0 base).
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] if any anchor string is absent — a
+/// golden-drift invariant violation (fail-loud, never a silent no-op that ships
+/// a manifest where `ws_client` compiles without `tokio-tungstenite`).
+fn websocket_cargo_toml(base: &str) -> DResult<String> {
+    const DEFAULT_PREFIX: &str = "default = [";
+    const PROFILE_ANCHOR: &str = "[profile.dev]";
+    let tokio_time_only = format!(
+        "{} = {{ version = \"{}\", features = [\"rt\", \"rt-multi-thread\", \"macros\", \"time\"] }}",
+        crate_specs::TOKIO.name,
+        crate_specs::TOKIO.version,
+    );
+    let tokio_time_sync = format!(
+        "{} = {{ version = \"{}\", features = [\"rt\", \"rt-multi-thread\", \"macros\", \"time\", \"sync\"] }}",
+        crate_specs::TOKIO.name,
+        crate_specs::TOKIO.version,
+    );
+    let ws_dep = format!(
+        "{} = \"{}\"\n",
+        crate_specs::TOKIO_TUNGSTENITE.name,
+        crate_specs::TOKIO_TUNGSTENITE.version,
+    );
+
+    // Step 1 — promote `websocket_client` to the default feature list.
+    let pfx = base
+        .find(DEFAULT_PREFIX)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::project::websocket_cargo_toml",
+            detail: format!("Cargo.toml anchor {DEFAULT_PREFIX:?} not found — golden drifted"),
+        })?;
+    let search_from = pfx + DEFAULT_PREFIX.len();
+    let rel = base
+        .get(search_from..)
+        .and_then(|s| s.find(']'))
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::project::websocket_cargo_toml",
+            detail: "default feature list has no closing ']' — golden drifted".to_owned(),
+        })?;
+    let close = search_from + rel;
+    let mut step1 = String::with_capacity(base.len() + 64);
+    step1.push_str(base.get(..close).unwrap_or(""));
+    step1.push_str(r#", "websocket_client""#);
+    step1.push_str(base.get(close..).unwrap_or(""));
+
+    // Step 2 — add `"sync"` to tokio if not already present (idempotent when a
+    // prior server/live/tui surgery already added it).
+    let step2 = if step1.contains(r#""sync""#) {
+        step1
+    } else {
+        let replaced = step1.replacen(&tokio_time_only, &tokio_time_sync, 1);
+        if replaced == step1 {
+            return Err(Diagnostic::CompilerBug {
+                where_: "sky_backend_rust::project::websocket_cargo_toml",
+                detail: format!(
+                    "tokio anchor {tokio_time_only:?} not found and no \"sync\" present — \
+                     golden drifted; the ws_client runtime requires tokio sync"
+                ),
+            });
+        }
+        replaced
+    };
+
+    // Step 3 — append tokio-tungstenite before `[profile.dev]`.
+    let anchor_pos = step2
+        .find(PROFILE_ANCHOR)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::project::websocket_cargo_toml",
+            detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
+        })?;
+    let mut result = String::with_capacity(step2.len() + ws_dep.len());
+    result.push_str(step2.get(..anchor_pos).unwrap_or(""));
+    result.push_str(&ws_dep);
     result.push_str(step2.get(anchor_pos..).unwrap_or(""));
     Ok(result)
 }

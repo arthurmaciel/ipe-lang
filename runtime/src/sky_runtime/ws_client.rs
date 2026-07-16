@@ -28,7 +28,13 @@ use tokio_tungstenite::tungstenite::Message;
 
 /// Sky.Core.WebSocket.WebSocketMessage — bridged so the runtime can build frames.
 /// Variant names match the Sky constructors (Text / Binary).
-#[derive(Clone, Debug, PartialEq)]
+///
+/// The backend emits this type AS the Sky `WebSocketMessage` ADT (the enum decl
+/// is bridged, not user-emitted), so it must carry the same derives a real Sky
+/// enum gets — `serde::{Serialize, Deserialize}` in particular, since a Live
+/// `Msg` variant like `GotFrame WebSocketMessage` is serialized to/from the
+/// session store and the wire.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum WsClientMessage {
     Text(String),
     /// Binary frames carry raw bytes (`Vec<u8>`) — no Latin-1 bridge. Sky code
@@ -37,9 +43,10 @@ pub enum WsClientMessage {
 }
 
 /// Sky.Core.WebSocket.CloseCode — bridged so the runtime can build close codes
-/// for onClose's toMsg. Variant names match the Sky constructors.
+/// for onClose's toMsg. Variant names match the Sky constructors. Carries the
+/// same serde derives as [`WsClientMessage`] for the same Live-`Msg` reason.
 #[allow(non_snake_case)]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum WsCloseCode {
     Normal,
     GoingAway,

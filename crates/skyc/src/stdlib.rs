@@ -328,11 +328,15 @@ const SKY_CORE_PURE: &str = include_str!("../stdlib/Sky/Core/Pure.sky");
 ///
 /// Defines 3 ADTs (`WebSocket`, `WebSocketMessage`, `CloseCode`) and routes its
 /// I/O through `Ffi.kernel "WebSocket_*"` / `"Sub_subscribeWebSocket"` aliases.
-/// KERNEL-BLOCKED (#196): none of the `WebSocket_*` kernels nor
-/// `Sub_subscribeWebSocket` have a `StdlibKernel` variant, so importing a member
-/// fails closed with SKY-N0028 (`docs/divergences-from-sky.md`
-/// §B-FfiKernelAliasSealed).  Unblocked once the kernels are registered.
-/// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
+/// RESOLVES (skyc-0 AND cargo-0): the six Task-tier `WebSocket_*` kernels plus
+/// `Sub_subscribeWebSocket` are registered (`sky_runtime::ws_client::*`). The
+/// Sub-tier kernel is `any`-typed; the backend peephole splits it on the literal
+/// `kind` into the four typed `sub_subscribe_ws_*` runtime fns. `connectWith`'s
+/// `WebSocketCfg` record folds to the runtime `WsClientCfg` struct (mirrors the
+/// `CacheCfg` fold). The `ws_client` runtime module + `tokio-tungstenite` dep are
+/// gated behind the `websocket_client` feature the backend adds via
+/// `uses_websocket`. Resolved via the `Ffi.kernel` alias fast-path, so the
+/// `WebSocket` qualifier stays out of `STDLIB_MODULE_QUALIFIERS`.
 const SKY_CORE_WEBSOCKET: &str = include_str!("../stdlib/Sky/Core/WebSocket.sky");
 
 /// `Std.Cache` — in-memory LRU + TTL cache (compiled source).

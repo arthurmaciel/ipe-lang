@@ -1258,6 +1258,17 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::WsSendBinaryToClient => "ws_server_send_binary_to_client",
         KernelFn::WsBroadcast => "ws_server_broadcast",
         KernelFn::WsCloseClient => "ws_server_close_client",
+        // ── Sky.Core.WebSocket outbound-client runtime fn names (ws_client.rs) ─
+        KernelFn::WebSocketConnect => "web_socket_connect",
+        KernelFn::WebSocketConnectWith => "web_socket_connect_with",
+        KernelFn::WebSocketSend => "web_socket_send",
+        KernelFn::WebSocketSendBinary => "web_socket_send_binary",
+        KernelFn::WebSocketClose => "web_socket_close",
+        KernelFn::WebSocketCloseWithCode => "web_socket_close_with_code",
+        // The peephole in `emit_tea_call` rewrites `SubSubscribeWebSocket` to one
+        // of the four typed `sub_subscribe_ws_*` fns; this name is the fallback
+        // (the `message` kind) and is never emitted via the standard N-arg path.
+        KernelFn::SubSubscribeWebSocket => "sub_subscribe_ws_message",
         // ── Std.Ui.Lazy ────────────────────────────────────────────────
         KernelFn::LazyLazy => "lazy_lazy_",
         KernelFn::LazyLazy2 => "lazy_lazy2_",

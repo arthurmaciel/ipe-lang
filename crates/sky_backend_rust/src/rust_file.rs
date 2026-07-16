@@ -307,6 +307,7 @@ mod tests {
             uses_webview: false,
             uses_css: false,
             uses_auth: false,
+            uses_websocket: false,
         }
     }
 
