@@ -26,7 +26,7 @@ export PATH="$HOME/.cargo/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:$PA
 # this default AGREES with where a bare `cargo build` of the workspace lands
 # skyc — the same dir the sweep's per-example `cargo build` reuses. Override
 # CARGO_TARGET_DIR to relocate; we honour a pre-existing value.
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cache/sky-rust-target}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cache/ipe/ipe-target}"
 mkdir -p "$CARGO_TARGET_DIR" || {
   echo "env.sh: could not create CARGO_TARGET_DIR='$CARGO_TARGET_DIR' (perms/ENOSPC?)" >&2
   return 1 2>/dev/null || exit 1
