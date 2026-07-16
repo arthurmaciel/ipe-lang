@@ -1,5 +1,5 @@
 //! Negative gates for the SEAL fix 2026-07-11 (`docs/architecture/
-//! error-record-literal-seal-fix-2026-07-11.md`): a bare record literal must
+//! docs/adr/0017-error-payload-nominal-identity.md`): a bare record literal must
 //! NOT construct the nominal error-payload types `PanicInfo` / `TypeInfo` /
 //! `ErrorInfo`. Each fixture used to be an exit-0-then-cargo-fail (well-typed
 //! per the old structural registration, but the emitted Rust passed a

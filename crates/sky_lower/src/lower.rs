@@ -6421,7 +6421,7 @@ impl<'a> Lowerer<'a> {
                 // `SkyStringify` impl renders a non-derivable field as the
                 // `<fn>` placeholder instead of calling a derive. No gate
                 // needed at declaration time; see
-                // `docs/architecture/ctor-payload-function-design.md`.
+                // `docs/adr/0015-constructor-payload-functions-narrowed-gates.md`.
                 fields.push(ir);
             }
             variants.push(Variant {
@@ -9578,7 +9578,7 @@ impl<'a> Lowerer<'a> {
     /// fully-applied value, and finishing it needs a nested-closure
     /// (`curryN`-style) lowering this Stage does not implement (Stage 2,
     /// tracked separately — see
-    /// `docs/architecture/ctor-payload-function-design.md` §3). Fail closed
+    /// `docs/adr/0015-constructor-payload-functions-narrowed-gates.md` §3). Fail closed
     /// here rather than let an unfinished chain reach a use site with no
     /// sound lowering.
     ///
@@ -12688,7 +12688,7 @@ impl<'a> Lowerer<'a> {
     /// BACKSTOP (Tier 1) behind the primary type-checker obligation
     /// (`sky_types::constrain::constrain_var_kernel`'s `hof_kernel_result`
     /// `TyBounds` tie, Tier 2 — see
-    /// `docs/architecture/ctor-payload-andmap-arity-gate-design.md` §3.2):
+    /// `docs/adr/0016-andmap-arity-gate-type-obligation.md` §3.2):
     /// Tier 2 already rejects the hazard as a type error (`SKY-T0014`)
     /// before lowering ever runs; this backstop gives a second, independent
     /// line of defense keyed on the ACTUAL kernel-call resolution boundary

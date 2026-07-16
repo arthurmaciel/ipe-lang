@@ -183,7 +183,7 @@ struct Builtins {
     ed_custom: Symbol,
     /// `PanicInfo` / `TypeInfo` / `ErrorInfo` — NOMINAL type-constructor
     /// symbols (SEAL fix 2026-07-11, `docs/architecture/
-    /// error-record-literal-seal-fix-2026-07-11.md`). The three payload
+    /// docs/adr/0017-error-payload-nominal-identity.md`). The three payload
     /// record types are opaque nominal Cons (like the server `Request`), NOT
     /// structural records: a bare record literal must not unify with them —
     /// the runtime backs them with concrete structs (`SkyPanicInfo` /
@@ -2711,7 +2711,7 @@ impl<'a> Builder<'a> {
             }
             // Higher-order-kernel callback-result obligation (#90 T3,
             // primary/Tier-2 mechanism — see
-            // `docs/architecture/ctor-payload-andmap-arity-gate-design.md`).
+            // `docs/adr/0016-andmap-arity-gate-type-obligation.md`).
             // Every `Maybe`/`Result` higher-order kernel FULLY APPLIES its
             // callback at runtime (`FnOnce(..) -> R` with an exact arity),
             // while the IR flattens a curried Sky function into one
