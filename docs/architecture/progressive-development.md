@@ -34,10 +34,10 @@ is possible by construction.
 ## Operating it
 ```bash
 # 0. mem-guard must be running; tree clean; on master (or your base).
-./autopilot-run.sh                    # supervised first run (1 cycle, live watch.sh attached)
-./autopilot-run.sh --full             # full run using autopilot's native caps
+scripts/progressive-development/autopilot-run.sh          # supervised first run (1 cycle, live watch.sh attached)
+scripts/progressive-development/autopilot-run.sh --full   # full run using autopilot's native caps
 PROGDEV_LANES=2 scripts/progressive-development/autopilot.sh   # or invoke directly
-./autopilot-stop.sh                   # graceful stop after the current phase (touch autopilot.stop)
+scripts/progressive-development/autopilot-stop.sh         # graceful stop after the current phase (touch autopilot.stop)
 # lanes commit straight to the base branch through the green gate — no fast-forward step.
 ```
 
