@@ -1,372 +1,219 @@
 # ipê — Project Roadmap
 
-This document enumerates the remaining and future work for the ipê
-compiler, backend, and runtime, in priority order, together with the
-**done ledger** (dated landed milestones and major items). It is the
-durable plan of record: finish the compiler + backend + runtime first,
-then the parked FFI subsystem, then the post-completion program, then
-the longer-horizon standing work.
+Where the project is, and what is left. Terse and honest: DONE / IN-FLIGHT /
+PENDING against the real tree. Pending work items live in
+`scripts/progressive-development/backlog.jsonl` (query via
+`scripts/progressive-development/backlog.sh list`/`show`) — the flat SSOT the
+progressive-development loop reads and writes. Accepted design decisions live
+in `docs/adr/`; this file plans, it does not restate them. Enforcement rules
+(the SEAL, principle order, the two-tier gate) live in `PRINCIPLES.md`.
 
-**Pending work lives in `scripts/progressive-development/backlog.jsonl`**
-(query via `scripts/progressive-development/backlog.sh list`/`show`) — the
-flat, pending-only SSOT the progressive-development loop reads/writes
-directly. No markdown mirror of it exists (dropped 2026-07-12 — the JSONL
-*is* the working data). The eight canonical road-map phase names used
-there are defined here: **Sweep to green** · **Security hardening** ·
-**CI, oracle & publish** · **Hardening follow-ups** · **FFI** ·
-**Post-completion** · **Longer-horizon** · **Designed targets**.
-Sections A (phases 1–4), B (FFI), C (Post-completion), D
-(Longer-horizon), and E (Designed targets) below carry the same rows,
-with a `Done at` column recording what has already landed.
-
-**Principles order.** security > correctness > soundness > efficiency
-> completeness > readability. Every decision below is resolved in
-favour of the earlier principle when two conflict.
-
-**Two fundamental design rules** govern all work:
-
-- **Parse, don't validate** — turn unstructured input into precise
-  types at the boundary; never re-check the same invariant downstream.
-- **Make invalid states unrepresentable** — encode invariants in the
-  type system so illegal configurations cannot be constructed.
-
-**How work runs (velocity model, condensed).** Rigour and speed
-conflict only if you serialize the wrong thing. Each round lands a
-short sequential CORE step (shared-contract additions: IR variants,
-diagnostic codes, kernel-registry rows), then fans out parallel agents
-with **disjoint file sets only** (hard rule — no shared file is edited
-by two agents in a round), each behind the full non-negotiable gate
-(guardian review, behavioural parity vs the Go reference, clippy-hardest
-+ tests + fmt), then merges serially through the same gate. The gates
-are never skipped to save time; speed comes from partitioning, not from
-relaxing rigour. Mechanical, reference-backed items are additionally
-eligible for the autonomous progressive-development loop (rows tagged
-`[progdev-safe]` in `scripts/progressive-development/backlog.jsonl`).
+**Principle order** (strict tie-breaker): security > correctness > soundness >
+efficiency > completeness > readability. **Two fundamental rules**: parse don't
+validate; make invalid states unrepresentable. **The SEAL**: if `skyc` accepts
+a program, the emitted Rust must `cargo build`.
 
 ---
 
-## Done ledger — milestone ladder (M0–M6)
+## Current position
 
-| Done at | Milestone |
-|---|---|
-| 2026-06-26 | **M0 — spine**: ADT + `case` + a kernel + `println`, end-to-end, runs |
-| 2026-06-27 | **M1 — core language**: `let…in`, lambdas + first-class functions, `if`/multi-way `if`, tuples, full binop set, records + access + update, type aliases |
-| 2026-06-28 → 06-29 | **M2 — polymorphism**: type variables end-to-end, generic functions, same-module re-instantiation, wildcard-`any` soundness gate, parametric type aliases, float literals + exponent parity |
-| 2026-06-29 → 06-30 | **M3 — full ADTs & patterns**: non-nullary constructors, nested/cons/tuple/record/literal/alias/wildcard patterns, exhaustiveness (Maranget) |
-| 2026-06-30 → 07-06 | **M4 — stdlib breadth via the kernel registry**: List/Maybe/Result/Dict/Set/String/Math/Char/Decimal/… as registry rows + Rust runtime mirrors + parity tests |
-| 2026-07-03 → 07-05 | **M5 — effects & runtime**: Task everywhere (incl. `Task.retryWith`), Cmd/Sub, Http, File, System, Process, Db, Crypto, Time, Random — mirroring `runtime-go` module-for-module |
-| 2026-07-04 → ongoing | **M6 — app shapes (partial)**: Sky.Http.Server, Sky.Live (routed apps, SSE, forms), Sky.Tui, Cli — driven by the example-sweep front; Webview pending |
+The **Sky(Haskell)→Rust compiler port is essentially done.** Compiler,
+backend, runtime, and stdlib all reach broad parity with the Go/Haskell
+reference; the milestone ladder M0–M6 is complete. The completion gate is the
+example sweep — every non-Go-only example must **build ✓, run ✓, and match the
+Go reference ✓**.
 
-## Done ledger — major landed items
+**Sweep: one red left.** Every per-example blocker is closed except
+`36-composite-server` (#221, `SKY-L0126`). Its diagnostic-misattribution half
+(Defect B) has landed; the substantive half (Fix A) is in flight — see below.
 
-| Done at | Item |
-|---|---|
-| 2026-07-02 | #50 crate-spec SSOT; #52 float sci-notation pinned to Go `%v` (exp ≥ 6, probed vs Go 1.26.2); #48 let-bound-cfg diagnostic |
-| 2026-07-03 | F7 CSS/attribute emission injection-safe by construction; #55a Encoding text codecs → UTF-8 (Go parity); #96 lambda/function parameter patterns (SKY-L0105 retired); auto-TCO (typed `TailRecur`/`TailLoop` IR → Rust `loop`) |
-| 2026-07-04 | #89 JsonDecP seal (curry-wrap succeed, DbDecSucceed naming, Decoder thunk-rewrite); #111 effect modules (Auth + ServerStream + HttpStream); #95 lambda-view seal gate design landed with RoutedLiveApp (#108, closes #56 core) |
-| 2026-07-05 | #121 curried FuncValue arity-exact invariant (T1–T6 + SKY-L0125); #94 Msg-admissibility gate (SKY-L0125); #135 WS Ping heartbeat (B20 closed); #143 Appendable `++` super-type — `++` accepts both `String` and `List` operands (closes the former "`++` is String-only" parity gap) |
-| 2026-07-06 | #66 well-typed no-panic fuzzer + #66-N first half (ill-typed rejection fuzzer, 0 false-acceptances); #154 misplaced-span kernels wired; Border.shadow/glow/innerShadow kernels; SKY-I0001 interp-literal ICE fixed (`crates/skyc/tests/interp_literal.rs`) |
-| 2026-07-09 | #85 Error rich-ADT core (`Error ErrorKind ErrorInfo`, 69-golden `SkyError` flip) + #160 Error ctor-scheme; #71 explain_lookup (closed by AUD-15); AUD-01..08 + AUD-10..15 hardening (14 confirmed audit findings, 13 landed — see `docs/architecture/principles-audit-2026-07-09.md`); class-1 inference bug #1 (integer-literal monomorphization) fixed + gate-verified; #82 record type-alias auto-constructor (SKY-N0001); ex27/ex37 erased-`any` ctor payload pinned to `Dict String String` (`pin_any_in_ty`, divergence B-AnyCtorPayload) |
-| 2026-07-10 | #109/#156 `Ui.onSubmit`/`Std.Html.Events.onSubmit` dispatch via `Event::OnForm`; `Arc<dyn Any>` OnRaw removed — zero `dyn Any` in emitted-code paths; #63 `Sky.Http.Middleware.withCsrf` — double-submit CSRF for Sky.Http.Server + `ServerResponse` multi-`Set-Cookie` fix + a same-day well-formedness hardening fix from independent review; Class-8 web remainder (4 AUD-09 items); #45 kernel-scheme exhaustiveness gate; Boundary Scheme Promotion (class-1 inference bug #2) — landed, reverted after independent review found a SEAL violation, re-landed with the exact gap closed and re-verified against the failing shape via real `cargo build`, held under a SECOND independent review with no new finding (`docs/divergences-from-sky.md` B23). #90 ctor-payload-function lift did NOT land — 3 same-day incidents on the same sub-feature (T3 curried-`andMap`), each independent review reproducing a different bypass; needs a real design pass, not another mechanical fix (see `BACKLOG.md`'s `#90` row). |
-| 2026-07-12 | #161 `sky_runtime::list`'s 8 HOF kernels (`list_foldl`/`list_foldr`/`list_indexed_map`/`list_concat_map`/`list_filter`/`list_any`/`list_all`/`list_find`) dropped a spurious `+ Clone` bound on their callback parameter — none of the 8 implementations ever clone the callback (each calls it through a shared `&self` borrow), but the bound rejected EVERY boxed Sky closure (`Box<dyn Fn(..) -> .. + Send>`, which can never be `Clone`) at `cargo build` with E0277, not just the partial-application shape (`List.filter (isVisible session) items`) the bug report used — a plain non-capturing lambda (`List.filter (\x -> x > 0) xs`) failed identically. Audited every other `impl Fn`/`impl FnOnce` bound across `runtime/src/sky_runtime/*.rs`: no other kernel carries a stray `+ Clone`, so the fix is fully general. Verified GONE on all 3 examples the bug report cited (`17-skymon`, `18-job-queue`, `19-skyforum`) — each example's OVERALL `cargo build` is still red, blocked by its own unrelated, separately-tracked bug (`BACKLOG.md` #165, #164, #162 respectively). New coverage: `runtime/src/sky_runtime/list.rs::tests::hof_kernels_accept_boxed_non_clone_closure` + `tests/golden/i161_list_filter_partial_app/Main.sky` + `crates/skyc/tests/golden_i161_list_filter_partial_app.rs` (compile-only + `SKY_E2E=1` build-and-run legs, both green). |
-| 2026-07-12 | #162 `Std.Html.Events.onSubmit` / `Std.Ui.onSubmit` with a typed-record payload (the canonical CLAUDE.md `form [onSubmit DoSignIn]` password-form idiom) — `html_on_raw_` / `ui_on_submit_`'s generic bound `F: Fn(T) -> M + Send + Sync + 'static` was never satisfiable because the two dedicated emit sites (`HtmlEventShape::Raw` and `KernelFn::UiOnSubmit` in `sky_backend_rust::emit_expr`) passed the codegen's boxed first-class-function-value (`Box<dyn Fn(T) -> M + Send + 'static>` — the generic `IrType::Fun` rendering in `emit_types.rs`, which deliberately claims only `+Send`, not `+Sync`, since most `Fn`-value consumers need no more) straight through as `F` — a trait object's auto-trait set is exactly its bound list, so that box could never satisfy `+ Sync` regardless of what the boxed closure actually captured (verified with a minimal standalone repro before touching the compiler: `Arc::new(move \|x\| (boxed_dyn_fn_send)(x))` is itself never `Sync`, independent of `boxed_dyn_fn_send`'s captures). Root cause is NOT a missing bound on the runtime side (`Event::OnForm`'s `Arc<dyn Fn(FormData) -> Option<M> + Send + Sync>` slot genuinely needs `Sync` — it's shared across the live session's dispatch table, readable from any request-servicing thread) — the fix is at the TWO emit sites: re-wrap the boxed value in a freshly-declared closure (`move \|_x\| ({payload_s})(_x)`), the SAME technique the pre-existing `HtmlEventShape::String`/`Bool` arms already used (re-embedding the box-construction as SOURCE inside the wrapper's body means it is built anew each call rather than captured, so the wrapper's own Send+Sync-ness depends only on the Sky closure's legitimate `move` captures, never on the erased trait-object type). Verified fixed + generalizes across every `live`-shape example using the canonical typed-record onSubmit pattern found by grep: `examples/27-multi-session-chat` (the row's cited repro — both `join-room`/`send-message` forms), `examples/37-composite-live-shop`, `examples/28-streaming-chat`, `examples/19-skyforum` (this one now `cargo build`s CLEAN, 0 errors) — all four had their `html_on_raw_`/`ui_on_submit_` Sync errors disappear with zero regression on their unrelated pre-existing errors (confirmed byte-for-byte identical error SETS before/after on `27-multi-session-chat`'s 4 unrelated `SqlParam`/`SkyRow` errors and `37-composite-live-shop`'s 41 unrelated `E0308`s). Two DIFFERENT, sibling root-cause bugs surfaced while verifying generalization and were deliberately NOT bundled into this fix (filed separately): `BACKLOG.md` #166 (same Send+Sync-erasure pattern, but at `Http.Stream.chunks`'s SHARED generic N-arg fallback emitter — a different, higher-blast-radius call path) and #167 (`onSubmit` with a BARE 0-arity Msg constant — a genuinely different arity/eta-expansion defect, not Send/Sync, surfaced by `examples/12-skyvote`). New coverage: `crates/skyc/tests/live_e2e.rs::live_onsubmit_typed_record_build_only` (compile+cargo-build-only leg) + `::live_onsubmit_typed_record_dispatches_decoded_payload` (full `SKY_E2E=1` leg — spawns the emitted Sky.Live binary, `POST /_sky/event` a real `submit` event with typed form data, asserts the re-rendered page reflects the DECODED `Creds` record's field, proving the fix isn't merely compile-time but that `DoSignIn` genuinely dispatches with the concrete decoded payload end-to-end); both green under `SKY_E2E=1 cargo nextest run -p skyc --test live_e2e -E 'test(live_onsubmit_typed_record)'`. |
+**Stdlib: 4 deferred families (#210).** `Std.Cache` and `Std.PubSub` are wired.
+`Std.Email`, `Sky.Core.WebSocket` (client subs), `Std.Config`, and the residual
+`Std.Cache` emit-layer work fail closed honestly (they need runtime-struct-alias
++ phantom-param + trait-bound codegen beyond plain kernel registration), tracked
+as #210. Not sweep-blocking.
 
-Closed-as-obsolete / not-a-bug: #75 (Color reservation — superseded by
-home-aware type resolution + `Std.Css`'s own `type Color`), #122 (Cli
-view printer — reference-correct as-is), #157 (Jwt builder API — was
-already fully wired).
+Then the pre-push **restructure endgame** (Steps A–D below), then the macro
+(Elm-parity) program, then FFI last.
 
 ---
 
-## A. Critical path — compiler + backend + runtime to completion
+## Tier ordering (the spine)
 
-**DONE gate.** Completion is defined by the example sweep: every
-non-Go-only example passes the GitHub example sweep with all three
-checks green — **build ✓, run ✓, equivalent-to-Go-reference ✓.**
+1. **Tier 1 — compiler to completion.** Sweep to green (only #221 left) +
+   security hardening (ships before push, never deferred) → the restructure
+   endgame → push to `arthurmaciel/ipe-lang`.
+2. **Tier 3 — macro / Elm-parity.** Elm-core coverage, adopted principled
+   compilation strategies, filed divergent language features, source-level lint
+   tool (#207), exhaustive-case-on-finite-ADT (#208).
+3. **Tier 2 — FFI (LAST).** Fully-automatic, shim-free binding of arbitrary
+   Rust crates, behind a blocking RCE-sandbox security gate.
 
-The critical path decomposes into four phases: **Sweep to green**
-(close every per-example blocker), **Security hardening** (the
-pre-push security tier — never deferred past the push), **CI, oracle &
-publish** (port the sweep, activate the oracle, fix CI, rename, push),
-and **Hardening follow-ups** (correctness/efficiency debts that don't
-block the sweep). The #59 rename runs **solo, dead-last before the
-push** (per the Tier-1 chain: sweep-green → seal → #110 → #37 → #59 →
-push).
-
-Standing precondition: reclaim build-cache / disk headroom before
-heavy local builds — a near-full disk fails a build mid-run as
-`ENOSPC` *after* type-check and codegen succeed and masquerades as a
-codegen regression.
-
-### A-table — Sweep to green
-
-| Done at | Priority | Road map phase | Task | Notes | Spec |
-|---|---|---|---|---|---|
-| 2026-07-12 | High | Sweep to green | SEAL violation in `examples/24-tui-kitchen-sink` emit — skyc exited 0 but the emitted crate failed `cargo build` with 2 × E0308 on the Sky.Tui/Sky.Live argv-dispatch idiom (`main = case List.head argsList of Just "live" -> Live.app cfg \|> Task.run; _ -> Tui.app cfg \|> Task.run`) | Two independent codegen defects, both root-caused and fixed (`abbc8c2`). Defect 1: a string-literal ctor-payload sub-pattern (`Just "live"`) lowered to a bare `Pat::Str`, emitting `SkyMaybe::Just("live")` — a `&str` pattern against an owned `String` ctor field. Fixed by extending the #158 C2 nested-ctor-payload desugaring to desugar a direct `PStr` ctor arg into a fresh `String` binder + arm guard (`binder == "live"`). Defect 2: `emit_func`'s entry-point `Task.run` elision only recognised a flat `main = task \|> Task.run` body; a case-branched body left `sky_main` returning `SkyResult<E, A>` while `fn main`'s `block_on(sky_main())` epilogue requires `SkyTask<A>`. Fixed with `elide_task_run_tail`, which recurses through every tail-position control-flow construct and elides only when EVERY leaf in tail position is a `Task.run`/`Task.perform` call. Independent adversarial review (`fe1592e`) found two sibling gaps one hop past the fix's scope: (A) a `PStr` nested two-plus levels deep (`Just (Just "x")`) fell through the depth-1-only guard to the same E0308 — fixed by extending `lower_payload_pat`'s `PStr` arm to fail-closed with `SKY-L0116` (mirroring the sibling `PList`/`PCons` gate), which as a side effect also closed a previously-untested top-level list-literal-of-strings arm head against `List String`; (B) a mixed-arm body (`Task.run` calls alongside plain `Result`-typed expressions, the validate-then-run idiom) correctly declined elision but nothing widened `sky_main`'s wrap to match — fixed by widening `emit_func`'s `sky_main_wrap` fallback to also cover `func.ret == Result(_, A)` with elision declined, wrapping the body in `task_from_result({ ... })`. Regression tests: `golden_tui_entry_case_seal.rs` (2 default-gate emit-text assertions + `SKY_E2E`-gated cargo-build-and-run proof), `golden_m158_nested_patterns.rs`, `golden_mixed_arm_task_run_elision_seal.rs` (`SKY_E2E`-gated cargo-build-and-run proof). Both commits report full `cargo nextest run --workspace` green (2026/2026 then 2031/2031) + clean `cargo clippy --workspace --all-targets -- -D warnings`. Re-verified 2026-07-12 (this session): manual repro (`skyc build` + `cargo build --manifest-path sky-out/rust/Cargo.toml` on the real `examples/24-tui-kitchen-sink` fixture) exits 0 clean; emitted `sky_main` shows the owned-`String` guard (`nstrlit_0 == "live".to_string()`), not a `&str` pattern. No code changes needed in this session — the fix was already present on this worktree's branch tip; only the stale `BACKLOG.md`/`ROADMAP.md` bookkeeping needed updating. | |
-| 2026-07-12 | Critical | Sweep to green | Name-only HttpRequest-shape false-positive fold — any user record whose field NAMES matched the 7-field HttpRequest set `{body, followRedirects, headers, maxRedirects, method, timeout, url}` got misclassified as the opaque `IrType::HttpRequest`, regardless of field TYPES, at three sites: `sky_lower::lower::ir_type_from_ty`'s `Ty::Record` arm, `ir_type_from_canon`'s `canon::Type::Record` arm, and `sky_backend_rust::emit_expr::emit_record`'s independent `HTTP_REQUEST_FIELDS` shortcut | Landed the TYPE-WIDENING mitigation, not a fully nominal check — investigated first: `canon::Type::Record` / `Ty::Record` are purely structural (`Vec<(Symbol, Self)>` / `BTreeMap<Symbol, Self>`, no `Alias` variant), and the `HttpRequest` alias is expanded to a plain structural record at annotation-normalisation time (`sky_types::constrain::Builder::normalize_annotation_ty`, ~L2262) — no nominal alias identity survives into either `Ty` (post-solve) or `canon::Type` (pre-solve) for the lowerer to key off, for ANY alias in this compiler, not just `HttpRequest`. A genuinely nominal check would need alias identity threaded through canonicalisation + solving — out of reach for a root-cause fix at this layer. Instead: both `sky_lower` sites now check field TYPES (`String`/`Bool`/`Int`/`List (String,String)`, ground-truthed against `constrain.rs`'s own `http_request()` closure, the ONLY place that constructs these types) in addition to NAMES via a new `HTTP_REQUEST_FIELD_TYPES` table + `is_http_request_shape`/`is_http_request_canon_shape`/`ty_matches_http_field`/`canon_ty_matches_http_field`. This closes the concrete false-positive (an all-`Int` 7-field record no longer folds) while a record structurally IDENTICAL to `HttpRequest` (same names AND types) still folds — the sound answer under Sky's purely structural type system. `sky_backend_rust::emit_expr::emit_record` cannot re-run the type-aware test directly (no `sky_lower` dependency), so it now defers to `EmitCtx::has_record_struct_for` (checks the `record_by_fieldset` registry, itself populated from the lowerer's authoritative decision via `collect_records_in_ty` → `module.records`) BEFORE its own name-only fallback — a genuine `HttpRequest` literal never gets a registered struct (the lowerer intercepts it into the opaque type first), so the ordering is sound and closes the three-site divergence without cross-crate coupling. New golden `tests/golden/http_request_name_only_fold_seal` (all-Int 7-field record, `SKY_E2E=1` cargo-build-and-run proof, sum = 28) plus 2 default-gate emit-text assertions. All 4 pre-existing `m5b_http_*` goldens (including the `31beb85` two-path-divergence fixture) re-verified passing under `SKY_E2E=1` — no regression. Full `cargo nextest run --workspace` (2052/2052), `cargo test --doc --workspace`, and `cargo clippy --workspace --all-targets -- -D warnings` all clean. | `docs/architecture/class2-tier1-sweep-fix-spec-2026-07-09.md` |
-| 2026-07-12 | High | Sweep to green | `golden_m5b_http`'s `http_response_fields` E2E fixture — SKY-I0001 "no synthesised struct for HttpRequest fieldset" | Root-caused as the two-path divergence between `ir_type_from_ty`'s structural fold (builder-chain values) and `ir_type_from_canon`'s Record arm (anonymous-record annotations) — the two disagreed on which record shapes fold to `IrType::HttpRequest`. Fixed (`31beb85`) by extracting a shared `HTTP_REQUEST_FIELDS` const + `is_http_request_field_shape` helper both paths now call. Independent adversarial review: APPROVE (fix correct + refactor behavior-preserving); flagged the name-only shortcut and the `emit_expr.rs` sibling site, both already covered by the Critical row above; filed one new Low coverage-gap row for a missing default-gate (non-`SKY_E2E`) test. Re-verified 2026-07-12: `http_response_fields` + full `golden_m5b_http` suite pass under `SKY_E2E=1`. | `docs/architecture/class2-tier1-sweep-fix-spec-2026-07-09.md` |
-| 2026-07-12 | High | CI, oracle & publish | Gate blind spot — `cargo nextest run --workspace` does NOT enable the runtime's `live` feature (workspace feature-unification never pulls it), so the ENTIRE `sky_runtime::live::*` surface (`style_inject` CSS-injection sink gates, SSE/session/dispatch) was silently excluded from the default gate | Re-verified as ALREADY CLOSED, not newly landed — the BACKLOG row was stale bookkeeping. CI's `runtime-full-features` job (`cargo nextest run -p sky-runtime-rust --features full`) has existed since the initial CI workflow commit (`6cd146a`); commit `5082148` (2026-07-11, predates this row's filing time) additionally mirrored the `--features full` lane into all four local gate recipes (`scripts/progressive-development/{prompt,context}.md`, `orchestrate.sh`, `autopilot.sh`) with cross-referencing comments so CI and the local recipe can't drift apart again. This session independently re-measured the gap to confirm the fix is real and complete: `cargo nextest run -p sky-runtime-rust` (default features) = 569/569 passed, 0 tests under `sky_runtime::live::*` (confirms the blind spot mechanism — default truly excludes `live`); `cargo nextest run -p sky-runtime-rust --features full` = 992/992 passed, 140/140 `sky_runtime::live::*` tests green (423-test delta, all newly-visible tests pass — nothing was quietly broken under the previously-blind lane). Did NOT re-run the full-workspace `cargo nextest run --workspace` (all crates, not just the runtime) in this session — hit the repo's 10 GB disk-safety floor mid-build from concurrent worktree-lane disk pressure (3 sibling agent worktrees held 15–29 GB of target-dir artifacts each at the time), stopped per the hard rule, and did not retry (the same lane would predictably hit the same wall again without those other builds finishing first). No code changed; this row closes as a documentation-only correction (BACKLOG entry removed, this ledger entry added). `.github/workflows/examples-sweep.yml` / `.forgejo/workflows/heavy.yml` don't touch the runtime crate and were confirmed out of scope. | |
-| 2026-07-10 | Critical | Sweep to green | Boundary Scheme Promotion — fix untyped top-level bindings sharing ONE monomorphic var across the linked program (class-1 inference bug #2) | Re-landed after a same-day revert (independent review found E0283 on a cross-module field-access getter — `promote_untyped_boundaries`'s `obligation_roots` missed the field-access's own result var). Re-fixed (inserted `fa.result` into `obligation_roots`; ported the typed arm's `used_generics` filter into the untyped arm as defense-in-depth) and re-verified against the EXACT failing shape via a real `cargo build`+`run` golden, not just a `sky_types` unit test. Held under a SECOND independent review — no new SEAL violation found (see the `RecordUpdate.fields` follow-up row below for the one non-exploitable completeness gap it surfaced). See `docs/divergences-from-sky.md` B23. | `docs/architecture/class1-inference-fix-spec-2026-07-09.md` |
-| 2026-07-11 | Medium | Sweep to green | Boundary Scheme Promotion follow-up — multi-module fuzz templates added to `scripts/fuzz-well-typed.sh` (kinds 19-22: cross-module 2-type reuse, untyped value binding at 2 element types, Number-bounded helper single-type use documenting D2, mutually-recursive untyped pair used polymorphically) and `scripts/fuzz-ill-typed.sh` (cats 7-8: same-module 2-type use — the #66-N false-acceptance canary — and cross-module use at an incompatible instantiated type) | Multi-file infra: templates/mutants write a `src/Lib.sky` sibling next to `Main.sky` (per-iteration dirs are fresh; `save_failure`/`save_false_acceptance` copy the whole `src/`). Verified: all 4 well-typed templates green through the full pipeline (skyc-0 + cargo-0 + run-0, per-kind seeds 7/2/18/9); ill-typed loop `--seed 0 --iters 9` covers all 9 cats, 9/9 rejected with expected codes (cats 7-8 SKY-T0001, empirically pinned). | `docs/architecture/class1-inference-fix-spec-2026-07-09.md` |
-| 2026-07-11 | Low | Sweep to green | Boundary Scheme Promotion — `obligation_roots` (`crates/sky_types/src/constrain.rs`) had a symmetric gap for `RecordUpdate.fields`' per-field VALUE vars (analogous to the `fa.result` gap): `promote_untyped_boundaries`'s `record_updates` loop only inserted `ru.record`, never each field's value var. Was NOT exploitable (the `used_generics` defense-in-depth filter independently stripped the resulting stale generic), but was a real completeness gap in the primary obligation-exclusion mechanism. | Fixed: each `ru.fields` value var now joins `obligation_roots` alongside `ru.record`. Regression `sky_types::tests::record_update_field_value_var_is_excluded_from_quantification` inspects the promoted scheme directly (`untyped_type_params` must quantify nothing for `setName r n = { r \| name = n }`) — verified to FAIL against the pre-fix loop and pass post-fix. Found by independent second-pass review of the Boundary Scheme Promotion re-fix (2026-07-10). | `docs/architecture/class1-inference-fix-spec-2026-07-09.md` |
-| 2026-07-11 | High | Sweep to green | #90 SKY-L0114 ctor-payload-function — `Ok`/`Just` holding a function is rejected, making `Result.andMap` / `Maybe.andMap` unusable | **Landed on the 5th attempt** (merged `0e4eac0`; commits `cd9bb1c` attempt-4 base reapply + `d8f5814` fail-closed core + `6daa2f1` error-slot pin). The 4-incident history is in the done-ledger + `ctor-payload-andmap-arity-gate-design.md`. 5th-attempt core: `emitted_bound_satisfied`'s `and_map_payload` arm now fails CLOSED on a bare `Ty::Var` (matching every sibling obligation and `Math.min`'s `ord`, verified differentially), accepting the conservative cost — a legitimately-arity-1 ANNOTATED double forwarder is conservatively rejected (pinned by fixture, mirroring Math.min's own behavior). Gating the salvaged work found + fixed one more positive-path seal hole: the pipe's eta-param annotation pinned a free Result-error var to `JsonVal` while `ok_res` pins `SkyError` — `ir_type_from_ty_json`'s Result arm now pins a free ERROR-slot var to `IrType::Error` (one defaulting policy, both sides). Adversarial review (the 5th, after 4 that each broke prior attempts): **CLEAN** — 20+ fresh fixtures including 6 novel shapes (quadruple forwarder, record-field-stored fn, if-selected, type-alias-annotated forwarder, List.map lambda, a 3-module safe/hazard split targeting the generalization boundary), every curried shape cleanly rejected at skyc time, every positive path builds+runs correct output incl. concrete `Result String/MyErr/Int` error types (the pin didn't overreach). 32/32 l0114 fixture suite under SKY_E2E. 2 findings filed as their own rows (a PRE-EXISTING let-bound-ctor-closure E0308 hole bisected to the Stage-1 base, and a diagnostic-phrasing nit). | `docs/architecture/ctor-payload-function-design.md`, `docs/architecture/ctor-payload-andmap-arity-gate-design.md` |
-| 2026-07-11 | High | Sweep to green | #158 Nested-constructor-payload patterns (`Ok {name}`, `Just (h :: t)`) were fail-closed (SKY-L0112/SKY-L0116) where the reference recurses and compiles | Landed (`021e695`, spec Item C). C1 (record sub-pattern in ctor payload) now recovers the nested record's full field set via `lower_record_pat` (region threaded onto ctor/tuple sub-patterns; no backend change; two-level `Ok (Just {name})` works). C2 (cons/list in ctor payload) desugars the arg to a fresh `Vec` binder + an arm-level LENGTH GUARD (new `Expr::ListLenCheck`) + a body prelude recovering head elements by index (new `Expr::ListIndexClone`) and the tail via `List.drop` — the guard makes `Just []` fall through soundly (prints `0`, never a panic). Kept fail-closed (avoids accept-then-cargo-fail): a guarded nested-cons arm with NO trailing catch-all (guard-non-exhaustive to rustc), and cons nested in a tuple column / two levels deep (out of scope). `Arm.guard` field + guard rendering in `emit_match` + `emit_expr_tail`. 7 SKY_E2E goldens (record, two-level record, cons, `Just []`→0 fall-through, closed-list, generic-elem, + the fail-closed negative). | `docs/architecture/class4-pattern-lowering-fix-spec-2026-07-09.md` |
-| 2026-07-11 | High | Sweep to green | #99 Refutable match-arm alias over non-Copy payload double-moves — `case m of Just ((a,b) as w) -> use a,b,w` → E0382 | Landed (`67130c0`), spec followed exactly with 2 documented deviations: (1) the fail-closed gate lives in `lower_case` over the assembled arm set, mirroring the emitter's per-match/per-column STR/LIST/WHOLE mode decision — the spec's per-pattern placement couldn't see the mode and would have over-rejected sound by-ref LIST/STR aliases; (2) the diagnostic is SKY-L0128 (SKY-L0127 was taken by #90's T4 gate after the spec was written). New `sky_ir::is_dispatch_free` shared predicate; backend `render_arm_pat_alias_safe` extends the #96 clone-rebuild strategy to by-value match arms (builtin Maybe/Result payloads — the concrete repro's path — user-enum payloads, and whole-arm heads); dispatch-NEEDING alias inners fail closed with an actionable explain page. Green fixture proves a/b/w all read correctly from real compiled Rust under SKY_E2E; red fixture pins the clean SKY-L0128 rejection; the `m3b3_alias` byte-golden regenerated after its go-parity E2E confirmed identical output; the unit test that had PINNED the unsound `y @ x` emission now asserts the clone-rebuild form. | `docs/architecture/seal-noncopy-move-design.md` §4.2 + `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md` |
-| 2026-07-11 | High | Sweep to green | #125 Decoder thunk coverage: tuple-destructure + record-field binders (loud E0382) | Landed. #89 fixed the bare-`PVar` `Decoder` reuse (thunk-wrap RHS + rewrite each read to a zero-arg thunk call); #125 generalizes to tuple/record destructure binders: when the aggregate value type contains `IrType::Decoder` anywhere (`ir_type_contains_decoder`), the whole destructure is thunked and each read re-destructures a fresh MASKED copy of the pattern (`mask_pattern_except` — every other bound name erased to wildcard) from a fresh thunk call, using `Expr::Destructure` itself as the projector (no new IR node). Sound for the same reason as #89: Decoders are pure builders, so re-evaluation is construction-cost-only. §2.5 refactor (extract `rewrite_var_free_occurrences`, verified byte-identical against the m4h goldens) landed as its own step-1 commit. Wired into BOTH `lower_let` and `lower_case`'s single-arm destructure. 3 golden fixtures (tuple/record/case reuse, exact stdout under SKY_E2E) + a byte-identity guard proving the non-Decoder fast path is untouched. | `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md` |
-| 2026-07-11 | Medium | Sweep to green | #102 F1 shadow diagnostic: local `type X` shadowing a dep-imported `X` → downstream SKY-T0001 instead of clean SKY-N0012 at the decl | Landed (`a980804`, spec Item D): a dep-shadow pre-pass in `canonicalise_with_env` (`crates/sky_canon/src/resolve.rs`) mirrors `inject_dep_type`'s dep-vs-dep clash check — a local union/alias name already present in `type_home_map` under a different home is rejected with the existing SKY-N0012 (`DuplicateType`) AT THE DECL. Reads-only pre-pass (writes stay in the following loops), unions-then-aliases before either mutates the map. No new diagnostic code. Same-module duplicates keep their better first-declared span. Golden negative fixture + 4 canon unit tests (local union/alias shadow, no-import control, same-module-still-first-span). | `docs/architecture/class4-pattern-lowering-fix-spec-2026-07-09.md` |
-| 2026-07-11 | High | Sweep to green | #113 Pseudo-class attrs render to nothing in the static `htmlRender` sink (AttrPseudoRule no-op) | Encoder fix landed with the 2026-07-10 Std.Ui/Html kernel batch (`collect_html_attrs` harvests every `AttrPseudoRule` into one `||`-joined `data-sky-pc-rules` marker; `PseudoClass::wire_tag` colocated with the type, lock-step with `style_inject`'s decode side) — affected every backend, not just the static sink, exactly as the spec predicted. Closed out 2026-07-11 by adding the spec's two remaining tests: the multi-rule merge (exactly ONE marker per element) and the full composed pipeline (`AttrPseudoRule` → `ui_layout` → `assign_sky_ids` → `apply_style_injections` → `render_html` → scoped `<style>` with the `@media (hover: hover)` guard, no marker leak) — the gap the kernel-batch review flagged. | `docs/architecture/class10-ui-html-fix-spec-2026-07-09.md` |
-| 2026-07-11 | Medium | Sweep to green | #105 Std.Css hardening (defence-in-depth): @import/expression gating on `raw`/`keyframes` bodies + reject CSS-hex-escaped values in `safeValue` | Both parts landed (`917f79c`). Part 1 (pure Sky): `raw`/`keyframes` drop the whole rule on an `@import` (CSS-level SSRF) / `expression(` smuggle (`keyframes` scans the joined frames — a bare-named-fn `List.any` would trip the first-class-fn Clone limitation; joining only over-detects, fail-safe). Part 2 (`css_safety.rs`): `SafeCssValue` now decodes CSS backslash-hex escapes (`\65 xpression(...)` → `expression(...)`, `\3b` → `;`) and re-runs the shared breakout scan against the decoded form — closing the hidden-keyword bypass; scope is precisely `SafeCssValue` (`SafeCssPropertyName`/`Selector` already reject `\`). Std.Css security golden extended with the `@import` vectors (dropped end-to-end under SKY_E2E) + benign-keyframes non-regression. | `docs/architecture/class10-ui-html-fix-spec-2026-07-09.md` |
-| 2026-07-11 | High | Sweep to green | #32 M5a follow-ups (fail-closed): Task arity-3 ICE + Task-in-ADT-ctor gate | Landed (`9377a0c`, spec Item E). Two `CompilerBug` ICE sites reachable from well-typed source now emit a clean SKY-T0016: (E1) `normalize_annotation_ty`'s mis-arity `Task` arm (bare `Task`, `Task Error Int Bool`) → `TypeError::TaskArity`; (E2) a mis-arity `Task` in a ctor payload never reaches `normalize_annotation_ty`, so a new `task_arity_in_canon` predicate + Gate 0a at the top of `lower_enum`'s field loop fails closed at the ctor span before `ir_type_from_canon`'s Task catch-all ICE (`ir_type_from_canon` untouched). (E3) Task/Cmd/Sub-in-payload resolved as ACCEPT — `type Job = Job (Task Error Int)` is declarable + #87 derive-demotes the non-derivable enum; the Task payload is walled at SKY-T0001 at CONSTRUCTION, which is load-bearing for the accept's soundness (a non-derivable Task value can never reach a Model/comparison → no downstream SEAL). New SKY-T0016 (taxonomy 88→89). Independent review approved-with-findings: F1 (the Task-only gate left wrong-arity Cmd/Sub still ICE-ing SKY-I0001, contrary to the item title) fixed in follow-up `e024e01` — `TaskArity` made carrier-aware, `normalize_annotation_ty` + `task_arity_in_canon` generalized to all three carriers, Cmd/Sub regression fixtures added; F2 (an overstated "builds + runs" claim) corrected here. | `docs/architecture/class4-pattern-lowering-fix-spec-2026-07-09.md` |
-| 2026-07-10 | High | Sweep to green | #56 Prove row-poly subset/superset record resolution (A7 watch) + gate on sweep | Investigated 2026-07-10: no defect found, all reachable subset/superset shapes resolve or fail-loud in parity with the reference. 5 golden-test fixtures wired into `crates/skyc/tests/golden_row_poly_records.rs` (purely additive, zero compiler code touched) pinning the invariant on the sweep: 2 accept (subset field access, subset pattern matching incl. `case` + `List.map` lambda), 3 reject (closed-superset mismatch SKY-T0001, two-incompatible-superset-instantiations-of-a-local-let SKY-T0001, the pre-existing `#56b` annotation-syntax-gap canary SKY-P0001). Independent review verified all 5 fire for the right reason (not just green) by re-deriving both reject cases from source, and ran the `SKY_E2E` real-build tier (7/7 pass) — found one moderate doc-accuracy issue: the two-supersets fixture's "class-1 coupling tripwire" framing overstated its coverage (it exercises `unify.rs`'s ordinary closed-record-mismatch rule via the no-let-polymorphism path, not `promote_untyped_boundaries`, which only generalizes module-level bindings — no cross-module two-superset fixture exists yet) — corrected in the same pass. | `docs/architecture/row-poly-subset-superset-design.md` |
-| 2026-07-10 | High | Sweep to green | #45 Make the constrain kernel-scheme table exhaustive over canon lists (close the exit-0-then-cargo-fail class) | Extended `canon_equals_registry`'s G1 reverse loop (`crates/sky_canon/src/lib.rs`) into a full subset gate over `qual_vars`; two exception mechanisms (`excluded_quals`, member-granular `deliberately_unbacked_members`) keep it from blinding whole modules. Surfaced 20 previously-undocumented unbacked kernels — see the Std.Ui/Std.Html kernel-gaps row below. | `docs/architecture/class3-kernel-registry-fix-spec-2026-07-09.md` + `docs/architecture/html-ui-live-scheme-table.md` + `docs/superpowers/plans/2026-07-03-registry-phase-E.md` |
-| 2026-07-10 | High | Sweep to green | #70 Fix kernel arity-table drift (`decl().arity` vs `callee_arity`) — latent exit-0-then-cargo-fail | Found and fixed real drift across ~20 kernels (`Pure.*` companions like `IoReadLine`/`TimeNow`/`SystemArgs`, several `Db.*ById`/`*ByField` variants, TEA `Cmd`/`PubSub.publish`, `Middleware`/`RateLimit` variants) whose `decl().arity` disagreed with the actual call-site arity. Added `callee_arity_matches_decl_arity`, a machine-checked exhaustiveness test (same pattern as #45's `canon_equals_registry`) asserting the two never diverge for any `StdlibKernel` variant, so a future addition that gets this wrong fails the gate immediately. | `docs/architecture/class3-kernel-registry-fix-spec-2026-07-09.md` |
-| 2026-07-10 | Medium | Sweep to green | #85 ErrorDetails follow-up: port `ErrorInfo.details : Maybe ErrorDetails` + the 5-variant `ErrorDetails`/`PanicInfo`/`TypeInfo` union | Landed: same registration recipe as `ErrorKind`, verified arm-for-arm identical across all 6 subsystems by independent review (canon ctor registration, constrain ctor schemes, lowerer arms, `IrType` leaf + derivable/serde, `builtin_runtime_enum` + all 4 backend walker arms). New `Error.withDetails : ErrorDetails -> Error -> Error` kernel is the sanctioned attach-details path — fully sound, `SKY_E2E` golden round-trips 3 of the 5 variants through real `cargo build` + run. Dropped `#[derive(Eq)]` on `SkyError`/`SkyErrorInfo` (forced by the new `SkyMaybe`-typed `details` field, which is `PartialEq`-only) — confirmed nothing in the runtime relied on `Eq`/`Ord` for either type. Independent review found one pre-existing (not introduced here, traced to the original ErrorKind/ErrorInfo pass) accept-then-cargo-fail gap on DIRECT record-literal construction of `PanicInfo`/`TypeInfo`/`ErrorInfo` — filed as its own row below per no-deferral; does not affect the sanctioned `Error.withDetails` path this item ships. | `docs/architecture/error-module-design.md` |
-| 2026-07-11 | Medium | Sweep to green | `PanicInfo`/`TypeInfo`/`ErrorInfo` raw record-literal construction was a well-typed Sky program `skyc` accepted but whose emitted Rust failed `cargo build` (E0308, synth `RecMessageStack` vs runtime `SkyPanicInfo`) | Fixed (`526ada2`) via the **nominal-identity** remediation (the #85-reviewer-preferred option), chosen over backend coercion after a Fable design pass confirmed coercion "fixes the value but not the type judgement — a pattern-bound payload escapes the ctor position into any structural-record-typed slot, reproducing E0308 one hop away". The 3 types are now nominal (`Ty::Con` schemes in constrain.rs, new `ErrorRecordFields`/`FieldState` table in `sky_types/lib.rs`, `EXTRA_BUILTIN_TYPE_NAMES` annotatable, `IrType::{ErrorInfo,PanicInfo,TypeInfo}` leaves render as `sky_runtime::error::Sky*`) so a bare record literal fails to unify with a clean SKY-T0001. Design note `docs/architecture/error-record-literal-seal-fix-2026-07-11.md`. The RED repro is now a clean rejection; the #85 goldens (`error_adt_roundtrip`/`error_details_roundtrip`, which exercise `.details`/`.message`/`.expected` field access) stay green under SKY_E2E; the previously-cargo-failing helper-over-bound-payload shape is now green; `describePanic : PanicInfo -> String` is annotatable. 3 rejection gates + 1 positive E2E golden. The "sanctioned divergence" caveat withdrawn from `docs/divergences-from-sky.md` §B-ErrorADT. | `docs/architecture/error-record-literal-seal-fix-2026-07-11.md` |
-| 2026-07-10 | High | Sweep to green | Remaining Std.Ui / Std.Html kernel gaps surfaced by the example sweep — wire missing kernels across the layers with the `../sky` reference | 19 of 20 unbacked kernels landed: `Ui.image/disabled/paddingEach/clipX/clipY/scrollbarX/scrollbarY/onFile/onPseudo/hover/focus/focusVisible/active`, `Html.toString/voidNode/doctype/titleNode/htmlNode/headNode`, `Background.linearGradient` — each wired through the full 8-file recipe. Found and fixed a pre-existing latent bug while wiring `Ui.onPseudo`: the sky-id-scoped pseudo-class `<style>` injection pipeline (`live/style_inject.rs`) existed and was tested, but nothing produced its `data-sky-pc-rules` marker input, so the already-shipped `Background/Border/Font.hoverColor/focusColor/activeColor/disabledColor` kernels were silently rendering as no-ops — closed in `render.rs::collect_html_attrs`. Also fixed 2 pre-existing latent mis-arity bugs in `lower_callee`'s legacy-match table (5 `Html.*` + 4 `Ui` clip/scrollbar names mapped onto the wrong generic kernel) — confirmed harmless pre-fix (type-check already fail-closed via `deliberately_unbacked_members`, lowering was unreachable). `Ui.mediaQuery` deferred — see the new row below (needs a genuinely new CSS media-query emission mechanism, not a same-shape wiring job). Independent review (2026-07-10) confirmed the pseudo-class fix, exhaustiveness gates, and the golden E2E all clean; found one pre-existing (non-regression, upstream-matched) CSS-escaping gap on `Ui.onPseudo` — filed as its own Security-hardening row below. | `docs/architecture/ui-html-completeness-design.md` |
-| 2026-07-11 | Medium | Sweep to green | `Ui.mediaQuery` — the 1 of 20 unbacked kernels deliberately deferred from the 2026-07-10 Std.Ui/Html batch (needed a genuinely new wrapper-Element CSS media-query emission mechanism) | Landed (`0264605`+`b5d5f5b`). Producer kernel `ui_media_query_` builds an `Element::Node` carrying `data-sky-mq-q`/`-rules` markers, consumed by the pre-existing `build_mq` sink into a sky-id-scoped `<style data-sky-mq>@media <q> { [sky-id] { <rules> } }</style>`; folds attrs through the SAME `build_style_string` collector as inline-style/onPseudo. `Ui.breakpoint` un-stubbed to delegate. New `SafeCssMediaQuery` producer gate (allows MQ-L4 `<` range syntax, rejects breakout). Standard 8-file kernel registration; removed from `deliberately_unbacked_members`. Follow-on `b5d5f5b` drops a phantom `<M>` (E0282) from the 6 now-live breakpoint constants. Independent review APPROVED (SEAL passed) and surfaced a PRE-EXISTING CSS-marker-forgery sink gap — filed as a High Security-hardening `BACKLOG.md` row (`build_mq`/`build_pc`/`build_tr` sink-gated 2026-07-11; `build_anim` + typed-marker fix residual). | `docs/architecture/ui-mediaquery-design-2026-07-11.md` |
-| 2026-07-11 | High | Sweep to green | Let-bound constructor-closure E0308 SEAL — `let f = Ok (\x -> …)` where a payload lambda flows through a `let` / builtin `Ok`/`Just` had no trait-object target at the box site, so `Box::new(closure)` inferred `Box<{closure}>` and a later `Box<dyn Fn>` use failed `cargo build` (skyc exit-0) | Filed from the #90 5th-attempt review; landed (`034c4b4`, merged `5cb500d`). `emit_lambda` now pins the box to the trait-object type at the box site (`{ let __sky_fn: <T> = <Box\|Arc>::new(closure); __sky_fn }`), matching `emit_func_value`. Independent re-review caught a CRITICAL follow-on that the green gate missed: the Box/Arc choice used a `typed.starts_with("Arc<")` STRING test that missed the `ServerHandler<E>` type-ALIAS (an `Arc` slot), re-breaking every inline `Server.post path (\req -> …)` handler lambda to E0308. Fixed by extracting a shared STRUCTURAL `wants_arc_ctor` helper (matches the `IrType` shape) used by BOTH emit paths + a gate-included emit golden `golden_l0114_server_handler_arc` asserting the handler lambda boxes with `Arc` not `Box` (the SKY_E2E server suite that would have caught it doesn't run in the default gate — the root cause of the miss). 15 lambda byte-goldens regenerated (the `__sky_fn` pin). A THIRD, independent pre-existing hole in the same `Arc`-slot family was found + fixed while resolving the review: WS `onError`'s callback is `Fn(WsHandle, Error) -> SkyTask<()>` (2nd param the error type, NOT `String` like `onMessage`), so it matched neither `wants_arc_ctor`'s nor `render_type`'s `[WebSocketServer, Str]` Arc arm → rendered generic `Box<dyn Fn>` and passed a `Box` into `ws_server_with_on_error`'s `Arc<…>` param → skyc-0-then-cargo-fail E0308 (confirmed by real emit + `cargo build` of a minimal `Ws.withOnError` fixture, present before AND after the earlier fix — latent because the Rust example sweep #35 isn't gating yet). Both Arc patterns extended with `[WebSocketServer, Error]` in lock-step; golden `ws_on_error_callback_boxes_with_arc_not_box` pins it. | `docs/architecture/ctor-payload-function-design.md` |
-| 2026-07-11 | Low | Sweep to green | The conservative SKY-T0014 rejection of an arity-1 annotated double forwarder rendered a confusing double-negative inline message ("`a` is not a non-function callback result … type") | Fixed at the render layer: the #90 T3 higher-order-kernel callback-result obligation's class label is now the shared `sky_diagnostics::HOF_KERNEL_RESULT_CLASS` constant (constructor + renderer keyed off the same symbol, no drift), and `SuperTypeUnsatisfied` renders a tailored sentence for it — "the callback's result type `a` may itself be a function — Maybe/Result higher-order kernels (map / map2..5 / mapError / andMap) apply their callback at one exact arity, so the callback must return a plain (non-function) value". Every other class label keeps the generic "`X` is not a `<class>` type" template (locked by the same regression test). `skyc explain SKY-T0014` updated to quote the new inline wording. Regression: `render::tests::hof_kernel_result_super_type_renders_without_double_negative`. | |
-
-### A-table — Security hardening
-
-| Done at | Priority | Road map phase | Task | Notes | Spec |
-|---|---|---|---|---|---|
-| 2026-07-10 | High | Security hardening | #44 Opaque `Secret` stdlib type (gates WASM hydration island + secrets-are-typed rule) | Landed: sealed newtype (`Sky.Core.Secret`, `fromString`/`reveal`/`redacted` kernels) following the `SqlFragment` (#61) opaque-newtype convention — exactly one hand-written constant-time `PartialEq` (`subtle::ConstantTimeEq`, no early-exit byte compare) and one hand-written always-redacting `SkyStringify`/`Debug`; deliberately no `Display`/`Hash`/`Ord`/serde. Non-serde is load-bearing: `ir_type_is_serde` is exhaustive and recursive through Record/Maybe/List/Set/Tuple/Result/Dict/enum-payloads, so a `Std.Live` Model field of type `Secret` (or any compound containing one) is a compile-time `SKY-L0120`, not a session-store leak. Backing buffer zeroizes on `Drop` via the `zeroize` crate on the in-place buffer (not a moved-out copy). `Auth.signToken`/`verifyToken` re-typed `String → Secret`; reveal happens only at the `AUTH_WRAPPERS` FFI boundary, `runtime/src/sky_runtime/auth.rs` internals untouched. Independent review (2026-07-10) verified constant-time eq, exhaustive leak-surface hunt (no `Display`/`Hash`/`Ord`/`From` bypass found), the compound-nesting `SKY-L0120` gate (`Maybe Secret`, nested records), the auth re-typing boundary, and real zeroize-on-drop — all clean. `SKY_E2E=1` golden suite (6 tests: seal/reveal, constant-time eq, record-containing-Secret, log redaction, auth roundtrip) passes via real `cargo build`s. | `docs/architecture/class6-secret-sqlfragment-fix-spec-2026-07-09.md` |
-| 2026-07-10 | High | Security hardening | #61 `SqlFragment` param-query newtype — SQL injection = type error | Landed: opaque `SqlFragment` with typed combinators (`column`/`param`/`eq`/`and`/`inList`/etc.); `Db.findWhere`/`Db.deleteWhere` take `SqlFragment`, not `String`; `Db.unsafeFindWhere` removed outright (not deprecated) per the spec's no-deferral decision. Found+fixed one exit-0-then-cargo-fail during its own verification (`sql_column`'s `&str` param, inconsistent with every other Sky-`String`-typed kernel param). Full workspace gate initially failed after merge — 21 new kernels (19 `Sql.*` + `Db.findWhere`/`deleteWhere`) were missing from `lower_callee`'s legacy string-match table (only exercised by the `id=None` fallback path, which lane-c's own targeted tests never hit); fixed centrally post-merge, gate now green. | `docs/architecture/class6-secret-sqlfragment-fix-spec-2026-07-09.md` |
-| 2026-07-10 | Medium | Hardening follow-ups | Pre-existing E2E failures `db_crud`/`db_transaction` (+ `m5a` `error_channel`/`task_map_error_lambda`) — TWO unrelated regressions | Fixed both. (A) `db_crud`: `bdbc572` flipped `DbInsertRow`/`DbUpdateById` to `dict(string,string)` (correct) but left the fixture's list-of-tuples literals stale → wrapped in `Dict.fromList`, dropped the now-redundant `.into_iter().collect::<HashMap>()` emitter conversion. (B) `db_transaction`+`m5a`: `5db4cd3` made `SkyError` a real enum, but `K::TaskFail`'s over-polymorphic `fun(var(1), task(var(0)))` still let `Task.fail "str"` HM-check → emitted ill-typed `task_fail(String)`. Pinned the scheme to `fun(error_ty(), task(var(0)))` (matching `mapError`/`onError` + the bundled `stdlib/Sky/Core/Task.sky` annotation), rewrote the 3 fixtures to `Task.fail (Error.unexpected …)`, added a negative SKY-T0001 gate (`Task.fail "str"` now cleanly rejected) + a `docs/divergences-from-sky.md` entry (Ipê's `Error -> Task Error a` is deliberately less permissive than the reference's `e -> Task e a`). All 4 previously-red E2E tests + 2 new negative gates pass under `SKY_E2E=1`. | `docs/architecture/class7-db-crud-transaction-fix-spec-2026-07-10.md` |
-| 2026-07-10 | High | Security hardening | Class-8 web remainder: session cookie `Secure` TLS-gated (not ENV-gated), `/_sky/observability/ingest` CSRF exemption, WS upgrade Origin check outside production (CSWSH), `live_max_body_bytes()` `>0` floor | All 4 sub-items landed: session cookie now reflects the real TLS signal (`request_is_https`, `live/mod.rs`) not just `ENV`; ingest endpoint's dev-mode no-token path now rejects cross-origin POSTs (`live/console.rs`); WS upgrade defaults to same-origin outside production instead of allow-all (`server.rs`); `live_max_body_bytes` floor was already correct. The CSRF cookie's OWN TLS-gating was deliberately left out of scope — see `#63c` below. | `docs/architecture/class8-live-http-security-fix-spec-2026-07-09.md` |
-| 2026-07-10 | High | Security hardening | #63b `withCsrf`'s golden/E2E coverage never issues a real HTTP request — `golden_m6_middleware_csrf.rs` only checked `skyc`/`cargo build` succeed; `server_e2e.rs` had zero CSRF tests. | Landed: 3 real HTTP-level E2E tests in `server_e2e.rs` — forged POST (no cookie/header) → 403; cookie present + mismatched/missing header → 403 (both sub-cases); legit GET-mints-cookie-then-POST-echoes-it flow → 200 with the wrapped handler's own body. Proves the full 12-site kernel-registry dispatch chain end to end over a real TCP connection, not just compile-level. | `docs/architecture/class8-live-http-security-fix-spec-2026-07-09.md` |
-| 2026-07-10 | High | Security hardening | #63c CSRF cookie ENV-vs-TLS `Secure`-gating bug — a forgotten `ENV=production` on an actually-TLS'd deploy shipped the CSRF cookie without `Secure`/host-lock | Landed: `csrf_set_cookie_value` now takes a `request_is_https` bool captured from `ServerRequest.headers` BEFORE the request is moved into the wrapped handler inside `middleware_with_csrf` (the design adaptation the row called for — the session-cookie path had the request available at cookie-set time, this one doesn't), threaded through as a `Copy` bool into the async cookie-stamping block. `Secure` fires when EITHER `production_from_env()` OR `request_is_https` (`X-Forwarded-Proto: https`, only honoured under the `SKY_TRUSTED_PROXY` opt-in — same untrusted-by-default trust gate `build_request` uses for `remoteAddr` and the session cookie's own fix). Cookie NAME stays process-global (identity stability across a session); only the `Secure` ATTRIBUTE became request-scoped. Unit tests cover the full OR-gate truth table + the trust gate; a real HTTP-level E2E through `middleware_with_csrf` proves the signal survives the capture-before-move adaptation. | `docs/architecture/class8-live-http-security-fix-spec-2026-07-09.md` |
-| 2026-07-10 | High | Security hardening | Class-7 SQL/DB remainder: `SqlNull` text-typed NULL breaks Postgres, Postgres driver structurally unreachable, `db_insert_row` fabricated `id=0` on non-integer PK, tenant-prefix SQL enforcement absent from plain `db.rs` | All 4 sub-items landed: `SqlParam::Null` now carries a type witness (`Null(Box<SqlParam>)`) instead of binding as text; new `[database] driver` manifest parsing (`crates/skyc/src/project.rs`) threads a `DbDriver` enum through `RustBackend::with_db_driver` → `EmitCtx` → template/Cargo.toml selection, closing the silent-no-op where `driver = "postgres"` never changed the emitted `config.rs` (proven structurally by the new `crates/skyc/tests/postgres_driver_reachability.rs`, no live Postgres needed); `db_insert_fields` gained a `DB_USES_RETURNING_ID` branch + `extract_returning_id` helper so autoincrement ids are read back instead of fabricated as `0`; `runtime/src/sky_runtime/live/hub.rs` gained `tokio::task_local!`-scoped `TENANT_PREFIX` + `reject_cross_tenant_svc`, closing the plain `db.rs` gap in the tenant-prefix SQL-WHERE enforcement (v0.16.6-equivalent guarantee) that `hub.rs`'s reader path already had. Post-merge clippy gate caught 2 issues fixed centrally: a `clippy::doc_markdown` nit (`` `SQLite` `` backticks) and 3 `clippy::expect_used` errors in the new test file's setup helper (`#[allow]`, matching the established per-test-file convention). **Independent review (commit `ac8b2bfc`) then found a real SEAL violation in sub-item 2:** `db_cargo_toml` selected the sqlx driver feature EXCLUSIVELY (`"sqlite"` xor `"postgres"`), but the always-emitted `telemetry_spill.rs`/`live/hub.rs`/`live/store.rs` runtime modules hardcode `sqlx::sqlite::SqlitePool` for local spill/session persistence independent of the app's `[database]` driver choice — a `driver = "postgres"` project built cleanly through `skyc` (exit 0) but its emitted Rust failed `cargo build` with 3 errors once the `sqlite` sqlx feature was dropped. Root-cause fixed same day (commit `b67a857`): the feature selection is now additive (`sqlite` always on, `postgres` added on top), the contradicting unit test assertion was corrected, and a new `SKY_E2E`-gated `postgres_driver_project_cargo_builds` test actually `cargo check`s the emitted Postgres project (closing the coverage gap — the original test only grepped emitted source text, never built it). `cargo nextest run --workspace` + `cargo clippy --workspace --all-targets -D warnings` both green after the fix. | `docs/architecture/class7-sql-db-fix-spec-2026-07-09.md` |
-| 2026-07-10 | High | Security hardening | `url_is_cacheable` substring-`contains("memory")` DoS reopen — fixed to parse the `file:`/`sqlite:` scheme + query string structurally instead of substring-matching; independent review then caught a second soundness hole in the fix itself (`"file::memory:"`, SQLite's documented in-memory URI idiom, was misclassified as cacheable, silently pooling distinct private databases) — closed in the same pass | Commit `1d65aa0`; regression tests `url_is_cacheable_*` in `runtime/src/sky_runtime/db.rs`. | `docs/architecture/class7-sql-db-fix-spec-2026-07-09.md` |
-| 2026-07-11 | Medium | Security hardening | `Std.Ui`'s inline/pseudo-rule CSS collector did not escape value-as-data attrs (`Font.family` etc.) — a Sky-level `String` reached a `<style>` block via `Ui.onPseudo` defended only by `</style>` stripping, not brace/`;`/`@import` breakout protection | Fixed (`b4cb69c`): 8 raw-string arms in `build_style_string` (Font.family/decoration/align, border-style, overflow, transition, animation, background-image) now route through the SHARED `SafeCssValue` gate, fail-closed drop-on-failure matching the sibling already-gated arms — no new encoder, does not touch `css_safety.rs` (#105's surface). Repro A (page-wide `body{display:none}` via Font.family) and Repro B (`@import` of remote CSS via Background.image) both neutralised end-to-end; legit values (font stacks, `all 200ms ease`, `dashed`) render untouched. 3 unit + 2 end-to-end pseudo-pipeline regression tests. Design pass + implementation both 2026-07-11. | `docs/architecture/ui-css-escaping-fix-spec-2026-07-10.md` |
-| 2026-07-11 | High | Security hardening | CSS style-marker forgery — the `data-sky-{mq,pc,tr,anim}-rules` / `-mq-q` markers are raw `String` HTML attributes forgeable via `Ui.htmlAttribute`, bypassing producer-side `SafeCss*` gates; the Live/Webview injection sink spliced them into a raw `<style>` body | Closed in two same-day passes. (1) `fb32dd3`: sink-side re-validation for `build_mq` (query via `SafeCssMediaQuery`, rules via `sink_safe_declaration_list`), `build_pc` (per-entry), `build_tr` (`SafeCssValue`) — fail-closed drop, byte-identical passthrough on legit payloads. (2) This landing closes the LAST exploitable sink, `build_anim`, which had only `strip_style_close` because keyframe bodies legitimately contain `{ } ;`: new keyframe-GRAMMAR validator `sink_safe_keyframes_body` in `css_safety.rs` (selector tokens restricted to `from`/`to`/`<number>%`, block declarations through the shared `SafeCssValue` raw+escape-decoded policy, no trailing content outside blocks, no nesting) + `SafeCssValue` on the animation shorthand tail; per-entry fail-closed drop (sibling animations survive), same posture as `build_pc`. 7 new regression tests (2 `css_safety` accept/reject matrices + 5 `style_inject` sink gates incl. byte-identical legit passthrough and forged-entry-drops-sibling-survives); all 34 style-inject/css-safety tests green under `--features live`. Residual typed-`Attribute::StyleMarker` unrepresentability refactor re-filed as Medium (non-exploitable now; needs an ADT-bridge design pass — Rust-only variant risks non-exhaustive matches in emitted code). | `docs/architecture/ui-mediaquery-design-2026-07-11.md` |
-| | Medium | Security hardening | **DEFERRED (explicit user override, 2026-07-10) — not blocking this campaign.** #66-T2 Type-directed well-typed AST generator (fuzzer Tier-A): generate arbitrary well-typed programs by construction (typing rules run in reverse), assert skyc accepts + emitted program is no-panic | Guardian-typesystem, multi-session PROJECT — do NOT rush. Adopt the reference design (`../sky` `WellTypedFuzzerGen.hs`) via `proptest`/`arbitrary`. Load-bearing invariant: "well-typed by construction under generation". Scope: pure type-relevant constructs only. | |
-| | Medium | Security hardening | **DEFERRED (explicit user override, 2026-07-10) — not blocking this campaign.** #66-N second half — differential rejection fuzzer vs `../sky`: mutate freely, run both compilers, compare accept/reject | The reference is NOT ground truth: a divergence is a REVIEW candidate, never an auto-verdict ("Ipê rejects, Sky accepts" is most likely Ipê being MORE correct). First half (guaranteed-breaking mutation tier, `scripts/fuzz-ill-typed.sh`) landed 2026-07-06. | |
-| 2026-07-06 | — | Security hardening | #66 Well-typed no-panic fuzzer (`scripts/fuzz-well-typed.sh`) — landed; wired into the autopilot as the guardian soundness oracle | | |
-
-### A-table — CI, oracle & publish
-
-| Done at | Priority | Road map phase | Task | Notes | Spec |
-|---|---|---|---|---|---|
-| | High | CI, oracle & publish | #35 Port examples-sweep to skyc + run the full sweep (the source-of-truth gate) | Porting itself is done (spec §1). Declaring "sweep-green" is still blocked on the Critical Boundary-Scheme-Promotion (class-1) row above — do not run the gating full sweep until that lands (spec §0). 2026-07-10: fixed the reproduced same-`CARGO_TARGET_DIR` binary-swap race (`flock`-guarded critical section + PID-suffixed report stamp, commit `6d93e85`) — independent review confirmed this part is correctly implemented. Residual gap found by the SAME review: see the new row below — do not declare the sweep gate fully trustworthy until it lands. | `docs/architecture/class2-tier1-sweep-fix-spec-2026-07-09.md` |
-| 2026-07-10 | High | CI, oracle & publish | #35b Residual sweep-concurrency gap (found by review of #35's race fix): per-example diagnostic files (`$HIST/$n.{skyc,cargo,go.build,rust.run,go.run}.log`, `$n.diff.txt`, `$n.equiv/`) are still keyed only by bare example name, not PID/STAMP-suffixed — two invocations with DIFFERENT `CARGO_TARGET_DIR`s (no `flock` contention) but the SAME shared `$HIST` cache can still interleave-corrupt the SAME example's diagnostic files, producing a false `DIFFER` or false equivalence pass. | Fixed via a `diag()` helper routing every per-example diagnostic write through `$HIST/$n.$STAMP.<ext>` (reusing #35's existing `$STAMP`); added a `flock` availability preflight check (previously missing, would have silently no-op'd #35's fix); added `scripts/test-examples-sweep-concurrency.sh`, a real 2-concurrent-invocation regression test. Independent review verified every write/read path routes through `diag()`, `$STAMP` is fixed at script-scope (no within-run divergence risk), the `flock` preflight fires before the critical section, and — critically — reproduced the ORIGINAL bug by reverting `diag()` in a scratch copy and confirming the new regression test correctly fails against it (not just passes trivially against the fix). | `docs/architecture/class2-tier1-sweep-fix-spec-2026-07-09.md` |
-| | High | CI, oracle & publish | #110 Oracle full-activation: wire HTML/tui/scenario normalizers + rebuild release skyc + flip CI phase-2 + 65-fixture divergence corpus | | `docs/architecture/class2-tier1-sweep-fix-spec-2026-07-09.md` |
-| | High | CI, oracle & publish | #37 Fix CI (port ../sky examples-sweep.yml + ci.yml) + push to `git@github.com:arthurmaciel/ipe-lang` | Includes the CI example-patch-queue (in-repo patches CI applies to upstream examples before build), accepted per `docs/divergences-from-sky.md#planned-future-divergences`. Windows question: `docs/architecture/tui-windows-ci.md` / `docs/architecture/windows-ci-support.md`. Plans: `docs/architecture/sweep-and-parity-plan.md`, `docs/superpowers/plans/2026-07-02-ci-and-push.md`. | `docs/architecture/class2-tier1-sweep-fix-spec-2026-07-09.md` |
-| | Critical | CI, oracle & publish | #59 PRE-PUSH: full codebase rename Sky → Ipê/Ipe/ipe (case-preserving; watch the naive-sed trap — upstream-Sky refs stay Sky) | Runs SOLO, dead-last before the push — no other work in flight during the rename. | `docs/superpowers/plans/2026-07-03-rename-sky-to-ipe.md` |
-| | Medium | CI, oracle & publish | Publish the README (honest relation-to-Elm-and-Sky framing) | Re-run the divergences review (`docs/divergences-review.md`) first so the ledger the README cites is current. | `docs/README-draft-relation-to-elm-and-sky.md` |
-| 2026-07-11 | Medium | CI, oracle & publish | E2E shared-target + cached-oracle infrastructure | Verified already-landed: Fix 1 (single shared cargo target for every emitted E2E project, per-golden package rename — `crates/skyc/tests/support/mod.rs` + `oracle::build_rust_binary`) and Fix 2 (`tools/oracle` cached Go oracle + `refresh-oracle`, 4 rigour invariants pinned by unit tests, 12/12 green). Row was stale — closed as bookkeeping. | `docs/architecture/e2e-and-oracle-caching.md` |
-
-### A-table — Hardening follow-ups
-
-| Done at | Priority | Road map phase | Task | Notes | Spec |
-|---|---|---|---|---|---|
-| 2026-07-10 | Low | Hardening follow-ups | `is_cross_origin_ingest`/`ws_cross_origin` compared `Origin` host against the raw `Host` header string — a default-port-vs-explicit-port mismatch caused a false-positive same-origin rejection | Fixed: a shared `strip_default_port` helper in `http_header.rs` (strips `:443`/`:80` per scheme) is now used by all three sites (`live/console.rs`, `server.rs`, `live/csrf.rs::origin_mismatch`) so they can't drift, with 3 regression tests (explicit https default port, explicit http default port, non-default port still flagged). Availability nit, always failed CLOSED. | `docs/architecture/class8-live-http-security-fix-spec-2026-07-09.md` |
-| 2026-07-10 | Low | Hardening follow-ups | `DbFindOneByField`/`DbFindManyByField` (arity fixed by #70) had no golden E2E coverage — only source inspection + the internal exhaustiveness test | Landed: `m5b_db_find_by_field` golden fixture (inserts 3 rows, exercises findOneByField match + no-match and findManyByField match + no-match, sorted so the assertion doesn't depend on unspecified SQL row order). `sanctioned.divergence` marker follows the established Db-fixture convention (Go+SQLite vs Rust+sqlx; ipê output is the reference). oracle.meta + expected_go.txt authoritatively regenerated via `refresh-oracle` (real build+run), and the `SKY_E2E=1` tier passes (88s real `skyc build` + `cargo build` + run). | `docs/architecture/class3-kernel-registry-fix-spec-2026-07-09.md` |
-| 2026-07-11 | Medium | Hardening follow-ups | #34 M5b-db follow-ups: SqlValue variant completeness, exhaustive `emit_db_call`, self-oracle, db-without-live build; wire `db_decode_money` into kernel dispatch | Landed (commit `821d2ab`): `Db.Decode.money` wired through the full kernel-registration recipe (canon allowlist, `StdlibKernel::DbDecMoney` + `decl()`, constrain scheme `String -> Decoder (Decimal, String)`, lower dispatch, standard-path emit) — previously implemented+tested in runtime but unreachable from Sky source. Sibling sub-items confirmed already closed by earlier commits (SqlValue completeness `b2a53d7`, db-without-live `e57d691`, exhaustive `emit_db_call` with `CompilerBug` fallthrough). Independent review verified: all 3 exhaustiveness gates genuinely cover the new kernel (accounting assert makes silent skips impossible); the malformed-money path is total (12 adversarial inputs → all `Err`, zero panics — total by construction, `split_once`, no indexing); the `B-DbDecMoney` divergence entry (`Decoder (Decimal, String)` vs Go's `Decoder Money` — project-generated types unnameable from the shared runtime crate) is accurate, honest, and the round-trip is lossless. SEAL proven via `SKY_E2E=1` golden. 2 non-blocking findings filed as their own rows (parity-index tooling drift; RELOCATED-vs-FIRST_SCHEMED taxonomy). | `docs/architecture/class7-sql-db-fix-spec-2026-07-09.md` |
-| 2026-07-11 | Medium | Hardening follow-ups | #33 M5b-http residual: header-case parity remainder + extra Http builders | Both spec-§6 items landed. §6.1: outbound `Http.get/post/request` response-header keys now route through the shared `http_header::canonical_header` (reqwest is always lower-case; Go's `net/http.Header` is always canonical — `Dict.get "Content-Type"` parity), with a source-level wiring seal test in `http_client.rs`. §6.2: `Http.withUrl` / `withFollowRedirects` / `withMaxRedirects` added end-to-end (kernel enum + decl + ALL, lower resolution + arity group, constrain schemes, naming, pretty, `emit_http_builder_call` clone-and-reassign arms, `Http.sky` exposing + pure bodies); new golden `m5b_http_builders_redirects` (emission-text + E2E chain override) plus the existing `m5b_http_builders` stays green. Neither gap was a recorded divergence — no ledger action. | `docs/architecture/class8-live-http-security-fix-spec-2026-07-09.md` |
-| 2026-07-10 | Medium | Hardening follow-ups | #129 Runtime audit: `spawn_blocking` for CPU-heavy/blocking kernels (bcrypt/zstd/file) — reactor-starvation guard | Landed: 5 files audited and wrapped via a shared `run_blocking` helper (real `spawn_blocking` under the `tokio` feature, direct-call fallback for the standalone runtime crate's narrow-feature builds only — never a real generated Sky project, which always pulls `tokio`) — `file.rs` (readFile/writeFile/exists/mkdirAll/etc), `compression.rs` (gzip/gunzip/zstd), `config_decode.rs` (load_from_file), `csv.rs` (stream_from_file), `system.rs` (process::run). Panic-inside-spawn_blocking correctly converts to `Task Error`, no swallowing. Independent review verified all 7 new regression tests genuinely detect the ABSENCE of `spawn_blocking` (ticker-yield-starvation pattern), not just functional correctness — and found 2 follow-ups filed as their own rows: those tests don't run under the default CI gate (feature-gated out), and `system_load_env` was missed from the audited surface. | `docs/architecture/class9-kernel-robustness-fix-spec-2026-07-09.md` |
-| 2026-07-10 | Medium | Hardening follow-ups | #129's 7 new `spawn_blocking` regression tests never ran under the default CI gate — feature-gated out | Fixed: added a `.github/workflows/ci.yml` step `cargo nextest run -p sky-runtime-rust --features full`, verified locally to actually execute the `*_spawn_blocking_tests` modules (6 matched, all pass) — a future refactor that drops `spawn_blocking` now fails CI. | `docs/architecture/class9-kernel-robustness-fix-spec-2026-07-09.md` |
-| 2026-07-10 | Low | Hardening follow-ups | `system_load_env` did a synchronous `std::fs::read_to_string(".env")` not routed through #129's `run_blocking` helper | Fixed: routed through the same `run_blocking` helper as its sibling `system.rs` kernels; regression test `system_load_env_does_not_starve_concurrent_async_work` (ticker-yield-starvation pattern) runs under the new CI `--features full` step. | `docs/architecture/class9-kernel-robustness-fix-spec-2026-07-09.md` |
-| 2026-07-10 | Medium | Hardening follow-ups | `File.readFileBytes` silently truncated at its fixed 10 MiB cap instead of erroring | Fixed with the same single-pass `take(cap+1)`-and-check-actual-bytes idiom as its `readFileLimit` sibling — reads one byte past the cap and errors loudly on overflow instead of returning a truncated buffer. Regression test in `file.rs`'s `read_file_limit_tests` sibling module. | `docs/architecture/class9-kernel-robustness-fix-spec-2026-07-09.md` |
-| 2026-07-10 | Medium | Hardening follow-ups | `File.readFileLimit` metadata-then-`take(cap)` TOCTOU — a file growing mid-check silently truncated instead of erroring; fixed to a single-pass `take(cap+1)`-and-check-actual-bytes-read idiom, removing the race window structurally | From the AUD-09 gap-sweep (`file.rs:100`). Commit `706f026`; independent review found no issues. | `docs/architecture/class9-kernel-robustness-fix-spec-2026-07-09.md` |
-| 2026-07-11 | Medium | Hardening follow-ups | #142 Precision follow-up: #139 made `Expr::Access` clone unconditionally + blanket `Clone` bounds on fn generics — restore the borrow fast-path | Landed per spec §3 (combined with AUD-09's O(n²) clone finding — same site): `Expr::Access` gains `field_ty : IrType` threaded from the solver's region type; the emitter reads definitely-`Copy` fields bare and keeps `.clone()` for heap/generic fields. `Generic` fallback conservatively keeps the clone. `emit_func`'s blanket `Clone` bound deliberately unchanged (spec §3.3 — relied on by T5/list-mode/#96); heap-field last-use elision explicitly deferred (spec §3.5). Regression: `golden_i142_access_copy_elision` (emission-text split assertion + E2E `6|xx`); `m1_record_update` snapshot re-diffed — exactly ONE line changed (the Int field reads), rest byte-identical. | `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md` |
-| | Medium | Hardening follow-ups | #31 Phase-4 remainder — make-invalid-states-unrepresentable hardening (non-blocking) | | |
-| 2026-07-11 | Medium | Hardening follow-ups | AUD-09 lower/emitter leftovers — 2 of 3 closed: `Match::from_parts_unchecked` pub replaced by sealed shape-preserving `Match::map_bodies`/`try_map_bodies`/`map_scrutinee` combinators (patterns + arm count/order untouchable by construction; all 5 cross-crate rebuild sites migrated; source-seal test forbids reintroduction), and the unconditional field-access `.clone()` O(n²) closed together with #142 (type-directed Copy elision). | Bug-29 (`any`-return matches any `Ty::Con`) remains as its own narrowed BACKLOG row — Class-1 guardian-design item, needs a short spec first. | `docs/architecture/class3-kernel-registry-fix-spec-2026-07-09.md` §Item-4 + `docs/architecture/class5-emitter-clone-fix-spec-2026-07-09.md` §3 |
-| | Low | Hardening follow-ups | #53 Emit backend via typed token AST instead of String concatenation | Guardian-design item. | |
-| 2026-07-11 | Low | Hardening follow-ups | Efficiency-audit ledger burn-down (remaining medium/low findings) | Landed the 20 strictly-safe findings of 27 (all 3 highs, 12/13 mediums, 4 lows + 1 low found already closed at HEAD) in one gated batch: solver `Rc<CtorScheme>`/`Rc<Ty>` schemes + `root_content` by-ref peeks + 2-find `unify`; lowerer one-pass `KernelUsage` (9 walks → 1), HashSet record-shape dedup, `Intercepted::Fallthrough` peek reuse, positional `FuncId`; emitter `Callee::Kernel` probe gate + `emit_program` capacity hint; canon `Env` tables behind `Rc`/`make_mut`, interner single `Arc<str>`, parser `rfind` split; runtime single-pass HTML escaper, borrowed SSE attr-diff maps + sky-id, `render_into` shared accumulator, single-buffer `build_style_string`. Gates: workspace nextest 1979/1979 + runtime `--features live` 771/771 + doc tests + clippy `-D warnings` (default AND live feature sets) — golden/equivalence suites prove the byte-identical claim. 7 audit-gated residuals re-filed as their own narrowed row. | `docs/architecture/efficiency-audit-2026-07-02.md` §0 |
-| | Low | Hardening follow-ups | Efficiency-audit residual (7 gated findings): §7 `ModPathId` (determinism/`Ord` guard), §2 scope persistent map (profile-gated), §3 `lower_callee` symbol table (broad diff), §4 Http consts + `record_by_fieldset` keying (shared-keying correctness gate), §5 lexer streaming (byte-identical golden gate), §6 `SafeCssValue` lazy (security-gated) | Each residual is gated by the audit's own safety analysis — see ledger §0. | `docs/architecture/efficiency-audit-2026-07-02.md` |
-| 2026-07-11 | Low | Hardening follow-ups | `Task.fail "str"` (and every call-arg mismatch) rendered the SKY-T0001 diagnostic inverted — `expected String, found Error` — and blamed the callee's span | Root-caused to the Call constraint arm feeding the ACTUAL argument vars straight into the callee's arrow shape, which put the user's argument on unify's *expected* side. Fixed Elm-style: each argument now unifies against a FRESH param var; the callee-vs-shape constraint solves first (param vars adopt the DECLARED types), then each per-arg constraint unifies found=actual-arg vs expected=declared-param at the ARGUMENT's span. `Task.fail "plain string"` now reads `expected Error, found String` and underlines the argument. Non-function-callee orientation (`expected a -> b, found String`) preserved and locked by a companion test. Regressions: `call_arg_mismatch_expected_is_declared_param_found_is_actual_arg` + `calling_a_non_function_keeps_function_shape_on_expected_side` (sky_types). Full workspace nextest 1981/1981 + clippy green. | |
-| 2026-07-11 | Low | Hardening follow-ups | `ipe-index parity --gaps` permanently flagged `DbDec.money go=1 rust=0` even though the kernel is fully wired and SEAL-proven — the Pass-2 route synthesizer mechanically snake-cased `DbDec.money` to `db_dec_money`, which never matches the real `db_decode_money` | Fixed at the route-synthesis level (more honest than a presence-check alias): new `synth_rust_fn` applies family-convention overrides before the mechanical snake-case — every explicit ancestor `("DbDec", …)` row uses the `db_decode_*` prefix, so an Ipê-new DbDec kernel synthesizes under it too (member name still snake-cased: `andThen` → `and_then`). The report row itself now carries the true rust_fn and `parity=ok`. Regression: `dbdec_go_synth_follows_db_decode_family_convention`. Also cleared the tool crate's 4 pre-existing clippy -D warnings failures (identical-if role classifier, doc overindent, type-complexity alias, manual prefix strip) so `cargo clippy --all-targets -- -D warnings` is green for ipe-index. (The alternative fix — adding the route row to `../sky`'s Rust Builder Kernel.hs — remains available but is no longer needed for a green signal.) | |
-| 2026-07-11 | Low | Hardening follow-ups | `DbDecMoney` sat in `RELOCATED` (doc-contract: "relocated from the legacy `kernel_ty` table with a byte-faithful legacy oracle") although the kernel is Ipê-new — it belongs in `FIRST_SCHEMED` | Moved to `FIRST_SCHEMED` with cross-referencing comments in both lists (hole XOR relocation). Zero functional impact by construction (`migrated_set_burndown` pins the union, `first_schemed_were_holes` pins disjointness + schemed-ness — both green), but the burndown ledger's meaning is no longer muddied. | |
-| 2026-07-11 | Low | Hardening follow-ups | A record UPDATE on a now-nominal `PanicInfo`/`TypeInfo`/`ErrorInfo` (`{ p \| message = "x" }`) rejected with the misleading SKY-T0012 "type PanicInfo has no field `message`" — the field IS readable via `p.message`; the real reason is that a nominal builtin has no user-writable record-update form | Landed the dedicated diagnostic the design doc called out: new `TypeError::BuiltinRecordUpdate` → **SKY-T0017** ("built-in type cannot be updated with record syntax", taxonomy 89→90, conforming explain page with the read-vs-rebuild guidance + `Error.unexpected` recipe + nominal/structural glossary). `resolve_deferred`'s record-update peek gains a `BuiltinCon` arm (an args-empty Con owned by `ErrorRecordFields` or equal to `RequestFields.con`) that reports the type BY NAME at the update span instead of falling through to the "no field" wording. Verified end-to-end: `skyc build` renders SKY-T0017 with the new caret message; `skyc explain SKY-T0017` serves the page. Regression: `sky_types::tests::record_update_on_builtin_nominal_is_dedicated_diagnostic` (with an anti-vacuity canon assert). | `docs/architecture/error-record-literal-seal-fix-2026-07-11.md` |
-| 2026-07-09 | — | Hardening follow-ups | AUD-01..08 + AUD-10..15 (audit hardening pass, 13/15 landed; AUD-09 partial) | Full findings + ledger: `docs/architecture/principles-audit-2026-07-09.md`. | |
+FFI is last because the ordering puts the security gate ahead of convenience:
+an untrusted-crate compile must never run unsandboxed.
 
 ---
 
-## B. FFI subsystem — parked until A completes
+## IN-FLIGHT — Fix A: clonable function-value carrier (#221)
 
-The FFI design is complete and reviewed
-(`docs/architecture/ffi-port-spec.md`). Implementation does not start
-until the compiler is done. Scope: **fully-automatic, shim-free
-binding of arbitrary Rust crates** (not Go packages).
+The one open sweep red. `36-composite-server` legally partially-applies a
+captured let-bound function value; our lowerer fail-closes it `SKY-L0126`
+because the general first-class-function carrier is non-`Clone` `Box<dyn Fn>`.
+The reference Rust backend handles the exact shape with a clonable `Arc<dyn Fn>`
+carrier + pre-cloned captures.
 
-**Divergence from Sky:** the reference implementation binds Go
-packages; ipê's FFI binds Rust crates. The subsystem is otherwise
-designed to reach the same fully-automatic, no-user-written-shim
-experience.
+**The fix** flips the general `IrType::Fun` carrier `Box<dyn Fn>` → `Arc<dyn
+Fn>`, so a captured function value becomes `Clone` and the whole
+L0125/L0126/`reject_fn_value_reuse` fail-close family dissolves as
+over-representation — a carrier-level structural fix, not a per-site
+special-case. `clone_class` becomes derived from the emitter's carrier table
+(one predicate, two readers) so the two can never drift. `FnOnceChain` and
+`Decoder` keep their carriers (one-shot / nominal, not the `Fun` family).
 
-*Rationale:* parking FFI keeps the critical path focused; the ordering
-puts the security gate ahead of convenience so an untrusted-crate
-compile can never run unsandboxed. Prove on pure/sync crates first,
-then async SDKs — shim-free binding of async SDKs is the acceptance
-metric.
-
-| Done at | Priority | Road map phase | Task | Notes | Spec |
-|---|---|---|---|---|---|
-| | High | FFI | #40 FFI Phase 0 — inspector hardening (disjoint `tools/` crate) | | `docs/superpowers/plans/2026-07-02-ffi-phase0-inspector.md` + `docs/architecture/ffi-subsystem-design.md` |
-| | Critical | FFI | #41 FFI sandbox — blocking security gate before `ipe add` ships (compiling arbitrary third-party crates is execution of untrusted code) | Security precedes any generation work. | `docs/architecture/ffi-sandbox-and-generator-impl-ready.md` |
-| | High | FFI | #42 FFI consumer port — generator (Haskell → Rust `ipe_ffi` crate) | Depends on the kernel registry. | `docs/architecture/ffi-port-spec.md` + `docs/architecture/ffi-design.md` + `docs/architecture/ffi-rust-subsystem-design.md` |
-| | Medium | FFI | Async FFI bridge — bind async Rust SDKs (tokio-runtime bridge, `AbortOnDrop` cancel propagation, B8 error funnel) | Shim-free async-SDK binding is THE acceptance metric. | `docs/architecture/async-ffi-bridge-design.md` |
-| 2026-07-10 | — | FFI | AUD-10 inspector interim mitigation: refuse `custom-build`/`proc-macro` targets unless `--allow-build-scripts` | Full sandboxing remains #41. | |
+Execution-ready spec: `docs/architecture/fix-a-clone-carrier-execution-spec-2026-07-16.md`.
+Root cause: `docs/architecture/sweep-red-221-l0126-root-cause-2026-07-16.md`.
+Escalated as a multi-lane foundational campaign; sequenced **before** the
+larger clone-relay move/clone-discipline restructure (`fix-a-pre` tag marks the
+rollback point). Expect one re-diagnosis round on `36` after the flip (latent
+`kont` / multi-use members predicted to dissolve, not surprise).
 
 ---
 
-## C. Post-completion program
+## Tier 1 — remaining work
 
-### C.1 — Project rename to `ipe`
+### Sweep to green
 
-Ship a single `ipe` binary spanning the compiler, the future
-interpreter, the project doctor, and watch. Apply consistent naming
-throughout the codebase, retaining a single acknowledgement line in the
-README. The codebase rename itself (#59) is **pre-push** (see the
-CI, oracle & publish phase above, per the Tier-1 chain); C.1 keeps the
-single-`ipe`-binary product scope.
+| Item | Priority | Status |
+|---|---|---|
+| #221 `36-composite-server` SKY-L0126 — Fix A carrier flip | High | in-flight (Defect B landed) |
 
-*Rationale:* one binary and one name is the coherent product identity;
-the acknowledgement line records lineage without diluting it.
+Every other per-example blocker (SEAL breaches, kernel gaps, HttpRequest
+false-fold, entry-point Task.run elision, clone-relay binder sites, stdlib
+Layer-3 resolution, server route-body equivalence) is closed — see the git
+history and `docs/adr/`.
 
-### C.2 — Module-namespace redesign
+### Security hardening (ships before push)
 
-Replace the two-tier core/std split with a **single flat standard
-library**, with nothing imported by default and LSP auto-import on
-first use. Research prelude handling in Rust, Elm, Gleam, Haskell, Go,
-and Zig before committing to the shape.
+The full security tier has landed: opaque `Secret` (#44) and `SqlFragment`
+(#61) sealed newtypes; the Live/HTTP web-security invariants (TLS-gated cookies,
+CSRF double-submit + TLS-gating, CSWSH origin checks, body-size floor); the
+SQL/DB remainder (typed NULL witness, multi-driver compile-time selection,
+tenant-prefix SQL-WHERE enforcement, cacheable-URL parsing); CSS injection
+defences (value-as-data escaping, style-marker forgery sink gates); and the
+blocking-offload / TOCTOU kernel-robustness pass. Decisions are distilled in
+`docs/adr/0004`, `0006`, `0012`, `0013`, `0014`.
 
-### C.3 — Source-name de-abbreviation
+The FFI sandbox (#41) is the one security item deferred — it gates FFI shipping,
+not the push.
 
-Rename abbreviated source identifiers for readability — for example
-`kernel_ty` → `kernel_type`, `Ty::Var` → `Type::Variable`. Idiomatic
-Rust abbreviations are retained.
+### The restructure endgame → push
 
-### C.4 — Guarantee Elm `core` library coverage
+The pre-push work is **one campaign, four ordered steps** (spec:
+`docs/architecture/repo-restructure-spec.md`). Ordering is deliberate: relocate
+before rename before flatten before fmt, so no path or import churns twice and
+fmt seals a settled tree exactly once.
 
-Audit the standard library against `elm/core` and add the missing
-modules and functions (Array, Tuple, Bitwise, and any others the audit
-surfaces). The authoritative `elm/core` inventory is enumerated in
-[`elm-core-coverage.md`](docs/architecture/elm-core-coverage.md).
+| Step | What | Status | Backlog |
+|---|---|---|---|
+| **A** | Repo-layout relocation (`git mv` only; no renames, no import edits) | pending | — |
+| **B** | Sky → Ipê rename (`sky_*`→`ipe_*`, `SKY-`→`IPE-`); **user-review-gated** — classify every finding, user approves a TSV, only then apply; upstream `../sky` refs stay `Sky` | pending | #212 |
+| **C** | Namespace flatten — single flat stdlib, nothing imported by default, LSP auto-import on first use (`namespace-imports-and-packaging-spec.md`) | pending | — |
+| **D** | Sanctioned `cargo fmt` seal (`SKY_ALLOW_FMT=1`), **LAST** — one workspace-wide pass on the settled tree, pinned rustfmt so CI + local agree | pending | #214 |
 
-### C.5 — Evaluate more principled compilation strategies
+Alongside / feeding the push:
 
-Study the reference Haskell backend and `elm/compiler`, and adopt a
-strategy only where it **strictly improves a project principle without
-harming a higher one**. Where a strategy is not adopted, record a
-comparison table capturing the trade-off.
+| Item | Priority | Status | Backlog / spec |
+|---|---|---|---|
+| #35 Examples-sweep ported to skyc + run as the gate | High | ported; gates on #221 landing | — |
+| #110 Oracle full activation (HTML/tui/scenario normalizers, release-skyc rebuild, CI phase-2 flip, divergence corpus) | High | pending | — |
+| #37 CI (examples-sweep.yml + ci.yml) + push to `arthurmaciel/ipe-lang`; includes the upstream-example patch queue | High | pending | — |
+| Publish the honest README (relation-to-Elm-and-Sky framing) after re-running the divergences review | Medium | pending | `docs/README-draft-relation-to-elm-and-sky.md` |
 
-### C.6 — Implement the filed divergent language features
+### Hardening follow-ups (correctness/efficiency debts, non-sweep-blocking)
 
-Implement the language features filed in
-[`docs/divergences-from-sky.md#planned-future-divergences`](docs/divergences-from-sky.md#planned-future-divergences):
-hot-reloading, Std.Ui-as-IR, standalone TEA, deep-update sugar,
-or-patterns, pattern guards, effect-sequencing (`do` block), record
-punning, a dev-only time-travel debugger, and the CI patch queue over
-upstream examples.
-
-**Divergence from Sky:** these features are intentional departures
-from the reference language; each is tracked with its own rationale in
-the divergences ledger. Divergences go last, on a verified-complete
-base.
-
-| Done at | Priority | Road map phase | Task | Notes | Spec |
-|---|---|---|---|---|---|
-| | Medium | Post-completion | #155 Route URL changes to a Msg (Elm `Browser.application` parity), demote the magic `page` field to sugar | First Elm-core-coverage item. | `docs/architecture/url-navigation-msg-design.md` |
-| | Medium | Post-completion | #116 Entry contract (Option C): auto-run Task/backend-app `main` + drop trailing `\|> Task.run` (v0.17.3 pipeCollapsesTask parity) | | `docs/architecture/adopt-from-sky-v0172.md` |
-| | Medium | Post-completion | #128 Drop `Task.run` + `Task.perform` from the Ipê surface (#116 companion) | Departure — first consumer of the CI example-patch-queue. | `docs/architecture/drop-task-run-surface-design.md` |
-| | Medium | Post-completion | #131 `Task.map2..5` + `Task.parallel2..5` (expression forms) + `parallelDo` block | | `docs/architecture/task-combinators.md` |
-| | Medium | Post-completion | #133 Multiline-string margin stripping (anchor = first string character's column) | Departure — output-changing; records an oracle divergence per patch class. | `docs/architecture/multiline-string-margin-stripping-design.md` |
-| | Medium | Post-completion | Idea-7 effect `do` block (scoped effect sequencing; kills the `let _ = TaskExpr` auto-force wart) | DESIGNED 2026-07-04. | `docs/ideas/idea-7-effect-do-block-design.md` |
-| | Medium | Post-completion | C.4 Guarantee Elm `core` library coverage — audit the stdlib against `elm/core`, add missing modules/functions (Array, Tuple, Bitwise, …) | | `docs/architecture/elm-core-coverage.md` + `docs/architecture/elm-core-gap-matrix.md` + `docs/architecture/additive-stdlib-features.md` |
-| | Medium | Post-completion | C.2 Module-namespace redesign: single flat standard library, nothing imported by default, LSP auto-import on first use | Research prelude handling in Rust, Elm, Gleam, Haskell, Go, Zig first. | `docs/architecture/flat-namespace-redesign.md` |
-| | Medium | Post-completion | C.3 Source-name de-abbreviation (`kernel_ty` → `kernel_type`, `Ty::Var` → `Type::Variable`; idiomatic Rust abbreviations retained) | | `docs/architecture/readability-and-naming-audit.md` |
-| | Medium | Post-completion | C.5 Evaluate more principled compilation strategies from the reference Haskell backend + `elm/compiler`; adopt only where a principle strictly improves, else record the comparison table | | `docs/architecture/sky-upstream-learnings.md` |
-| | Medium | Post-completion | C.6 Implement the filed divergent language features (deep-update sugar, or-patterns, pattern guards, record punning, hot-reload family, time-travel debugger, …) | Divergences go last, on a verified-complete base. | `docs/divergences-from-sky.md#planned-future-divergences` |
-| | Medium | Post-completion | #56b Row-var record annotation syntax `{ r \| f : T }` does not parse (SKY-P0001) — reference accepts + monomorphises the callee per record shape | Completeness gap found while investigating #56. Zero corpus usage (not sweep-blocking). Needs per-record-shape callee monomorphisation in the backend first — same machinery the class-1 coupling tripwire needs; land together if possible. | `docs/architecture/row-poly-subset-superset-design.md#gap-filed-row-var-record-annotation-syntax-r--f--t` |
+| Item | Priority | Status | Backlog |
+|---|---|---|---|
+| #210 Register the 4 deferred stdlib families needing emit-layer marshalling (`Std.Cache` residual, `Std.Email`, `Sky.Core.WebSocket`, `Std.Config`) | High | pending | #210 |
+| #169 `ws_client.rs` client-side WebSocket subs — relax over-strict bound in the same commit that first wires their `KernelFn` arm | Medium | pending (unreachable today) | #169 |
+| #170 onSubmit payload classifier — extend `is_definitely_not_callable` to record/tuple/list literal payloads | Low | pending | #170 |
+| #31 make-invalid-states-unrepresentable hardening remainder | Medium | pending | — |
+| #53 Emit backend via a typed token AST instead of `String` concatenation | Low | pending (guardian-design) | — |
+| Efficiency-audit residual (7 gated findings: `ModPathId` `Ord`, scope map, `lower_callee` table, Http consts keying, lexer streaming, `SafeCssValue` lazy) | Low | pending | `docs/architecture/efficiency-audit-2026-07-02.md` |
+| AUD-09 Bug-29 (`any`-return matches any `Ty::Con`) — Class-1 guardian item, needs a short spec | Medium | pending | — |
 
 ---
 
-## D. Longer-horizon / standing
+## Tier 3 — macro / post-completion program
 
-### D.1 — Incremental compilation (salsa)
+Elm-parity and de-abbreviation, on a verified-complete base. Divergences go
+last. The single `ipe` binary and product identity are settled by Steps B/C of
+the restructure.
 
-Introduce salsa-based incremental compilation across the compiler and
-the LSP — the foundation for fast watch and hotpatching.
-
-### D.2 — Standard-library behaviour audit against Elm semantics
-
-Audit standard-library behaviour against Elm semantics, covering at
-least: JSON object key order, integer-decoder strictness, float
-formatting, and null / oneOf / nullable handling.
-
-### D.3 — Full floating-point Set/Dict keys and locale-correct case mapping
-
-Support full floating-point keys in Set and Dict (ordered-float) and
-locale-correct case mapping.
-
-| Done at | Priority | Road map phase | Task | Notes | Spec |
-|---|---|---|---|---|---|
-| | Low | Longer-horizon | D.1 Incremental compilation (salsa) across the compiler and the LSP — foundation for fast watch + hotpatching | | `docs/architecture/incremental-compilation-and-watch.md` + `docs/superpowers/plans/2026-07-03-incremental-salsa.md` |
-| | Low | Longer-horizon | D.2 Standard-library behaviour audit against Elm semantics (JSON key order, integer-decoder strictness, float formatting, null/oneOf/nullable) | | `docs/architecture/stdlib-elm-behaviour-audit-plan.md` |
-| | Low | Longer-horizon | D.3 Full floating-point Set/Dict keys (ordered-float) + locale-correct case mapping | Lifts SKY-L0117. | `docs/architecture/float-keys-and-locale-case-design.md` |
+| Item | Priority | Backlog / spec |
+|---|---|---|
+| Guarantee Elm `core` library coverage — audit stdlib vs `elm/core`, add missing modules (Array, Tuple, Bitwise, …) | Medium | `docs/architecture/elm-core-coverage.md` |
+| #155 Route URL changes to a Msg (Elm `Browser.application` parity); demote the magic `page` field to sugar | Medium | `docs/architecture/url-navigation-msg-design.md` |
+| #116 Entry contract — auto-run Task/backend-app `main`, drop trailing `\|> Task.run` | Medium | `docs/architecture/adopt-from-sky-v0172.md` |
+| #128 Drop `Task.run`/`Task.perform` from the surface (#116 companion) | Medium | `docs/architecture/drop-task-run-surface-design.md` |
+| #131 `Task.map2..5` + `Task.parallel2..5` + `parallelDo` block | Medium | `docs/architecture/task-combinators.md` |
+| #133 Multiline-string margin stripping | Medium | `docs/architecture/multiline-string-margin-stripping-design.md` |
+| Idea-7 effect `do` block (kills the `let _ = TaskExpr` auto-force wart) | Medium | `docs/ideas/idea-7-effect-do-block-design.md` |
+| Source-name de-abbreviation (`kernel_ty`→`kernel_type`, `Ty::Var`→`Type::Variable`; idiomatic Rust abbreviations kept) | Medium | `docs/architecture/readability-and-naming-audit.md` |
+| Evaluate more principled compilation strategies from the reference Haskell backend + `elm/compiler`; adopt only where a principle strictly improves, else record the comparison | Medium | `docs/architecture/sky-upstream-learnings.md` |
+| Implement filed divergent features (deep-update sugar, or-patterns, pattern guards, record punning, hot-reload family, time-travel debugger, …) | Medium | `docs/divergences-from-sky.md#planned-future-divergences` |
+| #56b Row-var record annotation syntax `{ r \| f : T }` (needs per-record-shape callee monomorphisation) | Medium | `docs/adr/0018-row-poly-records-pinned-before-lowering.md` |
+| #207 Ipê-level source lint tool (elm-review / clippy shaped, over the typed AST) — DEPARTURE from Sky | Low | #207 |
+| #208 Refuse a wildcard `case` arm on a finite-variant ADT (force exhaustive arms) — DEPARTURE from Elm | Low | #208 |
+| #209 Co-located property verification (`verify` blocks: examples + compiler-checked laws) — EXTENSION, deferred pending validity review | Low | #209 (deferred) |
 
 ---
 
-## E. Designed compilation targets (specs approved; priority to be set)
+## Tier 2 — FFI (last)
 
-Each has a complete, security-reviewed design spec; sequencing against
-sections A–D is a product decision.
+Design complete and reviewed (`docs/architecture/ffi-port-spec.md`).
+Implementation starts only after Tier 1. Scope: **fully-automatic, shim-free
+binding of arbitrary Rust crates** (the reference binds Go packages; this is a
+recorded divergence). Prove on pure/sync crates first, then async SDKs —
+shim-free async-SDK binding is the acceptance metric.
 
-### E.1 — WASM / browser target
+| Item | Priority | Spec |
+|---|---|---|
+| #40 FFI Phase 0 — inspector hardening (disjoint `tools/` crate) | High | `docs/architecture/ffi-subsystem-design.md` |
+| #41 FFI sandbox — blocking security gate before `ipe add` ships | Critical | `docs/architecture/ffi-sandbox-and-generator-impl-ready.md` |
+| #42 FFI generator (Haskell → Rust `ipe_ffi` crate); depends on the kernel registry | High | `docs/architecture/ffi-port-spec.md` |
+| Async FFI bridge — bind async Rust SDKs (tokio-runtime bridge, `AbortOnDrop` cancel, error funnel) | Medium | `docs/architecture/async-ffi-bridge-design.md` |
 
-Compile ipê programs to WebAssembly so apps run client-side in the
-browser (TEA in the browser, reusing the ported VNode/diff to drive the
-real DOM), and support an online playground. The design fixes the
-public-bundle secret boundary at compile time (server-only effects are
-unrepresentable under `--target wasm`; a distinct `HydrationState` type
-gates what may enter the SSR hydration island) and preserves the
-no-eval / strict-CSP posture. Spec:
-[`wasm-target.md`](docs/architecture/wasm-target.md).
+---
 
-### E.2 — Static compilation (portable single binaries)
+## Longer-horizon / standing
 
-Produce fully-static, portable binaries — musl on Linux, static-CRT on
-Windows, with an honest macOS limitation — with a pure-Rust **`dlmalloc`
-default allocator** (clears the musl-malloc throughput cliff without a C
-dependency, per the security-first order); mimalloc is an explicit,
-notice-emitting opt-in. Spec:
-[`static-compilation.md`](docs/architecture/static-compilation.md).
+| Item | Priority | Spec |
+|---|---|---|
+| Incremental compilation (salsa) across the compiler + LSP — foundation for fast watch + hotpatching | Low | `docs/architecture/incremental-compilation-and-watch.md` |
+| Standard-library behaviour audit vs Elm semantics (JSON key order, integer-decoder strictness, float formatting, null/oneOf/nullable) | Low | `docs/architecture/stdlib-elm-behaviour-audit-plan.md` |
+| Full floating-point Set/Dict keys (ordered-float) + locale-correct case mapping (lifts SKY-L0117) | Low | `docs/architecture/float-keys-and-locale-case-design.md` |
 
-### E.3 — Language server (LSP)
+---
 
-A salsa-backed, editor-agnostic language server: diagnostics, hover,
-go-to-definition, completion, semantic tokens, formatting, and rename —
-reusing the compiler's single type-checker (no divergent analyzer). Its
-headline feature is **TEA scaffolding** — snippets, code actions ("add
-`Msg` variant + matching `update` arm", "convert `main = Task.run` to a
-worker"), and lints/hints — delivered over standard LSP so it works in
-most editors. Every generated edit passes a `VerifiedEdit` gate that
-re-checks the whole edit blast radius, so a scaffold can never break the
-build. Spec: [`ipe-lsp.md`](docs/architecture/ipe-lsp.md).
+## Designed compilation targets (specs approved; sequencing is a product call)
 
-### E.4 — TEA everywhere (opt-in worker shape)
+Each has a complete, security-reviewed spec; where each lands against the tiers
+above is a product decision.
 
-Make The Elm Architecture an opt-in program shape for every backend —
-including a headless `Std.Worker.program` (init / update / subscriptions,
-no view) for CLI and long-running processes, modelled on Elm's
-`Platform.worker`. Least-intrusive: existing entries (`main = Task.run`,
-`Live.app`, `Server.listen`) are byte-unchanged; TEA is strictly
-additive and reuses the ported TEA runtime. The headless loop terminates
-soundly by tracking live source-task liveness (a signal-only daemon
-stays alive for SIGTERM; a quiescent worker exits cleanly). Spec:
-[`tea-everywhere.md`](docs/architecture/tea-everywhere.md).
-
-*Implementation invariants (from the design review, to enforce at build
-time):* sequence the counter Acquire-loads before `try_recv`; `select!`
-over mailbox-recv and a quit-notify so a full-mailbox daemon still
-observes SIGTERM; abort (not await) source tasks during the quit-drain.
-
-| Done at | Priority | Road map phase | Task | Notes | Spec |
-|---|---|---|---|---|---|
-| | Low | Designed targets | E.1 WASM / browser target (TEA in the browser, playground; compile-time public-bundle secret boundary) | | `docs/architecture/wasm-target.md` |
-| | Low | Designed targets | E.2 Static compilation — portable single binaries (musl / static-CRT; `dlmalloc` default allocator) | | `docs/architecture/static-compilation.md` + `docs/superpowers/plans/2026-07-03-static-compilation.md` |
-| | Low | Designed targets | E.3 Language server (LSP) — salsa-backed, TEA scaffolding, `VerifiedEdit` gate | | `docs/architecture/ipe-lsp.md` + `docs/superpowers/plans/2026-07-03-lsp.md` |
-| | Low | Designed targets | E.4 TEA everywhere — opt-in headless `Std.Worker.program` shape for every backend | Implementation invariants recorded in the spec (Acquire-loads before `try_recv`; `select!` over mailbox + quit-notify; abort source tasks during quit-drain). | `docs/architecture/tea-everywhere.md` |
+- **WASM / browser target** — TEA in the browser, online playground; the
+  public-bundle secret boundary is fixed at compile time (server-only effects
+  unrepresentable under `--target wasm`; a distinct `HydrationState` gates the
+  SSR hydration island); no-eval / strict-CSP posture preserved.
+  `docs/architecture/wasm-target.md`.
+- **Static compilation** — portable single binaries (musl on Linux, static-CRT
+  on Windows, honest macOS limitation) with a pure-Rust `dlmalloc` default
+  allocator; mimalloc an explicit notice-emitting opt-in.
+  `docs/architecture/static-compilation.md`.
+- **Language server (LSP)** — salsa-backed, reusing the compiler's one
+  type-checker; headline feature is TEA scaffolding (snippets, code actions,
+  lints), every generated edit behind a `VerifiedEdit` re-check gate.
+  `docs/architecture/ipe-lsp.md`.
+- **TEA everywhere** — opt-in headless `Std.Worker.program` shape for every
+  backend, modelled on Elm's `Platform.worker`; strictly additive (existing
+  entries byte-unchanged), sound headless termination via source-task liveness.
+  `docs/architecture/tea-everywhere.md`.
