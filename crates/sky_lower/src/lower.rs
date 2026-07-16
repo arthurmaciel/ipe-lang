@@ -365,6 +365,52 @@ fn is_http_request_canon_shape(fields: &mut [(&str, &canon::Type)], interner: &I
 /// takes (same mechanism as the `HttpRequest` fold above).
 const CACHE_CFG_FIELDS: &[&str] = &["maxBytes", "maxEntries", "ttlMs"];
 
+/// The canonical `Sky.Core.WebSocket.WebSocketCfg` field NAMES *and* TYPES,
+/// alphabetically sorted by name — `headers : List (String, String)`,
+/// `pingInterval : Int`, `timeout : Int`, `url : String`. A record of exactly
+/// this shape folds to the nominal `IrType::WebSocketClientCfg`
+/// (`sky_runtime::ws_client::WsClientCfg`) so a `WebSocket.defaultCfg`-built
+/// record literal constructs the runtime struct the `web_socket_connect_with`
+/// kernel takes (same mixed-type mechanism as the `HttpRequest` fold above,
+/// reusing the shared [`HttpFieldTy`] leaf matcher).
+const WEBSOCKET_CFG_FIELD_TYPES: &[(&str, HttpFieldTy)] = &[
+    ("headers", HttpFieldTy::StrPairList),
+    ("pingInterval", HttpFieldTy::Int),
+    ("timeout", HttpFieldTy::Int),
+    ("url", HttpFieldTy::Str),
+];
+
+/// Does `fields` (as `(resolved name, &Ty)` pairs) match the canonical
+/// `WebSocketCfg` shape — same field NAMES *and* TYPES as
+/// [`WEBSOCKET_CFG_FIELD_TYPES`]? Sorts `fields` by name in place.
+fn is_websocket_cfg_shape(fields: &mut [(&str, &Ty)], interner: &Interner) -> bool {
+    if fields.len() != WEBSOCKET_CFG_FIELD_TYPES.len() {
+        return false;
+    }
+    fields.sort_unstable_by_key(|(name, _)| *name);
+    fields.iter().zip(WEBSOCKET_CFG_FIELD_TYPES.iter()).all(
+        |((name, ty), (expected_name, expected_ty))| {
+            *name == *expected_name && ty_matches_http_field(ty, *expected_ty, interner)
+        },
+    )
+}
+
+/// The [`canon::Type`] twin of [`is_websocket_cfg_shape`].
+fn is_websocket_cfg_canon_shape(
+    fields: &mut [(&str, &canon::Type)],
+    interner: &Interner,
+) -> bool {
+    if fields.len() != WEBSOCKET_CFG_FIELD_TYPES.len() {
+        return false;
+    }
+    fields.sort_unstable_by_key(|(name, _)| *name);
+    fields.iter().zip(WEBSOCKET_CFG_FIELD_TYPES.iter()).all(
+        |((name, ty), (expected_name, expected_ty))| {
+            *name == *expected_name && canon_ty_matches_http_field(ty, *expected_ty, interner)
+        },
+    )
+}
+
 /// the canonical `Std.Cache.stats` return field-name set, alphabetically
 /// sorted: `evictions`, `hits`, `misses` — all `Int`. Folded to the nominal
 /// `IrType::CacheStats` (`sky_runtime::cache::CacheStats`).
@@ -977,6 +1023,7 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         // Cache config / stats + Csv document are plain data records — no
         // function.
         | IrType::CacheCfg
+        | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc => false,
         // `LiveRoute page` carries the page type it builds — recurse (the
@@ -1072,6 +1119,7 @@ fn clone_class(t: &IrType) -> CloneClass {
         // Cache config / stats + Csv document runtime structs are `Clone` (no
         // `Copy`).
         | IrType::CacheCfg
+        | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc => CloneClass::CloneOk,
         // Non-Clone: function-typed, task, decoder, Cmd, Sub.
@@ -3753,6 +3801,7 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         // Cache config / stats + Csv document are non-parametric — mention no
         // type var.
         | IrType::CacheCfg
+        | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc => false,
     }
@@ -3893,6 +3942,18 @@ fn apply_kernel_type_param_bounds(
     let display_matcher = |tracked: Symbol, k: KernelFn, args: &[Expr]| -> bool {
         matches!(k, KernelFn::BasicsToString) && arg_is_tracked_var(args, 0, tracked)
     };
+    // `Sub.subscribeWebSocket raw kind msg` — the bare `msg` (arg index 2) is
+    // MOVED into the `sub_subscribe_ws_open<M: Send + 'static>` runtime fn (the
+    // backend peephole routes the "open" kind there), which stores it in a
+    // `SkySub::Source` closure that is `Box<dyn FnOnce(..) + Send>`. The value
+    // therefore needs `Send + 'static`. The message/close/error kinds pass a
+    // BOXED callback (already `Send + 'static`), so this obligation is about the
+    // bare-value onOpen path — but firing it whenever `msg` is a tracked Var is
+    // sound for all four (the closure-typed kinds never bind their `toMsg`
+    // directly as a bare `Generic(tv)` param binder, so `fires_on` won't match).
+    let ws_open_msg_matcher = |tracked: Symbol, k: KernelFn, args: &[Expr]| -> bool {
+        matches!(k, KernelFn::SubSubscribeWebSocket) && arg_is_tracked_var(args, 2, tracked)
+    };
 
     for (tv, bounds) in type_params.iter_mut() {
         let is_wildcard = is_wildcard_any_tv(interner, *tv);
@@ -3912,6 +3973,12 @@ fn apply_kernel_type_param_bounds(
         // Display — wildcard OR named.
         if fires_on(&display_matcher) {
             *bounds = bounds.with_display();
+        }
+        // `Send + 'static` — the bare `onOpen` msg moved into the
+        // `sub_subscribe_ws_open` Source closure. Wildcard OR named (the msg is a
+        // genuine `msg` tvar in the `onOpen` wrapper).
+        if fires_on(&ws_open_msg_matcher) {
+            *bounds = bounds.with_send();
         }
         // `'static` — wildcard OR named. NOT a kernel-on-param obligation:
         // the tvar appears in the TYPE of a boxed callback (a `FuncValue` /
@@ -5291,6 +5358,9 @@ struct KernelUsage {
     tui: bool,
     /// Any Std.Webview kernel.
     webview: bool,
+    /// Any outbound `Sky.Core.WebSocket` client kernel — gates the
+    /// `websocket_client` Cargo feature + `ws_client` runtime module.
+    websocket: bool,
 }
 
 impl KernelUsage {
@@ -5305,6 +5375,7 @@ impl KernelUsage {
             && self.live
             && self.tui
             && self.webview
+            && self.websocket
     }
 
     /// OR in the family flags for one kernel callee.
@@ -5318,6 +5389,7 @@ impl KernelUsage {
         self.live |= k.is_live();
         self.tui |= k.is_tui();
         self.webview |= k.is_webview();
+        self.websocket |= k.is_websocket_client();
     }
 }
 
@@ -6944,6 +7016,10 @@ impl<'a> Lowerer<'a> {
         // the emitted `sky_runtime/mod.rs`.
         let uses_auth = kernel_usage.auth;
 
+        // detect outbound Sky.Core.WebSocket client usage — the backend adds the
+        // `websocket_client` Cargo feature + `ws_client` runtime module.
+        let uses_websocket = kernel_usage.websocket;
+
         let module = Module {
             name: ModPath(self.m.name.clone()),
             types: types_ir,
@@ -6958,6 +7034,7 @@ impl<'a> Lowerer<'a> {
             uses_webview,
             uses_css,
             uses_auth,
+            uses_websocket,
         };
         Ok(Program {
             modules: vec![module],
@@ -8646,6 +8723,12 @@ impl<'a> Lowerer<'a> {
                 if is_csv_doc_canon_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::CsvDoc);
                 }
+                // fold the nominal Sky.Core.WebSocket connect-config record
+                // annotation shape to the opaque runtime `IrType::WebSocketClientCfg`
+                // — twin of the solved-Ty fold.
+                if is_websocket_cfg_canon_shape(&mut named_fields, self.interner) {
+                    return Ok(IrType::WebSocketClientCfg);
+                }
                 let mut ir_fields = BTreeMap::new();
                 for (name, fty) in fields {
                     ir_fields.insert(*name, self.ir_type_from_canon(fty, generics)?);
@@ -9604,6 +9687,13 @@ impl<'a> Lowerer<'a> {
                 // runtime struct (see `emit_record`).
                 if is_csv_doc_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::CsvDoc);
+                }
+                // fold the nominal Sky.Core.WebSocket connect-config record shape
+                // to the runtime `WsClientCfg` struct — same rationale: the
+                // `web_socket_connect_with` kernel takes it, so a synthesised
+                // `Rec…` struct would mismatch it (E0308).
+                if is_websocket_cfg_shape(&mut named_fields, self.interner) {
+                    return Ok(IrType::WebSocketClientCfg);
                 }
                 let mut lowered = BTreeMap::new();
                 for (name, field_ty) in fields {
@@ -13458,7 +13548,11 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HttpStreamClose
                 | KernelFn::UiColorCss
                 // ── Sky.Http.Server.WebSocket arity-1 ──────────────────
-                | KernelFn::WsCloseClient,
+                | KernelFn::WsCloseClient
+                // ── Sky.Core.WebSocket client arity-1 ──────────────────
+                | KernelFn::WebSocketConnect
+                | KernelFn::WebSocketConnectWith
+                | KernelFn::WebSocketClose,
             ) => Ok(1),
             Callee::Kernel(
                 KernelFn::AuthHashPasswordCost
@@ -13479,13 +13573,21 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::WsUpgrade
                 | KernelFn::WsSendToClient
                 | KernelFn::WsSendBinaryToClient
-                | KernelFn::WsBroadcast,
+                | KernelFn::WsBroadcast
+                // ── Sky.Core.WebSocket client arity-2 ──────────────────
+                | KernelFn::WebSocketSend
+                | KernelFn::WebSocketSendBinary,
             ) => Ok(2),
             Callee::Kernel(
                 KernelFn::AuthSignToken
                 | KernelFn::AuthRegister
                 | KernelFn::AuthLogin
-                | KernelFn::AuthSetRole,
+                | KernelFn::AuthSetRole
+                // ── Sky.Core.WebSocket client arity-3 ──────────────────
+                // `closeWithCode : Int -> String -> Int -> Task Error ()`
+                // `subscribeWebSocket : Int -> String -> (any -> msg) -> Sub msg`
+                | KernelFn::WebSocketCloseWithCode
+                | KernelFn::SubSubscribeWebSocket,
             ) => Ok(3),
             // ── Std.Ui.Lazy ────────────────────────────────────────────
             // lazy  : (a -> Element msg) -> a -> Element msg          — arity 2
@@ -16545,6 +16647,7 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         // Cache config / stats + Csv document are non-parametric — no generic
         // syms.
         | IrType::CacheCfg
+        | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc => {}
     }
@@ -16754,6 +16857,17 @@ mod tests {
         KernelFn::CacheClear,
         KernelFn::CacheSize,
         KernelFn::CacheStats,
+        // Sky.Core.WebSocket — outbound client. Resolved exclusively through the
+        // `Ffi.kernel "WebSocket_*"` / `"Sub_subscribeWebSocket"` alias fast-path
+        // (the `WebSocket` qualifier is a compiled-source module name, never a
+        // legacy `QUALIFIERS` entry), so no legacy `lower_callee` arm exists.
+        KernelFn::WebSocketConnect,
+        KernelFn::WebSocketConnectWith,
+        KernelFn::WebSocketSend,
+        KernelFn::WebSocketSendBinary,
+        KernelFn::WebSocketClose,
+        KernelFn::WebSocketCloseWithCode,
+        KernelFn::SubSubscribeWebSocket,
     ];
 
     /// Verifies that for every non-excluded variant in `KernelFn::ALL`, the

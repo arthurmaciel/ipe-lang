@@ -145,6 +145,7 @@ const TAG_SECRET: u8 = 46;
 const TAG_CACHE_CFG: u8 = 47;
 const TAG_CACHE_STATS: u8 = 48;
 const TAG_CSV_DOC: u8 = 49;
+const TAG_WEBSOCKET_CLIENT_CFG: u8 = 50;
 /// Fuel exhaustion marker — distinct from every variant tag.
 const TAG_FUEL_EXHAUSTED: u8 = 0xFF;
 
@@ -193,6 +194,7 @@ fn hash_ty(ctx: &EmitCtx, ty: &IrType, h: &mut Sha256, fuel: u32) -> DResult<()>
         IrType::CacheCfg => h.update([TAG_CACHE_CFG]),
         IrType::CacheStats => h.update([TAG_CACHE_STATS]),
         IrType::CsvDoc => h.update([TAG_CSV_DOC]),
+        IrType::WebSocketClientCfg => h.update([TAG_WEBSOCKET_CLIENT_CFG]),
 
         IrType::Task(inner) => {
             h.update([TAG_TASK]);
@@ -451,6 +453,7 @@ mod tests {
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_websocket: false,
             }],
         }
     }

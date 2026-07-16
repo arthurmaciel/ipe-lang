@@ -666,6 +666,7 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::CacheCfg => "CacheCfg",
         IrType::CacheStats => "CacheStats",
         IrType::CsvDoc => "Csv",
+        IrType::WebSocketClientCfg => "WebSocketCfg",
     }
 }
 
@@ -735,6 +736,7 @@ mod schema_tag_tests {
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_websocket: false,
             }],
         };
         let ctx = EmitCtx::build(&interner, &program, DbDriver::Sqlite)?;

@@ -263,6 +263,7 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         // not serde, never persisted to a session store — not valid Model
         // leaves.
         | IrType::CacheCfg
+        | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc
         // `SqlFragment` is a query-building value, never

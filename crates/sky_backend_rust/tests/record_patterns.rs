@@ -65,6 +65,7 @@ fn program(name: Symbol, funcs: Vec<Func>, entry: Option<FuncId>) -> Program {
             uses_webview: false,
             uses_css: false,
             uses_auth: false,
+            uses_websocket: false,
         }],
     }
 }
