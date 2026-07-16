@@ -513,6 +513,29 @@ struct Builtins {
     cache_f_misses: Symbol,
     /// `"evictions"` — `Std.Cache.stats` return field `evictions : Int`.
     cache_f_evictions: Symbol,
+    // ── #210 Std.Email type + record field symbols ────────────────────────────
+    /// `"EmailProvider"` — the opaque `Std.Email.EmailProvider` ADT constructor
+    /// (`Resend`/`Ses`/`SendGrid`/`Smtp`).  Backed by
+    /// `sky_runtime::email::EmailProvider`; lowered to `IrType::EmailProvider`.
+    email_provider: Symbol,
+    /// `EmailMessage` record field names (`sky_runtime::email::EmailMessage`).
+    email_f_from: Symbol,
+    email_f_to: Symbol,
+    email_f_cc: Symbol,
+    email_f_bcc: Symbol,
+    email_f_subject: Symbol,
+    email_f_text_body: Symbol,
+    email_f_html_body: Symbol,
+    email_f_attachments: Symbol,
+    email_f_reply_to: Symbol,
+    /// `Attachment` record field names (`sky_runtime::email::EmailAttachment`)
+    /// — the `attachments` element shape carried inside `EmailMessage`.
+    email_f_filename: Symbol,
+    email_f_mime_type: Symbol,
+    email_f_content: Symbol,
+    // `SesConfig` / `SmtpConfig` record shapes are folded by the lowerer via
+    // field-name string constants (`sky_lower`), not through a kernel scheme, so
+    // no interned field symbols for them are needed here.
 }
 
 impl Builtins {
@@ -667,6 +690,20 @@ impl Builtins {
             cache_f_hits: interner.intern("hits")?,
             cache_f_misses: interner.intern("misses")?,
             cache_f_evictions: interner.intern("evictions")?,
+            // ── #210 Std.Email type + record field symbols ───────────────────
+            email_provider: interner.intern("EmailProvider")?,
+            email_f_from: interner.intern("from")?,
+            email_f_to: interner.intern("to")?,
+            email_f_cc: interner.intern("cc")?,
+            email_f_bcc: interner.intern("bcc")?,
+            email_f_subject: interner.intern("subject")?,
+            email_f_text_body: interner.intern("textBody")?,
+            email_f_html_body: interner.intern("htmlBody")?,
+            email_f_attachments: interner.intern("attachments")?,
+            email_f_reply_to: interner.intern("replyTo")?,
+            email_f_filename: interner.intern("filename")?,
+            email_f_mime_type: interner.intern("mimeType")?,
+            email_f_content: interner.intern("content")?,
             // ── Order ADT (#123) ─────────────────────────────────────────────
             order: interner.intern("Order")?,
             lt: interner.intern("LT")?,
@@ -3680,6 +3717,42 @@ impl<'a> Builder<'a> {
             m.insert(self.builtins.cache_f_evictions, int());
             Ty::Record(m, RowTail::Closed)
         };
+        // #210 Std.Email: `EmailProvider` opaque ADT (runtime
+        // `sky_runtime::email::EmailProvider`). Empty-module `Con` (home-
+        // insensitive lowering, same posture as `ws_server`); the Sky
+        // `type EmailProvider` declaration unifies with it structurally by name.
+        let email_provider = || Ty::Con {
+            module: Vec::new(),
+            name: self.builtins.email_provider,
+            args: Vec::new(),
+        };
+        // `EmailMessage` — closed 9-field record (runtime
+        // `sky_runtime::email::EmailMessage`). The lowerer folds a value of this
+        // exact shape to the nominal `IrType::EmailMessage` so a
+        // `defaultMessage`-built record literal constructs the runtime struct the
+        // `email_send` kernel takes (mirrors the `CsvDoc` / `CacheCfg` folds).
+        let email_message_rec = || {
+            let mut m = BTreeMap::new();
+            m.insert(self.builtins.email_f_from, string());
+            m.insert(self.builtins.email_f_to, list(string()));
+            m.insert(self.builtins.email_f_cc, list(string()));
+            m.insert(self.builtins.email_f_bcc, list(string()));
+            m.insert(self.builtins.email_f_subject, string());
+            m.insert(self.builtins.email_f_text_body, string());
+            m.insert(self.builtins.email_f_html_body, string());
+            // `attachments : List Attachment` — the element is the runtime
+            // `EmailAttachment` record shape `{ filename, mimeType, content }`.
+            let mut att = BTreeMap::new();
+            att.insert(self.builtins.email_f_filename, string());
+            att.insert(self.builtins.email_f_mime_type, string());
+            att.insert(self.builtins.email_f_content, string());
+            m.insert(
+                self.builtins.email_f_attachments,
+                list(Ty::Record(att, RowTail::Closed)),
+            );
+            m.insert(self.builtins.email_f_reply_to, string());
+            Ty::Record(m, RowTail::Closed)
+        };
         let attr = |m: Ty| Ty::Con {
             module: Vec::new(),
             name: self.builtins.attribute,
@@ -5900,6 +5973,13 @@ impl<'a> Builder<'a> {
             K::CacheSize => fun(int(), task(int())),
             K::CacheStats => fun(int(), task(cache_stats_rec())),
 
+            // ── Std.Email ─────────────────────────────────────────────────────────
+            // send : EmailProvider -> EmailMessage -> Task Error String
+            K::EmailSend => fun(
+                email_provider(),
+                fun(email_message_rec(), task(string())),
+            ),
+
             // ── Ui.link ──────────────────────────────────────────────────────────
             // link : List (Attribute msg) -> { url : String, label : Element msg }
             //      -> Element msg
@@ -7770,6 +7850,8 @@ mod registry_phase_c_tests {
             K::CacheClear,
             K::CacheSize,
             K::CacheStats,
+            // ── Std.Email (#210; 1) ──────────────────────────────────────────
+            K::EmailSend,
             // ── Std.PubSub (#215; 2) ─────────────────────────────────────
             // Moved from KNOWN_UNBACKED: runtime exists, emit arm wired
             // (`pubsub_publish::<_, SkyError>`), scheme `String -> a -> Task Error Int`.

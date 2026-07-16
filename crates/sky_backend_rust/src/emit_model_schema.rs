@@ -37,8 +37,8 @@
 
 use sha2::{Digest, Sha256};
 use sky_diagnostics::{DResult, Diagnostic};
-use sky_ir::{IrType, ModPath};
 use sky_intern::Symbol;
+use sky_ir::{IrType, ModPath};
 
 use crate::EmitCtx;
 
@@ -145,6 +145,11 @@ const TAG_SECRET: u8 = 46;
 const TAG_CACHE_CFG: u8 = 47;
 const TAG_CACHE_STATS: u8 = 48;
 const TAG_CSV_DOC: u8 = 49;
+const TAG_EMAIL_MESSAGE: u8 = 50;
+const TAG_EMAIL_ATTACHMENT: u8 = 51;
+const TAG_EMAIL_SES_CONFIG: u8 = 52;
+const TAG_EMAIL_SMTP_CONFIG: u8 = 53;
+const TAG_EMAIL_PROVIDER: u8 = 54;
 /// Fuel exhaustion marker — distinct from every variant tag.
 const TAG_FUEL_EXHAUSTED: u8 = 0xFF;
 
@@ -193,6 +198,11 @@ fn hash_ty(ctx: &EmitCtx, ty: &IrType, h: &mut Sha256, fuel: u32) -> DResult<()>
         IrType::CacheCfg => h.update([TAG_CACHE_CFG]),
         IrType::CacheStats => h.update([TAG_CACHE_STATS]),
         IrType::CsvDoc => h.update([TAG_CSV_DOC]),
+        IrType::EmailMessage => h.update([TAG_EMAIL_MESSAGE]),
+        IrType::EmailAttachment => h.update([TAG_EMAIL_ATTACHMENT]),
+        IrType::EmailSesConfig => h.update([TAG_EMAIL_SES_CONFIG]),
+        IrType::EmailSmtpConfig => h.update([TAG_EMAIL_SMTP_CONFIG]),
+        IrType::EmailProvider => h.update([TAG_EMAIL_PROVIDER]),
 
         IrType::Task(inner) => {
             h.update([TAG_TASK]);
@@ -451,6 +461,7 @@ mod tests {
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_email: false,
             }],
         }
     }
