@@ -44,7 +44,7 @@ use sky_backend::Backend;
 use sky_backend_rust::RustBackend;
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::{Interner, Symbol};
-use sky_ir::{
+use sky_ir::{OnFormKind, 
     CallPin, Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Pat, Program,
 };
 
@@ -133,11 +133,11 @@ fn getx_program(interner: &mut Interner) -> DResult<Program> {
                     callee: Callee::Func(FuncId::from_raw(0)),
                     args: vec![Expr::Record(vec![(x, Expr::Int(7)), (y, Expr::Int(2))])],
                     pin: CallPin::None,
-                }],
+                    on_form: OnFormKind::NotForm,                }],
                 pin: CallPin::None,
-            }],
+                on_form: OnFormKind::NotForm,            }],
             pin: CallPin::None,
-        },
+            on_form: OnFormKind::NotForm,        },
     };
 
     Ok(program(

@@ -1546,6 +1546,19 @@ pub enum Expr {
         /// the pre-#181 output. Every IR→IR rewrite that reconstructs a `Call`
         /// MUST preserve this field.
         pin: CallPin,
+        /// Type-directed form-submit handler classification for the
+        /// `onSubmit` kernel family (`Ui.onSubmit` / `Std.Html.Events.onSubmit`).
+        /// The runtime's `Event::OnForm` slot accepts either a DECODER
+        /// (`FormData -> Option<Msg>`, from a `T -> Msg` handler) or a FIXED
+        /// value (`Msg`, from a bare non-function handler). Which one is a
+        /// property of the handler's SOLVED type — an arrow vs a non-arrow —
+        /// known only to the HM solver at lower time, never re-derivable from
+        /// the payload's SYNTAX at emit time (a `Var` bound to a bare `Msg`
+        /// reads identically to a `Var` bound to a decoder function). The
+        /// lowerer records the verdict here so the backend dispatches
+        /// mechanically. For every non-`onSubmit` call this stays
+        /// [`OnFormKind::NotForm`] and emission is byte-identical.
+        on_form: OnFormKind,
     },
     /// A tuple constructor `(e1, e2, ...)`.
     ///
@@ -1810,6 +1823,42 @@ impl CallPin {
             Self::ErrSkyError => "::<SkyError>",
         }
     }
+}
+
+/// How an `onSubmit`-family call ([`Expr::Call`] whose callee is
+/// `Ui.onSubmit` / `Std.Html.Events.onSubmit`) dispatches its handler.
+///
+/// The runtime `Event::OnForm` slot is `Arc<dyn Fn(FormData) -> Option<Msg>>`.
+/// A well-typed `onSubmit` handler is one of two SHAPES, distinguished ONLY by
+/// its solved type:
+///
+/// * an ARROW handler `T -> Msg` (a decoder function, a `Creds -> Msg`
+///   constructor, a `\fd -> …` lambda) — the wire `FormData` is decoded into
+///   `T` and mapped through the handler ([`Self::Decoder`]);
+/// * a NON-ARROW handler — a bare `Msg` value (`DoSignUp`, a `let`-bound
+///   `m : Msg`, a record/tuple/list literal that IS the `Msg`) — the form
+///   payload is ignored and the fixed value is dispatched verbatim
+///   ([`Self::FixedValue`]).
+///
+/// This is a property of the HANDLER'S TYPE, not its syntax: `Ui.onSubmit m`
+/// and `Ui.onSubmit decoder` are syntactically identical when `m`/`decoder`
+/// are both `Var`s — only the solver knows which is callable. Deciding it at
+/// emit time from the payload's `Expr` shape is unsound (the reported #228
+/// break: `let m = DoSignUp in onSubmit m` emitted `(m)(_x)`, a cargo `E0618`
+/// after `skyc` exit 0). The lowerer resolves it from the handler's solved
+/// region type and records the verdict here so the backend never guesses.
+///
+/// [`Self::NotForm`] is the default carried by every non-`onSubmit` call; the
+/// backend ignores this field except in the two `onSubmit` emit arms.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, Default)]
+pub enum OnFormKind {
+    /// Not an `onSubmit` call — the field is inert. Byte-identical emission.
+    #[default]
+    NotForm,
+    /// Arrow handler `T -> Msg`: decode `FormData` into `T`, map to `Msg`.
+    Decoder,
+    /// Non-arrow handler: dispatch the fixed `Msg` value, ignore the form.
+    FixedValue,
 }
 
 /// Every stdlib kernel function known to the Sky compiler.
@@ -3239,8 +3288,10 @@ mod tests {
                     callee: Callee::Kernel(KernelFn::StringFromInt),
                     args: vec![Expr::Int(1)],
                     pin: CallPin::None,
+                    on_form: OnFormKind::NotForm,
                 }],
                 pin: CallPin::None,
+                on_form: OnFormKind::NotForm,
             },
         };
         let program = Program {
@@ -3684,7 +3735,7 @@ mod serde_persistence_tests {
 
     use super::{
         Arm, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath,
-        Module, Pat, Program, TypeDef, Variant,
+        Module, OnFormKind, Pat, Program, TypeDef, Variant,
     };
     use crate::pretty::pretty;
 
@@ -3814,6 +3865,7 @@ mod serde_persistence_tests {
                         callee: Callee::Kernel(KernelFn::LogPrintln),
                         args: vec![],
                         pin: CallPin::None,
+                        on_form: OnFormKind::NotForm,
                     },
                 }],
                 entry: None,
