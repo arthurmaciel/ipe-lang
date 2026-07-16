@@ -316,14 +316,16 @@ runtime (each either matches Go or is more correct):
 both match Go exactly and are therefore *not* divergences from Sky. Recorded here
 only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
 
-### B18 — `Ws.sendBinaryToClient` takes `Vec<u8>`, not `String`
+### B18 — WS `sendBinary` (server + client) takes `Vec<u8>`, not `String`
 - **Differs:** Sky defines `type alias Bytes = String`, so the Go reference's
-  `sendBinaryToClient` / `sendBinary` take a `String` (raw bytes in a Go string;
-  cost-free alias). ipê's `Bytes` is a distinct `Vec<u8>` primitive (B2), so
-  `Ws.sendBinaryToClient` takes `Bytes` (`Vec<u8>`) — no lossy UTF-8 hop.
-  Programs that pass binary data through `sendBinaryToClient` work correctly on
-  ipê; the same program on the Go reference relies on Go's transparent
-  `string` ↔ `[]byte` relationship.
+  server `sendBinaryToClient` AND the client `Sky.Core.WebSocket.sendBinary`
+  both take a `String` (raw bytes in a Go string; cost-free alias). ipê's
+  `Bytes` is a distinct `Vec<u8>` primitive (B2), so both `Ws.sendBinaryToClient`
+  and `WebSocket.sendBinary` take `Bytes` (`Vec<u8>`) — no lossy UTF-8 hop. The
+  client stdlib's `sendBinaryRaw` is annotated `Int -> Bytes -> Task Error ()`
+  accordingly (the reference declares `Int -> String`). Programs that pass binary
+  data through either work correctly on ipê; the same program on the Go reference
+  relies on Go's transparent `string` ↔ `[]byte` relationship.
 - **Go-oracle relationship:** Go succeeds; binary frames are representationally
   different (`String` vs `Vec<u8>`). For ASCII-range payloads, output is
   identical. For non-UTF-8 binary payloads, ipê is the correct implementation

@@ -171,6 +171,7 @@ fn tag_program(interner: &mut Interner, payload: Pat) -> DResult<Program> {
             uses_webview: false,
             uses_css: false,
             uses_auth: false,
+            uses_websocket: false,
         }],
     })
 }
@@ -337,6 +338,7 @@ fn alias_program(interner: &mut Interner) -> DResult<(Program, Symbol, Symbol)> 
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_websocket: false,
             }],
         },
         x,

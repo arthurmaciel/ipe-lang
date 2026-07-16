@@ -1116,6 +1116,19 @@ pub enum StdlibKernel {
     WsSendBinaryToClient,   // WebSocketServer -> Bytes -> Task Error () (arity 2)
     WsBroadcast,            // List WebSocketServer -> String -> Task Error () (arity 2)
     WsCloseClient,          // WebSocketServer -> Task Error () (arity 1)
+    // ── Sky.Core.WebSocket — outbound WebSocket client (7 kernels) ──
+    // The 6 Task-tier kernels take/return a raw `Int` socket id (the stdlib
+    // wraps it in the `WebSocket` ADT). `Sub_subscribeWebSocket` is the single
+    // `any`-typed Sub-tier kernel the stdlib routes onOpen/onMessage/onClose/
+    // onError through; the backend peephole splits it on the compile-time literal
+    // `kind` string into the four typed runtime fns (sub_subscribe_ws_*).
+    WebSocketConnect,        // String -> Task Error Int (arity 1)
+    WebSocketConnectWith,    // WebSocketCfg -> Task Error Int (arity 1)
+    WebSocketSend,           // Int -> String -> Task Error () (arity 2)
+    WebSocketSendBinary,     // Int -> Bytes -> Task Error () (arity 2)
+    WebSocketClose,          // Int -> Task Error () (arity 1)
+    WebSocketCloseWithCode,  // Int -> String -> Int -> Task Error () (arity 3)
+    SubSubscribeWebSocket,   // Int -> String -> (any -> msg) -> Sub msg (arity 3)
     // ── Std.Ui.Region ──────────────────────────────────────────────
     RegionMainContent,   // Attribute msg (arity 0)
     RegionNavigation,    // Attribute msg (arity 0)
@@ -2467,6 +2480,31 @@ impl StdlibKernel {
             }
             Self::WsBroadcast => d("Ws", "broadcast", 2, Server, "ws_server_broadcast"),
             Self::WsCloseClient => d("Ws", "closeClient", 1, Server, "ws_server_close_client"),
+            // ── Sky.Core.WebSocket — outbound WebSocket client (7 kernels) ──
+            // The Task-tier six are `Pure`-classed (plain effects, default N-arg
+            // emit like `Http.get`); the runtime fns live in `ws_client.rs`
+            // (gated by the `websocket_client` feature the backend adds via the
+            // `uses_websocket` flag). `Sub_subscribeWebSocket` is `Tea`-classed —
+            // the backend's `emit_tea_call` peephole splits it on the literal
+            // `kind` into the four typed `sub_subscribe_ws_*` runtime fns.
+            Self::WebSocketConnect => d("WebSocket", "connect", 1, Pure, "web_socket_connect"),
+            Self::WebSocketConnectWith => {
+                d("WebSocket", "connectWith", 1, Pure, "web_socket_connect_with")
+            }
+            Self::WebSocketSend => d("WebSocket", "send", 2, Pure, "web_socket_send"),
+            Self::WebSocketSendBinary => {
+                d("WebSocket", "sendBinary", 2, Pure, "web_socket_send_binary")
+            }
+            Self::WebSocketClose => d("WebSocket", "close", 1, Pure, "web_socket_close"),
+            Self::WebSocketCloseWithCode => {
+                d("WebSocket", "closeWithCode", 3, Pure, "web_socket_close_with_code")
+            }
+            // The runtime fn here is a placeholder: the peephole always rewrites
+            // the call to one of `sub_subscribe_ws_{message,open,close,error}`,
+            // so this name is never emitted directly.
+            Self::SubSubscribeWebSocket => {
+                d("Sub", "subscribeWebSocket", 3, Tea, "sub_subscribe_ws_message")
+            }
             // ── Std.Ui.Region ──────────────────────────────────────────────
             Self::RegionMainContent => d("Region", "mainContent", 0, Ui, "ui_region_main_content_"),
             Self::RegionNavigation => d("Region", "navigation", 0, Ui, "ui_region_navigation_"),
@@ -3463,6 +3501,14 @@ impl StdlibKernel {
         Self::WsSendBinaryToClient,
         Self::WsBroadcast,
         Self::WsCloseClient,
+        // ── Sky.Core.WebSocket — outbound WebSocket client (7 kernels) ──
+        Self::WebSocketConnect,
+        Self::WebSocketConnectWith,
+        Self::WebSocketSend,
+        Self::WebSocketSendBinary,
+        Self::WebSocketClose,
+        Self::WebSocketCloseWithCode,
+        Self::SubSubscribeWebSocket,
         // ── Std.Ui.Region ──────────────────────────────────────────────
         Self::RegionMainContent,
         Self::RegionNavigation,
@@ -3708,6 +3754,7 @@ impl StdlibKernel {
                 | Self::PubSubPublish
                 | Self::PubSubPublishNoEcho
                 | Self::HttpStreamChunks
+                | Self::SubSubscribeWebSocket
         )
     }
 
@@ -3768,6 +3815,28 @@ impl StdlibKernel {
                 | Self::WsSendBinaryToClient
                 | Self::WsBroadcast
                 | Self::WsCloseClient
+        )
+    }
+
+    /// `true` when this variant is an outbound `Sky.Core.WebSocket` CLIENT
+    /// kernel (the 6 Task-tier connect/send/close kernels plus the Sub-tier
+    /// `Sub.subscribeWebSocket`).
+    ///
+    /// Used by `sky_lower` to detect `uses_websocket` and by the backend to add
+    /// the `websocket_client` Cargo feature + `ws_client` runtime module (whose
+    /// fns are gated behind that feature — unlike `Http.get`, they are NOT part
+    /// of the always-present M0 base module set).
+    #[must_use]
+    pub const fn is_websocket_client(self) -> bool {
+        matches!(
+            self,
+            Self::WebSocketConnect
+                | Self::WebSocketConnectWith
+                | Self::WebSocketSend
+                | Self::WebSocketSendBinary
+                | Self::WebSocketClose
+                | Self::WebSocketCloseWithCode
+                | Self::SubSubscribeWebSocket
         )
     }
 
