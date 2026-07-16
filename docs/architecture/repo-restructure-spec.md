@@ -91,12 +91,30 @@ are disjoint → merging into `Ipe/` yields no name clash. Nested modules
 (`Core.Http` vs `Http.Server`; `Std.Live.*`, `Std.Ui.*`) nest, not clash. Step C
 owns the import rewrite + the `Ipe.` prefix decisions from the namespace spec.
 
-## Verification (each step)
+## Verification — tiered per-step gate (NOT the full §6 gate ×3)
 
-`git mv` preserves history. After Step A: workspace `cargo build` + full §6 gate
-green (unchanged behavior — pure relocation), fresh `skyc` builds, full example
-sweep unchanged vs pre-move. A red that appears is a rewiring miss, not a
-regression → fix the path, never the code.
+`git mv` preserves history. `cargo check` + `clippy` alone are NOT sufficient
+between steps: they prove the COMPILER compiles, not that it RESOLVES
+paths/stdlib/runtime and EMITS working code — exactly what these steps threaten,
+and those failures are invisible to `check` (which also links no `skyc` binary to
+run the sweep). Match the gate to what each step can break:
+
+- **Fast pre-filter (every step):** `cargo build --workspace` (produces the
+  `skyc`/`ipe` binary) + `cargo clippy --workspace`. Seconds; catches
+  compile/lint breaks before the expensive run.
+- **Load-bearing (every step):** `cargo nextest run --workspace` (golden + E2E +
+  skyc-resolution tests — the layer a move/rename/flatten actually breaks) + the
+  **example sweep** (the ultimate skyc-driven check). Steps B + C regenerate
+  goldens via `refresh-oracle` first.
+- **Deferrable to the END:** `cargo test --doc --workspace` + `cargo nextest run
+  -p <runtime> --features full` + `clippy --workspace --all-targets -D warnings`
+  — EXCEPT Step B (rename) touches runtime identifiers + feature-gated code, so
+  run `--features full` there too.
+- **End of all three:** the complete §6 gate + example sweep 36/36 +
+  cross-platform CI.
+
+A red that appears is a rewiring/rename/import miss, not a logic regression → fix
+the path/name/import, never the code (§0).
 
 ## Rollback
 
