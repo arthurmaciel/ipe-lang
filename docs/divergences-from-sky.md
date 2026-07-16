@@ -258,7 +258,7 @@ runtime (each either matches Go or is more correct):
 - **Rationale:** soundness/efficiency — Rust's move semantics let the last use
   move; over-cloning the last use is incorrect by Rust's standards (wastes an
   allocation on a path where the original is never touched again). Strictly better
-  than the reference. See `docs/architecture/seal-noncopy-move-design.md §4.1`.
+  than the reference. See `docs/adr/0002-seal-noncopy-move-clone-escape-hatch.md` (§4.1).
 - **Verified:** design doc §4.1; reference `ExprEmitter.hs:294,781-787`.
 - **Sanctioned:** yes (`sanctioned:`). Pending fixture goldens for #104.
 
@@ -276,7 +276,7 @@ runtime (each either matches Go or is more correct):
   pattern is the Haskell-emitting-Rust path. ipê's output is correct on this
   shape; the reference's output is wrong when `name` is used in the arm body.
 - **Rationale:** correctness — the reference has a latent bug (alias name dropped
-  → E0425 on use). ipê fixes it. See `docs/architecture/seal-noncopy-move-design.md §4.2`.
+  → E0425 on use). ipê fixes it. See `docs/adr/0002-seal-noncopy-move-clone-escape-hatch.md` (§4.2).
 - **Verified:** design doc §4.2; `ExprEmitter.hs:4206`; existing #96 clone-split
   machinery (`emit_expr.rs:3237`) extended into `emit_arm_head`.
 - **Sanctioned:** yes (`sanctioned:` — correctness improvement over a reference
