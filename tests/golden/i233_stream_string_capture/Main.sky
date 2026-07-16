@@ -1,0 +1,39 @@
+module Main exposing (main)
+
+-- #233. A `Stream.stream` handler that CAPTURES enclosing non-`Copy` `String`
+-- locals (`header`/`body`) — the exact shape of examples/36-composite-server's
+-- Csv-stream export handler.
+--
+-- Pre-fix: the emit-synthesized `move |_x| (handler)(_x)` re-wrap (which
+-- recovers the runtime's `+Sync` bound) captured `header`/`body` and the
+-- re-embedded handler box MOVED them out on the first call, degrading the
+-- wrapper to `FnOnce` — `server_stream_stream`'s `Fn` bound then rejected it
+-- (2x E0507 `cannot move out of a captured variable in an Fn closure`,
+-- AFTER `skyc` exit 0 — a SEAL break).
+--
+-- Fix: the `StreamStream` emit arm pre-clones every free local the handler
+-- captures INSIDE the wrapper body, so the box moves fresh clones and the
+-- wrapper stays `Fn`. This fixture builds the emitted crate with cargo (the
+-- layer that caught #233); a server binary cannot run-to-exit, so the
+-- assertion is a successful cargo build.
+
+import Sky.Http.Server as Server
+import Sky.Http.Server.Stream as Stream
+import Sky.Core.Task as Task
+import Sky.Core.String as String
+
+exportHandler : Server.Request -> Task Error Server.Response
+exportHandler _ =
+    let
+        header = String.append "id," "name\n"
+        body = String.append "1," "alice\n"
+    in
+        Stream.stream "text/csv; charset=utf-8"
+            (\writer ->
+                Stream.emit header writer
+                    |> Task.andThen (\_ -> Stream.emit body writer)
+                    |> Task.andThen (\_ -> Stream.finish writer)
+            )
+
+main =
+    Server.listen 8099 [ Server.get "/export.csv" exportHandler ]

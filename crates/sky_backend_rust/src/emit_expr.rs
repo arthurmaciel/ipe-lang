@@ -2158,6 +2158,39 @@ fn emit_tea_call(
     }
 }
 
+/// Build the capture-clone prologue for the `StreamStream` re-wrap closure.
+///
+/// The `StreamStream` arm wraps the handler in `move |_x| (handler)(_x)` to
+/// recover the runtime's `+Sync` bound by rebuilding the handler box as SOURCE
+/// per call (see the `UiOnSubmit` doc). But the handler's own `move` captures
+/// its enclosing non-`Copy` locals (the `header`/`body` `String`s of a
+/// Csv-stream handler); the re-embedded box steals them from the `move |_x|`
+/// wrapper's env on the first call, so the wrapper degrades to `FnOnce` and
+/// `server_stream_stream`'s `Fn` bound rejects it (`E0507` after `skyc` exit
+/// 0 — a SEAL break). The lowerer's capture-clone rewrite only reaches INTO
+/// the handler body; this synthesized wrapper is emit-only, invisible to it.
+///
+/// So this returns a `let <v> = <v>.clone(); …` prologue for every free local
+/// `v` the handler captures, spliced INSIDE the wrapper body: the box moves the
+/// fresh shadowing clones, the wrapper keeps its originals for the next call.
+/// Same shape as the `TaskSeq`/`TaskSeqSync` clone-capture prologue, applied at
+/// an emit-synthesized closure. Every captured free local is `Clone`: an
+/// enclosing value (`Clone` by its carrier type), a `let`-bound handler
+/// promoted to `SharedLambda` (`Arc`, `Clone` — `StreamStream` is in
+/// `requires_sync_capture`), or a `Copy` leaf (whose `.clone()` is a bitwise
+/// copy).
+fn stream_handler_capture_prologue(ctx: &EmitCtx, handler: &Expr) -> DResult<String> {
+    let mut prologue = String::new();
+    for sym in free_vars(handler) {
+        let id = ctx.emit_ident(sym)?;
+        write!(prologue, "let {id} = {id}.clone(); ").map_err(|_| Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::stream_handler_capture_prologue",
+            detail: "writing stream-handler capture-clone prologue failed".to_owned(),
+        })?;
+    }
+    Ok(prologue)
+}
+
 /// Handle a `Sky.Http.Server` / `Middleware` / `RateLimit` kernel call.
 ///
 /// Returns `Ok(None)` for all wired server kernels (they all use the standard
@@ -2263,8 +2296,9 @@ fn emit_server_call(
             let fn_name = kernel_name(*k);
             let ct_s = emit_expr_at(ctx, ct_e, indent, child, generics)?;
             let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
+            let prologue = stream_handler_capture_prologue(ctx, f_e)?;
             Ok(Some(format!(
-                "{fn_name}({ct_s}, move |_x| ({f_s})(_x))"
+                "{fn_name}({ct_s}, move |_x| {{ {prologue}({f_s})(_x) }})"
             )))
         }
 
