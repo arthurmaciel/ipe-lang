@@ -17,7 +17,7 @@ mod pretty;
 pub use ir::{
     Arm, BinOp, BoundSet, CallPin, Callee, EnumDef, Expr, Func, FuncId, HtmlEventShape, IrType,
     KernelFn,
-    Match, ModPath, Module, Pat, Program, TypeDef, UiCtor, UiPlain, Variant, ir_type_is_derivable,
-    ir_type_is_serde, is_dispatch_free, is_irrefutable,
+    Match, ModPath, Module, Pat, Program, TypeDef, UiCtor, UiPlain, Variant, carrier_is_clone,
+    ir_type_is_derivable, ir_type_is_serde, is_dispatch_free, is_irrefutable,
 };
 pub use pretty::pretty;
