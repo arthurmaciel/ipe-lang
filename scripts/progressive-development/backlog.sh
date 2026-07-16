@@ -126,7 +126,11 @@ cmd_add() {
             >> "$JSONL"
         echo "added #$id ($phase / $priority)" >&2
     }
-    with_lock bash -c "$(declare -f _add_locked die); JSONL='$JSONL' priority='$priority' phase='$phase' task='$task' notes='$notes' spec='$spec' blocked_by='$blocked_by' _add_locked"
+    # Pass all fields via exported env vars, not shell interpolation — single-quotes
+    # in task/notes/spec text would break out of the 'var=...' quoting in the
+    # bash -c string, corrupting the JSONL (SSOT-corruption risk).
+    export JSONL priority phase task notes spec blocked_by
+    with_lock bash -c "$(declare -f _add_locked die); _add_locked"
 }
 
 cmd_claim() {
