@@ -41,9 +41,9 @@ use sky_backend::Backend;
 use sky_backend_rust::RustBackend;
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::{Interner, Symbol};
-use sky_ir::{OnFormKind, 
+use sky_ir::{
     Arm, BinOp, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath,
-    Module, Pat, Program, TypeDef, Variant,
+    Module, OnFormKind, Pat, Program, TypeDef, Variant,
 };
 
 fn emit(interner: &Interner, prog: &Program) -> DResult<String> {
@@ -151,11 +151,14 @@ fn maybe_program(i: &mut Interner) -> DResult<Program> {
                         args: vec![Expr::Int(5)],
                     }],
                     pin: CallPin::None,
-                    on_form: OnFormKind::NotForm,                }],
+                    on_form: OnFormKind::NotForm,
+                }],
                 pin: CallPin::None,
-                on_form: OnFormKind::NotForm,            }],
+                on_form: OnFormKind::NotForm,
+            }],
             pin: CallPin::None,
-            on_form: OnFormKind::NotForm,        },
+            on_form: OnFormKind::NotForm,
+        },
     };
 
     Ok(Program {
@@ -173,6 +176,7 @@ fn maybe_program(i: &mut Interner) -> DResult<Program> {
             uses_webview: false,
             uses_css: false,
             uses_auth: false,
+            uses_email: false,
         }],
     })
 }
@@ -235,7 +239,8 @@ fn tree_sum_fn(interner: &mut Interner, syms: &TreeSyms) -> DResult<Func> {
         callee: Callee::Func(FuncId::from_raw(0)),
         args: vec![Expr::Var(arg)],
         pin: CallPin::None,
-        on_form: OnFormKind::NotForm,    };
+        on_form: OnFormKind::NotForm,
+    };
     let arms = vec![
         Arm {
             pat: Pat::Ctor {
@@ -314,11 +319,14 @@ fn tree_main_fn(interner: &mut Interner, syms: &TreeSyms) -> DResult<Func> {
                     callee: Callee::Func(FuncId::from_raw(0)),
                     args: vec![the_tree],
                     pin: CallPin::None,
-                    on_form: OnFormKind::NotForm,                }],
+                    on_form: OnFormKind::NotForm,
+                }],
                 pin: CallPin::None,
-                on_form: OnFormKind::NotForm,            }],
+                on_form: OnFormKind::NotForm,
+            }],
             pin: CallPin::None,
-            on_form: OnFormKind::NotForm,        },
+            on_form: OnFormKind::NotForm,
+        },
     })
 }
 
@@ -343,6 +351,7 @@ fn tree_program(interner: &mut Interner) -> DResult<Program> {
             uses_webview: false,
             uses_css: false,
             uses_auth: false,
+            uses_email: false,
         }],
     })
 }
@@ -482,6 +491,7 @@ fn concrete_multi_field_enum_emits() -> DResult<()> {
             uses_webview: false,
             uses_css: false,
             uses_auth: false,
+            uses_email: false,
         }],
     };
     let out = emit(&interner, &prog)?;

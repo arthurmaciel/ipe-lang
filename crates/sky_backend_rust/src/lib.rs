@@ -109,13 +109,13 @@ impl<'a> RustBackend<'a> {
     ///
     /// Propagates any [`Diagnostic`] from [`EmitCtx::build`] or
     /// [`project::emit_module_file`].
-    pub fn emit_module_file(
-        &self,
-        program: &Program,
-        home: &ModPath,
-    ) -> DResult<String> {
+    pub fn emit_module_file(&self, program: &Program, home: &ModPath) -> DResult<String> {
         let ctx = EmitCtx::build(self.interner, program, self.db_driver)?;
-        project::emit_module_file(&ctx, program, &rust_file::RustFileId::SkyModule(home.clone()))
+        project::emit_module_file(
+            &ctx,
+            program,
+            &rust_file::RustFileId::SkyModule(home.clone()),
+        )
     }
 
     /// Assemble the full split [`EmittedProject`] from already-rendered per-file
@@ -320,6 +320,11 @@ pub(crate) struct EmitCtx<'a> {
     /// When set, [`crate::project::emit_program`] appends
     /// `pub mod auth; pub use auth::*;` to the emitted `sky_runtime/mod.rs`.
     pub(crate) uses_auth: bool,
+    /// `true` when the program uses the `Std.Email` `Email.send` kernel. When
+    /// set, [`crate::project::emit_program`] appends `pub mod email; pub use
+    /// email::*;` to the emitted `sky_runtime/mod.rs` and adds the `lettre`
+    /// dependency to the emitted `Cargo.toml`.
+    pub(crate) uses_email: bool,
     /// The Rust type name for the emitted `SqlValue` enum (e.g. `MainSqlValue`).
     /// `None` when `uses_db` is `false`.
     pub(crate) sqlvalue_rust_name: Option<String>,
@@ -443,8 +448,10 @@ impl<'a> EmitCtx<'a> {
                 enum_names.insert(key.clone(), rust_name.clone());
                 let mut all_fields = Vec::with_capacity(def.variants.len());
                 for variant in &def.variants {
-                    variant_fields
-                        .insert((def.home.clone(), def.name, variant.name), variant.fields.clone());
+                    variant_fields.insert(
+                        (def.home.clone(), def.name, variant.name),
+                        variant.fields.clone(),
+                    );
                     all_fields.push((variant.name, variant.fields.clone()));
                 }
                 enum_variants.insert(key, all_fields);
@@ -719,6 +726,8 @@ impl<'a> EmitCtx<'a> {
 
         // detect Std.Auth kernel usage.
         let uses_auth = program.modules.iter().any(|m| m.uses_auth);
+        // detect Std.Email kernel usage.
+        let uses_email = program.modules.iter().any(|m| m.uses_email);
 
         Ok(Self {
             interner,
@@ -732,6 +741,7 @@ impl<'a> EmitCtx<'a> {
             uses_webview,
             uses_css,
             uses_auth,
+            uses_email,
             sqlvalue_rust_name,
             sqlfield_rust_name,
             enum_names,
@@ -1146,6 +1156,15 @@ impl<'a> EmitCtx<'a> {
             // to `SkyCacheHandle::Cache`. A user's own `type Cache …` DOES get an
             // `EnumDef` (registered in `enum_names`) and short-circuits above.
             Some("Cache") => Some("SkyCacheHandle"),
+            // `Std.Email.EmailProvider` is backed by the runtime enum
+            // `sky_runtime::email::EmailProvider` (variant names `Resend`/`Ses`/
+            // `SendGrid`/`Smtp` match the Sky ctors verbatim). Its `EnumDef` is
+            // suppressed in `sky_lower` (no `enum_names` entry, so the guard
+            // above lets this fire), so `Resend "k"` / `Ses cfg` construct the
+            // runtime variants and `case p of Resend k -> …` matches them. In
+            // scope via `pub use sky_runtime::email::*`. A user's own
+            // `type EmailProvider` DOES get an `EnumDef` and short-circuits above.
+            Some("EmailProvider") => Some("EmailProvider"),
             _ => None,
         }
     }
@@ -1291,7 +1310,14 @@ fn collect_record_shapes(
         // structs — no structural record shape to synthesise.
         | IrType::CacheCfg
         | IrType::CacheStats
-        | IrType::CsvDoc => {}
+        | IrType::CsvDoc
+        // Std.Email records + provider ADT are folded to nominal runtime
+        // structs — no structural record shape to synthesise.
+        | IrType::EmailMessage
+        | IrType::EmailAttachment
+        | IrType::EmailSesConfig
+        | IrType::EmailSmtpConfig
+        | IrType::EmailProvider => {}
         // `LiveRoute page` is page-parametric — descend in case the page type
         // carries a nested record shape.
         IrType::LiveRoute(page) => {
@@ -1431,7 +1457,14 @@ fn type_reaches_enum(
         // — no reachable enum edge to `target`.
         | IrType::CacheCfg
         | IrType::CacheStats
-        | IrType::CsvDoc => false,
+        | IrType::CsvDoc
+        // Std.Email records + provider ADT are monomorphic runtime types —
+        // no reachable enum edge to `target`.
+        | IrType::EmailMessage
+        | IrType::EmailAttachment
+        | IrType::EmailSesConfig
+        | IrType::EmailSmtpConfig
+        | IrType::EmailProvider => false,
         // `Route<Page>` stores its `not_found`/built pages by value — a page
         // type reaching `target` through a route is a genuine size edge.
         IrType::LiveRoute(page) => type_reaches_enum(page, target, enums, visited),
@@ -1504,7 +1537,14 @@ fn contains_generic(ty: &IrType) -> bool {
         // parameters.
         | IrType::CacheCfg
         | IrType::CacheStats
-        | IrType::CsvDoc => false,
+        | IrType::CsvDoc
+        // Std.Email records + provider ADT are monomorphic — no generic
+        // parameters.
+        | IrType::EmailMessage
+        | IrType::EmailAttachment
+        | IrType::EmailSesConfig
+        | IrType::EmailSmtpConfig
+        | IrType::EmailProvider => false,
         // `LiveRoute page` is parametric on `page`; check if it carries a
         // generic.
         IrType::LiveRoute(page) => contains_generic(page),
@@ -1603,7 +1643,13 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         // collect.
         | IrType::CacheCfg
         | IrType::CacheStats
-        | IrType::CsvDoc => {}
+        | IrType::CsvDoc
+        // Std.Email records + provider ADT are monomorphic — no generics.
+        | IrType::EmailMessage
+        | IrType::EmailAttachment
+        | IrType::EmailSesConfig
+        | IrType::EmailSmtpConfig
+        | IrType::EmailProvider => {}
         // `LiveRoute page` may carry generic parameters through `page`.
         IrType::LiveRoute(page) => collect_generics(page, out),
         // `Ui { ctor, msg }` may carry generic parameters through `msg`.
@@ -1906,7 +1952,13 @@ fn match_template(
         // leaves.
         | IrType::CacheCfg
         | IrType::CacheStats
-        | IrType::CsvDoc => {
+        | IrType::CsvDoc
+        // Std.Email records + provider ADT are monomorphic runtime-type leaves.
+        | IrType::EmailMessage
+        | IrType::EmailAttachment
+        | IrType::EmailSesConfig
+        | IrType::EmailSmtpConfig
+        | IrType::EmailProvider => {
             if template == concrete {
                 Ok(())
             } else {
@@ -2095,6 +2147,7 @@ mod record_struct_namespace_tests {
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_email: false,
             }],
         };
 
@@ -2160,6 +2213,7 @@ mod record_struct_namespace_tests {
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_email: false,
             }],
         };
 

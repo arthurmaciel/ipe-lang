@@ -34,9 +34,9 @@ use sky_backend::Backend;
 use sky_backend_rust::RustBackend;
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::Interner;
-use sky_ir::{OnFormKind, 
-    Arm, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Pat,
-    Program, TypeDef, Variant,
+use sky_ir::{
+    Arm, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module,
+    OnFormKind, Pat, Program, TypeDef, Variant,
 };
 
 fn emit(interner: &Interner, prog: &Program) -> DResult<String> {
@@ -123,11 +123,14 @@ fn wrap_program(i: &mut Interner) -> DResult<Program> {
                         args: vec![Expr::Tuple(vec![Expr::Int(3), Expr::Int(4)])],
                     }],
                     pin: CallPin::None,
-                    on_form: OnFormKind::NotForm,                }],
+                    on_form: OnFormKind::NotForm,
+                }],
                 pin: CallPin::None,
-                on_form: OnFormKind::NotForm,            }],
+                on_form: OnFormKind::NotForm,
+            }],
             pin: CallPin::None,
-            on_form: OnFormKind::NotForm,        },
+            on_form: OnFormKind::NotForm,
+        },
     };
 
     Ok(Program {
@@ -145,6 +148,7 @@ fn wrap_program(i: &mut Interner) -> DResult<Program> {
             uses_webview: false,
             uses_css: false,
             uses_auth: false,
+            uses_email: false,
         }],
     })
 }
@@ -198,6 +202,7 @@ fn unit_value_and_type_render() -> DResult<()> {
             uses_webview: false,
             uses_css: false,
             uses_auth: false,
+            uses_email: false,
         }],
     };
     let src = emit(&i, &prog)?;

@@ -131,6 +131,15 @@ pub struct Module {
     /// whether to append `pub mod auth; pub use auth::*;` to the emitted
     /// `sky_runtime/mod.rs`.
     pub uses_auth: bool,
+    /// `true` when the lowerer detected the `Std.Email` `Email.send` kernel call
+    /// in the module's function bodies.
+    ///
+    /// Set by `sky_lower` when a call site resolves to `KernelFn::EmailSend`.
+    /// The backend reads this flag to decide whether to append `pub mod email;
+    /// pub use email::*;` to the emitted `sky_runtime/mod.rs` and to add the
+    /// `lettre` dependency (the only extra crate `email.rs` needs beyond the
+    /// base manifest) to the emitted `Cargo.toml`.
+    pub uses_email: bool,
 }
 
 /// A user-declared type. The IR models user types as enums (Sky's `type`
@@ -979,6 +988,46 @@ pub enum IrType {
     /// would mismatch it (E0308). Fully `Clone` (derivable on the runtime
     /// struct); never stored in a Sky.Live Model.
     CsvDoc,
+
+    /// `Std.Email`'s message record — 9 fields `{ from, to, cc, bcc, subject,
+    /// textBody, htmlBody, attachments, replyTo }`. Renders as
+    /// `sky_runtime::email::EmailMessage`.
+    ///
+    /// Folded the same way as [`IrType::CsvDoc`]: the lowerer folds any solved /
+    /// annotated record matching that exact 9-field shape (field NAMES and
+    /// TYPES) so a `defaultMessage`-built record literal constructs the runtime
+    /// struct the `email_send` kernel takes, rather than a backend-synthesised
+    /// record struct that would mismatch it (E0308). Fully `Clone`.
+    EmailMessage,
+
+    /// `Std.Email`'s attachment record `{ filename : String, mimeType : String,
+    /// content : String }`. Renders as `sky_runtime::email::EmailAttachment`
+    /// (the runtime type name differs from the Sky alias `Attachment`; the
+    /// `content` field carries bytes as the `Bytes`-alias `String`). Folded like
+    /// [`IrType::EmailMessage`].
+    EmailAttachment,
+
+    /// `Std.Email`'s SES config record `{ region : String, key : String,
+    /// secret : String }`. Renders as `sky_runtime::email::SesConfig`. Folded
+    /// like [`IrType::EmailMessage`].
+    EmailSesConfig,
+
+    /// `Std.Email`'s SMTP config record `{ host : String, port : Int,
+    /// user : String, pass : String }`. Renders as
+    /// `sky_runtime::email::SmtpConfig`. Folded like [`IrType::EmailMessage`].
+    EmailSmtpConfig,
+
+    /// `Std.Email`'s `EmailProvider` ADT (`Resend String | Ses SesConfig |
+    /// SendGrid String | Smtp SmtpConfig`). Renders as
+    /// `sky_runtime::email::EmailProvider`.
+    ///
+    /// The Sky union's own [`EnumDef`] is SUPPRESSED in `sky_lower` (same
+    /// mechanism as `SkyCacheHandle`): the runtime enum IS the canonical
+    /// representation, and the Sky ctor names (`Resend`/`Ses`/`SendGrid`/`Smtp`)
+    /// match the runtime variant names verbatim, so construction and pattern
+    /// matching route directly onto the runtime enum. Mirrors the reference's
+    /// `runtimeOpaqueTypes` `RPubUseAlias` for `EmailProvider`.
+    EmailProvider,
 }
 
 /// Tag enum for the message-parametric `Std.Ui` / `Std.Html` types.
@@ -1155,6 +1204,13 @@ pub fn ir_type_is_derivable(
         // `WsHandle` / `WsServerCfg` are opaque handles — not fully derivable.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
+        // Std.Email runtime structs + the EmailProvider enum derive only
+        // Clone+Debug (no PartialEq) — not fully derivable.
+        | IrType::EmailMessage
+        | IrType::EmailAttachment
+        | IrType::EmailSesConfig
+        | IrType::EmailSmtpConfig
+        | IrType::EmailProvider
         | IrType::LiveReq
         // `Route<Page>` holds an `Arc<dyn Fn>` builder — never derivable/serde
         // regardless of its page argument.
@@ -1287,6 +1343,14 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::CacheCfg
         | IrType::CacheStats
         | IrType::CsvDoc
+        // Std.Email runtime structs + EmailProvider enum are kernel-boundary
+        // values (`email_send`), never persisted to a session store — the
+        // runtime types carry no serde derive.
+        | IrType::EmailMessage
+        | IrType::EmailAttachment
+        | IrType::EmailSesConfig
+        | IrType::EmailSmtpConfig
+        | IrType::EmailProvider
         // `WsHandle` / `WsServerCfg` are opaque handles; not serde.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
@@ -1382,7 +1446,12 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::LiveReq
         | IrType::CacheCfg
         | IrType::CacheStats
-        | IrType::CsvDoc => true,
+        | IrType::CsvDoc
+        | IrType::EmailMessage
+        | IrType::EmailAttachment
+        | IrType::EmailSesConfig
+        | IrType::EmailSmtpConfig
+        | IrType::EmailProvider => true,
         // Non-`Clone` default carriers. `Fun`'s default carrier is `Box<dyn Fn>`
         // (position-typed model — the `Clone` `Arc` carrier exists only at
         // promoted binding sites, see [`fun_value_arc_promotable`]).
@@ -3323,6 +3392,7 @@ mod tests {
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_email: false,
             }],
         };
         let clone = program.clone();
@@ -3815,6 +3885,7 @@ mod serde_persistence_tests {
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_email: false,
             }],
         })
     }
@@ -3878,6 +3949,7 @@ mod serde_persistence_tests {
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_email: false,
             }],
         };
         let json = {
