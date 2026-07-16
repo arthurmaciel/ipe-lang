@@ -312,6 +312,14 @@ fn hash_enum(
     h: &mut Sha256,
     fuel: u32,
 ) -> DResult<()> {
+    // Nominal identity: Sky ADTs are nominal, so the type name AND its home
+    // module path fold in — a same-shaped enum from another module is a
+    // DIFFERENT wire format.
+    update_str(h, ctx.resolve_ident(name)?);
+    update_count(h, home.0.len());
+    for seg in &home.0 {
+        update_str(h, ctx.resolve_ident(*seg)?);
+    }
     // Type arguments are part of the wire shape: `Box Int` and `Box String`
     // share the definition's payload template but serialize differently.
     update_count(h, args.len());
@@ -320,7 +328,14 @@ fn hash_enum(
     }
     let variants = ctx.enum_variant_payloads(home, name);
     update_count(h, variants.len());
-    for payload in variants {
+    for (variant_sym, payload) in variants {
+        // Declaration order preserved (never sorted, unlike record fields)
+        // and each variant's NAME folded in at its own position: the
+        // serialized discriminant is assigned by DECLARATION INDEX, so both
+        // a rename (name changes, index fixed) and a reorder (index changes,
+        // name set fixed) are wire-format-relevant and must both change the
+        // hash.
+        update_str(h, ctx.resolve_ident(*variant_sym)?);
         update_count(h, payload.len());
         for field_ty in payload {
             hash_ty(ctx, field_ty, h, fuel)?;
@@ -412,6 +427,161 @@ mod tests {
             a, b,
             "the schema tag must be independent of Symbol intern order \
              (parse order), depending only on the Model's shape"
+        );
+        Ok(())
+    }
+
+    /// A minimal single-module program carrying `types` (helper for the
+    /// enum-identity tests below).
+    fn program_with_types(name: sky_ir::ModPath, types: Vec<sky_ir::TypeDef>) -> Program {
+        Program {
+            modules: vec![sky_ir::Module {
+                name,
+                types,
+                funcs: vec![],
+                entry: None,
+                records: vec![],
+                uses_tea: false,
+                uses_server: false,
+                uses_ui: false,
+                uses_live: false,
+                uses_tui: false,
+                uses_webview: false,
+                uses_css: false,
+                uses_auth: false,
+            }],
+        }
+    }
+
+    fn enum_def(
+        home: sky_ir::ModPath,
+        name: sky_intern::Symbol,
+        variants: Vec<sky_ir::Variant>,
+    ) -> sky_ir::TypeDef {
+        sky_ir::TypeDef::Enum(sky_ir::EnumDef {
+            name,
+            home,
+            type_params: vec![],
+            variants,
+        })
+    }
+
+    /// Two structurally-identical but differently-NAMED enums must hash
+    /// DIFFERENTLY — Sky ADTs are nominal, and a same-shaped enum from a
+    /// different module decodes with the wrong semantic meaning attached
+    /// (the "restore passes the gate with nonsense" H24 hazard).
+    #[test]
+    fn identical_shape_different_enum_name_differs() -> DResult<()> {
+        let mut interner = Interner::new();
+        let mod_a = interner.intern("ModA")?;
+        let mod_b = interner.intern("ModB")?;
+        let wrapper = interner.intern("Wrapper")?;
+        let boxed = interner.intern("Box")?;
+        let wrap = interner.intern("Wrap")?;
+        let field = interner.intern("v")?;
+        let main_mod = interner.intern("Main")?;
+
+        let home_a = sky_ir::ModPath(vec![mod_a]);
+        let home_b = sky_ir::ModPath(vec![mod_b]);
+        // SAME variant name, SAME single-Int payload — only the nominal
+        // identity (home + type name) differs.
+        let variant = sky_ir::Variant {
+            name: wrap,
+            fields: vec![IrType::Int],
+        };
+        let program = program_with_types(
+            sky_ir::ModPath(vec![main_mod]),
+            vec![
+                enum_def(home_a.clone(), wrapper, vec![variant.clone()]),
+                enum_def(home_b.clone(), boxed, vec![variant]),
+            ],
+        );
+        let ctx = EmitCtx::build(&interner, &program, DbDriver::Sqlite)?;
+
+        let model_a = IrType::Record(BTreeMap::from([(
+            field,
+            IrType::Enum {
+                home: home_a,
+                name: wrapper,
+                args: vec![],
+            },
+        )]));
+        let model_b = IrType::Record(BTreeMap::from([(
+            field,
+            IrType::Enum {
+                home: home_b,
+                name: boxed,
+                args: vec![],
+            },
+        )]));
+        let a = model_schema_tag(&ctx, &model_a)?;
+        let b = model_schema_tag(&ctx, &model_b)?;
+        assert_ne!(
+            a, b,
+            "two same-shaped but differently-named enums must produce \
+             different schema tags (nominal identity)"
+        );
+        Ok(())
+    }
+
+    /// Reordering two SAME-SHAPE (zero-payload) variants must change the
+    /// hash: the serialized discriminant is assigned by DECLARATION INDEX,
+    /// so `Pending | Active | Done` and `Active | Pending | Done` are
+    /// different wire formats even though the name SET and shape set are
+    /// identical. A shape-only hash — or one that sorts variants by name the
+    /// way record fields are sorted — hashes these identically and leaves
+    /// the H24 reorder hazard open.
+    #[test]
+    fn enum_variant_reorder_among_same_shape_variants_changes_the_hash() -> DResult<()> {
+        let mut interner = Interner::new();
+        let mod_a = interner.intern("ModA")?;
+        let status = interner.intern("Status")?;
+        let pending = interner.intern("Pending")?;
+        let active = interner.intern("Active")?;
+        let done = interner.intern("Done")?;
+        let field = interner.intern("status")?;
+        let main_mod = interner.intern("Main")?;
+        let home = sky_ir::ModPath(vec![mod_a]);
+        let nullary = |name| sky_ir::Variant {
+            name,
+            fields: vec![],
+        };
+
+        let program_1 = program_with_types(
+            sky_ir::ModPath(vec![main_mod]),
+            vec![enum_def(
+                home.clone(),
+                status,
+                vec![nullary(pending), nullary(active), nullary(done)],
+            )],
+        );
+        let program_2 = program_with_types(
+            sky_ir::ModPath(vec![main_mod]),
+            vec![enum_def(
+                home.clone(),
+                status,
+                // First two variants swapped — same name set, same shapes.
+                vec![nullary(active), nullary(pending), nullary(done)],
+            )],
+        );
+
+        let model = IrType::Record(BTreeMap::from([(
+            field,
+            IrType::Enum {
+                home,
+                name: status,
+                args: vec![],
+            },
+        )]));
+
+        let ctx_1 = EmitCtx::build(&interner, &program_1, DbDriver::Sqlite)?;
+        let a = model_schema_tag(&ctx_1, &model)?;
+        let ctx_2 = EmitCtx::build(&interner, &program_2, DbDriver::Sqlite)?;
+        let b = model_schema_tag(&ctx_2, &model)?;
+        assert_ne!(
+            a, b,
+            "swapping two zero-payload variants changes the serialized \
+             discriminant assignment and must change the schema tag"
         );
         Ok(())
     }
