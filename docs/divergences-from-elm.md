@@ -210,3 +210,34 @@ limits — they match Elm 0.19.x:
 - **R4** — RESOLVED. No `Never`-error task form exists; the `Task` surface
   (`crates/skyc/stdlib/Sky/Core/Task.sky`) fixes every error slot to `Error`,
   and no `Never` type is defined in the stdlib or canon prelude.
+
+---
+
+## 7. Planned divergences (filed, not yet implemented)
+
+### 7.1 Closed-union `case` refuses catch-all arms
+
+Elm (and the Sky reference, which follows Elm here) accepts a wildcard `_ ->`
+or bare-variable arm as a catch-all over any scrutinee type. ipê will refuse
+a catch-all arm when the scrutinee's solved type is a **closed union** (a
+user-declared ADT, `Maybe`, or `Result`) and the arm absorbs at least one
+constructor no earlier arm matched — so adding a variant becomes a compile
+error at every top-level match site instead of silently taking the catch-all
+branch (the classic silent-`update` TEA failure). Wildcards remain required/
+allowed over open domains (`Int`, `Float`, `String`, `Char`) and permitted
+over `Bool` and `List` (their constructor sets cannot grow). Scope is the
+arm's top-level pattern only; nested payload positions are covered by an
+opt-in lint rule instead (combinatorial-explosion trade, stated in the
+design). Escape hatch: a per-site `-- @allow(open-case) <reason>` directive
+with a mandatory reason — the rule guards program evolution, not runtime
+soundness (exhaustiveness itself, SKY-T0010, stays unsuppressible), which is
+why a reasoned opt-out is admissible. Counterweights: a machine-applicable
+fix/code action expanding the catch-all into one arm per hidden constructor
+reusing the catch-all's own body (semantics-preserving), and an "add missing
+arms" LSP action for the no-catch-all case. New diagnostic SKY-T0018 with a
+progressive explain page; SKY-T0010's page (which already *teaches* this
+philosophy ahead of the implementation) is corrected in the same change.
+Recommendation: adopt-with-opt-out. Design + spec + phased plan (incl. the
+in-repo corpus migration):
+`docs/architecture/exhaustive-case-finite-adt-design-2026-07-16.md`. Filed
+2026-07-16 (backlog #208); implementation not started.
