@@ -27,11 +27,11 @@ Go reference ✓**.
 `36-composite-server` (#221, `SKY-L0126`). Its diagnostic-misattribution half
 (Defect B) has landed; the substantive half (Fix A) is in flight — see below.
 
-**Stdlib: 4 deferred families (#210).** `Std.Cache` and `Std.PubSub` are wired.
-`Std.Email`, `Sky.Core.WebSocket` (client subs), `Std.Config`, and the residual
-`Std.Cache` emit-layer work fail closed honestly (they need runtime-struct-alias
-+ phantom-param + trait-bound codegen beyond plain kernel registration), tracked
-as #210. Not sweep-blocking.
+**Stdlib: 4 deferred families (#210).** DONE — all four seal (skyc-0 ⇒ cargo-0).
+`Std.Cache`, `Std.PubSub`, `Std.Email` (EmailProvider runtime-enum bridge + 4
+record folds + `lettre`), `Sky.Core.WebSocket` (client subs), and `Std.Config`
+(shared `Decoder` carrier) are wired via runtime-struct-alias + phantom-param +
+trait-bound codegen beyond plain kernel registration.
 
 Then the pre-push **restructure endgame** (Steps A–D below), then the macro
 (Elm-parity) program, then FFI last.
@@ -133,7 +133,7 @@ Alongside / feeding the push:
 
 | Item | Priority | Status | Backlog |
 |---|---|---|---|
-| #210 Register the 4 deferred stdlib families needing emit-layer marshalling (`Std.Cache` residual, `Std.Email`, `Sky.Core.WebSocket`, `Std.Config`) | High | pending | #210 |
+| #210 Register the 4 deferred stdlib families needing emit-layer marshalling (`Std.Cache` residual, `Std.Email`, `Sky.Core.WebSocket`, `Std.Config`) | High | done 2026-07-16 | #210 |
 | #169 `ws_client.rs` client-side WebSocket subs — relax over-strict bound in the same commit that first wires their `KernelFn` arm | Medium | pending (unreachable today) | #169 |
 | #170 onSubmit payload classifier — extend `is_definitely_not_callable` to record/tuple/list literal payloads | Low | pending | #170 |
 | #31 make-invalid-states-unrepresentable hardening remainder | Medium | pending | — |
