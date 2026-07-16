@@ -620,6 +620,34 @@ fn run_inner(
             }
         });
     }
+    // SIGTERM → orderly shutdown, for the CLI `run()` path ONLY (`external_stop`
+    // is `None` exactly there). A supervisor's `kill -TERM <skyc-pid>` (systemd's
+    // default, PID-only — not the foreground process group Ctrl-C signals) would
+    // otherwise hard-kill this process before ANY teardown code runs, orphaning
+    // the supervised child on its port forever. The forwarder is a third instance
+    // of the existing "send into the unified event channel" pattern; the
+    // `Shutdown => break` arm below then runs the full, already-tested teardown.
+    //
+    // NEVER installed for `spawn()` (`external_stop` is `Some`): `spawn()` runs
+    // on a same-process background thread inside an EMBEDDING HOST — installing a
+    // process-wide SIGTERM handler there would silently and permanently change
+    // the HOST's signal disposition (signal-hook does not restore the previous
+    // disposition once its action is gone). `spawn()` keeps relying exclusively
+    // on `WatchHandle`'s stop channel + `Drop` safety net.
+    if external_stop.is_none() {
+        #[cfg(unix)]
+        {
+            let evt_tx = evt_tx.clone();
+            // Errors are logged, never fatal — a platform where signal
+            // registration fails degrades to the pre-existing behaviour (no
+            // PID-only-SIGTERM handling), never a hard failure of `ipe watch`.
+            if let Err(e) = sky_watch::install_sigterm_forwarder(move || {
+                let _ = evt_tx.send(OrchestratorEvent::Shutdown);
+            }) {
+                eprintln!("[ipe watch] warning: could not install SIGTERM handler: {e}");
+            }
+        }
+    }
     if let Some(stop_rx) = external_stop {
         let evt_tx = evt_tx.clone();
         thread::spawn(move || {
