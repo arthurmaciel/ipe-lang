@@ -40,6 +40,7 @@ const fn empty_module(name: ModPath) -> Module {
         uses_webview: false,
         uses_css: false,
         uses_auth: false,
+        uses_email: false,
     }
 }
 

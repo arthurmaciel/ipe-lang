@@ -52,6 +52,7 @@ fn program_with_live(
             uses_webview: false,
             uses_css: false,
             uses_auth: false,
+            uses_email: false,
         }],
     }
 }
@@ -226,7 +227,10 @@ fn enum_with_function_payload_has_no_derive() -> DResult<()> {
         ],
         home: ModPath(vec![]),
     };
-    let src = emit(&interner, &program(main_mod, vec![TypeDef::Enum(def)], vec![]))?;
+    let src = emit(
+        &interner,
+        &program(main_mod, vec![TypeDef::Enum(def)], vec![]),
+    )?;
 
     assert!(src.contains("pub enum MainHolder"), "enum emitted:\n{src}");
     assert_no_full_derive(&src, "enum", "MainHolder");

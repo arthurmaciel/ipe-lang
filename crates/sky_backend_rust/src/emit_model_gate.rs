@@ -265,6 +265,13 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::CacheCfg
         | IrType::CacheStats
         | IrType::CsvDoc
+        // Std.Email records + provider ADT are kernel-boundary values, not
+        // serde, never persisted to a session store — not valid Model leaves.
+        | IrType::EmailMessage
+        | IrType::EmailAttachment
+        | IrType::EmailSesConfig
+        | IrType::EmailSmtpConfig
+        | IrType::EmailProvider
         // `SqlFragment` is a query-building value, never
         // persisted to a Live session store — not a valid Model leaf.
         | IrType::SqlFragment
