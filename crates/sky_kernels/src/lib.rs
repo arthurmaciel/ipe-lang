@@ -1428,6 +1428,50 @@ pub enum StdlibKernel {
     CacheSize,
     /// `Cache.statsRaw : Int -> Task Error { hits, misses, evictions }`.
     CacheStats,
+
+    // ── Std.Config — typed TOML/YAML/JSON decoders ────────────────────
+    // Config shares the JSON `Decoder<E, T>` carrier and its `decode_*`
+    // combinator runtime fns: `string`/`int`/`float`/`bool`/`field`/`at`/
+    // `list`/`map`/`andThen`/`succeed`/`fail` route to the SAME runtime fns
+    // as the corresponding `JsonDec*` kernels (see `naming.rs`). Only the
+    // format front-ends (`decodeToml`/`decodeYaml`/`decodeJson`), `nullable`,
+    // and `loadFromFile` have Config-specific runtime fns
+    // (`sky_runtime::config_decode::*`). Distinct variants keep
+    // `Config.<member>` resolution clean while reusing the shared decoder
+    // runtime. Class `Pure` (Task effect lives in the scheme, same as
+    // File/Io/Http).
+    /// `Config.string : Decoder String` — shares `json_decode_string`.
+    ConfigString,
+    /// `Config.int : Decoder Int` — shares `json_decode_int`.
+    ConfigInt,
+    /// `Config.float : Decoder Float` — shares `json_decode_float`.
+    ConfigFloat,
+    /// `Config.bool : Decoder Bool` — shares `json_decode_bool`.
+    ConfigBool,
+    /// `Config.nullable : Decoder a -> Decoder (Maybe a)`.
+    ConfigNullable,
+    /// `Config.field : String -> Decoder a -> Decoder a` — shares `decode_field`.
+    ConfigField,
+    /// `Config.at : List String -> Decoder a -> Decoder a` — shares `decode_at`.
+    ConfigAt,
+    /// `Config.list : Decoder a -> Decoder (List a)` — shares `decode_list`.
+    ConfigList,
+    /// `Config.succeed : a -> Decoder a` — shares `decode_succeed`.
+    ConfigSucceed,
+    /// `Config.fail : String -> Decoder a` — shares `decode_fail`.
+    ConfigFail,
+    /// `Config.map : (a -> b) -> Decoder a -> Decoder b` — shares `decode_map`.
+    ConfigMap,
+    /// `Config.andThen : (a -> Decoder b) -> Decoder a -> Decoder b` — shares `decode_and_then`.
+    ConfigAndThen,
+    /// `Config.decodeToml : String -> Decoder a -> Result Error a`.
+    ConfigDecodeToml,
+    /// `Config.decodeYaml : String -> Decoder a -> Result Error a`.
+    ConfigDecodeYaml,
+    /// `Config.decodeJson : String -> Decoder a -> Result Error a`.
+    ConfigDecodeJson,
+    /// `Config.loadFromFile : String -> Decoder a -> Task Error a`.
+    ConfigLoadFromFile,
 }
 
 impl StdlibKernel {
@@ -2647,6 +2691,29 @@ impl StdlibKernel {
             Self::CacheClear => d("Cache", "clear", 1, Pure, "cache_clear"),
             Self::CacheSize => d("Cache", "size", 1, Pure, "cache_size"),
             Self::CacheStats => d("Cache", "stats", 1, Pure, "cache_stats"),
+
+            // ── Std.Config ────────────────────────────────────────────
+            // The 11 combinator/primitive kernels share the JSON `decode_*`
+            // runtime fns; the 5 format/nullable/load kernels are Config-own
+            // (`sky_runtime::config_decode::*`).
+            Self::ConfigString => d("Config", "string", 0, Pure, "json_decode_string"),
+            Self::ConfigInt => d("Config", "int", 0, Pure, "json_decode_int"),
+            Self::ConfigFloat => d("Config", "float", 0, Pure, "json_decode_float"),
+            Self::ConfigBool => d("Config", "bool", 0, Pure, "json_decode_bool"),
+            Self::ConfigNullable => d("Config", "nullable", 1, Pure, "config_nullable"),
+            Self::ConfigField => d("Config", "field", 2, Pure, "decode_field"),
+            Self::ConfigAt => d("Config", "at", 2, Pure, "decode_at"),
+            Self::ConfigList => d("Config", "list", 1, Pure, "decode_list"),
+            Self::ConfigSucceed => d("Config", "succeed", 1, Pure, "decode_succeed"),
+            Self::ConfigFail => d("Config", "fail", 1, Pure, "decode_fail"),
+            Self::ConfigMap => d("Config", "map", 2, Pure, "decode_map"),
+            Self::ConfigAndThen => d("Config", "andThen", 2, Pure, "decode_and_then"),
+            Self::ConfigDecodeToml => d("Config", "decodeToml", 2, Pure, "config_decode_toml"),
+            Self::ConfigDecodeYaml => d("Config", "decodeYaml", 2, Pure, "config_decode_yaml"),
+            Self::ConfigDecodeJson => d("Config", "decodeJson", 2, Pure, "config_decode_json"),
+            Self::ConfigLoadFromFile => {
+                d("Config", "loadFromFile", 2, Pure, "config_load_from_file")
+            }
         }
     }
 
@@ -3610,6 +3677,22 @@ impl StdlibKernel {
         Self::CacheClear,
         Self::CacheSize,
         Self::CacheStats,
+        Self::ConfigString,
+        Self::ConfigInt,
+        Self::ConfigFloat,
+        Self::ConfigBool,
+        Self::ConfigNullable,
+        Self::ConfigField,
+        Self::ConfigAt,
+        Self::ConfigList,
+        Self::ConfigSucceed,
+        Self::ConfigFail,
+        Self::ConfigMap,
+        Self::ConfigAndThen,
+        Self::ConfigDecodeToml,
+        Self::ConfigDecodeYaml,
+        Self::ConfigDecodeJson,
+        Self::ConfigLoadFromFile,
     ];
 
     // ── Classification predicates (moved from sky_ir::KernelFn) ─────────────

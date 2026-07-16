@@ -357,10 +357,18 @@ const STD_COMPRESSION: &str = include_str!("../stdlib/Std/Compression.sky");
 
 /// `Std.Config` — typed TOML/YAML/JSON decoders (compiled source).
 ///
-/// Defines `type Decoder a`.  DOUBLE-BLOCKED (#196): (a) `Decoder` collides with
-/// the reserved parametric builtin type (SKY-N0026 at its declaration — the Rust
-/// lowerer's `ir_type_from_ty` reserves `Decoder`), and (b) no `Config_*` kernel
-/// variants exist (SKY-N0028).  Both must be resolved before it compiles.
+/// Defines `type Decoder a` — the SHARED opaque decoder carrier
+/// (`IrType::Decoder`, runtime `sky_runtime::json::Decoder<E, T>`), the same one
+/// `Sky.Core.Json.Decode` names as a bare reserved builtin. RESOLVES (#210,
+/// skyc-0 AND cargo-0): (a) `Std.Config`'s `Decoder` re-declaration is exempted
+/// from SKY-N0026 via `sky_canon`'s `STDLIB_DEFINABLE_CARRIER_TYPES` (trusted
+/// `EmbeddedStdlib` origin only — user shadowing stays rejected); the ABOVE-guard
+/// `Decoder` lowerer arm + `is_opaque_boxed_wrapper` make the re-declaration
+/// lower to the shared carrier with no competing enum. (b) The 16 `Config_*`
+/// kernels are registered across every anti-drift site; the 11 combinator/
+/// primitive kernels emit the shared JSON `decode_*` runtime fns, the 5 format/
+/// nullable/load kernels emit `sky_runtime::config_decode::*` (vendored
+/// unconditionally, same posture as Csv/Cache/Compression).
 /// Not in `STDLIB_MODULE_QUALIFIERS`.
 const STD_CONFIG: &str = include_str!("../stdlib/Std/Config.sky");
 
