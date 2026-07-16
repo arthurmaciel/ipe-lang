@@ -40,14 +40,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use salsa::Setter as _;
-use sky_diagnostics::Diagnostic;
-use sky_intern::{Interner, Symbol};
 /// Re-exported so drivers and tests can name the trust tag and interface
 /// type without a direct `sky_canon` dependency.
 pub use sky_canon::{ModuleExports, ModuleOrigin};
+use sky_diagnostics::Diagnostic;
+use sky_intern::{Interner, Symbol};
 use sky_syntax::Module;
 
-pub use metadata::{program_metadata, ProgramMetadata, ProgramMetadataResult};
+pub use metadata::{ProgramMetadata, ProgramMetadataResult, program_metadata};
 
 // ---------------------------------------------------------------------------
 // The shared interner (plan Task 3, Option 3a)
@@ -474,11 +474,7 @@ where
     if let Some(color_entry) = color.get_mut(entry_path) {
         *color_entry = Color::Gray;
     }
-    stack.push((
-        entry_path.to_vec(),
-        entry_deps,
-        vec![entry_path.join(".")],
-    ));
+    stack.push((entry_path.to_vec(), entry_deps, vec![entry_path.join(".")]));
 
     while let Some((node, mut deps, dfs_path)) = stack.pop() {
         if let Some(next_dep) = deps.pop() {
@@ -567,11 +563,7 @@ pub fn topo_order(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> TopoOrder
     .map_err(|cycle| Diagnostic::Name {
         span: sky_diagnostics::Span::DUMMY,
         msg: sky_diagnostics::NameError::ImportCycle {
-            path: cycle
-                .path
-                .into_iter()
-                .map(String::into_boxed_str)
-                .collect(),
+            path: cycle.path.into_iter().map(String::into_boxed_str).collect(),
         },
     })
 }
@@ -639,7 +631,8 @@ pub fn linked_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> Linke
 }
 
 /// The memoized kernel type-scheme table.
-pub type KernelTypesResult = Result<Arc<Vec<(sky_kernels::StdlibKernel, sky_types::Ty)>>, Diagnostic>;
+pub type KernelTypesResult =
+    Result<Arc<Vec<(sky_kernels::StdlibKernel, sky_types::Ty)>>, Diagnostic>;
 
 /// The kernel type-scheme table (incremental plan Task 9): every schemed
 /// [`sky_kernels::StdlibKernel`] paired with the inference scheme
@@ -706,7 +699,7 @@ pub fn typecheck(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> TypecheckR
 
 /// The memoized result of lowering [`linked_program`]'s whole-program merge
 /// against [`typecheck`]'s solved types into the backend-agnostic IR.
-pub type LowerResult = Result<Arc<sky_ir::Program>, Diagnostic>;
+pub type LowerResult = Result<Arc<sky_ir::Program>, (Diagnostic, Vec<Symbol>)>;
 
 /// Lower the linked whole-program module (incremental plan Task 13).
 ///
@@ -727,8 +720,8 @@ pub type LowerResult = Result<Arc<sky_ir::Program>, Diagnostic>;
 /// scope, not attempted here.
 #[salsa::tracked]
 pub fn lower_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> LowerResult {
-    let linked = linked_program(db, root, entry)?;
-    let types = typecheck(db, root, entry).map_err(|(diag, _home)| diag)?;
+    let linked = linked_program(db, root, entry).map_err(|d| (d, Vec::new()))?;
+    let types = typecheck(db, root, entry)?;
     let mut interner = db.interner().lock();
     sky_lower::lower(&linked.module, &types, &mut interner).map(Arc::new)
 }
@@ -807,7 +800,11 @@ pub struct BuildConfig {
 
 /// The memoized result of emitting the linked, lowered program to Rust
 /// source text.
-pub type EmitResult = Result<Arc<sky_backend::EmittedProject>, Diagnostic>;
+// Error carries the owning-module `home` (empty for a homeless backend/emit
+// diagnostic) so the driver attributes a LOWERING error surfaced through the
+// emit demand to the correct source file (#221 fix B), mirroring
+// [`TypecheckResult`]. A pure-backend emit error is homeless → driver heuristic.
+pub type EmitResult = Result<Arc<sky_backend::EmittedProject>, (Diagnostic, Vec<Symbol>)>;
 
 /// Emit [`lower_program`]'s IR to a Rust [`sky_backend::EmittedProject`]
 /// (incremental plan Task 17's real consumer / Phase-5 §10.2 continuation
@@ -844,6 +841,7 @@ pub fn emit_project(
         .with_db_driver(driver)
         .emit(&program)
         .map(Arc::new)
+        .map_err(|d| (d, Vec::new()))
 }
 
 // ---------------------------------------------------------------------------
@@ -856,7 +854,7 @@ pub fn emit_project(
 /// `Spine`'s content, or a single Sky-module's own file. Same
 /// `Result<Arc<..>, Diagnostic>` shape as [`EmitResult`], carrying the
 /// rendered `String` rather than a whole project.
-pub type EmitTextResult = Result<Arc<String>, Diagnostic>;
+pub type EmitTextResult = Result<Arc<String>, (Diagnostic, Vec<Symbol>)>;
 
 /// The set of [`RustFileId`]s the program emits an OWN Sky-module file for —
 /// the `home`-set quantifier (§4.2). Mirrors `program_metadata`'s
@@ -890,7 +888,7 @@ pub fn program_rust_file_ids(
     db: &dyn Db,
     root: SourceRoot,
     entry: SourceFile,
-) -> Result<Arc<Vec<sky_ir::ModPath>>, Diagnostic> {
+) -> Result<Arc<Vec<sky_ir::ModPath>>, (Diagnostic, Vec<Symbol>)> {
     let program = lower_program(db, root, entry)?;
     let homes = {
         let interner = db.interner().lock();
@@ -924,6 +922,7 @@ pub fn emit_spine_file(
         .with_db_driver(driver)
         .emit_spine(&program)
         .map(Arc::new)
+        .map_err(|d| (d, Vec::new()))
 }
 
 /// One `SkyModule` file's text (§4.2): that `home`'s `EnumDef`s + `Func`s only,
@@ -955,6 +954,7 @@ pub fn emit_rust_file<'db>(
         .with_db_driver(driver)
         .emit_module_file(&program, &home)
         .map(Arc::new)
+        .map_err(|d| (d, Vec::new()))
 }
 
 /// The complete intended [`sky_backend::EmittedProject`] — the top-level driver
@@ -1010,6 +1010,7 @@ pub fn emit_manifest(
         .with_db_driver(driver)
         .assemble_split_manifest(&program, &spine, &module_texts)
         .map(Arc::new)
+        .map_err(|d| (d, Vec::new()))
 }
 
 /// The identifier words of one module's source text — the per-file slice of
@@ -1129,9 +1130,7 @@ fn line_scan_imports(source: &str) -> Vec<Vec<String>> {
             .unwrap_or("");
         // Remove a trailing `as` keyword if it bled in (shouldn't happen but
         // defensive).
-        let module_str = module_str
-            .strip_suffix(" as")
-            .map_or(module_str, str::trim);
+        let module_str = module_str.strip_suffix(" as").map_or(module_str, str::trim);
         let module_str = module_str.trim_end_matches(" as");
         let parts: Vec<String> = module_str.split('.').map(str::to_owned).collect();
         if parts.first().is_some_and(|s| !s.is_empty()) {

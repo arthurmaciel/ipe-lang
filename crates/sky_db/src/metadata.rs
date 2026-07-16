@@ -85,7 +85,7 @@ pub struct ProgramMetadata {
 /// The error case is [`lower_program`]'s own diagnostic, propagated verbatim
 /// — this query never fails on its own account; it is a pure structural walk
 /// over an already-lowered, already-well-formed IR.
-pub type ProgramMetadataResult = Result<Arc<ProgramMetadata>, Diagnostic>;
+pub type ProgramMetadataResult = Result<Arc<ProgramMetadata>, (Diagnostic, Vec<Symbol>)>;
 
 /// Compute the whole-program DCE-reachability metadata for the program
 /// rooted at `entry` (incremental plan Task 14).
