@@ -6,8 +6,9 @@ use sky_backend::Backend;
 use sky_backend_rust::RustBackend;
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::{Interner, Symbol};
-use sky_ir::{OnFormKind, 
-    BinOp, CallPin, Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Program,
+use sky_ir::{
+    BinOp, CallPin, Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, OnFormKind,
+    Program,
 };
 
 const COUNT_ID: FuncId = FuncId::from_raw(0);
@@ -69,7 +70,8 @@ fn emit_count_main_rs(tco: bool) -> DResult<String> {
                 callee: Callee::Func(COUNT_ID),
                 args: vec![next_n, next_acc],
                 pin: CallPin::None,
-                on_form: OnFormKind::NotForm,            }),
+                on_form: OnFormKind::NotForm,
+            }),
         }
     };
 
@@ -99,11 +101,14 @@ fn emit_count_main_rs(tco: bool) -> DResult<String> {
                     callee: Callee::Func(COUNT_ID),
                     args: vec![Expr::Int(5), Expr::Int(0)],
                     pin: CallPin::None,
-                    on_form: OnFormKind::NotForm,                }],
+                    on_form: OnFormKind::NotForm,
+                }],
                 pin: CallPin::None,
-                on_form: OnFormKind::NotForm,            }],
+                on_form: OnFormKind::NotForm,
+            }],
             pin: CallPin::None,
-            on_form: OnFormKind::NotForm,        },
+            on_form: OnFormKind::NotForm,
+        },
     };
 
     let program = Program {
@@ -122,6 +127,7 @@ fn emit_count_main_rs(tco: bool) -> DResult<String> {
             uses_css: false,
             uses_auth: false,
             uses_websocket: false,
+            uses_email: false,
         }],
     };
 

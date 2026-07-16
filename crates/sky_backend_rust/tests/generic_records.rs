@@ -35,8 +35,9 @@ use sky_backend::Backend;
 use sky_backend_rust::RustBackend;
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::{Interner, Symbol};
-use sky_ir::{OnFormKind, 
-    BoundSet, CallPin, Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Program,
+use sky_ir::{
+    BoundSet, CallPin, Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, OnFormKind,
+    Program,
 };
 
 /// A single-module program.
@@ -57,6 +58,7 @@ fn program(name: Symbol, funcs: Vec<Func>, records: Vec<IrType>, entry: Option<F
             uses_css: false,
             uses_auth: false,
             uses_websocket: false,
+            uses_email: false,
         }],
     }
 }
@@ -136,13 +138,17 @@ fn wrap_unwrap_program(interner: &mut Interner) -> DResult<Program> {
                         callee: Callee::Func(FuncId::from_raw(0)),
                         args: vec![Expr::Int(42)],
                         pin: CallPin::None,
-                        on_form: OnFormKind::NotForm,                    }],
+                        on_form: OnFormKind::NotForm,
+                    }],
                     pin: CallPin::None,
-                    on_form: OnFormKind::NotForm,                }],
+                    on_form: OnFormKind::NotForm,
+                }],
                 pin: CallPin::None,
-                on_form: OnFormKind::NotForm,            }],
+                on_form: OnFormKind::NotForm,
+            }],
             pin: CallPin::None,
-            on_form: OnFormKind::NotForm,        },
+            on_form: OnFormKind::NotForm,
+        },
     };
 
     Ok(program(

@@ -34,9 +34,9 @@ use sky_backend::Backend;
 use sky_backend_rust::RustBackend;
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::Interner;
-use sky_ir::{OnFormKind, 
+use sky_ir::{
     BinOp, BoundSet, CallPin, Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module,
-    Program,
+    OnFormKind, Program,
 };
 
 /// Build the canonical generic program:
@@ -82,7 +82,8 @@ fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
         callee: Callee::Func(identity_id),
         args: vec![Expr::Int(40)],
         pin: CallPin::None,
-        on_form: OnFormKind::NotForm,    };
+        on_form: OnFormKind::NotForm,
+    };
     // identity (1 == 1) — T1 = Bool, the second concrete instantiation.
     let call_bool = Expr::Call {
         callee: Callee::Func(identity_id),
@@ -92,7 +93,8 @@ fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
             rhs: Box::new(Expr::Int(1)),
         }],
         pin: CallPin::None,
-        on_form: OnFormKind::NotForm,    };
+        on_form: OnFormKind::NotForm,
+    };
     // if flag then n + 2 else n
     let chosen = Expr::If {
         cond: Box::new(Expr::Var(flag)),
@@ -110,9 +112,11 @@ fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
             callee: Callee::Kernel(KernelFn::StringFromInt),
             args: vec![chosen],
             pin: CallPin::None,
-            on_form: OnFormKind::NotForm,        }],
+            on_form: OnFormKind::NotForm,
+        }],
         pin: CallPin::None,
-        on_form: OnFormKind::NotForm,    };
+        on_form: OnFormKind::NotForm,
+    };
     // let n = identity 40 in let flag = identity (1 == 1) in <print>
     let main_body = Expr::Let {
         name: n,
@@ -149,6 +153,7 @@ fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
             uses_css: false,
             uses_auth: false,
             uses_websocket: false,
+            uses_email: false,
         }],
     })
 }
@@ -258,21 +263,25 @@ fn build_bounded_program(interner: &mut Interner) -> DResult<Program> {
         callee: Callee::Func(max_id),
         args: vec![Expr::Int(20), Expr::Int(21)],
         pin: CallPin::None,
-        on_form: OnFormKind::NotForm,    };
+        on_form: OnFormKind::NotForm,
+    };
     let double_call = Expr::Call {
         callee: Callee::Func(double_id),
         args: vec![max_call],
         pin: CallPin::None,
-        on_form: OnFormKind::NotForm,    };
+        on_form: OnFormKind::NotForm,
+    };
     let main_body = Expr::Call {
         callee: Callee::Kernel(KernelFn::LogPrintln),
         args: vec![Expr::Call {
             callee: Callee::Kernel(KernelFn::StringFromInt),
             args: vec![double_call],
             pin: CallPin::None,
-            on_form: OnFormKind::NotForm,        }],
+            on_form: OnFormKind::NotForm,
+        }],
         pin: CallPin::None,
-        on_form: OnFormKind::NotForm,    };
+        on_form: OnFormKind::NotForm,
+    };
     let main_fn = Func {
         id: main_id,
         name: main,
@@ -299,6 +308,7 @@ fn build_bounded_program(interner: &mut Interner) -> DResult<Program> {
             uses_css: false,
             uses_auth: false,
             uses_websocket: false,
+            uses_email: false,
         }],
     })
 }

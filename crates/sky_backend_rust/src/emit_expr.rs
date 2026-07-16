@@ -2144,7 +2144,9 @@ fn emit_tea_call(
             let topic_s = emit_expr_at(ctx, topic_e, indent, child, generics)?;
             let payload_s = emit_expr_at(ctx, payload_e, indent, child, generics)?;
             let name = kernel_name(*k); // "pubsub_publish" / "pubsub_publish_no_echo"
-            Ok(Some(format!("{name}::<_, SkyError>({topic_s}, {payload_s})")))
+            Ok(Some(format!(
+                "{name}::<_, SkyError>({topic_s}, {payload_s})"
+            )))
         }
         // ── Sky.Core.WebSocket: onOpen / onMessage / onClose / onError ───────────
         // `Sub_subscribeWebSocket : Int -> String -> (any -> msg) -> Sub msg`.
@@ -7514,6 +7516,30 @@ const WEBSOCKET_CFG_FIELDS: &[&str] = &["headers", "pingInterval", "timeout", "u
 /// to `Vec::new()`. Kept in sync with `sky_lower::lower::SERVER_RESPONSE_FIELD_TYPES`.
 const SERVER_RESPONSE_FIELDS: &[&str] = &["body", "contentType", "headers", "status"];
 
+/// the sorted `Std.Email` record field-name sets. A record literal with exactly
+/// one of these name-sets (and no registered synthesised struct, because the
+/// lowerer folded the shape to the matching `IrType::Email*`) constructs the
+/// runtime struct (re-exported bare via `pub use email::*`). Mirror of the
+/// `CsvDoc` fall-through; kept in sync with `sky_lower::lower::EMAIL_*_FIELDS`.
+/// The four name-sets are mutually distinct, so the name-only match is exact
+/// (soundness note: a genuine `Std.Email` literal never gets a registered
+/// struct because the lowerer intercepts it into the `IrType::Email*` fold
+/// first — the same rationale as `CsvDoc`).
+const EMAIL_MESSAGE_FIELDS: &[&str] = &[
+    "attachments",
+    "bcc",
+    "cc",
+    "from",
+    "htmlBody",
+    "replyTo",
+    "subject",
+    "textBody",
+    "to",
+];
+const EMAIL_ATTACHMENT_FIELDS: &[&str] = &["content", "filename", "mimeType"];
+const EMAIL_SES_FIELDS: &[&str] = &["key", "region", "secret"];
+const EMAIL_SMTP_FIELDS: &[&str] = &["host", "pass", "port", "user"];
+
 /// Emit a record literal `{ x = e1, ... }` as a named struct literal
 /// `RecXY { x: <e1>, ... }`. `depth` is the literal's own IR-nesting level; its
 /// field values are emitted one level deeper. Kept out of the `emit_expr_at`
@@ -7596,6 +7622,18 @@ fn emit_record(
                     .iter()
                     .zip(SERVER_RESPONSE_FIELDS.iter())
                     .all(|(a, b)| a.as_str() == *b);
+            // Std.Email fall-throughs — same rationale as `CsvDoc`: a
+            // `defaultMessage`/`defaultAttachment`/… built literal has no
+            // registered struct (folded to the matching `IrType::Email*`), so it
+            // constructs the runtime struct (re-exported bare via `pub use
+            // email::*`). The Sky `Attachment` alias maps to `EmailAttachment`.
+            let name_set_is = |expected: &[&str]| {
+                sorted.len() == expected.len()
+                    && sorted
+                        .iter()
+                        .zip(expected.iter())
+                        .all(|(a, b)| a.as_str() == *b)
+            };
             if is_http_request {
                 "HttpRequest".to_owned()
             } else if is_cache_cfg {
@@ -7606,6 +7644,14 @@ fn emit_record(
                 "WsClientCfg".to_owned()
             } else if is_server_response {
                 "ServerResponse".to_owned()
+            } else if name_set_is(EMAIL_MESSAGE_FIELDS) {
+                "EmailMessage".to_owned()
+            } else if name_set_is(EMAIL_ATTACHMENT_FIELDS) {
+                "EmailAttachment".to_owned()
+            } else if name_set_is(EMAIL_SES_FIELDS) {
+                "SesConfig".to_owned()
+            } else if name_set_is(EMAIL_SMTP_FIELDS) {
+                "SmtpConfig".to_owned()
             } else {
                 ctx.record_name_for_literal(&key)?.to_owned()
             }

@@ -542,6 +542,202 @@ fn is_csv_doc_canon_shape(fields: &mut [(&str, &canon::Type)], interner: &Intern
             && canon_ty_is_list_of_string(rty, 2, interner))
 }
 
+// ── #210 Std.Email record shapes ────────────────────────────────────────────
+// The four `Std.Email` record shapes fold to their nominal runtime structs
+// (`sky_runtime::email::{EmailMessage, EmailAttachment, SesConfig, SmtpConfig}`)
+// so a `defaultMessage`/`defaultAttachment`/… built record literal constructs
+// the exact struct the `email_send` kernel + the `EmailProvider` variant fields
+// take (mirror of the `CsvDoc` / `CacheCfg` folds). Each shape is matched on
+// field NAMES *and* field TYPES so an unrelated same-arity record does not fold.
+
+/// `Attachment` — sorted field NAMES `{ content, filename, mimeType }`, all
+/// `String`. Folds to `IrType::EmailAttachment`.
+const EMAIL_ATTACHMENT_FIELDS: &[&str] = &["content", "filename", "mimeType"];
+
+/// `SesConfig` — sorted field NAMES `{ key, region, secret }`, all `String`.
+/// Folds to `IrType::EmailSesConfig`.
+const EMAIL_SES_FIELDS: &[&str] = &["key", "region", "secret"];
+
+/// `SmtpConfig` — sorted field NAMES `{ host, pass, port, user }` (`port : Int`,
+/// the rest `String`). Folds to `IrType::EmailSmtpConfig`.
+const EMAIL_SMTP_FIELDS: &[&str] = &["host", "pass", "port", "user"];
+
+/// `EmailMessage` — sorted field NAMES `{ attachments, bcc, cc, from, htmlBody,
+/// replyTo, subject, textBody, to }`. Folds to `IrType::EmailMessage`.
+const EMAIL_MESSAGE_FIELDS: &[&str] = &[
+    "attachments",
+    "bcc",
+    "cc",
+    "from",
+    "htmlBody",
+    "replyTo",
+    "subject",
+    "textBody",
+    "to",
+];
+
+/// Is `ty` the built-in `String`?
+fn ty_is_string(ty: &Ty, interner: &Interner) -> bool {
+    matches!(ty, Ty::Con { module, name, args }
+        if module.is_empty() && args.is_empty() && interner.resolve(*name) == Some("String"))
+}
+
+/// The [`canon::Type`] twin of [`ty_is_string`].
+fn canon_ty_is_string(ty: &canon::Type, interner: &Interner) -> bool {
+    matches!(ty, canon::Type::Con { home, name, args }
+        if home.is_empty() && args.is_empty() && interner.resolve(*name) == Some("String"))
+}
+
+/// Does `fields` match an all-`String` record whose sorted field NAMES equal
+/// `expected`? Sorts `fields` in place. Used for the `Attachment` / `SesConfig`
+/// shapes (both all-`String`).
+fn is_all_string_record_shape(
+    fields: &mut [(&str, &Ty)],
+    expected: &[&str],
+    interner: &Interner,
+) -> bool {
+    if fields.len() != expected.len() {
+        return false;
+    }
+    fields.sort_unstable_by_key(|(name, _)| *name);
+    fields
+        .iter()
+        .zip(expected.iter())
+        .all(|((name, ty), exp)| *name == *exp && ty_is_string(ty, interner))
+}
+
+/// The [`canon::Type`] twin of [`is_all_string_record_shape`].
+fn is_all_string_canon_record_shape(
+    fields: &mut [(&str, &canon::Type)],
+    expected: &[&str],
+    interner: &Interner,
+) -> bool {
+    if fields.len() != expected.len() {
+        return false;
+    }
+    fields.sort_unstable_by_key(|(name, _)| *name);
+    fields
+        .iter()
+        .zip(expected.iter())
+        .all(|((name, ty), exp)| *name == *exp && canon_ty_is_string(ty, interner))
+}
+
+/// Does `fields` match the `SmtpConfig` shape — `{ host, pass, port, user }`
+/// with `port : Int` and the other three `String`? Sorts `fields` in place.
+fn is_email_smtp_shape(fields: &mut [(&str, &Ty)], interner: &Interner) -> bool {
+    if fields.len() != EMAIL_SMTP_FIELDS.len() {
+        return false;
+    }
+    fields.sort_unstable_by_key(|(name, _)| *name);
+    matches!(fields, [(host_n, host_ty), (pass_n, pass_ty), (port_n, port_ty), (user_n, user_ty)]
+        if *host_n == "host" && *pass_n == "pass" && *port_n == "port" && *user_n == "user"
+            && ty_is_string(host_ty, interner)
+            && ty_is_string(pass_ty, interner)
+            && ty_is_int(port_ty, interner)
+            && ty_is_string(user_ty, interner))
+}
+
+/// The [`canon::Type`] twin of [`is_email_smtp_shape`].
+fn is_email_smtp_canon_shape(fields: &mut [(&str, &canon::Type)], interner: &Interner) -> bool {
+    if fields.len() != EMAIL_SMTP_FIELDS.len() {
+        return false;
+    }
+    fields.sort_unstable_by_key(|(name, _)| *name);
+    matches!(fields, [(host_n, host_ty), (pass_n, pass_ty), (port_n, port_ty), (user_n, user_ty)]
+        if *host_n == "host" && *pass_n == "pass" && *port_n == "port" && *user_n == "user"
+            && canon_ty_is_string(host_ty, interner)
+            && canon_ty_is_string(pass_ty, interner)
+            && canon_ty_is_int(port_ty, interner)
+            && canon_ty_is_string(user_ty, interner))
+}
+
+/// Does `fields` match the 9-field `EmailMessage` shape (NAMES + TYPES)? Sorts
+/// `fields` in place. The `attachments` element is checked to be a `List` of a
+/// record whose own shape is the `Attachment` shape (all-`String`
+/// `{ content, filename, mimeType }`); the `to`/`cc`/`bcc` are `List String`;
+/// the remaining five are `String`.
+fn is_email_message_shape(fields: &mut [(&str, &Ty)], interner: &Interner) -> bool {
+    if fields.len() != EMAIL_MESSAGE_FIELDS.len() {
+        return false;
+    }
+    fields.sort_unstable_by_key(|(name, _)| *name);
+    let names_match = fields
+        .iter()
+        .zip(EMAIL_MESSAGE_FIELDS.iter())
+        .all(|((name, _), exp)| *name == *exp);
+    if !names_match {
+        return false;
+    }
+    fields.iter().all(|(name, ty)| match *name {
+        "to" | "cc" | "bcc" => ty_is_list_of_string(ty, 1, interner),
+        "attachments" => ty_is_list_of_attachment(ty, interner),
+        // from / htmlBody / replyTo / subject / textBody
+        _ => ty_is_string(ty, interner),
+    })
+}
+
+/// The [`canon::Type`] twin of [`is_email_message_shape`].
+fn is_email_message_canon_shape(fields: &mut [(&str, &canon::Type)], interner: &Interner) -> bool {
+    if fields.len() != EMAIL_MESSAGE_FIELDS.len() {
+        return false;
+    }
+    fields.sort_unstable_by_key(|(name, _)| *name);
+    let names_match = fields
+        .iter()
+        .zip(EMAIL_MESSAGE_FIELDS.iter())
+        .all(|((name, _), exp)| *name == *exp);
+    if !names_match {
+        return false;
+    }
+    fields.iter().all(|(name, ty)| match *name {
+        "to" | "cc" | "bcc" => canon_ty_is_list_of_string(ty, 1, interner),
+        "attachments" => canon_ty_is_list_of_attachment(ty, interner),
+        _ => canon_ty_is_string(ty, interner),
+    })
+}
+
+/// Is `ty` a `List <Attachment-shaped record>`?
+fn ty_is_list_of_attachment(ty: &Ty, interner: &Interner) -> bool {
+    match ty {
+        Ty::Con { module, name, args }
+            if module.is_empty() && interner.resolve(*name) == Some("List") =>
+        {
+            match args.as_slice() {
+                [Ty::Record(fields, _)] => {
+                    let mut fs: Vec<(&str, &Ty)> = fields
+                        .iter()
+                        .filter_map(|(s, t)| interner.resolve(*s).map(|n| (n, t)))
+                        .collect();
+                    is_all_string_record_shape(&mut fs, EMAIL_ATTACHMENT_FIELDS, interner)
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// The [`canon::Type`] twin of [`ty_is_list_of_attachment`].
+fn canon_ty_is_list_of_attachment(ty: &canon::Type, interner: &Interner) -> bool {
+    match ty {
+        canon::Type::Con { home, name, args }
+            if home.is_empty() && interner.resolve(*name) == Some("List") =>
+        {
+            match args.as_slice() {
+                [canon::Type::Record(fields)] => {
+                    let mut fs: Vec<(&str, &canon::Type)> = fields
+                        .iter()
+                        .filter_map(|(s, t)| interner.resolve(*s).map(|n| (n, t)))
+                        .collect();
+                    is_all_string_canon_record_shape(&mut fs, EMAIL_ATTACHMENT_FIELDS, interner)
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
 /// Does this solved [`Ty`] contain a free type variable anywhere? Used to keep
 /// the lowerer's record-shape collection to fully-concrete shapes — a
 /// variable-bearing (generic) record reaches the backend through a signature,
@@ -1025,7 +1221,13 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
-        | IrType::CsvDoc => false,
+        | IrType::CsvDoc
+        // Std.Email records + provider ADT — plain data, no function.
+        | IrType::EmailMessage
+        | IrType::EmailAttachment
+        | IrType::EmailSesConfig
+        | IrType::EmailSmtpConfig
+        | IrType::EmailProvider => false,
         // `LiveRoute page` carries the page type it builds — recurse (the
         // route's own builder closure is runtime-internal, not a Sky `Fn`).
         IrType::LiveRoute(page) => ir_contains_fun(page),
@@ -1121,7 +1323,13 @@ fn clone_class(t: &IrType) -> CloneClass {
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
-        | IrType::CsvDoc => CloneClass::CloneOk,
+        | IrType::CsvDoc
+        // Std.Email runtime structs + provider enum are `Clone` (no `Copy`).
+        | IrType::EmailMessage
+        | IrType::EmailAttachment
+        | IrType::EmailSesConfig
+        | IrType::EmailSmtpConfig
+        | IrType::EmailProvider => CloneClass::CloneOk,
         // Non-Clone: function-typed, task, decoder, Cmd, Sub.
         // Also Generic(_) until T5 (which injects `T: Clone`).
         IrType::Fun(_, _)
@@ -1702,7 +1910,12 @@ fn rewrite_captured_clones(
         // Non-lambda args keep the full `noncl_set` so forwarding a NonClone
         // value in arg position (e.g. `applyTwice f x` where `f` is non-callee)
         // is still rejected.
-        Expr::Call { callee, args, pin, on_form } => Ok(Expr::Call {
+        Expr::Call {
+            callee,
+            args,
+            pin,
+            on_form,
+        } => Ok(Expr::Call {
             callee,
             args: args
                 .into_iter()
@@ -2801,7 +3014,12 @@ fn promote_unification_sibling_lambdas(
             lhs: Box::new(recur(*lhs)?),
             rhs: Box::new(recur(*rhs)?),
         }),
-        Expr::Call { callee, args, pin, on_form } => Ok(Expr::Call {
+        Expr::Call {
+            callee,
+            args,
+            pin,
+            on_form,
+        } => Ok(Expr::Call {
             callee,
             args: args.into_iter().map(recur).collect::<DResult<Vec<_>>>()?,
             pin,
@@ -3040,7 +3258,12 @@ fn force_shared_capture_clones(sym: Symbol, expr: Expr) -> Expr {
             then_: Box::new(force_shared_capture_clones(sym, *then_)),
             else_: Box::new(force_shared_capture_clones(sym, *else_)),
         },
-        Expr::Call { callee, args, pin, on_form } => Expr::Call {
+        Expr::Call {
+            callee,
+            args,
+            pin,
+            on_form,
+        } => Expr::Call {
             callee,
             args: force_shared_capture_clones_all(sym, args),
             pin,
@@ -3803,7 +4026,13 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
-        | IrType::CsvDoc => false,
+        | IrType::CsvDoc
+        // Std.Email records + provider ADT are non-parametric — no type var.
+        | IrType::EmailMessage
+        | IrType::EmailAttachment
+        | IrType::EmailSesConfig
+        | IrType::EmailSmtpConfig
+        | IrType::EmailProvider => false,
     }
 }
 
@@ -4467,9 +4696,7 @@ fn shim_fn_value_reads(
             .collect::<DResult<Vec<Expr>>>()
     };
     match expr {
-        Expr::Var(s) | Expr::CloneVar(s) if s == sym => {
-            fn_read_shim(sym, param_tys, ret, eta_pool)
-        }
+        Expr::Var(s) | Expr::CloneVar(s) if s == sym => fn_read_shim(sym, param_tys, ret, eta_pool),
         Expr::Var(_)
         | Expr::CloneVar(_)
         | Expr::Int(_)
@@ -4491,10 +4718,20 @@ fn shim_fn_value_reads(
                 args: recurse_all(args)?,
             })
         }
-        Expr::Call { callee, args, pin, on_form } => {
+        Expr::Call {
+            callee,
+            args,
+            pin,
+            on_form,
+        } => {
             // Sync-capture kernel args stay untouched (see the fn doc).
             if matches!(&callee, Callee::Kernel(k) if k.requires_sync_capture()) {
-                Ok(Expr::Call { callee, args, pin, on_form })
+                Ok(Expr::Call {
+                    callee,
+                    args,
+                    pin,
+                    on_form,
+                })
             } else {
                 Ok(Expr::Call {
                     callee,
@@ -4504,7 +4741,11 @@ fn shim_fn_value_reads(
                 })
             }
         }
-        Expr::Lambda { params, ret: lret, body } => {
+        Expr::Lambda {
+            params,
+            ret: lret,
+            body,
+        } => {
             if params.iter().any(|(s, _)| *s == sym) {
                 Ok(Expr::Lambda {
                     params,
@@ -4519,7 +4760,11 @@ fn shim_fn_value_reads(
                 })
             }
         }
-        Expr::SharedLambda { params, ret: lret, body } => {
+        Expr::SharedLambda {
+            params,
+            ret: lret,
+            body,
+        } => {
             if params.iter().any(|(s, _)| *s == sym) {
                 Ok(Expr::SharedLambda {
                     params,
@@ -4880,7 +5125,12 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
             *remaining = after_scrut.saturating_sub(peak);
             Expr::Match(m)
         }
-        Expr::Call { callee, args, pin, on_form } => Expr::Call {
+        Expr::Call {
+            callee,
+            args,
+            pin,
+            on_form,
+        } => Expr::Call {
             callee,
             args: args
                 .into_iter()
@@ -5361,6 +5611,8 @@ struct KernelUsage {
     /// Any outbound `Sky.Core.WebSocket` client kernel — gates the
     /// `websocket_client` Cargo feature + `ws_client` runtime module.
     websocket: bool,
+    /// The `Std.Email` `Email.send` kernel.
+    email: bool,
 }
 
 impl KernelUsage {
@@ -5376,6 +5628,7 @@ impl KernelUsage {
             && self.tui
             && self.webview
             && self.websocket
+            && self.email
     }
 
     /// OR in the family flags for one kernel callee.
@@ -5390,6 +5643,7 @@ impl KernelUsage {
         self.tui |= k.is_tui();
         self.webview |= k.is_webview();
         self.websocket |= k.is_websocket_client();
+        self.email |= matches!(k, KernelFn::EmailSend);
     }
 }
 
@@ -5634,7 +5888,12 @@ fn rewrite_var_free_occurrences(
                 (new_body, new_guard)
             },
         )),
-        Expr::Call { callee, args, pin, on_form } => Expr::Call {
+        Expr::Call {
+            callee,
+            args,
+            pin,
+            on_form,
+        } => Expr::Call {
             callee,
             args: args
                 .into_iter()
@@ -6904,6 +7163,17 @@ impl<'a> Lowerer<'a> {
             if self.is_cache_handle_union(u) || self.is_config_decoder_union(u) {
                 continue;
             }
+            // `Std.Email`'s `type EmailProvider` is backed by the runtime enum
+            // `sky_runtime::email::EmailProvider` (ctor names match verbatim).
+            // Skip its `EnumDef` so the backend never emits a duplicate
+            // `StdEmailEmailProvider`; the `builtin_runtime_enum` / `enum_name`
+            // overrides route the type + ctors + patterns to the runtime enum
+            // (mirrors the `SkyCacheHandle` suppression + the reference's
+            // `runtimeOpaqueTypes` mapping). `lower_enum` is still called above
+            // for its ctor-payload validation side effect.
+            if self.is_email_provider_union(u) {
+                continue;
+            }
             types_ir.push(TypeDef::Enum(def));
         }
 
@@ -7015,6 +7285,10 @@ impl<'a> Lowerer<'a> {
         // backend uses this flag to append `pub mod auth; pub use auth::*;` to
         // the emitted `sky_runtime/mod.rs`.
         let uses_auth = kernel_usage.auth;
+        // detect `Std.Email` `Email.send` usage — the backend uses this flag to
+        // append `pub mod email; pub use email::*;` to the emitted
+        // `sky_runtime/mod.rs` and to add the `lettre` dependency.
+        let uses_email = kernel_usage.email;
 
         // detect outbound Sky.Core.WebSocket client usage — the backend adds the
         // `websocket_client` Cargo feature + `ws_client` runtime module.
@@ -7035,6 +7309,7 @@ impl<'a> Lowerer<'a> {
             uses_css,
             uses_auth,
             uses_websocket,
+            uses_email,
         };
         Ok(Program {
             modules: vec![module],
@@ -7249,6 +7524,23 @@ impl<'a> Lowerer<'a> {
                 module,
                 [a, b] if self.interner.resolve(*a) == Some("Std")
                     && self.interner.resolve(*b) == Some("Cache")
+            )
+    }
+
+    /// is `u` the `Std.Email.EmailProvider` opaque ADT — module
+    /// `["Std", "Email"]`, name `EmailProvider`? Backed by the runtime enum
+    /// `sky_runtime::email::EmailProvider`, so its `EnumDef` is suppressed.
+    fn is_email_provider_union(&self, u: &canon::Union) -> bool {
+        self.is_email_provider_con(&u.home, u.name)
+    }
+
+    /// is `(module, name)` the `Std.Email.EmailProvider` opaque ADT?
+    fn is_email_provider_con(&self, module: &[Symbol], name: Symbol) -> bool {
+        self.interner.resolve(name) == Some("EmailProvider")
+            && matches!(
+                module,
+                [a, b] if self.interner.resolve(*a) == Some("Std")
+                    && self.interner.resolve(*b) == Some("Email")
             )
     }
 
@@ -8486,6 +8778,11 @@ impl<'a> Lowerer<'a> {
                 // `StreamWriter` — opaque server-side stream writer handle.
                 // Mirrors `ir_type_from_ty`'s "StreamWriter" arm.
                 "StreamWriter" => Ok(IrType::StreamWriter),
+                // `Std.Email.EmailProvider` — opaque ADT backed by the runtime
+                // enum. Home-guarded — mirrors `ir_type_from_ty`'s arm.
+                "EmailProvider" if self.is_email_provider_con(home, *name) => {
+                    Ok(IrType::EmailProvider)
+                }
                 // `HttpRequest` — opaque HTTP request descriptor.
                 // Sky users write this as a structural record literal, but the
                 // annotation `HttpRequest` maps directly to the runtime type via
@@ -8747,6 +9044,28 @@ impl<'a> Lowerer<'a> {
                 // — twin of the solved-Ty fold.
                 if is_websocket_cfg_canon_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::WebSocketClientCfg);
+                }
+                // fold the four nominal Std.Email record annotation shapes to
+                // their runtime structs — twin of the solved-Ty fold.
+                if is_email_message_canon_shape(&mut named_fields, self.interner) {
+                    return Ok(IrType::EmailMessage);
+                }
+                if is_email_smtp_canon_shape(&mut named_fields, self.interner) {
+                    return Ok(IrType::EmailSmtpConfig);
+                }
+                if is_all_string_canon_record_shape(
+                    &mut named_fields,
+                    EMAIL_ATTACHMENT_FIELDS,
+                    self.interner,
+                ) {
+                    return Ok(IrType::EmailAttachment);
+                }
+                if is_all_string_canon_record_shape(
+                    &mut named_fields,
+                    EMAIL_SES_FIELDS,
+                    self.interner,
+                ) {
+                    return Ok(IrType::EmailSesConfig);
                 }
                 let mut ir_fields = BTreeMap::new();
                 for (name, fty) in fields {
@@ -9371,6 +9690,13 @@ impl<'a> Lowerer<'a> {
                 "Cookie" => Ok(IrType::ServerCookie),
                 // `StreamWriter` — opaque stream writer handle.
                 "StreamWriter" => Ok(IrType::StreamWriter),
+                // `Std.Email.EmailProvider` — opaque ADT backed by the runtime
+                // enum. Home-guarded (`["Std","Email"]`) so a user `type
+                // EmailProvider` with a different home falls through to the
+                // program-enum guard below and wins by its own identity.
+                "EmailProvider" if self.is_email_provider_con(module, *name) => {
+                    Ok(IrType::EmailProvider)
+                }
                 // `HttpRequest` — opaque HTTP request descriptor.
                 // Mirrors `ir_type_from_canon`'s "HttpRequest" arm.
                 "HttpRequest" => Ok(IrType::HttpRequest),
@@ -9713,6 +10039,28 @@ impl<'a> Lowerer<'a> {
                 // `Rec…` struct would mismatch it (E0308).
                 if is_websocket_cfg_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::WebSocketClientCfg);
+                }
+                // fold the four nominal Std.Email record shapes to their runtime
+                // structs — same rationale: `email_send` takes the `EmailMessage`
+                // (+ `EmailProvider` variant fields take the config structs), so a
+                // synthesised `Rec…` struct would mismatch (E0308). A record
+                // literal built by `defaultMessage`/`defaultAttachment`/… thus
+                // emits the runtime struct (see `emit_record`).
+                if is_email_message_shape(&mut named_fields, self.interner) {
+                    return Ok(IrType::EmailMessage);
+                }
+                if is_email_smtp_shape(&mut named_fields, self.interner) {
+                    return Ok(IrType::EmailSmtpConfig);
+                }
+                if is_all_string_record_shape(
+                    &mut named_fields,
+                    EMAIL_ATTACHMENT_FIELDS,
+                    self.interner,
+                ) {
+                    return Ok(IrType::EmailAttachment);
+                }
+                if is_all_string_record_shape(&mut named_fields, EMAIL_SES_FIELDS, self.interner) {
+                    return Ok(IrType::EmailSesConfig);
                 }
                 let mut lowered = BTreeMap::new();
                 for (name, field_ty) in fields {
@@ -13793,6 +14141,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ConfigDecodeJson
                 | KernelFn::ConfigLoadFromFile,
             ) => Ok(2),
+            // Std.Email — `send : EmailProvider -> EmailMessage -> Task Error String`.
+            Callee::Kernel(KernelFn::EmailSend) => Ok(2),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
                 let def = self.m.defs.get(idx).ok_or_else(|| {
@@ -16700,7 +17050,13 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::CacheCfg
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
-        | IrType::CsvDoc => {}
+        | IrType::CsvDoc
+        // Std.Email records + provider ADT are non-parametric — no generic syms.
+        | IrType::EmailMessage
+        | IrType::EmailAttachment
+        | IrType::EmailSesConfig
+        | IrType::EmailSmtpConfig
+        | IrType::EmailProvider => {}
     }
 }
 
@@ -16936,6 +17292,8 @@ mod tests {
         KernelFn::WebSocketClose,
         KernelFn::WebSocketCloseWithCode,
         KernelFn::SubSubscribeWebSocket,
+        // Std.Email
+        KernelFn::EmailSend,
     ];
 
     /// Verifies that for every non-excluded variant in `KernelFn::ALL`, the

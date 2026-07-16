@@ -119,6 +119,19 @@ const RUNTIME_MOD_RS_AUTH_APPEND: &str = "pub mod auth;\npub use auth::*;\n";
 /// `sub_subscribe_ws_*` fns return) is force-appended alongside this in
 /// [`assemble_project_files`], mirroring the `uses_server` rule.
 const RUNTIME_MOD_RS_WEBSOCKET_APPEND: &str = "pub mod ws_client;\npub use ws_client::*;\n";
+// ── Std.Email ───────────────────────────────────────────────────────────
+
+/// Lines appended to `sky_runtime/mod.rs` when the program uses the `Std.Email`
+/// `Email.send` kernel.
+///
+/// `email.rs` is in the runtime source tree (vendored into every emitted crate)
+/// but declared only on demand. It depends on `http_client` (in the base
+/// `mod.rs`) plus the `base64` / `hmac` / `sha2` / `serde_json` / `reqwest` /
+/// `url` crates (all unconditional deps in the base manifest) and `lettre` (the
+/// one extra dep added by [`email_cargo_toml`] when `uses_email` is set). No
+/// runtime feature flag is involved — the emitted crate vendors the source
+/// directly, so declaring the module + adding `lettre` is sufficient.
+const RUNTIME_MOD_RS_EMAIL_APPEND: &str = "pub mod email;\npub use email::*;\n";
 
 // ── Std.Ui / Std.Html ───────────────────────────────────────────────────
 
@@ -682,6 +695,15 @@ fn assemble_project_files(
     } else {
         cargo_toml
     };
+    // Std.Email: `email.rs` needs the `lettre` crate for the SMTP transport
+    // (every other crate it uses — `base64` / `hmac` / `sha2` / `serde_json` /
+    // `reqwest` / `url` — is already an unconditional base-manifest dep). Add
+    // `lettre` only when the program uses `Email.send`.
+    let cargo_toml = if ctx.uses_email {
+        email_cargo_toml(&cargo_toml)?
+    } else {
+        cargo_toml
+    };
     // mod.rs starts from the M0 default and gains extra `pub mod` lines for
     // each kernel group the program uses.
     let runtime_mod_rs = {
@@ -713,6 +735,10 @@ fn assemble_project_files(
         // Std.Auth — append auth module when any Auth kernel is used.
         if ctx.uses_auth {
             mod_rs.push_str(RUNTIME_MOD_RS_AUTH_APPEND);
+        }
+        // Std.Email — append email module when `Email.send` is used.
+        if ctx.uses_email {
+            mod_rs.push_str(RUNTIME_MOD_RS_EMAIL_APPEND);
         }
         // `http_header` is now part of the M0 BASE `mod.rs` (#33 §6.1 made the
         // base `http_client` module depend on it), so it needs no conditional
@@ -1624,6 +1650,44 @@ fn websocket_cargo_toml(base: &str) -> DResult<String> {
     result.push_str(step2.get(..anchor_pos).unwrap_or(""));
     result.push_str(&ws_dep);
     result.push_str(step2.get(anchor_pos..).unwrap_or(""));
+    Ok(result)
+}
+
+/// Build the email-enabled `Cargo.toml` by appending the `lettre` dependency
+/// before `[profile.dev]`.
+///
+/// `email.rs` (the vendored `Std.Email` runtime module) needs `lettre` for the
+/// SMTP transport; every other crate it uses (`base64` / `hmac` / `sha2` /
+/// `serde_json` / `reqwest` / `url`) is already an unconditional base-manifest
+/// dependency. No feature promotion is required — the emitted crate declares the
+/// `email` module unconditionally (via the `mod.rs` append), so the module is
+/// always compiled once its one extra dep is present. `lettre`'s feature list +
+/// `default-features = false` mirror `runtime/Cargo.toml` (the vendored source
+/// was tested against exactly that shape). The version comes from the
+/// [`crate_specs`] SSOT (drift-guarded against `runtime/Cargo.toml`).
+///
+/// # Errors
+///
+/// Returns [`Diagnostic::CompilerBug`] if the `[profile.dev]` anchor is absent —
+/// a golden-drift invariant violation (fail-loud, never a silent no-op).
+fn email_cargo_toml(base: &str) -> DResult<String> {
+    const PROFILE_ANCHOR: &str = "[profile.dev]";
+    let lettre_dep = format!(
+        "{} = {{ version = \"{}\", default-features = false, features = [\"builder\", \
+         \"hostname\", \"smtp-transport\", \"pool\", \"tokio1\", \"tokio1-rustls-tls\"] }}\n\n",
+        crate_specs::LETTRE.name,
+        crate_specs::LETTRE.version,
+    );
+    let anchor_pos = base
+        .find(PROFILE_ANCHOR)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "sky_backend_rust::project::email_cargo_toml",
+            detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
+        })?;
+    let mut result = String::with_capacity(base.len() + lettre_dep.len());
+    result.push_str(base.get(..anchor_pos).unwrap_or(""));
+    result.push_str(&lettre_dep);
+    result.push_str(base.get(anchor_pos..).unwrap_or(""));
     Ok(result)
 }
 
