@@ -1,0 +1,39 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Task as Task
+import Std.Db as Db
+import Std.Log exposing (println)
+
+
+-- #217 contract-drift regression: `Std.Db.Migration` is a record alias
+-- `{ name : String, sql : String }` (reference `Std/Db.sky:237`) and
+-- `Db.migrate : Db -> List Migration -> Task Error (List String)`
+-- (reference `:300`) — NOT `List (String, String)`. Ported verbatim from
+-- the reference migration idiom: record literals in a `List Migration`,
+-- plus the `defaultMigration` builder.
+--
+-- The `defaultMigration "…"` entry exercises the pure record builder;
+-- `CREATE TABLE IF NOT EXISTS` keeps repeated runs idempotent. The pipeline
+-- recovers any Task error to a fixed marker so the SEAL check (cargo-0 ⇒
+-- exit-0) is independent of ambient `sky.db` state — the point of this test
+-- is that the three contract surfaces TYPE-CHECK and EMIT correctly, not the
+-- migration engine's runtime behaviour (covered by the m5b_db goldens).
+migrations : List Db.Migration
+migrations =
+    [ { name = "0001_users"
+      , sql = "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, email TEXT)"
+      }
+    , Db.defaultMigration "0002_noop"
+    ]
+
+
+runMigrations : Task Error (List String)
+runMigrations =
+    Task.andThen (\db -> Db.migrate db migrations) (Db.connect ())
+
+
+main =
+    Task.andThen
+        (\names -> println ("applied:" ++ String.fromInt (List.length names)))
+        (Task.onError (\_ -> Task.succeed []) runMigrations)

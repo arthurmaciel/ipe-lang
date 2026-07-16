@@ -142,6 +142,8 @@ enum HttpFieldTy {
     Int,
     /// `List (String, String)`.
     StrPairList,
+    /// `Dict String String`.
+    StrStrDict,
 }
 
 /// The canonical `HttpRequest` record shape as `(field name, expected field
@@ -185,6 +187,52 @@ const HTTP_REQUEST_FIELD_TYPES: &[(&str, HttpFieldTy)] = &[
     ("url", HttpFieldTy::Str),
 ];
 
+/// The canonical `Sky.Http.Server.Response` record shape as `(field name,
+/// expected field TYPE)` pairs, alphabetically sorted by name: `body`,
+/// `contentType`, `headers`, `status`. Matches the reference
+/// `Sky/Http/Server.sky:66` record alias. A `Ty::Record` (or `canon::Type`)
+/// of this exact shape folds to [`IrType::ServerResponse`] so a handler-built
+/// record literal emits the runtime `sky_runtime::ServerResponse` struct
+/// (which the server kernels produce/consume) rather than a backend-synthesised
+/// `Rec…` struct — the same anti-drift discipline as `HttpRequest`.
+const SERVER_RESPONSE_FIELD_TYPES: &[(&str, HttpFieldTy)] = &[
+    ("body", HttpFieldTy::Str),
+    ("contentType", HttpFieldTy::Str),
+    ("headers", HttpFieldTy::StrStrDict),
+    ("status", HttpFieldTy::Int),
+];
+
+/// Does `fields` match the canonical `Response` record shape — same NAMES *and*
+/// TYPES as [`SERVER_RESPONSE_FIELD_TYPES`]? Sorts `fields` by name in place
+/// (see [`is_http_request_shape`]).
+fn is_server_response_shape(fields: &mut [(&str, &Ty)], interner: &Interner) -> bool {
+    if fields.len() != SERVER_RESPONSE_FIELD_TYPES.len() {
+        return false;
+    }
+    fields.sort_unstable_by_key(|(name, _)| *name);
+    fields.iter().zip(SERVER_RESPONSE_FIELD_TYPES.iter()).all(
+        |((name, ty), (expected_name, expected_ty))| {
+            *name == *expected_name && ty_matches_http_field(ty, *expected_ty, interner)
+        },
+    )
+}
+
+/// The [`canon::Type`] twin of [`is_server_response_shape`].
+fn is_server_response_canon_shape(
+    fields: &mut [(&str, &canon::Type)],
+    interner: &Interner,
+) -> bool {
+    if fields.len() != SERVER_RESPONSE_FIELD_TYPES.len() {
+        return false;
+    }
+    fields.sort_unstable_by_key(|(name, _)| *name);
+    fields.iter().zip(SERVER_RESPONSE_FIELD_TYPES.iter()).all(
+        |((name, ty), (expected_name, expected_ty))| {
+            *name == *expected_name && canon_ty_matches_http_field(ty, *expected_ty, interner)
+        },
+    )
+}
+
 /// Does this solved [`Ty`] match `expected` — one leaf of
 /// [`HTTP_REQUEST_FIELD_TYPES`]? Built-in leaf types (`String` / `Bool` /
 /// `Int` / `List`) are `Ty::Con` with an empty `module` (built-ins have no
@@ -214,6 +262,16 @@ fn ty_matches_http_field(ty: &Ty, expected: HttpFieldTy, interner: &Interner) ->
                             if ty_matches_http_field(a, HttpFieldTy::Str, interner)
                                 && ty_matches_http_field(b, HttpFieldTy::Str, interner)
                     )
+                )
+        }
+        (HttpFieldTy::StrStrDict, Ty::Con { module, name, args }) => {
+            module.is_empty()
+                && interner.resolve(*name) == Some("Dict")
+                && matches!(
+                    args.as_slice(),
+                    [k, v]
+                        if ty_matches_http_field(k, HttpFieldTy::Str, interner)
+                            && ty_matches_http_field(v, HttpFieldTy::Str, interner)
                 )
         }
         _ => false,
@@ -252,6 +310,16 @@ fn canon_ty_matches_http_field(
                             if canon_ty_matches_http_field(a, HttpFieldTy::Str, interner)
                                 && canon_ty_matches_http_field(b, HttpFieldTy::Str, interner)
                     )
+                )
+        }
+        (HttpFieldTy::StrStrDict, canon::Type::Con { home, name, args }) => {
+            home.is_empty()
+                && interner.resolve(*name) == Some("Dict")
+                && matches!(
+                    args.as_slice(),
+                    [k, v]
+                        if canon_ty_matches_http_field(k, HttpFieldTy::Str, interner)
+                            && canon_ty_matches_http_field(v, HttpFieldTy::Str, interner)
                 )
         }
         _ => false,
@@ -734,6 +802,41 @@ fn collect_type_vars(t: &canon::Type, out: &mut BTreeSet<Symbol>) {
 /// payload field carries a `Box<dyn Fn>` cannot satisfy the enum's derived
 /// `Clone`/`Debug`/`PartialEq` nor its `SkyStringify` impl, so a function-bearing
 /// field is the fail-closed first-class gap.
+/// Does `ty` mention any opaque `Sky.Http.Server` runtime type
+/// (`ServerRequest` / `ServerResponse` / `ServerRoute` / `ServerCookie`)?
+///
+/// #217: `Sky.Http.Server.Response` is a record alias that folds to
+/// `IrType::ServerResponse`, so a program can *use* the server types — build a
+/// `Response` record literal, annotate `Request -> Task Error Response` — WITHOUT
+/// ever calling a server kernel. The `server` runtime module (which defines
+/// these structs) is only appended to the emitted crate when it is used, so the
+/// used-check must include the TYPES, not just the kernels; otherwise
+/// `ServerResponse` is referenced but undefined (E0412 — a SEAL breach).
+fn ir_type_mentions_server(ty: &IrType) -> bool {
+    match ty {
+        IrType::ServerRequest
+        | IrType::ServerResponse
+        | IrType::ServerRoute
+        | IrType::ServerCookie => true,
+        IrType::Task(inner)
+        | IrType::Cmd(inner)
+        | IrType::Sub(inner)
+        | IrType::Decoder(inner)
+        | IrType::Maybe(inner)
+        | IrType::List(inner) => ir_type_mentions_server(inner),
+        IrType::Result(a, b) | IrType::Dict(a, b) => {
+            ir_type_mentions_server(a) || ir_type_mentions_server(b)
+        }
+        IrType::Fun(params, ret) | IrType::FnOnceChain(params, ret) => {
+            params.iter().any(ir_type_mentions_server) || ir_type_mentions_server(ret)
+        }
+        IrType::Tuple(elems) => elems.iter().any(ir_type_mentions_server),
+        IrType::Record(fields) => fields.values().any(ir_type_mentions_server),
+        IrType::Enum { args, .. } => args.iter().any(ir_type_mentions_server),
+        _ => false,
+    }
+}
+
 fn ir_contains_fun(ty: &IrType) -> bool {
     match ty {
         // A curried `FnOnce` chain is the same boxed-closure family as `Fun`.
@@ -6159,11 +6262,20 @@ impl<'a> Lowerer<'a> {
         // add `SkyCmd<M>` / `SkySub<M>` type aliases.
         let uses_tea = kernel_usage.tea;
 
-        // M6: detect whether any Sky.Http.Server kernel call is present. The
-        // backend uses this flag to inject the `server` feature in Cargo.toml
-        // and append `pub mod server; pub use server::*; pub mod server_stream;
-        // pub use server_stream::*;` to mod.rs.
-        let uses_server = kernel_usage.server;
+        // M6: detect whether any Sky.Http.Server kernel call is present, OR any
+        // function signature references a server type (#217: a `Response` record
+        // literal / `Request`-typed handler uses the server structs without
+        // necessarily calling a server kernel). Either pulls in the `server`
+        // runtime module — the backend injects the `server` Cargo feature and
+        // appends `pub mod server; pub use server::*; pub mod server_stream; pub
+        // use server_stream::*;` to mod.rs. Missing the type-only case would
+        // reference `ServerResponse`/`ServerRequest` in emitted code with no
+        // definition in scope (E0412 — a SEAL breach).
+        let uses_server = kernel_usage.server
+            || funcs.iter().any(|f| {
+                ir_type_mentions_server(&f.ret)
+                    || f.params.iter().any(|(_, t)| ir_type_mentions_server(t))
+            });
 
         // M7: detect Std.Ui / Std.Html / Std.Live / Std.Tui / Std.Webview usage.
         // TUI runtime files (tui/app.rs, tui/layout.rs, tui/focus.rs) import
@@ -7389,6 +7501,22 @@ impl<'a> Lowerer<'a> {
     /// missing from the binding's free-variable set), so no node `span` is
     /// threaded — those are [`bug`]s, not span-carrying feature gaps.
     #[allow(clippy::too_many_lines)] // declarative type-constructor dispatch — each builtin listed explicitly for safety
+    /// The IR type of `Std.Db.Migration` — the record `{ name : String, sql :
+    /// String }` (reference `Std/Db.sky:237`). Both field names appear in every
+    /// program that annotates `Migration` (the record literals / `defaultMigration`
+    /// call sites intern them), so a read-only interner lookup resolves them; a
+    /// missing symbol is a compiler bug (the annotation implies the fields).
+    fn migration_record_ir(&self) -> IrType {
+        let mut fields = BTreeMap::new();
+        if let Some(name_sym) = self.interner.lookup("name") {
+            fields.insert(name_sym, IrType::Str);
+        }
+        if let Some(sql_sym) = self.interner.lookup("sql") {
+            fields.insert(sql_sym, IrType::Str);
+        }
+        IrType::Record(fields)
+    }
+
     fn ir_type_from_canon(&self, t: &canon::Type, generics: &[Symbol]) -> DResult<IrType> {
         match t {
             // A type-constructor application. A builtin (`Int`, `Bool`, …) carries
@@ -7644,6 +7772,12 @@ impl<'a> Lowerer<'a> {
                 // annotation `HttpRequest` maps directly to the runtime type via
                 // this opaque variant.
                 "HttpRequest" => Ok(IrType::HttpRequest),
+                // #217: `Std.Db.Migration` — the record alias `{ name : String,
+                // sql : String }` (reference `Std/Db.sky:237`). Annotated
+                // directly (`migrations : List Db.Migration`), so expand it to
+                // the synthesised record here — mirrors how the type-checker's
+                // `normalize_annotation_ty` expands the same name.
+                "Migration" => Ok(self.migration_record_ir()),
                 // #127: `WebSocketServer` — opaque per-peer WsHandle.
                 "WebSocketServer" => Ok(IrType::WebSocketServer),
                 // #127: `WebSocketServerCfg` — opaque WsServerCfg<SkyError>.
@@ -7863,6 +7997,12 @@ impl<'a> Lowerer<'a> {
                     .collect();
                 if is_http_request_canon_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::HttpRequest);
+                }
+                // #217: fold the `Response` record annotation shape to the
+                // opaque runtime `IrType::ServerResponse` — twin of the
+                // solved-Ty fold above.
+                if is_server_response_canon_shape(&mut named_fields, self.interner) {
+                    return Ok(IrType::ServerResponse);
                 }
                 // #210: fold the two nominal Std.Cache record shapes (annotation
                 // path — e.g. `newRaw : CacheCfg -> …` / `statsRaw : … -> Task
@@ -8404,6 +8544,10 @@ impl<'a> Lowerer<'a> {
                 // `HttpRequest` — opaque HTTP request descriptor (#111).
                 // Mirrors `ir_type_from_canon`'s "HttpRequest" arm.
                 "HttpRequest" => Ok(IrType::HttpRequest),
+                // #217: `Std.Db.Migration` record alias — mirrors
+                // `ir_type_from_canon`'s "Migration" arm (defensive; the solved
+                // type of a migration value is normally a `Ty::Record`).
+                "Migration" => Ok(self.migration_record_ir()),
                 // #127: `WebSocketServer` — opaque per-peer WsHandle.
                 "WebSocketServer" => Ok(IrType::WebSocketServer),
                 // #127: `WebSocketServerCfg` — opaque WsServerCfg<SkyError>.
@@ -8705,6 +8849,15 @@ impl<'a> Lowerer<'a> {
                     .collect();
                 if is_http_request_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::HttpRequest);
+                }
+                // #217: fold the `Sky.Http.Server.Response` record shape to the
+                // opaque runtime `IrType::ServerResponse` — same rationale as
+                // HttpRequest: the server kernels produce/consume the runtime
+                // `sky_runtime::ServerResponse` struct, so a synthesised `Rec…`
+                // struct would mismatch it (E0308). A handler-built record
+                // literal thus emits the runtime struct (see `emit_record`).
+                if is_server_response_shape(&mut named_fields, self.interner) {
+                    return Ok(IrType::ServerResponse);
                 }
                 // #210: fold the two nominal Std.Cache record shapes to their
                 // runtime structs (CacheCfg / CacheStats) — same rationale as
@@ -11533,6 +11686,8 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DbConnect
                 // `DbClose : Db -> Task Error ()` — takes the pool handle
                 | KernelFn::DbClose
+                // `DbDefaultMigration : String -> Migration` — pure record builder
+                | KernelFn::DbDefaultMigration
                 // ── Db.Decode arity-1 (M5b-db) ────────────────────────────────
                 // Primitive column decoders: `String -> Decoder T`
                 | KernelFn::DbDecString
@@ -13269,6 +13424,7 @@ impl<'a> Lowerer<'a> {
                     }
                     ("Db", "withTransaction") => Ok(Callee::Kernel(KernelFn::DbWithTransaction)),
                     ("Db", "migrate") => Ok(Callee::Kernel(KernelFn::DbMigrate)),
+                    ("Db", "defaultMigration") => Ok(Callee::Kernel(KernelFn::DbDefaultMigration)),
                     // ── Db.Decode kernels (M5b-db) ────────────────────────────
                     ("Db.Decode", "string") => Ok(Callee::Kernel(KernelFn::DbDecString)),
                     ("Db.Decode", "int") => Ok(Callee::Kernel(KernelFn::DbDecInt)),

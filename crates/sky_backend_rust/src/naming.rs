@@ -703,6 +703,9 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::DbInsertFieldsReturning => "db_insert_fields_returning",
         KernelFn::DbWithTransaction => "db_with_transaction",
         KernelFn::DbMigrate => "db_migrate_apply",
+        // Never emitted as a call — `emit_expr` intercepts it into an inline
+        // `Migration` struct literal. Name kept for completeness/`sky doc`.
+        KernelFn::DbDefaultMigration => "db_default_migration",
         // ── Db.Decode kernels (M5b-db) ───────────────────────────────────────
         KernelFn::DbDecString => "db_decode_string",
         KernelFn::DbDecInt => "db_decode_int",

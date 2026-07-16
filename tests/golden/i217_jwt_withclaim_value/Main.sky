@@ -1,0 +1,35 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Core.Jwt as Jwt
+import Sky.Core.Json.Encode as JsonEnc
+import Sky.Core.Result as Result
+import Std.Log exposing (println)
+
+
+-- #217 contract-drift regression: `Jwt.withClaim` takes a `JsonEnc.Value`
+-- (the reference contract, `Sky/Core/Jwt.sky:79`), NOT a bare `String`.
+-- Ported verbatim from the reference builder idiom: a string claim and an
+-- int claim, both threaded through `withClaim` as encoded JSON values.
+token : Result Error String
+token =
+    Jwt.encode
+        (Jwt.hs256 "0123456789012345678901234567890123")
+        (Jwt.claims
+            |> Jwt.subject "u1"
+            |> Jwt.withClaim "email" (JsonEnc.string "a@b.c")
+            |> Jwt.withClaim "count" (JsonEnc.int 7)
+        )
+
+
+main =
+    case token of
+        Ok t ->
+            if String.length t > 20 then
+                println "ok"
+
+            else
+                println "short"
+
+        Err _ ->
+            println "err"
