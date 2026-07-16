@@ -232,7 +232,7 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         IrType::Enum { home, name, .. } => {
             // A non-admissible user enum: descend into its variant payloads to
             // find the concrete offending leaf.
-            for payloads in ctx.enum_variant_payloads(home, *name) {
+            for (_, payloads) in ctx.enum_variant_payloads(home, *name) {
                 for field_ty in payloads {
                     if !admissible(ctx, field_ty, app) {
                         return leaf_of_bounded(ctx, field_ty, app, next);

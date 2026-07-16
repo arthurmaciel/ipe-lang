@@ -20,6 +20,7 @@ mod emit_cli;
 mod emit_expr;
 mod emit_live;
 mod emit_model_gate;
+mod emit_model_schema;
 mod emit_tui;
 mod emit_types;
 mod emit_webview;
@@ -179,6 +180,10 @@ impl Backend for RustBackend<'_> {
     }
 }
 
+/// One enum's variants as `(variant name, payload field types)`, in
+/// declaration order — the value shape of [`EmitCtx::enum_variants`].
+type VariantList = Vec<(Symbol, Vec<IrType>)>;
+
 /// A canonical record field list: `(Sky field name, field type)` pairs sorted by
 /// field name. The order is the struct's declaration / `SkyStringify` read order.
 type RecordFields = Vec<(String, IrType)>;
@@ -331,13 +336,16 @@ pub(crate) struct EmitCtx<'a> {
     /// nullary variant. Used at construction / pattern sites to box (and un-box) a
     /// recursive field so the emitted Rust enum stays finite-sized.
     variant_fields: BTreeMap<(ModPath, Symbol, Symbol), Vec<IrType>>,
-    /// Type identity `(home, name)` → the field-type lists of all its variants
-    /// (one inner vector per variant, in declaration order). The whole-enum view
-    /// that [`Self::is_cyclic_self_field`] walks to decide whether a payload field
+    /// Type identity `(home, name)` → every variant's `(name, field types)`,
+    /// in declaration order. The whole-enum view that
+    /// [`Self::is_cyclic_self_field`] walks to decide whether a payload field
     /// sits on a type-size cycle back to its own enum — direct (`Node Tree …`)
     /// or indirect (mutual recursion, or a self-edge routed through a tuple /
-    /// record / another generic's type argument).
-    enum_variants: BTreeMap<(ModPath, Symbol), Vec<Vec<IrType>>>,
+    /// record / another generic's type argument) — and that the Model schema
+    /// tag ([`emit_model_schema`]) folds variant NAMES from at their declared
+    /// positions (the serialized discriminant is assigned by declaration
+    /// index, so a variant rename AND a reorder are both wire-format-relevant).
+    enum_variants: BTreeMap<(ModPath, Symbol), VariantList>,
     /// Enum type symbol → whether that user enum's rendered Rust type supports
     /// the full `#[derive(Clone, Debug, PartialEq)]` set. Computed by a monotone
     /// whole-program fixpoint at [`EmitCtx::build`]: an enum is non-derivable iff
@@ -372,7 +380,7 @@ impl<'a> EmitCtx<'a> {
     fn build(interner: &'a Interner, program: &Program, db_driver: DbDriver) -> DResult<Self> {
         let mut enum_names: BTreeMap<(ModPath, Symbol), String> = BTreeMap::new();
         let mut variant_fields: BTreeMap<(ModPath, Symbol, Symbol), Vec<IrType>> = BTreeMap::new();
-        let mut enum_variants: BTreeMap<(ModPath, Symbol), Vec<Vec<IrType>>> = BTreeMap::new();
+        let mut enum_variants: BTreeMap<(ModPath, Symbol), VariantList> = BTreeMap::new();
         let mut func_names = BTreeMap::new();
         for module in &program.modules {
             let segs = module
@@ -437,7 +445,7 @@ impl<'a> EmitCtx<'a> {
                 for variant in &def.variants {
                     variant_fields
                         .insert((def.home.clone(), def.name, variant.name), variant.fields.clone());
-                    all_fields.push(variant.fields.clone());
+                    all_fields.push((variant.name, variant.fields.clone()));
                 }
                 enum_variants.insert(key, all_fields);
             }
@@ -545,7 +553,7 @@ impl<'a> EmitCtx<'a> {
                     if !enum_derivable.get(key).copied().unwrap_or(true) {
                         continue;
                     }
-                    let ok = variants.iter().all(|fields| {
+                    let ok = variants.iter().all(|(_, fields)| {
                         fields
                             .iter()
                             .all(|f| sky_ir::ir_type_is_derivable(f, &lookup))
@@ -586,7 +594,7 @@ impl<'a> EmitCtx<'a> {
                     if !enum_serde.get(key).copied().unwrap_or(true) {
                         continue;
                     }
-                    let ok = variants.iter().all(|fields| {
+                    let ok = variants.iter().all(|(_, fields)| {
                         fields.iter().all(|f| sky_ir::ir_type_is_serde(f, &lookup))
                     });
                     if !ok {
@@ -765,11 +773,17 @@ impl<'a> EmitCtx<'a> {
             .unwrap_or(true)
     }
 
-    /// The per-variant payload field-type lists of user enum `sym`, in variant
-    /// order. Empty when `sym` is not a known user enum. Read by the Model-
-    /// admissibility gate to walk a non-admissible enum down to its offending
-    /// leaf.
-    pub(crate) fn enum_variant_payloads(&self, home: &ModPath, sym: Symbol) -> &[Vec<IrType>] {
+    /// Every variant of user enum `sym` as `(variant name, payload field
+    /// types)`, in declaration order. Empty when `sym` is not a known user
+    /// enum. Read by the Model-admissibility gate (payload shapes only) and
+    /// by the Model schema tag (names AND shapes — the serialized
+    /// discriminant is declaration-index-keyed, so the name at each position
+    /// is wire-format-relevant).
+    pub(crate) fn enum_variant_payloads(
+        &self,
+        home: &ModPath,
+        sym: Symbol,
+    ) -> &[(Symbol, Vec<IrType>)] {
         self.enum_variants
             .get(&(home.clone(), sym))
             .map_or(&[], Vec::as_slice)
@@ -1308,7 +1322,7 @@ fn collect_record_shapes(
 fn type_reaches_enum(
     ty: &IrType,
     target: (&ModPath, Symbol),
-    enums: &BTreeMap<(ModPath, Symbol), Vec<Vec<IrType>>>,
+    enums: &BTreeMap<(ModPath, Symbol), VariantList>,
     visited: &mut BTreeSet<(ModPath, Symbol)>,
 ) -> bool {
     match ty {
@@ -1329,7 +1343,7 @@ fn type_reaches_enum(
             {
                 return variants
                     .iter()
-                    .flatten()
+                    .flat_map(|(_, fields)| fields)
                     .any(|f| type_reaches_enum(f, target, enums, visited));
             }
             false
