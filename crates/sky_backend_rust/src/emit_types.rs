@@ -13,7 +13,7 @@ use crate::naming::mangle_reserved;
 use crate::{EmitCtx, RecordStruct};
 
 /// The generic-type-parameter scope in effect while emitting one function's
-/// signature and body (M2a).
+/// signature and body.
 ///
 /// Maps a Sky type-variable [`Symbol`] to its deterministic Rust generic name
 /// (`T1`, `T2`, …) by the variable's *position* in the function's quantification
@@ -78,7 +78,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::ErrorKind => "sky_runtime::error::SkyErrorKind".to_owned(),
         IrType::Error => "sky_runtime::error::SkyError".to_owned(),
         IrType::ErrorDetails => "sky_runtime::error::SkyErrorDetails".to_owned(),
-        // The NOMINAL error-payload types (SEAL fix 2026-07-11): rendered as
+        // The NOMINAL error-payload types (SEAL fix): rendered as
         // the runtime's concrete structs, so a pattern-bound payload and any
         // position naming these types agree on ONE Rust type — never a
         // project-local synthesized record struct.
@@ -96,7 +96,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::Task(inner) => format!("SkyTask<{}>", render_type(ctx, inner, generics)?),
         IrType::Enum { home, name, args } => {
             // Special-case builtin Http.Stream ADTs that are NOT registered as
-            // synthetic `EnumDef`s but appear in user type annotations (#148).
+            // synthetic `EnumDef`s but appear in user type annotations.
             //
             // `ChunkEvent` is generic over the error type (`E` = always
             // `SkyError` in practice) — we bake the concrete type arg in here
@@ -111,7 +111,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
             {
                 return Ok("ChunkEvent<SkyError>".to_owned());
             }
-            // #210: `Std.Cache.Cache k v` is backed by the NON-generic runtime
+            // `Std.Cache.Cache k v` is backed by the NON-generic runtime
             // enum `SkyCacheHandle` — drop the phantom `k`/`v` args (they live
             // only on the kernel calls), else the render would emit an invalid
             // `SkyCacheHandle<T1, T2>` (E0107). `enum_name` returns the runtime
@@ -162,7 +162,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // `Decoder<T>` is the JSON decoder type, aliased in the emitted project's
         // preamble as `pub type Decoder<T> = sky_runtime::json::Decoder<SkyError, T>`.
         //
-        // #195: when the DECODED VALUE is itself a function (`Decoder (a -> b)` —
+        // when the DECODED VALUE is itself a function (`Decoder (a -> b)` —
         // e.g. the accumulator of a `succeed Ctor |> required …` pipeline, or a
         // `succeed (partiallyApplied x)` payload), the runtime represents that
         // payload as an owned/linear curry chain, `Box<dyn FnOnce(a) -> b + Send>`
@@ -194,18 +194,18 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::ServerResponse => "ServerResponse".to_owned(),
         IrType::ServerRoute => "ServerRoute".to_owned(),
         IrType::ServerCookie => "ServerCookie".to_owned(),
-        // #111: stream writer handle — re-exported from sky_runtime::server_stream.
+        // stream writer handle — re-exported from sky_runtime::server_stream.
         IrType::StreamWriter => "StreamWriter".to_owned(),
-        // #111: HTTP request handle — re-exported from sky_runtime::http.
+        // HTTP request handle — re-exported from sky_runtime::http.
         IrType::HttpRequest => "HttpRequest".to_owned(),
-        // #127: Sky.Http.Server.WebSocket opaque handles.
+        // Sky.Http.Server.WebSocket opaque handles.
         IrType::WebSocketServer => "WsHandle".to_owned(),
         IrType::WebSocketServerCfg => "WsServerCfg<SkyError>".to_owned(),
-        // #210: Std.Cache config / stats records — re-exported (ungated) from
+        // Std.Cache config / stats records — re-exported (ungated) from
         // sky_runtime::cache, so the bare name resolves via the crate glob use.
         IrType::CacheCfg => "CacheCfg".to_owned(),
         IrType::CacheStats => "CacheStats".to_owned(),
-        // M7 Std.Ui / Std.Html parametric types.  Use fully-qualified Rust paths
+        // Std.Ui / Std.Html parametric types.  Use fully-qualified Rust paths
         // (T2 soundness: `Attribute` exists in BOTH Std.Ui and Std.Html namespaces;
         // qualified paths keep them unambiguous and prevent glob-import shadowing).
         IrType::Ui { ctor, msg } => {
@@ -231,7 +231,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
             UiPlain::Description => "sky_runtime::ui::element::Description".to_owned(),
             UiPlain::LayoutContext => "sky_runtime::ui::element::LayoutContext".to_owned(),
         },
-        // M7 Live types — render to qualified runtime paths.
+        // Live types — render to qualified runtime paths.
         IrType::LiveReq => "sky_runtime::live::LiveReq".to_owned(),
         // `Route<Page>` has NO default type parameter in the runtime
         // (`live/route.rs`), so the page argument MUST be rendered: a bare
@@ -250,7 +250,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
             format!("({})", parts.join(", "))
         }
         IrType::Record(fields) => ctx.render_record_use(fields, generics)?,
-        // M6 Handler-arrow special case: `Request -> Task Error Response` must
+        // Handler-arrow special case: `Request -> Task Error Response` must
         // render as `ServerHandler<SkyError>` (an Arc<dyn Fn> alias defined in
         // the runtime), not as a generic `Box<dyn Fn + Send + 'static>`.  This
         // arm MUST appear before the generic `Fun` arm so it takes priority.
@@ -335,7 +335,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::FnOnceChain(params, ret) => render_fn_once_chain(ctx, params, ret, generics)?,
         // A generic type variable renders as the function's corresponding Rust
         // generic (`T1`, `T2`, …), resolved by position in the quantification
-        // scope (M2a). No trait bound is emitted — M2a covers only parametric
+        // scope. No trait bound is emitted — M2a covers only parametric
         // pass-through; constrained variables are rejected upstream.
         IrType::Generic(sym) => generics.rust_name(*sym)?,
     })
@@ -349,7 +349,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
 /// require. It is Send-ONLY (never `+ Sync`): a `FnOnce` curry chain is an
 /// owned/linear value that flows into the runtime's `Box<dyn Fn(..) + Send>`
 /// decoder slots, never into a shared `Arc<dyn Fn + Send + Sync>` callback slot —
-/// so forcing `+ Sync` on it is over-constrained and unsatisfiable (#195).
+/// so forcing `+ Sync` on it is over-constrained and unsatisfiable.
 ///
 /// # Errors
 ///
@@ -403,7 +403,7 @@ fn render_fn_once_chain(
 /// }
 /// ```
 ///
-/// A payload-carrying and/or generic enum (M3a) gains tuple-variant payloads, a
+/// A payload-carrying and/or generic enum gains tuple-variant payloads, a
 /// `<T1, …>` clause on the enum and its impl, and `SkyStringify` arms that bind
 /// each payload field and render it through the total autoref dispatch — mirroring
 /// the Go-reference Rust backend's `skyStringifyEnumImpl`:
@@ -474,7 +474,7 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
                     ));
                     binders.push(binder);
                 } else {
-                    // #87 seal: a non-derivable payload (a function / opaque
+                    // seal: a non-derivable payload (a function / opaque
                     // wrapper) impls neither `SkyStringify` nor `Debug`, so the
                     // autoref `.dispatch()` would not resolve (E0599). Bind it
                     // with `_` and render a `<fn>` placeholder — these carry no
@@ -517,14 +517,14 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
         )
     };
 
-    // #87 seal: only a fully-derivable enum takes the unconditional
+    // seal: only a fully-derivable enum takes the unconditional
     // `#[derive(Clone, Debug, PartialEq)]`. An enum whose payload reaches a
     // first-class function / opaque wrapper (directly or through a carrier /
     // another non-derivable enum) cannot derive those traits — emit no auto
     // derives (the hand-written `SkyStringify` impl below still gives it a total
     // string form).
     let self_derivable = ctx.enum_is_derivable(&def.home, def.name);
-    // #93 seal: the serde derive is gated on the SERDE predicate, not the CDPeq
+    // seal: the serde derive is gated on the SERDE predicate, not the CDPeq
     // one. serde-support ⊊ CDPeq-support: a `Clone + Debug + PartialEq` enum whose
     // payload reaches a `Html` / `Element` / `Color` / `UiPlain` value (serde-less
     // but derivable) must NOT be forced to `serde::Serialize` / `Deserialize` —
@@ -621,7 +621,7 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
                 "(&sky_runtime::stringify::Wrap(&self.{ident})).dispatch()"
             ));
         } else {
-            // #87 seal: a non-derivable field (a function / opaque wrapper)
+            // seal: a non-derivable field (a function / opaque wrapper)
             // impls neither `SkyStringify` nor `Debug`, so `.dispatch()` would
             // not resolve. Render a `<fn>` placeholder for that `{}` slot.
             show_args.push("\"<fn>\"".to_owned());
@@ -659,13 +659,13 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
         format!("format!(\"{fmt}\", {})", show_args.join(", "))
     };
 
-    // #87 seal: only a fully-derivable record takes the unconditional
+    // seal: only a fully-derivable record takes the unconditional
     // `#[derive(Clone, Debug, PartialEq)]`. A record holding a first-class
     // function / opaque wrapper field (directly or through a carrier / a
     // non-derivable enum) cannot derive those traits — emit no auto derives (the
     // hand-written `SkyStringify` impl below still gives it a total string form).
     //
-    // #93 seal: the serde derive is gated on `rec.is_serde` (the per-record serde
+    // seal: the serde derive is gated on `rec.is_serde` (the per-record serde
     // fixpoint), NOT `rec.is_derivable`. A CDPeq-but-not-serde record — e.g. a
     // view-helper `{ title : String, body : Html Msg }` in a Std.Live program —
     // keeps its `#[derive(Clone, Debug, PartialEq)]` but is NOT forced to

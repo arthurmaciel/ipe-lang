@@ -1,4 +1,4 @@
-//! #87 seal regression: a user record / enum that stores a first-class function
+//! seal regression: a user record / enum that stores a first-class function
 //! or an opaque wrapper (`Decoder` / `Cmd` / …) must NOT reach the unconditional
 //! `#[derive(Clone, Debug, PartialEq)]`.
 //!
@@ -241,7 +241,7 @@ fn enum_with_function_payload_has_no_derive() -> DResult<()> {
     Ok(())
 }
 
-/// #93 seal: in a `Std.Live` program, a NON-Model view-helper record that holds
+/// seal: in a `Std.Live` program, a NON-Model view-helper record that holds
 /// an `Html` field is `CDPeq`-supporting (`Html<M>` derives `Clone, Debug,
 /// PartialEq`) but NOT serde-supporting (`Html<M>` is not `Serialize`). Before
 /// the #93 fix the serde derive was gated on the `CDPeq` flag (`is_derivable`), so
@@ -321,7 +321,7 @@ fn live_html_helper_record_gets_cdpeq_without_serde() -> DResult<()> {
         "helper record's Html field rendered:\n{src}"
     );
 
-    // #93 core: the Html-holding helper carries `CDPeq` WITHOUT serde.
+    // core: the Html-holding helper carries `CDPeq` WITHOUT serde.
     let (helper_cdpeq, helper_serde) = derive_flavours(&src, "RecBodyTitle");
     assert!(
         helper_cdpeq,

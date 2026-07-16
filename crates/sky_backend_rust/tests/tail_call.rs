@@ -1,4 +1,4 @@
-//! TCO emission goldens (task #49): a `TailLoop` body emits `let mut`-shadowed
+//! TCO emission goldens: a `TailLoop` body emits `let mut`-shadowed
 //! params + `loop { … }` with temporaries-first `continue` jumps; an ordinary
 //! (non-`TailLoop`) recursive body emits ordinary recursion, no loop.
 

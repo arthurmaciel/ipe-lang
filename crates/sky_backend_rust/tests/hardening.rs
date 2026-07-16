@@ -274,7 +274,7 @@ fn cross_module_type_name_collision_is_rejected() -> DResult<()> {
     Ok(())
 }
 
-/// M1-core: `Expr::Let`, `Expr::If`, and the extended `BinOp` set emit total,
+/// `Expr::Let`, `Expr::If`, and the extended `BinOp` set emit total,
 /// well-formed Rust even though the frontend does not yet produce them. The
 /// `let`/`if` forms render as self-contained parenthesised expressions so they
 /// compose anywhere an expression is expected, and `/=` maps to Rust `!=`.

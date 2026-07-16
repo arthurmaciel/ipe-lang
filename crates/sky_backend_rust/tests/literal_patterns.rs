@@ -1,5 +1,5 @@
 //! Literal-, alias- and wildcard-pattern rendering tests for the M3b-3 Rust
-//! backend (task M3B3-CORE).
+//! backend.
 //!
 //! These exercise the [`Pat`] additions the backend learned to render as flat
 //! Rust match arms:
@@ -349,7 +349,7 @@ fn alias_subpattern_renders_binding_with_subpattern() -> DResult<()> {
     let mut i = Interner::new();
     let (prog, _x, _y) = alias_program(&mut i)?;
     let src = emit(&i, &prog)?;
-    // #99: in a by-VALUE ctor-payload position the alias no longer renders
+    // in a by-VALUE ctor-payload position the alias no longer renders
     // as `y @ x` (that spelling double-moves a non-`Copy` payload — sound
     // only under a by-ref binding mode). It now binds a fresh temp and
     // re-derives both binders in the arm prelude via the #96 clone-rebuild
