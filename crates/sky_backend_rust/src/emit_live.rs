@@ -346,6 +346,27 @@ fn emit_live_app_inner(
         crate::emit_model_gate::check_admissible_msg(ctx, msg_ty, sky_diagnostics::AppShape::Live)?;
     }
 
+    // H24: the compile-time Model schema tag, computed from the SAME
+    // recovered Model type the admissibility gate just checked. The session
+    // store rejects a persisted checkpoint whose tag differs BEFORE
+    // deserializing it. An unrecoverable `view` shape (the gate's documented
+    // fail-open residual) gets the all-zero sentinel: every same-sentinel
+    // checkpoint is treated as same-schema — exactly the pre-tag behaviour
+    // for those shapes, never a new rejection.
+    let schema_tag: [u8; 32] = match crate::emit_model_gate::model_ty_of_view(view_e) {
+        Some(model_ty) => crate::emit_model_schema::model_schema_tag(ctx, model_ty)?,
+        None => [0u8; 32],
+    };
+    let tag_bytes = schema_tag
+        .iter()
+        .map(|b| format!("0x{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    // Declared as a block-local const at the call site (the one place it is
+    // used); the byte value is the whole point — the identifier just keeps
+    // the emitted call arg readable.
+    let tag_const = format!("const SKY_LIVE_MODEL_SCHEMA_TAG: [u8; 32] = [{tag_bytes}];");
+
     let init_s = emit_live_fn(ctx, init_e, indent, child, generics)?;
     let update_s = emit_live_fn(ctx, update_e, indent, child, generics)?;
     let view_s = emit_live_fn(ctx, view_e, indent, child, generics)?;
@@ -378,7 +399,8 @@ fn emit_live_app_inner(
              {model_ty_s} {{ page: __page, ..__model }}"
         );
         return Ok(Some(format!(
-            "sky_runtime::live::live_app_routed(\
+            "{{ {tag_const} \
+             sky_runtime::live::live_app_routed(\
              {init_s}, \
              {update_s}, \
              {view_s}, \
@@ -387,8 +409,9 @@ fn emit_live_app_inner(
              {not_found_s}, \
              {set_page}, \
              ::std::env::var(\"SKY_LIVE_STORE\").unwrap_or_else(|_| \"memory\".to_string()), \
-             ::std::env::var(\"SKY_LIVE_STORE_PATH\").unwrap_or_else(|_| ::std::string::String::new())\
-             )"
+             ::std::env::var(\"SKY_LIVE_STORE_PATH\").unwrap_or_else(|_| ::std::string::String::new()), \
+             SKY_LIVE_MODEL_SCHEMA_TAG\
+             ) }}"
         )));
     }
 
@@ -398,14 +421,16 @@ fn emit_live_app_inner(
     // The store kind and path come from env at call time so a single binary can
     // switch stores without recompilation (`SKY_LIVE_STORE` / `SKY_LIVE_STORE_PATH`).
     Ok(Some(format!(
-        "sky_runtime::live::live_app(\
+        "{{ {tag_const} \
+         sky_runtime::live::live_app(\
          {init_s}, \
          {update_s}, \
          {view_s}, \
          {subs_s}, \
          ::std::env::var(\"SKY_LIVE_STORE\").unwrap_or_else(|_| \"memory\".to_string()), \
-         ::std::env::var(\"SKY_LIVE_STORE_PATH\").unwrap_or_else(|_| ::std::string::String::new())\
-         )"
+         ::std::env::var(\"SKY_LIVE_STORE_PATH\").unwrap_or_else(|_| ::std::string::String::new()), \
+         SKY_LIVE_MODEL_SCHEMA_TAG\
+         ) }}"
     )))
 }
 
@@ -640,5 +665,143 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::Secret => "Secret",
         IrType::CacheCfg => "CacheCfg",
         IrType::CacheStats => "CacheStats",
+    }
+}
+
+#[cfg(test)]
+mod schema_tag_tests {
+    use std::collections::BTreeMap;
+
+    use sky_diagnostics::DResult;
+    use sky_intern::Interner;
+    use sky_ir::{
+        Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Program, UiCtor,
+    };
+
+    use crate::emit_types::GenericScope;
+    use crate::{DbDriver, EmitCtx};
+
+    fn fn_item(interner: &mut Interner, id: u32, name: &str) -> DResult<Func> {
+        Ok(Func {
+            id: FuncId::from_raw(id),
+            name: interner.intern(name)?,
+            home: ModPath(vec![]),
+            type_params: vec![],
+            params: vec![],
+            ret: IrType::Int,
+            body: Expr::Int(0),
+        })
+    }
+
+    fn func_value(id: u32, ty: IrType) -> Expr {
+        Expr::FuncValue {
+            callee: Callee::Func(FuncId::from_raw(id)),
+            ty,
+        }
+    }
+
+    /// The emitted `live_app(...)` call carries the compile-time Model schema
+    /// tag: a `const SKY_LIVE_MODEL_SCHEMA_TAG: [u8; 32] = [...]` declaration
+    /// plus that identifier as the call's new final argument (H24 — the
+    /// session store rejects a checkpoint whose tag differs BEFORE
+    /// deserializing it).
+    #[test]
+    fn live_app_emits_schema_tag_const_and_final_argument() -> DResult<()> {
+        let mut interner = Interner::new();
+        let init_fn = fn_item(&mut interner, 0, "init")?;
+        let update_fn = fn_item(&mut interner, 1, "update")?;
+        let view_fn = fn_item(&mut interner, 2, "view")?;
+        let subs_fn = fn_item(&mut interner, 3, "subscriptions")?;
+        let init_sym = init_fn.name;
+        let update_sym = update_fn.name;
+        let view_sym = view_fn.name;
+        let subs_sym = subs_fn.name;
+        let count = interner.intern("count")?;
+        let main_mod = interner.intern("Main")?;
+
+        let program = Program {
+            modules: vec![Module {
+                name: ModPath(vec![main_mod]),
+                types: vec![],
+                funcs: vec![init_fn, update_fn, view_fn, subs_fn],
+                entry: None,
+                records: vec![],
+                uses_tea: false,
+                uses_server: false,
+                uses_ui: false,
+                uses_live: true,
+                uses_tui: false,
+                uses_webview: false,
+                uses_css: false,
+                uses_auth: false,
+            }],
+        };
+        let ctx = EmitCtx::build(&interner, &program, DbDriver::Sqlite)?;
+
+        // Model = { count : Int } (no `page` field → the single-page branch).
+        let model = IrType::Record(BTreeMap::from([(count, IrType::Int)]));
+        let cmd_int = || IrType::Cmd(Box::new(IrType::Int));
+        let pair = || IrType::Tuple(vec![model.clone(), cmd_int()]);
+        let cfg = Expr::Record(vec![
+            (
+                init_sym,
+                func_value(0, IrType::Fun(vec![IrType::LiveReq], Box::new(pair()))),
+            ),
+            (
+                update_sym,
+                func_value(
+                    1,
+                    IrType::Fun(vec![IrType::Int, model.clone()], Box::new(pair())),
+                ),
+            ),
+            (
+                view_sym,
+                func_value(
+                    2,
+                    IrType::Fun(
+                        vec![model.clone()],
+                        Box::new(IrType::Ui {
+                            ctor: UiCtor::Html,
+                            msg: Box::new(IrType::Int),
+                        }),
+                    ),
+                ),
+            ),
+            (
+                subs_sym,
+                func_value(
+                    3,
+                    IrType::Fun(
+                        vec![model.clone()],
+                        Box::new(IrType::Sub(Box::new(IrType::Int))),
+                    ),
+                ),
+            ),
+        ]);
+
+        let out = super::emit_live_call(
+            &ctx,
+            &Callee::Kernel(KernelFn::LiveApp),
+            &[cfg],
+            0,
+            0,
+            GenericScope::new(&[]),
+        )?
+        .expect("LiveApp must emit");
+
+        assert!(
+            out.contains("const SKY_LIVE_MODEL_SCHEMA_TAG: [u8; 32] = ["),
+            "the emission must declare the schema-tag const, got:\n{out}"
+        );
+        assert!(
+            out.contains("SKY_LIVE_MODEL_SCHEMA_TAG)"),
+            "the emitted live_app call must pass the tag identifier as its \
+             final argument, got:\n{out}"
+        );
+        assert!(
+            out.contains("sky_runtime::live::live_app("),
+            "single-page cfg must still route to live_app, got:\n{out}"
+        );
+        Ok(())
     }
 }
