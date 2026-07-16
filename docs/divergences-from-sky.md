@@ -1679,3 +1679,22 @@ source; output-changing departures record an `oracle_divergence + reason`
 auto-migration; CI can generate the patches by running the migrator over
 pristine sources — the queue doubles as an end-to-end test of the user-facing
 migration tool.
+
+### 6.10 `ipe lint` — source-level lint tool (design complete)
+
+The reference ships no lint subsystem — no lint pass, no lint CLI command, no
+per-site suppression (its `Sky/Lsp/Diag.hs` republishes compiler diagnostics
+only). ipê adds `ipe lint`, an elm-review/clippy-class static-analysis tool
+over the compiler's own artifacts (parse AST + canon AST + `SolvedTypes` —
+never a second analyzer): visitor-schema rules in a new `sky_lint` crate,
+dual `SKY-W####`+kebab-name identity, `allow`/`warn`/`deny` levels via
+`sky.toml [lint]`, per-site `-- @allow(<rule>) <reason>` directives with a
+mandatory reason (an unused directive is itself a lint), autofix via the
+existing `Suggestion`/`Applicability` machinery with a verify-then-write
+gate, and LSP surfacing as diagnostics + quick-fix code actions. Rule
+catalogue v1: dead code, case hygiene, Elm-family pitfalls, and security
+smells (`Task String` errors, Float-money, password-`onInput`,
+`data-sky-eval`). Capability-only divergence: lint never changes what the
+compiler accepts, so Go-oracle parity is unaffected. Design + spec + phased
+plan: `docs/architecture/ipe-lint-tool-design-2026-07-16.md`. Filed
+2026-07-16 (backlog #207); implementation not started.
