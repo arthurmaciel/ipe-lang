@@ -115,7 +115,7 @@ pub struct SolvedTypes {
     /// `"b"`, …), keyed by `(home, def_name)`. Absent or empty for a def that
     /// stayed fully monomorphic (no boundary-free residual `Flex` root) — the
     /// lowerer's untyped-def arm behaves exactly as before this field
-    /// existed. See `docs/architecture/class1-inference-fix-spec-2026-07-09.md`.
+    /// existed. See `docs/adr/0008-untyped-binding-module-boundary-generalization.md`.
     pub untyped_type_params: BTreeMap<(Vec<Symbol>, Symbol), Vec<Symbol>>,
 }
 
@@ -197,7 +197,7 @@ fn infer_with_budget_attributed(
     // cross-module call site's field accesses / record updates need the
     // freshly-instantiated (not the stale program-wide-shared) structure to
     // resolve correctly. See
-    // `docs/architecture/class1-inference-fix-spec-2026-07-09.md`.
+    // `docs/adr/0008-untyped-binding-module-boundary-generalization.md`.
     let untyped_schemes = promote_untyped_boundaries(&mut uf, budget, interner, &generated)?;
 
     // Discharge deferred field accesses and record updates in a joint fixpoint.
@@ -3669,7 +3669,7 @@ mod tests {
     /// using it at two different concrete types from within its own module is
     /// a sound rejection, exactly matching the reference `sky` compiler's
     /// `CLocal` semantics (empirically verified against `sky v0.16.29`; see
-    /// `docs/architecture/class1-inference-fix-spec-2026-07-09.md`). A
+    /// `docs/adr/0008-untyped-binding-module-boundary-generalization.md`). A
     /// CROSS-module use at two different types IS accepted — see
     /// [`untyped_binding_generalizes_across_cross_module_uses`]. To get
     /// polymorphism from within the same module, annotate it (see
