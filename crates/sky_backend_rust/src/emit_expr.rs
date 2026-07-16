@@ -2003,10 +2003,9 @@ fn emit_db_call(
 ///
 /// Returns `Err(CompilerBug)` for any `k.is_tea()` variant that is:
 ///
-/// * **M6-reserved** (`CmdPublish`, `CmdPublishNoEcho`, `SubSubscribeTopic`,
-///   `PubSubPublish`, `PubSubPublishNoEcho`) — guard fires if a program
-///   somehow reaches one (e.g. if `lower_callee` mis-routes it); not
-///   user-reachable from M5c input.
+/// * **M6-reserved** (`CmdPublish`, `CmdPublishNoEcho`, `SubSubscribeTopic`) —
+///   guard fires if a program somehow reaches one (e.g. if `lower_callee`
+///   mis-routes it); not user-reachable from M5c input.
 ///
 /// Returns `Ok(None)` for non-TEA callees so the standard path handles them.
 #[allow(clippy::match_same_arms)]
@@ -2098,16 +2097,21 @@ fn emit_tea_call(
         // `Cmd.publishNoEcho : String -> Dict String String -> Cmd msg`
         // Both map to the standard N-arg emit path (runtime live/pubsub.rs).
         KernelFn::CmdPublish | KernelFn::CmdPublishNoEcho => Ok(None),
-        // ── M6 reserved: NOT emittable yet ───────────────────────────────────────
-        // If a program somehow reaches one of these kernels through lower_callee
-        // routing, that is a compiler invariant violation — hard error.
-        KernelFn::PubSubPublish | KernelFn::PubSubPublishNoEcho => Err(Diagnostic::CompilerBug {
-            where_: "sky_backend_rust::emit_tea_call",
-            detail: format!(
-                "M6-reserved TEA kernel {k:?} reached emit — \
-                     PubSub qualifier not yet in QUALIFIERS"
-            ),
-        }),
+        // ── #215: Std.PubSub.publish / publishNoEcho ────────────────────────────
+        // `pubsub_publish<T, E>(topic, payload) -> SkyTask<E, i64>` — T (payload)
+        // infers from arg 1; E (error) appears ONLY in the SkyTask<E, i64> result,
+        // so anchor it to SkyError with `<_, SkyError>` (T first, E second).
+        // Mirror of the CsvParse `::<SkyError>` anchor; two generic slots because T
+        // precedes E.  `pubsub_publish` is re-exported at sky_runtime root via
+        // `pub use live::*`, so no full path needed in the emitted crate.
+        KernelFn::PubSubPublish | KernelFn::PubSubPublishNoEcho => {
+            let topic_e = arg!(0, "topic")?;
+            let payload_e = arg!(1, "payload")?;
+            let topic_s = emit_expr_at(ctx, topic_e, indent, child, generics)?;
+            let payload_s = emit_expr_at(ctx, payload_e, indent, child, generics)?;
+            let name = kernel_name(*k); // "pubsub_publish" / "pubsub_publish_no_echo"
+            Ok(Some(format!("{name}::<_, SkyError>({topic_s}, {payload_s})")))
+        }
         // Any other `k.is_tea()` variant not listed above is a new wired variant
         // that needs an explicit arm.  The `is_tea()` guard at the top of this
         // function means this arm is a hard compile-time-visible gap rather than
