@@ -4900,7 +4900,7 @@ impl<'a> Builder<'a> {
             // genuine `Ty::Var(u32::MAX)` hole (legacy `kernel_ty` has no Html/
             // Ui/Background/Border/Font arm), so all land in FIRST_SCHEMED.
             // Verified vs runtime fn params + lower `callee_arity` per
-            // docs/architecture/html-ui-live-scheme-table.md. `Live.appRouted`
+            // docs/adr/0020-html-ui-live-kernel-arity-tripwire.md. `Live.appRouted`
             // is EXCLUDED (REACHABLE_BUT_UNLOWERED) — its lowering is
             // `Feature::RoutedLiveApp` unsupported, so a caller fails closed.
 
@@ -7222,7 +7222,7 @@ mod registry_phase_c_tests {
             // Std.Html / Std.Ui / Sky.Live rendering family (42 — task #74).
             // All genuine `Ty::Var(u32::MAX)` holes (legacy `kernel_ty` has no
             // Html/Ui/Background/Border/Font arm). Verified vs runtime + lower
-            // `callee_arity` in docs/architecture/html-ui-live-scheme-table.md.
+            // `callee_arity` in docs/adr/0020-html-ui-live-kernel-arity-tripwire.md.
             // `LiveAppRouted` is EXCLUDED here — it is `REACHABLE_BUT_UNLOWERED`.
             K::HtmlRender,
             K::HtmlEscapeText,

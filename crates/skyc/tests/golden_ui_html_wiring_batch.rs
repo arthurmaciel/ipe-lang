@@ -7,7 +7,7 @@
 //!
 //! `Ui.mediaQuery` is NOT exercised here — it was deferred from this batch
 //! and wired 2026-07-11 with its own golden (`golden_ui_mediaquery.rs`; see
-//! `docs/architecture/ui-mediaquery-design-2026-07-11.md`).
+//! `docs/adr/0019-ui-mediaquery-safe-boundary.md`).
 //!
 //! ## Oracle provenance
 //!

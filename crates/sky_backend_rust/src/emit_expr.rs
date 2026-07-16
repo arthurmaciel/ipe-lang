@@ -3784,7 +3784,7 @@ fn emit_ui_call(
         // consumed by `live::style_inject::build_mq` into a sky-id-scoped
         // `<style data-sky-mq=…>` block. The query string is gated through
         // `SafeCssMediaQuery` inside the runtime helper (fail-closed drop).
-        // See docs/architecture/ui-mediaquery-design-2026-07-11.md.
+        // See docs/adr/0019-ui-mediaquery-safe-boundary.md.
         KernelFn::UiMediaQuery => {
             let [q_e, a_e, el_e] = args else {
                 return Err(Diagnostic::CompilerBug {

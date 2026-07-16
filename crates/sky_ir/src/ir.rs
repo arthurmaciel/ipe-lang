@@ -788,7 +788,7 @@ pub enum IrType {
     ///
     /// Constructed by `Ws.defaultCfg` and threaded through the `Ws.with*`
     /// builder chain; consumed by `Ws.upgrade`.  Phantom `msg` type parameter
-    /// dropped (D2 — see docs/architecture/websocket-server-design.md).
+    /// dropped (D2 — see docs/adr/0023-websocket-server-kernel-only-typed-handles.md).
     WebSocketServerCfg,
     // ── M7: Std.Ui / Std.Html parametric types ──────────────────────────────
     /// A parametric `Std.Ui` or `Std.Html` type — one that carries a message type

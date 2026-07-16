@@ -991,7 +991,7 @@ pub enum StdlibKernel {
     /// `live::style_inject::apply_style_injections` (`build_mq`) into a
     /// sky-id-scoped `<style data-sky-mq="<sid>">@media <q> {
     /// [sky-id="<sid>"] { <rules> } }</style>` block. See
-    /// `docs/architecture/ui-mediaquery-design-2026-07-11.md`.
+    /// `docs/adr/0019-ui-mediaquery-safe-boundary.md`.
     UiMediaQuery,
     UiMobile,        // Breakpoint constant: "(max-width: 767px)"
     UiTablet,        // Breakpoint constant: "(min-width: 768px) and (max-width: 1023px)"
