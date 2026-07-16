@@ -2642,9 +2642,20 @@ fn promote_unification_sibling_lambdas(
 /// boundary)? Unlike [`lambda_body_refs_sym`] (which treats nested lambdas
 /// as transparent — the right shape for "will the OUTER `move` closure
 /// capture this"), this one STOPS at a nested lambda boundary and returns
-/// `false` for it: a reference that only exists behind ANOTHER nested
-/// closure is that INNER closure's own concern (it gets its own wrap when
-/// [`force_shared_capture_clones`] reaches it), not this one's.
+/// `false` for it.
+///
+/// This predicate must ALWAYS be evaluated on the ALREADY-PROCESSED body
+/// (after [`force_shared_capture_clones`] has recursed into the nested
+/// lambdas), never the raw pre-recursion body. Recursion is what makes the
+/// predicate sound as a wrap decision: when the inner lambda genuinely
+/// captures `sym`, its own wrap plants a `Let { sym, CloneVar(sym), .. }`
+/// directly in the enclosing lambda's body, turning what was an
+/// only-behind-a-nested-lambda reference into a DIRECT one this predicate
+/// now sees — so the pre-clone relays outward through every move-closure
+/// boundary between `sym`'s binding and the read. Evaluating it on the
+/// pre-recursion body would miss that relay and let an intermediate closure
+/// move `sym` out of an `Fn` env (E0507); see
+/// [`wrap_shared_lambda_if_needed`].
 fn sym_referenced_directly(sym: Symbol, expr: &Expr) -> bool {
     match expr {
         Expr::Var(s) | Expr::CloneVar(s) => *s == sym,
@@ -3009,22 +3020,33 @@ fn wrap_shared_lambda_if_needed(sym: Symbol, lambda_expr: Expr) -> Expr {
     let (shadowed, needs_wrap, rebuilt) = match lambda_expr {
         Expr::Lambda { params, ret, body } => {
             let shadowed = params.iter().any(|(s, _)| *s == sym);
-            let needs_wrap = !shadowed && sym_referenced_directly(sym, &body);
+            // Recurse FIRST, then decide on the PROCESSED body. An inner
+            // lambda's own wrap plants a direct `CloneVar(sym)` read in THIS
+            // lambda's body, so a symbol reached only through a deeper closure
+            // (e.g. a pipeline-synthesized intermediate `move |eta_0|`) becomes
+            // a direct reference here after recursion — and this lambda gets its
+            // relay pre-clone. Deciding on the pre-recursion body would miss it
+            // (`sym_referenced_directly` is lambda-opaque), leaving the
+            // intermediate closure to move `sym` out of the enclosing `Fn` env
+            // (E0507). The relay thus propagates outward through every boundary.
             let body = if shadowed {
                 body
             } else {
                 Box::new(force_shared_capture_clones(sym, *body))
             };
+            let needs_wrap = !shadowed && sym_referenced_directly(sym, &body);
             (shadowed, needs_wrap, Expr::Lambda { params, ret, body })
         }
         Expr::SharedLambda { params, ret, body } => {
             let shadowed = params.iter().any(|(s, _)| *s == sym);
-            let needs_wrap = !shadowed && sym_referenced_directly(sym, &body);
+            // Recurse FIRST, then decide on the PROCESSED body — see the
+            // `Lambda` arm above for why the relay must be post-recursion.
             let body = if shadowed {
                 body
             } else {
                 Box::new(force_shared_capture_clones(sym, *body))
             };
+            let needs_wrap = !shadowed && sym_referenced_directly(sym, &body);
             (
                 shadowed,
                 needs_wrap,
@@ -6804,6 +6826,18 @@ impl<'a> Lowerer<'a> {
                             let mut remaining = n;
                             lowered_body =
                                 rewrite_multiuse_clones(*sym, &mut remaining, lowered_body);
+                        } else {
+                            // #218: at `n == 1` the multi-use pass is skipped,
+                            // but a single read sitting behind TWO OR MORE
+                            // `move`-closure boundaries still needs the
+                            // per-boundary clone relay (the def-head sibling of
+                            // the lambda-param fix in `lower_lambda`). The
+                            // intermediate closure would otherwise move the param
+                            // out of the enclosing `Fn` env (E0507).
+                            // `force_shared_capture_clones` is a documented no-op
+                            // when no nested capturing lambda is present, so
+                            // steady-state params stay byte-identical.
+                            lowered_body = force_shared_capture_clones(*sym, lowered_body);
                         }
                     } else {
                         // T4 (#90): a fn-carrying, non-Clone param has no sound
@@ -6968,6 +7002,11 @@ impl<'a> Lowerer<'a> {
                                 let mut remaining = n;
                                 lowered_body =
                                     rewrite_multiuse_clones(*sym, &mut remaining, lowered_body);
+                            } else {
+                                // #218: single read behind >= 2 move-closure
+                                // boundaries still needs the per-boundary relay;
+                                // see the Typed-path comment above.
+                                lowered_body = force_shared_capture_clones(*sym, lowered_body);
                             }
                         } else {
                             // T4 (#90): see the Typed-path comment above.
@@ -8036,12 +8075,30 @@ impl<'a> Lowerer<'a> {
         // `rewrite_multiuse_clones`'s own `Lambda` arm carries the #199
         // nested-capture descent, so a param captured into a further-nested
         // closure is covered by the same walk.
+        //
+        // #218: the multi-use pass only fires at `n > 1`, but the
+        // nested-capture relay is needed whenever the param's read sits behind
+        // TWO OR MORE `move`-closure boundaries — even at `n == 1`. Shape:
+        // `report e = randomToken 4 |> Task.andThen (\errId -> logAndFail e errId)`.
+        // Here `e` (a `CloneOk` `Error`) is read exactly once, but through the
+        // pipeline-synthesized intermediate `move |eta_0|` closure AND the inner
+        // `\errId ->` closure; the intermediate boundary must pre-clone `e` too
+        // or it moves `e` out of `report`'s `Fn` env (E0507). At `n == 1` the
+        // multi-use pass is skipped, so run the relay directly:
+        // `force_shared_capture_clones` gives every intermediate move-closure
+        // boundary its own `let sym = sym.clone()` and is a documented no-op
+        // when there is no nested capturing lambda (steady-state single-closure
+        // params stay byte-identical). At `n > 1` the multi-use pass already
+        // performs this exact relay via its `Lambda` arm, so the two are
+        // mutually exclusive — never double-applied.
         for (sym, ir_ty) in &ir_params {
             if matches!(clone_class(ir_ty), CloneClass::CloneOk) {
                 let n = count_var_uses(*sym, &body);
                 if n > 1 {
                     let mut remaining = n;
                     body = rewrite_multiuse_clones(*sym, &mut remaining, body);
+                } else {
+                    body = force_shared_capture_clones(*sym, body);
                 }
             }
         }
@@ -14435,7 +14492,14 @@ impl<'a> Lowerer<'a> {
                         let mut remaining = n;
                         rewrite_multiuse_clones(name, &mut remaining, acc)
                     } else {
-                        acc
+                        // #218: a single read of a non-function `CloneOk`
+                        // let-binding behind >= 2 move-closure boundaries still
+                        // needs the per-boundary clone relay. The `Fun`-typed
+                        // `Arc`-promotion path below (`needs_shared_capture`)
+                        // handles function-typed bindings; this covers the
+                        // ordinary-value siblings. `force_shared_capture_clones`
+                        // is a documented no-op absent a nested capturing lambda.
+                        force_shared_capture_clones(name, acc)
                     }
                 } else {
                     // T4 (#90): a fn-carrying, non-Clone let-binding has no
