@@ -47,6 +47,22 @@ pub trait SessionStore<Model, Msg>: Send + Sync {
     async fn delete(&self, sid: &str);
     /// Evict idle-expired sessions (called periodically by the eviction task).
     async fn sweep(&self) {}
+
+    /// Every session handle THIS PROCESS currently holds live (i.e. has an
+    /// in-memory driver + possibly an open SSE connection). Deliberately
+    /// scoped to the LOCAL mem-cache, never the full persisted table: a
+    /// `Cold` row on disk (another replica's session, or one this process
+    /// simply hasn't touched yet) has no SSE connection in THIS process to
+    /// push anything to, so it is out of scope for what this method is for.
+    /// Returns handles directly (not bare sids) — the caller
+    /// (`push_reload_to_live_sessions`) needs each handle's `sse_tx` and
+    /// would otherwise have to re-`get()` every id, opening a TOCTOU-ish gap
+    /// where a session evicted between the enumerate and the re-fetch is
+    /// silently skipped OR (worse) touches its TTL a second time for no
+    /// reason. No default body (unlike `sweep`) — every backend has an
+    /// opinion; a future backend without an in-process cache must make an
+    /// explicit, reviewed choice, not silently inherit a possibly-wrong one.
+    async fn live_sessions(&self) -> Vec<SessionHandle<Model, Msg>>;
 }
 
 // ─── Memory store — default; in-process, lost on restart (Go memoryStore) ────
@@ -100,6 +116,14 @@ impl<Model: Send + 'static, Msg: Send + 'static> SessionStore<Model, Msg>
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .retain(|_, (_, seen)| now.duration_since(*seen) <= ttl);
+    }
+    async fn live_sessions(&self) -> Vec<SessionHandle<Model, Msg>> {
+        self.sessions
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .map(|(h, _)| h.clone())
+            .collect()
     }
 }
 
@@ -268,6 +292,14 @@ where
             .unwrap_or_else(|e| e.into_inner())
             .retain(|_, (_, seen)| now.duration_since(*seen) <= ttl);
     }
+    async fn live_sessions(&self) -> Vec<SessionHandle<Model, Msg>> {
+        self.mem_cache
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .map(|(h, _)| h.clone())
+            .collect()
+    }
 }
 
 // ─── Postgres store — multi-instance deployments (Go postgresStore) ──────────
@@ -411,6 +443,14 @@ where
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .retain(|_, (_, seen)| now.duration_since(*seen) <= ttl);
+    }
+    async fn live_sessions(&self) -> Vec<SessionHandle<Model, Msg>> {
+        self.mem_cache
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .map(|(h, _)| h.clone())
+            .collect()
     }
 }
 
@@ -556,6 +596,14 @@ where
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .retain(|_, (_, seen)| now.duration_since(*seen) <= ttl);
+    }
+    async fn live_sessions(&self) -> Vec<SessionHandle<Model, Msg>> {
+        self.mem_cache
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .map(|(h, _)| h.clone())
+            .collect()
     }
 }
 
@@ -958,6 +1006,121 @@ mod tests {
             }
             s.delete(&sid).await;
         }
+    }
+
+    /// `live_sessions()` lists exactly the locally-live handles: empty on a
+    /// fresh store, grows with `set()`, shrinks with `delete()`.
+    #[tokio::test]
+    async fn memory_store_live_sessions_lists_only_locally_cached_handles() {
+        let s: MemoryStore<(), ()> = MemoryStore::new(Duration::from_secs(60));
+        assert!(s.live_sessions().await.is_empty());
+        s.set("a", handle()).await;
+        s.set("b", handle()).await;
+        assert_eq!(s.live_sessions().await.len(), 2);
+        s.delete("a").await;
+        assert_eq!(s.live_sessions().await.len(), 1);
+    }
+
+    /// A persisted row with NO in-process handle (another replica's session,
+    /// seeded via raw SQL bypassing `set()`) is NOT a live session — only the
+    /// locally-`set()` one is returned.
+    #[cfg(feature = "db")]
+    #[tokio::test]
+    async fn sqlite_store_live_sessions_excludes_cold_rows() {
+        let path = std::env::temp_dir().join(format!("skytest_lives_{}.db", std::process::id()));
+        let p = path.to_str().unwrap();
+        let _ = std::fs::remove_file(p);
+        let s: SqliteStore<i32, ()> = SqliteStore::new(p, Duration::from_secs(60), TEST_TAG)
+            .await
+            .unwrap();
+        // Cross-replica cold row: valid blob + tag, but no mem_cache entry.
+        sqlx::query(
+            "INSERT INTO sky_sessions (sid, blob, last_seen, schema_tag) VALUES (?, ?, ?, ?)",
+        )
+        .bind("cold_sid")
+        .bind("41")
+        .bind(now_secs())
+        .bind(hex::encode(TEST_TAG))
+        .execute(&s.pool)
+        .await
+        .unwrap();
+        s.set("live_sid", handle_i32(42)).await;
+
+        let live = s.live_sessions().await;
+        assert_eq!(
+            live.len(),
+            1,
+            "only the locally-set session has a live handle; the cold row \
+             (no SSE connection in this process) must be excluded"
+        );
+        // The cold row is still a valid checkpoint through get().
+        assert!(matches!(
+            s.get("cold_sid").await,
+            Some(StoreHit::Cold(41))
+        ));
+        let _ = std::fs::remove_file(p);
+    }
+
+    /// Postgres mirror of the cold-row exclusion — `SKY_TEST_PG_URL`-gated.
+    #[cfg(feature = "db")]
+    #[tokio::test]
+    async fn postgres_store_live_sessions_excludes_cold_rows() {
+        let Ok(url) = std::env::var("SKY_TEST_PG_URL") else {
+            return;
+        };
+        let cold_sid = format!("pgtest_cold_{}", std::process::id());
+        let live_sid = format!("pgtest_live_{}", std::process::id());
+        let s: PostgresStore<i32, ()> = PostgresStore::new(&url, Duration::from_secs(60), TEST_TAG)
+            .await
+            .unwrap();
+        s.delete(&cold_sid).await;
+        s.delete(&live_sid).await;
+        sqlx::query(
+            "INSERT INTO sky_sessions (sid, blob, last_seen, schema_tag) \
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(&cold_sid)
+        .bind("41")
+        .bind(now_secs())
+        .bind(hex::encode(TEST_TAG))
+        .execute(&s.pool)
+        .await
+        .unwrap();
+        s.set(&live_sid, handle_i32(42)).await;
+        assert_eq!(s.live_sessions().await.len(), 1);
+        s.delete(&cold_sid).await;
+        s.delete(&live_sid).await;
+    }
+
+    /// Redis mirror of the cold-row exclusion — `SKY_TEST_REDIS_URL`-gated.
+    #[cfg(feature = "redis_store")]
+    #[tokio::test]
+    async fn redis_store_live_sessions_excludes_cold_rows() {
+        let Ok(url) = std::env::var("SKY_TEST_REDIS_URL") else {
+            return;
+        };
+        let cold_sid = format!("redistest_cold_{}", std::process::id());
+        let live_sid = format!("redistest_live_{}", std::process::id());
+        let s: RedisStore<i32, ()> = RedisStore::new(&url, Duration::from_secs(60), TEST_TAG)
+            .await
+            .unwrap();
+        s.delete(&cold_sid).await;
+        s.delete(&live_sid).await;
+        // Cross-replica cold row: HASH written directly, no mem_cache entry.
+        let mut conn = s.conn.clone();
+        let _: () = redis::cmd("HSET")
+            .arg(redis_key(&cold_sid))
+            .arg("blob")
+            .arg("41")
+            .arg("tag")
+            .arg(hex::encode(TEST_TAG))
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        s.set(&live_sid, handle_i32(42)).await;
+        assert_eq!(s.live_sessions().await.len(), 1);
+        s.delete(&cold_sid).await;
+        s.delete(&live_sid).await;
     }
 
     #[tokio::test]
