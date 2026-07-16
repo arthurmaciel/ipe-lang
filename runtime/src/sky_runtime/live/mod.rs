@@ -238,53 +238,12 @@ pub fn render_page_full(sid: &str, base: &str, body: &str, csrf_token: &str) -> 
     )
 }
 
-/// Floating "🔍 Console" link injected into every dev-mode page (Go parity:
-/// `devBannerHTML`). Suppressed for a sub-app (`base` non-empty — e.g. the
-/// bundled console child itself; a console link inside the console is
-/// recursive), in production (`ENV`/`SKY_ENV` non-dev), and when the console
-/// surface is disabled (`SKY_CONSOLE_EMBED=off` / `SKY_CONSOLE_AUTH=off`).
-/// Rendered as a sibling of `#sky-root` so a body patch never blows it away;
-/// `position:fixed` pins it bottom-right and `pointer-events` stays default so
-/// the link is clickable.
+/// Floating "🔍 Console" link injected into every dev-mode page. The
+/// implementation lives in the always-compiled `telemetry` module so the
+/// Sky.Http.Server path (`server.rs`) shares the identical byte-exact banner;
+/// this is a thin re-export for the Live page renderer.
 fn dev_console_banner(base: &str) -> String {
-    if !base.is_empty() || crate::sky_runtime::telemetry::production_from_env() {
-        return String::new();
-    }
-    if matches!(
-        crate::sky_runtime::system::read_env_var("SKY_CONSOLE_EMBED").as_deref(),
-        Ok("off") | Ok("0") | Ok("false")
-    ) || crate::sky_runtime::system::read_env_var("SKY_CONSOLE_AUTH")
-        .map(|v| v == "off")
-        .unwrap_or(false)
-    {
-        return String::new();
-    }
-    // Byte-match Go's `devBannerHTML` (dev_banner.go): same id, target/rel/title,
-    // monospace blue styling, and the `&#128269;` entity (NOT a literal emoji) so
-    // both backends emit identical bytes. href honours SKY_CONSOLE_URL (default
-    // /_sky/console), attribute-escaped against a hostile env value.
-    let url = crate::sky_runtime::system::read_env_var("SKY_CONSOLE_URL")
-        .map(|v| v.trim().to_string())
-        .ok()
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "/_sky/console".to_string());
-    let esc = url
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&#34;")
-        .replace('\'', "&#39;");
-    format!(
-        "<a id=\"__sky-dev-console\" href=\"{esc}\" target=\"_blank\" rel=\"noopener\" \
-         title=\"Sky Console (dev only)\" \
-         style=\"position:fixed;right:12px;bottom:12px;z-index:2147483646;\
-         font:12px/1.4 ui-monospace,Menlo,monospace;\
-         background:#1c2027;color:#7eb6ff;\
-         border:1px solid #353b46;border-radius:6px;\
-         padding:6px 10px;text-decoration:none;\
-         box-shadow:0 2px 8px rgba(0,0,0,0.4);\">\
-         &#128269; Console</a>"
-    )
+    crate::sky_runtime::telemetry::dev_console_banner(base)
 }
 
 // ─── live_app: axum mount + per-session TEA driver over SSE ─────────────────
