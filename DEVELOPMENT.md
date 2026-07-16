@@ -177,8 +177,8 @@ each) is `PRINCIPLES.md` §The two-tier gate. Implementation:
 full-gate-certified sha.
 
 **Cheap gate (`lane_gate`)** — merges the lane into the integration worktree,
-then builds + lints ONLY the touched crates:
-- `cargo +nightly build -p skyc`
+then checks + tests + lints ONLY the touched crates:
+- `cargo +nightly check -p skyc`
 - `cargo +nightly nextest run <-p touched-crates>` (scoped; no `SKY_E2E`)
 - `cargo +nightly clippy <-p touched-crates> --no-deps -- -D warnings`
 
