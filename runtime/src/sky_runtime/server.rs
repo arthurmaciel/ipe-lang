@@ -603,7 +603,32 @@ fn to_axum_response(r: ServerResponse) -> axum::response::Response {
             builder = builder.header(name, value);
         }
     }
-    match builder.body(axum::body::Body::from(r.body)) {
+    // Dev-only "🔍 Console" banner injection (Go parity: rt.go server dispatch
+    // tail — injectDevBanner(devBannerHTML()) for every text/html response).
+    // Runs on the buffered body only; streaming responses returned above via
+    // serve_streaming_sentinel bypass this (same as Go, where streams skip the
+    // buffered fmt.Fprint path). Effective content-type = the handler's override
+    // header when present, else r.contentType (mirrors the has_ct_header
+    // resolution used to emit the content-type above).
+    let effective_ct: String = if has_ct_header {
+        r.headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default()
+    } else {
+        r.contentType.clone()
+    };
+    // Prefix test matches Go's `strings.HasPrefix(ct, "text/html")` exactly:
+    // case-sensitive, no trimming — Sky's html builder always sets a lowercase
+    // `text/html; charset=utf-8`, so this is the byte-parity comparison.
+    let body = if effective_ct.starts_with("text/html") {
+        let banner = crate::sky_runtime::telemetry::dev_console_banner("");
+        crate::sky_runtime::telemetry::inject_dev_banner(&r.body, &banner)
+    } else {
+        r.body
+    };
+    match builder.body(axum::body::Body::from(body)) {
         Ok(resp) => resp,
         Err(_) => axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
@@ -1962,6 +1987,47 @@ mod tests {
         assert!(matches!(r.target, RouteTarget::Handler(_)));
         let resp = server_with_status(404, server_text("nope".to_string()));
         assert_eq!(resp.status, 404);
+    }
+
+    async fn axum_body_string(resp: axum::response::Response) -> String {
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("collect body");
+        String::from_utf8(bytes.to_vec()).expect("utf8 body")
+    }
+
+    #[tokio::test]
+    async fn to_axum_response_injects_dev_banner_into_html_before_body_close() {
+        // Default test env is dev (ENV/SKY_ENV unset), so the banner is emitted.
+        // Go parity: injectDevBanner runs on every text/html buffered response.
+        let sky = server_html("<html><body><h1>hi</h1></body></html>".to_string());
+        let out = axum_body_string(to_axum_response(sky)).await;
+        assert!(
+            out.contains(r#"<a id="__sky-dev-console""#),
+            "banner must be injected: {out}"
+        );
+        let banner_at = out.find(r#"<a id="__sky-dev-console""#).expect("banner present");
+        let body_close = out.rfind("</body>").expect("</body> present");
+        assert!(
+            banner_at < body_close,
+            "banner must sit before </body>: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn to_axum_response_leaves_non_html_untouched() {
+        // JSON / plain-text responses never get the banner (Go: the HasPrefix
+        // "text/html" gate excludes them).
+        let sky = server_json(r#"{"ok":true}"#.to_string());
+        let out = axum_body_string(to_axum_response(sky)).await;
+        assert_eq!(out, r#"{"ok":true}"#, "non-html body must be verbatim");
+
+        let sky_text = server_text("plain body</body>".to_string());
+        let out_text = axum_body_string(to_axum_response(sky_text)).await;
+        assert_eq!(
+            out_text, "plain body</body>",
+            "text/plain body must be verbatim even with a </body> substring"
+        );
     }
 
     #[test]
