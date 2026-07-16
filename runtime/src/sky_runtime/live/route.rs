@@ -68,6 +68,22 @@ pub fn match_routes<Page: Clone>(routes: &[Route<Page>], not_found: &Page, path:
     not_found.clone()
 }
 
+/// Go `matchAnyRoute` parity: does `path` match ANY declared route? With no
+/// routes only `/` is a page URL (the single-page `Live.app` shape). The page
+/// handler uses this to keep unrouted GETs (browser noise like
+/// `/favicon.ico`, asset probes, unknown paths) from re-routing a live
+/// session's model — an unrouted re-route would rebuild the handler index
+/// from the `notFound` view and orphan every handler on the page the browser
+/// is actually showing.
+pub fn matches_any<Page>(routes: &[Route<Page>], path: &str) -> bool {
+    if routes.is_empty() {
+        return path == "/";
+    }
+    routes
+        .iter()
+        .any(|rt| match_route(&rt.pattern, path).is_some())
+}
+
 /// Name→value params for the first route matching `path` — for `req.params`.
 /// Zips the matched pattern's `:name` segments with the captured values.
 pub fn match_params<Page>(
@@ -129,5 +145,21 @@ mod tests {
         assert_eq!(match_routes(&rs, &Page::NF, "/nope"), Page::NF); // notFound
         assert_eq!(match_routes(&rs, &Page::NF, "/apps"), Page::NF); // arity mismatch
         assert_eq!(match_routes(&rs, &Page::NF, "/apps/"), Page::NF); // trailing slash trims -> 1 seg
+    }
+
+    #[test]
+    fn matches_any_routed_and_empty_table() {
+        let rs = routes();
+        assert!(matches_any(&rs, "/"));
+        assert!(matches_any(&rs, "/apps/foo"));
+        assert!(matches_any(&rs, "/apps/foo/")); // trailing slash tolerated
+        assert!(!matches_any(&rs, "/favicon.ico"));
+        assert!(!matches_any(&rs, "/nope"));
+
+        // Empty route table (single-page `Live.app`): only `/` is a page URL.
+        let none: Vec<Route<Page>> = Vec::new();
+        assert!(matches_any(&none, "/"));
+        assert!(!matches_any(&none, "/favicon.ico"));
+        assert!(!matches_any(&none, "/about"));
     }
 }
