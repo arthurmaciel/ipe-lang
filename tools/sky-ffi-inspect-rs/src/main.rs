@@ -6188,11 +6188,11 @@ fn is_byte_seq(rt: &str) -> bool {
     }
     // [u8; N] or &[u8; N] (the leading & has no `mut`, since &mut is excluded)
     let body = t.strip_prefix('&').unwrap_or(t).trim();
-    if let Some(rest) = body.strip_prefix("[u8;") {
-        if let Some(inner) = rest.strip_suffix(']') {
-            let n = inner.trim();
-            return !n.is_empty() && n.chars().all(|c| c.is_ascii_digit());
-        }
+    if let Some(rest) = body.strip_prefix("[u8;")
+        && let Some(inner) = rest.strip_suffix(']')
+    {
+        let n = inner.trim();
+        return !n.is_empty() && n.chars().all(|c| c.is_ascii_digit());
     }
     false
 }

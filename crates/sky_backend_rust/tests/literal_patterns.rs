@@ -63,6 +63,7 @@ fn emit(interner: &Interner, prog: &Program) -> DResult<String> {
 /// sole sub-pattern of an `A`-variant constructor (`type Tag = A Int | B`), so
 /// the sub-pattern flows through `render_pat`. The `B` arm completes the M3a
 /// constructor cover. Returns `(program, the A variant symbol)`.
+#[allow(clippy::too_many_lines)] // thorough constructor-cover fixture builder
 fn tag_program(interner: &mut Interner, payload: Pat) -> DResult<Program> {
     let main_mod = interner.intern("Main")?;
     let tag = interner.intern("Tag")?;

@@ -1383,6 +1383,10 @@ fn partial_application_of_a_first_class_value_eta_expands() -> DResult<()> {
 }
 
 #[test]
+// Thorough IR-fixture probe: builds a 4-arrow callee, over-applies it short of
+// saturation, and asserts the full residual eta-lambda shape. Naturally long;
+// matches the sky_backend_rust fixture-test convention.
+#[allow(clippy::too_many_lines)]
 fn over_application_with_partial_surplus_eta_expands() -> DResult<()> {
     // `f` declares ONE parameter but a four-arrow type `Int -> Int -> Int -> Int
     // -> Int`, so `f 1` returns a flattened THREE-argument closure. `f 1 2`
