@@ -19,6 +19,10 @@
 //!   INV-3 ("a failing rebuild never kills the running binary") and H15/H16
 //!   (`RespawnLastGood` recovery from the on-disk artifact when a fresh
 //!   binary fails its readiness probe).
+//! - [`signal`] (unix) — a safe "run this closure on SIGTERM" listener the
+//!   orchestrator's `run()` path (never `spawn()` — an in-process embedder's
+//!   SIGTERM disposition must not be touched) forwards into its shutdown
+//!   channel.
 //!
 //! Authoritative design: `docs/architecture/incremental-compilation-and-watch.md`
 //! §Q2. Phase 7 addendum:
@@ -27,9 +31,12 @@
 pub mod coalesce;
 pub mod process;
 pub mod scope;
+pub mod signal;
 
 pub use coalesce::{Batch, DebounceConfig, coalesce_loop};
 pub use process::{
     LastGoodBinary, ReadinessCheck, RestartOutcome, RestartTimeouts, SupervisorState,
 };
 pub use scope::{MAX_WATCHED_FILES, ScopeError, WatchScope, WatchedPath};
+#[cfg(unix)]
+pub use signal::install_sigterm_forwarder;
