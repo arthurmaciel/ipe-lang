@@ -35,7 +35,7 @@ use crate::EmitCtx;
 /// Returns `None` for any other expression shape (a `Var` referencing a
 /// let-bound local, a partial application, …) — the documented fail-open
 /// residual of the #91/#95 gates. Callers treat `None` as "cannot prove
-/// inadmissible" and skip; see `seal-gates-msg-lambda-view-design.md` §3.3.
+/// inadmissible" and skip; see `docs/adr/0022-seal-gates-msg-admissibility-and-lambda-view.md` §3.3.
 ///
 /// This is the SHARED recovery primitive for (a) the #91 Model gate, (b) the
 /// #95 lambda-`view` fix (a lambda `view` previously returned `None` here and

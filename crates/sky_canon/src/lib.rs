@@ -1979,7 +1979,7 @@ mod tests {
         //     the whole qualifier before this set is even consulted).
         //
         // The remaining 20 were discovered while landing this Task 3 gate
-        // (2026-07-10) — the `html-ui-live-scheme-table.md` derivation only
+        // (2026-07-10) — the `docs/adr/0020-html-ui-live-kernel-arity-tripwire.md` derivation only
         // audited kernels that already had a `StdlibKernel` id (a TYPES-side
         // `Ty::Var(u32::MAX)`-class hole); these have no id at all yet, a
         // CANON-side hole one layer earlier. Each is a real Std.Ui / Std.Html
@@ -2006,7 +2006,7 @@ mod tests {
             // `StdlibKernel::UiMediaQuery` (runtime `ui_media_query_` +
             // `live::style_inject::build_mq` consumer). The last of the 20
             // deferred members from this list to be wired; see
-            // docs/architecture/ui-mediaquery-design-2026-07-11.md.
+            // docs/adr/0019-ui-mediaquery-safe-boundary.md.
             ("Ui", "onPseudo"),
             ("Ui", "hover"),
             ("Ui", "focus"),
