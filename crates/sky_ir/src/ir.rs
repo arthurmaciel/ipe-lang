@@ -1290,6 +1290,96 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
     }
 }
 
+/// Does this type's emitted Rust carrier implement `Clone`?
+///
+/// The SINGLE authority both the lowerer's capture classifier and the backend's
+/// carrier choice consult, so a shape that renders a `Clone` carrier can never be
+/// classified `NonClone` (or vice-versa) — the two tables cannot drift. A
+/// first-class function value renders `Arc<dyn Fn(..) -> R + Send + Sync +
+/// 'static>` (a `Clone` reference-counted carrier), so [`IrType::Fun`] is `true`
+/// here; a captured function value therefore clones per call (an `Arc::clone`
+/// refcount bump) exactly like every other `Clone` capture.
+///
+/// The `false` set is the carriers that genuinely do NOT implement `Clone`:
+/// * [`IrType::FnOnceChain`] — a curried `Box<dyn FnOnce>` tower, consume-once by
+///   type (the decode/db-decode pipeline `next_decoder` slots require it); a
+///   `FnOnce` cannot be re-called, so it is never `Clone`.
+/// * [`IrType::Task`] / [`IrType::Cmd`] / [`IrType::Sub`] — pinned futures /
+///   effect descriptors whose runtime carriers are not `Clone`.
+/// * [`IrType::Decoder`] — a runtime struct whose `run` field is a
+///   `Box<dyn Fn>`; the nominal carrier is not `Clone`.
+/// * [`IrType::Generic`] — a parametric type variable: its `Clone`-ness is
+///   decided by the caller's instantiation and its emitted `T: Clone` bound, not
+///   by the carrier here (`clone_class`'s bare-`Generic` admission handles the
+///   sound multi-use clone under that bound).
+///
+/// A transparent carrier (list / set / tuple / dict / result / maybe / record /
+/// enum) is `Clone` iff every element it carries is — one non-`Clone` member
+/// poisons the whole composite, matching the emitted Rust (`SkyMaybe<T>: Clone`
+/// requires `T: Clone`, etc.).
+///
+/// The match is exhaustive with no wildcard: a new [`IrType`] variant must make
+/// an explicit carrier-`Clone` decision here (walker-arm rule / SEAL
+/// make-invalid-states-unrepresentable).
+#[must_use]
+pub fn carrier_is_clone(ty: &IrType) -> bool {
+    match ty {
+        // Copy / Clone scalar and opaque leaves — every one implements `Clone`.
+        IrType::Int
+        | IrType::Float
+        | IrType::Bool
+        | IrType::Str
+        | IrType::Char
+        | IrType::Unit
+        | IrType::Bytes
+        | IrType::Json
+        | IrType::Order
+        | IrType::Decimal
+        | IrType::ErrorKind
+        | IrType::Error
+        | IrType::ErrorDetails
+        | IrType::ErrorInfo
+        | IrType::PanicInfo
+        | IrType::TypeInfo
+        | IrType::SqlFragment
+        | IrType::Secret
+        | IrType::Db
+        | IrType::ServerRequest
+        | IrType::ServerResponse
+        | IrType::ServerRoute
+        | IrType::ServerCookie
+        | IrType::StreamWriter
+        | IrType::HttpRequest
+        | IrType::WebSocketServer
+        | IrType::WebSocketServerCfg
+        | IrType::UiPlain(_)
+        | IrType::LiveReq
+        | IrType::CacheCfg
+        | IrType::CacheStats
+        // A first-class function value renders `Arc<dyn Fn>` — reference-counted,
+        // `Clone`. This is the carrier flip that dissolves the non-`Clone`-capture
+        // fail-close family.
+        | IrType::Fun(_, _) => true,
+        // Genuinely non-`Clone` carriers.
+        IrType::FnOnceChain(_, _)
+        | IrType::Task(_)
+        | IrType::Cmd(_)
+        | IrType::Sub(_)
+        | IrType::Decoder(_)
+        | IrType::Generic(_) => false,
+        // Transparent carriers: `Clone` iff every carried element is.
+        IrType::Maybe(e) | IrType::List(e) | IrType::Set(e) => carrier_is_clone(e),
+        IrType::Result(a, b) | IrType::Dict(a, b) => carrier_is_clone(a) && carrier_is_clone(b),
+        IrType::Tuple(es) => es.iter().all(carrier_is_clone),
+        IrType::Record(fields) => fields.values().all(carrier_is_clone),
+        IrType::Enum { args, .. } => args.iter().all(carrier_is_clone),
+        // `Element<M>` / `Html<M>` and `Route<Page>` recurse on their type
+        // parameter — the runtime carriers derive `Clone` over a `Clone` param.
+        IrType::Ui { msg, .. } => carrier_is_clone(msg),
+        IrType::LiveRoute(page) => carrier_is_clone(page),
+    }
+}
+
 /// An expression in the typed IR.
 ///
 /// Note: the [`Match`] variant wraps the opaque [`Match`] type rather than
