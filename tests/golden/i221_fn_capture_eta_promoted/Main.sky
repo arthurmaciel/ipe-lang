@@ -1,0 +1,23 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+
+
+-- #221 minimal trigger: `guarded`'s body partially applies the SIBLING
+-- let-bound function value `wrap` (1 of 2 flattened args), so lowering
+-- synthesizes a residual `\eta_0 -> wrap(<partial>, eta_0)` that CAPTURES
+-- `wrap` inside a new closure — a capture that exists only post-lowering.
+-- The binder-site promotion must see it and flip `wrap` to the `Clone`
+-- `Arc<dyn Fn>` carrier (was SKY-L0126).
+inc : Int -> Int -> Int
+inc a b =
+    a + b
+
+
+main =
+    let
+        wrap f x = f x + 1
+        guarded f = wrap (inc f)
+        r = guarded 1 2
+    in
+        println (String.fromInt r)

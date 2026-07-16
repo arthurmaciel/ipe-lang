@@ -1,0 +1,30 @@
+module Main exposing (main)
+
+import Sky.Core.Prelude exposing (..)
+
+
+-- #221 fn-value REUSE promotion: a pure fn-typed `let` binding consumed more
+-- than once. `double` is moved into a `Box<dyn Fn>` argument slot twice (the
+-- reads are re-dispatched through fresh closures over the `Arc` carrier);
+-- `add`'s two partial applications synthesize TWO eta closures that each
+-- capture `add` — a reuse count that exists only post-lowering (was
+-- SKY-L0127).
+apply : (Int -> Int) -> Int -> Int
+apply f x =
+    f x
+
+
+add : Int -> Int -> Int
+add a b =
+    a + b
+
+
+main =
+    let
+        double n = n * 2
+        h1 = add 1
+        h2 = add 2
+        a = apply double 3
+        b = apply double 4
+    in
+        println (String.fromInt (a + b + h1 10 + h2 20))
