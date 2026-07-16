@@ -1,6 +1,6 @@
 //! TCO IR nodes (`TailLoop` / `TailRecur`) construct, clone, and compare — the
 //! parse-don't-validate jump transport is a typed value, never a stringly
-//! sentinel (task #49).
+//! sentinel.
 
 use sky_diagnostics::DResult;
 use sky_intern::Interner;

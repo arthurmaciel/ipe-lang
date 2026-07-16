@@ -1,4 +1,4 @@
-//! Emission for `Std.Cli` / `Sky.Cli` app-entry kernel (#111).
+//! Emission for `Std.Cli` / `Sky.Cli` app-entry kernel.
 //!
 //! Wires one Cli kernel:
 //!
@@ -104,7 +104,7 @@ fn emit_cli_inner(
     let subs_e = lookup_field(ctx, fields, "subscriptions")?;
     let on_line_e = lookup_field(ctx, fields, "onLine")?;
 
-    // #91 seal: gate the Model against `cli_program`'s `Clone` bound. A
+    // seal: gate the Model against `cli_program`'s `Clone` bound. A
     // non-clonable (non-derivable) Model — a field of type `Cmd`/`Sub`/`Task`/
     // `Decoder`/`Db`/function — would otherwise `skyc`-succeed then
     // `cargo`-fail; the gate makes it a fail-closed `SKY-L0120` error.

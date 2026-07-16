@@ -38,7 +38,7 @@ use crate::EmitCtx;
 /// inadmissible" and skip; see `docs/adr/0022-seal-gates-msg-admissibility-and-lambda-view.md` §3.3.
 ///
 /// This is the SHARED recovery primitive for (a) the #91 Model gate, (b) the
-/// #95 lambda-`view` fix (a lambda `view` previously returned `None` here and
+/// lambda-`view` fix (a lambda `view` previously returned `None` here and
 /// silently skipped the gate), and (c) #108's routed-vs-non-routed emit branch
 /// (`emit_live::routed_page_field`), keeping the type-tier `RoutedLiveCheck`
 /// and the emit-tier detection in agreement on lambda-shaped cfg fields.
@@ -254,19 +254,19 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::StreamWriter
         // `HttpRequest` is an opaque handle — not a valid Model leaf.
         | IrType::HttpRequest
-        // #127: `WsHandle` / `WsServerCfg` are opaque handles — not valid Model leaves.
+        // `WsHandle` / `WsServerCfg` are opaque handles — not valid Model leaves.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
         | IrType::LiveReq
         | IrType::LiveRoute(_)
-        // #210: Cache config / stats are kernel-boundary data records, not serde,
+        // Cache config / stats are kernel-boundary data records, not serde,
         // never persisted to a session store — not valid Model leaves.
         | IrType::CacheCfg
         | IrType::CacheStats
-        // `SqlFragment` (backlog #61) is a query-building value, never
+        // `SqlFragment` is a query-building value, never
         // persisted to a Live session store — not a valid Model leaf.
         | IrType::SqlFragment
-        // `Secret` (backlog #44) must never round-trip through a Live session
+        // `Secret` must never round-trip through a Live session
         // store — not a valid Model leaf. This is the `blame()` classification
         // consulted ONLY after `admissible()` (which uses `ir_type_is_serde`,
         // `false` for `Secret`) has already rejected a Live Model containing
@@ -276,7 +276,7 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         // `Order` is a plain three-variant data enum — an admissible leaf.
         // `Decimal` is a Copy newtype — an admissible leaf.
         // `ErrorKind`/`Error`/`ErrorDetails` and the nominal error-payload
-        // leaves (`ErrorInfo`/`PanicInfo`/`TypeInfo`, SEAL fix 2026-07-11)
+        // leaves (`ErrorInfo`/`PanicInfo`/`TypeInfo`, SEAL fix)
         // derive serde — admissible leaves (e.g. a Model's `historyError :
         // Maybe Error` field).
         | IrType::Order

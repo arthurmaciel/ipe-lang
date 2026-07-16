@@ -163,7 +163,7 @@ fn emit_tui_inner(
     let subs_e = lookup_field(ctx, fields, "subscriptions")?;
     let on_key_e = lookup_field(ctx, fields, "onKey")?;
 
-    // #91 seal: gate the Model against `tui_app`'s `Clone` bound. A non-clonable
+    // seal: gate the Model against `tui_app`'s `Clone` bound. A non-clonable
     // (non-derivable) Model — a field of type `Cmd`/`Sub`/`Task`/`Decoder`/`Db`/
     // function — would otherwise `skyc`-succeed then `cargo`-fail; the gate makes
     // it a fail-closed `SKY-L0120` error. (Tui needs only `Clone`, not serde, so
@@ -176,7 +176,7 @@ fn emit_tui_inner(
         )?;
     }
 
-    // #94 seal: gate the Msg type against `tui_app`'s Clone+Send bound.
+    // seal: gate the Msg type against `tui_app`'s Clone+Send bound.
     // Same derivable predicate as Live — Msg is never persisted.
     if let Some(msg_ty) = crate::emit_model_gate::msg_ty_of_update(update_e) {
         crate::emit_model_gate::check_admissible_msg(

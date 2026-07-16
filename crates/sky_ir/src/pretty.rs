@@ -115,14 +115,14 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         IrType::ServerResponse => "Response".to_owned(),
         IrType::ServerRoute => "Route".to_owned(),
         IrType::ServerCookie => "Cookie".to_owned(),
-        // #111: stream writer handle.
+        // stream writer handle.
         IrType::StreamWriter => "StreamWriter".to_owned(),
-        // #111: HTTP request handle (opaque, structural record folded to this variant).
+        // HTTP request handle (opaque, structural record folded to this variant).
         IrType::HttpRequest => "HttpRequest".to_owned(),
-        // #127: Sky.Http.Server.WebSocket opaque handles.
+        // Sky.Http.Server.WebSocket opaque handles.
         IrType::WebSocketServer => "WebSocketServer".to_owned(),
         IrType::WebSocketServerCfg => "WebSocketServerCfg".to_owned(),
-        // M7 Std.Ui / Std.Html parametric types.
+        // Std.Ui / Std.Html parametric types.
         IrType::Ui { ctor, msg } => {
             let ctor_name = match ctor {
                 UiCtor::Html => "Html",
@@ -130,10 +130,10 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
                 UiCtor::UiAttribute => "Ui.Attribute",
                 UiCtor::HtmlAttribute => "Html.Attribute",
                 UiCtor::HtmlEvent => "Html.Event",
-                // #124 Std.Ui.Input parametric label / placeholder types.
+                // Std.Ui.Input parametric label / placeholder types.
                 UiCtor::Label => "Input.Label",
                 UiCtor::Placeholder => "Input.Placeholder",
-                // #150 Std.Ui.Input radio option type.
+                // Std.Ui.Input radio option type.
                 UiCtor::RadioOption => "Input.RadioOption",
             };
             format!("{} {}", ctor_name, ir_type_name(interner, msg))
@@ -209,7 +209,7 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         IrType::TypeInfo => "TypeInfo".to_owned(),
         IrType::SqlFragment => "SqlFragment".to_owned(),
         IrType::Secret => "Secret".to_owned(),
-        // #210: Std.Cache config / stats records.
+        // Std.Cache config / stats records.
         IrType::CacheCfg => "CacheCfg".to_owned(),
         IrType::CacheStats => "CacheStats".to_owned(),
     }
@@ -320,7 +320,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::ListAny => "List.any",
         KernelFn::ListAll => "List.all",
         KernelFn::ListFind => "List.find",
-        // ── List batch (#119) ────────────────────────────────────────────────
+        // ── List batch ────────────────────────────────────────────────
         KernelFn::ListFilterMap => "List.filterMap",
         KernelFn::ListSortBy => "List.sortBy",
         KernelFn::BasicsNot => "Basics.not",
@@ -331,14 +331,14 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::BasicsModBy => "Basics.modBy",
         KernelFn::BasicsClamp => "Basics.clamp",
         KernelFn::BasicsToString => "Basics.toString",
-        // ── Basics numerics (#115) ──────────────────────────────────────────
+        // ── Basics numerics ──────────────────────────────────────────
         KernelFn::BasicsNegate => "Basics.negate",
         KernelFn::BasicsAbs => "Basics.abs",
         KernelFn::BasicsSqrt => "Basics.sqrt",
         KernelFn::BasicsMin => "Basics.min",
         KernelFn::BasicsMax => "Basics.max",
-        // ── end Basics numerics (#115) ──────────────────────────────────────
-        // ── Error kernels (Sky.Core.Error — minimal `Error = String` slice, #86) ─
+        // ── end Basics numerics ──────────────────────────────────────
+        // ── Error kernels (Sky.Core.Error — minimal `Error = String` slice) ─
         KernelFn::ErrorUnexpected => "Error.unexpected",
         KernelFn::ErrorInvalidInput => "Error.invalidInput",
         KernelFn::ErrorIo => "Error.io",
@@ -449,7 +449,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::SetUnion => "Set.union",
         KernelFn::SetIntersect => "Set.intersect",
         KernelFn::SetDiff => "Set.diff",
-        // ── Bytes kernels (M4e) ──────────────────────────────────────────────
+        // ── Bytes kernels ──────────────────────────────────────────────
         KernelFn::BytesEmpty => "Bytes.empty",
         KernelFn::BytesLength => "Bytes.length",
         KernelFn::BytesIsEmpty => "Bytes.isEmpty",
@@ -461,14 +461,14 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::BytesToBase64 => "Bytes.toBase64",
         KernelFn::BytesAppend => "Bytes.append",
         KernelFn::BytesSlice => "Bytes.slice",
-        // ── Encoding (M4f) ────────────────────────────────────────────────────
+        // ── Encoding ────────────────────────────────────────────────────
         KernelFn::EncodingBase64Encode => "Encoding.base64Encode",
         KernelFn::EncodingBase64Decode => "Encoding.base64Decode",
         KernelFn::EncodingUrlEncode => "Encoding.urlEncode",
         KernelFn::EncodingUrlDecode => "Encoding.urlDecode",
         KernelFn::EncodingHexEncode => "Encoding.hexEncode",
         KernelFn::EncodingHexDecode => "Encoding.hexDecode",
-        // ── JsonEnc (M4g) ────────────────────────────────────────────────────
+        // ── JsonEnc ────────────────────────────────────────────────────
         KernelFn::JsonEncString => "JsonEnc.string",
         KernelFn::JsonEncInt => "JsonEnc.int",
         KernelFn::JsonEncFloat => "JsonEnc.float",
@@ -477,7 +477,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::JsonEncList => "JsonEnc.list",
         KernelFn::JsonEncObject => "JsonEnc.object",
         KernelFn::JsonEncEncode => "JsonEnc.encode",
-        // ── JsonDec (M4h) ────────────────────────────────────────────────────
+        // ── JsonDec ────────────────────────────────────────────────────
         KernelFn::JsonDecString => "JsonDec.string",
         KernelFn::JsonDecInt => "JsonDec.int",
         KernelFn::JsonDecFloat => "JsonDec.float",
@@ -495,12 +495,12 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::JsonDecMap2 => "JsonDec.map2",
         KernelFn::JsonDecMap3 => "JsonDec.map3",
         KernelFn::JsonDecMap4 => "JsonDec.map4",
-        // ── JsonDecP (M4h) ───────────────────────────────────────────────────
+        // ── JsonDecP ───────────────────────────────────────────────────
         KernelFn::JsonDecPRequired => "JsonDecP.required",
         KernelFn::JsonDecPOptional => "JsonDecP.optional",
         KernelFn::JsonDecPCustom => "JsonDecP.custom",
         KernelFn::JsonDecPRequiredAt => "JsonDecP.requiredAt",
-        // ── Crypto kernels (M5a) ─────────────────────────────────────────────
+        // ── Crypto kernels ─────────────────────────────────────────────
         KernelFn::CryptoSha256 => "Crypto.sha256",
         KernelFn::CryptoSha512 => "Crypto.sha512",
         KernelFn::CryptoSha1 => "Crypto.sha1",
@@ -518,16 +518,16 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::CryptoChachaKeyFromPassword => "Crypto.chachaKeyFromPassword",
         KernelFn::CryptoRandomBytes => "Crypto.randomBytes",
         KernelFn::CryptoRandomToken => "Crypto.randomToken",
-        // ── Uuid kernels (M5b) ───────────────────────────────────────────────
+        // ── Uuid kernels ───────────────────────────────────────────────
         KernelFn::UuidV4 => "Uuid.v4",
         KernelFn::UuidV7 => "Uuid.v7",
         KernelFn::UuidParse => "Uuid.parse",
-        // ── Jwt kernels (M5b) ────────────────────────────────────────────────
+        // ── Jwt kernels ────────────────────────────────────────────────
         KernelFn::JwtEncodeHs256 => "Jwt.encodeHs256",
         KernelFn::JwtDecodeHs256 => "Jwt.decodeHs256",
         KernelFn::JwtEncodeRs256 => "Jwt.encodeRs256",
         KernelFn::JwtDecodeRs256 => "Jwt.decodeRs256",
-        // ── Task combinators (M5a) ────────────────────────────────────────────
+        // ── Task combinators ────────────────────────────────────────────
         KernelFn::TaskSucceed => "Task.succeed",
         KernelFn::TaskFail => "Task.fail",
         KernelFn::TaskMap => "Task.map",
@@ -541,7 +541,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::TaskRun => "Task.run",
         KernelFn::TaskPerform => "Task.perform",
         KernelFn::TaskLazy => "Task.lazy",
-        // ── Task retry surface (M5a) ──────────────────────────────────────────
+        // ── Task retry surface ──────────────────────────────────────────
         KernelFn::TaskRetryWith => "Task.retryWith",
         KernelFn::TaskLinearBackoff => "Task.linearBackoff",
         KernelFn::TaskExponentialBackoff => "Task.exponentialBackoff",
@@ -552,18 +552,18 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::TaskWithMaxAttempts => "Task.withMaxAttempts",
         KernelFn::TaskWithBaseMs => "Task.withBaseMs",
         KernelFn::TaskWithKind => "Task.withKind",
-        // ── Io kernels (M5a) ──────────────────────────────────────────────────
+        // ── Io kernels ──────────────────────────────────────────────────
         KernelFn::IoReadLine => "Io.readLine",
         KernelFn::IoWriteStdout => "Io.writeStdout",
         KernelFn::IoWriteStderr => "Io.writeStderr",
-        // ── Time kernels (M5a) ────────────────────────────────────────────────
+        // ── Time kernels ────────────────────────────────────────────────
         KernelFn::TimeNow => "Time.now",
         KernelFn::TimeSleep => "Time.sleep",
         KernelFn::TimeUnixMillis => "Time.unixMillis",
         KernelFn::TimeTimeString => "Time.timeString",
         KernelFn::TimeIsLeapYear => "Time.isLeapYear",
         KernelFn::TimeDaysInMonth => "Time.daysInMonth",
-        // ── System kernels (M5a) ──────────────────────────────────────────────
+        // ── System kernels ──────────────────────────────────────────────
         KernelFn::SystemArgs => "System.args",
         KernelFn::SystemGetenv => "System.getenv",
         KernelFn::SystemGetenvOr => "System.getenvOr",
@@ -575,11 +575,11 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::SystemCwd => "System.cwd",
         KernelFn::SystemLoadEnv => "System.loadEnv",
         KernelFn::SystemExit => "System.exit",
-        // ── Random kernels (M5a) ──────────────────────────────────────────────
+        // ── Random kernels ──────────────────────────────────────────────
         KernelFn::RandomInt => "Random.int",
         KernelFn::RandomFloat => "Random.float",
         KernelFn::RandomChoice => "Random.choice",
-        // ── File kernels (M5a) ────────────────────────────────────────────────
+        // ── File kernels ────────────────────────────────────────────────
         KernelFn::FileReadFile => "File.readFile",
         KernelFn::FileWriteFile => "File.writeFile",
         KernelFn::FileExists => "File.exists",
@@ -595,7 +595,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::FileCopy => "File.copy",
         KernelFn::FileRename => "File.rename",
         KernelFn::FileDelete => "File.delete",
-        // ── Http kernels (M5b) ──────────────────────────────────────────────
+        // ── Http kernels ──────────────────────────────────────────────
         KernelFn::HttpGet => "Http.get",
         KernelFn::HttpPost => "Http.post",
         KernelFn::HttpRequest => "Http.request",
@@ -608,7 +608,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HttpWithUrl => "Http.withUrl",
         KernelFn::HttpWithFollowRedirects => "Http.withFollowRedirects",
         KernelFn::HttpWithMaxRedirects => "Http.withMaxRedirects",
-        // ── Db kernels (M5b-db) ──────────────────────────────────────────────
+        // ── Db kernels ──────────────────────────────────────────────
         KernelFn::DbConnect => "Db.connect",
         KernelFn::DbOpen => "Db.open",
         KernelFn::DbClose => "Db.close",
@@ -635,7 +635,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::DbWithTransaction => "Db.withTransaction",
         KernelFn::DbMigrate => "Db.migrate",
         KernelFn::DbDefaultMigration => "Db.defaultMigration",
-        // ── Db.Decode kernels (M5b-db) ───────────────────────────────────────
+        // ── Db.Decode kernels ───────────────────────────────────────
         KernelFn::DbDecString => "Db.Decode.string",
         KernelFn::DbDecInt => "Db.Decode.int",
         KernelFn::DbDecFloat => "Db.Decode.float",
@@ -651,7 +651,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::DbDecRequired => "Db.Decode.required",
         KernelFn::DbDecOptional => "Db.Decode.optional",
         KernelFn::DbDecMoney => "Db.Decode.money",
-        // ── Std.Db.Sql — SqlFragment builder (backlog #61) ───────────────────
+        // ── Std.Db.Sql — SqlFragment builder ───────────────────
         KernelFn::SqlColumn => "Sql.column",
         KernelFn::SqlParam => "Sql.param",
         KernelFn::SqlInt => "Sql.int",
@@ -674,33 +674,33 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::SecretFromString => "Secret.fromString",
         KernelFn::SecretReveal => "Secret.reveal",
         KernelFn::SecretRedacted => "Secret.redacted",
-        // #194: Sky.Core.Regex
+        // Sky.Core.Regex
         KernelFn::RegexMatch => "Regex.match",
         KernelFn::RegexFind => "Regex.find",
         KernelFn::RegexFindAll => "Regex.findAll",
         KernelFn::RegexReplace => "Regex.replace",
         KernelFn::RegexSplit => "Regex.split",
-        // #202: Sky.Core.Path
+        // Sky.Core.Path
         KernelFn::PathBase => "Path.base",
         KernelFn::PathDir => "Path.dir",
         KernelFn::PathExt => "Path.ext",
         KernelFn::PathIsAbsolute => "Path.isAbsolute",
-        // #197: Std.Trace
+        // Std.Trace
         KernelFn::TraceSpan => "Trace.span",
         KernelFn::TraceEvent => "Trace.event",
         KernelFn::TraceAttr => "Trace.attr",
-        // #197: Std.Compression
+        // Std.Compression
         KernelFn::CompressionGzip => "Compression.gzip",
         KernelFn::CompressionGunzip => "Compression.gunzip",
         KernelFn::CompressionZstdCompress => "Compression.zstdCompress",
         KernelFn::CompressionZstdDecompress => "Compression.zstdDecompress",
-        // #197: Std.Csv
+        // Std.Csv
         KernelFn::CsvParse => "Csv.parse",
         KernelFn::CsvParseWithDelimiter => "Csv.parseWithDelimiter",
         KernelFn::CsvEncode => "Csv.encode",
         KernelFn::CsvEncodeWithDelimiter => "Csv.encodeWithDelimiter",
         KernelFn::CsvParseStreamFromFile => "Csv.parseStreamFromFile",
-        // #210: Std.Cache (the `*Raw` kernel aliases; the surface names carry
+        // Std.Cache (the `*Raw` kernel aliases; the surface names carry
         // no `Raw` suffix but the pretty form names the underlying kernel).
         KernelFn::CacheNewRaw => "Cache.newRaw",
         KernelFn::CacheGet => "Cache.getRaw",
@@ -709,7 +709,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::CacheClear => "Cache.clearRaw",
         KernelFn::CacheSize => "Cache.sizeRaw",
         KernelFn::CacheStats => "Cache.statsRaw",
-        // M5c: TEA Cmd / Sub / Time.every (wired)
+        // TEA Cmd / Sub / Time.every (wired)
         KernelFn::CmdNone => "Cmd.none",
         KernelFn::CmdBatch => "Cmd.batch",
         KernelFn::CmdPerform => "Cmd.perform",
@@ -723,7 +723,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::SubSubscribeTopic => "Sub.subscribeTopic",
         KernelFn::PubSubPublish => "PubSub.publish",
         KernelFn::PubSubPublishNoEcho => "PubSub.publishNoEcho",
-        // M6: Sky.Http.Server kernels
+        // Sky.Http.Server kernels
         KernelFn::ServerGet => "Server.get",
         KernelFn::ServerPost => "Server.post",
         KernelFn::ServerPut => "Server.put",
@@ -753,24 +753,24 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::MiddlewareWithRateLimit => "Middleware.withRateLimit",
         KernelFn::MiddlewareWithCsrf => "Middleware.withCsrf",
         KernelFn::RateLimitAllow => "RateLimit.allow",
-        // ── M7: Std.Ui / Std.Html render kernels ─────────────────────────────
+        // ── Std.Ui / Std.Html render kernels ─────────────────────────────
         KernelFn::UiLayout => "Ui.layout",
         KernelFn::UiLayoutWith => "Ui.layoutWith",
         KernelFn::HtmlRender => "Html.render",
         KernelFn::HtmlEscapeText => "Html.escapeText",
         KernelFn::HtmlEscapeAttr => "Html.escapeAttr",
         KernelFn::HtmlAttrToString => "Html.attrToString",
-        // ── M7: Std.Live app-entry kernels ───────────────────────────────────
+        // ── Std.Live app-entry kernels ───────────────────────────────────
         KernelFn::LiveApp => "Live.app",
         KernelFn::LiveAppRouted => "Live.appRouted",
         KernelFn::LiveRoute => "Live.route",
         KernelFn::LiveRenderStatic => "Live.renderStatic",
-        // ── M7: Std.Tui app-entry kernels ────────────────────────────────────
+        // ── Std.Tui app-entry kernels ────────────────────────────────────
         KernelFn::TuiProgram => "Tui.program",
         KernelFn::TuiApp => "Tui.app",
-        // ── M7: Std.Webview app-entry kernel ─────────────────────────────────
+        // ── Std.Webview app-entry kernel ─────────────────────────────────
         KernelFn::WebviewApp => "Webview.app",
-        // ── M7: Std.Ui element builders ──────────────────────────────────────
+        // ── Std.Ui element builders ──────────────────────────────────────
         KernelFn::UiNone => "Ui.none",
         KernelFn::UiText => "Ui.text",
         KernelFn::UiHtml => "Ui.html",
@@ -784,7 +784,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::UiButton => "Ui.button",
         KernelFn::UiLink => "Ui.link",
         KernelFn::UiImage => "Ui.image",
-        // ── M7: Std.Ui attribute builders ────────────────────────────────────
+        // ── Std.Ui attribute builders ────────────────────────────────────
         KernelFn::UiSpacing => "Ui.spacing",
         KernelFn::UiPadding => "Ui.padding",
         KernelFn::UiPaddingXY => "Ui.paddingXY",
@@ -805,7 +805,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::UiScrollbarX => "Ui.scrollbarX",
         KernelFn::UiScrollbarY => "Ui.scrollbarY",
         KernelFn::UiGridColumns => "Ui.gridColumns",
-        // ── M7: Std.Ui Length builders ───────────────────────────────────────
+        // ── Std.Ui Length builders ───────────────────────────────────────
         KernelFn::UiPx => "Ui.px",
         KernelFn::UiFill => "Ui.fill",
         KernelFn::UiContent => "Ui.content",
@@ -815,14 +815,14 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::UiVw => "Ui.vw",
         KernelFn::UiMinimum => "Ui.minimum",
         KernelFn::UiMaximum => "Ui.maximum",
-        // ── M7: Std.Ui Color builders ────────────────────────────────────────
+        // ── Std.Ui Color builders ────────────────────────────────────────
         KernelFn::UiRgb => "Ui.rgb",
         KernelFn::UiRgba => "Ui.rgba",
         KernelFn::UiWhite => "Ui.white",
         KernelFn::UiBlack => "Ui.black",
         KernelFn::UiTransparent => "Ui.transparent",
         KernelFn::UiColorCss => "Ui.colorCss",
-        // ── M7: Background / Border / Font sub-modules ───────────────────────
+        // ── Background / Border / Font sub-modules ───────────────────────
         KernelFn::BackgroundColor => "Background.color",
         KernelFn::BackgroundImage => "Background.image",
         KernelFn::BackgroundLinearGradient => "Background.linearGradient",
@@ -838,7 +838,6 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::FontFamily => "Font.family",
         KernelFn::FontBold => "Font.bold",
         KernelFn::FontItalic => "Font.italic",
-        // ── #76 Tier 1 ───────────────────────────────────────────────────────
         KernelFn::UiSquare => "Ui.square",
         KernelFn::UiWidescreen => "Ui.widescreen",
         KernelFn::UiCinemascope => "Ui.cinemascope",
@@ -905,7 +904,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         // ── Std.Ui.Keyed ──────────────────────────────────────────────────────
         KernelFn::KeyedColumn => "Keyed.column",
         KernelFn::KeyedRow => "Keyed.row",
-        // ── Std.Ui.Region (#117) ──────────────────────────────────────────────
+        // ── Std.Ui.Region ──────────────────────────────────────────────
         KernelFn::RegionMainContent => "Region.mainContent",
         KernelFn::RegionNavigation => "Region.navigation",
         KernelFn::RegionFooter => "Region.footer",
@@ -925,7 +924,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::UiDescLiveAssertive => "Ui.descLiveAssertive",
         KernelFn::UiDescHeading => "Ui.descHeading",
         KernelFn::UiDescLabel => "Ui.descLabel",
-        // ── M7: Html element builders ────────────────────────────────────────
+        // ── Html element builders ────────────────────────────────────────
         KernelFn::HtmlTextNode => "Html.text",
         KernelFn::HtmlRawNode => "Html.raw",
         KernelFn::HtmlNode => "Html.node",
@@ -941,7 +940,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HtmlP => "Html.p",
         KernelFn::HtmlInput => "Html.input",
         KernelFn::HtmlImg => "Html.img",
-        // #76 batch 2: Std.Html element builders.
+        // batch 2: Std.Html element builders.
         KernelFn::HtmlH1 => "Html.h1",
         KernelFn::HtmlH2 => "Html.h2",
         KernelFn::HtmlH3 => "Html.h3",
@@ -1010,7 +1009,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HtmlSource => "Html.source",
         KernelFn::HtmlTrack => "Html.track",
         KernelFn::HtmlWbr => "Html.wbr",
-        // #76: Std.Html.Attributes builders (source-facing names).
+        // Std.Html.Attributes builders (source-facing names).
         KernelFn::HtmlAttrClass => "Attr.class",
         KernelFn::HtmlAttrId => "Attr.id",
         KernelFn::HtmlAttrHref => "Attr.href",
@@ -1047,7 +1046,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::UiOnBool => "Ui.onBool",
         KernelFn::UiOnSubmit => "Ui.onSubmit",
         KernelFn::UiOnFile => "Ui.onFile",
-        // #107: Std.Html.Events builders (produce Std.Html.Attribute).
+        // Std.Html.Events builders (produce Std.Html.Attribute).
         KernelFn::HtmlOnClick => "Event.onClick",
         KernelFn::HtmlOnFocus => "Event.onFocus",
         KernelFn::HtmlOnBlur => "Event.onBlur",
@@ -1059,7 +1058,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HtmlOnKeyDown => "Event.onKeyDown",
         KernelFn::HtmlOnKeyUp => "Event.onKeyUp",
         KernelFn::HtmlOnBool => "Event.onBool",
-        // ── #111: Cli app-entry + Auth + Stream + HttpStream ─────────────────
+        // ── Cli app-entry + Auth + Stream + HttpStream ─────────────────
         KernelFn::CliProgram => "Cli.program",
         KernelFn::AuthHashPassword => "Auth.hashPassword",
         KernelFn::AuthHashPasswordCost => "Auth.hashPasswordCost",
@@ -1078,7 +1077,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HttpStreamForEachChunk => "HttpStream.forEachChunk",
         KernelFn::HttpStreamClose => "HttpStream.close",
         KernelFn::HttpStreamChunks => "HttpStream.chunks",
-        // ── #127: Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
+        // ── Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
         KernelFn::WsDefaultCfg => "Ws.defaultCfg",
         KernelFn::WsWithOnConnect => "Ws.withOnConnect",
         KernelFn::WsWithOnMessage => "Ws.withOnMessage",
@@ -1091,7 +1090,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::WsSendBinaryToClient => "Ws.sendBinaryToClient",
         KernelFn::WsBroadcast => "Ws.broadcast",
         KernelFn::WsCloseClient => "Ws.closeClient",
-        // ── Std.Ui.Input (#124) ───────────────────────────────────────────────
+        // ── Std.Ui.Input ───────────────────────────────────────────────
         KernelFn::InputLabelAbove => "Input.labelAbove",
         KernelFn::InputLabelBelow => "Input.labelBelow",
         KernelFn::InputLabelLeft => "Input.labelLeft",
@@ -1110,14 +1109,14 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::InputOption => "Input.option",
         KernelFn::InputRadio => "Input.radio",
         KernelFn::InputRadioRow => "Input.radioRow",
-        // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────────
+        // ── Std.Ui.Lazy ────────────────────────────────────────────────
         KernelFn::LazyLazy => "Lazy.lazy",
         KernelFn::LazyLazy2 => "Lazy.lazy2",
         KernelFn::LazyLazy3 => "Lazy.lazy3",
         KernelFn::LazyLazy4 => "Lazy.lazy4",
         KernelFn::LazyLazy5 => "Lazy.lazy5",
         KernelFn::BasicsCompare => "Basics.compare",
-        // ── Jwt builder API (D-00, #152) ─────────────────────────────────────
+        // ── Jwt builder API ─────────────────────────────────────
         KernelFn::JwtClaims => "Jwt.claims",
         KernelFn::JwtHs256 => "Jwt.hs256",
         KernelFn::JwtRs256 => "Jwt.rs256",

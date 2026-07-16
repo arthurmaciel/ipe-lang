@@ -280,7 +280,7 @@ fn function_type_in_annotation_argument_lowers_to_fun() -> DResult<()> {
     Ok(())
 }
 
-/// M2a: a fully-parametric annotation lowers to a *generic* function — the
+/// a fully-parametric annotation lowers to a *generic* function — the
 /// binding's free type variables become `type_params`, and each annotation
 /// `Type::Var` becomes an `IrType::Generic`. `identity : a -> a ; identity x = x`
 /// emits `type_params = [a]`, param `(x, Generic(a))`, return `Generic(a)`. This
@@ -861,7 +861,7 @@ fn unsupported_binary_operator() -> DResult<()> {
     Ok(())
 }
 
-/// M3b-3: a single wildcard `case` arm is now a supported FLAT match (a trailing
+/// a single wildcard `case` arm is now a supported FLAT match (a trailing
 /// catch-all is structurally exhaustive), no longer the SKY-L0100 gap. The
 /// lowering succeeds and yields a `Match` body.
 #[test]
@@ -894,7 +894,7 @@ fn wildcard_only_case_lowers_to_flat_match() -> DResult<()> {
     Ok(())
 }
 
-/// M3b-3: a constructor arm followed by a variable catch-all is now a supported
+/// a constructor arm followed by a variable catch-all is now a supported
 /// FLAT match (the trailing variable is an irrefutable catch-all), no longer the
 /// SKY-L0100 gap.
 #[test]

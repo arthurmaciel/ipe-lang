@@ -120,7 +120,7 @@ fn emit_webview_app_inner(
     let subs_e = lookup_field(ctx, fields, "subscriptions")?;
     let window_e = lookup_field(ctx, fields, "window")?;
 
-    // #91 seal: gate the Model against `webview_app`'s `Clone` bound (same as
+    // seal: gate the Model against `webview_app`'s `Clone` bound (same as
     // Tui — memory-resident Model, `Clone` only). A non-clonable (non-derivable)
     // Model becomes a fail-closed `SKY-L0120` error instead of a `cargo` fail.
     if let Some(model_ty) = crate::emit_model_gate::model_ty_of_view(view_e) {
@@ -131,7 +131,7 @@ fn emit_webview_app_inner(
         )?;
     }
 
-    // #94 seal: gate the Msg type against `webview_app`'s Clone+Send bound.
+    // seal: gate the Msg type against `webview_app`'s Clone+Send bound.
     // Same derivable predicate as Live/Tui — Msg is never persisted.
     if let Some(msg_ty) = crate::emit_model_gate::msg_ty_of_update(update_e) {
         crate::emit_model_gate::check_admissible_msg(
