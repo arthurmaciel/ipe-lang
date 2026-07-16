@@ -144,6 +144,7 @@ const TAG_SQL_FRAGMENT: u8 = 45;
 const TAG_SECRET: u8 = 46;
 const TAG_CACHE_CFG: u8 = 47;
 const TAG_CACHE_STATS: u8 = 48;
+const TAG_CSV_DOC: u8 = 49;
 /// Fuel exhaustion marker — distinct from every variant tag.
 const TAG_FUEL_EXHAUSTED: u8 = 0xFF;
 
@@ -191,6 +192,7 @@ fn hash_ty(ctx: &EmitCtx, ty: &IrType, h: &mut Sha256, fuel: u32) -> DResult<()>
         IrType::Secret => h.update([TAG_SECRET]),
         IrType::CacheCfg => h.update([TAG_CACHE_CFG]),
         IrType::CacheStats => h.update([TAG_CACHE_STATS]),
+        IrType::CsvDoc => h.update([TAG_CSV_DOC]),
 
         IrType::Task(inner) => {
             h.update([TAG_TASK]);

@@ -205,6 +205,9 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // sky_runtime::cache, so the bare name resolves via the crate glob use.
         IrType::CacheCfg => "CacheCfg".to_owned(),
         IrType::CacheStats => "CacheStats".to_owned(),
+        // Std.Csv document record — re-exported (ungated) from sky_runtime::csv,
+        // so the bare name resolves via the crate glob use.
+        IrType::CsvDoc => "CsvDoc".to_owned(),
         // Std.Ui / Std.Html parametric types.  Use fully-qualified Rust paths
         // (T2 soundness: `Attribute` exists in BOTH Std.Ui and Std.Html namespaces;
         // qualified paths keep them unambiguous and prevent glob-import shadowing).
