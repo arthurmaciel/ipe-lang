@@ -1,13 +1,16 @@
 module Dep exposing (composed)
 
 import Sky.Core.Prelude exposing (..)
+import Sky.Core.Task as Task
+import Sky.Core.Error exposing (Error)
 
 
-applyTwice : (Int -> Int) -> Int -> Int
-applyTwice g x =
-    g (g x)
-
-
+-- The forwarded capture must be a GENUINELY non-Clone carrier (a `Task`) so
+-- the SKY-L0126 fail-close is permanent: a pure fn-typed capture is
+-- Arc-promoted (legal), so it can no longer anchor this attribution test.
+useTask : Task Error Int -> Int -> Int
+useTask t x =
+    x
 -- `composed` is a LARGE def whose body starts far above the failing span:
 -- the leading `let` padding pushes the SKY-L0126 forwarding site deep inside
 -- the def body, so this def's `body_span.lo` is a poor (large-`lo_dist`) match
@@ -15,8 +18,10 @@ applyTwice g x =
 -- `Server.run` enclosing `guarded`) under which the pre-fix-B byte-offset
 -- heuristic prefers a numerically-closer Main.sky def and mis-blames it. Fix B
 -- threads `Dep.composed`'s home so the diagnostic renders against Dep.sky.
-composed : (Int -> Int) -> (Int -> Int)
-composed f =
+
+
+composed : Task Error Int -> Int -> Int
+composed t =
     let
         pad0 = 0
         pad1 = 0
@@ -27,4 +32,4 @@ composed f =
         pad6 = 0
         pad7 = 0
     in
-    \x -> applyTwice f x
+        \x -> useTask t x

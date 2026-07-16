@@ -22,8 +22,8 @@ use sky_diagnostics::{DResult, Diagnostic, Feature, Located, LowerError, Span};
 use sky_intern::{Interner, Symbol};
 use sky_ir::{
     Arm, BinOp, BoundSet, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match,
-    ModPath, Module, Pat, Program, TypeDef, UiCtor, UiPlain, Variant, is_dispatch_free,
-    is_irrefutable,
+    ModPath, Module, Pat, Program, TypeDef, UiCtor, UiPlain, Variant, fun_value_arc_promotable,
+    is_dispatch_free, is_irrefutable,
 };
 use sky_types::{SolvedTypes, Ty, TyBounds};
 
@@ -1137,192 +1137,6 @@ fn canon_collect_pat_binds(pat: &canon::Pattern, bound: &mut BTreeSet<Symbol>) {
             canon_collect_pat_binds(head, bound);
             canon_collect_pat_binds(tail, bound);
         }
-    }
-}
-
-/// Does `sym` occur as a free (non-shadowed) `VarLocal` at lambda-nesting depth
-/// ≥ 1 anywhere in `expr`? `depth` is the number of `Lambda` boundaries already
-/// crossed. The canon-level analogue of [`collect_lambda_capture_depths`] used
-/// by `lower_let`'s Arc-promotion look-ahead: a function value read INSIDE a
-/// nested lambda is move-captured out of the enclosing environment, so a bare
-/// `Box<dyn Fn>` carrier is unsound there (E0525/E0507) — the binding must be
-/// Arc-promoted. A depth-0 occurrence (a direct call in the binder's own scope)
-/// is sound and does NOT trigger promotion. Shadow discipline mirrors
-/// [`canon_collect_free_locals`]: `Let` names, `Case` arm patterns, and inner
-/// `Lambda` params each shadow `sym` in their scope.
-fn canon_sym_captured_at_depth_ge1(sym: Symbol, expr: &canon::Expr, depth: u32) -> bool {
-    match &expr.value {
-        canon::Expr_::VarLocal(s) => *s == sym && depth >= 1,
-        canon::Expr_::Lambda(params, body) => {
-            let mut inner = BTreeSet::new();
-            for p in params {
-                canon_collect_pat_binds(p, &mut inner);
-            }
-            !inner.contains(&sym) && canon_sym_captured_at_depth_ge1(sym, body, depth + 1)
-        }
-        canon::Expr_::Let(bindings, body) => {
-            let mut shadowed = false;
-            for b in bindings {
-                if !shadowed && canon_sym_captured_at_depth_ge1(sym, &b.body, depth) {
-                    return true;
-                }
-                let mut names = BTreeSet::new();
-                canon_collect_pat_binds(&b.pat, &mut names);
-                if names.contains(&sym) {
-                    shadowed = true;
-                }
-            }
-            !shadowed && canon_sym_captured_at_depth_ge1(sym, body, depth)
-        }
-        canon::Expr_::Case(scrut, arms) => {
-            if canon_sym_captured_at_depth_ge1(sym, scrut, depth) {
-                return true;
-            }
-            arms.iter().any(|arm| {
-                let mut names = BTreeSet::new();
-                canon_collect_pat_binds(&arm.pat, &mut names);
-                !names.contains(&sym) && canon_sym_captured_at_depth_ge1(sym, &arm.body, depth)
-            })
-        }
-        canon::Expr_::Call(callee, args) => {
-            canon_sym_captured_at_depth_ge1(sym, callee, depth)
-                || args
-                    .iter()
-                    .any(|a| canon_sym_captured_at_depth_ge1(sym, a, depth))
-        }
-        canon::Expr_::Binop { lhs, rhs, .. } => {
-            canon_sym_captured_at_depth_ge1(sym, lhs, depth)
-                || canon_sym_captured_at_depth_ge1(sym, rhs, depth)
-        }
-        canon::Expr_::If(branches, else_) => {
-            branches.iter().any(|(cond, then)| {
-                canon_sym_captured_at_depth_ge1(sym, cond, depth)
-                    || canon_sym_captured_at_depth_ge1(sym, then, depth)
-            }) || canon_sym_captured_at_depth_ge1(sym, else_, depth)
-        }
-        canon::Expr_::Tuple(elems) | canon::Expr_::List(elems) => elems
-            .iter()
-            .any(|e| canon_sym_captured_at_depth_ge1(sym, e, depth)),
-        canon::Expr_::Cons(h, t) => {
-            canon_sym_captured_at_depth_ge1(sym, h, depth)
-                || canon_sym_captured_at_depth_ge1(sym, t, depth)
-        }
-        canon::Expr_::Record(fields) => fields
-            .iter()
-            .any(|(_, v)| canon_sym_captured_at_depth_ge1(sym, v, depth)),
-        canon::Expr_::Access(rec, _) => canon_sym_captured_at_depth_ge1(sym, rec, depth),
-        canon::Expr_::Update(base, fields) => {
-            canon_sym_captured_at_depth_ge1(sym, base, depth)
-                || fields
-                    .iter()
-                    .any(|(_, v)| canon_sym_captured_at_depth_ge1(sym, v, depth))
-        }
-        canon::Expr_::VarTopLevel { .. }
-        | canon::Expr_::VarKernel { .. }
-        | canon::Expr_::VarCtor { .. }
-        | canon::Expr_::Int(_)
-        | canon::Expr_::Float(_)
-        | canon::Expr_::Str(_)
-        | canon::Expr_::Char(_)
-        | canon::Expr_::Unit => false,
-    }
-}
-
-/// Count the CONSUMING (non-direct-callee) free occurrences of `sym` in `expr`,
-/// stopping the walk at any binder that shadows `sym`. The canon-level analogue
-/// of [`count_fn_value_uses`] used by `lower_let`'s Arc-promotion look-ahead: a
-/// function value read at a non-callee position (as a call ARGUMENT, a record
-/// field, a list element, …) is MOVED there, so more than one such read cannot
-/// ride a non-`Clone` `Box<dyn Fn>` carrier (E0382) — the binding must be
-/// Arc-promoted so each read clones the pointer. A DIRECT-callee `f x` borrows
-/// (`Fn::call(&self, …)`) and is not counted, matching
-/// [`count_fn_value_uses_apply`].
-fn canon_fn_value_uses(sym: Symbol, expr: &canon::Expr) -> usize {
-    match &expr.value {
-        canon::Expr_::VarLocal(s) => usize::from(*s == sym),
-        canon::Expr_::Call(callee, args) => {
-            // The direct callee `Call(VarLocal(sym), args)` borrows — not counted;
-            // every argument position is a consuming use.
-            let callee_uses = if matches!(&callee.value, canon::Expr_::VarLocal(s) if *s == sym) {
-                0
-            } else {
-                canon_fn_value_uses(sym, callee)
-            };
-            callee_uses + args.iter().map(|a| canon_fn_value_uses(sym, a)).sum::<usize>()
-        }
-        canon::Expr_::Lambda(params, body) => {
-            let mut inner = BTreeSet::new();
-            for p in params {
-                canon_collect_pat_binds(p, &mut inner);
-            }
-            if inner.contains(&sym) {
-                0
-            } else {
-                canon_fn_value_uses(sym, body)
-            }
-        }
-        canon::Expr_::Let(bindings, body) => {
-            let mut total = 0;
-            let mut shadowed = false;
-            for b in bindings {
-                if !shadowed {
-                    total += canon_fn_value_uses(sym, &b.body);
-                }
-                let mut names = BTreeSet::new();
-                canon_collect_pat_binds(&b.pat, &mut names);
-                if names.contains(&sym) {
-                    shadowed = true;
-                }
-            }
-            if !shadowed {
-                total += canon_fn_value_uses(sym, body);
-            }
-            total
-        }
-        canon::Expr_::Case(scrut, arms) => {
-            let mut total = canon_fn_value_uses(sym, scrut);
-            for arm in arms {
-                let mut names = BTreeSet::new();
-                canon_collect_pat_binds(&arm.pat, &mut names);
-                if !names.contains(&sym) {
-                    total += canon_fn_value_uses(sym, &arm.body);
-                }
-            }
-            total
-        }
-        canon::Expr_::Binop { lhs, rhs, .. } => {
-            canon_fn_value_uses(sym, lhs) + canon_fn_value_uses(sym, rhs)
-        }
-        canon::Expr_::If(branches, else_) => {
-            branches
-                .iter()
-                .map(|(c, t)| canon_fn_value_uses(sym, c) + canon_fn_value_uses(sym, t))
-                .sum::<usize>()
-                + canon_fn_value_uses(sym, else_)
-        }
-        canon::Expr_::Tuple(elems) | canon::Expr_::List(elems) => {
-            elems.iter().map(|e| canon_fn_value_uses(sym, e)).sum()
-        }
-        canon::Expr_::Cons(h, t) => canon_fn_value_uses(sym, h) + canon_fn_value_uses(sym, t),
-        canon::Expr_::Record(fields) => {
-            fields.iter().map(|(_, v)| canon_fn_value_uses(sym, v)).sum()
-        }
-        canon::Expr_::Access(rec, _) => canon_fn_value_uses(sym, rec),
-        canon::Expr_::Update(base, fields) => {
-            canon_fn_value_uses(sym, base)
-                + fields
-                    .iter()
-                    .map(|(_, v)| canon_fn_value_uses(sym, v))
-                    .sum::<usize>()
-        }
-        canon::Expr_::VarTopLevel { .. }
-        | canon::Expr_::VarKernel { .. }
-        | canon::Expr_::VarCtor { .. }
-        | canon::Expr_::Int(_)
-        | canon::Expr_::Float(_)
-        | canon::Expr_::Str(_)
-        | canon::Expr_::Char(_)
-        | canon::Expr_::Unit => 0,
     }
 }
 
@@ -4219,6 +4033,466 @@ fn reject_fn_value_reuse(sym: Symbol, ir_ty: &IrType, body: &Expr, span: Span) -
     Ok(())
 }
 
+// ── Fn-value Arc-carrier promotion (position-typed carrier model) ────────────
+//
+// A pure-`Fun` binding (`sky_ir::fun_value_arc_promotable`) whose reads exceed
+// what the default `Box<dyn Fn>` carrier can soundly serve is promoted to the
+// `Clone` `Arc<dyn Fn + Send + Sync>` carrier (`Expr::SharedLambda`). The
+// promotion decision runs on the LOWERED scope IR, so it sees the closures
+// eta-expansion synthesizes during lowering — the shapes a source-level scan
+// structurally cannot (`guarded h = wrap (rateLimit … h)` supplies 1 of
+// `wrap`'s 2 flattened args, so a residual `\eta_0 -> wrap(<partial>, eta_0)`
+// capturing `wrap` exists only post-lowering).
+//
+// Read soundness for a `Box`-carried fn binding, by position:
+//   * depth-0 direct callee — borrows via `Fn::call(&self, ..)`, sound.
+//   * depth-0 non-callee, single use — a plain final move, sound.
+//   * NON-CALLEE read at closure depth ≥ 1 — the closure body moves the
+//     captured `Box` out of a `&self` env per call → E0507.
+//   * ANY read at closure depth ≥ 2 — an inner closure's construction moves
+//     the value out of the outer closure's env per call → E0507/E0525.
+//   * > 1 consuming use — the second move of a non-`Clone` value → E0382.
+// The last three demand the `Arc` carrier; [`fn_value_read_flags`] +
+// [`count_fn_value_uses`] detect them.
+//
+// After promotion the binding's reads are reconciled to the `Arc`:
+//   * callee reads call the `Arc` directly (callee auto-deref);
+//   * capturing closures clone at each boundary
+//     ([`force_shared_capture_clones`] relays + [`rewrite_multiuse_clones`]);
+//   * NON-CALLEE reads are re-dispatched through a fresh plain closure
+//     ([`shim_fn_value_reads`]) because `Arc<dyn Fn>` satisfies neither a
+//     `Box<dyn Fn>` slot nor an `impl Fn` kernel bound (std has no
+//     `impl Fn for Arc<F>`) — the reference backend's `{ let v = v.clone();
+//     move |a| v(a) }` re-dispatch, in IR form.
+
+/// Positional facts about the live reads of a fn-typed binding `sym` in its
+/// scope, gathered by [`fn_value_read_flags`]. Reads inside a
+/// `requires_sync_capture` kernel-call argument are excluded — those slots are
+/// served by the dedicated sync-capture promotion path
+/// (`flows_into_sync_kernel_call` + `promote_unification_sibling_lambdas`),
+/// whose output is byte-pinned.
+#[derive(Clone, Copy, Default)]
+struct FnValueReadFlags {
+    /// A non-callee `Var`/`CloneVar` read at closure depth ≥ 1 exists — a bare
+    /// `Box` capture would be moved out of a `Fn` env per call (E0507).
+    non_callee_ge1: bool,
+    /// Any read at closure depth ≥ 2 exists — an intermediate closure's
+    /// construction would move the `Box` out of its enclosing env (E0525).
+    any_ge2: bool,
+}
+
+/// Gather [`FnValueReadFlags`] for `sym` over `expr`. Shadow discipline and
+/// callee-position handling mirror [`count_fn_value_uses`]; depth counting
+/// mirrors [`collect_lambda_capture_depths`]. Enumerated exhaustively (no `_`
+/// catch-all) so a future `Expr` variant is a compile error here, not a
+/// silently-missed read.
+fn fn_value_read_flags(sym: Symbol, expr: &Expr) -> FnValueReadFlags {
+    let mut flags = FnValueReadFlags::default();
+    fn_value_read_flags_walk(sym, expr, 0, &mut flags);
+    flags
+}
+
+#[allow(clippy::too_many_lines)]
+fn fn_value_read_flags_walk(sym: Symbol, expr: &Expr, depth: u32, flags: &mut FnValueReadFlags) {
+    match expr {
+        Expr::Var(s) | Expr::CloneVar(s) => {
+            if *s == sym {
+                flags.non_callee_ge1 |= depth >= 1;
+                flags.any_ge2 |= depth >= 2;
+            }
+        }
+        Expr::Lambda { params, body, .. } | Expr::SharedLambda { params, body, .. } => {
+            if !params.iter().any(|(s, _)| *s == sym) {
+                fn_value_read_flags_walk(sym, body, depth + 1, flags);
+            }
+        }
+        Expr::Apply { func, args } => {
+            match func.as_ref() {
+                // Direct-callee read: borrows (`Fn::call`), so it is not a
+                // non-callee hazard — but at depth ≥ 2 its capture chain still
+                // moves the value through an intermediate closure env.
+                Expr::Var(s) | Expr::CloneVar(s) if *s == sym => {
+                    flags.any_ge2 |= depth >= 2;
+                }
+                other => fn_value_read_flags_walk(sym, other, depth, flags),
+            }
+            for a in args {
+                fn_value_read_flags_walk(sym, a, depth, flags);
+            }
+        }
+        // A sync-capture kernel argument is the sync-promotion path's slot —
+        // reads there are not this promotion's concern (see the struct doc).
+        Expr::Call { callee, args, .. } => {
+            if !matches!(callee, Callee::Kernel(k) if k.requires_sync_capture()) {
+                for a in args {
+                    fn_value_read_flags_walk(sym, a, depth, flags);
+                }
+            }
+        }
+        Expr::Let { name, value, body } => {
+            fn_value_read_flags_walk(sym, value, depth, flags);
+            if *name != sym {
+                fn_value_read_flags_walk(sym, body, depth, flags);
+            }
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            fn_value_read_flags_walk(sym, value, depth, flags);
+            if !pat_binds_symbol(binder, sym) {
+                fn_value_read_flags_walk(sym, body, depth, flags);
+            }
+        }
+        Expr::Match(m) => {
+            fn_value_read_flags_walk(sym, m.scrutinee(), depth, flags);
+            for arm in m.arms() {
+                if !pat_binds_symbol(&arm.pat, sym) {
+                    fn_value_read_flags_walk(sym, &arm.body, depth, flags);
+                }
+            }
+        }
+        Expr::TailLoop { params, body } => {
+            if !params.iter().any(|(s, _)| *s == sym) {
+                fn_value_read_flags_walk(sym, body, depth, flags);
+            }
+        }
+        Expr::BinOp { lhs, rhs, .. } => {
+            fn_value_read_flags_walk(sym, lhs, depth, flags);
+            fn_value_read_flags_walk(sym, rhs, depth, flags);
+        }
+        Expr::If { cond, then_, else_ } => {
+            fn_value_read_flags_walk(sym, cond, depth, flags);
+            fn_value_read_flags_walk(sym, then_, depth, flags);
+            fn_value_read_flags_walk(sym, else_, depth, flags);
+        }
+        Expr::Ctor { args, .. } | Expr::TailRecur { args } => {
+            for a in args {
+                fn_value_read_flags_walk(sym, a, depth, flags);
+            }
+        }
+        Expr::Tuple(items) | Expr::List { items, .. } => {
+            for e in items {
+                fn_value_read_flags_walk(sym, e, depth, flags);
+            }
+        }
+        Expr::Cons { head, tail } => {
+            fn_value_read_flags_walk(sym, head, depth, flags);
+            fn_value_read_flags_walk(sym, tail, depth, flags);
+        }
+        Expr::ListIndexClone { list, .. } | Expr::ListLenCheck { list, .. } => {
+            fn_value_read_flags_walk(sym, list, depth, flags);
+        }
+        Expr::Record(fields) => {
+            for (_, e) in fields {
+                fn_value_read_flags_walk(sym, e, depth, flags);
+            }
+        }
+        Expr::Update { record, fields } => {
+            fn_value_read_flags_walk(sym, record, depth, flags);
+            for (_, e) in fields {
+                fn_value_read_flags_walk(sym, e, depth, flags);
+            }
+        }
+        Expr::TaskSeq { effect, rest } | Expr::TaskSeqSync { effect, rest } => {
+            fn_value_read_flags_walk(sym, effect, depth, flags);
+            fn_value_read_flags_walk(sym, rest, depth, flags);
+        }
+        Expr::Access { record, .. } => {
+            fn_value_read_flags_walk(sym, record, depth, flags);
+        }
+        Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. } => {}
+    }
+}
+
+/// Build the re-dispatch closure for a non-callee read of the Arc-promoted
+/// `sym`: `Lambda { f0.., Apply(CloneVar(sym), [f0..]) }`, emitted as
+/// `Box::new(move |f0..| (sym.clone())(f0..))`. The fresh plain closure
+/// satisfies the `Box<dyn Fn>` slot / `impl Fn` kernel bound the read flows
+/// into; the clone keeps the enclosing closure `Fn` (relay pre-clones at each
+/// boundary come from [`force_shared_capture_clones`]). Fresh parameter
+/// symbols come positionally from the eta pool — each shim is its own closure
+/// scope, so slot reuse cannot shadow across sites.
+fn fn_read_shim(
+    sym: Symbol,
+    param_tys: &[IrType],
+    ret: &IrType,
+    eta_pool: &[Symbol],
+) -> DResult<Expr> {
+    let mut params: Vec<(Symbol, IrType)> = Vec::with_capacity(param_tys.len());
+    let mut args: Vec<Expr> = Vec::with_capacity(param_tys.len());
+    for (offset, ty) in param_tys.iter().enumerate() {
+        let fresh = *eta_pool.get(offset).ok_or_else(|| {
+            bug(
+                "sky_lower::fn_read_shim",
+                "eta-parameter pool smaller than the promoted binding's arity",
+            )
+        })?;
+        params.push((fresh, ty.clone()));
+        args.push(Expr::Var(fresh));
+    }
+    Ok(Expr::Lambda {
+        params,
+        ret: ret.clone(),
+        body: Box::new(Expr::Apply {
+            func: Box::new(Expr::CloneVar(sym)),
+            args,
+        }),
+    })
+}
+
+/// Mint the `Arc` carrier for a promoted binding whose value is NOT a lambda
+/// literal (a partial-application residual, an alias `Var`, a `FuncValue`, a
+/// record-field access, …), or for a fn-typed PARAM being shadow-rebound:
+/// `SharedLambda { f0.., Apply(value, [f0..]) }`, emitted as
+/// `Arc::new(move |f0..| (value)(f0..))`. The underlying value is moved into
+/// the `Arc`'d closure ONCE (its own single consuming use) and called by
+/// borrow per dispatch, so the wrapper is `Fn` and `Clone`.
+fn eta_shared_rebind(
+    value: Expr,
+    param_tys: &[IrType],
+    ret: &IrType,
+    eta_pool: &[Symbol],
+) -> DResult<Expr> {
+    let mut params: Vec<(Symbol, IrType)> = Vec::with_capacity(param_tys.len());
+    let mut args: Vec<Expr> = Vec::with_capacity(param_tys.len());
+    for (offset, ty) in param_tys.iter().enumerate() {
+        let fresh = *eta_pool.get(offset).ok_or_else(|| {
+            bug(
+                "sky_lower::eta_shared_rebind",
+                "eta-parameter pool smaller than the promoted binding's arity",
+            )
+        })?;
+        params.push((fresh, ty.clone()));
+        args.push(Expr::Var(fresh));
+    }
+    Ok(Expr::SharedLambda {
+        params,
+        ret: ret.clone(),
+        body: Box::new(Expr::Apply {
+            func: Box::new(value),
+            args,
+        }),
+    })
+}
+
+/// Rewrite every live NON-CALLEE `Var(sym)` / `CloneVar(sym)` read in `expr`
+/// into the [`fn_read_shim`] re-dispatch closure. Direct callee reads
+/// (`Apply { func: sym, .. }`) stay — the `Arc` is called by auto-deref.
+/// Reads inside a `requires_sync_capture` kernel-call argument stay — the
+/// sync-capture promotion path owns those slots (mirrors
+/// [`fn_value_read_flags`], so trigger and rewrite cover the same read set).
+/// Shadow discipline mirrors [`count_fn_value_uses`]; enumerated exhaustively
+/// (no `_` catch-all).
+#[allow(clippy::too_many_lines)]
+fn shim_fn_value_reads(
+    sym: Symbol,
+    param_tys: &[IrType],
+    ret: &IrType,
+    eta_pool: &[Symbol],
+    expr: Expr,
+) -> DResult<Expr> {
+    let recurse = |e: Expr| shim_fn_value_reads(sym, param_tys, ret, eta_pool, e);
+    let recurse_all = |items: Vec<Expr>| {
+        items
+            .into_iter()
+            .map(|e| shim_fn_value_reads(sym, param_tys, ret, eta_pool, e))
+            .collect::<DResult<Vec<Expr>>>()
+    };
+    match expr {
+        Expr::Var(s) | Expr::CloneVar(s) if s == sym => {
+            fn_read_shim(sym, param_tys, ret, eta_pool)
+        }
+        Expr::Var(_)
+        | Expr::CloneVar(_)
+        | Expr::Int(_)
+        | Expr::Bool(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::Char(_)
+        | Expr::Unit
+        | Expr::FuncValue { .. } => Ok(expr),
+        Expr::Apply { func, args } => {
+            let func = match *func {
+                // Direct callee read: stays — the promoted `Arc` is callable.
+                Expr::Var(s) if s == sym => Expr::Var(s),
+                Expr::CloneVar(s) if s == sym => Expr::CloneVar(s),
+                other => recurse(other)?,
+            };
+            Ok(Expr::Apply {
+                func: Box::new(func),
+                args: recurse_all(args)?,
+            })
+        }
+        Expr::Call { callee, args, pin } => {
+            // Sync-capture kernel args stay untouched (see the fn doc).
+            if matches!(&callee, Callee::Kernel(k) if k.requires_sync_capture()) {
+                Ok(Expr::Call { callee, args, pin })
+            } else {
+                Ok(Expr::Call {
+                    callee,
+                    args: recurse_all(args)?,
+                    pin,
+                })
+            }
+        }
+        Expr::Lambda { params, ret: lret, body } => {
+            if params.iter().any(|(s, _)| *s == sym) {
+                Ok(Expr::Lambda {
+                    params,
+                    ret: lret,
+                    body,
+                })
+            } else {
+                Ok(Expr::Lambda {
+                    params,
+                    ret: lret,
+                    body: Box::new(recurse(*body)?),
+                })
+            }
+        }
+        Expr::SharedLambda { params, ret: lret, body } => {
+            if params.iter().any(|(s, _)| *s == sym) {
+                Ok(Expr::SharedLambda {
+                    params,
+                    ret: lret,
+                    body,
+                })
+            } else {
+                Ok(Expr::SharedLambda {
+                    params,
+                    ret: lret,
+                    body: Box::new(recurse(*body)?),
+                })
+            }
+        }
+        Expr::Let { name, value, body } => {
+            let value = Box::new(recurse(*value)?);
+            let body = if name == sym {
+                body
+            } else {
+                Box::new(recurse(*body)?)
+            };
+            Ok(Expr::Let { name, value, body })
+        }
+        Expr::Destructure {
+            binder,
+            value,
+            body,
+        } => {
+            let value = Box::new(recurse(*value)?);
+            let body = if pat_binds_symbol(&binder, sym) {
+                body
+            } else {
+                Box::new(recurse(*body)?)
+            };
+            Ok(Expr::Destructure {
+                binder,
+                value,
+                body,
+            })
+        }
+        Expr::Match(m) => Ok(Expr::Match(m.try_map_bodies(
+            |scrutinee| shim_fn_value_reads(sym, param_tys, ret, eta_pool, scrutinee),
+            |pat, body, guard| {
+                let body = if pat_binds_symbol(pat, sym) {
+                    body
+                } else {
+                    shim_fn_value_reads(sym, param_tys, ret, eta_pool, body)?
+                };
+                Ok((body, guard))
+            },
+        )?)),
+        Expr::TailLoop { params, body } => {
+            let body = if params.iter().any(|(s, _)| *s == sym) {
+                body
+            } else {
+                Box::new(recurse(*body)?)
+            };
+            Ok(Expr::TailLoop { params, body })
+        }
+        Expr::BinOp { op, lhs, rhs } => Ok(Expr::BinOp {
+            op,
+            lhs: Box::new(recurse(*lhs)?),
+            rhs: Box::new(recurse(*rhs)?),
+        }),
+        Expr::If { cond, then_, else_ } => Ok(Expr::If {
+            cond: Box::new(recurse(*cond)?),
+            then_: Box::new(recurse(*then_)?),
+            else_: Box::new(recurse(*else_)?),
+        }),
+        Expr::Ctor {
+            home,
+            ty,
+            variant,
+            args,
+        } => Ok(Expr::Ctor {
+            home,
+            ty,
+            variant,
+            args: recurse_all(args)?,
+        }),
+        Expr::Tuple(items) => Ok(Expr::Tuple(recurse_all(items)?)),
+        Expr::List { elem, items } => Ok(Expr::List {
+            elem,
+            items: recurse_all(items)?,
+        }),
+        Expr::Cons { head, tail } => Ok(Expr::Cons {
+            head: Box::new(recurse(*head)?),
+            tail: Box::new(recurse(*tail)?),
+        }),
+        Expr::ListIndexClone { list, index } => Ok(Expr::ListIndexClone {
+            list: Box::new(recurse(*list)?),
+            index,
+        }),
+        Expr::ListLenCheck { list, len, exact } => Ok(Expr::ListLenCheck {
+            list: Box::new(recurse(*list)?),
+            len,
+            exact,
+        }),
+        Expr::Record(fields) => Ok(Expr::Record(
+            fields
+                .into_iter()
+                .map(|(name, e)| recurse(e).map(|e| (name, e)))
+                .collect::<DResult<Vec<_>>>()?,
+        )),
+        Expr::Update { record, fields } => Ok(Expr::Update {
+            record: Box::new(recurse(*record)?),
+            fields: fields
+                .into_iter()
+                .map(|(name, e)| recurse(e).map(|e| (name, e)))
+                .collect::<DResult<Vec<_>>>()?,
+        }),
+        Expr::Access {
+            record,
+            field,
+            field_ty,
+        } => Ok(Expr::Access {
+            record: Box::new(recurse(*record)?),
+            field,
+            field_ty,
+        }),
+        Expr::TaskSeq { effect, rest } => Ok(Expr::TaskSeq {
+            effect: Box::new(recurse(*effect)?),
+            rest: Box::new(recurse(*rest)?),
+        }),
+        Expr::TaskSeqSync { effect, rest } => Ok(Expr::TaskSeqSync {
+            effect: Box::new(recurse(*effect)?),
+            rest: Box::new(recurse(*rest)?),
+        }),
+        Expr::TailRecur { args } => Ok(Expr::TailRecur {
+            args: recurse_all(args)?,
+        }),
+    }
+}
+
 /// The MAX use-count across all non-shadowing arms of a (post-scrutinee-rewrite)
 /// `Match` node, for restoring the shared `remaining` counter after the per-arm
 /// snapshot pass in `rewrite_multiuse_clones`.
@@ -5631,19 +5905,25 @@ pub struct Lowerer<'a> {
     /// mutability so the lowering walk stays over a shared `&self`.
     fn_is_async: Cell<bool>,
 
-    /// `let`-bound function-typed symbols this scope will Arc-promote (their
-    /// carrier becomes `Arc<dyn Fn>` because they are captured at lambda-nesting
-    /// depth ≥ 1). Populated by `lower_let`'s look-ahead pre-pass BEFORE the
-    /// binding values are lowered, so the capture-clone classifier
-    /// (`captured_locals` in `lower_lambda`) knows — at the moment it classifies
-    /// a capture — that such a symbol will be `Clone` at its binding site, and
-    /// routes it to `clone_set` (`CloneVar` = `Arc::clone`) instead of
-    /// fail-closing SKY-L0126. The pre-pass and the actual `SharedLambda`
-    /// promotion in `lower_let_pvar` read the SAME set, so the classifier's
-    /// `CloneVar` and the value's `Arc` carrier can never disagree (a `.clone()`
-    /// on a non-`Clone` `Box` would be E0599). Interior mutability so the
-    /// lowering walk stays over a shared `&self`; scoped/restored per `let`.
-    arc_promoted_fn_syms: std::cell::RefCell<BTreeSet<Symbol>>,
+    /// Symbols whose BINDER kind can carry the `Arc<dyn Fn>` promotion: plain
+    /// `let` names (`PVar`) and def/lambda parameters — the binder sites that
+    /// run the fn-value promotion pass. The capture-clone classifier in
+    /// `lower_lambda` routes a captured pure-`Fun` symbol OUT of the SKY-L0126
+    /// fail-close only when its binder is registered here (the binder site will
+    /// see the capture on the LOWERED scope — eta-synthesized closures included
+    /// — and promote the binding's carrier). A fn-typed symbol bound by a
+    /// destructure / match-arm pattern is NOT registered, so its capture keeps
+    /// today's honest fail-close. Scoped save/restore per registering scope;
+    /// interior mutability so the lowering walk stays over a shared `&self`.
+    promotable_fn_binders: std::cell::RefCell<BTreeSet<Symbol>>,
+    /// Fail-close signal: pure-`Fun` captures the classifier routed AWAY from
+    /// SKY-L0126 on the promise that the symbol's binder site will decide the
+    /// carrier, keyed by symbol with the capturing lambda's span. Each binder
+    /// site consumes its symbol's entry; a binder that cannot resolve the
+    /// binding to a `Fun` shape (region disagreement) re-raises the original
+    /// SKY-L0126 instead of emitting a `.clone()` on a non-`Clone` `Box`
+    /// (E0599 — a SEAL break). Cleared per def.
+    deferred_fun_captures: std::cell::RefCell<BTreeMap<Symbol, Span>>,
 }
 
 /// The interned symbols of the built-in `Maybe` / `Result` types and their
@@ -6303,7 +6583,8 @@ impl<'a> Lowerer<'a> {
             current_home: std::cell::RefCell::new(Vec::new()),
             current_poly_tvars: std::cell::RefCell::new(BTreeMap::new()),
             fn_is_async: Cell::new(false),
-            arc_promoted_fn_syms: std::cell::RefCell::new(BTreeSet::new()),
+            promotable_fn_binders: std::cell::RefCell::new(BTreeSet::new()),
+            deferred_fun_captures: std::cell::RefCell::new(BTreeMap::new()),
         }
     }
 
@@ -6941,6 +7222,10 @@ impl<'a> Lowerer<'a> {
         // Track the current def's home so every `region_ty(span)` lookup uses the
         // correct `(home, span)` key, matching what the constraint builder wrote.
         *self.current_home.borrow_mut() = def.home().to_vec();
+        // Deferred fn-capture signals are a per-def contract between the capture
+        // classifier and the binder sites; a def that errored out mid-lowering
+        // must not leak its signals into the next def.
+        self.deferred_fun_captures.borrow_mut().clear();
 
         // `id` is the def's position in `m.defs` — identical to the
         // `func_ids` entry `new()` recorded for `(home, name)` (the map is
@@ -7133,9 +7418,15 @@ impl<'a> Lowerer<'a> {
                 // correct async context for their own scope.
                 let prev_async = self.fn_is_async.get();
                 self.fn_is_async.set(matches!(ret, IrType::Task(_)));
-                let mut lowered_body = self.lower_expr(body)?;
+                // Params are promotable fn binders for the body's capture
+                // classifier (an inner lambda capturing a pure-`Fun` param
+                // defers to the param loop below instead of SKY-L0126).
+                let param_syms: Vec<Symbol> = params.iter().map(|(s, _)| *s).collect();
+                let body_result =
+                    self.with_promotable_fn_binders(param_syms, || self.lower_expr(body));
                 *self.current_poly_tvars.borrow_mut() = saved_poly_tvars;
                 self.fn_is_async.set(prev_async);
+                let mut lowered_body = body_result?;
                 for (binder_sym, binder_pat) in prologue.into_iter().rev() {
                     lowered_body = Expr::Destructure {
                         binder: binder_pat,
@@ -7194,13 +7485,16 @@ impl<'a> Lowerer<'a> {
                 // Move-ownership discipline for CloneOk / bare-Generic params
                 // (T5, #104/#112/#189) — the ONE entry point every binder kind
                 // shares. Run BEFORE TCO so the loop-rewrite sees already-correct
-                // clone nodes. `apply_move_ownership` collapses the former
-                // per-site `n > 1 { multiuse } else { relay }` split into a
-                // single `rewrite_multiuse_clones(remaining = n)` call (lean and
-                // correct for every n ≥ 1) and fails closed on fn-value reuse
-                // for ineligible params.
+                // clone nodes. `apply_param_move_ownership` first promotes a
+                // pure-`Fun` param whose reads need the `Clone` `Arc` carrier,
+                // then falls through to `apply_move_ownership`, which collapses
+                // the former per-site `n > 1 { multiuse } else { relay }` split
+                // into a single `rewrite_multiuse_clones(remaining = n)` call
+                // (lean and correct for every n ≥ 1) and fails closed on
+                // fn-value reuse for ineligible params.
                 for (sym, ir_ty) in &params {
-                    lowered_body = apply_move_ownership(*sym, ir_ty, lowered_body, sig_span)?;
+                    lowered_body =
+                        self.apply_param_move_ownership(*sym, ir_ty, lowered_body, sig_span)?;
                 }
                 // TCO: if every self-call is a tail call, rewrite the body to a
                 // loop so the Rust stack stays flat (mirrors Sky's TailCallOpt).
@@ -7333,7 +7627,10 @@ impl<'a> Lowerer<'a> {
                     // Save/set/restore fn_is_async (same rationale as Typed path).
                     let prev_async = self.fn_is_async.get();
                     self.fn_is_async.set(matches!(ret, IrType::Task(_)));
-                    let body_result = self.lower_expr(body);
+                    // Same promotable-fn-binder registration as the Typed path.
+                    let param_syms: Vec<Symbol> = params.iter().map(|(s, _)| *s).collect();
+                    let body_result =
+                        self.with_promotable_fn_binders(param_syms, || self.lower_expr(body));
                     self.fn_is_async.set(prev_async);
                     if let Some(saved) = saved_poly_tvars {
                         *self.current_poly_tvars.borrow_mut() = saved;
@@ -7349,10 +7646,11 @@ impl<'a> Lowerer<'a> {
                         };
                     }
                     // Same move-ownership discipline as the Typed path above —
-                    // one `apply_move_ownership` per param (see that call site
-                    // and the fn doc for the collapsed-branch rationale).
+                    // one `apply_param_move_ownership` per param (see that call
+                    // site and the fn doc for the collapsed-branch rationale).
                     for (sym, ir_ty) in &params {
-                        lowered_body = apply_move_ownership(*sym, ir_ty, lowered_body, sig_span)?;
+                        lowered_body =
+                            self.apply_param_move_ownership(*sym, ir_ty, lowered_body, sig_span)?;
                     }
                     let arity = params.len();
                     if analyze_tail_recursion(id, arity, &lowered_body)
@@ -8286,6 +8584,122 @@ impl<'a> Lowerer<'a> {
             .collect()
     }
 
+    /// T3 capture-clone rewrite for a closure body: classify the free locals
+    /// captured by the closure (from its CANON body) and rewrite the LOWERED
+    /// `body` — `CloneOk` reads become `CloneVar` (`.clone()`), `NonClone` captures
+    /// outside the depth-0 callee position fail-close SKY-L0125/L0126.
+    ///
+    /// A captured pure-`Fun` symbol whose binder can carry the `Arc<dyn Fn>`
+    /// promotion (a plain `let` name or a def/lambda param — see
+    /// `promotable_fn_binders`) is routed AWAY from the fail-close: its reads
+    /// stay bare here, and the BINDER site — which sees the fully-lowered
+    /// scope, eta-synthesized closures included — decides the carrier
+    /// (`SharedLambda` + relays + read shims) from the same structural facts.
+    /// The deferral is recorded so a binder that cannot resolve the `Fun` shape
+    /// re-raises this SKY-L0126 instead of leaking an unsound bare `Box`
+    /// capture (fail-closed both ways).
+    fn rewrite_lambda_captures(
+        &self,
+        all_param_pats: &[&canon::Pattern],
+        cur_body: &canon::Expr,
+        span: Span,
+        body: Expr,
+    ) -> DResult<Expr> {
+        let captures = self.captured_locals(all_param_pats, cur_body);
+        let mut clone_set: BTreeSet<Symbol> = BTreeSet::new();
+        let mut noncl_set: BTreeSet<Symbol> = BTreeSet::new();
+        for (sym, ir_ty) in captures {
+            if ir_ty.as_ref().is_some_and(fun_value_arc_promotable)
+                && self.promotable_fn_binders.borrow().contains(&sym)
+            {
+                self.deferred_fun_captures.borrow_mut().insert(sym, span);
+                continue;
+            }
+            match ir_ty.as_ref().map(clone_class) {
+                Some(CloneClass::CloneOk) => {
+                    clone_set.insert(sym);
+                }
+                Some(CloneClass::NonClone) => {
+                    noncl_set.insert(sym);
+                }
+                Some(CloneClass::CopyLeaf) | None => {}
+            }
+        }
+        rewrite_captured_clones(&clone_set, &noncl_set, span, body, 0)
+    }
+
+    /// Run `f` with `syms` registered as promotable fn binders (see the
+    /// `promotable_fn_binders` field doc), restoring the previous registration
+    /// afterwards so nested scopes compose and shadowing resolves to the
+    /// innermost registering binder.
+    fn with_promotable_fn_binders<T>(&self, syms: Vec<Symbol>, f: impl FnOnce() -> T) -> T {
+        if syms.is_empty() {
+            return f();
+        }
+        let saved = {
+            let mut set = self.promotable_fn_binders.borrow_mut();
+            let saved = set.clone();
+            set.extend(syms);
+            saved
+        };
+        let out = f();
+        *self.promotable_fn_binders.borrow_mut() = saved;
+        out
+    }
+
+    /// Move-ownership entry point for def / lambda PARAMS — the param-side
+    /// mirror of `lower_let_pvar`'s binding promotion. A pure-`Fun` param whose
+    /// reads exceed the bare `Box<dyn Fn>` carrier (see the promotion module
+    /// doc above [`FnValueReadFlags`]) is shadow-rebound to the `Clone` `Arc`
+    /// carrier at function entry:
+    ///
+    /// ```text
+    /// let h = { Arc::new(move |f0..| h(f0..)) };   // moves the Box in once
+    /// <body: reads reconciled to the Arc>
+    /// ```
+    ///
+    /// so every capturing closure clones the pointer and every non-callee read
+    /// re-dispatches through a fresh `Box` closure — the function's SIGNATURE
+    /// (and therefore every caller) keeps the lean `Box` carrier. Everything
+    /// else falls through to [`apply_move_ownership`] unchanged.
+    fn apply_param_move_ownership(
+        &self,
+        sym: Symbol,
+        ir_ty: &IrType,
+        body: Expr,
+        span: Span,
+    ) -> DResult<Expr> {
+        let deferred_capture = self.deferred_fun_captures.borrow_mut().remove(&sym);
+        // The pure-`Fun` shape here IS `fun_value_arc_promotable`'s eligible set
+        // (the single sky_ir authority); the destructured `ps`/`r` feed the shim
+        // and rebind. The deferred-capture signal is NOT a trigger (a deferral
+        // also fires for lean, sound capture shapes) — the walkers detect
+        // exactly the read patterns a bare `Box` param cannot serve.
+        if let IrType::Fun(ps, r) = ir_ty {
+            let flags = fn_value_read_flags(sym, &body);
+            if flags.non_callee_ge1 || flags.any_ge2 || count_fn_value_uses(sym, &body) > 1 {
+                let shimmed = shim_fn_value_reads(sym, ps, r, &self.eta_params, body)?;
+                let mut remaining = count_var_uses(sym, &shimmed);
+                let disciplined = rewrite_multiuse_clones(sym, &mut remaining, shimmed);
+                let disciplined = force_shared_capture_clones(sym, disciplined);
+                let rebind = eta_shared_rebind(Expr::Var(sym), ps, r, &self.eta_params)?;
+                return Ok(Expr::Let {
+                    name: sym,
+                    value: Box::new(rebind),
+                    body: Box::new(disciplined),
+                });
+            }
+            return apply_move_ownership(sym, ir_ty, body, span);
+        }
+        if let Some(capture_span) = deferred_capture {
+            // A capture site saw `sym` as a pure `Fun`, the param's own type
+            // disagrees — re-raise the fail-close rather than leak an unsound
+            // bare `Box` capture.
+            return Err(unsupported(capture_span, Feature::NonCloneCapture));
+        }
+        apply_move_ownership(sym, ir_ty, body, span)
+    }
+
     /// Lower an anonymous function `\p0 p1 ... -> body` into [`Expr::Lambda`].
     ///
     /// The lambda's solved region type is a curried arrow `T0 -> T1 -> … -> R`.
@@ -8379,6 +8793,31 @@ impl<'a> Lowerer<'a> {
                 _ => break,
             }
         }
+        // Flatten-invariant completion: the solved arrow still curries but the
+        // body is not a lambda literal — it COMPUTES a function value (a
+        // middleware body `cors (Middleware.withLogging h)` of type
+        // `Handler -> Handler` is the canonical shape). Every consumer of the
+        // closure assumes the FLATTENED arity — `ir_type_from_ty` renders one
+        // multi-parameter `Fun`, a call site's `ty_arrow_arity` counts every
+        // arrow, and `eta_expand_value_partial` builds residuals against that
+        // count — so an unpadded curried closure is an E0057/E0308 at cargo
+        // after skyc exit 0 (SEAL break). Pad the closure with fresh trailing
+        // parameters and apply the computed function value to them, so the
+        // closure's arity equals its flattened type's for EVERY body shape,
+        // not only lambda-literal bodies.
+        let mut eta_pad: Vec<Symbol> = Vec::new();
+        while let Ty::Fun(arg, rest) = cur {
+            let sym = *self.eta_params.get(eta_pad.len()).ok_or_else(|| {
+                bug(
+                    "sky_lower::lower_lambda",
+                    "eta-parameter pool smaller than the lambda's residual arrow arity",
+                )
+            })?;
+            let ir_ty = self.ir_type_from_ty_json(arg, span)?;
+            ir_params.push((sym, ir_ty));
+            eta_pad.push(sym);
+            cur = rest.as_ref();
+        }
         // T8 (#151 c02): use the JSON-friendly variant for the lambda return
         // type.  When the lambda's return type is a compound type containing a
         // free `Ty::Var` (e.g. `Task a` inside a polymorphic function like
@@ -8394,45 +8833,31 @@ impl<'a> Lowerer<'a> {
         let ret = self.ir_type_from_ty_json(cur, span)?;
         // Save/set/restore fn_is_async so `lower_let`'s PAnything arm chooses
         // TaskSeqSync vs TaskSeq based on THIS lambda's return type, not the
-        // enclosing def's.
+        // enclosing def's. A pad-applied body's IMMEDIATE type is the residual
+        // arrow (a function value), not the flattened `Task` return — the body
+        // expression itself is not in an async position.
         let prev_async = self.fn_is_async.get();
-        self.fn_is_async.set(matches!(ret, IrType::Task(_)));
-        let mut body = self.lower_expr(cur_body)?;
+        self.fn_is_async
+            .set(eta_pad.is_empty() && matches!(ret, IrType::Task(_)));
+        // Register this lambda's own params as promotable fn binders while the
+        // body is lowered, so an INNER lambda capturing one of them routes to
+        // the deferral (the param loop below promotes the carrier) instead of
+        // fail-closing SKY-L0126.
+        let param_syms: Vec<Symbol> = ir_params.iter().map(|(s, _)| *s).collect();
+        let mut body = self.with_promotable_fn_binders(param_syms, || self.lower_expr(cur_body))?;
         self.fn_is_async.set(prev_async);
+        // Apply the computed function-value body to the flatten-invariant pad
+        // parameters (no-op for the ordinary fully-flattened lambda).
+        if !eta_pad.is_empty() {
+            body = Expr::Apply {
+                func: Box::new(body),
+                args: eta_pad.iter().map(|s| Expr::Var(*s)).collect(),
+            };
+        }
         // T3: Capture-clone rewrite — classify free locals captured
         // by this closure and replace CloneOk reads with `.clone()`, emitting
         // SKY-L0125 for NonClone captures outside callee position.
-        {
-            let captures = self.captured_locals(&all_param_pats, cur_body);
-            let promoted = self.arc_promoted_fn_syms.borrow();
-            let mut clone_set: BTreeSet<Symbol> = BTreeSet::new();
-            let mut noncl_set: BTreeSet<Symbol> = BTreeSet::new();
-            for (sym, ir_ty) in captures {
-                // A function-typed symbol the enclosing `let` scope will
-                // Arc-promote (captured at depth ≥ 1 — see
-                // `arc_promoted_fn_syms`) is `Clone` at its binding site, so a
-                // capture of it clones the `Arc` (`CloneVar`) rather than
-                // fail-closing SKY-L0126. Route it to `clone_set` even though
-                // `clone_class(Fun)` is `NonClone`: the promotion and this
-                // classification read the SAME set, so the carrier and the
-                // `.clone()` agree.
-                if promoted.contains(&sym) {
-                    clone_set.insert(sym);
-                    continue;
-                }
-                match ir_ty.as_ref().map(clone_class) {
-                    Some(CloneClass::CloneOk) => {
-                        clone_set.insert(sym);
-                    }
-                    Some(CloneClass::NonClone) => {
-                        noncl_set.insert(sym);
-                    }
-                    Some(CloneClass::CopyLeaf) | None => {}
-                }
-            }
-            drop(promoted);
-            body = rewrite_captured_clones(&clone_set, &noncl_set, span, body, 0)?;
-        }
+        body = self.rewrite_lambda_captures(&all_param_pats, cur_body, span, body)?;
         // Fold each destructuring param's `Destructure` around the body,
         // OUTERMOST-first (reverse of source order) so the first parameter's
         // destructure is the outermost binding — identical to the def-head
@@ -8447,10 +8872,10 @@ impl<'a> Lowerer<'a> {
         }
         // Move-ownership discipline for LAMBDA params — the exact analogue of
         // the def-head param rewrite in `lower_def`, through the ONE shared
-        // `apply_move_ownership` entry point. This folds the two former loops
-        // (the CloneOk multi-use/relay rewrite #199/#218 and the separate
-        // T4 fn-value-reuse gate) into one per-param call:
-        // `apply_move_ownership` runs the lean `rewrite_multiuse_clones`
+        // entry point: `apply_param_move_ownership` promotes a pure-`Fun` param
+        // whose reads need the `Clone` `Arc` carrier (captured at closure depth
+        // ≥ 1 / reused as a value) and otherwise falls through to
+        // `apply_move_ownership`, which runs the lean `rewrite_multiuse_clones`
         // (`remaining = n`, correct for every n ≥ 1) for CloneOk / bare-Generic
         // params and fails closed on fn-value reuse for the rest. Upgrading
         // eligibility from `CloneOk`-only to `param_is_multiuse_clonable`
@@ -8458,7 +8883,7 @@ impl<'a> Lowerer<'a> {
         // double-move — a reused bare-`Generic` lambda param now clones under
         // its emitted `T: Clone` bound instead of double-moving.
         for (sym, ir_ty) in &ir_params {
-            body = apply_move_ownership(*sym, ir_ty, body, span)?;
+            body = self.apply_param_move_ownership(*sym, ir_ty, body, span)?;
         }
         Ok(Expr::Lambda {
             params: ir_params,
@@ -14814,6 +15239,66 @@ impl<'a> Lowerer<'a> {
     /// binding's solved type is `Decoder T`, else the T5 multi-use-clone /
     /// T4 fn-value-reuse-gate / #164 shared-capture treatment for an
     /// ordinary single-name binding.
+    /// The `Decoder`-typed arm of [`Self::lower_let_pvar`]: wrap the value in a
+    /// zero-arg rebuild thunk (a `Decoder` is `!Clone` and consumed by value)
+    /// and rewrite every read to a thunk call. The thunk body gets the same
+    /// capture-clone classification as a lambda body, including the pure-`Fun`
+    /// binder deferral.
+    fn lower_let_pvar_decoder(
+        &self,
+        name: Symbol,
+        b: &canon::LetBinding,
+        value: Expr,
+        acc: Expr,
+        dec_ty: IrType,
+    ) -> DResult<Expr> {
+        // T3: apply capture-clone rewrite to the thunk body before
+        // wrapping. The thunk has zero params so all free VarLocals in
+        // b.body are outer captures. CloneOk captures must `.clone()` to
+        // keep the thunk `Fn`; NonClone captures in callee position are
+        // fine.
+        let thunk_body = {
+            let captures = self.captured_locals(&[], &b.body);
+            let mut clone_set: BTreeSet<Symbol> = BTreeSet::new();
+            let mut noncl_set: BTreeSet<Symbol> = BTreeSet::new();
+            for (sym, ir_ty) in captures {
+                // Same pure-`Fun` deferral as `lower_lambda`'s classifier:
+                // the capture's carrier is decided at the symbol's own
+                // binder site (which sees the lowered scope), never
+                // fail-closed here.
+                if ir_ty.as_ref().is_some_and(fun_value_arc_promotable)
+                    && self.promotable_fn_binders.borrow().contains(&sym)
+                {
+                    self.deferred_fun_captures
+                        .borrow_mut()
+                        .insert(sym, b.body.span);
+                    continue;
+                }
+                match ir_ty.as_ref().map(clone_class) {
+                    Some(CloneClass::CloneOk) => {
+                        clone_set.insert(sym);
+                    }
+                    Some(CloneClass::NonClone) => {
+                        noncl_set.insert(sym);
+                    }
+                    Some(CloneClass::CopyLeaf) | None => {}
+                }
+            }
+            rewrite_captured_clones(&clone_set, &noncl_set, b.body.span, value, 0)?
+        };
+        let thunk = Expr::Lambda {
+            params: vec![],
+            ret: dec_ty,
+            body: Box::new(thunk_body),
+        };
+        let thunked_body = rewrite_var_to_apply(name, acc);
+        Ok(Expr::Let {
+            name,
+            value: Box::new(thunk),
+            body: Box::new(thunked_body),
+        })
+    }
+
     fn lower_let_pvar(
         &self,
         name: Symbol,
@@ -14821,45 +15306,24 @@ impl<'a> Lowerer<'a> {
         value: Expr,
         acc: Expr,
     ) -> DResult<Expr> {
+        // Consume this binder's deferred fn-capture signal (if any): the capture
+        // classifier routed a pure-`Fun` capture of `name` away from SKY-L0126 on
+        // the promise that THIS site decides the carrier. If the binding cannot
+        // be resolved to a `Fun` shape below, the original fail-close is
+        // re-raised (never a `.clone()` on a non-`Clone` `Box`).
+        let deferred_capture = self.deferred_fun_captures.borrow_mut().remove(&name);
         // F2 — Decoder thunk: `Decoder` is `!Clone` and every function that
         // consumes it does so by value.  When the binding's solved type is
         // `Decoder T`, wrap the value in a zero-arg lambda so the decoder is
         // rebuilt on each use, and rewrite every `Var(name)` read in the body
         // to `Apply(Var(name), [])` (emitted as `(d)()`).
         if let Some(dec_ty) = self.decoder_ir_type(b.body.span) {
-            // T3: apply capture-clone rewrite to the thunk body before
-            // wrapping. The thunk has zero params so all free VarLocals in
-            // b.body are outer captures. CloneOk captures must `.clone()` to
-            // keep the thunk `Fn`; NonClone captures in callee position are
-            // fine.
-            let thunk_body = {
-                let captures = self.captured_locals(&[], &b.body);
-                let mut clone_set: BTreeSet<Symbol> = BTreeSet::new();
-                let mut noncl_set: BTreeSet<Symbol> = BTreeSet::new();
-                for (sym, ir_ty) in captures {
-                    match ir_ty.as_ref().map(clone_class) {
-                        Some(CloneClass::CloneOk) => {
-                            clone_set.insert(sym);
-                        }
-                        Some(CloneClass::NonClone) => {
-                            noncl_set.insert(sym);
-                        }
-                        Some(CloneClass::CopyLeaf) | None => {}
-                    }
-                }
-                rewrite_captured_clones(&clone_set, &noncl_set, b.body.span, value, 0)?
-            };
-            let thunk = Expr::Lambda {
-                params: vec![],
-                ret: dec_ty,
-                body: Box::new(thunk_body),
-            };
-            let thunked_body = rewrite_var_to_apply(name, acc);
-            Ok(Expr::Let {
-                name,
-                value: Box::new(thunk),
-                body: Box::new(thunked_body),
-            })
+            if let Some(capture_span) = deferred_capture {
+                // A capture saw `name` as a pure `Fun`, but the binding is a
+                // `Decoder` — the promotion contract cannot be met; fail closed.
+                return Err(unsupported(capture_span, Feature::NonCloneCapture));
+            }
+            self.lower_let_pvar_decoder(name, b, value, acc, dec_ty)
         } else {
             // T5: multi-use-clone rewrite for CloneOk
             // let-bindings.  When the bound value is of `CloneOk` type (e.g.
@@ -14873,34 +15337,74 @@ impl<'a> Lowerer<'a> {
             let ty_opt = self
                 .region_ty(b.body.span)
                 .and_then(|ty| self.ir_type_from_ty(ty, b.body.span).ok());
-            // A symbol the look-ahead pre-pass elected to Arc-promote is `Clone`
-            // at its binding site (the `SharedLambda` carrier below), so its
-            // multi-use reuse is sound — route it through the CloneOk multi-use
-            // clone rewrite (`rewrite_multiuse_clones`, `CloneVar` per non-last
-            // read = `Arc::clone`) rather than `apply_move_ownership`, whose
-            // `reject_fn_value_reuse` arm would fail-close SKY-L0127 on a value
-            // it (statically, via `clone_class(Fun) = NonClone`) still believes
-            // uncloneable. The promotion and this routing read the same set, so
-            // the carrier and the clones agree.
-            let promoted_by_lookahead = self.arc_promoted_fn_syms.borrow().contains(&name);
-            let mut acc = if let Some(ref ir_ty) = ty_opt {
-                if promoted_by_lookahead {
-                    let mut remaining = count_var_uses(name, &acc);
-                    rewrite_multiuse_clones(name, &mut remaining, acc)
-                } else {
-                    // The ONE shared move-ownership entry point (see
-                    // `apply_move_ownership`): the lean `rewrite_multiuse_clones`
-                    // (`remaining = n`, correct for every n ≥ 1) for CloneOk /
-                    // bare-Generic values — its `n == 1` Lambda arm installs the
-                    // per-boundary relay without the old depth-0 over-clone —
-                    // and a fail-closed #90 T4 gate for fn-value reuse. The
-                    // `Fun`-typed `Arc`-promotion path below
-                    // (`needs_shared_capture` / `flows_into_sync_kernel_call`)
-                    // is orthogonal and untouched.
-                    apply_move_ownership(name, ir_ty, acc, b.body.span)?
+            // Pure-`Fun` bindings may take the `Arc<dyn Fn>` carrier promotion
+            // (`fun_value_arc_promotable` — the single sky_ir authority). The
+            // NEW promotion triggers are computed on the LOWERED scope `acc`, so
+            // eta-synthesized closures (partial applications rebuilt during
+            // lowering) are visible — the reason this decision cannot live in a
+            // canon-level pre-pass:
+            //   * a deferred capture signal (the classifier saw `name` captured
+            //     by a closure), or
+            //   * a non-callee value read at closure depth ≥ 1 (a bare `Box`
+            //     would be moved out of a `Fn` env per call — E0507), or
+            //   * reuse as a function value (> 1 consuming read — E0382 on a
+            //     `Box`).
+            // A promoted binding routes through the CloneOk multi-use clone
+            // rewrite (`CloneVar` per non-last read = `Arc::clone`) after its
+            // non-callee reads are re-dispatched through fresh `Box` closures
+            // (`shim_fn_value_reads` — `Arc<dyn Fn>` satisfies neither a
+            // `Box<dyn Fn>` slot nor an `impl Fn` bound). The legacy
+            // `needs_shared_capture` / `flows_into_sync_kernel_call` triggers
+            // keep their exact existing treatment (no shim / no multi-use pass)
+            // so their byte-pinned output is unchanged.
+            let fun_shape: Option<(Vec<IrType>, IrType)> = match &ty_opt {
+                Some(ir_ty) if fun_value_arc_promotable(ir_ty) => match ir_ty {
+                    IrType::Fun(ps, r) => Some((ps.clone(), (**r).clone())),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(capture_span) = deferred_capture
+                && fun_shape.is_none()
+            {
+                // The capture site saw a pure `Fun`, the binder cannot —
+                // re-raise the fail-close rather than emit an unsound bare
+                // `Box` capture.
+                return Err(unsupported(capture_span, Feature::NonCloneCapture));
+            }
+            // NOTE the deferred-capture signal is NOT a trigger: a deferral
+            // also fires for the lean, sound capture shapes (a single
+            // depth-0-callee read inside one closure), which must keep the bare
+            // `Box` carrier byte-identically. The walkers below detect exactly
+            // the read patterns a `Box` cannot serve; `needs_shared_capture`
+            // (depth ≥ 2 / 2+ closure captures) joins in the carrier-flip
+            // condition further down.
+            let new_trigger = fun_shape.is_some()
+                && (fn_value_read_flags(name, &acc).non_callee_ge1
+                    || count_fn_value_uses(name, &acc) > 1);
+            let mut acc = match (&fun_shape, new_trigger) {
+                (Some((ps, r)), true) => {
+                    let shimmed = shim_fn_value_reads(name, ps, r, &self.eta_params, acc)?;
+                    let mut remaining = count_var_uses(name, &shimmed);
+                    rewrite_multiuse_clones(name, &mut remaining, shimmed)
                 }
-            } else {
-                acc
+                _ => {
+                    if let Some(ref ir_ty) = ty_opt {
+                        // The ONE shared move-ownership entry point (see
+                        // `apply_move_ownership`): the lean
+                        // `rewrite_multiuse_clones` (`remaining = n`, correct for
+                        // every n ≥ 1) for CloneOk / bare-Generic values — its
+                        // `n == 1` Lambda arm installs the per-boundary relay
+                        // without the old depth-0 over-clone — and a fail-closed
+                        // #90 T4 gate for fn-value reuse. The `Fun`-typed
+                        // `Arc`-promotion path below (`needs_shared_capture` /
+                        // `flows_into_sync_kernel_call`) is orthogonal and
+                        // untouched.
+                        apply_move_ownership(name, ir_ty, acc, b.body.span)?
+                    } else {
+                        acc
+                    }
+                }
             };
 
             // E0507 fix: a NonClone function-typed binding referenced
@@ -14931,41 +15435,60 @@ impl<'a> Lowerer<'a> {
             // non-nested capture being the common sound case for THAT trigger —
             // and ORs into the same promotion path.
             let mut value = value;
-            // The look-ahead pre-pass (`lower_let`) already decided this
-            // fn-typed lambda is captured at depth ≥ 1 and must be Arc-carried;
-            // its captures were classified `CloneVar` on that basis, so the
-            // carrier MUST become `Arc` here or those `.clone()`s hit E0599 on a
-            // `Box`. OR it into the promotion trigger alongside the existing
-            // nesting/sync-kernel heuristics.
-            let promoted_by_lookahead = self.arc_promoted_fn_syms.borrow().contains(&name);
-            if let Some(ref ir_ty) = ty_opt
-                && matches!(ir_ty, IrType::Fun(..))
-                && (promoted_by_lookahead
+            // A NEW-trigger promotion (deferred capture / non-callee depth ≥ 1
+            // read / value reuse — decided on the LOWERED scope above) MUST flip
+            // the carrier here or the inserted `.clone()`s hit E0599 on a `Box`.
+            // OR it into the promotion alongside the existing nesting /
+            // sync-kernel heuristics.
+            if let Some((ps, r)) = fun_shape
+                && (new_trigger
                     || needs_shared_capture(name, &acc)
                     || flows_into_sync_kernel_call(name, &acc))
             {
                 acc = force_shared_capture_clones(name, acc);
-                if let Expr::Lambda { params, ret, body } = value {
-                    // `name`'s reads now render `Arc<dyn Fn + Send + Sync>`.
-                    // A read sitting in one branch of an `if`/`match` whose
-                    // sibling branch renders a function value at the default
-                    // `Box` carrier (an inline lambda, a `FuncValue` top-level
-                    // reference, a `Var` of another box-typed binding, …) would
-                    // emit two incompatible carriers at one unification slot →
-                    // cargo E0308 after skyc exit 0 (SEAL break). Coerce every
-                    // such sibling function-value leaf to the same `Arc` carrier
-                    // (inline lambdas directly; every other shape by
-                    // eta-expansion), using this promoted lambda's arrow type as
-                    // the group's unified type. Runs BEFORE `value` is moved so
-                    // `params`/`ret` are still available.
-                    acc = promote_unification_sibling_lambdas(
-                        name,
-                        acc,
-                        &params,
-                        &ret,
-                        &self.eta_params,
-                    )?;
-                    value = Expr::SharedLambda { params, ret, body };
+                match value {
+                    Expr::Lambda { params, ret, body } => {
+                        // `name`'s reads now render `Arc<dyn Fn + Send + Sync>`.
+                        // A read sitting in one branch of an `if`/`match` whose
+                        // sibling branch renders a function value at the default
+                        // `Box` carrier (an inline lambda, a `FuncValue` top-level
+                        // reference, a `Var` of another box-typed binding, …)
+                        // would emit two incompatible carriers at one unification
+                        // slot → cargo E0308 after skyc exit 0 (SEAL break).
+                        // Coerce every such sibling function-value leaf to the
+                        // same `Arc` carrier (inline lambdas directly; every
+                        // other shape by eta-expansion), using this promoted
+                        // lambda's arrow type as the group's unified type. Runs
+                        // BEFORE `value` is moved so `params`/`ret` are still
+                        // available.
+                        acc = promote_unification_sibling_lambdas(
+                            name,
+                            acc,
+                            &params,
+                            &ret,
+                            &self.eta_params,
+                        )?;
+                        value = Expr::SharedLambda { params, ret, body };
+                    }
+                    // Already the `Arc` carrier.
+                    already @ Expr::SharedLambda { .. } => value = already,
+                    // A NEW-trigger promotion of a non-lambda function VALUE (a
+                    // partial-application residual left as a `Call`/`Apply`, an
+                    // alias `Var`, a top-level `FuncValue`, a fn-typed record
+                    // field access, …): mint the `Arc` carrier by eta-expanding
+                    // the value into a `SharedLambda` that moves the underlying
+                    // value in once and forwards per call. A LEGACY-only trigger
+                    // keeps the value untouched — an alias binding propagates the
+                    // promoted root's `Arc` type through Rust inference (see
+                    // `flows_into_sync_kernel_call`'s alias-chain doc), and that
+                    // behaviour is byte-pinned.
+                    other => {
+                        value = if new_trigger {
+                            eta_shared_rebind(other, &ps, &r, &self.eta_params)?
+                        } else {
+                            other
+                        };
+                    }
                 }
             }
 
@@ -14978,74 +15501,20 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_let(&self, bindings: &[canon::LetBinding], body: &canon::Expr) -> DResult<Expr> {
-        // Arc-promotion look-ahead (must run BEFORE any binding value is
-        // lowered — the capture-clone classifier in `lower_lambda` consults the
-        // result). A `let`-bound, function-typed LAMBDA symbol captured at
-        // lambda-nesting depth ≥ 1 anywhere in the scope (a sibling binding's
-        // value or the body) cannot ride a bare `Box<dyn Fn>` carrier — the
-        // nested closure move-captures it (E0525/E0507). Promote it to a `Clone`
-        // `Arc<dyn Fn>` so every capturing closure clones the pointer. The
-        // scanned syms are recorded so (a) the classifier routes their captures
-        // to `clone_set` (`CloneVar`) instead of SKY-L0126, and (b)
-        // `lower_let_pvar` actually emits the `SharedLambda` (Arc) carrier — one
-        // set drives both, so the `.clone()` and the carrier agree by
-        // construction. Restricted to lambda-literal values (`\.. -> ..`), which
-        // `lower_let_pvar`'s promotion path can carry; a non-lambda function
-        // VALUE (`g = f 1`) is out of scope here (it would need a distinct
-        // value-carrier promotion — see the Arc-carrier design doc).
-        let newly_promoted: BTreeSet<Symbol> = bindings
+        // Plain `let` names (`PVar`) are promotable fn binders: a pure-`Fun`
+        // capture of one routes to the binder-site promotion in `lower_let_pvar`
+        // (decided on the LOWERED scope, eta-synthesized closures included)
+        // instead of fail-closing SKY-L0126 at the capture. Destructure-bound
+        // names are deliberately NOT registered — their binder has no carrier
+        // promotion, so their fn captures keep today's honest fail-close.
+        let names: Vec<Symbol> = bindings
             .iter()
-            .enumerate()
-            .filter_map(|(i, b)| {
-                let canon::Pattern_::PVar(name) = &b.pat.value else {
-                    return None;
-                };
-                if !matches!(&b.body.value, canon::Expr_::Lambda(..)) {
-                    return None;
-                }
-                if !matches!(self.region_ty(b.body.span), Some(Ty::Fun(_, _))) {
-                    return None;
-                }
-                // Promote when the lambda is EITHER
-                //   (a) captured at lambda-depth ≥ 1 (nested-closure move —
-                //       E0525/E0507, the SKY-L0126 shape), OR
-                //   (b) used as a function VALUE more than once (a second
-                //       non-callee move — E0382, the SKY-L0127 reuse shape).
-                // Both are dissolved by a `Clone` `Arc<dyn Fn>` carrier (each
-                // read clones the pointer). Scan the body and every OTHER binding
-                // value (a binding's own value never references itself as a free
-                // local at its binder — its lambda params shadow it — but mutually
-                // referencing siblings and the body do).
-                let others = || {
-                    std::iter::once(body).chain(
-                        bindings
-                            .iter()
-                            .enumerate()
-                            .filter(move |(j, _)| *j != i)
-                            .map(|(_, b)| &b.body),
-                    )
-                };
-                let captured = others().any(|e| canon_sym_captured_at_depth_ge1(*name, e, 0));
-                let reused = others().map(|e| canon_fn_value_uses(*name, e)).sum::<usize>() > 1;
-                (captured || reused).then_some(*name)
+            .filter_map(|b| match &b.pat.value {
+                canon::Pattern_::PVar(name) => Some(*name),
+                _ => None,
             })
             .collect();
-        // Union into the active set for the duration of this `let`, restoring
-        // the prior set afterwards (nested `let`s compose; a symbol promoted by
-        // an outer scope stays promoted inside).
-        let saved: BTreeSet<Symbol> = if newly_promoted.is_empty() {
-            BTreeSet::new()
-        } else {
-            let mut set = self.arc_promoted_fn_syms.borrow_mut();
-            let saved = set.clone();
-            set.extend(newly_promoted.iter().copied());
-            saved
-        };
-        let result = self.lower_let_inner(bindings, body);
-        if !newly_promoted.is_empty() {
-            *self.arc_promoted_fn_syms.borrow_mut() = saved;
-        }
-        result
+        self.with_promotable_fn_binders(names, || self.lower_let_inner(bindings, body))
     }
 
     fn lower_let_inner(&self, bindings: &[canon::LetBinding], body: &canon::Expr) -> DResult<Expr> {
@@ -16304,5 +16773,44 @@ mod tests {
             mismatches.len(),
             mismatches.join("\n"),
         );
+    }
+
+    /// `sky_ir::carrier_is_clone` (the emitter-side default-carrier authority)
+    /// and `clone_class` (the lowerer-side capture classifier) must agree on
+    /// the `Clone` boundary — a shape whose default carrier is `Clone` can
+    /// never classify `NonClone`, and vice-versa. A drift here is the exact
+    /// two-hand-maintained-tables defect the shared authority exists to
+    /// prevent (a `.clone()` on a non-`Clone` carrier is cargo E0599 after
+    /// skyc exit 0).
+    #[test]
+    fn carrier_clone_authority_agrees_with_clone_class() {
+        use sky_ir::{IrType, carrier_is_clone};
+
+        use super::{CloneClass, clone_class};
+
+        let fun = IrType::Fun(vec![IrType::Int], Box::new(IrType::Int));
+        let samples: Vec<IrType> = vec![
+            IrType::Int,
+            IrType::Str,
+            IrType::Bytes,
+            IrType::Unit,
+            fun.clone(),
+            IrType::FnOnceChain(vec![IrType::Int], Box::new(IrType::Int)),
+            IrType::Task(Box::new(IrType::Int)),
+            IrType::Decoder(Box::new(IrType::Int)),
+            IrType::Maybe(Box::new(fun.clone())),
+            IrType::Maybe(Box::new(IrType::Int)),
+            IrType::Tuple(vec![IrType::Str, fun.clone()]),
+            IrType::Tuple(vec![IrType::Str, IrType::Int]),
+            IrType::List(Box::new(IrType::Str)),
+            IrType::Result(Box::new(IrType::Error), Box::new(IrType::Int)),
+        ];
+        for ty in &samples {
+            assert_eq!(
+                carrier_is_clone(ty),
+                clone_class(ty) != CloneClass::NonClone,
+                "carrier_is_clone / clone_class drift on {ty:?}"
+            );
+        }
     }
 }
