@@ -1038,10 +1038,14 @@ fn db_cargo_toml(driver: crate::DbDriver) -> DResult<String> {
         crate::DbDriver::Sqlite => r#""sqlite""#.to_owned(),
         crate::DbDriver::Postgres => r#""sqlite", "postgres""#.to_owned(),
     };
+    // `bincode` rides with `sqlx`: the vendored live session store's
+    // checkpoint body is bincode-encoded under the same `db` feature gate.
     let sqlx_line = format!(
-        "{} = {{ version = \"{}\", features = [\"runtime-tokio-rustls\", {sqlx_features}] }}\n\n",
+        "{} = {{ version = \"{}\", features = [\"runtime-tokio-rustls\", {sqlx_features}] }}\n{} = \"{}\"\n\n",
         crate_specs::SQLX.name,
         crate_specs::SQLX.version,
+        crate_specs::BINCODE.name,
+        crate_specs::BINCODE.version,
     );
 
     let step1 = CARGO_TOML.replacen(DEFAULT_LINE, DEFAULT_LINE_DB, 1);

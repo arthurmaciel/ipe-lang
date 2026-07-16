@@ -45,6 +45,8 @@ hmac = "0.12"
 sha1 = "0.10"
 md-5 = "0.10"
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "postgres"], optional = true }
+# Sky.Live session-checkpoint body encoding (H24 wire format: base64(tag ++ bincode)).
+bincode = { version = "1", optional = true }
 redis = { version = "0.27", features = ["tokio-comp"], optional = true }
 regex = "1"
 # Exact Unicode General_Category lookup. NON-optional: char_kernel.rs (always
@@ -86,8 +88,8 @@ json = ["serde_json", "jsonwebtoken"]
 # (which also pulls sha2); listing it here fixes the standalone `--features db`
 # build, which has no crypto. (serde is now a non-optional dep — see [dependencies] —
 # so it is NOT listed here.)
-db = ["sqlx", "tokio", "serde_json", "json", "sha2"]
-redis_store = ["redis", "tokio", "serde_json", "async-trait"]
+db = ["sqlx", "tokio", "serde_json", "json", "sha2", "bincode"]
+redis_store = ["redis", "tokio", "serde_json", "async-trait", "bincode"]
 crypto = ["sha2", "rsa", "bcrypt", "aes-gcm", "chacha20poly1305", "pbkdf2"]
 compression = ["flate2", "zstd", "tokio"]
 csv_kernel = ["csv", "tokio"]
