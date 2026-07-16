@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use sky_canon::ast as canon;
 use sky_diagnostics::{
     Code, DResult, Diagnostic, Feature, Located, LowerError, SKY_L0101, SKY_L0102, SKY_L0107,
-    SKY_L0108, SKY_L0110, SKY_L0114, SKY_L0119, Span,
+    SKY_L0108, SKY_L0114, SKY_L0119, Span,
 };
 use sky_intern::{Interner, Symbol};
 use sky_ir::{BoundSet, Callee, Expr, FuncId, IrType, KernelFn};
@@ -1280,14 +1280,13 @@ fn nested_lambda_body_flattens_into_one_closure() -> DResult<()> {
 }
 
 #[test]
-fn partial_application_of_a_first_class_value_fails_closed() -> DResult<()> {
+fn partial_application_of_a_first_class_value_eta_expands() -> DResult<()> {
     // Partial application of a first-class *value* (here a lambda) — `(\b -> \c
     // -> 0) 2` passes one argument to a two-arity closure. The named-callee path
-    // eta-expands an arity mismatch, but the value path cannot (it would have to
-    // capture the closure value), so M1 fails closed with SKY-L0110 rather than
-    // emitting an under-applied `(g)(2)` that cargo rejects with no Sky
-    // diagnostic. This is the shape the (now-removed) named-callee gate never
-    // covered — the value-application path needs its own fail-closed net.
+    // eta-expands an arity mismatch; the value path now does too, capturing the
+    // value and the supplied arg into a residual closure `\eta_0 -> (value)(2,
+    // eta_0)` : Int -> Int (matching the reference's curried-closure model),
+    // rather than failing closed with SKY-L0110.
     let mut i = Interner::new();
     let caller = i.intern("caller")?;
     let b = i.intern("b")?;
@@ -1342,22 +1341,59 @@ fn partial_application_of_a_first_class_value_fails_closed() -> DResult<()> {
         regions,
         &mut i,
     );
-    // Blamed span is the whole application (`call_span`).
-    assert_unsupported(res, Feature::PartialOverApplication, SKY_L0110, call_span);
+    assert!(
+        res.is_ok(),
+        "value partial application must eta-expand, got {res:?}"
+    );
+    let caller_fn = func_named(&res, &i, "caller");
+    let Some(caller_fn) = caller_fn else {
+        assert!(false_marker(), "caller must lower");
+        return Ok(());
+    };
+    // The body is the residual eta-lambda `\eta_0: Int -> (value)(2, eta_0)`.
+    let Expr::Lambda { params, ret, body } = &caller_fn.body else {
+        assert!(
+            false_marker(),
+            "value partial lowers to a Lambda, got {:?}",
+            caller_fn.body
+        );
+        return Ok(());
+    };
+    assert_eq!(params.len(), 1, "one missing parameter");
+    let Some((_, eta_ty)) = params.first() else {
+        return Ok(());
+    };
+    assert_eq!(*eta_ty, IrType::Int, "missing param keeps its solved type");
+    assert_eq!(*ret, IrType::Int, "residual return type");
+    // body: Apply { func: <value>, args: [2, eta_0] } — every arg at once.
+    let Expr::Apply { args, .. } = body.as_ref() else {
+        assert!(
+            false_marker(),
+            "eta body is an Apply of the value, got {body:?}"
+        );
+        return Ok(());
+    };
+    assert_eq!(args.len(), 2, "supplied arg + synthesised residual param");
+    assert!(
+        matches!(args.first(), Some(Expr::Int(2))),
+        "captured supplied arg 2"
+    );
+    let _ = call_span;
     Ok(())
 }
 
 #[test]
-fn over_application_with_partial_surplus_saturation_fails_closed() -> DResult<()> {
+fn over_application_with_partial_surplus_eta_expands() -> DResult<()> {
     // `f` declares ONE parameter but a four-arrow type `Int -> Int -> Int -> Int
     // -> Int`, so `f 1` returns a flattened THREE-argument closure. `f 1 2`
     // over-applies (two args > one declared param) but the single surplus arg
     // does NOT saturate that three-argument closure — the result is itself a
-    // partial application of the returned first-class value, which M1 cannot
-    // lower. The over path must fail closed with SKY-L0110 rather than emit
-    // `(f(1))(2)` that passes one of three required args and cargo rejects with
-    // no Sky diagnostic. (`f 1 2 3 4` — surplus 3 == returned arity 3 — still
-    // saturates exactly and lowers to a single `Apply`; this test pins only the
+    // partial application of the returned first-class value. The over path now
+    // eta-expands it (matching the reference's `SkyCall(f(1), 2)` residual):
+    // `\eta_0 \eta_1 -> (f(1))(2, eta_0, eta_1)` — capturing the direct call and
+    // the surplus arg, taking the two still-missing params, rather than failing
+    // closed with SKY-L0110. (`f 1 2 3 4` — surplus 3 == returned arity 3 —
+    // still saturates exactly and lowers to a single `Apply`; this test pins the
     // short-surplus case.)
     let mut i = Interner::new();
     let f = i.intern("f")?;
@@ -1437,7 +1473,46 @@ fn over_application_with_partial_surplus_saturation_fails_closed() -> DResult<()
         regions,
         &mut i,
     );
-    assert_unsupported(res, Feature::PartialOverApplication, SKY_L0110, call_span);
+    assert!(
+        res.is_ok(),
+        "under-saturating over-application must eta-expand, got {res:?}"
+    );
+    let Some(caller_fn) = func_named(&res, &i, "caller") else {
+        assert!(false_marker(), "caller must lower");
+        return Ok(());
+    };
+    // Residual eta-lambda `\eta_0 \eta_1 -> (Call(f, [1]))(2, eta_0, eta_1)`.
+    let Expr::Lambda { params, body, .. } = &caller_fn.body else {
+        assert!(
+            false_marker(),
+            "over-partial lowers to a Lambda, got {:?}",
+            caller_fn.body
+        );
+        return Ok(());
+    };
+    assert_eq!(
+        params.len(),
+        2,
+        "two still-missing params (3 returned − 1 surplus)"
+    );
+    let Expr::Apply { func, args } = body.as_ref() else {
+        assert!(false_marker(), "eta body is an Apply, got {body:?}");
+        return Ok(());
+    };
+    assert!(
+        matches!(func.as_ref(), Expr::Call { .. }),
+        "applies Call(f, head), got {func:?}"
+    );
+    assert_eq!(
+        args.len(),
+        3,
+        "surplus arg + two synthesised residual params"
+    );
+    assert!(
+        matches!(args.first(), Some(Expr::Int(2))),
+        "captured surplus arg 2"
+    );
+    let _ = call_span;
     Ok(())
 }
 
