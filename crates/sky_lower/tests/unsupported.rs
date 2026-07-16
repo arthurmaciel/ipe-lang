@@ -67,7 +67,9 @@ fn run_with_regions(
         poly_var_map: BTreeMap::new(),
         untyped_type_params: BTreeMap::new(),
     };
-    lower(&m, &types, interner)
+    // `lower` now pairs its diagnostic with the owning def's `home` (#221 fix B);
+    // these single-module gap tests assert only on the diagnostic, so drop it.
+    lower(&m, &types, interner).map_err(|(d, _home)| d)
 }
 
 /// Assert the lowering failed with exactly the expected unsupported feature,
