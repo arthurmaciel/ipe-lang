@@ -1,0 +1,25 @@
+module Main exposing (main, tests)
+
+-- Regression for bug #219: Sky.Test.runMain must print the pass/fail
+-- summary line to stdout (matching the Go reference), not exit silently.
+-- With three passing tests the emitted binary must print exactly
+-- "3 passed, 0 failed (3 total)" and exit 0.
+
+import Sky.Core.Prelude exposing (..)
+import Sky.Test as Test exposing (Test)
+
+
+main =
+    Test.runMain tests
+
+
+tests : List Test
+tests =
+    [ Test.suite "arith"
+        [ Test.test "add" (\_ -> Test.equal 2 (1 + 1))
+        , Test.test "mul" (\_ -> Test.equal 6 (2 * 3))
+        ]
+    , Test.suite "bool"
+        [ Test.test "truth" (\_ -> Test.isTrue True)
+        ]
+    ]
