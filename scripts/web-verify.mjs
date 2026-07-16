@@ -193,6 +193,13 @@ async function main() {
 
         const pause = (ms) => page.waitForTimeout(ms);
 
+        // Scenario diagnostic log — every line a scenario records via
+        // opts.log (degraded fallbacks, un-verifiable steps) is surfaced on
+        // this driver's stdout so a step a scenario could NOT truly verify is
+        // visible in the sweep report, never a silent pass.
+        const scenarioLog = [];
+        const log = (msg) => scenarioLog.push(String(msg));
+
         // Load the per-app scenario module.
         const scenarioMod = await import(pathToFileURL(path.join(__dirname, 'verify-scenarios.mjs')).href);
         const scenarios = scenarioMod.scenarios || scenarioMod.default;
@@ -200,7 +207,12 @@ async function main() {
         if (typeof scenarioFn !== 'function') {
             throw new Error(`unknown scenario: ${scenarioName} (known: ${Object.keys(scenarios).join(', ')})`);
         }
-        await scenarioFn(page, { baseUrl, pause, skyEventPosts });
+        await scenarioFn(page, { baseUrl, pause, skyEventPosts, log });
+
+        if (scenarioLog.length > 0) {
+            console.log(`--- scenario ${scenarioName}: ${scenarioLog.length} unverified/degraded step(s) ---`);
+            for (const line of scenarioLog) console.log(`  UNVERIFIED: ${line}`);
+        }
 
         await page.screenshot({ path: path.join(runDir, 'home.png'), fullPage: false }).catch(() => {});
 
