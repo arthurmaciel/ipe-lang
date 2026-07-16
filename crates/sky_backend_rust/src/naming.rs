@@ -5,7 +5,59 @@
 //! type and function names. M0 only needs the `Main` module's enum + functions,
 //! but the conversions are written generally so they match the reference.
 
+use std::collections::BTreeSet;
+use std::sync::LazyLock;
+
 use sky_ir::KernelFn;
+
+/// The first `snake_case` segment of every runtime-kernel Rust name — the set of
+/// identifier prefixes the `sky_runtime` glob (`pub use sky_runtime::*;`) owns at
+/// the emitted crate root.
+///
+/// Derived structurally from the authoritative kernel table ([`KernelFn::ALL`] ×
+/// [`kernel_name`]) rather than a hand-maintained list, so it can never drift out
+/// of sync with the kernels it must reserve: a kernel whose Rust name is
+/// `auth_hash_password` contributes `auth`; `string_from_int` contributes
+/// `string`. A user top-level function whose default `snake_case` name begins
+/// with one of these segments would collide with a kernel at the crate root, so
+/// [`module_value`] disambiguates it (see [`disambiguate_user_fn_name`]).
+static KERNEL_NAME_PREFIXES: LazyLock<BTreeSet<&'static str>> = LazyLock::new(|| {
+    KernelFn::ALL
+        .iter()
+        .map(|&k| {
+            let name = kernel_name(k);
+            name.split_once('_').map_or(name, |(head, _)| head)
+        })
+        .collect()
+});
+
+/// If a user top-level function's default `snake_case` name would collide with a
+/// runtime-kernel namespace at the emitted crate root, return the disambiguated
+/// name; otherwise `None`.
+///
+/// A user `module Auth` value `hashPassword` folds to `auth_hash_password` —
+/// byte-identical to the `Std.Auth` kernel's runtime name. Once both the user
+/// module's `pub use …::*` and `pub use sky_runtime::*;` land at the crate root,
+/// that name is doubly-defined: the user body's own call to the kernel resolves
+/// to the user function (self-recursion), and the two definitions clash. The
+/// structural fix is to prefix the user side with `user_`, which no kernel name
+/// begins with, making the user function provably disjoint from every kernel
+/// while leaving kernel call sites byte-identical. The check keys on the first
+/// `snake_case` segment (the kernel-owned namespace), so `auth_mint_token` — a
+/// user function with no kernel counterpart but in a kernel-owned namespace —
+/// is disambiguated too, keeping the whole `Auth` module on one consistent
+/// scheme.
+#[must_use]
+fn disambiguate_user_fn_name(default_snake: &str) -> Option<String> {
+    let head = default_snake
+        .split_once('_')
+        .map_or(default_snake, |(head, _)| head);
+    if KERNEL_NAME_PREFIXES.contains(head) {
+        Some(format!("user_{default_snake}"))
+    } else {
+        None
+    }
+}
 
 /// Convert a Sky module-prefixed name to `UpperCamelCase` (used for type names).
 ///
@@ -214,11 +266,14 @@ pub fn module_value(module: &[&str], name: &str) -> String {
         let prefix = to_snake_case(&module_prefix(module));
         return mangle_reserved(format!("{prefix}_{name}"));
     }
-    mangle_reserved(to_snake_case(&format!(
-        "{}_{}",
-        module_prefix(module),
-        name
-    )))
+    let default_snake = to_snake_case(&format!("{}_{}", module_prefix(module), name));
+    // A user module named after a kernel namespace (e.g. `module Auth`, whose
+    // functions fold to `auth_*`) collides with the `sky_runtime` glob at the
+    // crate root. Prefix the user side with `user_` so it is provably disjoint
+    // from every kernel; kernel call sites are untouched. See
+    // [`disambiguate_user_fn_name`].
+    let disambiguated = disambiguate_user_fn_name(&default_snake).unwrap_or(default_snake);
+    mangle_reserved(disambiguated)
 }
 
 /// The base Rust struct name for a synthesised record shape, derived from its
@@ -1309,6 +1364,45 @@ mod tests {
         assert_eq!(
             module_value(&["Lib", "State"], "Widget"),
             "lib_state_Widget"
+        );
+    }
+
+    #[test]
+    fn user_module_named_after_kernel_namespace_is_disambiguated() {
+        // A user `module Auth` value `hashPassword` folds to `auth_hash_password`,
+        // byte-identical to the `Std.Auth` kernel runtime name — self-recursion +
+        // duplicate-definition once both glob re-exports land at the crate root.
+        // The `user_` prefix makes the user side provably disjoint from every
+        // kernel while leaving the kernel name untouched.
+        assert_eq!(kernel_name(KernelFn::AuthHashPassword), "auth_hash_password");
+        assert_eq!(
+            module_value(&["Auth"], "hashPassword"),
+            "user_auth_hash_password"
+        );
+        assert_ne!(
+            module_value(&["Auth"], "hashPassword"),
+            kernel_name(KernelFn::AuthHashPassword),
+            "user Auth.hashPassword must not collide with the Std.Auth kernel"
+        );
+        // Every function in a kernel-owned namespace is disambiguated uniformly,
+        // even one with no kernel counterpart (`mintToken`), so the whole module
+        // stays on one consistent scheme.
+        assert_eq!(
+            module_value(&["Auth"], "mintToken"),
+            "user_auth_mint_token"
+        );
+        // A user module whose prefix is NOT a kernel namespace is untouched: the
+        // composite-server's `Routes.Auth` folds to `routes_auth_*` (first segment
+        // `routes`), so it keeps its default name.
+        assert_eq!(
+            module_value(&["Routes", "Auth"], "handleLogin"),
+            "routes_auth_handle_login"
+        );
+        // The reserved set is derived from the live kernel table, so a `String`
+        // module (matching the `String` kernel namespace) is reserved too.
+        assert_eq!(
+            module_value(&["String"], "myHelper"),
+            "user_string_my_helper"
         );
     }
 
