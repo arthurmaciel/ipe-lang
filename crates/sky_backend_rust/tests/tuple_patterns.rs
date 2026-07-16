@@ -34,7 +34,7 @@ use sky_backend::Backend;
 use sky_backend_rust::RustBackend;
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::Interner;
-use sky_ir::{
+use sky_ir::{OnFormKind, 
     Arm, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Pat,
     Program, TypeDef, Variant,
 };
@@ -123,11 +123,11 @@ fn wrap_program(i: &mut Interner) -> DResult<Program> {
                         args: vec![Expr::Tuple(vec![Expr::Int(3), Expr::Int(4)])],
                     }],
                     pin: CallPin::None,
-                }],
+                    on_form: OnFormKind::NotForm,                }],
                 pin: CallPin::None,
-            }],
+                on_form: OnFormKind::NotForm,            }],
             pin: CallPin::None,
-        },
+            on_form: OnFormKind::NotForm,        },
     };
 
     Ok(Program {
