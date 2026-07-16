@@ -1242,7 +1242,7 @@ pub fn ui_behind_<M: Clone>(elem: Element<M>) -> Attribute<M> {
 // `live::style_inject::build_mq` into a sky-id-scoped
 // `<style data-sky-mq="<sid>">@media <q> { [sky-id="<sid>"] { <rules> } }</style>`
 // block.  (The pre-2026-07-11 Phase-0 no-op-passthrough stub is gone; see
-// docs/architecture/ui-mediaquery-design-2026-07-11.md.)
+// docs/adr/0019-ui-mediaquery-safe-boundary.md.)
 
 // NOTE (2026-07-11): these six breakpoint constants return a bare `String`
 // with NO `M` in the signature, so they take NO type parameter. A phantom

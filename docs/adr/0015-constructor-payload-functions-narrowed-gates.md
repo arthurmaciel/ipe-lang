@@ -1,0 +1,55 @@
+Status: Accepted
+Date: 2026-07-11
+
+# 0015. Function values in constructor payloads: lift the blanket ban, keep two narrow fail-closed gates
+
+## Context
+
+The original gate `SKY-L0114` rejected *all* function-valued constructor
+payloads (`Ok (\x -> x+1)`, `Just someFn`) to prevent emit-layer seal violations:
+function values render as `Box<dyn Fn>`, which cannot derive `Clone`, `Debug`,
+`PartialEq`, or serde. But the *construction* was never the hazard — runtime
+`SkyMaybe<T>`/`SkyResult<E, A>` already carry generically-bounded derives that
+compile even with a non-derivable type argument; only the *uses* are dangerous.
+The gate also predates the `#87` derive-demotion machinery that now absorbs
+non-derivable payloads in user enums.
+
+## Decision
+
+Replace the blanket construction ban with two narrower fail-closed gates:
+
+1. A **reuse gate** (`SKY-L0127`) rejecting multiple consuming uses of a
+   function-carrying value (`Box<dyn Fn>` is not `Clone`).
+2. An **`andMap` call-site arity gate** (designed in ADR 0016) rejecting curried
+   payloads that would not satisfy `FnOnce(A) -> B` at runtime.
+
+The construction lift is sound because (a) runtime enums have bounded generic
+derives, (b) concrete user enums drop auto-derives when non-derivable (`#87`
+fixpoint), and (c) upstream obligations (`==`, `toString`, serde, Live Model)
+are already guarded upstream of lowering (the type-checker's `ty_is_equatable`
+rejection, the `#91` Model gate, `ir_type_is_serde` poisoning).
+
+Rejected alternatives:
+
+- **Add `Maybe`/`Result` to the opaque-wrapper exemption** — wrong: they are not
+  opaque (fields are pattern-matched and stringified), and it would silently
+  bless all functions under them, including multi-arity shapes that fail at
+  `andMap`.
+- **Arc payload representation** — dual representation (Box in params, Arc in
+  payloads) needs seams at every construction/extraction boundary, and
+  `Arc<dyn Fn>` still lacks `Debug`/`PartialEq`/serde, so no use-gate goes away.
+- **Bare `fn` pointers (upstream's choice)** — silently forbids capturing
+  closures, which Sky semantics demand; upstream documents this breakage.
+
+## Consequences
+
+- The reuse gate preserves the invariant "every non-`Copy` value is either
+  `Clone` or linearly used" (ADR 0002) for function payloads until the general
+  clone-hoist pass (ADR 0007) subsumes it.
+- **This is a sanctioned divergence from upstream's `fn`-pointer approach**:
+  Sky's `Box<dyn Fn>` with captures is strictly more general and the right
+  trade-off for Sky semantics (recorded in `docs/divergences-from-sky.md`).
+- **Invariant that must keep holding:** the construction lift stays sound only
+  while the three upstream guards (runtime bounded derives, `#87` demotion, and
+  the type-checker/Model/serde gates) remain in place; weakening any of them
+  reopens an exit-0-then-cargo-fail hole.

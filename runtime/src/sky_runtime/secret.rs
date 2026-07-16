@@ -12,8 +12,8 @@
 //! hand-written impl on `Secret` itself, so there is no OTHER impl a caller
 //! could accidentally reach that would expose the plaintext.
 //!
-//! # Design (class6-secret-sqlfragment-fix-spec-2026-07-09.md §"Full design —
-//! #44 `Secret`")
+//! # Design (see ADR 0006 for the `Secret` sealed-newtype decision;
+//! docs/adr/0012-sqlfragment-derive-safe-seal.md for the sibling `SqlFragment`)
 //!
 //! * `Clone` — derived (a `Secret` may be stored, passed around, and used at
 //!   more than one call site, same as any other opaque runtime value).

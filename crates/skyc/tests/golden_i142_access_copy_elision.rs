@@ -7,7 +7,7 @@
 //! "list-of-records renders" case). Even for `Copy` scalars the `.clone()`
 //! call was pure noise.
 //!
-//! Fix (`class5-emitter-clone-fix-spec-2026-07-09.md` §3): `Expr::Access`
+//! Fix (`docs/adr/0011-emitter-clone-borrow-discipline.md` §3): `Expr::Access`
 //! carries the field's solved type (`field_ty`); the emitter reads
 //! definitely-`Copy` fields BARE and keeps `.clone()` for everything else
 //! (heap-backed, generics, composites). The heap half of the audit's fix
