@@ -22,6 +22,41 @@ use std::time::{Duration, Instant};
 /// Model's own shape is covered by the structural half of the hash.
 pub const LIVE_MODEL_SCHEMA_WIRE_VERSION: &str = "sky-live-model-schema-v1";
 
+/// Encode one Model checkpoint as `base64(schema_tag(32) ++ bincode(model))`
+/// — self-contained (tag travels inside the blob), TEXT-column-safe on every
+/// backend (base64 never emits NUL / invalid UTF-8, so no `ALTER TABLE` or
+/// BYTEA migration is ever needed). `None` when serialization fails (the
+/// caller skips the checkpoint write, same as the old JSON path's `if let Ok`).
+#[cfg(any(feature = "db", feature = "redis_store"))]
+fn encode_checkpoint<Model: serde::Serialize>(schema_tag: &[u8; 32], model: &Model) -> Option<String> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+    let body = bincode::serialize(model).ok()?;
+    let mut framed = Vec::with_capacity(32 + body.len());
+    framed.extend_from_slice(schema_tag);
+    framed.extend_from_slice(&body);
+    Some(B64.encode(framed))
+}
+
+/// Decode one persisted checkpoint: base64 → split the leading 32-byte tag →
+/// reject on mismatch BEFORE deserializing (H24) → bincode-decode the body.
+/// EVERY failure (bad base64 — including a pre-Stage-C JSON row —, short
+/// blob, foreign tag, corrupt body) is `None`: the same fail-soft
+/// drop-session/fresh-`init` path H22 guarantees, never a panic.
+#[cfg(any(feature = "db", feature = "redis_store"))]
+fn decode_checkpoint<Model: serde::de::DeserializeOwned>(
+    schema_tag: &[u8; 32],
+    blob: &str,
+) -> Option<Model> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+    let framed = B64.decode(blob.as_bytes()).ok()?;
+    let tag = framed.get(..32)?;
+    if tag != schema_tag {
+        return None;
+    }
+    let body = framed.get(32..)?;
+    bincode::deserialize(body).ok()
+}
+
 /// The in-process live session (owns its driver goroutine + SSE channel).
 pub type SessionHandle<Model, Msg> = Arc<Mutex<SessionEntry<Model, Msg>>>;
 
@@ -211,22 +246,19 @@ where
                 .await;
             return Some(StoreHit::Live(h));
         }
-        // Cold: decode the persisted model checkpoint (post-restart / other replica).
-        let row: Option<(String, String)> =
-            sqlx::query_as("SELECT blob, schema_tag FROM sky_sessions WHERE sid = ?")
-                .bind(sid)
-                .fetch_optional(&self.pool)
-                .await
-                .ok()
-                .flatten();
-        let (blob, row_tag) = row?;
-        // H24 gate: a checkpoint written under a DIFFERENT Model schema is
-        // rejected BEFORE `serde_json::from_str` ever sees it — identical to
-        // "no row" (the caller starts the session fresh at `init`).
-        if row_tag != hex::encode(self.schema_tag) {
-            return None;
-        }
-        let model: Model = serde_json::from_str(&blob).ok()?;
+        // Cold: decode the persisted model checkpoint (post-restart / other
+        // replica). The blob is self-contained (base64(tag ++ bincode)); the
+        // leading 32-byte tag is compared BEFORE deserialization (H24) — a
+        // mismatch, an old-format JSON row, or a corrupt body all take the
+        // same fail-soft miss path. The legacy schema_tag COLUMN is still
+        // written (NOT NULL) but no longer read.
+        let row: Option<(String,)> = sqlx::query_as("SELECT blob FROM sky_sessions WHERE sid = ?")
+            .bind(sid)
+            .fetch_optional(&self.pool)
+            .await
+            .ok()
+            .flatten();
+        let model: Model = decode_checkpoint(&self.schema_tag, &row?.0)?;
         let _ = sqlx::query("UPDATE sky_sessions SET last_seen = ? WHERE sid = ?")
             .bind(now_secs())
             .bind(sid)
@@ -244,7 +276,7 @@ where
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .insert(sid.to_string(), (handle, Instant::now()));
-        if let Ok(blob) = serde_json::to_string(&model) {
+        if let Some(blob) = encode_checkpoint(&self.schema_tag, &model) {
             let _ = sqlx::query(
                 "INSERT INTO sky_sessions (sid, blob, last_seen, schema_tag) VALUES (?, ?, ?, ?) \
                  ON CONFLICT(sid) DO UPDATE SET blob=excluded.blob, \
@@ -367,20 +399,15 @@ where
                 .await;
             return Some(StoreHit::Live(h));
         }
-        let row: Option<(String, String)> =
-            sqlx::query_as("SELECT blob, schema_tag FROM sky_sessions WHERE sid = $1")
-                .bind(sid)
-                .fetch_optional(&self.pool)
-                .await
-                .ok()
-                .flatten();
-        let (blob, row_tag) = row?;
-        // H24 gate — reject a foreign-schema checkpoint before deserialize
-        // (see SqliteStore::get).
-        if row_tag != hex::encode(self.schema_tag) {
-            return None;
-        }
-        let model: Model = serde_json::from_str(&blob).ok()?;
+        // Self-contained framed blob — see SqliteStore::get. The legacy
+        // schema_tag COLUMN is still written (NOT NULL) but no longer read.
+        let row: Option<(String,)> = sqlx::query_as("SELECT blob FROM sky_sessions WHERE sid = $1")
+            .bind(sid)
+            .fetch_optional(&self.pool)
+            .await
+            .ok()
+            .flatten();
+        let model: Model = decode_checkpoint(&self.schema_tag, &row?.0)?;
         let _ = sqlx::query("UPDATE sky_sessions SET last_seen = $1 WHERE sid = $2")
             .bind(now_secs())
             .bind(sid)
@@ -398,7 +425,7 @@ where
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .insert(sid.to_string(), (handle, Instant::now()));
-        if let Ok(blob) = serde_json::to_string(&model) {
+        if let Some(blob) = encode_checkpoint(&self.schema_tag, &model) {
             let _ = sqlx::query(
                 "INSERT INTO sky_sessions (sid, blob, last_seen, schema_tag) \
                  VALUES ($1, $2, $3, $4) \
@@ -525,23 +552,17 @@ where
             let _: Result<(), _> = conn.expire(redis_key(sid), self.ttl_secs as i64).await;
             return Some(StoreHit::Live(h));
         }
-        // One HMGET reads the blob AND its schema tag from the session HASH
-        // (a pre-HASH string key errs WRONGTYPE → `.ok()?` → treated as a
-        // miss, the same fail-soft path as a corrupt blob).
-        let fields: (Option<String>, Option<String>) = redis::cmd("HMGET")
+        // The session HASH's blob field is the self-contained framed
+        // checkpoint (see SqliteStore::get); a pre-HASH string key errs
+        // WRONGTYPE → `.ok()?` → the same fail-soft miss path. The legacy
+        // companion `tag` field is retired (no longer written or read).
+        let blob: Option<String> = redis::cmd("HGET")
             .arg(redis_key(sid))
             .arg("blob")
-            .arg("tag")
             .query_async(&mut conn)
             .await
             .ok()?;
-        let (blob, row_tag) = (fields.0?, fields.1?);
-        // H24 gate — reject a foreign-schema checkpoint before deserialize
-        // (see SqliteStore::get).
-        if row_tag != hex::encode(self.schema_tag) {
-            return None;
-        }
-        let model: Model = serde_json::from_str(&blob).ok()?;
+        let model: Model = decode_checkpoint(&self.schema_tag, &blob?)?;
         let _: Result<(), _> = conn.expire(redis_key(sid), self.ttl_secs as i64).await;
         Some(StoreHit::Cold(model))
     }
@@ -555,18 +576,16 @@ where
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .insert(sid.to_string(), (handle, Instant::now()));
-        if let Ok(blob) = serde_json::to_string(&model) {
+        if let Some(blob) = encode_checkpoint(&self.schema_tag, &model) {
             let mut conn = self.conn.clone();
-            // HASH per session: blob + tag share ONE key and ONE TTL, so
-            // they can never drift apart via separately-expiring keys.
+            // HASH per session, one key + one TTL; the tag lives INSIDE the
+            // framed blob, so nothing can drift apart.
             let key = redis_key(sid);
             let _: Result<(), _> = redis::pipe()
                 .cmd("HSET")
                 .arg(&key)
                 .arg("blob")
                 .arg(blob)
-                .arg("tag")
-                .arg(hex::encode(self.schema_tag))
                 .ignore()
                 .cmd("EXPIRE")
                 .arg(&key)
@@ -1033,12 +1052,12 @@ mod tests {
         let s: SqliteStore<i32, ()> = SqliteStore::new(p, Duration::from_secs(60), TEST_TAG)
             .await
             .unwrap();
-        // Cross-replica cold row: valid blob + tag, but no mem_cache entry.
+        // Cross-replica cold row: valid framed blob, but no mem_cache entry.
         sqlx::query(
             "INSERT INTO sky_sessions (sid, blob, last_seen, schema_tag) VALUES (?, ?, ?, ?)",
         )
         .bind("cold_sid")
-        .bind("41")
+        .bind(encode_checkpoint(&TEST_TAG, &41_i32).unwrap())
         .bind(now_secs())
         .bind(hex::encode(TEST_TAG))
         .execute(&s.pool)
@@ -1059,6 +1078,169 @@ mod tests {
             Some(StoreHit::Cold(41))
         ));
         let _ = std::fs::remove_file(p);
+    }
+
+    /// Stage-C wire format: the raw persisted blob is
+    /// `base64(schema_tag(32) ++ bincode(model))` — a property ONLY the new
+    /// format satisfies (a JSON body would fail the length identity) — and
+    /// a fresh store still round-trips it as `Cold`.
+    #[cfg(feature = "db")]
+    #[tokio::test]
+    async fn sqlite_store_new_format_round_trips_model_through_bincode() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+        let path = std::env::temp_dir().join(format!("skytest_binc_{}.db", std::process::id()));
+        let p = path.to_str().unwrap();
+        let _ = std::fs::remove_file(p);
+        let model: i32 = 42;
+        {
+            let s: SqliteStore<i32, ()> = SqliteStore::new(p, Duration::from_secs(60), TEST_TAG)
+                .await
+                .unwrap();
+            s.set("s1", handle_i32(model)).await;
+            // Read the raw column back and assert the format identity.
+            let row: (String,) = sqlx::query_as("SELECT blob FROM sky_sessions WHERE sid = 's1'")
+                .fetch_one(&s.pool)
+                .await
+                .unwrap();
+            let framed = B64
+                .decode(row.0.as_bytes())
+                .expect("the persisted blob must be valid base64");
+            let body_len = bincode::serialized_size(&model).unwrap() as usize;
+            assert_eq!(
+                framed.len(),
+                32 + body_len,
+                "blob must be exactly schema_tag(32) ++ bincode(model)"
+            );
+            assert_eq!(framed.get(..32).unwrap(), TEST_TAG);
+        }
+        {
+            let s: SqliteStore<i32, ()> = SqliteStore::new(p, Duration::from_secs(60), TEST_TAG)
+                .await
+                .unwrap();
+            match s.get("s1").await {
+                Some(StoreHit::Cold(m)) => assert_eq!(m, 42),
+                _ => panic!("expected Cold(42) through the bincode path"),
+            }
+        }
+        let _ = std::fs::remove_file(p);
+    }
+
+    /// A raw pre-Stage-C JSON row (seeded directly, bypassing `set()`) is
+    /// rejected cleanly by `get()` — `None`, NEVER a panic: it fails base64
+    /// decode (or the tag prefix) and takes the same fail-soft path a
+    /// corrupt blob always took.
+    #[cfg(feature = "db")]
+    #[tokio::test]
+    async fn sqlite_store_old_json_row_is_rejected_not_crashed() {
+        let path = std::env::temp_dir().join(format!("skytest_oldjson_{}.db", std::process::id()));
+        let p = path.to_str().unwrap();
+        let _ = std::fs::remove_file(p);
+        let s: SqliteStore<i32, ()> = SqliteStore::new(p, Duration::from_secs(60), TEST_TAG)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO sky_sessions (sid, blob, last_seen, schema_tag) VALUES (?, ?, ?, ?)",
+        )
+        .bind("old")
+        .bind("42") // a pre-Stage-C serde-JSON body
+        .bind(now_secs())
+        .bind(hex::encode(TEST_TAG))
+        .execute(&s.pool)
+        .await
+        .unwrap();
+        assert!(
+            s.get("old").await.is_none(),
+            "an old-format JSON row ages out via the fail-soft miss path"
+        );
+        let _ = std::fs::remove_file(p);
+    }
+
+    /// Postgres mirrors of the bincode round-trip + old-row fail-soft —
+    /// `SKY_TEST_PG_URL`-gated.
+    #[cfg(feature = "db")]
+    #[tokio::test]
+    async fn postgres_store_new_format_round_trips_and_rejects_old_json_rows() {
+        let Ok(url) = std::env::var("SKY_TEST_PG_URL") else {
+            return;
+        };
+        let sid = format!("pgtest_binc_{}", std::process::id());
+        let old_sid = format!("pgtest_oldjson_{}", std::process::id());
+        {
+            let s: PostgresStore<i32, ()> =
+                PostgresStore::new(&url, Duration::from_secs(60), TEST_TAG)
+                    .await
+                    .unwrap();
+            s.delete(&sid).await;
+            s.delete(&old_sid).await;
+            s.set(&sid, handle_i32(7)).await;
+            sqlx::query(
+                "INSERT INTO sky_sessions (sid, blob, last_seen, schema_tag) \
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(&old_sid)
+            .bind("7")
+            .bind(now_secs())
+            .bind(hex::encode(TEST_TAG))
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        }
+        {
+            let s: PostgresStore<i32, ()> =
+                PostgresStore::new(&url, Duration::from_secs(60), TEST_TAG)
+                    .await
+                    .unwrap();
+            match s.get(&sid).await {
+                Some(StoreHit::Cold(m)) => assert_eq!(m, 7),
+                _ => panic!("expected Cold(7) through the bincode path"),
+            }
+            assert!(s.get(&old_sid).await.is_none());
+            s.delete(&sid).await;
+            s.delete(&old_sid).await;
+        }
+    }
+
+    /// Redis mirrors of the bincode round-trip + old-row fail-soft —
+    /// `SKY_TEST_REDIS_URL`-gated.
+    #[cfg(feature = "redis_store")]
+    #[tokio::test]
+    async fn redis_store_new_format_round_trips_and_rejects_old_json_rows() {
+        let Ok(url) = std::env::var("SKY_TEST_REDIS_URL") else {
+            return;
+        };
+        let sid = format!("redistest_binc_{}", std::process::id());
+        let old_sid = format!("redistest_oldjson_{}", std::process::id());
+        {
+            let s: RedisStore<i32, ()> = RedisStore::new(&url, Duration::from_secs(60), TEST_TAG)
+                .await
+                .unwrap();
+            s.delete(&sid).await;
+            s.delete(&old_sid).await;
+            s.set(&sid, handle_i32(9)).await;
+            // Old-format row: raw JSON in the blob field.
+            let mut conn = s.conn.clone();
+            let _: () = redis::cmd("HSET")
+                .arg(redis_key(&old_sid))
+                .arg("blob")
+                .arg("9")
+                .arg("tag")
+                .arg(hex::encode(TEST_TAG))
+                .query_async(&mut conn)
+                .await
+                .unwrap();
+        }
+        {
+            let s: RedisStore<i32, ()> = RedisStore::new(&url, Duration::from_secs(60), TEST_TAG)
+                .await
+                .unwrap();
+            match s.get(&sid).await {
+                Some(StoreHit::Cold(m)) => assert_eq!(m, 9),
+                _ => panic!("expected Cold(9) through the bincode path"),
+            }
+            assert!(s.get(&old_sid).await.is_none());
+            s.delete(&sid).await;
+            s.delete(&old_sid).await;
+        }
     }
 
     /// Postgres mirror of the cold-row exclusion — `SKY_TEST_PG_URL`-gated.
