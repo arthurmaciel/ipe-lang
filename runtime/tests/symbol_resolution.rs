@@ -72,7 +72,12 @@ fn every_kernel_name_resolves_to_runtime_fn() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
     // ── 1. Parse naming.rs: collect every string literal from kernel_name() ─
-    let naming_path = root.join("..").join("crates").join("sky_backend_rust").join("src").join("naming.rs");
+    let naming_path = root
+        .join("..")
+        .join("crates")
+        .join("sky_backend_rust")
+        .join("src")
+        .join("naming.rs");
     let naming_src = std::fs::read_to_string(&naming_path)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", naming_path.display()));
 
@@ -101,11 +106,11 @@ fn every_kernel_name_resolves_to_runtime_fn() {
             let path = entry.path();
             if path.is_dir() {
                 walk(&path, fn_re, out);
-            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    for cap in fn_re.captures_iter(&content) {
-                        out.insert(cap[1].to_string());
-                    }
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs")
+                && let Ok(content) = std::fs::read_to_string(&path)
+            {
+                for cap in fn_re.captures_iter(&content) {
+                    out.insert(cap[1].to_string());
                 }
             }
         }

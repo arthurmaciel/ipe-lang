@@ -1296,10 +1296,10 @@ mod tests {
         fn go<M>(n: &Html<M>, out: &mut Vec<String>) {
             if let Html::HElement(_, attrs, kids) = n {
                 for a in attrs {
-                    if let Attribute::Attr(k, v) = a {
-                        if k == "sky-id" {
-                            out.push(v.clone());
-                        }
+                    if let Attribute::Attr(k, v) = a
+                        && k == "sky-id"
+                    {
+                        out.push(v.clone());
                     }
                 }
                 for c in kids {
