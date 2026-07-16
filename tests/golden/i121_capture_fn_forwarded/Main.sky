@@ -1,22 +1,22 @@
 module Main exposing (main)
 
--- F6 (#121 seal) — GATE. A lambda FORWARDS (not calls) a function-typed local.
--- `f : Int -> Int` is NonClone.  In `\x -> applyTwice f x`, `f` is an
--- ARGUMENT to `applyTwice` (non-callee position).
--- T3 rule 4: NonClone not in callee position → SKY-L0125 at compile time.
--- This must never reach cargo (was a silent cargo-fail before the fix).
 
-
+-- F6 (#121 seal) — RE-CLASSIFIED to ACCEPT by the #221 fn-value Arc-carrier
+-- promotion. A lambda FORWARDS (not calls) the fn-typed param `f` in a
+-- non-callee position: the param is shadow-rebound to the `Clone`
+-- `Arc<dyn Fn>` carrier at function entry and the read re-dispatched through
+-- a fresh `Box` closure, so the shape compiles and runs (it was SKY-L0125/6
+-- fail-closed while the only carrier was a non-`Clone` `Box<dyn Fn>`).
 applyTwice : (Int -> Int) -> Int -> Int
 applyTwice g x =
     g (g x)
-
-
 -- `f` is captured from outside and forwarded to `applyTwice` — non-callee.
-compose : (Int -> Int) -> (Int -> Int)
+
+
+compose : (Int -> Int) -> Int -> Int
 compose f =
     \x -> applyTwice f x
 
 
 main =
-    println "unreachable"
+    println (String.fromInt (compose (\n -> n + 1) 3))

@@ -1,6 +1,8 @@
 # Fix A — clonable function-value carrier: execution-ready spec
 
-Status: Ready to execute (design only — no code in this change).
+Status: LANDED as §B6 option 1 (the lowered-IR, binder-site promotion — see
+§B7 at the end for the implemented design). §§1–5 (universal Arc) remain
+FALSIFIED history per §B1; read §B1–B7 as the authoritative design.
 Closes: sweep red #221 (`36-composite-server`, SKY-L0126).
 Root cause: `docs/architecture/sweep-red-221-l0126-root-cause-2026-07-16.md`.
 Restructure it lands inside: `docs/architecture/clone-relay-class-macro-design-2026-07-16.md`.
@@ -1023,3 +1025,49 @@ pre-pass.
 Option 1 is smaller, matches the lean directive, and directly extends the landed
 per-`let` pre-pass; prefer it. The per-`let` pre-pass can be REPLACED by the
 def-level post-pass (not kept alongside) once (1) lands.
+
+## B7. Implemented design (option 1, landed — replaces the per-`let` canon pre-pass)
+
+The promotion decision runs on the LOWERED IR at each BINDER site, which is
+where the fully-lowered scope (eta-synthesized closures included) is in hand —
+the "def-level post-lowering pass", realised scope-by-scope as lowering
+unwinds, completing before TCO:
+
+* **Single authority** — `sky_ir::fun_value_arc_promotable` (pure `IrType::Fun`
+  only; `FnOnceChain`/`Decoder`/composites excluded) says which binding shapes
+  may take the `Arc` carrier; `sky_ir::carrier_is_clone(Fun)` is now honestly
+  `false` (the DEFAULT carrier is `Box<dyn Fn>`; the promoted `SharedLambda`
+  carrier is the position-typed `Clone` exception) and agrees exactly with
+  `clone_class`.
+* **Deferral, not rejection** — `lower_lambda`'s capture classifier routes a
+  captured pure-`Fun` symbol whose binder is REGISTERED promotable (plain `let`
+  names + def/lambda params, via `promotable_fn_binders`) away from the
+  SKY-L0126 fail-close, leaving reads bare; a signal (`deferred_fun_captures`)
+  lets a binder that cannot resolve the `Fun` shape re-raise the original
+  SKY-L0126 (fail-closed both ways). Destructure/match-arm-bound fn symbols
+  are not registered — they keep today's honest fail-close.
+* **Binder-site triggers, on the lowered scope** — a pure-`Fun` `let`
+  (`lower_let_pvar`) or param (`apply_param_move_ownership`) is promoted when
+  `fn_value_read_flags` finds a non-callee read at closure depth ≥ 1 (E0507
+  class), a read at depth ≥ 2 (params; lets get this from
+  `needs_shared_capture`), or `count_fn_value_uses > 1` (E0382 class). Lean
+  shapes (depth-0 callee, single move) stay bare `Box`, byte-identically.
+* **Read reconciliation** — a promoted binding's non-callee reads are
+  re-dispatched through fresh `Box` closures (`shim_fn_value_reads` →
+  `Box::new(move |a..| (sym.clone())(a..))`, the reference's `redispatch`
+  shim), because `Arc<dyn Fn>` satisfies neither a `Box<dyn Fn>` slot nor an
+  `impl Fn` bound; capture relays come from `force_shared_capture_clones`;
+  reuse clones from `rewrite_multiuse_clones`; callee reads call the `Arc`
+  by auto-deref. Reads inside `requires_sync_capture` kernel args are the
+  sync-promotion path's slots and stay untouched (byte-pinned).
+* **Carrier mint** — a promoted `let`'s lambda value flips to
+  `Expr::SharedLambda` (the reference's `arcWrapClosure`); a promoted
+  NON-lambda value or param shadow-rebinds via `eta_shared_rebind`
+  (`Arc::new(move |a..| (value)(a..))`, moving the underlying value in once) —
+  a param's SIGNATURE (and every caller) keeps the lean `Box`.
+* **Flatten-invariant completion** (unmasked by the same family) — a lambda
+  whose body COMPUTES a function (`wrap h = cors (withLogging h)` :
+  `Handler -> Handler`) is padded with trailing eta params applying the
+  computed value, so the closure's arity always equals its flattened type's —
+  the arity every consumer (`ty_arrow_arity`, `eta_expand_value_partial`,
+  `render_type`) already assumes.

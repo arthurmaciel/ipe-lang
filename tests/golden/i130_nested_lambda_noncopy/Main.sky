@@ -1,25 +1,21 @@
 module Main exposing (main)
 
--- c14 (#130 seal) — GATE. A NonClone function `f` is used in direct callee
--- position INSIDE a nested lambda at depth > 0.
+
+-- c14 (#130 seal) — RE-CLASSIFIED to ACCEPT by the #221 fn-value Arc-carrier
+-- promotion. The fn-typed param `f` is called in direct callee position
+-- INSIDE a nested lambda at depth ≥ 2:
 --
 -- `composed f = \p -> (\x -> f x) p`
 --
--- Inside `\x -> f x`, `f` is `Apply { func: Var(f), args: [x] }` — direct
--- callee position.  But this is inside an inner lambda (depth 1 relative to
--- the outer lambda `\p -> ...`).
---
--- Pre-fix: the NonClone callee-position exemption fired at ANY nesting depth.
--- `Var(f)` in `Apply.func` at depth 1 was allowed bare → inner `move` closure
--- consumed `f` from the outer env → outer closure became `FnOnce` → E0525.
---
--- Fix 2 (#130): callee-position exemption applies ONLY at depth == 0.
--- At depth 1, `Var(f)` in callee position triggers SKY-L0126 at skyc time
--- (never reaches cargo).
-
-composed : (Int -> Int) -> (Int -> Int)
+-- Under the bare `Box<dyn Fn>` carrier the inner `move` closure consumed `f`
+-- from the outer env per call (E0525), so the depth-0-only callee exemption
+-- fail-closed this with SKY-L0126. The promotion shadow-rebinds `f` to the
+-- `Clone` `Arc<dyn Fn>` carrier and relays a clone across each closure
+-- boundary, so the shape compiles and runs.
+composed : (Int -> Int) -> Int -> Int
 composed f =
     \p -> (\x -> f x) p
 
+
 main =
-    println "unreachable"
+    println (String.fromInt (composed (\n -> n * 2) 3))
