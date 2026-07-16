@@ -299,3 +299,31 @@ fn cache_builds_and_runs() {
     // put "k"="hit" then get "k" → Just "hit"; withDefault → "hit".
     seal_module("cache", CACHE_MAIN, "CACHE:hit");
 }
+
+// ── #215: Std.PubSub ─────────────────────────────────────────────────────────
+// PubSub.publish : String -> any -> Task Error Int.  No Live.app runs in this
+// probe so publish resolves to Err(Unavailable) — Task.onError swallows it and
+// the program prints the marker.  The test asserts skyc-0 ⇒ cargo-0 ⇒ exit-0.
+
+const PUBSUB_MAIN: &str = "module Main exposing (main)\n\
+    import Sky.Core.Prelude exposing (..)\n\
+    import Sky.Core.Task as Task\n\
+    import Sky.Core.Json.Encode as JsonEnc\n\
+    import Std.PubSub as PubSub\n\
+    import Std.Log exposing (println)\n\n\
+    main =\n\
+    \x20   let\n\
+    \x20       _ = PubSub.publish \"t\" (JsonEnc.string \"hi\")\n\
+    \x20               |> Task.onError (\\_ -> Task.succeed 0)\n\
+    \x20   in\n\
+    \x20   println \"PUBSUB_OK\"\n";
+
+#[test]
+fn pubsub_resolves_and_emits() {
+    let _ = compile_module_probe("pubsub", PUBSUB_MAIN);
+}
+
+#[test]
+fn pubsub_builds_and_runs() {
+    seal_module("pubsub", PUBSUB_MAIN, "PUBSUB_OK");
+}
