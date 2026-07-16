@@ -9,6 +9,8 @@ sky_ir = { path = "../sky_ir" }
 sky_intern = { path = "../sky_intern" }
 sky_backend = { path = "../sky_backend" }
 sky_diagnostics = { path = "../sky_diagnostics" }
+# Model schema tag (H24) — same pin as sky_watch/skyc/runtime.
+sha2 = "0.10"
 
 [lints]
 workspace = true
