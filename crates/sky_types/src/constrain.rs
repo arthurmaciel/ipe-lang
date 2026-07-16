@@ -4418,8 +4418,8 @@ impl<'a> Builder<'a> {
             // `"ISO_CODE AMOUNT"` TEXT column (the lossless serialisation
             // `SqlMoney` writes on INSERT) back into its amount/currency-code
             // pair. Deliberately NOT `Decoder Money`: `Money`/`Currency` are
-            // project-generated types unnameable from this crate (see #34 spec,
-            // `docs/architecture/class7-sql-db-fix-spec-2026-07-09.md` §6) — a
+            // project-generated types unnameable from this crate (see #34;
+            // `docs/adr/0013-multi-driver-db-compile-time-selection.md`) — a
             // recorded divergence from the Go backend's `Decoder Money`,
             // documented in `docs/divergences-from-sky.md`.
             K::DbDecMoney => fun(string(), dec(tuple2(decimal(), string()))),
