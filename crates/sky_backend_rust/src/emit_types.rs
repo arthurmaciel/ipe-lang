@@ -211,6 +211,16 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // Std.Csv document record — re-exported (ungated) from sky_runtime::csv,
         // so the bare name resolves via the crate glob use.
         IrType::CsvDoc => "CsvDoc".to_owned(),
+        // Std.Email records + provider ADT — re-exported from sky_runtime::email
+        // (`pub use email::*` appended when the program uses `Email.send`), so
+        // the bare names resolve via the crate glob use. `Attachment` maps to the
+        // runtime `EmailAttachment` (the Sky alias name differs from the runtime
+        // struct name).
+        IrType::EmailMessage => "EmailMessage".to_owned(),
+        IrType::EmailAttachment => "EmailAttachment".to_owned(),
+        IrType::EmailSesConfig => "SesConfig".to_owned(),
+        IrType::EmailSmtpConfig => "SmtpConfig".to_owned(),
+        IrType::EmailProvider => "EmailProvider".to_owned(),
         // Std.Ui / Std.Html parametric types.  Use fully-qualified Rust paths
         // (T2 soundness: `Attribute` exists in BOTH Std.Ui and Std.Html namespaces;
         // qualified paths keep them unambiguous and prevent glob-import shadowing).

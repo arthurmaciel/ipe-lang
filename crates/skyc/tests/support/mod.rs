@@ -240,6 +240,17 @@ pub struct RunOutcome {
     pub exit_code: Option<i32>,
 }
 
+/// Build the emitted project at `emitted_dir` into the shared target WITHOUT
+/// running it, returning `Ok(())` on a successful `cargo build` or `Err` with
+/// cargo's stderr. Used by SEAL goldens whose kernel is network-effectful (e.g.
+/// `Email.send`) so a run has no deterministic stdout — the SEAL proof there is
+/// that skyc-0 ⇒ the emitted crate `cargo build`s. Delegates to
+/// [`oracle::build_rust_binary`].
+#[allow(dead_code)] // not every golden test binary exercises every helper
+pub fn build_emitted(golden_name: &str, emitted_dir: &Path) -> Result<(), String> {
+    oracle::build_rust_binary(golden_name, emitted_dir).map(|_| ())
+}
+
 /// Build the emitted project at `emitted_dir` into the shared target and run the
 /// resulting binary, returning its captured stdout and exit code.
 ///

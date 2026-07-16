@@ -41,6 +41,7 @@ const fn empty_module(name: ModPath) -> Module {
         uses_css: false,
         uses_auth: false,
         uses_websocket: false,
+        uses_email: false,
     }
 }
 

@@ -667,6 +667,11 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::CacheStats => "CacheStats",
         IrType::CsvDoc => "Csv",
         IrType::WebSocketClientCfg => "WebSocketCfg",
+        IrType::EmailMessage => "EmailMessage",
+        IrType::EmailAttachment => "EmailAttachment",
+        IrType::EmailSesConfig => "SesConfig",
+        IrType::EmailSmtpConfig => "SmtpConfig",
+        IrType::EmailProvider => "EmailProvider",
     }
 }
 
@@ -676,9 +681,7 @@ mod schema_tag_tests {
 
     use sky_diagnostics::DResult;
     use sky_intern::Interner;
-    use sky_ir::{
-        Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Program, UiCtor,
-    };
+    use sky_ir::{Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Program, UiCtor};
 
     use crate::emit_types::GenericScope;
     use crate::{DbDriver, EmitCtx};
@@ -737,6 +740,7 @@ mod schema_tag_tests {
                 uses_css: false,
                 uses_auth: false,
                 uses_websocket: false,
+                uses_email: false,
             }],
         };
         let ctx = EmitCtx::build(&interner, &program, DbDriver::Sqlite)?;

@@ -695,7 +695,7 @@ pub enum StdlibKernel {
     UiParagraph,
     UiTextColumn,
     UiButton, // (List Attr, { onPress : Maybe msg, label : Element msg }) → Element msg
-    UiLink, // (List Attr, { url : String, label : Element msg }) → Element msg
+    UiLink,   // (List Attr, { url : String, label : Element msg }) → Element msg
     /// `Ui.form : List (Attribute msg) -> List (Element msg) -> Element msg`
     UiForm,
     /// `Ui.image : List Attr -> { src : String, description : String } -> Element msg`
@@ -939,7 +939,7 @@ pub enum StdlibKernel {
     UiOnKeyDown,
     UiOnKeyUp,
     UiOnBool,
-    UiOnSubmit,   // (a -> msg) -> Attribute msg  — form submit
+    UiOnSubmit, // (a -> msg) -> Attribute msg  — form submit
     /// `Ui.onFile : (String -> msg) -> Attribute msg` — wire event name
     /// `"sky-file"`; the browser-side driver reads the chosen file, base64
     /// data-URL-encodes it, and dispatches the URL string to the handler.
@@ -962,17 +962,17 @@ pub enum StdlibKernel {
     HtmlOnBool,
     // ── Std.Ui extended attribute builders ───────────────────────
     // Ui namespace — aspect-ratio + htmlAttribute + name/style/cinemascope
-    UiSquare,         // nullary Attr: "1 / 1"
-    UiWidescreen,     // nullary Attr: "16 / 9"
-    UiCinemascope,    // nullary Attr: "2.35 / 1"
-    UiAspectRatio,    // Float → Attr
-    UiAspectRatioWH,  // Int → Int → Attr
-    UiHtmlAttribute,  // String → String → Attr (AttrAttribute escape-hatch)
-    UiName,           // String → Attr (HTML name= attribute)
-    UiStyle,          // String → String → Attr (raw CSS property + value)
-    UiTransitionRaw,  // String → Bool → Attr (CSS transition shorthand + respect-reduced-motion flag)
-    UiGridTracksRaw,  // String → String → Attr (grid-template-columns + grid-template-rows)
-    UiAnimateRaw,     // String → String → String → Bool → Attr (name + shorthand-tail + @keyframes body + respect flag)
+    UiSquare,        // nullary Attr: "1 / 1"
+    UiWidescreen,    // nullary Attr: "16 / 9"
+    UiCinemascope,   // nullary Attr: "2.35 / 1"
+    UiAspectRatio,   // Float → Attr
+    UiAspectRatioWH, // Int → Int → Attr
+    UiHtmlAttribute, // String → String → Attr (AttrAttribute escape-hatch)
+    UiName,          // String → Attr (HTML name= attribute)
+    UiStyle,         // String → String → Attr (raw CSS property + value)
+    UiTransitionRaw, // String → Bool → Attr (CSS transition shorthand + respect-reduced-motion flag)
+    UiGridTracksRaw, // String → String → Attr (grid-template-columns + grid-template-rows)
+    UiAnimateRaw, // String → String → String → Bool → Attr (name + shorthand-tail + @keyframes body + respect flag)
     // ── Breakpoint opaque constants + Ui.breakpoint wrapper ────────────
     /// `Ui.breakpoint : Breakpoint -> List (Attribute msg) -> Element msg -> Element msg`
     ///
@@ -1045,16 +1045,16 @@ pub enum StdlibKernel {
     BorderHoverWidth,   // Int → Attr
     BorderHoverRounded, // Int → Attr
     // Font namespace — weight variants (nullary)
-    FontWeight,     // Int → Attr
-    FontSemiBold,   // nullary (600)
-    FontRegular,    // nullary (400)
-    FontLight,      // nullary (300)
-    FontExtraBold,  // nullary (800)
-    FontBlack,      // nullary (900)
+    FontWeight,    // Int → Attr
+    FontSemiBold,  // nullary (600)
+    FontRegular,   // nullary (400)
+    FontLight,     // nullary (300)
+    FontExtraBold, // nullary (800)
+    FontBlack,     // nullary (900)
     // Font namespace — decoration
-    FontUnderline,     // nullary (AttrFontUnderline)
-    FontNoDecoration,  // nullary (AttrFontDecoration("none"))
-    FontLineThrough,   // nullary (AttrFontDecoration("line-through"))
+    FontUnderline,    // nullary (AttrFontUnderline)
+    FontNoDecoration, // nullary (AttrFontDecoration("none"))
+    FontLineThrough,  // nullary (AttrFontDecoration("line-through"))
     // Font namespace — spacing (Float → Attr)
     FontLetterSpacing, // Float → Attr (AttrFontLetterSpacing)
     FontWordSpacing,   // Float → Attr (AttrFontWordSpacing)
@@ -1063,7 +1063,7 @@ pub enum StdlibKernel {
     FontAlignRight,  // nullary (AttrFontAlign("right"))
     FontAlignCenter, // nullary (AttrFontAlign("center")) — distinct from FontCenter
     FontCenter,      // nullary (AttrFontAlign("center"))
-    FontJustify,    // nullary (AttrFontAlign("justify"))
+    FontJustify,     // nullary (AttrFontAlign("justify"))
     // Font namespace — string constants (nullary → String, NOT Attribute)
     FontSansSerif, // String constant "sans-serif"
     FontSerif,     // String constant "serif"
@@ -1130,13 +1130,13 @@ pub enum StdlibKernel {
     WebSocketCloseWithCode,  // Int -> String -> Int -> Task Error () (arity 3)
     SubSubscribeWebSocket,   // Int -> String -> (any -> msg) -> Sub msg (arity 3)
     // ── Std.Ui.Region ──────────────────────────────────────────────
-    RegionMainContent,   // Attribute msg (arity 0)
-    RegionNavigation,    // Attribute msg (arity 0)
-    RegionFooter,        // Attribute msg (arity 0)
-    RegionAside,         // Attribute msg (arity 0)
-    RegionHeading,       // Int → Attribute msg (arity 1)
-    RegionLabel,         // String → Attribute msg (arity 1)
-    RegionAnnounce,      // Attribute msg (arity 0)
+    RegionMainContent,      // Attribute msg (arity 0)
+    RegionNavigation,       // Attribute msg (arity 0)
+    RegionFooter,           // Attribute msg (arity 0)
+    RegionAside,            // Attribute msg (arity 0)
+    RegionHeading,          // Int → Attribute msg (arity 1)
+    RegionLabel,            // String → Attribute msg (arity 1)
+    RegionAnnounce,         // Attribute msg (arity 0)
     RegionAnnounceUrgently, // Attribute msg (arity 0)
     // ── Ui.input + Ui.describe + desc* constructors ───────────────────────
     UiInput,             // List (Attribute msg) -> Element msg (arity 1)
@@ -1485,6 +1485,14 @@ pub enum StdlibKernel {
     ConfigDecodeJson,
     /// `Config.loadFromFile : String -> Decoder a -> Task Error a`.
     ConfigLoadFromFile,
+    // ── Std.Email — provider-abstract email send ──────────────────────
+    // Task-effectful; runtime `sky_runtime::email::email_send`. Routed via the
+    // compiled-source `Std.Email` Layer-3 surface + `Ffi.kernel "Email_send"`.
+    // Class `Pure` (the effect lives in the `Task` scheme, same as File/Http).
+    // Takes the runtime `EmailProvider` enum + `EmailMessage` struct (the Sky
+    // ADT / record aliases fold to those nominal runtime types).
+    /// `Email.send : EmailProvider -> EmailMessage -> Task Error String`.
+    EmailSend,
 }
 
 impl StdlibKernel {
@@ -1613,10 +1621,10 @@ impl StdlibKernel {
             Self::BasicsToString => d("Basics", "toString", 1, Pure, "basics_to_string"),
             // ── Basics numerics ──────────────────────────────────────────
             Self::BasicsNegate => d("Basics", "negate", 1, Pure, "basics_negate"),
-            Self::BasicsAbs    => d("Basics", "abs",    1, Pure, "basics_abs"),
-            Self::BasicsSqrt   => d("Basics", "sqrt",   1, Pure, "math_sqrt"),
-            Self::BasicsMin    => d("Basics", "min",    2, Pure, "math_min"),
-            Self::BasicsMax    => d("Basics", "max",    2, Pure, "math_max"),
+            Self::BasicsAbs => d("Basics", "abs", 1, Pure, "basics_abs"),
+            Self::BasicsSqrt => d("Basics", "sqrt", 1, Pure, "math_sqrt"),
+            Self::BasicsMin => d("Basics", "min", 2, Pure, "math_min"),
+            Self::BasicsMax => d("Basics", "max", 2, Pure, "math_max"),
             Self::BasicsCompare => d("Basics", "compare", 2, Pure, "basics_compare"),
             // ── end Basics numerics ──────────────────────────────────────
             // ── Error (Sky.Core.Error — real Error/ErrorKind ADT) ──
@@ -1636,17 +1644,17 @@ impl StdlibKernel {
             Self::ErrorUnavailable => d("Error", "unavailable", 1, Pure, "sky_error_unavailable"),
             Self::ErrorTimeout => d("Error", "timeout", 0, Pure, "sky_error_timeout"),
             Self::ErrorNotFound => d("Error", "notFound", 0, Pure, "sky_error_not_found"),
-            Self::ErrorPermissionDenied => {
-                d("Error", "permissionDenied", 0, Pure, "sky_error_permission_denied")
-            }
+            Self::ErrorPermissionDenied => d(
+                "Error",
+                "permissionDenied",
+                0,
+                Pure,
+                "sky_error_permission_denied",
+            ),
             Self::ErrorToString => d("Error", "toString", 1, Pure, "basics_error_to_string"),
-            Self::ErrorWithMessage => {
-                d("Error", "withMessage", 2, Pure, "sky_error_with_message")
-            }
+            Self::ErrorWithMessage => d("Error", "withMessage", 2, Pure, "sky_error_with_message"),
             Self::ErrorIsRetryable => d("Error", "isRetryable", 1, Pure, "sky_error_is_retryable"),
-            Self::ErrorWithDetails => {
-                d("Error", "withDetails", 2, Pure, "sky_error_with_details")
-            }
+            Self::ErrorWithDetails => d("Error", "withDetails", 2, Pure, "sky_error_with_details"),
             // ── CssSafety (Sky.Core.CssSafety — Std.Css leaf kernels) ────
             // The `emit` symbols are the bare runtime fn names re-exported at the
             // `sky_runtime` root (`pub use css::*`): `safe_value` /
@@ -1655,12 +1663,14 @@ impl StdlibKernel {
             Self::CssSafetySafePropName => {
                 d("CssSafety", "safePropName", 1, Pure, "safe_prop_name")
             }
-            Self::CssSafetySafeSelector => {
-                d("CssSafety", "safeSelector", 1, Pure, "safe_selector")
-            }
-            Self::CssSafetyStripStyleClose => {
-                d("CssSafety", "stripStyleClose", 1, Pure, "strip_style_close_kernel")
-            }
+            Self::CssSafetySafeSelector => d("CssSafety", "safeSelector", 1, Pure, "safe_selector"),
+            Self::CssSafetyStripStyleClose => d(
+                "CssSafety",
+                "stripStyleClose",
+                1,
+                Pure,
+                "strip_style_close_kernel",
+            ),
             // ── Maybe ───────────────────────────────────────────────────────
             Self::MaybeWithDefault => d("Maybe", "withDefault", 2, Pure, "maybe_with_default"),
             Self::MaybeMap => d("Maybe", "map", 2, Pure, "sky_maybe_map"),
@@ -1930,15 +1940,23 @@ impl StdlibKernel {
             // ── Task retry surface (special-case emitter in emit_expr.rs) ───
             Self::TaskRetryWith => d("Task", "retryWith", 2, Pure, "task_retry_with"),
             Self::TaskLinearBackoff => d("Task", "linearBackoff", 2, Pure, "task_linear_backoff"),
-            Self::TaskExponentialBackoff => {
-                d("Task", "exponentialBackoff", 2, Pure, "task_exponential_backoff")
-            }
+            Self::TaskExponentialBackoff => d(
+                "Task",
+                "exponentialBackoff",
+                2,
+                Pure,
+                "task_exponential_backoff",
+            ),
             Self::TaskWithJitter => d("Task", "withJitter", 1, Pure, "task_with_jitter"),
             Self::TaskRetryOn => d("Task", "retryOn", 2, Pure, "task_retry_on"),
             Self::TaskWithRetryOn => d("Task", "withRetryOn", 2, Pure, "task_with_retry_on"),
-            Self::TaskDefaultRetryPolicy => {
-                d("Task", "defaultRetryPolicy", 0, Pure, "task_default_retry_policy")
-            }
+            Self::TaskDefaultRetryPolicy => d(
+                "Task",
+                "defaultRetryPolicy",
+                0,
+                Pure,
+                "task_default_retry_policy",
+            ),
             Self::TaskWithMaxAttempts => {
                 d("Task", "withMaxAttempts", 2, Pure, "task_with_max_attempts")
             }
@@ -2007,9 +2025,13 @@ impl StdlibKernel {
                 Pure,
                 "http_with_follow_redirects",
             ),
-            Self::HttpWithMaxRedirects => {
-                d("Http", "withMaxRedirects", 2, Pure, "http_with_max_redirects")
-            }
+            Self::HttpWithMaxRedirects => d(
+                "Http",
+                "withMaxRedirects",
+                2,
+                Pure,
+                "http_with_max_redirects",
+            ),
             // ── Db ──────────────────────────────────────────────────────────
             Self::DbConnect => d("Db", "connect", 1, Db, "db_connect"),
             Self::DbOpen => d("Db", "open", 2, Db, "db_open"),
@@ -2218,9 +2240,7 @@ impl StdlibKernel {
             Self::BorderWidthEach => d("Border", "widthEach", 1, Ui, "ui_border_width_each_"),
             Self::BorderShadow => d("Border", "shadow", 1, Ui, "ui_border_shadow_"),
             Self::BorderGlow => d("Border", "glow", 2, Ui, "ui_border_glow_"),
-            Self::BorderInnerShadow => {
-                d("Border", "innerShadow", 1, Ui, "ui_border_inner_shadow_")
-            }
+            Self::BorderInnerShadow => d("Border", "innerShadow", 1, Ui, "ui_border_inner_shadow_"),
             Self::FontSize => d("Font", "size", 1, Ui, "ui_font_size_"),
             Self::FontColor => d("Font", "color", 1, Ui, "ui_font_color_"),
             Self::FontFamily => d("Font", "family", 1, Ui, "ui_font_family_"),
@@ -2391,15 +2411,9 @@ impl StdlibKernel {
             Self::UiHtmlAttribute => d("Ui", "htmlAttribute", 2, Ui, "ui_html_attribute_"),
             Self::UiName => d("Ui", "name", 1, Ui, "ui_name_"),
             Self::UiStyle => d("Ui", "style", 2, Ui, "ui_style_"),
-            Self::UiTransitionRaw => {
-                d("Ui", "transitionRaw", 2, Ui, "ui_transition_raw_")
-            }
-            Self::UiGridTracksRaw => {
-                d("Ui", "gridTracksRaw", 2, Ui, "ui_grid_tracks_raw_")
-            }
-            Self::UiAnimateRaw => {
-                d("Ui", "animateRaw", 4, Ui, "ui_animate_raw_")
-            }
+            Self::UiTransitionRaw => d("Ui", "transitionRaw", 2, Ui, "ui_transition_raw_"),
+            Self::UiGridTracksRaw => d("Ui", "gridTracksRaw", 2, Ui, "ui_grid_tracks_raw_"),
+            Self::UiAnimateRaw => d("Ui", "animateRaw", 4, Ui, "ui_animate_raw_"),
             // Breakpoint
             Self::UiBreakpoint => d("Ui", "breakpoint", 3, Ui, "ui_breakpoint_"),
             Self::UiMediaQuery => d("Ui", "mediaQuery", 3, Ui, "ui_media_query_"),
@@ -2426,22 +2440,20 @@ impl StdlibKernel {
             Self::BackgroundActiveColor => {
                 d("Background", "activeColor", 1, Ui, "ui_bg_active_color_")
             }
-            Self::BackgroundDisabledColor => {
-                d("Background", "disabledColor", 1, Ui, "ui_bg_disabled_color_")
-            }
+            Self::BackgroundDisabledColor => d(
+                "Background",
+                "disabledColor",
+                1,
+                Ui,
+                "ui_bg_disabled_color_",
+            ),
             // Border namespace
             Self::BorderSolid => d("Border", "solid", 0, Ui, "ui_border_solid_"),
             Self::BorderDashed => d("Border", "dashed", 0, Ui, "ui_border_dashed_"),
             Self::BorderDotted => d("Border", "dotted", 0, Ui, "ui_border_dotted_"),
-            Self::BorderHoverColor => {
-                d("Border", "hoverColor", 1, Ui, "ui_border_hover_color_")
-            }
-            Self::BorderFocusColor => {
-                d("Border", "focusColor", 1, Ui, "ui_border_focus_color_")
-            }
-            Self::BorderActiveColor => {
-                d("Border", "activeColor", 1, Ui, "ui_border_active_color_")
-            }
+            Self::BorderHoverColor => d("Border", "hoverColor", 1, Ui, "ui_border_hover_color_"),
+            Self::BorderFocusColor => d("Border", "focusColor", 1, Ui, "ui_border_focus_color_"),
+            Self::BorderActiveColor => d("Border", "activeColor", 1, Ui, "ui_border_active_color_"),
             Self::BorderHoverWidth => d("Border", "hoverWidth", 1, Ui, "ui_border_hover_width_"),
             Self::BorderHoverRounded => {
                 d("Border", "hoverRounded", 1, Ui, "ui_border_hover_rounded_")
@@ -2479,13 +2491,23 @@ impl StdlibKernel {
             Self::CliProgram => d("Cli", "program", 1, KernelClass::Cli, "cli_program"),
             // Std.Auth / Sky.Auth (fail-closed: qual-registered only, no lower arm).
             Self::AuthHashPassword => d("Auth", "hashPassword", 1, Pure, "auth_hash_password"),
-            Self::AuthHashPasswordCost => {
-                d("Auth", "hashPasswordCost", 2, Pure, "auth_hash_password_cost")
+            Self::AuthHashPasswordCost => d(
+                "Auth",
+                "hashPasswordCost",
+                2,
+                Pure,
+                "auth_hash_password_cost",
+            ),
+            Self::AuthVerifyPassword => {
+                d("Auth", "verifyPassword", 2, Pure, "auth_verify_password")
             }
-            Self::AuthVerifyPassword => d("Auth", "verifyPassword", 2, Pure, "auth_verify_password"),
-            Self::AuthPasswordStrength => {
-                d("Auth", "passwordStrength", 1, Pure, "auth_password_strength")
-            }
+            Self::AuthPasswordStrength => d(
+                "Auth",
+                "passwordStrength",
+                1,
+                Pure,
+                "auth_password_strength",
+            ),
             Self::AuthSignToken => d("Auth", "signToken", 3, Pure, "auth_sign_token"),
             Self::AuthVerifyToken => d("Auth", "verifyToken", 2, Pure, "auth_verify_token"),
             Self::AuthRegister => d("Auth", "register", 3, Pure, "auth_register"),
@@ -2495,33 +2517,65 @@ impl StdlibKernel {
             Self::StreamStream => d("Stream", "stream", 2, Server, "server_stream_stream"),
             Self::StreamEmit => d("Stream", "emit", 2, Server, "server_stream_emit"),
             Self::StreamFinish => d("Stream", "finish", 1, Server, "server_stream_finish"),
-            Self::StreamWithContentType => {
-                d("Stream", "withContentType", 2, Server, "server_stream_with_content_type")
-            }
+            Self::StreamWithContentType => d(
+                "Stream",
+                "withContentType",
+                2,
+                Server,
+                "server_stream_with_content_type",
+            ),
             // Sky.Core.Http.Stream (fail-closed: qual-registered only, no lower arm).
             Self::HttpStreamOpen => d("HttpStream", "open", 1, Pure, "http_stream_open"),
-            Self::HttpStreamForEachChunk => {
-                d("HttpStream", "forEachChunk", 2, Pure, "http_stream_for_each_chunk")
-            }
+            Self::HttpStreamForEachChunk => d(
+                "HttpStream",
+                "forEachChunk",
+                2,
+                Pure,
+                "http_stream_for_each_chunk",
+            ),
             Self::HttpStreamClose => d("HttpStream", "close", 1, Pure, "http_stream_close"),
             Self::HttpStreamChunks => d("HttpStream", "chunks", 2, Pure, "sub_subscribe_stream"),
             // ── Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
             Self::WsDefaultCfg => d("Ws", "defaultCfg", 0, Server, "ws_server_default_cfg"),
-            Self::WsWithOnConnect => d("Ws", "withOnConnect", 2, Server, "ws_server_with_on_connect"),
-            Self::WsWithOnMessage => d("Ws", "withOnMessage", 2, Server, "ws_server_with_on_message"),
+            Self::WsWithOnConnect => d(
+                "Ws",
+                "withOnConnect",
+                2,
+                Server,
+                "ws_server_with_on_connect",
+            ),
+            Self::WsWithOnMessage => d(
+                "Ws",
+                "withOnMessage",
+                2,
+                Server,
+                "ws_server_with_on_message",
+            ),
             Self::WsWithOnClose => d("Ws", "withOnClose", 2, Server, "ws_server_with_on_close"),
             Self::WsWithOnError => d("Ws", "withOnError", 2, Server, "ws_server_with_on_error"),
-            Self::WsWithMaxMessageBytes => {
-                d("Ws", "withMaxMessageBytes", 2, Server, "ws_server_with_max_message_bytes")
-            }
-            Self::WsWithOriginPatterns => {
-                d("Ws", "withOriginPatterns", 2, Server, "ws_server_with_origin_patterns")
-            }
+            Self::WsWithMaxMessageBytes => d(
+                "Ws",
+                "withMaxMessageBytes",
+                2,
+                Server,
+                "ws_server_with_max_message_bytes",
+            ),
+            Self::WsWithOriginPatterns => d(
+                "Ws",
+                "withOriginPatterns",
+                2,
+                Server,
+                "ws_server_with_origin_patterns",
+            ),
             Self::WsUpgrade => d("Ws", "upgrade", 2, Server, "server_web_socket_upgrade"),
             Self::WsSendToClient => d("Ws", "sendToClient", 2, Server, "ws_server_send_to_client"),
-            Self::WsSendBinaryToClient => {
-                d("Ws", "sendBinaryToClient", 2, Server, "ws_server_send_binary_to_client")
-            }
+            Self::WsSendBinaryToClient => d(
+                "Ws",
+                "sendBinaryToClient",
+                2,
+                Server,
+                "ws_server_send_binary_to_client",
+            ),
             Self::WsBroadcast => d("Ws", "broadcast", 2, Server, "ws_server_broadcast"),
             Self::WsCloseClient => d("Ws", "closeClient", 1, Server, "ws_server_close_client"),
             // ── Sky.Core.WebSocket — outbound WebSocket client (7 kernels) ──
@@ -2557,9 +2611,13 @@ impl StdlibKernel {
             Self::RegionHeading => d("Region", "heading", 1, Ui, "ui_region_heading_"),
             Self::RegionLabel => d("Region", "label", 1, Ui, "ui_region_label_"),
             Self::RegionAnnounce => d("Region", "announce", 0, Ui, "ui_region_announce_"),
-            Self::RegionAnnounceUrgently => {
-                d("Region", "announceUrgently", 0, Ui, "ui_region_announce_urgently_")
-            }
+            Self::RegionAnnounceUrgently => d(
+                "Region",
+                "announceUrgently",
+                0,
+                Ui,
+                "ui_region_announce_urgently_",
+            ),
             // ── Ui.input + Ui.describe + desc* constructors ───────────────
             Self::UiInput => d("Ui", "input", 1, Ui, "ui_input_"),
             Self::UiDescribe => d("Ui", "describe", 1, Ui, "ui_describe_"),
@@ -2588,7 +2646,9 @@ impl StdlibKernel {
             Self::InputEmail => d("Input", "email", 2, Ui, "input_email_"),
             Self::InputUsername => d("Input", "username", 2, Ui, "input_username_"),
             Self::InputSearch => d("Input", "search", 2, Ui, "input_search_"),
-            Self::InputCurrentPassword => d("Input", "currentPassword", 2, Ui, "input_current_password_"),
+            Self::InputCurrentPassword => {
+                d("Input", "currentPassword", 2, Ui, "input_current_password_")
+            }
             Self::InputNewPassword => d("Input", "newPassword", 2, Ui, "input_new_password_"),
             Self::InputCheckbox => d("Input", "checkbox", 2, Ui, "input_checkbox_"),
             Self::InputSlider => d("Input", "slider", 2, Ui, "input_slider_"),
@@ -2596,55 +2656,61 @@ impl StdlibKernel {
             Self::InputRadio => d("Input", "radio", 2, Ui, "input_radio_"),
             Self::InputRadioRow => d("Input", "radioRow", 2, Ui, "input_radio_row_"),
             // ── Std.Ui.Lazy ─────────────────────────────────────��──────
-            Self::LazyLazy  => d("Lazy", "lazy",  2, Ui, "lazy_lazy_"),
+            Self::LazyLazy => d("Lazy", "lazy", 2, Ui, "lazy_lazy_"),
             Self::LazyLazy2 => d("Lazy", "lazy2", 3, Ui, "lazy_lazy2_"),
             Self::LazyLazy3 => d("Lazy", "lazy3", 4, Ui, "lazy_lazy3_"),
             Self::LazyLazy4 => d("Lazy", "lazy4", 5, Ui, "lazy_lazy4_"),
             Self::LazyLazy5 => d("Lazy", "lazy5", 6, Ui, "lazy_lazy5_"),
             // ── Std.Ui.Keyed ────────────────────────────────────────────────
             Self::KeyedColumn => d("Keyed", "column", 2, Ui, "keyed_column_"),
-            Self::KeyedRow    => d("Keyed", "row",    2, Ui, "keyed_row_"),
+            Self::KeyedRow => d("Keyed", "row", 2, Ui, "keyed_row_"),
             // ── Std.Decimal — arbitrary-precision decimal arithmetic ──────────
-            Self::DecZero        => d("Decimal", "zero",        0, Pure, "decimal_zero"),
-            Self::DecOne         => d("Decimal", "one",         0, Pure, "decimal_one"),
-            Self::DecOneHundred  => d("Decimal", "oneHundred",  0, Pure, "decimal_one_hundred"),
-            Self::DecFromString  => d("Decimal", "fromString",  1, Pure, "decimal_from_string"),
-            Self::DecFromInt     => d("Decimal", "fromInt",     1, Pure, "decimal_from_int"),
-            Self::DecFromFloat   => d("Decimal", "fromFloat",   1, Pure, "decimal_from_float"),
-            Self::DecFromMinor   => d("Decimal", "fromMinor",   2, Pure, "decimal_from_minor"),
-            Self::DecToString    => d("Decimal", "toString",    1, Pure, "decimal_to_string"),
-            Self::DecToStringFixed => d("Decimal", "toStringFixed", 2, Pure, "decimal_to_string_fixed"),
-            Self::DecToFloat     => d("Decimal", "toFloat",     1, Pure, "decimal_to_float"),
-            Self::DecToInt       => d("Decimal", "toInt",       1, Pure, "decimal_to_int"),
-            Self::DecToMinor     => d("Decimal", "toMinor",     2, Pure, "decimal_to_minor"),
-            Self::DecAdd         => d("Decimal", "add",         2, Pure, "decimal_add"),
-            Self::DecSub         => d("Decimal", "sub",         2, Pure, "decimal_sub"),
-            Self::DecMul         => d("Decimal", "mul",         2, Pure, "decimal_mul"),
-            Self::DecDiv         => d("Decimal", "div",         2, Pure, "decimal_div"),
-            Self::DecMod         => d("Decimal", "mod",         2, Pure, "decimal_mod"),
-            Self::DecNeg         => d("Decimal", "neg",         1, Pure, "decimal_neg"),
-            Self::DecAbs         => d("Decimal", "abs",         1, Pure, "decimal_abs"),
-            Self::DecFloor       => d("Decimal", "floor",       1, Pure, "decimal_floor"),
-            Self::DecCeil        => d("Decimal", "ceil",        1, Pure, "decimal_ceil"),
-            Self::DecRound       => d("Decimal", "round",       2, Pure, "decimal_round"),
+            Self::DecZero => d("Decimal", "zero", 0, Pure, "decimal_zero"),
+            Self::DecOne => d("Decimal", "one", 0, Pure, "decimal_one"),
+            Self::DecOneHundred => d("Decimal", "oneHundred", 0, Pure, "decimal_one_hundred"),
+            Self::DecFromString => d("Decimal", "fromString", 1, Pure, "decimal_from_string"),
+            Self::DecFromInt => d("Decimal", "fromInt", 1, Pure, "decimal_from_int"),
+            Self::DecFromFloat => d("Decimal", "fromFloat", 1, Pure, "decimal_from_float"),
+            Self::DecFromMinor => d("Decimal", "fromMinor", 2, Pure, "decimal_from_minor"),
+            Self::DecToString => d("Decimal", "toString", 1, Pure, "decimal_to_string"),
+            Self::DecToStringFixed => d(
+                "Decimal",
+                "toStringFixed",
+                2,
+                Pure,
+                "decimal_to_string_fixed",
+            ),
+            Self::DecToFloat => d("Decimal", "toFloat", 1, Pure, "decimal_to_float"),
+            Self::DecToInt => d("Decimal", "toInt", 1, Pure, "decimal_to_int"),
+            Self::DecToMinor => d("Decimal", "toMinor", 2, Pure, "decimal_to_minor"),
+            Self::DecAdd => d("Decimal", "add", 2, Pure, "decimal_add"),
+            Self::DecSub => d("Decimal", "sub", 2, Pure, "decimal_sub"),
+            Self::DecMul => d("Decimal", "mul", 2, Pure, "decimal_mul"),
+            Self::DecDiv => d("Decimal", "div", 2, Pure, "decimal_div"),
+            Self::DecMod => d("Decimal", "mod", 2, Pure, "decimal_mod"),
+            Self::DecNeg => d("Decimal", "neg", 1, Pure, "decimal_neg"),
+            Self::DecAbs => d("Decimal", "abs", 1, Pure, "decimal_abs"),
+            Self::DecFloor => d("Decimal", "floor", 1, Pure, "decimal_floor"),
+            Self::DecCeil => d("Decimal", "ceil", 1, Pure, "decimal_ceil"),
+            Self::DecRound => d("Decimal", "round", 2, Pure, "decimal_round"),
             Self::DecRoundHalfUp => d("Decimal", "roundHalfUp", 2, Pure, "decimal_round_half_up"),
-            Self::DecTruncate    => d("Decimal", "truncate",    2, Pure, "decimal_truncate"),
-            Self::DecCompare     => d("Decimal", "compare",     2, Pure, "decimal_compare"),
-            Self::DecEq          => d("Decimal", "eq",          2, Pure, "decimal_eq"),
-            Self::DecNeq         => d("Decimal", "neq",         2, Pure, "decimal_neq"),
-            Self::DecLt          => d("Decimal", "lt",          2, Pure, "decimal_lt"),
-            Self::DecLte         => d("Decimal", "lte",         2, Pure, "decimal_lte"),
-            Self::DecGt          => d("Decimal", "gt",          2, Pure, "decimal_gt"),
-            Self::DecGte         => d("Decimal", "gte",         2, Pure, "decimal_gte"),
-            Self::DecMin         => d("Decimal", "min",         2, Pure, "decimal_min"),
-            Self::DecMax         => d("Decimal", "max",         2, Pure, "decimal_max"),
-            Self::DecIsZero      => d("Decimal", "isZero",      1, Pure, "decimal_is_zero"),
-            Self::DecIsPositive  => d("Decimal", "isPositive",  1, Pure, "decimal_is_positive"),
-            Self::DecIsNegative  => d("Decimal", "isNegative",  1, Pure, "decimal_is_negative"),
-            Self::DecPercentOf   => d("Decimal", "percentOf",   2, Pure, "decimal_percent_of"),
-            Self::DecAddPercent  => d("Decimal", "addPercent",  2, Pure, "decimal_add_percent"),
-            Self::DecSubPercent  => d("Decimal", "subPercent",  2, Pure, "decimal_sub_percent"),
-            Self::DecFormatWith  => d("Decimal", "formatWith",  4, Pure, "decimal_format_with"),
+            Self::DecTruncate => d("Decimal", "truncate", 2, Pure, "decimal_truncate"),
+            Self::DecCompare => d("Decimal", "compare", 2, Pure, "decimal_compare"),
+            Self::DecEq => d("Decimal", "eq", 2, Pure, "decimal_eq"),
+            Self::DecNeq => d("Decimal", "neq", 2, Pure, "decimal_neq"),
+            Self::DecLt => d("Decimal", "lt", 2, Pure, "decimal_lt"),
+            Self::DecLte => d("Decimal", "lte", 2, Pure, "decimal_lte"),
+            Self::DecGt => d("Decimal", "gt", 2, Pure, "decimal_gt"),
+            Self::DecGte => d("Decimal", "gte", 2, Pure, "decimal_gte"),
+            Self::DecMin => d("Decimal", "min", 2, Pure, "decimal_min"),
+            Self::DecMax => d("Decimal", "max", 2, Pure, "decimal_max"),
+            Self::DecIsZero => d("Decimal", "isZero", 1, Pure, "decimal_is_zero"),
+            Self::DecIsPositive => d("Decimal", "isPositive", 1, Pure, "decimal_is_positive"),
+            Self::DecIsNegative => d("Decimal", "isNegative", 1, Pure, "decimal_is_negative"),
+            Self::DecPercentOf => d("Decimal", "percentOf", 2, Pure, "decimal_percent_of"),
+            Self::DecAddPercent => d("Decimal", "addPercent", 2, Pure, "decimal_add_percent"),
+            Self::DecSubPercent => d("Decimal", "subPercent", 2, Pure, "decimal_sub_percent"),
+            Self::DecFormatWith => d("Decimal", "formatWith", 4, Pure, "decimal_format_with"),
             // ── Std.Db.Sql — SqlFragment builder ───────────────
             Self::SqlColumn => d("Sql", "column", 1, Db, "sql_column"),
             // `int` / `string` / `float` / `bool` are Sky-level type
@@ -2699,24 +2765,44 @@ impl StdlibKernel {
             // Runtime names MUST match `sky_runtime::compression::*` exactly.
             Self::CompressionGzip => d("Compression", "gzip", 1, Pure, "compression_gzip"),
             Self::CompressionGunzip => d("Compression", "gunzip", 1, Pure, "compression_gunzip"),
-            Self::CompressionZstdCompress => {
-                d("Compression", "zstdCompress", 1, Pure, "compression_zstd_compress")
-            }
-            Self::CompressionZstdDecompress => {
-                d("Compression", "zstdDecompress", 1, Pure, "compression_zstd_decompress")
-            }
+            Self::CompressionZstdCompress => d(
+                "Compression",
+                "zstdCompress",
+                1,
+                Pure,
+                "compression_zstd_compress",
+            ),
+            Self::CompressionZstdDecompress => d(
+                "Compression",
+                "zstdDecompress",
+                1,
+                Pure,
+                "compression_zstd_decompress",
+            ),
             // ── Std.Csv ───────────────────────────────────────────────
             Self::CsvParse => d("Csv", "parse", 1, Pure, "csv_parse"),
-            Self::CsvParseWithDelimiter => {
-                d("Csv", "parseWithDelimiter", 2, Pure, "csv_parse_with_delimiter")
-            }
+            Self::CsvParseWithDelimiter => d(
+                "Csv",
+                "parseWithDelimiter",
+                2,
+                Pure,
+                "csv_parse_with_delimiter",
+            ),
             Self::CsvEncode => d("Csv", "encode", 1, Pure, "csv_encode"),
-            Self::CsvEncodeWithDelimiter => {
-                d("Csv", "encodeWithDelimiter", 2, Pure, "csv_encode_with_delimiter")
-            }
-            Self::CsvParseStreamFromFile => {
-                d("Csv", "parseStreamFromFile", 1, Pure, "csv_parse_stream_from_file")
-            }
+            Self::CsvEncodeWithDelimiter => d(
+                "Csv",
+                "encodeWithDelimiter",
+                2,
+                Pure,
+                "csv_encode_with_delimiter",
+            ),
+            Self::CsvParseStreamFromFile => d(
+                "Csv",
+                "parseStreamFromFile",
+                1,
+                Pure,
+                "csv_parse_stream_from_file",
+            ),
             // ── Std.Cache ─────────────────────────────────────────────
             // Runtime names MUST match `sky_runtime::cache::*` exactly. Alias
             // strings `Cache_newRaw`/`Cache_get`/… split to qualifier `Cache` +
@@ -2752,6 +2838,10 @@ impl StdlibKernel {
             Self::ConfigLoadFromFile => {
                 d("Config", "loadFromFile", 2, Pure, "config_load_from_file")
             }
+            // ── Std.Email ─────────────────────────────────────────────
+            // Alias `Email_send` splits to qualifier `Email` + name `send`; the
+            // emit column is the runtime fn `sky_runtime::email::email_send`.
+            Self::EmailSend => d("Email", "send", 2, Pure, "email_send"),
         }
     }
 
@@ -3739,6 +3829,8 @@ impl StdlibKernel {
         Self::ConfigDecodeYaml,
         Self::ConfigDecodeJson,
         Self::ConfigLoadFromFile,
+        // ── Std.Email ─────────────────────────────────────────────────
+        Self::EmailSend,
     ];
 
     // ── Classification predicates (moved from sky_ir::KernelFn) ─────────────
@@ -4462,7 +4554,7 @@ impl StdlibKernel {
     pub const fn is_html_container(self) -> bool {
         matches!(
             self,
-                Self::HtmlH1
+            Self::HtmlH1
                 | Self::HtmlH2
                 | Self::HtmlH3
                 | Self::HtmlH4
@@ -4530,7 +4622,7 @@ impl StdlibKernel {
     pub const fn is_html_void(self) -> bool {
         matches!(
             self,
-                Self::HtmlBr
+            Self::HtmlBr
                 | Self::HtmlHr
                 | Self::HtmlMeta
                 | Self::HtmlLink
