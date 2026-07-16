@@ -155,6 +155,100 @@ pub fn production_from_env() -> bool {
     !matches!(e.as_str(), "dev" | "development" | "local")
 }
 
+/// Floating "🔍 Console" link injected into every dev-mode `text/html` response
+/// — both the Sky.Live page path and every buffered Sky.Http.Server response
+/// (Go parity: `devBannerHTML`, `dev_banner.go`). Lives here (the always-compiled
+/// telemetry module) rather than under `live` so the server path (`server.rs`,
+/// where the `live` module is DCE'd out of server-only builds) can reach it too.
+///
+/// Suppressed for a sub-app (`base` non-empty — e.g. the bundled console child
+/// itself; a console link inside the console is recursive), in production
+/// (`ENV`/`SKY_ENV` non-dev), when the banner is turned off (`SKY_DEV_BANNER=off|0`,
+/// Go parity), and when the console surface is disabled (`SKY_CONSOLE_EMBED=off`
+/// / `SKY_CONSOLE_AUTH=off`). The union of Go's and the live path's gates —
+/// suppression only ever makes bodies match MORE often across odd configs, and
+/// the sweep's env (nothing set) hits the injecting path either way.
+///
+/// Rendered as a sibling of `#sky-root` on the Live path (so a body patch never
+/// blows it away); `position:fixed` pins it bottom-right and `pointer-events`
+/// stays default so the link is clickable.
+pub fn dev_console_banner(base: &str) -> String {
+    if !base.is_empty() || production_from_env() {
+        return String::new();
+    }
+    if matches!(
+        crate::sky_runtime::system::read_env_var("SKY_DEV_BANNER").as_deref(),
+        Ok("off") | Ok("0")
+    ) {
+        return String::new();
+    }
+    if matches!(
+        crate::sky_runtime::system::read_env_var("SKY_CONSOLE_EMBED").as_deref(),
+        Ok("off") | Ok("0") | Ok("false")
+    ) || crate::sky_runtime::system::read_env_var("SKY_CONSOLE_AUTH")
+        .map(|v| v == "off")
+        .unwrap_or(false)
+    {
+        return String::new();
+    }
+    // Byte-match Go's `devBannerHTML` (`dev_banner.go`): same id, target/rel/title,
+    // monospace blue styling, and the `&#128269;` entity (NOT a literal emoji) so
+    // both backends emit identical bytes. href honours `SKY_CONSOLE_URL` (default
+    // `/_sky/console`), attribute-escaped against a hostile env value.
+    let url = crate::sky_runtime::system::read_env_var("SKY_CONSOLE_URL")
+        .map(|v| v.trim().to_string())
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "/_sky/console".to_string());
+    let esc = url
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&#34;")
+        .replace('\'', "&#39;");
+    format!(
+        "<a id=\"__sky-dev-console\" href=\"{esc}\" target=\"_blank\" rel=\"noopener\" \
+         title=\"Sky Console (dev only)\" \
+         style=\"position:fixed;right:12px;bottom:12px;z-index:2147483646;\
+         font:12px/1.4 ui-monospace,Menlo,monospace;\
+         background:#1c2027;color:#7eb6ff;\
+         border:1px solid #353b46;border-radius:6px;\
+         padding:6px 10px;text-decoration:none;\
+         box-shadow:0 2px 8px rgba(0,0,0,0.4);\">\
+         &#128269; Console</a>"
+    )
+}
+
+/// Insert `banner` just before the LAST case-insensitive `</body>` tag (Go
+/// parity: `injectDevBanner`, `dev_banner.go`). Falls back to appending when no
+/// `</body>` is present (body-only fragments). An empty banner is a no-op.
+pub fn inject_dev_banner(body: &str, banner: &str) -> String {
+    if banner.is_empty() {
+        return body.to_string();
+    }
+    let low = body.to_ascii_lowercase();
+    match low.rfind("</body>") {
+        // `idx` is the byte offset of the ASCII "</body>" in the lowercased copy;
+        // `to_ascii_lowercase` is byte-length-preserving on ASCII and never
+        // touches multi-byte UTF-8 lead/continuation bytes, so `idx` is a valid
+        // char boundary in `body` too — the `body[..idx]` / `body[idx..]` slices
+        // cannot split a codepoint (no panic).
+        Some(idx) => {
+            let mut out = String::with_capacity(body.len() + banner.len());
+            out.push_str(&body[..idx]);
+            out.push_str(banner);
+            out.push_str(&body[idx..]);
+            out
+        }
+        None => {
+            let mut out = String::with_capacity(body.len() + banner.len());
+            out.push_str(body);
+            out.push_str(banner);
+            out
+        }
+    }
+}
+
 /// `Some(value)` when responses run in cross-origin-iframe mode
 /// (`SKY_LIVE_FRAME_ANCESTORS` set — the SkyDeploy control-plane embeds the
 /// console). Snapshotted once into a `OnceLock` so env is read only once
@@ -705,5 +799,79 @@ mod tests {
         assert!(j.contains(r#""name":"db.query""#), "{j}");
         assert!(j.contains(r#""durUs":1234"#), "{j}");
         assert!(j.contains(r#""ok":false"#), "{j}");
+    }
+
+    #[test]
+    fn dev_banner_byte_matches_go_dev_banner_markup() {
+        // Go parity (dev_banner.go devBannerHTML): same id, target/rel/title,
+        // monospace blue style, `&#128269;` ENTITY (not a literal emoji). Default
+        // test env is dev (ENV/SKY_ENV unset) → non-empty banner.
+        let b = dev_console_banner("");
+        let expected = "<a id=\"__sky-dev-console\" href=\"/_sky/console\" target=\"_blank\" \
+            rel=\"noopener\" title=\"Sky Console (dev only)\" \
+            style=\"position:fixed;right:12px;bottom:12px;z-index:2147483646;\
+            font:12px/1.4 ui-monospace,Menlo,monospace;\
+            background:#1c2027;color:#7eb6ff;\
+            border:1px solid #353b46;border-radius:6px;\
+            padding:6px 10px;text-decoration:none;\
+            box-shadow:0 2px 8px rgba(0,0,0,0.4);\">\
+            &#128269; Console</a>";
+        assert_eq!(b, expected, "dev console banner must byte-match Go");
+        assert!(
+            !b.contains('🔍'),
+            "must use the &#128269; entity, not a literal emoji"
+        );
+    }
+
+    #[test]
+    fn dev_banner_suppressed_for_subapp() {
+        // A non-empty base = sub-app (e.g. the console child) → no recursive link.
+        // Base-gate needs no env mutation, so this stays race-free.
+        assert_eq!(dev_console_banner("/_sky/console"), "");
+    }
+
+    #[test]
+    fn inject_dev_banner_before_last_body_close() {
+        let body = "<html><body><p>hi</p></body></html>";
+        let out = inject_dev_banner(body, "<BANNER>");
+        assert_eq!(out, "<html><body><p>hi</p><BANNER></body></html>");
+    }
+
+    #[test]
+    fn inject_dev_banner_case_insensitive_body_tag() {
+        // Go lower-cases the body before LastIndex("</body>").
+        let body = "<HTML><BODY>x</BODY></HTML>";
+        let out = inject_dev_banner(body, "<B>");
+        assert_eq!(out, "<HTML><BODY>x<B></BODY></HTML>");
+    }
+
+    #[test]
+    fn inject_dev_banner_uses_last_body_close() {
+        let body = "</body>first</body>";
+        let out = inject_dev_banner(body, "<B>");
+        assert_eq!(out, "</body>first<B></body>");
+    }
+
+    #[test]
+    fn inject_dev_banner_appends_when_no_body_tag() {
+        let body = "<p>fragment only</p>";
+        let out = inject_dev_banner(body, "<B>");
+        assert_eq!(out, "<p>fragment only</p><B>");
+    }
+
+    #[test]
+    fn inject_dev_banner_empty_is_noop() {
+        // Empty banner is the observable effect of the production-suppressed path:
+        // dev_console_banner returns "" in production, so injection must no-op.
+        let body = "<html><body>x</body></html>";
+        assert_eq!(inject_dev_banner(body, ""), body);
+    }
+
+    #[test]
+    fn inject_dev_banner_utf8_body_char_boundary_safe() {
+        // Multi-byte UTF-8 before the </body> must not panic on the slice.
+        let body = "<body>café — 日本語</body>";
+        let out = inject_dev_banner(body, "<B>");
+        assert_eq!(out, "<body>café — 日本語<B></body>");
     }
 }
