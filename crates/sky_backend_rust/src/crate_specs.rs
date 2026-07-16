@@ -22,6 +22,10 @@ pub const SQLX: CrateSpec = CrateSpec {
     name: "sqlx",
     version: "0.8",
 };
+pub const BINCODE: CrateSpec = CrateSpec {
+    name: "bincode",
+    version: "1",
+};
 pub const AXUM: CrateSpec = CrateSpec {
     name: "axum",
     version: "0.7",
@@ -67,6 +71,7 @@ pub const TAO: CrateSpec = CrateSpec {
 pub const ALL: &[CrateSpec] = &[
     TOKIO,
     SQLX,
+    BINCODE,
     AXUM,
     TOWER_HTTP,
     ASYNC_TRAIT,
@@ -92,7 +97,7 @@ mod tests {
             assert!(!spec.name.is_empty(), "empty crate name in ALL");
             assert!(!spec.version.is_empty(), "empty version for {}", spec.name);
         }
-        assert_eq!(ALL.len(), 11, "expected 11 surgery-emitted crate specs");
+        assert_eq!(ALL.len(), 12, "expected 12 surgery-emitted crate specs");
     }
 
     /// Extract the version from a Cargo dependency value: `"0.4"` or
