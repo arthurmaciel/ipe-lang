@@ -1743,7 +1743,7 @@ fn write_match(out: &mut String, m: &Match, interner: &Interner, level: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{CallPin, FuncId};
+    use crate::ir::{CallPin, FuncId, OnFormKind};
     use sky_diagnostics::DResult;
 
     /// Build the canonical M0 program: a `Main` module with a `Msg` enum and a
@@ -1773,8 +1773,10 @@ mod tests {
                     callee: Callee::Kernel(KernelFn::StringFromInt),
                     args: vec![Expr::Int(1)],
                     pin: CallPin::None,
+                    on_form: OnFormKind::NotForm,
                 }],
                 pin: CallPin::None,
+                on_form: OnFormKind::NotForm,
             },
         };
 

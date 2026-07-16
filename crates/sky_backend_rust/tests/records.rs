@@ -36,7 +36,7 @@ use sky_backend::Backend;
 use sky_backend_rust::RustBackend;
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::{Interner, Symbol};
-use sky_ir::{CallPin, Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Program};
+use sky_ir::{OnFormKind, CallPin, Callee, Expr, Func, FuncId, IrType, KernelFn, ModPath, Module, Program};
 
 /// A single-module program with the given funcs and optional entry.
 fn program(name: Symbol, funcs: Vec<Func>, entry: Option<FuncId>) -> Program {
@@ -151,15 +151,15 @@ fn record_trio(interner: &mut Interner) -> DResult<Program> {
                             callee: Callee::Func(FuncId::from_raw(0)),
                             args: vec![Expr::Int(1)],
                             pin: CallPin::None,
-                        }],
+                            on_form: OnFormKind::NotForm,                        }],
                         pin: CallPin::None,
-                    }],
+                        on_form: OnFormKind::NotForm,                    }],
                     pin: CallPin::None,
-                }],
+                    on_form: OnFormKind::NotForm,                }],
                 pin: CallPin::None,
-            }],
+                on_form: OnFormKind::NotForm,            }],
             pin: CallPin::None,
-        },
+            on_form: OnFormKind::NotForm,        },
     };
 
     Ok(program(

@@ -1634,6 +1634,203 @@ fn live_onsubmit_list_literal_build_only() -> Result<(), BoxError> {
     Ok(())
 }
 
+// ── #228 — onSubmit VAR-bound bare-Msg payload (the last syntactic gap) ────────
+//
+// #167/#170 closed the bare-`Ctor` / record / tuple / list LITERAL onSubmit
+// payloads by extending the emit-site `is_definitely_not_callable` classifier
+// to those Expr shapes. That classifier was SYNTACTIC — it inspected the
+// payload `Expr` variant. A `let`-bound bare `Msg` VALUE dispatched by
+// `onSubmit` (`let m = DoSignUp in onSubmit m`) lowers the payload to a plain
+// `Expr::Var`, which is NOT in the classifier's fixed set, so the emit site
+// wrapped it as a decoder: `html_on_raw_("submit", move |_x| (m)(_x))`.
+// `m` is `MainMsg::DoSignUp`, a non-callable enum value → `(m)(_x)` is cargo
+// `E0618` ("expected function") AFTER `skyc` exit 0 — a SEAL violation.
+//
+// The fix makes classification TYPE-DIRECTED (mirroring `../sky`'s
+// `formTargetRustType`): the lowerer reads the handler's SOLVED type and
+// records `OnFormKind::{Decoder,FixedValue}` on the `Call`. A non-arrow value
+// (this shape) routes to `html_on_raw_fixed_` regardless of its syntax; an
+// arrow handler keeps the decode path. Acceptance no longer depends on the
+// payload's `Expr` shape, so a `Var`/`Apply`/`Access`-bound bare `Msg` seals
+// identically to a bare-`Ctor` one. A successful `skyc` + `cargo build` IS the
+// assertion; the E2E companion proves the fixed value is actually dispatched.
+
+/// #228 — `onSubmit m` where `m : Msg` is a `let`-bound bare (non-function)
+/// value. The payload lowers to `Expr::Var`, the shape the pre-fix syntactic
+/// classifier misrouted to the decoder path.
+const SKY_ONSUBMIT_VAR_BOUND_MSG: &str = r#"module Main exposing (main)
+
+import Std.Live as Live
+import Std.Html exposing (..)
+import Std.Html.Attributes exposing (..)
+import Std.Html.Events exposing (onSubmit, onInput)
+
+type Msg
+    = UpdateName String
+    | DoSignUp
+
+type alias Model =
+    { name : String
+    , confirmed : Bool
+    }
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { name = "", confirmed = False }, Cmd.none )
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        UpdateName n ->
+            ( { model | name = n }, Cmd.none )
+
+        DoSignUp ->
+            ( { model | confirmed = True }, Cmd.none )
+
+view : Model -> Html Msg
+view model =
+    let
+        m =
+            DoSignUp
+    in
+    div []
+        [ form
+            [ onSubmit m ]
+            [ input [ type_ "text", name "name", value model.name, onInput UpdateName ]
+            , button [ type_ "submit" ] [ text "Go" ]
+            ]
+        , text
+            (if model.confirmed then
+                "confirmed:" ++ model.name
+
+             else
+                "not-confirmed"
+            )
+        ]
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+main =
+    Live.app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = DoSignUp
+        }
+"#;
+
+/// #228 seal — BUILD-ONLY: the `Var`-bound bare-Msg `onSubmit` form must
+/// compile end-to-end. Before the fix this was `skyc` exit 0 then `cargo
+/// build` E0618 (`(m)(_x)` on a non-callable value). A successful `skyc` +
+/// `cargo build` IS the assertion.
+///
+/// # Errors
+///
+/// Propagates any pipeline or Cargo build failure as a test error.
+#[test]
+fn live_onsubmit_var_bound_msg_build_only() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+
+    let _exe = compile_and_build(
+        "live_onsubmit_var_bound_msg_build_only",
+        SKY_ONSUBMIT_VAR_BOUND_MSG,
+    )?;
+    Ok(())
+}
+
+/// #228 seal — FULL E2E: submitting the `Var`-bound bare-Msg form over the
+/// wire must dispatch `DoSignUp` regardless of the posted `FormData`, proving
+/// the type-directed fix routes to the fixed-dispatch runtime helper (fires
+/// unconditionally) rather than a decoder that could silently swallow the
+/// submit. The posted args carry a real field (`name=alice`) the fixed path
+/// ignores. Structurally mirrors [`live_onsubmit_bare_msg_dispatches_fixed_msg`].
+///
+/// # Errors
+///
+/// Propagates any pipeline, Cargo build, server-spawn, or HTTP error.
+#[test]
+fn live_onsubmit_var_bound_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
+    if std::env::var("SKY_E2E").is_err() {
+        return Ok(());
+    }
+
+    let test_name = "live_onsubmit_var_bound_msg";
+    let exe = compile_and_build(test_name, SKY_ONSUBMIT_VAR_BOUND_MSG)?;
+    let port = pick_ephemeral_port()?;
+    let _guard = spawn_and_wait_ready(test_name, &exe, port)?;
+    let addr = format!("127.0.0.1:{port}");
+
+    // ── Step 1: GET / — initial page, extract session cookie + form hid ─────
+    let (raw_headers, body) = http_send(test_name, &addr, "GET", "/", &[], None)?;
+
+    let sid = extract_cookie(&raw_headers, "sky_sid").ok_or_else(|| -> BoxError {
+        format!(
+            "{test_name}: no sky_sid cookie in GET / response\n\
+             --- raw headers ---\n{raw_headers}"
+        )
+        .into()
+    })?;
+
+    let hid = extract_hid_for_open_tag(&body, "form").ok_or_else(|| -> BoxError {
+        format!(
+            "{test_name}: could not find data-sky-hid on <form> in GET / body\n\
+             --- first 2000 bytes ---\n{}",
+            &body[..body.len().min(2000)]
+        )
+        .into()
+    })?;
+
+    // ── Step 2: POST /_sky/event — submit with REAL (but ignored) form data ─
+    let event_body =
+        format!(r#"{{"id":"{hid}","event":"submit","args":[{{"name":"alice"}}],"sessionId":""}}"#);
+    let cookie_header = format!("sky_sid={sid}");
+    let (_, post_body) = http_send(
+        test_name,
+        &addr,
+        "POST",
+        "/_sky/event",
+        &[
+            ("Content-Type", "application/json"),
+            ("Cookie", &cookie_header),
+        ],
+        Some(event_body.as_bytes()),
+    )?;
+
+    assert!(
+        post_body.contains("patches"),
+        "{test_name}: POST /_sky/event (submit) did not return a patches ACK\nbody: {post_body}"
+    );
+
+    // ── Step 3: wait for async model update ─────────────────────────────────
+    std::thread::sleep(Duration::from_millis(200));
+
+    // ── Step 4: GET / with session cookie — should show the fixed dispatch ──
+    let (_, body2) = http_send(
+        test_name,
+        &addr,
+        "GET",
+        "/",
+        &[("Cookie", &cookie_header)],
+        None,
+    )?;
+
+    assert!(
+        body2.contains("confirmed:"),
+        "{test_name}: DoSignUp was not dispatched on Var-bound bare-Msg \
+         onSubmit (expected the re-rendered page to contain \"confirmed:\")\n\
+         --- first 2000 bytes of second GET / ---\n{}",
+        &body2[..body2.len().min(2000)]
+    );
+
+    Ok(())
+}
+
 /// #168 fixture — a `let`-bound LOCAL closure dispatched via `Ui.onSubmit`.
 ///
 /// `let handler = \c -> DoSignIn c in ... Ui.onSubmit handler ...`. Before the

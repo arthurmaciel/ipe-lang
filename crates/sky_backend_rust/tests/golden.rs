@@ -9,7 +9,7 @@ use sky_backend::Backend;
 use sky_backend_rust::RustBackend;
 use sky_diagnostics::{DResult, Diagnostic};
 use sky_intern::Interner;
-use sky_ir::{
+use sky_ir::{OnFormKind, 
     Arm, BinOp, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath,
     Module, Pat, Program, TypeDef, Variant,
 };
@@ -115,11 +115,11 @@ fn build_m0(interner: &mut Interner) -> DResult<Program> {
                         Expr::Int(0),
                     ],
                     pin: CallPin::None,
-                }],
+                    on_form: OnFormKind::NotForm,                }],
                 pin: CallPin::None,
-            }],
+                on_form: OnFormKind::NotForm,            }],
             pin: CallPin::None,
-        },
+            on_form: OnFormKind::NotForm,        },
     };
 
     Ok(Program {
