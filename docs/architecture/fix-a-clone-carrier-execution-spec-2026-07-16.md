@@ -512,3 +512,298 @@ Residuals (honest):
    golden churn purely mechanical; both are follow-ups.
 4. Any `36` residual on a Task/Decoder carrier (§7) is out of scope for #221
    and filed separately, per the no-symptom-patch rule.
+
+---
+
+## Adversarial review amendments
+
+This section supersedes the body above wherever they conflict. Each item is an
+in-tree verification of a spec claim, or a correction where the tree differs
+from what the spec assumed. Dated design context is sanctioned in an
+architecture doc.
+
+### A1. The affected NEGATIVE goldens are `l0127_*`, not `l0105_*` (spec §6 step 4 mis-targeted)
+
+The spec's §6 step 4 says "hand-audit each `l0105_*`; a `Fun`-capture reject
+that they assert must now become a GREEN emit." **In-tree audit finds this
+target is empty and the real target is elsewhere.** Every `l0105_neg_*`
+fixture is a REFUTABILITY / parse negative (`SKY-P0001` / `SKY-T0015`), NOT a
+`Fun`-capture reject:
+
+| Fixture | Rejects with | Touched by carrier flip? |
+|---|---|---|
+| `l0105_neg_int_lambda` | SKY-P0001 (`\1 ->` bare literal param) | No |
+| `l0105_neg_list_lambda` | SKY-P0001 (`\[a] ->`) | No |
+| `l0105_neg_ctor_lambda` | SKY-T0015 (`\(Just x) ->` refutable) | No |
+| `l0105_neg_cons_lambda` | SKY-T0015 (`\(x :: xs) ->`) | No |
+| `l0105_neg_nested_tuple` | SKY-T0015 (`\(a, Just x) ->`) | No |
+| `l0105_neg_ctor_def` | SKY-T0015 (`f (Just x) =`) | No |
+| `l0105_neg_money_ctor_param` | SKY-T0015 (`amount (Money d _) =`) | No |
+
+All seven reject at the parser / irrefutability gate, strictly BEFORE lowering's
+`clone_class` runs, so the carrier flip cannot turn any of them into an accept.
+`l0105_alias_move_seal` and `l0105_param_patterns` are POSITIVE (`main.rs`
+present) — they byte-churn Box→Arc mechanically, no re-classification.
+
+**The negatives that DO flip are the `l0127_*` (fn-value-reuse gate),**
+asserted in `crates/skyc/tests/golden_l0114_ctor_payload_function.rs`:
+
+| Test fn | Fixture | Reused type | Post-flip disposition |
+|---|---|---|---|
+| `fn_carrier_reuse_gated` | `l0127_fn_carrier_reuse_gated` | `Maybe (Int -> Int)` let-binding, `consume mf + consume mf` | **Was SKY-L0127; NOW ACCEPT + run.** `clone_class(Maybe(Fun))` = `clone_class_named_composite([Fun])` = `CloneOk` once `Fun` is `CloneOk`; the `Maybe (Arc<dyn Fn>)` clones per use, cargo-builds. Re-classify: assert exit-0 + emitted runs, output `4`. |
+| `lambda_param_reuse_gated` | `l0127_lambda_param_reuse_gated` | `Maybe (Int -> Int)` lambda param reused | **Was SKY-L0127; NOW ACCEPT + run**, same reason, output `4`. |
+| `lambda_param_call_twice_accepted` | `l0127_lambda_param_call_twice_accepted` | `f 1 + f 2` (callee) | Stays GREEN, unchanged (already accepted; callee-position). |
+
+Both `*_reuse_gated` re-classifications are **make-invalid-states-unrepresentable
+in the correct direction**: the state they rejected is no longer invalid once
+the carrier is `Clone`. This is NOT the §0 no-shortcuts trap (deleting a red to
+fake-pass) — the program genuinely now compiles and runs the reference answer.
+The test bodies must be rewritten to assert the accept + the runtime value, and
+a `main.rs` golden captured for each. **Their comments (which say "must stay
+SKY-L0127") are rewritten to state the new contract.** This is a required,
+audited change — record it explicitly in the implementation commit message so a
+reviewer does not mistake it for a weakened gate.
+
+**Correction to spec §6 step 4:** replace "audit each `l0105_*`" with "audit
+each `l0127_*` and the `l0114_and_map_*_stays_gated` set." The `l0114_and_map_*`
+cases are curried `andMap` chains carried as `FnOnceChain` — `clone_class`
+stays `NonClone` (§2.1), so `reject_fn_value_reuse` still fires; they STAY
+gated. Verify each `assert_hof_curried_rejected` still holds post-flip (it must,
+structurally, because `FnOnceChain` never enters `carrier_is_clone`'s true set).
+
+### A2. `reject_fn_value_reuse` narrows correctly for composites — no soundness hole
+
+The spec §4 keeps `reject_fn_value_reuse` "dormant for `Fun`." Adversarial
+composite audit confirms the narrowing is sound in BOTH directions:
+
+* Its guard is `ir_contains_fun(t) && clone_class(t) == NonClone`.
+* A composite carrying a `Fun` AND a genuine NonClone (a tuple/record mixing
+  `Fun` with `Task`/`Cmd`/`Sub`/`Decoder`/`FnOnceChain`): `clone_class` is
+  floored to `NonClone` by the NonClone member (via `clone_class_composite`),
+  so the guard STAYS true → still rejected. Correct: the value genuinely cannot
+  clone, and the `Fun` member is irrelevant to that verdict.
+* A composite of only-clonable members (`(Int -> Int, String)`): now `CloneOk`,
+  guard false → accepted, each use clones. Sound (`(Arc<dyn Fn>, String): Clone`).
+
+So `reject_fn_value_reuse` is NOT dead after the flip — it retains exactly the
+true-uncloneable remnant. **Delete-vs-dormant decision (spec §4, brief Q3):
+KEEP it, not as dead code but as live-narrowed code.** Its guard is a runtime
+predicate over the composite's actual clone-class, not a `Fun`-shaped syntactic
+match, so it self-narrows the instant `clone_class(Fun)` flips — there is no
+provably-unreachable arm to delete here. Deleting it WOULD reopen the
+`(Fun, Task)`-tuple / `Task`-returning-composite reuse class (E0382). The
+"dormant" framing in §4 is imprecise; the accurate framing is "live, its reach
+shrinks to the still-uncloneable carriers." Amend §4's `reject_fn_value_reuse`
+row wording accordingly.
+
+### A3. The depth-0 exemption + L0126 arm: KEEP (live-narrowed), do not delete
+
+Same verdict as A2 for the depth-0 callee exemption (lower.rs:1313) and the
+L0126 fail-close arm (lower.rs:1276). After the flip, a `Fun` capture is
+classified `CloneOk` at the `captured_locals` split (lower.rs:8208-8218,
+14565-14574, 14624-14634) — it enters `clone_set`, never `noncl_set` — so it
+reaches `rewrite_captured_clones` as a `CloneVar` at ANY depth and never touches
+line 1276 or the 1313 exemption. But `noncl_set` still receives
+`Task`/`Cmd`/`Sub`/`Decoder`/`FnOnceChain`/`Generic` captures, for which the
+depth-0 exemption and the L0126 arm remain load-bearing. **Both stay; neither
+is dead.** This is the brief's Q3 "make-invalid-states-unrepresentable"
+tension resolved by evidence: the arms are unreachable FOR `Fun` but reachable
+for the genuine-NonClone set, so they are not provably-dead code — deleting them
+reopens the Task/Decoder capture class. The structural guarantee that `Fun`
+cannot reach them is discharged by the SINGLE `carrier_is_clone` predicate
+routing `Fun` into `clone_set`, which is where make-invalid-states-unrepresentable
+actually lands — not by deleting a still-reachable arm.
+
+**No new emit_expr classifier edit is needed** for the three `captured_locals`
+sites: they all already `match ir_ty.as_ref().map(clone_class)` and route
+`CloneOk → clone_set`. Flipping `clone_class(Fun) → CloneOk` re-routes `Fun`
+automatically. Confirmed at all three sites in-tree.
+
+### A4. The S4b Arc-promotion path is the ONE real byte-stability / SEAL risk — sequencing
+
+The tree already contains clone-relay Stage 1 (`apply_move_ownership`,
+lower.rs:4016 — the spec §8 "land clone-relay first" is partly overtaken: Stage
+1 has landed; Fix A still lands orthogonally ON TOP). The live interaction:
+`lower_let_pvar`'s else-branch (lower.rs:14661-14730) now does, for a `Fun`-typed
+`let` binding:
+
+1. `apply_move_ownership(name, ir_ty, acc, ...)` — with `Fun` now
+   `param_is_multiuse_clonable` (CloneOk), runs `rewrite_multiuse_clones`,
+   turning all-but-last `Var(name)` into `CloneVar(name)`. **Before Fix A this
+   took the `reject_fn_value_reuse` else-arm** (no rewrite for single-use).
+2. THEN the S4b block: `if matches!(ir_ty, IrType::Fun(..)) && (needs_shared_capture
+   || flows_into_sync_kernel_call)` → `force_shared_capture_clones(name, acc)` +
+   promote to `SharedLambda` (Arc carrier) + `promote_unification_sibling_lambdas`.
+
+Two questions this raises, and the pre-registered answers:
+
+* **Soundness (no double-consume):** `rewrite_multiuse_clones` and
+  `force_shared_capture_clones` both operate by inserting `CloneVar`/relay
+  shadows; neither removes a use. `CloneVar` reads are idempotent under a second
+  clone pass (`force_shared_capture_clones` treats `Var` and `CloneVar` leaves
+  identically at line 2872-2873 and only ADDS relay shadows at lambda
+  boundaries). An `Arc::clone` of an `Arc::clone` is still a refcount bump — no
+  double-move, no E0507. SOUND.
+* **Byte-stability (SEAL / golden churn):** this composition is the ONE place the
+  flip can produce output that is NOT a pure Box→Arc type-string swap — the
+  depth-0 `rewrite_multiuse_clones` may now insert a `CloneVar` that the old
+  NonClone path did not. **This is EXPECTED and CORRECT** (an Arc carrier SHOULD
+  clone per non-last use), but it means a golden exercising a multi-use `Fun`
+  `let`-binding that ALSO hits `needs_shared_capture`/`flows_into_sync_kernel_call`
+  (the S4b `#164`/`#168`/`#172` families: `i164_*`, `i168_*`, `i172_*`,
+  `i191_input_arc_capture`) may show a diff BEYOND the type string. **Phase 3
+  must eyeball these specific goldens by hand, not bless-accept blindly.** If a
+  diff there is a `Var→CloneVar` at a non-last multi-use position, it is the
+  intended lean clone and is accepted; if it changes control flow or drops a
+  relay, STOP (that is a real regression). This is the spec's medium-high
+  confidence item made precise: the risk is localized to the S4b-∩-multiuse
+  goldens, nowhere else.
+
+**Ordering within `lower_let_pvar` stays as-is** (move-ownership THEN S4b
+promotion): reversing it would make `needs_shared_capture` count over an
+un-rewritten body — no benefit, and the current order is what the landed Stage 1
+established. Do not reorder.
+
+### A5. eta-expand `Var→CloneVar` flip for `Fun` slots — comment debt + the `Err` fallback
+
+At `eta_expand_partial` (lower.rs:10684-10761) and the sibling eta sites
+(10918, 11069, 11358), `slot_classes` computes `clone_class` per supplied arg.
+Post-flip, a `Var(sym)` in a `Fun` slot classifies `CloneOk` and rewrites to
+`CloneVar(sym)` (line 10703) instead of staying bare. **This is correct** — the
+forwarded `Arc<dyn Fn>` is cloned into the eta-lambda, and the runtime HOF takes
+`impl FnOnce` (accepts a moved-in Arc clone), so it compiles and is sound. But:
+
+* The comment blocks at 10706-10713 ("a function/task/decoder variable forwarded
+  … moving the Var in is a plain ownership transfer") and 10735-10741 ("a NonClone
+  fresh construction, safe to inline") are now STALE for the `Fun` sub-case. They
+  describe the pre-flip world. **Update them to say: `Fun` slots are now `CloneOk`
+  and forward via `CloneVar`; only `Task`/`Cmd`/`Sub`/`Decoder`/`FnOnceChain`
+  remain the bare-move NonClone forward.** Comment-only; no logic change (the
+  match already routes `CloneOk → CloneVar`).
+* **The `Err(_) if matches!(slot_ty, Ty::Fun(_, _)) => Some(CloneClass::NonClone)`
+  fallback (10694, 10918, 11358) — KEEP as NonClone, do NOT flip to CloneOk.**
+  Rationale: this arm fires ONLY when `ir_type_from_ty` FAILED, i.e. the slot's
+  arrow carries an unresolved nested `Ty::Var` (a polymorphic `Task Error a`
+  result, etc.). A bare-move forward of such a value into a fresh (non-nested)
+  eta-lambda is always sound (plain ownership transfer, the eta-lambda is not
+  captured inside another closure), and we cannot render a `CloneVar` clone for
+  a type we could not resolve to an `IrType` anyway. Flipping it would be
+  guessing `Clone`-ness of an unresolved type — a soundness risk for a NonClone
+  instantiation. The resolvable path (10689 `Ok(ir_ty) => clone_class(&ir_ty)`)
+  already flips `Fun → CloneOk` correctly; the `Err` fallback stays conservative.
+  This is `parse-don't-validate`: resolve when you can (flip), stay fail-safe
+  when you cannot (bare NonClone forward, which is sound for a fresh eta-lambda).
+
+### A6. `carrier_is_clone` — exhaustive, in `sky_ir`, the single authority
+
+Placement: `sky_ir` (both `sky_lower` and `sky_backend_rust` depend on it;
+`IrType` lives there). Signature `fn carrier_is_clone(t: &IrType) -> bool`,
+exhaustive over all 43 variants with NO `_` arm (a future variant forces a
+decision — SEAL make-invalid-states-unrepresentable). Its `true` set is EXACTLY
+today's `CopyLeaf` ∪ `CloneOk` leaves PLUS `Fun`, recursing on composites the
+same way `clone_class` does. The `false` set is
+`FnOnceChain`/`Task`/`Decoder`/`Cmd`/`Sub`/`Generic` and any composite
+transitively carrying one.
+
+Crate-direction constraint: `clone_class` lives in `sky_lower`, and `sky_ir`
+must NOT depend on `sky_lower`. So `carrier_is_clone` is the PRIMARY authority
+in `sky_ir` and `clone_class` (in `sky_lower`) CONSULTS it — not the reverse.
+Concretely:
+
+* `clone_class`'s `Fun` arm moves from the `NonClone` bucket (lower.rs:991-999)
+  to the `CloneOk` bucket; `FnOnceChain` stays in `NonClone`. The
+  `CopyLeaf`-vs-`CloneOk` three-way refinement stays entirely in `clone_class`
+  (a `sky_lower` concern the emitter never needs).
+* `carrier_is_clone` in `sky_ir` returns `false` for
+  `FnOnceChain`/`Task`/`Decoder`/`Cmd`/`Sub`/`Generic` and composites carrying
+  them; `true` for every `CopyLeaf`/`CloneOk` leaf and `Fun`.
+* The emitter (`render_type` Arc-vs-Box for `Fun`; `wants_arc_ctor` Arc-vs-Box
+  ctor) consults `carrier_is_clone` DIRECTLY — so a shape that renders Arc is
+  `carrier_is_clone == true`, and `clone_class` classifies that same shape
+  non-`NonClone` because it reads the same predicate. One boolean in `sky_ir`,
+  two readers; the tables provably cannot drift.
+* Add a `debug_assert` / unit test that `carrier_is_clone(&t) == (clone_class(&t)
+  != NonClone)` over a representative variant set, so a future edit to one that
+  forgets the other fails a test rather than reopening the drift.
+
+### A7. `emit_shared_lambda` type-string vs the general arm — byte, not SEAL
+
+`emit_shared_lambda` (emit_expr.rs:7895) emits `::std::sync::Arc<dyn Fn(..) ->
+R + Send + Sync + 'static>`; post-flip `render_type(Fun)` emits `Arc<dyn Fn(..)
+-> R + Send + Sync + 'static>` (bare `Arc`, project prelude `use`s it). These are
+the SAME Rust type — a `::std::sync::Arc` / `Arc` mismatch at a unification slot
+is not an E0308 (path aliases resolve identically). So NO SEAL risk. It IS a
+byte difference if a golden's `SharedLambda` sits next to a `render_type(Fun)`
+string. §3.4's "leave `emit_shared_lambda` in place for Phase 1" stands; note
+the two now emit type-equal (not byte-equal) strings, which is fine. Merging
+them is a follow-up (residual #3). Do NOT touch in this change.
+
+### A8. SEAL atomicity — the ONLY skyc-green-cargo-red window
+
+The classifier edit (`clone_class(Fun) = CloneOk` via `carrier_is_clone`) and
+the emitter edit (`render_type(Fun)` Box→Arc + `wants_arc_ctor` all-`Fun`) MUST
+land in ONE commit. Between them lies a real SEAL breach:
+
+* Classifier-only: a reused `Fun` `let`-binding now gets `.clone()` inserted
+  (`CloneVar`), but `render_type` still emits `Box<dyn Fn>` (not `Clone`) →
+  emitted `arc.clone()` on a `Box` value → cargo E0599 `clone` (Box<dyn Fn> has
+  no Clone). skyc-green, cargo-red.
+* Emitter-only: `render_type` emits `Arc<dyn Fn>` but `wants_arc_ctor` still
+  says `Box` for a general `Fun` → `let __sky_fn: Arc<dyn Fn> = Box::new(..)` →
+  cargo E0308. skyc-green, cargo-red.
+
+Confirmed there is NO OTHER emit site that renders the general `Fun` carrier
+type-string (audit: `emit_types.rs:320` is the sole `Box<dyn Fn(` **emission**;
+every other `Box<dyn Fn(` match is a comment or the `FnOnceChain` /
+`shouldRetry`-field / retry-adapter path, none of which the `Fun` flip reaches).
+The `shouldRetry` field (`emit_expr.rs:1513`) is a `RetryPolicy` runtime-struct
+field typed `Box<dyn Fn(SkyError) -> bool>`, populated from a `Fun` VALUE via
+its own adapter — after the flip the incoming value is `Arc<dyn Fn>`, and the
+adapter re-wraps (like `arc_callback_wrap`); it does not render the general
+carrier. Verify its golden (`i164`/retry family) in Phase 3; expect a re-wrap,
+not a raw carrier mismatch.
+
+Phase 1+2 = one commit (as spec §9 says). This is confirmed as the complete
+SEAL risk map — no third window exists.
+
+### A9. Verdict on the brief's re-decision asks
+
+* **FnOnceChain stays Box (§2.1): CORRECT, Correctness-necessary, not merely
+  conservative.** The runtime `curryN`/`decode_pipeline_*`/`db_decode_*` seams
+  take `Box<dyn FnOnce>` towers (json.rs, db.rs) — a `FnOnce` is
+  consume-once by TYPE. Migrating to `Arc<dyn Fn>` is a semantic change (a `Fn`
+  can be re-called; the pipeline's one-shot `next_decoder` contract does not
+  want that) requiring runtime signature edits, for zero soundness gain (the
+  chains are never captured across a re-callable `Fn` boundary — they have no
+  reuse to admit). KEEP Box.
+* **Decoder stays a struct with a `Box<dyn Fn>` field (§2.2): CORRECT.** A Sky
+  `Decoder a` is a nominal runtime carrier, not a first-class `Fun` value;
+  `clone_class` sees `IrType::Decoder`, never the field. The `Decoder (A -> B)`
+  payload rides in the `T` slot and flips to `Arc<dyn Fn>` automatically (T is a
+  `Fun`); `Decoder<E, Arc<dyn Fn + Send + Sync>>: Send` holds. No Decoder-specific
+  work. KEEP.
+* **A family member that DOES dissolve beyond the spec's list:** the
+  `l0127_*_reuse_gated` fn-value-REUSE class (A1) — the spec framed
+  `reject_fn_value_reuse` as merely going dormant, but in fact a whole class of
+  previously-rejected programs (a `Maybe (Int -> Int)` or any composite-of-only-
+  clonables reused N×) now COMPILES. That is a genuine completeness gain the
+  spec undersold; it is captured by the same carrier flip, no extra work, and it
+  is why the two `l0127` negatives must be re-classified rather than left red.
+
+### A10. Position-independence proof (brief Q4, #172 anti-pattern)
+
+The invariant "acceptance of a well-typed capture never depends on syntactic
+position" holds by construction after the flip: a `Fun` capture is classified
+`CloneOk` at the `captured_locals` split regardless of whether it is read as a
+depth-0 callee, a depth-≥1 forwarded arg, a sibling partial-app residual, or a
+multi-use value — all four routes reach `rewrite_captured_clones` /
+`rewrite_multiuse_clones` and emit `CloneVar` (Arc clone). No arm inspects
+"callee vs arg" or "depth 0 vs ≥1" FOR a `Fun` anymore (the depth-0 exemption
+and the L0126 arm are reached only by the genuine-NonClone set, A3). The #172
+anti-pattern (coerce inline-lambda siblings only) is structurally avoided:
+`promote_unification_sibling_lambdas` already eta-expands EVERY function-typed
+leaf (not just inline lambdas), and after the flip even that path is only
+exercised for the S4b Arc-promotion sub-case; the ordinary `Fun` capture needs
+no sibling coercion at all because every `Fun` renders the same Arc carrier
+unconditionally. Position-independence is a THEOREM of the single-carrier +
+single-classifier design, not a per-site patch.
