@@ -28,7 +28,7 @@ no import touches until Step C.
 
 ```
 src/
-  app/            <- crates/skyc/{Cargo.toml, src, tests}   (the CLI/driver; post-rename binary `ipe`)
+  ipe-cli/        <- crates/skyc/{Cargo.toml, src, tests}   (the CLI/driver; binary `ipe`)
   compiler/       <- crates/* EXCEPT skyc  (sky_parse, sky_canon, sky_syntax, sky_types,
                      sky_lower, sky_ir, sky_backend, sky_backend_rust, sky_kernels,
                      sky_diagnostics, sky_db, sky_intern, sky_watch)
@@ -38,24 +38,23 @@ src/
 ```
 `crates/` and `runtime/` are removed after their contents move.
 
-### Open naming decisions (kept your proposal; alternatives noted)
-- `src/app` — self-describing alt: `src/cli` or `src/ipe` (it is the `ipe`
-  binary post-rename). **Default: `src/app`** unless you say otherwise.
-- `src/runtime/rust/` — the `/rust/` level anticipates other runtimes
-  (`wasm-target.md`). **Default: keep it.** Drop to `src/runtime/` if no non-Rust
-  runtime is planned.
+### Naming decisions (confirmed 2026-07-16)
+- **`src/ipe-cli`** (was `src/app`) — explicit + unequivocal; it is the `ipe`
+  CLI binary.
+- **`src/runtime/rust/`** — the `/rust/` level is intentional: other backends +
+  runtimes are planned (e.g. wasm), so `src/runtime/<target>/` is the shape.
 
-## `crates/skyc/tests/` — moves with `src/app/`
+## `crates/skyc/tests/` — moves with `src/ipe-cli/`
 
 skyc's tests (golden_*, server_e2e, watch_*, tui/webview_e2e, msg_admissibility,
 stdlib-seal…) drive the `skyc` binary end-to-end → they are the app's integration
-tests → move wholesale to `src/app/tests/`. After the move, reassess whether any
+tests → move wholesale to `src/ipe-cli/tests/`. After the move, reassess whether any
 pure compiler-unit test belongs under `src/compiler/<crate>/tests/` instead.
 
 ## Cargo + path rewiring (Step A)
 
 1. **Workspace root `Cargo.toml`** — update `members`/`exclude` to
-   `src/app`, `src/compiler/*`, `src/runtime/rust`, plus `tools/*` (unchanged).
+   `src/ipe-cli`, `src/compiler/*`, `src/runtime/rust`, plus `tools/*` (unchanged).
 2. **Inter-crate deps** — every `path = "../<crate>"` in all Cargo.tomls
    re-anchored to the new relative layout (compiler crates are now siblings under
    `src/compiler/`; app depends on `../compiler/<crate>` and `../runtime/rust`;
@@ -64,7 +63,7 @@ pure compiler-unit test belongs under `src/compiler/<crate>/tests/` instead.
    `skyc`) — renames are Step B. Only *paths* move here.
 4. **Stdlib embed path** — skyc locates its stdlib (currently
    `crates/skyc/stdlib`); update the resolver to `src/stdlib` (const/env in
-   `src/app/src/…`; check `stdlib.rs`).
+   `src/ipe-cli/src/…`; check `stdlib.rs`).
 5. **`SKY_RUNTIME_DIR`** — default resolution + `scripts/lib/env.sh` +
    `skyc-runtime-dir` memory move from `runtime/src/sky_runtime` to
    `src/runtime/rust/src/sky_runtime`.
