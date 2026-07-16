@@ -2303,7 +2303,9 @@ fn unify_group_value_leaves(
             // function-value leaves for the group's carrier.
             name: let_name,
             value,
-            body: Box::new(unify_group_value_leaves(name, *body, params, ret, eta_pool)?),
+            body: Box::new(unify_group_value_leaves(
+                name, *body, params, ret, eta_pool,
+            )?),
         }),
         Expr::Destructure {
             binder,
@@ -2313,7 +2315,9 @@ fn unify_group_value_leaves(
             let body = if pat_binds_symbol(&binder, name) {
                 body
             } else {
-                Box::new(unify_group_value_leaves(name, *body, params, ret, eta_pool)?)
+                Box::new(unify_group_value_leaves(
+                    name, *body, params, ret, eta_pool,
+                )?)
             };
             Ok(Expr::Destructure {
                 binder,
@@ -2323,21 +2327,22 @@ fn unify_group_value_leaves(
         }
         Expr::If { cond, then_, else_ } => Ok(Expr::If {
             cond,
-            then_: Box::new(unify_group_value_leaves(name, *then_, params, ret, eta_pool)?),
-            else_: Box::new(unify_group_value_leaves(name, *else_, params, ret, eta_pool)?),
+            then_: Box::new(unify_group_value_leaves(
+                name, *then_, params, ret, eta_pool,
+            )?),
+            else_: Box::new(unify_group_value_leaves(
+                name, *else_, params, ret, eta_pool,
+            )?),
         }),
         Expr::Match(m) => {
-            let m = m.try_map_bodies(
-                Ok,
-                |pat, body, guard| {
-                    let body = if pat_binds_symbol(pat, name) {
-                        body
-                    } else {
-                        unify_group_value_leaves(name, body, params, ret, eta_pool)?
-                    };
-                    Ok((body, guard))
-                },
-            )?;
+            let m = m.try_map_bodies(Ok, |pat, body, guard| {
+                let body = if pat_binds_symbol(pat, name) {
+                    body
+                } else {
+                    unify_group_value_leaves(name, body, params, ret, eta_pool)?
+                };
+                Ok((body, guard))
+            })?;
             Ok(Expr::Match(m))
         }
         // Every other value leaf shares the group's `IrType::Fun` type (a
@@ -2512,15 +2517,12 @@ fn promote_unification_sibling_lambdas(
                 !pat_binds_symbol(&arm.pat, name) && branch_value_leaf_reads_sym(name, &arm.body)
             });
             if group_promotes {
-                let m = m.try_map_bodies(
-                    Ok,
-                    |_pat, body, guard| {
-                        Ok((
-                            unify_group_value_leaves(name, body, params, ret, eta_pool)?,
-                            guard,
-                        ))
-                    },
-                )?;
+                let m = m.try_map_bodies(Ok, |_pat, body, guard| {
+                    Ok((
+                        unify_group_value_leaves(name, body, params, ret, eta_pool)?,
+                        guard,
+                    ))
+                })?;
                 Ok(Expr::Match(m))
             } else {
                 Ok(Expr::Match(m))
@@ -2535,17 +2537,18 @@ fn promote_unification_sibling_lambdas(
             if group_promotes {
                 Ok(Expr::If {
                     cond,
-                    then_: Box::new(unify_group_value_leaves(name, *then_, params, ret, eta_pool)?),
-                    else_: Box::new(unify_group_value_leaves(name, *else_, params, ret, eta_pool)?),
+                    then_: Box::new(unify_group_value_leaves(
+                        name, *then_, params, ret, eta_pool,
+                    )?),
+                    else_: Box::new(unify_group_value_leaves(
+                        name, *else_, params, ret, eta_pool,
+                    )?),
                 })
             } else {
                 Ok(Expr::If { cond, then_, else_ })
             }
         }
-        Expr::TailLoop {
-            params: lp,
-            body,
-        } => {
+        Expr::TailLoop { params: lp, body } => {
             let body = if lp.iter().any(|(s, _)| *s == name) {
                 body
             } else {
@@ -2560,31 +2563,19 @@ fn promote_unification_sibling_lambdas(
         }),
         Expr::Call { callee, args, pin } => Ok(Expr::Call {
             callee,
-            args: args
-                .into_iter()
-                .map(recur)
-                .collect::<DResult<Vec<_>>>()?,
+            args: args.into_iter().map(recur).collect::<DResult<Vec<_>>>()?,
             pin,
         }),
         Expr::Apply { func, args } => Ok(Expr::Apply {
             func: Box::new(recur(*func)?),
-            args: args
-                .into_iter()
-                .map(recur)
-                .collect::<DResult<Vec<_>>>()?,
+            args: args.into_iter().map(recur).collect::<DResult<Vec<_>>>()?,
         }),
         Expr::Tuple(items) => Ok(Expr::Tuple(
-            items
-                .into_iter()
-                .map(recur)
-                .collect::<DResult<Vec<_>>>()?,
+            items.into_iter().map(recur).collect::<DResult<Vec<_>>>()?,
         )),
         Expr::List { elem, items } => Ok(Expr::List {
             elem,
-            items: items
-                .into_iter()
-                .map(recur)
-                .collect::<DResult<Vec<_>>>()?,
+            items: items.into_iter().map(recur).collect::<DResult<Vec<_>>>()?,
         }),
         Expr::Cons { head, tail } => Ok(Expr::Cons {
             head: Box::new(recur(*head)?),
@@ -2630,10 +2621,7 @@ fn promote_unification_sibling_lambdas(
             home,
             ty,
             variant,
-            args: args
-                .into_iter()
-                .map(recur)
-                .collect::<DResult<Vec<_>>>()?,
+            args: args.into_iter().map(recur).collect::<DResult<Vec<_>>>()?,
         }),
         Expr::TaskSeq { effect, rest } => Ok(Expr::TaskSeq {
             effect: Box::new(recur(*effect)?),
@@ -2644,10 +2632,7 @@ fn promote_unification_sibling_lambdas(
             rest: Box::new(recur(*rest)?),
         }),
         Expr::TailRecur { args } => Ok(Expr::TailRecur {
-            args: args
-                .into_iter()
-                .map(recur)
-                .collect::<DResult<Vec<_>>>()?,
+            args: args.into_iter().map(recur).collect::<DResult<Vec<_>>>()?,
         }),
     }
 }
@@ -7843,11 +7828,15 @@ impl<'a> Lowerer<'a> {
                 // #210: fold the two nominal Std.Cache record shapes (annotation
                 // path — e.g. `newRaw : CacheCfg -> …` / `statsRaw : … -> Task
                 // Error { hits, misses, evictions }`) — twin of the solved-Ty fold.
-                if is_all_int_canon_record_shape(&mut named_fields, CACHE_CFG_FIELDS, self.interner) {
+                if is_all_int_canon_record_shape(&mut named_fields, CACHE_CFG_FIELDS, self.interner)
+                {
                     return Ok(IrType::CacheCfg);
                 }
-                if is_all_int_canon_record_shape(&mut named_fields, CACHE_STATS_FIELDS, self.interner)
-                {
+                if is_all_int_canon_record_shape(
+                    &mut named_fields,
+                    CACHE_STATS_FIELDS,
+                    self.interner,
+                ) {
                     return Ok(IrType::CacheStats);
                 }
                 let mut ir_fields = BTreeMap::new();
@@ -10383,24 +10372,31 @@ impl<'a> Lowerer<'a> {
                 // A first-class function *value* applied via [`Expr::Apply`]
                 // (a local function-typed binding, a lambda, or another
                 // expression's result). The named-callee path above reshapes an
-                // arity mismatch (eta-expand / saturate); the value path cannot
-                // — eta-expanding a value would have to capture the closure
-                // value itself, a distinct mechanism M1 does not yet provide.
+                // arity mismatch (eta-expand / saturate); the value path handles
+                // the *partial* case by eta-expanding the value itself — the
+                // supplied args and the value are captured into a fresh residual
+                // closure that takes the missing parameters.
                 //
-                // So when the callee's solved type is a known curried arrow whose
+                // When the callee's solved type is a known curried arrow whose
                 // arity exceeds the supplied argument count, this is *partial*
-                // application of a first-class value: fail closed with a Sky
-                // diagnostic rather than emit an under-applied `(g)(a)` that cargo
-                // rejects with no Sky-level error. (Over-application of a value is
-                // ruled out earlier by type-checking — applying past the arity
-                // makes the result a non-function — so a mismatch here is always
-                // partial.) A missing or non-arrow region type falls through to
-                // the direct apply, preserving the exact-application fast path.
-                if let Some(ty) = self.region_ty(callee.span) {
-                    let arity = Self::ty_arrow_arity(ty);
-                    if arity != 0 && args.len() != arity {
-                        return Err(unsupported(call_span, Feature::PartialOverApplication));
-                    }
+                // application of a first-class value. The reference (`../sky`)
+                // emits function values as curried single-arg closures, so
+                // applying one arg at a time is a plain call; our IR flattens the
+                // curried chain into one multi-parameter `Fun`, so the residual
+                // must be rebuilt as a closure `\eta_i… -> (value)(supplied…,
+                // eta_i…)` of the residual arrow type. `eta_expand_value_partial`
+                // builds exactly that — the same eta-expansion the named-callee
+                // path uses, but over the lowered value expression. (Over-
+                // application of a value is ruled out earlier by type-checking —
+                // applying past the arity makes the result a non-function — so a
+                // mismatch here is always partial.) A missing or non-arrow region
+                // type falls through to the direct apply, preserving the
+                // exact-application fast path.
+                if let Some(arity) = self.region_ty(callee.span).map(Self::ty_arrow_arity)
+                    && arity != 0
+                    && args.len() < arity
+                {
+                    return self.eta_expand_value_partial(callee, lowered_args, arity, call_span);
                 }
                 Ok(Expr::Apply {
                     func: Box::new(self.lower_expr(callee)?),
@@ -10644,6 +10640,157 @@ impl<'a> Lowerer<'a> {
         //   let cap_0 = expr_0 in let cap_1 = expr_1 in <lambda>
         // which evaluates the args left-to-right before the closure is built,
         // matching Sky's pure-functional semantics.
+        let result = hoisted
+            .into_iter()
+            .rev()
+            .fold(lambda, |inner, (cap_sym, original)| Expr::Let {
+                name: cap_sym,
+                value: Box::new(original),
+                body: Box::new(inner),
+            });
+        Ok(result)
+    }
+
+    /// Eta-expand a **partial application of a first-class function VALUE** — a
+    /// local function-typed binding, a lambda result, or any expression whose
+    /// solved region type is a curried arrow of arity `N` — applied to `k < N`
+    /// arguments. The residual is a boxed closure that captures the value plus
+    /// the supplied args and takes the missing parameters:
+    ///
+    /// ```text
+    /// g 2          (g : Int -> Int -> Int, 1 supplied)
+    /// ──────────────────────────────────────────────
+    /// Box::new(move |eta_0: i64| -> i64 { (g)(2, eta_0) })
+    /// ```
+    ///
+    /// This is the function-VALUE counterpart of [`Self::eta_expand_partial`]
+    /// (which handles a NAMED/kernel callee). The reference (`../sky`) emits
+    /// function values as curried single-arg closures, so `g 2` is a plain call
+    /// returning another closure; our IR flattens the curried chain into one
+    /// multi-parameter [`IrType::Fun`], so the residual must be rebuilt as one
+    /// closure that applies every remaining argument at once. The body is an
+    /// [`Expr::Apply`] (call of a value), not an [`Expr::Call`] (call of a named
+    /// callee) — that is the only structural difference from `eta_expand_partial`.
+    ///
+    /// The T4/#130 capture-clone discipline applies identically to the supplied
+    /// args: a `CloneOk` `Var` becomes `CloneVar` (the residual closure is `Fn`,
+    /// re-callable, so a captured non-`Copy` value must clone per call); a
+    /// non-`Var` `CloneOk` expression is hoisted to a `let __sky_cap_i` binding
+    /// outside the lambda; `NonClone`/unknown non-`Fun` slots surface
+    /// [`Feature::NonCloneCapture`]. The captured VALUE itself is a `Box<dyn Fn>`
+    /// captured by move; the closure calls it via `Fn`'s `&self`, so the residual
+    /// is `Fn`, not `FnOnce`.
+    ///
+    /// Per-parameter and return types come from the callee's solved region type
+    /// (the full arrow `T0 -> … -> T_{N-1} -> R`), never guessed. A missing
+    /// region type or an arrow shorter than `arity` is unreachable for
+    /// well-typed input and surfaces as a [`Diagnostic::CompilerBug`].
+    fn eta_expand_value_partial(
+        &self,
+        callee: &canon::Expr,
+        lowered_args: Vec<Expr>,
+        arity: usize,
+        call_span: Span,
+    ) -> DResult<Expr> {
+        let fn_ty = self.region_ty(callee.span).ok_or_else(|| {
+            bug(
+                "sky_lower::eta_expand_value_partial",
+                "no inferred type for a partially-applied function value",
+            )
+        })?;
+        let (arg_tys, ret_ty) = peel_arrow_arity(
+            fn_ty,
+            arity,
+            "sky_lower::eta_expand_value_partial",
+            "value callee type has fewer arrows than its arrow-arity",
+        )?;
+
+        let supplied = lowered_args.len();
+        let mut params: Vec<(Symbol, IrType)> = Vec::with_capacity(arity - supplied);
+        let mut call_args = lowered_args;
+
+        // T4/#130: classify each supplied arg's slot for the capture-clone
+        // discipline. Same as `eta_expand_partial`: a `Fun`-typed slot whose
+        // resolution fails from a nested `Ty::Var` is definitionally NonClone
+        // (safe to forward); any other resolution failure is a conservative None.
+        let slot_classes: Vec<Option<CloneClass>> = arg_tys
+            .iter()
+            .take(supplied)
+            .map(|slot_ty| match self.ir_type_from_ty(slot_ty, call_span) {
+                Ok(ir_ty) => Some(clone_class(&ir_ty)),
+                Err(_) if matches!(slot_ty, Ty::Fun(_, _)) => Some(CloneClass::NonClone),
+                Err(_) => None,
+            })
+            .collect();
+
+        let mut hoisted: Vec<(Symbol, Expr)> = Vec::new();
+        let mut cap_cursor = 0usize;
+        for (arg, cls) in call_args.iter_mut().zip(slot_classes) {
+            if let Expr::Var(sym) = *arg {
+                match cls {
+                    // CloneOk `Var`: the residual `Fn` closure is re-callable, so
+                    // the captured non-`Copy` value clones per call.
+                    Some(CloneClass::CloneOk) => *arg = Expr::CloneVar(sym),
+                    // CopyLeaf: scalar `Copy` — bare `Var` copies by value.
+                    // NonClone: a function/task var forwarded by move into a fresh
+                    //   closure — a plain ownership transfer, no E0525.
+                    Some(CloneClass::CopyLeaf | CloneClass::NonClone) => {}
+                    // Genuinely indeterminate non-`Fun` slot: fail-close rather
+                    // than emit a possible E0525 (move-out-of-captured-env).
+                    None => return Err(unsupported(call_span, Feature::NonCloneCapture)),
+                }
+            } else {
+                // Non-`Var` complex expression. CloneOk → hoist to a
+                // `let __sky_cap_i = <expr>` OUTSIDE the lambda so it evaluates
+                // once and each call clones the binding. CopyLeaf/NonClone/None →
+                // inline (a fresh value each call, not a capture).
+                match cls {
+                    Some(CloneClass::CloneOk) => {
+                        let cap_sym = *self.cap_params.get(cap_cursor).ok_or_else(|| {
+                            bug(
+                                "sky_lower::eta_expand_value_partial",
+                                "cap_params pool too small for complex-arg hoist",
+                            )
+                        })?;
+                        cap_cursor += 1;
+                        let original = std::mem::replace(arg, Expr::CloneVar(cap_sym));
+                        hoisted.push((cap_sym, original));
+                    }
+                    Some(CloneClass::CopyLeaf | CloneClass::NonClone) | None => {}
+                }
+            }
+        }
+
+        // Build the missing parameter list from argument positions
+        // `supplied..arity`. Use the JSON-friendly variant so a free `Ty::Var` in
+        // an unconstrained slot maps to `IrType::Json` rather than raising
+        // SKY-L0102 — sound because the residual closure's slot is type-unified
+        // by the surrounding application context.
+        for (offset, arg_ty) in arg_tys.get(supplied..).unwrap_or(&[]).iter().enumerate() {
+            let sym = *self.eta_params.get(offset).ok_or_else(|| {
+                bug(
+                    "sky_lower::eta_expand_value_partial",
+                    "eta-parameter pool smaller than the partial-application gap",
+                )
+            })?;
+            let ir = self.ir_type_from_ty_json(arg_ty, call_span)?;
+            params.push((sym, ir));
+            call_args.push(Expr::Var(sym));
+        }
+        let ret = self.ir_type_from_ty_json(ret_ty, call_span)?;
+        // Body: apply EVERY argument (supplied + residual) to the lowered value
+        // at once — the flattened multi-parameter closure accepts them together.
+        let body = Expr::Apply {
+            func: Box::new(self.lower_expr(callee)?),
+            args: call_args,
+        };
+        let lambda = Expr::Lambda {
+            params,
+            ret,
+            body: Box::new(body),
+        };
+        // T4/#130: wrap hoisted let-bindings around the lambda, in reverse so the
+        // args evaluate left-to-right before the closure is built.
         let result = hoisted
             .into_iter()
             .rev()
@@ -10914,9 +11061,27 @@ impl<'a> Lowerer<'a> {
         let surplus = lowered_args.len().saturating_sub(arity);
         if let Some(ty) = self.region_ty(callee.span) {
             let returned_arity = Self::ty_arrow_arity(ty).saturating_sub(arity);
-            if surplus != returned_arity {
-                return Err(unsupported(call_span, Feature::PartialOverApplication));
+            if surplus < returned_arity {
+                // The surplus under-saturates the returned closure — the result
+                // is itself a partial application of a first-class value (`f 1 2`
+                // where `f a = \b -> \c -> …`: `f` consumes its one param, then
+                // the 2-arg returned closure gets only one surplus arg). The
+                // reference emits `SkyCall(f(1), 2)` — a residual closure. Match
+                // it by eta-expanding: capture the direct `Call(f, head)` result
+                // and the surplus args into a closure taking the still-missing
+                // params. `eta_expand_over_partial` builds exactly that.
+                return self.eta_expand_over_partial(
+                    callee,
+                    resolved,
+                    lowered_args,
+                    arity,
+                    returned_arity,
+                    call_span,
+                );
             }
+            // A surplus that EXCEEDS the returned closure's arity is ruled out by
+            // type-checking (applying past the arity makes the result a non-
+            // function), so `surplus == returned_arity` is the only exact case.
         }
         let mut iter = lowered_args.into_iter();
         let head: Vec<Expr> = iter.by_ref().take(arity).collect();
@@ -10932,6 +11097,143 @@ impl<'a> Lowerer<'a> {
             }),
             args: rest,
         })
+    }
+
+    /// Eta-expand an **under-saturating over-application** `f a0 … a_{m-1}` where
+    /// `f`'s declared arity is `arity < m`, and the surplus `m - arity` args are
+    /// FEWER than the returned closure's `returned_arity`. The result is a
+    /// partial application of the first-class value the direct `Call(f, head)`
+    /// returns — so, as in [`Self::eta_expand_value_partial`], the residual is a
+    /// boxed closure capturing that call and the surplus args, taking the still-
+    /// missing params:
+    ///
+    /// ```text
+    /// f 1 2        (f : Int->Int->Int->Int, f a = \b -> \c -> …; arity 1, surplus [2])
+    /// ─────────────────────────────────────────────────────────────────────────
+    /// Box::new(move |eta_0: i64| -> i64 { ((f(1)))(2, eta_0) })
+    /// ```
+    ///
+    /// The residual params/ret come from the callee's solved region type, peeled
+    /// past the `arity + surplus` positions already supplied. The T4/#130 clone
+    /// discipline for the surplus args mirrors the other eta paths; the captured
+    /// `Call(f, head)` value is a `Box<dyn Fn>` moved in and called via `&self`,
+    /// so the residual is `Fn`.
+    fn eta_expand_over_partial(
+        &self,
+        callee: &canon::Expr,
+        resolved: Callee,
+        lowered_args: Vec<Expr>,
+        arity: usize,
+        returned_arity: usize,
+        call_span: Span,
+    ) -> DResult<Expr> {
+        let fn_ty = self.region_ty(callee.span).ok_or_else(|| {
+            bug(
+                "sky_lower::eta_expand_over_partial",
+                "no inferred type for an over-applied callee",
+            )
+        })?;
+        // Peel the FULL arrow (arity + returned_arity positions) to get every
+        // parameter type and the final return type.
+        let (arg_tys, ret_ty) = peel_arrow_arity(
+            fn_ty,
+            arity + returned_arity,
+            "sky_lower::eta_expand_over_partial",
+            "callee type has fewer arrows than its arrow-arity",
+        )?;
+
+        // Split the supplied args: the first `arity` saturate the direct `Call`;
+        // the rest are surplus applied to the returned closure.
+        let total_supplied = lowered_args.len();
+        let mut iter = lowered_args.into_iter();
+        let head: Vec<Expr> = iter.by_ref().take(arity).collect();
+        let mut surplus_args: Vec<Expr> = iter.collect();
+
+        // T4/#130: classify each SURPLUS arg's slot (positions `arity..total`)
+        // for the capture-clone discipline. A `Fun`-typed slot whose resolution
+        // fails from a nested `Ty::Var` is definitionally NonClone.
+        let slot_classes: Vec<Option<CloneClass>> = arg_tys
+            .get(arity..total_supplied)
+            .unwrap_or(&[])
+            .iter()
+            .map(|slot_ty| match self.ir_type_from_ty(slot_ty, call_span) {
+                Ok(ir_ty) => Some(clone_class(&ir_ty)),
+                Err(_) if matches!(slot_ty, Ty::Fun(_, _)) => Some(CloneClass::NonClone),
+                Err(_) => None,
+            })
+            .collect();
+
+        let mut hoisted: Vec<(Symbol, Expr)> = Vec::new();
+        let mut cap_cursor = 0usize;
+        for (arg, cls) in surplus_args.iter_mut().zip(slot_classes) {
+            if let Expr::Var(sym) = *arg {
+                match cls {
+                    Some(CloneClass::CloneOk) => *arg = Expr::CloneVar(sym),
+                    Some(CloneClass::CopyLeaf | CloneClass::NonClone) => {}
+                    None => return Err(unsupported(call_span, Feature::NonCloneCapture)),
+                }
+            } else {
+                match cls {
+                    Some(CloneClass::CloneOk) => {
+                        let cap_sym = *self.cap_params.get(cap_cursor).ok_or_else(|| {
+                            bug(
+                                "sky_lower::eta_expand_over_partial",
+                                "cap_params pool too small for complex-arg hoist",
+                            )
+                        })?;
+                        cap_cursor += 1;
+                        let original = std::mem::replace(arg, Expr::CloneVar(cap_sym));
+                        hoisted.push((cap_sym, original));
+                    }
+                    Some(CloneClass::CopyLeaf | CloneClass::NonClone) | None => {}
+                }
+            }
+        }
+
+        // Residual params: positions `total_supplied..(arity + returned_arity)`.
+        let mut params: Vec<(Symbol, IrType)> =
+            Vec::with_capacity(returned_arity - surplus_args.len());
+        let mut apply_args = surplus_args;
+        for (offset, arg_ty) in arg_tys
+            .get(total_supplied..)
+            .unwrap_or(&[])
+            .iter()
+            .enumerate()
+        {
+            let sym = *self.eta_params.get(offset).ok_or_else(|| {
+                bug(
+                    "sky_lower::eta_expand_over_partial",
+                    "eta-parameter pool smaller than the over-application gap",
+                )
+            })?;
+            let ir = self.ir_type_from_ty_json(arg_ty, call_span)?;
+            params.push((sym, ir));
+            apply_args.push(Expr::Var(sym));
+        }
+        let ret = self.ir_type_from_ty_json(ret_ty, call_span)?;
+        // Body: apply (surplus + residual) args to the direct-call result at once.
+        let body = Expr::Apply {
+            func: Box::new(Expr::Call {
+                callee: resolved,
+                args: head,
+                pin: CallPin::None,
+            }),
+            args: apply_args,
+        };
+        let lambda = Expr::Lambda {
+            params,
+            ret,
+            body: Box::new(body),
+        };
+        let result = hoisted
+            .into_iter()
+            .rev()
+            .fold(lambda, |inner, (cap_sym, original)| Expr::Let {
+                name: cap_sym,
+                value: Box::new(original),
+                body: Box::new(inner),
+            });
+        Ok(result)
     }
 
     /// The declared arity of a resolved direct callee — the argument count a
@@ -14948,7 +15250,6 @@ impl<'a> Lowerer<'a> {
             _ => Err(unsupported(p.span, Feature::NestedCtorDiscrimination)),
         }
     }
-
 }
 
 /// Recursively collect every [`IrType::Generic`] symbol that appears
