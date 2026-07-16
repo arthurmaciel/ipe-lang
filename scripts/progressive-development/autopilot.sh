@@ -143,10 +143,21 @@ die()  {   # aborts always show on the terminal, watched or not
 # serial phases). start_epoch drives watch's elapsed-time column.
 status_file() { printf 'docs/architecture/progdev-status-lane%s.txt' "$1"; }
 STATUS="$(status_file 0)"
-set_task() { CUR_TYPE="$1"; CUR_TASK="$(printf '%.110s' "$2")"; CUR_START="$(date +%H:%M)"; CUR_START_EPOCH="$(date +%s)"; CUR_ATT="${3:-·}"; }
+# CUR_FIRST_EPOCH: set once per item (first set_task call); never reset on
+# phase transitions — watch.sh uses it to show TOTAL elapsed across retries.
+CUR_FIRST_EPOCH=""
+set_task() {
+    CUR_TYPE="$1"; CUR_TASK="$(printf '%.110s' "$2")"; CUR_START="$(date +%H:%M)"
+    CUR_START_EPOCH="$(date +%s)"; CUR_ATT="${3:-·}"
+    # Persist first-seen epoch across attempts: set only when blank (new item)
+    # or when the caller clears it (lane_author resets it at item start via
+    # unset CUR_FIRST_EPOCH before set_task, so every new item gets a fresh epoch).
+    [ -z "${CUR_FIRST_EPOCH:-}" ] && CUR_FIRST_EPOCH="$CUR_START_EPOCH"
+}
 phase() {  # <phase-name> <model>
     { printf 'task    %s\n' "${CUR_TASK:-·}"
-      printf 'type    %s   attempt %s   started %s   start_epoch %s\n' "${CUR_TYPE:-·}" "${CUR_ATT:-·}" "${CUR_START:-·}" "${CUR_START_EPOCH:-0}"
+      printf 'type    %s   attempt %s   started %s   start_epoch %s   first_seen_epoch %s\n' \
+             "${CUR_TYPE:-·}" "${CUR_ATT:-·}" "${CUR_START:-·}" "${CUR_START_EPOCH:-0}" "${CUR_FIRST_EPOCH:-0}"
       printf 'phase   %-11s model %-8s now %s\n' "$1" "${2:-·}" "$(date +%H:%M)"; } > "$STATUS" 2>/dev/null
     log "· $1 (${2:-·})"
 }
@@ -601,6 +612,7 @@ lane_author() {
     local datt design design_text review ahead
     STATUS="$(status_file "$i")"                       # this lane's header (local to the subshell)
     datt="$(( $(attempts_of "$gdesc") + 1 ))"
+    CUR_FIRST_EPOCH=""   # reset so set_task stamps a fresh first-seen epoch for this item
     set_task "$class" "$gdesc" "$datt/$MAX_ATTEMPTS"
 
     # DESIGN — reuse the saved plan on a retry, else fresh (Opus)
@@ -609,7 +621,10 @@ lane_author() {
         design_text="$(cat "$dplan")"; cp -f "$dplan" "$dfile"; : > "$dlog"
     else
         phase design opus
-        design="$(agent "$DESIGN_MODEL" "You are a compiler fix DESIGNER specialising in $class. Do NOT write code. Produce a concise root-cause + fix PLAN: (a) the root cause, (b) the exact crates/files/functions to change, (c) the approach — matching the ../sky READ-ONLY reference, root-cause only, NEVER a hack/fixture-edit/gate-weakening, (d) the regression test to add. FOCUS: $(class_focus "$class"). Item: $gdesc .$(resume_hint "$gdesc") If there is NO sound fix (needs a human decision, genuinely multi-session, or would require a hack), print exactly 'DESIGN: ESCALATE <why>' and nothing else. Otherwise print 'DESIGN: <the plan>'." | tee "$dlog")"
+        # SANDBOX: run the design agent inside the lane worktree (same as IMPL)
+        # so that any file the agent writes despite the "do NOT write code"
+        # instruction lands in the throwaway lane branch, not the main checkout.
+        design="$( ( cd "$gwt"; agent "$DESIGN_MODEL" "You are a compiler fix DESIGNER specialising in $class. Do NOT write code. Produce a concise root-cause + fix PLAN: (a) the root cause, (b) the exact crates/files/functions to change, (c) the approach — matching the ../sky READ-ONLY reference, root-cause only, NEVER a hack/fixture-edit/gate-weakening, (d) the regression test to add. FOCUS: $(class_focus "$class"). Item: $gdesc .$(resume_hint "$gdesc") If there is NO sound fix (needs a human decision, genuinely multi-session, or would require a hack), print exactly 'DESIGN: ESCALATE <why>' and nothing else. Otherwise print 'DESIGN: <the plan>'." ) | tee "$dlog")"
         if printf '%s' "$design" | rg -q 'DESIGN: ESCALATE'; then
             printf 'ESCALATE design escalate: %s\n' "$(reason_of "$design")" > "$res"; return 0
         fi
