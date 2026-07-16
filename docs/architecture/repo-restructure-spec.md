@@ -19,10 +19,20 @@ green between steps (each ends on a full §6 gate + example sweep):
   `IPE_`, `.sky`→`.ipe`, etc. Golden regen.
 - **Step C — namespace flatten** (`namespace-imports-and-packaging-spec.md`):
   merge the relocated `Sky/Core`+`Std` stdlib into `Ipe/`, rewrite imports.
+- **Step D — sanctioned fmt seal (#214), LAST.** The single `SKY_ALLOW_FMT=1
+  cargo fmt --all` pass, its own commit, immediately before the end-of-campaign
+  full gate + CI. Runs LAST because B (rename) and C (flatten) churn `.rs`
+  identifiers + import blocks and thus introduce their own rustfmt drift — a
+  fmt pass earlier is re-dirtied by the churn. One pass on the final settled tree
+  fixes the ~209 pre-existing fmt-dirty files AND all B/C drift at once, at a
+  solo/quiet moment (no lanes — `fmt --all` rewrites the whole workspace and must
+  not collide with concurrent work). After it, `cargo fmt --all --check` is green,
+  so the CI fmt gate can be switched on.
 
 Rationale: A is safe pure-motion; doing renames/flatten before the move would
 churn paths twice. Keeping `Sky/Core`+`Std` subdirs intact through Step A means
-no import touches until Step C.
+no import touches until Step C. Fmt (D) is last so it seals the settled tree once
+rather than being re-churned by B/C.
 
 ## Target tree (Step A end-state)
 
@@ -110,8 +120,10 @@ run the sweep). Match the gate to what each step can break:
   -p <runtime> --features full` + `clippy --workspace --all-targets -D warnings`
   — EXCEPT Step B (rename) touches runtime identifiers + feature-gated code, so
   run `--features full` there too.
-- **End of all three:** the complete §6 gate + example sweep 36/36 +
-  cross-platform CI.
+- **After C, before the final gate:** Step D — the `SKY_ALLOW_FMT=1 cargo fmt
+  --all` seal (#214), own commit.
+- **End of the campaign (after D):** the complete §6 gate + `cargo fmt --all
+  --check` green + example sweep 36/36 + cross-platform CI (fmt gate now on).
 
 A red that appears is a rewiring/rename/import miss, not a logic regression → fix
 the path/name/import, never the code (§0).
