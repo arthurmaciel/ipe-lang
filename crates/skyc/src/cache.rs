@@ -755,6 +755,7 @@ mod tests {
                 uses_css: false,
                 uses_auth: false,
                 uses_websocket: false,
+                uses_email: false,
             }],
         })
     }

@@ -216,6 +216,12 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         IrType::WebSocketClientCfg => "WebSocketCfg".to_owned(),
         // Std.Csv document record.
         IrType::CsvDoc => "Csv".to_owned(),
+        // Std.Email records + provider ADT (surface names as the Sky author sees).
+        IrType::EmailMessage => "EmailMessage".to_owned(),
+        IrType::EmailAttachment => "Attachment".to_owned(),
+        IrType::EmailSesConfig => "SesConfig".to_owned(),
+        IrType::EmailSmtpConfig => "SmtpConfig".to_owned(),
+        IrType::EmailProvider => "EmailProvider".to_owned(),
     }
 }
 
@@ -730,6 +736,8 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::ConfigDecodeYaml => "Config.decodeYaml",
         KernelFn::ConfigDecodeJson => "Config.decodeJson",
         KernelFn::ConfigLoadFromFile => "Config.loadFromFile",
+        // Std.Email
+        KernelFn::EmailSend => "Email.send",
         // TEA Cmd / Sub / Time.every (wired)
         KernelFn::CmdNone => "Cmd.none",
         KernelFn::CmdBatch => "Cmd.batch",
@@ -1889,6 +1897,7 @@ mod tests {
                 uses_css: false,
                 uses_auth: false,
                 uses_websocket: false,
+                uses_email: false,
             }],
         })
     }
@@ -1991,6 +2000,7 @@ program
                 uses_css: false,
                 uses_auth: false,
                 uses_websocket: false,
+                uses_email: false,
             }],
         };
 
@@ -2055,6 +2065,7 @@ program
                 uses_css: false,
                 uses_auth: false,
                 uses_websocket: false,
+                uses_email: false,
             }],
         };
 
@@ -2122,6 +2133,7 @@ program
                 uses_css: false,
                 uses_auth: false,
                 uses_websocket: false,
+                uses_email: false,
             }],
         };
 
@@ -2174,6 +2186,7 @@ program
                 uses_css: false,
                 uses_auth: false,
                 uses_websocket: false,
+                uses_email: false,
             }],
         };
 
@@ -2235,6 +2248,7 @@ program
                 uses_css: false,
                 uses_auth: false,
                 uses_websocket: false,
+                uses_email: false,
             }],
         };
 
@@ -2288,6 +2302,7 @@ program
                 uses_css: false,
                 uses_auth: false,
                 uses_websocket: false,
+                uses_email: false,
             }],
         };
 
@@ -2383,6 +2398,7 @@ program
                 uses_css: false,
                 uses_auth: false,
                 uses_websocket: false,
+                uses_email: false,
             }],
         };
 
@@ -2478,6 +2494,7 @@ program
                 uses_css: false,
                 uses_auth: false,
                 uses_websocket: false,
+                uses_email: false,
             }],
         };
 
@@ -2518,6 +2535,7 @@ program
                 uses_css: false,
                 uses_auth: false,
                 uses_websocket: false,
+                uses_email: false,
             }],
         };
         let rendered = pretty(&program, &i);

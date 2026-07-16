@@ -66,6 +66,10 @@ pub const TOKIO_TUNGSTENITE: CrateSpec = CrateSpec {
     name: "tokio-tungstenite",
     version: "0.24",
 };
+pub const LETTRE: CrateSpec = CrateSpec {
+    name: "lettre",
+    version: "0.11",
+};
 
 /// Every spec emitted by the surgery functions, for drift-test iteration.
 ///
@@ -86,6 +90,7 @@ pub const ALL: &[CrateSpec] = &[
     WRY,
     TAO,
     TOKIO_TUNGSTENITE,
+    LETTRE,
 ];
 
 #[cfg(test)]
@@ -102,7 +107,7 @@ mod tests {
             assert!(!spec.name.is_empty(), "empty crate name in ALL");
             assert!(!spec.version.is_empty(), "empty version for {}", spec.name);
         }
-        assert_eq!(ALL.len(), 13, "expected 13 surgery-emitted crate specs");
+        assert_eq!(ALL.len(), 14, "expected 14 surgery-emitted crate specs");
     }
 
     /// Extract the version from a Cargo dependency value: `"0.4"` or

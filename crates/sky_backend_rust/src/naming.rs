@@ -850,6 +850,8 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::ConfigDecodeYaml => "config_decode_yaml",
         KernelFn::ConfigDecodeJson => "config_decode_json",
         KernelFn::ConfigLoadFromFile => "config_load_from_file",
+        // ── Std.Email ───────────────────────────────────────────────────
+        KernelFn::EmailSend => "email_send",
         // ── TEA Cmd / Sub / Time kernels (wired) ────────────────────────
         KernelFn::CmdNone => "cmd_none",
         KernelFn::CmdBatch => "cmd_batch",
@@ -1398,7 +1400,10 @@ mod tests {
         // duplicate-definition once both glob re-exports land at the crate root.
         // The `user_` prefix makes the user side provably disjoint from every
         // kernel while leaving the kernel name untouched.
-        assert_eq!(kernel_name(KernelFn::AuthHashPassword), "auth_hash_password");
+        assert_eq!(
+            kernel_name(KernelFn::AuthHashPassword),
+            "auth_hash_password"
+        );
         assert_eq!(
             module_value(&["Auth"], "hashPassword"),
             "user_auth_hash_password"
@@ -1411,10 +1416,7 @@ mod tests {
         // Every function in a kernel-owned namespace is disambiguated uniformly,
         // even one with no kernel counterpart (`mintToken`), so the whole module
         // stays on one consistent scheme.
-        assert_eq!(
-            module_value(&["Auth"], "mintToken"),
-            "user_auth_mint_token"
-        );
+        assert_eq!(module_value(&["Auth"], "mintToken"), "user_auth_mint_token");
         // A user module whose prefix is NOT a kernel namespace is untouched: the
         // composite-server's `Routes.Auth` folds to `routes_auth_*` (first segment
         // `routes`), so it keeps its default name.
