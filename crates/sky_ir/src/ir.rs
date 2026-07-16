@@ -966,6 +966,19 @@ pub enum IrType {
     /// kernel (otherwise E0308). Fields are read via `.hits`/`.misses`/
     /// `.evictions` on the runtime struct's pub fields.
     CacheStats,
+
+    /// `Std.Csv`'s document record `{ header : List String, rows : List (List
+    /// String) }`. Renders as `sky_runtime::csv::CsvDoc`.
+    ///
+    /// The lowerer folds any solved / annotated record matching that exact
+    /// 2-field shape to this opaque variant (same mechanism as
+    /// [`IrType::CacheCfg`]) so a record literal fed to `Csv.encode` constructs
+    /// the runtime `CsvDoc` struct the `csv_encode` kernel takes — and the
+    /// `csv_parse` kernel's `CsvDoc` return is field-accessed via `.header` /
+    /// `.rows` — rather than a backend-synthesised `RecHeaderRows` struct that
+    /// would mismatch it (E0308). Fully `Clone` (derivable on the runtime
+    /// struct); never stored in a Sky.Live Model.
+    CsvDoc,
 }
 
 /// Tag enum for the message-parametric `Std.Ui` / `Std.Html` types.
@@ -1101,9 +1114,11 @@ pub fn ir_type_is_derivable(
         | IrType::TypeInfo
         | IrType::SqlFragment
         | IrType::Secret
-        // Cache config / stats runtime structs derive Clone+Debug+PartialEq.
+        // Cache config / stats + Csv document runtime structs derive
+        // Clone+Debug+PartialEq.
         | IrType::CacheCfg
         | IrType::CacheStats
+        | IrType::CsvDoc
         | IrType::Generic(_)
         | IrType::UiPlain(_) => true,
         // The fully-derivable Std.Ui / Std.Html carriers vs the two Clone-only
@@ -1265,11 +1280,13 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         // field of type `Secret` a compile-time SKY-L0120, not a session-store
         // leak.
         | IrType::Secret
-        // Cache config / stats are kernel-boundary data records — derivable
-        // (see `ir_type_is_derivable`) but never persisted to a session store, so
-        // not serde (the runtime structs carry no serde derive).
+        // Cache config / stats + Csv document are kernel-boundary data records
+        // — derivable (see `ir_type_is_derivable`) but never persisted to a
+        // session store, so not serde (the runtime structs carry no serde
+        // derive).
         | IrType::CacheCfg
         | IrType::CacheStats
+        | IrType::CsvDoc
         // `WsHandle` / `WsServerCfg` are opaque handles; not serde.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
@@ -1364,7 +1381,8 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
         | IrType::UiPlain(_)
         | IrType::LiveReq
         | IrType::CacheCfg
-        | IrType::CacheStats => true,
+        | IrType::CacheStats
+        | IrType::CsvDoc => true,
         // Non-`Clone` default carriers. `Fun`'s default carrier is `Box<dyn Fn>`
         // (position-typed model — the `Clone` `Arc` carrier exists only at
         // promoted binding sites, see [`fun_value_arc_promotable`]).

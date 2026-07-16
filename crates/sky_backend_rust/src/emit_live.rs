@@ -665,6 +665,7 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::Secret => "Secret",
         IrType::CacheCfg => "CacheCfg",
         IrType::CacheStats => "CacheStats",
+        IrType::CsvDoc => "Csv",
     }
 }
 
