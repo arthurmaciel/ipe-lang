@@ -212,6 +212,8 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         // Std.Cache config / stats records.
         IrType::CacheCfg => "CacheCfg".to_owned(),
         IrType::CacheStats => "CacheStats".to_owned(),
+        // Sky.Core.WebSocket connect-config record.
+        IrType::WebSocketClientCfg => "WebSocketCfg".to_owned(),
         // Std.Csv document record.
         IrType::CsvDoc => "Csv".to_owned(),
     }
@@ -1109,6 +1111,14 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::WsSendBinaryToClient => "Ws.sendBinaryToClient",
         KernelFn::WsBroadcast => "Ws.broadcast",
         KernelFn::WsCloseClient => "Ws.closeClient",
+        // ── Sky.Core.WebSocket — outbound WebSocket client ─────────────
+        KernelFn::WebSocketConnect => "WebSocket.connect",
+        KernelFn::WebSocketConnectWith => "WebSocket.connectWith",
+        KernelFn::WebSocketSend => "WebSocket.send",
+        KernelFn::WebSocketSendBinary => "WebSocket.sendBinary",
+        KernelFn::WebSocketClose => "WebSocket.close",
+        KernelFn::WebSocketCloseWithCode => "WebSocket.closeWithCode",
+        KernelFn::SubSubscribeWebSocket => "Sub.subscribeWebSocket",
         // ── Std.Ui.Input ───────────────────────────────────────────────
         KernelFn::InputLabelAbove => "Input.labelAbove",
         KernelFn::InputLabelBelow => "Input.labelBelow",
@@ -1878,6 +1888,7 @@ mod tests {
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_websocket: false,
             }],
         })
     }
@@ -1979,6 +1990,7 @@ program
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_websocket: false,
             }],
         };
 
@@ -2042,6 +2054,7 @@ program
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_websocket: false,
             }],
         };
 
@@ -2108,6 +2121,7 @@ program
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_websocket: false,
             }],
         };
 
@@ -2159,6 +2173,7 @@ program
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_websocket: false,
             }],
         };
 
@@ -2219,6 +2234,7 @@ program
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_websocket: false,
             }],
         };
 
@@ -2271,6 +2287,7 @@ program
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_websocket: false,
             }],
         };
 
@@ -2365,6 +2382,7 @@ program
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_websocket: false,
             }],
         };
 
@@ -2459,6 +2477,7 @@ program
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_websocket: false,
             }],
         };
 
@@ -2498,6 +2517,7 @@ program
                 uses_webview: false,
                 uses_css: false,
                 uses_auth: false,
+                uses_websocket: false,
             }],
         };
         let rendered = pretty(&program, &i);
