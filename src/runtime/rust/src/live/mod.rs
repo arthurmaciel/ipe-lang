@@ -1,13 +1,15 @@
 //! Ipe.Live on the Rust backend — HTTP-first render + SSE patch loop.
 //! Generic over the app's (Model, Msg); no `any`, static dispatch only.
-pub mod diff;
+// Re-exported from the target-neutral `dom` module (shared with the
+// browser-WASM sink); module aliases keep `live::diff::Patch`-style paths valid.
+pub use crate::dom::diff;
+pub use crate::dom::dispatch;
 pub use diff::*;
-pub mod dispatch;
 pub use dispatch::*;
 pub mod sse;
-pub use sse::*;
-pub mod form;
+pub use crate::dom::form;
 pub use form::*;
+pub use sse::*;
 pub mod route;
 pub use route::*;
 pub mod console;
