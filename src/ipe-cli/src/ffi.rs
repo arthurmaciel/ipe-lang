@@ -163,9 +163,13 @@ fn inspector_binary() -> Result<PathBuf, CliError> {
 
 /// Run the inspector for `krate` inside the sandbox jail and return its
 /// stdout (the inspection JSON).
-fn run_inspector(krate: &CrateName, features: &[String]) -> Result<String, CliError> {
+fn run_inspector(
+    krate: &CrateName,
+    features: &[String],
+    allow_build_scripts: bool,
+) -> Result<String, CliError> {
     let inspector = inspector_binary()?;
-    let argv = ipe_ffi::driver::inspector_argv(krate, features, None);
+    let argv = ipe_ffi::driver::inspector_argv(krate, features, None, allow_build_scripts);
     let mut payload: Vec<OsString> = vec![inspector.clone().into_os_string()];
     payload.extend(argv);
 
@@ -255,8 +259,13 @@ fn run_inspector(krate: &CrateName, features: &[String]) -> Result<String, CliEr
 }
 
 /// Shared tail of `add` / `install`: inspect one crate + write its artifacts.
-fn add_one(cache: &FfiCache, krate: &CrateName, features: &[String]) -> Result<(), CliError> {
-    let json = run_inspector(krate, features)?;
+fn add_one(
+    cache: &FfiCache,
+    krate: &CrateName,
+    features: &[String],
+    allow_build_scripts: bool,
+) -> Result<(), CliError> {
+    let json = run_inspector(krate, features, allow_build_scripts)?;
     // A multi-crate inspector run emits a JSON array; `ipe add` runs one
     // crate, but tolerate the array wrapper by unwrapping a singleton.
     let doc_text = match serde_json::from_str::<serde_json::Value>(&json) {
@@ -288,6 +297,7 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
     let mut krate: Option<String> = None;
     let mut features: Vec<String> = Vec::new();
     let mut assume_yes = false;
+    let mut allow_build_scripts = false;
     let mut it = rest.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -298,6 +308,7 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
                 features.extend(raw.split(',').map(str::to_owned));
             }
             "--yes" => assume_yes = true,
+            "--allow-build-scripts" => allow_build_scripts = true,
             other if krate.is_none() => krate = Some(other.to_owned()),
             _ => {
                 return Err(CliError::Usage(
@@ -322,7 +333,7 @@ pub fn run_add(rest: &[String]) -> Result<(), CliError> {
     }
 
     let cache = FfiCache::at_project_root(Path::new("."));
-    add_one(&cache, &krate, &features)
+    add_one(&cache, &krate, &features, allow_build_scripts)
 }
 
 /// `ipe remove <crate>`.
@@ -369,7 +380,7 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
     for (name, _version) in deps {
         let krate =
             CrateName::parse(&name).map_err(|diag| CliError::UsageOwned(diag.to_string()))?;
-        add_one(&cache, &krate, &[])?;
+        add_one(&cache, &krate, &[], false)?;
     }
     Ok(())
 }

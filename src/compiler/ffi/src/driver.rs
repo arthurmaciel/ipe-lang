@@ -234,8 +234,12 @@ pub fn inspector_argv(
     krate: &CrateName,
     features: &[String],
     git: Option<&GitSource>,
+    allow_build_scripts: bool,
 ) -> Vec<OsString> {
     let mut argv: Vec<OsString> = Vec::new();
+    if allow_build_scripts {
+        argv.push("--allow-build-scripts".into());
+    }
     if !features.is_empty() {
         argv.push("--features".into());
         argv.push(features.join(",").into());
@@ -859,7 +863,7 @@ mod tests {
             &hosts,
         )
         .expect("accepted");
-        let argv = inspector_argv(&krate, &["std".to_owned()], Some(&git));
+        let argv = inspector_argv(&krate, &["std".to_owned()], Some(&git), false);
         let rendered: Vec<String> = argv
             .iter()
             .map(|a| a.to_string_lossy().into_owned())
