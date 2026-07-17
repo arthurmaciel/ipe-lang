@@ -100,7 +100,7 @@ fn emit_project_memoized_coarse_floor() {
     let a = file(&db, &["A"], DEP_A);
     let b = file(&db, &["B"], IMPORTER_B);
     let root = root_of(&db, &[(&["A"], a), (&["B"], b)]);
-    let config = BuildConfig::new(&db, DbDriver::Sqlite);
+    let config = BuildConfig::new(&db, DbDriver::Sqlite, None);
 
     let emitted =
         ipe_db::emit_project(&db, root, b, config).expect("trivial int program must emit");
@@ -150,7 +150,7 @@ fn emit_project_config_change_does_not_retrigger_lower() {
     let a = file(&db, &["A"], DEP_A);
     let b = file(&db, &["B"], IMPORTER_B);
     let root = root_of(&db, &[(&["A"], a), (&["B"], b)]);
-    let config = BuildConfig::new(&db, DbDriver::Sqlite);
+    let config = BuildConfig::new(&db, DbDriver::Sqlite, None);
 
     assert!(ipe_db::emit_project(&db, root, b, config).is_ok());
     assert_eq!(log.executions_of("emit_project("), 1);
@@ -201,7 +201,7 @@ fn emit_project_source_edit_retriggers_lower_and_emit() {
     let a = file(&db, &["A"], DEP_A);
     let b = file(&db, &["B"], IMPORTER_B);
     let root = root_of(&db, &[(&["A"], a), (&["B"], b)]);
-    let config = BuildConfig::new(&db, DbDriver::Sqlite);
+    let config = BuildConfig::new(&db, DbDriver::Sqlite, None);
 
     assert!(ipe_db::emit_project(&db, root, b, config).is_ok());
 
@@ -224,7 +224,7 @@ fn emit_project_short_circuits_on_lower_error() {
     let (db, _log) = logged_db();
     let entry = file(&db, &["Entry"], RED_ENTRY);
     let root = root_of(&db, &[(&["Entry"], entry)]);
-    let config = BuildConfig::new(&db, DbDriver::Sqlite);
+    let config = BuildConfig::new(&db, DbDriver::Sqlite, None);
 
     let lower_err =
         ipe_db::lower_program(&db, root, entry).expect_err("ill-typed program must fail to lower");

@@ -740,9 +740,10 @@ mod schema_tag_tests {
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_ffi: false,
             }],
         };
-        let ctx = EmitCtx::build(&interner, &program, DbDriver::Sqlite)?;
+        let ctx = EmitCtx::build(&interner, &program, DbDriver::Sqlite, None)?;
 
         // Model = { count : Int } (no `page` field → the single-page branch).
         let model = IrType::Record(BTreeMap::from([(count, IrType::Int)]));

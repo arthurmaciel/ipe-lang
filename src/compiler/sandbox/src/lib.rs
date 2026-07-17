@@ -235,6 +235,16 @@ pub struct JailSpec {
     pub registry_cache: Option<PathBuf>,
     /// The pinned nightly toolchain name exported as `RUSTUP_TOOLCHAIN`.
     pub toolchain: Option<String>,
+    /// Toolchain directories re-bound read-only AFTER the `/home` tmpfs mask
+    /// (a rustup install lives under the invoking user's home, which the
+    /// tmpfs would otherwise hide). Read-only: the payload can execute the
+    /// toolchain but never mutate it.
+    pub toolchain_ro_binds: Vec<PathBuf>,
+    /// Directories prepended to the jail's `PATH` (toolchain `bin` dirs).
+    pub path_prepend: Vec<PathBuf>,
+    /// The rustup root exported as `RUSTUP_HOME` (the env is scrubbed, so the
+    /// proxy binaries cannot discover it from `$HOME`).
+    pub rustup_home: Option<PathBuf>,
     /// Resource caps.
     pub limits: ResourceLimits,
 }
@@ -285,18 +295,33 @@ pub fn bwrap_argv(
         argv.push(cache.clone().into());
         argv.push(cache.clone().into());
     }
+    // Re-expose the toolchain through the tmpfs mask, read-only.
+    for dir in &spec.toolchain_ro_binds {
+        argv.push("--ro-bind".into());
+        argv.push(dir.clone().into());
+        argv.push(dir.clone().into());
+    }
     argv.push("--bind".into());
     argv.push(spec.scoped_tmp.clone().into());
     argv.push(spec.scoped_tmp.clone().into());
     argv.push("--chdir".into());
     argv.push(spec.scoped_tmp.clone().into());
     let cargo_home = spec.scoped_tmp.join("cargo-home");
-    let setenvs: Vec<(&str, OsString)> = vec![
-        ("CARGO_NET_OFFLINE", "1".into()),
-        ("CARGO_HOME", cargo_home.into()),
-        ("PATH", "/usr/bin:/bin".into()),
-        ("TMPDIR", spec.scoped_tmp.clone().into()),
-    ];
+    let mut path_value = String::new();
+    for dir in &spec.path_prepend {
+        path_value.push_str(&dir.to_string_lossy());
+        path_value.push(':');
+    }
+    path_value.push_str("/usr/bin:/bin");
+    let mut setenvs: Vec<(&str, OsString)> = Vec::new();
+    // The fetch phase must reach the registry; every compile/introspect
+    // phase stays offline.
+    if spec.network == NetworkPolicy::Denied {
+        setenvs.push(("CARGO_NET_OFFLINE", "1".into()));
+    }
+    setenvs.push(("CARGO_HOME", cargo_home.into()));
+    setenvs.push(("PATH", path_value.into()));
+    setenvs.push(("TMPDIR", spec.scoped_tmp.clone().into()));
     for (key, value) in setenvs {
         argv.push("--setenv".into());
         argv.push(key.into());
@@ -306,6 +331,11 @@ pub fn bwrap_argv(
         argv.push("--setenv".into());
         argv.push("RUSTUP_TOOLCHAIN".into());
         argv.push(tc.into());
+    }
+    if let Some(rustup_home) = &spec.rustup_home {
+        argv.push("--setenv".into());
+        argv.push("RUSTUP_HOME".into());
+        argv.push(rustup_home.clone().into());
     }
     argv.push("--".into());
     if let Some(p) = prlimit {
@@ -520,6 +550,9 @@ mod tests {
             scoped_tmp: PathBuf::from("/work/tmp-1"),
             registry_cache: Some(PathBuf::from("/work/registry")),
             toolchain: Some("nightly-2026-01-01".to_owned()),
+            toolchain_ro_binds: Vec::new(),
+            path_prepend: Vec::new(),
+            rustup_home: None,
             limits: ResourceLimits::default(),
         }
     }
@@ -614,7 +647,12 @@ mod tests {
             assert!(
                 matches!(
                     key.as_str(),
-                    "CARGO_NET_OFFLINE" | "CARGO_HOME" | "PATH" | "TMPDIR" | "RUSTUP_TOOLCHAIN"
+                    "CARGO_NET_OFFLINE"
+                        | "CARGO_HOME"
+                        | "PATH"
+                        | "TMPDIR"
+                        | "RUSTUP_TOOLCHAIN"
+                        | "RUSTUP_HOME"
                 ),
                 "unexpected env var {key} enters the jail"
             );

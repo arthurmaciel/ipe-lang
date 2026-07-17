@@ -1225,6 +1225,7 @@ fn callee_name(callee: &Callee) -> String {
     match callee {
         Callee::Func(id) => format!("fn#{}", id.as_raw()),
         Callee::Kernel(kernel) => format!("kernel {}", kernel_name(*kernel)),
+        Callee::Ffi { ident } => format!("ffi #{}", ident.as_raw()),
     }
 }
 
@@ -1897,6 +1898,7 @@ mod tests {
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_ffi: false,
             }],
         })
     }
@@ -2000,6 +2002,7 @@ program
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_ffi: false,
             }],
         };
 
@@ -2065,6 +2068,7 @@ program
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_ffi: false,
             }],
         };
 
@@ -2133,6 +2137,7 @@ program
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_ffi: false,
             }],
         };
 
@@ -2186,6 +2191,7 @@ program
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_ffi: false,
             }],
         };
 
@@ -2248,6 +2254,7 @@ program
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_ffi: false,
             }],
         };
 
@@ -2302,6 +2309,7 @@ program
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_ffi: false,
             }],
         };
 
@@ -2398,6 +2406,7 @@ program
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_ffi: false,
             }],
         };
 
@@ -2494,6 +2503,7 @@ program
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_ffi: false,
             }],
         };
 
@@ -2535,6 +2545,7 @@ program
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_ffi: false,
             }],
         };
         let rendered = pretty(&program, &i);
