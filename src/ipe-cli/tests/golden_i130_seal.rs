@@ -42,7 +42,7 @@ fn repo_root() -> PathBuf {
 /// Assert that `skyc::build(fixture)` surfaces `expected` as a
 /// `CliError::Pipeline` diagnostic.  Runs WITHOUT `SKY_E2E` so the gate
 /// checks remain fast in the default CI pass.
-fn assert_skyc_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code) {
+fn assert_skyc_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code) {
     let root = repo_root();
     let entry = root
         .join("tests")

@@ -5,8 +5,8 @@
 //!
 //! Without the fix, `skyc build` FAILED with SKY-L0102 ("polymorphic value's type could
 //! not be determined") at the `[] ->` arm inside `Lib.sky`. The type-checker
-//! (`sky_types`) correctly generalized the boundary scheme — its
-//! `untyped_type_params` entry listed the element var — but `sky_lower`'s
+//! (`ipe_types`) correctly generalized the boundary scheme — its
+//! `untyped_type_params` entry listed the element var — but `ipe_lower`'s
 //! `lower_case` carried a stale gate that rejected ANY list `case` binding a
 //! value (`_ :: rest`) whose element type lowered to `IrType::Generic(_)`,
 //! believing "function generics emit bound-free" so `rest.to_vec()` would fail
@@ -17,7 +17,7 @@
 //! `IrType::Json`). So the emitted `fn even_len<T1: Clone>(xs: Vec<T1>) -> bool`
 //! with `rest.to_vec()` builds fine — the gate rejected sound programs.
 //!
-//! Fix (`crates/sky_lower/src/lower.rs`, `lower_case`): remove the stale
+//! Fix (`crates/ipe_lower/src/lower.rs`, `lower_case`): remove the stale
 //! generic-element list-binding SKY-L0102 gate. A `Generic` element that reaches
 //! `lower_case` is, by construction, a `Clone`-bounded declared type parameter,
 //! so the owned-rebind (`rest.to_vec()` / `x.clone()`) is sound. Cross-module

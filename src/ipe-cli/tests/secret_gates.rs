@@ -19,7 +19,7 @@ fn repo_root() -> PathBuf {
 
 /// Build the named golden fixture and assert it surfaces exactly `expected` as
 /// a pipeline diagnostic — never a panic, never a silent accept.
-fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code) {
+fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code) {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -46,7 +46,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code)
 
 /// `"using key " ++ Secret.fromString "sk_live_abc123"` — `Secret` does not
 /// satisfy the `++` append obligation (`String` / `List _` only; see
-/// `BinopClass::Append`'s doc comment in `sky_types::constrain`). Both
+/// `BinopClass::Append`'s doc comment in `ipe_types::constrain`). Both
 /// operands are `eq`'d to one shared appendable-bounded super-var; the
 /// concrete `String` literal on the left pins that var to `String` FIRST, so
 /// the `Secret` right operand surfaces as an ordinary `SKY-T0001` `Con`
@@ -58,6 +58,6 @@ fn secret_concat_is_rejected() {
     assert_gate(
         "secret_concat_rejected",
         "secret_concat_rejected_emit",
-        sky_diagnostics::SKY_T0001,
+        ipe_diagnostics::SKY_T0001,
     );
 }

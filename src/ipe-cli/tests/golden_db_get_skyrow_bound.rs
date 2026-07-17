@@ -11,9 +11,9 @@
 //! carried an unbounded `<T1: Clone>` param, so its body's
 //! `db_get_string(_, &payload)` could not prove `payload: SkyRow`.
 //!
-//! Fix (`crates/sky_ir/src/ir.rs` + `crates/sky_lower/src/lower.rs`): a new
+//! Fix (`crates/ipe_ir/src/ir.rs` + `crates/ipe_lower/src/lower.rs`): a new
 //! `BoundSet::SKY_ROW` flag, rendered by `render_bounds` as
-//! `sky_runtime::db::SkyRow`. The lowerer decides the bound STRUCTURALLY, at
+//! `ipe_runtime::db::SkyRow`. The lowerer decides the bound STRUCTURALLY, at
 //! IR level (`apply_db_row_bounds` / `body_calls_db_get_on_param`): it fires
 //! ONLY when the fn body contains an actual `Db.get*` KERNEL application whose
 //! ROW argument is a `Var`/`CloneVar` reference to the wildcard `any` param
@@ -75,12 +75,12 @@ fn i177_skyc_accepts_and_bounds_fn_not_struct() {
     // The decoder function's wildcard-`any` generic gains the `SkyRow` bound so
     // its `db_get_string(_, &payload)` body type-checks (E0277 half).
     assert!(
-        emitted.contains("sky_runtime::db::SkyRow"),
+        emitted.contains("ipe_runtime::db::SkyRow"),
         "the wildcard-`any` decoder function must carry the `SkyRow` bound so \
          its `db_get_string` body type-checks (#177); got main.rs:\n{emitted}"
     );
     assert!(
-        emitted.contains("pub fn main_decode_row<T1: Clone + sky_runtime::db::SkyRow>"),
+        emitted.contains("pub fn main_decode_row<T1: Clone + ipe_runtime::db::SkyRow>"),
         "the bound belongs on the decoder FUNCTION's generic param, not \
          elsewhere (#177); got main.rs:\n{emitted}"
     );

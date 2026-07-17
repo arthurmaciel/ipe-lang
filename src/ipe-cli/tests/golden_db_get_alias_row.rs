@@ -75,7 +75,7 @@ fn assert_skyc_bounds_fn_not_struct(fixture: &str) {
 
     // The alias in row position must NOT defeat the bound.
     assert!(
-        emitted.contains("pub fn main_decode_row<T1: Clone + sky_runtime::db::SkyRow>"),
+        emitted.contains("pub fn main_decode_row<T1: Clone + ipe_runtime::db::SkyRow>"),
         "the aliased-row decoder's wildcard-`any` generic must still carry the \
          `SkyRow` bound so its `db_get_string(_, &r)` body type-checks (#177 \
          FIX-UP 2); got main.rs:\n{emitted}"

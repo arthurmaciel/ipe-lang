@@ -67,7 +67,7 @@ pub fn golden_dir_of(golden: &Path) -> &Path {
 ///
 /// **Scope is manifest-authoritative, not a blind recursive diff.** A golden
 /// dir carries OTHER, non-emitted fixture files (`Main.sky`, `expected_go.txt`,
-/// `oracle.meta`, and a partial `sky_runtime/` reference tree) that the emitted
+/// `oracle.meta`, and a partial `ipe_runtime/` reference tree) that the emitted
 /// project does not reproduce at those paths; the walk is scoped to exactly the
 /// golden's byte-diffable emitted artifacts (`main.rs` -> `<out>/src/main.rs`,
 /// and `Cargo.toml` -> `<out>/Cargo.toml` WHEN the golden dir checks one in),
@@ -172,7 +172,7 @@ pub fn assert_emitted_project_matches_golden_dir(emitted_out: &Path, golden_dir:
 /// string, so a substring assertion is robust to WHICH file the split placed
 /// a symbol in.
 ///
-/// The vendored `src/sky_runtime/` tree is deliberately EXCLUDED: it is the
+/// The vendored `src/ipe_runtime/` tree is deliberately EXCLUDED: it is the
 /// fixed kernel runtime, identical for every program, and a substring test
 /// asserting "the emitted program carries symbol X" means X in the emitted
 /// USER/stdlib-source code, never a coincidental match inside the runtime

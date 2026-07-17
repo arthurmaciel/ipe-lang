@@ -1,6 +1,6 @@
 //! `ipe watch`.
 //!
-//! The salsa-aware orchestrator that wires [`sky_watch`]'s salsa-agnostic
+//! The salsa-aware orchestrator that wires [`ipe_watch`]'s salsa-agnostic
 //! primitives (confined watcher, debounce, process supervisor) to THIS
 //! crate's warm compile pipeline. This is the first real CONSUMER of
 //! incremental compilation's speed benefit — a naive "re-run `skyc build`
@@ -17,7 +17,7 @@
 //!
 //! 1. **notify watcher thread** (owned by the `notify::Watcher` handle) —
 //!    pushes every IN-SCOPE raw path change onto an `mpsc` channel. The
-//!    [`sky_watch::WatchScope::is_relevant`] filter runs INSIDE the event
+//!    [`ipe_watch::WatchScope::is_relevant`] filter runs INSIDE the event
 //!    callback, so an excluded-dir storm never reaches the channel at all.
 //!    The callback ALSO rejects `EventKind::Access` (open/read)
 //!    and `EventKind::Other` before that filter even runs — load-bearing,
@@ -28,10 +28,10 @@
 //!    that rejection — it is the write-completion proof a debounce window
 //!    alone cannot substitute for; see the callback's own doc comment for
 //!    why.
-//! 2. **coalesce thread** — [`sky_watch::coalesce_loop`] turns that raw
+//! 2. **coalesce thread** — [`ipe_watch::coalesce_loop`] turns that raw
 //!    stream into settled batches (the debounce half).
 //! 3. **compile worker thread** (spawned fresh per rebuild cycle) — holds a
-//!    CLONED [`sky_db::SkyDatabase`] handle and runs [`compile_prepared`]
+//!    CLONED [`ipe_db::SkyDatabase`] handle and runs [`compile_prepared`]
 //!    inside [`salsa::Cancelled::catch`]. The orchestrator thread never runs
 //!    a salsa query itself; it only mutates inputs (which is what makes a
 //!    superseding edit cancel the in-flight worker — see the cancellation
@@ -88,7 +88,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use sky_intern::Interner;
+use ipe_intern::Interner;
 
 use crate::project;
 use crate::{CliError, io_err, write_emitted_project};
@@ -119,7 +119,7 @@ pub enum WatchEvent {
     /// `generation`'s `cargo build` was killed because a newer batch
     /// superseded it ("never overlapping cargo builds").
     CargoKilled { generation: u64 },
-    /// `generation` reached [`sky_watch::SupervisorState::apply_green`] and
+    /// `generation` reached [`ipe_watch::SupervisorState::apply_green`] and
     /// this was the outcome.
     Restarted {
         generation: u64,
@@ -127,10 +127,10 @@ pub enum WatchEvent {
     },
 }
 
-/// A test/observability-friendly mirror of [`sky_watch::RestartOutcome`].
+/// A test/observability-friendly mirror of [`ipe_watch::RestartOutcome`].
 ///
 /// That type intentionally isn't `Clone` — it can carry a live [`Child`]
-/// via [`sky_watch::SupervisorState`] elsewhere in this module — so
+/// via [`ipe_watch::SupervisorState`] elsewhere in this module — so
 /// [`WatchEvent`] carries this small `Clone`-able summary instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RestartOutcomeKind {
@@ -152,8 +152,8 @@ pub struct WatchOptions {
     /// for `/_sky/readyz` when the emitted project is detected as a
     /// Sky.Live app. Harmless (ignored) for every other app shape.
     pub port: u16,
-    pub debounce: sky_watch::DebounceConfig,
-    pub restart_timeouts: sky_watch::RestartTimeouts,
+    pub debounce: ipe_watch::DebounceConfig,
+    pub restart_timeouts: ipe_watch::RestartTimeouts,
     /// Optional lifecycle observer — see [`WatchEvent`]. `None` on the CLI
     /// path.
     pub on_event: Option<Arc<dyn Fn(WatchEvent) + Send + Sync>>,
@@ -167,8 +167,8 @@ impl WatchOptions {
             out_dir,
             runtime_dir,
             port: 8000,
-            debounce: sky_watch::DebounceConfig::default(),
-            restart_timeouts: sky_watch::RestartTimeouts::default(),
+            debounce: ipe_watch::DebounceConfig::default(),
+            restart_timeouts: ipe_watch::RestartTimeouts::default(),
             on_event: None,
         }
     }
@@ -184,7 +184,7 @@ fn emit(opts: &WatchOptions, event: WatchEvent) {
 /// (the one-shot driver) would consume, but returned to the CALLER instead
 /// of immediately compiled, so `ipe watch` can re-resolve on every settled
 /// batch and feed the result through a WARM, reused database via
-/// `sky_db::sync_source_root` rather than constructing a fresh one per
+/// `ipe_db::sync_source_root` rather than constructing a fresh one per
 /// build. Deliberately mirrors `run_build`'s own manifest-resolution
 /// dispatch (`crates/skyc/src/lib.rs`) without touching that code — the
 /// one-shot entry points stay exactly as tested by the golden suite; this
@@ -195,7 +195,7 @@ struct ResolvedProject {
     discovered: Vec<project::DiscoveredModule>,
     entry_path: Vec<String>,
     blame_path: PathBuf,
-    db_driver: sky_backend_rust::DbDriver,
+    db_driver: ipe_backend_rust::DbDriver,
 }
 
 /// Resolve `entry` (a `.sky` file, a `sky.toml`, or a project directory)
@@ -244,7 +244,7 @@ fn resolve_project_sources(entry: &Path) -> Result<ResolvedProject, CliError> {
     // No manifest: sibling discovery, mirroring `build_with_sibling_discovery`.
     let source = std::fs::read_to_string(entry).map_err(|e| io_err(entry, e))?;
     let mut name_interner = Interner::new();
-    let parsed = sky_parse::parse_module(&source, &mut name_interner).map_err(|diag| {
+    let parsed = ipe_parse::parse_module(&source, &mut name_interner).map_err(|diag| {
         CliError::Pipeline {
             file: entry.to_path_buf(),
             src: source.clone(),
@@ -288,11 +288,11 @@ fn resolve_project_sources(entry: &Path) -> Result<ResolvedProject, CliError> {
         discovered,
         entry_path: entry_module_path,
         blame_path: entry.to_path_buf(),
-        db_driver: sky_backend_rust::DbDriver::Sqlite,
+        db_driver: ipe_backend_rust::DbDriver::Sqlite,
     })
 }
 
-/// The project root + entry directory a [`sky_watch::WatchScope`] confines
+/// The project root + entry directory a [`ipe_watch::WatchScope`] confines
 /// itself to, derived from one resolved snapshot.
 fn scope_roots(resolved: &ResolvedProject, entry: &Path) -> (PathBuf, PathBuf) {
     // The manifest's directory when a `sky.toml` is the blame path (its own
@@ -350,7 +350,7 @@ enum OrchestratorEvent {
 /// (child process killed/reaped, watcher + coalesce threads joined) —
 /// never an unbounded wait (CLAUDE.md §3's "every long-running command MUST
 /// be timeout-bounded"). Generously above the realistic worst case: a
-/// `graceful_stop` of [`sky_watch::RestartTimeouts::default`]'s 3 s, plus
+/// `graceful_stop` of [`ipe_watch::RestartTimeouts::default`]'s 3 s, plus
 /// slack for the cargo-kill waiter's poll loop, the compile worker's salsa
 /// unwind, and the coalesce thread's join — all of which are themselves
 /// individually bounded and normally complete in well under a second once
@@ -466,7 +466,7 @@ pub fn spawn(opts: WatchOptions) -> (thread::JoinHandle<Result<(), CliError>>, W
 }
 
 enum CompileOutcome {
-    Green(Arc<sky_backend::EmittedProject>),
+    Green(Arc<ipe_backend::EmittedProject>),
     Red(String),
     /// Cancelled via salsa (a newer generation superseded it) — never
     /// reported to the user; the newer cycle already took over.
@@ -508,7 +508,7 @@ fn run_inner(
     let initial = resolve_project_sources(&opts.entry)?;
     let (root_dir, entry_dir) = scope_roots(&initial, &opts.entry);
 
-    let scope = sky_watch::WatchScope::build(&root_dir, &entry_dir)
+    let scope = ipe_watch::WatchScope::build(&root_dir, &entry_dir)
         .map_err(|e| CliError::UsageOwned(e.to_string()))?;
     eprintln!(
         "[ipe watch] watching {} ({} source files)",
@@ -600,10 +600,10 @@ fn run_inner(
 
     warn_if_memory_store();
 
-    let (batch_tx, batch_rx) = mpsc::channel::<sky_watch::Batch>();
+    let (batch_tx, batch_rx) = mpsc::channel::<ipe_watch::Batch>();
     let debounce_cfg = opts.debounce;
     let coalesce_handle =
-        thread::spawn(move || sky_watch::coalesce_loop(&raw_rx, &batch_tx, debounce_cfg));
+        thread::spawn(move || ipe_watch::coalesce_loop(&raw_rx, &batch_tx, debounce_cfg));
 
     let (evt_tx, evt_rx) = mpsc::channel::<OrchestratorEvent>();
     {
@@ -637,7 +637,7 @@ fn run_inner(
             // Errors are logged, never fatal — a platform where signal
             // registration fails degrades to the pre-existing behaviour (no
             // PID-only-SIGTERM handling), never a hard failure of `ipe watch`.
-            if let Err(e) = sky_watch::install_sigterm_forwarder(move || {
+            if let Err(e) = ipe_watch::install_sigterm_forwarder(move || {
                 let _ = evt_tx.send(OrchestratorEvent::Shutdown);
             }) {
                 eprintln!("[ipe watch] warning: could not install SIGTERM handler: {e}");
@@ -653,10 +653,10 @@ fn run_inner(
         });
     }
 
-    let mut db_main = sky_db::SkyDatabase::new();
-    let mut source_root: Option<sky_db::SourceRoot> = None;
-    let mut config: Option<sky_db::BuildConfig> = None;
-    let mut supervisor = sky_watch::SupervisorState::fresh();
+    let mut db_main = ipe_db::SkyDatabase::new();
+    let mut source_root: Option<ipe_db::SourceRoot> = None;
+    let mut config: Option<ipe_db::BuildConfig> = None;
+    let mut supervisor = ipe_watch::SupervisorState::fresh();
     let mut generation: u64 = 0;
     let mut compile_worker: Option<thread::JoinHandle<()>> = None;
     let mut cargo_child: Option<Arc<std::sync::Mutex<Child>>> = None;
@@ -707,13 +707,13 @@ fn run_inner(
                 let mut sources = resolved.sources;
                 let mut discovered = resolved.discovered;
                 let injected = project::inject_compiled_std_closure(&mut sources, &mut discovered);
-                let desired: BTreeMap<Vec<String>, (String, sky_db::ModuleOrigin)> = sources
+                let desired: BTreeMap<Vec<String>, (String, ipe_db::ModuleOrigin)> = sources
                     .iter()
                     .map(|(p, (_, text))| {
                         let origin = if injected.contains(p) {
-                            sky_db::ModuleOrigin::EmbeddedStdlib
+                            ipe_db::ModuleOrigin::EmbeddedStdlib
                         } else {
-                            sky_db::ModuleOrigin::User
+                            ipe_db::ModuleOrigin::User
                         };
                         (p.clone(), (text.clone(), origin))
                     })
@@ -723,7 +723,7 @@ fn run_inner(
                 // worker's cancelled query unwinds and drops its database
                 // clone — see the module doc's cancellation walkthrough.
                 let root = if let Some(root) = source_root {
-                    sky_db::sync_source_root(&mut db_main, root, &desired);
+                    ipe_db::sync_source_root(&mut db_main, root, &desired);
                     root
                 } else {
                     let root = crate::create_source_root(&db_main, &sources, &injected);
@@ -738,7 +738,7 @@ fn run_inner(
                     }
                     cfg
                 } else {
-                    let cfg = sky_db::BuildConfig::new(&db_main, resolved.db_driver);
+                    let cfg = ipe_db::BuildConfig::new(&db_main, resolved.db_driver);
                     config = Some(cfg);
                     cfg
                 };
@@ -842,9 +842,9 @@ fn run_inner(
                     }
                     CargoOutcome::Green(exe_path) => {
                         let readiness = if current_is_live {
-                            sky_watch::ReadinessCheck::HttpReadyz { port: opts.port }
+                            ipe_watch::ReadinessCheck::HttpReadyz { port: opts.port }
                         } else {
-                            sky_watch::ReadinessCheck::AliveGrace {
+                            ipe_watch::ReadinessCheck::AliveGrace {
                                 grace: Duration::from_millis(300),
                             }
                         };
@@ -875,7 +875,7 @@ fn run_inner(
     // clone — BEFORE waiting on `coalesce_handle` below. `raw_tx` is moved
     // (never `.clone()`d — see `mpsc::channel` above) into `watcher`'s own
     // event callback, so `watcher` is the SOLE owner of a live sender.
-    // `sky_watch::coalesce_loop`'s blocking `raw_rx.recv()` only returns
+    // `ipe_watch::coalesce_loop`'s blocking `raw_rx.recv()` only returns
     // once every `raw_tx` sender has been dropped; leaving `watcher` to die
     // via its ordinary end-of-function scope drop (i.e. AFTER
     // `coalesce_handle.join()` below) means that `join()` blocks FOREVER —
@@ -902,8 +902,8 @@ fn run_inner(
 }
 
 /// Detection heuristic for readiness strategy: the backend's Sky.Live entry
-/// point emission always contains the literal `sky_runtime::live::live_app`
-/// call (`crates/sky_backend_rust/src/emit_live.rs`) — deterministic,
+/// point emission always contains the literal `ipe_runtime::live::live_app`
+/// call (`crates/ipe_backend_rust/src/emit_live.rs`) — deterministic,
 /// compiler-controlled text, not user input, so a substring check is sound
 /// here (unlike parsing arbitrary user text). Sky.Live apps get the
 /// precise `/_sky/readyz` probe; every other shape (Sky.Http.Server has no
@@ -911,12 +911,12 @@ fn run_inner(
 /// argument this driver cannot statically know) falls back to
 /// `AliveGrace` — matching the design doc's own readiness bifurcation
 /// ("`/_sky/readyz` for Sky.Live; alive + optional health for CLI").
-fn is_sky_live_project(emitted: &sky_backend::EmittedProject) -> bool {
+fn is_sky_live_project(emitted: &ipe_backend::EmittedProject) -> bool {
     emitted
         .files
         .iter()
         .find(|(rel, _)| rel.as_str() == "src/main.rs")
-        .is_some_and(|(_, text)| text.contains("sky_runtime::live::live_app"))
+        .is_some_and(|(_, text)| text.contains("ipe_runtime::live::live_app"))
 }
 
 /// Build the child process's environment.
@@ -978,17 +978,17 @@ fn warn_if_memory_store() {
     }
 }
 
-fn report_restart_outcome(outcome: &sky_watch::RestartOutcome) {
+fn report_restart_outcome(outcome: &ipe_watch::RestartOutcome) {
     match outcome {
-        sky_watch::RestartOutcome::Spawned => eprintln!("[ipe watch] app is up"),
-        sky_watch::RestartOutcome::UnchangedBinary => {}
-        sky_watch::RestartOutcome::Restarted => eprintln!("[ipe watch] app restarted"),
-        sky_watch::RestartOutcome::RespawnedLastGood { broken } => eprintln!(
+        ipe_watch::RestartOutcome::Spawned => eprintln!("[ipe watch] app is up"),
+        ipe_watch::RestartOutcome::UnchangedBinary => {}
+        ipe_watch::RestartOutcome::Restarted => eprintln!("[ipe watch] app restarted"),
+        ipe_watch::RestartOutcome::RespawnedLastGood { broken } => eprintln!(
             "[ipe watch] new binary failed its readiness probe ({}); kept the previous \
              last-good binary running instead",
             broken.display()
         ),
-        sky_watch::RestartOutcome::NothingRunning {
+        ipe_watch::RestartOutcome::NothingRunning {
             broken,
             last_good_error,
         } => {
@@ -1004,17 +1004,17 @@ fn report_restart_outcome(outcome: &sky_watch::RestartOutcome) {
     }
 }
 
-/// Project a [`sky_watch::RestartOutcome`] down to the `Clone`-able
+/// Project a [`ipe_watch::RestartOutcome`] down to the `Clone`-able
 /// [`RestartOutcomeKind`] tests observe via [`WatchEvent::Restarted`].
-const fn restart_outcome_kind(outcome: &sky_watch::RestartOutcome) -> RestartOutcomeKind {
+const fn restart_outcome_kind(outcome: &ipe_watch::RestartOutcome) -> RestartOutcomeKind {
     match outcome {
-        sky_watch::RestartOutcome::Spawned => RestartOutcomeKind::Spawned,
-        sky_watch::RestartOutcome::UnchangedBinary => RestartOutcomeKind::UnchangedBinary,
-        sky_watch::RestartOutcome::Restarted => RestartOutcomeKind::Restarted,
-        sky_watch::RestartOutcome::RespawnedLastGood { .. } => {
+        ipe_watch::RestartOutcome::Spawned => RestartOutcomeKind::Spawned,
+        ipe_watch::RestartOutcome::UnchangedBinary => RestartOutcomeKind::UnchangedBinary,
+        ipe_watch::RestartOutcome::Restarted => RestartOutcomeKind::Restarted,
+        ipe_watch::RestartOutcome::RespawnedLastGood { .. } => {
             RestartOutcomeKind::RespawnedLastGood
         }
-        sky_watch::RestartOutcome::NothingRunning { .. } => RestartOutcomeKind::NothingRunning,
+        ipe_watch::RestartOutcome::NothingRunning { .. } => RestartOutcomeKind::NothingRunning,
     }
 }
 

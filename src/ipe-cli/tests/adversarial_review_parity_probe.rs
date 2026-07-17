@@ -61,13 +61,13 @@ fn entry_path() -> Vec<String> {
     ENTRY.iter().map(|s| (*s).to_owned()).collect()
 }
 
-type CompileOutcome = Result<sky_backend::EmittedProject, String>;
+type CompileOutcome = Result<ipe_backend::EmittedProject, String>;
 
 fn cold_compile(user: &UserSources) -> CompileOutcome {
     let (sources, injected) = prepared(user);
-    let db = sky_db::SkyDatabase::new();
+    let db = ipe_db::SkyDatabase::new();
     let root = skyc::create_source_root(&db, &sources, &injected);
-    let config = sky_db::BuildConfig::new(&db, sky_backend_rust::DbDriver::Sqlite);
+    let config = ipe_db::BuildConfig::new(&db, ipe_backend_rust::DbDriver::Sqlite);
     skyc::compile_prepared(
         &db,
         root,
@@ -80,17 +80,17 @@ fn cold_compile(user: &UserSources) -> CompileOutcome {
 }
 
 struct WarmSession {
-    db: sky_db::SkyDatabase,
-    root: Option<sky_db::SourceRoot>,
+    db: ipe_db::SkyDatabase,
+    root: Option<ipe_db::SourceRoot>,
     // Stable across the whole session — see the twin comment in
     // `clean_vs_incremental_parity.rs`.
-    config: Option<sky_db::BuildConfig>,
+    config: Option<ipe_db::BuildConfig>,
 }
 
 impl WarmSession {
     fn new() -> Self {
         Self {
-            db: sky_db::SkyDatabase::new(),
+            db: ipe_db::SkyDatabase::new(),
             root: None,
             config: None,
         }
@@ -101,19 +101,19 @@ impl WarmSession {
     #[allow(clippy::single_match_else)]
     fn sync_only(&mut self, user: &UserSources) {
         let (sources, injected) = prepared(user);
-        let desired: BTreeMap<Vec<String>, (String, sky_db::ModuleOrigin)> = sources
+        let desired: BTreeMap<Vec<String>, (String, ipe_db::ModuleOrigin)> = sources
             .iter()
             .map(|(p, (_, text))| {
                 let origin = if injected.contains(p) {
-                    sky_db::ModuleOrigin::EmbeddedStdlib
+                    ipe_db::ModuleOrigin::EmbeddedStdlib
                 } else {
-                    sky_db::ModuleOrigin::User
+                    ipe_db::ModuleOrigin::User
                 };
                 (p.clone(), (text.clone(), origin))
             })
             .collect();
         match self.root {
-            Some(root) => sky_db::sync_source_root(&mut self.db, root, &desired),
+            Some(root) => ipe_db::sync_source_root(&mut self.db, root, &desired),
             None => {
                 let root = skyc::create_source_root(&self.db, &sources, &injected);
                 self.root = Some(root);
@@ -147,9 +147,9 @@ impl WarmSession {
     fn compile(&mut self, user: &UserSources) -> CompileOutcome {
         self.sync_only(user);
         if self.config.is_none() {
-            self.config = Some(sky_db::BuildConfig::new(
+            self.config = Some(ipe_db::BuildConfig::new(
                 &self.db,
-                sky_backend_rust::DbDriver::Sqlite,
+                ipe_backend_rust::DbDriver::Sqlite,
             ));
         }
         self.demand(user)
@@ -172,8 +172,8 @@ fn first_diff(a: &str, b: &str) -> String {
 fn assert_parity(label: &str, warm: &CompileOutcome, cold: &CompileOutcome) {
     match (warm, cold) {
         (Ok(w), Ok(c)) => {
-            let w_keys: Vec<&str> = w.files.keys().map(sky_backend::RelPath::as_str).collect();
-            let c_keys: Vec<&str> = c.files.keys().map(sky_backend::RelPath::as_str).collect();
+            let w_keys: Vec<&str> = w.files.keys().map(ipe_backend::RelPath::as_str).collect();
+            let c_keys: Vec<&str> = c.files.keys().map(ipe_backend::RelPath::as_str).collect();
             assert_eq!(w_keys, c_keys, "[{label}] emitted file sets diverged");
             assert!(
                 w.cargo_toml == c.cargo_toml,

@@ -130,7 +130,7 @@ fn http_response_fields() {
 /// `{body, followRedirects, headers, maxRedirects, method, timeout, url}`
 /// fieldset as an explicit annotation.
 ///
-/// Root cause: `sky_lower::lower::ir_type_from_ty` folds any solved record
+/// Root cause: `ipe_lower::lower::ir_type_from_ty` folds any solved record
 /// matching that exact 7-field shape into the opaque `IrType::HttpRequest`
 /// (so `Http.request` / `HttpStream.open` call sites see the runtime type),
 /// regardless of what the value's OTHER consumers do. But
@@ -142,7 +142,7 @@ fn http_response_fields() {
 /// With no such signature anywhere in the program, no struct is
 /// registered and the lookup raises SKY-I0001, even though the value's
 /// runtime type is correctly known throughout. So the arm emits
-/// `sky_runtime::HttpRequest { ... }` directly — the fixed, canonical name —
+/// `ipe_runtime::HttpRequest { ... }` directly — the fixed, canonical name —
 /// instead of resolving a name through the record-shape registry.
 ///
 /// This is the default-gate (emit-only, no `SKY_E2E`) companion to
@@ -177,9 +177,9 @@ fn http_default_request_emits_without_signature_consumer() {
     let main_rs = std::fs::read_to_string(out.join("src").join("main.rs"))
         .expect("emitted src/main.rs must exist");
     assert!(
-        main_rs.contains("sky_runtime::HttpRequest {"),
+        main_rs.contains("ipe_runtime::HttpRequest {"),
         "Http.defaultRequest must construct the canonical \
-         `sky_runtime::HttpRequest` struct directly, not a backend-\
+         `ipe_runtime::HttpRequest` struct directly, not a backend-\
          synthesised record struct resolved through `record_struct_by_key`.\n\
          --- src/main.rs ---\n{main_rs}"
     );

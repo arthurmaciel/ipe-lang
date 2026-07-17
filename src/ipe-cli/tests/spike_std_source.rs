@@ -128,7 +128,7 @@ fn hostile_std_squat_is_sky_n0025() {
     };
     assert_eq!(
         code,
-        Some(sky_diagnostics::SKY_N0025),
+        Some(ipe_diagnostics::SKY_N0025),
         "hostile Std.Palette must be SKY-N0025 (not a silent override): {err}"
     );
 }

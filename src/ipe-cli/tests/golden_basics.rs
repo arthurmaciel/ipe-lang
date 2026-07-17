@@ -43,7 +43,7 @@ fn emits_byte_identical_main_rs_and_vendors_runtime() {
 
     assert!(
         out.join("src")
-            .join("sky_runtime")
+            .join("ipe_runtime")
             .join("core.rs")
             .is_file(),
         "runtime module tree must be vendored",

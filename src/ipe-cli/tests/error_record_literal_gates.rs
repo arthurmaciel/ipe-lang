@@ -23,7 +23,7 @@ fn repo_root() -> PathBuf {
 
 /// Build the named golden fixture and assert it surfaces exactly `expected` as
 /// a pipeline diagnostic — never a panic, never a silent accept.
-fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code) {
+fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code) {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -55,7 +55,7 @@ fn panic_info_record_literal_is_rejected() {
     assert_gate(
         "error_record_literal_panicinfo",
         "error_record_literal_panicinfo_emit",
-        sky_diagnostics::SKY_T0001,
+        ipe_diagnostics::SKY_T0001,
     );
 }
 
@@ -65,7 +65,7 @@ fn type_info_record_literal_is_rejected() {
     assert_gate(
         "error_record_literal_typeinfo",
         "error_record_literal_typeinfo_emit",
-        sky_diagnostics::SKY_T0001,
+        ipe_diagnostics::SKY_T0001,
     );
 }
 
@@ -77,6 +77,6 @@ fn error_info_record_literal_is_rejected() {
     assert_gate(
         "error_record_literal_errorinfo",
         "error_record_literal_errorinfo_emit",
-        sky_diagnostics::SKY_T0001,
+        ipe_diagnostics::SKY_T0001,
     );
 }

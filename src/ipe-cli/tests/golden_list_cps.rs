@@ -7,7 +7,7 @@
 //! REACHABLE from a compilable Sky-Rust program is the kernel subset —
 //! `map` / `filter` / `foldl` / `foldr` / `length` / `head` / `tail` / `member`
 //! / `range` / `reverse` — and each of those routes to an ITERATIVE Rust
-//! runtime kernel over `Vec` (`src/runtime/rust/src/sky_runtime/list.rs`), with no
+//! runtime kernel over `Vec` (`src/runtime/rust/src/list.rs`), with no
 //! per-element recursion. This golden pins that: `range → map → foldr` over
 //! `500_000` elements runs to a clean exit under a 512 KiB main-thread stack. A
 //! one-frame-per-element recursion of that depth would SIGABRT

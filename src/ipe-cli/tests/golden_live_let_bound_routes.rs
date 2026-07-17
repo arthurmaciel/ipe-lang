@@ -71,7 +71,7 @@ fn live_let_bound_routes_compiles_no_ice() {
 //
 // `routeTable`'s top-level fn signature renders the binding's inferred type
 // `List (LiveRoute Page)`. Pre-round-4 `IrType::LiveRoute` rendered a bare
-// `sky_runtime::live::route::Route` — but the runtime `Route<Page>` has NO
+// `ipe_runtime::live::route::Route` — but the runtime `Route<Page>` has NO
 // default type parameter, so THIS golden itself was skyc-0 then cargo-fail
 // (E0107) at the `routeTable` signature. Post-fix the signature renders
 // `Vec<Route<MainPage>>`.

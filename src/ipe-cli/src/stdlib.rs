@@ -63,7 +63,7 @@ const HTTP: &str = include_str!("../../stdlib/Sky/Core/Http.sky");
 /// `Sky.Core.Path` — pure filesystem-path helpers, compiled-source Layer-3.
 ///
 /// The members are point-free `Ffi.kernel "Path_*"` aliases resolved by the
-/// kernel-alias mechanism (`sky_canon::resolve::detect_kernel_alias`) to
+/// kernel-alias mechanism (`ipe_canon::resolve::detect_kernel_alias`) to
 /// the pure `PathBase`/`PathDir`/`PathExt`/`PathIsAbsolute` `StdlibKernel`
 /// variants. Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`) so its body
 /// is actually compiled; NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
@@ -72,7 +72,7 @@ const PATH: &str = include_str!("../../stdlib/Sky/Core/Path.sky");
 /// `Sky.Core.Regex` — RE2 regex helpers, compiled-source Layer-3.
 ///
 /// The members are point-free `Ffi.kernel "Regex_*"` aliases resolved by the
-/// kernel-alias mechanism (`sky_canon::resolve::detect_kernel_alias`) to
+/// kernel-alias mechanism (`ipe_canon::resolve::detect_kernel_alias`) to
 /// the pure `RegexMatch`/`RegexFind`/… `StdlibKernel` variants. Registered in
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`) so its body is actually compiled;
 /// NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
@@ -268,7 +268,7 @@ const STD_UI_GRID: &str = include_str!("../../stdlib/Std/Ui/Grid.sky");
 ///
 /// Pure-Sky; the `transitionRaw` primitive is a native `Std.Ui` kernel
 /// (`KernelFn::UiTransitionRaw`) that constructs `AttrTransition shorthand
-/// respect`, rendered by `src/runtime/rust/src/sky_runtime/ui/render.rs`.  Ported from
+/// respect`, rendered by `src/runtime/rust/src/ui/render.rs`.  Ported from
 /// `../sky/sky-stdlib/Std/Ui/Transition.sky`; the reference's
 /// `import Std.Ui exposing (transitionRaw)` is qualified to `Ui.transitionRaw`
 /// (mirrors the `Std.Ui.Grid` port's `Ui.style` call).
@@ -288,7 +288,7 @@ const STD_UI_TRANSFORM: &str = include_str!("../../stdlib/Std/Ui/Transform.sky")
 /// Pure-Sky; the `animateRaw` primitive is a native `Std.Ui` kernel
 /// (`KernelFn::UiAnimateRaw`, `String -> String -> String -> Bool -> Attribute`)
 /// that constructs `AttrAnimation name shorthand keyframes respect`, rendered
-/// by `src/runtime/rust/src/sky_runtime/ui/render.rs` (inline `animation:` property) and
+/// by `src/runtime/rust/src/ui/render.rs` (inline `animation:` property) and
 /// injected as an `@keyframes` block by `live::style_inject::build_anim`.
 /// Ported from `../sky/sky-stdlib/Std/Ui/Animation.sky`; the reference's
 /// `import Std.Ui exposing (animateRaw)` is qualified to `Ui.animateRaw`
@@ -313,7 +313,7 @@ const STD_MONEY: &str = include_str!("../../stdlib/Std/Money.sky");
 ///
 /// The point-free helpers `uuidV4`/`uuidV7` route through internal
 /// `Ffi.kernel "Uuid_v4"`/`"Uuid_v7"` aliases (resolved by the kernel-alias
-/// mechanism, `sky_canon::resolve::detect_kernel_alias`).  ARITY-BLOCKED: the
+/// mechanism, `ipe_canon::resolve::detect_kernel_alias`).  ARITY-BLOCKED: the
 /// `uuidV4Kernel`/`uuidV7Kernel` helpers annotate an arity-0 `Task Error String`
 /// value over the arity-1 `Uuid_v4`/`Uuid_v7` kernels (`() -> Task Error String`),
 /// so they are rejected with SKY-T0001 at type-check until an
@@ -327,7 +327,7 @@ const SKY_CORE_PURE: &str = include_str!("../../stdlib/Sky/Core/Pure.sky");
 /// Defines 3 ADTs (`WebSocket`, `WebSocketMessage`, `CloseCode`) and routes its
 /// I/O through `Ffi.kernel "WebSocket_*"` / `"Sub_subscribeWebSocket"` aliases.
 /// RESOLVES (skyc-0 AND cargo-0): the six Task-tier `WebSocket_*` kernels plus
-/// `Sub_subscribeWebSocket` are registered (`sky_runtime::ws_client::*`). The
+/// `Sub_subscribeWebSocket` are registered (`ipe_runtime::ws_client::*`). The
 /// Sub-tier kernel is `any`-typed; the backend peephole splits it on the literal
 /// `kind` into the four typed `sub_subscribe_ws_*` runtime fns. `connectWith`'s
 /// `WebSocketCfg` record folds to the runtime `WsClientCfg` struct (mirrors the
@@ -341,7 +341,7 @@ const SKY_CORE_WEBSOCKET: &str = include_str!("../../stdlib/Sky/Core/WebSocket.s
 ///
 /// Defines `type Cache k v = Cache Int` ADT.  RESOLVES (skyc-0 AND
 /// cargo-0): the seven `Cache_*` kernels are registered
-/// (`sky_runtime::cache::*`; a faithful port of the reference's Go+Rust cache
+/// (`ipe_runtime::cache::*`; a faithful port of the reference's Go+Rust cache
 /// kernels).  The opaque `Cache k v` is backed by the non-generic runtime
 /// `SkyCacheHandle` (the phantom `k`/`v` are dropped, mirroring the reference's
 /// `runtimeOpaqueTypes` mapping); `CacheCfg` / the `stats` return record fold to
@@ -360,16 +360,16 @@ const STD_COMPRESSION: &str = include_str!("../../stdlib/Std/Compression.sky");
 /// `Std.Config` — typed TOML/YAML/JSON decoders (compiled source).
 ///
 /// Defines `type Decoder a` — the SHARED opaque decoder carrier
-/// (`IrType::Decoder`, runtime `sky_runtime::json::Decoder<E, T>`), the same one
+/// (`IrType::Decoder`, runtime `ipe_runtime::json::Decoder<E, T>`), the same one
 /// `Sky.Core.Json.Decode` names as a bare reserved builtin. RESOLVES (skyc-0
 /// AND cargo-0): (a) `Std.Config`'s `Decoder` re-declaration is exempted
-/// from SKY-N0026 via `sky_canon`'s `STDLIB_DEFINABLE_CARRIER_TYPES` (trusted
+/// from SKY-N0026 via `ipe_canon`'s `STDLIB_DEFINABLE_CARRIER_TYPES` (trusted
 /// `EmbeddedStdlib` origin only — user shadowing stays rejected); the ABOVE-guard
 /// `Decoder` lowerer arm + `is_opaque_boxed_wrapper` make the re-declaration
 /// lower to the shared carrier with no competing enum. (b) The 16 `Config_*`
 /// kernels are registered across every anti-drift site; the 11 combinator/
 /// primitive kernels emit the shared JSON `decode_*` runtime fns, the 5 format/
-/// nullable/load kernels emit `sky_runtime::config_decode::*` (vendored
+/// nullable/load kernels emit `ipe_runtime::config_decode::*` (vendored
 /// unconditionally, same posture as Csv/Cache/Compression).
 /// Not in `STDLIB_MODULE_QUALIFIERS`.
 const STD_CONFIG: &str = include_str!("../../stdlib/Std/Config.sky");
@@ -426,7 +426,7 @@ const STD_UI_EVENTS: &str = include_str!("../../stdlib/Std/Ui/Events.sky");
 
 /// Every compiled-source stdlib module, keyed by its dotted import name.
 ///
-/// Disjoint from [`MODULES`] (parse fixtures) and from `sky_canon`'s
+/// Disjoint from [`MODULES`] (parse fixtures) and from `ipe_canon`'s
 /// `STDLIB_MODULE_QUALIFIERS` (kernel qualifiers) — see the module comment.
 pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     CompiledStdModule {
@@ -522,13 +522,13 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         source: STD_UI_EVENTS,
     },
     // Sky.Core.Regex — Layer-3 source, `Ffi.kernel "Regex_*"` aliases route
-    // to the registered pure `Regex*` kernels (`sky_runtime::regex_kernel::*`).
+    // to the registered pure `Regex*` kernels (`ipe_runtime::regex_kernel::*`).
     CompiledStdModule {
         dotted: "Sky.Core.Regex",
         source: REGEX,
     },
     // Sky.Core.Path — Layer-3 source, `Ffi.kernel "Path_*"` aliases route
-    // to the registered pure `Path*` kernels (`sky_runtime::path::*`).
+    // to the registered pure `Path*` kernels (`ipe_runtime::path::*`).
     CompiledStdModule {
         dotted: "Sky.Core.Path",
         source: PATH,
@@ -559,7 +559,7 @@ pub fn is_compiled_source_segments(segments: &[String]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sky_intern::Interner;
+    use ipe_intern::Interner;
 
     /// Every embedded `Sky.Core` module must PARSE with the same front end that
     /// reads user code — the proof that the compiler can read its own embedded
@@ -568,7 +568,7 @@ mod tests {
     fn every_embedded_module_parses() {
         for m in MODULES {
             let mut interner = Interner::new();
-            let parsed = sky_parse::parse_module(m.source, &mut interner);
+            let parsed = ipe_parse::parse_module(m.source, &mut interner);
             assert!(
                 parsed.is_ok(),
                 "embedded module {} must parse: {:?}",
@@ -598,7 +598,7 @@ mod tests {
     fn every_compiled_source_module_parses() {
         for m in COMPILED_STD_MODULES {
             let mut interner = Interner::new();
-            let parsed = sky_parse::parse_module(m.source, &mut interner);
+            let parsed = ipe_parse::parse_module(m.source, &mut interner);
             assert!(
                 parsed.is_ok(),
                 "compiled-source module {} must parse: {:?}",
@@ -616,7 +616,7 @@ mod tests {
     fn compiled_vs_kernel_qualifier_disjoint() {
         for m in COMPILED_STD_MODULES {
             let segments: Vec<&str> = m.dotted.split('.').collect();
-            let clash = sky_canon::STDLIB_MODULE_QUALIFIERS
+            let clash = ipe_canon::STDLIB_MODULE_QUALIFIERS
                 .iter()
                 .any(|(path, _)| *path == segments.as_slice());
             assert!(

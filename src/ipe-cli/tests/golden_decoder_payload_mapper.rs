@@ -15,7 +15,7 @@
 //! `FnOnce`) AND an unsatisfiable `+ Sync` → skyc-0-then-cargo-fail
 //! (E0308 / E0277).
 //!
-//! Fix (`crates/sky_lower/src/lower.rs`, `retype_decoder_payload_mapper`): at
+//! Fix (`crates/ipe_lower/src/lower.rs`, `retype_decoder_payload_mapper`): at
 //! the decode-combinator (`map` / `map2` / `map3` / `map4` / `andThen`, Json +
 //! Db) call site — where the mapper's parameters ARE, by construction, the
 //! decoded payload value(s) — retype any single-parameter function-typed mapper

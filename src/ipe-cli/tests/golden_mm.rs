@@ -117,7 +117,7 @@ fn mm_qualtype_local_shadow_compiles() {
 // Negative helpers
 // ---------------------------------------------------------------------------
 
-fn expect_error_code(fixture_name: &str, expected: sky_diagnostics::Code) {
+fn expect_error_code(fixture_name: &str, expected: ipe_diagnostics::Code) {
     let fixture = golden_dir(fixture_name);
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(fixture_name);
     let _ = std::fs::remove_dir_all(&out);
@@ -146,7 +146,7 @@ fn expect_error_code(fixture_name: &str, expected: sky_diagnostics::Code) {
 
 #[test]
 fn mm_neg_missing_is_sky_n0020() {
-    expect_error_code("mm_neg_missing", sky_diagnostics::SKY_N0020);
+    expect_error_code("mm_neg_missing", ipe_diagnostics::SKY_N0020);
 }
 
 // ---------------------------------------------------------------------------
@@ -155,7 +155,7 @@ fn mm_neg_missing_is_sky_n0020() {
 
 #[test]
 fn mm_neg_cycle_is_sky_n0021() {
-    expect_error_code("mm_neg_cycle", sky_diagnostics::SKY_N0021);
+    expect_error_code("mm_neg_cycle", ipe_diagnostics::SKY_N0021);
 }
 
 // ---------------------------------------------------------------------------
@@ -164,7 +164,7 @@ fn mm_neg_cycle_is_sky_n0021() {
 
 #[test]
 fn mm_neg_selfimport_is_sky_n0021() {
-    expect_error_code("mm_neg_selfimport", sky_diagnostics::SKY_N0021);
+    expect_error_code("mm_neg_selfimport", ipe_diagnostics::SKY_N0021);
 }
 
 // ---------------------------------------------------------------------------
@@ -173,7 +173,7 @@ fn mm_neg_selfimport_is_sky_n0021() {
 
 #[test]
 fn mm_neg_notexposed_is_sky_n0022() {
-    expect_error_code("mm_neg_notexposed", sky_diagnostics::SKY_N0022);
+    expect_error_code("mm_neg_notexposed", ipe_diagnostics::SKY_N0022);
 }
 
 // ---------------------------------------------------------------------------
@@ -182,7 +182,7 @@ fn mm_neg_notexposed_is_sky_n0022() {
 
 #[test]
 fn mm_neg_pathmismatch_is_sky_n0023() {
-    expect_error_code("mm_neg_pathmismatch", sky_diagnostics::SKY_N0023);
+    expect_error_code("mm_neg_pathmismatch", ipe_diagnostics::SKY_N0023);
 }
 
 // ---------------------------------------------------------------------------
@@ -191,7 +191,7 @@ fn mm_neg_pathmismatch_is_sky_n0023() {
 
 #[test]
 fn mm_neg_ambigval_is_sky_n0024() {
-    expect_error_code("mm_neg_ambigval", sky_diagnostics::SKY_N0024);
+    expect_error_code("mm_neg_ambigval", ipe_diagnostics::SKY_N0024);
 }
 
 // ---------------------------------------------------------------------------
@@ -202,7 +202,7 @@ fn mm_neg_ambigval_is_sky_n0024() {
 
 #[test]
 fn mm_neg_ambigctor_is_sky_n0024() {
-    expect_error_code("mm_neg_ambigctor", sky_diagnostics::SKY_N0024);
+    expect_error_code("mm_neg_ambigctor", ipe_diagnostics::SKY_N0024);
 }
 
 // ---------------------------------------------------------------------------
@@ -211,7 +211,7 @@ fn mm_neg_ambigctor_is_sky_n0024() {
 
 #[test]
 fn mm_neg_reserved_is_sky_n0025() {
-    expect_error_code("mm_neg_reserved", sky_diagnostics::SKY_N0025);
+    expect_error_code("mm_neg_reserved", ipe_diagnostics::SKY_N0025);
 }
 
 // ---------------------------------------------------------------------------
@@ -222,7 +222,7 @@ fn mm_neg_reserved_is_sky_n0025() {
 
 #[test]
 fn mm_neg_samedef_is_sky_n0024() {
-    expect_error_code("mm_neg_samedef", sky_diagnostics::SKY_N0024);
+    expect_error_code("mm_neg_samedef", ipe_diagnostics::SKY_N0024);
 }
 
 // ---------------------------------------------------------------------------
@@ -231,7 +231,7 @@ fn mm_neg_samedef_is_sky_n0024() {
 
 #[test]
 fn mm_neg_sametype_is_sky_n0012() {
-    expect_error_code("mm_neg_sametype", sky_diagnostics::SKY_N0012);
+    expect_error_code("mm_neg_sametype", ipe_diagnostics::SKY_N0012);
 }
 
 // ---------------------------------------------------------------------------
@@ -248,5 +248,5 @@ fn mm_neg_sametype_is_sky_n0012() {
 
 #[test]
 fn mm_neg_qualref_sig_is_sky_t0001() {
-    expect_error_code("mm_neg_qualref_sig", sky_diagnostics::SKY_T0001);
+    expect_error_code("mm_neg_qualref_sig", ipe_diagnostics::SKY_T0001);
 }

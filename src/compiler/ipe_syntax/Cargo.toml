@@ -1,0 +1,12 @@
+[package]
+name = "ipe_syntax"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+ipe_intern = { path = "../ipe_intern" }
+ipe_diagnostics = { path = "../ipe_diagnostics" }
+
+[lints]
+workspace = true

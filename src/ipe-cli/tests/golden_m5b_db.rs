@@ -385,8 +385,8 @@ fn db_find_by_field() {
 ///
 /// Proves the kernel-registration recipe works end-to-end: canon
 /// `Db.Decode` allowlist, `StdlibKernel::DbDecMoney` decl, constrain.rs
-/// scheme, `sky_lower` arity-1 dispatch, `sky_backend_rust` standard-path
-/// emit, `sky_ir` pretty-print.
+/// scheme, `ipe_lower` arity-1 dispatch, `ipe_backend_rust` standard-path
+/// emit, `ipe_ir` pretty-print.
 ///
 /// Sanctioned divergence (tagged `divergence`, not `sanctioned`): the Rust
 /// backend's `Db.Decode.money` returns `Decoder (Decimal, String)`, not the

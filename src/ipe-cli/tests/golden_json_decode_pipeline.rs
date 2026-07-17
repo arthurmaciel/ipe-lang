@@ -7,11 +7,11 @@
 //! on the decoder payload, but the runtime represents a `Decoder (a -> b)`
 //! payload as a Send-ONLY curry chain `Box<dyn FnOnce(a) -> b + Send>` (exactly
 //! what the `curryN` helpers build and what `decode_succeed`'s `A` is inferred
-//! to — see `src/runtime/rust/src/sky_runtime/json.rs`). Two mismatches fired: the wrong
+//! to — see `src/runtime/rust/src/json.rs`). Two mismatches fired: the wrong
 //! trait (`Fn` vs `FnOnce`) AND an over-constrained `+ Sync` (a `FnOnce` curry
 //! chain is `Send` but NOT `Sync`) → skyc-0-then-cargo-fail (E0308 / E0277).
 //!
-//! Fix (`crates/sky_backend_rust/src/emit_types.rs`): a function-typed `Decoder`
+//! Fix (`crates/ipe_backend_rust/src/emit_types.rs`): a function-typed `Decoder`
 //! payload renders as the `FnOnceChain` shape the runtime uses
 //! (`Box<dyn FnOnce(..) -> _ + Send>`, Send-only, never `+ Sync`) — a decoder
 //! payload is owned/linear and never flows into an

@@ -6,7 +6,7 @@
 //! * `Cmd.none`, `Cmd.batch`, `Cmd.perform`, `Sub.none`, `Sub.batch`,
 //!   `Sub.every`, `Time.every` are wired through the type-checker, lowerer,
 //!   and emitter.
-//! * The emitted Rust project links against `sky_runtime::tea` correctly.
+//! * The emitted Rust project links against `ipe_runtime::tea` correctly.
 //! * Type inference works without explicit annotations when a `Cmd.perform`
 //!   or `Sub.every` call anchors the `msg` type parameter.
 //! * An **un-anchored** `Cmd.none` / `Sub.none` (free `msg` type variable)
@@ -117,7 +117,7 @@ fn sub_ctors() {
 /// Build the named golden fixture and assert it surfaces exactly `expected` as a
 /// pipeline diagnostic.  Fails if the build succeeds, or if a different error
 /// code is returned.  A skip occurs only when the runtime cannot be resolved.
-fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code) {
+fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code) {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -152,6 +152,6 @@ fn undetermined_cmd_none_msg_is_sky_l0102() {
     assert_gate(
         "gate_undetermined_msg",
         "m5c_gate_undetermined_msg_emit",
-        sky_diagnostics::SKY_L0102,
+        ipe_diagnostics::SKY_L0102,
     );
 }

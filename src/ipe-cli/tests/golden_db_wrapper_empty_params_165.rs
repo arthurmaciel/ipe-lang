@@ -13,7 +13,7 @@
 //! checker's `Db.exec` / `Db.query` / `Db.queryDecode` scheme leaves that
 //! element variable completely unconstrained (`list(var(0))`) — nothing
 //! ever told the Rust backend that the ELEMENT type needs
-//! `Into<sky_runtime::db::SqlParam>`, so:
+//! `Into<ipe_runtime::db::SqlParam>`, so:
 //!
 //! * a genuinely polymorphic wrapper (called at different concrete `args`
 //!   types across modules) emitted an unbounded `T1: Clone` generic whose
@@ -24,9 +24,9 @@
 //!   convention (`IrType::Json`) — a bare, ambiguous `Vec::new()` call-site
 //!   argument (E0283).
 //!
-//! Fix (`crates/sky_types/src/{ty,constrain,lib}.rs` +
-//! `crates/sky_ir/src/ir.rs` + `crates/sky_lower/src/lower.rs` +
-//! `crates/sky_backend_rust/src/emit_expr.rs`):
+//! Fix (`crates/ipe_types/src/{ty,constrain,lib}.rs` +
+//! `crates/ipe_ir/src/ir.rs` + `crates/ipe_lower/src/lower.rs` +
+//! `crates/ipe_backend_rust/src/emit_expr.rs`):
 //!
 //! 1. New `TyBounds::sql_param` obligation, tied to `Db.exec` / `Db.query` /
 //!    `Db.queryDecode`'s params-list ELEMENT variable in
@@ -37,11 +37,11 @@
 //!    existing `Number` → `Int` defaulting arm) instead of falling through
 //!    to the `IrType::Json` wildcard — closes the E0283 half.
 //! 3. The obligation realises as `BoundSet::sql_param` →
-//!    `T{n}: … Into<sky_runtime::db::SqlParam>` on the emitted Rust generic
+//!    `T{n}: … Into<ipe_runtime::db::SqlParam>` on the emitted Rust generic
 //!    (composes with the ordinary `<T{n}: Bound>` list; no separate `where`
 //!    clause needed) — closes the E0277 half.
 //! 4. `emit_db_call`'s `project_params` now maps via `Into::into` (not
-//!    `SqlParam::from`) into an explicit `Vec<sky_runtime::db::SqlParam>` —
+//!    `SqlParam::from`) into an explicit `Vec<ipe_runtime::db::SqlParam>` —
 //!    `Into::into` is what a `T{n}: Into<SqlParam>` bound actually lets a
 //!    still-generic function body call; std's blanket `impl<T, U: From<T>>
 //!    Into<U> for T` keeps every concrete element type (`String` / `i64` /
@@ -80,7 +80,7 @@ fn repo_root() -> PathBuf {
 }
 
 /// skyc-0: the compiler must accept the 3-module program AND emit the
-/// `Into<sky_runtime::db::SqlParam>` bound on the wrapper functions' own
+/// `Into<ipe_runtime::db::SqlParam>` bound on the wrapper functions' own
 /// generic (the E0277 half of #165) — checked unconditionally (cheap, no
 /// `cargo`), independent of the `SKY_E2E` gate below.
 #[test]
@@ -124,7 +124,7 @@ fn db_wrapper_empty_params_165_skyc_accepts_and_emits_sql_param_bound() {
     );
 
     // the E0277 half (a still-generic `Db.exec`/`Db.query` wrapper
-    // needing `Into<sky_runtime::db::SqlParam>` on its own emitted generic)
+    // needing `Into<ipe_runtime::db::SqlParam>` on its own emitted generic)
     // is NOT asserted textually here: this fixture's `args` unifies to the
     // concrete `MainSqlValue` at every call site (same as
     // `examples/17-skymon`'s real wrappers, which likewise lower fully
@@ -133,10 +133,10 @@ fn db_wrapper_empty_params_165_skyc_accepts_and_emits_sql_param_bound() {
     // appear on `args`'s own type parameter in THIS fixture. Asserting on
     // internal Rust generic-signature shape here would be testing an
     // incidental unification outcome, not the bug. The E0277 half is
-    // exercised directly by `crates/sky_backend_rust`'s own
+    // exercised directly by `crates/ipe_backend_rust`'s own
     // `render_bounds`/`bounds_for` unit-level wiring (the bound IS emitted
     // whenever `BoundSet::has_sql_param()` is set — see
-    // `crates/sky_lower/src/lower.rs`'s `bounds_for`); the E2E test below is
+    // `crates/ipe_lower/src/lower.rs`'s `bounds_for`); the E2E test below is
     // the authoritative end-to-end gate on the actual `cargo build` outcome
     // for both halves at once.
 }

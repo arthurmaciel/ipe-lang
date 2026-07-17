@@ -30,7 +30,7 @@ fn repo_root() -> PathBuf {
 /// Build `tests/golden/<fixture>/Main.sky`, assert it fails type-checking with
 /// `expected`, and assert NO Rust was emitted (the pipeline stopped before
 /// codegen). Skips silently when the runtime cannot be resolved.
-fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code) {
+fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code) {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -69,7 +69,7 @@ fn math_min_on_function_value_is_sky_t0014() {
     assert_gate(
         "math_min_fn_gate",
         "m4c_math_min_fn_gate_emit",
-        sky_diagnostics::SKY_T0014,
+        ipe_diagnostics::SKY_T0014,
     );
 }
 
@@ -78,6 +78,6 @@ fn math_min_on_record_value_is_sky_t0014() {
     assert_gate(
         "math_min_rec_gate",
         "m4c_math_min_rec_gate_emit",
-        sky_diagnostics::SKY_T0014,
+        ipe_diagnostics::SKY_T0014,
     );
 }

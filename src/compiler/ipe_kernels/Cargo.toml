@@ -1,0 +1,19 @@
+[package]
+name = "ipe_kernels"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+# ── DAG constraint ──────────────────────────────────────────────────────────
+# `ipe_kernels` is a LEAF crate.  Only `ipe_intern` and `ipe_diagnostics` are
+# permitted as in-workspace dependencies.  NO dependency on `ipe_ir`,
+# `ipe_types`, or `ipe_backend_rust` is ever allowed — those crates import
+# `ipe_kernels`, and a reverse edge would create a cycle. `serde` is an
+# external leaf dependency (no in-workspace edge), added so `StdlibKernel`
+# can derive `Serialize`/`Deserialize` for the Phase 6.5 on-disk lowered-IR
+# cache (`ipe_ir::Callee::Kernel` embeds a `StdlibKernel`).
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+
+[lints]
+workspace = true

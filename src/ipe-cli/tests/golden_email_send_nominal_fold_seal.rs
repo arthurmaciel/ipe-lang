@@ -7,7 +7,7 @@
 //! registered `Email_send` kernel). Registering the kernel across every
 //! anti-drift site AND folding the `EmailMessage` / `Attachment` record shapes
 //! (plus the `EmailProvider` ADT) to their nominal runtime types
-//! (`sky_runtime::email::{EmailMessage, EmailAttachment, EmailProvider}`) makes
+//! (`ipe_runtime::email::{EmailMessage, EmailAttachment, EmailProvider}`) makes
 //! a builder-constructed message + a `Resend` ctor construct the exact runtime
 //! types the `email_send` kernel takes. A backend-synthesised `Rec…` struct or
 //! a duplicate `StdEmailEmailProvider` enum would mismatch that boundary with
@@ -72,7 +72,7 @@ fn built_app_rs(root: &Path, out: &Path) -> (Result<(), skyc::CliError>, Option<
     let built = skyc::build(&entry, out, &runtime);
     let emitted = if built.is_ok() {
         // Scan the emitted APP modules only (`src/sky_mods/` + `src/main.rs`),
-        // not the vendored `src/sky_runtime/` — the runtime's own `email.rs`
+        // not the vendored `src/ipe_runtime/` — the runtime's own `email.rs`
         // defines the structs/enum and would mask what the app-side codegen
         // chose.
         let mut acc = std::fs::read_to_string(out.join("src").join("main.rs")).unwrap_or_default();

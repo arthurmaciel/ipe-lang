@@ -29,7 +29,7 @@ fn repo_root() -> PathBuf {
 /// pipeline diagnostic. A build that succeeds, or fails with any other error,
 /// makes `got` differ from `Some(expected)` and fails with a descriptive message
 /// — never a panic. A skip occurs only when the runtime cannot be resolved.
-fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code) {
+fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code) {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -59,6 +59,6 @@ fn ctor_pattern_arity_is_sky_t0013() {
     assert_gate(
         "gate_arity",
         "m3a_gate_arity_emit",
-        sky_diagnostics::SKY_T0013,
+        ipe_diagnostics::SKY_T0013,
     );
 }

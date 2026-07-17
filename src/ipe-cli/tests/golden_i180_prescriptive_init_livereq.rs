@@ -17,7 +17,7 @@
 //!    opaque server `Request`), but its fixed field set is READABLE via the
 //!    deferred `FieldAccess` pass (`LiveReqFields`). `init req = ... req.path`
 //!    type-checks and lowers to `(req).path.clone()`, reading
-//!    `sky_runtime::live::LiveReq` directly — no synthesised record.
+//!    `ipe_runtime::live::LiveReq` directly — no synthesised record.
 //!
 //! Full design: `docs/adr/0021-tea-state-engine-and-prescriptive-init.md`;
 //! divergence B24 in `docs/divergences-from-sky.md`.
@@ -115,8 +115,8 @@ fn live_init_reads_req_path_field() {
     let main_rs = std::fs::read_to_string(out.join("src").join("main.rs"))
         .expect("emitted main.rs must exist");
     assert!(
-        main_rs.contains("sky_runtime::live::LiveReq"),
-        "#180: the emitted init must take the concrete `sky_runtime::live::LiveReq`",
+        main_rs.contains("ipe_runtime::live::LiveReq"),
+        "#180: the emitted init must take the concrete `ipe_runtime::live::LiveReq`",
     );
     assert!(
         main_rs.contains("(req).path.clone()"),

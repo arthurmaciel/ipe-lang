@@ -1,7 +1,7 @@
 //! Seal — `List.filter` / `List.any` with a partial-application
 //! predicate must compile AND run.
 //!
-//! Root cause: `sky_backend_rust::emit_expr::emit_lambda` always lowers a
+//! Root cause: `ipe_backend_rust::emit_expr::emit_lambda` always lowers a
 //! Sky closure VALUE to `Box<dyn Fn(..) -> .. + Send + 'static>` regardless
 //! of what it captures. `Box<dyn Fn>` can never implement `Clone` (trait
 //! objects can't derive it), so any kernel whose Rust signature demanded
@@ -9,13 +9,13 @@
 //! at `cargo build` with E0277 — not just partial applications (the shape
 //! the original bug report used), but plain non-capturing lambdas too.
 //!
-//! `sky_runtime::list::list_filter` / `list_any` (plus `list_all` /
+//! `ipe_runtime::list::list_filter` / `list_any` (plus `list_all` /
 //! `list_foldl` / `list_foldr` / `list_indexed_map` / `list_concat_map` /
 //! `list_find`) declared that `+ Clone` bound without ever actually cloning
 //! the callback — each calls it through a shared `&self` borrow (a `for`
 //! loop, or `Iterator::filter`/`any`/`all`/`map`/`flat_map`, all of which
 //! only need `Fn`/`FnMut`). The fix drops the bound from all eight kernels
-//! in `src/runtime/rust/src/sky_runtime/list.rs`.
+//! in `src/runtime/rust/src/list.rs`.
 //!
 //! Fixture shape: `List.filter (isAbove 3) items` / `List.any (isAbove N)
 //! items`, where `isAbove threshold x = x > threshold` — `isAbove 3` is a

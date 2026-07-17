@@ -43,7 +43,7 @@ fn golden_dir(name: &str) -> PathBuf {
     repo_root().join("tests").join("golden").join(name)
 }
 
-fn diag_code(err: &skyc::CliError) -> Option<sky_diagnostics::Code> {
+fn diag_code(err: &skyc::CliError) -> Option<ipe_diagnostics::Code> {
     match err {
         skyc::CliError::Pipeline { diag, .. } => Some(diag.code()),
         _ => None,
@@ -242,7 +242,7 @@ fn closed_superset_is_sky_t0001() {
     let Err(err) = res else { return };
     assert_eq!(
         diag_code(&err),
-        Some(sky_diagnostics::SKY_T0001),
+        Some(ipe_diagnostics::SKY_T0001),
         "closed record annotation vs superset arg must be SKY-T0001; \
          err = {err}"
     );
@@ -291,7 +291,7 @@ fn two_different_supersets_is_sky_t0001() {
     let Err(err) = res else { return };
     assert_eq!(
         diag_code(&err),
-        Some(sky_diagnostics::SKY_T0001),
+        Some(ipe_diagnostics::SKY_T0001),
         "an unannotated getter used at two different superset shapes must \
          be SKY-T0001 (no let-generalization over rows); err = {err}"
     );
@@ -332,7 +332,7 @@ fn row_var_annotation_is_sky_p0001() {
     let Err(err) = res else { return };
     assert_eq!(
         diag_code(&err),
-        Some(sky_diagnostics::SKY_P0001),
+        Some(ipe_diagnostics::SKY_P0001),
         "row-var record annotation `{{ r | f : T }}` must be SKY-P0001 \
          (unsupported syntax, fail-closed) until the backend gains \
          per-record-shape callee monomorphisation; err = {err}"

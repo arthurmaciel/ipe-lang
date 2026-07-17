@@ -48,7 +48,7 @@ fn append_and_number_on_same_var_is_sky_t0014() {
     };
     assert_eq!(
         code,
-        Some(sky_diagnostics::SKY_T0014),
+        Some(ipe_diagnostics::SKY_T0014),
         "expected SKY-T0014 (Append+Number unsatisfied by Int), got: {built:?}"
     );
 }

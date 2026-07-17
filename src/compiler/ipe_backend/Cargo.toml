@@ -1,0 +1,20 @@
+[package]
+name = "ipe_backend"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+ipe_ir = { path = "../ipe_ir" }
+ipe_diagnostics = { path = "../ipe_diagnostics" }
+# Phase 6 (Task 19): `EmittedProject` / `RelPath` need to round-trip through
+# the on-disk build cache (`skyc::cache`). See `RelPath`'s manual
+# `Serialize`/`Deserialize` impls for why `#[derive]` alone would be unsound
+# here (it would bypass `RelPath::new`'s path-traversal validation on load).
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true

@@ -1,7 +1,7 @@
 //! Class 7 §3 regression: `sky.toml`'s `[database] driver = "postgres"` must
 //! actually change what gets emitted — before this fix it was a silent no-op
 //! (`crates/skyc/src/project.rs`'s manifest parser didn't even recognise a
-//! `[database]` section, and `sky_backend_rust::project::emit_program` always
+//! `[database]` section, and `ipe_backend_rust::project::emit_program` always
 //! wrote the sqlite `config.rs` template regardless of what `sky.toml` said).
 //!
 //! No live Postgres needed: this only proves the STRUCTURAL wiring —
@@ -9,7 +9,7 @@
 //! `emit_program`'s config.rs/Cargo.toml selection — actually threads the
 //! driver choice through to the emitted project's files. `crates/skyc/src/project.rs`'s
 //! `mod tests` covers the manifest-parsing half in isolation;
-//! `crates/sky_backend_rust/src/project.rs`'s `mod tests` covers the
+//! `crates/ipe_backend_rust/src/project.rs`'s `mod tests` covers the
 //! `db_cargo_toml` / template-selection half in isolation. This test proves
 //! the two halves are actually wired together end-to-end through
 //! `skyc::build_project`.
@@ -57,7 +57,7 @@ fn write_project(test_name: &str, database_section: &str) -> PathBuf {
 }
 
 /// The core structural fix: `driver = "postgres"` in `sky.toml` must cause
-/// the emitted `src/sky_runtime/config.rs` to declare `sqlx::postgres::PgPool`
+/// the emitted `src/ipe_runtime/config.rs` to declare `sqlx::postgres::PgPool`
 /// / `PgRow` and `DB_USES_RETURNING_ID: bool = true` — NOT the sqlite
 /// template. Before this fix, `RUNTIME_CONFIG_RS_DB` was a single
 /// unconditional `include_str!`, so this assertion would have failed (the
@@ -75,7 +75,7 @@ fn postgres_driver_selects_postgres_config_template() {
         built.err()
     );
 
-    let config_rs = fs::read_to_string(out.join("src").join("sky_runtime").join("config.rs"))
+    let config_rs = fs::read_to_string(out.join("src").join("ipe_runtime").join("config.rs"))
         .expect("emitted config.rs must exist");
     assert!(
         config_rs.contains("sqlx::postgres::PgPool"),
@@ -177,7 +177,7 @@ fn no_database_section_still_selects_sqlite_config_template() {
         built.err()
     );
 
-    let config_rs = fs::read_to_string(out.join("src").join("sky_runtime").join("config.rs"))
+    let config_rs = fs::read_to_string(out.join("src").join("ipe_runtime").join("config.rs"))
         .expect("emitted config.rs must exist");
     assert!(
         config_rs.contains("sqlx::sqlite::SqlitePool"),

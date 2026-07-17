@@ -2,7 +2,7 @@
 //! Std.Ui `Color`, and the `Sky.Core.Json.Encode` `Value` encoders.
 //!
 //! Without a `stdlib_scheme` entry these kernels would be `Ty::Var(u32::MAX)`
-//! scheme holes in `sky_types::constrain`. Their schemes make
+//! scheme holes in `ipe_types::constrain`. Their schemes make
 //! `Length` / `Color` lower to `IrType::UiPlain(_)` and the JSON `Value` type to
 //! `IrType::Json` — so the whole `type -> lower -> emit -> run` path is
 //! typed. This golden proves the pipeline end-to-end:

@@ -33,7 +33,7 @@ fn repo_root() -> PathBuf {
 /// Build the named golden fixture and assert it surfaces exactly `expected` as a
 /// pipeline diagnostic — never a panic. A skip occurs only when the runtime
 /// cannot be resolved.
-fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code) {
+fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code) {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -91,7 +91,7 @@ fn non_exhaustive_nested_case_is_sky_t0010() {
     assert_gate(
         "gate_nonexhaustive_nested",
         "m3b2_gate_nonexhaustive_emit",
-        sky_diagnostics::SKY_T0010,
+        ipe_diagnostics::SKY_T0010,
     );
 }
 
@@ -126,7 +126,7 @@ fn single_arm_refutable_tuple_case_is_sky_l0115() {
     assert_gate(
         "gate_refutable_single",
         "m3b2_gate_refutable_single_emit",
-        sky_diagnostics::SKY_L0115,
+        ipe_diagnostics::SKY_L0115,
     );
 }
 
@@ -135,6 +135,6 @@ fn refutable_let_destructure_is_sky_t0015() {
     assert_gate(
         "gate_refutable_let",
         "m3b2_gate_refutable_let_emit",
-        sky_diagnostics::SKY_T0015,
+        ipe_diagnostics::SKY_T0015,
     );
 }

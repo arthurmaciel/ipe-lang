@@ -490,7 +490,7 @@ fn http_post(
 ///
 /// Proves the full M6-server pipeline end-to-end:
 /// Sky source → skyc → emitted Rust (with `server` feature injected) →
-/// `sky_runtime::server::server_listen` + `server_get` + `server_text` →
+/// `ipe_runtime::server::server_listen` + `server_get` + `server_text` →
 /// axum HTTP server → response received by the test.
 ///
 /// # Errors
@@ -813,7 +813,7 @@ fn csrf_legit_post_with_matching_token_allowed() -> Result<(), BoxError> {
 /// (`X-Forwarded-Proto: https`, only honoured when the operator opts in via
 /// `SKY_TRUSTED_PROXY`), not just a process-wide `ENV` snapshot — closing
 /// the same ENV-vs-TLS gap already fixed for the Sky.Live session cookie
-/// (`src/runtime/rust/src/sky_runtime/live/mod.rs::page_response`,
+/// (`src/runtime/rust/src/live/mod.rs::page_response`,
 /// `request_is_https`). The `server.rs` side needed a real design
 /// adaptation (not a copy-paste of the session-cookie fix): the signal has
 /// to be captured from `ServerRequest.headers` BEFORE `middleware_with_csrf`

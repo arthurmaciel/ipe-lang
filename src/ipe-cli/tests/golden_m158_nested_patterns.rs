@@ -80,7 +80,7 @@ fn assert_accepted_runs(name: &str, expected_stdout: &str) {
 
 /// Assert `name` stays fail-closed with `expected` — a clean diagnostic, never
 /// an accept-then-cargo-fail.
-fn assert_gated(name: &str, expected: sky_diagnostics::Code) {
+fn assert_gated(name: &str, expected: ipe_diagnostics::Code) {
     let root = repo_root();
     if skyc::resolve_runtime().is_err() {
         return;
@@ -150,7 +150,7 @@ fn nested_cons_generic_elem_accepted() {
 fn nested_cons_no_fallback_stays_gated() {
     assert_gated(
         "nested_cons_no_fallback_gated",
-        sky_diagnostics::SKY_L0116,
+        ipe_diagnostics::SKY_L0116,
     );
 }
 
@@ -165,7 +165,7 @@ fn nested_cons_no_fallback_stays_gated() {
 fn nested_strlit_two_levels_stays_gated() {
     assert_gated(
         "nested_strlit_two_levels_gated",
-        sky_diagnostics::SKY_L0116,
+        ipe_diagnostics::SKY_L0116,
     );
 }
 
