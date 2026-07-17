@@ -8,7 +8,7 @@
 
 use std::fmt;
 
-use ipe_diagnostics::{Code, IPE_F4400, IPE_F4401, IPE_F4402};
+use ipe_diagnostics::{Code, IPE_F4400, IPE_F4401, IPE_F4402, IPE_F4411, IPE_F4412};
 
 /// One FFI-generator diagnostic: the failure class plus enough context to
 /// name the offending binding.
@@ -50,6 +50,23 @@ pub enum Diagnostic {
         /// Which bindability rule was broken.
         defect: GenericBindDefect,
     },
+    /// `IPE-F4411` — an untrusted crate source (git URL, pin, or crate name)
+    /// was rejected at the driver gate, before reaching any command or the
+    /// network.
+    SourceRejected {
+        /// The offending input, verbatim.
+        source: String,
+        /// Which gate rule was broken.
+        defect: SourceDefect,
+    },
+    /// `IPE-F4412` — an FFI cache artifact could not be read, written, or
+    /// removed.
+    ArtifactIo {
+        /// The artifact path.
+        path: String,
+        /// The rendered OS error.
+        detail: String,
+    },
 }
 
 impl Diagnostic {
@@ -60,6 +77,8 @@ impl Diagnostic {
             Self::CallUnrenderable { .. } | Self::GenericNotBindable { .. } => IPE_F4400,
             Self::WireMalformed { .. } => IPE_F4401,
             Self::ShapeContradiction { .. } => IPE_F4402,
+            Self::SourceRejected { .. } => IPE_F4411,
+            Self::ArtifactIo { .. } => IPE_F4412,
         }
     }
 }
@@ -92,11 +111,85 @@ impl fmt::Display for Diagnostic {
             Self::GenericNotBindable { callee, defect } => {
                 write!(f, "{}: `{callee}`: {defect}", self.code().as_str())
             }
+            Self::SourceRejected { source, defect } => {
+                write!(f, "{}: {source:?}: {defect}", self.code().as_str())
+            }
+            Self::ArtifactIo { path, detail } => {
+                write!(
+                    f,
+                    "{}: cache artifact `{path}`: {detail}",
+                    self.code().as_str()
+                )
+            }
         }
     }
 }
 
 impl std::error::Error for Diagnostic {}
+
+/// The closed set of crate-source gate rejections (`IPE-F4411`). Every rule
+/// runs BEFORE the input can reach a command line or the network.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceDefect {
+    /// A crate name outside `[A-Za-z0-9_-]+`.
+    CrateNameIllegal,
+    /// A git URL whose scheme is not `https://`.
+    SchemeNotHttps,
+    /// A git URL with no host component.
+    HostMissing,
+    /// A git host with characters outside `[A-Za-z0-9._-]`.
+    HostCharsetIllegal {
+        /// The offending host.
+        host: String,
+    },
+    /// A git host not on the allowlist.
+    HostNotAllowlisted {
+        /// The offending host.
+        host: String,
+        /// The hosts that would be accepted.
+        allowed: Vec<String>,
+    },
+    /// More than one of rev/branch/tag supplied — git honours only one.
+    MultiplePins {
+        /// The pin kinds that were simultaneously supplied.
+        present: Vec<&'static str>,
+    },
+    /// A pin value that is empty, option-shaped (`-…`), or carries
+    /// whitespace/control characters.
+    PinIllegal {
+        /// The offending pin value.
+        got: String,
+    },
+}
+
+impl fmt::Display for SourceDefect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CrateNameIllegal => {
+                f.write_str("crate name must be non-empty and match [A-Za-z0-9_-]+")
+            }
+            Self::SchemeNotHttps => f.write_str("git source must use the https:// scheme"),
+            Self::HostMissing => f.write_str("git URL has no host component"),
+            Self::HostCharsetIllegal { host } => {
+                write!(f, "git host {host:?} has characters outside [A-Za-z0-9._-]")
+            }
+            Self::HostNotAllowlisted { host, allowed } => write!(
+                f,
+                "git host {host:?} is not on the allowlist ({}); set IPE_FFI_GIT_HOSTS to extend it",
+                allowed.join(", ")
+            ),
+            Self::MultiplePins { present } => write!(
+                f,
+                "rev/branch/tag are mutually exclusive, but {} were supplied",
+                present.join(" + ")
+            ),
+            Self::PinIllegal { got } => write!(
+                f,
+                "pin value {got:?} is empty, option-shaped, or carries whitespace"
+            ),
+        }
+    }
+}
 
 /// Why a concrete instantiation type falls outside the closed bindable set.
 ///

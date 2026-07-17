@@ -19,6 +19,7 @@
 pub mod bindings;
 pub mod call;
 pub mod diag;
+pub mod driver;
 pub mod emit;
 pub mod instance;
 pub mod naming;
