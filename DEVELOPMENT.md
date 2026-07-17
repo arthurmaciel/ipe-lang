@@ -108,7 +108,7 @@ disown                                # survives shell exit
 
 Defaults (16 GB host): per-process kill at 6 GB RSS for compiler tooling
 (`cargo`/`rustc`/`cc1`/`cc1plus`/`cc`/`collect2`/`ld`/`ld.lld`/`lld`/`ipe`/
-`sky-ffi-inspect`/`rust-analyzer`); 10 GB panic tier for dev-session hosts
+`ipe-ffi-inspector`/`rust-analyzer`); 10 GB panic tier for dev-session hosts
 (`claude`/`node`/`ghostty`); system-pressure floor at <1.2 GB free.
 Tune via `MEM_GUARD_PROC_MB` / `MEM_GUARD_PANIC_MB` / `MEM_GUARD_SYS_FLOOR_MB`;
 `MEM_GUARD_DRY=1` = log-only. Never silence a kill by raising a threshold — a
