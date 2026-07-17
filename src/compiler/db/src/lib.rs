@@ -39,13 +39,13 @@ mod metadata;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use salsa::Setter as _;
 /// Re-exported so drivers and tests can name the trust tag and interface
 /// type without a direct `ipe_canon` dependency.
 pub use ipe_canon::{ModuleExports, ModuleOrigin};
 use ipe_diagnostics::Diagnostic;
 use ipe_intern::{Interner, Symbol};
 use ipe_syntax::Module;
+use salsa::Setter as _;
 
 pub use metadata::{ProgramMetadata, ProgramMetadataResult, program_metadata};
 

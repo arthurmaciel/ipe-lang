@@ -3,8 +3,8 @@
 //! so these must return key-sorted output regardless of insertion order. Also
 //! asserts the absent-key / idempotent-remove behaviours that must NOT panic.
 
-use proptest::prelude::*;
 use ipe_runtime_rust::*;
+use proptest::prelude::*;
 
 fn build_string(pairs: &[(&str, i64)]) -> std::collections::HashMap<String, i64> {
     let mut d = ipe_runtime_rust::dict::dict_empty();
@@ -22,7 +22,10 @@ fn keys_values_tolist_are_key_sorted_regardless_of_insertion_order() {
         ipe_runtime_rust::dict::dict_keys(d.clone()),
         vec!["a".to_string(), "b".to_string(), "c".to_string()]
     );
-    assert_eq!(ipe_runtime_rust::dict::dict_values(d.clone()), vec![1, 2, 3]);
+    assert_eq!(
+        ipe_runtime_rust::dict::dict_values(d.clone()),
+        vec![1, 2, 3]
+    );
     assert_eq!(
         ipe_runtime_rust::dict::dict_to_list(d.clone()),
         vec![
@@ -65,7 +68,10 @@ fn get_present_is_just_absent_is_nothing() {
 #[test]
 fn member_true_false() {
     let d = build_string(&[("k", 1)]);
-    assert!(ipe_runtime_rust::dict::dict_member("k".to_string(), d.clone()));
+    assert!(ipe_runtime_rust::dict::dict_member(
+        "k".to_string(),
+        d.clone()
+    ));
     assert!(!ipe_runtime_rust::dict::dict_member("nope".to_string(), d));
 }
 
@@ -90,7 +96,10 @@ fn empty_dict_ops_are_total() {
         ipe_runtime_rust::dict::dict_get("a".to_string(), d.clone()),
         IpeMaybe::Nothing
     ));
-    assert!(!ipe_runtime_rust::dict::dict_member("a".to_string(), d.clone()));
+    assert!(!ipe_runtime_rust::dict::dict_member(
+        "a".to_string(),
+        d.clone()
+    ));
     assert_eq!(
         ipe_runtime_rust::dict::dict_keys(d.clone()),
         Vec::<String>::new()
@@ -102,7 +111,8 @@ fn empty_dict_ops_are_total() {
 
 #[test]
 fn from_list_last_wins_on_duplicate_key() {
-    let d = ipe_runtime_rust::dict::dict_from_list(vec![("k".to_string(), 1i64), ("k".to_string(), 2)]);
+    let d =
+        ipe_runtime_rust::dict::dict_from_list(vec![("k".to_string(), 1i64), ("k".to_string(), 2)]);
     // HashMap::from_iter keeps the last value for a duplicate key.
     assert!(matches!(
         ipe_runtime_rust::dict::dict_get("k".to_string(), d),

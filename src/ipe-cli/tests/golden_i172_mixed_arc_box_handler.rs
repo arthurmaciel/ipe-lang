@@ -48,7 +48,10 @@ fn repo_root() -> PathBuf {
 }
 
 fn entry_path(root: &Path, fixture: &str) -> PathBuf {
-    root.join("tests").join("golden").join(fixture).join("Main.ipe")
+    root.join("tests")
+        .join("golden")
+        .join(fixture)
+        .join("Main.ipe")
 }
 
 /// skyc-0 ∧ carrier-unification: the compiler must accept the program AND emit
@@ -67,8 +70,7 @@ fn entry_path(root: &Path, fixture: &str) -> PathBuf {
 fn assert_skyc_unifies_to_arc(fixture: &str) {
     let root = repo_root();
     let entry = entry_path(&root, fixture);
-    let out =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{fixture}_skyc_out"));
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{fixture}_skyc_out"));
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = ipe::resolve_runtime() else {

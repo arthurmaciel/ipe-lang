@@ -25,12 +25,7 @@ pub fn lazy_lazy2_<M, A, B>(f: impl Fn(A, B) -> Element<M>, a: A, b: B) -> Eleme
 }
 
 /// `Lazy.lazy3 : (a -> b -> c -> Element msg) -> a -> b -> c -> Element msg` (eager)
-pub fn lazy_lazy3_<M, A, B, C>(
-    f: impl Fn(A, B, C) -> Element<M>,
-    a: A,
-    b: B,
-    c: C,
-) -> Element<M> {
+pub fn lazy_lazy3_<M, A, B, C>(f: impl Fn(A, B, C) -> Element<M>, a: A, b: B, c: C) -> Element<M> {
     f(a, b, c)
 }
 

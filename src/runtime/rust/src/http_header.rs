@@ -124,17 +124,17 @@ mod tests {
     /// common case for both headers).
     #[test]
     fn origin_host_mismatch_same_origin_no_ports() {
-        assert!(!origin_host_mismatch(
-            "https://example.com",
-            "example.com"
-        ));
+        assert!(!origin_host_mismatch("https://example.com", "example.com"));
     }
 
     /// Cross-origin host — must still be flagged regardless of the port
     /// normalization added by this fix.
     #[test]
     fn origin_host_mismatch_different_host_is_flagged() {
-        assert!(origin_host_mismatch("https://evil.example", "victim.example"));
+        assert!(origin_host_mismatch(
+            "https://evil.example",
+            "victim.example"
+        ));
     }
 
     /// The bug this fix closes: `https://example.com` (implicit :443) vs
@@ -151,7 +151,10 @@ mod tests {
     /// Same bug, `http`/`:80` side.
     #[test]
     fn origin_host_mismatch_normalizes_explicit_default_http_port() {
-        assert!(!origin_host_mismatch("http://example.com", "example.com:80"));
+        assert!(!origin_host_mismatch(
+            "http://example.com",
+            "example.com:80"
+        ));
     }
 
     /// A NON-default explicit port must still compare as a mismatch when the

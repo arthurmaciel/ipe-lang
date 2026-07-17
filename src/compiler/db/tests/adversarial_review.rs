@@ -18,8 +18,8 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
+use ipe_db::{IpeDatabase, ModuleOrigin, SourceFile, SourceRoot, canonicalize, module_interface};
 use salsa::Setter as _;
-use ipe_db::{ModuleOrigin, IpeDatabase, SourceFile, SourceRoot, canonicalize, module_interface};
 
 #[derive(Clone, Default)]
 struct EventLog(Arc<Mutex<Vec<String>>>);

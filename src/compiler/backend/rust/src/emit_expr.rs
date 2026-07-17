@@ -5778,9 +5778,7 @@ fn emit_json_decoder_call(
     //    decode_succeed (Config over the same carrier).
     if matches!(
         callee,
-        Callee::Kernel(
-            KernelFn::JsonDecSucceed | KernelFn::DbDecSucceed | KernelFn::ConfigSucceed
-        )
+        Callee::Kernel(KernelFn::JsonDecSucceed | KernelFn::DbDecSucceed | KernelFn::ConfigSucceed)
     ) && let Some(arg) = args.first()
     {
         match arg {

@@ -29,7 +29,7 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use ipe_db::{ImportResolution, ModuleOrigin, IpeDatabase, SourceFile, SourceRoot};
+use ipe_db::{ImportResolution, IpeDatabase, ModuleOrigin, SourceFile, SourceRoot};
 
 fn file(db: &IpeDatabase, path: &[&str], text: &str) -> SourceFile {
     SourceFile::new(

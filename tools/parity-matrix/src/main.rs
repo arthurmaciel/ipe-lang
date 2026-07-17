@@ -139,15 +139,13 @@ fn main() {
     let cfg = Config::new(our_dir, ref_dir);
 
     match cmd {
-        "extract" => {
-            match run_extract(&cfg) {
-                Ok(tsv) => print!("{tsv}"),
-                Err(e) => {
-                    eprintln!("extract error: {e}");
-                    std::process::exit(1);
-                }
+        "extract" => match run_extract(&cfg) {
+            Ok(tsv) => print!("{tsv}"),
+            Err(e) => {
+                eprintln!("extract error: {e}");
+                std::process::exit(1);
             }
-        }
+        },
         "report" => {
             let tsv_path = positional.get(1).map(String::as_str).unwrap_or("-");
             let tsv = if tsv_path == "-" {
@@ -235,11 +233,24 @@ impl Row {
                 || compiled_source_quals.contains(&self.qualifier)
                 || matches!(
                     self.qualifier.as_str(),
-                    "Log" | "Html" | "Ui" | "PubSub" | "Background"
-                    | "Border" | "Font" | "Region" | "Input" | "Attr"
-                    | "Event" | "Lazy" | "Keyed"
-                    | "CssSafety" | "Middleware" | "Db.Decode"
-                    | "Regex" | "Path"
+                    "Log"
+                        | "Html"
+                        | "Ui"
+                        | "PubSub"
+                        | "Background"
+                        | "Border"
+                        | "Font"
+                        | "Region"
+                        | "Input"
+                        | "Attr"
+                        | "Event"
+                        | "Lazy"
+                        | "Keyed"
+                        | "CssSafety"
+                        | "Middleware"
+                        | "Db.Decode"
+                        | "Regex"
+                        | "Path"
                 );
             if !skip_canon && !self.in_canon_qual {
                 issues.push("canon_missing");
@@ -281,11 +292,7 @@ impl Row {
 }
 
 fn yn(b: bool) -> &'static str {
-    if b {
-        "Y"
-    } else {
-        "N"
-    }
+    if b { "Y" } else { "N" }
 }
 
 // ── Extract entry point ──────────────────────────────────────────────────────
@@ -430,11 +437,12 @@ fn scan_runtime_fns_dir(dir: &Path, fns: &mut HashSet<String>) -> Result<(), Str
                     // Extract name up to `(` or `<` (generic params) or end of token.
                     // Handles both one-liners `pub fn foo(` and multi-line generics
                     // `pub fn foo<\n    T: ...`.
-                    let name_end = rest
-                        .find(['(', '<', ' ', '\t'])
-                        .unwrap_or(rest.len());
+                    let name_end = rest.find(['(', '<', ' ', '\t']).unwrap_or(rest.len());
                     let base = rest[..name_end].trim();
-                    if !base.is_empty() && base != "new" && base.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                    if !base.is_empty()
+                        && base != "new"
+                        && base.chars().all(|c| c.is_alphanumeric() || c == '_')
+                    {
                         fns.insert(base.to_string());
                     }
                 }
@@ -546,7 +554,11 @@ fn scan_self_slice(src: &str, name: &str) -> HashSet<String> {
     };
 
     // Determine close character based on what opened the block.
-    let open_ch = if rest.as_bytes().get(inner_start.saturating_sub(1)) == Some(&b'[') { '[' } else { '{' };
+    let open_ch = if rest.as_bytes().get(inner_start.saturating_sub(1)) == Some(&b'[') {
+        '['
+    } else {
+        '{'
+    };
     let close_ch = if open_ch == '[' { ']' } else { '}' };
     let mut depth = 1usize;
     let mut end = 0usize;
@@ -699,8 +711,7 @@ fn parse_d_args(s: &str) -> DeclInfo {
                 // Identifier — could be a KernelClass variant (Pure, Db, …).
                 if bytes[i].is_ascii_alphabetic() {
                     let start = i;
-                    while i < bytes.len()
-                        && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_')
+                    while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_')
                     {
                         i += 1;
                     }
@@ -723,7 +734,6 @@ fn parse_d_args(s: &str) -> DeclInfo {
         class,
     }
 }
-
 
 /// Scan `kernel_name()` (or `n()`) arms from naming.rs.
 ///
@@ -962,10 +972,9 @@ fn scan_canon_qualifiers(src: &str) -> HashSet<(String, String)> {
                         State::InTuple if current_qual.is_empty() => {
                             current_qual = s;
                         }
-                        State::InMembers
-                            if !current_qual.is_empty() && !s.is_empty() => {
-                                set.insert((current_qual.clone(), s));
-                            }
+                        State::InMembers if !current_qual.is_empty() && !s.is_empty() => {
+                            set.insert((current_qual.clone(), s));
+                        }
                         _ => {}
                     }
                 }
@@ -1147,14 +1156,8 @@ fn split_sky_decl(line: &str) -> Option<(String, String)> {
 /// Scan the reference sky-ffi-inspect Go file and our sky-ffi-inspect-rs for
 /// `PackageInfo` / `PkgInfo` schema fields.  Returns (ref_fields, our_fields).
 #[allow(dead_code)]
-fn scan_ffi_schemas(
-    ref_go: &Path,
-    our_rs: &Path,
-) -> (HashSet<String>, HashSet<String>) {
-    (
-        scan_go_struct_fields(ref_go),
-        scan_rs_struct_fields(our_rs),
-    )
+fn scan_ffi_schemas(ref_go: &Path, our_rs: &Path) -> (HashSet<String>, HashSet<String>) {
+    (scan_go_struct_fields(ref_go), scan_rs_struct_fields(our_rs))
 }
 
 fn scan_go_struct_fields(path: &Path) -> HashSet<String> {
@@ -1234,13 +1237,14 @@ fn run_report(tsv: &str) -> Result<String, String> {
         .iter()
         .filter(|r| r.status.starts_with("MISMATCH"))
         .collect();
-    let backlog_rows: Vec<&ParsedRow> = rows
-        .iter()
-        .filter(|r| r.status == "BACKLOG")
-        .collect();
+    let backlog_rows: Vec<&ParsedRow> = rows.iter().filter(|r| r.status == "BACKLOG").collect();
 
     // Runtime symbol existence stats.
-    let with_sym: Vec<&ParsedRow> = wired.iter().filter(|r| !r.runtime_sym.is_empty()).copied().collect();
+    let with_sym: Vec<&ParsedRow> = wired
+        .iter()
+        .filter(|r| !r.runtime_sym.is_empty())
+        .copied()
+        .collect();
     let sym_exists_count = with_sym.iter().filter(|r| r.runtime_sym_exists).count();
     let sym_missing_count = with_sym.len() - sym_exists_count;
 
@@ -1261,8 +1265,14 @@ fn run_report(tsv: &str) -> Result<String, String> {
     let _ = writeln!(out);
     let _ = writeln!(out, "> Generated by `parity-matrix report`. Re-run with:");
     let _ = writeln!(out, "> ```bash");
-    let _ = writeln!(out, "> parity-matrix extract > docs/architecture/parity-matrix.tsv");
-    let _ = writeln!(out, "> parity-matrix report docs/architecture/parity-matrix.tsv > docs/architecture/parity-matrix.md");
+    let _ = writeln!(
+        out,
+        "> parity-matrix extract > docs/architecture/parity-matrix.tsv"
+    );
+    let _ = writeln!(
+        out,
+        "> parity-matrix report docs/architecture/parity-matrix.tsv > docs/architecture/parity-matrix.md"
+    );
     let _ = writeln!(out, "> ```");
     let _ = writeln!(out);
     let _ = writeln!(out, "## Summary");
@@ -1275,14 +1285,22 @@ fn run_report(tsv: &str) -> Result<String, String> {
     let _ = writeln!(
         out,
         "| Wired OK (all 8 layers pass) | {ok_count} ({:.0}%) |",
-        if wired_count > 0 { ok_count as f64 / wired_count as f64 * 100.0 } else { 0.0 }
+        if wired_count > 0 {
+            ok_count as f64 / wired_count as f64 * 100.0
+        } else {
+            0.0
+        }
     );
     let _ = writeln!(out, "| MISMATCH (bugs) | {} |", mismatch_rows.len());
     let _ = writeln!(
         out,
         "| Runtime symbol coverage | {sym_exists_count}/{} ({:.0}%) |",
         with_sym.len(),
-        if !with_sym.is_empty() { sym_exists_count as f64 / with_sym.len() as f64 * 100.0 } else { 0.0 }
+        if !with_sym.is_empty() {
+            sym_exists_count as f64 / with_sym.len() as f64 * 100.0
+        } else {
+            0.0
+        }
     );
     let _ = writeln!(out, "| Runtime symbols MISSING | {sym_missing_count} |");
     let _ = writeln!(out);
@@ -1292,7 +1310,11 @@ fn run_report(tsv: &str) -> Result<String, String> {
     let _ = writeln!(out, "| Class | Wired | OK | % |");
     let _ = writeln!(out, "|-------|-------|----|---|");
     for (class, (w, ok)) in &class_counts {
-        let pct = if *w > 0 { *ok as f64 / *w as f64 * 100.0 } else { 0.0 };
+        let pct = if *w > 0 {
+            *ok as f64 / *w as f64 * 100.0
+        } else {
+            0.0
+        };
         let _ = writeln!(out, "| {class} | {w} | {ok} | {pct:.0}% |");
     }
     let _ = writeln!(out);
@@ -1317,13 +1339,21 @@ fn run_report(tsv: &str) -> Result<String, String> {
             let _ = writeln!(
                 out,
                 "| {} | {} | {} | `{}` | {} |",
-                r.variant, qm, r.status, r.runtime_sym, yn2(r.runtime_sym_exists)
+                r.variant,
+                qm,
+                r.status,
+                r.runtime_sym,
+                yn2(r.runtime_sym_exists)
             );
         }
         let _ = writeln!(out);
     }
 
-    let _ = writeln!(out, "## Backlog (not yet wired — {} entries)", backlog_rows.len());
+    let _ = writeln!(
+        out,
+        "## Backlog (not yet wired — {} entries)",
+        backlog_rows.len()
+    );
     let _ = writeln!(out);
     if backlog_rows.len() <= 40 {
         let _ = writeln!(out, "| Variant | Class |");
@@ -1332,7 +1362,11 @@ fn run_report(tsv: &str) -> Result<String, String> {
             let _ = writeln!(out, "| {} | {} |", r.variant, r.class);
         }
     } else {
-        let _ = writeln!(out, "(Backlog has {} entries — run `parity-matrix extract | grep BACKLOG` for full list.)", backlog_rows.len());
+        let _ = writeln!(
+            out,
+            "(Backlog has {} entries — run `parity-matrix extract | grep BACKLOG` for full list.)",
+            backlog_rows.len()
+        );
     }
     let _ = writeln!(out);
 
@@ -1340,11 +1374,23 @@ fn run_report(tsv: &str) -> Result<String, String> {
     let _ = writeln!(out);
     let _ = writeln!(out, "| Item | Status |");
     let _ = writeln!(out, "|------|--------|");
-    let _ = writeln!(out, "| `sky-ffi-inspect-rs` PkgInfo schema | needs comparison |");
-    let _ = writeln!(out, "| FFI generator port (`src/Sky/Build/Rust/Ffi*.hs`) | 0% — not started |");
-    let _ = writeln!(out, "| FFI generator (`FfiGen.hs`, 2093 lines) | 0% — not started |");
+    let _ = writeln!(
+        out,
+        "| `sky-ffi-inspect-rs` PkgInfo schema | needs comparison |"
+    );
+    let _ = writeln!(
+        out,
+        "| FFI generator port (`src/Sky/Build/Rust/Ffi*.hs`) | 0% — not started |"
+    );
+    let _ = writeln!(
+        out,
+        "| FFI generator (`FfiGen.hs`, 2093 lines) | 0% — not started |"
+    );
     let _ = writeln!(out);
-    let _ = writeln!(out, "Reference generator modules (denominators for port tracking):");
+    let _ = writeln!(
+        out,
+        "Reference generator modules (denominators for port tracking):"
+    );
     let _ = writeln!(out);
     let _ = writeln!(out, "| Module | Lines |");
     let _ = writeln!(out, "|--------|-------|");
@@ -1359,11 +1405,7 @@ fn run_report(tsv: &str) -> Result<String, String> {
 }
 
 fn yn2(b: bool) -> &'static str {
-    if b {
-        "✓"
-    } else {
-        "✗"
-    }
+    if b { "✓" } else { "✗" }
 }
 
 // ── TSV parser (for report) ───────────────────────────────────────────────────

@@ -55,10 +55,7 @@ fn emits_byte_identical_main_rs() {
     // the emitted `src/main.rs` against the golden `main.rs`). Replaces the
     // former hand-rolled `read_to_string` + `assert_eq!` pair with the shared
     // harness helper.
-    support::assert_emitted_project_matches_golden_dir(
-        &out,
-        support::golden_dir_of(&golden),
-    );
+    support::assert_emitted_project_matches_golden_dir(&out, support::golden_dir_of(&golden));
 }
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
@@ -86,7 +83,10 @@ fn end_to_end_builds_and_prints_forty_two() {
     let outcome = support::build_and_run_emitted("custom_maybe_adt", &out);
     support::assert_go_parity(
         "custom_maybe_adt",
-        &repo_root().join("tests").join("golden").join("custom_maybe_adt"),
+        &repo_root()
+            .join("tests")
+            .join("golden")
+            .join("custom_maybe_adt"),
         &outcome.stdout,
     );
     assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");

@@ -127,7 +127,13 @@ impl IpeError {
     /// Every message constructor defaults `details = Nothing`, mirroring the
     /// reference design's `mkInfo` smart constructor.
     fn with(kind: IpeErrorKind, message: String) -> Self {
-        Self::Error(kind, IpeErrorInfo { message, details: IpeMaybe::Nothing })
+        Self::Error(
+            kind,
+            IpeErrorInfo {
+                message,
+                details: IpeMaybe::Nothing,
+            },
+        )
     }
 
     pub fn io(message: String) -> Self {
@@ -162,7 +168,10 @@ impl IpeError {
         Self::with(IpeErrorKind::NotFound, "not found".to_owned())
     }
     pub fn permission_denied() -> Self {
-        Self::with(IpeErrorKind::PermissionDenied, "permission denied".to_owned())
+        Self::with(
+            IpeErrorKind::PermissionDenied,
+            "permission denied".to_owned(),
+        )
     }
 
     /// Sky `Error.withMessage : String -> Error -> Error` — replaces the
@@ -199,7 +208,13 @@ impl IpeError {
     #[must_use]
     pub fn with_details(self, details: IpeErrorDetails) -> Self {
         let Self::Error(kind, info) = self;
-        Self::Error(kind, IpeErrorInfo { message: info.message, details: IpeMaybe::Just(details) })
+        Self::Error(
+            kind,
+            IpeErrorInfo {
+                message: info.message,
+                details: IpeMaybe::Just(details),
+            },
+        )
     }
 }
 
@@ -318,7 +333,10 @@ mod tests {
 
     #[test]
     fn nullary_constructors_have_fixed_messages() {
-        assert_eq!(IpeError::timeout().to_sky_string(), "Timeout: operation timed out");
+        assert_eq!(
+            IpeError::timeout().to_sky_string(),
+            "Timeout: operation timed out"
+        );
         assert_eq!(IpeError::not_found().to_sky_string(), "NotFound: not found");
         assert_eq!(
             IpeError::permission_denied().to_sky_string(),
@@ -365,12 +383,14 @@ mod tests {
 
     #[test]
     fn with_details_sets_just_keeps_kind_and_message() {
-        let e = IpeError::io("disk full".to_owned())
-            .with_details(IpeErrorDetails::HttpStatus(404));
+        let e = IpeError::io("disk full".to_owned()).with_details(IpeErrorDetails::HttpStatus(404));
         let IpeError::Error(kind, info) = &e;
         assert_eq!(*kind, IpeErrorKind::Io);
         assert_eq!(info.message, "disk full");
-        assert_eq!(info.details, IpeMaybe::Just(IpeErrorDetails::HttpStatus(404)));
+        assert_eq!(
+            info.details,
+            IpeMaybe::Just(IpeErrorDetails::HttpStatus(404))
+        );
     }
 
     #[test]

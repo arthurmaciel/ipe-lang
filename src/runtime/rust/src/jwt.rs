@@ -302,22 +302,34 @@ pub fn jwt_decode_rs256<E: From<String>>(key_pem: String, token: String) -> IpeR
 // above). These wrappers add no new logging surface.
 
 /// Generated-code alias for `jwt_encode_hs256` with `E = String`.
-pub fn ipe_jwt_encode_hs256(secret: String, claims_json: String) -> IpeResult<crate::error::IpeError, String> {
+pub fn ipe_jwt_encode_hs256(
+    secret: String,
+    claims_json: String,
+) -> IpeResult<crate::error::IpeError, String> {
     jwt_encode_hs256(secret, claims_json)
 }
 
 /// Generated-code alias for `jwt_decode_hs256` with `E = String`.
-pub fn ipe_jwt_decode_hs256(secret: String, token: String) -> IpeResult<crate::error::IpeError, String> {
+pub fn ipe_jwt_decode_hs256(
+    secret: String,
+    token: String,
+) -> IpeResult<crate::error::IpeError, String> {
     jwt_decode_hs256(secret, token)
 }
 
 /// Generated-code alias for `jwt_encode_rs256` with `E = String`.
-pub fn ipe_jwt_encode_rs256(key_pem: String, claims_json: String) -> IpeResult<crate::error::IpeError, String> {
+pub fn ipe_jwt_encode_rs256(
+    key_pem: String,
+    claims_json: String,
+) -> IpeResult<crate::error::IpeError, String> {
     jwt_encode_rs256(key_pem, claims_json)
 }
 
 /// Generated-code alias for `jwt_decode_rs256` with `E = String`.
-pub fn ipe_jwt_decode_rs256(key_pem: String, token: String) -> IpeResult<crate::error::IpeError, String> {
+pub fn ipe_jwt_decode_rs256(
+    key_pem: String,
+    token: String,
+) -> IpeResult<crate::error::IpeError, String> {
     jwt_decode_rs256(key_pem, token)
 }
 
@@ -392,17 +404,29 @@ pub fn ipe_jwt_audience(aud: String, claims: JsonValue) -> JsonValue {
 /// Sky stdlib's `Jwt.ipe` passes the value straight through as a JSON number,
 /// so we mirror that — the caller is responsible for providing the right unit.
 pub fn ipe_jwt_expires_at(exp: i64, claims: JsonValue) -> JsonValue {
-    claims_set(claims, "exp", JsonValue::Number(serde_json::Number::from(exp)))
+    claims_set(
+        claims,
+        "exp",
+        JsonValue::Number(serde_json::Number::from(exp)),
+    )
 }
 
 /// `Jwt.notBefore : Int -> Claims -> Claims` — sets the `nbf` claim.
 pub fn ipe_jwt_not_before(nbf: i64, claims: JsonValue) -> JsonValue {
-    claims_set(claims, "nbf", JsonValue::Number(serde_json::Number::from(nbf)))
+    claims_set(
+        claims,
+        "nbf",
+        JsonValue::Number(serde_json::Number::from(nbf)),
+    )
 }
 
 /// `Jwt.issuedAt : Int -> Claims -> Claims` — sets the `iat` claim.
 pub fn ipe_jwt_issued_at(iat: i64, claims: JsonValue) -> JsonValue {
-    claims_set(claims, "iat", JsonValue::Number(serde_json::Number::from(iat)))
+    claims_set(
+        claims,
+        "iat",
+        JsonValue::Number(serde_json::Number::from(iat)),
+    )
 }
 
 /// `Jwt.jwtId : String -> Claims -> Claims` — sets the `jti` claim.
@@ -522,8 +546,7 @@ pub fn ipe_jwt_decode(
     };
 
     // 4. Manual time validation matching reference semantics exactly.
-    let claims_val: JsonValue =
-        serde_json::from_str(&payload_json).unwrap_or(JsonValue::Null);
+    let claims_val: JsonValue = serde_json::from_str(&payload_json).unwrap_or(JsonValue::Null);
 
     if let Some(exp) = claims_val.get("exp").and_then(|v| v.as_i64()) {
         // pastClaim: now >= exp  → expired

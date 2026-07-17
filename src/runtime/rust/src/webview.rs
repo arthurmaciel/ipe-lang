@@ -157,10 +157,7 @@ mod imp {
     fn render<Model, Msg, FView>(
         view: &FView,
         model: &Model,
-    ) -> (
-        String,
-        crate::live::dispatch::HandlerIndex<Msg>,
-    )
+    ) -> (String, crate::live::dispatch::HandlerIndex<Msg>)
     where
         Model: Clone,
         Msg: Clone,

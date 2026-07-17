@@ -49,9 +49,7 @@ pub fn csrf_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
         !matches!(
-            crate::system::read_env_var("IPE_CSRF")
-                .ok()
-                .as_deref(),
+            crate::system::read_env_var("IPE_CSRF").ok().as_deref(),
             Some("off") | Some("0") | Some("false")
         )
     })
@@ -163,8 +161,7 @@ fn origin_mismatch(headers: &HeaderMap) -> bool {
         use std::sync::OnceLock;
         static CHECK: OnceLock<bool> = OnceLock::new();
         *CHECK.get_or_init(|| {
-            crate::system::read_env_var("IPE_LIVE_CSRF_ORIGIN_CHECK").as_deref()
-                == Ok("on")
+            crate::system::read_env_var("IPE_LIVE_CSRF_ORIGIN_CHECK").as_deref() == Ok("on")
         })
     }
     if !origin_check_enabled() {

@@ -20,7 +20,11 @@ fn emits_byte_identical_main_rs_and_vendors_runtime() {
         .join("golden")
         .join("basics")
         .join("Main.ipe");
-    let golden = root.join("tests").join("golden").join("basics").join("main.rs");
+    let golden = root
+        .join("tests")
+        .join("golden")
+        .join("basics")
+        .join("main.rs");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m0_emit");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -36,10 +40,7 @@ fn emits_byte_identical_main_rs_and_vendors_runtime() {
     // match byte-for-byte. Replaces the former hand-rolled `read_to_string` +
     // `assert_eq!` pair — proven equal in discriminating power side by side
     // before that block was removed.
-    support::assert_emitted_project_matches_golden_dir(
-        &out,
-        support::golden_dir_of(&golden),
-    );
+    support::assert_emitted_project_matches_golden_dir(&out, support::golden_dir_of(&golden));
 
     assert!(
         out.join("src")

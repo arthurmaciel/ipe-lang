@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 
 use ipe_canon::ast as canon;
 use ipe_diagnostics::{
-    Code, DResult, Diagnostic, Feature, Located, LowerError, IPE_L0101, IPE_L0102, IPE_L0107,
-    IPE_L0108, IPE_L0114, IPE_L0119, Span,
+    Code, DResult, Diagnostic, Feature, IPE_L0101, IPE_L0102, IPE_L0107, IPE_L0108, IPE_L0114,
+    IPE_L0119, Located, LowerError, Span,
 };
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{BoundSet, Callee, Expr, FuncId, IrType, KernelFn};

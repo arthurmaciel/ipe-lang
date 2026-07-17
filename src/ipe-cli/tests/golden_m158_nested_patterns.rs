@@ -148,10 +148,7 @@ fn nested_cons_generic_elem_accepted() {
 /// it stays IPE-L0116 rather than an accept-then-cargo-fail.
 #[test]
 fn nested_cons_no_fallback_stays_gated() {
-    assert_gated(
-        "nested_cons_no_fallback_gated",
-        ipe_diagnostics::IPE_L0116,
-    );
+    assert_gated("nested_cons_no_fallback_gated", ipe_diagnostics::IPE_L0116);
 }
 
 /// Adversarial-review sibling gap (Finding A): a `PStr` sub-pattern nested TWO
@@ -163,10 +160,7 @@ fn nested_cons_no_fallback_stays_gated() {
 /// — E0308 at `cargo build`, expected `String` found `&str`).
 #[test]
 fn nested_strlit_two_levels_stays_gated() {
-    assert_gated(
-        "nested_strlit_two_levels_gated",
-        ipe_diagnostics::IPE_L0116,
-    );
+    assert_gated("nested_strlit_two_levels_gated", ipe_diagnostics::IPE_L0116);
 }
 
 /// Companion positive control: the depth-1 direct-arg string-literal ctor

@@ -65,7 +65,10 @@ fn list_kernel_is_pure_and_total() {
 fn string_kernel_is_pure_and_total() {
     // String.append / toUpper / reverse — pure transforms, no I/O.
     let s = ipe_runtime_rust::string::string_append("sky".to_string(), "wasm".to_string());
-    assert_eq!(ipe_runtime_rust::string::string_to_upper(s.clone()), "SKYWASM");
+    assert_eq!(
+        ipe_runtime_rust::string::string_to_upper(s.clone()),
+        "SKYWASM"
+    );
     assert_eq!(ipe_runtime_rust::string::string_reverse(s), "msawyks");
 
     // String.toInt failure path is a Maybe, not a panic — floor-safe.
@@ -78,8 +81,10 @@ fn string_kernel_is_pure_and_total() {
 #[test]
 fn dict_kernel_is_pure_and_total() {
     // Dict.fromList / get — pure HashMap ops, deterministic sorted iteration.
-    let d =
-        ipe_runtime_rust::dict::dict_from_list(vec![("a".to_string(), 1i64), ("b".to_string(), 2i64)]);
+    let d = ipe_runtime_rust::dict::dict_from_list(vec![
+        ("a".to_string(), 1i64),
+        ("b".to_string(), 2i64),
+    ]);
     match ipe_runtime_rust::dict::dict_get("a".to_string(), d.clone()) {
         IpeMaybe::Just(v) => assert_eq!(v, 1),
         IpeMaybe::Nothing => panic!("test bug: present key missed"),
@@ -109,7 +114,10 @@ fn json_kernel_encode_is_pure_and_total() {
             ipe_runtime_rust::json::json_enc_string("sky".to_string()),
         ),
         ("n".to_string(), ipe_runtime_rust::json::json_enc_int(42)),
-        ("ok".to_string(), ipe_runtime_rust::json::json_enc_bool(true)),
+        (
+            "ok".to_string(),
+            ipe_runtime_rust::json::json_enc_bool(true),
+        ),
     ]);
     let compact = ipe_runtime_rust::json::json_enc_encode(0, obj);
     // Field order is preserved by the object encoder; assert on stable substrings

@@ -109,11 +109,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use sha2::{Digest, Sha256};
 use ipe_backend::EmittedProject;
 use ipe_backend_rust::DbDriver;
 use ipe_intern::{Interner, SerdeInternerGuard};
 use ipe_ir::Program;
+use sha2::{Digest, Sha256};
 
 /// Domain-separation tag for the content-address hash — bumped whenever the
 /// key's ingredient set changes shape (never for a value change within the

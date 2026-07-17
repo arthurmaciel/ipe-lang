@@ -11,12 +11,12 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use salsa::Setter as _;
 use ipe_db::{
-    ImportResolution, ModuleOrigin, IpeDatabase, SourceFile, SourceRoot, canonicalize,
+    ImportResolution, IpeDatabase, ModuleOrigin, SourceFile, SourceRoot, canonicalize,
     module_interface, resolve_imports,
 };
 use ipe_diagnostics::{Diagnostic, NameError};
+use salsa::Setter as _;
 
 /// A shared, poison-safe log of executed-query debug keys.
 #[derive(Clone, Default)]

@@ -1098,31 +1098,31 @@ pub enum StdlibKernel {
     /// Classified as TEA (not server) because it returns `IpeSub<M>`.
     HttpStreamChunks,
     // ── Ipe.Http.Server.WebSocket (12 kernels) ─────────────────────
-    WsDefaultCfg,           // WebSocketServerCfg (arity 0)
-    WsWithOnConnect,        // (WebSocketServer -> Task Error ()) -> WebSocketServerCfg -> WebSocketServerCfg (arity 2)
-    WsWithOnMessage,        // (WebSocketServer -> String -> Task Error ()) -> WebSocketServerCfg -> WebSocketServerCfg (arity 2)
-    WsWithOnClose,          // (WebSocketServer -> Task Error ()) -> WebSocketServerCfg -> WebSocketServerCfg (arity 2)
-    WsWithOnError,          // (WebSocketServer -> Error -> Task Error ()) -> WebSocketServerCfg -> WebSocketServerCfg (arity 2)
-    WsWithMaxMessageBytes,  // Int -> WebSocketServerCfg -> WebSocketServerCfg (arity 2)
-    WsWithOriginPatterns,   // List String -> WebSocketServerCfg -> WebSocketServerCfg (arity 2)
-    WsUpgrade,              // Request -> WebSocketServerCfg -> Task Error Response (arity 2)
-    WsSendToClient,         // WebSocketServer -> String -> Task Error () (arity 2)
-    WsSendBinaryToClient,   // WebSocketServer -> Bytes -> Task Error () (arity 2)
-    WsBroadcast,            // List WebSocketServer -> String -> Task Error () (arity 2)
-    WsCloseClient,          // WebSocketServer -> Task Error () (arity 1)
+    WsDefaultCfg,          // WebSocketServerCfg (arity 0)
+    WsWithOnConnect, // (WebSocketServer -> Task Error ()) -> WebSocketServerCfg -> WebSocketServerCfg (arity 2)
+    WsWithOnMessage, // (WebSocketServer -> String -> Task Error ()) -> WebSocketServerCfg -> WebSocketServerCfg (arity 2)
+    WsWithOnClose, // (WebSocketServer -> Task Error ()) -> WebSocketServerCfg -> WebSocketServerCfg (arity 2)
+    WsWithOnError, // (WebSocketServer -> Error -> Task Error ()) -> WebSocketServerCfg -> WebSocketServerCfg (arity 2)
+    WsWithMaxMessageBytes, // Int -> WebSocketServerCfg -> WebSocketServerCfg (arity 2)
+    WsWithOriginPatterns, // List String -> WebSocketServerCfg -> WebSocketServerCfg (arity 2)
+    WsUpgrade,     // Request -> WebSocketServerCfg -> Task Error Response (arity 2)
+    WsSendToClient, // WebSocketServer -> String -> Task Error () (arity 2)
+    WsSendBinaryToClient, // WebSocketServer -> Bytes -> Task Error () (arity 2)
+    WsBroadcast,   // List WebSocketServer -> String -> Task Error () (arity 2)
+    WsCloseClient, // WebSocketServer -> Task Error () (arity 1)
     // ── Ipe.WebSocket — outbound WebSocket client (7 kernels) ──
     // The 6 Task-tier kernels take/return a raw `Int` socket id (the stdlib
     // wraps it in the `WebSocket` ADT). `Sub_subscribeWebSocket` is the single
     // `any`-typed Sub-tier kernel the stdlib routes onOpen/onMessage/onClose/
     // onError through; the backend peephole splits it on the compile-time literal
     // `kind` string into the four typed runtime fns (sub_subscribe_ws_*).
-    WebSocketConnect,        // String -> Task Error Int (arity 1)
-    WebSocketConnectWith,    // WebSocketCfg -> Task Error Int (arity 1)
-    WebSocketSend,           // Int -> String -> Task Error () (arity 2)
-    WebSocketSendBinary,     // Int -> Bytes -> Task Error () (arity 2)
-    WebSocketClose,          // Int -> Task Error () (arity 1)
-    WebSocketCloseWithCode,  // Int -> String -> Int -> Task Error () (arity 3)
-    SubSubscribeWebSocket,   // Int -> String -> (any -> msg) -> Sub msg (arity 3)
+    WebSocketConnect,       // String -> Task Error Int (arity 1)
+    WebSocketConnectWith,   // WebSocketCfg -> Task Error Int (arity 1)
+    WebSocketSend,          // Int -> String -> Task Error () (arity 2)
+    WebSocketSendBinary,    // Int -> Bytes -> Task Error () (arity 2)
+    WebSocketClose,         // Int -> Task Error () (arity 1)
+    WebSocketCloseWithCode, // Int -> String -> Int -> Task Error () (arity 3)
+    SubSubscribeWebSocket,  // Int -> String -> (any -> msg) -> Sub msg (arity 3)
     // ── Ipe.Ui.Region ──────────────────────────────────────────────
     RegionMainContent,      // Attribute msg (arity 0)
     RegionNavigation,       // Attribute msg (arity 0)
@@ -2579,23 +2579,35 @@ impl StdlibKernel {
             // the backend's `emit_tea_call` peephole splits it on the literal
             // `kind` into the four typed `sub_subscribe_ws_*` runtime fns.
             Self::WebSocketConnect => d("WebSocket", "connect", 1, Pure, "web_socket_connect"),
-            Self::WebSocketConnectWith => {
-                d("WebSocket", "connectWith", 1, Pure, "web_socket_connect_with")
-            }
+            Self::WebSocketConnectWith => d(
+                "WebSocket",
+                "connectWith",
+                1,
+                Pure,
+                "web_socket_connect_with",
+            ),
             Self::WebSocketSend => d("WebSocket", "send", 2, Pure, "web_socket_send"),
             Self::WebSocketSendBinary => {
                 d("WebSocket", "sendBinary", 2, Pure, "web_socket_send_binary")
             }
             Self::WebSocketClose => d("WebSocket", "close", 1, Pure, "web_socket_close"),
-            Self::WebSocketCloseWithCode => {
-                d("WebSocket", "closeWithCode", 3, Pure, "web_socket_close_with_code")
-            }
+            Self::WebSocketCloseWithCode => d(
+                "WebSocket",
+                "closeWithCode",
+                3,
+                Pure,
+                "web_socket_close_with_code",
+            ),
             // The runtime fn here is a placeholder: the peephole always rewrites
             // the call to one of `sub_subscribe_ws_{message,open,close,error}`,
             // so this name is never emitted directly.
-            Self::SubSubscribeWebSocket => {
-                d("Sub", "subscribeWebSocket", 3, Tea, "sub_subscribe_ws_message")
-            }
+            Self::SubSubscribeWebSocket => d(
+                "Sub",
+                "subscribeWebSocket",
+                3,
+                Tea,
+                "sub_subscribe_ws_message",
+            ),
             // ── Ipe.Ui.Region ──────────────────────────────────────────────
             Self::RegionMainContent => d("Region", "mainContent", 0, Ui, "ui_region_main_content_"),
             Self::RegionNavigation => d("Region", "navigation", 0, Ui, "ui_region_navigation_"),

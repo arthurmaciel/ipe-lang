@@ -2006,7 +2006,9 @@ mod tests {
             out.contains(r#"<a id="__sky-dev-console""#),
             "banner must be injected: {out}"
         );
-        let banner_at = out.find(r#"<a id="__sky-dev-console""#).expect("banner present");
+        let banner_at = out
+            .find(r#"<a id="__sky-dev-console""#)
+            .expect("banner present");
         let body_close = out.rfind("</body>").expect("</body> present");
         assert!(
             banner_at < body_close,
