@@ -1,7 +1,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # ipê EXAMPLES sweep — the cornerstone correctness gate for the vendored examples.
 #
-# Runs `scripts/equivalence-checks/examples-sweep.sh` (per in-scope example: BUILD `skyc build` +
+# Runs `scripts/equivalence-checks/examples-sweep.sh` (per in-scope example: BUILD `ipe build` +
 # `cargo build` · RUN headless per shape · EQUIVALENCE Go≡Rust — PHASED, off for now).
 # The single OS-aware `scripts/lib/checks.sh` drives every host — no per-OS fork.
 #
@@ -12,12 +12,12 @@
 # bottom shows how EQUIVALENCE turns on later (build/obtain the Haskell `sky` reference).
 #
 # ── NON-GATING FOR NOW ───────────────────────────────────────────────────────
-# skyc currently implements only `Sky.Core.*`; examples reaching for `Std.*` /
-# server / tui / webview runtimes will skyc-fail or cargo-fail until the compiler
+# ipe currently implements only `Ipe.*`; examples reaching for `Ipe.*` /
+# server / tui / webview runtimes will ipe-fail or cargo-fail until the compiler
 # reaches parity. So the sweep is expected to be largely RED during the build-out.
 # The job runs with `continue-on-error: true` (informational: it prints the table,
 # uploads the artifact, and surfaces the verdict WITHOUT failing the workflow).
-# FLIP `continue-on-error` to false — making a RED row fail CI — once skyc reaches
+# FLIP `continue-on-error` to false — making a RED row fail CI — once ipe reaches
 # example parity (tracked in docs/architecture/examples-sweep-port.md).
 # ─────────────────────────────────────────────────────────────────────────────
 name: examples sweep
@@ -50,12 +50,12 @@ jobs:
       matrix:
         # ubuntu is the developer-reference host (full cli/server/live/tui/webview).
         # macOS adapts (tui via BSD `script`, webview via the real display). Windows
-        # (Git Bash) can be added once skyc matures — kept out of the first iteration
-        # to avoid noise while most rows are still skyc-fail.
+        # (Git Bash) can be added once ipe matures — kept out of the first iteration
+        # to avoid noise while most rows are still ipe-fail.
         os: [ubuntu-latest, macos-latest]
 
     env:
-      # Shared cargo target (persisted via actions/cache). skyc + every emitted
+      # Shared cargo target (persisted via actions/cache). ipe + every emitted
       # example crate build into this ONE dir, so heavy deps compile once.
       CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/sky-rust-target
       # sccache OFF on CI (its GHA backend uses GitHub's retired v1 Actions-Cache
@@ -68,7 +68,7 @@ jobs:
       IPE_SWEEP_FORCE: '1'
       # >=32-byte test secret so any Std.Auth example that DOES build can boot.
       IPE_AUTH_TOKEN_SECRET: sky-ci-sweep-test-secret-0123456789-abcdef
-      # Cold-CI build headroom (per-example skyc ceiling).
+      # Cold-CI build headroom (per-example ipe ceiling).
       IPE_SWEEP_BUILD_TIMEOUT: '900'
       CARGO_HTTP_MULTIPLEXING: 'false'
       CARGO_NET_RETRY: '5'
@@ -89,7 +89,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # Cache the shared cargo target + registry (skyc + emitted-crate deps).
+      # Cache the shared cargo target + registry (ipe + emitted-crate deps).
       - name: Cache cargo target
         uses: actions/cache@v4
         with:
@@ -108,7 +108,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ripgrep xvfb
           # NOTE: webkit2gtk/libsoup (needed to LINK a webview example) are not
-          # installed yet — webview examples don't build on skyc during phase 1,
+          # installed yet — webview examples don't build on ipe during phase 1,
           # so their RUN column reports skip. Add them here when that changes.
 
       - name: Install ripgrep + coreutils (macOS)
@@ -122,14 +122,14 @@ jobs:
 
       # Build the compiler under test into the shared target dir. --release keeps
       # the per-example build ceilings comfortable; SKYC_BIN auto-resolves to
-      # $CARGO_TARGET_DIR/release/skyc (see scripts/lib/env.sh).
-      - name: Build skyc
-        run: cargo build --release -p skyc
+      # $CARGO_TARGET_DIR/release/ipe (see scripts/lib/env.sh).
+      - name: Build ipe
+        run: cargo build --release -p ipe
 
       # Pre-warm the runtime dep tree so the first example's cargo build reuses
       # compiled deps instead of cold-compiling the world and blowing the ceiling.
       - name: Pre-warm runtime deps
-        run: cargo build -p sky-runtime-rust || cargo build --workspace || true
+        run: cargo build -p ipe_runtime_rust || cargo build --workspace || true
 
       - name: Run examples sweep (BUILD + RUN, no EQUIVALENCE)
         shell: bash
@@ -196,8 +196,8 @@ jobs:
   #     - uses: haskell-actions/setup@v2       # build the Haskell `sky` reference
   #       with: { ghc-version: '9.6.7', cabal-version: 'latest' }
   #     - run: sudo apt-get update && sudo apt-get install -y ripgrep xvfb
-  #     - name: Build skyc
-  #       run: cargo build --release -p skyc
+  #     - name: Build ipe
+  #       run: cargo build --release -p ipe
   #     - name: Build the Haskell sky reference (IPE_GO_BIN)
   #       run: |
   #         # (in the sky checkout) cabal build exe:sky && ln -sf "$(cabal list-bin exe:sky)" /usr/local/bin/sky
