@@ -3,6 +3,11 @@ sky-out/
 .ipe-cache/
 .skydeps/
 /tmp-parity/
+
+# Mirrored+patched upstream Sky examples — materialised at sweep time by
+# scripts/lib/sky_mirror.sh (IPE_SWEEP_MIRROR_SKY=1). Regenerated each run, never
+# vendored; only the rename map + README + manifest under examples/sky/ are source.
+/examples/sky/[0-9]*/
 # Default SQLite DB written by `Db.connect ()` when an emitted binary is run
 # by the E2E test harness in the crate/repo cwd — a run artifact, never source.
 sky.db
