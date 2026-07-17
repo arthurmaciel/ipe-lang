@@ -1387,7 +1387,7 @@ pub fn code_index() -> String {
 
 /// Resolve a (case-insensitive) code string to its embedded explain page.
 ///
-/// The input is trimmed and upper-cased before matching, so `sky-t0001` and
+/// The input is trimmed and upper-cased before matching, so `ipe-t0001` and
 /// `IPE-T0001` both resolve.
 ///
 /// # Errors
@@ -1828,8 +1828,8 @@ mod tests {
 
     #[test]
     fn explain_is_case_insensitive() {
-        assert!(explain_lookup("sky-t0001").is_ok());
-        assert!(explain_lookup("  Sky-T0001  ").is_ok());
+        assert!(explain_lookup("ipe-t0001").is_ok());
+        assert!(explain_lookup("  Ipe-T0001  ").is_ok());
     }
 
     #[test]
