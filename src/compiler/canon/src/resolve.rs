@@ -322,15 +322,22 @@ fn reject_reserved_builtin_type(
 ///
 /// MAKE INVALID STATES UNREPRESENTABLE: "this module is trusted stdlib" is a
 /// typed value, not a string check on the module name.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum ModuleOrigin {
     /// Ordinary user-authored source. Subject to every reserved-namespace and
     /// reserved-builtin-type gate.
+    #[default]
     User,
     /// A compiled-source stdlib module injected from `ipe`'s embed table. Exempt
     /// from IPE-N0025 (it legitimately declares `module Ipe.…`) and required to
     /// be fully annotated (fail-closed gate below).
     EmbeddedStdlib,
+    /// A driver-generated FFI interface module (`module Rust.<Crate> …`),
+    /// derived at build time from a bound crate's validated `kernel.json`.
+    /// The ONLY origin whose bodies may use `Ffi.binding "<wrapper>" …`, and
+    /// the only legitimate definer of a `Rust.…` home; required to be fully
+    /// annotated (the annotation IS the trusted FFI signature seed).
+    FfiInterface,
 }
 
 /// A registered `type alias` awaiting expansion at its use sites.
@@ -557,8 +564,23 @@ pub fn canonicalise_module_in_project(
             msg: NameError::ReservedNamespace { name },
         });
     }
+    // `Rust` is reserved for driver-generated FFI interface modules, the same
+    // way `Ipe` is reserved for the stdlib: downstream stages treat a
+    // `Rust.…` home as a foreign-crate interface (opaque foreign unions are
+    // never emitted as Rust enums), so a user module squatting there would
+    // silently vanish from emission. Same unforgeable-origin discipline.
+    let rust_sym = interner.intern("Rust")?;
+    if origin != ModuleOrigin::FfiInterface && home.first().copied().is_some_and(|s| s == rust_sym)
+    {
+        let name = path_to_dot_string(interner, &home);
+        return Err(Diagnostic::Name {
+            span: m.name.span,
+            msg: NameError::ReservedNamespace { name },
+        });
+    }
 
     let mut env = Env::initial(home.clone(), interner)?;
+    env.origin = origin;
     // Register user import aliases for stdlib (`Ipê.*` / `Ipe.*`) modules BEFORE
     // the dep-injection loop below. The loop bare-`continue`s for stdlib imports
     // (they need no dep injection), so alias registration is a separate,
@@ -725,7 +747,10 @@ pub fn canonicalise_module_in_project(
     // deep-stdlib unification failure (or exit-0-then-cargo-fail) into an explicit
     // build-time invariant. It can never fire for user code (User origin skips
     // this block); synthesised record-alias ctors are `Def::Typed`, so they pass.
-    if origin == ModuleOrigin::EmbeddedStdlib {
+    if matches!(
+        origin,
+        ModuleOrigin::EmbeddedStdlib | ModuleOrigin::FfiInterface
+    ) {
         for d in &canon_mod.defs {
             if let canon::Def::Untyped { name, .. } = d {
                 let binding = name_str(interner, name.value)?;
@@ -2514,6 +2539,7 @@ fn canonicalise_pattern(
 }
 
 /// Canonicalise an expression, resolving every name.
+#[allow(clippy::too_many_lines)] // one arm per source expression form
 fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResult<canon::Expr> {
     let span = e.span;
     let node = match &e.value {
@@ -2529,12 +2555,16 @@ fn canonicalise_expr(e: &src::Expr, env: &Env, interner: &mut Interner) -> DResu
         src::Expr_::VarLocal(name) => resolve_var(*name, span, env, interner)?,
         src::Expr_::VarQual(qual, name) => resolve_qual_var(*qual, *name, span, env, interner)?,
         src::Expr_::Call(f, args) => {
-            let callee = canonicalise_expr(f, env, interner)?;
-            let mut can_args = Vec::with_capacity(args.len());
-            for a in args {
-                can_args.push(canonicalise_expr(a, env, interner)?);
+            if let Some(node) = canonicalise_foreign_call(f, args, span, env, interner)? {
+                node
+            } else {
+                let callee = canonicalise_expr(f, env, interner)?;
+                let mut can_args = Vec::with_capacity(args.len());
+                for a in args {
+                    can_args.push(canonicalise_expr(a, env, interner)?);
+                }
+                canon::Expr_::Call(Box::new(callee), can_args)
             }
-            canon::Expr_::Call(Box::new(callee), can_args)
         }
         src::Expr_::Case(scrut, arms) => {
             let can_scrut = canonicalise_expr(scrut, env, interner)?;
@@ -3299,6 +3329,73 @@ pub struct KernelAlias {
     pub id: StdlibKernel,
     pub module: Symbol,
     pub function: Symbol,
+}
+
+/// Recognise the `Ffi.binding "<wrapper_fn_ident>" arg0 …` body shape of a
+/// driver-generated FFI interface module and produce the typed
+/// [`canon::Expr_::ForeignCall`] node.
+///
+/// Returns `Ok(None)` for every module whose origin is not
+/// [`ModuleOrigin::FfiInterface`] — the call then falls through to ordinary
+/// qualified-name resolution, where `Ffi` is not an importable module and the
+/// reference fails with the ordinary unknown-name diagnostic. This is the
+/// trust gate: user source can never mint a `ForeignCall`, so an arbitrary
+/// wrapper identifier (or a mistyped annotation over one) is unrepresentable
+/// outside driver-vouched interface modules.
+///
+/// # Errors
+/// [`Diagnostic::CompilerBug`] when an `FfiInterface` module carries a
+/// malformed `Ffi.binding` shape (non-literal or non-identifier wrapper name)
+/// — the driver generated it, so malformation is an internal invariant
+/// violation, never user error.
+fn canonicalise_foreign_call(
+    callee: &src::Expr,
+    args: &[src::Expr],
+    span: Span,
+    env: &Env,
+    interner: &mut Interner,
+) -> DResult<Option<canon::Expr_>> {
+    if env.origin != ModuleOrigin::FfiInterface {
+        return Ok(None);
+    }
+    let src::Expr_::VarQual(qualifier, member) = &callee.value else {
+        return Ok(None);
+    };
+    let ffi_sym = interner.intern("Ffi")?;
+    let binding_sym = interner.intern("binding")?;
+    if *qualifier != ffi_sym || *member != binding_sym {
+        return Ok(None);
+    }
+    let malformed = |detail: String| Diagnostic::CompilerBug {
+        where_: "canon.foreign_binding",
+        detail,
+    };
+    let Some((ident_expr, value_args)) = args.split_first() else {
+        return Err(malformed(format!(
+            "Ffi.binding without a wrapper-identifier argument at {span:?}"
+        )));
+    };
+    let src::Expr_::Str(ident) = &ident_expr.value else {
+        return Err(malformed(format!(
+            "Ffi.binding wrapper identifier must be a string literal at {span:?}"
+        )));
+    };
+    let mut chars = ident.chars();
+    let well_formed = chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !well_formed {
+        return Err(malformed(format!(
+            "Ffi.binding wrapper identifier {ident:?} is not a Rust fn identifier"
+        )));
+    }
+    let mut can_args = Vec::with_capacity(value_args.len());
+    for a in value_args {
+        can_args.push(canonicalise_expr(a, env, interner)?);
+    }
+    Ok(Some(canon::Expr_::ForeignCall {
+        ident: interner.intern(ident)?,
+        args: can_args,
+    }))
 }
 
 /// Recognise a Stage-4 kernel-alias binding and resolve it against the kernel

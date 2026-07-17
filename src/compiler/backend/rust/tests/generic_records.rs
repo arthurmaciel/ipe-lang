@@ -59,6 +59,7 @@ fn program(name: Symbol, funcs: Vec<Func>, records: Vec<IrType>, entry: Option<F
             uses_auth: false,
             uses_websocket: false,
             uses_email: false,
+            uses_ffi: false,
         }],
     }
 }
