@@ -61,7 +61,7 @@ fn rejects_cleanly_or_builds_and_runs_never_silent_cargo_fail() {
     if let Err(CliError::Pipeline { diag, .. }) = &built {
         assert_eq!(
             diag.code(),
-            sky_diagnostics::SKY_L0107,
+            ipe_diagnostics::SKY_L0107,
             "a function value reaching a record field through a type variable \
              must surface SKY-L0107, got: {diag:?}"
         );

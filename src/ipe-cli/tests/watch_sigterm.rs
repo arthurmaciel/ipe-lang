@@ -235,7 +235,7 @@ fn spawn_never_installs_a_sigterm_forwarder() -> Result<(), BoxError> {
     static HOST_SIGTERM: AtomicBool = AtomicBool::new(false);
 
     // The host's own SIGTERM handling — what `spawn()` must leave untouched.
-    sky_watch::install_sigterm_forwarder(|| HOST_SIGTERM.store(true, Ordering::Relaxed))
+    ipe_watch::install_sigterm_forwarder(|| HOST_SIGTERM.store(true, Ordering::Relaxed))
         .map_err(|e| -> BoxError { format!("host handler registration: {e}").into() })?;
 
     let (sky_dir, out_dir) = fresh_dirs("spawn_no_forwarder")?;

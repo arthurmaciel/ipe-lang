@@ -2,15 +2,15 @@
 //! the kernel boundary". A record literal of the canonical `Csv`
 //! shape `{ header : List String, rows : List (List String) }` fed directly to
 //! `Csv.encode` must not be emitted as a backend-synthesised `RecHeaderRows`
-//! struct while the `csv_encode` kernel takes `sky_runtime::csv::CsvDoc`:
+//! struct while the `csv_encode` kernel takes `ipe_runtime::csv::CsvDoc`:
 //! that is `skyc` exit 0 then a `cargo build` E0308
 //! (`expected CsvDoc, found RecHeaderRows`).
 //!
-//! So `sky_lower::lower::ir_type_from_ty` / `ir_type_from_canon` fold a
+//! So `ipe_lower::lower::ir_type_from_ty` / `ir_type_from_canon` fold a
 //! record of that exact shape (field NAMES `header`/`rows` AND field TYPES
 //! `List String` / `List (List String)`) to the nominal `IrType::CsvDoc`
 //! (`is_csv_doc_shape` / `is_csv_doc_canon_shape`) — mirror of the
-//! `HttpRequest` / `CacheCfg` folds. `sky_backend_rust::emit_expr::emit_record`
+//! `HttpRequest` / `CacheCfg` folds. `ipe_backend_rust::emit_expr::emit_record`
 //! defers to the lowerer's registered-struct decision, then falls back to its
 //! own `CSV_DOC_FIELDS` name-only heuristic (sound: a genuine `Csv` literal
 //! never gets a registered struct because the lowerer intercepts it first), so
@@ -74,7 +74,7 @@ fn built_main_rs(root: &Path, out: &Path) -> (Result<(), skyc::CliError>, Option
     let built = skyc::build(&entry, out, &runtime);
     let emitted = if built.is_ok() {
         // Scan the emitted APP modules only (`src/sky_mods/` + `src/main.rs`),
-        // not the vendored `src/sky_runtime/` — the runtime's own `csv.rs`
+        // not the vendored `src/ipe_runtime/` — the runtime's own `csv.rs`
         // defines `CsvDoc` and would mask what the app-side codegen chose.
         let mut acc = std::fs::read_to_string(out.join("src").join("main.rs")).unwrap_or_default();
         acc.push('\n');

@@ -15,7 +15,7 @@
 //! mirroring the existingthe C2 nested-cons-in-ctor-payload desugaring.
 //!
 //! Defect 2: the entry-point `Task.run` elision in `emit_func`
-//! (`sky_backend_rust::emit_expr`) only recognised a FLAT `main = task |>
+//! (`ipe_backend_rust::emit_expr`) only recognised a FLAT `main = task |>
 //! Task.run` body (`func.body` itself a `Call(TaskRun, [inner])`). A
 //! `case`-branched body where EVERY arm tail-calls `Task.run` left
 //! `sky_main` returning `SkyResult<E, A>` while the `fn main` epilogue's

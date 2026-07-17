@@ -11,7 +11,7 @@
 //! ```
 //!
 //! Root cause (`promote_untyped_boundaries` in
-//! `crates/sky_types/src/constrain.rs`): an unannotated top-level getter like
+//! `crates/ipe_types/src/constrain.rs`): an unannotated top-level getter like
 //! `getName r = r.name` registers a deferred `FieldAccess { record, result,
 //! .. }` obligation. The obligation-gate `obligation_roots` set excluded
 //! `fa.record` from quantification (so the record parameter correctly stays
@@ -29,10 +29,10 @@
 //! ("cannot infer type of the type parameter").
 //!
 //! Fix (two parts, per BACKLOG.md's "Boundary Scheme Promotion" row):
-//! 1. `crates/sky_types/src/constrain.rs`'s `promote_untyped_boundaries` now
+//! 1. `crates/ipe_types/src/constrain.rs`'s `promote_untyped_boundaries` now
 //!    also inserts `fa.result` into `obligation_roots` alongside `fa.record`
 //!    — the actual root-cause fix.
-//! 2. `crates/sky_lower/src/lower.rs`'s untyped lowering arm now ports the
+//! 2. `crates/ipe_lower/src/lower.rs`'s untyped lowering arm now ports the
 //!    Typed arm's `used_generics` structural-appearance filter (the
 //!    Bug-28/Bug-29 invariant): `type_params` only ever contains a symbol
 //!    that structurally appears in the RESOLVED `params`/`ret`, so a stale
@@ -42,11 +42,11 @@
 //!    enumerated.
 //!
 //! This test is deliberately an ACTUAL `cargo build` (gated `SKY_E2E=1`),
-//! not just a `sky_types` unit test — the prior attempt's own unit-test
+//! not just a `ipe_types` unit test — the prior attempt's own unit-test
 //! matrix (including
 //! `obligation_gated_untyped_def_single_record_type_cross_module_use_accepted`)
 //! all passed despite the bug, because the bug is a codegen-level defect
-//! (an unused Rust generic) invisible to `sky_types`'s own HM-soundness
+//! (an unused Rust generic) invisible to `ipe_types`'s own HM-soundness
 //! checks. Only a real `rustc` invocation on the emitted project catches it.
 //!
 //! The fixture (`tests/golden/boundary_scheme_field_result/src/`) is a
@@ -131,7 +131,7 @@ fn class1_field_result_skyc_accepts_and_emits_concrete_getter() {
 /// cargo-0 ∧ run-0: the emitted project actually compiles with `rustc` and
 /// prints the field it read. Gated on `SKY_E2E=1` — a real `cargo build`,
 /// the only check that would have caught the original SEAL violation (every
-/// `sky_types` unit test in the prior attempt passed despite the bug).
+/// `ipe_types` unit test in the prior attempt passed despite the bug).
 #[test]
 fn class1_field_result_cargo_builds_and_runs() {
     if std::env::var("SKY_E2E").is_err() {

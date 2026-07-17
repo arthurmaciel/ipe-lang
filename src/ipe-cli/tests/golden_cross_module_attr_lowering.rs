@@ -14,9 +14,9 @@
 //! `Server.run` starts ~1000 before), so the user sees the phantom
 //! `--> Main.sky:73`.
 //!
-//! Fix: `sky_lower::lower` now pairs its diagnostic with the failing def's
-//! `home` module path (mirroring `sky_types::infer_attributed`), threaded
-//! through `sky_db::lower_program` / `emit_manifest`, so the driver resolves
+//! Fix: `ipe_lower::lower` now pairs its diagnostic with the failing def's
+//! `home` module path (mirroring `ipe_types::infer_attributed`), threaded
+//! through `ipe_db::lower_program` / `emit_manifest`, so the driver resolves
 //! the owning source file EXACTLY via `home_to_source`.
 //!
 //! This fixture is tuned so the failing `Dep.sky` span sits at a byte offset

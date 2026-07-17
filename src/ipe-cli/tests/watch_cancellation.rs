@@ -17,7 +17,7 @@
 //! it, not racing to land before the compile already finished.
 //!
 //! This is intentionally independent of `crate::watch`'s orchestrator
-//! scaffolding — it exercises `sky_db`'s cancellation contract directly
+//! scaffolding — it exercises `ipe_db`'s cancellation contract directly
 //! against `skyc::compile_prepared` (the exact function the orchestrator's
 //! compile worker calls), so a failure here points at the MECHANISM, not at
 //! `watch.rs`'s wiring around it.
@@ -30,7 +30,7 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use sky_db::{BuildConfig, ModuleOrigin, SkyDatabase, SourceFile, SourceRoot};
+use ipe_db::{BuildConfig, ModuleOrigin, SkyDatabase, SourceFile, SourceRoot};
 
 const DEP_A: &str = "module A exposing (visible)\n\nvisible = 1\n";
 const ENTRY: &str =
@@ -57,7 +57,7 @@ fn compile_worker_is_cancelled_by_a_concurrent_input_edit() {
         &db,
         BTreeMap::from([(a_path.clone(), a_file), (main_path.clone(), main_file)]),
     );
-    let config = BuildConfig::new(&db, sky_backend_rust::DbDriver::Sqlite);
+    let config = BuildConfig::new(&db, ipe_backend_rust::DbDriver::Sqlite);
 
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
     sources.insert(a_path, (PathBuf::from("<test>/A.sky"), DEP_A.to_owned()));
@@ -89,7 +89,7 @@ fn compile_worker_is_cancelled_by_a_concurrent_input_edit() {
     // exactly what `sync_source_root` does inside `watch.rs`'s orchestrator
     // on a settled batch, mirrored directly here without the orchestrator
     // scaffolding so this proof is about salsa's OWN mechanism.
-    sky_db::set_text_if_changed(
+    ipe_db::set_text_if_changed(
         &mut db,
         a_file,
         "module A exposing (visible)\n\nvisible = 2\n",
@@ -122,7 +122,7 @@ fn the_same_fixture_compiles_cleanly_without_a_concurrent_edit() {
         &db,
         BTreeMap::from([(a_path.clone(), a_file), (main_path.clone(), main_file)]),
     );
-    let config = BuildConfig::new(&db, sky_backend_rust::DbDriver::Sqlite);
+    let config = BuildConfig::new(&db, ipe_backend_rust::DbDriver::Sqlite);
 
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
     sources.insert(a_path, (PathBuf::from("<test>/A.sky"), DEP_A.to_owned()));

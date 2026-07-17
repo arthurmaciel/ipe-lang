@@ -574,7 +574,7 @@ fn extract_hid_for_open_tag(html: &str, tag: &str) -> Option<String> {
 /// Sky source
 ///   → skyc (parse → canon → types → lower → emit Rust with "live" feature)
 ///   → cargo build
-///   → sky_runtime::live::live_app(init, update, view, subs, …)
+///   → ipe_runtime::live::live_app(init, update, view, subs, …)
 ///   → init(LiveReq) → (Model{count:0}, Cmd::None)
 ///   → view(model)   → Html tree with text node "0"
 ///   → render_page   → full HTML document
@@ -635,7 +635,7 @@ fn live_get_root_contains_initial_count() -> Result<(), BoxError> {
 /// This is a BUILD-ONLY test — it does not spawn the binary.  A successful
 /// `cargo build` is the assertion.  If `serde::Serialize / Deserialize` derives
 /// are absent on the `Msg` enum and `Model` struct, `cargo build` will fail
-/// with a trait-bound error from `sky_runtime::live::live_app`.
+/// with a trait-bound error from `ipe_runtime::live::live_app`.
 ///
 /// # Errors
 ///
@@ -1027,7 +1027,7 @@ fn live_pubsub_publish_polymorphic_record_payload_build_only() -> Result<(), Box
 /// its bound list, so that box can never satisfy `+ Sync` regardless of what it
 /// captures — a skyc-accept/cargo-reject SEAL violation. The emit re-wraps the
 /// boxed value in a freshly-declared closure at the `KernelFn::UiOnSubmit` /
-/// `HtmlEventShape::Raw` emit sites (`sky_backend_rust::emit_expr`) instead of
+/// `HtmlEventShape::Raw` emit sites (`ipe_backend_rust::emit_expr`) instead of
 /// forwarding the box itself — see that arm's comment for the full mechanism.
 const SKY_ONSUBMIT_TYPED_RECORD: &str = r#"module Main exposing (main)
 
@@ -1223,7 +1223,7 @@ fn live_onsubmit_typed_record_dispatches_decoded_payload() -> Result<(), BoxErro
 /// arm), never a function. So a provably-non-callable argument shape routes to
 /// the `html_on_raw_fixed_` runtime helper (dispatches the fixed value
 /// directly, no decode attempt) instead of `html_on_raw_`
-/// (`sky_backend_rust::emit_expr`'s `is_definitely_not_callable` gate).
+/// (`ipe_backend_rust::emit_expr`'s `is_definitely_not_callable` gate).
 const SKY_ONSUBMIT_BARE_MSG: &str = r#"module Main exposing (main)
 
 import Std.Live as Live
@@ -1833,7 +1833,7 @@ fn live_onsubmit_var_bound_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
 /// captured by move into the `ui_on_submit_(move |_x| (handler)(_x))` wrapper
 /// would make this `skyc` exit 0 then `cargo build` E0277 (`dyn Fn(..) ->
 /// MainMsg + Send` cannot be shared between threads safely). So
-/// `sky_lower::lower_let_pvar` + `flows_into_sync_kernel_call` promote the
+/// `ipe_lower::lower_let_pvar` + `flows_into_sync_kernel_call` promote the
 /// let-bound closure to `Arc<dyn Fn + Send + Sync>` at its declaration.
 const SKY_ONSUBMIT_LET_BOUND_HANDLER: &str = r#"module Main exposing (main)
 

@@ -19,7 +19,7 @@ fn repo_root() -> PathBuf {
 /// Build the named golden fixture and assert it surfaces exactly `expected` as a
 /// pipeline diagnostic — never a panic. A skip occurs only when the runtime
 /// cannot be resolved.
-fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code) {
+fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code) {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -49,7 +49,7 @@ fn non_exhaustive_nested_same_ctor_case_is_sky_t0010() {
     assert_gate(
         "gate_nonexhaustive_nested_same_ctor",
         "m3b4_gate_nonexhaustive_emit",
-        sky_diagnostics::SKY_T0010,
+        ipe_diagnostics::SKY_T0010,
     );
 }
 
@@ -65,6 +65,6 @@ fn all_top_ctors_covered_with_nested_literal_gap_is_sky_t0010() {
     assert_gate(
         "floor_sentinel",
         "m3b4_floor_sentinel_emit",
-        sky_diagnostics::SKY_T0010,
+        ipe_diagnostics::SKY_T0010,
     );
 }

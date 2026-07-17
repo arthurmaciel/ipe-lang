@@ -1,8 +1,8 @@
 //! Regression for the "Name-only HttpRequest-shape false-positive fold" —
 //! deciding "is this record an `HttpRequest`?" purely by field NAMES (in
-//! `sky_lower::lower::ir_type_from_ty`'s `Ty::Record` arm, its sibling in
+//! `ipe_lower::lower::ir_type_from_ty`'s `Ty::Record` arm, its sibling in
 //! `ir_type_from_canon`'s `canon::Type::Record` arm, and
-//! `sky_backend_rust::emit_expr::emit_record`'s independent
+//! `ipe_backend_rust::emit_expr::emit_record`'s independent
 //! `HTTP_REQUEST_FIELDS` special case) is unsound: checking whether the field
 //! NAMES exactly match the 7-field set `{body, followRedirects, headers,
 //! maxRedirects, method, timeout, url}` regardless of field TYPES silently
@@ -12,12 +12,12 @@
 //! struct's declared type disagreeing with the `HttpRequest` type the literal
 //! is emitted as).
 //!
-//! So both `sky_lower::lower::ir_type_from_ty` / `ir_type_from_canon`
+//! So both `ipe_lower::lower::ir_type_from_ty` / `ir_type_from_canon`
 //! check field TYPES in addition to field NAMES (`is_http_request_shape` /
 //! `is_http_request_canon_shape`, `HTTP_REQUEST_FIELD_TYPES`) before folding
-//! to the opaque `IrType::HttpRequest`. `sky_backend_rust::emit_expr`'s
+//! to the opaque `IrType::HttpRequest`. `ipe_backend_rust::emit_expr`'s
 //! independent, cross-crate-isolated copy cannot re-run that TYPE-aware
-//! check directly (no `sky_lower` dependency), so it instead defers to the
+//! check directly (no `ipe_lower` dependency), so it instead defers to the
 //! lowerer's authoritative decision via `EmitCtx::has_record_struct_for`
 //! before falling back to its own name-only heuristic — a genuine
 //! `HttpRequest` literal never gets a registered struct (the lowerer
@@ -68,7 +68,7 @@ fn built_main_rs(root: &Path, out: &Path) -> (Result<(), skyc::CliError>, Option
 }
 
 /// The all-`Int` 7-field record must NOT fold to the opaque
-/// `sky_runtime::HttpRequest` struct literal — it shares the canonical
+/// `ipe_runtime::HttpRequest` struct literal — it shares the canonical
 /// `HttpRequest` field NAMES but none of its field TYPES, so the (now
 /// type-aware) lowerer must classify it as a plain synthesised record.
 #[test]
@@ -85,7 +85,7 @@ fn name_only_shape_does_not_emit_runtime_http_request_literal() {
     };
 
     assert!(
-        !main_rs.contains("sky_runtime::HttpRequest {") && !main_rs.contains("HttpRequest {"),
+        !main_rs.contains("ipe_runtime::HttpRequest {") && !main_rs.contains("HttpRequest {"),
         "an all-Int 7-field record sharing HttpRequest's field NAMES (not \
          TYPES) must NOT be emitted as an `HttpRequest` struct literal — \
          that struct's fields are typed String/Bool/List and would reject \

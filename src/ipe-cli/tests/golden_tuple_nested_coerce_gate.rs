@@ -58,7 +58,7 @@ fn assert_l0115_gate(fixture: &str, out_suffix: &str) {
     };
     assert_eq!(
         got,
-        Some(sky_diagnostics::SKY_L0115),
+        Some(ipe_diagnostics::SKY_L0115),
         "fixture {fixture}: a list / cons sub-pattern nested in a nested-tuple column \
          must fail closed to SKY-L0115 (never skyc-0-then-cargo-fail); got build \
          result {built:?}"

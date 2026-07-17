@@ -325,7 +325,7 @@ fn let_bound_webview_window_is_sky_l0119_not_ice() {
     };
     assert_eq!(
         code,
-        Some(sky_diagnostics::SKY_L0119),
+        Some(ipe_diagnostics::SKY_L0119),
         "expected a SKY-L0119 Pipeline diagnostic (not an ICE), got {err:?}"
     );
 }

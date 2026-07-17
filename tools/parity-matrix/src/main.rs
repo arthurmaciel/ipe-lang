@@ -294,8 +294,8 @@ fn run_extract(cfg: &Config) -> Result<String, String> {
     let our = &cfg.our_dir;
     let refr = &cfg.ref_dir;
 
-    // ── Layer 1: sky_kernels enum variants ───────────────────────────────────
-    let kernels_lib = our.join("crates/sky_kernels/src/lib.rs");
+    // ── Layer 1: ipe_kernels enum variants ───────────────────────────────────
+    let kernels_lib = our.join("crates/ipe_kernels/src/lib.rs");
     let kernels_src = read_file(&kernels_lib)?;
 
     let all_variants = scan_enum_variants(&kernels_src, "StdlibKernel");
@@ -303,11 +303,11 @@ fn run_extract(cfg: &Config) -> Result<String, String> {
     let decl_map = scan_decl_arms(&kernels_src); // variant → DeclInfo
 
     // ── Layer 2 / 3: naming + constrain scheme ───────────────────────────────
-    let naming_lib = our.join("crates/sky_backend_rust/src/naming.rs");
+    let naming_lib = our.join("crates/ipe_backend_rust/src/naming.rs");
     let naming_src = read_file(&naming_lib)?;
     let naming_map = scan_kernel_name(&naming_src); // variant → runtime_sym
 
-    let constrain_lib = our.join("crates/sky_types/src/constrain.rs");
+    let constrain_lib = our.join("crates/ipe_types/src/constrain.rs");
     let constrain_src = read_file(&constrain_lib)?;
     let first_schemed = scan_named_slice(&constrain_src, "FIRST_SCHEMED");
     let relocated = scan_named_slice(&constrain_src, "RELOCATED");
@@ -315,7 +315,7 @@ fn run_extract(cfg: &Config) -> Result<String, String> {
     schemed_set.extend(relocated.iter().cloned());
 
     // ── Layer 4: canon qualifier table ───────────────────────────────────────
-    let env_lib = our.join("crates/sky_canon/src/env.rs");
+    let env_lib = our.join("crates/ipe_canon/src/env.rs");
     let env_src = read_file(&env_lib)?;
     let canon_qual_set = scan_canon_qualifiers(&env_src); // (qualifier, member)
 
@@ -327,12 +327,12 @@ fn run_extract(cfg: &Config) -> Result<String, String> {
     let compiled_source_quals = scan_compiled_source_qualifiers(&stdlib_src);
 
     // ── Layer 5: lower dispatch arms ─────────────────────────────────────────
-    let lower_lib = our.join("crates/sky_lower/src/lower.rs");
+    let lower_lib = our.join("crates/ipe_lower/src/lower.rs");
     let lower_src = read_file(&lower_lib)?;
     let lower_arms = scan_lower_arms(&lower_src); // variant names with lower arm
 
     // ── Layer 7 / 8: runtime pub fn names ────────────────────────────────────
-    let runtime_dir = our.join("runtime/src/sky_runtime");
+    let runtime_dir = our.join("runtime/src/ipe_runtime");
     let our_fns = scan_runtime_fns(&runtime_dir)?;
 
     let ref_runtime_dir = refr.join("runtime-rust/src/sky_runtime");
@@ -600,7 +600,7 @@ struct DeclInfo {
     class: String,
 }
 
-/// Scan `decl()` match arms from sky_kernels/src/lib.rs.
+/// Scan `decl()` match arms from ipe_kernels/src/lib.rs.
 ///
 /// The actual form is a shorthand `d(...)` helper:
 /// ```
@@ -788,7 +788,7 @@ fn scan_kernel_name(src: &str) -> HashMap<String, String> {
 /// resolved by `detect_kernel_alias`, so — by the
 /// `compiled_vs_kernel_qualifier_disjoint` invariant — the module is
 /// DELIBERATELY absent from the `QUALIFIERS` kernel-qualifier table in
-/// `sky_canon`.  The canon-parity check must therefore skip these qualifiers.
+/// `ipe_canon`.  The canon-parity check must therefore skip these qualifiers.
 ///
 /// The qualifier short-name is the last dotted segment (`Sky.Core.Regex` →
 /// `Regex`, `Std.Ui.Responsive` → `Responsive`), which matches the qualifier
@@ -832,7 +832,7 @@ fn scan_compiled_source_qualifiers(src: &str) -> HashSet<String> {
     set
 }
 
-/// Scan the `QUALIFIERS` table from sky_canon/src/env.rs.
+/// Scan the `QUALIFIERS` table from ipe_canon/src/env.rs.
 ///
 /// Returns a set of `(qualifier, member)` pairs.
 fn scan_canon_qualifiers(src: &str) -> HashSet<(String, String)> {
@@ -976,7 +976,7 @@ fn scan_canon_qualifiers(src: &str) -> HashSet<(String, String)> {
     set
 }
 
-/// Scan `lower_callee()` match arms from sky_lower/src/lower.rs.
+/// Scan `lower_callee()` match arms from ipe_lower/src/lower.rs.
 ///
 /// Arms look like:
 /// ```

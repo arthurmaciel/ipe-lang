@@ -13,7 +13,7 @@
 //! kernel namespace, both names are further disambiguated with a `user_` prefix
 //! (the user-module-vs-kernel guard), so the shared identifier the collision
 //! guard reports is `user_ui_border_rounded`. Mirrors the sibling
-//! enum-name collision guard (`crates/sky_backend_rust/src/lib.rs`, the
+//! enum-name collision guard (`crates/ipe_backend_rust/src/lib.rs`, the
 //! `enum_names.values().any(...)` check ~10 lines above the guard this
 //! test covers).
 //!
@@ -97,8 +97,8 @@ fn distinct_functions_folding_to_the_same_rust_name_are_rejected() {
         assert!(false_marker(), "expected a Pipeline diagnostic, got: {err}");
         return;
     };
-    let sky_diagnostics::Diagnostic::Name {
-        msg: sky_diagnostics::NameError::DuplicateValue { name, .. },
+    let ipe_diagnostics::Diagnostic::Name {
+        msg: ipe_diagnostics::NameError::DuplicateValue { name, .. },
         ..
     } = diag
     else {

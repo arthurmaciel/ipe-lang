@@ -5,36 +5,36 @@
 //! §"Cross-session persistence" (**LOCKED, Option B**).
 //!
 //! Everything in-process is memoized, but nothing survives ACROSS process
-//! invocations — every `skyc build` starts a cold [`sky_db::SkyDatabase`].
+//! invocations — every `skyc build` starts a cold [`ipe_db::SkyDatabase`].
 //! This module closes that gap for the coarse, whole-project granularity
-//! that genuinely exists (`sky_db::emit_project`'s output — see this
+//! that genuinely exists (`ipe_db::emit_project`'s output — see this
 //! module's own doc section below for why that is a deliberate, documented
 //! divergence from the design doc's literal "persist per-module lowered IR"
 //! wording).
 //!
 //! ## What is cached, and why not literally "lowered IR"
 //!
-//! The design doc's Option-B locks in persisting `sky_ir` (the lowered IR)
-//! to `.ipe/lowered/`. `sky_lower::lower` always produces exactly ONE
-//! whole-program [`sky_ir::Program`], so "per module" was never on the
-//! table. The DEEPER blocker for persisting `sky_ir::Program` itself,
+//! The design doc's Option-B locks in persisting `ipe_ir` (the lowered IR)
+//! to `.ipe/lowered/`. `ipe_lower::lower` always produces exactly ONE
+//! whole-program [`ipe_ir::Program`], so "per module" was never on the
+//! table. The DEEPER blocker for persisting `ipe_ir::Program` itself,
 //! specifically:
-//! every [`sky_intern::Symbol`] embedded in the IR (`Var`, `Ctor`, record
+//! every [`ipe_intern::Symbol`] embedded in the IR (`Var`, `Ctor`, record
 //! field names, `IrType::Generic`, …) is a raw index into THIS process's
-//! [`sky_intern::Interner`] — meaningless, and NOT merely "differently
+//! [`ipe_intern::Interner`] — meaningless, and NOT merely "differently
 //! numbered", in a fresh process with a fresh, empty interner. Making that
 //! sound requires a relocation pass: serialize every embedded `Symbol` as
 //! its resolved STRING, and on load, re-intern each string into the
 //! CURRENT process's interner and rewrite every `Symbol` occurrence to the
 //! newly-assigned id — a walker over every `Symbol`-carrying site in
-//! `sky_ir::ir` (far more sites than [`sky_db::program_metadata`]'s
+//! `ipe_ir::ir` (far more sites than [`ipe_db::program_metadata`]'s
 //! `Ctor`-only walk touches: `Var`, `CloneVar`, `Access`, record field
 //! keys, `FuncSig` params/generics, `EnumDef`/`TypeDef` fields, …) plus
 //! full `serde` coverage across ~20 IR types. That is a genuine, multi-
 //! session redesign, not a corner to cut.
 //!
-//! **What ships instead**: [`sky_backend::EmittedProject`] — the output of
-//! [`sky_db::emit_project`] — is cached. It is pure `String` data (no
+//! **What ships instead**: [`ipe_backend::EmittedProject`] — the output of
+//! [`ipe_db::emit_project`] — is cached. It is pure `String` data (no
 //! `Symbol`, no interner dependency whatsoever: `RelPath` wraps a `String`,
 //! `files` maps `RelPath -> String`, `cargo_toml` is a `String`), so it
 //! serializes and deserializes losslessly with zero cross-process identity
@@ -42,8 +42,8 @@
 //! give for `skyc build`'s actual use case (a cold-start cache hit skips
 //! parse -> canon -> link -> infer -> lower -> emit ENTIRELY, not just
 //! infer -> lower -> emit), at the cost of not serving a hypothetical
-//! future interpreter tier that wants to consume `sky_ir` directly (design
-//! doc §"Why `sky_ir` is the cut-point") — that tier does not exist yet,
+//! future interpreter tier that wants to consume `ipe_ir` directly (design
+//! doc §"Why `ipe_ir` is the cut-point") — that tier does not exist yet,
 //! so the cost is paid by nobody today. This divergence is deliberate and
 //! recorded here, not silently substituted.
 //!
@@ -55,7 +55,7 @@
 //! there is no ambiguity between e.g. `[["AB"], ["C"]]` and `[["A"], ["BC"]]`:
 //!
 //! - the entry module path,
-//! - the SQL driver ([`sky_backend_rust::DbDriver`]),
+//! - the SQL driver ([`ipe_backend_rust::DbDriver`]),
 //! - every in-scope module's path, trust origin (injected stdlib vs. user
 //!   source — the module-IDENTITY axis the design doc's cache-key-
 //!   completeness note calls out: an add/delete/rename of a module MUST
@@ -110,10 +110,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use sha2::{Digest, Sha256};
-use sky_backend::EmittedProject;
-use sky_backend_rust::DbDriver;
-use sky_intern::{Interner, SerdeInternerGuard};
-use sky_ir::Program;
+use ipe_backend::EmittedProject;
+use ipe_backend_rust::DbDriver;
+use ipe_intern::{Interner, SerdeInternerGuard};
+use ipe_ir::Program;
 
 /// Domain-separation tag for the content-address hash — bumped whenever the
 /// key's ingredient set changes shape (never for a value change within the
@@ -144,7 +144,7 @@ fn update_str(hasher: &mut Sha256, s: &str) {
 /// `sources` is the driver's `module_path -> (fs_path, text)` map AFTER
 /// [`crate::project::inject_compiled_std_closure`] has run (so it already
 /// includes the injected stdlib closure's text) — the fs path itself is
-/// deliberately unhashed, matching [`sky_db::SourceFile`]'s own input shape
+/// deliberately unhashed, matching [`ipe_db::SourceFile`]'s own input shape
 /// (module path + text + origin; never the on-disk path).
 #[must_use]
 pub fn compute_project_key(
@@ -193,10 +193,10 @@ const IR_KEY_TAG: &[u8] = b"skyc-build-cache-ir-key-v1";
 
 /// Compute the content-address key for the lowered-IR cache tier:
 /// a pure function of every input that determines
-/// [`sky_db::lower_program`]'s output.
+/// [`ipe_db::lower_program`]'s output.
 ///
 /// Deliberately NARROWER than [`compute_project_key`]: `db_driver` only
-/// affects the FINAL emit stage (`sky_db::emit_project` reads
+/// affects the FINAL emit stage (`ipe_db::emit_project` reads
 /// `config.db_driver`), never `linked_program`/`typecheck`/`lower_program`
 /// (see `docs/architecture/salsa-incremental-compilation-2026-07-11.md`
 /// §11.2/§13) — so an IR-tier key that included it would over-invalidate: a
@@ -357,9 +357,9 @@ pub fn store(cache_root: &Path, epoch: &str, key: &str, project: &EmittedProject
 //
 // Sits ONE STAGE EARLIER than the `EmittedProject` tier above: a hit here
 // skips parse -> canon -> link -> infer -> lower ENTIRELY (no
-// `sky_db::SkyDatabase` is even constructed — see `compile_modules_observed`
+// `ipe_db::SkyDatabase` is even constructed — see `compile_modules_observed`
 // in `crate::lib`), running only `RustBackend::emit` over the recovered
-// `sky_ir::Program` before falling through to the SAME
+// `ipe_ir::Program` before falling through to the SAME
 // `write_emitted_project`/tier-1-`store` path a full pipeline run uses. A
 // hit here is therefore a smaller win than an `EmittedProject`-tier hit
 // (emit still runs), but covers the case an `EmittedProject`-tier miss does
@@ -367,24 +367,24 @@ pub fn store(cache_root: &Path, epoch: &str, key: &str, project: &EmittedProject
 // SAME `Program` this tier caches is still exactly reusable even though the
 // `EmittedProject` tier's key (which folds in `db_driver`) misses.
 //
-// **The relocation pass.** `sky_ir::Program` embeds `sky_intern::Symbol`
+// **The relocation pass.** `ipe_ir::Program` embeds `ipe_intern::Symbol`
 // pervasively — a raw index into the WRITING process's interner, meaningless
-// against any other. `sky_intern::Symbol`'s `serde` impls close this by
+// against any other. `ipe_intern::Symbol`'s `serde` impls close this by
 // serialising the symbol's resolved STRING and re-interning it into an
 // AMBIENT interner installed via `SerdeInternerGuard::install` (see that
 // type's own module doc for the full design + the cross-process id-drift
 // proof). Every (de)serialize call in this section installs a guard around
 // exactly one `Program` (de)serialize call, so a `Program` deserialized here
-// behaves identically to a fresh `sky_lower::lower` output IN THE CALLING
+// behaves identically to a fresh `ipe_lower::lower` output IN THE CALLING
 // PROCESS's interner — never a raw-id mismatch.
 //
-// **Security.** `sky_intern::Symbol::deserialize` validates every embedded
-// string through `sky_intern::is_valid_symbol_text` before interning it —
+// **Security.** `ipe_intern::Symbol::deserialize` validates every embedded
+// string through `ipe_intern::is_valid_symbol_text` before interning it —
 // closing the SAME class of hole `RelPath`'s hand-written `Deserialize`
 // closes for path traversal, applied to identifier text instead of paths
 // (a poisoned symbol string could otherwise splice arbitrary Rust source
 // into the next `RustBackend::emit` call, since the backend trusts an
-// interned string verbatim when emitting identifiers). `sky_ir::Match`
+// interned string verbatim when emitting identifiers). `ipe_ir::Match`
 // similarly carries a hand-written `Deserialize` that re-validates through
 // `Match::new_flat`'s structural backstop rather than trusting the arm list
 // verbatim. Every failure mode here — corrupt JSON, a poisoned `Symbol`
@@ -398,7 +398,7 @@ fn ir_entry_file_path(cache_root: &Path, epoch: &str, key: &str) -> PathBuf {
 /// Look up a cached lowered [`Program`] for `key` under `epoch`, relocating
 /// every embedded `Symbol` into `interner` (the RELOCATION PASS — see this
 /// section's module doc). Every failure mode (missing file, unreadable,
-/// corrupt JSON, a `Symbol` text that fails `sky_intern::is_valid_symbol_text`,
+/// corrupt JSON, a `Symbol` text that fails `ipe_intern::is_valid_symbol_text`,
 /// a `Match` arm list `Match::new_flat` rejects) is a plain cache MISS —
 /// `None`, never an error — matching the `EmittedProject` tier's contract
 /// exactly ([`try_load`]).
@@ -584,7 +584,7 @@ mod tests {
         let cache_root = dir.join("cache-root-round-trip");
         let mut files = BTreeMap::new();
         files.insert(
-            sky_backend::RelPath::new("src/main.rs").expect("valid path"),
+            ipe_backend::RelPath::new("src/main.rs").expect("valid path"),
             "fn main() {}".to_owned(),
         );
         let project = EmittedProject {
@@ -629,7 +629,7 @@ mod tests {
     fn try_load_treats_a_poisoned_relpath_entry_as_a_miss() {
         // Even a syntactically-valid JSON document with a semantically
         // unsafe `RelPath` key must be discarded, not partially trusted —
-        // proven at the `sky_backend` level (`emitted_project_deserialize_
+        // proven at the `ipe_backend` level (`emitted_project_deserialize_
         // rejects_a_poisoned_key`); this test proves the cache layer
         // inherits that rejection via `.ok()` rather than accidentally
         // routing around it.
@@ -666,8 +666,8 @@ mod tests {
     // The lowered-IR cache tier
     // -----------------------------------------------------------------
 
-    fn sample_ir_program(i: &mut Interner) -> sky_diagnostics::DResult<Program> {
-        use sky_ir::{
+    fn sample_ir_program(i: &mut Interner) -> ipe_diagnostics::DResult<Program> {
+        use ipe_ir::{
             Arm, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match, ModPath,
             Module, OnFormKind, Pat, TypeDef, Variant,
         };
@@ -787,7 +787,7 @@ mod tests {
     }
 
     #[test]
-    fn ir_store_and_load_round_trip_within_one_interner() -> sky_diagnostics::DResult<()> {
+    fn ir_store_and_load_round_trip_within_one_interner() -> ipe_diagnostics::DResult<()> {
         let mut plain = Interner::new();
         let program = sample_ir_program(&mut plain)?;
         let interner = Arc::new(Mutex::new(plain));
@@ -818,12 +818,12 @@ mod tests {
     /// through a COMPLETELY DIFFERENT, differently-polluted interner (the
     /// scenario a real `skyc build` -> `skyc build` sequence produces: a
     /// fresh `Interner::new()` per invocation). Asserts the relocated
-    /// `Program`'s structural content (via `sky_ir::pretty::pretty`,
+    /// `Program`'s structural content (via `ipe_ir::pretty::pretty`,
     /// resolved-name comparison — not raw `Symbol` equality, which is not
     /// expected to survive the boundary) matches a Program built fresh in
     /// the reader's own, unrelated interner.
     #[test]
-    fn ir_cache_hit_survives_cross_process_symbol_id_drift() -> sky_diagnostics::DResult<()> {
+    fn ir_cache_hit_survives_cross_process_symbol_id_drift() -> ipe_diagnostics::DResult<()> {
         let dir = std::env::temp_dir().join(format!("skyc-ir-cache-drift-{}", std::process::id()));
         let cache_root = dir.join("cache-root-drift");
         let _ = fs::remove_dir_all(&dir);
@@ -856,9 +856,9 @@ mod tests {
             let guard = interner_b
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            sky_ir::pretty(&program_b, &guard)
+            ipe_ir::pretty(&program_b, &guard)
         };
-        let dump_c = sky_ir::pretty(&program_c, &interner_c);
+        let dump_c = ipe_ir::pretty(&program_c, &interner_c);
         assert_eq!(
             dump_b, dump_c,
             "an IR-cache entry loaded through a differently-polluted \
@@ -891,7 +891,7 @@ mod tests {
 
     /// A poisoned `Symbol` text (would-be Rust-injection payload) inside an
     /// otherwise-valid-JSON IR cache entry must be rejected as a whole-entry
-    /// miss — proving the on-disk boundary inherits `sky_intern::Symbol`'s
+    /// miss — proving the on-disk boundary inherits `ipe_intern::Symbol`'s
     /// deserialize-time validation rather than accidentally routing around
     /// it (the same class of proof `try_load_treats_a_poisoned_relpath_
     /// entry_as_a_miss` gives for the `EmittedProject` tier).
@@ -920,7 +920,7 @@ mod tests {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             guard
-                .resolve(sky_intern::Symbol::from_raw(0))
+                .resolve(ipe_intern::Symbol::from_raw(0))
                 .map(str::to_owned)
         };
         assert!(

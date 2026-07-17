@@ -88,7 +88,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 
 /// Compile `tests/golden/<fixture>/Main.sky` and assert it is rejected with the
 /// expected diagnostic code (a gate golden — no program output).
-fn assert_gate(fixture: &str, expected: sky_diagnostics::Code) {
+fn assert_gate(fixture: &str, expected: ipe_diagnostics::Code) {
     let root = repo_root();
     let entry = golden_dir(&root, fixture).join("Main.sky");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{fixture}_gate_emit"));
@@ -121,5 +121,5 @@ fn cons_sum_builds_and_prints_six() {
 
 #[test]
 fn non_exhaustive_list_case_is_sky_t0010() {
-    assert_gate("gate_list_nonexhaustive", sky_diagnostics::SKY_T0010);
+    assert_gate("gate_list_nonexhaustive", ipe_diagnostics::SKY_T0010);
 }

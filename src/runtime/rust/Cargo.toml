@@ -1,9 +1,13 @@
 [package]
-name = "sky-runtime-rust"
+name = "ipe-runtime-rust"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "Sky language runtime for Rust — primitives, collections, FFI"
+
+[lib]
+name = "ipe_runtime_rust"
+path = "src/mod.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["full"], optional = true }

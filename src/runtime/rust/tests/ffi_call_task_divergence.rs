@@ -48,7 +48,7 @@
 //! stable anchor is the `"Ffi.callTask"` / `"Ffi.callPure"` call-site prefix —
 //! so the assertions match on that, not on the volatile rationale text.
 
-use sky_runtime_rust::{ffi_call_pure_polyfill, ffi_call_task_polyfill, ffi_to_any_polyfill};
+use ipe_runtime_rust::{ffi_call_pure_polyfill, ffi_call_task_polyfill, ffi_to_any_polyfill};
 
 /// Dynamic-shape `Ffi.callTask` (non-literal name/args) is refused by the
 /// no-reflection guard with an actionable, kernel-named panic. The substring

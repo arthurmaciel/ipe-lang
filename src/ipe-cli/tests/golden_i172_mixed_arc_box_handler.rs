@@ -22,7 +22,7 @@
 //! `Box::new(main_sign_in)` against the promoted `Arc`, same E0308 one Expr shape
 //! over.
 //!
-//! Fix (`promote_unification_sibling_lambdas` in `crates/sky_lower/src/lower.rs`):
+//! Fix (`promote_unification_sibling_lambdas` in `crates/ipe_lower/src/lower.rs`):
 //! when `handler` becomes a `SharedLambda`, coerce EVERY sibling function-value
 //! leaf in the unification group to the `Arc` carrier — an inline `Expr::Lambda`
 //! directly to `SharedLambda`, every OTHER shape (`FuncValue`/`Var`/`Access`/

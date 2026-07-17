@@ -182,7 +182,7 @@ fn param_route_wrong_adt_ctor_is_sky_t0001() {
     };
     assert_eq!(
         got,
-        Some(sky_diagnostics::SKY_T0001),
+        Some(ipe_diagnostics::SKY_T0001),
         "#108 hole 3: a wrong-ADT param ctor must still be SKY-T0001, got: {result:?}",
     );
 }

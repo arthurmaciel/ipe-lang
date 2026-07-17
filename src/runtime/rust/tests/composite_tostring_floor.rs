@@ -5,7 +5,7 @@
 //! ## What this fixture is for
 //!
 //! `Basics.toString` / `Debug.toString` (the `{{interp}}` stringifier) are
-//! `Display`-bound in the Rust runtime (`src/sky_runtime/basics.rs`):
+//! `Display`-bound in the Rust runtime (`src/ipe_runtime/basics.rs`):
 //!
 //! ```ignore
 //! pub fn basics_to_string<T: std::fmt::Display>(v: T) -> String { format!("{}", v) }
@@ -74,7 +74,7 @@
 //! should be promoted then (see spec §"Disposition rationale"). The ADT shape
 //! stays blocked until Go stops leaking its struct layout.
 
-use sky_runtime_rust::sky_runtime::basics::{basics_to_string, debug_to_string};
+use ipe_runtime_rust::ipe_runtime_rust::basics::{basics_to_string, debug_to_string};
 
 // --- Positive floor: scalars match Go `%v` byte-for-byte via the Display path. ---
 

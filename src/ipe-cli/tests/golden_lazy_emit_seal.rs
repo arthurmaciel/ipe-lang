@@ -9,7 +9,7 @@
 //! ## What is tested
 //!
 //! * `Lazy.lazy viewItem "hello"` — arity-1 closure: emits
-//!   `sky_runtime::ui::lazy::lazy_lazy_(move |_a| (f)(_a), a)`.
+//!   `ipe_runtime::ui::lazy::lazy_lazy_(move |_a| (f)(_a), a)`.
 //! * `Lazy.lazy2 viewPair "first" "second"` — arity-2 closure with TWO
 //!   DISTINGUISHABLE args: emits `lazy_lazy2_(..., a, b)` (arg ORDER matters;
 //!   a swap is silent past the mechanical gate).
@@ -65,11 +65,11 @@ fn lazy_emit_seal_skyc_cargo_and_run_zero() {
     let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
         .expect("emitted main.rs must exist");
     assert!(
-        emitted.contains("sky_runtime::ui::lazy::lazy_lazy_("),
+        emitted.contains("ipe_runtime::ui::lazy::lazy_lazy_("),
         "emitted main.rs must call lazy_lazy_; got:\n{emitted}"
     );
     assert!(
-        emitted.contains("sky_runtime::ui::lazy::lazy_lazy2_("),
+        emitted.contains("ipe_runtime::ui::lazy::lazy_lazy2_("),
         "emitted main.rs must call lazy_lazy2_; got:\n{emitted}"
     );
 

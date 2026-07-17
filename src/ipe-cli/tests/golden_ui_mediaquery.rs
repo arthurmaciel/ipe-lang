@@ -29,7 +29,7 @@
 //! expand them via `apply_style_injections` into the sky-id-scoped
 //! `<style data-sky-mq="<sid>">@media <q> { [sky-id="<sid>"] { <rules> } }
 //! </style>` block — that half is pinned by the runtime unit tests in
-//! `src/runtime/rust/src/sky_runtime/live/style_inject.rs`.)
+//! `src/runtime/rust/src/live/style_inject.rs`.)
 //!
 //! Run:
 //!

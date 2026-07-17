@@ -1926,6 +1926,190 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipe-runtime-rust"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "async-trait",
+ "axum",
+ "base64",
+ "bcrypt",
+ "bincode",
+ "chacha20poly1305",
+ "chrono",
+ "chrono-tz",
+ "crossterm",
+ "csv",
+ "flate2",
+ "futures-util",
+ "hex",
+ "hmac",
+ "jsonwebtoken",
+ "lettre",
+ "libc",
+ "md-5",
+ "pbkdf2",
+ "percent-encoding",
+ "proptest",
+ "redis",
+ "regex",
+ "reqwest",
+ "rsa",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "serde_yaml",
+ "sha1",
+ "sha2",
+ "sqlx",
+ "subtle",
+ "tao",
+ "tokio",
+ "tokio-tungstenite",
+ "toml",
+ "tower",
+ "tower-http 0.5.2",
+ "unicode-general-category",
+ "unicode-width",
+ "url",
+ "uuid",
+ "wry",
+ "zeroize",
+ "zstd",
+]
+
+[[package]]
+name = "ipe_backend"
+version = "0.0.0"
+dependencies = [
+ "ipe_diagnostics",
+ "ipe_ir",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ipe_backend_rust"
+version = "0.0.0"
+dependencies = [
+ "ipe_backend",
+ "ipe_diagnostics",
+ "ipe_intern",
+ "ipe_ir",
+ "sha2",
+]
+
+[[package]]
+name = "ipe_canon"
+version = "0.0.0"
+dependencies = [
+ "ipe_diagnostics",
+ "ipe_intern",
+ "ipe_kernels",
+ "ipe_parse",
+ "ipe_syntax",
+]
+
+[[package]]
+name = "ipe_db"
+version = "0.0.0"
+dependencies = [
+ "ipe_backend",
+ "ipe_backend_rust",
+ "ipe_canon",
+ "ipe_diagnostics",
+ "ipe_intern",
+ "ipe_ir",
+ "ipe_kernels",
+ "ipe_lower",
+ "ipe_parse",
+ "ipe_syntax",
+ "ipe_types",
+ "salsa",
+]
+
+[[package]]
+name = "ipe_diagnostics"
+version = "0.0.0"
+
+[[package]]
+name = "ipe_intern"
+version = "0.0.0"
+dependencies = [
+ "ipe_diagnostics",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ipe_ir"
+version = "0.0.0"
+dependencies = [
+ "ipe_diagnostics",
+ "ipe_intern",
+ "ipe_kernels",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ipe_kernels"
+version = "0.0.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "ipe_lower"
+version = "0.0.0"
+dependencies = [
+ "ipe_canon",
+ "ipe_diagnostics",
+ "ipe_intern",
+ "ipe_ir",
+ "ipe_parse",
+ "ipe_types",
+]
+
+[[package]]
+name = "ipe_parse"
+version = "0.0.0"
+dependencies = [
+ "ipe_diagnostics",
+ "ipe_intern",
+ "ipe_syntax",
+]
+
+[[package]]
+name = "ipe_syntax"
+version = "0.0.0"
+dependencies = [
+ "ipe_diagnostics",
+ "ipe_intern",
+]
+
+[[package]]
+name = "ipe_types"
+version = "0.0.0"
+dependencies = [
+ "ipe_canon",
+ "ipe_diagnostics",
+ "ipe_intern",
+ "ipe_kernels",
+ "ipe_parse",
+]
+
+[[package]]
+name = "ipe_watch"
+version = "0.0.0"
+dependencies = [
+ "notify",
+ "sha2",
+ "signal-hook",
+]
+
+[[package]]
 name = "ipnet"
 version = "2.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3814,210 +3998,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "sky-runtime-rust"
-version = "0.1.0"
-dependencies = [
- "aes-gcm",
- "async-trait",
- "axum",
- "base64",
- "bcrypt",
- "bincode",
- "chacha20poly1305",
- "chrono",
- "chrono-tz",
- "crossterm",
- "csv",
- "flate2",
- "futures-util",
- "hex",
- "hmac",
- "jsonwebtoken",
- "lettre",
- "libc",
- "md-5",
- "pbkdf2",
- "percent-encoding",
- "proptest",
- "redis",
- "regex",
- "reqwest",
- "rsa",
- "rust_decimal",
- "serde",
- "serde_json",
- "serde_urlencoded",
- "serde_yaml",
- "sha1",
- "sha2",
- "sqlx",
- "subtle",
- "tao",
- "tokio",
- "tokio-tungstenite",
- "toml",
- "tower",
- "tower-http 0.5.2",
- "unicode-general-category",
- "unicode-width",
- "url",
- "uuid",
- "wry",
- "zeroize",
- "zstd",
-]
-
-[[package]]
-name = "sky_backend"
-version = "0.0.0"
-dependencies = [
- "serde",
- "serde_json",
- "sky_diagnostics",
- "sky_ir",
-]
-
-[[package]]
-name = "sky_backend_rust"
-version = "0.0.0"
-dependencies = [
- "sha2",
- "sky_backend",
- "sky_diagnostics",
- "sky_intern",
- "sky_ir",
-]
-
-[[package]]
-name = "sky_canon"
-version = "0.0.0"
-dependencies = [
- "sky_diagnostics",
- "sky_intern",
- "sky_kernels",
- "sky_parse",
- "sky_syntax",
-]
-
-[[package]]
-name = "sky_db"
-version = "0.0.0"
-dependencies = [
- "salsa",
- "sky_backend",
- "sky_backend_rust",
- "sky_canon",
- "sky_diagnostics",
- "sky_intern",
- "sky_ir",
- "sky_kernels",
- "sky_lower",
- "sky_parse",
- "sky_syntax",
- "sky_types",
-]
-
-[[package]]
-name = "sky_diagnostics"
-version = "0.0.0"
-
-[[package]]
-name = "sky_intern"
-version = "0.0.0"
-dependencies = [
- "serde",
- "serde_json",
- "sky_diagnostics",
-]
-
-[[package]]
-name = "sky_ir"
-version = "0.0.0"
-dependencies = [
- "serde",
- "serde_json",
- "sky_diagnostics",
- "sky_intern",
- "sky_kernels",
-]
-
-[[package]]
-name = "sky_kernels"
-version = "0.0.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "sky_lower"
-version = "0.0.0"
-dependencies = [
- "sky_canon",
- "sky_diagnostics",
- "sky_intern",
- "sky_ir",
- "sky_parse",
- "sky_types",
-]
-
-[[package]]
-name = "sky_parse"
-version = "0.0.0"
-dependencies = [
- "sky_diagnostics",
- "sky_intern",
- "sky_syntax",
-]
-
-[[package]]
-name = "sky_syntax"
-version = "0.0.0"
-dependencies = [
- "sky_diagnostics",
- "sky_intern",
-]
-
-[[package]]
-name = "sky_types"
-version = "0.0.0"
-dependencies = [
- "sky_canon",
- "sky_diagnostics",
- "sky_intern",
- "sky_kernels",
- "sky_parse",
-]
-
-[[package]]
-name = "sky_watch"
-version = "0.0.0"
-dependencies = [
- "notify",
- "sha2",
- "signal-hook",
-]
-
-[[package]]
 name = "skyc"
 version = "0.0.0"
 dependencies = [
  "hex",
+ "ipe_backend",
+ "ipe_backend_rust",
+ "ipe_canon",
+ "ipe_db",
+ "ipe_diagnostics",
+ "ipe_intern",
+ "ipe_ir",
+ "ipe_lower",
+ "ipe_parse",
+ "ipe_types",
+ "ipe_watch",
  "notify",
  "oracle",
  "salsa",
  "serde_json",
  "sha2",
- "sky_backend",
- "sky_backend_rust",
- "sky_canon",
- "sky_db",
- "sky_diagnostics",
- "sky_intern",
- "sky_ir",
- "sky_lower",
- "sky_parse",
- "sky_types",
- "sky_watch",
 ]
 
 [[package]]

@@ -10,7 +10,7 @@
 //! `move` still move-captured the FREE outer `habit`, so a later sibling use
 //! (`RemoveHabit habit.id`, the button `onPress`) hit use-after-move.
 //!
-//! Fix (`emit_arc_callback_field` in `crates/sky_backend_rust/src/emit_expr.rs`):
+//! Fix (`emit_arc_callback_field` in `crates/ipe_backend_rust/src/emit_expr.rs`):
 //! hoist the leading capture-clone `let`s OUTSIDE the `Arc`'s `move` closure —
 //! `{ let habit = habit.clone(); ::std::sync::Arc::new(move |_x| (INNER)(_x)) }`
 //! — so the `Arc` owns the pre-made clone and the original binding survives for

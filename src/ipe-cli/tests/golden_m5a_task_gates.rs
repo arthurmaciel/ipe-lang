@@ -19,7 +19,7 @@ fn repo_root() -> PathBuf {
 /// Build the named golden fixture and assert it surfaces exactly `expected` as a
 /// pipeline diagnostic — never a panic.  A skip occurs only when the runtime
 /// cannot be resolved.
-fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code) {
+fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code) {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -52,7 +52,7 @@ fn task_bad_error_channel_is_sky_t0001() {
     assert_gate(
         "gate_task_bad_error",
         "m5a_gate_task_bad_error_emit",
-        sky_diagnostics::SKY_T0001,
+        ipe_diagnostics::SKY_T0001,
     );
 }
 
@@ -74,7 +74,7 @@ fn task_fail_string_literal_is_sky_t0001() {
     assert_gate(
         "gate_task_fail_string",
         "m5a_gate_task_fail_string_emit",
-        sky_diagnostics::SKY_T0001,
+        ipe_diagnostics::SKY_T0001,
     );
 }
 
@@ -87,7 +87,7 @@ fn cmd_annotation_wrong_arity_is_sky_t0016_not_ice() {
     assert_gate(
         "gate_cmd_arity",
         "m5a_gate_cmd_arity_emit",
-        sky_diagnostics::SKY_T0016,
+        ipe_diagnostics::SKY_T0016,
     );
 }
 
@@ -99,7 +99,7 @@ fn sub_ctor_payload_wrong_arity_is_sky_t0016_not_ice() {
     assert_gate(
         "gate_sub_ctor_arity",
         "m5a_gate_sub_ctor_arity_emit",
-        sky_diagnostics::SKY_T0016,
+        ipe_diagnostics::SKY_T0016,
     );
 }
 
@@ -114,6 +114,6 @@ fn task_annotation_arity_three_is_sky_t0016_not_ice() {
     assert_gate(
         "gate_task_arity_three",
         "m5a_gate_task_arity_three_emit",
-        sky_diagnostics::SKY_T0016,
+        ipe_diagnostics::SKY_T0016,
     );
 }

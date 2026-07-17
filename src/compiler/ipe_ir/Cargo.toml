@@ -1,0 +1,22 @@
+[package]
+name = "ipe_ir"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+ipe_intern = { path = "../ipe_intern" }
+ipe_diagnostics = { path = "../ipe_diagnostics" }
+ipe_kernels = { path = "../ipe_kernels" }
+# Phase 6.5 (symbol-relocation persistence): every `ipe_ir` type derives
+# `Serialize`/`Deserialize` (relying on `ipe_intern::Symbol`'s ambient-
+# interner impls for the embedded `Symbol` fields) so `ipe_ir::Program` can
+# round-trip through the on-disk lowered-IR cache (`skyc::cache`). `Match`
+# gets a hand-written impl instead of `#[derive]` — see its own doc.
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true

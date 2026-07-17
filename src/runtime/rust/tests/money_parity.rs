@@ -9,11 +9,11 @@
 //! bit-identical. Non-terminating fractions (1/3 etc.) may diverge
 //! beyond 28 digits — documented as a neutral platform difference.
 
-use sky_runtime_rust::*;
+use ipe_runtime_rust::*;
 
 // ── decimal helper ─────────────────────────────────────────────────────────
 
-fn d(s: &str) -> sky_runtime::decimal::Decimal {
+fn d(s: &str) -> ipe_runtime_rust::decimal::Decimal {
     match decimal_from_string::<SkyError>(s.to_string()) {
         SkyResult::Ok(v) => v,
         SkyResult::Err(e) => panic!("bad decimal literal {s:?}: {e}"),
@@ -227,7 +227,7 @@ fn fx_rate_round_trip_matches_go() {
     assert!(!money_has_rate("USD".to_string(), "GBP".to_string()));
 
     // getRate: USD→EUR = 0.92
-    let got: SkyResult<SkyError, sky_runtime::decimal::Decimal> =
+    let got: SkyResult<SkyError, ipe_runtime_rust::decimal::Decimal> =
         money_get_rate("USD".to_string(), "EUR".to_string());
     assert!(got.is_ok());
     if let SkyResult::Ok(v) = got {
@@ -235,7 +235,7 @@ fn fx_rate_round_trip_matches_go() {
     }
 
     // Same-currency always returns 1 (Go: `if from == to { return 1, true }`)
-    let same: SkyResult<SkyError, sky_runtime::decimal::Decimal> =
+    let same: SkyResult<SkyError, ipe_runtime_rust::decimal::Decimal> =
         money_get_rate("USD".to_string(), "USD".to_string());
     assert!(same.is_ok());
     if let SkyResult::Ok(v) = same {
@@ -243,7 +243,7 @@ fn fx_rate_round_trip_matches_go() {
     }
 
     // Unregistered pair → Err
-    let missing: SkyResult<SkyError, sky_runtime::decimal::Decimal> =
+    let missing: SkyResult<SkyError, ipe_runtime_rust::decimal::Decimal> =
         money_get_rate("USD".to_string(), "GBP".to_string());
     assert!(missing.is_err(), "getRate for unregistered pair must Err");
 
@@ -261,14 +261,14 @@ fn fx_auto_inverse_rate_capped_to_16_dp_matches_go() {
     let set: SkyResult<SkyError, ()> = money_set_rate("USD".to_string(), "EUR".to_string(), d("3"));
     assert!(set.is_ok(), "setRate must succeed for a positive rate");
 
-    let fwd: SkyResult<SkyError, sky_runtime::decimal::Decimal> =
+    let fwd: SkyResult<SkyError, ipe_runtime_rust::decimal::Decimal> =
         money_get_rate("USD".to_string(), "EUR".to_string());
     assert!(fwd.is_ok());
     if let SkyResult::Ok(v) = fwd {
         assert_eq!(decimal_to_string(v), "3");
     }
 
-    let inv: SkyResult<SkyError, sky_runtime::decimal::Decimal> =
+    let inv: SkyResult<SkyError, ipe_runtime_rust::decimal::Decimal> =
         money_get_rate("EUR".to_string(), "USD".to_string());
     assert!(inv.is_ok());
     if let SkyResult::Ok(v) = inv {

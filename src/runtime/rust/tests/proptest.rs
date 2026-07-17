@@ -1,7 +1,7 @@
 //! Property-based tests for the Sky Rust runtime.
 
 use proptest::prelude::*;
-use sky_runtime_rust::*;
+use ipe_runtime_rust::*;
 
 // ═══════════════════════════════════════════════════════════════════
 // Core types — direct from the runtime
@@ -73,14 +73,14 @@ proptest! {
 
 #[cfg(feature = "tokio")]
 mod task_tests {
-    use sky_runtime_rust::*;
+    use ipe_runtime_rust::*;
 
     fn run<A: Send + 'static>(task: SkyTask<SkyError, A>) -> SkyResult<SkyError, A> {
         task_run(task)
     }
 
     fn mk_task<A: Send + 'static>(a: A) -> SkyTask<SkyError, A> {
-        sky_runtime::task::task_succeed::<SkyError, A>(a)
+        ipe_runtime_rust::task::task_succeed::<SkyError, A>(a)
     }
 
     #[test]
@@ -103,7 +103,7 @@ mod task_tests {
     #[test]
     fn task_fail_is_err() {
         let err: SkyError = str_err("boom");
-        let t: SkyTask<SkyError, i64> = sky_runtime::task::task_fail::<SkyError, i64>(err);
+        let t: SkyTask<SkyError, i64> = ipe_runtime_rust::task::task_fail::<SkyError, i64>(err);
         assert!(run(t).is_err());
     }
 
@@ -219,32 +219,32 @@ mod task_tests {
 
 #[cfg(feature = "json")]
 mod json_tests {
-    use sky_runtime_rust::*;
+    use ipe_runtime_rust::*;
 
     #[test]
     fn json_int_roundtrip() {
-        let json = sky_runtime::json::json_enc_int(42);
-        let encoded = sky_runtime::json::json_enc_encode(0, json);
-        let decoder: Decoder<SkyError, i64> = sky_runtime::json::json_decode_int();
-        let decoded = sky_runtime::json::decode_from_json_string(decoder, encoded);
+        let json = ipe_runtime_rust::json::json_enc_int(42);
+        let encoded = ipe_runtime_rust::json::json_enc_encode(0, json);
+        let decoder: Decoder<SkyError, i64> = ipe_runtime_rust::json::json_decode_int();
+        let decoded = ipe_runtime_rust::json::decode_from_json_string(decoder, encoded);
         assert_eq!(decoded, SkyResult::Ok(42));
     }
 
     #[test]
     fn json_string_roundtrip() {
-        let json = sky_runtime::json::json_enc_string("hello".to_string());
-        let encoded = sky_runtime::json::json_enc_encode(0, json);
-        let decoder: Decoder<SkyError, String> = sky_runtime::json::json_decode_string();
-        let decoded = sky_runtime::json::decode_from_json_string(decoder, encoded);
+        let json = ipe_runtime_rust::json::json_enc_string("hello".to_string());
+        let encoded = ipe_runtime_rust::json::json_enc_encode(0, json);
+        let decoder: Decoder<SkyError, String> = ipe_runtime_rust::json::json_decode_string();
+        let decoded = ipe_runtime_rust::json::decode_from_json_string(decoder, encoded);
         assert_eq!(decoded, SkyResult::Ok("hello".to_string()));
     }
 
     #[test]
     fn json_bool_roundtrip() {
-        let json = sky_runtime::json::json_enc_bool(true);
-        let encoded = sky_runtime::json::json_enc_encode(0, json);
-        let decoder: Decoder<SkyError, bool> = sky_runtime::json::json_decode_bool();
-        let decoded = sky_runtime::json::decode_from_json_string(decoder, encoded);
+        let json = ipe_runtime_rust::json::json_enc_bool(true);
+        let encoded = ipe_runtime_rust::json::json_enc_encode(0, json);
+        let decoder: Decoder<SkyError, bool> = ipe_runtime_rust::json::json_decode_bool();
+        let decoded = ipe_runtime_rust::json::decode_from_json_string(decoder, encoded);
         assert_eq!(decoded, SkyResult::Ok(true));
     }
 }
@@ -323,7 +323,7 @@ proptest! {
 
 #[cfg(feature = "email")]
 mod email_smtp_tests {
-    use sky_runtime_rust::*;
+    use ipe_runtime_rust::*;
 
     fn msg(from: &str) -> EmailMessage {
         EmailMessage {

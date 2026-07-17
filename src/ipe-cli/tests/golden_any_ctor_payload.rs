@@ -119,7 +119,7 @@ fn any_ctor_payload_fail_closed() {
     };
     assert_eq!(
         got,
-        Some(sky_diagnostics::SKY_T0001),
+        Some(ipe_diagnostics::SKY_T0001),
         "using an `any`-ctor payload as String must surface SKY-T0001, got: {built:?}"
     );
 }

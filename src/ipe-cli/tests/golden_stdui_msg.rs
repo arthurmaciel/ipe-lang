@@ -20,7 +20,7 @@
 //!
 //! * `ir_type_from_canon` handles `Html Msg` in type annotations, producing
 //!   `IrType::Ui { ctor: UiCtor::Html, msg: IrType::Enum { Msg, [] } }`.
-//! * `KernelFn::UiLayout` emits `sky_runtime::ui::render::ui_layout(attrs_s, elem_s)`
+//! * `KernelFn::UiLayout` emits `ipe_runtime::ui::render::ui_layout(attrs_s, elem_s)`
 //!   with no turbofish — Rust infers `M = MainMsg` bottom-up from the concrete
 //!   element tree.  (The old `with_ui_msg` / `enclosing_ui_msg()` mechanism
 //!   was removed; M-propagation is now purely bottom-up from event payloads.)

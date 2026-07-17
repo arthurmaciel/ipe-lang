@@ -84,11 +84,11 @@ pub fn stage_of(path: &str) -> Option<Stage> {
     let (tag, rel) = split_tag(path);
     if tag == "ipe" {
         // Ipê stage crates mirror the Haskell stage modules.
-        if rel.starts_with("crates/sky_parse/") { Some(Stage::Parse) }
-        else if rel.starts_with("crates/sky_canon/") { Some(Stage::Canonicalise) }
-        else if rel.starts_with("crates/sky_types/") { Some(Stage::Type) }
-        else if rel.starts_with("crates/sky_lower/") { Some(Stage::Build) }
-        else if rel.starts_with("crates/sky_ir/") || rel.starts_with("crates/sky_backend") { Some(Stage::Generate) }
+        if rel.starts_with("crates/ipe_parse/") { Some(Stage::Parse) }
+        else if rel.starts_with("crates/ipe_canon/") { Some(Stage::Canonicalise) }
+        else if rel.starts_with("crates/ipe_types/") { Some(Stage::Type) }
+        else if rel.starts_with("crates/ipe_lower/") { Some(Stage::Build) }
+        else if rel.starts_with("crates/ipe_ir/") || rel.starts_with("crates/ipe_backend") { Some(Stage::Generate) }
         else { None }
     } else if rel.starts_with("src/Sky/Parse/") { Some(Stage::Parse) }
     else if rel.starts_with("src/Sky/Canonicalise/") { Some(Stage::Canonicalise) }

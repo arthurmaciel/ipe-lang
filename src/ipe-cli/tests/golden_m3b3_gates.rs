@@ -21,7 +21,7 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code) {
+fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code) {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -51,7 +51,7 @@ fn non_exhaustive_int_case_is_sky_t0010() {
     assert_gate(
         "gate_nonexhaustive_open_int",
         "m3b3_gate_nonexhaustive_emit",
-        sky_diagnostics::SKY_T0010,
+        ipe_diagnostics::SKY_T0010,
     );
 }
 

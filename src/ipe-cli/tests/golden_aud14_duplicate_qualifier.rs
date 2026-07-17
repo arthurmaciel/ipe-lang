@@ -74,8 +74,8 @@ fn distinct_modules_sharing_an_explicit_alias_is_rejected() {
         assert!(false_marker(), "expected a Pipeline diagnostic, got: {err}");
         return;
     };
-    let sky_diagnostics::Diagnostic::Name {
-        msg: sky_diagnostics::NameError::DuplicateQualifier { qualifier, .. },
+    let ipe_diagnostics::Diagnostic::Name {
+        msg: ipe_diagnostics::NameError::DuplicateQualifier { qualifier, .. },
         ..
     } = diag
     else {
