@@ -36,7 +36,7 @@ fn fixture_entry() -> PathBuf {
         .join("tests")
         .join("golden")
         .join("tuple_str_column_var_scrutinee")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 /// Fast gate: a multi-arm tuple `case` on a VARIABLE scrutinee with a

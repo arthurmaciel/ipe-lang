@@ -1191,7 +1191,7 @@ impl<'a> Parser<'a> {
     /// * **Adjacent non-literal atom** (`-x`, `-(e)`, `-f x`) — desugared at
     ///   parse time to `Call(VarLocal("negate"), [e])`, matching the canonical
     ///   Elm / Sky desugar path.  This closes the IPE-P0001 that 37-composite-
-    ///   live-shop hit on `if cents < 0 then -cents else cents` (State.sky:156).
+    ///   live-shop hit on `if cents < 0 then -cents else cents` (State.ipe:156).
     ///
     /// * **Non-adjacent** (`- 5`, `- x`) — the Haskell parser's `exprAtom_`
     ///   has no leading `spaces` call after consuming `-`, so a space before the

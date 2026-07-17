@@ -16,7 +16,7 @@ import Sky.Core.Error as Error exposing (Error)
 -- through Task.run inside each wrapper — same eager-evaluation
 -- semantic the example had pre-migration. For long-running batched
 -- writes or background reads, factor into a top-level `Task Error a`
--- and dispatch via Cmd.perform — see 18-job-queue/src/Main.sky.
+-- and dispatch via Cmd.perform — see 18-job-queue/src/Main.ipe.
 dbConn =
     case Task.run (Db.open "sqlite" "skyvote.db") of
 

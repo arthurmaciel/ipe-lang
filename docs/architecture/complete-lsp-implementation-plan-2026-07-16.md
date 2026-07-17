@@ -211,7 +211,7 @@ only mode** — an unsound action is never shown, at any phase.
   when a client (Neovim, Helix) negotiates `utf-8` the conversion becomes
   the identity — one code path less to get wrong, mandatory `utf-16`
   support kept.
-- **Watched files.** Register `**/*.sky` + `sky.toml` via
+- **Watched files.** Register `**/*.ipe` + `sky.toml` via
   `workspace/didChangeWatchedFiles`; on-disk changes to non-open files
   reconcile through `sync_source_root` (module add/delete/rename already
   proven by the resolve-imports tests).
@@ -283,7 +283,7 @@ it; bold = we exceed the reference on that row.
 | 24 | **TEA scaffolding**: snippet catalog + program-reading actions (add Msg variant + arm; add subscription; scaffold app; convert to worker) | `canonicalize`/`typecheck` + structured AST insertion | every action through the `VerifiedEdit` gate; snippets golden-tested at their honest bar (L-M) | 5 | — |
 | 25 | **Rename** (prepareRename + project-wide) | `collect_references` + `VerifiedEdit` over full blast radius | refuses kernel/FFI/reserved targets; post-edit program typechecks or no edit exists | 4 | R (ungated) |
 | 26 | **Auto-import** (completion `additionalTextEdits` + unresolved-name quick-fix) | canonicaliser export index (a query) | ambiguity → disambiguation list, never a silent pick (L-E); gated | 5 | — |
-| 27 | **workspace/willRenameFiles** — renaming `Foo.sky` rewrites `module` header + every importer, atomically | `resolve_imports` reverse edges + `VerifiedEdit` | the same gate; a file rename cannot orphan importers | 5 | — |
+| 27 | **workspace/willRenameFiles** — renaming `Foo.ipe` rewrites `module` header + every importer, atomically | `resolve_imports` reverse edges + `VerifiedEdit` | the same gate; a file rename cannot orphan importers | 5 | — |
 | 28 | Formatting (full doc; range later) | THE formatter crate (`ipe fmt` port) | delegated + idempotence-asserted; **gated on the port** (§11 F-1) | 6 | R |
 | 29 | Code lens: reference counts (opt-in, default off) | symbol-index query | display-only; §11 F-4 for anything that runs code | 6 | — |
 | 30 | `ipe lsp` subcommand + editor onboarding docs | — | — | 0 | R |

@@ -18,10 +18,10 @@
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
 //! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the SAME
-//! `Main.sky` files to the same stdout:
+//! `Main.ipe` files to the same stdout:
 //!
 //! ```text
-//! $ sky run Main.sky   # Go backend
+//! $ sky run Main.ipe   # Go backend
 //! hi, world!   # append
 //! abcd         # append_chain
 //! ```
@@ -36,12 +36,12 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
     root.join("tests").join("golden").join(name)
 }
 
-/// Compile `tests/golden/<name>/Main.sky` and assert the emitted `src/main.rs`
+/// Compile `tests/golden/<name>/Main.ipe` and assert the emitted `src/main.rs`
 /// equals the checked-in `tests/golden/<name>/main.rs` byte-for-byte.
 fn assert_byte_identical(name: &str) {
     let root = repo_root();
     let dir = golden_dir(&root, name);
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let golden = dir.join("main.rs");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_emit"));
     let _ = std::fs::remove_dir_all(&out);
@@ -74,7 +74,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 
     let root = repo_root();
     let dir = golden_dir(&root, name);
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 

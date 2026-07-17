@@ -1,7 +1,7 @@
 //! Cached Go-oracle format + staleness gate for the golden parity suite.
 //!
 //! The Go reference compiler's output for a golden is a pure function of
-//! `(Main.sky, Go `sky` version)` — it does not depend on skyc at all. So rather
+//! `(Main.ipe, Go `sky` version)` — it does not depend on skyc at all. So rather
 //! than re-running the Go backend on every parity check, each golden commits a
 //! cached oracle value:
 //!
@@ -9,7 +9,7 @@
 //!   (the bytes the Go-built binary prints, with NONE of the compiler's progress
 //!   chatter), OR — when Sky's behaviour differs on this shape — skyc's
 //!   own output, recorded as a documented divergence.
-//! * `tests/golden/<name>/oracle.meta` — `sha256(Main.sky)` + the Go `sky`
+//! * `tests/golden/<name>/oracle.meta` — `sha256(Main.ipe)` + the Go `sky`
 //!   version string + an `oracle_divergence` flag (with a reason when set) + the
 //!   captured exit code.
 //!
@@ -19,7 +19,7 @@
 //!   [`build_and_run_rust`]) is used by the `refresh-oracle` tool to (re)capture
 //!   the cached value when a golden is added or changed.
 //! * The **read** side ([`check_parity`]) is used by the golden tests. It NEVER
-//!   invokes the Go backend: it re-hashes `Main.sky`, fails loudly if the hash
+//!   invokes the Go backend: it re-hashes `Main.ipe`, fails loudly if the hash
 //!   no longer matches the cached one (a stale oracle the author forgot to
 //!   refresh), and otherwise diffs skyc's stdout against the cached expected.
 //!
@@ -60,7 +60,7 @@ pub const EXPECTED_FILE: &str = "expected_go.txt";
 /// File holding the cached oracle metadata, relative to a golden's directory.
 pub const META_FILE: &str = "oracle.meta";
 /// The Sky entry point inside every golden directory.
-pub const MAIN_SKY: &str = "Main.sky";
+pub const MAIN_SKY: &str = "Main.ipe";
 /// Marker file declaring a golden a deliberate, Go-succeeds divergence.
 ///
 /// When present in a golden's directory it means the Go oracle SUCCEEDS but
@@ -161,7 +161,7 @@ pub fn sanctioned_reason(golden_dir: &Path) -> Result<Option<String>, String> {
 
 /// Lowercase hex SHA-256 of `bytes`.
 ///
-/// Used to fingerprint `Main.sky` so a golden whose source changed without a
+/// Used to fingerprint `Main.ipe` so a golden whose source changed without a
 /// matching `refresh-oracle` run is caught by [`check_parity`] rather than
 /// silently diffed against a stale expectation.
 #[must_use]
@@ -174,7 +174,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 /// Parsed contents of an `oracle.meta` file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Meta {
-    /// Lowercase hex SHA-256 of the `Main.sky` the cache was captured from.
+    /// Lowercase hex SHA-256 of the `Main.ipe` the cache was captured from.
     pub main_sky_sha256: String,
     /// The Go `sky --version` string at capture time (provenance only).
     pub go_sky_version: String,
@@ -290,7 +290,7 @@ impl Meta {
 /// "skip" outcome, so a broken or stale golden can never pass silently.
 #[derive(Clone, Debug)]
 pub enum ParityError {
-    /// `Main.sky` could not be read at `path`.
+    /// `Main.ipe` could not be read at `path`.
     MissingMainSky { path: PathBuf, detail: String },
     /// `oracle.meta` is absent — the golden was never registered with the
     /// refresh tool.
@@ -299,7 +299,7 @@ pub enum ParityError {
     MalformedMeta { detail: String },
     /// `expected_go.txt` is absent though `oracle.meta` exists.
     MissingExpected { path: PathBuf, detail: String },
-    /// The current `Main.sky` hash differs from the cached one: the source was
+    /// The current `Main.ipe` hash differs from the cached one: the source was
     /// edited without re-running the refresh tool.
     Stale {
         golden: String,
@@ -342,7 +342,7 @@ impl fmt::Display for ParityError {
                 current,
             } => write!(
                 f,
-                "oracle stale for {golden} — run refresh-oracle (Main.sky sha256 {current} != cached {cached})"
+                "oracle stale for {golden} — run refresh-oracle (Main.ipe sha256 {current} != cached {cached})"
             ),
             Self::Mismatch {
                 golden,
@@ -373,7 +373,7 @@ impl fmt::Display for ParityError {
 /// Read the cached oracle for the golden at `golden_dir` and compare it against
 /// `skyc_stdout`. NEVER invokes the Go backend.
 ///
-/// The staleness gate runs first: if `sha256(Main.sky)` differs from the cached
+/// The staleness gate runs first: if `sha256(Main.ipe)` differs from the cached
 /// hash the function fails with [`ParityError::Stale`] BEFORE any diff, so a
 /// changed source whose oracle was not refreshed can never be diffed against a
 /// stale expectation.
@@ -762,7 +762,7 @@ mod tests {
     fn parity_matches_when_hash_and_stdout_agree() {
         let dir = fresh_golden("match");
         let src = "main = 1\n";
-        write(&dir, "Main.sky", src);
+        write(&dir, "Main.ipe", src);
         write(&dir, "expected_go.txt", "1\n");
         let meta = Meta {
             main_sky_sha256: sha256_hex(src.as_bytes()),
@@ -780,7 +780,7 @@ mod tests {
     #[test]
     fn parity_fails_loudly_when_main_sky_changed_without_refresh() {
         let dir = fresh_golden("stale");
-        // The cached hash is of the OLD source; Main.sky now holds new source.
+        // The cached hash is of the OLD source; Main.ipe now holds new source.
         let meta = Meta {
             main_sky_sha256: sha256_hex(b"main = 1\n"),
             go_sky_version: "sky dev".to_owned(),
@@ -788,7 +788,7 @@ mod tests {
             oracle_divergence: false,
             divergence_reason: None,
         };
-        write(&dir, "Main.sky", "main = 2\n");
+        write(&dir, "Main.ipe", "main = 2\n");
         write(&dir, "expected_go.txt", "1\n");
         write(&dir, "oracle.meta", &meta.serialize());
 
@@ -804,7 +804,7 @@ mod tests {
     #[test]
     fn parity_fails_when_oracle_meta_is_missing() {
         let dir = fresh_golden("nometa");
-        write(&dir, "Main.sky", "main = 1\n");
+        write(&dir, "Main.ipe", "main = 1\n");
         // No oracle.meta, no expected_go.txt — never a silent skip.
         let outcome = check_parity(&dir, "nometa", "1\n");
         assert!(
@@ -842,7 +842,7 @@ mod tests {
     fn sanctioned_mismatch_is_labelled_distinctly_from_divergence() {
         let dir = fresh_golden("sanctioned_label");
         let src = "main = 1\n";
-        write(&dir, "Main.sky", src);
+        write(&dir, "Main.ipe", src);
         write(&dir, "expected_go.txt", "UPPER\n");
         let meta = Meta {
             main_sky_sha256: sha256_hex(src.as_bytes()),
@@ -903,7 +903,7 @@ mod tests {
     fn parity_uses_divergence_expected_when_sky_differs() {
         let dir = fresh_golden("divergence");
         let src = "main = 42\n";
-        write(&dir, "Main.sky", src);
+        write(&dir, "Main.ipe", src);
         // Sky's behaviour differs here; expected holds skyc's recorded output.
         write(&dir, "expected_go.txt", "42\n");
         let meta = Meta {

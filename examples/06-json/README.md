@@ -5,7 +5,7 @@ JSON encoding and decoding using `Sky.Core.Json.Encode` and `Sky.Core.Json.Decod
 ## Build & Run
 
 ```bash
-sky build src/Main.sky
+sky build src/Main.ipe
 ./sky-out/app
 ```
 

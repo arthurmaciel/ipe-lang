@@ -191,7 +191,7 @@ Reasoning, in PRINCIPLES order:
 
   ```
   error[IPE-T0018]: this catch-all hides constructors of `Msg`
-    --> src/Main.sky:41:9
+    --> src/Main.ipe:41:9
      |
   41 |         _ -> ( model, Cmd.none )
      |         ^ absorbs: Decrement, Reset

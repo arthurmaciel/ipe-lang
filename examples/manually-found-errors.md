@@ -6,7 +6,7 @@ Console is poor - it is not run at a different port. Why? With Ctrl-C is the app
 
 
 ## 10-live-component   Got a warning[IPE-T0011]: redundant case branch
-  --> src/Counter.sky:71:23
+  --> src/Counter.ipe:71:23
    |
 71 |               [class "counter-buttons"]
    |                       ^ `_` is already handled
@@ -18,7 +18,7 @@ Console is poor - it is not run at a different port. Why? With Ctrl-C is the app
 15-http-server  OK (is the server shutting down gracefully?)
 16-skychess OK
 17-skymon   Got a warning[IPE-T0011]: redundant case branch
-   --> src/Lib/Auth.sky:236:6
+   --> src/Lib/Auth.ipe:236:6
     |
 236 |     else
     |      ^ `_` is already handled
@@ -26,7 +26,7 @@ Console is poor - it is not run at a different port. Why? With Ctrl-C is the app
     = note: run `skyc explain IPE-T0011` for more information
 
 warning[IPE-T0011]: redundant case branch
-   --> src/Page/MonitorDetail.sky:230:45
+   --> src/Page/MonitorDetail.ipe:230:45
     |
 230 |               [ onClick (Navigate DashboardPage), class "btn btn-primary" ]
     |                                             ^ `_` is already handled
@@ -75,7 +75,7 @@ For more information about this error, try `rustc --explain E0507`.
 Compare to Go
 
 ## 24-tui-kitchen-sink Got a warning[IPE-L0124]: `Live.app` routes list is non-empty but Model has no `page` field
-   --> src/Main.sky:497:13
+   --> src/Main.ipe:497:13
     |
 497 |             Live.app
     |             ^^^^^^^^ 1 route(s) declared but the Model has no `page` field — routing is disabled and the routes are ignored
@@ -88,7 +88,7 @@ Have to compare with Go
 
 25-sky-console  
 warning[IPE-L0124]: `Live.app` routes list is non-empty but Model has no `page` field
-  --> src/Main.sky:62:5
+  --> src/Main.ipe:62:5
    |
 62 |     app
    |     ^^^ 1 route(s) declared but the Model has no `page` field — routing is disabled and the routes are ignored
@@ -333,9 +333,9 @@ OK, but compare with Go
 OK, but compare with Go
 
 ## 38-composite-ui-multibackend
-"$SKYC_BIN" build src/Main.sky --out sky-out/rust && cargo +nightly build -Z unstable-options --manifest-path sky-out/rust/Cargo.toml --artifact-dir ./sky-out/rust/target/debug/ &&  ./sky-out/rust/target/debug/sky-app 
+"$SKYC_BIN" build src/Main.ipe --out sky-out/rust && cargo +nightly build -Z unstable-options --manifest-path sky-out/rust/Cargo.toml --artifact-dir ./sky-out/rust/target/debug/ &&  ./sky-out/rust/target/debug/sky-app 
 warning[IPE-L0124]: `Live.app` routes list is non-empty but Model has no `page` field
-   --> src/View.sky:123:48
+   --> src/View.ipe:123:48
     |
 123 |             , statTile "7-day avg" (ToString.fromInt weekAvg ++ "%")
     |                                                ^^^^^^^^ 1 route(s) declared but the Model has no `page` field — routing is disabled and the routes are ignored

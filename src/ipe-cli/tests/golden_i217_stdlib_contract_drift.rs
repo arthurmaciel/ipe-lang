@@ -8,13 +8,13 @@
 //! The reference Sky-source signature IS the contract:
 //!
 //! * `withClaim : String -> JsonEnc.Value -> Claims -> Claims`
-//!   (`Sky/Core/Jwt.sky:79`) — ours had drifted to `String -> String -> …`.
+//!   (`Sky/Core/Jwt.ipe:79`) — ours had drifted to `String -> String -> …`.
 //! * `type alias Migration = { name : String, sql : String }` +
 //!   `migrate : Db -> List Migration -> Task Error (List String)`
-//!   (`Std/Db.sky:237,300`) — ours had no `Migration` and `migrate` took
+//!   (`Std/Db.ipe:237,300`) — ours had no `Migration` and `migrate` took
 //!   `List (String, String)`.
 //! * `type alias Response = { status : Int, body : String, headers : Dict
-//!   String String, contentType : String }` (`Sky/Http/Server.sky:66`) — ours
+//!   String String, contentType : String }` (`Sky/Http/Server.ipe:66`) — ours
 //!   had registered it as an opaque nominal, so a record literal was rejected.
 //!
 //! Each test compiles a fixture that uses the surface as the reference does.
@@ -40,7 +40,7 @@ fn entry_path(root: &Path, name: &str) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join(name)
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 /// Compile a fixture and assert `skyc` accepts it (the contract now matches the

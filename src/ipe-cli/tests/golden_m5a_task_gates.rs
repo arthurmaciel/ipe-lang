@@ -25,7 +25,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code)
         .join("tests")
         .join("golden")
         .join(fixture)
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 
@@ -63,7 +63,7 @@ fn task_bad_error_channel_is_sky_t0001() {
 /// `IpeError` vs `String`) — a "compilation successful, then `cargo build`
 /// fails" class violation. The scheme is pinned to `fun(error_ty(),
 /// task(var(0)))`, matching `mapError`/`onError` and the bundled
-/// `Sky.Core.Task.sky:33` annotation (`fail : Error -> Task Error a`), so the
+/// `Sky.Core.Task.ipe:33` annotation (`fail : Error -> Task Error a`), so the
 /// mismatch is caught at `skyc` type-check time. This also pins the
 /// divergence from upstream Sky's polymorphic `fail : e -> Task e a`
 /// (`docs/divergences-from-sky.md`, "`Task` error-channel scheme is

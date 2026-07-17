@@ -39,7 +39,7 @@ reference into ipê's tree.
 | **Non-FFI, in scope** | **65** | The corpus to author now. Each doubles as a skyc golden. |
 
 The FFI/non-FFI split was derived mechanically: a fixture is FFI iff its
-`sky.toml` has a `[rust.dependencies]` table or its `Main.sky` imports
+`sky.toml` has a `[rust.dependencies]` table or its `Main.ipe` imports
 `Sky.Ffi`. This matches reference-audit items 20/21/22
 (`docs/architecture/sky-rust-backend-reference-audit.md`).
 
@@ -234,7 +234,7 @@ and CRLF handling.
 ### 3.1 Drop-in steps
 
 1. **Author the 65 fixtures** under `crates/skyc/tests/sky/<name>/` (mirroring
-   the reference layout `src/Main.sky` + `sky.toml`). They double as skyc
+   the reference layout `src/Main.ipe` + `sky.toml`). They double as skyc
    goldens. Port in the Tier 0→4 order above.
 2. **Port `equivalence-corpus.sh`** (pure-stdlib deterministic-stdout driver) into
    `scripts/`. Point `FIXROOT` at ipê's fixture dir. Its `CORPUS_DEFAULT` = the

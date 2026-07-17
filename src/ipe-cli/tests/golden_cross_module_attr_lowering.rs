@@ -5,25 +5,25 @@
 //!
 //! This is the lowering-pass analogue of `golden_t0012_cross_module_attr`
 //! (which covers a post-solve field-access error). In
-//! `36-composite-server`, `guarded h = wrap (rateLimit … h)` in `Server.sky`
+//! `36-composite-server`, `guarded h = wrap (rateLimit … h)` in `Server.ipe`
 //! raises IPE-L0126; if lowering diagnostics carry only a bare, file-local
 //! byte `Span` with no owning module, the driver's `source_for_span` heuristic
 //! picks whichever merged def numerically CONTAINS that offset with the
-//! smallest `lo_dist` — which can be `Main.sky`'s `runMigrate`
+//! smallest `lo_dist` — which can be `Main.ipe`'s `runMigrate`
 //! (its body starts ~46 bytes before the offset while the real owner
 //! `Server.run` starts ~1000 before), so the user sees the phantom
-//! `--> Main.sky:73`.
+//! `--> Main.ipe:73`.
 //!
 //! Fix: `ipe_lower::lower` now pairs its diagnostic with the failing def's
 //! `home` module path (mirroring `ipe_types::infer_attributed`), threaded
 //! through `ipe_db::lower_program` / `emit_manifest`, so the driver resolves
 //! the owning source file EXACTLY via `home_to_source`.
 //!
-//! This fixture is tuned so the failing `Dep.sky` span sits at a byte offset
-//! that the OLD heuristic mis-attributes to `Main.sky` (its `main` body span
+//! This fixture is tuned so the failing `Dep.ipe` span sits at a byte offset
+//! that the OLD heuristic mis-attributes to `Main.ipe` (its `main` body span
 //! numerically contains the offset with a smaller `lo_dist` than the padded
-//! `Dep.composed` body). This must render `--> Dep.sky`, not the `-->
-//! Main.sky:20` the OLD heuristic produces.
+//! `Dep.composed` body). This must render `--> Dep.ipe`, not the `-->
+//! Main.ipe:20` the OLD heuristic produces.
 //!
 //! Run:
 //! ```text
@@ -44,7 +44,7 @@ fn try_build(name: &str) -> Result<(), String> {
         .join("golden")
         .join(name)
         .join("src")
-        .join("Main.sky");
+        .join("Main.ipe");
     if !entry.exists() {
         return Err(format!("fixture not found: {}", entry.display()));
     }
@@ -58,8 +58,8 @@ fn try_build(name: &str) -> Result<(), String> {
     skyc::build_with_sibling_discovery(&entry, &out, &runtime).map_err(|e| e.to_string())
 }
 
-/// The IPE-L0126 must blame `Dep.sky` (which owns the forwarded-capture def),
-/// never the byte-colliding `Main.sky`.
+/// The IPE-L0126 must blame `Dep.ipe` (which owns the forwarded-capture def),
+/// never the byte-colliding `Main.ipe`.
 #[test]
 fn l0126_lower_error_attributes_to_owning_module() {
     // Runtime unavailable → try_build returns Ok as a skip. Nothing to assert.
@@ -68,11 +68,11 @@ fn l0126_lower_error_attributes_to_owning_module() {
     };
     assert!(err.contains("IPE-L0126"), "expected IPE-L0126, got:\n{err}");
     assert!(
-        err.contains("Dep.sky"),
-        "lowering error must attribute to the owning module Dep.sky, got:\n{err}"
+        err.contains("Dep.ipe"),
+        "lowering error must attribute to the owning module Dep.ipe, got:\n{err}"
     );
     assert!(
-        !err.contains("Main.sky"),
-        "lowering error must NOT mis-attribute to the byte-colliding Main.sky, got:\n{err}"
+        !err.contains("Main.ipe"),
+        "lowering error must NOT mis-attribute to the byte-colliding Main.ipe, got:\n{err}"
     );
 }

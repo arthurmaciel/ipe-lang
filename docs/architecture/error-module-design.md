@@ -3,7 +3,7 @@
 > **⚠️ CORRECTION (impl-guardian gate, verified, 2026-07-03).** Steps 1–2's
 > PRIMARY approach — "Sky.Core.Error as a *compiled Sky source module*, helpers
 > stay pure Sky, no kernels" — is **INFEASIBLE at HEAD**: nothing calls
-> `skyc::stdlib::source` (embedded `.sky` are parse-tested only; `build`/
+> `skyc::stdlib::source` (embedded `.ipe` are parse-tested only; `build`/
 > `build_project` never inject stdlib source), and `golden_list_ops_wiring`
 > establishes that **kernel routing is the only exit-0-safe wiring** (a qualified
 > stdlib call lacking a `KernelFn`/lower-arm/scheme emits IPE-L0108). So the
@@ -27,7 +27,7 @@
 
 ## Verified ground truth (this repo, HEAD)
 
-- `sky-out/.sky-stdlib/Sky/Core/Error.sky` is byte-identical to upstream:
+- `sky-out/.ipe-stdlib/Sky/Core/Error.ipe` is byte-identical to upstream:
   `type Error = Error ErrorKind ErrorInfo`; `ErrorKind` = 11 fieldless variants
   (`Io | Network | Ffi | Decode | Timeout | NotFound | PermissionDenied |
   InvalidInput | Conflict | Unavailable | Unexpected`); `ErrorDetails` =
@@ -105,7 +105,7 @@ marshalling, no encode/decode, nothing that can drift out of sync.
 ## Final Rust Error representation
 
 Emitted through the ordinary user-type path (like any Sky ADT), **not** a
-runtime-owned primitive. Names/variant order/field names mirror `Error.sky`
+runtime-owned primitive. Names/variant order/field names mirror `Error.ipe`
 exactly so lowered ctor/pattern code type-checks with no shim.
 
 ```rust
@@ -220,14 +220,14 @@ added only where a boundary needs it.
 ## Ordered, implementable build tasks
 
 1. **Canon registration (task #78).** Add `Sky.Core.Error` to
-   `crates/skyc/src/stdlib.rs`: an `ERROR = include_str!("../stdlib/Sky/Core/Error.sky")`
+   `crates/skyc/src/stdlib.rs`: an `ERROR = include_str!("../stdlib/Sky/Core/Error.ipe")`
    const + a `MODULES` entry (drop the byte-identical copy under
-   `crates/skyc/stdlib/Sky/Core/Error.sky`). As a compiled source module its
+   `crates/skyc/stdlib/Sky/Core/Error.ipe`). As a compiled source module its
    functions resolve as ordinary top-level bindings (`Callee::TopLevel`) — no
    N0004, no per-function QUALIFIERS wiring. Keep `Error`/`ErrorKind`/
    `ErrorDetails` in `RESERVED_BUILTIN_TYPES` (`crates/sky_canon/src/resolve.rs`)
    but exempt the canonical declarer via a `{Maybe→Sky.Core.Maybe,
-   Result→…, Error→Sky.Core.Error}` owner table (reuse the exemption Maybe.sky
+   Result→…, Error→Sky.Core.Error}` owner table (reuse the exemption Maybe.ipe
    already relies on; make it explicit if currently implicit-by-compile-order).
    Repoint the Prelude `errorToString` to resolve to `Sky.Core.Error.toString`.
 2. **Kernels.** **None for the helpers** — they are compiled Sky bodies (this is
@@ -307,7 +307,7 @@ added only where a boundary needs it.
   cost of ~16 hand-maintained kernel/scheme/arity arms (drift surface). Kept
   only as the step-2 *fallback* if Sky-body codegen proves infeasible.
 - **A3's runtime-owned *type* (the Maybe/Result club).** A3's framing that
-  Error.sky is a compiled source module and the round-trip is by identity is
+  Error.ipe is a compiled source module and the round-trip is by identity is
   **adopted**, but its choice to make the *type* runtime-owned is rejected in
   favour of upstream's emit-as-normal-ADT: the runtime-owned route needs a
   genuinely new `ErrorInfo`/`PanicInfo`/`TypeInfo` → runtime-struct bridge

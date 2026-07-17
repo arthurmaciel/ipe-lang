@@ -33,7 +33,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
     root.join("tests").join("golden").join(name)
 }
 
-/// Compile `tests/golden/<name>/Main.sky`, build the emitted Cargo project,
+/// Compile `tests/golden/<name>/Main.ipe`, build the emitted Cargo project,
 /// run it, and assert its stdout matches the cached oracle. Gated on `IPE_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
     if std::env::var("IPE_E2E").is_err() {
@@ -42,7 +42,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 
     let root = repo_root();
     let dir = golden_dir(&root, name);
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 

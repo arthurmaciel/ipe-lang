@@ -12,7 +12,7 @@ and emits **one** table row:
 
 | Column | What | Cells |
 |---|---|---|
-| **BUILD** | `skyc build <sky.toml\|src/Main.sky> --out sky-out/rust` + `cargo build --manifest-path sky-out/rust/Cargo.toml` | `ok` · `skyc-fail` · `cargo-fail` |
+| **BUILD** | `skyc build <sky.toml\|src/Main.ipe> --out sky-out/rust` + `cargo build --manifest-path sky-out/rust/Cargo.toml` | `ok` · `skyc-fail` · `cargo-fail` |
 | **RUN** | run the emitted `sky-app` binary headless, per `example_shape` (via `exercise_*` in `lib/checks.sh`) | `ok` · `panic` · `hang` · `noserve` · `notty` · `skip` |
 | **EQUIVALENCE** | build the Go reference + compare to Rust per the DERIVED equivalence mode (**phased — off by default**) | `equivalence-stdout` · `equivalence-body N` · `equivalence-serve` · `equivalence-scenario` · `equivalence-pty` · `n/a` · `DIFFER` · `go-ref-broken` · `—` |
 
@@ -28,7 +28,7 @@ NO `--backend rust` flag. `skyc build <entry>` emits a self-contained Cargo
 project under `sky-out/rust/` (the runtime vendored into `src/sky_runtime`), whose
 package/binary is `sky-app`. The sweep then runs `cargo build` on the emitted
 `Cargo.toml`. The build target is `sky.toml` when present (multi-module project
-discovery), else `src/Main.sky` (single-file). Verified against
+discovery), else `src/Main.ipe` (single-file). Verified against
 `crates/skyc/src/lib.rs` `run_build`.
 
 ## Phased Go≡Rust parity

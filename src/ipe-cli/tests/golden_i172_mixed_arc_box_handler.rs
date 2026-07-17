@@ -48,7 +48,7 @@ fn repo_root() -> PathBuf {
 }
 
 fn entry_path(root: &Path, fixture: &str) -> PathBuf {
-    root.join("tests").join("golden").join(fixture).join("Main.sky")
+    root.join("tests").join("golden").join(fixture).join("Main.ipe")
 }
 
 /// skyc-0 ∧ carrier-unification: the compiler must accept the program AND emit

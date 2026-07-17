@@ -51,11 +51,11 @@
 //!
 //! The fixture (`tests/golden/boundary_scheme_field_result/src/`) is a
 //! genuine 3-module project:
-//! - `Lib1.sky` — the unannotated cross-module getter (`getName r = r.name`).
-//! - `Lib2.sky` — the record type (`Person`) and a sample value, used at
+//! - `Lib1.ipe` — the unannotated cross-module getter (`getName r = r.name`).
+//! - `Lib2.ipe` — the record type (`Person`) and a sample value, used at
 //!   exactly ONE concrete type from `Main` (the shape the obligation-gate
 //!   fallback is supposed to keep monomorphic on the record parameter).
-//! - `Main.sky` — calls `Lib1.getName Lib2.samplePerson` and prints the
+//! - `Main.ipe` — calls `Lib1.getName Lib2.samplePerson` and prints the
 //!   result.
 //!
 //! Run:
@@ -83,7 +83,7 @@ fn class1_field_result_skyc_accepts_and_emits_concrete_getter() {
         .join("golden")
         .join("boundary_scheme_field_result")
         .join("src")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("class1_boundary_scheme_field_result_skyc_out");
     let _ = std::fs::remove_dir_all(&out);
@@ -144,7 +144,7 @@ fn class1_field_result_cargo_builds_and_runs() {
         .join("golden")
         .join("boundary_scheme_field_result")
         .join("src")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_class1_boundary_scheme_field_result_e2e");
     let _ = std::fs::remove_dir_all(&out);
 

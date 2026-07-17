@@ -38,7 +38,7 @@ import Sky.Core.Error exposing (Error)
 --
 -- Run + verify:
 --
---   sky run src/Main.sky
+--   sky run src/Main.ipe
 --   curl --no-buffer http://localhost:8001/relay
 --
 -- Expected: chunks appear progressively (alpha, beta, gamma, delta,

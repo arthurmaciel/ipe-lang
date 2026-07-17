@@ -952,7 +952,7 @@ impl Env {
             // String String); the `with*` builders + `defaultRequest` are ALSO
             // pure kernels (HttpRequest record-update emission in the backend) —
             // cross-module pure-Sky stdlib calls are not resolved by skyc, so the
-            // builders cannot live as pure Sky in Http.sky. Every name below is
+            // builders cannot live as pure Sky in Http.ipe. Every name below is
             // registered so `Http.foo` resolves during name-resolution and lands
             // as `Callee::Kernel` (see lower.rs ("Http", _) arms + constrain.rs
             // kernel_ty Http entries that give each its record type).

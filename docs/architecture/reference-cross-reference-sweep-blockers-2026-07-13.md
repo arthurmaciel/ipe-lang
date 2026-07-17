@@ -20,7 +20,7 @@ Reference supports BOTH `{}`-init and `LiveReq`-init via three mechanisms:
 3. **Discard wrapper for non-readers.** `ExprEmitter.hs:1686-1696`:
    `{ let __sky_init = init; move |_r: sky_runtime::LiveReq| __sky_init(()) }`.
    Runtime always calls `Fn(LiveReq)` (`runtime-rust/.../live/mod.rs:1082`); wrapper discards it.
-Reference examples: `examples/26-ui-showcase/src/Main.sky:22` (`{}`-init), `examples/09-live-counter/src/Main.sky:40`.
+Reference examples: `examples/26-ui-showcase/src/Main.ipe:22` (`{}`-init), `examples/09-live-counter/src/Main.ipe:40`.
 **FIX: MIRROR. The `{}`-init example is CORRECT.** Type init arg as free tvar; detect body-reads-req; emit discard-and-call-`()` wrapper for non-readers.
 
 ## #181 — polymorphic-kernel turbofish (E0282/E0283) — REFERENCE SOLVES (MIRROR)

@@ -3,7 +3,7 @@
 //! Mirrors runtime-go/rt/money_kernel.go.
 //!
 //! The Sky-side `Money` ADT carries a typed `Currency` enum + a `Decimal`
-//! amount. At the Ffi boundary, the wrappers in `sky-stdlib/Std/Money.sky`
+//! amount. At the Ffi boundary, the wrappers in `sky-stdlib/Std/Money.ipe`
 //! convert the Currency into its ISO 4217 code (a String) before calling
 //! these kernels — so every function below takes the code as a plain String.
 

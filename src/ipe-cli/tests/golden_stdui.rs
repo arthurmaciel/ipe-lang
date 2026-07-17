@@ -2,7 +2,7 @@
 //! `Ui.layout` / `Ui.column` / `Ui.el` / `Ui.text` / `Ui.spacing` /
 //! `Background.color` / `Font.bold` / `Html.htmlRender` end-to-end smoke test.
 //!
-//! The golden compiles `tests/golden/stdui/Main.sky` through `skyc`, builds
+//! The golden compiles `tests/golden/stdui/Main.ipe` through `skyc`, builds
 //! the emitted Rust project with the shared cargo target, runs the binary, and
 //! checks its stdout against the cached oracle
 //! (`tests/golden/stdui/oracle.meta` + `expected_go.txt`).
@@ -43,12 +43,12 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// Compile / build / run `tests/golden/stdui/Main.sky` and return the golden
+/// Compile / build / run `tests/golden/stdui/Main.ipe` and return the golden
 /// directory together with the run outcome. Gated on `IPE_E2E=1`.
 fn build_run_m7() -> (PathBuf, support::RunOutcome) {
     let root = repo_root();
     let dir = root.join("tests").join("golden").join("stdui");
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_m7_stdui_e2e");
     let _ = std::fs::remove_dir_all(&out);
 

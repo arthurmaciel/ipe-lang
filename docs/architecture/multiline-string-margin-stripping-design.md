@@ -55,7 +55,7 @@ output-changing Ipê departure.
   `MultiLine (T.unpack content)` — verbatim; `findTripleClose`
   (lines 176–188) does no processing. Zero margin stripping.
 - **Corpus:** 19 upstream examples use `"""`, essentially all as
-  SQL/DDL (`07-todo-cli/src/Main.sky:84-88`, `08-notes-app` etc.) where
+  SQL/DDL (`07-todo-cli/src/Main.ipe:84-88`, `08-notes-app` etc.) where
   the leaked indentation is semantically inert — which is why the
   departure is safe to take, and why it is *output-changing* (the
   bytes printed/stored change) without being *behaviour-breaking*.

@@ -70,7 +70,7 @@ fn assert_skyc_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::
         .join("tests")
         .join("golden")
         .join(fixture)
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 
@@ -107,7 +107,7 @@ fn f1_firstclass_curried_and_shadow() {
         .join("tests")
         .join("golden")
         .join("firstclass_curried");
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i121_firstclass_curried_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -170,7 +170,7 @@ fn f2_firstclass_arity0() {
         .join("tests")
         .join("golden")
         .join("firstclass_arity0");
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i121_firstclass_arity0_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -214,7 +214,7 @@ fn f3_partial_noncopy() {
         .join("tests")
         .join("golden")
         .join("partial_noncopy");
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i121_partial_noncopy_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -265,7 +265,7 @@ fn f4_lambda_capture_noncopy_and_f11_shadow() {
         .join("tests")
         .join("golden")
         .join("lambda_capture_noncopy");
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i121_lambda_capture_noncopy_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -312,7 +312,7 @@ fn f5_capture_fn_called_control() {
         .join("tests")
         .join("golden")
         .join("capture_fn_called");
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i121_capture_fn_called_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -366,7 +366,7 @@ fn f6_capture_fn_forwarded_promoted_accepts() {
         .join("tests")
         .join("golden")
         .join("capture_fn_forwarded")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i121_capture_fn_forwarded_accept");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -404,7 +404,7 @@ fn f7_succeed_curried() {
         .join("tests")
         .join("golden")
         .join("succeed_curried");
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i121_succeed_curried_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -449,7 +449,7 @@ fn f8_curried_three_arrows() {
         .join("tests")
         .join("golden")
         .join("curried_three_arrows");
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i121_curried_three_arrows_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -498,7 +498,7 @@ fn f9_decoder_thunk_capture() {
         .join("tests")
         .join("golden")
         .join("decoder_thunk_capture");
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i121_decoder_thunk_capture_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -573,7 +573,7 @@ fn f11_pipeline_custom_curried() {
         .join("tests")
         .join("golden")
         .join("pipeline_custom_curried");
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i121_pipeline_custom_curried_e2e");
     let _ = std::fs::remove_dir_all(&out);
 

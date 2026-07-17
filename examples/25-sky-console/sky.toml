@@ -1,5 +1,5 @@
 name = "sky-console"
-entry = "src/Main.sky"
+entry = "src/Main.ipe"
 
 [live]
 port = 8025

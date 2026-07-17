@@ -463,7 +463,7 @@ mod tests {
         sources.insert(
             vec!["Main".to_owned()],
             (
-                PathBuf::from("Main.sky"),
+                PathBuf::from("Main.ipe"),
                 "module Main exposing (main)\n".to_owned(),
             ),
         );
@@ -526,7 +526,7 @@ mod tests {
         added.insert(
             vec!["Extra".to_owned()],
             (
-                PathBuf::from("Extra.sky"),
+                PathBuf::from("Extra.ipe"),
                 "module Extra exposing (y)\ny = 2\n".to_owned(),
             ),
         );

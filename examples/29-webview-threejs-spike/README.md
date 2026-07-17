@@ -33,7 +33,7 @@ two-process dance collapses into a single Sky source file.
 
 ```bash
 cd examples/29-webview-threejs-spike
-sky run src/Main.sky
+sky run src/Main.ipe
 ```
 
 A native window opens, the Three.js scene paints, the FPS counter
@@ -61,7 +61,7 @@ just escalated — flag in the PR.
 
 ```
 sky.toml                 ← [live].static = "static" — the bug #370 gate
-src/Main.sky             ← Webview.app cfg + view that emits the HUD + canvas + script tags
+src/Main.ipe             ← Webview.app cfg + view that emits the HUD + canvas + script tags
 static/three.min.js      ← Three.js r158 UMD build (vendored, ~636 KB)
 static/scene.js          ← Animated 3D scene + HUD probes
 static/style.css         ← HUD + canvas chrome
@@ -69,7 +69,7 @@ static/style.css         ← HUD + canvas chrome
 
 That's the entire footprint. Compare to the pre-bug-#370 version,
 which carried an extra `webview_shim/` Go module + a Sky.Http.Server
-in `Main.sky` to hand-roll three `Server.get` handlers per static
+in `Main.ipe` to hand-roll three `Server.get` handlers per static
 file — gone.
 
 ## A note on the vendored Three.js version

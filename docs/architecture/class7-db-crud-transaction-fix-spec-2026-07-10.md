@@ -48,7 +48,7 @@
 
 ```
 skyc: error[IPE-T0001]: type mismatch
-  --> tests/golden/db_crud/Main.sky:18:29
+  --> tests/golden/db_crud/Main.ipe:18:29
    |
 18 |                             Db.insertRow txconn
    |                             ^^^^^^^^^^^^ expected List (String, String), found Dict String String
@@ -82,7 +82,7 @@ and `examples/27-*` (written against upstream) exercises the Dict surface.
 unsanctioned divergence from upstream. But `bdbc572` changed only the type
 scheme and left the two consumers of the old surface stale:
 
-* the golden fixture `tests/golden/db_crud/Main.sky:20,26` still passes
+* the golden fixture `tests/golden/db_crud/Main.ipe:20,26` still passes
   raw list-of-tuples literals (its header comment, lines 3–5, still
   describes the "Vec<(String,String)>→HashMap conversion");
 * the emitter arms `crates/sky_backend_rust/src/emit_expr.rs:1565`
@@ -121,7 +121,7 @@ not a gate.
 
 ### Fix
 
-1. **Fixture** — `tests/golden/db_crud/Main.sky`:
+1. **Fixture** — `tests/golden/db_crud/Main.ipe`:
    * line 20: `[ ( "id", "1" ), ( "name", "apple" ), ( "qty", "5" ) ]` →
      `(Dict.fromList [ ( "id", "1" ), ( "name", "apple" ), ( "qty", "5" ) ])`
    * line 26: `[ ( "qty", "10" ) ]` → `(Dict.fromList [ ( "qty", "10" ) ])`
@@ -170,7 +170,7 @@ error[E0308]: mismatched types
 ```
 
 from the fixture's `Task.fail "rollback-test"`
-(`tests/golden/db_transaction/Main.sky:49`).
+(`tests/golden/db_transaction/Main.ipe:49`).
 
 ### Root cause — `5db4cd3` turned `SkyError` into a real enum; the `Task.fail` scheme still admits any `e`
 
@@ -211,7 +211,7 @@ is exactly the failure class the project's own principles forbid.
 
 The over-polymorphic scheme also contradicts skyc's own bundled stdlib,
 which already declares the pinned form
-(`crates/skyc/stdlib/Sky/Core/Task.sky:33`):
+(`crates/skyc/stdlib/Sky/Core/Task.ipe:33`):
 
 ```elm
 fail : Error -> Task Error a
@@ -241,21 +241,21 @@ codegen with a proper IPE-T0001.
    ```
 
    One line. Aligns `fail` with `mapError`/`onError`'s already-pinned
-   channel and with `crates/skyc/stdlib/Sky/Core/Task.sky:33`.
+   channel and with `crates/skyc/stdlib/Sky/Core/Task.ipe:33`.
 
 2. **Fixtures** (all three call sites in the tree; verified via
    `rg 'Task\.fail "' crates/skyc/stdlib examples tests` — stdlib and
    examples have zero String-arg call sites, all examples already pass
    `Error.unexpected …` / `Error.io …` values):
-   * `tests/golden/db_transaction/Main.sky:49` →
+   * `tests/golden/db_transaction/Main.ipe:49` →
      `Task.fail (Error.unexpected "rollback-test")`
-   * `tests/golden/error_channel/Main.sky:12` →
+   * `tests/golden/error_channel/Main.ipe:12` →
      `Task.fail (Error.unexpected "an error")`
-   * `tests/golden/task_map_error_lambda/Main.sky:10` →
+   * `tests/golden/task_map_error_lambda/Main.ipe:10` →
      `Task.fail (Error.unexpected "an error")`
 
    The `Error.unexpected …` shape is already green end-to-end today:
-   `tests/golden/error_module/Main.sky` emits
+   `tests/golden/error_module/Main.ipe` emits
    `task_fail(sky_error_unexpected("boom".to_string()))` and passes a full
    `cargo check` (validated on a scratch emission at `2bc2a67`). Expected
    outputs unchanged: none of the three fixtures print the error value
@@ -264,7 +264,7 @@ codegen with a proper IPE-T0001.
    `crates/skyc/tests/golden_m5a_task.rs:17,26,95,117` quote the old source,
    refresh the quotes.
 
-3. **Stale prose** — `crates/skyc/stdlib/Sky/Core/Task.sky:6` still says
+3. **Stale prose** — `crates/skyc/stdlib/Sky/Core/Task.ipe:6` still says
    *"always `SkyError = String` at the Rust level"*; update to describe the
    `5db4cd3` enum (`SkyError::Error(kind, info)`).
 

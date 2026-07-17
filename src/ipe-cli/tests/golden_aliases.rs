@@ -11,11 +11,11 @@
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
 //! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the SAME
-//! `Main.sky` to stdout `42\n`, exit 0 — verified by hand in a temp dir (so the
+//! `Main.ipe` to stdout `42\n`, exit 0 — verified by hand in a temp dir (so the
 //! Go build artifacts never touch the reference tree):
 //!
 //! ```text
-//! $ cd "$(mktemp -d)" && cp Main.sky . && sky run Main.sky   # Go backend
+//! $ cd "$(mktemp -d)" && cp Main.ipe . && sky run Main.ipe   # Go backend
 //! 42
 //! ```
 //!
@@ -35,7 +35,7 @@ fn example_entry(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("aliases")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 #[test]

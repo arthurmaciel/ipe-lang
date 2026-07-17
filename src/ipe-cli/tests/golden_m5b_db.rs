@@ -21,7 +21,7 @@
 //!   is compiled with `SQLITE_THREADSAFE=2` (serialised mode); sqlx uses async
 //!   connection pooling.
 //!
-//! Running this `Main.sky` on the Go backend would require the full Go+cgo
+//! Running this `Main.ipe` on the Go backend would require the full Go+cgo
 //! `SQLite` toolchain and would produce byte-identical output, but is not part of
 //! the automated oracle-capture workflow (the oracle tool runs on this machine).
 //! The cached expected is ipê's own verified output.
@@ -103,13 +103,13 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
     root.join("tests").join("golden").join(name)
 }
 
-/// Compile `tests/golden/<name>/Main.sky`, build the emitted Cargo project, run
+/// Compile `tests/golden/<name>/Main.ipe`, build the emitted Cargo project, run
 /// it, and return the golden directory plus the run outcome. The caller gates on
 /// `IPE_E2E`. Fails the test on any build/runtime error.
 fn build_run(name: &str) -> (PathBuf, support::RunOutcome) {
     let root = repo_root();
     let dir = golden_dir(&root, name);
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
@@ -330,7 +330,7 @@ fn db_sql_decimal_money() {
 fn db_poly_params_compiles() {
     let root = repo_root();
     let dir = golden_dir(&root, "db_poly_params");
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("db_poly_params");
     let _ = std::fs::remove_dir_all(&out);
 

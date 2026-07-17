@@ -52,21 +52,21 @@ fn distinct_functions_folding_to_the_same_rust_name_are_rejected() {
         &tmp,
         &[
             (
-                "UiBorder.sky",
+                "UiBorder.ipe",
                 "module UiBorder exposing (rounded)\n\
                  import Sky.Core.Prelude exposing (..)\n\n\
                  rounded : Int -> Int\n\
                  rounded x = x\n",
             ),
             (
-                "Ui.sky",
+                "Ui.ipe",
                 "module Ui exposing (borderRounded)\n\
                  import Sky.Core.Prelude exposing (..)\n\n\
                  borderRounded : Int -> Int\n\
                  borderRounded x = x + 1\n",
             ),
             (
-                "Main.sky",
+                "Main.ipe",
                 "module Main exposing (main)\n\
                  import Sky.Core.Prelude exposing (..)\n\
                  import Std.Log exposing (println)\n\
@@ -78,7 +78,7 @@ fn distinct_functions_folding_to_the_same_rust_name_are_rejected() {
     );
     assert!(wrote, "must write the fixture project to a temp dir");
 
-    let entry = tmp.join("src").join("Main.sky");
+    let entry = tmp.join("src").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("aud08_function_name_collision_out");
     let _ = fs::remove_dir_all(&out);
 
@@ -125,14 +125,14 @@ fn distinct_functions_with_distinct_rust_names_are_accepted() {
         &tmp,
         &[
             (
-                "Lib.sky",
+                "Lib.ipe",
                 "module Lib exposing (helper)\n\
                  import Sky.Core.Prelude exposing (..)\n\n\
                  helper : Int -> Int\n\
                  helper x = x\n",
             ),
             (
-                "Main.sky",
+                "Main.ipe",
                 "module Main exposing (main)\n\
                  import Sky.Core.Prelude exposing (..)\n\
                  import Std.Log exposing (println)\n\
@@ -143,7 +143,7 @@ fn distinct_functions_with_distinct_rust_names_are_accepted() {
     );
     assert!(wrote, "must write the fixture project to a temp dir");
 
-    let entry = tmp.join("src").join("Main.sky");
+    let entry = tmp.join("src").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("aud08_function_name_collision_control_out");
     let _ = fs::remove_dir_all(&out);

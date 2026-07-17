@@ -5,7 +5,7 @@ Interactive counter using Sky.Live with server-sent events (SSE). Demonstrates t
 ## Build & Run
 
 ```bash
-sky build src/Main.sky
+sky build src/Main.ipe
 ./sky-out/app
 ```
 

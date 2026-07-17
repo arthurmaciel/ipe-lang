@@ -45,7 +45,7 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// Compile / build / run `tests/golden/input_callback_maybe_field/Main.sky`.
+/// Compile / build / run `tests/golden/input_callback_maybe_field/Main.ipe`.
 /// Gated on `IPE_E2E=1`. The `cargo build` step is where the seal is enforced:
 /// a `Box`-vs-`Arc` callback mismatch fails the build (E0308), failing this
 /// test hard.
@@ -55,7 +55,7 @@ fn build_run_input_callback() -> support::RunOutcome {
         .join("tests")
         .join("golden")
         .join("input_callback_maybe_field");
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_m7_input_callback_maybe_field_e2e");
     let _ = std::fs::remove_dir_all(&out);
 

@@ -966,13 +966,13 @@ mod tests {
                 path: Box::new([]),
             },
         };
-        let out = render(&d, "test.sky", src);
+        let out = render(&d, "test.ipe", src);
 
         assert!(
             out.starts_with("error[IPE-T0001]: type mismatch\n"),
             "header:\n{out}"
         );
-        assert!(out.contains("--> test.sky:4:5"), "location:\n{out}");
+        assert!(out.contains("--> test.ipe:4:5"), "location:\n{out}");
         assert!(out.contains("4 |     foo"), "source line:\n{out}");
         assert!(
             out.contains("^^^ expected Int, found List String"),
@@ -1001,7 +1001,7 @@ mod tests {
                 found: Box::new(TyDoc::Var("a".into())),
             },
         };
-        let out = render(&d, "test.sky", src);
+        let out = render(&d, "test.ipe", src);
         assert!(
             !out.contains("is not a non-function"),
             "double-negative template must not fire for the HOF label:\n{out}"
@@ -1018,7 +1018,7 @@ mod tests {
                 found: Box::new(con("String")),
             },
         };
-        let out2 = render(&generic, "test.sky", src);
+        let out2 = render(&generic, "test.ipe", src);
         assert!(
             out2.contains("String is not a Number type"),
             "generic template regressed:\n{out2}"
@@ -1031,7 +1031,7 @@ mod tests {
             where_: "lower",
             detail: "no region type".into(),
         };
-        let out = render(&d, "test.sky", "anything");
+        let out = render(&d, "test.ipe", "anything");
 
         assert!(out.starts_with("internal compiler error[IPE-I0001]: internal compiler error\n"));
         // No location / snippet band for a DUMMY span.
@@ -1058,8 +1058,8 @@ mod tests {
                 path: Box::new([]),
             },
         };
-        let out = render(&d, "f.sky", src);
-        assert!(out.contains("--> f.sky:2:5"), "clamped location:\n{out}");
+        let out = render(&d, "f.ipe", src);
+        assert!(out.contains("--> f.ipe:2:5"), "clamped location:\n{out}");
         // Underline is bounded by the end of the line, not the bogus hi.
         assert!(out.contains("^^^"), "clamped underline:\n{out}");
         assert!(
@@ -1075,12 +1075,12 @@ mod tests {
             span: Span::new(500, 600),
             msg: ParseError::IntLiteralOutOfRange,
         };
-        let _ = render(&d, "empty.sky", "");
+        let _ = render(&d, "empty.ipe", "");
         let d2 = Diagnostic::Type {
             span: Span::new(500, 600),
             msg: TypeError::Mismatch,
         };
-        let out = render(&d2, "empty.sky", "");
+        let out = render(&d2, "empty.ipe", "");
         assert!(out.contains("error[IPE-T0001]"));
     }
 
@@ -1093,7 +1093,7 @@ mod tests {
                 opener: Span::new(11, 12),
             },
         };
-        let out = render(&d, "p.sky", src);
+        let out = render(&d, "p.ipe", src);
         assert!(out.contains('^'), "primary underline:\n{out}");
         assert!(
             out.contains("- the unclosed delimiter opened here"),
@@ -1111,12 +1111,12 @@ mod tests {
                 suggestions: Box::new(["length".into(), "list".into()]),
             },
         };
-        let out = render(&d, "n.sky", "lenght\n");
+        let out = render(&d, "n.ipe", "lenght\n");
         let first = out.find("did you mean `length`?").unwrap_or(usize::MAX);
         let second = out.find("did you mean `list`?").unwrap_or(0);
         assert!(first < second, "producer order preserved:\n{out}");
         // Stable across runs: re-render must be byte-identical.
-        assert_eq!(out, render(&d, "n.sky", "lenght\n"));
+        assert_eq!(out, render(&d, "n.ipe", "lenght\n"));
         let _ = IPE_N0001;
     }
 
@@ -1133,7 +1133,7 @@ mod tests {
                 ])),
             },
         };
-        let out = render(&d, "t.sky", "5\n");
+        let out = render(&d, "t.ipe", "5\n");
         assert!(
             out.contains("found a number, expected an identifier, a constructor, or `(`"),
             "{out}"
@@ -1148,7 +1148,7 @@ mod tests {
                 constructor: "Red".into(),
             },
         };
-        let out = render(&d, "w.sky", "Red\n");
+        let out = render(&d, "w.ipe", "Red\n");
         assert!(
             out.starts_with("warning[IPE-T0011]: redundant case branch\n"),
             "{out}"
@@ -1167,13 +1167,13 @@ mod tests {
                 suggestions: Box::new(["length".into()]),
             },
         };
-        let out = render(&d, "n.sky", src);
+        let out = render(&d, "n.ipe", src);
         assert!(
             out.contains("= help: replace `lenght` with `length`"),
             "suggestion:\n{out}"
         );
         // Re-render is byte-identical (deterministic).
-        assert_eq!(out, render(&d, "n.sky", src));
+        assert_eq!(out, render(&d, "n.ipe", src));
     }
 
     #[test]
@@ -1182,7 +1182,7 @@ mod tests {
             where_: "lower",
             detail: "no region type".into(),
         };
-        let out = render(&d, "x.sky", "anything");
+        let out = render(&d, "x.ipe", "anything");
         assert!(
             out.contains("sorry about that"),
             "Elm-style apology:\n{out}"

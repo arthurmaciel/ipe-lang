@@ -37,7 +37,7 @@ fn i193_nonclone_fn_once_per_arm_rejected() {
         .join("tests")
         .join("golden")
         .join("nonclone_fn_once_per_arm")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("i193_nonclone_fn_once_per_arm_out");
     let _ = std::fs::remove_dir_all(&out);

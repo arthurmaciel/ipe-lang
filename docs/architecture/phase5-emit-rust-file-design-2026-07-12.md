@@ -426,7 +426,7 @@ hand-rolled ones):
 /// files`'s own manifest-is-authoritative discipline one layer up, in the
 /// TEST harness rather than the driver.
 ///
-/// `golden_dir` may contain OTHER, non-emitted fixture files (`Main.sky`,
+/// `golden_dir` may contain OTHER, non-emitted fixture files (`Main.ipe`,
 /// `expected_go.txt`, `oracle.meta`) — the walk is scoped to exactly the
 /// relative-path KEYS `emitted` declares (`src/**/*.rs` + root
 /// `Cargo.toml`), never a blind recursive diff of the whole directory, so
@@ -612,7 +612,7 @@ throws away that granularity for the sole benefit of a smaller golden diff —
 rejected under the no-deferral / root-cause principle.
 
 **Note on `golden_cross_module_type_res.rs`.** This existing test (multi-
-`.sky`-file examples 16/17) asserts `skyc::build` exits 0 — it does NOT
+`.ipe`-file examples 16/17) asserts `skyc::build` exits 0 — it does NOT
 byte-compare `main.rs`. It is UNAFFECTED by this spec either way (it never
 touches the golden-dir byte-comparison harness), but it IS a genuine
 existing multi-module program at the SOURCE level. Worth a follow-up note
@@ -1405,17 +1405,17 @@ sky_backend_rust golden`).
 
 ### Task 11 — a NEW multi-module + `Std.Db` pilot fixture, at TODAY's (pre-split) single-file shape
 
-**Files:** create `tests/golden/multi_mod_split_pilot/Main.sky`; create
-`tests/golden/multi_mod_split_pilot/Lib.sky`; create
+**Files:** create `tests/golden/multi_mod_split_pilot/Main.ipe`; create
+`tests/golden/multi_mod_split_pilot/Lib.ipe`; create
 `tests/golden/multi_mod_split_pilot/main.rs` (golden, single-file shape);
 create `tests/golden/multi_mod_split_pilot/Cargo.toml`; create
 `crates/skyc/tests/golden_multi_mod_split_pilot.rs`.
 
 **Steps:**
 
-1. Write minimal two-module Sky source: `Lib.sky` declares one small
+1. Write minimal two-module Sky source: `Lib.ipe` declares one small
    function, one small enum, AND one `Std.Db` call (e.g. `Db.query`/
-   `Db.exec` against a trivial table) so `uses_db` is true; `Main.sky`
+   `Db.exec` against a trivial table) so `uses_db` is true; `Main.ipe`
    imports and uses both, plus defines `main`. The `Std.Db` call is
    deliberate, not incidental — it makes this the ONE fixture that
    exercises the multi-module split AND the `SqlValue`/`SqlField`
@@ -1640,7 +1640,7 @@ is green — a verified fact backed by a `git diff` artifact and a per-project
      node is still expected to re-run given `lower_program`'s coarse
      re-execution; the useful assertion is value-equality, not
      zero-executions).
-   - `program_rust_file_ids_tracks_module_add_delete` — add a third `.sky`
+   - `program_rust_file_ids_tracks_module_add_delete` — add a third `.ipe`
      module (with a distinct `home`) to the warm session's `SourceRoot`;
      assert the returned `BTreeSet<RustFileId>` grows by one.
 
@@ -1704,7 +1704,7 @@ end to end, with THE SEAL and the parity gate both still holding.
 1. Failing test: build a warm session (mirroring
    `clean_vs_incremental_parity.rs`'s `WarmSession` shape) over the Task-11
    pilot fixture's TWO modules; demand `emit_manifest`; edit ONLY
-   `Lib.sky`'s body (no signature/export change); re-demand
+   `Lib.ipe`'s body (no signature/export change); re-demand
    `emit_manifest`; assert via the `SkyDatabase::with_event_callback`
    mechanism (Phase 1 §3.1's own memo-hit proof mechanism) that
    `emit_rust_file` fires a `WillExecute` for `Lib`'s `RustFileId` but

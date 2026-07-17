@@ -32,7 +32,7 @@ fn build_fixture(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>
         .join("tests")
         .join("golden")
         .join(fixture)
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 

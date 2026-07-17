@@ -439,7 +439,7 @@ the **whole-project key surface**, behind a **version-epoch directory prefix**.
   address includes the `file_set()`-derived module identity + resolved import
   targets + emitted `mod` list.
 - **`ipe add` dependency change invalidates:** change app-crate `Cargo.toml`
-  `[dependencies]` without touching any `.sky`; assert the cached crate is not
+  `[dependencies]` without touching any `.ipe`; assert the cached crate is not
   reused (address includes the `Cargo.toml` content hash).
 - **Compiler upgrade wipes wholesale:** bump `compiler_revision`; assert the whole
   prior epoch directory is abandoned (H14), never per-entry-trusted across versions.
@@ -474,7 +474,7 @@ that binary).
 **Test first.** A symlink resolving outside the project root is **refused**
 (`WatchedPath` un-constructible); an excluded dir event (`sky-out/`, `.ipe/`,
 `target/`, `.git/`) is dropped at the source; event queue is bounded.
-**Do.** Allowlist: `sky.toml`, entry dir recursive `.sky` walk, `tests/`,
+**Do.** Allowlist: `sky.toml`, entry dir recursive `.ipe` walk, `tests/`,
 `~/.cache/ipe/ffi/rust/*.ipei` + `kernel.json` (read-only). **Watch directories,
 not inodes** (editors tmp-write+rename). Canonicalise every discovered path;
 `WatchedPath` only constructible from an in-root canonical path. Bound watched-file

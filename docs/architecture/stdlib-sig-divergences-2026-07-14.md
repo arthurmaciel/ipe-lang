@@ -1,6 +1,6 @@
 # Stdlib signature-divergence audit — 2026-07-14
 
-Audit of the 30 embedded `.sky` modules in `crates/skyc/stdlib/` against the
+Audit of the 30 embedded `.ipe` modules in `crates/skyc/stdlib/` against the
 upstream reference (`../sky/sky-stdlib/`) and the Rust kernel registry
 (`scripts/ipe-index parity --gaps`).
 
@@ -128,33 +128,33 @@ Semantically identical — same `UiGridTracksRaw` kernel. No action required.
 
 | File | Status |
 |---|---|
-| `Sky/Core/Basics.sky` | ok |
-| `Sky/Core/Maybe.sky` | ok |
-| `Sky/Core/Result.sky` | ok |
-| `Sky/Core/List.sky` | ok |
-| `Sky/Core/String.sky` | ok |
-| `Sky/Core/Char.sky` | ok |
-| `Sky/Core/Dict.sky` | ok |
-| `Sky/Core/Set.sky` | ok |
-| `Sky/Core/Bytes.sky` | ok |
-| `Sky/Core/Crypto.sky` | ok |
-| `Sky/Core/Task.sky` | ok |
-| `Sky/Core/Io.sky` | ok |
-| `Sky/Core/Time.sky` | DIVERGES — 7 missing functions (section 2.1) |
-| `Sky/Core/System.sky` | DIVERGES — 1 missing function (section 2.3) |
-| `Sky/Core/Random.sky` | DIVERGES — 1 wrong sig + 8 missing (sections 1.1 and 2.2) |
-| `Sky/Core/File.sky` | EXTRA — `delete` not in upstream (section 3.1) |
-| `Sky/Core/Http.sky` | ok |
-| `Sky/Core/Math.sky` | ok |
-| `Sky/Core/ToString.sky` | ok (COMPILED_STD_MODULES) |
-| `Sky/Test.sky` | ok (COMPILED_STD_MODULES) |
-| `Std/Css.sky` | ok (COMPILED_STD_MODULES) |
-| `Std/Palette.sky` | ok (COMPILED_STD_MODULES) |
-| `Std/Live/Head.sky` | ok (COMPILED_STD_MODULES) |
-| `Std/Money.sky` | ok (COMPILED_STD_MODULES) |
-| `Std/Ui/Responsive.sky` | ok (COMPILED_STD_MODULES) |
-| `Std/Ui/Chart.sky` | ok (COMPILED_STD_MODULES) |
-| `Std/Ui/Grid.sky` | COSMETIC — import style differs (section 4.1) |
-| `Std/Ui/Transition.sky` | ok (COMPILED_STD_MODULES) |
-| `Std/Ui/Transform.sky` | ok (COMPILED_STD_MODULES) |
-| `Std/Ui/Animation.sky` | ok (COMPILED_STD_MODULES) |
+| `Sky/Core/Basics.ipe` | ok |
+| `Sky/Core/Maybe.ipe` | ok |
+| `Sky/Core/Result.ipe` | ok |
+| `Sky/Core/List.ipe` | ok |
+| `Sky/Core/String.ipe` | ok |
+| `Sky/Core/Char.ipe` | ok |
+| `Sky/Core/Dict.ipe` | ok |
+| `Sky/Core/Set.ipe` | ok |
+| `Sky/Core/Bytes.ipe` | ok |
+| `Sky/Core/Crypto.ipe` | ok |
+| `Sky/Core/Task.ipe` | ok |
+| `Sky/Core/Io.ipe` | ok |
+| `Sky/Core/Time.ipe` | DIVERGES — 7 missing functions (section 2.1) |
+| `Sky/Core/System.ipe` | DIVERGES — 1 missing function (section 2.3) |
+| `Sky/Core/Random.ipe` | DIVERGES — 1 wrong sig + 8 missing (sections 1.1 and 2.2) |
+| `Sky/Core/File.ipe` | EXTRA — `delete` not in upstream (section 3.1) |
+| `Sky/Core/Http.ipe` | ok |
+| `Sky/Core/Math.ipe` | ok |
+| `Sky/Core/ToString.ipe` | ok (COMPILED_STD_MODULES) |
+| `Sky/Test.ipe` | ok (COMPILED_STD_MODULES) |
+| `Std/Css.ipe` | ok (COMPILED_STD_MODULES) |
+| `Std/Palette.ipe` | ok (COMPILED_STD_MODULES) |
+| `Std/Live/Head.ipe` | ok (COMPILED_STD_MODULES) |
+| `Std/Money.ipe` | ok (COMPILED_STD_MODULES) |
+| `Std/Ui/Responsive.ipe` | ok (COMPILED_STD_MODULES) |
+| `Std/Ui/Chart.ipe` | ok (COMPILED_STD_MODULES) |
+| `Std/Ui/Grid.ipe` | COSMETIC — import style differs (section 4.1) |
+| `Std/Ui/Transition.ipe` | ok (COMPILED_STD_MODULES) |
+| `Std/Ui/Transform.ipe` | ok (COMPILED_STD_MODULES) |
+| `Std/Ui/Animation.ipe` | ok (COMPILED_STD_MODULES) |

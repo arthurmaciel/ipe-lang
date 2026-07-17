@@ -11,7 +11,7 @@
 //! ## Oracle provenance
 //!
 //! All three goldens are TRUE Go-parity goldens (`oracle_divergence = false`):
-//! the Go reference compiler compiled the identical `Main.sky` and produced the
+//! the Go reference compiler compiled the identical `Main.ipe` and produced the
 //! captured `expected_go.txt`.  The test asserts byte-identity of stdout with
 //! the Go output.
 //!
@@ -51,13 +51,13 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
     root.join("tests").join("golden").join(name)
 }
 
-/// Compile `tests/golden/<name>/Main.sky` through skyc, build the emitted Rust
+/// Compile `tests/golden/<name>/Main.ipe` through skyc, build the emitted Rust
 /// project with the shared cargo target, run the binary, and return the golden
 /// directory plus the run outcome. Gated on `IPE_E2E=1`.
 fn build_run(name: &str) -> (PathBuf, support::RunOutcome) {
     let root = repo_root();
     let dir = golden_dir(&root, name);
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
@@ -153,7 +153,7 @@ fn http_response_fields() {
 #[test]
 fn http_default_request_emits_without_signature_consumer() {
     let root = repo_root();
-    let entry = golden_dir(&root, "http_response_fields").join("Main.sky");
+    let entry = golden_dir(&root, "http_response_fields").join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_m5b_http_default_request_no_sig_emit");
     let _ = std::fs::remove_dir_all(&out);
 

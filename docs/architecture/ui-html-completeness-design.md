@@ -103,7 +103,7 @@ Upstream's *actual* completeness mechanism is that `Std.Ui`/`Std.Html` are
 render/escape kernels + an opaque-ADT type bridge; the ~160 members need *no*
 per-member id. That is genuinely superior on P4/P5/P6 and is the recorded
 **north-star**: as the Rust canon/type/lower gain the ability to ingest the full
-`sky-stdlib/Std/{Ui,Html}.sky` ADT surface (List, records, closures-in-ADT-
+`sky-stdlib/Std/{Ui,Html}.ipe` ADT surface (List, records, closures-in-ADT-
 fields — largely post-M0), each `Backed` batch below can be *retired to pure
 Sky*, thinning the manifest. It is **rejected as the immediate #76 deliverable**
 (see §6) because the port is kernel-backed today and cannot yet compile that
@@ -287,7 +287,7 @@ docs/divergences-from-sky.md             (layout-sentinel divergence; numeric-en
   as the immediate deliverable, adopted as north-star.** Weighed critically: it
   is genuinely superior on P4/P5/P6 (0 per-member wiring, HM-checked like user
   code) and is what upstream actually does. But the Rust port is kernel-backed
-  *today*; compiling the full `Std/{Ui,Html}.sky` ADT surface needs canon/type/
+  *today*; compiling the full `Std/{Ui,Html}.ipe` ADT surface needs canon/type/
   lower to ingest List, records, and closures-in-ADT-fields (largely post-M0).
   Shipping it now would block #76 on a multi-milestone dependency. The chosen
   kernel-backed manifest is the **bridge that thins toward pure Sky**: each

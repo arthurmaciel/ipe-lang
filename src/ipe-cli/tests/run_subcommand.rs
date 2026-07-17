@@ -43,7 +43,7 @@ fn run_no_args_returns_usage_error() {
 fn run_unknown_flag_returns_usage_error() {
     let args: Vec<String> = vec![
         "run".to_owned(),
-        "Main.sky".to_owned(),
+        "Main.ipe".to_owned(),
         "--bogus-flag".to_owned(),
     ];
     let result = skyc::run_cli(&args);
@@ -57,7 +57,7 @@ fn run_unknown_flag_returns_usage_error() {
 // E2E test — only active when IPE_E2E=1 (requires cargo + runtime)
 // ---------------------------------------------------------------------------
 
-/// `skyc run <entry.sky>` must:
+/// `skyc run <entry.ipe>` must:
 ///   1. Compile the Sky program (exit 0 from skyc pipeline).
 ///   2. Invoke `cargo build` on the emitted project (SEAL check).
 ///   3. Exec the resulting binary; its stdout must equal `"hello from run\n"`.
@@ -86,7 +86,7 @@ fn run_subcommand_builds_and_executes_hello_program() {
     // Write the source file into a temp directory.
     let dir = std::env::temp_dir().join("skyc_run_subcommand_e2e");
     let _ = fs::remove_dir_all(&dir);
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let created = fs::create_dir_all(&dir).and_then(|()| fs::write(&entry, SRC));
     assert!(created.is_ok(), "write source: {created:?}");
 

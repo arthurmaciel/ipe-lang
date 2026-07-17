@@ -52,11 +52,11 @@
 //! 3-module project, mirroring `examples/17-skymon`'s actual
 //! `Lib.Database`/`Lib.Alerts`/`Lib.Monitors` cross-module shape:
 //!
-//! - `Lib1.sky` — `queryOrLog` / `execOrLog`, the unannotated wrapper
+//! - `Lib1.ipe` — `queryOrLog` / `execOrLog`, the unannotated wrapper
 //!   functions around `Db.query` / `Db.exec`.
-//! - `Lib2.sky` — calls `Lib1.execOrLog` with a `List SqlValue` (typed
+//! - `Lib2.ipe` — calls `Lib1.execOrLog` with a `List SqlValue` (typed
 //!   mixed-param path).
-//! - `Main.sky` — calls `Lib1.execOrLog` with BOTH the empty list `[]` (the
+//! - `Main.ipe` — calls `Lib1.execOrLog` with BOTH the empty list `[]` (the
 //!   trigger, twice — a DDL statement and a no-bind-params `DELETE`)
 //!   AND a non-empty `List SqlValue`, then `Lib1.queryOrLog` with `[]` to
 //!   read the rows back. `args` stays `List SqlValue` at every non-empty
@@ -91,7 +91,7 @@ fn db_wrapper_empty_params_165_skyc_accepts_and_emits_sql_param_bound() {
         .join("golden")
         .join("db_wrapper_empty_params_165")
         .join("src")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("db_wrapper_empty_params_165_skyc_out");
     let _ = std::fs::remove_dir_all(&out);
@@ -158,7 +158,7 @@ fn db_wrapper_empty_params_165_cargo_builds_and_runs() {
         .join("golden")
         .join("db_wrapper_empty_params_165")
         .join("src")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_db_wrapper_empty_params_165_e2e");
     let _ = std::fs::remove_dir_all(&out);
 

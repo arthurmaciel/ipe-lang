@@ -51,7 +51,7 @@ incremental DB), `sky_intern`, `sky_watch`; `skyc` = driver + CLI. Runtime
 impls live in `runtime/src/sky_runtime/`.
 
 **skyc CLI:** subcommands `build` / `run` / `watch` / `explain` / `fix`.
-`skyc build <src/Main.sky | sky.toml> --out sky-out/rust`. Binary =
+`skyc build <src/Main.ipe | sky.toml> --out sky-out/rust`. Binary =
 `target/release/skyc` (`cargo build --release -p skyc`);
 `source scripts/lib/env.sh` sets `SKYC_BIN` + `IPE_RUNTIME_DIR`.
 
@@ -64,9 +64,9 @@ of the `KNOWN_UNBACKED` bucket), `sky_lower` (arity table +
 (module registration). Template to seal a new stdlib module:
 `crates/skyc/tests/golden_stdlib_module_seal.rs`.
 
-**Examples + sweep:** an example = `examples/NN-name/src/Main.sky` (+ other
-`.sky` modules, `sky.toml`). The `build_set` is **disk-derived**
-(`scripts/lib/examples.sh`) — every `examples/NN-*/src/Main.sky` whose imports
+**Examples + sweep:** an example = `examples/NN-name/src/Main.ipe` (+ other
+`.ipe` modules, `sky.toml`). The `build_set` is **disk-derived**
+(`scripts/lib/examples.sh`) — every `examples/NN-*/src/Main.ipe` whose imports
 resolve is auto-included; adding the dir IS the registration.
 `scripts/equivalence-checks/examples-sweep.sh`, per example: `skyc build … --out sky-out/rust` →
 `cargo build --manifest-path sky-out/rust/Cargo.toml` → run
@@ -79,7 +79,7 @@ vendored into `src/sky_runtime/` (skyc copies from `IPE_RUNTIME_DIR`), default
 binary `sky-app`, edition 2024.
 
 **Golden tests** (`crates/skyc/tests/golden_*.rs`): a golden =
-`tests/golden/<name>/Main.sky` + `main.rs` (expected emit, **byte-compared**)
+`tests/golden/<name>/Main.ipe` + `main.rs` (expected emit, **byte-compared**)
 + a cached Go oracle (`expected_go.txt` / `oracle.meta`). Default run =
 byte-identity of the emit (fast, no cargo). `IPE_E2E=1` = build+run the
 emitted project (THE SEAL: skyc-0 ⇒ cargo-0). Oracle files are regenerated

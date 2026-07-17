@@ -493,7 +493,7 @@ pub fn result_traverse<T0, T1, E>(
 // indexed or unwrapped. No panic, no `unsafe`, no allocation beyond the result.
 
 /// `Result.map2 : (a -> b -> v) -> Result e a -> Result e b -> Result e v`.
-/// First `Err` in (ra, rb) order wins — matches the nested-case `.sky` def.
+/// First `Err` in (ra, rb) order wins — matches the nested-case `.ipe` def.
 pub fn result_map2<E, A, B, V>(
     f: impl FnOnce(A, B) -> V,
     ra: IpeResult<E, A>,
@@ -593,7 +593,7 @@ pub fn result_map5<Er, A, B, C, D, E, V>(
     IpeResult::Ok(f(a, b, c, d, e_val))
 }
 
-/// `Result.andMap : Result e a -> Result e (a -> b) -> Result e b`. The `.sky`
+/// `Result.andMap : Result e a -> Result e (a -> b) -> Result e b`. The `.ipe`
 /// definition inspects the FUNCTION result first, so its `Err` wins over the
 /// value's `Err`. The function is applied only when BOTH are `Ok`.
 pub fn result_and_map<E, A, B, F: FnOnce(A) -> B>(
@@ -721,7 +721,7 @@ pub fn maybe_map5<A, B, C, D, E, V>(
 }
 
 /// `Maybe.andMap : Maybe a -> Maybe (a -> b) -> Maybe b`. Function-Maybe
-/// inspected first (matches the `.sky` definition).
+/// inspected first (matches the `.ipe` definition).
 pub fn maybe_and_map<A, B, F: FnOnce(A) -> B>(
     ma: IpeMaybe<A>,
     mf: IpeMaybe<F>,

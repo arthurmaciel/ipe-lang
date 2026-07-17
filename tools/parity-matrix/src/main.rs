@@ -1006,7 +1006,7 @@ fn scan_lower_arms(src: &str) -> HashSet<String> {
     set
 }
 
-/// Scan sky-stdlib `.sky` files for `qualifier.member` symbols.
+/// Scan sky-stdlib `.ipe` files for `qualifier.member` symbols.
 ///
 /// Strategy: look for `Ffi.kernel "name"` patterns (kernel bindings) and also
 /// for bare `name : type` top-level declarations.  We derive the qualifier from
@@ -1049,60 +1049,60 @@ fn scan_sky_stdlib_dir(dir: &Path, set: &mut HashSet<(String, String)>) -> Resul
     Ok(())
 }
 
-/// Convert a `.sky` file path to a canonical qualifier short-name.
+/// Convert a `.ipe` file path to a canonical qualifier short-name.
 fn path_to_qualifier(path: &Path) -> String {
     // Look for the segment after `sky-stdlib/` and map to qualifier.
     let path_str = path.to_string_lossy();
     // Map known module paths to their canonical qualifiers.
     let mappings: &[(&str, &str)] = &[
-        ("Sky/Core/String.sky", "String"),
-        ("Sky/Core/Char.sky", "Char"),
-        ("Sky/Core/List.sky", "List"),
-        ("Sky/Core/Maybe.sky", "Maybe"),
-        ("Sky/Core/Result.sky", "Result"),
-        ("Sky/Core/Error.sky", "Error"),
-        ("Sky/Core/Math.sky", "Math"),
-        ("Sky/Core/Dict.sky", "Dict"),
-        ("Sky/Core/Set.sky", "Set"),
-        ("Sky/Core/Bytes.sky", "Bytes"),
-        ("Sky/Core/Encoding.sky", "Encoding"),
-        ("Sky/Core/Crypto.sky", "Crypto"),
-        ("Sky/Core/Uuid.sky", "Uuid"),
-        ("Sky/Core/Jwt.sky", "Jwt"),
-        ("Sky/Core/Json/Encode.sky", "JsonEnc"),
-        ("Sky/Core/Json/Decode.sky", "JsonDec"),
-        ("Sky/Core/Json/Decode/Pipeline.sky", "JsonDecP"),
-        ("Sky/Core/Task.sky", "Task"),
-        ("Sky/Core/Io.sky", "Io"),
-        ("Sky/Core/Time.sky", "Time"),
-        ("Sky/Core/System.sky", "System"),
-        ("Sky/Core/Random.sky", "Random"),
-        ("Sky/Core/File.sky", "File"),
-        ("Sky/Core/Http.sky", "Http"),
-        ("Sky/Core/CssSafety.sky", "CssSafety"),
-        ("Sky/Core/Basics.sky", "Basics"),
-        ("Sky/Core/Prelude.sky", "Basics"),
-        ("Sky/Http/Server.sky", "Server"),
-        ("Sky/Http/Middleware.sky", "Middleware"),
-        ("Sky/Http/RateLimit.sky", "RateLimit"),
-        ("Std/Log.sky", "Log"),
-        ("Std/Cmd.sky", "Cmd"),
-        ("Std/Sub.sky", "Sub"),
-        ("Std/Db.sky", "Db"),
-        ("Std/Db/Decode.sky", "Db.Decode"),
-        ("Std/Ui.sky", "Ui"),
-        ("Std/Ui/Background.sky", "Background"),
-        ("Std/Ui/Border.sky", "Border"),
-        ("Std/Ui/Font.sky", "Font"),
-        ("Std/Ui/Region.sky", "Region"),
-        ("Std/Html.sky", "Html"),
-        ("Std/Html/Attributes.sky", "Attr"),
-        ("Std/Html/Events.sky", "Event"),
-        ("Std/Live.sky", "Live"),
-        ("Std/Tui.sky", "Tui"),
-        ("Std/Webview.sky", "Webview"),
-        ("Std/Cli.sky", "Cli"),
-        ("Std/Auth.sky", "Auth"),
+        ("Sky/Core/String.ipe", "String"),
+        ("Sky/Core/Char.ipe", "Char"),
+        ("Sky/Core/List.ipe", "List"),
+        ("Sky/Core/Maybe.ipe", "Maybe"),
+        ("Sky/Core/Result.ipe", "Result"),
+        ("Sky/Core/Error.ipe", "Error"),
+        ("Sky/Core/Math.ipe", "Math"),
+        ("Sky/Core/Dict.ipe", "Dict"),
+        ("Sky/Core/Set.ipe", "Set"),
+        ("Sky/Core/Bytes.ipe", "Bytes"),
+        ("Sky/Core/Encoding.ipe", "Encoding"),
+        ("Sky/Core/Crypto.ipe", "Crypto"),
+        ("Sky/Core/Uuid.ipe", "Uuid"),
+        ("Sky/Core/Jwt.ipe", "Jwt"),
+        ("Sky/Core/Json/Encode.ipe", "JsonEnc"),
+        ("Sky/Core/Json/Decode.ipe", "JsonDec"),
+        ("Sky/Core/Json/Decode/Pipeline.ipe", "JsonDecP"),
+        ("Sky/Core/Task.ipe", "Task"),
+        ("Sky/Core/Io.ipe", "Io"),
+        ("Sky/Core/Time.ipe", "Time"),
+        ("Sky/Core/System.ipe", "System"),
+        ("Sky/Core/Random.ipe", "Random"),
+        ("Sky/Core/File.ipe", "File"),
+        ("Sky/Core/Http.ipe", "Http"),
+        ("Sky/Core/CssSafety.ipe", "CssSafety"),
+        ("Sky/Core/Basics.ipe", "Basics"),
+        ("Sky/Core/Prelude.ipe", "Basics"),
+        ("Sky/Http/Server.ipe", "Server"),
+        ("Sky/Http/Middleware.ipe", "Middleware"),
+        ("Sky/Http/RateLimit.ipe", "RateLimit"),
+        ("Std/Log.ipe", "Log"),
+        ("Std/Cmd.ipe", "Cmd"),
+        ("Std/Sub.ipe", "Sub"),
+        ("Std/Db.ipe", "Db"),
+        ("Std/Db/Decode.ipe", "Db.Decode"),
+        ("Std/Ui.ipe", "Ui"),
+        ("Std/Ui/Background.ipe", "Background"),
+        ("Std/Ui/Border.ipe", "Border"),
+        ("Std/Ui/Font.ipe", "Font"),
+        ("Std/Ui/Region.ipe", "Region"),
+        ("Std/Html.ipe", "Html"),
+        ("Std/Html/Attributes.ipe", "Attr"),
+        ("Std/Html/Events.ipe", "Event"),
+        ("Std/Live.ipe", "Live"),
+        ("Std/Tui.ipe", "Tui"),
+        ("Std/Webview.ipe", "Webview"),
+        ("Std/Cli.ipe", "Cli"),
+        ("Std/Auth.ipe", "Auth"),
     ];
     for (suffix, qual) in mappings {
         if path_str.contains(suffix) {

@@ -325,17 +325,17 @@ mod tests {
         // Test that the resolution helper maps `Sky.Core.List` to the sky-stdlib path.
         use crate::query::resolve_edges;
         let s = Store::open(":memory:").unwrap();
-        s.put_file("sky-stdlib/Sky/Core/List.sky", "sky", "stdlib-sky", 0, "").unwrap();
-        s.put_file("sky-stdlib/Sky/Core/Maybe.sky", "sky", "stdlib-sky", 0, "").unwrap();
-        s.put_edge("sky-stdlib/Sky/Core/List.sky", "Sky.Core.Maybe", "import").unwrap();
+        s.put_file("sky-stdlib/Sky/Core/List.ipe", "sky", "stdlib-sky", 0, "").unwrap();
+        s.put_file("sky-stdlib/Sky/Core/Maybe.ipe", "sky", "stdlib-sky", 0, "").unwrap();
+        s.put_edge("sky-stdlib/Sky/Core/List.ipe", "Sky.Core.Maybe", "import").unwrap();
         // resolve_edges needs a repo path; use "." since we only test the known-set logic.
         // We fake the known set by having the file in files table.
         resolve_edges(&s, ".").unwrap();
         // Check resolved
         let resolved: Option<String> = s.conn.query_row(
-            "SELECT resolved FROM edges WHERE src='sky-stdlib/Sky/Core/List.sky' AND dst='Sky.Core.Maybe'",
+            "SELECT resolved FROM edges WHERE src='sky-stdlib/Sky/Core/List.ipe' AND dst='Sky.Core.Maybe'",
             [], |r| r.get(0)
         ).unwrap();
-        assert_eq!(resolved.as_deref(), Some("sky-stdlib/Sky/Core/Maybe.sky"));
+        assert_eq!(resolved.as_deref(), Some("sky-stdlib/Sky/Core/Maybe.ipe"));
     }
 }

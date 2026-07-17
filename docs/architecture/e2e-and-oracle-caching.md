@@ -15,7 +15,7 @@
   (tokio/rsa/syn/...) recompile per golden (×~18). sccache softens the rustc layer
   but link/codegen repeat. Also balloons /tmp to several GB per sweep.
 - The Go reference output is recomputed live every parity run, though it's a pure
-  function of (Main.sky, Go `sky` version) — independent of skyc.
+  function of (Main.ipe, Go `sky` version) — independent of skyc.
 
 ## Fix 1 — E2E emitted projects share ONE target
 Point every emitted-project `cargo build` at a single shared target (the global
@@ -39,10 +39,10 @@ per-project `/tmp/.../target`. Locate where the harness sets the per-project tar
 > The golden read path is `support::assert_go_parity` → `oracle::check_parity`
 > (NO live Go), wired into the M2-lex goldens. `oracle`'s unit tests pin all four
 > rigour invariants (match / stale / missing / divergence).
-Per golden, commit `expected_go.txt` + `oracle.meta` = { `hash(Main.sky)`,
+Per golden, commit `expected_go.txt` + `oracle.meta` = { `hash(Main.ipe)`,
 Go `sky` version }. Parity = run skyc, diff vs `expected_go.txt`. No Go build in the
 hot path; parity also runs with no Go binary present (helps headless cron/CI).
-- **Staleness gate:** if `hash(Main.sky) != stored hash` → FAIL "oracle stale —
+- **Staleness gate:** if `hash(Main.ipe) != stored hash` → FAIL "oracle stale —
   run refresh", never silently diff against a stale expected.
 - **`refresh-oracle` step** (run when a golden is added/changed or the Go pin bumps):
   rebuild Go, recapture `expected_go.txt`, update meta.

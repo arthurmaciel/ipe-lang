@@ -4,7 +4,7 @@
 //! element types (`List Int` and `List String`).
 //!
 //! Without the fix, `skyc build` FAILED with IPE-L0102 ("polymorphic value's type could
-//! not be determined") at the `[] ->` arm inside `Lib.sky`. The type-checker
+//! not be determined") at the `[] ->` arm inside `Lib.ipe`. The type-checker
 //! (`ipe_types`) correctly generalized the boundary scheme — its
 //! `untyped_type_params` entry listed the element var — but `ipe_lower`'s
 //! `lower_case` carried a stale gate that rejected ANY list `case` binding a
@@ -43,7 +43,7 @@ fn entry_path(root: &Path) -> PathBuf {
         .join("golden")
         .join("cross_module_poly_recursion")
         .join("src")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 /// skyc-0: the compiler must accept the 2-module program (no IPE-L0102) AND emit

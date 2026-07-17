@@ -11,13 +11,13 @@
 //!
 //! 1. Reads `sky.toml` to obtain the project name and confirm the source root
 //!    exists (`src/` by default).
-//! 2. Walks `src/` recursively, collecting every `*.sky` file.
+//! 2. Walks `src/` recursively, collecting every `*.ipe` file.
 //! 3. Maps each file path to a module name by:
-//!    - Stripping the `src/` prefix and `.sky` suffix.
+//!    - Stripping the `src/` prefix and `.ipe` suffix.
 //!    - Splitting on the OS path separator to obtain segment strings.
 //!    - Rejecting any segment that is not a valid Sky module segment
 //!      (`[A-Z][A-Za-z0-9_]*`).
-//! 4. The entry module is always `Main` (`src/Main.sky`).
+//! 4. The entry module is always `Main` (`src/Main.ipe`).
 //!
 //! # Topological sort
 //!
@@ -54,9 +54,9 @@ pub struct ProjectManifest {
 /// A discovered Sky source file with its resolved module path.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DiscoveredModule {
-    /// Absolute path to the `.sky` source file.
+    /// Absolute path to the `.ipe` source file.
     pub path: PathBuf,
-    /// Module path segments, e.g. `Lib/Utils.sky` → `["Lib", "Utils"]`.
+    /// Module path segments, e.g. `Lib/Utils.ipe` → `["Lib", "Utils"]`.
     pub module_path: Vec<String>,
 }
 
@@ -190,7 +190,7 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
 // Module discovery
 // ---------------------------------------------------------------------------
 
-/// Walk `src_root` recursively, collecting every `*.sky` file as a
+/// Walk `src_root` recursively, collecting every `*.ipe` file as a
 /// [`DiscoveredModule`].
 ///
 /// Files whose path contains a non-module-segment (e.g. lowercase first char
@@ -234,10 +234,10 @@ pub fn discover_modules(src_root: &Path) -> Result<Vec<DiscoveredModule>, CliErr
     Ok(result)
 }
 
-/// Map a `.sky` file path to a [`DiscoveredModule`], or `None` when the path
+/// Map a `.ipe` file path to a [`DiscoveredModule`], or `None` when the path
 /// contains a non-module segment.
 fn file_to_module(src_root: &Path, path: &Path) -> Option<DiscoveredModule> {
-    // Strip the src_root prefix and the .sky extension.
+    // Strip the src_root prefix and the .ipe extension.
     let rel = path.strip_prefix(src_root).ok()?;
     let without_ext = rel.with_extension("");
     // Split into segments using the OS path separator.
@@ -327,7 +327,7 @@ where
 /// `EmbeddedStdlib` source. A path is added to this set ONLY when a NEW synthetic
 /// entry is inserted; if `sources` already holds the key (a user file squatting
 /// on `Std.Palette`, or an earlier injection), injection is skipped and the path
-/// is NOT tagged trusted. So a hostile `src/Std/Palette.sky` is canonicalised as
+/// is NOT tagged trusted. So a hostile `src/Std/Palette.ipe` is canonicalised as
 /// `ModuleOrigin::User` and stays IPE-N0025-rejected.
 ///
 /// Efficiency (design §7): the worklist is seeded only from imports that match a
@@ -423,7 +423,7 @@ pub use ipe_db::extract_imports_from_source;
 mod tests {
     use super::*;
 
-    /// Write a minimal manifest + `src/Main.sky` under a fresh temp dir and
+    /// Write a minimal manifest + `src/Main.ipe` under a fresh temp dir and
     /// return the manifest path. `database_section` is spliced in verbatim
     /// (empty string → no `[database]` section at all).
     fn write_manifest(test_name: &str, database_section: &str) -> PathBuf {
@@ -432,10 +432,10 @@ mod tests {
         let src = tmp.join("src");
         fs::create_dir_all(&src).expect("create src/");
         fs::write(
-            src.join("Main.sky"),
+            src.join("Main.ipe"),
             "module Main exposing (main)\nmain = 0\n",
         )
-        .expect("write Main.sky");
+        .expect("write Main.ipe");
         let toml_path = tmp.join("sky.toml");
         fs::write(
             &toml_path,
@@ -531,11 +531,11 @@ import String
     fn topological_order_two_modules() {
         let modules = vec![
             DiscoveredModule {
-                path: PathBuf::from("src/Main.sky"),
+                path: PathBuf::from("src/Main.ipe"),
                 module_path: vec!["Main".to_owned()],
             },
             DiscoveredModule {
-                path: PathBuf::from("src/Lib/Utils.sky"),
+                path: PathBuf::from("src/Lib/Utils.ipe"),
                 module_path: vec!["Lib".to_owned(), "Utils".to_owned()],
             },
         ];
@@ -569,13 +569,13 @@ import String
         sources.insert(
             vec!["Main".to_owned()],
             (
-                PathBuf::from("src/Main.sky"),
+                PathBuf::from("src/Main.ipe"),
                 "module Main exposing (main)\nimport Std.Palette exposing (..)\nmain = 0\n"
                     .to_owned(),
             ),
         );
         let mut discovered = vec![DiscoveredModule {
-            path: PathBuf::from("src/Main.sky"),
+            path: PathBuf::from("src/Main.ipe"),
             module_path: vec!["Main".to_owned()],
         }];
 
@@ -597,13 +597,13 @@ import String
         sources.insert(
             vec!["Main".to_owned()],
             (
-                PathBuf::from("src/Main.sky"),
+                PathBuf::from("src/Main.ipe"),
                 "module Main exposing (main)\nimport Sky.Core.Prelude exposing (..)\nmain = 0\n"
                     .to_owned(),
             ),
         );
         let mut discovered = vec![DiscoveredModule {
-            path: PathBuf::from("src/Main.sky"),
+            path: PathBuf::from("src/Main.ipe"),
             module_path: vec!["Main".to_owned()],
         }];
 
@@ -624,7 +624,7 @@ import String
         sources.insert(
             vec!["Main".to_owned()],
             (
-                PathBuf::from("src/Main.sky"),
+                PathBuf::from("src/Main.ipe"),
                 "module Main exposing (main)\nimport Std.Palette exposing (..)\nmain = 0\n"
                     .to_owned(),
             ),
@@ -633,17 +633,17 @@ import String
         sources.insert(
             palette.clone(),
             (
-                PathBuf::from("src/Std/Palette.sky"),
+                PathBuf::from("src/Std/Palette.ipe"),
                 "module Std.Palette exposing (..)\ntoHex = 0\n".to_owned(),
             ),
         );
         let mut discovered = vec![
             DiscoveredModule {
-                path: PathBuf::from("src/Main.sky"),
+                path: PathBuf::from("src/Main.ipe"),
                 module_path: vec!["Main".to_owned()],
             },
             DiscoveredModule {
-                path: PathBuf::from("src/Std/Palette.sky"),
+                path: PathBuf::from("src/Std/Palette.ipe"),
                 module_path: palette.clone(),
             },
         ];
@@ -665,11 +665,11 @@ import String
     fn topological_order_detects_cycle() {
         let modules = vec![
             DiscoveredModule {
-                path: PathBuf::from("src/A.sky"),
+                path: PathBuf::from("src/A.ipe"),
                 module_path: vec!["A".to_owned()],
             },
             DiscoveredModule {
-                path: PathBuf::from("src/B.sky"),
+                path: PathBuf::from("src/B.ipe"),
                 module_path: vec!["B".to_owned()],
             },
         ];

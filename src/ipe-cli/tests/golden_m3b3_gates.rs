@@ -27,7 +27,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code)
         .join("tests")
         .join("golden")
         .join(fixture)
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 
@@ -64,7 +64,7 @@ fn redundant_branch_after_catch_all_is_sky_t0011_warning_build_succeeds() {
         .join("tests")
         .join("golden")
         .join("gate_redundant")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m3b3_gate_redundant_emit");
     let _ = std::fs::remove_dir_all(&out);
 

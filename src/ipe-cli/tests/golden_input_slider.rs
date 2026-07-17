@@ -19,7 +19,7 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// Compile `tests/golden/input_slider/Main.sky` and assert it succeeds.
+/// Compile `tests/golden/input_slider/Main.ipe` and assert it succeeds.
 /// Skips silently when the runtime cannot be resolved (CI without runtime dir).
 #[test]
 fn input_slider_typechecks_and_lowers() {
@@ -28,7 +28,7 @@ fn input_slider_typechecks_and_lowers() {
         .join("tests")
         .join("golden")
         .join("input_slider")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i148_input_slider_emit");
     let _ = std::fs::remove_dir_all(&out);
 

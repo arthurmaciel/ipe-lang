@@ -1129,7 +1129,7 @@ fn emit_http_call(
 ///
 /// * **`HttpWithHeader k v req`** — emits a prepend:
 ///   `{ let mut __sky_rec = (req).clone(); __sky_rec.headers.insert(0, (k, v)); __sky_rec }`.
-///   PREPEND (cons-prepend) matches the Go reference implementation in `Http.sky`
+///   PREPEND (cons-prepend) matches the Go reference implementation in `Http.ipe`
 ///   (`{ req | headers = (k, v) :: req.headers }`), so `withHeader "B" "2"` after
 ///   `withHeader "A" "1"` yields `B:2,A:1` in iteration order.
 ///
@@ -1800,7 +1800,7 @@ fn emit_db_call(
         }
         // ── DbMigrate: (conn, List Migration) → Task e (List String) ──
         // `Migration` is the record alias `{ name : String, sql : String }`
-        // (reference `Std/Db.sky:237`), lowered to the synthesised struct with
+        // (reference `Std/Db.ipe:237`), lowered to the synthesised struct with
         // those two fields. The runtime `db_migrate_apply` takes `Vec<(String,
         // String)>`, so map each record to a `(name, sql)` tuple — the exact
         // shape the reference's pure-Sky `migrate` produces via `List.map (\m ->
@@ -1818,7 +1818,7 @@ fn emit_db_call(
         }
         // ── DbDefaultMigration: String -> Migration ──────────────────────────
         // Pure record builder — a `Migration` named with an empty SQL body
-        // (reference `Std/Db.sky:246`). Emitted inline as the synthesised
+        // (reference `Std/Db.ipe:246`). Emitted inline as the synthesised
         // `{ name, sql }` struct literal so no runtime kernel is required.
         KernelFn::DbDefaultMigration => {
             let name_e = arg!(0, "name")?;

@@ -44,10 +44,10 @@ fn distinct_modules_sharing_an_explicit_alias_is_rejected() {
     let wrote = write_project(
         &tmp,
         &[
-            ("A.sky", "module A exposing (format)\nformat = \"from A\"\n"),
-            ("B.sky", "module B exposing (format)\nformat = \"from B\"\n"),
+            ("A.ipe", "module A exposing (format)\nformat = \"from A\"\n"),
+            ("B.ipe", "module B exposing (format)\nformat = \"from B\"\n"),
             (
-                "Main.sky",
+                "Main.ipe",
                 "module Main exposing (main)\n\
                  import A as Utils\n\
                  import B as Utils\n\n\
@@ -57,7 +57,7 @@ fn distinct_modules_sharing_an_explicit_alias_is_rejected() {
     );
     assert!(wrote, "must write the fixture project to a temp dir");
 
-    let entry = tmp.join("src").join("Main.sky");
+    let entry = tmp.join("src").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("aud14_duplicate_qualifier_out");
     let _ = fs::remove_dir_all(&out);
 
@@ -101,9 +101,9 @@ fn same_module_reimported_under_same_alias_is_accepted() {
     let wrote = write_project(
         &tmp,
         &[
-            ("A.sky", "module A exposing (format)\nformat = \"from A\"\n"),
+            ("A.ipe", "module A exposing (format)\nformat = \"from A\"\n"),
             (
-                "Main.sky",
+                "Main.ipe",
                 "module Main exposing (main)\n\
                  import A as Utils\n\
                  import A as Utils\n\n\
@@ -113,7 +113,7 @@ fn same_module_reimported_under_same_alias_is_accepted() {
     );
     assert!(wrote, "must write the fixture project to a temp dir");
 
-    let entry = tmp.join("src").join("Main.sky");
+    let entry = tmp.join("src").join("Main.ipe");
     let out =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("aud14_duplicate_qualifier_diamond_out");
     let _ = fs::remove_dir_all(&out);

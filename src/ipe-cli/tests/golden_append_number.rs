@@ -25,7 +25,7 @@ fn golden(name: &str) -> PathBuf {
         .join("tests")
         .join("golden")
         .join(name)
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 fn out(name: &str) -> PathBuf {

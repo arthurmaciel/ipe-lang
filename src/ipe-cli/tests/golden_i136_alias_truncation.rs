@@ -22,7 +22,7 @@ fn assert_builds(fixture: &str) {
         .join("tests")
         .join("golden")
         .join(fixture)
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(fixture);
     let _ = std::fs::remove_dir_all(&out);
 

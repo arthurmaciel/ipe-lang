@@ -4,7 +4,7 @@
 # Ported from ../sky/scripts/fuzz-well-typed.sh (Haskell backend, Go target).
 # KEY ADAPTATIONS — Rust/Ipê backend:
 #
-#   BUILD: skyc build src/Main.sky --out sky-out/rust
+#   BUILD: skyc build src/Main.ipe --out sky-out/rust
 #          cargo build --manifest-path sky-out/rust/Cargo.toml
 #          (binary: $CARGO_TARGET_DIR/debug/sky-app)
 #
@@ -540,10 +540,10 @@ EOF
 
 # ── Multi-module templates (constructs 19–22) ────────────────────────────────
 # Boundary Scheme Promotion follow-up (class1 spec §"Fuzzer additions"):
-# each writes a `Lib.sky` SIBLING next to `Main.sky` (two-file project) so the
+# each writes a `Lib.ipe` SIBLING next to `Main.ipe` (two-file project) so the
 # fuzzer exercises the cross-module untyped-boundary generalization path the
 # 2026-07-10 class-1 fix landed — single-file templates can never reach it.
-# Each template function takes the Lib.sky path as its FIRST argument.
+# Each template function takes the Lib.ipe path as its FIRST argument.
 
 # Template 19: cross-module 2-type reuse — an UNTYPED `ident x = x` in Lib,
 # instantiated at Int AND String from Main. Pre-fix this was the class-1
@@ -667,9 +667,9 @@ EOF
 
 # ── Template renderer ─────────────────────────────────────────────────────────
 # Total templates: 23 (6 original + 13 single-file + 4 multi-module).
-# kind = seed-derived mod 23. Kinds 19-22 write a Lib.sky sibling (the
+# kind = seed-derived mod 23. Kinds 19-22 write a Lib.ipe sibling (the
 # multi-file infrastructure lives inside render_template: dst is always
-# src/Main.sky, so Lib.sky lands next to it and skyc's module resolution
+# src/Main.ipe, so Lib.ipe lands next to it and skyc's module resolution
 # picks it up from the same src/ directory).
 render_template() {
     local seed=$1 dst=$2
@@ -727,13 +727,13 @@ render_template() {
         16) echo "maybeandmap";    template_maybe_andmap      "$n1" "$n2"        > "$dst" ;;
         17) echo "resultmap2";     template_result_map2       "$n1" "$n2"        > "$dst" ;;
         18) echo "multilineinterp"; template_multiline_interp "$n1" "$n2" "$str" > "$dst" ;;
-        # Multi-module kinds (19-22): Lib.sky is written as a sibling of dst
-        # (always src/Main.sky), exercising the class-1 boundary-scheme
+        # Multi-module kinds (19-22): Lib.ipe is written as a sibling of dst
+        # (always src/Main.ipe), exercising the class-1 boundary-scheme
         # promotion's cross-module generalization path.
-        19) echo "mm2typereuse";   template_mm_2type_reuse    "$(dirname "$dst")/Lib.sky" "$n1" "$str" > "$dst" ;;
-        20) echo "mmvaluebind";    template_mm_value_binding  "$(dirname "$dst")/Lib.sky" "$n1" "$str" > "$dst" ;;
-        21) echo "mmnumberhelper"; template_mm_number_helper  "$(dirname "$dst")/Lib.sky" "$n1" "$n2"  > "$dst" ;;
-        22) echo "mmrecpair";      template_mm_recursive_pair "$(dirname "$dst")/Lib.sky" "$lst" "$str" > "$dst" ;;
+        19) echo "mm2typereuse";   template_mm_2type_reuse    "$(dirname "$dst")/Lib.ipe" "$n1" "$str" > "$dst" ;;
+        20) echo "mmvaluebind";    template_mm_value_binding  "$(dirname "$dst")/Lib.ipe" "$n1" "$str" > "$dst" ;;
+        21) echo "mmnumberhelper"; template_mm_number_helper  "$(dirname "$dst")/Lib.ipe" "$n1" "$n2"  > "$dst" ;;
+        22) echo "mmrecpair";      template_mm_recursive_pair "$(dirname "$dst")/Lib.ipe" "$lst" "$str" > "$dst" ;;
     esac
 }
 
@@ -744,7 +744,7 @@ setup_project() {
     cat > "$dir/sky.toml" <<'EOF'
 name = "sky-fuzz-iter"
 version = "0.0.0"
-entry = "src/Main.sky"
+entry = "src/Main.ipe"
 EOF
 }
 
@@ -764,7 +764,7 @@ run_iter() {
 
     case "$mode" in
         template)
-            kind=$(render_template "$seed" "$iterdir/src/Main.sky")
+            kind=$(render_template "$seed" "$iterdir/src/Main.ipe")
             ;;
         corpus)
             # Replay a known-good corpus example — validates the compiler
@@ -775,33 +775,33 @@ run_iter() {
             # stdlib type error (unrelated to soundness under test) — skip it.
             local corpus_src=""
             for _corpus_cand in \
-                "$REPO/examples/01-hello-world/src/Main.sky" \
-                "$REPO/examples/14-task-demo/src/Main.sky"; do
+                "$REPO/examples/01-hello-world/src/Main.ipe" \
+                "$REPO/examples/14-task-demo/src/Main.ipe"; do
                 [[ -f "$_corpus_cand" ]] && { corpus_src="$_corpus_cand"; break; }
             done
             if [[ -n "$corpus_src" ]]; then
-                cp -f "$corpus_src" "$iterdir/src/Main.sky"
+                cp -f "$corpus_src" "$iterdir/src/Main.ipe"
                 kind="corpus"
             else
-                kind=$(render_template "$seed" "$iterdir/src/Main.sky")
+                kind=$(render_template "$seed" "$iterdir/src/Main.ipe")
                 kind="template-fallback"
             fi
             ;;
         composite|*)
             if (( seed % 2 == 0 )); then
-                kind=$(render_template "$seed" "$iterdir/src/Main.sky")
+                kind=$(render_template "$seed" "$iterdir/src/Main.ipe")
             else
                 local composite_corpus=""
                 for _cc in \
-                    "$REPO/examples/01-hello-world/src/Main.sky" \
-                    "$REPO/examples/14-task-demo/src/Main.sky"; do
+                    "$REPO/examples/01-hello-world/src/Main.ipe" \
+                    "$REPO/examples/14-task-demo/src/Main.ipe"; do
                     [[ -f "$_cc" ]] && { composite_corpus="$_cc"; break; }
                 done
                 if [[ -n "$composite_corpus" ]]; then
-                    cp -f "$composite_corpus" "$iterdir/src/Main.sky"
+                    cp -f "$composite_corpus" "$iterdir/src/Main.ipe"
                     kind="corpus"
                 else
-                    kind=$(render_template "$seed" "$iterdir/src/Main.sky")
+                    kind=$(render_template "$seed" "$iterdir/src/Main.ipe")
                 fi
             fi
             ;;
@@ -814,7 +814,7 @@ run_iter() {
     # ── Step 1: skyc build → emitted Rust project ──────────────────────────
     local skyc_rc=0
     if ! ( cd "$iterdir" && timeout "$BUILD_TIMEOUT" \
-           "$SKYC_BIN" build src/Main.sky --out sky-out/rust >"$buildlog" 2>&1 ); then
+           "$SKYC_BIN" build src/Main.ipe --out sky-out/rust >"$buildlog" 2>&1 ); then
         skyc_rc=$?
         echo "SKYC-BUILD-FAILED rc=$skyc_rc kind=$kind"
         return 1
@@ -908,7 +908,7 @@ run_tp_demo() {
 
     local tp_dir; tp_dir="$(mktemp -d "${TMPDIR:-/tmp}/sky-fuzz-tp.XXXXXX")"
     setup_project "$tp_dir"
-    cat > "$tp_dir/src/Main.sky" <<'EOF'
+    cat > "$tp_dir/src/Main.ipe" <<'EOF'
 module Main exposing (main)
 
 import Sky.Core.Prelude exposing (..)
@@ -924,7 +924,7 @@ EOF
 
     echo "[1/3] skyc build..."
     if ! ( cd "$tp_dir" && timeout "$BUILD_TIMEOUT" \
-           "$SKYC_BIN" build src/Main.sky --out sky-out/rust >"$buildlog" 2>&1 ); then
+           "$SKYC_BIN" build src/Main.ipe --out sky-out/rust >"$buildlog" 2>&1 ); then
         echo "RESULT: FAIL — program did not build (compiler bug)"
         echo "  Build log: $(cat "$buildlog")"
         rm -rf "$tp_dir"; return 1

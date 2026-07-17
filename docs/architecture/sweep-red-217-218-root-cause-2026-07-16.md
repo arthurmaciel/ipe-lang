@@ -16,7 +16,7 @@ Rust backend + Go runtime) per DEVELOPMENT.md §0a.
 
 ```
 skyc: error[IPE-T0001]: type mismatch
-  --> src/Auth.sky:47:42
+  --> src/Auth.ipe:47:42
    |
 47 |                 |> Jwt.withClaim "email" (JsonEnc.string payload.email)
    |                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected String, found Value
@@ -40,9 +40,9 @@ from the reference module's Sky-source signature.*
 
 | # | Symbol | Ours (drifted) | Reference (`../sky/sky-stdlib`) | Sites in example |
 |---|---|---|---|---|
-| 1 | `Jwt.withClaim` | `String -> String -> Claims -> Claims` — `crates/sky_types/src/constrain.rs:4878` (scheme), `crates/sky_kernels/src/lib.rs:470,1853` (decl), `runtime/src/sky_runtime/jwt.rs:416` (`sky_jwt_with_claim(key: String, value: String, …)`) | `withClaim : String -> JsonEnc.Value -> Claims -> Claims` — `Sky/Core/Jwt.sky:79` (pure Sky, NO kernel upstream; every typed helper `issuer`/`expiresAt`/… is built ON it via `JsonEnc.string`/`JsonEnc.int`) | `src/Auth.sky:47` |
-| 2 | `Sky.Http.Server.Response` | opaque nominal — `constrain.rs:267,590` (`server_response`, "the opaque server response type") | `type alias Response = { status : Int, body : String, headers : Dict String String, contentType : String }` — `Sky/Http/Server.sky:66` (record alias; the example's comment at `Routes/Todos.sky:226-229` documents that upstream *deliberately* builds it as a record literal) | `src/Server.sky:128`, `src/Routes/Todos.sky:232`, `src/Routes/Health.sky:154` |
-| 3 | `Std.Db.Migration` + `Db.migrate` | `Migration` alias not registered at all; `Db.migrate : Db -> List (String, String) -> Task (List String)` — `constrain.rs:4376-4379` (`K::DbMigrate`) | `type alias Migration = { name : String, sql : String }` + `defaultMigration` — `Std/Db.sky:237,246`; `migrate` takes `List Migration` | `src/Migrations.sky` (4 bindings + `Main.sky` call) |
+| 1 | `Jwt.withClaim` | `String -> String -> Claims -> Claims` — `crates/sky_types/src/constrain.rs:4878` (scheme), `crates/sky_kernels/src/lib.rs:470,1853` (decl), `runtime/src/sky_runtime/jwt.rs:416` (`sky_jwt_with_claim(key: String, value: String, …)`) | `withClaim : String -> JsonEnc.Value -> Claims -> Claims` — `Sky/Core/Jwt.ipe:79` (pure Sky, NO kernel upstream; every typed helper `issuer`/`expiresAt`/… is built ON it via `JsonEnc.string`/`JsonEnc.int`) | `src/Auth.ipe:47` |
+| 2 | `Sky.Http.Server.Response` | opaque nominal — `constrain.rs:267,590` (`server_response`, "the opaque server response type") | `type alias Response = { status : Int, body : String, headers : Dict String String, contentType : String }` — `Sky/Http/Server.ipe:66` (record alias; the example's comment at `Routes/Todos.ipe:226-229` documents that upstream *deliberately* builds it as a record literal) | `src/Server.ipe:128`, `src/Routes/Todos.ipe:232`, `src/Routes/Health.ipe:154` |
+| 3 | `Std.Db.Migration` + `Db.migrate` | `Migration` alias not registered at all; `Db.migrate : Db -> List (String, String) -> Task (List String)` — `constrain.rs:4376-4379` (`K::DbMigrate`) | `type alias Migration = { name : String, sql : String }` + `defaultMigration` — `Std/Db.ipe:237,246`; `migrate` takes `List Migration` | `src/Migrations.ipe` (4 bindings + `Main.ipe` call) |
 
 Generative reason: the D-00/#152 Jwt builder (and the Server/Db type surfaces)
 were **authored, not ported** — the value-arg type was guessed as `String`, and
@@ -67,7 +67,7 @@ not just a rejection.
 ### Residual red (honest report, distinct blocker)
 
 After patching all 5 drift sites in the `/tmp` copy, the example STILL fails —
-`IPE-L0126` (non-Clone capture, fail-closed) at `src/Main.sky:73`
+`IPE-L0126` (non-Clone capture, fail-closed) at `src/Main.ipe:73`
 (`\db -> Db.migrate db Migrations.all |> Task.andThen …`). That is a separate
 lowering-completeness gap in the same shared-capture machinery as #218 (fails
 closed here instead of mis-emitting — no SEAL breach). File it as its own
@@ -93,7 +93,7 @@ backlog item; 36-composite-server needs BOTH fixed to go green.
 2. **Close the class** (fix-the-structure): a stdlib-contract parity gate — a
    test that walks every kernel-backed module mirroring a reference
    `sky-stdlib` module and asserts our scheme renders identical to the
-   reference `.sky` signature (skydex indexes the reference; `ipe-index parity`
+   reference `.ipe` signature (skydex indexes the reference; `ipe-index parity`
    already reconciles kernel routes). B-JwtDecode + this bug are two instances
    of the same class; without the gate a third is guaranteed.
 
@@ -151,7 +151,7 @@ error[E0507]: cannot move out of `selectRecent`, a captured variable in an `Fn` 
    --> src/main.rs:427:790
 ```
 
-Source: `examples/18-job-queue/src/Main.sky:148-166` (`saveSnapshot`:
+Source: `examples/18-job-queue/src/Main.ipe:148-166` (`saveSnapshot`:
 `insertRow db ts = Db.exec …` / `writeAll db = … |> Task.andThen (\_ -> Time.now ())
 |> Task.andThen (\ts -> insertRow db ts)`) and the mirror `loadHistory:172-184`.
 
@@ -245,7 +245,7 @@ by construction:
   divergence as sanctioned). Our #164 pass adopted the lean discipline but
   dropped the relay at boundaries that don't read the symbol directly.
 - Upstream `Jwt` (for #217) has no kernels at all: `withClaim` is pure Sky
-  (`skydex locate withClaim` → `sky-stdlib/Sky/Core/Jwt.sky` binding only);
+  (`skydex locate withClaim` → `sky-stdlib/Sky/Core/Jwt.ipe` binding only);
   the ordinary HM checker types it from source — nothing to drift.
 
 ### (d) Structural fix + invariant
@@ -319,6 +319,6 @@ table* from the reference stdlib (checker rejects a valid program — fails
 closed, Correctness/Completeness); #218 drifts the *clone-relay invariant*
 inside one pass (emitter accepts and mis-emits — fails open, SEAL breach,
 Soundness). Per PRINCIPLES order #218 outranks #217 in urgency. The residual
-IPE-L0126 in 36-composite-server (`Main.sky:73`) lives in the same
+IPE-L0126 in 36-composite-server (`Main.ipe:73`) lives in the same
 shared-capture machinery as #218 and should be filed + investigated when the
 relay fix lands (it may simply be the fail-closed face of the same gap).

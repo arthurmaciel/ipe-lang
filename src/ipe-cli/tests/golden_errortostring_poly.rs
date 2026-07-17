@@ -19,7 +19,7 @@
 //!
 //! Seal of the upstream 00-standard-libs blocker:
 //!   - Building examples/00-standard-libs emits no "errorToString expected"
-//!     error at Sky/Test.sky:74.
+//!     error at Sky/Test.ipe:74.
 //!
 //! E2E (cargo build + run) is behind `IPE_E2E=1`.
 
@@ -36,7 +36,7 @@ fn golden_entry(root: &Path, name: &str) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join(name)
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 fn try_build(entry: &Path) -> Result<PathBuf, skyc::CliError> {
@@ -175,7 +175,7 @@ fn annotation_rigid_plus_literal_still_fails() {
 // ─── upstream blocker seal ────────────────────────────────────────────────────
 
 /// Regression: building examples/00-standard-libs must NOT produce the original
-/// "errorToString expected" mismatch at Sky/Test.sky:74. The error was
+/// "errorToString expected" mismatch at Sky/Test.ipe:74. The error was
 /// IPE-T0001 from the monomorphic `Error -> String` scheme being unified
 /// against a rigid annotation var `a` in `equal : a -> a -> TestResult`.
 ///
@@ -201,7 +201,7 @@ fn standard_libs_errortostring_blocker_gone() {
         Err(skyc::CliError::Pipeline { diag, .. }) => {
             let msg = format!("{diag:?}");
             assert!(
-                !msg.contains("Test.sky") || !msg.contains("errorToString expected"),
+                !msg.contains("Test.ipe") || !msg.contains("errorToString expected"),
                 "original Sky.Test:74 errorToString blocker must be gone; got: {msg}"
             );
             // There may be a subsequent blocker (e.g. Jwt type mismatch) — that is
@@ -211,7 +211,7 @@ fn standard_libs_errortostring_blocker_gone() {
         Err(other) => {
             let msg = format!("{other:?}");
             assert!(
-                !msg.contains("Test.sky") || !msg.contains("errorToString expected"),
+                !msg.contains("Test.ipe") || !msg.contains("errorToString expected"),
                 "original Sky.Test:74 errorToString blocker must be gone; got: {msg}"
             );
         }

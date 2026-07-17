@@ -1,6 +1,6 @@
 name = "sse-relay"
 version = "0.1.0"
-entry = "src/Main.sky"
+entry = "src/Main.ipe"
 port = 8001
 
 [source]

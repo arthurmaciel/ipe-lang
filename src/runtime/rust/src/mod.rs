@@ -180,7 +180,7 @@ pub mod css_safety;
 // `Std.Css` funnels every free-string entry through. Re-exported at the
 // crate root so the emitted `pub use ipe_runtime::*` resolves the bare kernel
 // names that `naming::kernel_name` emits. Typed length/colour constructors +
-// the render fold stay pure Sky in `Std/Css.sky`.
+// the render fold stay pure Sky in `Std/Css.ipe`.
 pub mod css;
 pub use css::*;
 

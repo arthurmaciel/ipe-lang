@@ -33,7 +33,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 #[test]
 fn i99_alias_tuple_match_arm_is_skyc_ok() {
     let root = repo_root();
-    let entry = golden_dir(&root, "alias_tuple_match_arm").join("Main.sky");
+    let entry = golden_dir(&root, "alias_tuple_match_arm").join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i99_alias_tuple_e2e");
     let _ = std::fs::remove_dir_all(&out);
     let runtime = skyc::resolve_runtime();
@@ -56,7 +56,7 @@ fn i99_alias_tuple_match_arm_builds_and_runs() {
         return;
     }
     let root = repo_root();
-    let entry = golden_dir(&root, "alias_tuple_match_arm").join("Main.sky");
+    let entry = golden_dir(&root, "alias_tuple_match_arm").join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i99_alias_tuple_e2e_run");
     let _ = std::fs::remove_dir_all(&out);
     let runtime = skyc::resolve_runtime();
@@ -81,7 +81,7 @@ fn i99_alias_tuple_match_arm_builds_and_runs() {
 #[test]
 fn i99_alias_over_self_edge_is_skyc_ok() {
     let root = repo_root();
-    let entry = golden_dir(&root, "alias_self_edge").join("Main.sky");
+    let entry = golden_dir(&root, "alias_self_edge").join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i99_self_edge_e2e");
     let _ = std::fs::remove_dir_all(&out);
     let runtime = skyc::resolve_runtime();
@@ -104,7 +104,7 @@ fn i99_alias_over_self_edge_builds_and_runs() {
         return;
     }
     let root = repo_root();
-    let entry = golden_dir(&root, "alias_self_edge").join("Main.sky");
+    let entry = golden_dir(&root, "alias_self_edge").join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i99_self_edge_e2e_run");
     let _ = std::fs::remove_dir_all(&out);
     let runtime = skyc::resolve_runtime();
@@ -129,7 +129,7 @@ fn i99_alias_over_self_edge_builds_and_runs() {
 #[test]
 fn i99_alias_over_ctor_inner_is_sky_l0128() {
     let root = repo_root();
-    let entry = golden_dir(&root, "alias_ctor_rejected").join("Main.sky");
+    let entry = golden_dir(&root, "alias_ctor_rejected").join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i99_alias_ctor_rejected");
     let _ = std::fs::remove_dir_all(&out);
     let runtime = skyc::resolve_runtime();

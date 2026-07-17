@@ -191,7 +191,7 @@ mod tests {
     use ipe_diagnostics::{Diagnostic, NameError};
     use ipe_intern::Symbol;
 
-    const GOLDEN: &str = include_str!("../../../../tests/golden/basics/Main.sky");
+    const GOLDEN: &str = include_str!("../../../../tests/golden/basics/Main.ipe");
 
     /// Parse + canonicalise the golden M0 module. Returns `None` (failing the
     /// caller's assertions) rather than panicking, per the no-panic gate.
@@ -3208,7 +3208,7 @@ mod tests {
     // must NOT produce a DuplicateValue error.  The TYPE namespace (`type alias`)
     // and the CONSTRUCTOR namespace (`type … = Ctor`) are distinct in both
     // Elm and Sky.  Reproduces the failure seen in
-    // examples/25-sky-console/src/State.sky where `type Tab = Overview | …`
+    // examples/25-sky-console/src/State.ipe where `type Tab = Overview | …`
     // and `type alias Overview = { … }` coexist in the same module.
     // ─────────────────────────────────────────────────────────────────────────
 

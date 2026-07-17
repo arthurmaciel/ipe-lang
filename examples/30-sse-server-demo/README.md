@@ -21,7 +21,7 @@ reads).
 
 ```
 cd examples/30-sse-server-demo
-sky run src/Main.sky
+sky run src/Main.ipe
 ```
 
 Then in another terminal:

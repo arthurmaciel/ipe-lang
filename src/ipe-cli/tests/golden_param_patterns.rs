@@ -36,7 +36,7 @@ fn fixture_dir(root: &Path) -> PathBuf {
 #[test]
 fn emits_byte_identical_main_rs() {
     let root = repo_root();
-    let entry = fixture_dir(&root).join("Main.sky");
+    let entry = fixture_dir(&root).join("Main.ipe");
     let golden = fixture_dir(&root).join("main.rs");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("l0105_param_patterns_emit");
     let _ = std::fs::remove_dir_all(&out);
@@ -64,7 +64,7 @@ fn emits_byte_identical_main_rs() {
 #[test]
 fn emission_preserves_the_load_bearing_shapes() {
     let root = repo_root();
-    let entry = fixture_dir(&root).join("Main.sky");
+    let entry = fixture_dir(&root).join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("l0105_param_patterns_shapes");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -114,7 +114,7 @@ fn end_to_end_builds_and_prints_one_hundred_twelve() {
         return;
     }
     let root = repo_root();
-    let entry = fixture_dir(&root).join("Main.sky");
+    let entry = fixture_dir(&root).join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_l0105_param_patterns_e2e");
     let _ = std::fs::remove_dir_all(&out);
 

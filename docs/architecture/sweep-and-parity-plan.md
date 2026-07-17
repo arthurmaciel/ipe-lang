@@ -62,7 +62,7 @@ columns, and one VERDICT:
    goldens** each carrying committed `expected_go.txt` + `oracle.meta`
    (`main_sky_sha256` + `go_sky_version` + `exit_code` + `oracle_divergence`
    [+ `divergence_reason`]). The `oracle` crate (`tools/oracle/src/lib.rs`)
-   read path `check_parity` **NEVER invokes Go**: it re-hashes `Main.sky`, hard-
+   read path `check_parity` **NEVER invokes Go**: it re-hashes `Main.ipe`, hard-
    fails on a stale hash, and diffs skyc's stdout against the cached bytes.
    `tools/refresh-oracle` (re)captures the cache by running the **real Go `sky`**
    (`IPE_GO_ORACLE`, default `../sky/sky-out/sky`) **once, locally** — Go
@@ -180,7 +180,7 @@ stdout is non-reproducible.
 
 An **example-level refresh** analogous to `tools/refresh-oracle`, differing from
 the golden tool in three ways: (1) staleness key hashes the **whole example
-source tree** (`**/*.sky` + `sky.toml`), not a single `Main.sky`; (2) it drives
+source tree** (`**/*.ipe` + `sky.toml`), not a single `Main.ipe`; (2) it drives
 `server`/`tui` shapes to capture normalized route-body / grid snapshots, not
 only stdout; (3) it reuses the identical `oracle::Meta` format + divergence
 tags (`sanctioned:` / `divergence:` / auto Go-failure) so the divergence policy

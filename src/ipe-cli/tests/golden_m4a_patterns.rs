@@ -37,12 +37,12 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
     root.join("tests").join("golden").join(name)
 }
 
-/// Compile `tests/golden/<name>/Main.sky` and assert the emitted `src/main.rs`
+/// Compile `tests/golden/<name>/Main.ipe` and assert the emitted `src/main.rs`
 /// equals the checked-in `tests/golden/<name>/main.rs` byte-for-byte.
 fn assert_byte_identical(name: &str) {
     let root = repo_root();
     let dir = golden_dir(&root, name);
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_emit"));
     let _ = std::fs::remove_dir_all(&out);
 
@@ -71,7 +71,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 
     let root = repo_root();
     let dir = golden_dir(&root, name);
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
@@ -86,11 +86,11 @@ fn assert_runs_and_matches_oracle(name: &str) {
     assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");
 }
 
-/// Compile `tests/golden/<fixture>/Main.sky` and assert it is rejected with the
+/// Compile `tests/golden/<fixture>/Main.ipe` and assert it is rejected with the
 /// expected diagnostic code (a gate golden — no program output).
 fn assert_gate(fixture: &str, expected: ipe_diagnostics::Code) {
     let root = repo_root();
-    let entry = golden_dir(&root, fixture).join("Main.sky");
+    let entry = golden_dir(&root, fixture).join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{fixture}_gate_emit"));
     let _ = std::fs::remove_dir_all(&out);
 

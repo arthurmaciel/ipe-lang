@@ -61,7 +61,7 @@ const SUGGESTION_MAX_DISTANCE: usize = 2;
 ///     opaque names. Leaving them UNRESERVED is what lets a user ADT — and,
 ///     crucially, a compiled-source `Std.Css` type (`Color` / `Length` / …) —
 ///     declare them; the home-aware guard keeps the genuine Std.Ui
-///     builtin resolving to `UiPlain`. Multiple shipped `.sky` fixtures
+///     builtin resolving to `UiPlain`. Multiple shipped `.ipe` fixtures
 ///     (`dict_adt_gate`, `set_adt_fn_gate`, `mm_local_pkg`, …) already
 ///     declare `type Color` as a benign sample ADT and now lower correctly.
 const RESERVED_BUILTIN_TYPES: &[&str] = &[
@@ -160,7 +160,7 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
     // Lowerer arm: `ir_type_from_canon` `"Decimal" => IrType::Decimal`.
     "Decimal",
     // `Std.Db.Migration` record alias `{ name : String, sql : String }`
-    // (reference `Std/Db.sky:237`). Structural record — `normalize_annotation_ty`
+    // (reference `Std/Db.ipe:237`). Structural record — `normalize_annotation_ty`
     // expands the name to the record; the lowerer keeps it a synthesised struct
     // (no opaque arm), so it is user-shadowable-safe like `HttpRequest`.
     "Migration",
@@ -182,7 +182,7 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
 ];
 
 /// Kernel-implicit Prelude type names that are globally in scope in
-/// every Sky program but are NOT declared by any compiled `.sky` source file —
+/// every Sky program but are NOT declared by any compiled `.ipe` source file —
 /// they are resolved by the runtime as opaque handles.
 ///
 /// Without these entries, bare annotations
@@ -1725,7 +1725,7 @@ fn synthesize_record_alias_ctors(
         //
         // The old code emitted IPE-N0010 (DuplicateValue) here, which was wrong
         // and broke the `type Tab = Overview | …` + `type alias Overview = { … }`
-        // pattern found in examples/25-sky-console/src/State.sky.
+        // pattern found in examples/25-sky-console/src/State.ipe.
         //
         // Ref: `Sky.Canonicalise.Module.registerAliases` upstream, lines 1759–1775.
         if seen_ctors.contains_key(&alias_name) {
@@ -1862,7 +1862,7 @@ fn inject_dep_exports(
             // Inject all dep aliases, carrying the dep module's type scope so
             // body expansion can resolve types not imported by the IMPORTING
             // module (e.g. `Model`'s body references `Piece` from Chess.Piece
-            // which is only in State.sky's scope, not in Home.sky's).
+            // which is only in State.ipe's scope, not in Home.ipe's).
             for (&alias_name, ea) in &dep.aliases {
                 injected_aliases
                     .entry(alias_name)

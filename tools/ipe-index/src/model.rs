@@ -67,11 +67,11 @@ pub fn role_of(path: &str) -> Role {
 }
 
 /// Ipê-repo (`crates/` compiler, `runtime/` runtime, `tools/` tooling,
-/// `crates/skyc/stdlib/**.sky` Sky stdlib) classifier.
+/// `crates/skyc/stdlib/**.ipe` Sky stdlib) classifier.
 fn role_of_ipe(rel: &str) -> Role {
-    // Any .sky source is stdlib-Sky (the `crates/skyc/stdlib/` bundle and any
+    // Any .ipe source is stdlib-Sky (the `crates/skyc/stdlib/` bundle and any
     // other bundled Sky file classify identically).
-    if rel.ends_with(".sky") { Role::IpeStdlibSky }
+    if rel.ends_with(".ipe") { Role::IpeStdlibSky }
     else if rel.starts_with("crates/") && rel.ends_with(".rs") { Role::IpeCompilerRs }
     else if rel.starts_with("runtime/") && rel.ends_with(".rs") { Role::IpeRuntimeRs }
     else if rel.starts_with("tools/") && rel.ends_with(".rs") { Role::IpeToolRs }
@@ -109,12 +109,12 @@ mod tests {
     fn classifies_paths() {
         assert_eq!(lang_of("src/Sky/Build/Compile.hs"), Lang::Haskell);
         assert_eq!(lang_of("runtime-rust/src/sky_runtime/list.rs"), Lang::Rust);
-        assert_eq!(lang_of("a.sky"), Lang::Sky);
+        assert_eq!(lang_of("a.ipe"), Lang::Sky);
         assert_eq!(role_of("runtime-rust/tests/sky/49-x/src/Main.sky"), Role::Fixture);
-        assert_eq!(role_of("examples/13-skyshop/src/Main.sky"), Role::Example);
+        assert_eq!(role_of("examples/13-skyshop/src/Main.ipe"), Role::Example);
         assert_eq!(role_of("src/Sky/Parse/Lexer.hs"), Role::CompilerHs);
         assert_eq!(role_of("runtime-go/rt/rt.go"), Role::RuntimeGo);
-        assert_eq!(role_of("sky-stdlib/Sky/Core/List.sky"), Role::StdlibSky);
+        assert_eq!(role_of("sky-stdlib/Sky/Core/List.ipe"), Role::StdlibSky);
         assert_eq!(role_of("scripts/equivalence-checks/web-verify.mjs"), Role::ConsoleTs); // JS/TS/MJS not Other
         assert_eq!(lang_of("scripts/x.mjs"), Lang::Ts);
         assert_eq!(stage_of("src/Sky/Canonicalise/Module.hs"), Some(Stage::Canonicalise));

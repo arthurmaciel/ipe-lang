@@ -1,5 +1,5 @@
 //! Backlog the — the real `Error ErrorKind ErrorInfo` ADT (ported from
-//! the ancestor Go/Haskell design's `sky-stdlib/Sky/Core/Error.sky`).
+//! the ancestor Go/Haskell design's `sky-stdlib/Sky/Core/Error.ipe`).
 //!
 //! Proves the whole pipeline end-to-end: construction (`Error.io`,
 //! `Error.timeout`), the ctor-scheme fix (pattern matching
@@ -33,7 +33,7 @@ fn error_adt_roundtrip_compiles() {
         .join("tests")
         .join("golden")
         .join("error_adt_roundtrip")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("error_adt_roundtrip_out");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -58,7 +58,7 @@ fn error_adt_roundtrip_runs_and_prints_expected_output() {
         .join("tests")
         .join("golden")
         .join("error_adt_roundtrip")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_error_adt_roundtrip_e2e");
     let _ = std::fs::remove_dir_all(&out);
 

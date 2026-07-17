@@ -17,7 +17,7 @@
 #
 # THE GO-FFI SIGNAL IS THE IMPORT, NOT `[go.dependencies]`. The real Go-FFI tell
 # is a Sky `import` of a Go-PACKAGE module — one that resolves to neither a Sky
-# stdlib module nor a local project `.sky` file (`Github.Com.…`, `Net.Http`,
+# stdlib module nor a local project `.ipe` file (`Github.Com.…`, `Net.Http`,
 # `Fyne.…`).
 #
 # Provides (all FUNCTIONS — call them, don't read arrays):
@@ -35,7 +35,7 @@ all_examples() {
   for d in examples/[0-9]*/ examples/simple/ examples/test_pkg/ examples/rust/*/; do
     [ -d "$d" ] || continue
     d="${d%/}"
-    [ -f "$d/src/Main.sky" ] || continue
+    [ -f "$d/src/Main.ipe" ] || continue
     printf '%s\n' "$d"
   done
 }
@@ -45,7 +45,7 @@ all_examples() {
 # lands, a top-level sky-stdlib/). IPE_STDLIB_DIRS is a space-separated list of
 # roots to index; both are scanned so a bare/partial stdlib import (`import
 # System` → Sky.Core.System) resolves regardless of which tree owns it. Every
-# `/`-delimited suffix of each module path (minus `.sky`) is recorded as an O(1)
+# `/`-delimited suffix of each module path (minus `.ipe`) is recorded as an O(1)
 # key. The BUILT flag is the idempotency guard across re-sources.
 IPE_STDLIB_DIRS="${IPE_STDLIB_DIRS:-src/stdlib sky-stdlib}"
 declare -gA _SKY_STDLIB_INDEX
@@ -55,9 +55,9 @@ _build_stdlib_index() {
   for root in $IPE_STDLIB_DIRS; do
     [ -d "$root" ] || continue
     while IFS= read -r f; do
-      # index keys are relative to the stdlib ROOT (so Sky/Core/String.sky →
+      # index keys are relative to the stdlib ROOT (so Sky/Core/String.ipe →
       # Sky/Core/String, Core/String, String), mirroring the source layout.
-      rest="${f#"$root"/}"; rest="${rest%.sky}"
+      rest="${f#"$root"/}"; rest="${rest%.ipe}"
       while :; do
         _SKY_STDLIB_INDEX["$rest"]=1
         case "$rest" in
@@ -65,7 +65,7 @@ _build_stdlib_index() {
           *)   break ;;
         esac
       done
-    done < <(find "$root" -type f -name '*.sky' 2>/dev/null)
+    done < <(find "$root" -type f -name '*.ipe' 2>/dev/null)
   done
   _SKY_STDLIB_INDEX_BUILT=1
 }
@@ -73,12 +73,12 @@ _build_stdlib_index() {
 # ── is_out_of_scope <dir>: the ONLY exclusion is Go-FFI (IMPORT signal) ──────
 # Return 0 (exclude) IFF the example imports a Go-PACKAGE module: a Sky `import`
 # whose module name resolves to NEITHER a Sky stdlib module NOR a local project
-# `.sky` file. The recursive `.sky` walk is load-bearing: some examples hide
+# `.ipe` file. The recursive `.ipe` walk is load-bearing: some examples hide
 # their `Github.Com.…`/`Net.Http`/`Fyne.…` imports inside Lib.* submodules.
 #   • prefix Sky. / Std.  → Sky stdlib          → IN scope
 #   • prefix Rust.        → Rust-FFI wrapper crate → IN scope
 #   • dotted name suffix-matches the stdlib index → IN scope
-#   • dotted name resolves to a `.sky` under the project → IN (local mod)
+#   • dotted name resolves to a `.ipe` under the project → IN (local mod)
 #   • otherwise (`Github.Com.…`, `Net.Http`, `Fyne.…`) → Go-FFI → OUT
 is_out_of_scope() {
   local dir="$1" m rel localpaths localdone=""
@@ -94,12 +94,12 @@ is_out_of_scope() {
     rel="${m//.//}"
     [ -n "${_SKY_STDLIB_INDEX[$rel]:-}" ] && continue
     if [ -z "$localdone" ]; then
-      localpaths=$'\n'"$(find "$dir" -type f -name '*.sky' 2>/dev/null)"$'\n'
+      localpaths=$'\n'"$(find "$dir" -type f -name '*.ipe' 2>/dev/null)"$'\n'
       localdone=1
     fi
-    case "$localpaths" in *"/${rel}.sky"$'\n'*) continue ;; esac
+    case "$localpaths" in *"/${rel}.ipe"$'\n'*) continue ;; esac
     return 0                                          # unresolvable → Go-package → OUT
-  done < <(find "$dir/src" -type f -name '*.sky' -exec \
+  done < <(find "$dir/src" -type f -name '*.ipe' -exec \
              rg --no-filename -No '^[[:space:]]*import[[:space:]]+([A-Za-z0-9_.]+)' -r '$1' {} + 2>/dev/null)
   return 1                                            # every import resolved → in scope
 }

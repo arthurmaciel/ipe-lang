@@ -25,7 +25,7 @@ fn compile() -> Option<Result<(), skyc::CliError>> {
         .join("tests")
         .join("golden")
         .join("middleware_csrf")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = out_dir();
     let _ = std::fs::remove_dir_all(&out);
     let Ok(runtime) = skyc::resolve_runtime() else {

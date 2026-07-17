@@ -9,7 +9,7 @@ in handler goroutines).
 ## Run
 
 ```bash
-sky run src/Main.sky
+sky run src/Main.ipe
 curl --no-buffer http://localhost:8001/relay
 ```
 

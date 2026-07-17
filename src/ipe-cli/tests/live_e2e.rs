@@ -233,7 +233,7 @@ main =
 /// - `set_page` closure generation (T5)
 /// - `live_app_routed` runtime entry (already ported in `runtime/`)
 ///
-/// This is the same structure as `examples/09-live-counter/src/Main.sky`.
+/// This is the same structure as `examples/09-live-counter/src/Main.ipe`.
 const IPE_LIVE_ROUTED: &str = r#"module Main exposing (main)
 
 import Std.Live as Live
@@ -302,9 +302,9 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxEr
         format!("{test_name}: cannot create sky source dir: {e}").into()
     })?;
 
-    let entry = ipe_dir.join("Main.sky");
+    let entry = ipe_dir.join("Main.ipe");
     std::fs::write(&entry, ipe_source)
-        .map_err(|e| -> BoxError { format!("{test_name}: cannot write Main.sky: {e}").into() })?;
+        .map_err(|e| -> BoxError { format!("{test_name}: cannot write Main.ipe: {e}").into() })?;
 
     let out_dir = std::env::temp_dir().join(format!("live_e2e_{test_name}_emitted"));
     let _ = std::fs::remove_dir_all(&out_dir);
@@ -1017,7 +1017,7 @@ fn live_pubsub_publish_polymorphic_record_payload_build_only() -> Result<(), Box
 /// Typed-record onSubmit — the CANONICAL CLAUDE.md "forms with passwords" idiom:
 /// `Ui.form [Ui.onSubmit DoSignIn] [...]` where `DoSignIn : Creds -> Msg` is a
 /// TYPED-RECORD payload constructor (not a bare Msg). This is the exact shape
-/// `examples/19-skyforum`'s `View/Login.sky` and `examples/27-multi-session-chat`
+/// `examples/19-skyforum`'s `View/Login.ipe` and `examples/27-multi-session-chat`
 /// use in production.
 ///
 /// Forwarding the codegen's boxed closure value (`Box<dyn Fn(T) -> M + Send +
@@ -1207,8 +1207,8 @@ fn live_onsubmit_typed_record_dispatches_decoded_payload() -> Result<(), BoxErro
 /// Bare-Msg onSubmit — the "ignore form data, always dispatch this fixed
 /// action" idiom: `Std.Html.Events.onSubmit Confirm` where `Confirm : Msg`
 /// carries NO payload (a nullary constructor, not a decoder function). This
-/// is the exact shape `examples/12-skyvote`'s `Page/AuthPage.sky` /
-/// `Page/Submit.sky` / `Page/Detail.sky` use throughout (`onSubmit
+/// is the exact shape `examples/12-skyvote`'s `Page/AuthPage.ipe` /
+/// `Page/Submit.ipe` / `Page/Detail.ipe` use throughout (`onSubmit
 /// DoSignUp` / `DoSignIn` / `SubmitIdea` / `SubmitComment`) — form fields
 /// are already synced into `Model` via `onInput`/`onChange`; `onSubmit`
 /// just triggers the action, ignoring the posted `FormData` entirely.

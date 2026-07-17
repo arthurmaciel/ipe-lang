@@ -5,7 +5,7 @@ The simplest Sky programme -- prints a greeting to stdout.
 ## Build & Run
 
 ```bash
-sky build src/Main.sky
+sky build src/Main.ipe
 ./sky-out/app
 ```
 

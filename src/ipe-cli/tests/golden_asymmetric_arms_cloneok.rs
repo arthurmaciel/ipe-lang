@@ -41,7 +41,7 @@ fn entry_path(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("asymmetric_arms_cloneok")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 /// skyc-0 + clone-count snapshot: the compiler must accept the program and

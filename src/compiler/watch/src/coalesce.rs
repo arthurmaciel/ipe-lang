@@ -144,7 +144,7 @@ mod tests {
 
         for i in 0..20 {
             raw_tx
-                .send(PathBuf::from(format!("/proj/src/File{i}.sky")))
+                .send(PathBuf::from(format!("/proj/src/File{i}.ipe")))
                 .expect("send must succeed");
         }
         // Let the burst land within the quiescence window, then stop sending.
@@ -173,7 +173,7 @@ mod tests {
 
         for _ in 0..5 {
             raw_tx
-                .send(PathBuf::from("/proj/src/Main.sky"))
+                .send(PathBuf::from("/proj/src/Main.ipe"))
                 .expect("send must succeed");
         }
         let batch = out_rx
@@ -199,7 +199,7 @@ mod tests {
         // forever — only the 150ms hard cap can ever flush this batch.
         let sender = thread::spawn(move || {
             for i in 0..10 {
-                let _ = raw_tx.send(PathBuf::from(format!("/proj/src/T{i}.sky")));
+                let _ = raw_tx.send(PathBuf::from(format!("/proj/src/T{i}.ipe")));
                 thread::sleep(Duration::from_millis(40));
             }
         });

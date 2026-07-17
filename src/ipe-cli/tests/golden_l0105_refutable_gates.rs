@@ -37,7 +37,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code)
         .join("tests")
         .join("golden")
         .join(fixture)
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 
@@ -110,7 +110,7 @@ fn bare_list_lambda_param_is_parse_rejected() {
     );
 }
 
-/// Negative regression for Std/Money.sky fix: a single-ctor union param
+/// Negative regression for Std/Money.ipe fix: a single-ctor union param
 /// `amount (Money d _) = d` must still be rejected as IPE-T0015.
 /// Proves the stdlib fix did not relax the irrefutability rule.
 #[test]
@@ -131,7 +131,7 @@ fn single_ctor_case_accessor_compiles() {
         .join("tests")
         .join("golden")
         .join("money_ctor_accessor_case")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("money_ctor_accessor_case_emit");
     let _ = std::fs::remove_dir_all(&out);
     let Ok(runtime) = skyc::resolve_runtime() else {
@@ -146,7 +146,7 @@ fn single_ctor_case_accessor_compiles() {
 }
 
 /// Seal remeasure: building examples/00-standard-libs must NOT produce IPE-T0015
-/// on Std/Money or Sky/Test after the Std/Money.sky accessor fix.
+/// on Std/Money or Sky/Test after the Std/Money.ipe accessor fix.
 #[test]
 fn standard_libs_sky_t0015_money_blocker_gone() {
     let root = repo_root();
@@ -167,7 +167,7 @@ fn standard_libs_sky_t0015_money_blocker_gone() {
         Err(skyc::CliError::Pipeline { diag, .. }) => {
             let msg = format!("{diag:?}");
             assert!(
-                !msg.contains("IPE-T0015") || (!msg.contains("Money") && !msg.contains("Test.sky")),
+                !msg.contains("IPE-T0015") || (!msg.contains("Money") && !msg.contains("Test.ipe")),
                 "IPE-T0015 from Std/Money/Sky.Test must be gone after accessor fix; got: {msg}"
             );
         }
@@ -175,7 +175,7 @@ fn standard_libs_sky_t0015_money_blocker_gone() {
         Err(other) => {
             let msg = format!("{other:?}");
             assert!(
-                !msg.contains("IPE-T0015") || (!msg.contains("Money") && !msg.contains("Test.sky")),
+                !msg.contains("IPE-T0015") || (!msg.contains("Money") && !msg.contains("Test.ipe")),
                 "IPE-T0015 from Std/Money/Sky.Test must be gone after accessor fix; got: {msg}"
             );
         }

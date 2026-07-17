@@ -14,7 +14,7 @@
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
 //! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the SAME
-//! `Main.sky` to stdout `42\n`, exit 0 — hand-verified in a temp dir, where the
+//! `Main.ipe` to stdout `42\n`, exit 0 — hand-verified in a temp dir, where the
 //! Go backend emits the matching `MainOpt[T1 any]` enum and `MainOpt_Som(41)`
 //! construction. Running the Go toolchain inside `cargo test` is impractical, so
 //! the hand-computed `42` is the in-test oracle.
@@ -29,7 +29,7 @@ fn example_entry(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("custom_maybe_adt")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 #[test]

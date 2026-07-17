@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 //! `skyc` — the command-line driver.
 //!
-//! Wires the pipeline end to end: read a `.sky` entry file, run it through
+//! Wires the pipeline end to end: read a `.ipe` entry file, run it through
 //! [`ipe_parse`] → [`ipe_canon`] → [`ipe_types`] → [`ipe_lower`] → the
 //! [`ipe_backend_rust`] emitter, write the emitted Cargo project, and vendor the
 //! Sky runtime module tree into it (a port of the copy step in the Haskell
@@ -154,13 +154,13 @@ pub fn build(entry: &Path, out_dir: &Path, runtime_dir: &Path) -> Result<(), Cli
     )
 }
 
-/// Build a `.sky` entry file and all sibling modules discovered in the same
+/// Build a `.ipe` entry file and all sibling modules discovered in the same
 /// source directory.
 ///
 /// When no `sky.toml` is present, the entry file's parent directory is used
-/// as the source root. Every `*.sky` file found there is loaded and compiled
+/// as the source root. Every `*.ipe` file found there is loaded and compiled
 /// together — fixing IPE-N0020 for multi-file projects built via the
-/// file-path shorthand (`skyc build src/Main.sky`).
+/// file-path shorthand (`skyc build src/Main.ipe`).
 ///
 /// This is the faithful port of Haskell's `Graph.discoverModulesMulti
 /// (sourceRoot : ...) entryPath` call in `Sky.Build.Compile.hs`: it probes
@@ -202,7 +202,7 @@ pub fn build_with_sibling_discovery(
         .filter(|p| p.is_dir())
         .unwrap_or_else(|| Path::new("."));
 
-    // Discover ALL .sky files in the source root (recursively). This is the
+    // Discover ALL .ipe files in the source root (recursively). This is the
     // equivalent of `Graph.discoverModulesMulti [srcRoot] entryPath` in
     // `Sky.Build.Compile.hs`.
     let mut discovered = project::discover_modules(src_root)?;
@@ -247,11 +247,11 @@ pub fn build_with_sibling_discovery(
     )
 }
 
-/// Walk up the directory tree from a `.sky` file's parent, looking for a
+/// Walk up the directory tree from a `.ipe` file's parent, looking for a
 /// `sky.toml` manifest. Returns the manifest path if found, or `None` when
 /// the walk reaches the filesystem root.
 ///
-/// Faithful port of the Haskell `sky build src/Main.sky` behavior: when
+/// Faithful port of the Haskell `sky build src/Main.ipe` behavior: when
 /// given a file entry the Haskell driver locates the project root (where
 /// `sky.toml` lives) before calling `buildProject`, so the full module graph
 /// is compiled instead of just the single entry file.
@@ -678,7 +678,7 @@ pub fn compile_prepared(
         }
         // Union ctor spans live in the union's home byte-namespace, outside any
         // def body — without this they fall back to the entry file and render
-        // at a coincidental byte offset in Main.sky (the misattribution class
+        // at a coincidental byte offset in Main.ipe (the misattribution class
         // for IPE-L0102 / IPE-L0114 and other `lower_enum` errors).
         for union in &linked.unions {
             for ctor in &union.ctors {
@@ -736,15 +736,15 @@ pub fn compile_prepared(
     // failing span, not blindly to the entry file. After link, every module's
     // defs keep their original `home` byte-namespace, so a bare `pipeline_err`
     // (which always blames the entry file) mis-renders a dep-module diagnostic
-    // against the entry file at a coincidental byte offset — e.g. a State.sky
-    // IPE-L0115 shown at an unrelated Main.sky line. `source_for_span` maps the
+    // against the entry file at a coincidental byte offset — e.g. a State.ipe
+    // IPE-L0115 shown at an unrelated Main.ipe line. `source_for_span` maps the
     // span back to its owning def's file, the same heuristic already used for
     // constraint-gen / exhaustiveness type errors.
     // Lowering (and emit) errors carry the owning def's `home`,
     // exactly like `typecheck` above. When `home` is non-empty we resolve the
     // source file DIRECTLY via `home_to_source` (O(log N), exact) — this is what
-    // makes a Server.sky IPE-L0126 render against Server.sky, not against a
-    // Main.sky def whose byte range coincidentally overlaps the failing span.
+    // makes a Server.ipe IPE-L0126 render against Server.ipe, not against a
+    // Main.ipe def whose byte range coincidentally overlaps the failing span.
     // An empty `home` (homeless backend diagnostic, or a pre-def lowering
     // error) falls back to the byte-offset heuristic `source_for_span`.
     let span_attributed_err =
@@ -991,7 +991,7 @@ fn prune_orphaned_files(
 ///
 /// The build pipeline:
 /// 1. Parse `sky.toml` to locate the source root.
-/// 2. Discover every `*.sky` file under `src/`.
+/// 2. Discover every `*.ipe` file under `src/`.
 /// 3. Scan each file for `import` declarations (token-level lexer scan) to
 ///    build the import graph.
 /// 4. Topological sort — fail closed on a cycle (IPE-N0021).
@@ -1084,11 +1084,11 @@ pub fn resolve_runtime() -> Result<PathBuf, CliError> {
 
 /// The top-level usage hint, listing every subcommand and flag.
 const USAGE: &str = "usage:\n  \
-     skyc build <entry.sky|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]\n  \
-     skyc run   <entry.sky|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [-- <args>...]\n  \
-     skyc watch <entry.sky|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [--port <n>]\n  \
+     skyc build <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]\n  \
+     skyc run   <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [-- <args>...]\n  \
+     skyc watch <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [--port <n>]\n  \
      skyc explain [<CODE>]\n  \
-     skyc fix <entry.sky> [--yes]";
+     skyc fix <entry.ipe> [--yes]";
 
 /// Parse `argv` (excluding the program name) and run the requested command.
 ///
@@ -1140,7 +1140,7 @@ fn run_watch(rest: &[String]) -> Result<(), CliError> {
     watch::run(&opts)
 }
 
-/// `skyc build <entry.sky> [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]`.
+/// `skyc build <entry.ipe> [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]`.
 fn run_build(rest: &[String]) -> Result<(), CliError> {
     let mut it = rest.iter();
     let entry = it.next().ok_or(CliError::Usage(USAGE))?.clone();
@@ -1181,7 +1181,7 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
     // Route the build:
     //   1. Directory → expect sky.toml inside it.
     //   2. .toml file → build_project directly.
-    //   3. .sky file → walk up looking for sky.toml (project-mode); fall back
+    //   3. .ipe file → walk up looking for sky.toml (project-mode); fall back
     //      to sibling discovery when no sky.toml exists (fixes IPE-N0020 for
     //      multi-file projects built via the file-path shorthand). This mirrors
     //      the Haskell driver's `Graph.discoverModulesMulti srcRoot entryPath`
@@ -1198,14 +1198,14 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
     } else if entry_path.extension().and_then(|e| e.to_str()) == Some("toml") {
         Some(entry_path.clone())
     } else {
-        // .sky file: walk up the directory tree looking for a sky.toml. When
+        // .ipe file: walk up the directory tree looking for a sky.toml. When
         // found, build_project discovers all modules; when absent, fall through
         // to build_with_sibling_discovery which uses the entry's directory as
         // the source root.
         find_manifest_for_sky_file(&entry_path)
     };
 
-    // No sky.toml found: compile entry + all sibling .sky files in the same
+    // No sky.toml found: compile entry + all sibling .ipe files in the same
     // directory. Byte-identical to `build` when the directory holds only the
     // entry file (regression-covered by the golden suite).
     manifest.map_or_else(
@@ -1214,7 +1214,7 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
     )
 }
 
-/// `skyc run <entry.sky|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [-- <args>...]`
+/// `skyc run <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [-- <args>...]`
 ///
 /// One-shot build + run: compiles the entry to `out_dir` (same routing as
 /// [`run_build`]), then invokes `cargo build` on the emitted project and
@@ -1352,7 +1352,7 @@ fn run_explain(rest: &[String]) -> Result<(), CliError> {
     }
 }
 
-/// `skyc fix <entry.sky> [--yes]`. Default is interactive per-edit confirmation;
+/// `skyc fix <entry.ipe> [--yes]`. Default is interactive per-edit confirmation;
 /// `--yes` is durable authorization to apply every machine-applicable edit.
 fn run_fix(rest: &[String]) -> Result<(), CliError> {
     let mut it = rest.iter();
@@ -1730,7 +1730,7 @@ fn read_yes_no() -> bool {
 fn write_atomic(target: &Path, contents: &str) -> Result<(), CliError> {
     let dir = target.parent().filter(|p| !p.as_os_str().is_empty());
     let name = target.file_name().map_or_else(
-        || String::from("source.sky"),
+        || String::from("source.ipe"),
         |n| n.to_string_lossy().into_owned(),
     );
     let tmp_name = format!(".{name}.skyc-fix.{}.tmp", std::process::id());
@@ -1797,7 +1797,7 @@ mod tests {
             .join("tests")
             .join("golden")
             .join("basics")
-            .join("Main.sky")
+            .join("Main.ipe")
     }
 
     /// Drift-closed proof: every entry in `ALL_CODES` resolves via `explain_lookup`.
@@ -1995,7 +1995,7 @@ mod tests {
 
         let dir = std::env::temp_dir().join("skyc_generic_record_src_e2e");
         let _ = fs::remove_dir_all(&dir);
-        let entry = dir.join("Main.sky");
+        let entry = dir.join("Main.ipe");
         let created = fs::create_dir_all(&dir).and_then(|()| fs::write(&entry, SRC));
         assert!(created.is_ok(), "write source: {created:?}");
 
@@ -2042,7 +2042,7 @@ mod tests {
     // find_manifest_for_sky_file tests (IPE-N0020 fix)
     // -----------------------------------------------------------------------
 
-    /// Creates a temp directory with a nested `src/Main.sky` and a `sky.toml`
+    /// Creates a temp directory with a nested `src/Main.ipe` and a `sky.toml`
     /// at the project root, confirming the upward walk finds the manifest.
     #[test]
     fn find_manifest_walks_up_to_project_root() {
@@ -2052,8 +2052,8 @@ mod tests {
         fs::create_dir_all(&src).expect("create src/");
         let toml = tmp.join("sky.toml");
         fs::write(&toml, "name = \"test\"\n").expect("write sky.toml");
-        let main_sky = src.join("Main.sky");
-        fs::write(&main_sky, "module Main exposing (main)\nmain = 0\n").expect("write Main.sky");
+        let main_sky = src.join("Main.ipe");
+        fs::write(&main_sky, "module Main exposing (main)\nmain = 0\n").expect("write Main.ipe");
 
         let found = find_manifest_for_sky_file(&main_sky);
         assert_eq!(
@@ -2111,7 +2111,7 @@ main =
 
         let dir = std::env::temp_dir().join("skyc_panything_regression");
         let _ = fs::remove_dir_all(&dir);
-        let entry = dir.join("Main.sky");
+        let entry = dir.join("Main.ipe");
         let created = fs::create_dir_all(&dir).and_then(|()| fs::write(&entry, SRC));
         assert!(created.is_ok(), "write source: {created:?}");
 
@@ -2166,7 +2166,7 @@ main =
 
         let dir = std::env::temp_dir().join("skyc_taskrun_elision_regression");
         let _ = fs::remove_dir_all(&dir);
-        let entry = dir.join("Main.sky");
+        let entry = dir.join("Main.ipe");
         let created = fs::create_dir_all(&dir).and_then(|()| fs::write(&entry, SRC));
         assert!(created.is_ok(), "write source: {created:?}");
 
@@ -2203,7 +2203,7 @@ main =
         let tmp = std::env::temp_dir().join("skyc_no_manifest_test");
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).expect("create dir");
-        let sky = tmp.join("Standalone.sky");
+        let sky = tmp.join("Standalone.ipe");
         fs::write(&sky, "module Standalone exposing (f)\nf = 0\n").expect("write sky");
         // Deliberately no sky.toml anywhere under tmp.
         // The walk terminates at the filesystem root without finding one.
@@ -2217,7 +2217,7 @@ main =
         let _ = fs::remove_dir_all(&tmp);
     }
 
-    /// Two-module program: `Main.sky` calls a helper in sibling `Lib.sky`.
+    /// Two-module program: `Main.ipe` calls a helper in sibling `Lib.ipe`.
     /// `build_with_sibling_discovery` must compile both without IPE-N0020.
     #[test]
     fn sibling_discovery_compiles_two_module_program() {
@@ -2234,22 +2234,22 @@ main =
         let src = tmp.join("src");
         fs::create_dir_all(&src).expect("create src/");
 
-        // Helper module: src/Helper.sky
+        // Helper module: src/Helper.ipe
         fs::write(
-            src.join("Helper.sky"),
+            src.join("Helper.ipe"),
             "module Helper exposing (answer)\nanswer = 42\n",
         )
-        .expect("write Helper.sky");
+        .expect("write Helper.ipe");
 
-        // Entry module: src/Main.sky — imports Helper
+        // Entry module: src/Main.ipe — imports Helper
         fs::write(
-            src.join("Main.sky"),
+            src.join("Main.ipe"),
             "module Main exposing (main)\nimport Helper\nmain = println (String.fromInt Helper.answer)\n",
         )
-        .expect("write Main.sky");
+        .expect("write Main.ipe");
 
         let out = tmp.join("out");
-        let result = build_with_sibling_discovery(&src.join("Main.sky"), &out, &runtime);
+        let result = build_with_sibling_discovery(&src.join("Main.ipe"), &out, &runtime);
         assert!(
             result.is_ok(),
             "two-module program must compile via sibling discovery: {:?}",
@@ -2262,8 +2262,8 @@ main =
     // Cross-module infer errors name the dep module's file
     // -----------------------------------------------------------------------
 
-    /// When a type error originates in a dep module (`Helper.sky`), the rendered
-    /// diagnostic must cite `Helper.sky` as the file, NOT the entry `Main.sky`.
+    /// When a type error originates in a dep module (`Helper.ipe`), the rendered
+    /// diagnostic must cite `Helper.ipe` as the file, NOT the entry `Main.ipe`.
     /// A single `pipeline_err` closure capturing only the entry file path would
     /// render dep-module errors with the wrong source snippet and file name.
     ///
@@ -2275,21 +2275,21 @@ main =
         let src = tmp.join("src");
         fs::create_dir_all(&src).expect("create src/");
 
-        // Helper.sky: deliberate type error — `1 + "oops"` mixes Int and String.
-        let helper_path = src.join("Helper.sky");
+        // Helper.ipe: deliberate type error — `1 + "oops"` mixes Int and String.
+        let helper_path = src.join("Helper.ipe");
         fs::write(
             &helper_path,
             "module Helper exposing (broken)\nbroken = 1 + \"oops\"\n",
         )
-        .expect("write Helper.sky");
+        .expect("write Helper.ipe");
 
-        // Main.sky: imports Helper and uses `broken` — but the error is in Helper.
-        let main_path = src.join("Main.sky");
+        // Main.ipe: imports Helper and uses `broken` — but the error is in Helper.
+        let main_path = src.join("Main.ipe");
         fs::write(
             &main_path,
             "module Main exposing (main)\nimport Helper\nmain = println (String.fromInt Helper.broken)\n",
         )
-        .expect("write Main.sky");
+        .expect("write Main.ipe");
 
         // Runtime is never accessed: a type error fires at infer, before lower/emit.
         let dummy_runtime = std::env::temp_dir();
@@ -2306,12 +2306,12 @@ main =
             return; // any other error kind is a separate concern
         };
 
-        // The file blamed must be Helper.sky, not Main.sky.
+        // The file blamed must be Helper.ipe, not Main.ipe.
         let file_name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
         assert_eq!(
             file_name,
-            "Helper.sky",
-            "#144 regression: type error in dep module must blame `Helper.sky`, \
+            "Helper.ipe",
+            "#144 regression: type error in dep module must blame `Helper.ipe`, \
              not `{file_name}`; full path: {}",
             file.display()
         );
@@ -2342,12 +2342,12 @@ main =
     /// is available.
     ///
     /// This test builds a two-module program where the type error is in module B
-    /// (`Lib.sky`) but the heuristic *could* be fooled by a wide def in module A
-    /// (`Pad.sky`).  The assertion checks that the blamed file is `Lib.sky`.
+    /// (`Lib.ipe`) but the heuristic *could* be fooled by a wide def in module A
+    /// (`Pad.ipe`).  The assertion checks that the blamed file is `Lib.ipe`.
     ///
-    /// To exercise the home-discriminant path rather than the heuristic, `Pad.sky`
+    /// To exercise the home-discriminant path rather than the heuristic, `Pad.ipe`
     /// is constructed so that its def body starts at roughly the same byte offset
-    /// as the error in `Lib.sky` — any byte-offset resolver that ignores the home
+    /// as the error in `Lib.ipe` — any byte-offset resolver that ignores the home
     /// would be ambiguous.  The discriminant is the only reliable resolver.
     #[test]
     fn home_discriminant_cross_module_type_error_names_correct_file() {
@@ -2356,8 +2356,8 @@ main =
         let src = tmp.join("src");
         fs::create_dir_all(&src).expect("create src/");
 
-        // Pad.sky: a valid module whose single def body starts at roughly the
-        // same byte offset as the type error in Lib.sky.  Constructed so the
+        // Pad.ipe: a valid module whose single def body starts at roughly the
+        // same byte offset as the type error in Lib.ipe.  Constructed so the
         // body span (a long arithmetic chain) numerically overlaps with Lib's
         // error span.  The body itself is well-typed.
         //
@@ -2367,12 +2367,12 @@ main =
         //
         // After link, Pad's def body covers bytes [27, 62] in Pad's namespace.
         fs::write(
-            src.join("Pad.sky"),
+            src.join("Pad.ipe"),
             "module Pad exposing (pad)\npad = 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9\n",
         )
-        .expect("write Pad.sky");
+        .expect("write Pad.ipe");
 
-        // Lib.sky: a module with a deliberate type error at a span that falls
+        // Lib.ipe: a module with a deliberate type error at a span that falls
         // numerically inside Pad's body range.
         //
         //   "module Lib exposing (bad)\nbad = " is 27 bytes.
@@ -2385,21 +2385,21 @@ main =
         // happens to be Lib here.  But in general (different padding choices) it
         // can pick the wrong one.  The fix makes the home the authoritative signal.
         fs::write(
-            src.join("Lib.sky"),
+            src.join("Lib.ipe"),
             "module Lib exposing (bad)\nbad = 1 + 2 + 3 + 4 + \"oops\"\n",
         )
-        .expect("write Lib.sky");
+        .expect("write Lib.ipe");
 
-        // Main.sky: imports both; the error is in Lib, not Main or Pad.
+        // Main.ipe: imports both; the error is in Lib, not Main or Pad.
         fs::write(
-            src.join("Main.sky"),
+            src.join("Main.ipe"),
             "module Main exposing (main)\nimport Lib\nimport Pad\nmain = println (String.fromInt Lib.bad)\n",
         )
-        .expect("write Main.sky");
+        .expect("write Main.ipe");
 
         let dummy_runtime = std::env::temp_dir();
         let out = tmp.join("out");
-        let result = build_with_sibling_discovery(&src.join("Main.sky"), &out, &dummy_runtime);
+        let result = build_with_sibling_discovery(&src.join("Main.ipe"), &out, &dummy_runtime);
 
         // Must fail — type error in Lib.
         assert!(
@@ -2411,14 +2411,14 @@ main =
             return;
         };
 
-        // The blamed file must be Lib.sky — the module that OWNS the failing
+        // The blamed file must be Lib.ipe — the module that OWNS the failing
         // constraint, regardless of which module the byte-offset heuristic
         // would pick.
         let file_name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
         assert_eq!(
             file_name,
-            "Lib.sky",
-            "home-discriminant regression: type error in Lib must blame `Lib.sky`, \
+            "Lib.ipe",
+            "home-discriminant regression: type error in Lib must blame `Lib.ipe`, \
              not `{file_name}`; full path: {}",
             file.display()
         );
@@ -2481,12 +2481,12 @@ main =
         sources.insert(
             entry_path.clone(),
             (
-                PathBuf::from("<cache-e2e>/Main.sky"),
+                PathBuf::from("<cache-e2e>/Main.ipe"),
                 "module Main exposing (main)\n\nmain = 1\n".to_owned(),
             ),
         );
         let discovered = vec![project::DiscoveredModule {
-            path: PathBuf::from("<cache-e2e>/Main.sky"),
+            path: PathBuf::from("<cache-e2e>/Main.ipe"),
             module_path: entry_path.clone(),
         }];
 
@@ -2606,12 +2606,12 @@ main =
         sources.insert(
             entry_path.clone(),
             (
-                PathBuf::from("<p>/Main.sky"),
+                PathBuf::from("<p>/Main.ipe"),
                 "module Main exposing (main)\n\nmain = 1\n".to_owned(),
             ),
         );
         let discovered = vec![project::DiscoveredModule {
-            path: PathBuf::from("<p>/Main.sky"),
+            path: PathBuf::from("<p>/Main.ipe"),
             module_path: entry_path.clone(),
         }];
 
@@ -2694,12 +2694,12 @@ main =
         sources.insert(
             entry_path.clone(),
             (
-                PathBuf::from("<p>/Main.sky"),
+                PathBuf::from("<p>/Main.ipe"),
                 "module Main exposing (main)\n\nmain = 1\n".to_owned(),
             ),
         );
         let discovered = vec![project::DiscoveredModule {
-            path: PathBuf::from("<p>/Main.sky"),
+            path: PathBuf::from("<p>/Main.ipe"),
             module_path: entry_path.clone(),
         }];
 
@@ -2779,12 +2779,12 @@ main =
         sources.insert(
             entry_path.clone(),
             (
-                PathBuf::from("<cache-e2e>/Main.sky"),
+                PathBuf::from("<cache-e2e>/Main.ipe"),
                 "module Main exposing (main)\n\nmain = 1\n".to_owned(),
             ),
         );
         let discovered = vec![project::DiscoveredModule {
-            path: PathBuf::from("<cache-e2e>/Main.sky"),
+            path: PathBuf::from("<cache-e2e>/Main.ipe"),
             module_path: entry_path.clone(),
         }];
 
