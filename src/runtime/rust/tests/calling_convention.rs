@@ -19,8 +19,7 @@ use std::path::PathBuf;
 
 #[test]
 fn no_unintended_curried_helpers() {
-    let runtime_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("src");
+    let runtime_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
 
     let mut curried: Vec<String> = Vec::new();
     // Capture the helper name AND the first parameter type of the returned

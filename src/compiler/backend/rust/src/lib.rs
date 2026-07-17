@@ -433,10 +433,8 @@ impl<'a> EmitCtx<'a> {
                 // Ipê enum DECL is suppressed in `emit_enum` (a bridged type has no
                 // user-emitted body). Same intent as the reference `Types.hs` map.
                 let def_name = resolve_sym(interner, def.name)?;
-                let rust_name = match websocket_bridge_rust_name(&home_segs, def_name) {
-                    Some(runtime_name) => runtime_name.to_owned(),
-                    None => naming::enum_name(&home_segs, def_name),
-                };
+                let rust_name = websocket_bridge_rust_name(&home_segs, def_name)
+                    .map_or_else(|| naming::enum_name(&home_segs, def_name), str::to_owned);
                 // A type's nominal identity is `(home, name)`. Two modules each
                 // declaring `type Color` share the bare `name` `Symbol` but differ
                 // in `home`, so they do not collide — each keys a distinct Rust

@@ -2079,7 +2079,7 @@ main =
 /// never see it) between the page load and the user's submit. If the page
 /// handler's Live-hit branch re-routed the session model for that GET
 /// (`/favicon.ico` matches no route → `notFound` page), re-rendered THAT view,
-/// and replaced the session's handler index + last_view, every subsequent
+/// and replaced the session's handler index + `last_view`, every subsequent
 /// event from the page the browser is actually showing (the form submit
 /// included) would resolve against the wrong index and be silently dropped.
 ///

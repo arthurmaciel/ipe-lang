@@ -24,6 +24,9 @@ fn missing(detail: &str) -> Diagnostic {
 /// Build the emitted `src/main.rs` for a program whose `count` function has a
 /// tail-recursive body — as a `TailLoop` when `tco` is true (post-rewrite shape),
 /// or an ordinary `If` with a self-`Call` when false (the un-rewritten shape).
+// A single cohesive IR fixture builder: constructing the two full `Program`s
+// inline is inherently long; splitting it would scatter one fixture.
+#[allow(clippy::too_many_lines)]
 fn emit_count_main_rs(tco: bool) -> DResult<String> {
     let mut interner = Interner::new();
     let main_mod = interner.intern("Main")?;

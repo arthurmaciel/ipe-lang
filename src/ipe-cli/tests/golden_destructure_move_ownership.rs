@@ -1,6 +1,6 @@
 //! Destructure move-ownership — SEAL regression.
 //!
-//! A `let (a, b) = pair` destructure binder whose CloneOk component `a` is read
+//! A `let (a, b) = pair` destructure binder whose `CloneOk` component `a` is read
 //! TWICE by value in the body. Without the fix, destructure was the ONE binder kind
 //! that never invoked the count/clone/relay machinery, so the emitted
 //! `string_append(a, string_append(a, b))` moved `a` twice → ipe-0 but
