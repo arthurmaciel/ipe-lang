@@ -14,7 +14,7 @@ import Ipe.Log exposing (println)
 -- already covered on HEAD — this golden is a LOCK, not a fix.
 --
 -- Pre-fix: may have been E0382 if `lower_let_pvar` did not reach pipeline closures.
--- Post-fix + lock: ipe-0 → cargo-0 → run prints the expected two lines.
+-- Post-fix + lock: skyc-0 → cargo-0 → run prints the expected two lines.
 runQuery : String -> Task Error String
 runQuery conn =
     Task.andThen

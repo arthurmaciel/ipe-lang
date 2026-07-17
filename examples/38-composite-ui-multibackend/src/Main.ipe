@@ -1,6 +1,6 @@
 module Main exposing (main)
 
--- examples/38-composite-ui-multibackend — ONE Ipê source rendering
+-- examples/38-composite-ui-multibackend — ONE Sky source rendering
 -- IDENTICALLY across Ipe.Live (web), Ipe.Tui (terminal), and
 -- Ipe.Webview (desktop). The shared View module owns Model + view;
 -- this file's sole job is to argv-dispatch into the right backend
@@ -101,7 +101,7 @@ main =
                 , update = update
                 , view = view
                 , subscriptions = subscriptions
-                , window = { title = "Ipê Habits", size = ( 960, 720 ) }
+                , window = { title = "Sky Habits", size = ( 960, 720 ) }
                 }
                 |> Task.run
 

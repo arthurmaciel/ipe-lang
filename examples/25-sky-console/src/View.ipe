@@ -83,7 +83,7 @@ header model =
         ]
         [ Ui.el
             [ Font.size 16, Font.bold ]
-            (Ui.text "Ipê Console")
+            (Ui.text "Sky Console")
         , Ui.el
             [ Ui.alignRight
             , Font.color textSecondary
@@ -96,7 +96,7 @@ header model =
 
 headerMeta : Overview -> String
 headerMeta o =
-    "Ipê " ++ o.skyVersion
+    "Sky " ++ o.skyVersion
         ++ " · " ++ o.authMode
         ++ " · uptime " ++ formatUptime o.uptimeSeconds
 
@@ -212,7 +212,7 @@ kpiCard label valueText =
 systemPanel : Overview -> Element Msg
 systemPanel o =
     panel "System"
-        [ infoRow "Ipê version"  o.skyVersion
+        [ infoRow "Sky version"  o.skyVersion
         , infoRow "Commit"       o.commit
         , infoRow "Built at"     o.builtAt
         , infoRow "Uptime"       (formatUptime o.uptimeSeconds)

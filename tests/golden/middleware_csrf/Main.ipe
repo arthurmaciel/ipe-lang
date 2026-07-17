@@ -2,7 +2,7 @@ module Main exposing (main)
 
 -- Compile-only golden for #63 (Middleware.withCsrf): pins that a Ipe.Http.Server
 -- route wrapped in Middleware.withCsrf emits `middleware_with_csrf(...)` and the
--- emitted crate cargo-builds (the seal: ipe exit 0 implies `cargo build` exit 0).
+-- emitted crate cargo-builds (the seal: skyc exit 0 implies `cargo build` exit 0).
 
 import Ipe.Http.Server as Server
 import Ipe.Http.Middleware as Middleware

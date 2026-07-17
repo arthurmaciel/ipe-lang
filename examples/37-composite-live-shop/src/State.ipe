@@ -141,7 +141,7 @@ cartTotalCents items =
 
 -- Currency formatting in cents → dollars + 2dp. Bug #462 forbids
 -- relying on String.padLeft with a non-digit char, so we build the
--- two-digit cents fragment via Ipê-side helpers.
+-- two-digit cents fragment via Sky-side helpers.
 formatMoney : Int -> String
 formatMoney cents =
     let

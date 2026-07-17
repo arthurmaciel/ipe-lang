@@ -9,7 +9,7 @@ module Main exposing (main)
 -- re-embedded handler box MOVED them out on the first call, degrading the
 -- wrapper to `FnOnce` — `server_stream_stream`'s `Fn` bound then rejected it
 -- (2x E0507 `cannot move out of a captured variable in an Fn closure`,
--- AFTER `ipe` exit 0 — a SEAL break).
+-- AFTER `skyc` exit 0 — a SEAL break).
 --
 -- Fix: the `StreamStream` emit arm pre-clones every free local the handler
 -- captures INSIDE the wrapper body, so the box moves fresh clones and the

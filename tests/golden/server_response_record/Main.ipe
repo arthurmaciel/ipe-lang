@@ -11,7 +11,7 @@ import Ipe.Log exposing (println)
 
 -- #217 contract-drift regression: `Ipe.Http.Server.Response` is a record
 -- alias `{ status : Int, body : String, headers : Dict String String,
--- contentType : String }` (reference `Ipê/Http/Server.ipe:66`), NOT an
+-- contentType : String }` (reference `Sky/Http/Server.ipe:66`), NOT an
 -- opaque nominal. Ported verbatim from the reference idiom: build a
 -- `Response` as a record literal, and read a field back off it.
 

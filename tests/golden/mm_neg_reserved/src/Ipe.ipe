@@ -1,0 +1,3 @@
+module Ipe exposing (val)
+val : Int
+val = 1

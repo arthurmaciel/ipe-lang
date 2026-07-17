@@ -9,7 +9,7 @@ module Main exposing (main)
 -- `#[derive(Clone, Copy)]` (an i64 id wrapper, server_stream.rs:38).
 --
 -- Fix: StreamWriter classifies as `CopyLeaf` — bare capture is sound.
--- This fixture asserts ipe exit-0; the cargo/runtime layer is covered by
+-- This fixture asserts skyc exit-0; the cargo/runtime layer is covered by
 -- the 30-sse-server-demo sweep entry.
 
 import Ipe.Http.Server as Server

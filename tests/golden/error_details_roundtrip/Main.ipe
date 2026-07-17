@@ -2,7 +2,7 @@ module Main exposing (main)
 
 -- Backlog #85 follow-up — `ErrorInfo.details : Maybe ErrorDetails` + the
 -- 5-variant `ErrorDetails`/`PanicInfo`/`TypeInfo` union (ported alongside the
--- core `Error ErrorKind ErrorInfo` ADT from `crates/ipe/tests/
+-- core `Error ErrorKind ErrorInfo` ADT from `crates/skyc/tests/
 -- golden_error_adt_roundtrip.rs`, backlog #85/#160).
 --
 -- `Error.withDetails` is the sanctioned way to attach `ErrorDetails` to a

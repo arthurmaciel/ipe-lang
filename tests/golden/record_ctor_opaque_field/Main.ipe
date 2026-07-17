@@ -11,7 +11,7 @@ import Ipe.Log exposing (println)
 -- Clone/Debug/PartialEq/SkyStringify. Round-1's synthesis gate wrongly EXEMPTED
 -- the opaque head (mirroring the lowerer's payload-scan) and synthesised a
 -- constructor, so the backend emitted a `#[derive(Clone, Debug, PartialEq)]` +
--- `impl SkyStringify` struct over `Decoder` — ipe exit-0 then cargo-101
+-- `impl SkyStringify` struct over `Decoder` — skyc exit-0 then cargo-101
 -- (E0277 Clone/Debug, E0369 ==, E0599 SkyStringify): the seal hole. The
 -- struct-derivability gate now DECLINES synthesis, so merely NAMING this alias
 -- (declared, never constructed) builds clean — no ctor, no struct.

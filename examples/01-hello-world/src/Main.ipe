@@ -5,4 +5,4 @@ import Ipe.Log exposing (println)
 
 
 main =
-    println "Hello from Ipê!"
+    println "Hello from Sky!"
