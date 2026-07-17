@@ -1,9 +1,9 @@
-//! Sky → Rust identifier naming rules (M0 subset).
+//! Sky → Rust identifier naming rules.
 //!
 //! Ports the relevant arms of `Sky/Generate/Rust/Builder/Naming.hs`:
 //! `toCamelCase` / `toSnakeCase` and the module-prefixing used to derive Rust
-//! type and function names. M0 only needs the `Main` module's enum + functions,
-//! but the conversions are written generally so they match the reference.
+//! type and function names. The conversions are written generally so they
+//! match the reference across every module, not just `Main`.
 
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
@@ -131,11 +131,11 @@ pub fn to_snake_case(s: &str) -> String {
 /// → `Sky_Core_Io`). This matches `moduleNameToRust` (dots → underscores) when
 /// the path is supplied as already-split segments.
 ///
-/// `pub` (rather than private) since Phase 5's `rust_file::mod_ident`
-/// (design doc §2.1.1) reuses this exact fold for the NEW `ModPath -> Rust
-/// mod identifier` namespace. `naming` stays a private module, so `pub`
-/// here is crate-scoped in practice (`clippy::redundant_pub_crate` — a
-/// `pub(crate)` item inside a private module is equivalent to `pub`).
+/// `pub` (rather than private) because `rust_file::mod_ident` reuses this exact
+/// fold for the `ModPath -> Rust mod identifier` namespace. `naming` stays a
+/// private module, so `pub` here is crate-scoped in practice
+/// (`clippy::redundant_pub_crate` — a `pub(crate)` item inside a private module
+/// is equivalent to `pub`).
 pub fn module_prefix(module: &[&str]) -> String {
     module.join("_")
 }
@@ -213,7 +213,7 @@ fn is_reserved_rust_name(s: &str) -> bool {
 /// Rewrite an emitted identifier that collides with a Rust keyword so the
 /// generated code compiles. A reserved name gains a trailing underscore
 /// (`type` → `type_`, `Self` → `Self_`); every other name passes through
-/// unchanged, so emission for the M0 golden stays byte-identical.
+/// unchanged.
 ///
 /// The trailing-underscore form is chosen over raw identifiers (`r#name`)
 /// because it is valid for *every* keyword — `r#crate` / `r#self` / `r#Self` /
@@ -291,7 +291,7 @@ pub fn record_struct_name(field_names: &[String]) -> String {
     mangle_reserved(to_camel_case(&format!("Rec_{joined}")))
 }
 
-/// The Rust runtime function name for a kernel built-in (M0 subset). Mirrors
+/// The Rust runtime function name for a kernel built-in. Mirrors
 /// `Kernel.kernelToRust`.
 #[must_use]
 #[allow(clippy::too_many_lines)]
@@ -400,7 +400,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // ── end Basics numerics ──────────────────────────────────────
         // ── Error kernels (Sky.Core.Error — real Error/ErrorKind ADT) ──
         // Each message constructor classifies its own `ErrorKind` at
-        // construction (`sky_runtime::error::SkyError`, no longer a shared
+        // construction (`sky_runtime::error::SkyError`, not a shared
         // string-identity). `toString` reuses the existing `errorToString`
         // runtime (`basics_error_to_string`).
         KernelFn::ErrorUnexpected => "sky_error_unexpected",
@@ -467,7 +467,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // ── Math arity-1 (Int → Int) ─────────────────────────────────────────
         KernelFn::MathAbs => "math_abs",
         // ── Math arity-1 (Float → Float) ────────────────────────────────────
-        // MathSqrt merged with BasicsSqrt above (Basics numerics #115).
+        // MathSqrt merged with BasicsSqrt above.
         KernelFn::MathCbrt => "math_cbrt",
         KernelFn::MathExp => "math_exp",
         KernelFn::MathExp2 => "math_exp2",
@@ -735,7 +735,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // the params list via `sky_runtime::db::SqlParam::from` which is
         // implemented for all of those types (runtime primitives + generated
         // `StdDbSqlValue`).  The untyped `db_exec(Vec<String>)` variant in the
-        // runtime is retained for direct Rust test use but is no longer emitted
+        // runtime is retained for direct Rust test use but is not emitted
         // for Sky source.
         KernelFn::DbConnect => "db_connect",
         KernelFn::DbOpen => "db_open",
@@ -860,7 +860,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::SubBatch => "sub_batch",
         KernelFn::SubEvery => "sub_every",
         KernelFn::TimeEvery => "time_every",
-        // ── M6 reserved TEA kernels (NOT emittable; emit path returns CompilerBug) ──
+        // ── Reserved TEA kernels (NOT emittable; emit path returns CompilerBug) ─────
         // kernel_name is still required for any exhaustive match on KernelFn.
         KernelFn::CmdPublish => "cmd_publish",
         KernelFn::CmdPublishNoEcho => "cmd_publish_no_echo",
@@ -897,7 +897,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::MiddlewareWithRateLimit => "middleware_with_rate_limit",
         KernelFn::MiddlewareWithCsrf => "middleware_with_csrf",
         KernelFn::RateLimitAllow => "rate_limit_allow",
-        // ── Std.Ui / Std.Html render kernels (Phase 0 — fully wired) ────
+        // ── Std.Ui / Std.Html render kernels (fully wired) ──────────────
         KernelFn::UiLayout => "ui_layout",
         KernelFn::UiLayoutWith => "ui_layout_with",
         // `Html.toString` is a distinct kernel sharing `HtmlRender`'s runtime fn.
@@ -905,15 +905,15 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::HtmlEscapeText => "html_escape_text_",
         KernelFn::HtmlEscapeAttr => "html_escape_attr_",
         KernelFn::HtmlAttrToString => "html_attr_to_string_",
-        // ── Std.Live app-entry kernels (Phase 0 — stubs, emit CompilerBug) ──
+        // ── Std.Live app-entry kernels ──────────────────────────────────
         KernelFn::LiveApp => "live_app",
         KernelFn::LiveAppRouted => "live_app_routed",
         KernelFn::LiveRoute => "live_route",
         KernelFn::LiveRenderStatic => "live_render_static",
-        // ── Std.Tui app-entry kernels (Phase 0 — stubs) ─────────────────
+        // ── Std.Tui app-entry kernels ───────────────────────────────────
         KernelFn::TuiProgram => "tui_app",
         KernelFn::TuiApp => "tui_app_ui",
-        // ── Std.Webview app-entry kernel (Phase 0 — stub) ───────────────
+        // ── Std.Webview app-entry kernel ────────────────────────────────
         KernelFn::WebviewApp => "webview_app",
         // ── Std.Ui element builders ──────────────────────────────────────
         KernelFn::UiNone => "ui_none_",
@@ -1208,7 +1208,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         | KernelFn::HtmlAttrAutofocus
         | KernelFn::HtmlBoolAttribute => "html_bool_named_attr_",
         KernelFn::HtmlNoAttr => "html_no_attr_",
-        // Phase-1a event-attribute builders
+        // Event-attribute builders
         KernelFn::UiOnClick => "ui_on_click_",
         KernelFn::UiOnFocus => "ui_on_focus_",
         KernelFn::UiOnBlur => "ui_on_blur_",

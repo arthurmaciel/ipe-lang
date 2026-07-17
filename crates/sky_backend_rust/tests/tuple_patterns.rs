@@ -1,5 +1,4 @@
-//! Tuple-pattern and unit-value tests for the M3b-1 Rust backend (task
-//! M3B1-CORE).
+//! Tuple-pattern and unit-value tests for the Rust backend.
 //!
 //! These exercise the two IR additions the backend learned to emit:
 //!

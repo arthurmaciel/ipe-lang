@@ -1,11 +1,10 @@
-//! Emission for `Std.Live` / `Sky.Live` app-entry kernels (Phase-1b).
+//! Emission for `Std.Live` / `Sky.Live` app-entry kernels.
 //!
 //! Wires three of the four Live kernels:
 //!
 //! * [`KernelFn::LiveApp`] — `Live.app cfg` → `sky_runtime::live::live_app(…)`
 //!   for single-page apps, or `live_app_routed(…)` when the Model carries a
-//!   `page` field (#108 T5 emit branch — the six-field cfg scheme with
-//!   `routes` / `notFound`).
+//!   `page` field (the six-field cfg scheme with `routes` / `notFound`).
 //! * [`KernelFn::LiveRoute`] — `Live.route pattern ctor` →
 //!   `sky_runtime::live::route::Route::new(…)`.
 //! * [`KernelFn::LiveRenderStatic`] — `Live.renderStatic view model` →
@@ -18,7 +17,7 @@
 //!   by index (panic vector eliminated).
 //! * Store kind / path are read from process env at call time, not compiled in.
 //! * `Live.appRouted` is a vestigial alias routed through the same
-//!   `lower_app_entry_cfg` path as `Live.app` (#108 T4); its arm here is a
+//!   `lower_app_entry_cfg` path as `Live.app`; its arm here is a
 //!   defensive invariant check.
 
 use sky_diagnostics::{DResult, Diagnostic, LowerError, Span};
@@ -35,7 +34,7 @@ use crate::emit_types::{GenericScope, render_type};
 /// `k.is_live()` variants, but a defensive `None` for unknown variants avoids
 /// a catchall `_` arm).
 ///
-/// Called from `emit_ui_call` after the Phase-0 stubs were removed.
+/// Called from `emit_ui_call`.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 pub fn emit_live_call(
@@ -53,7 +52,7 @@ pub fn emit_live_call(
     match k {
         // ── Live.app { init, update, view, subscriptions, routes, notFound } ──
         //
-        // The six-field cfg scheme (#108 T3). `emit_live_app_inner` branches
+        // The six-field cfg scheme. `emit_live_app_inner` branches
         // on the Model's `page` field: routed apps take `live_app_routed`
         // (routes + notFound + set_page); single-page apps take `live_app`.
         KernelFn::LiveApp => {
@@ -77,7 +76,7 @@ pub fn emit_live_call(
             emit_live_app_inner(ctx, fields, indent, child, generics)
         }
 
-        // ── Live.appRouted — vestigial alias of `Live.app` (#108 T4) ───────
+        // ── Live.appRouted — vestigial alias of `Live.app` ─────────────────
         //
         // The lower stage routes `Live.appRouted` through the same
         // `lower_app_entry_cfg` path as `Live.app` (the reference has ONE
@@ -134,7 +133,7 @@ pub fn emit_live_call(
 
 /// Emit `Live.route pattern builder` → `Route::new(&pattern, closure)`.
 ///
-/// `Live.route : String -> builder -> LiveRoute page` (#106 / #108 round 4).
+/// `Live.route : String -> builder -> LiveRoute page`.
 /// The builder argument is one of:
 ///
 /// * A page-constructor reference ([`Expr::Ctor`], nullary or partial — the
@@ -183,7 +182,7 @@ fn emit_live_route(
         args: ctor_args,
     } = builder_e
     {
-        // T6: the full field-type slice (not just the count) so each slot can
+        // The full field-type slice (not just the count) so each slot can
         // emit a type-directed conversion.
         let variant_tys = ctx.variant_fields(home, *ty, *variant)?;
         let ctor_s = emit_expr_at(ctx, builder_e, indent, child, generics)?;
@@ -499,16 +498,16 @@ fn builder_fn_params(e: &Expr) -> Option<Vec<&IrType>> {
 ///
 /// Returns `Some((model_ty, page_ty))` when:
 /// - `view` is an `Expr::FuncValue` OR an `Expr::Lambda` whose first parameter
-///   type is recoverable (`emit_model_gate::fn_param_ty` — the #95 fix; a
-///   lambda `view` previously fell through here and a ROUTED app silently
-///   emitted the non-routed `live_app`, discarding `routes`/`notFound`),
+///   type is recoverable (`emit_model_gate::fn_param_ty` handles both shapes,
+///   so a routed lambda `view` is not misrouted to the non-routed `live_app`,
+///   which would discard `routes`/`notFound`),
 /// - the Model is an `IrType::Record`, and
 /// - one of its fields resolves to the Sky identifier `"page"`.
 ///
 /// Returns `None` for single-page apps or when the Model type cannot be
 /// structurally recovered (treated as "unrouted" — never false-blocks a
 /// well-formed program, mirrors the same "cannot prove inadmissible" policy
-/// as `emit_model_gate`).  Sharing `model_ty_of_view` with the #91 Model gate
+/// as `emit_model_gate`).  Sharing `model_ty_of_view` with the Model gate
 /// keeps the type-tier `RoutedLiveCheck` and this emit-tier detection in
 /// agreement on every cfg-field shape the gate can see.
 fn routed_page_field<'a>(ctx: &EmitCtx, view_e: &'a Expr) -> Option<(&'a IrType, &'a IrType)> {
@@ -546,7 +545,7 @@ fn routed_page_field<'a>(ctx: &EmitCtx, view_e: &'a Expr) -> Option<(&'a IrType,
 /// The general [`emit_expr_at`] path is WRONG for these slots: it pins a lambda
 /// to `Box<dyn Fn(...) -> R + Send + 'static>` (see `emit_lambda`). That trait
 /// object carries `Send` but NOT `Sync`, so it fails the slot's `Sync` bound —
-/// an exit-0-then-cargo-fail SEAL break (`E0277`, #176: subscription
+/// an exit-0-then-cargo-fail SEAL break (`E0277`: subscription
 /// `\_ -> Sub.none` in `examples/10-live-component`). Emitting the closure
 /// unboxed keeps the concrete closure type, whose auto-derived `Send + Sync`
 /// satisfies the bound.

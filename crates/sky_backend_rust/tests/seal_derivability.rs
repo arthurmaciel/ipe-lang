@@ -30,7 +30,7 @@ fn program(name: Symbol, types: Vec<TypeDef>, funcs: Vec<Func>) -> Program {
 }
 
 /// Like [`program`] but lets the test set `uses_live`, so the emitter takes the
-/// Std.Live serde-derive path (#93 gate exercise).
+/// Std.Live serde-derive path (SEAL gate exercise).
 fn program_with_live(
     name: Symbol,
     types: Vec<TypeDef>,
@@ -248,12 +248,12 @@ fn enum_with_function_payload_has_no_derive() -> DResult<()> {
 
 /// seal: in a `Std.Live` program, a NON-Model view-helper record that holds
 /// an `Html` field is `CDPeq`-supporting (`Html<M>` derives `Clone, Debug,
-/// PartialEq`) but NOT serde-supporting (`Html<M>` is not `Serialize`). Before
-/// the #93 fix the serde derive was gated on the `CDPeq` flag (`is_derivable`), so
-/// such a record got `#[derive(..., serde::Serialize, serde::Deserialize)]`
-/// forced onto it → `skyc` exit 0 then `cargo` E0277. The gate now reads the
-/// per-record serde flag (`is_serde`): the helper keeps its `CDPeq` derive WITHOUT
-/// serde, while a sibling all-primitive record still gets the serde derive.
+/// PartialEq`) but NOT serde-supporting (`Html<M>` is not `Serialize`). Gating
+/// the serde derive on the `CDPeq` flag (`is_derivable`) would force
+/// `#[derive(..., serde::Serialize, serde::Deserialize)]` onto such a record →
+/// `skyc` exit 0 then `cargo` E0277. The gate instead reads the per-record
+/// serde flag (`is_serde`): the helper keeps its `CDPeq` derive WITHOUT serde,
+/// while a sibling all-primitive record still gets the serde derive.
 ///
 /// This is the emit-text half of the seal (fast, no cargo). The cargo-buildable
 /// half is proven end-to-end by `skyc`'s `live_e2e::live_html_helper_record_build_only`.

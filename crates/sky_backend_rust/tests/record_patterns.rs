@@ -1,5 +1,4 @@
-//! Record-pattern and nested-pattern tests for the M3b-2 Rust backend (task
-//! M3B2-CORE).
+//! Record-pattern and nested-pattern tests for the Rust backend.
 //!
 //! These exercise the IR addition the backend learned to render — the RECORD
 //! pattern [`Pat::Record`] — plus the renderer's now-fully-recursive coverage of
