@@ -23,9 +23,10 @@ use std::fmt;
 
 use lsp_server::Connection;
 use lsp_types::{
-    HoverProviderCapability, InitializeParams, InitializeResult, OneOf, PositionEncodingKind,
-    SaveOptions, ServerCapabilities, ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind,
-    TextDocumentSyncOptions, TextDocumentSyncSaveOptions,
+    DocumentLinkOptions, FoldingRangeProviderCapability, HoverProviderCapability, InitializeParams,
+    InitializeResult, OneOf, PositionEncodingKind, SaveOptions, ServerCapabilities, ServerInfo,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+    TextDocumentSyncSaveOptions,
 };
 
 use ipe_lsp_features::PositionEncoding;
@@ -124,6 +125,11 @@ fn server_capabilities(encoding: PositionEncoding) -> ServerCapabilities {
         position_encoding: Some(position_encoding),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
+        document_link_provider: Some(DocumentLinkOptions {
+            resolve_provider: Some(false),
+            work_done_progress_options: lsp_types::WorkDoneProgressOptions::default(),
+        }),
+        folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
         text_document_sync: Some(TextDocumentSyncCapability::Options(
             TextDocumentSyncOptions {
                 open_close: Some(true),

@@ -47,6 +47,14 @@ struct State {
 }
 
 impl State {
+    /// The document URI of a user module, when it has an on-disk path.
+    fn uri_for_module(&self, module: &[String]) -> Option<Url> {
+        self.module_of_path
+            .iter()
+            .find(|(_, m)| m.as_slice() == module)
+            .and_then(|(path, _)| Url::from_file_path(path).ok())
+    }
+
     /// Resolve a document URI to its module path, input handle, and current
     /// input text.
     fn locate(&self, uri: &Url) -> Option<(Vec<String>, ipe_db::SourceFile, String)> {
@@ -132,6 +140,8 @@ fn handle_request(state: &State, connection: &Connection, request: Request) {
     let result: Option<serde_json::Value> = match request.method.as_str() {
         "textDocument/hover" => Some(hover_result(state, &request.params)),
         "textDocument/documentSymbol" => Some(document_symbols_result(state, &request.params)),
+        "textDocument/documentLink" => Some(document_links_result(state, &request.params)),
+        "textDocument/foldingRange" => Some(folding_ranges_result(state, &request.params)),
         _ => None,
     };
     let response = match result {
@@ -183,6 +193,51 @@ fn hover_result(state: &State, params: &serde_json::Value) -> serde_json::Value 
             serde_json::to_value(hover).unwrap_or(serde_json::Value::Null)
         },
     )
+}
+
+/// `textDocument/documentLink` — every resolved `import` as a link to the
+/// imported module's file.
+fn document_links_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+    let Ok(params) = serde_json::from_value::<lsp_types::DocumentLinkParams>(params.clone()) else {
+        return serde_json::Value::Null;
+    };
+    let Some((_module, file, text)) = state.locate(&params.text_document.uri) else {
+        return serde_json::Value::Null;
+    };
+    let Some(root) = state.root else {
+        return serde_json::Value::Null;
+    };
+    let links: Vec<lsp_types::DocumentLink> =
+        ipe_lsp_features::links::document_links(&state.db, root, file)
+            .into_iter()
+            .filter_map(|link| {
+                let target = state.uri_for_module(&link.target_module)?;
+                Some(lsp_types::DocumentLink {
+                    range: ipe_lsp_features::offset::span_to_range(
+                        &text,
+                        link.span,
+                        state.encoding,
+                    ),
+                    target: Some(target),
+                    tooltip: None,
+                    data: None,
+                })
+            })
+            .collect();
+    serde_json::to_value(links).unwrap_or(serde_json::Value::Null)
+}
+
+/// `textDocument/foldingRange` — the import block plus every multi-line
+/// top-level declaration.
+fn folding_ranges_result(state: &State, params: &serde_json::Value) -> serde_json::Value {
+    let Ok(params) = serde_json::from_value::<lsp_types::FoldingRangeParams>(params.clone()) else {
+        return serde_json::Value::Null;
+    };
+    let Some((_module, file, _text)) = state.locate(&params.text_document.uri) else {
+        return serde_json::Value::Null;
+    };
+    let ranges = ipe_lsp_features::folding::folding_ranges(&state.db, file, state.encoding);
+    serde_json::to_value(ranges).unwrap_or(serde_json::Value::Null)
 }
 
 /// `textDocument/documentSymbol` — the parse tree's hierarchical outline.

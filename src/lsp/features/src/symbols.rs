@@ -26,10 +26,16 @@ pub fn document_symbols(
 
     let mut out: Vec<DocumentSymbol> = Vec::new();
     for value in &module.values {
+        // A value's `Located` span is its NAME; the full range runs to the
+        // body's end.
+        let full = Span::new(
+            value.value.name.span.lo,
+            value.value.body.span.hi.max(value.span.hi),
+        );
         out.push(symbol(
             resolve(value.value.name.value),
             SymbolKind::FUNCTION,
-            value.span,
+            full,
             value.value.name.span,
             Vec::new(),
             text,
