@@ -43,7 +43,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets --workspace -- -D warnings
 
-  # Guards the sky-runtime-rust feature graph against silent coupling. The
+  # Guards the ipe-runtime-rust feature graph against silent coupling. The
   # workspace jobs above build the runtime with its DEFAULT features (`[]`), so
   # narrow subsets are otherwise unexercised. In particular a DB-only server /
   # CLI app must compile WITHOUT `live` (Sky.Live) — if a future change adds an
@@ -61,9 +61,24 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.6
       - uses: Swatinem/rust-cache@v2
       # db WITHOUT live — the load-bearing invariant.
-      - run: cargo clippy -p sky-runtime-rust --no-default-features --features db --all-targets -- -D warnings
+      - run: cargo clippy -p ipe-runtime-rust --no-default-features --features db --all-targets -- -D warnings
       # db WITH live — the pair must also stay co-buildable.
-      - run: cargo clippy -p sky-runtime-rust --no-default-features --features db,live --all-targets -- -D warnings
+      - run: cargo clippy -p ipe-runtime-rust --no-default-features --features db,live --all-targets -- -D warnings
+
+  # WASM floor: the pure kernel set (incl. the whole Ipe.Ui render surface) and
+  # the json leg must keep compiling to wasm32-unknown-unknown — the substrate
+  # of the browser target (docs/architecture/wasm-target.md).
+  wasm-floor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: mozilla-actions/sccache-action@v0.0.6
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p ipe-runtime-rust --target wasm32-unknown-unknown
+      - run: cargo build -p ipe-runtime-rust --target wasm32-unknown-unknown --features json
 
   test:
     runs-on: ubuntu-latest
@@ -76,7 +91,7 @@ jobs:
       - run: cargo nextest run --workspace          # E2E tests no-op without IPE_E2E
       - run: cargo test --doc --workspace           # nextest doesn't run doctests
 
-  # `sky-runtime-rust`'s `default = []` leaves `compression`/`csv`/`config`/
+  # `ipe-runtime-rust`'s `default = []` leaves `compression`/`csv`/`config`/
   # `tokio` (and every other optional feature) OFF, so the `test` job above
   # never compiles the `#[cfg(feature = "...")]`-gated unit tests that live
   # behind those flags — including #129's 7 `*_spawn_blocking_tests` modules
@@ -90,7 +105,7 @@ jobs:
   # this job is the one place those regression tests run in CI. The local
   # gate recipes (scripts/progressive-development/context.md +
   # autopilot.sh) carry the mirroring
-  # `cargo nextest run -p sky-runtime-rust --features full` lane — keep them
+  # `cargo nextest run -p ipe-runtime-rust --features full` lane — keep them
   # in sync with this job.
   runtime-full-features:
     runs-on: ubuntu-latest
@@ -100,7 +115,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.6
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
-      - run: cargo nextest run -p sky-runtime-rust --features full
+      - run: cargo nextest run -p ipe-runtime-rust --features full
 
   # Scoped deliberately, not exhaustively. All 6 targets are
   # `#![forbid(unsafe_code)]`, so Miri's value here is catching UB triggered

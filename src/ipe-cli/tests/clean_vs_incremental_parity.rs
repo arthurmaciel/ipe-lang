@@ -78,7 +78,12 @@ fn cold_compile(user: &UserSources) -> CompileOutcome {
     let db = ipe_db::IpeDatabase::new();
     let root =
         ipe::create_source_root(&db, &sources, &injected, &std::collections::BTreeSet::new());
-    let config = ipe_db::BuildConfig::new(&db, ipe_backend_rust::DbDriver::Sqlite, None);
+    let config = ipe_db::BuildConfig::new(
+        &db,
+        ipe_backend_rust::DbDriver::Sqlite,
+        None,
+        ipe_ir::Target::Native,
+    );
     ipe::compile_prepared(
         &db,
         root,
@@ -139,7 +144,12 @@ impl WarmSession {
             root
         };
         let config = *self.config.get_or_insert_with(|| {
-            ipe_db::BuildConfig::new(&self.db, ipe_backend_rust::DbDriver::Sqlite, None)
+            ipe_db::BuildConfig::new(
+                &self.db,
+                ipe_backend_rust::DbDriver::Sqlite,
+                None,
+                ipe_ir::Target::Native,
+            )
         });
         ipe::compile_prepared(
             &self.db,

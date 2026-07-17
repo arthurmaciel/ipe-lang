@@ -864,6 +864,25 @@ String, size : (Int, Int) }`) today; macOS is supported first.
 (...)` to convert `Element` → `Html` before rendering. A raw `Ui.column
 [...]` body produces a blank window (same convention as Ipe.Live).
 
+## Browser-WASM target (`--target wasm`)
+
+`ipe build --target wasm` compiles a single-page `Live.app` program to a
+browser bundle: the emitted project is a `cdylib` crate (wasm-bindgen glue,
+no tokio/axum/sqlx) plus a static `www/` shell (CSP `script-src 'self'
+'wasm-unsafe-eval'` — no JS eval). Bundle it with
+`cargo build --target wasm32-unknown-unknown --release` + the `wasm-bindgen`
+CLI (the build prints the exact commands).
+
+Per-target capability: pure kernels (`String`/`List`/`Dict`/`Math`/`Json`/
+`Decimal`/`Regex`/…) and the whole `Ipe.Ui`/`Ipe.Html`/`Ipe.Css` render
+surface compile; `Cmd.none`/`Cmd.batch`/`Cmd.perform`/`Sub.none` run on the
+browser scheduler. Server-only effects (`Db.*`, `File.*`, `Auth.*`,
+`System.getenv`, `Server.*`, `Log.*`, `Http.*`, `Time.now`, …) have NO wasm
+denotation — naming one is IPE-N0029 at compile time; route them through a
+native server and call it over HTTP once the fetch substitute lands. Routed
+apps (Model with a `page` field) are IPE-L0129 until the client router
+ships; use `routes = []` + a page-free Model.
+
 ## Active limitations
 
 Current compiler limitations to work around when writing code.
@@ -909,6 +928,7 @@ Current compiler limitations to work around when writing code.
 ```bash
 ipe init [name]                    # new project
 sky build src/Main.ipe             # compile → sky-out/app
+ipe build src/Main.ipe --target wasm   # browser-WASM project (cdylib + www/ shell)
 ipe run src/Main.ipe               # build + run
 ipe build|run … --static           # fully-static musl single binary (dlmalloc
                                    #  default; --target <triple> --allocator

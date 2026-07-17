@@ -380,7 +380,13 @@ mod tests {
         program: &Program,
         fields: BTreeMap<ipe_intern::Symbol, IrType>,
     ) -> DResult<[u8; 32]> {
-        let ctx = EmitCtx::build(interner, program, DbDriver::Sqlite, None)?;
+        let ctx = EmitCtx::build(
+            interner,
+            program,
+            DbDriver::Sqlite,
+            None,
+            ipe_ir::Target::Native,
+        )?;
         model_schema_tag(&ctx, &IrType::Record(fields))
     }
 
@@ -513,7 +519,13 @@ mod tests {
                 enum_def(home_b.clone(), boxed, vec![variant]),
             ],
         );
-        let ctx = EmitCtx::build(&interner, &program, DbDriver::Sqlite, None)?;
+        let ctx = EmitCtx::build(
+            &interner,
+            &program,
+            DbDriver::Sqlite,
+            None,
+            ipe_ir::Target::Native,
+        )?;
 
         let model_a = IrType::Record(BTreeMap::from([(
             field,
@@ -591,9 +603,21 @@ mod tests {
             },
         )]));
 
-        let ctx_1 = EmitCtx::build(&interner, &program_1, DbDriver::Sqlite, None)?;
+        let ctx_1 = EmitCtx::build(
+            &interner,
+            &program_1,
+            DbDriver::Sqlite,
+            None,
+            ipe_ir::Target::Native,
+        )?;
         let a = model_schema_tag(&ctx_1, &model)?;
-        let ctx_2 = EmitCtx::build(&interner, &program_2, DbDriver::Sqlite, None)?;
+        let ctx_2 = EmitCtx::build(
+            &interner,
+            &program_2,
+            DbDriver::Sqlite,
+            None,
+            ipe_ir::Target::Native,
+        )?;
         let b = model_schema_tag(&ctx_2, &model)?;
         assert_ne!(
             a, b,
