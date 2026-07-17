@@ -11,7 +11,9 @@
 //! the `SourceFile` inputs the driver (the LSP server crate) sets.
 
 pub mod diagnostics;
+pub mod folding;
 pub mod hover;
+pub mod links;
 pub mod offset;
 pub mod symbols;
 
