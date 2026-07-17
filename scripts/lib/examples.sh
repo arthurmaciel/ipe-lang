@@ -122,10 +122,14 @@ is_web_example() {
 }
 
 # ── example_shape <dir>: tui|webview|fyne|server|live|cli ────────────────────
-# `_shape_match` strips Ipê line comments (`--…`) from every matching line before
-# re-testing, so a doc comment naming a backend can't misclassify the example.
+# `_shape_match` strips Ipê comments — both `{- … -}` block/doc comments (which
+# can span lines) AND `--…` line comments — from the whole source before matching,
+# so prose that names a backend (e.g. a `{-| … like Ipe.Live … -}` doc comment on
+# a CLI example) can't misclassify the example by its shape.
 _shape_match() { # $1=src dir  $2=regex
-  rg --no-filename -e "$2" "$1" 2>/dev/null | sed 's/--.*$//' | rg -q -e "$2" 2>/dev/null
+  find "$1" -name '*.ipe' -exec cat {} + 2>/dev/null \
+    | perl -0777 -pe 's/\{-.*?-\}//gs; s/--[^\n]*//g' \
+    | rg -q -e "$2" 2>/dev/null
 }
 example_shape() {
   local s="$1/src"
