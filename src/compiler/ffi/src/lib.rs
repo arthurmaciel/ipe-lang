@@ -20,4 +20,5 @@ pub mod call;
 pub mod diag;
 pub mod naming;
 pub mod num_coerce;
+pub mod pkginfo;
 pub mod typeref;

@@ -5,6 +5,77 @@
 //! tri-artifact agreement is byte-equal by construction — a three-way name
 //! skew (an under-bind that link-fails) is structurally impossible.
 
+use crate::diag::WireDefect;
+
+/// A validated Rust identifier (`^[A-Za-z_][A-Za-z0-9_]*$`).
+///
+/// The constructor is the only way in, so a crate that names a symbol
+/// `"; std::process::Command::new(...)"` can never reach generated source —
+/// the injection class dies at the trusted decode surface.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RustIdent(String);
+
+impl RustIdent {
+    /// Validate and wrap an identifier.
+    ///
+    /// # Errors
+    ///
+    /// [`WireDefect::InvalidIdent`] when the string is empty, starts with a
+    /// digit, or contains anything outside `[A-Za-z0-9_]`.
+    pub fn parse(s: &str) -> Result<Self, WireDefect> {
+        let mut chars = s.chars();
+        let head_ok = chars
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+        if head_ok && chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            Ok(Self(s.to_owned()))
+        } else {
+            Err(WireDefect::InvalidIdent { got: s.to_owned() })
+        }
+    }
+
+    /// The identifier text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for RustIdent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// A validated `::`-separated path of Rust identifiers (`civil::date`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IdentPath(String);
+
+impl IdentPath {
+    /// Validate and wrap an identifier path (every segment a [`RustIdent`]).
+    ///
+    /// # Errors
+    ///
+    /// [`WireDefect::InvalidModulePath`] when any segment fails identifier
+    /// validation or the path is empty.
+    pub fn parse(s: &str) -> Result<Self, WireDefect> {
+        let invalid = || WireDefect::InvalidModulePath { got: s.to_owned() };
+        if s.is_empty() {
+            return Err(invalid());
+        }
+        for seg in s.split("::") {
+            RustIdent::parse(seg).map_err(|_| invalid())?;
+        }
+        Ok(Self(s.to_owned()))
+    }
+
+    /// The path text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Lower-case the first character (`Version` → `version`).
 #[must_use]
 pub fn lower_first(s: &str) -> String {
@@ -148,5 +219,32 @@ mod tests {
     fn arg_names_are_positional() {
         assert_eq!(arg_name(0), "arg0");
         assert_eq!(arg_name(12), "arg12");
+    }
+
+    #[test]
+    fn rust_ident_accepts_identifiers_and_kills_injection_shapes() {
+        assert!(RustIdent::parse("parse").is_ok());
+        assert!(RustIdent::parse("_private2").is_ok());
+        assert!(RustIdent::parse("Version").is_ok());
+        for bad in [
+            "",
+            "2fast",
+            "a-b",
+            "a b",
+            "a::b",
+            "; std::process::Command::new(\"sh\")",
+            "名前",
+        ] {
+            assert!(RustIdent::parse(bad).is_err(), "{bad:?} must be rejected");
+        }
+    }
+
+    #[test]
+    fn ident_path_validates_every_segment() {
+        assert!(IdentPath::parse("civil").is_ok());
+        assert!(IdentPath::parse("civil::date").is_ok());
+        for bad in ["", "::", "a::", "::b", "a::b-c", "a; rm -rf /"] {
+            assert!(IdentPath::parse(bad).is_err(), "{bad:?} must be rejected");
+        }
     }
 }
