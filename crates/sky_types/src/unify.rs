@@ -1,4 +1,4 @@
-//! Unification of two solver variables, ported from the M0-relevant arms of
+//! Unification of two solver variables, ported from the relevant arms of
 //! `Sky.Type.Unify` (derivative of elm/compiler's `Type.Unify`, BSD-3-Clause).
 //!
 //! Eager, in-place unification over the union-find arena. A flexible variable
@@ -316,7 +316,7 @@ fn unify_flat(
             }
             Ok(())
         }
-        // ── Open-record unification (#108 T2 / #56 row-poly) ─────────────────
+        // ── Open-record unification (row-poly) ───────────────────────────────
         //
         // Faithful port of `unifyRecords` from
         // `../sky/src/Sky/Type/Unify.hs:468-512`.

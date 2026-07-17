@@ -9,7 +9,7 @@
 
 use super::*;
 
-// ── #129: shared blocking-pool helper ───────────────────────────────────────
+// ── shared blocking-pool helper ───────────────────────────────────────
 //
 // `csv_parse_stream_from_file` does a blocking `std::fs::File::open` +
 // incremental CSV read (up to `SKY_CSV_MAX_ROWS`, default 10M rows, with NO
@@ -225,7 +225,7 @@ fn csv_parse_stream_from_file_sync(path: &str) -> Result<Vec<Vec<String>>, Strin
 /// Csv.parseStreamFromFile : String -> Task Error (List (List String))
 /// Returns every row (including the header).
 ///
-/// #129: file I/O + incremental CSV parsing (up to `SKY_CSV_MAX_ROWS`, no
+/// file I/O + incremental CSV parsing (up to `SKY_CSV_MAX_ROWS`, no
 /// byte cap) is offloaded to tokio's blocking pool via `run_blocking` — see
 /// the module-level doc comment on `run_blocking` above.
 pub fn csv_parse_stream_from_file<E: From<String> + Send + 'static>(
@@ -348,7 +348,7 @@ mod stream_from_file_spawn_blocking_tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    /// #129 regression: on a SINGLE-WORKER (current_thread) runtime, the
+    /// Reactor-starvation guard: on a SINGLE-WORKER (current_thread) runtime, the
     /// blocking file read + CSV parse inside `csv_parse_stream_from_file`
     /// would starve every other task on that runtime until it completes
     /// (worse still, pre-fix this work ran EAGERLY before the returned

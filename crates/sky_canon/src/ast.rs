@@ -1,11 +1,11 @@
 //! Canonical AST — the name-resolved tree the type checker consumes.
 //!
-//! Rust port of the Milestone-0 subset of the Haskell compiler's
+//! Rust port of the supported subset of the Haskell compiler's
 //! `Sky.AST.Canonical` (itself a derivative work of elm/compiler's
 //! `AST.Canonical`, BSD-3-Clause). Every variable is fully resolved: a
 //! reference is classified as a local binding, a top-level binding of a named
 //! module, a stdlib kernel function, or a data constructor. Only the nodes the
-//! M0 golden program exercises are modelled.
+//! supported subset exercises are modelled.
 //!
 //! Identifiers are interned [`Symbol`]s; located nodes are wrapped in
 //! [`Located`]. Module names are dotted segment vectors (`Main` → `[Main]`).
@@ -14,7 +14,7 @@ use sky_diagnostics::{Located, Span};
 use sky_intern::Symbol;
 use sky_kernels::StdlibKernel;
 
-/// A name-resolved module (M0 subset).
+/// A name-resolved module.
 //
 // `Eq` is not derived: `defs` carry [`Expr`] bodies that may hold a float
 // literal (only `PartialEq`).
@@ -119,7 +119,7 @@ impl Def {
 /// An expression with its source span.
 pub type Expr = Located<Expr_>;
 
-/// Name-resolved expression node (M0 subset).
+/// Name-resolved expression node.
 ///
 /// `Eq` is not derived: [`Expr_::Float`] carries an `f64` (only `PartialEq`).
 #[derive(Clone, PartialEq, Debug)]
@@ -129,11 +129,11 @@ pub enum Expr_ {
     /// A top-level binding of a named module.
     VarTopLevel { module: Vec<Symbol>, name: Symbol },
     /// A stdlib kernel function.  `id` carries the pre-resolved
-    /// [`StdlibKernel`] variant when the kernel was registered in Phase A's
-    /// `stdlib_index`; `None` for entries not yet wired (legacy fallback path
-    /// in `lower_callee`).  `module` and `name` are retained for diagnostics,
-    /// the type-constraint kernel-scheme lookup, and the legacy string-match
-    /// fallback.
+    /// [`StdlibKernel`] variant when the kernel is registered in the
+    /// `stdlib_index`; `None` for entries not wired there (string-match
+    /// fallback path in `lower_callee`).  `module` and `name` are retained for
+    /// diagnostics, the type-constraint kernel-scheme lookup, and that
+    /// string-match fallback.
     VarKernel {
         id: Option<StdlibKernel>,
         module: Symbol,
@@ -204,7 +204,7 @@ pub enum Expr_ {
     /// resolved against the enclosing scope; the field is a label.
     Access(Box<Expr>, Symbol),
     /// A record update `{ base | field = value, ... }`. The base is the resolved
-    /// reference to the record being copied (a variable, in the M1 grammar); the
+    /// reference to the record being copied (a variable, in the current grammar); the
     /// field list carries each updated `(name, value)` pair, names being labels
     /// and values resolved against the enclosing scope. An update introduces no
     /// bindings.
@@ -214,7 +214,7 @@ pub enum Expr_ {
 /// A resolved `let` binding: `<pat> = body`.
 ///
 /// The binder is a resolved [`Pattern`]: a [`Pattern_::PVar`] for the common
-/// `name = body` case, or an irrefutable tuple / record destructure (M3b-2). A
+/// `name = body` case, or an irrefutable tuple / record destructure. A
 /// refutable binder is rejected fail-closed at lowering.
 // `Eq` is not derived: `body` is an [`Expr`], only `PartialEq` (float literals).
 #[derive(Clone, PartialEq, Debug)]
@@ -235,7 +235,7 @@ pub struct CaseBranch {
 /// A pattern with its source span.
 pub type Pattern = Located<Pattern_>;
 
-/// Name-resolved pattern node (M0 subset).
+/// Name-resolved pattern node.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Pattern_ {
     /// The wildcard `_`.
@@ -253,28 +253,28 @@ pub enum Pattern_ {
     /// A tuple pattern `(p0, p1, ...)`. Invariant: arity ≥ 2. Each element is a
     /// resolved sub-pattern; every variable it introduces is bound as a local.
     PTuple(Vec<Pattern>),
-    /// A record pattern `{ x, y }` (M3b-2). Field-pun only: each entry is a
+    /// A record pattern `{ x, y }`. Field-pun only: each entry is a
     /// located field name that also binds a local of the same name. Always
     /// irrefutable; carries at least one field.
     PRecord(Vec<Located<Symbol>>),
-    /// An integer literal pattern `0` (M3b-3). Refutable; Int is OPEN.
+    /// An integer literal pattern `0`. Refutable; Int is OPEN.
     PInt(i64),
-    /// A boolean literal pattern `True` / `False` (M3b-3). A `True` + `False`
+    /// A boolean literal pattern `True` / `False`. A `True` + `False`
     /// pair is an exhaustive cover of the closed `Bool` type.
     PBool(bool),
-    /// A character literal pattern `'a'` (M3b-3) — carries the single unescaped
+    /// A character literal pattern `'a'` — carries the single unescaped
     /// character's text. Refutable; Char is OPEN.
     PChar(String),
-    /// A string literal pattern `"hi"` (M3b-3) — carries the unescaped value.
+    /// A string literal pattern `"hi"` — carries the unescaped value.
     /// Refutable; String is OPEN.
     PStr(String),
-    /// An alias / `as` pattern `inner as name` (M3b-3): matches `inner` and also
+    /// An alias / `as` pattern `inner as name`: matches `inner` and also
     /// binds the whole matched value to `name`.
     PAlias(Box<Pattern>, Located<Symbol>),
-    /// A list pattern `[]` / `[a, b, c]` (M4a). The empty list is the nil cover;
+    /// A list pattern `[]` / `[a, b, c]`. The empty list is the nil cover;
     /// a fixed-length list matches exactly that many elements.
     PList(Vec<Pattern>),
-    /// A cons pattern `head :: tail` (M4a) — binds the first element and the rest.
+    /// A cons pattern `head :: tail` — binds the first element and the rest.
     PCons(Box<Pattern>, Box<Pattern>),
 }
 
@@ -317,7 +317,7 @@ impl Pattern_ {
     }
 }
 
-/// Canonical type (M0 subset). Mirrors `Can.Type` narrowed to arrows, type
+/// Canonical type. Mirrors `Can.Type` narrowed to arrows, type
 /// variables, and constructor applications.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Type {
@@ -340,7 +340,7 @@ pub enum Type {
     /// A closed record type `{ field : T, ... }`. Fields are `(name, type)` pairs
     /// in source order; the empty record is outside the grammar so the list is
     /// non-empty. A field type variable participates in the binding's
-    /// quantification exactly like one in any other position (M2c).
+    /// quantification exactly like one in any other position.
     Record(Vec<(Symbol, Self)>),
 }
 

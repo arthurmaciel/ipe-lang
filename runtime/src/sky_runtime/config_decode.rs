@@ -101,7 +101,7 @@ pub fn config_decode_yaml<E: From<String> + 'static, T>(
     )
 }
 
-// ── #129: shared blocking-pool helper ───────────────────────────────────────
+// ── shared blocking-pool helper ───────────────────────────────────────
 //
 // `config_load_from_file` does a blocking `std::fs::File::open` + capped
 // `read_to_string` (up to `SKY_CONFIG_MAX_BYTES`, default 16 MiB) inline.
@@ -171,7 +171,7 @@ fn config_read_capped(path: &str, cap: u64) -> Result<String, String> {
 // Config.loadFromFile : String -> Decoder a -> Task Error a
 // Extension dispatch: .toml / .yaml|.yml / .json (default json).
 //
-// #129: the file read is offloaded via `run_blocking` (see the module-level
+// the file read is offloaded via `run_blocking` (see the module-level
 // doc comment above) so a large/slow config read can't stall the tokio
 // worker thread. The decode dispatch itself runs back on the calling task
 // after the read completes — decoding an already-in-memory, size-capped
@@ -295,7 +295,7 @@ mod load_from_file_spawn_blocking_tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    /// #129 regression: on a SINGLE-WORKER (current_thread) runtime, the
+    /// Reactor-starvation guard: on a SINGLE-WORKER (current_thread) runtime, the
     /// blocking file read inside `config_load_from_file` would starve every
     /// other task on that runtime until the read completes. This proves the
     /// read is offloaded to tokio's blocking-thread pool: a concurrently-

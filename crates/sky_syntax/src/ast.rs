@@ -1,11 +1,10 @@
 //! Source AST — the raw parse tree before name resolution.
 //!
-//! This is the Rust port of the Milestone-0 subset of the Haskell compiler's
+//! This is the Rust port of the supported subset of the Haskell compiler's
 //! `Sky.AST.Source` (which is itself a derivative work of elm/compiler's
-//! `AST.Source`, BSD-3-Clause). Only the nodes the M0 golden program exercises
-//! are modelled; the broader source grammar (records, tuples, lambdas, lists,
-//! `let`/`if`, FFI imports, multiline strings, type aliases, infix decls) is
-//! deliberately omitted until a later milestone needs it.
+//! `AST.Source`, BSD-3-Clause). Only the nodes the supported grammar
+//! exercises are modelled; unsupported source grammar (FFI imports, infix
+//! decls) is deliberately omitted until needed.
 //!
 //! Identifiers are interned [`Symbol`]s; every node that has a source location
 //! is wrapped in [`Located`].
@@ -13,7 +12,7 @@
 use sky_diagnostics::Located;
 use sky_intern::Symbol;
 
-/// A parsed module (M0 subset).
+/// A parsed module.
 //
 // `Eq` is not derived: `values` hold [`Value`]s whose bodies may carry an `f64`
 // float literal, so the tree is only `PartialEq`.
@@ -98,8 +97,9 @@ pub struct Union {
 
 /// A `type alias Name = T` declaration.
 ///
-/// Mirrors the Haskell compiler's `Sky.AST.Source.Alias`, narrowed to what M1
-/// supports. The aliased type `body` is expanded away at canonicalisation, so no
+/// Mirrors the Haskell compiler's `Sky.AST.Source.Alias`, narrowed to the
+/// supported subset. The aliased type `body` is expanded away at
+/// canonicalisation, so no
 /// stage after name resolution ever observes the alias name.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct TypeAlias {
@@ -124,7 +124,7 @@ pub struct Ctor {
 /// An expression with its source span.
 pub type Expr = Located<Expr_>;
 
-/// Expression node (M0 subset).
+/// Expression node.
 ///
 /// `Eq` is not derived: [`Expr_::Float`] carries an `f64`, which is only
 /// `PartialEq`. No consumer keys a map / set on an expression, so `PartialEq`
@@ -168,13 +168,13 @@ pub enum Expr_ {
     Case(Box<Expr>, Vec<(Pattern, Expr)>),
     /// An anonymous function `\p0 p1 ... -> body`. The parameter list has arity
     /// ≥ 1 (the parser rejects a zero-parameter `\ -> e`); each parameter is a
-    /// pattern (M1 admits a plain variable or `_`). Mirrors the Haskell
+    /// pattern (a plain variable or `_`). Mirrors the Haskell
     /// compiler's `Src.Lambda [Pattern] Expr`.
     Lambda(Vec<Pattern>, Box<Expr>),
     /// A precedence-climbed binary-operator chain: a sequence of
     /// `(operand, operator)` pairs followed by the final operand.
     Binops(Vec<(Expr, Located<Symbol>)>, Box<Expr>),
-    /// `let <bindings> in <body>`. M1 models simple value bindings only
+    /// `let <bindings> in <body>`. Models simple value bindings only
     /// (`name = expr`); function bindings (`f x = …`) and destructuring
     /// (`(a, b) = …`) are rejected at the parser. The bindings are scoped
     /// sequentially: each value sees the enclosing scope plus the bindings that
@@ -189,7 +189,7 @@ pub enum Expr_ {
     ///
     /// Invariant: the element list has arity ≥ 2. A parenthesised single
     /// expression `(e)` is *not* a tuple — the parser unwraps it to `e` — and
-    /// the empty parens `()` are the unit value (unsupported in M1, rejected at
+    /// the empty parens `()` are the unit value (unsupported, rejected at
     /// the parser). Mirrors the Haskell compiler's `Src.Tuple e1 e2 [rest]`,
     /// flattened to one vector here.
     Tuple(Vec<Expr>),
@@ -202,7 +202,7 @@ pub enum Expr_ {
     /// A record literal `{ field = expr, ... }`. Fields are `(name, value)`
     /// pairs in source order; the field name is a located lowercase identifier.
     /// Mirrors the Haskell compiler's `Src.Record`, narrowed to the closed-record
-    /// (no `{ r | ... }` extension) M1 subset.
+    /// (no `{ r | ... }` extension) subset.
     Record(Vec<(Located<Symbol>, Expr)>),
     /// A record field access `record.field` (`record` lowercase). The parser
     /// builds this from a dotted lowercase identifier (`p.x`) and nests it for a
@@ -213,18 +213,19 @@ pub enum Expr_ {
     /// base to a bare variable, as Elm does); the field list carries each
     /// updated `(name, value)` pair in source order. Mirrors the Haskell
     /// compiler's `Src.Update (Located String) [(Located String, Expr)]`,
-    /// narrowed to the closed-record M1 subset.
+    /// narrowed to the closed-record subset.
     Update(Located<Symbol>, Vec<(Located<Symbol>, Expr)>),
 }
 
 /// A single `let` binding: `<pat> = body`.
 ///
 /// The binder is a [`Pattern`]: the common `name = body` case is a
-/// [`Pattern_::PVar`], and M3b-2 also admits an irrefutable destructure
-/// (`(a, b) = e`, `{ x } = e`) as a tuple / record pattern. A refutable binder
-/// (a constructor pattern) parses here but is rejected fail-closed downstream —
-/// a `let` binder must always match. M1 subset of the Haskell compiler's
-/// `Sky.AST.Source.Def`, extended with the destructure form (`DestructDef`).
+/// [`Pattern_::PVar`], and an irrefutable destructure
+/// (`(a, b) = e`, `{ x } = e`) is admitted as a tuple / record pattern. A
+/// refutable binder (a constructor pattern) parses here but is rejected
+/// fail-closed downstream — a `let` binder must always match. Subset of the
+/// Haskell compiler's `Sky.AST.Source.Def`, extended with the destructure
+/// form (`DestructDef`).
 // `Eq` is not derived: `body` is an [`Expr`], only `PartialEq` (float literals).
 #[derive(Clone, PartialEq, Debug)]
 pub struct LetBinding {
@@ -235,7 +236,7 @@ pub struct LetBinding {
 /// A pattern with its source span.
 pub type Pattern = Located<Pattern_>;
 
-/// Pattern node (M0 subset).
+/// Pattern node.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Pattern_ {
     /// The wildcard `_`.
@@ -249,7 +250,7 @@ pub enum Pattern_ {
     /// pattern. Elements may be variables, wildcards, nested constructor
     /// patterns, or nested tuples. Mirrors the Haskell compiler's tuple pattern.
     PTuple(Vec<Pattern>),
-    /// A record pattern `{ x, y }` (M3b-2). Field-pun only: every entry names a
+    /// A record pattern `{ x, y }`. Field-pun only: every entry names a
     /// field of the scrutinee record and binds a variable of the same name, so
     /// the binder list is a non-empty set of located field names. Mirrors the
     /// Haskell compiler's `Src.PRecord [A.Located String]` — there is no
@@ -257,37 +258,37 @@ pub enum Pattern_ {
     /// a record pattern is always irrefutable. The empty record `{}` is outside
     /// the grammar; a `PRecord` always carries at least one field.
     PRecord(Vec<Located<Symbol>>),
-    /// An integer literal pattern `0`, `42` (M3b-3). Refutable. Int is an OPEN
+    /// An integer literal pattern `0`, `42`. Refutable. Int is an OPEN
     /// (infinite) type, so a `case` over int literals needs a wildcard / var
     /// catch-all to be exhaustive. Mirrors the Haskell compiler's `Src.PInt`.
     PInt(i64),
-    /// A boolean literal pattern `True` / `False` (M3b-3). Refutable in
+    /// A boolean literal pattern `True` / `False`. Refutable in
     /// isolation, but a `True` + `False` pair is an exhaustive cover of `Bool`
     /// (a closed two-constructor type). Mirrors the Haskell compiler's `Src.PBool`.
     PBool(bool),
-    /// A character literal pattern `'a'` (M3b-3). The carried [`String`] is the
+    /// A character literal pattern `'a'`. The carried [`String`] is the
     /// source character text (single grapheme, or a `\`-escape pair). Refutable;
     /// Char is OPEN. Mirrors the Haskell compiler's `Src.PChr`.
     PChar(String),
-    /// A string literal pattern `"hi"` (M3b-3). The carried [`String`] is the
+    /// A string literal pattern `"hi"`. The carried [`String`] is the
     /// already-unescaped value. Refutable; String is OPEN. Mirrors the Haskell
     /// compiler's `Src.PStr`.
     PStr(String),
-    /// An alias / `as` pattern `inner as name` (M3b-3). Matches `inner` and also
+    /// An alias / `as` pattern `inner as name`. Matches `inner` and also
     /// binds the whole matched value to `name`. Mirrors the Haskell compiler's
     /// `Src.PAlias Pattern (A.Located String)`.
     PAlias(Box<Pattern>, Located<Symbol>),
-    /// A list pattern `[]` / `[a, b, c]` (M4a). The empty list is the nil cover;
+    /// A list pattern `[]` / `[a, b, c]`. The empty list is the nil cover;
     /// a fixed-length `[a, b]` matches a list of exactly that length. Mirrors the
     /// Haskell compiler's `Src.PList`.
     PList(Vec<Pattern>),
-    /// A cons pattern `head :: tail` (M4a) — the right-associative list
+    /// A cons pattern `head :: tail` — the right-associative list
     /// deconstruction. `(x :: xs)` binds the first element to `head` and the rest
     /// to `tail`. Mirrors the Haskell compiler's `Src.PCons`.
     PCons(Box<Pattern>, Box<Pattern>),
 }
 
-/// Type-annotation node (M0 subset).
+/// Type-annotation node.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum TypeAnnotation {
     /// An arrow type `A -> B`.

@@ -1,7 +1,7 @@
-//! Recursive-descent parser for the Milestone-0 subset of Sky.
+//! Recursive-descent parser for the supported subset of Sky.
 //!
 //! Port of `Sky.Parse.{Module,Declaration,Type,Pattern,Expression}` narrowed to
-//! the M0 grammar: a module header, imports, `type` unions, top-level value
+//! the supported grammar: a module header, imports, `type` unions, top-level value
 //! bindings with optional type annotations, `case … of`, function application,
 //! and `+`/`-` binary-operator chains.
 //!
@@ -17,8 +17,8 @@
 //! overflow on adversarial input.
 //!
 //! Qualified upper-case names in **type** and **pattern** position are rejected
-//! with a typed error rather than collapsed into a non-reference AST: M0 does
-//! not yet model `Module.Type` annotations or `Module.Ctor` patterns, so the
+//! with a typed error rather than collapsed into a non-reference AST: the parser
+//! does not yet model `Module.Type` annotations or `Module.Ctor` patterns, so the
 //! parser fails fast instead of silently dropping the qualifier (which the
 //! canonicaliser would then resolve against the wrong name).
 
@@ -839,7 +839,7 @@ impl<'a> Parser<'a> {
                 let span = Self::span_merge(head.span, end);
                 Ok(Located::new(span, TypeAnnotation::TType(q, segs, args)))
             }
-            // A type variable / arrow cannot be applied in the M0 grammar.
+            // A type variable / arrow cannot be applied in the grammar.
             _ => Err(Diagnostic::Parse {
                 span: head.span,
                 msg: ParseError::TypeArgsOnNonConstructor,
@@ -1044,7 +1044,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Peek a binary operator that continues the current block. Recognises the
-    /// full M1-core set: arithmetic (`+ - * /`), string append (`++`),
+    /// full core set: arithmetic (`+ - * /`), string append (`++`),
     /// comparison (`== /= < > <= >=`), and boolean (`&& ||`). Precedence +
     /// associativity are resolved later, at canonicalisation, from the flat
     /// chain this records.
@@ -1847,7 +1847,7 @@ impl<'a> Parser<'a> {
             return Err(self.too_deep(Construct::Let));
         }
         // The binder is either a destructure pattern — a tuple `(a, b)`, a record
-        // `{ x }`, or a wildcard `_` (M3b-2) — or the common `name = body` value
+        // `{ x }`, or a wildcard `_` — or the common `name = body` value
         // binding. The destructure forms start with a token that cannot begin a
         // plain value name, so peeking selects the path without lookahead beyond
         // one token. The simple path keeps its precise BindingNameNotLower
@@ -1949,7 +1949,7 @@ impl<'a> Parser<'a> {
         } else {
             head
         };
-        // A cons pattern `head :: tail` (M4a). `::` is right-associative and
+        // A cons pattern `head :: tail`. `::` is right-associative and
         // binds looser than constructor application, so the head parsed so far is
         // the first element and the tail is parsed recursively (which nests
         // rightward and consumes its own `as` alias). `a :: b :: rest` becomes
@@ -1996,7 +1996,7 @@ impl<'a> Parser<'a> {
         let tok = self.bump(Construct::Pattern)?;
         match &tok.kind {
             Tok::Underscore => Ok(Located::new(tok.span, Pattern_::PAnything)),
-            // Literal leaves (M3b-3): int / string / char. Bool literals
+            // Literal leaves: int / string / char. Bool literals
             // (`True` / `False`) come through the `Ident` arm below. A float
             // literal is intentionally NOT a pattern leaf — equality on `f64`
             // is unsound to match on (Rust forbids float patterns), so a
@@ -2037,7 +2037,7 @@ impl<'a> Parser<'a> {
                 Ok(Located::new(tok.span, inner.value))
             }
             Tok::LBrace => {
-                // A record pattern `{ x, y }` (M3b-2). Field-pun only: each entry
+                // A record pattern `{ x, y }`. Field-pun only: each entry
                 // is a bare lowercase field name that also binds a local of the
                 // same name. There is no `{ field = sub-pattern }` form (the Go
                 // reference rejects it at parse), and the empty record `{}` is
@@ -2083,7 +2083,7 @@ impl<'a> Parser<'a> {
                 }
                 let first_upper = text.chars().next().is_some_and(|c| c.is_ascii_uppercase());
                 if first_upper {
-                    // M0 does not model qualified constructors (`Module.Ctor`) in
+                    // Qualified constructors (`Module.Ctor`) are not modelled in
                     // pattern position. Reject a dotted upper-case name rather than
                     // drop the qualifier into a non-reference AST.
                     if text.contains('.') {
@@ -2150,7 +2150,7 @@ impl<'a> Parser<'a> {
     /// Whether the next token can begin a BINDER pattern atom — a function or
     /// lambda parameter. Literals are refutable and never bind a parameter, so a
     /// literal start STOPS the parameter list (`\x 1` reports a missing `->` at
-    /// `1`, not a swallowed literal parameter), matching the pre-M3b-3 grammar.
+    /// `1`, not a swallowed literal parameter).
     fn peek_is_binder_atom_start(&self) -> bool {
         matches!(
             self.peek_kind(),

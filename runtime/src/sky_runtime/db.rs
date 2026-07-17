@@ -386,7 +386,7 @@ pub fn db_decode_bool<E: From<String> + 'static>(col: String) -> Decoder<E, bool
 ///
 /// The DB column stores a TEXT value in `"ISO_CODE AMOUNT"` format
 /// (e.g. `"USD 1234.56"`, `"BTC 0.00012"`), written by `SqlMoney` on the
-/// bind side (v0.16.26 #582).
+/// bind side.
 ///
 /// ### Type representation
 ///
@@ -397,10 +397,9 @@ pub fn db_decode_bool<E: From<String> + 'static>(col: String) -> Decoder<E, bool
 /// `(Decimal, String)` — a structural pair that a codegen-emitted wrapper can
 /// destructure into the project's concrete `StdMoneyMoney::Money(amount, currency)`.
 ///
-/// For Phase A the Kernel.hs routing entry **cannot** be wired directly to
+/// The Kernel.hs routing entry **cannot** be wired directly to
 /// `db_decode_money` without a codegen-level wrapper that constructs
-/// `StdMoneyMoney` from the `(Decimal, String)`.  See the BLOCKED note in the
-/// Phase A output.
+/// `StdMoneyMoney` from the `(Decimal, String)`.
 ///
 /// Totality: missing column, NULL, bad format, unparseable amount → `Err`.
 pub fn db_decode_money<E: From<String> + 'static>(col: String) -> Decoder<E, (Decimal, String)> {
@@ -450,10 +449,10 @@ pub fn db_decode_money<E: From<String> + 'static>(col: String) -> Decoder<E, (De
 }
 
 /// `DbDec.nullable inner` — ONE-arg form matching Sky's
-/// `nullable : Decoder a -> Decoder (Maybe a)` (#577).
+/// `nullable : Decoder a -> Decoder (Maybe a)`.
 ///
-/// Uses `inner.fields` (the `Decoder` struct metadata added in the
-/// `{run, fields}` redesign) to determine which columns the inner decoder reads.
+/// Uses `inner.fields` (the `Decoder` struct's `{run, fields}` metadata) to
+/// determine which columns the inner decoder reads.
 /// This is the Rust equivalent of Go's `DbDec_nullable` which gates on
 /// `inner.cols`.
 ///
@@ -1743,7 +1742,7 @@ pub fn db_with_transaction<E: Send + From<String> + 'static, A: Send + 'static>(
 /// A runtime-nameable SQL parameter value, matching the Sky `SqlValue` ADT.
 /// See the module-level comment above for the generated-ADT conversion rules.
 ///
-/// `PartialEq` precondition (backlog #61 `SqlFragment` design note): every
+/// `PartialEq` precondition (`SqlFragment` design note): every
 /// constituent field type here (`String`, `i64`, `f64`, `bool`, `Vec<u8>`) is
 /// already `PartialEq`, so the derive below is total and structural — no
 /// hand-written impl needed.
@@ -1863,7 +1862,7 @@ fn bind_sql_param<'q>(q: DbQuery<'q>, p: SqlParam) -> DbQuery<'q> {
     }
 }
 
-// ─── Std.Db.Sql — SqlFragment builder (backlog #61) ────────────────────────
+// ─── Std.Db.Sql — SqlFragment builder ────────────────────────
 //
 // Closes the SQL-injection surface the removed `unsafeFindWhere` left open.
 // The ONLY way to obtain a `SqlFragment` is through the combinators below —
@@ -1899,7 +1898,7 @@ pub struct SqlFragment {
 impl std::fmt::Debug for SqlFragment {
     /// SQL text + bind COUNT only — never bind VALUES. A bind may carry a
     /// revealed secret; this is the one place `SqlFragment` and `Secret`
-    /// (backlog #44) intersect, and it resolves the same way both items
+    /// intersect, and it resolves the same way both items
     /// resolve elsewhere: safe by construction, no reliance on a caller
     /// remembering an escape hatch.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -2429,18 +2428,16 @@ mod tests {
         assert!(url_is_cacheable("sqlite:./memory_backup.sqlite"));
     }
 
-    // Soundness regression (independent review after the DoS-reopen fix landed):
-    // SQLite's own documented idiom wraps `:memory:` in a `file:` sub-scheme
-    // (sqlite.org/inmemorydb.html — `sqlite3_open("file::memory:?cache=shared",
-    // ...)`). A prior version of this function stripped only the outer
-    // `sqlite:`/`sqlite://` scheme and never the inner `file:` one, so
-    // `"file::memory:"` fell through to the default `true` (cacheable) branch
-    // — silently pooling what SQLite (empirically verified via two
-    // independently-built sqlx pools) treats as two DISTINCT private
-    // databases. Verified against sqlite.org's documented semantics: a bare
-    // `:memory:` name is unconditionally private (not URI-parsed, so
-    // `cache=shared` has no effect on it even if present); only the
-    // `file:`-wrapped URI form honours `cache=shared`.
+    // Soundness: SQLite's own documented idiom wraps `:memory:` in a `file:`
+    // sub-scheme (sqlite.org/inmemorydb.html —
+    // `sqlite3_open("file::memory:?cache=shared", ...)`). Stripping only the
+    // outer `sqlite:`/`sqlite://` scheme and not the inner `file:` one would
+    // let `"file::memory:"` fall through to the default `true` (cacheable)
+    // branch — silently pooling what SQLite treats as two DISTINCT private
+    // databases. Per sqlite.org's documented semantics: a bare `:memory:` name
+    // is unconditionally private (not URI-parsed, so `cache=shared` has no
+    // effect on it even if present); only the `file:`-wrapped URI form honours
+    // `cache=shared`.
     #[test]
     fn url_is_cacheable_file_wrapped_memory_without_shared_cache_is_not_cacheable() {
         assert!(!url_is_cacheable("file::memory:"));
@@ -2452,7 +2449,7 @@ mod tests {
         assert!(url_is_cacheable("file::memory:?cache=shared"));
     }
 
-    // #52: the SkyRow accessor is total over a Dict-shaped row — present field
+    // the SkyRow accessor is total over a Dict-shaped row — present field
     // reads back, absent field is "" (never panics), int/bool parse + default.
     #[test]
     fn sky_row_hashmap_total() {
@@ -2468,7 +2465,7 @@ mod tests {
         assert!(!db_get_bool("missing".into(), &m));
     }
 
-    // #52 Part 1: `Db.getString "path" req` on an `init` handler's typed
+    // `Db.getString "path" req` on an `init` handler's typed
     // request reads the named struct field; params/headers/cookies back any
     // other key; absent -> "" (total).
     #[cfg(feature = "live")]
@@ -2498,7 +2495,7 @@ mod tests {
         // A SINGLE persistent connection per test. `sqlite::memory:` gives each
         // pool connection its OWN in-memory database, so a default multi-conn
         // pool routes BEGIN / INSERT / COMMIT / SELECT to different (empty) DBs
-        // — the source of the parallel-run flake (#27): under load the pool
+        // — the source of a parallel-run flake: under load the pool
         // opens extra connections and ops miss the table / committed row.
         // min=max=1 pins one connection (one DB, table + transactions always
         // visible); each test still gets its own isolated pool.
@@ -3475,7 +3472,7 @@ mod tests {
         assert!(matches!(r, SkyResult::Ok(())));
     }
 
-    // ─── Std.Db.Sql — SqlFragment builder (backlog #61) ────────────────────
+    // ─── Std.Db.Sql — SqlFragment builder ────────────────────
 
     async fn insert_todo(db: &Db, title: &str) {
         let mut r = HashMap::new();

@@ -1,12 +1,12 @@
 #![forbid(unsafe_code)]
 //! `sky_parse` — the lexer + layout + recursive-descent parser for the
-//! Milestone-0 subset of Sky.
+//! supported subset of Sky.
 //!
 //! Entry point: [`parse_module`]. It consumes source text plus a mutable
 //! [`Interner`] and produces a [`sky_syntax::Module`], or a typed
 //! [`sky_diagnostics::Diagnostic`]. The parser is a hand-written recursive
 //! descent port of the Haskell compiler's `Sky.Parse.*`, narrowed to the
-//! nodes the M0 golden program exercises. Recursion is bounded by
+//! nodes the supported subset exercises. Recursion is bounded by
 //! [`parser::MAX_DEPTH`] so adversarial input cannot overflow the stack.
 
 mod layout;
@@ -23,7 +23,7 @@ pub use parser::MAX_DEPTH;
 ///
 /// # Errors
 /// Returns a [`sky_diagnostics::Diagnostic`] if the source cannot be lexed or
-/// does not form a valid M0 module, or [`sky_diagnostics::ParseError::TooDeep`]
+/// does not form a valid module, or [`sky_diagnostics::ParseError::TooDeep`]
 /// if the recursion-depth guard trips.
 pub fn parse_module(src: &str, interner: &mut Interner) -> DResult<Module> {
     let toks = lexer::lex(src)?;
@@ -303,7 +303,7 @@ mod tests {
 
     #[test]
     fn full_operator_set_parses_into_a_binops_chain() {
-        // Every M1-core operator must lex + parse; the body becomes a flat
+        // Every core operator must lex + parse; the body becomes a flat
         // `Binops` chain (precedence is resolved later, at canonicalisation).
         let mut i = Interner::new();
         let src = format!(
@@ -905,7 +905,7 @@ mod tests {
 
     #[test]
     fn unit_value_parses_into_expr_unit() {
-        // `()` is the unit value (M3b-1): empty parentheses parse to `Expr_::Unit`,
+        // `()` is the unit value: empty parentheses parse to `Expr_::Unit`,
         // never a tuple, a paren-group, or a parse error.
         let mut i = Interner::new();
         let src = format!("{HDR}v =\n    ()\n");
@@ -921,7 +921,7 @@ mod tests {
     #[test]
     fn tuple_pattern_in_function_parameter_parses_into_a_ptuple() {
         // `fst (a, b) = a` — a tuple pattern in parameter position, with two
-        // variable elements. Before M3b-1 this failed at the `,`.
+        // variable elements.
         let mut i = Interner::new();
         let src = format!("{HDR}fst : (a, b) -> a\nfst (a, b) =\n    a\n");
         let m = parse_module(&src, &mut i);
@@ -1555,7 +1555,7 @@ mod tests {
     fn parses_negative_literal_as_application_argument() {
         // `f (-5)`: the negative literal is the (parenthesised) argument; the
         // body is a `Call` with one `Int(-5)` argument. This is the shape the
-        // M4c Math goldens rely on (`Math.abs (-5)`, `Math.floor (-2.7)`, …).
+        // Math goldens rely on (`Math.abs (-5)`, `Math.floor (-2.7)`, …).
         let mut i = Interner::new();
         let src = "module Main exposing (v)\n\nv f =\n    f (-5)\n";
         let result = parse_module(src, &mut i);
@@ -1603,7 +1603,7 @@ mod tests {
         );
     }
 
-    // ── Unary negation on identifiers / expressions (Task #114) ──────────────
+    // ── Unary negation on identifiers / expressions ──────────────────────────
     //
     // Port of the Haskell `exprAtom_` `Negate` arm (Expression.hs:356–367):
     // `-e` in prefix position desugars to `Call(VarLocal("negate"), [e])`.
@@ -1921,7 +1921,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Triple-quoted string regression tests (Task #118)
+    // Triple-quoted string regression tests
     // -----------------------------------------------------------------------
     // Reference: Sky.Parse.String.findTripleClose (Haskell) — the closing
     // terminator is exactly `"""`, never a lone `"`.

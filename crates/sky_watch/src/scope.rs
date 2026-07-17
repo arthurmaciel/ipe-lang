@@ -1,4 +1,4 @@
-//! Task 21 — the confined watcher's typed scope (INV-4, H18).
+//! The confined watcher's typed scope (INV-4, H18).
 //!
 //! `ipe watch` must observe only a strict, typed allowlist: `sky.toml`, the
 //! entry point's directory (recursive source-extension walk), and `tests/`

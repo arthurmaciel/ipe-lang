@@ -31,16 +31,14 @@ impl Symbol {
 pub struct Interner {
     /// One shared `Arc<str>` per unique string, stored in BOTH `map` (as the
     /// key) and `strings` (as the id-indexed entry) — the second store is a
-    /// refcount bump, not a second heap copy (efficiency-audit §5 medium:
-    /// every unique identifier used to be heap-allocated twice). `Arc` (not
-    /// `Rc`) keeps `Interner: Send + Sync`. Symbol assignment order, dedup,
-    /// and the `resolve` None-on-forged-symbol contract are unchanged.
+    /// refcount bump, not a second heap copy. `Arc` (not
+    /// `Rc`) keeps `Interner: Send + Sync`.
     map: HashMap<std::sync::Arc<str>, Symbol>,
     strings: Vec<std::sync::Arc<str>>,
     /// When set, [`Self::fresh_symbols`] avoids exactly the names in this set
     /// instead of every already-interned string — see the incremental-build
     /// determinism note on that method. Set per build via
-    /// [`Self::set_fresh_avoid`]; `None` preserves the historical
+    /// [`Self::set_fresh_avoid`]; `None` uses the
     /// whole-table behaviour for callers that own a per-build interner.
     fresh_avoid: Option<BTreeSet<String>>,
 }
@@ -91,8 +89,7 @@ impl Interner {
     ///   inputs. This keeps the minted names deterministic on a **warm**
     ///   (reused) interner: names minted by a previous build's lowering are
     ///   NOT collisions (re-minting `eta_0` returns the same append-only
-    ///   symbol), so a rebuild emits the same names a cold build would —
-    ///   proven by the Task-18 clean-vs-incremental parity gate.
+    ///   symbol), so a rebuild emits the same names a cold build would.
     /// - unset (per-build interners: unit tests, direct embedders): the
     ///   historical whole-table behaviour — any interned string collides.
     ///   Equivalent to the avoid-set mode on a cold interner, where every

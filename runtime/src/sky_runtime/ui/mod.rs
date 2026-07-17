@@ -14,10 +14,10 @@ pub mod render;
 /// with the `naming.rs` trailing-underscore convention.
 pub mod helpers;
 
-/// `Std.Ui.Input` kernel helpers — typed form controls (Task #124).
+/// `Std.Ui.Input` kernel helpers — typed form controls.
 pub mod input;
 
-/// `Std.Ui.Lazy` kernel helpers — eager evaluation in v1 (#146).
+/// `Std.Ui.Lazy` kernel helpers — eager evaluation in v1.
 pub mod lazy;
 
 /// `Std.Ui.Keyed` kernel helpers — sky-key diff identity (key discarded in v1).

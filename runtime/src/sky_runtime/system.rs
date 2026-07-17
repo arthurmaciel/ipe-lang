@@ -86,7 +86,7 @@ pub fn system_args<E: Send + 'static>(_: ()) -> SkyTask<E, Vec<String>> {
     Box::pin(async move { ok_res(std::env::args().skip(1).collect()) })
 }
 
-// ── #129: shared blocking-pool helper ───────────────────────────────────────
+// ── shared blocking-pool helper ───────────────────────────────────────
 //
 // `process_run` calls `std::process::Command::output()`, which BLOCKS the
 // calling thread until the child process exits — an arbitrarily long wait
@@ -141,7 +141,7 @@ fn process_run_sync(cmd: &str, args: &[String]) -> Result<std::process::Output, 
 /// untrusted Sky source (e.g. blocking the `Process.` module) is the calling
 /// application's responsibility, exactly as on Go.
 ///
-/// #129: the actual `Command::output()` wait is offloaded via `run_blocking`
+/// The actual `Command::output()` wait is offloaded via `run_blocking`
 /// (see the module-level doc comment above) so a long-running subprocess
 /// can't stall the tokio worker thread polling this future.
 pub fn process_run<E: Send + From<String> + 'static>(
@@ -365,15 +365,13 @@ fn system_load_env_sync() {
 /// (process env wins, matching Sky's precedence). A missing `.env` is a no-op
 /// success.
 ///
-/// #129 follow-up: `std::fs::read_to_string(".env")` is a blocking syscall —
-/// this kernel used to run it inline inside the `async move` body instead of
-/// through the `run_blocking` helper this very module defines (above, for
-/// `process_run`), the exact class #129 closed for `file.rs`/
-/// `compression.rs`/`csv.rs`/`config_decode.rs`. Low real-world impact
-/// (`.env` is small and read once at startup), but on a slow/network
-/// filesystem it would still stall the tokio worker thread polling this
-/// future. Routed through `run_blocking` so it's offloaded like every other
-/// blocking-fs kernel in this module.
+/// `std::fs::read_to_string(".env")` is a blocking syscall, so it routes
+/// through the `run_blocking` helper this module defines (above, for
+/// `process_run`) rather than running inline inside the `async move` body —
+/// the same offload `file.rs`/`compression.rs`/`csv.rs`/`config_decode.rs`
+/// use. Real-world impact is low (`.env` is small and read once at startup),
+/// but on a slow/network filesystem an inline read would stall the tokio
+/// worker thread polling this future.
 pub fn system_load_env<E: Send + 'static>(_: ()) -> SkyTask<E, ()> {
     Box::pin(async move {
         // `run_blocking`'s `Err` arm (the blocking task panicked) is folded
@@ -465,7 +463,7 @@ mod process_run_spawn_blocking_tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    /// #129 regression: `Command::output()` blocks the calling thread until
+    /// Reactor-starvation guard: `Command::output()` blocks the calling thread until
     /// the child process exits. On a SINGLE-WORKER (current_thread) runtime,
     /// running that wait inline (no `spawn_blocking`) would starve every
     /// other task scheduled on that runtime for the subprocess's whole
@@ -516,14 +514,13 @@ mod system_load_env_spawn_blocking_tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    /// #129 follow-up regression: `system_load_env` reads `.env` via
-    /// `std::fs::read_to_string`, a blocking syscall. Pre-fix this ran
-    /// inline inside the `async move` body instead of through the shared
-    /// `run_blocking` helper (defined above in this file, already used by
-    /// `process_run`) — the exact class #129 closed for `file.rs` /
-    /// `compression.rs` / `csv.rs` / `config_decode.rs`, just missed for this
-    /// module's own kernel. This proves the post-fix `system_load_env`
-    /// offloads the read to tokio's blocking-thread pool: a concurrently-
+    /// Reactor-starvation guard: `system_load_env` reads `.env` via
+    /// `std::fs::read_to_string`, a blocking syscall. It must route through the
+    /// shared `run_blocking` helper (defined above in this file, already used
+    /// by `process_run`) rather than run inline inside the `async move` body —
+    /// the same offload `file.rs` / `compression.rs` / `csv.rs` /
+    /// `config_decode.rs` use. This proves `system_load_env` offloads the read
+    /// to tokio's blocking-thread pool: a concurrently-
     /// spawned cheap ticker task must make progress (ticks > 0) WHILE the
     /// read is in flight.
     ///

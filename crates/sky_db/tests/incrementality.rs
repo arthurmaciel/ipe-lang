@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Phase-1 incrementality proofs (spec:
+//! Incrementality proofs (spec:
 //! `docs/architecture/salsa-incremental-compilation-2026-07-11.md` §3.6).
 //!
 //! The load-bearing test is `parse_granularity`: two runs where only one
@@ -66,8 +66,8 @@ fn file(db: &SkyDatabase, path: &[&str], text: &str) -> SourceFile {
     )
 }
 
-/// THE mission proof: edit B only; `parse(A)` is a memo hit (zero
-/// re-executions), `parse(B)` re-executes exactly once.
+/// Edit B only: `parse(A)` is a memo hit (zero re-executions), `parse(B)`
+/// re-executes exactly once.
 #[test]
 fn parse_granularity() {
     let (mut db, log) = logged_db();

@@ -1,10 +1,10 @@
-//! Constraint generation, ported from the M0-relevant arms of
+//! Constraint generation, ported from the relevant arms of
 //! `Sky.Type.Constrain.Expression` (derivative of elm/compiler's
 //! `Type.Constrain.Expression`, BSD-3-Clause).
 //!
 //! Walks the canonical module, minting a union-find variable for each
 //! sub-expression region and emitting equality [`Constraint`]s that the solver
-//! discharges. The arms modelled are exactly those the M0 golden program
+//! discharges. The arms modelled are exactly those the golden program
 //! exercises: integer literals, `VarLocal` / `VarTopLevel` / `VarKernel` /
 //! `VarCtor` references, function application (`Call`), `case`, and the binary
 //! operators `+` / `-`.
@@ -118,7 +118,7 @@ const ZONK_NODE_LIMIT: u32 = 4_096;
 
 /// Interned symbols for the built-in type constructors the inferencer needs to
 /// name. `Int` / `String` usually already exist (from the source), but `Task`
-/// never appears in M0 source, so the builder interns them up front to
+/// never appears in source, so the builder interns them up front to
 /// guarantee a stable, resolvable [`Symbol`] for each.
 struct Builtins {
     int: Symbol,
@@ -152,9 +152,9 @@ struct Builtins {
     /// ...` infers `e : Error` without leaving a free variable.
     error: Symbol,
     /// `ErrorKind` — the 11-variant classification carried by `Error`'s first
-    /// field (backlog #85/#160). Registered as a Prelude built-in exactly
-    /// like `Order` (#123) — see `sky_lower`'s `enum_variants`/`ctor_arity`
-    /// (E-12, #152), which already validate `Error kind info ->` patterns.
+    /// field. Registered as a Prelude built-in exactly
+    /// like `Order` — see `sky_lower`'s `enum_variants`/`ctor_arity`
+    /// (E-12), which already validate `Error kind info ->` patterns.
     errorkind: Symbol,
     /// The 11 `ErrorKind` nullary constructor symbols, in canon's registered
     /// index order (`crates/sky_canon/src/env.rs`) — do not reorder.
@@ -170,7 +170,7 @@ struct Builtins {
     ek_unavailable: Symbol,
     ek_unexpected: Symbol,
     /// `ErrorDetails` — the 5-variant enrichment union carried on
-    /// `ErrorInfo.details` (backlog #85 follow-up). Registered as a Prelude
+    /// `ErrorInfo.details`. Registered as a Prelude
     /// built-in exactly like `ErrorKind` — see `sky_lower`'s
     /// `enum_variants`/`ctor_arity` seeding.
     errordetails: Symbol,
@@ -182,8 +182,8 @@ struct Builtins {
     ed_json_decode: Symbol,
     ed_custom: Symbol,
     /// `PanicInfo` / `TypeInfo` / `ErrorInfo` — NOMINAL type-constructor
-    /// symbols (SEAL fix 2026-07-11, `docs/architecture/
-    /// docs/adr/0017-error-payload-nominal-identity.md`). The three payload
+    /// symbols (SEAL fix, see
+    /// `docs/adr/0017-error-payload-nominal-identity.md`). The three payload
     /// record types are opaque nominal Cons (like the server `Request`), NOT
     /// structural records: a bare record literal must not unify with them —
     /// the runtime backs them with concrete structs (`SkyPanicInfo` /
@@ -228,7 +228,7 @@ struct Builtins {
     migration_f_name: Symbol,
     /// `"sql"` — `Std.Db.Migration` record field.
     migration_f_sql: Symbol,
-    // ── Db type symbols (M5b-db) ─────────────────────────────────────────────
+    // ── Db type symbols ──────────────────────────────────────────────────────
     /// `"Db"` — the opaque database connection pool type constructor.
     db: Symbol,
     /// `"SqlValue"` — the sum type for typed SQL parameter values.
@@ -236,10 +236,10 @@ struct Builtins {
     /// `"SqlField"` — the sum type for PATCH-style field-set / field-omit SQL params.
     sqlfield: Symbol,
     /// `"SqlFragment"` — `Std.Db.Sql`'s opaque, parameterized WHERE-fragment
-    /// type (backlog #61).
+    /// type.
     sqlfragment: Symbol,
     /// `"Secret"` — `Sky.Core.Secret`'s opaque, sealed secret-string wrapper
-    /// type (backlog #44).
+    /// type.
     secret: Symbol,
     // ── SqlValue constructor name symbols ─────────────────────────────────────
     sql_string: Symbol,
@@ -256,18 +256,18 @@ struct Builtins {
     // ── SqlField constructor name symbols ─────────────────────────────────────
     set_field: Symbol,
     omit_field: Symbol,
-    // ── Shared row-decoder type (M5b-db + M4h JSON) ───────────────────────────
+    // ── Shared row-decoder type (JSON) ────────────────────────────────────────
     /// `"Decoder"` — the opaque decoder type constructor shared by `Sky.Core.Json.Decode`
     /// and `Std.Db.Decode`. Represented in the IR as `IrType::Decoder(Box<IrType>)`.
     decoder: Symbol,
-    // ── TEA Cmd / Sub type constructor symbols (M5c) ─────────────────────────
+    // ── TEA Cmd / Sub type constructor symbols ────────────────────────────────
     /// `"Cmd"` — the opaque command type constructor `Cmd msg`.
     /// Represented in the IR as `IrType::Cmd(Box<IrType>)`.
     cmd: Symbol,
     /// `"Sub"` — the opaque subscription type constructor `Sub msg`.
     /// Represented in the IR as `IrType::Sub(Box<IrType>)`.
     sub: Symbol,
-    // ── Sky.Http.Server opaque type constructor symbols (M6) ──────────────────
+    // ── Sky.Http.Server opaque type constructor symbols ───────────────────────
     /// `"Request"` — the opaque server request type.
     server_request: Symbol,
     /// `"Response"` — the opaque server response type.
@@ -279,21 +279,20 @@ struct Builtins {
     /// `"Handler"` — the `Request -> Task Error Response` alias from
     /// `Sky.Http.Server`. Pre-interned so `constrain_def` can detect a
     /// `handler : Handler` annotation and expand it to the full arrow type
-    /// before the parameter-loop runs (fixes SKY-T0004 for handler bindings,
-    /// #152).
+    /// before the parameter-loop runs (fixes SKY-T0004 for handler bindings).
     handler: Symbol,
-    // ── #111: Sky.Http.Server.Stream opaque type constructor symbol ───────────
+    // ── Sky.Http.Server.Stream opaque type constructor symbol ───────────
     /// `"StreamWriter"` — the opaque stream writer handle passed to the
     /// `Stream.stream` callback and consumed by `Stream.emit` /
     /// `Stream.finish` / `Stream.withContentType`.
     stream_writer: Symbol,
-    // ── #127: Sky.Http.Server.WebSocket opaque type constructor symbols ────────
+    // ── Sky.Http.Server.WebSocket opaque type constructor symbols ────────
     /// `"WebSocketServer"` — the opaque per-peer WebSocket handle (`WsHandle`).
     ws_server: Symbol,
     /// `"WebSocketServerCfg"` — the opaque WebSocket server configuration
     /// (`WsServerCfg<SkyError>`).
     ws_server_cfg: Symbol,
-    // ── M7: Std.Ui / Std.Html parametric type constructor symbols ─────────────
+    // ── Std.Ui / Std.Html parametric type constructor symbols ─────────────────
     /// `"Attribute"` — Std.Ui attribute type constructor `Attribute msg`.
     ///
     /// Used to build Ui kernel type schemes so the HM solver constrains
@@ -323,10 +322,8 @@ struct Builtins {
     /// `"PseudoClass"` — Std.Ui nullary pseudo-class-selector type produced by
     /// `Ui.hover` / `Ui.focus` / `Ui.focusVisible` / `Ui.active` / `Ui.disabled`
     /// and consumed by `Ui.onPseudo`. Lowered to
-    /// `IrType::UiPlain(UiPlain::PseudoClass)` via the pre-existing
-    /// `"PseudoClass"` arm in `sky_lower::ir_type_from_ty` (the whole IR /
-    /// backend / runtime pipeline for this type already existed — only the
-    /// kernel-scheme wiring was missing).
+    /// `IrType::UiPlain(UiPlain::PseudoClass)` via the
+    /// `"PseudoClass"` arm in `sky_lower::ir_type_from_ty`.
     pseudo_class: Symbol,
     /// `"Value"` — the opaque JSON value type (`Value = any` in Sky) produced /
     /// consumed by the `JsonEnc.*` encoders. Lowered to `IrType::Json`
@@ -343,7 +340,7 @@ struct Builtins {
     lw_wrapper_attrs: Symbol,
     /// `"rootAttrs"` — the second field in the `Ui.layoutWith` config record.
     lw_root_attrs: Symbol,
-    // ── Std.Live / Sky.Live opaque type constructor symbols (Phase-1b) ─────────
+    // ── Std.Live / Sky.Live opaque type constructor symbols ───────────────────
     /// `"LiveReq"` — opaque request threaded through `Live.app`'s `init`.
     live_req: Symbol,
     /// `"LiveRoute"` — opaque route descriptor returned by `Live.route`.
@@ -365,7 +362,7 @@ struct Builtins {
     /// Reserved for a future split scheme between `app` and `appRouted`.
     #[allow(dead_code)]
     live_f_not_found: Symbol,
-    // ── Tui cfg record field name symbols (Phase-1c) ─────────────────────────────
+    // ── Tui cfg record field name symbols ─────────────────────────────────────
     /// `"onKey"` — the onKey field of the `Tui.app` / `Tui.program` config record.
     /// Typed `{ kind : String, value : String } -> msg`; the backend bridges the
     /// record handler onto the runtime bound `FOnKey: Fn(String, String) -> Msg`.
@@ -374,7 +371,7 @@ struct Builtins {
     tui_f_key_kind: Symbol,
     /// `"value"` — field of the pinned `KeyEvent` record in the `onKey` scheme.
     tui_f_key_value: Symbol,
-    // ── Webview cfg record field name symbols (Phase-1d) ─────────────────────────
+    // ── Webview cfg record field name symbols ─────────────────────────────────
     /// `"window"` — the window field of the `Webview.app` config record.
     /// Typed as a closed record `{ title : String, size : (Int, Int) }`.
     webview_f_window: Symbol,
@@ -383,7 +380,7 @@ struct Builtins {
     /// `"size"` — the size field inside the Webview window config record.
     /// Typed as `(Int, Int)` — width × height in logical pixels.
     webview_f_size: Symbol,
-    // ── Cli cfg record field name symbols (#111) ──────────────────────────────
+    // ── Cli cfg record field name symbols ──────────────────────────────
     /// `"onLine"` — the onLine field of the `Cli.program` config record.
     /// Typed as `String -> Msg` — called once per stdin line.
     cli_f_on_line: Symbol,
@@ -394,7 +391,7 @@ struct Builtins {
     /// `"label"` — the label field of the `Ui.button` config record.
     /// Typed as `Element msg`.
     btn_f_label: Symbol,
-    // ── Std.Ui.Input type constructor + cfg field symbols (#124) ─────────────
+    // ── Std.Ui.Input type constructor + cfg field symbols ─────────────
     /// `"Label"` — the `Label msg` type constructor from `Std.Ui.Input`.
     /// Lowered to `IrType::Ui { ctor: UiCtor::Label, msg }`.
     input_label_con: Symbol,
@@ -434,7 +431,7 @@ struct Builtins {
     /// No synthetic `EnumDef` is injected; the backend handles it via a special
     /// case in `enum_name` that maps the symbol to the runtime struct.
     stream_id: Symbol,
-    // ── Order ADT (#123) ─────────────────────────────────────────────────────
+    // ── Order ADT ─────────────────────────────────────────────────────
     /// `"Order"` — the type constructor for three-way comparison results.
     order: Symbol,
     /// `"LT"` — the LT constructor of the Order ADT (less-than).
@@ -443,7 +440,7 @@ struct Builtins {
     eq: Symbol,
     /// `"GT"` — the GT constructor of the Order ADT (greater-than).
     gt: Symbol,
-    // ── Task.RetryPolicy field name symbols (M5a retry surface) ──────────────
+    // ── Task.RetryPolicy field name symbols (retry surface) ───────────────────
     /// `"maxAttempts"` — maximum number of attempts in `RetryPolicy e`.
     retry_f_max_attempts: Symbol,
     /// `"baseMs"` — base delay in milliseconds in `RetryPolicy e`.
@@ -474,7 +471,7 @@ struct Builtins {
     shadow_f_spread: Symbol,
     /// `"color"` — shadow colour field.
     shadow_f_color: Symbol,
-    // ── Ui.image record field name symbols (#76) ──────────────────────────────
+    // ── Ui.image record field name symbols ──────────────────────────────
     /// `"src"` — image source URL field of `Ui.image _ { src, description }`.
     img_f_src: Symbol,
     /// `"description"` — alt-text field of `Ui.image _ { src, description }`.
@@ -495,12 +492,12 @@ struct Builtins {
     /// `rust_decimal::Decimal`).  Zero type arguments.  Lowered to
     /// `IrType::Decimal` by `ir_type_from_ty` / `ir_type_from_canon`.
     decimal: Symbol,
-    // ── #197 Std.Csv record field symbols ─────────────────────────────────────
+    // ── Std.Csv record field symbols ─────────────────────────────────────
     /// `"header"` — `Std.Csv.Csv.header : List String`.
     csv_f_header: Symbol,
     /// `"rows"` — `Std.Csv.Csv.rows : List (List String)`.
     csv_f_rows: Symbol,
-    // ── #210 Std.Cache record field symbols ───────────────────────────────────
+    // ── Std.Cache record field symbols ───────────────────────────────────
     /// `"maxEntries"` — `Std.Cache.CacheCfg.maxEntries : Int`.
     cache_f_max_entries: Symbol,
     /// `"ttlMs"` — `Std.Cache.CacheCfg.ttlMs : Int`.
@@ -513,7 +510,7 @@ struct Builtins {
     cache_f_misses: Symbol,
     /// `"evictions"` — `Std.Cache.stats` return field `evictions : Int`.
     cache_f_evictions: Symbol,
-    // ── #210 Sky.Core.WebSocket.WebSocketCfg record field symbols ─────────────
+    // ── Sky.Core.WebSocket.WebSocketCfg record field symbols ─────────────
     /// `"url"` — `Sky.Core.WebSocket.WebSocketCfg.url : String`.
     ws_f_url: Symbol,
     /// `"headers"` — `WebSocketCfg.headers : List (String, String)`.
@@ -522,7 +519,7 @@ struct Builtins {
     ws_f_timeout: Symbol,
     /// `"pingInterval"` — `WebSocketCfg.pingInterval : Int`.
     ws_f_ping_interval: Symbol,
-    // ── #210 Std.Email type + record field symbols ────────────────────────────
+    // ── Std.Email type + record field symbols ────────────────────────────
     /// `"EmailProvider"` — the opaque `Std.Email.EmailProvider` ADT constructor
     /// (`Resend`/`Ses`/`SendGrid`/`Smtp`).  Backed by
     /// `sky_runtime::email::EmailProvider`; lowered to `IrType::EmailProvider`.
@@ -605,7 +602,7 @@ impl Builtins {
             http_f_timeout: interner.intern("timeout")?,
             http_f_follow_redirects: interner.intern("followRedirects")?,
             http_f_max_redirects: interner.intern("maxRedirects")?,
-            // Db symbols (M5b-db).
+            // Db symbols.
             db: interner.intern("Db")?,
             sqlvalue: interner.intern("SqlValue")?,
             sqlfield: interner.intern("SqlField")?,
@@ -623,21 +620,21 @@ impl Builtins {
             set_field: interner.intern("SetField")?,
             omit_field: interner.intern("OmitField")?,
             decoder: interner.intern("Decoder")?,
-            // TEA Cmd / Sub type constructors (M5c).
+            // TEA Cmd / Sub type constructors.
             cmd: interner.intern("Cmd")?,
             sub: interner.intern("Sub")?,
-            // Sky.Http.Server opaque types (M6).
+            // Sky.Http.Server opaque types.
             server_request: interner.intern("Request")?,
             server_response: interner.intern("Response")?,
             server_route: interner.intern("Route")?,
             server_cookie: interner.intern("Cookie")?,
             handler: interner.intern("Handler")?,
-            // #111: Sky.Http.Server.Stream opaque handle.
+            // Sky.Http.Server.Stream opaque handle.
             stream_writer: interner.intern("StreamWriter")?,
-            // #127: Sky.Http.Server.WebSocket opaque handles.
+            // Sky.Http.Server.WebSocket opaque handles.
             ws_server: interner.intern("WebSocketServer")?,
             ws_server_cfg: interner.intern("WebSocketServerCfg")?,
-            // M7: Std.Ui / Std.Html parametric type constructor symbols.
+            // Std.Ui / Std.Html parametric type constructor symbols.
             attribute: interner.intern("Attribute")?,
             element: interner.intern("Element")?,
             html_con: interner.intern("Html")?,
@@ -648,7 +645,7 @@ impl Builtins {
             json_value: interner.intern("Value")?,
             lw_wrapper_attrs: interner.intern("wrapperAttrs")?,
             lw_root_attrs: interner.intern("rootAttrs")?,
-            // Phase-1b: Std.Live / Sky.Live opaque types + cfg field names.
+            // Std.Live / Sky.Live opaque types + cfg field names.
             live_req: interner.intern("LiveReq")?,
             live_route_con: interner.intern("LiveRoute")?,
             live_f_init: interner.intern("init")?,
@@ -657,20 +654,20 @@ impl Builtins {
             live_f_subscriptions: interner.intern("subscriptions")?,
             live_f_routes: interner.intern("routes")?,
             live_f_not_found: interner.intern("notFound")?,
-            // Phase-1c: Tui cfg field names.
+            // Tui cfg field names.
             tui_f_on_key: interner.intern("onKey")?,
             tui_f_key_kind: interner.intern("kind")?,
             tui_f_key_value: interner.intern("value")?,
-            // Phase-1d: Webview cfg field names.
+            // Webview cfg field names.
             webview_f_window: interner.intern("window")?,
             webview_f_title: interner.intern("title")?,
             webview_f_size: interner.intern("size")?,
-            // #111: Cli cfg field names.
+            // Cli cfg field names.
             cli_f_on_line: interner.intern("onLine")?,
             // Ui.button cfg field names.
             btn_f_on_press: interner.intern("onPress")?,
             btn_f_label: interner.intern("label")?,
-            // Std.Ui.Input type constructors + cfg field names (#124).
+            // Std.Ui.Input type constructors + cfg field names.
             input_label_con: interner.intern("Label")?,
             input_placeholder_con: interner.intern("Placeholder")?,
             input_radio_option_con: interner.intern("RadioOption")?,
@@ -680,31 +677,31 @@ impl Builtins {
             input_f_checked: interner.intern("checked")?,
             input_f_icon: interner.intern("icon")?,
             input_f_spellcheck: interner.intern("spellcheck")?,
-            // Std.Ui.Input.slider cfg fields (#148).
+            // Std.Ui.Input.slider cfg fields.
             input_f_value: interner.intern("value")?,
             input_f_min: interner.intern("min")?,
             input_f_max: interner.intern("max")?,
             input_f_step: interner.intern("step")?,
-            // Std.Ui.Input.radio / radioRow cfg fields (#150).
+            // Std.Ui.Input.radio / radioRow cfg fields.
             input_f_options: interner.intern("options")?,
             input_f_selected: interner.intern("selected")?,
-            // Sky.Core.Http.Stream: StreamId opaque handle type (#148).
+            // Sky.Core.Http.Stream: StreamId opaque handle type.
             stream_id: interner.intern("StreamId")?,
             csv_f_header: interner.intern("header")?,
             csv_f_rows: interner.intern("rows")?,
-            // ── #210 Std.Cache record field symbols ──────────────────────────
+            // ── Std.Cache record field symbols ──────────────────────────
             cache_f_max_entries: interner.intern("maxEntries")?,
             cache_f_ttl_ms: interner.intern("ttlMs")?,
             cache_f_max_bytes: interner.intern("maxBytes")?,
             cache_f_hits: interner.intern("hits")?,
             cache_f_misses: interner.intern("misses")?,
             cache_f_evictions: interner.intern("evictions")?,
-            // ── #210 Sky.Core.WebSocket.WebSocketCfg record field symbols ────
+            // ── Sky.Core.WebSocket.WebSocketCfg record field symbols ────
             ws_f_url: interner.intern("url")?,
             ws_f_headers: interner.intern("headers")?,
             ws_f_timeout: interner.intern("timeout")?,
             ws_f_ping_interval: interner.intern("pingInterval")?,
-            // ── #210 Std.Email type + record field symbols ───────────────────
+            // ── Std.Email type + record field symbols ───────────────────
             email_provider: interner.intern("EmailProvider")?,
             email_f_from: interner.intern("from")?,
             email_f_to: interner.intern("to")?,
@@ -718,12 +715,12 @@ impl Builtins {
             email_f_filename: interner.intern("filename")?,
             email_f_mime_type: interner.intern("mimeType")?,
             email_f_content: interner.intern("content")?,
-            // ── Order ADT (#123) ─────────────────────────────────────────────
+            // ── Order ADT ─────────────────────────────────────────────
             order: interner.intern("Order")?,
             lt: interner.intern("LT")?,
             eq: interner.intern("EQ")?,
             gt: interner.intern("GT")?,
-            // ── Task.RetryPolicy field names (M5a retry surface) ─────────────
+            // ── Task.RetryPolicy field names (retry surface) ─────────────────────
             retry_f_max_attempts: interner.intern("maxAttempts")?,
             retry_f_base_ms: interner.intern("baseMs")?,
             retry_f_jitter: interner.intern("jitter")?,
@@ -740,7 +737,7 @@ impl Builtins {
             shadow_f_blur: interner.intern("blur")?,
             shadow_f_spread: interner.intern("spread")?,
             shadow_f_color: interner.intern("color")?,
-            // ── Ui.image record field names (#76) ────────────────────────────────
+            // ── Ui.image record field names ────────────────────────────────
             img_f_src: interner.intern("src")?,
             img_f_description: interner.intern("description")?,
             // ── JWT builder opaque type constructor symbols (D-00) ──────────────
@@ -813,7 +810,7 @@ impl Builtins {
             name: self.bytes,
             args: Vec::new(),
         };
-        // Monomorphic `Error` / `ErrorKind` (backlog #85/#160) — no type params.
+        // Monomorphic `Error` / `ErrorKind` — no type params.
         let error_ty = Ty::Con {
             module: Vec::new(),
             name: self.error,
@@ -824,14 +821,14 @@ impl Builtins {
             name: self.errorkind,
             args: Vec::new(),
         };
-        // Monomorphic `ErrorDetails` (backlog #85 follow-up) — no type params.
+        // Monomorphic `ErrorDetails` — no type params.
         let errordetails_ty = Ty::Con {
             module: Vec::new(),
             name: self.errordetails,
             args: Vec::new(),
         };
         // `PanicInfo` / `TypeInfo` / `ErrorInfo` — NOMINAL opaque Cons, not
-        // structural records (SEAL fix 2026-07-11; see the `TypeNames` field
+        // structural records (SEAL fix; see the `TypeNames` field
         // doc). A bare record literal (`FfiPanic { message = …, stack = … }`)
         // now fails to unify with a clean skyc-time type mismatch instead of
         // lowering to a synthesized struct that fails `cargo build` against
@@ -898,10 +895,10 @@ impl Builtins {
                     result: result_ty,
                 },
             ),
-            // ── Error / ErrorKind constructors (backlog #85/#160) ──────────────
-            // `Error : ErrorKind -> ErrorInfo -> Error` — closes #160 (the
-            // no-scheme ctor-pattern fallback that bound `info` to an untied
-            // fresh var). `ErrorKind`'s 11 variants are all nullary.
+            // ── Error / ErrorKind constructors ──────────────
+            // `Error : ErrorKind -> ErrorInfo -> Error` — without it the
+            // no-scheme ctor-pattern fallback would bind `info` to an untied
+            // fresh var. `ErrorKind`'s 11 variants are all nullary.
             (
                 self.error,
                 CtorScheme {
@@ -986,7 +983,7 @@ impl Builtins {
                     result: errorkind_ty,
                 },
             ),
-            // ── ErrorDetails constructors (backlog #85 follow-up) ───────────────
+            // ── ErrorDetails constructors ───────────────
             // `FfiPanic : PanicInfo -> ErrorDetails`
             // `TypeMismatch : TypeInfo -> ErrorDetails`
             // `HttpStatus : Int -> ErrorDetails`
@@ -1027,7 +1024,7 @@ impl Builtins {
                     result: errordetails_ty,
                 },
             ),
-            // ── SqlValue constructors (M5b-db) ─────────────────────────────────
+            // ── SqlValue constructors ──────────────────────────────────────────
             // Each maps its payload type → SqlValue.
             (
                 self.sql_string,
@@ -1075,7 +1072,7 @@ impl Builtins {
             // SqlDecimal wraps a String decimal representation (lossless TEXT
             // serialisation matching Go's shopspring.Decimal.String()).
             // Minimal wiring: Sky users write `SqlDecimal "1234.56"` rather than
-            // a native Decimal value (native Decimal IrType deferred to M6).
+            // a native Decimal value (native Decimal is not yet an IrType).
             (
                 self.sql_decimal,
                 CtorScheme {
@@ -1106,7 +1103,7 @@ impl Builtins {
                     result: sqlvalue_ty.clone(),
                 },
             ),
-            // ── SqlField constructors (M5b-db) ─────────────────────────────────
+            // ── SqlField constructors ──────────────────────────────────────────
             // SetField : SqlValue -> SqlField — wraps a typed parameter value.
             (
                 self.set_field,
@@ -1123,7 +1120,7 @@ impl Builtins {
                     result: sqlfield_ty,
                 },
             ),
-            // ── Order constructors (#123) ──────────────────────────────────
+            // ── Order constructors ──────────────────────────────────
             // LT, EQ, GT are all nullary: no payload, result is Order.
             (
                 self.lt,
@@ -1377,7 +1374,7 @@ pub struct FieldAccess {
     /// merges modules, a bare byte-offset span cannot identify the source file;
     /// the home lets a post-solve error (SKY-T0012) attribute to the correct
     /// module instead of the byte-offset heuristic's best guess (which can pick
-    /// a numerically-closer def in a *different* file — the #144 span-collision
+    /// a numerically-closer def in a *different* file — the span-collision
     /// class, here surfacing as an `info.message` error blamed on an unrelated
     /// `class` call in another module).
     pub home: Vec<Symbol>,
@@ -1429,7 +1426,7 @@ pub struct RoutedLiveCheck {
     pub span: Span,
 }
 
-/// A deferred per-route page-witness check for `Live.route` (#108 round 4).
+/// A deferred per-route page-witness check for `Live.route`.
 ///
 /// `Live.route : String -> builder -> LiveRoute page` types its second
 /// argument with a variable (`builder`, var(1)) DISTINCT from the result's
@@ -1607,7 +1604,7 @@ impl<'a> Builder<'a> {
         //   unconstrained. The variable's settled type is read back into `env`.
         //   (Generalising an *un*annotated binding so it can be used at several
         //   concrete types in one module needs rank-based let-generalisation,
-        //   which the M2a solver does not yet model — so an untyped polymorphic
+        //   which the solver does not yet model — so an untyped polymorphic
         //   binding is monomorphic at its use sites. Sound, not yet complete;
         //   write an annotation to get full polymorphism.)
         for def in &module.defs {
@@ -1789,7 +1786,7 @@ impl<'a> Builder<'a> {
     }
 
     /// Constrain a binary operation by the type discipline of its operator. The
-    /// returned [`VarId`] is the result type's variable. Mirrors the M1-core
+    /// returned [`VarId`] is the result type's variable. Mirrors the core
     /// subset of `Sky.Type.Constrain.Expression.binopTypes`.
     fn constrain_binop(
         &mut self,
@@ -2075,7 +2072,7 @@ impl<'a> Builder<'a> {
 
     // ── the walk ────────────────────────────────────────────────────────────
 
-    #[allow(clippy::too_many_lines)] // Handler expansion block (E-12/#152) pushed it over 100
+    #[allow(clippy::too_many_lines)] // Handler expansion block (E-12) pushes it over 100
     fn constrain_def(&mut self, def: &canon::Def) -> DResult<()> {
         // Track which source module this def belongs to so every `regions.insert`
         // in the sub-expression walk uses `(home, span)` as the key, preventing
@@ -2099,7 +2096,7 @@ impl<'a> Builder<'a> {
                 // conflates `a` and `b`) are both mismatches rather than silently
                 // accepted. Per-call-site uses instead instantiate the binding's
                 // type as fresh *flex* variables (see [`Self::instantiate`]).
-                // ── Handler alias expansion (#152 / T0004 fix) ───────────────
+                // ── Handler alias expansion (T0004 fix) ───────────────
                 // `Handler` is the stdlib alias `Request -> Task Error Response`
                 // (Sky.Http.Server).  A binding annotated as `Handler` with one
                 // parameter (e.g. `handleHome : Handler; handleHome req = …`)
@@ -2369,9 +2366,9 @@ impl<'a> Builder<'a> {
                     // `Cmd` / `Sub` take exactly one message type. A mis-arity
                     // application (bare `Cmd`, `Cmd Int Bool`) would otherwise
                     // reach the lowerer's `ir_type_from_canon` catch-all and
-                    // ICE (SKY-I0001) — the Cmd/Sub sibling of #32's Task gate.
+                    // ICE (SKY-I0001) — the Cmd/Sub sibling of the Task gate.
                     // Fail closed here with the same clean SKY-T0016, symmetric
-                    // with the `Task` arm above. [found by the #32 review]
+                    // with the `Task` arm above.
                     let carrier = if name == self.builtins.cmd {
                         "Cmd"
                     } else {
@@ -2596,7 +2593,7 @@ impl<'a> Builder<'a> {
         match k.decl().qualifier {
             "Set" => Some(TyBounds::set_elem()),
             "Dict" => Some(TyBounds::dict_key()),
-            // #210: `Std.Cache`'s key variable is raw scheme-var 0 in `get` /
+            // `Std.Cache`'s key variable is raw scheme-var 0 in `get` /
             // `put` / `remove` (`Int -> k -> …`), and the runtime scans keys by
             // `PartialEq` (`cache_get`/`cache_put`/`cache_remove` bound
             // `K: PartialEq`). Attaching the EQ obligation lifts `PartialEq`
@@ -2610,7 +2607,7 @@ impl<'a> Builder<'a> {
 
     /// The raw scheme-var id of the CALLBACK-RESULT slot of a `Maybe`/`Result`
     /// higher-order kernel — the variable that must not itself instantiate to
-    /// a function ([`TyBounds::hof_kernel_result`], #90 T3).
+    /// a function ([`TyBounds::hof_kernel_result`]).
     ///
     /// Slot ids follow each kernel's scheme in [`Self::stdlib_scheme`] and are
     /// asserted against those schemes by
@@ -2628,10 +2625,10 @@ impl<'a> Builder<'a> {
     ///   `ResultCombine` — no callback is applied by the kernel; a
     ///   function-valued payload flows through by value in its (consistently
     ///   flattened) representation, which is sound.
-    /// * `Task` / `Cmd` / `Sub` / `Decoder` kernels — out of #90's scope:
-    ///   their heads were ALREADY exempted from the ctor-payload region gate
-    ///   before #90 (`is_opaque_boxed_wrapper`), so any curried-callback
-    ///   hazard there is pre-existing and independently tracked (the
+    /// * `Task` / `Cmd` / `Sub` / `Decoder` kernels — out of scope:
+    ///   their heads are exempted from the ctor-payload region gate
+    ///   (`is_opaque_boxed_wrapper`), so any curried-callback
+    ///   hazard there is tracked separately (the
     ///   `Decoder` family in particular must NOT be gated — its runtime has
     ///   genuine `curry1..curry10` currying support the applicative decoder
     ///   pipeline depends on).
@@ -2680,7 +2677,7 @@ impl<'a> Builder<'a> {
         name: Symbol,
         span: Span,
     ) -> DResult<VarId> {
-        // ── Obligation pre-checks (Phase D: re-keyed off the resolved `id`,
+        // ── Obligation pre-checks (keyed off the resolved `id`,
         //    not a re-inspected module string). They live OUTSIDE the scheme
         //    tables and must fire BEFORE the registry/legacy delegation, so the
         //    bounded super-var reaches the caller instead of the bare base
@@ -2689,7 +2686,7 @@ impl<'a> Builder<'a> {
             // `Math.min` / `Math.max`: `Comparable a => a -> a -> a`. The bounded
             // super-var (reused across BOTH arrow argument positions AND the
             // result) is what rejects `Math.min f g` / `Math.min recA recB`
-            // (M4c gate, `golden_m4c_math_gate`). This is a DIRECT-build bounded
+            // (`golden_m4c_math_gate`). This is a DIRECT-build bounded
             // scheme, NOT `stdlib_scheme` + a tie, because min/max's base scheme
             // has three independent `var(0)`s and the gate needs all three tied
             // to one bounded var.
@@ -2712,7 +2709,7 @@ impl<'a> Builder<'a> {
                 let inner2 = self.structure(FlatType::Fun(s, inner1))?;
                 return self.structure(FlatType::Fun(s, inner2));
             }
-            // ── Basics numerics (#115) ────────────────────────────────────────
+            // ── Basics numerics ────────────────────────────────────────
             // `negate / abs : number a => a -> a`. SUB obligation (Number
             // super-type — same as the unary-minus operator). A function / record
             // argument fails closed (T0001) before reaching a runtime that would
@@ -2730,7 +2727,7 @@ impl<'a> Builder<'a> {
                 let inner = self.structure(FlatType::Fun(s, s))?;
                 return self.structure(FlatType::Fun(s, inner));
             }
-            // `compare : comparable a => a -> a -> Order` (#123). Direct-build
+            // `compare : comparable a => a -> a -> Order`. Direct-build
             // (not stdlib_scheme + tie): both argument positions share one
             // Ord-bounded super-var; the return is the monomorphic Order type.
             if matches!(k, StdlibKernel::BasicsCompare) {
@@ -2743,8 +2740,8 @@ impl<'a> Builder<'a> {
                 let inner = self.structure(FlatType::Fun(s, order_var))?;
                 return self.structure(FlatType::Fun(s, inner));
             }
-            // ── end Basics numerics (#115) ────────────────────────────────────
-            // `Basics.toString : a -> String` (#77). The argument carries the
+            // ── end Basics numerics ────────────────────────────────────
+            // `Basics.toString : a -> String`. The argument carries the
             // STRINGIFY obligation (a bounded super-var → Rust `SkyStringify`):
             // a scalar / record / ADT satisfies it, a bare function (or a value
             // nesting one) fails CLOSED at type-check rather than emitting an
@@ -2760,8 +2757,8 @@ impl<'a> Builder<'a> {
                 let string_ty = self.string_var()?;
                 return self.structure(FlatType::Fun(s, string_ty));
             }
-            // Dict / Set element-key `comparable` obligation (M4d). The base
-            // scheme is relocated into `stdlib_scheme` (Phase D); we instantiate
+            // Dict / Set element-key `comparable` obligation. The base
+            // scheme is relocated into `stdlib_scheme`; we instantiate
             // it and tie key-position raw var 0 to a bounded super-var. Only
             // key-position `var(0)` carries the bound, so this is `stdlib_scheme`
             // + a tie (unlike min/max's direct-build shape above).
@@ -2786,7 +2783,7 @@ impl<'a> Builder<'a> {
             // position is bounded, so a generic wrapper around `Db.exec` /
             // `Db.query` (`Database.exec label queryStr args` in
             // `examples/17-skymon`) lifts `Into<SqlParam>` onto its own
-            // emitted Rust generic (closing the E0277 half of #165), and an
+            // emitted Rust generic (closing the E0277 half), and an
             // empty-list call site whose element type is otherwise
             // completely unconstrained defaults to `SqlValue` at solve time
             // instead of the wildcard-`any` fallback (closing the E0283
@@ -2809,8 +2806,8 @@ impl<'a> Builder<'a> {
                 }
                 return Ok(var);
             }
-            // Higher-order-kernel callback-result obligation (#90 T3,
-            // primary/Tier-2 mechanism — see
+            // Higher-order-kernel callback-result obligation
+            // (primary/Tier-2 mechanism — see
             // `docs/adr/0016-andmap-arity-gate-type-obligation.md`).
             // Every `Maybe`/`Result` higher-order kernel FULLY APPLIES its
             // callback at runtime (`FnOnce(..) -> R` with an exact arity),
@@ -2842,7 +2839,7 @@ impl<'a> Builder<'a> {
                 return Ok(var);
             }
             // `Log.*With : String -> List a -> Task Error ()` — the attr-list
-            // ELEMENT `a` carries the STRINGIFY obligation (#77). Same
+            // ELEMENT `a` carries the STRINGIFY obligation. Same
             // `stdlib_scheme` + tie shape as Dict/Set: instantiate the base
             // scheme and tie its list-element `var(0)` to a Show super-var, so a
             // non-showable element (a function) fails closed at type-check.
@@ -2864,7 +2861,7 @@ impl<'a> Builder<'a> {
                 }
                 return Ok(var);
             }
-            // `Live.app` — post-solve routed-Live check (#108 Part B).
+            // `Live.app` — post-solve routed-Live check.
             //
             // The open-record cfg scheme for K::LiveApp is shared by both routed
             // apps (Model has a `page : Page` field) and non-routed apps (Model
@@ -2892,7 +2889,7 @@ impl<'a> Builder<'a> {
                 }
                 return Ok(var);
             }
-            // `Live.route` — per-route page witness (#108 round 4).
+            // `Live.route` — per-route page witness.
             //
             // The scheme types the page-builder argument with var(1) DISTINCT
             // from the result's page var(0): the argument is EITHER a nullary
@@ -2920,17 +2917,17 @@ impl<'a> Builder<'a> {
                 return Ok(var);
             }
         }
-        // ── Parse-once registry lookup (Phase E, Task 1c) ──
+        // ── Parse-once registry lookup ──
         //
-        // `stdlib_scheme` is now TOTAL over the reachable kernel set (Tasks
-        // 0/1a/1b) and WILDCARD-FREE, so every reachable kernel resolves via
-        // the `StdlibKernel` id. The legacy string-keyed `kernel_ty` table —
-        // which carried the `Ty::Var(u32::MAX)` exit-0 sentinel for un-typed
-        // kernels — is DELETED. A `None` id (FFI `Rust.*`) or an excluded
-        // bucket (`LiveAppRouted` — unlowered) misses the registry and is
+        // `stdlib_scheme` is TOTAL over the reachable kernel set and
+        // WILDCARD-FREE, so every reachable kernel resolves via the
+        // `StdlibKernel` id. There is no legacy string-keyed `kernel_ty`
+        // table carrying a `Ty::Var(u32::MAX)` exit-0 sentinel for un-typed
+        // kernels. A `None` id (FFI `Rust.*`) or an excluded bucket
+        // (`LiveAppRouted` — unlowered) misses the registry and is
         // fail-closed with SKY-L0108 (loud) via `kernel_scheme_or_unsupported`,
         // never silently typed as a free variable that `cargo` later rejects.
-        let _ = (module, name); // retained for diagnostics; Task 2 removes them from the node
+        let _ = (module, name); // retained for diagnostics
         let registry = id.and_then(|k| self.stdlib_scheme(k));
         let ty = Self::kernel_scheme_or_unsupported(registry, None, span)?;
         self.instantiate(&ty)
@@ -2989,7 +2986,7 @@ impl<'a> Builder<'a> {
                 self.constrain_var_top_level(module, *name, span)?
             }
             canon::Expr_::VarKernel { id, module, name } => {
-                // Phase C: the pre-resolved `id` selects the parse-once
+                // the pre-resolved `id` selects the parse-once
                 // registry scheme (`stdlib_scheme`) for migrated families,
                 // falling back to the legacy symbol-keyed table otherwise.
                 self.constrain_var_kernel(*id, *module, *name, span)?
@@ -3003,8 +3000,7 @@ impl<'a> Builder<'a> {
             canon::Expr_::Call(callee, args) => {
                 let callee_var = self.constrain_expr(local, callee)?;
                 // Each argument gets a FRESH param var rather than flowing its
-                // own var straight into the callee's arrow shape. Two payoffs
-                // (diagnostic-orientation fix, BACKLOG 2026-07-10 row):
+                // own var straight into the callee's arrow shape. Two payoffs:
                 //  1. the callee-vs-shape constraint below is solved FIRST, so
                 //     each param var adopts the callee's DECLARED param type;
                 //  2. the per-arg constraint then unifies found=actual-arg
@@ -3043,8 +3039,8 @@ impl<'a> Builder<'a> {
                 // Sequential, monomorphic `let`: each binding's value is
                 // constrained against the scope built so far, and its name binds
                 // to that value's variable for the bindings that follow and the
-                // `in` body. The whole `let`'s type is the body's type. (M1 does
-                // not generalise let-bound names — no let-polymorphism.)
+                // `in` body. The whole `let`'s type is the body's type. It does
+                // not generalise let-bound names — no let-polymorphism.
                 let mut let_local = local.clone();
                 for b in bindings {
                     let bv = self.constrain_expr(&let_local, &b.body)?;
@@ -3282,7 +3278,7 @@ impl<'a> Builder<'a> {
                     // Instantiate the scheme fresh, tie the result to the
                     // scrutinee, and constrain each payload sub-pattern against its
                     // field's (now use-site) type. Recursing handles a nested
-                    // sub-pattern's typing too; the lowerer is what restricts M3a
+                    // sub-pattern's typing too; the lowerer is what restricts
                     // payloads to variables / wildcards.
                     let (arg_vars, result_var) = self.instantiate_ctor(&scheme)?;
                     self.eq(pat.span, result_var, scrut_var);
@@ -3293,7 +3289,7 @@ impl<'a> Builder<'a> {
                         // complete shape the same way a top-level `case` / `let` binder
                         // already does (identical precedent in `constrain_lambda`, the
                         // `regions.insert` on every lambda-parameter span below).
-                        // Class 4 item C (#158) —
+                        // Class 4 item C —
                         // docs/adr/0010-pattern-and-lowering-completeness.md.
                         self.regions
                             .insert((self.current_home.clone(), sub.span), av);
@@ -3305,7 +3301,7 @@ impl<'a> Builder<'a> {
                     // pattern variables (e.g. `Chunk text` where `Chunk` is an
                     // imported ctor) get bound into `local`.  Without the recursion
                     // the body sees `VarLocal("text")` that is absent from the local
-                    // map and fires the "unbound local" ICE (#145).  Use a fresh flex
+                    // map and fires the "unbound local" ICE.  Use a fresh flex
                     // variable per arg since the field types are unknown.
                     let ctor = self.con_var(home.clone(), *type_name, Vec::new())?;
                     self.eq(pat.span, ctor, scrut_var);
@@ -3332,7 +3328,7 @@ impl<'a> Builder<'a> {
                     self.constrain_pattern(local, sub, ev)?;
                     // Same region-threading as the `PCtor` arm above so a record
                     // (or list) nested inside a TUPLE element (`(Ok {name}, y)`)
-                    // recovers its complete shape in the lowerer. Class 4 item C (#158).
+                    // recovers its complete shape in the lowerer. Class 4 item C.
                     self.regions
                         .insert((self.current_home.clone(), sub.span), ev);
                 }
@@ -3439,19 +3435,16 @@ impl<'a> Builder<'a> {
         )
     }
 
-    /// Parse-once type scheme for a **migrated** stdlib kernel, keyed by the
-    /// pre-resolved [`StdlibKernel`] id carried on the `VarKernel` node.
-    /// `None` = the kernel is not yet migrated into the registry, so the caller
-    /// ([`Self::constrain_var_kernel`]) falls back to the legacy symbol-keyed
-    /// [`Self::kernel_ty`] table.
+    /// Parse-once type scheme for a stdlib kernel, keyed by the pre-resolved
+    /// [`StdlibKernel`] id carried on the `VarKernel` node. `None` = the
+    /// kernel has no registry scheme, so the caller
+    /// ([`Self::constrain_var_kernel`]) fails closed.
     ///
-    /// Phase C migrates **String → List → Math**, EXCLUDING `Math.min` /
-    /// `Math.max` (they keep their dedicated `Comparable`-obligation path in
-    /// `constrain_var_kernel`, so the M4c gate does not reopen). Every arm here
-    /// is a byte-faithful copy of the corresponding `kernel_ty` arm; the
-    /// structural `Ty`-equality is pinned per-kernel by the
-    /// `stdlib_scheme_matches_legacy` parity tripwire, and the exact migrated
-    /// set is pinned by `migrated_set_burndown`.
+    /// `Math.min` / `Math.max` are EXCLUDED — they keep their dedicated
+    /// `Comparable`-obligation path in `constrain_var_kernel`. The structural
+    /// `Ty`-equality against the reference schemes is pinned per-kernel by the
+    /// `stdlib_scheme_matches_legacy` parity tripwire, and the covered set is
+    /// pinned by `migrated_set_burndown`.
     #[allow(clippy::too_many_lines)] // declarative scheme table — mirrors kernel_ty
     #[allow(clippy::match_same_arms)] // family-grouped declarative type table; merging cross-family arms with coincidentally-equal schemes would obscure the per-family structure
     fn stdlib_scheme(&self, k: StdlibKernel) -> Option<Ty> {
@@ -3496,9 +3489,9 @@ impl<'a> Builder<'a> {
             name: self.builtins.char,
             args: Vec::new(),
         };
-        // ── Phase D relocation closures (mirror `kernel_ty`'s preamble so the
-        //    relocated arms produce structurally identical `Ty` values; the
-        //    `stdlib_scheme_matches_legacy` tripwire proves the equality). ──
+        // ── Scheme-builder closures (produce structurally identical `Ty`
+        //    values across the kernel arms; the `stdlib_scheme_matches_legacy`
+        //    tripwire proves the equality). ──
         let result = |e: Ty, a: Ty| Ty::Con {
             module: Vec::new(),
             name: self.builtins.result,
@@ -3520,7 +3513,7 @@ impl<'a> Builder<'a> {
             name: self.builtins.bytes,
             args: Vec::new(),
         };
-        // `Order` is a zero-argument constructor (#123).
+        // `Order` is a zero-argument constructor.
         let order = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.order,
@@ -3537,7 +3530,7 @@ impl<'a> Builder<'a> {
             name: self.builtins.error,
             args: Vec::new(),
         };
-        // `ErrorDetails` is a zero-argument constructor (backlog #85 follow-up).
+        // `ErrorDetails` is a zero-argument constructor.
         let errordetails_ty = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.errordetails,
@@ -3605,13 +3598,13 @@ impl<'a> Builder<'a> {
             name: self.builtins.sqlfield,
             args: Vec::new(),
         };
-        // `SqlFragment` — `Std.Db.Sql`'s opaque WHERE-fragment type (#61).
+        // `SqlFragment` — `Std.Db.Sql`'s opaque WHERE-fragment type.
         let sqlfragment = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.sqlfragment,
             args: Vec::new(),
         };
-        // `Secret` — `Sky.Core.Secret`'s opaque sealed secret-string type (#44).
+        // `Secret` — `Sky.Core.Secret`'s opaque sealed secret-string type.
         let secret = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.secret,
@@ -3667,14 +3660,14 @@ impl<'a> Builder<'a> {
             name: self.builtins.server_cookie,
             args: Vec::new(),
         };
-        // `sw()` — the opaque `StreamWriter` handle (#111). Used by
+        // `sw()` — the opaque `StreamWriter` handle. Used by
         // `Stream.stream` callback arg and `Stream.emit`/`finish`/`withContentType`.
         let sw = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.stream_writer,
             args: Vec::new(),
         };
-        // #148: `stream_id()` — the opaque `StreamId` handle from
+        // `stream_id()` — the opaque `StreamId` handle from
         // `Sky.Core.Http.Stream`. Backed at runtime by
         // `sky_runtime::http_stream::SkyStreamId` (a newtype over `i64`).
         // Used as the return type of `HttpStream.open` and the first argument
@@ -3684,7 +3677,7 @@ impl<'a> Builder<'a> {
             name: self.builtins.stream_id,
             args: Vec::new(),
         };
-        // #127: `wsh()` — the opaque `WsHandle` per-peer handle.
+        // `wsh()` — the opaque `WsHandle` per-peer handle.
         // Used as the first arg of every WsServerCfg callback and as the
         // target of `sendToClient` / `sendBinaryToClient` / `broadcast` / `closeClient`.
         let wsh = || Ty::Con {
@@ -3692,14 +3685,14 @@ impl<'a> Builder<'a> {
             name: self.builtins.ws_server,
             args: Vec::new(),
         };
-        // #127: `wscfg()` — the opaque `WsServerCfg<SkyError>` configuration type.
+        // `wscfg()` — the opaque `WsServerCfg<SkyError>` configuration type.
         // Built by `Ws.defaultCfg` and threaded through the builder chain.
         let wscfg = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.ws_server_cfg,
             args: Vec::new(),
         };
-        // ── #197 stdlib record / opaque-Con helpers ─────────────────────────
+        // ── stdlib record / opaque-Con helpers ─────────────────────────
         // `Csv` — closed record `{ header : List String, rows : List (List
         // String) }` (runtime `sky_runtime::csv::CsvDoc`).
         let csv_rec = || {
@@ -3708,7 +3701,7 @@ impl<'a> Builder<'a> {
             m.insert(self.builtins.csv_f_rows, list(list(string())));
             Ty::Record(m, RowTail::Closed)
         };
-        // #210: `CacheCfg` — closed record `{ maxEntries : Int, ttlMs : Int,
+        // `CacheCfg` — closed record `{ maxEntries : Int, ttlMs : Int,
         // maxBytes : Int }`. The lowerer folds a value of this exact shape to the
         // nominal `IrType::CacheCfg` (`sky_runtime::cache::CacheCfg`) so a
         // `Cache.defaultCfg`-built record literal constructs the runtime struct
@@ -3720,7 +3713,7 @@ impl<'a> Builder<'a> {
             m.insert(self.builtins.cache_f_max_bytes, int());
             Ty::Record(m, RowTail::Closed)
         };
-        // #210: `Cache.stats` return — closed record `{ hits : Int,
+        // `Cache.stats` return — closed record `{ hits : Int,
         // misses : Int, evictions : Int }` (runtime `sky_runtime::cache::
         // CacheStats`). Consumed by field access on the kernel result, exactly
         // like `Csv`'s `CsvDoc` return, so no lowerer fold is needed on this side.
@@ -3731,7 +3724,7 @@ impl<'a> Builder<'a> {
             m.insert(self.builtins.cache_f_evictions, int());
             Ty::Record(m, RowTail::Closed)
         };
-        // #210: `WebSocketCfg` — closed record `{ url : String, headers :
+        // `WebSocketCfg` — closed record `{ url : String, headers :
         // List (String, String), timeout : Int, pingInterval : Int }`. The
         // lowerer folds a value of this exact shape to the nominal
         // `IrType::WebSocketClientCfg` (`sky_runtime::ws_client::WsClientCfg`) so
@@ -3749,7 +3742,7 @@ impl<'a> Builder<'a> {
             m.insert(self.builtins.ws_f_ping_interval, int());
             Ty::Record(m, RowTail::Closed)
         };
-        // #210 Std.Email: `EmailProvider` opaque ADT (runtime
+        // Std.Email: `EmailProvider` opaque ADT (runtime
         // `sky_runtime::email::EmailProvider`). Empty-module `Con` (home-
         // insensitive lowering, same posture as `ws_server`); the Sky
         // `type EmailProvider` declaration unifies with it structurally by name.
@@ -3902,7 +3895,7 @@ impl<'a> Builder<'a> {
         // all share ONE page type variable.  A `notFound = 5` in a routed app
         // that also uses `Live.route "/" CounterPage` sets `var(2) = Page`
         // (through the per-route witness — see [`RouteWitnessCheck`]) and then
-        // forces `5 : Page` → SKY-T0001.  Seal fix for #108 / the
+        // forces `5 : Page` → SKY-T0001.  Seal fix — the
         // "exit-0-then-cargo-fail E0308" class.  Since round 4 the arg is no
         // longer phantom at the IR level: the lowerer threads it into
         // `IrType::LiveRoute(page)` so the backend renders `Route<Page>`.
@@ -4003,7 +3996,7 @@ impl<'a> Builder<'a> {
             K::ListAny | K::ListAll => fun(fun(var(0), bool_ty()), fun(list(var(0)), bool_ty())),
             // find : (a -> Bool) -> List a -> Maybe a
             K::ListFind => fun(fun(var(0), bool_ty()), fun(list(var(0)), maybe(var(0)))),
-            // ── List batch (#119) ────────────────────────────────────────────
+            // ── List batch ────────────────────────────────────────────
             // filterMap : (a -> Maybe b) -> List a -> List b
             K::ListFilterMap => fun(fun(var(0), maybe(var(1))), fun(list(var(0)), list(var(1)))),
             // sortBy : (a -> comparable) -> List a -> List a — BASE scheme only.
@@ -4013,7 +4006,7 @@ impl<'a> Builder<'a> {
             // the bounded scheme); it exists so `stdlib_scheme` is total.
             K::ListSortBy => fun(fun(var(0), var(1)), fun(list(var(0)), list(var(0)))),
 
-            // ── Basics core Prelude (6 — task #76 slice) ──
+            // ── Basics core Prelude (6 — slice) ──
             K::BasicsNot => fun(bool_ty(), bool_ty()),
             K::BasicsIdentity => fun(var(0), var(0)),
             K::BasicsAlways => fun(var(0), fun(var(1), var(0))),
@@ -4029,10 +4022,10 @@ impl<'a> Builder<'a> {
             // `stdlib_scheme` is total and the burndown tripwire holds.
             K::BasicsClamp => fun(var(0), fun(var(0), fun(var(0), var(0)))),
             // toString : a -> String — base scheme for the totality gate; the
-            // real STRINGIFY-bounded typing is direct-built in constrain_var_kernel
-            // (#77), same pattern as clamp/min/max.
+            // real STRINGIFY-bounded typing is direct-built in constrain_var_kernel,
+            // same pattern as clamp/min/max.
             K::BasicsToString => fun(var(0), string()),
-            // ── Basics numerics (#115) ────────────────────────────────────────
+            // ── Basics numerics ────────────────────────────────────────
             // negate / abs: `number a => a -> a`. BASE scheme only (bounded scheme
             // is direct-built in constrain_var_kernel). Production never reaches
             // this arm (obligation pre-check early-returns); exists for the totality
@@ -4046,7 +4039,7 @@ impl<'a> Builder<'a> {
             // `compare`: base scheme (production hits the direct-build in
             // constrain_var_kernel; this arm exists for the totality gate).
             K::BasicsCompare => fun(var(0), fun(var(0), order())),
-            // ── end Basics numerics (#115) ────────────────────────────────────
+            // ── end Basics numerics ────────────────────────────────────
 
             // ── Math (min / max stay on the obligation path — NOT migrated) ──
             // Constants — bare Float values (arity 0).
@@ -4090,13 +4083,13 @@ impl<'a> Builder<'a> {
 
             // ── Log ──
             K::LogPrintln => fun(string(), task_unit()),
-            // info/debug/warn/error : String -> Task Error () (#78 slice). The
+            // info/debug/warn/error : String -> Task Error (). The
             // *With variants (List (String, a) attrs) are Stringify-bounded and
-            // stay fail-closed until #77 adds a Stringify obligation.
+            // stay fail-closed until a Stringify obligation is added.
             K::LogInfo | K::LogDebug | K::LogWarn | K::LogError => fun(string(), task_unit()),
             // *With : String -> List a -> Task Error () where `a` is Stringify.
             // Base scheme for the totality gate; the Stringify obligation on the
-            // list-element var(0) is tied in constrain_var_kernel (#77).
+            // list-element var(0) is tied in constrain_var_kernel.
             K::LogInfoWith | K::LogDebugWith | K::LogWarnWith | K::LogErrorWith => {
                 fun(string(), fun(list(var(0)), task_unit()))
             }
@@ -4288,7 +4281,7 @@ impl<'a> Builder<'a> {
             K::TaskPerform => fun(task(var(0)), result(error_ty(), var(0))),
             // `Task.lazy : (() -> Task e a) -> Task e a`
             K::TaskLazy => fun(fun(Ty::Unit, task(var(0))), task(var(0))),
-            // ── Task retry surface (M5a) ────────────────────────────────────
+            // ── Task retry surface ──────────────────────────────────────────
             // `linearBackoff : Int -> Int -> RetryPolicy e`
             K::TaskLinearBackoff => fun(int(), fun(int(), retry_policy(var(0)))),
             // `exponentialBackoff : Int -> Int -> RetryPolicy e`
@@ -4377,7 +4370,7 @@ impl<'a> Builder<'a> {
                 fun(fun(result(error_ty(), var(0)), var(1)), cmd(var(1))),
             ),
 
-            // ── Cmd.publish / Cmd.publishNoEcho (M5e) ──
+            // ── Cmd.publish / Cmd.publishNoEcho ──
             // `Cmd.publish : String -> any -> Cmd msg`
             // var(0) = msg type variable, var(1) = payload (polymorphic, like runtime T).
             K::CmdPublish => fun(string(), fun(var(1), cmd(var(0)))),
@@ -4392,7 +4385,7 @@ impl<'a> Builder<'a> {
             // var(0) = payload type (the `any`), var(1) = message type.
             K::SubSubscribeTopic => fun(string(), fun(fun(var(0), var(1)), sub(var(1)))),
 
-            // ── PubSub.publish / publishNoEcho (backlog #215) ──
+            // ── PubSub.publish / publishNoEcho ──
             // `PubSub.publish    : String -> a -> Task Error Int`
             // `PubSub.publishNoEcho : String -> a -> Task Error Int`
             // var(0) = payload (polymorphic, monomorphized by rustc — like the
@@ -4536,7 +4529,7 @@ impl<'a> Builder<'a> {
             ),
             // `Db.findWhere : Db -> String -> SqlFragment -> Task (List Row)`
             // — the `SqlFragment`-typed replacement for the removed
-            // `unsafeFindWhere` (backlog #61). A caller can never pass a raw
+            // `unsafeFindWhere`. A caller can never pass a raw
             // `String` WHERE clause here: only the `Sql.*` combinators below
             // produce a `SqlFragment`, so a naive string-concatenated WHERE
             // clause is a SKY-T0001 type mismatch, not a runtime risk.
@@ -4626,7 +4619,7 @@ impl<'a> Builder<'a> {
             // `"ISO_CODE AMOUNT"` TEXT column (the lossless serialisation
             // `SqlMoney` writes on INSERT) back into its amount/currency-code
             // pair. Deliberately NOT `Decoder Money`: `Money`/`Currency` are
-            // project-generated types unnameable from this crate (see #34;
+            // project-generated types unnameable from this crate (see
             // `docs/adr/0013-multi-driver-db-compile-time-selection.md`) — a
             // recorded divergence from the Go backend's `Decoder Money`,
             // documented in `docs/divergences-from-sky.md`.
@@ -4696,7 +4689,7 @@ impl<'a> Builder<'a> {
                 list(attr(var(0))),
                 fun(list(elem_t(var(0))), elem_t(var(0))),
             ),
-            // ── M7: Std.Ui nearby attribute builders ─────────────────────────────
+            // ── Std.Ui nearby attribute builders ─────────────────────────────────
             // `Ui.above/below/onLeft/onRight/inFront/behind : Element msg -> Attribute msg`
             K::UiAbove
             | K::UiBelow
@@ -4724,7 +4717,7 @@ impl<'a> Builder<'a> {
             // var(1) = the form-data record type (decoupled from var(0) = msg)
             K::UiOnSubmit => fun(fun(var(1), var(0)), attr(var(0))),
 
-            // ── #107: Std.Html.Events builders — produce `Std.Html.Attribute
+            // ── Std.Html.Events builders — produce `Std.Html.Attribute
             // msg` (`html_attr`), matching the `Std.Html.Attributes` builders
             // and the element builders' `List (html_attr msg)` slot. The arg
             // shape is dictated by `html_event_shape`; the `Raw` (onSubmit) form
@@ -4754,7 +4747,7 @@ impl<'a> Builder<'a> {
                 sky_kernels::HtmlEventShape::Raw => fun(var(1), html_attr(var(0))),
             },
 
-            // ── Std.Live app-entry (#108 T3 — open 6-field scheme) ──
+            // ── Std.Live app-entry (open 6-field scheme) ──
             //
             // Mirrors `../sky/src/Sky/Type/Constrain/Expression.hs:2674-2695`.
             // The cfg record is OPEN (row variable `var(3)` = `appExt`) so the
@@ -4801,7 +4794,7 @@ impl<'a> Builder<'a> {
                 );
                 fun(cfg_rec, task_unit())
             }
-            // #106 / #108 round 4: `Live.route : String -> builder -> LiveRoute page`
+            // `Live.route : String -> builder -> LiveRoute page`
             // with builder = var(1) DISTINCT from page = var(0).
             //
             // The second argument is either a nullary page VALUE
@@ -4926,7 +4919,7 @@ impl<'a> Builder<'a> {
                 fun(cfg_rec, task_unit())
             }
 
-            // ── Std.Cli / Sky.Cli app-entry (#111) ─────────────────────
+            // ── Std.Cli / Sky.Cli app-entry ─────────────────────
             // `Cli.program : { init : () -> (model, Cmd msg)
             //                , update : msg -> model -> (model, Cmd msg)
             //                , view : model -> String
@@ -4946,7 +4939,7 @@ impl<'a> Builder<'a> {
                         m
                     },
                     // Closed cfg record — like `Tui.app` / `Webview.app`, the
-                    // Cli cfg takes exactly its named fields (the #108 open
+                    // Cli cfg takes exactly its named fields (the open
                     // row is a `Live.app`-only surface).
                     RowTail::Closed,
                 );
@@ -4980,13 +4973,13 @@ impl<'a> Builder<'a> {
                 fun(cfg_rec, task_unit())
             }
 
-            // ══ FIRST-SCHEMED families (Phase D8–D13) ══
-            // These had NO legacy scheme (`kernel_ty` → `Ty::Var(u32::MAX)`
-            // hole); they receive their FIRST correct scheme here, authored from
-            // the runtime signature + `.sky` HM signature. No parity oracle
-            // exists (legacy was a hole), so correctness is pinned by
-            // `first_schemed_were_holes` (each WAS a hole) plus skyc→cargo build
-            // fixtures. Every arrow-count equals `decl().arity` — the invariant
+            // ══ FIRST-SCHEMED families ══
+            // These have NO legacy scheme (`kernel_ty` → `Ty::Var(u32::MAX)`
+            // hole); they get their scheme here, authored from the runtime
+            // signature + `.sky` HM signature. No parity oracle exists, so
+            // correctness is pinned by `first_schemed_were_holes` (each is a
+            // genuine hole) plus skyc→cargo build fixtures. Every arrow-count
+            // equals `decl().arity` — the invariant
             // `eta_expand_partial` relies on when peeling `arity` arrows off the
             // inferred callee type.
 
@@ -5068,7 +5061,7 @@ impl<'a> Builder<'a> {
                 fun(string(), fun(string(), result(error_ty(), string())))
             }
 
-            // ── Jwt builder API (D-00, #152) ──────────────────────────────────
+            // ── Jwt builder API (D-00) ──────────────────────────────────
             // `Jwt.claims : Claims` — nullary: returns an empty claims object.
             K::JwtClaims => claims_ty(),
             // `Jwt.hs256 : String -> Algorithm`
@@ -5094,11 +5087,11 @@ impl<'a> Builder<'a> {
             // `Jwt.decode : Algorithm -> Int -> String -> Result Error String`
             K::JwtDecode => fun(algorithm_ty(), fun(int(), fun(string(), result(error_ty(), string())))),
 
-            // ── Encoding (6 — task #55a) — the base64 / url / hex text codecs.
+            // ── Encoding (6) — the base64 / url / hex text codecs.
             //    Encoders `String -> String` (UTF-8 bytes, Go parity);
             //    decoders `String -> Result Error String` (decoded bytes must be
             //    valid UTF-8 — non-UTF-8 payloads surface as `Err`; raw bytes go
-            //    through `Std.Bytes`). Each WAS a `Ty::Var(u32::MAX)` hole. ──
+            //    through `Std.Bytes`). Each is a `Ty::Var(u32::MAX)` hole. ──
             K::EncodingBase64Encode | K::EncodingUrlEncode | K::EncodingHexEncode => {
                 fun(string(), string())
             }
@@ -5106,10 +5099,10 @@ impl<'a> Builder<'a> {
                 fun(string(), result(error_ty(), string()))
             }
 
-            // ── Std.Html / Std.Ui / Sky.Live rendering (42 — task #74) ──
+            // ── Std.Html / Std.Ui / Sky.Live rendering (42) ──
             // The Html/Ui/Background/Border/Font rendering family. `attr(m)` /
             // `elem_t(m)` / `html_t(m)` are the msg-polymorphic opaque cons;
-            // `length()` / `color()` are the nullary value cons (#69). Each is a
+            // `length()` / `color()` are the nullary value cons. Each is a
             // genuine `Ty::Var(u32::MAX)` hole (legacy `kernel_ty` has no Html/
             // Ui/Background/Border/Font arm), so all land in FIRST_SCHEMED.
             // Verified vs runtime fn params + lower `callee_arity` per
@@ -5143,7 +5136,7 @@ impl<'a> Builder<'a> {
             | K::UiScrollbarY
             | K::FontBold
             | K::FontItalic
-            // #76 Tier 1 — nullary Attr
+            // Tier 1 — nullary Attr
             | K::UiSquare
             | K::UiWidescreen
             | K::UiCinemascope
@@ -5174,7 +5167,7 @@ impl<'a> Builder<'a> {
             | K::BorderWidth
             | K::BorderRounded
             | K::FontSize
-            // #76 Tier 1 — Int → Attr
+            // Tier 1 — Int → Attr
             | K::FontWeight
             | K::FontHoverSize
             | K::BorderHoverWidth
@@ -5192,7 +5185,7 @@ impl<'a> Builder<'a> {
             K::BackgroundColor
             | K::BorderColor
             | K::FontColor
-            // #76 Tier 1 — Color pseudo-class attrs
+            // Tier 1 — Color pseudo-class attrs
             | K::BackgroundHoverColor
             | K::BackgroundFocusColor
             | K::BackgroundActiveColor
@@ -5235,7 +5228,7 @@ impl<'a> Builder<'a> {
                 fun(rec_arg, attr(var(0)))
             }
 
-            // #76 Tier 1 — two-arg attrs.
+            // Tier 1 — two-arg attrs.
             K::UiAspectRatioWH => fun(int(), fun(int(), attr(var(0)))),
             K::UiHtmlAttribute => fun(string(), fun(string(), attr(var(0)))),
             K::UiName => fun(string(), attr(var(0))),
@@ -5259,7 +5252,7 @@ impl<'a> Builder<'a> {
                 fun(string(), fun(string(), fun(bool_ty(), attr(var(0))))),
             ),
 
-            // #154: Ui.breakpoint + Breakpoint constants.
+            // Ui.breakpoint + Breakpoint constants.
             //
             // Sanctioned divergence from Sky Go: `Breakpoint` is typed as
             // `String` in the Rust port rather than as a distinct opaque type
@@ -5267,7 +5260,7 @@ impl<'a> Builder<'a> {
             // fabricate arbitrary `Breakpoint` values because all constructors
             // (`mobile`, `tablet`, …) are kernels whose schemes return `string()`;
             // the only type-safety gap vs. the Go backend is that a plain `String`
-            // literal would also unify — acceptable for Phase-0.
+            // literal would also unify — an accepted limitation.
             //
             // `Ui.breakpoint : String -> List (Attribute msg) -> Element msg -> Element msg`
             // `Ui.mediaQuery : String -> List (Attribute msg) -> Element msg -> Element msg`
@@ -5281,7 +5274,7 @@ impl<'a> Builder<'a> {
             K::UiMobile | K::UiTablet | K::UiDesktop | K::UiDarkMode | K::UiLightMode
             | K::UiReducedMotion => string(),
 
-            // ── #76: PseudoClass opaque constants + Ui.onPseudo ──────────────────
+            // ── PseudoClass opaque constants + Ui.onPseudo ──────────────────
             // Typed-constant shortcuts — all return the opaque `PseudoClass` type
             // (mirrors `sky_runtime::ui::element::PseudoClass`'s 5 constructors).
             K::UiHover | K::UiFocus | K::UiFocusVisible | K::UiActive | K::UiDisabled => {
@@ -5334,13 +5327,13 @@ impl<'a> Builder<'a> {
             // Std.Html void nodes (arity 1 — attrs only).
             K::HtmlInput | K::HtmlImg | K::HtmlBr | K::HtmlHr | K::HtmlMeta | K::HtmlLink | K::HtmlLinkNode | K::HtmlArea | K::HtmlBase | K::HtmlCol | K::HtmlEmbed | K::HtmlSource | K::HtmlTrack | K::HtmlWbr => fun(list(html_attr(var(0))), html_t(var(0))),
 
-            // Std.Html styleNode (arity 2 — attrs, css string; #46/#47 F7). The
+            // Std.Html styleNode (arity 2 — attrs, css string; F7). The
             // runtime bakes `strip_style_close` on the css. RELOCATED — matches
             // the legacy `kernel_ty(Html, styleNode)` byte-for-byte (html_attr +
             // html_t). `List (Std.Html.Attribute msg) -> String -> Html msg`.
             K::HtmlStyleNode => fun(list(html_attr(var(0))), fun(string(), html_t(var(0)))),
 
-            // ── #76: Std.Html.Attributes builders ────────────────────────────
+            // ── Std.Html.Attributes builders ────────────────────────────
             // String fixed-key: `String -> Std.Html.Attribute msg`.
             K::HtmlAttrClass
             | K::HtmlAttrId
@@ -5367,7 +5360,7 @@ impl<'a> Builder<'a> {
             K::HtmlAttribute => fun(string(), fun(string(), html_attr(var(0)))),
             K::HtmlBoolAttribute => fun(string(), fun(bool_ty(), html_attr(var(0)))),
             K::HtmlNoAttr => html_attr(var(0)),
-            // #76 Tier 1 — Int-keyed html attr.
+            // Tier 1 — Int-keyed html attr.
             K::HtmlAttrTabindex => fun(int(), html_attr(var(0))),
             // Textarea rows attribute — `Int -> HtmlAttribute msg`.
             K::HtmlAttrRows => fun(int(), html_attr(var(0))),
@@ -5432,7 +5425,7 @@ impl<'a> Builder<'a> {
                 fun(string(), fun(string(), fun(int(), fun(decimal(), string()))))
             }
 
-            // ── Std.Ui.Region (#117) ──────────────────────────────────────────
+            // ── Std.Ui.Region ──────────────────────────────────────────
             // Nullary region landmark attrs — `Attribute msg`.
             K::RegionMainContent
             | K::RegionNavigation
@@ -5460,7 +5453,7 @@ impl<'a> Builder<'a> {
             K::UiDescHeading => fun(int(), description()),
             K::UiDescLabel => fun(string(), description()),
 
-            // ── Std.Ui.Input (#124) ──────────────────────────────────────────
+            // ── Std.Ui.Input ──────────────────────────────────────────
             //
             // Label constructors: `List (Attribute msg) -> Element msg -> Label msg`
             K::InputLabelAbove | K::InputLabelBelow | K::InputLabelLeft | K::InputLabelRight => {
@@ -5583,7 +5576,7 @@ impl<'a> Builder<'a> {
                 fun(list(attr(var(0))), fun(cfg_rec, elem_t(var(0))))
             }
 
-            // ── Std.Ui.Input radio group (#150) ───────────────────────────────
+            // ── Std.Ui.Input radio group ───────────────────────────────
             //
             // `Input.option : String -> Element msg -> RadioOption msg`
             K::InputOption => fun(string(), fun(elem_t(var(0)), radio_option_t(var(0)))),
@@ -5631,7 +5624,7 @@ impl<'a> Builder<'a> {
                 fun(list(attr(var(0))), fun(cfg_rec, elem_t(var(0))))
             }
 
-            // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────
+            // ── Std.Ui.Lazy ────────────────────────────────────────────
             // lazy  : (a -> Element msg) -> a -> Element msg
             K::LazyLazy => fun(
                 fun(var(0), elem_t(var(1))),
@@ -5778,13 +5771,12 @@ impl<'a> Builder<'a> {
             K::JsonEncObject => fun(list(tuple2(string(), value())), value()),
             K::JsonEncEncode => fun(int(), fun(value(), string())),
 
-            // ── Sky.Core.Error (15 — real Error/ErrorKind/ErrorDetails ADT,
-            //    backlog #85/#160) ──
+            // ── Sky.Core.Error (15 — real Error/ErrorKind/ErrorDetails ADT) ──
             //    `Error` is `Error ErrorKind ErrorInfo` (`Error`'s own ctor scheme
             //    is registered in `ctor_schemes()`), backed at runtime by the real
-            //    `sky_runtime::error::SkyError` enum (`IrType::Error`) — no longer
+            //    `sky_runtime::error::SkyError` enum (`IrType::Error`), not
             //    string-backed. The eight message constructors are `String ->
-            //    Error` (each now classifies its `ErrorKind` at construction);
+            //    Error` (each classifies its `ErrorKind` at construction);
             //    `timeout`/`notFound`/`permissionDenied` are nullary `Error`;
             //    `toString : Error -> String` routes through the shared
             //    Stringify-bounded mechanism (see the `BasicsToString |
@@ -5792,7 +5784,7 @@ impl<'a> Builder<'a> {
             //    shadowed fallback, never actually reached); `withMessage :
             //    String -> Error -> Error`; `isRetryable : Error -> Bool`
             //    classifies on kind alone; `withDetails : ErrorDetails -> Error ->
-            //    Error` (backlog #85 follow-up) attaches the `ErrorDetails` union
+            //    Error` attaches the `ErrorDetails` union
             //    to `ErrorInfo.details : Maybe ErrorDetails` (`ErrorDetails`'s own
             //    5-variant ctor scheme is registered in `ctor_schemes()`).
             K::ErrorUnexpected
@@ -5809,7 +5801,7 @@ impl<'a> Builder<'a> {
             K::ErrorIsRetryable => fun(error_ty(), bool_ty()),
             K::ErrorWithDetails => fun(errordetails_ty(), fun(error_ty(), error_ty())),
 
-            // ── Sky.Core.CssSafety (4 — Std.Css leaf security kernels, #47) ──
+            // ── Sky.Core.CssSafety (4 — Std.Css leaf security kernels) ──
             //    The three parsers are `String -> Maybe String` (`None` => the
             //    Sky side drops the declaration/rule via `CssDropped` /
             //    `CssRuleDropped`); `stripStyleClose` is the `String -> String`
@@ -5821,7 +5813,7 @@ impl<'a> Builder<'a> {
             }
             K::CssSafetyStripStyleClose => fun(string(), string()),
 
-            // ── Sky.Core.Uuid (3 — task #54) — ENTROPY IS AN EFFECT ──
+            // ── Sky.Core.Uuid (3) — ENTROPY IS AN EFFECT ──
             //    `v4`/`v7` draw fresh entropy per call, so they are typed on the
             //    effect tier `() -> Task Error String` (runtime `uuid_v4::<E>(_:
             //    ())` / `uuid_v7::<E>(_: ())` return `SkyTask<E, String>`),
@@ -5836,8 +5828,8 @@ impl<'a> Builder<'a> {
             K::UuidV4 | K::UuidV7 => fun(Ty::Unit, task(string())),
             K::UuidParse => fun(string(), maybe(string())),
 
-            // EXCLUDED — the ONLY kernels without a scheme (Phase E Task 1a made
-            // this an EXPLICIT wildcard-free arm, so F1 is structurally
+            // EXCLUDED — the ONLY kernels without a scheme. This is an
+            // EXPLICIT wildcard-free arm, so F1 is structurally
             // unrepresentable here: a future `StdlibKernel` variant fails to
             // compile in `sky_types` until it is either schemed above or added to
             // one of the two exclusion buckets below).
@@ -5856,7 +5848,7 @@ impl<'a> Builder<'a> {
             //    their schemes above; not in this arm.
             K::LiveAppRouted => return None,
 
-            // ── #111: Std.Auth (9 kernels) ──────────────────────────────────────
+            // ── Std.Auth (9 kernels) ──────────────────────────────────────
             // hashPassword : String -> Result Error String
             K::AuthHashPassword => fun(string(), result(error_ty(), string())),
             // hashPasswordCost : String -> Int -> Result Error String
@@ -5866,16 +5858,16 @@ impl<'a> Builder<'a> {
             // passwordStrength : String -> Result Error String
             K::AuthPasswordStrength => fun(string(), result(error_ty(), string())),
             // signToken : Secret -> Dict String String -> Int -> Result Error String
-            // AUD-06 (seal): claims used to be flex `var(0)` — unifies with ANY
-            // type, so skyc accepted a record/Int/whatever as claims while the
-            // emitted wrapper is pinned to `HashMap<String,String>`
+            // AUD-06 (seal): a flex `claims` `var(0)` would unify with ANY
+            // type, so skyc would accept a record/Int/whatever as claims while
+            // the emitted wrapper is pinned to `HashMap<String,String>`
             // (project.rs AUTH_WRAPPERS + runtime/auth.rs), no coercion at
             // lowering → cargo fail on any non-Dict claims (exit-0-then-cargo-
             // fail). Pinned concrete per the concrete-over-generic rule — this
             // was never genuine polymorphism, just an unpinned wildcard.
             // Diverges from Go's polymorphic `a`; see divergences-from-sky.md.
             //
-            // backlog #44: the signing secret is `Secret`, not `String` — "secrets
+            // the signing secret is `Secret`, not `String` — "secrets
             // are typed" (PRINCIPLES.md). Re-typed in the same change as `Secret`
             // itself; zero migration cost (no fixture calls this kernel yet).
             // `project.rs`'s `AUTH_WRAPPERS` reveals the `Secret` to the runtime's
@@ -5885,7 +5877,7 @@ impl<'a> Builder<'a> {
                 fun(dict(string(), string()), fun(int(), result(error_ty(), string()))),
             ),
             // verifyToken : Secret -> String -> Result Error (Dict String String)
-            // backlog #44: same re-typing as `signToken` above.
+            // same re-typing as `signToken` above.
             K::AuthVerifyToken => {
                 fun(secret(), fun(string(), result(error_ty(), dict(string(), string()))))
             }
@@ -5896,7 +5888,7 @@ impl<'a> Builder<'a> {
             // setRole : Db -> Int -> String -> Task Error ()
             K::AuthSetRole => fun(db(), fun(int(), fun(string(), task_unit()))),
 
-            // ── Sky.Core.Secret — opaque secret-string wrapper (backlog #44) ────
+            // ── Sky.Core.Secret — opaque secret-string wrapper ────
             // `fromString` is the seal (construction boundary); `reveal` is the
             // single greppable un-parse; `redacted` is the explicit "<redacted>"
             // accessor (also what `toString`/interpolation gives automatically —
@@ -5910,7 +5902,7 @@ impl<'a> Builder<'a> {
             K::SecretReveal => fun(secret(), string()),
             K::SecretRedacted => fun(secret(), string()),
 
-            // ── #111: Sky.Http.Server.Stream (4 kernels) ────────────────────────
+            // ── Sky.Http.Server.Stream (4 kernels) ────────────────────────
             // stream : String -> (StreamWriter -> Task Error ()) -> Task Error Response
             // The callback receives an opaque `StreamWriter` handle; emit/finish
             // consume the same handle directly (no Int unwrap layer needed).
@@ -5922,12 +5914,12 @@ impl<'a> Builder<'a> {
             // withContentType : String -> StreamWriter -> Task Error ()
             K::StreamWithContentType => fun(string(), fun(sw(), task_unit())),
 
-            // ── #111: Sky.Core.Http.Stream (4 kernels) ──────────────────────────
+            // ── Sky.Core.Http.Stream (4 kernels) ──────────────────────────
             // open : HttpRequest -> Task Error StreamId
             //
             // Returns an opaque `StreamId` handle wrapping the raw i64 stream
-            // registry key.  Previously typed as `Task Error Int`; fixed in #148
-            // to match upstream `Sky.Core.Http.Stream.open`'s declared return type.
+            // registry key.  Typed to match upstream
+            // `Sky.Core.Http.Stream.open`'s declared return type.
             K::HttpStreamOpen => fun(http_request(), task(stream_id())),
             // forEachChunk : StreamId -> (String -> Task Error ()) -> Task Error ()
             K::HttpStreamForEachChunk => {
@@ -5939,7 +5931,7 @@ impl<'a> Builder<'a> {
             // ChunkEvent is opaque from the runtime; modelled as `var(0)`.
             K::HttpStreamChunks => fun(stream_id(), fun(fun(var(0), var(1)), sub(var(1)))),
 
-            // ── #127: Sky.Http.Server.WebSocket (12 kernels) ────────────────────
+            // ── Sky.Http.Server.WebSocket (12 kernels) ────────────────────
             // defaultCfg : WebSocketServerCfg
             // Arity-0: the return type IS the scheme (no `fun` wrapper).
             K::WsDefaultCfg => wscfg(),
@@ -5970,7 +5962,7 @@ impl<'a> Builder<'a> {
             // closeClient : WebSocketServer -> Task Error ()
             K::WsCloseClient => fun(wsh(), task_unit()),
 
-            // ── #210: Sky.Core.WebSocket — outbound WebSocket client ─────────────
+            // ── Sky.Core.WebSocket — outbound WebSocket client ─────────────
             // The Task-tier six take/return a raw `Int` socket id (the stdlib
             // wraps it in the `WebSocket` ADT). `connectWith` takes the nominal
             // `WebSocketCfg` record (`{ url, headers, timeout, pingInterval }`),
@@ -6006,7 +5998,7 @@ impl<'a> Builder<'a> {
                 fun(int(), fun(string(), fun(var(0), sub(var(1)))))
             }
 
-            // ── #194: Sky.Core.Regex (5 kernels) ────────────────────────────────
+            // ── Sky.Core.Regex (5 kernels) ────────────────────────────────
             // Concrete, monomorphic schemes (no type vars): RE2 helpers over
             // `String`. `match` returns `Bool`; `find` a `Maybe String`;
             // `findAll`/`split` a `List String`; `replace` is arity-3
@@ -6018,7 +6010,7 @@ impl<'a> Builder<'a> {
             K::RegexReplace => fun(string(), fun(string(), fun(string(), string()))),
             K::RegexSplit => fun(string(), fun(string(), list(string()))),
 
-            // ── #202: Sky.Core.Path (4 kernels) ─────────────────────────────────
+            // ── Sky.Core.Path (4 kernels) ─────────────────────────────────
             // Pure path helpers over `String`. `base`/`dir`/`ext` return
             // `String`; `isAbsolute` returns `Bool`. Runtime total/pure
             // (`sky_runtime::path::*`, re-exported ungated).
@@ -6027,7 +6019,7 @@ impl<'a> Builder<'a> {
             K::PathExt => fun(string(), string()),
             K::PathIsAbsolute => fun(string(), bool_ty()),
 
-            // ── #197: Std.Trace (3 kernels) ─────────────────────────────────────
+            // ── Std.Trace (3 kernels) ─────────────────────────────────────
             // `span : String -> Task a -> Task a` — the wrapped Task's value flows
             // through untouched; the error channel is the implicit `Error`.
             // `event : String -> Task ()`; `attr : String -> String -> Task ()`.
@@ -6035,7 +6027,7 @@ impl<'a> Builder<'a> {
             K::TraceEvent => fun(string(), task_unit()),
             K::TraceAttr => fun(string(), fun(string(), task_unit())),
 
-            // ── #197: Std.Compression (4 kernels) ───────────────────────────────
+            // ── Std.Compression (4 kernels) ───────────────────────────────
             // `Bytes -> Task Bytes` — the Rust runtime `compression_*` takes and
             // returns `Vec<u8>` (`Bytes` lowers to `Vec<u8>`), a documented
             // divergence from the Go backend's `String`-as-bytes shape.
@@ -6044,7 +6036,7 @@ impl<'a> Builder<'a> {
             K::CompressionZstdCompress => fun(bytes(), task(bytes())),
             K::CompressionZstdDecompress => fun(bytes(), task(bytes())),
 
-            // ── #197: Std.Csv (5 kernels) ───────────────────────────────────────
+            // ── Std.Csv (5 kernels) ───────────────────────────────────────
             // `Csv` is the closed record `{ header : List String,
             // rows : List (List String) }` (runtime `sky_runtime::csv::CsvDoc`).
             K::CsvParse => fun(string(), result(error_ty(), csv_rec())),
@@ -6055,7 +6047,7 @@ impl<'a> Builder<'a> {
             K::CsvEncodeWithDelimiter => fun(string(), fun(csv_rec(), string())),
             K::CsvParseStreamFromFile => fun(string(), task(list(list(string())))),
 
-            // ── #210: Std.Cache (7 kernels) ─────────────────────────────────────
+            // ── Std.Cache (7 kernels) ─────────────────────────────────────
             // All take the raw `Int` handle. `k`/`v` are the surface key/value
             // type variables (`var(0)`/`var(1)`); the runtime scans keys by
             // `PartialEq`. `newRaw` takes the `CacheCfg` record, `stats` returns
@@ -6158,7 +6150,7 @@ impl<'a> Builder<'a> {
                 fun(rec_arg, attr(var(0)))
             }
 
-            // ── Std.Db.Sql — SqlFragment builder (backlog #61) ───────────────
+            // ── Std.Db.Sql — SqlFragment builder ───────────────
             //
             // `Sql.column : String -> SqlFragment` — validated column/table
             // reference (dot-accepting, so `users.id` is legal).
@@ -6812,7 +6804,7 @@ fn zonk_underflow() -> Diagnostic {
 }
 
 // ===========================================================================
-// Phase C — kernel-registry migration tripwires
+// Kernel-registry tripwires
 // ===========================================================================
 
 impl<'a> Builder<'a> {
@@ -6860,8 +6852,8 @@ impl<'a> Builder<'a> {
 /// never schemes (routed / unlowered buckets — those fail closed with
 /// SKY-L0108 at their call sites).
 ///
-/// This is the *lift* behind the salsa `kernel_types()` query (incremental
-/// plan Task 9): the table is read through the SAME [`Builder::stdlib_scheme`]
+/// This is the *lift* behind the salsa `kernel_types()` query: the table is
+/// read through the SAME [`Builder::stdlib_scheme`]
 /// method inference uses, so the memoized table can never drift from what
 /// constraint generation actually applies. The schemes are pure functions of
 /// the interned builtin names — no union-find state is created or consumed.
@@ -6891,15 +6883,15 @@ mod registry_phase_c_tests {
     use sky_kernels::StdlibKernel;
 
     /// Kernels RELOCATED into `stdlib_scheme` from the legacy `kernel_ty` table
-    /// (Phase C's String/List/Math + Phase D's remaining backed families).
-    /// Each carries a byte-faithful legacy oracle, so `stdlib_scheme_matches_legacy`
-    /// proves the relocation changed no type. Monotone burndown anchor: GROWS per
-    /// family task, never shrinks, and must exactly match the RELOCATED slice of
+    /// (String / List / Math plus the remaining backed families). Each carries
+    /// a byte-faithful legacy oracle, so `stdlib_scheme_matches_legacy`
+    /// proves the relocation changed no type. Monotone burndown anchor: GROWS
+    /// per family, never shrinks, and must exactly match the RELOCATED slice of
     /// what `stdlib_scheme` returns `Some` for.
     ///
     /// `Math.min` / `Math.max` are RELOCATED here as their *base* scheme
     /// (`a -> a -> a`); the `Comparable` obligation is layered separately in
-    /// `constrain_var_kernel` (M4c gate), so their base is parity-checked like any
+    /// `constrain_var_kernel`, so their base is parity-checked like any
     /// other relocation while the bound still fires in production.
     const RELOCATED: &[StdlibKernel] = {
         use StdlibKernel as K;
@@ -7100,7 +7092,7 @@ mod registry_phase_c_tests {
             K::ServerMethod,
             K::ServerCookieNew,
             K::ServerWithCookie,
-            // Db (22 — `unsafeFindWhere` removed by backlog #61; its
+            // Db (22 — `unsafeFindWhere` removed; its
             // replacements `findWhere`/`deleteWhere` are FIRST_SCHEMED below,
             // never having existed in the legacy `kernel_ty` table)
             K::DbConnect,
@@ -7142,9 +7134,8 @@ mod registry_phase_c_tests {
             K::DbDecMap4,
             K::DbDecRequired,
             K::DbDecOptional,
-            // `DbDecMoney` is FIRST_SCHEMED, not relocated — it is Ipê-new
-            // (#34), so no byte-faithful legacy `kernel_ty` oracle ever
-            // existed for it (taxonomy fix, independent-review row 2026-07-11).
+            // `DbDecMoney` is FIRST_SCHEMED, not relocated — it is Ipê-new,
+            // so no byte-faithful legacy `kernel_ty` oracle ever existed for it.
             // Set (10) — base scheme; set_elem obligation layered in constrain_var_kernel
             K::SetEmpty,
             K::SetSize,
@@ -7209,43 +7200,37 @@ mod registry_phase_c_tests {
             K::TuiProgram,
             // Std.Webview app-entry (1)
             K::WebviewApp,
-            // Std.Html styleNode (1 — #46/#47 F7 schemed it in legacy kernel_ty;
-            // parity checked by stdlib_scheme_matches_legacy).
+            // Std.Html styleNode (1 — F7; parity checked by
+            // stdlib_scheme_matches_legacy).
             K::HtmlStyleNode,
         ]
     };
 
-    /// Families that had NO legacy scheme (`kernel_ty` → `Ty::Var(u32::MAX)`) and
-    /// receive their FIRST correct scheme in Phase D (D8–D13). No parity oracle
-    /// exists; correctness is pinned by `first_schemed_were_holes` (the scheme
-    /// closes a genuine hole) plus the skyc→cargo build fixtures. GROWS per
-    /// family task; never shrinks. Empty until the first-scheme family tasks land.
+    /// Families that have NO legacy scheme (`kernel_ty` → `Ty::Var(u32::MAX)`)
+    /// and receive their scheme directly from their runtime + `.sky`
+    /// signatures. No parity oracle exists; correctness is pinned by
+    /// `first_schemed_were_holes` (the scheme closes a genuine hole) plus the
+    /// skyc→cargo build fixtures. GROWS per family; never shrinks.
     ///
-    /// Phase D8–D13 (this slice) schemes the independent holed families from
-    /// their runtime + `.sky` signatures. Task #58 additionally schemed Crypto
-    /// AEAD (`aesGcm*`/`chacha20*`) and Jwt ENCODE (`encodeHs256`/`encodeRs256`)
-    /// after correcting their registry `decl().arity` 3→2 to match the Rust
-    /// runtime (the AEAD nonce is internal; encode takes secret + claims-JSON),
-    /// so the arrow-count == arity invariant now holds. Task #69 additionally
-    /// schemed the Std.Ui `Length` builders (`px`/`fill`/`content`/`shrink`/
-    /// `fillPortion`/`vh`/`vw`/`minimum`/`maximum`), the Std.Ui `Color` builders
-    /// (`rgb`/`rgba`/`white`/`black`/`transparent`), and the `Sky.Core.Json.Encode`
-    /// encoders (`string`/`int`/`float`/`bool`/`null`/`list`/`object`/`encode`):
-    /// `Length` / `Color` lower to `IrType::UiPlain(_)` and the JSON `Value` type
-    /// to `IrType::Json`, all pre-existing IR forms with a complete emit path.
-    /// Task #54 schemed `Sky.Core.Uuid` (`v4`/`v7` as `() -> Task Error String`
-    /// — entropy is an effect; `parse` as the pure `String -> Maybe String`
-    /// parser), closing that exit-0 hole. Task #68 schemed the nine remaining
-    /// `List` combinators; task #55a schemed the six `Encoding` codecs (text
-    /// path now UTF-8, Go parity). EXCLUDED (still on the `Ty::Var` fallback):
-    /// ONLY `PubSub` (`publish`/`publishNoEcho`) — a KNOWN-UNBACKED exclusion
-    /// (`KNOWN_UNBACKED`), no runtime backing and qualifier absent from canon
-    /// `qual_vars`; Phase E turns it into a hard unreachable-kernel error.
-    /// As of backlog #215, `PubSub.publish` / `PubSub.publishNoEcho` are now
-    /// schemed (`String -> a -> Task Error Int`) and have been moved here from
-    /// `KNOWN_UNBACKED` (which is now empty). The runtime `pubsub_publish` /
-    /// `pubsub_publish_no_echo` exist; the emit arm emits
-    /// `pubsub_publish::<_, SkyError>(topic, payload)`.
+    /// Notable members:
+    /// - Crypto AEAD (`aesGcm*`/`chacha20*`) and Jwt ENCODE
+    ///   (`encodeHs256`/`encodeRs256`): registry `decl().arity` is 2 to match
+    ///   the Rust runtime (the AEAD nonce is internal; encode takes secret +
+    ///   claims-JSON), so the arrow-count == arity invariant holds.
+    /// - Std.Ui `Length` builders (`px`/`fill`/`content`/`shrink`/
+    ///   `fillPortion`/`vh`/`vw`/`minimum`/`maximum`), Std.Ui `Color` builders
+    ///   (`rgb`/`rgba`/`white`/`black`/`transparent`), and the
+    ///   `Sky.Core.Json.Encode` encoders: `Length` / `Color` lower to
+    ///   `IrType::UiPlain(_)` and the JSON `Value` type to `IrType::Json`.
+    /// - `Sky.Core.Uuid` (`v4`/`v7` as `() -> Task Error String` — entropy is
+    ///   an effect; `parse` as the pure `String -> Maybe String` parser).
+    /// - The `List` combinators and the `Encoding` codecs (UTF-8 text path,
+    ///   Go parity).
+    /// - `PubSub.publish` / `PubSub.publishNoEcho`
+    ///   (`String -> a -> Task Error Int`): the runtime `pubsub_publish` /
+    ///   `pubsub_publish_no_echo` exist; the emit arm emits
+    ///   `pubsub_publish::<_, SkyError>(topic, payload)`. `KNOWN_UNBACKED` is
+    ///   empty.
     const FIRST_SCHEMED: &[StdlibKernel] = {
         use StdlibKernel as K;
         &[
@@ -7295,7 +7280,7 @@ mod registry_phase_c_tests {
             K::CharToUpper,
             K::CharToCode,
             K::CharFromCode,
-            // Error (13 — Sky.Core.Error minimal `Error = String` slice, #86)
+            // Error (13 — Sky.Core.Error minimal `Error = String` slice)
             K::ErrorUnexpected,
             K::ErrorInvalidInput,
             K::ErrorIo,
@@ -7311,15 +7296,15 @@ mod registry_phase_c_tests {
             K::ErrorWithMessage,
             K::ErrorIsRetryable,
             K::ErrorWithDetails,
-            // CssSafety (4 — Std.Css leaf security kernels, #47). Each WAS a hole
-            // (`kernel_ty` has no CssSafety arm → `Ty::Var(u32::MAX)`) until
+            // CssSafety (4 — Std.Css leaf security kernels). Each is a hole
+            // (`kernel_ty` has no CssSafety arm → `Ty::Var(u32::MAX)`) unless
             // schemed above; the three parsers are `String -> Maybe String`,
             // `stripStyleClose` is `String -> String`.
             K::CssSafetySafeValue,
             K::CssSafetySafePropName,
             K::CssSafetySafeSelector,
             K::CssSafetyStripStyleClose,
-            // Crypto (17 — AEAD included after the arity 3→2 correction, #58)
+            // Crypto (17 — AEAD included after the arity 3→2 correction)
             K::CryptoSha256,
             K::CryptoSha512,
             K::CryptoSha1,
@@ -7337,12 +7322,12 @@ mod registry_phase_c_tests {
             K::CryptoChacha20Decrypt,
             K::CryptoRandomBytes,
             K::CryptoRandomToken,
-            // Jwt (4 — encode included after the arity 3→2 correction, #58)
+            // Jwt (4 — encode included after the arity 3→2 correction)
             K::JwtDecodeHs256,
             K::JwtDecodeRs256,
             K::JwtEncodeHs256,
             K::JwtEncodeRs256,
-            // Jwt builder API (13 — D-00, #152): `claims` / `hs256` / `rs256` /
+            // Jwt builder API (13 — D-00): `claims` / `hs256` / `rs256` /
             // `subject` / `issuer` / `audience` / `expiresAt` / `notBefore` /
             // `issuedAt` / `jwtId` / `withClaim` / `encode` / `decode`.
             // All genuine holes (no legacy `kernel_ty` arm).
@@ -7410,15 +7395,15 @@ mod registry_phase_c_tests {
             K::JsonEncList,
             K::JsonEncObject,
             K::JsonEncEncode,
-            // Uuid (3 — task #54): `v4`/`v7` are `() -> Task Error String`
+            // Uuid (3): `v4`/`v7` are `() -> Task Error String`
             // (entropy is an effect, not a memoizable pure String); `parse` is
-            // the pure `String -> Maybe String` parser. Each WAS a hole
+            // the pure `String -> Maybe String` parser. Each is a hole
             // (`kernel_ty` has no Uuid arm → `Ty::Var(u32::MAX)`), confirmed by
             // `first_schemed_were_holes`.
             K::UuidV4,
             K::UuidV7,
             K::UuidParse,
-            // List (9 — task #68): the non-HOF combinators `append`/`concat`/
+            // List (9): the non-HOF combinators `append`/`concat`/
             // `take`/`drop`/`zip`/`cons`/`isEmpty` plus the two HOFs
             // `concatMap`/`indexedMap`. Canon anchored every `List.x` to
             // `VarHome::Kernel`, but only 10 had a `KernelFn`+scheme — these nine
@@ -7434,26 +7419,26 @@ mod registry_phase_c_tests {
             K::ListIsEmpty,
             K::ListConcatMap,
             K::ListIndexedMap,
-            // List HOFs any/all/find (3 — task #72, same class as #68).
+            // List HOFs any/all/find (3).
             K::ListAny,
             K::ListAll,
             K::ListFind,
-            // List filterMap/sortBy (2 — task #119, same class as #72).
+            // List filterMap/sortBy (2).
             K::ListFilterMap,
             K::ListSortBy,
-            // Basics core Prelude (6 — task #76 slice).
+            // Basics core Prelude (6 — slice).
             K::BasicsNot,
             K::BasicsIdentity,
             K::BasicsAlways,
             K::BasicsFst,
             K::BasicsSnd,
             K::BasicsModBy,
-            // Log info/debug/warn/error (4 — task #78 slice).
+            // Log info/debug/warn/error (4 — slice).
             K::LogInfo,
             K::LogDebug,
             K::LogWarn,
             K::LogError,
-            // Log *With (4 — #77 Stringify obligation on the attr list element).
+            // Log *With (4 — Stringify obligation on the attr list element).
             K::LogInfoWith,
             K::LogDebugWith,
             K::LogWarnWith,
@@ -7462,19 +7447,19 @@ mod registry_phase_c_tests {
             // (Ord) obligation, base scheme in `stdlib_scheme`.
             K::BasicsClamp,
             K::BasicsToString,
-            // ── Basics numerics (#115) — negate/abs/sqrt/min/max ────────────
+            // ── Basics numerics — negate/abs/sqrt/min/max ────────────
             K::BasicsNegate,
             K::BasicsAbs,
             K::BasicsSqrt,
             K::BasicsMin,
             K::BasicsMax,
             K::BasicsCompare,
-            // ── end Basics numerics (#115) ──────────────────────────────────
-            // Result combinators newly wired (holes post-seal; `withDefault` /
-            // `map` are the RELOCATED pair, these two are first-schemed).
+            // ── end Basics numerics ──────────────────────────────────
+            // Result combinators that are first-schemed holes; `withDefault` /
+            // `map` are the RELOCATED pair, these two are first-schemed.
             K::ResultAndThen,
             K::ResultMapError,
-            // Result / Maybe applicative combinators (#88 — mapN / andMap /
+            // Result / Maybe applicative combinators (mapN / andMap /
             // combine / traverse). All genuine holes (no legacy `kernel_ty`
             // arm); runtime fns in `core.rs` (`result_map2` .. `result_traverse`,
             // `maybe_map2` .. `maybe_combine`; `result_traverse` pre-existed).
@@ -7491,19 +7476,19 @@ mod registry_phase_c_tests {
             K::MaybeMap5,
             K::MaybeAndMap,
             K::MaybeCombine,
-            // Encoding (6 — task #55a): base64/url/hex text codecs. Encoders
+            // Encoding (6): base64/url/hex text codecs. Encoders
             // `String -> String`, decoders `String -> Result Error String`.
-            // Each WAS a `Ty::Var(u32::MAX)` hole (`kernel_ty` has no Encoding
+            // Each is a `Ty::Var(u32::MAX)` hole (`kernel_ty` has no Encoding
             // arm), confirmed by `first_schemed_were_holes`. The runtime text
-            // path is now UTF-8 (Go parity); byte round-tripping moved to
-            // `Std.Bytes`. #55b migrates the runtime-internal byte pipelines.
+            // path is UTF-8 (Go parity); byte round-tripping lives in
+            // `Std.Bytes`.
             K::EncodingBase64Encode,
             K::EncodingBase64Decode,
             K::EncodingUrlEncode,
             K::EncodingUrlDecode,
             K::EncodingHexEncode,
             K::EncodingHexDecode,
-            // Std.Html / Std.Ui / Sky.Live rendering family (42 — task #74).
+            // Std.Html / Std.Ui / Sky.Live rendering family (42).
             // All genuine `Ty::Var(u32::MAX)` holes (legacy `kernel_ty` has no
             // Html/Ui/Background/Border/Font arm). Verified vs runtime + lower
             // `callee_arity` in docs/adr/0020-html-ui-live-kernel-arity-tripwire.md.
@@ -7551,7 +7536,7 @@ mod registry_phase_c_tests {
             K::HtmlP,
             K::HtmlInput,
             K::HtmlImg,
-            // #76 batch 2: Std.Html element builders (first-schemed — no legacy).
+            // Std.Html element builders (first-schemed — no legacy).
             K::HtmlH1,
             K::HtmlH2,
             K::HtmlH3,
@@ -7618,7 +7603,7 @@ mod registry_phase_c_tests {
             K::HtmlSource,
             K::HtmlTrack,
             K::HtmlWbr,
-            // #76: Std.Html.Attributes builders (first-schemed — no legacy).
+            // Std.Html.Attributes builders (first-schemed — no legacy).
             K::HtmlAttrClass,
             K::HtmlAttrId,
             K::HtmlAttrHref,
@@ -7642,8 +7627,7 @@ mod registry_phase_c_tests {
             K::HtmlAttribute,
             K::HtmlBoolAttribute,
             K::HtmlNoAttr,
-            // #107: Std.Html.Events builders (first-schemed — no legacy; before
-            // #107 `Std.Html.Events.*` aliased to the `Ui*` event kernels).
+            // Std.Html.Events builders (first-schemed — no legacy).
             K::HtmlOnClick,
             K::HtmlOnFocus,
             K::HtmlOnBlur,
@@ -7655,10 +7639,10 @@ mod registry_phase_c_tests {
             K::HtmlOnKeyDown,
             K::HtmlOnKeyUp,
             K::HtmlOnBool,
-            // NB: HtmlStyleNode is NOT here — it is RELOCATED (the F7 #46/#47 work
-            // already schemed `Html.styleNode` in the legacy `kernel_ty` table),
-            // so its parity is checked by `stdlib_scheme_matches_legacy`.
-            // ── #76 Tier 1: extended Std.Ui / Font / Background / Border builders ──
+            // NB: HtmlStyleNode is NOT here — it is RELOCATED (`Html.styleNode`
+            // is schemed in the legacy `kernel_ty` table, F7), so its parity is
+            // checked by `stdlib_scheme_matches_legacy`.
+            // ── Tier 1: extended Std.Ui / Font / Background / Border builders ──
             K::UiSquare,
             K::UiWidescreen,
             K::UiCinemascope,
@@ -7670,10 +7654,10 @@ mod registry_phase_c_tests {
             K::UiTransitionRaw,
             K::UiGridTracksRaw,
             K::UiAnimateRaw,
-            // #154: Breakpoint
+            // Breakpoint
             K::UiBreakpoint,
-            // `Ui.mediaQuery` — the last of the #76/#45 20-kernel batch, wired
-            // 2026-07-11 once the `style_inject::build_mq` consumer existed.
+            // `Ui.mediaQuery` — routes through the `style_inject::build_mq`
+            // consumer.
             K::UiMediaQuery,
             K::UiMobile,
             K::UiTablet,
@@ -7718,9 +7702,9 @@ mod registry_phase_c_tests {
             K::FontDisabledColor,
             K::FontHoverSize,
             K::HtmlAttrTabindex,
-            // Std.Cli / Sky.Cli app-entry (#111) — brand-new kernel, no legacy oracle.
+            // Std.Cli / Sky.Cli app-entry — brand-new kernel, no legacy oracle.
             K::CliProgram,
-            // ── #111: Std.Auth (9 kernels) — schemed + lowered, moved from REACHABLE_BUT_UNLOWERED ──
+            // ── Std.Auth (9 kernels) — schemed + lowered, moved from REACHABLE_BUT_UNLOWERED ──
             K::AuthHashPassword,
             K::AuthHashPasswordCost,
             K::AuthVerifyPassword,
@@ -7730,17 +7714,17 @@ mod registry_phase_c_tests {
             K::AuthRegister,
             K::AuthLogin,
             K::AuthSetRole,
-            // ── #111: Sky.Http.Server.Stream (4 kernels) ─────────────────────────
+            // ── Sky.Http.Server.Stream (4 kernels) ─────────────────────────
             K::StreamStream,
             K::StreamEmit,
             K::StreamFinish,
             K::StreamWithContentType,
-            // ── #111: Sky.Core.Http.Stream (4 kernels) ───────────────────────────
+            // ── Sky.Core.Http.Stream (4 kernels) ───────────────────────────
             K::HttpStreamOpen,
             K::HttpStreamForEachChunk,
             K::HttpStreamClose,
             K::HttpStreamChunks,
-            // ── #127: Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
+            // ── Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
             K::WsDefaultCfg,
             K::WsWithOnConnect,
             K::WsWithOnMessage,
@@ -7761,7 +7745,7 @@ mod registry_phase_c_tests {
             K::WebSocketClose,
             K::WebSocketCloseWithCode,
             K::SubSubscribeWebSocket,
-            // ── Std.Ui.Region (#117) — all 8 landmark/live-region attrs ──
+            // ── Std.Ui.Region — all 8 landmark/live-region attrs ──
             K::RegionMainContent,
             K::RegionNavigation,
             K::RegionFooter,
@@ -7781,7 +7765,7 @@ mod registry_phase_c_tests {
             K::UiDescLiveAssertive,
             K::UiDescHeading,
             K::UiDescLabel,
-            // ── Std.Ui.Input (#124) ───────────────────────────────────────────
+            // ── Std.Ui.Input ───────────────────────────────────────────
             K::InputLabelAbove,
             K::InputLabelBelow,
             K::InputLabelLeft,
@@ -7800,28 +7784,28 @@ mod registry_phase_c_tests {
             K::InputOption,
             K::InputRadio,
             K::InputRadioRow,
-            // ── Std.Ui.Lazy (#146) ────────────────────────────────────────────
+            // ── Std.Ui.Lazy ────────────────────────────────────────────
             K::LazyLazy,
             K::LazyLazy2,
             K::LazyLazy3,
             K::LazyLazy4,
             K::LazyLazy5,
-            // ── TEA pub/sub M5e: Cmd.publish / Cmd.publishNoEcho ──────────────
-            // Genuine holes — no legacy `kernel_ty` arm, newly schemed in M5e.
-            // `"publish"` / `"publishNoEcho"` are now registered in canon
-            // QUALIFIERS ("Cmd" entry) and wired through lower + emit.
+            // ── TEA pub/sub: Cmd.publish / Cmd.publishNoEcho ──────────────
+            // Genuine holes — no legacy `kernel_ty` arm. `"publish"` /
+            // `"publishNoEcho"` are registered in canon QUALIFIERS ("Cmd"
+            // entry) and flow through lower + emit.
             K::CmdPublish,
             K::CmdPublishNoEcho,
-            // ── Ui.link + Border.widthEach (this wiring task) ─────────────────
-            // New kernels with no legacy `kernel_ty` entry — pure holes.
+            // ── Ui.link + Border.widthEach ────────────────────────────────────
+            // No legacy `kernel_ty` entry — pure holes.
             K::UiLink,
             K::BorderWidthEach,
             K::BorderShadow,
             K::BorderGlow,
             K::BorderInnerShadow,
-            // ── #76: 20 previously-unbacked Std.Ui / Std.Html / Background
-            // kernels (BACKLOG "Sweep to green" — #45's exhaustiveness gate list).
-            // New kernels with no legacy `kernel_ty` entry — pure holes.
+            // ── 20 Std.Ui / Std.Html / Background kernels — the
+            // exhaustiveness gate list. No legacy `kernel_ty` entry — pure
+            // holes.
             K::UiImage,
             K::UiPaddingEach,
             K::UiClipX,
@@ -7888,7 +7872,7 @@ mod registry_phase_c_tests {
             K::DecFormatWith,
             // ── Textarea rows attr ─────────────────────────────────────────────
             K::HtmlAttrRows,
-            // ── Std.Db.Sql — SqlFragment builder (backlog #61; 19) ──────────────
+            // ── Std.Db.Sql — SqlFragment builder (19) ──────────────
             K::SqlColumn,
             K::SqlParam,
             K::SqlInt,
@@ -7910,42 +7894,42 @@ mod registry_phase_c_tests {
             K::SqlLike,
             K::DbFindWhere,
             K::DbDeleteWhere,
-            // `Db.Decode.money` (#34) — Ipê-NEW kernel (the ancestor has no
+            // `Db.Decode.money` — Ipê-NEW kernel (the ancestor has no
             // DbDec money route), so it closed a genuine hole rather than
             // relocating a legacy `kernel_ty` scheme. Its DbDec siblings are
             // RELOCATED; this one is deliberately not (hole XOR relocation).
             K::DbDecMoney,
-            // ── Sky.Core.Secret (backlog #44; 3) ─────────────────────────────
+            // ── Sky.Core.Secret (3) ─────────────────────────────
             K::SecretFromString,
             K::SecretReveal,
             K::SecretRedacted,
-            // ── Sky.Core.Regex (#194; 5) ─────────────────────────────────────
+            // ── Sky.Core.Regex (5) ─────────────────────────────────────
             K::RegexMatch,
             K::RegexFind,
             K::RegexFindAll,
             K::RegexReplace,
             K::RegexSplit,
-            // ── Sky.Core.Path (#202; 4) ──────────────────────────────────────
+            // ── Sky.Core.Path (4) ──────────────────────────────────────
             K::PathBase,
             K::PathDir,
             K::PathExt,
             K::PathIsAbsolute,
-            // ── Std.Trace (#197; 3) ──────────────────────────────────────────
+            // ── Std.Trace (3) ──────────────────────────────────────────
             K::TraceSpan,
             K::TraceEvent,
             K::TraceAttr,
-            // ── Std.Compression (#197; 4) ────────────────────────────────────
+            // ── Std.Compression (4) ────────────────────────────────────
             K::CompressionGzip,
             K::CompressionGunzip,
             K::CompressionZstdCompress,
             K::CompressionZstdDecompress,
-            // ── Std.Csv (#197; 5) ────────────────────────────────────────────
+            // ── Std.Csv (5) ────────────────────────────────────────────
             K::CsvParse,
             K::CsvParseWithDelimiter,
             K::CsvEncode,
             K::CsvEncodeWithDelimiter,
             K::CsvParseStreamFromFile,
-            // ── Std.Cache (#210; 7) ──────────────────────────────────────────
+            // ── Std.Cache (7) ──────────────────────────────────────────
             K::CacheNewRaw,
             K::CacheGet,
             K::CachePut,
@@ -7953,7 +7937,7 @@ mod registry_phase_c_tests {
             K::CacheClear,
             K::CacheSize,
             K::CacheStats,
-            // ── Std.Config (#210; 16) ────────────────────────────────────
+            // ── Std.Config (16) ────────────────────────────────────
             K::ConfigString,
             K::ConfigInt,
             K::ConfigFloat,
@@ -7970,11 +7954,11 @@ mod registry_phase_c_tests {
             K::ConfigDecodeYaml,
             K::ConfigDecodeJson,
             K::ConfigLoadFromFile,
-            // ── Std.Email (#210; 1) ──────────────────────────────────────────
+            // ── Std.Email (1) ──────────────────────────────────────────
             K::EmailSend,
-            // ── Std.PubSub (#215; 2) ─────────────────────────────────────
-            // Moved from KNOWN_UNBACKED: runtime exists, emit arm wired
-            // (`pubsub_publish::<_, SkyError>`), scheme `String -> a -> Task Error Int`.
+            // ── Std.PubSub (2) ─────────────────────────────────────
+            // Runtime exists, emit arm present (`pubsub_publish::<_, SkyError>`),
+            // scheme `String -> a -> Task Error Int`.
             K::PubSubPublish,
             K::PubSubPublishNoEcho,
         ]
@@ -7996,7 +7980,7 @@ mod registry_phase_c_tests {
 
     /// KNOWN-UNBACKED kernels: present in `StdlibKernel::ALL` (so they carry a
     /// registry index) but deliberately NEVER schemed. Currently **empty** —
-    /// as of backlog #215, `PubSub.publish`/`PubSub.publishNoEcho` (the only
+    /// `PubSub.publish`/`PubSub.publishNoEcho` (the only
     /// previous occupants) were promoted to `FIRST_SCHEMED` once their runtime
     /// functions and emit arm were confirmed present. The bucket exists
     /// structurally so the `known_unbacked_never_schemed` gate still compiles
@@ -8072,29 +8056,22 @@ mod registry_phase_c_tests {
         Builtins::new(interner).expect("Builtins::new must not fail in tests")
     }
 
-    // RELOCATED byte-parity was proven against kernel_ty through commit
-    // 41596b2; kernel_ty is now deleted (Task 1c), so the former
-    // `stdlib_scheme_matches_legacy` two-source parity check is structurally
-    // impossible and was removed here. `migrated_set_burndown` still pins the
-    // exact Some set (RELOCATED ∪ FIRST_SCHEMED ⟺ Some), so both of that
-    // retired test's guards — "every RELOCATED kernel is Some" and "every Some
-    // scheme is classified RELOCATED or FIRST_SCHEMED" — are subsumed. The
-    // `first_schemed_were_holes` test below preserves the remaining classify
-    // guard (RELOCATED ∩ FIRST_SCHEMED = ∅), and the golden suite exercises
-    // each RELOCATED scheme's emit.
+    // `kernel_ty` is deleted, so a two-source `stdlib_scheme_matches_legacy`
+    // parity check is structurally impossible. `migrated_set_burndown` pins the
+    // exact Some set (RELOCATED ∪ FIRST_SCHEMED ⟺ Some), which subsumes both
+    // "every RELOCATED kernel is Some" and "every Some scheme is classified
+    // RELOCATED or FIRST_SCHEMED". The `first_schemed_were_holes` test below
+    // holds the classify guard (RELOCATED ∩ FIRST_SCHEMED = ∅), and the golden
+    // suite exercises each RELOCATED scheme's emit.
 
-    /// The historical was-a-hole oracle (`FIRST_SCHEMED` kernel had NO legacy
-    /// scheme, `kernel_ty` → the un-typed sentinel) was retired with `kernel_ty`
-    /// in Task 1c. That "each first-schemed kernel closed a genuine exit-0 hole,
-    /// not a relocation" guarantee was proven against `kernel_ty` through commit
-    /// 41596b2 and is now structurally impossible to re-check (the legacy table
-    /// is deleted). What stays checkable — and what preserves the classify
-    /// invariant of the retired `stdlib_scheme_matches_legacy` else-branch — is
-    /// that `FIRST_SCHEMED` and `RELOCATED` are DISJOINT (a scheme is a hole
-    /// XOR a relocation, never both) and that every `FIRST_SCHEMED` kernel is
-    /// actually schemed. Disjointness is NOT implied by `migrated_set_burndown`
-    /// (an overlapping kernel still satisfies the union membership), so this is
-    /// a genuine independent guard.
+    /// A was-a-hole oracle (`FIRST_SCHEMED` kernel had NO legacy scheme,
+    /// `kernel_ty` → the un-typed sentinel) is not checkable — the legacy
+    /// table is deleted. What stays checkable is that `FIRST_SCHEMED` and
+    /// `RELOCATED` are DISJOINT (a scheme is a hole XOR a relocation, never
+    /// both) and that every `FIRST_SCHEMED` kernel is actually schemed.
+    /// Disjointness is NOT implied by `migrated_set_burndown` (an overlapping
+    /// kernel still satisfies the union membership), so this is a genuine
+    /// independent guard.
     #[test]
     fn first_schemed_were_holes() {
         let mut interner = Interner::new();
@@ -8137,13 +8114,12 @@ mod registry_phase_c_tests {
         }
     }
 
-    /// Phase E — Task 0 gate. `stdlib_scheme` is TOTAL over the reachable set:
+    /// Totality gate. `stdlib_scheme` is TOTAL over the reachable set:
     /// every `StdlibKernel` except the explicit `KNOWN_UNBACKED` exclusions has a
-    /// concrete scheme. This is the load-bearing precondition for the totality
-    /// flip (Task 1) — deleting the `Ty::Var(u32::MAX)` fallback is only sound if
-    /// no reachable kernel was silently riding it. If this fails, it prints the
-    /// un-schemed variants; they must be schemed (or classified `KNOWN_UNBACKED`)
-    /// before Phase E proceeds.
+    /// concrete scheme. This is the load-bearing precondition for deleting the
+    /// `Ty::Var(u32::MAX)` fallback — only sound if no reachable kernel is
+    /// silently riding it. If this fails, it prints the un-schemed variants;
+    /// they must be schemed (or classified `KNOWN_UNBACKED`).
     #[test]
     fn stdlib_scheme_total_over_reachable() {
         let mut interner = Interner::new();
@@ -8168,7 +8144,7 @@ mod registry_phase_c_tests {
         );
     }
 
-    /// Phase E — Task 1c SEAL. The banned F1 exit-0 sentinel (`Ty::Var` at the
+    /// SEAL. The banned F1 exit-0 sentinel (`Ty::Var` at the
     /// reserved max id) is GONE from the code: `kernel_ty` and its
     /// `_ => <sentinel>` fallthrough are deleted, and `constrain_var_kernel`
     /// fails closed with SKY-L0108 on a registry miss. This test freezes that by
@@ -8202,7 +8178,7 @@ mod registry_phase_c_tests {
     /// SKY-L0108-shaped `Err` (loud), NOT a silent `Ty::Var`. Also checks
     /// registry-first precedence and single-source resolution.
     ///
-    /// Since Task 1c the legacy string table is DELETED and
+    /// The legacy string table is DELETED and
     /// `constrain_var_kernel` passes `None` for the legacy slot, so a registry
     /// miss (`None` id, or a `REACHABLE_BUT_UNLOWERED` bucket) reaches this exact
     /// `Err` live in the constrain path — the seal that removed the exit-0 hole.
@@ -8243,7 +8219,7 @@ mod registry_phase_c_tests {
         );
     }
 
-    /// #90 T3 (5th attempt) — the [`Builder::hof_result_slot_for`] table
+    /// The [`Builder::hof_result_slot_for`] table
     /// cannot drift from the scheme shapes in [`Builder::stdlib_scheme`]: for
     /// every table entry, the slot's raw var must be exactly the FINAL RESULT
     /// of the kernel's callback arrow (the arrow the runtime kernel fully

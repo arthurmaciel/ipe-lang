@@ -1,6 +1,6 @@
-//! WALL 6 (#68) — self-referential FFI builder bundle: MIRI soundness PROOF.
+//! Self-referential FFI builder bundle: MIRI soundness PROOF.
 //!
-//! GUARDIAN-GATED EXISTENCE PROOF (design gate 2026-06-27, see
+//! GUARDIAN-GATED EXISTENCE PROOF (see
 //! `runtime-rust/docs/superpowers/specs/2026-06-27-rust-ffi-wall6-selfref-builder-design.md`).
 //!
 //! This file is the concrete, MIRI-checked proof that the *mechanism* which would
@@ -33,7 +33,7 @@
 //!      `&'a Db` ⇒ covariant ⇒ lengthening `'a → 'static` via transmute is benign
 //!      given (1)-(3). THIS is the precondition the inspector cannot verify for an
 //!      arbitrary foreign type → why auto-emit stays blocked.
-//!   5. ALIASABLE OWNER (MIRI-FOUND, 2026-06-27) — the owner MUST NOT be a plain
+//!   5. ALIASABLE OWNER (MIRI-FOUND) — the owner MUST NOT be a plain
 //!      `Box<Db>`. Under Stacked Borrows, moving a `Box` asserts UNIQUE access to
 //!      its pointee, which INVALIDATES the dependent's outstanding shared borrow —
 //!      UB, even with invariants 1-4 satisfied. (MIRI flagged the naive `Box`
@@ -57,9 +57,9 @@
 //!
 //! Run: `cargo +nightly miri test` in this directory (Stacked Borrows), and
 //! `MIRIFLAGS=-Zmiri-tree-borrows cargo +nightly miri test` (Tree Borrows).
-//! VERIFIED 2026-06-27: **3/3 pass under BOTH models** — but only after MIRI
-//! forced out invariants 5 and 6 below, which the design spec's original
-//! invariants 1-4 MISSED. That is the proof's real payload: the sound
+//! VERIFIED: **3/3 pass under BOTH models** — but only with invariants 5 and 6
+//! below, which MIRI forced out and the design spec's original invariants 1-4
+//! MISSED. That is the proof's real payload: the sound
 //! construction is materially subtler than "box the owner + order the fields",
 //! which is precisely why auto-EMITTING it is REJECT-FOR-NOW (guardian gate) —
 //! a codegen that emits the obvious form ships UB.
@@ -215,7 +215,7 @@ fn rows_step(b: SkyFluentSel) -> SkyFluentSelected {
     }
 }
 
-/// TERMINAL — the SUBTLE one (invariant 6, MIRI-found 2026-06-27). The terminal
+/// TERMINAL — the SUBTLE one (invariant 6, MIRI-found). The terminal
 /// READS the pointee (`dep.run()`, a shared access — fine under a protector) and
 /// returns the owned result, but it MUST NOT free `owner` inside its own frame:
 /// `b` is a by-value argument, so the borrow `dep` holds of `*owner` is STRONGLY

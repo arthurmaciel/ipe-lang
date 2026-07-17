@@ -25,7 +25,7 @@ use std::path::PathBuf;
 /// `callee_name()` path, OR defined in the generated-code epilogue rather
 /// than the runtime.  See module-level docs for per-entry rationale.
 const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
-    // ── Dead: emit_task_retry_call (#134) constructs RetryPolicy / ShouldRetry
+    // ── Dead: emit_task_retry_call constructs RetryPolicy / ShouldRetry
     //         values inline for the builder variants; only task_retry_with has
     //         a real runtime fn. These name strings are never emitted. ────────
     "task_default_retry_policy",
@@ -48,11 +48,11 @@ const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     "http_with_body",
     "http_with_header",
     "http_with_timeout",
-    // #33 §6.2 Go-parity builders — same inline clone-and-reassign emission.
+    // Go-parity builders — same inline clone-and-reassign emission.
     "http_with_url",
     "http_with_follow_redirects",
     "http_with_max_redirects",
-    // ── Dead: emit_expr's DbDefaultMigration arm (#217) emits the `Migration`
+    // ── Dead: emit_expr's DbDefaultMigration arm emits the `Migration`
     //         record struct literal inline; this name string is never emitted.
     "db_default_migration",
     // ── Dead: emit_live_route generates a closure expression, not a function

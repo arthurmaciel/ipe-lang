@@ -1158,7 +1158,7 @@ pub fn server_web_socket_close_client<E: From<String> + Send + 'static>(id: i64)
     })
 }
 
-// ─── Sky.Http.Server.WebSocket adapters (#127) ────────────────────────────
+// ─── Sky.Http.Server.WebSocket adapters ────────────────────────────
 //
 // Kernel-callable entry points (D3: handle-taking wrappers + cfg builders).
 // The i64 family above is the registry API kept for upstream-sync; these
@@ -1376,7 +1376,7 @@ mod ws_adapter_tests {
         assert_eq!(parsed, 256);
     }
 
-    // ── ws_heartbeat_secs env parsing (#135) ──────────────────────────────────
+    // ── ws_heartbeat_secs env parsing ──────────────────────────────────
 
     /// Default heartbeat interval is 30 s (Go parity: `wsDefaultPingInterval`).
     #[test]
@@ -1716,13 +1716,13 @@ fn csrf_token_well_formed(t: &str) -> bool {
 ///
 /// `Secure` is set when EITHER `production_from_env()` is true (unconditional
 /// floor — a production deploy always gets `Secure`, matching
-/// `server_with_cookie`'s pre-existing gate and the session cookie's
+/// `server_with_cookie`'s gate and the session cookie's
 /// `csrf::cookies_secure()` half) OR `request_is_https` is true (THIS
 /// specific request arrived over TLS at a trusted proxy, opt-in via
 /// `SKY_TRUSTED_PROXY` — closes the gap where a dev process (`ENV` unset)
-/// fronted by a TLS-terminating proxy used to emit a non-Secure CSRF cookie
-/// even though the browser connection was HTTPS). Same OR-gate shape as the
-/// session cookie's fix in `live/mod.rs::page_response`.
+/// fronted by a TLS-terminating proxy would otherwise emit a non-Secure CSRF
+/// cookie even though the browser connection was HTTPS). Same OR-gate shape as
+/// the session cookie in `live/mod.rs::page_response`.
 ///
 /// `request_is_https` MUST be computed from the ORIGINAL request headers
 /// before the request is consumed — see the call site in
@@ -2289,11 +2289,10 @@ mod tests {
         }
     }
 
-    /// Regression for the well-formedness gap found by independent review of
-    /// #63: an EQUAL pair of malformed values (too short to be a real
-    /// server-minted token) must still be rejected — the compare alone
-    /// (`cookie_tok == header_tok`) is not sufficient, both sides must also
-    /// look like a genuine token.
+    /// Regression for the well-formedness gap: an EQUAL pair of malformed
+    /// values (too short to be a real server-minted token) must still be
+    /// rejected — the compare alone (`cookie_tok == header_tok`) is not
+    /// sufficient, both sides must also look like a genuine token.
     #[tokio::test]
     async fn csrf_post_with_matching_but_malformed_tokens_rejected() {
         let mut cookies = HashMap::new();
@@ -2311,7 +2310,7 @@ mod tests {
         }
     }
 
-    // ── #63c: CSRF cookie `Secure` — ENV-vs-TLS combined gate ──────────────
+    // ── CSRF cookie `Secure` — ENV-vs-TLS combined gate ──────────────
 
     #[test]
     fn request_is_https_ignored_without_trust_opt_in() {

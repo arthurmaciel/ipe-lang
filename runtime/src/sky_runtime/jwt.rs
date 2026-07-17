@@ -21,7 +21,7 @@
 //! captured-Go-token byte-equality goldens, and
 //! `crates/skyc/tests/golden_m5b_uuid_jwt.rs` for the byte-parity assertions.
 //!
-//! ## API-surface divergence from the Go backend (M5b interim)
+//! ## API-surface divergence from the Go backend
 //!
 //! The Go backend exposes JWT through a builder API —
 //! `Jwt.encode (Jwt.hs256 secret) (Jwt.claims |> Jwt.subject … |> …)` and
@@ -294,7 +294,7 @@ pub fn jwt_decode_rs256<E: From<String>>(key_pem: String, token: String) -> SkyR
 // The generic `jwt_encode_hs256<E: From<String>>` and friends cannot be
 // called directly from generated code where the `Err` arm may be discarded —
 // Rust cannot infer `E` in that context. These monomorphic aliases pin
-// `E = SkyError` (backlog #85/#160) and are what `naming::kernel_name()` maps the Jwt kernels to,
+// `E = SkyError` and are what `naming::kernel_name()` maps the Jwt kernels to,
 // mirroring the `sky_aes_gcm_encrypt` pattern in `crypto.rs`.
 //
 // SECURITY: only the error message crosses the `From<String>` boundary; no
@@ -321,7 +321,7 @@ pub fn sky_jwt_decode_rs256(key_pem: String, token: String) -> SkyResult<crate::
     jwt_decode_rs256(key_pem, token)
 }
 
-// ── Builder API (D-00, #152) ─────────────────────────────────────────────────
+// ── Builder API (D-00) ─────────────────────────────────────────────────
 //
 // The Go backend exposes JWT through a builder pattern:
 //   `Jwt.encode (Jwt.hs256 secret) (Jwt.claims |> Jwt.subject "alice" |> …)`

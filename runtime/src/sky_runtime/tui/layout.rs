@@ -1155,8 +1155,8 @@ fn render_input<M: Clone>(
     // lightened by 38; real content + cursor paint over the track.
     let is_text_like = !matches!(input_type.as_str(), "checkbox" | "radio" | "range");
     // Border frame spec — a bordered input draws a REAL 1-cell box (correct
-    // Std.Ui: Border.width > 0 ⇒ a frame). Previously the frame was suppressed
-    // (a Go-mirror) and the border only widened the track, so no border showed.
+    // Std.Ui: Border.width > 0 ⇒ a frame). Suppressing the frame (a Go-mirror)
+    // so the border only widens the track would show no border.
     let mut bw = 0i64;
     let mut bcolor: Option<Color> = None;
     let mut bsty = String::from("solid");

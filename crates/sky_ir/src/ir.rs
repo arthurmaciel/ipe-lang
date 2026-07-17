@@ -1,6 +1,5 @@
-//! The typed IR node definitions (M0 subset). Widened in later milestones; for
-//! M0 the surface is deliberately narrow so that every constructible value is a
-//! well-formed program fragment.
+//! The typed IR node definitions. The surface is deliberately narrow so that
+//! every constructible value is a well-formed program fragment.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -110,7 +109,7 @@ pub struct Module {
     pub uses_webview: bool,
     /// `true` when the lowerer detected at least one `Sky.Core.CssSafety`
     /// leaf security kernel (`CssSafety.safeValue` / `safePropName` /
-    /// `safeSelector` / `stripStyleClose` — the `Std.Css` backing, #47) in the
+    /// `safeSelector` / `stripStyleClose` — the `Std.Css` backing) in the
     /// module's function bodies.
     ///
     /// Set by `sky_lower` when any call site resolves to a
@@ -141,7 +140,7 @@ pub struct Module {
     /// to add the `websocket_client` feature to the emitted `Cargo.toml` (plus
     /// the `tokio-tungstenite` dep) and to append `pub mod ws_client; pub use
     /// ws_client::*;` to the emitted `sky_runtime/mod.rs` — the `ws_client`
-    /// runtime module is feature-gated and NOT part of the M0 base module set.
+    /// runtime module is feature-gated and NOT part of the base module set.
     pub uses_websocket: bool,
     /// `true` when the lowerer detected the `Std.Email` `Email.send` kernel call
     /// in the module's function bodies.
@@ -155,8 +154,8 @@ pub struct Module {
 }
 
 /// A user-declared type. The IR models user types as enums (Sky's `type`
-/// declarations); a nullary-only enum is the M0 case, a payload-carrying and/or
-/// generic enum the M3a case.
+/// declarations): a variant may be nullary, or carry payload fields, and the
+/// enum may be generic.
 #[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum TypeDef {
     Enum(EnumDef),
@@ -167,8 +166,7 @@ pub enum TypeDef {
 /// A variant may carry payload fields and the type may be generic over a
 /// list of type parameters (`type Maybe a = Just a | Nothing`). A nullary-only,
 /// non-generic enum (`type Msg = Increment | Decrement`) has every variant's
-/// `fields` empty and an empty `type_params` — that path stays byte-identical to
-/// the M0 backend output.
+/// `fields` empty and an empty `type_params`.
 #[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct EnumDef {
     pub name: Symbol,
@@ -178,8 +176,8 @@ pub struct EnumDef {
     /// alone — is the type's nominal identity. The backend derives the emitted
     /// Rust enum name from `home` (`["Std","Palette"] + Shade` → `StdPaletteShade`,
     /// `["Lib"] + Color` → `LibColor`, `["Main"] + Msg` → `MainMsg`), so a
-    /// single-module program (home == entry) is byte-identical to the pre-#100
-    /// output while two same-short-named types from different modules mangle to
+    /// single-module program (home == entry) mangles to the bare short name
+    /// while two same-short-named types from different modules mangle to
     /// distinct Rust enums. Empty for backend-unit-test IR built by hand.
     pub home: ModPath,
     /// The type variables this enum quantifies, in declaration order. Each is a
@@ -214,8 +212,8 @@ pub struct Variant {
 ///
 /// An unconstrained type variable — one the body only passes through (`id x =
 /// x`) — has the empty set [`BoundSet::UNBOUNDED`], which the backend emits as a
-/// bare generic (`T1`), byte-identical to a structurally-parametric M2a
-/// function. A variable the body *constrains* by applying an operation to it
+/// bare generic (`T1`), the same as any structurally-parametric function. A
+/// variable the body *constrains* by applying an operation to it
 /// carries the matching bounds, so the emitted generic is `T1: <bounds>`.
 ///
 /// Each flag maps a Sky super-type capability to the Rust standard-library
@@ -569,13 +567,12 @@ pub struct Func {
     /// different source modules from colliding with Rust E0428.
     pub home: ModPath,
     /// The type variables this function quantifies, in quantification order,
-    /// each paired with its [`BoundSet`] (M2a / M2d). A type variable is a Sky
+    /// each paired with its [`BoundSet`]. A type variable is a Sky
     /// type-variable [`Symbol`] that appears as an [`IrType::Generic`] in the
     /// parameters / return / body; its `BoundSet` records the Rust trait bounds
     /// the body's use of the variable demands. A monomorphic function has an
-    /// empty list, so existing M0 / M1 functions are unchanged. A
-    /// structurally-parametric variable carries [`BoundSet::UNBOUNDED`],
-    /// so its emitted generic stays a bare `T1`.
+    /// empty list. A structurally-parametric variable carries
+    /// [`BoundSet::UNBOUNDED`], so its emitted generic stays a bare `T1`.
     ///
     /// The order is load-bearing: the backend derives each variable's Rust
     /// generic name (`T1`, `T2`, …) from its *position* here, so a function
@@ -589,7 +586,7 @@ pub struct Func {
     pub body: Expr,
 }
 
-/// The M0 type lattice. Widened in later milestones.
+/// The type lattice.
 ///
 /// `Hash` is derived so record-shape collection (`sky_lower`'s
 /// `collect_record_types`) can dedup via a `HashSet` gate instead of an
@@ -655,7 +652,7 @@ pub enum IrType {
     /// struct is deterministic regardless of interning order.
     ///
     /// Open / row-polymorphic records (`{ r | x : Int }`) are intentionally NOT
-    /// representable here — they are deferred to M2 and rejected at lowering, so
+    /// representable here — they are unsupported and rejected at lowering, so
     /// every `Record` the backend sees is closed.
     Record(BTreeMap<Symbol, Self>),
     /// A function type `T0 -> T1 -> ... -> R`, carried as its parameter list and
@@ -677,8 +674,8 @@ pub enum IrType {
     /// Distinct from [`Self::Fun`] (a flattened, re-callable
     /// `Box<dyn Fn(T0, T1, ...) -> R>`): this variant renders as NESTED
     /// `Box<dyn FnOnce(Ti) -> { next level or R } + Send>` boxes, one level
-    /// of currying per parameter. Introduced for #164 (`f7_succeed_curried`)
-    /// to type the `next_decoder` slot of the `JsonDec.Pipeline`/`Db.Decode`
+    /// of currying per parameter. Types the `next_decoder` slot of the
+    /// `JsonDec.Pipeline`/`Db.Decode`
     /// curried-combinator kernels (`decode_pipeline_required` /
     /// `decode_pipeline_optional` / `decode_pipeline_required_at` /
     /// `db_decode_required` / `db_decode_optional`), whose hand-written Rust
@@ -751,20 +748,20 @@ pub enum IrType {
     /// type is always `serde_json::Value`, re-exported from the runtime as
     /// `JsonVal`.  The lowerer produces this variant when a `Ty::Var`
     /// appears in the argument or return position of a `JsonEnc.*` kernel
-    /// call — the only place in the M4g subset where `any` is meaningful.
+    /// call — the only place where `any` is meaningful.
     /// The backend emits `JsonVal`.
     Json,
     /// The `Decoder a` type — an opaque decoder that reads a JSON value and
     /// produces a value of type `a`.
     ///
-    /// Introduced in M4h (`Sky.Core.Json.Decode`).  Renders as
+    /// Backs `Sky.Core.Json.Decode`.  Renders as
     /// `Decoder<T>` using the emitted project's preamble type alias:
     /// `pub type Decoder<T> = sky_runtime::json::Decoder<SkyError, T>`.
     Decoder(Box<Self>),
     /// The `Db` connection pool type — an opaque handle to an open database
     /// connection pool (`Std.Db`).
     ///
-    /// Introduced in M5b-db.  Renders as `Db` via the runtime re-export
+    /// Renders as `Db` via the runtime re-export
     /// `pub use sky_runtime::Db;` in the emitted crate preamble.  The type is
     /// zero-argument (no type parameters) and value-cloneable (the pool is
     /// reference-counted internally).
@@ -772,14 +769,14 @@ pub enum IrType {
     /// A `Cmd msg` value — an opaque command produced by the `update` function
     /// and passed back to the TEA runtime.
     ///
-    /// Introduced in M5c.  Renders as `SkyCmd<T>` via the project-level alias
+    /// Renders as `SkyCmd<T>` via the project-level alias
     /// `pub type SkyCmd<M> = sky_runtime::tea::SkyCmd<M>`.
     /// The inner type is the message type `M`.
     Cmd(Box<Self>),
     /// A `Sub msg` value — an opaque subscription descriptor returned by
     /// the `subscriptions` function.
     ///
-    /// Introduced in M5c.  Renders as `SkySub<T>` via the project-level alias
+    /// Renders as `SkySub<T>` via the project-level alias
     /// `pub type SkySub<M> = sky_runtime::tea::SkySub<M>`.
     /// The inner type is the message type `M`.
     Sub(Box<Self>),
@@ -875,8 +872,8 @@ pub enum IrType {
     /// the page type it builds. Rendered as
     /// `sky_runtime::live::route::Route<Page>`. The runtime `Route<Page>`
     /// struct has NO default type parameter, so the page argument is
-    /// load-bearing: rendering a bare `Route` (the pre-#108-round-4 shape) is
-    /// an E0107 `cargo` failure whenever the type reaches a rendered position
+    /// load-bearing: rendering a bare `Route` is an E0107 `cargo` failure
+    /// whenever the type reaches a rendered position
     /// (an empty `routes = []` literal's `Vec::<…>::new()` turbofish, or a
     /// let-bound route table's fn signature).
     LiveRoute(Box<Self>),
@@ -908,8 +905,7 @@ pub enum IrType {
     /// …) emit via the `builtin_runtime_enum` path — no synthetic `EnumDef`.
     ErrorKind,
 
-    /// The built-in `Error` type — `Error ErrorKind ErrorInfo` (backlog
-    /// #85/#160).
+    /// The built-in `Error` type — `Error ErrorKind ErrorInfo`.
     ///
     /// Renders as `sky_runtime::error::SkyError`. Sole constructor shares its
     /// name with the type (`enum_variants[(Prelude, error)] = [error]`, set in
@@ -919,11 +915,11 @@ pub enum IrType {
     ///
     /// `ErrorInfo` carries `{ message : String, details : Maybe ErrorDetails
     /// }` — a plain closed record, not a leaf `IrType` (Sky records are
-    /// structural); `details` was added by the backlog #85 follow-up.
+    /// structural).
     Error,
 
     /// The built-in `ErrorDetails` type — the 5-variant enrichment union
-    /// carried optionally on `ErrorInfo.details` (backlog #85 follow-up).
+    /// carried optionally on `ErrorInfo.details`.
     ///
     /// Renders as `sky_runtime::error::SkyErrorDetails`. Constructor names
     /// match Sky source verbatim (`FfiPanic` / `TypeMismatch` / `HttpStatus`
@@ -960,9 +956,9 @@ pub enum IrType {
     /// Renders as `sky_runtime::error::SkyTypeInfo`.
     TypeInfo,
 
-    /// `Std.Db.Sql`'s opaque WHERE-fragment type (backlog #61 — SQL injection
-    /// closed by construction: a `SqlFragment` can only be built through the
-    /// `Sql.*` combinator kernels, never from an arbitrary `String`).
+    /// `Std.Db.Sql`'s opaque WHERE-fragment type — SQL injection closed by
+    /// construction: a `SqlFragment` can only be built through the `Sql.*`
+    /// combinator kernels, never from an arbitrary `String`.
     ///
     /// Renders as `sky_runtime::db::SqlFragment`. Fully `Clone + PartialEq`
     /// (derivable), but NOT serde — it is a query-building value, never
@@ -971,9 +967,9 @@ pub enum IrType {
     /// bind may carry a revealed secret).
     SqlFragment,
 
-    /// `Sky.Core.Secret`'s opaque, sealed secret-string type (backlog #44 —
-    /// "secrets are typed, never `fmt`-stringified": a `Secret` can only be
-    /// built through `Secret.fromString`, never implicitly from a `String`).
+    /// `Sky.Core.Secret`'s opaque, sealed secret-string type — "secrets are
+    /// typed, never `fmt`-stringified": a `Secret` can only be built through
+    /// `Secret.fromString`, never implicitly from a `String`.
     ///
     /// Renders as `sky_runtime::secret::Secret`. Fully `Clone + PartialEq`
     /// (derivable — `PartialEq` is hand-written and CONSTANT-TIME, the only
@@ -1291,7 +1287,7 @@ pub fn ir_type_is_derivable(
 /// `live_app` bounds it "Serialize + `DeserializeOwned` + Clone + `PartialEq`".
 /// Without this gate a well-typed program that stores a non-serialisable value
 /// in its Model `skyc`-succeeds and then `cargo`-fails on the missing `serde`
-/// bound (the #91 seal hole).
+/// bound (the seal hole this gate closes).
 ///
 /// The serde-OK leaf set is a **strict subset** of the derivable leaf set
 /// ([`ir_type_is_derivable`]): every serde-OK leaf is also derivable, so
@@ -1629,8 +1625,8 @@ pub enum Expr {
     /// binds a single [`Symbol`] (the audited common fast path), `Destructure`
     /// binds an IRREFUTABLE [`Pat`] — a [`Pat::Tuple`] of variables / wildcards
     /// (recursively), or a bare [`Pat::Var`] / [`Pat::Wildcard`]. It is the IR
-    /// shape M3b-1 lowers a tuple-destructuring `case` arm and a tuple function
-    /// parameter to (`fst (a, b) = a` → a synthetic param plus
+    /// The lowerer emits this for a tuple-destructuring `case` arm and a tuple
+    /// function parameter (`fst (a, b) = a` → a synthetic param plus
     /// `Destructure { (a, b) = arg } a`). The binder must be irrefutable — the
     /// lowerer is the sole producer and rejects a refutable element
     /// (a constructor / literal) fail-closed (SKY-L0115) — so the backend's
@@ -1663,9 +1659,8 @@ pub enum Expr {
         /// NOT bound by an enclosing generic function's signature (which would
         /// already pin it, making an added turbofish a conflict). When the
         /// type is concrete, rustc infers it from the argument / context, so
-        /// the pin stays [`CallPin::None`] and emission is byte-identical to
-        /// the pre-#181 output. Every IR→IR rewrite that reconstructs a `Call`
-        /// MUST preserve this field.
+        /// the pin stays [`CallPin::None`]. Every IR→IR rewrite that
+        /// reconstructs a `Call` MUST preserve this field.
         pin: CallPin,
         /// Type-directed form-submit handler classification for the
         /// `onSubmit` kernel family (`Ui.onSubmit` / `Std.Html.Events.onSubmit`).
@@ -1738,8 +1733,8 @@ pub enum Expr {
     /// A record field access `record.field`. `field_ty` is the field's own
     /// solved type — carried so the Rust backend can decide, WITHOUT any
     /// textual heuristic, whether the read needs a `.clone()` (a heap-backed
-    /// field) or can skip it (a Rust-`Copy` scalar) — see #142/AUD-09's
-    /// type-directed Copy-elision fix,
+    /// field) or can skip it (a Rust-`Copy` scalar) — see AUD-09's
+    /// type-directed Copy-elision,
     /// `docs/adr/0011-emitter-clone-borrow-discipline.md` §3.
     /// When the lowerer cannot resolve a concrete field type (a still-generic
     /// field inside a polymorphic body), it falls back to
@@ -1775,7 +1770,7 @@ pub enum Expr {
     /// one closure environment along some nesting chain (see
     /// `sky_lower::needs_shared_capture`).
     ///
-    /// SEAL fix (#164 E0507 pair): `examples/18-job-queue`'s
+    /// SEAL fix (E0507 pair): `examples/18-job-queue`'s
     /// `withErrorReporting` (and its `saveSnapshot`/`loadHistory` siblings)
     /// let-bind a local closure (`logAndFail`, `insertRow`, `selectRecent`)
     /// that is referenced from INSIDE another, more-deeply-nested closure --
@@ -1898,7 +1893,7 @@ pub enum Callee {
 /// The lowerer only ever emits a non-[`Self::None`] variant when the free
 /// parameter is a bare type variable NOT bound by an enclosing generic
 /// signature; a concrete parameter needs no pin (rustc infers it) and stays
-/// [`Self::None`], keeping emission byte-identical to the pre-#181 output.
+/// [`Self::None`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, Default)]
 pub enum CallPin {
     /// No turbofish — the common case (rustc infers every type parameter).
@@ -1925,8 +1920,8 @@ pub enum CallPin {
 impl CallPin {
     /// The turbofish suffix this pin renders immediately after a kernel's name
     /// (before its `(` argument list): `dict_empty::<String, i64>(…)`, etc.
-    /// [`Self::None`] renders the empty string, so an unpinned call is emitted
-    /// byte-identically to the pre-#181 output.
+    /// [`Self::None`] renders the empty string, so an unpinned call emits no
+    /// turbofish.
     ///
     /// The concrete default types (`i64` / `String` / `SkyError`) mirror the
     /// Go/Haskell reference's polymorphic-kernel defaults: a genuinely
@@ -1964,9 +1959,9 @@ impl CallPin {
 /// This is a property of the HANDLER'S TYPE, not its syntax: `Ui.onSubmit m`
 /// and `Ui.onSubmit decoder` are syntactically identical when `m`/`decoder`
 /// are both `Var`s — only the solver knows which is callable. Deciding it at
-/// emit time from the payload's `Expr` shape is unsound (the reported #228
-/// break: `let m = DoSignUp in onSubmit m` emitted `(m)(_x)`, a cargo `E0618`
-/// after `skyc` exit 0). The lowerer resolves it from the handler's solved
+/// emit time from the payload's `Expr` shape is unsound (`let m = DoSignUp in
+/// onSubmit m` would emit `(m)(_x)`, a cargo `E0618` after `skyc` exit 0).
+/// The lowerer resolves it from the handler's solved
 /// region type and records the verdict here so the backend never guesses.
 ///
 /// [`Self::NotForm`] is the default carried by every non-`onSubmit` call; the
@@ -1984,10 +1979,10 @@ pub enum OnFormKind {
 
 /// Every stdlib kernel function known to the Sky compiler.
 ///
-/// **Phase A type alias.** The alias keeps every downstream call-site
-/// (`Callee::Kernel(KernelFn)`, `k.is_db()`, `KernelFn::*` variant patterns)
-/// compiling unchanged.  `sky_kernels::StdlibKernel` is the single source of
-/// truth; `sky_ir` re-exports it under the `KernelFn` alias.
+/// Re-export alias so `sky_ir` call-sites (`Callee::Kernel(KernelFn)`,
+/// `k.is_db()`, `KernelFn::*` variant patterns) reach the enum through this
+/// crate.  `sky_kernels::StdlibKernel` is the single source of truth;
+/// `sky_ir` re-exports it under the `KernelFn` alias.
 ///
 /// See [`sky_kernels::StdlibKernel`] for the full variant list and
 /// [`sky_kernels::StdlibKernel::decl`] for per-variant metadata.
@@ -2000,10 +1995,8 @@ pub use sky_kernels::HtmlEventShape;
 
 /// Binary operators.
 ///
-/// M0 shipped `Add`/`Sub`; M1 core widens the set with the remaining
-/// arithmetic, comparison, and boolean operators. `Append` (`++`) carries
-/// string concatenation; list `++` and `::` are deferred until the list type
-/// lands.
+/// Covers the arithmetic, comparison, and boolean operators. `Append` (`++`)
+/// carries string concatenation.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum BinOp {
     Add,
@@ -2039,10 +2032,10 @@ pub struct Arm {
     pub body: Expr,
     /// An optional boolean guard evaluated after `pat` matches; `false` falls
     /// through to the next arm (native Rust `match` guard semantics). `None`
-    /// for every pre-existing arm shape (byte-identical emission — the backend
-    /// renders `{pat} => …` unchanged, only adding `if {guard}` when `Some`).
+    /// for an arm with no guard — the backend renders `{pat} => …`, adding
+    /// `if {guard}` only when `Some`.
     ///
-    /// Introduced for Class 4 item C2 — a cons / list sub-pattern nested
+    /// A cons / list sub-pattern nested
     /// in a constructor payload lowers to a plain [`Pat::Var`] binder for that
     /// position PLUS a guard checking the bound `Vec`'s length, with the named
     /// sub-bindings (`h`, `t`) recovered via indexing / slicing in the arm
@@ -2069,25 +2062,23 @@ impl Arm {
 
 /// A pattern.
 ///
-/// M3a supports a constructor pattern whose payload sub-patterns bind to a
-/// variable ([`Pat::Var`]) or are ignored ([`Pat::Wildcard`]). Nullary
-/// constructor patterns are [`Pat::Ctor`] with an empty `args`. M3b-1 adds
-/// the tuple pattern [`Pat::Tuple`]. M3b-2 adds the record pattern
-/// [`Pat::Record`] and makes every sub-position fully recursive: ANY [`Pat`] may
+/// A constructor pattern ([`Pat::Ctor`]) carries payload sub-patterns; a
+/// nullary constructor has an empty `args`. The tuple ([`Pat::Tuple`]) and
+/// record ([`Pat::Record`]) patterns nest fully recursively: ANY [`Pat`] may
 /// appear as a constructor payload, a tuple element, or a record-field
 /// sub-pattern (`Just (a, b)`, `Node (Node …) x r`, `{ point = (a, b) }`).
 ///
-/// [`Pat::Var`] / [`Pat::Wildcard`] and the literal leaves [`Pat::Int`] /
-/// [`Pat::Bool`] / [`Pat::Char`] / [`Pat::Str`] are leaves; [`Pat::Ctor`] /
-/// [`Pat::Tuple`] / [`Pat::Record`] / [`Pat::Alias`] are nesting nodes whose
-/// sub-patterns reuse the same enum, recursively. The var / wildcard /
-/// alias-of-irrefutable shapes also serve as an irrefutable destructuring binder
-/// (a single irrefutable case arm, a function parameter, or a `let`-destructure)
-/// when every leaf is a var / wildcard.
+/// [`Pat::Var`] / [`Pat::Wildcard`] and the refutable literal leaves
+/// [`Pat::Int`] / [`Pat::Bool`] / [`Pat::Char`] / [`Pat::Str`] are leaves;
+/// [`Pat::Ctor`] / [`Pat::Tuple`] / [`Pat::Record`] / [`Pat::Alias`] (the
+/// alias / `as` binder) are nesting nodes whose sub-patterns reuse the same
+/// enum, recursively. The var / wildcard / alias-of-irrefutable shapes also
+/// serve as an irrefutable destructuring binder (a single irrefutable case
+/// arm, a function parameter, or a `let`-destructure) when every leaf is a
+/// var / wildcard.
 ///
-/// M3b-3 adds the refutable literal leaves ([`Pat::Int`], [`Pat::Bool`],
-/// [`Pat::Char`], [`Pat::Str`]) and the alias / `as` binder ([`Pat::Alias`]).
-/// Cons / list patterns remain M4 and are rejected upstream at lowering.
+/// Cons / list patterns have no `Pat` variant: they lower to a [`Pat::Var`]
+/// binder plus an arm-level length guard (see [`Arm::guard`]).
 #[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Pat {
     /// A variable binder — binds the matched value (a constructor payload field)
@@ -2116,8 +2107,8 @@ pub enum Pat {
     /// [`Pat`] and recurses.
     Alias(Box<Self>, Symbol),
     /// A constructor pattern `Variant sub0 sub1 …` (a nullary pattern `Variant`
-    /// has an empty `args`). Each `args` element is an arbitrary [`Pat`] (M3b-2:
-    /// nested ctor / tuple / record sub-patterns are all permitted). `home` + `ty`
+    /// has an empty `args`). Each `args` element is an arbitrary [`Pat`]
+    /// (nested ctor / tuple / record sub-patterns are all permitted). `home` + `ty`
     /// are the scrutinee enum's nominal identity (see [`EnumDef::home`]).
     Ctor {
         home: ModPath,
@@ -2206,7 +2197,7 @@ pub fn is_irrefutable(pat: &Pat) -> bool {
 ///
 /// Used by the Rust backend (`render_arm_pat_alias_safe`) to decide whether
 /// an `Alias` node's inner shape can be safely rebuilt from a CLONE of the
-/// alias binder (the #96/#99 by-value alias-split fix) — safe exactly when
+/// alias binder (the by-value alias-split) — safe exactly when
 /// reconstructing every leaf `inner` binds is possible without having
 /// discarded any data, which holds only when `inner` never needed a runtime
 /// check to get there. The `sky_lower` lowerer calls this too, to reject an
@@ -2954,7 +2945,7 @@ mod tests {
         Ok(())
     }
 
-    // ── M3b-3 flat refutable match (`Match::new_flat`) ─────────────────────
+    // ── flat refutable match (`Match::new_flat`) ──────────────────────────
 
     #[test]
     fn new_flat_accepts_literal_arms_with_trailing_wildcard() -> DResult<()> {
@@ -3639,7 +3630,7 @@ mod tests {
         let mut i = Interner::new();
         let (_ty, inc, dec) = msg_enum(&mut i)?;
 
-        // A bare variable whole-scrutinee arm is not an M3a shape — the arm head
+        // A bare variable whole-scrutinee arm is not a valid arm head — it
         // must be a constructor pattern, so Match::new fails closed.
         let arms = vec![Arm {
             pat: Pat::Var(i.intern("anything")?),
@@ -3770,8 +3761,8 @@ mod tests {
 
     /// `Secret`: fully derivable (Clone + `PartialEq`) but
     /// deliberately NOT serde — a `Secret` must never round-trip through a
-    /// Live session store or any other serialisation path. This is also the
-    /// #45/#70 derive-blast-radius regression: a record containing a `Secret`
+    /// Live session store or any other serialisation path. Guards the
+    /// derive-blast-radius property: a record containing a `Secret`
     /// field must still get `Clone`/`Debug`/`==` (proved by
     /// `serde_poisons_carriers_transitively`-style coverage below).
     #[test]
@@ -3787,12 +3778,11 @@ mod tests {
         );
     }
 
-    /// derive-blast-radius regression: a record `{ apiKey : Secret, label :
+    /// derive-blast-radius: a record `{ apiKey : Secret, label :
     /// String }` must still be derivable (Clone/Debug/PartialEq) even though
     /// its `Secret` field is not serde — marking a leaf non-derivable (rather
-    /// than merely non-serde) would have made the WHOLE record lose ALL
-    /// derives (the exact #45/#70 exit-0-then-cargo-fail class the fix spec's
-    /// §1 mechanism exists to avoid).
+    /// than merely non-serde) would make the WHOLE record lose ALL
+    /// derives, an exit-0-then-cargo-fail class.
     #[test]
     fn record_containing_secret_stays_derivable() {
         let mut fields = std::collections::BTreeMap::new();
@@ -3839,7 +3829,7 @@ mod tests {
     }
 }
 
-/// Phase 6.5 (symbol-relocation persistence) — `sky_ir`-level round-trip and
+/// Symbol-relocation persistence — `sky_ir`-level round-trip and
 /// cross-process id-drift proof for whole-`Program` `serde` persistence.
 ///
 /// Complements `sky_intern`'s `Symbol`-level proof

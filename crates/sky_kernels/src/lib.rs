@@ -8,13 +8,8 @@
 //! `sky_backend_rust` is ever allowed; those crates import `sky_kernels` and a
 //! reverse edge would create a DAG cycle.
 //!
-//! # Phase A
-//!
-//! Phase A establishes the registry infrastructure while keeping every
-//! downstream crate on the legacy dual-backed path.  `sky_ir` re-exports
-//! `type KernelFn = sky_kernels::StdlibKernel` so existing call-sites compile
-//! unchanged.  Phase B threads `VarHome::Kernel(KernelId)` through the
-//! canonicaliser, retiring the parallel `(Symbol, Symbol)` table.
+//! `sky_ir` re-exports `type KernelFn = sky_kernels::StdlibKernel` so
+//! call-sites reach the enum through either crate.
 
 #![allow(clippy::module_name_repetitions)] // KernelId / KernelClass / FfiKernelId all contain "Kernel"
 #![forbid(unsafe_code)]
@@ -28,12 +23,12 @@ pub enum KernelClass {
     /// System, Random, File, Http — everything that does not belong to a
     /// specialised subsystem.
     Pure,
-    /// `Std.Db` / `Db.Decode` kernels (M5b-db / M6).
+    /// `Std.Db` / `Db.Decode` kernels.
     Db,
     /// `Sky.Http.Server` / Middleware / `RateLimit` kernels.
     Server,
-    /// `Cmd` / `Sub` / `Time.every` TEA wiring kernels (M5c, including M6
-    /// reserved pub/sub variants).
+    /// `Cmd` / `Sub` / `Time.every` TEA wiring kernels, including reserved
+    /// pub/sub variants.
     Tea,
     /// `Std.Ui` / `Std.Html` element and attribute builders.
     Ui,
@@ -45,7 +40,7 @@ pub enum KernelClass {
     Webview,
     /// `Std.Cli` / `Sky.Cli` app-entry kernel.
     Cli,
-    /// Reserved for the FFI kernel tier (Phase B+).
+    /// Reserved for the FFI kernel tier.
     Ffi,
 }
 
@@ -252,7 +247,7 @@ pub enum StdlibKernel {
     ErrorWithMessage,
     // Classification: `Error -> Bool` (kind ∈ {Timeout, Network, Unavailable}).
     ErrorIsRetryable,
-    // Modifier (backlog #85 follow-up): `ErrorDetails -> Error -> Error`
+    // Modifier: `ErrorDetails -> Error -> Error`
     // (attaches the `ErrorDetails` union to `ErrorInfo.details`).
     ErrorWithDetails,
     // ── CssSafety (Sky.Core.CssSafety — Std.Css leaf security kernels) ───
@@ -296,8 +291,7 @@ pub enum StdlibKernel {
     /// `Result.combine : List (Result e a) -> Result e (List a)`.
     ResultCombine,
     /// `Result.traverse : (a -> Result e b) -> List a -> Result e (List b)`
-    /// — one-pass map+collect; first `Err` short-circuits (#88, runtime fn
-    /// `result_traverse` pre-existed).
+    /// — one-pass map+collect; first `Err` short-circuits.
     ResultTraverse,
     /// Internal: `Result.withDefault`-style defaulting used during lowering.
     /// Qualifier `"_internal_"` — not registered in the canon `QUALIFIERS`
@@ -490,7 +484,7 @@ pub enum StdlibKernel {
     TaskPerform,
     /// `Task.lazy : (() -> Task e a) -> Task e a` — deferred task creation.
     TaskLazy,
-    // ── Task retry surface (M5a retryWith) ──────────────────────────────────
+    // ── Task retry surface (retryWith) ──────────────────────────────────────
     /// `Task.retryWith : RetryPolicy Error -> Task Error a -> Task Error a`
     /// Runs the task retrying per policy on failure.
     TaskRetryWith,
@@ -575,13 +569,13 @@ pub enum StdlibKernel {
     HttpWithBody,
     HttpWithHeader,
     /// `Http.withUrl : String -> HttpRequest -> HttpRequest` — pure builder
-    /// (Go parity, #33 §6.2).
+    /// (Go parity).
     HttpWithUrl,
     /// `Http.withFollowRedirects : Bool -> HttpRequest -> HttpRequest` —
-    /// pure builder (Go parity, #33 §6.2).
+    /// pure builder (Go parity).
     HttpWithFollowRedirects,
     /// `Http.withMaxRedirects : Int -> HttpRequest -> HttpRequest` — pure
-    /// builder (Go parity, #33 §6.2).
+    /// builder (Go parity).
     HttpWithMaxRedirects,
     // ── Db ──────────────────────────────────────────────────────────────────
     DbConnect,
@@ -626,7 +620,7 @@ pub enum StdlibKernel {
     DbDecRequired,
     DbDecOptional,
     DbDecMoney,
-    // ── TEA: Cmd / Sub / Time.every (wired M5c) ─────────────────────────────
+    // ── TEA: Cmd / Sub / Time.every ─────────────────────────────────────────
     CmdNone,
     CmdBatch,
     CmdPerform,
@@ -635,16 +629,16 @@ pub enum StdlibKernel {
     SubEvery,
     TimeEvery,
     // ── TEA: pub/sub ────────────────────────────────────────────────────────
-    /// `Cmd.publish` — wired M5e; `"publish"` registered in canon `QUALIFIERS`.
+    /// `Cmd.publish` — `"publish"` registered in canon `QUALIFIERS`.
     CmdPublish,
-    /// `Cmd.publishNoEcho` — wired M5e alongside `CmdPublish`.
+    /// `Cmd.publishNoEcho` — alongside `CmdPublish`.
     CmdPublishNoEcho,
-    /// `Sub.subscribeTopic` — wired M5d.
+    /// `Sub.subscribeTopic`.
     SubSubscribeTopic,
-    /// `PubSub.publish` — reserved for M6; absent from [`Self::ALL`] until the
+    /// `PubSub.publish` — reserved; absent from [`Self::ALL`] until the
     /// `"PubSub"` qualifier is added to the canon `QUALIFIERS` table.
     PubSubPublish,
-    /// `PubSub.publishNoEcho` — reserved for M6; absent from [`Self::ALL`].
+    /// `PubSub.publishNoEcho` — reserved; absent from [`Self::ALL`].
     PubSubPublishNoEcho,
     // ── Sky.Http.Server / Middleware / RateLimit ─────────────────────────────
     ServerGet,
@@ -731,7 +725,7 @@ pub enum StdlibKernel {
     UiPointer,
     UiClip,
     /// `Ui.clipX : Attribute msg` — `AttrOverflow "clip" "visible"` (single-axis
-    /// clip; Y stays truly visible, no `auto`-scrollbar promotion — #76).
+    /// clip; Y stays truly visible, no `auto`-scrollbar promotion).
     UiClipX,
     /// `Ui.clipY : Attribute msg` — `AttrOverflow "visible" "clip"`.
     UiClipY,
@@ -798,10 +792,10 @@ pub enum StdlibKernel {
     /// `Html.toString : Html msg -> String` — alias of `Html.render` (same
     /// runtime kernel `html_render_`), kept for API familiarity.
     HtmlToString,
-    /// `Html.styleNode : List Attr -> String -> Html msg` — arity-2, NOT the
-    /// arity-3 `HtmlNode` it was previously mis-folded into. Its dedicated
-    /// runtime kernel `html_style_node_` close-tag-neutralises the CSS body at
-    /// construction (F7).
+    /// `Html.styleNode : List Attr -> String -> Html msg` — arity-2, distinct
+    /// from the arity-3 `HtmlNode`. Its dedicated runtime kernel
+    /// `html_style_node_` close-tag-neutralises the CSS body at construction
+    /// (F7).
     HtmlStyleNode,
     HtmlDiv,
     HtmlSpan,
@@ -928,7 +922,7 @@ pub enum StdlibKernel {
     TuiApp,
     // ── Std.Webview app-entry kernel ─────────────────────────────────────
     WebviewApp,
-    // ── event-attribute builders (Phase-1a) ──────────────────────────────
+    // ── event-attribute builders ─────────────────────────────────────────
     UiOnClick,
     UiOnFocus,
     UiOnBlur,
@@ -1893,7 +1887,7 @@ impl StdlibKernel {
             Self::CryptoRandomBytes => d("Crypto", "randomBytes", 1, Pure, "crypto_random_bytes"),
             Self::CryptoRandomToken => d("Crypto", "randomToken", 1, Pure, "crypto_random_token"),
             // ── Uuid ────────────────────────────────────────────────────────
-            // `v4`/`v7` are EFFECT-tier (`() -> Task Error String`, task #54):
+            // `v4`/`v7` are EFFECT-tier (`() -> Task Error String`):
             // entropy is not a memoizable pure `String`. Arity is 1 (the unit
             // argument) so the FIRST_SCHEMED `arrow-count == decl().arity`
             // invariant holds against the `fun(Unit, task(string))` scheme.
@@ -2084,7 +2078,7 @@ impl StdlibKernel {
             Self::DbDecRequired => d("Db.Decode", "required", 3, Db, "db_decode_required"),
             Self::DbDecOptional => d("Db.Decode", "optional", 4, Db, "db_decode_optional"),
             Self::DbDecMoney => d("Db.Decode", "money", 1, Db, "db_decode_money"),
-            // ── TEA: Cmd / Sub / Time.every (wired M5c) ─────────────────────
+            // ── TEA: Cmd / Sub / Time.every ─────────────────────────────────
             Self::CmdNone => d("Cmd", "none", 0, Tea, "cmd_none"),
             Self::CmdBatch => d("Cmd", "batch", 1, Tea, "cmd_batch"),
             Self::CmdPerform => d("Cmd", "perform", 2, Tea, "cmd_perform"),
@@ -2092,7 +2086,7 @@ impl StdlibKernel {
             Self::SubBatch => d("Sub", "batch", 1, Tea, "sub_batch"),
             Self::SubEvery => d("Sub", "every", 2, Tea, "sub_every"),
             Self::TimeEvery => d("Time", "every", 2, Tea, "time_every"),
-            // ── TEA: M6 reserved pub/sub ─────────────────────────────────────
+            // ── TEA: reserved pub/sub ────────────────────────────────────────
             // Qualifier "Cmd" IS in qual_vars but "publish"/"publishNoEcho" are
             // NOT yet. Absent from ALL until wired; decl() is still exhaustive.
             Self::CmdPublish => d("Cmd", "publish", 2, Tea, "cmd_publish"),
@@ -2255,11 +2249,10 @@ impl StdlibKernel {
             Self::HtmlTitleNode => d("Html", "titleNode", 1, Ui, "html_title_node_"),
             Self::HtmlToString => d("Html", "toString", 1, Ui, "html_render_"),
             Self::HtmlStyleNode => d("Html", "styleNode", 2, Ui, "html_style_node_"),
-            // Arity corrected 3→2 / 2→1: the tag is a baked literal,
-            // not a parameter — `html_div_` etc. take (attrs, children) = 2, the
-            // void `html_input_`/`html_img_` take (attrs) = 1. Runtime fn params
-            // AND lower `callee_arity` (2/1) are the authorities; the old decl
-            // arity was an off-by-one (same class as the AEAD/Jwt 3→2 fix, #58).
+            // The tag is a baked literal, not a parameter — `html_div_` etc.
+            // take (attrs, children) = 2, the void `html_input_`/`html_img_`
+            // take (attrs) = 1. Runtime fn params AND lower `callee_arity`
+            // (2/1) are the authorities for the decl arity.
             Self::HtmlDiv => d("Html", "div", 2, Ui, "html_div_"),
             Self::HtmlSpan => d("Html", "span", 2, Ui, "html_span_"),
             Self::HtmlA => d("Html", "a", 2, Ui, "html_a_"),
@@ -2487,7 +2480,7 @@ impl StdlibKernel {
             Self::HtmlAttrTabindex => d("Attr", "tabindex", 1, Ui, "html_attr_tabindex_"),
             Self::HtmlAttrRows => d("Attr", "rows", 1, Ui, "html_attr_rows_"),
             // ── Effect stdlib modules ────────────────────────────────────
-            // Std.Cli / Sky.Cli app-entry (fully wired, Phase 1).
+            // Std.Cli / Sky.Cli app-entry.
             Self::CliProgram => d("Cli", "program", 1, KernelClass::Cli, "cli_program"),
             // Std.Auth / Sky.Auth (fail-closed: qual-registered only, no lower arm).
             Self::AuthHashPassword => d("Auth", "hashPassword", 1, Pure, "auth_hash_password"),
@@ -2856,9 +2849,9 @@ impl StdlibKernel {
     ///
     /// `PubSubPublish` / `PubSubPublishNoEcho` are in `ALL` but use a
     /// PubSub-qualifier skip in the parity-matrix tripwire (their qualifier is
-    /// not yet registered in `QUALIFIERS`).  No `Cmd.*` exclusions remain —
-    /// `CmdPublish` and `CmdPublishNoEcho` were wired in M5e alongside their
-    /// `QUALIFIERS` entries.
+    /// not yet registered in `QUALIFIERS`).  There are no `Cmd.*` exclusions:
+    /// `CmdPublish` and `CmdPublishNoEcho` carry their own `QUALIFIERS`
+    /// entries.
     pub const ALL: &'static [Self] = &[
         // Log
         Self::LogPrintln,
@@ -2961,7 +2954,7 @@ impl StdlibKernel {
         Self::BasicsMax,
         Self::BasicsCompare,
         // ── end Basics numerics ──────────────────────────────────────
-        // Error (Sky.Core.Error — minimal `Error = String` slice, #86)
+        // Error (Sky.Core.Error — minimal `Error = String` slice)
         Self::ErrorUnexpected,
         Self::ErrorInvalidInput,
         Self::ErrorIo,
@@ -2977,7 +2970,7 @@ impl StdlibKernel {
         Self::ErrorWithMessage,
         Self::ErrorIsRetryable,
         Self::ErrorWithDetails,
-        // CssSafety (Sky.Core.CssSafety — Std.Css leaf security kernels, #47)
+        // CssSafety (Sky.Core.CssSafety — Std.Css leaf security kernels)
         Self::CssSafetySafeValue,
         Self::CssSafetySafePropName,
         Self::CssSafetySafeSelector,
@@ -3148,7 +3141,7 @@ impl StdlibKernel {
         Self::JwtDecodeHs256,
         Self::JwtEncodeRs256,
         Self::JwtDecodeRs256,
-        // Jwt builder API (D-00, #152)
+        // Jwt builder API (D-00)
         Self::JwtClaims,
         Self::JwtHs256,
         Self::JwtRs256,
@@ -3294,7 +3287,7 @@ impl StdlibKernel {
         Self::SubEvery,
         Self::SubSubscribeTopic,
         Self::TimeEvery,
-        // TEA: PubSub M6 reserved (qualifier "PubSub" not yet in qual_vars →
+        // TEA: PubSub reserved (qualifier "PubSub" not yet in qual_vars →
         // tripwire skips; kept here so they appear in the registry index)
         Self::PubSubPublish,
         Self::PubSubPublishNoEcho,
@@ -3426,7 +3419,7 @@ impl StdlibKernel {
         Self::HtmlP,
         Self::HtmlInput,
         Self::HtmlImg,
-        // batch 2: Std.Html element builders (container + void).
+        // Std.Html element builders (container + void).
         Self::HtmlH1,
         Self::HtmlH2,
         Self::HtmlH3,
@@ -3520,13 +3513,11 @@ impl StdlibKernel {
         Self::HtmlAttribute,
         Self::HtmlBoolAttribute,
         Self::HtmlNoAttr,
-        // `Html.styleNode` (#46/#47 F7) — a canon `Html` qualifier member
-        // (env.rs) that was MISSING from ALL, so canon minted it with id=None and
-        // it silently rode the `Ty::Var(u32::MAX)` fallback (Task 0's ALL-iterating
-        // gate could not see it; Phase E Task 1a's wildcard-free match exposed it).
+        // `Html.styleNode` (F7) — a canon `Html` qualifier member (env.rs).
         // Registering it here gives it id=Some so its stdlib_scheme arm is
-        // consulted — without this it would regress to fail-closed once kernel_ty
-        // is deleted (Task 1c).
+        // consulted; without this it would fail closed. A canon qualifier
+        // member absent from ALL is minted with id=None and rides the
+        // `Ty::Var(u32::MAX)` fallback.
         Self::HtmlStyleNode,
         // Live
         Self::LiveApp,
@@ -3911,7 +3902,7 @@ impl StdlibKernel {
     }
 
     /// `true` when this variant belongs to the TEA (`Cmd` / `Sub` /
-    /// `Time.every`) subsystem, including M6-reserved pub/sub variants.
+    /// `Time.every`) subsystem, including reserved pub/sub variants.
     #[must_use]
     pub const fn is_tea(self) -> bool {
         matches!(
@@ -4000,7 +3991,7 @@ impl StdlibKernel {
     /// Used by `sky_lower` to detect `uses_websocket` and by the backend to add
     /// the `websocket_client` Cargo feature + `ws_client` runtime module (whose
     /// fns are gated behind that feature — unlike `Http.get`, they are NOT part
-    /// of the always-present M0 base module set).
+    /// of the always-present base module set).
     #[must_use]
     pub const fn is_websocket_client(self) -> bool {
         matches!(
@@ -4037,7 +4028,7 @@ impl StdlibKernel {
         )
     }
 
-    /// `true` when this variant belongs to the `Std.Ui` / `Std.Html` M7
+    /// `true` when this variant belongs to the `Std.Ui` / `Std.Html`
     /// subsystem.
     #[must_use]
     #[allow(clippy::too_many_lines)] // exhaustive Ui/Html kernel enumeration
@@ -4417,10 +4408,9 @@ impl StdlibKernel {
     /// (`Box<dyn Fn(..) -> .. + Send + 'static>`, which is how a generic
     /// `IrType::Fun` renders in `emit_types.rs`).
     ///
-    /// **BACKLOG #168.** The emit-site "re-wrap the payload in a
-    /// freshly-declared closure" technique
-    /// (`sky_backend_rust::emit_expr`'s `KernelFn::UiOnSubmit` /
-    /// `HtmlEventShape::Raw` / `StreamStream` arms, #162/#166) only launders a
+    /// The emit-site "re-wrap the payload in a freshly-declared closure"
+    /// technique (`sky_backend_rust::emit_expr`'s `KernelFn::UiOnSubmit` /
+    /// `HtmlEventShape::Raw` / `StreamStream` arms) only launders a
     /// MISSING `+Sync` bound when the payload is constructed INLINE at the call
     /// site (a literal `Lambda`/`FuncValue` — the box is rebuilt fresh, as
     /// source, inside the wrapper's body on every call, so it never enters the
@@ -4434,8 +4424,8 @@ impl StdlibKernel {
     ///
     /// This predicate is consulted by
     /// `sky_lower::flows_into_sync_kernel_call` (from `lower_let_pvar`,
-    /// alongside the pre-existing #164 `needs_shared_capture` nested/sibling
-    /// check) to decide whether a `let`-bound function-typed local must be
+    /// alongside the `needs_shared_capture` nested/sibling check) to decide
+    /// whether a `let`-bound function-typed local must be
     /// promoted to `Expr::SharedLambda` — emitted as
     /// `Arc<dyn Fn(..) -> .. + Send + Sync + 'static>` — even for a single,
     /// non-nested use. Unlike `needs_shared_capture`'s trigger (2+ competing
@@ -4545,7 +4535,7 @@ impl StdlibKernel {
         })
     }
 
-    /// `true` for a `#76 batch 2` Std.Html CONTAINER element builder
+    /// `true` for a Std.Html CONTAINER element builder
     /// (`h1`/`nav`/`table`/... — `List Attr -> List Html -> Html msg`). The
     /// backend emit arm routes these through `html_node_(tag, attrs, children)`
     /// with the wire tag from [`Self::html_element_tag`]. Excludes the older
@@ -4613,7 +4603,7 @@ impl StdlibKernel {
         )
     }
 
-    /// `true` for a `#76 batch 2` Std.Html VOID element builder
+    /// `true` for a Std.Html VOID element builder
     /// (`br`/`hr`/`meta`/`link`/... — `List Attr -> Html msg`, no children).
     /// The emit arm routes these through `html_node_(tag, attrs, vec![])`; the
     /// render sink self-closes any tag in its `VOID` set and drops children, so
@@ -4637,7 +4627,7 @@ impl StdlibKernel {
         )
     }
 
-    /// The wire tag name for a `#76 batch 2` Std.Html element builder
+    /// The wire tag name for a Std.Html element builder
     /// (container or void). `None` for any non-element variant. The name is the
     /// HTML tag emitted verbatim as the first `html_node_` argument.
     #[must_use]
@@ -4747,7 +4737,7 @@ impl StdlibKernel {
     }
 
     /// `true` when this variant belongs to the `Sky.Core.CssSafety` leaf
-    /// security-kernel family (the `Std.Css` backing, #47): `safe_value` /
+    /// security-kernel family (the `Std.Css` backing): `safe_value` /
     /// `safe_prop_name` / `safe_selector` / `strip_style_close_kernel`.
     ///
     /// These kernels live in `sky_runtime::css` (which glob-re-exports their
@@ -4773,19 +4763,19 @@ impl StdlibKernel {
 
 /// Opaque identifier for a user-provided FFI binding.
 ///
-/// Phase A stub — the inner `u32` has no public API.  Phase B will expose
-/// constructors tied to the FFI introspection pipeline.
+/// Stub — the inner `u32` has no public API; constructors tied to the FFI
+/// introspection pipeline are not yet exposed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct FfiKernelId(u32);
 
 /// A fully-resolved kernel function: either a known stdlib kernel (resolved
 /// at canonicalisation time) or a user-provided FFI binding (resolved during
-/// the FFI phase; Phase A stub).
+/// the FFI phase; stub).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum KernelId {
     /// A known stdlib kernel.
     Stdlib(StdlibKernel),
-    /// A user-provided FFI binding (Phase A stub).
+    /// A user-provided FFI binding (stub).
     Ffi(FfiKernelId),
 }
 
@@ -4803,7 +4793,8 @@ mod tests {
     /// A collision in `decl()` would let `stdlib_index`'s silent last-wins insert
     /// silently alias one variant onto another, making `id = Some(k)` ambiguous:
     /// the variant stored in the index would not necessarily be the one `decl()`
-    /// names, and the Phase B fast path would fire with the wrong variant.
+    /// names, and the `stdlib_index` fast path would fire with the wrong
+    /// variant.
     ///
     /// MECHANICAL: built from `ALL` + `decl()` only — no read of `stdlib_index`
     /// or any runtime state.  Fails deterministically on any transposition in

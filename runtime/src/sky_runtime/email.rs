@@ -11,8 +11,8 @@
 //! `htmlBody` / `replyTo` / `mimeType` — hence the non_snake_case allow).
 //!
 //! Networking parity with Go: Resend + SendGrid + SES (v2, SigV4) over HTTPS.
-//! SMTP is not yet ported (needs an SMTP transport crate) — it returns a clear
-//! `Err` so the surface is complete and the gap is explicit.
+//! SMTP goes through the `lettre` transport (opportunistic/required STARTTLS or
+//! implicit TLS on 465), completing the provider surface.
 //!
 //! `SKY_EMAIL_DRY_RUN=1` short-circuits every provider and returns a synthetic
 //! id — used by tests so they don't depend on third-party services.
@@ -347,9 +347,9 @@ async fn send_ses<E: From<String>>(cfg: &SesConfig, m: &EmailMessage) -> SkyResu
         );
     }
     // SES v2 simple-content (used below) cannot carry attachments — that needs the
-    // raw-MIME (Content.Raw) path. Rather than SILENTLY DROP attachments (data
-    // loss), fail loudly until the raw-MIME builder lands. Resend/SendGrid/SMTP
-    // support attachments today.
+    // raw-MIME (Content.Raw) path, which this module does not build. Rather than
+    // SILENTLY DROP attachments (data loss), fail loudly. Resend/SendGrid/SMTP
+    // support attachments.
     if !m.attachments.is_empty() {
         return SkyResult::Err(
             "email.send/Ses: attachments require the raw-MIME path, not yet supported on SES \

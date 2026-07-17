@@ -323,7 +323,7 @@ pub fn string_repeat(n: i64, s: String) -> String {
     s.repeat(n as usize)
 }
 
-// ── Missing kernels (Go-parity sweep 2026-06-15) ──────────────────────────────
+// ── Go-parity kernels ──────────────────────────────
 
 /// `String.concat : List String -> String`
 /// Concatenates a list of strings with no separator.
@@ -473,7 +473,7 @@ pub fn string_is_url(s: String) -> bool {
     // Go's url.Parse rejects ASCII control bytes (0x00–0x1F, 0x7F) anywhere in
     // the URL, but the regex host class `[^/\s?#]` only excludes `\s` whitespace
     // — an embedded NUL / ESC / other control char would otherwise pass and slip
-    // through this XSS-link gate. Reject up front. (Audit 2026-06-19,
+    // through this XSS-link gate. Reject up front. (Audit finding:
     // security-relevant validator parity.)
     if t.bytes().any(|b| b.is_ascii_control()) {
         return false;

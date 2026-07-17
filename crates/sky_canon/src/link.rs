@@ -47,7 +47,7 @@ use crate::ast;
 /// distinct Rust enums downstream (`StdPaletteColor` vs `MainColor`), so the
 /// gate keys on `(home, name)`, not `name` alone. This makes "two types with
 /// the same nominal identity in the linked program" unrepresentable while
-/// admitting same-short-name-different-module (#100).
+/// admitting same-short-name-different-module.
 pub fn link(
     entry_name: Vec<Symbol>,
     modules: Vec<ast::Module>,

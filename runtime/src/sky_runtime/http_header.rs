@@ -84,7 +84,7 @@ mod tests {
     use super::{canonical_header, origin_host_mismatch};
 
     /// Well-formed header names — byte-identical to Go's
-    /// `textproto.CanonicalMIMEHeaderKey` (oracle probed against Go 2026-07-02).
+    /// `textproto.CanonicalMIMEHeaderKey`.
     #[test]
     fn canonical_header_matches_go_canonical_mime_key() {
         for (input, want) in [

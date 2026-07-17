@@ -61,7 +61,7 @@ pub use trace::*;
 pub mod encoding;
 pub use encoding::*;
 
-// `Sky.Core.Bytes` — distinct `Vec<u8>` byte buffer (M4e).
+// `Sky.Core.Bytes` — distinct `Vec<u8>` byte buffer.
 // Divergence from Sky: Sky aliases Bytes = String; Rust maps Bytes to Vec<u8>.
 pub mod bytes;
 pub use bytes::*;
@@ -107,7 +107,7 @@ pub use tui::{tui_app, tui_app_ui};
 pub mod uuid_kernel;
 pub use uuid_kernel::*;
 
-// `Sky.Core.Secret` — opaque secret-string wrapper (backlog #44). Always
+// `Sky.Core.Secret` — opaque secret-string wrapper. Always
 // compiled (no cfg gate): a plain newtype over `String` with only `subtle` /
 // `zeroize` as deps (both non-optional base deps), so every feature subset
 // gets the type.
@@ -115,7 +115,7 @@ pub mod secret;
 pub use secret::*;
 
 // Canonical HTTP header-name casing, shared by Sky.Live, Sky.Http.Server AND
-// the outbound `http_client` response path (#33 §6.1 — `http_client` does NOT
+// the outbound `http_client` response path (`http_client` does NOT
 // imply `server`, so `server`-only gating would break an `http_client`-only
 // build). Gated on the union of its consumers; a default-features build
 // omits it (dead code otherwise). The EMITTED project's `mod.rs` declares it
@@ -177,7 +177,7 @@ pub mod css_safety;
 
 // Std.Css leaf security kernels (safe_value / safe_prop_name / safe_selector /
 // strip_style_close_kernel) — the four primitive shims the compiled-source
-// `Std.Css` funnels every free-string entry through (#47). Re-exported at the
+// `Std.Css` funnels every free-string entry through. Re-exported at the
 // crate root so the emitted `pub use sky_runtime::*` resolves the bare kernel
 // names that `naming::kernel_name` emits. Typed length/colour constructors +
 // the render fold stay pure Sky in `Std/Css.sky`.

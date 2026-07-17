@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
-//! Source AST for the Sky compiler (Milestone 0 subset). This is the raw parse
-//! tree the parser produces and name resolution (`sky_canon`) consumes. It
-//! mirrors the M0 subset of the Haskell compiler's `Sky.AST.Source`.
+//! Source AST for the Sky compiler. This is the raw parse tree the parser
+//! produces and name resolution (`sky_canon`) consumes. It mirrors the
+//! supported subset of the Haskell compiler's `Sky.AST.Source`.
 
 mod ast;
 
@@ -190,7 +190,7 @@ mod tests {
     #[test]
     fn unused_variants_construct_and_compare() -> DResult<()> {
         // PAnything, TVar are not in the golden program; exercise them so the
-        // whole M0 enum surface is covered by PartialEq.
+        // whole enum surface is covered by PartialEq.
         let anything: Pattern_ = Pattern_::PAnything;
         assert_eq!(anything, Pattern_::PAnything);
 

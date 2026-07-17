@@ -1,4 +1,4 @@
-//! `Std.Ui` → `Html<M>` render kernel — Phase 0 implementation.
+//! `Std.Ui` → `Html<M>` render kernel.
 //!
 //! This module is the ONLY place that converts a `Std.Ui` `Element<M>` tree to
 //! `sky_runtime::html::Html<M>`.  It is a runtime kernel (not compiled from Sky)
@@ -307,9 +307,9 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
             }
             Attribute::AttrAnimation(name, spec, keyframes, _respect) => {
                 // Emit animation name + spec; keyframes require a <style> block
-                // which the Phase-0 render doesn't inject (no DOM).  The `name`
-                // + `spec` provide the `animation:` property; keyframes are
-                // silently dropped for now and tracked as a Phase-1 follow-up.
+                // which this render doesn't inject (no DOM).  The `name` +
+                // `spec` provide the `animation:` property; keyframes are
+                // dropped here.
                 let _ = keyframes; // suppress unused-variable warning
                 // Gate the composed `name spec` shorthand as ONE value.
                 let shorthand = format!("{name} {spec}");
@@ -548,15 +548,14 @@ pub fn ui_layout<M: Clone>(attrs: Vec<Attribute<M>>, elem: Element<M>) -> Html<M
 /// `sky_runtime::ui::render::ui_layout_with_vecs::<M>(wrapper, root, elem)`.
 /// The two `Vec<Attribute<M>>` arguments are extracted at the **emit site**
 /// (field-extraction on the IR `Expr::Record` literal), so the cfg record struct
-/// never needs to be materialised — closing SKY-I0001 and eliminating the
-/// former silent-drop stub `ui_layout_with<M, C>` (which ignored cfg entirely).
+/// never needs to be materialised — closing SKY-I0001.
 ///
 /// # Design note (MAKE INVALID STATES UNREPRESENTABLE)
 ///
-/// The former `pub fn ui_layout_with<M: Clone, C>(_cfg: C, elem: Element<M>)`
-/// was deleted in Phase-0 unfreeze.  That function accepted any `C` and
-/// silently dropped it, producing wrong HTML (exit-0-cargo-ok-but-wrong-output).
-/// The correct impl was always here; the emit-site change wires it directly.
+/// There is deliberately no `ui_layout_with<M: Clone, C>(_cfg: C, elem)` shape:
+/// a fn accepting any `C` and silently dropping it would produce wrong HTML
+/// (exit-0-cargo-ok-but-wrong-output). The cfg's `wrapper_attrs`/`root_attrs`
+/// are extracted at the emit site and passed here explicitly.
 pub fn ui_layout_with_vecs<M: Clone>(
     wrapper_attrs: Vec<Attribute<M>>,
     root_attrs: Vec<Attribute<M>>,
@@ -790,8 +789,8 @@ mod tests {
     }
 
     /// A dangerous style KEY (contains `;` + injection payload) must be
-    /// dropped — the key was previously emitted verbatim, allowing a whole
-    /// CSS rule to be smuggled through the value gate.
+    /// dropped — an unchecked key emitted verbatim would let a whole CSS rule
+    /// be smuggled through the value gate.
     #[test]
     fn css_dangerous_key_dropped() {
         let attrs = vec![Attribute::AttrStyle(
@@ -857,7 +856,7 @@ mod tests {
         assert!(s.contains("press me"), "element text must render: {s}");
     }
 
-    // ── #76: 20-kernel wiring batch regressions ───────────────────────────────
+    // ── kernel-wiring regressions ───────────────────────────────
 
     #[test]
     fn ui_padding_each_renders_four_distinct_sides() {
@@ -1011,8 +1010,8 @@ mod tests {
     fn ui_breakpoint_delegates_to_media_query_markers() {
         // `Ui.breakpoint Ui.mobile [...] child` is upstream-defined as
         // `mediaQuery (breakpointToQuery bp) ...`; with Breakpoint = String
-        // in this port the delegation must emit the same marker pair (the
-        // pre-2026-07-11 Phase-0 passthrough stub emitted nothing).
+        // in this port the delegation must emit the same marker pair, not a
+        // passthrough that drops the query.
         let elem = super::super::helpers::ui_breakpoint_::<TestMsg>(
             super::super::helpers::ui_mobile_(),
             vec![Attribute::AttrBgColor(Color::Rgba(1, 2, 3, 1.0))],

@@ -280,7 +280,7 @@ pub enum ParseError {
     UnexpectedEof { construct: Construct },
     /// Nesting of `construct` exceeded `limit`. [SKY-P0003]
     NestingTooDeep { construct: Construct, limit: u16 },
-    /// A byte that is not a recognised M0 character. [SKY-P0010]
+    /// A byte that is not a recognised character. [SKY-P0010]
     UnknownChar(char),
     /// A lone `.` not part of `..` or a qualified name. [SKY-P0011]
     StrayDot,
@@ -428,7 +428,7 @@ pub enum NameError {
     },
 }
 
-/// Class label for the #90 T3 higher-order-kernel callback-result obligation.
+/// Class label for the higher-order-kernel callback-result obligation.
 ///
 /// `Maybe`/`Result` `map`/`map2..5`/`mapError`/`andMap` apply their callback
 /// at one exact arity, so the callback's result must not itself be a
@@ -545,9 +545,9 @@ pub enum Feature {
     /// Binary operators other than `+`/`-`. [SKY-L0101]
     BinOps,
     /// A value whose type stays fully polymorphic — the solver never pinned it
-    /// to a concrete instance, so the lowerer cannot monomorphise it (M2a emits
-    /// generic *functions*, but cannot yet represent an under-determined
-    /// polymorphic *value*). [SKY-L0102]
+    /// to a concrete instance, so the lowerer cannot monomorphise it (the
+    /// backend emits generic *functions*, but cannot yet represent an
+    /// under-determined polymorphic *value*). [SKY-L0102]
     Polymorphism,
     /// Function types in argument/return position of a value annotation. [SKY-L0103]
     HigherOrderValues,
@@ -568,13 +568,13 @@ pub enum Feature {
     /// A functional update `{ r | … }` on a record whose type is generic (a field
     /// typed by a type variable). The backend copies the base record with
     /// `.clone()`, which needs the type parameter to be `Clone`-bounded —
-    /// bounded generics are M2d, so this is a not-yet gap rather than broken
-    /// Rust. Field access + construction on generic records DO work (M2c).
+    /// bounded generics are unsupported, so this is a not-yet gap rather than
+    /// broken Rust. Field access + construction on generic records DO work.
     /// [SKY-L0111]
     BoundedRecordUpdate,
     /// A RECORD sub-pattern nested inside a constructor payload or a tuple
-    /// element (`Just { x }`, `( { x }, y )`). M3b-2 lowers nested variable /
-    /// wildcard / constructor / tuple sub-patterns, and a record pattern at the
+    /// element (`Just { x }`, `( { x }, y )`). The lowerer handles nested
+    /// variable / wildcard / constructor / tuple sub-patterns, and a record pattern at the
     /// `case` scrutinee or a `let` destructure — but a record pattern in a
     /// nested carrier needs that carrier's record type threaded to the lowerer,
     /// which lands later. The plain nested shapes (`Just (a, b)`,
@@ -586,13 +586,13 @@ pub enum Feature {
     /// literal, or list/cons pattern anywhere) — `Just ((Ok x) as w)`. The
     /// common alias shape (`(a, b) as w`, dispatch-free) is fully supported;
     /// only a dispatch-NEEDING inner is gated here, because honoring it
-    /// soundly by value would double-move a non-`Copy` payload (the exact
-    /// #99 bug) and honoring it by reference would require matching the
+    /// soundly by value would double-move a non-`Copy` payload
+    /// and honoring it by reference would require matching the
     /// whole arm by reference — a materially larger redesign. [SKY-L0128]
     AliasOverRefutablePayload,
     /// A data constructor named as a first-class function *value* — referenced
     /// bare (`map Just xs`) or partially applied (`Node l 1` for a three-field
-    /// `Node`). M3a lowers a *saturated* construction (`Just 5`, `Node l 1 r`);
+    /// `Node`). The lowerer handles a *saturated* construction (`Just 5`, `Node l 1 r`);
     /// constructor-as-function awaits the same first-class-value machinery as a
     /// partially-applied top-level function. [SKY-L0113]
     CtorAsFunction,
@@ -609,8 +609,8 @@ pub enum Feature {
     /// `case` on a tuple with MORE THAN ONE arm (needs product/literal-pattern
     /// exhaustiveness), or a tuple destructure binder (a single-arm tuple `case`
     /// or a tuple function parameter) whose element is REFUTABLE — a constructor
-    /// or literal — so the binding could fail at run time. M3b-1 supports a
-    /// single irrefutable tuple destructure (elements are variables / wildcards /
+    /// or literal — so the binding could fail at run time. The lowerer supports
+    /// a single irrefutable tuple destructure (elements are variables / wildcards /
     /// nested irrefutable tuples); the richer shapes land later. [SKY-L0115]
     TuplePatternMatch,
     /// A refutable pattern-discrimination shape the lowerer cannot yet route to
@@ -652,7 +652,7 @@ pub enum Feature {
     /// the forwarding in a named top-level function. [SKY-L0125]
     NonCloneCapture,
     /// A binding whose type embeds a function (a bare function value, or one
-    /// held inside a `Maybe`/`Result`/user-union payload — #90) was used more
+    /// held inside a `Maybe`/`Result`/user-union payload) was used more
     /// than once in a value-consuming (non-callee) position. `Box<dyn Fn>` is
     /// not `Clone`, so a second consuming use would double-move in the
     /// emitted Rust (E0382). Calling the function is unlimited (a call
@@ -713,7 +713,7 @@ pub enum ModelLeaf {
 /// Not `Copy`: [`LowerError::InadmissibleAppModel`] carries an owned field name.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum LowerError {
-    /// A feature the M0 lowerer does not implement. [SKY-L01##]
+    /// A feature the lowerer does not implement. [SKY-L01##]
     Unsupported(Feature),
     /// A `Live`/`Tui`/`Webview` app-entry Model type whose Rust rendering does
     /// not satisfy the runtime bound the entry requires (`Live` needs

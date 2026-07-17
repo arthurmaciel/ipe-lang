@@ -220,14 +220,14 @@ pub fn to_array<E: From<String>, T: Clone, const N: usize>(xs: &[T]) -> SkyResul
 // BOTH the externally-tagged repr (session-store round-trip) AND a bare value
 // (form data: `note=hello` → `Just("hello")`). `Serialize` stays derived (tagged)
 // so the session store writes `{"Just":"x"}` / `"Nothing"` and the manual
-// `Deserialize` reads those back correctly (#42).
+// `Deserialize` reads those back correctly.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub enum SkyMaybe<T> {
     Nothing,
     Just(T),
 }
 
-// Custom `Deserialize` for `SkyMaybe<T>` (#42).
+// Custom `Deserialize` for `SkyMaybe<T>`.
 //
 // Accepted input shapes:
 //   - Externally-tagged map `{"Just": v}` → `Just(T::deserialize(v))`.
@@ -235,7 +235,7 @@ pub enum SkyMaybe<T> {
 //   - Externally-tagged string `"Nothing"` (unit variant) → `Nothing`.
 //   - Bare non-null value `v` → `Just(T::deserialize(v))`.
 //     This is the form-data case: `note=hello` → the urlencoded deserialiser
-//     presents a bare string, which the tagged derive rejected (#42 bug).
+//     presents a bare string, which the tagged derive rejects.
 //   - `null` / absent (handled by `Default` + `#[serde(default)]` at the struct
 //     field level) → `Nothing`.
 //
@@ -348,7 +348,7 @@ impl<T> SkyMaybe<T> {
 // `json.Unmarshal` decoding a missing nullable field to nil. This MANUAL impl
 // (the derive would demand `T: Default`, which a `SkyMaybe<NonDefault>` field
 // cannot satisfy) lets a form-target record carrying a `Maybe X` field qualify
-// for the #37 lenient `#[serde(default)]` form-decode stamp without an E0277.
+// for the lenient `#[serde(default)]` form-decode stamp without an E0277.
 // Deliberately NOT provided for `SkyResult`: an absent `Result` has no canonical
 // zero (`Ok` vs `Err` is undecidable), so a Result-typed form field keeps the
 // strict (non-Default) emission instead — see Emitter.hs `allFieldsDefaultable`.
@@ -856,7 +856,7 @@ pub fn panic_500_body(payload: &(dyn std::any::Any + Send)) -> String {
 ///
 ///   1. `tokio::task::spawn(...)` internally uses `catch_unwind` to turn a task
 ///      panic into a `JoinError`.  The async-FFI binding bodies use this to satisfy
-///      C5 (foreign `async fn` panics → `SkyResult::Err`) — see #44.
+///      C5 (foreign `async fn` panics → `SkyResult::Err`).
 ///
 ///   2. `block_on`'s `std::thread::spawn(…).join()` catches a panicking entry
 ///      future at the OS-thread boundary and maps it to `SkyResult::Err`.
@@ -881,8 +881,7 @@ mod tests {
     use super::*;
 
     // -----------------------------------------------------------------------
-    // SkyMaybe<T> Deserialize regressions (#50)
-    // Guardian-proven correct in #42; now pinned in-tree for every T.
+    // SkyMaybe<T> Deserialize regressions — pinned in-tree for every T.
     // -----------------------------------------------------------------------
 
     // --- SkyMaybe<i64> ---
