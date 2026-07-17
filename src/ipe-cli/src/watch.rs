@@ -793,8 +793,9 @@ fn run_inner(
                         emit(opts, WatchEvent::CompileFailed { generation: g });
                     }
                     CompileOutcome::Green(emitted) => {
+                        // Watch is always a dynamic dev build — no static plan.
                         if let Err(e) =
-                            write_emitted_project(&emitted, &opts.out_dir, &opts.runtime_dir)
+                            write_emitted_project(&emitted, &opts.out_dir, &opts.runtime_dir, None)
                         {
                             eprintln!("[ipe watch] failed to write emitted project: {e}");
                             continue;
