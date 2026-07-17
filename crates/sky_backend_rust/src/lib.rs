@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! The Rust backend for the Sky compiler (Milestone 0).
+//! The Rust backend for the Sky compiler.
 //!
 //! Consumes the backend-agnostic typed [`sky_ir::Program`] and emits a Rust
 //! Cargo project. The crate is split into the fixed templates emitted for every
@@ -8,7 +8,7 @@
 //! ([`emit_types`]) and functions ([`emit_expr`]). [`naming`] holds the
 //! Sky → Rust identifier rules.
 //!
-//! The single correctness gate is byte-equality against the golden M0 program
+//! The single correctness gate is byte-equality against the golden program
 //! (`tests/golden/m0/main.rs`).
 //!
 //! The [`sky_ir`] boundary carries [`sky_intern::Symbol`]s, not strings, so the
@@ -87,7 +87,7 @@ impl<'a> RustBackend<'a> {
 
     /// Render the `Spine` tier's Rust text for `program` — the program-wide
     /// entry file content (see [`project::emit_spine`] for the full
-    /// specification). ADDITIVE Milestone-C entry point: NOT on the public
+    /// specification). ADDITIVE entry point: NOT on the public
     /// emission path ([`Backend::emit`] still produces a single file). Builds
     /// the [`EmitCtx`] the same way [`Backend::emit`] does, then delegates.
     ///
@@ -101,7 +101,7 @@ impl<'a> RustBackend<'a> {
     }
 
     /// Render one `SkyModule(home)` file's Rust text for `program` (see
-    /// [`project::emit_module_file`]). ADDITIVE Milestone-C entry point: NOT
+    /// [`project::emit_module_file`]). ADDITIVE entry point: NOT
     /// on the public emission path. Builds the [`EmitCtx`] the same way
     /// [`Backend::emit`] does, then delegates.
     ///
@@ -124,7 +124,7 @@ impl<'a> RustBackend<'a> {
     /// file-count-AGNOSTIC manifest/runtime block is shared verbatim with
     /// [`Backend::emit`]'s single-file path, so the result is byte-identical to
     /// [`Backend::emit`]'s output for the same multi-module program (design doc
-    /// §4.4/Task 16 — the `sky_db::emit_manifest` assembly seam). NOT on the
+    /// §4.4 — the `sky_db::emit_manifest` assembly seam). NOT on the
     /// single-file path; the caller ([`sky_db::emit_manifest`]) invokes it ONLY
     /// when 2+ distinct homes are present.
     ///
@@ -149,7 +149,7 @@ impl<'a> RustBackend<'a> {
 /// Every [`rust_file::RustFileId::SkyModule`] bucket [`rust_file::
 /// partition_items`] produces, `Spine` excluded (`Spine` is not a per-module
 /// home — it is the always-present entry file). This is the `home`-set
-/// quantifier Milestone D's `sky_db::program_rust_file_ids` wraps in a
+/// quantifier `sky_db::program_rust_file_ids` wraps in a
 /// tracked query (spec §4.2): a Sky-module add/delete changes this set, making
 /// "which files exist" a first-class, salsa-observable value.
 ///
@@ -215,7 +215,7 @@ pub(crate) struct RecordStruct {
     /// The struct's generic type parameters: the distinct
     /// [`IrType::Generic`] symbols appearing in [`Self::fields`], in
     /// first-occurrence field order. Empty for a monomorphic record — that path
-    /// stays byte-identical to b3.
+    /// emits no generic clause.
     ///
     /// The order is load-bearing: a parameter's Rust name (`T1`, `T2`, …) is its
     /// *position* here, exactly as for [`sky_ir::Func::type_params`], so struct
@@ -227,7 +227,7 @@ pub(crate) struct RecordStruct {
     /// against the whole-program enum-derivability fixpoint. The emitter reads
     /// this flag to choose the `CDPeq` derive set, so a record holding a first-class
     /// function / opaque wrapper can never reach the unconditional derive by
-    /// construction (#87 seal).
+    /// construction (upholds the SEAL).
     pub is_derivable: bool,
     /// `true` iff every field's type renders to a Rust type that ALSO derives
     /// `serde::Serialize` + `serde::Deserialize` (see [`sky_ir::ir_type_is_serde`]).
@@ -237,7 +237,8 @@ pub(crate) struct RecordStruct {
     /// `is_derivable` — to gate the serde derive under `uses_live`, so a
     /// `CDPeq`-but-not-serde record (a view-helper holding `Html` / `Element` /
     /// `Color` / a `UiPlain` value) in a Std.Live program never gets serde forced
-    /// onto it and therefore never exit-0-then-cargo-fails on `E0277` (#93 seal).
+    /// onto it and therefore never exit-0-then-cargo-fails on `E0277` (upholds
+    /// the SEAL).
     pub is_serde: bool,
 }
 
@@ -267,7 +268,7 @@ pub(crate) struct EmitCtx<'a> {
     /// when `uses_db` is `false`.
     pub(crate) db_driver: DbDriver,
     /// `true` when the program uses at least one TEA (`Cmd` / `Sub` /
-    /// `Time.every`) kernel introduced in M5c. When set,
+    /// `Time.every`) kernel. When set,
     /// [`crate::project::emit_program`]:
     ///
     /// * appends `pub mod tea; pub use tea::*;` to the emitted
@@ -275,7 +276,7 @@ pub(crate) struct EmitCtx<'a> {
     /// * adds `pub type SkyCmd<M> = sky_runtime::tea::SkyCmd<M>;` and
     ///   `pub type SkySub<M> = sky_runtime::tea::SkySub<M>;` to `main.rs`.
     ///
-    /// `tea.rs` is ungated (no `live` cargo feature needed for M5c); the only
+    /// `tea.rs` is ungated (no `live` cargo feature needed); the only
     /// dependency is `tokio`, which is already in the default feature set.
     pub(crate) uses_tea: bool,
     /// `true` when the program uses at least one Sky.Http.Server kernel.
@@ -303,10 +304,10 @@ pub(crate) struct EmitCtx<'a> {
     /// `true` when the program uses at least one `Std.Webview` app-entry kernel.
     /// When set, the emitted project gains the `"webview"` Cargo feature
     /// (which transitively pulls `"live"`) and the main entry is switched to
-    /// `block_on_current_thread` (G3: tao/Cocoa requires the process main thread).
+    /// `block_on_current_thread` (tao/Cocoa requires the process main thread).
     pub(crate) uses_webview: bool,
     /// `true` when the program uses at least one `Sky.Core.CssSafety` leaf
-    /// security kernel (the `Std.Css` backing, #47).  When set (independently of
+    /// security kernel (the `Std.Css` backing).  When set (independently of
     /// [`Self::uses_ui`]), [`crate::project::emit_program`] declares
     /// `css_safety` / `css` (`pub use css::*`) in the emitted
     /// `sky_runtime/mod.rs` so the bare `safe_value` / `safe_prop_name` /
@@ -326,7 +327,7 @@ pub(crate) struct EmitCtx<'a> {
     /// the `websocket_client` feature (+ `tokio-tungstenite` dep) to the emitted
     /// `Cargo.toml` and appends `pub mod ws_client; pub use ws_client::*;` to the
     /// emitted `sky_runtime/mod.rs` — the `ws_client` module is feature-gated and
-    /// NOT part of the M0 base module set.
+    /// NOT part of the base module set.
     pub(crate) uses_websocket: bool,
     /// `true` when the program uses the `Std.Email` `Email.send` kernel. When
     /// set, [`crate::project::emit_program`] appends `pub mod email; pub use
@@ -364,8 +365,9 @@ pub(crate) struct EmitCtx<'a> {
     /// whole-program fixpoint at [`EmitCtx::build`]: an enum is non-derivable iff
     /// some variant payload reaches a non-derivable leaf (a function, an opaque
     /// wrapper, or another non-derivable enum). Read by the emitter to gate the
-    /// derive set on user enums and on record structs (#87 seal). Whole-program
-    /// (all modules) so cross-module `IrType::Enum` references resolve soundly.
+    /// derive set on user enums and on record structs (upholds the SEAL).
+    /// Whole-program (all modules) so cross-module `IrType::Enum` references
+    /// resolve soundly.
     enum_derivable: BTreeMap<(ModPath, Symbol), bool>,
     /// Enum type symbol → whether that user enum's rendered Rust type derives
     /// `serde::Serialize` **and** `serde::de::DeserializeOwned`. Computed by a
@@ -373,8 +375,8 @@ pub(crate) struct EmitCtx<'a> {
     /// enum is non-serde iff some variant payload reaches a non-serde leaf (the
     /// non-derivable set PLUS the `Clone`-only UI value/carrier types, per
     /// [`sky_ir::ir_type_is_serde`]). Read by the Sky.Live app-entry Model gate
-    /// (#91 seal). Whole-program so cross-module `IrType::Enum` references
-    /// resolve soundly.
+    /// (upholds the SEAL). Whole-program so cross-module `IrType::Enum`
+    /// references resolve soundly.
     enum_serde: BTreeMap<(ModPath, Symbol), bool>,
     /// Function id → Rust function name (e.g. `update` → `main_update`).
     func_names: BTreeMap<FuncId, String>,
@@ -437,7 +439,7 @@ impl<'a> EmitCtx<'a> {
                 };
                 // A type's nominal identity is `(home, name)`. Two modules each
                 // declaring `type Color` share the bare `name` `Symbol` but differ
-                // in `home`, so they no longer collide — each keys a distinct Rust
+                // in `home`, so they do not collide — each keys a distinct Rust
                 // enum. A genuine duplicate `(home, name)` (the SAME type
                 // declared twice) is caught upstream by the link-level gate; this
                 // stays as a fail-closed defence-in-depth backstop (SKY-I0202).
@@ -898,8 +900,8 @@ impl<'a> EmitCtx<'a> {
     /// that coincidentally camel-case to the same base) collides with an
     /// enum name, a function name, or a caller-supplied `mod_ident`.
     ///
-    /// **Why this check exists (independent-review finding, Phase 5 design
-    /// doc §2.2/Task 3).** `RecordStruct` and `EnumDef` both render as Rust
+    /// **Why this check exists (design doc §2.2).** `RecordStruct` and
+    /// `EnumDef` both render as Rust
     /// `struct`/`enum` items and share Rust's TYPE namespace (`mod` items
     /// share it too — the same namespace `mod_ident`'s collision gate
     /// polices). Today's single-file backend never cross-checks a record
@@ -946,9 +948,9 @@ impl<'a> EmitCtx<'a> {
     }
 
     /// Render a record TYPE at a USE SITE to its Rust spelling, keyed by its
-    /// field-name set: the bare struct name for a monomorphic shape (`RecXY`,
-    /// byte-identical to b3), or the struct instantiated at concrete type
-    /// arguments for a generic shape (`RecValue<i64>`, M2c).
+    /// field-name set: the bare struct name for a monomorphic shape (`RecXY`),
+    /// or the struct instantiated at concrete type
+    /// arguments for a generic shape (`RecValue<i64>`).
     ///
     /// `generics` is the enclosing function's generic scope: a use-site field
     /// type may itself be an [`IrType::Generic`] (a parametric signature passing
@@ -969,7 +971,7 @@ impl<'a> EmitCtx<'a> {
         key.sort();
         let rec = self.record_struct_by_key(&key)?;
         if rec.type_params.is_empty() {
-            // Monomorphic shape: the bare struct name, byte-identical to b3.
+            // Monomorphic shape: the bare struct name.
             return Ok(rec.name.clone());
         }
         // Generic shape: match the use-site field types against the struct's
@@ -1183,8 +1185,8 @@ impl<'a> EmitCtx<'a> {
             // `Order`/`SkyOrder`). Constructor emission: `SkyErrorKind::Io` /
             // `::Network` / etc.
             Some("ErrorKind") => Some("SkyErrorKind"),
-            // `ErrorDetails` is backed by `SkyErrorDetails` (backlog #85
-            // follow-up). Constructor names match Sky source verbatim:
+            // `ErrorDetails` is backed by `SkyErrorDetails`. Constructor names
+            // match Sky source verbatim:
             // `FfiPanic` / `TypeMismatch` / `HttpStatus` / `JsonDecode` /
             // `Custom`.
             Some("ErrorDetails") => Some("SkyErrorDetails"),
@@ -1227,7 +1229,7 @@ impl<'a> EmitCtx<'a> {
 /// One set can legitimately carry several entries — a generic template
 /// (`{ value : a }`) plus concrete instantiations (`{ value : Int }`). The later
 /// [`canonicalise_shape`] pass reconciles them into one struct. Storing every
-/// distinct occurrence (rather than rejecting the second) is what makes M2c's
+/// distinct occurrence (rather than rejecting the second) is what makes the
 /// generic-plus-concrete merge representable.
 fn collect_record_shapes(
     interner: &Interner,
@@ -1309,7 +1311,7 @@ fn collect_record_shapes(
         | IrType::Json
         // The opaque Db connection pool handle carries no record shape.
         | IrType::Db
-        // M6 opaque server types carry no record shapes of their own.
+        // Opaque server types carry no record shapes of their own.
         | IrType::ServerRequest
         | IrType::ServerResponse
         | IrType::ServerRoute
@@ -1453,7 +1455,7 @@ fn type_reaches_enum(
         // `Db` is a pointer-sized opaque handle (connection pool Arc); it cannot
         // participate in an infinite-size cycle.
         | IrType::Db
-        // M6 opaque server types are pointer-sized — they cannot be part of an
+        // Opaque server types are pointer-sized — they cannot be part of an
         // infinite-size cycle.
         | IrType::ServerRequest
         | IrType::ServerResponse
@@ -1542,7 +1544,7 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::Json
         // `Db` is an opaque monomorphic handle — no generic parameters.
         | IrType::Db
-        // M6 opaque server types are monomorphic — no generic parameters.
+        // Opaque server types are monomorphic — no generic parameters.
         | IrType::ServerRequest
         | IrType::ServerResponse
         | IrType::ServerRoute
@@ -1649,7 +1651,7 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::Json
         // `Db` is monomorphic — no generic parameters to collect.
         | IrType::Db
-        // M6 opaque server types are monomorphic.
+        // Opaque server types are monomorphic.
         | IrType::ServerRequest
         | IrType::ServerResponse
         | IrType::ServerRoute
@@ -1959,7 +1961,7 @@ fn match_template(
         // `Db` is a monomorphic opaque handle; its template and concrete forms
         // must be identical (both `IrType::Db`).
         | IrType::Db
-        // M6 opaque server types are monomorphic leaf types.
+        // Opaque server types are monomorphic leaf types.
         | IrType::ServerRequest
         | IrType::ServerResponse
         | IrType::ServerRoute
@@ -2029,9 +2031,9 @@ fn match_template(
 /// and its generic parameter list.
 ///
 /// * No occurrence carries a type variable → a MONOMORPHIC struct (empty
-///   parameter list). All occurrences must be identical, exactly as b3 required;
-///   a second, differing concrete shape is the same "two types for one field
-///   set" upstream-contract violation b3 rejected (SKY-I0204).
+///   parameter list). All occurrences must be identical; a second, differing
+///   concrete shape is a "two types for one field set" upstream-contract
+///   violation, rejected as SKY-I0204.
 /// * At least one occurrence is generic → a GENERIC struct. Every generic
 ///   occurrence must be alpha-equivalent (same [`skeleton_key`]); the first is
 ///   the canonical template, whose generic symbols name the parameters in
@@ -2052,7 +2054,7 @@ fn canonicalise_shape(key: &[String], occurrences: &[RecordFields]) -> DResult<C
     let template = occurrences.iter().find(|f| is_generic(f));
 
     let Some(template) = template else {
-        // All-concrete: b3 contract — exactly one shape per field set.
+        // All-concrete: exactly one shape per field set.
         for other in occurrences.iter().skip(1) {
             if other != first {
                 return Err(Diagnostic::CompilerBug {
@@ -2160,12 +2162,11 @@ mod record_struct_namespace_tests {
 
     use super::*;
 
-    /// Task 3 (independent-review finding): a record shape whose synthesised
-    /// name collides with a user enum's Rust name must fail closed, not
-    /// silently coexist (today's single-file backend never cross-checks
-    /// `RecordStruct` names against `enum_names`/`func_names` — a
-    /// pre-existing gap that only manifests once file-splitting lets a local
-    /// declaration silently shadow a glob-reexported one).
+    /// A record shape whose synthesised name collides with a user enum's Rust
+    /// name must fail closed, not silently coexist (today's single-file backend
+    /// never cross-checks `RecordStruct` names against `enum_names`/`func_names`
+    /// — a gap that only manifests once file-splitting lets a local declaration
+    /// silently shadow a glob-reexported one).
     ///
     /// `naming::enum_name(&["Rec"], "XY")` folds to `"RecXY"` — module home
     /// `["Rec"]`, type name `"XY"`. Separately, a record literal with fields

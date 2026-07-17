@@ -1,4 +1,4 @@
-//! Hardening regression tests for the M0 Rust backend (task E5).
+//! Hardening regression tests for the Rust backend.
 //!
 //! These exercise the failure-fast and identifier-safety guards that sit
 //! *around* the byte-identical golden emission:

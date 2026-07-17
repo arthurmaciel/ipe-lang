@@ -1,5 +1,5 @@
 //! Model-admissibility gate for `Std.Live` / `Std.Tui` / `Std.Webview`
-//! app-entry kernels (#91 seal).
+//! app-entry kernels.
 //!
 //! The app entry threads a **Model** state type through `init` / `update` /
 //! `view`. Each runtime entry bounds that Model:
@@ -34,14 +34,15 @@ use crate::EmitCtx;
 ///
 /// Returns `None` for any other expression shape (a `Var` referencing a
 /// let-bound local, a partial application, …) — the documented fail-open
-/// residual of the #91/#95 gates. Callers treat `None` as "cannot prove
+/// residual of the admissibility gates. Callers treat `None` as "cannot prove
 /// inadmissible" and skip; see `docs/adr/0022-seal-gates-msg-admissibility-and-lambda-view.md` §3.3.
 ///
-/// This is the SHARED recovery primitive for (a) the #91 Model gate, (b) the
-/// lambda-`view` fix (a lambda `view` previously returned `None` here and
-/// silently skipped the gate), and (c) #108's routed-vs-non-routed emit branch
-/// (`emit_live::routed_page_field`), keeping the type-tier `RoutedLiveCheck`
-/// and the emit-tier detection in agreement on lambda-shaped cfg fields.
+/// This is the SHARED recovery primitive for (a) the Model gate, (b) the
+/// lambda-`view` path (a lambda `view` returns its Model here rather than
+/// `None`, so it is not silently skipped), and (c) the routed-vs-non-routed
+/// emit branch (`emit_live::routed_page_field`), keeping the type-tier
+/// `RoutedLiveCheck` and the emit-tier detection in agreement on lambda-shaped
+/// cfg fields.
 #[must_use]
 pub fn fn_param_ty(e: &Expr, idx: usize) -> Option<&IrType> {
     match e {
@@ -59,7 +60,7 @@ pub fn fn_param_ty(e: &Expr, idx: usize) -> Option<&IrType> {
 /// `view : Model -> Html Msg` (Live/Webview) / `Model -> Element Msg` (Tui) is
 /// either a named function reference ([`Expr::FuncValue`]) or an inline lambda
 /// ([`Expr::Lambda`]); the Model is the first parameter type in both shapes
-/// (see [`fn_param_ty`] — the #95 fix made this Lambda-aware).
+/// (see [`fn_param_ty`], which is Lambda-aware).
 ///
 /// Returns `None` when the Model type cannot be recovered structurally (the
 /// field is neither a function reference nor a lambda). Callers treat `None`

@@ -1,7 +1,7 @@
-//! Type emission (M0 subset): user enums and their `SkyStringify` impls, plus
+//! Type emission: user enums and their `SkyStringify` impls, plus
 //! IR-type → Rust-type rendering.
 //!
-//! Ports the M0-relevant arms of `Sky/Generate/Rust/Builder/TypeEmitter.hs`
+//! Ports the relevant arms of `Sky/Generate/Rust/Builder/TypeEmitter.hs`
 //! (`unionToRustTypeDef`) and `Emitter.hs` (`typeDefToString` / the enum
 //! `skyStringifyEnumImpl`). The byte target is golden `main.rs` lines 31–43.
 
@@ -22,10 +22,9 @@ use crate::{EmitCtx, RecordStruct};
 /// monomorphic functions and for program-level emission (enums, record structs),
 /// where no generic is in scope.
 ///
-/// Phase-1a: the `enclosing_ui_msg` field and `with_ui_msg`/`enclosing_ui_msg()`
-/// methods that used to thread the enclosing function's `Html<M>` return type down
-/// to `UiLayout`/`UiLayoutWith` have been removed.  M is now inferred bottom-up
-/// from the concrete element/attrs types sourced from `SolvedTypes.regions`.
+/// For `UiLayout`/`UiLayoutWith`, M is inferred bottom-up from the concrete
+/// element/attrs types sourced from `SolvedTypes.regions`, not threaded down
+/// from the enclosing function's `Html<M>` return type.
 ///
 /// The type is [`Copy`], so it is threaded by value through the emitters.
 #[derive(Clone, Copy)]
@@ -121,8 +120,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
             }
             let base = ctx.enum_name(home, *name)?.to_owned();
             if args.is_empty() {
-                // A non-generic enum renders as the bare Rust type name —
-                // byte-identical to the M0 backend.
+                // A non-generic enum renders as the bare Rust type name.
                 base
             } else {
                 let mut parts = Vec::with_capacity(args.len());
@@ -189,7 +187,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // `pub type SkySub<M> = sky_runtime::tea::SkySub<M>`.
         IrType::Cmd(inner) => format!("SkyCmd<{}>", render_type(ctx, inner, generics)?),
         IrType::Sub(inner) => format!("SkySub<{}>", render_type(ctx, inner, generics)?),
-        // M6 opaque server types — render to their sky_runtime names directly.
+        // Opaque server types — render to their sky_runtime names directly.
         IrType::ServerRequest => "ServerRequest".to_owned(),
         IrType::ServerResponse => "ServerResponse".to_owned(),
         IrType::ServerRoute => "ServerRoute".to_owned(),
@@ -253,7 +251,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // (`live/route.rs`), so the page argument MUST be rendered: a bare
         // `Route` is an E0107 cargo failure in every rendered position — the
         // empty `routes = []` literal's `Vec::<…>::new()` turbofish and any
-        // let-bound route table's fn signature (#108 round 4, hole 1).
+        // let-bound route table's fn signature.
         IrType::LiveRoute(page) => format!(
             "sky_runtime::live::route::Route<{}>",
             render_type(ctx, page, generics)?
@@ -337,7 +335,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
                 parts.join(", ")
             )
         }
-        // #164 (`f7_succeed_curried`): a curried chain of ONE-SHOT closures,
+        // `f7_succeed_curried`: a curried chain of ONE-SHOT closures,
         // one `Box<dyn FnOnce>` level per parameter — distinct from `Fun`'s
         // flattened, re-callable `Box<dyn Fn(T0, T1, ...) -> R>`. Rendered
         // from the INSIDE out: the last parameter's box wraps the bare
@@ -351,8 +349,8 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::FnOnceChain(params, ret) => render_fn_once_chain(ctx, params, ret, generics)?,
         // A generic type variable renders as the function's corresponding Rust
         // generic (`T1`, `T2`, …), resolved by position in the quantification
-        // scope. No trait bound is emitted — M2a covers only parametric
-        // pass-through; constrained variables are rejected upstream.
+        // scope. No trait bound is emitted — only parametric pass-through is
+        // supported here; constrained variables are rejected upstream.
         IrType::Generic(sym) => generics.rust_name(*sym)?,
     })
 }
@@ -401,7 +399,7 @@ fn render_fn_once_chain(
 /// Emit an enum and its derived `SkyStringify` impl, including the trailing
 /// newline.
 ///
-/// A nullary-only, non-generic enum (the M0 case) emits byte-identically to the
+/// A nullary-only, non-generic enum emits byte-identically to the
 /// golden:
 /// ```text
 /// #[derive(Clone, Debug, PartialEq)]
@@ -457,7 +455,7 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
     }
     let name = ctx.enum_name(&def.home, def.name)?.to_owned();
     // The enum's own generic scope: each type parameter → `T1`, `T2`, … by
-    // position. Empty for a non-generic enum (byte-identical to M0).
+    // position. Empty for a non-generic enum.
     let scope = GenericScope::new(&def.type_params);
 
     let mut variant_lines = Vec::with_capacity(def.variants.len());
@@ -524,7 +522,7 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
 
     // Generic clauses: `<T1, T2>` on the enum, `<T1: SkyStringify + Debug, …>` on
     // the impl, `<T1, T2>` on the impl's `for` type. All empty when the enum is
-    // non-generic, so that path stays byte-identical to M0.
+    // non-generic, so that path emits no generic clause.
     let params: Vec<String> = (1..=def.type_params.len())
         .map(|i| format!("T{i}"))
         .collect();
@@ -557,7 +555,7 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
     // still gets its `#[derive(Clone, Debug, PartialEq)]` (self_derivable), just
     // without serde, so it stays cargo-buildable. `enum_is_serde ⇒ enum_is_derivable`
     // (the serde fixpoint is a demotion of the derivable one), so serde is never
-    // added without CDPeq. #91's app-entry Model gate independently rejects a
+    // added without CDPeq. The app-entry Model gate independently rejects a
     // NON-serde type used AS a Live/Tui/Webview Model; this gate covers every OTHER
     // (non-Model) emitted type in a Live program.
     let self_serde = ctx.enum_is_serde(&def.home, def.name);
@@ -612,7 +610,7 @@ impl{impl_bounds} SkyStringify for {name}{use_clause} {{
 /// renders through the runtime's total autoref `Wrap(..).dispatch()` shim, which
 /// never fails to resolve a method regardless of the field type.
 ///
-/// A GENERIC record shape (M2c — a field typed by a type variable) gains a
+/// A GENERIC record shape (a field typed by a type variable) gains a
 /// generic clause on both the struct and its impl. Shape (for `{ value : a }`):
 /// ```text
 /// #[derive(Clone, Debug, PartialEq)]
@@ -629,11 +627,11 @@ impl{impl_bounds} SkyStringify for {name}{use_clause} {{
 /// always-available fallback). `std::fmt::Debug` is spelled in full — the
 /// emitted crate's `pub use sky_runtime::*` shadows the `core` crate with the
 /// runtime's `core` module, so `core::fmt` would not resolve. A monomorphic
-/// record emits an empty clause, so that path is byte-identical to b3.
+/// record emits an empty clause.
 pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> {
     let name = &rec.name;
     // The struct's own generic scope: each parameter symbol → `T1`, `T2`, … by
-    // position. Empty for a monomorphic record (byte-identical to b3).
+    // position. Empty for a monomorphic record.
     let scope = GenericScope::new(&rec.type_params);
     let mut field_lines = Vec::with_capacity(rec.fields.len());
     let mut show_args = Vec::with_capacity(rec.fields.len());
@@ -697,7 +695,7 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
     // `serde::Serialize` / `Deserialize`, which would be an exit-0-then-cargo-fail
     // (E0277: `Html<Msg>: Serialize` unsatisfied). `is_serde ⇒ is_derivable`
     // (serde-OK leaves ⊂ derivable leaves), so serde is never added without CDPeq.
-    // #91's app-entry Model gate independently rejects a non-serde type used AS a
+    // The app-entry Model gate independently rejects a non-serde type used AS a
     // Live/Tui/Webview Model; this gate covers every OTHER (non-Model) record.
     let serde_derives = if rec.is_serde && ctx.uses_live {
         ", serde::Serialize, serde::Deserialize"

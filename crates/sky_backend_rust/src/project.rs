@@ -28,23 +28,24 @@ use crate::preamble::{epilogue, preamble};
 use crate::rust_file;
 use crate::rust_file::{Partitioned, RustFileId, partition_items};
 
-/// The golden M0 program, embedded at compile time. The fixed runtime-bindings
+/// The golden program, embedded at compile time. The fixed runtime-bindings
 /// block (kernel wrappers, golden lines 45–127) is an exact substring of it.
 const GOLDEN: &str = include_str!("../../../tests/golden/m0/main.rs");
 
-/// The project `Cargo.toml`, embedded verbatim from the golden. M0 emits the
-/// same manifest for every program (dependency set is fixed by the runtime).
+/// The project `Cargo.toml`, embedded verbatim from the golden. The backend
+/// emits the same manifest for every program (dependency set is fixed by the
+/// runtime).
 const CARGO_TOML: &str = include_str!("../../../tests/golden/m0/Cargo.toml");
 
 /// The generated `sky_runtime/mod.rs` — the curated set of runtime modules whose
 /// dependencies are satisfied by [`CARGO_TOML`]. The vendored runtime source
 /// ships a fuller `mod.rs` (declaring `uuid` / `live` / `db` / … modules that
-/// pull crates outside the M0 manifest); the driver overwrites it with this
-/// trimmed version. M0 emits a fixed module set; later milestones compute it
-/// from the kernels a program actually uses.
+/// pull crates outside the base manifest); the driver overwrites it with this
+/// trimmed version. The backend emits a fixed base module set, then appends the
+/// modules a program's kernels require.
 const RUNTIME_MOD_RS: &str = include_str!("../../../tests/golden/m0/sky_runtime/mod.rs");
 
-/// The generated `sky_runtime/config.rs` (DB/config bindings — empty for M0).
+/// The generated `sky_runtime/config.rs` (DB/config bindings — empty by default).
 const RUNTIME_CONFIG_RS: &str = include_str!("../../../tests/golden/m0/sky_runtime/config.rs");
 
 // ── db-enabled manifest fragments ──────────────────────────────────
@@ -61,8 +62,8 @@ const RUNTIME_MOD_RS_DB_APPEND: &str = "pub mod db;\npub use db::*;\npub mod tel
 /// Lines appended to `sky_runtime/mod.rs` when the program uses TEA kernels
 /// (`Cmd.none / batch / perform`, `Sub.none / batch / every`, `Time.every`).
 ///
-/// `tea.rs` lives in the runtime source tree (ungated — no cargo feature needed
-/// for M5c); this addition makes `cmd_none` / `sub_every` / … available in the
+/// `tea.rs` lives in the runtime source tree (ungated — no cargo feature
+/// needed); this addition makes `cmd_none` / `sub_every` / … available in the
 /// emitted `main.rs` namespace via `pub use sky_runtime::*`.
 const RUNTIME_MOD_RS_TEA_APPEND: &str = "pub mod tea;\npub use tea::*;\n";
 
@@ -82,14 +83,11 @@ const RUNTIME_MOD_RS_SERVER_APPEND: &str = "pub mod server;\npub use server::*;\
 
 // ── Shared transitive dep: http_header ──────────────────────────────────────
 //
-// `http_header.rs` (a dependency-free leaf exposing `canonical_header`) used
-// to be a CONDITIONAL append here, guarded on
-// `uses_server || uses_live || uses_webview` — it was referenced only by
-// `server.rs` and `live/req.rs`. Since #33 §6.1 the outbound `http_client.rs`
-// response path (part of the M0 BASE module set) also calls it, so it moved
-// into the base `mod.rs` (`tests/golden/m0/sky_runtime/mod.rs`) and the
-// conditional append was removed — re-adding one would emit a duplicate
-// `pub mod http_header;` (E0428) for server/live programs.
+// `http_header.rs` (a dependency-free leaf exposing `canonical_header`) is part
+// of the base `mod.rs` (`tests/golden/m0/sky_runtime/mod.rs`), because the
+// outbound `http_client.rs` response path always calls it. It must NOT be
+// conditionally appended here — a conditional `pub mod http_header;` would
+// duplicate the base declaration (E0428) for server/live programs.
 
 // ── Std.Auth ──────────────────────────────────────────────────────────
 
@@ -113,7 +111,7 @@ const RUNTIME_MOD_RS_AUTH_APPEND: &str = "pub mod auth;\npub use auth::*;\n";
 /// generated `main.rs` can call `web_socket_connect` / `web_socket_send` / … and
 /// the `sub_subscribe_ws_*` subscription fns via `pub use sky_runtime::*`.
 ///
-/// `ssrf.rs` (`ws_client`'s SSRF validators) is already part of the M0 base
+/// `ssrf.rs` (`ws_client`'s SSRF validators) is already part of the base
 /// `mod.rs` (the always-present `http_client` module also needs it), so no
 /// `ssrf` append is required here. `tea.rs` (whose `SkySub<M>` the
 /// `sub_subscribe_ws_*` fns return) is force-appended alongside this in
@@ -158,7 +156,7 @@ const RUNTIME_MOD_RS_UI_APPEND: &str = "pub mod html;\npub use html::*;\npub mod
 
 /// Lines appended to `sky_runtime/mod.rs` when the program uses the `Std.Css`
 /// leaf security kernels (`Sky.Core.CssSafety.safeValue` / `safePropName` /
-/// `safeSelector` / `stripStyleClose`, #47) — OR any `Std.Ui` / `Std.Html`
+/// `safeSelector` / `stripStyleClose`) — OR any `Std.Ui` / `Std.Html`
 /// render kernel (whose runtime modules import `css_safety` at the top level).
 ///
 /// `css_safety.rs` is a dependency-free, audited leaf; `css.rs` (the four
@@ -176,7 +174,7 @@ const RUNTIME_MOD_RS_UI_APPEND: &str = "pub mod html;\npub use html::*;\npub mod
 /// (`E0428`).
 const RUNTIME_MOD_RS_CSS_APPEND: &str = "pub mod css_safety;\npub mod css;\npub use css::*;\n";
 
-// ── Phase-1c: Std.Tui / Sky.Tui ─────────────────────────────────────────────
+// ── Std.Tui / Sky.Tui ───────────────────────────────────────────────────────
 
 /// Lines appended to `sky_runtime/mod.rs` when the program uses Std.Tui /
 /// Sky.Tui app-entry kernels.
@@ -194,7 +192,7 @@ const RUNTIME_MOD_RS_CSS_APPEND: &str = "pub mod css_safety;\npub mod css;\npub 
 const RUNTIME_MOD_RS_TUI_APPEND: &str = "#[cfg(feature = \"tui\")]\npub mod tui;\n\
      #[cfg(feature = \"tui\")]\npub use tui::{tui_app, tui_app_ui};\n";
 
-// ── Phase-1d: Std.Webview / Sky.Webview ─────────────────────────────────────
+// ── Std.Webview / Sky.Webview ───────────────────────────────────────────────
 
 /// Lines appended to `sky_runtime/mod.rs` when the program uses Std.Webview /
 /// Sky.Webview app-entry kernels.
@@ -212,7 +210,7 @@ const RUNTIME_MOD_RS_TUI_APPEND: &str = "#[cfg(feature = \"tui\")]\npub mod tui;
 const RUNTIME_MOD_RS_WEBVIEW_APPEND: &str = "#[cfg(feature = \"webview\")]\npub mod webview;\n\
      #[cfg(feature = \"webview\")]\npub use webview::{webview_app, WebviewWindowCfg};\n";
 
-// ── Phase-1b: Std.Live / Sky.Live ───────────────────────────────────────────
+// ── Std.Live / Sky.Live ─────────────────────────────────────────────────────
 
 /// Lines appended to `sky_runtime/mod.rs` when the program uses Std.Live /
 /// Sky.Live app-entry kernels.
@@ -254,7 +252,7 @@ const TEA_TYPE_ALIASES: &str = "pub type SkyCmd<M> = sky_runtime::tea::SkyCmd<M>
 /// `SkyError` so call sites in user function bodies compile without requiring
 /// a turbofish annotation.
 ///
-/// backlog #44: `auth_sign_token` / `auth_verify_token` take a Sky-typed
+/// `auth_sign_token` / `auth_verify_token` take a Sky-typed
 /// `sky_runtime::secret::Secret` (not `String`) at this boundary — "secrets
 /// are typed, never `fmt`-stringified" (`PRINCIPLES.md`). The wrapper reveals
 /// it via `sky_runtime::secret::secret_reveal` immediately before delegating
@@ -306,7 +304,7 @@ pub fn auth_set_role(conn: Db, user_id: i64, role: String) -> SkyTask<()> {\n   
 ";
 
 /// The `sky_runtime/config.rs` emitted for db-enabled programs targeting
-/// `SQLite` (the default driver). Replaces the no-op M0 stub with the `SQLite`
+/// `SQLite` (the default driver). Replaces the no-op default stub with the `SQLite`
 /// type aliases + helper fns the `db.rs` module requires. Mirrors
 /// `runtime/src/sky_runtime/config.rs` verbatim, keeping the
 /// `#[cfg(feature = "db")]` / `#[cfg(not(feature = "db"))]` guards so a
@@ -357,7 +355,7 @@ fn bucket_or_bug<'p>(
 /// functions (golden lines 45–127).
 ///
 /// These bindings (`SkyError`, the `log_*` / `system_*` / `time_*` / … wrappers)
-/// are identical for every M0 program, so they are sliced out of the embedded
+/// are identical for every program, so they are sliced out of the embedded
 /// golden rather than hand-retyped — the same drift-free strategy the
 /// preamble/epilogue use. The slice is anchored entirely on its *own* content
 /// (the first alias and the final `http_parse_query` wrapper), independent of
@@ -381,7 +379,7 @@ fn runtime_bindings() -> DResult<&'static str> {
 /// Emit the complete project for `program`.
 #[allow(clippy::too_many_lines)]
 pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject> {
-    // Partition every user item by the Rust file it belongs in (Task 4). The
+    // Partition every user item by the Rust file it belongs in. The
     // number of DISTINCT `RustFileId::SkyModule` buckets — NEVER counting the
     // always-possible `Spine` bucket (§3.3: "counts `SkyModule` buckets only,
     // never `Spine`") — is the trigger for the real per-module split:
@@ -410,7 +408,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         }
     }
 
-    // Task 3 (design doc §2.2/independent-review finding): fail closed if a
+    // (design doc §2.2): fail closed if a
     // synthesised record struct's name collides with a user enum's name, a
     // function name, or a `mod_ident`. In the single-file collapse case no
     // `mod` declarations are written, so the honest set is empty; in the real
@@ -492,14 +490,11 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
     } else {
         // ── The Spine-collapse invariant (§3.3) ──────────────────────────────
         // Exactly ONE distinct `SkyModule` bucket (or none): inline that one
-        // module's types/funcs into a single `src/main.rs`, byte-for-byte
-        // identical to the pre-Milestone-C output. THIS BRANCH IS
-        // LOAD-BEARING — every existing single-module golden must stay
-        // byte-identical (§5 Task 13's zero-blast-radius gate). It reproduces
-        // the exact inline layout of the pre-split code: preamble, user types
-        // (via `type_order`), Spine enums, record structs, DB-projection
-        // impls, kernel-wrapper prelude, user funcs (via `func_order`),
-        // epilogue, G3.
+        // module's types/funcs into a single `src/main.rs`. THIS BRANCH IS
+        // LOAD-BEARING — every single-module golden must stay byte-identical to
+        // this inline layout: preamble, user types (via `type_order`), Spine
+        // enums, record structs, DB-projection impls, kernel-wrapper prelude,
+        // user funcs (via `func_order`), epilogue, G3.
         let Partitioned {
             buckets,
             type_order,
@@ -608,7 +603,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
 /// — appending the manifest (`Cargo.toml`) and the trimmed runtime module
 /// files (`sky_runtime/mod.rs` + `config.rs`).
 ///
-/// **Factored out of [`emit_program`] (design doc §4.4/Task 16).** This block
+/// **Factored out of [`emit_program`] (design doc §4.4).** This block
 /// is file-count-agnostic — it depends ONLY on `ctx`'s used-kernel flags, never
 /// on how many Rust source files `rust_sources` carries — so the salsa
 /// `emit_manifest` query (`sky_db`) reuses it verbatim after assembling
@@ -630,8 +625,8 @@ fn assemble_project_files(
     // So we only need to emit the files that differ from the raw source tree:
     //
     //   • `mod.rs` — trimmed to the kernel set the program uses (non-db path
-    //     keeps the M0 default; db path appends `pub mod db; pub use db::*;`).
-    //   • `config.rs` — the M0 stub for non-db; the full db-type-alias file
+    //     keeps the default; db path appends `pub mod db; pub use db::*;`).
+    //   • `config.rs` — the stub for non-db; the full db-type-alias file
     //     for db programs (provides `DbPool`, `DbRow`, `SKY_DB_URL`, …).
     //   • `Cargo.toml` — adds `db` to default features + `sqlx` dep for db.
     // Build the manifest + runtime module selection based on which kernel groups
@@ -648,7 +643,7 @@ fn assemble_project_files(
         (CARGO_TOML.to_owned(), RUNTIME_CONFIG_RS.to_owned())
     };
     // Apply server manifest extension on top of whichever base was chosen above.
-    // Phase-1b: Live also needs axum + tower-http (the live runtime uses axum
+    // Live also needs axum + tower-http (the live runtime uses axum
     // internally).  Apply server_cargo_toml for both `uses_server`, `uses_live`,
     // and `uses_webview` (Webview's real backend imports from the live module,
     // which uses axum; the function is idempotent when multiple flags are set).
@@ -657,11 +652,11 @@ fn assemble_project_files(
     } else {
         cargo_toml
     };
-    // Phase-1b: when the program uses Live, add "live" to the default features.
+    // When the program uses Live, add "live" to the default features.
     // The base manifest already declares `live = []` as a non-default feature;
     // we just need to promote it to the `default` list so the compiled binary
     // includes the `live` module.
-    // Phase-1d: Webview's real backend imports `sky_runtime::live::dispatch`
+    // Webview's real backend imports `sky_runtime::live::dispatch`
     // (for `build_index`) and `sky_runtime::html::render_html` — both gated
     // behind the `live` feature. Force-promote `live` for Webview as well.
     let cargo_toml = if ctx.uses_live || ctx.uses_webview {
@@ -669,7 +664,7 @@ fn assemble_project_files(
     } else {
         cargo_toml
     };
-    // Phase-1c: when the program uses Tui, add "tui" to the default features
+    // When the program uses Tui, add "tui" to the default features
     // and inject the crossterm + unicode-width deps required by the tui runtime.
     // The base manifest declares `tui = []` as a non-default feature; we promote
     // it and add the deps so the compiled binary includes the `tui` module.
@@ -678,7 +673,7 @@ fn assemble_project_files(
     } else {
         cargo_toml
     };
-    // Phase-1d: when the program uses Webview, add "webview" to the default
+    // When the program uses Webview, add "webview" to the default
     // features and inject the wry + tao deps required by the real native-window
     // backend. The base manifest declares `webview = []` as a non-default feature;
     // this function promotes it, wires it to wry + tao, and adds those deps.
@@ -704,7 +699,7 @@ fn assemble_project_files(
     } else {
         cargo_toml
     };
-    // mod.rs starts from the M0 default and gains extra `pub mod` lines for
+    // mod.rs starts from the base default and gains extra `pub mod` lines for
     // each kernel group the program uses.
     let runtime_mod_rs = {
         let mut mod_rs = RUNTIME_MOD_RS.to_owned();
@@ -728,7 +723,7 @@ fn assemble_project_files(
             mod_rs.push_str(RUNTIME_MOD_RS_SERVER_APPEND);
         }
         // Sky.Core.WebSocket client — declare `ws_client` (its `ssrf` dep is
-        // already in the M0 base, its `tea` dep forced above).
+        // already in the base, its `tea` dep forced above).
         if ctx.uses_websocket {
             mod_rs.push_str(RUNTIME_MOD_RS_WEBSOCKET_APPEND);
         }
@@ -740,9 +735,9 @@ fn assemble_project_files(
         if ctx.uses_email {
             mod_rs.push_str(RUNTIME_MOD_RS_EMAIL_APPEND);
         }
-        // `http_header` is now part of the M0 BASE `mod.rs` (#33 §6.1 made the
-        // base `http_client` module depend on it), so it needs no conditional
-        // append here — see the retired-append note at the top of this file.
+        // `http_header` is part of the base `mod.rs` (the base `http_client`
+        // module depends on it), so it needs no conditional append here — see
+        // the note at the top of this file.
         // Std.Css leaf security kernels — declared for any render-capable
         // program (`uses_ui`, whose html/ui/live runtime modules import
         // `css_safety`) OR a pure-`Std.Css` program (`uses_css`, no render
@@ -755,7 +750,7 @@ fn assemble_project_files(
         // (tui/focus.rs), so a String-view Tui program (`uses_tui` without
         // `uses_ui`) still needs the css/ui/html appends — same invariant as
         // the `http_header` leaf above.
-        // (#215 extension): `live/mod.rs` unconditionally does
+        // `live/mod.rs` unconditionally does
         // `pub use crate::sky_runtime::html::*` and `html.rs` imports
         // `css_safety`, so a `uses_live`-only program (e.g. PubSub-only, no
         // Std.Ui kernels) still needs `css_safety` and `html` declared.
@@ -769,15 +764,15 @@ fn assemble_project_files(
         if ctx.uses_ui || ctx.uses_tui || ctx.uses_live || ctx.uses_webview {
             mod_rs.push_str(RUNTIME_MOD_RS_UI_APPEND);
         }
-        // Phase-1b: Std.Live / Sky.Live app-entry kernels.
+        // Std.Live / Sky.Live app-entry kernels.
         if ctx.uses_live || ctx.uses_webview {
             mod_rs.push_str(RUNTIME_MOD_RS_LIVE_APPEND);
         }
-        // Phase-1c: Std.Tui / Sky.Tui app-entry kernels.
+        // Std.Tui / Sky.Tui app-entry kernels.
         if ctx.uses_tui {
             mod_rs.push_str(RUNTIME_MOD_RS_TUI_APPEND);
         }
-        // Phase-1d: Std.Webview / Sky.Webview app-entry kernel.
+        // Std.Webview / Sky.Webview app-entry kernel.
         if ctx.uses_webview {
             mod_rs.push_str(RUNTIME_MOD_RS_WEBVIEW_APPEND);
         }
@@ -814,10 +809,9 @@ fn assemble_project_files(
 /// `SqlField` then record structs then the DB-projection impls).
 ///
 /// **This function is NOT on the public emission path** — [`emit_program`]
-/// (still single-file) does not call it. It is the additive Milestone-C
-/// rendering entry point that Task 12 will wire in; landing it separately
-/// keeps `emit_program` byte-for-byte unchanged while its new output tier is
-/// proven in isolation (`tests/split_emit.rs`).
+/// (still single-file) does not call it. It is an additive rendering entry
+/// point kept separate so `emit_program` stays byte-for-byte unchanged while
+/// this output tier is proven in isolation (`tests/split_emit.rs`).
 ///
 /// # Errors
 ///
@@ -928,7 +922,7 @@ pub fn emit_module_file(ctx: &EmitCtx, program: &Program, home: &RustFileId) -> 
 }
 
 /// Assemble the full split [`EmittedProject`] from ALREADY-RENDERED per-file
-/// texts (design doc §4.4/Task 16 — the `emit_manifest` assembly seam).
+/// texts (design doc §4.4 — the `emit_manifest` assembly seam).
 ///
 /// `spine_text` is [`emit_spine`]'s output; `module_texts` maps each Sky-module
 /// `home` to its [`emit_module_file`] output. This function performs ONLY the
@@ -974,7 +968,7 @@ pub fn assemble_split_manifest(
         }
     }
 
-    // Task 3: fail closed if a synthesised record struct's name collides with a
+    // Fail closed if a synthesised record struct's name collides with a
     // `mod_ident` (every SkyModule home contributes its ident in the split).
     let mod_idents: BTreeSet<String> = module_homes
         .iter()
@@ -1063,7 +1057,7 @@ fn pub_crate_item(rendered: &str) -> String {
     rendered.to_owned()
 }
 
-/// Build the db-enabled `Cargo.toml` from the base M0 manifest by:
+/// Build the db-enabled `Cargo.toml` from the base manifest by:
 ///
 /// 1. Adding `"db"` to the `default` feature list.
 /// 2. Appending the `sqlx` dependency line, with `"sqlite"` ALWAYS enabled
@@ -1252,7 +1246,7 @@ fn server_cargo_toml(base: &str) -> DResult<String> {
 /// in the emitted manifest.
 ///
 /// The base manifest already declares `live = []` as a non-default feature
-/// (present in the M0 golden's `[features]` section).  This function promotes
+/// (present in the golden's `[features]` section).  This function promotes
 /// it by inserting `"live"` immediately before the closing `]` of the
 /// `default = [...]` line — the same generic anchor used by `server_cargo_toml`.
 ///
@@ -1574,7 +1568,7 @@ fn webview_cargo_toml(base: &str) -> DResult<String> {
 ///    `tokio::sync::mpsc` / `broadcast`) when not already present — idempotent,
 ///    same strategy as `tui_cargo_toml`.
 /// 3. Appending `tokio-tungstenite` as a plain dependency before `[profile.dev]`
-///    (`futures-util` and `url`, its other deps, are already in the M0 base).
+///    (`futures-util` and `url`, its other deps, are already in the base).
 ///
 /// # Errors
 ///

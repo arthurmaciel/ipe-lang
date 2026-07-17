@@ -1,18 +1,11 @@
-//! Backend-internal file-id domain for per-Sky-module Rust emission
-//! (Phase-5 continuation — see `docs/architecture/
-//! phase5-emit-rust-file-design-2026-07-12.md` §2.1). NOT yet a salsa
-//! type — that is Milestone D (§4.1).
+//! Backend-internal file-id domain for per-Sky-module Rust emission.
 //!
-//! `mod_ident`/`resolve_mod_ident`/`assert_mod_idents_unique` (Task 2's
-//! fail-closed duplicate-`mod`-name gate) are complete and unit-tested here,
-//! but have no PRODUCTION caller yet — Milestone A never writes more than
-//! one file, so no `mod` items exist for two of them to collide over (see
-//! `project.rs::emit_program`'s own comment on this point). They gain their
-//! real caller in Milestone C, once `emit_program` actually partitions
-//! output across multiple `SkyModule` files. This is staged-ahead-of-use,
-//! not dead code in the "nobody knows if this works" sense — it is
-//! deliberately built and proven correct before its caller exists, matching
-//! this crate's TDD-per-task convention.
+//! `mod_ident`/`resolve_mod_ident`/`assert_mod_idents_unique` form a
+//! fail-closed duplicate-`mod`-name gate. They have no production caller while
+//! `emit_program` writes at most one file — no `mod` items exist for two of
+//! them to collide over (see `project.rs::emit_program`'s own comment on this
+//! point). Their caller appears once `emit_program` partitions output across
+//! multiple `SkyModule` files.
 #![allow(dead_code)]
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -40,9 +33,8 @@ pub enum RustFileId {
 /// Reuses the same base fold [`naming::module_prefix`] already applies for
 /// the value/type case, snake-cased and prefixed with `sky_mod_` to keep it
 /// visually distinct from the vendored `sky_runtime` module tree. This is a
-/// NEW namespace (design doc §2.1.1) — nothing before this task needed a
-/// `ModPath -> Rust identifier` folding for a `mod` declaration, because
-/// there was only ever one file.
+/// Folds a `ModPath` to the Rust identifier for its `mod` declaration; needed
+/// only once emission spans more than one file.
 #[must_use]
 pub fn mod_ident(home: &[&str]) -> String {
     format!(
@@ -56,7 +48,7 @@ pub fn mod_ident(home: &[&str]) -> String {
 /// hand-built test IR) — surfaced as a [`Diagnostic::CompilerBug`], never a
 /// panic.
 ///
-/// Reachable outside this module since Milestone C:
+/// Reachable outside this module:
 /// [`crate::project::emit_program`] needs it to compute both the
 /// `src/sky_mods/<mod_ident>.rs` file paths and the `main.rs` barrel lines
 /// (`#[path = …] mod <ident>;` / `pub(crate) use <ident>::*;`) for each
@@ -119,11 +111,10 @@ pub fn assert_mod_idents_unique(ids: &[RustFileId], interner: &Interner) -> DRes
 /// (incrementally reused) database and a cold (freshly rebuilt) one for the
 /// SAME final program (the documented warm-db symbol-numbering limitation,
 /// `clean_vs_incremental_parity.rs`'s own top doc comment). Iterating
-/// `buckets` directly is fine for lookups / the totality proof (Task 4), but
+/// `buckets` directly is fine for lookups / the totality proof, but
 /// is an UNSOUND final byte-emission order the moment two or more distinct
 /// real Sky-module `home`s are present in one program — caught by
-/// `parity_multimodule_adversarial_edits`'s `module-added` step (regression
-/// found in Milestone A review, closed same session).
+/// `parity_multimodule_adversarial_edits`'s `module-added` step.
 ///
 /// It is ALSO not what an existing multi-module golden expects:
 /// `tests/golden/mm_diamond` (`D` imported by BOTH `B` and `C`, both
@@ -135,15 +126,13 @@ pub fn assert_mod_idents_unique(ids: &[RustFileId], interner: &Interner) -> DRes
 /// `type_order`/`func_order` instead record each distinct `SkyModule`
 /// `home`'s FIRST-ENCOUNTER position while walking `program.modules[..].
 /// types` / `.funcs` in THEIR OWN vector order — exactly the traversal the
-/// pre-Task-5 code walked directly (two independent `for module in &program.
+/// direct-walk code performs (two independent `for module in &program.
 /// modules { for x in &module.x { ... } }` loops), and every existing golden
 /// (single- AND multi-module) was captured against. `program.modules`'s own
 /// vector order is a linker-computed topological order, proven warm/cold-
-/// stable by `parity_multimodule_adversarial_edits` itself (that gate ran
-/// directly against the pre-Task-5 direct-walk code on `master`, with no
-/// `partition_items` in the loop at all, and passed) — first-encounter order
-/// over it is therefore ALSO warm/cold-stable. Two separate orders (not one
-/// combined order) because the old code's two independent loops could, in
+/// stable by `parity_multimodule_adversarial_edits` itself — first-encounter
+/// order over it is therefore ALSO warm/cold-stable. Two separate orders (not
+/// one combined order) because the two independent loops could, in
 /// principle, see a different cross-module home sequence for types than for
 /// funcs — e.g. a home whose ONLY items are functions (like `D` in
 /// `mm_diamond`, which declares no types at all) contributes nothing to the
@@ -159,7 +148,7 @@ pub struct Partitioned<'p> {
 /// [`RustFileId`] it is declared in — see [`Partitioned`] for the full
 /// shape, including the two emission-order fields.
 ///
-/// Proven TOTAL (Task 4): every item in `program.modules[..].types /
+/// Proven TOTAL: every item in `program.modules[..].types /
 /// .funcs` appears in EXACTLY ONE output bucket — no drop, no duplicate.
 ///
 /// **`SqlValue`/`SqlField` Spine special case (design doc §2.2).** These two
@@ -391,7 +380,7 @@ mod tests {
     fn partition_items_is_total_for_a_single_module_fixture() -> DResult<()> {
         // Mirrors `tests/golden.rs`'s `build_m0` shape: one module, every
         // item's `home` matches the module's own name — the case every
-        // existing (pre-Milestone-C) golden fixture is in.
+        // existing single-file golden fixture is in.
         let mut interner = Interner::new();
         let main_mod = interner.intern("Main")?;
         let msg_ty = interner.intern("Msg")?;
@@ -525,8 +514,8 @@ mod tests {
         Ok(())
     }
 
-    /// Regression test for the `mm_diamond`-class ordering bug (Milestone A
-    /// review, same session): `type_order`/`func_order` must follow
+    /// Regression test for the `mm_diamond`-class ordering bug:
+    /// `type_order`/`func_order` must follow
     /// `program.modules`'s OWN vector (linker/topological) order, never an
     /// alphabetical or `mod_ident`-string sort. `Zeta` is placed BEFORE
     /// `Alpha` in `program.modules` — reverse alphabetical — specifically so

@@ -1,9 +1,9 @@
-//! Phase-5 Milestone C, Task 10: the `emit_spine` / `emit_module_file`
-//! rendering entry points, tested in isolation.
+//! The `emit_spine` / `emit_module_file` rendering entry points, tested in
+//! isolation.
 //!
 //! These two functions are ADDITIVE — nothing in the public emission path
-//! (`RustBackend::emit` → `project::emit_program`) calls them yet (that is
-//! Task 12). This binary proves they exist, are individually callable, and
+//! (`RustBackend::emit` → `project::emit_program`) calls them yet. This binary
+//! proves they exist, are individually callable, and
 //! route items to the two output tiers the design doc §2.1/§2.2 mandates:
 //!
 //! * `emit_spine` → preamble banner + kernel-wrapper prelude + `fn main()` +

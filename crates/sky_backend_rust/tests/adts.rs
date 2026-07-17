@@ -1,7 +1,6 @@
-//! Payload-carrying / generic / recursive ADT tests for the M3a Rust backend
-//! (task M3A-CORE).
+//! Payload-carrying / generic / recursive ADT tests for the Rust backend.
 //!
-//! These exercise the enum pipeline beyond M0's nullary variants:
+//! These exercise the enum pipeline beyond nullary variants:
 //!
 //! * a GENERIC ADT (`type Maybe a = Just a | Nothing`) emits a generic Rust enum
 //!   (`pub enum MainMaybe<T1> { Just(T1), Nothing }`) + a bounded `SkyStringify`

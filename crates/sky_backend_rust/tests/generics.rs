@@ -1,4 +1,4 @@
-//! Fully-parametric top-level function emission for the Rust backend (M2a core).
+//! Fully-parametric top-level function emission for the Rust backend.
 //!
 //! Exercises the generic-codegen spine added by the IR's [`IrType::Generic`] +
 //! `Func::type_params`: a structurally-parametric function `identity : a -> a`
@@ -183,7 +183,7 @@ fn emits_generic_function_signature() -> DResult<()> {
         "identity's body is the bare parameter `x`:\n{main_rs}"
     );
     // The monomorphic entry carries NO generic clause — the empty `type_params`
-    // path is byte-identical to the pre-M2a shape.
+    // path emits no generic clause.
     assert!(
         main_rs.contains("pub fn sky_main() -> SkyTask<()> {"),
         "monomorphic `main` emits no generic clause:\n{main_rs}"
@@ -198,7 +198,7 @@ fn emits_generic_function_signature() -> DResult<()> {
     Ok(())
 }
 
-/// Build a program with two super-typed generic functions, exercising the M2d
+/// Build a program with two super-typed generic functions, exercising the
 /// bound clauses:
 ///
 /// ```sky
