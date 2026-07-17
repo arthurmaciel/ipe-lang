@@ -1,0 +1,246 @@
+//! Whole-project diagnostics collection over the `ipe_db` query graph.
+//!
+//! [`collect`] demands the same memoized queries the batch driver runs —
+//! `parse` → `canonicalize` (dep-first) → `typecheck` → `lower_program` —
+//! and returns every resulting compiler [`Diagnostic`] attributed to the
+//! module that owns it. The attribution rules mirror the driver's blame
+//! logic exactly:
+//!
+//! - parse/canonicalize diagnostics belong to the module that produced them;
+//!   an importer of a red dependency inherits the dep's failure *silently*
+//!   (the dep already reported it at its own file);
+//! - a `typecheck`/`lower_program` error carries its home module path
+//!   (`ipe_types::infer_attributed`) — an exact map lookup, never a guess;
+//! - a homeless diagnostic (constraint-generation, exhaustiveness, backend)
+//!   falls back to the span heuristic over the linked program's defs — the
+//!   same closest-`lo` rule the CLI driver renders with.
+//!
+//! Every module in the project appears in the result (with an empty list
+//! when clean), so a consumer can clear stale diagnostics for files that
+//! healed.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use ipe_db::{Db as _, ImportResolution, IpeDatabase, SourceRoot};
+use ipe_diagnostics::{Diagnostic, Severity, Span};
+use ipe_intern::Symbol;
+use lsp_types::{DiagnosticSeverity, NumberOrString};
+
+use crate::offset::{PositionEncoding, span_to_range};
+
+/// Every diagnostic owned by one module, keyed by its module path.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ModuleDiagnostics {
+    /// The owning module's path segments (e.g. `["Main"]`).
+    pub module: Vec<String>,
+    /// The module's diagnostics, in pipeline order. Empty when clean.
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Collect every current diagnostic for the project rooted at `root` with
+/// entry module `entry`, one entry per module (empty when clean).
+#[must_use]
+pub fn collect(
+    db: &IpeDatabase,
+    root: SourceRoot,
+    entry: ipe_db::SourceFile,
+) -> Vec<ModuleDiagnostics> {
+    let files = root.files(db).clone();
+    let entry_module: Vec<String> = entry.module_path(db).clone();
+    let mut by_module: BTreeMap<Vec<String>, Vec<Diagnostic>> = files
+        .keys()
+        .map(|path| (path.clone(), Vec::new()))
+        .collect();
+
+    // Parse every module; a red parse taints the module for later stages.
+    let mut failed: BTreeSet<Vec<String>> = BTreeSet::new();
+    for (path, file) in &files {
+        if let Err(diag) = ipe_db::parse(db, *file) {
+            push(&mut by_module, path, diag);
+            failed.insert(path.clone());
+        }
+    }
+
+    // Dependency-first order; a cycle is one project-level diagnostic.
+    let order = match ipe_db::topo_order(db, root, entry) {
+        Ok(order) => order,
+        Err(diag) => {
+            push(&mut by_module, &entry_module, diag);
+            return flatten(by_module);
+        }
+    };
+
+    // Canonicalise dep-first. A module whose (transitive) dep already failed
+    // is skipped: its `canonicalize` error would be the dep's own diagnostic
+    // replayed, and attributing that to the importer would be a mis-blame.
+    for path in order.iter() {
+        if failed.contains(path) {
+            continue;
+        }
+        let Some(file) = files.get(path) else {
+            continue;
+        };
+        let dep_tainted = ipe_db::resolve_imports(db, root, *file).map_or(true, |resolutions| {
+            resolutions.iter().any(|(dep_path, resolution)| {
+                matches!(resolution, ImportResolution::Resolved(_)) && failed.contains(dep_path)
+            })
+        });
+        if dep_tainted {
+            failed.insert(path.clone());
+            continue;
+        }
+        if let Err(diag) = ipe_db::canonicalize(db, root, *file) {
+            push(&mut by_module, path, diag);
+            failed.insert(path.clone());
+        }
+    }
+
+    if !failed.is_empty() {
+        // The whole-program stages need every module canonicalised; their
+        // demand now would only replay a diagnostic already attributed above.
+        return flatten(by_module);
+    }
+
+    match ipe_db::typecheck(db, root, entry) {
+        Err((diag, home)) => {
+            let owner = attribute(db, root, entry, &home, diag.primary_span(), &entry_module);
+            push(&mut by_module, &owner, diag);
+        }
+        Ok(solved) => {
+            for warning in &solved.warnings {
+                let owner = attribute(db, root, entry, &[], warning.primary_span(), &entry_module);
+                push(&mut by_module, &owner, warning.clone());
+            }
+            if let Err((diag, home)) = ipe_db::lower_program(db, root, entry) {
+                let owner = attribute(db, root, entry, &home, diag.primary_span(), &entry_module);
+                push(&mut by_module, &owner, diag);
+            }
+        }
+    }
+
+    flatten(by_module)
+}
+
+fn push(by_module: &mut BTreeMap<Vec<String>, Vec<Diagnostic>>, path: &[String], diag: Diagnostic) {
+    if let Some(list) = by_module.get_mut(path) {
+        list.push(diag);
+    } else {
+        by_module.insert(path.to_vec(), vec![diag]);
+    }
+}
+
+fn flatten(by_module: BTreeMap<Vec<String>, Vec<Diagnostic>>) -> Vec<ModuleDiagnostics> {
+    by_module
+        .into_iter()
+        .map(|(module, diagnostics)| ModuleDiagnostics {
+            module,
+            diagnostics,
+        })
+        .collect()
+}
+
+/// Resolve a diagnostic's owning module: an exact `home` lookup when the
+/// solver attributed one, else the span heuristic over the linked program,
+/// else the entry module.
+fn attribute(
+    db: &IpeDatabase,
+    root: SourceRoot,
+    entry: ipe_db::SourceFile,
+    home: &[Symbol],
+    span: Span,
+    entry_module: &[String],
+) -> Vec<String> {
+    let home_syms: Option<Vec<Symbol>> = if home.is_empty() {
+        ipe_db::linked_program(db, root, entry)
+            .ok()
+            .and_then(|linked| home_for_span(&linked.module, span))
+    } else {
+        Some(home.to_vec())
+    };
+    home_syms
+        .and_then(|syms| resolve_module_path(db, &syms))
+        .unwrap_or_else(|| entry_module.to_vec())
+}
+
+/// Resolve an interned module path back to its string segments.
+fn resolve_module_path(db: &IpeDatabase, home: &[Symbol]) -> Option<Vec<String>> {
+    let interner = db.interner().lock();
+    home.iter()
+        .map(|&sym| interner.resolve(sym).map(str::to_owned))
+        .collect()
+}
+
+/// The module whose def (or union constructor) most tightly encloses `span`
+/// in the linked whole-program module — the driver's closest-`lo` blame rule.
+///
+/// After link, every def keeps its original `home`, and every span in a
+/// def's body is a byte offset into that home module's own source, so the
+/// def that *starts nearest* the failing span (narrower body as tiebreaker)
+/// names the owning module.
+fn home_for_span(linked: &ipe_canon::ast::Module, span: Span) -> Option<Vec<Symbol>> {
+    if span == Span::DUMMY {
+        return None;
+    }
+    // (lo_dist, width, home)
+    let mut best: Option<(u32, u32, &[Symbol])> = None;
+    for def in &linked.defs {
+        let body_span = match def {
+            ipe_canon::ast::Def::Untyped { body, .. } | ipe_canon::ast::Def::Typed { body, .. } => {
+                body.span
+            }
+        };
+        if body_span.lo <= span.lo && span.hi <= body_span.hi {
+            let lo_dist = span.lo.saturating_sub(body_span.lo);
+            let width = body_span.hi.saturating_sub(body_span.lo);
+            if best.is_none_or(|(prev_dist, prev_width, _)| {
+                lo_dist < prev_dist || (lo_dist == prev_dist && width < prev_width)
+            }) {
+                best = Some((lo_dist, width, def.home()));
+            }
+        }
+    }
+    for union in &linked.unions {
+        for ctor in &union.ctors {
+            if ctor.span.lo <= span.lo && span.hi <= ctor.span.hi {
+                let lo_dist = span.lo.saturating_sub(ctor.span.lo);
+                let width = ctor.span.hi.saturating_sub(ctor.span.lo);
+                if best.is_none_or(|(prev_dist, prev_width, _)| {
+                    lo_dist < prev_dist || (lo_dist == prev_dist && width < prev_width)
+                }) {
+                    best = Some((lo_dist, width, union.home.as_slice()));
+                }
+            }
+        }
+    }
+    best.map(|(_, _, home)| home.to_vec())
+}
+
+/// Map one compiler diagnostic to its LSP form.
+///
+/// `text` is the owning module's source. The message is the compiler's own
+/// snippet-free rendering ([`ipe_diagnostics::plain_message`]) — the wording
+/// cannot drift from `ipe build`'s.
+#[must_use]
+pub fn to_lsp(diag: &Diagnostic, text: &str, encoding: PositionEncoding) -> lsp_types::Diagnostic {
+    let span = diag.primary_span();
+    let range = if span == Span::DUMMY {
+        lsp_types::Range::default()
+    } else {
+        span_to_range(text, span, encoding)
+    };
+    let severity = match diag.severity() {
+        Severity::Error | Severity::Bug => DiagnosticSeverity::ERROR,
+        Severity::Warning => DiagnosticSeverity::WARNING,
+    };
+    lsp_types::Diagnostic {
+        range,
+        severity: Some(severity),
+        code: Some(NumberOrString::String(diag.code().as_str().to_owned())),
+        code_description: None,
+        source: Some("ipe".to_owned()),
+        message: ipe_diagnostics::plain_message(diag, text),
+        related_information: None,
+        tags: None,
+        data: None,
+    }
+}
