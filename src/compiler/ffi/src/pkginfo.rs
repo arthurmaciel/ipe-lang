@@ -26,8 +26,8 @@ struct WireParam {
     name: String,
     #[serde(rename = "type")]
     ty: String,
-    #[serde(default, rename = "skyType")]
-    sky_type: String,
+    #[serde(default, rename = "ipeType")]
+    ipe_type: String,
     #[serde(default, rename = "rustType")]
     rust_type: String,
 }
@@ -217,7 +217,7 @@ pub struct Param {
     pub foreign_ty: String,
     /// The inspector's Ipê-side type override (empty ⇒ derive from
     /// `foreign_ty`).
-    pub sky_type: String,
+    pub ipe_type: String,
     /// The inspector's Rust-side type override for wrapper emission.
     pub rust_type: String,
 }
@@ -560,7 +560,7 @@ fn param_from_wire(w: WireParam) -> Param {
     Param {
         name: w.name,
         foreign_ty: w.ty,
-        sky_type: w.sky_type,
+        ipe_type: w.ipe_type,
         rust_type: w.rust_type,
     }
 }
@@ -687,7 +687,7 @@ mod tests {
     fn decodes_a_minimal_plain_function() {
         let pkg = decode(&base_pkg(&json!([{
             "name": "parse",
-            "params": [{"name": "text", "type": "&str", "skyType": "string", "rustType": "&str"}],
+            "params": [{"name": "text", "type": "&str", "ipeType": "string", "rustType": "&str"}],
             "results": [{"name": "", "type": "Result<Version, Error>"}],
             "variadic": false,
             "effect": "fallible",
