@@ -152,9 +152,13 @@ pub fn compute_project_key(
     injected: &BTreeSet<Vec<String>>,
     entry_path: &[String],
     db_driver: DbDriver,
+    target: ipe_ir::Target,
 ) -> String {
     let mut hasher = Sha256::new();
     update_len_prefixed(&mut hasher, KEY_TAG);
+    // The target changes the emitted manifest/entry shape — a native-keyed
+    // entry must never serve a wasm build (or vice versa).
+    update_len_prefixed(&mut hasher, format!("{target:?}").as_bytes());
 
     let entry_len = u64::try_from(entry_path.len()).unwrap_or(u64::MAX);
     hasher.update(entry_len.to_le_bytes());
@@ -208,9 +212,14 @@ pub fn compute_ir_key(
     sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
     injected: &BTreeSet<Vec<String>>,
     entry_path: &[String],
+    target: ipe_ir::Target,
 ) -> String {
     let mut hasher = Sha256::new();
     update_len_prefixed(&mut hasher, IR_KEY_TAG);
+    // The IR itself is target-independent, but the fast path re-emits from a
+    // cached Program WITHOUT re-running canonicalisation — keying on target
+    // keeps the wasm Layer-1 gate (which runs at canon) unskippable.
+    update_len_prefixed(&mut hasher, format!("{target:?}").as_bytes());
 
     let entry_len = u64::try_from(entry_path.len()).unwrap_or(u64::MAX);
     hasher.update(entry_len.to_le_bytes());
@@ -485,42 +494,96 @@ mod tests {
     #[test]
     fn key_is_deterministic() {
         let (sources, injected) = sample_sources();
-        let a = compute_project_key(&sources, &injected, &entry(), DbDriver::Sqlite);
-        let b = compute_project_key(&sources, &injected, &entry(), DbDriver::Sqlite);
+        let a = compute_project_key(
+            &sources,
+            &injected,
+            &entry(),
+            DbDriver::Sqlite,
+            ipe_ir::Target::Native,
+        );
+        let b = compute_project_key(
+            &sources,
+            &injected,
+            &entry(),
+            DbDriver::Sqlite,
+            ipe_ir::Target::Native,
+        );
         assert_eq!(a, b, "same inputs must hash to the same key");
     }
 
     #[test]
     fn key_changes_with_source_text() {
         let (mut sources, injected) = sample_sources();
-        let base = compute_project_key(&sources, &injected, &entry(), DbDriver::Sqlite);
+        let base = compute_project_key(
+            &sources,
+            &injected,
+            &entry(),
+            DbDriver::Sqlite,
+            ipe_ir::Target::Native,
+        );
         if let Some(main) = sources.get_mut(&vec!["Main".to_owned()]) {
             main.1.push_str("\n-- comment\n");
         }
-        let edited = compute_project_key(&sources, &injected, &entry(), DbDriver::Sqlite);
+        let edited = compute_project_key(
+            &sources,
+            &injected,
+            &entry(),
+            DbDriver::Sqlite,
+            ipe_ir::Target::Native,
+        );
         assert_ne!(base, edited, "a body edit must change the key");
     }
 
     #[test]
     fn key_changes_with_db_driver() {
         let (sources, injected) = sample_sources();
-        let sqlite = compute_project_key(&sources, &injected, &entry(), DbDriver::Sqlite);
-        let postgres = compute_project_key(&sources, &injected, &entry(), DbDriver::Postgres);
+        let sqlite = compute_project_key(
+            &sources,
+            &injected,
+            &entry(),
+            DbDriver::Sqlite,
+            ipe_ir::Target::Native,
+        );
+        let postgres = compute_project_key(
+            &sources,
+            &injected,
+            &entry(),
+            DbDriver::Postgres,
+            ipe_ir::Target::Native,
+        );
         assert_ne!(sqlite, postgres, "the SQL driver is part of the key");
     }
 
     #[test]
     fn key_changes_with_entry_path() {
         let (sources, injected) = sample_sources();
-        let a = compute_project_key(&sources, &injected, &["Main".to_owned()], DbDriver::Sqlite);
-        let b = compute_project_key(&sources, &injected, &["Other".to_owned()], DbDriver::Sqlite);
+        let a = compute_project_key(
+            &sources,
+            &injected,
+            &["Main".to_owned()],
+            DbDriver::Sqlite,
+            ipe_ir::Target::Native,
+        );
+        let b = compute_project_key(
+            &sources,
+            &injected,
+            &["Other".to_owned()],
+            DbDriver::Sqlite,
+            ipe_ir::Target::Native,
+        );
         assert_ne!(a, b, "the entry module path is part of the key");
     }
 
     #[test]
     fn key_changes_with_module_add_and_remove() {
         let (sources, injected) = sample_sources();
-        let base = compute_project_key(&sources, &injected, &entry(), DbDriver::Sqlite);
+        let base = compute_project_key(
+            &sources,
+            &injected,
+            &entry(),
+            DbDriver::Sqlite,
+            ipe_ir::Target::Native,
+        );
 
         let mut added = sources.clone();
         added.insert(
@@ -530,12 +593,24 @@ mod tests {
                 "module Extra exposing (y)\ny = 2\n".to_owned(),
             ),
         );
-        let with_extra = compute_project_key(&added, &injected, &entry(), DbDriver::Sqlite);
+        let with_extra = compute_project_key(
+            &added,
+            &injected,
+            &entry(),
+            DbDriver::Sqlite,
+            ipe_ir::Target::Native,
+        );
         assert_ne!(base, with_extra, "adding a module must change the key");
 
         let mut removed = sources;
         removed.remove(&vec!["Std".to_owned(), "Prelude".to_owned()]);
-        let without_prelude = compute_project_key(&removed, &injected, &entry(), DbDriver::Sqlite);
+        let without_prelude = compute_project_key(
+            &removed,
+            &injected,
+            &entry(),
+            DbDriver::Sqlite,
+            ipe_ir::Target::Native,
+        );
         assert_ne!(
             base, without_prelude,
             "removing a module must change the key"
@@ -553,8 +628,20 @@ mod tests {
         let (sources, _injected) = sample_sources();
         let no_injection: BTreeSet<Vec<String>> = BTreeSet::new();
         let all_injected: BTreeSet<Vec<String>> = sources.keys().cloned().collect();
-        let a = compute_project_key(&sources, &no_injection, &entry(), DbDriver::Sqlite);
-        let b = compute_project_key(&sources, &all_injected, &entry(), DbDriver::Sqlite);
+        let a = compute_project_key(
+            &sources,
+            &no_injection,
+            &entry(),
+            DbDriver::Sqlite,
+            ipe_ir::Target::Native,
+        );
+        let b = compute_project_key(
+            &sources,
+            &all_injected,
+            &entry(),
+            DbDriver::Sqlite,
+            ipe_ir::Target::Native,
+        );
         assert_ne!(a, b, "the trust-origin flag is part of the key");
     }
 
@@ -573,8 +660,14 @@ mod tests {
             (PathBuf::from("x"), String::new()),
         );
         let empty: BTreeSet<Vec<String>> = BTreeSet::new();
-        let a = compute_project_key(&left, &empty, &[], DbDriver::Sqlite);
-        let b = compute_project_key(&right, &empty, &[], DbDriver::Sqlite);
+        let a = compute_project_key(&left, &empty, &[], DbDriver::Sqlite, ipe_ir::Target::Native);
+        let b = compute_project_key(
+            &right,
+            &empty,
+            &[],
+            DbDriver::Sqlite,
+            ipe_ir::Target::Native,
+        );
         assert_ne!(a, b, "differently-segmented module paths must not collide");
     }
 
@@ -761,8 +854,8 @@ mod tests {
     #[test]
     fn compute_ir_key_is_deterministic_and_excludes_db_driver() {
         let (sources, injected) = sample_sources();
-        let a = compute_ir_key(&sources, &injected, &entry());
-        let b = compute_ir_key(&sources, &injected, &entry());
+        let a = compute_ir_key(&sources, &injected, &entry(), ipe_ir::Target::Native);
+        let b = compute_ir_key(&sources, &injected, &entry(), ipe_ir::Target::Native);
         assert_eq!(a, b, "same inputs must hash to the same IR key");
 
         // Unlike `compute_project_key`, `compute_ir_key` must be blind to
@@ -770,7 +863,7 @@ mod tests {
         // nothing to vary here; this test pins the SIGNATURE difference
         // itself (a `db_driver`-only rebuild reuses the SAME IR key).
         assert_eq!(
-            compute_ir_key(&sources, &injected, &entry()),
+            compute_ir_key(&sources, &injected, &entry(), ipe_ir::Target::Native),
             a,
             "compute_ir_key has no db_driver parameter to vary"
         );
@@ -779,11 +872,11 @@ mod tests {
     #[test]
     fn compute_ir_key_changes_with_source_text() {
         let (mut sources, injected) = sample_sources();
-        let base = compute_ir_key(&sources, &injected, &entry());
+        let base = compute_ir_key(&sources, &injected, &entry(), ipe_ir::Target::Native);
         if let Some(main) = sources.get_mut(&vec!["Main".to_owned()]) {
             main.1.push_str("\n-- comment\n");
         }
-        let edited = compute_ir_key(&sources, &injected, &entry());
+        let edited = compute_ir_key(&sources, &injected, &entry(), ipe_ir::Target::Native);
         assert_ne!(base, edited, "a body edit must change the IR key");
     }
 

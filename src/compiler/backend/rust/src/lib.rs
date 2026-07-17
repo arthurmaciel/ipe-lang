@@ -85,6 +85,7 @@ pub struct RustBackend<'a> {
     interner: &'a Interner,
     db_driver: DbDriver,
     ffi: Option<FfiEmit>,
+    target: ipe_ir::Target,
 }
 
 impl<'a> RustBackend<'a> {
@@ -97,7 +98,16 @@ impl<'a> RustBackend<'a> {
             interner,
             db_driver: DbDriver::Sqlite,
             ffi: None,
+            target: ipe_ir::Target::Native,
         }
+    }
+
+    /// Select the compilation target the emitted project is built for
+    /// (`Native` by default; `WasmClient` under `ipe build --target wasm`).
+    #[must_use]
+    pub const fn with_target(mut self, target: ipe_ir::Target) -> Self {
+        self.target = target;
+        self
     }
 
     /// Select the SQL driver the emitted project targets (from `sky.toml`'s
@@ -128,7 +138,13 @@ impl<'a> RustBackend<'a> {
     /// Propagates any [`Diagnostic`] from [`EmitCtx::build`] or
     /// [`project::emit_spine`].
     pub fn emit_spine(&self, program: &Program) -> DResult<String> {
-        let ctx = EmitCtx::build(self.interner, program, self.db_driver, self.ffi.clone())?;
+        let ctx = EmitCtx::build(
+            self.interner,
+            program,
+            self.db_driver,
+            self.ffi.clone(),
+            self.target,
+        )?;
         project::emit_spine(&ctx, program)
     }
 
@@ -142,7 +158,13 @@ impl<'a> RustBackend<'a> {
     /// Propagates any [`Diagnostic`] from [`EmitCtx::build`] or
     /// [`project::emit_module_file`].
     pub fn emit_module_file(&self, program: &Program, home: &ModPath) -> DResult<String> {
-        let ctx = EmitCtx::build(self.interner, program, self.db_driver, self.ffi.clone())?;
+        let ctx = EmitCtx::build(
+            self.interner,
+            program,
+            self.db_driver,
+            self.ffi.clone(),
+            self.target,
+        )?;
         project::emit_module_file(
             &ctx,
             program,
@@ -171,7 +193,13 @@ impl<'a> RustBackend<'a> {
         spine_text: &str,
         module_texts: &BTreeMap<ModPath, String>,
     ) -> DResult<EmittedProject> {
-        let ctx = EmitCtx::build(self.interner, program, self.db_driver, self.ffi.clone())?;
+        let ctx = EmitCtx::build(
+            self.interner,
+            program,
+            self.db_driver,
+            self.ffi.clone(),
+            self.target,
+        )?;
         project::assemble_split_manifest(&ctx, program, spine_text, module_texts)
     }
 }
@@ -207,7 +235,13 @@ impl Backend for RustBackend<'_> {
     }
 
     fn emit(&self, program: &Program) -> DResult<EmittedProject> {
-        let ctx = EmitCtx::build(self.interner, program, self.db_driver, self.ffi.clone())?;
+        let ctx = EmitCtx::build(
+            self.interner,
+            program,
+            self.db_driver,
+            self.ffi.clone(),
+            self.target,
+        )?;
         project::emit_program(&ctx, program)
     }
 }
@@ -299,6 +333,9 @@ pub(crate) struct EmitCtx<'a> {
     /// threaded in via [`RustBackend::with_db_driver`]). Meaningless / ignored
     /// when `uses_db` is `false`.
     pub(crate) db_driver: DbDriver,
+    /// The compilation target (`Native` | `WasmClient`) — selects the manifest
+    /// template, the vendored runtime module set, and the entry shape.
+    pub(crate) target: ipe_ir::Target,
     /// `true` when the program uses at least one TEA (`Cmd` / `Sub` /
     /// `Time.every`) kernel. When set,
     /// [`crate::project::emit_program`]:
@@ -438,6 +475,7 @@ impl<'a> EmitCtx<'a> {
         program: &Program,
         db_driver: DbDriver,
         ffi: Option<FfiEmit>,
+        target: ipe_ir::Target,
     ) -> DResult<Self> {
         let mut enum_names: BTreeMap<(ModPath, Symbol), String> = BTreeMap::new();
         let mut variant_fields: BTreeMap<(ModPath, Symbol, Symbol), Vec<IrType>> = BTreeMap::new();
@@ -806,6 +844,7 @@ impl<'a> EmitCtx<'a> {
             interner,
             uses_db,
             db_driver,
+            target,
             uses_tea,
             uses_server,
             uses_ui,
@@ -2314,7 +2353,13 @@ mod record_struct_namespace_tests {
         // `EmitCtx::build` itself must still succeed today — the
         // record-vs-enum collision is a PRE-EXISTING gap `build` does not
         // check; this task adds the check as a SEPARATE, explicit gate.
-        let ctx = EmitCtx::build(&interner, &program, DbDriver::Sqlite, None)?;
+        let ctx = EmitCtx::build(
+            &interner,
+            &program,
+            DbDriver::Sqlite,
+            None,
+            ipe_ir::Target::Native,
+        )?;
         assert_eq!(ctx.record_structs().len(), 1);
         assert_eq!(
             ctx.record_structs().first().map(|r| r.name.as_str()),
@@ -2379,7 +2424,13 @@ mod record_struct_namespace_tests {
             }],
         };
 
-        let ctx = EmitCtx::build(&interner, &program, DbDriver::Sqlite, None)?;
+        let ctx = EmitCtx::build(
+            &interner,
+            &program,
+            DbDriver::Sqlite,
+            None,
+            ipe_ir::Target::Native,
+        )?;
         ctx.assert_record_structs_disjoint_from_type_namespace(&BTreeSet::new())
     }
 }

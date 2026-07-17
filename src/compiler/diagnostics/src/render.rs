@@ -442,6 +442,10 @@ fn name_label(msg: &NameError) -> Option<String> {
         NameError::UnknownKernelAlias {
             module, function, ..
         } => Some(format!("no registered kernel `{module}.{function}`")),
+        NameError::ServerOnlyKernelForWasm { qualifier, name } => Some(format!(
+            "`{qualifier}.{name}` is server-only and has no denotation for target `wasm`; \
+             run it behind a server route and call it from the client over HTTP"
+        )),
         NameError::Unknown => None,
     }
 }
@@ -697,6 +701,12 @@ const fn feature_label(f: Feature) -> &'static str {
              destructure, but not yet nested inside a constructor payload or a \
              tuple element — that needs the carrier's record type threaded to the \
              lowerer [feature: nested-payload-patterns]"
+        }
+        Feature::WasmRoutedApp => {
+            "a routed Live.app (Model with a `page` field + `routes`) has no \
+             browser client router yet — under `--target wasm` use a \
+             single-page Model (no `page` field) for now \
+             [feature: wasm-routed-app]"
         }
         Feature::AliasOverRefutablePayload => {
             "an `as`-alias over a nested constructor / literal / list pattern \

@@ -54,6 +54,11 @@ needs everything before it except M7.
 
 ## M0 — Pure-kernel wasm floor (first landable slice)
 
+**Status: LANDED** — uuid `js` shim (wasm32-scoped), `wasm-floor` CI job
+(default + `--features json` builds), floor-guard test re-pointed. The crypto
+leg stays excluded (getrandom js untested for the RustCrypto stack) — a
+stated exclusion, revisited with the crypto substitutes.
+
 **Scope.** Make the documented floor (`List`/`String`/`Dict`/`Maybe`/`Result`
 + JSON, no Task I/O — including the `Ipe.Ui` render surface, which the probe
 shows is already part of it) an *enforced* build target instead of an
@@ -76,6 +81,16 @@ CI workflow.
 
 ## M1 — Layer-1 security gate: target-keyed kernel registry
 
+**Status: LANDED** — `ipe_kernels::Target` (`Native` | `WasmClient`) +
+default-deny `available_on` allowlist; `ipe_canon::target_gate` walks the
+linked module (naming-based: everything linked is emitted, so reachability
+pruning waits for the M5 closure); IPE-N0029 diagnostic + explain page;
+`--target wasm` CLI flag threaded through `BuildOptions`/`BuildConfig` and
+both build-cache keys. `Cmd.none`/`Cmd.batch`/`Cmd.perform`/`Sub.none` +
+`Live.app` are tagged alongside the landed M3 sink (their substitutes exist);
+`Live.route` stays untagged until the client router lands (routed apps are
+IPE-L0129 under wasm).
+
 **Scope.** The `Target` (`Native` | `WasmClient`) parameter on the kernel
 registry as a **default-deny allowlist** (spec Q5 Layer 1): under
 `--target wasm` a kernel resolves only if explicitly `WasmClient`-tagged;
@@ -96,6 +111,16 @@ default-deny proven by an untagged-new-kernel test.
 
 ## M2 — WASM emission branch (manifest + entry)
 
+**Status: LANDED (orchestration partial)** — fourth manifest template
+(cdylib, wasm-bindgen pinned to the CLI version, no tokio/axum/sqlx/TLS,
+project-local `.cargo/config.toml` shielding wasm32 from host native-linker
+rustflags), wasm runtime module set + floor-filtered prelude,
+`#[wasm_bindgen(start)]` entry, `www/index.html` + `boot.js` CSP shell in the
+emitted project. SEAL proven: `examples/40-wasm-counter` ipe-0 ⇒ wasm
+cargo-0. The driver prints the cargo/wasm-bindgen bundle commands instead of
+running them — the in-driver orchestration (+`wasm-opt`) is the remaining M2
+work.
+
 **Scope.** Fourth manifest template in the backend (spec Q2): `cdylib`,
 wasm-bindgen/wasm-bindgen-futures/js-sys/web-sys-allowlist/gloo-timers/
 getrandom-js/console_error_panic_hook; **no** tokio/axum/sqlx/native-TLS and
@@ -111,6 +136,19 @@ branch: `#[wasm_bindgen(start)]` entry replacing `fn main()` + tokio.
 to a `.wasm` (SEAL holds cross-target: ipe exit-0 ⇒ wasm cargo exit-0).
 
 ## M3 — Client runtime: DOM sink + TEA scheduler (Ipe.Ui in the browser)
+
+**Status: LANDED (first slice)** — `src/runtime/rust/src/wasm/` (feature
+`wasm-client`): mount, `dom::diff` `Vec<Patch>` apply via typed web-sys,
+delegated root listeners keyed by sky-id, rAF-coalesced update cycle,
+`Cmd.perform` via `spawn_local`, panic hook. Proven in Chromium:
+`examples/40-wasm-counter` renders the Ipe.Ui view and processes onClick
+(+3/−1/Reset). Divergence from the sketch: mount applies the
+sanitiser-gated `render_html` output (ONE renderer — the DOM the diff
+patches is byte-identical to the SSE first paint) rather than a per-node
+tree walk; the typed walk remains an option behind equivalence tests.
+Prereqs executed: `dom/` re-home (diff/dispatch/form/req), cfg-split
+`IpeTask`/`PerformThunk` Send relaxation. Remaining: Sub bridge (timers),
+pub/sub broker, `wasm-bindgen-test` harness in the runtime crate.
 
 **Scope.** `src/runtime/rust/src/wasm/` (feature `wasm-client`,
 `cfg(target_arch = "wasm32")`) per spec Q4: `mount` (tree walk →
