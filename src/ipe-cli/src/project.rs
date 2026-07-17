@@ -49,6 +49,13 @@ pub struct ProjectManifest {
     /// `[database]` section (or the `driver` key within it) is absent — the
     /// documented default in `CLAUDE.md`'s `sky.toml` schema table.
     pub driver: ipe_backend_rust::DbDriver,
+    /// The `[rust]` static-build request layer (`static` / `target` /
+    /// `allocator` / `allowSlowAllocator`) — the lowest-precedence layer
+    /// (CLI > env > `sky.toml`) of `crate::build_plan::resolve`'s input.
+    /// Every field defaults to unset when the section (or key) is absent.
+    /// Malformed values (a bad bool, an unknown allocator) are refused at
+    /// parse time, never silently ignored.
+    pub static_request: crate::build_plan::StaticRequestLayer,
 }
 
 /// A discovered Ipê source file with its resolved module path.
@@ -133,6 +140,10 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
     let mut name: Option<String> = None;
     let mut src_rel: Option<String> = None;
     let mut driver_str: Option<String> = None;
+    let mut rust_static: Option<String> = None;
+    let mut rust_target: Option<String> = None;
+    let mut rust_allocator: Option<String> = None;
+    let mut rust_allow_slow: Option<String> = None;
 
     for raw_line in text.lines() {
         let line = raw_line.trim();
@@ -146,6 +157,8 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
                 "[source]"
             } else if line == "[database]" {
                 "[database]"
+            } else if line == "[rust]" {
+                "[rust]"
             } else {
                 "other"
             };
@@ -160,6 +173,10 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
             ("" | "[project]", "name") => name = Some(val.to_owned()),
             ("[source]", "root") => src_rel = Some(val.to_owned()),
             ("[database]", "driver") => driver_str = Some(val.to_owned()),
+            ("[rust]", "static") => rust_static = Some(val.to_owned()),
+            ("[rust]", "target") => rust_target = Some(val.to_owned()),
+            ("[rust]", "allocator") => rust_allocator = Some(val.to_owned()),
+            ("[rust]", "allowSlowAllocator") => rust_allow_slow = Some(val.to_owned()),
             _ => {}
         }
     }
@@ -178,11 +195,28 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
         None => ipe_backend_rust::DbDriver::Sqlite,
     };
 
+    // Parse, don't validate: the `[rust]` values become typed request fields
+    // here, so a typo'd allocator or bool is a hard error at manifest-parse
+    // time — the same posture as `[database] driver` above.
+    let static_request = crate::build_plan::StaticRequestLayer {
+        static_build: rust_static
+            .map(|v| crate::build_plan::parse_bool("sky.toml: [rust] static", &v))
+            .transpose()?,
+        target: rust_target,
+        allocator: rust_allocator
+            .map(|v| crate::build_plan::AllocatorChoice::parse(&v))
+            .transpose()?,
+        allow_slow_allocator: rust_allow_slow
+            .map(|v| crate::build_plan::parse_bool("sky.toml: [rust] allowSlowAllocator", &v))
+            .transpose()?,
+    };
+
     Ok(ProjectManifest {
         name,
         root,
         src_root,
         driver,
+        static_request,
     })
 }
 
