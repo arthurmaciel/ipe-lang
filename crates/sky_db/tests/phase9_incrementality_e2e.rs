@@ -1,19 +1,17 @@
 #![forbid(unsafe_code)]
-//! Milestone D Task 17 — the end-to-end incrementality proof (spec:
-//! `docs/architecture/phase5-emit-rust-file-design-2026-07-12.md` §5 Task 17).
+//! The end-to-end incrementality proof (spec:
+//! `docs/architecture/phase5-emit-rust-file-design-2026-07-12.md` §5).
 //!
-//! Tasks 14–16 built and unit-proved the per-`RustFileId` query graph. This
-//! test proves the WHOLE-PATH property the graph exists to deliver, driven
-//! through the real top-level `emit_manifest` demand exactly as
-//! `compile_prepared` drives it: a body edit to ONE module of a warm two-module
-//! session forces that module's `emit_rust_file` to re-execute, but the
-//! `emit_spine_file`'s OUTPUT VALUE stays byte-identical (salsa backdates it) —
-//! so the on-disk write for the spine's `main.rs` skips and `cargo`'s
-//! per-compilation-unit incrementality is preserved.
+//! The per-`RustFileId` query graph exists to deliver a WHOLE-PATH property,
+//! and this test proves it, driven through the real top-level `emit_manifest`
+//! demand exactly as `compile_prepared` drives it: a body edit to ONE module of
+//! a warm two-module session forces that module's `emit_rust_file` to
+//! re-execute, but the `emit_spine_file`'s OUTPUT VALUE stays byte-identical
+//! (salsa backdates it) — so the on-disk write for the spine's `main.rs` skips
+//! and `cargo`'s per-compilation-unit incrementality is preserved.
 //!
-//! This is asserted from the real salsa event stream (Phase 1 §3.1's
-//! `with_event_callback` memo-hit mechanism), NOT inferred from the query
-//! graph's static shape — the discipline §5 Task 17 requires.
+//! This is asserted from the real salsa event stream (the `with_event_callback`
+//! memo-hit mechanism), NOT inferred from the query graph's static shape.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -124,9 +122,9 @@ fn body_edit_reexecutes_only_the_edited_module_file() {
     // lower_program), but its OUTPUT VALUE must be byte-identical — the spine
     // carries no user function body, so Lib's body edit does not change it.
     // salsa backdates the memo; the on-disk write for main.rs skips. This is
-    // THE property the whole task exists to deliver, asserted on the VALUE
-    // (§4.3: value-equality, not zero-executions, is the useful invariant on
-    // the coarse floor).
+    // the property the whole graph exists to deliver, asserted on the VALUE:
+    // value-equality, not zero-executions, is the useful invariant on the
+    // coarse floor.
     let spine_after = sky_db::emit_spine_file(&db, root, main, config).expect("spine after");
     assert_eq!(
         spine_before, spine_after,

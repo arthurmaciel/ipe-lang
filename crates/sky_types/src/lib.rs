@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! `sky_types` — Hindley-Milner type inference for the Milestone-0 subset of
+//! `sky_types` — Hindley-Milner type inference for the supported subset of
 //! Sky.
 //!
 //! Entry point: [`infer`]. It consumes a name-resolved [`sky_canon::ast::Module`]
@@ -12,8 +12,8 @@
 //! `Sky.Type.{Type,UnionFind,Unify,Solve}` + `Constrain.Expression`:
 //!
 //! * [`unionfind`] — `Vec`-backed weighted union-find (port of `UnionFind`).
-//! * [`constrain`] — constraint generation over the canonical AST (M0 arms of
-//!   `Constrain.Expression`).
+//! * [`constrain`] — constraint generation over the canonical AST (the
+//!   supported arms of `Constrain.Expression`).
 //! * [`unify`] — in-place unification with an occurs check (port of `Unify`).
 //! * [`solve`] — budget-bounded constraint discharge (port of `Solve`).
 //!
@@ -213,10 +213,10 @@ fn infer_with_budget_attributed(
     let req_fields = lift!(RequestFields::build(interner));
     // The opaque `LiveReq` type (Sky.Live `init`'s per-session request context)
     // has a fixed field set too (see [`LiveReqFields`]); intern it once here so
-    // `req.path` / `req.cookies` accesses resolve against the runtime struct (#180).
+    // `req.path` / `req.cookies` accesses resolve against the runtime struct.
     let live_req_fields = lift!(LiveReqFields::build(interner));
     // The nominal error-payload types `PanicInfo`/`TypeInfo`/`ErrorInfo`
-    // resolve field accesses the same way (SEAL fix 2026-07-11 — see
+    // resolve field accesses the same way (SEAL fix — see
     // [`ErrorRecordFields`]).
     let err_fields = lift!(ErrorRecordFields::build(interner));
     let builtin_field_tables = BuiltinFieldTables {
@@ -227,8 +227,8 @@ fn infer_with_budget_attributed(
     // Unlike the other post-solve passes, `resolve_deferred` returns the failing
     // field-access / record-update's `home` module path so a SKY-T0012 attributes
     // to the source file that actually owns the access — not the byte-offset
-    // heuristic's best guess, which mis-blamed `info.message` in one module on a
-    // `class` call in another (12-skyvote regression).
+    // heuristic's best guess, which can mis-blame `info.message` in one module
+    // on a `class` call in another.
     resolve_deferred(
         &mut uf,
         budget,
@@ -238,7 +238,7 @@ fn infer_with_budget_attributed(
         &generated.record_updates,
     )?;
 
-    // Per-route page witnesses (#108 round 4): each `Live.route pattern ctor`
+    // Per-route page witnesses: each `Live.route pattern ctor`
     // relates its builder argument's settled type to the route's page type —
     // a nullary builder witnesses the page directly, a params-consuming
     // constructor (`String -> Page`) witnesses it with its result type.  Must
@@ -289,7 +289,7 @@ fn infer_with_budget_attributed(
     // emitted type parameter. (Ordering-only flex variables are left generic, as
     // before — they carry no numeric obligation to default.)
     let int_sym = lift!(interner.intern("Int"));
-    // SQL-bind-parameter defaulting (#165): the element variable of a `List a`
+    // SQL-bind-parameter defaulting: the element variable of a `List a`
     // argument bound into `Db.exec` / `Db.query` / `Db.queryDecode`'s params
     // position that the program never pinned to a concrete type (an empty
     // `[]` literal at that call site, e.g. `Database.queryOrLog label sql []`
@@ -557,7 +557,7 @@ fn emitted_bound_satisfied(interner: &Interner, bounds: TyBounds, ty: &Ty) -> bo
                     && args.len() == 1
                     && interner.resolve(*name) == Some("List")
         );
-    // #90 T3: the higher-order-kernel callback-result obligation (`map` /
+    // The higher-order-kernel callback-result obligation (`map` /
     // `map2..5` / `mapError` / `andMap` over `Maybe`/`Result` — see
     // `TyBounds::HOF_KERNEL_RESULT`). Deliberately SHALLOW on structure —
     // only the HEAD is checked (`Ty::Fun` directly, not nested anywhere) —
@@ -587,7 +587,7 @@ fn emitted_bound_satisfied(interner: &Interner, bounds: TyBounds, ty: &Ty) -> bo
     // design for ALL bounds at once — see
     // `docs/adr/0016-andmap-arity-gate-type-obligation.md` §6.
     let not_curried_ok = !matches!(ty, Ty::Fun(_, _) | Ty::Var(_));
-    // SQL-bind-parameter obligation (#165): satisfied by exactly the Sky
+    // SQL-bind-parameter obligation: satisfied by exactly the Sky
     // types the runtime has a `From<T> for SqlParam` impl for — the bare
     // scalars `sky_runtime::db` binds directly, plus the `SqlValue` ADT
     // itself (whose generated `From` impl covers the typed-mixed-param
@@ -627,7 +627,7 @@ pub(crate) fn concrete_super_ok(interner: &Interner, bounds: TyBounds, ty: &Ty) 
                     && args.len() == 1
                     && interner.resolve(*name) == Some("List")
         );
-    // SQL-bind-parameter obligation (#165) pinned directly to a concrete
+    // SQL-bind-parameter obligation pinned directly to a concrete
     // type: the runtime's `From<T> for SqlParam` set — `String` / `Int` /
     // `Float` / `Bool`, plus the `SqlValue` ADT itself.
     let sql_param_ok = matches!(prim, Some("Int" | "Float" | "String" | "Bool" | "SqlValue"));
@@ -643,7 +643,7 @@ pub(crate) fn concrete_super_ok(interner: &Interner, bounds: TyBounds, ty: &Ty) 
         // since every non-function type derives `SkyStringify`.
         && (!bounds.has_show() || ty_is_equatable(ty))
         && (!bounds.has_append() || appendable_ok)
-        // #90 T3: see `emitted_bound_satisfied`'s matching comment — same
+        // See `emitted_bound_satisfied`'s matching comment — same
         // structurally-shallow, fail-closed-on-`Ty::Var` check, reused for
         // the concrete-pin path. (A `Content::Structure` root cannot zonk to
         // a bare head `Ty::Var`, so the `Ty::Var` arm is unreachable here —
@@ -694,7 +694,7 @@ fn super_unsatisfied(interner: &Interner, bounds: TyBounds, ty: &Ty, span: Span)
     if bounds.has_append() {
         classes.push("Appendable");
     }
-    // #90 T3: the higher-order-kernel callback-result obligation. Named
+    // The higher-order-kernel callback-result obligation. Named
     // distinctly from the other classes (it is not a Sky super-type a user
     // annotates against — it is an internal arity restriction on the
     // callback-result slot of `Maybe`/`Result`'s `map`/`map2..5`/`mapError`/
@@ -864,7 +864,7 @@ impl RequestFields {
 }
 
 /// The fixed field set of the opaque `LiveReq` type — the per-session request
-/// context passed to a Sky.Live `init` callback (#180).
+/// context passed to a Sky.Live `init` callback.
 ///
 /// Mirrors [`RequestFields`] exactly: `LiveReq` is an opaque nullary `Con` at
 /// the type level (so `init : {} -> …` fails closed with SKY-T0001 against the
@@ -950,7 +950,7 @@ impl LiveReqFields {
 struct BuiltinFieldTables<'a> {
     /// Opaque server `Sky.Http.Server.Request` field table.
     req: &'a RequestFields,
-    /// Opaque Sky.Live `LiveReq` field table (#180).
+    /// Opaque Sky.Live `LiveReq` field table.
     live_req: &'a LiveReqFields,
     /// Nominal error-payload (`PanicInfo`/`TypeInfo`/`ErrorInfo`) field tables.
     err: &'a ErrorRecordFields,
@@ -968,8 +968,8 @@ enum ErrFieldTy {
 }
 
 /// Fixed field tables for the NOMINAL error-payload types `PanicInfo` /
-/// `TypeInfo` / `ErrorInfo` (SEAL fix 2026-07-11 — see `docs/architecture/
-/// docs/adr/0017-error-payload-nominal-identity.md`).
+/// `TypeInfo` / `ErrorInfo` (SEAL fix — see
+/// `docs/adr/0017-error-payload-nominal-identity.md`).
 ///
 /// These three types are opaque `Con`s at the type level (so a bare record
 /// literal cannot masquerade as the runtime's concrete `SkyPanicInfo` /
@@ -1145,14 +1145,14 @@ fn field_access_state(
         // The opaque `LiveReq` Con (Sky.Live `init`'s per-session request)
         // resolves the same way against its fixed field set (see
         // [`LiveReqFields`]); `req.path` type-checks, the emit reads
-        // `sky_runtime::live::LiveReq` directly (#180).
+        // `sky_runtime::live::LiveReq` directly.
         Content::Structure(FlatType::Con { name, args, .. })
             if *name == tables.live_req.con && args.is_empty() =>
         {
             Peek::LiveReq
         }
         // `PanicInfo` / `TypeInfo` / `ErrorInfo` are opaque nominal Cons
-        // (SEAL fix 2026-07-11) whose field sets are fixed (see
+        // (SEAL fix) whose field sets are fixed (see
         // [`ErrorRecordFields`]). Resolve the field against the known table
         // so `p.message` / `t.expected` / `info.details` type-check; the
         // emit reads the runtime structs' pub fields directly.
@@ -1355,7 +1355,7 @@ fn resolve_one_record_update(
     }
 }
 
-/// Discharge every deferred per-route page witness (#108 round 4).
+/// Discharge every deferred per-route page witness.
 ///
 /// For each `Live.route pattern builder` reference: follow the builder
 /// variable's settled structure and peel its leading `_ -> rest` arrows —
@@ -1634,8 +1634,8 @@ mod tests {
     #[test]
     fn body_constraining_a_record_field_var_is_rejected() {
         // `bad : a -> { value : a } ; bad x = { value = 1 }` pins the rigid field
-        // variable `a` to `Int` in the body — the rigid-skolem gate rejects it
-        // (bounded generics are M2d), rather than silently accepting it.
+        // variable `a` to `Int` in the body — the rigid-skolem gate rejects it,
+        // rather than silently accepting it.
         let src = format!(
             "{M2C_HDR}bad : a -> {{ value : a }}\nbad x =\n    {{ value = 1 }}\n\nmain = bad\n"
         );
@@ -2282,10 +2282,9 @@ mod tests {
         );
     }
 
-    /// Test matrix item 8: a rigid-contaminated untyped def (its body unifies
-    /// with a typed sibling's skolem) is unchanged — phase 1 conservatively
-    /// excludes rigid roots from generalization, so this stays exactly as
-    /// restrictive as before the fix.
+    /// A rigid-contaminated untyped def (its body unifies with a typed
+    /// sibling's skolem) is not generalized — generalization conservatively
+    /// excludes rigid roots.
     #[test]
     fn rigid_contaminated_untyped_def_stays_unquantified() {
         let src = "module Main exposing (main)\n\
@@ -2374,10 +2373,9 @@ mod tests {
         // `Task.fail : Error -> Task Error a` called with a `String` argument:
         // the DECLARED parameter type is the *expected* side and the user's
         // actual argument the *found* side — "expected Error, found String",
-        // never the inversion. Regression for the BACKLOG diagnostic-
-        // orientation row (2026-07-10 review of the db_crud/Task.fail pin):
-        // the Call arm used to constrain `eq(callee_var, arrow-of-arg-types)`,
-        // which put the actual argument on unify's *expected* side.
+        // never the inversion. The Call arm must orient the constraint so the
+        // declared parameter, not the actual argument, lands on unify's
+        // *expected* side.
         let src = "module Main exposing (main)\n\
                    import Sky.Core.Prelude exposing (..)\n\
                    main =\n    Task.fail \"plain string\"\n";
@@ -2468,8 +2466,6 @@ mod tests {
         // field IS readable (`p.message`); the real reason is that a nominal
         // builtin has no user-writable record-update form. It must be the
         // dedicated `BuiltinRecordUpdate` (SKY-T0017) naming the type.
-        // (BACKLOG DX row from the PanicInfo nominal-identity review,
-        // 2026-07-11; the design doc called this exact follow-up out.)
         let src = "module Main exposing (main)\n\
                    import Sky.Core.Prelude exposing (..)\n\
                    f : PanicInfo -> PanicInfo\n\
@@ -2816,7 +2812,7 @@ mod tests {
         );
     }
 
-    /// SKY-L0124 (#153 follow-up): a `Live.app` with a non-empty `routes` list
+    /// SKY-L0124: a `Live.app` with a non-empty `routes` list
     /// whose Model has NO `page` field emits a **warning**, not an error. The
     /// program still type-checks (Go's `applyRoute` no-ops the same shape); the
     /// warning flags the likely mis-named routed-page field.
@@ -3475,7 +3471,7 @@ mod tests {
         );
     }
 
-    // ── M2a: let-generalization + per-call-site instantiation ───────────────
+    // ── let-generalization + per-call-site instantiation ────────────────────
 
     /// A polymorphic annotation `a -> a` reads back into `env` as one quantified
     /// variable used on both sides of the arrow — `Fun(Var p, Var p)` with the
@@ -3687,7 +3683,7 @@ mod tests {
     /// REJECTED at type-check (SKY-T0001-class), not silently accepted.
     #[test]
     fn auth_sign_token_claims_pinned_to_dict_string_string() {
-        // backlog #44: `signToken`'s first argument is `Secret`, not `String` —
+        // `signToken`'s first argument is `Secret`, not `String` —
         // seal via `Secret.fromString` (auto-qualified prelude module, no
         // import needed, same as `Uuid.v4`).
         let ok_src = "module Main exposing (main)\n\
@@ -3881,13 +3877,12 @@ mod tests {
         assert_eq!(ty_con_name(b, &i).as_deref(), Some("Int"));
     }
 
-    /// SKY-T0001 regression (numeric-literal polymorphism): an integer literal is
+    /// Numeric-literal polymorphism (SKY-T0001): an integer literal is
     /// `Number`-polymorphic, so passing `100` where a `Float` is expected
-    /// type-checks — the literal resolves to `Float`.  This is the minimized
-    /// `pct 100` shape (`pct : Float -> Length`) that failed in `examples/12`,
-    /// `examples/00`, and (transitively) the cross-module link before the fix:
-    /// the literal used to be pinned to a concrete `Int` at creation and clashed
-    /// with the `Float` parameter.
+    /// type-checks — the literal resolves to `Float`.  The minimized shape is
+    /// `pct 100` with `pct : Float -> Length`: the literal must not be pinned
+    /// to a concrete `Int` at creation, which would clash with the `Float`
+    /// parameter.
     #[test]
     fn integer_literal_accepted_where_float_expected() {
         let src = "module Main exposing (main)\n\
@@ -3954,11 +3949,11 @@ mod tests {
         );
     }
 
-    /// #145 regression: `constrain_pattern` must recurse into sub-patterns of a
+    /// `constrain_pattern` must recurse into sub-patterns of a
     /// constructor whose scheme is not registered (e.g. an imported kernel-stdlib
-    /// ADT like `ChunkEvent`).  Before the fix, the no-scheme fallback skipped
-    /// binding arg variables into `br_local`, so the arm body's `VarLocal` lookup
-    /// fired the "unbound local" ICE (SKY-I0001).
+    /// ADT like `ChunkEvent`).  If the no-scheme fallback skips binding arg
+    /// variables into `br_local`, the arm body's `VarLocal` lookup
+    /// fires the "unbound local" ICE (SKY-I0001).
     ///
     /// We exercise this directly by building a `canon::Module` with no `unions`
     /// (so `ImportedCtor` has no scheme) and a single `case` arm:
@@ -4027,7 +4022,7 @@ mod tests {
         let result = infer(&module, &mut i);
 
         // The result may be a type error (e.g. T0001) but must NOT be the
-        // "unbound local" compiler bug that fired before the #145 fix.
+        // "unbound local" compiler bug.
         if let Err(sky_diagnostics::Diagnostic::CompilerBug { detail, .. }) = &result {
             assert!(
                 !detail.contains("unbound local"),
@@ -4037,7 +4032,7 @@ mod tests {
         }
     }
 
-    /// #201 diagnostic: a cross-module untyped recursive function polymorphic in
+    /// A cross-module untyped recursive function polymorphic in
     /// its LIST-ELEMENT type (`listLen : List a -> Int`) must generalize its
     /// element var at the boundary so the lowerer can emit a Rust generic — NOT
     /// leave it a residual flex that hits SKY-L0102.

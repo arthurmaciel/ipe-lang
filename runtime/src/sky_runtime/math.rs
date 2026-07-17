@@ -82,7 +82,7 @@ pub fn sky_int_div(a: i64, b: i64) -> i64 {
     a.wrapping_div(b)
 }
 
-// CONTRACT (documented deliberately — audit 2026-06-19): `min`/`max` use a real
+// CONTRACT (documented deliberately): `min`/`max` use a real
 // `PartialOrd` compare. For floats this tracks the TYPED Go path (`Math_minT`),
 // NOT Go's polymorphic any-path (which routes floats through `AsInt` and compares
 // truncated ints) — the typed compare is the correct one. NaN tie-break is fixed
@@ -102,7 +102,7 @@ pub fn math_pow(base: f64, exp: f64) -> f64 {
     base.powf(exp)
 }
 
-// CONTRACT (documented deliberately — audit 2026-06-19): the `as i64` float→int
+// CONTRACT (documented deliberately): the `as i64` float→int
 // casts SATURATE by Rust's definition — NaN → 0, +∞ → i64::MAX, −∞ → i64::MIN,
 // out-of-range finite → the nearest bound. This is TOTAL (never panics/UB) and is
 // the deliberate contract; Go's `int64(math.Floor(x))` on the same extreme inputs
@@ -300,7 +300,7 @@ mod tests {
         assert_eq!(math_round(2.4), 2);
     }
 
-    // ── go-parity regression tests (2026-06-15) ──────────────────────
+    // ── go-parity regression tests ──────────────────────
 
     #[test]
     fn test_math_phi() {

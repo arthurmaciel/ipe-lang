@@ -37,14 +37,14 @@ use sky_types::SolvedTypes;
 ///
 /// # Errors
 /// * Returns [`sky_diagnostics::Diagnostic::Lower`] when the input is valid Sky
-///   that the M0 subset does not model yet (polymorphism, higher-order values,
+///   that the supported subset does not model yet (polymorphism, higher-order values,
 ///   non-`Task ()` results, extra kernels, non-constructor patterns, …),
 ///   carrying the offending node's span and its `SKY-L01##` feature.
 /// * Returns [`sky_diagnostics::Diagnostic::CompilerBug`] when an internal
 ///   invariant is violated — a missing region type for an `IrType` slot, an
 ///   unresolved scrutinee enum, or a match arm set that fails
 ///   [`sky_ir::Match::new`]'s exhaustiveness proof. These are unreachable for
-///   well-typed, well-canonicalised M0 input.
+///   well-typed, well-canonicalised input.
 pub fn lower(
     m: &canon::Module,
     types: &SolvedTypes,
@@ -58,7 +58,7 @@ pub fn lower(
     // interning) raises only homeless `CompilerBug`/intern diagnostics — each
     // such `?` is mapped to an EMPTY home via `homeless`, so the driver falls
     // back to its byte-offset heuristic for those (as it already does for
-    // homeless type errors). The per-def home attribution that fixes #221's
+    // homeless type errors). The per-def home attribution that fixes
     // cross-module misattribution lives inside `Lowerer::run`, at the
     // `lower_def` boundary.
     let homeless = |d: Diagnostic| (d, Vec::<sky_intern::Symbol>::new());
@@ -135,7 +135,7 @@ pub fn lower(
     // seed the variant-set / arity tables it would otherwise read from
     // `module.unions`. Mint them here through the owned `&mut Interner`.
     //
-    // `SqlValue` / `SqlField` are M5b-db Prelude built-ins following the same
+    // `SqlValue` / `SqlField` are Db Prelude built-ins following the same
     // pattern: they appear in typed Sky code as if user-declared, but have no
     // `type` declaration in any Sky source file — the compiler synthesises their
     // `EnumDef`s at lowering time when a Db kernel call is detected.
@@ -180,7 +180,7 @@ pub fn lower(
         ek_conflict: interner.intern("Conflict").map_err(homeless)?,
         ek_unavailable: interner.intern("Unavailable").map_err(homeless)?,
         ek_unexpected: interner.intern("Unexpected").map_err(homeless)?,
-        // ── ErrorDetails (backlog #85 follow-up) ──────────────────────────────
+        // ── ErrorDetails ─────────────────────────────────────────────────────
         errordetails: interner.intern("ErrorDetails").map_err(homeless)?,
         ed_ffi_panic: interner.intern("FfiPanic").map_err(homeless)?,
         ed_type_mismatch: interner.intern("TypeMismatch").map_err(homeless)?,
@@ -591,7 +591,7 @@ mod tests {
     #[test]
     fn generic_record_update_is_a_lower_gap() {
         // Updating a generic record needs a `Clone`-bounded type parameter
-        // (bounded generics are M2d) — it surfaces as SKY-L0111, NOT broken Rust.
+        // (bounded generics are unsupported) — it surfaces as SKY-L0111, NOT broken Rust.
         let err = lower_result(
             "module Main exposing (setValue)\nsetValue : { value : a } -> a -> { value : a }\nsetValue r x =\n    { r | value = x }\n",
         );
@@ -898,12 +898,11 @@ mod tests {
         );
     }
 
-    /// Regression for Bug-28: `init : any -> Model` (any in PARAM position).
+    /// Regression: `init : any -> Model` (any in PARAM position).
     ///
-    /// The batch-any19 fix previously filtered the `any` symbol from
-    /// `type_params`, causing the backend's `GenericScope::rust_name` to ICE
-    /// (SKY-I0001) because `params` still held `IrType::Generic(any_sym)` while
-    /// `type_params` was empty.
+    /// Filtering the `any` symbol from `type_params` causes the backend's
+    /// `GenericScope::rust_name` to ICE (SKY-I0001) because `params` still holds
+    /// `IrType::Generic(any_sym)` while `type_params` is empty.
     ///
     /// The principled fix computes `type_params` from the structurally-used
     /// `IrType::Generic` set of the solved `params + ret`.  For `any` in param

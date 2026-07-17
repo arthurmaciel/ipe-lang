@@ -348,8 +348,8 @@ impl SupervisorState {
 /// available safely) is the hard stop once the grace window elapses. The
 /// bounded-down-window property (H15) holds either way, at the cost of
 /// never proactively signalling the target's graceful-drain path from the
-/// watcher itself. Recorded as a scoped, honest limitation in the Phase-7
-/// spec addendum rather than reached for an unjustified `unsafe` block.
+/// watcher itself — a scoped, honest limitation rather than an unjustified
+/// `unsafe` block.
 fn stop_gracefully(child: &mut Child, grace: Duration) {
     let deadline = Instant::now() + grace;
     loop {

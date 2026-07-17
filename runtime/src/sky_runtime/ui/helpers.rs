@@ -494,8 +494,8 @@ pub fn html_raw_node_<M>(s: String) -> Html<M> {
 /// `Html.styleNode : List (Attribute msg) -> String -> Html msg`
 ///
 /// SECURITY (F7): `styleNode` is arity-2 `(attrs, css:String)` — NOT the arity-3
-/// `html_node_` it was previously mis-lowered to. It bakes the injection fix into
-/// construction (PARSE, DON'T VALIDATE): the CSS body is close-tag-neutralised
+/// `html_node_`. It bakes injection safety into construction (PARSE, DON'T
+/// VALIDATE): the CSS body is close-tag-neutralised
 /// exactly once, HERE, so the `HRaw` it produces is already safe. The `<style>`
 /// render sink (`html::render_into_ctx`) strips again — defence in depth — so a
 /// `</style><script>` breakout in a `Std.Css` value cannot reach the DOM.
@@ -569,11 +569,11 @@ pub fn html_button_<M>(
 
 /// `Html.p (and other block elements) : List (Attribute msg) -> List (Html msg) -> Html msg`
 ///
-/// NOTE (Phase 0): `h1`/`h2`/.../`body`/`footer`/`nav`/`section`/… all map
-/// here because they share the 2-arg `(attrs, children)` signature.  A future
-/// refactor will split them into per-tag kernel variants or use `html_node_`
-/// with an injected tag-name arg.  In Phase 0 only `p` is the primary tag —
-/// the other tag names are not yet exercised by any test.
+/// NOTE: `h1`/`h2`/.../`body`/`footer`/`nav`/`section`/… all map here because
+/// they share the 2-arg `(attrs, children)` signature. These could split into
+/// per-tag kernel variants or use `html_node_` with an injected tag-name arg;
+/// `p` is the primary tag, the other tag names are not yet exercised by any
+/// test.
 pub fn html_p_<M>(
     attrs: Vec<crate::sky_runtime::html::Attribute<M>>,
     children: Vec<Html<M>>,
@@ -591,7 +591,7 @@ pub fn html_img_<M>(attrs: Vec<crate::sky_runtime::html::Attribute<M>>) -> Html<
     Html::HElement("img".to_owned(), attrs, vec![])
 }
 
-// ── Phase-1a: Event-attribute builders ───────────────────────────────────────
+// ── Event-attribute builders ───────────────────────────────────────
 //
 // These back the `UiOnClick`, `UiOnFocus`, … KernelFn variants.  They return
 // `element::Attribute<M>` (same as all other Ui attribute builders) with the
@@ -691,7 +691,7 @@ pub fn ui_on_file_<M>(f: std::sync::Arc<dyn Fn(String) -> M + Send + Sync>) -> A
     )))
 }
 
-// ── #76 Tier 1: extended Std.Ui / Font / Background / Border builders ────────
+// ── Tier 1: extended Std.Ui / Font / Background / Border builders ────────
 
 // Ui namespace — aspect-ratio
 
@@ -996,7 +996,7 @@ pub fn ui_font_hover_size_<M>(n: i64) -> Attribute<M> {
     Attribute::AttrPseudoRule(PseudoClass::Hover, format!("font-size:{n}px"))
 }
 
-// ── Std.Ui.Region (#117) ────────────────────────────────────────────────────
+// ── Std.Ui.Region ────────────────────────────────────────────────────
 
 /// `Region.mainContent : Attribute msg`
 pub fn ui_region_main_content_<M>() -> Attribute<M> {
@@ -1160,9 +1160,9 @@ pub fn ui_form_<M: Clone>(
 /// a JSON path), matching the Go backend's `json.Unmarshal` semantics at the
 /// record-shape level (case-insensitive field-name match, missing field ⇒
 /// zero value). `F: Fn(T) -> M + Send + Sync + 'static` is a strictly
-/// narrower requirement than the `A: Any` bound this replaces (#109/#156).
+/// narrower requirement than an `A: Any` bound.
 ///
-/// #162: `Send + Sync` is NOT automatically satisfied merely because the
+/// `Send + Sync` is NOT automatically satisfied merely because the
 /// underlying Sky closure only captures `'static` enum constructors / owned
 /// data — if the codegen's generic first-class-function-value rendering has
 /// already boxed the closure as `Box<dyn Fn(T) -> M + Send + 'static>`
@@ -1203,7 +1203,7 @@ pub fn ui_on_submit_<M, T, F: Fn(T) -> M>(_f: F) -> Attribute<M> {
 /// `let`-bound `m : Msg`). Selected by the lowerer's type-directed
 /// `OnFormKind::FixedValue` verdict when the handler's solved type is a
 /// non-arrow value, so the codegen never emits a `(m)(_x)` call against a
-/// non-callable value (the #228 cargo `E0618` after `skyc` exit 0).
+/// non-callable value (which would be a cargo `E0618`).
 ///
 /// Deliberately does NOT route through `decode_form_or_warn` — there is no
 /// payload type to decode into, and a spurious decode failure on a real form's
@@ -1255,7 +1255,7 @@ pub fn ui_behind_<M: Clone>(elem: Element<M>) -> Attribute<M> {
     Attribute::AttrNearby(Location::Behind, elem)
 }
 
-// ── #154: Breakpoint constants + wrapper ──────────────────────────────────────
+// ── Breakpoint constants + wrapper ──────────────────────────────────────
 //
 // These functions support `Ui.breakpoint` / `Ui.mediaQuery` and the named
 // `Breakpoint` constants (`Ui.mobile`, `Ui.tablet`, …).
@@ -1269,15 +1269,14 @@ pub fn ui_behind_<M: Clone>(elem: Element<M>) -> Attribute<M> {
 // `data-sky-mq-q` / `data-sky-mq-rules` marker pair consumed by
 // `live::style_inject::build_mq` into a sky-id-scoped
 // `<style data-sky-mq="<sid>">@media <q> { [sky-id="<sid>"] { <rules> } }</style>`
-// block.  (The pre-2026-07-11 Phase-0 no-op-passthrough stub is gone; see
-// docs/adr/0019-ui-mediaquery-safe-boundary.md.)
+// block.  (See docs/adr/0019-ui-mediaquery-safe-boundary.md.)
 
-// NOTE (2026-07-11): these six breakpoint constants return a bare `String`
-// with NO `M` in the signature, so they take NO type parameter. A phantom
-// `<M>` here was a latent bug — an unconstrained type param can't be inferred
-// and produces `E0282: type annotations needed` the moment the value flows
-// into a real consumer (which it now does, once `ui_breakpoint_` delegates to
-// `ui_media_query_` instead of ignoring its query arg). The codegen emits
+// NOTE: these six breakpoint constants return a bare `String` with NO `M` in
+// the signature, so they take NO type parameter. A phantom `<M>` here would be
+// a latent bug — an unconstrained type param can't be inferred and produces
+// `E0282: type annotations needed` the moment the value flows into a real
+// consumer (`ui_breakpoint_` delegates to `ui_media_query_` rather than
+// ignoring its query arg, so it does flow). The codegen emits
 // `ui_mobile_()` (no turbofish), so a non-generic fn is exactly what's needed.
 
 /// `Ui.mobile : String` — CSS media query `(max-width: 767px)`.
@@ -1310,7 +1309,7 @@ pub fn ui_reduced_motion_() -> String {
     "(prefers-reduced-motion: reduce)".to_owned()
 }
 
-// ── #76: PseudoClass opaque constants + Ui.onPseudo ───────────────────────────
+// ── PseudoClass opaque constants + Ui.onPseudo ───────────────────────────
 //
 // Typed-constant shortcuts so user code can write `Ui.hover` / `Ui.focus`
 // without a fully-qualified constructor path — mirrors `Ui.white` / `Ui.black`

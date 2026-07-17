@@ -11,13 +11,13 @@
 //! typed kernel below — one per heterogeneous toMsg shape, so no bounded fn is
 //! shared and no stdlib override is needed.
 //!
-//! STATUS (as of #169): this client-side receive surface is NOT yet wired —
-//! no `KernelFn` variant routes codegen to `sub_subscribe_ws_{message,close,
-//! error}`, so these three functions are currently unreachable dead code. Their
-//! `F` bound was relaxed from `Send + Sync` to `Send` (#169) defensively, ahead
-//! of that wiring, so the eventual wiring commit cannot ship exit-0-then-cargo-
-//! fail (a THE-SEAL violation) on the generic first-class-function-value render
-//! path — the same fix #166 applied to the reachable `sub_subscribe_stream`.
+//! STATUS: this client-side receive surface is NOT yet wired — no `KernelFn`
+//! variant routes codegen to `sub_subscribe_ws_{message,close,error}`, so these
+//! three functions are currently unreachable dead code. Their `F` bound is
+//! `Send` (not `Send + Sync`) defensively, ahead of that wiring, so the
+//! eventual wiring commit cannot ship exit-0-then-cargo-fail (a THE-SEAL
+//! violation) on the generic first-class-function-value render path — the same
+//! contract the reachable `sub_subscribe_stream` uses.
 
 use super::*;
 use futures_util::{SinkExt, StreamExt};
@@ -171,8 +171,9 @@ async fn do_connect<E: From<String> + Send + 'static>(
     let safe_url = redact_ws_url(&url);
     // SSRF guard: when SKY_HTTP_DENY_PRIVATE is set, reject a ws/wss URL whose host
     // resolves to a private/loopback/link-local address BEFORE the handshake — the
-    // WebSocket surface previously connected with no deny-private check, so an
-    // attacker-controlled URL could reach internal services the Http client blocks.
+    // without this check the WebSocket surface would connect with no
+    // deny-private guard, letting an attacker-controlled URL reach internal
+    // services the Http client blocks.
     if let Err(msg) = crate::sky_runtime::ssrf::ssrf_validate_url(&url) {
         return SkyResult::Err(msg.into());
     }
@@ -582,21 +583,21 @@ fn ws_registered(socket_id: i64) -> bool {
 
 /// onMessage : (WebSocketMessage -> msg) -> Sub msg
 ///
-/// #169: `to_msg` is moved exclusively into the ONE detached `tokio::spawn`
-/// task below (never behind a shared `Arc`, never read from two threads at
-/// once) — the same shape as the sibling `sub_subscribe_stream` (`http_stream.rs`,
-/// #166) and `sub_subscribe_topic` (`pubsub.rs`), whose doc comments state the
-/// identical rationale. `Send` is therefore the full and correct contract;
-/// `Sync` is NOT required. An over-declared `+ Sync` here is exactly the bound
-/// the codegen's generic first-class-function-value rendering
+/// `to_msg` is moved exclusively into the ONE detached `tokio::spawn` task
+/// below (never behind a shared `Arc`, never read from two threads at once) —
+/// the same shape as the sibling `sub_subscribe_stream` (`http_stream.rs`) and
+/// `sub_subscribe_topic` (`pubsub.rs`), whose doc comments state the identical
+/// rationale. `Send` is therefore the full and correct contract; `Sync` is NOT
+/// required. An over-declared `+ Sync` here is exactly the bound the codegen's
+/// generic first-class-function-value rendering
 /// (`Box<dyn Fn(..) -> .. + Send + 'static>` — deliberately `+Send`-only) could
 /// never satisfy, so it would surface as a THE-SEAL `cargo build` E0277 the day
-/// codegen first routes a client `onMessage` subscription here. This relaxation
-/// is DEFENSIVE / PRE-WIRING: as of this commit these three client-side subs
-/// (`_message` / `_close` / `_error`) are UNREACHABLE — no `KernelFn` variant
-/// routes codegen to them yet (the whole `Sky.Core.WebSocket` client surface
-/// is unwired). Relaxing a dead-code bound cannot regress anything; it ensures
-/// the future wiring commit does not ship exit-0-then-cargo-fail on day one.
+/// codegen first routes a client `onMessage` subscription here. The `Send`-only
+/// bound is DEFENSIVE / PRE-WIRING: these three client-side subs
+/// (`_message` / `_close` / `_error`) are currently UNREACHABLE — no `KernelFn`
+/// variant routes codegen to them yet (the whole `Sky.Core.WebSocket` client
+/// surface is unwired) — so the future wiring commit does not ship
+/// exit-0-then-cargo-fail on day one.
 pub fn sub_subscribe_ws_message<M, F>(socket_id: i64, to_msg: F) -> SkySub<M>
 where
     M: Send + 'static,
@@ -641,7 +642,7 @@ where
 
 /// onClose : (CloseCode -> msg) -> Sub msg
 ///
-/// #169 — same defensive pre-wiring bound relaxation as
+/// Same defensive pre-wiring `Send`-only bound as
 /// [`sub_subscribe_ws_message`]: `to_msg` is moved into the single detached
 /// `tokio::spawn` below and never shared behind an `Arc`, so `Send + 'static`
 /// is the exact contract and `+ Sync` was over-strict. Currently unreachable
@@ -678,7 +679,7 @@ where
 
 /// onError : (Error -> msg) -> Sub msg. E is the project error (From<String>).
 ///
-/// #169 — same defensive pre-wiring bound relaxation as
+/// Same defensive pre-wiring `Send`-only bound as
 /// [`sub_subscribe_ws_message`]: `to_msg` is moved into the single detached
 /// `tokio::spawn` below and never shared behind an `Arc`, so `Send + 'static`
 /// is the exact contract and `+ Sync` was over-strict. Currently unreachable

@@ -989,10 +989,10 @@ mod tests {
     #[test]
     fn hof_kernel_result_super_type_renders_without_double_negative() {
         // The generic SuperTypeUnsatisfied template ("`X` is not a `<class>`
-        // type") reads as a confusing double negative for the #90 T3
+        // type") reads as a confusing double negative for the
         // higher-order-kernel callback-result obligation ("`a` is not a
         // non-function callback result … type"). That class label must render
-        // through the tailored sentence instead (BACKLOG DX row, 2026-07-11).
+        // through the tailored sentence instead.
         let src = "module Main exposing (main)\n\nmain =\n    foo\n";
         let d = Diagnostic::Type {
             span: Span::new(40, 43),

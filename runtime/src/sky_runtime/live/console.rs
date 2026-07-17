@@ -454,8 +454,8 @@ mod tests {
         )));
         // No Origin header at all → not flagged (curl / server-to-server push).
         assert!(!is_cross_origin_ingest(&mk(None, "victim.example")));
-        // Backlog port-mismatch fix: an implicit-default-port Origin against
-        // an explicit-default-port Host is the SAME origin, not a mismatch.
+        // An implicit-default-port Origin against an explicit-default-port
+        // Host is the SAME origin, not a mismatch.
         assert!(!is_cross_origin_ingest(&mk(
             Some("https://victim.example"),
             "victim.example:443"

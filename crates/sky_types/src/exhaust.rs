@@ -55,7 +55,7 @@ const WITNESS_CAP: usize = 32;
 /// never by `name` alone — keeps their constructor sets DISTINCT. A bare-`Symbol`
 /// key would let the second `type Color` overwrite the first's variant set,
 /// making a `case` over EITHER `Color` judged against the WRONG constructor set
-/// (a spurious or missed SKY-T0010) once both are linked (#100).
+/// (a spurious or missed SKY-T0010) once both are linked.
 type TyId = (Vec<Symbol>, Symbol);
 
 /// Constructor-signature tables, built once per module from its `type` decls.
@@ -107,7 +107,7 @@ impl Sigs {
 
         for union in &module.unions {
             // The union's DEFINING module — its nominal identity is `(home, name)`,
-            // distinct from a same-short-named type in another module (#100).
+            // distinct from a same-short-named type in another module.
             let uhome = union.home.clone();
             let ukey = (uhome.clone(), union.name);
             let mut ctors: Vec<&canon::Ctor> = union.ctors.iter().collect();
@@ -150,7 +150,7 @@ impl Sigs {
 #[derive(Clone, PartialEq, Eq)]
 enum Head {
     /// An ADT constructor, identified by its owning type's HOME module plus the
-    /// constructor name — the `(home, name)` nominal identity (#100). Home is
+    /// constructor name — the `(home, name)` nominal identity. Home is
     /// carried so two same-short-named types' constructors never conflate in the
     /// usefulness matrix.
     Adt(Vec<Symbol>, Symbol),
@@ -466,7 +466,7 @@ fn check_case(
 
     // Redundancy: an arm is redundant when its pattern is not useful against the
     // arms before it (those already cover every value it would match). Reported
-    // by the arm's top-level constructor name, mirroring the M3a diagnostic. The
+    // by the arm's top-level constructor name, mirroring the reference diagnostic. The
     // prior-arm matrix grows one row per step, so no indexing is needed.
     let mut prior: Vec<Vec<UPat>> = Vec::with_capacity(rows.len());
     for (br, row) in branches.iter().zip(rows.iter()) {

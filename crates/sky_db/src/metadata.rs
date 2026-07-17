@@ -1,4 +1,4 @@
-//! Phase 5 Task 14 — `program_metadata()`: the coarse, LOCKED whole-program
+//! `program_metadata()`: the coarse, LOCKED whole-program
 //! DCE-reachability seam (spec §5 row 5; `docs/architecture/
 //! incremental-compilation-and-watch.md`'s `program_metadata()` row).
 //!
@@ -11,7 +11,7 @@
 //! dependency would under-invalidate: DCE reachability could go stale exactly
 //! when it matters most. This query gets that property BY CONSTRUCTION, with
 //! no special mechanism needed: it depends directly on `lower_program`'s
-//! return value, itself the coarse per-program seam (Phase 4) — any semantic
+//! return value, itself the coarse per-program seam — any semantic
 //! edit anywhere already re-executes `lower_program`, and therefore this
 //! query re-executes too. What a downstream consumer gains is NOT skipping
 //! this query's *execution* — it gains early-cutting on a BYTE-IDENTICAL
@@ -21,14 +21,13 @@
 //! still early-cut on a BYTE-IDENTICAL metadata output even though the query
 //! itself always re-executes."
 //!
-//! **Scope, honestly recorded (mirrors the Phase-3 `kernel_types` precedent —
-//! materialized, but not yet a dependency of anything that consumes it for
-//! real pruning):**
+//! **Scope, honestly recorded (materialized, but not yet a dependency of
+//! anything that consumes it for real pruning):**
 //!
 //! - `reachable_funcs` is a genuine fixpoint over the whole-program call
 //!   graph (direct [`Callee::Func`] calls AND [`Expr::FuncValue`]
 //!   first-class references), seeded from the lowered program's entry
-//!   [`FuncId`]. Phase 4 already established that [`sky_lower::lower`]
+//!   [`FuncId`]. [`sky_lower::lower`]
 //!   always emits exactly one [`sky_ir::Module`]
 //!   (`Program { modules: vec![module] }`,
 //!   `crates/sky_lower/src/lower.rs`), so there is only ever one
@@ -88,7 +87,7 @@ pub struct ProgramMetadata {
 pub type ProgramMetadataResult = Result<Arc<ProgramMetadata>, (Diagnostic, Vec<Symbol>)>;
 
 /// Compute the whole-program DCE-reachability metadata for the program
-/// rooted at `entry` (incremental plan Task 14).
+/// rooted at `entry`.
 ///
 /// Depends on [`lower_program`] directly — see the module doc for why that
 /// is exactly the "never firewalled" property the design spec locks in.

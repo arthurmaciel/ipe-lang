@@ -1,4 +1,4 @@
-//! `Std.Css` leaf security kernels (#47, Design-1).
+//! `Std.Css` leaf security kernels.
 //!
 //! `Std.Css` is compiled **pure Sky source** (`crates/skyc/stdlib/Std/Css.sky`):
 //! the ADTs (`CssProp` / `CssRule` / `Length` / `Color` / keyword enums), the
@@ -99,7 +99,7 @@ mod tests {
             safe_value("red</style><script>alert(1)</script>".into()),
             SkyMaybe::Nothing
         ));
-        // #105 part 2: CSS-hex-escaped bypass (`\65 ` → 'e') dropped too.
+        // CSS-hex-escaped bypass (`\65 ` → 'e') dropped too.
         assert!(matches!(
             safe_value("\\65 xpression(alert(1))".into()),
             SkyMaybe::Nothing

@@ -12,7 +12,7 @@
 //   - CSRF token          → live/csrf.rs `gen_token` (OsRng)
 //   - UUID v4             → `uuid::new_v4` (getrandom)
 // When adding a new security-bearing random value, route it through `OsRng`, NOT
-// through any `lcg_*` / `random_*` fn here. (Audit 2026-06-19, low/weak-crypto —
+// through any `lcg_*` / `random_*` fn here. (Audit finding: low/weak-crypto —
 // recorded as an invariant so a future change can't silently violate it.)
 use super::*;
 use std::sync::atomic::{AtomicU64, Ordering};

@@ -1,5 +1,5 @@
-//! Name resolution: `sky_syntax` source tree → canonical AST. Port of the M0
-//! subset of `Sky.Canonicalise.{Module,Expression,Pattern,Type}`.
+//! Name resolution: `sky_syntax` source tree → canonical AST. Port of the
+//! supported subset of `Sky.Canonicalise.{Module,Expression,Pattern,Type}`.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -46,11 +46,11 @@ const SUGGESTION_MAX_DISTANCE: usize = 2;
 /// LayoutContext 2302, LiveReq 2304.
 /// ```
 ///
-/// `SqlFragment` (backlog #61) was added after this citation list was drawn
-/// up; see its own arm in `ir_type_from_ty` / `ir_type_from_canon`.
+/// `SqlFragment` is not in this citation list; see its own arm in
+/// `ir_type_from_ty` / `ir_type_from_canon`.
 ///
 /// Several names that `ir_type_from_ty` also matches are deliberately EXCLUDED,
-/// because #101 moved them BELOW the `enum_variants` guard in BOTH lowering
+/// because they sit BELOW the `enum_variants` guard in BOTH lowering
 /// paths (ty + canon), so a program union of that name wins by its
 /// `(home, name)` identity and only a genuine opaque builtin (no union entry)
 /// reaches the fallback arm:
@@ -60,7 +60,7 @@ const SUGGESTION_MAX_DISTANCE: usize = 2;
 ///     `Description`, `LayoutContext`, `LiveReq` — the nullary Std.Ui / Sky.Live
 ///     opaque names. Leaving them UNRESERVED is what lets a user ADT — and,
 ///     crucially, a compiled-source `Std.Css` type (`Color` / `Length` / …) —
-///     declare them; the home-aware guard (#100/#101) keeps the genuine Std.Ui
+///     declare them; the home-aware guard keeps the genuine Std.Ui
 ///     builtin resolving to `UiPlain`. Multiple shipped `.sky` fixtures
 ///     (`m4d_dict_adt_gate`, `m4d_set_adt_fn_gate`, `mm_local_pkg`, …) already
 ///     declare `type Color` as a benign sample ADT and now lower correctly.
@@ -84,11 +84,11 @@ const RESERVED_BUILTIN_TYPES: &[&str] = &[
     "Sub",
     "SqlValue",
     "SqlField",
-    // `Std.Db.Sql`'s opaque WHERE-fragment type (backlog #61) — reserved (not
+    // `Std.Db.Sql`'s opaque WHERE-fragment type — reserved (not
     // `EXTRA_BUILTIN_TYPE_NAMES`) so user shadowing of this security-tier type
     // is a hard canon error, matching the `SqlValue`/`SqlField` precedent.
     "SqlFragment",
-    // `Sky.Core.Secret`'s opaque sealed secret-string type (backlog #44) —
+    // `Sky.Core.Secret`'s opaque sealed secret-string type —
     // reserved for the same reason as `SqlFragment`: a security-tier type
     // must not be shadowable by user code.
     "Secret",
@@ -133,7 +133,7 @@ const RESERVED_BUILTIN_TYPES: &[&str] = &[
 /// only invariant. Any name handled by an explicit arm with `home = []` that
 /// is NOT in `RESERVED_BUILTIN_TYPES` belongs here.
 const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
-    // Three-way comparison result (`lt`/`eq`/`gt`). In the lowerer since #123.
+    // Three-way comparison result (`lt`/`eq`/`gt`).
     "Order",
     // Std.Ui plain types — lowerer guard is BELOW `enum_variants` so user ADTs
     // of the same name win via their real home; but annotations that name them
@@ -153,7 +153,7 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
     "HttpRequest",
     "WebSocketServer",
     "WebSocketServerCfg",
-    // Std.Ui.Input parametric label/placeholder types (#124).
+    // Std.Ui.Input parametric label/placeholder types.
     "Label",
     "Placeholder",
     // Std.Decimal opaque arbitrary-precision decimal type.
@@ -164,15 +164,14 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
     // expands the name to the record; the lowerer keeps it a synthesised struct
     // (no opaque arm), so it is user-shadowable-safe like `HttpRequest`.
     "Migration",
-    // `Sky.Core.Error`'s `ErrorDetails` union (backlog #85 follow-up).
+    // `Sky.Core.Error`'s `ErrorDetails` union.
     // Lowerer arm: `ir_type_from_canon` `"ErrorDetails" => IrType::ErrorDetails`.
     // (`ErrorKind` — registered the same way at the same lowerer site — is a
-    // PRE-EXISTING gap in this list, not introduced here; left alone to stay
-    // strictly additive.)
+    // gap in this list.)
     "ErrorDetails",
-    // `Sky.Core.Error`'s NOMINAL payload types (SEAL fix 2026-07-11 —
+    // `Sky.Core.Error`'s NOMINAL payload types (see
     // `docs/adr/0017-error-payload-nominal-identity.md`).
-    // Previously anonymous structural records; now opaque nominal Cons backed
+    // Opaque nominal Cons backed
     // by `sky_runtime::error::{SkyPanicInfo, SkyTypeInfo, SkyErrorInfo}`, so
     // annotations such as `describePanic : PanicInfo -> String` must resolve.
     // Lowerer arms: `ir_type_from_canon` / `ir_type_from_ty`
@@ -182,22 +181,22 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
     "ErrorInfo",
 ];
 
-/// Kernel-implicit Prelude type names (#576) that are globally in scope in
+/// Kernel-implicit Prelude type names that are globally in scope in
 /// every Sky program but are NOT declared by any compiled `.sky` source file —
 /// they are resolved by the runtime as opaque handles.
 ///
-/// These names were previously absent from ALL allowlists, so bare annotations
-/// like `handleHome : Handler` failed with `TypeNotFound` / SKY-N0002 even
+/// Without these entries, bare annotations
+/// like `handleHome : Handler` fail with `TypeNotFound` / SKY-N0002 even
 /// though they are legitimate kernel builtins. Each entry receives the
 /// empty-home sentinel (`Vec::new()`) just like `RESERVED_BUILTIN_TYPES` and
 /// `EXTRA_BUILTIN_TYPE_NAMES`.
 ///
 /// Note: not all of these have explicit arms in `sky_lower::ir_type_from_canon`
-/// yet (tracked as #138 follow-up for `Handler` / `Middleware` / `Session` / `Store` /
-/// `VNode`). Adding them here is the canon-level fix; lowerer arms complete the
-/// end-to-end path.
+/// yet (`Handler` / `Middleware` / `Session` / `Store` /
+/// `VNode`). Registering them here is the canon-level fix; lowerer arms complete
+/// the end-to-end path.
 const KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES: &[&str] = &[
-    // `Request -> Task Error Response` alias from Sky.Http.Server (#576).
+    // `Request -> Task Error Response` alias from Sky.Http.Server.
     "Handler",
     // `Html msg` — the top-level rendered HTML node type from Std.Html / Std.Ui.
     // Needed so `viewFoo : Model -> Html Msg` annotations typecheck without
@@ -221,20 +220,20 @@ const KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES: &[&str] = &[
 /// [`ModuleOrigin::EmbeddedStdlib`] module is permitted to DEFINE, while a
 /// [`ModuleOrigin::User`] module stays rejected (SKY-N0026).
 ///
-/// These are exactly the nullary Std.Ui / Sky.Live opaque names that #101 moved
+/// These are exactly the nullary Std.Ui / Sky.Live opaque names that sit
 /// BELOW the home-aware `enum_variants` guard in the lowerer
 /// (`sky_lower::ir_type_from_ty` + `ir_type_from_canon`). Because the lowerer
-/// now keys a program-defined `type Length` under its real `(home, name)`
-/// (#100) and resolves it to its OWN enum, a compiled-source stdlib module
+/// keys a program-defined `type Length` under its real `(home, name)`
+/// and resolves it to its OWN enum, a compiled-source stdlib module
 /// (`Std.Css` / the `Std.Palette` spike) can canonically DEFINE these types
-/// without the former `UiPlain` hijack — so canon reservation is no longer
+/// without a `UiPlain` hijack — so canon reservation is not
 /// load-bearing for lowering-soundness on this exact set.
 ///
 /// The reservation is retained for [`ModuleOrigin::User`] as a defence-in-depth
 /// *user-facing guarantee* ("you cannot shadow `Length`" → a clean SKY-N0026
 /// rather than a confusing dual-`Length` type-boundary error against the
 /// built-in `UiPlain::Length`). The carve-out is keyed on the UNFORGEABLE typed
-/// [`ModuleOrigin`] (#98/#100), never on module text: a hostile user file named
+/// [`ModuleOrigin`], never on module text: a hostile user file named
 /// `Std.Css` is discovered as User source and gets NEITHER this exemption NOR
 /// the SKY-N0025 namespace exemption.
 ///
@@ -420,7 +419,7 @@ pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::
     // Single-module has no deps, so no user qualifiers to map — but a Html-family
     // STDLIB import qualifier (`import Std.Html.Attributes as Attr`) still needs
     // its `["Html"]` type home folded so a qualified `Attr.Attribute` lowers to
-    // `html::Attribute` (#179 / #185).
+    // `html::Attribute`.
     let mut qualifier_paths: BTreeMap<Symbol, Vec<Symbol>> = BTreeMap::new();
     fold_html_stdlib_qualifier_homes(&m.imports, &mut qualifier_paths, interner)?;
     // The bare single-module entry is always ordinary USER source: the trust tag
@@ -684,7 +683,7 @@ pub fn canonicalise_module_in_project(
 
     // Fold Html-family STDLIB import qualifiers into `qualifier_paths` (→
     // `["Html"]`) so a qualified `Attr.Attribute` (`import Std.Html.Attributes as
-    // Attr`) resolves to the `html::Attribute` home (#179 / #185). Runs AFTER the
+    // Attr`) resolves to the `html::Attribute` home. Runs AFTER the
     // user-dep loop so a user qualifier that also names a Html dep keeps its real
     // dep path (`entry(..).or_insert` inside the helper is a no-op on a hit).
     fold_html_stdlib_qualifier_homes(&m.imports, &mut qualifier_paths, interner)?;
@@ -708,7 +707,7 @@ pub fn canonicalise_module_in_project(
             origin,
             interner,
         )?;
-    // The record-alias auto-constructors that were actually synthesized (#82):
+    // The record-alias auto-constructors that were actually synthesized:
     // exactly the defs whose name is an alias name. A function-field alias is
     // gated out of synthesis, so it is absent here and must NOT be exported as a
     // value — deriving the set from the real defs keeps exports and synthesis in
@@ -840,12 +839,13 @@ fn register_stdlib_import_aliases(
 }
 
 /// Bring the stdlib VALUE members named in an explicit
-/// `import Sky.*/Std.* exposing (n1, n2, …)` list into UNQUALIFIED scope (#97).
+/// `import Sky.*/Std.* exposing (n1, n2, …)` list into UNQUALIFIED scope.
 ///
-/// `import M exposing (member)` for a stdlib module previously registered
-/// nothing — stdlib imports are skipped by the dep-injection loop
-/// ([`inject_dep_exports`] never runs for them), so a bare `member` reference
-/// fell through to `SKY-N0001`. This is the exposing-list counterpart of #78's
+/// `import M exposing (member)` for a stdlib module registers value members
+/// into unqualified scope. Stdlib imports are skipped by the dep-injection loop
+/// ([`inject_dep_exports`] never runs for them), so without this a bare `member`
+/// reference would fall through to `SKY-N0001`. This is the exposing-list
+/// counterpart of the stdlib
 /// alias registration ([`register_stdlib_import_aliases`]): it reuses the same
 /// authoritative path→qualifier table via [`Env::canonical_stdlib_qualifier`].
 ///
@@ -860,7 +860,7 @@ fn register_stdlib_import_aliases(
 ///   canonical qualifier's member table, so the cloned entry carries the SAME
 ///   kernel id + canonical module + name a qualified `M.member` reference
 ///   resolves to. Lowering is therefore identical whether the call site is
-///   qualified or unqualified (exactly like #78's alias clones).
+///   qualified or unqualified (exactly like the stdlib alias clones).
 /// * **Fail-closed.** A lowercase exposed name that is NOT a real value member
 ///   of the module yields [`NameError::NameNotExposed`] with a did-you-mean over
 ///   the module's actual members — never a silently invented unqualified
@@ -880,8 +880,8 @@ fn register_stdlib_import_aliases(
 /// turn a legal local shadow of a Prelude name (e.g. a user `map`) into a
 /// `DuplicateValue` and regress the corpus. The common wildcard case
 /// (`import Sky.Core.Prelude exposing (..)`) already works via the pre-installed
-/// Prelude builtins + qualified access; correct open-import member flooding is
-/// filed as follow-up #98.
+/// Prelude builtins + qualified access; correct open-import member flooding
+/// remains a follow-up.
 ///
 /// # Errors
 /// [`NameError::NameNotExposed`] / [`NameError::DuplicateValue`]; or
@@ -975,7 +975,7 @@ const HOME_SENSITIVE_BUILTIN_TYPES: &[&str] = &["Attribute", "Event"];
 
 /// Record the canonical `["Html"]` `home` for a home-sensitive builtin TYPE
 /// (`Attribute` / `Event`) brought UNQUALIFIED into scope via an explicit
-/// `import <Html-family> exposing (Attribute, …)` list (#179) — the TYPE
+/// `import <Html-family> exposing (Attribute, …)` list — the TYPE
 /// counterpart of [`inject_stdlib_exposed_values`] (which handles only lowercase
 /// VALUE members).
 ///
@@ -983,14 +983,14 @@ const HOME_SENSITIVE_BUILTIN_TYPES: &[&str] = &["Attribute", "Event"];
 ///
 /// `Attribute` exists in BOTH `Std.Ui` (→ `ui::element::Attribute`) and
 /// `Std.Html.Attributes` (→ `html::Attribute`); the lowerer disambiguates by
-/// `is_html = home contains "Html"`. A bare `Attribute` exposed from a stdlib
-/// Html module previously reached the empty-home sentinel (stdlib imports are
-/// skipped by the dep-injection loop), so `is_html` always failed and the
+/// `is_html = home contains "Html"`. Without this fold, a bare `Attribute`
+/// exposed from a stdlib Html module reaches the empty-home sentinel (stdlib
+/// imports are skipped by the dep-injection loop), so `is_html` fails and the
 /// `Std.Live.Head.pairToAttr : (String,String) -> Attribute msg` shape
-/// mis-lowered to `ui::element::Attribute` while its `Attr.attribute` body
-/// produced `html::Attribute` — an exit-0-then-cargo-fail E0308 SEAL violation.
+/// mis-lowers to `ui::element::Attribute` while its `Attr.attribute` body
+/// produces `html::Attribute` — an exit-0-then-cargo-fail E0308 SEAL violation.
 /// The bare path resolves via `resolve_unqualified_type_home`, which consults
-/// `type_home_map` first, so recording `["Html"]` here fixes it.
+/// `type_home_map` first, so recording `["Html"]` here disambiguates it.
 ///
 /// ## Why `["Html"]` and not the full dep path
 ///
@@ -1086,7 +1086,7 @@ fn inject_stdlib_exposed_type_homes(
 }
 
 /// Fold each Html-family STDLIB import qualifier into `qualifier_paths`, mapping
-/// it to the canonical `["Html"]` type home (#179 / #185).
+/// it to the canonical `["Html"]` type home.
 ///
 /// Stdlib kernel imports are skipped by the ordinary `qualifier_paths`
 /// construction (they carry no `deps` entry), so a QUALIFIED `Attr.Attribute`
@@ -1136,7 +1136,7 @@ fn fold_html_stdlib_qualifier_homes(
 
 /// Flood EVERY value member of a stdlib module named in
 /// `import Sky.*/Std.* exposing (..)` into the LOW-PRIORITY wildcard tier
-/// ([`Env::wildcard_vars`]) so bare `div` / `text` / … resolve unqualified (#98).
+/// ([`Env::wildcard_vars`]) so bare `div` / `text` / … resolve unqualified.
 ///
 /// This is the open-import counterpart of [`inject_stdlib_exposed_values`]. The
 /// two paths differ ONLY in insertion discipline, and the difference is the whole
@@ -1249,7 +1249,7 @@ fn canonicalise_with_env(
 ) -> DResult<(canon::Module, BTreeMap<Symbol, KernelAlias>)> {
     let home = env.home.clone();
 
-    // #102: a LOCAL type/alias declaration whose name already has a
+    // A LOCAL type/alias declaration whose name already has a
     // `type_home_map` entry from a DIFFERENT home is a dep-imported type being
     // shadowed. Reject it here, at the declaration, with the SAME
     // `NameError::DuplicateType` (SKY-N0012) `inject_dep_type` already uses for a
@@ -1345,7 +1345,7 @@ fn canonicalise_with_env(
     // Int`) and the parametric form (`type alias Pair a = ( a, a )`) are
     // supported: a parametric alias records its declared parameters and is
     // expanded by substituting each use site's type arguments for the parameters
-    // in the body (M2B). An alias name that collides with a union (or another
+    // in the body. An alias name that collides with a union (or another
     // alias) is a duplicate type name. The aliased bodies are kept as source
     // annotations and expanded in-place at every use site by `canonicalise_type`,
     // so no later stage ever sees an alias.
@@ -1396,7 +1396,7 @@ fn canonicalise_with_env(
     }
 
     // Synthesize a value-level auto-constructor for every local record type
-    // alias (SKY-N0001 / #82). Built here — the single site where each alias's
+    // alias (SKY-N0001). Built here — the single site where each alias's
     // source-order fields are known — as an ordinary typed `Def`, so no later
     // stage special-cases it. Must run before the value pre-pass so the ctor
     // names participate in `seen_values` (a user value colliding with a ctor
@@ -1423,13 +1423,13 @@ fn canonicalise_with_env(
         env.vars.insert(name.value, VarHome::TopLevel(home.clone()));
     }
     // Bring stdlib VALUE members named in an explicit `import Sky.*/Std.* exposing
-    // (name, …)` list into UNQUALIFIED scope (#97). Runs after the synth-ctor
+    // (name, …)` list into UNQUALIFIED scope. Runs after the synth-ctor
     // seeding and before the local-value pre-pass so an exposed name and a local
-    // of the same name collide as `DuplicateValue` (mirrors #82's ctor-collision
+    // of the same name collide as `DuplicateValue` (mirrors the ctor-collision
     // rule). Fail-closed: a lowercase name that is not a real value member of the
     // module surfaces `NameNotExposed`, never a dangling binding.
     inject_stdlib_exposed_values(m, env, &mut seen_values, interner)?;
-    // #179: record the `["Html"]` origin home for a home-sensitive builtin TYPE
+    // Record the `["Html"]` origin home for a home-sensitive builtin TYPE
     // brought UNQUALIFIED via `import <Html-family> exposing (Attribute)`, so the
     // bare `Attribute msg` annotation lowers to the SAME newtype (`html::Attribute`
     // vs `ui::element::Attribute`) its body produces. Runs before any value body
@@ -1437,7 +1437,7 @@ fn canonicalise_with_env(
     // `type_home_map` first) sees the recorded home rather than the empty-home
     // sentinel that always mis-selects `UiAttribute`.
     inject_stdlib_exposed_type_homes(m, type_home_map, interner)?;
-    // #98: flood every member of an `import Sky.*/Std.* exposing (..)` stdlib
+    // Flood every member of an `import Sky.*/Std.* exposing (..)` stdlib
     // module into the LOW-PRIORITY wildcard tier. Deliberately does NOT touch
     // `seen_values` — a local / explicit-exposed / synth-ctor / prelude name of
     // the same spelling silently shadows a wildcard member (see the fn doc);
@@ -1506,7 +1506,7 @@ fn canonicalise_with_env(
 }
 
 /// Synthesize the value-level auto-constructor for every LOCAL `type alias`
-/// whose declaration body is a *literal* record (SKY-N0001 / task #82).
+/// whose declaration body is a *literal* record (SKY-N0001).
 ///
 /// For `type alias T p0..pk = { f0 : A0, …, fN : AN }` this produces the
 /// ordinary typed binding
@@ -1593,11 +1593,11 @@ fn is_opaque_boxed_wrapper_canon(interner: &Interner, name: Symbol) -> bool {
 /// struct-synthesis decision: an opaque wrapper in FIELD position is ITSELF the
 /// non-derivable value, regardless of its payload. `{ dec : Decoder Int }`,
 /// `{ cmd : Cmd Msg }` carry no raw function at all, yet the emitted
-/// `#[derive(…)]` struct over `Decoder` / `SkyCmd` does not build (round-1
-/// verified: skyc-0 then cargo-101 — the seal hole this fix closes). So here the
+/// `#[derive(…)]` struct over `Decoder` / `SkyCmd` does not build (skyc accepts
+/// it but cargo rejects it — an exit-0-then-cargo-fail seal hole). So here the
 /// opaque head SHORT-CIRCUITS to `true` (the flip): the wrapper is non-derivable
-/// as a struct field, so the alias must DECLINE synthesis and keep its exact
-/// pre-#82 behaviour (no positional constructor). It loses zero capability — such
+/// as a struct field, so the alias must DECLINE synthesis and stay a plain type
+/// (no positional constructor). It loses zero capability — such
 /// a record is unbuildable-as-a-struct at every real construction/use site
 /// regardless — and turns the un-buildable constructor UNREPRESENTABLE at canon
 /// rather than emitted-then-cargo-rejected.
@@ -1672,7 +1672,7 @@ fn synthesize_record_alias_ctors(
             can_fields.push((*fname, cty));
         }
 
-        // Data-record gate (#82 scope). DECLINE synthesis when ANY field type is
+        // Data-record gate. DECLINE synthesis when ANY field type is
         // non-derivable-as-a-struct-field ([`field_type_nonderivable`]). The
         // synthesised constructor's body is a record literal that lowers to a
         // `#[derive(Clone, Debug, PartialEq)]` + `impl SkyStringify` struct over
@@ -1685,19 +1685,18 @@ fn synthesize_record_alias_ctors(
         //     `{ p : (Int -> Int, Bool) }`, `{ g : Result e (Int -> Int) }`, a
         //     nested record). For a DIRECT arrow the lowerer's own
         //     `embeds_nonderivable_function` region gate would reject the (unused,
-        //     un-DCE'd) ctor body at SKY-L0107; for a nested one the head-only
-        //     round-0 gate emitted-then-cargo-failed.
+        //     un-DCE'd) ctor body at SKY-L0107; a head-only gate over the nested
+        //     shape would emit Rust that cargo then rejects.
         //   * an OPAQUE boxed-wrapper field (`{ dec : Decoder Int }`,
-        //     `{ cmd : Cmd Msg }`, `Sub`, `Task`) — round-1 verified skyc-0 then
-        //     cargo-101 (E0277 Clone/Debug, E0369 ==, E0599 SkyStringify), because
+        //     `{ cmd : Cmd Msg }`, `Sub`, `Task`) — skyc accepts it but cargo
+        //     rejects (E0277 Clone/Debug, E0369 ==, E0599 SkyStringify), because
         //     the wrapper VALUE is itself non-derivable; nesting one under a
         //     carrier (`List (Decoder Int)`, `Maybe (Cmd Msg)`) is equally
         //     non-derivable (the predicate recurses).
         //
         // There is no whole-program DCE to prune an *unused* such ctor, so
         // synthesizing it would turn a module that merely *names* the alias into a
-        // build failure — a regression (pre-#82 a merely-named alias built clean).
-        // Declining keeps the alias's exact pre-#82 behaviour (no positional
+        // build failure. Declining keeps the alias a plain type (no positional
         // constructor) and makes the un-buildable constructor UNREPRESENTABLE at
         // canon rather than emitted-then-rejected. See [`field_type_nonderivable`]
         // for why the synthesis predicate is NOT the lowerer's function-embedding
@@ -1775,8 +1774,8 @@ fn synthesize_record_alias_ctors(
 /// with a DIFFERENT already-imported home under [`NameError::DuplicateType`]
 /// (SKY-N0012).
 ///
-/// The two types are genuinely distinct nominal identities `(home, name)` — the
-/// #100 fix lets each emit its own Rust enum — but bringing both into scope
+/// The two types are genuinely distinct nominal identities `(home, name)` —
+/// each emits its own Rust enum — but bringing both into scope
 /// under the same UNQUALIFIED type name (`import ModA exposing (ColorA)` +
 /// `import ModB exposing (ColorA)`) leaves `ColorA` unresolvable to a single
 /// type. This is the type-level analogue of the value-import ambiguity gate
@@ -1951,7 +1950,7 @@ fn inject_dep_exports(
                                     dep_scope_aliases: Some(dep.scope_aliases.clone()),
                                 });
                             // A record alias also exports a value-level
-                            // auto-constructor under the same name (#82); when the
+                            // auto-constructor under the same name; when the
                             // dep exposed it (present in `dep.values`), bring it
                             // into the value namespace too so `exposing (Account)`
                             // makes `Account` usable as a constructor.
@@ -2144,7 +2143,7 @@ fn build_module_exports(
                     },
                 );
                 // A record alias also exports its value-level auto-constructor
-                // (#82) — but ONLY when one was actually synthesized (a
+                // — but ONLY when one was actually synthesized (a
                 // function-field alias is gated out). The synthesized `Def` lives
                 // in this module's `defs`, so the importer's
                 // `check_and_inject_value` path registers the name as
@@ -2184,7 +2183,7 @@ fn build_module_exports(
                                         },
                                     );
                                     // Exposing a record alias also exposes its
-                                    // value-level auto-constructor (#82), when one
+                                    // value-level auto-constructor, when one
                                     // was synthesized (function-field aliases are
                                     // gated out).
                                     if synth_ctor_names.contains(type_name) {
@@ -2450,7 +2449,7 @@ fn bind_pattern_names(p: &src::Pattern_, env: &mut Env) {
     }
 }
 
-/// Canonicalise a pattern. M0 supports wildcard, var, and constructor patterns.
+/// Canonicalise a pattern. Supports wildcard, var, and constructor patterns.
 fn canonicalise_pattern(
     p: &src::Pattern,
     env: &Env,
@@ -2704,10 +2703,10 @@ fn resolve_var(name: Symbol, span: Span, env: &Env, interner: &Interner) -> DRes
     }
     if let Some(home) = env.lookup_var(name) {
         // A local / top-level / explicit-exposed / prelude binding wins over any
-        // wildcard-exposed member of the same spelling (silent shadow, #98).
+        // wildcard-exposed member of the same spelling (silent shadow).
         return Ok(var_home_to_expr(name, home));
     }
-    // Low-priority wildcard tier (#98): only reached when the higher tiers miss.
+    // Low-priority wildcard tier: only reached when the higher tiers miss.
     resolve_wildcard_var(name, span, env, interner)
 }
 
@@ -2730,8 +2729,9 @@ fn var_home_to_expr(name: Symbol, home: &VarHome) -> canon::Expr_ {
     }
 }
 
-/// Resolve a bare name against the low-priority wildcard tier ([`Env::wildcard_vars`],
-/// #98), or fail with the ordinary `SKY-N0001` when it is absent there too.
+/// Resolve a bare name against the low-priority wildcard tier
+/// ([`Env::wildcard_vars`]), or fail with the ordinary `SKY-N0001` when it is
+/// absent there too.
 ///
 /// * Exactly one surviving origin → resolve to its cloned kernel home (identical
 ///   to the qualified reference).
@@ -2875,7 +2875,7 @@ enum Assoc {
 /// The precedence (higher binds tighter) and associativity of `op`.
 ///
 /// Mirror of the Haskell reference `Sky.Parse.Symbol.precedence` for the
-/// M1-core operator set; any operator outside the set defaults to `9 L` exactly
+/// core operator set; any operator outside the set defaults to `9 L` exactly
 /// as the Haskell catch-all does.
 const fn op_precedence(op: &str) -> (i32, Assoc) {
     match op.as_bytes() {
@@ -3032,7 +3032,7 @@ fn combine_binop(
     ))
 }
 
-/// Map an operator symbol to its kernel function name. M0 subset of
+/// Map an operator symbol to its kernel function name. Supported subset of
 /// `Expression.resolveOpName`.
 fn resolve_op_func(op: Symbol, interner: &mut Interner) -> DResult<Symbol> {
     let func: Option<&'static str> = match interner.resolve(op) {
@@ -3058,8 +3058,8 @@ fn resolve_op_func(op: Symbol, interner: &mut Interner) -> DResult<Symbol> {
     func.map_or(Ok(op), |name| interner.intern(name))
 }
 
-/// Canonicalise a type annotation. M0 subset of `Canonicalise.Type`, extended
-/// with `type alias` expansion (M1 non-parametric, M2B parametric): a `TType`
+/// Canonicalise a type annotation. Supported subset of `Canonicalise.Type`, extended
+/// with `type alias` expansion (non-parametric and parametric): a `TType`
 /// whose unqualified name registers as an alias is replaced in place by its
 /// body, with the use site's type arguments substituted for the alias's declared
 /// parameters, so no later stage observes the alias name.
@@ -3261,7 +3261,7 @@ fn canonicalise_type(
             // `fold_html_stdlib_qualifier_homes`) the canonical `["Html"]` home
             // for a Html-family STDLIB qualifier, so `Attr.Attribute` →
             // `html::Attribute` while `Ui.Attribute` (not folded) falls through to
-            // the empty Ui sentinel (#179 / #185). Unqualified: delegate to
+            // the empty Ui sentinel. Unqualified: delegate to
             // `resolve_unqualified_type_home` which fails closed with SKY-N0002
             // for unknown names (builtins get the empty-home sentinel).
             let home = if qualifier_str.is_empty() {
@@ -3779,7 +3779,7 @@ fn desugar_multiline(
 mod alias_ctor_gate_tests {
     //! Unit coverage for [`field_type_nonderivable`] — the STRUCT-derivability
     //! gate that decides whether a record `type alias` gets a synthesised
-    //! auto-constructor (SKY-N0001 / #82). It returns `true` (DECLINE synthesis)
+    //! auto-constructor (SKY-N0001). It returns `true` (DECLINE synthesis)
     //! when a field type could NOT be a field of a
     //! `#[derive(Clone, Debug, PartialEq)]` + `impl SkyStringify` struct — a raw
     //! function at ANY depth inside a derive carrier (the round-1 seal fix) OR an

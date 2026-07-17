@@ -12,7 +12,7 @@
 //! Pre-condition: `assign_sky_ids` has stamped a `sky-id` attr on every
 //! element. Post-condition: every marker attr is stripped (even on no-match, so
 //! an empty marker never leaks as an inert `data-*`) and a `<style>` child is
-//! prepended (or sibling-hoisted after a void element, #409).
+//! prepended (or sibling-hoisted after a void element).
 //!
 //! SECURITY: the `<style>` body is emitted as an `HRaw` node (CSS cannot be
 //! entity-escaped without breaking it). The marker attrs are raw Strings a
@@ -86,7 +86,7 @@ pub fn apply_style_injections<M>(node: &mut Html<M>) {
     );
     // A void element at the TREE ROOT is never self-handled (inject_pass skips
     // void self-build, since a void tag can take no child <style>) and has no
-    // parent to hoist a sibling <style> after it (#409). Its markers would
+    // parent to hoist a sibling <style> after it. Its markers would
     // therefore survive every pass and leak as inert data-* attrs, breaking the
     // post-condition. Strip them here. The CSS is necessarily dropped — a void
     // root has nowhere to carry a <style> node. (A void node WITH a parent is
@@ -465,8 +465,8 @@ mod tests {
             ),
         ];
         let css = build_pc("r_0_button", &attrs);
-        // Post-2026-07-11 sink hardening: the forged rule carries a ruleset
-        // breakout (`}`) + `</style>`; `sink_safe_declaration_list` now drops the
+        // Sink hardening: the forged rule carries a ruleset
+        // breakout (`}`) + `</style>`; `sink_safe_declaration_list` drops the
         // whole pseudo-rule FAIL-CLOSED (stronger than the old strip-only
         // contract that let the sanitised `:hover` block through).
         assert!(!css.contains("</style"), "breakout not stripped: {css}");
@@ -490,7 +490,7 @@ mod tests {
             ),
         ];
         let css = build_mq("r0", &attrs);
-        // Post-2026-07-11 sink hardening: both markers carry a `</style>`
+        // Sink hardening: both markers carry a `</style>`
         // breakout, so `SafeCssMediaQuery` (query) and `sink_safe_declaration_list`
         // (rules) each reject and `build_mq` drops the whole @media block
         // fail-closed — stronger than the old strip-then-still-emit contract.
@@ -520,7 +520,7 @@ mod tests {
             !css.to_ascii_lowercase().contains("</style><script"),
             "{css}"
         );
-        // Post-2026-07-11 sink hardening: the query carries a `</style><script>`
+        // Sink hardening: the query carries a `</style><script>`
         // breakout → `SafeCssMediaQuery` rejects it → `build_mq` drops the whole
         // @media block fail-closed (even though the rules half is legit).
         assert_eq!(
@@ -537,7 +537,7 @@ mod tests {
         )];
         let css = build_anim("r.0#div", &attrs);
         assert!(!css.contains("</style"), "{css}");
-        // Post-2026-07-11 sink hardening: the body carries trailing content
+        // Sink hardening: the body carries trailing content
         // after the last keyframe block (`</style>`), so
         // `sink_safe_keyframes_body` rejects it and the whole entry drops
         // FAIL-CLOSED (stronger than the old strip-then-still-emit contract).
@@ -667,7 +667,7 @@ mod tests {
     #[test]
     fn void_element_hoists_style_to_sibling() {
         // An <input> (void) carrying a marker can't take a child <style>; it must
-        // be hoisted to a sibling slot right after the input (#409).
+        // be hoisted to a sibling slot right after the input.
         let mut tree: Html<()> = Html::HElement(
             "div".to_string(),
             vec![attr("sky-id", "r")],
@@ -720,9 +720,8 @@ mod tests {
     /// `Attribute::AttrPseudoRule` (as `Background.hoverColor` constructs it)
     /// through `ui_layout` → `assign_sky_ids` → `apply_style_injections` →
     /// `render_html` must produce a sky-id-scoped `<style>` rule and leave NO
-    /// `data-sky-pc-rules` marker in the final HTML. Closes the "two halves
-    /// each tested, whole pipeline never composed" gap flagged by the
-    /// independent review of the 2026-07-10 Std.Ui/Html kernel batch.
+    /// `data-sky-pc-rules` marker in the final HTML. Composes the whole
+    /// pipeline, not just each half in isolation.
     #[test]
     fn end_to_end_ui_hover_color_renders_scoped_style_and_leaves_no_marker() {
         use crate::sky_runtime::html::{assign_sky_ids, render_html};
@@ -918,7 +917,7 @@ mod tests {
         assert!(s.contains("still here"), "child must still render: {s}");
     }
 
-    // ── Sink-side forgery gates (2026-07-11 review finding) ───────────────
+    // ── Sink-side forgery gates ───────────────
     // The style markers are raw String attributes a caller can FORGE via
     // `Ui.htmlAttribute "data-sky-mq-rules" "…"`, bypassing the producer's
     // SafeCssValue / SafeCssMediaQuery gates entirely. The sink builders must

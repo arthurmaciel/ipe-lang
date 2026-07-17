@@ -1,18 +1,16 @@
 #![forbid(unsafe_code)]
-//! Milestone D proofs (spec:
-//! `docs/architecture/phase5-emit-rust-file-design-2026-07-12.md` §4 —
-//! Tasks 14/15/16).
+//! Per-`RustFileId` salsa query-graph proofs (spec:
+//! `docs/architecture/phase5-emit-rust-file-design-2026-07-12.md` §4).
 //!
-//! Milestone D wires the per-`RustFileId` salsa query graph on top of the
-//! coarse `lower_program` floor. It changes NO emitted bytes — it makes the
+//! The per-`RustFileId` salsa query graph sits on top of the coarse
+//! `lower_program` floor. It changes NO emitted bytes — it makes the
 //! COMPILER's own re-derivation of each Rust file's content salsa-tracked and
 //! memoized, so an unaffected module's text is not re-rendered when an
 //! unrelated module is edited (§3.4).
 //!
-//! Task 14 (this section): [`sky_db::RustFileId`] is a genuine
-//! `#[salsa::interned]` key — distinct from Task 1's non-interned
-//! `sky_backend_rust::RustFileId` (§4.1). The rest of the file (Tasks 15/16)
-//! proves the tracked queries built on it.
+//! [`sky_db::RustFileId`] is a genuine `#[salsa::interned]` key — distinct
+//! from the non-interned `sky_backend_rust::RustFileId` (§4.1). The rest of
+//! the file proves the tracked queries built on it.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -130,7 +128,7 @@ fn rust_file_id_interns_distinct_homes_distinctly() {
 }
 
 // ---------------------------------------------------------------------------
-// Task 15 — program_rust_file_ids / emit_spine_file / emit_rust_file
+// program_rust_file_ids / emit_spine_file / emit_rust_file
 // (spec §4.2 + §4.3's honest divergence: assert on VALUE-equality, not
 // zero-executions, since emit_rust_file is forced to re-run whenever its
 // coarse `lower_program` dependency's value changes)
@@ -138,8 +136,8 @@ fn rust_file_id_interns_distinct_homes_distinctly() {
 
 // A two-module program: `Lib` owns `helper`, `Main` owns `answer` and imports
 // `Lib`. Both are genuine distinct `home`s, so the backend emits an own Rust
-// file for each — exactly the multi-home shape Milestone D's per-file
-// incrementality is built on.
+// file for each — exactly the multi-home shape per-file incrementality is
+// built on.
 const LIB: &str = "module Lib exposing (helper)\n\nhelper : Int\nhelper = 41\n";
 const LIB_BODY_EDIT: &str = "module Lib exposing (helper)\n\nhelper : Int\nhelper = 40\n";
 const MAIN_IMPORTS_LIB: &str = "module Main exposing (answer)\n\nimport Lib exposing (helper)\n\nanswer : Int\nanswer = helper + 1\n";
@@ -221,13 +219,13 @@ fn emit_spine_file_memoized_coarse_floor() {
     assert_eq!(log.executions_of("lower_program("), 1);
 }
 
-/// §4.3's red-green proof. A body edit to module A forces `lower_program` to
-/// re-execute (coarse floor, unchanged), which in turn forces
-/// `emit_rust_file(B)` to re-run — so we do NOT assert zero executions for B.
-/// The USEFUL invariant, the one that preserves `cargo`'s per-compilation-unit
-/// incrementality, is that B's produced STRING comes out byte-identical
-/// (salsa backdates B's memo, `emit_manifest`/`write_if_changed` skip B's
-/// write). We assert exactly that.
+/// Per-file incrementality invariant (spec §4.3). A body edit to module A
+/// forces `lower_program` to re-execute (coarse floor, unchanged), which in
+/// turn forces `emit_rust_file(B)` to re-run — so we do NOT assert zero
+/// executions for B. The USEFUL invariant, the one that preserves `cargo`'s
+/// per-compilation-unit incrementality, is that B's produced STRING comes out
+/// byte-identical (salsa backdates B's memo, `emit_manifest`/`write_if_changed`
+/// skip B's write). We assert exactly that.
 #[test]
 #[allow(clippy::expect_used)]
 fn emit_rust_file_memoized_per_file() {
@@ -313,14 +311,14 @@ fn program_rust_file_ids_tracks_module_add_delete() {
 }
 
 // ---------------------------------------------------------------------------
-// Task 16 — emit_manifest (the Spine-collapse invariant at the SALSA layer)
+// emit_manifest (the Spine-collapse invariant at the SALSA layer)
 // ---------------------------------------------------------------------------
 
 /// For a SINGLE-module program, `emit_manifest` must be BYTE-IDENTICAL to
-/// `emit_project` — the Spine-collapse invariant (§3.3), now proven at the
-/// salsa layer, not just the backend layer. This is the property that lets
-/// `compile_prepared` switch its call site from `emit_project` to
-/// `emit_manifest` (§4.4) with zero emitted-byte change.
+/// `emit_project` — the Spine-collapse invariant (§3.3), proven at the salsa
+/// layer. This is the property that lets `compile_prepared` call
+/// `emit_manifest` in place of `emit_project` (§4.4) with zero emitted-byte
+/// change.
 #[test]
 #[allow(clippy::expect_used)]
 fn emit_manifest_matches_emit_project_for_single_module() {
@@ -353,7 +351,7 @@ fn emit_manifest_matches_emit_project_for_single_module() {
 /// The split-assembly path's own SEAL: for a genuine TWO-module program,
 /// `emit_manifest` (which assembles from the demanded `emit_spine_file` +
 /// per-`emit_rust_file` outputs) must be BYTE-IDENTICAL to `emit_project`
-/// (which renders the split inline). This guards the new
+/// (which renders the split inline). This guards the
 /// `assemble_split_manifest` seam against drift — a barrel-line, module-order,
 /// or file-path mismatch would surface here rather than as an
 /// exit-0-then-cargo-fail downstream.

@@ -1,11 +1,11 @@
 //! The lowering core: a name-resolved [`canon::Module`] plus its
 //! [`SolvedTypes`] become a backend-agnostic [`sky_ir::Program`].
 //!
-//! This is the narrowed M0 port of the Haskell compiler's `Sky.Build.Compile`
+//! This is the narrowed port of the Haskell compiler's `Sky.Build.Compile`
 //! lowering walk and `Sky.Build.LowerCtx`. Every step is total, and failures
 //! split into two channels — never a panic, never a guess:
 //!
-//! * an input shape that is *valid Sky the M0 subset does not model yet*
+//! * an input shape that is *valid Sky the supported subset does not model yet*
 //!   (polymorphism, higher-order values, extra kernels, …) becomes a
 //!   [`sky_diagnostics::Diagnostic::Lower`] carrying the offending node's span
 //!   and the matching `SKY-L01##` feature — the "not supported yet" channel;
@@ -41,7 +41,7 @@ type ParamPrologue = (Symbol, Pat);
 /// Reserved **strictly** for genuinely-unreachable states: a symbol foreign to
 /// the interner, a missing `FuncId`, a missing inferred region type, an
 /// unresolved scrutinee enum — things a well-canonicalised, well-typed module
-/// can never produce. A shape the M0 subset simply does not model yet is *not*
+/// can never produce. A shape the supported subset simply does not model yet is *not*
 /// a bug: it goes through [`Self::unsupported`] instead.
 fn bug(where_: &'static str, detail: impl Into<String>) -> Diagnostic {
     Diagnostic::CompilerBug {
@@ -157,12 +157,12 @@ enum HttpFieldTy {
 /// `printReq : { body : String, ... } -> String`). Both paths MUST apply the
 /// identical test so a genuinely `HttpRequest`-shaped value resolves to the
 /// same `IrType::HttpRequest` / `sky_runtime::HttpRequest` regardless of
-/// which path its type reached emission through — a value built via the
-/// former and consumed via the latter (or vice versa) used to diverge
-/// (SKY-I0001 follow-up), one side folding to the opaque runtime type, the
+/// which path its type reached emission through. Without the shared test a
+/// value built via the former and consumed via the latter (or vice versa)
+/// would diverge (SKY-I0001), one side folding to the opaque runtime type, the
 /// other falling back to a backend-synthesised struct with a different name.
 ///
-/// Checking field TYPES here (not just names, as the pre-fix version did) is
+/// Checking field TYPES here (not just names) is
 /// load-bearing: Sky's row-polymorphic record types are purely structural —
 /// the `HttpRequest` alias is expanded to a plain structural record at
 /// annotation-normalisation time (`normalize_annotation_ty`), so NO nominal
@@ -964,7 +964,7 @@ fn is_opaque_boxed_wrapper(interner: &Interner, name: Symbol) -> bool {
 /// The built-in COLLECTION type constructors (`List`/`Dict`/`Set`), whose Rust
 /// rendering (`Vec<T>` / `HashMap<K,V>` / `BTreeSet<T>`) is a container the
 /// kernels (`DictGet`, `ListMap`, …) blanket-`.clone()` their element/value
-/// argument (#90 design doc §2 hazard table: "collections of functions" stays
+/// argument (the design-doc §2 hazard table: "collections of functions" stays
 /// a real gap). A function type argument here is NOT the sound
 /// enum-constructor-payload shape [`is_enum_like_con_head`] exempts — kept
 /// gated (`ty_contains_fun`) by [`embeds_nonderivable_function`]'s fallback arm.
@@ -976,14 +976,14 @@ fn is_builtin_collection(interner: &Interner, name: Symbol) -> bool {
 /// `Result` or a user-declared union — as opposed to a builtin COLLECTION
 /// (`List`/`Dict`/`Set`) or an opaque boxed wrapper?
 ///
-/// #90 (SKY-L0114 narrowing): `Ok f` / `Just f` construct the RUNTIME
+/// SKY-L0114 narrowing: `Ok f` / `Just f` construct the RUNTIME
 /// `SkyResult`/`SkyMaybe` enums, whose derives are generic-bounded
 /// (`impl<T: Clone> Clone for SkyMaybe<T>`, `runtime/src/sky_runtime/core.rs`)
 /// — the TYPE `SkyMaybe<Box<dyn Fn(..)->R>>` compiles regardless of whether
 /// `T` satisfies the bound; only *using* `.clone()`/`==`/stringify on it would
 /// fail, and each such use is independently gated (type-checker's
-/// `ty_is_equatable`, the #91 Model gate, #93's serde-derive gate). A
-/// user-declared union enjoys the same shape after the #87 derive-demotion
+/// `ty_is_equatable`, the Model gate, the serde-derive gate). A
+/// user-declared union enjoys the same shape after the derive-demotion
 /// fixpoint (`enum_is_derivable` drops the auto-derive when a payload embeds a
 /// function). So a function argument directly under an enum-like head is
 /// SOUND to lower — [`is_opaque_boxed_wrapper`] callers already exempt the
@@ -993,7 +993,7 @@ fn is_builtin_collection(interner: &Interner, name: Symbol) -> bool {
 /// `HashMap<K,V>` / `BTreeSet<T>` element type is real Rust generic
 /// instantiation, and several collection kernels blanket-`.clone()` their
 /// element (`DictGet`, `emit_expr.rs`) — E0599 on a non-`Clone`
-/// `Box<dyn Fn>` element. Kept gated (Stage 2 territory, not #90).
+/// `Box<dyn Fn>` element. Kept gated (Stage 2 territory).
 fn is_enum_like_con_head(interner: &Interner, name: Symbol) -> bool {
     !is_opaque_boxed_wrapper(interner, name) && !is_builtin_collection(interner, name)
 }
@@ -1046,7 +1046,7 @@ fn embeds_nonderivable_function(interner: &Interner, ty: &Ty) -> bool {
             .iter()
             .any(|a| embeds_nonderivable_function(interner, a)),
         // A builtin COLLECTION head (`List`/`Dict`/`Set`): unchanged blanket
-        // check — a function element/value type is still the real gap (#90
+        // check — a function element/value type is still the real gap (the
         // design doc §2, "collections of functions").
         Ty::Con { args, .. } => args
             .iter()
@@ -1182,7 +1182,7 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::Decoder(_)
         // `Db` is an opaque connection pool handle, not a function type.
         | IrType::Db
-        // M6 opaque server types are opaque handles, not function types.
+        // Opaque server types are opaque handles, not function types.
         | IrType::ServerRequest
         | IrType::ServerResponse
         | IrType::ServerRoute
@@ -1286,8 +1286,7 @@ fn clone_class(t: &IrType) -> CloneClass {
         // UiPlain (element.rs derives Clone), LiveReq (req.rs derives Clone).
         // Error: SkyError derives Clone (not Copy — carries a heap `String`).
         // ErrorDetails: SkyErrorDetails derives Clone (not Copy — carries
-        // heap-allocated `String`/`Vec<String>` payloads; backlog #85
-        // follow-up).
+        // heap-allocated `String`/`Vec<String>` payloads).
         // `SqlFragment` is `#[derive(Clone, PartialEq)]` (no Copy — carries a
         // heap-allocated `String` + `Vec<SqlParam>`).
         // `Secret` is `#[derive(Clone)]` (no Copy — carries a heap-allocated
@@ -1385,8 +1384,8 @@ fn clone_class(t: &IrType) -> CloneClass {
 /// Scope: only a BARE `Generic` leaf. Composites carrying a generic
 /// (`List (Generic)`, `Tuple(.., Generic)`, …) still floor to `NonClone` via the
 /// generic leaf and are intentionally out of scope here — the wider blast radius
-/// of flipping `clone_class(Generic)` itself is a separate decision (see #189
-/// design). A bare `Generic` param already makes [`reject_fn_value_reuse`] a
+/// of flipping `clone_class(Generic)` itself is a separate design decision.
+/// A bare `Generic` param already makes [`reject_fn_value_reuse`] a
 /// no-op (`ir_contains_fun(Generic) == false`), so admitting it here loses no
 /// diagnostic — it only closes the silent double-move.
 fn param_is_multiuse_clonable(ir_ty: &IrType) -> bool {
@@ -1649,8 +1648,8 @@ fn rewrite_captured_clones(
         // Lambdas in FUNC position (immediately-invoked pattern
         // `(\x -> f x) p`) are NOT cleared: the inner lambda creation moves a
         // NonClone value out of the outer env on every call → outer closure
-        // becomes FnOnce against a `Box<dyn Fn>` return annotation → Rust E0277
-        // (i130 c14 gate).  Those still propagate `noncl_set` via the normal
+        // becomes FnOnce against a `Box<dyn Fn>` return annotation → Rust E0277.
+        // Those still propagate `noncl_set` via the normal
         // `other` path into the `Lambda` arm.
         Expr::Apply { func, args } => {
             let new_func = Box::new(match *func {
@@ -1786,7 +1785,7 @@ fn rewrite_captured_clones(
         //
         // `noncl_set` IS propagated into inner lambda bodies (at depth+1) so
         // that the depth > 0 gate can fire for the immediately-invoked pattern
-        // `(\x -> f x) p` (i130 c14): that inner `\x -> f x` is in `Apply.func`
+        // `(\x -> f x) p`: that inner `\x -> f x` is in `Apply.func`
         // position and reaches this arm via the normal `other` path.  At depth 1
         // the callee-position exemption (`depth == 0`) does NOT fire, so
         // `Var(f)` inside the inner body triggers L0126 — correctly preventing
@@ -2115,7 +2114,7 @@ fn rewrite_captured_clones(
 // is the "real" final consume.  Over-cloning is acceptable (conservatism);
 // a precision pass can follow once the correctness seal holds.
 //
-// Sub-class #112 — Lambda captures that are also used after the closure:
+// Sub-class — Lambda captures that are also used after the closure:
 // A `move` closure captures a `CloneOk` local by value (moving it) even when
 // the lambda body only ever reads a `.clone()` of it (T3).  If the same local
 // is referenced again AFTER the lambda creation, Rust sees E0382 because the
@@ -2231,7 +2230,7 @@ fn lambda_body_refs_sym(sym: Symbol, expr: &Expr) -> bool {
     }
 }
 
-// ── Shared (Arc) capture rewrite, #164 E0507 fix ─────────────────────────────
+// ── Shared (Arc) capture rewrite, E0507 fix ──────────────────────────────────
 //
 // `rewrite_captured_clones`'s depth==0 bare-callee exemption for a NonClone
 // (function-typed) capture is sound only when the capturing lambda is not
@@ -2391,15 +2390,15 @@ fn needs_shared_capture(sym: Symbol, expr: &Expr) -> bool {
     depths.iter().any(|&d| d >= 2) || depths.iter().filter(|&&d| d >= 1).count() >= 2
 }
 
-// ── BACKLOG #168: usage-site (not nesting-site) shared-capture trigger ─────
+// ── Usage-site (not nesting-site) shared-capture trigger ──────────────────
 //
-// `needs_shared_capture` (above) closes the #164 class: a `let`-bound closure
+// `needs_shared_capture` (above) closes the class: a `let`-bound closure
 // moved into 2+ competing closure environments. It does NOT cover a narrower,
 // DIFFERENT class — a single, non-nested (depth-0) reference to a `let`-bound
 // closure passed straight into a kernel call whose runtime consumer itself
 // requires `Send + Sync` (`KernelFn::requires_sync_capture`, e.g.
 // `Ui.onSubmit` / `Ui.onInput` / `Std.Html.Events.on*` / `Stream.stream`).
-// #162's emit-site "re-wrap in a freshly-declared closure" technique only
+// The emit-site "re-wrap in a freshly-declared closure" technique only
 // launders a missing `+Sync` bound when the payload is constructed INLINE at
 // the call site; a `Var(sym)` referencing an ALREADY-BUILT `Box<dyn Fn +
 // Send>` local just moves that non-Sync value into the wrapper's capture
@@ -2426,7 +2425,7 @@ fn expr_mentions_sym(sym: Symbol, expr: &Expr) -> bool {
 /// AND `let`-alias chains of arbitrary length — into an argument of a kernel
 /// call whose runtime consumer requires `Send + Sync`
 /// (`KernelFn::requires_sync_capture`)? See the module comment above for the
-/// bug class this closes (BACKLOG #168).
+/// bug class this closes.
 ///
 /// Traversal mirrors [`collect_lambda_capture_depths`] (recurse into every
 /// `Expr` variant, lambda bodies included — a sync-requiring call reachable
@@ -2541,7 +2540,7 @@ fn flows_into_sync_kernel_call(sym: Symbol, expr: &Expr) -> bool {
     }
 }
 
-// ── BACKLOG #172: mixed Arc/Box handler unification at one Rust type slot ──
+// ── Mixed Arc/Box handler unification at one Rust type slot ────────────────
 //
 // Once [`Lowerer::lower_let_pvar`] promotes a function-typed `let name = \… ->
 // …` whose read [`flows_into_sync_kernel_call`] (e.g. `Ui.onSubmit`), every read
@@ -3207,7 +3206,7 @@ fn sym_referenced_directly(sym: Symbol, expr: &Expr) -> bool {
 /// captures the FRESH local clone — leaving the outer binding intact for
 /// any other capture site. Mirrors the identical pattern
 /// [`rewrite_multiuse_clones`] already uses for `CloneOk` multi-use
-/// let-bindings (T5, #104/#112), generalised to the case where EVERY
+/// let-bindings (T5), generalised to the case where EVERY
 /// directly-capturing closure needs its own wrap, not just all-but-the-last.
 ///
 /// Applying this unconditionally to every directly-capturing lambda is
@@ -3766,7 +3765,7 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
 }
 
 // ── Kernel→type-param-bound propagation — structural IR detection ─────────────
-// (#177 SkyRow, #186 Display — one shared walk, a kernel→bound map.)
+// (SkyRow, Display — one shared walk, a kernel→bound map.)
 //
 // Some runtime kernels are generic over a type parameter with a Rust trait bound
 // — `db_get_*<R: SkyRow>(field: String, row: &R)`,
@@ -3811,8 +3810,8 @@ const fn is_db_row_accessor(k: KernelFn) -> bool {
 ///
 /// `matcher(tracked, k, args)` answers, for the currently-tracked symbol
 /// `tracked`, whether the call `Callee::Kernel(k)` applied to `args` obligates
-/// it — e.g. #177's `is_db_row_accessor(k) && args[1] is Var(tracked)` (`SkyRow`),
-/// or #186's `k == BasicsToString && args[0] is Var(tracked)` (`Display`). Every
+/// it — e.g. SkyRow's `is_db_row_accessor(k) && args[1] is Var(tracked)` (`SkyRow`),
+/// or Display's `k == BasicsToString && args[0] is Var(tracked)` (`Display`). Every
 /// distinct kernel→bound obligation is expressed as one such matcher; the
 /// STRUCTURAL walk (shadow discipline + alias-transparency) is shared, so a new
 /// bound reuses this whole traversal by supplying only its own matcher.
@@ -3946,7 +3945,7 @@ fn body_calls_kernel_on_param(
 
 /// Is `args[idx]` a direct `Var`/`CloneVar` reference to `tracked`? The shared
 /// "the param sits in the bound-obliging arg position" test for every
-/// direct-arg-position kernel→bound matcher (Shape A: #177 `SkyRow` at arg 1,
+/// direct-arg-position kernel→bound matcher (Shape A: `SkyRow` at arg 1,
 /// `Display` at arg 0).
 fn arg_is_tracked_var(args: &[Expr], idx: usize, tracked: Symbol) -> bool {
     matches!(args.get(idx), Some(Expr::Var(s) | Expr::CloneVar(s)) if *s == tracked)
@@ -3954,7 +3953,7 @@ fn arg_is_tracked_var(args: &[Expr], idx: usize, tracked: Symbol) -> bool {
 
 /// Is `*tv` a wildcard-`any` generic (a fresh `anyp_`-pooled binder minted by
 /// `split_typed_sig`, or the raw `any` symbol) rather than a genuine named tvar
-/// (`a`/`msg`)? #177's `SkyRow` bound is restricted to wildcards; #186's
+/// (`a`/`msg`)? The `SkyRow` bound is restricted to wildcards; the
 /// `Display` bound applies to BOTH.
 fn is_wildcard_any_tv(interner: &Interner, tv: Symbol) -> bool {
     interner
@@ -4117,7 +4116,7 @@ fn body_boxes_generic_callback(tv: Symbol, expr: &Expr) -> bool {
     }
 }
 
-/// GENERAL kernel→type-param-bound propagation (#177 `SkyRow` + #186 `Display`,
+/// GENERAL kernel→type-param-bound propagation (`SkyRow` + `Display`,
 /// generalising the original single-purpose `Db.get*`→`SkyRow` walk).
 ///
 /// A kernel whose Rust signature bounds a type parameter — `db_get_*<R: SkyRow>`,
@@ -4133,11 +4132,11 @@ fn body_boxes_generic_callback(tv: Symbol, expr: &Expr) -> bool {
 /// Each obligation supplies a `matcher(tracked, k, args)` — does this kernel
 /// call obligate `tracked` (the exact arg position that the kernel bounds holds
 /// a `Var`/`CloneVar` of it)? — and a wildcard-only flag: is the bound
-/// restricted to wildcard `any` params (as #177's `SkyRow` is), or does it apply
-/// to named tvars too (#186's `Display`)? The matched `BoundSet` builder records
+/// restricted to wildcard `any` params (as the `SkyRow` bound is), or does it apply
+/// to named tvars too (as the `Display` bound does)? The matched `BoundSet` builder records
 /// the Rust bound.
 ///
-/// A subtlety carried over from #177: a param has TWO distinct symbols. `tv` is
+/// A subtlety in the `SkyRow` case: a param has TWO distinct symbols. `tv` is
 /// the TYPE-VARIABLE symbol that names the Rust generic `T{n}`; the VALUE binder
 /// the body references (`payload`, `x`) is a SEPARATE symbol, found in `params`
 /// as the `(binder, IrType::Generic(tv))` pair. So the walk resolves `tv`'s
@@ -4154,16 +4153,16 @@ fn apply_kernel_type_param_bounds(
     params: &[(Symbol, IrType)],
     body: &Expr,
 ) {
-    // #177 — SkyRow: a `Db.get*(field, &row)` accessor whose ROW arg (index 1)
+    // SkyRow: a `Db.get*(field, &row)` accessor whose ROW arg (index 1)
     // is the tracked param. Wildcard-`any`-only: a genuine named tvar never
     // legitimately flows into a row accessor, and restricting to wildcards keeps
-    // the record struct + reusable generics clean (see #177's false-positive
+    // the record struct + reusable generics clean (see SkyRow's false-positive
     // golden). `DbGetById` (arity 3) takes a `Db` handle, not a row, so it is
     // excluded by `is_db_row_accessor`.
     let sky_row_matcher = |tracked: Symbol, k: KernelFn, args: &[Expr]| -> bool {
         is_db_row_accessor(k) && arg_is_tracked_var(args, 1, tracked)
     };
-    // #186 — Display: a `Basics.toString(x)` application whose sole arg (index 0)
+    // Display: a `Basics.toString(x)` application whose sole arg (index 0)
     // is the tracked param. Applies to wildcard `any` AND named tvars — `toString`
     // is legitimate on a polymorphic value, and `T: Display` is satisfiable by
     // every scalar caller; a composite argument fails at COMPILE time either way
@@ -4243,7 +4242,7 @@ fn apply_kernel_type_param_bounds(
 /// `expr`, treating a direct-callee `Expr::Apply` position as non-consuming
 /// (a `Box<dyn Fn>` call borrows via `Fn::call(&self, ..)`).
 ///
-/// Used only for the fn-value reuse gate (T4, #90) — never for the
+/// Used only for the fn-value reuse gate (T4) — never for the
 /// multi-use-clone rewrite, which has different call-position semantics for
 /// `CloneOk` types (those are not directly callable, so the distinction never
 /// mattered there).
@@ -4363,7 +4362,7 @@ fn count_fn_value_uses_apply(sym: Symbol, func: &Expr, args: &[Expr]) -> usize {
 ///
 /// Self-guarding: a no-op `Ok(())` for any OTHER type (a `CopyLeaf` like
 /// `Int`, or a `CloneOk`/opaque `NonClone` carrier with no embedded
-/// function — e.g. a bare `Task`/`Decoder`, which #90 does not touch and
+/// function — e.g. a bare `Task`/`Decoder`, which the fn-value reuse gate does not touch and
 /// which the multi-use-clone rewrite already handles for `CloneOk`), so
 /// callers may invoke it unconditionally wherever that rewrite does not
 /// apply. See the "Fn-value reuse gate, T4" module doc block above
@@ -4389,16 +4388,16 @@ fn count_fn_value_uses_apply(sym: Symbol, func: &Expr, args: &[Expr]) -> usize {
 /// Mechanism (no per-site `n > 1` / `n == 1` branch): the single call
 /// [`rewrite_multiuse_clones`] with `remaining = count_var_uses(sym, scope)`
 /// is already correct and lean for **every** `n ≥ 1`:
-/// * `n > 1` — clone all but the last occurrence (T5, #104/#112/#199).
+/// * `n > 1` — clone all but the last occurrence (T5).
 /// * `n == 1` — the sole occurrence stays bare (no depth-0 over-clone), and its
 ///   `Lambda`/`SharedLambda` arm runs `force_shared_capture_clones` over the
-///   body, installing the inner relays (the #218 obligation) WITHOUT the
+///   body, installing the inner relays (the obligation) WITHOUT the
 ///   spurious depth-0 pre-clone the old open-coded `else` branch added.
 /// * `n == 0` — an unused binder: [`rewrite_multiuse_clones`] no-ops at
 ///   `remaining == 0`, so unused pattern vars stay byte-identical.
 ///
 /// Eligibility mirrors [`param_is_multiuse_clonable`] (`CloneOk` ∪ bare
-/// `Generic`, #189); a fn-carrying `NonClone` binder has no sound clone rewrite,
+/// `Generic`); a fn-carrying `NonClone` binder has no sound clone rewrite,
 /// so it fails closed on reuse via [`reject_fn_value_reuse`] (self-guarding on
 /// non-fn-carrying / `CloneOk` types, so calling it for every ineligible binder
 /// is safe — a `CopyLeaf` scalar or wildcard binder is a no-op).
@@ -5030,7 +5029,7 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
             lhs: Box::new(rewrite_multiuse_clones(sym, remaining, *lhs)),
             rhs: Box::new(rewrite_multiuse_clones(sym, remaining, *rhs)),
         },
-        // #193 — `If` branches are mutually exclusive.  Each branch gets its own
+        // `If` branches are mutually exclusive.  Each branch gets its own
         // per-arm counter seeded from its own use-count plus a phantom +1 when
         // the value escapes the `If` (v3 C1: post-if liveness = after_cond - max > 0).
         // The shared counter is restored by subtracting the MAX branch use-count.
@@ -5085,7 +5084,7 @@ fn rewrite_multiuse_clones(sym: Symbol, remaining: &mut usize, expr: Expr) -> Ex
                 body: new_body,
             }
         }
-        // #193 — Match arms are mutually exclusive.  Rewrite the scrutinee with
+        // Match arms are mutually exclusive.  Rewrite the scrutinee with
         // the shared counter (it runs unconditionally), then give each arm body
         // its OWN counter — per-arm snapshot/restore (v3 C1).
         //
@@ -5570,14 +5569,13 @@ enum Intercepted {
     /// Not intercepted — continue on [`Lowerer::lower_call_uniform`]. When the
     /// callee was a `VarKernel`/`VarTopLevel`, the already-resolved [`Callee`]
     /// is carried so the uniform path doesn't re-run the `lower_callee`
-    /// dispatch (efficiency-audit §3 medium).
+    /// dispatch.
     Fallthrough(Option<Callee>),
 }
 
 /// Per-family kernel-usage flags, collected in ONE traversal over every
-/// function body (efficiency-audit §3 medium: [`Lowerer::run`] previously
-/// walked every body once per family — nine independent full-AST
-/// `expr_uses_<family>_kernel` passes).
+/// function body (rather than walking every body once per family — nine
+/// independent full-AST `expr_uses_<family>_kernel` passes).
 ///
 /// Each flag is the OR of the same [`sky_ir::KernelFn`] family predicate the
 /// former per-family walkers applied to `Call` / `FuncValue` callees, over the
@@ -5756,10 +5754,10 @@ fn scan_kernel_usage(expr: &Expr, usage: &mut KernelUsage) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Build a [`Diagnostic::Lower`] for a feature the M0 lowerer does not model
+/// Build a [`Diagnostic::Lower`] for a feature the lowerer does not model
 /// yet, carrying the offending node's source `span`. This is the
 /// "not supported yet" channel (`SKY-L01##`), distinct from [`bug`] ("the
-/// compiler is broken"): the input is valid Sky the M0 subset has not reached.
+/// compiler is broken"): the input is valid Sky the supported subset has not reached.
 const fn unsupported(span: Span, feature: Feature) -> Diagnostic {
     Diagnostic::Lower {
         span,
@@ -5789,7 +5787,7 @@ fn pat_binds_symbol(pat: &Pat, target: Symbol) -> bool {
 }
 
 /// Rewrite every FREE `Expr::Var(target)` in `expr` to `on_hit(target)` —
-/// the shared shadow-aware tree walk behind [`rewrite_var_to_apply`] (#89 F2)
+/// the shared shadow-aware tree walk behind [`rewrite_var_to_apply`] (F2)
 /// and [`rewrite_destructure_read`]. Factoring the walk out keeps the
 /// two rewrites' shadow handling provably identical instead of two chances
 /// to drift (spec §2.5,
@@ -6030,7 +6028,7 @@ fn rewrite_var_free_occurrences(
 /// Rewrite every free `Expr::Var(target)` in `expr` to
 /// `Expr::Apply { func: Var(target), args: [] }` (emitted as `(target)()`).
 ///
-/// This is the read-site half of the Decoder thunk rewrite (#89 F2, design
+/// This is the read-site half of the Decoder thunk rewrite (F2, design
 /// preserved in git history as `seal-jsondecp-design.md` §5.C): after
 /// [`Lowerer::lower_let`] wraps a Decoder-typed binding value in a zero-arg
 /// lambda, every read of that binding must call the thunk to obtain a fresh
@@ -6043,7 +6041,7 @@ fn rewrite_var_to_apply(target: Symbol, expr: Expr) -> Expr {
 }
 
 /// Does `ty` structurally contain [`IrType::Decoder`] anywhere (itself, or
-/// nested inside a `Tuple`/`Record`/`Maybe`/`Result`/`List`)? Gates #125's
+/// nested inside a `Tuple`/`Record`/`Maybe`/`Result`/`List`)? Gates the
 /// destructure-thunk rewrite: a `Tuple`/`Record` binder whose aggregate
 /// type contains a Decoder anywhere needs the WHOLE destructure thunked
 /// (spec §2.2) — a Decoder nested inside e.g. `Maybe (Decoder a)` is out of
@@ -6103,7 +6101,7 @@ fn pat_bound_symbols(pat: &Pat, out: &mut BTreeSet<Symbol>) {
 /// (dropping the alias wrapper entirely; a single flat name needs no `as`),
 /// otherwise the alias erases and recurses into `inner` (its own name is
 /// irrelevant to this masked, single-name extraction). Used to build the
-/// per-read-site re-destructure pattern for #125 (spec §2.2) — reusing the
+/// per-read-site re-destructure pattern for (spec §2.2) — reusing the
 /// ORIGINAL pattern's shape (masked) sidesteps needing any tuple-index /
 /// record-field EXPRESSION accessor in the IR, since [`Expr::Destructure`]
 /// already exists to bind a pattern from a value.
@@ -6133,7 +6131,7 @@ fn mask_pattern_except(pat: &Pat, keep: Symbol) -> Pat {
                 .collect(),
         ),
         // Binding-free leaves keep their shape. `Ctor` / `Slice` never
-        // appear in a #125-eligible binder (the irrefutable destructure
+        // appear in a destructure-thunk-eligible binder (the irrefutable destructure
         // grammar forbids them — `lower_destructure_pat`'s own fail-closed
         // arms); kept total via an unreachable-in-practice clone rather
         // than a partial match.
@@ -6216,7 +6214,7 @@ pub struct Lowerer<'a> {
     /// entry aliases a user identifier.
     eta_params: Vec<Symbol>,
     /// Pre-minted, collision-free names for capturing a supplied argument
-    /// expression in an eta-expand-partial hoist (T4/#121). When a supplied arg
+    /// expression in an eta-expand-partial hoist (T4). When a supplied arg
     /// is not a literal or bare `Var`, it is hoisted to
     /// `let __sky_cap_i = <arg> in <lambda>` so it evaluates once even though
     /// the lambda is called multiple times. Sized identically to `eta_params`
@@ -6259,7 +6257,7 @@ pub struct Lowerer<'a> {
     /// Monotonic cursor into [`Self::any_param_binders`], mirroring
     /// [`Self::param_cursor`]'s shape exactly.
     any_param_cursor: Cell<usize>,
-    /// Pre-minted, collision-free names for the #125 destructure-thunk
+    /// Pre-minted, collision-free names for the destructure-thunk
     /// binding (`let destr_thunk_N = move || <value>; …`) that
     /// [`Self::build_destructure_or_decoder_thunk`] introduces when a
     /// tuple / record / alias destructure binds a value whose type
@@ -6411,7 +6409,7 @@ pub struct BuiltinCtors {
     pub ek_conflict: Symbol,
     pub ek_unavailable: Symbol,
     pub ek_unexpected: Symbol,
-    // ── ErrorDetails ADT (backlog #85 follow-up) ──────────────────────────────
+    // ── ErrorDetails ADT ──────────────────────────────
     // `ErrorDetails` has 5 constructors, each arity 1.
     pub errordetails: Symbol,
     pub ed_ffi_panic: Symbol,
@@ -6548,7 +6546,7 @@ pub fn count_any_param_sites(m: &canon::Module, interner: &Interner) -> usize {
 }
 
 /// Count every destructure-binder `let` binding AND single-arm product
-/// `case` in the module — one pre-minted symbol needed per site for #125's
+/// `case` in the module — one pre-minted symbol needed per site for the
 /// Decoder-thunk generalization (spec §2.6), REGARDLESS of whether that
 /// binding ultimately turns out to be Decoder-typed (the type-dependent
 /// gate runs later, once solving has completed; this pass is purely
@@ -6824,7 +6822,7 @@ pub struct SymbolPools {
 type TypedSigParts = (Vec<IrParam>, Vec<ParamPrologue>, IrType, Vec<Symbol>);
 
 impl<'a> Lowerer<'a> {
-    #[allow(clippy::too_many_lines)] // Error/ErrorKind ADT seeding (E-12/#152) pushed it over 100
+    #[allow(clippy::too_many_lines)] // Error/ErrorKind ADT seeding pushes it over 100
     pub fn new(
         m: &'a canon::Module,
         types: &'a SolvedTypes,
@@ -6966,7 +6964,7 @@ impl<'a> Lowerer<'a> {
         ctor_arity.insert((prelude_home.clone(), builtins.ek_conflict), 0);
         ctor_arity.insert((prelude_home.clone(), builtins.ek_unavailable), 0);
         ctor_arity.insert((prelude_home.clone(), builtins.ek_unexpected), 0);
-        // ── ErrorDetails ADT (backlog #85 follow-up) ─────────────────────────────
+        // ── ErrorDetails ADT ─────────────────────────────
         // 5-variant enrichment union carried on `ErrorInfo.details`. Same
         // registration recipe as `ErrorKind` above — seeding here lets
         // `case d of FfiPanic info -> …` / `HttpStatus code -> …` validate and
@@ -7050,7 +7048,7 @@ impl<'a> Lowerer<'a> {
         Ok(sym)
     }
 
-    /// Hand out the next globally-unique #125 destructure-thunk binder from
+    /// Hand out the next globally-unique destructure-thunk binder from
     /// [`Self::destructure_thunk_binders`]. Mirrors
     /// [`Self::fresh_param_binder`] exactly; sized by
     /// [`count_destructure_thunk_sites`], so an overrun is an internal
@@ -7131,7 +7129,7 @@ impl<'a> Lowerer<'a> {
     /// Run the pass, producing the single-module program. On error, returns the
     /// diagnostic paired with the `home` (module byte-namespace path) of the def
     /// that produced it, so the driver attributes a lowering diagnostic to the
-    /// correct SOURCE FILE rather than guessing from a bare byte span (the #221
+    /// correct SOURCE FILE rather than guessing from a bare byte span (the
     /// misattribution class: a Server.sky lowering span numerically overlapping
     /// a Main.sky def range was blamed on Main.sky). Mirrors
     /// [`sky_types::infer_attributed`]'s `(Diagnostic, Vec<Symbol>)` contract
@@ -7184,7 +7182,7 @@ impl<'a> Lowerer<'a> {
             // enumeration order in `new()` under the unique-`(home, name)`
             // module invariant, so the positional id equals the map-resolved
             // id — passing it spares `lower_def` a throwaway `Vec<Symbol>`
-            // key allocation per def (efficiency-audit §3 low).
+            // key allocation per def.
             let id = FuncId::from_raw(u32::try_from(idx).unwrap_or(u32::MAX));
             // fix B: attach THIS def's home to any lowering diagnostic it
             // raises, so the driver resolves the owning source file exactly
@@ -7228,7 +7226,7 @@ impl<'a> Lowerer<'a> {
         // no `import Std.Db` is not affected.
         // All nine kernel-family flags are collected in ONE pass over the
         // function bodies (see [`KernelUsage`]) instead of nine independent
-        // full-AST walks (efficiency-audit §3 medium).
+        // full-AST walks.
         let mut kernel_usage = KernelUsage::default();
         for f in &funcs {
             if kernel_usage.all_set() {
@@ -7250,7 +7248,7 @@ impl<'a> Lowerer<'a> {
         let uses_tea = kernel_usage.tea;
 
         // detect whether any Sky.Http.Server kernel call is present, OR any
-        // function signature references a server type (#217: a `Response` record
+        // function signature references a server type (a `Response` record
         // literal / `Request`-typed handler uses the server structs without
         // necessarily calling a server kernel). Either pulls in the `server`
         // runtime module — the backend injects the `server` Cargo feature and
@@ -7337,7 +7335,7 @@ impl<'a> Lowerer<'a> {
         // `SqlValue` is a Prelude built-in (not a user `type`): its constructors
         // carry the empty canon home, so its nominal identity uses the empty
         // `ModPath` everywhere (EnumDef / IrType::Enum / Expr::Ctor). The backend's
-        // empty-home→entry-module naming fallback reproduces the pre-#100 Rust name
+        // empty-home→entry-module naming fallback reproduces the the earlier Rust name
         // byte-for-byte.
         let sv = IrType::Enum {
             home: ModPath(Vec::new()),
@@ -7442,7 +7440,7 @@ impl<'a> Lowerer<'a> {
     /// ([`Feature::Polymorphism`]).
     ///
     /// A field whose type embeds a function (`type Retryish e = RetryWhen (e ->
-    /// Bool)`) is NOT gated here — #87's derive-demotion fixpoint keeps
+    /// Bool)`) is NOT gated here — the derive-demotion fixpoint keeps
     /// the emitted enum sound (see the field-loop comment below).
     /// Search a canonical constructor-payload type for a mis-arity `Task`
     /// application (any arity other than the internal unary `Task a` or the
@@ -7462,7 +7460,7 @@ impl<'a> Lowerer<'a> {
     /// `Cmd`/`Sub` take exactly 1 (`Cmd msg`). Any other arity would trip
     /// `ir_type_from_canon`'s catch-all `CompilerBug` (SKY-I0001), so
     /// `lower_enum`'s Gate 0a fails closed on it with a clean SKY-T0016.
-    /// (Cmd/Sub coverage added after the #32 review found the Task-only gate
+    /// (Cmd/Sub coverage added after the review found the Task-only gate
     /// left the siblings ICE-ing, contrary to the item title.)
     fn task_arity_in_canon(&self, t: &canon::Type) -> Option<(&'static str, usize)> {
         match t {
@@ -7556,7 +7554,7 @@ impl<'a> Lowerer<'a> {
                 // SKY-T0016 diagnostic (`TypeError::TaskArity`) at the ctor span,
                 // matching E1's annotation-path behaviour. A well-formed
                 // `Task Error a` (arity 2) is NOT rejected here — it lowers to a
-                // `Variant` carrying `IrType::Task`, and #87's derive-demotion
+                // `Variant` carrying `IrType::Task`, and the derive-demotion
                 // fixpoint degrades a non-derivable enum gracefully.
                 if let Some((carrier, found)) = self.task_arity_in_canon(arg) {
                     return Err(Diagnostic::Type {
@@ -7580,7 +7578,7 @@ impl<'a> Lowerer<'a> {
                 }
                 let ir = self.ir_type_from_canon(arg, &type_params)?;
                 // a function-bearing payload field (`type Retryish e =
-                // RetryWhen (e -> Bool)`) is SOUND to declare — #87's
+                // RetryWhen (e -> Bool)`) is SOUND to declare — the
                 // derive-demotion fixpoint (`enum_is_derivable`,
                 // `sky_backend_rust::emit_types`) drops the enum's
                 // `#[derive(Clone, Debug, PartialEq)]` whenever any field
@@ -7619,9 +7617,9 @@ impl<'a> Lowerer<'a> {
     /// by full structural equality, so the output order is fixed.
     fn collect_record_types(&self) -> DResult<Vec<IrType>> {
         let mut out: Vec<IrType> = Vec::new();
-        // O(1) dedup gate alongside the ordered Vec (efficiency-audit §3
-        // medium: the former `out.contains(&ir)` was an O(n²) scan over
-        // every region/env record shape). `out` keeps the same ordering and
+        // O(1) dedup gate alongside the ordered Vec: an `out.contains(&ir)`
+        // check would be an O(n²) scan over
+        // every region/env record shape. `out` keeps the same ordering and
         // the same element set — the set only gates insertion.
         let mut seen: std::collections::HashSet<IrType> = std::collections::HashSet::new();
         for ty in self.types.regions.values().chain(self.types.env.values()) {
@@ -7653,7 +7651,7 @@ impl<'a> Lowerer<'a> {
                 // the generic (the solver's variable id is not a source symbol),
                 // so [`Self::ir_type_from_ty`] would reject the bare `Ty::Var`
                 // field as an under-determined polymorphic value. Skipping it is
-                // sound: an unannotated binding can never be generic (M0 rejects an
+                // sound: an unannotated binding can never be generic (the lowerer rejects an
                 // untyped binding with parameters), so every genuinely-generic
                 // record reaches the backend through a signature.
                 if !ty_contains_var(ty) {
@@ -7701,7 +7699,7 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
-    #[allow(clippy::too_many_lines)] // grew past 100 with the T5 multi-use-clone pre-pass (#104)
+    #[allow(clippy::too_many_lines)] // the T5 multi-use-clone pre-pass pushes it past 100
     fn lower_def(&self, def: &canon::Def, id: FuncId) -> DResult<Func> {
         // Track the current def's home so every `region_ty(span)` lookup uses the
         // correct `(home, span)` key, matching what the constraint builder wrote.
@@ -7967,7 +7965,7 @@ impl<'a> Lowerer<'a> {
                     .map(|v| (v, Self::bounds_for(var_bounds, v)))
                     .collect();
                 // Move-ownership discipline for CloneOk / bare-Generic params
-                // (T5, #104/#112/#189) — the ONE entry point every binder kind
+                // (T5) — the ONE entry point every binder kind
                 // shares. Run BEFORE TCO so the loop-rewrite sees already-correct
                 // clone nodes. `apply_param_move_ownership` first promotes a
                 // pure-`Fun` param whose reads need the `Clone` `Arc` carrier,
@@ -7992,7 +7990,7 @@ impl<'a> Lowerer<'a> {
                 }
                 // General kernel→type-param-bound propagation: a param that flows
                 // into a bound-obliging kernel gains that kernel's Rust bound —
-                // #177 (`Db.get*`→`SkyRow`, wildcard-only) + #186
+                // SkyRow (`Db.get*`→`SkyRow`, wildcard-only) + Display
                 // (`toString`→`Display`, any tvar). See
                 // `apply_kernel_type_param_bounds`.
                 apply_kernel_type_param_bounds(
@@ -8144,7 +8142,7 @@ impl<'a> Lowerer<'a> {
                     }
                     let mut type_params =
                         compute_type_params(quantified_syms, var_bounds, &params, &ret);
-                    // General kernel→type-param-bound propagation (#177 SkyRow +
+                    // General kernel→type-param-bound propagation (SkyRow +
                     // Display) — see `apply_kernel_type_param_bounds`.
                     apply_kernel_type_param_bounds(
                         self.interner,
@@ -8368,7 +8366,7 @@ impl<'a> Lowerer<'a> {
                 // type checker rejects this first (the body's inferred arity
                 // cannot unify with the shorter annotation → SKY-T0001), so
                 // reaching it here is a genuine invariant violation, not a
-                // missing M0 feature. (Slated to become a dedicated SKY-T0004
+                // missing feature. (Slated to become a dedicated SKY-T0004
                 // at the type-checking boundary.)
                 return Err(bug(
                     "sky_lower::split_typed_sig",
@@ -8502,7 +8500,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Convert a canonical annotation type (no `Task`/unit appears in M0
+    /// Convert a canonical annotation type (no `Task`/unit appears in the supported subset
     /// annotations) into an [`IrType`]. `generics` is the enclosing binding's
     /// quantified type-variable set: a `Type::Var` it contains is a parametric
     /// pass-through and lowers to [`IrType::Generic`].
@@ -8557,8 +8555,8 @@ impl<'a> Lowerer<'a> {
                 "Error" => Ok(IrType::Error),
                 "ErrorKind" => Ok(IrType::ErrorKind),
                 // `ErrorDetails` — the 5-variant enrichment union carried on
-                // `ErrorInfo.details : Maybe ErrorDetails` (backlog #85
-                // follow-up). Backed by `sky_runtime::error::SkyErrorDetails`.
+                // `ErrorInfo.details : Maybe ErrorDetails`. Backed by
+                // `sky_runtime::error::SkyErrorDetails`.
                 "ErrorDetails" => Ok(IrType::ErrorDetails),
                 // The NOMINAL error-payload types (SEAL fix) —
                 // annotatable via canon's `EXTRA_BUILTIN_TYPE_NAMES`. Backed
@@ -8626,7 +8624,7 @@ impl<'a> Lowerer<'a> {
                         args.len()
                     ),
                 )),
-                // `Decoder a` — the opaque JSON decoder type introduced by M4h.
+                // `Decoder a` — the opaque JSON decoder type.
                 // Canonical annotations use it directly; maps to `IrType::Decoder`.
                 "Decoder" if args.len() == 1 => {
                     let inner = self.ir_type_from_canon(
@@ -8640,17 +8638,17 @@ impl<'a> Lowerer<'a> {
                     )?;
                     Ok(IrType::Decoder(Box::new(inner)))
                 }
-                // `Db` — opaque connection pool handle introduced by M5b-db.
+                // `Db` — opaque connection pool handle.
                 "Db" => Ok(IrType::Db),
-                // M6 opaque server types — users may annotate handlers with
+                // Opaque server types — users may annotate handlers with
                 // `Request -> Task Error Response` (via `exposing (Request, Response)`)
                 // or route lists with `List Route`.  Mirrors `ir_type_from_ty`.
                 "Request" => Ok(IrType::ServerRequest),
                 "Response" => Ok(IrType::ServerResponse),
                 "Route" => Ok(IrType::ServerRoute),
                 "Cookie" => Ok(IrType::ServerCookie),
-                // `Cmd msg` / `Sub msg` — TEA command and subscription types
-                // introduced in M5c.  Users may write annotations like
+                // `Cmd msg` / `Sub msg` — TEA command and subscription types.
+                // Users may write annotations like
                 // `myCmd : Cmd Int`.
                 "Cmd" if args.len() == 1 => {
                     let inner = self.ir_type_from_canon(
@@ -8798,8 +8796,8 @@ impl<'a> Lowerer<'a> {
                 "WebSocketServer" => Ok(IrType::WebSocketServer),
                 // `WebSocketServerCfg` — opaque WsServerCfg<SkyError>.
                 "WebSocketServerCfg" => Ok(IrType::WebSocketServerCfg),
-                // `LiveRoute page` is parametric on the page type it builds
-                // (#108 round 4) — a bare `LiveRoute` annotation cannot
+                // `LiveRoute page` is parametric on the page type it builds:
+                // a bare `LiveRoute` annotation cannot
                 // type-check (the solver's `LiveRoute` Con carries exactly one
                 // argument, so a 0-arg annotation is a Con-arity SKY-T0001
                 // before lowering); a miss here is an invariant violation.
@@ -8888,9 +8886,9 @@ impl<'a> Lowerer<'a> {
                 // still resolves as its own enum (name-shadowing is allowed for
                 // non-reserved names). Mirrors the `ir_type_from_ty` arm at the
                 // `"Value"` case — both paths must map to `IrType::Json` for
-                // consistency. Added by #138 to support bare `Value` annotations
-                // on user functions (kernel-implicit Prelude type, #576).
-                // `Claims` (D-00) maps to the same opaque JSON accumulator.
+                // consistency. Supports bare `Value` annotations
+                // on user functions (kernel-implicit Prelude type).
+                // `Claims` maps to the same opaque JSON accumulator.
                 // ── Kernel-implicit opaque server / Sky.Live types ────────
                 // These names are registered in `KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES`
                 // in sky_canon so they pass N0002 without an explicit import.
@@ -8951,7 +8949,7 @@ impl<'a> Lowerer<'a> {
                 Ok(IrType::Fun(params, Box::new(ret)))
             }
             // A type variable in an annotation (`id : a -> a`). When the
-            // enclosing binding quantifies it (M2a — a fully-parametric
+            // enclosing binding quantifies it (polymorphism — a fully-parametric
             // function), it lowers to an [`IrType::Generic`] pass-through. Every
             // variable appearing in the annotation is in `free_vars` by
             // construction, so a variable absent from `generics` here means canon
@@ -9076,7 +9074,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Collect the captured local variables for a closure body (T3, #121).
+    /// Collect the captured local variables for a closure body (T3).
     ///
     /// Walks `canon_body` collecting every `VarLocal` free relative to
     /// `lambda_param_pats` (all flattened param patterns of the enclosing
@@ -9235,7 +9233,7 @@ impl<'a> Lowerer<'a> {
     /// (Without the flatten, `f a = \b -> \c -> …` declared `Int -> Int -> Int ->
     /// Int` emits a curried `Fn(i64) -> Fn(i64) -> i64` body into a flattened
     /// `Fn(i64, i64) -> i64` return slot, which cargo rejects with no Sky
-    /// diagnostic.) Parameter patterns must be plain names (M1 has no parameter
+    /// diagnostic.) Parameter patterns must be plain names (the grammar has no parameter
     /// destructuring).
     fn lower_lambda(
         &self,
@@ -9340,7 +9338,7 @@ impl<'a> Lowerer<'a> {
             eta_pad.push(sym);
             cur = rest.as_ref();
         }
-        // T8 (#151 c02): use the JSON-friendly variant for the lambda return
+        // T8: use the JSON-friendly variant for the lambda return
         // type.  When the lambda's return type is a compound type containing a
         // free `Ty::Var` (e.g. `Task a` inside a polymorphic function like
         // `wrap : String -> Task Error a -> Task Error a`), the strict
@@ -9401,7 +9399,7 @@ impl<'a> Lowerer<'a> {
         // (`remaining = n`, correct for every n ≥ 1) for CloneOk / bare-Generic
         // params and fails closed on fn-value reuse for the rest. Upgrading
         // eligibility from `CloneOk`-only to `param_is_multiuse_clonable`
-        // (#189's bare-`Generic` admission) also closes the latent S3-generic
+        // (the bare-`Generic` admission) also closes the latent S3-generic
         // double-move — a reused bare-`Generic` lambda param now clones under
         // its emitted `T: Clone` bound instead of double-moving.
         for (sym, ir_ty) in &ir_params {
@@ -9416,7 +9414,7 @@ impl<'a> Lowerer<'a> {
 
     /// Convert a solved [`Ty`] (used for the return type of untyped bindings,
     /// e.g. `main : Task ()`) into an [`IrType`]. `span` blames the binding when
-    /// the inferred type is a shape M0 does not model yet.
+    /// the inferred type is a shape the subset does not model yet.
     /// Lower a list literal `[]` / `[a, b, c]`. The element [`IrType`] comes from
     /// the expression's solved region type (`List elem`), so the backend can
     /// render an empty list as a typed `Vec::<T>::new()`; the items lower
@@ -9525,7 +9523,7 @@ impl<'a> Lowerer<'a> {
                 // `Secret` is `Sky.Core.Secret`'s opaque sealed secret-string
                 // type. Backed by `sky_runtime::secret::Secret`.
                 "Secret" => Ok(IrType::Secret),
-                // `Algorithm` (D-00) shares the `String` IR representation.
+                // `Algorithm` shares the `String` IR representation.
                 "String" | "Algorithm" => Ok(IrType::Str),
                 // `Error` — backed by the real `sky_runtime::error::SkyError` ADT
                 // no longer merged with `String`. Lambda
@@ -9534,7 +9532,7 @@ impl<'a> Lowerer<'a> {
                 "Error" => Ok(IrType::Error),
                 "ErrorKind" => Ok(IrType::ErrorKind),
                 // `ErrorDetails` — mirrors the `ir_type_from_canon` arm added at
-                // the same time (backlog #85 follow-up).
+                // the same time.
                 "ErrorDetails" => Ok(IrType::ErrorDetails),
                 // The NOMINAL error-payload types (SEAL fix) —
                 // backed by `sky_runtime::error::{SkyErrorInfo, SkyPanicInfo,
@@ -9551,7 +9549,7 @@ impl<'a> Lowerer<'a> {
                 // time: these are the HM-solved-type counterparts that fire when
                 // the type is propagated via the region map rather than read from
                 // a user annotation.
-                // `Claims` (D-00) maps to the same opaque JSON accumulator.
+                // `Claims` maps to the same opaque JSON accumulator.
                 "Handler" | "Middleware" | "Session" | "Store" | "VNode" | "Claims" => {
                     Ok(IrType::Json)
                 }
@@ -9621,7 +9619,7 @@ impl<'a> Lowerer<'a> {
                     }
                     Ok(IrType::Set(Box::new(elem)))
                 }
-                // `Decoder a` — the opaque JSON decoder type introduced by M4h.
+                // `Decoder a` — the opaque JSON decoder type.
                 // Maps to `sky_runtime::json::Decoder<SkyError, T>`, aliased as
                 // `Decoder<T>` in the emitted project's preamble.
                 "Decoder" if args.len() == 1 => {
@@ -9636,11 +9634,11 @@ impl<'a> Lowerer<'a> {
                     )?;
                     Ok(IrType::Decoder(Box::new(inner)))
                 }
-                // `Db` — the opaque connection pool handle introduced by M5b-db.
+                // `Db` — the opaque connection pool handle.
                 // Zero type arguments; maps to `sky_runtime::Db`.
                 "Db" => Ok(IrType::Db),
-                // `Cmd msg` / `Sub msg` — the TEA command and subscription types
-                // introduced in M5c.  Each carries exactly one type argument (the
+                // `Cmd msg` / `Sub msg` — the TEA command and subscription types.
+                // Each carries exactly one type argument (the
                 // message type `M`).  Maps to `sky_runtime::tea::SkyCmd<M>` /
                 // `sky_runtime::tea::SkySub<M>`, aliased in the emitted preamble.
                 "Cmd" if args.len() == 1 => {
@@ -9680,7 +9678,7 @@ impl<'a> Lowerer<'a> {
                     name: *name,
                     args: Vec::new(),
                 }),
-                // M6 opaque server types — map directly to their dedicated
+                // Opaque server types — map directly to their dedicated
                 // `IrType` variants so the backend emits the runtime names
                 // (`ServerRequest`, `ServerResponse`, `ServerRoute`,
                 // `ServerCookie`) without synthesising record structs.
@@ -9845,7 +9843,7 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
-                // ── Program-defined enum guard (home-aware; #100/#101) ────────
+                // ── Program-defined enum guard (home-aware) ──────────────
                 // Checked BEFORE the bare-name Std.Ui / Sky.Live opaque arms
                 // below, mirroring `ir_type_from_canon`'s ordering (the annotated
                 // path already places its enum guard ahead of every non-reserved
@@ -9860,7 +9858,7 @@ impl<'a> Lowerer<'a> {
                 // … that is NOT a program union — the real runtime `UiPlain`
                 // types) has no `enum_variants` entry for any home, so the guard
                 // fails and it falls through to the `UiPlain` arms below,
-                // unchanged. This closes the #101 exit-0-then-cargo-fail hole (HOF
+                // unchanged. This closes the exit-0-then-cargo-fail hole (HOF
                 // `applyTo _ Magenta` emitting a `UiPlain::Color` slot) and the
                 // SKY-I0001 ty-vs-canon disagreement on `{ c : Color }` literals.
                 _ if self
@@ -9938,7 +9936,7 @@ impl<'a> Lowerer<'a> {
                 // former `Ty::Var(u32::MAX)` exit-0 hole.
                 //
                 // Placed AFTER the `enum_variants` guard (like the nullary
-                // `Length` / `Color` / … opaque arms, which #101 moved below the
+                // `Length` / `Color` / … opaque arms, which sit below the
                 // guard): the built-in JSON `Value` is never a program union, so a
                 // user-declared `type Value` still resolves as its own enum here.
                 // The parametric reserved builtins (`Decoder` / `Cmd` / `Html` /
@@ -10089,12 +10087,12 @@ impl<'a> Lowerer<'a> {
             // body), emit `IrType::Generic(sym)` — the backend produces
             // e.g. `Attribute<T1>` rather than failing closed.
             //
-            // Otherwise: with M2a, a binding can be genuinely parametric, so
+            // Otherwise: with polymorphism support, a binding can be genuinely parametric, so
             // a region the solver left as a bare variable is an
             // under-determined polymorphic value the lowerer cannot
             // monomorphise here yet — e.g. a polymorphic function referenced
             // as a first-class value whose type never gets pinned to a
-            // concrete instance at the use site. That is a real M2a feature
+            // concrete instance at the use site. That is a real polymorphism feature
             // gap (the value's Rust type would itself have to be generic in a
             // position the backend does not yet model), not an invariant
             // violation, so it surfaces as a `Diagnostic::Lower` with the span
@@ -10237,7 +10235,7 @@ impl<'a> Lowerer<'a> {
                         // `Ok f |> Result.andMap …`) must agree, or the
                         // emitted `let eta_0: SkyResult<JsonVal, _> = ok_res(…)`
                         // is an E0308 exit-0-then-cargo-fail (found while
-                        // gating #90's 5th attempt: the
+                        // gating the 5th attempt: the
                         // `l0114_result_and_map_fn_payload` positive-path
                         // fixture). One defaulting policy, both sides.
                         let err_ty = args.first().ok_or_else(result_arg_bug)?;
@@ -10327,7 +10325,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// #164 (`f7_succeed_curried`): render the `next_decoder` argument type
+    // (`f7_succeed_curried`): render the `next_decoder` argument type
     /// (or the return type) of a `JsonDec.Pipeline` / `Db.Decode` curried-
     /// combinator kernel (`JsonDecPRequired` / `JsonDecPOptional` /
     /// `JsonDecPRequiredAt` / `DbDecRequired` / `DbDecOptional`) as
@@ -10398,7 +10396,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// #164 (`f7_succeed_curried`; #164 follow-up `f11_pipeline_custom_curried`):
+    // (`f7_succeed_curried`; follow-up `f11_pipeline_custom_curried`):
     /// does `resolved` name one of the SIX `JsonDec.Pipeline` / `Db.Decode`
     /// curried-combinator kernels whose LAST parameter (`next_decoder` /
     /// `ctor_dec`) needs the [`Self::ir_type_from_ty_pipeline_decoder`]
@@ -10521,7 +10519,7 @@ impl<'a> Lowerer<'a> {
             // literal's type is always drawn from `{integer}` (never `{float}`),
             // so passing `100` where `f64` is expected is a hard `E0308`
             // regardless of context — the SAME class of skyc-exit-0-then-
-            // cargo-fail SEAL violation as #167's onSubmit bug, just in the
+            // cargo-fail SEAL violation as the onSubmit bug, just in the
             // numeric-literal-defaulting subsystem instead of event-handler
             // codegen. `is_concrete_float` is the existing helper
             // `reject_float_keyed_collection` already uses for this exact
@@ -10716,7 +10714,7 @@ impl<'a> Lowerer<'a> {
                 Ok(Expr::Record(lowered))
             }
             canon::Expr_::Access(record, field) => {
-                // #142/AUD-09 type-directed Copy elision: thread the field's
+                //AUD-09 type-directed Copy elision: thread the field's
                 // solved type (the Access expression's own region type) into
                 // the IR so the backend can skip `.clone()` on `Copy` scalars.
                 // `ir_type_from_ty` may legitimately fail for a still-generic
@@ -10757,7 +10755,7 @@ impl<'a> Lowerer<'a> {
                     // ── TEA gate: `Cmd.none` / `Sub.none` carry an opaque
                     // `msg` type-parameter (`SkyCmd<M>` / `SkySub<M>`).  When the
                     // HM solver leaves `msg` as a free `Ty::Var` — the common
-                    // shape in M5c since there is no update loop to anchor `msg`
+                    // shape here since there is no update loop to anchor `msg`
                     // via a user `Msg` ADT — the emitted `cmd_none()` / `sub_none()`
                     // has an uninferrable `SkyCmd<_>` type that `cargo build`
                     // rejects with E0282.  Call `ir_type_from_ty` on the region
@@ -10873,9 +10871,9 @@ impl<'a> Lowerer<'a> {
     /// is the base's, already surfaced via `Module.records` from the base region's
     /// solved type.
     ///
-    /// M2c gate: updating a GENERIC record (a field typed by a quantified type
+    /// Generic-record-update gate: updating a GENERIC record (a field typed by a quantified type
     /// variable) needs a `Clone`-bounded type parameter, because the backend
-    /// copies the base with `.clone()`. Bounded generics are M2d, so a generic
+    /// copies the base with `.clone()`. Bounded generics are unsupported, so a generic
     /// record update is a not-yet gap ([`Feature::BoundedRecordUpdate`],
     /// SKY-L0111) rather than broken Rust. The base's solved region type tells us
     /// whether it is generic; a monomorphic update is byte-identical to b3.
@@ -11127,8 +11125,7 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
-    /// Lower the page-builder argument of a `Live.route pattern builder` call
-    /// (#108 round 4).
+    /// Lower the page-builder argument of a `Live.route pattern builder` call.
     ///
     /// A BARE payload constructor (`UserPage` with `UserPage : String -> Page`
     /// — the canonical `:param` route shape) lowers to a zero-arg
@@ -11174,7 +11171,7 @@ impl<'a> Lowerer<'a> {
         // `ir_type_from_ty` conversion) is gated here on its own region type.
         self.reject_float_keyed_collection(call_span)?;
 
-        // App-entry / Live.route intercepts (Phase-1b/#108) — see the helper.
+        // App-entry / Live.route intercepts — see the helper.
         match self.intercept_live_kernel_call(callee, args)? {
             Intercepted::Done(e) => Ok(e),
             Intercepted::Fallthrough(peeked) => {
@@ -11184,14 +11181,13 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Kernel-call intercepts that must run BEFORE the uniform arg lowering
-    /// of [`Self::lower_call_uniform`] (Phase-1b + #108).
+    /// of [`Self::lower_call_uniform`].
     ///
     /// Returns [`Intercepted::Done`] when the call was intercepted and fully
     /// lowered here; [`Intercepted::Fallthrough`] to continue on the uniform
     /// path. `lower_callee` is a pure symbol-table lookup (no side effects);
     /// a fall-through carries the already-resolved [`Callee`] so the uniform
-    /// path doesn't re-run the large dispatch (efficiency-audit §3 medium —
-    /// it used to be deliberately re-called, "safe but minimal-diff").
+    /// path doesn't re-run the large dispatch.
     fn intercept_live_kernel_call(
         &self,
         callee: &canon::Expr,
@@ -11200,7 +11196,7 @@ impl<'a> Lowerer<'a> {
         if let canon::Expr_::VarKernel { .. } | canon::Expr_::VarTopLevel { .. } = &callee.value {
             let peek = self.lower_callee(callee)?;
             match &peek {
-                // ── Live.app cfg literal (L0107 exemption, Phase-1b) ────────────
+                // ── Live.app cfg literal (L0107 exemption) ────────────
                 Callee::Kernel(KernelFn::LiveApp) if args.len() == 1 => {
                     // `args.len() == 1` is the match guard above; `first()` is
                     // always `Some` here.  Using `first()` instead of `args[0]`
@@ -11225,8 +11221,8 @@ impl<'a> Lowerer<'a> {
                 // Same pattern as `Live.app`: intercept the single cfg-record arg
                 // BEFORE the uniform `lower_expr` path so function-typed fields
                 // (init/update/view/subscriptions/onKey) do not trip SKY-L0107.
-                // Phase-1c: TuiApp / TuiProgram.
-                // Phase-1d: WebviewApp — the extra `window` field is a plain record
+                // TuiApp / TuiProgram.
+                // WebviewApp — the extra `window` field is a plain record
                 //   value (no functions); `lower_app_entry_cfg` additionally
                 //   requires that record — and its `size` tuple — to be inline
                 //   literals (the G4 emit gates).
@@ -11271,8 +11267,8 @@ impl<'a> Lowerer<'a> {
                 //
                 // A non-literal cfg arg is currently unsupported (emit would ICE); it
                 // is fail-closed via the `Expr::Record` guard in emit_expr.rs rather
-                // than a separate SKY-L0119 here, since Phase-0 only wires literal
-                // cfg forms and a non-literal would produce a CompilerBug diagnostic
+                // than a separate SKY-L0119 here, since only literal cfg forms
+                // are wired and a non-literal would produce a CompilerBug diagnostic
                 // with a clear location at the emit boundary.
                 Callee::Kernel(
                     KernelFn::InputText
@@ -11363,7 +11359,7 @@ impl<'a> Lowerer<'a> {
     /// `peeked` is the callee [`Self::intercept_live_kernel_call`] already
     /// resolved for a `VarKernel`/`VarTopLevel` callee (or `None` for every
     /// other callee shape) — reused here instead of re-running the large
-    /// `lower_callee` dispatch per call (efficiency-audit §3 medium).
+    /// `lower_callee` dispatch per call.
     /// Is this solved `Ty` a GENUINELY-FREE type variable at this call site —
     /// i.e. a `Ty::Var` the solver never constrained AND that is not an
     /// enclosing generic function's own quantified parameter (which the
@@ -11575,7 +11571,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// #183 — re-align a `Result.mapError` error-HANDLER wildcard-lambda param
+    /// Re-align a `Result.mapError` error-HANDLER wildcard-lambda param
     /// that defaulted to `IrType::Json` onto the value side's `IrType::Error`
     /// (`SkyError`) default.
     ///
@@ -11608,7 +11604,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// #198 — re-type a decode-combinator mapper lambda's function-typed
+    /// Re-type a decode-combinator mapper lambda's function-typed
     /// parameter from the SHARED-callback [`IrType::Fun`] shape to the OWNED,
     /// Send-only [`IrType::FnOnceChain`] shape when that parameter IS a decoder
     /// payload that happens to be a function.
@@ -11616,8 +11612,8 @@ impl<'a> Lowerer<'a> {
     /// A `Decoder (a -> b)` payload is represented at runtime as an owned,
     /// linear curry chain — `Box<dyn FnOnce(a) -> b + Send>` (what `curryN`
     /// builds and `decode_succeed`'s `A` is inferred to), never the re-callable
-    /// `Box<dyn Fn(a) -> b + Send + Sync>`. #195 already renders that shape at
-    /// the `Decoder<Fun>` TYPE position (the producer side —
+    /// `Box<dyn Fn(a) -> b + Send + Sync>`. `render_type` already renders that
+    /// shape at the `Decoder<Fun>` TYPE position (the producer side —
     /// `emit_types::render_type`'s `Decoder(Fun)` arm). But when the payload
     /// flows OUT of the decoder into a mapper's parameter — `JsonDec.map (\f ->
     /// f x) d`, `map2 (\g h -> …) da db`, `andThen (\f -> …) d` — that
@@ -11632,7 +11628,7 @@ impl<'a> Lowerer<'a> {
     /// parameter whose IR type is a function type is, by construction, a decoder
     /// payload and must carry the owned `FnOnceChain` shape to match the
     /// producer. This is the same owned-fn-value-vs-shared-callback
-    /// classification as #195, applied at the lambda-PARAM emission site rather
+    /// classification as the type-position render, applied at the lambda-PARAM emission site rather
     /// than the `Decoder<T>` type site — closing the whole class, not the one
     /// failing program.
     ///
@@ -11695,7 +11691,7 @@ impl<'a> Lowerer<'a> {
                 name,
                 ..
             } => {
-                // A constructor application. M3a lowers a *saturated* construction
+                // A constructor application. The lowerer lowers a *saturated* construction
                 // to `Expr::Ctor`; a partial application (`Node l 1` for a
                 // three-field `Node`) eta-expands: `|eta_k,…,eta_{N-1}| Ctor(a0,…,eta_k,…)`.
                 // Over-application is ruled out by type-checking (applying past
@@ -11733,7 +11729,7 @@ impl<'a> Lowerer<'a> {
                 } else {
                     // Partial ctor application: eta-expand into a closure that
                     // captures the supplied args and takes the missing ones.
-                    // Applies the same T4/#130 capture-clone discipline as
+                    // Applies the same T4 capture-clone discipline as
                     // `eta_expand_partial` for named-function partial application.
                     self.eta_expand_partial_ctor(
                         callee,
@@ -11836,7 +11832,7 @@ impl<'a> Lowerer<'a> {
     /// The number of leading arrows in a curried function type — the argument
     /// count a saturated application of a value of this type must pass. A
     /// non-function type has arity `0`. Used to detect partial application of a
-    /// first-class function value, which M1 fails closed on rather than emitting
+    /// first-class function value, which the lowerer fails closed on rather than emitting
     /// an under-applied call. (The IR flattens this curried chain into one
     /// multi-parameter `Fun`, so this count is the boxed closure's parameter
     /// count.)
@@ -11852,7 +11848,7 @@ impl<'a> Lowerer<'a> {
 
     /// Classify an `onSubmit`-family call's handler by its SOLVED type, so the
     /// backend dispatches the runtime `Event::OnForm` slot correctly without
-    /// re-deriving callability from the payload's syntax (the #228 unsound
+    /// re-deriving callability from the payload's syntax (the unsound
     /// gate). Mirrors the reference's `formTargetRustType` decision
     /// (`../sky` `ExprEmitter.hs`): the FIRST param of the handler's arrow type
     /// is the form-record `T` to decode; a non-arrow handler is a bare `Msg`
@@ -12056,7 +12052,7 @@ impl<'a> Lowerer<'a> {
             // Rust type is unified by the compiler from the call site, so
             // `JsonVal` is a sound stand-in for any unconstrained `Ty::Var`.
             //
-            // #164 (`f7_succeed_curried`): EXCEPT the `next_decoder` slot
+            // (`f7_succeed_curried`): EXCEPT the `next_decoder` slot
             // (the kernel's LAST argument) of the five JsonDec.Pipeline /
             // Db.Decode curried-combinator kernels — that one slot needs the
             // curried `FnOnce`-chain shape, never the flattened `Fun` this
@@ -12072,7 +12068,7 @@ impl<'a> Lowerer<'a> {
             params.push((sym, ir));
             call_args.push(Expr::Var(sym));
         }
-        // T8 (#151 c02): use the JSON-friendly variant for the lambda return
+        // T8: use the JSON-friendly variant for the lambda return
         // type for the same reason the eta-params (above) use it: when
         // `ret_ty` is `Task a` (a 1-arg Task) and `a` is a free `Ty::Var`
         // (the common case for polymorphic helpers like
@@ -12149,7 +12145,7 @@ impl<'a> Lowerer<'a> {
     /// [`Expr::Apply`] (call of a value), not an [`Expr::Call`] (call of a named
     /// callee) — that is the only structural difference from `eta_expand_partial`.
     ///
-    /// The T4/#130 capture-clone discipline applies identically to the supplied
+    /// The T4 capture-clone discipline applies identically to the supplied
     /// args: a `CloneOk` `Var` becomes `CloneVar` (the residual closure is `Fn`,
     /// re-callable, so a captured non-`Copy` value must clone per call); a
     /// non-`Var` `CloneOk` expression is hoisted to a `let __sky_cap_i` binding
@@ -12186,7 +12182,7 @@ impl<'a> Lowerer<'a> {
         let mut params: Vec<(Symbol, IrType)> = Vec::with_capacity(arity - supplied);
         let mut call_args = lowered_args;
 
-        // T4/#130: classify each supplied arg's slot for the capture-clone
+        // T4: classify each supplied arg's slot for the capture-clone
         // discipline. Same as `eta_expand_partial`: a `Fun`-typed slot whose
         // resolution fails from a nested `Ty::Var` is definitionally NonClone
         // (safe to forward); any other resolution failure is a conservative None.
@@ -12266,7 +12262,7 @@ impl<'a> Lowerer<'a> {
             ret,
             body: Box::new(body),
         };
-        // T4/#130: wrap hoisted let-bindings around the lambda, in reverse so the
+        // T4: wrap hoisted let-bindings around the lambda, in reverse so the
         // args evaluate left-to-right before the closure is built.
         let result = hoisted
             .into_iter()
@@ -12289,7 +12285,7 @@ impl<'a> Lowerer<'a> {
     /// ```
     ///
     /// This is the ctor counterpart of [`Self::eta_expand_partial`] for named
-    /// functions.  The T4/#130 capture-clone discipline applies identically:
+    /// functions.  The T4 capture-clone discipline applies identically:
     ///
     /// * `Var(sym)` supplied args are rewritten to `CloneVar(sym)` when the slot
     ///   type is `CloneOk`; left bare for `CopyLeaf`.  `NonClone` or unknown types
@@ -12350,7 +12346,7 @@ impl<'a> Lowerer<'a> {
                     Some(CloneClass::CopyLeaf) => {} // bare Var — Copy, no clone
                     // NonClone: a captured non-Clone value cannot be re-forwarded.
                     // None: unknown type on a bare Var — conservatively fail-close
-                    // (T7/#130): cannot prove Copy-safety.
+                    // (T7): cannot prove Copy-safety.
                     Some(CloneClass::NonClone) | None => {
                         return Err(unsupported(call_span, Feature::NonCloneCapture));
                     }
@@ -12519,7 +12515,7 @@ impl<'a> Lowerer<'a> {
     /// saturates the returned closure**. The closure's arity is the callee
     /// type's full arrow depth minus the `arity` parameters the direct `Call`
     /// already consumes; if the surplus is short of it, the result is itself a
-    /// partial application of a first-class value — which M1 cannot lower (the
+    /// partial application of a first-class value — which the lowerer cannot lower (the
     /// returned closure is a flattened multi-parameter `Fn`; under-applying it
     /// would need first-class-value partial application). So in that case we fail
     /// closed with [`Feature::PartialOverApplication`] rather than emit
@@ -12570,7 +12566,7 @@ impl<'a> Lowerer<'a> {
                 callee: resolved,
                 args: head,
                 // Over-application: the base call returns a function that is
-                // further applied; the affected #181 kernels never take this
+                // further applied; the affected kernels never take this
                 // shape, so no turbofish.
                 pin: CallPin::None,
                 // Over-applied kernel base call — never `onSubmit`.
@@ -12595,7 +12591,7 @@ impl<'a> Lowerer<'a> {
     /// ```
     ///
     /// The residual params/ret come from the callee's solved region type, peeled
-    /// past the `arity + surplus` positions already supplied. The T4/#130 clone
+    /// past the `arity + surplus` positions already supplied. The T4 clone
     /// discipline for the surplus args mirrors the other eta paths; the captured
     /// `Call(f, head)` value is a `Box<dyn Fn>` moved in and called via `&self`,
     /// so the residual is `Fn`.
@@ -12630,7 +12626,7 @@ impl<'a> Lowerer<'a> {
         let head: Vec<Expr> = iter.by_ref().take(arity).collect();
         let mut surplus_args: Vec<Expr> = iter.collect();
 
-        // T4/#130: classify each SURPLUS arg's slot (positions `arity..total`)
+        // T4: classify each SURPLUS arg's slot (positions `arity..total`)
         // for the capture-clone discipline. A `Fun`-typed slot whose resolution
         // fails from a nested `Ty::Var` is definitionally NonClone.
         let slot_classes: Vec<Option<CloneClass>> = arg_tys
@@ -13193,16 +13189,16 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DbDecMap
                 // `andThen : (a -> Decoder b) -> Decoder a -> Decoder b`
                 | KernelFn::DbDecAndThen
-                // ── TEA arity-2 (M5c wired) ───────────────────────────────────
+                // ── TEA arity-2 (wired) ───────────────────────────────────
                 // `Cmd.perform : Task Error a -> (Result Error a -> msg) -> Cmd msg`
                 | KernelFn::CmdPerform
                 // `Sub.every : Int -> msg -> Sub msg`
                 | KernelFn::SubEvery
                 // `Time.every : Int -> msg -> Sub msg`  (alias)
                 | KernelFn::TimeEvery
-                // `Sub.subscribeTopic : String -> (any -> msg) -> Sub msg`  (M5d wired)
+                // `Sub.subscribeTopic : String -> (any -> msg) -> Sub msg`  (wired)
                 | KernelFn::SubSubscribeTopic
-                // ── TEA arity-2 (M6 reserved — not emitted yet) ───────────────
+                // ── TEA arity-2 (reserved — not emitted yet) ───────────────
                 // `Cmd.publish : String -> a -> Cmd msg`
                 | KernelFn::CmdPublish
                 // `Cmd.publishNoEcho : String -> a -> Cmd msg`
@@ -13238,7 +13234,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::MiddlewareWithCors
                 // `Error.withMessage : String -> Error -> Error`
                 | KernelFn::ErrorWithMessage
-                // `Error.withDetails : ErrorDetails -> Error -> Error` (#85 follow-up)
+                // `Error.withDetails : ErrorDetails -> Error -> Error`
                 | KernelFn::ErrorWithDetails,
             ) => Ok(2),
             Callee::Kernel(
@@ -13543,7 +13539,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlTrack
                 // `Html.wbr : List (Attribute msg) -> Html msg` (void element)
                 | KernelFn::HtmlWbr
-                // ── Phase-1a event-attribute builders — arity 1 ──────────
+                // ── event-attribute builders — arity 1 ──────────
                 // `Ui.onClick : msg -> Attribute msg`
                 | KernelFn::UiOnClick
                 // `Ui.onFocus : msg -> Attribute msg`
@@ -13821,7 +13817,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlHtmlNode
                 // `Html.headNode : List (Attribute msg) -> List (Html msg) -> Html msg`
                 | KernelFn::HtmlHeadNode
-                // `Live.route : String -> page -> LiveRoute` (#106: `page` is a
+                // `Live.route : String -> page -> LiveRoute` (`page` is a
                 // bare polymorphic value — nullary ctor OR `String -> Page`)
                 | KernelFn::LiveRoute
                 // `Live.renderStatic : LiveAppCfg model msg -> String -> Task Error String`
@@ -13829,7 +13825,7 @@ impl<'a> Lowerer<'a> {
                 // generic `Attr.attribute k v` / `Attr.boolAttribute k b`.
                 | KernelFn::HtmlAttribute
                 | KernelFn::HtmlBoolAttribute
-                // -- #76 Tier 1 -- arity 2
+                // -- Tier 1 -- arity 2
                 | KernelFn::UiAspectRatioWH
                 | KernelFn::UiHtmlAttribute
                 | KernelFn::UiStyle
@@ -14187,14 +14183,13 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Resolve a named callee (`Maybe.andMap`, `String.length`, a user
-    /// top-level function, …) to its [`Callee`], then run the #90 T3
+    /// top-level function, …) to its [`Callee`], then run the T3
     /// curried-`andMap`-payload backstop over the RESULT.
     ///
-    /// **Revert-incident Bug 3 (BACKLOG #90).** The first two #90 landings
-    /// (`f80f05a`/`39d9a57`, both reverted) ran the curried-payload check
-    /// from INSIDE [`Self::lower_call_uniform`]'s `VarKernel | VarTopLevel`
-    /// arm — which only sees a callee that is the DIRECT callee of a `Call`
-    /// AST node. A bare-value reference to `Result.andMap` /
+    /// Running the curried-payload check only from INSIDE
+    /// [`Self::lower_call_uniform`]'s `VarKernel | VarTopLevel`
+    /// arm is not enough — that arm only sees a callee that is the DIRECT
+    /// callee of a `Call` AST node. A bare-value reference to `Result.andMap` /
     /// `Maybe.andMap` — passed as a higher-order argument, `let`-bound as a
     /// point-free alias (`myAndMap = Result.andMap`), extracted from a
     /// record field, or re-exported through an `import … as …` alias — never
@@ -14235,7 +14230,7 @@ impl<'a> Lowerer<'a> {
     fn lower_callee_resolve(&self, callee: &canon::Expr) -> DResult<Callee> {
         match &callee.value {
             canon::Expr_::VarKernel { id, module, name } => {
-                // Phase B fast path: use the pre-resolved id when available.
+                // fast path: use the pre-resolved id when available.
                 // This avoids the ~400-arm string-match dispatch for every
                 // registered kernel.  Unregistered entries (id = None) fall
                 // through to the legacy string-match below.
@@ -14687,7 +14682,7 @@ impl<'a> Lowerer<'a> {
                         Ok(Callee::Kernel(KernelFn::HttpWithMaxRedirects))
                     }
                     // ── Db kernels ──────────────────────────────────
-                    // ── Sql kernels (#61 SqlFragment combinators) ──────────
+                    // ── Sql kernels (SqlFragment combinators) ──────────
                     ("Sql", "column") => Ok(Callee::Kernel(KernelFn::SqlColumn)),
                     ("Sql", "param") => Ok(Callee::Kernel(KernelFn::SqlParam)),
                     ("Sql", "int") => Ok(Callee::Kernel(KernelFn::SqlInt)),
@@ -14755,7 +14750,7 @@ impl<'a> Lowerer<'a> {
                     ("Db.Decode", "map4") => Ok(Callee::Kernel(KernelFn::DbDecMap4)),
                     ("Db.Decode", "required") => Ok(Callee::Kernel(KernelFn::DbDecRequired)),
                     ("Db.Decode", "optional") => Ok(Callee::Kernel(KernelFn::DbDecOptional)),
-                    // ── TEA Cmd / Sub / Time kernels (M5c / M5e) ─────────────────
+                    // ── TEA Cmd / Sub / Time kernels ─────────────────
                     ("Cmd", "none") => Ok(Callee::Kernel(KernelFn::CmdNone)),
                     ("Cmd", "batch") => Ok(Callee::Kernel(KernelFn::CmdBatch)),
                     ("Cmd", "perform") => Ok(Callee::Kernel(KernelFn::CmdPerform)),
@@ -14910,10 +14905,10 @@ impl<'a> Lowerer<'a> {
                     // dedicated kernel close-tag-neutralises the CSS body (F7).
                     ("Html", "styleNode") => Ok(Callee::Kernel(KernelFn::HtmlStyleNode)),
                     ("Html", "node") => Ok(Callee::Kernel(KernelFn::HtmlNode)),
-                    // ── 20-kernel wiring batch — each of these 5 is now its
-                    // own dedicated `KernelFn` variant (distinct arity from the
-                    // generic arity-3 `Html.node`); the former combined arm
-                    // above silently mis-arities them onto `HtmlNode`.
+                    // Each of these 5 is its own dedicated `KernelFn` variant
+                    // (distinct arity from the generic arity-3 `Html.node`);
+                    // routing them through the combined `HtmlNode` arm above
+                    // would silently mis-arity them.
                     ("Html", "voidNode") => Ok(Callee::Kernel(KernelFn::HtmlVoidNode)),
                     ("Html", "doctype") => Ok(Callee::Kernel(KernelFn::HtmlDoctype)),
                     ("Html", "titleNode") => Ok(Callee::Kernel(KernelFn::HtmlTitleNode)),
@@ -15022,7 +15017,7 @@ impl<'a> Lowerer<'a> {
                     ("Attr", "attribute") => Ok(Callee::Kernel(KernelFn::HtmlAttribute)),
                     ("Attr", "boolAttribute") => Ok(Callee::Kernel(KernelFn::HtmlBoolAttribute)),
                     ("Attr", "noAttr") => Ok(Callee::Kernel(KernelFn::HtmlNoAttr)),
-                    // ── Phase-1a event-attribute builders (Std.Ui qualifier) ──
+                    // ── event-attribute builders (Std.Ui qualifier) ──
                     // `Ui.onClick` etc. produce the `Std.Ui.Attribute` variant.
                     // NB: the primary resolution path is the id fast-path above
                     // (env.rs threads the pre-resolved kernel id); these string
@@ -15354,8 +15349,8 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Lower a constructor payload sub-pattern. M3a binds a payload field to a
-    /// variable or ignores it with `_`; M3b-1 also admits a TUPLE payload of
+    /// Lower a constructor payload sub-pattern. The lowerer binds a payload field to a
+    /// variable or ignores it with `_`; the lowerer also admits a TUPLE payload of
     /// those (`Just (a, b)`), lowered element-wise. A nested constructor /
     /// literal / record / cons sub-pattern is the nested-payload gap (SKY-L0112),
     /// surfaced fail-closed rather than mis-lowered.
@@ -15384,7 +15379,7 @@ impl<'a> Lowerer<'a> {
             // (`m0-24-tui-kitchen-sink` SEAL violation sibling —
             // `SkyMaybe::Just(SkyMaybe::Just("x"))` is E0308, `expected String,
             // found &str`). Fail-closed (SKY-L0116), the exact sibling of the
-            // PList / PCons gate below. Class 4 item C2 / #158.
+            // PList / PCons gate below. Class 4 item C2.
             canon::Pattern_::PStr(_) => Err(unsupported(p.span, Feature::NestedCtorDiscrimination)),
             // An alias `inner as name` lowers to the IR binding-with-subpattern.
             canon::Pattern_::PAlias(inner, name) => Ok(Pat::Alias(
@@ -15426,7 +15421,7 @@ impl<'a> Lowerer<'a> {
             // A record sub-pattern nested in a constructor payload (`Ok {name}`).
             // The payload field's complete record type is recovered from the
             // per-sub-pattern region the constraint generator now records (Class 4
-            // item C / #158), then `lower_record_pat` builds the complete
+            // item C), then `lower_record_pat` builds the complete
             // `Pat::Record` the same way a top-level `case` / `let` binder does.
             // `Pat::Record` nested inside `Pat::Ctor.args` is an already-permitted
             // IR shape and lowers to valid Rust struct-pattern nesting.
@@ -15445,7 +15440,7 @@ impl<'a> Lowerer<'a> {
             // `lower_arm_pat` (which owns the whole arm + body). Reaching a
             // PList / PCons HERE means the shape is nested via some OTHER path
             // (two levels deep, `Ok (Just (h :: t))`, out of this item's scope) —
-            // fail-closed (SKY-L0116). Class 4 item C / #158.
+            // fail-closed (SKY-L0116). Class 4 item C.
             canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _) => {
                 Err(unsupported(p.span, Feature::NestedCtorDiscrimination))
             }
@@ -15488,7 +15483,7 @@ impl<'a> Lowerer<'a> {
             // A record pattern nested inside a tuple destructure (`(Ok {name}, y)`
             // single-arm form, `({ x }, y) = e`). The element's complete record
             // type is recovered from the per-sub-pattern region the constraint
-            // generator now records (Class 4 item C / #158) — same recovery a
+            // generator now records (Class 4 item C) — same recovery a
             // top-level record binder uses via `lower_binder_pat`.
             canon::Pattern_::PRecord(fields) => {
                 let ty = self.region_ty(p.span).ok_or_else(|| {
@@ -15651,7 +15646,7 @@ impl<'a> Lowerer<'a> {
                 // path REGARDLESS of how deeply it is nested. Recurse through every
                 // structural column (nested tuple / ctor args / alias inner) — a
                 // `PCons` nested inside a nested-TUPLE column would otherwise slip
-                // through a top-level-only check (#174 fix-up: probe G).
+                // through a top-level-only check (probe G).
                 cols.iter().any(Self::col_needs_literal_tuple_path)
             });
             return Ok(!any_col_needs_literal_tuple_path);
@@ -15690,7 +15685,7 @@ impl<'a> Lowerer<'a> {
     /// which only the literal-tuple scrutinee can produce (there are no element
     /// expressions to `.as_slice()`-wrap a variable tuple column), so a `PList` /
     /// `PCons` leaf anywhere `cargo`-fails (E0529) on the by-value path — it stays
-    /// fail-closed. (#174 fix-up: probe G — a `PCons` nested inside a nested-`PTuple`
+    /// fail-closed. (probe G — a `PCons` nested inside a nested-`PTuple`
     /// column slipped through a top-level-only check; this recurses.)
     ///
     /// A STRING-literal column (`PStr`) is NOT flagged here: the backend
@@ -15713,7 +15708,7 @@ impl<'a> Lowerer<'a> {
             canon::Pattern_::PAlias(inner, _) => Self::col_needs_literal_tuple_path(inner),
             // Leaves the by-value whole path lowers directly — a wildcard, variable,
             // record field-pun, a scalar literal, or a string literal (handled by the
-            // backend's binder + `as_str()` guard, #182) all match without a
+            // backend's binder + `as_str()` guard) all match without a
             // coerced-column path.
             canon::Pattern_::PAnything
             | canon::Pattern_::PVar(_)
@@ -15802,7 +15797,7 @@ impl<'a> Lowerer<'a> {
         }
         let inner_ty = args.first()?;
         // If the inner type cannot be lowered (e.g. it is a polymorphic variable
-        // the M0 lowerer cannot yet handle), return None — the binding will
+        // the lowerer cannot yet handle), return None — the binding will
         // proceed through the standard path and surface the real diagnostic.
         self.ir_type_from_ty(inner_ty, span)
             .ok()
@@ -15810,12 +15805,12 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Build the [`Expr`] for a destructure-binder `let` / single-arm-`case`
-    /// binding, applying the #125 Decoder-thunk generalization when `value`'s
+    /// binding, applying the Decoder-thunk generalization when `value`'s
     /// aggregate type contains [`IrType::Decoder`] anywhere. Falls through to
-    /// a plain [`Expr::Destructure`] (byte-identical to pre-#125 emission)
+    /// a plain [`Expr::Destructure`] (byte-identical to the earlier emission)
     /// when it does not.
     ///
-    /// The Decoder path generalizes #89 Fix C to multi-name binders: the
+    /// The Decoder path generalizes Fix C to multi-name binders: the
     /// whole `value` is wrapped in a zero-arg thunk lambda and EVERY name the
     /// binder binds gets its free reads rewritten to a fresh, masked
     /// re-destructure of a thunk call
@@ -15924,7 +15919,7 @@ impl<'a> Lowerer<'a> {
 
     /// [`Self::lower_let`]'s `PVar` arm: the F2 decoder-thunk wrap when the
     /// binding's solved type is `Decoder T`, else the T5 multi-use-clone /
-    /// T4 fn-value-reuse-gate / #164 shared-capture treatment for an
+    /// T4 fn-value-reuse-gate shared-capture treatment for an
     /// ordinary single-name binding.
     /// The `Decoder`-typed arm of [`Self::lower_let_pvar`]: wrap the value in a
     /// zero-arg rebuild thunk (a `Decoder` is `!Clone` and consumed by value)
@@ -16019,7 +16014,7 @@ impl<'a> Lowerer<'a> {
             // E0382 (use of moved value) in emitted Rust where each
             // `Var(name)` lowers to a bare identifier that moves the value.
             //
-            // batch-xm rekeyed `types.regions` to `(home, span)`;
+            // `types.regions` is keyed by `(home, span)`;
             // `region_ty` builds the composite key from current_home.
             let ty_opt = self
                 .region_ty(b.body.span)
@@ -16083,7 +16078,7 @@ impl<'a> Lowerer<'a> {
                         // every n ≥ 1) for CloneOk / bare-Generic values — its
                         // `n == 1` Lambda arm installs the per-boundary relay
                         // without the old depth-0 over-clone — and a fail-closed
-                        // #90 T4 gate for fn-value reuse. The `Fun`-typed
+                        // T4 gate for fn-value reuse. The `Fun`-typed
                         // `Arc`-promotion path below (`needs_shared_capture` /
                         // `flows_into_sync_kernel_call`) is orthogonal and
                         // untouched.
@@ -16260,7 +16255,7 @@ impl<'a> Lowerer<'a> {
                     let binder = self.lower_binder_pat(&b.pat, &b.body)?;
                     // Scope = the let body + the values of every later sibling
                     // binding (source order) — where the destructured components
-                    // may be read (see #224 pass in the thunk builder).
+                    // may be read (see pass in the thunk builder).
                     let mut scope: Vec<&canon::Expr> = vec![body];
                     if let Some(later) = bindings.get(b_src_idx + 1..) {
                         scope.extend(later.iter().map(|lb| &lb.body));
@@ -16279,7 +16274,7 @@ impl<'a> Lowerer<'a> {
         Ok(acc)
     }
 
-    // The per-arm loop (T5 clone insertion + #158 C2 nested-cons desugaring)
+    // The per-arm loop (T5 clone insertion + C2 nested-cons desugaring)
     // plus the destructure / tuple / enum-cover dispatch pushes this past the
     // 100-line ceiling; splitting on an arbitrary boundary would obscure the
     // single linear lowering flow. The allow is narrow: only this function.
@@ -16305,7 +16300,7 @@ impl<'a> Lowerer<'a> {
                 let binder = self.lower_binder_pat(&first.pat, scrut)?;
                 let body = self.lower_expr(&first.body)?;
                 // Scope = the single arm body — where the destructured
-                // components are read (see #224 pass in the thunk builder).
+                // components are read (see pass in the thunk builder).
                 return self.build_destructure_or_decoder_thunk(
                     binder,
                     scrutinee,
@@ -16347,7 +16342,7 @@ impl<'a> Lowerer<'a> {
         // set. Any other mix (literal heads, a wildcard / variable catch-all, an
         // alias head, or a constructor + catch-all) takes the FLAT refutable
         // `Match::new_flat` path, whose backstop is structural.
-        // Redundancy demotion (batch-xm): SKY-T0011 is a WARNING, so arms AFTER
+        // Redundancy demotion: SKY-T0011 is a WARNING, so arms AFTER
         // an irrefutable catch-all can now reach lowering. They are provably
         // unreachable — the exhaustiveness pass already warned — so DROP them
         // here (semantics-preserving; the Go reference compiles the same
@@ -16444,7 +16439,7 @@ impl<'a> Lowerer<'a> {
             })
             .collect::<DResult<Vec<_>>>()?;
 
-        // #99 (SKY-L0128): reject dispatch-needing `as`-aliases in by-value
+        // (SKY-L0128): reject dispatch-needing `as`-aliases in by-value
         // match positions before they reach the backend.
         Self::gate_by_value_dispatch_needing_aliases(&arms, branches)?;
 
@@ -16478,7 +16473,7 @@ impl<'a> Lowerer<'a> {
         // `fn f<T1: Clone>(xs: Vec<T1>) -> …` supports `rest.to_vec()` /
         // `x.clone()` and `cargo`-builds. This holds for a Boundary-Scheme-
         // Promoted untyped def (`listLen xs = case xs of [] -> … ; _ :: rest ->
-        // …`, a cross-module polymorphic recursion, #201) exactly as for an
+        // …`, a cross-module polymorphic recursion) exactly as for an
         // annotated generic — both route the element var through the same
         // `current_poly_tvars` generic path. A non-binding list `case`
         // (`[] -> … ; _ :: _ -> …`) clones nothing and was never affected. The
@@ -16513,7 +16508,7 @@ impl<'a> Lowerer<'a> {
     /// pattern contain an `as`-alias whose inner shape needs Rust-level
     /// runtime dispatch anywhere? Such an alias cannot be honored soundly by
     /// value: `name @ inner` double-moves a non-`Copy` payload (E0382), and
-    /// the clone-rebuild repair (`render_arm_pat_alias_safe`, the #96/#99
+    /// the clone-rebuild repair (`render_arm_pat_alias_safe`, the
     /// strategy) is only sound for a dispatch-FREE inner — a failing inner
     /// check may have discarded data the alias binder needs. Walks every
     /// nested position (ctor payloads, tuple elements, record fields) since
@@ -16552,7 +16547,7 @@ impl<'a> Lowerer<'a> {
     /// (WHOLE mode with neither flag, and non-str/non-list tuple columns) are
     /// gated: a dispatch-needing alias inner there is rejected at lowering
     /// with a clean diagnostic rather than reaching the backend, where it
-    /// would either double-move (the pre-#99 E0382 seal hole) or require a
+    /// would either double-move (the the earlier E0382 seal hole) or require a
     /// by-reference arm redesign. Dispatch-free aliases pass through — the
     /// backend's `render_arm_pat_alias_safe` repairs those.
     fn gate_by_value_dispatch_needing_aliases(
@@ -16609,7 +16604,7 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
-    /// Lower a `case`-arm HEAD pattern to its IR [`Pat`]. Handles the full M3b-3
+    /// Lower a `case`-arm HEAD pattern to its IR [`Pat`]. Handles the full set of
     /// refutable head set — variable / wildcard binders, the literal leaves
     /// (`0` / `True` / `'a'` / `"hi"`), an alias / `as` binder, and a
     /// constructor pattern (whose payload sub-patterns recurse through
@@ -16757,7 +16752,7 @@ impl<'a> Lowerer<'a> {
                 // a bare type parameter carries no `Clone` bound. That theory
                 // stopped holding once `emit_func` started injecting `Clone`
                 // UNCONDITIONALLY on every one of a function's own quantified
-                // type parameters (T5, #104/#112) — and `list_elem_ir` (via
+                // type parameters (T5) — and `list_elem_ir` (via
                 // `poly_tvar_symbol`) only ever resolves a `Ty::Var` to
                 // `IrType::Generic(sym)` when `sym` IS one of the ENCLOSING
                 // typed binding's own quantified vars (`current_poly_tvars`,
@@ -16838,7 +16833,7 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Classify a constructor-arg sub-pattern as a SUPPORTABLE nested list for
-    /// the #158 C2 desugaring: a `PList` / `PCons` whose every element AND open
+    /// the C2 desugaring: a `PList` / `PCons` whose every element AND open
     /// tail is a plain `PVar` / `PAnything`. Returns the flattened prefix (each
     /// entry `Some(sym)` for a named binder, `None` for a wildcard), whether it
     /// is `closed` (a `PList` literal / a cons chain ending in `[]`), and the
@@ -17126,7 +17121,7 @@ mod tests {
         let ek_conflict = interner.intern("Conflict").unwrap();
         let ek_unavailable = interner.intern("Unavailable").unwrap();
         let ek_unexpected = interner.intern("Unexpected").unwrap();
-        // ── ErrorDetails ADT (backlog #85 follow-up) ─────────────────────────
+        // ── ErrorDetails ADT ─────────────────────────
         let errordetails = interner.intern("ErrorDetails").unwrap();
         let ed_ffi_panic = interner.intern("FfiPanic").unwrap();
         let ed_type_mismatch = interner.intern("TypeMismatch").unwrap();
@@ -17173,7 +17168,7 @@ mod tests {
             ek_conflict,
             ek_unavailable,
             ek_unexpected,
-            // ── ErrorDetails (backlog #85 follow-up) ─────────────────────────
+            // ── ErrorDetails ─────────────────────────
             errordetails,
             ed_ffi_panic,
             ed_type_mismatch,
@@ -17207,20 +17202,20 @@ mod tests {
     //
     // EMITTABILITY VERDICT (sky_backend_rust/src/emit_expr.rs, `emit_tea_call`):
     //
-    //   KernelFn::PubSubPublish       → Ok(Some("pubsub_publish::<_, SkyError>(…)"))  [emittable, #215]
-    //   KernelFn::PubSubPublishNoEcho → Ok(Some("pubsub_publish_no_echo::<_, SkyError>(…)"))  [emittable, #215]
+    //   KernelFn::PubSubPublish       → Ok(Some("pubsub_publish::<_, SkyError>(…)"))  [emittable]
+    //   KernelFn::PubSubPublishNoEcho → Ok(Some("pubsub_publish_no_echo::<_, SkyError>(…)"))  [emittable]
     //
     // PubSubPublish and PubSubPublishNoEcho are in ALL (and hence in
     // stdlib_index) but the qualifier "PubSub" is absent from QUALIFIERS in
     // env.rs, so no VarKernel node with module="PubSub" can be produced via
     // the legacy string path.  They are reachable ONLY through the
     // `Ffi.kernel "PubSub_publish"` alias fast-path (`id = Some`, set by
-    // `sky_canon::resolve::detect_kernel_alias`).  As of backlog #215, both
+    // `sky_canon::resolve::detect_kernel_alias`).  Both
     // have a real type scheme (`String -> a -> Task Error Int`) and a
     // dedicated emit arm — they emit `pubsub_publish::<_, SkyError>(topic,
     // payload)`.  They remain here (no legacy arm) so the
     // decl-equiv-legacy test skips them.
-    // The #194/#197/#202/#210/#215 stdlib families (Regex / Path / Trace /
+    // The stdlib families (Regex / Path / Trace /
     // Compression / Csv / Cache / PubSub) are resolved EXCLUSIVELY through the
     // `Ffi.kernel "Mod_fn"` alias fast-path (`id = Some`, set by
     // `sky_canon::resolve::detect_kernel_alias`): their qualifiers are compiled-
@@ -17298,7 +17293,7 @@ mod tests {
 
     /// Verifies that for every non-excluded variant in `KernelFn::ALL`, the
     /// legacy string-match arm in `lower_callee` returns `Callee::Kernel(sk)`
-    /// when called with `id = None` (i.e. the Phase B fast path disabled).
+    /// when called with `id = None` (i.e. the fast path disabled).
     ///
     /// Forcing `id = None` makes the test NON-VACUOUS:
     ///
@@ -17429,7 +17424,7 @@ mod tests {
         );
     }
 
-    /// #70 — `callee_arity`'s hand-written per-variant arity buckets must
+    /// `callee_arity`'s hand-written per-variant arity buckets must
     /// agree with `StdlibKernel::decl().arity` (the same enum, aliased as
     /// `KernelFn`).
     ///
@@ -17439,9 +17434,9 @@ mod tests {
     /// against at lowering time (its call sites decide eta-expansion,
     /// argument saturation, and TEA default-arg elision). Rust's
     /// exhaustiveness checker guarantees `callee_arity`'s match covers every
-    /// `KernelFn` variant (a *missing* arm is a compile error), but nothing
-    /// previously caught a *wrong* arity value inside one of the buckets —
-    /// that silent drift is the exit-0-then-cargo-fail class `#70` names: a
+    /// `KernelFn` variant (a *missing* arm is a compile error), but the
+    /// checker cannot catch a *wrong* arity value inside one of the buckets —
+    /// that silent drift is the exit-0-then-cargo-fail class: a
     /// program can pass `skyc`'s type-check against `decl().arity`'s arrow
     /// count and still emit a Rust call with the wrong argument count,
     /// caught only by `cargo`, never by `skyc`.

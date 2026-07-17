@@ -1,24 +1,24 @@
 #![forbid(unsafe_code)]
-//! `sky_db` — the salsa incremental-compilation database (Phase 1).
+//! `sky_db` — the salsa incremental-compilation database.
 //!
 //! Authoritative design: `docs/architecture/incremental-compilation-and-watch.md`
-//! (locked Q1–Q4). Phase-1 scope + decisions ledger:
+//! (locked Q1–Q4). Scope + decisions ledger:
 //! `docs/architecture/salsa-incremental-compilation-2026-07-11.md`.
 //!
-//! Phase 1 puts the earliest front-end stages behind memoized salsa queries:
+//! The earliest front-end stages sit behind memoized salsa queries:
 //!
 //! - **Inputs** (the parse-don't-validate boundary): [`SourceFile`] (module
 //!   path + text, one per in-scope `.sky` module) and [`SourceRoot`] (the
 //!   in-scope file set — the design spec's `file_set()`).
 //! - **Tracked queries**: [`parse`] (per-file AST, errors as values) and
 //!   [`imports`] (per-file import list via the same string-scan the driver's
-//!   topological sort has always used).
+//!   topological sort uses).
 //!
-//! Phase 2 (spec §5 row 2 — plan Tasks 5/6/7/8) adds the canonicalisation
-//! tier: [`resolve_imports`] (the closed-enum module-resolution edge, AST-
-//! derived), [`canonicalize`] (per-module name resolution), and
-//! [`module_interface`] (the export-surface firewall — importers early-cut on
-//! dep body-only edits via salsa backdating).
+//! The canonicalisation tier (spec §5 row 2): [`resolve_imports`] (the
+//! closed-enum module-resolution edge, AST-derived), [`canonicalize`]
+//! (per-module name resolution), and [`module_interface`] (the export-surface
+//! firewall — importers early-cut on dep body-only edits via salsa
+//! backdating).
 //!
 //! INV-1 (no hidden inputs): no query here touches `std::fs`, `std::env`, or
 //! the clock. File reading stays in the driver, which is where inputs are set.
@@ -30,9 +30,9 @@
 //! resolves against the current interner. Symbol *numbering* depends on the
 //! query-demand order; the one-shot `skyc` driver demands queries in a fixed
 //! topological order against a cold database, so emitted bytes are identical
-//! to the pre-salsa pipeline (enforced by the golden-oracle suite). Warm-db
-//! reuse stays confined to tests until the clean-vs-incremental parity gate
-//! (plan Task 18) exists.
+//! to the non-incremental pipeline (enforced by the golden-oracle suite).
+//! Warm-db reuse stays confined to tests until the clean-vs-incremental
+//! parity gate exists.
 
 mod metadata;
 
@@ -50,7 +50,7 @@ use sky_syntax::Module;
 pub use metadata::{ProgramMetadata, ProgramMetadataResult, program_metadata};
 
 // ---------------------------------------------------------------------------
-// The shared interner (plan Task 3, Option 3a)
+// The shared interner (Option 3a)
 // ---------------------------------------------------------------------------
 
 /// A database-owned, append-only interner shared between salsa queries and
@@ -81,8 +81,8 @@ impl SharedInterner {
     /// The underlying `Arc<Mutex<Interner>>` handle.
     ///
     /// Exists alongside [`Self::lock`] for callers that need the Arc ITSELF
-    /// rather than a guard — specifically `skyc::cache`'s Phase 6.5
-    /// on-disk lowered-IR tier, which installs this database's interner as
+    /// rather than a guard — specifically `skyc::cache`'s on-disk lowered-IR
+    /// tier, which installs this database's interner as
     /// the ambient `serde` context for `sky_intern::Symbol`
     /// (`sky_intern::SerdeInternerGuard::install`) around a
     /// `sky_ir::Program` (de)serialize call. Cloning the `Arc` is cheap (a
@@ -158,7 +158,7 @@ pub struct SourceFile {
     /// Full source text.
     #[returns(ref)]
     pub text: String,
-    /// The driver-vouched trust tag (Phase 2). `EmbeddedStdlib` is only ever
+    /// The driver-vouched trust tag. `EmbeddedStdlib` is only ever
     /// set by the driver for module paths it injected from the compiler's own
     /// embed table — a user file squatting on `Std.Foo` arrives as `User` and
     /// stays SKY-N0025-rejected. Unforgeable from module text by construction:
@@ -189,7 +189,7 @@ pub fn set_text_if_changed(db: &mut SkyDatabase, file: SourceFile, new_text: &st
 }
 
 // ---------------------------------------------------------------------------
-// Tracked queries (Phase 1: parse + imports)
+// Tracked queries: parse + imports
 // ---------------------------------------------------------------------------
 
 /// The memoized result of parsing one module. Errors are **values** — a
@@ -211,20 +211,19 @@ pub fn parse(db: &dyn Db, file: SourceFile) -> ParseResult {
 ///
 /// Backed by [`extract_imports_from_source`] — a token-level scan (real
 /// lexer) whose edge set is a superset-or-equal of the AST's import edges,
-/// which is what makes the driver's SKY-N0021 cycle gate sound (M1 fix).
+/// which is what makes the driver's SKY-N0021 cycle gate sound.
 /// Deliberately pre-parse rather than derived from [`parse`]: the topo sort
 /// must still work on files whose parse would fail (a lex-failing file falls
-/// back to the historical line scan for ordering only — it contributes no
-/// AST edges), and deriving from the AST is an observable ordering change
-/// that belongs behind the clean-vs-incremental parity gate (plan Task
-/// 5/18).
+/// back to the line scan for ordering only — it contributes no AST edges),
+/// and deriving from the AST is an observable ordering change that belongs
+/// behind the clean-vs-incremental parity gate.
 #[salsa::tracked]
 pub fn imports(db: &dyn Db, file: SourceFile) -> Arc<Vec<Vec<String>>> {
     Arc::new(extract_imports_from_source(file.text(db)))
 }
 
 // ---------------------------------------------------------------------------
-// Tracked queries (Phase 2: resolve_imports + module_interface + canonicalize)
+// Tracked queries: resolve_imports + module_interface + canonicalize
 // ---------------------------------------------------------------------------
 
 /// Closed-enum result of resolving one `import` path against the file set.
@@ -252,14 +251,14 @@ pub type ImportResolutions = Result<Arc<Vec<(Vec<String>, ImportResolution)>>, D
 
 /// Resolve every `import` of `file` against the project file set.
 ///
-/// Derived from the parsed AST (the plan's Task-5 shape), NOT the pre-parse
-/// string-scan [`imports`] query — this query's consumer is [`canonicalize`],
-/// which iterates the AST's import declarations, so the two must agree
-/// exactly. The string-scan stays in service of the driver's topological
-/// sort only (recorded parity choice, spec §3.4).
+/// Derived from the parsed AST, NOT the pre-parse string-scan [`imports`]
+/// query — this query's consumer is [`canonicalize`], which iterates the
+/// AST's import declarations, so the two must agree exactly. The string-scan
+/// stays in service of the driver's topological sort only (recorded parity
+/// choice, spec §3.4).
 ///
 /// Reads the whole `files` field, so adding/removing/renaming ANY file
-/// re-validates every module's resolutions (H6 — the set-vs-contents gate);
+/// re-validates every module's resolutions (the set-vs-contents gate);
 /// unchanged results backdate and cut dependents.
 #[salsa::tracked]
 pub fn resolve_imports(db: &dyn Db, root: SourceRoot, file: SourceFile) -> ImportResolutions {
@@ -311,12 +310,11 @@ pub type CanonResult = Result<Arc<CanonicalModule>, Diagnostic>;
 /// before any `canonicalize` demand. That gate is sound because the topo
 /// sort's edge set ([`extract_imports_from_source`], a token-level scan via
 /// the real lexer) is a superset-or-equal of the AST import edges this query
-/// walks — the M1 fix; the previous line scanner missed lexer-legal edges
-/// (`import\tB`, `import {- c -} B`), letting a scan-invisible cycle reach
-/// salsa's dependency-cycle panic on the production path. A *direct* demand
-/// on a cyclic import graph (test/LSP misuse, bypassing the driver's gate)
-/// still hits salsa's cycle panic — fail-loud, never a stale or fixpointed
-/// value.
+/// walks — a scan that missed lexer-legal edges (`import\tB`,
+/// `import {- c -} B`) would let a scan-invisible cycle reach salsa's
+/// dependency-cycle panic on the production path. A *direct* demand on a
+/// cyclic import graph (test/LSP misuse, bypassing the driver's gate) still
+/// hits salsa's cycle panic — fail-loud, never a stale or fixpointed value.
 #[salsa::tracked]
 pub fn canonicalize(db: &dyn Db, root: SourceRoot, file: SourceFile) -> CanonResult {
     let parsed = parse(db, file)?;
@@ -375,8 +373,8 @@ pub fn canonicalize(db: &dyn Db, root: SourceRoot, file: SourceFile) -> CanonRes
 /// The cross-module interface of one module — its export surface, projected
 /// out of [`canonicalize`].
 ///
-/// This is the PRIMARY invalidation firewall (plan Task 7): when a body-only
-/// edit re-runs `canonicalize(A)` but the exports come out **equal**, salsa
+/// This is the PRIMARY invalidation firewall: when a body-only edit re-runs
+/// `canonicalize(A)` but the exports come out **equal**, salsa
 /// backdates this query's memo and every importer's `canonicalize` stays
 /// valid without re-executing. Deliberately a projection of `canonicalize`
 /// rather than a second parse-only summarizer: one export-computation code
@@ -399,7 +397,7 @@ pub fn module_interface(
 }
 
 // ---------------------------------------------------------------------------
-// Tracked queries (Phase 3: topo_order + linked_program + kernel_types)
+// Tracked queries: topo_order + linked_program + kernel_types
 // ---------------------------------------------------------------------------
 
 /// An import cycle detected during topological ordering.
@@ -583,13 +581,13 @@ pub struct LinkedProgram {
 pub type LinkedProgramResult = Result<Arc<LinkedProgram>, Diagnostic>;
 
 /// Assemble the per-module [`canonicalize`] results into the linked
-/// whole-program module (incremental plan Task 11 — the COARSE spine).
+/// whole-program module — the COARSE spine.
 ///
 /// Deliberately coarse: any edit that re-canonicalises any module re-links
 /// the world (link output value-equality still backdates dependents-to-be).
-/// The point is the query **seam**: Phase 4's per-module `typecheck` /
-/// `lower` refinement replaces the consumer side of this query without the
-/// driver changing shape, and the Task-18 parity gate guards that
+/// The point is the query **seam**: a per-module `typecheck` / `lower`
+/// refinement replaces the consumer side of this query without the driver
+/// changing shape, and the clean-vs-incremental parity gate guards that
 /// refinement.
 ///
 /// Demand order: modules are canonicalised in the [`topo_order`] dep-first
@@ -634,18 +632,18 @@ pub fn linked_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> Linke
 pub type KernelTypesResult =
     Result<Arc<Vec<(sky_kernels::StdlibKernel, sky_types::Ty)>>, Diagnostic>;
 
-/// The kernel type-scheme table (incremental plan Task 9): every schemed
+/// The kernel type-scheme table: every schemed
 /// [`sky_kernels::StdlibKernel`] paired with the inference scheme
 /// constraint generation applies at its call sites, materialized once per
 /// database via [`sky_types::kernel_type_table`] (the same code path
 /// inference reads — no second scheme table to drift).
 ///
 /// Keyed on `root` as the forward seam: when FFI package interfaces become
-/// salsa inputs (plan Task 2's parked `ffi_package_interface(PackageId)`),
-/// this query unions them in per project and re-executes only when a package
+/// salsa inputs (the parked `ffi_package_interface(PackageId)` query), this
+/// query unions them in per project and re-executes only when a package
 /// interface changes. Today it reads no input at all, so it never re-executes
-/// within a database revision history — proven by the Phase-3 granularity
-/// test (source edits do not re-derive the table).
+/// within a database revision history — a source edit does not re-derive the
+/// table.
 #[salsa::tracked]
 pub fn kernel_types(db: &dyn Db, root: SourceRoot) -> KernelTypesResult {
     // `root` is deliberately unread today (see the doc above); silence the
@@ -656,7 +654,7 @@ pub fn kernel_types(db: &dyn Db, root: SourceRoot) -> KernelTypesResult {
 }
 
 // ---------------------------------------------------------------------------
-// Tracked queries (Phase 4: typecheck + lower — the coarse per-program SEAM)
+// Tracked queries: typecheck + lower — the coarse per-program SEAM
 // ---------------------------------------------------------------------------
 
 /// The memoized result of type-checking [`linked_program`]'s whole-program
@@ -664,18 +662,15 @@ pub fn kernel_types(db: &dyn Db, root: SourceRoot) -> KernelTypesResult {
 /// path (see [`sky_types::infer_attributed`]).
 pub type TypecheckResult = Result<Arc<sky_types::SolvedTypes>, (Diagnostic, Vec<Symbol>)>;
 
-/// Type-check the linked whole-program module (incremental plan Task 12).
+/// Type-check the linked whole-program module.
 ///
 /// **This is the coarse per-program SEAM, not per-module typecheck.** Keyed on
 /// `(root, entry)` and depending on [`linked_program`], so it inherits exactly
 /// the same coarseness: an edit anywhere in the reachable module graph
-/// re-executes this query in full, same as it would re-run
-/// `sky_types::infer_attributed` today. What changes is that the result is now
-/// **memoized**: a repeat demand, or a demand after a byte-equal re-save,
-/// executes nothing — before this query existed, `compile_prepared` called
-/// `infer_attributed` as a plain function on every single build, so a warm
-/// no-op rebuild still re-ran the whole solver. This query is what makes that
-/// waste visible to salsa (and therefore skippable).
+/// re-executes this query in full, the same work `sky_types::infer_attributed`
+/// does. The result is **memoized**: a repeat demand, or a demand after a
+/// byte-equal re-save, executes nothing. Memoizing here is what makes a warm
+/// no-op rebuild skip the whole solver instead of re-running it.
 ///
 /// Why not genuinely per-module: `sky_types::infer_attributed` builds ONE
 /// [`sky_types::unionfind`]-backed constraint graph over the ENTIRE linked
@@ -701,12 +696,12 @@ pub fn typecheck(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> TypecheckR
 /// against [`typecheck`]'s solved types into the backend-agnostic IR.
 pub type LowerResult = Result<Arc<sky_ir::Program>, (Diagnostic, Vec<Symbol>)>;
 
-/// Lower the linked whole-program module (incremental plan Task 13).
+/// Lower the linked whole-program module.
 ///
 /// **Coarse per-program SEAM**, the [`typecheck`] sibling: depends on
 /// [`linked_program`] and [`typecheck`], so it re-executes exactly when
-/// either would have re-run `sky_lower::lower` today, but now as a memoized
-/// salsa node — a repeat demand or a no-op re-save executes nothing.
+/// either would re-run `sky_lower::lower`, now as a memoized salsa node — a
+/// repeat demand or a no-op re-save executes nothing.
 ///
 /// Why not genuinely per-module: beyond inheriting `typecheck`'s coupling
 /// (lowering reads [`sky_types::SolvedTypes`], itself whole-program),
@@ -714,10 +709,9 @@ pub type LowerResult = Result<Arc<sky_ir::Program>, (Diagnostic, Vec<Symbol>)>;
 /// …) sized from whole-program facts — `lower::max_def_arity(m)` and
 /// `lower::count_destructure_param_sites(m)` walk every def in the merged
 /// module. A per-module lowering pass would need those pools either resized
-/// per module (risking the exact numbering the golden-oracle SEAL pins — see
-/// the Phase-3 fresh-name-pool finding) or restructured into a
-/// composable/incremental allocation scheme. Recorded as Phase-4 follow-up
-/// scope, not attempted here.
+/// per module (which would perturb the exact fresh-name numbering the
+/// golden-oracle SEAL pins) or restructured into a composable/incremental
+/// allocation scheme — a recorded follow-up, not done here.
 #[salsa::tracked]
 pub fn lower_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> LowerResult {
     let linked = linked_program(db, root, entry).map_err(|d| (d, Vec::new()))?;
@@ -727,7 +721,7 @@ pub fn lower_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> LowerR
 }
 
 // ---------------------------------------------------------------------------
-// Milestone D — per-Rust-file salsa domain
+// Per-Rust-file salsa domain
 // (spec: `docs/architecture/phase5-emit-rust-file-design-2026-07-12.md` §4.1)
 // ---------------------------------------------------------------------------
 
@@ -737,7 +731,7 @@ pub fn lower_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> LowerR
 /// keyed on it memoizes independently of every OTHER file.
 ///
 /// **Distinct from [`sky_backend_rust`]'s own `RustFileId`.** That backend
-/// type (Task 1) is a plain, non-interned `enum { Spine, SkyModule(ModPath) }`
+/// type is a plain, non-interned `enum { Spine, SkyModule(ModPath) }`
 /// used internally for partitioning; it never reaches salsa. This one is the
 /// salsa domain: it carries ONLY a `home` (`Spine` is NOT a `RustFileId` —
 /// it is always present and never added/removed by a module add/delete, so it
@@ -754,7 +748,7 @@ pub struct RustFileId {
 }
 
 // ---------------------------------------------------------------------------
-// Tracked queries (Task 17 / Phase 5 continuation: `BuildConfig` + emit_project)
+// Tracked queries: `BuildConfig` + emit_project
 // ---------------------------------------------------------------------------
 
 /// The build-wide, driver-supplied configuration that affects **emission**
@@ -765,10 +759,9 @@ pub struct RustFileId {
 /// deliberately narrowed to the ONE field that has a real tracked-query
 /// consumer today ([`emit_project`]) rather than the full parsed-`sky.toml`
 /// shape the design doc sketches (`entry`, `codegen_flags`, `[log]`
-/// fields, …). Phase 1 §3.2 already named the discipline this follows:
-/// "reserved seams stay design-level until their phase" — a `ProjectConfig`
-/// with fields nothing reads is exactly the dead-surface trap that section
-/// warns against. `db_driver` earns its place because [`emit_project`]
+/// fields, …). The discipline: reserved seams stay design-level until a real
+/// consumer exists — a `ProjectConfig` with fields nothing reads is a
+/// dead-surface trap. `db_driver` earns its place because [`emit_project`]
 /// genuinely reads it (routing `RustBackend::with_db_driver`), and nothing
 /// upstream of emission (`canonicalize`, `typecheck`, `lower_program`) is
 /// affected by the SQL driver choice — `sky.toml`'s `driver` key changes the
@@ -782,8 +775,8 @@ pub struct RustFileId {
 /// the design doc's "editing field A doesn't invalidate a query that only
 /// reads field B" property for free, with no hand-rolled projection query
 /// needed. `BuildConfig` has exactly ONE field today because no second
-/// field has a real consumer yet (the same gate `db_driver` itself had to
-/// clear) — so the MULTI-field half of the field-granularity story
+/// field has a real consumer yet — so the MULTI-field half of the
+/// field-granularity story
 /// (`config_entry()` vs `config_log_level()` both projected off one
 /// `ProjectConfig`) is honestly out of scope until a second field earns its
 /// place. What this DOES prove today or scope, and what the
@@ -802,22 +795,19 @@ pub struct BuildConfig {
 /// source text.
 // Error carries the owning-module `home` (empty for a homeless backend/emit
 // diagnostic) so the driver attributes a LOWERING error surfaced through the
-// emit demand to the correct source file (#221 fix B), mirroring
-// [`TypecheckResult`]. A pure-backend emit error is homeless → driver heuristic.
+// emit demand to the correct source file, mirroring [`TypecheckResult`]. A
+// pure-backend emit error is homeless → driver heuristic.
 pub type EmitResult = Result<Arc<sky_backend::EmittedProject>, (Diagnostic, Vec<Symbol>)>;
 
-/// Emit [`lower_program`]'s IR to a Rust [`sky_backend::EmittedProject`]
-/// (incremental plan Task 17's real consumer / Phase-5 §10.2 continuation
-/// item 2).
+/// Emit [`lower_program`]'s IR to a Rust [`sky_backend::EmittedProject`].
 ///
 /// **Coarse per-program SEAM**, the [`lower_program`] sibling: depends on
 /// [`lower_program`] (the IR) and [`BuildConfig::db_driver`] (the ONE
 /// emit-relevant config field), so it re-executes exactly when either would
-/// have re-run [`sky_backend_rust::RustBackend::emit`] today — but now as a
-/// memoized salsa node. Before this query existed, `compile_prepared` called
-/// `RustBackend::emit` as a plain function on every single build (Phase 4's
-/// own finding for `typecheck`/`lower_program`, one layer further down the
-/// pipeline): a warm no-op rebuild still re-ran the whole backend pass.
+/// re-run [`sky_backend_rust::RustBackend::emit`], now as a memoized salsa
+/// node. Memoizing here — the same win [`typecheck`]/[`lower_program`] get one
+/// layer up the pipeline — is what lets a warm no-op rebuild skip the whole
+/// backend pass instead of re-running it.
 ///
 /// Depending on `config` (not just `root`/`entry`) is what makes the
 /// field-granularity property observable: a `db_driver` edit re-executes
@@ -845,7 +835,7 @@ pub fn emit_project(
 }
 
 // ---------------------------------------------------------------------------
-// Milestone D — the per-Rust-file tracked query graph
+// The per-Rust-file tracked query graph
 // (spec: `docs/architecture/phase5-emit-rust-file-design-2026-07-12.md` §4.2)
 // ---------------------------------------------------------------------------
 
@@ -906,7 +896,7 @@ pub fn program_rust_file_ids(
 /// keeping this query's memoized value byte-stable under a barrel-only change.
 ///
 /// Depends on [`lower_program`] and [`BuildConfig::db_driver`] — re-executes
-/// exactly when either would have re-run the backend's spine render, now as a
+/// exactly when either would re-run the backend's spine render, now as a
 /// memoized salsa node.
 #[salsa::tracked]
 pub fn emit_spine_file(
@@ -931,9 +921,9 @@ pub fn emit_spine_file(
 /// Depends on [`lower_program`], [`BuildConfig::db_driver`], AND the `file` key
 /// — the `file` key is what makes this SEPARATELY memoized per module. §4.3's
 /// honest divergence: because it depends on the COARSE whole-program
-/// [`lower_program`] (Phase 4's per-module lowering continuation is still
-/// unshipped), a body edit ANYWHERE forces this query to RE-EXECUTE for every
-/// file. The incrementality win is the RED-GREEN one: for an UNRELATED module's
+/// [`lower_program`] (per-module lowering does not exist yet), a body edit
+/// ANYWHERE forces this query to RE-EXECUTE for every file. The
+/// incrementality win is the RED-GREEN one: for an UNRELATED module's
 /// `file`, the re-execution reads a byte-identical slice of the freshly-lowered
 /// program and produces a byte-identical `String`, so salsa backdates its memo
 /// and [`emit_manifest`]'s dependency on it early-cuts — the on-disk write
@@ -974,9 +964,9 @@ pub fn emit_rust_file<'db>(
 /// program anyway — its own edit forces the whole coarse floor to re-run). The
 /// per-file assembly path fires only for genuine 2+-home programs. Either way
 /// the return SHAPE is [`EmitResult`], so `compile_prepared` /
-/// `write_emitted_project` need zero changes (§4.4). [`emit_project`] is kept,
-/// not deleted — the whole-program non-split oracle (`sky_backend_rust`'s
-/// golden tests) still calls it.
+/// `write_emitted_project` need zero changes (§4.4). [`emit_project`] remains
+/// live — the whole-program non-split oracle (`sky_backend_rust`'s golden
+/// tests) calls it directly.
 #[salsa::tracked]
 pub fn emit_manifest(
     db: &dyn Db,
@@ -1090,13 +1080,13 @@ pub fn sync_source_root(
 /// consumes the same token stream). That superset property is load-bearing:
 /// the driver's topological sort uses these edges for its SKY-N0021
 /// import-cycle gate, and a missed edge would let a cyclic
-/// `module_interface` demand reach salsa's dependency-cycle panic (the M1
-/// regression — the previous line scanner required the literal prefix
-/// `"import "` and missed lexer-legal edges such as `import\tB` or
-/// `import {- c -} B`).
+/// `module_interface` demand reach salsa's dependency-cycle panic. A plain
+/// line scan that keyed on the literal prefix `"import "` would miss
+/// lexer-legal edges such as `import\tB` or `import {- c -} B`; the
+/// token-level scan does not.
 ///
-/// Fallback (source that does not lex): the historical line scan, kept for
-/// topo *ordering* only. An unlexable module cannot parse, so it contributes
+/// Fallback (source that does not lex): the line scan, for topo *ordering*
+/// only. An unlexable module cannot parse, so it contributes
 /// no AST import edges — the fallback's under-approximation cannot bypass
 /// the cycle gate.
 ///
@@ -1112,8 +1102,8 @@ pub fn extract_imports_from_source(source: &str) -> Vec<Vec<String>> {
     line_scan_imports(source)
 }
 
-/// Historical best-effort line scan (`import <path>` at line start), used
-/// ONLY when the source does not lex — see [`extract_imports_from_source`].
+/// Best-effort line scan (`import <path>` at line start), used ONLY when the
+/// source does not lex — see [`extract_imports_from_source`].
 fn line_scan_imports(source: &str) -> Vec<Vec<String>> {
     let mut imports: Vec<Vec<String>> = Vec::new();
     for line in source.lines() {

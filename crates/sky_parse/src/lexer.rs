@@ -1,8 +1,8 @@
-//! Layout-aware lexer for the Milestone-0 subset of Sky.
+//! Layout-aware lexer for the supported subset of Sky.
 //!
 //! This is a Rust port of the relevant pieces of the Haskell compiler's
 //! `Sky.Parse.{Primitives,Space,Number,Symbol,Variable}` — narrowed to the
-//! token shapes the M0 golden program exercises. Rather than emit explicit
+//! token shapes the supported subset exercises. Rather than emit explicit
 //! layout tokens, each token carries its 1-based `line`/`col`, and the parser
 //! reconstructs block structure from columns (see [`crate::layout`]).
 //!
@@ -14,7 +14,7 @@
 
 use sky_diagnostics::{DResult, Diagnostic, ParseError, Span};
 
-/// A lexical token kind (M0 subset).
+/// A lexical token kind.
 ///
 /// `Eq` is intentionally NOT derived: [`Tok::Float`] carries an `f64`, which is
 /// only `PartialEq` (IEEE-754 `NaN` is not reflexive). Token comparison only

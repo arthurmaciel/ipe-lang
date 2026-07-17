@@ -177,11 +177,11 @@ pub fn log_info<E: Send + 'static>(msg: String) -> SkyTask<E, ()> {
 // over its element type `A`, bounded by `SkyStringify` — the TOTAL Go-`%v`
 // stringifier every Sky-representable type implements (String unquoted, tuples
 // as `{k v}`, generated records/ADTs via their codegen-emitted impl). A plain
-// `Display` bound was wrong: tuples + generated types don't implement `Display`,
-// so it failed to compile at any tuple/record call site (the E0277 in
-// routes_auth / routes_todos). `SkyStringify` is satisfiable at EVERY concrete
-// element type codegen can emit, so no codegen change is needed — the call site
-// passes its concrete `Vec<A>` and the bound always holds.
+// `Display` bound is insufficient: tuples + generated types don't implement
+// `Display`, so it fails to compile (E0277) at any tuple/record call site.
+// `SkyStringify` is satisfiable at EVERY concrete element type codegen can emit,
+// so no codegen change is needed — the call site passes its concrete `Vec<A>`
+// and the bound always holds.
 //
 // Rendering mirrors Go's `renderLogMsgWithAttrs` byte-for-byte: the flat attr
 // list is space-joined onto the message (`msg a1 a2 …`, each `ai` via `%v`),

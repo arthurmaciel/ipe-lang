@@ -134,7 +134,7 @@ pub enum Attribute<M> {
     /// `Ui.htmlAttribute name value` escape hatch — an arbitrary, possibly
     /// attacker-derived attribute name + value. The TUI renderer (the only
     /// current sink) emits ANSI cells, so there is no markup-injection surface.
-    /// SECURITY CONTRACT for the M6 Std.Ui→HTML lowering: an `AttrAttribute`
+    /// SECURITY CONTRACT for the Std.Ui→HTML lowering: an `AttrAttribute`
     /// MUST be lowered to a `html::Attribute::Attr` and emitted through
     /// `html::render` (whose `render_into_ctx` gates every name via
     /// `SafeAttrName` and every URL value via `sanitise_url_attr`). A bespoke

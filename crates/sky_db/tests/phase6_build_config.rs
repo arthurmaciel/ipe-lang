@@ -1,20 +1,18 @@
 #![forbid(unsafe_code)]
-//! Task 17 proofs (spec:
+//! Build-config seam proofs (spec:
 //! `docs/architecture/salsa-incremental-compilation-2026-07-11.md` §11 —
-//! plan Task 17, the `project_config()` seam).
+//! the `project_config()` seam).
 //!
-//! [`sky_db::BuildConfig`] is a genuine salsa **input** (not a reserved
-//! surface nothing reads — Phase 1 §3.2's own anti-pattern) carrying the
-//! ONE build-relevant field with a real tracked-query consumer today:
-//! `db_driver`. [`sky_db::emit_project`] is that consumer — the coarse SEAM
-//! over `RustBackend::emit`, mirroring the Phase-4 `typecheck`/
-//! `lower_program` shape one layer further down the pipeline.
+//! [`sky_db::BuildConfig`] is a genuine salsa **input** carrying the ONE
+//! build-relevant field with a real tracked-query consumer: `db_driver`.
+//! [`sky_db::emit_project`] is that consumer — the coarse SEAM over
+//! `RustBackend::emit`, mirroring the `typecheck`/`lower_program` shape one
+//! layer further down the pipeline.
 //!
 //! These tests prove two independent things:
 //!
-//! 1. **Coarse-but-real memoization** — the same `*_memoized_coarse_floor`
-//!    shape every prior phase's seam proves: repeat demand / byte-equal
-//!    re-save execute nothing; a reachable dep's body edit re-executes.
+//! 1. **Coarse-but-real memoization** — repeat demand / byte-equal re-save
+//!    execute nothing; a reachable dep's body edit re-executes.
 //! 2. **Config lives on its own input** — a `BuildConfig`-only edit
 //!    re-executes `emit_project` WITHOUT re-executing `linked_program` /
 //!    `typecheck` / `lower_program` at all. This is the property that makes
@@ -93,7 +91,7 @@ const DEP_A_BODY_EDIT: &str = "module A exposing (visible)\n\nvisible = 1\n\nhid
 const IMPORTER_B: &str = "module B exposing (b)\n\nimport A exposing (visible)\n\nb = visible\n";
 
 // ---------------------------------------------------------------------------
-// emit_project (Task 17 — the coarse per-program SEAM over `RustBackend::emit`)
+// emit_project — the coarse per-program SEAM over `RustBackend::emit`
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -196,8 +194,7 @@ fn emit_project_config_change_does_not_retrigger_lower() {
 }
 
 /// The other direction: a plain source edit (config untouched) re-executes
-/// the whole chain through to `emit_project`, exactly like every other
-/// Phase-4/5 seam.
+/// the whole chain through to `emit_project`, exactly like every other seam.
 #[test]
 fn emit_project_source_edit_retriggers_lower_and_emit() {
     let (mut db, log) = logged_db();

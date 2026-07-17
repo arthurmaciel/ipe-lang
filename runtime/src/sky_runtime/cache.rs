@@ -161,7 +161,7 @@ where
                         }),
                 )
             } else {
-                None // ttl <= 0 → no expiry (existing semantics preserved)
+                None // ttl <= 0 → no expiry
             };
             let (added, evicted) = {
                 let store = slot

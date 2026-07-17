@@ -4,7 +4,7 @@
 //! `HubStore.sky` declares twelve `Ffi.kernel "Hub_read*"` bindings that the
 //! Rust codegen lowers to the `hub_*` functions in this module. Each reads the
 //! SQLite telemetry **spill** (`SKY_CONSOLE_HUB_DB` / the `dbPath` arg, written
-//! by the #69 dual-write) and returns the console's typed `State*` record shape.
+//! by the dual-write) and returns the console's typed `State*` record shape.
 //!
 //! ## Why generic over the return type
 //!

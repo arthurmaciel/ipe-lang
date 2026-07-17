@@ -4,15 +4,14 @@
 //! byte buffers (`Vec<u8>`) — Sky's `Bytes` primitive — so compressed payloads
 //! (including non-UTF-8 binary) round-trip losslessly.
 //!
-//! # Reactor-starvation guard (#129)
+//! # Reactor-starvation guard
 //!
 //! gzip/zstd (de)compression is CPU-bound and can take non-trivial wall time
 //! on large payloads. Every kernel here offloads its work to
 //! `tokio::task::spawn_blocking` so it can't stall the tokio worker thread
-//! that's polling the returned future — a single large `Compression.gzip`
-//! call previously ran INLINE on the calling thread before the future was
-//! even polled, blocking every other task scheduled on that worker for the
-//! call's full duration. See
+//! that's polling the returned future. Running the work INLINE on the calling
+//! thread before the future is polled would block every other task scheduled
+//! on that worker for the call's full duration. See
 //! `docs/adr/0014-kernel-robustness-blocking-offload-and-toctou.md` §2.
 //!
 //! # Decompression bomb protection
@@ -80,7 +79,7 @@ fn zstd_compress_bytes(data: &[u8]) -> Result<Vec<u8>, String> {
 /// Compression.gzip : Bytes -> Task Error Bytes
 pub fn compression_gzip<E: From<String> + Send + 'static>(data: Vec<u8>) -> SkyTask<E, Vec<u8>> {
     Box::pin(async move {
-        // #129: gzip is CPU-bound; offload to the blocking pool so it can't
+        // gzip is CPU-bound; offload to the blocking pool so it can't
         // starve the tokio worker thread polling this future (same rationale
         // as auth.rs's bcrypt spawn_blocking). The `compression` Cargo
         // feature ALWAYS pulls in `tokio` (`compression = ["flate2", "zstd",
@@ -294,7 +293,7 @@ mod tests {
         assert!(result.unwrap_err().contains("exceeds"));
     }
 
-    /// #129 regression: on a SINGLE-WORKER (current_thread) runtime, a
+    /// Reactor-starvation guard: on a SINGLE-WORKER (current_thread) runtime, a
     /// blocking zstd compression call run inline on the polled future would
     /// starve every other task on that runtime until it completes. This
     /// proves `compression_zstd_compress` offloads its CPU-bound work to

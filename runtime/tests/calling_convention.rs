@@ -2,11 +2,10 @@
 //! to the runtime. Under the tupled calling convention a multi-arg Sky function
 //! lowers to ONE tupled Rust fn `f(a, b)`, never a curried `f(a)(b)`.
 //!
-//! As of the JSON-pipeline uncurry refactor (commit 710f35f5), the runtime has
-//! NO curried helpers — even the `Json.Decode.Pipeline` builders
-//! (`decode_pipeline_required` / `_optional`) are now tupled: they take their
-//! `next_decoder` as a `Box<dyn FnOnce(T) -> F>` argument and return a plain
-//! `Decoder<E, F>`, not an `impl Fn…`. So the expected set is empty.
+//! The runtime has NO curried helpers — even the `Json.Decode.Pipeline`
+//! builders (`decode_pipeline_required` / `_optional`) are tupled: they take
+//! their `next_decoder` as a `Box<dyn FnOnce(T) -> F>` argument and return a
+//! plain `Decoder<E, F>`, not an `impl Fn…`. So the expected set is empty.
 //!
 //! The one shape that still returns `impl Fn…` is a Handler producer (the
 //! `middleware_with_*` family): it takes all its Sky args tupled and returns a

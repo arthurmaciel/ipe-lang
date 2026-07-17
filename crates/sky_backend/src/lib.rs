@@ -116,7 +116,7 @@ impl serde::Serialize for RelPath {
 /// impl would reconstruct `RelPath(raw_string)` directly from the untrusted
 /// bytes, bypassing [`RelPath::new`]'s path-traversal validation entirely —
 /// exactly the "parse, don't validate" boundary this newtype exists to
-/// enforce (see the type's own doc). This matters concretely for Phase 6's
+/// enforce (see the type's own doc). This matters concretely for the
 /// on-disk build cache (`skyc::cache`): a corrupted or tampered cache file
 /// is untrusted input from the moment it is read off disk, so a `RelPath`
 /// key inside a deserialized [`EmittedProject`] MUST re-run the same
@@ -244,7 +244,7 @@ mod tests {
 
     /// The security-critical property: `RelPath`'s `Deserialize` impl is
     /// hand-written specifically so a malicious/corrupted on-disk cache
-    /// entry (Phase 6) cannot smuggle a path-traversal key past
+    /// entry cannot smuggle a path-traversal key past
     /// `RelPath::new`'s validation. A naive `#[derive(Deserialize)]` would
     /// have let this test fail.
     #[test]
