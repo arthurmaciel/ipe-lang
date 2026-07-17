@@ -1153,7 +1153,7 @@ fn split_sky_decl(line: &str) -> Option<(String, String)> {
 
 // ── FFI surface scan ─────────────────────────────────────────────────────────
 
-/// Scan the reference sky-ffi-inspect Go file and our sky-ffi-inspect-rs for
+/// Scan the reference sky-ffi-inspect Go file and our ipe-ffi-inspector for
 /// `PackageInfo` / `PkgInfo` schema fields.  Returns (ref_fields, our_fields).
 #[allow(dead_code)]
 fn scan_ffi_schemas(ref_go: &Path, our_rs: &Path) -> (HashSet<String>, HashSet<String>) {
@@ -1376,7 +1376,7 @@ fn run_report(tsv: &str) -> Result<String, String> {
     let _ = writeln!(out, "|------|--------|");
     let _ = writeln!(
         out,
-        "| `sky-ffi-inspect-rs` PkgInfo schema | needs comparison |"
+        "| `ipe-ffi-inspector` PkgInfo schema | needs comparison |"
     );
     let _ = writeln!(
         out,
