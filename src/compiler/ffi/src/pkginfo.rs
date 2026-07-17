@@ -631,6 +631,12 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
                 Err(d) => dropped.push(d),
             }
         }
+        // Collapse duplicate wrapper-reference names at the decode boundary
+        // (first wins) so all three emitters see the same deduped list by
+        // construction — a real `to_string` colliding with the synthetic
+        // Display bridge is one entry, never a duplicate Rust item.
+        let mut seen_refs = std::collections::BTreeSet::new();
+        fns.retain(|f| seen_refs.insert(f.wrapper_ref_name()));
         let mut transitive_deps = Vec::with_capacity(w.transitive_deps.len());
         for dep in w.transitive_deps {
             let ident =

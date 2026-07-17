@@ -174,6 +174,120 @@ pub fn arg_name(j: usize) -> String {
     format!("arg{j}")
 }
 
+/// Convert a mixed-case name to `snake_case` (`Semver_toString` →
+/// `semver_to_string`).
+///
+/// MUST stay byte-equal to the backend's `to_snake_case` — the backend derives
+/// the same identifier at FFI call sites, so a divergence here is an
+/// under-bind that link-fails.
+#[must_use]
+pub fn to_snake_case(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::new();
+    let mut i = if let Some(&c) = chars.first() {
+        out.extend(c.to_lowercase());
+        1_usize
+    } else {
+        0
+    };
+    while let Some(&c) = chars.get(i) {
+        if c == '_' {
+            if let Some(&n) = chars.get(i + 1) {
+                out.push('_');
+                out.extend(n.to_lowercase());
+                i += 2;
+                continue;
+            }
+            out.push('_');
+        } else if c.is_uppercase() {
+            out.push('_');
+            out.extend(c.to_lowercase());
+        } else {
+            out.push(c);
+        }
+        i += 1;
+    }
+    out
+}
+
+/// The emitted `_bindings.rs` wrapper fn identifier.
+///
+/// The kernel base (the kernel name minus its `Rust_` prefix) joined to the
+/// wrapper-reference name, in `snake_case` (`Rust_Semver` + `parse` →
+/// `semver_parse`).
+#[must_use]
+pub fn wrapper_fn_ident(kernel_name: &str, ref_name: &str) -> String {
+    let base = kernel_name.strip_prefix("Rust_").unwrap_or(kernel_name);
+    to_snake_case(&format!("{base}_{ref_name}"))
+}
+
+/// Raw-escape a foreign identifier that collides with a Rust keyword
+/// (`match` → `r#match`) so a keyword-named foreign field/variant/method
+/// still renders parseable Rust.
+///
+/// The backend's trailing-underscore mangle is wrong here: the emitted name
+/// must reference the REAL foreign item, so `r#` is the only correct escape.
+/// `crate`/`self`/`Self`/`super` pass through unchanged — they reject the
+/// `r#` form, and Rust forbids them as field/variant/method names anyway.
+#[must_use]
+pub fn rust_safe_ident(s: &str) -> String {
+    let is_raw_escapable_keyword = matches!(
+        s,
+        "as" | "break"
+            | "const"
+            | "continue"
+            | "else"
+            | "enum"
+            | "extern"
+            | "false"
+            | "fn"
+            | "for"
+            | "if"
+            | "impl"
+            | "in"
+            | "let"
+            | "loop"
+            | "match"
+            | "mod"
+            | "move"
+            | "mut"
+            | "pub"
+            | "ref"
+            | "return"
+            | "static"
+            | "struct"
+            | "trait"
+            | "true"
+            | "type"
+            | "unsafe"
+            | "use"
+            | "where"
+            | "while"
+            | "async"
+            | "await"
+            | "dyn"
+            | "abstract"
+            | "become"
+            | "box"
+            | "do"
+            | "final"
+            | "macro"
+            | "override"
+            | "priv"
+            | "typeof"
+            | "unsized"
+            | "virtual"
+            | "yield"
+            | "try"
+            | "gen"
+    );
+    if is_raw_escapable_keyword {
+        format!("r#{s}")
+    } else {
+        s.to_owned()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,6 +333,39 @@ mod tests {
     fn arg_names_are_positional() {
         assert_eq!(arg_name(0), "arg0");
         assert_eq!(arg_name(12), "arg12");
+    }
+
+    #[test]
+    fn snake_case_matches_the_backend_convention() {
+        assert_eq!(to_snake_case("Semver_parse"), "semver_parse");
+        assert_eq!(
+            to_snake_case("Semver_toString_from_version"),
+            "semver_to_string_from_version"
+        );
+        assert_eq!(to_snake_case("Main_update"), "main_update");
+        assert_eq!(to_snake_case(""), "");
+    }
+
+    #[test]
+    fn wrapper_fn_ident_drops_the_rust_prefix_and_snakes() {
+        assert_eq!(wrapper_fn_ident("Rust_Semver", "parse"), "semver_parse");
+        assert_eq!(
+            wrapper_fn_ident("Rust_Semver", "major_field_from_version"),
+            "semver_major_field_from_version"
+        );
+        assert_eq!(wrapper_fn_ident("Ffi", "x"), "ffi_x");
+    }
+
+    #[test]
+    fn rust_safe_ident_raw_escapes_keywords_only() {
+        assert_eq!(rust_safe_ident("match"), "r#match");
+        assert_eq!(rust_safe_ident("type"), "r#type");
+        assert_eq!(rust_safe_ident("gen"), "r#gen");
+        assert_eq!(rust_safe_ident("major"), "major");
+        // `r#self` is invalid Rust; these pass through (unreachable as
+        // foreign field/variant names).
+        assert_eq!(rust_safe_ident("self"), "self");
+        assert_eq!(rust_safe_ident("crate"), "crate");
     }
 
     #[test]
