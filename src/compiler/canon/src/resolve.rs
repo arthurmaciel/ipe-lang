@@ -801,7 +801,7 @@ fn register_stdlib_import_aliases(
     for import in imports {
         let dep_path = &import.name.value;
         // Only `Ipe.*` imports name compiler stdlib modules.
-        if !dep_path.first().copied().is_some_and(|s| s == ipe_sym) {
+        if dep_path.first().copied().is_none_or(|s| s != ipe_sym) {
             continue;
         }
         let Some(canonical) = env.canonical_stdlib_qualifier(dep_path, interner)? else {
@@ -890,7 +890,7 @@ fn inject_stdlib_exposed_values(
     for import in &m.imports {
         let dep_path = &import.name.value;
         // Only `Ipê.*` / `Ipe.*` imports name compiler stdlib modules.
-        if !dep_path.first().copied().is_some_and(|s| s == ipe_sym) {
+        if dep_path.first().copied().is_none_or(|s| s != ipe_sym) {
             continue;
         }
         // Open imports (`exposing (..)`) are a no-op — see the doc comment.
@@ -1166,7 +1166,7 @@ fn inject_stdlib_wildcard_values(
     for import in &m.imports {
         let dep_path = &import.name.value;
         // Only `Ipê.*` / `Ipe.*` imports name compiler stdlib modules.
-        if !dep_path.first().copied().is_some_and(|s| s == ipe_sym) {
+        if dep_path.first().copied().is_none_or(|s| s != ipe_sym) {
             continue;
         }
         // Only open imports (`exposing (..)`) flood the wildcard tier; the

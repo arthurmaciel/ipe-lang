@@ -3807,7 +3807,7 @@ const fn is_db_row_accessor(k: KernelFn) -> bool {
 ///
 /// `matcher(tracked, k, args)` answers, for the currently-tracked symbol
 /// `tracked`, whether the call `Callee::Kernel(k)` applied to `args` obligates
-/// it — e.g. IpeRow's `is_db_row_accessor(k) && args[1] is Var(tracked)` (`IpeRow`),
+/// it — e.g. `IpeRow`'s `is_db_row_accessor(k) && args[1] is Var(tracked)` (`IpeRow`),
 /// or Display's `k == BasicsToString && args[0] is Var(tracked)` (`Display`). Every
 /// distinct kernel→bound obligation is expressed as one such matcher; the
 /// STRUCTURAL walk (shadow discipline + alias-transparency) is shared, so a new
@@ -17519,7 +17519,7 @@ mod tests {
             IrType::Decoder(Box::new(IrType::Int)),
             IrType::Maybe(Box::new(fun.clone())),
             IrType::Maybe(Box::new(IrType::Int)),
-            IrType::Tuple(vec![IrType::Str, fun.clone()]),
+            IrType::Tuple(vec![IrType::Str, fun]),
             IrType::Tuple(vec![IrType::Str, IrType::Int]),
             IrType::List(Box::new(IrType::Str)),
             IrType::Result(Box::new(IrType::Error), Box::new(IrType::Int)),

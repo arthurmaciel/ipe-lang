@@ -175,8 +175,8 @@ fn wait_for_exit(
 /// child is gone (killed and reaped), never an orphan holding the port.
 #[cfg(target_os = "linux")]
 #[test]
-fn watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_ipe_process()
--> Result<(), BoxError> {
+fn watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_ipe_process() -> Result<(), BoxError>
+{
     if std::env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
