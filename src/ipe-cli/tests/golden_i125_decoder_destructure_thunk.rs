@@ -20,7 +20,7 @@
 //!       decode_from_json_string(nameDecoder, "{\"name\":\"Alice\"}".to_string()); …
 //!     |       ----------- value moved here                     ^^^^^^^^^^^ value used here after move
 //!     |       move occurs because `nameDecoder` has type
-//!       `json::Decoder<SkyError, std::string::String>`, which does not implement the `Copy` trait
+//!       `json::Decoder<IpeError, std::string::String>`, which does not implement the `Copy` trait
 //! ```
 //!
 //! (Without the thunk, the record fixture's error names the same binder moved

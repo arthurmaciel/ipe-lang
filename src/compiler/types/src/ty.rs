@@ -274,8 +274,8 @@ impl TyBounds {
         Self(Self::DICT_KEY)
     }
     /// The stringify obligation (`toString` / `Log.*With` attrs / `Debug.toString`
-    /// → Rust `SkyStringify`). Satisfied by every NON-FUNCTION type — every scalar
-    /// primitive plus every codegen-emitted record/ADT gets a `SkyStringify` impl;
+    /// → Rust `IpeStringify`). Satisfied by every NON-FUNCTION type — every scalar
+    /// primitive plus every codegen-emitted record/ADT gets a `IpeStringify` impl;
     /// a bare function does not. Same head/deep discipline as [`Self::eq`]: a
     /// function at the head (or nested) fails closed at type-check rather than
     /// emitting an unbounded generic `cargo` rejects.
@@ -337,7 +337,7 @@ impl TyBounds {
     pub const fn has_dict_key(self) -> bool {
         self.0 & Self::DICT_KEY != 0
     }
-    /// Whether the stringify obligation is set (`→ Rust SkyStringify`).
+    /// Whether the stringify obligation is set (`→ Rust IpeStringify`).
     #[must_use]
     pub const fn has_show(self) -> bool {
         self.0 & Self::SHOW != 0

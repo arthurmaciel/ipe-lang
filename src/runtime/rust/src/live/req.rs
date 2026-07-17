@@ -6,16 +6,16 @@
 //! req` over a `map[string]any` — doesn't port to Rust's no-`any` runtime, so
 //! the Rust backend uses the typed-record form only.)
 
-use crate::dict::SkyDict;
+use crate::dict::IpeDict;
 
 #[derive(Clone, Debug)]
 pub struct LiveReq {
     pub path: String,
     pub query: String,
     pub method: String,
-    pub params: SkyDict<String>,
-    pub headers: SkyDict<String>,
-    pub cookies: SkyDict<String>,
+    pub params: IpeDict<String>,
+    pub headers: IpeDict<String>,
+    pub cookies: IpeDict<String>,
 }
 
 /// Build a `LiveReq` from the incoming request parts + the matched route params.
@@ -23,9 +23,9 @@ pub fn live_req(
     method: &axum::http::Method,
     uri: &axum::http::Uri,
     headers: &axum::http::HeaderMap,
-    params: SkyDict<String>,
+    params: IpeDict<String>,
 ) -> LiveReq {
-    let mut hdrs: SkyDict<String> = SkyDict::new();
+    let mut hdrs: IpeDict<String> = IpeDict::new();
     for (k, v) in headers.iter() {
         if let Ok(val) = v.to_str() {
             // First-value-wins on duplicate header keys, matching Go's
@@ -37,7 +37,7 @@ pub fn live_req(
             .or_insert_with(|| val.to_string());
         }
     }
-    let mut cookies: SkyDict<String> = SkyDict::new();
+    let mut cookies: IpeDict<String> = IpeDict::new();
     if let Some(c) = headers
         .get(axum::http::header::COOKIE)
         .and_then(|v| v.to_str().ok())
@@ -67,7 +67,7 @@ mod tests {
         let mut h = axum::http::HeaderMap::new();
         h.insert(
             axum::http::header::COOKIE,
-            "sky_sid=abc; theme=dark".parse().unwrap(),
+            "ipe_sid=abc; theme=dark".parse().unwrap(),
         );
         h.insert("x-custom", "v".parse().unwrap());
         let uri: axum::http::Uri = "/apps/sky?q=1".parse().unwrap();
@@ -80,7 +80,7 @@ mod tests {
         assert_eq!(req.path, "/apps/sky");
         assert_eq!(req.query, "q=1");
         assert_eq!(req.method, "GET");
-        assert_eq!(req.cookies.get("sky_sid").map(String::as_str), Some("abc"));
+        assert_eq!(req.cookies.get("ipe_sid").map(String::as_str), Some("abc"));
         assert_eq!(req.cookies.get("theme").map(String::as_str), Some("dark"));
         assert_eq!(req.headers.get("X-Custom").map(String::as_str), Some("v"));
     }

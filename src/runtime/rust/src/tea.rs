@@ -13,9 +13,9 @@ use std::pin::Pin;
 
 /// Sky `Cmd msg`. Perform carries a boxed thunk producing the message (the
 /// task's success/error type is erased inside; M is concrete).
-pub enum SkyCmd<M> {
+pub enum IpeCmd<M> {
     None,
-    Batch(Vec<SkyCmd<M>>),
+    Batch(Vec<IpeCmd<M>>),
     Perform(Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = M> + Send>> + Send>),
     /// pub/sub broadcast. The thunk receives the publishing session's sid (the
     /// origin), injected by the Live dispatch loop, and returns the subscriber
@@ -26,67 +26,67 @@ pub enum SkyCmd<M> {
 
 /// A custom subscription event source: given an `emit` callback, spawn a task
 /// that pushes messages into the loop, returning its JoinHandle (aborted on
-/// re-subscribe). Keeps SkySub decoupled from source-specific runtimes (e.g. the
+/// re-subscribe). Keeps IpeSub decoupled from source-specific runtimes (e.g. the
 /// WebSocket client builds one of these for `onMessage`).
 pub type SubSpawn<M> =
     Box<dyn FnOnce(std::sync::Arc<dyn Fn(M) + Send + Sync>) -> tokio::task::JoinHandle<()> + Send>;
 
 /// Sky `Sub msg`.
-pub enum SkySub<M> {
+pub enum IpeSub<M> {
     None,
-    Batch(Vec<SkySub<M>>),
+    Batch(Vec<IpeSub<M>>),
     Every { ms: i64, msg: M },
     Source(SubSpawn<M>),
 }
 
 // ─── Cmd kernels ──────────────────────────────────────────────────────────
 
-pub fn cmd_none<M>() -> SkyCmd<M> {
-    SkyCmd::None
+pub fn cmd_none<M>() -> IpeCmd<M> {
+    IpeCmd::None
 }
-pub fn cmd_batch<M>(list: Vec<SkyCmd<M>>) -> SkyCmd<M> {
-    SkyCmd::Batch(list)
+pub fn cmd_batch<M>(list: Vec<IpeCmd<M>>) -> IpeCmd<M> {
+    IpeCmd::Batch(list)
 }
 
 /// Cmd.perform : Task err a -> (Result err a -> msg) -> Cmd msg.
-/// Composes the task and the toMsg decoder (which receives the SkyResult) into a
+/// Composes the task and the toMsg decoder (which receives the IpeResult) into a
 /// single message-producing thunk fired by the run loop.
-pub fn cmd_perform<E, A, M, F>(task: SkyTask<E, A>, to_msg: F) -> SkyCmd<M>
+pub fn cmd_perform<E, A, M, F>(task: IpeTask<E, A>, to_msg: F) -> IpeCmd<M>
 where
     E: Send + 'static,
     A: Send + 'static,
     M: Send + 'static,
-    F: FnOnce(SkyResult<E, A>) -> M + Send + 'static,
+    F: FnOnce(IpeResult<E, A>) -> M + Send + 'static,
 {
-    SkyCmd::Perform(Box::new(move || {
+    IpeCmd::Perform(Box::new(move || {
         Box::pin(async move { to_msg(task.await) })
     }))
 }
 
 // ─── Sub kernels ──────────────────────────────────────────────────────────
 
-pub fn sub_none<M>() -> SkySub<M> {
-    SkySub::None
+pub fn sub_none<M>() -> IpeSub<M> {
+    IpeSub::None
 }
-pub fn sub_batch<M>(list: Vec<SkySub<M>>) -> SkySub<M> {
-    SkySub::Batch(list)
+pub fn sub_batch<M>(list: Vec<IpeSub<M>>) -> IpeSub<M> {
+    IpeSub::Batch(list)
 }
 
 /// Sub.every : Int -> msg -> Sub msg — dispatch `msg` every `ms` milliseconds.
-pub fn sub_every<M>(ms: i64, msg: M) -> SkySub<M> {
-    SkySub::Every { ms, msg }
+pub fn sub_every<M>(ms: i64, msg: M) -> IpeSub<M> {
+    IpeSub::Every { ms, msg }
 }
 
 /// Time.every : Int -> msg -> Sub msg — alias of `Sub.every` (matches Go's
 /// `Time_every`, which delegates to `Sub_every`). The `Time_every` kernel name
 /// lowers to this.
-pub fn time_every<M>(ms: i64, msg: M) -> SkySub<M> {
+pub fn time_every<M>(ms: i64, msg: M) -> IpeSub<M> {
     sub_every(ms, msg)
 }
 
 // `Sky.Core.Http.Stream.chunks` → `Sub_subscribeStream` lives in `http_stream.rs`
 // now (alongside the stream registry it drains + the bridged `ChunkEvent` enum).
-// It returns a `SkySub::Source` driven by this module's SubManager.
+// It returns a `IpeSub::Source` driven by this module's SubManager.
 
 // ─── TEA event loop plumbing (Sub.every tickers + Cmd firing) ───────────────
 
@@ -125,19 +125,19 @@ impl<M: Clone + Send + 'static> SubManager<M> {
             h.abort();
         }
     }
-    pub(crate) fn update(&mut self, sub: SkySub<M>) {
+    pub(crate) fn update(&mut self, sub: IpeSub<M>) {
         self.stop_all();
         self.spawn(sub);
     }
-    fn spawn(&mut self, sub: SkySub<M>) {
+    fn spawn(&mut self, sub: IpeSub<M>) {
         match sub {
-            SkySub::None => {}
-            SkySub::Batch(items) => {
+            IpeSub::None => {}
+            IpeSub::Batch(items) => {
                 for it in items {
                     self.spawn(it);
                 }
             }
-            SkySub::Every { ms, msg } => {
+            IpeSub::Every { ms, msg } => {
                 if ms <= 0 {
                     return;
                 }
@@ -154,7 +154,7 @@ impl<M: Clone + Send + 'static> SubManager<M> {
                 });
                 self.handles.push(h);
             }
-            SkySub::Source(spawn) => {
+            IpeSub::Source(spawn) => {
                 // Hand the source an emit callback that funnels Msgs into the loop.
                 let tx = self.tx.clone();
                 let emit: std::sync::Arc<dyn Fn(M) + Send + Sync> = std::sync::Arc::new(move |m| {
@@ -169,17 +169,17 @@ impl<M: Clone + Send + 'static> SubManager<M> {
 /// Fire a Cmd: None/Batch recurse; Perform spawns the composed task→toMsg thunk
 /// and pushes the resulting Msg back into the loop channel.
 pub(crate) fn cli_run_cmd<M: Send + 'static>(
-    cmd: SkyCmd<M>,
+    cmd: IpeCmd<M>,
     tx: &tokio::sync::mpsc::UnboundedSender<CliEvent<M>>,
 ) {
     match cmd {
-        SkyCmd::None => {}
-        SkyCmd::Batch(items) => {
+        IpeCmd::None => {}
+        IpeCmd::Batch(items) => {
             for c in items {
                 cli_run_cmd(c, tx);
             }
         }
-        SkyCmd::Perform(thunk) => {
+        IpeCmd::Perform(thunk) => {
             let tx = tx.clone();
             // Fire-and-forget: a panic inside the composed task→toMsg thunk aborts
             // only this task and is intentionally swallowed — that is the
@@ -192,7 +192,7 @@ pub(crate) fn cli_run_cmd<M: Send + 'static>(
                 let _ = tx.send(CliEvent::Msg(msg));
             });
         }
-        SkyCmd::Publish(thunk) => {
+        IpeCmd::Publish(thunk) => {
             // No Live session in a Cli program; publish with an empty origin
             // (no subscriber's owner_sid matches "" → echo-default no-op).
             let _ = thunk("");
@@ -214,15 +214,15 @@ pub fn cli_program<Model, Msg, E, FInit, FUpdate, FView, FSubs, FOnLine>(
     view: FView,
     subscriptions: FSubs,
     on_line: FOnLine,
-) -> SkyTask<E, ()>
+) -> IpeTask<E, ()>
 where
     E: Send + 'static,
     Model: Clone + Send + 'static,
     Msg: Clone + Send + 'static,
-    FInit: Fn(()) -> (Model, SkyCmd<Msg>) + Send + 'static,
-    FUpdate: Fn(Msg, Model) -> (Model, SkyCmd<Msg>) + Send + 'static,
+    FInit: Fn(()) -> (Model, IpeCmd<Msg>) + Send + 'static,
+    FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + 'static,
     FView: Fn(Model) -> String + Send + 'static,
-    FSubs: Fn(Model) -> SkySub<Msg> + Send + 'static,
+    FSubs: Fn(Model) -> IpeSub<Msg> + Send + 'static,
     FOnLine: Fn(String) -> Msg + Send + 'static,
 {
     Box::pin(async move {

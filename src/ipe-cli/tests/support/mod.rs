@@ -102,18 +102,18 @@ pub fn assert_emitted_project_matches_golden_dir(emitted_out: &Path, golden_dir:
     }
 
     // Per-Sky-module split files: when the emitted
-    // project splits into `src/sky_mods/<mod>.rs`, each is compared byte-for-byte
-    // against `<golden_dir>/sky_mods/<mod>.rs`. The comparison is SYMMETRIC —
+    // project splits into `src/ipe_mods/<mod>.rs`, each is compared byte-for-byte
+    // against `<golden_dir>/ipe_mods/<mod>.rs`. The comparison is SYMMETRIC —
     // the union of the emitted set and the golden set is walked, so an emitted
     // file the golden lacks (under-checked-in) AND a golden file the split no
     // longer emits (stale/over-checked-in) both fail loudly, mirroring
     // `prune_orphaned_files`'s manifest-is-authoritative discipline. A program
     // that collapses to a single file (the §3.3 Spine-collapse invariant) has
-    // no `sky_mods/` on EITHER side, so this adds nothing for those goldens.
-    let mut sky_mod_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    // no `ipe_mods/` on EITHER side, so this adds nothing for those goldens.
+    let mut ipe_mod_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for dir in [
-        emitted_out.join("src").join("sky_mods"),
-        golden_dir.join("sky_mods"),
+        emitted_out.join("src").join("ipe_mods"),
+        golden_dir.join("ipe_mods"),
     ] {
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for entry in entries.filter_map(Result::ok) {
@@ -121,15 +121,15 @@ pub fn assert_emitted_project_matches_golden_dir(emitted_out: &Path, golden_dir:
                 if path.extension().is_some_and(|x| x == "rs")
                     && let Some(name) = path.file_name().and_then(|n| n.to_str())
                 {
-                    sky_mod_names.insert(name.to_owned());
+                    ipe_mod_names.insert(name.to_owned());
                 }
             }
         }
     }
-    for name in &sky_mod_names {
+    for name in &ipe_mod_names {
         pairs.push((
-            format!("sky_mods/{name}"),
-            emitted_out.join("src").join("sky_mods").join(name),
+            format!("ipe_mods/{name}"),
+            emitted_out.join("src").join("ipe_mods").join(name),
         ));
     }
 
@@ -167,7 +167,7 @@ pub fn assert_emitted_project_matches_golden_dir(emitted_out: &Path, golden_dir:
 }
 
 /// Concatenate the text of every emitted Sky-side `.rs` file under
-/// `<emitted_out>/src` — `src/main.rs` plus every `src/sky_mods/*.rs` the
+/// `<emitted_out>/src` — `src/main.rs` plus every `src/ipe_mods/*.rs` the
 /// per-Sky-module split may have written — into ONE
 /// string, so a substring assertion is robust to WHICH file the split placed
 /// a symbol in.
@@ -176,18 +176,18 @@ pub fn assert_emitted_project_matches_golden_dir(emitted_out: &Path, golden_dir:
 /// fixed kernel runtime, identical for every program, and a substring test
 /// asserting "the emitted program carries symbol X" means X in the emitted
 /// USER/stdlib-source code, never a coincidental match inside the runtime
-/// shim. Scoping to `main.rs` + `sky_mods/*.rs` keeps that discrimination
+/// shim. Scoping to `main.rs` + `ipe_mods/*.rs` keeps that discrimination
 /// exactly as sharp as the old `read_to_string(src/main.rs)` had it while no
 /// longer caring whether the split relocated X out of `main.rs` into a
-/// `sky_mods/<mod>.rs` file (the correct new multi-file behaviour).
+/// `ipe_mods/<mod>.rs` file (the correct new multi-file behaviour).
 ///
 /// # Panics
 ///
 /// Fails the calling test (via `assert!`) if `src/main.rs` is missing or
 /// unreadable — a green path always emits it, so its absence is a real
-/// failure, never silently a no-op empty haystack. A missing `sky_mods/`
+/// failure, never silently a no-op empty haystack. A missing `ipe_mods/`
 /// directory is NOT a failure: the Spine-collapse invariant (§3.3) legitimately
-/// emits no `sky_mods/` for a single-home program.
+/// emits no `ipe_mods/` for a single-home program.
 #[must_use]
 #[allow(dead_code)] // adopted file-by-file as substring goldens migrate to the shared helper
 pub fn read_all_emitted_src(emitted_out: &Path) -> String {
@@ -202,13 +202,13 @@ pub fn read_all_emitted_src(emitted_out: &Path) -> String {
     );
     let mut combined = main_text.unwrap_or_default();
 
-    // Append every `src/sky_mods/*.rs` the split may have written, in a
+    // Append every `src/ipe_mods/*.rs` the split may have written, in a
     // deterministic (sorted) order so the concatenation is stable across
     // filesystems that hand back directory entries in arbitrary order. If the
     // program collapsed to a single file, this directory does not exist and
     // the loop is a no-op.
-    let sky_mods = src.join("sky_mods");
-    if let Ok(entries) = std::fs::read_dir(&sky_mods) {
+    let ipe_mods = src.join("ipe_mods");
+    if let Ok(entries) = std::fs::read_dir(&ipe_mods) {
         let mut files: Vec<PathBuf> = entries
             .filter_map(Result::ok)
             .map(|e| e.path())

@@ -4,7 +4,7 @@
 //! `ErrorInfo`. Under structural registration each fixture would be an
 //! exit-0-then-cargo-fail (well-typed in skyc, but the emitted Rust passes a
 //! project-local synthesized record struct where the runtime's concrete
-//! `SkyPanicInfo`/`SkyTypeInfo`/`SkyErrorInfo` is required — E0308). They
+//! `IpePanicInfo`/`IpeTypeInfo`/`IpeErrorInfo` is required — E0308). They
 //! are ordinary IPE-T0001 type mismatches at `skyc` time.
 //!
 //! Companion positive golden: `crates/skyc/tests/

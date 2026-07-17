@@ -343,7 +343,7 @@ const IPE_CORE_WEBSOCKET: &str = include_str!("../../stdlib/Sky/Core/WebSocket.s
 /// cargo-0): the seven `Cache_*` kernels are registered
 /// (`ipe_runtime::cache::*`; a faithful port of the reference's Go+Rust cache
 /// kernels).  The opaque `Cache k v` is backed by the non-generic runtime
-/// `SkyCacheHandle` (the phantom `k`/`v` are dropped, mirroring the reference's
+/// `IpeCacheHandle` (the phantom `k`/`v` are dropped, mirroring the reference's
 /// `runtimeOpaqueTypes` mapping); `CacheCfg` / the `stats` return record fold to
 /// the runtime `CacheCfg` / `CacheStats` structs (mirroring the reference's
 /// struct-alias registry).
@@ -400,7 +400,7 @@ const STD_LIVE_CONSOLE: &str = include_str!("../../stdlib/Std/Live/Console.sky")
 /// Routes through `Ffi.kernel "PubSub_publish"` / `"PubSub_publishNoEcho"`.
 /// RESOLVES (skyc-0 AND cargo-0): `PubSubPublish`/`PubSubPublishNoEcho` have a
 /// type scheme (`String -> a -> Task Error Int`) and a dedicated emit arm
-/// (`pubsub_publish::<_, SkyError>(topic, payload)`).  A member use exits skyc-0
+/// (`pubsub_publish::<_, IpeError>(topic, payload)`).  A member use exits skyc-0
 /// AND cargo-0.  The payload `a` is a genuine monomorphized type var (concrete-
 /// over-generic), never erased.  See `docs/divergences-from-sky.md`
 /// §B-FfiKernelAliasSealed for the closed completeness gap.

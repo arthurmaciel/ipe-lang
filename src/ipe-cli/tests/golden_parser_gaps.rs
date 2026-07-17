@@ -18,7 +18,7 @@
 //!   would give `-4`). Output: `"10 -3"`.
 //! * `intdiv_minint` — F6 regression: `i64::MIN // -1`. Raw Rust `/`
 //!   panics here unconditionally (signed-overflow hardware trap); Sky-Go
-//!   returns `i64::MIN` (two's-complement wrap). `sky_int_div` reproduces this
+//!   returns `i64::MIN` (two's-complement wrap). `ipe_int_div` reproduces this
 //!   via `wrapping_div`. Output: `"-9223372036854775808"`, exit 0.
 //! * `let_fn` — a let-bound *function* (`inc n = n + 1`) applied inside the
 //!   `in` body. Output: `"30"`.
@@ -182,7 +182,7 @@ fn intdiv_by_zero_aborts_exit_101() {
 /// Raw Rust `/` on `i64` panics here unconditionally (signed-overflow hardware
 /// trap, present even with `overflow-checks = false`). Sky-Go `rt.IntDiv` uses
 /// two's-complement arithmetic and returns `i64::MIN`. The fix routes
-/// `BinOp::IntDiv` through `ipe_runtime::math::sky_int_div(a, b)` which calls
+/// `BinOp::IntDiv` through `ipe_runtime::math::ipe_int_div(a, b)` which calls
 /// `a.wrapping_div(b)` for non-zero divisors, reproducing Go's result.
 #[test]
 fn intdiv_minint_by_neg1_does_not_panic() {

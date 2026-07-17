@@ -20,7 +20,7 @@
 //!   `emit_webview_fn` (raw function name for `FuncValue`, fallback to
 //!   `emit_expr_at`). A named `fn` item satisfies `Send + Sync + 'static` via
 //!   the blanket impl; `Box<dyn Fn>` does not without explicit bound annotation.
-//! * **G3**: The `fn main` entry MUST use `block_on_current_thread(sky_main())`
+//! * **G3**: The `fn main` entry MUST use `block_on_current_thread(ipe_main())`
 //!   when `uses_webview` is set. This switch is performed in `project.rs`
 //!   (`emit_program`) via an anchor-asserted `replacen-once` that aborts with
 //!   `CompilerBug` on zero-match — ensuring a well-typed Webview app never

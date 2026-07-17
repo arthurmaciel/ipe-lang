@@ -9,7 +9,7 @@
 //!
 //! The one shape that still returns `impl Fn…` is a Handler producer (the
 //! `middleware_with_*` family): it takes all its Sky args tupled and returns a
-//! **Handler**, the runtime type `Fn(ServerRequest) -> SkyTask<E, Response>`.
+//! **Handler**, the runtime type `Fn(ServerRequest) -> IpeTask<E, Response>`.
 //! The returned closure takes a runtime `ServerRequest`, NOT a deferred Sky arg,
 //! so this is not currying — it's a function that returns a function-typed
 //! value. These are recognised structurally (return-Fn arg == `ServerRequest`)
@@ -39,7 +39,7 @@ fn no_unintended_curried_helpers() {
         let content = std::fs::read_to_string(&path).unwrap();
         for cap in re.captures_iter(&content) {
             let returned_arg = cap.get(2).unwrap().as_str();
-            // A function returning a Handler (`Fn(ServerRequest) -> SkyTask`)
+            // A function returning a Handler (`Fn(ServerRequest) -> IpeTask`)
             // is a handler producer, not a curried helper — skip it.
             if returned_arg == "ServerRequest" {
                 continue;

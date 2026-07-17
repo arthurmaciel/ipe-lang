@@ -75,7 +75,7 @@ type CompileOutcome = Result<ipe_backend::EmittedProject, String>;
 /// exact shape `compile_modules` produces on a one-shot `skyc build`.
 fn cold_compile(user: &UserSources) -> CompileOutcome {
     let (sources, injected) = prepared(user);
-    let db = ipe_db::SkyDatabase::new();
+    let db = ipe_db::IpeDatabase::new();
     let root = skyc::create_source_root(&db, &sources, &injected);
     let config = ipe_db::BuildConfig::new(&db, ipe_backend_rust::DbDriver::Sqlite);
     skyc::compile_prepared(
@@ -92,7 +92,7 @@ fn cold_compile(user: &UserSources) -> CompileOutcome {
 /// The warm side: ONE database reused across the whole edit sequence, inputs
 /// reconciled per state via [`ipe_db::sync_source_root`].
 struct WarmSession {
-    db: ipe_db::SkyDatabase,
+    db: ipe_db::IpeDatabase,
     root: Option<ipe_db::SourceRoot>,
     // A STABLE `BuildConfig` handle across the whole sequence:
     // constructing a fresh `BuildConfig` per
@@ -105,7 +105,7 @@ struct WarmSession {
 impl WarmSession {
     fn new() -> Self {
         Self {
-            db: ipe_db::SkyDatabase::new(),
+            db: ipe_db::IpeDatabase::new(),
             root: None,
             config: None,
         }

@@ -65,7 +65,7 @@ type CompileOutcome = Result<ipe_backend::EmittedProject, String>;
 
 fn cold_compile(user: &UserSources) -> CompileOutcome {
     let (sources, injected) = prepared(user);
-    let db = ipe_db::SkyDatabase::new();
+    let db = ipe_db::IpeDatabase::new();
     let root = skyc::create_source_root(&db, &sources, &injected);
     let config = ipe_db::BuildConfig::new(&db, ipe_backend_rust::DbDriver::Sqlite);
     skyc::compile_prepared(
@@ -80,7 +80,7 @@ fn cold_compile(user: &UserSources) -> CompileOutcome {
 }
 
 struct WarmSession {
-    db: ipe_db::SkyDatabase,
+    db: ipe_db::IpeDatabase,
     root: Option<ipe_db::SourceRoot>,
     // Stable across the whole session — see the twin comment in
     // `clean_vs_incremental_parity.rs`.
@@ -90,7 +90,7 @@ struct WarmSession {
 impl WarmSession {
     fn new() -> Self {
         Self {
-            db: ipe_db::SkyDatabase::new(),
+            db: ipe_db::IpeDatabase::new(),
             root: None,
             config: None,
         }

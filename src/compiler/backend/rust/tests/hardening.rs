@@ -58,7 +58,7 @@ fn emit(interner: &Interner, program: &Program) -> DResult<String> {
 
 /// A reserved Rust keyword used as a variant name and a param name must be
 /// mangled (`type` → `type_`) so the emitted Rust compiles — while the enum's
-/// `sky_show` keeps the original Sky spelling.
+/// `ipe_show` keeps the original Sky spelling.
 #[test]
 fn reserved_names_are_mangled_in_emitted_output() -> DResult<()> {
     let mut interner = Interner::new();
@@ -95,7 +95,7 @@ fn reserved_names_are_mangled_in_emitted_output() -> DResult<()> {
     assert!(out.contains("    type_,\n"), "variant not mangled:\n{out}");
     assert!(
         out.contains("MainKw::type_ => \"type\".to_string(),"),
-        "sky_show must mangle the ident but keep the Sky display name:\n{out}"
+        "ipe_show must mangle the ident but keep the Sky display name:\n{out}"
     );
     // …and the keyword parameter is mangled too, with a valid body reference.
     assert!(

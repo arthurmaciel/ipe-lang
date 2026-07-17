@@ -1,6 +1,6 @@
 // Config stub for standalone crate testing.
 // In generated projects this file is OVERRIDDEN by the Sky compiler.
-// `SkyError` is the real ADT from `error.rs`, re-exported at the crate root
+// `IpeError` is the real ADT from `error.rs`, re-exported at the crate root
 // via `pub use error::*` — no `String` alias needed.
 
 #[cfg(feature = "db")]

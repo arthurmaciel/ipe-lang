@@ -60,10 +60,10 @@ fn compile_solo() -> Option<Result<(), CliError>> {
 
 /// Compile an inline source through the skyc pipeline (no cargo).
 fn compile_src(test_name: &str, source: &str) -> Option<Result<(), CliError>> {
-    let sky_dir = std::env::temp_dir().join(format!("param_routes_{test_name}_sky"));
-    let _ = std::fs::remove_dir_all(&sky_dir);
-    std::fs::create_dir_all(&sky_dir).ok()?;
-    let entry = sky_dir.join("Main.sky");
+    let ipe_dir = std::env::temp_dir().join(format!("param_routes_{test_name}_sky"));
+    let _ = std::fs::remove_dir_all(&ipe_dir);
+    std::fs::create_dir_all(&ipe_dir).ok()?;
+    let entry = ipe_dir.join("Main.sky");
     std::fs::write(&entry, source).ok()?;
     let out = std::env::temp_dir().join(format!("param_routes_{test_name}_out"));
     let _ = std::fs::remove_dir_all(&out);

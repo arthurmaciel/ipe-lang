@@ -30,7 +30,7 @@ pub fn basics_mod_by(divisor: i64, n: i64) -> i64 {
 /// an extra range-check.  See `docs/divergences-from-sky.md §B-compare`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
-pub enum SkyOrder {
+pub enum IpeOrder {
     LT = 0,
     EQ = 1,
     GT = 2,
@@ -44,13 +44,13 @@ pub enum SkyOrder {
 /// which implement `PartialOrd` in Rust.  NaN-producing operations (`Float`)
 /// follow Rust's `PartialOrd` convention (NaN is unordered); Sky does not
 /// expose a `Float` NaN literal so this is sound in practice.
-pub fn basics_compare<T: PartialOrd>(a: T, b: T) -> SkyOrder {
+pub fn basics_compare<T: PartialOrd>(a: T, b: T) -> IpeOrder {
     if a < b {
-        SkyOrder::LT
+        IpeOrder::LT
     } else if a > b {
-        SkyOrder::GT
+        IpeOrder::GT
     } else {
-        SkyOrder::EQ
+        IpeOrder::EQ
     }
 }
 
@@ -149,18 +149,18 @@ pub fn basics_abs<T: PartialOrd + SaturatingNeg + Copy + Default>(x: T) -> T {
 
 /// Sky `errorToString : a -> String` — universal Sky stringifier.
 /// Used by Sky.Test.debugShow and friends to render any Sky value into
-/// a diagnostic string. Backed by the total `SkyStringify` trait, which
+/// a diagnostic string. Backed by the total `IpeStringify` trait, which
 /// mirrors Go's `Basics_errorToString` EXACTLY: a `String` renders UNQUOTED
 /// (`hi`, not `"hi"`), scalars render like `%v`, and slices/tuples/maps follow
 /// Go's space-separated layout. Every codegen-emitted record/ADT gets a
-/// `SkyStringify` impl (Emitter.hs), so the bound is always satisfiable —
+/// `IpeStringify` impl (Emitter.hs), so the bound is always satisfiable —
 /// the generic `debugShow : a -> String` body type-checks and is total.
-pub fn basics_error_to_string<T: crate::stringify::SkyStringify>(v: T) -> String {
-    v.sky_show()
+pub fn basics_error_to_string<T: crate::stringify::IpeStringify>(v: T) -> String {
+    v.ipe_show()
 }
 
 // Sky.Core.Error's runtime kernels live in `error.rs` — `Error` is the real
-// `ipe_runtime::error::SkyError` ADT, not a bare `String`. `Error.toString`
+// `ipe_runtime::error::IpeError` ADT, not a bare `String`. `Error.toString`
 // reuses `basics_error_to_string` above.
 
 /// Sky `Debug.toString` — the `{{expr}}` string-interpolation stringifier.
@@ -191,9 +191,9 @@ mod tests {
     #[test]
     fn error_to_string_renders_kind_and_message() {
         // `Error.toString` reuses `basics_error_to_string`, dispatching through
-        // `SkyStringify` to `SkyError::to_sky_string`'s `"<Kind>: <message>"`.
+        // `IpeStringify` to `IpeError::to_sky_string`'s `"<Kind>: <message>"`.
         assert_eq!(
-            basics_error_to_string(crate::error::SkyError::io("boom".to_owned())),
+            basics_error_to_string(crate::error::IpeError::io("boom".to_owned())),
             "Io: boom"
         );
     }

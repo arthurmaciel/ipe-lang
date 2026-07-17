@@ -599,7 +599,7 @@ pub enum Feature {
     /// A function value stored in a CONSTRUCTOR PAYLOAD — declared
     /// (`type Box = Mk (Int -> Int)`) or laundered there through a type variable
     /// (`type Box a = Mk a` applied as `Mk (\n -> n + 1)`). The generated Rust
-    /// enum derives `Clone`/`Debug`/`PartialEq` + `SkyStringify`, none of which a
+    /// enum derives `Clone`/`Debug`/`PartialEq` + `IpeStringify`, none of which a
     /// `Box<dyn Fn>` payload field satisfies, so accepting it would emit
     /// cargo-failing Rust. The sibling of [`Self::FirstClassFunctions`] (a
     /// function in a *record* field), split out so the message names the

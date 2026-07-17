@@ -250,7 +250,7 @@ pub fn inject_dev_banner(body: &str, banner: &str) -> String {
 }
 
 /// `Some(value)` when responses run in cross-origin-iframe mode
-/// (`IPE_LIVE_FRAME_ANCESTORS` set — the SkyDeploy control-plane embeds the
+/// (`IPE_LIVE_FRAME_ANCESTORS` set — the IpeDeploy control-plane embeds the
 /// console). Snapshotted once into a `OnceLock` so env is read only once
 /// (eliminates the TOCTOU window where a dynamic env mutation could split the
 /// cookie name / CSP framing decision within a single request).
@@ -328,7 +328,7 @@ pub fn record_request(status: u16) {
     REQUESTS_TOTAL.fetch_add(1, Ordering::Relaxed);
     if status >= 500 {
         ERRORS_TOTAL.fetch_add(1, Ordering::Relaxed);
-        metric_inc("sky_live_errors_total", &[], 1);
+        metric_inc("ipe_live_errors_total", &[], 1);
     }
 }
 
@@ -469,7 +469,7 @@ pub fn metric_observe(name: &str, labels: &[(&str, &str)], v: f64) {
 }
 
 /// Extract the BOUNDED variant name from a `Debug` value, for use as a
-/// low-cardinality metric label (e.g. `sky_live_msg_seconds{name}` — Go parity
+/// low-cardinality metric label (e.g. `ipe_live_msg_seconds{name}` — Go parity
 /// with msg_logging.go). Returns ONLY the leading Rust-identifier characters of
 /// the `{:?}` rendering — the enum variant name — and NEVER any payload field.
 ///
@@ -561,14 +561,14 @@ fn prom_type_token(v: &MetricValue) -> &'static str {
 /// can't contradict each other.
 fn metric_help(name: &str) -> &'static str {
     match name {
-        "sky_live_requests_total" => "Total HTTP requests served, by method and status.",
-        "sky_live_sse_drops_total" => "SSE patches dropped due to a full per-session buffer.",
-        "sky_live_sse_connections_total" => "Total SSE connections opened.",
-        "sky_live_sessions_active" => "Currently-active Sky.Live sessions.",
-        "sky_live_errors_total" => "Total responses with a 5xx status.",
-        "sky_live_request_seconds" => "HTTP request latency in seconds.",
-        "sky_live_msg_seconds" => "Msg-handling latency in seconds, by Msg variant name.",
-        "sky_live_msg_total" => "Total Msgs handled, by variant name, outcome, and noop.",
+        "ipe_live_requests_total" => "Total HTTP requests served, by method and status.",
+        "ipe_live_sse_drops_total" => "SSE patches dropped due to a full per-session buffer.",
+        "ipe_live_sse_connections_total" => "Total SSE connections opened.",
+        "ipe_live_sessions_active" => "Currently-active Sky.Live sessions.",
+        "ipe_live_errors_total" => "Total responses with a 5xx status.",
+        "ipe_live_request_seconds" => "HTTP request latency in seconds.",
+        "ipe_live_msg_seconds" => "Msg-handling latency in seconds, by Msg variant name.",
+        "ipe_live_msg_total" => "Total Msgs handled, by variant name, outcome, and noop.",
         _ => "Sky runtime metric.",
     }
 }

@@ -6,13 +6,13 @@
 //! iteration Sky guarantees; `Hash + Eq` for the map ops. Codegen emits the
 //! key type from the `Dict k v` annotation (TypeRenderer renders `HashMap<k,v>`;
 //! empty-dict turbofish pins both K and V from the expected type). The
-//! `SkyDict<T>` alias stays for the String-keyed runtime structs (db rows).
+//! `IpeDict<T>` alias stays for the String-keyed runtime structs (db rows).
 
-use super::SkyMaybe;
+use super::IpeMaybe;
 use std::collections::HashMap;
 use std::hash::Hash;
 
-pub type SkyDict<T> = HashMap<String, T>;
+pub type IpeDict<T> = HashMap<String, T>;
 
 /// `Dict.empty : Dict k v`.
 pub fn dict_empty<K, V>() -> HashMap<K, V> {
@@ -28,10 +28,10 @@ pub fn dict_insert<K: Hash + Eq, V>(k: K, v: V, d: HashMap<K, V>) -> HashMap<K, 
 }
 
 /// `Dict.get : k -> Dict k v -> Maybe v`.
-pub fn dict_get<K: Hash + Eq, V: Clone>(k: K, d: HashMap<K, V>) -> SkyMaybe<V> {
+pub fn dict_get<K: Hash + Eq, V: Clone>(k: K, d: HashMap<K, V>) -> IpeMaybe<V> {
     match d.get(&k) {
-        Some(v) => SkyMaybe::Just(v.clone()),
-        None => SkyMaybe::Nothing,
+        Some(v) => IpeMaybe::Just(v.clone()),
+        None => IpeMaybe::Nothing,
     }
 }
 
@@ -140,26 +140,26 @@ mod tests {
 
     #[test]
     fn test_dict_insert_get_roundtrip() {
-        let d: SkyDict<i64> = dict_empty();
+        let d: IpeDict<i64> = dict_empty();
         let d = dict_insert("a".into(), 1, d);
         let d = dict_insert("b".into(), 2, d);
         match dict_get("a".into(), d.clone()) {
-            SkyMaybe::Just(v) => assert_eq!(v, 1),
-            SkyMaybe::Nothing => panic!("missing"),
+            IpeMaybe::Just(v) => assert_eq!(v, 1),
+            IpeMaybe::Nothing => panic!("missing"),
         }
         match dict_get("b".into(), d.clone()) {
-            SkyMaybe::Just(v) => assert_eq!(v, 2),
-            SkyMaybe::Nothing => panic!("missing"),
+            IpeMaybe::Just(v) => assert_eq!(v, 2),
+            IpeMaybe::Nothing => panic!("missing"),
         }
         match dict_get("missing".into(), d) {
-            SkyMaybe::Just(_) => panic!("should be Nothing"),
-            SkyMaybe::Nothing => (),
+            IpeMaybe::Just(_) => panic!("should be Nothing"),
+            IpeMaybe::Nothing => (),
         }
     }
 
     #[test]
     fn test_dict_keys_sorted() {
-        let mut d: SkyDict<i64> = dict_empty();
+        let mut d: IpeDict<i64> = dict_empty();
         d = dict_insert("c".into(), 3, d);
         d = dict_insert("a".into(), 1, d);
         d = dict_insert("b".into(), 2, d);
@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn test_dict_remove_and_member() {
-        let mut d: SkyDict<i64> = dict_empty();
+        let mut d: IpeDict<i64> = dict_empty();
         d = dict_insert("x".into(), 10, d);
         assert!(dict_member("x".into(), d.clone()));
         let d = dict_remove("x".into(), d);
@@ -177,13 +177,13 @@ mod tests {
 
     #[test]
     fn test_dict_empty_keys() {
-        let d: SkyDict<i64> = dict_empty();
+        let d: IpeDict<i64> = dict_empty();
         assert!(dict_keys(d).is_empty());
     }
 
     #[test]
     fn test_dict_size_and_is_empty() {
-        let d: SkyDict<i64> = dict_empty();
+        let d: IpeDict<i64> = dict_empty();
         assert!(dict_is_empty(d.clone()));
         assert_eq!(dict_size(d.clone()), 0);
         let d = dict_insert("x".into(), 42, d);
@@ -193,8 +193,8 @@ mod tests {
 
     #[test]
     fn test_dict_union_left_biased() {
-        let a: SkyDict<i64> = dict_from_list(vec![("x".into(), 1), ("y".into(), 2)]);
-        let b: SkyDict<i64> = dict_from_list(vec![
+        let a: IpeDict<i64> = dict_from_list(vec![("x".into(), 1), ("y".into(), 2)]);
+        let b: IpeDict<i64> = dict_from_list(vec![
             ("y".into(), 99), // should be overwritten by a's y=2
             ("z".into(), 3),
         ]);
@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn test_dict_map_sorted() {
-        let d: SkyDict<i64> = dict_from_list(vec![("b".into(), 2), ("a".into(), 1)]);
+        let d: IpeDict<i64> = dict_from_list(vec![("b".into(), 2), ("a".into(), 1)]);
         let result: HashMap<String, i64> = dict_map(|_k, v| v * 10, d);
         assert_eq!(result.get("a"), Some(&10));
         assert_eq!(result.get("b"), Some(&20));
@@ -215,7 +215,7 @@ mod tests {
 
     #[test]
     fn test_dict_foldl_sorted_order() {
-        let d: SkyDict<i64> =
+        let d: IpeDict<i64> =
             dict_from_list(vec![("c".into(), 3), ("a".into(), 1), ("b".into(), 2)]);
         // Collect keys in fold order; should be sorted (a, b, c).
         let keys_seen = dict_foldl(

@@ -49,12 +49,12 @@ fn fresh_dirs(tag: &str) -> Result<(PathBuf, PathBuf), BoxError> {
         std::process::id(),
         Instant::now().elapsed().as_nanos()
     ));
-    let sky_dir = base.join("sky");
+    let ipe_dir = base.join("sky");
     let out_dir = base.join("out");
     let _ = std::fs::remove_dir_all(&base);
-    std::fs::create_dir_all(&sky_dir)
-        .map_err(|e| -> BoxError { format!("mkdir {}: {e}", sky_dir.display()).into() })?;
-    Ok((sky_dir, out_dir))
+    std::fs::create_dir_all(&ipe_dir)
+        .map_err(|e| -> BoxError { format!("mkdir {}: {e}", ipe_dir.display()).into() })?;
+    Ok((ipe_dir, out_dir))
 }
 
 fn http_get_body(port: u16) -> Option<String> {
@@ -181,12 +181,12 @@ fn watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_skyc_process()
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
-    let (sky_dir, out_dir) = fresh_dirs("term_reaps_child")?;
-    std::fs::write(sky_dir.join("Main.sky"), server_fixture("v1"))
+    let (ipe_dir, out_dir) = fresh_dirs("term_reaps_child")?;
+    std::fs::write(ipe_dir.join("Main.sky"), server_fixture("v1"))
         .map_err(|e| -> BoxError { format!("write Main.sky: {e}").into() })?;
 
     let port = 19157;
-    let mut skyc_proc = spawn_skyc_watch(&sky_dir.join("Main.sky"), &out_dir, port)?;
+    let mut skyc_proc = spawn_skyc_watch(&ipe_dir.join("Main.sky"), &out_dir, port)?;
 
     if !wait_for_body(port, "v1", Duration::from_secs(180)) {
         let _ = skyc_proc.kill();
@@ -238,17 +238,17 @@ fn spawn_never_installs_a_sigterm_forwarder() -> Result<(), BoxError> {
     ipe_watch::install_sigterm_forwarder(|| HOST_SIGTERM.store(true, Ordering::Relaxed))
         .map_err(|e| -> BoxError { format!("host handler registration: {e}").into() })?;
 
-    let (sky_dir, out_dir) = fresh_dirs("spawn_no_forwarder")?;
+    let (ipe_dir, out_dir) = fresh_dirs("spawn_no_forwarder")?;
     // Red-build source: parses (so setup succeeds) but never compiles green,
     // so no cargo build ever starts — the loop just stays alive.
-    std::fs::write(sky_dir.join("Main.sky"), RED_BUILD_SOURCE)
+    std::fs::write(ipe_dir.join("Main.sky"), RED_BUILD_SOURCE)
         .map_err(|e| -> BoxError { format!("write Main.sky: {e}").into() })?;
     let Ok(runtime_dir) = skyc::resolve_runtime() else {
         eprintln!("skipping (embedded runtime not resolvable)");
         return Ok(());
     };
     let opts =
-        skyc::watch::WatchOptions::new(sky_dir.join("Main.sky"), out_dir, runtime_dir);
+        skyc::watch::WatchOptions::new(ipe_dir.join("Main.sky"), out_dir, runtime_dir);
     let (join, handle) = skyc::watch::spawn(opts);
 
     // Let the orchestrator finish setup and enter its event loop.
@@ -310,12 +310,12 @@ fn double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_sigkill()
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
-    let (sky_dir, out_dir) = fresh_dirs("double_term")?;
-    std::fs::write(sky_dir.join("Main.sky"), server_fixture("v1"))
+    let (ipe_dir, out_dir) = fresh_dirs("double_term")?;
+    std::fs::write(ipe_dir.join("Main.sky"), server_fixture("v1"))
         .map_err(|e| -> BoxError { format!("write Main.sky: {e}").into() })?;
 
     let port = 19158;
-    let mut skyc_proc = spawn_skyc_watch(&sky_dir.join("Main.sky"), &out_dir, port)?;
+    let mut skyc_proc = spawn_skyc_watch(&ipe_dir.join("Main.sky"), &out_dir, port)?;
 
     if !wait_for_body(port, "v1", Duration::from_secs(180)) {
         let _ = skyc_proc.kill();

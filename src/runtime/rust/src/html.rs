@@ -241,7 +241,7 @@ fn render_into_ctx<M>(
             // in n.Attrs), NOT a bare `k`.
             let mut pairs: Vec<(&str, String)> = vec![];
             let mut events: Vec<&str> = vec![];
-            let mut sky_id: Option<&str> = None;
+            let mut ipe_id: Option<&str> = None;
             // Multi-valued attribute merge — mirrors Go `HtmlToVNode`
             // (live.go ~L161-185). `class` is HTML's space-separated and
             // `style` HTML's semicolon-separated multi-valued attribute: an
@@ -261,7 +261,7 @@ fn render_into_ctx<M>(
                     Attribute::Attr(k, v) => {
                         let k = k.as_str();
                         if k == "sky-id" {
-                            sky_id = Some(v);
+                            ipe_id = Some(v);
                         }
                         match pairs.iter_mut().find(|(pk, _)| *pk == k) {
                             Some((_, existing)) if !existing.is_empty() && k == "class" => {
@@ -360,7 +360,7 @@ fn render_into_ctx<M>(
                 s.push_str(" data-sky-on=\"");
                 s.push_str(&events.join(" "));
                 s.push('"');
-                if let Some(id) = sky_id {
+                if let Some(id) = ipe_id {
                     s.push_str(" data-sky-hid=\"");
                     s.push_str(&escape_attr(id));
                     s.push('"');
@@ -701,7 +701,7 @@ fn assign_sky_ids_depth<M>(node: &mut Html<M>, path: &str, depth: usize) {
         for child in kids.iter_mut() {
             if let Html::HElement(ctag, cattrs, _) = child {
                 let mut seg = format!("{path}_{idx}_{ctag}");
-                if let Some(key) = sky_id_key(ctag, cattrs) {
+                if let Some(key) = ipe_id_key(ctag, cattrs) {
                     seg.push(':');
                     seg.push_str(&key);
                 }
@@ -716,7 +716,7 @@ fn assign_sky_ids_depth<M>(node: &mut Html<M>, path: &str, depth: usize) {
 /// `sky-key` attribute (set by `Html.keyed`), then `name` on form-bearing tags.
 /// Any matched value is sanitised so it can't corrupt the sky-id grammar.
 /// Mirrors Go `skyIDKey`.
-fn sky_id_key<M>(tag: &str, attrs: &[Attribute<M>]) -> Option<String> {
+fn ipe_id_key<M>(tag: &str, attrs: &[Attribute<M>]) -> Option<String> {
     if let Some(k) = attr_value(attrs, "sky-key")
         && !k.is_empty()
     {
@@ -995,23 +995,23 @@ pub fn html_attr_to_string_<M>(attr: Attribute<M>) -> String {
     }
 }
 
-// ─── SkyStringify for the Html runtime types ────────────────────────────────
+// ─── IpeStringify for the Html runtime types ────────────────────────────────
 // Same rationale as the Std.Ui impls in ui/element.rs: a codegen-emitted
-// `sky_show` recurses into every field, so an Html/Attribute/Event a generated
+// `ipe_show` recurses into every field, so an Html/Attribute/Event a generated
 // type can hold must impl the trait (else E0599). No Go `%v` analogue worth
 // matching; a stable type-tag placeholder is total and never recurses into `M`.
-impl<M> crate::stringify::SkyStringify for Html<M> {
-    fn sky_show(&self) -> String {
+impl<M> crate::stringify::IpeStringify for Html<M> {
+    fn ipe_show(&self) -> String {
         "<html>".to_string()
     }
 }
-impl<M> crate::stringify::SkyStringify for Attribute<M> {
-    fn sky_show(&self) -> String {
+impl<M> crate::stringify::IpeStringify for Attribute<M> {
+    fn ipe_show(&self) -> String {
         "<html-attribute>".to_string()
     }
 }
-impl<M> crate::stringify::SkyStringify for Event<M> {
-    fn sky_show(&self) -> String {
+impl<M> crate::stringify::IpeStringify for Event<M> {
+    fn ipe_show(&self) -> String {
         "<event>".to_string()
     }
 }
@@ -1273,7 +1273,7 @@ mod tests {
     }
 
     #[test]
-    fn sky_ids_are_stable_and_pathed() {
+    fn ipe_ids_are_stable_and_pathed() {
         let mut t: Html<()> = Html::HElement(
             "div".into(),
             vec![],
@@ -1354,7 +1354,7 @@ mod tests {
     }
 
     #[test]
-    fn sky_key_value_is_sanitised() {
+    fn ipe_key_value_is_sanitised() {
         assert_eq!(sanitise_sky_id_key("a/b c.d"), "a_b_c_d");
         assert_eq!(sanitise_sky_id_key("keep-_OK9"), "keep-_OK9");
     }

@@ -26,8 +26,8 @@ fn trace_enabled() -> bool {
 // Trace.span : String -> Task e a -> Task e a
 pub fn trace_span<E: Send + 'static, A: Send + 'static>(
     name: String,
-    task: SkyTask<E, A>,
-) -> SkyTask<E, A> {
+    task: IpeTask<E, A>,
+) -> IpeTask<E, A> {
     Box::pin(async move {
         let on = trace_enabled();
         let start = Instant::now();
@@ -36,7 +36,7 @@ pub fn trace_span<E: Send + 'static, A: Send + 'static>(
         }
         let result = task.await;
         let elapsed = start.elapsed();
-        let ok = matches!(result, SkyResult::Ok(_));
+        let ok = matches!(result, IpeResult::Ok(_));
         // Always record the span into the telemetry ring (the Sky Console reads
         // it); the stderr line stays opt-in via IPE_TRACE.
         super::telemetry::record_span(&name, elapsed.as_micros() as u64, ok);
@@ -54,7 +54,7 @@ pub fn trace_span<E: Send + 'static, A: Send + 'static>(
 }
 
 // Trace.event : String -> Task Error ()
-pub fn trace_event<E: Send + 'static>(name: String) -> SkyTask<E, ()> {
+pub fn trace_event<E: Send + 'static>(name: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         if trace_enabled() {
             eprintln!("[trace] event {}", scrub(&name));
@@ -65,7 +65,7 @@ pub fn trace_event<E: Send + 'static>(name: String) -> SkyTask<E, ()> {
 
 // Trace.attr : String -> String -> Task Error ()
 // Keys are namespaced under `sky.trace.` to match the Go runtime.
-pub fn trace_attr<E: Send + 'static>(key: String, value: String) -> SkyTask<E, ()> {
+pub fn trace_attr<E: Send + 'static>(key: String, value: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         if trace_enabled() {
             eprintln!("[trace] attr sky.trace.{} = {}", scrub(&key), scrub(&value));

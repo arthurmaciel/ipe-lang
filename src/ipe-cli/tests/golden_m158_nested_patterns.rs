@@ -159,7 +159,7 @@ fn nested_cons_no_fallback_stays_gated() {
 /// direct-arg string-literal desugaring's scope (`Just "x"` at depth 1, which
 /// `nested_strlit_ctor_payload_accepted` below confirms still works). Must
 /// stay fail-closed with IPE-L0116, never accept-then-cargo-fail (silent
-/// acceptance would emit `SkyMaybe::Just(SkyMaybe::Just("x"))`
+/// acceptance would emit `IpeMaybe::Just(IpeMaybe::Just("x"))`
 /// — E0308 at `cargo build`, expected `String` found `&str`).
 #[test]
 fn nested_strlit_two_levels_stays_gated() {

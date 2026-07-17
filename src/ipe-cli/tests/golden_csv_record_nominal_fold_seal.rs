@@ -41,7 +41,7 @@ fn fixture_entry(root: &Path) -> PathBuf {
 }
 
 /// Recursively concatenate every emitted `.rs` file under `dir`. The
-/// `Csv.encode` call site lands in `src/sky_mods/sky_mod_main.rs` (top-level
+/// `Csv.encode` call site lands in `src/ipe_mods/ipe_mod_main.rs` (top-level
 /// bindings emit to per-module files), not `src/main.rs`, so the assertions
 /// must scan the whole emitted tree rather than a single file.
 fn concat_emitted_rs(dir: &Path, out: &mut String) {
@@ -73,12 +73,12 @@ fn built_main_rs(root: &Path, out: &Path) -> (Result<(), skyc::CliError>, Option
     };
     let built = skyc::build(&entry, out, &runtime);
     let emitted = if built.is_ok() {
-        // Scan the emitted APP modules only (`src/sky_mods/` + `src/main.rs`),
+        // Scan the emitted APP modules only (`src/ipe_mods/` + `src/main.rs`),
         // not the vendored `src/ipe_runtime/` — the runtime's own `csv.rs`
         // defines `CsvDoc` and would mask what the app-side codegen chose.
         let mut acc = std::fs::read_to_string(out.join("src").join("main.rs")).unwrap_or_default();
         acc.push('\n');
-        concat_emitted_rs(&out.join("src").join("sky_mods"), &mut acc);
+        concat_emitted_rs(&out.join("src").join("ipe_mods"), &mut acc);
         Some(acc)
     } else {
         None

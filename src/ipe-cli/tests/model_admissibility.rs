@@ -17,10 +17,10 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// Compile `source` through `skyc::build`, returning the pipeline result. The
 /// emitted project is written to a per-test temp dir; `cargo` is never invoked.
 fn compile(test_name: &str, source: &str) -> Result<Result<(), skyc::CliError>, BoxError> {
-    let sky_dir = std::env::temp_dir().join(format!("model_adm_{test_name}_sky"));
-    let _ = std::fs::remove_dir_all(&sky_dir);
-    std::fs::create_dir_all(&sky_dir)?;
-    let entry = sky_dir.join("Main.sky");
+    let ipe_dir = std::env::temp_dir().join(format!("model_adm_{test_name}_sky"));
+    let _ = std::fs::remove_dir_all(&ipe_dir);
+    std::fs::create_dir_all(&ipe_dir)?;
+    let entry = ipe_dir.join("Main.sky");
     std::fs::write(&entry, source)?;
 
     let out_dir = std::env::temp_dir().join(format!("model_adm_{test_name}_out"));

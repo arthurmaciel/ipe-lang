@@ -263,13 +263,13 @@ impl Env {
         let streamid = interner.intern("StreamId")?;
         // Sky.Core.Error ADTs.
         //
-        // `Error` is both a type name (currently `SkyError = String` in the runtime)
+        // `Error` is both a type name (currently `IpeError = String` in the runtime)
         // and a constructor `Error ErrorKind ErrorInfo` — arity 2.  Registering the
         // constructor here fixes N0003 when a pattern `Error kind info ->` appears in
         // user code.  `ErrorKind` is a separate ADT with 11 nullary constructors.
         //
         // NOTE: full Error ADT migration is PARKED; the runtime still represents
-        // `SkyError` as `String`.  These registrations advance canon past N0003;
+        // `IpeError` as `String`.  These registrations advance canon past N0003;
         // the lowerer/backend may surface a new error until the migration lands.
         let error_type = interner.intern("Error")?;
         let errorkind = interner.intern("ErrorKind")?;
@@ -335,7 +335,7 @@ impl Env {
             // `Custom : String -> ErrorDetails`
             // Index order matches `ipe_types::constrain`'s ctor scheme
             // registration and `src/runtime/rust/src/error.rs`'s
-            // `SkyErrorDetails` enum — DO NOT reorder.
+            // `IpeErrorDetails` enum — DO NOT reorder.
             ("FfiPanic", errordetails, 0, 1),
             ("TypeMismatch", errordetails, 1, 1),
             ("HttpStatus", errordetails, 2, 1),

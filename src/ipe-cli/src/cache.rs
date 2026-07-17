@@ -5,7 +5,7 @@
 //! §"Cross-session persistence" (**LOCKED, Option B**).
 //!
 //! Everything in-process is memoized, but nothing survives ACROSS process
-//! invocations — every `skyc build` starts a cold [`ipe_db::SkyDatabase`].
+//! invocations — every `skyc build` starts a cold [`ipe_db::IpeDatabase`].
 //! This module closes that gap for the coarse, whole-project granularity
 //! that genuinely exists (`ipe_db::emit_project`'s output — see this
 //! module's own doc section below for why that is a deliberate, documented
@@ -357,7 +357,7 @@ pub fn store(cache_root: &Path, epoch: &str, key: &str, project: &EmittedProject
 //
 // Sits ONE STAGE EARLIER than the `EmittedProject` tier above: a hit here
 // skips parse -> canon -> link -> infer -> lower ENTIRELY (no
-// `ipe_db::SkyDatabase` is even constructed — see `compile_modules_observed`
+// `ipe_db::IpeDatabase` is even constructed — see `compile_modules_observed`
 // in `crate::lib`), running only `RustBackend::emit` over the recovered
 // `ipe_ir::Program` before falling through to the SAME
 // `write_emitted_project`/tier-1-`store` path a full pipeline run uses. A

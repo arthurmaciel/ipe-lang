@@ -24,8 +24,8 @@ impl<M: Clone> HandlerIndex<M> {
     ///
     /// Returns `None` when the sky-id is unknown or the event name doesn't
     /// match any registered handler.
-    pub fn resolve(&self, sky_id: &str, event: &str, args: &[String]) -> Option<M> {
-        match self.map.get(sky_id)?.get(event)? {
+    pub fn resolve(&self, ipe_id: &str, event: &str, args: &[String]) -> Option<M> {
+        match self.map.get(ipe_id)?.get(event)? {
             Event::OnMsg(_, m) => Some(m.clone()),
             Event::OnString(_, f) => Some(f(args.first().cloned().unwrap_or_default())),
             Event::OnBool(_, f) => Some(f(args.first().map(|s| s == "true").unwrap_or(false))),
@@ -36,8 +36,8 @@ impl<M: Clone> HandlerIndex<M> {
     /// Resolve a form-submit event. Distinct from [`Self::resolve`] because
     /// the `FormData` map arrives via the form-submission wire path, not the
     /// positional `args` slice.
-    pub fn resolve_form(&self, sky_id: &str, event: &str, fd: FormData) -> Option<M> {
-        match self.map.get(sky_id)?.get(event)? {
+    pub fn resolve_form(&self, ipe_id: &str, event: &str, fd: FormData) -> Option<M> {
+        match self.map.get(ipe_id)?.get(event)? {
             Event::OnForm(_, f) => f(fd), // f already returns Option<M> (None on decode failure)
             _ => None,
         }

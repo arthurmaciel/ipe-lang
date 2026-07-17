@@ -28,7 +28,7 @@
 //! * `fns_maybe_default` — `Maybe.withDefault 0 (Just 5)` → `5`.
 //! * `fns_result_map` — `Result.withDefault 0 (Result.map (\x -> x + 1) (Ok 2))`
 //!   → `3`. `Ok 2`'s `Result e a` error type is unconstrained, so the lowerer
-//!   pins it to the project `SkyError` via the runtime's `ok_res` (avoiding
+//!   pins it to the project `IpeError` via the runtime's `ok_res` (avoiding
 //!   rustc's E0282 ambiguity); `Result.map`'s runtime takes the container first,
 //!   so the backend re-points the two arguments.
 //!

@@ -59,7 +59,7 @@ const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     //         call. ──────────────────────────────────────────────────────────
     "live_route",
     // ── Dead: emit_cli_call synthesises the CLI entry-point block inline. ───
-    "sky_cli_program_",
+    "ipe_cli_program_",
     // ── Dead: emit_ui_call emits ipe_runtime_rust::ui::render::ui_layout_with_vecs
     //         for UiLayoutWith; the bare "ui_layout_with" name is not used.
     //         Note: ui_layout_with_vecs IS in the runtime; this entry is for

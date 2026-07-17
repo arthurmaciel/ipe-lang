@@ -28,7 +28,7 @@ use super::*;
 /// FRESH id — entropy is not memoizable. Bound is `E: From<String>` to match
 /// the other entropy Tasks (`crypto_random_token`), so a discarded
 /// `let _ = Uuid.v4 ()` auto-forces identically; generation itself never errors.
-pub fn uuid_v4<E: From<String> + Send + 'static>(_: ()) -> SkyTask<E, String> {
+pub fn uuid_v4<E: From<String> + Send + 'static>(_: ()) -> IpeTask<E, String> {
     Box::pin(async move { ok_res(::uuid::Uuid::new_v4().to_string()) })
 }
 
@@ -40,7 +40,7 @@ pub fn uuid_v4<E: From<String> + Send + 'static>(_: ()) -> SkyTask<E, String> {
 /// those). `v4` is random (getrandom/CSPRNG) but UUIDs are still only 122 bits of
 /// formatted entropy — prefer `crypto_random_token` for security tokens.
 /// (Audit finding: low — documented contract.)
-pub fn uuid_v7<E: From<String> + Send + 'static>(_: ()) -> SkyTask<E, String> {
+pub fn uuid_v7<E: From<String> + Send + 'static>(_: ()) -> IpeTask<E, String> {
     Box::pin(async move { ok_res(::uuid::Uuid::now_v7().to_string()) })
 }
 
@@ -48,10 +48,10 @@ pub fn uuid_v7<E: From<String> + Send + 'static>(_: ()) -> SkyTask<E, String> {
 ///
 /// PURE: no entropy, no effect — a real parser over an existing string. Kept off
 /// the Task tier deliberately (it is not the arity-0 entropy artifact).
-pub fn uuid_parse(s: String) -> SkyMaybe<String> {
+pub fn uuid_parse(s: String) -> IpeMaybe<String> {
     match ::uuid::Uuid::parse_str(&s) {
-        Ok(u) => SkyMaybe::Just(u.to_string()),
-        Err(_) => SkyMaybe::Nothing,
+        Ok(u) => IpeMaybe::Just(u.to_string()),
+        Err(_) => IpeMaybe::Nothing,
     }
 }
 
@@ -61,10 +61,10 @@ mod tests {
 
     /// Run one entropy Task to completion, unwrapping the Ok payload. The error
     /// channel is `String` here (the tests never hit it — generation is total).
-    async fn run(task: SkyTask<String, String>) -> String {
+    async fn run(task: IpeTask<String, String>) -> String {
         match task.await {
-            SkyResult::Ok(v) => v,
-            SkyResult::Err(e) => panic!("uuid task errored unexpectedly: {e}"),
+            IpeResult::Ok(v) => v,
+            IpeResult::Err(e) => panic!("uuid task errored unexpectedly: {e}"),
         }
     }
 
@@ -73,10 +73,10 @@ mod tests {
         let id = run(uuid_v4(())).await;
         assert_eq!(id.len(), 36); // 8-4-4-4-12
         assert_eq!(&id[14..15], "4", "v4 version nibble");
-        assert!(matches!(uuid_parse(id), SkyMaybe::Just(_)));
+        assert!(matches!(uuid_parse(id), IpeMaybe::Just(_)));
         assert!(matches!(
             uuid_parse("not-a-uuid".to_string()),
-            SkyMaybe::Nothing
+            IpeMaybe::Nothing
         ));
     }
 
@@ -95,7 +95,7 @@ mod tests {
         let a = run(uuid_v7(())).await;
         let b = run(uuid_v7(())).await;
         assert_eq!(&a[14..15], "7", "v7 version nibble");
-        assert!(matches!(uuid_parse(a.clone()), SkyMaybe::Just(_)));
+        assert!(matches!(uuid_parse(a.clone()), IpeMaybe::Just(_)));
         assert_ne!(a, b, "two Uuid.v7 runs must produce different ids");
     }
 }

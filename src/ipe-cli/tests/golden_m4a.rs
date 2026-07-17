@@ -7,15 +7,15 @@
 //! Four programs exercise the surface end to end:
 //!
 //! * `maybe_stdlib` — `case (Just 42) of Just n -> n ; Nothing -> 0`, prints `42`.
-//!   `Maybe a` lowers to the runtime's `SkyMaybe<T>`; the construction and the
+//!   `Maybe a` lowers to the runtime's `IpeMaybe<T>`; the construction and the
 //!   pattern both route to it.
 //! * `result_stdlib` — `case (Ok 7) of Ok n -> n ; Err _ -> 0`, prints `7`.
-//!   `Result e a` lowers to the runtime's `SkyResult<E, A>`.
+//!   `Result e a` lowers to the runtime's `IpeResult<E, A>`.
 //! * `bool_stdlib` — `if True then "yes" else "no"`, prints `yes`. `True` / `False`
 //!   lower to the Rust `true` / `false` keyword constants.
 //! * `list_stdlib` — `1 :: 2 :: [3, 4, 5]` built and passed to a function, prints
 //!   `7`. The list literal lowers to `vec![…]` and `::` to the runtime's
-//!   `sky_list_cons`, over the runtime's `Vec<T>` list representation.
+//!   `ipe_list_cons`, over the runtime's `Vec<T>` list representation.
 //!
 //! Each emitted `main.rs` must be byte-identical to the checked-in golden, and
 //! (behind `IPE_E2E=1`) the emitted project must build and print the value the

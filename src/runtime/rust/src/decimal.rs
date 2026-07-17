@@ -2,7 +2,7 @@
 //! on shopspring/decimal); we use `rust_decimal::Decimal` which has compatible
 //! precision (96-bit mantissa + scale).
 
-use super::SkyResult;
+use super::IpeResult;
 use rust_decimal::{Decimal as RD, prelude::FromPrimitive};
 
 /// Opaque Sky `Decimal` — newtype around rust_decimal::Decimal.
@@ -15,10 +15,10 @@ use std::str::FromStr;
 
 // Constructors
 
-pub fn decimal_from_string<E: From<String>>(s: String) -> SkyResult<E, Decimal> {
+pub fn decimal_from_string<E: From<String>>(s: String) -> IpeResult<E, Decimal> {
     match RD::from_str(&s) {
-        Ok(d) => SkyResult::Ok(Decimal(d)),
-        Err(e) => SkyResult::Err(format!("Std.Decimal: parse: {}", e).into()),
+        Ok(d) => IpeResult::Ok(Decimal(d)),
+        Err(e) => IpeResult::Err(format!("Std.Decimal: parse: {}", e).into()),
     }
 }
 pub fn decimal_from_int(n: i64) -> Decimal {
@@ -142,9 +142,9 @@ pub fn decimal_mul(a: Decimal, b: Decimal) -> Decimal {
         }
     }))
 }
-pub fn decimal_div<E: From<String>>(a: Decimal, b: Decimal) -> SkyResult<E, Decimal> {
+pub fn decimal_div<E: From<String>>(a: Decimal, b: Decimal) -> IpeResult<E, Decimal> {
     if b.0.is_zero() {
-        return SkyResult::Err("Std.Decimal: divide by zero".to_string().into());
+        return IpeResult::Err("Std.Decimal: divide by zero".to_string().into());
     }
     // checked_div, NOT the bare `/`: rust_decimal's `Div` panics ("Division
     // overflowed") on 96-bit mantissa overflow during scale-alignment — a panic
@@ -162,17 +162,17 @@ pub fn decimal_div<E: From<String>>(a: Decimal, b: Decimal) -> SkyResult<E, Deci
     // DivisionPrecision = 16 (its `Div` is `DivRound(…, 16)` with half-away-from-
     // zero rounding). Exact fractions with ≤16 dp are unaffected; non-terminating
     // quotients (1/3, 2/3, 1/7, …) round to 16 dp exactly as shopspring does.
-    SkyResult::Ok(Decimal(
+    IpeResult::Ok(Decimal(
         quotient.round_dp_with_strategy(16, RoundingStrategy::MidpointAwayFromZero),
     ))
 }
-pub fn decimal_mod<E: From<String>>(a: Decimal, b: Decimal) -> SkyResult<E, Decimal> {
+pub fn decimal_mod<E: From<String>>(a: Decimal, b: Decimal) -> IpeResult<E, Decimal> {
     if b.0.is_zero() {
-        return SkyResult::Err("Std.Decimal: mod by zero".to_string().into());
+        return IpeResult::Err("Std.Decimal: mod by zero".to_string().into());
     }
     // checked_rem, NOT the bare `%`: rust_decimal's `Rem` also panics on overflow.
     // Post zero-guard, `None` is overflow → 0 (a sound saturating remainder).
-    SkyResult::Ok(Decimal(a.0.checked_rem(b.0).unwrap_or(RD::ZERO)))
+    IpeResult::Ok(Decimal(a.0.checked_rem(b.0).unwrap_or(RD::ZERO)))
 }
 pub fn decimal_neg(d: Decimal) -> Decimal {
     Decimal(-d.0)
@@ -343,10 +343,10 @@ mod tests {
 
     #[test]
     fn test_from_string() {
-        let r: SkyResult<String, Decimal> = decimal_from_string("12.345".to_string());
-        assert!(matches!(r, SkyResult::Ok(_)));
-        let r2: SkyResult<String, Decimal> = decimal_from_string("not a number".to_string());
-        assert!(matches!(r2, SkyResult::Err(_)));
+        let r: IpeResult<String, Decimal> = decimal_from_string("12.345".to_string());
+        assert!(matches!(r, IpeResult::Ok(_)));
+        let r2: IpeResult<String, Decimal> = decimal_from_string("not a number".to_string());
+        assert!(matches!(r2, IpeResult::Err(_)));
     }
 
     #[test]
@@ -354,16 +354,16 @@ mod tests {
         assert_eq!(decimal_to_string(decimal_add(d("1.5"), d("2.25"))), "3.75");
         assert_eq!(decimal_to_string(decimal_sub(d("5"), d("2.5"))), "2.5");
         assert_eq!(decimal_to_string(decimal_mul(d("1.5"), d("4"))), "6");
-        let div: SkyResult<String, Decimal> = decimal_div(d("10"), d("4"));
+        let div: IpeResult<String, Decimal> = decimal_div(d("10"), d("4"));
         assert_eq!(
             decimal_to_string(match div {
-                SkyResult::Ok(v) => v,
+                IpeResult::Ok(v) => v,
                 _ => panic!(),
             }),
             "2.5"
         );
-        let div_zero: SkyResult<String, Decimal> = decimal_div(d("1"), d("0"));
-        assert!(matches!(div_zero, SkyResult::Err(_)));
+        let div_zero: IpeResult<String, Decimal> = decimal_div(d("1"), d("0"));
+        assert!(matches!(div_zero, IpeResult::Err(_)));
     }
 
     #[test]

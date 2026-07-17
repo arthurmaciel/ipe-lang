@@ -17,7 +17,7 @@ pub mod random;
 // `locked_set_var_if_absent` / `locked_remove_var` accessors that EVERY module
 // (always-compiled telemetry/core/file/csv/… included) must route process-env
 // access through for the reader↔mutator serialisation to hold by construction.
-// Its Sky-facing helpers return `SkyTask`/`SkyResult` (defined in `core`, no
+// Its Sky-facing helpers return `IpeTask`/`IpeResult` (defined in `core`, no
 // tokio dependency) and otherwise use only std, so it compiles without tokio.
 pub mod system;
 #[cfg(feature = "tokio")]

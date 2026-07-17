@@ -37,7 +37,7 @@ fn entry_path(root: &Path) -> PathBuf {
 
 /// skyc-0: the compiler accepts the program AND does NOT mint the spurious
 /// depth-0 over-clone closure. The pipeline stage `eta_0` must be a plain
-/// `let` value binding (`let eta_0: SkyTask`), never a capturing
+/// `let` value binding (`let eta_0: IpeTask`), never a capturing
 /// `move |eta_0|` closure — the over-clone signature.
 #[test]
 fn i225_depth0_no_overclone_skyc_accepts_lean() {

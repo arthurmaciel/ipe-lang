@@ -122,7 +122,7 @@ const BASE_CSS: &str = concat!(
 
 /// Render `view(model)` to a full HTML page and print it — the static
 /// render path (the interactive server is `live_app`).
-pub fn live_render_static<E, Model, Msg, FView>(view: FView, model: Model) -> SkyTask<E, ()>
+pub fn live_render_static<E, Model, Msg, FView>(view: FView, model: Model) -> IpeTask<E, ()>
 where
     E: Send + 'static,
     Model: Send + 'static,
@@ -134,7 +134,7 @@ where
         assign_sky_ids(&mut tree, "r");
         style_inject::apply_style_injections(&mut tree);
         println!("{}", render_page(&render_html(&tree)));
-        SkyResult::Ok(())
+        IpeResult::Ok(())
     })
 }
 
@@ -248,7 +248,7 @@ fn dev_console_banner(base: &str) -> String {
 
 // ─── live_app: axum mount + per-session TEA driver over SSE ─────────────────
 
-use crate::tea::{SkyCmd, SkySub};
+use crate::tea::{IpeCmd, IpeSub};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -320,7 +320,7 @@ fn value_to_string(v: &serde_json::Value) -> String {
 /// `page` field reflects the matched route.
 type RouteResolver<Model> = Arc<dyn Fn(Model, &str) -> Model + Send + Sync>;
 /// Boxed param resolver: a GET path → the matched route's `:name`→value params.
-type ParamResolver = Arc<dyn Fn(&str) -> crate::dict::SkyDict<String> + Send + Sync>;
+type ParamResolver = Arc<dyn Fn(&str) -> crate::dict::IpeDict<String> + Send + Sync>;
 /// Boxed route predicate: does a GET path match a declared route? (Go
 /// `matchAnyRoute` parity.) Gates the page handler's browser-noise 404 and
 /// the unrouted-GET-against-a-live-session 404 — see `page`.
@@ -402,15 +402,15 @@ impl Drop for SessionSlot {
 
 /// Fire a `Cmd`: None/Batch recurse; Perform spawns the composed task→Msg thunk
 /// and pushes the result back into the per-session loop.
-fn run_cmd<Msg: Send + 'static>(cmd: SkyCmd<Msg>, tx: &Sender<Msg>, sid: &str) {
+fn run_cmd<Msg: Send + 'static>(cmd: IpeCmd<Msg>, tx: &Sender<Msg>, sid: &str) {
     match cmd {
-        SkyCmd::None => {}
-        SkyCmd::Batch(items) => {
+        IpeCmd::None => {}
+        IpeCmd::Batch(items) => {
             for c in items {
                 run_cmd(c, tx, sid);
             }
         }
-        SkyCmd::Perform(thunk) => {
+        IpeCmd::Perform(thunk) => {
             let tx = tx.clone();
             tokio::spawn(async move {
                 let m = thunk().await;
@@ -423,7 +423,7 @@ fn run_cmd<Msg: Send + 'static>(cmd: SkyCmd<Msg>, tx: &Sender<Msg>, sid: &str) {
                 }
             });
         }
-        SkyCmd::Publish(thunk) => {
+        IpeCmd::Publish(thunk) => {
             // Inject this session's sid as the broadcast origin (Go parity:
             // liveApp.Publish sets Origin = session.sid). Fire-and-forget.
             let _ = thunk(sid);
@@ -435,7 +435,7 @@ fn run_cmd<Msg: Send + 'static>(cmd: SkyCmd<Msg>, tx: &Sender<Msg>, sid: &str) {
 /// re-evaluated each commit — Go tea_subs.go parity). When `subscriptions` is
 /// `Sub.none`, this is exercised mainly by the None arm.
 fn spawn_subs<Msg: Clone + Send + 'static>(
-    sub: SkySub<Msg>,
+    sub: IpeSub<Msg>,
     tx: &Sender<Msg>,
     handles: &mut Vec<tokio::task::JoinHandle<()>>,
 ) {
@@ -443,18 +443,18 @@ fn spawn_subs<Msg: Clone + Send + 'static>(
         h.abort();
     }
     fn go<Msg: Clone + Send + 'static>(
-        sub: SkySub<Msg>,
+        sub: IpeSub<Msg>,
         tx: &Sender<Msg>,
         handles: &mut Vec<tokio::task::JoinHandle<()>>,
     ) {
         match sub {
-            SkySub::None => {}
-            SkySub::Batch(items) => {
+            IpeSub::None => {}
+            IpeSub::Batch(items) => {
                 for s in items {
                     go(s, tx, handles);
                 }
             }
-            SkySub::Every { ms, msg } => {
+            IpeSub::Every { ms, msg } => {
                 if ms <= 0 {
                     return;
                 }
@@ -472,7 +472,7 @@ fn spawn_subs<Msg: Clone + Send + 'static>(
                 });
                 handles.push(h);
             }
-            SkySub::Source(spawn) => {
+            IpeSub::Source(spawn) => {
                 let tx = tx.clone();
                 let emit: Arc<dyn Fn(Msg) + Send + Sync> = Arc::new(move |m| {
                     let _ = tx.try_send(m);
@@ -512,12 +512,12 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
     // equality. Generated Model structs always derive PartialEq.
     Model: Clone + PartialEq + Send + 'static,
     // `Debug` is required to derive the BOUNDED Msg variant-name label for the
-    // `sky_live_msg_seconds` histogram (telemetry::variant_name). Generated Msg
+    // `ipe_live_msg_seconds` histogram (telemetry::variant_name). Generated Msg
     // enums always derive Debug, so this internal bound is always satisfiable.
     Msg: Clone + Send + std::fmt::Debug + 'static,
-    FUpdate: Fn(Msg, Model) -> (Model, SkyCmd<Msg>) + Send + Sync + 'static,
+    FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
-    FSubs: Fn(Model) -> SkySub<Msg> + Send + Sync + 'static,
+    FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
 {
     let mut sub_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
     // Initial subscriptions — Go parity (setupSubscriptions runs at session
@@ -577,7 +577,7 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
                 .model
                 .clone()
         };
-        // Msg-handling latency histogram (Go parity: sky_live_msg_seconds{name},
+        // Msg-handling latency histogram (Go parity: ipe_live_msg_seconds{name},
         // msg_logging.go). The `name` label is the BOUNDED Msg variant name
         // (finite cardinality), never a payload — see telemetry::variant_name.
         // Extracted BEFORE `update` consumes `msg`.
@@ -585,13 +585,13 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
         let msg_started = std::time::Instant::now();
         let (next, cmd) = update(msg, model);
         crate::telemetry::metric_observe(
-            "sky_live_msg_seconds",
+            "ipe_live_msg_seconds",
             &[("name", &msg_name)],
             msg_started.elapsed().as_secs_f64(),
         );
         // Borrow (not move) cmd to detect a no-command update; cmd is moved into
         // run_cmd later. Part of the `noop` signal below.
-        let cmd_is_none = matches!(cmd, SkyCmd::None);
+        let cmd_is_none = matches!(cmd, IpeCmd::None);
 
         let mut tree = view(next.clone());
         assign_sky_ids(&mut tree, "r");
@@ -614,12 +614,12 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
             e.seq += 1;
             (patches, e.seq, e.sse_tx.clone(), noop)
         };
-        // Msg counter (Go parity: sky_live_msg_total{name,outcome,noop}). All
+        // Msg counter (Go parity: ipe_live_msg_total{name,outcome,noop}). All
         // labels bounded: name = finite variant set, outcome = "ok" (this path
         // has no error channel), noop ∈ {true,false}. Emitted OUTSIDE the entry
         // lock (no registry-lock-under-entry-lock nesting).
         crate::telemetry::metric_inc(
-            "sky_live_msg_total",
+            "ipe_live_msg_total",
             &[
                 ("name", &msg_name),
                 ("outcome", "ok"),
@@ -695,9 +695,9 @@ fn normalise_base_path(raw: &str) -> String {
 }
 
 /// The session cookie name for a given (normalised) base path. At the root,
-/// `__Host-sky_sid` in secure mode (production / frame-ancestors) else `sky_sid`;
+/// `__Host-ipe_sid` in secure mode (production / frame-ancestors) else `ipe_sid`;
 /// for a sub-app a base-derived DISTINCT name so this child's session cookie can
-/// never clobber the PARENT app's `sky_sid` (both would otherwise be `Path=/` and
+/// never clobber the PARENT app's `ipe_sid` (both would otherwise be `Path=/` and
 /// share the browser's cookie jar on the proxied paths). Go gives each sub-app a
 /// distinct `cookieName` for the same reason (live.go:2769).
 ///
@@ -706,25 +706,25 @@ fn normalise_base_path(raw: &str) -> String {
 /// so it gets the `__Host-` prefix — the browser then refuses any `Set-Cookie`
 /// carrying a `Domain=` attribute, closing the sibling-subdomain cookie-tossing →
 /// session-fixation vector (an attacker on `evil.example.com` with a valid cert
-/// could otherwise plant `sky_sid` for `example.com`). `__Host-` MANDATES
+/// could otherwise plant `ipe_sid` for `example.com`). `__Host-` MANDATES
 /// Secure + Path=/ + no-Domain — `page_response` satisfies all three in secure
 /// mode (Secure flag set, root `cookie_path()` is `/`, no Domain attribute).
-/// Mirrors `csrf::csrf_cookie_name()`. Plain-HTTP dev keeps the bare `sky_sid`
+/// Mirrors `csrf::csrf_cookie_name()`. Plain-HTTP dev keeps the bare `ipe_sid`
 /// (`__Host-` requires Secure, which a browser drops over `http://`). A sub-app
 /// (Path != `/`) can never use `__Host-`, so it keeps the base-scoped name.
 fn cookie_name_for(base: &str) -> String {
     if base.is_empty() {
         if csrf::cookies_secure() {
-            "__Host-sky_sid".to_string()
+            "__Host-ipe_sid".to_string()
         } else {
-            "sky_sid".to_string()
+            "ipe_sid".to_string()
         }
     } else {
         let suffix: String = base
             .chars()
             .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
             .collect();
-        format!("sky_sid{suffix}")
+        format!("ipe_sid{suffix}")
     }
 }
 
@@ -1061,7 +1061,7 @@ async fn maybe_push_reload_to_live_sessions<Model, Msg>(
 
 /// Await the FIRST shutdown signal (SIGINT or SIGTERM), then run the graceful
 /// teardown and return so axum's `with_graceful_shutdown` drains in-flight
-/// connections and the serve future resolves `Ok(())` (→ the SkyTask is `Ok` →
+/// connections and the serve future resolves `Ok(())` (→ the IpeTask is `Ok` →
 /// the generated entry exits 0). Go parity: `live.go:3503` (the SIGINT/SIGTERM
 /// handler that prints the line, flips readyz, drains, then returns naturally).
 ///
@@ -1117,7 +1117,7 @@ where
     // connection can't hang the drain (Go's `srv.Close()` drops them outright).
     // Spawned (not awaited) so we still return immediately and let the axum drain
     // win the race when there are no long-lived connections (the common case →
-    // sub-window exit). Exit 0 keeps the SkyTask-Ok / exit-0 contract.
+    // sub-window exit). Exit 0 keeps the IpeTask-Ok / exit-0 contract.
     tokio::spawn(async {
         tokio::time::sleep(shutdown_grace()).await;
         // Defense-in-depth: kill the console child again in case it was spawned
@@ -1189,18 +1189,18 @@ pub fn live_app<E, Model, Msg, FInit, FUpdate, FView, FSubs>(
     store_kind: String,
     store_path: String,
     schema_tag: [u8; 32],
-) -> SkyTask<E, ()>
+) -> IpeTask<E, ()>
 where
     E: From<String> + Send + 'static,
     Model:
         serde::Serialize + serde::de::DeserializeOwned + Clone + PartialEq + Send + Sync + 'static,
     // Debug: forwarded through serve_live → drive_session for the
-    // sky_live_msg_seconds{name} label. Generated Msg enums always derive Debug.
+    // ipe_live_msg_seconds{name} label. Generated Msg enums always derive Debug.
     Msg: Clone + Send + Sync + std::fmt::Debug + 'static,
-    FInit: Fn(req::LiveReq) -> (Model, SkyCmd<Msg>) + Send + Sync + 'static,
-    FUpdate: Fn(Msg, Model) -> (Model, SkyCmd<Msg>) + Send + Sync + 'static,
+    FInit: Fn(req::LiveReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
+    FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
-    FSubs: Fn(Model) -> SkySub<Msg> + Send + Sync + 'static,
+    FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
 {
     Box::pin(async move {
         let store =
@@ -1244,19 +1244,19 @@ pub fn live_app_routed<E, Model, Msg, Page, FInit, FUpdate, FView, FSubs, FSetPa
     store_kind: String,
     store_path: String,
     schema_tag: [u8; 32],
-) -> SkyTask<E, ()>
+) -> IpeTask<E, ()>
 where
     E: From<String> + Send + 'static,
     Model:
         serde::Serialize + serde::de::DeserializeOwned + Clone + PartialEq + Send + Sync + 'static,
     // Debug: forwarded through serve_live → drive_session for the
-    // sky_live_msg_seconds{name} label. Generated Msg enums always derive Debug.
+    // ipe_live_msg_seconds{name} label. Generated Msg enums always derive Debug.
     Msg: Clone + Send + Sync + std::fmt::Debug + 'static,
     Page: Clone + Send + Sync + 'static,
-    FInit: Fn(req::LiveReq) -> (Model, SkyCmd<Msg>) + Send + Sync + 'static,
-    FUpdate: Fn(Msg, Model) -> (Model, SkyCmd<Msg>) + Send + Sync + 'static,
+    FInit: Fn(req::LiveReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
+    FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
-    FSubs: Fn(Model) -> SkySub<Msg> + Send + Sync + 'static,
+    FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
     FSetPage: Fn(Page, Model) -> Model + Send + Sync + 'static,
 {
     Box::pin(async move {
@@ -1380,16 +1380,16 @@ async fn serve_noise_from_static_root(path: &str) -> Option<axum::response::Resp
 /// The only per-entry difference (the `route_resolver`) lives on `state`.
 async fn serve_live<E, Model, Msg, FInit, FUpdate, FView, FSubs>(
     state: LiveState<Model, Msg, FInit, FUpdate, FView, FSubs>,
-) -> SkyResult<E, ()>
+) -> IpeResult<E, ()>
 where
     E: From<String> + Send + 'static,
     Model: Clone + PartialEq + Send + 'static,
-    // Debug: forwarded to drive_session for the sky_live_msg_seconds{name} label.
+    // Debug: forwarded to drive_session for the ipe_live_msg_seconds{name} label.
     Msg: Clone + Send + std::fmt::Debug + 'static,
-    FInit: Fn(req::LiveReq) -> (Model, SkyCmd<Msg>) + Send + Sync + 'static,
-    FUpdate: Fn(Msg, Model) -> (Model, SkyCmd<Msg>) + Send + Sync + 'static,
+    FInit: Fn(req::LiveReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
+    FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
     FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
-    FSubs: Fn(Model) -> SkySub<Msg> + Send + Sync + 'static,
+    FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
 {
     use axum::Router;
     use axum::extract::State;
@@ -1408,12 +1408,12 @@ where
         where
             Model: Clone + PartialEq + Send + 'static,
             // Debug: the GET handler creates a session and spawns drive_session,
-            // which needs the bound for the sky_live_msg_seconds{name} label.
+            // which needs the bound for the ipe_live_msg_seconds{name} label.
             Msg: Clone + Send + std::fmt::Debug + 'static,
-            FInit: Fn(req::LiveReq) -> (Model, SkyCmd<Msg>) + Send + Sync + 'static,
-            FUpdate: Fn(Msg, Model) -> (Model, SkyCmd<Msg>) + Send + Sync + 'static,
+            FInit: Fn(req::LiveReq) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
+            FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + Sync + 'static,
             FView: Fn(Model) -> Html<Msg> + Send + Sync + 'static,
-            FSubs: Fn(Model) -> SkySub<Msg> + Send + Sync + 'static,
+            FSubs: Fn(Model) -> IpeSub<Msg> + Send + Sync + 'static,
         {
             // Cookie-based session lifecycle (Go store.Get on every GET):
             //   * Live hit  → reuse the in-process session; re-apply routing for
@@ -1479,7 +1479,7 @@ where
                     // volume, so NOT rejected; but count its driver so the slot it
                     // gets below is paired (decremented on the driver's exit).
                     st.session_count.fetch_add(1, Ordering::SeqCst);
-                    (sid, (st.route_resolver)(m, uri.path()), SkyCmd::None)
+                    (sid, (st.route_resolver)(m, uri.path()), IpeCmd::None)
                 }
                 None => {
                     // Admission control (cookieless = brand-new session = the
@@ -1604,12 +1604,12 @@ where
                 entry.lock().unwrap_or_else(|e| e.into_inner()).sse_tx = Some(tx.clone());
             }
 
-            // Metrics (Go parity: sky_live_sse_connections_total /
-            // sky_live_sessions_active). Count the connection and mark the session
+            // Metrics (Go parity: ipe_live_sse_connections_total /
+            // ipe_live_sessions_active). Count the connection and mark the session
             // active; the gauge is decremented when the response body stream is
             // dropped on disconnect (the SessionGauge guard below).
-            crate::telemetry::metric_inc("sky_live_sse_connections_total", &[], 1);
-            crate::telemetry::metric_add_gauge("sky_live_sessions_active", &[], 1);
+            crate::telemetry::metric_inc("ipe_live_sse_connections_total", &[], 1);
+            crate::telemetry::metric_add_gauge("ipe_live_sessions_active", &[], 1);
 
             // Immediate hello + ~2KB proxy-buffer padding comment, then a 15s
             // heartbeat keepalive (Go parity: live.go SSE handshake).
@@ -1672,7 +1672,7 @@ where
             impl Drop for SessionGauge {
                 fn drop(&mut self) {
                     crate::telemetry::metric_add_gauge(
-                        "sky_live_sessions_active",
+                        "ipe_live_sessions_active",
                         &[],
                         -1,
                     );
@@ -2028,7 +2028,7 @@ where
         let addr = format!("0.0.0.0:{port}");
         let listener = match tokio::net::TcpListener::bind(&addr).await {
             Ok(l) => l,
-            Err(e) => return SkyResult::Err(format!("Live.app: bind {addr}: {e}").into()),
+            Err(e) => return IpeResult::Err(format!("Live.app: bind {addr}: {e}").into()),
         };
         // Bind-address line (stderr, Rust-specific — carries the 0.0.0.0 bind).
         eprintln!("[sky.live] listening on http://{addr}");
@@ -2037,21 +2037,21 @@ where
         println!("Sky.Live listening on :{port}");
         // Graceful shutdown (Go parity — live.go:3503): trap SIGINT/SIGTERM,
         // print the shutdown line, drain in-flight requests, and return cleanly so
-        // the SkyTask resolves Ok → the generated entry exits 0 (NOT 130). A
+        // the IpeTask resolves Ok → the generated entry exits 0 (NOT 130). A
         // SECOND signal force-exits 130 via the watchdog inside live_shutdown_signal.
         match axum::serve(listener, app)
             .with_graceful_shutdown(live_shutdown_signal(shutdown_store))
             .await
         {
             Ok(()) => ok_res(()),
-            Err(e) => SkyResult::Err(format!("Live.app: serve: {e}").into()),
+            Err(e) => IpeResult::Err(format!("Live.app: serve: {e}").into()),
         }
     }
 }
 
 /// Read the session cookie from request headers. Uses the base-path-aware
 /// cookie name (`session_cookie_name`) so a sub-app reads its own scoped cookie,
-/// never the parent's `sky_sid`.
+/// never the parent's `ipe_sid`.
 fn sid_from_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
     let name = session_cookie_name();
     let raw = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
@@ -2270,10 +2270,10 @@ mod base_path_tests {
 
     #[test]
     fn cookie_name_is_sky_sid_at_root_distinct_under_base() {
-        assert_eq!(cookie_name_for(""), "sky_sid");
-        // Distinct from the parent's `sky_sid` so the proxied child can't clobber it.
-        assert_eq!(cookie_name_for("/_sky/console"), "sky_sid__sky_console");
-        assert_ne!(cookie_name_for("/_sky/console"), "sky_sid");
+        assert_eq!(cookie_name_for(""), "ipe_sid");
+        // Distinct from the parent's `ipe_sid` so the proxied child can't clobber it.
+        assert_eq!(cookie_name_for("/_sky/console"), "ipe_sid__sky_console");
+        assert_ne!(cookie_name_for("/_sky/console"), "ipe_sid");
     }
 
     #[test]

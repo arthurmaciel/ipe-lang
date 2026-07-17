@@ -225,9 +225,9 @@ pub enum StdlibKernel {
     BasicsCompare,
     // ── end Basics numerics ──────────────────────────────────────────
     // ── Error (Sky.Core.Error — minimal `Error = String` slice) ─────────
-    // Message-carrying constructors: `String -> Error`. With `SkyError = String`
+    // Message-carrying constructors: `String -> Error`. With `IpeError = String`
     // the message IS the error value, so all eight collapse to one identity
-    // runtime symbol (`sky_error_from_message`); the distinct Sky-level names are
+    // runtime symbol (`ipe_error_from_message`); the distinct Sky-level names are
     // preserved for the rich-ADT upgrade.
     ErrorUnexpected,
     ErrorInvalidInput,
@@ -1095,7 +1095,7 @@ pub enum StdlibKernel {
     HttpStreamForEachChunk,
     HttpStreamClose,
     /// `Http.Stream.chunks sid toMsg` — subscribes to stream chunks; returns `Sub msg`.
-    /// Classified as TEA (not server) because it returns `SkySub<M>`.
+    /// Classified as TEA (not server) because it returns `IpeSub<M>`.
     HttpStreamChunks,
     // ── Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
     WsDefaultCfg,           // WebSocketServerCfg (arity 0)
@@ -1344,7 +1344,7 @@ pub enum StdlibKernel {
     SecretReveal,
     /// `Secret.redacted : Secret -> String` — explicit `"<redacted>"` (also
     /// what `toString` / interpolation gives automatically — see
-    /// `ipe_runtime::secret`'s hand-written `SkyStringify` impl).
+    /// `ipe_runtime::secret`'s hand-written `IpeStringify` impl).
     SecretRedacted,
 
     // ── Sky.Core.Regex — RE2 helpers ──────────────────────────────────
@@ -1595,7 +1595,7 @@ impl StdlibKernel {
             Self::ListTake => d("List", "take", 2, Pure, "list_take"),
             Self::ListDrop => d("List", "drop", 2, Pure, "list_drop"),
             Self::ListZip => d("List", "zip", 2, Pure, "list_zip"),
-            Self::ListCons => d("List", "cons", 2, Pure, "sky_list_cons"),
+            Self::ListCons => d("List", "cons", 2, Pure, "ipe_list_cons"),
             Self::ListIsEmpty => d("List", "isEmpty", 1, Pure, "list_is_empty"),
             Self::ListConcatMap => d("List", "concatMap", 2, Pure, "list_concat_map"),
             Self::ListIndexedMap => d("List", "indexedMap", 2, Pure, "list_indexed_map"),
@@ -1623,32 +1623,32 @@ impl StdlibKernel {
             // ── end Basics numerics ──────────────────────────────────────
             // ── Error (Sky.Core.Error — real Error/ErrorKind ADT) ──
             // Each message constructor classifies its own `ErrorKind` at
-            // construction (`ipe_runtime::error::SkyError`, no longer a
+            // construction (`ipe_runtime::error::IpeError`, no longer a
             // shared string-identity). `toString` reuses the existing
             // `errorToString` runtime (`basics_error_to_string`).
-            Self::ErrorUnexpected => d("Error", "unexpected", 1, Pure, "sky_error_unexpected"),
+            Self::ErrorUnexpected => d("Error", "unexpected", 1, Pure, "ipe_error_unexpected"),
             Self::ErrorInvalidInput => {
-                d("Error", "invalidInput", 1, Pure, "sky_error_invalid_input")
+                d("Error", "invalidInput", 1, Pure, "ipe_error_invalid_input")
             }
-            Self::ErrorIo => d("Error", "io", 1, Pure, "sky_error_io"),
-            Self::ErrorNetwork => d("Error", "network", 1, Pure, "sky_error_network"),
-            Self::ErrorFfi => d("Error", "ffi", 1, Pure, "sky_error_ffi"),
-            Self::ErrorDecode => d("Error", "decode", 1, Pure, "sky_error_decode"),
-            Self::ErrorConflict => d("Error", "conflict", 1, Pure, "sky_error_conflict"),
-            Self::ErrorUnavailable => d("Error", "unavailable", 1, Pure, "sky_error_unavailable"),
-            Self::ErrorTimeout => d("Error", "timeout", 0, Pure, "sky_error_timeout"),
-            Self::ErrorNotFound => d("Error", "notFound", 0, Pure, "sky_error_not_found"),
+            Self::ErrorIo => d("Error", "io", 1, Pure, "ipe_error_io"),
+            Self::ErrorNetwork => d("Error", "network", 1, Pure, "ipe_error_network"),
+            Self::ErrorFfi => d("Error", "ffi", 1, Pure, "ipe_error_ffi"),
+            Self::ErrorDecode => d("Error", "decode", 1, Pure, "ipe_error_decode"),
+            Self::ErrorConflict => d("Error", "conflict", 1, Pure, "ipe_error_conflict"),
+            Self::ErrorUnavailable => d("Error", "unavailable", 1, Pure, "ipe_error_unavailable"),
+            Self::ErrorTimeout => d("Error", "timeout", 0, Pure, "ipe_error_timeout"),
+            Self::ErrorNotFound => d("Error", "notFound", 0, Pure, "ipe_error_not_found"),
             Self::ErrorPermissionDenied => d(
                 "Error",
                 "permissionDenied",
                 0,
                 Pure,
-                "sky_error_permission_denied",
+                "ipe_error_permission_denied",
             ),
             Self::ErrorToString => d("Error", "toString", 1, Pure, "basics_error_to_string"),
-            Self::ErrorWithMessage => d("Error", "withMessage", 2, Pure, "sky_error_with_message"),
-            Self::ErrorIsRetryable => d("Error", "isRetryable", 1, Pure, "sky_error_is_retryable"),
-            Self::ErrorWithDetails => d("Error", "withDetails", 2, Pure, "sky_error_with_details"),
+            Self::ErrorWithMessage => d("Error", "withMessage", 2, Pure, "ipe_error_with_message"),
+            Self::ErrorIsRetryable => d("Error", "isRetryable", 1, Pure, "ipe_error_is_retryable"),
+            Self::ErrorWithDetails => d("Error", "withDetails", 2, Pure, "ipe_error_with_details"),
             // ── CssSafety (Sky.Core.CssSafety — Std.Css leaf kernels) ────
             // The `emit` symbols are the bare runtime fn names re-exported at the
             // `ipe_runtime` root (`pub use css::*`): `safe_value` /
@@ -1667,8 +1667,8 @@ impl StdlibKernel {
             ),
             // ── Maybe ───────────────────────────────────────────────────────
             Self::MaybeWithDefault => d("Maybe", "withDefault", 2, Pure, "maybe_with_default"),
-            Self::MaybeMap => d("Maybe", "map", 2, Pure, "sky_maybe_map"),
-            Self::MaybeAndThen => d("Maybe", "andThen", 2, Pure, "sky_maybe_and_then"),
+            Self::MaybeMap => d("Maybe", "map", 2, Pure, "ipe_maybe_map"),
+            Self::MaybeAndThen => d("Maybe", "andThen", 2, Pure, "ipe_maybe_and_then"),
             // `mapN` arity = 1 (fn) + N containers; `andMap` = 2; `combine` = 1.
             Self::MaybeMap2 => d("Maybe", "map2", 3, Pure, "maybe_map2"),
             Self::MaybeMap3 => d("Maybe", "map3", 4, Pure, "maybe_map3"),
@@ -1678,9 +1678,9 @@ impl StdlibKernel {
             Self::MaybeCombine => d("Maybe", "combine", 1, Pure, "maybe_combine"),
             // ── Result ──────────────────────────────────────────────────────
             Self::ResultWithDefault => d("Result", "withDefault", 2, Pure, "result_with_default"),
-            Self::ResultMap => d("Result", "map", 2, Pure, "sky_result_map"),
-            Self::ResultAndThen => d("Result", "andThen", 2, Pure, "sky_result_and_then"),
-            Self::ResultMapError => d("Result", "mapError", 2, Pure, "sky_result_map_error"),
+            Self::ResultMap => d("Result", "map", 2, Pure, "ipe_result_map"),
+            Self::ResultAndThen => d("Result", "andThen", 2, Pure, "ipe_result_and_then"),
+            Self::ResultMapError => d("Result", "mapError", 2, Pure, "ipe_result_map_error"),
             Self::ResultMap2 => d("Result", "map2", 3, Pure, "result_map2"),
             Self::ResultMap3 => d("Result", "map3", 4, Pure, "result_map3"),
             Self::ResultMap4 => d("Result", "map4", 5, Pure, "result_map4"),
@@ -1770,13 +1770,13 @@ impl StdlibKernel {
             // ── Encoding ────────────────────────────────────────────────────
             Self::EncodingBase64Encode => d("Encoding", "base64Encode", 1, Pure, "base64_encode"),
             Self::EncodingBase64Decode => {
-                d("Encoding", "base64Decode", 1, Pure, "sky_base64_decode")
+                d("Encoding", "base64Decode", 1, Pure, "ipe_base64_decode")
             }
             Self::EncodingUrlEncode => d("Encoding", "urlEncode", 1, Pure, "url_encode"),
-            Self::EncodingUrlDecode => d("Encoding", "urlDecode", 1, Pure, "sky_url_decode"),
+            Self::EncodingUrlDecode => d("Encoding", "urlDecode", 1, Pure, "ipe_url_decode"),
             Self::EncodingHexEncode => d("Encoding", "hexEncode", 1, Pure, "encoding_hex_encode"),
             Self::EncodingHexDecode => {
-                d("Encoding", "hexDecode", 1, Pure, "sky_encoding_hex_decode")
+                d("Encoding", "hexDecode", 1, Pure, "ipe_encoding_hex_decode")
             }
             // ── Json.Encode ─────────────────────────────────────────────────
             Self::JsonEncString => d("JsonEnc", "string", 1, Pure, "json_enc_string"),
@@ -1838,7 +1838,7 @@ impl StdlibKernel {
                 "rsaSha256Sign",
                 2,
                 Pure,
-                "sky_crypto_rsa_sha256_sign",
+                "ipe_crypto_rsa_sha256_sign",
             ),
             Self::CryptoRsaSha256Verify => d(
                 "Crypto",
@@ -1855,20 +1855,20 @@ impl StdlibKernel {
                 "crypto_constant_time_equal",
             ),
             // AEAD arity is 2 (key, plaintext/ciphertext): the Rust runtime
-            // (`sky_aes_gcm_encrypt(key, plaintext)` etc.) prepends/strips a
+            // (`ipe_aes_gcm_encrypt(key, plaintext)` etc.) prepends/strips a
             // fresh random nonce internally, so — unlike the Go backend which
             // took an explicit nonce/AAD arg — there is no third argument.
             Self::CryptoAesGcmEncrypt => {
-                d("Crypto", "aesGcmEncrypt", 2, Pure, "sky_aes_gcm_encrypt")
+                d("Crypto", "aesGcmEncrypt", 2, Pure, "ipe_aes_gcm_encrypt")
             }
             Self::CryptoAesGcmDecrypt => {
-                d("Crypto", "aesGcmDecrypt", 2, Pure, "sky_aes_gcm_decrypt")
+                d("Crypto", "aesGcmDecrypt", 2, Pure, "ipe_aes_gcm_decrypt")
             }
             Self::CryptoChacha20Encrypt => {
-                d("Crypto", "chacha20Encrypt", 2, Pure, "sky_chacha20_encrypt")
+                d("Crypto", "chacha20Encrypt", 2, Pure, "ipe_chacha20_encrypt")
             }
             Self::CryptoChacha20Decrypt => {
-                d("Crypto", "chacha20Decrypt", 2, Pure, "sky_chacha20_decrypt")
+                d("Crypto", "chacha20Decrypt", 2, Pure, "ipe_chacha20_decrypt")
             }
             Self::CryptoAesKeyFromPassword => d(
                 "Crypto",
@@ -1897,26 +1897,26 @@ impl StdlibKernel {
             Self::UuidParse => d("Uuid", "parse", 1, Pure, "uuid_parse"),
             // ── Jwt ─────────────────────────────────────────────────────────
             // Encode arity is 2 (secret/key, claims_json): the Rust runtime
-            // `sky_jwt_encode_hs256(secret, claims_json)` / `_rs256(key_pem,
+            // `ipe_jwt_encode_hs256(secret, claims_json)` / `_rs256(key_pem,
             // claims_json)` take exactly two args.
-            Self::JwtEncodeHs256 => d("Jwt", "encodeHs256", 2, Pure, "sky_jwt_encode_hs256"),
-            Self::JwtDecodeHs256 => d("Jwt", "decodeHs256", 2, Pure, "sky_jwt_decode_hs256"),
-            Self::JwtEncodeRs256 => d("Jwt", "encodeRs256", 2, Pure, "sky_jwt_encode_rs256"),
-            Self::JwtDecodeRs256 => d("Jwt", "decodeRs256", 2, Pure, "sky_jwt_decode_rs256"),
+            Self::JwtEncodeHs256 => d("Jwt", "encodeHs256", 2, Pure, "ipe_jwt_encode_hs256"),
+            Self::JwtDecodeHs256 => d("Jwt", "decodeHs256", 2, Pure, "ipe_jwt_decode_hs256"),
+            Self::JwtEncodeRs256 => d("Jwt", "encodeRs256", 2, Pure, "ipe_jwt_encode_rs256"),
+            Self::JwtDecodeRs256 => d("Jwt", "decodeRs256", 2, Pure, "ipe_jwt_decode_rs256"),
             // ── Jwt builder API ──────────────────────────────────
-            Self::JwtClaims => d("Jwt", "claims", 0, Pure, "sky_jwt_claims"),
-            Self::JwtHs256 => d("Jwt", "hs256", 1, Pure, "sky_jwt_hs256"),
-            Self::JwtRs256 => d("Jwt", "rs256", 1, Pure, "sky_jwt_rs256"),
-            Self::JwtSubject => d("Jwt", "subject", 2, Pure, "sky_jwt_subject"),
-            Self::JwtIssuer => d("Jwt", "issuer", 2, Pure, "sky_jwt_issuer"),
-            Self::JwtAudience => d("Jwt", "audience", 2, Pure, "sky_jwt_audience"),
-            Self::JwtExpiresAt => d("Jwt", "expiresAt", 2, Pure, "sky_jwt_expires_at"),
-            Self::JwtNotBefore => d("Jwt", "notBefore", 2, Pure, "sky_jwt_not_before"),
-            Self::JwtIssuedAt => d("Jwt", "issuedAt", 2, Pure, "sky_jwt_issued_at"),
-            Self::JwtJwtId => d("Jwt", "jwtId", 2, Pure, "sky_jwt_jwt_id"),
-            Self::JwtWithClaim => d("Jwt", "withClaim", 3, Pure, "sky_jwt_with_claim"),
-            Self::JwtEncode => d("Jwt", "encode", 2, Pure, "sky_jwt_encode"),
-            Self::JwtDecode => d("Jwt", "decode", 3, Pure, "sky_jwt_decode"),
+            Self::JwtClaims => d("Jwt", "claims", 0, Pure, "ipe_jwt_claims"),
+            Self::JwtHs256 => d("Jwt", "hs256", 1, Pure, "ipe_jwt_hs256"),
+            Self::JwtRs256 => d("Jwt", "rs256", 1, Pure, "ipe_jwt_rs256"),
+            Self::JwtSubject => d("Jwt", "subject", 2, Pure, "ipe_jwt_subject"),
+            Self::JwtIssuer => d("Jwt", "issuer", 2, Pure, "ipe_jwt_issuer"),
+            Self::JwtAudience => d("Jwt", "audience", 2, Pure, "ipe_jwt_audience"),
+            Self::JwtExpiresAt => d("Jwt", "expiresAt", 2, Pure, "ipe_jwt_expires_at"),
+            Self::JwtNotBefore => d("Jwt", "notBefore", 2, Pure, "ipe_jwt_not_before"),
+            Self::JwtIssuedAt => d("Jwt", "issuedAt", 2, Pure, "ipe_jwt_issued_at"),
+            Self::JwtJwtId => d("Jwt", "jwtId", 2, Pure, "ipe_jwt_jwt_id"),
+            Self::JwtWithClaim => d("Jwt", "withClaim", 3, Pure, "ipe_jwt_with_claim"),
+            Self::JwtEncode => d("Jwt", "encode", 2, Pure, "ipe_jwt_encode"),
+            Self::JwtDecode => d("Jwt", "decode", 3, Pure, "ipe_jwt_decode"),
             // ── Task combinators ────────────────────────────────────────────
             Self::TaskSucceed => d("Task", "succeed", 1, Pure, "task_succeed"),
             Self::TaskFail => d("Task", "fail", 1, Pure, "task_fail"),

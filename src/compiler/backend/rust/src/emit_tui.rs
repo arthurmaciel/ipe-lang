@@ -232,7 +232,7 @@ fn emit_tui_inner(
 ///   fields not supplied by `tuiKeyToSky`.
 ///
 /// Rationale for the default-fill approach: the Haskell compiler's Go backend
-/// handles the `KeyEvent → Msg` bridge via reflection (`SkyCall`), which
+/// handles the `KeyEvent → Msg` bridge via reflection (`IpeCall`), which
 /// zero-initialises fields not present in the runtime struct.  The Rust port
 /// replicates that contract statically at code-generation time.
 fn emit_tui_on_key(

@@ -1,6 +1,6 @@
 //! The STRINGIFY obligation (`Basics.toString : a -> String`, the shared
 //! lever for the whole Stringify-bounded family). The argument carries a bounded
-//! super-var → Rust `SkyStringify`. A scalar / record / ADT satisfies it; a bare
+//! super-var → Rust `IpeStringify`. A scalar / record / ADT satisfies it; a bare
 //! function is rejected AT TYPE-CHECK (fail-closed), never emitting an unbounded
 //! `basics_to_string::<T>` that `cargo` would reject — the seal is preserved.
 //!

@@ -10,8 +10,8 @@
 //! screen) on Drop — normal exit AND panic unwind — so no path leaves the
 //! terminal wedged. Raw-mode failure returns `Err`; `TERM=dumb` is refused.
 
-use super::super::core::{SkyResult, SkyTask, ok_res};
-use super::super::tea::{CliEvent, SkyCmd, SkySub, SubManager, cli_run_cmd};
+use super::super::core::{IpeResult, IpeTask, ok_res};
+use super::super::tea::{CliEvent, IpeCmd, IpeSub, SubManager, cli_run_cmd};
 use super::super::ui::Element;
 use super::focus::{
     Focusable, InputRegistry, clamp_focus, edit_input, ensure_focus_visible, extract_click_msg,
@@ -251,20 +251,20 @@ fn tui_run<Model, Msg, E, FInit, FUpdate, FSubs, FOnKey, FRender>(
     subscriptions: FSubs,
     on_key: FOnKey,
     render_frame: FRender,
-) -> SkyTask<E, ()>
+) -> IpeTask<E, ()>
 where
     E: Send + From<String> + 'static,
     Model: Clone + Send + 'static,
     Msg: Clone + Send + 'static,
-    FInit: Fn(()) -> (Model, SkyCmd<Msg>) + Send + 'static,
-    FUpdate: Fn(Msg, Model) -> (Model, SkyCmd<Msg>) + Send + 'static,
-    FSubs: Fn(Model) -> SkySub<Msg> + Send + 'static,
+    FInit: Fn(()) -> (Model, IpeCmd<Msg>) + Send + 'static,
+    FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + 'static,
+    FSubs: Fn(Model) -> IpeSub<Msg> + Send + 'static,
     FOnKey: Fn(String, String) -> Msg + Send + 'static,
     FRender: Fn(&Model) -> String + Send + 'static,
 {
     Box::pin(async move {
         if crate::system::read_env_var("TERM").as_deref() == Ok("dumb") {
-            return SkyResult::Err(
+            return IpeResult::Err(
                 "Tui: TERM=dumb is not an interactive terminal"
                     .to_string()
                     .into(),
@@ -272,7 +272,7 @@ where
         }
         let _guard = match TuiGuard::enter() {
             Ok(g) => g,
-            Err(e) => return SkyResult::Err(e.into()),
+            Err(e) => return IpeResult::Err(e.into()),
         };
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<CliEvent<Msg>>();
@@ -319,15 +319,15 @@ pub fn tui_app<Model, Msg, E, FInit, FUpdate, FView, FSubs, FOnKey>(
     view: FView,
     subscriptions: FSubs,
     on_key: FOnKey,
-) -> SkyTask<E, ()>
+) -> IpeTask<E, ()>
 where
     E: Send + From<String> + 'static,
     Model: Clone + Send + 'static,
     Msg: Clone + Send + 'static,
-    FInit: Fn(()) -> (Model, SkyCmd<Msg>) + Send + 'static,
-    FUpdate: Fn(Msg, Model) -> (Model, SkyCmd<Msg>) + Send + 'static,
+    FInit: Fn(()) -> (Model, IpeCmd<Msg>) + Send + 'static,
+    FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + 'static,
     FView: Fn(Model) -> String + Send + 'static,
-    FSubs: Fn(Model) -> SkySub<Msg> + Send + 'static,
+    FSubs: Fn(Model) -> IpeSub<Msg> + Send + 'static,
     FOnKey: Fn(String, String) -> Msg + Send + 'static,
 {
     tui_run(init, update, subscriptions, on_key, move |m: &Model| {
@@ -389,20 +389,20 @@ pub fn tui_app_ui<Model, Msg, E, FInit, FUpdate, FView, FSubs, FOnKey>(
     view: FView,
     subscriptions: FSubs,
     on_key: FOnKey,
-) -> SkyTask<E, ()>
+) -> IpeTask<E, ()>
 where
     E: Send + From<String> + 'static,
     Model: Clone + Send + 'static,
     Msg: Clone + Send + 'static,
-    FInit: Fn(()) -> (Model, SkyCmd<Msg>) + Send + 'static,
-    FUpdate: Fn(Msg, Model) -> (Model, SkyCmd<Msg>) + Send + 'static,
+    FInit: Fn(()) -> (Model, IpeCmd<Msg>) + Send + 'static,
+    FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + 'static,
     FView: Fn(Model) -> Element<Msg> + Send + 'static,
-    FSubs: Fn(Model) -> SkySub<Msg> + Send + 'static,
+    FSubs: Fn(Model) -> IpeSub<Msg> + Send + 'static,
     FOnKey: Fn(String, String) -> Msg + Send + 'static,
 {
     Box::pin(async move {
         if crate::system::read_env_var("TERM").as_deref() == Ok("dumb") {
-            return SkyResult::Err(
+            return IpeResult::Err(
                 "Tui: TERM=dumb is not an interactive terminal"
                     .to_string()
                     .into(),
@@ -410,7 +410,7 @@ where
         }
         let _guard = match TuiGuard::enter_mouse() {
             Ok(g) => g,
-            Err(e) => return SkyResult::Err(e.into()),
+            Err(e) => return IpeResult::Err(e.into()),
         };
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<CliEvent<Msg>>();

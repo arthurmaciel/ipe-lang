@@ -51,7 +51,7 @@ pub fn ffi_call_pure_polyfill<T, A>(name: String, _args: Vec<A>) -> T {
 pub fn ffi_call_task_polyfill<T, A>(name: String, _args: Vec<A>) -> T {
     panic!(
         "Ffi.callTask {:?}: dynamic dispatch is not supported on target=rust \
-         BY DESIGN. A string -> SkyTask<E, a> registry would need a runtime \
+         BY DESIGN. A string -> IpeTask<E, a> registry would need a runtime \
          reflection / `Box<dyn Any>` surface (Go's `%v`-string registry) to \
          return an unconstrained generic — exactly the dynamism this backend \
          exists to refuse, and it cannot be made total. Use a string-literal \

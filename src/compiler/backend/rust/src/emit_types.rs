@@ -1,4 +1,4 @@
-//! Type emission: user enums and their `SkyStringify` impls, plus
+//! Type emission: user enums and their `IpeStringify` impls, plus
 //! IR-type → Rust-type rendering.
 //!
 //! Ports the relevant arms of `Sky/Generate/Rust/Builder/TypeEmitter.hs`
@@ -72,18 +72,18 @@ impl<'a> GenericScope<'a> {
 #[allow(clippy::too_many_lines)]
 pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResult<String> {
     Ok(match ty {
-        IrType::Order => "ipe_runtime::basics::SkyOrder".to_owned(),
+        IrType::Order => "ipe_runtime::basics::IpeOrder".to_owned(),
         IrType::Decimal => "ipe_runtime::decimal::Decimal".to_owned(),
-        IrType::ErrorKind => "ipe_runtime::error::SkyErrorKind".to_owned(),
-        IrType::Error => "ipe_runtime::error::SkyError".to_owned(),
-        IrType::ErrorDetails => "ipe_runtime::error::SkyErrorDetails".to_owned(),
+        IrType::ErrorKind => "ipe_runtime::error::IpeErrorKind".to_owned(),
+        IrType::Error => "ipe_runtime::error::IpeError".to_owned(),
+        IrType::ErrorDetails => "ipe_runtime::error::IpeErrorDetails".to_owned(),
         // The NOMINAL error-payload types (SEAL fix): rendered as
         // the runtime's concrete structs, so a pattern-bound payload and any
         // position naming these types agree on ONE Rust type — never a
         // project-local synthesized record struct.
-        IrType::ErrorInfo => "ipe_runtime::error::SkyErrorInfo".to_owned(),
-        IrType::PanicInfo => "ipe_runtime::error::SkyPanicInfo".to_owned(),
-        IrType::TypeInfo => "ipe_runtime::error::SkyTypeInfo".to_owned(),
+        IrType::ErrorInfo => "ipe_runtime::error::IpeErrorInfo".to_owned(),
+        IrType::PanicInfo => "ipe_runtime::error::IpePanicInfo".to_owned(),
+        IrType::TypeInfo => "ipe_runtime::error::IpeTypeInfo".to_owned(),
         IrType::SqlFragment => "ipe_runtime::db::SqlFragment".to_owned(),
         IrType::Secret => "ipe_runtime::secret::Secret".to_owned(),
         IrType::Int => "i64".to_owned(),
@@ -92,31 +92,31 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::Str => "String".to_owned(),
         IrType::Char => "char".to_owned(),
         IrType::Unit => "()".to_owned(),
-        IrType::Task(inner) => format!("SkyTask<{}>", render_type(ctx, inner, generics)?),
+        IrType::Task(inner) => format!("IpeTask<{}>", render_type(ctx, inner, generics)?),
         IrType::Enum { home, name, args } => {
             // Special-case builtin Http.Stream ADTs that are NOT registered as
             // synthetic `EnumDef`s but appear in user type annotations.
             //
             // `ChunkEvent` is generic over the error type (`E` = always
-            // `SkyError` in practice) — we bake the concrete type arg in here
+            // `IpeError` in practice) — we bake the concrete type arg in here
             // rather than propagating it through the IrType layer (the Sky
             // user sees `ChunkEvent` as a non-generic type; the `E` channel is
             // invisible to user code).
             //
             // `StreamId` is handled by the `enum_name` override in `EmitCtx`
-            // (returns `"SkyStreamId"`), so it falls through to the normal
+            // (returns `"IpeStreamId"`), so it falls through to the normal
             // non-generic path below.
             if home.0.is_empty() && args.is_empty() && ctx.resolve_ident(*name) == Ok("ChunkEvent")
             {
-                return Ok("ChunkEvent<SkyError>".to_owned());
+                return Ok("ChunkEvent<IpeError>".to_owned());
             }
             // `Std.Cache.Cache k v` is backed by the NON-generic runtime
-            // enum `SkyCacheHandle` — drop the phantom `k`/`v` args (they live
+            // enum `IpeCacheHandle` — drop the phantom `k`/`v` args (they live
             // only on the kernel calls), else the render would emit an invalid
-            // `SkyCacheHandle<T1, T2>` (E0107). `enum_name` returns the runtime
+            // `IpeCacheHandle<T1, T2>` (E0107). `enum_name` returns the runtime
             // name; here we skip appending the arg list.
             if ctx.is_cache_handle_type(home, *name) {
-                return Ok("SkyCacheHandle".to_owned());
+                return Ok("IpeCacheHandle".to_owned());
             }
             let base = ctx.enum_name(home, *name)?.to_owned();
             if args.is_empty() {
@@ -133,9 +133,9 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // The built-in `Maybe a` / `Result e a` render to the runtime's shared
         // representations, brought into scope by the emitted crate's
         // `pub use ipe_runtime::*`.
-        IrType::Maybe(elem) => format!("SkyMaybe<{}>", render_type(ctx, elem, generics)?),
+        IrType::Maybe(elem) => format!("IpeMaybe<{}>", render_type(ctx, elem, generics)?),
         IrType::Result(err, ok) => format!(
-            "SkyResult<{}, {}>",
+            "IpeResult<{}, {}>",
             render_type(ctx, err, generics)?,
             render_type(ctx, ok, generics)?
         ),
@@ -158,7 +158,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // in the emitted crate).
         IrType::Json => "JsonVal".to_owned(),
         // `Decoder<T>` is the JSON decoder type, aliased in the emitted project's
-        // preamble as `pub type Decoder<T> = ipe_runtime::json::Decoder<SkyError, T>`.
+        // preamble as `pub type Decoder<T> = ipe_runtime::json::Decoder<IpeError, T>`.
         //
         // when the DECODED VALUE is itself a function (`Decoder (a -> b)` —
         // e.g. the accumulator of a `succeed Ctor |> required …` pipeline, or a
@@ -181,12 +181,12 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // `Db` is the opaque database connection pool type, re-exported from the
         // runtime as `pub use ipe_runtime::Db;` in the emitted crate preamble.
         IrType::Db => "Db".to_owned(),
-        // `SkyCmd<M>` / `SkySub<M>` are the opaque TEA command and subscription
+        // `IpeCmd<M>` / `IpeSub<M>` are the opaque TEA command and subscription
         // types, aliased in the emitted project's preamble as
-        // `pub type SkyCmd<M> = ipe_runtime::tea::SkyCmd<M>` and
-        // `pub type SkySub<M> = ipe_runtime::tea::SkySub<M>`.
-        IrType::Cmd(inner) => format!("SkyCmd<{}>", render_type(ctx, inner, generics)?),
-        IrType::Sub(inner) => format!("SkySub<{}>", render_type(ctx, inner, generics)?),
+        // `pub type IpeCmd<M> = ipe_runtime::tea::IpeCmd<M>` and
+        // `pub type IpeSub<M> = ipe_runtime::tea::IpeSub<M>`.
+        IrType::Cmd(inner) => format!("IpeCmd<{}>", render_type(ctx, inner, generics)?),
+        IrType::Sub(inner) => format!("IpeSub<{}>", render_type(ctx, inner, generics)?),
         // Opaque server types — render to their ipe_runtime names directly.
         IrType::ServerRequest => "ServerRequest".to_owned(),
         IrType::ServerResponse => "ServerResponse".to_owned(),
@@ -198,7 +198,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::HttpRequest => "HttpRequest".to_owned(),
         // Sky.Http.Server.WebSocket opaque handles.
         IrType::WebSocketServer => "WsHandle".to_owned(),
-        IrType::WebSocketServerCfg => "WsServerCfg<SkyError>".to_owned(),
+        IrType::WebSocketServerCfg => "WsServerCfg<IpeError>".to_owned(),
         // Std.Cache config / stats records — re-exported (ungated) from
         // ipe_runtime::cache, so the bare name resolves via the crate glob use.
         IrType::CacheCfg => "CacheCfg".to_owned(),
@@ -265,20 +265,20 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         }
         IrType::Record(fields) => ctx.render_record_use(fields, generics)?,
         // Handler-arrow special case: `Request -> Task Error Response` must
-        // render as `ServerHandler<SkyError>` (an Arc<dyn Fn> alias defined in
+        // render as `ServerHandler<IpeError>` (an Arc<dyn Fn> alias defined in
         // the runtime), not as a generic `Box<dyn Fn + Send + 'static>`.  This
         // arm MUST appear before the generic `Fun` arm so it takes priority.
         IrType::Fun(params, ret)
             if matches!(params.as_slice(), [IrType::ServerRequest])
                 && matches!(ret.as_ref(), IrType::Task(inner) if matches!(inner.as_ref(), IrType::ServerResponse)) =>
         {
-            "ServerHandler<SkyError>".to_owned()
+            "ServerHandler<IpeError>".to_owned()
         }
         // WsServerCfg callback fields store Arc<dyn Fn + Send + Sync>; emit the
         // matching type so the WS adapter functions compile.  The three shapes are:
-        //   onConnect / onClose  →  Fn(WsHandle) -> SkyTask<()>
-        //   onMessage            →  Fn(WsHandle, String) -> SkyTask<()>
-        //   onError              →  Fn(WsHandle, Error)  -> SkyTask<()>
+        //   onConnect / onClose  →  Fn(WsHandle) -> IpeTask<()>
+        //   onMessage            →  Fn(WsHandle, String) -> IpeTask<()>
+        //   onError              →  Fn(WsHandle, Error)  -> IpeTask<()>
         // `onError`'s second param is the error type, NOT String — its runtime
         // setter `ws_server_with_on_error` takes `Arc<dyn Fn(WsHandle, E) -> …>`,
         // so it MUST render as `Arc<…>` here (and box with `Arc::new` in
@@ -396,7 +396,7 @@ fn render_fn_once_chain(
     Ok(acc)
 }
 
-/// Emit an enum and its derived `SkyStringify` impl, including the trailing
+/// Emit an enum and its derived `IpeStringify` impl, including the trailing
 /// newline.
 ///
 /// A nullary-only, non-generic enum emits byte-identically to the
@@ -407,8 +407,8 @@ fn render_fn_once_chain(
 ///     Increment,
 ///     Decrement,
 /// }
-/// impl SkyStringify for MainMsg {
-///     fn sky_show(&self) -> String {
+/// impl IpeStringify for MainMsg {
+///     fn ipe_show(&self) -> String {
 ///         match self {
 ///             MainMsg::Increment => "Increment".to_string(),
 ///             MainMsg::Decrement => "Decrement".to_string(),
@@ -418,7 +418,7 @@ fn render_fn_once_chain(
 /// ```
 ///
 /// A payload-carrying and/or generic enum gains tuple-variant payloads, a
-/// `<T1, …>` clause on the enum and its impl, and `SkyStringify` arms that bind
+/// `<T1, …>` clause on the enum and its impl, and `IpeStringify` arms that bind
 /// each payload field and render it through the total autoref dispatch — mirroring
 /// the Go-reference Rust backend's `skyStringifyEnumImpl`:
 /// ```text
@@ -427,8 +427,8 @@ fn render_fn_once_chain(
 ///     Just(T1),
 ///     Nothing,
 /// }
-/// impl<T1: SkyStringify + std::fmt::Debug> SkyStringify for MainMaybe<T1> {
-///     fn sky_show(&self) -> String {
+/// impl<T1: IpeStringify + std::fmt::Debug> IpeStringify for MainMaybe<T1> {
+///     fn ipe_show(&self) -> String {
 ///         match self {
 ///             MainMaybe::Just(p0) => format!("Just {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch()),
 ///             MainMaybe::Nothing => "Nothing".to_string(),
@@ -461,7 +461,7 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
     let mut variant_lines = Vec::with_capacity(def.variants.len());
     let mut show_arms = Vec::with_capacity(def.variants.len());
     for variant in &def.variants {
-        // The Rust variant ident is keyword-mangled; the `sky_show` string keeps
+        // The Rust variant ident is keyword-mangled; the `ipe_show` string keeps
         // the original Sky name so a variant like `Type` still displays as
         // "Type", not "Type_". For non-keyword variants the two coincide, so the
         // golden stays byte-identical.
@@ -491,14 +491,14 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
                     // `binder` is a `match self` binder → already a `&FieldType`,
                     // so `Wrap(binder)` carries the reference the dispatch
                     // expects. Sound because a derivable field type impls
-                    // `SkyStringify` or `Debug` (the autoref fallback).
+                    // `IpeStringify` or `Debug` (the autoref fallback).
                     show_args.push(format!(
                         "(&ipe_runtime::stringify::Wrap({binder})).dispatch()"
                     ));
                     binders.push(binder);
                 } else {
                     // seal: a non-derivable payload (a function / opaque
-                    // wrapper) impls neither `SkyStringify` nor `Debug`, so the
+                    // wrapper) impls neither `IpeStringify` nor `Debug`, so the
                     // autoref `.dispatch()` would not resolve (E0599). Bind it
                     // with `_` and render a `<fn>` placeholder — these carry no
                     // user-visible data, matching the reference backend.
@@ -520,7 +520,7 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
     let variants = variant_lines.join("\n");
     let arms = show_arms.join("\n");
 
-    // Generic clauses: `<T1, T2>` on the enum, `<T1: SkyStringify + Debug, …>` on
+    // Generic clauses: `<T1, T2>` on the enum, `<T1: IpeStringify + Debug, …>` on
     // the impl, `<T1, T2>` on the impl's `for` type. All empty when the enum is
     // non-generic, so that path emits no generic clause.
     let params: Vec<String> = (1..=def.type_params.len())
@@ -531,7 +531,7 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
     } else {
         let bounds: Vec<String> = params
             .iter()
-            .map(|p| format!("{p}: SkyStringify + std::fmt::Debug"))
+            .map(|p| format!("{p}: IpeStringify + std::fmt::Debug"))
             .collect();
         (
             format!("<{}>", params.join(", ")),
@@ -544,7 +544,7 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
     // `#[derive(Clone, Debug, PartialEq)]`. An enum whose payload reaches a
     // first-class function / opaque wrapper (directly or through a carrier /
     // another non-derivable enum) cannot derive those traits — emit no auto
-    // derives (the hand-written `SkyStringify` impl below still gives it a total
+    // derives (the hand-written `IpeStringify` impl below still gives it a total
     // string form).
     let self_derivable = ctx.enum_is_derivable(&def.home, def.name);
     // seal: the serde derive is gated on the SERDE predicate, not the CDPeq
@@ -576,8 +576,8 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
         "{derive_prefix}pub enum {name}{decl_clause} {{
 {variants}
 }}
-impl{impl_bounds} SkyStringify for {name}{use_clause} {{
-    fn sky_show(&self) -> String {{
+impl{impl_bounds} IpeStringify for {name}{use_clause} {{
+    fn ipe_show(&self) -> String {{
         match self {{
 {arms}
         }}
@@ -587,7 +587,7 @@ impl{impl_bounds} SkyStringify for {name}{use_clause} {{
     ))
 }
 
-/// Emit a synthesised record struct and its derived `SkyStringify` impl,
+/// Emit a synthesised record struct and its derived `IpeStringify` impl,
 /// including the trailing newline.
 ///
 /// Shape (for `{ x : Int, y : Int }`):
@@ -597,14 +597,14 @@ impl{impl_bounds} SkyStringify for {name}{use_clause} {{
 ///     x: i64,
 ///     y: i64,
 /// }
-/// impl SkyStringify for RecXY {
-///     fn sky_show(&self) -> String {
+/// impl IpeStringify for RecXY {
+///     fn ipe_show(&self) -> String {
 ///         format!("{{{} {}}}", (&ipe_runtime::stringify::Wrap(&self.x)).dispatch(), (&ipe_runtime::stringify::Wrap(&self.y)).dispatch())
 ///     }
 /// }
 /// ```
 ///
-/// The `sky_show` body mirrors the Go reference's `%v` rendering of a struct
+/// The `ipe_show` body mirrors the Go reference's `%v` rendering of a struct
 /// (`{f0 f1 ...}`, fields space-separated in declared order, no field names) so
 /// stringifying a record reads identically across the two backends. Each field
 /// renders through the runtime's total autoref `Wrap(..).dispatch()` shim, which
@@ -617,13 +617,13 @@ impl{impl_bounds} SkyStringify for {name}{use_clause} {{
 /// pub struct RecValue<T1> {
 ///     value: T1,
 /// }
-/// impl<T1: SkyStringify + std::fmt::Debug> SkyStringify for RecValue<T1> {
+/// impl<T1: IpeStringify + std::fmt::Debug> IpeStringify for RecValue<T1> {
 ///     ...
 /// }
 /// ```
-/// The impl bounds each parameter `SkyStringify + std::fmt::Debug` so the inline
+/// The impl bounds each parameter `IpeStringify + std::fmt::Debug` so the inline
 /// autoref `Wrap(..).dispatch()` resolves at the generic frame (the
-/// `SkyStringify` arm is selected with zero autoref, the `Debug` arm is the
+/// `IpeStringify` arm is selected with zero autoref, the `Debug` arm is the
 /// always-available fallback). `std::fmt::Debug` is spelled in full — the
 /// emitted crate's `pub use ipe_runtime::*` shadows the `core` crate with the
 /// runtime's `core` module, so `core::fmt` would not resolve. A monomorphic
@@ -645,14 +645,14 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
             ));
         } else {
             // seal: a non-derivable field (a function / opaque wrapper)
-            // impls neither `SkyStringify` nor `Debug`, so `.dispatch()` would
+            // impls neither `IpeStringify` nor `Debug`, so `.dispatch()` would
             // not resolve. Render a `<fn>` placeholder for that `{}` slot.
             show_args.push("\"<fn>\"".to_owned());
         }
     }
     let fields_block = field_lines.join("\n");
 
-    // Generic clauses: `<T1, T2>` on the struct, `<T1: SkyStringify + Debug, …>`
+    // Generic clauses: `<T1, T2>` on the struct, `<T1: IpeStringify + Debug, …>`
     // on the impl, `<T1, T2>` on the impl's `for` type. All empty when the record
     // is monomorphic.
     let params: Vec<String> = (1..=rec.type_params.len())
@@ -663,7 +663,7 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
     } else {
         let bounds: Vec<String> = params
             .iter()
-            .map(|p| format!("{p}: SkyStringify + std::fmt::Debug"))
+            .map(|p| format!("{p}: IpeStringify + std::fmt::Debug"))
             .collect();
         (
             format!("<{}>", params.join(", ")),
@@ -686,7 +686,7 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
     // `#[derive(Clone, Debug, PartialEq)]`. A record holding a first-class
     // function / opaque wrapper field (directly or through a carrier / a
     // non-derivable enum) cannot derive those traits — emit no auto derives (the
-    // hand-written `SkyStringify` impl below still gives it a total string form).
+    // hand-written `IpeStringify` impl below still gives it a total string form).
     //
     // seal: the serde derive is gated on `rec.is_serde` (the per-record serde
     // fixpoint), NOT `rec.is_derivable`. A CDPeq-but-not-serde record — e.g. a
@@ -711,8 +711,8 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
         "{derive_prefix}pub struct {name}{decl_clause} {{
 {fields_block}
 }}
-impl{impl_bounds} SkyStringify for {name}{use_clause} {{
-    fn sky_show(&self) -> String {{
+impl{impl_bounds} IpeStringify for {name}{use_clause} {{
+    fn ipe_show(&self) -> String {{
         {body}
     }}
 }}

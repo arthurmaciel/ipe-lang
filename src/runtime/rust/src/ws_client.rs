@@ -2,7 +2,7 @@
 //!
 //! Task-tier: connect/connectWith/send/sendBinary/close/closeWithCode via a
 //! per-socket registry (a write-command mpsc + a frames broadcast). Receive:
-//! `Sub_subscribeWebSocket` builds a SkySub::Source that drains the frames
+//! `Sub_subscribeWebSocket` builds a IpeSub::Source that drains the frames
 //! broadcast and emits messages into the TEA loop — completing `onMessage`.
 //!
 //! WebSocketMessage/CloseCode are bridged to runtime enums so the runtime can
@@ -163,7 +163,7 @@ async fn do_connect<E: From<String> + Send + 'static>(
     headers: Vec<(String, String)>,
     timeout_ms: i64,
     ping_interval_ms: i64,
-) -> SkyResult<E, i64> {
+) -> IpeResult<E, i64> {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
     // Build the credential-stripped form ONCE; every error message below echoes
@@ -175,14 +175,14 @@ async fn do_connect<E: From<String> + Send + 'static>(
     // deny-private guard, letting an attacker-controlled URL reach internal
     // services the Http client blocks.
     if let Err(msg) = crate::ssrf::ssrf_validate_url(&url) {
-        return SkyResult::Err(msg.into());
+        return IpeResult::Err(msg.into());
     }
     // Build the handshake request so custom headers (e.g. Authorization) from
     // connectWith's cfg.headers are sent.
     let mut req = match url.as_str().into_client_request() {
         Ok(r) => r,
         Err(e) => {
-            return SkyResult::Err(
+            return IpeResult::Err(
                 format!("WebSocket.connect {}: bad url: {}", safe_url, e).into(),
             );
         }
@@ -195,7 +195,7 @@ async fn do_connect<E: From<String> + Send + 'static>(
         let name = match k.parse::<HeaderName>() {
             Ok(n) => n,
             Err(_) => {
-                return SkyResult::Err(
+                return IpeResult::Err(
                     format!(
                         "WebSocket.connect {}: invalid header name {:?}",
                         safe_url, k
@@ -207,7 +207,7 @@ async fn do_connect<E: From<String> + Send + 'static>(
         let val = match HeaderValue::from_str(v) {
             Ok(val) => val,
             Err(_) => {
-                return SkyResult::Err(
+                return IpeResult::Err(
                     format!(
                         "WebSocket.connect {}: invalid value for header {:?}",
                         safe_url, k
@@ -243,7 +243,7 @@ async fn do_connect<E: From<String> + Send + 'static>(
     // open (it validates a name that connect_async would resolve again).
     let pinned = match crate::ssrf::ssrf_pinned_ws_addr(&url) {
         Ok(p) => p,
-        Err(msg) => return SkyResult::Err(msg.into()),
+        Err(msg) => return IpeResult::Err(msg.into()),
     };
     type WsConnOut = Result<
         (
@@ -261,7 +261,7 @@ async fn do_connect<E: From<String> + Send + 'static>(
                 // plain ws:// stream; refuse wss under the guard rather than dial
                 // plaintext to a TLS endpoint.
                 if url.starts_with("wss://") {
-                    return SkyResult::Err(format!(
+                    return IpeResult::Err(format!(
                         "WebSocket.connect {}: wss with IPE_HTTP_DENY_PRIVATE is unsupported (no TLS feature to pin the connection)",
                         safe_url
                     ).into());
@@ -303,10 +303,10 @@ async fn do_connect<E: From<String> + Send + 'static>(
         match tokio::time::timeout(std::time::Duration::from_millis(to_ms), connect_fut).await {
             Ok(Ok(ok)) => ok,
             Ok(Err(e)) => {
-                return SkyResult::Err(format!("WebSocket.connect {}: {}", safe_url, e).into());
+                return IpeResult::Err(format!("WebSocket.connect {}: {}", safe_url, e).into());
             }
             Err(_) => {
-                return SkyResult::Err(
+                return IpeResult::Err(
                     format!(
                         "WebSocket.connect {}: handshake timed out after {}ms",
                         safe_url, to_ms
@@ -418,7 +418,7 @@ async fn do_connect<E: From<String> + Send + 'static>(
 }
 
 /// WebSocket.connect : String -> Task Error Int (raw id; Sky wraps in WebSocket)
-pub fn web_socket_connect<E: From<String> + Send + 'static>(url: String) -> SkyTask<E, i64> {
+pub fn web_socket_connect<E: From<String> + Send + 'static>(url: String) -> IpeTask<E, i64> {
     Box::pin(do_connect(url, Vec::new(), 30000, 0))
 }
 
@@ -428,7 +428,7 @@ pub fn web_socket_connect<E: From<String> + Send + 'static>(url: String) -> SkyT
 /// tungstenite auto-pongs inbound pings on the read side).
 pub fn web_socket_connect_with<E: From<String> + Send + 'static>(
     cfg: WsClientCfg,
-) -> SkyTask<E, i64> {
+) -> IpeTask<E, i64> {
     Box::pin(do_connect(
         cfg.url,
         cfg.headers,
@@ -478,12 +478,12 @@ fn send_cmd(id: i64, cmd: WsCmd) -> bool {
 }
 
 /// WebSocket.send : Int -> String -> Task Error ()
-pub fn web_socket_send<E: From<String> + Send + 'static>(id: i64, msg: String) -> SkyTask<E, ()> {
+pub fn web_socket_send<E: From<String> + Send + 'static>(id: i64, msg: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         if send_cmd(id, WsCmd::Text(msg)) {
             ok_res(())
         } else {
-            SkyResult::Err(format!("WebSocket.send: no socket {}", id).into())
+            IpeResult::Err(format!("WebSocket.send: no socket {}", id).into())
         }
     })
 }
@@ -492,18 +492,18 @@ pub fn web_socket_send<E: From<String> + Send + 'static>(id: i64, msg: String) -
 pub fn web_socket_send_binary<E: From<String> + Send + 'static>(
     id: i64,
     msg: Vec<u8>,
-) -> SkyTask<E, ()> {
+) -> IpeTask<E, ()> {
     Box::pin(async move {
         if send_cmd(id, WsCmd::Binary(msg)) {
             ok_res(())
         } else {
-            SkyResult::Err(format!("WebSocket.sendBinary: no socket {}", id).into())
+            IpeResult::Err(format!("WebSocket.sendBinary: no socket {}", id).into())
         }
     })
 }
 
 /// WebSocket.close : Int -> Task Error () (idempotent)
-pub fn web_socket_close<E: From<String> + Send + 'static>(id: i64) -> SkyTask<E, ()> {
+pub fn web_socket_close<E: From<String> + Send + 'static>(id: i64) -> IpeTask<E, ()> {
     Box::pin(async move {
         let _ = send_cmd(id, WsCmd::Close);
         deregister(id);
@@ -516,7 +516,7 @@ pub fn web_socket_close_with_code<E: From<String> + Send + 'static>(
     code: i64,
     reason: String,
     id: i64,
-) -> SkyTask<E, ()> {
+) -> IpeTask<E, ()> {
     Box::pin(async move {
         // A WebSocket close code is a u16 (RFC 6455 §7.4). A bare `code as u16`
         // SILENTLY TRUNCATES a Sky `Int` outside 0..=65535 (e.g. 70000 → 4464),
@@ -598,12 +598,12 @@ fn ws_registered(socket_id: i64) -> bool {
 /// variant routes codegen to them yet (the whole `Sky.Core.WebSocket` client
 /// surface is unwired) — so the future wiring commit does not ship
 /// exit-0-then-cargo-fail on day one.
-pub fn sub_subscribe_ws_message<M, F>(socket_id: i64, to_msg: F) -> SkySub<M>
+pub fn sub_subscribe_ws_message<M, F>(socket_id: i64, to_msg: F) -> IpeSub<M>
 where
     M: Send + 'static,
     F: Fn(WsClientMessage) -> M + Send + 'static,
 {
-    SkySub::Source(Box::new(move |emit| {
+    IpeSub::Source(Box::new(move |emit| {
         if ws_registered(socket_id) && ws_mark_subscribed(socket_id, WsSubKind::Message) {
             tokio::spawn(async move {
                 let mut rx = match subscribe_events(socket_id) {
@@ -628,11 +628,11 @@ where
 }
 
 /// onOpen : msg -> Sub msg — dispatch `msg` once when connected.
-pub fn sub_subscribe_ws_open<M>(socket_id: i64, msg: M) -> SkySub<M>
+pub fn sub_subscribe_ws_open<M>(socket_id: i64, msg: M) -> IpeSub<M>
 where
     M: Send + 'static,
 {
-    SkySub::Source(Box::new(move |emit| {
+    IpeSub::Source(Box::new(move |emit| {
         if ws_registered(socket_id) && ws_mark_subscribed(socket_id, WsSubKind::Open) {
             emit(msg);
         }
@@ -647,12 +647,12 @@ where
 /// `tokio::spawn` below and never shared behind an `Arc`, so `Send + 'static`
 /// is the exact contract and `+ Sync` was over-strict. Currently unreachable
 /// (no `KernelFn` arm routes here yet); relaxing dead code can't regress.
-pub fn sub_subscribe_ws_close<M, F>(socket_id: i64, to_msg: F) -> SkySub<M>
+pub fn sub_subscribe_ws_close<M, F>(socket_id: i64, to_msg: F) -> IpeSub<M>
 where
     M: Send + 'static,
     F: Fn(WsCloseCode) -> M + Send + 'static,
 {
-    SkySub::Source(Box::new(move |emit| {
+    IpeSub::Source(Box::new(move |emit| {
         if ws_registered(socket_id) && ws_mark_subscribed(socket_id, WsSubKind::Close) {
             tokio::spawn(async move {
                 let mut rx = match subscribe_events(socket_id) {
@@ -684,13 +684,13 @@ where
 /// `tokio::spawn` below and never shared behind an `Arc`, so `Send + 'static`
 /// is the exact contract and `+ Sync` was over-strict. Currently unreachable
 /// (no `KernelFn` arm routes here yet); relaxing dead code can't regress.
-pub fn sub_subscribe_ws_error<E, M, F>(socket_id: i64, to_msg: F) -> SkySub<M>
+pub fn sub_subscribe_ws_error<E, M, F>(socket_id: i64, to_msg: F) -> IpeSub<M>
 where
     E: From<String> + Send + 'static,
     M: Send + 'static,
     F: Fn(E) -> M + Send + 'static,
 {
-    SkySub::Source(Box::new(move |emit| {
+    IpeSub::Source(Box::new(move |emit| {
         if ws_registered(socket_id) && ws_mark_subscribed(socket_id, WsSubKind::Error) {
             tokio::spawn(async move {
                 let mut rx = match subscribe_events(socket_id) {

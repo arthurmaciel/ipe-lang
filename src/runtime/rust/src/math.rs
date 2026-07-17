@@ -75,7 +75,7 @@ pub fn math_abs(x: i64) -> i64 {
 // accidental panics; this is a classified, tested, intentional one. The
 // `intdiv_by_zero_aborts_exit_101` golden verifies exit 101 / empty stdout.
 #[allow(clippy::panic)]
-pub fn sky_int_div(a: i64, b: i64) -> i64 {
+pub fn ipe_int_div(a: i64, b: i64) -> i64 {
     if b == 0 {
         panic!("attempt to divide by zero");
     }

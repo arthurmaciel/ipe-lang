@@ -1,4 +1,4 @@
-// Sky.Core.Io — line-oriented stdio. All effectful, so SkyTask-returning.
+// Sky.Core.Io — line-oriented stdio. All effectful, so IpeTask-returning.
 use super::*;
 
 use std::io::Write;
@@ -15,7 +15,7 @@ use std::io::Write;
 /// trade-off `File.readFileLimit` already makes.
 const IO_READ_LINE_CAP_BYTES: u64 = 1024 * 1024;
 
-pub fn io_read_line<E: Send + From<String> + 'static>(_: ()) -> SkyTask<E, String> {
+pub fn io_read_line<E: Send + From<String> + 'static>(_: ()) -> IpeTask<E, String> {
     Box::pin(async move {
         let mut line = String::new();
         let stdin = std::io::stdin();
@@ -26,13 +26,13 @@ pub fn io_read_line<E: Send + From<String> + 'static>(_: ()) -> SkyTask<E, Strin
                 let trimmed = line.trim_end_matches(['\n', '\r']).to_string();
                 ok_res(trimmed)
             }
-            Err(e) => SkyResult::Err(str_err(&format!("{}", e))),
+            Err(e) => IpeResult::Err(str_err(&format!("{}", e))),
         }
     })
 }
 
 /// `Io.writeStdout : String -> Task Error ()`. Writes verbatim (no newline).
-pub fn io_write_stdout<E: Send + From<String> + 'static>(s: String) -> SkyTask<E, ()> {
+pub fn io_write_stdout<E: Send + From<String> + 'static>(s: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         let r = (|| {
             let mut out = std::io::stdout();
@@ -41,13 +41,13 @@ pub fn io_write_stdout<E: Send + From<String> + 'static>(s: String) -> SkyTask<E
         })();
         match r {
             Ok(()) => ok_res(()),
-            Err(e) => SkyResult::Err(str_err(&format!("{}", e))),
+            Err(e) => IpeResult::Err(str_err(&format!("{}", e))),
         }
     })
 }
 
 /// `Io.writeStderr : String -> Task Error ()`. Writes verbatim (no newline).
-pub fn io_write_stderr<E: Send + From<String> + 'static>(s: String) -> SkyTask<E, ()> {
+pub fn io_write_stderr<E: Send + From<String> + 'static>(s: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         let r = (|| {
             let mut err = std::io::stderr();
@@ -56,7 +56,7 @@ pub fn io_write_stderr<E: Send + From<String> + 'static>(s: String) -> SkyTask<E
         })();
         match r {
             Ok(()) => ok_res(()),
-            Err(e) => SkyResult::Err(str_err(&format!("{}", e))),
+            Err(e) => IpeResult::Err(str_err(&format!("{}", e))),
         }
     })
 }

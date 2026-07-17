@@ -32,7 +32,7 @@ fn dummy_bcrypt_hash() -> &'static str {
 
 /// Sky `hashPassword : String -> Result Error String`. Bcrypt with default
 /// cost 12 (matches Go runtime).
-pub fn auth_hash_password<E: From<String>>(pw: String) -> SkyResult<E, String> {
+pub fn auth_hash_password<E: From<String>>(pw: String) -> IpeResult<E, String> {
     auth_hash_password_cost(pw, 12)
 }
 
@@ -42,12 +42,12 @@ pub fn auth_hash_password<E: From<String>>(pw: String) -> SkyResult<E, String> {
 /// DOUBLES the work, so cost 31 is a single-call CPU-exhaustion DoS (~years per
 /// hash). 15 (~1–2 s/hash) is a generous operational ceiling; higher is always a
 /// self-DoS, so it is clamped down rather than honoured.
-pub fn auth_hash_password_cost<E: From<String>>(pw: String, cost: i64) -> SkyResult<E, String> {
+pub fn auth_hash_password_cost<E: From<String>>(pw: String, cost: i64) -> IpeResult<E, String> {
     if pw.chars().count() < 8 {
-        return SkyResult::Err("password must be at least 8 characters".to_string().into());
+        return IpeResult::Err("password must be at least 8 characters".to_string().into());
     }
     if pw.len() > 72 {
-        return SkyResult::Err(
+        return IpeResult::Err(
             "password longer than 72 bytes (bcrypt limit)"
                 .to_string()
                 .into(),
@@ -55,17 +55,17 @@ pub fn auth_hash_password_cost<E: From<String>>(pw: String, cost: i64) -> SkyRes
     }
     let clamped = cost.clamp(4, 15) as u32;
     match bcrypt::hash(&pw, clamped) {
-        Ok(h) => SkyResult::Ok(h),
-        Err(e) => SkyResult::Err(format!("bcrypt: {}", e).into()),
+        Ok(h) => IpeResult::Ok(h),
+        Err(e) => IpeResult::Err(format!("bcrypt: {}", e).into()),
     }
 }
 
 /// Sky `verifyPassword : String -> String -> Result Error Bool`.
 /// `verifyPassword candidate hash` — true if candidate hashes to the same hash.
-pub fn auth_verify_password<E: From<String>>(pw: String, hash: String) -> SkyResult<E, bool> {
+pub fn auth_verify_password<E: From<String>>(pw: String, hash: String) -> IpeResult<E, bool> {
     match bcrypt::verify(&pw, &hash) {
-        Ok(b) => SkyResult::Ok(b),
-        Err(e) => SkyResult::Err(format!("bcrypt verify: {}", e).into()),
+        Ok(b) => IpeResult::Ok(b),
+        Err(e) => IpeResult::Err(format!("bcrypt verify: {}", e).into()),
     }
 }
 
@@ -77,12 +77,12 @@ pub fn auth_verify_password<E: From<String>>(pw: String, hash: String) -> SkyRes
 /// > ≥12 chars + letter + digit + symbol → "strong"
 /// > ≥10 chars + letter + digit          → "medium"
 /// > otherwise (passes letter+digit check) → "weak"
-pub fn auth_password_strength<E: From<String>>(pw: String) -> SkyResult<E, String> {
+pub fn auth_password_strength<E: From<String>>(pw: String) -> IpeResult<E, String> {
     if pw.chars().count() < 8 {
-        return SkyResult::Err("password must be at least 8 characters".to_string().into());
+        return IpeResult::Err("password must be at least 8 characters".to_string().into());
     }
     if pw.len() > 72 {
-        return SkyResult::Err(
+        return IpeResult::Err(
             "password longer than 72 bytes (bcrypt limit)"
                 .to_string()
                 .into(),
@@ -92,7 +92,7 @@ pub fn auth_password_strength<E: From<String>>(pw: String) -> SkyResult<E, Strin
     let has_digit = pw.chars().any(|c| c.is_ascii_digit());
     let has_symbol = pw.chars().any(|c| !c.is_alphanumeric());
     if !has_letter || !has_digit {
-        return SkyResult::Err(
+        return IpeResult::Err(
             "password must contain both letters and digits"
                 .to_string()
                 .into(),
@@ -106,7 +106,7 @@ pub fn auth_password_strength<E: From<String>>(pw: String) -> SkyResult<E, Strin
     } else {
         "weak"
     };
-    SkyResult::Ok(rating.to_string())
+    IpeResult::Ok(rating.to_string())
 }
 
 // ─── JWT kernels (HS256) ──────────────────────────────────────────────
@@ -121,9 +121,9 @@ pub fn auth_sign_token<E: From<String>>(
     secret: String,
     claims: HashMap<String, String>,
     expiry_seconds: i64,
-) -> SkyResult<E, String> {
+) -> IpeResult<E, String> {
     if secret.len() < 32 {
-        return SkyResult::Err(
+        return IpeResult::Err(
             "auth.signToken: secret must be ≥32 bytes"
                 .to_string()
                 .into(),
@@ -135,7 +135,7 @@ pub fn auth_sign_token<E: From<String>>(
     // never-expiring token. Reject up front so the safe outcome is the only
     // reachable one.
     if expiry_seconds < 0 {
-        return SkyResult::Err(
+        return IpeResult::Err(
             "auth.signToken: expiry_seconds must be non-negative"
                 .to_string()
                 .into(),
@@ -161,8 +161,8 @@ pub fn auth_sign_token<E: From<String>>(
     let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
     let key = jsonwebtoken::EncodingKey::from_secret(secret.as_bytes());
     match jsonwebtoken::encode(&header, &value, &key) {
-        Ok(t) => SkyResult::Ok(t),
-        Err(e) => SkyResult::Err(format!("jwt encode: {}", e).into()),
+        Ok(t) => IpeResult::Ok(t),
+        Err(e) => IpeResult::Err(format!("jwt encode: {}", e).into()),
     }
 }
 
@@ -172,9 +172,9 @@ pub fn auth_sign_token<E: From<String>>(
 pub fn auth_verify_token<E: From<String>>(
     secret: String,
     token: String,
-) -> SkyResult<E, HashMap<String, String>> {
+) -> IpeResult<E, HashMap<String, String>> {
     if secret.len() < 32 {
-        return SkyResult::Err(
+        return IpeResult::Err(
             "auth.verifyToken: secret must be ≥32 bytes"
                 .to_string()
                 .into(),
@@ -187,7 +187,7 @@ pub fn auth_verify_token<E: From<String>>(
     // sibling `Jwt.decode` path (jwt.rs) already closed this exact gap with a
     // documented fix; mirror it exactly rather than re-deriving it.
     if crate::jwt::exp_is_zero(&token) {
-        return SkyResult::Err(
+        return IpeResult::Err(
             "auth.verifyToken: token has expired".to_string().into(),
         );
     }
@@ -218,7 +218,7 @@ pub fn auth_verify_token<E: From<String>>(
     validation.validate_aud = false;
     let parsed = match jsonwebtoken::decode::<serde_json::Value>(&token, &key, &validation) {
         Ok(d) => d,
-        Err(e) => return SkyResult::Err(format!("jwt verify: {}", e).into()),
+        Err(e) => return IpeResult::Err(format!("jwt verify: {}", e).into()),
     };
     let mut out = HashMap::new();
     if let serde_json::Value::Object(m) = parsed.claims {
@@ -233,7 +233,7 @@ pub fn auth_verify_token<E: From<String>>(
             out.insert(k, s);
         }
     }
-    SkyResult::Ok(out)
+    IpeResult::Ok(out)
 }
 
 // ─── DB-touching kernels ──────────────────────────────────────────────
@@ -253,7 +253,7 @@ pub fn auth_verify_token<E: From<String>>(
 /// — `db_auto_id_column()` returns the right fragment for sqlite
 /// (`INTEGER PRIMARY KEY AUTOINCREMENT`), mysql (`BIGINT NOT NULL
 /// AUTO_INCREMENT PRIMARY KEY`), or postgres (`BIGSERIAL PRIMARY KEY`).
-async fn ensure_users_schema<E: From<String> + Send>(conn: &Db) -> SkyResult<E, ()> {
+async fn ensure_users_schema<E: From<String> + Send>(conn: &Db) -> IpeResult<E, ()> {
     let schema = format!(
         "CREATE TABLE IF NOT EXISTS users (
             {},
@@ -265,8 +265,8 @@ async fn ensure_users_schema<E: From<String> + Send>(conn: &Db) -> SkyResult<E, 
         db_auto_id_column()
     );
     match sqlx::query(&schema).execute(conn).await {
-        Ok(_) => SkyResult::Ok(()),
-        Err(e) => SkyResult::Err(format!("auth.users schema: {}", e).into()),
+        Ok(_) => IpeResult::Ok(()),
+        Err(e) => IpeResult::Err(format!("auth.users schema: {}", e).into()),
     }
 }
 
@@ -277,7 +277,7 @@ pub fn auth_register<E: Send + From<String> + 'static>(
     conn: Db,
     email: String,
     password: String,
-) -> SkyTask<E, i64> {
+) -> IpeTask<E, i64> {
     Box::pin(async move {
         // Normalize the email (trim + lowercase) so a case/whitespace variant can't
         // create a DUPLICATE account that bypasses the UNIQUE constraint, and so
@@ -287,18 +287,18 @@ pub fn auth_register<E: Send + From<String> + 'static>(
         // sensitive per RFC 5321, but every real provider treats them case-
         // insensitively; canonical-lowercase is the universal practice.)
         let email = email.trim().to_lowercase();
-        if let SkyResult::Err(e) = ensure_users_schema::<E>(&conn).await {
-            return SkyResult::Err(e);
+        if let IpeResult::Err(e) = ensure_users_schema::<E>(&conn).await {
+            return IpeResult::Err(e);
         }
         // bcrypt is CPU-bound and BLOCKING (~250 ms at cost 12). Running it on a
         // tokio worker thread starves the async runtime (every concurrent register
         // ties up a core worker). Offload to the blocking pool.
         let hash =
             match tokio::task::spawn_blocking(move || auth_hash_password::<E>(password)).await {
-                Ok(SkyResult::Ok(h)) => h,
-                Ok(SkyResult::Err(e)) => return SkyResult::Err(e),
+                Ok(IpeResult::Ok(h)) => h,
+                Ok(IpeResult::Err(e)) => return IpeResult::Err(e),
                 Err(_) => {
-                    return SkyResult::Err(
+                    return IpeResult::Err(
                         "auth.register: password-hash task failed"
                             .to_string()
                             .into(),
@@ -321,11 +321,11 @@ pub fn auth_register<E: Send + From<String> + 'static>(
             .execute(&conn)
             .await;
         match result {
-            Ok(res) => SkyResult::Ok(db_last_insert_id(&res)),
+            Ok(res) => IpeResult::Ok(db_last_insert_id(&res)),
             Err(sqlx::Error::Database(de)) if de.is_unique_violation() => {
-                SkyResult::Err("auth.register: email already registered".to_string().into())
+                IpeResult::Err("auth.register: email already registered".to_string().into())
             }
-            Err(e) => SkyResult::Err(format!("auth.register: {}", e).into()),
+            Err(e) => IpeResult::Err(format!("auth.register: {}", e).into()),
         }
     })
 }
@@ -339,13 +339,13 @@ pub fn auth_login<E: Send + From<String> + 'static>(
     conn: Db,
     email: String,
     password: String,
-) -> SkyTask<E, i64> {
+) -> IpeTask<E, i64> {
     Box::pin(async move {
         // Same canonicalisation as auth_register so a case/whitespace variant of a
         // registered email still logs in (and can't be used to probe the store).
         let email = email.trim().to_lowercase();
-        if let SkyResult::Err(e) = ensure_users_schema::<E>(&conn).await {
-            return SkyResult::Err(e);
+        if let IpeResult::Err(e) = ensure_users_schema::<E>(&conn).await {
+            return IpeResult::Err(e);
         }
         let sql = db_format_sql("SELECT id, password_hash FROM users WHERE email = ?".to_string());
         match sqlx::query(&sql).bind(&email).fetch_optional(&conn).await {
@@ -356,7 +356,7 @@ pub fn auth_login<E: Send + From<String> + 'static>(
                 let id: i64 = match row.try_get(0) {
                     Ok(id) => id,
                     Err(_) => {
-                        return SkyResult::Err(
+                        return IpeResult::Err(
                             "auth.login: invalid credentials".to_string().into(),
                         );
                     }
@@ -369,9 +369,9 @@ pub fn auth_login<E: Send + From<String> + 'static>(
                 .await
                 .unwrap_or(false);
                 if ok {
-                    SkyResult::Ok(id)
+                    IpeResult::Ok(id)
                 } else {
-                    SkyResult::Err("auth.login: invalid credentials".to_string().into())
+                    IpeResult::Err("auth.login: invalid credentials".to_string().into())
                 }
             }
             Ok(None) => {
@@ -383,9 +383,9 @@ pub fn auth_login<E: Send + From<String> + 'static>(
                     bcrypt::verify(&password, dummy_bcrypt_hash())
                 })
                 .await;
-                SkyResult::Err("auth.login: invalid credentials".to_string().into())
+                IpeResult::Err("auth.login: invalid credentials".to_string().into())
             }
-            Err(e) => SkyResult::Err(format!("auth.login: {}", e).into()),
+            Err(e) => IpeResult::Err(format!("auth.login: {}", e).into()),
         }
     })
 }
@@ -397,10 +397,10 @@ pub fn auth_set_role<E: Send + From<String> + 'static>(
     conn: Db,
     user_id: i64,
     role: String,
-) -> SkyTask<E, ()> {
+) -> IpeTask<E, ()> {
     Box::pin(async move {
-        if let SkyResult::Err(e) = ensure_users_schema::<E>(&conn).await {
-            return SkyResult::Err(e);
+        if let IpeResult::Err(e) = ensure_users_schema::<E>(&conn).await {
+            return IpeResult::Err(e);
         }
         let sql = db_format_sql("UPDATE users SET role = ? WHERE id = ?".to_string());
         match sqlx::query(&sql)
@@ -409,8 +409,8 @@ pub fn auth_set_role<E: Send + From<String> + 'static>(
             .execute(&conn)
             .await
         {
-            Ok(_) => SkyResult::Ok(()),
-            Err(e) => SkyResult::Err(format!("auth.setRole: {}", e).into()),
+            Ok(_) => IpeResult::Ok(()),
+            Err(e) => IpeResult::Err(format!("auth.setRole: {}", e).into()),
         }
     })
 }
@@ -424,44 +424,44 @@ mod tests {
 
     #[test]
     fn test_hash_verify_roundtrip() {
-        let hash: SkyResult<String, String> =
+        let hash: IpeResult<String, String> =
             auth_hash_password_cost("password123".into(), TEST_COST);
         let h = match hash {
-            SkyResult::Ok(h) => h,
+            IpeResult::Ok(h) => h,
             _ => panic!("hash"),
         };
-        let ok: SkyResult<String, bool> = auth_verify_password("password123".into(), h.clone());
-        assert!(matches!(ok, SkyResult::Ok(true)));
-        let bad: SkyResult<String, bool> = auth_verify_password("wrongpass".into(), h);
-        assert!(matches!(bad, SkyResult::Ok(false)));
+        let ok: IpeResult<String, bool> = auth_verify_password("password123".into(), h.clone());
+        assert!(matches!(ok, IpeResult::Ok(true)));
+        let bad: IpeResult<String, bool> = auth_verify_password("wrongpass".into(), h);
+        assert!(matches!(bad, IpeResult::Ok(false)));
     }
 
     #[test]
     fn test_hash_too_short() {
-        let r: SkyResult<String, String> = auth_hash_password("short".into());
-        assert!(matches!(r, SkyResult::Err(_)));
+        let r: IpeResult<String, String> = auth_hash_password("short".into());
+        assert!(matches!(r, IpeResult::Err(_)));
     }
 
     #[test]
     fn test_password_strength() {
         // <8 chars → Err
-        let r: SkyResult<String, String> = auth_password_strength("short".into());
-        assert!(matches!(r, SkyResult::Err(_)));
+        let r: IpeResult<String, String> = auth_password_strength("short".into());
+        assert!(matches!(r, IpeResult::Err(_)));
         // All letters → Err
-        let r: SkyResult<String, String> = auth_password_strength("abcdefghij".into());
-        assert!(matches!(r, SkyResult::Err(_)));
+        let r: IpeResult<String, String> = auth_password_strength("abcdefghij".into());
+        assert!(matches!(r, IpeResult::Err(_)));
         // All digits → Err
-        let r: SkyResult<String, String> = auth_password_strength("1234567890".into());
-        assert!(matches!(r, SkyResult::Err(_)));
+        let r: IpeResult<String, String> = auth_password_strength("1234567890".into());
+        assert!(matches!(r, IpeResult::Err(_)));
         // 8 chars, letter+digit → weak
-        let r: SkyResult<String, String> = auth_password_strength("abc12345".into());
-        assert!(matches!(r, SkyResult::Ok(ref s) if s == "weak"));
+        let r: IpeResult<String, String> = auth_password_strength("abc12345".into());
+        assert!(matches!(r, IpeResult::Ok(ref s) if s == "weak"));
         // 10 chars, letter+digit → medium
-        let r: SkyResult<String, String> = auth_password_strength("abcde12345".into());
-        assert!(matches!(r, SkyResult::Ok(ref s) if s == "medium"));
+        let r: IpeResult<String, String> = auth_password_strength("abcde12345".into());
+        assert!(matches!(r, IpeResult::Ok(ref s) if s == "medium"));
         // 12 chars + symbol → strong
-        let r: SkyResult<String, String> = auth_password_strength("abc12345xyz!".into());
-        assert!(matches!(r, SkyResult::Ok(ref s) if s == "strong"));
+        let r: IpeResult<String, String> = auth_password_strength("abc12345xyz!".into());
+        assert!(matches!(r, IpeResult::Ok(ref s) if s == "strong"));
     }
 
     #[test]
@@ -471,14 +471,14 @@ mod tests {
         let mut claims = HashMap::new();
         claims.insert("sub".to_string(), "user-123".to_string());
         claims.insert("role".to_string(), "admin".to_string());
-        let token: SkyResult<String, String> = auth_sign_token(secret.clone(), claims, 3600);
+        let token: IpeResult<String, String> = auth_sign_token(secret.clone(), claims, 3600);
         let t = match token {
-            SkyResult::Ok(t) => t,
+            IpeResult::Ok(t) => t,
             _ => panic!("sign"),
         };
-        let verified: SkyResult<String, HashMap<String, String>> = auth_verify_token(secret, t);
+        let verified: IpeResult<String, HashMap<String, String>> = auth_verify_token(secret, t);
         match verified {
-            SkyResult::Ok(m) => {
+            IpeResult::Ok(m) => {
                 assert_eq!(m.get("sub").unwrap(), "user-123");
                 assert_eq!(m.get("role").unwrap(), "admin");
                 assert!(m.contains_key("exp"));
@@ -490,9 +490,9 @@ mod tests {
 
     #[test]
     fn test_jwt_short_secret_rejected() {
-        let token: SkyResult<String, String> =
+        let token: IpeResult<String, String> =
             auth_sign_token("short".into(), HashMap::new(), 3600);
-        assert!(matches!(token, SkyResult::Err(_)));
+        assert!(matches!(token, IpeResult::Err(_)));
     }
 
     fn now_unix() -> i64 {
@@ -515,10 +515,10 @@ mod tests {
         let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
         let key = jsonwebtoken::EncodingKey::from_secret(secret.as_bytes());
         let token = jsonwebtoken::encode(&header, &claims, &key).expect("encode");
-        let verified: SkyResult<String, HashMap<String, String>> =
+        let verified: IpeResult<String, HashMap<String, String>> =
             auth_verify_token(secret, token);
         assert!(
-            matches!(verified, SkyResult::Err(_)),
+            matches!(verified, IpeResult::Err(_)),
             "an Auth token expired 30s ago must be rejected (no clock-skew leeway)"
         );
     }
@@ -534,17 +534,17 @@ mod tests {
         let mut claims = HashMap::new();
         claims.insert("sub".to_string(), "user-123".to_string());
         claims.insert("aud".to_string(), "my-service".to_string());
-        let token: SkyResult<String, String> = auth_sign_token(secret.clone(), claims, 3600);
+        let token: IpeResult<String, String> = auth_sign_token(secret.clone(), claims, 3600);
         let t = match token {
-            SkyResult::Ok(t) => t,
-            SkyResult::Err(e) => panic!("sign: {e}"),
+            IpeResult::Ok(t) => t,
+            IpeResult::Err(e) => panic!("sign: {e}"),
         };
-        let verified: SkyResult<String, HashMap<String, String>> = auth_verify_token(secret, t);
+        let verified: IpeResult<String, HashMap<String, String>> = auth_verify_token(secret, t);
         match verified {
-            SkyResult::Ok(m) => {
+            IpeResult::Ok(m) => {
                 assert_eq!(m.get("aud").map(String::as_str), Some("my-service"));
             }
-            SkyResult::Err(e) => panic!("verify must accept aud-bearing claims: {e}"),
+            IpeResult::Err(e) => panic!("verify must accept aud-bearing claims: {e}"),
         }
     }
 
@@ -555,29 +555,29 @@ mod tests {
             Err(_) => return, // in-memory connect can't realistically fail; skip if it does
         };
         // Register with mixed case + surrounding whitespace.
-        let id: SkyResult<String, i64> = auth_register(
+        let id: IpeResult<String, i64> = auth_register(
             pool.clone(),
             "  Alice@Example.COM ".into(),
             "hunter2!".into(),
         )
         .await;
         let uid = match id {
-            SkyResult::Ok(i) => i,
-            SkyResult::Err(_) => 0,
+            IpeResult::Ok(i) => i,
+            IpeResult::Err(_) => 0,
         };
         assert!(uid > 0, "register with mixed-case email should succeed");
         // Login with a DIFFERENT case must resolve to the SAME account.
-        let login: SkyResult<String, i64> =
+        let login: IpeResult<String, i64> =
             auth_login(pool.clone(), "alice@example.com".into(), "hunter2!".into()).await;
         assert!(
-            matches!(login, SkyResult::Ok(u) if u == uid),
+            matches!(login, IpeResult::Ok(u) if u == uid),
             "login must be case-insensitive"
         );
         // A case-variant re-register must hit the UNIQUE constraint (no dup account).
-        let dup: SkyResult<String, i64> =
+        let dup: IpeResult<String, i64> =
             auth_register(pool.clone(), "ALICE@example.com".into(), "hunter2!".into()).await;
         assert!(
-            matches!(dup, SkyResult::Err(_)),
+            matches!(dup, IpeResult::Err(_)),
             "case-variant must not create a duplicate account"
         );
     }
@@ -586,32 +586,32 @@ mod tests {
     async fn test_register_login_flow() {
         let pool = DbPool::connect("sqlite::memory:").await.expect("connect");
         // register
-        let id: SkyResult<String, i64> =
+        let id: IpeResult<String, i64> =
             auth_register(pool.clone(), "alice@example.com".into(), "hunter2!".into()).await;
         let user_id = match id {
-            SkyResult::Ok(i) => i,
-            SkyResult::Err(e) => panic!("{}", e),
+            IpeResult::Ok(i) => i,
+            IpeResult::Err(e) => panic!("{}", e),
         };
         assert!(user_id > 0);
         // login correct
-        let login_ok: SkyResult<String, i64> =
+        let login_ok: IpeResult<String, i64> =
             auth_login(pool.clone(), "alice@example.com".into(), "hunter2!".into()).await;
-        assert!(matches!(login_ok, SkyResult::Ok(uid) if uid == user_id));
+        assert!(matches!(login_ok, IpeResult::Ok(uid) if uid == user_id));
         // login wrong password
-        let login_bad: SkyResult<String, i64> =
+        let login_bad: IpeResult<String, i64> =
             auth_login(pool.clone(), "alice@example.com".into(), "wrong".into()).await;
-        assert!(matches!(login_bad, SkyResult::Err(_)));
+        assert!(matches!(login_bad, IpeResult::Err(_)));
         // login non-existent email
-        let login_noexist: SkyResult<String, i64> =
+        let login_noexist: IpeResult<String, i64> =
             auth_login(pool.clone(), "nobody@example.com".into(), "anything".into()).await;
-        assert!(matches!(login_noexist, SkyResult::Err(_)));
+        assert!(matches!(login_noexist, IpeResult::Err(_)));
         // duplicate register
-        let dup: SkyResult<String, i64> =
+        let dup: IpeResult<String, i64> =
             auth_register(pool.clone(), "alice@example.com".into(), "hunter2!".into()).await;
-        assert!(matches!(dup, SkyResult::Err(_)));
+        assert!(matches!(dup, IpeResult::Err(_)));
         // set role
-        let role: SkyResult<String, ()> = auth_set_role(pool, user_id, "admin".into()).await;
-        assert!(matches!(role, SkyResult::Ok(())));
+        let role: IpeResult<String, ()> = auth_set_role(pool, user_id, "admin".into()).await;
+        assert!(matches!(role, IpeResult::Ok(())));
     }
 
     #[test]
@@ -619,15 +619,15 @@ mod tests {
         // A negative TTL must NOT mint a token (it would otherwise underflow
         // into a never-expiring token). Expect Err.
         let secret = "a-test-secret-of-32-bytes-padding".to_string();
-        let token: SkyResult<String, String> = auth_sign_token(secret, HashMap::new(), -1);
+        let token: IpeResult<String, String> = auth_sign_token(secret, HashMap::new(), -1);
         assert!(
-            matches!(token, SkyResult::Err(_)),
+            matches!(token, IpeResult::Err(_)),
             "negative expiry must be rejected"
         );
         // i64::MIN (the pathological underflow case) must also be rejected.
         let secret = "a-test-secret-of-32-bytes-padding".to_string();
-        let token2: SkyResult<String, String> = auth_sign_token(secret, HashMap::new(), i64::MIN);
-        assert!(matches!(token2, SkyResult::Err(_)));
+        let token2: IpeResult<String, String> = auth_sign_token(secret, HashMap::new(), i64::MIN);
+        assert!(matches!(token2, IpeResult::Err(_)));
     }
 
     #[tokio::test]
@@ -660,10 +660,10 @@ mod tests {
         .expect("insert");
         // The matched-email branch reads id first; a decode failure must fail
         // closed (Err), NOT silently authenticate as user 0.
-        let login: SkyResult<String, i64> =
+        let login: IpeResult<String, i64> =
             auth_login(pool, "badid@example.com".into(), "whatever".into()).await;
         assert!(
-            matches!(login, SkyResult::Err(_)),
+            matches!(login, IpeResult::Err(_)),
             "a failed id-column decode must yield Err, never Ok(0)"
         );
     }

@@ -86,7 +86,7 @@ type ErasedHandler = Arc<
 /// this `Arc<dyn Fn>`, because a real route handler CAPTURES app state
 /// (`handleRegister cfg db`) and a capturing closure cannot coerce to a bare
 /// `fn` pointer.
-pub type ServerHandler<E> = Arc<dyn Fn(ServerRequest) -> SkyTask<E, ServerResponse> + Send + Sync>;
+pub type ServerHandler<E> = Arc<dyn Fn(ServerRequest) -> IpeTask<E, ServerResponse> + Send + Sync>;
 
 /// Accept a route / middleware handler as EITHER a bare closure / fn item OR an
 /// already-boxed `ServerHandler<E>` (the Arc the `Handler` alias renders as),
@@ -103,7 +103,7 @@ pub trait IntoServerHandler<E> {
 
 impl<E, F> IntoServerHandler<E> for F
 where
-    F: Fn(ServerRequest) -> SkyTask<E, ServerResponse> + Send + Sync + 'static,
+    F: Fn(ServerRequest) -> IpeTask<E, ServerResponse> + Send + Sync + 'static,
 {
     fn into_server_handler(self) -> ServerHandler<E> {
         Arc::new(self)
@@ -125,7 +125,7 @@ impl<E> IntoServerHandler<E> for ServerHandler<E> {
 // `server_api`. The three impls cover pairwise-disjoint types.
 impl<E, F> IntoServerHandler<E> for Arc<F>
 where
-    F: Fn(ServerRequest) -> SkyTask<E, ServerResponse> + Send + Sync + 'static,
+    F: Fn(ServerRequest) -> IpeTask<E, ServerResponse> + Send + Sync + 'static,
 {
     fn into_server_handler(self) -> ServerHandler<E> {
         self
@@ -158,11 +158,11 @@ where
         let task = h(req);
         Box::pin(async move {
             match task.await {
-                SkyResult::Ok(resp) => Ok(resp),
+                IpeResult::Ok(resp) => Ok(resp),
                 // The error detail is dropped at the boundary (-> 500). Handlers
                 // wanting a typed error response should return an Ok response with
                 // Server.withStatus instead; Err is for unexpected failures.
-                SkyResult::Err(_) => Err("handler returned Err".to_string()),
+                IpeResult::Err(_) => Err("handler returned Err".to_string()),
             }
         }) as Pin<Box<dyn Future<Output = Result<ServerResponse, String>> + Send>>
     })
@@ -292,19 +292,19 @@ pub fn server_redirect(location: String) -> ServerResponse {
 
 // ─── request accessors (pure) ─────────────────────────────────────────────
 
-pub fn server_param(name: String, req: ServerRequest) -> SkyMaybe<String> {
+pub fn server_param(name: String, req: ServerRequest) -> IpeMaybe<String> {
     match req.params.get(&name) {
-        Some(v) => SkyMaybe::Just(v.clone()),
-        None => SkyMaybe::Nothing,
+        Some(v) => IpeMaybe::Just(v.clone()),
+        None => IpeMaybe::Nothing,
     }
 }
-pub fn server_query_param(name: String, req: ServerRequest) -> SkyMaybe<String> {
+pub fn server_query_param(name: String, req: ServerRequest) -> IpeMaybe<String> {
     match req.query.get(&name) {
-        Some(v) => SkyMaybe::Just(v.clone()),
-        None => SkyMaybe::Nothing,
+        Some(v) => IpeMaybe::Just(v.clone()),
+        None => IpeMaybe::Nothing,
     }
 }
-pub fn server_header(name: String, req: ServerRequest) -> SkyMaybe<String> {
+pub fn server_header(name: String, req: ServerRequest) -> IpeMaybe<String> {
     // Go's `r.Header.Get` canonicalises the lookup key, so `Server.header
     // "content-type"` and `"Content-Type"` both resolve. `build_request` stores
     // request headers under the same canonical key, so this lookup is
@@ -313,20 +313,20 @@ pub fn server_header(name: String, req: ServerRequest) -> SkyMaybe<String> {
         .headers
         .get(&crate::http_header::canonical_header(&name))
     {
-        Some(v) => SkyMaybe::Just(v.clone()),
-        None => SkyMaybe::Nothing,
+        Some(v) => IpeMaybe::Just(v.clone()),
+        None => IpeMaybe::Nothing,
     }
 }
-pub fn server_get_cookie(name: String, req: ServerRequest) -> SkyMaybe<String> {
+pub fn server_get_cookie(name: String, req: ServerRequest) -> IpeMaybe<String> {
     match req.cookies.get(&name) {
-        Some(v) => SkyMaybe::Just(v.clone()),
-        None => SkyMaybe::Nothing,
+        Some(v) => IpeMaybe::Just(v.clone()),
+        None => IpeMaybe::Nothing,
     }
 }
 
 // These three are total (every well-formed request has a body, path, and
 // method — they are populated unconditionally by `build_request`), so they
-// return plain `String`, NOT `SkyMaybe<String>`. Go parity: Go's analogous
+// return plain `String`, NOT `IpeMaybe<String>`. Go parity: Go's analogous
 // accessors return the raw parsed string values with no Maybe wrapper.
 pub fn server_body(req: ServerRequest) -> String {
     req.body
@@ -640,7 +640,7 @@ fn method_router(method: &str, h: ErasedHandler) -> axum::routing::MethodRouter 
     let svc = move |req: axum::extract::Request| {
         let h = h.clone();
         async move {
-            let (sky_req, upgrader) = match build_request(req).await {
+            let (ipe_req, upgrader) = match build_request(req).await {
                 Ok(v) => v,
                 Err(code) => {
                     let status = axum::http::StatusCode::from_u16(code)
@@ -655,7 +655,7 @@ fn method_router(method: &str, h: ErasedHandler) -> axum::routing::MethodRouter 
                 .scope(std::cell::Cell::new(upgrader), async move {
                     WS_RESPONSE
                         .scope(std::cell::Cell::new(None), async move {
-                            let result = h(sky_req).await;
+                            let result = h(ipe_req).await;
                             if let Some(ws_resp) = WS_RESPONSE.with(|c| c.take()) {
                                 return ws_resp;
                             }
@@ -695,7 +695,7 @@ fn strip_trailing_slash(p: &str) -> String {
 pub fn server_listen<E: From<String> + Send + 'static>(
     port: i64,
     routes: Vec<ServerRoute>,
-) -> SkyTask<E, ()> {
+) -> IpeTask<E, ()> {
     Box::pin(async move {
         let mut app: axum::Router = axum::Router::new();
         for r in routes {
@@ -737,7 +737,7 @@ pub fn server_listen<E: From<String> + Send + 'static>(
         let addr = format!("{}:{}", host, port);
         let listener = match tokio::net::TcpListener::bind(&addr).await {
             Ok(l) => l,
-            Err(e) => return SkyResult::Err(format!("Server.listen: bind {}: {}", addr, e).into()),
+            Err(e) => return IpeResult::Err(format!("Server.listen: bind {}: {}", addr, e).into()),
         };
         eprintln!("[sky.http.server] listening on http://{}", addr);
         // with_connect_info so each request carries the peer SocketAddr —
@@ -745,7 +745,7 @@ pub fn server_listen<E: From<String> + Send + 'static>(
         let svc = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
         match axum::serve(listener, svc).await {
             Ok(()) => ok_res(()),
-            Err(e) => SkyResult::Err(format!("Server.listen: serve: {}", e).into()),
+            Err(e) => IpeResult::Err(format!("Server.listen: serve: {}", e).into()),
         }
     })
 }
@@ -773,8 +773,8 @@ pub enum WsHandle {
 /// capture; capturing handlers need Arc<dyn Fn> erasure, a follow-up).
 ///
 /// Generic over the error type E because the project's concrete error
-/// (SkyCoreErrorError) is unnameable from the runtime crate. The Sky-side
-/// bridge pins `E = SkyError` (and drops the phantom `msg`) via a generic type
+/// (IpeCoreErrorError) is unnameable from the runtime crate. The Sky-side
+/// bridge pins `E = IpeError` (and drops the phantom `msg`) via a generic type
 /// alias — see aliasToRustTypeDef. fn pointers don't store E, so WsServerCfg<E>
 /// is Send/Copy-of-fields regardless of E.
 #[allow(non_snake_case)]
@@ -788,10 +788,10 @@ pub struct WsServerCfg<E> {
     // value in `Arc::new(..)` at every record literal / field-update site, so
     // the `withOnX` setters (param `impl Fn`) and `defaultCfg` (lambda literals)
     // both store cleanly. Arc is Clone, so the `#[derive(Clone)]` above holds.
-    pub onConnect: Arc<dyn Fn(WsHandle) -> SkyTask<E, ()> + Send + Sync>,
-    pub onMessage: Arc<dyn Fn(WsHandle, String) -> SkyTask<E, ()> + Send + Sync>,
-    pub onClose: Arc<dyn Fn(WsHandle) -> SkyTask<E, ()> + Send + Sync>,
-    pub onError: Arc<dyn Fn(WsHandle, E) -> SkyTask<E, ()> + Send + Sync>,
+    pub onConnect: Arc<dyn Fn(WsHandle) -> IpeTask<E, ()> + Send + Sync>,
+    pub onMessage: Arc<dyn Fn(WsHandle, String) -> IpeTask<E, ()> + Send + Sync>,
+    pub onClose: Arc<dyn Fn(WsHandle) -> IpeTask<E, ()> + Send + Sync>,
+    pub onError: Arc<dyn Fn(WsHandle, E) -> IpeTask<E, ()> + Send + Sync>,
     pub maxMessageBytes: i64,
     pub originPatterns: Vec<String>,
 }
@@ -1028,7 +1028,7 @@ fn ws_cross_origin(req: &ServerRequest) -> bool {
 pub fn server_web_socket_upgrade<E: From<String> + Send + 'static>(
     req: ServerRequest,
     cfg: WsServerCfg<E>,
-) -> SkyTask<E, ServerResponse> {
+) -> IpeTask<E, ServerResponse> {
     Box::pin(async move {
         // Origin allowlist. Production with no patterns → reject (matches Go). With
         // patterns set (any mode), the request's Origin must match one of them.
@@ -1101,12 +1101,12 @@ fn ws_send_raw(id: i64, out: WsOut) -> bool {
 pub fn server_web_socket_send_to_client<E: From<String> + Send + 'static>(
     id: i64,
     msg: String,
-) -> SkyTask<E, ()> {
+) -> IpeTask<E, ()> {
     Box::pin(async move {
         if ws_send_raw(id, WsOut::Text(msg)) {
             ok_res(())
         } else {
-            SkyResult::Err(format!("ws: no client {}", id).into())
+            IpeResult::Err(format!("ws: no client {}", id).into())
         }
     })
 }
@@ -1115,12 +1115,12 @@ pub fn server_web_socket_send_to_client<E: From<String> + Send + 'static>(
 pub fn server_web_socket_send_binary_to_client<E: From<String> + Send + 'static>(
     id: i64,
     msg: Vec<u8>,
-) -> SkyTask<E, ()> {
+) -> IpeTask<E, ()> {
     Box::pin(async move {
         if ws_send_raw(id, WsOut::Binary(msg)) {
             ok_res(())
         } else {
-            SkyResult::Err(format!("ws: no client {}", id).into())
+            IpeResult::Err(format!("ws: no client {}", id).into())
         }
     })
 }
@@ -1129,7 +1129,7 @@ pub fn server_web_socket_send_binary_to_client<E: From<String> + Send + 'static>
 pub fn server_web_socket_broadcast<E: From<String> + Send + 'static>(
     ids: Vec<i64>,
     msg: String,
-) -> SkyTask<E, ()> {
+) -> IpeTask<E, ()> {
     Box::pin(async move {
         let mut any_ok = false;
         {
@@ -1145,13 +1145,13 @@ pub fn server_web_socket_broadcast<E: From<String> + Send + 'static>(
         if ids.is_empty() || any_ok {
             ok_res(())
         } else {
-            SkyResult::Err("ws broadcast: every send failed".to_string().into())
+            IpeResult::Err("ws broadcast: every send failed".to_string().into())
         }
     })
 }
 
 /// ServerWebSocket_closeClient : Int -> Task Error () (idempotent)
-pub fn server_web_socket_close_client<E: From<String> + Send + 'static>(id: i64) -> SkyTask<E, ()> {
+pub fn server_web_socket_close_client<E: From<String> + Send + 'static>(id: i64) -> IpeTask<E, ()> {
     Box::pin(async move {
         let _ = ws_send_raw(id, WsOut::Close);
         ok_res(())
@@ -1165,7 +1165,7 @@ pub fn server_web_socket_close_client<E: From<String> + Send + 'static>(id: i64)
 // adapters sit in front of it.
 //
 // Design decisions (docs/adr/0023-websocket-server-kernel-only-typed-handles.md):
-//   D2 — WsServerCfg is monomorphic (pins E = SkyError, drops phantom msg).
+//   D2 — WsServerCfg is monomorphic (pins E = IpeError, drops phantom msg).
 //   D3 — kernels take WsHandle, not i64; adapters unwrap.
 //   D4 — bounded fail-fast `try_send` (IPE_WS_SEND_BUFFER=256 default).
 
@@ -1186,11 +1186,11 @@ pub fn ws_server_default_cfg<E: From<String> + Send + 'static>() -> WsServerCfg<
 
 /// `Ws.withOnConnect` — replace the `onConnect` callback.
 ///
-/// Accepts `Arc<dyn Fn(WsHandle) -> SkyTask<E, ()> + Send + Sync + 'static>` directly
+/// Accepts `Arc<dyn Fn(WsHandle) -> IpeTask<E, ()> + Send + Sync + 'static>` directly
 /// because stable Rust does not implement `Fn<Args>` for `Arc<dyn Fn<Args>>` — the
 /// emitter always pre-wraps the function in `Arc::new`, so the adapter stores it as-is.
 pub fn ws_server_with_on_connect<E>(
-    cb: Arc<dyn Fn(WsHandle) -> SkyTask<E, ()> + Send + Sync + 'static>,
+    cb: Arc<dyn Fn(WsHandle) -> IpeTask<E, ()> + Send + Sync + 'static>,
     cfg: WsServerCfg<E>,
 ) -> WsServerCfg<E>
 where
@@ -1209,7 +1209,7 @@ where
 ///
 /// Accepts `Arc<dyn Fn(...)>` directly — see `ws_server_with_on_connect` for rationale.
 pub fn ws_server_with_on_message<E>(
-    cb: Arc<dyn Fn(WsHandle, String) -> SkyTask<E, ()> + Send + Sync + 'static>,
+    cb: Arc<dyn Fn(WsHandle, String) -> IpeTask<E, ()> + Send + Sync + 'static>,
     cfg: WsServerCfg<E>,
 ) -> WsServerCfg<E>
 where
@@ -1225,7 +1225,7 @@ where
 ///
 /// Accepts `Arc<dyn Fn(...)>` directly — see `ws_server_with_on_connect` for rationale.
 pub fn ws_server_with_on_close<E>(
-    cb: Arc<dyn Fn(WsHandle) -> SkyTask<E, ()> + Send + Sync + 'static>,
+    cb: Arc<dyn Fn(WsHandle) -> IpeTask<E, ()> + Send + Sync + 'static>,
     cfg: WsServerCfg<E>,
 ) -> WsServerCfg<E>
 where
@@ -1238,7 +1238,7 @@ where
 ///
 /// Accepts `Arc<dyn Fn(...)>` directly — see `ws_server_with_on_connect` for rationale.
 pub fn ws_server_with_on_error<E>(
-    cb: Arc<dyn Fn(WsHandle, E) -> SkyTask<E, ()> + Send + Sync + 'static>,
+    cb: Arc<dyn Fn(WsHandle, E) -> IpeTask<E, ()> + Send + Sync + 'static>,
     cfg: WsServerCfg<E>,
 ) -> WsServerCfg<E>
 where
@@ -1277,7 +1277,7 @@ pub fn ws_server_with_origin_patterns<E: From<String> + Send + 'static>(
 pub fn ws_server_send_to_client<E: From<String> + Send + 'static>(
     h: WsHandle,
     msg: String,
-) -> SkyTask<E, ()> {
+) -> IpeTask<E, ()> {
     let WsHandle::WebSocketServer(id) = h;
     server_web_socket_send_to_client(id, msg)
 }
@@ -1287,7 +1287,7 @@ pub fn ws_server_send_to_client<E: From<String> + Send + 'static>(
 pub fn ws_server_send_binary_to_client<E: From<String> + Send + 'static>(
     h: WsHandle,
     data: Vec<u8>,
-) -> SkyTask<E, ()> {
+) -> IpeTask<E, ()> {
     let WsHandle::WebSocketServer(id) = h;
     server_web_socket_send_binary_to_client(id, data)
 }
@@ -1296,7 +1296,7 @@ pub fn ws_server_send_binary_to_client<E: From<String> + Send + 'static>(
 pub fn ws_server_broadcast<E: From<String> + Send + 'static>(
     hs: Vec<WsHandle>,
     msg: String,
-) -> SkyTask<E, ()> {
+) -> IpeTask<E, ()> {
     let ids: Vec<i64> = hs
         .into_iter()
         .map(|WsHandle::WebSocketServer(id)| id)
@@ -1305,7 +1305,7 @@ pub fn ws_server_broadcast<E: From<String> + Send + 'static>(
 }
 
 /// `Ws.closeClient` — close a peer connection.  D3; idempotent.
-pub fn ws_server_close_client<E: From<String> + Send + 'static>(h: WsHandle) -> SkyTask<E, ()> {
+pub fn ws_server_close_client<E: From<String> + Send + 'static>(h: WsHandle) -> IpeTask<E, ()> {
     let WsHandle::WebSocketServer(id) = h;
     server_web_socket_close_client(id)
 }
@@ -1422,7 +1422,7 @@ mod ws_adapter_tests {
 
 // ─── Sky.Http.Middleware + Sky.Http.RateLimit ─────────────────────────────
 //
-// A Handler is `Fn(ServerRequest) -> SkyTask<E, ServerResponse>`. Each `with*`
+// A Handler is `Fn(ServerRequest) -> IpeTask<E, ServerResponse>`. Each `with*`
 // wraps a handler and returns a new one; they chain generically (each output is
 // the next's input H), so no concrete `Handler` type is named.
 
@@ -1508,7 +1508,7 @@ where
         let task = h(req);
         Box::pin(async move {
             match task.await {
-                SkyResult::Ok(mut resp) => {
+                IpeResult::Ok(mut resp) => {
                     if let Some(a) = allow {
                         // See preflight branch: a reflected specific origin needs
                         // `Vary: Origin` to be cache-safe.
@@ -1554,8 +1554,8 @@ where
         Box::pin(async move {
             let result = task.await;
             let status = match &result {
-                SkyResult::Ok(r) => r.status,
-                SkyResult::Err(_) => 500,
+                IpeResult::Ok(r) => r.status,
+                IpeResult::Err(_) => 500,
             };
             eprintln!(
                 "[sky.http] {} {} {} {}ms",
@@ -1684,9 +1684,9 @@ fn request_is_https(headers: &HashMap<String, String>) -> bool {
 /// request-scoped.
 fn csrf_cookie_name() -> &'static str {
     if crate::telemetry::production_from_env() {
-        "__Host-sky_csrf"
+        "__Host-ipe_csrf"
     } else {
-        "sky_csrf"
+        "ipe_csrf"
     }
 }
 
@@ -1741,7 +1741,7 @@ fn csrf_set_cookie_value(token: &str, request_is_https: bool) -> String {
 }
 
 /// Middleware.withCsrf : Handler -> Handler. Double-submit-cookie CSRF guard
-/// for `Sky.Http.Server` routes (Go/upstream-audit parity: `__Host-sky_csrf`
+/// for `Sky.Http.Server` routes (Go/upstream-audit parity: `__Host-ipe_csrf`
 /// cookie, safe methods set/refresh it, unsafe methods require cookie ==
 /// `X-Csrf-Token` header via constant-time compare, 403 on any
 /// mismatch/missing value).
@@ -1797,9 +1797,9 @@ where
         let task = h(req);
         Box::pin(async move {
             match task.await {
-                SkyResult::Ok(mut resp) => {
+                IpeResult::Ok(mut resp) => {
                     resp.cookies.push(csrf_set_cookie_value(&token, is_https));
-                    SkyResult::Ok(resp)
+                    IpeResult::Ok(resp)
                 }
                 other => other,
             }
@@ -1939,14 +1939,14 @@ mod tests {
             assert!(
                 matches!(
                     server_header(probe.to_string(), req.clone()),
-                    SkyMaybe::Just(ref v) if v == "application/json"
+                    IpeMaybe::Just(ref v) if v == "application/json"
                 ),
                 "lookup {probe:?} should resolve to the stored value",
             );
         }
         assert!(matches!(
             server_header("x-missing".to_string(), req.clone()),
-            SkyMaybe::Nothing
+            IpeMaybe::Nothing
         ));
     }
 
@@ -1972,7 +1972,7 @@ mod tests {
         assert!(!req.headers.contains_key("x-trace-id"));
         assert!(matches!(
             server_header("X-TRACE-ID".to_string(), req),
-            SkyMaybe::Just(ref v) if v == "abc123"
+            IpeMaybe::Just(ref v) if v == "abc123"
         ));
     }
 
@@ -1981,7 +1981,7 @@ mod tests {
         // Validate the crux: a Sky-shaped handler closure boxes into a Route.
         let r: ServerRoute = server_get::<String, _>("/".to_string(), |_req: ServerRequest| {
             Box::pin(ready(ok_res::<String, _>(server_text("hi".to_string()))))
-                as SkyTask<String, ServerResponse>
+                as IpeTask<String, ServerResponse>
         });
         assert_eq!(r.method, "GET");
         assert!(matches!(r.target, RouteTarget::Handler(_)));
@@ -2022,8 +2022,8 @@ mod tests {
         let out = axum_body_string(to_axum_response(sky)).await;
         assert_eq!(out, r#"{"ok":true}"#, "non-html body must be verbatim");
 
-        let sky_text = server_text("plain body</body>".to_string());
-        let out_text = axum_body_string(to_axum_response(sky_text)).await;
+        let ipe_text = server_text("plain body</body>".to_string());
+        let out_text = axum_body_string(to_axum_response(ipe_text)).await;
         assert_eq!(
             out_text, "plain body</body>",
             "text/plain body must be verbatim even with a </body> substring"
@@ -2137,11 +2137,11 @@ mod tests {
         // branch instead of 403 — the origin check must short-circuit before
         // that point for this assertion to distinguish the two paths.
         match server_web_socket_upgrade::<String>(req, cfg).await {
-            SkyResult::Ok(r) => assert_eq!(
+            IpeResult::Ok(r) => assert_eq!(
                 r.status, 403,
                 "cross-origin WS upgrade must be rejected outside production too"
             ),
-            SkyResult::Err(e) => panic!("expected Ok(403), got Err({e})"),
+            IpeResult::Err(e) => panic!("expected Ok(403), got Err({e})"),
         }
     }
 
@@ -2157,11 +2157,11 @@ mod tests {
         // WS upgrade), which is enough to prove it did NOT hit the 403
         // cross-origin branch.
         match server_web_socket_upgrade::<String>(req, cfg).await {
-            SkyResult::Ok(r) => assert_eq!(
+            IpeResult::Ok(r) => assert_eq!(
                 r.status, 400,
                 "same-origin WS upgrade must pass the origin check (400 = no real upgrader in this unit test, not 403)"
             ),
-            SkyResult::Err(e) => panic!("expected Ok(400), got Err({e})"),
+            IpeResult::Err(e) => panic!("expected Ok(400), got Err({e})"),
         }
     }
 
@@ -2229,28 +2229,28 @@ mod tests {
     async fn csrf_get_mints_and_sets_cookie_no_check() {
         let h = middleware_with_csrf::<String, _>(|_req: ServerRequest| {
             Box::pin(ready(ok_res::<String, _>(server_text("ok".into()))))
-                as SkyTask<String, ServerResponse>
+                as IpeTask<String, ServerResponse>
         });
         let req = mk_req("GET", HashMap::new(), HashMap::new());
         let resp = h(req).await;
         match resp {
-            SkyResult::Ok(r) => assert_eq!(r.cookies.len(), 1, "GET must mint a fresh cookie"),
-            SkyResult::Err(_) => panic!("GET must never be rejected"),
+            IpeResult::Ok(r) => assert_eq!(r.cookies.len(), 1, "GET must mint a fresh cookie"),
+            IpeResult::Err(_) => panic!("GET must never be rejected"),
         }
     }
 
     #[tokio::test]
     async fn csrf_post_without_header_rejected() {
         let mut cookies = HashMap::new();
-        cookies.insert("sky_csrf".to_string(), "a".repeat(64));
+        cookies.insert("ipe_csrf".to_string(), "a".repeat(64));
         let h = middleware_with_csrf::<String, _>(|_req: ServerRequest| {
             Box::pin(ready(ok_res::<String, _>(server_text("ok".into()))))
-                as SkyTask<String, ServerResponse>
+                as IpeTask<String, ServerResponse>
         });
         let req = mk_req("POST", cookies, HashMap::new());
         match h(req).await {
-            SkyResult::Ok(r) => assert_eq!(r.status, 403),
-            SkyResult::Err(_) => panic!("expected an Ok(403), not an Err"),
+            IpeResult::Ok(r) => assert_eq!(r.status, 403),
+            IpeResult::Err(_) => panic!("expected an Ok(403), not an Err"),
         }
     }
 
@@ -2258,34 +2258,34 @@ mod tests {
     async fn csrf_post_with_matching_cookie_and_header_allowed() {
         let tok = "b".repeat(64);
         let mut cookies = HashMap::new();
-        cookies.insert("sky_csrf".to_string(), tok.clone());
+        cookies.insert("ipe_csrf".to_string(), tok.clone());
         let mut headers = HashMap::new();
         headers.insert("x-csrf-token".to_string(), tok);
         let h = middleware_with_csrf::<String, _>(|_req: ServerRequest| {
             Box::pin(ready(ok_res::<String, _>(server_text("ok".into()))))
-                as SkyTask<String, ServerResponse>
+                as IpeTask<String, ServerResponse>
         });
         let req = mk_req("POST", cookies, headers);
         match h(req).await {
-            SkyResult::Ok(r) => assert_eq!(r.status, 200),
-            SkyResult::Err(_) => panic!("expected Ok(200)"),
+            IpeResult::Ok(r) => assert_eq!(r.status, 200),
+            IpeResult::Err(_) => panic!("expected Ok(200)"),
         }
     }
 
     #[tokio::test]
     async fn csrf_post_with_mismatched_cookie_and_header_rejected() {
         let mut cookies = HashMap::new();
-        cookies.insert("sky_csrf".to_string(), "c".repeat(64));
+        cookies.insert("ipe_csrf".to_string(), "c".repeat(64));
         let mut headers = HashMap::new();
         headers.insert("x-csrf-token".to_string(), "d".repeat(64));
         let h = middleware_with_csrf::<String, _>(|_req: ServerRequest| {
             Box::pin(ready(ok_res::<String, _>(server_text("ok".into()))))
-                as SkyTask<String, ServerResponse>
+                as IpeTask<String, ServerResponse>
         });
         let req = mk_req("POST", cookies, headers);
         match h(req).await {
-            SkyResult::Ok(r) => assert_eq!(r.status, 403),
-            SkyResult::Err(_) => panic!("expected Ok(403)"),
+            IpeResult::Ok(r) => assert_eq!(r.status, 403),
+            IpeResult::Err(_) => panic!("expected Ok(403)"),
         }
     }
 
@@ -2296,17 +2296,17 @@ mod tests {
     #[tokio::test]
     async fn csrf_post_with_matching_but_malformed_tokens_rejected() {
         let mut cookies = HashMap::new();
-        cookies.insert("sky_csrf".to_string(), "x".to_string());
+        cookies.insert("ipe_csrf".to_string(), "x".to_string());
         let mut headers = HashMap::new();
         headers.insert("x-csrf-token".to_string(), "x".to_string());
         let h = middleware_with_csrf::<String, _>(|_req: ServerRequest| {
             Box::pin(ready(ok_res::<String, _>(server_text("ok".into()))))
-                as SkyTask<String, ServerResponse>
+                as IpeTask<String, ServerResponse>
         });
         let req = mk_req("POST", cookies, headers);
         match h(req).await {
-            SkyResult::Ok(r) => assert_eq!(r.status, 403),
-            SkyResult::Err(_) => panic!("expected Ok(403)"),
+            IpeResult::Ok(r) => assert_eq!(r.status, 403),
+            IpeResult::Err(_) => panic!("expected Ok(403)"),
         }
     }
 
@@ -2410,7 +2410,7 @@ mod tests {
         headers.insert("x-forwarded-proto".to_string(), "https".to_string());
         let h = middleware_with_csrf::<String, _>(|_req: ServerRequest| {
             Box::pin(ready(ok_res::<String, _>(server_text("ok".into()))))
-                as SkyTask<String, ServerResponse>
+                as IpeTask<String, ServerResponse>
         });
         let req = mk_req("GET", HashMap::new(), headers);
         // `middleware_with_csrf` calls the process-wide `request_is_https`
@@ -2419,7 +2419,7 @@ mod tests {
         // documents the untrusted-by-default floor: no Secure without the
         // operator's opt-in, even though the header claims https.
         match h(req).await {
-            SkyResult::Ok(r) => {
+            IpeResult::Ok(r) => {
                 assert_eq!(r.cookies.len(), 1);
                 assert!(
                     !r.cookies[0].contains("; Secure"),
@@ -2427,7 +2427,7 @@ mod tests {
                     r.cookies[0]
                 );
             }
-            SkyResult::Err(_) => panic!("GET must never be rejected"),
+            IpeResult::Err(_) => panic!("GET must never be rejected"),
         }
     }
 }
