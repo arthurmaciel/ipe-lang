@@ -154,6 +154,7 @@ fn build_identity_program(interner: &mut Interner) -> DResult<Program> {
             uses_auth: false,
             uses_websocket: false,
             uses_email: false,
+            uses_ffi: false,
         }],
     })
 }
@@ -309,6 +310,7 @@ fn build_bounded_program(interner: &mut Interner) -> DResult<Program> {
             uses_auth: false,
             uses_websocket: false,
             uses_email: false,
+            uses_ffi: false,
         }],
     })
 }

@@ -66,8 +66,9 @@ type CompileOutcome = Result<ipe_backend::EmittedProject, String>;
 fn cold_compile(user: &UserSources) -> CompileOutcome {
     let (sources, injected) = prepared(user);
     let db = ipe_db::IpeDatabase::new();
-    let root = ipe::create_source_root(&db, &sources, &injected);
-    let config = ipe_db::BuildConfig::new(&db, ipe_backend_rust::DbDriver::Sqlite);
+    let root =
+        ipe::create_source_root(&db, &sources, &injected, &std::collections::BTreeSet::new());
+    let config = ipe_db::BuildConfig::new(&db, ipe_backend_rust::DbDriver::Sqlite, None);
     ipe::compile_prepared(
         &db,
         root,
@@ -115,7 +116,12 @@ impl WarmSession {
         match self.root {
             Some(root) => ipe_db::sync_source_root(&mut self.db, root, &desired),
             None => {
-                let root = ipe::create_source_root(&self.db, &sources, &injected);
+                let root = ipe::create_source_root(
+                    &self.db,
+                    &sources,
+                    &injected,
+                    &std::collections::BTreeSet::new(),
+                );
                 self.root = Some(root);
             }
         }
@@ -150,6 +156,7 @@ impl WarmSession {
             self.config = Some(ipe_db::BuildConfig::new(
                 &self.db,
                 ipe_backend_rust::DbDriver::Sqlite,
+                None,
             ));
         }
         self.demand(user)

@@ -1,0 +1,16 @@
+[project]
+name = "ffi-skyshop-core"
+
+# 13-skyshop's Go dependency conversion, per the FFI acceptance path:
+#   github.com/google/uuid  -> crate `uuid` (auto-bound, shim-free — see
+#                              .ipe/cache/ffi/rust, regenerate with
+#                              `ipe add uuid --features v4,v7 --allow-build-scripts`)
+#   cloud.google.com/go/firestore + firebase auth -> Ipe.Db (SQLite) + Ipe.Auth
+#                              (async Rust SDKs are outside the sync FFI ladder
+#                              by design — M-G bridge)
+#   encoding/*, strings, strconv, fmt, os, io, context, net/http -> Ipe stdlib
+[rust.dependencies]
+uuid = "1"
+
+[database]
+driver = "sqlite"

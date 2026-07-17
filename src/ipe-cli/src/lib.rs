@@ -16,6 +16,7 @@
 //! Errors are typed ([`CliError`]); no operation panics or unwraps.
 
 mod cache;
+pub mod ffi;
 pub mod project;
 pub mod stdlib;
 pub mod watch;
@@ -356,6 +357,28 @@ fn compile_modules_observed(
     // source — the ONLY inputs that earn `ModuleOrigin::EmbeddedStdlib` below.
     let injected = project::inject_compiled_std_closure(&mut sources, &mut discovered);
 
+    // The FFI seam: load the project's installed-crate catalog (empty when no
+    // `.ipe/cache/ffi/rust` exists up-tree), inject one `Rust.<Crate>`
+    // interface module per crate, and assemble the backend emission inputs.
+    let ffi_catalog = match ffi::load_catalog_for(blame_path) {
+        Ok(c) => c,
+        Err(e) => return (Err(e), CacheOutcome::Miss),
+    };
+    let ffi_cache_hint = ffi::find_cache_root(blame_path).unwrap_or_default();
+    let ffi_injected = match ffi::inject_interfaces(&mut sources, &ffi_catalog, &ffi_cache_hint) {
+        Ok(set) => set,
+        Err(e) => return (Err(e), CacheOutcome::Miss),
+    };
+    let ffi_emit = match ffi::assemble_emit(&ffi_catalog) {
+        Ok(f) => f,
+        Err(e) => return (Err(e), CacheOutcome::Miss),
+    };
+    // The on-disk build caches key only the Ipê sources — the FFI bindings
+    // text and opaque map live OUTSIDE that key, so a cache hit could serve a
+    // stale emitted project after `ipe add`/`ipe remove`. Disable both cache
+    // tiers for FFI-using builds (correctness over warm-start speed).
+    let cache_dir = if ffi_emit.is_some() { None } else { cache_dir };
+
     // The on-disk build cache. `epoch` folds in BOTH the running
     // `ipe` binary's own content hash and the active `rustc`'s fingerprint
     // (see `cache::derive_epoch`'s doc for why this makes
@@ -421,13 +444,13 @@ fn compile_modules_observed(
     // order, so the interning sequence — and therefore emitted bytes — is
     // deterministic across runs (golden-suite-enforced).
     let db = ipe_db::IpeDatabase::new();
-    let source_root = create_source_root(&db, &sources, &injected);
+    let source_root = create_source_root(&db, &sources, &injected, &ffi_injected);
     // The config input (see `ipe_db::BuildConfig`'s doc for why this
     // is narrowed to `db_driver` rather than the full `sky.toml` shape). A
     // fresh `BuildConfig` per one-shot invocation is fine here — unlike the
     // clean-vs-incremental parity gate's warm sequence, this driver never
     // re-demands `emit_project` against a second config instance.
-    let config = ipe_db::BuildConfig::new(&db, db_driver);
+    let config = ipe_db::BuildConfig::new(&db, db_driver, ffi_emit);
 
     let emitted = match compile_prepared(&db, source_root, &sources, entry_path, blame_path, config)
     {
@@ -478,12 +501,15 @@ pub fn create_source_root(
     db: &ipe_db::IpeDatabase,
     sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
     injected: &std::collections::BTreeSet<Vec<String>>,
+    ffi_injected: &std::collections::BTreeSet<Vec<String>>,
 ) -> ipe_db::SourceRoot {
     let file_handles: BTreeMap<Vec<String>, ipe_db::SourceFile> = sources
         .iter()
         .map(|(mod_path, (_, src))| {
             let origin = if injected.contains(mod_path) {
                 ipe_canon::ModuleOrigin::EmbeddedStdlib
+            } else if ffi_injected.contains(mod_path) {
+                ipe_canon::ModuleOrigin::FfiInterface
             } else {
                 ipe_canon::ModuleOrigin::User
             };
@@ -1087,6 +1113,9 @@ const USAGE: &str = "usage:\n  \
      ipe build <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]\n  \
      ipe run   <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [-- <args>...]\n  \
      ipe watch <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [--port <n>]\n  \
+     ipe add <crate> [--features a,b] [--yes]\n  \
+     ipe remove <crate>\n  \
+     ipe install [--yes]\n  \
      ipe explain [<CODE>]\n  \
      ipe fix <entry.ipe> [--yes]";
 
@@ -1100,6 +1129,9 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
         Some((cmd, rest)) if cmd == "run" => run_run(rest),
         Some((cmd, rest)) if cmd == "watch" => run_watch(rest),
         Some((cmd, rest)) if cmd == "explain" => run_explain(rest),
+        Some((cmd, rest)) if cmd == "add" => ffi::run_add(rest),
+        Some((cmd, rest)) if cmd == "remove" => ffi::run_remove(rest),
+        Some((cmd, rest)) if cmd == "install" => ffi::run_install(rest),
         Some((cmd, rest)) if cmd == "fix" => run_fix(rest),
         _ => Err(CliError::Usage(USAGE)),
     }
@@ -1701,7 +1733,7 @@ fn apply_fixes_cmd<W: Write>(entry: &Path, auto: bool, w: &mut W) -> Result<(), 
 
 /// Read a line from stdin and interpret it as a yes/no answer. EOF or any read
 /// error is treated as "no" (the safe default for a mutating action).
-fn read_yes_no() -> bool {
+pub(crate) fn read_yes_no() -> bool {
     let mut line = String::new();
     match std::io::stdin().read_line(&mut line) {
         Ok(_) => {
@@ -1878,7 +1910,7 @@ mod tests {
         let index = code_index();
         let lines = index.lines().count();
         assert_eq!(lines, ALL_CODES.len(), "one line per code");
-        assert_eq!(ALL_CODES.len(), 94, "taxonomy is 94 codes");
+        assert_eq!(ALL_CODES.len(), 97, "taxonomy is 97 codes");
         assert!(
             index.contains("IPE-T0001  type mismatch"),
             "index pairs code with title"

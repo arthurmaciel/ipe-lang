@@ -4775,19 +4775,29 @@ impl StdlibKernel {
 
 /// Opaque identifier for a user-provided FFI binding.
 ///
-/// Stub — the inner `u32` has no public API; constructors tied to the FFI
-/// introspection pipeline are not yet exposed.
+/// Reserved. The landed FFI consumer wiring realises the open registry
+/// WITHOUT a kernel-tier id: each bound crate becomes a driver-generated,
+/// fully-annotated `Rust.<Crate>` interface module
+/// (`ipe_canon::resolve::ModuleOrigin::FfiInterface`) whose forwarder bodies
+/// lower to `ipe_ir::Callee::Ffi { ident }` — FFI signatures ride the ONE
+/// existing annotation → `Ty` path, so there is no second scheme table for
+/// this id to index. The variant stays reserved for a future need to
+/// register an FFI binding at the KERNEL tier (e.g. a stdlib-visible alias
+/// onto a bound crate); constructors are deliberately unexposed until that
+/// consumer exists.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct FfiKernelId(u32);
 
-/// A fully-resolved kernel function: either a known stdlib kernel (resolved
-/// at canonicalisation time) or a user-provided FFI binding (resolved during
-/// the FFI phase; stub).
+/// A fully-resolved kernel function.
+///
+/// Either a known stdlib kernel (resolved at canonicalisation time) or a
+/// user-provided FFI binding (reserved — see [`FfiKernelId`] for why the
+/// landed FFI wiring does not mint these).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum KernelId {
     /// A known stdlib kernel.
     Stdlib(StdlibKernel),
-    /// A user-provided FFI binding (stub).
+    /// A user-provided FFI binding (reserved).
     Ffi(FfiKernelId),
 }
 

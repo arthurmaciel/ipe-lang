@@ -159,6 +159,13 @@ pub enum Expr_ {
     Unit,
     /// Function application.
     Call(Box<Expr>, Vec<Expr>),
+    /// A foreign-crate FFI wrapper call — the canonical form of the
+    /// `Ffi.binding "<wrapper_fn_ident>" arg0 …` body a driver-generated
+    /// FFI interface module carries ([`crate::resolve::ModuleOrigin::FfiInterface`]
+    /// only; unrepresentable from user source). `ident` is the emitted
+    /// `_bindings.rs` wrapper `pub fn` identifier; the enclosing binding's
+    /// annotation is the trusted HM signature.
+    ForeignCall { ident: Symbol, args: Vec<Expr> },
     /// `case scrutinee of` with resolved arms.
     Case(Box<Expr>, Vec<CaseBranch>),
     /// An anonymous function `\p0 p1 ... -> body`. The parameter patterns are

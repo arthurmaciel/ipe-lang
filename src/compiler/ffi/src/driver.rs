@@ -234,8 +234,12 @@ pub fn inspector_argv(
     krate: &CrateName,
     features: &[String],
     git: Option<&GitSource>,
+    allow_build_scripts: bool,
 ) -> Vec<OsString> {
     let mut argv: Vec<OsString> = Vec::new();
+    if allow_build_scripts {
+        argv.push("--allow-build-scripts".into());
+    }
     if !features.is_empty() {
         argv.push("--features".into());
         argv.push(features.join(",").into());
@@ -309,7 +313,7 @@ pub fn slugify(name: &str) -> String {
         .collect()
 }
 
-/// The four artifact paths for one bound crate.
+/// The artifact paths for one bound crate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactPaths {
     /// The `.ipei` type-environment seed.
@@ -320,6 +324,11 @@ pub struct ArtifactPaths {
     pub bindings: PathBuf,
     /// The `coverage.md` over-drop report.
     pub coverage: PathBuf,
+    /// The injectable Ipê interface module (`<slug>.ipe`).
+    pub interface: PathBuf,
+    /// The consumer manifest (`<slug>.consumer.json`) — module/kernel names,
+    /// opaque-type paths, pinned Cargo dep lines, and the included bindings.
+    pub consumer: PathBuf,
 }
 
 /// The project-local FFI artifact cache (`<project>/.ipe/cache/ffi/rust`).
@@ -351,6 +360,8 @@ impl FfiCache {
             kernel_json: self.root.join(format!("{slug}.kernel.json")),
             bindings: self.root.join(format!("{slug}_bindings.rs")),
             coverage: self.root.join(format!("{slug}.coverage.md")),
+            interface: self.root.join(format!("{slug}.ipe")),
+            consumer: self.root.join(format!("{slug}.consumer.json")),
         }
     }
 
@@ -366,11 +377,15 @@ impl FfiCache {
         };
         std::fs::create_dir_all(&self.root).map_err(|e| io_err(&self.root, &e))?;
         let paths = self.artifact_paths(&slugify(pkg.name()));
-        let writes: [(&Path, String); 4] = [
+        let iface = crate::interface::crate_interface(pkg);
+        let consumer_json = emit_consumer_json(pkg, &iface)?;
+        let writes: [(&Path, String); 6] = [
             (&paths.ipei, crate::emit::emit_ipei(pkg)),
             (&paths.kernel_json, crate::emit::emit_kernel_json(pkg)),
             (&paths.bindings, crate::bindings::emit_bindings(pkg)),
             (&paths.coverage, emit_coverage(pkg)),
+            (&paths.interface, iface.source),
+            (&paths.consumer, consumer_json),
         ];
         for (path, contents) in &writes {
             std::fs::write(path, contents).map_err(|e| io_err(path, &e))?;
@@ -391,6 +406,8 @@ impl FfiCache {
             &paths.kernel_json,
             &paths.bindings,
             &paths.coverage,
+            &paths.interface,
+            &paths.consumer,
         ] {
             match std::fs::remove_file(path) {
                 Ok(()) => {}
@@ -432,6 +449,174 @@ pub fn install_from_inspection(
     }
     let paths = cache.write_package(&pkg)?;
     Ok((pkg, paths))
+}
+
+// ── consumer manifest + installed-crate catalog ─────────────────────────────
+
+/// Serialize the consumer manifest for one validated package: everything the
+/// build-time catalog loader needs WITHOUT re-running inspection.
+///
+/// # Errors
+///
+/// Propagates the pinned-dep-line derivation failure (an unpinned dependency
+/// is refused at install, never discovered at build).
+pub fn emit_consumer_json(
+    pkg: &PkgInfo,
+    iface: &crate::interface::CrateInterface,
+) -> Result<String, Diagnostic> {
+    let bindings: Vec<serde_json::Value> = iface
+        .bindings
+        .iter()
+        .map(|b| {
+            serde_json::json!({
+                "refName": b.ref_name,
+                "wrapperIdent": b.wrapper_ident,
+                "arity": b.arity,
+                "sig": b.sig,
+            })
+        })
+        .collect();
+    let doc = serde_json::json!({
+        "moduleName": iface.module_name,
+        "kernelName": iface.kernel_name,
+        "opaqueTypes": iface.opaque_types,
+        "cargoDeps": cargo_dep_lines(pkg)?,
+        "bindings": bindings,
+    });
+    let mut text = serde_json::to_string_pretty(&doc).unwrap_or_else(|_| "{}".to_owned());
+    text.push('\n');
+    Ok(text)
+}
+
+/// One installed crate's consumer-side view, loaded from the artifact cache.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledCrate {
+    /// The cache slug (`semver`).
+    pub slug: String,
+    /// Ipê module qualifier (`Rust.Semver`).
+    pub module_name: String,
+    /// Kernel-name prefix (`Rust_Semver`).
+    pub kernel_name: String,
+    /// The injectable Ipê interface module source.
+    pub interface_source: String,
+    /// The full `_bindings.rs` wrapper source.
+    pub bindings_source: String,
+    /// Opaque foreign type name → absolute Rust path.
+    pub opaque_types: std::collections::BTreeMap<String, String>,
+    /// Pinned `[dependencies]` lines.
+    pub cargo_deps: Vec<String>,
+    /// Every wrapper fn identifier the interface forwards to.
+    pub wrapper_idents: BTreeSet<String>,
+}
+
+/// Load every installed crate from a project's FFI artifact cache.
+///
+/// An absent cache directory is an empty catalog (a project with no FFI).
+/// Each crate is validated on load: every wrapper identifier the interface
+/// module forwards to must exist as a `pub fn` in the stored bindings source
+/// — a tampered or half-written cache is refused here, before it can produce
+/// an `ipe`-exit-0 build whose emitted Rust dangles (THE SEAL).
+///
+/// # Errors
+///
+/// `IPE-F4412` for an unreadable artifact; a wire-defect diagnostic for a
+/// malformed consumer manifest or a missing wrapper.
+pub fn load_catalog(cache_root: &Path) -> Result<Vec<InstalledCrate>, Diagnostic> {
+    if !cache_root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let io_err = |path: &Path, detail: String| Diagnostic::ArtifactIo {
+        path: path.to_string_lossy().into_owned(),
+        detail,
+    };
+    let mut slugs: Vec<String> = Vec::new();
+    let entries = std::fs::read_dir(cache_root).map_err(|e| io_err(cache_root, e.to_string()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| io_err(cache_root, e.to_string()))?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if let Some(slug) = name.strip_suffix(".consumer.json") {
+            slugs.push(slug.to_owned());
+        }
+    }
+    slugs.sort();
+    let mut out = Vec::with_capacity(slugs.len());
+    for slug in slugs {
+        let cache = FfiCache {
+            root: cache_root.to_path_buf(),
+        };
+        let paths = cache.artifact_paths(&slug);
+        let read = |p: &Path| -> Result<String, Diagnostic> {
+            std::fs::read_to_string(p).map_err(|e| io_err(p, e.to_string()))
+        };
+        let consumer_text = read(&paths.consumer)?;
+        let interface_source = read(&paths.interface)?;
+        let bindings_source = read(&paths.bindings)?;
+        let malformed = |detail: String| Diagnostic::WireMalformed {
+            context: format!("consumer manifest `{}`", paths.consumer.display()),
+            defect: crate::diag::WireDefect::Json { detail },
+        };
+        let doc: serde_json::Value = serde_json::from_str(&consumer_text)
+            .map_err(|e| malformed(format!("invalid JSON: {e}")))?;
+        let str_field = |key: &str| -> Result<String, Diagnostic> {
+            doc.get(key)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .ok_or_else(|| malformed(format!("missing string field `{key}`")))
+        };
+        let module_name = str_field("moduleName")?;
+        let kernel_name = str_field("kernelName")?;
+        let opaque_types: std::collections::BTreeMap<String, String> = doc
+            .get("opaqueTypes")
+            .and_then(serde_json::Value::as_object)
+            .map(|m| {
+                m.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_owned())))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let cargo_deps: Vec<String> = doc
+            .get("cargoDeps")
+            .and_then(serde_json::Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let wrapper_idents: BTreeSet<String> = doc
+            .get("bindings")
+            .and_then(serde_json::Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|b| b.get("wrapperIdent").and_then(serde_json::Value::as_str))
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        // Fail-closed cross-check: every forwarded wrapper must exist in the
+        // stored bindings source.
+        for ident in &wrapper_idents {
+            let decl = format!("pub fn {ident}(");
+            if !bindings_source.contains(&decl) {
+                return Err(malformed(format!(
+                    "interface forwards to wrapper `{ident}` but `{}` declares no such \
+                     `pub fn` — re-run `ipe add` to regenerate the cache",
+                    paths.bindings.display()
+                )));
+            }
+        }
+        out.push(InstalledCrate {
+            slug,
+            module_name,
+            kernel_name,
+            interface_source,
+            bindings_source,
+            opaque_types,
+            cargo_deps,
+            wrapper_idents,
+        });
+    }
+    Ok(out)
 }
 
 // ── coverage report (the over-drop keystone made visible) ───────────────────
@@ -495,12 +680,22 @@ pub fn cargo_dep_lines(pkg: &PkgInfo) -> Result<Vec<String>, Diagnostic> {
         return Ok(lines);
     }
     for dep in pkg.transitive_deps() {
+        // The inspector's own probe scaffold registers as a workspace member
+        // during introspection; it is not a real registry package.
+        if dep.name.starts_with("_ipe_ffi_probe") {
+            continue;
+        }
         if dep.version.is_empty() {
             return Err(missing_version(&dep.name));
         }
-        // The primary crate (the lib ident matching the package) carries the
-        // effective feature set rustdoc succeeded with.
-        let features = if dep.ident.as_str() == pkg.name() {
+        // The primary crate carries the effective feature set rustdoc
+        // succeeded with. Matched on the REGISTRY package NAME, not the lib
+        // ident: a crate whose lib renames its target (`async-stripe` → lib
+        // `stripe`) has `dep.ident = "stripe"` but `dep.name = "async-stripe"
+        // = pkg.name()`, and the `Cargo.toml` key is the package name — so
+        // matching on ident would drop the feature set and ship a manifest
+        // missing a mandatory runtime feature (a cargo build-script failure).
+        let features = if dep.name == pkg.name() {
             pkg.features()
         } else {
             &[]
@@ -673,7 +868,7 @@ mod tests {
             &hosts,
         )
         .expect("accepted");
-        let argv = inspector_argv(&krate, &["std".to_owned()], Some(&git));
+        let argv = inspector_argv(&krate, &["std".to_owned()], Some(&git), false);
         let rendered: Vec<String> = argv
             .iter()
             .map(|a| a.to_string_lossy().into_owned())
