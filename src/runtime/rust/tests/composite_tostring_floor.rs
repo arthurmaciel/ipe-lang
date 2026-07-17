@@ -74,7 +74,7 @@
 //! should be promoted then (see spec §"Disposition rationale"). The ADT shape
 //! stays blocked until Go stops leaking its struct layout.
 
-use ipe_runtime_rust::ipe_runtime_rust::basics::{basics_to_string, debug_to_string};
+use ipe_runtime_rust::basics::{basics_to_string, debug_to_string};
 
 // --- Positive floor: scalars match Go `%v` byte-for-byte via the Display path. ---
 

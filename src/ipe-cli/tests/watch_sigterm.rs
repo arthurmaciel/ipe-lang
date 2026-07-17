@@ -132,14 +132,14 @@ fn pid_is_alive(pid: u32) -> bool {
 /// Spawn a REAL `ipe watch` subprocess (the `run()` path, `external_stop =
 /// None` — the only caller the SIGTERM forwarder is installed for).
 #[cfg(target_os = "linux")]
-fn spawn_skyc_watch(
+fn spawn_ipe_watch(
     entry: &Path,
     out_dir: &Path,
     port: u16,
 ) -> Result<std::process::Child, BoxError> {
     let runtime_dir = ipe::resolve_runtime()
         .map_err(|e| -> BoxError { format!("runtime dir must resolve: {e}").into() })?;
-    std::process::Command::new(env!("CARGO_BIN_EXE_skyc"))
+    std::process::Command::new(env!("CARGO_BIN_EXE_ipe"))
         .arg("watch")
         .arg(entry)
         .arg("--out")
@@ -151,7 +151,7 @@ fn spawn_skyc_watch(
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .map_err(|e| -> BoxError { format!("skyc watch must spawn: {e}").into() })
+        .map_err(|e| -> BoxError { format!("ipe watch must spawn: {e}").into() })
 }
 
 /// Poll `child.try_wait()` until it exits or `timeout` elapses.
@@ -175,7 +175,7 @@ fn wait_for_exit(
 /// child is gone (killed and reaped), never an orphan holding the port.
 #[cfg(target_os = "linux")]
 #[test]
-fn watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_skyc_process()
+fn watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_ipe_process()
 -> Result<(), BoxError> {
     if std::env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
@@ -186,11 +186,11 @@ fn watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_skyc_process()
         .map_err(|e| -> BoxError { format!("write Main.ipe: {e}").into() })?;
 
     let port = 19157;
-    let mut skyc_proc = spawn_skyc_watch(&ipe_dir.join("Main.ipe"), &out_dir, port)?;
+    let mut ipe_proc = spawn_ipe_watch(&ipe_dir.join("Main.ipe"), &out_dir, port)?;
 
     if !wait_for_body(port, "v1", Duration::from_secs(180)) {
-        let _ = skyc_proc.kill();
-        let _ = skyc_proc.wait();
+        let _ = ipe_proc.kill();
+        let _ = ipe_proc.wait();
         return Err("initial cold build+spawn must serve v1 within budget".into());
     }
     let child_pid = find_pid_by_environ_kv("IPE_LIVE_PORT", &port.to_string())
@@ -198,12 +198,12 @@ fn watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_skyc_process()
 
     sigterm(ipe_proc.id())?;
 
-    let status = wait_for_exit(&mut skyc_proc, Duration::from_secs(30));
+    let status = wait_for_exit(&mut ipe_proc, Duration::from_secs(30));
     let Some(status) = status else {
-        let _ = skyc_proc.kill();
-        let _ = skyc_proc.wait();
+        let _ = ipe_proc.kill();
+        let _ = ipe_proc.wait();
         return Err(
-            "skyc must exit within a bounded wait after a PID-only SIGTERM \
+            "ipe must exit within a bounded wait after a PID-only SIGTERM \
                     (pre-fix: it died instantly via the default disposition, but the \
                     orphaned child kept the port)"
                 .into(),
@@ -319,11 +319,11 @@ fn double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_sigkill() ->
         .map_err(|e| -> BoxError { format!("write Main.ipe: {e}").into() })?;
 
     let port = 19158;
-    let mut skyc_proc = spawn_skyc_watch(&ipe_dir.join("Main.ipe"), &out_dir, port)?;
+    let mut ipe_proc = spawn_ipe_watch(&ipe_dir.join("Main.ipe"), &out_dir, port)?;
 
     if !wait_for_body(port, "v1", Duration::from_secs(180)) {
-        let _ = skyc_proc.kill();
-        let _ = skyc_proc.wait();
+        let _ = ipe_proc.kill();
+        let _ = ipe_proc.wait();
         return Err("initial cold build+spawn must serve v1 within budget".into());
     }
     let child_pid = find_pid_by_environ_kv("IPE_LIVE_PORT", &port.to_string())
@@ -345,12 +345,12 @@ fn double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_sigkill() ->
     // Second SIGTERM to the SAME PID.
     sigterm(ipe_proc.id())?;
 
-    let status = wait_for_exit(&mut skyc_proc, Duration::from_secs(30));
+    let status = wait_for_exit(&mut ipe_proc, Duration::from_secs(30));
     let elapsed = t0.elapsed();
     let Some(status) = status else {
-        let _ = skyc_proc.kill();
-        let _ = skyc_proc.wait();
-        return Err("skyc must still exit after its bounded teardown".into());
+        let _ = ipe_proc.kill();
+        let _ = ipe_proc.wait();
+        return Err("ipe must still exit after its bounded teardown".into());
     };
     assert!(
         status.success(),
