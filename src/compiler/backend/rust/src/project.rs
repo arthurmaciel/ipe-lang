@@ -811,7 +811,17 @@ fn assemble_project_files(
                      emission inputs (RustBackend::with_ffi)"
                 .to_owned(),
         })?;
-        files.insert(RelPath::new("src/ffi.rs")?, ffi.bindings_source.clone());
+        // S4 sentinel DCE (design D7): keep only the wrapper regions the
+        // program REACHES. Reachability is read straight off the emitted
+        // source — every `Callee::Ffi` renders as `crate::ffi::<ident>`, so a
+        // scan of the already-emitted files is exhaustive by construction.
+        // This is what lets a program bind a 76k-symbol crate yet compile only
+        // the handful of wrappers it calls — and keeps a generator gap in some
+        // UNUSED wrapper (an exotic lifetime/borrow shape the emitter renders
+        // wrong) from breaking a build that never calls it.
+        let reached = reached_ffi_idents(&files);
+        let shaken = shake_ffi_by_fn_ident(&ffi.bindings_source, &reached);
+        files.insert(RelPath::new("src/ffi.rs")?, shaken);
         let main = files
             .get_mut("src/main.rs")
             .ok_or_else(|| Diagnostic::CompilerBug {
@@ -1711,6 +1721,85 @@ fn email_cargo_toml(base: &str) -> DResult<String> {
     result.push_str(&lettre_dep);
     result.push_str(base.get(anchor_pos..).unwrap_or(""));
     Ok(result)
+}
+
+/// The `crate::ffi::<ident>` wrapper identifiers referenced anywhere in the
+/// emitted Rust sources — the program's reached FFI wrapper set.
+///
+/// Every `ipe_ir::Callee::Ffi` lowers to a `crate::ffi::<ident>(` call
+/// (`emit_expr::callee_name`), so scanning the emitted text is an exhaustive,
+/// parse-free reachability oracle.
+fn reached_ffi_idents(files: &BTreeMap<RelPath, String>) -> std::collections::BTreeSet<String> {
+    const MARK: &str = "crate::ffi::";
+    let mut out = std::collections::BTreeSet::new();
+    for text in files.values() {
+        let mut rest: &str = text;
+        while let Some(pos) = rest.find(MARK) {
+            let after = &rest[pos + MARK.len()..];
+            let ident: String = after
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !ident.is_empty() {
+                out.insert(ident);
+            }
+            rest = after;
+        }
+    }
+    out
+}
+
+/// The FFI wrapper-module sentinel bounds (mirror of `ipe_ffi::naming`; the
+/// backend may not depend on `ipe_ffi`, so the wire-format literals are
+/// re-stated here — a pure text protocol, stable by contract).
+const FFI_WRAPPER_BEGIN: &str = "// IPE-FFI-WRAPPER BEGIN ";
+const FFI_WRAPPER_END: &str = "// IPE-FFI-WRAPPER END";
+
+/// Text-slice the wrapper module on its BEGIN/END sentinels, keeping preamble
+/// unconditionally and only the regions whose `pub fn <ident>(` is reached.
+///
+/// Conservative-keep: a region whose `pub fn` ident cannot be read (a shape
+/// the scan does not recognise) is KEPT, so the shake never drops a wrapper
+/// the program calls (an under-bind); over-keep is dead code cargo strips.
+fn shake_ffi_by_fn_ident(
+    source: &str,
+    reached: &std::collections::BTreeSet<String>,
+) -> String {
+    let mut out = String::with_capacity(source.len());
+    // Buffer one wrapper region until its `pub fn` ident is known, then
+    // decide keep/drop for the whole region.
+    let mut region: Option<(String, bool)> = None; // (buffered text, reached?)
+    for line in source.lines() {
+        if line.trim_end().starts_with(FFI_WRAPPER_BEGIN) {
+            region = Some((String::new(), false));
+        }
+        if let Some((buf, keep)) = region.as_mut() {
+            buf.push_str(line);
+            buf.push('\n');
+            if let Some(rest) = line.trim_start().strip_prefix("pub fn ") {
+                let ident: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                // An ident we cannot read is conservatively kept.
+                *keep = ident.is_empty() || reached.contains(&ident);
+            }
+            if line.trim_end() == FFI_WRAPPER_END {
+                if *keep {
+                    out.push_str(buf);
+                }
+                region = None;
+            }
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    // A dangling unterminated region (malformed) is kept whole.
+    if let Some((buf, _)) = region {
+        out.push_str(&buf);
+    }
+    out
 }
 
 /// Append the bound FFI crates' pinned `[dependencies]` lines (driver-merged,
