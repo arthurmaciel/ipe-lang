@@ -1136,7 +1136,7 @@ pub fn ui_form_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M>>) -
 /// (`ipe_backend_rust::emit_expr`'s `KernelFn::UiOnSubmit` arm) closes this
 /// by re-wrapping the boxed value in a freshly-declared closure at the call
 /// site rather than forwarding the box itself.
-#[cfg(feature = "live")]
+#[cfg(any(feature = "live", feature = "wasm-client"))]
 pub fn ui_on_submit_<M, T, F>(f: F) -> Attribute<M>
 where
     T: serde::de::DeserializeOwned,
@@ -1145,7 +1145,7 @@ where
     Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnForm(
         "submit".into(),
         std::sync::Arc::new(move |fd: crate::html::FormData| {
-            crate::live::form::decode_form_or_warn::<T>(fd).map(&f)
+            crate::dom::form::decode_form_or_warn::<T>(fd).map(&f)
         }),
     )))
 }
@@ -1153,7 +1153,7 @@ where
 /// Non-`live` builds (Ipe.Tui without the HTTP form wire): `Ui.onSubmit` was
 /// already inert everywhere before this fix, so this degrades to a
 /// structural no-op — not a regression, Tui has no form-submit wire concept.
-#[cfg(not(feature = "live"))]
+#[cfg(not(any(feature = "live", feature = "wasm-client")))]
 pub fn ui_on_submit_<M, T, F: Fn(T) -> M>(_f: F) -> Attribute<M> {
     Attribute::NoAttribute
 }
@@ -1172,7 +1172,7 @@ pub fn ui_on_submit_<M, T, F: Fn(T) -> M>(_f: F) -> Attribute<M> {
 /// payload type to decode into, and a spurious decode failure on a real form's
 /// fields would silently swallow the submit. Always fires. `M: Clone` is not a
 /// new requirement — every Ipe.Live `Msg` is already `Clone` by construction.
-#[cfg(feature = "live")]
+#[cfg(any(feature = "live", feature = "wasm-client"))]
 pub fn ui_on_submit_fixed_<M: Clone + Send + Sync + 'static>(msg: M) -> Attribute<M> {
     Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnForm(
         "submit".into(),
@@ -1181,7 +1181,7 @@ pub fn ui_on_submit_fixed_<M: Clone + Send + Sync + 'static>(msg: M) -> Attribut
 }
 
 /// Non-`live` builds — same degrade-to-no-op rationale as `ui_on_submit_`.
-#[cfg(not(feature = "live"))]
+#[cfg(not(any(feature = "live", feature = "wasm-client")))]
 pub fn ui_on_submit_fixed_<M>(_msg: M) -> Attribute<M> {
     Attribute::NoAttribute
 }
