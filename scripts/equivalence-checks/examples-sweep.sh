@@ -34,6 +34,15 @@
 # FLAGS:
 #   IPE_SWEEP_BUILD_ONLY=1  → BUILD column only (RUN + EQUIVALENCE = `—`). No `go`.
 #   IPE_SWEEP_NO_EQUIV=1    → BUILD + RUN; EQUIVALENCE skipped (`—`).  ← phase-1 default.
+#   IPE_SWEEP_STATIC=1      → build every example `--static` (musl), cargo-build the
+#                             emitted crate with CWD = the crate dir (cargo discovers
+#                             the generated .cargo/config.toml from CWD, not from
+#                             --manifest-path), ldd-assert the artifact is genuinely
+#                             static (`not-static` = RED), and RUN the static binary.
+#                             Webview examples assert the typed WebviewStatic refusal
+#                             instead (`no-refusal` = RED). Forces NO_EQUIV (the Go
+#                             reference is dynamic; static-ness is a Rust-only gate).
+#                             IPE_STATIC_TRIPLE overrides the default musl triple.
 #   IPE_SWEEP_FORCE=1       → override the (opt-in) night gate + mem-guard warn.
 #   IPE_SWEEP_NIGHT_GATE=1  → re-enable the local 22:00–08:00 BRT deferral window.
 #   RUST_EXAMPLES="01-… 19-…" → subset override (paths or basenames).
@@ -71,6 +80,12 @@ fi
 # ── Mode flags ───────────────────────────────────────────────────────────────
 BUILD_ONLY="${IPE_SWEEP_BUILD_ONLY:-0}"
 NO_EQUIV="${IPE_SWEEP_NO_EQUIV:-0}"
+STATIC="${IPE_SWEEP_STATIC:-0}"
+if [ "$STATIC" = 1 ]; then
+  # The Go reference is a dynamic binary; static-ness is a Rust-only gate.
+  NO_EQUIV=1
+  export IPE_STATIC_TRIPLE="${IPE_STATIC_TRIPLE:-x86_64-unknown-linux-musl}"
+fi
 [ "$BUILD_ONLY" = 1 ] && NO_EQUIV=1
 if [ "$BUILD_ONLY" != 1 ]; then
   command -v curl >/dev/null 2>&1 || { echo "ERROR: curl required for RUN/EQUIVALENCE (set IPE_SWEEP_BUILD_ONLY=1)." >&2; exit 2; }
@@ -117,6 +132,7 @@ say() { echo "$@" | tee -a "$RUNLOG"; }
 # across rows-$STAMP.tsv / sweep-$STAMP.table / the per-example logs.
 diag() { printf '%s/%s.%s.%s\n' "$HIST" "$1" "$STAMP" "$2"; }
 say "=== ipê EXAMPLES sweep @ $STAMP (repo: $REPO · ipe: $IPE_BIN) ==="
+[ "$STATIC" = 1 ] && say "  (IPE_SWEEP_STATIC=1 — --static builds for $IPE_STATIC_TRIPLE; ldd-asserted; EQUIVALENCE off)"
 [ "$BUILD_ONLY" = 1 ] && say "  (IPE_SWEEP_BUILD_ONLY=1 — BUILD column only; RUN+EQUIVALENCE skipped)"
 [ "$BUILD_ONLY" != 1 ] && [ "$NO_EQUIV" = 1 ] && say "  (IPE_SWEEP_NO_EQUIV=1 — BUILD+RUN; EQUIVALENCE skipped — the phase-1 default)"
 [ "$NO_EQUIV" = 1 ] || [ "$WEB_OK" = 1 ] || say "  NOTE: browser stack incomplete — scenario equivalence falls back to normalised HTML body comparison (GET / → #sky-root diff via equivalence_normalize_html.py)."
@@ -139,11 +155,12 @@ WARN_CELL=0
 build_rust() {
   local d="$1" n="$2" tmo="${IPE_SWEEP_BUILD_TIMEOUT:-900}" tgt attempt ok=0
   local ipelog cargolog; ipelog="$(diag "$n" ipe.log)"; cargolog="$(diag "$n" cargo.log)"
+  local staticargs=(); [ "$STATIC" = 1 ] && staticargs=(--static)
   tgt="$(ipe_build_target "$d")"
   for attempt in 1 2 3 4; do
     # --runtime is left to ipe's auto-resolve (walks up to $REPO/src/runtime/rust/src/
     # sky_runtime); IPE_RUNTIME_DIR is exported by env.sh as a belt-and-braces.
-    if ( cd "$d" && timeout "$tmo" "$IPE_BIN" build "$tgt" --out sky-out/rust >"$ipelog" 2>&1 ); then
+    if ( cd "$d" && timeout "$tmo" "$IPE_BIN" build "$tgt" --out sky-out/rust "${staticargs[@]}" >"$ipelog" 2>&1 ); then
       ok=1; break
     fi
     # Transient cargo registry / network flake — back off + retry.
@@ -159,12 +176,23 @@ build_rust() {
   # cargo build the emitted crate. The vendored runtime carries
   # `#![allow(unused, non_snake_case)]` (generated-code suppression), so a warning
   # that LEAKS PAST that allow is a genuine codegen defect — counted + gated.
-  if ( cd "$d" && timeout 900 cargo build --manifest-path sky-out/rust/Cargo.toml >"$cargolog" 2>&1 ); then
-    WARN_CELL="$(rg -o 'generated [0-9]+ warning' "$cargolog" 2>/dev/null | rg -o '[0-9]+' | tail -1)"
-    : "${WARN_CELL:=0}"
-    BUILD_CELL="ok"; return 0
+  if [ "$STATIC" = 1 ]; then
+    # CWD trap: cargo discovers the generated .cargo/config.toml (+crt-static)
+    # from CWD ancestors, NOT from --manifest-path — build from the crate dir.
+    if ! ( cd "$d/sky-out/rust" && timeout 900 cargo build --target "$IPE_STATIC_TRIPLE" >"$cargolog" 2>&1 ); then
+      BUILD_CELL="cargo-fail"; return 1
+    fi
+    # Static-ness is asserted, never assumed.
+    local sbin="$CARGO_TARGET_DIR/$IPE_STATIC_TRIPLE/debug/sky-app"
+    if ! assert_static_bin "$sbin"; then
+      BUILD_CELL="not-static"; return 1
+    fi
+  elif ! ( cd "$d" && timeout 900 cargo build --manifest-path sky-out/rust/Cargo.toml >"$cargolog" 2>&1 ); then
+    BUILD_CELL="cargo-fail"; return 1
   fi
-  BUILD_CELL="cargo-fail"; return 1
+  WARN_CELL="$(rg -o 'generated [0-9]+ warning' "$cargolog" 2>/dev/null | rg -o '[0-9]+' | tail -1)"
+  : "${WARN_CELL:=0}"
+  BUILD_CELL="ok"; return 0
 }
 
 # ── build_go <dir> <example> → 0=ok (binary at $d/sky-out/app), 1=fail ──────
@@ -397,6 +425,20 @@ for d in "${EXAMPLES[@]}"; do
 
   flock -x "$SWEEP_LOCK_FD"
 
+  # Static mode: an Ipe.Webview app links the system webview and MUST be
+  # refused (typed WebviewStatic) — the refusal firing is the pass condition;
+  # ipe accepting it is a RED row (no-refusal).
+  if [ "$STATIC" = 1 ] && [ "$shape" = webview ]; then
+    if ( cd "$d" && timeout 120 "$IPE_BIN" build "$(ipe_build_target "$d")" --out sky-out/rust --static >"$(diag "$n" ipe.log)" 2>&1 ); then
+      printf '%s\t%s\t%s\t%s\t%s\n' "$n" "no-refusal" "—" "—" "webview accepted --static — WebviewStatic refusal did not fire" >>"$ROWS"
+    elif grep -q "static build refused" "$(diag "$n" ipe.log)"; then
+      printf '%s\t%s\t%s\t%s\t%s\n' "$n" "refused" "skip" "—" "webview: typed WebviewStatic refusal (by design)" >>"$ROWS"
+    else
+      printf '%s\t%s\t%s\t%s\t%s\n' "$n" "ipe-fail" "—" "—" "webview --static failed for a non-refusal reason (see $(basename "$(diag "$n" ipe.log)"))" >>"$ROWS"
+    fi
+    ( cd "$d" && rm -rf sky-out .ipeache .skydeps ); flock -u "$SWEEP_LOCK_FD"; continue
+  fi
+
   if ! build_rust "$d" "$n"; then
     build_cell="$BUILD_CELL"; note="rust build failed (see $(basename "$(diag "$n" ipe.log)") / $(basename "$(diag "$n" cargo.log)"))"
     printf '%s\t%s\t%s\t%s\t%s\n' "$n" "$build_cell" "—" "—" "$note" >>"$ROWS"
@@ -442,7 +484,7 @@ RED=0; GREEN=0; SKIP=0; AMBER=0; RED_ROWS=""
 declare -A EQ_COUNT=()
 while IFS=$'\t' read -r n b r e note; do
   row_red=0
-  case "$b" in ipe-fail|cargo-fail) row_red=1 ;; esac
+  case "$b" in ipe-fail|cargo-fail|not-static|no-refusal) row_red=1 ;; esac
   case "$r" in panic|hang|noserve|notty) row_red=1 ;; esac
   case "$e" in DIFFER) row_red=1 ;; esac
   if [ "$e" = go-ref-broken ]; then AMBER=$((AMBER+1)); row_red=0; fi
