@@ -18,6 +18,7 @@
 
 pub mod call;
 pub mod diag;
+pub mod emit;
 pub mod naming;
 pub mod num_coerce;
 pub mod pkginfo;
