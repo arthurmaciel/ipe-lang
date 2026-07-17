@@ -16,5 +16,8 @@
 //! Module DAG (leaf-first): `num_coerce` → `diag` → `naming` → `pkginfo` /
 //! `typeref` → `call` → `emit` → `instance` → `driver`.
 
+pub mod call;
 pub mod diag;
+pub mod naming;
 pub mod num_coerce;
+pub mod typeref;
