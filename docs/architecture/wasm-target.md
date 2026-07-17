@@ -1,6 +1,10 @@
 # WASM / browser target for ipê
 
-> **Status:** design-locked (this document). No code, no build yet.
+> **Status:** design-locked (this document). No target code yet; execution plan
+> in `docs/architecture/wasm-target-impl-plan.md`. Probe result: the runtime's
+> default (pure) feature set — including the whole `ui`/`html` render surface —
+> already compiles clean to `wasm32-unknown-unknown` once uuid's `js`
+> (getrandom) feature is enabled; see the plan's M0.
 > **Scope:** running ipê in the browser — client-side apps (SPA + Ipe.Live
 > hydration) and an online playground.
 > **Principle ordering (binding for every decision below):** security >
@@ -90,8 +94,8 @@ a fork survived critique, it is listed under **Open decisions** for the user.
 client runtime to *run* whatever it compiles. Shipping A first directly de-risks
 B.
 
-**Shared machinery across A and B:** the whole front-end (`sky_parse →
-sky_canonicalise → sky_type → sky_ir`); the ported runtime (`Html<M>`, `diff`,
+**Shared machinery across A and B:** the whole front-end (`ipe_parse →
+ipe_canon → ipe_types → ipe_ir`); the ported runtime (`Html<M>`, `diff`,
 `render`, `tea`); the **target-keyed kernel gate** (§Q5); and the **Cmd/Sub →
 browser bridge** (§Q4). B2's interpreter running a TEA app in the browser needs
 the *same* browser-substitute effect bridge and the *same* gate that A needs.
@@ -101,7 +105,8 @@ the *same* browser-substitute effect bridge and the *same* gate that A needs.
 ## Q2 — Compilation route for programs
 
 **Decision.** ipê → Rust → `wasm32-unknown-unknown`, **reusing
-`crates/sky_backend_rust` verbatim**. Reject a direct ipê→WASM backend.
+`ipe_backend_rust` (`src/compiler/backend/rust`) verbatim**. Reject a direct
+ipê→WASM backend.
 
 *Rationale (principle-ordered).* Reuse maximises correctness/soundness: one
 emission path, one runtime, one no-panic contract, one security gate to audit. A
@@ -163,7 +168,7 @@ epilogue is replaced by a wasm-bindgen entry:
 #[wasm_bindgen(start)]
 pub fn start() {
     console_error_panic_hook::set_once();
-    sky_runtime::wasm::mount("#app", Main_init, Main_update, Main_view, Main_subscriptions);
+    ipe_runtime_rust::wasm::mount("#app", Main_init, Main_update, Main_view, Main_subscriptions);
 }
 ```
 
@@ -173,7 +178,7 @@ back to a clean client `init` on `Err`** (malformed / truncated / tampered
 island) — never `unwrap`/`expect`/trap on the public, user-editable island (§Q6
 "Fault-tolerant hydrate"). Async: `Cmd.perform` uses
 `wasm_bindgen_futures::spawn_local` instead of
-a tokio task — the `SkyCmd::Perform` boxed thunk in `tea.rs` is already
+a tokio task — the `IpeCmd::Perform` boxed thunk in `tea.rs` is already
 runtime-agnostic, so only the *driver* changes.
 
 **Toolchain orchestration:** `ipe build --target wasm` runs
@@ -284,7 +289,7 @@ a server secret}, and §Q5 makes every DOES-NOT unrepresentable at compile time.
 
 ## Q4 — Client TEA runtime + Cmd/Sub mapping
 
-**Decision.** Reuse `ui/render.rs` (`Element<M> → Html<M>`, with its existing
+**Decision.** Reuse `src/runtime/rust/src/ui/render.rs` (`Element<M> → Html<M>`, with its existing
 `SafeCssPropertyName`/`sanitise_css_url`/`SafeAttrName` sanitisers) and
 `live/diff.rs` (`diff<M>(old, new) -> Vec<Patch>`) **unchanged**. Swap only the
 *sink*: today `Vec<Patch>` is serialised to JSON → SSE → `client.js`; on the
@@ -294,7 +299,7 @@ behavioural parity between the SSE wire and the client driver (one diff
 algorithm, two consumers). `client.js` is **not** shipped; its patch-apply logic
 is ported into Rust/`web-sys`.
 
-New module `runtime/src/sky_runtime/wasm/` (feature `wasm-client`,
+New module `src/runtime/rust/src/wasm/` (feature `wasm-client`,
 `cfg(target_arch = "wasm32")`). The scheduler holds
 `Rc<RefCell<{ model: M, tree: Html<M>, queue: VecDeque<M> }>>`.
 
@@ -333,7 +338,7 @@ New module `runtime/src/sky_runtime/wasm/` (feature `wasm-client`,
 
 ### Cmd / Sub → browser mapping
 
-`SkyCmd<M>` / `SkySub<M>` in `tea.rs` are already generic over `M` (not `any`),
+`IpeCmd<M>` / `IpeSub<M>` in `tea.rs` are already generic over `M` (not `any`),
 so only the driver is new.
 
 | ipê | Browser mechanism |
@@ -402,7 +407,7 @@ defence-in-depth. Reject the `Task`-capability-row as a v1 mechanism (below).
 
 ### Layer 1 — Target-keyed kernel registry (the floor: the effect has no denotation)
 
-The kernel registry (`crates/ipe/src/stdlib.rs` + the backend kernel table) is
+The kernel registry (`src/ipe-cli/src/stdlib.rs` + the backend kernel table) is
 **parameterised by `Target` (`Native` | `WasmClient`)**. The client table is an
 **allowlist, default-deny**: under `--target wasm` a kernel has a client
 denotation **only if it is explicitly tagged `WasmClient`-safe** in the registry
@@ -512,7 +517,7 @@ matching it is a **build error**, forcing the author to confirm. So
   **classified-diagnostic path** (§Q4 log-and-die, taxonomy `CoerceFailure`) —
   the same discipline as the native no-raw-`.(T)` / `rt.Coerce[T]` rule. A lint
   (`clippy`-level deny or a codegen post-check) rejects `unchecked_into` /
-  `unchecked_ref` anywhere in `runtime/src/sky_runtime/wasm/`.
+  `unchecked_ref` anywhere in `src/runtime/rust/src/wasm/`.
 - **CSP is *tighter* than a JS SPA.** WASM instantiation needs the narrow
   `script-src 'wasm-unsafe-eval'` token, which permits WASM compilation but
   **not** JS `eval`. The app runs under `script-src 'self' 'wasm-unsafe-eval'`
@@ -697,11 +702,11 @@ needs the usual container/resource/time-limit isolation.
 
 **B2 — fully-client compile via the interpreter tier.** Shipping `rustc`+cargo to
 a browser tab is **infeasible** (not a preference — even Rust's own playground
-compiles server-side); a WASM `ipe` front-end gets you to typecheck + `sky_ir`
+compiles server-side); a WASM `ipe` front-end gets you to typecheck + `ipe_ir`
 and **no runnable program**. The gap is closed by the roadmap's **interpreter
 tier** (Position A LOCKED; the interpreter is justified there by REPL +
-WASM/portability). Ship the front-end (`parse → canonicalise → type → sky_ir`)
-**plus an `sky_ir` interpreter**, both compiled to WASM. The playground then
+WASM/portability). Ship the front-end (`parse → canonicalise → type → ipe_ir`)
+**plus an `ipe_ir` interpreter**, both compiled to WASM. The playground then
 type-checks (instant errors, salsa-incremental as the user types) and *runs*
 entirely client-side, offline — Elm-parity DX. The interpreter drives the *same*
 §Q4 client TEA runtime and the *same* browser-substitute Cmd/Sub bridge, so B2 is
@@ -789,32 +794,39 @@ AOT path well before B2.
 
 ## Implementation surface (files that change)
 
-- `crates/sky_backend_rust/src/project.rs` — WASM manifest template (cdylib +
-  wasm-bindgen/web-sys/gloo/getrandom-js; no tokio/axum/sqlx/native-TLS); the
-  point where the manifest becomes computed-from-used-kernels.
-- `crates/sky_backend_rust/src/preamble.rs` — `#[wasm_bindgen(start)]` /
+Phased milestones + gates: `docs/architecture/wasm-target-impl-plan.md`.
+
+- `src/compiler/backend/rust/src/project.rs` (+ `crate_specs.rs`) — WASM
+  manifest template (cdylib + wasm-bindgen/web-sys/gloo/getrandom-js; no
+  tokio/axum/sqlx/native-TLS); the point where the manifest becomes
+  computed-from-used-kernels.
+- `src/compiler/backend/rust/src/preamble.rs` — `#[wasm_bindgen(start)]` /
   `hydrate` entry + `spawn_local` driver (WASM branch).
-- `crates/ipe/src/stdlib.rs` (+ backend kernel table) — target-keyed kernel
+- `src/ipe-cli/src/stdlib.rs` (+ the `ipe_kernels` table) — target-keyed kernel
   registry (`Native` | `WasmClient`) as a **default-deny allowlist** (a kernel is
   client-representable only if explicitly `WasmClient`-tagged); the Layer-1 gate.
-- `crates/ipe` canonicaliser — module `server`/`client`/`shared` classification
-  + reachability-closure check (Layer 2).
-- `crates/ipe` type checker — **`HydrationState` field-type gate**: the type
-  serialised into the hydration island must have only client/shared-safe field
-  types (reject any transitively secret/server-only field type at the
+- `src/compiler/canon` (`ipe_canon`) — module `server`/`client`/`shared`
+  classification + reachability-closure check (Layer 2).
+- `src/compiler/types` (`ipe_types`) — **`HydrationState` field-type gate**: the
+  type serialised into the hydration island must have only client/shared-safe
+  field types (reject any transitively secret/server-only field type at the
   declaration). Blocker-1 fix.
-- `runtime/src/sky_runtime/wasm/` (new, `feature = "wasm-client"`,
+- `src/runtime/rust/src/wasm/` (new, `feature = "wasm-client"`,
   `cfg(target_arch = "wasm32")`) — `mount` / `adopt` / `apply` sink + scheduler
   + Cmd/Sub browser bridge + delegated event wiring + the **island serialiser
   (escapes `<`/`>`/`&`/U+2028/U+2029)** and the **fault-tolerant `hydrate`
   parser** (`Result` + fallback to client `init`). All JS→web-sys crossings use
   checked `dyn_into` (no `unchecked_into`; enforced by a `clippy` deny in this
-  module). Reuses `ui/render.rs`, `live/diff.rs`, `live/dispatch.rs` (id scheme),
-  `live/form.rs`, `tea.rs` unchanged.
+  module). Reuses `src/runtime/rust/src/ui/render.rs`, `live/diff.rs`,
+  `live/dispatch.rs` (id scheme), `live/form.rs`, `tea.rs` unchanged — note
+  `live/*` is currently gated behind the tokio-linked `live` feature and
+  `tea.rs` behind `tokio`; the pure diff/dispatch/form/TEA-type pieces must be
+  re-homed (or `cfg`-split) out of those features so `wasm-client` can pull
+  them without tokio.
 - `emit_expr.rs` / `emit_types.rs` — **no change** (target-agnostic).
 - Example sweep + H12 conformance — add WASM rows (build + run under
   `--target wasm`).
 - Docs to sync on landing: `ROADMAP.md` (add a WASM/browser section),
   `docs/architecture/ui-live-tui-webview-spec.md` (add `is_client_wasm` to the
-  exhaustive target discrimination), `templates/CLAUDE.md` + `docs/sky-toml.md`
-  (the `[wasm]` section), `docs/stdlib.md` (per-target capability notes).
+  exhaustive target discrimination), `CLAUDE.md` (the `[wasm]` `sky.toml`
+  section + per-target stdlib capability notes in the authoring reference).
