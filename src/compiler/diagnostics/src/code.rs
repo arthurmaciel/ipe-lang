@@ -8,7 +8,8 @@
 //! is preserved in git history.
 //!
 //! Ranges: `IPE-P####` parse, `IPE-N####` name resolution, `IPE-T####` type,
-//! `IPE-L####` lower / not-yet-supported, `IPE-I####` internal (compiler bug).
+//! `IPE-L####` lower / not-yet-supported, `IPE-F####` foreign bindings (FFI),
+//! `IPE-I####` internal (compiler bug).
 
 /// Where a reader reports a compiler bug or nudges an unimplemented feature.
 ///
@@ -239,6 +240,17 @@ pub const IPE_L0128: Code = Code("IPE-L0128");
 pub const IPE_L0200: Code = Code("IPE-L0200");
 
 // ---------------------------------------------------------------------------
+// FFI (IPE-F####)
+// ---------------------------------------------------------------------------
+
+/// a foreign-call description cannot be rendered as valid Rust
+pub const IPE_F4400: Code = Code("IPE-F4400");
+/// a foreign binding's inspection data is malformed
+pub const IPE_F4401: Code = Code("IPE-F4401");
+/// a foreign function declares contradictory shape flags
+pub const IPE_F4402: Code = Code("IPE-F4402");
+
+// ---------------------------------------------------------------------------
 // Internal (IPE-I####)
 // ---------------------------------------------------------------------------
 
@@ -355,6 +367,9 @@ pub fn title(c: Code) -> &'static str {
         IPE_L0127 => "a value holding a function is used more than once",
         IPE_L0128 => "alias over a dispatch-needing nested pattern not supported yet",
         IPE_L0200 => "expression nests too deeply for the backend",
+        IPE_F4400 => "a foreign-call description cannot be rendered as valid Rust",
+        IPE_F4401 => "a foreign binding's inspection data is malformed",
+        IPE_F4402 => "a foreign function declares contradictory shape flags",
         IPE_I0001 => "internal compiler error",
         IPE_I0010 => "intern: unresolved symbol",
         IPE_I0011 => "intern: symbol table exhausted",
@@ -463,6 +478,9 @@ pub fn explain_page(c: Code) -> Option<&'static str> {
         IPE_L0127 => Some(include_str!("../explain/IPE-L0127.md")),
         IPE_L0128 => Some(include_str!("../explain/IPE-L0128.md")),
         IPE_L0200 => Some(include_str!("../explain/IPE-L0200.md")),
+        IPE_F4400 => Some(include_str!("../explain/IPE-F4400.md")),
+        IPE_F4401 => Some(include_str!("../explain/IPE-F4401.md")),
+        IPE_F4402 => Some(include_str!("../explain/IPE-F4402.md")),
         IPE_I0001 => Some(include_str!("../explain/IPE-I0001.md")),
         IPE_I0010 => Some(include_str!("../explain/IPE-I0010.md")),
         IPE_I0011 => Some(include_str!("../explain/IPE-I0011.md")),
@@ -493,8 +511,8 @@ pub const ALL_CODES: &[Code] = &[
     IPE_L0105, IPE_L0106, IPE_L0107, IPE_L0108, IPE_L0110, IPE_L0111, IPE_L0112, IPE_L0113,
     IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119, IPE_L0120, IPE_L0121,
     IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127, IPE_L0128, IPE_L0200,
-    IPE_I0001, IPE_I0010, IPE_I0011, IPE_I0100, IPE_I0101, IPE_I0102, IPE_I0103, IPE_I0200,
-    IPE_I0201, IPE_I0202, IPE_I0203,
+    IPE_F4400, IPE_F4401, IPE_F4402, IPE_I0001, IPE_I0010, IPE_I0011, IPE_I0100, IPE_I0101,
+    IPE_I0102, IPE_I0103, IPE_I0200, IPE_I0201, IPE_I0202, IPE_I0203,
 ];
 
 #[cfg(test)]
@@ -502,8 +520,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn taxonomy_has_ninety_one_codes() {
-        assert_eq!(ALL_CODES.len(), 91);
+    fn taxonomy_has_ninety_four_codes() {
+        assert_eq!(ALL_CODES.len(), 94);
     }
 
     #[test]
@@ -521,7 +539,7 @@ mod tests {
             assert!(s.starts_with("IPE-"), "{s} bad prefix");
             assert!(seen.insert(s), "{s} duplicated");
         }
-        assert_eq!(seen.len(), 91);
+        assert_eq!(seen.len(), 94);
     }
 
     /// CI coverage gate: every taxonomy code has a conforming explain page.
