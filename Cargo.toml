@@ -16,6 +16,8 @@ members = [
     "src/compiler/ffi",
     "src/compiler/sandbox",
     "src/compiler/watch",
+    "src/lsp/features",
+    "src/lsp/server",
     "src/ipe-cli",
     "tools/oracle",
     "tools/refresh-oracle",
