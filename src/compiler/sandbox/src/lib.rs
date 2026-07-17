@@ -404,8 +404,8 @@ pub fn assert_net_namespace_empty() -> Result<(), IsolationDefect> {
     let ifaces = std::fs::read_dir("/sys/class/net")
         .map_err(|e| IsolationDefect::ProcUnreadable(format!("/sys/class/net: {e}")))?;
     for entry in ifaces {
-        let entry = entry
-            .map_err(|e| IsolationDefect::ProcUnreadable(format!("/sys/class/net: {e}")))?;
+        let entry =
+            entry.map_err(|e| IsolationDefect::ProcUnreadable(format!("/sys/class/net: {e}")))?;
         let name = entry.file_name().to_string_lossy().into_owned();
         if name != "lo" {
             return Err(IsolationDefect::NonLoopbackInterface(name));
@@ -560,8 +560,14 @@ mod tests {
         // Read-only root; tmpfs over every home; one writable mount.
         assert!(joined.contains("--ro-bind / /"), "{joined}");
         assert!(joined.contains("--tmpfs /home"), "{joined}");
-        assert!(joined.contains("--ro-bind /work/registry /work/registry"), "{joined}");
-        assert!(joined.contains("--bind /work/tmp-1 /work/tmp-1"), "{joined}");
+        assert!(
+            joined.contains("--ro-bind /work/registry /work/registry"),
+            "{joined}"
+        );
+        assert!(
+            joined.contains("--bind /work/tmp-1 /work/tmp-1"),
+            "{joined}"
+        );
         assert!(joined.contains("--chdir /work/tmp-1"), "{joined}");
         // Env allowlist only — offline cargo, scoped CARGO_HOME, fixed PATH.
         assert!(joined.contains("--setenv CARGO_NET_OFFLINE 1"), "{joined}");
@@ -576,9 +582,8 @@ mod tests {
         );
         // Resource caps via prlimit, then the payload with NO shell.
         assert!(
-            joined.contains(
-                "-- /usr/bin/prlimit --as=4294967296 --cpu=300 --nofile=256 --nproc=512"
-            ),
+            joined
+                .contains("-- /usr/bin/prlimit --as=4294967296 --cpu=300 --nofile=256 --nproc=512"),
             "{joined}"
         );
         assert!(joined.ends_with("-- ipe-ffi-inspector semver"), "{joined}");
@@ -635,7 +640,10 @@ mod tests {
             select_mechanism(&only_unshare),
             Mechanism::UnshareCandidate("/usr/bin/unshare".into())
         );
-        assert_eq!(select_mechanism(&Capabilities::default()), Mechanism::Refused);
+        assert_eq!(
+            select_mechanism(&Capabilities::default()),
+            Mechanism::Refused
+        );
     }
 
     #[test]
