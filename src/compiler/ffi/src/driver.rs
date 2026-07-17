@@ -235,8 +235,12 @@ pub fn inspector_argv(
     features: &[String],
     git: Option<&GitSource>,
     allow_build_scripts: bool,
+    fetch_only: bool,
 ) -> Vec<OsString> {
     let mut argv: Vec<OsString> = Vec::new();
+    if fetch_only {
+        argv.push("--fetch-only".into());
+    }
     if allow_build_scripts {
         argv.push("--allow-build-scripts".into());
     }
@@ -868,7 +872,7 @@ mod tests {
             &hosts,
         )
         .expect("accepted");
-        let argv = inspector_argv(&krate, &["std".to_owned()], Some(&git), false);
+        let argv = inspector_argv(&krate, &["std".to_owned()], Some(&git), false, false);
         let rendered: Vec<String> = argv
             .iter()
             .map(|a| a.to_string_lossy().into_owned())
@@ -884,6 +888,16 @@ mod tests {
                 "v1.0.26",
                 "semver"
             ]
+        );
+        // The fetch phase prepends `--fetch-only`.
+        let fetch = inspector_argv(&krate, &[], None, false, true);
+        assert_eq!(
+            fetch.first().map(|a| a.to_string_lossy().into_owned()),
+            Some("--fetch-only".to_owned())
+        );
+        assert_eq!(
+            fetch.last().map(|a| a.to_string_lossy().into_owned()),
+            Some("semver".to_owned())
         );
     }
 
