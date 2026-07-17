@@ -78,7 +78,7 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Sky", "Core", "Http"], "Http"),
     // NOTE — `Sky.Core.Path` and `Sky.Core.Regex` are DELIBERATELY
     // absent here. They are COMPILED-SOURCE Layer-3 modules (registered in
-    // `skyc::stdlib::COMPILED_STD_MODULES`): their members are point-free
+    // `ipe::stdlib::COMPILED_STD_MODULES`): their members are point-free
     // `Ffi.kernel "Path_*"` / `"Regex_*"` aliases that `detect_kernel_alias`
     // routes to the registered pure `Path*` / `Regex*` `StdlibKernel` variants
     // (runtime: `ipe_runtime::{path,regex_kernel}::*`). A module is EITHER a

@@ -3,21 +3,21 @@
 # (build_set, DERIVED in lib/examples.sh: every candidate dir minus Go-FFI) it
 # does up to THREE things and emits ONE table row with three columns:
 #
-#   BUILD   skyc build + cargo build                        → ok / skyc-fail / cargo-fail
+#   BUILD   ipe build + cargo build                        → ok / ipe-fail / cargo-fail
 #   RUN     run the Rust binary headless, per shape         → ok / panic / hang / noserve / notty / skip
 #   EQUIVALENCE   build the Go reference + compare to Rust        → equivalence-* / n/a / DIFFER / go-ref-broken
 #
 # PORTED from ../sky/runtime-rust/scripts/examples-sweep.sh. KEY ADAPTATION: the
-# compiler here is `skyc` (Rust-only cargo workspace), not the Haskell `sky`. The
+# compiler here is `ipe` (Rust-only cargo workspace), not the Haskell `sky`. The
 # BUILD step invokes:
 #
-#   ( cd <example> && skyc build <sky.toml | src/Main.ipe> [--out sky-out/rust] )
+#   ( cd <example> && ipe build <sky.toml | src/Main.ipe> [--out sky-out/rust] )
 #   cargo build --manifest-path <example>/sky-out/rust/Cargo.toml
 #
-# skyc has NO `--backend` flag (it only targets Rust); it emits a self-contained
+# ipe has NO `--backend` flag (it only targets Rust); it emits a self-contained
 # Cargo project under sky-out/rust/ with the runtime vendored into
 # src/sky_runtime, whose default package/binary is `sky-app`. Verified against
-# src/ipe-cli/src/lib.rs `run_build` (usage: `skyc build <entry.ipe|project-dir|
+# src/ipe-cli/src/lib.rs `run_build` (usage: `ipe build <entry.ipe|project-dir|
 # sky.toml> [--out <dir>] [--runtime <dir>]`) + the E2E test in the same file that
 # builds sky-out and runs target/debug/sky-app.
 #
@@ -53,8 +53,8 @@ if [ -z "$REPO" ] || [ ! -f "$REPO/scripts/equivalence-checks/examples-sweep.sh"
   echo "ERROR: can't locate the repo. cd into it, or set IPE_REPO=/path/to/sky-rust." >&2; exit 2
 fi
 cd "$REPO"
-if [ ! -x "$SKYC_BIN" ]; then
-  echo "ERROR: skyc binary not at '$SKYC_BIN' — build it: cargo build --release -p skyc (or set SKYC_BIN)." >&2; exit 2
+if [ ! -x "$IPE_BIN" ]; then
+  echo "ERROR: ipe binary not at '$IPE_BIN' — build it: cargo build --release -p ipe (or set IPE_BIN)." >&2; exit 2
 fi
 
 # ── Preflight: corrupted builds under low disk (HARD gate) ───────────────────
@@ -65,7 +65,7 @@ fi
 # mem-guard is a DEV convenience (macOS-only in the sibling repo). Here it's a
 # soft WARN only — never blocks the sweep or CI.
 if ! pgrep -f 'mem-guard\.sh' >/dev/null 2>&1; then
-  echo "WARN: mem-guard.sh not running — a runaway skyc/cargo can pressure host memory; watch it on a slim box." >&2
+  echo "WARN: mem-guard.sh not running — a runaway ipe/cargo can pressure host memory; watch it on a slim box." >&2
 fi
 
 # ── Mode flags ───────────────────────────────────────────────────────────────
@@ -107,7 +107,7 @@ say() { echo "$@" | tee -a "$RUNLOG"; }
 # CARGO_TARGET_DIRs (so #35's flock below never contends between them) can
 # still process the SAME example concurrently. Before this fix every
 # per-example diagnostic file was keyed ONLY by bare example name
-# ($HIST/$n.skyc.log, etc.), so two such invocations could open-and-truncate
+# ($HIST/$n.ipe.log, etc.), so two such invocations could open-and-truncate
 # the SAME path at overlapping times — genuinely interleaving bytes from both
 # processes into one file (not just "last write wins"), producing a false
 # DIFFER (corrupted diff.txt/.equivalence) or a false equivalence pass (corrupted
@@ -116,19 +116,19 @@ say() { echo "$@" | tee -a "$RUNLOG"; }
 # keeps every artefact from one invocation grouped under the same STAMP
 # across rows-$STAMP.tsv / sweep-$STAMP.table / the per-example logs.
 diag() { printf '%s/%s.%s.%s\n' "$HIST" "$1" "$STAMP" "$2"; }
-say "=== ipê EXAMPLES sweep @ $STAMP (repo: $REPO · skyc: $SKYC_BIN) ==="
+say "=== ipê EXAMPLES sweep @ $STAMP (repo: $REPO · ipe: $IPE_BIN) ==="
 [ "$BUILD_ONLY" = 1 ] && say "  (IPE_SWEEP_BUILD_ONLY=1 — BUILD column only; RUN+EQUIVALENCE skipped)"
 [ "$BUILD_ONLY" != 1 ] && [ "$NO_EQUIV" = 1 ] && say "  (IPE_SWEEP_NO_EQUIV=1 — BUILD+RUN; EQUIVALENCE skipped — the phase-1 default)"
 [ "$NO_EQUIV" = 1 ] || [ "$WEB_OK" = 1 ] || say "  NOTE: browser stack incomplete — scenario equivalence falls back to normalised HTML body comparison (GET / → #sky-root diff via equivalence_normalize_html.py)."
 
-# ── skyc build target for an example dir — sky.toml if present, else src/Main.ipe
-# skyc's project build (src/ipe-cli/src/lib.rs build_project) needs a sky.toml to
+# ── ipe build target for an example dir — sky.toml if present, else src/Main.ipe
+# ipe's project build (src/ipe-cli/src/lib.rs build_project) needs a sky.toml to
 # discover multi-module projects; the single-file build takes an entry `.ipe`.
 # All vendored examples ship sky.toml EXCEPT 26-ui-showcase (which is multi-module
 # but has no sky.toml — it will single-file-build and surface a real IPE-N0020 for
 # its local `RegressionGates` import until a sky.toml is added upstream). See the
 # port doc's TODO(verify).
-skyc_build_target() {
+ipe_build_target() {
   local d="$1"
   if [ -f "$d/sky.toml" ]; then echo "sky.toml"; else echo "src/Main.ipe"; fi
 }
@@ -138,23 +138,23 @@ BUILD_CELL=""
 WARN_CELL=0
 build_rust() {
   local d="$1" n="$2" tmo="${IPE_SWEEP_BUILD_TIMEOUT:-900}" tgt attempt ok=0
-  local skyclog cargolog; skyclog="$(diag "$n" skyc.log)"; cargolog="$(diag "$n" cargo.log)"
-  tgt="$(skyc_build_target "$d")"
+  local ipelog cargolog; ipelog="$(diag "$n" ipe.log)"; cargolog="$(diag "$n" cargo.log)"
+  tgt="$(ipe_build_target "$d")"
   for attempt in 1 2 3 4; do
-    # --runtime is left to skyc's auto-resolve (walks up to $REPO/src/runtime/rust/src/
+    # --runtime is left to ipe's auto-resolve (walks up to $REPO/src/runtime/rust/src/
     # sky_runtime); IPE_RUNTIME_DIR is exported by env.sh as a belt-and-braces.
-    if ( cd "$d" && timeout "$tmo" "$SKYC_BIN" build "$tgt" --out sky-out/rust >"$skyclog" 2>&1 ); then
+    if ( cd "$d" && timeout "$tmo" "$IPE_BIN" build "$tgt" --out sky-out/rust >"$ipelog" 2>&1 ); then
       ok=1; break
     fi
     # Transient cargo registry / network flake — back off + retry.
     if [ "$attempt" -lt 4 ] && \
-       grep -qiE 'unable to update registry|download of .* failed|curl failed|HTTP2 framing|spurious network error|Connection reset|operation timed out|failed to get response' "$skyclog"; then
+       grep -qiE 'unable to update registry|download of .* failed|curl failed|HTTP2 framing|spurious network error|Connection reset|operation timed out|failed to get response' "$ipelog"; then
       sleep 5; continue
     fi
     break
   done
   if [ "$ok" != 1 ]; then
-    BUILD_CELL="skyc-fail"; return 1
+    BUILD_CELL="ipe-fail"; return 1
   fi
   # cargo build the emitted crate. The vendored runtime carries
   # `#![allow(unused, non_snake_case)]` (generated-code suppression), so a warning
@@ -179,7 +179,7 @@ build_go() {
     if [ -x "$REPO/tools/oracle/bin/sky" ]; then go_bin="$REPO/tools/oracle/bin/sky"; else go_bin="sky"; fi
   fi
   command -v "$go_bin" >/dev/null 2>&1 || return 1
-  # IPE_RUNTIME_DIR is a skyc-ONLY knob (env.sh exports it so skyc's --runtime
+  # IPE_RUNTIME_DIR is a ipe-ONLY knob (env.sh exports it so ipe's --runtime
   # auto-resolve is CWD-independent). The Haskell `sky` Go reference ALSO honours
   # IPE_RUNTIME_DIR — and would vendor the REPO's *Rust* runtime tree as its Go
   # `rt/` package, yielding `undefined: rt.SetPortDefault` (every rt.* symbol) at
@@ -372,7 +372,7 @@ WARNS="$HIST/warnings-$STAMP.tsv"; : >"$WARNS"
 DCUR=""
 
 # ── Cross-invocation build serialization ─────────────────────────────────────
-# skyc emits a FIXED `sky-app` binary name into the shared $CARGO_TARGET_DIR
+# ipe emits a FIXED `sky-app` binary name into the shared $CARGO_TARGET_DIR
 # (see resolve_bin's comment above: "each example's cargo build writes
 # $CARGO_TARGET_DIR/{debug,release}/sky-app"). If two examples-sweep.sh
 # invocations race against the SAME CARGO_TARGET_DIR (e.g. two
@@ -391,16 +391,16 @@ for d in "${EXAMPLES[@]}"; do
   DCUR="$d"
   shape="$(example_shape "$d")"
   mode="$(equivalence_mode "$d")"
-  ( cd "$d" && rm -rf sky-out .skycache .skydeps )
+  ( cd "$d" && rm -rf sky-out .ipeache .skydeps )
 
   build_cell=""; run_cell="—"; equivalence_cell="—"; note=""
 
   flock -x "$SWEEP_LOCK_FD"
 
   if ! build_rust "$d" "$n"; then
-    build_cell="$BUILD_CELL"; note="rust build failed (see $(basename "$(diag "$n" skyc.log)") / $(basename "$(diag "$n" cargo.log)"))"
+    build_cell="$BUILD_CELL"; note="rust build failed (see $(basename "$(diag "$n" ipe.log)") / $(basename "$(diag "$n" cargo.log)"))"
     printf '%s\t%s\t%s\t%s\t%s\n' "$n" "$build_cell" "—" "—" "$note" >>"$ROWS"
-    ( cd "$d" && rm -rf sky-out .skycache .skydeps ); flock -u "$SWEEP_LOCK_FD"; continue
+    ( cd "$d" && rm -rf sky-out .ipeache .skydeps ); flock -u "$SWEEP_LOCK_FD"; continue
   fi
   build_cell="ok"
   printf '%s\t%s\n' "$n" "${WARN_CELL:-0}" >>"$WARNS"
@@ -409,7 +409,7 @@ for d in "${EXAMPLES[@]}"; do
   if [ "$BUILD_ONLY" = 1 ] || [ -z "$rbin" ]; then
     [ -z "$rbin" ] && { run_cell="noserve"; note="no binary resolved after build"; }
     printf '%s\t%s\t%s\t%s\t%s\n' "$n" "$build_cell" "$run_cell" "$equivalence_cell" "$note" >>"$ROWS"
-    ( cd "$d" && rm -rf sky-out .skycache .skydeps ); flock -u "$SWEEP_LOCK_FD"; continue
+    ( cd "$d" && rm -rf sky-out .ipeache .skydeps ); flock -u "$SWEEP_LOCK_FD"; continue
   fi
 
   IFS=$'\t' read -r run_cell run_note < <(run_for "$n" "$shape" "$rbin")
@@ -425,7 +425,7 @@ for d in "${EXAMPLES[@]}"; do
   note="$run_note"; [ -n "$equivalence_note" ] && note="${note:+$note; }$equivalence_note"
   printf '%s\t%s\t%s\t%s\t%s\n' "$n" "$build_cell" "$run_cell" "$equivalence_cell" "$note" >>"$ROWS"
   reap
-  ( cd "$d" && rm -rf sky-out .skycache .skydeps )
+  ( cd "$d" && rm -rf sky-out .ipeache .skydeps )
 done
 
 # ── Render the aligned table ─────────────────────────────────────────────────
@@ -442,7 +442,7 @@ RED=0; GREEN=0; SKIP=0; AMBER=0; RED_ROWS=""
 declare -A EQ_COUNT=()
 while IFS=$'\t' read -r n b r e note; do
   row_red=0
-  case "$b" in skyc-fail|cargo-fail) row_red=1 ;; esac
+  case "$b" in ipe-fail|cargo-fail) row_red=1 ;; esac
   case "$r" in panic|hang|noserve|notty) row_red=1 ;; esac
   case "$e" in DIFFER) row_red=1 ;; esac
   if [ "$e" = go-ref-broken ]; then AMBER=$((AMBER+1)); row_red=0; fi

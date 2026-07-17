@@ -54,7 +54,7 @@ fn server_request_accessor_emit_inserts_clone() {
     let out = std::env::temp_dir().join("skyc_m6_server_request_accessors");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(
         runtime.is_ok(),
         "runtime must resolve for E2E: {:?}",
@@ -62,10 +62,10 @@ fn server_request_accessor_emit_inserts_clone() {
     );
     let Ok(runtime) = runtime else { return };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc::build failed for server_request_accessors: {:?}",
+        "ipe::build failed for server_request_accessors: {:?}",
         built.err()
     );
 

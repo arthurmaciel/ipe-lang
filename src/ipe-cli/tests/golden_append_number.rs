@@ -13,7 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-use skyc::CliError;
+use ipe::CliError;
 
 fn repo_root() -> PathBuf {
     let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
@@ -36,12 +36,12 @@ fn out(name: &str) -> PathBuf {
 /// never accepted at exit 0 (a seal violation).
 #[test]
 fn append_and_number_on_same_var_is_sky_t0014() {
-    let Ok(rt) = skyc::resolve_runtime() else {
+    let Ok(rt) = ipe::resolve_runtime() else {
         return;
     };
     let o = out("append_number");
     let _ = std::fs::remove_dir_all(&o);
-    let built = skyc::build(&golden("append_number"), &o, &rt);
+    let built = ipe::build(&golden("append_number"), &o, &rt);
     let code = match &built {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
         _ => None,
@@ -57,12 +57,12 @@ fn append_and_number_on_same_var_is_sky_t0014() {
 /// compile — the fix must not over-tighten the defaulting rule.
 #[test]
 fn number_only_var_still_defaults_to_int() {
-    let Ok(rt) = skyc::resolve_runtime() else {
+    let Ok(rt) = ipe::resolve_runtime() else {
         return;
     };
     let o = out("number_only");
     let _ = std::fs::remove_dir_all(&o);
-    let built = skyc::build(&golden("number_only"), &o, &rt);
+    let built = ipe::build(&golden("number_only"), &o, &rt);
     assert!(
         built.is_ok(),
         "Number-only super var must still default to Int and compile: {built:?}"

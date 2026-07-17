@@ -11,7 +11,7 @@
 #     for now → WEB_OK=0 → exercise_live degrades to a server boot check, which
 #     is exactly the BUILD+RUN phase-1 behaviour we want).
 #   • resolve_bin looks under sky-out/rust/target and the shared CARGO_TARGET_DIR
-#     for skyc's emitted `sky-app` binary.
+#     for ipe's emitted `sky-app` binary.
 #
 # Depends on lib/env.sh being sourced first (CARGO_TARGET_DIR, PATH, REPO). It is
 # idempotent and side-effect-light at source time (exports + a browser-stack probe).
@@ -110,13 +110,13 @@ scenario_for() {
   fi
 }
 
-# ── resolve_bin <example-dir>: the freshest Rust binary skyc just built ──────
-# skyc emits a Cargo project whose package/binary is `sky-app` (src/ipe-cli emits
+# ── resolve_bin <example-dir>: the freshest Rust binary ipe just built ──────
+# ipe emits a Cargo project whose package/binary is `sky-app` (src/ipe-cli emits
 # a fixed `sky-app` bin). Because ~/.cargo/config.toml pins a shared target-dir,
 # each example's `cargo build` writes $CARGO_TARGET_DIR/{debug,release}/sky-app;
 # the sweep builds+runs one example at a time (rm -rf between), so overwrite is
 # fine. Probe the shared target first, then the per-example target. The sky.toml
-# `name` is tried too (harmless first probe; skyc names the bin sky-app regardless).
+# `name` is tried too (harmless first probe; ipe names the bin sky-app regardless).
 resolve_bin() {
   local d="$1" name b
   name="$(rg -No '^name\s*=\s*"([^"]+)"' -r '$1' "$d/sky.toml" 2>/dev/null | head -1)"

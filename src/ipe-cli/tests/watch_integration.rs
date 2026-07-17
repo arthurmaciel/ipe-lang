@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use skyc::watch::{WatchEvent, WatchHandle, WatchOptions};
+use ipe::watch::{WatchEvent, WatchHandle, WatchOptions};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
@@ -128,12 +128,12 @@ fn start_watch(
     sink: &EventSink,
 ) -> Result<
     (
-        std::thread::JoinHandle<Result<(), skyc::CliError>>,
+        std::thread::JoinHandle<Result<(), ipe::CliError>>,
         WatchHandle,
     ),
     BoxError,
 > {
-    let runtime_dir = skyc::resolve_runtime()
+    let runtime_dir = ipe::resolve_runtime()
         .map_err(|e| -> BoxError { format!("runtime dir must resolve: {e}").into() })?;
     let mut opts = WatchOptions::new(entry.to_path_buf(), out_dir.to_path_buf(), runtime_dir);
     opts.port = port;
@@ -144,7 +144,7 @@ fn start_watch(
         hard_cap: Duration::from_millis(600),
     };
     opts.on_event = Some(sink.as_callback());
-    Ok(skyc::watch::spawn(opts))
+    Ok(ipe::watch::spawn(opts))
 }
 
 fn write_main(ipe_dir: &Path, source: &str) -> Result<(), BoxError> {
@@ -156,7 +156,7 @@ fn write_main(ipe_dir: &Path, source: &str) -> Result<(), BoxError> {
 /// a setup-level `CliError` as a plain test failure.
 fn stop_and_join(
     handle: &WatchHandle,
-    join: std::thread::JoinHandle<Result<(), skyc::CliError>>,
+    join: std::thread::JoinHandle<Result<(), ipe::CliError>>,
 ) -> Result<(), BoxError> {
     handle.stop();
     join.join().map_or_else(

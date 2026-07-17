@@ -137,7 +137,7 @@ fn spawn_skyc_watch(
     out_dir: &Path,
     port: u16,
 ) -> Result<std::process::Child, BoxError> {
-    let runtime_dir = skyc::resolve_runtime()
+    let runtime_dir = ipe::resolve_runtime()
         .map_err(|e| -> BoxError { format!("runtime dir must resolve: {e}").into() })?;
     std::process::Command::new(env!("CARGO_BIN_EXE_skyc"))
         .arg("watch")
@@ -243,13 +243,13 @@ fn spawn_never_installs_a_sigterm_forwarder() -> Result<(), BoxError> {
     // so no cargo build ever starts — the loop just stays alive.
     std::fs::write(ipe_dir.join("Main.ipe"), RED_BUILD_SOURCE)
         .map_err(|e| -> BoxError { format!("write Main.ipe: {e}").into() })?;
-    let Ok(runtime_dir) = skyc::resolve_runtime() else {
+    let Ok(runtime_dir) = ipe::resolve_runtime() else {
         eprintln!("skipping (embedded runtime not resolvable)");
         return Ok(());
     };
     let opts =
-        skyc::watch::WatchOptions::new(ipe_dir.join("Main.ipe"), out_dir, runtime_dir);
-    let (join, handle) = skyc::watch::spawn(opts);
+        ipe::watch::WatchOptions::new(ipe_dir.join("Main.ipe"), out_dir, runtime_dir);
+    let (join, handle) = ipe::watch::spawn(opts);
 
     // Let the orchestrator finish setup and enter its event loop.
     std::thread::sleep(Duration::from_millis(300));

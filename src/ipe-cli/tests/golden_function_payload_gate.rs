@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 
 mod support;
 
-use skyc::CliError;
+use ipe::CliError;
 
 fn repo_root() -> PathBuf {
     let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
@@ -52,11 +52,11 @@ fn rejects_cleanly_or_builds_and_runs_never_silent_cargo_fail() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m3a_function_payload_gate_emit");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve: {:?}", runtime.err());
     let Ok(runtime) = runtime else { return };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
 
     // The minimal sound outcome: a clean constructor-payload-function
     // diagnostic naming the constructor-payload carrier (IPE-L0114), distinct

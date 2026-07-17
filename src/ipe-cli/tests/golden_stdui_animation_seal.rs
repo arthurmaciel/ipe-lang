@@ -21,7 +21,7 @@ mod support;
 
 #[allow(clippy::expect_used)]
 fn runtime() -> PathBuf {
-    skyc::resolve_runtime().expect("runtime must resolve for animation seal test")
+    ipe::resolve_runtime().expect("runtime must resolve for animation seal test")
 }
 
 /// A minimal Std.Ui program exercising `Animation.attribute`. NOTE: the
@@ -62,7 +62,7 @@ main =
 /// `slot` gives each `#[test]` its OWN project dir under `CARGO_TARGET_TMPDIR` so
 /// the two tests here (which run in parallel) never race on a shared path.
 #[allow(clippy::expect_used)]
-fn build_animation_project(slot: &str) -> (PathBuf, Result<(), skyc::CliError>) {
+fn build_animation_project(slot: &str) -> (PathBuf, Result<(), ipe::CliError>) {
     let out =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("stdui_animation_seal_{slot}"));
     let _ = std::fs::remove_dir_all(&out);
@@ -71,7 +71,7 @@ fn build_animation_project(slot: &str) -> (PathBuf, Result<(), skyc::CliError>) 
     let entry = src.join("Main.ipe");
     std::fs::write(&entry, MAIN_SKY).expect("write Main.ipe");
     let emit = out.join("emit");
-    let res = skyc::build(&entry, &emit, &runtime());
+    let res = ipe::build(&entry, &emit, &runtime());
     (emit, res)
 }
 

@@ -67,10 +67,10 @@ fn poly_task_on_error_nested_green() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("poly_task_on_error_nested");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return; // runtime unavailable — skip silently
     };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for poly_task_on_error_nested: {:?}",

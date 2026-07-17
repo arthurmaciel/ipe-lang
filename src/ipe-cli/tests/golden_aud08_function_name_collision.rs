@@ -43,7 +43,7 @@ fn write_project(dir: &std::path::Path, files: &[(&str, &str)]) -> bool {
 
 #[test]
 fn distinct_functions_folding_to_the_same_rust_name_are_rejected() {
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return; // runtime unavailable in this environment — skip silently
     };
 
@@ -82,7 +82,7 @@ fn distinct_functions_folding_to_the_same_rust_name_are_rejected() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("aud08_function_name_collision_out");
     let _ = fs::remove_dir_all(&out);
 
-    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     let Err(err) = built else {
         assert!(
             false_marker(),
@@ -93,7 +93,7 @@ fn distinct_functions_folding_to_the_same_rust_name_are_rejected() {
         );
         return;
     };
-    let skyc::CliError::Pipeline { diag, .. } = &err else {
+    let ipe::CliError::Pipeline { diag, .. } = &err else {
         assert!(false_marker(), "expected a Pipeline diagnostic, got: {err}");
         return;
     };
@@ -116,7 +116,7 @@ fn distinct_functions_folding_to_the_same_rust_name_are_rejected() {
 /// over-eager and reject legitimate distinct names.
 #[test]
 fn distinct_functions_with_distinct_rust_names_are_accepted() {
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
 
@@ -148,7 +148,7 @@ fn distinct_functions_with_distinct_rust_names_are_accepted() {
         .join("aud08_function_name_collision_control_out");
     let _ = fs::remove_dir_all(&out);
 
-    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "distinct, non-colliding function names must build cleanly: {:?}",

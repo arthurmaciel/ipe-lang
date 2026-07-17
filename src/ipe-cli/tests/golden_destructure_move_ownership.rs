@@ -41,12 +41,12 @@ fn i224_destructure_skyc_accepts_and_clones_reused_component() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i224_destructure_skyc_out");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         eprintln!("SKIP destructure_move_ownership: runtime not available");
         return;
     };
 
-    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for destructure_move_ownership: {:?}",
@@ -78,11 +78,11 @@ fn i224_destructure_cargo_builds_and_runs() {
     let out = std::env::temp_dir().join("skyc_i224_destructure_move_ownership_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
 
-    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(built.is_ok(), "skyc build must succeed: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted("destructure_move_ownership", &out);

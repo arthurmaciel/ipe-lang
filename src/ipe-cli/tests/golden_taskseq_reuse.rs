@@ -42,12 +42,12 @@ fn i193_taskseq_skyc_accepts() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i193_taskseq_reuse_skyc_out");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         eprintln!("SKIP taskseq_reuse: runtime not available");
         return;
     };
 
-    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for taskseq_reuse: {:?}",
@@ -78,11 +78,11 @@ fn i193_taskseq_cargo_builds_and_runs() {
     let out = std::env::temp_dir().join("skyc_i193_taskseq_reuse_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(built.is_ok(), "skyc build must succeed: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted("taskseq_reuse", &out);

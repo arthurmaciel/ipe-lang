@@ -29,7 +29,7 @@
 
 use std::path::{Path, PathBuf};
 
-use skyc::CliError;
+use ipe::CliError;
 
 // ── Inline source strings for T4d/T4f/MIX and non-routed regression ──────────
 
@@ -163,7 +163,7 @@ main =
 
 /// Compile `source` through the skyc pipeline (no cargo). Returns `None` to
 /// skip when the embedded runtime cannot be resolved.
-fn compile_src(test_name: &str, source: &str) -> Option<Result<(), skyc::CliError>> {
+fn compile_src(test_name: &str, source: &str) -> Option<Result<(), ipe::CliError>> {
     let ipe_dir = std::env::temp_dir().join(format!("live_routed_empty_{test_name}_sky"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
     std::fs::create_dir_all(&ipe_dir).ok()?;
@@ -171,10 +171,10 @@ fn compile_src(test_name: &str, source: &str) -> Option<Result<(), skyc::CliErro
     std::fs::write(&entry, source).ok()?;
     let out = std::env::temp_dir().join(format!("live_routed_empty_{test_name}_out"));
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return None;
     };
-    Some(skyc::build(&entry, &out, &runtime))
+    Some(ipe::build(&entry, &out, &runtime))
 }
 
 fn repo_root() -> PathBuf {
@@ -194,10 +194,10 @@ fn run_skyc(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>> {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return None;
     };
-    Some(skyc::build(&entry, &out, &runtime))
+    Some(ipe::build(&entry, &out, &runtime))
 }
 
 /// R1: Routed Model (`page : Page`), `routes = []`, `notFound = 5` (Int).
@@ -382,10 +382,10 @@ fn routed_empty_routes_well_typed_compiles_and_renders_route_page() {
         .join("Main.ipe");
     let out = empty_routes_ok_out();
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let result = skyc::build(&entry, &out, &runtime);
+    let result = ipe::build(&entry, &out, &runtime);
     assert!(
         result.is_ok(),
         "#108 hole 1: well-typed empty-routes routed app must be skyc-0, got: {:?}",

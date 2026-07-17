@@ -1,15 +1,15 @@
 [package]
-name = "skyc"
+name = "ipe"
 edition.workspace = true
 version.workspace = true
 license.workspace = true
 
 [lib]
-name = "skyc"
+name = "ipe"
 path = "src/lib.rs"
 
 [[bin]]
-name = "skyc"
+name = "ipe"
 path = "src/main.rs"
 
 [dependencies]

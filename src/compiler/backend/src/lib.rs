@@ -117,7 +117,7 @@ impl serde::Serialize for RelPath {
 /// bytes, bypassing [`RelPath::new`]'s path-traversal validation entirely —
 /// exactly the "parse, don't validate" boundary this newtype exists to
 /// enforce (see the type's own doc). This matters concretely for the
-/// on-disk build cache (`skyc::cache`): a corrupted or tampered cache file
+/// on-disk build cache (`ipe::cache`): a corrupted or tampered cache file
 /// is untrusted input from the moment it is read off disk, so a `RelPath`
 /// key inside a deserialized [`EmittedProject`] MUST re-run the same
 /// rejection an in-process backend emission would. Routing through

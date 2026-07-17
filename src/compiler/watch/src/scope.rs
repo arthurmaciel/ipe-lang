@@ -34,7 +34,7 @@ const EXCLUDED_DIR_NAMES: &[&str] = &[
     // The project-local incremental state directory the design doc reserves
     // (`.ipe/lowered/`, `.ipe/source.hash`) and its build-cache sibling.
     ".ipe",
-    ".skyc-cache",
+    ".ipe-cache",
     // Generated build output directories a `skyc build`/`ipe watch` produces.
     "sky-out",
 ];

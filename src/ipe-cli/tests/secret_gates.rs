@@ -29,12 +29,12 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code)
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     let got = match &built {
-        Err(skyc::CliError::Pipeline { diag, .. }) => Some(diag.code()),
+        Err(ipe::CliError::Pipeline { diag, .. }) => Some(diag.code()),
         _ => None,
     };
     assert_eq!(

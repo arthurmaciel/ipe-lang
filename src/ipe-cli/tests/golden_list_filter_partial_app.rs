@@ -39,7 +39,7 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// Assert that `skyc::build(fixture)` SUCCEEDS (exit-0 from the lowerer).
+/// Assert that `ipe::build(fixture)` SUCCEEDS (exit-0 from the lowerer).
 /// Runs without `IPE_E2E` so the compile check is always fast.
 #[test]
 fn list_filter_partial_app_compiles() {
@@ -52,10 +52,10 @@ fn list_filter_partial_app_compiles() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i161_list_filter_partial_app_emit");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return; // runtime unavailable — skip silently
     };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for list_filter_partial_app: {:?}",
@@ -73,11 +73,11 @@ fn list_filter_partial_app_compiles() {
     let e2e_out = std::env::temp_dir().join("skyc_i161_list_filter_partial_app_e2e");
     let _ = std::fs::remove_dir_all(&e2e_out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = skyc::build(&entry, &e2e_out, &runtime);
+    let built = ipe::build(&entry, &e2e_out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for list_filter_partial_app (E2E leg): {:?}",

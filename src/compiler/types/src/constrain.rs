@@ -1495,7 +1495,7 @@ pub struct Generated {
     /// first-encounter order over `module.defs` — which is itself
     /// dependency-first topo order, since `link::link` concatenates each
     /// source module's whole def list in the caller-supplied topo order (see
-    /// `ipe_canon::link` and `skyc::project::topological_order`). Consumed by
+    /// `ipe_canon::link` and `ipe::project::topological_order`). Consumed by
     /// `promote_untyped_boundaries` to discharge/generalize each module's
     /// untyped defs only after every module it depends on has already been
     /// generalized.

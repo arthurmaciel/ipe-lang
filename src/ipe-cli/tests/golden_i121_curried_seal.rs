@@ -31,7 +31,7 @@
 
 use std::path::{Path, PathBuf};
 
-use skyc::CliError;
+use ipe::CliError;
 
 mod support;
 
@@ -61,7 +61,7 @@ fn emitted_program_source(out: &Path) -> String {
     acc
 }
 
-/// Assert that `skyc::build(fixture)` surfaces `expected` as a
+/// Assert that `ipe::build(fixture)` surfaces `expected` as a
 /// `CliError::Pipeline` diagnostic.  Runs WITHOUT `IPE_E2E` so the gate
 /// checks remain fast in the default CI pass.
 fn assert_skyc_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code) {
@@ -74,10 +74,10 @@ fn assert_skyc_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return; // runtime unavailable — skip silently rather than fail
     };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     let got = match &built {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
         _ => None,
@@ -111,11 +111,11 @@ fn f1_firstclass_curried_and_shadow() {
     let out = std::env::temp_dir().join("skyc_i121_firstclass_curried_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for firstclass_curried: {:?}",
@@ -174,11 +174,11 @@ fn f2_firstclass_arity0() {
     let out = std::env::temp_dir().join("skyc_i121_firstclass_arity0_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for firstclass_arity0: {:?}",
@@ -218,11 +218,11 @@ fn f3_partial_noncopy() {
     let out = std::env::temp_dir().join("skyc_i121_partial_noncopy_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for partial_noncopy: {:?}",
@@ -269,11 +269,11 @@ fn f4_lambda_capture_noncopy_and_f11_shadow() {
     let out = std::env::temp_dir().join("skyc_i121_lambda_capture_noncopy_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for lambda_capture_noncopy: {:?}",
@@ -316,11 +316,11 @@ fn f5_capture_fn_called_control() {
     let out = std::env::temp_dir().join("skyc_i121_capture_fn_called_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for capture_fn_called (control): {:?}",
@@ -370,10 +370,10 @@ fn f6_capture_fn_forwarded_promoted_accepts() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i121_capture_fn_forwarded_accept");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "forwarded fn-typed param must Arc-promote and build: {:?}",
@@ -408,11 +408,11 @@ fn f7_succeed_curried() {
     let out = std::env::temp_dir().join("skyc_i121_succeed_curried_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for succeed_curried: {:?}",
@@ -453,11 +453,11 @@ fn f8_curried_three_arrows() {
     let out = std::env::temp_dir().join("skyc_i121_curried_three_arrows_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for curried_three_arrows: {:?}",
@@ -502,11 +502,11 @@ fn f9_decoder_thunk_capture() {
     let out = std::env::temp_dir().join("skyc_i121_decoder_thunk_capture_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for decoder_thunk_capture: {:?}",
@@ -577,11 +577,11 @@ fn f11_pipeline_custom_curried() {
     let out = std::env::temp_dir().join("skyc_i121_pipeline_custom_curried_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for pipeline_custom_curried: {:?}",

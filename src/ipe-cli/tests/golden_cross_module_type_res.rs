@@ -13,7 +13,7 @@
 //! so they compile cleanly without the heuristic.  See `golden_i138_total_resolution`
 //! for the error-path regression gate.
 //!
-//! These tests only check that `skyc::build` succeeds (exit 0); they do NOT
+//! These tests only check that `ipe::build` succeeds (exit 0); they do NOT
 //! build or run the emitted Rust project and do NOT require `IPE_E2E`.
 //!
 //! Run:
@@ -28,7 +28,7 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// Compile an example's entry point with `skyc::build` and assert exit 0.
+/// Compile an example's entry point with `ipe::build` and assert exit 0.
 /// Skips silently when the runtime directory is not present (e.g. a minimal
 /// checkout without the embedded stdlib), so the test never fails in CI
 /// environments that only have the crates but not the full repo layout.
@@ -42,13 +42,13 @@ fn assert_skyc_exit0(label: &str, entry_rel: &str) {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{label}_skyc_out"));
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         eprintln!("SKIP {label}: runtime not available");
         return;
     };
     // Multi-module examples require sibling-discovery so imports like
     // `import State exposing (..)` resolve to adjacent `.ipe` files.
-    let result = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let result = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         result.is_ok(),
         "skyc must compile {label} cleanly (exit 0): {:?}",

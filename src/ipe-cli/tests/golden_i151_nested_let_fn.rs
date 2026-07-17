@@ -62,10 +62,10 @@ fn c01_nested_let_fn_callee_green() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("nested_let_fn_callee");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return; // runtime unavailable — skip silently
     };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for nested_let_fn_callee (was IPE-L0126 pre-fix): {:?}",
@@ -119,10 +119,10 @@ fn c02_poly_fn_on_error_green() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("poly_task_on_error");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return; // runtime unavailable — skip silently
     };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for poly_task_on_error (was IPE-L0126 pre-fix): {:?}",

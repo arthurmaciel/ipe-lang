@@ -41,8 +41,8 @@ fn build_ok(fixture: &str, out_suffix: &str) -> Option<PathBuf> {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime().ok()?;
-    let built = skyc::build(&entry, &out, &runtime);
+    let runtime = ipe::resolve_runtime().ok()?;
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "fixture {fixture}: tuple-pattern shape must now build cleanly, got {built:?}"

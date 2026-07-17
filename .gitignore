@@ -1,6 +1,6 @@
 /target
 sky-out/
-.skycache/
+.ipe-cache/
 .skydeps/
 /tmp-parity/
 # Default SQLite DB written by `Db.connect ()` when an emitted binary is run

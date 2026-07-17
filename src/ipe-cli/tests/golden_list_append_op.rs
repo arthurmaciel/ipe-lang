@@ -34,12 +34,12 @@ fn compile_golden(name: &str) -> PathBuf {
     let entry = golden_dir(&root, name).join("Main.ipe");
     let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else {
         return out;
     };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(built.is_ok(), "build failed for {name}: {:?}", built.err());
     out
 }
@@ -80,12 +80,12 @@ fn append_on_int_is_rejected_at_typecheck() {
     let entry = golden_dir(&root, "m_neg_append_on_int").join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_m_neg_append_on_int_e2e");
     let _ = std::fs::remove_dir_all(&out);
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve");
     let Ok(runtime) = runtime else {
         return;
     };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_err(),
         "`++` on `Int` MUST fail at skyc type-check (Appendable obligation), \

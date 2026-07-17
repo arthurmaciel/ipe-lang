@@ -25,12 +25,12 @@ fn compile_golden(name: &str) -> PathBuf {
     let entry = golden_dir(&root, name).join("Main.ipe");
     let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else {
         return out;
     };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(built.is_ok(), "build failed for {name}: {:?}", built.err());
     out
 }
@@ -59,12 +59,12 @@ fn log_info_with_stringify_attrs_compiles() {
     let entry = golden_dir(&root, "m_log_with").join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_m_log_with_e2e");
     let _ = std::fs::remove_dir_all(&out);
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve");
     let Ok(runtime) = runtime else {
         return;
     };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "Log.infoWith with String attrs must compile: {:?}",
@@ -81,12 +81,12 @@ fn tostring_on_function_is_rejected_at_typecheck() {
     let entry = golden_dir(&root, "m_tostring_fn_rejected").join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_m_tostring_fn_rejected_e2e");
     let _ = std::fs::remove_dir_all(&out);
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve");
     let Ok(runtime) = runtime else {
         return;
     };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_err(),
         "toString on a function MUST fail at skyc type-check (Stringify obligation), \

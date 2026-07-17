@@ -322,7 +322,7 @@ fn run_extract(cfg: &Config) -> Result<String, String> {
     // Compiled-source Layer-3 module qualifiers (Regex, Path, ToString, Pure, …)
     // are DELIBERATELY absent from the QUALIFIERS table (they route via
     // `detect_kernel_alias`), so the canon-parity check must skip them.
-    let stdlib_lib = our.join("crates/skyc/src/stdlib.rs");
+    let stdlib_lib = our.join("src/ipe-cli/src/stdlib.rs");
     let stdlib_src = read_file(&stdlib_lib)?;
     let compiled_source_quals = scan_compiled_source_qualifiers(&stdlib_src);
 
@@ -781,7 +781,7 @@ fn scan_kernel_name(src: &str) -> HashMap<String, String> {
     map
 }
 
-/// Scan `COMPILED_STD_MODULES` from `crates/skyc/src/stdlib.rs` and return the
+/// Scan `COMPILED_STD_MODULES` from `src/ipe-cli/src/stdlib.rs` and return the
 /// set of canonical qualifier short-names for compiled-source Layer-3 modules.
 ///
 /// A compiled-source module's members are point-free `Ffi.kernel "…"` aliases

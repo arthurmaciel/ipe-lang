@@ -36,7 +36,7 @@
 
 use std::path::{Path, PathBuf};
 
-use skyc::CliError;
+use ipe::CliError;
 
 mod support;
 
@@ -69,11 +69,11 @@ fn any_ctor_payload_skyc_and_cargo_zero() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("l0102_any_ctor_payload_emit");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc must accept `BroadcastMsg any` (was IPE-L0102 pre-fix): {:?}",
@@ -108,11 +108,11 @@ fn any_ctor_payload_fail_closed() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("l0102_any_ctor_fail_closed_emit");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     let got = match &built {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
         _ => None,
@@ -133,11 +133,11 @@ fn ctor_span_attr_dep_module() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("l0102_ctor_span_attr_emit");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
 
-    let result = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let result = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         result.is_err(),
         "expected IPE-L0114 for function-bearing ctor in dep — success means the seal is broken"

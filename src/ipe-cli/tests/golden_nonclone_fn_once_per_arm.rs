@@ -42,12 +42,12 @@ fn i193_nonclone_fn_once_per_arm_rejected() {
         .join("i193_nonclone_fn_once_per_arm_out");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         eprintln!("SKIP nonclone_fn_once_per_arm: runtime not available");
         return;
     };
 
-    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "per-arm fn-value uses must SUM to 2 and Arc-promote the param \

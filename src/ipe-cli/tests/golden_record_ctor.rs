@@ -46,10 +46,10 @@ fn record_ctor_end_to_end_field_order() {
     let out = std::env::temp_dir().join("skyc_m82_record_ctor_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(built.is_ok(), "build failed: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted("record_ctor", &out);
@@ -77,10 +77,10 @@ fn record_ctor_and_literal_share_one_struct() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m82_record_ctor_twin_emit");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve: {:?}", runtime.err());
     let Ok(runtime) = runtime else { return };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(built.is_ok(), "build failed: {:?}", built.err());
 
     let emitted = std::fs::read_to_string(out.join("src").join("main.rs"));
@@ -134,12 +134,12 @@ fn seal_fn_field_alias_emits_no_struct() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m82_record_ctor_fn_field_emit");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve: {:?}", runtime.err());
     let Ok(runtime) = runtime else { return };
     // skyc MUST succeed — a function-embedding alias that is merely NAMED
     // (declared, never constructed) is a valid program.
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc must accept a merely-named function-embedding record alias: {:?}",
@@ -180,10 +180,10 @@ fn seal_fn_field_alias_builds_and_runs() {
     let out = std::env::temp_dir().join("skyc_m82_record_ctor_fn_field_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(built.is_ok(), "skyc build failed: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted("record_ctor_fn_field", &out);
@@ -214,12 +214,12 @@ fn seal_opaque_field_alias_emits_no_struct() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m82_record_ctor_opaque_field_emit");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve: {:?}", runtime.err());
     let Ok(runtime) = runtime else { return };
     // skyc MUST succeed — an opaque-wrapper-field alias that is merely NAMED
     // (declared, never constructed) is a valid program.
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc must accept a merely-named opaque-wrapper-field record alias: {:?}",
@@ -261,10 +261,10 @@ fn seal_opaque_field_alias_builds_and_runs() {
     let out = std::env::temp_dir().join("skyc_m82_record_ctor_opaque_field_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(built.is_ok(), "skyc build failed: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted("record_ctor_opaque_field", &out);
@@ -278,7 +278,7 @@ fn seal_opaque_field_alias_builds_and_runs() {
 /// ROUND-2 SEAL FAIL-CLOSED. The same opaque-wrapper-field alias, but the
 /// alias name is USED as a value constructor (`D Decode.int`). Because synthesis
 /// declined, no top-level value `D` exists, so this must fail CLOSED at skyc with
-/// IPE-N0001 — NEVER skyc-0-then-cargo-fail. `skyc::build` must return `Err` and
+/// IPE-N0001 — NEVER skyc-0-then-cargo-fail. `ipe::build` must return `Err` and
 /// emit nothing. This is the decisive contrast to the seal hole: the same source
 /// shape that round-1 emitted-then-cargo-failed is now rejected at skyc.
 #[test]
@@ -292,10 +292,10 @@ fn seal_opaque_field_used_as_ctor_fails_closed() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m82_record_ctor_opaque_ctor_emit");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve: {:?}", runtime.err());
     let Ok(runtime) = runtime else { return };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_err(),
         "using an opaque-wrapper-field alias as a ctor must fail CLOSED at skyc, \
@@ -322,10 +322,10 @@ fn record_ctor_cross_module_end_to_end() {
     let out = std::env::temp_dir().join("skyc_m82_record_ctor_xmod_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
-    let built = skyc::build_project(&manifest, &out, &runtime);
+    let built = ipe::build_project(&manifest, &out, &runtime);
     assert!(
         built.is_ok(),
         "cross-module build failed: {:?}",

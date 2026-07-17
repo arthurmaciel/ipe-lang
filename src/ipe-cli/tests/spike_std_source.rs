@@ -15,7 +15,7 @@ mod support;
 
 #[allow(clippy::expect_used)]
 fn runtime() -> PathBuf {
-    skyc::resolve_runtime().expect("runtime must resolve for spike tests")
+    ipe::resolve_runtime().expect("runtime must resolve for spike tests")
 }
 
 fn repo_root() -> PathBuf {
@@ -40,7 +40,7 @@ fn spike_project_builds_and_injects_compiled_source() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("spike_std_source");
     let _ = std::fs::remove_dir_all(&out);
 
-    let res = skyc::build_project(&spike_manifest(), &out, &runtime());
+    let res = ipe::build_project(&spike_manifest(), &out, &runtime());
     assert!(
         res.is_ok(),
         "spike build_project must succeed (inject → canon-as-stdlib → emit): {:?}",
@@ -119,11 +119,11 @@ fn hostile_std_squat_is_sky_n0025() {
     .expect("write Main.ipe");
 
     let out = root.join("out");
-    let res = skyc::build_project(&root.join("sky.toml"), &out, &runtime());
+    let res = ipe::build_project(&root.join("sky.toml"), &out, &runtime());
     assert!(res.is_err(), "hostile Std.Palette squat must be rejected");
     let Err(err) = res else { return };
     let code = match &err {
-        skyc::CliError::Pipeline { diag, .. } => Some(diag.code()),
+        ipe::CliError::Pipeline { diag, .. } => Some(diag.code()),
         _ => None,
     };
     assert_eq!(
@@ -144,7 +144,7 @@ fn spike_e2e_runs_and_prints_hex() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("spike_std_source_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let res = skyc::build_project(&spike_manifest(), &out, &runtime());
+    let res = ipe::build_project(&spike_manifest(), &out, &runtime());
     assert!(res.is_ok(), "spike build must succeed: {:?}", res.err());
 
     let outcome = support::build_and_run_emitted("spike_std_source", &out);

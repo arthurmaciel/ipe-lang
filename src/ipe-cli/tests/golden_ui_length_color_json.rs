@@ -52,11 +52,11 @@ fn ui_length_color_and_json_value_render_end_to_end() {
     let out = std::env::temp_dir().join("skyc_m7_ui_length_color_json_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for ui_length_color_json: {:?}",

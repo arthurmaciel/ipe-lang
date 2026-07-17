@@ -16,7 +16,7 @@
 
 use std::path::{Path, PathBuf};
 
-use skyc::CliError;
+use ipe::CliError;
 
 fn repo_root() -> PathBuf {
     let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
@@ -36,8 +36,8 @@ fn build_fixture(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime().ok()?;
-    Some(skyc::build(&entry, &out, &runtime))
+    let runtime = ipe::resolve_runtime().ok()?;
+    Some(ipe::build(&entry, &out, &runtime))
 }
 
 /// E2: a mis-arity `Task` in a constructor payload is a clean IPE-T0016, not an

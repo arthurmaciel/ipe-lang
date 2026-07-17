@@ -24,11 +24,11 @@ fn emits_byte_identical_main_rs_and_vendors_runtime() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m0_emit");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve: {:?}", runtime.err());
     let Ok(runtime) = runtime else { return };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(built.is_ok(), "build failed: {:?}", built.err());
 
     // Directory-diff the emitted project against the golden dir: asserts the
@@ -71,10 +71,10 @@ fn end_to_end_builds_and_prints_one() {
     let out = std::env::temp_dir().join("skyc_m0_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(built.is_ok(), "build failed: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted("basics", &out);
@@ -103,10 +103,10 @@ fn pipeline_error_renders_with_code_and_explain_pointer() {
     // The runtime dir is never reached: the parse error fires first. Pass a
     // path that need not exist.
     let runtime = dir.join("no-runtime");
-    let built = skyc::build(&entry, &dir.join("out"), &runtime);
+    let built = ipe::build(&entry, &dir.join("out"), &runtime);
 
     assert!(
-        matches!(&built, Err(skyc::CliError::Pipeline { .. })),
+        matches!(&built, Err(ipe::CliError::Pipeline { .. })),
         "expected a pipeline error, got: {built:?}"
     );
     let Err(err) = built else { return };

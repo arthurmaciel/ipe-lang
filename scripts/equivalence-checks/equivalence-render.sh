@@ -22,7 +22,7 @@
 # this repo the same way examples-sweep.sh was (examples-sweep-port.md): the
 # reference drives ONE compiler with `--backend go|rust`; here there are TWO
 # binaries — the pinned Go-reference oracle (`IPE_GO_BIN`, default
-# tools/oracle/bin/sky) and `skyc` (env.sh's SKYC_BIN) + a `cargo build` of the
+# tools/oracle/bin/sky) and `ipe` (env.sh's IPE_BIN) + a `cargo build` of the
 # emitted crate. Deliberately NOT inlined into examples-sweep.sh's `pty` EQUIVALENCE
 # case — tui-grid equivalence lives in this standalone driver by the reference's
 # own architecture; the main sweep's `pty` mode stays at the boot-both floor.
@@ -43,11 +43,11 @@ _dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd -P)"
 source "$_dir/../lib/env.sh"
 [ -n "${REPO:-}" ] && cd "$REPO" || { echo "ERROR: run from the ipê repo (set IPE_REPO)." >&2; exit 2; }
 # shellcheck source=lib/checks.sh
-source "$_dir/../lib/checks.sh"   # resolve_bin (the freshest skyc-emitted binary)
+source "$_dir/../lib/checks.sh"   # resolve_bin (the freshest ipe-emitted binary)
 
 GO_ORACLE="${IPE_GO_BIN:-$REPO/tools/oracle/bin/sky}"
 [ -x "$GO_ORACLE" ] || { echo "ERROR: Go-reference oracle not found at $GO_ORACLE (set IPE_GO_BIN; see tools/oracle/README.md)." >&2; exit 2; }
-[ -x "$SKYC_BIN" ] || { echo "ERROR: skyc binary not at '$SKYC_BIN' — build it: cargo build --release -p skyc (or set SKYC_BIN)." >&2; exit 2; }
+[ -x "$IPE_BIN" ] || { echo "ERROR: ipe binary not at '$IPE_BIN' — build it: cargo build --release -p ipe (or set IPE_BIN)." >&2; exit 2; }
 NORM_HTML="$_dir/../lib/equivalence_normalize_html.py"
 NORM_TUI="$_dir/../lib/equivalence_tui_grid.py"
 HIST="${TMPDIR:-/tmp}/sky-equivalence-render"; mkdir -p -m 700 "$HIST" 2>/dev/null || true
@@ -68,17 +68,17 @@ free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0)
 build_both() {
   local d="$1" tgt
   # Clear caches before EACH backend — building go then rust in the same dir
-  # otherwise lets a stale .skycache short-circuit poison the second build.
-  ( cd "$d" && rm -rf sky-out .skycache .skydeps ) >/dev/null 2>&1
+  # otherwise lets a stale .ipeache short-circuit poison the second build.
+  ( cd "$d" && rm -rf sky-out .ipeache .skydeps ) >/dev/null 2>&1
   # env -u IPE_RUNTIME_DIR: the exported Rust-runtime dir would leak into the Go
   # reference's build and read as go-ref-broken (same fix as examples-sweep.sh).
   ( cd "$d" && env -u IPE_RUNTIME_DIR timeout 300 "$GO_ORACLE" build src/Main.ipe ) >"$HIST/go-build.log" 2>&1 || { echo "  go build failed (see $HIST/go-build.log)"; return 1; }
   GO_BIN="$HIST/$(basename "$d").gobin"; cp -f "$d/sky-out/app" "$GO_BIN" || return 1
-  ( cd "$d" && rm -rf sky-out .skycache .skydeps ) >/dev/null 2>&1
-  # skyc: project build when a sky.toml exists (multi-module discovery), else the
-  # single-file entry (same dispatch as examples-sweep.sh's skyc_build_target).
+  ( cd "$d" && rm -rf sky-out .ipeache .skydeps ) >/dev/null 2>&1
+  # ipe: project build when a sky.toml exists (multi-module discovery), else the
+  # single-file entry (same dispatch as examples-sweep.sh's ipe_build_target).
   if [ -f "$d/sky.toml" ]; then tgt="sky.toml"; else tgt="src/Main.ipe"; fi
-  ( cd "$d" && timeout 600 "$SKYC_BIN" build "$tgt" --out sky-out/rust ) >"$HIST/rust-build.log" 2>&1 || { echo "  skyc build failed (see $HIST/rust-build.log)"; return 1; }
+  ( cd "$d" && timeout 600 "$IPE_BIN" build "$tgt" --out sky-out/rust ) >"$HIST/rust-build.log" 2>&1 || { echo "  ipe build failed (see $HIST/rust-build.log)"; return 1; }
   ( cd "$d" && timeout 900 cargo build --manifest-path sky-out/rust/Cargo.toml ) >>"$HIST/rust-build.log" 2>&1 || { echo "  cargo build failed (see $HIST/rust-build.log)"; return 1; }
   RUST_BIN="$(resolve_bin "$d")"
   [ -n "$RUST_BIN" ] && [ -x "$RUST_BIN" ] || { echo "  rust binary not found"; return 1; }
