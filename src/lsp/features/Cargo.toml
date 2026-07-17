@@ -1,0 +1,16 @@
+[package]
+name = "ipe_lsp_features"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+ipe_db = { path = "../../compiler/db" }
+ipe_diagnostics = { path = "../../compiler/diagnostics" }
+ipe_intern = { path = "../../compiler/intern" }
+ipe_canon = { path = "../../compiler/canon" }
+ipe_types = { path = "../../compiler/types" }
+lsp-types = "0.95"
+
+[lints]
+workspace = true

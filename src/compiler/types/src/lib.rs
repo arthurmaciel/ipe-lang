@@ -40,6 +40,7 @@ use ipe_diagnostics::{DResult, Diagnostic, Span, TypeError};
 use ipe_intern::{Interner, Symbol};
 
 pub use constrain::kernel_type_table;
+pub use doc::{VarNamer, ty_to_doc};
 pub use solve::{BUDGET_ENV, Budget, DEFAULT_SOLVER_BUDGET};
 pub use ty::{RowTail, Ty, TyBounds, is_solver_var, tag_solver_var, untag_solver_var};
 
@@ -47,7 +48,6 @@ use constrain::{
     Builder, FieldAccess, RecordUpdate, RouteWitnessCheck, RoutedLiveCheck, SchemeApp,
     promote_untyped_boundaries, zonk,
 };
-use doc::{VarNamer, ty_to_doc};
 use solve::solve_attributed;
 use ty::{Content, FlatType};
 use unify::unify;

@@ -166,6 +166,51 @@ pub fn render(d: &Diagnostic, file: &str, source: &str) -> String {
     out
 }
 
+/// Render a diagnostic as a snippet-free, colour-free message.
+///
+/// The title, the primary payload label, then every help/note line — the
+/// same wording as [`render`], minus the location/snippet bands and the ANSI
+/// colour a client (an editor showing an LSP diagnostic) renders itself.
+/// Secondary spans are omitted here; a protocol client carries them as
+/// related locations instead.
+#[must_use]
+pub fn plain_message(d: &Diagnostic, source: &str) -> String {
+    let code = d.code();
+    let mut out = String::new();
+    out.push_str(title(code));
+    if let Some(label) = primary_label(d) {
+        out.push_str(": ");
+        out.push_str(&label);
+    }
+    for line in &d.help() {
+        let text = match line {
+            HelpLine::Suggest(s) => Some(suggestion_text(s, source)),
+            HelpLine::SecondarySpan { .. } => None,
+            other => help_text(other),
+        };
+        if let Some(text) = text {
+            out.push('\n');
+            out.push_str(&text);
+        }
+    }
+    if let Diagnostic::CompilerBug { detail, .. } = d {
+        if !detail.is_empty() {
+            out.push_str("\nnote: ");
+            out.push_str(detail);
+        }
+        let _ = write!(
+            out,
+            "\nnote: this is a bug in the compiler, please report it at: {ISSUE_TRACKER_URL}"
+        );
+    }
+    let _ = write!(
+        out,
+        "\nnote: run `ipe explain {}` for more information",
+        code.as_str()
+    );
+    out
+}
+
 // ===========================================================================
 // Source-position arithmetic (checked, clamped, panic-free)
 // ===========================================================================
@@ -878,6 +923,16 @@ fn char_repr(c: char) -> String {
 // ===========================================================================
 // Type rendering
 // ===========================================================================
+
+/// Render a resolved type document to its display form.
+///
+/// The same rendering diagnostics use inline (`expected Int, found List
+/// String`), exposed for consumers (hover, docs) that show a type outside a
+/// diagnostic.
+#[must_use]
+pub fn render_ty(t: &TyDoc) -> String {
+    ty_to_string(t)
+}
 
 /// Render a resolved type document at the top precedence level.
 fn ty_to_string(t: &TyDoc) -> String {

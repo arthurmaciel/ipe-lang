@@ -190,12 +190,12 @@ fn emit(opts: &WatchOptions, event: WatchEvent) {
 /// one-shot entry points stay exactly as tested by the golden suite; this
 /// is an independent, read-only duplicate of the RESOLUTION step only (no
 /// compiler stage runs here).
-struct ResolvedProject {
-    sources: BTreeMap<Vec<String>, (PathBuf, String)>,
-    discovered: Vec<project::DiscoveredModule>,
-    entry_path: Vec<String>,
-    blame_path: PathBuf,
-    db_driver: ipe_backend_rust::DbDriver,
+pub(crate) struct ResolvedProject {
+    pub(crate) sources: BTreeMap<Vec<String>, (PathBuf, String)>,
+    pub(crate) discovered: Vec<project::DiscoveredModule>,
+    pub(crate) entry_path: Vec<String>,
+    pub(crate) blame_path: PathBuf,
+    pub(crate) db_driver: ipe_backend_rust::DbDriver,
 }
 
 /// Resolve `entry` (a `.ipe` file, a `sky.toml`, or a project directory)
@@ -204,11 +204,19 @@ struct ResolvedProject {
 /// `.toml` → itself; `.ipe` → walk up for a manifest, else sibling
 /// discovery.
 ///
+/// `entry_text_override`, when given, shadows the entry `.ipe` file's disk
+/// bytes in the no-manifest branch — the LSP hands the unsaved editor
+/// buffer here so module-path discovery follows what the author sees, not
+/// stale disk state. `ipe watch` always passes `None` (disk is its truth).
+///
 /// # Errors
 /// [`CliError::Io`] on any filesystem failure; [`CliError::Pipeline`] if the
 /// entry file itself fails to parse (needed only to learn its declared
 /// module path in the no-manifest case).
-fn resolve_project_sources(entry: &Path) -> Result<ResolvedProject, CliError> {
+pub(crate) fn resolve_project_sources(
+    entry: &Path,
+    entry_text_override: Option<&str>,
+) -> Result<ResolvedProject, CliError> {
     let manifest_path = if entry.is_dir() {
         let candidate = entry.join("sky.toml");
         if candidate.is_file() {
@@ -242,7 +250,10 @@ fn resolve_project_sources(entry: &Path) -> Result<ResolvedProject, CliError> {
     }
 
     // No manifest: sibling discovery, mirroring `build_with_sibling_discovery`.
-    let source = std::fs::read_to_string(entry).map_err(|e| io_err(entry, e))?;
+    let source = match entry_text_override {
+        Some(text) => text.to_owned(),
+        None => std::fs::read_to_string(entry).map_err(|e| io_err(entry, e))?,
+    };
     let mut name_interner = Interner::new();
     let parsed = ipe_parse::parse_module(&source, &mut name_interner).map_err(|diag| {
         CliError::Pipeline {
@@ -505,7 +516,7 @@ fn run_inner(
     opts: &WatchOptions,
     external_stop: Option<mpsc::Receiver<()>>,
 ) -> Result<(), CliError> {
-    let initial = resolve_project_sources(&opts.entry)?;
+    let initial = resolve_project_sources(&opts.entry, None)?;
     let (root_dir, entry_dir) = scope_roots(&initial, &opts.entry);
 
     let scope = ipe_watch::WatchScope::build(&root_dir, &entry_dir)
@@ -696,7 +707,7 @@ fn run_inner(
                     let _ = child.kill();
                 }
 
-                let resolved = match resolve_project_sources(&opts.entry) {
+                let resolved = match resolve_project_sources(&opts.entry, None) {
                     Ok(r) => r,
                     Err(e) => {
                         eprintln!("[ipe watch] {e}");
