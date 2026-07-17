@@ -11,6 +11,7 @@ pub mod crypto;
 pub mod csv;
 pub mod decimal;
 pub mod dict;
+pub mod dom;
 pub mod encoding;
 pub mod error;
 pub mod ffi_polyfills;

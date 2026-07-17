@@ -8,15 +8,7 @@
 
 use crate::dict::IpeDict;
 
-#[derive(Clone, Debug)]
-pub struct LiveReq {
-    pub path: String,
-    pub query: String,
-    pub method: String,
-    pub params: IpeDict<String>,
-    pub headers: IpeDict<String>,
-    pub cookies: IpeDict<String>,
-}
+pub use crate::dom::req::LiveReq;
 
 /// Build a `LiveReq` from the incoming request parts + the matched route params.
 pub fn live_req(

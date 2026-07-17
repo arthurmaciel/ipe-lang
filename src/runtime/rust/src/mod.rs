@@ -169,10 +169,24 @@ pub mod email;
 #[cfg(feature = "email")]
 pub use email::*;
 
-#[cfg(feature = "tokio")]
+// `tea` carries the target-neutral `IpeCmd`/`IpeSub` types plus the native
+// (tokio) loop; on wasm32 the wasm-client sink drives the same types with
+// the loop halves cfg'd out inside the file.
+#[cfg(any(
+    feature = "tokio",
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
 pub mod tea;
-#[cfg(feature = "tokio")]
+#[cfg(any(
+    feature = "tokio",
+    all(target_arch = "wasm32", feature = "wasm-client")
+))]
 pub use tea::*;
+
+// Browser-WASM TEA sink (mount / patch-apply / delegated events). Only
+// meaningful on wasm32; the feature keeps native builds' dep graph untouched.
+#[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
+pub mod wasm;
 
 #[cfg(feature = "websocket_client")]
 pub mod ws_client;
@@ -185,6 +199,12 @@ pub use ws_client::*;
 // live module re-exports from here.
 pub mod html;
 pub use html::*;
+
+// Target-neutral DOM data path (diff → `Vec<Patch>`, handler index, form
+// decode). Pure over `html`; shared by the Live SSE wire, the Webview bridge,
+// and the browser-WASM sink. NOT glob-re-exported at the root: `live` already
+// lifts its items, and a second root glob would shadow-collide under `live`.
+pub mod dom;
 
 // Shared CSS/style injection-safety encoders (SafeCssValue / SafeCssPropertyName
 // / SafeCssSelector / strip_style_close). One policy, one place — imported by the

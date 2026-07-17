@@ -1,0 +1,99 @@
+module Main exposing (main)
+
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.Live exposing (app)
+import Ipe.Cmd as Cmd
+import Ipe.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Font as Font
+
+
+type Page
+    = CounterPage
+
+
+type Msg
+    = Increment
+    | Decrement
+    | Reset
+
+
+type alias Model =
+    { count : Int
+    }
+
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { count = 0 }, Cmd.none )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Increment ->
+            ( { model | count = model.count + 1 }, Cmd.none )
+
+        Decrement ->
+            ( { model | count = model.count - 1 }, Cmd.none )
+
+        Reset ->
+            ( { model | count = 0 }, Cmd.none )
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.none
+
+
+view : Model -> Html Msg
+view model =
+    Ui.layout []
+        (Ui.column
+            [ Ui.spacing 16, Ui.padding 32, Ui.centerX ]
+            [ Ui.el
+                [ Font.size 20, Font.bold ]
+                (Ui.text "Ipe.Ui counter")
+            , Ui.row
+                [ Ui.spacing 12 ]
+                [ Ui.button
+                    [ Ui.padding 12
+                    , Background.color (Ui.rgb 37 99 235)
+                    , Font.color (Ui.rgb 255 255 255)
+                    , Border.rounded 8
+                    ]
+                    { onPress = Just Decrement, label = Ui.text "-" }
+                , Ui.el
+                    [ Font.size 32, Font.bold ]
+                    (Ui.text (String.fromInt model.count))
+                , Ui.button
+                    [ Ui.padding 12
+                    , Background.color (Ui.rgb 37 99 235)
+                    , Font.color (Ui.rgb 255 255 255)
+                    , Border.rounded 8
+                    ]
+                    { onPress = Just Increment, label = Ui.text "+" }
+                ]
+            , Ui.button
+                [ Ui.padding 8
+                , Background.color (Ui.rgb 107 114 128)
+                , Font.color (Ui.rgb 255 255 255)
+                , Border.rounded 6
+                ]
+                { onPress = Just Reset, label = Ui.text "Reset" }
+            ]
+        )
+
+
+main =
+    app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = CounterPage
+        }

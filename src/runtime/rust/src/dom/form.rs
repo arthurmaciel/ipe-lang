@@ -4,7 +4,7 @@
 //! handler turns it into a `FormData` (`HashMap<String, String>`). `decode_form`
 //! narrows that into the typed Ipê record `T` the `onSubmit` handler expects.
 
-use crate::live::html::FormData;
+use crate::html::FormData;
 
 /// Decode browser form data into a typed Ipê record `T`.
 ///

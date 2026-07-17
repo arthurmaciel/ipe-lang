@@ -16,7 +16,7 @@ use std::pin::Pin;
 pub enum IpeCmd<M> {
     None,
     Batch(Vec<IpeCmd<M>>),
-    Perform(Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = M> + Send>> + Send>),
+    Perform(PerformThunk<M>),
     /// pub/sub broadcast. The thunk receives the publishing session's sid (the
     /// origin), injected by the Live dispatch loop, and returns the subscriber
     /// count. Not generic over the payload type T — T is captured inside the
@@ -24,12 +24,25 @@ pub enum IpeCmd<M> {
     Publish(Box<dyn FnOnce(&str) -> i64 + Send>),
 }
 
+/// The boxed message-producing thunk inside [`IpeCmd::Perform`]. Same
+/// cfg-split rationale as `IpeTask` (`core.rs`): wasm futures touch the DOM
+/// and are `!Send`; the native bound backs `tokio::spawn`.
+#[cfg(not(target_arch = "wasm32"))]
+pub type PerformThunk<M> = Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = M> + Send>> + Send>;
+#[cfg(target_arch = "wasm32")]
+pub type PerformThunk<M> = Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = M>>>>;
+
 /// A custom subscription event source: given an `emit` callback, spawn a task
 /// that pushes messages into the loop, returning its JoinHandle (aborted on
 /// re-subscribe). Keeps IpeSub decoupled from source-specific runtimes (e.g. the
 /// WebSocket client builds one of these for `onMessage`).
+#[cfg(not(target_arch = "wasm32"))]
 pub type SubSpawn<M> =
     Box<dyn FnOnce(std::sync::Arc<dyn Fn(M) + Send + Sync>) -> tokio::task::JoinHandle<()> + Send>;
+/// wasm: single-threaded, no tokio — a source registers its emit callback and
+/// owns its own teardown (no `JoinHandle` to abort).
+#[cfg(target_arch = "wasm32")]
+pub type SubSpawn<M> = Box<dyn FnOnce(std::rc::Rc<dyn Fn(M)>)>;
 
 /// Ipê `Sub msg`.
 pub enum IpeSub<M> {
@@ -51,12 +64,28 @@ pub fn cmd_batch<M>(list: Vec<IpeCmd<M>>) -> IpeCmd<M> {
 /// Cmd.perform : Task err a -> (Result err a -> msg) -> Cmd msg.
 /// Composes the task and the toMsg decoder (which receives the IpeResult) into a
 /// single message-producing thunk fired by the run loop.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn cmd_perform<E, A, M, F>(task: IpeTask<E, A>, to_msg: F) -> IpeCmd<M>
 where
     E: Send + 'static,
     A: Send + 'static,
     M: Send + 'static,
     F: FnOnce(IpeResult<E, A>) -> M + Send + 'static,
+{
+    IpeCmd::Perform(Box::new(move || {
+        Box::pin(async move { to_msg(task.await) })
+    }))
+}
+
+/// wasm: same composition, minus the `Send` bounds (single-threaded browser
+/// event loop; the thunk is driven by `spawn_local`).
+#[cfg(target_arch = "wasm32")]
+pub fn cmd_perform<E, A, M, F>(task: IpeTask<E, A>, to_msg: F) -> IpeCmd<M>
+where
+    E: 'static,
+    A: 'static,
+    M: 'static,
+    F: FnOnce(IpeResult<E, A>) -> M + 'static,
 {
     IpeCmd::Perform(Box::new(move || {
         Box::pin(async move { to_msg(task.await) })
@@ -94,6 +123,7 @@ pub fn time_every<M>(ms: i64, msg: M) -> IpeSub<M> {
 /// (Tui — Strings keep this free of the feature-gated TuiKey type), an
 /// already-built Msg (from a ticker or a Cmd.perform result), or EOF. Shared by
 /// `cli_program` and `tui_app` so both reuse `SubManager` (Tick) + `cli_run_cmd`.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) enum CliEvent<M> {
     Line(String),
     // Constructed only by the `tui` raw-key reader; cli_program matches it
@@ -108,11 +138,13 @@ pub(crate) enum CliEvent<M> {
 /// Tracks the goroutine-equivalent ticker tasks spawned for the active
 /// `Sub.every` subscriptions. `update` stops all + respawns from the new Sub
 /// (mirrors tea_subs.go: one program, one model, re-evaluated each tick).
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct SubManager<M> {
     tx: tokio::sync::mpsc::UnboundedSender<CliEvent<M>>,
     handles: Vec<tokio::task::JoinHandle<()>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<M: Clone + Send + 'static> SubManager<M> {
     pub(crate) fn new(tx: tokio::sync::mpsc::UnboundedSender<CliEvent<M>>) -> Self {
         SubManager {
@@ -168,6 +200,7 @@ impl<M: Clone + Send + 'static> SubManager<M> {
 
 /// Fire a Cmd: None/Batch recurse; Perform spawns the composed task→toMsg thunk
 /// and pushes the resulting Msg back into the loop channel.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn cli_run_cmd<M: Send + 'static>(
     cmd: IpeCmd<M>,
     tx: &tokio::sync::mpsc::UnboundedSender<CliEvent<M>>,
@@ -208,6 +241,7 @@ pub(crate) fn cli_run_cmd<M: Send + 'static>(
 /// onLine, ticker/Cmd.perform Msg) through update -> re-fire cmd -> re-subs ->
 /// view, until stdin EOF. Stdin is read on a blocking task; tickers + perform
 /// results merge into the same single-threaded update sequence via one channel.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn cli_program<Model, Msg, E, FInit, FUpdate, FView, FSubs, FOnLine>(
     init: FInit,
     update: FUpdate,

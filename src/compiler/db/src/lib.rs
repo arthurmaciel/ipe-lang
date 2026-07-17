@@ -795,6 +795,10 @@ pub struct BuildConfig {
     /// with no installed FFI crates. See [`ipe_backend_rust::FfiEmit`].
     #[returns(ref)]
     pub ffi: Option<ipe_backend_rust::FfiEmit>,
+    /// The compilation target (`Native` | `WasmClient` under
+    /// `ipe build --target wasm`) — selects the emitted manifest template,
+    /// vendored runtime module set, and entry shape.
+    pub target: ipe_ir::Target,
 }
 
 /// The memoized result of emitting the linked, lowered program to Rust
@@ -833,10 +837,12 @@ pub fn emit_project(
     let program = lower_program(db, root, entry)?;
     let driver = config.db_driver(db);
     let ffi = config.ffi(db).clone();
+    let target = config.target(db);
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
         .with_ffi(ffi)
+        .with_target(target)
         .emit(&program)
         .map(Arc::new)
         .map_err(|d| (d, Vec::new()))
@@ -916,10 +922,12 @@ pub fn emit_spine_file(
     let program = lower_program(db, root, entry)?;
     let driver = config.db_driver(db);
     let ffi = config.ffi(db).clone();
+    let target = config.target(db);
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
         .with_ffi(ffi)
+        .with_target(target)
         .emit_spine(&program)
         .map(Arc::new)
         .map_err(|d| (d, Vec::new()))
@@ -949,11 +957,13 @@ pub fn emit_rust_file<'db>(
     let program = lower_program(db, root, entry)?;
     let driver = config.db_driver(db);
     let ffi = config.ffi(db).clone();
+    let target = config.target(db);
     let home = file.home(db);
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
         .with_ffi(ffi)
+        .with_target(target)
         .emit_module_file(&program, &home)
         .map(Arc::new)
         .map_err(|d| (d, Vec::new()))
@@ -1008,10 +1018,12 @@ pub fn emit_manifest(
 
     let driver = config.db_driver(db);
     let ffi = config.ffi(db).clone();
+    let target = config.target(db);
     let interner = db.interner().lock();
     ipe_backend_rust::RustBackend::new(&interner)
         .with_db_driver(driver)
         .with_ffi(ffi)
+        .with_target(target)
         .assemble_split_manifest(&program, &spine, &module_texts)
         .map(Arc::new)
         .map_err(|d| (d, Vec::new()))
