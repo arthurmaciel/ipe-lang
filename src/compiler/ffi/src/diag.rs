@@ -8,7 +8,7 @@
 
 use std::fmt;
 
-use ipe_diagnostics::{Code, IPE_F4400, IPE_F4401, IPE_F4402};
+use ipe_diagnostics::{Code, IPE_F4400, IPE_F4401, IPE_F4402, IPE_F4411, IPE_F4412};
 
 /// One FFI-generator diagnostic: the failure class plus enough context to
 /// name the offending binding.
@@ -39,6 +39,34 @@ pub enum Diagnostic {
         /// The flag names that were simultaneously set.
         flags: Vec<&'static str>,
     },
+    /// `IPE-F4400` — a reached generic FFI call site (or the generic binding
+    /// itself) cannot be soundly bound: the instantiation falls outside the
+    /// closed bindable set, a trait bound is unsatisfied or unmodellable, or
+    /// a multi-call closure captures a non-Clone value. Raised at the call
+    /// site by the instance gate — never a deferred cargo failure.
+    GenericNotBindable {
+        /// The qualified Ipê callee (`Rust.Box1.make`).
+        callee: String,
+        /// Which bindability rule was broken.
+        defect: GenericBindDefect,
+    },
+    /// `IPE-F4411` — an untrusted crate source (git URL, pin, or crate name)
+    /// was rejected at the driver gate, before reaching any command or the
+    /// network.
+    SourceRejected {
+        /// The offending input, verbatim.
+        source: String,
+        /// Which gate rule was broken.
+        defect: SourceDefect,
+    },
+    /// `IPE-F4412` — an FFI cache artifact could not be read, written, or
+    /// removed.
+    ArtifactIo {
+        /// The artifact path.
+        path: String,
+        /// The rendered OS error.
+        detail: String,
+    },
 }
 
 impl Diagnostic {
@@ -46,9 +74,11 @@ impl Diagnostic {
     #[must_use]
     pub const fn code(&self) -> Code {
         match self {
-            Self::CallUnrenderable { .. } => IPE_F4400,
+            Self::CallUnrenderable { .. } | Self::GenericNotBindable { .. } => IPE_F4400,
             Self::WireMalformed { .. } => IPE_F4401,
             Self::ShapeContradiction { .. } => IPE_F4402,
+            Self::SourceRejected { .. } => IPE_F4411,
+            Self::ArtifactIo { .. } => IPE_F4412,
         }
     }
 }
@@ -78,11 +108,206 @@ impl fmt::Display for Diagnostic {
                     flags.join(" + ")
                 )
             }
+            Self::GenericNotBindable { callee, defect } => {
+                write!(f, "{}: `{callee}`: {defect}", self.code().as_str())
+            }
+            Self::SourceRejected { source, defect } => {
+                write!(f, "{}: {source:?}: {defect}", self.code().as_str())
+            }
+            Self::ArtifactIo { path, detail } => {
+                write!(
+                    f,
+                    "{}: cache artifact `{path}`: {detail}",
+                    self.code().as_str()
+                )
+            }
         }
     }
 }
 
 impl std::error::Error for Diagnostic {}
+
+/// The closed set of crate-source gate rejections (`IPE-F4411`). Every rule
+/// runs BEFORE the input can reach a command line or the network.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceDefect {
+    /// A crate name outside `[A-Za-z0-9_-]+`.
+    CrateNameIllegal,
+    /// A git URL whose scheme is not `https://`.
+    SchemeNotHttps,
+    /// A git URL with no host component.
+    HostMissing,
+    /// A git host with characters outside `[A-Za-z0-9._-]`.
+    HostCharsetIllegal {
+        /// The offending host.
+        host: String,
+    },
+    /// A git host not on the allowlist.
+    HostNotAllowlisted {
+        /// The offending host.
+        host: String,
+        /// The hosts that would be accepted.
+        allowed: Vec<String>,
+    },
+    /// More than one of rev/branch/tag supplied — git honours only one.
+    MultiplePins {
+        /// The pin kinds that were simultaneously supplied.
+        present: Vec<&'static str>,
+    },
+    /// A pin value that is empty, option-shaped (`-…`), or carries
+    /// whitespace/control characters.
+    PinIllegal {
+        /// The offending pin value.
+        got: String,
+    },
+}
+
+impl fmt::Display for SourceDefect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CrateNameIllegal => {
+                f.write_str("crate name must be non-empty and match [A-Za-z0-9_-]+")
+            }
+            Self::SchemeNotHttps => f.write_str("git source must use the https:// scheme"),
+            Self::HostMissing => f.write_str("git URL has no host component"),
+            Self::HostCharsetIllegal { host } => {
+                write!(f, "git host {host:?} has characters outside [A-Za-z0-9._-]")
+            }
+            Self::HostNotAllowlisted { host, allowed } => write!(
+                f,
+                "git host {host:?} is not on the allowlist ({}); set IPE_FFI_GIT_HOSTS to extend it",
+                allowed.join(", ")
+            ),
+            Self::MultiplePins { present } => write!(
+                f,
+                "rev/branch/tag are mutually exclusive, but {} were supplied",
+                present.join(" + ")
+            ),
+            Self::PinIllegal { got } => write!(
+                f,
+                "pin value {got:?} is empty, option-shaped, or carries whitespace"
+            ),
+        }
+    }
+}
+
+/// Why a concrete instantiation type falls outside the closed bindable set.
+///
+/// A residual type variable means monomorphisation did not specialise the
+/// call — the sound answer is this rejection, never a boxed/`any` fallback.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClosedSetViolation {
+    /// A bare type variable survived monomorphisation.
+    UnresolvedTypeVariable(String),
+    /// A named constructor outside the closed set (opaque foreign types are
+    /// conservatively rejected pending derive-scan metadata).
+    NonClosedConstructor(String),
+    /// A record type.
+    RecordType,
+    /// A tuple type.
+    TupleType,
+    /// A function type.
+    FunctionType,
+    /// A type alias (unexpanded).
+    TypeAlias(String),
+}
+
+impl fmt::Display for ClosedSetViolation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnresolvedTypeVariable(n) => write!(f, "unresolved type variable `{n}`"),
+            Self::NonClosedConstructor(n) => write!(f, "non-closed type constructor `{n}`"),
+            Self::RecordType => write!(f, "record type"),
+            Self::TupleType => write!(f, "tuple type"),
+            Self::FunctionType => write!(f, "function type"),
+            Self::TypeAlias(n) => write!(f, "type alias `{n}`"),
+        }
+    }
+}
+
+/// The closed set of generic-FFI bindability defects (`IPE-F4400`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GenericBindDefect {
+    /// The instantiation type is outside the closed Ipê↔Rust bindable set.
+    OutsideClosedSet {
+        /// The type-param name.
+        param: String,
+        /// The rendered instantiation type.
+        ty: String,
+        /// Why the type is outside the set.
+        violation: ClosedSetViolation,
+    },
+    /// The bound is modellable but the concrete Rust type lacks the trait.
+    BoundUnsatisfied {
+        /// The type-param name.
+        param: String,
+        /// The rendered Ipê instantiation type.
+        ty: String,
+        /// The closed Rust type it maps to.
+        rust_ty: String,
+        /// The unsatisfied trait bound.
+        bound: String,
+    },
+    /// The declared bound is outside the modellable `MODELLABLE_5` table —
+    /// the backend cannot prove it holds for an arbitrary bindable type, so
+    /// it refuses to emit an unsound wrapper (names the BOUND, not the type).
+    UnmodellableBound {
+        /// The type-param name.
+        param: String,
+        /// The unmodellable trait bound.
+        bound: String,
+    },
+    /// An Ipê lambda captures a non-Clone value into a multi-call
+    /// (`Fn`/`FnMut`) closure slot, whose owned-clone bridge re-clones every
+    /// capture per call.
+    CaptureNotClone {
+        /// The captured variable name.
+        capture: String,
+        /// The rendered Ipê type of the capture.
+        ty: String,
+    },
+}
+
+impl fmt::Display for GenericBindDefect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OutsideClosedSet {
+                param,
+                ty,
+                violation,
+            } => write!(
+                f,
+                "type parameter `{param}` is instantiated at `{ty}` ({violation}), outside the \
+                 Ipê↔Rust bindable set; use a primitive (Int / Float / Bool / Char / String), a \
+                 `List` or `Maybe` of one, or bind a non-generic FFI wrapper for `{ty}`"
+            ),
+            Self::BoundUnsatisfied {
+                param,
+                ty,
+                rust_ty,
+                bound,
+            } => write!(
+                f,
+                "type parameter `{param}` is instantiated at `{ty}` (Rust `{rust_ty}`), but the \
+                 binding requires the Rust trait bound `{bound}` and `{rust_ty}` does not \
+                 implement `{bound}`"
+            ),
+            Self::UnmodellableBound { param, bound } => write!(
+                f,
+                "the binding declares the Rust trait bound `{bound}` on type parameter `{param}`, \
+                 but the backend can only model the bounds {{Hash, Eq, Ord, Clone, Default}}; it \
+                 will not emit an unsound generic wrapper — drop the `{bound}` bound or bind a \
+                 non-generic wrapper at the concrete type(s) you need"
+            ),
+            Self::CaptureNotClone { capture, ty } => write!(
+                f,
+                "capture `{capture}` of type `{ty}` is passed into a multi-call closure that Rust \
+                 requires to be `Fn + Clone`, but `{ty}` is not provably Clone; use a Clone-able \
+                 captured value, capture nothing, or pass it to a single-call FnOnce slot"
+            ),
+        }
+    }
+}
 
 /// The closed set of structural defects a foreign-call AST can carry.
 ///

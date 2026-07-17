@@ -14,11 +14,14 @@
 //! forbidden.
 //!
 //! Module DAG (leaf-first): `num_coerce` → `diag` → `naming` → `pkginfo` /
-//! `typeref` → `call` → `emit` → `instance` → `driver`.
+//! `typeref` → `call` → `emit` / `bindings` → `instance` → `driver`.
 
+pub mod bindings;
 pub mod call;
 pub mod diag;
+pub mod driver;
 pub mod emit;
+pub mod instance;
 pub mod naming;
 pub mod num_coerce;
 pub mod pkginfo;

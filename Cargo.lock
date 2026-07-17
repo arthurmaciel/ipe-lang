@@ -2123,6 +2123,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipe_sandbox"
+version = "0.0.0"
+dependencies = [
+ "ipe_diagnostics",
+]
+
+[[package]]
 name = "ipe_syntax"
 version = "0.0.0"
 dependencies = [
