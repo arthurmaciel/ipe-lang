@@ -5,9 +5,9 @@ module Main exposing (main)
 -- user-defined `pickMin` forwarder below and like the `< > <= >=` operators.
 -- A comparable forwarder built on `Math.min` therefore generalises to a Rust
 -- `T: PartialOrd` bound; instantiating it at a FUNCTION type — which Rust never
--- orders — is rejected here at type-check (SKY-T0014) rather than emitting an
+-- orders — is rejected here at type-check (IPE-T0014) rather than emitting an
 -- unbounded `math_min<T>(…)` that `cargo` cannot build. (Calling `Math.min`
--- directly on two functions is the eager-pin sibling and surfaces SKY-T0001;
+-- directly on two functions is the eager-pin sibling and surfaces IPE-T0001;
 -- both fail closed with no Rust emitted.)
 pickMin : a -> a -> a
 pickMin x y =

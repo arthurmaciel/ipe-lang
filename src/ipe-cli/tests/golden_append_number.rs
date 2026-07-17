@@ -8,7 +8,7 @@
 //! rejected — a seal violation.
 //!
 //! Fix: before pinning to `Int`, call `concrete_super_ok(interner, bounds,
-//! &int_ty)`. If it returns false, emit `super_unsatisfied` (SKY-T0014)
+//! &int_ty)`. If it returns false, emit `super_unsatisfied` (IPE-T0014)
 //! instead of the structural pin.
 
 use std::path::{Path, PathBuf};
@@ -32,7 +32,7 @@ fn out(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name)
 }
 
-/// Negative: `f x = (x ++ x) + 1` must be rejected with SKY-T0014,
+/// Negative: `f x = (x ++ x) + 1` must be rejected with IPE-T0014,
 /// never accepted at exit 0 (a seal violation).
 #[test]
 fn append_and_number_on_same_var_is_sky_t0014() {
@@ -48,8 +48,8 @@ fn append_and_number_on_same_var_is_sky_t0014() {
     };
     assert_eq!(
         code,
-        Some(ipe_diagnostics::SKY_T0014),
-        "expected SKY-T0014 (Append+Number unsatisfied by Int), got: {built:?}"
+        Some(ipe_diagnostics::IPE_T0014),
+        "expected IPE-T0014 (Append+Number unsatisfied by Int), got: {built:?}"
     );
 }
 

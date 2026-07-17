@@ -87,7 +87,7 @@ diverged, the row records it and gives the reconciled call.
 | A1 | NEUTRAL | Rust-all-the-way single-language port structure. | Omit |
 | A2 | FEATURE | Typed IR checkpoint — malformed shapes unrepresentable vs AST→string. | Lead |
 | A3 | FEATURE | Typed `TailRecur`/`TailLoop` → Rust `loop`; constant stack where the reference's Rust backend has no TCO. Soundness win. | Lead |
-| A4 | FEATURE | Closed 424-variant `KernelFn`, fail-closed `SKY-L0108` vs a fail-open snake_case path; kills the "skyc exits 0, cargo fails" class. | Lead (security) |
+| A4 | FEATURE | Closed 424-variant `KernelFn`, fail-closed `IPE-L0108` vs a fail-open snake_case path; kills the "skyc exits 0, cargo fails" class. | Lead (security) |
 | A5 | FEATURE | `render_type → DResult`, no `"String"` default — total by construction. | Support |
 | A6 | NEUTRAL→FEATURE | First-class opaque `IrType` variants vs `{M}`-placeholder strings. | Support |
 | A7 | FEATURE (**watch**) | Exact-key record resolution, fail-loud > superset-widen + `"String"`. **All three reasoners: watch-item** — could reject a valid row-polymorphic subset/superset program the reference accepts. See §5. | Support (pending sweep gate) |

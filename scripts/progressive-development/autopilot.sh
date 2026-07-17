@@ -345,14 +345,14 @@ for _g in grep egrep fgrep; do
 done
 # cargo shim: headless claude -p ignores PreToolUse hooks, so enforce the
 # `cargo fmt`-write ban here too — block it, pass everything else to the real
-# cargo. Escape hatch: SKY_ALLOW_FMT=1 (the one sanctioned workspace pass, #214).
+# cargo. Escape hatch: IPE_ALLOW_FMT=1 (the one sanctioned workspace pass, #214).
 cat > "$SHIMDIR/cargo" <<'CARGOSHIM'
 #!/usr/bin/env bash
 case " $* " in
   *" fmt "*|*" fmt")
     case " $* " in
       *" --check"*) ;;
-      *) [ -n "$SKY_ALLOW_FMT" ] || { echo "cargo fmt is disabled for autopilot agents — it reformats the WHOLE workspace. Use rustfmt <exact file>, or cargo fmt --check, or SKY_ALLOW_FMT=1 for the one sanctioned pass." >&2; exit 2; } ;;
+      *) [ -n "$IPE_ALLOW_FMT" ] || { echo "cargo fmt is disabled for autopilot agents — it reformats the WHOLE workspace. Use rustfmt <exact file>, or cargo fmt --check, or IPE_ALLOW_FMT=1 for the one sanctioned pass." >&2; exit 2; } ;;
     esac ;;
 esac
 exec "$HOME/.cargo/bin/cargo" "$@"
@@ -702,12 +702,12 @@ lane_gate() {
 # + clippy + fuzz) on integration HEAD. Returns 0 green / 1 red. Run only by
 # certify_batch, every $FULL_GATE_EVERY cycles (or when pending hits 0).
 full_gate() {
-    local GRF SKY_SHARE
+    local GRF IPE_SHARE
     GRF="-C link-arg=-fuse-ld=mold -Zthreads=8"
-    if git -C "$GATE_WT" diff --name-only "$LAST_FULL_GREEN..HEAD" 2>/dev/null | rg -q '^runtime/'; then SKY_SHARE=""; else SKY_SHARE="$IPE_CACHE/oracle-target"; fi
+    if git -C "$GATE_WT" diff --name-only "$LAST_FULL_GREEN..HEAD" 2>/dev/null | rg -q '^runtime/'; then IPE_SHARE=""; else IPE_SHARE="$IPE_CACHE/oracle-target"; fi
     ( cd "$GATE_WT"; touch runtime/tests/*.rs src/ipe-cli/tests/*.rs 2>/dev/null; \
-      RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" SKY_ORACLE_SHARED_TARGET="$SKY_SHARE" timeout 3000 cargo +nightly nextest run --workspace >/tmp/autopilot-gate.log 2>&1 \
-      && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" SKY_ORACLE_SHARED_TARGET="$SKY_SHARE" timeout 1800 cargo +nightly nextest run -p sky-runtime-rust --features full >>/tmp/autopilot-gate.log 2>&1 \
+      RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" IPE_ORACLE_SHARED_TARGET="$IPE_SHARE" timeout 3000 cargo +nightly nextest run --workspace >/tmp/autopilot-gate.log 2>&1 \
+      && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" IPE_ORACLE_SHARED_TARGET="$IPE_SHARE" timeout 1800 cargo +nightly nextest run -p sky-runtime-rust --features full >>/tmp/autopilot-gate.log 2>&1 \
       && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 600 cargo +nightly test --workspace --doc >>/tmp/autopilot-gate.log 2>&1 \
       && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 1200 cargo +nightly clippy --workspace --no-deps --jobs 4 -- -D warnings >>/tmp/autopilot-gate.log 2>&1 ) \
       && ( cd "$GATE_WT"; "$FUZZ" --iters "$FUZZ_ITERS" --quiet >>/tmp/autopilot-gate.log 2>&1 )

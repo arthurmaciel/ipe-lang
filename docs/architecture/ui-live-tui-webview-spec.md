@@ -413,7 +413,7 @@ golden: `webview_app(` 5-arg destructure + `WebviewWindowCfg{…}` + current-thr
 - Webview IPC round-trip (headless, no window): synthetic IPC JSON `{skyId,event,args}` ->
   `parse_ipc -> index.resolve -> update` -> assert model transition. Plus wry/tao Linux xvfb boot
   smoke: build `--features webview` against `webkit2gtk-4.1`, run under `xvfb-run -a` with a
-  bounded self-close (`SKY_WEBVIEW_SMOKE_EXIT_MS`), assert exit 0 + no panic/link error. Plus a
+  bounded self-close (`IPE_WEBVIEW_SMOKE_EXIT_MS`), assert exit 0 + no panic/link error. Plus a
   Cmd/Sub dispatch test (instrumented `UserEvent::Msg` counter behind `#[cfg(test)]`).
 - Tui PTY interaction (follow-on, optional): scripted keystrokes under `portable-pty`,
   timeout-bounded, `kill -KILL` on timeout.

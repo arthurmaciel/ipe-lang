@@ -24,7 +24,7 @@
 //! ```
 //!
 //! to stdout `5\n`, exit 0 (hand-verified in a temp dir). The
-//! `end_to_end_*` test (gated on `SKY_E2E=1`) drives the same hand-built IR
+//! `end_to_end_*` test (gated on `IPE_E2E=1`) drives the same hand-built IR
 //! through the Rust backend, builds the emitted crate, and asserts the identical
 //! `5`.
 
@@ -364,10 +364,10 @@ fn conflicting_field_set_types_fail_fast() -> DResult<()> {
 /// Full spine: build the canonical record IR, emit the Cargo project, vendor the
 /// runtime, `cargo build`, run, and assert the program prints `5` — the value
 /// the Go backend produces for the field-set-equivalent program. Gated on
-/// `SKY_E2E=1` so the default `cargo test` stays fast and offline.
+/// `IPE_E2E=1` so the default `cargo test` stays fast and offline.
 #[test]
 fn end_to_end_builds_and_prints_five() -> DResult<()> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -428,9 +428,9 @@ fn io_bug(path: &Path, e: &std::io::Error) -> Diagnostic {
 }
 
 /// Locate the Sky runtime module tree (`src/runtime/rust/src/ipe_runtime`), via
-/// `SKY_RUNTIME_DIR` or an upward search from the current directory.
+/// `IPE_RUNTIME_DIR` or an upward search from the current directory.
 fn resolve_runtime() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("SKY_RUNTIME_DIR") {
+    if let Ok(dir) = std::env::var("IPE_RUNTIME_DIR") {
         let p = PathBuf::from(dir);
         if p.is_dir() {
             return Some(p);

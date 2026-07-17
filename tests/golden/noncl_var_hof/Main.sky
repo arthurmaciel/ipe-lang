@@ -9,7 +9,7 @@ import Std.Log exposing (println)
 --   Task.succeed "hello" |> Task.andThen go
 --
 -- The partial application `Task.andThen go` puts `go` in a `Fun`-typed
--- (NonClone) slot.  Before #149 this emitted SKY-L0126 because
+-- (NonClone) slot.  Before #149 this emitted IPE-L0126 because
 -- eta_expand_partial treated any Var in a NonClone slot as an error.
 -- After the fix, NonClone Vars are bare-moved into the eta-lambda
 -- (valid because task_and_then takes FnOnce — a single ownership

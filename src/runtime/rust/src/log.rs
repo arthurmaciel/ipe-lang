@@ -8,8 +8,8 @@
 //           keys alphabetically sorted to match Go's json.Marshal of a map)
 //
 // Stream routing matches Go: warn + error → stderr, debug + info → stdout.
-// `SKY_LOG_LEVEL` gates output (debug < info < warn < error; default info);
-// `SKY_LOG_FORMAT=json` switches to the JSON shape. Each line is also mirrored
+// `IPE_LOG_LEVEL` gates output (debug < info < warn < error; default info);
+// `IPE_LOG_FORMAT=json` switches to the JSON shape. Each line is also mirrored
 // into the telemetry ring (the Sky Console reads it).
 //
 // `Log.println` is a SEPARATE bare line with NO prefix (Go's `Log_println` is a
@@ -21,10 +21,10 @@ const LOG_LEVEL_INFO: i32 = 1;
 const LOG_LEVEL_WARN: i32 = 2;
 const LOG_LEVEL_ERROR: i32 = 3;
 
-/// `SKY_LOG_LEVEL` → numeric threshold. Mirrors Go's `logLevelFromEnv`
+/// `IPE_LOG_LEVEL` → numeric threshold. Mirrors Go's `logLevelFromEnv`
 /// (`debug` / `warn`|`warning` / `error`; everything else → info).
 fn log_threshold() -> i32 {
-    match crate::system::read_env_var("SKY_LOG_LEVEL")
+    match crate::system::read_env_var("IPE_LOG_LEVEL")
         .unwrap_or_default()
         .to_ascii_lowercase()
         .as_str()
@@ -37,7 +37,7 @@ fn log_threshold() -> i32 {
 }
 
 fn log_json() -> bool {
-    crate::system::read_env_var("SKY_LOG_FORMAT").unwrap_or_default() == "json"
+    crate::system::read_env_var("IPE_LOG_FORMAT").unwrap_or_default() == "json"
 }
 
 /// Current UTC instant in Go's `time.RFC3339Nano` layout

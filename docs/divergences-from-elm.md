@@ -230,12 +230,12 @@ arm's top-level pattern only; nested payload positions are covered by an
 opt-in lint rule instead (combinatorial-explosion trade, stated in the
 design). Escape hatch: a per-site `-- @allow(open-case) <reason>` directive
 with a mandatory reason — the rule guards program evolution, not runtime
-soundness (exhaustiveness itself, SKY-T0010, stays unsuppressible), which is
+soundness (exhaustiveness itself, IPE-T0010, stays unsuppressible), which is
 why a reasoned opt-out is admissible. Counterweights: a machine-applicable
 fix/code action expanding the catch-all into one arm per hidden constructor
 reusing the catch-all's own body (semantics-preserving), and an "add missing
-arms" LSP action for the no-catch-all case. New diagnostic SKY-T0018 with a
-progressive explain page; SKY-T0010's page (which already *teaches* this
+arms" LSP action for the no-catch-all case. New diagnostic IPE-T0018 with a
+progressive explain page; IPE-T0010's page (which already *teaches* this
 philosophy ahead of the implementation) is corrected in the same change.
 Recommendation: adopt-with-opt-out. Design + spec + phased plan (incl. the
 in-repo corpus migration):

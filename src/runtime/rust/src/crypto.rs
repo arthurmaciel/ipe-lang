@@ -116,7 +116,7 @@ pub fn crypto_hmac_sha256(key: String, msg: String) -> String {
     // INFALLIBLE: HMAC accepts any key length (new_from_slice never returns Err);
     // the kernel is a pure `String -> String -> String` Sky surface with no Result
     // channel, and a fallback MAC would be a silently-wrong hash (a security defect).
-    // SKY-RUST-AUDIT:ACCEPTED (Arthur Maciel, 2026-06-13) — infallible HMAC ctor; pure kernel has no Result channel; a fallback MAC is a security defect [ledger #1]
+    // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel, 2026-06-13) — infallible HMAC ctor; pure kernel has no Result channel; a fallback MAC is a security defect [ledger #1]
     #[allow(clippy::expect_used)]
     let mut mac =
         HmacSha256::new_from_slice(key.as_bytes()).expect("Hmac<Sha256> accepts any key length");
@@ -136,7 +136,7 @@ pub fn crypto_hmac_sha512(key: String, msg: String) -> String {
     // INFALLIBLE: HMAC accepts any key length (new_from_slice never returns Err);
     // the kernel is a pure `String -> String -> String` Sky surface with no Result
     // channel, and a fallback MAC would be a silently-wrong hash (a security defect).
-    // SKY-RUST-AUDIT:ACCEPTED (Arthur Maciel, 2026-06-13) — infallible HMAC ctor; pure kernel has no Result channel; a fallback MAC is a security defect [ledger #1]
+    // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel, 2026-06-13) — infallible HMAC ctor; pure kernel has no Result channel; a fallback MAC is a security defect [ledger #1]
     #[allow(clippy::expect_used)]
     let mut mac =
         HmacSha512::new_from_slice(key.as_bytes()).expect("Hmac<Sha512> accepts any key length");

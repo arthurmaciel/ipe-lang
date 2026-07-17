@@ -1,7 +1,7 @@
 module Main exposing (main)
 import Sky.Core.Prelude exposing (..)
 
--- #90 Stage 1: `Ok f` holding a function used to trip SKY-L0114 unconditionally,
+-- #90 Stage 1: `Ok f` holding a function used to trip IPE-L0114 unconditionally,
 -- making `Result.andMap` unusable. The construction is sound: `Ok`/`Err`
 -- construct the runtime `SkyResult` enum, whose derives are generic-bounded, so
 -- `SkyResult<E, Box<dyn Fn(..)->R>>` compiles regardless of the payload.

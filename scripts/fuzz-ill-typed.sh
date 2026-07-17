@@ -14,44 +14,44 @@
 #
 #   Cat 1 — UNDEFINED FIELD ACCESS:
 #       Base has record with field `f`. Mutation accesses `.f<SEED>` (absent).
-#       Expected code: SKY-T0012 (this record has no such field).
+#       Expected code: IPE-T0012 (this record has no such field).
 #
 #   Cat 2 — UNDEFINED VARIABLE:
 #       Reference `undef_<SEED>` — an identifier that provably has no binding
 #       anywhere in scope.
-#       Expected code: SKY-N0001 (cannot find this value in scope).
+#       Expected code: IPE-N0001 (cannot find this value in scope).
 #
 #   Cat 3 — UNKNOWN QUALIFIED MEMBER:
 #       `String.nosuchfn_<SEED> x` — String module has no such member.
-#       Expected code: SKY-N0005 (module has no such member).
+#       Expected code: IPE-N0005 (module has no such member).
 #
 #   Cat 4 — FORCED TYPE MISMATCH:
 #       `String.length <int-literal>` — length : String -> Int, not Int -> Int.
 #       Also: `if <int-literal> then X else X` — if-condition must be Bool.
-#       Expected code: SKY-T0001 (type mismatch).
+#       Expected code: IPE-T0001 (type mismatch).
 #
 #   Cat 5 — WRONG CONSTRUCTOR ARITY:
 #       A 1-payload constructor applied with 0 payloads in a case-pattern,
 #       so the case tries to match `Just` where a `Just x` pattern is required.
 #       Actually: apply a 0-ary constructor with an extra arg: `Nothing 42`.
-#       Expected code: SKY-T0001 (type mismatch / application to non-function).
+#       Expected code: IPE-T0001 (type mismatch / application to non-function).
 #
 #   Cat 6 — NON-EXHAUSTIVE CASE:
 #       An ADT with 3 constructors; the case covers only 2.
-#       Expected code: SKY-T0010 (this case does not handle every possibility).
+#       Expected code: IPE-T0010 (this case does not handle every possibility).
 #
 #   Cat 7 — SAME-MODULE 2-TYPE USE OF AN UNTYPED HELPER (#66-N canary):
 #       `ident x = x` used at Int AND String within its own module. Boundary
 #       scheme promotion generalizes at MODULE boundaries only — same-module
 #       reuse stays monomorphic (reference parity, class1 spec). A silent
 #       acceptance here means the promotion over-generalized.
-#       Expected code: SKY-T0001.
+#       Expected code: IPE-T0001.
 #
 #   Cat 8 — CROSS-MODULE USE AT AN INCOMPATIBLE INSTANTIATED TYPE
 #       (multi-module: writes src/Lib.sky): `Lib.inc "str"` against the
 #       untyped Number-bounded `inc n = n + 1`. The imported scheme's bound
 #       must survive fresh instantiation.
-#       Expected code: SKY-T0001.
+#       Expected code: IPE-T0001.
 #
 # SELF-VALIDATION:
 #   - Bases COMPILE CLEAN (proves the harness doesn't reject everything).
@@ -66,14 +66,14 @@
 #   --build-timeout N  skyc build timeout in seconds (default 60)
 #   --base-sanity      Run base-compile sanity check then exit
 #   --cat-demo         Demo one rejected mutant per category then exit
-#   SKY_FUZZ_NEG_FULL=1  Shorthand for --iters 1000
+#   IPE_FUZZ_NEG_FULL=1  Shorthand for --iters 1000
 #
 # Exit: 0 = all iterations green (every mutant rejected, 0 false-acceptances);
 #        1 = FALSE ACCEPTANCE found (soundness bug) or harness error;
 #        2 = setup error.
 #
 # Reproduce: ./scripts/fuzz-ill-typed.sh --seed N --iters 1 --keep
-# Full gate:  SKY_FUZZ_NEG_FULL=1 ./scripts/fuzz-ill-typed.sh
+# Full gate:  IPE_FUZZ_NEG_FULL=1 ./scripts/fuzz-ill-typed.sh
 
 set -uo pipefail
 
@@ -81,7 +81,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/env.sh"
 
 # ── Flags ────────────────────────────────────────────────────────────────────
-ITERS="${SKY_FUZZ_NEG_FULL:+1000}"
+ITERS="${IPE_FUZZ_NEG_FULL:+1000}"
 ITERS="${ITERS:-40}"
 SEED=""
 KEEP=0
@@ -275,7 +275,7 @@ EOF
 # Used for:
 #   Cat 5 — Nothing applied to an extra arg (`Nothing 42`)
 # NOTE: Sky's Rust backend does not support multi-clause pattern matching on
-# function params (SKY-P0030 / top-level pattern dispatch). Use a single
+# function params (IPE-P0030 / top-level pattern dispatch). Use a single
 # clause with a case expression instead.
 base_maybe_usage() {
     cat <<'EOF'
@@ -351,7 +351,7 @@ main =
     in
     println (String.fromInt pt.value${suffix})
 EOF
-    # Why ill-typed: `pt` is `Point` which has no field `value${suffix}` — SKY-T0012.
+    # Why ill-typed: `pt` is `Point` which has no field `value${suffix}` — IPE-T0012.
 }
 
 # Cat 2 — undefined variable (undef_<SEED> has no binding in scope)
@@ -371,7 +371,7 @@ main =
     in
     println (String.fromInt (x + y + undef_${suffix}))
 EOF
-    # Why ill-typed: `undef_${suffix}` is not in scope — SKY-N0001.
+    # Why ill-typed: `undef_${suffix}` is not in scope — IPE-N0001.
 }
 
 # Cat 3 — unknown qualified member (String.<typo>_<SEED>)
@@ -390,7 +390,7 @@ main =
     in
     println (String.fromInt (String.nosuchfn_${suffix} s))
 EOF
-    # Why ill-typed: String module has no member `nosuchfn_${suffix}` — SKY-N0005.
+    # Why ill-typed: String module has no member `nosuchfn_${suffix}` — IPE-N0005.
 }
 
 # Cat 4a — type mismatch via String.length on an Int literal
@@ -406,7 +406,7 @@ import Std.Log exposing (println)
 main =
     println (String.fromInt (String.length $n))
 EOF
-    # Why ill-typed: String.length : String -> Int, but we pass Int literal $n — SKY-T0001.
+    # Why ill-typed: String.length : String -> Int, but we pass Int literal $n — IPE-T0001.
 }
 
 # Cat 4b — type mismatch via if-condition that is Int, not Bool
@@ -425,7 +425,7 @@ main =
     in
     println result
 EOF
-    # Why ill-typed: if-condition must be Bool; $n is an Int literal — SKY-T0001.
+    # Why ill-typed: if-condition must be Bool; $n is an Int literal — IPE-T0001.
 }
 
 # Cat 5 — wrong constructor arity: Nothing applied to an extra Int arg
@@ -445,7 +445,7 @@ main =
     println (String.fromInt val)
 EOF
     # Why ill-typed: Nothing : Maybe a has arity 0; applying it to $n is an
-    # application of a non-function. Expect SKY-T0001 (type mismatch on
+    # application of a non-function. Expect IPE-T0001 (type mismatch on
     # application: Maybe a is not a function).
 }
 
@@ -474,7 +474,7 @@ main =
     println (describeShape Circle)
 EOF
     # Why ill-typed: Shape has 3 constructors; the case covers only 2 (missing
-    # Triangle). Expect SKY-T0010 (this case does not handle every possibility).
+    # Triangle). Expect IPE-T0010 (this case does not handle every possibility).
 }
 
 # Cat 7 — same-module 2-type use of an UNTYPED helper. The class-1 boundary
@@ -499,14 +499,14 @@ main =
 EOF
     # Why ill-typed (by current semantics): `ident` is untyped and used at Int
     # AND String within its own module — same-module reuse is monomorphic.
-    # Expect SKY-T0001 (empirically verified 2026-07-11).
+    # Expect IPE-T0001 (empirically verified 2026-07-11).
 }
 
 # Cat 8 — CROSS-MODULE use of an untyped Number-bounded helper at an
 # incompatible instantiated type (`Lib.inc "str"` where `inc n = n + 1`).
 # The boundary scheme promotion must instantiate the imported scheme fresh
 # AND still carry the Number bound — a String argument is an ordinary
-# SKY-T0001, never an acceptance. Writes a Lib.sky sibling (multi-module).
+# IPE-T0001, never an acceptance. Writes a Lib.sky sibling (multi-module).
 mutant_cross_module_bad_inst() {
     local seed=$1 libdst=$2
     local n; n=$(( (seed % 90) + 1 ))
@@ -528,7 +528,7 @@ main =
     println (String.fromInt (Lib.inc "oops$n"))
 EOF
     # Why ill-typed: Lib.inc's promoted scheme is Number-bounded (n + 1);
-    # instantiating it at String violates the bound — SKY-T0001
+    # instantiating it at String violates the bound — IPE-T0001
     # (empirically verified 2026-07-11).
 }
 
@@ -537,15 +537,15 @@ EOF
 # ═══════════════════════════════════════════════════════════════════════════════
 #
 #  Index  Mutant fn                   Expected code  Category label
-#  0      undef_field                 SKY-T0012      cat1
-#  1      undef_var                   SKY-N0001      cat2
-#  2      unknown_member              SKY-N0005      cat3
-#  3      type_mismatch_strlen        SKY-T0001      cat4a
-#  4      type_mismatch_if            SKY-T0001      cat4b
-#  5      ctor_arity                  SKY-T0001      cat5
-#  6      nonexhaustive_case          SKY-T0010      cat6
-#  7      same_module_2type           SKY-T0001      cat7 (#66-N canary)
-#  8      cross_module_bad_inst       SKY-T0001      cat8 (multi-module)
+#  0      undef_field                 IPE-T0012      cat1
+#  1      undef_var                   IPE-N0001      cat2
+#  2      unknown_member              IPE-N0005      cat3
+#  3      type_mismatch_strlen        IPE-T0001      cat4a
+#  4      type_mismatch_if            IPE-T0001      cat4b
+#  5      ctor_arity                  IPE-T0001      cat5
+#  6      nonexhaustive_case          IPE-T0010      cat6
+#  7      same_module_2type           IPE-T0001      cat7 (#66-N canary)
+#  8      cross_module_bad_inst       IPE-T0001      cat8 (multi-module)
 #
 # Total: 9 entries in the catalogue.
 
@@ -571,15 +571,15 @@ catalogue_fn() {
 catalogue_code() {
     local idx=$1
     case $idx in
-        0) echo "SKY-T0012" ;;
-        1) echo "SKY-N0001" ;;
-        2) echo "SKY-N0005" ;;
-        3) echo "SKY-T0001" ;;
-        4) echo "SKY-T0001" ;;
-        5) echo "SKY-T0001" ;;
-        6) echo "SKY-T0010" ;;
-        7) echo "SKY-T0001" ;;
-        8) echo "SKY-T0001" ;;
+        0) echo "IPE-T0012" ;;
+        1) echo "IPE-N0001" ;;
+        2) echo "IPE-N0005" ;;
+        3) echo "IPE-T0001" ;;
+        4) echo "IPE-T0001" ;;
+        5) echo "IPE-T0001" ;;
+        6) echo "IPE-T0010" ;;
+        7) echo "IPE-T0001" ;;
+        8) echo "IPE-T0001" ;;
     esac
 }
 
@@ -723,17 +723,17 @@ run_cat_demo() {
                 printf '  RESULT: REJECTED with %s (correct)\n' "$code"
             else
                 # Still a valid rejection — code might have a different pattern on stderr.
-                # Extract any SKY- code from the log for reporting.
-                local found_code; found_code=$(grep -oP 'SKY-[A-Z][0-9]+' "$log" | head -1)
+                # Extract any IPE- code from the log for reporting.
+                local found_code; found_code=$(grep -oP 'IPE-[A-Z][0-9]+' "$log" | head -1)
                 if [[ -n "$found_code" ]]; then
                     printf '  RESULT: REJECTED with %s (expected %s — check catalogue)\n' \
                         "$found_code" "$code"
                 else
-                    printf '  RESULT: REJECTED (exit %d, no SKY- code in log)\n' "$rc"
+                    printf '  RESULT: REJECTED (exit %d, no IPE- code in log)\n' "$rc"
                 fi
             fi
-            # Show first 5 lines of log with any SKY- code for documentation.
-            local first_line; first_line=$(grep -m1 'SKY-\|error\[' "$log" 2>/dev/null || true)
+            # Show first 5 lines of log with any IPE- code for documentation.
+            local first_line; first_line=$(grep -m1 'IPE-\|error\[' "$log" 2>/dev/null || true)
             if [[ -n "$first_line" ]]; then
                 printf '  diag:  %s\n' "$first_line"
             fi
@@ -786,7 +786,7 @@ run_iter() {
     if grep -q "$code" "$log" 2>/dev/null; then
         echo "REJECTED-OK label=$label code=$code"
     else
-        local found; found=$(grep -oP 'SKY-[A-Z][0-9]+' "$log" | head -1 || true)
+        local found; found=$(grep -oP 'IPE-[A-Z][0-9]+' "$log" | head -1 || true)
         if [[ -n "$found" ]]; then
             echo "REJECTED-DIFF-CODE label=$label expected=$code got=$found"
         else
@@ -907,7 +907,7 @@ if [[ "$rejected" -eq "$ITERS" ]]; then
     if (( ITERS >= 1000 )); then
         echo "  Full gate SATISFIED — 1000+ iters clean."
     else
-        echo "  Smoke PASS. Full gate: SKY_FUZZ_NEG_FULL=1 ./scripts/fuzz-ill-typed.sh"
+        echo "  Smoke PASS. Full gate: IPE_FUZZ_NEG_FULL=1 ./scripts/fuzz-ill-typed.sh"
     fi
     exit 0
 else

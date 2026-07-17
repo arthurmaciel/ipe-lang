@@ -1,9 +1,9 @@
 module Main exposing (main)
 
--- SKY-L0102 regression: `any` as a union-constructor payload field.
+-- IPE-L0102 regression: `any` as a union-constructor payload field.
 --
 -- Pre-fix: `lower_enum` Gate 1 collected the `any` Ty::Var, found it absent
--- from `union.vars`, and raised Feature::Polymorphism (SKY-L0102).
+-- from `union.vars`, and raised Feature::Polymorphism (IPE-L0102).
 --
 -- Post-fix: `any` is the pub/sub wire-carrier pin (Dict String String).
 -- The solver substitutes it in the CtorScheme; the lowerer skips it in Gate 1

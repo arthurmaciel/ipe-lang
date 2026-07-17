@@ -57,7 +57,7 @@ hot path; parity also runs with no Go binary present (helps headless cron/CI).
   already runs for first parity); reuse forever until invalidated.
 
 ## NOT doing: guardian review || e2e
-Rejected. The guardian's adversarial probes are themselves SKY_E2E (CPU-heavy)
+Rejected. The guardian's adversarial probes are themselves IPE_E2E (CPU-heavy)
 builds → contend with e2e on 4 cores + the target lock (not free LLM-only work).
 Overlapping its reasoning with mech-e2e also breaks the cheap-first invariant
 (don't spend Opus until mech green) → wasted tokens on the ~30-50% of batches where

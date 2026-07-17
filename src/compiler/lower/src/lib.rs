@@ -39,7 +39,7 @@ use ipe_types::SolvedTypes;
 /// * Returns [`ipe_diagnostics::Diagnostic::Lower`] when the input is valid Sky
 ///   that the supported subset does not model yet (polymorphism, higher-order values,
 ///   non-`Task ()` results, extra kernels, non-constructor patterns, …),
-///   carrying the offending node's span and its `SKY-L01##` feature.
+///   carrying the offending node's span and its `IPE-L01##` feature.
 /// * Returns [`ipe_diagnostics::Diagnostic::CompilerBug`] when an internal
 ///   invariant is violated — a missing region type for an `IrType` slot, an
 ///   unresolved scrutinee enum, or a match arm set that fails
@@ -591,7 +591,7 @@ mod tests {
     #[test]
     fn generic_record_update_is_a_lower_gap() {
         // Updating a generic record needs a `Clone`-bounded type parameter
-        // (bounded generics are unsupported) — it surfaces as SKY-L0111, NOT broken Rust.
+        // (bounded generics are unsupported) — it surfaces as IPE-L0111, NOT broken Rust.
         let err = lower_result(
             "module Main exposing (setValue)\nsetValue : { value : a } -> a -> { value : a }\nsetValue r x =\n    { r | value = x }\n",
         );
@@ -603,7 +603,7 @@ mod tests {
                     ..
                 })
             ),
-            "generic record update must be SKY-L0111, got {err:?}"
+            "generic record update must be IPE-L0111, got {err:?}"
         );
     }
 
@@ -901,7 +901,7 @@ mod tests {
     /// Regression: `init : any -> Model` (any in PARAM position).
     ///
     /// Filtering the `any` symbol from `type_params` causes the backend's
-    /// `GenericScope::rust_name` to ICE (SKY-I0001) because `params` still holds
+    /// `GenericScope::rust_name` to ICE (IPE-I0001) because `params` still holds
     /// `IrType::Generic(any_sym)` while `type_params` is empty.
     ///
     /// The principled fix computes `type_params` from the structurally-used
@@ -921,7 +921,7 @@ mod tests {
     #[test]
     fn any_in_param_position_lowers_without_ice() {
         // `wrap : any -> Int` — `any` is in parameter position.
-        // Before Bug-28 fix this would ICE (SKY-I0001 / CompilerBug via the
+        // Before Bug-28 fix this would ICE (IPE-I0001 / CompilerBug via the
         // backend's GenericScope::rust_name); with the fix it must lower.
         let opt = lower_func(
             "module Main exposing (wrap)\nwrap : any -> Int\nwrap _ =\n    42\n",

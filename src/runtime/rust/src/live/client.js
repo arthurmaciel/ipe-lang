@@ -3,7 +3,7 @@ var __skyBase = window.__SKY_BASE || "";
 var __skyCsrfToken = window.__SKY_CSRF_TOKEN || "";
 // Server-templated config (mod.rs render_page_full → window.__SKY_* ; Go parity
 // live.go ~5993). Each reads the injected window global when present, else the
-// hardcoded default — so SKY_LIVE_RETRY_* / QUEUE_MAX / HELLO_TIMEOUT_MS /
+// hardcoded default — so IPE_LIVE_RETRY_* / QUEUE_MAX / HELLO_TIMEOUT_MS /
 // HEARTBEAT_TTL_MS / BANNER overrides reach the client. CSP-safe (no eval).
 var __skyBannerEnabled = (window.__SKY_BANNER_ENABLED != null) ? window.__SKY_BANNER_ENABLED : true;
 var __skyRetryBaseMs = (window.__SKY_RETRY_BASE_MS != null) ? window.__SKY_RETRY_BASE_MS : 500;
@@ -702,7 +702,7 @@ var __skyRetryTimer = null;
 var __skyRetryAttempts = 0;
 // __skyRetryBaseMs / __skyRetryMaxMs / __skyRetryMaxAttempts /
 // __skyEventQueueMax are templated at the top of this script from
-// the SKY_LIVE_RETRY_* / SKY_LIVE_QUEUE_MAX env vars (see
+// the IPE_LIVE_RETRY_* / IPE_LIVE_QUEUE_MAX env vars (see
 // loadLiveBannerConfig).
 function __skyPostEvent(body) {
   // Phase 1.2 — attach the per-session CSRF token. The server-side
@@ -1241,7 +1241,7 @@ function __skySetStatus(state, msg) {
 }
 function __skyInjectStatusBanner() {
   if (__skyStatusEl) return;            // idempotent
-  if (!__skyBannerEnabled) return;      // SKY_LIVE_BANNER=off
+  if (!__skyBannerEnabled) return;      // IPE_LIVE_BANNER=off
   var el = document.createElement("div");
   el.id = "__sky-status";
   el.className = "sky-status sky-status--connected";

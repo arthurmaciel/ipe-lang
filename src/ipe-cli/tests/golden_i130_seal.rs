@@ -15,14 +15,14 @@
 //!   lambda captures the named binding (Clone-wrapped) rather than inlining
 //!   the expression with its free vars captured bare.
 //! * **Fix 4 T7** — `eta_expand_partial` fail-close: `ir_type_from_ty` → None
-//!   emits SKY-L0126 instead of silently passing a bare Var.
+//!   emits IPE-L0126 instead of silently passing a bare Var.
 //!
-//! Green fixtures (c01, c02, c13) require `SKY_E2E=1` for cargo build+run.
+//! Green fixtures (c01, c02, c13) require `IPE_E2E=1` for cargo build+run.
 //! Gate fixture (c14) runs the diagnostic check always.
 //!
 //! ```text
 //! # green suite:
-//! SKY_E2E=1 cargo test -p skyc --test golden_i130_seal
+//! IPE_E2E=1 cargo test -p skyc --test golden_i130_seal
 //!
 //! # gate check only (fast):
 //! cargo test -p skyc --test golden_i130_seal
@@ -40,7 +40,7 @@ fn repo_root() -> PathBuf {
 }
 
 /// Assert that `skyc::build(fixture)` surfaces `expected` as a
-/// `CliError::Pipeline` diagnostic.  Runs WITHOUT `SKY_E2E` so the gate
+/// `CliError::Pipeline` diagnostic.  Runs WITHOUT `IPE_E2E` so the gate
 /// checks remain fast in the default CI pass.
 fn assert_skyc_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code) {
     let root = repo_root();
@@ -78,7 +78,7 @@ fn assert_skyc_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::
 /// Expected output: "green,green,green".
 #[test]
 fn c01_enum_capture_fix1() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -125,7 +125,7 @@ fn c01_enum_capture_fix1() {
 /// Expected output: "1,5 2,5 3,5".
 #[test]
 fn c02_record_capture_fix1() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -173,7 +173,7 @@ fn c02_record_capture_fix1() {
 /// Expected output: "hello! hello?".
 #[test]
 fn c13_complex_arg_hoist_t4() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -222,7 +222,7 @@ fn c13_complex_arg_hoist_t4() {
 /// Under the fn-value `Arc`-carrier promotion, `f` is
 /// shadow-rebound to the `Clone` `Arc<dyn Fn>` carrier and a clone relayed
 /// across each closure boundary, so the shape compiles and runs
-/// (`composed (*2) 3` = `6`). A SKY-L0126 gate is sound only under a
+/// (`composed (*2) 3` = `6`). A IPE-L0126 gate is sound only under a
 /// bare `Box<dyn Fn>` carrier (whose inner `move` closure consumes `f` per
 /// call, E0525); the state it would reject is not invalid here.
 #[test]
@@ -246,7 +246,7 @@ fn c14_nested_lambda_noncopy_promoted_accepts() {
         built.err()
     );
 
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = support::build_and_run_emitted("nested_lambda_noncopy", &out);
@@ -261,7 +261,7 @@ fn c14_nested_lambda_noncopy_promoted_accepts() {
 ///
 /// Without the fix, `clone_class(IrType::StreamWriter)` said `NonClone`, so
 /// forwarding the captured handle as an argument (not calling it) tripped
-/// SKY-L0126.  The runtime type is `#[derive(Clone, Copy)]`
+/// IPE-L0126.  The runtime type is `#[derive(Clone, Copy)]`
 /// (`server_stream.rs:38`) — the classification was an active wrong claim.
 /// Same audit flipped ServerRequest/ServerResponse/ServerRoute/ServerCookie/
 /// `HttpRequest` to `CloneOk` (all derive `Clone`).
@@ -285,7 +285,7 @@ fn c05_streamwriter_capture_forward() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "StreamWriter capture-forward must pass skyc (was SKY-L0126): {:?}",
+        "StreamWriter capture-forward must pass skyc (was IPE-L0126): {:?}",
         built.err()
     );
 }
@@ -309,7 +309,7 @@ fn c05_streamwriter_capture_forward() {
 /// Unlike `c05` (skyc exit-0 only), this asserts the EMITTED CRATE cargo-builds
 /// — the layer where this surfaces. A listening-server fixture cannot
 /// run-to-exit, so a successful `cargo build` IS the acceptance. E2E-gated
-/// (`SKY_E2E=1`) so the default fast pass stays emit-only.
+/// (`IPE_E2E=1`) so the default fast pass stays emit-only.
 #[test]
 fn c06_stream_string_capture_seal() {
     let root = repo_root();
@@ -331,7 +331,7 @@ fn c06_stream_string_capture_seal() {
         built.err()
     );
 
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     // Build-only: the fixture is a listening server, so it cannot run-to-exit.

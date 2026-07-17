@@ -59,7 +59,7 @@ pub struct CacheStats {
 
 struct CacheEntry<K> {
     key: K,
-    // SKY-RUST-AUDIT:ACCEPTED (Arthur Maciel, 2026-06-13) — Cache_remove carries no V; value erased, downcast to V only on get (per-handle V-consistent); miss → Nothing [ledger #4]
+    // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel, 2026-06-13) — Cache_remove carries no V; value erased, downcast to V only on get (per-handle V-consistent); miss → Nothing [ledger #4]
     value: Box<dyn Any + Send>, // the cache value `V`, downcast on get
     expires_at: Option<Instant>,
     last_seq: u64, // for LRU eviction
@@ -72,7 +72,7 @@ struct Slot {
     evictions: i64,
     entries: i64, // tracked here so sizeRaw needs neither K nor V
     seq: u64,     // monotonic access counter
-    // SKY-RUST-AUDIT:ACCEPTED (Arthur Maciel, 2026-06-13) — Cache_size/clear carry no V; per-handle store downcast by K (every op uses same K); mismatch → no-op [ledger #4]
+    // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel, 2026-06-13) — Cache_size/clear carry no V; per-handle store downcast by K (every op uses same K); mismatch → no-op [ledger #4]
     store: Option<Box<dyn Any + Send>>, // Vec<CacheEntry<K>>, created lazily on first K-bearing op
 }
 

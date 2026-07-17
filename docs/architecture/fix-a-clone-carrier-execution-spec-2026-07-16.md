@@ -3,7 +3,7 @@
 Status: LANDED as §B6 option 1 (the lowered-IR, binder-site promotion — see
 §B7 at the end for the implemented design). §§1–5 (universal Arc) remain
 FALSIFIED history per §B1; read §B1–B7 as the authoritative design.
-Closes: sweep red #221 (`36-composite-server`, SKY-L0126).
+Closes: sweep red #221 (`36-composite-server`, IPE-L0126).
 Root cause: `docs/architecture/sweep-red-221-l0126-root-cause-2026-07-16.md`.
 Restructure it lands inside: `docs/architecture/clone-relay-class-macro-design-2026-07-16.md`.
 
@@ -457,7 +457,7 @@ full byte-golden sweep is the FINAL gate. Tag `fix-a-pre` at HEAD for rollback.
 - Gate: `cargo check --workspace` + `nextest -p sky_backend_rust` (byte
   goldens will FAIL here — that is expected pre-bless).
 - **SEAL risk point:** this is where skyc-green-but-cargo-red is caught. After
-  bless (Phase 3), a scoped `SKY_E2E=1` build of a `Fun`-heavy golden proves
+  bless (Phase 3), a scoped `IPE_E2E=1` build of a `Fun`-heavy golden proves
   the annotation and value agree. Do not proceed past Phase 3 with any golden
   that emits but does not cargo-build.
 
@@ -481,7 +481,7 @@ full byte-golden sweep is the FINAL gate. Tag `fix-a-pre` at HEAD for rollback.
 - Build+run `36-composite-server` under the sweep. Expect green OR the §7
   one re-diagnosis round (instrument, read `class`, confirm any residual fire
   is a genuine out-of-scope carrier, file it — do NOT patch under #221).
-- FINAL gate: full byte-golden sweep (70+3), `SKY_E2E=1` on the `Fun`-heavy
+- FINAL gate: full byte-golden sweep (70+3), `IPE_E2E=1` on the `Fun`-heavy
   goldens, the ex-36 example row green, workspace `cargo check` + `clippy`
   (pedantic/nursery deny — the carrier flip must not introduce a lint).
 - **SEAL final check:** every golden that skyc-accepts must cargo-build. The
@@ -529,18 +529,18 @@ architecture doc.
 The spec's §6 step 4 says "hand-audit each `l0105_*`; a `Fun`-capture reject
 that they assert must now become a GREEN emit." **In-tree audit finds this
 target is empty and the real target is elsewhere.** Every `l0105_neg_*`
-fixture is a REFUTABILITY / parse negative (`SKY-P0001` / `SKY-T0015`), NOT a
+fixture is a REFUTABILITY / parse negative (`IPE-P0001` / `IPE-T0015`), NOT a
 `Fun`-capture reject:
 
 | Fixture | Rejects with | Touched by carrier flip? |
 |---|---|---|
-| `neg_int_lambda` | SKY-P0001 (`\1 ->` bare literal param) | No |
-| `neg_list_lambda` | SKY-P0001 (`\[a] ->`) | No |
-| `neg_ctor_lambda` | SKY-T0015 (`\(Just x) ->` refutable) | No |
-| `neg_cons_lambda` | SKY-T0015 (`\(x :: xs) ->`) | No |
-| `neg_nested_tuple` | SKY-T0015 (`\(a, Just x) ->`) | No |
-| `neg_ctor_def` | SKY-T0015 (`f (Just x) =`) | No |
-| `neg_money_ctor_param` | SKY-T0015 (`amount (Money d _) =`) | No |
+| `neg_int_lambda` | IPE-P0001 (`\1 ->` bare literal param) | No |
+| `neg_list_lambda` | IPE-P0001 (`\[a] ->`) | No |
+| `neg_ctor_lambda` | IPE-T0015 (`\(Just x) ->` refutable) | No |
+| `neg_cons_lambda` | IPE-T0015 (`\(x :: xs) ->`) | No |
+| `neg_nested_tuple` | IPE-T0015 (`\(a, Just x) ->`) | No |
+| `neg_ctor_def` | IPE-T0015 (`f (Just x) =`) | No |
+| `neg_money_ctor_param` | IPE-T0015 (`amount (Money d _) =`) | No |
 
 All seven reject at the parser / irrefutability gate, strictly BEFORE lowering's
 `clone_class` runs, so the carrier flip cannot turn any of them into an accept.
@@ -552,8 +552,8 @@ asserted in `crates/skyc/tests/golden_l0114_ctor_payload_function.rs`:
 
 | Test fn | Fixture | Reused type | Post-flip disposition |
 |---|---|---|---|
-| `fn_carrier_reuse_gated` | `fn_carrier_reuse_gated` | `Maybe (Int -> Int)` let-binding, `consume mf + consume mf` | **Was SKY-L0127; NOW ACCEPT + run.** `clone_class(Maybe(Fun))` = `clone_class_named_composite([Fun])` = `CloneOk` once `Fun` is `CloneOk`; the `Maybe (Arc<dyn Fn>)` clones per use, cargo-builds. Re-classify: assert exit-0 + emitted runs, output `4`. |
-| `lambda_param_reuse_gated` | `lambda_param_reuse_gated` | `Maybe (Int -> Int)` lambda param reused | **Was SKY-L0127; NOW ACCEPT + run**, same reason, output `4`. |
+| `fn_carrier_reuse_gated` | `fn_carrier_reuse_gated` | `Maybe (Int -> Int)` let-binding, `consume mf + consume mf` | **Was IPE-L0127; NOW ACCEPT + run.** `clone_class(Maybe(Fun))` = `clone_class_named_composite([Fun])` = `CloneOk` once `Fun` is `CloneOk`; the `Maybe (Arc<dyn Fn>)` clones per use, cargo-builds. Re-classify: assert exit-0 + emitted runs, output `4`. |
+| `lambda_param_reuse_gated` | `lambda_param_reuse_gated` | `Maybe (Int -> Int)` lambda param reused | **Was IPE-L0127; NOW ACCEPT + run**, same reason, output `4`. |
 | `lambda_param_call_twice_accepted` | `lambda_param_call_twice_accepted` | `f 1 + f 2` (callee) | Stays GREEN, unchanged (already accepted; callee-position). |
 
 Both `*_reuse_gated` re-classifications are **make-invalid-states-unrepresentable
@@ -562,7 +562,7 @@ the carrier is `Clone`. This is NOT the §0 no-shortcuts trap (deleting a red to
 fake-pass) — the program genuinely now compiles and runs the reference answer.
 The test bodies must be rewritten to assert the accept + the runtime value, and
 a `main.rs` golden captured for each. **Their comments (which say "must stay
-SKY-L0127") are rewritten to state the new contract.** This is a required,
+IPE-L0127") are rewritten to state the new contract.** This is a required,
 audited change — record it explicitly in the implementation commit message so a
 reviewer does not mistake it for a weakened gate.
 
@@ -884,7 +884,7 @@ universal Arc.
 function value `wrap` is captured as a callee at lambda-nesting depth 1 inside
 `guarded`'s eta-expanded residual. At depth 1 a bare `Box<dyn Fn>` capture is
 unsound (the inner `move` closure steals it from the outer env → E0525), so the
-lowerer fail-closes SKY-L0126. The ONLY sound bare position is a depth-0 callee.
+lowerer fail-closes IPE-L0126. The ONLY sound bare position is a depth-0 callee.
 
 The lean fix is to Arc-promote a fn-value captured at depth ≥ 1 (Arc is `Clone`,
 so each capturing closure clones the pointer — a refcount bump). The tree
@@ -979,7 +979,7 @@ Implemented and verified in `sky_lower` (byte-neutral across all 67 goldens,
   `let` binding that is captured at lambda-depth ≥ 1 OR reused (> 1 non-callee
   use) IN ITS OWN CANON `let` SCOPE is recorded in `arc_promoted_fn_syms`. The
   capture classifier (`captured_locals` in `lower_lambda`) routes those symbols
-  to `clone_set` (`CloneVar`) instead of SKY-L0126, and `lower_let_pvar` routes
+  to `clone_set` (`CloneVar`) instead of IPE-L0126, and `lower_let_pvar` routes
   them to `rewrite_multiuse_clones` + the `SharedLambda` (Arc) promotion instead
   of `reject_fn_value_reuse` — one set drives all three, so the carrier and the
   `.clone()`s agree (no E0599/E0126). Helpers: `canon_sym_captured_at_depth_ge1`,
@@ -992,7 +992,7 @@ Arc only where captured; `guarded` and the eta-lambdas stay `Box`. That is the
 leanest correct carrier, exactly the user directive.
 
 **The remaining blocker — proven by instrumentation, the reason `36` is still
-red:** in `36-composite-server`, `wrap` trips SKY-L0127 with `count=2` NON-callee
+red:** in `36-composite-server`, `wrap` trips IPE-L0127 with `count=2` NON-callee
 uses that DO NOT EXIST IN CANON. They are SYNTHESIZED by eta-expansion DURING
 lowering: `guarded h = wrap (rateLimit … h)` supplies 1 of `wrap`'s 2 flattened
 args, so `eta_expand_value_partial` builds a residual `\eta_0 -> wrap(<partial>,
@@ -1042,9 +1042,9 @@ unwinds, completing before TCO:
 * **Deferral, not rejection** — `lower_lambda`'s capture classifier routes a
   captured pure-`Fun` symbol whose binder is REGISTERED promotable (plain `let`
   names + def/lambda params, via `promotable_fn_binders`) away from the
-  SKY-L0126 fail-close, leaving reads bare; a signal (`deferred_fun_captures`)
+  IPE-L0126 fail-close, leaving reads bare; a signal (`deferred_fun_captures`)
   lets a binder that cannot resolve the `Fun` shape re-raise the original
-  SKY-L0126 (fail-closed both ways). Destructure/match-arm-bound fn symbols
+  IPE-L0126 (fail-closed both ways). Destructure/match-arm-bound fn symbols
   are not registered — they keep today's honest fail-close.
 * **Binder-site triggers, on the lowered scope** — a pure-`Fun` `let`
   (`lower_let_pvar`) or param (`apply_param_move_ownership`) is promoted when

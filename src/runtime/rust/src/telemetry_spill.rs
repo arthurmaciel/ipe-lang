@@ -1,6 +1,6 @@
 //! Telemetry spill — write-through persistence to a SQLite file.
 //!
-//! When `SKY_CONSOLE_DB_PATH` is set, the always-compiled in-RAM sink
+//! When `IPE_CONSOLE_DB_PATH` is set, the always-compiled in-RAM sink
 //! (`telemetry.rs`) ALSO dual-writes every log + span to a SQLite file via a
 //! background batcher task. The bundled console child reads that
 //! same file through the `hub_*` kernels — so this module + `live/hub.rs`
@@ -28,9 +28,9 @@ use std::sync::OnceLock;
 use tokio::sync::mpsc;
 
 /// Env var that turns the spill on (Go parity).
-const SPILL_ENV: &str = "SKY_CONSOLE_DB_PATH";
+const SPILL_ENV: &str = "IPE_CONSOLE_DB_PATH";
 /// Service-name env (the hub schema groups by `service_name`).
-const SERVICE_ENV: &str = "SKY_SERVICE_NAME";
+const SERVICE_ENV: &str = "IPE_SERVICE_NAME";
 /// Bounded queue depth (~1 s of telemetry at peak; overflow drops + warns).
 const QUEUE_CAP: usize = 1024;
 /// Retention: logs/spans older than this are pruned hourly (Go: 24 h).
@@ -71,7 +71,7 @@ enum SpillEntry {
 
 static SENDER: OnceLock<mpsc::Sender<SpillEntry>> = OnceLock::new();
 
-/// Whether the local spill writer is active (db parent with `SKY_CONSOLE_DB_PATH`
+/// Whether the local spill writer is active (db parent with `IPE_CONSOLE_DB_PATH`
 /// set). The console mount uses this to decide between writing the store
 /// directly (db parent) and the push-to-collector path (lean parent pushes to
 /// the console child).
@@ -97,7 +97,7 @@ fn rfc3339(ts_ms: u64) -> String {
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339())
 }
 
-/// Enable the spill from `SKY_CONSOLE_DB_PATH`. Idempotent + best-effort: a
+/// Enable the spill from `IPE_CONSOLE_DB_PATH`. Idempotent + best-effort: a
 /// missing env var or any open/schema failure leaves the in-RAM sink untouched.
 /// Call once from the runtime entry boot path (db-gated).
 pub async fn enable_from_env() {

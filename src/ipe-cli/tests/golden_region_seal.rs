@@ -7,10 +7,10 @@
 //! * `Region.label : String -> Attribute msg`
 //! * `Region.announce`, `announceUrgently` — nullary live-region attrs
 //!
-//! Gated on `SKY_E2E=1`. Run:
+//! Gated on `IPE_E2E=1`. Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_i117_region_seal
+//! IPE_E2E=1 cargo test -p skyc --test golden_i117_region_seal
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -24,7 +24,7 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn region_all_members_skyc_and_cargo_zero() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

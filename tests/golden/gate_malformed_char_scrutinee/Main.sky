@@ -2,7 +2,7 @@ module Main exposing (main)
 import Sky.Core.Prelude exposing (..)
 
 -- A second unrecognised escape (`\z`), this time in scrutinee position. Same
--- single-character invariant, same SKY-P0015 floor: the malformed char literal
+-- single-character invariant, same IPE-P0015 floor: the malformed char literal
 -- is rejected at lex time with no emit.
 grade : Char -> Int
 grade c =

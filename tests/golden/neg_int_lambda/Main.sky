@@ -2,8 +2,8 @@ module Main exposing (main)
 import Sky.Core.Prelude exposing (..)
 
 -- A bare integer-literal lambda param `\1 ->` is refutable. It is caught even
--- EARLIER than the SKY-T0015 gate: the parser's param grammar does not admit a
--- bare literal in binding position, so it fails closed as SKY-P0001. Either way,
+-- EARLIER than the IPE-T0015 gate: the parser's param grammar does not admit a
+-- bare literal in binding position, so it fails closed as IPE-P0001. Either way,
 -- a refutable literal param never reaches codegen.
 f : Int -> Int
 f = \1 -> 0

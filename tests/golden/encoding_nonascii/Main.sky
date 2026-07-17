@@ -14,7 +14,7 @@ import Sky.Core.Encoding as Encoding
 --
 -- The leading "café" literal anchors the list's element type to String (the
 -- current Rust-backend milestone cannot infer a list whose elements are all
--- function returns — SKY-L0102); it also echoes the input next to its encodings.
+-- function returns — IPE-L0102); it also echoes the input next to its encodings.
 main =
     let
         b64 = Encoding.base64Encode "café"

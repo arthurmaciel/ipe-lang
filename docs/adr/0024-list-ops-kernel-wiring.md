@@ -8,7 +8,7 @@ Date: 2026-07-09
 Nine list operations (`take`, `drop`, `append`, `concat`, `concatMap`, `zip`,
 `cons`, `isEmpty`, `indexedMap`) were registered in canon's prelude-qualifier
 member array but lacked kernel registry entries, lowerer arms, and constrain
-schemes, so calling any produced `error[SKY-L0108]: kernel function not
+schemes, so calling any produced `error[IPE-L0108]: kernel function not
 available yet`. The design question was whether to complete kernel wiring or
 route these to the pure-Sky `Sky.Core.List` bodies.
 
@@ -43,4 +43,4 @@ security/correctness/soundness benefit.
   (constant stack vs. Go's recursion, output-identical) in
   `docs/divergences-from-sky.md`.
 - Adjacent same-class gaps (`any`, `all`, `find`) are filed as same-family
-  follow-up, not left as latent `SKY-L0108`.
+  follow-up, not left as latent `IPE-L0108`.

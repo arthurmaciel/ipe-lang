@@ -29,7 +29,7 @@
 //!
 //! Spec: `docs/adr/0011-emitter-clone-borrow-discipline.md` §2.
 //!
-//! Run: `SKY_E2E=1 cargo test -p skyc --test golden_i125_decoder_destructure_thunk`
+//! Run: `IPE_E2E=1 cargo test -p skyc --test golden_i125_decoder_destructure_thunk`
 
 use std::path::{Path, PathBuf};
 
@@ -62,12 +62,12 @@ fn assert_skyc_ok(name: &str) -> PathBuf {
     out
 }
 
-/// `SKY_E2E` tier: the emitted project must cargo-build (no
+/// `IPE_E2E` tier: the emitted project must cargo-build (no
 /// E0382 like the one recorded above) AND run printing `Alice|Bob`
 /// (proving the reused Decoder component decodes BOTH payloads correctly —
 /// not just "compiles").
 fn assert_e2e_output(name: &str) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let out = assert_skyc_ok(name);

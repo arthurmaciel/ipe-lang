@@ -1,7 +1,7 @@
 //! Task / Io / Time / System / Random / File parity gate — effect sequencing,
 //! Task combinators, and the error channel.
 //!
-//! All tests are gated on `SKY_E2E=1`; without it they return early so the
+//! All tests are gated on `IPE_E2E=1`; without it they return early so the
 //! default `cargo test` stays fast.
 //!
 //! ## Golden catalogue
@@ -27,12 +27,12 @@
 //!
 //! * `task_map_error_lambda` — `Task.onError (\e -> println "recovered") …`.
 //!   The lambda's `e` parameter must be inferred as `Error` (not a free variable)
-//!   so the handler compiles without SKY-L0102.  Expected output: `recovered`.
+//!   so the handler compiles without IPE-L0102.  Expected output: `recovered`.
 //!
 //! Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test golden_m5a_task
+//! IPE_E2E=1 cargo test golden_m5a_task
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -50,9 +50,9 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 
 /// Compile `tests/golden/<name>/Main.sky`, build the emitted Cargo project,
 /// run it, and assert its stdout matches the cached oracle.  Gated on
-/// `SKY_E2E=1`.
+/// `IPE_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -107,7 +107,7 @@ fn error_channel() {
 /// `greet : String -> Task Error ()` is a signed top-level effectful helper.
 /// The kernel builds a unary `Task a` while `from_canon` converts the
 /// annotation to a binary `Task Error a`; without reconciliation this is a
-/// SKY-T0001 "expected Task Error (), found Task ()". `normalize_annotation_ty`
+/// IPE-T0001 "expected Task Error (), found Task ()". `normalize_annotation_ty`
 /// reduces 2-arg `Task Error a` → 1-arg `Task a` at all annotation sites.
 /// Expected output: `Hello, World!`.
 #[test]
@@ -120,7 +120,7 @@ fn task_signed_helper() {
 /// `Task.onError (\e -> println "recovered") (Task.fail (Error.unexpected "an
 /// error"))` exercises the `mapError`/`onError` `kernel_ty` fix: the handler
 /// parameter `e` must be inferred as `Error` (not a free `var(1)`) so the
-/// unused-lambda-param path doesn't trigger SKY-L0102 ("polymorphic
+/// unused-lambda-param path doesn't trigger IPE-L0102 ("polymorphic
 /// parameter"). `Task.fail` is pinned to `Error -> Task Error a`, hence the
 /// `Error.unexpected` wrap rather than a bare string literal.
 /// Expected output: `recovered`.

@@ -22,7 +22,7 @@
 //!
 //! Run:
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_i190_static_bound
+//! IPE_E2E=1 cargo test -p skyc --test golden_i190_static_bound
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -43,7 +43,7 @@ fn entry_path(root: &Path) -> PathBuf {
 
 /// skyc-0: the compiler must accept the program AND emit the `'static` lifetime
 /// bound on the generic that flows into the boxed `+ 'static` mapper callback —
-/// checked unconditionally (cheap, no `cargo`), independent of the `SKY_E2E`
+/// checked unconditionally (cheap, no `cargo`), independent of the `IPE_E2E`
 /// gate. This is the exact assertion that the E0310 SEAL break cannot recur.
 #[test]
 fn i190_skyc_accepts_and_bounds_fn_static() {
@@ -87,11 +87,11 @@ fn i190_skyc_accepts_and_bounds_fn_static() {
 }
 
 /// cargo-0 ∧ run-0: the emitted project actually compiles with `rustc` and
-/// renders the `<link>`. Gated on `SKY_E2E=1` — the only check that would have
+/// renders the `<link>`. Gated on `IPE_E2E=1` — the only check that would have
 /// caught the original SEAL violation (E0310, `skyc build` clean).
 #[test]
 fn i190_cargo_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -1,6 +1,6 @@
 ---
 name: examples-sweep
-description: Run the ipê EXAMPLES sweep — the cornerstone correctness gate. ONE deterministic pass that BUILDS each in-scope example with `skyc build` + `cargo build`, RUNS it headless per shape, and (once a Go reference exists) asserts the Rust output matches Go per the example's equivalence mode, emitting a per-example BUILD·RUN·EQUIVALENCE table. Use when the user asks to run the examples sweep, verify the vendored examples still build + run on skyc, or after a codegen/runtime change. First-iteration default is BUILD+RUN only (SKY_SWEEP_NO_EQUIV=1) — the Go≡Rust EQUIVALENCE column is phased in later. Trigger: /sky-compiler:examples-sweep.
+description: Run the ipê EXAMPLES sweep — the cornerstone correctness gate. ONE deterministic pass that BUILDS each in-scope example with `skyc build` + `cargo build`, RUNS it headless per shape, and (once a Go reference exists) asserts the Rust output matches Go per the example's equivalence mode, emitting a per-example BUILD·RUN·EQUIVALENCE table. Use when the user asks to run the examples sweep, verify the vendored examples still build + run on skyc, or after a codegen/runtime change. First-iteration default is BUILD+RUN only (IPE_SWEEP_NO_EQUIV=1) — the Go≡Rust EQUIVALENCE column is phased in later. Trigger: /sky-compiler:examples-sweep.
 ---
 
 # examples-sweep
@@ -35,9 +35,9 @@ discovery), else `src/Main.sky` (single-file). Verified against
 
 EQUIVALENCE needs a Go reference produced by the Haskell `sky` compiler, which this repo
 does not ship. So the **first CI iteration runs BUILD+RUN only**
-(`SKY_SWEEP_NO_EQUIV=1`). The EQUIVALENCE column, `build_go()`, `exercise_server_equiv`,
+(`IPE_SWEEP_NO_EQUIV=1`). The EQUIVALENCE column, `build_go()`, `exercise_server_equiv`,
 and the two Python normalisers are kept intact so parity flips on later — either by
-putting a Haskell `sky` on PATH as `SKY_GO_BIN`, or by consuming vendored Go
+putting a Haskell `sky` on PATH as `IPE_GO_BIN`, or by consuming vendored Go
 reference outputs. See `docs/architecture/class2-tier1-sweep-fix-spec-2026-07-09.md` §1.
 
 ## Verdict
@@ -45,7 +45,7 @@ reference outputs. See `docs/architecture/class2-tier1-sweep-fix-spec-2026-07-09
 - **GREEN row** = BUILD `ok` AND RUN ∈ {`ok`, `skip`} AND EQUIVALENCE ∈ {`equivalence-*`, `n/a`, `—`, `go-ref-broken`}.
 - **RED row** = any `skyc-fail` / `cargo-fail` / `panic` / `hang` / `noserve` / `notty` / `DIFFER`.
 - **AMBER** = `go-ref-broken` — the Go reference itself fails (upstream Go bug, not a Rust failure). Does NOT make the row red.
-- **VERDICT PASS** iff no RED row AND no cargo warning leaks past the generated `#![allow]` (gated by `SKY_SWEEP_WARN_GATE`, default on; `=0` = report-only).
+- **VERDICT PASS** iff no RED row AND no cargo warning leaks past the generated `#![allow]` (gated by `IPE_SWEEP_WARN_GATE`, default on; `=0` = report-only).
 
 > **Expected first-run state.** skyc currently implements only `Sky.Core.*`;
 > examples reaching for `Std.Ui` / `Std.Live` / `Std.Db` / server/tui runtimes will
@@ -63,12 +63,12 @@ small file of exceptions + reasons) — a line wins over the derived mode.
 
 | Flag | Effect |
 |---|---|
-| `SKY_SWEEP_BUILD_ONLY=1` | BUILD column only (fast compile check; RUN + EQUIVALENCE = `—`). No `go`/`curl` needed. |
-| `SKY_SWEEP_NO_EQUIV=1` | BUILD + RUN; EQUIVALENCE skipped (`—`). **The phase-1 default.** |
-| `SKY_SWEEP_WARN_GATE=0` | downgrade the cargo-warning-past-`#![allow]` gate to report-only. |
-| `SKY_SWEEP_NIGHT_GATE=1` | re-enable the OPT-IN local 22:00–08:00 BRT deferral window (off by default so CI never blocks). |
-| `SKY_SWEEP_FORCE=1` | override the night gate. |
-| `SKY_SWEEP_BUILD_TIMEOUT=N` | per-example skyc build ceiling (default 900 s — cold CI-safe). |
+| `IPE_SWEEP_BUILD_ONLY=1` | BUILD column only (fast compile check; RUN + EQUIVALENCE = `—`). No `go`/`curl` needed. |
+| `IPE_SWEEP_NO_EQUIV=1` | BUILD + RUN; EQUIVALENCE skipped (`—`). **The phase-1 default.** |
+| `IPE_SWEEP_WARN_GATE=0` | downgrade the cargo-warning-past-`#![allow]` gate to report-only. |
+| `IPE_SWEEP_NIGHT_GATE=1` | re-enable the OPT-IN local 22:00–08:00 BRT deferral window (off by default so CI never blocks). |
+| `IPE_SWEEP_FORCE=1` | override the night gate. |
+| `IPE_SWEEP_BUILD_TIMEOUT=N` | per-example skyc build ceiling (default 900 s — cold CI-safe). |
 | `RUST_EXAMPLES="01-… 19-…"` | subset override (paths or basenames). |
 
 ## Preflight
@@ -82,7 +82,7 @@ blocks the sweep or CI).
 1. **Build skyc once**, then run the sweep (phase-1 default = BUILD+RUN):
    ```bash
    cargo build --release -p skyc
-   SKY_SWEEP_NO_EQUIV=1 bash scripts/equivalence-checks/examples-sweep.sh
+   IPE_SWEEP_NO_EQUIV=1 bash scripts/equivalence-checks/examples-sweep.sh
    ```
    It self-resolves repo + env (`SKYC_BIN` from the cargo target dir), runs the
    sweep, and prints the table + summary + scoreboard path

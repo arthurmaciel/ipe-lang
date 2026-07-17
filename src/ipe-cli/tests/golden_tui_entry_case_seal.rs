@@ -27,11 +27,11 @@
 //!
 //! ## Why the emit-only assertions run in the DEFAULT gate
 //!
-//! `SKY_E2E`-gated tests do not run in the default `cargo nextest` gate —
+//! `IPE_E2E`-gated tests do not run in the default `cargo nextest` gate —
 //! documented BACKLOG blind spot ("Gate blind spot" row). This file's first
 //! two tests inspect the emitted `src/main.rs` text (no cargo build) so they
-//! run in the DEFAULT gate and pin the regression even when `SKY_E2E` is
-//! unset; the third test is the `SKY_E2E`-gated cargo-build-and-run proof
+//! run in the DEFAULT gate and pin the regression even when `IPE_E2E` is
+//! unset; the third test is the `IPE_E2E`-gated cargo-build-and-run proof
 //! that the emitted crate actually compiles AND prints the right thing.
 
 use std::path::{Path, PathBuf};
@@ -149,7 +149,7 @@ fn case_branched_entry_point_elides_task_run_to_skytask() {
     );
 }
 
-/// The load-bearing SEAL proof: under `SKY_E2E=1`, actually `cargo build` the
+/// The load-bearing SEAL proof: under `IPE_E2E=1`, actually `cargo build` the
 /// emitted crate and run it, asserting BOTH defects are closed together (a
 /// fix for one that reintroduces the other still fails this test) and that
 /// the runtime picks the `Just "live"` branch (`mode = Just "live"` in the
@@ -169,7 +169,7 @@ fn tui_entry_case_taskrun_builds_and_runs() {
         "tui_entry_case_taskrun: must be accepted, got: {built:?}"
     );
 
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = support::build_and_run_emitted("tui_entry_case_taskrun", &out);

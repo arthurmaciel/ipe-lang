@@ -3,7 +3,7 @@ module Main exposing (main)
 import Sky.Core.Prelude exposing (..)
 import Std.Log exposing (println)
 
--- #158 residual scope (fail-closed, SKY-L0116): a `case` whose nested-cons arm
+-- #158 residual scope (fail-closed, IPE-L0116): a `case` whose nested-cons arm
 -- is exhaustive at the SKY level (`Just (h::t)` + `Just []` cover every `Just`,
 -- `Nothing` covers the rest) but has NO trailing wildcard catch-all. The
 -- guard-based lowering makes those `Just` arms REFUTABLE to rustc (a guard may

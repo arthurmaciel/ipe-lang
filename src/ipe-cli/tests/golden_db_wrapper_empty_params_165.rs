@@ -67,7 +67,7 @@
 //!
 //! Run:
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_db_wrapper_empty_params_165
+//! IPE_E2E=1 cargo test -p skyc --test golden_db_wrapper_empty_params_165
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -82,7 +82,7 @@ fn repo_root() -> PathBuf {
 /// skyc-0: the compiler must accept the 3-module program AND emit the
 /// `Into<ipe_runtime::db::SqlParam>` bound on the wrapper functions' own
 /// generic (the E0277 half of #165) — checked unconditionally (cheap, no
-/// `cargo`), independent of the `SKY_E2E` gate below.
+/// `cargo`), independent of the `IPE_E2E` gate below.
 #[test]
 fn db_wrapper_empty_params_165_skyc_accepts_and_emits_sql_param_bound() {
     let root = repo_root();
@@ -143,12 +143,12 @@ fn db_wrapper_empty_params_165_skyc_accepts_and_emits_sql_param_bound() {
 
 /// cargo-0 ∧ run-0: the emitted project actually compiles with `rustc` and
 /// prints the two rows read back through the empty-params wrapper call.
-/// Gated on `SKY_E2E=1` — a real `cargo build`, the only check that would
+/// Gated on `IPE_E2E=1` — a real `cargo build`, the only check that would
 /// have caught the original SEAL violation (9x rustc error on
 /// `examples/17-skymon`, `skyc build` itself was clean).
 #[test]
 fn db_wrapper_empty_params_165_cargo_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

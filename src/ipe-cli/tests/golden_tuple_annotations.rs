@@ -1,10 +1,10 @@
 //! Tuple-type-annotation gate: `skyc` must emit `main.rs`
 //! byte-identical to the checked-in golden for a program whose top-level
 //! bindings carry **tuple-type annotations** (`firstOf : (Int, Int) -> Int`),
-//! and (behind `SKY_E2E=1`) the emitted project must build and print `48`.
+//! and (behind `IPE_E2E=1`) the emitted project must build and print `48`.
 //!
 //! Parity artefact for the tuple-annotation feature. Without it,
-//! a `(T1, T2)` in a type annotation fails at parse with SKY-P0050 ("unclosed
+//! a `(T1, T2)` in a type annotation fails at parse with IPE-P0050 ("unclosed
 //! delimiter"). The annotation parses to `TypeAnnotation::TTuple`,
 //! canonicalises to `canon::Type::Tuple`, flows through the solver's existing
 //! `Ty::Tuple` structure, and lowers to `IrType::Tuple` — so a tuple-typed
@@ -77,10 +77,10 @@ fn emits_byte_identical_main_rs() {
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
 /// tuple-annotation program prints `48` — the same value the Go backend
-/// produces. Gated on `SKY_E2E=1` so the default `cargo test` stays fast.
+/// produces. Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn end_to_end_builds_and_prints_forty_eight() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

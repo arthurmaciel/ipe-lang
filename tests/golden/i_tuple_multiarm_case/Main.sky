@@ -8,7 +8,7 @@ import Std.Log exposing (println)
 -- A MULTI-arm `case` on a LITERAL tuple whose columns are cons patterns plus a
 -- `_` catch-all — the shape example 38-composite-ui-multibackend
 -- (State.seedHistoryHelp) needs. Before the tuple-match close this was rejected
--- fail-closed as SKY-L0115; now it lowers to a native Rust tuple `match`
+-- fail-closed as IPE-L0115; now it lowers to a native Rust tuple `match`
 -- (`match (xs.as_slice(), ys.as_slice()) { ([a, xrest @ ..], [b, yrest @ ..]) =>
 -- …, _ => … }`), skyc-0 ⟹ cargo-0.
 zipSum : List Int -> List Int -> List Int -> List Int
@@ -23,7 +23,7 @@ zipSum xs ys acc =
 
 
 -- A multi-arm tuple `case` with literal / variable columns and NO trailing
--- catch-all — coverage proven upstream (SKY-T0010), accepted by the product
+-- catch-all — coverage proven upstream (IPE-T0010), accepted by the product
 -- backstop in `Match::new_flat`.
 classify : Bool -> Bool -> Int
 classify p q =

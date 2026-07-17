@@ -14,13 +14,13 @@
 //!   { [] => …, [x, rest @ ..] => … }`); the head element is rebound owned via
 //!   `.clone()` and the tail via `.to_vec()`, so the arm body sees the Sky `Int`
 //!   / `List Int` types. Its emitted `main.rs` must be byte-identical to the
-//!   checked-in golden, and (behind `SKY_E2E=1`) the emitted project must build
+//!   checked-in golden, and (behind `IPE_E2E=1`) the emitted project must build
 //!   and print the value the Go reference produces — captured in `expected_go.txt`
 //!   / `oracle.meta` via the cached-oracle infra (no live Go in this gate).
 //!
 //! * `gate_list_nonexhaustive` (negative) — `case xs of x :: rest -> x`
 //!   omits the `[]` arm. `List` is the closed `Nil | Cons` type, so the missing
-//!   empty-list case is non-exhaustive: the usefulness check reports SKY-T0010
+//!   empty-list case is non-exhaustive: the usefulness check reports IPE-T0010
 //!   (the soundness floor — a non-exhaustive list `case` MUST be caught before
 //!   emit, never deferred to a rustc `E0004`). A gate golden has no program
 //!   output, so it carries no `oracle.meta`.
@@ -63,9 +63,9 @@ fn assert_byte_identical(name: &str) {
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert its
 /// stdout matches the golden's CACHED Go oracle via the staleness-gated
-/// `support::assert_go_parity` — NO live Go run. Gated on `SKY_E2E=1`.
+/// `support::assert_go_parity` — NO live Go run. Gated on `IPE_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -121,5 +121,5 @@ fn cons_sum_builds_and_prints_six() {
 
 #[test]
 fn non_exhaustive_list_case_is_sky_t0010() {
-    assert_gate("gate_list_nonexhaustive", ipe_diagnostics::SKY_T0010);
+    assert_gate("gate_list_nonexhaustive", ipe_diagnostics::IPE_T0010);
 }

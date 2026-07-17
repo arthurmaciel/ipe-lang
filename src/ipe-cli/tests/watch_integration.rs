@@ -5,14 +5,14 @@
 //! file-save against warm salsa recompute — which is DELIBERATELY fast —
 //! is not a reliable timing window for an E2E test).
 //!
-//! Gated on `SKY_E2E=1` exactly like `server_e2e.rs`: every scenario here
+//! Gated on `IPE_E2E=1` exactly like `server_e2e.rs`: every scenario here
 //! drives a REAL `cargo build` of the emitted project and spawns the
 //! resulting binary, so these are slow (first build pays the full
 //! dependency-compile cost) but honest — no mocked compiler, no mocked
 //! process supervisor.
 //!
 //! ```text
-//! SKY_E2E=1 cargo nextest run -p skyc --test watch_integration
+//! IPE_E2E=1 cargo nextest run -p skyc --test watch_integration
 //! ```
 
 use std::io::{Read, Write};
@@ -27,7 +27,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 /// A minimal `Sky.Http.Server` fixture, parameterised on the response body
 /// so a test can edit it in place and observe the swap. Reads its port from
-/// `SKY_SERVER_PORT` — the SAME convention `server_e2e.rs` already
+/// `IPE_SERVER_PORT` — the SAME convention `server_e2e.rs` already
 /// establishes in this repo, and what `watch::child_env` drives from
 /// `WatchOptions::port`.
 fn server_fixture(body: &str) -> String {
@@ -35,7 +35,7 @@ fn server_fixture(body: &str) -> String {
         "module Main exposing (main)\n\n\
          import Sky.Http.Server as Server\n\n\
          main =\n    \
-             let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr \"SKY_SERVER_PORT\" \"8080\"))\n    \
+             let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr \"IPE_SERVER_PORT\" \"8080\"))\n    \
              in\n    \
              Server.listen port\n        \
                  [ Server.get \"/\" (\\req -> Task.succeed (Server.text \"{body}\")) ]\n"
@@ -167,7 +167,7 @@ fn stop_and_join(
 
 /// Find a live process whose `/proc/<pid>/environ` contains the exact
 /// `key=value` pair `ipe watch` injects into its supervised child's
-/// environment (`watch::child_env` sets `SKY_LIVE_PORT`/`SKY_SERVER_PORT`
+/// environment (`watch::child_env` sets `IPE_LIVE_PORT`/`IPE_SERVER_PORT`
 /// to the configured port — see `watch.rs`). Matching on the environment
 /// rather than `cmdline`/the executable PATH is deliberate: the emitted
 /// binary's actual on-disk location depends on where `cargo build` puts it
@@ -218,8 +218,8 @@ fn pid_is_alive(pid: u32) -> bool {
 
 #[test]
 fn watch_rebuild_on_save_swaps_the_running_binary() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
-        eprintln!("skipping (set SKY_E2E=1 to run)");
+    if std::env::var("IPE_E2E").is_err() {
+        eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
     let (sky_dir, out_dir) = fresh_dirs("rebuild_swap")?;
@@ -245,8 +245,8 @@ fn watch_rebuild_on_save_swaps_the_running_binary() -> Result<(), BoxError> {
 
 #[test]
 fn watch_keeps_last_good_binary_alive_on_a_syntax_error() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
-        eprintln!("skipping (set SKY_E2E=1 to run)");
+    if std::env::var("IPE_E2E").is_err() {
+        eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
     let (sky_dir, out_dir) = fresh_dirs("last_good")?;
@@ -285,8 +285,8 @@ fn watch_keeps_last_good_binary_alive_on_a_syntax_error() -> Result<(), BoxError
 
 #[test]
 fn watch_coalesces_a_rapid_double_save_into_one_rebuild() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
-        eprintln!("skipping (set SKY_E2E=1 to run)");
+    if std::env::var("IPE_E2E").is_err() {
+        eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
     let (sky_dir, out_dir) = fresh_dirs("coalesce")?;
@@ -338,8 +338,8 @@ fn watch_coalesces_a_rapid_double_save_into_one_rebuild() -> Result<(), BoxError
 #[cfg(target_os = "linux")]
 #[test]
 fn dropping_a_watch_handle_without_stop_still_reaps_the_supervised_child() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
-        eprintln!("skipping (set SKY_E2E=1 to run)");
+    if std::env::var("IPE_E2E").is_err() {
+        eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
     let (sky_dir, out_dir) = fresh_dirs("drop_reaps_child")?;
@@ -354,11 +354,11 @@ fn dropping_a_watch_handle_without_stop_still_reaps_the_supervised_child() -> Re
         "initial cold build+spawn must serve v1"
     );
 
-    // `watch::child_env` sets `SKY_LIVE_PORT=<port>` in the supervised
+    // `watch::child_env` sets `IPE_LIVE_PORT=<port>` in the supervised
     // child's own environment, unique to this test's port — a stronger
     // handle on the right PID than the executable's on-disk path (which
     // moves if the test-runner's own environment sets `CARGO_TARGET_DIR`).
-    let child_pid = find_pid_by_environ_kv("SKY_LIVE_PORT", &port.to_string())
+    let child_pid = find_pid_by_environ_kv("IPE_LIVE_PORT", &port.to_string())
         .expect("the supervised child process must be discoverable via /proc once v1 is serving");
     assert!(
         pid_is_alive(child_pid),

@@ -51,7 +51,7 @@ The session cookie's `Secure` attribute was ENV-gated (snapshot once at process
 start), so a dev process behind a TLS proxy emitted a non-Secure cookie. The fix
 makes the SESSION cookie's `Secure` attribute **request-scoped** via
 `X-Forwarded-Proto` — but only when the operator opts in through
-`SKY_TRUSTED_PROXY` (unset/`0`/`false` = don't trust), the **same env-var and
+`IPE_TRUSTED_PROXY` (unset/`0`/`false` = don't trust), the **same env-var and
 same rationale** `server.rs` already established for `X-Forwarded-For`. A
 client-supplied header must never be trusted by default.
 
@@ -80,8 +80,8 @@ the configured allowlist.
 
 ### 5. Environment byte-count floors must reject `0`
 
-`live_max_body_bytes()` read `SKY_LIVE_MAX_BODY_BYTES` without a `> 0` filter, so
-`SKY_LIVE_MAX_BODY_BYTES=0` made every `/_sky/event` POST 413. It must
+`live_max_body_bytes()` read `IPE_LIVE_MAX_BODY_BYTES` without a `> 0` filter, so
+`IPE_LIVE_MAX_BODY_BYTES=0` made every `/_sky/event` POST 413. It must
 `.filter(|&n| n > 0)` before falling back to the default, matching
 `server.rs::max_body()`. Both read the same env var (Go parity — the var is
 shared between the Sky.Live event endpoint and the Sky.Http.Server default), so
@@ -93,7 +93,7 @@ the floor behaviour must be identical on both sides.
   page-embedded token; headless per-route double-submit with non-HttpOnly
   cookie) are deliberately different and must stay feature-partitioned: the
   headless path may only use crates unconditional under `--features server`.
-- `SKY_TRUSTED_PROXY` is the single opt-in gate for *all* spoofable proxy-header
+- `IPE_TRUSTED_PROXY` is the single opt-in gate for *all* spoofable proxy-header
   trust (X-Forwarded-For and X-Forwarded-Proto). Any future header that a
   reverse proxy sets must route through the same gate — never trusted by
   default.

@@ -9,7 +9,7 @@ The language needs a `Secret` type for auth tokens, API keys, and passwords —
 values that must never leak through logs/`Debug`/`Display` and must never be
 compared in variable time. It is implemented as an opaque built-in primitive
 (`runtime/src/sky_runtime/secret.rs`, `IrType::Secret`, the four `Secret.*`
-kernels, and the SKY-T0014 gate). The code is the source of truth for the *how*;
+kernels, and the IPE-T0014 gate). The code is the source of truth for the *how*;
 this ADR preserves the soundness/security *why*.
 
 ## Decision
@@ -29,13 +29,13 @@ Because `emit_expr.rs` dispatches every non-HOF kernel generically, the four
 `Secret` kernels need no `emit_expr` change — they emit as plain `fn(args)`
 calls.
 
-**`==` on a `Secret` is rejected at type-check (SKY-T0014).** `ty_is_equatable`
+**`==` on a `Secret` is rejected at type-check (IPE-T0014).** `ty_is_equatable`
 previously returned `true` for any zero-arg `Ty::Con` (empty args ⇒ vacuously
 `all` true), so `secret == secret` would type-check — then either fail `cargo`
 (no `PartialEq` derive: the exit-0-then-cargo-fail class) or, worse, if `Secret`
 ever derived `PartialEq`, *silently permit a variable-time compare*. Both violate
 the security principle. The gate makes `ty_is_equatable(&Secret) == false`, so an
-equality obligation on a `Secret` fails closed with SKY-T0014 at type-check
+equality obligation on a `Secret` fails closed with IPE-T0014 at type-check
 time. This makes "a secret compared with `==`" **unrepresentable at the Sky
 level** — the developer must reach for the constant-time kernel.
 

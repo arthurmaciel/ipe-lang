@@ -175,7 +175,7 @@ recorded reference.
   authored `Jwt.withClaim : String -> String -> Claims -> Claims`, an
   UNSANCTIONED narrowing of the reference `withClaim : String -> JsonEnc.Value
   -> Claims -> Claims` (`Sky/Core/Jwt.sky:79`). This both rejected valid
-  reference programs (`Jwt.withClaim "email" (JsonEnc.string e)` → SKY-T0001)
+  reference programs (`Jwt.withClaim "email" (JsonEnc.string e)` → IPE-T0001)
   and lost expressiveness (an `Int`/`Bool`/nested-object claim was
   inexpressible, and even the string case stored the value as a JSON *string* —
   wrong token bytes). Now converged: the scheme, kernel signature
@@ -337,7 +337,7 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
 - **Differs:** Go's reference WS server (`runtime-go/rt/server_websocket.go`)
   blocks up to ~30 s on a full write buffer before returning an error. ipê's
   `ws_loop` uses a `tokio::sync::mpsc::channel` of capacity
-  `SKY_WS_SEND_BUFFER` (default 256 frames) with `try_send`: when the queue is
+  `IPE_WS_SEND_BUFFER` (default 256 frames) with `try_send`: when the queue is
   full the send returns `Err` immediately without blocking. Frames from a slow
   or dead consumer are dropped rather than causing handler-task pileup.
 - **Go-oracle relationship:** Go succeeds; error timing and behavior on a slow
@@ -345,7 +345,7 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
 - **Rationale:** security/soundness — a blocking send behind one slow peer can
   pile up goroutines/tasks (memory exhaustion), while a bounded fail-fast
   channel keeps back-pressure explicit and configurable. The 256-frame default
-  (overridable via `SKY_WS_SEND_BUFFER`) is sufficient for all non-streaming
+  (overridable via `IPE_WS_SEND_BUFFER`) is sufficient for all non-streaming
   uses. If Go's 30 s blocking semantic is required, change 3 lines in the
   adapters to `tx.send_timeout(out, Duration::from_secs(30))`.
   **Sanctioned:** yes (`divergence:`).
@@ -357,23 +357,23 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   the registry until TCP gave up.~~
 - **RESOLVED (#135):** `ws_loop` now has a third `select!` arm driven by
   `tokio::time::interval(Duration::from_secs(ws_heartbeat_secs()))`.  Default
-  interval 30 s (Go parity).  Override via `SKY_WS_HEARTBEAT` (seconds, > 0).
+  interval 30 s (Go parity).  Override via `IPE_WS_HEARTBEAT` (seconds, > 0).
   axum auto-replies to incoming Pong frames.  Confirmed green in
   `ws_adapter_tests` unit-tests.
 - **Go-oracle relationship:** parity restored — both send a Ping every 30 s.
 
-### B21 — Unknown type names fail-closed at canon (SKY-N0002) vs deferred ICE (#138)
+### B21 — Unknown type names fail-closed at canon (IPE-N0002) vs deferred ICE (#138)
 - **Differs:** Sky's Haskell canonicaliser resolves an unqualified uppercase type
   name by calling `Map.findWithDefault []` on `type_home_map`, silently supplying
   an empty home `[]` for any name absent from the map. An empty home downstream
   in the Go code-gen is a silent runtime error (or, in the Rust backend, a
-  `SKY-I0001` ICE via the `ir_type_from_canon` unique-match heuristic). ipê's
+  `IPE-I0001` ICE via the `ir_type_from_canon` unique-match heuristic). ipê's
   `canonicalise_type` now classifies every unqualified upper-case type name
   explicitly at canon time:
   - **Known builtins** (`RESERVED_BUILTIN_TYPES` + `EXTRA_BUILTIN_TYPE_NAMES`) →
     empty-home sentinel `home = []` as before; the lowerer resolves them via
     explicit named arms.
-  - **User-defined / unknown names** → `TypeNotFound` / `SKY-N0002` with a
+  - **User-defined / unknown names** → `TypeNotFound` / `IPE-N0002` with a
     did-you-mean suggestion list from `type_home_map` + `ctx.aliases`. The ICE
     path and the unique-match `enum_variants` heuristic in `ir_type_from_canon`
     and `ir_type_from_ty` are removed.
@@ -388,11 +388,11 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   deferred-failure hole; this is the stricter-is-better class.
 - **Sanctioned:** yes (`sanctioned:`). Regression gate: `golden_i138_total_resolution`
   (error fixtures `empty_home_bridge` / `optbridge` → must emit
-  SKY-N0002 not SKY-I0001; positive control `kernel_implicit_positive` →
+  IPE-N0002 not IPE-I0001; positive control `kernel_implicit_positive` →
   must compile clean).
 
 ### B22 — Function value in a `Maybe`/`Result`/user-union constructor payload (#90 Stage 1)
-- **Differs:** ipê lifted the blanket `SKY-L0114` rejection of a function
+- **Differs:** ipê lifted the blanket `IPE-L0114` rejection of a function
   value in a constructor payload for ENUM-LIKE heads (`Maybe`/`Result`, or a
   user union) — `Ok (\x -> x + 1)`, `Just f`, and a DECLARED function-typed
   payload (`type Retryish e = RetryWhen (e -> Bool)`) all lower and run.
@@ -454,11 +454,11 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   (`crates/skyc/tests/golden_m4c_math_gate.rs`)**: a DIRECT `andMap` call
   pins the obligated payload-result variable straight to a concrete `Fun`
   structure at the unifier's own head-pin check (the "eager pin" case),
-  surfacing a plain `SKY-T0001` (`TypeMismatch`) — every aliasing shape in
+  surfacing a plain `IPE-T0001` (`TypeMismatch`) — every aliasing shape in
   the fixture matrix hits this path, confirmed empirically. An ANNOTATED
   GENERIC FORWARDER around `andMap` instead lifts the obligation onto its
   own annotation skolem, re-verified per external call site, surfacing the
-  friendlier `SKY-T0014` (`SuperTypeUnsatisfied`, "non-function callback
+  friendlier `IPE-T0014` (`SuperTypeUnsatisfied`, "non-function callback
   result (Maybe/Result higher-order kernel)"). Both are clean Sky
   diagnostics; the pipeline never emits Rust that `cargo` rejects either
   way. One documented conservatism (5th attempt): when the obligated result
@@ -497,7 +497,7 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   `ctor_decl_fn_payload`, `fn_extracted_called_twice`,
   `function_payload_gate` (flipped from its reject branch to its
   build-and-run branch). Negative controls (aliasing-shape matrix, must stay
-  a clean diagnostic — SKY-T0001 / SKY-T0014 / SKY-L0114, never a cargo-fail;
+  a clean diagnostic — IPE-T0001 / IPE-T0014 / IPE-L0114, never a cargo-fail;
   no oracle needed): `and_map_curried_stays_gated`,
   `and_map_let_bound_alias_stays_gated`,
   `and_map_bare_alias_stays_gated`,
@@ -507,11 +507,11 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   `lambda_param_reuse_gated`. Positive cross-module control (must stay
   ACCEPTED): `and_map_cross_module_wrapper_accepted`.
 - **Revert-incident history (2026-07-10, THREE reverts before this landing).**
-  (1) `f80f05a` landed, reverted (`dbd876b`): the SKY-L0127 reuse gate was
+  (1) `f80f05a` landed, reverted (`dbd876b`): the IPE-L0127 reuse gate was
   wired at 4 call sites (Def params, `let`-bindings, match-arm bindings) but
   not at `lower_lambda`'s own parameters — `\mf -> consume mf + consume mf`
   with `mf : Maybe (Int -> Int)` reused the boxed closure twice and reached
-  `cargo build` as E0382; the SKY-L0114 curried-`andMap` gate also matched
+  `cargo build` as E0382; the IPE-L0114 curried-`andMap` gate also matched
   only two syntactic call shapes and was bypassed by a `let`-bound partial
   application (`let g = Result.andMap (Ok 1) in g (Ok add3)`), reaching
   `cargo build` as E0277. (2) `39d9a57` re-landed with both bugs fixed —
@@ -552,7 +552,7 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
 - **D1 — ambiguous instantiation fails closed.** Where the reference accepts
   via Go's `[]any` erasure (a use-site region still carrying a free type
   variable not covered by the enclosing def's own generics), ipê rejects with
-  SKY-L0102-ambiguous at the use span. **Sanctioned:** yes — matches the
+  IPE-L0102-ambiguous at the use span. **Sanctioned:** yes — matches the
   repo's "prefer concrete over generic codegen" rule; strictly the safer
   direction (under-acceptance, never a soundness hole).
 - **D2 — `Super`-bounded residual vars stay program-monomorphic in phase 1.**
@@ -593,7 +593,7 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   declared as a Rust generic absent from the resolved `params`/`ret` again.
   Both re-verified against the EXACT failing shape via a real `cargo build`
   + `cargo run` golden (`crates/skyc/tests/golden_class1_boundary_scheme_field_result.rs`,
-  `SKY_E2E=1`), not just a `sky_types` unit test — the original attempt's
+  `IPE_E2E=1`), not just a `sky_types` unit test — the original attempt's
   full `sky_types` unit-test matrix (including the obligation-gated
   single-record-type-cross-module-use case) passed despite the bug, because
   the defect is invisible to HM-level checks. Given that history, this
@@ -607,7 +607,7 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   polymorphic in its LIST-ELEMENT type (`evenLen`/`oddLen`/`listLen : List a ->
   Bool`, fuzzer seed 31348 `mmrecpair`) was correctly generalized by
   `sky_types` (`untyped_type_params` listed the element var), yet `skyc` FAILED
-  with SKY-L0102 at the `[] ->` arm. Root cause was NOT the boundary scheme but
+  with IPE-L0102 at the `[] ->` arm. Root cause was NOT the boundary scheme but
   a stale gate in `sky_lower::lower_case`: it rejected ANY list `case` binding a
   value (`_ :: rest`) whose element lowered to `IrType::Generic(_)`, on the now-
   false premise that "function generics emit bound-free" so the owned-rebind
@@ -621,7 +621,7 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   — removed. This turns a spurious under-acceptance into acceptance; the emitted
   Rust is a `Clone`-bounded generic monomorphized per use site. Re-verified via
   a real `cargo build` + `cargo run` golden
-  (`crates/skyc/tests/golden_i201_cross_module_poly_recursion.rs`, `SKY_E2E=1`,
+  (`crates/skyc/tests/golden_i201_cross_module_poly_recursion.rs`, `IPE_E2E=1`,
   prints `EO`) and the fuzzer (`scripts/fuzz-well-typed.sh --seed 31348`, now
   green).
 
@@ -636,7 +636,7 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   `Live.app` requires `init : LiveReq -> (Model, Cmd Msg)`, and
   `Tui.app`/`Tui.program`/`Webview.app` require `init : () -> (Model, Cmd Msg)`.
   A mismatch (`init : {} ->` on Live, or `init : LiveReq ->` on Tui) is a clear
-  compile-time SKY-T0001 (`expected LiveReq, found {}` / `expected (), found
+  compile-time IPE-T0001 (`expected LiveReq, found {}` / `expected (), found
   LiveReq`) at the `init` cfg field, not a raw unification failure and not a
   deferred `cargo` break. A `Live.app` init that declares polymorphic `init : a
   -> …` unifies `a` to `LiveReq` automatically (unchanged for the canonical
@@ -650,7 +650,7 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   server `Request`), but its fixed field set is READABLE via the deferred
   `FieldAccess` pass (`LiveReqFields`, mirroring `RequestFields`). A field access
   lowers to `(req).<field>.clone()` reading the struct directly — no synthesised
-  record. Record UPDATE on a `LiveReq` is rejected (SKY-T0017), exactly like
+  record. Record UPDATE on a `LiveReq` is rejected (IPE-T0017), exactly like
   `Request`.
 - **Rationale:** ambient input (env/args/cwd) is reached through `System.*` from
   anywhere; `init`'s argument carries ONLY genuine per-invocation context with
@@ -700,7 +700,7 @@ trap; and a typed jump vs a stringly sentinel.
 ### A4 — Closed typed kernel registry + fail-closed default
 ipê dispatches through a closed **424-variant** `KernelFn` enum with a typed
 `StdlibKernel` registry (`crates/sky_kernels`), indexed anti-drift from
-`StdlibKernel::ALL`; an unknown kernel fails **closed** with `SKY-L0108`. The
+`StdlibKernel::ALL`; an unknown kernel fails **closed** with `IPE-L0108`. The
 reference dispatches `(mod,name)` via a string `case` and falls **open** to a
 `toSnakeCase` default (`src/Sky/Generate/Rust/Builder/Kernel.hs:801-802`).
 *Rationale:* security → correctness — a fail-open snake_case default is the exact
@@ -793,7 +793,7 @@ cargo-culted back in.
 
 ### A12 — Fail-closed refutable function-argument patterns
 For a refutable function-arg pattern (`f (Just x) = …`) ipê refuses at lower
-(SKY-L0115/0116) and closes the gap via a front-end desugar to `case`. The
+(IPE-L0115/0116) and closes the gap via a front-end desugar to `case`. The
 reference synthesises a `let … else { panic! }` (a reachable `panic!`).
 *Rationale:* soundness — "no panic from well-typed Sky" outranks the completeness
 the reference gains. (Front-end desugar is the completeness close.)
@@ -838,14 +838,14 @@ not satisfy these bounds, so the emitted Rust fails `cargo build`. Because
 admissibility gates:
 
 - **#91 (shipped):** `check_admissible_model` in `emit_model_gate.rs:62` — gates
-  Model at `skyc`, emits `SKY-L0120` on a non-serde/non-Clone leaf. Verified:
+  Model at `skyc`, emits `IPE-L0120` on a non-serde/non-Clone leaf. Verified:
   `code.rs:198-200`, `emit_model_gate.rs`.
 - **#94 ✅ shipped (landed, corrected 2026-07-09):** `check_admissible_msg` in
   `emit_model_gate.rs:105` — gates Msg at `skyc` using `ir_type_is_derivable`
   for all three app shapes (NOT serde — Html is derivable and thus admissible
   as a Live Msg payload, unlike Live Model), called from `emit_live.rs:349` /
-  `emit_tui.rs:182` / `emit_webview.rs:137`. Emits `SKY-L0125`
-  (`InadmissibleAppMsg`) — NOT the originally-planned `SKY-L0121`, which was
+  `emit_tui.rs:182` / `emit_webview.rs:137`. Emits `IPE-L0125`
+  (`InadmissibleAppMsg`) — NOT the originally-planned `IPE-L0121`, which was
   reassigned in the interim to the unrelated `JsonDec.succeed` curry-arity
   gate. Regression: `crates/skyc/tests/msg_admissibility.rs` (7/7 green).
   Originally designed in `docs/architecture/seal-gates-msg-lambda-view-design.md §2`.
@@ -860,37 +860,37 @@ Go; the Rust backend's static bounds make the Go-dynamic path a `cargo`-fail.
 Gates at `skyc` convert the `cargo`-fail class into a clear user diagnostic.
 See `docs/architecture/seal-gates-msg-lambda-view-design.md §4`.
 
-### A16 — App cfg must be an inline record literal (SKY-L0119)
+### A16 — App cfg must be an inline record literal (IPE-L0119)
 The reference Go backend accepts any expression as the `Live.app` / `Tui.app` /
 `Webview.app` cfg argument, including a let-bound variable
 (`let cfg = { … } in Live.app cfg`). ipê's backend reads the cfg's fields
 (`init`, `update`, `view`, `subscriptions`, …) directly from the structural
 record at the call site; a non-literal argument (a `Var`, a pipe result, a
 function call) cannot be field-indexed at lower time, so it is rejected with
-`SKY-L0119` ("app entry cfg must be an inline record literal").
+`IPE-L0119` ("app entry cfg must be an inline record literal").
 
 *Rationale:* Rust-lowering constraint — the backend must structurally decompose
 the cfg record at lower time to emit the correct `live_app` call; a variable
 reference loses the field structure. The reference's Go backend reconstructs the
 cfg at runtime via reflection; ipê does not have that escape hatch.
-*Verified:* `code.rs:196`, `explain/SKY-L0119.md`, `emit_live.rs` (lookup_field).
+*Verified:* `code.rs:196`, `explain/IPE-L0119.md`, `emit_live.rs` (lookup_field).
 *Note:* let-bound-cfg support (`[feature: let-bound-app-cfg]` in the explain
 page) is a tracked future item — not a permanent limitation.
 
-### A17 — `Float` rejected as `Set` element or `Dict` key (SKY-L0117)
+### A17 — `Float` rejected as `Set` element or `Dict` key (IPE-L0117)
 Sky's type system treats `Float` as a `comparable` value, so the Sky type checker
 accepts `Set Float` / `Dict Float v` — the reference Go backend uses `interface{}`
 comparison and tolerates these at runtime. ipê backs `Set a` with
 `BTreeSet<a>` and `Dict k v` with `HashMap<k, v>`; Rust's `f64` implements
 neither `Ord` (NaN has no place in a total order) nor `Hash`/`Eq` (NaN != NaN).
 Emitting `BTreeSet<f64>` / `HashMap<f64, _>` would produce Rust that does not
-compile, so the case is rejected at lower with `SKY-L0117`.
+compile, so the case is rejected at lower with `IPE-L0117`.
 
 *Rationale:* Rust-substrate constraint, permanent. The NaN/ordering issue is a
 semantic property of IEEE 754 floating point that does not arise in Go's
 `interface{}`-keyed maps. The diagnostic is deliberate and named a divergence from
 Sky in its own explain page. *Verified:* `code.rs:192-194`,
-`explain/SKY-L0117.md`. Total-order `Float` set/dict (e.g. via an
+`explain/IPE-L0117.md`. Total-order `Float` set/dict (e.g. via an
 ordered-float wrapper) is a tracked future enhancement.
 
 ### A18 — `WsServerCfg` phantom `msg` type var dropped (D2)
@@ -978,7 +978,7 @@ API-shape review):
   pinned; `fail`'s pin closes the family. Regression:
   `crates/skyc/tests/golden_m5b_db.rs::db_transaction`,
   `crates/skyc/tests/golden_m5a_task.rs::{error_channel,
-  task_map_error_lambda}`, plus a negative `SKY-T0001` check-only test
+  task_map_error_lambda}`, plus a negative `IPE-T0001` check-only test
   (`Task.fail "oops"` must be rejected). **Sanctioned:** yes — the polymorphic
   reading was unimplementable on this backend; it only ever produced
   ill-typed Rust, never a working program.
@@ -990,7 +990,7 @@ API-shape review):
   (`Sky/Canonicalise/Expression.hs`) has no literal case: a digit-leading body
   becomes `Can.VarLocal "54"`, which surfaces downstream as a naming error (the
   interpolation grammar there is names-only). ipê's `constrain` treats an
-  unresolved local as a violated invariant (SKY-I0001 ICE), so without this the
+  unresolved local as a violated invariant (IPE-I0001 ICE), so without this the
   same program ICE'd rather than compiling. A Sky identifier can never start
   with a digit, so recognising the literal is unambiguous and strictly better
   (a well-typed program compiles instead of failing). **Sanctioned:** yes.
@@ -1007,7 +1007,7 @@ API-shape review):
 | Compiler host | Haskell, emits Go + Rust | Rust, emits Rust (`skyc`) | Single-language port |
 | IR | AST → string emitters | Typed `sky_ir::Expr` (two-stage) | Malformed shapes unrepresentable |
 | Tail-call jump | Stringly `__tco_jump__` sentinel; Rust backend has no TCO | Typed `TailRecur`/`TailLoop` IR → Rust `loop` | Constant stack; typed jump |
-| Kernel dispatch | `(mod,name)` case; fail-open `toSnakeCase` default | Closed 424-variant `KernelFn`; fail-closed `SKY-L0108` | No exit-0-then-cargo-fail class |
+| Kernel dispatch | `(mod,name)` case; fail-open `toSnakeCase` default | Closed 424-variant `KernelFn`; fail-closed `IPE-L0108` | No exit-0-then-cargo-fail class |
 | Type render | `_ -> "String"` fallback | `IrType → DResult`, closed, no default | Total by construction |
 | Record alias | superset-widen or `"String"` | exact sorted-key, `CompilerBug` on miss | Soundness > completeness |
 | Refutable arg pattern | synthesised `panic!` | fail-closed + desugar to `case` | No panic from well-typed code |
@@ -1023,13 +1023,13 @@ API-shape review):
 | Float sci-notation | exp ≥ 21 (reference Rust) | exp ≥ 6 (Go `%v` parity) — **confirmed vs Go 1.26.2 (#52)** | ipê matches Go; the reference's Rust fork diverges |
 | Clone strategy (non-`Copy` bindings) | use-count ≥ 2 → clone ALL reads (including last) | true last-use: clone all-but-last owned reads, last moves; borrow reads exempt | Rust move semantics; N−1 clones vs N |
 | As-pattern alias in match arm | drops alias name → E0425 on use (latent bug) | binds whole by move, reconstructs inner from clone | Correctness; reference latent bug fixed |
-| Model admissibility | dynamic (Go reflects at runtime; no compile-time gate) | static `SKY-L0120` gate at `skyc` | Rust static trait bounds (seal) |
-| Msg admissibility | dynamic (no compile-time gate) | static `SKY-L0121` gate (designed; pending impl) | Rust static trait bounds (seal) |
-| App cfg argument | any expression (let-bound variable OK) | must be an inline record literal (`SKY-L0119`) | Backend reads fields at lower time; no runtime reflection |
-| `Float` as `Set`/`Dict` key | accepted (Go `interface{}` comparison) | rejected `SKY-L0117` | `f64` lacks `Ord`/`Hash` in Rust |
+| Model admissibility | dynamic (Go reflects at runtime; no compile-time gate) | static `IPE-L0120` gate at `skyc` | Rust static trait bounds (seal) |
+| Msg admissibility | dynamic (no compile-time gate) | static `IPE-L0121` gate (designed; pending impl) | Rust static trait bounds (seal) |
+| App cfg argument | any expression (let-bound variable OK) | must be an inline record literal (`IPE-L0119`) | Backend reads fields at lower time; no runtime reflection |
+| `Float` as `Set`/`Dict` key | accepted (Go `interface{}` comparison) | rejected `IPE-L0117` | `f64` lacks `Ord`/`Hash` in Rust |
 | WS `sendBinaryToClient` arg type | `String` (Bytes alias) | `Vec<u8>` (distinct `Bytes` primitive) | B2 consequence; lossless binary frames |
 | WS send semantics | blocks ~30 s on full write buffer | bounded `try_send`; `Err` on full queue (B19) | Bounded fail-fast; no handler-task pileup |
-| WS Ping heartbeat | 30 s Ping + 10 s timeout | 30 s Ping (B20 closed #135); `SKY_WS_HEARTBEAT` override | Parity restored; axum auto-replies Pong |
+| WS Ping heartbeat | 30 s Ping + 10 s timeout | 30 s Ping (B20 closed #135); `IPE_WS_HEARTBEAT` override | Parity restored; axum auto-replies Pong |
 | `WsServerCfg` type params | `WebSocketServerCfg msg` (phantom var) | nullary opaque — `WsServerCfg<SkyError>` (A18) | Sub-tier phantom not needed; nullary is sounder |
 
 ---
@@ -1040,7 +1040,7 @@ API-shape review):
   last-use) and B17 (#99 alias bind) are pending fixture goldens. B3 RETIRED
   (task #55a) per inline note. B18–B20 are WS-server entries added with task
   #127. B20 CLOSED (#135) — Ping heartbeat ported. B21 is the #138
-  total-resolution gate (unknown-type → SKY-N0002 not ICE). **B22
+  total-resolution gate (unknown-type → IPE-N0002 not ICE). **B22
   RE-LANDED 2026-07-10** — the #90 ctor-payload-function lift was landed,
   reverted, re-landed, then reverted AGAIN the same day after a second
   independent review reproduced a THIRD seal violation in the curried-
@@ -1075,7 +1075,7 @@ API-shape review):
   type-var entry added with task #127.
 - **Stdlib/surface divergences:** 5 API-shape (added `Task` error-channel
   monomorphism, class-7 fix 2026-07-10) + 4 front-end capability gaps +
-  2 new gate-forced surface constraints (SKY-L0119, SKY-L0117).
+  2 new gate-forced surface constraints (IPE-L0119, IPE-L0117).
 
 ## Could not confirm / verify
 
@@ -1099,11 +1099,11 @@ API-shape review):
     renderers across the 4324-line module) — no typed-IR checkpoint. Confirms
     the A2 characterisation.
 
-- **SKY-L0121 (InadmissibleAppMsg) — PENDING IMPLEMENTATION.** The Msg-gate
+- **IPE-L0121 (InadmissibleAppMsg) — PENDING IMPLEMENTATION.** The Msg-gate
   design is complete (`docs/architecture/seal-gates-msg-lambda-view-design.md §2`)
   and the diagnostic code constant is reserved in the design, but as of this pass
-  `SKY_L0121` does not yet appear in `crates/sky_diagnostics/src/code.rs` (the
-  file has 79 taxonomy codes; `SKY-L0121` is not among them). A15 captures the
+  `IPE_L0121` does not yet appear in `crates/sky_diagnostics/src/code.rs` (the
+  file has 79 taxonomy codes; `IPE-L0121` is not among them). A15 captures the
   designed behaviour; mark as asserted-pending-impl until the code lands.
 
 - **"Nominal (home, name) identity types #100" — NOT VERIFIED AS SKY DIVERGENCE.**
@@ -1136,8 +1136,8 @@ API-shape review):
   `.parse::<f64>()`/`s == "true"` expressions that decode at the call site. For
   payloads of any other type, the reference emits a String and relies on the
   Go runtime to coerce; ipê rejects at compile time with a `Diagnostic::CompilerBug`
-  (to be upgraded to the reserved diagnostic code `SKY-L0123` in a follow-up
-  task — NOT `SKY-L0121`, which is owned by the #94 `InadmissibleAppMsg` gate;
+  (to be upgraded to the reserved diagnostic code `IPE-L0123` in a follow-up
+  task — NOT `IPE-L0121`, which is owned by the #94 `InadmissibleAppMsg` gate;
   see `docs/architecture/design-coherence-review.md` §C1). The same follow-up
   covers the sibling fail-closed arm added in #108 round 4: a route page
   builder that is neither a page constructor, an inline lambda, nor a named
@@ -1176,7 +1176,7 @@ API-shape review):
   `payloadDict : Dict String String` and the subscriber decodes with
   `Db.getString`; the round-trip is semantically equivalent.  Programs that
   use the payload directly as a non-Dict type (e.g. passing it to
-  `String.length`) are now rejected at type-check with SKY-T0001 — a
+  `String.length`) are now rejected at type-check with IPE-T0001 — a
   correctness gain over Go's silent runtime failure.
 - **Rationale:** concrete-over-generic contract + `Clone/Debug/PartialEq` seal.
   The `any` wildcard has exactly one concrete lowering in pub/sub payload
@@ -1196,7 +1196,7 @@ API-shape review):
 - **Go-oracle relationship:** Go succeeds for any claims shape (record, map,
   scalar); ipê accepts only a `Dict String String` claims argument (and returns
   the same on verify). A well-typed Sky program passing a record literal or
-  other non-Dict shape as claims is now REJECTED at type-check (SKY-T0001-class)
+  other non-Dict shape as claims is now REJECTED at type-check (IPE-T0001-class)
   instead of silently miscompiling — the AUD-06 seal fix this entry documents
   closed an exit-0-then-cargo-fail hole where `var(0)` unified with anything
   while the emitted runtime wrapper (`AUTH_WRAPPERS` in
@@ -1293,7 +1293,7 @@ API-shape review):
   `ErrorInfo` are NOMINAL opaque builtin types (backed by the runtime's
   `SkyPanicInfo`/`SkyTypeInfo`/`SkyErrorInfo` structs), not anonymous
   structural records. Raw record-literal construction is a LOUD `skyc`-time
-  SKY-T0001 rejection — before the fix it was silently accepted and the
+  IPE-T0001 rejection — before the fix it was silently accepted and the
   emitted project failed `cargo build` (E0308: the literal lowered to a
   project-local synthesized struct), an exit-0-then-cargo-fail that was
   temporarily mis-filed here as a sanctioned divergence. Field access on the
@@ -1341,7 +1341,7 @@ API-shape review):
   precedence bugs are unrepresentable and a `SqlFragment`'s `sql` text is
   always `?`-placeholder text with a matching `binds` list. `Db.findWhere` /
   `Db.deleteWhere` take `SqlFragment`, not `String` — a naive
-  string-concatenated WHERE clause is now a `skyc` compile-time `SKY-T0001`
+  string-concatenated WHERE clause is now a `skyc` compile-time `IPE-T0001`
   type mismatch, never a runtime value. `Db.unsafeFindWhere` (and its runtime
   `db_unsafe_find_where`) is REMOVED, not deprecated — the security-tier
   no-deferral rule (`CLAUDE.md` / `PRINCIPLES.md`) treats "keep the raw-SQL
@@ -1393,7 +1393,7 @@ API-shape review):
   enforcement section); no Go counterpart type exists (`oracle_divergence =
   true` on every new golden). `Secret` is `Clone + PartialEq` (derivable) but
   deliberately NOT `serde` — this is ALSO the mechanism that makes a
-  `Std.Live` Model field of type `Secret` a compile-time `SKY-L0120`
+  `Std.Live` Model field of type `Secret` a compile-time `IPE-L0120`
   (never a session-store leak): `ir_type_is_serde(Secret) = false` gates the
   Live Model exactly like it gates `SqlFragment`. A record containing a
   `Secret` field stays fully `Clone`/`Debug`/`==` (the #45/#70
@@ -1488,31 +1488,31 @@ API-shape review):
   `ModuleExports.kernel_aliases` map.
 - **Fail-closed (SEAL):** a pair the registry does NOT cover — or a malformed
   string with no usable `_` split — is rejected at compile time with
-  `NameError::UnknownKernelAlias` (**SKY-N0028**), never emitted as a call to a
+  `NameError::UnknownKernelAlias` (**IPE-N0028**), never emitted as a call to a
   non-existent kernel that would type-check in `skyc` yet fail the downstream
   `cargo build`. This is the "make invalid states unrepresentable" rule applied
   to the kernel-alias path: `skyc` acceptance is a structural proof the kernel
   exists. Regression: `crates/skyc/tests/golden_ffi_kernel_alias_seal.rs`
-  (unknown → SKY-N0028; malformed → SKY-N0028; registered `String_toUpper` →
+  (unknown → IPE-N0028; malformed → IPE-N0028; registered `String_toUpper` →
   skyc-0 AND cargo-0).
 - **Layered fail-closed for arity/lowering gaps:** because ipê types the alias's
   *body* via the kernel's HM scheme (not a flexible var — a flexible var would be
   the exact exit-0-then-cargo-fail hole the SEAL forbids), an alias whose declared
-  annotation arity differs from the kernel's scheme is rejected with **SKY-T0001**
-  at type-check, and a kernel with no lowering arm is rejected with **SKY-L0108**
+  annotation arity differs from the kernel's scheme is rejected with **IPE-T0001**
+  at type-check, and a kernel with no lowering arm is rejected with **IPE-L0108**
   at lowering. Both are clean `skyc`-time rejections — no cargo-fail. Consequence:
   some upstream compiled-source modules stay kernel-blocked on ipê until their
   Rust kernels (and, where the annotation diverges from the kernel scheme, the
   matching lowering) exist:
-  - **Registry-blocked (no `StdlibKernel` variant, SKY-N0028):** `Std.Trace`,
+  - **Registry-blocked (no `StdlibKernel` variant, IPE-N0028):** `Std.Trace`,
     `Std.Cache`, `Std.Csv`, `Std.Email`, `Std.Compression`, `Std.Config`,
     `Sky.Core.WebSocket` (incl. its `Sub_subscribeWebSocket`).
-  - **Lowering-blocked (kernel in the registry but no lower/emit arm, SKY-L0108
+  - **Lowering-blocked (kernel in the registry but no lower/emit arm, IPE-L0108
     / emit `CompilerBug`):** *(none — backlog #215 resolved `Std.PubSub`: it now
     emits `pubsub_publish::<_, SkyError>(topic, payload)` with scheme
     `String -> a -> Task Error Int`; skyc-0 AND cargo-0 guaranteed.  The payload
     `a` is a genuine monomorphized type var, never erased.)*
-  - **Arity-blocked (SKY-T0001):** `Sky.Core.Pure`'s internal `uuidV4Kernel` /
+  - **Arity-blocked (IPE-T0001):** `Sky.Core.Pure`'s internal `uuidV4Kernel` /
     `uuidV7Kernel` helpers annotate an arity-0 `Task Error String` value over the
     arity-1 `Uuid_v4`/`Uuid_v7` kernels (`() -> Task Error String`). Go's
     `func() any` runtime boundary absorbs the arity difference; Rust's
@@ -1525,7 +1525,7 @@ API-shape review):
   resolve.rs` (`detect_kernel_alias`, `KernelAlias`, in-module + dep injection),
   `crates/sky_canon/src/lib.rs` (`ModuleExports.kernel_aliases`,
   `ExportedKernelAlias`), `crates/sky_diagnostics/src/{code,diagnostic,render}.rs`
-  + `explain/SKY-N0028.md`.
+  + `explain/IPE-N0028.md`.
 
 ### B-UiEventsFnArg — `Std.Ui.Events.onSubmit`/`onInput` take a handler function, not a bare Msg
 
@@ -1619,7 +1619,7 @@ them (`A | B if cond -> …`, guard applies to the whole or-pattern) and maps
 1:1 to Rust match guards. **Soundness floor (load-bearing):** a guarded arm
 does NOT contribute to exhaustiveness (the guard may be false) — the Maranget
 check must treat guarded rows as non-covering, requiring an unguarded/
-wildcard fallback else **SKY-T0010**, caught BEFORE emit (Rust would
+wildcard fallback else **IPE-T0010**, caught BEFORE emit (Rust would
 otherwise reject the guard-only match as E0004 = exit-0-then-cargo-fail).
 Guards also affect redundancy (a guard can make a shadowed later arm
 reachable). Implement together with 6.3. Filed 2026-06-28 (user-approved);
@@ -1690,7 +1690,7 @@ per-site suppression (its `Sky/Lsp/Diag.hs` republishes compiler diagnostics
 only). ipê adds `ipe lint`, an elm-review/clippy-class static-analysis tool
 over the compiler's own artifacts (parse AST + canon AST + `SolvedTypes` —
 never a second analyzer): visitor-schema rules in a new `sky_lint` crate,
-dual `SKY-W####`+kebab-name identity, `allow`/`warn`/`deny` levels via
+dual `IPE-W####`+kebab-name identity, `allow`/`warn`/`deny` levels via
 `sky.toml [lint]`, per-site `-- @allow(<rule>) <reason>` directives with a
 mandatory reason (an unused directive is itself a lint), autofix via the
 existing `Suggestion`/`Applicability` machinery with a verify-then-write

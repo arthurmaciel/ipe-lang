@@ -12,7 +12,7 @@ referenced, not restated in full.
 
 Companion designs integrated as LSP surfaces:
 `ipe-lint-tool-design-2026-07-16.md` (lint diagnostics + quick-fixes),
-`exhaustive-case-finite-adt-design-2026-07-16.md` (SKY-T0018 + the
+`exhaustive-case-finite-adt-design-2026-07-16.md` (IPE-T0018 + the
 expand/add-arms/keep-open code actions),
 `salsa-incremental-compilation-2026-07-11.md` (the query layer, esp. §15's
 LSP seam) and `incremental-compilation-and-watch.md` (INV-1..5, H-ledger).
@@ -71,7 +71,7 @@ the production `skyc` path:
 |---|---|
 | Inputs | `SourceFile { module_path, text, origin }`, `SourceRoot { files }`, `BuildConfig`; driver helpers `set_text_if_changed` (byte-equal no-op) + `sync_source_root` (file-set reconciliation) |
 | Front | `parse`, `imports` (topo scan), `resolve_imports` (closed enum `Resolved | Unresolved`; `Ambiguous` unrepresentable by input shape), `canonicalize`, `module_interface` (backdating firewall: body-only edits don't re-canon importers), `identifier_words` |
-| Spine | `topo_order` (cycle = SKY-N0021 as a value), `linked_program`, `kernel_types`, `typecheck`, `lower_program`, `program_metadata` |
+| Spine | `topo_order` (cycle = IPE-N0021 as a value), `linked_program`, `kernel_types`, `typecheck`, `lower_program`, `program_metadata` |
 | Emit | `emit_project`, `program_rust_file_ids`, `emit_spine_file`, `emit_rust_file`, `emit_manifest` |
 
 Load-bearing properties the LSP builds on, each already proven by test:
@@ -99,7 +99,7 @@ Load-bearing properties the LSP builds on, each already proven by test:
   correctness dependency** — handlers consume the query by name, so the
   granularity refinement lands later with zero handler changes.
 
-**Diagnostics infrastructure.** `sky_diagnostics` has stable `SKY-*`
+**Diagnostics infrastructure.** `sky_diagnostics` has stable `IPE-*`
 codes; `explain_page(Code)`/`title(Code)` with a drift test that every
 code has a conforming page; `HelpLine::Suggest(Suggestion { span,
 replacement, applicability })` with `Applicability
@@ -278,7 +278,7 @@ it; bold = we exceed the reference on that row.
 | 19 | **Document links** (`import Foo.Bar` → file) | `resolve_imports` | resolved edges only | 1 | — |
 | 20 | **Call hierarchy** (prepare/incoming/outgoing) | `collect_references` + the call edges `program_metadata` already walks | exhaustive IR walkers exist | 4 | — |
 | 21 | Code actions (+resolve): compiler-fix surfacing | `Suggestion`/`Applicability` on diagnostics | compiler's own confidence model; `MachineApplicable` → preferred fix | 2 | R (2 fixes) |
-| 22 | **Code actions: SKY-T0018 family** — expand catch-all (MachineApplicable), add missing arms from witnesses (HasPlaceholders), keep-open directive | witness machinery from `sky_types::exhaust` (companion design §7) | message and fix share one witness list — cannot disagree | 4 | — |
+| 22 | **Code actions: IPE-T0018 family** — expand catch-all (MachineApplicable), add missing arms from witnesses (HasPlaceholders), keep-open directive | witness machinery from `sky_types::exhaust` (companion design §7) | message and fix share one witness list — cannot disagree | 4 | — |
 | 23 | **Code actions: lint quick-fixes + @allow suppression action** | `sky_lint` findings (Diagnostic::Lint) when it lands | lint = third consumer of compiler artifacts; fixes gated | 4 | — |
 | 24 | **TEA scaffolding**: snippet catalog + program-reading actions (add Msg variant + arm; add subscription; scaffold app; convert to worker) | `canonicalize`/`typecheck` + structured AST insertion | every action through the `VerifiedEdit` gate; snippets golden-tested at their honest bar (L-M) | 5 | — |
 | 25 | **Rename** (prepareRename + project-wide) | `collect_references` + `VerifiedEdit` over full blast radius | refuses kernel/FFI/reserved targets; post-edit program typechecks or no edit exists | 4 | R (ungated) |
@@ -407,7 +407,7 @@ def granularity. This makes the reachability analysis the compiler already
 computes visible in the editor — a small feature with outsized "the
 compiler is alive" effect.
 
-**SKY-T0018 + lint actions (rows 22–23).** The companion designs already
+**IPE-T0018 + lint actions (rows 22–23).** The companion designs already
 specify the actions and pin their inputs to the compiler's witness
 machinery (message and fix cannot disagree). The LSP work is surfacing
 only: findings arrive as `Diagnostic`s on the one channel; fixes arrive as
@@ -526,7 +526,7 @@ property; ranked-list golden; fallback-to-scope-only when unconstrained.
 
 `sky_lsp_edits`: the `VerifiedEdit` type + blast-radius closure
 (built and tested before any producer); rename + prepareRename; call
-hierarchy; the SKY-T0018 action family (expand catch-all / add missing
+hierarchy; the IPE-T0018 action family (expand catch-all / add missing
 arms / keep-open) as the exhaustiveness design lands; lint quick-fix
 surfacing when `sky_lint` lands (both degrade gracefully to "not yet
 offered" if their compiler-side dependency hasn't merged — the surfacing
@@ -628,7 +628,7 @@ implies "it compiles" — proven by types, gates, and CI, not by intent.*
 | F-4 | Any code lens that runs project code ("run main", "run test") | violates G5 (the server executes no project code); even client-executed commands normalize a run-from-editor path we haven't threat-modeled | v1 ships at most the display-only reference-count lens, default off; run lenses need their own security design first |
 | F-5 | Partial-buffer result *quality* | `sky_parse` error recovery is best-effort today | no-crash holds unconditionally (G3 layers 2–3); recovery-quality improvements are additive and tracked on the parser, not the LSP |
 | F-6 | Settled-edit diagnostics latency on large projects | `typecheck` is whole-program-coarse | correct today, honest in docs; per-module `typecheck` (salsa doc §9.4) is the tracked unlock — zero handler changes when it lands |
-| F-7 | Lint + SKY-T0018 surfacing | companion designs not yet implemented | LSP surfacing code is additive; rows 22–23 activate when their compiler-side dependencies merge |
+| F-7 | Lint + IPE-T0018 surfacing | companion designs not yet implemented | LSP surfacing code is additive; rows 22–23 activate when their compiler-side dependencies merge |
 
 ---
 

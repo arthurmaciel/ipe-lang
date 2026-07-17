@@ -46,17 +46,17 @@ rules. The tooling:
 **Compiler pipeline (acyclic crate stages):** `sky_parse` → `sky_canon` (name
 resolve) → `sky_types` (HM infer/constrain) → `sky_lower` (AST→IR) → `sky_ir`
 → `sky_backend_rust` (emit Rust). Support crates: `sky_kernels` (kernel
-table), `sky_diagnostics` (SKY-* codes + `explain/*.md`), `sky_db` (salsa
+table), `sky_diagnostics` (IPE-* codes + `explain/*.md`), `sky_db` (salsa
 incremental DB), `sky_intern`, `sky_watch`; `skyc` = driver + CLI. Runtime
 impls live in `runtime/src/sky_runtime/`.
 
 **skyc CLI:** subcommands `build` / `run` / `watch` / `explain` / `fix`.
 `skyc build <src/Main.sky | sky.toml> --out sky-out/rust`. Binary =
 `target/release/skyc` (`cargo build --release -p skyc`);
-`source scripts/lib/env.sh` sets `SKYC_BIN` + `SKY_RUNTIME_DIR`.
+`source scripts/lib/env.sh` sets `SKYC_BIN` + `IPE_RUNTIME_DIR`.
 
 **Registering a kernel = update ALL anti-drift sites** (type-checker enforces
-most; miss one → SKY-N0028 / SKY-L0108 / a drift test): `sky_kernels` (enum +
+most; miss one → IPE-N0028 / IPE-L0108 / a drift test): `sky_kernels` (enum +
 `decl()` + `ALL`), `sky_types::constrain` (type-scheme + `FIRST_SCHEMED`, out
 of the `KNOWN_UNBACKED` bucket), `sky_lower` (arity table +
 `REGISTRY_ONLY_ALLOWLIST` for alias-only kernels),
@@ -71,17 +71,17 @@ resolve is auto-included; adding the dir IS the registration.
 `scripts/equivalence-checks/examples-sweep.sh`, per example: `skyc build … --out sky-out/rust` →
 `cargo build --manifest-path sky-out/rust/Cargo.toml` → run
 `sky-out/rust/target/debug/sky-app`. VERDICT PASS iff zero red rows. Modes:
-`SKY_SWEEP_BUILD_ONLY=1` (compile only), `SKY_SWEEP_NO_EQUIV=1` (build+run, no
+`IPE_SWEEP_BUILD_ONLY=1` (compile only), `IPE_SWEEP_NO_EQUIV=1` (build+run, no
 Go), default (+ Go≡Rust via cached `expected_go.txt`).
 
 **Emitted project:** `sky-out/rust/` = a Cargo project with the runtime
-vendored into `src/sky_runtime/` (skyc copies from `SKY_RUNTIME_DIR`), default
+vendored into `src/sky_runtime/` (skyc copies from `IPE_RUNTIME_DIR`), default
 binary `sky-app`, edition 2024.
 
 **Golden tests** (`crates/skyc/tests/golden_*.rs`): a golden =
 `tests/golden/<name>/Main.sky` + `main.rs` (expected emit, **byte-compared**)
 + a cached Go oracle (`expected_go.txt` / `oracle.meta`). Default run =
-byte-identity of the emit (fast, no cargo). `SKY_E2E=1` = build+run the
+byte-identity of the emit (fast, no cargo). `IPE_E2E=1` = build+run the
 emitted project (THE SEAL: skyc-0 ⇒ cargo-0). Oracle files are regenerated
 ONLY by `cargo run -p refresh-oracle -- <golden>` — NEVER hand-edited.
 
@@ -93,7 +93,7 @@ raising `jobs` multiplies per lane → OOM). **Never override `RUSTFLAGS`** —
 the config's `mold`-only flags ARE the sccache cache key; extra flags fork the
 key → cold recompiles + more RAM pressure. All cargo targets live under
 `~/.cache/ipe/` (write-boundary — `PRINCIPLES.md`); E2E emitted builds use
-`SKY_ORACLE_SHARED_TARGET`. `cargo nextest run -p skyc` recompiles ALL ~155
+`IPE_ORACLE_SHARED_TARGET`. `cargo nextest run -p skyc` recompiles ALL ~155
 skyc test binaries — scope to `--test <name>` when you need one.
 
 ### 1. Memory safety — `scripts/guards/mem-guard.sh` MUST run during dev
@@ -158,7 +158,7 @@ A hung test/build is a silent task waster. Rules:
   `skyc run` / `skyc watch`) wraps the child in `timeout`. A step that doesn't
   time out cannot be re-run.
 - **Example sweep** already bounds every stage: skyc build `timeout
-  ${SKY_SWEEP_BUILD_TIMEOUT:-900}`, `cargo build` `timeout 900`, emitted-app
+  ${IPE_SWEEP_BUILD_TIMEOUT:-900}`, `cargo build` `timeout 900`, emitted-app
   run `timeout 8` (`exercise_cli` in `scripts/lib/checks.sh`) — don't remove or
   widen without a real reason.
 - **Background shell commands** waiting on a process MUST `kill -KILL` after a
@@ -179,13 +179,13 @@ full-gate-certified sha.
 **Cheap gate (`lane_gate`)** — merges the lane into the integration worktree,
 then checks + tests + lints ONLY the touched crates:
 - `cargo +nightly check -p skyc`
-- `cargo +nightly nextest run <-p touched-crates>` (scoped; no `SKY_E2E`)
+- `cargo +nightly nextest run <-p touched-crates>` (scoped; no `IPE_E2E`)
 - `cargo +nightly clippy <-p touched-crates> --no-deps -- -D warnings`
 
 **Full gate (`full_gate` via `certify_batch`)** — every
 `PROGDEV_FULL_GATE_EVERY` cycles (default 10) OR the instant pending work
 drains:
-- `cargo +nightly nextest run --workspace` (+ `SKY_ORACLE_SHARED_TARGET` for E2E)
+- `cargo +nightly nextest run --workspace` (+ `IPE_ORACLE_SHARED_TARGET` for E2E)
 - `cargo +nightly nextest run -p sky-runtime-rust --features full`
   (LOAD-BEARING — mirror of CI's `runtime-full-features`)
 - `cargo +nightly test --workspace --doc`
@@ -234,7 +234,7 @@ explicit user override ships a known issue) is `PRINCIPLES.md` §0. Mechanics:
   keeps the gate + oracle + warm `lane-*` targets and reaps the rest, AND
   sweeps stray cargo targets under `~/.cache/*target*` or `/tmp`
   (pgrep-guarded). Every dispatched-agent brief MUST set `CARGO_TARGET_DIR`
-  (and `SKY_ORACLE_SHARED_TARGET`) under `~/.cache/ipe/`.
+  (and `IPE_ORACLE_SHARED_TARGET`) under `~/.cache/ipe/`.
 
 **Pre-build disk check — BEFORE any full build/test suite/example sweep.**
 `df -h /`; if <~15–20 GB free, reclaim first: `rm -rf "$CARGO_TARGET_DIR"`,
@@ -322,7 +322,7 @@ mid-build leaves half-written artifacts worse than a clean rebuild.
   the failing test is the discovery artefact.
 - **`crates/*/tests/*.rs`** (incl. `crates/skyc/tests/golden_*.rs`) for
   compile-time + codegen behaviour; **`runtime/tests/*.rs`** for runtime-kernel
-  soundness/parity; goldens are byte-compared and `SKY_E2E=1` builds+runs the
+  soundness/parity; goldens are byte-compared and `IPE_E2E=1` builds+runs the
   emitted project (THE SEAL).
 - **Runtime verification.** The example sweep (`scripts/equivalence-checks/examples-sweep.sh`)
   builds AND runs each example, then diffs Rust≡Go stdout/body via the cached
@@ -333,7 +333,7 @@ mid-build leaves half-written artifacts worse than a clean rebuild.
 ### Release checklist (non-negotiable)
 
 1. Rebuild the driver: `cargo build --release -p skyc`; `source
-   scripts/lib/env.sh` exports `SKYC_BIN` + `SKY_RUNTIME_DIR`.
+   scripts/lib/env.sh` exports `SKYC_BIN` + `IPE_RUNTIME_DIR`.
 2. Full gate green — the ONE authoritative run (§3b): `cargo +nightly nextest
    run --workspace`, `cargo +nightly nextest run -p sky-runtime-rust --features
    full`, `cargo +nightly test --workspace --doc`, `cargo +nightly clippy

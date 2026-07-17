@@ -1,7 +1,7 @@
 //! Tuple-pattern shapes. Both shapes are MODELLED end-to-end by the
 //! tuple-pattern lowering plus the `ipe_types::exhaust` exhaustiveness/redundancy
 //! engine (a shape the lowerer cannot model surfaces a clean, span-carrying
-//! SKY-L0115 — never a panic, an internal compiler bug, or silent refutable
+//! IPE-L0115 — never a panic, an internal compiler bug, or silent refutable
 //! cargo-failing Rust). These tests pin the verified-correct behaviour:
 //!
 //! * a `case` on a tuple with MORE THAN ONE arm whose first arm is irrefutable
@@ -13,7 +13,7 @@
 //!   `match pair { (MainOpt::Som(x), b) => …, (MainOpt::Non, b) => … }`.
 //!
 //! Each is driven through the full `skyc` pipeline; the build MUST SUCCEED (no
-//! SKY-L0115, no other diagnostic) and — behind `SKY_E2E=1` — the emitted crate
+//! IPE-L0115, no other diagnostic) and — behind `IPE_E2E=1` — the emitted crate
 //! MUST build with cargo and print the reference value `3`. The anti-goal the
 //! original gate guarded against (silent, cargo-FAILING refutable Rust) is
 //! covered by the E2E build+run: were an arm dropped unsoundly or a refutable
@@ -50,7 +50,7 @@ fn build_ok(fixture: &str, out_suffix: &str) -> Option<PathBuf> {
     Some(out)
 }
 
-/// Behind `SKY_E2E=1`, build the emitted crate with cargo and assert stdout is
+/// Behind `IPE_E2E=1`, build the emitted crate with cargo and assert stdout is
 /// exactly `3\n`. This is the load-bearing soundness check: a dropped or
 /// non-exhaustive match arm would make cargo reject the crate (or change the
 /// printed value), so a green here proves the lowering is correct, not merely
@@ -60,7 +60,7 @@ fn build_ok(fixture: &str, out_suffix: &str) -> Option<PathBuf> {
 // lowering under test, so aborting is the correct failure signal.
 #[allow(clippy::expect_used)]
 fn assert_e2e_prints_three(out: &Path) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let output = Command::new("cargo")

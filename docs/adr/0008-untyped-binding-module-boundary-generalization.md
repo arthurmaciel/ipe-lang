@@ -48,7 +48,7 @@ Rejected alternatives:
 - `Super`-bounded and rigid-contaminated defs stay program-monomorphic (an
   under-acceptance deferred to a later phase — the safe direction).
 - Ambiguous instantiation (a use-site region with free vars not covered by the
-  enclosing def's own generics) fails closed with `SKY-L0102` — stricter than
+  enclosing def's own generics) fails closed with `IPE-L0102` — stricter than
   the reference, sanctioned under "prefer concrete codegen."
 - **Invariant that must keep holding:** the quantified-var population never
   collides with `Ty::Var` or union-find representatives; nothing is copied

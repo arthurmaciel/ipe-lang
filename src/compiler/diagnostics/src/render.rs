@@ -130,7 +130,7 @@ pub fn render(d: &Diagnostic, file: &str, source: &str) -> String {
             footer.push(text);
         }
     }
-    // Humble messaging: an internal compiler error (every `SKY-I*`) is a gap in
+    // Humble messaging: an internal compiler error (every `IPE-I*`) is a gap in
     // Sky, not the reader's fault. Apologise plainly, Elm-style, and point at
     // the one issue tracker — never a raw backtrace, never false confidence.
     if severity == Severity::Bug {
@@ -588,7 +588,7 @@ fn hint_text(hint: Hint) -> String {
             "add a top-level type signature, e.g. `f : Int -> Int`".to_string()
         }
         Hint::RaiseSolverBudget => {
-            "raise the budget with `SKY_SOLVER_BUDGET=<n>` (0 disables the limit)".to_string()
+            "raise the budget with `IPE_SOLVER_BUDGET=<n>` (0 disables the limit)".to_string()
         }
         Hint::NestingBoundDeliberate => {
             "this limit is deliberate, to fail fast on pathologically nested input".to_string()
@@ -672,7 +672,7 @@ const fn feature_label(f: Feature) -> &'static str {
              element is not supported yet, and an `andMap` chain applying a curried \
              (2-or-more-argument) function needs curried-payload support that is not \
              implemented yet — this is a lowering-time backstop; the primary check is \
-             a type error (SKY-T0014) [feature: ctor-payload-function]"
+             a type error (IPE-T0014) [feature: ctor-payload-function]"
         }
         Feature::TuplePatternMatch => {
             "a tuple pattern is supported only as a single irrefutable destructure \
@@ -938,7 +938,7 @@ fn ty_fun_lhs(t: &TyDoc) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::code::{SKY_I0001, SKY_N0001, SKY_P0050, SKY_T0001};
+    use crate::code::{IPE_I0001, IPE_N0001, IPE_P0050, IPE_T0001};
     use crate::diagnostic::{Diagnostic, Expected, ExpectedSet, ParseError};
 
     fn con(name: &str) -> TyDoc {
@@ -969,7 +969,7 @@ mod tests {
         let out = render(&d, "test.sky", src);
 
         assert!(
-            out.starts_with("error[SKY-T0001]: type mismatch\n"),
+            out.starts_with("error[IPE-T0001]: type mismatch\n"),
             "header:\n{out}"
         );
         assert!(out.contains("--> test.sky:4:5"), "location:\n{out}");
@@ -979,7 +979,7 @@ mod tests {
             "underline:\n{out}"
         );
         assert!(
-            out.contains("= note: run `skyc explain SKY-T0001` for more information"),
+            out.contains("= note: run `skyc explain IPE-T0001` for more information"),
             "footer:\n{out}"
         );
         // No ANSI in the non-tty test environment.
@@ -1033,7 +1033,7 @@ mod tests {
         };
         let out = render(&d, "test.sky", "anything");
 
-        assert!(out.starts_with("internal compiler error[SKY-I0001]: internal compiler error\n"));
+        assert!(out.starts_with("internal compiler error[IPE-I0001]: internal compiler error\n"));
         // No location / snippet band for a DUMMY span.
         assert!(!out.contains("-->"), "no location:\n{out}");
         assert!(!out.contains(" | "), "no snippet:\n{out}");
@@ -1042,8 +1042,8 @@ mod tests {
             "detail surfaced:\n{out}"
         );
         assert!(out.contains("= note: this is a bug in Sky, please report it"));
-        assert!(out.contains("= note: run `skyc explain SKY-I0001` for more information"));
-        let _ = SKY_I0001;
+        assert!(out.contains("= note: run `skyc explain IPE-I0001` for more information"));
+        let _ = IPE_I0001;
     }
 
     #[test]
@@ -1081,7 +1081,7 @@ mod tests {
             msg: TypeError::Mismatch,
         };
         let out = render(&d2, "empty.sky", "");
-        assert!(out.contains("error[SKY-T0001]"));
+        assert!(out.contains("error[IPE-T0001]"));
     }
 
     #[test]
@@ -1099,7 +1099,7 @@ mod tests {
             out.contains("- the unclosed delimiter opened here"),
             "secondary:\n{out}"
         );
-        let _ = SKY_P0050;
+        let _ = IPE_P0050;
     }
 
     #[test]
@@ -1117,7 +1117,7 @@ mod tests {
         assert!(first < second, "producer order preserved:\n{out}");
         // Stable across runs: re-render must be byte-identical.
         assert_eq!(out, render(&d, "n.sky", "lenght\n"));
-        let _ = SKY_N0001;
+        let _ = IPE_N0001;
     }
 
     #[test]
@@ -1150,10 +1150,10 @@ mod tests {
         };
         let out = render(&d, "w.sky", "Red\n");
         assert!(
-            out.starts_with("warning[SKY-T0011]: redundant case branch\n"),
+            out.starts_with("warning[IPE-T0011]: redundant case branch\n"),
             "{out}"
         );
-        let _ = SKY_T0001;
+        let _ = IPE_T0001;
     }
 
     #[test]
@@ -1194,7 +1194,7 @@ mod tests {
         // Footer still ends with the explain pointer.
         assert!(
             out.trim_end()
-                .ends_with("note: run `skyc explain SKY-I0001` for more information"),
+                .ends_with("note: run `skyc explain IPE-I0001` for more information"),
             "explain pointer last:\n{out}"
         );
     }

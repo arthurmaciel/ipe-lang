@@ -17,7 +17,7 @@
 //! Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test golden_m6_server
+//! IPE_E2E=1 cargo test golden_m6_server
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -41,7 +41,7 @@ fn repo_root() -> PathBuf {
 /// * `server_param(…, …clone())` / `server_get_cookie(…, …clone())`
 #[test]
 fn server_request_accessor_emit_inserts_clone() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -5,7 +5,7 @@
 //! gate, a Msg storing a non-admissible value (`Cmd` / `Sub` / `Task` /
 //! `Decoder` / `Db` / a function) makes `skyc` exit 0 and then `cargo build`
 //! fail on the missing trait bound. The gate converts that into a fail-closed
-//! `SKY-L0125` diagnostic.
+//! `IPE-L0125` diagnostic.
 //!
 //! KEY ASYMMETRY: `Html`-carrying Msg MUST be ACCEPTED. The predicate is
 //! `ir_type_is_derivable` (NOT serde) — `Html` derives Clone+Debug+PartialEq
@@ -14,7 +14,7 @@
 //!
 //! These tests are COMPILE-ONLY (they run the `skyc` pipeline + write the
 //! project, but never invoke `cargo`), so they are fast and NOT gated on
-//! `SKY_E2E`.
+//! `IPE_E2E`.
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
@@ -63,7 +63,7 @@ fn assert_accepted(test_name: &str, source: &str) -> Result<(), BoxError> {
 
 // ── Rejection fixtures ────────────────────────────────────────────────────────
 
-/// `Sky.Live` app: Msg variant carries a `Cmd`. Must be rejected with SKY-L0125.
+/// `Sky.Live` app: Msg variant carries a `Cmd`. Must be rejected with IPE-L0125.
 const LIVE_CMD_MSG: &str = r"module Main exposing (main)
 
 import Std.Live as Live
@@ -105,9 +105,9 @@ main =
 /// `Sky.Live` app: Msg variant carries a function. A declared function-typed
 /// payload is sound on its own (derive-demotion keeps the emitted enum's
 /// derives correct), so it is NOT rejected at the declaration site
-/// (`SKY-L0114`); it falls through to the MORE PRECISE Msg-admissibility
+/// (`IPE-L0114`); it falls through to the MORE PRECISE Msg-admissibility
 /// gate: `Msg` fails the runtime's `Clone + Send + Sync + Debug + 'static`
-/// bound because of the embedded function, `SKY-L0125`.
+/// bound because of the embedded function, `IPE-L0125`.
 const LIVE_FN_MSG: &str = r"module Main exposing (main)
 
 import Std.Live as Live
@@ -184,7 +184,7 @@ main =
         }
 ";
 
-/// `Sky.Tui` app: Msg variant carries a `Cmd`. Must be rejected with SKY-L0125.
+/// `Sky.Tui` app: Msg variant carries a `Cmd`. Must be rejected with IPE-L0125.
 const TUI_CMD_MSG: &str = r"module Main exposing (main)
 
 import Std.Tui as Tui
@@ -233,7 +233,7 @@ main =
 ";
 
 /// `Sky.Tui` app: Msg variant carries a function. Same shape as
-/// `LIVE_FN_MSG` — falls through to the Msg gate, `SKY-L0125`.
+/// `LIVE_FN_MSG` — falls through to the Msg gate, `IPE-L0125`.
 const TUI_FN_MSG: &str = r"module Main exposing (main)
 
 import Std.Tui as Tui
@@ -369,7 +369,7 @@ main =
 
 #[test]
 fn live_msg_with_cmd_is_rejected() -> Result<(), BoxError> {
-    assert_rejected_with("live_cmd_msg", LIVE_CMD_MSG, "SKY-L0125")
+    assert_rejected_with("live_cmd_msg", LIVE_CMD_MSG, "IPE-L0125")
 }
 
 #[test]
@@ -377,7 +377,7 @@ fn live_msg_with_fn_is_rejected() -> Result<(), BoxError> {
     // The declaration-site gate (L0114) does not fire on a declared
     // function-typed payload; the Msg gate (L0125) catches the non-admissible
     // function-embedding Msg.
-    assert_rejected_with("live_fn_msg", LIVE_FN_MSG, "SKY-L0125")
+    assert_rejected_with("live_fn_msg", LIVE_FN_MSG, "IPE-L0125")
 }
 
 #[test]
@@ -385,13 +385,13 @@ fn live_lambda_update_with_cmd_msg_is_rejected() -> Result<(), BoxError> {
     assert_rejected_with(
         "live_lambda_update_cmd_msg",
         LIVE_LAMBDA_UPDATE_CMD_MSG,
-        "SKY-L0125",
+        "IPE-L0125",
     )
 }
 
 #[test]
 fn tui_msg_with_cmd_is_rejected() -> Result<(), BoxError> {
-    assert_rejected_with("tui_cmd_msg", TUI_CMD_MSG, "SKY-L0125")
+    assert_rejected_with("tui_cmd_msg", TUI_CMD_MSG, "IPE-L0125")
 }
 
 #[test]
@@ -399,7 +399,7 @@ fn tui_msg_with_fn_is_rejected() -> Result<(), BoxError> {
     // The declaration-site gate (L0114) does not fire on a declared
     // function-typed payload; the Msg gate (L0125) catches the non-admissible
     // function-embedding Msg.
-    assert_rejected_with("tui_fn_msg", TUI_FN_MSG, "SKY-L0125")
+    assert_rejected_with("tui_fn_msg", TUI_FN_MSG, "IPE-L0125")
 }
 
 /// THE CRITICAL ASYMMETRY TEST: Html in Msg must be ACCEPTED (derivable, not serde).

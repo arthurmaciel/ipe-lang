@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 /// Wire-format epoch for the Model schema tag (H24). Must equal the
 /// backend's `emit_model_schema::WIRE_EPOCH` — the epoch is folded into the
-/// compile-time `SKY_LIVE_MODEL_SCHEMA_TAG` each generated Sky.Live binary
+/// compile-time `IPE_LIVE_MODEL_SCHEMA_TAG` each generated Sky.Live binary
 /// carries. Bumped ONLY when the tag framing / blob encoding itself changes
 /// shape (domain-separation convention), never for a Model change — the
 /// Model's own shape is covered by the structural half of the hash.
@@ -301,7 +301,7 @@ where
             .await;
     }
     async fn sweep(&self) {
-        // Total cutoff: an absurd `SKY_LIVE_TTL` (u64 near 2^63) would make a bare
+        // Total cutoff: an absurd `IPE_LIVE_TTL` (u64 near 2^63) would make a bare
         // `now_secs() - (ttl as i64)` debug-panic / wrap-to-negative (caller-controlled
         // arithmetic). `try_from` → i64::MAX on overflow, then saturating_sub clamps,
         // so an oversized TTL degrades to "never expire" instead of faulting. For all
@@ -451,7 +451,7 @@ where
             .await;
     }
     async fn sweep(&self) {
-        // Total cutoff: an absurd `SKY_LIVE_TTL` (u64 near 2^63) would make a bare
+        // Total cutoff: an absurd `IPE_LIVE_TTL` (u64 near 2^63) would make a bare
         // `now_secs() - (ttl as i64)` debug-panic / wrap-to-negative (caller-controlled
         // arithmetic). `try_from` → i64::MAX on overflow, then saturating_sub clamps,
         // so an oversized TTL degrades to "never expire" instead of faulting. For all
@@ -705,7 +705,7 @@ fn go_log_timestamp() -> String {
 
 /// Render a whole-second `Duration` the way Go's `time.Duration.String()` does
 /// for our TTL granularity: `1h0m0s`, `30m0s`, `45s`, `0s`. Sub-second remainder
-/// is dropped (TTLs are whole seconds — `SKY_LIVE_TTL` parses to `u64` seconds).
+/// is dropped (TTLs are whole seconds — `IPE_LIVE_TTL` parses to `u64` seconds).
 fn go_duration_string(d: Duration) -> String {
     let total = d.as_secs();
     if total == 0 {
@@ -900,11 +900,11 @@ mod tests {
         let _ = std::fs::remove_file(p);
     }
 
-    /// Postgres mirror of the reject test — `SKY_TEST_PG_URL`-gated.
+    /// Postgres mirror of the reject test — `IPE_TEST_PG_URL`-gated.
     #[cfg(feature = "db")]
     #[tokio::test]
     async fn postgres_store_rejects_a_row_written_by_a_different_schema_tag() {
-        let Ok(url) = std::env::var("SKY_TEST_PG_URL") else {
+        let Ok(url) = std::env::var("IPE_TEST_PG_URL") else {
             return;
         };
         let sid = format!("pgtest_h24_{}", std::process::id());
@@ -930,11 +930,11 @@ mod tests {
     }
 
     /// Redis mirror of the reject test (HASH-per-session shape) —
-    /// `SKY_TEST_REDIS_URL`-gated.
+    /// `IPE_TEST_REDIS_URL`-gated.
     #[cfg(feature = "redis_store")]
     #[tokio::test]
     async fn redis_store_rejects_a_row_written_by_a_different_schema_tag() {
-        let Ok(url) = std::env::var("SKY_TEST_REDIS_URL") else {
+        let Ok(url) = std::env::var("IPE_TEST_REDIS_URL") else {
             return;
         };
         let sid = format!("redistest_h24_{}", std::process::id());
@@ -965,13 +965,13 @@ mod tests {
         assert_eq!(redis_key("abc"), "sky:sess:abc");
     }
 
-    /// Postgres restart survival — gated on `SKY_TEST_PG_URL` (a reachable
+    /// Postgres restart survival — gated on `IPE_TEST_PG_URL` (a reachable
     /// `postgres://…` URL). Skipped when unset so CI without a PG server stays
     /// green; run locally with the env var to exercise the real round-trip.
     #[cfg(feature = "db")]
     #[tokio::test]
     async fn postgres_store_checkpoint_survives_restart() {
-        let Ok(url) = std::env::var("SKY_TEST_PG_URL") else {
+        let Ok(url) = std::env::var("IPE_TEST_PG_URL") else {
             return;
         };
         let sid = format!("pgtest_{}", std::process::id());
@@ -997,11 +997,11 @@ mod tests {
         }
     }
 
-    /// Redis restart survival — gated on `SKY_TEST_REDIS_URL`. Skipped when unset.
+    /// Redis restart survival — gated on `IPE_TEST_REDIS_URL`. Skipped when unset.
     #[cfg(feature = "redis_store")]
     #[tokio::test]
     async fn redis_store_checkpoint_survives_restart() {
-        let Ok(url) = std::env::var("SKY_TEST_REDIS_URL") else {
+        let Ok(url) = std::env::var("IPE_TEST_REDIS_URL") else {
             return;
         };
         let sid = format!("redistest_{}", std::process::id());
@@ -1156,11 +1156,11 @@ mod tests {
     }
 
     /// Postgres mirrors of the bincode round-trip + old-row fail-soft —
-    /// `SKY_TEST_PG_URL`-gated.
+    /// `IPE_TEST_PG_URL`-gated.
     #[cfg(feature = "db")]
     #[tokio::test]
     async fn postgres_store_new_format_round_trips_and_rejects_old_json_rows() {
-        let Ok(url) = std::env::var("SKY_TEST_PG_URL") else {
+        let Ok(url) = std::env::var("IPE_TEST_PG_URL") else {
             return;
         };
         let sid = format!("pgtest_binc_{}", std::process::id());
@@ -1201,11 +1201,11 @@ mod tests {
     }
 
     /// Redis mirrors of the bincode round-trip + old-row fail-soft —
-    /// `SKY_TEST_REDIS_URL`-gated.
+    /// `IPE_TEST_REDIS_URL`-gated.
     #[cfg(feature = "redis_store")]
     #[tokio::test]
     async fn redis_store_new_format_round_trips_and_rejects_old_json_rows() {
-        let Ok(url) = std::env::var("SKY_TEST_REDIS_URL") else {
+        let Ok(url) = std::env::var("IPE_TEST_REDIS_URL") else {
             return;
         };
         let sid = format!("redistest_binc_{}", std::process::id());
@@ -1243,11 +1243,11 @@ mod tests {
         }
     }
 
-    /// Postgres mirror of the cold-row exclusion — `SKY_TEST_PG_URL`-gated.
+    /// Postgres mirror of the cold-row exclusion — `IPE_TEST_PG_URL`-gated.
     #[cfg(feature = "db")]
     #[tokio::test]
     async fn postgres_store_live_sessions_excludes_cold_rows() {
-        let Ok(url) = std::env::var("SKY_TEST_PG_URL") else {
+        let Ok(url) = std::env::var("IPE_TEST_PG_URL") else {
             return;
         };
         let cold_sid = format!("pgtest_cold_{}", std::process::id());
@@ -1274,11 +1274,11 @@ mod tests {
         s.delete(&live_sid).await;
     }
 
-    /// Redis mirror of the cold-row exclusion — `SKY_TEST_REDIS_URL`-gated.
+    /// Redis mirror of the cold-row exclusion — `IPE_TEST_REDIS_URL`-gated.
     #[cfg(feature = "redis_store")]
     #[tokio::test]
     async fn redis_store_live_sessions_excludes_cold_rows() {
-        let Ok(url) = std::env::var("SKY_TEST_REDIS_URL") else {
+        let Ok(url) = std::env::var("IPE_TEST_REDIS_URL") else {
             return;
         };
         let cold_sid = format!("redistest_cold_{}", std::process::id());

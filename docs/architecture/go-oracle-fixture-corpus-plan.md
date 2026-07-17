@@ -225,7 +225,7 @@ equivalence paths in `examples-sweep.sh` are driven.
 **Current state (verified):** `equivalence_normalize_html.py` and `equivalence_tui_grid.py`
 are **already vendored byte-identical** into `scripts/lib/`, and
 `scripts/equivalence-checks/examples-sweep.sh` already carries the EQUIVALENCE column, `build_go()`,
-`equivalence_for()`, and the `SKY_SWEEP_NO_EQUIV` flag (default `1` = phase-1: BUILD +
+`equivalence_for()`, and the `IPE_SWEEP_NO_EQUIV` flag (default `1` = phase-1: BUILD +
 RUN, EQUIVALENCE skipped). `scripts/equivalence-checks/equivalence-classification.tsv` is also ported
 byte-identical. **What is missing:** the two standalone drivers
 (`equivalence-corpus.sh`, `equivalence-render.sh`), the 65 fixtures themselves, a Go oracle,
@@ -244,7 +244,7 @@ and CRLF handling.
    it already references `lib/equivalence_normalize_html.py` / `lib/equivalence_tui_grid.py`.
    `pyte` gates the tui path (SKIP if absent — a correct skip, not a false pass).
 4. **Stand up the Go oracle** — two viable modes:
-   - **Live-oracle:** point `SKY_GO_BIN` at an external Haskell `sky` that emits
+   - **Live-oracle:** point `IPE_GO_BIN` at an external Haskell `sky` that emits
      the Go reference; `build_go()` runs `sky build --backend go`. Highest
      fidelity, requires the reference toolchain present in CI.
    - **Snapshot-oracle (recommended to bootstrap):** commit the Go reference
@@ -252,8 +252,8 @@ and CRLF handling.
      fixture. No live Go build; the diff is fixture-stdout vs committed golden.
      Removes the CI dependency on a Haskell toolchain and makes the corpus
      reproducible. Regenerate goldens only from a pinned reference `sky`.
-5. **Flip the gate on:** once the oracle exists, drop `SKY_SWEEP_NO_EQUIV=1`
-   default (or run corpus/render explicitly). Keep `SKY_SWEEP_NO_EQUIV=1` as the
+5. **Flip the gate on:** once the oracle exists, drop `IPE_SWEEP_NO_EQUIV=1`
+   default (or run corpus/render explicitly). Keep `IPE_SWEEP_NO_EQUIV=1` as the
    escape hatch for the no-oracle machine.
 6. **Port the harness self-tests** (reference items 20/24) so a normalizer
    regression is itself caught.
@@ -376,7 +376,7 @@ Track the corpus as a **burndown**: each fixture flips GREEN as its phase
 completes; the DONE gate (memory: endgame example sweep) is all-green across the
 non-FFI corpus. Do not gate CI red-fails on the corpus until a phase claims a
 fixture — until then it is an aspirational manifest, run with
-`SKY_SWEEP_NO_EQUIV=1` as the phase-1 default.
+`IPE_SWEEP_NO_EQUIV=1` as the phase-1 default.
 
 ---
 
@@ -390,6 +390,6 @@ fixture — until then it is an aspirational manifest, run with
 - **HARDEN (Rule 2):** add CRLF folding to the stdout + html paths (not the tui
   path); canonicalize char-references; tag the float-threshold and
   json-HTML-escape divergences as `oracle_divergence`, never match-to-Go.
-- **BLOCK:** do not flip `SKY_SWEEP_NO_EQUIV` off in CI as a hard gate until a
+- **BLOCK:** do not flip `IPE_SWEEP_NO_EQUIV` off in CI as a hard gate until a
   Go oracle (live or snapshot) exists AND the owning phase claims each fixture —
   otherwise a pre-parity red poisons the gate.

@@ -499,7 +499,7 @@ fn find_executable(json_stdout: &str, unique_pkg: &str) -> Option<String> {
 /// `CARGO_TARGET_DIR` the caller (orchestrator/autopilot) set for the isolated
 /// COMPILER-crate build.
 ///
-/// `shared` is the raw `SKY_ORACLE_SHARED_TARGET` value (an explicit input the
+/// `shared` is the raw `IPE_ORACLE_SHARED_TARGET` value (an explicit input the
 /// harness owns — the library cannot reliably infer "does this change edit
 /// `runtime/`?" from the working dir, so the decision is passed in).
 ///
@@ -521,7 +521,7 @@ fn resolve_emitted_target(shared: Option<&str>) -> Option<String> {
     if !Path::new(trimmed).is_absolute() {
         // Present-but-malformed → fail loud-and-safe (isolate), not silent.
         eprintln!(
-            "sky-oracle: ignoring SKY_ORACLE_SHARED_TARGET={trimmed:?} \
+            "sky-oracle: ignoring IPE_ORACLE_SHARED_TARGET={trimmed:?} \
              (not an absolute path); isolating emitted build in ambient CARGO_TARGET_DIR"
         );
         return None;
@@ -533,7 +533,7 @@ fn resolve_emitted_target(shared: Option<&str>) -> Option<String> {
 /// returning its stdout + exit code.
 ///
 /// The emitted build's cargo target is chosen by [`resolve_emitted_target`] from
-/// `SKY_ORACLE_SHARED_TARGET`: when the harness opts in with an absolute path the
+/// `IPE_ORACLE_SHARED_TARGET`: when the harness opts in with an absolute path the
 /// build is pinned to that shared target (runtime deps compiled once, reused),
 /// overriding whatever ambient `CARGO_TARGET_DIR` was set for the isolated
 /// compiler-crate build; otherwise the ambient env is inherited untouched
@@ -551,7 +551,7 @@ fn resolve_emitted_target(shared: Option<&str>) -> Option<String> {
 pub fn build_and_run_rust(golden_name: &str, emitted_dir: &Path) -> Result<RunResult, String> {
     let unique_pkg = rewrite_package_name(emitted_dir, golden_name)?;
 
-    let shared = std::env::var("SKY_ORACLE_SHARED_TARGET").ok();
+    let shared = std::env::var("IPE_ORACLE_SHARED_TARGET").ok();
     let mut cmd = Command::new("cargo");
     cmd.arg("build")
         .arg("--message-format=json")
@@ -596,7 +596,7 @@ pub fn build_and_run_rust(golden_name: &str, emitted_dir: &Path) -> Result<RunRe
 ///    so binaries from different goldens can coexist in the shared cargo target.
 /// 2. Runs `cargo build --message-format=json` in the emitted directory. The
 ///    cargo target is chosen by [`resolve_emitted_target`] from
-///    `SKY_ORACLE_SHARED_TARGET`: an absolute opt-in path pins the build to the
+///    `IPE_ORACLE_SHARED_TARGET`: an absolute opt-in path pins the build to the
 ///    shared target (runtime deps reused, overriding the ambient
 ///    `CARGO_TARGET_DIR`); absence/malformation inherits the ambient env
 ///    (isolate — the fail-safe default). Do NOT re-add a "no override" claim:
@@ -611,7 +611,7 @@ pub fn build_and_run_rust(golden_name: &str, emitted_dir: &Path) -> Result<RunRe
 pub fn build_rust_binary(golden_name: &str, emitted_dir: &Path) -> Result<String, String> {
     let unique_pkg = rewrite_package_name(emitted_dir, golden_name)?;
 
-    let shared = std::env::var("SKY_ORACLE_SHARED_TARGET").ok();
+    let shared = std::env::var("IPE_ORACLE_SHARED_TARGET").ok();
     let mut cmd = Command::new("cargo");
     cmd.arg("build")
         .arg("--message-format=json")

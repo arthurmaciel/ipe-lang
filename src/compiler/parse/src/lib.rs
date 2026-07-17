@@ -41,7 +41,7 @@ pub fn parse_module(src: &str, interner: &mut Interner) -> DResult<Module> {
 /// every import edge in a successfully parsed module's AST appears in this
 /// scan. The scan may *over*-approximate (an `import` keyword token outside
 /// the header is a parse error, not an edge) but can never miss an AST edge —
-/// the load-bearing property for the driver's SKY-N0021 import-cycle gate.
+/// the load-bearing property for the driver's IPE-N0021 import-cycle gate.
 ///
 /// Returns `None` when `src` does not lex. An unlexable module cannot parse,
 /// so it contributes no AST import edges; callers may substitute a heuristic
@@ -383,31 +383,31 @@ mod tests {
     #[test]
     fn lambda_without_arrow_is_a_parse_error() {
         // `\x x` — no `->` after the parameters.
-        assert_eq!(err_code(&format!("{HDR}f =\n    \\x 1\n")), "SKY-P0001");
+        assert_eq!(err_code(&format!("{HDR}f =\n    \\x 1\n")), "IPE-P0001");
     }
 
     #[test]
     fn lambda_without_params_is_a_parse_error() {
         // `\ -> 1` — a zero-parameter lambda is outside the grammar.
-        assert_eq!(err_code(&format!("{HDR}f =\n    \\ -> 1\n")), "SKY-P0001");
+        assert_eq!(err_code(&format!("{HDR}f =\n    \\ -> 1\n")), "IPE-P0001");
     }
 
     #[test]
     fn lone_ampersand_is_unknown_char() {
-        // A single `&` is not a Sky operator (only `&&`); it lexes as SKY-P0010.
-        assert_eq!(err_code(&format!("{HDR}x = 1 & 2")), "SKY-P0010");
+        // A single `&` is not a Sky operator (only `&&`); it lexes as IPE-P0010.
+        assert_eq!(err_code(&format!("{HDR}x = 1 & 2")), "IPE-P0010");
     }
 
     #[test]
     fn lexer_errors_carry_their_codes() {
-        // SKY-P0010 unknown character.
-        assert_eq!(err_code("module Main exposing (main)\nx = @"), "SKY-P0010");
-        // SKY-P0011 stray '.'.
-        assert_eq!(err_code("."), "SKY-P0011");
-        // SKY-P0012 number joined to a name.
-        assert_eq!(err_code("123abc"), "SKY-P0012");
-        // SKY-P0013 integer literal out of range.
-        assert_eq!(err_code("99999999999999999999999"), "SKY-P0013");
+        // IPE-P0010 unknown character.
+        assert_eq!(err_code("module Main exposing (main)\nx = @"), "IPE-P0010");
+        // IPE-P0011 stray '.'.
+        assert_eq!(err_code("."), "IPE-P0011");
+        // IPE-P0012 number joined to a name.
+        assert_eq!(err_code("123abc"), "IPE-P0012");
+        // IPE-P0013 integer literal out of range.
+        assert_eq!(err_code("99999999999999999999999"), "IPE-P0013");
     }
 
     #[test]
@@ -507,18 +507,18 @@ mod tests {
 
     #[test]
     fn leading_dot_is_not_a_float() {
-        // Elm-style requires a leading digit, so `.5` is a stray `.` (SKY-P0011),
+        // Elm-style requires a leading digit, so `.5` is a stray `.` (IPE-P0011),
         // never a float.
-        assert_eq!(err_code(".5"), "SKY-P0011");
+        assert_eq!(err_code(".5"), "IPE-P0011");
     }
 
     #[test]
     fn trailing_exponent_marker_is_joined_name() {
         // `1.5e` has no digit after the exponent marker, so the `e` reads as a
-        // name joined to the number (SKY-P0012) rather than an exponent.
-        assert_eq!(err_code("1.5e"), "SKY-P0012");
+        // name joined to the number (IPE-P0012) rather than an exponent.
+        assert_eq!(err_code("1.5e"), "IPE-P0012");
         // A letter immediately after a float is likewise a joined name.
-        assert_eq!(err_code("1.5x"), "SKY-P0012");
+        assert_eq!(err_code("1.5x"), "IPE-P0012");
     }
 
     #[test]
@@ -533,8 +533,8 @@ mod tests {
         // `1e400` overflows f64 to infinity; rejecting it (rather than silently
         // accepting `inf`) keeps parity with the Go reference. A finite literal,
         // including the largest in-range exponent, still lexes cleanly.
-        assert_eq!(err_code("1e400"), "SKY-P0016");
-        assert_eq!(err_code("1.0e309"), "SKY-P0016");
+        assert_eq!(err_code("1e400"), "IPE-P0016");
+        assert_eq!(err_code("1.0e309"), "IPE-P0016");
         assert_eq!(kinds("1e308"), vec![Tok::Float(1e308)]);
         // A genuine `0.0` is finite and must not be mistaken for an overflow.
         assert_eq!(kinds("0.0"), vec![Tok::Float(0.0)]);
@@ -543,45 +543,45 @@ mod tests {
     #[test]
     fn malformed_module_header_is_p0020() {
         // Not `module`.
-        assert_eq!(err_code("import X exposing (..)"), "SKY-P0020");
+        assert_eq!(err_code("import X exposing (..)"), "IPE-P0020");
         // Module name not an identifier.
-        assert_eq!(err_code("module = x"), "SKY-P0020");
+        assert_eq!(err_code("module = x"), "IPE-P0020");
         // Missing `exposing`.
-        assert_eq!(err_code("module Main"), "SKY-P0020");
+        assert_eq!(err_code("module Main"), "IPE-P0020");
     }
 
     #[test]
     fn malformed_exposing_list_is_p0021() {
         // Missing `(`.
-        assert_eq!(err_code("module Main exposing main)"), "SKY-P0021");
+        assert_eq!(err_code("module Main exposing main)"), "IPE-P0021");
         // Bad separator between items.
-        assert_eq!(err_code("module Main exposing (a b)"), "SKY-P0021");
+        assert_eq!(err_code("module Main exposing (a b)"), "IPE-P0021");
     }
 
     #[test]
     fn missing_equals_is_p0030() {
-        assert_eq!(err_code(&format!("{HDR}foo 5")), "SKY-P0030");
+        assert_eq!(err_code(&format!("{HDR}foo 5")), "IPE-P0030");
     }
 
     #[test]
     fn malformed_type_declaration_is_p0031() {
         // Missing type name.
-        assert_eq!(err_code(&format!("{HDR}type = Foo")), "SKY-P0031");
+        assert_eq!(err_code(&format!("{HDR}type = Foo")), "IPE-P0031");
         // Missing `=` before constructors.
-        assert_eq!(err_code(&format!("{HDR}type Foo Bar")), "SKY-P0031");
+        assert_eq!(err_code(&format!("{HDR}type Foo Bar")), "IPE-P0031");
         // Constructor not uppercase.
-        assert_eq!(err_code(&format!("{HDR}type Foo = bar")), "SKY-P0031");
+        assert_eq!(err_code(&format!("{HDR}type Foo = bar")), "IPE-P0031");
     }
 
     #[test]
     fn type_args_on_non_constructor_is_p0040() {
-        assert_eq!(err_code(&format!("{HDR}x : a Int\nx = 5")), "SKY-P0040");
+        assert_eq!(err_code(&format!("{HDR}x : a Int\nx = 5")), "IPE-P0040");
     }
 
     #[test]
     fn expected_type_is_p0041() {
         // A token that cannot begin a type.
-        assert_eq!(err_code(&format!("{HDR}x : =\nx = 5")), "SKY-P0041");
+        assert_eq!(err_code(&format!("{HDR}x : =\nx = 5")), "IPE-P0041");
         // A dotted uppercase type now PARSES (qualified type support):
         // `Foo.Bar` becomes TType("Foo", ["Bar"], []) — canonicalisation (not
         // the parser) is responsible for validating that `Foo` is a known module.
@@ -590,16 +590,16 @@ mod tests {
 
     #[test]
     fn unclosed_delimiter_is_p0050() {
-        assert_eq!(err_code(&format!("{HDR}main = (5")), "SKY-P0050");
+        assert_eq!(err_code(&format!("{HDR}main = (5")), "IPE-P0050");
     }
 
     #[test]
     fn malformed_case_is_p0060() {
         // `of` missing after the scrutinee.
-        assert_eq!(err_code(&format!("{HDR}main = case 5")), "SKY-P0060");
+        assert_eq!(err_code(&format!("{HDR}main = case 5")), "IPE-P0060");
         // `->` missing in a branch.
         let missing_arrow = format!("{HDR}main =\n    case main of\n        Foo 5\n");
-        assert_eq!(err_code(&missing_arrow), "SKY-P0060");
+        assert_eq!(err_code(&missing_arrow), "IPE-P0060");
     }
 
     #[test]
@@ -772,19 +772,19 @@ mod tests {
 
     #[test]
     fn unterminated_string_is_p0014() {
-        assert_eq!(err_code(&format!("{HDR}s =\n    \"oops\n")), "SKY-P0014");
+        assert_eq!(err_code(&format!("{HDR}s =\n    \"oops\n")), "IPE-P0014");
     }
 
     #[test]
     fn malformed_char_is_p0015() {
         // Empty char literal `''`.
-        assert_eq!(err_code(&format!("{HDR}c =\n    ''\n")), "SKY-P0015");
+        assert_eq!(err_code(&format!("{HDR}c =\n    ''\n")), "IPE-P0015");
         // Multi-character char literal `'ab'`.
-        assert_eq!(err_code(&format!("{HDR}c =\n    'ab'\n")), "SKY-P0015");
+        assert_eq!(err_code(&format!("{HDR}c =\n    'ab'\n")), "IPE-P0015");
         // Unrecognised escapes resolve to backslash + char (two scalar values),
-        // which violates the single-character invariant → SKY-P0015.
-        assert_eq!(err_code(&format!("{HDR}c =\n    '\\q'\n")), "SKY-P0015");
-        assert_eq!(err_code(&format!("{HDR}c =\n    '\\z'\n")), "SKY-P0015");
+        // which violates the single-character invariant → IPE-P0015.
+        assert_eq!(err_code(&format!("{HDR}c =\n    '\\q'\n")), "IPE-P0015");
+        assert_eq!(err_code(&format!("{HDR}c =\n    '\\z'\n")), "IPE-P0015");
         // Recognised escapes and plain chars stay valid (single scalar value).
         assert_eq!(err_code(&format!("{HDR}c =\n    '\\n'\n")), "OK");
         assert_eq!(err_code(&format!("{HDR}c =\n    '\\0'\n")), "OK");
@@ -794,27 +794,27 @@ mod tests {
     #[test]
     fn malformed_let_is_p0061() {
         // No bindings before `in`.
-        assert_eq!(err_code(&format!("{HDR}v =\n    let in 0\n")), "SKY-P0061");
+        assert_eq!(err_code(&format!("{HDR}v =\n    let in 0\n")), "IPE-P0061");
         // Missing `=` after the binding name.
         assert_eq!(
             err_code(&format!("{HDR}v =\n    let x 2 in x\n")),
-            "SKY-P0061"
+            "IPE-P0061"
         );
         // Parameters present but `=` never arrives (`in` is not a binder atom):
         // MissingEquals, not a silent swallow.
         assert_eq!(
             err_code(&format!("{HDR}v =\n    let f x in f\n")),
-            "SKY-P0061"
+            "IPE-P0061"
         );
         // Missing `in` after the bindings.
         assert_eq!(
             err_code(&format!("{HDR}v =\n    let x = 2\n    x\n")),
-            "SKY-P0061"
+            "IPE-P0061"
         );
         // An uppercase binding name is not a value binding.
         assert_eq!(
             err_code(&format!("{HDR}v =\n    let X = 2 in X\n")),
-            "SKY-P0061"
+            "IPE-P0061"
         );
     }
 
@@ -961,14 +961,14 @@ mod tests {
     fn unclosed_tuple_is_p0050() {
         // A tuple opened but never closed surfaces the unclosed-delimiter code,
         // the same as a plain parenthesised group.
-        assert_eq!(err_code(&format!("{HDR}v =\n    (1, 2\n")), "SKY-P0050");
+        assert_eq!(err_code(&format!("{HDR}v =\n    (1, 2\n")), "IPE-P0050");
     }
 
     #[test]
     fn tuple_type_annotation_parses_into_a_ttuple() {
         // `fst : (a, b) -> a` — a tuple type in argument position. The annotation
         // is `TLambda(TTuple([TVar a, TVar b]), TVar a)`. Before M2B this failed
-        // at parse with SKY-P0050; it now unblocks `fst`/`snd`.
+        // at parse with IPE-P0050; it now unblocks `fst`/`snd`.
         let mut i = Interner::new();
         let src = format!("{HDR}fst : (a, b) -> a\nfst t =\n    t\n");
         let m = parse_module(&src, &mut i);
@@ -1056,7 +1056,7 @@ mod tests {
     fn unclosed_tuple_type_is_p0050() {
         // A tuple type opened but never closed surfaces the unclosed-delimiter
         // code, the same as a plain parenthesised type group.
-        assert_eq!(err_code(&format!("{HDR}f : (a, b")), "SKY-P0050");
+        assert_eq!(err_code(&format!("{HDR}f : (a, b")), "IPE-P0050");
     }
 
     #[test]
@@ -1345,7 +1345,7 @@ mod tests {
     fn lone_dot_is_still_a_stray_dot(/* #6 regression */) {
         // A `.` not part of `..` and not introducing a field access is still the
         // typed stray-dot lex error — the #6 fix must not swallow it.
-        assert_eq!(err_code(&format!("{HDR}v =\n    1 . 2\n")), "SKY-P0011");
+        assert_eq!(err_code(&format!("{HDR}v =\n    1 . 2\n")), "IPE-P0011");
     }
 
     #[test]
@@ -1384,7 +1384,7 @@ mod tests {
     #[test]
     fn unclosed_record_is_unexpected_eof() {
         // A record opened but never closed runs the input out cleanly.
-        assert_eq!(err_code(&format!("{HDR}v =\n    {{ x = 1\n")), "SKY-P0002");
+        assert_eq!(err_code(&format!("{HDR}v =\n    {{ x = 1\n")), "IPE-P0002");
     }
 
     #[test]
@@ -1392,38 +1392,38 @@ mod tests {
         // Missing `then` after the condition.
         assert_eq!(
             err_code(&format!("{HDR}v =\n    if v 1 else 0\n")),
-            "SKY-P0062"
+            "IPE-P0062"
         );
         // Missing `else` after the `then` branch.
         assert_eq!(
             err_code(&format!("{HDR}v =\n    if v then 1\n")),
-            "SKY-P0062"
+            "IPE-P0062"
         );
         // Absent condition (`if then …`).
         assert_eq!(
             err_code(&format!("{HDR}v =\n    if then 1 else 0\n")),
-            "SKY-P0062"
+            "IPE-P0062"
         );
     }
 
     #[test]
     fn unexpected_token_is_p0001() {
         // A token that cannot begin an expression.
-        assert_eq!(err_code(&format!("{HDR}main = )")), "SKY-P0001");
+        assert_eq!(err_code(&format!("{HDR}main = )")), "IPE-P0001");
         // SHOULD-FIX: a qualified constructor in pattern position is rejected.
         let qual_ctor = format!("{HDR}main =\n    case main of\n        Foo.Bar -> 1\n");
-        assert_eq!(err_code(&qual_ctor), "SKY-P0001");
+        assert_eq!(err_code(&qual_ctor), "IPE-P0001");
     }
 
     #[test]
     fn unexpected_eof_is_p0002() {
-        assert_eq!(err_code(&format!("{HDR}main =")), "SKY-P0002");
+        assert_eq!(err_code(&format!("{HDR}main =")), "IPE-P0002");
     }
 
     #[test]
     fn nesting_too_deep_is_p0003() {
         let deep = format!("{HDR}main = {}", "(".repeat(400));
-        assert_eq!(err_code(&deep), "SKY-P0003");
+        assert_eq!(err_code(&deep), "IPE-P0003");
     }
 
     #[test]
@@ -1613,7 +1613,7 @@ mod tests {
     #[test]
     fn negation_of_identifier_desugars_to_negate_call() {
         // `-cents` → `Call(VarLocal("negate"), [VarLocal("cents")])`.
-        // This is the exact shape that triggered SKY-P0001 in
+        // This is the exact shape that triggered IPE-P0001 in
         // 37-composite-live-shop / State.sky:156:
         //   `if cents < 0 then -cents else cents`
         let mut i = Interner::new();
@@ -1808,12 +1808,12 @@ mod tests {
         );
     }
 
-    /// An unterminated block comment is SKY-P0017.
+    /// An unterminated block comment is IPE-P0017.
     #[test]
     fn unterminated_block_comment_is_p0017() {
         assert_eq!(
             err_code(&format!("{HDR}main = {{- never closed")),
-            "SKY-P0017"
+            "IPE-P0017"
         );
     }
 
@@ -1929,7 +1929,7 @@ mod tests {
     /// A triple-quoted string containing a lone `"` must not terminate early.
     /// This is the core 33-websocket-echo regression: inline HTML such as
     /// `<div class="card">` caused a premature close on the `"` after `class=`,
-    /// making the rest lex as identifiers and triggering a misleading SKY-N0001.
+    /// making the rest lex as identifiers and triggering a misleading IPE-N0001.
     #[test]
     fn triple_string_lone_quote_does_not_terminate_early() {
         use lexer::{Tok, lex};
@@ -2017,11 +2017,11 @@ mod tests {
     }
 
     /// A triple-quoted string with embedded `"` parses successfully at the
-    /// module level — confirming no downstream SKY-N0001 leaks through.
+    /// module level — confirming no downstream IPE-N0001 leaks through.
     #[test]
     fn triple_string_with_quote_parses_in_module_context() {
         // If the lexer terminated early on the `"`, the rest would be mis-lexed
-        // as identifiers and the module parser would fail with SKY-N0001 or a
+        // as identifiers and the module parser would fail with IPE-N0001 or a
         // similar error rather than "OK".
         assert_eq!(
             err_code(&format!(
@@ -2031,7 +2031,7 @@ mod tests {
         );
     }
 
-    /// An unterminated triple-quoted string reports SKY-P0014 (same as a
+    /// An unterminated triple-quoted string reports IPE-P0014 (same as a
     /// single-line unterminated string), not a misleading identifier error.
     #[test]
     fn unterminated_triple_string_is_p0014() {
@@ -2041,8 +2041,8 @@ mod tests {
         let err = result.unwrap_err();
         assert_eq!(
             err.code().as_str(),
-            "SKY-P0014",
-            "unterminated triple string is SKY-P0014, got {err:?}"
+            "IPE-P0014",
+            "unterminated triple string is IPE-P0014, got {err:?}"
         );
     }
 
@@ -2058,7 +2058,7 @@ mod tests {
         let src = format!("{HDR}x = y{}", ".a".repeat(300_000));
         assert_eq!(
             err_code(&src),
-            "SKY-P0003",
+            "IPE-P0003",
             "deeply nested dotted ident must be rejected, not panic"
         );
     }
@@ -2070,7 +2070,7 @@ mod tests {
         let src = format!("{HDR}x = (y){}", ".a".repeat(300_000));
         assert_eq!(
             err_code(&src),
-            "SKY-P0003",
+            "IPE-P0003",
             "deeply nested postfix dot chain must be rejected, not panic"
         );
     }

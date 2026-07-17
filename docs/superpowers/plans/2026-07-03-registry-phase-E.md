@@ -22,7 +22,7 @@ Current committed shape (verified against HEAD 2026-07-03):
   run **before** the scheme lookup — they must survive Phase E untouched.
 - Dual lookup (:1500–1515): `registry = id.and_then(|k| self.stdlib_scheme(k))`,
   `legacy = self.legacy_kernel_ty(module, name)`, combined by
-  `kernel_scheme_or_unsupported(registry, legacy, span)` (:1524) which emits **SKY-L0108**
+  `kernel_scheme_or_unsupported(registry, legacy, span)` (:1524) which emits **IPE-L0108**
   (`LowerError::Unsupported(Feature::Kernels)`) when BOTH are `None`.
 - `legacy_kernel_ty` (:1544) is currently **total**: `Some(self.kernel_ty(module, name))`, so the
   fail-closed arm is dormant (covered directly by `both_miss_is_fail_closed`, :5929).
@@ -45,7 +45,7 @@ Current committed shape (verified against HEAD 2026-07-03):
   `Some(id)`. Excluded alias namespaces at :1435.
 - `crates/sky_lower/src/lower.rs:3914` `lower_callee`: id=`Some` fast path (:3921) returns
   `Callee::Kernel(*sk)`; the ~377-arm legacy `&str` table (:3924+) is the **id=None** fallback,
-  tail SKY-L0108 at :4444. `decl_equiv_legacy_match` (:5031) forces `id=None` to keep the legacy
+  tail IPE-L0108 at :4444. `decl_equiv_legacy_match` (:5031) forces `id=None` to keep the legacy
   arm non-vacuous.
 - `crates/sky_lower/src/lower.rs:2061` `ir_type_from_ty`: opaque builtin-name arms
   (`Value`/`Length`/`Color`/`Decoder`/`Element`/`Html`) are matched **before** the user-enum
@@ -148,7 +148,7 @@ unrepresentable at this line.
 Change `legacy_kernel_ty` (:1544) from `Some(self.kernel_ty(module, name))` to return `None` for
 un-typed kernels. Because `stdlib_scheme` is now total over reachable (Task 0) and the registry
 branch runs first in `kernel_scheme_or_unsupported`, every reachable kernel is served by
-`registry = Some(..)`; `legacy` is `None` and inert. The dormant SKY-L0108 arm
+`registry = Some(..)`; `legacy` is `None` and inert. The dormant IPE-L0108 arm
 (`both_miss_is_fail_closed`, :5929) now becomes the *live* fail-closed path for any (unreachable)
 miss.
 
@@ -156,7 +156,7 @@ miss.
   the right thing; only `legacy` changes from always-`Some` to always-`None`.
 - **Verify:** `cargo test -p sky_types` green (including `both_miss_is_fail_closed`); then run the
   example sweep gate early (Task 5's command) to confirm no previously-green example regresses — this
-  is the moment a mis-migrated reachable kernel would surface as SKY-L0108. If green, the legacy table
+  is the moment a mis-migrated reachable kernel would surface as IPE-L0108. If green, the legacy table
   is provably dead.
 
 ### 1c — Delete the dead legacy table and the `Ty::Var(u32::MAX)` sentinel
@@ -200,7 +200,7 @@ already be proven to carry `Some(id)` (Task 3's subset gate). Do Task 3, then:
    only where a diagnostic string is needed.
 3. `crates/sky_types/src/constrain.rs:1457,1575` — `constrain_var_kernel(id: StdlibKernel, span)`;
    obligation pre-checks (:1477, :1487) key off `id` unchanged; final body is
-   `let ty = self.stdlib_scheme(id).ok_or(SKY-L0108…)?; self.instantiate(&ty)`.
+   `let ty = self.stdlib_scheme(id).ok_or(IPE-L0108…)?; self.instantiate(&ty)`.
    The VarKernel arm (:1575) drops its `module`/`name` bindings.
 4. `crates/sky_lower/src/lower.rs:3914` — `lower_callee` becomes `Callee::Kernel(*id)` directly; the
    ~377-arm legacy `&str` table (:3924–4444) is **deleted**, and `decl_equiv_legacy_match` (:5031) —
@@ -289,7 +289,7 @@ The exit-0-then-cargo-fail class is now closed by construction; this task proves
 - Example sweep via the plugin skill `sky-rust-backend:examples-sweep` (or `scripts/example-sweep.sh`
   with its `run_with_timeout 10` intact) — every example builds **and runs**; a skyc-exit-0 that used
   to fail at `cargo` can no longer occur because an un-typeable kernel now fails skyc at
-  type-check with SKY-L0108. Confirm no example newly fails at skyc (that would be a real un-schemed
+  type-check with IPE-L0108. Confirm no example newly fails at skyc (that would be a real un-schemed
   reachable kernel — Task 0 should have caught it; if it appears here, Task 0's reachable set was
   incomplete).
 - Go-parity goldens byte-identical (per memory: m4/m7 oracle goldens must not shift — the seal is
@@ -307,7 +307,7 @@ command `timeout`-bounded; mem-guard alive; clean up background loops before dec
 
 | # | Risk | Likelihood | Mitigation |
 |---|---|---|---|
-| **R-A (riskiest)** | Deleting `kernel_ty` (Task 1c) strands a *reachable* kernel that was silently riding the `Ty::Var(u32::MAX)` fallback (a family missed by Uuid/Encoding/Css), turning a previously-"green" example red at skyc. | Med | Task 0 `stdlib_scheme_total_over_reachable` is the machine gate; run it **and** the example sweep at Task 1b (before the 1c deletion) so the failure surfaces as an inert SKY-L0108 while the legacy table still exists as a rollback. |
+| **R-A (riskiest)** | Deleting `kernel_ty` (Task 1c) strands a *reachable* kernel that was silently riding the `Ty::Var(u32::MAX)` fallback (a family missed by Uuid/Encoding/Css), turning a previously-"green" example red at skyc. | Med | Task 0 `stdlib_scheme_total_over_reachable` is the machine gate; run it **and** the example sweep at Task 1b (before the 1c deletion) so the failure surfaces as an inert IPE-L0108 while the legacy table still exists as a rollback. |
 | R-B | Dropping `module`/`name` (Task 2) removes info a future FFI consumer node reuses. | Low | FFI is parked and resolves `Rust.*` to a *separate* `KernelId::Ffi` callee per design Q4 — not this stdlib `VarKernel`. Recorded as Open Decision 2; reconstruct diagnostics from `decl(id)`. |
 | R-C | `stdlib_scheme_matches_legacy` loses its oracle when `kernel_ty` is deleted (Task 1c), silently weakening the Go-parity guarantee for RELOCATED families. | Med | Freeze a per-kernel `Ty` snapshot oracle before deleting `kernel_ty`; never drop the parity check outright. |
 | R-D | #45 gate (Task 4) rejects a legitimate corpus `type Color`, breaking an example. | Low-Med | Grep the corpus first; if hit, it is the latent miscompile — coordinate a rename PR; keep Task 4 non-blocking to the seal. |

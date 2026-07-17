@@ -7,7 +7,7 @@
 //! msg = """item={{tag}} count={{String.fromInt 54}} total={{String.fromInt 51}}"""
 //! ```
 //!
-//! and skyc ICE'd with the SKY-I0001 `unbound local 54` bug. Root cause: the
+//! and skyc ICE'd with the IPE-I0001 `unbound local 54` bug. Root cause: the
 //! interpolation mini-parser (`resolve_simple_interp_ref`) treated the literal
 //! `54` as a bare identifier, emitting `VarLocal("54")`. A Sky identifier can
 //! never start with a digit, so `54` is an integer literal — the `VarLocal`
@@ -18,7 +18,7 @@
 //!
 //! The compile check is a PURE skyc build (no cargo) — it always runs and
 //! directly reproduces the fuzzer failure at the skyc level. The run check is
-//! `SKY_E2E`-gated (builds + runs the emitted binary).
+//! `IPE_E2E`-gated (builds + runs the emitted binary).
 
 use std::path::{Path, PathBuf};
 
@@ -37,7 +37,7 @@ fn golden_entry(name: &str) -> PathBuf {
         .join("Main.sky")
 }
 
-/// skyc must ACCEPT the program — no SKY-I0001 ICE on a literal interpolation
+/// skyc must ACCEPT the program — no IPE-I0001 ICE on a literal interpolation
 /// argument. Pure skyc compile: no cargo, always runs.
 #[test]
 fn interp_int_literal_compiles() {
@@ -56,7 +56,7 @@ fn interp_int_literal_compiles() {
 /// The emitted binary prints the interpolated literals (`54`, `51`).
 #[test]
 fn interp_int_literal_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let entry = golden_entry("m_interp_int_literal");

@@ -3,14 +3,14 @@
 //! silent cargo-failing Rust.
 //!
 //! * a constructor pattern binding the wrong number of payload fields →
-//!   SKY-T0013 (a type error).
+//!   IPE-T0013 (a type error).
 //!
 //! (Two `case` arms head-matching the same constructor with a refutable nested
 //! payload — `Som (Som x)` then `Som Non` — is now SUPPORTED: each arm lowers to
 //! its own Rust `match` arm in source order. Its positive regression lives in
 //! `golden_m3b4_nested` / `golden_m3b4_two_same_ctor`.)
 //!
-//! Note: the partial-ctor-application gap (formerly SKY-L0113) is closed.
+//! Note: the partial-ctor-application gap (formerly IPE-L0113) is closed.
 //! Positive regressions live in `golden_i147_ctor_as_fn_seal`.
 //!
 //! Each is driven through the full `skyc` pipeline and asserted to produce its
@@ -59,6 +59,6 @@ fn ctor_pattern_arity_is_sky_t0013() {
     assert_gate(
         "gate_arity",
         "m3a_gate_arity_emit",
-        ipe_diagnostics::SKY_T0013,
+        ipe_diagnostics::IPE_T0013,
     );
 }

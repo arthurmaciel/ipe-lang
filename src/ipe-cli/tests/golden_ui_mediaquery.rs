@@ -34,7 +34,7 @@
 //! Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test golden_ui_mediaquery
+//! IPE_E2E=1 cargo test golden_ui_mediaquery
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -48,7 +48,7 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn ui_mediaquery_compiles_builds_and_renders_markers() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

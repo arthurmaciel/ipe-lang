@@ -10,11 +10,11 @@
 //! keeps kind).
 //!
 //! ```text
-//! # compile-only check (fast, no SKY_E2E needed):
+//! # compile-only check (fast, no IPE_E2E needed):
 //! cargo test -p skyc --test golden_error_adt_roundtrip
 //!
 //! # full E2E (run the emitted binary, assert stdout):
-//! SKY_E2E=1 cargo test -p skyc --test golden_error_adt_roundtrip
+//! IPE_E2E=1 cargo test -p skyc --test golden_error_adt_roundtrip
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -50,7 +50,7 @@ fn error_adt_roundtrip_compiles() {
 
 #[test]
 fn error_adt_roundtrip_runs_and_prints_expected_output() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();

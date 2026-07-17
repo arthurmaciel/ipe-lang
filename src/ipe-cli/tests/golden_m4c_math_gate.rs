@@ -6,7 +6,7 @@
 //! impose. A comparable forwarder built on `Math.min` therefore generalises to a
 //! Rust generic bounded by `PartialOrd`; instantiating it at a type Rust cannot
 //! order — a function, a record — must be rejected here at type-check
-//! (SKY-T0014), never left to emit an unbounded `math_min<T>(…)` call that
+//! (IPE-T0014), never left to emit an unbounded `math_min<T>(…)` call that
 //! `cargo` rejects (the runtime helper requires `T: PartialOrd`). This restores
 //! the sky-build => cargo-build floor for the Math kernels.
 //!
@@ -14,7 +14,7 @@
 //! scheme-application path the `maxOf` gate uses: a `pickMin : a -> a -> a`
 //! forwarder whose body is `Math.min x y`, instantiated at a function value and
 //! at a record value. (Calling `Math.min` directly on two non-comparable values
-//! is the eager-pin sibling and surfaces SKY-T0001 instead; both fail closed
+//! is the eager-pin sibling and surfaces IPE-T0001 instead; both fail closed
 //! with no Rust emitted — the point of the gate is that codegen is never
 //! reached.)
 
@@ -69,7 +69,7 @@ fn math_min_on_function_value_is_sky_t0014() {
     assert_gate(
         "math_min_fn_gate",
         "m4c_math_min_fn_gate_emit",
-        ipe_diagnostics::SKY_T0014,
+        ipe_diagnostics::IPE_T0014,
     );
 }
 
@@ -78,6 +78,6 @@ fn math_min_on_record_value_is_sky_t0014() {
     assert_gate(
         "math_min_rec_gate",
         "m4c_math_min_rec_gate_emit",
-        ipe_diagnostics::SKY_T0014,
+        ipe_diagnostics::IPE_T0014,
     );
 }

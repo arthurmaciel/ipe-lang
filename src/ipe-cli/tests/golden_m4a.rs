@@ -1,6 +1,6 @@
 //! Stdlib-foundation parity gate: the Prelude-exposed built-in
 //! constructors (`True` / `False`, `Just` / `Nothing`, `Ok` / `Err`) usable as
-//! VALUE expressions and in `case` patterns (closing SKY-N0001 / SKY-N0003), and
+//! VALUE expressions and in `case` patterns (closing IPE-N0001 / IPE-N0003), and
 //! the built-in `List` type with `[]` / `[a, b, c]` literals and the `::` cons
 //! operator.
 //!
@@ -18,7 +18,7 @@
 //!   `sky_list_cons`, over the runtime's `Vec<T>` list representation.
 //!
 //! Each emitted `main.rs` must be byte-identical to the checked-in golden, and
-//! (behind `SKY_E2E=1`) the emitted project must build and print the value the
+//! (behind `IPE_E2E=1`) the emitted project must build and print the value the
 //! Go reference compiler produces — captured in each golden's `expected_go.txt`
 //! / `oracle.meta` via the cached-oracle infra (no live Go in this gate).
 
@@ -61,9 +61,9 @@ fn assert_byte_identical(name: &str) {
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert its
 /// stdout matches the golden's CACHED Go oracle via the staleness-gated
-/// `support::assert_go_parity` — NO live Go run. Gated on `SKY_E2E=1`.
+/// `support::assert_go_parity` — NO live Go run. Gated on `IPE_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

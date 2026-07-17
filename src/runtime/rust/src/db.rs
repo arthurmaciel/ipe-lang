@@ -51,7 +51,7 @@ fn sky_err<E: From<String> + Send>(e: &sqlx::Error) -> E {
 // `withTransaction` must run BEGIN, the entire body, and COMMIT/ROLLBACK on ONE
 // physical connection. A bare `pool.execute(BEGIN)` routes each statement to an
 // arbitrary free connection, so on a multi-connection pool (Postgres/MySQL
-// default, or `SKY_DB_MAX_CONNECTIONS > 1` on sqlite) the body's writes can
+// default, or `IPE_DB_MAX_CONNECTIONS > 1` on sqlite) the body's writes can
 // autocommit on a different connection that has no open transaction — a rollback
 // then silently fails to undo them.
 //
@@ -633,10 +633,10 @@ fn url_is_cacheable(url: &str) -> bool {
 
 /// Upper bound on pooled connections per database. Bounded by default so that
 /// arbitrary user code calling `Db.connect` can NEVER exhaust the database
-/// server's connection limit; raise via `SKY_DB_MAX_CONNECTIONS` for workloads
+/// server's connection limit; raise via `IPE_DB_MAX_CONNECTIONS` for workloads
 /// that genuinely need more headroom.
 fn max_pool_connections() -> u32 {
-    crate::system::read_env_var("SKY_DB_MAX_CONNECTIONS")
+    crate::system::read_env_var("IPE_DB_MAX_CONNECTIONS")
         .ok()
         .and_then(|v| v.parse::<u32>().ok())
         .filter(|n| *n > 0)
@@ -647,9 +647,9 @@ fn max_pool_connections() -> u32 {
 /// connects to many distinct URLs accumulates live pools forever (memory +
 /// connection-handle DoS). At the cap, a new URL is served by a freshly-built,
 /// UNCACHED pool — still fully functional, just rebuilt per connect for that URL.
-/// Env SKY_DB_MAX_POOLS; default 32 (far above the typical 1–2 DBs per app).
+/// Env IPE_DB_MAX_POOLS; default 32 (far above the typical 1–2 DBs per app).
 fn max_db_pools() -> usize {
-    crate::system::read_env_var("SKY_DB_MAX_POOLS")
+    crate::system::read_env_var("IPE_DB_MAX_POOLS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|n| *n > 0)
@@ -948,7 +948,7 @@ fn migrate_checksum(sql: &str) -> String {
 /// loses the INSERT to a PK violation inside its own tx, which rolls back, so
 /// there is no partial-corruption window.
 ///
-/// DB-ops mode (parity with Go's `Db_migrateApply`): when the `SKY_DB_OP` env var
+/// DB-ops mode (parity with Go's `Db_migrateApply`): when the `IPE_DB_OP` env var
 /// is set — the CLI `sky db status` / `sky db migrate --backend rust` sets it — the
 /// task PRINTS a human report and `process::exit`s instead of returning, so the
 /// surrounding app never starts serving:
@@ -966,7 +966,7 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
 ) -> SkyTask<E, Vec<String>> {
     Box::pin(async move {
         // CLI op mode (empty when unset → library Task-return path, unchanged).
-        let op: String = crate::system::read_env_var("SKY_DB_OP")
+        let op: String = crate::system::read_env_var("IPE_DB_OP")
             .map(|v| v.trim().to_ascii_lowercase())
             .unwrap_or_default();
         // In `migrate` op mode an infra error prints context to stderr + exits 1;

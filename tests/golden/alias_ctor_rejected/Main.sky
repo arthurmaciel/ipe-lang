@@ -7,7 +7,7 @@ type Wrap
     = Wrap (Maybe Int)
 
 -- #99 RED-side control: an alias over a dispatch-NEEDING inner (`Just x`
--- needs its own discriminant check) in a by-value arm is SKY-L0128 — the
+-- needs its own discriminant check) in a by-value arm is IPE-L0128 — the
 -- clone-rebuild repair is only sound for dispatch-free inners, and the
 -- fail-closed gate must fire rather than let the backend double-move.
 describe : Wrap -> String

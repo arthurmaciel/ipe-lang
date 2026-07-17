@@ -7,7 +7,7 @@ import Std.Log exposing (println)
 -- with a superset argument. `{ name : String }` pins `getName`'s parameter
 -- to the EXACT field set `{ name }`; a CLOSED side of `unifyRecords`
 -- (mechanism 1) cannot absorb the caller's extra `age` field, so this is
--- rejected at type-check as SKY-T0001 — fail-loud, parity with the
+-- rejected at type-check as IPE-T0001 — fail-loud, parity with the
 -- reference's E2001 ("expected <missing>, actual Int") for the same shape.
 getName : { name : String } -> String
 getName rec =

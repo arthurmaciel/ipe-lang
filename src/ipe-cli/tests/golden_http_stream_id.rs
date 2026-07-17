@@ -3,7 +3,7 @@
 //!
 //! Before this fix, `K::HttpStreamOpen`'s scheme was `fun(http_request(), task(int()))`.
 //! User code that handled the result as `Result Error StreamId` triggered
-//! `SKY-T0001: expected StreamId, found Int`.
+//! `IPE-T0001: expected StreamId, found Int`.
 //!
 //! The fix changes the scheme to `fun(http_request(), task(stream_id()))` where
 //! `stream_id()` resolves to the opaque `StreamId` builtin type, and introduces
@@ -13,7 +13,7 @@
 //! This test uses `skyc::emit_ir_text` (parse → canon → types → lower → IR text)
 //! which stops before Rust emission — originally chosen to verify the type
 //! scheme and lowering without hitting an UNRELATED Http-builder synthesizer
-//! limitation (SKY-I0001 on `Http.defaultRequest`'s struct-literal emission,
+//! limitation (IPE-I0001 on `Http.defaultRequest`'s struct-literal emission,
 //! since this fixture's `req` has no consumer that spells out the
 //! `HttpRequest` fieldset in an annotation). That limitation is closed (see
 //! `golden_m5b_http.rs`'s `http_default_request_emits_without_signature_consumer`
@@ -29,7 +29,7 @@ fn repo_root() -> PathBuf {
 }
 
 /// Parse + type-check + lower `tests/golden/http_stream_id/Main.sky`.
-/// Asserts the pipeline succeeds (no SKY-T0001 from mismatched `Int` vs
+/// Asserts the pipeline succeeds (no IPE-T0001 from mismatched `Int` vs
 /// `StreamId`, and no `callee_arity` panic from a missing lower arm).
 #[test]
 fn http_stream_open_returns_stream_id_not_int() {
@@ -44,7 +44,7 @@ fn http_stream_open_returns_stream_id_not_int() {
     assert!(
         result.is_ok(),
         "HttpStream.open typed as `Task Error StreamId` must pass type-check + lower \
-         without SKY-T0001; got: {:?}",
+         without IPE-T0001; got: {:?}",
         result.err()
     );
 }
@@ -52,10 +52,10 @@ fn http_stream_open_returns_stream_id_not_int() {
 /// Companion to the IR-text check above: `req = Http.defaultRequest url`
 /// here is passed straight to `HttpStream.open` and never read as a field
 /// nor passed through any signature that spells out the `HttpRequest`
-/// fieldset — a shape prone to SKY-I0001 during Rust
+/// fieldset — a shape prone to IPE-I0001 during Rust
 /// emission (see `golden_m5b_http.rs`'s
 /// `http_default_request_emits_without_signature_consumer`). Default-gate,
-/// emit-only (no `SKY_E2E`, no cargo build needed).
+/// emit-only (no `IPE_E2E`, no cargo build needed).
 #[test]
 fn http_stream_open_full_emit_succeeds() {
     let root = repo_root();

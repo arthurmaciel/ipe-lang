@@ -1,7 +1,7 @@
 //! Class 4 item C — nested-constructor-payload function-argument patterns.
 //!
 //! Two shapes that the reference (../sky) recurses into and compiles are
-//! ACCEPTED (rather than fail-closing as SKY-L0112 record / SKY-L0116 cons):
+//! ACCEPTED (rather than fail-closing as IPE-L0112 record / IPE-L0116 cons):
 //!
 //! * A RECORD sub-pattern nested in a ctor payload (`Ok { name }`) — the
 //!   constraint generator records a region on every `PCtor` (and `PTuple`)
@@ -20,7 +20,7 @@
 //! `docs/adr/0010-pattern-and-lowering-completeness.md` Item C):
 //!
 //! * A guarded nested-cons arm with NO trailing catch-all is guard-non-exhaustive
-//!   to rustc, so it stays SKY-L0116 rather than an accept-then-cargo-fail.
+//!   to rustc, so it stays IPE-L0116 rather than an accept-then-cargo-fail.
 
 use std::path::{Path, PathBuf};
 
@@ -50,7 +50,7 @@ fn built_code(root: &Path, name: &str) -> (Result<(), CliError>, PathBuf) {
     (skyc::build(&entry, &out, &runtime), out)
 }
 
-/// Build a green fixture, assert acceptance, and (under `SKY_E2E=1`) build the
+/// Build a green fixture, assert acceptance, and (under `IPE_E2E=1`) build the
 /// emitted crate and assert its runtime stdout — the load-bearing verification
 /// that a now-accepted shape does not exit-0-then-cargo-fail.
 fn assert_accepted_runs(name: &str, expected_stdout: &str) {
@@ -61,7 +61,7 @@ fn assert_accepted_runs(name: &str, expected_stdout: &str) {
     let (built, out) = built_code(&root, name);
     assert!(built.is_ok(), "{name}: must be accepted, got: {built:?}");
 
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = support::build_and_run_emitted(name, &out);
@@ -97,7 +97,7 @@ fn assert_gated(name: &str, expected: ipe_diagnostics::Code) {
     );
 }
 
-// ── Repro 2: record sub-pattern nested in a ctor payload (was SKY-L0112) ─────
+// ── Repro 2: record sub-pattern nested in a ctor payload (was IPE-L0112) ─────
 
 #[test]
 fn nested_record_payload_accepted() {
@@ -112,7 +112,7 @@ fn nested_record_two_levels_accepted() {
     assert_accepted_runs("nested_record_two_levels", "Ada");
 }
 
-// ── Repro 1: cons / list sub-pattern nested in a ctor payload (was SKY-L0116) ─
+// ── Repro 1: cons / list sub-pattern nested in a ctor payload (was IPE-L0116) ─
 
 #[test]
 fn nested_cons_payload_accepted() {
@@ -145,12 +145,12 @@ fn nested_cons_generic_elem_accepted() {
 
 /// A nested-cons arm set that is Sky-exhaustive (`Just (h::t)` + `Just []` +
 /// `Nothing`) but has NO trailing wildcard is guard-non-exhaustive to rustc, so
-/// it stays SKY-L0116 rather than an accept-then-cargo-fail.
+/// it stays IPE-L0116 rather than an accept-then-cargo-fail.
 #[test]
 fn nested_cons_no_fallback_stays_gated() {
     assert_gated(
         "nested_cons_no_fallback_gated",
-        ipe_diagnostics::SKY_L0116,
+        ipe_diagnostics::IPE_L0116,
     );
 }
 
@@ -158,14 +158,14 @@ fn nested_cons_no_fallback_stays_gated() {
 /// levels deep in a ctor payload (`Just (Just "x")`) — one hop past the
 /// direct-arg string-literal desugaring's scope (`Just "x"` at depth 1, which
 /// `nested_strlit_ctor_payload_accepted` below confirms still works). Must
-/// stay fail-closed with SKY-L0116, never accept-then-cargo-fail (silent
+/// stay fail-closed with IPE-L0116, never accept-then-cargo-fail (silent
 /// acceptance would emit `SkyMaybe::Just(SkyMaybe::Just("x"))`
 /// — E0308 at `cargo build`, expected `String` found `&str`).
 #[test]
 fn nested_strlit_two_levels_stays_gated() {
     assert_gated(
         "nested_strlit_two_levels_gated",
-        ipe_diagnostics::SKY_L0116,
+        ipe_diagnostics::IPE_L0116,
     );
 }
 

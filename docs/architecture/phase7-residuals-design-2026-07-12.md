@@ -426,7 +426,7 @@ change.
   /// Sky.Live Model schema-compatibility tag (H24). Computed at compile time
   /// from the Model type's structural shape; the session store rejects a
   /// persisted blob whose tag does not match BEFORE deserializing it.
-  const SKY_LIVE_MODEL_SCHEMA_TAG: [u8; 32] = [0x3a, 0x91, /* … 32 total */];
+  const IPE_LIVE_MODEL_SCHEMA_TAG: [u8; 32] = [0x3a, 0x91, /* … 32 total */];
   ```
   and passes it as one new trailing argument to `live_app(...)`/
   `live_app_routed(...)`.
@@ -480,7 +480,7 @@ change.
 
 **Stage C — the wire-format swap (JSON → bincode), highest blast radius,
 ships last, entirely runtime-side.** Zero additional backend/emission
-change (the `SKY_LIVE_MODEL_SCHEMA_TAG` const and the threading from Stage B
+change (the `IPE_LIVE_MODEL_SCHEMA_TAG` const and the threading from Stage B
 are already in place and unchanged) — Stage C touches only `store.rs`.
 
 - Blob encoding becomes `base64_encode(schema_tag_bytes(32) ++
@@ -597,8 +597,8 @@ are already in place and unchanged) — Stage C touches only `store.rs`.
 | `deeply_nested_type_never_hangs` | A | A type nested past the fuel bound still returns (no infinite recursion, no panic) |
 | `sqlite_store_rejects_a_row_written_by_a_different_schema_tag` | B | Two `SqliteStore`s over the same path, different `schema_tag` — `get()` after the tag change returns `None`, not `Some(Cold(stale_shape))` |
 | `sqlite_store_accepts_a_row_written_by_the_same_schema_tag` | B | Same tag both times — `get()` still returns `Some(Cold(model))` (the gate isn't "always reject") |
-| `postgres_store_rejects_a_row_written_by_a_different_schema_tag` (`SKY_TEST_PG_URL`-gated) | B | Same as sqlite, over Postgres |
-| `redis_store_rejects_a_row_written_by_a_different_schema_tag` (`SKY_TEST_REDIS_URL`-gated) | B | Same as sqlite, over the HASH-per-session Redis shape |
+| `postgres_store_rejects_a_row_written_by_a_different_schema_tag` (`IPE_TEST_PG_URL`-gated) | B | Same as sqlite, over Postgres |
+| `redis_store_rejects_a_row_written_by_a_different_schema_tag` (`IPE_TEST_REDIS_URL`-gated) | B | Same as sqlite, over the HASH-per-session Redis shape |
 | Golden re-baseline (5 `Live.app`/`Live.appRouted` fixtures) | B | Emitted `main.rs` gains exactly the new const + arg; remaining 428 fixtures byte-identical |
 | `sqlite_store_new_format_round_trips_model_through_bincode` | C | `set()` then `get()` through the base64(tag+bincode) path returns the original Model |
 | `sqlite_store_old_json_row_is_rejected_not_crashed` | C | A raw pre-Stage-C JSON row (seeded directly, bypassing `set()`) is rejected cleanly by `get()`, never panics |
@@ -722,7 +722,7 @@ signal`):
 /// Push a bounded `event: reload` frame to every session THIS PROCESS is
 /// currently serving over SSE, so a connected browser skips its own
 /// reconnect-wait and refetches immediately instead of waiting out
-/// `SKY_LIVE_RETRY_BASE_MS`'s backoff ladder. Dev-mode only — see H23
+/// `IPE_LIVE_RETRY_BASE_MS`'s backoff ladder. Dev-mode only — see H23
 /// (`docs/architecture/incremental-compilation-and-watch.md:870`): a
 /// production deployment must have NO reachable path that pushes this
 /// frame, so the call is gated at its ONE call site (`live_shutdown_
@@ -806,7 +806,7 @@ with, not a special case of, this codebase's existing gating convention.
    reload frame rather than blocking the shutdown sequence or retrying.
    This is an explicit, accepted trade-off, not an oversight — a dropped
    `reload` frame has a low-consequence fallback (the browser's own
-   `EventSource` reconnect-on-drop logic, `SKY_LIVE_RETRY_*`'s existing
+   `EventSource` reconnect-on-drop logic, `IPE_LIVE_RETRY_*`'s existing
    backoff ladder, already fires independently the moment the SSE
    connection itself closes during shutdown), so the correctness floor
    was already covered before this feature existed; `push_reload_to_live_
@@ -823,8 +823,8 @@ with, not a special case of, this codebase's existing gating convention.
 |---|---|
 | `memory_store_live_sessions_lists_only_locally_cached_handles` | `live_sessions()` on `MemoryStore` returns exactly the set/not-yet-deleted sids |
 | `sqlite_store_live_sessions_excludes_cold_rows` (`feature = "db"`) | A row inserted directly into `sky_sessions` (bypassing `set()`, simulating a cross-replica session) is NOT returned by `live_sessions()`; a `set()`-created one is |
-| `postgres_store_live_sessions_excludes_cold_rows` (`SKY_TEST_PG_URL`-gated) | Same property, Postgres |
-| `redis_store_live_sessions_excludes_cold_rows` (`SKY_TEST_REDIS_URL`-gated) | Same property, Redis |
+| `postgres_store_live_sessions_excludes_cold_rows` (`IPE_TEST_PG_URL`-gated) | Same property, Postgres |
+| `redis_store_live_sessions_excludes_cold_rows` (`IPE_TEST_REDIS_URL`-gated) | Same property, Redis |
 | `push_reload_to_live_sessions_sends_one_frame_per_live_session` | Two live sessions with bound `sse_tx` channels each receive exactly one `sse::frame("reload", "{}")`; a session with `sse_tx = None` is skipped without panicking |
 | `live_shutdown_signal_skips_the_reload_push_in_production` | With `ENV=production`, the reload push helper is never invoked (asserted via a channel that would receive the frame in dev but stays empty in prod) |
 
@@ -1112,9 +1112,9 @@ process's signal, so `spawn()` genuinely has no USE for this forwarder.
 |---|---|
 | `sigterm_forwarder_invokes_callback_on_sigterm` (unix-gated) | `install_sigterm_forwarder` fires its closure after the test process signals itself via `kill -TERM $$` |
 | `sigterm_forwarder_never_fires_without_a_signal` (unix-gated) | The closure is NOT invoked within a bounded poll window when no signal is sent (negative control) |
-| `watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_skyc_process` (`SKY_E2E=1`, unix-gated) | A real `ipe watch` subprocess, `kill -TERM <skyc-pid>` (the PID only, not its process group) — asserts BOTH the `skyc` process exits within a bounded wait AND the supervised child process is gone (`/proc/<pid>` check, same technique as the existing Bug-3 regression test) |
+| `watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_skyc_process` (`IPE_E2E=1`, unix-gated) | A real `ipe watch` subprocess, `kill -TERM <skyc-pid>` (the PID only, not its process group) — asserts BOTH the `skyc` process exits within a bounded wait AND the supervised child process is gone (`/proc/<pid>` check, same technique as the existing Bug-3 regression test) |
 | `spawn_never_installs_a_sigterm_forwarder` (unix-gated) — regression test for finding 6 | Call `sky_watch::spawn(opts)` in-process, then deliver SIGTERM to the TEST process's own PID (the host `spawn()` is running inside); assert the test process is STILL ALIVE after a bounded wait (no exit) and that `WatchHandle::stop()` remains the only way the spawned watch loop actually shuts down — proves `spawn()` never touches the embedding host's SIGTERM disposition |
-| `double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_sigkill` (`SKY_E2E=1`, unix-gated) — proof test for finding 7 | A real `ipe watch` subprocess with a supervised child that ignores SIGTERM itself (so `supervisor.shutdown`'s graceful window is guaranteed to elapse and its own bounded SIGKILL escalation is what actually reaps the child) — send SIGTERM once (starts the documented graceful teardown), then, partway through the teardown's bounded wait (after the forwarder thread has already consumed the first signal and returned), send a SECOND SIGTERM to the SAME `skyc` PID; assert the `skyc` process's total wall-clock time to exit is NOT measurably shorter than a single-SIGTERM run's (i.e. the second signal has no observable escalating effect — it is absorbed, not delivered as an additional kill). The test's own doc comment states the operational conclusion in plain language: "a stuck `ipe watch` needs SIGKILL — a second SIGTERM is not a documented or relied-upon escape hatch." |
+| `double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_sigkill` (`IPE_E2E=1`, unix-gated) — proof test for finding 7 | A real `ipe watch` subprocess with a supervised child that ignores SIGTERM itself (so `supervisor.shutdown`'s graceful window is guaranteed to elapse and its own bounded SIGKILL escalation is what actually reaps the child) — send SIGTERM once (starts the documented graceful teardown), then, partway through the teardown's bounded wait (after the forwarder thread has already consumed the first signal and returned), send a SECOND SIGTERM to the SAME `skyc` PID; assert the `skyc` process's total wall-clock time to exit is NOT measurably shorter than a single-SIGTERM run's (i.e. the second signal has no observable escalating effect — it is absorbed, not delivered as an additional kill). The test's own doc comment states the operational conclusion in plain language: "a stuck `ipe watch` needs SIGKILL — a second SIGTERM is not a documented or relied-upon escape hatch." |
 
 ## 4. Combined TDD step list
 
@@ -1253,11 +1253,11 @@ module until then. Do not commit yet.
 
 **1B.2 — `PostgresStore` mirror.**
 Same two tests, same implementation shape, over `PostgresStore` (gated on
-`SKY_TEST_PG_URL`, matching the existing precedent). Still part of the
+`IPE_TEST_PG_URL`, matching the existing precedent). Still part of the
 1B.1-1B.4 atomic commit — do not commit yet.
 
 **1B.3 — `RedisStore` mirror, HASH-shaped.**
-Same two tests (gated on `SKY_TEST_REDIS_URL`) over `RedisStore`, but the
+Same two tests (gated on `IPE_TEST_REDIS_URL`) over `RedisStore`, but the
 implementation switches from a bare string value to a Redis HASH
 (`HSET sky:sess:<sid> blob <json> tag <hex>` + one `EXPIRE`) so the tag and
 blob share one TTL. Still part of the 1B.1-1B.4 atomic commit — do not
@@ -1282,7 +1282,7 @@ live,db,redis_store`) to confirm no other regression. Commit —
 In `crates/sky_backend_rust/src/emit_live.rs`, add a unit test (in this
 crate's own test module, not the 433-fixture golden harness) asserting
 that emitting a small synthetic `live_app` cfg produces a string
-CONTAINING a `const SKY_LIVE_MODEL_SCHEMA_TAG: [u8; 32] = [...]` line and
+CONTAINING a `const IPE_LIVE_MODEL_SCHEMA_TAG: [u8; 32] = [...]` line and
 that the emitted `live_app(...)` call passes that identifier as its new
 final argument. **Confirm it fails** (the const doesn't exist in the
 output yet). Wire `let schema_tag = model_schema_tag(ctx, model_ty)?;`
@@ -1347,7 +1347,7 @@ and confirm it fails if you temporarily swap in an `.unwrap()` to prove the
 test actually exercises the failure path. Restore the `?`. Commit.
 
 **1C.4 — `PostgresStore` + `RedisStore` mirrors.**
-Same two tests (`SKY_TEST_PG_URL`/`SKY_TEST_REDIS_URL`-gated) over
+Same two tests (`IPE_TEST_PG_URL`/`IPE_TEST_REDIS_URL`-gated) over
 Postgres and Redis; Redis's HASH `tag` field is retired (stop writing it —
 the tag now lives inside the `blob` field's leading 32 bytes, same as
 Sqlite/Postgres). Commit — **Stage C complete. Problem 1 fully closed.**
@@ -1377,10 +1377,10 @@ insert a row directly via raw SQL (simulating a cross-replica session, no
 identical-to-`MemoryStore` body over `mem_cache`. Run green. Commit.
 
 **2.3 — `PostgresStore::live_sessions()`.**
-Same test (`SKY_TEST_PG_URL`-gated), same body. Commit.
+Same test (`IPE_TEST_PG_URL`-gated), same body. Commit.
 
 **2.4 — `RedisStore::live_sessions()`.**
-Same test (`SKY_TEST_REDIS_URL`-gated), same body. Commit — trait addition
+Same test (`IPE_TEST_REDIS_URL`-gated), same body. Commit — trait addition
 fully implemented across all four backends.
 
 **2.5 — `push_reload_to_live_sessions` helper.**
@@ -1427,7 +1427,7 @@ own, independent of everything else in this document.**
 
 **3.2 — Wire into `run_inner`, gated on `external_stop.is_none()`.**
 Add `watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_skyc_
-process` to `crates/skyc/tests/watch_integration.rs` (`SKY_E2E=1`,
+process` to `crates/skyc/tests/watch_integration.rs` (`IPE_E2E=1`,
 unix-gated, mirroring the existing E2E test style and the Bug-3 regression
 test's `/proc/<pid>/environ`-based child-liveness check): start a real
 `ipe watch` subprocess (i.e. via `run()`, `external_stop = None`) against a
@@ -1442,7 +1442,7 @@ call to `run_inner` per §3.3's REVISED design — `if external_stop.is_none()
 { ... sky_watch::install_sigterm_forwarder(...) ... }`, inserted right
 after `evt_tx`/`evt_rx` are created and BEFORE the existing
 `external_stop`-consuming block moves it out. Run the new test green. Run
-it again alongside the three existing `SKY_E2E=1` watch scenarios
+it again alongside the three existing `IPE_E2E=1` watch scenarios
 (sequentially, per the project's own "never overlapping E2E watch runs
 sharing a port" convention already established in §14.9) to confirm no
 interference. Commit.
@@ -1471,7 +1471,7 @@ place. Commit.
 **3.4 — Double-SIGTERM proof test (corrects decision 6's claim, finding
 7).**
 Add `double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_
-sigkill` (`SKY_E2E=1`, unix-gated) per §3.5's test-inventory description:
+sigkill` (`IPE_E2E=1`, unix-gated) per §3.5's test-inventory description:
 start a real `ipe watch` subprocess whose supervised child ignores SIGTERM
 (so `supervisor.shutdown`'s bounded grace window is guaranteed to run its
 full course), send SIGTERM once, then send a SECOND SIGTERM partway

@@ -8,12 +8,12 @@
 //! (the same strategy, extended to by-value match arms).
 //!
 //! RED side: an alias over a dispatch-NEEDING inner (`(Just x) as inner`
-//! nested in a ctor payload) is SKY-L0128 fail-closed — the clone-rebuild
+//! nested in a ctor payload) is IPE-L0128 fail-closed — the clone-rebuild
 //! repair is only sound for dispatch-free inners.
 //!
 //! Spec: `docs/adr/0011-emitter-clone-borrow-discipline.md` §1.
 //!
-//! Run: `SKY_E2E=1 cargo test golden_i99`
+//! Run: `IPE_E2E=1 cargo test golden_i99`
 
 use std::path::{Path, PathBuf};
 
@@ -47,12 +47,12 @@ fn i99_alias_tuple_match_arm_is_skyc_ok() {
     );
 }
 
-/// `SKY_E2E` tier: the emitted project must cargo-build AND run with the
+/// `IPE_E2E` tier: the emitted project must cargo-build AND run with the
 /// arm body reading `a`, `b`, AND `w` — proving the E0382 partial move is
 /// gone and the values are correct (not just "compiles").
 #[test]
 fn i99_alias_tuple_match_arm_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();
@@ -95,12 +95,12 @@ fn i99_alias_over_self_edge_is_skyc_ok() {
     );
 }
 
-/// `SKY_E2E` tier: the emitted self-edge project must cargo-build AND run
+/// `IPE_E2E` tier: the emitted self-edge project must cargo-build AND run
 /// with the arm body reading BOTH the recursed value (`child`) and the
 /// aliased whole (`w`) — proving the E0308 box mismatch is gone.
 #[test]
 fn i99_alias_over_self_edge_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();
@@ -123,7 +123,7 @@ fn i99_alias_over_self_edge_builds_and_runs() {
 }
 
 /// RED-side control: an alias over a dispatch-NEEDING inner (`Just x`) in a
-/// by-value ctor payload is a clean SKY-L0128 lowering rejection — never a
+/// by-value ctor payload is a clean IPE-L0128 lowering rejection — never a
 /// skyc-accept-then-cargo-fail, and never silently over-broad (the GREEN
 /// fixture above proves the dispatch-free shape still passes).
 #[test]
@@ -139,8 +139,8 @@ fn i99_alias_over_ctor_inner_is_sky_l0128() {
     let err = built.expect_err("#99: alias over a dispatch-needing inner must be rejected");
     let rendered = format!("{err:?}");
     assert!(
-        rendered.contains("AliasOverRefutablePayload") || rendered.contains("SKY-L0128"),
-        "rejection must be the SKY-L0128 gate, got: {rendered}"
+        rendered.contains("AliasOverRefutablePayload") || rendered.contains("IPE-L0128"),
+        "rejection must be the IPE-L0128 gate, got: {rendered}"
     );
     assert!(
         !out.join("src").join("main.rs").exists(),

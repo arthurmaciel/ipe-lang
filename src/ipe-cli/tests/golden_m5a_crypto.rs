@@ -4,7 +4,7 @@
 //! Every test compiles a Sky program through `skyc`, builds the emitted Rust
 //! project with the shared cargo target, runs the binary, and asserts its stdout
 //! matches the cached oracle (`tests/golden/m5a_crypto_*/expected_go.txt`).
-//! All tests are gated on `SKY_E2E=1`; without it they return early.
+//! All tests are gated on `IPE_E2E=1`; without it they return early.
 //!
 //! ## Golden catalogue
 //!
@@ -37,7 +37,7 @@
 //! Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test golden_m5a
+//! IPE_E2E=1 cargo test golden_m5a
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -55,9 +55,9 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 
 /// Compile `tests/golden/<name>/Main.sky`, build the emitted Cargo project,
 /// run it, and assert its stdout matches the cached oracle.  Gated on
-/// `SKY_E2E=1`.
+/// `IPE_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

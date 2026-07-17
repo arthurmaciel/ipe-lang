@@ -35,7 +35,7 @@
 //!
 //! Run:
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_i172_mixed_arc_box_handler
+//! IPE_E2E=1 cargo test -p skyc --test golden_i172_mixed_arc_box_handler
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -54,7 +54,7 @@ fn entry_path(root: &Path, fixture: &str) -> PathBuf {
 /// skyc-0 ∧ carrier-unification: the compiler must accept the program AND emit
 /// the `Ui.onSubmit` argument's sibling branches through the identical `Arc`
 /// carrier — checked unconditionally (cheap, no `cargo`), independent of the
-/// `SKY_E2E` gate. This is the exact assertion the E0308/E0507 SEAL break cannot
+/// `IPE_E2E` gate. This is the exact assertion the E0308/E0507 SEAL break cannot
 /// recur: at the unification slot the emitted Rust must build the sibling
 /// function value via `::std::sync::Arc::new` (never a bare `Box::new` at the
 /// slot), and the promoted `handler` value-leaf must be CLONED (`.clone()`,
@@ -112,10 +112,10 @@ fn assert_skyc_unifies_to_arc(fixture: &str) {
 }
 
 /// cargo-0 ∧ run-0: the emitted project actually compiles with `rustc` (no
-/// E0308/E0507) and renders the form. Gated on `SKY_E2E=1` — the only check that
+/// E0308/E0507) and renders the form. Gated on `IPE_E2E=1` — the only check that
 /// would have caught the original SEAL violation (E0308, `skyc build` clean).
 fn assert_cargo_builds_and_runs(fixture: &str) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

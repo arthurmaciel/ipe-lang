@@ -24,7 +24,7 @@ injection was built for — `"Html" | "Element" | "Attribute"` (the same three
 `ir_type_from_ty`'s UI arms special-case) — before injecting. Non-UI Cons no
 longer inject; the downstream wildcard-`any` return-type handling then calls
 `ir_type_from_ty(body_ty)` without the injected mapping, and the embedded free
-`Ty::Var` makes it **fail closed** with `Feature::Polymorphism` (`SKY-L0102`)
+`Ty::Var` makes it **fail closed** with `Feature::Polymorphism` (`IPE-L0102`)
 instead of emitting a return-position-only generic.
 
 Rejected alternative (for any future genuinely-polymorphic-value use case): a
@@ -37,7 +37,7 @@ prior art), never a return-only generic.
 - **Invariant that must keep holding:** the injection is a UI-specific
   accommodation, gated on the UI Con name; it must never widen a non-UI `any`
   return into a return-position-only generic (that shape is the seal breach). A
-  non-UI `… -> any` body carrying a free type var fails closed with `SKY-L0102`,
+  non-UI `… -> any` body carrying a free type var fails closed with `IPE-L0102`,
   actionable ("annotate the element type or drop the `any`").
 - **Sanctioned divergence:** the Go backend accepts `w : Int -> any; w n = []`
   (its `any` erases to `[]any`); post-fix Ipê rejects it — loud-not-silently-

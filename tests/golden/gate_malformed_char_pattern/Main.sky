@@ -3,7 +3,7 @@ import Sky.Core.Prelude exposing (..)
 
 -- An unrecognised escape resolves to backslash + char, two scalar values, which
 -- violates the single-character invariant the char backend relies on. In
--- pattern position `'\q'` must be rejected at lex time as SKY-P0015 — never
+-- pattern position `'\q'` must be rejected at lex time as IPE-P0015 — never
 -- silently lowered to a two-character literal.
 grade : Char -> Int
 grade c =

@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 -- backlog #61 negative gate: a naive string-concatenated WHERE clause is a
--- compile-time SKY-T0001 type mismatch at Db.findWhere (String vs
+-- compile-time IPE-T0001 type mismatch at Db.findWhere (String vs
 -- SqlFragment) — never a runtime SQL-injection risk. This is the core
 -- "parse, don't validate" property the SqlFragment newtype exists to
 -- establish: there is no representable way to pass raw String content where

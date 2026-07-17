@@ -4,14 +4,14 @@
 //! two case arms sums to 2 total consuming uses. Under the fn-value
 //! `Arc`-carrier promotion, the SUM (2 > 1) drives the param's
 //! promotion to the `Clone` `Arc<dyn Fn>` carrier — the program compiles and
-//! runs (`applyEither True (+1)` = `43`) instead of fail-closing SKY-L0127.
+//! runs (`applyEither True (+1)` = `43`) instead of fail-closing IPE-L0127.
 //!
 //! The SUM-not-MAX pin survives with its polarity flipped: if
 //! `count_fn_value_uses`'s Match arm were accidentally changed to MAX,
 //! `max(1,1)=1` would skip the promotion, the param would stay a bare
 //! `Box<dyn Fn>` moved once per arm, and the emitted source would carry NO
 //! `Arc<dyn Fn>` rebind — the default (fast) test run asserts that rebind is
-//! present, and the `SKY_E2E=1` run would catch the resulting cargo E0382.
+//! present, and the `IPE_E2E=1` run would catch the resulting cargo E0382.
 //!
 //! Run:
 //! ```text
@@ -29,7 +29,7 @@ fn repo_root() -> PathBuf {
 
 /// The per-arm consuming uses must SUM to 2 and Arc-promote the param: the
 /// build succeeds and the emitted program carries the `Arc<dyn Fn>` rebind.
-/// Behind `SKY_E2E=1` the emitted project must build and print `43`.
+/// Behind `IPE_E2E=1` the emitted project must build and print `43`.
 #[test]
 fn i193_nonclone_fn_once_per_arm_rejected() {
     let root = repo_root();
@@ -51,7 +51,7 @@ fn i193_nonclone_fn_once_per_arm_rejected() {
     assert!(
         built.is_ok(),
         "per-arm fn-value uses must SUM to 2 and Arc-promote the param \
-         (was SKY-L0127 under the Box-only carrier): {built:?}"
+         (was IPE-L0127 under the Box-only carrier): {built:?}"
     );
 
     let emitted = std::fs::read_to_string(out.join("src").join("main.rs")).unwrap_or_default();
@@ -62,7 +62,7 @@ fn i193_nonclone_fn_once_per_arm_rejected() {
          skips the promotion and re-opens the per-arm double-move E0382)"
     );
 
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = support::build_and_run_emitted("nonclone_fn_once_per_arm", &out);

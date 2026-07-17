@@ -58,7 +58,7 @@ import Std.Db as Db exposing (Db)
 -- so `Pure.uuidV4` is a point-free alias to it, exactly like every other
 -- `Ffi.kernel` stdlib binding.  A `uuidV4 _ = uuidV4Kernel` indirection
 -- annotated the kernel as a bare `Task Error String`, which mismatches its
--- real `() -> Task Error String` scheme (SKY-T0001).
+-- real `() -> Task Error String` scheme (IPE-T0001).
 uuidV4 : () -> Task Error String
 uuidV4 =
     Ffi.kernel "Uuid_v4"

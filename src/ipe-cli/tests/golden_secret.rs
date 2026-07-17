@@ -8,10 +8,10 @@
 //! Companion files: `crates/skyc/tests/secret_gates.rs` (negative gates —
 //! `mySecret ++ "x"` rejected at compile time) and
 //! `crates/skyc/tests/model_admissibility.rs`
-//! (`live_model_with_secret_field_is_rejected`, the Model-gate SKY-L0120
+//! (`live_model_with_secret_field_is_rejected`, the Model-gate IPE-L0120
 //! case).
 //!
-//! Run: `SKY_E2E=1 cargo test golden_secret`
+//! Run: `IPE_E2E=1 cargo test golden_secret`
 
 use std::path::{Path, PathBuf};
 
@@ -27,7 +27,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 }
 
 fn e2e_enabled() -> bool {
-    std::env::var("SKY_E2E").is_ok()
+    std::env::var("IPE_E2E").is_ok()
 }
 
 /// Compile `tests/golden/<name>/Main.sky`, build the emitted Cargo project,
@@ -162,10 +162,10 @@ fn auth_sign_verify_round_trip_with_secret_key() {
     assert_eq!(out.stdout.trim(), "alice");
 }
 
-// ── Pure compile-only smoke (always runs, no SKY_E2E / no cargo) ───────────
+// ── Pure compile-only smoke (always runs, no IPE_E2E / no cargo) ───────────
 
 /// All five fixtures above must at least `skyc`-compile cleanly even when
-/// `SKY_E2E` is unset (CI without the heavy cargo-build tier still catches a
+/// `IPE_E2E` is unset (CI without the heavy cargo-build tier still catches a
 /// type-check regression).
 #[test]
 fn all_secret_goldens_compile() {

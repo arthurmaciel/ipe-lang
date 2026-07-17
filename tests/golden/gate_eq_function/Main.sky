@@ -4,7 +4,7 @@ import Sky.Core.Prelude exposing (..)
 -- `eq2` constrains `a` to Equatable (its body compares with `==`). A function is
 -- the one shape `==` cannot handle — Rust derives `PartialEq` for primitives,
 -- tuples, records, and enums, but never for a function. Instantiating `eq2` at a
--- function type is rejected here (SKY-T0014) rather than emitting Rust that
+-- function type is rejected here (IPE-T0014) rather than emitting Rust that
 -- cargo cannot build.
 eq2 : a -> a -> Bool
 eq2 p q = p == q

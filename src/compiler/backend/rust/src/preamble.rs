@@ -14,7 +14,7 @@
 //!
 //! A missing anchor is not a silent empty fallback: a golden edit
 //! that drops the USER TYPES banner or the `Ffi.kernel` polyfill comment fails
-//! loudly with [`Diagnostic::CompilerBug`] (SKY-I0203) rather than emitting a
+//! loudly with [`Diagnostic::CompilerBug`] (IPE-I0203) rather than emitting a
 //! truncated project.
 
 use ipe_diagnostics::{DResult, Diagnostic};
@@ -24,7 +24,7 @@ use ipe_diagnostics::{DResult, Diagnostic};
 const GOLDEN: &str = include_str!("../../../../../tests/golden/basics/main.rs");
 
 /// The `Diagnostic::CompilerBug` raised when a golden anchor is absent — a
-/// drifted-golden invariant violation, surfaced (SKY-I0203) instead of a silent
+/// drifted-golden invariant violation, surfaced (IPE-I0203) instead of a silent
 /// empty slice.
 fn anchor_missing(anchor: &str) -> Diagnostic {
     Diagnostic::CompilerBug {
@@ -41,7 +41,7 @@ fn anchor_missing(anchor: &str) -> Diagnostic {
 ///
 /// # Errors
 ///
-/// Returns [`Diagnostic::CompilerBug`] (SKY-I0203) if the USER TYPES banner
+/// Returns [`Diagnostic::CompilerBug`] (IPE-I0203) if the USER TYPES banner
 /// anchor is absent from the embedded golden.
 pub fn preamble() -> DResult<String> {
     // The user type definitions begin immediately after the USER TYPES banner
@@ -73,7 +73,7 @@ pub fn preamble() -> DResult<String> {
 ///
 /// # Errors
 ///
-/// Returns [`Diagnostic::CompilerBug`] (SKY-I0203) if the `Ffi.kernel` polyfill
+/// Returns [`Diagnostic::CompilerBug`] (IPE-I0203) if the `Ffi.kernel` polyfill
 /// anchor is absent from the embedded golden.
 pub fn epilogue() -> DResult<String> {
     // Anchored on the ASCII prefix of the polyfill comment (the full comment

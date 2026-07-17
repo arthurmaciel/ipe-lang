@@ -2,7 +2,7 @@
 //!
 //! Compiles `tests/golden/html_elements/Main.sky` through `skyc`, builds the
 //! emitted Rust project with the shared cargo target, runs the binary, and
-//! asserts on the rendered HTML. Gated on `SKY_E2E=1`.
+//! asserts on the rendered HTML. Gated on `IPE_E2E=1`.
 //!
 //! ## What is proven (CORRECT-TAG, not the pre-batch wrong-render fold)
 //!
@@ -17,7 +17,7 @@
 //!   sink is tag-name-driven for void self-closing + drops children for void
 //!   tags, so no injected-child surface.
 //!
-//! Run: `SKY_E2E=1 cargo test golden_m7_html_elements`
+//! Run: `IPE_E2E=1 cargo test golden_m7_html_elements`
 
 use std::path::{Path, PathBuf};
 
@@ -30,7 +30,7 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn html_element_family_renders_correct_tags() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

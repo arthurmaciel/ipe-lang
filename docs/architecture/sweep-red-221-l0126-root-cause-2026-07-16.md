@@ -1,4 +1,4 @@
-# Sweep red #221 — `36-composite-server` SKY-L0126 root cause
+# Sweep red #221 — `36-composite-server` IPE-L0126 root cause
 
 Read-only diagnosis. No code changed; all repro work under `/tmp` copies with
 an instrumented THROWAWAY compiler build (`/tmp/ipe-instr`,
@@ -20,7 +20,7 @@ Two distinct defects compose:
    representation: partial application of a sibling *let-bound* function value
    (`wrap`, carrier `Box<dyn Fn>`, non-`Clone`) synthesizes a residual closure
    that reads `Var(wrap)` at closure depth 1, where the lowerer's depth-0
-   callee-position exemption does not apply → fail-closed SKY-L0126. Legal Sky;
+   callee-position exemption does not apply → fail-closed IPE-L0126. Legal Sky;
    Go reference runs it; the reference Rust backend handles this exact shape
    (`rateLimit … h` is named verbatim in its comments) via a **clonable
    `Arc<dyn Fn>` carrier + pre-cloned captures**.
@@ -31,9 +31,9 @@ Two distinct defects compose:
    contains those bytes with the closest `lo` — in the pristine tree that is
    `Main.sky`'s `runMigrate` → the phantom `Main.sky:73:2`.
 
-## (a) What SKY-L0126 is + the reported construct
+## (a) What IPE-L0126 is + the reported construct
 
-`SKY-L0126` ("non-Clone capture in a closure is not yet supported",
+`IPE-L0126` ("non-Clone capture in a closure is not yet supported",
 `Feature::NonCloneCapture`): the capture-clone rewrite that keeps emitted
 closures `Fn` (re-callable) fail-closes when a closure captures a binding
 whose `CloneClass` is `NonClone` (functions, tasks, decoders, `Cmd`/`Sub`,
@@ -65,7 +65,7 @@ main =
         println (String.fromInt r)
 ```
 
-→ `SKY-L0126`, instrumentation: `site=rewrite_captured_clones sym=wrap
+→ `IPE-L0126`, instrumentation: `site=rewrite_captured_clones sym=wrap
 depth=1`, `lambda_span` = the `guarded` binding.
 
 Contrast pair: `guarded f = wrap (inc f) 2` (FULL application — `wrap` stays a
@@ -202,7 +202,7 @@ an optional `home`), and skyc's `span_attributed_err` (lib.rs:743) resolves
 homeless spans (`Span::DUMMY`). **Invariant:** *a diagnostic's span is only
 ever resolved against the source text of the module that produced it.*
 Ship B even if A lands first — every other lowering diagnostic class
-(SKY-L01xx) misattributes the same way in multi-module projects, and it turns
+(IPE-L01xx) misattributes the same way in multi-module projects, and it turns
 any future multi-module red from a bisection swamp into a one-look fix.
 
 ## (f) Affected files + regression tests
@@ -230,7 +230,7 @@ Fix B (attribution):
   (only if `Diagnostic` itself carries the home).
 
 Regression tests that should exist:
-1. Golden + `SKY_E2E=1` for the (b) minimal trigger — sibling let-bound
+1. Golden + `IPE_E2E=1` for the (b) minimal trigger — sibling let-bound
    partial application; today expected-red, green after A. Companion greens:
    the full-application and top-level-`wrap` contrast variants (must stay
    green even before A).

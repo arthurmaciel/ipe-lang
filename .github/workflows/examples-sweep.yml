@@ -8,7 +8,7 @@
 # ── PHASED Go-parity (READ THIS) ─────────────────────────────────────────────
 # EQUIVALENCE needs a Go reference built by the Haskell `sky` compiler, which this repo
 # does NOT have. The first iteration therefore runs BUILD+RUN only
-# (SKY_SWEEP_NO_EQUIV=1). The commented `examples-sweep-equivalence` job stub at the
+# (IPE_SWEEP_NO_EQUIV=1). The commented `examples-sweep-equivalence` job stub at the
 # bottom shows how EQUIVALENCE turns on later (build/obtain the Haskell `sky` reference).
 #
 # ── NON-GATING FOR NOW ───────────────────────────────────────────────────────
@@ -61,15 +61,15 @@ jobs:
       # sccache OFF on CI (its GHA backend uses GitHub's retired v1 Actions-Cache
       # API); actions/cache carries cross-run warmth instead. Leaving
       # CARGO_INCREMENTAL at cargo's default lets the cached target do incremental.
-      SKY_NO_SCCACHE: '1'
+      IPE_NO_SCCACHE: '1'
       # Phase 1: BUILD + RUN, no Go≡Rust EQUIVALENCE (no Haskell `sky` reference here).
-      SKY_SWEEP_NO_EQUIV: '1'
+      IPE_SWEEP_NO_EQUIV: '1'
       # Night gate is opt-in (off by default) — but set FORCE too, belt-and-braces.
-      SKY_SWEEP_FORCE: '1'
+      IPE_SWEEP_FORCE: '1'
       # >=32-byte test secret so any Std.Auth example that DOES build can boot.
-      SKY_AUTH_TOKEN_SECRET: sky-ci-sweep-test-secret-0123456789-abcdef
+      IPE_AUTH_TOKEN_SECRET: sky-ci-sweep-test-secret-0123456789-abcdef
       # Cold-CI build headroom (per-example skyc ceiling).
-      SKY_SWEEP_BUILD_TIMEOUT: '900'
+      IPE_SWEEP_BUILD_TIMEOUT: '900'
       CARGO_HTTP_MULTIPLEXING: 'false'
       CARGO_NET_RETRY: '5'
 
@@ -174,8 +174,8 @@ jobs:
   # PHASE 2 (COMMENTED STUB) — Go≡Rust EQUIVALENCE. Turn this on once a Go reference is
   # available. Two supported paths:
   #   (a) Build the Haskell `sky` compiler in the job (haskell-actions/setup +
-  #       cabal build exe:sky), put it on PATH as SKY_GO_BIN, drop
-  #       SKY_SWEEP_NO_EQUIV, and add setup-go for the reference `go build`.
+  #       cabal build exe:sky), put it on PATH as IPE_GO_BIN, drop
+  #       IPE_SWEEP_NO_EQUIV, and add setup-go for the reference `go build`.
   #   (b) Consume vendored Go reference outputs (expected_go.txt per example,
   #       à la docs/architecture/e2e-and-oracle-caching.md) so no Go toolchain is
   #       needed — extend equivalence_for() to diff against the cached reference.
@@ -185,9 +185,9 @@ jobs:
   #   runs-on: ubuntu-latest
   #   env:
   #     CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/sky-rust-target
-  #     SKY_NO_SCCACHE: '1'
-  #     SKY_SWEEP_FORCE: '1'
-  #     SKY_GO_BIN: sky           # the Haskell reference compiler on PATH
+  #     IPE_NO_SCCACHE: '1'
+  #     IPE_SWEEP_FORCE: '1'
+  #     IPE_GO_BIN: sky           # the Haskell reference compiler on PATH
   #   steps:
   #     - uses: actions/checkout@v4
   #     - uses: dtolnay/rust-toolchain@stable
@@ -198,9 +198,9 @@ jobs:
   #     - run: sudo apt-get update && sudo apt-get install -y ripgrep xvfb
   #     - name: Build skyc
   #       run: cargo build --release -p skyc
-  #     - name: Build the Haskell sky reference (SKY_GO_BIN)
+  #     - name: Build the Haskell sky reference (IPE_GO_BIN)
   #       run: |
   #         # (in the sky checkout) cabal build exe:sky && ln -sf "$(cabal list-bin exe:sky)" /usr/local/bin/sky
   #         echo "TODO: wire the Haskell sky reference build"
   #     - name: Run examples sweep (BUILD + RUN + EQUIVALENCE)
-  #       run: bash scripts/equivalence-checks/examples-sweep.sh   # EQUIVALENCE on: SKY_SWEEP_NO_EQUIV unset
+  #       run: bash scripts/equivalence-checks/examples-sweep.sh   # EQUIVALENCE on: IPE_SWEEP_NO_EQUIV unset

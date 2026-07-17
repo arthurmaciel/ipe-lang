@@ -80,7 +80,7 @@ impl fmt::Display for CliError {
             Self::RuntimeNotFound => write!(
                 f,
                 "could not locate the Sky runtime; \
-                 set SKY_RUNTIME_DIR to an explicit path or pass --runtime <dir>"
+                 set IPE_RUNTIME_DIR to an explicit path or pass --runtime <dir>"
             ),
             Self::UnknownCode { input, suggestions } => {
                 write!(f, "unknown error code `{input}`")?;
@@ -159,7 +159,7 @@ pub fn build(entry: &Path, out_dir: &Path, runtime_dir: &Path) -> Result<(), Cli
 ///
 /// When no `sky.toml` is present, the entry file's parent directory is used
 /// as the source root. Every `*.sky` file found there is loaded and compiled
-/// together — fixing SKY-N0020 for multi-file projects built via the
+/// together — fixing IPE-N0020 for multi-file projects built via the
 /// file-path shorthand (`skyc build src/Main.sky`).
 ///
 /// This is the faithful port of Haskell's `Graph.discoverModulesMulti
@@ -472,7 +472,7 @@ fn compile_modules_observed(
 /// driver's unforgeable record from [`project::inject_compiled_std_closure`]).
 /// A user file squatting on `Std.Foo` is NOT in `injected` (injection skipped
 /// it on the pre-existing-key guard), so it is `User` and stays
-/// SKY-N0025-rejected.
+/// IPE-N0025-rejected.
 #[must_use]
 pub fn create_source_root(
     db: &ipe_db::SkyDatabase,
@@ -679,7 +679,7 @@ pub fn compile_prepared(
         // Union ctor spans live in the union's home byte-namespace, outside any
         // def body — without this they fall back to the entry file and render
         // at a coincidental byte offset in Main.sky (the misattribution class
-        // for SKY-L0102 / SKY-L0114 and other `lower_enum` errors).
+        // for IPE-L0102 / IPE-L0114 and other `lower_enum` errors).
         for union in &linked.unions {
             for ctor in &union.ctors {
                 if ctor.span.lo <= span.lo && span.hi <= ctor.span.hi {
@@ -725,7 +725,7 @@ pub fn compile_prepared(
         };
         CliError::Pipeline { file, src, diag }
     })?;
-    // Print non-fatal warnings (e.g. SKY-T0011 RedundantCaseBranch) to stderr.
+    // Print non-fatal warnings (e.g. IPE-T0011 RedundantCaseBranch) to stderr.
     // These are Severity::Warning: the build continues and exit code stays 0.
     for w in &types.warnings {
         let span = diag_span(w);
@@ -737,13 +737,13 @@ pub fn compile_prepared(
     // defs keep their original `home` byte-namespace, so a bare `pipeline_err`
     // (which always blames the entry file) mis-renders a dep-module diagnostic
     // against the entry file at a coincidental byte offset — e.g. a State.sky
-    // SKY-L0115 shown at an unrelated Main.sky line. `source_for_span` maps the
+    // IPE-L0115 shown at an unrelated Main.sky line. `source_for_span` maps the
     // span back to its owning def's file, the same heuristic already used for
     // constraint-gen / exhaustiveness type errors.
     // Lowering (and emit) errors carry the owning def's `home`,
     // exactly like `typecheck` above. When `home` is non-empty we resolve the
     // source file DIRECTLY via `home_to_source` (O(log N), exact) — this is what
-    // makes a Server.sky SKY-L0126 render against Server.sky, not against a
+    // makes a Server.sky IPE-L0126 render against Server.sky, not against a
     // Main.sky def whose byte range coincidentally overlaps the failing span.
     // An empty `home` (homeless backend diagnostic, or a pre-def lowering
     // error) falls back to the byte-offset heuristic `source_for_span`.
@@ -994,8 +994,8 @@ fn prune_orphaned_files(
 /// 2. Discover every `*.sky` file under `src/`.
 /// 3. Scan each file for `import` declarations (token-level lexer scan) to
 ///    build the import graph.
-/// 4. Topological sort — fail closed on a cycle (SKY-N0021).
-/// 5. Canonicalise each module in dep-first order (SKY-N0020 / N0022 / N0023 /
+/// 4. Topological sort — fail closed on a cycle (IPE-N0021).
+/// 5. Canonicalise each module in dep-first order (IPE-N0020 / N0022 / N0023 /
 ///    N0024 / N0025 gate).
 /// 6. Link (merge) all canonical modules into one.
 /// 7. Infer → lower → emit as a single-module program (byte-identical to the
@@ -1040,7 +1040,7 @@ pub fn build_project(
 /// Locate the Sky runtime module tree (`src/runtime/rust/src/`).
 ///
 /// Resolution order:
-/// 1. `$SKY_RUNTIME_DIR` — explicit override, allows pointing at any tree.
+/// 1. `$IPE_RUNTIME_DIR` — explicit override, allows pointing at any tree.
 /// 2. Upward walk from the current directory, checking in order:
 ///    - `src/runtime/rust/src/ipe_runtime` (the in-repo copy — found immediately when
 ///      running from anywhere inside the sky-rust workspace)
@@ -1051,7 +1051,7 @@ pub fn build_project(
 /// Returns [`CliError::RuntimeNotFound`] when no candidate directory exists, or
 /// [`CliError::Io`] if the current directory cannot be read.
 pub fn resolve_runtime() -> Result<PathBuf, CliError> {
-    if let Ok(dir) = std::env::var("SKY_RUNTIME_DIR") {
+    if let Ok(dir) = std::env::var("IPE_RUNTIME_DIR") {
         let path = PathBuf::from(dir);
         if path.is_dir() {
             return Ok(path);
@@ -1182,7 +1182,7 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
     //   1. Directory → expect sky.toml inside it.
     //   2. .toml file → build_project directly.
     //   3. .sky file → walk up looking for sky.toml (project-mode); fall back
-    //      to sibling discovery when no sky.toml exists (fixes SKY-N0020 for
+    //      to sibling discovery when no sky.toml exists (fixes IPE-N0020 for
     //      multi-file projects built via the file-path shorthand). This mirrors
     //      the Haskell driver's `Graph.discoverModulesMulti srcRoot entryPath`
     //      call in `Sky.Build.Compile.hs`.
@@ -1388,7 +1388,7 @@ pub fn code_index() -> String {
 /// Resolve a (case-insensitive) code string to its embedded explain page.
 ///
 /// The input is trimmed and upper-cased before matching, so `sky-t0001` and
-/// `SKY-T0001` both resolve.
+/// `IPE-T0001` both resolve.
 ///
 /// # Errors
 /// Returns [`CliError::UnknownCode`] (carrying a deterministic did-you-mean
@@ -1817,11 +1817,11 @@ mod tests {
 
     #[test]
     fn explain_resolves_a_known_code() {
-        let page = explain_lookup("SKY-T0001");
+        let page = explain_lookup("IPE-T0001");
         assert!(page.is_ok(), "known code must resolve: {:?}", page.err());
         let Ok(page) = page else { return };
         assert!(
-            page.starts_with("# SKY-T0001:"),
+            page.starts_with("# IPE-T0001:"),
             "page line 1 must name the code, got:\n{page}"
         );
     }
@@ -1834,20 +1834,20 @@ mod tests {
 
     #[test]
     fn explain_resolves_sky_t0014() {
-        // SKY-T0014 resolves via ALL_CODES from ipe_diagnostics rather than
+        // IPE-T0014 resolves via ALL_CODES from ipe_diagnostics rather than
         // a hand-mirror that could omit it.
-        let result = explain_lookup("SKY-T0014");
+        let result = explain_lookup("IPE-T0014");
         assert!(
             result.is_ok(),
-            "SKY-T0014 must resolve via ALL_CODES: {:?}",
+            "IPE-T0014 must resolve via ALL_CODES: {:?}",
             result.err()
         );
     }
 
     #[test]
     fn explain_rejects_unknown_code_with_suggestions() {
-        // Genuinely unknown code, close to SKY-T0013 — must yield did-you-mean.
-        let result = explain_lookup("SKY-T0099");
+        // Genuinely unknown code, close to IPE-T0013 — must yield did-you-mean.
+        let result = explain_lookup("IPE-T0099");
         assert!(
             matches!(&result, Err(CliError::UnknownCode { .. })),
             "unknown code must error, got: {result:?}"
@@ -1864,12 +1864,12 @@ mod tests {
     #[test]
     fn explain_unknown_code_display_is_deterministic() {
         let err = CliError::UnknownCode {
-            input: "SKY-Z9999".to_owned(),
-            suggestions: vec!["SKY-T0001", "SKY-T0002"],
+            input: "IPE-Z9999".to_owned(),
+            suggestions: vec!["IPE-T0001", "IPE-T0002"],
         };
         assert_eq!(
             err.to_string(),
-            "unknown error code `SKY-Z9999`\n  did you mean: SKY-T0001, SKY-T0002?"
+            "unknown error code `IPE-Z9999`\n  did you mean: IPE-T0001, IPE-T0002?"
         );
     }
 
@@ -1878,9 +1878,9 @@ mod tests {
         let index = code_index();
         let lines = index.lines().count();
         assert_eq!(lines, ALL_CODES.len(), "one line per code");
-        assert_eq!(ALL_CODES.len(), 91, "taxonomy is 91 codes"); // #90: +SKY-L0127; #99: +SKY-L0128; #32: +SKY-T0016; builtin-record-update: +SKY-T0017; #196: +SKY-N0028
+        assert_eq!(ALL_CODES.len(), 91, "taxonomy is 91 codes"); // #90: +IPE-L0127; #99: +IPE-L0128; #32: +IPE-T0016; builtin-record-update: +IPE-T0017; #196: +IPE-N0028
         assert!(
-            index.contains("SKY-T0001  type mismatch"),
+            index.contains("IPE-T0001  type mismatch"),
             "index pairs code with title"
         );
     }
@@ -1977,7 +1977,7 @@ mod tests {
     /// Generic records, end to end from SOURCE: parse → canon → infer → lower →
     /// emit → `cargo build` → run, asserting the program prints `42` — the value
     /// the Go reference backend produces for the same program (hand-verified in a
-    /// temp dir). Gated on `SKY_E2E=1` so the default `cargo test` stays fast and
+    /// temp dir). Gated on `IPE_E2E=1` so the default `cargo test` stays fast and
     /// offline. Complements the backend crate's hand-built-IR e2e by exercising
     /// the whole frontend (record type annotations + generalisation + lowering).
     #[test]
@@ -1989,7 +1989,7 @@ mod tests {
              unwrap r =\n    r.value\n\n\
              main = println (String.fromInt (unwrap (wrap 42)))\n";
 
-        if std::env::var("SKY_E2E").is_err() {
+        if std::env::var("IPE_E2E").is_err() {
             return;
         }
 
@@ -2039,7 +2039,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // find_manifest_for_sky_file tests (SKY-N0020 fix)
+    // find_manifest_for_sky_file tests (IPE-N0020 fix)
     // -----------------------------------------------------------------------
 
     /// Creates a temp directory with a nested `src/Main.sky` and a `sky.toml`
@@ -2068,7 +2068,7 @@ mod tests {
     // Regression: PAnything (wildcard lambda param with unconstrained Ty::Var)
     // -----------------------------------------------------------------------
 
-    /// Regression for `SKY-L0102` (`Feature::Polymorphism`) on wildcard `_`
+    /// Regression for `IPE-L0102` (`Feature::Polymorphism`) on wildcard `_`
     /// lambda parameters.
     ///
     /// Calling `ir_type_from_ty` on the `_` param's type is unsound: when the
@@ -2119,7 +2119,7 @@ main =
         let result = build(&entry, &out, &runtime);
         assert!(
             result.is_ok(),
-            "wildcard lambda with unconstrained type must not fire SKY-L0102: {result:?}"
+            "wildcard lambda with unconstrained type must not fire IPE-L0102: {result:?}"
         );
         let _ = fs::remove_dir_all(&dir);
     }
@@ -2218,12 +2218,12 @@ main =
     }
 
     /// Two-module program: `Main.sky` calls a helper in sibling `Lib.sky`.
-    /// `build_with_sibling_discovery` must compile both without SKY-N0020.
+    /// `build_with_sibling_discovery` must compile both without IPE-N0020.
     #[test]
     fn sibling_discovery_compiles_two_module_program() {
         let runtime = resolve_runtime();
         if runtime.is_err() {
-            // Runtime not found in this environment (CI without SKY_RUNTIME_DIR) —
+            // Runtime not found in this environment (CI without IPE_RUNTIME_DIR) —
             // skip rather than fail: the sweep catches this live.
             return;
         }

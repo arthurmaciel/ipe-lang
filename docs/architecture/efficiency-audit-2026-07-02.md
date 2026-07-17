@@ -141,7 +141,7 @@ Four strictly-safe findings, all producing byte-identical IR.
 The emitter's dominant cost is one heap String per IR node plus a `Vec<String>`
 + join at each composite node — inherent to the return-String-per-node design,
 kept deliberately (`#[inline(never)]` helpers bound stack depth for the
-SKY-L0200 depth-guard soundness test). A writer-based rewrite is a high-risk
+IPE-L0200 depth-guard soundness test). A writer-based rewrite is a high-risk
 architectural change, **not** a quick win, and is left as a deferred
 opportunity. Four strictly-safe wins found.
 

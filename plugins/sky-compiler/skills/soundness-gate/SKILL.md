@@ -16,7 +16,7 @@ for the irreducible soundness reasoning tools cannot do. Run it on every change.
 - BUT the hardest bugs (partial-application, nested-lambda, recursive types,
   char-escape, function-in-generic-record) are **exit-0-then-cargo-fail /
   soundness-floor** issues that PASS clippy/Miri/unit-tests — they need the
-  guardian's adversarial `SKY_E2E` probing + reasoning. So: don't make the
+  guardian's adversarial `IPE_E2E` probing + reasoning. So: don't make the
   guardian re-run rote tools; let it spend its tokens on the irreducible part.
 
 ## The process (run in order)
@@ -39,7 +39,7 @@ for the irreducible soundness reasoning tools cannot do. Run it on every change.
 3. **Adversarial guardian review — expensive (Opus, high effort), only now.**
    Given the green mechanical report, the `security-soundness-guardian` does ONLY
    what tools can't:
-   - design + run **adversarial `SKY_E2E` soundness probes** — hunt the
+   - design + run **adversarial `IPE_E2E` soundness probes** — hunt the
      exit-0-then-cargo-fail class (value laundered through a type var / payload /
      generic; recursive/mutual types; literal-escape edges; closures in data),
    - review **principle adherence** (Security > Correctness > Soundness >
@@ -51,7 +51,7 @@ for the irreducible soundness reasoning tools cannot do. Run it on every change.
 ## Hard invariants the gate enforces
 - `#![forbid(unsafe_code)]`; no `unwrap`/`expect`/`panic`/raw-indexing/`todo`.
 - Exhaustiveness is a soundness floor: a non-exhaustive match is caught
-  (SKY-T0010) BEFORE emit — Rust must never see E0004; no `_ => unreachable!()`
+  (IPE-T0010) BEFORE emit — Rust must never see E0004; no `_ => unreachable!()`
   fallback.
 - Behavioural parity vs the Go reference is the correctness oracle.
 - Reader-facing pages timeless (no project archaeology); code comments WHAT/WHY.

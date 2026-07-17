@@ -8,7 +8,7 @@
 //! * **Positive** — an alias whose string names a REGISTERED kernel resolves and
 //!   builds clean (`skyc` exit 0 AND the emitted Rust `cargo build`s). This is
 //!   the mechanism working end-to-end.
-//! * **Fail-closed (SKY-N0028)** — an alias whose string names NO registered
+//! * **Fail-closed (IPE-N0028)** — an alias whose string names NO registered
 //!   kernel is rejected at compile time. Accepting it would emit a call to a
 //!   non-existent kernel that type-checks in `skyc` but fails the downstream
 //!   `cargo build` — the exact exit-0-then-cargo-fail hole THE SEAL forbids
@@ -37,7 +37,7 @@ fn write_project(dir: &std::path::Path, main: &str) -> bool {
 }
 
 /// FAIL-CLOSED: `Ffi.kernel "NoSuchKernel_xyz"` names no registered kernel, so
-/// `skyc` must reject it with `NameError::UnknownKernelAlias` (SKY-N0028) —
+/// `skyc` must reject it with `NameError::UnknownKernelAlias` (IPE-N0028) —
 /// never accept-then-cargo-fail.
 #[test]
 fn unknown_kernel_alias_is_rejected_at_compile_time() {
@@ -66,7 +66,7 @@ fn unknown_kernel_alias_is_rejected_at_compile_time() {
     let Err(err) = built else {
         assert!(
             false_marker(),
-            "expected SKY-N0028 rejection for an alias naming an unregistered \
+            "expected IPE-N0028 rejection for an alias naming an unregistered \
              kernel, but skyc build SUCCEEDED — an exit-0-then-cargo-fail hole"
         );
         return;
@@ -87,7 +87,7 @@ fn unknown_kernel_alias_is_rejected_at_compile_time() {
     else {
         assert!(
             false_marker(),
-            "expected NameError::UnknownKernelAlias (SKY-N0028), got: {err}"
+            "expected NameError::UnknownKernelAlias (IPE-N0028), got: {err}"
         );
         return;
     };
@@ -133,7 +133,7 @@ fn malformed_kernel_alias_string_is_rejected() {
                 ..
             })
         ),
-        "a `_`-less alias string must fail closed with SKY-N0028: {built:?}"
+        "a `_`-less alias string must fail closed with IPE-N0028: {built:?}"
     );
 }
 

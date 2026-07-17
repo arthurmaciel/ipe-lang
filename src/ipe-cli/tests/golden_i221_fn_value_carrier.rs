@@ -1,13 +1,13 @@
 //! Fn-value `Arc`-carrier promotion — three shapes the position-typed carrier
 //! model dissolves (otherwise rejected, or silently cargo-broken).
 //! Each fixture must emit `main.rs` byte-identical to its checked-in golden,
-//! and (behind `SKY_E2E=1`) the emitted project must build and print the Go
+//! and (behind `IPE_E2E=1`) the emitted project must build and print the Go
 //! reference's value, exit 0.
 //!
 //! | Fixture | Shape | Without promotion |
 //! |---|---|---|
-//! | `fn_capture_eta_promoted` | sibling let-bound fn value captured by an ETA-SYNTHESIZED residual closure (`guarded f = wrap (inc f)`) | SKY-L0126 |
-//! | `fn_value_reuse_promoted` | pure fn-typed `let` consumed > 1× (direct arg moves + two partial-application eta captures) | SKY-L0127 |
+//! | `fn_capture_eta_promoted` | sibling let-bound fn value captured by an ETA-SYNTHESIZED residual closure (`guarded f = wrap (inc f)`) | IPE-L0126 |
+//! | `fn_value_reuse_promoted` | pure fn-typed `let` consumed > 1× (direct arg moves + two partial-application eta captures) | IPE-L0127 |
 //! | `fn_param_capture_promoted` | fn-typed PARAM forwarded non-callee inside an eta closure (`g = apply f`) | skyc-green, cargo E0507 (SEAL break) |
 //!
 //! The promotion decision runs on the LOWERED scope (the IR walkers see the
@@ -53,7 +53,7 @@ fn assert_byte_identical(name: &str) {
 }
 
 fn assert_e2e_prints(name: &str, want_stdout: &str) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();

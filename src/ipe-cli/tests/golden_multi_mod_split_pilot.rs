@@ -144,13 +144,13 @@ fn emits_split_spine_and_per_module_files() {
     assert_module_files_match_golden(&out, &fixture);
 }
 
-/// Full spine (gated on `SKY_E2E=1`): compile, build the emitted Cargo
+/// Full spine (gated on `IPE_E2E=1`): compile, build the emitted Cargo
 /// project, and run it. Proves THE SEAL — the multi-module + `Std.Db` emitted
 /// project actually `cargo build`s and runs. The two rows seeded in
 /// `Lib.seedAndCount` are counted and printed as `seeded:2`.
 #[test]
 fn end_to_end_builds_and_prints_seeded_count() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

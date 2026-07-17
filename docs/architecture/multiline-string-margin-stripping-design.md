@@ -201,7 +201,7 @@ canonicaliser test module) — one per normative property:
 - Formatter: `sky fmt` twice byte-identical on a fixture containing an
   indented multiline string; body not re-indented.
 
-Golden/E2E (`SKY_E2E=1`):
+Golden/E2E (`IPE_E2E=1`):
 
 - `m133_sql_shape` — the `07-todo-cli` CREATE-TABLE shape printed to
   stdout; `oracle.meta` carries `oracle_divergence = true` with the

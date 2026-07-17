@@ -6,7 +6,7 @@ import Sky.Core.Prelude exposing (..)
 -- DEEPER still — `Som (Som n)` is matched only for the literal `0`, so every
 -- other Int (`Som (Som 1)`, `Som (Som 2)`, …) is uncovered. `Int` is an OPEN
 -- type, so a finite set of literals never completes the column; the usefulness
--- checker must report SKY-T0010 (naming the missing `Som (Som _)`) BEFORE emit.
+-- checker must report IPE-T0010 (naming the missing `Som (Som _)`) BEFORE emit.
 --
 -- This pins the soundness floor: with the same-top-constructor restriction
 -- lifted, exhaustiveness rests SOLELY on the Maranget usefulness check. A

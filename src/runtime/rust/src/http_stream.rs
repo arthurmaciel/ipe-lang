@@ -105,7 +105,7 @@ pub fn http_stream_open<E: From<String> + Send + 'static>(
 ) -> SkyTask<E, SkyStreamId> {
     Box::pin(async move {
         // SSRF guard (was MISSING here — this surface built its own client and
-        // bypassed SKY_HTTP_DENY_PRIVATE entirely). Resolve+validate+pin + the
+        // bypassed IPE_HTTP_DENY_PRIVATE entirely). Resolve+validate+pin + the
         // per-redirect re-check via the shared helper, identical to Http.get/post.
         let builder =
             reqwest::Client::builder().connect_timeout(std::time::Duration::from_secs(30));

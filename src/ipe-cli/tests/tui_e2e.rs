@@ -1,13 +1,13 @@
 //! End-to-end tests for `Std.Tui` / `Sky.Tui` — `Tui.app`, `Ui.column`,
 //! `Ui.el`, `Ui.text`, and `String.fromInt`.
 //!
-//! Non-E2E tests (no `SKY_E2E` required):
+//! Non-E2E tests (no `IPE_E2E` required):
 //! - `tui_onkey_record_typechecks` — skyc-level regression for the `onKey :
 //!   KeyEvent -> Msg` record scheme fix (T0001); verifies both `Tui.app` and
 //!   `Tui.program` accept a single-argument record-typed key handler and that
 //!   the emitter generates the bridging wrapper closure.
 //!
-//! E2E tests (gated on `SKY_E2E=1`):
+//! E2E tests (gated on `IPE_E2E=1`):
 //! - `tui_counter_build_only` — full skyc + cargo build with `Tui.app` and
 //!   a `KeyEvent -> Msg` handler (a `String -> String -> Msg` curried shape is
 //!   not valid under the scheme).
@@ -37,7 +37,7 @@
 //! Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test tui_e2e
+//! IPE_E2E=1 cargo test tui_e2e
 //! ```
 
 /// A minimal `Tui.app` counter exercising the `Tui.app` scheme.
@@ -57,7 +57,7 @@
 /// Note: `view` returns `Element Msg` (NOT wrapped in `Ui.layout` → `Html Msg`
 /// like Sky.Live).  The Tui runtime renders the Element tree directly to ANSI
 /// cells; there is no HTML step.
-const SKY_TUI_COUNTER: &str = r"module Main exposing (main)
+const IPE_TUI_COUNTER: &str = r"module Main exposing (main)
 
 import Std.Tui as Tui
 import Std.Ui as Ui
@@ -110,12 +110,12 @@ main =
 // Note: `r#"..."#` is needed because the Sky source contains `""` (an empty
 // string literal) which would terminate a plain `r"..."` raw string early.
 //
-// Unlike `SKY_TUI_COUNTER`, this program does NOT pipe through `Task.run`
+// Unlike `IPE_TUI_COUNTER`, this program does NOT pipe through `Task.run`
 // at the `main` level — `Task.run : Task Error a -> a` keeps `a` polymorphic
-// when `main` has no type annotation, causing SKY-L0102.  `Tui.program` already
+// when `main` has no type annotation, causing IPE-L0102.  `Tui.program` already
 // returns `Task Unit`, which is a concrete type the module entry accepts
 // directly.
-const SKY_TUI_PROGRAM_ONKEY_RECORD: &str = r#"module Main exposing (main)
+const IPE_TUI_PROGRAM_ONKEY_RECORD: &str = r#"module Main exposing (main)
 
 import Std.Tui as Tui
 
@@ -193,7 +193,7 @@ fn compile_and_build(test_name: &str, sky_source: &str) -> Result<std::path::Pat
 /// value : String }` (a SINGLE-argument record handler).
 ///
 /// Typing `onKey` as `String -> String -> Msg` (two curried String arguments)
-/// in both schemes would cause `SKY-T0001` at the `Tui.program` / `Tui.app`
+/// in both schemes would cause `IPE-T0001` at the `Tui.program` / `Tui.app`
 /// call site, since example code uses the record-alias shape.
 ///
 /// After the fix, both schemes PIN the key-event argument to the closed
@@ -206,7 +206,7 @@ fn compile_and_build(test_name: &str, sky_source: &str) -> Result<std::path::Pat
 /// |kind: String, value: String| Main_on_key(RecKindValue { kind, value })
 /// ```
 ///
-/// This test runs WITHOUT `SKY_E2E` (skyc-level only — no cargo build), so it
+/// This test runs WITHOUT `IPE_E2E` (skyc-level only — no cargo build), so it
 /// is always live in CI.
 #[test]
 fn tui_onkey_record_typechecks() {
@@ -245,7 +245,7 @@ fn tui_onkey_record_typechecks() {
     }
 
     // ── 1. Tui.app with `onKey : KeyEvent -> Msg` ────────────────────────────
-    let app_rs = compile_ok("tui_app", SKY_TUI_COUNTER);
+    let app_rs = compile_ok("tui_app", IPE_TUI_COUNTER);
     if app_rs.is_empty() {
         return; // runtime unavailable — structural assertions skipped
     }
@@ -264,7 +264,7 @@ fn tui_onkey_record_typechecks() {
     );
 
     // ── 2. Tui.program with `onKey : KeyEvent -> Msg` ────────────────────────
-    let prog_rs = compile_ok("tui_program", SKY_TUI_PROGRAM_ONKEY_RECORD);
+    let prog_rs = compile_ok("tui_program", IPE_TUI_PROGRAM_ONKEY_RECORD);
 
     assert!(
         prog_rs.contains("|kind: String, value: String|"),
@@ -286,7 +286,7 @@ fn tui_onkey_record_typechecks() {
 ///
 /// * constrain: `Tui.app` correctly types the 5-field cfg with a
 ///   record-typed `onKey : KeyEvent -> Msg` handler.
-/// * lower: the cfg record literal bypasses SKY-L0107 (same exemption
+/// * lower: the cfg record literal bypasses IPE-L0107 (same exemption
 ///   as `Live.app`).
 /// * emit: `emit_tui_call` delegates to `tui_app_ui(…)` with the five
 ///   handler arguments correctly emitted, including the `|kind, value|` wrapper.
@@ -298,11 +298,11 @@ fn tui_onkey_record_typechecks() {
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn tui_counter_build_only() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
     // compile_and_build already does skyc + cargo build; success is the proof.
-    let _exe = compile_and_build("tui_build_only", SKY_TUI_COUNTER)?;
+    let _exe = compile_and_build("tui_build_only", IPE_TUI_COUNTER)?;
     Ok(())
 }

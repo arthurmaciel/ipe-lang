@@ -18,10 +18,10 @@
 //!
 //! ## Why the emit-only assertions run in the DEFAULT gate
 //!
-//! `SKY_E2E`-gated tests do not run in the default `cargo nextest` gate. This
+//! `IPE_E2E`-gated tests do not run in the default `cargo nextest` gate. This
 //! file's first test inspects the emitted `src/main.rs` text (no cargo build)
-//! so it runs in the DEFAULT gate and pins the regression even when `SKY_E2E`
-//! is unset; the second test is the `SKY_E2E`-gated cargo-build-and-run proof
+//! so it runs in the DEFAULT gate and pins the regression even when `IPE_E2E`
+//! is unset; the second test is the `IPE_E2E`-gated cargo-build-and-run proof
 //! that the emitted crate actually compiles AND prints the right count.
 
 use std::path::{Path, PathBuf};
@@ -117,7 +117,7 @@ fn csv_record_literal_emits_runtime_csv_doc_struct() {
     );
 }
 
-/// The load-bearing SEAL proof: under `SKY_E2E=1`, actually `cargo build` the
+/// The load-bearing SEAL proof: under `IPE_E2E=1`, actually `cargo build` the
 /// emitted crate and run it. A `RecHeaderRows` fold would fail `cargo build`
 /// with E0308 (`expected CsvDoc, found RecHeaderRows`); the nominal `CsvDoc`
 /// fold builds and prints `2` (the parsed-back header has two columns, `id` +
@@ -137,7 +137,7 @@ fn csv_record_nominal_fold_seal_builds_and_runs() {
         "csv_record_nominal_fold_seal: must be accepted, got: {built:?}"
     );
 
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = support::build_and_run_emitted("csv_record_nominal_fold_seal", &out);

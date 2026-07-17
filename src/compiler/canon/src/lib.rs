@@ -144,7 +144,7 @@ pub fn canonicalise_module(
 /// Like [`canonicalise_module`] but lets the build driver vouch that a module's
 /// source came from the compiler's own embedded stdlib table
 /// ([`ModuleOrigin::EmbeddedStdlib`]) — the ONLY way to legitimately declare a
-/// `module Std.…` / `module Sky.…` home without tripping SKY-N0025. The trust tag
+/// `module Std.…` / `module Sky.…` home without tripping IPE-N0025. The trust tag
 /// is unforgeable from module text: a user file named `Std.Foo` reaches this
 /// function as [`ModuleOrigin::User`] and stays rejected.
 ///
@@ -167,7 +167,7 @@ pub fn canonicalise_module_with_origin(
 /// Like [`canonicalise_module_with_origin`] but takes the dep interfaces by
 /// reference (the `module_interface` query memos — no per-importer deep clone)
 /// and an explicit `known_modules` universe (dot-joined module paths) used
-/// ONLY for the SKY-N0020 did-you-mean list. `deps` must contain exactly this
+/// ONLY for the IPE-N0020 did-you-mean list. `deps` must contain exactly this
 /// module's resolved imports; `known_modules` should list every module in the
 /// project. Strings only on the suggestion path — it never interns.
 ///
@@ -700,7 +700,7 @@ mod tests {
     fn user_type_shadowing_builtin_rejected() {
         // `Length` is a reserved built-in (`Std.Ui` nullary type) that the
         // lowerer matches ahead of the user-enum lookup; a user `type Length`
-        // would be silently overridden, so canon must reject it (SKY-N0026).
+        // would be silently overridden, so canon must reject it (IPE-N0026).
         let src = "module Main exposing (main)\n\n\
                    type Length = Red | Green\n\nmain = 0\n";
         let err = canon_err(src);
@@ -836,7 +836,7 @@ mod tests {
     #[test]
     fn stdlib_alias_registers_multisegment_json_encode() {
         // The reported failure: `import Sky.Core.Json.Encode as Encode` then
-        // `Encode.string` used to error SKY-N0004 (unknown module `Encode`)
+        // `Encode.string` used to error IPE-N0004 (unknown module `Encode`)
         // because the alias was never registered against the canonical `JsonEnc`.
         let src = "module Main exposing (main)\n\
                    import Sky.Core.Json.Encode as Encode\n\n\
@@ -1359,7 +1359,7 @@ mod tests {
 
     #[test]
     fn duplicate_record_update_field_is_rejected() {
-        // `{ p | x = 1, x = 2 }` updates `x` twice — rejected (SKY-N0010), as on
+        // `{ p | x = 1, x = 2 }` updates `x` twice — rejected (IPE-N0010), as on
         // a record literal.
         let mut i = Interner::new();
         let src = ipe_parse::parse_module(
@@ -1383,7 +1383,7 @@ mod tests {
 
     #[test]
     fn duplicate_record_field_is_rejected() {
-        // `{ x = 1, x = 2 }` defines `x` twice — rejected (SKY-N0010) rather than
+        // `{ x = 1, x = 2 }` defines `x` twice — rejected (IPE-N0010) rather than
         // silently collapsing to one field.
         let mut i = Interner::new();
         let src = ipe_parse::parse_module(
@@ -1581,7 +1581,7 @@ mod tests {
     #[test]
     fn alias_applied_with_too_many_arguments_is_an_arity_error() {
         // `Pair` declares one parameter; `Pair Int Bool` supplies two — a coded
-        // SKY-N0013 arity error with a span, never a crash.
+        // IPE-N0013 arity error with a span, never a crash.
         let err = canon_err(
             "module Main exposing (v)\n\
              type alias Pair a = (a, a)\n\n\
@@ -1675,8 +1675,8 @@ mod tests {
 
     // ---------------------------------------------------------------------
     // A LOCAL `type X` / `type alias X` shadowing a dep-imported `X`
-    // must be rejected at the declaration with SKY-N0012 (`DuplicateType`),
-    // not a downstream SKY-T0001. See `canonicalise_with_env`'s dep-shadow
+    // must be rejected at the declaration with IPE-N0012 (`DuplicateType`),
+    // not a downstream IPE-T0001. See `canonicalise_with_env`'s dep-shadow
     // pre-pass and docs/adr/0010-pattern-and-lowering-completeness.md
     // (item D).
     // ---------------------------------------------------------------------
@@ -1723,7 +1723,7 @@ mod tests {
                 })
             ),
             "local `type Color` shadowing imported Dep.Color must be a \
-             DuplicateType (SKY-N0012) at the declaration, got {err:?}"
+             DuplicateType (IPE-N0012) at the declaration, got {err:?}"
         );
     }
 
@@ -1749,7 +1749,7 @@ mod tests {
                 })
             ),
             "local `type alias Color` shadowing imported Dep.Color must be a \
-             DuplicateType (SKY-N0012) at the declaration, got {err:?}"
+             DuplicateType (IPE-N0012) at the declaration, got {err:?}"
         );
     }
 
@@ -1959,8 +1959,8 @@ mod tests {
         // them (so they parse + canonicalise) but `ipe_kernels::StdlibKernel`
         // has NO variant for them yet (confirmed by grepping
         // `crates/ipe_kernels/src/lib.rs` for each — zero hits). They already
-        // fail CLOSED at type-check today with a loud SKY-L0108
-        // (`error[SKY-L0108]: kernel function not available yet`) via
+        // fail CLOSED at type-check today with a loud IPE-L0108
+        // (`error[IPE-L0108]: kernel function not available yet`) via
         // `constrain_var_kernel`'s existing `id.and_then(..)` — never
         // silently — so listing them here does not violate the
         // exit-0-then-cargo-fail property this gate exists to protect; it makes
@@ -2254,7 +2254,7 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Record type-alias auto-constructor (SKY-N0001).
+    // Record type-alias auto-constructor (IPE-N0001).
     // ─────────────────────────────────────────────────────────────────────────
 
     /// Flatten an arrow type into `(arg types…, final result type)`.
@@ -2374,7 +2374,7 @@ mod tests {
     #[test]
     fn record_alias_ctor_resolves_as_a_value() {
         // Bare use of the alias name as a value resolves to a top-level binding,
-        // not a name error — the SKY-N0001 fix.
+        // not a name error — the IPE-N0001 fix.
         let mut i = Interner::new();
         let m = canon_ok(
             &mut i,
@@ -2452,7 +2452,7 @@ mod tests {
     #[test]
     fn non_record_alias_has_no_ctor_and_still_errors_as_value() {
         // `type alias Count = Int` gets NO value binding; using it as a value
-        // stays an ordinary SKY-N0001 ValueNotFound (Elm parity).
+        // stays an ordinary IPE-N0001 ValueNotFound (Elm parity).
         let mut i = Interner::new();
         let ok = canon_ok(
             &mut i,
@@ -2516,7 +2516,7 @@ mod tests {
         // (`type Bar = Foo`) are distinct. The upstream Haskell (`registerAliases`)
         // inserts into `_vars` without checking `_ctors`, so both coexist.
         //
-        // Previously this wrongly emitted SKY-N0010 (DuplicateValue). The fix
+        // Previously this wrongly emitted IPE-N0010 (DuplicateValue). The fix
         // changes `synthesize_record_alias_ctors` to `continue` (skip synthesis)
         // when the alias name coincides with a known ADT constructor, instead of
         // erroring — achieving the same "ADT ctor wins in expression position"
@@ -2563,7 +2563,7 @@ mod tests {
     fn function_field_record_alias_has_no_ctor() {
         // A config-record alias with an ARROW-headed field must NOT synthesize a
         // constructor — its body would be a record literal with a function field,
-        // which the lowerer rejects (SKY-L0107), and there is no DCE to prune an
+        // which the lowerer rejects (IPE-L0107), and there is no DCE to prune an
         // unused one. It stays a type only, with no synthesized constructor.
         let mut i = Interner::new();
         let m = canon_ok(
@@ -2644,7 +2644,7 @@ mod tests {
         // merely NAMING the alias builds clean and no dangling ctor value exists.
         // Use only builtin type args (`Int`, `Error`) so the test is not
         // sensitive to whether an undefined user ADT (`Msg`) compiles.
-        // Unknown unqualified type names fail closed with SKY-N0002;
+        // Unknown unqualified type names fail closed with IPE-N0002;
         // the test's intent (no ctor for opaque-field alias) does not depend on
         // the specific type argument — `Cmd Int` tests the same gate as `Cmd Msg`.
         for (decl, field_ty) in [
@@ -2758,7 +2758,7 @@ mod tests {
     fn stdlib_exposing_brings_value_into_unqualified_scope() {
         // `import Std.Live exposing (app, route)` → bare `app` resolves to the
         // same `VarKernel { module: Live, name: app }` a `Live.app` reference
-        // would. Previously this was `SKY-N0001` "app not found".
+        // would. Previously this was `IPE-N0001` "app not found".
         let src = "module Main exposing (main)\n\
                    import Std.Live exposing (app, route)\n\n\
                    main = app\n";
@@ -2874,7 +2874,7 @@ mod tests {
     fn stdlib_wildcard_brings_member_into_unqualified_scope() {
         // `import Std.Html exposing (..)` → bare `div` resolves to the same
         // `VarKernel { module: Html, name: div }` a `Html.div` reference would.
-        // This is the exact 09-live-counter blocker (SKY-N0001 on bare `div`).
+        // This is the exact 09-live-counter blocker (IPE-N0001 on bare `div`).
         let src = "module Main exposing (main)\n\
                    import Std.Html exposing (..)\n\n\
                    main = div\n";
@@ -2930,7 +2930,7 @@ mod tests {
     fn two_stdlib_wildcards_same_name_is_ambiguous_at_use() {
         // Both `Std.Html` and `Std.Ui` export `text`. Two `exposing (..)` imports
         // are BOTH legal at import time; a bare `text` USE is `AmbiguousImport`
-        // (SKY-N0024), never a silent last-wins.
+        // (IPE-N0024), never a silent last-wins.
         let err = canon_err(
             "module Main exposing (main)\n\
              import Std.Html exposing (..)\n\
@@ -3093,7 +3093,7 @@ mod tests {
                     ..
                 }
             ),
-            "hostile user Std.Palette must be SKY-N0025, got {err:?}"
+            "hostile user Std.Palette must be IPE-N0025, got {err:?}"
         );
     }
 
@@ -3153,7 +3153,7 @@ mod tests {
         let res = canon_with_origin(src, ModuleOrigin::EmbeddedStdlib);
         assert!(
             res.is_ok(),
-            "EmbeddedStdlib `type Length` must be exempt from SKY-N0026: {:?}",
+            "EmbeddedStdlib `type Length` must be exempt from IPE-N0026: {:?}",
             res.err()
         );
     }
@@ -3161,7 +3161,7 @@ mod tests {
     #[test]
     fn user_origin_reserved_ui_type_still_rejected() {
         // The mirror of the exemption: the identical `type Length`, in a
-        // non-Std user module (so N0025 does not pre-empt), stays SKY-N0026.
+        // non-Std user module (so N0025 does not pre-empt), stays IPE-N0026.
         // A hostile author gets NEITHER the namespace nor the builtin exemption.
         let src = "module Main exposing (main)\n\
              type Length = Px Int\n\
@@ -3176,7 +3176,7 @@ mod tests {
                     ..
                 }
             ),
-            "user `type Length` must be SKY-N0026, got {err:?}"
+            "user `type Length` must be IPE-N0026, got {err:?}"
         );
     }
 
@@ -3186,7 +3186,7 @@ mod tests {
         // (`STDLIB_DEFINABLE_UI_TYPES`). `Html`'s lowerer arm sits ABOVE the
         // home-aware `enum_variants` guard, so a same-named union would be
         // hijacked to `IrType::Ui` and mis-lower — even trusted stdlib must not
-        // redefine it. Stays SKY-N0026 for EVERY origin.
+        // redefine it. Stays IPE-N0026 for EVERY origin.
         let src = "module Std.Css exposing (Html(..))\n\
              type Html = Blob\n";
         let err = canon_with_origin(src, ModuleOrigin::EmbeddedStdlib)
@@ -3199,12 +3199,12 @@ mod tests {
                     ..
                 }
             ),
-            "load-bearing builtin `Html` must stay SKY-N0026 even for stdlib, got {err:?}"
+            "load-bearing builtin `Html` must stay IPE-N0026 even for stdlib, got {err:?}"
         );
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // SKY-N0010 regression: type-alias name coinciding with an ADT constructor
+    // IPE-N0010 regression: type-alias name coinciding with an ADT constructor
     // must NOT produce a DuplicateValue error.  The TYPE namespace (`type alias`)
     // and the CONSTRUCTOR namespace (`type … = Ctor`) are distinct in both
     // Elm and Sky.  Reproduces the failure seen in
@@ -3218,7 +3218,7 @@ mod tests {
         // `type alias Overview = { skyVersion : String }` defines a type alias
         // in a SEPARATE namespace.  Both should coexist without an error.
         //
-        // The regression was SKY-N0010 (DuplicateValue) from
+        // The regression was IPE-N0010 (DuplicateValue) from
         // `synthesize_record_alias_ctors` incorrectly checking `seen_ctors`.
         let src = "module Main exposing (main)\n\n\
                    type Tab = Overview | Metrics | Logs\n\n\

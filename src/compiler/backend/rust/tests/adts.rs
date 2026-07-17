@@ -29,7 +29,7 @@
 //! ```
 //!
 //! to stdout `5\n` / `12\n`, exit 0. The two `end_to_end_*` tests (gated on
-//! `SKY_E2E=1`) drive the same hand-built IR through the Rust backend, build the
+//! `IPE_E2E=1`) drive the same hand-built IR through the Rust backend, build the
 //! emitted crate, and assert the identical output — the soundness-floor
 //! regression for a value laundered through a generic / boxed-recursive payload.
 
@@ -572,7 +572,7 @@ fn end_to_end_recursive_tree_prints_twelve() -> DResult<()> {
 }
 
 /// Emit `prog`, vendor the runtime into a temp dir named `slot`, `cargo build`,
-/// run the binary, and assert its stdout equals `expected`. Gated on `SKY_E2E=1`
+/// run the binary, and assert its stdout equals `expected`. Gated on `IPE_E2E=1`
 /// so the default `cargo test` stays fast and offline.
 fn build_and_assert(
     interner: &Interner,
@@ -580,7 +580,7 @@ fn build_and_assert(
     slot: &str,
     expected: &str,
 ) -> DResult<()> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -637,7 +637,7 @@ fn io_bug(path: &Path, e: &std::io::Error) -> Diagnostic {
 }
 
 fn resolve_runtime() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("SKY_RUNTIME_DIR") {
+    if let Ok(dir) = std::env::var("IPE_RUNTIME_DIR") {
         let p = PathBuf::from(dir);
         if p.is_dir() {
             return Some(p);

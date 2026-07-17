@@ -35,24 +35,24 @@
 //!   `src/`, so the single-file oracle-cache layout does not apply; the run
 //!   asserts the literal Go-verified stdout instead.
 //!
-//! ## Negatives (assert the exact `SKY-*` diagnostic / runtime classification)
+//! ## Negatives (assert the exact `IPE-*` diagnostic / runtime classification)
 //!
 //! * `intdiv_divzero` — `10 // 0` at runtime. The runtime classifies this
 //!   as `DivisionByZero` and aborts with exit code 101 (a Rust panic), rather
 //!   than emitting a wrong answer. Asserted by building + running the emitted
-//!   binary and checking the exit code (gated on `SKY_E2E`).
-//! * `blockcomment_unterminated` — a `{-` that is never closed → `SKY-P0017`
+//!   binary and checking the exit code (gated on `IPE_E2E`).
+//! * `blockcomment_unterminated` — a `{-` that is never closed → `IPE-P0017`
 //!   (unterminated block comment). This is a sanctioned stricter behaviour: the
 //!   Go oracle leniently swallows the unterminated comment to EOF and builds an
 //!   empty program, so there is no oracle to diff — the diagnostic code is the
 //!   assertion.
 //! * `mm_neg_qualtype_unknownmod` — an annotation referencing `Bogus.Box`, a
-//!   module that is neither imported nor present → `SKY-N0004` (unknown module).
+//!   module that is neither imported nor present → `IPE-N0004` (unknown module).
 //!
 //! Run the E2E positives + the runtime negative with:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_parser_gaps
+//! IPE_E2E=1 cargo test -p skyc --test golden_parser_gaps
 //! ```
 //!
 //! The compile-time negatives run unconditionally (no build/run, so no gate).
@@ -79,11 +79,11 @@ fn runtime() -> PathBuf {
 }
 
 // ---------------------------------------------------------------------------
-// Single-file positive: build → run → cached-oracle byte-diff (SKY_E2E-gated).
+// Single-file positive: build → run → cached-oracle byte-diff (IPE_E2E-gated).
 // ---------------------------------------------------------------------------
 
 fn assert_single_oracle(name: &str) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let dir = golden_dir(name);
@@ -120,7 +120,7 @@ fn blockcomment_builds_and_matches_oracle() {
 
 #[test]
 fn qualtype_project_builds_and_prints_42() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let name = "mm_qualtype";
@@ -151,7 +151,7 @@ fn qualtype_project_builds_and_prints_42() {
 
 #[test]
 fn intdiv_by_zero_aborts_exit_101() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let name = "intdiv_divzero";
@@ -190,7 +190,7 @@ fn intdiv_minint_by_neg1_does_not_panic() {
 }
 
 // ---------------------------------------------------------------------------
-// Compile-time negatives: exact SKY-* diagnostic codes (always run).
+// Compile-time negatives: exact IPE-* diagnostic codes (always run).
 // ---------------------------------------------------------------------------
 
 fn diag_code(err: &skyc::CliError) -> Option<ipe_diagnostics::Code> {
@@ -212,8 +212,8 @@ fn unterminated_blockcomment_is_sky_p0017() {
     let Err(err) = res else { return };
     assert_eq!(
         diag_code(&err),
-        Some(ipe_diagnostics::SKY_P0017),
-        "unterminated `{{-` must be SKY-P0017; err = {err}"
+        Some(ipe_diagnostics::IPE_P0017),
+        "unterminated `{{-` must be IPE-P0017; err = {err}"
     );
 }
 
@@ -229,7 +229,7 @@ fn unknown_module_in_annotation_is_sky_n0004() {
     let Err(err) = res else { return };
     assert_eq!(
         diag_code(&err),
-        Some(ipe_diagnostics::SKY_N0004),
-        "`Bogus.Box` must be SKY-N0004 (unknown module); err = {err}"
+        Some(ipe_diagnostics::IPE_N0004),
+        "`Bogus.Box` must be IPE-N0004 (unknown module); err = {err}"
     );
 }

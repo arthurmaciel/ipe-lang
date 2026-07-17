@@ -324,7 +324,7 @@ fn unify_flat(
         // Algorithm (four cases):
         //   1. Unify every field present on BOTH sides pairwise.
         //   2. A CLOSED side cannot absorb the other's extra fields → mismatch
-        //      (SKY-T0001).
+        //      (IPE-T0001).
         //   3. If both sides carry identical field sets → unify the two extension
         //      variables and merge.
         //   4. Both sides are open with differing fields → mint a fresh flex

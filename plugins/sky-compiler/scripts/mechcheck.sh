@@ -9,7 +9,7 @@
 #   WORKSPACE_DIR  cargo workspace to check (default: $PWD) — works for sky-rust
 #                  (compiler+backend) and runtime-rust alike.
 #   --miri    also run `cargo +nightly miri test --workspace` (slow)
-#   --e2e     also run the golden E2E (SKY_E2E=1) — sky-rust only; runs BOUNDED
+#   --e2e     also run the golden E2E (IPE_E2E=1) — sky-rust only; runs BOUNDED
 #             (nested cargo builds are CPU/mem/disk heavy)
 #   --parity  also run ./scripts/parity-sweep.sh if present (Go-vs-Rust) — sky-rust only
 #   --fmt-fix APPLY `cargo fmt --all` instead of `--check` — for the dev/agent loop
@@ -95,13 +95,13 @@ fi
 
 # E2E: each test shells out to its own `cargo build` — cap concurrency.
 if [ "$RUN_E2E" = 1 ]; then
-  export SKY_E2E=1
+  export IPE_E2E=1
   if [ "$HAS_NEXTEST" = 1 ]; then
     step e2e cargo nextest run --workspace --test-threads 2
   else
     step e2e cargo test --workspace   # cargo runs test binaries serially => inherently bounded
   fi
-  unset SKY_E2E
+  unset IPE_E2E
 fi
 
 if [ "$RUN_PARITY" = 1 ]; then

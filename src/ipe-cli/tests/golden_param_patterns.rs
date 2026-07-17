@@ -1,4 +1,4 @@
-//! SKY-L0105 lambda / function parameter patterns — positive surface,
+//! IPE-L0105 lambda / function parameter patterns — positive surface,
 //! end to end. The fixture exercises every irrefutable binding-position shape in
 //! ONE program (each contributing to a hand-computed total of `112`):
 //!
@@ -18,7 +18,7 @@
 //!    param recovers its COMPLETE field set from the solved type
 //!    (`RecXY { x: _, y, .. }`), and `\_ ->` emits NO destructure (it rides the
 //!    preamble `#![allow(unused, non_snake_case)]`).
-//! 2. Behind `SKY_E2E=1` the emitted project builds and prints `112`, exit 0 —
+//! 2. Behind `IPE_E2E=1` the emitted project builds and prints `112`, exit 0 —
 //!    the soundness floor: an irrefutable param never fails a match at runtime.
 
 use std::path::{Path, PathBuf};
@@ -105,12 +105,12 @@ fn emission_preserves_the_load_bearing_shapes() {
 }
 
 /// Full spine: build the emitted Cargo project, run it, assert it prints `112`
-/// (the hand-computed total) and exits 0. Gated on `SKY_E2E=1`. This is the
+/// (the hand-computed total) and exits 0. Gated on `IPE_E2E=1`. This is the
 /// soundness-floor regression: every irrefutable param binds every value of its
 /// type, so no run-time match failure is possible.
 #[test]
 fn end_to_end_builds_and_prints_one_hundred_twelve() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();

@@ -1,4 +1,4 @@
-//! SKY-L0105 refutable parameter patterns — the negative surface. A
+//! IPE-L0105 refutable parameter patterns — the negative surface. A
 //! parameter (or `let` binder) is a BINDING position: it must match every value
 //! of its type. A refutable param must therefore be a clean, span-carrying
 //! compile-time error — never a runtime match failure (upstream Sky's
@@ -7,13 +7,13 @@
 //!
 //! Two fail-closed phases cover the whole refutable class:
 //!
-//! * **SKY-T0015** (the new irrefutability gate, type/exhaustiveness phase) —
+//! * **IPE-T0015** (the new irrefutability gate, type/exhaustiveness phase) —
 //!   for the shapes that PARSE as a parameter yet are refutable: a constructor
 //!   pattern (`\(Just x) ->`, `f (Just x) =`), a tuple with a refutable element
 //!   (`\(a, Just x) ->`), a cons pattern (`\(x :: xs) ->`). This gate is the one
 //!   this task adds — those params reach the checker, so the checker must reject
 //!   them before lowering.
-//! * **SKY-P0001** (the pre-existing parser grammar) — a bare literal (`\1 ->`)
+//! * **IPE-P0001** (the pre-existing parser grammar) — a bare literal (`\1 ->`)
 //!   or bracket-list (`\[a] ->`) param is not admitted in binding position at
 //!   all, so it fails even earlier. Recorded here so the coverage is honest: the
 //!   refutable class is closed by BOTH gates, and no refutable param reaches
@@ -61,7 +61,7 @@ fn ctor_lambda_param_is_sky_t0015() {
     assert_gate(
         "neg_ctor_lambda",
         "l0105_neg_ctor_lambda_emit",
-        ipe_diagnostics::SKY_T0015,
+        ipe_diagnostics::IPE_T0015,
     );
 }
 
@@ -70,7 +70,7 @@ fn ctor_def_head_param_is_sky_t0015() {
     assert_gate(
         "neg_ctor_def",
         "l0105_neg_ctor_def_emit",
-        ipe_diagnostics::SKY_T0015,
+        ipe_diagnostics::IPE_T0015,
     );
 }
 
@@ -79,7 +79,7 @@ fn tuple_param_with_refutable_element_is_sky_t0015() {
     assert_gate(
         "neg_nested_tuple",
         "l0105_neg_nested_tuple_emit",
-        ipe_diagnostics::SKY_T0015,
+        ipe_diagnostics::IPE_T0015,
     );
 }
 
@@ -88,7 +88,7 @@ fn cons_lambda_param_is_sky_t0015() {
     assert_gate(
         "neg_cons_lambda",
         "l0105_neg_cons_lambda_emit",
-        ipe_diagnostics::SKY_T0015,
+        ipe_diagnostics::IPE_T0015,
     );
 }
 
@@ -97,7 +97,7 @@ fn bare_int_literal_lambda_param_is_parse_rejected() {
     assert_gate(
         "neg_int_lambda",
         "l0105_neg_int_lambda_emit",
-        ipe_diagnostics::SKY_P0001,
+        ipe_diagnostics::IPE_P0001,
     );
 }
 
@@ -106,19 +106,19 @@ fn bare_list_lambda_param_is_parse_rejected() {
     assert_gate(
         "neg_list_lambda",
         "l0105_neg_list_lambda_emit",
-        ipe_diagnostics::SKY_P0001,
+        ipe_diagnostics::IPE_P0001,
     );
 }
 
 /// Negative regression for Std/Money.sky fix: a single-ctor union param
-/// `amount (Money d _) = d` must still be rejected as SKY-T0015.
+/// `amount (Money d _) = d` must still be rejected as IPE-T0015.
 /// Proves the stdlib fix did not relax the irrefutability rule.
 #[test]
 fn single_ctor_union_def_param_is_sky_t0015() {
     assert_gate(
         "neg_money_ctor_param",
         "l0105_neg_money_ctor_param_emit",
-        ipe_diagnostics::SKY_T0015,
+        ipe_diagnostics::IPE_T0015,
     );
 }
 
@@ -145,7 +145,7 @@ fn single_ctor_case_accessor_compiles() {
     );
 }
 
-/// Seal remeasure: building examples/00-standard-libs must NOT produce SKY-T0015
+/// Seal remeasure: building examples/00-standard-libs must NOT produce IPE-T0015
 /// on Std/Money or Sky/Test after the Std/Money.sky accessor fix.
 #[test]
 fn standard_libs_sky_t0015_money_blocker_gone() {
@@ -167,16 +167,16 @@ fn standard_libs_sky_t0015_money_blocker_gone() {
         Err(skyc::CliError::Pipeline { diag, .. }) => {
             let msg = format!("{diag:?}");
             assert!(
-                !msg.contains("SKY-T0015") || (!msg.contains("Money") && !msg.contains("Test.sky")),
-                "SKY-T0015 from Std/Money/Sky.Test must be gone after accessor fix; got: {msg}"
+                !msg.contains("IPE-T0015") || (!msg.contains("Money") && !msg.contains("Test.sky")),
+                "IPE-T0015 from Std/Money/Sky.Test must be gone after accessor fix; got: {msg}"
             );
         }
         Ok(()) => {}
         Err(other) => {
             let msg = format!("{other:?}");
             assert!(
-                !msg.contains("SKY-T0015") || (!msg.contains("Money") && !msg.contains("Test.sky")),
-                "SKY-T0015 from Std/Money/Sky.Test must be gone after accessor fix; got: {msg}"
+                !msg.contains("IPE-T0015") || (!msg.contains("Money") && !msg.contains("Test.sky")),
+                "IPE-T0015 from Std/Money/Sky.Test must be gone after accessor fix; got: {msg}"
             );
         }
     }

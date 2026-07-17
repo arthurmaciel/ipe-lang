@@ -1,4 +1,4 @@
-//! Regression gate — a post-solve field-access error (SKY-T0012) must attribute
+//! Regression gate — a post-solve field-access error (IPE-T0012) must attribute
 //! to the module that actually OWNS the access, not to a byte-offset collision
 //! in another merged module.
 //!
@@ -55,7 +55,7 @@ fn try_build(name: &str) -> Result<(), String> {
     skyc::build_with_sibling_discovery(&entry, &out, &runtime).map_err(|e| e.to_string())
 }
 
-/// The SKY-T0012 must blame `Dep.sky` (which owns `rec.missing`), never the
+/// The IPE-T0012 must blame `Dep.sky` (which owns `rec.missing`), never the
 /// byte-colliding `Main.sky`.
 #[test]
 fn t0012_field_error_attributes_to_owning_module() {
@@ -63,7 +63,7 @@ fn t0012_field_error_attributes_to_owning_module() {
     let Err(err) = try_build("cross_module_attr_field_access") else {
         return;
     };
-    assert!(err.contains("SKY-T0012"), "expected SKY-T0012, got:\n{err}");
+    assert!(err.contains("IPE-T0012"), "expected IPE-T0012, got:\n{err}");
     assert!(
         err.contains("Dep.sky:15"),
         "field error must attribute to the owning module Dep.sky:15, got:\n{err}"

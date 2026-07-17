@@ -16,7 +16,7 @@
 //! Run:
 //! ```text
 //! cargo test -p skyc --test golden_i225_depth0_no_overclone
-//! SKY_E2E=1 cargo test -p skyc --test golden_i225_depth0_no_overclone
+//! IPE_E2E=1 cargo test -p skyc --test golden_i225_depth0_no_overclone
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -78,11 +78,11 @@ fn i225_depth0_no_overclone_skyc_accepts_lean() {
     );
 }
 
-/// cargo-0 ∧ run-correct: gated on `SKY_E2E=1`. The lean form must still build
+/// cargo-0 ∧ run-correct: gated on `IPE_E2E=1`. The lean form must still build
 /// and run — leanness never at the cost of soundness.
 #[test]
 fn i225_depth0_no_overclone_cargo_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

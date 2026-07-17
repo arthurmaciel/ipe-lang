@@ -6,7 +6,7 @@
 //! A `Live.route : String -> page -> LiveRoute page` scheme sharing ONE type
 //! variable between the builder argument and the page type would make
 //! `Live.route "/u/:id" UserPage` (with `UserPage : String -> Page`) force
-//! `Page ≟ String -> Page` — a false SKY-T0001 on EVERY param-route app, which
+//! `Page ≟ String -> Page` — a false IPE-T0001 on EVERY param-route app, which
 //! also makes the emit tier's `route_param_get` conversion path dead code.
 //!
 //! The fix types the builder with its own variable and relates it to the page
@@ -14,15 +14,15 @@
 //! like `RoutedLiveCheck`): peel the builder's settled leading arrows, unify
 //! the result with the page. Nullary routes witness the page directly; param
 //! constructors witness it with their result; wrong-ADT constructors still
-//! fail with SKY-T0001.
+//! fail with IPE-T0001.
 //!
 //! ## Tests
 //!
 //! * SOLO: a param route alone → skyc-0; emitted builder applies the
 //!   `params.get(0)` conversion (compile-only, always runs).
 //! * MIXED: nullary + param routes in ONE list → skyc-0 (compile-only).
-//! * WRONG-ADT: a param ctor from another ADT → SKY-T0001 (compile-only).
-//! * `SKY_E2E=1`: the solo project cargo-builds (ISOLATED `CARGO_TARGET_DIR`)
+//! * WRONG-ADT: a param ctor from another ADT → IPE-T0001 (compile-only).
+//! * `IPE_E2E=1`: the solo project cargo-builds (ISOLATED `CARGO_TARGET_DIR`)
 //!   and, when run, a GET on `/u/42` renders `user:42` — the captured `:param`
 //!   delivered through `match_routes` into the page constructor.
 
@@ -75,7 +75,7 @@ fn compile_src(test_name: &str, source: &str) -> Option<Result<(), CliError>> {
 
 /// MIXED: one nullary route + one `:param` route in the SAME routes list.
 /// Both must witness the same page type (`Page`) — pre-round-4 this was the
-/// false-SKY-T0001 shape.
+/// false-IPE-T0001 shape.
 const MIXED_NULLARY_AND_PARAM: &str = r#"module Main exposing (main)
 import Std.Live as Live
 import Std.Ui as Ui
@@ -102,7 +102,7 @@ main =
 
 /// WRONG-ADT: the param ctor builds a value of ANOTHER ADT (`Other`, not
 /// `Page`). The per-route witness peels `String ->` and then fails
-/// `Other ≟ Page` → SKY-T0001. Pins that the witness peel does not blanket-
+/// `Other ≟ Page` → IPE-T0001. Pins that the witness peel does not blanket-
 /// accept every function-shaped builder.
 const WRONG_ADT_PARAM_CTOR: &str = r#"module Main exposing (main)
 import Std.Live as Live
@@ -140,7 +140,7 @@ fn param_route_solo_compiles_and_emits_param_conversion() {
     assert!(
         result.is_ok(),
         "#108 hole 3: a `:param` route with a payload-ctor builder must be \
-         skyc-0 (pre-fix: false SKY-T0001 `Page ≟ String -> Page`), got: {:?}",
+         skyc-0 (pre-fix: false IPE-T0001 `Page ≟ String -> Page`), got: {:?}",
         result.err(),
     );
     let main_rs = std::fs::read_to_string(solo_out().join("src").join("main.rs"))
@@ -170,7 +170,7 @@ fn param_route_mixed_with_nullary_compiles() {
     );
 }
 
-/// WRONG-ADT param ctor → SKY-T0001 (the witness still rejects).
+/// WRONG-ADT param ctor → IPE-T0001 (the witness still rejects).
 #[test]
 fn param_route_wrong_adt_ctor_is_sky_t0001() {
     let Some(result) = compile_src("wrong_adt", WRONG_ADT_PARAM_CTOR) else {
@@ -182,19 +182,19 @@ fn param_route_wrong_adt_ctor_is_sky_t0001() {
     };
     assert_eq!(
         got,
-        Some(ipe_diagnostics::SKY_T0001),
-        "#108 hole 3: a wrong-ADT param ctor must still be SKY-T0001, got: {result:?}",
+        Some(ipe_diagnostics::IPE_T0001),
+        "#108 hole 3: a wrong-ADT param ctor must still be IPE-T0001, got: {result:?}",
     );
 }
 
-// ── SKY_E2E tier — cargo build + runtime param delivery ─────────────────────
+// ── IPE_E2E tier — cargo build + runtime param delivery ─────────────────────
 
 /// Read the child's stderr until THE APP's Live listener line appears
 /// (bounded). The line must carry the app's own port: with the embedded
 /// console enabled the runtime spawns a console child that logs its OWN
 /// earlier `[sky.live] listening on …` line (on an unrelated port), so a bare
 /// "listening on" match returns before the app's listener is bound and the
-/// subsequent GET races it. Belt-and-braces alongside `SKY_CONSOLE_EMBED=off`.
+/// subsequent GET races it. Belt-and-braces alongside `IPE_CONSOLE_EMBED=off`.
 fn wait_ready(child: &mut std::process::Child, port: u16) -> bool {
     let Some(stderr) = child.stderr.take() else {
         return false;
@@ -227,13 +227,13 @@ fn http_get(port: u16, path: &str) -> std::io::Result<String> {
     Ok(buf)
 }
 
-/// `SKY_E2E`: cargo-build the solo param-route project (ISOLATED
+/// `IPE_E2E`: cargo-build the solo param-route project (ISOLATED
 /// `CARGO_TARGET_DIR` — a shared dir's fingerprint reuse can mask an E0308 as
 /// a false pass), run it, and assert GET `/u/42` renders `user:42` — the
 /// captured `:param` delivered through `match_routes` into `UserPage`.
 #[test]
 fn param_route_solo_cargo_builds_and_delivers_param() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     param_route_solo_compiles_and_emits_param_conversion();
@@ -273,11 +273,11 @@ fn param_route_solo_cargo_builds_and_delivers_param() {
     };
 
     let mut child = std::process::Command::new(&exe)
-        .env("SKY_LIVE_PORT", port.to_string())
-        .env("SKY_CSRF", "off")
+        .env("IPE_LIVE_PORT", port.to_string())
+        .env("IPE_CSRF", "off")
         // No embedded dev console: the console child is irrelevant here and
         // its own `listening on` log line would race the readiness check.
-        .env("SKY_CONSOLE_EMBED", "off")
+        .env("IPE_CONSOLE_EMBED", "off")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .spawn()

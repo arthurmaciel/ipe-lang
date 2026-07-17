@@ -1,17 +1,17 @@
 //! `Input.radio`, `Input.radioRow`, and `Input.option`
-//! must type-check and lower without `SKY-N0005: Input has no member radio`.
+//! must type-check and lower without `IPE-N0005: Input has no member radio`.
 //!
 //! Before this fix, `InputRadio`, `InputRadioRow`, and `InputOption` had no
 //! `StdlibKernel` variants, no type schemes in `constrain.rs`, no entries in
 //! the LEGACY `qual_vars` table, no LEGACY match arms in `lower.rs`, and no
-//! emit arms in `emit_expr.rs`.  All three triggered `SKY-N0005` at resolution.
+//! emit arms in `emit_expr.rs`.  All three triggered `IPE-N0005` at resolution.
 //!
 //! The `RadioOption` opaque type was also absent from the IR (`UiCtor` enum)
 //! and from the type-routing in `ir_type_from_canon` / `ir_type_from_ty`.
 //!
 //! This test asserts that `skyc::build` succeeds on the fixture — no pipeline
 //! diagnostic, no panic.  It does NOT run cargo or the emitted binary (no
-//! `SKY_E2E` required).
+//! `IPE_E2E` required).
 
 use std::path::{Path, PathBuf};
 

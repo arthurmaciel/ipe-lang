@@ -13,7 +13,7 @@
 //! Run:
 //! ```text
 //! cargo test -p skyc --test golden_i224_destructure_move_ownership
-//! SKY_E2E=1 cargo test -p skyc --test golden_i224_destructure_move_ownership
+//! IPE_E2E=1 cargo test -p skyc --test golden_i224_destructure_move_ownership
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -66,10 +66,10 @@ fn i224_destructure_skyc_accepts_and_clones_reused_component() {
     );
 }
 
-/// cargo-0 ∧ run-correct: gated on `SKY_E2E=1` — THE SEAL.
+/// cargo-0 ∧ run-correct: gated on `IPE_E2E=1` — THE SEAL.
 #[test]
 fn i224_destructure_cargo_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

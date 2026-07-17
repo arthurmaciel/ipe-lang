@@ -16,19 +16,19 @@ main =
         }
 ```
 
-Our port originally rejected it with SKY-T0001 because `Live.app`'s cfg was
+Our port originally rejected it with IPE-T0001 because `Live.app`'s cfg was
 typed as a **closed 4-field record** `{ init, update, view, subscriptions }` and
 the record unifier required **identical field sets** — there was no row variable
 to absorb `routes` / `notFound` (let alone `head` / `consoleAuth` / `guard` /
 `status`). Worse, our port had invented a **separate `Live.appRouted` kernel**
-(`KernelFn::LiveAppRouted`, `Feature::RoutedLiveApp`, gate SKY-L0118) that the
+(`KernelFn::LiveAppRouted`, `Feature::RoutedLiveApp`, gate IPE-L0118) that the
 corpus never calls, so the routed gate at `lower.rs:3305` was effectively dead
 code.
 
 The reference (`../sky` — the Haskell compiler *and its already-shipped Rust
 backend + runtime-rust*) is the literal port target, and it does **not** have a
 separate `appRouted` at the type level. This is implemented (T1–T7; example
-`36-composite-server` re-added at HEAD after SKY-L0110 landed); the code is the
+`36-composite-server` re-added at HEAD after IPE-L0110 landed); the code is the
 source of truth for the *how*. This ADR records the *why*.
 
 ## Decision
@@ -46,7 +46,7 @@ source of truth for the *how*. This ADR records the *why*.
   closure); if no → emit `live_app` (four TEA callbacks, routes/notFound
   dropped). There is **no `appRouted` kernel** anywhere in the reference — only
   `live_app` / `live_app_routed` at the Rust-emitter + runtime layer, driven by
-  one `Live.app` surface. `LiveAppRouted`/`RoutedLiveApp`/SKY-L0118 are
+  one `Live.app` surface. `LiveAppRouted`/`RoutedLiveApp`/IPE-L0118 are
   vestigial (kept as a defensive alias or deleted).
 
 This **converges toward the reference**, retiring our invented divergence.
@@ -62,7 +62,7 @@ page witness replaced the shared-var `Live.route` scheme that false-blocked
 
 ## Consequences
 
-### Typed route-`:param` payloads (sanctioned divergence, SKY-L0119)
+### Typed route-`:param` payloads (sanctioned divergence, IPE-L0119)
 
 The reference emits `ctor(params.get(i).cloned().unwrap_or_default())` — a
 `String` — into every page-constructor slot, silently assuming every payload is
@@ -76,7 +76,7 @@ emit, driven by the variant's payload field types (which emit already has):
 | `Int`    | `params.get(i).and_then(\|s\| s.parse::<i64>().ok()).unwrap_or_default()` |
 | `Float`  | `params.get(i).and_then(\|s\| s.parse::<f64>().ok()).unwrap_or_default()` |
 | `Bool`   | `params.get(i).map(\|s\| s == "true").unwrap_or_default()` |
-| other    | compile-time diagnostic **SKY-L0119** — reject, don't emit |
+| other    | compile-time diagnostic **IPE-L0119** — reject, don't emit |
 
 The `other` arm is the parse-don't-validate boundary: a `:param` segment is
 inherently a URL string; feeding it to a payload the runtime cannot derive from

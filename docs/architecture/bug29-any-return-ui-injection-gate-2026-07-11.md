@@ -51,14 +51,14 @@ injection).
 Non-UI Cons no longer inject. The downstream "wildcard-`any` return-type fix"
 block then calls `ir_type_from_ty(body_ty)` WITHOUT the injected mapping; the
 embedded free `Ty::Var` makes that fail with `Feature::Polymorphism`
-(SKY-L0102) — i.e. the shape **fails closed with a Sky diagnostic** instead
+(IPE-L0102) — i.e. the shape **fails closed with a Sky diagnostic** instead
 of emitting a return-position-only generic that can E0282 at arbitrary call
 sites.
 
 ### Divergence note
 
 The Go backend accepts `w : Int -> any; w n = []` (its `any` erases to
-`[]any`). Post-fix Ipê REJECTS it (SKY-L0102, actionable: annotate the
+`[]any`). Post-fix Ipê REJECTS it (IPE-L0102, actionable: annotate the
 element type or drop the `any`). This is loud-not-silent-wrong, per the
 sanctioned-divergence policy — record in `docs/divergences-from-sky.md` when
 implemented. If a genuinely-polymorphic-value use case surfaces later, the
@@ -71,11 +71,11 @@ injection.
 1. UI positive (must stay green): existing Webview/Live `view : Model -> any`
    goldens (the shape the injection serves) — no change.
 2. Non-UI negative: `w : Int -> any; w n = []` with an unpinning call site →
-   skyc REJECTS with SKY-L0102 (never exit-0). Golden asserting the
+   skyc REJECTS with IPE-L0102 (never exit-0). Golden asserting the
    diagnostic.
 3. Non-UI `Maybe`: `m : Int -> any; m n = Nothing` — same rejection class.
 
 ## Scope
 
 One detection-site edit + tests. No IR change, no new diagnostic code
-(reuses SKY-L0102).
+(reuses IPE-L0102).

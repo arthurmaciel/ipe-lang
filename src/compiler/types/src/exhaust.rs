@@ -4,9 +4,9 @@
 //! judging every `case` against the constructor signature of its scrutinee.
 //! Two findings are surfaced, both as owned, structured diagnostics:
 //!
-//! * **SKY-T0010 `NonExhaustiveCase`** — the arms do not cover every value; the
+//! * **IPE-T0010 `NonExhaustiveCase`** — the arms do not cover every value; the
 //!   missing patterns are listed (in declaration order for the top column).
-//! * **SKY-T0011 `RedundantCaseBranch`** — a later arm matches no value the
+//! * **IPE-T0011 `RedundantCaseBranch`** — a later arm matches no value the
 //!   earlier arms left open.
 //!
 //! ## Why a full usefulness algorithm (not a shallow head check)
@@ -55,7 +55,7 @@ const WITNESS_CAP: usize = 32;
 /// never by `name` alone — keeps their constructor sets DISTINCT. A bare-`Symbol`
 /// key would let the second `type Color` overwrite the first's variant set,
 /// making a `case` over EITHER `Color` judged against the WRONG constructor set
-/// (a spurious or missed SKY-T0010) once both are linked.
+/// (a spurious or missed IPE-T0010) once both are linked.
 type TyId = (Vec<Symbol>, Symbol);
 
 /// Constructor-signature tables, built once per module from its `type` decls.
@@ -233,7 +233,7 @@ fn to_upat(p: &canon::Pattern_) -> UPat {
 /// imported / unknown enum whose full constructor set is unavailable — the
 /// lowerer rejects the unknown scrutinee enum separately). List / cons patterns
 /// are NOT excluded: they are analysed via the built-in closed `Nil | Cons`
-/// signature (see `to_upat`), so their exhaustiveness (SKY-T0010) is enforced
+/// signature (see `to_upat`), so their exhaustiveness (IPE-T0010) is enforced
 /// here — a nested unknown constructor inside one still excludes the `case`.
 fn pattern_uses_unknown_ctor(p: &canon::Pattern_, sigs: &Sigs) -> bool {
     match p {
@@ -299,7 +299,7 @@ fn refutable_span(pat: &canon::Pattern) -> Option<Span> {
 /// The irrefutability gate for a **binding** position (a lambda / function-def
 /// parameter or a `let` binder). A binding must match *every* value of its
 /// type; a refutable pattern (`Just x`, `1`, `[a]`, `x :: xs`) is rejected here
-/// — before lowering — as SKY-T0015, so a well-typed program can never fail a
+/// — before lowering — as IPE-T0015, so a well-typed program can never fail a
 /// pattern match at runtime (no emitted panic arm, no `DoS` surface).
 ///
 /// The decision is [`canon::Pattern_::is_irrefutable`] — the ONE predicate the
@@ -307,7 +307,7 @@ fn refutable_span(pat: &canon::Pattern) -> Option<Span> {
 /// desync. [`refutable_span`] only refines the blame location.
 ///
 /// # Errors
-/// [`TypeError::RefutablePatternParameter`] (SKY-T0015) when `pat` is refutable.
+/// [`TypeError::RefutablePatternParameter`] (IPE-T0015) when `pat` is refutable.
 fn check_param_irrefutable(pat: &canon::Pattern) -> DResult<()> {
     if pat.value.is_irrefutable() {
         return Ok(());
@@ -319,9 +319,9 @@ fn check_param_irrefutable(pat: &canon::Pattern) -> DResult<()> {
 }
 
 /// Check every `case` in `module` for exhaustiveness + redundancy, and every
-/// **parameter / binder** pattern for irrefutability (SKY-T0015).
+/// **parameter / binder** pattern for irrefutability (IPE-T0015).
 ///
-/// Redundant-branch findings ([`TypeError::RedundantCaseBranch`], SKY-T0011)
+/// Redundant-branch findings ([`TypeError::RedundantCaseBranch`], IPE-T0011)
 /// are pushed onto `warnings` instead of being returned as errors — they are
 /// severity-Warning and must not abort compilation.
 ///
@@ -389,7 +389,7 @@ fn check_expr(
         canon::Expr_::Let(bindings, body) => {
             // A `let` binder is a binding position: it must be irrefutable (a name
             // or an irrefutable destructure). Assert that invariant here — a
-            // refutable `let (Just x) = …` is SKY-T0015, not a latent runtime
+            // refutable `let (Just x) = …` is IPE-T0015, not a latent runtime
             // panic. (`let f p = …` desugars to a name binder over a `Lambda`,
             // whose params are swept by the Lambda arm below.)
             for b in bindings {
@@ -423,7 +423,7 @@ fn check_expr(
         }
         canon::Expr_::Lambda(params, body) => {
             // Every lambda parameter is a binding position — sweep each for
-            // irrefutability (SKY-T0015) before recursing into the body. The
+            // irrefutability (IPE-T0015) before recursing into the body. The
             // pre-existing arm dropped the params entirely.
             for p in params {
                 check_param_irrefutable(p)?;
@@ -446,7 +446,7 @@ fn check_expr(
 /// matrix). A `case` mentioning a constructor outside this module's unions is
 /// skipped — its signature is unavailable, so it cannot be judged soundly here.
 ///
-/// Redundant-branch findings are pushed onto `warnings` (SKY-T0011 is a
+/// Redundant-branch findings are pushed onto `warnings` (IPE-T0011 is a
 /// Warning-severity diagnostic that must not abort compilation).
 fn check_case(
     scrut: &canon::Expr,
@@ -472,7 +472,7 @@ fn check_case(
     for (br, row) in branches.iter().zip(rows.iter()) {
         let q = [row.clone()];
         // A tuple / record arm is reported through the dedicated multi-arm
-        // product gate at lowering (SKY-L0115), which gives a clearer message
+        // product gate at lowering (IPE-L0115), which gives a clearer message
         // than "redundant branch"; redundancy reporting covers the constructor /
         // literal / wildcard / variable / alias arm shapes.
         let is_product = matches!(
@@ -480,7 +480,7 @@ fn check_case(
             canon::Pattern_::PTuple(_) | canon::Pattern_::PRecord(_)
         );
         if !is_product && useful(&prior, &q, sigs, 1).is_empty() {
-            // SKY-T0011 is Severity::Warning: collect it but do not abort.
+            // IPE-T0011 is Severity::Warning: collect it but do not abort.
             warnings.push(Diagnostic::Type {
                 span: br.pat.span,
                 msg: TypeError::RedundantCaseBranch {
@@ -840,7 +840,7 @@ fn render_upat(p: &UPat, interner: &Interner, atom: bool) -> DResult<String> {
 }
 
 /// The surface spelling of a `case` arm's pattern, used to name a redundant arm
-/// in the SKY-T0011 diagnostic. A constructor / variable resolves through the
+/// in the IPE-T0011 diagnostic. A constructor / variable resolves through the
 /// interner; a literal spells itself; a wildcard is `_`; an alias spells its
 /// inner pattern (the part that drives the match).
 fn arm_label(p: &canon::Pattern_, interner: &Interner) -> DResult<Box<str>> {

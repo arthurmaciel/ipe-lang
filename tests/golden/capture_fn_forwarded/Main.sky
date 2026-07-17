@@ -5,7 +5,7 @@ module Main exposing (main)
 -- promotion. A lambda FORWARDS (not calls) the fn-typed param `f` in a
 -- non-callee position: the param is shadow-rebound to the `Clone`
 -- `Arc<dyn Fn>` carrier at function entry and the read re-dispatched through
--- a fresh `Box` closure, so the shape compiles and runs (it was SKY-L0125/6
+-- a fresh `Box` closure, so the shape compiles and runs (it was IPE-L0125/6
 -- fail-closed while the only carrier was a non-`Clone` `Box<dyn Fn>`).
 applyTwice : (Int -> Int) -> Int -> Int
 applyTwice g x =

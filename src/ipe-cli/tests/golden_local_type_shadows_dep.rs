@@ -1,6 +1,6 @@
 //! Regression gate — a LOCAL `type X` shadowing a dep-imported `X` must be
-//! rejected AT THE DECLARATION with a clean SKY-N0012 (`DuplicateType`), not a
-//! confusing downstream SKY-T0001 type mismatch three functions later.
+//! rejected AT THE DECLARATION with a clean IPE-N0012 (`DuplicateType`), not a
+//! confusing downstream IPE-T0001 type mismatch three functions later.
 //!
 //! Root cause (see `docs/adr/0010-pattern-and-lowering-completeness.md`,
 //! item D): `canonicalise_with_env`'s `type_home_map.entry(..).or_insert_with(..)`
@@ -9,14 +9,14 @@
 //! dep's home while the LOCAL union's ctors (`Warm`/`Cool`) were registered into
 //! the environment. The `Color` annotation on `describe` then resolved to
 //! `Dep.Color` while the case-arm ctors were `Main.Color`, surfacing as an
-//! ordinary SKY-T0001 with no hint of the shadow.
+//! ordinary IPE-T0001 with no hint of the shadow.
 //!
 //! The fix adds a standalone pre-pass in `canonicalise_with_env` that mirrors
 //! `inject_dep_type`'s existing dep-vs-dep clash check EXACTLY, closing the
 //! asymmetry for the local-vs-dep case (both unions and aliases).
 //!
-//! This test only checks that `skyc::build` fails with SKY-N0012 (does NOT build
-//! or run the emitted Rust project; does NOT require `SKY_E2E`).
+//! This test only checks that `skyc::build` fails with IPE-N0012 (does NOT build
+//! or run the emitted Rust project; does NOT require `IPE_E2E`).
 //!
 //! Run:
 //! ```text
@@ -52,18 +52,18 @@ fn try_build(name: &str) -> Result<(), String> {
 
 /// The exact two-module repro from item D — `Main` declares `type Color`
 /// locally after `import Dep exposing (Color(..))`.  Must fail closed with
-/// SKY-N0012 at the local declaration, NOT a downstream SKY-T0001.
+/// IPE-N0012 at the local declaration, NOT a downstream IPE-T0001.
 #[test]
 fn m102_local_type_shadows_dep_fails_n0012() {
     let err = try_build("local_type_shadows_dep").expect_err(
         "local_type_shadows_dep must fail (local `type Color` shadows the imported Dep.Color)",
     );
     assert!(
-        err.contains("SKY-N0012"),
-        "expected SKY-N0012 (DuplicateType) at the shadowing declaration, got:\n{err}"
+        err.contains("IPE-N0012"),
+        "expected IPE-N0012 (DuplicateType) at the shadowing declaration, got:\n{err}"
     );
     assert!(
-        !err.contains("SKY-T0001"),
-        "must NOT surface as a downstream SKY-T0001 type mismatch, got:\n{err}"
+        !err.contains("IPE-T0001"),
+        "must NOT surface as a downstream IPE-T0001 type mismatch, got:\n{err}"
     );
 }

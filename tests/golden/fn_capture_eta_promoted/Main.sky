@@ -8,7 +8,7 @@ import Sky.Core.Prelude exposing (..)
 -- synthesizes a residual `\eta_0 -> wrap(<partial>, eta_0)` that CAPTURES
 -- `wrap` inside a new closure — a capture that exists only post-lowering.
 -- The binder-site promotion must see it and flip `wrap` to the `Clone`
--- `Arc<dyn Fn>` carrier (was SKY-L0126).
+-- `Arc<dyn Fn>` carrier (was IPE-L0126).
 inc : Int -> Int -> Int
 inc a b =
     a + b

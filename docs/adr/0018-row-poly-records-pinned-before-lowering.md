@@ -41,4 +41,4 @@ with the pinning invariant proven).
   keep *rejecting* until backend monomorphisation lands — flipping them to accept
   without that machinery reintroduces the A7 miss (a panic-on-unknown-shape).
 - One completeness gap is recorded, not a runtime hazard: row-var annotation
-  syntax `{ r | f : T }` does not parse (`SKY-P0001`).
+  syntax `{ r | f : T }` does not parse (`IPE-P0001`).

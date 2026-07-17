@@ -7,7 +7,7 @@
 //! `skyc`, builds the emitted Rust project with the shared cargo target, runs
 //! the binary, and checks its stdout against the cached oracle
 //! (`tests/golden/stdui_layoutwith/oracle.meta` + `expected_go.txt`).
-//! The test is gated on `SKY_E2E=1`; without it it returns early.
+//! The test is gated on `IPE_E2E=1`; without it it returns early.
 //!
 //! ## Oracle provenance
 //!
@@ -30,7 +30,7 @@
 //! Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test golden_m7_stdui_layoutwith
+//! IPE_E2E=1 cargo test golden_m7_stdui_layoutwith
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -44,7 +44,7 @@ fn repo_root() -> PathBuf {
 
 /// Compile / build / run `tests/golden/stdui_layoutwith/Main.sky` and
 /// return the golden directory together with the run outcome.
-/// Gated on `SKY_E2E=1`.
+/// Gated on `IPE_E2E=1`.
 fn build_run_layoutwith() -> (PathBuf, support::RunOutcome) {
     let root = repo_root();
     let dir = root
@@ -82,7 +82,7 @@ fn build_run_layoutwith() -> (PathBuf, support::RunOutcome) {
 /// Divergence golden — the expected value is skyc's own correct output.
 #[test]
 fn layoutwith_inline_cfg_applies_wrapper_and_root_attrs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

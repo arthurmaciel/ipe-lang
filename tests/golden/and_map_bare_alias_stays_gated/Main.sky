@@ -10,8 +10,8 @@ import Sky.Core.Prelude exposing (..)
 -- can never see this. `Result.andMap`'s literal occurrence lives INSIDE
 -- `myAndMap`'s own body as a bare-value reference, lowered through
 -- `lower_expr`'s bare-value arm (never `lower_call_uniform`). Must stay
--- rejected — SKY-T0014 (Tier 2, the primary `TyBounds` obligation) and/or
--- SKY-L0114 (Tier 1 backstop, now re-anchored inside `lower_callee` itself so
+-- rejected — IPE-T0014 (Tier 2, the primary `TyBounds` obligation) and/or
+-- IPE-L0114 (Tier 1 backstop, now re-anchored inside `lower_callee` itself so
 -- every reference funnels through it) — never a silent accept that reaches
 -- `cargo build` as E0277.
 add3 : Int -> Int -> Int -> Int

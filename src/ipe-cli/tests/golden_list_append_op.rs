@@ -1,7 +1,7 @@
 //! `++` must accept `List` operands (Elm/upstream semantics), not only
 //! `String`. Before this task, `BinopClass::Append` pinned both operands and
 //! the result to `String`, so `[1,2] ++ [3,4]` failed at unification with
-//! `SKY-T0001` before reaching the backend.
+//! `IPE-T0001` before reaching the backend.
 //!
 //! The fix generalises `++` to `Appendable a => a -> a -> a`, where
 //! `Appendable` admits `String` and `List _`. The solver pins the fresh
@@ -13,7 +13,7 @@
 //!   (b) `++` on `List (Int, Bool)` — the example-38 shape
 //!   (c) `++` on `String` — existing behaviour must be preserved
 //!
-//! Negative case (always runs — no `SKY_E2E` needed):
+//! Negative case (always runs — no `IPE_E2E` needed):
 //!   (d) `++` on `Int` → rejected at type-check with `Appendable` in message.
 
 use std::path::{Path, PathBuf};
@@ -45,7 +45,7 @@ fn compile_golden(name: &str) -> PathBuf {
 }
 
 fn e2e_enabled() -> bool {
-    std::env::var("SKY_E2E").is_ok()
+    std::env::var("IPE_E2E").is_ok()
 }
 
 /// (a/b/c) `++` on `List Int`, `List (Int, Bool)`, and `String` all compile
@@ -73,7 +73,7 @@ fn list_append_op_runs_with_parity() {
 /// (d) SEAL-PRESERVING negative gate: `++` on `Int` is rejected at skyc
 /// type-check (the `Appendable` obligation's head-rejection — `Int` is neither
 /// `String` nor `List _`), NOT deferred to a cargo failure. A pure compile —
-/// no `SKY_E2E` needed.
+/// no `IPE_E2E` needed.
 #[test]
 fn append_on_int_is_rejected_at_typecheck() {
     let root = repo_root();

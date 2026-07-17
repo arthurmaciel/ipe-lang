@@ -4,7 +4,7 @@ import Sky.Core.Prelude exposing (..)
 -- NEGATIVE (AUD-12): x has both Append and Number obligations.
 -- Before the fix, skyc defaulted x to Int and accepted silently;
 -- the emitted `x ++ x` then failed cargo because i64 has no ++ impl.
--- After the fix, skyc rejects here with SKY-T0014.
+-- After the fix, skyc rejects here with IPE-T0014.
 f x = (x ++ x) + 1
 
 main =

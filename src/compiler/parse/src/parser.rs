@@ -7,13 +7,13 @@
 //!
 //! Every raise site emits a **coded, structured** [`ParseError`]: the generic
 //! "expected X, found Y" family funnels through [`ParseError::UnexpectedToken`]
-//! (SKY-P0001) carrying the found [`TokenKind`] and an [`ExpectedSet`];
-//! truncated input becomes [`ParseError::UnexpectedEof`] (SKY-P0002) tagged with
+//! (IPE-P0001) carrying the found [`TokenKind`] and an [`ExpectedSet`];
+//! truncated input becomes [`ParseError::UnexpectedEof`] (IPE-P0002) tagged with
 //! the enclosing [`Construct`]; and each construct (module header, exposing list,
 //! definition, type declaration, `case`, parenthesised group) has its own
 //! defect-precise variant. Recursion is bounded by [`MAX_DEPTH`]; every
 //! recursive entry threads a depth counter and fails with
-//! [`ParseError::NestingTooDeep`] (SKY-P0003) before the native stack can
+//! [`ParseError::NestingTooDeep`] (IPE-P0003) before the native stack can
 //! overflow on adversarial input.
 //!
 //! Qualified upper-case names in **type** and **pattern** position are rejected
@@ -177,7 +177,7 @@ impl<'a> Parser<'a> {
 
     // ---- typed-error constructors -----------------------------------------
 
-    /// "found `<tok>`, expected `<set>`" — the SKY-P0001 funnel.
+    /// "found `<tok>`, expected `<set>`" — the IPE-P0001 funnel.
     fn unexpected_token(tok: &Token, expected: &[Expected]) -> Diagnostic {
         Diagnostic::Parse {
             span: tok.span,
@@ -231,7 +231,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Require a closing `)`. The primary span points where the `)` was
-    /// expected; `opener` is carried as the secondary span (SKY-P0050).
+    /// expected; `opener` is carried as the secondary span (IPE-P0050).
     fn close_paren(&mut self, opener: Span, construct: Construct) -> DResult<()> {
         match self.peek() {
             Some(t) if t.kind == Tok::RParen => {
@@ -1190,7 +1190,7 @@ impl<'a> Parser<'a> {
     ///
     /// * **Adjacent non-literal atom** (`-x`, `-(e)`, `-f x`) — desugared at
     ///   parse time to `Call(VarLocal("negate"), [e])`, matching the canonical
-    ///   Elm / Sky desugar path.  This closes the SKY-P0001 that 37-composite-
+    ///   Elm / Sky desugar path.  This closes the IPE-P0001 that 37-composite-
     ///   live-shop hit on `if cents < 0 then -cents else cents` (State.sky:156).
     ///
     /// * **Non-adjacent** (`- 5`, `- x`) — the Haskell parser's `exprAtom_`

@@ -70,7 +70,7 @@ Do **not** simply delete the resolver arms at `lower.rs:8520-8521` —
 that would demote a removed, well-known surface to a generic
 unknown-qualified-name error. Instead the resolver keeps *recognising*
 `("Task","run")` and `("Task","perform")` and maps them to a new
-removed-surface diagnostic (allocate the next free SKY-N code;
+removed-surface diagnostic (allocate the next free IPE-N code;
 explain page in `crates/sky_diagnostics/explain/`) whose message is a
 teacher, per the compiler-as-kind-teacher rule:
 
@@ -99,8 +99,8 @@ callers (compiler-synthesised, not user-reachable). What is removed:
 - `KernelFn::TaskPerform` entirely (variant, decl, `ALL` row, scheme
   `constrain.rs:3570-3571`, naming arm, pretty arm, discard-context
   arm) — it was a pure alias with zero independent behaviour;
-- doc/illustrative uses inside explain pages `SKY-L0119.md:50` and
-  `SKY-L0126.md:33` (rewrite the examples to the auto-run shape).
+- doc/illustrative uses inside explain pages `IPE-L0119.md:50` and
+  `IPE-L0126.md:33` (rewrite the examples to the auto-run shape).
 
 `Cmd.perform` is untouched — it is a different operation
 (`Task err a -> (Result err a -> msg) -> Cmd msg`,
@@ -171,7 +171,7 @@ Order of operations (after #116 is landed and green):
 6. Generate the upstream-example patch queue entries
    (`tests/example-patches/…`) by running the codemod over the 35
    upstream files; hand-write the non-mechanical residue.
-7. Rewrite the two explain-page examples (SKY-L0119, SKY-L0126).
+7. Rewrite the two explain-page examples (IPE-L0119, IPE-L0126).
 8. Promote the §6.9 planned-divergence to a live `divergence:` entry
    (removal + reserved-name note + rationale).
 
@@ -186,7 +186,7 @@ Order of operations (after #116 is landed and green):
 - `i128_removed_task_perform` — same three shapes for `Task.perform`.
 - Codemod unit tests: each mechanical rewrite idempotent (`skyc fix`
   twice = once), non-mechanical shape reported not rewritten.
-- E2E (`SKY_E2E=1`): the three regenerated goldens (step 5) build, run,
+- E2E (`IPE_E2E=1`): the three regenerated goldens (step 5) build, run,
   and stay byte-equivalent to their pre-existing `expected_go.txt`
   (output-neutrality proof).
 - Sweep: patched upstream examples build+run with outputs equal to the

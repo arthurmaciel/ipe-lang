@@ -4,9 +4,9 @@
 //!
 //! The hand-rolled form missed `PAlias` over an irrefutable inner
 //! (`_ as w` / `other as w`). The exhaustiveness pass treats such an alias
-//! head as a catch-all (maps to `Wild`) and only WARNS (`SKY-T0011`) about the
+//! head as a catch-all (maps to `Wild`) and only WARNS (`IPE-T0011`) about the
 //! arms after it — but the truncation left those arms alive, so they reached
-//! `Match::new_flat`, whose structural backstop raised `SKY-I0001`
+//! `Match::new_flat`, whose structural backstop raised `IPE-I0001`
 //! (`CompilerBug`) on well-typed source. Both shapes must now build.
 
 use std::path::{Path, PathBuf};
@@ -32,8 +32,8 @@ fn assert_builds(fixture: &str) {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "{fixture}: alias catch-all + trailing arm must warn (SKY-T0011) and \
-         build (was SKY-I0001 ICE): {:?}",
+        "{fixture}: alias catch-all + trailing arm must warn (IPE-T0011) and \
+         build (was IPE-I0001 ICE): {:?}",
         built.err()
     );
 }
