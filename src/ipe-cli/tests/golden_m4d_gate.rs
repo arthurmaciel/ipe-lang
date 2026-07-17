@@ -36,7 +36,7 @@ fn repo_root() -> PathBuf {
 /// Build `tests/golden/<fixture>/Main.sky`, assert it fails with `expected`, and
 /// assert NO Rust was emitted (the pipeline stopped before codegen). Skips
 /// silently when the runtime cannot be resolved.
-fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code) {
+fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code) {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -77,7 +77,7 @@ fn set_record_element_is_sky_t0001() {
     assert_gate(
         "set_record_gate",
         "m4d_set_record_gate_emit",
-        sky_diagnostics::SKY_T0001,
+        ipe_diagnostics::SKY_T0001,
     );
 }
 
@@ -87,7 +87,7 @@ fn dict_adt_key_is_sky_t0001() {
     assert_gate(
         "dict_adt_gate",
         "m4d_dict_adt_gate_emit",
-        sky_diagnostics::SKY_T0001,
+        ipe_diagnostics::SKY_T0001,
     );
 }
 
@@ -100,7 +100,7 @@ fn set_float_element_is_sky_l0117() {
     assert_gate(
         "set_float_gate",
         "m4d_set_float_gate_emit",
-        sky_diagnostics::SKY_L0117,
+        ipe_diagnostics::SKY_L0117,
     );
 }
 
@@ -111,7 +111,7 @@ fn dict_float_key_is_sky_l0117() {
     assert_gate(
         "dict_float_gate",
         "m4d_dict_float_gate_emit",
-        sky_diagnostics::SKY_L0117,
+        ipe_diagnostics::SKY_L0117,
     );
 }
 
@@ -130,7 +130,7 @@ fn set_float_inline_is_sky_l0117() {
     assert_gate(
         "set_float_inline_gate",
         "m4d_set_float_inline_gate_emit",
-        sky_diagnostics::SKY_L0117,
+        ipe_diagnostics::SKY_L0117,
     );
 }
 
@@ -141,7 +141,7 @@ fn set_float_let_is_sky_l0117() {
     assert_gate(
         "set_float_let_gate",
         "m4d_set_float_let_gate_emit",
-        sky_diagnostics::SKY_L0117,
+        ipe_diagnostics::SKY_L0117,
     );
 }
 
@@ -153,7 +153,7 @@ fn set_float_mapped_is_sky_l0117() {
     assert_gate(
         "set_float_mapped_gate",
         "m4d_set_float_mapped_gate_emit",
-        sky_diagnostics::SKY_L0117,
+        ipe_diagnostics::SKY_L0117,
     );
 }
 
@@ -164,7 +164,7 @@ fn set_float_insert_is_sky_l0117() {
     assert_gate(
         "set_float_insert_gate",
         "m4d_set_float_insert_gate_emit",
-        sky_diagnostics::SKY_L0117,
+        ipe_diagnostics::SKY_L0117,
     );
 }
 
@@ -175,7 +175,7 @@ fn dict_float_inline_is_sky_l0117() {
     assert_gate(
         "dict_float_inline_gate",
         "m4d_dict_float_inline_gate_emit",
-        sky_diagnostics::SKY_L0117,
+        ipe_diagnostics::SKY_L0117,
     );
 }
 
@@ -186,7 +186,7 @@ fn dict_float_let_is_sky_l0117() {
     assert_gate(
         "dict_float_let_gate",
         "m4d_dict_float_let_gate_emit",
-        sky_diagnostics::SKY_L0117,
+        ipe_diagnostics::SKY_L0117,
     );
 }
 
@@ -197,7 +197,7 @@ fn dict_float_insert_is_sky_l0117() {
     assert_gate(
         "dict_float_insert_gate",
         "m4d_dict_float_insert_gate_emit",
-        sky_diagnostics::SKY_L0117,
+        ipe_diagnostics::SKY_L0117,
     );
 }
 
@@ -220,7 +220,7 @@ fn set_rec_via_fn_is_sky_t0014() {
     assert_gate(
         "set_rec_fn_gate",
         "m4d_set_rec_fn_gate_emit",
-        sky_diagnostics::SKY_T0014,
+        ipe_diagnostics::SKY_T0014,
     );
 }
 
@@ -232,7 +232,7 @@ fn set_adt_via_fn_is_sky_t0014() {
     assert_gate(
         "set_adt_fn_gate",
         "m4d_set_adt_fn_gate_emit",
-        sky_diagnostics::SKY_T0014,
+        ipe_diagnostics::SKY_T0014,
     );
 }
 
@@ -244,7 +244,7 @@ fn dict_rec_via_fn_is_sky_t0014() {
     assert_gate(
         "dict_rec_fn_gate",
         "m4d_dict_rec_fn_gate_emit",
-        sky_diagnostics::SKY_T0014,
+        ipe_diagnostics::SKY_T0014,
     );
 }
 
@@ -256,6 +256,6 @@ fn dict_adt_via_fn_is_sky_t0014() {
     assert_gate(
         "dict_adt_fn_gate",
         "m4d_dict_adt_fn_gate_emit",
-        sky_diagnostics::SKY_T0014,
+        ipe_diagnostics::SKY_T0014,
     );
 }

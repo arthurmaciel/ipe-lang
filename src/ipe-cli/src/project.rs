@@ -45,10 +45,10 @@ pub struct ProjectManifest {
     /// Absolute path to the source root (`<root>/src` by default).
     pub src_root: PathBuf,
     /// The SQL driver the emitted project targets (from `[database] driver
-    /// = "…"`). Defaults to [`sky_backend_rust::DbDriver::Sqlite`] when the
+    /// = "…"`). Defaults to [`ipe_backend_rust::DbDriver::Sqlite`] when the
     /// `[database]` section (or the `driver` key within it) is absent — the
     /// documented default in `CLAUDE.md`'s `sky.toml` schema table.
-    pub driver: sky_backend_rust::DbDriver,
+    pub driver: ipe_backend_rust::DbDriver,
 }
 
 /// A discovered Sky source file with its resolved module path.
@@ -68,9 +68,9 @@ pub struct ImportEdge {
 }
 
 /// An import cycle detected during topological sort. The single definition
-/// lives in [`sky_db`] (beside the shared topo algorithm); re-exported here
+/// lives in [`ipe_db`] (beside the shared topo algorithm); re-exported here
 /// for the driver and existing callers.
-pub use sky_db::CycleError;
+pub use ipe_db::CycleError;
 
 // ---------------------------------------------------------------------------
 // Manifest parsing
@@ -85,10 +85,10 @@ pub use sky_db::CycleError;
 ///
 /// # Errors
 /// [`CliError::UsageOwned`] naming the unrecognised value.
-fn parse_db_driver(s: &str) -> Result<sky_backend_rust::DbDriver, CliError> {
+fn parse_db_driver(s: &str) -> Result<ipe_backend_rust::DbDriver, CliError> {
     match s {
-        "sqlite" => Ok(sky_backend_rust::DbDriver::Sqlite),
-        "postgres" | "postgresql" => Ok(sky_backend_rust::DbDriver::Postgres),
+        "sqlite" => Ok(ipe_backend_rust::DbDriver::Sqlite),
+        "postgres" | "postgresql" => Ok(ipe_backend_rust::DbDriver::Postgres),
         other => Err(CliError::UsageOwned(format!(
             "sky.toml: [database] driver = {other:?} is not supported \
              (expected \"sqlite\" or \"postgres\")"
@@ -175,7 +175,7 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<ProjectManifest, CliError>
 
     let driver = match driver_str {
         Some(s) => parse_db_driver(&s)?,
-        None => sky_backend_rust::DbDriver::Sqlite,
+        None => ipe_backend_rust::DbDriver::Sqlite,
     };
 
     Ok(ProjectManifest {
@@ -282,8 +282,8 @@ fn is_module_segment(s: &str) -> bool {
 /// Returns the modules in dep-first order (i.e. a module's deps come before
 /// it in the returned slice). The entry module (`["Main"]`) is always last.
 ///
-/// Delegates to [`sky_db::topological_order_paths`] — the single topo-sort
-/// algorithm, shared with the memoized `sky_db::topo_order` query so the
+/// Delegates to [`ipe_db::topological_order_paths`] — the single topo-sort
+/// algorithm, shared with the memoized `ipe_db::topo_order` query so the
 /// two orders can never drift.
 ///
 /// # Errors
@@ -297,7 +297,7 @@ where
     F: Fn(&[String]) -> Vec<Vec<String>>,
 {
     let paths: Vec<Vec<String>> = modules.iter().map(|m| m.module_path.clone()).collect();
-    let order = sky_db::topological_order_paths(&paths, entry_path, imports_of)?;
+    let order = ipe_db::topological_order_paths(&paths, entry_path, imports_of)?;
 
     // Map each ordered path back to its DiscoveredModule (last claimant wins
     // on a duplicate module path, matching the pre-delegation collect()).
@@ -409,11 +409,11 @@ pub fn inject_compiled_std_closure(
 /// harmlessly included in the returned set — the topo-sort driver filters them
 /// against the `module_set`.
 ///
-/// The single implementation lives in [`sky_db`] (it also backs the memoized
-/// `sky_db::imports` query the topo sort consumes) — re-exported here so the
+/// The single implementation lives in [`ipe_db`] (it also backs the memoized
+/// `ipe_db::imports` query the topo sort consumes) — re-exported here so the
 /// scan used for stdlib-closure injection and the scan used for topo ordering
 /// can never drift apart.
-pub use sky_db::extract_imports_from_source;
+pub use ipe_db::extract_imports_from_source;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -452,7 +452,7 @@ mod tests {
     fn parse_manifest_no_database_section_defaults_to_sqlite() {
         let toml_path = write_manifest("no_db_section", "");
         let manifest = parse_manifest(&toml_path).expect("manifest must parse");
-        assert_eq!(manifest.driver, sky_backend_rust::DbDriver::Sqlite);
+        assert_eq!(manifest.driver, ipe_backend_rust::DbDriver::Sqlite);
         let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
     }
 
@@ -460,7 +460,7 @@ mod tests {
     fn parse_manifest_explicit_sqlite_driver() {
         let toml_path = write_manifest("explicit_sqlite", "[database]\ndriver = \"sqlite\"\n");
         let manifest = parse_manifest(&toml_path).expect("manifest must parse");
-        assert_eq!(manifest.driver, sky_backend_rust::DbDriver::Sqlite);
+        assert_eq!(manifest.driver, ipe_backend_rust::DbDriver::Sqlite);
         let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
     }
 
@@ -468,7 +468,7 @@ mod tests {
     fn parse_manifest_postgres_driver() {
         let toml_path = write_manifest("postgres", "[database]\ndriver = \"postgres\"\n");
         let manifest = parse_manifest(&toml_path).expect("manifest must parse");
-        assert_eq!(manifest.driver, sky_backend_rust::DbDriver::Postgres);
+        assert_eq!(manifest.driver, ipe_backend_rust::DbDriver::Postgres);
         let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
     }
 
@@ -476,7 +476,7 @@ mod tests {
     fn parse_manifest_postgresql_alias_driver() {
         let toml_path = write_manifest("postgresql_alias", "[database]\ndriver = \"postgresql\"\n");
         let manifest = parse_manifest(&toml_path).expect("manifest must parse");
-        assert_eq!(manifest.driver, sky_backend_rust::DbDriver::Postgres);
+        assert_eq!(manifest.driver, ipe_backend_rust::DbDriver::Postgres);
         let _ = fs::remove_dir_all(toml_path.parent().expect("has parent"));
     }
 

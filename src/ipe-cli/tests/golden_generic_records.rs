@@ -9,7 +9,7 @@
 //! (`RecValue<T1>`) and the `wrap 42` use site instantiates it at `i64`. This is
 //! the generic-records feature exercised end to end through the real driver (parser →
 //! canonicaliser → solver → lowerer → Rust backend), not just the hand-built IR
-//! unit tests in `sky_backend_rust`.
+//! unit tests in `ipe_backend_rust`.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
 //! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the SAME

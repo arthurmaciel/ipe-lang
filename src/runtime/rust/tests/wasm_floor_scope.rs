@@ -40,7 +40,7 @@
 //! Keep this small, deterministic, dependency-free, and panic-free on every
 //! Sky-reachable path.
 
-use sky_runtime_rust::*;
+use ipe_runtime_rust::*;
 
 // ── (1) Pure-kernel floor candidates: no Task / tokio / async ──────────────
 //
@@ -52,24 +52,24 @@ use sky_runtime_rust::*;
 #[test]
 fn list_kernel_is_pure_and_total() {
     // List.range / List.length — no Task, no allocation surprise, fully sync.
-    let xs = sky_runtime::list::list_range(1, 5);
+    let xs = ipe_runtime_rust::list::list_range(1, 5);
     assert_eq!(xs, vec![1, 2, 3, 4, 5]);
-    assert_eq!(sky_runtime::list::list_length(xs), 5);
+    assert_eq!(ipe_runtime_rust::list::list_length(xs), 5);
 
     // List.member over an empty list must NOT panic (total negative path).
     let empty: Vec<i64> = Vec::new();
-    assert!(!sky_runtime::list::list_member(7, empty));
+    assert!(!ipe_runtime_rust::list::list_member(7, empty));
 }
 
 #[test]
 fn string_kernel_is_pure_and_total() {
     // String.append / toUpper / reverse — pure transforms, no I/O.
-    let s = sky_runtime::string::string_append("sky".to_string(), "wasm".to_string());
-    assert_eq!(sky_runtime::string::string_to_upper(s.clone()), "SKYWASM");
-    assert_eq!(sky_runtime::string::string_reverse(s), "msawyks");
+    let s = ipe_runtime_rust::string::string_append("sky".to_string(), "wasm".to_string());
+    assert_eq!(ipe_runtime_rust::string::string_to_upper(s.clone()), "SKYWASM");
+    assert_eq!(ipe_runtime_rust::string::string_reverse(s), "msawyks");
 
     // String.toInt failure path is a Maybe, not a panic — floor-safe.
-    match sky_runtime::string::string_to_int("not-a-number".to_string()) {
+    match ipe_runtime_rust::string::string_to_int("not-a-number".to_string()) {
         SkyMaybe::Nothing => {}
         SkyMaybe::Just(_) => panic!("test bug: non-numeric string parsed as Int"),
     }
@@ -79,18 +79,18 @@ fn string_kernel_is_pure_and_total() {
 fn dict_kernel_is_pure_and_total() {
     // Dict.fromList / get — pure HashMap ops, deterministic sorted iteration.
     let d =
-        sky_runtime::dict::dict_from_list(vec![("a".to_string(), 1i64), ("b".to_string(), 2i64)]);
-    match sky_runtime::dict::dict_get("a".to_string(), d.clone()) {
+        ipe_runtime_rust::dict::dict_from_list(vec![("a".to_string(), 1i64), ("b".to_string(), 2i64)]);
+    match ipe_runtime_rust::dict::dict_get("a".to_string(), d.clone()) {
         SkyMaybe::Just(v) => assert_eq!(v, 1),
         SkyMaybe::Nothing => panic!("test bug: present key missed"),
     }
     // Absent key → Nothing (total), and keys come back sorted (pure contract).
     assert!(matches!(
-        sky_runtime::dict::dict_get("zzz".to_string(), d.clone()),
+        ipe_runtime_rust::dict::dict_get("zzz".to_string(), d.clone()),
         SkyMaybe::Nothing
     ));
     assert_eq!(
-        sky_runtime::dict::dict_keys(d),
+        ipe_runtime_rust::dict::dict_keys(d),
         vec!["a".to_string(), "b".to_string()]
     );
 }
@@ -98,20 +98,20 @@ fn dict_kernel_is_pure_and_total() {
 // `json` is feature-gated (the kernel uses serde_json), so this leg compiles only
 // when the feature is on. Without the gate, `cargo test/clippy --all-targets` under
 // a narrow non-json subset (e.g. `--features websocket_client`) fails to resolve
-// `sky_runtime::json`. The list/string/dict legs below stay ungated (always-compiled).
+// `ipe_runtime_rust::json`. The list/string/dict legs below stay ungated (always-compiled).
 #[cfg(feature = "json")]
 #[test]
 fn json_kernel_encode_is_pure_and_total() {
     // JSON encode is a pure `Int -> Value -> String` — the floor's JSON leg.
-    let obj = sky_runtime::json::json_enc_object(vec![
+    let obj = ipe_runtime_rust::json::json_enc_object(vec![
         (
             "name".to_string(),
-            sky_runtime::json::json_enc_string("sky".to_string()),
+            ipe_runtime_rust::json::json_enc_string("sky".to_string()),
         ),
-        ("n".to_string(), sky_runtime::json::json_enc_int(42)),
-        ("ok".to_string(), sky_runtime::json::json_enc_bool(true)),
+        ("n".to_string(), ipe_runtime_rust::json::json_enc_int(42)),
+        ("ok".to_string(), ipe_runtime_rust::json::json_enc_bool(true)),
     ]);
-    let compact = sky_runtime::json::json_enc_encode(0, obj);
+    let compact = ipe_runtime_rust::json::json_enc_encode(0, obj);
     // Field order is preserved by the object encoder; assert on stable substrings
     // so the test does not depend on serde map iteration order beyond presence.
     assert!(compact.contains("\"name\":\"sky\""), "encoded: {compact}");

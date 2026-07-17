@@ -1,0 +1,22 @@
+[package]
+name = "ipe_db"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+salsa = "=0.27.2"
+ipe_intern = { path = "../ipe_intern" }
+ipe_diagnostics = { path = "../ipe_diagnostics" }
+ipe_syntax = { path = "../ipe_syntax" }
+ipe_parse = { path = "../ipe_parse" }
+ipe_canon = { path = "../ipe_canon" }
+ipe_types = { path = "../ipe_types" }
+ipe_kernels = { path = "../ipe_kernels" }
+ipe_lower = { path = "../ipe_lower" }
+ipe_ir = { path = "../ipe_ir" }
+ipe_backend = { path = "../ipe_backend" }
+ipe_backend_rust = { path = "../ipe_backend_rust" }
+
+[lints]
+workspace = true

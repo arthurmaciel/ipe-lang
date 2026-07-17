@@ -39,7 +39,7 @@ fn assert_malformed_char(fixture: &str, out_suffix: &str) {
     };
     assert_eq!(
         got,
-        Some(sky_diagnostics::SKY_P0015),
+        Some(ipe_diagnostics::SKY_P0015),
         "fixture {fixture}: expected SKY-P0015, got build result {built:?}"
     );
 

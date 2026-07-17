@@ -7,11 +7,11 @@
 //! * the three names are annotatable builtins (`describePanic : PanicInfo ->
 //!   String` resolves and compiles);
 //! * a pattern-bound payload and a helper parameter naming (or inferring) the
-//!   same nominal type agree on ONE Rust type (`sky_runtime::error::
+//!   same nominal type agree on ONE Rust type (`ipe_runtime::error::
 //!   SkyPanicInfo` etc.) — without the fix, this exact shape was an
 //!   exit-0-then-cargo-fail (the helper's parameter lowered to a
 //!   project-local synthesized record struct);
-//! * field access on all six fixed fields resolves through `sky_types`'
+//! * field access on all six fixed fields resolves through `ipe_types`'
 //!   `ErrorRecordFields` table and emits pub-field reads of the runtime
 //!   structs.
 //!

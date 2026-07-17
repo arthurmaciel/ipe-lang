@@ -6,7 +6,7 @@
 # `runtime`'s Cargo.toml gates most third-party deps (rsa, sqlx, redis, ...)
 # behind optional Cargo features (default = []) — CI's `test` job only builds
 # the default feature set. Enabling `full` here (mirroring ci.yml's
-# `runtime-full-features` job: `cargo nextest run -p sky-runtime-rust
+# `runtime-full-features` job: `cargo nextest run -p ipe-runtime-rust
 # --features full`) makes the supply-chain graph match what actually ships in
 # a real deployment, not just the narrow default-feature slice — otherwise an
 # advisory affecting an optional dep (e.g. the `rsa` entry below) silently
@@ -30,8 +30,8 @@ ignore = [
     # sidechannel). No fixed upstream release exists (the advisory's own
     # Solution field says "no fixed upgrade available"); pulled in via
     # `runtime`'s optional `crypto` feature for Sky.Core.Jwt RS256 sign/verify
-    # (jsonwebtoken -> rsa) — see runtime/src/sky_runtime/jwt.rs +
-    # runtime/src/sky_runtime/crypto.rs. Exposure is limited to SIGN (private
+    # (jsonwebtoken -> rsa) — see runtime/src/ipe_runtime/jwt.rs +
+    # runtime/src/ipe_runtime/crypto.rs. Exposure is limited to SIGN (private
     # key) + VERIFY (public key); the Marvin attack targets the PKCS#1 v1.5
     # DECRYPTION oracle, which this codebase never exercises. Accepted +
     # tracked; revisit when `rsa` ships a fix or a vetted constant-time

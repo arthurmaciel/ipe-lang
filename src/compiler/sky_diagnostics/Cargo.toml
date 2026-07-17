@@ -1,8 +1,0 @@
-[package]
-name = "sky_diagnostics"
-edition.workspace = true
-version.workspace = true
-license.workspace = true
-
-[lints]
-workspace = true

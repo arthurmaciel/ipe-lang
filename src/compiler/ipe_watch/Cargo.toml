@@ -1,0 +1,21 @@
+[package]
+name = "ipe_watch"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+# Task 21 (confined watcher). Directory-level (not inode-level) watching —
+# editors save via tmp-write + rename, so an inode watch misses the new file.
+notify = "8"
+# Task 23's `LastGoodBinary` content hash. Same pin as `skyc`'s own build
+# cache (`crates/skyc/Cargo.toml`) — one version across the workspace.
+sha2 = "0.10"
+
+# `signal` module: a safe SIGTERM listener. Its public API needs no caller
+# `unsafe`, so it composes with this crate's `#![forbid(unsafe_code)]` — the
+# `sigaction(2)` FFI lives inside signal-hook's own dependency crate.
+[target.'cfg(unix)'.dependencies]
+signal-hook = "0.3"
+
+[lints]
+workspace = true

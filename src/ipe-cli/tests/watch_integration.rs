@@ -139,7 +139,7 @@ fn start_watch(
     opts.port = port;
     // Tight debounce so the tests don't pay the default's full latency
     // budget while still comfortably coalescing a same-window double-save.
-    opts.debounce = sky_watch::DebounceConfig {
+    opts.debounce = ipe_watch::DebounceConfig {
         quiescence: Duration::from_millis(120),
         hard_cap: Duration::from_millis(600),
     };

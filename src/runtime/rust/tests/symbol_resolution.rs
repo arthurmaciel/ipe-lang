@@ -1,6 +1,6 @@
 //! Regression test: every symbol name returned by `kernel_name()` in
-//! `crates/sky_backend_rust/src/naming.rs` must resolve to a real `pub fn`
-//! in the runtime source (`src/sky_runtime/**/*.rs`), OR appear in the
+//! `crates/ipe_backend_rust/src/naming.rs` must resolve to a real `pub fn`
+//! in the runtime source (`src/ipe_runtime/**/*.rs`), OR appear in the
 //! explicit `KNOWN_DEAD_OR_EPILOGUE` allowlist.
 //!
 //! **Why this matters.** `callee_name()` in `emit_expr.rs` calls `kernel_name(k)`
@@ -60,7 +60,7 @@ const KNOWN_DEAD_OR_EPILOGUE: &[&str] = &[
     "live_route",
     // ── Dead: emit_cli_call synthesises the CLI entry-point block inline. ───
     "sky_cli_program_",
-    // ── Dead: emit_ui_call emits sky_runtime::ui::render::ui_layout_with_vecs
+    // ── Dead: emit_ui_call emits ipe_runtime_rust::ui::render::ui_layout_with_vecs
     //         for UiLayoutWith; the bare "ui_layout_with" name is not used.
     //         Note: ui_layout_with_vecs IS in the runtime; this entry is for
     //         the stub "ui_layout_with" name that never reaches callee_name(). ──
@@ -79,7 +79,7 @@ fn every_kernel_name_resolves_to_runtime_fn() {
         .join("..")
         .join("..")
         .join("compiler")
-        .join("sky_backend_rust")
+        .join("ipe_backend_rust")
         .join("src")
         .join("naming.rs");
     let naming_src = std::fs::read_to_string(&naming_path)
@@ -96,8 +96,8 @@ fn every_kernel_name_resolves_to_runtime_fn() {
         "kernel_name regex found zero symbols — the naming.rs path or regex is broken"
     );
 
-    // ── 2. Walk src/runtime/rust/src/sky_runtime/**/*.rs: collect all `pub fn` names ─
-    let runtime_src_dir = root.join("src").join("sky_runtime");
+    // ── 2. Walk src/runtime/rust/src/**/*.rs: collect all `pub fn` names ─
+    let runtime_src_dir = root.join("src").join("ipe_runtime");
     let mut runtime_fns: HashSet<String> = HashSet::new();
     let fn_re = regex::Regex::new(r"pub fn ([a-z_][a-z0-9_]*)").expect("fn_re");
 

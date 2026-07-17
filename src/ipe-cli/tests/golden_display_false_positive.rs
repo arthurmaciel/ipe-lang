@@ -70,7 +70,7 @@ fn i186_false_positive_skyc_no_spurious_display() {
     );
     let grab_sig = grab_sig.unwrap_or_default();
     assert!(
-        grab_sig.contains("sky_runtime::db::SkyRow"),
+        grab_sig.contains("ipe_runtime::db::SkyRow"),
         "the wildcard row generic must carry its real `SkyRow` obligation; got: {grab_sig}"
     );
     assert!(

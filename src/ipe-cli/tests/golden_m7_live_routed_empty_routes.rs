@@ -219,7 +219,7 @@ fn routed_empty_routes_int_notfound_is_sky_t0001() {
     };
     assert_eq!(
         got,
-        Some(sky_diagnostics::SKY_T0001),
+        Some(ipe_diagnostics::SKY_T0001),
         "#108 R1: routed Live.app with empty routes and Int notFound \
          must be rejected with SKY-T0001, got: {result:?}",
     );
@@ -245,7 +245,7 @@ fn routed_empty_routes_wrong_ctor_notfound_is_sky_t0001() {
     };
     assert_eq!(
         got,
-        Some(sky_diagnostics::SKY_T0001),
+        Some(ipe_diagnostics::SKY_T0001),
         "#108 R2: routed Live.app with empty routes and wrong-ADT notFound \
          must be rejected with SKY-T0001, got: {result:?}",
     );
@@ -291,7 +291,7 @@ fn t4d_nonempty_routes_wrong_notfound_is_sky_t0001() {
     };
     assert_eq!(
         got,
-        Some(sky_diagnostics::SKY_T0001),
+        Some(ipe_diagnostics::SKY_T0001),
         "T4d: non-empty routes + wrong-ADT notFound must be SKY-T0001, got: {result:?}",
     );
 }
@@ -311,7 +311,7 @@ fn t4f_wrong_route_ctor_is_sky_t0001() {
     };
     assert_eq!(
         got,
-        Some(sky_diagnostics::SKY_T0001),
+        Some(ipe_diagnostics::SKY_T0001),
         "T4f: wrong-ADT route ctor must be SKY-T0001, got: {result:?}",
     );
 }
@@ -331,7 +331,7 @@ fn mix_mixed_route_ctors_is_sky_t0001() {
     };
     assert_eq!(
         got,
-        Some(sky_diagnostics::SKY_T0001),
+        Some(ipe_diagnostics::SKY_T0001),
         "MIX: mixed-type route ctors must be SKY-T0001, got: {result:?}",
     );
 }

@@ -26,7 +26,7 @@
 //!
 //! ```text
 //! Tui.app cfg → constrain → lower → emit_tui_call →
-//!     sky_runtime::tui::tui_app_ui(init, update, view, subs, on_key)
+//!     ipe_runtime::tui::tui_app_ui(init, update, view, subs, on_key)
 //! ```
 //!
 //! The headless render assertion — does `view` produce a frame containing `0`?
@@ -279,7 +279,7 @@ fn tui_onkey_record_typechecks() {
 
 /// Compile-only: the Sky.Tui counter emits a Cargo project with the `"tui"`
 /// feature in the default feature list, `crossterm` and `unicode-width` deps,
-/// and `sky_runtime::tui::tui_app_ui` in the `main` function.
+/// and `ipe_runtime::tui::tui_app_ui` in the `main` function.
 ///
 /// This is a BUILD-ONLY test — it does not spawn the binary (Tui requires a
 /// real TTY).  A successful `cargo build` is the assertion:

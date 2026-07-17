@@ -1,6 +1,6 @@
 //! Regression gate — total type-name resolution.
 //!
-//! Calling `unwrap_or_default()` in `sky_canon::canonicalise_type` for any
+//! Calling `unwrap_or_default()` in `ipe_canon::canonicalise_type` for any
 //! unqualified type name absent from `type_home_map` would give it `home = []`.
 //! Genuine builtins (in `RESERVED_BUILTIN_TYPES` / `EXTRA_BUILTIN_TYPE_NAMES`)
 //! legitimately carry that empty-home sentinel; the lowerer resolves them by

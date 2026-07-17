@@ -13,7 +13,7 @@
 //! `37-composite-live-shop` / `38-composite-ui-multibackend` that surfaced the
 //! bug both import `Std.Live.Head`).
 //!
-//! Fix (`crates/sky_ir/src/ir.rs` `BoundSet::STATIC` + `crates/sky_lower`'s
+//! Fix (`crates/ipe_ir/src/ir.rs` `BoundSet::STATIC` + `crates/ipe_lower`'s
 //! `body_boxes_generic_callback`): a generic that flows, inside the body, into a
 //! boxed `+ 'static` callback gains the `'static` lifetime bound, rendered by
 //! `render_bounds` as the leading `'static` in the bound list
@@ -80,7 +80,7 @@ fn i190_skyc_accepts_and_bounds_fn_static() {
     // runtime's `Arc<dyn Fn + Send + Sync>` UI slots; the `'static` half
     // propagates onto T1.)
     assert!(
-        emitted.contains("Box<dyn Fn((String, String)) -> sky_runtime::html::Attribute<T1> + Send + Sync + 'static>"),
+        emitted.contains("Box<dyn Fn((String, String)) -> ipe_runtime::html::Attribute<T1> + Send + Sync + 'static>"),
         "the mapper callback must box into a `+ Send + Sync + 'static` trait object (#190/#184); got \
          main.rs:\n{emitted}"
     );

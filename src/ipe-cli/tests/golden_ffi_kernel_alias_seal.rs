@@ -75,9 +75,9 @@ fn unknown_kernel_alias_is_rejected_at_compile_time() {
         assert!(false_marker(), "expected a Pipeline diagnostic, got: {err}");
         return;
     };
-    let sky_diagnostics::Diagnostic::Name {
+    let ipe_diagnostics::Diagnostic::Name {
         msg:
-            sky_diagnostics::NameError::UnknownKernelAlias {
+            ipe_diagnostics::NameError::UnknownKernelAlias {
                 alias,
                 module,
                 function,
@@ -126,8 +126,8 @@ fn malformed_kernel_alias_string_is_rejected() {
         matches!(
             built,
             Err(skyc::CliError::Pipeline {
-                diag: sky_diagnostics::Diagnostic::Name {
-                    msg: sky_diagnostics::NameError::UnknownKernelAlias { .. },
+                diag: ipe_diagnostics::Diagnostic::Name {
+                    msg: ipe_diagnostics::NameError::UnknownKernelAlias { .. },
                     ..
                 },
                 ..

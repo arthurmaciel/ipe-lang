@@ -37,7 +37,7 @@
 //! token captured verbatim from the Go reference compiler running the
 //! equivalent builder-API program (`Jwt.encode (Jwt.hs256 secret) (claims …)`).
 //! The same constants are byte-checked at the unit level in
-//! `src/runtime/rust/src/sky_runtime/jwt.rs`.
+//! `src/runtime/rust/src/jwt.rs`.
 //!
 //! ## Golden catalogue
 //!

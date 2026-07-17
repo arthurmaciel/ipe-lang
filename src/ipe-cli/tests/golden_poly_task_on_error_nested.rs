@@ -23,7 +23,7 @@
 //! union-find representative (a typed binding's own `params`/`ret` are read
 //! from its annotation, never zonked) — but a `Ty::Var` read back from a
 //! ZONKED region (`region_ty`, used by every nested-lambda return-type
-//! lookup) is ALWAYS tagged via `sky_types::tag_solver_var`.  So even after
+//! lookup) is ALWAYS tagged via `ipe_types::tag_solver_var`.  So even after
 //! adding the `current_poly_tvars` check to `ir_type_from_ty_json`, the
 //! lookup still silently missed for every TYPED enclosing binding (it only
 //! matched for boundary-scheme-promoted UNTYPED bindings, whose
@@ -109,7 +109,7 @@ fn poly_task_on_error_nested_green() {
     // <4-char token>)" wrapper — proving Task.onError's fallback actually
     // fires with the right (generic, not JsonVal-erased) error type at
     // runtime. `Error.toString` on an `Error.unexpected` payload prefixes
-    // "Unexpected: " (see `sky_runtime::error::SkyError::to_sky_string`) —
+    // "Unexpected: " (see `ipe_runtime::error::SkyError::to_sky_string`) —
     // that prefix is genuine runtime behaviour, not part of this fixture's
     // own message text.
     assert!(

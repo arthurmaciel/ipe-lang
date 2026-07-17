@@ -7,16 +7,16 @@
 //! intervening `.clone()`, moving `x` on the first call.
 //!
 //! Root cause: `clone_class(IrType::Generic(_))` returned `NonClone`
-//! (`crates/sky_lower/src/lower.rs`), so the T5 multi-use-clone param pass
+//! (`crates/ipe_lower/src/lower.rs`), so the T5 multi-use-clone param pass
 //! (which fires only for `CloneOk`) skipped generic params, while
 //! `reject_fn_value_reuse` is a no-op for a bare `Generic`
 //! (`ir_contains_fun(Generic) == false`) — so a reused generic silently moved
 //! twice.
 //!
-//! Fix (`param_is_multiuse_clonable`, `crates/sky_lower/src/lower.rs`): the two
+//! Fix (`param_is_multiuse_clonable`, `crates/ipe_lower/src/lower.rs`): the two
 //! T5 param loops (Typed + Untyped def arms) treat a reused bare
 //! `IrType::Generic(_)` param as clonable, inserting `.clone()` on all-but-last
-//! use. Sound because `render_fn_generics` (`sky_backend_rust`) stamps
+//! use. Sound because `render_fn_generics` (`ipe_backend_rust`) stamps
 //! `T: Clone` on EVERY emitted generic fn type-param unconditionally — that
 //! `T: Clone` bound is the gate: a non-`Clone` instantiation fails the bound at
 //! the CALLER before the inserted `.clone()` is ever reached, so no unsoundness

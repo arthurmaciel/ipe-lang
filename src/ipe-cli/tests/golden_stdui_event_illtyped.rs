@@ -70,7 +70,7 @@ fn event_oninput_illtyped_bool_handler_is_sky_t0001() {
     };
     assert_eq!(
         got,
-        Some(sky_diagnostics::SKY_T0001),
+        Some(ipe_diagnostics::SKY_T0001),
         "stdui_event_illtyped: expected SKY-T0001 (type mismatch), got: {result:?}",
     );
 }

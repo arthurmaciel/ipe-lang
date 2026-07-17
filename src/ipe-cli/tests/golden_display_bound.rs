@@ -10,7 +10,7 @@
 //! function carried an unbounded `<T1: Clone>` param, so its body's
 //! `basics_to_string(x)` could not prove `x: Display`.
 //!
-//! Fix (`crates/sky_ir/src/ir.rs` + `crates/sky_lower/src/lower.rs`): a new
+//! Fix (`crates/ipe_ir/src/ir.rs` + `crates/ipe_lower/src/lower.rs`): a new
 //! `BoundSet::DISPLAY` flag, rendered by `render_bounds` as `std::fmt::Display`.
 //! The bound is decided STRUCTURALLY, at IR level, by the GENERAL kernel->bound
 //! map (`apply_kernel_type_param_bounds` / `body_calls_kernel_on_param`) that

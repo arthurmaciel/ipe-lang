@@ -5,7 +5,7 @@
 //! String-carrying events: the emitted code is
 //!
 //! ```rust
-//! sky_runtime::ui::helpers::ui_on_input_(
+//! ipe_runtime::ui::helpers::ui_on_input_(
 //!     ::std::sync::Arc::new(move |_x| ({closure})(_x))
 //! )
 //! ```

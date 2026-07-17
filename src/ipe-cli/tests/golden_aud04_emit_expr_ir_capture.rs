@@ -1,4 +1,4 @@
-//! AUD-04 regression — `sky_backend_rust::emit_expr`'s clone-capture and
+//! AUD-04 regression — `ipe_backend_rust::emit_expr`'s clone-capture and
 //! let-inlining rewrites operate at the IR-level `Expr` tree, not on textual
 //! (rendered-Rust-source) passes. A textual pass has no string-literal
 //! or field-name awareness, so a captured-variable identifier that also

@@ -27,7 +27,7 @@
 //! `http_ssrf_deny_loopback` does NOT start a fixture server.  It sets
 //! `SKY_HTTP_DENY_PRIVATE=1`, points `Http.get` at the loopback address, and
 //! asserts the runtime blocks the request (`DENIED` on stdout).  Proves the guard
-//! works end-to-end (Sky source → emitted Rust → `sky_runtime` SSRF check).
+//! works end-to-end (Sky source → emitted Rust → `ipe_runtime` SSRF check).
 //!
 //! Run:
 //!
@@ -154,7 +154,7 @@ main =
 
 // The SSRF program reads the fixture URL from `SKY_HTTP_TEST_URL` (a LIVE
 // loopback server — see `http_ssrf_deny_loopback`).  With SKY_HTTP_DENY_PRIVATE=1
-// the `sky_runtime` guard rejects the request at address-resolution time, before
+// the `ipe_runtime` guard rejects the request at address-resolution time, before
 // it reaches the network. Task.onError wraps Task.andThen so that a failure in
 // Http.get propagates past the andThen (which short-circuits on failure) and into
 // the onError handler, which prints "DENIED"; the andThen success branch prints
@@ -179,7 +179,7 @@ main =
 ///
 /// The fixture server responds with HTTP 200 and body `hello get`.  The Sky
 /// program prints `200\nhello get`.  Proves the full pipeline end-to-end:
-/// Sky source → skyc → emitted Rust → `sky_runtime` `Http.get` → parsed response.
+/// Sky source → skyc → emitted Rust → `ipe_runtime` `Http.get` → parsed response.
 ///
 /// # Errors
 ///
@@ -269,9 +269,9 @@ fn http_post_fixture() -> Result<(), BoxError> {
 /// resolution time — before any connection — so the fixture is never contacted
 /// and the program prints `DENIED`.
 ///
-/// This is a negative test: it proves the `sky_runtime` SSRF guard fires
+/// This is a negative test: it proves the `ipe_runtime` SSRF guard fires
 /// correctly for loopback addresses via the full emitted-binary path (not just
-/// at the unit-test level in `sky_runtime`).
+/// at the unit-test level in `ipe_runtime`).
 ///
 /// # Errors
 ///

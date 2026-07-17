@@ -2,16 +2,16 @@
 //! `skyc` — the command-line driver.
 //!
 //! Wires the pipeline end to end: read a `.sky` entry file, run it through
-//! [`sky_parse`] → [`sky_canon`] → [`sky_types`] → [`sky_lower`] → the
-//! [`sky_backend_rust`] emitter, write the emitted Cargo project, and vendor the
+//! [`ipe_parse`] → [`ipe_canon`] → [`ipe_types`] → [`ipe_lower`] → the
+//! [`ipe_backend_rust`] emitter, write the emitted Cargo project, and vendor the
 //! Sky runtime module tree into it (a port of the copy step in the Haskell
 //! compiler's `Sky.Generate.Rust.Project`).
 //!
 //! Generated Rust projects do not depend on the runtime as a Cargo path crate;
-//! instead `main.rs` declares `mod sky_runtime;` and the runtime sources are
+//! instead `main.rs` declares `mod ipe_runtime;` and the runtime sources are
 //! copied in beside it. The driver therefore must locate
-//! `src/runtime/rust/src/sky_runtime/` (the in-repo copy) and vendor it under
-//! `<out>/src/sky_runtime/`.
+//! `src/runtime/rust/src/` (the in-repo copy) and vendor it under
+//! `<out>/src/ipe_runtime/`.
 //!
 //! Errors are typed ([`CliError`]); no operation panics or unwraps.
 
@@ -26,10 +26,10 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use sky_diagnostics::{
+use ipe_diagnostics::{
     ALL_CODES, Applicability, Diagnostic, HelpLine, Suggestion, explain_page, render, title,
 };
-use sky_intern::Interner;
+use ipe_intern::Interner;
 
 /// A driver-level error. Distinct from a compiler [`Diagnostic`]: it also covers
 /// filesystem failures and command-line misuse, neither of which is a property
@@ -125,7 +125,7 @@ pub fn build(entry: &Path, out_dir: &Path, runtime_dir: &Path) -> Result<(), Cli
         src: source.clone(),
         diag,
     };
-    let parsed = sky_parse::parse_module(&source, &mut name_interner).map_err(&pipeline_err)?;
+    let parsed = ipe_parse::parse_module(&source, &mut name_interner).map_err(&pipeline_err)?;
     let entry_path: Vec<String> = parsed
         .name
         .value
@@ -150,7 +150,7 @@ pub fn build(entry: &Path, out_dir: &Path, runtime_dir: &Path) -> Result<(), Cli
         out_dir,
         runtime_dir,
         entry,
-        sky_backend_rust::DbDriver::Sqlite,
+        ipe_backend_rust::DbDriver::Sqlite,
     )
 }
 
@@ -188,7 +188,7 @@ pub fn build_with_sibling_discovery(
 
     // Parse the entry to learn its declared module path.
     let mut name_interner = Interner::new();
-    let parsed = sky_parse::parse_module(&source, &mut name_interner).map_err(&pipeline_err)?;
+    let parsed = ipe_parse::parse_module(&source, &mut name_interner).map_err(&pipeline_err)?;
     let entry_module_path: Vec<String> = parsed
         .name
         .value
@@ -243,7 +243,7 @@ pub fn build_with_sibling_discovery(
         out_dir,
         runtime_dir,
         entry,
-        sky_backend_rust::DbDriver::Sqlite,
+        ipe_backend_rust::DbDriver::Sqlite,
     )
 }
 
@@ -272,12 +272,12 @@ fn find_manifest_for_sky_file(sky_file: &Path) -> Option<PathBuf> {
 /// not need it and discards it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum CacheOutcome {
-    /// A matching, same-epoch [`sky_backend::EmittedProject`] entry was
+    /// A matching, same-epoch [`ipe_backend::EmittedProject`] entry was
     /// found on disk; the whole compile pipeline (parse through emit) was
     /// skipped.
     Hit,
     /// No `EmittedProject`-tier entry existed, but a matching, same-epoch
-    /// lowered-[`sky_ir::Program`] entry was — parse through
+    /// lowered-[`ipe_ir::Program`] entry was — parse through
     /// lower were skipped; only `RustBackend::emit` ran over the relocated
     /// IR (see `crate::cache`'s lowered-IR module doc section).
     IrHit,
@@ -288,7 +288,7 @@ pub(crate) enum CacheOutcome {
 
 /// The shared multi-module compile core: inject the compiled-source stdlib
 /// closure, topologically order the graph, canonicalise each module dep-first
-/// (with its unforgeable [`sky_canon::ModuleOrigin`]), link, then infer → lower →
+/// (with its unforgeable [`ipe_canon::ModuleOrigin`]), link, then infer → lower →
 /// emit → write. Both [`build`] and [`build_project`] route through this so the
 /// injection seam is identical on the single-file and project paths.
 ///
@@ -305,7 +305,7 @@ fn compile_modules(
     out_dir: &Path,
     runtime_dir: &Path,
     blame_path: &Path,
-    db_driver: sky_backend_rust::DbDriver,
+    db_driver: ipe_backend_rust::DbDriver,
 ) -> Result<(), CliError> {
     let cache_dir = cache::env_cache_dir(out_dir);
     compile_modules_observed(
@@ -337,7 +337,7 @@ fn compile_modules(
 /// BEFORE any salsa database exists (driver-boundary only — INV-1: no
 /// `std::fs` on a tracked path). On a hit, the ENTIRE compile pipeline
 /// (parse through emit) is skipped; only [`write_emitted_project`] runs,
-/// materialising the cached [`sky_backend::EmittedProject`] verbatim. On a
+/// materialising the cached [`ipe_backend::EmittedProject`] verbatim. On a
 /// miss, the full pipeline runs, and a successful
 /// result is best-effort stored for the next invocation.
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
@@ -348,7 +348,7 @@ fn compile_modules_observed(
     out_dir: &Path,
     runtime_dir: &Path,
     blame_path: &Path,
-    db_driver: sky_backend_rust::DbDriver,
+    db_driver: ipe_backend_rust::DbDriver,
     cache_dir: Option<&Path>,
 ) -> (Result<(), CliError>, CacheOutcome) {
     // Inject the transitive compiled-source stdlib closure. `injected` is the
@@ -381,15 +381,15 @@ fn compile_modules_observed(
     // when the `EmittedProject` tier just missed on a `db_driver`-only edit.
     if let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref()) {
         let ir_key = cache::compute_ir_key(&sources, &injected, entry_path);
-        let fresh_interner: std::sync::Arc<std::sync::Mutex<sky_intern::Interner>> =
-            std::sync::Arc::new(std::sync::Mutex::new(sky_intern::Interner::new()));
+        let fresh_interner: std::sync::Arc<std::sync::Mutex<ipe_intern::Interner>> =
+            std::sync::Arc::new(std::sync::Mutex::new(ipe_intern::Interner::new()));
         if let Some(program) = cache::try_load_ir(root, epoch, &ir_key, &fresh_interner) {
-            use sky_backend::Backend as _;
+            use ipe_backend::Backend as _;
             let emit_result = {
                 let guard = fresh_interner
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                sky_backend_rust::RustBackend::new(&guard)
+                ipe_backend_rust::RustBackend::new(&guard)
                     .with_db_driver(db_driver)
                     .emit(&program)
             };
@@ -420,14 +420,14 @@ fn compile_modules_observed(
     // cold and per-invocation, and queries are demanded in the fixed topo
     // order, so the interning sequence — and therefore emitted bytes — is
     // deterministic across runs (golden-suite-enforced).
-    let db = sky_db::SkyDatabase::new();
+    let db = ipe_db::SkyDatabase::new();
     let source_root = create_source_root(&db, &sources, &injected);
-    // The config input (see `sky_db::BuildConfig`'s doc for why this
+    // The config input (see `ipe_db::BuildConfig`'s doc for why this
     // is narrowed to `db_driver` rather than the full `sky.toml` shape). A
     // fresh `BuildConfig` per one-shot invocation is fine here — unlike the
     // clean-vs-incremental parity gate's warm sequence, this driver never
     // re-demands `emit_project` against a second config instance.
-    let config = sky_db::BuildConfig::new(&db, db_driver);
+    let config = ipe_db::BuildConfig::new(&db, db_driver);
 
     let emitted = match compile_prepared(&db, source_root, &sources, entry_path, blame_path, config)
     {
@@ -438,7 +438,7 @@ fn compile_modules_observed(
     if let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref()) {
         cache::store(root, epoch, &cache_key, &emitted);
         // Also store the lowered `Program` at the IR tier.
-        // `sky_db::lower_program` is a PURE MEMO HIT here — it already ran
+        // `ipe_db::lower_program` is a PURE MEMO HIT here — it already ran
         // (transitively, via `compile_prepared`'s `emit_project` demand
         // chain) inside the salsa database above, so this costs nothing
         // beyond the lookup + relocation-pass serialize. Best-effort: an
@@ -446,7 +446,7 @@ fn compile_modules_observed(
         // successful build into a reported failure (same advisory contract
         // as the `EmittedProject` tier's own store).
         if let Some(entry_file) = source_root.files(&db).get(entry_path).copied()
-            && let Ok(program) = sky_db::lower_program(&db, source_root, entry_file)
+            && let Ok(program) = ipe_db::lower_program(&db, source_root, entry_file)
         {
             let ir_key = cache::compute_ir_key(&sources, &injected, entry_path);
             cache::store_ir(
@@ -454,7 +454,7 @@ fn compile_modules_observed(
                 epoch,
                 &ir_key,
                 &program,
-                sky_db::Db::interner(&db).as_arc(),
+                ipe_db::Db::interner(&db).as_arc(),
             );
         }
     }
@@ -465,8 +465,8 @@ fn compile_modules_observed(
     )
 }
 
-/// Create the salsa inputs for one build: a [`sky_db::SourceFile`] per module
-/// plus the [`sky_db::SourceRoot`] file set.
+/// Create the salsa inputs for one build: a [`ipe_db::SourceFile`] per module
+/// plus the [`ipe_db::SourceRoot`] file set.
 ///
 /// The trust tag: `EmbeddedStdlib` IFF the module path is in `injected` (the
 /// driver's unforgeable record from [`project::inject_compiled_std_closure`]).
@@ -475,31 +475,31 @@ fn compile_modules_observed(
 /// SKY-N0025-rejected.
 #[must_use]
 pub fn create_source_root(
-    db: &sky_db::SkyDatabase,
+    db: &ipe_db::SkyDatabase,
     sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
     injected: &std::collections::BTreeSet<Vec<String>>,
-) -> sky_db::SourceRoot {
-    let file_handles: BTreeMap<Vec<String>, sky_db::SourceFile> = sources
+) -> ipe_db::SourceRoot {
+    let file_handles: BTreeMap<Vec<String>, ipe_db::SourceFile> = sources
         .iter()
         .map(|(mod_path, (_, src))| {
             let origin = if injected.contains(mod_path) {
-                sky_canon::ModuleOrigin::EmbeddedStdlib
+                ipe_canon::ModuleOrigin::EmbeddedStdlib
             } else {
-                sky_canon::ModuleOrigin::User
+                ipe_canon::ModuleOrigin::User
             };
             (
                 mod_path.clone(),
-                sky_db::SourceFile::new(db, mod_path.clone(), src.clone(), origin),
+                ipe_db::SourceFile::new(db, mod_path.clone(), src.clone(), origin),
             )
         })
         .collect();
-    sky_db::SourceRoot::new(db, file_handles)
+    ipe_db::SourceRoot::new(db, file_handles)
 }
 
 /// The in-memory compile core over an already-populated database.
 ///
 /// topo order → per-module canonicalisation (memoized, blame-attributed) →
-/// [`sky_db::linked_program`] (the coarse whole-program spine) → infer → lower →
+/// [`ipe_db::linked_program`] (the coarse whole-program spine) → infer → lower →
 /// emit. Returns the emitted project without touching the filesystem.
 ///
 /// This is THE production pipeline — [`compile_modules`] wraps it with input
@@ -509,7 +509,7 @@ pub fn create_source_root(
 ///
 /// `sources` is consulted for diagnostic blame only (module path → file/src).
 ///
-/// `config` is the [`sky_db::BuildConfig`] handle — callers that
+/// `config` is the [`ipe_db::BuildConfig`] handle — callers that
 /// re-demand `compile_prepared` across a warm sequence (the parity
 /// gate) MUST hold one stable `BuildConfig` across the sequence rather than
 /// constructing a fresh one per call, or `emit_project`'s memo key never
@@ -519,17 +519,17 @@ pub fn create_source_root(
 /// [`CliError::Pipeline`] carrying the first compiler diagnostic.
 #[allow(clippy::too_many_lines)]
 pub fn compile_prepared(
-    db: &sky_db::SkyDatabase,
-    source_root: sky_db::SourceRoot,
+    db: &ipe_db::SkyDatabase,
+    source_root: ipe_db::SourceRoot,
     sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
     entry_path: &[String],
     blame_path: &Path,
-    config: sky_db::BuildConfig,
-) -> Result<sky_backend::EmittedProject, CliError> {
+    config: ipe_db::BuildConfig,
+) -> Result<ipe_backend::EmittedProject, CliError> {
     // The build-wide interner is owned by the database (Option 3a) so the
     // parse query and the non-salsa passes share one symbol table. NEVER hold
     // a lock guard across a salsa query demand (the mutex is not reentrant).
-    let shared_interner = sky_db::Db::interner(db).clone();
+    let shared_interner = ipe_db::Db::interner(db).clone();
 
     let Some(entry_file) = source_root.files(db).get(entry_path).copied() else {
         return Err(CliError::Usage("internal: entry module not in source map"));
@@ -538,7 +538,7 @@ pub fn compile_prepared(
     // Dep-first module order (memoized; cycle = N0021, blamed on the
     // caller-supplied blame path since no single file owns a cycle).
     let topo =
-        sky_db::topo_order(db, source_root, entry_file).map_err(|diag| CliError::Pipeline {
+        ipe_db::topo_order(db, source_root, entry_file).map_err(|diag| CliError::Pipeline {
             file: blame_path.to_path_buf(),
             src: String::new(),
             diag,
@@ -568,7 +568,7 @@ pub fn compile_prepared(
         // no guard may be live here). A dep's own diagnostic never surfaces
         // here mis-blamed: deps precede the module in topo order, so a red
         // dep already errored at its own iteration with its own file.
-        sky_db::canonicalize(db, source_root, file_handle).map_err(|diag| CliError::Pipeline {
+        ipe_db::canonicalize(db, source_root, file_handle).map_err(|diag| CliError::Pipeline {
             file: path.clone(),
             src: src.clone(),
             diag,
@@ -585,7 +585,7 @@ pub fn compile_prepared(
         .get(entry_path)
         .map(|(_, s)| s.clone())
         .unwrap_or_default();
-    let pipeline_err = |diag: sky_diagnostics::Diagnostic| CliError::Pipeline {
+    let pipeline_err = |diag: ipe_diagnostics::Diagnostic| CliError::Pipeline {
         file: entry_src_path.clone(),
         src: entry_src.clone(),
         diag,
@@ -597,7 +597,7 @@ pub fn compile_prepared(
     // cross-module type-identity duplicates `(home, name)`, blamed on
     // the entry file like every other post-link diagnostic.
     let linked_program =
-        sky_db::linked_program(db, source_root, entry_file).map_err(&pipeline_err)?;
+        ipe_db::linked_program(db, source_root, entry_file).map_err(&pipeline_err)?;
     let linked = &linked_program.module;
 
     // The fresh-name collision universe for this build: the identifier words
@@ -608,7 +608,7 @@ pub fn compile_prepared(
     // exact divergence the clean-vs-incremental parity gate guards against.
     let mut fresh_avoid: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for file in source_root.files(db).values() {
-        fresh_avoid.extend(sky_db::identifier_words(db, *file).iter().cloned());
+        fresh_avoid.extend(ipe_db::identifier_words(db, *file).iter().cloned());
     }
 
     // Short lock scope: set the fresh-name avoid-set (must happen before
@@ -618,8 +618,8 @@ pub fn compile_prepared(
     // this cannot append a new symbol and cannot perturb interning order.
     // The guard is dropped before any further salsa query is demanded: the
     // interner mutex is not reentrant, and `typecheck`/`lower_program` each
-    // take their own lock internally (see `sky_db::typecheck`).
-    let home_to_source: BTreeMap<Vec<sky_intern::Symbol>, (PathBuf, String)> = {
+    // take their own lock internally (see `ipe_db::typecheck`).
+    let home_to_source: BTreeMap<Vec<ipe_intern::Symbol>, (PathBuf, String)> = {
         let mut interner = shared_interner.lock();
         interner.set_fresh_avoid(fresh_avoid);
         let mut map = BTreeMap::new();
@@ -655,16 +655,16 @@ pub fn compile_prepared(
     // selects the def in the same file because same-module defs share a byte
     // namespace; across modules, the intended def almost always has a smaller
     // distance from its own `lo`.
-    let source_for_span = |span: sky_diagnostics::Span| -> (PathBuf, String) {
-        if span == sky_diagnostics::Span::DUMMY {
+    let source_for_span = |span: ipe_diagnostics::Span| -> (PathBuf, String) {
+        if span == ipe_diagnostics::Span::DUMMY {
             return (entry_src_path.clone(), entry_src.clone());
         }
         // (lo_dist, width, home)
-        let mut best: Option<(u32, u32, &[sky_intern::Symbol])> = None;
+        let mut best: Option<(u32, u32, &[ipe_intern::Symbol])> = None;
         for def in &linked.defs {
             let body_span = match def {
-                sky_canon::ast::Def::Untyped { body, .. }
-                | sky_canon::ast::Def::Typed { body, .. } => body.span,
+                ipe_canon::ast::Def::Untyped { body, .. }
+                | ipe_canon::ast::Def::Typed { body, .. } => body.span,
             };
             if body_span.lo <= span.lo && span.hi <= body_span.hi {
                 let lo_dist = span.lo.saturating_sub(body_span.lo);
@@ -709,11 +709,11 @@ pub fn compile_prepared(
     // generation, field-access pass, exhaustiveness) we fall back to the
     // byte-offset heuristic.
     //
-    // `sky_db::typecheck` is the memoized
-    // SEAM over `sky_types::infer_attributed`: same whole-program computation,
+    // `ipe_db::typecheck` is the memoized
+    // SEAM over `ipe_types::infer_attributed`: same whole-program computation,
     // skippable on a warm no-op rebuild. No interner guard is held across
     // this demand — the query takes its own lock internally.
-    let types = sky_db::typecheck(db, source_root, entry_file).map_err(|(diag, home)| {
+    let types = ipe_db::typecheck(db, source_root, entry_file).map_err(|(diag, home)| {
         let span = diag_span(&diag);
         let (file, src) = if home.is_empty() {
             source_for_span(span)
@@ -748,7 +748,7 @@ pub fn compile_prepared(
     // An empty `home` (homeless backend diagnostic, or a pre-def lowering
     // error) falls back to the byte-offset heuristic `source_for_span`.
     let span_attributed_err =
-        |(diag, home): (sky_diagnostics::Diagnostic, Vec<sky_intern::Symbol>)| {
+        |(diag, home): (ipe_diagnostics::Diagnostic, Vec<ipe_intern::Symbol>)| {
             let (file, src) = if home.is_empty() {
                 source_for_span(diag_span(&diag))
             } else {
@@ -759,7 +759,7 @@ pub fn compile_prepared(
             };
             CliError::Pipeline { file, src, diag }
         };
-    // `sky_db::program_metadata` — the whole-program DCE-reachability seam
+    // `ipe_db::program_metadata` — the whole-program DCE-reachability seam
     // over `lower_program`.
     // Its own dependency on `lower_program` is what forces the lowering pass
     // to execute here; a standalone `lower_program` demand alongside this one
@@ -773,9 +773,9 @@ pub fn compile_prepared(
     // emitted bytes — the point is to put the query on the same path the
     // clean-vs-incremental parity gate drives, so a future divergence in this
     // analysis cannot go undetected.
-    sky_db::program_metadata(db, source_root, entry_file).map_err(span_attributed_err)?;
+    ipe_db::program_metadata(db, source_root, entry_file).map_err(span_attributed_err)?;
 
-    // `sky_db::emit_manifest` (design doc §4.4) — the top-level
+    // `ipe_db::emit_manifest` (design doc §4.4) — the top-level
     // emit demand, assembled from the per-`RustFileId` query graph:
     // `program_rust_file_ids` + `emit_spine_file` + one `emit_rust_file` per
     // home. For a single-module program it routes straight to `emit_project`
@@ -789,7 +789,7 @@ pub fn compile_prepared(
     // memoization properties `phase6_build_config.rs` proves hold — the
     // config field flows through unchanged.
     let emitted =
-        sky_db::emit_manifest(db, source_root, entry_file, config).map_err(span_attributed_err)?;
+        ipe_db::emit_manifest(db, source_root, entry_file, config).map_err(span_attributed_err)?;
     Ok((*emitted).clone())
 }
 
@@ -809,7 +809,7 @@ pub fn compile_prepared(
 /// # Errors
 /// [`CliError::Io`] on any filesystem failure.
 fn write_emitted_project(
-    emitted: &sky_backend::EmittedProject,
+    emitted: &ipe_backend::EmittedProject,
     out_dir: &Path,
     runtime_dir: &Path,
 ) -> Result<(), CliError> {
@@ -828,15 +828,15 @@ fn write_emitted_project(
 ///
 /// Three sources, in the same precedence `write_emitted_project` has always
 /// used ("vendor first, emit second" — the backend's trimmed
-/// `sky_runtime/mod.rs` / `config.rs` must win over the fuller copies from
+/// `ipe_runtime/mod.rs` / `config.rs` must win over the fuller copies from
 /// the source tree):
 ///   1. The vendored runtime module tree (`runtime_dir`, read recursively
-///      under `src/sky_runtime/`) — a driver-boundary filesystem read, the
+///      under `src/ipe_runtime/`) — a driver-boundary filesystem read, the
 ///      same discipline as reading the entry file (never inside a
 ///      salsa-tracked query).
 ///   2. `Cargo.toml` at the project root.
 ///   3. Every backend-emitted file (`emitted.files`; each key is already a
-///      validated [`sky_backend::RelPath`] — relative and `..`-free — so no
+///      validated [`ipe_backend::RelPath`] — relative and `..`-free — so no
 ///      entry here can escape `out_dir`).
 ///
 /// # Errors
@@ -845,11 +845,11 @@ fn write_emitted_project(
 /// runtime tree is trusted in-repo source, so this is not expected to fire in
 /// practice).
 fn build_emit_manifest(
-    emitted: &sky_backend::EmittedProject,
+    emitted: &ipe_backend::EmittedProject,
     runtime_dir: &Path,
 ) -> Result<BTreeMap<PathBuf, String>, CliError> {
     let mut manifest = BTreeMap::new();
-    collect_dir_text(runtime_dir, Path::new("src/sky_runtime"), &mut manifest)?;
+    collect_dir_text(runtime_dir, Path::new("src/ipe_runtime"), &mut manifest)?;
     manifest.insert(PathBuf::from("Cargo.toml"), emitted.cargo_toml.clone());
     for (rel, contents) in &emitted.files {
         manifest.insert(PathBuf::from(rel.as_str()), contents.clone());
@@ -1037,12 +1037,12 @@ pub fn build_project(
     )
 }
 
-/// Locate the Sky runtime module tree (`src/runtime/rust/src/sky_runtime/`).
+/// Locate the Sky runtime module tree (`src/runtime/rust/src/`).
 ///
 /// Resolution order:
 /// 1. `$SKY_RUNTIME_DIR` — explicit override, allows pointing at any tree.
 /// 2. Upward walk from the current directory, checking in order:
-///    - `src/runtime/rust/src/sky_runtime` (the in-repo copy — found immediately when
+///    - `src/runtime/rust/src/ipe_runtime` (the in-repo copy — found immediately when
 ///      running from anywhere inside the sky-rust workspace)
 ///    - `sky/runtime-rust/src/sky_runtime` (sibling sky checkout — legacy)
 ///    - `runtime-rust/src/sky_runtime` (legacy sibling path)
@@ -1064,14 +1064,14 @@ pub fn resolve_runtime() -> Result<PathBuf, CliError> {
         for candidate in [
             // In-repo runtime (sky-rust monorepo): found when CWD is anywhere
             // inside the workspace.
-            dir.join("src").join("runtime").join("rust").join("src").join("sky_runtime"),
+            dir.join("src").join("runtime").join("rust").join("src"),
             // Legacy: sibling `sky` checkout.
             dir.join("sky")
                 .join("runtime-rust")
                 .join("src")
-                .join("sky_runtime"),
+                .join("ipe_runtime"),
             // Legacy: sibling `runtime-rust` directory.
-            dir.join("runtime-rust").join("src").join("sky_runtime"),
+            dir.join("runtime-rust").join("src").join("ipe_runtime"),
         ] {
             if candidate.is_dir() {
                 return Ok(candidate);
@@ -1295,7 +1295,7 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
 
     // --- Step 3: exec the emitted binary, forwarding args and exit code ---
     // The binary name is always `sky-app` (the default package name used by
-    // `write_emitted_project`; see `sky_backend_rust::EmittedProject`).
+    // `write_emitted_project`; see `ipe_backend_rust::EmittedProject`).
     let bin = out_dir.join("target").join("debug").join("sky-app");
     let mut cmd = std::process::Command::new(&bin);
     cmd.args(bin_args);
@@ -1475,14 +1475,14 @@ pub fn emit_ir_text(entry: &Path) -> Result<String, CliError> {
     };
 
     let mut interner = Interner::new();
-    let module = sky_parse::parse_module(&source, &mut interner).map_err(&pipeline_err)?;
-    let canonical = sky_canon::canonicalise(&module, &mut interner).map_err(&pipeline_err)?;
-    let types = sky_types::infer(&canonical, &mut interner).map_err(&pipeline_err)?;
+    let module = ipe_parse::parse_module(&source, &mut interner).map_err(&pipeline_err)?;
+    let canonical = ipe_canon::canonicalise(&module, &mut interner).map_err(&pipeline_err)?;
+    let types = ipe_types::infer(&canonical, &mut interner).map_err(&pipeline_err)?;
     // Single-module IR dump: this path has one source file, so the home carried
     // by the lowering error is redundant — drop it and blame the entry file.
-    let program = sky_lower::lower(&canonical, &types, &mut interner)
+    let program = ipe_lower::lower(&canonical, &types, &mut interner)
         .map_err(|(diag, _home)| pipeline_err(diag))?;
-    Ok(sky_ir::pretty(&program, &interner))
+    Ok(ipe_ir::pretty(&program, &interner))
 }
 
 // ===========================================================================
@@ -1493,21 +1493,21 @@ pub fn emit_ir_text(entry: &Path) -> Result<String, CliError> {
 /// first diagnostic it raises, or `None` when the program compiles cleanly.
 fn pipeline_first_diagnostic(source: &str) -> Option<Diagnostic> {
     let mut interner = Interner::new();
-    let module = match sky_parse::parse_module(source, &mut interner) {
+    let module = match ipe_parse::parse_module(source, &mut interner) {
         Ok(m) => m,
         Err(d) => return Some(d),
     };
-    let canonical = match sky_canon::canonicalise(&module, &mut interner) {
+    let canonical = match ipe_canon::canonicalise(&module, &mut interner) {
         Ok(c) => c,
         Err(d) => return Some(d),
     };
-    let types = match sky_types::infer(&canonical, &mut interner) {
+    let types = match ipe_types::infer(&canonical, &mut interner) {
         Ok(t) => t,
         Err(d) => return Some(d),
     };
     // `--fix` diagnostic probe: single source, home is irrelevant — take just
     // the diagnostic.
-    sky_lower::lower(&canonical, &types, &mut interner)
+    ipe_lower::lower(&canonical, &types, &mut interner)
         .err()
         .map(|(diag, _home)| diag)
 }
@@ -1679,7 +1679,7 @@ fn apply_fixes_cmd<W: Write>(entry: &Path, auto: bool, w: &mut W) -> Result<(), 
 
     // Re-parse guard: refuse to keep a patch whose result no longer parses.
     let mut guard_interner = Interner::new();
-    if sky_parse::parse_module(&patched, &mut guard_interner).is_err() {
+    if ipe_parse::parse_module(&patched, &mut guard_interner).is_err() {
         writeln!(
             w,
             "fix: patched source no longer parses — rolled back, file left unchanged"
@@ -1769,25 +1769,25 @@ fn io_err(path: &Path, source: std::io::Error) -> CliError {
     }
 }
 
-/// Extract the source span from a diagnostic, returning [`sky_diagnostics::Span::DUMMY`]
+/// Extract the source span from a diagnostic, returning [`ipe_diagnostics::Span::DUMMY`]
 /// for the span-less [`Diagnostic::CompilerBug`] variant.
 ///
 /// Used by the cross-module error-attribution path in [`compile_modules`] to
 /// locate the source file that owns a diagnostic.
-const fn diag_span(d: &Diagnostic) -> sky_diagnostics::Span {
+const fn diag_span(d: &Diagnostic) -> ipe_diagnostics::Span {
     match d {
         Diagnostic::Parse { span, .. }
         | Diagnostic::Name { span, .. }
         | Diagnostic::Type { span, .. }
         | Diagnostic::Lower { span, .. } => *span,
-        Diagnostic::CompilerBug { .. } => sky_diagnostics::Span::DUMMY,
+        Diagnostic::CompilerBug { .. } => ipe_diagnostics::Span::DUMMY,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sky_diagnostics::{NameError, Span};
+    use ipe_diagnostics::{NameError, Span};
 
     /// The golden entry, located relative to this crate's manifest.
     fn golden_entry() -> PathBuf {
@@ -1834,7 +1834,7 @@ mod tests {
 
     #[test]
     fn explain_resolves_sky_t0014() {
-        // SKY-T0014 resolves via ALL_CODES from sky_diagnostics rather than
+        // SKY-T0014 resolves via ALL_CODES from ipe_diagnostics rather than
         // a hand-mirror that could omit it.
         let result = explain_lookup("SKY-T0014");
         assert!(
@@ -2497,7 +2497,7 @@ main =
             &out_a,
             &runtime,
             Path::new("<cache-e2e>"),
-            sky_backend_rust::DbDriver::Sqlite,
+            ipe_backend_rust::DbDriver::Sqlite,
             Some(&cache_dir),
         );
         assert!(
@@ -2514,7 +2514,7 @@ main =
         let entry_json = find_single_cache_entry(&cache_dir)
             .expect("first build must have written exactly one cache entry");
         let stored = fs::read_to_string(&entry_json).expect("cache entry must be readable");
-        let mut cached: sky_backend::EmittedProject =
+        let mut cached: ipe_backend::EmittedProject =
             serde_json::from_str(&stored).expect("cache entry must deserialize");
         cached.cargo_toml = format!("{SENTINEL}{}", cached.cargo_toml);
         fs::write(
@@ -2530,7 +2530,7 @@ main =
             &out_b,
             &runtime,
             Path::new("<cache-e2e>"),
-            sky_backend_rust::DbDriver::Sqlite,
+            ipe_backend_rust::DbDriver::Sqlite,
             Some(&cache_dir),
         );
         assert!(
@@ -2622,7 +2622,7 @@ main =
             &out_a,
             &runtime,
             Path::new("<p>"),
-            sky_backend_rust::DbDriver::Sqlite,
+            ipe_backend_rust::DbDriver::Sqlite,
             Some(&cache_dir),
         );
         assert!(
@@ -2650,7 +2650,7 @@ main =
             &out_b,
             &runtime,
             Path::new("<p>"),
-            sky_backend_rust::DbDriver::Postgres,
+            ipe_backend_rust::DbDriver::Postgres,
             Some(&cache_dir),
         );
         assert!(
@@ -2710,7 +2710,7 @@ main =
             &out_a,
             &runtime,
             Path::new("<p>"),
-            sky_backend_rust::DbDriver::Sqlite,
+            ipe_backend_rust::DbDriver::Sqlite,
             Some(&cache_dir),
         );
         assert!(
@@ -2741,7 +2741,7 @@ main =
             &out_b,
             &runtime,
             Path::new("<p>"),
-            sky_backend_rust::DbDriver::Postgres,
+            ipe_backend_rust::DbDriver::Postgres,
             Some(&cache_dir),
         );
         assert!(
@@ -2795,7 +2795,7 @@ main =
             &out_dir,
             &runtime,
             Path::new("<cache-e2e>"),
-            sky_backend_rust::DbDriver::Sqlite,
+            ipe_backend_rust::DbDriver::Sqlite,
             None,
         );
         assert!(result.is_ok(), "compile must succeed: {:?}", result.err());

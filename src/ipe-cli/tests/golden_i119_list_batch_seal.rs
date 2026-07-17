@@ -2,7 +2,7 @@
 //!
 //! `filterMap : (a -> Maybe b) -> List a -> List b` — applies a function that
 //! returns `Maybe b` to every element, keeps only the `Just` results, and
-//! unwraps them. Backed by `list_filter_map` in `src/runtime/rust/src/sky_runtime/list.rs`.
+//! unwraps them. Backed by `list_filter_map` in `src/runtime/rust/src/list.rs`.
 //!
 //! `sortBy : (a -> comparable) -> List a -> List a` — stable sort by a key
 //! projection. Backed by `list_sort_by` (decorate-sort-undecorate, NaN-safe,

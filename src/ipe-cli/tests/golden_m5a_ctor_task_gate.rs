@@ -54,7 +54,7 @@ fn ctor_task_arity_three_is_sky_t0016_not_ice() {
     };
     assert_eq!(
         got,
-        Some(sky_diagnostics::SKY_T0016),
+        Some(ipe_diagnostics::SKY_T0016),
         "expected SKY-T0016 for a mis-arity Task in a ctor payload, got {built:?}"
     );
 }
@@ -74,12 +74,12 @@ fn ctor_task_well_formed_builds() {
     if let Err(CliError::Pipeline { diag, .. }) = &built {
         assert_ne!(
             diag.code(),
-            sky_diagnostics::SKY_T0016,
+            ipe_diagnostics::SKY_T0016,
             "a well-formed `Task Error Int` payload must not be rejected as mis-arity"
         );
         assert_ne!(
             diag.code(),
-            sky_diagnostics::SKY_I0001,
+            ipe_diagnostics::SKY_I0001,
             "a well-formed `Task Error Int` payload must not ICE"
         );
     }

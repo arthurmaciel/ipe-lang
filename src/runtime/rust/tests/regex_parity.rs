@@ -15,7 +15,7 @@
 //! lookbehind) are the remaining known divergence points — none are exercised
 //! by the Sky stdlib surface.
 
-use sky_runtime_rust::*;
+use ipe_runtime_rust::*;
 
 // ── GOLDEN: Regex match ─────────────────────────────────────────────────────
 //

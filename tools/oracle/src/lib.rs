@@ -509,7 +509,7 @@ fn find_executable(json_stdout: &str, unique_pkg: &str) -> Option<String> {
 /// reused) ONLY when `shared` is a non-empty ABSOLUTE path. Empty / whitespace /
 /// relative / unset all return `None` (→ inherit the ambient env untouched =
 /// isolate). This is load-bearing security: a runtime/-editing lane vendors a
-/// DIFFERENT `sky_runtime`, so it must NOT reuse the shared target; isolating by
+/// DIFFERENT `ipe_runtime`, so it must NOT reuse the shared target; isolating by
 /// omission keeps that lane correct even if the orchestrator forgets to clear
 /// the flag, whereas sharing-by-omission would risk validating the gate against
 /// the wrong vendored runtime (a silent green over a possibly-regressed guard).

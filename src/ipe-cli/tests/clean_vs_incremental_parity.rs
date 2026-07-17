@@ -69,15 +69,15 @@ fn entry_path() -> Vec<String> {
     ENTRY.iter().map(|s| (*s).to_owned()).collect()
 }
 
-type CompileOutcome = Result<sky_backend::EmittedProject, String>;
+type CompileOutcome = Result<ipe_backend::EmittedProject, String>;
 
 /// The cold side: a fresh database built from the final source state — the
 /// exact shape `compile_modules` produces on a one-shot `skyc build`.
 fn cold_compile(user: &UserSources) -> CompileOutcome {
     let (sources, injected) = prepared(user);
-    let db = sky_db::SkyDatabase::new();
+    let db = ipe_db::SkyDatabase::new();
     let root = skyc::create_source_root(&db, &sources, &injected);
-    let config = sky_db::BuildConfig::new(&db, sky_backend_rust::DbDriver::Sqlite);
+    let config = ipe_db::BuildConfig::new(&db, ipe_backend_rust::DbDriver::Sqlite);
     skyc::compile_prepared(
         &db,
         root,
@@ -90,22 +90,22 @@ fn cold_compile(user: &UserSources) -> CompileOutcome {
 }
 
 /// The warm side: ONE database reused across the whole edit sequence, inputs
-/// reconciled per state via [`sky_db::sync_source_root`].
+/// reconciled per state via [`ipe_db::sync_source_root`].
 struct WarmSession {
-    db: sky_db::SkyDatabase,
-    root: Option<sky_db::SourceRoot>,
+    db: ipe_db::SkyDatabase,
+    root: Option<ipe_db::SourceRoot>,
     // A STABLE `BuildConfig` handle across the whole sequence:
     // constructing a fresh `BuildConfig` per
     // `compile_prepared` call would give `emit_project` a different memo key
     // every demand, silently defeating the seam's memoization on the warm
     // side (the gate would never actually exercise a cache hit for emit).
-    config: Option<sky_db::BuildConfig>,
+    config: Option<ipe_db::BuildConfig>,
 }
 
 impl WarmSession {
     fn new() -> Self {
         Self {
-            db: sky_db::SkyDatabase::new(),
+            db: ipe_db::SkyDatabase::new(),
             root: None,
             config: None,
         }
@@ -114,18 +114,18 @@ impl WarmSession {
     fn compile(&mut self, user: &UserSources) -> CompileOutcome {
         let (sources, injected) = prepared(user);
         let root = if let Some(root) = self.root {
-            let desired: BTreeMap<Vec<String>, (String, sky_db::ModuleOrigin)> = sources
+            let desired: BTreeMap<Vec<String>, (String, ipe_db::ModuleOrigin)> = sources
                 .iter()
                 .map(|(p, (_, text))| {
                     let origin = if injected.contains(p) {
-                        sky_db::ModuleOrigin::EmbeddedStdlib
+                        ipe_db::ModuleOrigin::EmbeddedStdlib
                     } else {
-                        sky_db::ModuleOrigin::User
+                        ipe_db::ModuleOrigin::User
                     };
                     (p.clone(), (text.clone(), origin))
                 })
                 .collect();
-            sky_db::sync_source_root(&mut self.db, root, &desired);
+            ipe_db::sync_source_root(&mut self.db, root, &desired);
             root
         } else {
             let root = skyc::create_source_root(&self.db, &sources, &injected);
@@ -133,7 +133,7 @@ impl WarmSession {
             root
         };
         let config = *self.config.get_or_insert_with(|| {
-            sky_db::BuildConfig::new(&self.db, sky_backend_rust::DbDriver::Sqlite)
+            ipe_db::BuildConfig::new(&self.db, ipe_backend_rust::DbDriver::Sqlite)
         });
         skyc::compile_prepared(
             &self.db,
@@ -166,8 +166,8 @@ fn first_diff(a: &str, b: &str) -> String {
 fn assert_parity(label: &str, warm: &CompileOutcome, cold: &CompileOutcome) {
     match (warm, cold) {
         (Ok(w), Ok(c)) => {
-            let w_keys: Vec<&str> = w.files.keys().map(sky_backend::RelPath::as_str).collect();
-            let c_keys: Vec<&str> = c.files.keys().map(sky_backend::RelPath::as_str).collect();
+            let w_keys: Vec<&str> = w.files.keys().map(ipe_backend::RelPath::as_str).collect();
+            let c_keys: Vec<&str> = c.files.keys().map(ipe_backend::RelPath::as_str).collect();
             assert_eq!(w_keys, c_keys, "[{label}] emitted file sets diverged");
             assert!(
                 w.cargo_toml == c.cargo_toml,

@@ -4,9 +4,9 @@
 //! a TEXT scan of the emitted Rust body (`rendered_body.contains("db_get_")`)
 //! false-positives on text that is NOT a
 //! runtime row accessor, appending `+ SkyRow` — a reference to the
-//! `#[cfg(feature = "db")]` trait `sky_runtime::db::SkyRow` — to a crate that
+//! `#[cfg(feature = "db")]` trait `ipe_runtime::db::SkyRow` — to a crate that
 //! never imports `Std.Db`. Result: `skyc` exit 0, then `cargo` fails with
-//! `error[E0433]: could not find db in sky_runtime`. A SEAL violation
+//! `error[E0433]: could not find db in ipe_runtime`. A SEAL violation
 //! (skyc-0-then-cargo-fail).
 //!
 //! Two minimal well-typed repros:
@@ -17,7 +17,7 @@
 //!     wildcard-`any` fn.
 //!
 //! The fix replaces the text scan with a STRUCTURAL walk of the lowered IR
-//! (`sky_lower`'s `body_calls_db_get_on_param`): the bound lands ONLY when the
+//! (`ipe_lower`'s `body_calls_db_get_on_param`): the bound lands ONLY when the
 //! body contains an actual `Db.get*` KERNEL application whose ROW argument is a
 //! `Var`/`CloneVar` reference to the wildcard param. Neither a string literal
 //! nor a user symbol is such an application, so NEITHER probe gains the bound —

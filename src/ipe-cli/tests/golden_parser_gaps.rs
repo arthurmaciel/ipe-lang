@@ -182,7 +182,7 @@ fn intdiv_by_zero_aborts_exit_101() {
 /// Raw Rust `/` on `i64` panics here unconditionally (signed-overflow hardware
 /// trap, present even with `overflow-checks = false`). Sky-Go `rt.IntDiv` uses
 /// two's-complement arithmetic and returns `i64::MIN`. The fix routes
-/// `BinOp::IntDiv` through `sky_runtime::math::sky_int_div(a, b)` which calls
+/// `BinOp::IntDiv` through `ipe_runtime::math::sky_int_div(a, b)` which calls
 /// `a.wrapping_div(b)` for non-zero divisors, reproducing Go's result.
 #[test]
 fn intdiv_minint_by_neg1_does_not_panic() {
@@ -193,7 +193,7 @@ fn intdiv_minint_by_neg1_does_not_panic() {
 // Compile-time negatives: exact SKY-* diagnostic codes (always run).
 // ---------------------------------------------------------------------------
 
-fn diag_code(err: &skyc::CliError) -> Option<sky_diagnostics::Code> {
+fn diag_code(err: &skyc::CliError) -> Option<ipe_diagnostics::Code> {
     match err {
         skyc::CliError::Pipeline { diag, .. } => Some(diag.code()),
         _ => None,
@@ -212,7 +212,7 @@ fn unterminated_blockcomment_is_sky_p0017() {
     let Err(err) = res else { return };
     assert_eq!(
         diag_code(&err),
-        Some(sky_diagnostics::SKY_P0017),
+        Some(ipe_diagnostics::SKY_P0017),
         "unterminated `{{-` must be SKY-P0017; err = {err}"
     );
 }
@@ -229,7 +229,7 @@ fn unknown_module_in_annotation_is_sky_n0004() {
     let Err(err) = res else { return };
     assert_eq!(
         diag_code(&err),
-        Some(sky_diagnostics::SKY_N0004),
+        Some(ipe_diagnostics::SKY_N0004),
         "`Bogus.Box` must be SKY-N0004 (unknown module); err = {err}"
     );
 }

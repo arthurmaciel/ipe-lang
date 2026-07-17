@@ -1,6 +1,6 @@
 //! E2E regression golden for `Attribute<msg>` type-identity
-//! disambiguation between `sky_runtime::html::Attribute` and
-//! `sky_runtime::ui::element::Attribute`.
+//! disambiguation between `ipe_runtime::html::Attribute` and
+//! `ipe_runtime::ui::element::Attribute`.
 //!
 //! ## The bug
 //!

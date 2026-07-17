@@ -1,4 +1,4 @@
-//! Seal — the home-aware enum guard in `sky_lower::ir_type_from_ty` must
+//! Seal — the home-aware enum guard in `ipe_lower::ir_type_from_ty` must
 //! win over the bare-name Std.Ui / Sky.Live opaque arms.
 //!
 //! Matching the bare name `"Color"` (→ `IrType::UiPlain(UiPlain::Color)`)
@@ -6,7 +6,7 @@
 //! that flows through the INFERRED lowering path to the opaque Std.Ui `Color`:
 //!
 //! * (i) a boxed `Fn(Color)` HOF argument emitted `Box<dyn
-//!   Fn(sky_runtime::ui::element::Color) -> _>` → skyc-0 / cargo-101 (E0433).
+//!   Fn(ipe_runtime::ui::element::Color) -> _>` → skyc-0 / cargo-101 (E0433).
 //! * (ii) a record field literal `{ c = Cyan }` lowered the field via the
 //!   ty-path (→ `UiPlain::Color`) while the annotation lowered it via
 //!   `ir_type_from_canon` (→ `MainColor`) — the two disagreed → SKY-I0001.
@@ -17,7 +17,7 @@
 //! builtin (no union entry) still falls through to `UiPlain`.
 //!
 //! Both goldens ALSO assert the coexistence invariant: the emitted Rust carries
-//! the user enum `MainColor` AND the runtime `sky_runtime::ui::element::Color`
+//! the user enum `MainColor` AND the runtime `ipe_runtime::ui::element::Color`
 //! (proof iii — the real Std.Ui Color is unchanged).
 //!
 //! Gated on `SKY_E2E=1`. Run:
@@ -36,7 +36,7 @@ fn repo_root() -> PathBuf {
 }
 
 /// Concatenate every emitted Rust source directly under `out/src` (skipping the
-/// copied `sky_runtime` subtree) so the test can assert on the generated program
+/// copied `ipe_runtime` subtree) so the test can assert on the generated program
 /// text regardless of how the backend splits modules across files.
 fn emitted_program_source(out: &Path) -> String {
     let src = out.join("src");
@@ -94,15 +94,15 @@ fn user_color_via_hof_resolves_to_own_enum() {
         "user `type Color` must emit its own `MainColor` enum"
     );
     // …and the HOF's boxed `Fn(Color)` argument now takes `MainColor` (THE fix);
-    // pre-it was `Box<dyn Fn(sky_runtime::ui::element::Color) -> _>` → E0433.
+    // pre-it was `Box<dyn Fn(ipe_runtime::ui::element::Color) -> _>` → E0433.
     assert!(
         program.contains("Fn(MainColor)"),
         "the inferred boxed HOF argument must take `MainColor`, not the opaque \
          Std.Ui Color"
     );
     assert!(
-        !program.contains("Fn(sky_runtime::ui::element::Color)"),
-        "the pre-#101 hijack (`Fn(sky_runtime::ui::element::Color)`) must be gone"
+        !program.contains("Fn(ipe_runtime::ui::element::Color)"),
+        "the pre-#101 hijack (`Fn(ipe_runtime::ui::element::Color)`) must be gone"
     );
     // The genuine Std.Ui Color path (Ui.rgb / Background.color) is unchanged —
     // it flows through the runtime helpers (proof iii, coexistence).

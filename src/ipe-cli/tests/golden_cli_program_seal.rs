@@ -7,7 +7,7 @@
 //! `SKY-L0107: function value in a record field` and the `emit_cli` path was
 //! unreachable dead code.  This test pins the full pipeline:
 //! constrain scheme (closed 5-field cfg, `RowTail::Closed`) → lower
-//! app-entry intercept → `emit_cli_call` → `sky_runtime::cli_program`.
+//! app-entry intercept → `emit_cli_call` → `ipe_runtime::cli_program`.
 //!
 //! Asserts skyc-0 ∧ cargo-0 ∧ run-0.  The runtime prints `view model` once at
 //! start; the harness runs the binary with stdin at EOF (`Command::output`
@@ -59,8 +59,8 @@ fn cli_program_skyc_cargo_and_run_zero() {
     let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
         .expect("emitted main.rs must exist");
     assert!(
-        emitted.contains("sky_runtime::cli_program("),
-        "emitted main.rs must call sky_runtime::cli_program; got:\n{emitted}"
+        emitted.contains("ipe_runtime::cli_program("),
+        "emitted main.rs must call ipe_runtime::cli_program; got:\n{emitted}"
     );
 
     // cargo-0 ∧ run-0: the binary builds, renders the initial view, exits 0.

@@ -21,7 +21,7 @@ fn repo_root() -> PathBuf {
 
 /// Build the named golden fixture and assert it surfaces exactly `expected` as
 /// a pipeline diagnostic — never a panic, never a silent accept.
-fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code) {
+fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code) {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -56,6 +56,6 @@ fn db_findwhere_string_is_t0001() {
     assert_gate(
         "db_gate_findwhere_string",
         "m5b_db_gate_findwhere_string_emit",
-        sky_diagnostics::SKY_T0001,
+        ipe_diagnostics::SKY_T0001,
     );
 }

@@ -1,0 +1,16 @@
+[package]
+name = "ipe_backend_rust"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+ipe_ir = { path = "../ipe_ir" }
+ipe_intern = { path = "../ipe_intern" }
+ipe_backend = { path = "../ipe_backend" }
+ipe_diagnostics = { path = "../ipe_diagnostics" }
+# Model schema tag (H24) — same pin as ipe_watch/skyc/runtime.
+sha2 = "0.10"
+
+[lints]
+workspace = true

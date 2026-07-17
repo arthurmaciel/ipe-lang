@@ -31,7 +31,7 @@ fn repo_root() -> PathBuf {
 /// Build the named golden fixture and assert it surfaces exactly `expected` as a
 /// pipeline diagnostic — never a panic / internal compiler bug. A skip occurs
 /// only when the runtime cannot be resolved.
-fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code) {
+fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code) {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -61,7 +61,7 @@ fn ctor_lambda_param_is_sky_t0015() {
     assert_gate(
         "neg_ctor_lambda",
         "l0105_neg_ctor_lambda_emit",
-        sky_diagnostics::SKY_T0015,
+        ipe_diagnostics::SKY_T0015,
     );
 }
 
@@ -70,7 +70,7 @@ fn ctor_def_head_param_is_sky_t0015() {
     assert_gate(
         "neg_ctor_def",
         "l0105_neg_ctor_def_emit",
-        sky_diagnostics::SKY_T0015,
+        ipe_diagnostics::SKY_T0015,
     );
 }
 
@@ -79,7 +79,7 @@ fn tuple_param_with_refutable_element_is_sky_t0015() {
     assert_gate(
         "neg_nested_tuple",
         "l0105_neg_nested_tuple_emit",
-        sky_diagnostics::SKY_T0015,
+        ipe_diagnostics::SKY_T0015,
     );
 }
 
@@ -88,7 +88,7 @@ fn cons_lambda_param_is_sky_t0015() {
     assert_gate(
         "neg_cons_lambda",
         "l0105_neg_cons_lambda_emit",
-        sky_diagnostics::SKY_T0015,
+        ipe_diagnostics::SKY_T0015,
     );
 }
 
@@ -97,7 +97,7 @@ fn bare_int_literal_lambda_param_is_parse_rejected() {
     assert_gate(
         "neg_int_lambda",
         "l0105_neg_int_lambda_emit",
-        sky_diagnostics::SKY_P0001,
+        ipe_diagnostics::SKY_P0001,
     );
 }
 
@@ -106,7 +106,7 @@ fn bare_list_lambda_param_is_parse_rejected() {
     assert_gate(
         "neg_list_lambda",
         "l0105_neg_list_lambda_emit",
-        sky_diagnostics::SKY_P0001,
+        ipe_diagnostics::SKY_P0001,
     );
 }
 
@@ -118,7 +118,7 @@ fn single_ctor_union_def_param_is_sky_t0015() {
     assert_gate(
         "neg_money_ctor_param",
         "l0105_neg_money_ctor_param_emit",
-        sky_diagnostics::SKY_T0015,
+        ipe_diagnostics::SKY_T0015,
     );
 }
 

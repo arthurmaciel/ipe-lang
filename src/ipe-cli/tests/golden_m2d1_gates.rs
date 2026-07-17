@@ -30,7 +30,7 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code) {
+fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code) {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -60,7 +60,7 @@ fn number_generic_at_bool_is_sky_t0014() {
     assert_gate(
         "gate_unsatisfied",
         "m2d1_gate_unsatisfied_emit",
-        sky_diagnostics::SKY_T0014,
+        ipe_diagnostics::SKY_T0014,
     );
 }
 
@@ -69,6 +69,6 @@ fn equality_generic_at_function_is_sky_t0014() {
     assert_gate(
         "gate_eq_function",
         "m2d1_gate_eq_function_emit",
-        sky_diagnostics::SKY_T0014,
+        ipe_diagnostics::SKY_T0014,
     );
 }

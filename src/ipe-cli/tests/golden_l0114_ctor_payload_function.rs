@@ -10,12 +10,12 @@
 //!
 //! * T1/T2 — a function value DIRECTLY in `Ok`/`Just`/a user union's payload
 //!   (declared or laundered through a type variable) is now ACCEPTED.
-//! * T3 Tier 2 (primary) — `sky_types::constrain::constrain_var_kernel` ties
+//! * T3 Tier 2 (primary) — `ipe_types::constrain::constrain_var_kernel` ties
 //!   the callback-result scheme-var of EVERY `Maybe`/`Result` higher-order
 //!   kernel (`map`, `map2..5`, `mapError`, `andMap` — 13 kernels, pinned by
-//!   `hof_result_slots_match_scheme_shapes` in `sky_types`) to a
+//!   `hof_result_slots_match_scheme_shapes` in `ipe_types`) to a
 //!   `TyBounds::hof_kernel_result()` obligation, checked at type-check time
-//!   (`sky_types::infer`) BEFORE lowering ever runs. The obligation covers the
+//!   (`ipe_types::infer`) BEFORE lowering ever runs. The obligation covers the
 //!   whole kernel set (a `Result.map` bypass otherwise slips through) and fails
 //!   CLOSED on a bare `Ty::Var` (an annotated double forwarder's skolem
 //!   otherwise escapes). Scoping it to `andMap` alone, or failing OPEN on a
@@ -76,7 +76,7 @@
 //! | **User applicative `map2` via `Result.map`+`andMap`** | `user_map2_via_andmap_stays_gated` | SKY-T0001 (cargo-fails even at a SAFE arity-2 use without the generalized obligation) |
 //! | Annotated `map` forwarder, curried | `map_annotated_forwarder_curried_is_t0014` (+ arity-1 green twin) | SKY-T0014 |
 //! | `Result.andThen` returning `Ok fn` | `and_then_fn_payload_accepted` | n/a — accepted (`andThen` needs NO obligation, Con-headed callback result; a callback legitimately returning `Ok fn` stays ACCEPTED and computes 42) |
-//! | Import alias | *(not constructible)* | n/a (`Result`/`Maybe` are compiler-kernel qualifiers in `sky-rust`, not backed by an importable Sky-source module — `crates/sky_canon/src/resolve.rs`'s fixed kernel-qualifier list — so there is no module to `import … as …`) |
+//! | Import alias | *(not constructible)* | n/a (`Result`/`Maybe` are compiler-kernel qualifiers in `sky-rust`, not backed by an importable Sky-source module — `crates/ipe_canon/src/resolve.rs`'s fixed kernel-qualifier list — so there is no module to `import … as …`) |
 //! | Cross-module annotated wrapper, reused at 2 different arity-1 types | `and_map_cross_module_wrapper_accepted` | design doc's `T3.residual` row — must stay ACCEPTED (proves Tier 2 does not over-reject) | n/a — accepted |
 
 use std::path::{Path, PathBuf};
@@ -342,9 +342,9 @@ fn assert_hof_curried_rejected(name: &str) {
         _ => None,
     };
     assert!(
-        code == Some(sky_diagnostics::SKY_T0001)
-            || code == Some(sky_diagnostics::SKY_T0014)
-            || code == Some(sky_diagnostics::SKY_L0114),
+        code == Some(ipe_diagnostics::SKY_T0001)
+            || code == Some(ipe_diagnostics::SKY_T0014)
+            || code == Some(ipe_diagnostics::SKY_L0114),
         "{name}: curried higher-order-kernel callback must be rejected with SKY-T0001 (Tier 2, \
          eager pin — the expected outcome for a DIRECT `andMap` call), SKY-T0014 \
          (Tier 2, deferred — reached only through a generic forwarder), or \
@@ -461,7 +461,7 @@ fn and_map_forwarder_curried_is_sky_t0014() {
     };
     assert_eq!(
         code,
-        Some(sky_diagnostics::SKY_T0014),
+        Some(ipe_diagnostics::SKY_T0014),
         "a curried payload through an ANNOTATED andMap forwarder must surface \
          the friendly SuperTypeUnsatisfied diagnostic (SKY-T0014), got: {built:?}"
     );
@@ -487,7 +487,7 @@ fn lambda_param_reuse_gated() {
     };
     assert_eq!(
         code,
-        Some(sky_diagnostics::SKY_L0127),
+        Some(ipe_diagnostics::SKY_L0127),
         "a fn-carrying lambda param used twice (consuming positions) must be \
          rejected with SKY-L0127, got: {built:?}"
     );
@@ -536,7 +536,7 @@ fn fn_carrier_reuse_gated() {
     };
     assert_eq!(
         code,
-        Some(sky_diagnostics::SKY_L0127),
+        Some(ipe_diagnostics::SKY_L0127),
         "a fn-carrying let-binding used twice (consuming positions) must be \
          rejected with SKY-L0127, got: {built:?}"
     );
@@ -559,7 +559,7 @@ fn assert_rejected_t0014(name: &str) {
     };
     assert_eq!(
         code,
-        Some(sky_diagnostics::SKY_T0014),
+        Some(ipe_diagnostics::SKY_T0014),
         "{name}: must be rejected with SKY-T0014 (fail-closed forwarder-escape \
          path), got: {built:?}"
     );
@@ -677,7 +677,7 @@ fn and_map_cross_module_untyped_forwarder_curried_rejected() {
     };
     assert_eq!(
         code,
-        Some(sky_diagnostics::SKY_T0014),
+        Some(ipe_diagnostics::SKY_T0014),
         "cross-module unannotated double forwarder at a curried payload must \
          be rejected with SKY-T0014, got: {built:?}"
     );

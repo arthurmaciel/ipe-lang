@@ -41,7 +41,7 @@ fn repo_root() -> PathBuf {
 }
 
 /// Concatenate every emitted `.rs` source directly under `out/src` (excluding
-/// the `sky_runtime` subtree) to let tests assert on generated program text.
+/// the `ipe_runtime` subtree) to let tests assert on generated program text.
 fn emitted_program_source(out: &Path) -> String {
     let src = out.join("src");
     let mut acc = String::new();
@@ -64,7 +64,7 @@ fn emitted_program_source(out: &Path) -> String {
 /// Assert that `skyc::build(fixture)` surfaces `expected` as a
 /// `CliError::Pipeline` diagnostic.  Runs WITHOUT `SKY_E2E` so the gate
 /// checks remain fast in the default CI pass.
-fn assert_skyc_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code) {
+fn assert_skyc_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code) {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -548,7 +548,7 @@ fn f10_generic_curried_gate_l0126() {
     assert_skyc_gate(
         "generic_curried",
         "i121_generic_curried_gate",
-        sky_diagnostics::SKY_L0126,
+        ipe_diagnostics::SKY_L0126,
     );
 }
 
@@ -557,7 +557,7 @@ fn f10_generic_curried_gate_l0126() {
 /// `mkPair : String -> (Int -> String)`, def-arity 1, same shape as F7 but the
 /// pipeline's second step is `Pipe.custom` (not `Pipe.required`).  Reproduces
 /// the independent-review-found gap: `is_pipeline_next_decoder_kernel`
-/// (`crates/sky_lower/src/lower.rs`) listed only five of the six
+/// (`crates/ipe_lower/src/lower.rs`) listed only five of the six
 /// `Decoder<E, Box<dyn FnOnce(_) -> _>>`-shaped kernels, omitting
 /// `KernelFn::JsonDecPCustom`.  Without the fix, `skyc build` exits 0 but the emitted
 /// `decode_pipeline_custom` call site fails `cargo build` with 2×E0308

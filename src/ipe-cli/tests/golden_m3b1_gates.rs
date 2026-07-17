@@ -1,5 +1,5 @@
 //! Tuple-pattern shapes. Both shapes are MODELLED end-to-end by the
-//! tuple-pattern lowering plus the `sky_types::exhaust` exhaustiveness/redundancy
+//! tuple-pattern lowering plus the `ipe_types::exhaust` exhaustiveness/redundancy
 //! engine (a shape the lowerer cannot model surfaces a clean, span-carrying
 //! SKY-L0115 — never a panic, an internal compiler bug, or silent refutable
 //! cargo-failing Rust). These tests pin the verified-correct behaviour:
