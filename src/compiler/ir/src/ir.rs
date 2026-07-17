@@ -286,7 +286,7 @@ impl BoundSet {
     /// &payload)` call cannot prove `payload: SkyRow` (E0277). Added ONLY to the
     /// wildcard `any` variable and ONLY when the body actually calls a `db_get_*`
     /// — no blast radius on genuine named type variables (`a`, `msg`).
-    const SKY_ROW: u16 = 1 << 11;
+    const IPE_ROW: u16 = 1 << 11;
     /// The `std::fmt::Display` bound: a generic type-param that flows into
     /// a `Basics.toString` kernel application (runtime `basics_to_string<T:
     /// std::fmt::Display>`) gains `std::fmt::Display` so the emitted body's
@@ -294,10 +294,10 @@ impl BoundSet {
     /// Without it the enclosing generic carries only `<T{n}: Clone>` and the
     /// body's `basics_to_string(x)` cannot prove `T{n}: Display` (E0277).
     ///
-    /// This is the SAME structural machinery as [`Self::SKY_ROW`] — a
+    /// This is the SAME structural machinery as [`Self::IPE_ROW`] — a
     /// kernel applied, alias-transparently, to a Var/CloneVar reference to a
     /// param whose type is `Generic(tv)` obliges the kernel's Rust bound on that
-    /// tv — generalised to a kernel→bound map. Unlike `SKY_ROW`, the bound lands
+    /// tv — generalised to a kernel→bound map. Unlike `IPE_ROW`, the bound lands
     /// on WILDCARD `any` AND genuine named tvars alike: `toString` is legitimate
     /// on a polymorphic value, and the resulting `T: Display` is satisfiable by
     /// every scalar caller (Int/Float/Bool/String) — the overwhelming common
@@ -439,10 +439,10 @@ impl BoundSet {
     }
 
     /// This set with the `SkyRow` (Db field-accessor row) bound — see
-    /// [`Self::SKY_ROW`].
+    /// [`Self::IPE_ROW`].
     #[must_use]
     pub const fn with_sky_row(self) -> Self {
-        Self(self.0 | Self::SKY_ROW)
+        Self(self.0 | Self::IPE_ROW)
     }
 
     /// This set with the `std::fmt::Display` (`Basics.toString`) bound — see
@@ -528,10 +528,10 @@ impl BoundSet {
     }
 
     /// Whether the `SkyRow` (Db field-accessor row) bound is set — see
-    /// [`Self::SKY_ROW`].
+    /// [`Self::IPE_ROW`].
     #[must_use]
     pub const fn has_sky_row(self) -> bool {
-        self.0 & Self::SKY_ROW != 0
+        self.0 & Self::IPE_ROW != 0
     }
 
     /// Whether the `std::fmt::Display` (`Basics.toString`) bound is set — see
@@ -1379,7 +1379,7 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         // `Secret` must NEVER round-trip through serde (session store, JSON
         // encode, anything) — derivable (see `ir_type_is_derivable`) but not
         // serde. This is the load-bearing gate that makes a `Std.Live` Model
-        // field of type `Secret` a compile-time SKY-L0120, not a session-store
+        // field of type `Secret` a compile-time IPE-L0120, not a session-store
         // leak.
         | IrType::Secret
         // Cache config / stats + Csv document are kernel-boundary data records
@@ -1544,7 +1544,7 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
 ///   their carrier is the composite (`SkyMaybe<Box<dyn Fn>>`); promoting the
 ///   inner slot would require type-position carrier changes across every
 ///   constructor and consumer, so their capture/reuse stays fail-closed
-///   (SKY-L0126 / SKY-L0127).
+///   (IPE-L0126 / IPE-L0127).
 #[must_use]
 pub const fn fun_value_arc_promotable(ty: &IrType) -> bool {
     matches!(ty, IrType::Fun(_, _))
@@ -1629,7 +1629,7 @@ pub enum Expr {
     /// function parameter (`fst (a, b) = a` → a synthetic param plus
     /// `Destructure { (a, b) = arg } a`). The binder must be irrefutable — the
     /// lowerer is the sole producer and rejects a refutable element
-    /// (a constructor / literal) fail-closed (SKY-L0115) — so the backend's
+    /// (a constructor / literal) fail-closed (IPE-L0115) — so the backend's
     /// `let <binder> = <value>;` is a sound, exhaustive Rust binding. `binder`
     /// is bound only within `body`, not in `value`.
     Destructure {
@@ -2150,7 +2150,7 @@ pub enum Pat {
     /// arbitrary [`Pat`]s and recurse. The List type is the closed two-constructor
     /// type `Nil | Cons`, so a `[]` arm plus an `_ :: _`-shaped arm is an
     /// exhaustive cover; coverage over the flattened shape is the type phase's
-    /// usefulness check (SKY-T0010), proven before lowering. The backend renders
+    /// usefulness check (IPE-T0010), proven before lowering. The backend renders
     /// this directly as a Rust slice pattern (`[p0, p1]` / `[p0, p1, rest @ ..]`).
     Slice {
         prefix: Vec<Self>,
@@ -2202,7 +2202,7 @@ pub fn is_irrefutable(pat: &Pat) -> bool {
 /// discarded any data, which holds only when `inner` never needed a runtime
 /// check to get there. The `ipe_lower` lowerer calls this too, to reject an
 /// alias over a dispatch-needing inner pattern in a REFUTABLE match-arm
-/// position (SKY-L0128) rather than let it reach the backend, where
+/// position (IPE-L0128) rather than let it reach the backend, where
 /// honoring it soundly would require matching the scrutinee by reference
 /// throughout — a materially larger redesign. See
 /// `docs/adr/0011-emitter-clone-borrow-discipline.md` §1.
@@ -2384,7 +2384,7 @@ impl Match {
     /// source order; the renderer emits them one-to-one.
     ///
     /// Exhaustiveness over the nested shape is proven UPSTREAM by the type
-    /// phase's usefulness/Maranget analysis (SKY-T0010), which runs before
+    /// phase's usefulness/Maranget analysis (IPE-T0010), which runs before
     /// lowering, so a non-exhaustive `case` never reaches this constructor. The
     /// check here is a cheap NECESSARY-condition backstop only: every variant of
     /// the enum must appear as some arm's top constructor, and no arm may name a
@@ -2456,7 +2456,7 @@ impl Match {
     /// Unlike [`Match::new`] (the all-constructor path), this path admits open
     /// literal types (`Int` / `Char` / `String`) whose coverage cannot be proven
     /// from a finite variant set. Exhaustiveness is therefore proven UPSTREAM by
-    /// the type phase's usefulness/Maranget analysis (SKY-T0010), which runs
+    /// the type phase's usefulness/Maranget analysis (IPE-T0010), which runs
     /// before lowering, so a non-exhaustive `case` never reaches this constructor.
     ///
     /// The backstop here is a cheap NECESSARY-condition check — the arm set is
@@ -2497,7 +2497,7 @@ impl Match {
         // irrefutable whole-list binder, or an alias over those) and at least one
         // is a genuine slice pattern. The List type is the closed `Nil | Cons`
         // type, so a `[]` arm plus an `_ :: _`-shaped arm covers it; that coverage
-        // was proven UPSTREAM by the Maranget usefulness check (SKY-T0010), so an
+        // was proven UPSTREAM by the Maranget usefulness check (IPE-T0010), so an
         // arm set in this shape with no trailing catch-all (`x :: rest` then `[]`)
         // is still sound here.
         let all_list_shaped = arms.iter().all(|a| is_list_shaped(&a.pat))
@@ -2505,7 +2505,7 @@ impl Match {
         // A multi-arm tuple `case`: every arm is product-shaped (a tuple pattern,
         // an irrefutable whole-tuple binder, or an alias over those) and at least
         // one is a genuine tuple pattern. A product type is inhabited only by its
-        // element tuples, so the upstream Maranget usefulness check (SKY-T0010)
+        // element tuples, so the upstream Maranget usefulness check (IPE-T0010)
         // already proved coverage before lowering — an arm set in this shape with
         // no trailing catch-all (`(True, _)` then `(False, _)`) is still sound.
         let all_product_shaped = arms.iter().all(|a| is_product_shaped(&a.pat))

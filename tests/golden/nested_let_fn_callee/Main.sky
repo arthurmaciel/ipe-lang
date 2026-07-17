@@ -8,7 +8,7 @@ module Main exposing (main)
 --
 -- Pre-fix: `rewrite_captured_clones` propagated `noncl_set = {process}` into
 -- the inner lambda body at depth+1, where the callee-position exemption
--- (`depth == 0`) did not fire → spurious SKY-L0126.
+-- (`depth == 0`) did not fire → spurious IPE-L0126.
 --
 -- Post-fix: the `Expr::Lambda` arm of `rewrite_captured_clones` clears
 -- `inner_noncl` before descending, leaving inner lambda bodies to their own

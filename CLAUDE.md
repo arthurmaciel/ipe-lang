@@ -108,7 +108,7 @@ Ask one focused question per ambiguity; don't guess heroically.
 
 An author configures at most these sections. Precedence: **process env >
 `.env` > `sky.toml`**. Secrets never go in `sky.toml` — auth secret comes
-from `SKY_AUTH_TOKEN_SECRET` (≥32 bytes).
+from `IPE_AUTH_TOKEN_SECRET` (≥32 bytes).
 
 ```toml
 name = "<project>"
@@ -137,12 +137,12 @@ level  = "info"                 # debug / info / warn / error
 ### Production gate — surface to the user
 
 Dev console + banner + metrics endpoint lock down when `ENV` (then
-`SKY_ENV`) is anything other than unset/`dev`/`development`/`local`. When
+`IPE_ENV`) is anything other than unset/`dev`/`development`/`local`. When
 the user mentions "deploy"/"production"/"Cloud Run"/"Kubernetes":
 
 * Confirm `ENV=production` will be set on runtime.
-* Confirm `SKY_AUTH_TOKEN_SECRET` ≥32 bytes.
-* Confirm `SKY_CONSOLE_AUTH` set (`token` or `app`) — production + unset
+* Confirm `IPE_AUTH_TOKEN_SECRET` ≥32 bytes.
+* Confirm `IPE_CONSOLE_AUTH` set (`token` or `app`) — production + unset
   refuses to mount `/_sky/console`.
 * Confirm session store is NOT `memory` when >1 replica.
 
@@ -719,7 +719,7 @@ cascade, page background image).
   `<h1..h6>`, `<main>`, `<nav>`, `<aside>`, `<footer>`, aria-*), `Input`
   (button, text, multiline, email, username, search, currentPassword,
   newPassword, checkbox, radio, radioRow, slider), `Lazy` (LRU-cached
-  subtrees, `SKY_UI_LAZY_CAP=N`), `Keyed` (sky-key for diff identity),
+  subtrees, `IPE_UI_LAZY_CAP=N`), `Keyed` (sky-key for diff identity),
   `Responsive` (classifyDevice, adapt — Model-driven branching needing
   typed Msg dispatch).
 - **Pseudo-classes** (`:hover`/`:focus-visible`/`:active`/`:disabled`) —
@@ -829,7 +829,7 @@ main = Tui.app cfg |> Task.run
 **Logical-pixel canvas** — `canvasWidth × canvasHeight` defines the design
 surface; the runtime converts `Ui.padding 8`/`Ui.px N` to cells. Covers
 ~95%+ of Std.Ui primitives; unsupported attrs (gradients, fine
-letter-spacing, image fills) emit a deduped warning (`SKY_TUI_QUIET=1`
+letter-spacing, image fills) emit a deduped warning (`IPE_TUI_QUIET=1`
 suppresses). Wide chars (CJK+emoji+ZWJ) supported.
 
 **Sky.Cli password mode** — `Cli.readPassword : () -> Task Error String`

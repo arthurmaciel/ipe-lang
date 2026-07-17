@@ -4,7 +4,7 @@
 //! Every test compiles a Sky program through `skyc`, builds the emitted Rust
 //! project with the shared cargo target, runs the binary, and checks its stdout
 //! against the cached oracle (`tests/golden/db_exec/oracle.meta` +
-//! `expected_go.txt`). Tests are gated on `SKY_E2E=1`; without it they return
+//! `expected_go.txt`). Tests are gated on `IPE_E2E=1`; without it they return
 //! early.
 //!
 //! ## Oracle provenance — why this is `oracle_divergence = true`
@@ -60,7 +60,7 @@
 //!   Output: `"widget|0|gadget"`.
 //! * `db_gate_findwhere_string` (negative, `golden_m5b_db_gates.rs`) —
 //!   `Db.findWhere conn "products" ("qty > " ++ "9")` is a compile-time
-//!   `SKY-T0001` (`String` vs `SqlFragment`) — the "parse, don't validate"
+//!   `IPE-T0001` (`String` vs `SqlFragment`) — the "parse, don't validate"
 //!   property this surface establishes.
 //! * `db_find_by_field` — `Db.exec` three INSERTs (two `category = "fruit"`,
 //!   one `category = "veggie"`) → `Db.findOneByField conn "items" "name" "apple"`
@@ -87,7 +87,7 @@
 //! Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test golden_m5b_db
+//! IPE_E2E=1 cargo test golden_m5b_db
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -105,7 +105,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 
 /// Compile `tests/golden/<name>/Main.sky`, build the emitted Cargo project, run
 /// it, and return the golden directory plus the run outcome. The caller gates on
-/// `SKY_E2E`. Fails the test on any build/runtime error.
+/// `IPE_E2E`. Fails the test on any build/runtime error.
 fn build_run(name: &str) -> (PathBuf, support::RunOutcome) {
     let root = repo_root();
     let dir = golden_dir(&root, name);
@@ -132,9 +132,9 @@ fn build_run(name: &str) -> (PathBuf, support::RunOutcome) {
 }
 
 /// Compile/build/run the golden and assert its stdout matches the cached oracle.
-/// Gated on `SKY_E2E=1`.
+/// Gated on `IPE_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let (dir, outcome) = build_run(name);
@@ -311,7 +311,7 @@ fn db_sql_decimal_money() {
 
 // ── Polymorphic params — T0001 regression ────────────────────────────────────
 
-/// SKY-T0001 regression: `Db.exec`/`Db.query` accept `List a` (polymorphic),
+/// IPE-T0001 regression: `Db.exec`/`Db.query` accept `List a` (polymorphic),
 /// so `List Int`, `List String`, and mixed `List SqlValue` all compile without
 /// a type-mismatch error.
 ///
@@ -321,8 +321,8 @@ fn db_sql_decimal_money() {
 /// * `Db.exec … ["hello"]`               — `List String` (as in the skymon example)
 /// * `Db.exec … [SqlNull …, SqlInt 42, SqlBool True]` — mixed `List SqlValue`
 ///
-/// Compile-only assertion: `skyc::build` must succeed (no `SKY-T0001`).
-/// E2E assertion (gated on `SKY_E2E=1`): binary prints `"3"` — three rows
+/// Compile-only assertion: `skyc::build` must succeed (no `IPE-T0001`).
+/// E2E assertion (gated on `IPE_E2E=1`): binary prints `"3"` — three rows
 /// inserted and queried back.
 ///
 /// Sanctioned divergence: ipê emits Rust+sqlx; oracle is ipê's own output.
@@ -338,11 +338,11 @@ fn db_poly_params_compiles() {
     assert!(runtime.is_ok(), "runtime must resolve: {:?}", runtime.err());
     let Ok(runtime) = runtime else { return };
 
-    // Core assertion: `skyc::build` succeeds — no SKY-T0001 for any param-list shape.
+    // Core assertion: `skyc::build` succeeds — no IPE-T0001 for any param-list shape.
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "SKY-T0001 regression: `Db.exec` with `List Int` / `List String` / mixed \
+        "IPE-T0001 regression: `Db.exec` with `List Int` / `List String` / mixed \
          `List SqlValue` must compile without a type-mismatch error; got: {:?}",
         built.err()
     );
@@ -350,7 +350,7 @@ fn db_poly_params_compiles() {
 
 /// E2E extension of [`db_poly_params_compiles`]: build the emitted Cargo project,
 /// run it, and assert the binary prints `"3"` (three rows inserted and read back).
-/// Gated on `SKY_E2E=1`.
+/// Gated on `IPE_E2E=1`.
 #[test]
 fn db_poly_params_e2e() {
     assert_runs_and_matches_oracle("db_poly_params");

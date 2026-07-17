@@ -76,7 +76,7 @@ For each behaviour probed:
    `decimal_parity.rs` hand-verified-oracle pattern
    (`runtime/tests/decimal_parity.rs:1-14`).
 2. **Record three answers per probe:**
-   - **Ipê** — run the golden (`SKY_E2E=1`).
+   - **Ipê** — run the golden (`IPE_E2E=1`).
    - **Go** — the existing cached oracle (`refresh-oracle` tooling).
    - **Elm** — an Elm 0.19.1 oracle. Method: a throwaway
      `elm/json`+`elm/core` project executed under node, one probe

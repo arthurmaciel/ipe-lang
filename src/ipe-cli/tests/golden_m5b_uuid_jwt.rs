@@ -4,7 +4,7 @@
 //! Every test compiles a Sky program through `skyc`, builds the emitted Rust
 //! project with the shared cargo target, runs the binary, and checks its stdout
 //! against the cached oracle (`tests/golden/m5b_*/oracle.meta` +
-//! `expected_go.txt`). All tests are gated on `SKY_E2E=1`; without it they
+//! `expected_go.txt`). All tests are gated on `IPE_E2E=1`; without it they
 //! return early.
 //!
 //! ## Oracle provenance — what is and isn't Go-compared here
@@ -63,7 +63,7 @@
 //! Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test golden_m5b
+//! IPE_E2E=1 cargo test golden_m5b
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -93,7 +93,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 
 /// Compile `tests/golden/<name>/Main.sky`, build the emitted Cargo project, run
 /// it, and return the golden directory plus the run outcome. The caller gates on
-/// `SKY_E2E`. Fails the test on any build/runtime error.
+/// `IPE_E2E`. Fails the test on any build/runtime error.
 fn build_run(name: &str) -> (PathBuf, support::RunOutcome) {
     let root = repo_root();
     let dir = golden_dir(&root, name);
@@ -120,9 +120,9 @@ fn build_run(name: &str) -> (PathBuf, support::RunOutcome) {
 }
 
 /// Compile/build/run the golden and assert its stdout matches the cached oracle.
-/// Gated on `SKY_E2E=1`.
+/// Gated on `IPE_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let (dir, outcome) = build_run(name);
@@ -134,7 +134,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 /// the `go_token` captured from the Go reference compiler — the explicit
 /// Go-byte-equality proof — AND that it still matches the cached oracle.
 fn assert_token_byte_identical_to_go(name: &str, go_token: &str) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let (dir, outcome) = build_run(name);

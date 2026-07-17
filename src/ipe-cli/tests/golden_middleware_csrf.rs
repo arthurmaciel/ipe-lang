@@ -4,7 +4,7 @@
 //! `middleware_with_csrf(...)` and that the emitted crate `cargo build`s (the
 //! Seal: `skyc` exit 0 implies `cargo build` exit 0).
 //!
-//! Compile-only assertions always run; the cargo build is `SKY_E2E=1`-gated
+//! Compile-only assertions always run; the cargo build is `IPE_E2E=1`-gated
 //! with an ISOLATED `CARGO_TARGET_DIR` (a shared dir's fingerprint reuse can
 //! mask a rustc failure as a false pass).
 
@@ -54,12 +54,12 @@ fn middleware_with_csrf_emits_wrapped_handler() {
     );
 }
 
-/// `SKY_E2E` tier: the emitted project must cargo-build (isolated target dir)
+/// `IPE_E2E` tier: the emitted project must cargo-build (isolated target dir)
 /// — proves the seal (skyc exit 0 implies cargo build exit 0) for the new
 /// `ServerResponse.cookies` field and the `middleware_with_csrf` kernel.
 #[test]
 fn middleware_with_csrf_cargo_builds() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     middleware_with_csrf_emits_wrapped_handler();

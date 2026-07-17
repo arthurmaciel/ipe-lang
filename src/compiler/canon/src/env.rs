@@ -205,7 +205,7 @@ pub struct Env {
     /// constructor, or prelude builtin of the same spelling all miss — so any of
     /// those SILENTLY shadow a wildcard member (no `DuplicateValue`, unlike the
     /// explicit-list path). When two or more distinct modules survive for a bare
-    /// use, that use is `AmbiguousImport` (SKY-N0024) AT THE USE SITE, never a
+    /// use, that use is `AmbiguousImport` (IPE-N0024) AT THE USE SITE, never a
     /// silent last-wins.
     pub wildcard_vars: Rc<BTreeMap<Symbol, BTreeMap<Symbol, WildcardOrigin>>>,
     /// **Parse-once registry index.**  Maps `(qualifier_sym, name_sym)`
@@ -458,7 +458,7 @@ impl Env {
             // func="toString", so the stdlib_index key is (Error, toString).
             // We must register with the same key so `id` resolves to
             // `Some(StdlibKernel::ErrorToString)` and the type-checker
-            // can look up its scheme without hitting SKY-L0108.
+            // can look up its scheme without hitting IPE-L0108.
             ("errorToString", error_sym, "toString"),
             ("println", log, "println"),
             // ── Basics numerics ─────────────────────────────────────────────
@@ -640,7 +640,7 @@ impl Env {
             // `Std.Log` — qualified form (`import Std.Log as Log`). `println`/
             // `info`/`debug`/`warn`/`error` are backed; the `*With`
             // variants take Stringify-bounded attrs and stay fail-closed
-            // (SKY-L0108) until the Stringify obligation is added.
+            // (IPE-L0108) until the Stringify obligation is added.
             (
                 "Log",
                 &[
@@ -1497,7 +1497,7 @@ impl Env {
             // Std.Cli / Sky.Cli — line-oriented TEA app-entry (fully wired).
             ("Cli", &["program"]),
             // Std.Auth / Sky.Auth — authentication helpers (fail-closed: no lower
-            // arm yet → SKY-L0108 at lower time; canon registration removes N0004).
+            // arm yet → IPE-L0108 at lower time; canon registration removes N0004).
             (
                 "Auth",
                 &[

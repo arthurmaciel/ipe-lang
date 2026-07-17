@@ -74,7 +74,7 @@ pub struct SolvedTypes {
     /// The home path discriminant prevents span collisions after `link::link`
     /// merges N source modules into a single flat def list: two different files
     /// can independently contain expressions at the same byte-offset span.  A
-    /// bare-`Span` key silently overwrote earlier entries, causing SKY-I0001.
+    /// bare-`Span` key silently overwrote earlier entries, causing IPE-I0001.
     pub regions: BTreeMap<(Vec<Symbol>, Span), Ty>,
     /// Super-type obligations of each typed binding's generic variables, keyed
     /// by `(home, def_name)` — NOT bare `def_name` (AUD-05 seal fix): two
@@ -88,7 +88,7 @@ pub struct SolvedTypes {
     /// each obligation into the matching Rust trait bound on the emitted
     /// generic parameter.
     pub bounds: BTreeMap<(Vec<Symbol>, Symbol), BTreeMap<Symbol, TyBounds>>,
-    /// Non-fatal diagnostics collected during type-checking (e.g. SKY-T0011
+    /// Non-fatal diagnostics collected during type-checking (e.g. IPE-T0011
     /// `RedundantCaseBranch`). These are [`Severity::Warning`] findings: callers
     /// MUST print them but MUST NOT treat them as compilation failures.
     pub warnings: Vec<Diagnostic>,
@@ -206,7 +206,7 @@ fn infer_with_budget_attributed(
     // `{ model | history = snapshots }` pins `model.history : List Snapshot`,
     // enabling `snap.ok` to resolve in the next pass).  Running them sequentially
     // would leave element types Flex when field accesses are processed, causing
-    // a false SKY-T0012.  See [`resolve_deferred`] for the full algorithm.
+    // a false IPE-T0012.  See [`resolve_deferred`] for the full algorithm.
     // The opaque server `Request` type has a fixed field set (see
     // [`RequestFields`]); intern it once here so the immutable-borrow
     // `resolve_deferred` pass can resolve `req.<field>` accesses.
@@ -225,7 +225,7 @@ fn infer_with_budget_attributed(
         err: &err_fields,
     };
     // Unlike the other post-solve passes, `resolve_deferred` returns the failing
-    // field-access / record-update's `home` module path so a SKY-T0012 attributes
+    // field-access / record-update's `home` module path so a IPE-T0012 attributes
     // to the source file that actually owns the access — not the byte-offset
     // heuristic's best guess, which can mis-blame `info.message` in one module
     // on a `class` call in another.
@@ -261,7 +261,7 @@ fn infer_with_budget_attributed(
     // field, the `notFound` type must match that field's type.  Non-routed
     // apps (Model has no `page` field) are silently skipped — UNLESS the app
     // declared a non-empty `routes` list, in which case the routes are ignored
-    // and we emit the SKY-L0124 warning (usually a mis-named `page` field). See
+    // and we emit the IPE-L0124 warning (usually a mis-named `page` field). See
     // the `RoutedLiveCheck` doc comment for the full rationale.
     let has_routes = !generated.route_witness_checks.is_empty();
     lift!(resolve_routed_live_checks(
@@ -277,9 +277,9 @@ fn infer_with_budget_attributed(
     // End-of-checking exhaustiveness + redundancy pass. Running it here — after
     // the solver settles — makes the lowerer's `Match::new` exhaustiveness
     // contract a genuinely unreachable compiler-bug case.
-    // Redundant-branch warnings (SKY-T0011) are collected rather than returned
+    // Redundant-branch warnings (IPE-T0011) are collected rather than returned
     // as errors — they are Severity::Warning and must not abort compilation.
-    // They join the same `warnings` sink already carrying any SKY-L0124.
+    // They join the same `warnings` sink already carrying any IPE-L0124.
     lift!(exhaust::check(m, interner, &mut warnings));
 
     // Numeric defaulting: a `Number` variable the program never pinned to a
@@ -370,7 +370,7 @@ fn infer_with_budget_attributed(
             // supports the operation. The unifier's head pin-check already
             // cleared a function HEAD; this catches a function NESTED inside a
             // tuple / record / enum under an equality obligation (Rust cannot
-            // compare it), failing closed with SKY-T0014 instead of emitting
+            // compare it), failing closed with IPE-T0014 instead of emitting
             // code `cargo` rejects.
             Content::Structure(_) => {
                 let ty = lift!(zonk(&mut uf, budget, root));
@@ -668,7 +668,7 @@ fn ty_is_equatable(ty: &Ty) -> bool {
     }
 }
 
-/// Build the [`TypeError::SuperTypeUnsatisfied`] (SKY-T0014) for a super-typed
+/// Build the [`TypeError::SuperTypeUnsatisfied`] (IPE-T0014) for a super-typed
 /// binding used at a type that does not meet its obligations.
 fn super_unsatisfied(interner: &Interner, bounds: TyBounds, ty: &Ty, span: Span) -> Diagnostic {
     // Name every super-type the variable owes, in a fixed order, joined with
@@ -755,7 +755,7 @@ fn super_unsatisfied(interner: &Interner, bounds: TyBounds, ty: &Ty, span: Span)
 /// can form dependency chains where a record update pins the element type of a
 /// list field that a downstream field access then needs.  Running the two passes
 /// sequentially breaks this: if field accesses run first the element type is still
-/// `Flex`, `snap.ok` stalls, and a false [`TypeError::NoSuchField`] (SKY-T0012)
+/// `Flex`, `snap.ok` stalls, and a false [`TypeError::NoSuchField`] (IPE-T0012)
 /// is reported.
 ///
 /// Concrete example (example 18 `job-queue`):
@@ -787,7 +787,7 @@ fn super_unsatisfied(interner: &Interner, bounds: TyBounds, ty: &Ty, span: Span)
 /// signatures — `Server.get`, `Server.param`, the `Handler` alias — as an
 /// opaque handle, and the lowerer maps it to `IrType::ServerRequest` backed by
 /// `runtime::ServerRequest`). Field access on that opaque `Con` would otherwise
-/// fail closed with SKY-T0012.
+/// fail closed with IPE-T0012.
 ///
 /// This table lets [`resolve_deferred`] resolve `req.<field>` against the known
 /// field types. The emit side needs no synthesised record: a field access
@@ -837,7 +837,7 @@ impl RequestFields {
     }
 
     /// Build the union-find variable for `field`'s type, or `None` when `field`
-    /// is not a member of `Request` (→ a genuine SKY-T0012).
+    /// is not a member of `Request` (→ a genuine IPE-T0012).
     fn field_var(&self, uf: &mut UnionFind<Content>, field: Symbol) -> DResult<Option<VarId>> {
         let string_var = |uf: &mut UnionFind<Content>| {
             uf.fresh(Content::Structure(FlatType::Con {
@@ -867,7 +867,7 @@ impl RequestFields {
 /// context passed to a Sky.Live `init` callback.
 ///
 /// Mirrors [`RequestFields`] exactly: `LiveReq` is an opaque nullary `Con` at
-/// the type level (so `init : {} -> …` fails closed with SKY-T0001 against the
+/// the type level (so `init : {} -> …` fails closed with IPE-T0001 against the
 /// prescriptive `LiveReq -> (Model, Cmd Msg)` scheme, and no bare record literal
 /// can masquerade as the runtime struct), but its fields stay READABLE. The
 /// deferred [`FieldAccess`] pass resolves `req.path` / `req.cookies` against this
@@ -917,7 +917,7 @@ impl LiveReqFields {
     }
 
     /// Build the union-find variable for `field`'s type, or `None` when `field`
-    /// is not a member of `LiveReq` (→ a genuine SKY-T0012).
+    /// is not a member of `LiveReq` (→ a genuine IPE-T0012).
     fn field_var(&self, uf: &mut UnionFind<Content>, field: Symbol) -> DResult<Option<VarId>> {
         let string_var = |uf: &mut UnionFind<Content>| {
             uf.fresh(Content::Structure(FlatType::Con {
@@ -1033,7 +1033,7 @@ impl ErrorRecordFields {
     }
 
     /// Build the union-find variable for `field`'s type on `con`, or `None`
-    /// when `field` is not a member (→ a genuine SKY-T0012).
+    /// when `field` is not a member (→ a genuine IPE-T0012).
     fn field_var(
         &self,
         uf: &mut UnionFind<Content>,
@@ -1081,7 +1081,7 @@ enum FieldState {
     /// field; the payload is the field's type var.
     Found(VarId),
     /// The base is resolved but does not have the field (or is not a record
-    /// at all) — an immediate SKY-T0012.
+    /// at all) — an immediate IPE-T0012.
     Missing,
 }
 
@@ -1110,8 +1110,8 @@ enum RuPeek {
     Flex,
     /// The base is a nominal BUILTIN with a fixed READABLE field table
     /// (`PanicInfo` / `TypeInfo` / `ErrorInfo` / `Request`) — field access
-    /// works, record UPDATE does not. Reported as the dedicated SKY-T0017
-    /// rather than a misleading "no field" SKY-T0012.
+    /// works, record UPDATE does not. Reported as the dedicated IPE-T0017
+    /// rather than a misleading "no field" IPE-T0012.
     BuiltinCon(Symbol),
     Other,
 }
@@ -1186,7 +1186,7 @@ fn resolve_deferred(
     // `Request` field lookup) carry no user-facing home — they are compiler
     // bugs, not source-attributed type errors — so they surface with an empty
     // home and the caller falls back to the byte-offset heuristic.  Only a
-    // genuine SKY-T0012 (built below with the failing item's `home`) attributes
+    // genuine IPE-T0012 (built below with the failing item's `home`) attributes
     // to a specific module.
     macro_rules! lift {
         ($e:expr) => {
@@ -1281,11 +1281,11 @@ enum RuOutcome {
 /// (releasing the arena borrow without deep-cloning the field map —
 /// efficiency-audit §2 medium), then:
 /// * a structural record → unify each updated field's value var against the
-///   field's type var (or SKY-T0012 on a missing field);
+///   field's type var (or IPE-T0012 on a missing field);
 /// * a nominal builtin (`PanicInfo`/`TypeInfo`/`ErrorInfo`/`Request`) → the
-///   dedicated SKY-T0017 (readable fields, no update form);
+///   dedicated IPE-T0017 (readable fields, no update form);
 /// * `Flex` → defer to the next pass;
-/// * anything else → SKY-T0012 on the first updated field (degenerate empty
+/// * anything else → IPE-T0012 on the first updated field (degenerate empty
 ///   update on a non-record base is treated as discharged so the loop can't
 ///   stall on it).
 fn resolve_one_record_update(
@@ -1370,10 +1370,10 @@ fn resolve_one_record_update(
 /// * Nullary builder (`Live.route "/" HomePage` — no arrows) → the builder IS
 ///   the page: unify directly.
 /// * Param constructor (`Live.route "/u/:id" UserPage`) → peel `String ->`,
-///   unify the result — the canonical corpus shape, falsely SKY-T0001'd by
+///   unify the result — the canonical corpus shape, falsely IPE-T0001'd by
 ///   the pre-round-4 shared-variable scheme.
 /// * Wrong-ADT constructor (`Live.route "/" Increment` in a `Page` app) →
-///   the peeled result (`Msg`) fails unification → SKY-T0001 at this route's
+///   the peeled result (`Msg`) fails unification → IPE-T0001 at this route's
 ///   span.
 /// * A builder that never settled (an unapplied `Live.route "/"` value) has a
 ///   flex root — not an arrow — and unifies with the page variable directly,
@@ -1401,14 +1401,14 @@ fn resolve_route_witness_checks(
             fuel -= 1;
         }
         // Unify the built page type with the route's page variable.  A
-        // mismatch is a normal SKY-T0001 blamed at the `Live.route` span.
+        // mismatch is a normal IPE-T0001 blamed at the `Live.route` span.
         unify(uf, budget, interner, check.span, cur, check.page_var)?;
     }
     Ok(())
 }
 
 /// For routed `Live.app` calls: if the settled Model type has a `page` field,
-/// the `notFound` type must match (SKY-T0001) — the `set_page` closure emitted
+/// the `notFound` type must match (IPE-T0001) — the `set_page` closure emitted
 /// by the backend already assumes this invariant.  Non-routed apps (Model has
 /// no `page` field) are silently skipped, so a blanket open-row projection is
 /// never needed and every non-routed app continues to pass.
@@ -1443,7 +1443,7 @@ fn resolve_routed_live_checks(
         };
         if let Some(page_var) = page_var {
             // Routed app: `notFound` must be the same type as `Model.page`.
-            // `unify` produces SKY-T0001 (TypeMismatch) if they differ.
+            // `unify` produces IPE-T0001 (TypeMismatch) if they differ.
             unify(
                 uf,
                 budget,
@@ -1458,7 +1458,7 @@ fn resolve_routed_live_checks(
             // non-routed runtime path and silently ignored. This compiles
             // (matching the Go reference's `applyRoute` no-op), but it is
             // almost always a mistake — usually a mis-named `page` field. Emit
-            // the SKY-L0124 warning at the `Live.app` span.
+            // the IPE-L0124 warning at the `Live.app` span.
             //
             // `route_count` is the total number of `Live.route` references in
             // the compile unit. In the common single-app-per-program case this
@@ -1475,7 +1475,7 @@ fn resolve_routed_live_checks(
     Ok(())
 }
 
-/// Build the [`TypeError::BuiltinRecordUpdate`] (SKY-T0017) for a record
+/// Build the [`TypeError::BuiltinRecordUpdate`] (IPE-T0017) for a record
 /// update on a nominal builtin (`PanicInfo` / `TypeInfo` / `ErrorInfo` /
 /// `Request`) — readable fields, no user-writable update form. Resolving the
 /// type-constructor symbol is the only fallible step; a missing backing string
@@ -1499,7 +1499,7 @@ fn builtin_record_update(interner: &Interner, name: Symbol, span: Span) -> DResu
     })
 }
 
-/// Build the [`TypeError::NoSuchField`] (SKY-T0012) for a field that is absent
+/// Build the [`TypeError::NoSuchField`] (IPE-T0012) for a field that is absent
 /// from the (settled) record type, or whose base is not a record.  Shared by
 /// all arms of the joint fixpoint in [`resolve_deferred`]; the record type is
 /// zonked + rendered here so the reporter needs no arena access.
@@ -1662,7 +1662,7 @@ mod tests {
 
     #[test]
     fn field_access_after_record_update_dep_chain_typechecks() {
-        // Regression for SKY-T0012 (example 18 `job-queue` shape).
+        // Regression for IPE-T0012 (example 18 `job-queue` shape).
         //
         // Pattern: a record `{{ items = [] }}` has a Flex list-element type.
         // `setItems xs model = {{ model | items = xs }}` is a record update that
@@ -1670,7 +1670,7 @@ mod tests {
         // `getSum` accesses `x.value` on each element via `List.foldl`.
         // When `setItems` and `getSum` share the SAME model via `main`, the field
         // access `x.value` must resolve after the record update in the joint
-        // fixpoint — NOT emit SKY-T0012.
+        // fixpoint — NOT emit IPE-T0012.
         //
         // The old sequential approach ran `resolve_field_accesses` to completion
         // before `resolve_record_updates`, so `x.value` saw a Flex element type
@@ -2462,10 +2462,10 @@ mod tests {
     #[test]
     fn record_update_on_builtin_nominal_is_dedicated_diagnostic() {
         // `{ p | message = "x" }` on the nominal builtin `PanicInfo` must NOT
-        // surface as SKY-T0012 "type PanicInfo has no field `message`" — the
+        // surface as IPE-T0012 "type PanicInfo has no field `message`" — the
         // field IS readable (`p.message`); the real reason is that a nominal
         // builtin has no user-writable record-update form. It must be the
-        // dedicated `BuiltinRecordUpdate` (SKY-T0017) naming the type.
+        // dedicated `BuiltinRecordUpdate` (IPE-T0017) naming the type.
         let src = "module Main exposing (main)\n\
                    import Sky.Core.Prelude exposing (..)\n\
                    f : PanicInfo -> PanicInfo\n\
@@ -2490,7 +2490,7 @@ mod tests {
                 })
             ),
             "record update on the nominal builtin PanicInfo must surface the \
-             dedicated BuiltinRecordUpdate (SKY-T0017), not SKY-T0012, got {r:?}"
+             dedicated BuiltinRecordUpdate (IPE-T0017), not IPE-T0012, got {r:?}"
         );
         let Err(Diagnostic::Type {
             msg: TypeError::BuiltinRecordUpdate { name },
@@ -2666,7 +2666,7 @@ mod tests {
                     ..
                 })
             ),
-            "expected RefutablePatternParameter (SKY-T0015), got {r:?}"
+            "expected RefutablePatternParameter (IPE-T0015), got {r:?}"
         );
     }
 
@@ -2691,7 +2691,7 @@ mod tests {
                     ..
                 })
             ),
-            "expected RefutablePatternParameter (SKY-T0015), got {r:?}"
+            "expected RefutablePatternParameter (IPE-T0015), got {r:?}"
         );
     }
 
@@ -2717,7 +2717,7 @@ mod tests {
     #[test]
     fn redundant_case_branch_names_constructor() {
         // `Increment` is matched twice; the case is otherwise exhaustive, so the
-        // redundancy is the only finding.  SKY-T0011 is Severity::Warning —
+        // redundancy is the only finding.  IPE-T0011 is Severity::Warning —
         // `infer` must return `Ok` with the warning in `types.warnings`, NOT
         // return `Err`.  The compiler must not fail with exit 1 for a warning.
         let src = "module Main exposing (main)\n\
@@ -2731,7 +2731,7 @@ mod tests {
             return;
         };
         let r = infer(&m, &mut i);
-        let types = r.expect("redundant branch is a warning (SKY-T0011), not an error");
+        let types = r.expect("redundant branch is a warning (IPE-T0011), not an error");
         assert_eq!(
             types.warnings.len(),
             1,
@@ -2758,7 +2758,7 @@ mod tests {
         }
     }
 
-    /// Regression against the SKY-T0011 false-positive class (the ex10-shaped
+    /// Regression against the IPE-T0011 false-positive class (the ex10-shaped
     /// bug): a `case` whose arms cover every constructor of a closed union
     /// EXACTLY ONCE — no trailing `_`, no redundant arm — must emit ZERO
     /// `RedundantCaseBranch` warnings, even when the same function body also
@@ -2807,12 +2807,12 @@ mod tests {
             .collect();
         assert!(
             redundant.is_empty(),
-            "an exhaustive case with no redundant arm must emit ZERO SKY-T0011, \
+            "an exhaustive case with no redundant arm must emit ZERO IPE-T0011, \
              got {redundant:?}"
         );
     }
 
-    /// SKY-L0124: a `Live.app` with a non-empty `routes` list
+    /// IPE-L0124: a `Live.app` with a non-empty `routes` list
     /// whose Model has NO `page` field emits a **warning**, not an error. The
     /// program still type-checks (Go's `applyRoute` no-ops the same shape); the
     /// warning flags the likely mis-named routed-page field.
@@ -2859,7 +2859,7 @@ mod tests {
         assert_eq!(
             warnings.len(),
             1,
-            "expected exactly one SKY-L0124 warning, got {warnings:?}"
+            "expected exactly one IPE-L0124 warning, got {warnings:?}"
         );
         let w = warnings.first().expect("len==1 asserted above");
         assert!(
@@ -2961,8 +2961,8 @@ mod tests {
         // later, deeper `Som (Som y)` arm covers no new value. The redundancy
         // finding is computed over the same nested matrix as exhaustiveness, so it
         // must fire even when the useless arm is more specific than the arm that
-        // subsumes it — reported as SKY-T0011 (Warning) naming the top-level `Som`.
-        // SKY-T0011 is Severity::Warning — infer must return Ok with the warning in
+        // subsumes it — reported as IPE-T0011 (Warning) naming the top-level `Som`.
+        // IPE-T0011 is Severity::Warning — infer must return Ok with the warning in
         // types.warnings, NOT return Err.
         let src = "module Main exposing (main)\n\
                    import Sky.Core.Prelude exposing (..)\n\
@@ -2975,7 +2975,7 @@ mod tests {
             return;
         };
         let r = infer(&m, &mut i);
-        let types = r.expect("redundant branch is a warning (SKY-T0011), not an error");
+        let types = r.expect("redundant branch is a warning (IPE-T0011), not an error");
         assert_eq!(
             types.warnings.len(),
             1,
@@ -3332,7 +3332,7 @@ mod tests {
 
     #[test]
     fn accessing_a_missing_field_is_no_such_field() {
-        // `{ x = 1 }` has no `y`: a closed record rejects the access (SKY-T0012).
+        // `{ x = 1 }` has no `y`: a closed record rejects the access (IPE-T0012).
         let source = "module Main exposing (v)\nv =\n    let p = { x = 1 } in p.y\n";
         let Some((m, mut i)) = canon_src(source) else {
             return;
@@ -3352,7 +3352,7 @@ mod tests {
 
     #[test]
     fn accessing_a_field_on_a_non_record_is_no_such_field() {
-        // `p` is an `Int`, so `p.x` has no field to read (SKY-T0012).
+        // `p` is an `Int`, so `p.x` has no field to read (IPE-T0012).
         let source = "module Main exposing (v)\nv =\n    let p = 5 in p.x\n";
         let Some((m, mut i)) = canon_src(source) else {
             return;
@@ -3386,7 +3386,7 @@ mod tests {
     #[test]
     fn updating_a_missing_field_is_no_such_field() {
         // `{ p | z = 0 }` where `p` has only `x`/`y`: a closed record rejects the
-        // update of an absent field (SKY-T0012).
+        // update of an absent field (IPE-T0012).
         let source =
             "module Main exposing (v)\nv =\n    let p = { x = 1, y = 2 } in { p | z = 0 }\n";
         let Some((m, mut i)) = canon_src(source) else {
@@ -3421,7 +3421,7 @@ mod tests {
 
     #[test]
     fn updating_a_field_on_a_non_record_is_no_such_field() {
-        // `p` is an `Int`, so `{ p | x = 1 }` has no field to update (SKY-T0012).
+        // `p` is an `Int`, so `{ p | x = 1 }` has no field to update (IPE-T0012).
         let source = "module Main exposing (v)\nv =\n    let p = 5 in { p | x = 1 }\n";
         let Some((m, mut i)) = canon_src(source) else {
             return;
@@ -3680,7 +3680,7 @@ mod tests {
     /// generated project's `HashMap<String,String>`-pinned wrapper could not
     /// build (exit-0-then-cargo-fail). A `Dict.fromList [...]` literal claims
     /// argument must still type-check clean; a record literal must now be
-    /// REJECTED at type-check (SKY-T0001-class), not silently accepted.
+    /// REJECTED at type-check (IPE-T0001-class), not silently accepted.
     #[test]
     fn auth_sign_token_claims_pinned_to_dict_string_string() {
         // `signToken`'s first argument is `Secret`, not `String` —
@@ -3831,7 +3831,7 @@ mod tests {
     }
 
     /// A Number generic used at `Bool` is rejected: `Bool` is not a `Number`, so
-    /// the use surfaces SKY-T0014 rather than emitting Rust `cargo` cannot build.
+    /// the use surfaces IPE-T0014 rather than emitting Rust `cargo` cannot build.
     #[test]
     fn number_generic_at_bool_is_super_type_unsatisfied() {
         let src = "module Main exposing (main)\n\
@@ -3877,7 +3877,7 @@ mod tests {
         assert_eq!(ty_con_name(b, &i).as_deref(), Some("Int"));
     }
 
-    /// Numeric-literal polymorphism (SKY-T0001): an integer literal is
+    /// Numeric-literal polymorphism (IPE-T0001): an integer literal is
     /// `Number`-polymorphic, so passing `100` where a `Float` is expected
     /// type-checks — the literal resolves to `Float`.  The minimized shape is
     /// `pct 100` with `pct : Float -> Length`: the literal must not be pinned
@@ -3953,7 +3953,7 @@ mod tests {
     /// constructor whose scheme is not registered (e.g. an imported kernel-stdlib
     /// ADT like `ChunkEvent`).  If the no-scheme fallback skips binding arg
     /// variables into `br_local`, the arm body's `VarLocal` lookup
-    /// fires the "unbound local" ICE (SKY-I0001).
+    /// fires the "unbound local" ICE (IPE-I0001).
     ///
     /// We exercise this directly by building a `canon::Module` with no `unions`
     /// (so `ImportedCtor` has no scheme) and a single `case` arm:
@@ -4035,7 +4035,7 @@ mod tests {
     /// A cross-module untyped recursive function polymorphic in
     /// its LIST-ELEMENT type (`listLen : List a -> Int`) must generalize its
     /// element var at the boundary so the lowerer can emit a Rust generic — NOT
-    /// leave it a residual flex that hits SKY-L0102.
+    /// leave it a residual flex that hits IPE-L0102.
     #[test]
     fn i201_polymorphic_list_element_cross_module_generalizes() {
         let lib = (
@@ -4068,7 +4068,7 @@ mod tests {
         assert!(
             quantified.is_some_and(|v| v.len() == 1),
             "listLen's promoted scheme must quantify EXACTLY the list-element \
-             var so the lowerer emits a Rust generic instead of SKY-L0102; got: {quantified:?}"
+             var so the lowerer emits a Rust generic instead of IPE-L0102; got: {quantified:?}"
         );
     }
 }

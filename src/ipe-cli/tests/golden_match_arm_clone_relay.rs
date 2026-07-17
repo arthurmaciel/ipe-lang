@@ -14,7 +14,7 @@
 //! Run:
 //! ```text
 //! cargo test -p skyc --test golden_i222_match_arm_clone_relay
-//! SKY_E2E=1 cargo test -p skyc --test golden_i222_match_arm_clone_relay
+//! IPE_E2E=1 cargo test -p skyc --test golden_i222_match_arm_clone_relay
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -67,10 +67,10 @@ fn i222_match_arm_skyc_accepts_and_relays() {
     );
 }
 
-/// cargo-0 ∧ run-correct: gated on `SKY_E2E=1` — THE SEAL.
+/// cargo-0 ∧ run-correct: gated on `IPE_E2E=1` — THE SEAL.
 #[test]
 fn i222_match_arm_cargo_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

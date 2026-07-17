@@ -1,7 +1,7 @@
 //! The ten stdlib modules whose runtime kernels exist and are registered in the
 //! compiler's `Ffi.kernel`-resolvable registry. Without registration,
-//! `import`/member-use fails closed (SKY-N0028 unknown kernel, SKY-N0026
-//! reserved-type collision, or SKY-T0001 annotation mismatch).
+//! `import`/member-use fails closed (IPE-N0028 unknown kernel, IPE-N0026
+//! reserved-type collision, or IPE-T0001 annotation mismatch).
 //!
 //! Each module below is a byte-identical reference Layer-3 port whose members
 //! are point-free `Ffi.kernel "Mod_fn"` aliases. Registering each family's
@@ -13,13 +13,13 @@
 //!
 //! * **Resolution + emit** (always): `import <Module>` and a member call resolve
 //!   and the frontend emits clean Rust (skyc exit 0). A resolution regression
-//!   (SKY-N0028 / N0026 / T0001) fails HERE — never a silent skip.
-//! * **Seal** (`SKY_E2E`): the emitted crate `cargo build`s AND runs cleanly.
+//!   (IPE-N0028 / N0026 / T0001) fails HERE — never a silent skip.
+//! * **Seal** (`IPE_E2E`): the emitted crate `cargo build`s AND runs cleanly.
 //!   skyc exit 0 AND cargo exit 0 — no exit-0-then-cargo-fail.
 //!
 //! ```text
 //! cargo test -p skyc --test golden_stdlib_module_seal
-//! SKY_E2E=1 cargo test -p skyc --test golden_stdlib_module_seal
+//! IPE_E2E=1 cargo test -p skyc --test golden_stdlib_module_seal
 //! ```
 
 use std::fs;
@@ -42,7 +42,7 @@ fn write_project(dir: &Path, main: &str) -> bool {
 }
 
 fn e2e_enabled() -> bool {
-    std::env::var("SKY_E2E").is_ok()
+    std::env::var("IPE_E2E").is_ok()
 }
 
 /// Compile `main` (a full `Main.sky` program) through the skyc frontend into an
@@ -335,7 +335,7 @@ fn pubsub_builds_and_runs() {
 // four primitives (string/int/float/bool), `field`/`at`/`list`/`nullable`,
 // `map`/`andThen`/`succeed`/`fail`, and all three format front-ends
 // (`decodeToml`/`decodeYaml`/`decodeJson`). Proves two properties together:
-// the `type Decoder a` re-declaration resolves (SKY-N0026 carrier exemption) with
+// the `type Decoder a` re-declaration resolves (IPE-N0026 carrier exemption) with
 // no competing enum emitted, and every kernel emits the shared JSON `decode_*` /
 // `config_decode_*` runtime fns (skyc-0 ⇒ cargo-0). Uses SINGLE-decoder
 // composition — the multi-parameter applicative `succeed (\a b -> …)` builder is

@@ -7,7 +7,7 @@
 //! full accumulator `acc`, which recurses into `TaskSeq` (`:3386`) and `Call`
 //! (`:3298`/`:3303`) — so this shape is covered on HEAD.  This golden is a
 //! **regression lock**: if a future change accidentally removes or gates that
-//! driver path, the E2E test (`SKY_E2E=1`) catches the E0382.
+//! driver path, the E2E test (`IPE_E2E=1`) catches the E0382.
 //!
 //! Run:
 //! ```text
@@ -15,7 +15,7 @@
 //! cargo test -p skyc --test golden_i193_taskseq_reuse
 //!
 //! # full E2E:
-//! SKY_E2E=1 cargo test -p skyc --test golden_i193_taskseq_reuse
+//! IPE_E2E=1 cargo test -p skyc --test golden_i193_taskseq_reuse
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -66,10 +66,10 @@ fn i193_taskseq_skyc_accepts() {
     );
 }
 
-/// cargo-0 ∧ run-correct: gated on `SKY_E2E=1`.
+/// cargo-0 ∧ run-correct: gated on `IPE_E2E=1`.
 #[test]
 fn i193_taskseq_cargo_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

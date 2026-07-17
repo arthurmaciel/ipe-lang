@@ -61,7 +61,7 @@ pub fn letters(k: u32) -> Box<str> {
 }
 
 /// Resolve a single [`Symbol`] into an owned name, or a `CompilerBug` if the
-/// interner has no backing string (a forged symbol — see SKY-I0010).
+/// interner has no backing string (a forged symbol — see IPE-I0010).
 fn resolve(interner: &Interner, sym: Symbol) -> DResult<Box<str>> {
     interner
         .resolve(sym)
@@ -138,7 +138,7 @@ pub fn ty_to_doc(ty: &Ty, interner: &Interner, namer: &mut VarNamer) -> DResult<
 
 /// Render a written annotation type ([`canon::Type`]) into an owned [`TyDoc`].
 ///
-/// Used by the `TooManyParameters` (SKY-T0004) producer to show the signature as
+/// Used by the `TooManyParameters` (IPE-T0004) producer to show the signature as
 /// the user wrote it. A type variable keeps its **source** name (not a letter),
 /// so the rendered annotation matches the program text. The canonical type is
 /// bounded by the parser's nesting cap, so the recursion is bounded.

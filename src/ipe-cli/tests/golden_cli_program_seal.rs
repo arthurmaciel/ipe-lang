@@ -4,7 +4,7 @@
 //! `Cli.program` cfg record carries five function-typed fields
 //! (init/update/view/subscriptions/onLine), so without `KernelFn::CliProgram`
 //! in the app-entry cfg intercept (`lower.rs`) EVERY real call tripped
-//! `SKY-L0107: function value in a record field` and the `emit_cli` path was
+//! `IPE-L0107: function value in a record field` and the `emit_cli` path was
 //! unreachable dead code.  This test pins the full pipeline:
 //! constrain scheme (closed 5-field cfg, `RowTail::Closed`) → lower
 //! app-entry intercept → `emit_cli_call` → `ipe_runtime::cli_program`.
@@ -13,10 +13,10 @@
 //! start; the harness runs the binary with stdin at EOF (`Command::output`
 //! nulls stdin), so the program renders the initial state and exits 0.
 //!
-//! Gated on `SKY_E2E=1`. Run:
+//! Gated on `IPE_E2E=1`. Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_i111_cli_program_seal
+//! IPE_E2E=1 cargo test -p skyc --test golden_i111_cli_program_seal
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -30,7 +30,7 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn cli_program_skyc_cargo_and_run_zero() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -47,7 +47,7 @@ fn cli_program_skyc_cargo_and_run_zero() {
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    // skyc-0: compiler must succeed (this shape can fail with SKY-L0107).
+    // skyc-0: compiler must succeed (this shape can fail with IPE-L0107).
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),

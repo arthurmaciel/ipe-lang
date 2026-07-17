@@ -1,7 +1,7 @@
 //! Hermetic network tests for Sky.Core.Http — `Http.get`, `Http.post`, and the
 //! SSRF deny-private guard.
 //!
-//! All tests are gated on `SKY_E2E=1`.  Without it they return early so the
+//! All tests are gated on `IPE_E2E=1`.  Without it they return early so the
 //! default `cargo test` stays fast.
 //!
 //! ## Architecture
@@ -19,20 +19,20 @@
 //!    request.  The fixture writes a canned HTTP/1.1 response and terminates.
 //!    Using a raw TCP listener keeps the test free of extra dependencies (no
 //!    `warp`, no `hyper-test`).
-//! 5. Runs the compiled binary with the fixture URL in `SKY_HTTP_TEST_URL` and
+//! 5. Runs the compiled binary with the fixture URL in `IPE_HTTP_TEST_URL` and
 //!    asserts exact stdout.
 //!
 //! ## SSRF negative test
 //!
 //! `http_ssrf_deny_loopback` does NOT start a fixture server.  It sets
-//! `SKY_HTTP_DENY_PRIVATE=1`, points `Http.get` at the loopback address, and
+//! `IPE_HTTP_DENY_PRIVATE=1`, points `Http.get` at the loopback address, and
 //! asserts the runtime blocks the request (`DENIED` on stdout).  Proves the guard
 //! works end-to-end (Sky source → emitted Rust → `ipe_runtime` SSRF check).
 //!
 //! Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test http_e2e
+//! IPE_E2E=1 cargo test http_e2e
 //! ```
 
 use std::io::{Read, Write};
@@ -129,31 +129,31 @@ fn start_fixture(
 }
 
 // Sky source shared between GET and POST tests.  The program reads the fixture
-// URL from the `SKY_HTTP_TEST_URL` env var, performs the request, and prints
+// URL from the `IPE_HTTP_TEST_URL` env var, performs the request, and prints
 // `<status>\n<body>` so the test can assert both independently.
 
-const SKY_HTTP_GET_PROGRAM: &str = r#"module Main exposing (main)
+const IPE_HTTP_GET_PROGRAM: &str = r#"module Main exposing (main)
 
 import Sky.Core.Http as Http
 
 main =
     Task.andThen
         (\resp -> println (String.fromInt resp.status ++ "\n" ++ resp.body))
-        (Http.get (System.getenvOr "SKY_HTTP_TEST_URL" "http://127.0.0.1:1"))
+        (Http.get (System.getenvOr "IPE_HTTP_TEST_URL" "http://127.0.0.1:1"))
 "#;
 
-const SKY_HTTP_POST_PROGRAM: &str = r#"module Main exposing (main)
+const IPE_HTTP_POST_PROGRAM: &str = r#"module Main exposing (main)
 
 import Sky.Core.Http as Http
 
 main =
     Task.andThen
         (\resp -> println (String.fromInt resp.status ++ "\n" ++ resp.body))
-        (Http.post (System.getenvOr "SKY_HTTP_TEST_URL" "http://127.0.0.1:1") "ping")
+        (Http.post (System.getenvOr "IPE_HTTP_TEST_URL" "http://127.0.0.1:1") "ping")
 "#;
 
-// The SSRF program reads the fixture URL from `SKY_HTTP_TEST_URL` (a LIVE
-// loopback server — see `http_ssrf_deny_loopback`).  With SKY_HTTP_DENY_PRIVATE=1
+// The SSRF program reads the fixture URL from `IPE_HTTP_TEST_URL` (a LIVE
+// loopback server — see `http_ssrf_deny_loopback`).  With IPE_HTTP_DENY_PRIVATE=1
 // the `ipe_runtime` guard rejects the request at address-resolution time, before
 // it reaches the network. Task.onError wraps Task.andThen so that a failure in
 // Http.get propagates past the andThen (which short-circuits on failure) and into
@@ -161,7 +161,7 @@ main =
 // the status, so a guard that FAILED to fire would print "200", not "DENIED".
 // Using nested calls (no |> operator) avoids Sky layout-rule parse ambiguity
 // when the pipe sits at a continuation line.
-const SKY_HTTP_SSRF_PROGRAM: &str = r#"module Main exposing (main)
+const IPE_HTTP_SSRF_PROGRAM: &str = r#"module Main exposing (main)
 
 import Sky.Core.Http as Http
 
@@ -170,7 +170,7 @@ main =
         (\e -> println "DENIED")
         (Task.andThen
             (\resp -> println (String.fromInt resp.status))
-            (Http.get (System.getenvOr "SKY_HTTP_TEST_URL" "http://127.0.0.1:1")))
+            (Http.get (System.getenvOr "IPE_HTTP_TEST_URL" "http://127.0.0.1:1")))
 "#;
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -186,7 +186,7 @@ main =
 /// Propagates any pipeline, build, or process-launch failure as a test error.
 #[test]
 fn http_get_fixture() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -195,10 +195,10 @@ fn http_get_fixture() -> Result<(), BoxError> {
         "HTTP/1.1 200 OK\r\nContent-Length: 9\r\nConnection: close\r\n\r\nhello get",
     )?;
 
-    let exe = compile_and_build("http_get_fixture", SKY_HTTP_GET_PROGRAM)?;
+    let exe = compile_and_build("http_get_fixture", IPE_HTTP_GET_PROGRAM)?;
 
     let out = Command::new(&exe)
-        .env("SKY_HTTP_TEST_URL", &url)
+        .env("IPE_HTTP_TEST_URL", &url)
         .output()
         .map_err(|e| -> BoxError { format!("http_get_fixture: cannot run binary: {e}").into() })?;
 
@@ -227,7 +227,7 @@ fn http_get_fixture() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, or process-launch failure as a test error.
 #[test]
 fn http_post_fixture() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -236,10 +236,10 @@ fn http_post_fixture() -> Result<(), BoxError> {
         "HTTP/1.1 201 Created\r\nContent-Length: 10\r\nConnection: close\r\n\r\nhello post",
     )?;
 
-    let exe = compile_and_build("http_post_fixture", SKY_HTTP_POST_PROGRAM)?;
+    let exe = compile_and_build("http_post_fixture", IPE_HTTP_POST_PROGRAM)?;
 
     let out = Command::new(&exe)
-        .env("SKY_HTTP_TEST_URL", &url)
+        .env("IPE_HTTP_TEST_URL", &url)
         .output()
         .map_err(|e| -> BoxError { format!("http_post_fixture: cannot run binary: {e}").into() })?;
 
@@ -257,7 +257,7 @@ fn http_post_fixture() -> Result<(), BoxError> {
     Ok(())
 }
 
-/// `Http.get` to a LIVE `127.0.0.1` fixture with `SKY_HTTP_DENY_PRIVATE=1` is
+/// `Http.get` to a LIVE `127.0.0.1` fixture with `IPE_HTTP_DENY_PRIVATE=1` is
 /// BLOCKED.
 ///
 /// A live loopback fixture IS started and its URL is handed to the program. This
@@ -265,7 +265,7 @@ fn http_post_fixture() -> Result<(), BoxError> {
 /// plain connection-refused cannot masquerade as a guard block. If the SSRF guard
 /// did NOT fire, `Http.get` would connect to the fixture and the program would
 /// print `200` (the andThen success branch) instead of `DENIED`. With
-/// `SKY_HTTP_DENY_PRIVATE=1` the guard rejects the loopback address at
+/// `IPE_HTTP_DENY_PRIVATE=1` the guard rejects the loopback address at
 /// resolution time — before any connection — so the fixture is never contacted
 /// and the program prints `DENIED`.
 ///
@@ -278,7 +278,7 @@ fn http_post_fixture() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, or process-launch failure as a test error.
 #[test]
 fn http_ssrf_deny_loopback() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -291,11 +291,11 @@ fn http_ssrf_deny_loopback() -> Result<(), BoxError> {
         "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi",
     )?;
 
-    let exe = compile_and_build("http_ssrf_deny_loopback", SKY_HTTP_SSRF_PROGRAM)?;
+    let exe = compile_and_build("http_ssrf_deny_loopback", IPE_HTTP_SSRF_PROGRAM)?;
 
     let out = Command::new(&exe)
-        .env("SKY_HTTP_DENY_PRIVATE", "1")
-        .env("SKY_HTTP_TEST_URL", &url)
+        .env("IPE_HTTP_DENY_PRIVATE", "1")
+        .env("IPE_HTTP_TEST_URL", &url)
         .output()
         .map_err(|e| -> BoxError {
             format!("http_ssrf_deny_loopback: cannot run binary: {e}").into()

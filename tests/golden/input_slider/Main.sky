@@ -5,7 +5,7 @@ import Std.Ui as Ui
 import Std.Ui.Input as Input
 
 
--- i148 regression: Input.slider must type-check and lower without SKY-N0005.
+-- i148 regression: Input.slider must type-check and lower without IPE-N0005.
 -- The cfg record carries onChange/value/min/max/step/label.
 
 type Msg

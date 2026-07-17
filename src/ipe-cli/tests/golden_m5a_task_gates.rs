@@ -1,6 +1,6 @@
 //! Task type-annotation gate: the error channel of `Task E a` must always be
 //! `Error`.  Any annotation `Task <X> a` where `X` is not `Error` (e.g. `Task String
-//! Int`, `Task Int a`) is a hard type-error, surfacing SKY-T0001 from
+//! Int`, `Task Int a`) is a hard type-error, surfacing IPE-T0001 from
 //! `normalize_annotation_ty` with message "expected Error, found X".
 //!
 //! This file tests the REJECT side of the reconciliation fix.  The ACCEPT side
@@ -44,7 +44,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code)
     );
 }
 
-/// `Task String Int` must be rejected with SKY-T0001 ("expected Error, found
+/// `Task String Int` must be rejected with IPE-T0001 ("expected Error, found
 /// String").  The `normalize_annotation_ty` pass validates the error channel
 /// of every 2-arg `Task` annotation and rejects anything other than `Error`.
 #[test]
@@ -52,11 +52,11 @@ fn task_bad_error_channel_is_sky_t0001() {
     assert_gate(
         "gate_task_bad_error",
         "m5a_gate_task_bad_error_emit",
-        ipe_diagnostics::SKY_T0001,
+        ipe_diagnostics::IPE_T0001,
     );
 }
 
-/// `Task.fail "plain string"` must be rejected with SKY-T0001 ("expected
+/// `Task.fail "plain string"` must be rejected with IPE-T0001 ("expected
 /// Error, found String"). An over-polymorphic `K::TaskFail` scheme
 /// (`fun(var(1), task(var(0)))`) would let a bare `String` argument HM-check and
 /// only blow up later at the emitted project's `cargo build` (E0308,
@@ -74,37 +74,37 @@ fn task_fail_string_literal_is_sky_t0001() {
     assert_gate(
         "gate_task_fail_string",
         "m5a_gate_task_fail_string_emit",
-        ipe_diagnostics::SKY_T0001,
+        ipe_diagnostics::IPE_T0001,
     );
 }
 
 /// A mis-arity `Cmd` ANNOTATION (`Cmd Int Bool` — Cmd
-/// takes exactly ONE message type) must be a clean SKY-T0016, not the
-/// SKY-I0001 ICE a Task-only gate would leave the sibling carriers with.
+/// takes exactly ONE message type) must be a clean IPE-T0016, not the
+/// IPE-I0001 ICE a Task-only gate would leave the sibling carriers with.
 /// `normalize_annotation_ty` validates Cmd/Sub arity too.
 #[test]
 fn cmd_annotation_wrong_arity_is_sky_t0016_not_ice() {
     assert_gate(
         "gate_cmd_arity",
         "m5a_gate_cmd_arity_emit",
-        ipe_diagnostics::SKY_T0016,
+        ipe_diagnostics::IPE_T0016,
     );
 }
 
 /// A mis-arity `Sub` in a CTOR PAYLOAD must be a clean
-/// SKY-T0016 at the ctor span, via `lower_enum`'s Gate 0a (covering all three
+/// IPE-T0016 at the ctor span, via `lower_enum`'s Gate 0a (covering all three
 /// async carriers).
 #[test]
 fn sub_ctor_payload_wrong_arity_is_sky_t0016_not_ice() {
     assert_gate(
         "gate_sub_ctor_arity",
         "m5a_gate_sub_ctor_arity_emit",
-        ipe_diagnostics::SKY_T0016,
+        ipe_diagnostics::IPE_T0016,
     );
 }
 
 /// A `Task` ANNOTATION with the wrong arity (`Task Error Int Bool`,
-/// three type arguments) must surface a clean SKY-T0016 diagnostic — NOT a
+/// three type arguments) must surface a clean IPE-T0016 diagnostic — NOT a
 /// generic `CompilerBug` ICE ("please report"). Reachable from source
 /// because canonicalisation validates arity only for type *aliases*, never for a
 /// non-alias constructor application like `Task`. `normalize_annotation_ty`'s
@@ -114,6 +114,6 @@ fn task_annotation_arity_three_is_sky_t0016_not_ice() {
     assert_gate(
         "gate_task_arity_three",
         "m5a_gate_task_arity_three_emit",
-        ipe_diagnostics::SKY_T0016,
+        ipe_diagnostics::IPE_T0016,
     );
 }

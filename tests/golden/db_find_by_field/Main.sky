@@ -16,7 +16,7 @@ module Main exposing (main)
 -- `formatRow` is a TOP-LEVEL function (not a `let`-bound closure) so it can be
 -- passed as a bare value to `List.map` from inside deeply nested
 -- `Task.andThen` continuations without tripping the captured-closure-as-value
--- limitation (SKY-L0126) — top-level function references are not local
+-- limitation (IPE-L0126) — top-level function references are not local
 -- captures.
 --
 -- NOTE on the empty-vs-non-empty check for `many`/`none` (both

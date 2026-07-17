@@ -1,4 +1,4 @@
-//! SKY-L0102 regression seal — wildcard lambda parameter `\_ -> expr`.
+//! IPE-L0102 regression seal — wildcard lambda parameter `\_ -> expr`.
 //!
 //! A `PAnything` (wildcard `_`) lambda parameter whose type is a free
 //! `Ty::Var(_)` — a type variable HM inference leaves unconstrained because the
@@ -19,10 +19,10 @@
 //!
 //! Asserts skyc-0 ∧ cargo-0 ∧ run produces expected output.
 //!
-//! Gated on `SKY_E2E=1`. Run:
+//! Gated on `IPE_E2E=1`. Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_l0102_wildcard_lambda_pany
+//! IPE_E2E=1 cargo test -p skyc --test golden_l0102_wildcard_lambda_pany
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -36,7 +36,7 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn wildcard_lambda_pany_skyc_cargo_and_run_zero() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -54,12 +54,12 @@ fn wildcard_lambda_pany_skyc_cargo_and_run_zero() {
     let Ok(runtime) = runtime else { return };
 
     // skyc-0: compiler must succeed.  Without the wildcard mapping this fails
-    // with SKY-L0102 ("unsupported feature: Polymorphism") on the `\_ ->`
+    // with IPE-L0102 ("unsupported feature: Polymorphism") on the `\_ ->`
     // lambda parameter.
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for wildcard_lambda_pany (was: SKY-L0102 Polymorphism): {:?}",
+        "skyc build must succeed for wildcard_lambda_pany (was: IPE-L0102 Polymorphism): {:?}",
         built.err()
     );
 

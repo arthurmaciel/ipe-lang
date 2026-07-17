@@ -26,7 +26,7 @@
 //!
 //! Run:
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_i198_decoder_payload_mapper
+//! IPE_E2E=1 cargo test -p skyc --test golden_i198_decoder_payload_mapper
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -47,7 +47,7 @@ fn entry_path(root: &Path) -> PathBuf {
 
 /// skyc-0: the compiler must accept the program AND render the mapper lambda's
 /// function-typed payload parameter as the runtime's Send-only `FnOnce` chain —
-/// checked unconditionally (cheap, no `cargo`), independent of the `SKY_E2E`
+/// checked unconditionally (cheap, no `cargo`), independent of the `IPE_E2E`
 /// gate. This is the exact assertion the E0308/E0277 SEAL break cannot recur:
 /// the `\f -> f 10` mapper param must be `Box<dyn FnOnce(i64) -> i64 + Send>`
 /// (never a `+ Sync`-stamped `Box<dyn Fn>`).
@@ -95,11 +95,11 @@ fn i198_skyc_accepts_and_renders_send_only_fnonce_param() {
 
 /// cargo-0 ∧ run-0: the emitted project actually compiles with `rustc` (no
 /// E0308 / E0277 from the payload-param `Fn`/`FnOnce` + `Sync` mismatch) and
-/// prints the decoded result. Gated on `SKY_E2E=1` — the only check that would
+/// prints the decoded result. Gated on `IPE_E2E=1` — the only check that would
 /// have caught the original SEAL violation (skyc-0, cargo-fail).
 #[test]
 fn i198_cargo_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

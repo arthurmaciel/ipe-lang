@@ -50,7 +50,7 @@ fn assert_byte_identical(name: &str) {
 }
 
 fn assert_runs_and_matches_oracle(name: &str) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -98,7 +98,7 @@ fn pipe_mixed_append_emits_byte_identical_main_rs() {
     assert_byte_identical("mixed_append");
 }
 
-// ── E2E oracle tests (gated on SKY_E2E=1) ────────────────────────────────────
+// ── E2E oracle tests (gated on IPE_E2E=1) ────────────────────────────────────
 
 #[test]
 fn pipe_chain_builds_and_prints_three() {

@@ -1,7 +1,7 @@
 //! Seal — constructors as first-class function values.
 //!
 //! A constructor of arity N in a value / partial-application position must not
-//! emit `Err(unsupported(…, Feature::CtorAsFunction))` (SKY-L0113).  The
+//! emit `Err(unsupported(…, Feature::CtorAsFunction))` (IPE-L0113).  The
 //! lowerer routes such sites into `eta_expand_partial_ctor`, producing an
 //! eta-wrapped closure that captures the supplied args (with T4 capture-
 //! clone discipline) and takes the remaining ones as lambda parameters:
@@ -20,17 +20,17 @@
 //!   `Tagged "item"` mapped over `[10, 20, 30]` → `"item:10, item:20, item:30"`.
 //! * **A3** (`ctor_field`) — ctor as a HOF argument (user-fn taking `String -> Box`):
 //!   `applyMk Wrap "hello"` → `"hello"`. (Records cannot hold function-typed fields
-//!   per SKY-L0107; the equivalent "first-class ctor" story holds via HOF arguments.)
+//!   per IPE-L0107; the equivalent "first-class ctor" story holds via HOF arguments.)
 //!
 //! All three also verify that the `gate_partial` fixture (formerly the
-//! SKY-L0113 gate) now COMPILES SUCCESSFULLY as a positive regression.
+//! IPE-L0113 gate) now COMPILES SUCCESSFULLY as a positive regression.
 //!
-//! Gated: green fixtures (A1-A3) require `SKY_E2E=1` for the cargo build+run
+//! Gated: green fixtures (A1-A3) require `IPE_E2E=1` for the cargo build+run
 //! step; the `gate_partial` positive-compile check runs always.
 //!
 //! ```text
 //! # green suite (cargo-0 required):
-//! SKY_E2E=1 cargo test -p skyc --test golden_i147_ctor_as_fn_seal
+//! IPE_E2E=1 cargo test -p skyc --test golden_i147_ctor_as_fn_seal
 //!
 //! # positive-compile check only (fast):
 //! cargo test -p skyc --test golden_i147_ctor_as_fn_seal
@@ -46,7 +46,7 @@ fn repo_root() -> PathBuf {
 }
 
 /// Assert that `skyc::build(fixture)` SUCCEEDS (exit-0 from the lowerer).
-/// Runs without `SKY_E2E` so this check is always fast.
+/// Runs without `IPE_E2E` so this check is always fast.
 fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
     let root = repo_root();
     let entry = root
@@ -68,10 +68,10 @@ fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
     );
 }
 
-// ── gate_partial positive-compile (formerly SKY-L0113 gate) ──────────────
+// ── gate_partial positive-compile (formerly IPE-L0113 gate) ──────────────
 
 /// The `gate_partial` fixture (`Node x 1` — arity-3 ctor with 2 supplied
-/// args) must COMPILE SUCCESSFULLY (not surface SKY-L0113).
+/// args) must COMPILE SUCCESSFULLY (not surface IPE-L0113).
 #[test]
 fn m3a_gate_partial_now_compiles() {
     assert_skyc_ok("gate_partial", "i147_m3a_gate_partial_positive");
@@ -86,7 +86,7 @@ fn m3a_gate_partial_now_compiles() {
 fn a1_ctor_map_bare() {
     assert_skyc_ok("ctor_map_bare", "i147_ctor_map_bare_emit");
 
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -114,7 +114,7 @@ fn a1_ctor_map_bare() {
     assert_eq!(
         outcome.exit_code,
         Some(0),
-        "A1: must exit 0 (was SKY-L0113 before #147)"
+        "A1: must exit 0 (was IPE-L0113 before #147)"
     );
     assert!(
         outcome.stdout.contains("1, 2, 3"),
@@ -133,7 +133,7 @@ fn a1_ctor_map_bare() {
 fn a2_ctor_partial_multiarg_with_clone() {
     assert_skyc_ok("ctor_partial", "i147_ctor_partial_emit");
 
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -161,7 +161,7 @@ fn a2_ctor_partial_multiarg_with_clone() {
     assert_eq!(
         outcome.exit_code,
         Some(0),
-        "A2: must exit 0 (was SKY-L0113 before #147)"
+        "A2: must exit 0 (was IPE-L0113 before #147)"
     );
     assert!(
         outcome.stdout.contains("item:10, item:20, item:30"),
@@ -180,7 +180,7 @@ fn a2_ctor_partial_multiarg_with_clone() {
 fn a3_ctor_stored_in_record_field() {
     assert_skyc_ok("ctor_field", "i147_ctor_field_emit");
 
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -208,7 +208,7 @@ fn a3_ctor_stored_in_record_field() {
     assert_eq!(
         outcome.exit_code,
         Some(0),
-        "A3: must exit 0 (was SKY-L0113 before #147)"
+        "A3: must exit 0 (was IPE-L0113 before #147)"
     );
     assert!(
         outcome.stdout.contains("hello"),

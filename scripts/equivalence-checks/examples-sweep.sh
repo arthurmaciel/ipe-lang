@@ -23,7 +23,7 @@
 #
 # PHASED Go-parity: EQUIVALENCE needs a Go reference built by the Haskell `sky`
 # compiler, which this repo does NOT have. The FIRST CI iteration runs BUILD+RUN
-# only (SKY_SWEEP_NO_EQUIV=1). The EQUIVALENCE column + build_go() below are kept intact
+# only (IPE_SWEEP_NO_EQUIV=1). The EQUIVALENCE column + build_go() below are kept intact
 # so parity can be turned on later (see docs/architecture/class2-tier1-sweep-fix-spec-2026-07-09.md §1).
 #
 # GREEN row  = BUILD ok AND RUN ok AND EQUIVALENCE ∈ {equivalence-*, n/a, —, amber go-ref-broken}.
@@ -32,10 +32,10 @@
 # VERDICT PASS iff no RED row.
 #
 # FLAGS:
-#   SKY_SWEEP_BUILD_ONLY=1  → BUILD column only (RUN + EQUIVALENCE = `—`). No `go`.
-#   SKY_SWEEP_NO_EQUIV=1    → BUILD + RUN; EQUIVALENCE skipped (`—`).  ← phase-1 default.
-#   SKY_SWEEP_FORCE=1       → override the (opt-in) night gate + mem-guard warn.
-#   SKY_SWEEP_NIGHT_GATE=1  → re-enable the local 22:00–08:00 BRT deferral window.
+#   IPE_SWEEP_BUILD_ONLY=1  → BUILD column only (RUN + EQUIVALENCE = `—`). No `go`.
+#   IPE_SWEEP_NO_EQUIV=1    → BUILD + RUN; EQUIVALENCE skipped (`—`).  ← phase-1 default.
+#   IPE_SWEEP_FORCE=1       → override the (opt-in) night gate + mem-guard warn.
+#   IPE_SWEEP_NIGHT_GATE=1  → re-enable the local 22:00–08:00 BRT deferral window.
 #   RUST_EXAMPLES="01-… 19-…" → subset override (paths or basenames).
 #
 # Exit: 0 = no RED row · 1 = a RED row · 2 = setup/gate.
@@ -46,11 +46,11 @@ source "$(dirname "$0")/../lib/env.sh"
 source "$(dirname "$0")/../lib/examples.sh"
 source "$(dirname "$0")/../lib/checks.sh"
 
-# ── Night gate (OPT-IN via SKY_SWEEP_NIGHT_GATE=1; off by default so CI runs) ─
+# ── Night gate (OPT-IN via IPE_SWEEP_NIGHT_GATE=1; off by default so CI runs) ─
 night_guard "examples-sweep"
 
 if [ -z "$REPO" ] || [ ! -f "$REPO/scripts/equivalence-checks/examples-sweep.sh" ]; then
-  echo "ERROR: can't locate the repo. cd into it, or set SKY_REPO=/path/to/sky-rust." >&2; exit 2
+  echo "ERROR: can't locate the repo. cd into it, or set IPE_REPO=/path/to/sky-rust." >&2; exit 2
 fi
 cd "$REPO"
 if [ ! -x "$SKYC_BIN" ]; then
@@ -69,15 +69,15 @@ if ! pgrep -f 'mem-guard\.sh' >/dev/null 2>&1; then
 fi
 
 # ── Mode flags ───────────────────────────────────────────────────────────────
-BUILD_ONLY="${SKY_SWEEP_BUILD_ONLY:-0}"
-NO_EQUIV="${SKY_SWEEP_NO_EQUIV:-0}"
+BUILD_ONLY="${IPE_SWEEP_BUILD_ONLY:-0}"
+NO_EQUIV="${IPE_SWEEP_NO_EQUIV:-0}"
 [ "$BUILD_ONLY" = 1 ] && NO_EQUIV=1
 if [ "$BUILD_ONLY" != 1 ]; then
-  command -v curl >/dev/null 2>&1 || { echo "ERROR: curl required for RUN/EQUIVALENCE (set SKY_SWEEP_BUILD_ONLY=1)." >&2; exit 2; }
-  command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 required for free_port (set SKY_SWEEP_BUILD_ONLY=1)." >&2; exit 2; }
+  command -v curl >/dev/null 2>&1 || { echo "ERROR: curl required for RUN/EQUIVALENCE (set IPE_SWEEP_BUILD_ONLY=1)." >&2; exit 2; }
+  command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 required for free_port (set IPE_SWEEP_BUILD_ONLY=1)." >&2; exit 2; }
 fi
 if [ "$NO_EQUIV" != 1 ]; then
-  command -v go >/dev/null 2>&1 || { echo "ERROR: go required for Go≡Rust EQUIVALENCE (set SKY_SWEEP_NO_EQUIV=1 or SKY_SWEEP_BUILD_ONLY=1)." >&2; exit 2; }
+  command -v go >/dev/null 2>&1 || { echo "ERROR: go required for Go≡Rust EQUIVALENCE (set IPE_SWEEP_NO_EQUIV=1 or IPE_SWEEP_BUILD_ONLY=1)." >&2; exit 2; }
 fi
 # rg is required by is_out_of_scope (the build_set Go-FFI filter) in EVERY mode.
 command -v rg >/dev/null 2>&1 || { echo "ERROR: rg (ripgrep) required for the example-scope filter (is_out_of_scope). Install ripgrep." >&2; exit 2; }
@@ -117,15 +117,15 @@ say() { echo "$@" | tee -a "$RUNLOG"; }
 # across rows-$STAMP.tsv / sweep-$STAMP.table / the per-example logs.
 diag() { printf '%s/%s.%s.%s\n' "$HIST" "$1" "$STAMP" "$2"; }
 say "=== ipê EXAMPLES sweep @ $STAMP (repo: $REPO · skyc: $SKYC_BIN) ==="
-[ "$BUILD_ONLY" = 1 ] && say "  (SKY_SWEEP_BUILD_ONLY=1 — BUILD column only; RUN+EQUIVALENCE skipped)"
-[ "$BUILD_ONLY" != 1 ] && [ "$NO_EQUIV" = 1 ] && say "  (SKY_SWEEP_NO_EQUIV=1 — BUILD+RUN; EQUIVALENCE skipped — the phase-1 default)"
+[ "$BUILD_ONLY" = 1 ] && say "  (IPE_SWEEP_BUILD_ONLY=1 — BUILD column only; RUN+EQUIVALENCE skipped)"
+[ "$BUILD_ONLY" != 1 ] && [ "$NO_EQUIV" = 1 ] && say "  (IPE_SWEEP_NO_EQUIV=1 — BUILD+RUN; EQUIVALENCE skipped — the phase-1 default)"
 [ "$NO_EQUIV" = 1 ] || [ "$WEB_OK" = 1 ] || say "  NOTE: browser stack incomplete — scenario equivalence falls back to normalised HTML body comparison (GET / → #sky-root diff via equivalence_normalize_html.py)."
 
 # ── skyc build target for an example dir — sky.toml if present, else src/Main.sky
 # skyc's project build (src/ipe-cli/src/lib.rs build_project) needs a sky.toml to
 # discover multi-module projects; the single-file build takes an entry `.sky`.
 # All vendored examples ship sky.toml EXCEPT 26-ui-showcase (which is multi-module
-# but has no sky.toml — it will single-file-build and surface a real SKY-N0020 for
+# but has no sky.toml — it will single-file-build and surface a real IPE-N0020 for
 # its local `RegressionGates` import until a sky.toml is added upstream). See the
 # port doc's TODO(verify).
 skyc_build_target() {
@@ -137,12 +137,12 @@ skyc_build_target() {
 BUILD_CELL=""
 WARN_CELL=0
 build_rust() {
-  local d="$1" n="$2" tmo="${SKY_SWEEP_BUILD_TIMEOUT:-900}" tgt attempt ok=0
+  local d="$1" n="$2" tmo="${IPE_SWEEP_BUILD_TIMEOUT:-900}" tgt attempt ok=0
   local skyclog cargolog; skyclog="$(diag "$n" skyc.log)"; cargolog="$(diag "$n" cargo.log)"
   tgt="$(skyc_build_target "$d")"
   for attempt in 1 2 3 4; do
     # --runtime is left to skyc's auto-resolve (walks up to $REPO/src/runtime/rust/src/
-    # sky_runtime); SKY_RUNTIME_DIR is exported by env.sh as a belt-and-braces.
+    # sky_runtime); IPE_RUNTIME_DIR is exported by env.sh as a belt-and-braces.
     if ( cd "$d" && timeout "$tmo" "$SKYC_BIN" build "$tgt" --out sky-out/rust >"$skyclog" 2>&1 ); then
       ok=1; break
     fi
@@ -169,23 +169,23 @@ build_rust() {
 
 # ── build_go <dir> <example> → 0=ok (binary at $d/sky-out/app), 1=fail ──────
 # PHASED: only reachable when NO_EQUIV=0. Go reference = the Haskell `sky`.
-# Resolution order: $SKY_GO_BIN → pinned $REPO/tools/oracle/bin/sky (the
+# Resolution order: $IPE_GO_BIN → pinned $REPO/tools/oracle/bin/sky (the
 # v0.17.3 sky-linux-x64 release, fetched not committed) → `sky` on PATH.
 # The pinned binary keeps the reference at the PORT-TARGET version so we never
 # read v0.16↔v0.17 stdlib skew as a parity failure.
 build_go() {
-  local d="$1" n="$2" go_bin="${SKY_GO_BIN:-}"
+  local d="$1" n="$2" go_bin="${IPE_GO_BIN:-}"
   if [ -z "$go_bin" ]; then
     if [ -x "$REPO/tools/oracle/bin/sky" ]; then go_bin="$REPO/tools/oracle/bin/sky"; else go_bin="sky"; fi
   fi
   command -v "$go_bin" >/dev/null 2>&1 || return 1
-  # SKY_RUNTIME_DIR is a skyc-ONLY knob (env.sh exports it so skyc's --runtime
+  # IPE_RUNTIME_DIR is a skyc-ONLY knob (env.sh exports it so skyc's --runtime
   # auto-resolve is CWD-independent). The Haskell `sky` Go reference ALSO honours
-  # SKY_RUNTIME_DIR — and would vendor the REPO's *Rust* runtime tree as its Go
+  # IPE_RUNTIME_DIR — and would vendor the REPO's *Rust* runtime tree as its Go
   # `rt/` package, yielding `undefined: rt.SetPortDefault` (every rt.* symbol) at
   # `go build`. `sky` has its own TH-embedded Go runtime, so the reference build
-  # MUST run with SKY_RUNTIME_DIR unset. `env -u` scopes the unset to this child.
-  ( cd "$d" && env -u SKY_RUNTIME_DIR timeout 300 "$go_bin" build src/Main.sky >"$(diag "$n" go.build.log)" 2>&1 )
+  # MUST run with IPE_RUNTIME_DIR unset. `env -u` scopes the unset to this child.
+  ( cd "$d" && env -u IPE_RUNTIME_DIR timeout 300 "$go_bin" build src/Main.sky >"$(diag "$n" go.build.log)" 2>&1 )
   sync
   [ -x "$d/sky-out/app" ]
 }
@@ -318,7 +318,7 @@ run_for() {
       else printf 'panic\ttui panicked\n'; fi
       ;;
     webview)
-      if ! command -v xvfb-run >/dev/null 2>&1 && [ "$SKY_HOST_OS" = linux ]; then printf 'skip\twebview: install xvfb to run headless\n'
+      if ! command -v xvfb-run >/dev/null 2>&1 && [ "$IPE_HOST_OS" = linux ]; then printf 'skip\twebview: install xvfb to run headless\n'
       else
         exercise_webview "$bin" "$rl"; local rc=$?
         if   [ "$rc" = 0 ]; then printf 'ok\t\n'
@@ -472,7 +472,7 @@ if [ -f "$WARNS" ]; then
   done < "$WARNS"
 fi
 WARN_FAIL=0
-[ "$WARN_TOTAL" -gt 0 ] && [ "${SKY_SWEEP_WARN_GATE:-1}" != 0 ] && WARN_FAIL=1
+[ "$WARN_TOTAL" -gt 0 ] && [ "${IPE_SWEEP_WARN_GATE:-1}" != 0 ] && WARN_FAIL=1
 
 say ""
 say "  summary: $GREEN green · $RED red · $SKIP skipped (of $TOTAL) · amber go-ref-broken=$AMBER"

@@ -23,7 +23,7 @@ value*. A member listed as a `&str` in the hand-written `QUALIFIERS` array
 (`env.rs:327`) is inserted into `qual_vars` with `id = None` whenever the
 registry lookup misses. Name-resolution and type-check then pass — the member is
 reachable — and the hole only detonates ~5 stages later at `lower_callee` (the
-`Feature::Kernels` / SKY-L0108 fallback) or, worse, as exit-0-then-cargo-fail.
+`Feature::Kernels` / IPE-L0108 fallback) or, worse, as exit-0-then-cargo-fail.
 The member set is authored **twice** (the `QUALIFIERS`/`FUNC_ALIASES`/
 `QUALIFIER_ALIASES` string arrays vs `StdlibKernel::ALL`), and the two drift,
 with `id = None` as the drift sink.
@@ -243,7 +243,7 @@ crates/sky_canon/src/resolve.rs          (drop Option seams; Deferred use-site d
 crates/sky_canon/src/ast.rs              (VarKernel drops Option id)
 crates/sky_canon/src/lib.rs              (total-partition test; retire canon_equals_registry role)
 crates/sky_types/src/constrain.rs        (stdlib_scheme total over Backing; Backing → scheme)
-crates/sky_lower/src/lower.rs            (delete legacy string dispatch + SKY-L0108 hole; tag/value injection)
+crates/sky_lower/src/lower.rs            (delete legacy string dispatch + IPE-L0108 hole; tag/value injection)
 crates/sky_backend_rust/src/naming.rs    (generic kernel names)
 crates/sky_backend_rust/src/emit_expr.rs (single emit_html_tag arm; SafeAttrName sinks)
 runtime/src/sky_runtime/ui/{helpers.rs,element.rs,render.rs}

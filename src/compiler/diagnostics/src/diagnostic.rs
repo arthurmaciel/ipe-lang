@@ -10,20 +10,20 @@
 //! so existing call sites keep compiling while producers migrate.
 
 use crate::code::{
-    Code, SKY_I0001, SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101, SKY_I0102, SKY_I0103, SKY_I0200,
-    SKY_I0201, SKY_I0202, SKY_I0203, SKY_L0100, SKY_L0101, SKY_L0102, SKY_L0103, SKY_L0104,
-    SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110, SKY_L0111, SKY_L0112, SKY_L0113,
-    SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0117, SKY_L0118, SKY_L0119, SKY_L0120, SKY_L0121,
-    SKY_L0122, SKY_L0123, SKY_L0124, SKY_L0125, SKY_L0126, SKY_L0127, SKY_L0128, SKY_L0200,
-    SKY_N0001,
-    SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011, SKY_N0012, SKY_N0013,
-    SKY_N0020, SKY_N0021, SKY_N0022, SKY_N0023, SKY_N0024, SKY_N0025, SKY_N0026, SKY_N0027,
-    SKY_N0028,
-    SKY_P0001,
-    SKY_P0002, SKY_P0003, SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013, SKY_P0014, SKY_P0015,
-    SKY_P0016, SKY_P0017, SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031, SKY_P0040, SKY_P0041,
-    SKY_P0050, SKY_P0060, SKY_P0061, SKY_P0062, SKY_T0001, SKY_T0002, SKY_T0003, SKY_T0004,
-    SKY_T0010, SKY_T0011, SKY_T0012, SKY_T0013, SKY_T0014, SKY_T0015, SKY_T0016, SKY_T0017,
+    Code, IPE_I0001, IPE_I0010, IPE_I0011, IPE_I0100, IPE_I0101, IPE_I0102, IPE_I0103, IPE_I0200,
+    IPE_I0201, IPE_I0202, IPE_I0203, IPE_L0100, IPE_L0101, IPE_L0102, IPE_L0103, IPE_L0104,
+    IPE_L0105, IPE_L0106, IPE_L0107, IPE_L0108, IPE_L0110, IPE_L0111, IPE_L0112, IPE_L0113,
+    IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119, IPE_L0120, IPE_L0121,
+    IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127, IPE_L0128, IPE_L0200,
+    IPE_N0001,
+    IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013,
+    IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027,
+    IPE_N0028,
+    IPE_P0001,
+    IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014, IPE_P0015,
+    IPE_P0016, IPE_P0017, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040, IPE_P0041,
+    IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004,
+    IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017,
     Severity,
 };
 use crate::span::Span;
@@ -271,55 +271,55 @@ pub enum ParseError {
     Unexpected,
     /// Coarse "recursion-depth guard tripped" (Milestone 0 — retained).
     TooDeep,
-    /// A token was found where the grammar wanted one of `expected`. [SKY-P0001]
+    /// A token was found where the grammar wanted one of `expected`. [IPE-P0001]
     UnexpectedToken {
         found: TokenKind,
         expected: ExpectedSet,
     },
-    /// Input ended while `construct` still required more tokens. [SKY-P0002]
+    /// Input ended while `construct` still required more tokens. [IPE-P0002]
     UnexpectedEof { construct: Construct },
-    /// Nesting of `construct` exceeded `limit`. [SKY-P0003]
+    /// Nesting of `construct` exceeded `limit`. [IPE-P0003]
     NestingTooDeep { construct: Construct, limit: u16 },
-    /// A byte that is not a recognised character. [SKY-P0010]
+    /// A byte that is not a recognised character. [IPE-P0010]
     UnknownChar(char),
-    /// A lone `.` not part of `..` or a qualified name. [SKY-P0011]
+    /// A lone `.` not part of `..` or a qualified name. [IPE-P0011]
     StrayDot,
-    /// A digit immediately followed by an identifier character. [SKY-P0012]
+    /// A digit immediately followed by an identifier character. [IPE-P0012]
     NumberJoinedToName(char),
-    /// An integer literal that does not fit in `i64`. [SKY-P0013]
+    /// An integer literal that does not fit in `i64`. [IPE-P0013]
     IntLiteralOutOfRange,
     /// A float literal whose magnitude overflows `f64` to infinity
-    /// (e.g. `1e400`). [SKY-P0016]
+    /// (e.g. `1e400`). [IPE-P0016]
     FloatLiteralOutOfRange,
     /// A string literal `"…` whose closing `"` is missing before end of input
-    /// (or before the line ends). [SKY-P0014]
+    /// (or before the line ends). [IPE-P0014]
     UnterminatedString,
     /// A character literal `'…` that is malformed — unterminated, empty (`''`),
-    /// or carrying more than one character before the closing `'`. [SKY-P0015]
+    /// or carrying more than one character before the closing `'`. [IPE-P0015]
     MalformedChar,
     /// A block comment `{- … ` whose closing `-}` is missing before end of
     /// input. Nesting is supported (`{- {- -} -}`), so the scanner counts
-    /// depth; depth > 0 at EOF triggers this error. [SKY-P0017]
+    /// depth; depth > 0 at EOF triggers this error. [IPE-P0017]
     UnterminatedBlockComment,
-    /// The module header is malformed. [SKY-P0020]
+    /// The module header is malformed. [IPE-P0020]
     MalformedModuleHeader(HeaderDefect),
-    /// The `exposing (...)` list is malformed. [SKY-P0021]
+    /// The `exposing (...)` list is malformed. [IPE-P0021]
     MalformedExposingList(ExposingDefect),
-    /// A value binding's patterns are not followed by `=`. [SKY-P0030]
+    /// A value binding's patterns are not followed by `=`. [IPE-P0030]
     MissingEquals { binding: Box<str> },
-    /// A `type` declaration is malformed. [SKY-P0031]
+    /// A `type` declaration is malformed. [IPE-P0031]
     MalformedTypeDeclaration(TypeDeclDefect),
-    /// Type arguments applied to a non-constructor. [SKY-P0040]
+    /// Type arguments applied to a non-constructor. [IPE-P0040]
     TypeArgsOnNonConstructor,
-    /// A token that cannot begin a type. [SKY-P0041]
+    /// A token that cannot begin a type. [IPE-P0041]
     ExpectedType,
-    /// A `(` opened something that never closed; `opener` is the `(` span. [SKY-P0050]
+    /// A `(` opened something that never closed; `opener` is the `(` span. [IPE-P0050]
     UnclosedDelimiter { opener: Span },
-    /// A `case … of` expression is malformed. [SKY-P0060]
+    /// A `case … of` expression is malformed. [IPE-P0060]
     MalformedCase(CaseDefect),
-    /// A `let … in` expression is malformed. [SKY-P0061]
+    /// A `let … in` expression is malformed. [IPE-P0061]
     MalformedLet(LetDefect),
-    /// An `if … then … else …` expression is malformed. [SKY-P0062]
+    /// An `if … then … else …` expression is malformed. [IPE-P0062]
     MalformedIf(IfDefect),
 }
 
@@ -328,83 +328,83 @@ pub enum ParseError {
 pub enum NameError {
     /// Coarse "a name did not resolve" (Milestone 0 — retained additively).
     Unknown,
-    /// A bare value name resolves to nothing. [SKY-N0001]
+    /// A bare value name resolves to nothing. [IPE-N0001]
     ValueNotFound {
         name: Box<str>,
         suggestions: Box<[Box<str>]>,
     },
-    /// A type name is undefined. [SKY-N0002]
+    /// A type name is undefined. [IPE-N0002]
     TypeNotFound {
         name: Box<str>,
         suggestions: Box<[Box<str>]>,
     },
-    /// A constructor is undefined/misspelled. [SKY-N0003]
+    /// A constructor is undefined/misspelled. [IPE-N0003]
     ConstructorNotFound {
         name: Box<str>,
         suggestions: Box<[Box<str>]>,
     },
-    /// A qualifier names no module/import alias. [SKY-N0004]
+    /// A qualifier names no module/import alias. [IPE-N0004]
     UnknownModule {
         qualifier: Box<str>,
         suggestions: Box<[Box<str>]>,
     },
-    /// The qualifier resolves but the member is absent. [SKY-N0005]
+    /// The qualifier resolves but the member is absent. [IPE-N0005]
     NoSuchMember {
         module: Box<str>,
         member: Box<str>,
         suggestions: Box<[Box<str>]>,
     },
-    /// Two top-level values share a name; `first` is the earlier span. [SKY-N0010]
+    /// Two top-level values share a name; `first` is the earlier span. [IPE-N0010]
     DuplicateValue { name: Box<str>, first: Span },
-    /// Two constructors share a name; `first` is the earlier span. [SKY-N0011]
+    /// Two constructors share a name; `first` is the earlier span. [IPE-N0011]
     DuplicateConstructor { name: Box<str>, first: Span },
-    /// Two types share a name; `first` is the earlier span. [SKY-N0012]
+    /// Two types share a name; `first` is the earlier span. [IPE-N0012]
     DuplicateType { name: Box<str>, first: Span },
     /// A `type alias` is applied with the wrong number of type arguments —
     /// `Pair Int Bool` for a one-parameter `Pair a`, or a bare `Pair` where one
-    /// argument is required. A type alias must be fully applied. [SKY-N0013]
+    /// argument is required. A type alias must be fully applied. [IPE-N0013]
     AliasArity {
         name: Box<str>,
         expected: usize,
         found: usize,
     },
     /// A local module named in an `import` cannot be found under `source_root`.
-    /// `suggestions` lists close matches by Levenshtein distance. [SKY-N0020]
+    /// `suggestions` lists close matches by Levenshtein distance. [IPE-N0020]
     ModuleNotFound {
         name: Box<str>,
         suggestions: Box<[Box<str>]>,
     },
     /// The import graph for the project contains a cycle; `path` lists the
-    /// module names in cycle order (last element imports the first). [SKY-N0021]
+    /// module names in cycle order (last element imports the first). [IPE-N0021]
     ImportCycle { path: Box<[Box<str>]> },
     /// An `import M exposing (x)` names a member `x` that `M` does not expose.
-    /// `suggestions` lists close matches among `M`'s public exports. [SKY-N0022]
+    /// `suggestions` lists close matches among `M`'s public exports. [IPE-N0022]
     NameNotExposed {
         module: Box<str>,
         name: Box<str>,
         suggestions: Box<[Box<str>]>,
     },
     /// The `module` declaration at the top of a `.sky` file does not match the
-    /// path I derived from the file's location under `source_root`. [SKY-N0023]
+    /// path I derived from the file's location under `source_root`. [IPE-N0023]
     ModulePathMismatch {
         declared: Box<str>,
         expected: Box<str>,
     },
     /// Two `import` statements bring the same unqualified name into scope;
-    /// `modules` lists the origins. [SKY-N0024]
+    /// `modules` lists the origins. [IPE-N0024]
     AmbiguousImport {
         name: Box<str>,
         modules: Box<[Box<str>]>,
     },
     /// A local module's name starts with `Sky` or `Std`, which are reserved for
-    /// the standard library. [SKY-N0025]
+    /// the standard library. [IPE-N0025]
     ReservedNamespace { name: Box<str> },
     /// A user `type` / `type alias` declaration reuses a name the compiler
     /// reserves for a built-in type constructor (`Int`, `Maybe`, `Html`, `Cmd`,
     /// `Length`, …). The lowerer matches these names ahead of the user-enum
     /// lookup, so accepting the shadow would silently override the user type and
     /// miscompile with no diagnostic; it is rejected at the declaration instead.
-    /// [SKY-N0026]
+    /// [IPE-N0026]
     ReservedBuiltinType { name: Box<str> },
     /// Two `import` statements register the same qualifier (an explicit
     /// `as Alias`, or two module paths sharing a last segment) against
@@ -413,14 +413,14 @@ pub enum NameError {
     /// no diagnostic. Re-importing the SAME dep module under the same
     /// qualifier (a diamond dependency) is NOT an error — only a genuine
     /// clash between two distinct dep modules is. `first` is the earlier
-    /// import's span. [SKY-N0027]
+    /// import's span. [IPE-N0027]
     DuplicateQualifier { qualifier: Box<str>, first: Span },
     /// A standard-library binding `f = Ffi.kernel "Name"` (a Stage-4 kernel
     /// alias) names a kernel that is not registered in the kernel table. The
     /// `alias` is the raw string; `module` / `function` are its first-`_` split.
     /// FAIL-CLOSED (THE SEAL): accepting this would emit a call to a kernel that
     /// does not exist, type-checking in `skyc` but failing the downstream Rust
-    /// build — so the alias is rejected at compile time. [SKY-N0028]
+    /// build — so the alias is rejected at compile time. [IPE-N0028]
     UnknownKernelAlias {
         alias: Box<str>,
         module: Box<str>,
@@ -446,7 +446,7 @@ pub enum TypeError {
     Mismatch,
     /// Coarse "solver step budget exhausted" (Milestone 0 — retained).
     BudgetExceeded,
-    /// Two types fail to unify, with rendered expected/found. [SKY-T0001]
+    /// Two types fail to unify, with rendered expected/found. [IPE-T0001]
     ///
     /// `TyDoc`s are boxed so the `Diagnostic` enum stays small (the `Err`
     /// half of every `DResult` in the compiler).
@@ -458,31 +458,31 @@ pub enum TypeError {
         /// The diverging field/row path, e.g. `["user", "age"]`, if applicable.
         path: Box<[Box<str>]>,
     },
-    /// Occurs-check failure: `var` would have to equal a type containing it. [SKY-T0002]
+    /// Occurs-check failure: `var` would have to equal a type containing it. [IPE-T0002]
     InfiniteType { var: Box<str>, ty: Box<TyDoc> },
-    /// The solver step budget `budget` was exhausted. [SKY-T0003]
+    /// The solver step budget `budget` was exhausted. [IPE-T0003]
     StepBudgetExceeded { budget: u64 },
     /// A typed binding has more parameter patterns than its annotation has
-    /// arrows. [SKY-T0004]
+    /// arrows. [IPE-T0004]
     TooManyParameters {
         binding: Box<str>,
         signature: Box<TyDoc>,
     },
-    /// A case does not cover every constructor; `missing` lists them. [SKY-T0010]
+    /// A case does not cover every constructor; `missing` lists them. [IPE-T0010]
     NonExhaustiveCase { missing: Box<[Box<str>]> },
-    /// Two arms cover the same constructor (warning). [SKY-T0011]
+    /// Two arms cover the same constructor (warning). [IPE-T0011]
     RedundantCaseBranch { constructor: Box<str> },
     /// `Live.app` carries a non-empty `routes` list but the Model type has no
     /// `page` field, so the routes are forwarded to the non-routed path and
     /// never update the Model (warning — the program still compiles, matching
     /// the Go reference's silent no-op). Usually a mis-named routed-page field.
-    /// [SKY-L0124]
+    /// [IPE-L0124]
     RoutedAppMissingPageField {
         /// How many routes were declared.
         route_count: usize,
     },
     /// A `record.field` access whose `field` is not present in the (closed)
-    /// record type `record` — or whose base is not a record at all. [SKY-T0012]
+    /// record type `record` — or whose base is not a record at all. [IPE-T0012]
     NoSuchField { field: Box<str>, record: Box<TyDoc> },
     /// A record UPDATE (`{ p | message = … }`) on a nominal BUILTIN type
     /// (`PanicInfo` / `TypeInfo` / `ErrorInfo` / `Request`). Those types expose
@@ -490,11 +490,11 @@ pub enum TypeError {
     /// they are not structural records — there is no user-writable
     /// record-update form, and nowhere sound for the updated structural value
     /// to flow. A plain [`TypeError::NoSuchField`] here would be misleading
-    /// ("no field `message`" for a field that IS readable). [SKY-T0017]
+    /// ("no field `message`" for a field that IS readable). [IPE-T0017]
     BuiltinRecordUpdate { name: Box<str> },
     /// A constructor pattern binds a number of payload sub-patterns that differs
     /// from the constructor's declared field count (`Just` with no payload, or
-    /// `Node l r` for a three-field `Node`). [SKY-T0013]
+    /// `Node l r` for a three-field `Node`). [IPE-T0013]
     CtorPatternArity {
         ctor: Box<str>,
         expected: usize,
@@ -508,7 +508,7 @@ pub enum TypeError {
     /// super-type; `found` is the offending type. A `class` equal to
     /// [`HOF_KERNEL_RESULT_CLASS`] renders through a tailored sentence — the
     /// generic "`X` is not a `<class>` type" template reads as a confusing
-    /// double negative for that internal arity obligation. [SKY-T0014]
+    /// double negative for that internal arity obligation. [IPE-T0014]
     SuperTypeUnsatisfied { class: Box<str>, found: Box<TyDoc> },
     /// A **parameter** pattern (lambda param, function-def head, or `let`
     /// binder) is **refutable** — it can fail to match some value of its type
@@ -517,7 +517,7 @@ pub enum TypeError {
     /// discriminates. Rejecting it here — before lowering — makes a
     /// runtime match-failure on a well-typed program unrepresentable (no
     /// emitted panic arm, no `DoS`/500 surface). The offending sub-pattern's span
-    /// rides on the wrapping [`Diagnostic::Type`]. [SKY-T0015]
+    /// rides on the wrapping [`Diagnostic::Type`]. [IPE-T0015]
     RefutablePatternParameter,
     /// A `Task` type constructor applied to a number of type arguments other than
     /// 1 (the internal unary form `Task a`) or 2 (the canonical user annotation
@@ -525,7 +525,7 @@ pub enum TypeError {
     /// arity only for type *aliases* (`NameError::AliasArity`), never for a
     /// non-alias type-constructor application like `Task Error Int Bool` (3 args)
     /// or a bare `Task` (0 args). Converts a former `CompilerBug` ICE into a clean
-    /// fail-closed diagnostic naming the found argument count. [SKY-T0016]
+    /// fail-closed diagnostic naming the found argument count. [IPE-T0016]
     ///
     /// `carrier` is the async-carrier constructor name — `"Task"` (expects 1
     /// or 2 args), `"Cmd"` / `"Sub"` (expect exactly 1) — so the rendered
@@ -537,40 +537,40 @@ pub enum TypeError {
 }
 
 /// A language feature that the Milestone-0 lowerer does not yet support. Each
-/// maps to an `SKY-L01##` code; the `[feature: …]` tag matches the spec.
+/// maps to an `IPE-L01##` code; the `[feature: …]` tag matches the spec.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Feature {
-    /// Wildcard/variable/literal patterns. [SKY-L0100]
+    /// Wildcard/variable/literal patterns. [IPE-L0100]
     CasePatternKinds,
-    /// Binary operators other than `+`/`-`. [SKY-L0101]
+    /// Binary operators other than `+`/`-`. [IPE-L0101]
     BinOps,
     /// A value whose type stays fully polymorphic — the solver never pinned it
     /// to a concrete instance, so the lowerer cannot monomorphise it (the
     /// backend emits generic *functions*, but cannot yet represent an
-    /// under-determined polymorphic *value*). [SKY-L0102]
+    /// under-determined polymorphic *value*). [IPE-L0102]
     Polymorphism,
-    /// Function types in argument/return position of a value annotation. [SKY-L0103]
+    /// Function types in argument/return position of a value annotation. [IPE-L0103]
     HigherOrderValues,
-    /// Task types other than `Task ()`. [SKY-L0104]
+    /// Task types other than `Task ()`. [IPE-L0104]
     TaskResults,
-    /// Non-variable function parameters. [SKY-L0105]
+    /// Non-variable function parameters. [IPE-L0105]
     ParamPatterns,
-    /// Unannotated top-level functions with parameters. [SKY-L0106]
+    /// Unannotated top-level functions with parameters. [IPE-L0106]
     UntypedFunctions,
-    /// Bare function references / non-name callees. [SKY-L0107]
+    /// Bare function references / non-name callees. [IPE-L0107]
     FirstClassFunctions,
-    /// Kernel calls beyond the supported set. [SKY-L0108]
+    /// Kernel calls beyond the supported set. [IPE-L0108]
     Kernels,
     /// A call whose argument count differs from the callee's declared arity:
     /// partial application (`add 2` where `add` takes two) or over-application
-    /// across the arity boundary (`f 1 2` where `f` takes one). [SKY-L0110]
+    /// across the arity boundary (`f 1 2` where `f` takes one). [IPE-L0110]
     PartialOverApplication,
     /// A functional update `{ r | … }` on a record whose type is generic (a field
     /// typed by a type variable). The backend copies the base record with
     /// `.clone()`, which needs the type parameter to be `Clone`-bounded —
     /// bounded generics are unsupported, so this is a not-yet gap rather than
     /// broken Rust. Field access + construction on generic records DO work.
-    /// [SKY-L0111]
+    /// [IPE-L0111]
     BoundedRecordUpdate,
     /// A RECORD sub-pattern nested inside a constructor payload or a tuple
     /// element (`Just { x }`, `( { x }, y )`). The lowerer handles nested
@@ -579,7 +579,7 @@ pub enum Feature {
     /// nested carrier needs that carrier's record type threaded to the lowerer,
     /// which lands later. The plain nested shapes (`Just (a, b)`,
     /// `Node (Node …) x r`) are accepted; only the nested-record carrier is
-    /// gated here. [SKY-L0112]
+    /// gated here. [IPE-L0112]
     NestedPayloadPatterns,
     /// An `as`-alias in a REFUTABLE match-arm position whose inner pattern
     /// itself needs Rust-level runtime dispatch (a nested constructor,
@@ -588,13 +588,13 @@ pub enum Feature {
     /// only a dispatch-NEEDING inner is gated here, because honoring it
     /// soundly by value would double-move a non-`Copy` payload
     /// and honoring it by reference would require matching the
-    /// whole arm by reference — a materially larger redesign. [SKY-L0128]
+    /// whole arm by reference — a materially larger redesign. [IPE-L0128]
     AliasOverRefutablePayload,
     /// A data constructor named as a first-class function *value* — referenced
     /// bare (`map Just xs`) or partially applied (`Node l 1` for a three-field
     /// `Node`). The lowerer handles a *saturated* construction (`Just 5`, `Node l 1 r`);
     /// constructor-as-function awaits the same first-class-value machinery as a
-    /// partially-applied top-level function. [SKY-L0113]
+    /// partially-applied top-level function. [IPE-L0113]
     CtorAsFunction,
     /// A function value stored in a CONSTRUCTOR PAYLOAD — declared
     /// (`type Box = Mk (Int -> Int)`) or laundered there through a type variable
@@ -603,7 +603,7 @@ pub enum Feature {
     /// `Box<dyn Fn>` payload field satisfies, so accepting it would emit
     /// cargo-failing Rust. The sibling of [`Self::FirstClassFunctions`] (a
     /// function in a *record* field), split out so the message names the
-    /// constructor-payload carrier and blames the construction site. [SKY-L0114]
+    /// constructor-payload carrier and blames the construction site. [IPE-L0114]
     CtorPayloadFunction,
     /// A tuple pattern used in a position the lowerer cannot yet handle: a
     /// `case` on a tuple with MORE THAN ONE arm (needs product/literal-pattern
@@ -611,7 +611,7 @@ pub enum Feature {
     /// or a tuple function parameter) whose element is REFUTABLE — a constructor
     /// or literal — so the binding could fail at run time. The lowerer supports
     /// a single irrefutable tuple destructure (elements are variables / wildcards /
-    /// nested irrefutable tuples); the richer shapes land later. [SKY-L0115]
+    /// nested irrefutable tuples); the richer shapes land later. [IPE-L0115]
     TuplePatternMatch,
     /// A refutable pattern-discrimination shape the lowerer cannot yet route to
     /// a Rust `match`. Several `case` arms head-matching the same CONSTRUCTOR and
@@ -620,8 +620,8 @@ pub enum Feature {
     /// source order. This gate is reserved for the discrimination shapes that
     /// still lack their carrier: cons / list patterns and guarded arms. The
     /// exhaustiveness checker validates the `case` first (a non-exhaustive one is
-    /// SKY-T0010), so an unsupported shape reaching here is gated cleanly rather
-    /// than mis-lowered. [SKY-L0116]
+    /// IPE-T0010), so an unsupported shape reaching here is gated cleanly rather
+    /// than mis-lowered. [IPE-L0116]
     NestedCtorDiscrimination,
     /// A `Set Float` or `Dict Float v`. Sky's `Float` is `comparable`, so the
     /// type checker accepts it (the typing follows Sky); but the Rust backings
@@ -631,12 +631,12 @@ pub enum Feature {
     /// `Float`-keyed collection has no sound Rust representation in the standard
     /// library, so it is rejected here at lowering rather than emitting Rust
     /// `cargo` rejects. Divergence from Sky, rationale: Rust backend capability.
-    /// [SKY-L0117]
+    /// [IPE-L0117]
     FloatKeyedCollection,
     /// `Live.appRouted` (the URL-routing variant of the `Sky.Live` entry point)
     /// is not yet wired on the Rust backend. Use the non-routed `Live.app` with
     /// `init`/`update`/`view`/`subscriptions` until routing support lands.
-    /// [SKY-L0118]
+    /// [IPE-L0118]
     RoutedLiveApp,
     /// The cfg record for an app entry point (`Live.app` / `Tui.app` /
     /// `Tui.program` / `Webview.app`) — or, for `Webview.app`, its nested
@@ -645,11 +645,11 @@ pub enum Feature {
     /// literal. The Rust backend reads the cfg's field expressions directly at
     /// the call site to emit the runtime entry call, so a non-literal cfg has no
     /// fields to read. Inline the record until non-literal cfg lowering lands.
-    /// [SKY-L0119]
+    /// [IPE-L0119]
     LetBoundAppCfg,
     /// A function/task/decoder value captured by a closure can only be
     /// called, not forwarded; bind the result outside the closure or wrap
-    /// the forwarding in a named top-level function. [SKY-L0125]
+    /// the forwarding in a named top-level function. [IPE-L0125]
     NonCloneCapture,
     /// A binding whose type embeds a function (a bare function value, or one
     /// held inside a `Maybe`/`Result`/user-union payload) was used more
@@ -659,7 +659,7 @@ pub enum Feature {
     /// borrows, never moves); only a second non-call use is rejected. A
     /// narrow, conservative gate — superseded once a general last-use clone
     /// pass (an extension of [`Self::NonCloneCapture`]'s analysis) lands.
-    /// [SKY-L0127]
+    /// [IPE-L0127]
     FunctionValueReuse,
 }
 
@@ -713,7 +713,7 @@ pub enum ModelLeaf {
 /// Not `Copy`: [`LowerError::InadmissibleAppModel`] carries an owned field name.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum LowerError {
-    /// A feature the lowerer does not implement. [SKY-L01##]
+    /// A feature the lowerer does not implement. [IPE-L01##]
     Unsupported(Feature),
     /// A `Live`/`Tui`/`Webview` app-entry Model type whose Rust rendering does
     /// not satisfy the runtime bound the entry requires (`Live` needs
@@ -721,7 +721,7 @@ pub enum LowerError {
     /// `Tui`/`Webview` need `Clone`). `app` drives the wording, `field` names the
     /// offending Model field (empty when the Model is not a record), and `leaf`
     /// categorises the payload. Converts a would-be `cargo` trait-bound failure
-    /// into a fail-closed `skyc` error. [SKY-L0120]
+    /// into a fail-closed `skyc` error. [IPE-L0120]
     InadmissibleAppModel {
         app: AppShape,
         field: Box<str>,
@@ -733,22 +733,22 @@ pub enum LowerError {
     /// Debug`). The predicate used is `ir_type_is_derivable` (NOT serde), so
     /// `Html`/`Element`/`Color`-carrying Msg variants are accepted (they derive
     /// `Clone + Debug + PartialEq`). Converts a would-be `cargo` trait-bound
-    /// failure into a fail-closed `skyc` error. [SKY-L0122]
+    /// failure into a fail-closed `skyc` error. [IPE-L0122]
     InadmissibleAppMsg {
         app: AppShape,
         field: Box<str>,
         leaf: ModelLeaf,
     },
-    /// Expression nesting exceeded the backend's bounded emit depth. [SKY-L0200]
+    /// Expression nesting exceeded the backend's bounded emit depth. [IPE-L0200]
     BackendNestingTooDeep { limit: u16 },
     /// `JsonDec.succeed` / `Db.Decode.succeed` constructor has more than 10
     /// parameters, which exceeds the `curry1`..`curry10` helpers in the runtime.
-    /// [SKY-L0121]
+    /// [IPE-L0121]
     DecodeSucceedArityTooHigh { n: usize },
     /// A `Live.route` pattern has a different number of `:param` segments than
     /// the page-constructor has payload fields. The extra params would be
     /// silently discarded or the constructor could never be fully applied.
-    /// [SKY-L0122]
+    /// [IPE-L0122]
     RouteParamCountMismatch {
         /// The URL pattern string (e.g. `"/apps/:id/:slug"`).
         pattern: Box<str>,
@@ -759,11 +759,11 @@ pub enum LowerError {
     },
     /// A `Live.route` page builder is not a page constructor, inline lambda, or
     /// named function — the Rust backend cannot emit a type-directed params
-    /// closure for a let-bound variable or computed expression. [SKY-L0123]
+    /// closure for a let-bound variable or computed expression. [IPE-L0123]
     RouteBuilderUnsupportedShape,
     /// A `Live.route` page-constructor payload field has a type that cannot be
     /// decoded from a URL `:param` string (only `String`, `Int`, `Float`, and
-    /// `Bool` are supported). [SKY-L0123]
+    /// `Bool` are supported). [IPE-L0123]
     RouteParamUnsupportedType {
         /// Zero-based index of the offending constructor payload field.
         field_index: usize,
@@ -839,7 +839,7 @@ pub enum Hint {
     FloatLiteralRange,
     /// Suggest adding a top-level type signature.
     AddTypeSignature,
-    /// Explain how to raise the solver budget via `SKY_SOLVER_BUDGET`.
+    /// Explain how to raise the solver budget via `IPE_SOLVER_BUDGET`.
     RaiseSolverBudget,
     /// Explain that a nesting bound is deliberate (fail-fast).
     NestingBoundDeliberate,
@@ -850,7 +850,7 @@ pub enum Hint {
     /// State that a feature is not supported yet (carries the feature).
     FeatureNotSupported(Feature),
     /// Explain that a parameter pattern must be irrefutable and suggest binding
-    /// the whole value and using `case` (SKY-T0015).
+    /// the whole value and using `case` (IPE-T0015).
     IrrefutableParameterRequired,
 }
 
@@ -978,127 +978,127 @@ impl Diagnostic {
 
 const fn parse_code(msg: &ParseError) -> Code {
     match msg {
-        ParseError::Unexpected | ParseError::UnexpectedToken { .. } => SKY_P0001,
-        ParseError::UnexpectedEof { .. } => SKY_P0002,
-        ParseError::TooDeep | ParseError::NestingTooDeep { .. } => SKY_P0003,
-        ParseError::UnknownChar(_) => SKY_P0010,
-        ParseError::StrayDot => SKY_P0011,
-        ParseError::NumberJoinedToName(_) => SKY_P0012,
-        ParseError::IntLiteralOutOfRange => SKY_P0013,
-        ParseError::FloatLiteralOutOfRange => SKY_P0016,
-        ParseError::UnterminatedString => SKY_P0014,
-        ParseError::MalformedChar => SKY_P0015,
-        ParseError::UnterminatedBlockComment => SKY_P0017,
-        ParseError::MalformedModuleHeader(_) => SKY_P0020,
-        ParseError::MalformedExposingList(_) => SKY_P0021,
-        ParseError::MissingEquals { .. } => SKY_P0030,
-        ParseError::MalformedTypeDeclaration(_) => SKY_P0031,
-        ParseError::TypeArgsOnNonConstructor => SKY_P0040,
-        ParseError::ExpectedType => SKY_P0041,
-        ParseError::UnclosedDelimiter { .. } => SKY_P0050,
-        ParseError::MalformedCase(_) => SKY_P0060,
-        ParseError::MalformedLet(_) => SKY_P0061,
-        ParseError::MalformedIf(_) => SKY_P0062,
+        ParseError::Unexpected | ParseError::UnexpectedToken { .. } => IPE_P0001,
+        ParseError::UnexpectedEof { .. } => IPE_P0002,
+        ParseError::TooDeep | ParseError::NestingTooDeep { .. } => IPE_P0003,
+        ParseError::UnknownChar(_) => IPE_P0010,
+        ParseError::StrayDot => IPE_P0011,
+        ParseError::NumberJoinedToName(_) => IPE_P0012,
+        ParseError::IntLiteralOutOfRange => IPE_P0013,
+        ParseError::FloatLiteralOutOfRange => IPE_P0016,
+        ParseError::UnterminatedString => IPE_P0014,
+        ParseError::MalformedChar => IPE_P0015,
+        ParseError::UnterminatedBlockComment => IPE_P0017,
+        ParseError::MalformedModuleHeader(_) => IPE_P0020,
+        ParseError::MalformedExposingList(_) => IPE_P0021,
+        ParseError::MissingEquals { .. } => IPE_P0030,
+        ParseError::MalformedTypeDeclaration(_) => IPE_P0031,
+        ParseError::TypeArgsOnNonConstructor => IPE_P0040,
+        ParseError::ExpectedType => IPE_P0041,
+        ParseError::UnclosedDelimiter { .. } => IPE_P0050,
+        ParseError::MalformedCase(_) => IPE_P0060,
+        ParseError::MalformedLet(_) => IPE_P0061,
+        ParseError::MalformedIf(_) => IPE_P0062,
     }
 }
 
 const fn name_code(msg: &NameError) -> Code {
     match msg {
-        NameError::Unknown | NameError::ValueNotFound { .. } => SKY_N0001,
-        NameError::TypeNotFound { .. } => SKY_N0002,
-        NameError::ConstructorNotFound { .. } => SKY_N0003,
-        NameError::UnknownModule { .. } => SKY_N0004,
-        NameError::NoSuchMember { .. } => SKY_N0005,
-        NameError::DuplicateValue { .. } => SKY_N0010,
-        NameError::DuplicateConstructor { .. } => SKY_N0011,
-        NameError::DuplicateType { .. } => SKY_N0012,
-        NameError::AliasArity { .. } => SKY_N0013,
-        NameError::ModuleNotFound { .. } => SKY_N0020,
-        NameError::ImportCycle { .. } => SKY_N0021,
-        NameError::NameNotExposed { .. } => SKY_N0022,
-        NameError::ModulePathMismatch { .. } => SKY_N0023,
-        NameError::AmbiguousImport { .. } => SKY_N0024,
-        NameError::ReservedNamespace { .. } => SKY_N0025,
-        NameError::ReservedBuiltinType { .. } => SKY_N0026,
-        NameError::DuplicateQualifier { .. } => SKY_N0027,
-        NameError::UnknownKernelAlias { .. } => SKY_N0028,
+        NameError::Unknown | NameError::ValueNotFound { .. } => IPE_N0001,
+        NameError::TypeNotFound { .. } => IPE_N0002,
+        NameError::ConstructorNotFound { .. } => IPE_N0003,
+        NameError::UnknownModule { .. } => IPE_N0004,
+        NameError::NoSuchMember { .. } => IPE_N0005,
+        NameError::DuplicateValue { .. } => IPE_N0010,
+        NameError::DuplicateConstructor { .. } => IPE_N0011,
+        NameError::DuplicateType { .. } => IPE_N0012,
+        NameError::AliasArity { .. } => IPE_N0013,
+        NameError::ModuleNotFound { .. } => IPE_N0020,
+        NameError::ImportCycle { .. } => IPE_N0021,
+        NameError::NameNotExposed { .. } => IPE_N0022,
+        NameError::ModulePathMismatch { .. } => IPE_N0023,
+        NameError::AmbiguousImport { .. } => IPE_N0024,
+        NameError::ReservedNamespace { .. } => IPE_N0025,
+        NameError::ReservedBuiltinType { .. } => IPE_N0026,
+        NameError::DuplicateQualifier { .. } => IPE_N0027,
+        NameError::UnknownKernelAlias { .. } => IPE_N0028,
     }
 }
 
 const fn type_code(msg: &TypeError) -> Code {
     match msg {
-        TypeError::Mismatch | TypeError::TypeMismatch { .. } => SKY_T0001,
-        TypeError::InfiniteType { .. } => SKY_T0002,
-        TypeError::BudgetExceeded | TypeError::StepBudgetExceeded { .. } => SKY_T0003,
-        TypeError::TooManyParameters { .. } => SKY_T0004,
-        TypeError::NonExhaustiveCase { .. } => SKY_T0010,
-        TypeError::RedundantCaseBranch { .. } => SKY_T0011,
-        TypeError::RoutedAppMissingPageField { .. } => SKY_L0124,
-        TypeError::NoSuchField { .. } => SKY_T0012,
-        TypeError::BuiltinRecordUpdate { .. } => SKY_T0017,
-        TypeError::CtorPatternArity { .. } => SKY_T0013,
-        TypeError::SuperTypeUnsatisfied { .. } => SKY_T0014,
-        TypeError::RefutablePatternParameter => SKY_T0015,
-        TypeError::TaskArity { .. } => SKY_T0016,
+        TypeError::Mismatch | TypeError::TypeMismatch { .. } => IPE_T0001,
+        TypeError::InfiniteType { .. } => IPE_T0002,
+        TypeError::BudgetExceeded | TypeError::StepBudgetExceeded { .. } => IPE_T0003,
+        TypeError::TooManyParameters { .. } => IPE_T0004,
+        TypeError::NonExhaustiveCase { .. } => IPE_T0010,
+        TypeError::RedundantCaseBranch { .. } => IPE_T0011,
+        TypeError::RoutedAppMissingPageField { .. } => IPE_L0124,
+        TypeError::NoSuchField { .. } => IPE_T0012,
+        TypeError::BuiltinRecordUpdate { .. } => IPE_T0017,
+        TypeError::CtorPatternArity { .. } => IPE_T0013,
+        TypeError::SuperTypeUnsatisfied { .. } => IPE_T0014,
+        TypeError::RefutablePatternParameter => IPE_T0015,
+        TypeError::TaskArity { .. } => IPE_T0016,
     }
 }
 
 const fn lower_code(msg: &LowerError) -> Code {
     match msg {
         LowerError::Unsupported(f) => feature_code(*f),
-        LowerError::InadmissibleAppModel { .. } => SKY_L0120,
-        LowerError::InadmissibleAppMsg { .. } => SKY_L0125,
-        LowerError::BackendNestingTooDeep { .. } => SKY_L0200,
-        LowerError::DecodeSucceedArityTooHigh { .. } => SKY_L0121,
-        LowerError::RouteParamCountMismatch { .. } => SKY_L0122,
+        LowerError::InadmissibleAppModel { .. } => IPE_L0120,
+        LowerError::InadmissibleAppMsg { .. } => IPE_L0125,
+        LowerError::BackendNestingTooDeep { .. } => IPE_L0200,
+        LowerError::DecodeSucceedArityTooHigh { .. } => IPE_L0121,
+        LowerError::RouteParamCountMismatch { .. } => IPE_L0122,
         LowerError::RouteBuilderUnsupportedShape
-        | LowerError::RouteParamUnsupportedType { .. } => SKY_L0123,
+        | LowerError::RouteParamUnsupportedType { .. } => IPE_L0123,
     }
 }
 
 const fn feature_code(f: Feature) -> Code {
     match f {
-        Feature::CasePatternKinds => SKY_L0100,
-        Feature::BinOps => SKY_L0101,
-        Feature::Polymorphism => SKY_L0102,
-        Feature::HigherOrderValues => SKY_L0103,
-        Feature::TaskResults => SKY_L0104,
-        Feature::ParamPatterns => SKY_L0105,
-        Feature::UntypedFunctions => SKY_L0106,
-        Feature::FirstClassFunctions => SKY_L0107,
-        Feature::Kernels => SKY_L0108,
-        Feature::PartialOverApplication => SKY_L0110,
-        Feature::BoundedRecordUpdate => SKY_L0111,
-        Feature::NestedPayloadPatterns => SKY_L0112,
-        Feature::AliasOverRefutablePayload => SKY_L0128,
-        Feature::CtorAsFunction => SKY_L0113,
-        Feature::CtorPayloadFunction => SKY_L0114,
-        Feature::TuplePatternMatch => SKY_L0115,
-        Feature::NestedCtorDiscrimination => SKY_L0116,
-        Feature::FloatKeyedCollection => SKY_L0117,
-        Feature::RoutedLiveApp => SKY_L0118,
-        Feature::LetBoundAppCfg => SKY_L0119,
-        Feature::NonCloneCapture => SKY_L0126,
-        Feature::FunctionValueReuse => SKY_L0127,
+        Feature::CasePatternKinds => IPE_L0100,
+        Feature::BinOps => IPE_L0101,
+        Feature::Polymorphism => IPE_L0102,
+        Feature::HigherOrderValues => IPE_L0103,
+        Feature::TaskResults => IPE_L0104,
+        Feature::ParamPatterns => IPE_L0105,
+        Feature::UntypedFunctions => IPE_L0106,
+        Feature::FirstClassFunctions => IPE_L0107,
+        Feature::Kernels => IPE_L0108,
+        Feature::PartialOverApplication => IPE_L0110,
+        Feature::BoundedRecordUpdate => IPE_L0111,
+        Feature::NestedPayloadPatterns => IPE_L0112,
+        Feature::AliasOverRefutablePayload => IPE_L0128,
+        Feature::CtorAsFunction => IPE_L0113,
+        Feature::CtorPayloadFunction => IPE_L0114,
+        Feature::TuplePatternMatch => IPE_L0115,
+        Feature::NestedCtorDiscrimination => IPE_L0116,
+        Feature::FloatKeyedCollection => IPE_L0117,
+        Feature::RoutedLiveApp => IPE_L0118,
+        Feature::LetBoundAppCfg => IPE_L0119,
+        Feature::NonCloneCapture => IPE_L0126,
+        Feature::FunctionValueReuse => IPE_L0127,
     }
 }
 
-/// Maps a `CompilerBug.where_` tag to a stable `SKY-I####`. Unknown tags fall
-/// back to the generic [`SKY_I0001`]; producers opt into a specific code by
+/// Maps a `CompilerBug.where_` tag to a stable `IPE-I####`. Unknown tags fall
+/// back to the generic [`IPE_I0001`]; producers opt into a specific code by
 /// stamping one of the recognised tags.
 fn bug_code(where_: &str) -> Code {
     match where_ {
-        "intern.resolve" => SKY_I0010,
-        "intern.capacity" => SKY_I0011,
-        "ir.match.unknown_variant" => SKY_I0100,
-        "ir.match.duplicate_arm" => SKY_I0101,
-        "ir.match.non_exhaustive" => SKY_I0102,
-        "ir.match.arm_enum_mismatch" => SKY_I0103,
-        "backend.no_rust_name" => SKY_I0200,
-        "backend.dangling_symbol" => SKY_I0201,
-        "backend.type_name_collision" => SKY_I0202,
-        "backend.golden_anchor" => SKY_I0203,
-        _ => SKY_I0001,
+        "intern.resolve" => IPE_I0010,
+        "intern.capacity" => IPE_I0011,
+        "ir.match.unknown_variant" => IPE_I0100,
+        "ir.match.duplicate_arm" => IPE_I0101,
+        "ir.match.non_exhaustive" => IPE_I0102,
+        "ir.match.arm_enum_mismatch" => IPE_I0103,
+        "backend.no_rust_name" => IPE_I0200,
+        "backend.dangling_symbol" => IPE_I0201,
+        "backend.type_name_collision" => IPE_I0202,
+        "backend.golden_anchor" => IPE_I0203,
+        _ => IPE_I0001,
     }
 }
 

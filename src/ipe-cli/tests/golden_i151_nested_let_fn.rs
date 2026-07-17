@@ -8,7 +8,7 @@
 //!
 //! c01: propagating `noncl_set = {process}` into the lambda argument at depth+1
 //! would make the callee-position exemption (`depth == 0`) miss at depth 1 →
-//! spurious SKY-L0126.
+//! spurious IPE-L0126.
 //!
 //! So the `Apply` arm of `rewrite_captured_clones` clears `noncl_set`
 //! for any `Expr::Lambda` in argument position before recursing.  Lambdas in
@@ -23,18 +23,18 @@
 //! c02: classifying `Var(report)` in the partial application `Task.onError
 //! report` as slot-class `None` (because `ir_type_from_ty` fails resolving
 //! `Error -> Task Error a` while `a` is still a free `Ty::Var`) would let T7
-//! conservatism turn `None` into SKY-L0126.
+//! conservatism turn `None` into IPE-L0126.
 //!
 //! So a `Ty::Fun` slot whose type resolution fails only due to a nested
 //! type variable maps to `Some(NonClone)` instead of `None`.  Forwarding the
 //! Var into an `impl FnOnce` slot is a plain ownership transfer — correct.
 //!
 //! ```text
-//! # gate check always (no SKY_E2E needed):
+//! # gate check always (no IPE_E2E needed):
 //! cargo test -p skyc --test golden_i151_nested_let_fn
 //!
 //! # full E2E (skyc build + cargo build + run):
-//! SKY_E2E=1 cargo test -p skyc --test golden_i151_nested_let_fn
+//! IPE_E2E=1 cargo test -p skyc --test golden_i151_nested_let_fn
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -49,7 +49,7 @@ fn repo_root() -> PathBuf {
 // ── c01 — let-fn in callee position inside nested lambda (green after fix) ───
 
 /// `applyInner n = List.map (\m -> process n m) [1,2,3]` — `process` is
-/// `NonClone` in callee position inside the inner lambda.  Without the fix, `SKY-L0126`.
+/// `NonClone` in callee position inside the inner lambda.  Without the fix, `IPE-L0126`.
 /// Post-fix: skyc build succeeds; cargo build + run produce "11, 12, 13".
 #[test]
 fn c01_nested_let_fn_callee_green() {
@@ -68,11 +68,11 @@ fn c01_nested_let_fn_callee_green() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for nested_let_fn_callee (was SKY-L0126 pre-fix): {:?}",
+        "skyc build must succeed for nested_let_fn_callee (was IPE-L0126 pre-fix): {:?}",
         built.err()
     );
 
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = support::build_and_run_emitted("nested_let_fn_callee", &out);
@@ -95,7 +95,7 @@ fn c01_nested_let_fn_callee_green() {
 /// and forwards it to `Task.onError`.  The polymorphic `a` caused two failures:
 ///
 /// 1. T7b (`slot_classes`): `ir_type_from_ty(Error -> Task Error a)` failed on the
-///    nested `Ty::Var("a")` → `slot_class = None` → SKY-L0126.  Fixed by mapping
+///    nested `Ty::Var("a")` → `slot_class = None` → IPE-L0126.  Fixed by mapping
 ///    `Ty::Fun` failed slots to `Some(NonClone)`.
 ///
 /// 2. T8 (ret type): after T7b cleared the slot gate, `ir_type_from_ty(Task a)` on
@@ -125,7 +125,7 @@ fn c02_poly_fn_on_error_green() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for poly_task_on_error (was SKY-L0126 pre-fix): {:?}",
+        "skyc build must succeed for poly_task_on_error (was IPE-L0126 pre-fix): {:?}",
         built.err()
     );
 }

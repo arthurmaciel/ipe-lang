@@ -5,14 +5,14 @@
 //! exit-0-then-cargo-fail (well-typed in skyc, but the emitted Rust passes a
 //! project-local synthesized record struct where the runtime's concrete
 //! `SkyPanicInfo`/`SkyTypeInfo`/`SkyErrorInfo` is required — E0308). They
-//! are ordinary SKY-T0001 type mismatches at `skyc` time.
+//! are ordinary IPE-T0001 type mismatches at `skyc` time.
 //!
 //! Companion positive golden: `crates/skyc/tests/
 //! golden_error_nominal_payload.rs` (field access + nominal-annotated helpers
 //! stay green).
 //!
 //! Compile-only: these fixtures never run (the program is ill-typed), so
-//! there is no oracle / `SKY_E2E` gate here.
+//! there is no oracle / `IPE_E2E` gate here.
 
 use std::path::{Path, PathBuf};
 
@@ -55,7 +55,7 @@ fn panic_info_record_literal_is_rejected() {
     assert_gate(
         "error_record_literal_panicinfo",
         "error_record_literal_panicinfo_emit",
-        ipe_diagnostics::SKY_T0001,
+        ipe_diagnostics::IPE_T0001,
     );
 }
 
@@ -65,7 +65,7 @@ fn type_info_record_literal_is_rejected() {
     assert_gate(
         "error_record_literal_typeinfo",
         "error_record_literal_typeinfo_emit",
-        ipe_diagnostics::SKY_T0001,
+        ipe_diagnostics::IPE_T0001,
     );
 }
 
@@ -77,6 +77,6 @@ fn error_info_record_literal_is_rejected() {
     assert_gate(
         "error_record_literal_errorinfo",
         "error_record_literal_errorinfo_emit",
-        ipe_diagnostics::SKY_T0001,
+        ipe_diagnostics::IPE_T0001,
     );
 }

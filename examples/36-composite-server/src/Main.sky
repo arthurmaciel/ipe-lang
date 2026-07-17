@@ -8,10 +8,10 @@ module Main exposing (main)
 --                       shape that `sky db migrate` invokes)
 --
 -- Environment:
---   SKY_AUTH_TOKEN_SECRET — JWT secret.  MUST be >= 32 bytes.  In dev
+--   IPE_AUTH_TOKEN_SECRET — JWT secret.  MUST be >= 32 bytes.  In dev
 --                           generate via `head -c 64 /dev/urandom | base64`.
---   SKY_COMPOSITE_DB      — sqlite path; default ./composite-server.db
---   SKY_COMPOSITE_PORT    — server port; default 8000
+--   IPE_COMPOSITE_DB      — sqlite path; default ./composite-server.db
+--   IPE_COMPOSITE_PORT    — server port; default 8000
 import Sky.Core.Prelude exposing (..)
 import Sky.Core.List as List
 import Sky.Core.String as String
@@ -55,9 +55,9 @@ readConfig : Config
 readConfig =
     { port = Maybe.withDefault
           8000
-          (String.toInt (System.getenvOr "SKY_COMPOSITE_PORT" "8000"))
-    , dbPath = System.getenvOr "SKY_COMPOSITE_DB" "./composite-server.db"
-    , jwtSecret = System.getenvOr "SKY_AUTH_TOKEN_SECRET" ""
+          (String.toInt (System.getenvOr "IPE_COMPOSITE_PORT" "8000"))
+    , dbPath = System.getenvOr "IPE_COMPOSITE_DB" "./composite-server.db"
+    , jwtSecret = System.getenvOr "IPE_AUTH_TOKEN_SECRET" ""
     , tokenTtlSeconds = 86400
     , rateLimitCapacity = 60
     , rateLimitRefill = 10
@@ -93,10 +93,10 @@ runServer : Config -> Task Error ()
 runServer cfg =
     if String.length cfg.jwtSecret < 32 then
         let
-            _ = println "ERROR: SKY_AUTH_TOKEN_SECRET must be >= 32 bytes."
+            _ = println "ERROR: IPE_AUTH_TOKEN_SECRET must be >= 32 bytes."
         in
             Task.fail
-                (Error.invalidInput "SKY_AUTH_TOKEN_SECRET must be >= 32 bytes")
+                (Error.invalidInput "IPE_AUTH_TOKEN_SECRET must be >= 32 bytes")
 
     else
         bootServer cfg

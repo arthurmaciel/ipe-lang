@@ -13,7 +13,7 @@
 //!   that confirms right-associative nesting, prints `abcd`.
 //!
 //! Each emitted `main.rs` must be byte-identical to the checked-in golden, and
-//! (behind `SKY_E2E=1`) the emitted project must build and print the value the
+//! (behind `IPE_E2E=1`) the emitted project must build and print the value the
 //! Go reference compiler produces.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
@@ -66,9 +66,9 @@ fn assert_byte_identical(name: &str) {
 /// Full spine: compile, build the emitted Cargo project, run it, and assert its
 /// stdout matches the golden's CACHED Go oracle (`expected_go.txt`) via the
 /// staleness-gated `support::assert_go_parity` — NO live Go run in this path.
-/// Gated on `SKY_E2E=1` so the default `cargo test` stays fast.
+/// Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 fn assert_runs_and_matches_oracle(name: &str) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

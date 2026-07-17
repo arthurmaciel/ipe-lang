@@ -201,7 +201,7 @@ framing, body caps). Residual:
 - 🟡 security — **Session cookie `Secure` is ENV-gated, not request/TLS-gated**
   (`live/mod.rs:809`): a non-prod process behind a TLS-terminating proxy emits a
   non-`Secure` `sky_sid`. **Fix:** honour `X-Forwarded-Proto=https` under a trusted-proxy
-  allowlist, or a `SKY_LIVE_FORCE_SECURE_COOKIES` override; thread into `__Host-` choice.
+  allowlist, or a `IPE_LIVE_FORCE_SECURE_COOKIES` override; thread into `__Host-` choice.
 - ⚪ security — **`/_sky/observability/ingest` CSRF-exempt AND open in dev**
   (`live/csrf.rs:141`): cross-site POST folds forged telemetry into the console (dev
   only; prod fails closed). **Fix:** remove from `is_exempt_path`, or bind dev-open to
@@ -210,7 +210,7 @@ framing, body caps). Residual:
   (`server.rs:974`): empty `originPatterns` + non-prod ENV → any Origin upgraded (CSWSH).
   **Fix:** default-deny cross-origin when patterns empty, independent of the ENV gate.
 - ⚪ correctness — **`live_max_body_bytes()` lacks the `>0` floor** `server::max_body` has
-  (`live/mod.rs:864`): `SKY_LIVE_MAX_BODY_BYTES=0` → every `/_sky/event` 413s. **Fix:**
+  (`live/mod.rs:864`): `IPE_LIVE_MAX_BODY_BYTES=0` → every `/_sky/event` 413s. **Fix:**
   `.filter(|&n| n > 0)`.
 
 ---
@@ -250,7 +250,7 @@ Beyond the verified txn-routing hole above:
   (`config.rs:10` + `project.rs:284` verbatim include + `db.rs:646`): sky.toml
   `[database] url` never wired; memory URLs excluded from the pool cache → each
   `Db.connect ()` a fresh empty DB → silent data loss. `⧗verify-owed`. **Fix:** emit
-  `config.rs` `SKY_DB_URL` from sky.toml (never `:memory:`), or read `DATABASE_URL`
+  `config.rs` `IPE_DB_URL` from sky.toml (never `:memory:`), or read `DATABASE_URL`
   at call time; shared-connection behaviour test.
 - 🟡 security — **`url_is_cacheable` substring test `!url.contains("memory")`**
   (`db.rs:560`): legit URLs containing "memory" bypass the pool cache → connection-exhaustion
@@ -295,7 +295,7 @@ Int, later entries validate against `Structure(Int)` but the defaulting entry's 
 `Append` obligation is never checked. Witness (well-formed, ill-typed): `f x = (x ++ x) + 1`
 — the `Append` super is created first, then `Number`; skyc accepts → cargo fail. Order-dependent
 exit-0-then-cargo-fail. **Fix:** in the defaulting arm gate the pin on the class union bounds —
-if `bounds.has_append()` return `super_unsatisfied` (SKY-T0014) instead of defaulting.
+if `bounds.has_append()` return `super_unsatisfied` (IPE-T0014) instead of defaulting.
 
 ### 🟠 parse-don't-validate — `Ty::Var(u32)` conflates interner raws with kernel-scheme ordinals ✓verdict
 `crates/sky_types/src/constrain.rs:1576-1584`
@@ -318,7 +318,7 @@ verifier read the step-2 guard (`:362-366`) and found it already rejects the rea
 `unify_flat` unions roots with fa's content BEFORE recursing on children, no occurs-check on
 Structure-Structure merges. Witness: `b : (Int,Int); b=(1,2); x = if True then b else (b,3)`
 → merged class content references itself → `occurs()`/`zonk` (assume acyclic) surface a
-CompilerBug instead of a type mismatch, and `SKY_SOLVER_BUDGET=0` risks a hang. **Fix:** add
+CompilerBug instead of a type mismatch, and `IPE_SOLVER_BUDGET=0` risks a hang. **Fix:** add
 a seen-set to `occurs()`; in zonk surface `InfiniteType` on a revisited root; correct the stale
 acyclicity comments.
 
@@ -337,7 +337,7 @@ record as a sanctioned divergence with a golden test.
 last segment collides with a stdlib qualifier (`import App.Http` → kernel `Http` table):
 `qual_map.insert(v, …)` REPLACES, so `Utils.format` / `Http.get` silently resolves to whichever
 import came last — semantics-changing wrong-name resolution, zero diagnostic. The unqualified
-path has a hard `AmbiguousImport` (SKY-N0024) gate; qualified doesn't. **Fix:** track
+path has a hard `AmbiguousImport` (IPE-N0024) gate; qualified doesn't. **Fix:** track
 qualifier→dep_path ownership; a second distinct dep claiming a qualifier → `DuplicateQualifier`
 or deferred `AmbiguousImport` at the qualified use site. Never blind-overwrite.
 
@@ -345,7 +345,7 @@ or deferred `AmbiguousImport` at the qualified use site. Never blind-overwrite.
   `Counter.Typo` passes canon → lowerer `other =>` ICE (CompilerBug) or silently matches a bare-name
   builtin. **Fix:** Tier-2 per-qualifier type-member map, fail-closed `NoSuchMember`.
 - 🟡 parse-don't-validate — **`{{name}}` interp with unknown bare ident** leaks an unbound `VarLocal`
-  → SKY-I0001 CompilerBug ICE instead of a NameError (`resolve.rs:3179`). **Fix:** fallback fails
+  → IPE-I0001 CompilerBug ICE instead of a NameError (`resolve.rs:3179`). **Fix:** fallback fails
   closed like `resolve_var` (value-not-found / ambiguous-import).
 - 🟡 invalid-states — **Two deps exposing the same-named type ALIAS merge silent first-wins**
   (`resolve.rs:1476`) — unions + values have ambiguity gates; aliases don't. **Fix:** track alias
@@ -384,7 +384,7 @@ in `lex_ident` (reject once at lex time — parse-don't-validate at the boundary
 `crates/sky_diagnostics/src/code.rs:451-469`
 The taxonomy's `ALL` slice is under `#[cfg(test)]` and not exported, so skyc hand-mirrors it
 (`skyc/src/lib.rs:41-110`, 68 codes vs 85) — while every rendered diagnostic footer tells users
-to run `skyc explain <code>`. 17 actively-produced codes (SKY-L0114..L0126, SKY-T0014/15, …) are
+to run `skyc explain <code>`. 17 actively-produced codes (IPE-L0114..L0126, IPE-T0014/15, …) are
 unresolvable. **Fix:** promote `ALL` to `pub const ALL_CODES` (single source of truth), delete
 skyc's mirror, iterate the one list in `run_explain`/`suggestions`.
 
@@ -398,7 +398,7 @@ skyc's mirror, iterate the one list in `run_explain`/`suggestions`.
 - ⚪ soundness — **`HtmlEventShape::Raw` hard-codes `Arc<dyn Any>` for onSubmit** (`lib.rs:71`) — the
   registry's own dyn-Any channel; runtime downcast mismatch = runtime failure. **Fix:** monomorphise
   per concrete `a`, or make the downcast a typed Err.
-- ⚪ parse-don't-validate — **`CompilerBug.where_` stringly-typed with silent `_ => SKY_I0001`**
+- ⚪ parse-don't-validate — **`CompilerBug.where_` stringly-typed with silent `_ => IPE_I0001`**
   (`diagnostic.rs:1002`). **Fix:** `BugSite` enum.
 - ⚪ readability — **Stale doc drift** (`InadmissibleAppMsg` tagged L0122 but maps L0125; stale
   "Absent from ALL" comment) (`diagnostic.rs:657`).
@@ -425,12 +425,12 @@ metadata --offline` build-script denylist + a loud `--allow-build-scripts` gate.
   (`tools/parity-matrix/src/main.rs:915`) → masks `lower_arm_missing` MISMATCH from the CI seal gate.
   **Fix:** anchor the scan to the `fn lower_callee` body + `=> Callee::Kernel(...)` arms.
 - ⚪ correctness — **`extract_imports_from_source` reads `import X` inside multiline strings**
-  (`skyc/src/project.rs:457`) → phantom graph edges / bogus SKY-N0021 cycle. **Fix:** track triple-quote
+  (`skyc/src/project.rs:457`) → phantom graph edges / bogus IPE-N0021 cycle. **Fix:** track triple-quote
   state or reuse the parsed header.
 - ⚪ security — **`write_atomic` predictable temp name (symlink-follow) + drops original file mode**
   (`skyc/src/lib.rs:1154`): `skyc fix` in a shared dir → symlink clobber; 0600→0644 permission
   downgrade. **Fix:** `create_new` (O_EXCL) + random suffix + `fchmod` to original mode.
-- ⚪ parse-don't-validate — **Invalid `SKY_RUNTIME_DIR` silently ignored** (falls back to the walk;
+- ⚪ parse-don't-validate — **Invalid `IPE_RUNTIME_DIR` silently ignored** (falls back to the walk;
   version-skew → seal-adjacent cargo-fail) (`skyc/src/lib.rs:657`). **Fix:** typed error, honour or reject.
 - ⚪ correctness — **`find_rustdoc_json` falls back to ANY `*.json`** → can bind a stale/wrong crate's
   rustdoc (`ffi-inspect main.rs:1265`). **Fix:** resolve the true lib-target name from `cargo metadata`.
@@ -452,7 +452,7 @@ All 14 verified. Security + seal first:
 9. 🟠 `lower.rs:3548` — re-key `bounds` by `(home, name)` (seal).
 10. 🟠 `constrain.rs:4859` — pin Auth claims scheme to `dict(string,string)` (seal).
 11. 🟠 `resolve.rs:1586` — qualifier ownership, no last-wins overwrite (correctness).
-12. 🟠 `config.rs:10`/`project.rs:284` — wire real `SKY_DB_URL` (correctness).
+12. 🟠 `config.rs:10`/`project.rs:284` — wire real `IPE_DB_URL` (correctness).
 13. 🟠 `code.rs:456` — promote `ALL_CODES` public, delete skyc's drifting mirror (completeness).
 
 Confirmed-real items are mirrored into `BACKLOG.md`

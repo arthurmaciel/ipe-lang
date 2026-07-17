@@ -24,7 +24,7 @@ Woodpecker agent, no systemd service, no "if the dev box is off, CI queues."
 2. **Keep a Codeberg mirror** (one extra git remote) so we're never locked in —
    git is portable; we can move CI later if values/independence demand it.
 3. **Jobs** (parallel): `fmt`, `clippy -D`, `test` (nextest + doctests), `miri`
-   (compiler crates), `e2e` (sharded `nextest --partition`, `SKY_E2E=1`).
+   (compiler crates), `e2e` (sharded `nextest --partition`, `IPE_E2E=1`).
 3.5. **Supply-chain security is a separate workflow** (`.github/workflows/
    security.yml`, added 2026-07-12): `cargo-audit` (RustSec advisory scan
    against `Cargo.lock`, config at `.cargo/audit.toml`) and `cargo-deny`

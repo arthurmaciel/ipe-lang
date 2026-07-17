@@ -374,7 +374,7 @@ pub fn server_with_cookie(c: ServerCookie, mut r: ServerResponse) -> ServerRespo
     // Add `Secure` in production so an auth/session cookie is never transmitted
     // over the cleartext proxy→app hop (SSL-strip / sniff). Omit it in dev so
     // cookies still work over plain-http localhost. Gate matches the rest of the
-    // runtime's production detection (ENV / SKY_ENV via productionFromEnv).
+    // runtime's production detection (ENV / IPE_ENV via productionFromEnv).
     let secure = if crate::telemetry::production_from_env() {
         "; Secure"
     } else {
@@ -392,10 +392,10 @@ pub fn server_with_cookie(c: ServerCookie, mut r: ServerResponse) -> ServerRespo
 
 const DEFAULT_MAX_BODY: usize = 32 * 1024 * 1024; // 32 MiB
 
-/// Request-body cap. Overridable via SKY_LIVE_MAX_BODY_BYTES (same env var as the
+/// Request-body cap. Overridable via IPE_LIVE_MAX_BODY_BYTES (same env var as the
 /// Go runtime's `[live] maxBodyBytes`); falls back to 32 MiB.
 fn max_body() -> usize {
-    crate::system::read_env_var("SKY_LIVE_MAX_BODY_BYTES")
+    crate::system::read_env_var("IPE_LIVE_MAX_BODY_BYTES")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
         .filter(|&n| n > 0)
@@ -485,7 +485,7 @@ async fn build_request(
         Err(_) => HashMap::new(),
     };
     // remoteAddr: trust the real TCP peer (ConnectInfo) by DEFAULT. Only honour a
-    // proxy's X-Forwarded-For / X-Real-IP when `SKY_TRUSTED_PROXY` is set — i.e.
+    // proxy's X-Forwarded-For / X-Real-IP when `IPE_TRUSTED_PROXY` is set — i.e.
     // the operator declares the app sits behind a trusted proxy that sets those
     // headers. Trusting client-supplied XFF unconditionally let ANY client spoof
     // their IP → rate-limit bypass (the fixed-window limiter keys on remoteAddr)
@@ -494,7 +494,7 @@ async fn build_request(
         .extensions
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
         .map(|ci| ci.0.ip().to_string());
-    let trust_proxy = crate::system::read_env_var("SKY_TRUSTED_PROXY")
+    let trust_proxy = crate::system::read_env_var("IPE_TRUSTED_PROXY")
         .map(|v| !v.is_empty() && v != "0" && v != "false")
         .unwrap_or(false);
     let remote_addr = if trust_proxy {
@@ -726,10 +726,10 @@ pub fn server_listen<E: From<String> + Send + 'static>(
                     .into_response()
             },
         ));
-        // Bind host is overridable via SKY_HTTP_BIND (e.g. 127.0.0.1 to avoid
+        // Bind host is overridable via IPE_HTTP_BIND (e.g. 127.0.0.1 to avoid
         // exposing on every interface). Default stays 0.0.0.0 for byte-identical
         // behaviour with prior releases; an empty/blank override falls back too.
-        let host = crate::system::read_env_var("SKY_HTTP_BIND")
+        let host = crate::system::read_env_var("IPE_HTTP_BIND")
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
@@ -805,9 +805,9 @@ enum WsOut {
 /// Per-peer outbound queue depth. A slow/idle WebSocket consumer must NOT let the
 /// server buffer unboundedly (OOM) — the channel is bounded and a full queue drops
 /// the message (the send kernel returns Err), giving real backpressure. Override
-/// via SKY_WS_SEND_BUFFER; default 256 frames.
+/// via IPE_WS_SEND_BUFFER; default 256 frames.
 fn ws_send_buffer() -> usize {
-    crate::system::read_env_var("SKY_WS_SEND_BUFFER")
+    crate::system::read_env_var("IPE_WS_SEND_BUFFER")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|n| *n > 0)
@@ -816,9 +816,9 @@ fn ws_send_buffer() -> usize {
 
 /// Heartbeat interval for WebSocket Ping frames.  Mirrors Go's
 /// `wsDefaultPingInterval = 30s` (`runtime-go/rt/server_websocket.go`).
-/// Override via `SKY_WS_HEARTBEAT` (seconds, must be > 0).
+/// Override via `IPE_WS_HEARTBEAT` (seconds, must be > 0).
 fn ws_heartbeat_secs() -> u64 {
-    crate::system::read_env_var("SKY_WS_HEARTBEAT")
+    crate::system::read_env_var("IPE_WS_HEARTBEAT")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .filter(|n| *n > 0)
@@ -928,7 +928,7 @@ async fn ws_loop<E: From<String> + Send + 'static>(
 
 fn ws_production() -> bool {
     let v = crate::system::read_env_var("ENV")
-        .or_else(|_| crate::system::read_env_var("SKY_ENV"))
+        .or_else(|_| crate::system::read_env_var("IPE_ENV"))
         .unwrap_or_default();
     !matches!(v.as_str(), "" | "dev" | "development" | "local")
 }
@@ -1167,7 +1167,7 @@ pub fn server_web_socket_close_client<E: From<String> + Send + 'static>(id: i64)
 // Design decisions (docs/adr/0023-websocket-server-kernel-only-typed-handles.md):
 //   D2 — WsServerCfg is monomorphic (pins E = SkyError, drops phantom msg).
 //   D3 — kernels take WsHandle, not i64; adapters unwrap.
-//   D4 — bounded fail-fast `try_send` (SKY_WS_SEND_BUFFER=256 default).
+//   D4 — bounded fail-fast `try_send` (IPE_WS_SEND_BUFFER=256 default).
 
 /// `Ws.defaultCfg` — no-op callbacks, `maxMessageBytes = 0` (→ 1 MiB in
 /// `ws_loop`), empty `originPatterns` (dev: same-origin only — `Origin` must
@@ -1363,7 +1363,7 @@ mod ws_adapter_tests {
 
     #[test]
     fn ws_send_buffer_default_is_256() {
-        // Without SKY_WS_SEND_BUFFER the default is 256 frames.
+        // Without IPE_WS_SEND_BUFFER the default is 256 frames.
         // This test avoids touching the env so it's safe to run in parallel
         // with other tests; it just confirms the fallback constant.
         // (env-mutation tests use std::env::set_var which is not thread-safe
@@ -1619,7 +1619,7 @@ where
 }
 
 /// Whether to trust `X-Forwarded-Proto` (and friends) for TLS-termination
-/// detection. Mirrors `build_request`'s existing `SKY_TRUSTED_PROXY` gate for
+/// detection. Mirrors `build_request`'s existing `IPE_TRUSTED_PROXY` gate for
 /// `remoteAddr` (line ~497 above) and `live/mod.rs`'s `trust_proxy_headers()`
 /// for the session cookie's `Secure` gate — same env var, same rationale: a
 /// client-supplied header must never be trusted by default, an operator opts
@@ -1633,7 +1633,7 @@ fn trust_proxy_headers() -> bool {
     use std::sync::OnceLock;
     static TRUST: OnceLock<bool> = OnceLock::new();
     *TRUST.get_or_init(|| {
-        crate::system::read_env_var("SKY_TRUSTED_PROXY")
+        crate::system::read_env_var("IPE_TRUSTED_PROXY")
             .map(|v| !v.is_empty() && v != "0" && v != "false")
             .unwrap_or(false)
     })
@@ -1719,7 +1719,7 @@ fn csrf_token_well_formed(t: &str) -> bool {
 /// `server_with_cookie`'s gate and the session cookie's
 /// `csrf::cookies_secure()` half) OR `request_is_https` is true (THIS
 /// specific request arrived over TLS at a trusted proxy, opt-in via
-/// `SKY_TRUSTED_PROXY` — closes the gap where a dev process (`ENV` unset)
+/// `IPE_TRUSTED_PROXY` — closes the gap where a dev process (`ENV` unset)
 /// fronted by a TLS-terminating proxy would otherwise emit a non-Secure CSRF
 /// cookie even though the browser connection was HTTPS). Same OR-gate shape as
 /// the session cookie in `live/mod.rs::page_response`.
@@ -1998,7 +1998,7 @@ mod tests {
 
     #[tokio::test]
     async fn to_axum_response_injects_dev_banner_into_html_before_body_close() {
-        // Default test env is dev (ENV/SKY_ENV unset), so the banner is emitted.
+        // Default test env is dev (ENV/IPE_ENV unset), so the banner is emitted.
         // Go parity: injectDevBanner runs on every text/html buffered response.
         let sky = server_html("<html><body><h1>hi</h1></body></html>".to_string());
         let out = axum_body_string(to_axum_response(sky)).await;
@@ -2123,7 +2123,7 @@ mod tests {
 
     #[tokio::test]
     async fn ws_upgrade_dev_rejects_cross_origin_without_allowlist() {
-        // No SKY_TRUSTED_PROXY / ENV involvement — this exercises the CSWSH
+        // No IPE_TRUSTED_PROXY / ENV involvement — this exercises the CSWSH
         // default-deny path directly: dev mode (no ENV set in this test
         // process), empty originPatterns, cross-origin Origin/Host pair. The
         // pre-fix behaviour fell through with no check at all (allow-all).
@@ -2182,16 +2182,16 @@ mod tests {
     #[test]
     fn max_body_env_override() {
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("SKY_LIVE_MAX_BODY_BYTES") };
+        unsafe { std::env::remove_var("IPE_LIVE_MAX_BODY_BYTES") };
         assert_eq!(max_body(), DEFAULT_MAX_BODY);
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("SKY_LIVE_MAX_BODY_BYTES", "1024") };
+        unsafe { std::env::set_var("IPE_LIVE_MAX_BODY_BYTES", "1024") };
         assert_eq!(max_body(), 1024);
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("SKY_LIVE_MAX_BODY_BYTES", "0") }; // invalid → default
+        unsafe { std::env::set_var("IPE_LIVE_MAX_BODY_BYTES", "0") }; // invalid → default
         assert_eq!(max_body(), DEFAULT_MAX_BODY);
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("SKY_LIVE_MAX_BODY_BYTES") };
+        unsafe { std::env::remove_var("IPE_LIVE_MAX_BODY_BYTES") };
     }
 
     #[tokio::test]
@@ -2318,7 +2318,7 @@ mod tests {
         headers.insert("x-forwarded-proto".to_string(), "https".to_string());
         assert!(
             !request_is_https_with_trust(&headers, false),
-            "must ignore X-Forwarded-Proto without SKY_TRUSTED_PROXY opt-in"
+            "must ignore X-Forwarded-Proto without IPE_TRUSTED_PROXY opt-in"
         );
     }
 
@@ -2353,7 +2353,7 @@ mod tests {
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::remove_var("ENV") };
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("SKY_ENV") };
+        unsafe { std::env::remove_var("IPE_ENV") };
         // (a) not production, request IS https -> Secure.
         assert!(
             csrf_set_cookie_value(&tok, true).contains("; Secure"),
@@ -2369,7 +2369,7 @@ mod tests {
     #[test]
     fn csrf_cookie_secure_production_forces_secure_even_without_tls_signal() {
         // (c) the exact gap this closes: ENV=production set, but THIS
-        // request is not detected as TLS (e.g. SKY_TRUSTED_PROXY unset, or
+        // request is not detected as TLS (e.g. IPE_TRUSTED_PROXY unset, or
         // no proxy in front) -> Secure still fires off the unconditional
         // production floor. Matches the session cookie's own combined-gate
         // semantics in live/mod.rs::page_response (`csrf::cookies_secure()
@@ -2402,7 +2402,7 @@ mod tests {
     /// End-to-end through `middleware_with_csrf` (not just the pure
     /// `csrf_set_cookie_value` helper): a GET request carrying
     /// `X-Forwarded-Proto: https` mints a Secure cookie when
-    /// `SKY_TRUSTED_PROXY` is honoured, proving the signal survives the
+    /// `IPE_TRUSTED_PROXY` is honoured, proving the signal survives the
     /// capture-before-move + thread-through-the-closure adaptation.
     #[tokio::test]
     async fn csrf_middleware_mints_secure_cookie_for_trusted_https_request() {
@@ -2415,7 +2415,7 @@ mod tests {
         let req = mk_req("GET", HashMap::new(), headers);
         // `middleware_with_csrf` calls the process-wide `request_is_https`
         // (via `trust_proxy_headers()`'s `OnceLock`), which without
-        // `SKY_TRUSTED_PROXY` set never trusts the header — so this test
+        // `IPE_TRUSTED_PROXY` set never trusts the header — so this test
         // documents the untrusted-by-default floor: no Secure without the
         // operator's opt-in, even though the header claims https.
         match h(req).await {
@@ -2423,7 +2423,7 @@ mod tests {
                 assert_eq!(r.cookies.len(), 1);
                 assert!(
                     !r.cookies[0].contains("; Secure"),
-                    "X-Forwarded-Proto must be ignored without SKY_TRUSTED_PROXY opt-in: {}",
+                    "X-Forwarded-Proto must be ignored without IPE_TRUSTED_PROXY opt-in: {}",
                     r.cookies[0]
                 );
             }

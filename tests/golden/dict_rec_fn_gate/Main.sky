@@ -5,7 +5,7 @@ module Main exposing (main)
 -- The Dict key variable carries the Sky `comparable`-key obligation
 -- (`TyBounds::dict_key`, → Rust `Hash + Eq + Ord`), so the forwarder generalises to
 -- a Rust generic bounded by those traits.  Instantiating it at a RECORD — which
--- Rust cannot hash or order — is rejected at type-check (SKY-T0014) rather than
+-- Rust cannot hash or order — is rejected at type-check (IPE-T0014) rather than
 -- emitting an unbounded `singleton_dict::<T, V>` that `cargo` cannot build.
 
 import Sky.Core.Dict as Dict

@@ -1,7 +1,7 @@
 //! Nested-lambda flattening: a one-parameter binding whose body is
 //! a curried lambda chain (`f a = \b -> \c -> a + b + c`) declared with a
 //! multi-arrow type (`Int -> Int -> Int -> Int`). `skyc` must emit `main.rs`
-//! byte-identical to the checked-in golden, and (behind `SKY_E2E=1`) the emitted
+//! byte-identical to the checked-in golden, and (behind `IPE_E2E=1`) the emitted
 //! project must build and print `6`.
 //!
 //! The lowerer flattens the nested lambda chain into a single multi-parameter
@@ -76,10 +76,10 @@ fn emits_byte_identical_main_rs() {
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
 /// nested-lambda flattening prints `6` — the same value the Go backend produces.
-/// Gated on `SKY_E2E=1` so the default `cargo test` stays fast.
+/// Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn end_to_end_builds_and_prints_six() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -1,5 +1,5 @@
 //! End-to-end gate: `skyc` must emit `main.rs` byte-identical to the
-//! Haskell-reference golden, and (behind `SKY_E2E=1`) the emitted project must
+//! Haskell-reference golden, and (behind `IPE_E2E=1`) the emitted project must
 //! build and print `1`.
 
 use std::path::{Path, PathBuf};
@@ -51,11 +51,11 @@ fn emits_byte_identical_main_rs_and_vendors_runtime() {
 }
 
 /// Full spine: compile, build the emitted Cargo project, and run it. Gated on
-/// `SKY_E2E=1` so the default `cargo test` stays fast (the emitted project pulls
+/// `IPE_E2E=1` so the default `cargo test` stays fast (the emitted project pulls
 /// real crates and takes ~1 min to compile cold).
 #[test]
 fn end_to_end_builds_and_prints_one() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -88,7 +88,7 @@ fn end_to_end_builds_and_prints_one() {
 
 /// A `CliError::Pipeline` must render as a coded, rustc/Elm-style report — not a
 /// `{:?}` debug dump. We feed `build` a deliberately ill-formed `.sky` source and
-/// assert the displayed error carries an `error[SKY-…]` header and the
+/// assert the displayed error carries an `error[IPE-…]` header and the
 /// `skyc explain` footer pointer.
 #[test]
 fn pipeline_error_renders_with_code_and_explain_pointer() {
@@ -113,7 +113,7 @@ fn pipeline_error_renders_with_code_and_explain_pointer() {
 
     let rendered = err.to_string();
     assert!(
-        rendered.contains("error[SKY-"),
+        rendered.contains("error[IPE-"),
         "rendered error must carry a coded header, got:\n{rendered}"
     );
     assert!(

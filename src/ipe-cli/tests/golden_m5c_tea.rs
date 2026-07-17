@@ -10,13 +10,13 @@
 //! * Type inference works without explicit annotations when a `Cmd.perform`
 //!   or `Sub.every` call anchors the `msg` type parameter.
 //! * An **un-anchored** `Cmd.none` / `Sub.none` (free `msg` type variable)
-//!   surfaces SKY-L0102 rather than emitting Rust that `cargo build` rejects
+//!   surfaces IPE-L0102 rather than emitting Rust that `cargo build` rejects
 //!   with E0282 ("type annotations needed for `tea::SkyCmd<_>`").
 //!
 //! No TEA dispatch loop is exercised here — that lands in M6.  These are
 //! pure construct-and-discard tests whose sole output is `"ok\n"`.
 //!
-//! Positive tests are gated on `SKY_E2E=1`; gate (error) tests run without it.
+//! Positive tests are gated on `IPE_E2E=1`; gate (error) tests run without it.
 //!
 //! ## Oracle provenance
 //!
@@ -33,12 +33,12 @@
 //! * `sub_ctors` — `Sub.every 1000 0` and `Sub.batch [Sub.none, Sub.every
 //!   500 1]` discarded; proves `sub_none` infers `msg` from a sibling.
 //! * `gate_undetermined_msg` — `let _ = Cmd.none in println "ok"` must
-//!   surface SKY-L0102 (free `msg` type variable), never emit cargo-failing Rust.
+//!   surface IPE-L0102 (free `msg` type variable), never emit cargo-failing Rust.
 //!
 //! Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test golden_m5c_tea
+//! IPE_E2E=1 cargo test golden_m5c_tea
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -58,9 +58,9 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 
 /// Compile `tests/golden/<name>/Main.sky`, build the emitted Cargo project,
 /// run it, and assert its stdout matches the cached oracle.  Gated on
-/// `SKY_E2E=1`.
+/// `IPE_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -144,7 +144,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code)
 
 /// `let _ = Cmd.none in println "ok"` — `Cmd.none` appears in isolation with
 /// no sibling to pin its `msg` type.  The HM solver leaves `msg` as a free
-/// type variable; skyc must exit 1 with SKY-L0102, never emit Rust that
+/// type variable; skyc must exit 1 with IPE-L0102, never emit Rust that
 /// `cargo build` rejects with E0282 ("type annotations needed for
 /// `tea::SkyCmd<_>`").
 #[test]
@@ -152,6 +152,6 @@ fn undetermined_cmd_none_msg_is_sky_l0102() {
     assert_gate(
         "gate_undetermined_msg",
         "m5c_gate_undetermined_msg_emit",
-        ipe_diagnostics::SKY_L0102,
+        ipe_diagnostics::IPE_L0102,
     );
 }

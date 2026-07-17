@@ -11,7 +11,7 @@ import Std.Log exposing (println)
 -- i148 regression: HttpStream.open must return Task Error StreamId
 -- (not Task Error Int — the pre-fix incorrect scheme).
 -- A binding annotated Result Error StreamId must accept the Task.run result
--- without SKY-T0001.
+-- without IPE-T0001.
 
 handleOpen : Result Error StreamId -> String
 handleOpen res =

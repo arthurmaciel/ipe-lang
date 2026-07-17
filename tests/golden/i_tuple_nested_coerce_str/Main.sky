@@ -16,7 +16,7 @@ import Std.Log exposing (println)
 -- (neither of which is a `PStr` / `PList` / `PCons`), so this slipped through to
 -- the coercion-free by-value path and produced skyc-0-then-cargo-fail. The gate
 -- now recurses into the nested tuple, finds the `PStr` leaf, and fails closed to
--- SKY-L0115 — an honest skyc-fail, never an exit-0-then-cargo-fail.
+-- IPE-L0115 — an honest skyc-fail, never an exit-0-then-cargo-fail.
 type Tag
     = A
     | B

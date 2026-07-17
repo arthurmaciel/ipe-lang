@@ -26,8 +26,8 @@
 //!
 //! Same DEFAULT-gate structure as `golden_tui_entry_case_seal.rs`: the first
 //! two tests inspect the emitted `src/main.rs` text (no cargo build) so they
-//! pin the regression even when `SKY_E2E` is unset; the third is the
-//! `SKY_E2E`-gated cargo-build-and-run proof.
+//! pin the regression even when `IPE_E2E` is unset; the third is the
+//! `IPE_E2E`-gated cargo-build-and-run proof.
 
 use std::path::{Path, PathBuf};
 
@@ -130,7 +130,7 @@ fn mixed_arm_entry_point_wraps_via_task_from_result() {
     );
 }
 
-/// The load-bearing SEAL proof: under `SKY_E2E=1`, actually `cargo build` the
+/// The load-bearing SEAL proof: under `IPE_E2E=1`, actually `cargo build` the
 /// emitted crate and run it, confirming the Ok-branch (Task.run arm) result
 /// propagates correctly through the wrap.
 #[test]
@@ -148,7 +148,7 @@ fn mixed_arm_task_run_elision_builds_and_runs() {
         "mixed_arm_task_run_elision: must be accepted, got: {built:?}"
     );
 
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = support::build_and_run_emitted("mixed_arm_task_run_elision", &out);

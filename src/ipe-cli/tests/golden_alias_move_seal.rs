@@ -1,4 +1,4 @@
-//! SKY-L0105 by-VALUE alias binding — the partial-move (E0382) SEAL regression.
+//! IPE-L0105 by-VALUE alias binding — the partial-move (E0382) SEAL regression.
 //!
 //! An `as`-alias over a destructure (`(a, b) as whole`) in a by-VALUE binding
 //! position binds BOTH the whole and its sub-parts. Rust's `name @ (a, b)`
@@ -27,7 +27,7 @@
 //! 1. `skyc` emits `main.rs` byte-identical to the checked-in golden — which
 //!    records that NO by-value alias renders as `name @ inner`; every alias
 //!    binds the whole then clones the sub-shape.
-//! 2. Behind `SKY_E2E=1` the emitted project BUILDS (the seal: was `cargo`-101)
+//! 2. Behind `IPE_E2E=1` the emitted project BUILDS (the seal: was `cargo`-101)
 //!    and prints `pqpqrsrstutuhcdcd`, exit 0 — proving whole AND parts are live.
 
 use std::path::{Path, PathBuf};
@@ -105,13 +105,13 @@ fn no_by_value_alias_uses_at_subpattern() {
 }
 
 /// Full spine: build the emitted Cargo project, run it, assert it prints
-/// `pqpqrsrstutuhcdcd`, exit 0. Gated on `SKY_E2E=1`. This is the SEAL: before
+/// `pqpqrsrstutuhcdcd`, exit 0. Gated on `IPE_E2E=1`. This is the SEAL: before
 /// the fix the by-value alias binding was `skyc`-0 then `cargo`-101 (E0382);
 /// the clean build + correct output prove whole AND parts are independently
 /// owned and live.
 #[test]
 fn end_to_end_builds_and_prints_the_concatenation() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();

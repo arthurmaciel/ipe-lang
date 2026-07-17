@@ -41,22 +41,22 @@
 #   --build-timeout N  skyc+cargo build timeout in seconds (default 300)
 #   --run-timeout N    binary run timeout in seconds (default 15)
 #   --tp-demo          Run the true-positive demo then exit (verifies detector)
-#   SKY_FUZZ_FULL=1    Shorthand for --iters 10000 (CI full-gate override)
+#   IPE_FUZZ_FULL=1    Shorthand for --iters 10000 (CI full-gate override)
 #
 # Exit: 0 = all iterations green; 1 = first failure (seed + forensics dir
 # under /tmp/sky-fuzz/FAILURES/); 2 = setup error.
 #
 # Reproduce a failure: ./scripts/fuzz-well-typed.sh --seed N --iters 1 --keep
-# Full 10k gate:       SKY_FUZZ_FULL=1 ./scripts/fuzz-well-typed.sh
+# Full 10k gate:       IPE_FUZZ_FULL=1 ./scripts/fuzz-well-typed.sh
 
 set -uo pipefail
 
-# ── Source the shared env (REPO, SKYC_BIN, CARGO_TARGET_DIR, SKY_RUNTIME_DIR) ──
+# ── Source the shared env (REPO, SKYC_BIN, CARGO_TARGET_DIR, IPE_RUNTIME_DIR) ──
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/env.sh"
 
 # ── Flags ────────────────────────────────────────────────────────────────────
-ITERS="${SKY_FUZZ_FULL:+10000}"
+ITERS="${IPE_FUZZ_FULL:+10000}"
 ITERS="${ITERS:-30}"
 SEED=""
 MODE="composite"
@@ -108,7 +108,7 @@ fi
 #       "[error] IndexOutOfRange (ref XXXXXXXX): ..."
 #       "[error] ArithmeticOverflow (ref XXXXXXXX): ..."
 #       "[error] Unexpected (ref XXXXXXXX): ..."
-#   • JSON variant (SKY_LOG_FORMAT=json):
+#   • JSON variant (IPE_LOG_FORMAT=json):
 #       {"level":"error","kind":"DivisionByZero",...}
 #   • Rust default unhandled-panic (reaches raw output when hook fires but
 #     the thread join still re-propagates):
@@ -515,7 +515,7 @@ EOF
 # Template 18: multiline string + interpolation — triple-quoted string with
 # {{...}} interpolations. Well-typed: all interpolated exprs are String.
 # NOTE: String.fromInt applied to a literal integer inside {{...}} triggers
-# SKY-I0001 (unbound local '<literal>') — compiler bug, not template bug.
+# IPE-I0001 (unbound local '<literal>') — compiler bug, not template bug.
 # Workaround: bind all Int values to let-variables BEFORE interpolating;
 # {{varName}} and {{String.fromInt varName}} both work when the arg is a name.
 template_multiline_interp() {
@@ -1064,7 +1064,7 @@ if [[ "$failures" -eq 0 ]]; then
         echo "sky-fuzz: full gate SATISFIED — ran $ITERS iters clean (criterion 8)"
     else
         echo "sky-fuzz: smoke PASS — ran $ITERS iters clean"
-        echo "          (full gate: SKY_FUZZ_FULL=1 ./scripts/fuzz-well-typed.sh)"
+        echo "          (full gate: IPE_FUZZ_FULL=1 ./scripts/fuzz-well-typed.sh)"
     fi
     exit 0
 else

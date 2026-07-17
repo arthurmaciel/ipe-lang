@@ -5,7 +5,7 @@ module Main exposing (main)
 -- `MainColor` on BOTH the inferred (record-literal) path and the annotated
 -- (alias) path, so the two agree. Pre-fix: the record literal lowered the field
 -- via the ty-path (→ `UiPlain::Color`) while the `Paint` alias / `shade`
--- annotation lowered it via the canon-path (→ `MainColor`) — a SKY-I0001
+-- annotation lowered it via the canon-path (→ `MainColor`) — a IPE-I0001
 -- ty-vs-canon disagreement.
 
 

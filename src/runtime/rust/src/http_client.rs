@@ -10,9 +10,9 @@
 //!
 //! The guard blocks requests whose resolved host is loopback, RFC-1918 private,
 //! link-local, unique-local (ULA), unspecified, or v4-mapped-private. It is
-//! ON by default in production (`ENV`/`SKY_ENV` not in {unset, dev, development,
+//! ON by default in production (`ENV`/`IPE_ENV` not in {unset, dev, development,
 //! local}) and OFF in dev so development against `localhost` keeps working
-//! unchanged. `SKY_HTTP_DENY_PRIVATE=1`/`on`/`true` forces it ON; setting it to
+//! unchanged. `IPE_HTTP_DENY_PRIVATE=1`/`on`/`true` forces it ON; setting it to
 //! any other value (`0`/`off`/`false`) is the explicit production opt-out. See
 //! `ssrf::ssrf_deny_private_enabled`.
 //!
@@ -81,7 +81,7 @@ pub struct HttpRequest {
 // and the request executor.
 
 /// Apply the SSRF deny-private guard to a `reqwest::ClientBuilder` for `url`.
-/// When `SKY_HTTP_DENY_PRIVATE` is set, validates the URL scheme + host, resolves
+/// When `IPE_HTTP_DENY_PRIVATE` is set, validates the URL scheme + host, resolves
 /// to a vetted non-private `SocketAddr`, pins DNS to it (defeats DNS-rebinding),
 /// and installs a per-redirect-hop re-check. SHARED by every outbound request
 /// surface — the regular Http client, `Http.Stream.open`, the WebSocket client,
@@ -94,7 +94,7 @@ pub struct HttpRequest {
 /// URL re-check left open: `ssrf_check_url` validated a hostname then DISCARDED the
 /// address, so reqwest re-resolved it by name at connect and could hit a rebind
 /// target; with this resolver reqwest connects to exactly the vetted addrs (no
-/// re-resolve). Installed only under SKY_HTTP_DENY_PRIVATE. IP-literal targets
+/// re-resolve). Installed only under IPE_HTTP_DENY_PRIVATE. IP-literal targets
 /// bypass the resolver, so the literal/scheme checks below and the per-hop
 /// redirect `Policy` remain mandatory.
 #[derive(Debug)]
@@ -113,7 +113,7 @@ impl reqwest::dns::Resolve for DenyPrivateResolver {
                     .filter(|a| !crate::ssrf::is_private_ip(a.ip()))
                     .collect();
                 if addrs.is_empty() {
-                    Err("http: blocked: host resolves only to private/blocked addresses (SKY_HTTP_DENY_PRIVATE)".to_string())
+                    Err("http: blocked: host resolves only to private/blocked addresses (IPE_HTTP_DENY_PRIVATE)".to_string())
                 } else {
                     Ok(addrs)
                 }
@@ -163,7 +163,7 @@ pub(crate) fn ssrf_apply(
     if deny {
         let parsed = reqwest::Url::parse(url).map_err(|e| {
             format!(
-                "http: blocked: invalid URL {:?}: {} (SKY_HTTP_DENY_PRIVATE)",
+                "http: blocked: invalid URL {:?}: {} (IPE_HTTP_DENY_PRIVATE)",
                 redact_userinfo(url),
                 e
             )
@@ -171,13 +171,13 @@ pub(crate) fn ssrf_apply(
         let scheme = parsed.scheme();
         if scheme != "http" && scheme != "https" && scheme != "ws" && scheme != "wss" {
             return Err(format!(
-                "http: blocked: scheme {:?} is not http/https/ws/wss (SKY_HTTP_DENY_PRIVATE)",
+                "http: blocked: scheme {:?} is not http/https/ws/wss (IPE_HTTP_DENY_PRIVATE)",
                 scheme
             ));
         }
         let host = parsed
             .host_str()
-            .ok_or_else(|| "http: blocked: URL has no host (SKY_HTTP_DENY_PRIVATE)".to_string())?
+            .ok_or_else(|| "http: blocked: URL has no host (IPE_HTTP_DENY_PRIVATE)".to_string())?
             .to_owned();
         let addr = resolve_first_non_private_addr(&host)?;
         builder = builder.resolve_to_addrs(host.as_str(), &[addr]);
@@ -229,7 +229,7 @@ async fn do_request<E: From<String> + Send + 'static>(
                 if scheme != "http" && scheme != "https" {
                     return SkyResult::Err(
                         format!(
-                            "http: blocked: scheme {:?} is not http/https (SKY_HTTP_DENY_PRIVATE)",
+                            "http: blocked: scheme {:?} is not http/https (IPE_HTTP_DENY_PRIVATE)",
                             scheme
                         )
                         .into(),
@@ -239,7 +239,7 @@ async fn do_request<E: From<String> + Send + 'static>(
             Err(e) => {
                 return SkyResult::Err(
                     format!(
-                        "http: blocked: invalid URL {:?}: {} (SKY_HTTP_DENY_PRIVATE)",
+                        "http: blocked: invalid URL {:?}: {} (IPE_HTTP_DENY_PRIVATE)",
                         redact_userinfo(&req.url),
                         e
                     )
@@ -324,12 +324,12 @@ async fn do_request<E: From<String> + Send + 'static>(
 /// Default cap on a buffered HTTP response body (`Http.get`/`post`/`request`):
 /// 100 MiB. `Http.*` returns the body as a single `String`, so an unbounded
 /// read of an attacker- or upstream-controlled response is a memory-exhaustion
-/// (OOM) vector. Override via `SKY_HTTP_MAX_BODY_BYTES` (streaming consumers that
+/// (OOM) vector. Override via `IPE_HTTP_MAX_BODY_BYTES` (streaming consumers that
 /// need unbounded bodies use `Sky.Core.Http.Stream` instead).
 const HTTP_BODY_CAP_DEFAULT: usize = 100 * 1024 * 1024;
 
 fn http_body_cap() -> usize {
-    crate::system::read_env_var("SKY_HTTP_MAX_BODY_BYTES")
+    crate::system::read_env_var("IPE_HTTP_MAX_BODY_BYTES")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|&n| n > 0)
@@ -355,7 +355,7 @@ async fn read_body_capped<E: From<String> + Send + 'static>(
     {
         return SkyResult::Err(
                 format!(
-                    "http: response body too large ({} > {} bytes; raise SKY_HTTP_MAX_BODY_BYTES or use Http.Stream)",
+                    "http: response body too large ({} > {} bytes; raise IPE_HTTP_MAX_BODY_BYTES or use Http.Stream)",
                     len, cap
                 )
                 .into(),
@@ -374,7 +374,7 @@ async fn read_body_capped<E: From<String> + Send + 'static>(
         if buf.len().saturating_add(bytes.len()) > cap {
             return SkyResult::Err(
                 format!(
-                    "http: response body too large (> {} bytes; raise SKY_HTTP_MAX_BODY_BYTES or use Http.Stream)",
+                    "http: response body too large (> {} bytes; raise IPE_HTTP_MAX_BODY_BYTES or use Http.Stream)",
                     cap
                 )
                 .into(),

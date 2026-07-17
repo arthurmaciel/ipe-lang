@@ -34,7 +34,7 @@ naive reading of the spec.
    the cargo project to `sky-out/rust/` and stop. The real `cargo build` runs
    **externally**: `scripts/equivalence-checks/examples-sweep.sh:132` does
    `cd "$d" && cargo build --manifest-path sky-out/rust/Cargo.toml`; the only
-   in-crate cargo invocation is the `SKY_E2E`-gated test at `lib.rs:1116`.
+   in-crate cargo invocation is the `IPE_E2E`-gated test at `lib.rs:1116`.
    ⇒ The `--target`/`--static` *build invocation* lives in the external runner
    (sweep + CI), while the *static configuration* must be baked into the emitted
    crate (`.cargo/config.toml` + `Cargo.toml` features) so a standalone `cargo
@@ -53,7 +53,7 @@ naive reading of the spec.
    ```rust
    #[cfg(feature = "static_alloc")]
    #[global_allocator]
-   static SKY_GLOBAL_ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+   static IPE_GLOBAL_ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
    ```
    This is exactly the inherited default the spec's D1 rips out. Both goldens are
    rebaselined by this plan.
@@ -129,7 +129,7 @@ env IPE_STATIC / IPE_TARGET / IPE_ALLOC         ┘        │ Result<BuildPlan,
   `talc = "4"`, `spin = "0.9"` (talc lock backing), `mimalloc = { version =
   "0.1", default-features = false }`.
 - Test runners: `cargo test -p sky_backend_rust`, `cargo test -p skyc`; e2e gated
-  on `SKY_E2E=1` and a new `SKY_E2E_STATIC=1`.
+  on `IPE_E2E=1` and a new `IPE_E2E_STATIC=1`.
 
 ## Global Constraints
 
@@ -283,7 +283,7 @@ golden in lockstep.
    ```rust
    #[cfg(feature = "alloc_dlmalloc")]
    #[global_allocator]
-   static SKY_GLOBAL_ALLOC: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
+   static IPE_GLOBAL_ALLOC: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
 
    // talc MUST be backed by a real lock. AssumeUnlockable is a data race the
    // moment any non-main thread allocates (tokio's worker pool alone breaks it).
@@ -291,12 +291,12 @@ golden in lockstep.
    // this arm, so UB-freedom does NOT depend on the app-shape classifier.
    #[cfg(feature = "alloc_talc")]
    #[global_allocator]
-   static SKY_GLOBAL_ALLOC: talc::Talck<spin::Mutex<()>, talc::ClaimOnOom> =
+   static IPE_GLOBAL_ALLOC: talc::Talck<spin::Mutex<()>, talc::ClaimOnOom> =
        talc::Talc::new(talc::ClaimOnOom::new(talc::Span::empty())).lock();
 
    #[cfg(feature = "alloc_mimalloc")]
    #[global_allocator]
-   static SKY_GLOBAL_ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+   static IPE_GLOBAL_ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
    // no alloc_* feature ⇒ system allocator: nothing emitted.
    ```
    (Verify the exact `talc` 4.x constructor spelling against the crate docs when
@@ -601,8 +601,8 @@ sweep.sh` (`--static` variant), `scripts/lib/checks.sh`.
 
 ## Task 9 — Golden / e2e: hello-world + representative server build static, run, and prove it
 
-**Files:** `crates/skyc/src/lib.rs` (new `SKY_E2E_STATIC`-gated test alongside the
-existing `SKY_E2E` one at L1084-1138).
+**Files:** `crates/skyc/src/lib.rs` (new `IPE_E2E_STATIC`-gated test alongside the
+existing `IPE_E2E` one at L1084-1138).
 
 **Steps:**
 1. Mirror the existing `generic_record_program_builds_and_prints_forty_two` e2e,
@@ -616,13 +616,13 @@ existing `SKY_E2E` one at L1084-1138).
 3. Add a **representative concurrent app** (a `Sky.Http.Server` example) as a second
    static case — this is the shape where the allocator matters and where a dynamic-
    NSS/getaddrinfo footgun would surface. Assert it starts and serves one request.
-4. Gate all of this on `SKY_E2E_STATIC=1` so default `cargo test` stays fast and
+4. Gate all of this on `IPE_E2E_STATIC=1` so default `cargo test` stays fast and
    host-independent (musl target may be absent on CI-less dev hosts).
 
 **Test-first:** the test itself is the artifact; it is RED until Tasks 2/3/6 land
 (no `alloc_dlmalloc` feature / no crt-static config).
 
-**Automated verification:** `SKY_E2E_STATIC=1 cargo test -p skyc static_e2e`.
+**Automated verification:** `IPE_E2E_STATIC=1 cargo test -p skyc static_e2e`.
 **Manual:** run the produced binary inside `docker run --rm -v …:/b scratch /b`
 (no libc present) — it must run, proving zero runtime deps.
 

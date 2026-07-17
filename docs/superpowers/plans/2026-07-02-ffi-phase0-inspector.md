@@ -605,7 +605,7 @@ note appended under the slice section), or a short
    sandbox lands."
 2. Record the **deferred rename**: `sky-ffi-inspect-rs → ipe-ffi-inspect` stays
    **DEFERRED** to the post-completion namespace sweep (renaming the crate, the
-   `SKY_FFI_INSPECTOR_RS` probe `sky/…/Ffi.hs:307`, the `bin/` walk-up
+   `IPE_FFI_INSPECTOR_RS` probe `sky/…/Ffi.hs:307`, the `bin/` walk-up
    `Ffi.hs:319`, the `[sky-ffi]` diagnostic prefix `Ffi.hs:149`, and cargo-fuzz
    as an optional continuous-fuzzing follow-on) — cosmetic, would churn byte-diff
    anchors mid-port.

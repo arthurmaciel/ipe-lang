@@ -14,9 +14,9 @@
 //! `emit_func_value` route through the shared structural `wants_arc_ctor` helper
 //! that matches on the `IrType` shape, never the rendered string.
 //!
-//! ## Why this test is NOT `SKY_E2E`-gated
+//! ## Why this test is NOT `IPE_E2E`-gated
 //!
-//! The full cargo-build proof lives in `server_e2e.rs` (`SKY_E2E`), but that
+//! The full cargo-build proof lives in `server_e2e.rs` (`IPE_E2E`), but that
 //! suite does not run in the default `cargo nextest` gate — which is exactly
 //! how the regression reached `master` green. This test needs only the emitted
 //! Rust text (no cargo build), so it runs in the DEFAULT gate and can never be

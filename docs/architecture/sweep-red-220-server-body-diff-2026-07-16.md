@@ -13,7 +13,7 @@ examples, not what actually ran here — all four are `Server.listen`
 
 Method: fresh `skyc` (`master-gate-target/debug/skyc`, built at HEAD
 `1ba31988`) → `skyc build sky.toml --out sky-out/rust` → `cargo build` →
-Go reference via pinned `tools/oracle/bin/sky` (v0.17.3, `SKY_RUNTIME_DIR`
+Go reference via pinned `tools/oracle/bin/sky` (v0.17.3, `IPE_RUNTIME_DIR`
 unset) → boot each binary, `curl` every comparable GET route, full-body
 `diff`.
 
@@ -45,7 +45,7 @@ response:
    b. `injectDevBanner(body, devBannerHTML())` — the `__sky-dev-console`
       anchor before the last case-insensitive `</body>`, else appended;
       `devBannerHTML` returns `""` in production (`productionFromEnv`) or
-      when `SKY_DEV_BANNER=off|0`; href = `SKY_CONSOLE_URL` default
+      when `IPE_DEV_BANNER=off|0`; href = `IPE_CONSOLE_URL` default
       `/_sky/console`, attribute-escaped — **not ported**. ← the observed diff.
 3. `MountEmbeddedConsole(mux)` + `MountObservabilityEndpoints(mux)` before
    user routes (the surface the banner links to) — **not ported** for
@@ -77,11 +77,11 @@ class of silent divergence arises.
   `production_from_env`); `live/mod.rs` re-exports/calls it (zero byte
   change to the Live path).
 - During extraction, reconcile the gate drift with Go's `devBannerHTML`:
-  Go suppresses on `productionFromEnv` + `SKY_DEV_BANNER=off|0`; our live
+  Go suppresses on `productionFromEnv` + `IPE_DEV_BANNER=off|0`; our live
   helper suppresses on production + non-empty `base` (sub-app) +
-  `SKY_CONSOLE_EMBED=off|0|false` + `SKY_CONSOLE_AUTH=off`, and does NOT
-  honour `SKY_DEV_BANNER`. Union both sets in the shared helper (add
-  `SKY_DEV_BANNER`, keep the live-side gates) — suppression can only make
+  `IPE_CONSOLE_EMBED=off|0|false` + `IPE_CONSOLE_AUTH=off`, and does NOT
+  honour `IPE_DEV_BANNER`. Union both sets in the shared helper (add
+  `IPE_DEV_BANNER`, keep the live-side gates) — suppression can only make
   bodies match MORE often in odd configs, and the sweep's env (nothing
   set) hits the injecting path either way.
 - In `to_axum_response`: after the effective content-type is resolved
@@ -93,7 +93,7 @@ class of silent divergence arises.
   `serve_streaming_sentinel` early-return sits above, same as Go where
   streams bypass the buffered `fmt.Fprint` path.
 - Tests: (a) unit — injection before `</body>`, append fallback,
-  non-HTML untouched, production/`SKY_DEV_BANNER` suppression; (b) reuse
+  non-HTML untouched, production/`IPE_DEV_BANNER` suppression; (b) reuse
   the pinned Go-bytes test against the shared helper; (c) E2E golden or
   sweep re-run — the four examples flip DIFFER → `equivalence-body N`.
 
@@ -123,7 +123,7 @@ Go's order). Own backlog item.
 real missing runtime feature. Do NOT pin these four in
 `equivalence-classification.tsv` (loses the byte-compare that proved everything
 else identical), do NOT loosen `equivalence_normalize_html.py` (it never ran
-here), and do NOT boot the Go reference with `SKY_DEV_BANNER=off` (would
+here), and do NOT boot the Go reference with `IPE_DEV_BANNER=off` (would
 mask this whole class permanently). One cosmetic nit, optional: the
 `DIFFER` row note for server-shape examples says "route body differs";
 only the live-shape fallback path mentions HTML normalisation — the

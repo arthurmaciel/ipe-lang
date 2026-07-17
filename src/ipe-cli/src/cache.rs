@@ -277,22 +277,22 @@ pub fn derive_epoch() -> Option<String> {
 }
 
 /// The default cache root for a build writing to `out_dir`, honouring the
-/// `SKY_BUILD_CACHE` / `SKY_BUILD_CACHE_DIR` environment overrides.
+/// `IPE_BUILD_CACHE` / `IPE_BUILD_CACHE_DIR` environment overrides.
 ///
-/// - `SKY_BUILD_CACHE=0` (also `off` / `false`) disables the cache entirely.
-/// - `SKY_BUILD_CACHE_DIR=<path>` overrides the default location.
+/// - `IPE_BUILD_CACHE=0` (also `off` / `false`) disables the cache entirely.
+/// - `IPE_BUILD_CACHE_DIR=<path>` overrides the default location.
 /// - Otherwise: `<out_dir>/.skyc-cache` — colocated with the build output
 ///   so `rm -rf <out_dir>` (the existing "force a clean rebuild" ritual)
 ///   also resets the cache, with no new mental model to learn.
 #[must_use]
 pub fn env_cache_dir(out_dir: &Path) -> Option<PathBuf> {
     if matches!(
-        std::env::var("SKY_BUILD_CACHE").as_deref(),
+        std::env::var("IPE_BUILD_CACHE").as_deref(),
         Ok("0" | "off" | "false")
     ) {
         return None;
     }
-    if let Ok(dir) = std::env::var("SKY_BUILD_CACHE_DIR") {
+    if let Ok(dir) = std::env::var("IPE_BUILD_CACHE_DIR") {
         return Some(PathBuf::from(dir));
     }
     Some(out_dir.join(".skyc-cache"))
@@ -548,7 +548,7 @@ mod tests {
         // the design doc's module-identity axis. This can't happen through
         // the real driver (a path is injected or it isn't), but the key
         // function must still be sensitive to it: origin affects
-        // canonicalisation (SKY-N0025), and the module doc's own "when in
+        // canonicalisation (IPE-N0025), and the module doc's own "when in
         // doubt, include it" principle applies.
         let (sources, _injected) = sample_sources();
         let no_injection: BTreeSet<Vec<String>> = BTreeSet::new();

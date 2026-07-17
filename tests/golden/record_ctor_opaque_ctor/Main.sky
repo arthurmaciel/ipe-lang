@@ -9,7 +9,7 @@ import Std.Log exposing (println)
 -- `record_ctor_opaque_field`, but here the alias name is USED as a value
 -- constructor (`D Decode.int`). Because synthesis declined (the field is
 -- non-derivable as a struct field), no top-level value `D` exists — so this
--- must fail CLOSED at skyc with SKY-N0001 ("cannot find this value in scope"),
+-- must fail CLOSED at skyc with IPE-N0001 ("cannot find this value in scope"),
 -- NEVER skyc-0-then-cargo-fail. This golden asserts the skyc build returns an
 -- error and emits nothing.
 type alias D =

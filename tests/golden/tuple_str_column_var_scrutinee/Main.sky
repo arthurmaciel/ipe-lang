@@ -11,7 +11,7 @@ import Std.Log exposing (println)
 -- `Std.Ui.Transform` / `Std.Ui.Animation` / `26-ui-showcase`.
 --
 -- Before #182 the lowerer fail-closed any coercing column (`PStr` / `PList` /
--- `PCons`) on the by-value whole-tuple path to SKY-L0115. Now a `PStr` column
+-- `PCons`) on the by-value whole-tuple path to IPE-L0115. Now a `PStr` column
 -- lowers to a native Rust `match pair { (__sg0, v) if __sg0.as_str() ==
 -- "transform" => … }` — a by-value binder + `as_str()` guard, sound for a
 -- variable scrutinee (mirrors the reference's `renderPatGuarded`). A `PList` /

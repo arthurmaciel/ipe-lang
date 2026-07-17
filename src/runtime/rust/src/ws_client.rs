@@ -169,7 +169,7 @@ async fn do_connect<E: From<String> + Send + 'static>(
     // Build the credential-stripped form ONCE; every error message below echoes
     // this, never the raw `url`.
     let safe_url = redact_ws_url(&url);
-    // SSRF guard: when SKY_HTTP_DENY_PRIVATE is set, reject a ws/wss URL whose host
+    // SSRF guard: when IPE_HTTP_DENY_PRIVATE is set, reject a ws/wss URL whose host
     // resolves to a private/loopback/link-local address BEFORE the handshake — the
     // without this check the WebSocket surface would connect with no
     // deny-private guard, letting an attacker-controlled URL reach internal
@@ -222,11 +222,11 @@ async fn do_connect<E: From<String> + Send + 'static>(
     // client to buffer an arbitrarily large payload. Default 1 MiB (matches the
     // server-side cap): the prior 16 MiB × the 64-deep broadcast buffer below was
     // ~1 GiB worst-case retained per socket under a lagging subscriber. Override
-    // via SKY_WS_MAX_MESSAGE_BYTES for apps that legitimately need larger frames.
+    // via IPE_WS_MAX_MESSAGE_BYTES for apps that legitimately need larger frames.
     //
     // tokio-tungstenite 0.24 exposes connect_async_with_config which passes a
     // tungstenite::protocol::WebSocketConfig directly to the handshake.
-    let max_msg: usize = crate::system::read_env_var("SKY_WS_MAX_MESSAGE_BYTES")
+    let max_msg: usize = crate::system::read_env_var("IPE_WS_MAX_MESSAGE_BYTES")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|n| *n > 0)
@@ -236,7 +236,7 @@ async fn do_connect<E: From<String> + Send + 'static>(
         max_frame_size: Some(max_msg),
         ..Default::default()
     };
-    // SSRF pin (R1): when SKY_HTTP_DENY_PRIVATE is on, resolve the host to a
+    // SSRF pin (R1): when IPE_HTTP_DENY_PRIVATE is on, resolve the host to a
     // vetted non-private addr and dial THAT ourselves, so tokio-tungstenite can't
     // re-resolve the name to a rebind target at connect time — closing the
     // resolve->connect TOCTOU that the bare ssrf_validate_url check above leaves
@@ -262,7 +262,7 @@ async fn do_connect<E: From<String> + Send + 'static>(
                 // plaintext to a TLS endpoint.
                 if url.starts_with("wss://") {
                     return SkyResult::Err(format!(
-                        "WebSocket.connect {}: wss with SKY_HTTP_DENY_PRIVATE is unsupported (no TLS feature to pin the connection)",
+                        "WebSocket.connect {}: wss with IPE_HTTP_DENY_PRIVATE is unsupported (no TLS feature to pin the connection)",
                         safe_url
                     ).into());
                 }

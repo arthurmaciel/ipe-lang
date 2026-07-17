@@ -22,11 +22,11 @@
 //!   trailing use of the effect's own argument is a use-after-move (E0382).
 //!
 //! ```text
-//! # compile-only check (fast, no SKY_E2E needed):
+//! # compile-only check (fast, no IPE_E2E needed):
 //! cargo test -p skyc --test golden_aud04_emit_expr_ir_capture
 //!
 //! # full E2E (run each emitted binary, assert stdout):
-//! SKY_E2E=1 cargo test -p skyc --test golden_aud04_emit_expr_ir_capture
+//! IPE_E2E=1 cargo test -p skyc --test golden_aud04_emit_expr_ir_capture
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -63,12 +63,12 @@ fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
     );
 }
 
-/// Under `SKY_E2E=1`, additionally build the emitted Rust project and run
+/// Under `IPE_E2E=1`, additionally build the emitted Rust project and run
 /// it, asserting exit 0 and that `expect_contains` appears verbatim in
 /// stdout (covering the wrong-output witnesses, which compile fine but print a
 /// corrupted string when the textual rewrite corrupts a shared word).
 fn assert_e2e_output(fixture: &str, expect_contains: &str) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();

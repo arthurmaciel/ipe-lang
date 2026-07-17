@@ -29,7 +29,7 @@ Provides the **M4 kernel registry** the FFI consumer port blocks on
 | Concern | Site | Failure direction today |
 |---|---|---|
 | Name-list ("what exists") | `sky_canon/src/env.rs:182` `QUALIFIERS: &[(&str,&[&str])]`, iterated `:990` → `VarHome::Kernel(Symbol,Symbol)` | CLOSED (unknown qualifier → error) |
-| `(qual,name) → KernelFn` | `sky_lower/src/lower.rs` `lower_callee` (~377 `&str` arms) → SKY-L0108 | CLOSED |
+| `(qual,name) → KernelFn` | `sky_lower/src/lower.rs` `lower_callee` (~377 `&str` arms) → IPE-L0108 | CLOSED |
 | `(qual,name) → Ty` scheme | `sky_types/src/constrain.rs:1881` `kernel_ty`, fallback **`:4069 _ => Ty::Var(u32::MAX)`** | **OPEN — the F1 root** |
 | `KernelFn → runtime name` | `sky_backend_rust/src/naming.rs` `kernel_name` (~416 arms) | — |
 | backend dispatch | `emit_expr.rs` keyed on `is_db()/is_ui()/is_server()` + `_ => Ok(None)` (`:279`, `:444`, `:821`) | OPEN (F8 mis-route) |
@@ -201,7 +201,7 @@ Coexistence properties (all per D5 / R0.2):
 
 **Phase B — parse-once boundary (closes F2).** `VarHome::Kernel(KernelId)`; relocate the `(qual,name) → StdlibKernel` table from `lower.rs` into `decl()` / `stdlib_index`, consumed by canon; `lower_callee` unwraps the canon id. Behaviour identical (same table, relocated). **F2 closed here, independent of schemes.** Green.
 
-**Phase C — invert the fallback (closes F1's silent-open class + F3's asymmetry).** Stand up the dual-lookup: `stdlib_scheme(id)` serves migrated families from the new exhaustive match and delegates un-migrated ones to legacy `kernel_ty`. **Change the legacy tail `_ => Ty::Var(u32::MAX)` to a fail-closed diagnostic whose shape matches lower's SKY-L0108** (an *unimplemented-kernel* gap — **not** a `CompilerBug`; a holed kernel used by valid Sky code is a missing scheme, not a compiler invariant break). The crate still compiles (the wildcard still exists), but its failure flips from silent-open (exit-0-then-cargo-fail) to loud-closed at type-check. **No new exit-0 hole can appear, and all ~231 existing holes surface at once as fail-closed `skyc` diagnostics** — and because `sky_types` now fails the *same way* lower already does, **F3's lower-closed/types-open asymmetry is closed here, two phases before the wildcard is deleted.** A burndown test enumerates `StdlibKernel::ALL`, calls `stdlib_scheme`, counts legacy-tail hits, and **asserts the count only decreases**.
+**Phase C — invert the fallback (closes F1's silent-open class + F3's asymmetry).** Stand up the dual-lookup: `stdlib_scheme(id)` serves migrated families from the new exhaustive match and delegates un-migrated ones to legacy `kernel_ty`. **Change the legacy tail `_ => Ty::Var(u32::MAX)` to a fail-closed diagnostic whose shape matches lower's IPE-L0108** (an *unimplemented-kernel* gap — **not** a `CompilerBug`; a holed kernel used by valid Sky code is a missing scheme, not a compiler invariant break). The crate still compiles (the wildcard still exists), but its failure flips from silent-open (exit-0-then-cargo-fail) to loud-closed at type-check. **No new exit-0 hole can appear, and all ~231 existing holes surface at once as fail-closed `skyc` diagnostics** — and because `sky_types` now fails the *same way* lower already does, **F3's lower-closed/types-open asymmetry is closed here, two phases before the wildcard is deleted.** A burndown test enumerates `StdlibKernel::ALL`, calls `stdlib_scheme`, counts legacy-tail hits, and **asserts the count only decreases**.
 
 > Rationale (security > correctness > completeness): the ~231 holes never produced a passing example — they were already red (cargo failure). Fail-closing only moves the failure earlier and louder, which the no-deferral rule *wants*. This is why Phase C precedes any family fill.
 
@@ -284,7 +284,7 @@ tighten the impl. Refreshed anchors and the adjustments follow.
 | `kernel_ty` at `constrain.rs:1881` (line 33) | `constrain.rs:1888` (`:1881` is now the close of the prior fn) | header moved |
 | VarKernel constrain arm | `constrain.rs:1483` (destructures `id: _`); scheme entry `constrain_var_kernel` at `:1435` | new post-B site |
 | `KernelFn` closed enum in `sky_ir` (`ir.rs:822`), "~394 variants" (lines 12, 39) | `StdlibKernel` now lives in leaf `sky_kernels` (`lib.rs`), **424** variants; `KernelFn` is an alias | Phase A relocated the enum + count |
-| "the ~377-arm `&str` table is **deleted**" from `lower.rs` (line 133) / Q2 | still present as the **id=None** legacy arm (`lower.rs:4050–4065`, tail `SKY-L0108` at `:4065`); dual-backed, not deleted | Q2 describes the Phase D/E end-state, not post-B reality |
+| "the ~377-arm `&str` table is **deleted**" from `lower.rs` (line 133) / Q2 | still present as the **id=None** legacy arm (`lower.rs:4050–4065`, tail `IPE-L0108` at `:4065`); dual-backed, not deleted | Q2 describes the Phase D/E end-state, not post-B reality |
 | canon `QUALIFIERS` hand-block replaced (line 125) | `stdlib_index` built from `ALL` in `env.rs:1012+`; install fast-path at `env.rs:192` | landed as specified |
 
 The `~231 holes / 14 families / ~173 arms` figures are pre-A estimates and
@@ -310,7 +310,7 @@ were not re-counted; treat as approximate.
    `DResult<VarId>` (`:1435`). Phase C must make `kernel_ty` (or its
    successor) return `Option<Ty>` and surface the miss in
    `constrain_var_kernel` as `Err(unsupported(span, Feature::Kernels))` —
-   byte-for-shape with lower's `SKY-L0108` (`lower.rs:4065`). Recommend the
+   byte-for-shape with lower's `IPE-L0108` (`lower.rs:4065`). Recommend the
    Phase C signature `stdlib_scheme(StdlibKernel) -> Option<Ty>` (None =
    not-yet-migrated) so the dual-lookup is `id.and_then(stdlib_scheme)
    .or_else(|| legacy_kernel_ty(module, name))` and Phase E's seal is the
@@ -367,7 +367,7 @@ exactly: `id = Some(k)` → `stdlib_scheme(k)` then legacy; `id = None` (FFI
 `Rust.*` and any name absent from `stdlib_index`) → legacy `(module,name)`.
 No family is silently mis-typed: a migrated family is total in
 `stdlib_scheme`; an un-migrated one is untouched legacy; a miss on both is
-loud (`SKY-L0108`-shaped) rather than the current silent `Ty::Var(u32::MAX)`
+loud (`IPE-L0108`-shaped) rather than the current silent `Ty::Var(u32::MAX)`
 exit-0-then-cargo-fail. The one edge the original prose under-specified is
 the **un-migrated `Some`** case — it must fall to legacy just like `None`,
 which the `Option<Ty>`-returning `stdlib_scheme` (adjustment 2) makes

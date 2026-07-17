@@ -6,7 +6,7 @@
 //! lock:
 //!   * the module injects → canonicalises-as-stdlib → lowers → emits (a Std-homed
 //!     `CssProp` / `CssRule` ADT defined AND matched — kernel-impossible);
-//!   * (`SKY_E2E`) the emitted binary RUNS and its CSS output keeps the benign
+//!   * (`IPE_E2E`) the emitted binary RUNS and its CSS output keeps the benign
 //!     rule byte-for-byte while NEUTRALISING all three injection vectors
 //!     (value breakout, `url(javascript:)`, selector breakout).
 
@@ -32,7 +32,7 @@ fn css_manifest() -> PathBuf {
 }
 
 /// The compiled-source `Std.Css` resolves + lowers like a user module: the
-/// project builds (no `SKY-N0001 stylesheet not found`), the emitted Rust carries
+/// project builds (no `IPE-N0001 stylesheet not found`), the emitted Rust carries
 /// the Std-homed render fold, and it routes free strings through the leaf
 /// security kernels (`safe_value` / `safe_selector`).
 #[test]
@@ -72,12 +72,12 @@ fn css_source_builds_and_injects_leaf_kernels() {
     );
 }
 
-/// SECURITY GOLDEN (`SKY_E2E`): the emitted binary runs and its CSS output keeps
+/// SECURITY GOLDEN (`IPE_E2E`): the emitted binary runs and its CSS output keeps
 /// the benign rule byte-for-byte while EVERY injection vector is neutralised —
 /// no `</style>`, `<script>`, `javascript:`, `expression(`, or `alert` survives.
 #[test]
 fn css_e2e_neutralises_injection() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("css_source_e2e");

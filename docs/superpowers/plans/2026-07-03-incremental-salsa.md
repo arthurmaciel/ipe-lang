@@ -73,7 +73,7 @@ under-invalidation.
   Reconciling this is the interning story (Task 3) and is a prerequisite for every
   tracked query.
 - **cargo is not invoked today.** `skyc::build`/`build_project` stop at writing
-  emitted files; only an `SKY_E2E`-gated test runs cargo (lib.rs:1116). The
+  emitted files; only an `IPE_E2E`-gated test runs cargo (lib.rs:1116). The
   emit→cargo bridge + integrated `ipe build` cargo step are net-new (Task 15/16).
 
 ---
@@ -113,7 +113,7 @@ unchanged value (proves inputs are independent).
 - `source_text(FileId) -> Arc<str>` (low durability), `file_set() -> Arc<BTreeSet<FileId>>` (low).
 - `project_config() -> ProjectConfig` (high) — a **typed** parse of `sky.toml`
   (reuse `skyc::project::parse_manifest`), NOT a raw string.
-- `codegen_flags() -> CodegenFlags` (high) — `SKY_DCE`, `SKY_SOLVER_BUDGET`,
+- `codegen_flags() -> CodegenFlags` (high) — `IPE_DCE`, `IPE_SOLVER_BUDGET`,
   budget factor, env-prefix parsed to typed fields (closes the hidden-env hole, H2).
 - `ffi_package_interface(PackageId) -> Arc<VerifiedFfiInterface>` (high) — **reserve
   the seam only** (FFI is PARKED per spec); a stub `VerifiedFfiInterface` whose
@@ -371,7 +371,7 @@ at last consistent state and the running binary untouched (INV-3).
 
 **Goal.** A real `ipe build` that runs emit → reconcile → **timeout-bounded cargo
 build** and distinguishes "lowering succeeded" from "cargo succeeded" (H9).
-**Test first.** Reuse/promote the `SKY_E2E` cargo test (lib.rs:1116) into a
+**Test first.** Reuse/promote the `IPE_E2E` cargo test (lib.rs:1116) into a
 first-class, timeout-bounded `ipe build` integration test on `tests/golden/basics`:
 emit → cargo build → run → assert prints `42`. Assert the "cargo built" signal is
 distinct from the "lowering succeeded" signal.

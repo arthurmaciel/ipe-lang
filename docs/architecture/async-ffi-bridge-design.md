@@ -290,11 +290,11 @@ no such hazard). The concrete mechanism is decided as:
 **v1 ports the reference's shipped pipeline unchanged in substance:**
 
 - **Program-level:** FFI refs are `Dce.FfiRef kernelName wrapperRefName`
-  reachability facts, exactly like stdlib kernel refs; `SKY_DCE=0` / empty
+  reachability facts, exactly like stdlib kernel refs; `IPE_DCE=0` / empty
   set → keep-everything.
 - **Wrapper-level (S4):** `ipe add` writes ALL admitted wrappers into the
   cached `<slug>_bindings.rs`, each bracketed by
-  `// SKY-FFI-WRAPPER BEGIN <ref>` / `END`; build time slices unreached
+  `// IPE-FFI-WRAPPER BEGIN <ref>` / `END`; build time slices unreached
   regions. Port the load-bearing discipline verbatim
   (`Ffi.hs:222-258`, `Project.hs:499-540`):
   - **R-D SSOT keying** — ONE `wrapperRefName` function feeds kernel.json
@@ -364,7 +364,7 @@ P3 generics M-E (turbofish,          │        │                          E2E
 | **P4** | Sandbox — unchanged | unchanged |
 | **P5** | Driver + consumer wiring — E2E rung 1 gains one async crate alongside semver | `ipe add` an async crate → build → run |
 | **P6** | E2E ladder: 10 sync shim-free crates + **firestore direct (fixture-104 parity)** + **the REAL async-stripe end-to-end build — reference open end #1, never run upstream** (heavy multi-crate: async-stripe-core + facade + client-core + hyper/tokio; disk-check + timeout-bounded per repo rules) | stripe checkout-session + customer round-trip green |
-| **P7** | **ACCEPTANCE — reference open end #2:** migrate skyshop-rs off all three shim crates (firestore path proven upstream; firebase mirrors firestore's async-trait shape; stripe proven in P6). Judgment residue relocates per the learnings verdict: `_status` keys die (typed `Task Error` + `Maybe`), env/client config moves to Sky code, `EmulatorTokenSource` (user trait impl) → Sky-side/stdlib helper. Verify used-set-only DCE (S4 slicing on all three crates; `SKY_DCE=0` residual documented, not a blocker) | **skyshop-rs: ZERO shims + used-set-only DCE = DONE** |
+| **P7** | **ACCEPTANCE — reference open end #2:** migrate skyshop-rs off all three shim crates (firestore path proven upstream; firebase mirrors firestore's async-trait shape; stripe proven in P6). Judgment residue relocates per the learnings verdict: `_status` keys die (typed `Task Error` + `Maybe`), env/client config moves to Sky code, `EmulatorTokenSource` (user trait impl) → Sky-side/stdlib helper. Verify used-set-only DCE (S4 slicing on all three crates; `IPE_DCE=0` residual documented, not a blocker) | **skyshop-rs: ZERO shims + used-set-only DCE = DONE** |
 
 ---
 

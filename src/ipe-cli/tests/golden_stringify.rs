@@ -4,7 +4,7 @@
 //! function is rejected AT TYPE-CHECK (fail-closed), never emitting an unbounded
 //! `basics_to_string::<T>` that `cargo` would reject — the seal is preserved.
 //!
-//! Positive case is `SKY_E2E`-gated (build + run). The negative case is a pure
+//! Positive case is `IPE_E2E`-gated (build + run). The negative case is a pure
 //! skyc compile (no cargo), so it always runs.
 
 use std::path::{Path, PathBuf};
@@ -36,7 +36,7 @@ fn compile_golden(name: &str) -> PathBuf {
 }
 
 fn e2e_enabled() -> bool {
-    std::env::var("SKY_E2E").is_ok()
+    std::env::var("IPE_E2E").is_ok()
 }
 
 /// `toString` on scalars compiles + runs (Go `%v`: bool lowercases).
@@ -74,7 +74,7 @@ fn log_info_with_stringify_attrs_compiles() {
 
 /// SEAL-PRESERVING negative gate: `toString` on a FUNCTION is rejected at skyc
 /// type-check (the Stringify obligation's `Fun` head-rejection), NOT deferred to
-/// a cargo failure. A pure compile — no `SKY_E2E` needed.
+/// a cargo failure. A pure compile — no `IPE_E2E` needed.
 #[test]
 fn tostring_on_function_is_rejected_at_typecheck() {
     let root = repo_root();

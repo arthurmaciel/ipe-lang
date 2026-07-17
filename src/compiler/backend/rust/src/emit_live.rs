@@ -63,13 +63,13 @@ pub fn emit_live_call(
                 });
             };
             // Unreachable for well-typed source: a non-literal cfg is rejected
-            // at lower with SKY-L0119 (Feature::LetBoundAppCfg); this guard is a
+            // at lower with IPE-L0119 (Feature::LetBoundAppCfg); this guard is a
             // defensive invariant, mirroring the `LiveAppRouted` precedent.
             let Expr::Record(fields) = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_live_call::LiveApp",
                     detail: "Live.app cfg must be an inline record literal; \
-                             a non-literal cfg is rejected at lower with SKY-L0119"
+                             a non-literal cfg is rejected at lower with IPE-L0119"
                         .into(),
                 });
             };
@@ -82,7 +82,7 @@ pub fn emit_live_call(
         // `lower_app_entry_cfg` path as `Live.app` (the reference has ONE
         // `Live.app` that branches at emit time), so the alias takes the same
         // `emit_live_app_inner` branch here.  A non-literal cfg is rejected at
-        // lower with SKY-L0119 exactly as for `Live.app`; the guard below is
+        // lower with IPE-L0119 exactly as for `Live.app`; the guard below is
         // the same defensive invariant.
         KernelFn::LiveAppRouted => {
             let [cfg_e] = args else {
@@ -95,7 +95,7 @@ pub fn emit_live_call(
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_live_call::LiveAppRouted",
                     detail: "Live.appRouted cfg must be an inline record literal; \
-                             a non-literal cfg is rejected at lower with SKY-L0119"
+                             a non-literal cfg is rejected at lower with IPE-L0119"
                         .into(),
                 });
             };
@@ -201,7 +201,7 @@ fn emit_live_route(
             //
             // Item 1: static arity check — count ':param' segments in
             // the pattern and compare against the constructor's payload count.
-            // A mismatch is a compile-time error (SKY-L0122): the route can
+            // A mismatch is a compile-time error (IPE-L0122): the route can
             // never deliver the right arguments.  Only checked when the pattern
             // is a string literal (the only shape the parser accepts for a
             // route pattern); other shapes are left to cargo for now.
@@ -266,7 +266,7 @@ fn emit_live_route(
     } else {
         // Any other builder shape (a `Var` referencing a local, a call
         // result, …) carries no recoverable parameter types, so the builder
-        // closure cannot be emitted soundly — fail CLOSED with SKY-L0123.
+        // closure cannot be emitted soundly — fail CLOSED with IPE-L0123.
         // Pre-round-4 this arm emitted `(builder)(params)` untyped, which
         // cargo-failed (E0308/E0618) for every shape except the rare raw
         // `List String -> Page` builder — a silent seal hole.
@@ -328,7 +328,7 @@ fn emit_live_app_inner(
     // bound BEFORE emitting. A non-serialisable Model (e.g. a field of type
     // `Cmd`/`Sub`/`Task`/`Decoder`/`Db`/function, or `Html`/`Element`/`Color`)
     // would otherwise `skyc`-succeed and then `cargo`-fail on the missing trait.
-    // The gate converts that into a fail-closed `SKY-L0120` diagnostic.
+    // The gate converts that into a fail-closed `IPE-L0120` diagnostic.
     if let Some(model_ty) = crate::emit_model_gate::model_ty_of_view(view_e) {
         crate::emit_model_gate::check_admissible_model(
             ctx,
@@ -340,7 +340,7 @@ fn emit_live_app_inner(
     // seal: gate the Msg type against `live_app`'s Clone+Send+Sync+Debug
     // bound. The predicate is ir_type_is_derivable (NOT serde) — Msg is never
     // persisted, so Html-carrying Msg is accepted. A Cmd/Sub/Task/function in
-    // Msg would cargo-fail; the gate makes it a fail-closed SKY-L0122 error.
+    // Msg would cargo-fail; the gate makes it a fail-closed IPE-L0122 error.
     if let Some(msg_ty) = crate::emit_model_gate::msg_ty_of_update(update_e) {
         crate::emit_model_gate::check_admissible_msg(ctx, msg_ty, ipe_diagnostics::AppShape::Live)?;
     }
@@ -364,7 +364,7 @@ fn emit_live_app_inner(
     // Declared as a block-local const at the call site (the one place it is
     // used); the byte value is the whole point — the identifier just keeps
     // the emitted call arg readable.
-    let tag_const = format!("const SKY_LIVE_MODEL_SCHEMA_TAG: [u8; 32] = [{tag_bytes}];");
+    let tag_const = format!("const IPE_LIVE_MODEL_SCHEMA_TAG: [u8; 32] = [{tag_bytes}];");
 
     let init_s = emit_live_fn(ctx, init_e, indent, child, generics)?;
     let update_s = emit_live_fn(ctx, update_e, indent, child, generics)?;
@@ -407,9 +407,9 @@ fn emit_live_app_inner(
              {routes_s}, \
              {not_found_s}, \
              {set_page}, \
-             ::std::env::var(\"SKY_LIVE_STORE\").unwrap_or_else(|_| \"memory\".to_string()), \
-             ::std::env::var(\"SKY_LIVE_STORE_PATH\").unwrap_or_else(|_| ::std::string::String::new()), \
-             SKY_LIVE_MODEL_SCHEMA_TAG\
+             ::std::env::var(\"IPE_LIVE_STORE\").unwrap_or_else(|_| \"memory\".to_string()), \
+             ::std::env::var(\"IPE_LIVE_STORE_PATH\").unwrap_or_else(|_| ::std::string::String::new()), \
+             IPE_LIVE_MODEL_SCHEMA_TAG\
              ) }}"
         )));
     }
@@ -418,7 +418,7 @@ fn emit_live_app_inner(
     // present in the cfg but not forwarded to the runtime entry.
     //
     // The store kind and path come from env at call time so a single binary can
-    // switch stores without recompilation (`SKY_LIVE_STORE` / `SKY_LIVE_STORE_PATH`).
+    // switch stores without recompilation (`IPE_LIVE_STORE` / `IPE_LIVE_STORE_PATH`).
     Ok(Some(format!(
         "{{ {tag_const} \
          ipe_runtime::live::live_app(\
@@ -426,9 +426,9 @@ fn emit_live_app_inner(
          {update_s}, \
          {view_s}, \
          {subs_s}, \
-         ::std::env::var(\"SKY_LIVE_STORE\").unwrap_or_else(|_| \"memory\".to_string()), \
-         ::std::env::var(\"SKY_LIVE_STORE_PATH\").unwrap_or_else(|_| ::std::string::String::new()), \
-         SKY_LIVE_MODEL_SCHEMA_TAG\
+         ::std::env::var(\"IPE_LIVE_STORE\").unwrap_or_else(|_| \"memory\".to_string()), \
+         ::std::env::var(\"IPE_LIVE_STORE_PATH\").unwrap_or_else(|_| ::std::string::String::new()), \
+         IPE_LIVE_MODEL_SCHEMA_TAG\
          ) }}"
     )))
 }
@@ -463,7 +463,7 @@ fn route_param_get(field_ty: &IrType, i: usize) -> DResult<String> {
         }
         IrType::Bool => format!("params.get({i}).map(|s| s == \"true\").unwrap_or_default()"),
         other => {
-            // Item 3b: upgrade to SKY-L0123. Item 4: replace
+            // Item 3b: upgrade to IPE-L0123. Item 4: replace
             // `{other:?}` (which leaks internal IR representation like
             // `Enum { home: ModPath([…]) }`) with a user-facing type name.
             return Err(Diagnostic::Lower {
@@ -705,7 +705,7 @@ mod schema_tag_tests {
     }
 
     /// The emitted `live_app(...)` call carries the compile-time Model schema
-    /// tag: a `const SKY_LIVE_MODEL_SCHEMA_TAG: [u8; 32] = [...]` declaration
+    /// tag: a `const IPE_LIVE_MODEL_SCHEMA_TAG: [u8; 32] = [...]` declaration
     /// plus that identifier as the call's new final argument (H24 — the
     /// session store rejects a checkpoint whose tag differs BEFORE
     /// deserializing it).
@@ -796,11 +796,11 @@ mod schema_tag_tests {
         .expect("LiveApp must emit");
 
         assert!(
-            out.contains("const SKY_LIVE_MODEL_SCHEMA_TAG: [u8; 32] = ["),
+            out.contains("const IPE_LIVE_MODEL_SCHEMA_TAG: [u8; 32] = ["),
             "the emission must declare the schema-tag const, got:\n{out}"
         );
         assert!(
-            out.contains("SKY_LIVE_MODEL_SCHEMA_TAG)"),
+            out.contains("IPE_LIVE_MODEL_SCHEMA_TAG)"),
             "the emitted live_app call must pass the tag identifier as its \
              final argument, got:\n{out}"
         );

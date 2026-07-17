@@ -11,14 +11,14 @@ should, per Elm-family semantics, introduce an in-scope **value**
 in *declared* field order). Before this decision the alias was registered only
 in the *type* namespace, so a value use — the dominant sweep shape
 `Decode.succeed UserProfile |> required "username" string |> …` — failed name
-resolution with SKY-N0001 ("cannot find this value in scope"). This blocked the
+resolution with IPE-N0001 ("cannot find this value in scope"). This blocked the
 Live / Http / Db examples in the skyc sweep.
 
 The decision was guardian-reviewed against the strict principle order
 **security > correctness > soundness > efficiency > completeness > readability**
 and the two rules *PARSE, DON'T VALIDATE* and *MAKE INVALID STATES
 UNREPRESENTABLE*. It is implemented (`golden_m82_record_ctor.rs`, task #82 /
-SKY-N0001); the code in `sky_canon` is now the source of truth for the *how*.
+IPE-N0001); the code in `sky_canon` is now the source of truth for the *how*.
 This ADR preserves the *why*.
 
 ## Decision
@@ -179,7 +179,7 @@ interning order (`{ zebra : Int, apple : String }`) still binds `T 1 "a"` to
   **once**, structurally, at declaration (source body is `TRecord`), and encoded
   as the presence of a `Def` + a value-namespace binding — not re-validated at
   any use site. A non-record alias (`type alias Count = Int`) gets no value
-  binding, so using it as a value stays an ordinary SKY-N0001 name error (Elm
+  binding, so using it as a value stays an ordinary IPE-N0001 name error (Elm
   parity). Head-alias-to-record (`type alias U = T` where `T` is itself a record
   alias) gets **no** ctor: the gate is strict on a *literal* `TRecord` body,
   matching Elm.
@@ -196,7 +196,7 @@ interning order (`{ zebra : Int, apple : String }`) still binds `T 1 "a"` to
 * **Function-typed fields fail closed.** A config-record alias
   (`{ onSubmit : msg }`) used as a positional auto-ctor builds a record literal
   with a function field ⇒ the pre-existing `FirstClassFunctions` gate
-  (SKY-L0107) fires with a clean diagnostic — a pre-existing limitation, **not**
+  (IPE-L0107) fires with a clean diagnostic — a pre-existing limitation, **not**
   a regression, and out of #82's data-record scope. The synthesized ctor must be
   DCE-eligible so an *unused* cfg-alias ctor is pruned rather than force-lowering
   a function-field body.

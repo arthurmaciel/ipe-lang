@@ -7,7 +7,7 @@
 //! to model, so solving reduces to: run every generated equality
 //! [`Constraint`] through
 //! the unifier, in order, sharing one [`Budget`]. The defensive solver-step
-//! bound (`SKY_SOLVER_BUDGET`) carries over verbatim in spirit.
+//! bound (`IPE_SOLVER_BUDGET`) carries over verbatim in spirit.
 
 use ipe_diagnostics::{DResult, Diagnostic, Span, TypeError};
 use ipe_intern::{Interner, Symbol};
@@ -22,7 +22,7 @@ use crate::unionfind::{UnionFind, VarId};
 pub const DEFAULT_SOLVER_BUDGET: u64 = 5_000_000;
 
 /// Environment variable that overrides [`DEFAULT_SOLVER_BUDGET`].
-pub const BUDGET_ENV: &str = "SKY_SOLVER_BUDGET";
+pub const BUDGET_ENV: &str = "IPE_SOLVER_BUDGET";
 
 /// A single constraint: the types of two solver variables must unify. The
 /// [`Span`] is the source region blamed in any resulting [`TypeError`].
@@ -48,7 +48,7 @@ pub struct Constraint {
 /// Each unify/occurs/zonk step ticks it; reaching zero raises
 /// [`TypeError::StepBudgetExceeded`] carrying the original `limit` (so the help
 /// line can name the value to raise). A budget of `None` is disabled (the
-/// `SKY_SOLVER_BUDGET=0` escape hatch).
+/// `IPE_SOLVER_BUDGET=0` escape hatch).
 pub struct Budget {
     remaining: Option<u64>,
     /// The step cap this budget was created with, reported in the diagnostic.

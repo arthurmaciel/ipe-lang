@@ -40,11 +40,11 @@
 //! at runtime.
 //!
 //! ```text
-//! # gate check always (no SKY_E2E needed):
+//! # gate check always (no IPE_E2E needed):
 //! cargo test -p skyc --test golden_i164_poly_task_on_error_nested
 //!
 //! # full E2E (skyc build + cargo build + run):
-//! SKY_E2E=1 cargo test -p skyc --test golden_i164_poly_task_on_error_nested
+//! IPE_E2E=1 cargo test -p skyc --test golden_i164_poly_task_on_error_nested
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -77,10 +77,10 @@ fn poly_task_on_error_nested_green() {
         built.err()
     );
 
-    // Structural check independent of SKY_E2E: the emitted Rust must be
+    // Structural check independent of IPE_E2E: the emitted Rust must be
     // generic over the helper's own type param (T1), never `JsonVal`. This
     // is exactly the SEAL-violating shape this closes — assert it here so a
-    // future regression fails even when SKY_E2E is not set (CI-cheap gate).
+    // future regression fails even when IPE_E2E is not set (CI-cheap gate).
     let main_rs = std::fs::read_to_string(out.join("src").join("main.rs"))
         .expect("emitted main.rs must exist after a successful skyc build");
     assert!(
@@ -94,7 +94,7 @@ fn poly_task_on_error_nested_green() {
          shape); got:\n{main_rs}"
     );
 
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = support::build_and_run_emitted("poly_task_on_error_nested", &out);

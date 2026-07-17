@@ -4,9 +4,9 @@
 //! `zip` / `cons` / `isEmpty` / `concatMap` call resolved (via the canon
 //! prelude-qualifier install) to `VarHome::Kernel` with NO `KernelFn` variant,
 //! no lower arm, and no constrain scheme — so `skyc` emitted
-//! `error[SKY-L0108]: kernel function not available yet` at the first such call.
+//! `error[IPE-L0108]: kernel function not available yet` at the first such call.
 //! `List.indexedMap` was worse: absent from the qualifier member array, it
-//! failed even earlier at canon with `SKY-N0005` (no such member).
+//! failed even earlier at canon with `IPE-N0005` (no such member).
 //!
 //! The fix (design: `docs/adr/0024-list-ops-kernel-wiring.md`) wires all nine
 //! as kernels — `KernelFn` variant + `d(...)` decl + lower arm + fail-closed
@@ -21,8 +21,8 @@
 //!
 //! This golden exercises all nine in one program, hitting the Elm/Go edge
 //! semantics (negative/over-length `take`/`drop`, `zip` truncating to the
-//! shorter operand, empty `concat`). Gated on `SKY_E2E=1` (emitted-project
-//! cargo build/run). Run: `SKY_E2E=1 cargo test --test golden_list_ops_wiring`.
+//! shorter operand, empty `concat`). Gated on `IPE_E2E=1` (emitted-project
+//! cargo build/run). Run: `IPE_E2E=1 cargo test --test golden_list_ops_wiring`.
 
 use std::path::{Path, PathBuf};
 
@@ -39,7 +39,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 
 /// Compile `tests/golden/<name>/Main.sky` into an emitted Rust project and
 /// return its directory. Fails the test loudly on a compile error (so the
-/// SKY-L0108/N0005 regression, were it to return, fails here rather than
+/// IPE-L0108/N0005 regression, were it to return, fails here rather than
 /// silently skipping).
 fn compile_golden(name: &str) -> PathBuf {
     let root = repo_root();
@@ -58,7 +58,7 @@ fn compile_golden(name: &str) -> PathBuf {
 }
 
 fn e2e_enabled() -> bool {
-    std::env::var("SKY_E2E").is_ok()
+    std::env::var("IPE_E2E").is_ok()
 }
 
 /// All nine newly-wired List ops compile and produce Elm/Go-parity output.
@@ -81,9 +81,9 @@ fn list_ops_wiring_runs_with_parity() {
     );
 }
 
-/// The List HOFs `any` / `all` / `find` are callable (same SKY-L0108 class).
+/// The List HOFs `any` / `all` / `find` are callable (same IPE-L0108 class).
 /// Without wiring, `List.any`/`all` would be canon members with no
-/// `KernelFn` (id=None → SKY-L0108), and `find` absent from the
+/// `KernelFn` (id=None → IPE-L0108), and `find` absent from the
 /// member array. `list_find` is new; `list_any`/`list_all` pre-existed.
 #[test]
 fn list_hof_any_all_find_runs() {
@@ -104,7 +104,7 @@ fn list_hof_any_all_find_runs() {
 
 /// The core `Basics`/Prelude fns `not`/`identity`/`always`/`fst`/
 /// `snd`/`modBy` are callable. Without wiring they would be canon members with no
-/// `KernelFn` (id=None → SKY-L0108), leaving a program unable to use
+/// `KernelFn` (id=None → IPE-L0108), leaving a program unable to use
 /// `not`. All runtime fns exist, `basics_not` included.
 #[test]
 fn basics_core_prelude_runs() {

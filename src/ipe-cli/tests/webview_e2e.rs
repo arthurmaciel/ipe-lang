@@ -2,7 +2,7 @@
 //! `Ui.layout`, `Ui.column`, `Ui.el`, `Ui.text`, `Ui.button`, and
 //! `String.fromInt`.
 //!
-//! All tests are gated on `SKY_E2E=1`.  Without it they return early so the
+//! All tests are gated on `IPE_E2E=1`.  Without it they return early so the
 //! default `cargo test` stays fast.
 //!
 //! ## Architecture
@@ -30,7 +30,7 @@
 //! Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test webview_e2e
+//! IPE_E2E=1 cargo test webview_e2e
 //! ```
 
 /// A minimal Sky.Webview counter app exercising the `Webview.app` wiring.
@@ -53,7 +53,7 @@
 ///
 /// Note: `init` takes `()` (unit), matching `Ty::Unit` in the constrain
 /// scheme.  Using `Ty::Tuple([])` (empty tuple) is NOT equivalent — the two
-/// don't unify, surfacing as SKY-T0001.
+/// don't unify, surfacing as IPE-T0001.
 ///
 /// Note: G3 — the emitted `fn main` uses `block_on_current_thread(sky_main())`
 /// (not `block_on`), enforced by the anchor-asserted switch in `project.rs`.
@@ -62,7 +62,7 @@
 ///
 /// Note: `window = { title = "Counter", size = ( 400, 300 ) }` is an inline
 /// record literal — required by the G4 gate in `emit_webview.rs`.
-const SKY_WEBVIEW_COUNTER: &str = r#"module Main exposing (main)
+const IPE_WEBVIEW_COUNTER: &str = r#"module Main exposing (main)
 
 import Std.Webview as Webview
 import Std.Ui as Ui
@@ -154,7 +154,7 @@ fn compile_and_build(test_name: &str, sky_source: &str) -> Result<std::path::Pat
 /// Assertions:
 /// - constrain: `Webview.app` correctly types the 5-field cfg
 ///   (`init/update/view/subscriptions/window` with nested `{ title, size }`).
-/// - lower: the cfg record literal bypasses SKY-L0107 (same exemption
+/// - lower: the cfg record literal bypasses IPE-L0107 (same exemption
 ///   as `Live.app` and `Tui.app`).
 /// - emit: `emit_webview_call` → `emit_webview_app_inner` (G4 gate:
 ///   `window` is inline record, `size` is inline 2-tuple) → `webview_app(…)`.
@@ -166,12 +166,12 @@ fn compile_and_build(test_name: &str, sky_source: &str) -> Result<std::path::Pat
 ///   `CompilerBug` rather than silently shipping the wrong executor).
 #[test]
 fn webview_counter_build_only() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
     // compile_and_build does skyc + cargo build; a clean binary path is the proof.
-    let _exe = compile_and_build("webview_build_only", SKY_WEBVIEW_COUNTER)?;
+    let _exe = compile_and_build("webview_build_only", IPE_WEBVIEW_COUNTER)?;
     Ok(())
 }
 
@@ -188,7 +188,7 @@ fn webview_counter_build_only() -> Result<(), BoxError> {
 /// was skipped and why.
 #[test]
 fn webview_counter_tier_b() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -207,7 +207,7 @@ fn webview_counter_tier_b() -> Result<(), BoxError> {
     }
 
     // ── Compile + build ──────────────────────────────────────────────────────
-    let exe = compile_and_build("webview_tier_b", SKY_WEBVIEW_COUNTER)?;
+    let exe = compile_and_build("webview_tier_b", IPE_WEBVIEW_COUNTER)?;
 
     // ── Spawn under xvfb-run with a hard timeout ─────────────────────────────
     // `timeout 5 <binary>` is wrapped by `xvfb-run -a` which provides a
@@ -244,9 +244,9 @@ fn webview_counter_tier_b() -> Result<(), BoxError> {
 
 /// The same counter, but with `window` let-bound instead of an inline record
 /// literal. Without the fix, the let-bound `window` reaches emit and fires the G4
-/// `Expr::Record` guard as a spanless `CompilerBug` (`SKY-I0001`); the
-/// lower gate instead rejects it with `SKY-L0119` at the offending span.
-const SKY_WEBVIEW_LET_BOUND_WINDOW: &str = r#"module Main exposing (main)
+/// `Expr::Record` guard as a spanless `CompilerBug` (`IPE-I0001`); the
+/// lower gate instead rejects it with `IPE-L0119` at the offending span.
+const IPE_WEBVIEW_LET_BOUND_WINDOW: &str = r#"module Main exposing (main)
 
 import Std.Webview as Webview
 import Std.Ui as Ui
@@ -297,8 +297,8 @@ main =
 "#;
 
 /// End-to-end guard: a let-bound `window` on `Webview.app` must produce a clean
-/// user-facing `SKY-L0119` diagnostic during lowering — NOT an
-/// internal-compiler-error (`SKY-I0001`) from the emit-stage G4 `Expr::Record`
+/// user-facing `IPE-L0119` diagnostic during lowering — NOT an
+/// internal-compiler-error (`IPE-I0001`) from the emit-stage G4 `Expr::Record`
 /// guard. Compile-only (`skyc::build`) — no `cargo build`, so it runs fast and
 /// needs no wry/tao toolchain, and it exercises the whole parse → canon → types
 /// → lower pipeline end-to-end (unlike the isolated lower unit test).
@@ -308,7 +308,7 @@ fn let_bound_webview_window_is_sky_l0119_not_ice() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create temp sky dir");
     let entry = dir.join("Main.sky");
-    std::fs::write(&entry, SKY_WEBVIEW_LET_BOUND_WINDOW).expect("write Main.sky");
+    std::fs::write(&entry, IPE_WEBVIEW_LET_BOUND_WINDOW).expect("write Main.sky");
 
     let out = std::env::temp_dir().join("l0119_webview_window_out");
     let _ = std::fs::remove_dir_all(&out);
@@ -325,7 +325,7 @@ fn let_bound_webview_window_is_sky_l0119_not_ice() {
     };
     assert_eq!(
         code,
-        Some(ipe_diagnostics::SKY_L0119),
-        "expected a SKY-L0119 Pipeline diagnostic (not an ICE), got {err:?}"
+        Some(ipe_diagnostics::IPE_L0119),
+        "expected a IPE-L0119 Pipeline diagnostic (not an ICE), got {err:?}"
     );
 }

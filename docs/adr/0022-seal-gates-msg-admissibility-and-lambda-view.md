@@ -38,7 +38,7 @@ Html/Element/Color); recovering Msg from `view`'s return (Msg is nested inside
 
 - Both Model and Msg are provably admissible for their app shape before `skyc`
   exits-0; a lambda-bound `view`/`update` no longer bypasses the gate. The
-  diagnostic is split by slot (`SKY_L0121` Msg, `SKY_L0120` Model).
+  diagnostic is split by slot (`IPE_L0121` Msg, `IPE_L0120` Model).
 - **Invariant that must keep holding:** the Model/Msg derivability asymmetry
   (Model needs serde, Msg needs only derivability) is load-bearing — collapsing
   them re-introduces false rejects or reopens the seal. A documented, *narrower*

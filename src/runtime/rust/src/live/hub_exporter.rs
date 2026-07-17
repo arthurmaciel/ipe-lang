@@ -1,9 +1,9 @@
 //! Remote hub OTLP push — HubExporter.
 //!
-//! When `SKY_CONSOLE_HUB` is set, this background exporter batches logs + spans
+//! When `IPE_CONSOLE_HUB` is set, this background exporter batches logs + spans
 //! and pushes them as **OTLP/JSON** to a remote `sky console-serve` hub
 //! (`POST <hub>/v1/logs`, `POST <hub>/v1/traces`, `Content-Type:
-//! application/json`), bearer-authenticated via `SKY_CONSOLE_HUB_TOKEN`. A
+//! application/json`), bearer-authenticated via `IPE_CONSOLE_HUB_TOKEN`. A
 //! batch that fails to push is kept in a bounded in-memory **spool** and retried
 //! on the next tick, so a transient hub outage never drops telemetry on the
 //! floor. Mirrors Go's `exporter.go` + `exporter_spool.go`.
@@ -13,8 +13,8 @@
 //! exporter speaks OTLP without a protobuf dependency.
 //!
 //! Spool backend: in-memory (bounded) here — covers transient outages + retry.
-//! File-spool restart-durability (`SKY_CONSOLE_SPOOL_MODE=file`, Go's
-//! `exporter_spool.go`, env knobs `SKY_CONSOLE_SPOOL_*`) is a parity extension
+//! File-spool restart-durability (`IPE_CONSOLE_SPOOL_MODE=file`, Go's
+//! `exporter_spool.go`, env knobs `IPE_CONSOLE_SPOOL_*`) is a parity extension
 //! the in-memory backend does not provide; those env knobs are not read.
 //!
 //! `live`-gated. Best-effort, no panic vectors: bounded offer queue (drop on
@@ -27,13 +27,13 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 /// Hub OTLP collector base URL — presence enables the exporter.
-const HUB_ENV: &str = "SKY_CONSOLE_HUB";
+const HUB_ENV: &str = "IPE_CONSOLE_HUB";
 /// Bearer token (Go requires ≥32 bytes; we refuse a shorter one).
-const TOKEN_ENV: &str = "SKY_CONSOLE_HUB_TOKEN";
+const TOKEN_ENV: &str = "IPE_CONSOLE_HUB_TOKEN";
 /// Flush cadence (ms).
-const INTERVAL_ENV: &str = "SKY_CONSOLE_BATCH_INTERVAL_MS";
+const INTERVAL_ENV: &str = "IPE_CONSOLE_BATCH_INTERVAL_MS";
 /// Service name attached as the OTLP `service.name` resource attribute.
-const SERVICE_ENV: &str = "SKY_SERVICE_NAME";
+const SERVICE_ENV: &str = "IPE_SERVICE_NAME";
 
 const DEFAULT_QUEUE_CAP: usize = 1024;
 const DEFAULT_INTERVAL_MS: u64 = 2000;
@@ -42,7 +42,7 @@ const MIN_TOKEN_BYTES: usize = 32;
 /// Max batches held in the retry spool before the oldest is evicted.
 const SPOOL_MAX_BATCHES: usize = 256;
 /// Total bytes of spooled batch JSON before the oldest is evicted (Go parity:
-/// `SKY_CONSOLE_SPOOL_MAX_BYTES` default 100 MB). Bounds the spool by size, not
+/// `IPE_CONSOLE_SPOOL_MAX_BYTES` default 100 MB). Bounds the spool by size, not
 /// just by batch count — a single batch can be large.
 const SPOOL_MAX_BYTES: usize = 100 * 1024 * 1024;
 /// Max accumulated entries (logs + spans) held between flushes before an early
@@ -71,7 +71,7 @@ pub(crate) enum Entry {
 
 static SENDER: OnceLock<mpsc::Sender<Entry>> = OnceLock::new();
 
-/// Enable the remote-hub OTLP exporter from env. No-op unless `SKY_CONSOLE_HUB`
+/// Enable the remote-hub OTLP exporter from env. No-op unless `IPE_CONSOLE_HUB`
 /// is set. Refuses a too-short token (Go parity). Idempotent; call once at boot.
 pub async fn enable_from_env() {
     // Trim ONCE so the URL we validate is the exact one we push to. A

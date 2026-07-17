@@ -560,12 +560,12 @@ mod system_load_env_spawn_blocking_tests {
         let mut contents = String::from("# ");
         contents.push_str(&"x".repeat(64 * 1024 * 1024));
         contents.push('\n');
-        contents.push_str("SKY_LOAD_ENV_PROBE_VAR=probe_value\n");
+        contents.push_str("IPE_LOAD_ENV_PROBE_VAR=probe_value\n");
         std::fs::write(&env_path, contents).unwrap();
 
         let orig_cwd = std::env::current_dir().unwrap();
         std::env::set_current_dir(&dir).unwrap();
-        locked_remove_var("SKY_LOAD_ENV_PROBE_VAR");
+        locked_remove_var("IPE_LOAD_ENV_PROBE_VAR");
 
         let ticks = rt.block_on(async move {
             let counter = Arc::new(AtomicU64::new(0));
@@ -583,10 +583,10 @@ mod system_load_env_spawn_blocking_tests {
         });
 
         // Functional sanity: the real var was actually picked up.
-        let loaded = read_env_var("SKY_LOAD_ENV_PROBE_VAR");
+        let loaded = read_env_var("IPE_LOAD_ENV_PROBE_VAR");
 
         std::env::set_current_dir(&orig_cwd).unwrap();
-        locked_remove_var("SKY_LOAD_ENV_PROBE_VAR");
+        locked_remove_var("IPE_LOAD_ENV_PROBE_VAR");
         let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(

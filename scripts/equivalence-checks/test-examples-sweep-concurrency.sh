@@ -171,11 +171,11 @@ run_lane() {
   RUSTUP_HOME="$ORIG_HOME/.rustup" \
   CARGO_TARGET_DIR="$target" \
   SKYC_BIN="$FAKE_SKYC" \
-  SKY_GO_BIN="$FAKE_GO" \
+  IPE_GO_BIN="$FAKE_GO" \
   RUST_EXAMPLES="$dir" \
   TEST_MARKER="$lane" \
-  SKY_SWEEP_FORCE=1 \
-  SKY_REPO="$REPO" \
+  IPE_SWEEP_FORCE=1 \
+  IPE_REPO="$REPO" \
   exec bash "$SCRIPT" >"$logfile" 2>&1
 }
 

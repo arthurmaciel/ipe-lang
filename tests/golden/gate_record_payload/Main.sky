@@ -2,7 +2,7 @@ module Main exposing (main)
 import Sky.Core.Prelude exposing (..)
 
 -- A RECORD sub-pattern nested inside a constructor payload (`Box { x }`).
--- Once the SKY-L0112 nested-record-carrier gap; #158 (Class 4 item C) closed it
+-- Once the IPE-L0112 nested-record-carrier gap; #158 (Class 4 item C) closed it
 -- by threading the payload field's record type to the lowerer, so this now
 -- ACCEPTS and prints 5.
 type Box = Box { x : Int }

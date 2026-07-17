@@ -548,7 +548,7 @@ pub fn ui_layout<M: Clone>(attrs: Vec<Attribute<M>>, elem: Element<M>) -> Html<M
 /// `ipe_runtime::ui::render::ui_layout_with_vecs::<M>(wrapper, root, elem)`.
 /// The two `Vec<Attribute<M>>` arguments are extracted at the **emit site**
 /// (field-extraction on the IR `Expr::Record` literal), so the cfg record struct
-/// never needs to be materialised — closing SKY-I0001.
+/// never needs to be materialised — closing IPE-I0001.
 ///
 /// # Design note (MAKE INVALID STATES UNREPRESENTABLE)
 ///

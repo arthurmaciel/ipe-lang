@@ -31,10 +31,10 @@ distributed hub.)
 cd examples/34-multi-tier-console
 rm -rf sky-out .skycache .skydeps   # clean slate
 sky build src/Main.sky
-SKY_LIVE_PORT=8034 \
-SKY_CONSOLE_AUTH=token \
-SKY_CONSOLE_TOKEN=local-dev-token \
-SKY_CONSOLE_TOKEN_SECRET=$(openssl rand -hex 32) \
+IPE_LIVE_PORT=8034 \
+IPE_CONSOLE_AUTH=token \
+IPE_CONSOLE_TOKEN=local-dev-token \
+IPE_CONSOLE_TOKEN_SECRET=$(openssl rand -hex 32) \
   ./sky-out/app
 ```
 

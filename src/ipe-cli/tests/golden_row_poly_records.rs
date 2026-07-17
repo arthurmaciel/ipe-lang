@@ -17,15 +17,15 @@
 //!
 //! | Fixture | Proof-matrix row(s) | Gate | Asserts |
 //! |---|---|---|---|
-//! | `row_poly_subset_access` | P2 | accept | unannotated getter, subset field access over a superset arg; emits a concrete (non-generic) getter against the superset struct; `SKY_E2E=1` prints `Ada` |
-//! | `row_poly_subset_pattern` | P5, P7 | accept | subset `case` pattern AND subset lambda pattern (through `List.map`) over a superset scrutinee; emitted pattern completes to the superset struct (`RecAgeName { age: _, name, .. }`); `SKY_E2E=1` prints `Iri: Ada, Bo` |
-//! | `row_poly_closed_superset_neg` | P4 | reject | CLOSED record annotation called with a superset arg → SKY-T0001 |
-//! | `row_poly_two_supersets_neg` | P6 (class-1 tripwire) | reject | unannotated let-bound getter called with two DIFFERENT superset shapes → SKY-T0001 |
-//! | `row_poly_annotation_gap` | P1 (gap canary) | reject | row-var record annotation `{ r \| f : T }` does not parse → SKY-P0001 |
+//! | `row_poly_subset_access` | P2 | accept | unannotated getter, subset field access over a superset arg; emits a concrete (non-generic) getter against the superset struct; `IPE_E2E=1` prints `Ada` |
+//! | `row_poly_subset_pattern` | P5, P7 | accept | subset `case` pattern AND subset lambda pattern (through `List.map`) over a superset scrutinee; emitted pattern completes to the superset struct (`RecAgeName { age: _, name, .. }`); `IPE_E2E=1` prints `Iri: Ada, Bo` |
+//! | `row_poly_closed_superset_neg` | P4 | reject | CLOSED record annotation called with a superset arg → IPE-T0001 |
+//! | `row_poly_two_supersets_neg` | P6 (class-1 tripwire) | reject | unannotated let-bound getter called with two DIFFERENT superset shapes → IPE-T0001 |
+//! | `row_poly_annotation_gap` | P1 (gap canary) | reject | row-var record annotation `{ r \| f : T }` does not parse → IPE-P0001 |
 //!
 //! Run the E2E accept-path bodies (real `cargo build` + run) with:
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_row_poly_records
+//! IPE_E2E=1 cargo test -p skyc --test golden_row_poly_records
 //! ```
 //! The three reject fixtures run unconditionally (compile-time only, no
 //! `cargo`, so no gate needed).
@@ -95,12 +95,12 @@ fn subset_access_skyc_accepts_and_resolves_superset_struct() {
 }
 
 /// cargo-0 ∧ run-0: the emitted project actually compiles and prints the
-/// field it read. Gated on `SKY_E2E=1` — matches the reference compiler's
+/// field it read. Gated on `IPE_E2E=1` — matches the reference compiler's
 /// own output for the identical shape (proof-matrix row P2: "accept; prints
 /// `Ada`"), hand-verified against `sky v0.16.29`.
 #[test]
 fn subset_access_cargo_builds_and_prints_ada() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -177,14 +177,14 @@ fn subset_pattern_skyc_accepts_and_completes_superset_pattern() {
 }
 
 /// cargo-0 ∧ run-0: the emitted project actually compiles and prints the
-/// values read through both subset patterns. Gated on `SKY_E2E=1` — matches
+/// values read through both subset patterns. Gated on `IPE_E2E=1` — matches
 /// the reference compiler's own output for the identical shapes
 /// (proof-matrix rows P5 "prints (same)" and P7 "prints `Ada, Bo`"),
 /// hand-verified against `sky v0.16.29` for this combined fixture
 /// (`Iri: Ada, Bo`).
 #[test]
 fn subset_pattern_cargo_builds_and_prints_iri_ada_bo() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -219,12 +219,12 @@ fn subset_pattern_cargo_builds_and_prints_iri_ada_bo() {
 
 // ---------------------------------------------------------------------------
 // row_poly_closed_superset_neg — P4: closed annotation vs superset arg.
-// Reject, SKY-T0001. Compile-time only, no gate.
+// Reject, IPE-T0001. Compile-time only, no gate.
 // ---------------------------------------------------------------------------
 
 /// A CLOSED record annotation (`{ name : String }`, no row var) cannot
 /// absorb a superset argument's extra `age` field — mechanism 1
-/// (`unifyRecords`) rejects it as SKY-T0001, in parity with the reference's
+/// (`unifyRecords`) rejects it as IPE-T0001, in parity with the reference's
 /// E2001 for the identical shape.
 #[test]
 fn closed_superset_is_sky_t0001() {
@@ -242,8 +242,8 @@ fn closed_superset_is_sky_t0001() {
     let Err(err) = res else { return };
     assert_eq!(
         diag_code(&err),
-        Some(ipe_diagnostics::SKY_T0001),
-        "closed record annotation vs superset arg must be SKY-T0001; \
+        Some(ipe_diagnostics::IPE_T0001),
+        "closed record annotation vs superset arg must be IPE-T0001; \
          err = {err}"
     );
     assert!(
@@ -253,12 +253,12 @@ fn closed_superset_is_sky_t0001() {
 }
 
 // ---------------------------------------------------------------------------
-// row_poly_two_supersets_neg — P6. Reject, SKY-T0001. Compile-time only, no
+// row_poly_two_supersets_neg — P6. Reject, IPE-T0001. Compile-time only, no
 // gate.
 // ---------------------------------------------------------------------------
 
 /// An unannotated LET-BOUND getter called with two DIFFERENT superset
-/// shapes (`{ name, age }` then `{ name, id }`) is rejected as SKY-T0001 —
+/// shapes (`{ name, age }` then `{ name, id }`) is rejected as IPE-T0001 —
 /// neither compiler let-generalizes over record rows. This rejection comes
 /// from `unify.rs`'s ordinary closed-record-mismatch rule, via the
 /// `Expr_::Let` no-let-polymorphism path (`constrain.rs`) — it does NOT
@@ -291,9 +291,9 @@ fn two_different_supersets_is_sky_t0001() {
     let Err(err) = res else { return };
     assert_eq!(
         diag_code(&err),
-        Some(ipe_diagnostics::SKY_T0001),
+        Some(ipe_diagnostics::IPE_T0001),
         "an unannotated getter used at two different superset shapes must \
-         be SKY-T0001 (no let-generalization over rows); err = {err}"
+         be IPE-T0001 (no let-generalization over rows); err = {err}"
     );
     assert!(
         !out.join("src").join("main.rs").exists(),
@@ -303,11 +303,11 @@ fn two_different_supersets_is_sky_t0001() {
 
 // ---------------------------------------------------------------------------
 // row_poly_annotation_gap — P1, the completeness-gap canary. Reject,
-// SKY-P0001. Compile-time only, no gate.
+// IPE-P0001. Compile-time only, no gate.
 // ---------------------------------------------------------------------------
 
 /// The row-var record annotation syntax `{ r | name : String }` does not
-/// parse — SKY-P0001 ("found `|`, expected `:`"). The
+/// parse — IPE-P0001 ("found `|`, expected `:`"). The
 /// reference parses this, types the row var, and monomorphises the callee
 /// per record-shape instantiation in its backend; ipê's backend cannot yet
 /// do the per-shape monomorphisation the syntax would require, so the
@@ -332,8 +332,8 @@ fn row_var_annotation_is_sky_p0001() {
     let Err(err) = res else { return };
     assert_eq!(
         diag_code(&err),
-        Some(ipe_diagnostics::SKY_P0001),
-        "row-var record annotation `{{ r | f : T }}` must be SKY-P0001 \
+        Some(ipe_diagnostics::IPE_P0001),
+        "row-var record annotation `{{ r | f : T }}` must be IPE-P0001 \
          (unsupported syntax, fail-closed) until the backend gains \
          per-record-shape callee monomorphisation; err = {err}"
     );

@@ -61,7 +61,7 @@ Typing is enforced by a **deferred post-solve check**, the same pattern
 as `RoutedLiveCheck` (`constrain.rs:1148-1155`) and `RouteWitnessCheck`
 (`constrain.rs:1187-1196`): if the settled cfg row carries an
 `onNavigate` field, unify its type with `var(2) -> var(1)`
-(page → Msg). Mismatch → SKY-T0001 at the field's span. This keeps the
+(page → Msg). Mismatch → IPE-T0001 at the field's span. This keeps the
 required-field scheme untouched and makes the optional field fully typed
 (no silent `any`).
 
@@ -108,7 +108,7 @@ Concretely the runtime keeps its `set_page` fast path when the field is
 absent (no synthetic Msg value is actually constructed — the desugaring
 is normative, not operational), but docs, the routed-live explain pages,
 and `routed-live-app-design.md` are updated to present `page` as sugar
-over `onNavigate`, not as magic. SKY-L0124 ("routes declared but no
+over `onNavigate`, not as magic. IPE-L0124 ("routes declared but no
 `page` field", `crates/sky_types/src/lib.rs:947-950`) is extended: an
 app with `routes` but neither a `page` field nor `onNavigate` warns; an
 app with `onNavigate` and no `page` field is **legal** (the app may
@@ -151,7 +151,7 @@ Constrain (`crates/sky_types/src/constrain.rs`):
    `RoutedLiveCheck`, `constrain.rs:1148-1155`); resolve it in
    `crates/sky_types/src/lib.rs` next to `resolve_routed_live_checks`
    (≈864–955): if the settled row has `onNavigate`, unify with
-   `Fun(page, msg)`; SKY-T0001 on mismatch.
+   `Fun(page, msg)`; IPE-T0001 on mismatch.
 
 Lower + emit (`crates/sky_lower/src/lower.rs` ≈3264–3305
 `lower_app_entry_cfg`; `crates/sky_backend_rust/src/emit_live.rs`):
@@ -175,7 +175,7 @@ Runtime (`runtime/src/sky_runtime/live/mod.rs`):
 6. No `client.js` change — the browser side is unchanged.
 
 Docs (same commit): `docs/architecture/routed-live-app-design.md` gains
-a short "superseded framing" note; `SKY-L0124` explain page updated;
+a short "superseded framing" note; `IPE-L0124` explain page updated;
 `docs/divergences-from-sky.md` gains the notify-only divergence entry.
 
 Dependency/ordering: none on Section-A work beyond routed-Live already
@@ -186,16 +186,16 @@ being landed (#108, done). Post-completion phase as filed.
 Unit/golden (`crates/skyc/tests/`, fixtures under `tests/golden/`):
 - `i155_on_navigate_dispatch` — routed app with `onNavigate = NavTo`;
   `update (NavTo p)` sets `page` and appends to a log list rendered in
-  the view. E2E (`SKY_E2E=1`): drive a route change, assert the log
+  the view. E2E (`IPE_E2E=1`): drive a route change, assert the log
   entry appears (proves the Msg went through `update`).
 - `i155_on_navigate_absent_baseline` — an existing routed golden
   rebuilt unchanged; assert emitted Rust and behaviour are byte-stable
   (the sugar path regression pin).
 - `i155_on_navigate_bad_type` — `onNavigate : Int -> Msg` against
-  `Page` routes → assert SKY-T0001 at the field span.
+  `Page` routes → assert IPE-T0001 at the field span.
 - `i155_on_navigate_no_page_field` — `onNavigate` present, model field
   named `current` instead of `page` → accepted, works E2E (demotion
-  proof); and `routes` present with neither → SKY-L0124 warn still
+  proof); and `routes` present with neither → IPE-L0124 warn still
   fires.
 - `i155_on_navigate_veto` — `update (NavTo p)` returns the model
   unchanged for a "locked" page; E2E asserts the view did not change

@@ -3,7 +3,7 @@ import Sky.Core.Prelude exposing (..)
 
 -- REFUTABLE lambda param `\(Just x) ->`: `Just x` fails to match `Nothing`, so a
 -- parameter (a binding position) can never be a constructor pattern. Rejected up
--- front as SKY-T0015 — never a runtime match failure.
+-- front as IPE-T0015 — never a runtime match failure.
 f : Maybe Int -> Int
 f = \(Just x) -> x
 

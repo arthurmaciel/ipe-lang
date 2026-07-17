@@ -11,7 +11,7 @@
 >
 > ```bash
 > cd /home/arthur/Documentos/comp/sky-rust
-> CARGO_TARGET_DIR=~/.cache/sky-rust-target-track2-dbcrud SKY_E2E=1 \
+> CARGO_TARGET_DIR=~/.cache/sky-rust-target-track2-dbcrud IPE_E2E=1 \
 >   cargo nextest run -p skyc --test golden_m5b_db -E 'test(db_crud) or test(db_transaction)'
 > # → 2 tests run: 0 passed, 2 failed  (db_crud in 0.05s at skyc type-check;
 > #    db_transaction after the full emitted-project cargo build)
@@ -35,19 +35,19 @@
 
 3. **The blast radius of §4 is wider than the backlog row says.** The same
    root cause currently breaks **`golden_m5a_task::error_channel` and
-   `golden_m5a_task::task_map_error_lambda`** under `SKY_E2E=1` (verified
+   `golden_m5a_task::task_map_error_lambda`** under `IPE_E2E=1` (verified
    red at `2bc2a67`: `2 tests run: 0 passed, 2 failed`). §4's fix closes all
    three tests. Any E2E sweep accounting must count these two as part of
    this row, not as new discoveries.
 
 ---
 
-## §1 — Failure A: `db_crud` fails skyc type-check (SKY-T0001 Dict vs List)
+## §1 — Failure A: `db_crud` fails skyc type-check (IPE-T0001 Dict vs List)
 
 ### Symptom
 
 ```
-skyc: error[SKY-T0001]: type mismatch
+skyc: error[IPE-T0001]: type mismatch
   --> tests/golden/db_crud/Main.sky:18:29
    |
 18 |                             Db.insertRow txconn
@@ -66,7 +66,7 @@ Timeline of the `DbInsertRow` / `DbUpdateById` row-parameter type:
 | `1949452` (registry Phase D) | — | `list(tuple2(string(), string()))` relocated verbatim | unchanged | unchanged — still green |
 | `bdbc572` | 07-06 | **flipped to `dict(string(), string())`** | **unchanged** | **unchanged — red since** |
 
-`bdbc572`'s own message states the motive: *"ex27 (SKY-T0001 Db.insertRow
+`bdbc572`'s own message states the motive: *"ex27 (IPE-T0001 Db.insertRow
 dict vs list): Fix DbInsertRow and DbUpdateById stdlib_scheme from
 list(tuple2(string(), string())) to dict(string(), string())"*. That
 direction is **correct** — the upstream reference
@@ -149,7 +149,7 @@ not a gate.
 `golden_m5b_db.rs::db_crud` (`crates/skyc/tests/golden_m5b_db.rs:159`)
 itself is the regression test — it runs the full
 type-check → emit → cargo build → run → oracle-compare pipeline under
-`SKY_E2E=1` and the check-only tier without it. No new test needed. If the
+`IPE_E2E=1` and the check-only tier without it. No new test needed. If the
 emitter cleanup (step 2) lands separately from the fixture (step 1), each
 half keeps the test green on its own — validated above for step 1;
 step 2 emits the identical runtime value.
@@ -230,7 +230,7 @@ fn) is pinned to `SkyError`. `Task.fail "x" |> Task.onError (\e ->
 println (String.toUpper e))` would HM-check (`e : String`) and then fail the
 emitted cargo build again — same bug class, one hop later. The scheme pin
 fixes the judgement at the source; the checker rejects the program before
-codegen with a proper SKY-T0001.
+codegen with a proper IPE-T0001.
 
 ### Fix
 
@@ -287,9 +287,9 @@ codegen with a proper SKY-T0001.
 Closes three currently-red E2E tests, which are the regression tests:
 `golden_m5b_db.rs::db_transaction` (`crates/skyc/tests/golden_m5b_db.rs:175`),
 `golden_m5a_task.rs::error_channel` (`:98`) and `::task_map_error_lambda`
-(`:123`). Additionally add one **negative** check-only test (no `SKY_E2E`
+(`:123`). Additionally add one **negative** check-only test (no `IPE_E2E`
 needed): a program containing `Task.fail "oops"` must now fail skyc with
-SKY-T0001 `expected Error, found String` — this pins the scheme so a future
+IPE-T0001 `expected Error, found String` — this pins the scheme so a future
 "restore Elm-parity polymorphism" change can't silently reopen the
 ill-typed-emission hole without confronting the recorded divergence.
 
@@ -303,9 +303,9 @@ fixture-dominated), §2 second (touches the scheme).
 Per-fix verification:
 
 ```bash
-CARGO_TARGET_DIR=… SKY_E2E=1 cargo nextest run -p skyc --test golden_m5b_db \
+CARGO_TARGET_DIR=… IPE_E2E=1 cargo nextest run -p skyc --test golden_m5b_db \
   -E 'test(db_crud) or test(db_transaction)'
-CARGO_TARGET_DIR=… SKY_E2E=1 cargo nextest run -p skyc --test golden_m5a_task \
+CARGO_TARGET_DIR=… IPE_E2E=1 cargo nextest run -p skyc --test golden_m5a_task \
   -E 'test(error_channel) or test(task_map_error_lambda)'
 cargo test -p sky_types -p sky_lower -p skyc          # non-E2E tiers
 ```

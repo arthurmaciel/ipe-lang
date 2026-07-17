@@ -14,7 +14,7 @@ import Std.Log exposing (println)
 -- `SkyMaybe::Just(SkyMaybe::Just("x"))` — a `&str` literal pattern against an
 -- owned `String` ctor FIELD, E0308 at `cargo build` despite `skyc` exit 0.
 --
--- This shape now stays fail-closed with a clean SKY-L0116 diagnostic, mirroring
+-- This shape now stays fail-closed with a clean IPE-L0116 diagnostic, mirroring
 -- the sibling PList / PCons gate at the same nested-payload recursion site —
 -- never accept-then-cargo-fail.
 f : Maybe (Maybe String) -> String

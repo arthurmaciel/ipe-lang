@@ -24,7 +24,7 @@ fn runtime() -> PathBuf {
 
 /// Minimal Db-kernel-using Sky program — enough to set `EmitCtx::uses_db =
 /// true` (any `Db.*` call site does), nothing more. Never built/run (no
-/// `SKY_E2E` gate here) — this test only inspects the EMITTED files, not
+/// `IPE_E2E` gate here) — this test only inspects the EMITTED files, not
 /// runtime behaviour (which needs a live Postgres and is out of scope for the
 /// default `cargo test` gate per the Class 7 spec's two-tier test strategy).
 const MAIN_SKY: &str = "\
@@ -109,7 +109,7 @@ fn postgres_driver_selects_postgres_config_template() {
     let _ = fs::remove_dir_all(&out);
 }
 
-/// `SKY_E2E` tier: the emitted Postgres-driver project must actually
+/// `IPE_E2E` tier: the emitted Postgres-driver project must actually
 /// `cargo build` (isolated target dir) — proves the seal (skyc exit 0
 /// implies cargo build exit 0) for the whole Postgres codegen path, not just
 /// the config.rs/Cargo.toml source-text assertions above. This is the check
@@ -120,7 +120,7 @@ fn postgres_driver_selects_postgres_config_template() {
 /// alone cannot catch a missing Cargo feature dependency.
 #[test]
 fn postgres_driver_project_cargo_builds() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let dir = write_project(

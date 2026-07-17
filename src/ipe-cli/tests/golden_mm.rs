@@ -7,11 +7,11 @@
 //! They also verify that `skyc build_project` handles three
 //! multi-module blockers:
 //!   * Defect 1 — kernel imports (`Sky.Core.Prelude`) accepted without
-//!     SKY-N0020.
+//!     IPE-N0020.
 //!   * Defect 2 — same-named functions in different modules emit distinct
 //!     Rust names (no E0428 from `cargo build`).
 //!   * Defect 3 — same-named constructors from two modules trigger clean
-//!     SKY-N0024 rather than silently resolving to the wrong type.
+//!     IPE-N0024 rather than silently resolving to the wrong type.
 //!
 //! **Negative fixtures** each contain a deliberate error and assert the
 //! exact `Code` produced: `missing` → N0020, `cycle`/`selfimport` → N0021,
@@ -101,7 +101,7 @@ fn mm_diamond_emits_byte_identical_main_rs() {
 // references `Counter.Msg` in a qualified annotation.  Exercises the
 // `qualifier_paths` fix: without it the canonicaliser resolved `Counter.Msg`
 // to Main's home (`["Main"]`) instead of Counter's (`["Counter"]`), causing
-// a SKY-T0001 type-mismatch at the unification site.
+// a IPE-T0001 type-mismatch at the unification site.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -141,112 +141,112 @@ fn expect_error_code(fixture_name: &str, expected: ipe_diagnostics::Code) {
 }
 
 // ---------------------------------------------------------------------------
-// Negative: missing module → SKY-N0020
+// Negative: missing module → IPE-N0020
 // ---------------------------------------------------------------------------
 
 #[test]
 fn mm_neg_missing_is_sky_n0020() {
-    expect_error_code("mm_neg_missing", ipe_diagnostics::SKY_N0020);
+    expect_error_code("mm_neg_missing", ipe_diagnostics::IPE_N0020);
 }
 
 // ---------------------------------------------------------------------------
-// Negative: import cycle → SKY-N0021
+// Negative: import cycle → IPE-N0021
 // ---------------------------------------------------------------------------
 
 #[test]
 fn mm_neg_cycle_is_sky_n0021() {
-    expect_error_code("mm_neg_cycle", ipe_diagnostics::SKY_N0021);
+    expect_error_code("mm_neg_cycle", ipe_diagnostics::IPE_N0021);
 }
 
 // ---------------------------------------------------------------------------
-// Negative: self-import → SKY-N0021 (self is a degenerate cycle)
+// Negative: self-import → IPE-N0021 (self is a degenerate cycle)
 // ---------------------------------------------------------------------------
 
 #[test]
 fn mm_neg_selfimport_is_sky_n0021() {
-    expect_error_code("mm_neg_selfimport", ipe_diagnostics::SKY_N0021);
+    expect_error_code("mm_neg_selfimport", ipe_diagnostics::IPE_N0021);
 }
 
 // ---------------------------------------------------------------------------
-// Negative: name not exposed → SKY-N0022
+// Negative: name not exposed → IPE-N0022
 // ---------------------------------------------------------------------------
 
 #[test]
 fn mm_neg_notexposed_is_sky_n0022() {
-    expect_error_code("mm_neg_notexposed", ipe_diagnostics::SKY_N0022);
+    expect_error_code("mm_neg_notexposed", ipe_diagnostics::IPE_N0022);
 }
 
 // ---------------------------------------------------------------------------
-// Negative: module path mismatch → SKY-N0023
+// Negative: module path mismatch → IPE-N0023
 // ---------------------------------------------------------------------------
 
 #[test]
 fn mm_neg_pathmismatch_is_sky_n0023() {
-    expect_error_code("mm_neg_pathmismatch", ipe_diagnostics::SKY_N0023);
+    expect_error_code("mm_neg_pathmismatch", ipe_diagnostics::IPE_N0023);
 }
 
 // ---------------------------------------------------------------------------
-// Negative: ambiguous value import → SKY-N0024
+// Negative: ambiguous value import → IPE-N0024
 // ---------------------------------------------------------------------------
 
 #[test]
 fn mm_neg_ambigval_is_sky_n0024() {
-    expect_error_code("mm_neg_ambigval", ipe_diagnostics::SKY_N0024);
+    expect_error_code("mm_neg_ambigval", ipe_diagnostics::IPE_N0024);
 }
 
 // ---------------------------------------------------------------------------
-// Negative: ambiguous constructor import (Defect-3 gate) → SKY-N0024
+// Negative: ambiguous constructor import (Defect-3 gate) → IPE-N0024
 // Without the Defect-3 fix this would silently resolve to the wrong type and
 // later trigger a Rust E0308 from `cargo build`.
 // ---------------------------------------------------------------------------
 
 #[test]
 fn mm_neg_ambigctor_is_sky_n0024() {
-    expect_error_code("mm_neg_ambigctor", ipe_diagnostics::SKY_N0024);
+    expect_error_code("mm_neg_ambigctor", ipe_diagnostics::IPE_N0024);
 }
 
 // ---------------------------------------------------------------------------
-// Negative: reserved namespace (`Sky.*` / `Std.*`) → SKY-N0025
+// Negative: reserved namespace (`Sky.*` / `Std.*`) → IPE-N0025
 // ---------------------------------------------------------------------------
 
 #[test]
 fn mm_neg_reserved_is_sky_n0025() {
-    expect_error_code("mm_neg_reserved", ipe_diagnostics::SKY_N0025);
+    expect_error_code("mm_neg_reserved", ipe_diagnostics::IPE_N0025);
 }
 
 // ---------------------------------------------------------------------------
 // Negative: same-named value exported by two modules, both imported
 // unqualified (Defect-2 regression guard — the name-level ambiguity must be
-// caught by the canon layer, not survive to produce a Rust E0428) → SKY-N0024
+// caught by the canon layer, not survive to produce a Rust E0428) → IPE-N0024
 // ---------------------------------------------------------------------------
 
 #[test]
 fn mm_neg_samedef_is_sky_n0024() {
-    expect_error_code("mm_neg_samedef", ipe_diagnostics::SKY_N0024);
+    expect_error_code("mm_neg_samedef", ipe_diagnostics::IPE_N0024);
 }
 
 // ---------------------------------------------------------------------------
-// Negative: same type name from two modules both imported → SKY-N0012
+// Negative: same type name from two modules both imported → IPE-N0012
 // ---------------------------------------------------------------------------
 
 #[test]
 fn mm_neg_sametype_is_sky_n0012() {
-    expect_error_code("mm_neg_sametype", ipe_diagnostics::SKY_N0012);
+    expect_error_code("mm_neg_sametype", ipe_diagnostics::IPE_N0012);
 }
 
 // ---------------------------------------------------------------------------
-// Negative: qualified cross-module reference with wrong argument type → SKY-T0001
+// Negative: qualified cross-module reference with wrong argument type → IPE-T0001
 //
 // Lib.helper : Int -> Int; Main calls `Lib.helper "str"` — qualified, so
-// SKY-N0024 does not fire.  Before the constrain re-key fix, `top_level` was
+// IPE-N0024 does not fire.  Before the constrain re-key fix, `top_level` was
 // keyed by bare Symbol so a same-named `Main.helper` (if present) would
 // overwrite `Lib.helper`'s entry, making skyc exit 0 and emit wrong-type Rust
 // that fails only at `cargo build` (E0308).  After the fix, `Lib.helper` is
 // looked up under its own `(["Lib"], "helper")` key and the mismatch is
-// diagnosed as SKY-T0001 right here, never reaching codegen.
+// diagnosed as IPE-T0001 right here, never reaching codegen.
 // ---------------------------------------------------------------------------
 
 #[test]
 fn mm_neg_qualref_sig_is_sky_t0001() {
-    expect_error_code("mm_neg_qualref_sig", ipe_diagnostics::SKY_T0001);
+    expect_error_code("mm_neg_qualref_sig", ipe_diagnostics::IPE_T0001);
 }

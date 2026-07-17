@@ -1,8 +1,8 @@
 //! Observability federation — child→parent telemetry push.
 //!
-//! When a Rust Live app runs as a sub-app under a parent (`SKY_PARENT_URL` set),
+//! When a Rust Live app runs as a sub-app under a parent (`IPE_PARENT_URL` set),
 //! this background exporter batches its logs + spans and POSTs them every
-//! `SKY_OBSERVABILITY_PUSH_INTERVAL_MS` (default 2000) to the parent's
+//! `IPE_OBSERVABILITY_PUSH_INTERVAL_MS` (default 2000) to the parent's
 //! `/_sky/observability/ingest` — the symmetric counterpart to the receiver in
 //! `live/console.rs`. Mirrors Go's `observability_push.go` (PushExporter).
 //!
@@ -22,13 +22,13 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 /// Parent base URL — presence of this var means "I'm a sub-app, push upward".
-const PARENT_ENV: &str = "SKY_PARENT_URL";
+const PARENT_ENV: &str = "IPE_PARENT_URL";
 /// Flush cadence (ms).
-const INTERVAL_ENV: &str = "SKY_OBSERVABILITY_PUSH_INTERVAL_MS";
+const INTERVAL_ENV: &str = "IPE_OBSERVABILITY_PUSH_INTERVAL_MS";
 /// Bounded queue depth override.
-const BUFFER_ENV: &str = "SKY_OBSERVABILITY_BUFFER";
+const BUFFER_ENV: &str = "IPE_OBSERVABILITY_BUFFER";
 /// Shared secret the parent's ingest gate checks (`X-Sky-Ingest-Token`).
-const TOKEN_ENV: &str = "SKY_INGEST_TOKEN";
+const TOKEN_ENV: &str = "IPE_INGEST_TOKEN";
 
 const DEFAULT_QUEUE_CAP: usize = 1024;
 const DEFAULT_INTERVAL_MS: u64 = 2000;
@@ -60,7 +60,7 @@ enum Entry {
 
 static SENDER: OnceLock<mpsc::Sender<Entry>> = OnceLock::new();
 
-/// Enable the push exporter from env. No-op unless `SKY_PARENT_URL` is set
+/// Enable the push exporter from env. No-op unless `IPE_PARENT_URL` is set
 /// (i.e. this process runs as a sub-app pushing UP to its parent's ingest —
 /// federation). Idempotent. Call once at Live boot.
 pub async fn enable_from_env() {

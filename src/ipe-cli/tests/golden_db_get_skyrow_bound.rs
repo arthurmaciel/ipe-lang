@@ -12,7 +12,7 @@
 //! `db_get_string(_, &payload)` could not prove `payload: SkyRow`.
 //!
 //! Fix (`crates/ipe_ir/src/ir.rs` + `crates/ipe_lower/src/lower.rs`): a new
-//! `BoundSet::SKY_ROW` flag, rendered by `render_bounds` as
+//! `BoundSet::IPE_ROW` flag, rendered by `render_bounds` as
 //! `ipe_runtime::db::SkyRow`. The lowerer decides the bound STRUCTURALLY, at
 //! IR level (`apply_db_row_bounds` / `body_calls_db_get_on_param`): it fires
 //! ONLY when the fn body contains an actual `Db.get*` KERNEL application whose
@@ -27,7 +27,7 @@
 //!
 //! Run:
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_i177_db_get_skyrow_bound
+//! IPE_E2E=1 cargo test -p skyc --test golden_i177_db_get_skyrow_bound
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -49,7 +49,7 @@ fn entry_path(root: &Path) -> PathBuf {
 /// skyc-0: the compiler must accept the program AND emit `+ SkyRow` on the
 /// wildcard-`any` decoder function's own generic while leaving the record
 /// STRUCT unbounded — checked unconditionally (cheap, no `cargo`), independent
-/// of the `SKY_E2E` gate below.
+/// of the `IPE_E2E` gate below.
 #[test]
 fn i177_skyc_accepts_and_bounds_fn_not_struct() {
     let root = repo_root();
@@ -101,12 +101,12 @@ fn i177_skyc_accepts_and_bounds_fn_not_struct() {
 }
 
 /// cargo-0 ∧ run-0: the emitted project actually compiles with `rustc` and
-/// prints the decoded record fields. Gated on `SKY_E2E=1` — a real
+/// prints the decoded record fields. Gated on `IPE_E2E=1` — a real
 /// `cargo build`, the only check that would have caught the original SEAL
 /// violation (E0277 on `examples/27-multi-session-chat`, `skyc build` clean).
 #[test]
 fn i177_cargo_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

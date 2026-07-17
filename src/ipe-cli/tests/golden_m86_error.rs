@@ -1,6 +1,6 @@
 //! `Sky.Core.Error` module qualifier — minimal `Error = String` slice.
 //!
-//! Gated on `SKY_E2E=1`; without it the test returns early so the default
+//! Gated on `IPE_E2E=1`; without it the test returns early so the default
 //! `cargo test` stays fast.
 //!
 //! ## Golden catalogue
@@ -17,7 +17,7 @@
 //! Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test golden_m86_error
+//! IPE_E2E=1 cargo test golden_m86_error
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -34,9 +34,9 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 }
 
 /// Compile `tests/golden/<name>/Main.sky`, build the emitted Cargo project,
-/// run it, and assert its stdout matches the cached oracle. Gated on `SKY_E2E=1`.
+/// run it, and assert its stdout matches the cached oracle. Gated on `IPE_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

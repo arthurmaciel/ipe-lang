@@ -38,7 +38,7 @@ Rejected alternatives:
 
 - The `Ws` qualifier + 12 kernels are the stable compiler↔runtime contract
   (example 33-websocket-echo builds through them). Send is bounded
-  (`SKY_WS_SEND_BUFFER=256`); reusing a stale handle after close yields a clean
+  (`IPE_WS_SEND_BUFFER=256`); reusing a stale handle after close yields a clean
   `Err` (registry miss).
 - **Invariant that must keep holding:** origin glob gating with CSWSH hardening
   is mandatory in production — empty `originPatterns` → 403 fail-closed. The

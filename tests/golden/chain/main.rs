@@ -3,7 +3,7 @@
 
 #[cfg(feature = "static_alloc")]
 #[global_allocator]
-static SKY_GLOBAL_ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static IPE_GLOBAL_ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 pub mod sky_runtime;
 pub use sky_runtime::*;

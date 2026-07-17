@@ -49,11 +49,11 @@ use std::process::{Command, ExitCode};
 
 use oracle::{EXPECTED_FILE, MAIN_SKY, META_FILE, Meta, RunResult, build_and_run_rust, sha256_hex};
 
-/// Default location of the Go reference compiler. Override with `SKY_GO_ORACLE`.
+/// Default location of the Go reference compiler. Override with `IPE_GO_ORACLE`.
 const DEFAULT_GO_ORACLE: &str = "/home/arthur/Documentos/comp/sky/sky-out/sky";
 
 fn go_oracle() -> String {
-    std::env::var("SKY_GO_ORACLE").unwrap_or_else(|_| DEFAULT_GO_ORACLE.to_owned())
+    std::env::var("IPE_GO_ORACLE").unwrap_or_else(|_| DEFAULT_GO_ORACLE.to_owned())
 }
 
 /// The `sky-rust` workspace root (two levels up from this crate's manifest:
@@ -104,7 +104,7 @@ fn run_go_oracle(oracle_bin: &str, main_sky: &Path, scratch: &Path) -> Result<Ru
     let dest = scratch.join(MAIN_SKY);
     std::fs::copy(main_sky, &dest).map_err(|e| format!("cannot copy Main.sky: {e}"))?;
 
-    // The Go `sky` binary ALSO honours `SKY_RUNTIME_DIR` — but that variable is
+    // The Go `sky` binary ALSO honours `IPE_RUNTIME_DIR` — but that variable is
     // ours, pointing at the *Rust* runtime so skyc can resolve it on the
     // divergence path. If it leaks into the Go build the Go compiler vendors a
     // bogus single-file `rt.go` from the Rust tree and `go build` fails with a
@@ -114,7 +114,7 @@ fn run_go_oracle(oracle_bin: &str, main_sky: &Path, scratch: &Path) -> Result<Ru
         .arg("build")
         .arg(MAIN_SKY)
         .current_dir(scratch)
-        .env_remove("SKY_RUNTIME_DIR")
+        .env_remove("IPE_RUNTIME_DIR")
         .output()
         .map_err(|e| format!("cannot spawn Go `sky build`: {e}"))?;
     if !build.status.success() {

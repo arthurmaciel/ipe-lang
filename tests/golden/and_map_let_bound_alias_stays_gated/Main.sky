@@ -9,8 +9,8 @@ import Sky.Core.Prelude exposing (..)
 -- gate only pattern-matched the direct 2-arg spelling and the
 -- pipe-desugared curried-call spelling — this `let`-bound alias shape
 -- reached `cargo build` as E0277 (expected a `FnOnce` closure, found a
--- 3-argument `dyn Fn`) instead of a clean SKY-L0114. Must stay rejected
--- with SKY-L0114 under EVERY syntactic spelling of the aliasing, never
+-- 3-argument `dyn Fn`) instead of a clean IPE-L0114. Must stay rejected
+-- with IPE-L0114 under EVERY syntactic spelling of the aliasing, never
 -- silently accepted.
 add3 : Int -> Int -> Int -> Int
 add3 a b c =

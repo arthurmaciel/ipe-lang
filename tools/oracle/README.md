@@ -19,7 +19,7 @@ committed. `sky --version` must print the pinned version.
 
 ## Resolution order (build_go)
 
-1. `$SKY_GO_BIN` (explicit override)
+1. `$IPE_GO_BIN` (explicit override)
 2. `tools/oracle/bin/sky` (this pinned binary)
 3. `sky` on `PATH` (fallback; may be stale — a version-skew warning risk)
 

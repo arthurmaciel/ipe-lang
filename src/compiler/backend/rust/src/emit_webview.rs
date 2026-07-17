@@ -13,9 +13,9 @@
 //!   [`Diagnostic::CompilerBug`], not silent drop).
 //! * **G4**: `window` MUST be an inline `Expr::Record` AND `size` within it MUST
 //!   be an inline 2-element `Expr::Tuple`. Any non-literal shape is rejected at
-//!   lower with `SKY-L0119` (`Feature::LetBoundAppCfg`); these emit-site guards
+//!   lower with `IPE-L0119` (`Feature::LetBoundAppCfg`); these emit-site guards
 //!   are unreachable-by-construction defensive invariants (defence-in-depth,
-//!   mirroring the `LiveAppRouted`/`SKY-L0118` precedent).
+//!   mirroring the `LiveAppRouted`/`IPE-L0118` precedent).
 //! * Function fields (init/update/view/subscriptions) are emitted via
 //!   `emit_webview_fn` (raw function name for `FuncValue`, fallback to
 //!   `emit_expr_at`). A named `fn` item satisfies `Send + Sync + 'static` via
@@ -66,13 +66,13 @@ pub fn emit_webview_call(
                 });
             };
             // Unreachable for well-typed source: a non-literal cfg is rejected
-            // at lower with SKY-L0119 (Feature::LetBoundAppCfg); this guard is a
+            // at lower with IPE-L0119 (Feature::LetBoundAppCfg); this guard is a
             // defensive invariant, mirroring the `LiveAppRouted` precedent.
             let Expr::Record(fields) = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_webview_call::WebviewApp",
                     detail: "Webview.app cfg must be an inline record literal; \
-                             a non-literal cfg is rejected at lower with SKY-L0119"
+                             a non-literal cfg is rejected at lower with IPE-L0119"
                         .into(),
                 });
             };
@@ -96,7 +96,7 @@ pub fn emit_webview_call(
 /// `title` may be any String-typed expression (variable, literal, concatenation).
 /// Both checks emit [`Diagnostic::CompilerBug`] on failure — they are unreachable
 /// for well-typed source: a non-literal `window`/`size` is rejected at lower with
-/// SKY-L0119 (`Feature::LetBoundAppCfg`), so these guards are defensive
+/// IPE-L0119 (`Feature::LetBoundAppCfg`), so these guards are defensive
 /// invariants, mirroring the `LiveAppRouted` precedent.
 ///
 /// # Function-field emission
@@ -122,7 +122,7 @@ fn emit_webview_app_inner(
 
     // seal: gate the Model against `webview_app`'s `Clone` bound (same as
     // Tui — memory-resident Model, `Clone` only). A non-clonable (non-derivable)
-    // Model becomes a fail-closed `SKY-L0120` error instead of a `cargo` fail.
+    // Model becomes a fail-closed `IPE-L0120` error instead of a `cargo` fail.
     if let Some(model_ty) = crate::emit_model_gate::model_ty_of_view(view_e) {
         crate::emit_model_gate::check_admissible_model(
             ctx,
@@ -143,13 +143,13 @@ fn emit_webview_app_inner(
 
     // ── G4 gate 1: `window` must be an inline record literal ─────────────────
     // Unreachable for well-typed source: a let-bound `window` is rejected at lower
-    // with SKY-L0119 (Feature::LetBoundAppCfg); this guard is a defensive invariant.
+    // with IPE-L0119 (Feature::LetBoundAppCfg); this guard is a defensive invariant.
     let Expr::Record(win_fields) = window_e else {
         return Err(Diagnostic::CompilerBug {
             where_: "ipe_backend_rust::emit_webview_app_inner::G4_window",
             detail: "Webview.app `window` field must be an inline record literal \
                      `{ title = ..., size = (..., ...) }`; \
-                     a let-bound WindowCfg variable is rejected at lower with SKY-L0119"
+                     a let-bound WindowCfg variable is rejected at lower with IPE-L0119"
                 .into(),
         });
     };
@@ -159,12 +159,12 @@ fn emit_webview_app_inner(
 
     // ── G4 gate 2: `size` must be an inline 2-element tuple literal ──────────
     // Unreachable for well-typed source: a let-bound `size` is rejected at lower
-    // with SKY-L0119 (Feature::LetBoundAppCfg); this guard is a defensive invariant.
+    // with IPE-L0119 (Feature::LetBoundAppCfg); this guard is a defensive invariant.
     let Expr::Tuple(size_elems) = size_e else {
         return Err(Diagnostic::CompilerBug {
             where_: "ipe_backend_rust::emit_webview_app_inner::G4_size",
             detail: "Webview.app `window.size` must be an inline 2-tuple literal `(w, h)`; \
-                     a let-bound size variable is rejected at lower with SKY-L0119"
+                     a let-bound size variable is rejected at lower with IPE-L0119"
                 .into(),
         });
     };

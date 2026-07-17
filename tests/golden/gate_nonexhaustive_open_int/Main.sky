@@ -2,7 +2,7 @@ module Main exposing (main)
 import Sky.Core.Prelude exposing (..)
 
 -- Int is an OPEN type: literal arms without a wildcard / variable catch-all do
--- NOT cover every value, so this `case` is non-exhaustive (SKY-T0010).
+-- NOT cover every value, so this `case` is non-exhaustive (IPE-T0010).
 f : Int -> Int
 f n =
     case n of

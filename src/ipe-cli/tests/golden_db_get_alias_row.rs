@@ -26,7 +26,7 @@
 //!
 //! Run:
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_i177_db_get_alias_row
+//! IPE_E2E=1 cargo test -p skyc --test golden_i177_db_get_alias_row
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -96,9 +96,9 @@ fn assert_skyc_bounds_fn_not_struct(fixture: &str) {
 }
 
 /// cargo-0 ∧ run-0 for the emitted project — the only check that would have
-/// caught the E0277 regression. Gated on `SKY_E2E=1`.
+/// caught the E0277 regression. Gated on `IPE_E2E=1`.
 fn assert_cargo_builds_and_runs(fixture: &str) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

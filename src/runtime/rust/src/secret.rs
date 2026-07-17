@@ -41,7 +41,7 @@
 //!   NOT serde ALSO means `Secret` is unconditionally Model-inadmissible for
 //!   `Std.Live` (`ir_type_is_serde` gates the Live Model — see
 //!   `ipe_ir::ir_type_is_serde` — so a `Live` app storing a `Secret` in its
-//!   Model is a compile-time `SKY-L0120`, never a session-store leak).
+//!   Model is a compile-time `IPE-L0120`, never a session-store leak).
 //! * `Drop` — zeroizes the backing buffer (`zeroize::Zeroize`) so the
 //!   plaintext does not linger in freed heap memory after the `Secret` goes
 //!   out of scope. Ships now, not deferred (security-tier hardening is

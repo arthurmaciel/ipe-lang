@@ -1,5 +1,5 @@
 //! `Std.Html.Events.onInput` handler-payload gate: a Bool handler must be
-//! REJECTED BY skyc with SKY-T0001 — never exit 0 and defer to cargo.
+//! REJECTED BY skyc with IPE-T0001 — never exit 0 and defer to cargo.
 //!
 //! ## Context
 //!
@@ -13,14 +13,14 @@
 //! ## What is tested
 //!
 //! * **Negative** (`stdui_event_illtyped`): `Event.onInput (\b -> SetChecked b)`
-//!   (Bool handler on a String event) → skyc reports SKY-T0001 (type mismatch),
+//!   (Bool handler on a String event) → skyc reports IPE-T0001 (type mismatch),
 //!   never exits 0.
 //!
 //! * **Positive** (`stdui_event_oninput`): `Event.onInput (\s -> SetText s)`
 //!   (String handler, well-typed) → skyc succeeds (build returns `Ok`).
 //!
 //! Both tests are pure skyc-pipeline checks (no cargo build / runtime binary
-//! required), so they run without `SKY_E2E=1`.  They return early if
+//! required), so they run without `IPE_E2E=1`.  They return early if
 //! [`skyc::resolve_runtime`] cannot locate the embedded runtime.
 
 use std::path::{Path, PathBuf};
@@ -52,12 +52,12 @@ fn run_skyc(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>> {
 }
 
 /// NEGATIVE gate: `Event.onInput` with a `Bool -> msg`
-/// handler must be rejected by skyc with SKY-T0001.
+/// handler must be rejected by skyc with IPE-T0001.
 ///
 /// Without the fix, `constrain.rs` fell to `Ty::Var(u32::MAX)` for the `"Event"`
 /// qualifier → skyc exited 0 → cargo emitted E0308.
 /// Post-fix: `Some("Ui" | "Event")` arm unifies `Bool -> msg` with the
-/// expected `String -> msg` → SKY-T0001 at the type-checking stage.
+/// expected `String -> msg` → IPE-T0001 at the type-checking stage.
 #[test]
 fn event_oninput_illtyped_bool_handler_is_sky_t0001() {
     let Some(result) = run_skyc("stdui_event_illtyped", "m7_stdui_event_illtyped_emit") else {
@@ -70,8 +70,8 @@ fn event_oninput_illtyped_bool_handler_is_sky_t0001() {
     };
     assert_eq!(
         got,
-        Some(ipe_diagnostics::SKY_T0001),
-        "stdui_event_illtyped: expected SKY-T0001 (type mismatch), got: {result:?}",
+        Some(ipe_diagnostics::IPE_T0001),
+        "stdui_event_illtyped: expected IPE-T0001 (type mismatch), got: {result:?}",
     );
 }
 

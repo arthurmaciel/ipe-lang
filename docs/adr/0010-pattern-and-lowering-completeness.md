@@ -45,10 +45,10 @@ uniformly to its siblings.
   slice binding (forbidden "textual surgery").
 
 - **D — local type shadowing a dep-imported type.** Dep-vs-dep name clashes were
-  rejected (`SKY-N0012`) but a local `type` shadowing a dep-imported type was
+  rejected (`IPE-N0012`) but a local `type` shadowing a dep-imported type was
   silently skipped, leaving ctors pointing at the local type while
   `type_home_map` pointed at the dep — surfacing as a confusing downstream type
-  mismatch. Add a pre-pass local-vs-dep check emitting the *same* `SKY-N0012`,
+  mismatch. Add a pre-pass local-vs-dep check emitting the *same* `IPE-N0012`,
   run before `type_home_map` is mutated so a same-module duplicate still gets the
   better per-module span. Rejected: lazy downstream detection (already the buggy
   status quo), or a new bespoke diagnostic (the existing one is correct).

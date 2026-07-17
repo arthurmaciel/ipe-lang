@@ -5,7 +5,7 @@ module Main exposing (main)
 -- built on it generalises to a Rust `T: PartialOrd` bound. The runtime ordering
 -- bound is satisfied only by the scalar comparables (`Int` / `Float` / `Char` /
 -- `Bool`); a record is not one, so instantiating the forwarder at `{ x : Int }`
--- is rejected here at type-check (SKY-T0014) instead of emitting an unbounded
+-- is rejected here at type-check (IPE-T0014) instead of emitting an unbounded
 -- `math_min<T>(…)` that `cargo` cannot build. Fails closed, no Rust emitted.
 pickMin : a -> a -> a
 pickMin x y =

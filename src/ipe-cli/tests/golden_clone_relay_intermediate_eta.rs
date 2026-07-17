@@ -28,7 +28,7 @@
 //! cargo test -p skyc --test golden_i218_clone_relay_intermediate_eta
 //!
 //! # full E2E (THE SEAL):
-//! SKY_E2E=1 cargo test -p skyc --test golden_i218_clone_relay_intermediate_eta
+//! IPE_E2E=1 cargo test -p skyc --test golden_i218_clone_relay_intermediate_eta
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -81,10 +81,10 @@ fn i218_clone_relay_skyc_accepts() {
     );
 }
 
-/// cargo-0 ∧ run-correct: gated on `SKY_E2E=1` — THE SEAL.
+/// cargo-0 ∧ run-correct: gated on `IPE_E2E=1` — THE SEAL.
 #[test]
 fn i218_clone_relay_cargo_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

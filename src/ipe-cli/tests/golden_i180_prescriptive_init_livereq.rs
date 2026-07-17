@@ -7,7 +7,7 @@
 //! are pinned here:
 //!
 //! 1. **Prescription is enforced.** A `Live.app` whose `init` declares `{}` (or
-//!    any non-`LiveReq` shape) is a clear compile-time SKY-T0001 at the `init`
+//!    any non-`LiveReq` shape) is a clear compile-time IPE-T0001 at the `init`
 //!    cfg field (`expected LiveReq, found {}`) — not a raw unification failure
 //!    and not a deferred `cargo` break.
 //!
@@ -22,7 +22,7 @@
 //! Full design: `docs/adr/0021-tea-state-engine-and-prescriptive-init.md`;
 //! divergence B24 in `docs/divergences-from-sky.md`.
 //!
-//! Compile-only assertions always run; the cargo build is `SKY_E2E=1`-gated
+//! Compile-only assertions always run; the cargo build is `IPE_E2E=1`-gated
 //! with an ISOLATED `CARGO_TARGET_DIR` (a shared dir's fingerprint reuse can
 //! mask a rustc failure as a false pass).
 
@@ -55,7 +55,7 @@ main =
 "#;
 
 /// The SAME app but with `init : {} -> …` — the non-`LiveReq` shape the
-/// prescriptive scheme must reject with a clear SKY-T0001.
+/// prescriptive scheme must reject with a clear IPE-T0001.
 const LIVE_INIT_UNIT_REJECTED: &str = r#"module Main exposing (main)
 import Std.Live as Live
 import Std.Ui as Ui
@@ -125,7 +125,7 @@ fn live_init_reads_req_path_field() {
     );
 }
 
-/// `init : {} -> …` must be rejected with a clear SKY-T0001 naming the expected
+/// `init : {} -> …` must be rejected with a clear IPE-T0001 naming the expected
 /// `LiveReq` — the prescriptive scheme, fail-closed at skyc time.
 #[test]
 fn live_init_unit_is_rejected() {
@@ -144,11 +144,11 @@ fn live_init_unit_is_rejected() {
     );
 }
 
-/// `SKY_E2E` tier: the `init : LiveReq` project must cargo-build (isolated
+/// `IPE_E2E` tier: the `init : LiveReq` project must cargo-build (isolated
 /// target dir) — the SEAL check that skyc-0 implies cargo-0.
 #[test]
 fn live_init_reads_req_path_cargo_builds() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     live_init_reads_req_path_field();

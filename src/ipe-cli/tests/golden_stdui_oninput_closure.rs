@@ -36,7 +36,7 @@
 //! Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test golden_m7_stdui_oninput_closure
+//! IPE_E2E=1 cargo test golden_m7_stdui_oninput_closure
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -49,7 +49,7 @@ fn repo_root() -> PathBuf {
 }
 
 /// Compile / build / run `tests/golden/stdui_oninput_closure/Main.sky` and
-/// return the golden directory together with the run outcome.  Gated on `SKY_E2E=1`.
+/// return the golden directory together with the run outcome.  Gated on `IPE_E2E=1`.
 fn build_run_oninput_closure() -> (PathBuf, support::RunOutcome) {
     let root = repo_root();
     let dir = root
@@ -87,7 +87,7 @@ fn build_run_oninput_closure() -> (PathBuf, support::RunOutcome) {
 /// the binary must exit 0.
 #[test]
 fn oninput_closure_arc_wrap_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

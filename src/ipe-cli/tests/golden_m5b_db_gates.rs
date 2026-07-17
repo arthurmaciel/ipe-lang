@@ -3,11 +3,11 @@
 //! misbehave (or be silently injectable) at runtime. This is the core
 //! "parse, don't validate" property the `SqlFragment` newtype exists to
 //! establish — `Db.findWhere` / `Db.deleteWhere` take `SqlFragment`, not
-//! `String`, so a hand-built WHERE string is a `SKY-T0001` type mismatch, not
+//! `String`, so a hand-built WHERE string is a `IPE-T0001` type mismatch, not
 //! a representable runtime value.
 //!
 //! Compile-only: these fixtures never run (there is nothing to execute — the
-//! program is ill-typed), so there is no oracle / `SKY_E2E` gate here, unlike
+//! program is ill-typed), so there is no oracle / `IPE_E2E` gate here, unlike
 //! `golden_m5b_db.rs`'s runnable goldens.
 
 use std::path::{Path, PathBuf};
@@ -48,7 +48,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code)
 
 /// `Db.findWhere conn "products" ("qty > " ++ "9")` — a plain `String` (built
 /// by `++`, not any `Sql.*` combinator) where `SqlFragment` is required —
-/// must be rejected with `SKY-T0001` at the call site. This is the exact
+/// must be rejected with `IPE-T0001` at the call site. This is the exact
 /// injection shape a raw `Db.unsafeFindWhere` would accept at runtime; `skyc`
 /// refuses it before a single byte of Rust is emitted.
 #[test]
@@ -56,6 +56,6 @@ fn db_findwhere_string_is_t0001() {
     assert_gate(
         "db_gate_findwhere_string",
         "m5b_db_gate_findwhere_string_emit",
-        ipe_diagnostics::SKY_T0001,
+        ipe_diagnostics::IPE_T0001,
     );
 }

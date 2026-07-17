@@ -1,4 +1,4 @@
-//! Integration tests for `skyc run` — gated on `SKY_E2E=1` so the default
+//! Integration tests for `skyc run` — gated on `IPE_E2E=1` so the default
 //! `cargo nextest` stays fast and offline (no cargo invocation required).
 //!
 //! The non-E2E tests still exercise the CLI parsing surface (usage errors) and
@@ -54,7 +54,7 @@ fn run_unknown_flag_returns_usage_error() {
 }
 
 // ---------------------------------------------------------------------------
-// E2E test — only active when SKY_E2E=1 (requires cargo + runtime)
+// E2E test — only active when IPE_E2E=1 (requires cargo + runtime)
 // ---------------------------------------------------------------------------
 
 /// `skyc run <entry.sky>` must:
@@ -63,16 +63,16 @@ fn run_unknown_flag_returns_usage_error() {
 ///   3. Exec the resulting binary; its stdout must equal `"hello from run\n"`.
 ///
 /// This test exercises the full `run_run` path from CLI dispatch through the
-/// Unix `exec` replacement.  It is skipped unless `SKY_E2E=1` is set.
+/// Unix `exec` replacement.  It is skipped unless `IPE_E2E=1` is set.
 #[test]
 fn run_subcommand_builds_and_executes_hello_program() {
     const SRC: &str = "module Main exposing (main)\n\nmain = println \"hello from run\"\n";
 
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
-    // Resolve the runtime dir (skips the test when SKY_RUNTIME_DIR is unset
+    // Resolve the runtime dir (skips the test when IPE_RUNTIME_DIR is unset
     // and the walk-up also fails, which happens in CI without the repo tree).
     let runtime = skyc::resolve_runtime();
     assert!(

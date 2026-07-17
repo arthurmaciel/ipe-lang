@@ -1,7 +1,7 @@
 //! Honest end-to-end tests for `Sky.Http.Server` — `Server.listen`,
 //! `Server.get`, `Server.text`, and `Server.param`.
 //!
-//! All tests are gated on `SKY_E2E=1`.  Without it they return early so the
+//! All tests are gated on `IPE_E2E=1`.  Without it they return early so the
 //! default `cargo test` stays fast.
 //!
 //! ## Architecture
@@ -18,7 +18,7 @@
 //!    reading the assigned port, then dropping the listener so the Sky server
 //!    can bind the same port moments later.
 //! 5. Spawns the compiled binary as a child process, passing
-//!    `SKY_SERVER_PORT=<port>` and `SKY_HTTP_BIND=127.0.0.1` so the server
+//!    `IPE_SERVER_PORT=<port>` and `IPE_HTTP_BIND=127.0.0.1` so the server
 //!    binds loopback-only.
 //! 6. Polls for server readiness: retries `TcpStream::connect` every 50 ms for
 //!    up to 10 s.  The ready signal is the appearance of
@@ -31,7 +31,7 @@
 //! Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test server_e2e
+//! IPE_E2E=1 cargo test server_e2e
 //! ```
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -45,17 +45,17 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 // ── Sky programs ──────────────────────────────────────────────────────────────
 
-/// A minimal Sky HTTP server. Reads its port from `SKY_SERVER_PORT`.
+/// A minimal Sky HTTP server. Reads its port from `IPE_SERVER_PORT`.
 ///
 /// Routes:
 /// * `GET /`             → body `hello server`
 /// * `GET /greet/:name`  → body `hi <name>` (exercises `Server.param`)
-const SKY_SERVER_PROGRAM: &str = r#"module Main exposing (main)
+const IPE_SERVER_PROGRAM: &str = r#"module Main exposing (main)
 
 import Sky.Http.Server as Server
 
 main =
-    let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr "SKY_SERVER_PORT" "8080"))
+    let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr "IPE_SERVER_PORT" "8080"))
     in
     Server.listen port
         [ Server.get "/" (\req -> Task.succeed (Server.text "hello server"))
@@ -157,9 +157,9 @@ fn spawn_and_wait_ready(
 }
 
 /// Same as `spawn_and_wait_ready`, plus caller-supplied extra environment
-/// variables on the child (e.g. `SKY_TRUSTED_PROXY` / `ENV` for the
+/// variables on the child (e.g. `IPE_TRUSTED_PROXY` / `ENV` for the
 /// CSRF-cookie `Secure`-gating E2E tests, which need a real subprocess
-/// because the runtime's `SKY_TRUSTED_PROXY` trust decision is cached in a
+/// because the runtime's `IPE_TRUSTED_PROXY` trust decision is cached in a
 /// process-wide `OnceLock` — an in-process unit test cannot toggle it
 /// per-test the way `csrf_set_cookie_value`'s pure-function unit tests can).
 ///
@@ -174,8 +174,8 @@ fn spawn_and_wait_ready_with_env(
     extra_env: &[(&str, &str)],
 ) -> Result<ProcessGuard, BoxError> {
     let mut cmd = Command::new(exe);
-    cmd.env("SKY_SERVER_PORT", port.to_string())
-        .env("SKY_HTTP_BIND", "127.0.0.1")
+    cmd.env("IPE_SERVER_PORT", port.to_string())
+        .env("IPE_HTTP_BIND", "127.0.0.1")
         .stderr(Stdio::piped())
         .stdout(Stdio::null());
     for (k, v) in extra_env {
@@ -233,12 +233,12 @@ fn spawn_and_wait_ready_with_env(
 /// Sky server that echoes the POST body verbatim.
 ///
 /// Route: `POST /echo` → body `Server.body req`
-const SKY_POST_ECHO_PROGRAM: &str = r#"module Main exposing (main)
+const IPE_POST_ECHO_PROGRAM: &str = r#"module Main exposing (main)
 
 import Sky.Http.Server as Server
 
 main =
-    let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr "SKY_SERVER_PORT" "8080"))
+    let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr "IPE_SERVER_PORT" "8080"))
     in
     Server.listen port
         [ Server.post "/echo" (\req -> Task.succeed (Server.text (Server.body req)))
@@ -250,12 +250,12 @@ main =
 ///
 /// Route: `POST /introspect/:tag?q=<val>` with header `X-Probe: <val>`
 /// → body `<method>|<path>|<probe>|<q>|<tag>`
-const SKY_INTROSPECT_PROGRAM: &str = r#"module Main exposing (main)
+const IPE_INTROSPECT_PROGRAM: &str = r#"module Main exposing (main)
 
 import Sky.Http.Server as Server
 
 main =
-    let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr "SKY_SERVER_PORT" "8080"))
+    let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr "IPE_SERVER_PORT" "8080"))
     in
     Server.listen port
         [ Server.post "/introspect/:tag" (\req ->
@@ -274,7 +274,7 @@ main =
 /// `Db.open : String -> String -> Task Error Db` (driver, url).
 /// `Db.connect : () -> Task Error Db` takes unit, not a URL string, so we use
 /// `Db.open` here for clarity.
-const SKY_SERVER_AND_DB_PROGRAM: &str = r#"module Main exposing (main)
+const IPE_SERVER_AND_DB_PROGRAM: &str = r#"module Main exposing (main)
 
 import Sky.Http.Server as Server
 import Std.Db as Db
@@ -282,7 +282,7 @@ import Std.Db as Db
 main =
     Task.andThen
         (\conn ->
-            let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr "SKY_SERVER_PORT" "8080"))
+            let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr "IPE_SERVER_PORT" "8080"))
             in
             Server.listen port
                 [ Server.get "/" (\req -> Task.succeed (Server.text "ok"))
@@ -295,7 +295,7 @@ main =
 /// (also wrapped in `Middleware.withCsrf`) so a real HTTP client can mint the
 /// double-submit cookie via a safe-method request before probing the
 /// CSRF-protected `POST /action`.
-const SKY_CSRF_PROGRAM: &str = r#"module Main exposing (main)
+const IPE_CSRF_PROGRAM: &str = r#"module Main exposing (main)
 
 import Sky.Http.Server as Server
 import Sky.Http.Middleware as Middleware
@@ -305,7 +305,7 @@ handle _req =
     Task.succeed (Server.text "ok")
 
 main =
-    let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr "SKY_SERVER_PORT" "8080"))
+    let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr "IPE_SERVER_PORT" "8080"))
     in
     Server.listen port
         [ Server.get "/action" (Middleware.withCsrf handle)
@@ -498,11 +498,11 @@ fn http_post(
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn server_get_root() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
-    let exe = compile_and_build("server_get_root", SKY_SERVER_PROGRAM)?;
+    let exe = compile_and_build("server_get_root", IPE_SERVER_PROGRAM)?;
     let port = pick_ephemeral_port()?;
     let _guard = spawn_and_wait_ready("server_get_root", &exe, port)?;
 
@@ -528,11 +528,11 @@ fn server_get_root() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn server_get_param() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
-    let exe = compile_and_build("server_get_param", SKY_SERVER_PROGRAM)?;
+    let exe = compile_and_build("server_get_param", IPE_SERVER_PROGRAM)?;
     let port = pick_ephemeral_port()?;
     let _guard = spawn_and_wait_ready("server_get_param", &exe, port)?;
 
@@ -560,11 +560,11 @@ fn server_get_param() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn post_body_echo() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
-    let exe = compile_and_build("post_body_echo", SKY_POST_ECHO_PROGRAM)?;
+    let exe = compile_and_build("post_body_echo", IPE_POST_ECHO_PROGRAM)?;
     let port = pick_ephemeral_port()?;
     let _guard = spawn_and_wait_ready("post_body_echo", &exe, port)?;
 
@@ -592,11 +592,11 @@ fn post_body_echo() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn request_introspection() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
-    let exe = compile_and_build("request_introspection", SKY_INTROSPECT_PROGRAM)?;
+    let exe = compile_and_build("request_introspection", IPE_INTROSPECT_PROGRAM)?;
     let port = pick_ephemeral_port()?;
     let _guard = spawn_and_wait_ready("request_introspection", &exe, port)?;
 
@@ -632,12 +632,12 @@ fn request_introspection() -> Result<(), BoxError> {
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn server_and_db_compose() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
     // compile_and_build already does skyc + cargo build; success is the proof.
-    let _exe = compile_and_build("server_and_db_compose", SKY_SERVER_AND_DB_PROGRAM)?;
+    let _exe = compile_and_build("server_and_db_compose", IPE_SERVER_AND_DB_PROGRAM)?;
     Ok(())
 }
 
@@ -658,12 +658,12 @@ fn server_and_db_compose() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn csrf_forged_post_without_token_rejected() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
     let test_name = "csrf_forged_post_without_token_rejected";
 
-    let exe = compile_and_build(test_name, SKY_CSRF_PROGRAM)?;
+    let exe = compile_and_build(test_name, IPE_CSRF_PROGRAM)?;
     let port = pick_ephemeral_port()?;
     let _guard = spawn_and_wait_ready(test_name, &exe, port)?;
     let addr = format!("127.0.0.1:{port}");
@@ -693,12 +693,12 @@ fn csrf_forged_post_without_token_rejected() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn csrf_post_with_cookie_but_mismatched_header_rejected() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
     let test_name = "csrf_post_with_cookie_but_mismatched_header_rejected";
 
-    let exe = compile_and_build(test_name, SKY_CSRF_PROGRAM)?;
+    let exe = compile_and_build(test_name, IPE_CSRF_PROGRAM)?;
     let port = pick_ephemeral_port()?;
     let _guard = spawn_and_wait_ready(test_name, &exe, port)?;
     let addr = format!("127.0.0.1:{port}");
@@ -762,12 +762,12 @@ fn csrf_post_with_cookie_but_mismatched_header_rejected() -> Result<(), BoxError
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn csrf_legit_post_with_matching_token_allowed() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
     let test_name = "csrf_legit_post_with_matching_token_allowed";
 
-    let exe = compile_and_build(test_name, SKY_CSRF_PROGRAM)?;
+    let exe = compile_and_build(test_name, IPE_CSRF_PROGRAM)?;
     let port = pick_ephemeral_port()?;
     let _guard = spawn_and_wait_ready(test_name, &exe, port)?;
     let addr = format!("127.0.0.1:{port}");
@@ -811,7 +811,7 @@ fn csrf_legit_post_with_matching_token_allowed() -> Result<(), BoxError> {
 /// Real HTTP-level proof that `Middleware.withCsrf`'s minted cookie
 /// `Secure` attribute is gated on the REQUEST-scoped TLS signal
 /// (`X-Forwarded-Proto: https`, only honoured when the operator opts in via
-/// `SKY_TRUSTED_PROXY`), not just a process-wide `ENV` snapshot — closing
+/// `IPE_TRUSTED_PROXY`), not just a process-wide `ENV` snapshot — closing
 /// the same ENV-vs-TLS gap already fixed for the Sky.Live session cookie
 /// (`src/runtime/rust/src/live/mod.rs::page_response`,
 /// `request_is_https`). The `server.rs` side needed a real design
@@ -821,7 +821,7 @@ fn csrf_legit_post_with_matching_token_allowed() -> Result<(), BoxError> {
 /// plain `bool` capture into the async block that stamps the cookie after
 /// the handler's `Task` resolves.
 ///
-/// Scenario (a): `SKY_TRUSTED_PROXY=1`, `ENV` unset (dev mode), GET carries
+/// Scenario (a): `IPE_TRUSTED_PROXY=1`, `ENV` unset (dev mode), GET carries
 /// `X-Forwarded-Proto: https` -> the minted `sky_csrf` cookie gets `Secure`
 /// even though `ENV` never claims production. Proves the request-scoped
 /// signal alone (independent of `ENV`) can flip the gate on.
@@ -831,15 +831,15 @@ fn csrf_legit_post_with_matching_token_allowed() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn csrf_cookie_secure_behind_trusted_tls_proxy() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
     let test_name = "csrf_cookie_secure_behind_trusted_tls_proxy";
 
-    let exe = compile_and_build(test_name, SKY_CSRF_PROGRAM)?;
+    let exe = compile_and_build(test_name, IPE_CSRF_PROGRAM)?;
     let port = pick_ephemeral_port()?;
     let _guard =
-        spawn_and_wait_ready_with_env(test_name, &exe, port, &[("SKY_TRUSTED_PROXY", "1")])?;
+        spawn_and_wait_ready_with_env(test_name, &exe, port, &[("IPE_TRUSTED_PROXY", "1")])?;
     let addr = format!("127.0.0.1:{port}");
 
     let get_req = "GET /action HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Forwarded-Proto: https\r\nConnection: close\r\n\r\n";
@@ -877,18 +877,18 @@ fn csrf_cookie_secure_behind_trusted_tls_proxy() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn csrf_cookie_not_secure_when_request_not_tls_detected() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
     let test_name = "csrf_cookie_not_secure_when_request_not_tls_detected";
 
-    let exe = compile_and_build(test_name, SKY_CSRF_PROGRAM)?;
+    let exe = compile_and_build(test_name, IPE_CSRF_PROGRAM)?;
     let port = pick_ephemeral_port()?;
-    // SKY_TRUSTED_PROXY is set (the opt-in is active), but the GET below
+    // IPE_TRUSTED_PROXY is set (the opt-in is active), but the GET below
     // never sends X-Forwarded-Proto — this specific request is not
     // TLS-detected.
     let _guard =
-        spawn_and_wait_ready_with_env(test_name, &exe, port, &[("SKY_TRUSTED_PROXY", "1")])?;
+        spawn_and_wait_ready_with_env(test_name, &exe, port, &[("IPE_TRUSTED_PROXY", "1")])?;
     let addr = format!("127.0.0.1:{port}");
 
     let get_req = "GET /action HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
@@ -917,7 +917,7 @@ fn csrf_cookie_not_secure_when_request_not_tls_detected() -> Result<(), BoxError
 
 /// Scenario (c) — the combined-gate semantics of the session cookie:
 /// `ENV=production` is an UNCONDITIONAL floor.  Even
-/// when THIS specific request is not TLS-detected (no `SKY_TRUSTED_PROXY`
+/// when THIS specific request is not TLS-detected (no `IPE_TRUSTED_PROXY`
 /// opt-in here at all), a production deploy must still get `Secure` —
 /// production assumes TLS termination happens somewhere in front of it.
 /// This matches `server_with_cookie`'s pre-existing production gate and
@@ -934,14 +934,14 @@ fn csrf_cookie_not_secure_when_request_not_tls_detected() -> Result<(), BoxError
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn csrf_cookie_secure_when_env_production_regardless_of_tls_signal() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
     let test_name = "csrf_cookie_secure_when_env_production_regardless_of_tls_signal";
 
-    let exe = compile_and_build(test_name, SKY_CSRF_PROGRAM)?;
+    let exe = compile_and_build(test_name, IPE_CSRF_PROGRAM)?;
     let port = pick_ephemeral_port()?;
-    // ENV=production, no SKY_TRUSTED_PROXY at all -> request_is_https() is
+    // ENV=production, no IPE_TRUSTED_PROXY at all -> request_is_https() is
     // always false in this process, yet Secure must still fire off the
     // unconditional production floor.
     let _guard = spawn_and_wait_ready_with_env(test_name, &exe, port, &[("ENV", "production")])?;

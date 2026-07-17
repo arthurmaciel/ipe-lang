@@ -7,7 +7,7 @@
 //! constructor. Each arm lowers to its own Rust `match` arm in source order.
 //!
 //! `skyc` must emit `main.rs` byte-identical to the checked-in golden, and
-//! (behind `SKY_E2E=1`) the emitted project must build and print `114`.
+//! (behind `IPE_E2E=1`) the emitted project must build and print `114`.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
 //! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the SAME
@@ -57,10 +57,10 @@ fn emits_byte_identical_main_rs() {
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
 /// program prints `114` — the same value the Go backend produces. Gated on
-/// `SKY_E2E=1` so the default `cargo test` stays fast.
+/// `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn end_to_end_builds_and_prints_one_one_four() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

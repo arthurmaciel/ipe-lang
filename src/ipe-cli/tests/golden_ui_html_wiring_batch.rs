@@ -38,7 +38,7 @@
 //! Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test golden_ui_html_wiring_batch
+//! IPE_E2E=1 cargo test golden_ui_html_wiring_batch
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -52,7 +52,7 @@ fn repo_root() -> PathBuf {
 
 /// Compile / build / run `tests/golden/ui_html_wiring_batch/Main.sky` and
 /// return the golden directory together with the run outcome. Gated on
-/// `SKY_E2E=1`.
+/// `IPE_E2E=1`.
 fn build_run_ui_html_wiring_batch() -> (PathBuf, support::RunOutcome) {
     let root = repo_root();
     let dir = root
@@ -87,7 +87,7 @@ fn build_run_ui_html_wiring_batch() -> (PathBuf, support::RunOutcome) {
 
 #[test]
 fn ui_html_wiring_batch_compiles_builds_and_renders_correctly() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

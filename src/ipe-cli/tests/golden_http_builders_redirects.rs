@@ -7,10 +7,10 @@
 //! `HttpRequest`, emitted through `emit_http_builder_call`'s clone-and-reassign
 //! block like its siblings (`withMethod` / `withTimeout` / `withBody`).
 //!
-//! Compile-tier assertion runs always; the run-tier requires `SKY_E2E=1`:
+//! Compile-tier assertion runs always; the run-tier requires `IPE_E2E=1`:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_m5b_http_builders_redirects
+//! IPE_E2E=1 cargo test -p skyc --test golden_m5b_http_builders_redirects
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -67,7 +67,7 @@ fn redirect_builders_compile_and_run() {
         );
     }
 
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -19,7 +19,7 @@ use crate::naming::kernel_name;
 /// `emit_expr` recurses one Rust stack frame per IR-expression level (`BinOp`
 /// operands, call arguments, match scrutinee/arm bodies). An adversarially or
 /// buggily deep IR spine would otherwise overflow the native stack with no
-/// diagnostic. The parser already caps *source* nesting at 256 (SKY-P0003);
+/// diagnostic. The parser already caps *source* nesting at 256 (IPE-P0003);
 /// this matching bound is defence-in-depth against an IR produced past that —
 /// well below the native stack ceiling (≤ 2 MB default thread stack), so the
 /// guard fires first. Sized conservatively to leave headroom for the frame size
@@ -1173,7 +1173,7 @@ fn emit_http_builder_call(
     // parameter). A program whose only `HttpRequest` consumer reads a field or
     // calls `Http.request`/`HttpStream.open` — never spelling the fieldset out
     // in an annotation — synthesises no such struct, and a lookup would hit
-    // SKY-I0001. Emitting the fixed runtime type name removes the dependency
+    // IPE-I0001. Emitting the fixed runtime type name removes the dependency
     // entirely.
     match k {
         KernelFn::HttpDefaultRequest => {
@@ -2608,7 +2608,7 @@ fn emit_ui_call(
         // We delegate at the emit site instead: extract `wrapperAttrs` and
         // `rootAttrs` directly from the IR record literal and pass them as
         // `Vec<Attribute<M>>` to `ui_layout_with_vecs`, bypassing the unsynthesised
-        // record struct that would trigger SKY-I0001 if materialised.
+        // record struct that would trigger IPE-I0001 if materialised.
         //
         // Non-literal cfg (e.g. `let cfg = { … } in Ui.layoutWith cfg elem`) is
         // rejected fail-closed with `CompilerBug` (unsupported).
@@ -2623,7 +2623,7 @@ fn emit_ui_call(
                 });
             };
             // Extract fields from the IR literal rather than materialising a
-            // synthesised Rust struct (which would ICE with SKY-I0001 because
+            // synthesised Rust struct (which would ICE with IPE-I0001 because
             // no struct for the {wrapperAttrs, rootAttrs} shape is registered).
             let Expr::Record(fields) = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
@@ -5708,7 +5708,7 @@ fn emit_ui_call(
 /// golden — so precedence is explicit and never relies on Rust's binding rules.
 ///
 /// The bounded entry point: emission starts at depth 0 and fails fast past
-/// [`MAX_EMIT_DEPTH`] (SKY-L0200) rather than overflowing the native stack.
+/// [`MAX_EMIT_DEPTH`] (IPE-L0200) rather than overflowing the native stack.
 pub fn emit_expr(
     ctx: &EmitCtx,
     expr: &Expr,
@@ -5996,7 +5996,7 @@ pub fn emit_expr_at(
             if matches!(callee, Callee::Kernel(_)) {
                 // JSON decoder kernel special cases are factored into a separate
                 // `#[inline(never)]` helper to keep the `emit_expr_at` stack frame
-                // small enough for the depth-guard test (SKY-L0200). The helper
+                // small enough for the depth-guard test (IPE-L0200). The helper
                 // returns `None` when no special case applies.
                 if let Some(result) =
                     emit_json_decoder_call(ctx, callee, args, indent, child, generics)?
@@ -6859,7 +6859,7 @@ fn collect_str_rebinds(ctx: &EmitCtx, pat: &Pat, out: &mut String) -> DResult<()
 /// `.clone()` (so the body sees `T`), a rest / whole list via `.to_vec()` (so the
 /// body sees `Vec<T>`). Cloning is the sound owned destructure of a shared slice;
 /// the lowerer gates a list `case` binding a still-generic (non-`Clone`) element
-/// type (SKY-L0102), so the `.clone()` / `.to_vec()` always resolve.
+/// type (IPE-L0102), so the `.clone()` / `.to_vec()` always resolve.
 fn list_binder_rebinds(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
     let mut out = String::new();
     match pat {
@@ -7090,7 +7090,7 @@ fn render_pat(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
 /// path whenever this returns `true`. This walks exactly the shapes the
 /// destructure-binder grammar admits — variable, wildcard, tuple, alias, and a
 /// top-level record whose fields are only variables / wildcards. A record field
-/// therefore never carries an alias (the lowerer forbids it — SKY-L0112), and a
+/// therefore never carries an alias (the lowerer forbids it — IPE-L0112), and a
 /// constructor / slice / literal never appears in an irrefutable binder, so
 /// those return `false`. The predicate and [`emit_binding_stmts`] special-case
 /// the SAME two shapes (`Alias`, `Tuple`); any disagreement fails closed there.
@@ -7144,7 +7144,7 @@ fn pat_contains_alias_in_arm(pat: &Pat) -> bool {
 /// A `Pat::Slice` prefix/rest is deliberately NOT recursed: a slice column
 /// reaches the reference-style LIST mode (matched by reference), never the
 /// by-value renderer, and the lowerer keeps a list / cons tuple column
-/// fail-closed on the variable-scrutinee path (SKY-L0115), so no `Pat::Str`
+/// fail-closed on the variable-scrutinee path (IPE-L0115), so no `Pat::Str`
 /// under a slice can reach here.
 fn pat_contains_str_in_arm(pat: &Pat) -> bool {
     match pat {
@@ -7206,7 +7206,7 @@ fn render_arm_pat_alias_safe(
             Ok(binder)
         }
         Pat::Alias(inner, _name) => {
-            // SKY-L0128 (`gate_by_value_dispatch_needing_aliases`) guarantees
+            // IPE-L0128 (`gate_by_value_dispatch_needing_aliases`) guarantees
             // `inner` is dispatch-free by the time lowering succeeds; fail
             // closed rather than silently mis-emit if that invariant is ever
             // violated — never trust a backend-side "this can't happen"
@@ -7215,7 +7215,7 @@ fn render_arm_pat_alias_safe(
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::render_arm_pat_alias_safe",
                     detail: "alias over a dispatch-needing inner pattern reached the \
-                             backend; SKY-L0128 should have rejected this at lowering"
+                             backend; IPE-L0128 should have rejected this at lowering"
                         .to_owned(),
                 });
             }
@@ -8014,7 +8014,7 @@ pub fn emit_lambda_unboxed(
 /// concrete closure type and a LATER use against `Box<dyn Fn>` fails as E0308.
 /// Pinning the trait object HERE — the same technique [`emit_func_value`] uses
 /// for a named function value — makes every lambda's static type the boxed
-/// trait object regardless of where it flows, closing the SKY-L0114
+/// trait object regardless of where it flows, closing the IPE-L0114
 /// `let f = Ok (\x -> …)` seal hole with no lowering / type-check change.
 ///
 /// The pointer constructor matches the rendered type: a lambda filling one of

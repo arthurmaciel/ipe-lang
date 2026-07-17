@@ -99,10 +99,10 @@ pub async fn api_metrics_summary() -> impl IntoResponse {
 }
 
 /// Production auth gate for the console + metrics surface (Go's
-/// `productionFromEnv` + `SKY_CONSOLE_AUTH`). Returns `Some(response)` when the
-/// request must be REFUSED. `SKY_CONSOLE_AUTH=off` → 404 (surface declared absent).
-/// In production (ENV/SKY_ENV non-dev) a `Bearer` admin token is required
-/// (`SKY_ADMIN_TOKEN`, legacy `SKY_CONSOLE_TOKEN`) — 401 otherwise. Dev mode (the
+/// `productionFromEnv` + `IPE_CONSOLE_AUTH`). Returns `Some(response)` when the
+/// request must be REFUSED. `IPE_CONSOLE_AUTH=off` → 404 (surface declared absent).
+/// In production (ENV/IPE_ENV non-dev) a `Bearer` admin token is required
+/// (`IPE_ADMIN_TOKEN`, legacy `IPE_CONSOLE_TOKEN`) — 401 otherwise. Dev mode (the
 /// default) is open and returns `None`.
 /// Does an `Authorization` header value authorize the admin surface? Accepts
 /// either `Bearer <tok>` OR `Basic base64(user:tok)` (Go parity: `hasAdminAuth`
@@ -128,7 +128,7 @@ fn header_authorizes(auth: &str, tok: &str) -> bool {
 }
 
 /// The parsed console-auth mode — the single authoritative representation of
-/// `SKY_CONSOLE_AUTH` (trim + lowercase; unknown → `Off`, no silent widen).
+/// `IPE_CONSOLE_AUTH` (trim + lowercase; unknown → `Off`, no silent widen).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum ConsoleAuthMode {
     Off,
@@ -148,10 +148,10 @@ impl ConsoleAuthMode {
         }
     }
 }
-/// The ONE parse of `SKY_CONSOLE_AUTH` (trim + lowercase; unknown → `Off`, no
+/// The ONE parse of `IPE_CONSOLE_AUTH` (trim + lowercase; unknown → `Off`, no
 /// silent widen). Unset → `DevOpen` in dev / `UnsetProd` in production.
 fn resolve_console_auth_mode() -> ConsoleAuthMode {
-    let raw = crate::system::read_env_var("SKY_CONSOLE_AUTH").unwrap_or_default();
+    let raw = crate::system::read_env_var("IPE_CONSOLE_AUTH").unwrap_or_default();
     match raw.trim().to_ascii_lowercase().as_str() {
         "off" => ConsoleAuthMode::Off,
         "token" => ConsoleAuthMode::Token,
@@ -172,9 +172,9 @@ fn resolve_console_auth_mode() -> ConsoleAuthMode {
 /// derivation. Used for the `[sky.console] inline console mounted … mode=<m>`
 /// startup log (Go parity — `console.go:328`). Total: every branch is explicit.
 ///
-/// Derivation (Go parity): `SKY_CONSOLE_AUTH` (case-insensitive, trimmed) selects
+/// Derivation (Go parity): `IPE_CONSOLE_AUTH` (case-insensitive, trimmed) selects
 /// `off`/`token`/`app`; unset → `dev-open` in dev (the default) or `unset-prod`
-/// in production (`ENV`/`SKY_ENV` non-dev); any unknown value → `off` (Go refuses
+/// in production (`ENV`/`IPE_ENV` non-dev); any unknown value → `off` (Go refuses
 /// to silently widen to something more permissive).
 pub fn console_auth_mode_label() -> &'static str {
     resolve_console_auth_mode().label()
@@ -188,15 +188,15 @@ pub fn gate_blocked(headers: &axum::http::HeaderMap) -> Option<axum::response::R
         ConsoleAuthMode::Off => {
             return Some((StatusCode::NOT_FOUND, "console disabled").into_response());
         }
-        // `SKY_CONSOLE_AUTH=app` (row-poly `consoleAuth` callback) is not yet
+        // `IPE_CONSOLE_AUTH=app` (row-poly `consoleAuth` callback) is not yet
         // implemented in the Rust runtime. Fail closed with a clear 501 rather than
         // a misleading 401 that suggests a bad token would fix it.
         ConsoleAuthMode::App => {
             return Some(
                 (
                     StatusCode::NOT_IMPLEMENTED,
-                    "SKY_CONSOLE_AUTH=app (row-poly consoleAuth callback) is not yet \
-                     supported on the Rust runtime; use token/off or SKY_ADMIN_TOKEN",
+                    "IPE_CONSOLE_AUTH=app (row-poly consoleAuth callback) is not yet \
+                     supported on the Rust runtime; use token/off or IPE_ADMIN_TOKEN",
                 )
                     .into_response(),
             );
@@ -207,20 +207,20 @@ pub fn gate_blocked(headers: &axum::http::HeaderMap) -> Option<axum::response::R
     if !telemetry::production_from_env() {
         return None;
     }
-    // Admin-token source precedence mirrors Go: SKY_ADMIN_TOKEN, then the legacy
-    // aliases SKY_CONSOLE_TOKEN and SKY_METRICS_TOKEN (Go honours SKY_METRICS_TOKEN
+    // Admin-token source precedence mirrors Go: IPE_ADMIN_TOKEN, then the legacy
+    // aliases IPE_CONSOLE_TOKEN and IPE_METRICS_TOKEN (Go honours IPE_METRICS_TOKEN
     // as a back-compat alias — without it a prod operator who only set the legacy
     // var is locked out / forced to a weaker config).
-    let want = crate::system::read_env_var("SKY_ADMIN_TOKEN")
+    let want = crate::system::read_env_var("IPE_ADMIN_TOKEN")
         .ok()
         .filter(|t| !t.is_empty())
         .or_else(|| {
-            crate::system::read_env_var("SKY_CONSOLE_TOKEN")
+            crate::system::read_env_var("IPE_CONSOLE_TOKEN")
                 .ok()
                 .filter(|t| !t.is_empty())
         })
         .or_else(|| {
-            crate::system::read_env_var("SKY_METRICS_TOKEN")
+            crate::system::read_env_var("IPE_METRICS_TOKEN")
                 .ok()
                 .filter(|t| !t.is_empty())
         });
@@ -260,9 +260,9 @@ pub fn gate_blocked(headers: &axum::http::HeaderMap) -> Option<axum::response::R
 /// than erroring — telemetry must never break the caller.
 ///
 /// Auth (Go parity): a shared secret in `X-Sky-Ingest-Token`, constant-time
-/// compared against `SKY_INGEST_TOKEN`. The Rust runtime does not yet spawn
+/// compared against `IPE_INGEST_TOKEN`. The Rust runtime does not yet spawn
 /// sub-apps (no auto-generated token to distribute), so the gate is enforced
-/// ONLY when an operator sets `SKY_INGEST_TOKEN` — unset leaves the endpoint open
+/// ONLY when an operator sets `IPE_INGEST_TOKEN` — unset leaves the endpoint open
 /// (dev / single-process). When federation lands the parent will generate + pass
 /// the token; the check side is already here.
 pub async fn ingest(headers: axum::http::HeaderMap, body: String) -> axum::response::Response {
@@ -351,7 +351,7 @@ fn fold_log(it: &serde_json::Value) {
 /// `server.rs::ws_cross_origin` — normalizes away each side's scheme-implied
 /// default port so the three never drift to different behavior), applied
 /// unconditionally here (not opt-in) since it's the ONLY defense available
-/// when `SKY_INGEST_TOKEN` is unset.
+/// when `IPE_INGEST_TOKEN` is unset.
 fn is_cross_origin_ingest(headers: &axum::http::HeaderMap) -> bool {
     let origin = match headers
         .get(axum::http::header::ORIGIN)
@@ -367,13 +367,13 @@ fn is_cross_origin_ingest(headers: &axum::http::HeaderMap) -> bool {
     crate::http_header::origin_host_mismatch(origin, host)
 }
 
-/// `Some(401)` when `SKY_INGEST_TOKEN` is set and the `X-Sky-Ingest-Token` header
+/// `Some(401)` when `IPE_INGEST_TOKEN` is set and the `X-Sky-Ingest-Token` header
 /// is absent or wrong (constant-time compare). Unset → open EXCEPT for a
 /// cross-origin browser POST (log-injection CSRF shape — see
 /// `is_cross_origin_ingest`), which is rejected even in dev.
 fn ingest_token_blocked(headers: &axum::http::HeaderMap) -> Option<axum::response::Response> {
     use subtle::ConstantTimeEq;
-    let want = match crate::system::read_env_var("SKY_INGEST_TOKEN")
+    let want = match crate::system::read_env_var("IPE_INGEST_TOKEN")
         .ok()
         .filter(|t| !t.is_empty())
     {
@@ -387,7 +387,7 @@ fn ingest_token_blocked(headers: &axum::http::HeaderMap) -> Option<axum::respons
                 return Some(
                     (
                         StatusCode::UNAUTHORIZED,
-                        "observability ingest requires SKY_INGEST_TOKEN in production",
+                        "observability ingest requires IPE_INGEST_TOKEN in production",
                     )
                         .into_response(),
                 );
@@ -403,7 +403,7 @@ fn ingest_token_blocked(headers: &axum::http::HeaderMap) -> Option<axum::respons
                 return Some(
                     (
                         StatusCode::FORBIDDEN,
-                        "observability ingest: cross-origin request rejected (set SKY_INGEST_TOKEN to allow federated pushes)",
+                        "observability ingest: cross-origin request rejected (set IPE_INGEST_TOKEN to allow federated pushes)",
                     )
                         .into_response(),
                 );
@@ -433,7 +433,7 @@ mod tests {
     use super::*;
 
     // Pure (no env dependency) — safe as its own test, no race with
-    // ingest_token_gate's SKY_INGEST_TOKEN mutation below.
+    // ingest_token_gate's IPE_INGEST_TOKEN mutation below.
     #[test]
     fn is_cross_origin_ingest_detection() {
         let mk = |origin: Option<&str>, host: &str| {
@@ -462,12 +462,12 @@ mod tests {
         )));
     }
 
-    // One test (not split) — SKY_INGEST_TOKEN is process-global env, so a split
+    // One test (not split) — IPE_INGEST_TOKEN is process-global env, so a split
     // would race other threads. Sets then clears the var within the test.
     #[test]
     fn ingest_token_gate() {
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("SKY_INGEST_TOKEN") };
+        unsafe { std::env::remove_var("IPE_INGEST_TOKEN") };
         // Unset → endpoint open regardless of header, when same-origin (or no
         // Origin at all — curl / non-browser caller).
         let h = axum::http::HeaderMap::new();
@@ -494,7 +494,7 @@ mod tests {
         );
 
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("SKY_INGEST_TOKEN", "secret123") };
+        unsafe { std::env::set_var("IPE_INGEST_TOKEN", "secret123") };
         // Missing header → blocked.
         let h = axum::http::HeaderMap::new();
         assert!(ingest_token_blocked(&h).is_some(), "missing header blocked");
@@ -514,6 +514,6 @@ mod tests {
         );
 
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("SKY_INGEST_TOKEN") };
+        unsafe { std::env::remove_var("IPE_INGEST_TOKEN") };
     }
 }

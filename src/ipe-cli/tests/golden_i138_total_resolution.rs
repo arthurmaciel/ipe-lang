@@ -6,11 +6,11 @@
 //! legitimately carry that empty-home sentinel; the lowerer resolves them by
 //! explicit name arm.  Unknown names (user ADTs referenced without importing
 //! their module) would also get `home = []`, falling through to the lowerer's
-//! unique-match heuristic, which ICEs with SKY-I0001 when zero or multiple
+//! unique-match heuristic, which ICEs with IPE-I0001 when zero or multiple
 //! matches exist.
 //!
 //! Resolution is instead TOTAL:
-//!   • Unknown unqualified upper-case names → SKY-N0002 (`TypeNotFound`) at
+//!   • Unknown unqualified upper-case names → IPE-N0002 (`TypeNotFound`) at
 //!     canon time, with a did-you-mean suggestion list.
 //!   • Known builtins → empty-home sentinel as before.
 //!   • The unique-match heuristic in `ir_type_from_canon` / `ir_type_from_ty`
@@ -20,8 +20,8 @@
 //!
 //! Tests:
 //!   1. `empty_home_bridge` — `Token` used in annotation, defined in both
-//!      `ModA` and `ModB` but not imported as a type → SKY-N0002.
-//!   2. `optbridge` — same shape, different payload types → SKY-N0002.
+//!      `ModA` and `ModB` but not imported as a type → IPE-N0002.
+//!   2. `optbridge` — same shape, different payload types → IPE-N0002.
 //!   3. `kernel_implicit_positive` — `Request` used without explicit import;
 //!      it is in `RESERVED_BUILTIN_TYPES`, so the fix must NOT reject it → exit 0.
 //!
@@ -64,20 +64,20 @@ fn try_build(name: &str) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
-// Error cases — must fail closed with SKY-N0002
+// Error cases — must fail closed with IPE-N0002
 // ---------------------------------------------------------------------------
 
 /// `Token` used in an annotation but never imported as a type; both `ModA` and
 /// `ModB` define their own `Token` ADT.  The ambiguity must surface as
-/// SKY-N0002, not an ICE.
+/// IPE-N0002, not an ICE.
 #[test]
 fn i138_empty_home_bridge_fails_n0002() {
     let err = try_build("empty_home_bridge")
         .expect_err("empty_home_bridge must fail (Token is not in scope)");
-    assert!(err.contains("SKY-N0002"), "expected SKY-N0002, got:\n{err}");
+    assert!(err.contains("IPE-N0002"), "expected IPE-N0002, got:\n{err}");
     assert!(
-        !err.contains("SKY-I0001"),
-        "must NOT be an ICE (SKY-I0001), got:\n{err}"
+        !err.contains("IPE-I0001"),
+        "must NOT be an ICE (IPE-I0001), got:\n{err}"
     );
 }
 
@@ -87,10 +87,10 @@ fn i138_empty_home_bridge_fails_n0002() {
 fn i138_optbridge_fails_n0002() {
     let err =
         try_build("optbridge").expect_err("optbridge must fail (Token is not in scope)");
-    assert!(err.contains("SKY-N0002"), "expected SKY-N0002, got:\n{err}");
+    assert!(err.contains("IPE-N0002"), "expected IPE-N0002, got:\n{err}");
     assert!(
-        !err.contains("SKY-I0001"),
-        "must NOT be an ICE (SKY-I0001), got:\n{err}"
+        !err.contains("IPE-I0001"),
+        "must NOT be an ICE (IPE-I0001), got:\n{err}"
     );
 }
 

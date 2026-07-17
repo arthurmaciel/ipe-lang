@@ -18,7 +18,7 @@
 //! side is pinned in `model_admissibility.rs` (`live_lambda_view_*`); THIS file
 //! pins the routed emit side.
 //!
-//! Compile-only assertions always run; the cargo build is `SKY_E2E=1`-gated
+//! Compile-only assertions always run; the cargo build is `IPE_E2E=1`-gated
 //! with an ISOLATED `CARGO_TARGET_DIR` (a shared dir's fingerprint reuse can
 //! mask a rustc failure as a false pass).
 
@@ -97,10 +97,10 @@ fn lambda_view_routed_app_emits_live_app_routed() {
     );
 }
 
-/// `SKY_E2E` tier: the emitted project must cargo-build (isolated target dir).
+/// `IPE_E2E` tier: the emitted project must cargo-build (isolated target dir).
 #[test]
 fn lambda_view_routed_app_cargo_builds() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     lambda_view_routed_app_emits_live_app_routed();

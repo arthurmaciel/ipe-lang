@@ -5,7 +5,7 @@ module Main exposing (main)
 -- examples/30-sse-server-demo and 32-sse-relay.
 --
 -- Pre-fix: `clone_class(IrType::StreamWriter)` returned `NonClone`, so the
--- forwarding capture tripped SKY-L0126 even though the runtime type is
+-- forwarding capture tripped IPE-L0126 even though the runtime type is
 -- `#[derive(Clone, Copy)]` (an i64 id wrapper, server_stream.rs:38).
 --
 -- Fix: StreamWriter classifies as `CopyLeaf` — bare capture is sound.

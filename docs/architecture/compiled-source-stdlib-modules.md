@@ -15,7 +15,7 @@ This is the enabler for port tasks #98 (pure-Sky-source stdlib north star), #47
 
 > A stdlib source module either resolves to **exactly the same pipeline result
 > as a user module** — parse → canonicalise → infer → lower → emit →
-> `cargo build` — **or it produces a clean `SKY-N…`/`SKY-T…` diagnostic**.
+> `cargo build` — **or it produces a clean `IPE-N…`/`IPE-T…` diagnostic**.
 > There is no third state. In particular: **never exit-0-then-cargo-fail.**
 
 Everything below is engineered to keep that invariant total. The three
@@ -23,7 +23,7 @@ mechanisms that make it unrepresentable to violate:
 
 1. **Presence-XOR-registry, fail-closed resolution** (§2) — an import resolves
    to *either* an on-disk/embedded source module *or* a closed kernel-registry
-   qualifier, else it is a hard `SKY-N` error. No silent "assume kernel".
+   qualifier, else it is a hard `IPE-N` error. No silent "assume kernel".
 2. **Fully-annotated-stdlib, fail-closed gate** (§3) — a compiled-source module
    with any un-annotated top-level binding is a compiler-internal error at
    canonicalisation, before inference can produce a surprising deep-stdlib
@@ -178,17 +178,17 @@ if dep_path.first().copied().is_some_and(|s| s == sky_sym || s == std_sym)
 **Fail-closed refinement (upstream tightening).** Upstream's "no source ⇒
 silently assume kernel" is fail-*open*: a typo resolves to a phantom kernel that
 only errors at `cargo`. The port keeps the existing behaviour that an unresolved
-non-`Sky`/`Std` import is `SKY-N0020 ModuleNotFound` (with did-you-mean), and
+non-`Sky`/`Std` import is `IPE-N0020 ModuleNotFound` (with did-you-mean), and
 additionally: an unresolved `Sky.`/`Std.` import that is **neither** injected as
 source **nor** a member of the closed kernel qualifier registry must surface a
-clean `SKY-N` diagnostic rather than a phantom kernel. Import resolution is
+clean `IPE-N` diagnostic rather than a phantom kernel. Import resolution is
 therefore total: source **XOR** registered kernel **XOR** clean error.
 
 ### 2.5 ModuleOrigin — trust is an unforgeable value (MAKE INVALID STATES UNREPRESENTABLE)
 
 Two canonicaliser gates would reject a legitimate compiled-source module:
 
-- **`SKY-N0025 ReservedNamespace`** (`resolve.rs:198`) rejects any module whose
+- **`IPE-N0025 ReservedNamespace`** (`resolve.rs:198`) rejects any module whose
   *own* home path starts with `Sky`/`Std`. `Std.Css` declares `module Std.Css`
   → would be rejected.
 - **`reject_reserved_builtin_type` / `RESERVED_BUILTIN_TYPES`**
@@ -248,7 +248,7 @@ with **zero solver changes**.
 **Soundness note.** The absence of rank-based generalisation is a *completeness*
 gap, never a soundness hole: if the annotation discipline were violated, the two
 use-types unify under one mono var and unification **rejects** the mismatch — a
-sound `SKY-T0001`, never a silent miscompile, and it *cannot by itself* cause
+sound `IPE-T0001`, never a silent miscompile, and it *cannot by itself* cause
 exit-0-then-cargo-fail.
 
 **Fail-closed gate (the minimal change, zero solver work).** In
@@ -415,13 +415,13 @@ exemptions, the annotation gate, and Std-homed-union ctor lowering — on a
      fail-closed unannotated-top-level gate.
    - `examples/spike-std-source/` (`sky.toml` + `src/Main.sky` doing
      `import Std.Palette exposing (Shade(..), toHex)` and `toHex Dark`).
-   - **GREEN gate:** `skyc build` exit-0 (no `SKY-N0020`/`N0025`), emits, then
+   - **GREEN gate:** `skyc build` exit-0 (no `IPE-N0020`/`N0025`), emits, then
      the emitted Cargo project `cargo build`s and **runs to the expected value**
-     under `SKY_E2E=1`. Add this as an integration test.
+     under `IPE_E2E=1`. Add this as an integration test.
 
 2. **Fail-closed resolution + N0025 tightening.** Confirm: an unresolved
    `Std.*`/`Sky.*` import that is neither injected nor a registered kernel
-   qualifier is a clean `SKY-N`; a user file literally named `Std.Foo` is
+   qualifier is a clean `IPE-N`; a user file literally named `Std.Foo` is
    rejected by N0025 (`ModuleOrigin::User`). Regression-test a **mixed** import
    set (kernel `Sky.Core.Prelude` + source `Std.Palette` in one module) so the
    `:244` conjunct keeps kernels on the `continue` path.

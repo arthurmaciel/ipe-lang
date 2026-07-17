@@ -17,7 +17,7 @@ where it must not.
   `Just(w @ (a, b))`, and Rust's default by-move binding makes `w` and `a`/`b`
   fight over the tuple (E0382). Add a predicate `is_dispatch_free(pat)` (true for
   `Var`/`Wildcard`/`Tuple`/`Record` nesting; false for `Ctor`/literal/`Slice`).
-  Reject aliases whose inner pattern needs dispatch with `SKY-L0127`; for
+  Reject aliases whose inner pattern needs dispatch with `IPE-L0127`; for
   dispatch-free inners, rewrite the alias into bind-then-destructure-from-a-clone
   (the same shape `#96`'s `emit_binding_stmts` proved sound for irrefutable
   binders). Rejected: matching the scrutinee by reference throughout the arm (a
@@ -50,7 +50,7 @@ where it must not.
 ## Consequences
 
 - **Invariants that must keep holding:** the backend must never emit an alias
-  over a dispatch-*needing* inner without `SKY-L0127` having rejected it upstream
+  over a dispatch-*needing* inner without `IPE-L0127` having rejected it upstream
   (backend-side `is_dispatch_free` checks are defensive, not the primary gate).
   A `Generic(_)` field type conservatively returns `false` from the Copy
   predicate (it may monomorphize to Copy, but the backend has no per-call-site

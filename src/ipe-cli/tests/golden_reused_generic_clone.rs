@@ -30,7 +30,7 @@
 //!
 //! # full E2E (real `cargo build` of the emitted project — the only check that
 //! # would have caught the original SEAL: skyc-0 then E0382):
-//! SKY_E2E=1 cargo test -p skyc --test golden_i189_reused_generic_clone
+//! IPE_E2E=1 cargo test -p skyc --test golden_i189_reused_generic_clone
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -55,7 +55,7 @@ fn entry_path(root: &Path) -> PathBuf {
 /// skyc-0 + emitted-source assertion (unconditional, cheap — no `cargo`): the
 /// compiler must accept the program AND emit the reused generic param with a
 /// `Clone` bound plus a `.clone()` on the non-final use. This directly asserts
-/// the E0382 trigger is gone, independent of the `SKY_E2E` gate.
+/// the E0382 trigger is gone, independent of the `IPE_E2E` gate.
 #[test]
 fn i189_skyc_accepts_and_clones_reused_generic() {
     let root = repo_root();
@@ -103,12 +103,12 @@ fn i189_skyc_accepts_and_clones_reused_generic() {
 
 /// cargo-0 ∧ run-0 ∧ Go-parity: the emitted project actually compiles with
 /// `rustc` (no E0382), prints the two instantiations, and its stdout matches the
-/// cached Go oracle. Gated on `SKY_E2E=1` — a real `cargo build`, the only check
+/// cached Go oracle. Gated on `IPE_E2E=1` — a real `cargo build`, the only check
 /// that would have caught the original SEAL violation (E0382, `skyc build`
 /// clean).
 #[test]
 fn i189_cargo_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -1,6 +1,6 @@
 -- Regression: errorToString must be polymorphic `Stringify a => a -> String`,
 -- not monomorphic `Error -> String`. Before the fix, calling errorToString
--- on an annotation var `a` (rigid) produced SKY-T0001. After the fix the
+-- on an annotation var `a` (rigid) produced IPE-T0001. After the fix the
 -- solver accumulates Stringify as a trait bound on `a`, and eqShow
 -- (which also needs Eq via `==`) exercises the Eq+Stringify union.
 module Main exposing (main, showAny, eqOrShow)

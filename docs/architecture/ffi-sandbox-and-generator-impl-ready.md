@@ -121,7 +121,7 @@ crate must not OOM the host — the inspector's over-drop bounds *what* is bound
 this bounds *what it costs*).
 
 **Env allowlist (the only vars that enter):** `CARGO_NET_OFFLINE`, `CARGO_HOME`,
-`PATH`, `RUSTUP_TOOLCHAIN`, `RUSTC`, `TMPDIR=<SCOPED_TMP>`. **Never** `SKY_*`,
+`PATH`, `RUSTUP_TOOLCHAIN`, `RUSTC`, `TMPDIR=<SCOPED_TMP>`. **Never** `IPE_*`,
 `IPE_*`, `AWS_*`, `GH_*`, `*_TOKEN`, `SSH_*`, `HOME` (real).
 
 **Resource caps (default, all env-overridable with a printed warning):**
@@ -160,7 +160,7 @@ important soundness property of the fallback.
 ### 1.6 Refusal + override (fail-closed default)
 
 If neither `bwrap` nor a *proven* `unshare` jail is available, `ipe add`
-**refuses** with `SKY-F4410` ("cannot establish an isolation jail; refusing to
+**refuses** with `IPE-F4410` ("cannot establish an isolation jail; refusing to
 compile an untrusted crate unsandboxed"). The sole override is
 `IPE_FFI_ALLOW_UNSANDBOXED=1`, which prints a red multi-line trust warning naming
 the crate and the fact that its `build.rs`/proc-macros will run with full
@@ -199,7 +199,7 @@ pub enum GitPin { Rev(GitRev), Branch(GitRef), Tag(GitRef), Default }
 
 impl GitSource {
     pub fn parse(raw: &str, pin: RawPin, hosts: &HostAllowlist)
-        -> Result<GitSource, Diagnostic>            // SKY-F4411 on any failure
+        -> Result<GitSource, Diagnostic>            // IPE-F4411 on any failure
     {
         // scheme: https only (ssh behind a flag); reject file://, http://, data://…
         // host:  ^[A-Za-z0-9._-]+$  AND  host ∈ hosts (default github.com,
@@ -266,10 +266,10 @@ source guarded only by emit-time string-literal escaping; ipê refuses the bad
 name at *decode*, one layer earlier.
 
 **Closed sums, no catch-all** — an unknown discriminator string is a hard
-`SKY-F4401`, never a defaulted variant:
+`IPE-F4401`, never a defaulted variant:
 
 ```rust
-enum FnShape { Free, Method, Field{fallible: Fallibility}, FieldSet, EnumCtor }  // flag-soup collapse; two-flags-set ⇒ SKY-F4402
+enum FnShape { Free, Method, Field{fallible: Fallibility}, FieldSet, EnumCtor }  // flag-soup collapse; two-flags-set ⇒ IPE-F4402
 enum CallKind { Method, Function }        enum ByKind { Ref, RefMut, Value }
 enum ClosureKind { Fn, FnMut, FnOnce }    enum Effect { Pure, Fallible, Effectful }
 enum Fallibility { Infallible, TaskError }   // R0.4: ONE stored bit, both emitters read it
@@ -292,7 +292,7 @@ both present).
 | `TypeRef` AST → Rust source | `render_type_ref` | total, **no `"F?"` fallback** — the only unrepresentable case (non-direct closure) is refused by `validate_call` check 6 |
 | `FnInfo` → ipê `Ty` (seed `.ipei`) | `sky_type_of` | total |
 | ipê `Ty` → Rust type (concrete) | `ty_to_rust` | total on closed set; emit-only `→ String` fallback tolerated only off the `call` path (unknown ⇒ over-drop already happened) |
-| ipê `Ty` → Rust type (generic slot) | `ty_to_rust_closed` | **fallible, no fallback** — record/tuple/fn/bare-TVar/opaque → `Err` → `SKY-F4400` |
+| ipê `Ty` → Rust type (generic slot) | `ty_to_rust_closed` | **fallible, no fallback** — record/tuple/fn/bare-TVar/opaque → `Err` → `IPE-F4400` |
 
 **Foreign → ipê mapping** (`sky_type_of`): int widths → `Int` (carrier `i64`);
 `f32/f64` → `Float`; `bool/char/()` direct; `String/&str/&Path/&OsStr` → `String`;
@@ -329,7 +329,7 @@ pub enum CallDefect {                        // closed — one per check
 
 impl Call {
     fn try_new(w: wire::Call, n_params: usize) -> Result<Call, Diagnostic> {
-        // → Diagnostic{ code: SKY-F4400, reason: CallDefect, span }
+        // → Diagnostic{ code: IPE-F4400, reason: CallDefect, span }
     }
 }
 ```
@@ -352,7 +352,7 @@ Once decode passes, `render_call` over an `Ok(Call)` is **total** and cannot
 emit-and-cargo-fail. A non-direct closure reaching `render_type_ref` is a
 `CompilerBug`-class diagnostic (unreachable after check 6), **never** a leaked
 `"F?"` string. **Drift fence:** an accept/reject corpus (mirror `FfiCallSpec.hs`)
-asserting each check rejects with `SKY-F4400` and each well-formed call renders
+asserting each check rejects with `IPE-F4400` and each well-formed call renders
 byte-stable.
 
 **Warm-cache re-validation (R0.1).** The `Call` written into `kernel.json` is a
@@ -407,7 +407,7 @@ validated `RustIdent`), `rust_module_name` (`uuid → Rust.Uuid`),
 `rust_kernel_name` (`Rust_<CapBase>`, version-suffix aware), and the BEGIN/END
 sentinel constants. **No emitter constructs a name independently** — so the
 `.ipei` binding name, the `kernel.json` `"name"`, the `_bindings.rs`
-`// SKY-FFI-WRAPPER BEGIN <ref>` sentinel, and the S4 DCE reachability key are
+`// IPE-FFI-WRAPPER BEGIN <ref>` sentinel, and the S4 DCE reachability key are
 **byte-equal by construction**; three-way name skew (an under-bind that
 link-fails) is structurally impossible.
 
@@ -466,7 +466,7 @@ Instance collection is demand-driven from reachable call sites (bounded by
 program size, not the crate's 76k symbols), deduped by `(callee, types)`, gated by
 `check_instance` **before** any Rust is emitted. Per type-param, in order:
 
-1. **Closed-set** (`ty_to_rust_closed`): non-nameable Rust type → `SKY-F4400`
+1. **Closed-set** (`ty_to_rust_closed`): non-nameable Rust type → `IPE-F4400`
    (`mk_closed_set_error`).
 2. **Trait-bound** (only on args past 1): bound ∉ `MODELLABLE_5` →
    `mk_unmodellable_bound_error` (names the bound); bound ∈ set but concrete lacks
@@ -478,18 +478,18 @@ both the inspector (`main.rs:411`, asserted the exact modellable subset with
 (`modellableTrait`, `FfiInstance.hs:292`). A cross-crate test asserts the two sets
 are byte-identical — either side changing without the other fails CI, never a
 user's cargo build. A bound outside the set on an *unused* symbol is over-drop
-(silent, sound); on a *reached* call site it is a loud `SKY-F4400`.
+(silent, sound); on a *reached* call site it is a loud `IPE-F4400`.
 
 **Closure-capture Clone gate.** `Fn`/`FnMut` slots re-clone every capture per call,
 so every capture must be **positively `Clone`** via a closed **allowlist**
-(`rust_type_is_clone`, never a denylist); first non-Clone → `SKY-F4400`. `FnOnce`
+(`rust_type_is_clone`, never a denylist); first non-Clone → `IPE-F4400`. `FnOnce`
 is moved once, never gated. **Named M-E acceptance item:** re-verify
 `traits_of_rust_type` cell-by-cell against ipê's actual runtime derives — notably
 `SkyMaybe` derives *no* `Default`/`Hash`/`Eq`, and `f64`/`f32` are `Clone`+`Default`
 only (the IEEE-754 security-critical cell). Port on evidence, not on faith.
 
 **Polymorphic-passthrough is LOCKED as reject (not open):** a generic FFI slot
-instantiated at a bare tyvar fails `ty_to_rust_closed` → `SKY-F4400` at the call
+instantiated at a bare tyvar fails `ty_to_rust_closed` → `IPE-F4400` at the call
 site. No erased `func(any) any` — that is the eval-hole the design forbids; the
 user monomorphises at the boundary. Stated expressiveness limitation, only sound
 answer.
@@ -571,9 +571,9 @@ answer.
 | **#40 B0.2** fail-closed parse | flip inspector `unwrap_used`/`expect_used`/`panic` from `allow` → **deny** (a *reversal* of the deliberate `Cargo.toml:12-19` decision; ~130 call sites: 42 `unwrap`/57 `expect`/31 `panic`); every adversarial-JSON path returns error-`PkgInfo` + non-zero exit, **never aborts**; **over-drop keystone comments survive verbatim** (`main.rs:812,1667,1965,2950,4578,4634,4670`); **no change perturbs a well-formed crate's `PkgInfo`** (would desync the byte-diff). |
 | **#40 B0.3** fuzz | adversarial rustdoc-JSON fuzz target proves: no panic, bounded memory, error-`PkgInfo` out. Acceptance test for B0.2. |
 | **#41 sandbox** (BLOCKING) | **bwrap jail (§1.4) denies net + scrubs env + RO-binds `/` + bounds RSS/CPU/wall**; **`unshare` fallback proves every namespace post-spawn (§1.5) or HARD-FAILS**; **refusal is the default when neither proves (§1.6)**; **trust-gate + phase separation + `--frozen --locked --offline` (§1.7)**; **`GitSource`/crate-name parse-not-validate + no `sh -c` (§1.8)**. *No untrusted crate may be introspected/compiled until every one of these passes.* This is the gate that unblocks the rest of #42's driver. |
-| **#42 M-A/M-C/M-B** decode+coerce | fixture 107 (`semver`) artifact byte-diff green vs sky; `SKY-F4400` reject corpus green; grep-fence "no bare `as i64/u64` outside `num_coerce`" green. **No M4 needed** (generator is a pure JSON→files function). |
+| **#42 M-A/M-C/M-B** decode+coerce | fixture 107 (`semver`) artifact byte-diff green vs sky; `IPE-F4400` reject corpus green; grep-fence "no bare `as i64/u64` outside `num_coerce`" green. **No M4 needed** (generator is a pure JSON→files function). |
 | **#42 M-D** emit | tri-artifact name-SSOT byte-equal by construction; **`.ipei ≡ stdlib_scheme` structural gate (§2.6) green**; fallibility diff-golden green; `compile_error!` fence present at every wrapper-module top. |
-| **#42 M-E** generics | MODELLABLE_5 two-way fence green; `traits_of_rust_type` re-verified cell-by-cell against ipê runtime derives; per-instance `SKY-F4400` corpus green. (Prereq OPEN-2: confirm per-region solved `Ty` reaches the FFI-callee region.) |
+| **#42 M-E** generics | MODELLABLE_5 two-way fence green; `traits_of_rust_type` re-verified cell-by-cell against ipê runtime derives; per-instance `IPE-F4400` corpus green. (Prereq OPEN-2: confirm per-region solved `Ty` reaches the FFI-callee region.) |
 | **#42 M-F** driver | consumer wiring blocks on **M4 kernel registry**; then the 10 shim-free sync crates (107-114 + regressions 73/76/92/97/105/106) byte-diff green → shim-free claim proven; malicious crate-name + bad git-URL refused before any compile. |
 | **#42 M-G** async | bridge proven on a small async crate (FutureExt::catch_unwind, single Task reactor, typed `Error`, never `block_on`); large async SDKs explicitly NOT claimed shim-free. |
 

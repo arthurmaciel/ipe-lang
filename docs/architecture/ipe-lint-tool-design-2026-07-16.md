@@ -15,7 +15,7 @@ per-site suppression (verified against `src/Sky/` and the CLI surface; its
 intentional capability **beyond** the reference, ledgered in
 `docs/divergences-from-sky.md` §6.
 
-Naming: crates and codes use the current `sky_*` / `SKY-*` prefixes; they
+Naming: crates and codes use the current `sky_*` / `IPE-*` prefixes; they
 rename with roadmap C.1 (`ipe_*`, `IPE-*`). CLI shown as `ipe lint`
 (today spelled `skyc lint`).
 
@@ -31,7 +31,7 @@ rename with roadmap C.1 (`ipe_*`, `IPE-*`). CLI shown as `ipe lint`
 | Analyzer identity | A **third consumer of the compiler's own artifacts** (parse AST + canon AST + `SolvedTypes`), never a second analyzer. A lint rule cannot parse, resolve, or infer anything itself — it reads what `skyc` computed. |
 | Crate | New `crates/sky_lint`: rule trait, driver, registry, rules. CLI subcommand in `skyc`; LSP surfacing via `sky_lsp` (its Phase 3). |
 | Rule API | elm-review-style **visitor schema over a single driver walk** (one AST traversal for N rules), with a typed `LintContext` exposing solved types by span. Rules are Rust impls registered in a closed `ALL_RULES` table with a drift test (the `sky_kernels` pattern). |
-| Identity + levels | Dual identity per rule: stable code `SKY-W####` + kebab-case name (`unused-import`). clippy-style levels `allow`/`warn`/`deny`; defaults per rule; config in `sky.toml [lint]`; per-site `-- @allow(<rule>) <reason>` directive with mandatory reason. |
+| Identity + levels | Dual identity per rule: stable code `IPE-W####` + kebab-case name (`unused-import`). clippy-style levels `allow`/`warn`/`deny`; defaults per rule; config in `sky.toml [lint]`; per-site `-- @allow(<rule>) <reason>` directive with mandatory reason. |
 | Findings | Lint findings are `sky_diagnostics::Diagnostic`s (new `Lint` variant) — one rendering pipeline, one `explain` surface, one `Suggestion`/`Applicability` fix model, one LSP publishing path. |
 | Autofix | Rules attach span-scoped `Suggestion`s; `ipe lint --fix` applies `MachineApplicable` edits and **re-checks before writing** (a fix that breaks the build is unrepresentable in the output — LSP G2 applied to the CLI). |
 | Extensibility v1 | Adding a first-party rule = one file + one table row + one explain page + golden fixtures. Third-party rules (dylib loading or rules-written-in-ipê) are **out of scope v1** — filed as a future phase, not half-shipped. |
@@ -124,7 +124,7 @@ consumers:  skyc lint (CLI)  ·  sky_lsp (diagnostics + quick-fixes)  ·  salsa 
 /// the registry is a const table, misregistration is a compile error
 /// or a drift-test failure, never a runtime surprise.
 pub struct RuleMeta {
-    /// Stable diagnostic code, e.g. SKY_W0101. Never reused, never renumbered.
+    /// Stable diagnostic code, e.g. IPE_W0101. Never reused, never renumbered.
     pub code: Code,
     /// Kebab-case human name, e.g. "unused-import" — the `@allow` / config key.
     pub name: &'static str,
@@ -198,8 +198,8 @@ pub static ALL_RULES: &[fn() -> Box<dyn Rule>] = &[ /* one ctor per rule */ ];
 
 Drift tests (the kernel-registry pattern):
 - every `RuleMeta.code` is in `sky_diagnostics::ALL_CODES` and vice versa for
-  the `SKY-W` range;
-- every rule has an explain page (`explain/SKY-W####.md` non-empty);
+  the `IPE-W` range;
+- every rule has an explain page (`explain/IPE-W####.md` non-empty);
 - rule `name`s are unique, kebab-case, and stable (snapshot test);
 - every rule has at least one flagged-fixture and one clean-fixture golden.
 
@@ -213,7 +213,7 @@ fixtures; missing any one is a failing test, not a latent gap.
 ```rust
 Lint {
     span: Span,
-    code: Code,             // the rule's SKY-W#### (validated: W range only)
+    code: Code,             // the rule's IPE-W#### (validated: W range only)
     rule: &'static str,     // kebab-case name, shown as `[unused-import]`
     message: Box<str>,
     help: Vec<HelpLine>,    // reuses Suggest(Suggestion) for fixes
@@ -222,7 +222,7 @@ Lint {
 
 What this buys, structurally:
 - **Rendering** — the existing rustc/Elm-style report renderer works unchanged
-  (caret snippet, help lines, `skyc explain SKY-W0101` pointer).
+  (caret snippet, help lines, `skyc explain IPE-W0101` pointer).
 - **`explain`** — lint explain pages join `crates/sky_diagnostics/explain/`
   and the `skyc explain` index; they follow the compiler-as-kind-teacher
   standard (progressive ELI10→deep, runnable before/after snippets).
@@ -239,7 +239,7 @@ Severity: `Diagnostic::severity()` for `Lint` reads the **resolved level**
 carried at construction (the driver resolves config before emitting), keeping
 the accessor total and config-free.
 
-Code range: `SKY-W####` (new family, W = warning/lint). Sub-ranges by category
+Code range: `IPE-W####` (new family, W = warning/lint). Sub-ranges by category
 for greppability, not behavior: W01xx dead code, W02xx pitfalls, W03xx style,
 W04xx security. Codes never renumber; a removed rule's code is retired, not
 reused.
@@ -315,7 +315,7 @@ closed-union rule (companion design) — one grammar, one parser, one table.
   in-memory copy, the copy is re-run through parse→canon→types (+ a re-lint),
   and only a clean result is written to disk. On failure nothing is written
   and the tool reports which fix broke the round-trip as a lint-tool bug
-  (SKY-I range). A `--fix` that leaves the tree broken is unrepresentable.
+  (IPE-I range). A `--fix` that leaves the tree broken is unrepresentable.
 - Overlapping edits within one file are applied in one pass sorted by span,
   rejecting overlaps (the second overlapping fix is deferred to the next run —
   fixpoint by iteration, never a corrupted splice).
@@ -328,7 +328,7 @@ extends that set without changing the mechanism. The LSP calls the same
 backend, after each successful check; salsa: as a derived `lint(file)` query
 downstream of `typecheck`, incremental and cancellable for free).
 
-- Findings → `textDocument/publishDiagnostics` with `code` = `SKY-W####`,
+- Findings → `textDocument/publishDiagnostics` with `code` = `IPE-W####`,
   `codeDescription` → the explain page, severity per §5.
 - `MachineApplicable` suggestions → quick-fix code actions through the
   existing `VerifiedEdit` gate (verify-on-apply in v0, verify-on-offer under
@@ -349,7 +349,7 @@ ipe lint <entry.sky | project-dir | sky.toml>
 ```
 
 Exit codes: `0` clean or warn-only · `1` ≥1 deny finding · `2` usage/config
-error. `ipe lint --list` and `skyc explain SKY-W####` are the discovery
+error. `ipe lint --list` and `skyc explain IPE-W####` are the discovery
 surface.
 
 ## 10. Rule catalogue v1
@@ -376,10 +376,10 @@ Fix column: MA = MachineApplicable, MI = MaybeIncorrect, HP = HasPlaceholders,
 | `case-bool-to-if` | `case b of True -> … ; False -> …` | C | MA rewrite to `if` |
 | `comparison-to-bool` | `x == True`, `x /= False` | C+T | MA drop the comparison |
 | `length-zero-is-empty` | `List.length xs == 0`, `String.length s == 0` | C | MA `List.isEmpty` / `String.isEmpty` |
-| `wildcard-absorbs-variants` | catch-all over a closed union **in nested pattern positions** (the top-level-column case is the compiler's SKY-T0018 — companion design; this rule covers the columns the compiler rule deliberately leaves open) | C+T | HP expand |
+| `wildcard-absorbs-variants` | catch-all over a closed union **in nested pattern positions** (the top-level-column case is the compiler's IPE-T0018 — companion design; this rule covers the columns the compiler rule deliberately leaves open) | C+T | HP expand |
 
-(The compiler already owns redundant arms — SKY-T0011 — and non-exhaustive
-`case` — SKY-T0010; lint never duplicates a compiler diagnostic.)
+(The compiler already owns redundant arms — IPE-T0011 — and non-exhaustive
+`case` — IPE-T0010; lint never duplicates a compiler diagnostic.)
 
 ### Elm-family pitfalls (W02xx) — default `warn`
 
@@ -442,7 +442,7 @@ independently useful. Gates listed per phase.
 
 - **Phase 0 — skeleton + pipeline seam.**
   `crates/sky_lint` (RuleMeta/Rule/Cx/Findings/registry + drift tests);
-  `Diagnostic::Lint` + `SKY-W` range in `sky_diagnostics` (+ `ALL_CODES`
+  `Diagnostic::Lint` + `IPE-W` range in `sky_diagnostics` (+ `ALL_CODES`
   count test update); driver walk over parse+canon+`SolvedTypes`;
   `skyc lint` CLI (human format, exit policy); **two seed rules**
   (`unused-import`, `case-bool-to-if`) with explain pages + fixtures.

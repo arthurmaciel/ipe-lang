@@ -32,8 +32,8 @@
 //! `golden_list_ops_wiring.rs` (all nine ops + Elm edges); this file keeps the
 //! capped-stack proof over the pre-existing kernel subset.
 //!
-//! Gated on `SKY_E2E=1` (emitted-project cargo build/run), like the other
-//! end-to-end goldens. Run: `SKY_E2E=1 cargo test --test golden_list_cps`.
+//! Gated on `IPE_E2E=1` (emitted-project cargo build/run), like the other
+//! end-to-end goldens. Run: `IPE_E2E=1 cargo test --test golden_list_cps`.
 
 use std::path::{Path, PathBuf};
 
@@ -67,7 +67,7 @@ fn compile_golden(name: &str) -> PathBuf {
 }
 
 fn e2e_enabled() -> bool {
-    std::env::var("SKY_E2E").is_ok()
+    std::env::var("IPE_E2E").is_ok()
 }
 
 /// The soundness proof — constant stack over the reachable List surface. A

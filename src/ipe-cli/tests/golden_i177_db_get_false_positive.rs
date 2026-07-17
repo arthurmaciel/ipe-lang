@@ -25,7 +25,7 @@
 //!
 //! Run:
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_i177_db_get_false_positive
+//! IPE_E2E=1 cargo test -p skyc --test golden_i177_db_get_false_positive
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -81,9 +81,9 @@ fn assert_skyc_accepts_without_sky_row(fixture: &str) {
 }
 
 /// cargo-0 ∧ run-0 for the emitted DB-less project — the only check that would
-/// have caught the original E0433. Gated on `SKY_E2E=1`.
+/// have caught the original E0433. Gated on `IPE_E2E=1`.
 fn assert_cargo_builds_and_runs(fixture: &str, expected_stdout: &str) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

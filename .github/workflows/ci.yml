@@ -73,7 +73,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.6
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
-      - run: cargo nextest run --workspace          # E2E tests no-op without SKY_E2E
+      - run: cargo nextest run --workspace          # E2E tests no-op without IPE_E2E
       - run: cargo test --doc --workspace           # nextest doesn't run doctests
 
   # `sky-runtime-rust`'s `default = []` leaves `compression`/`csv`/`config`/
@@ -161,6 +161,6 @@ jobs:
       - name: E2E shard ${{ matrix.shard }}/4
         if: steps.rt.outputs.available == 'true'
         env:
-          SKY_E2E: "1"
-          SKY_RUNTIME_DIR: ${{ github.workspace }}/vendor/upstream-sky/runtime-rust/src/sky_runtime
+          IPE_E2E: "1"
+          IPE_RUNTIME_DIR: ${{ github.workspace }}/vendor/upstream-sky/runtime-rust/src/sky_runtime
         run: cargo nextest run --workspace --partition count:${{ matrix.shard }}/4

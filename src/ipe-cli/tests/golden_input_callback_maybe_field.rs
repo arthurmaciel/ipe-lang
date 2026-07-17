@@ -33,7 +33,7 @@
 //! Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test golden_m7_input_callback_maybe_field
+//! IPE_E2E=1 cargo test golden_m7_input_callback_maybe_field
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -46,7 +46,7 @@ fn repo_root() -> PathBuf {
 }
 
 /// Compile / build / run `tests/golden/input_callback_maybe_field/Main.sky`.
-/// Gated on `SKY_E2E=1`. The `cargo build` step is where the seal is enforced:
+/// Gated on `IPE_E2E=1`. The `cargo build` step is where the seal is enforced:
 /// a `Box`-vs-`Arc` callback mismatch fails the build (E0308), failing this
 /// test hard.
 fn build_run_input_callback() -> support::RunOutcome {
@@ -82,7 +82,7 @@ fn build_run_input_callback() -> support::RunOutcome {
 /// (exit 0) and the binary runs (exit 0), rendering all four Input controls.
 #[test]
 fn input_callback_bare_ctor_arc_wraps_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

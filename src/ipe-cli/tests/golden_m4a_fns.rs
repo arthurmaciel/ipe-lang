@@ -37,7 +37,7 @@
 //! `Maybe.map`/`andThen` chain.
 //!
 //! Each emitted `main.rs` must be byte-identical to the checked-in golden, and
-//! (behind `SKY_E2E=1`) the emitted project must build and print the value the Go
+//! (behind `IPE_E2E=1`) the emitted project must build and print the value the Go
 //! reference compiler produces — captured in each golden's `expected_go.txt` /
 //! `oracle.meta` via the cached-oracle infra (no live Go in this gate).
 
@@ -80,9 +80,9 @@ fn assert_byte_identical(name: &str) {
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert its
 /// stdout matches the golden's CACHED Go oracle via the staleness-gated
-/// `support::assert_go_parity` — NO live Go run. Gated on `SKY_E2E=1`.
+/// `support::assert_go_parity` — NO live Go run. Gated on `IPE_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -150,7 +150,7 @@ fn maybe_chain_emits_byte_identical_main_rs() {
     assert_byte_identical("fns_maybe_chain");
 }
 
-// ── Build + run + Go-oracle parity (SKY_E2E=1) ───────────────────────────────
+// ── Build + run + Go-oracle parity (IPE_E2E=1) ───────────────────────────────
 
 #[test]
 fn foldl_builds_and_prints_ten() {

@@ -49,11 +49,11 @@ where
 /// but bounded by a hard ceiling so an attacker-controlled path pointing at an
 /// unbounded source (`/dev/zero`, a named pipe, a multi-GiB file) cannot OOM the
 /// process — `read_to_string` on `/dev/zero` never returns. The ceiling defaults
-/// to 512 MiB and is overridable via `SKY_FILE_READ_MAX` (bytes). For a smaller
+/// to 512 MiB and is overridable via `IPE_FILE_READ_MAX` (bytes). For a smaller
 /// explicit cap use `File.readFileLimit`; reading past the ceiling is an `Err`,
 /// never a silent truncation.
 fn file_read_ceiling() -> u64 {
-    crate::system::read_env_var("SKY_FILE_READ_MAX")
+    crate::system::read_env_var("IPE_FILE_READ_MAX")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .filter(|n| *n > 0)
@@ -72,7 +72,7 @@ fn file_read_file_sync(path: &str, cap: u64) -> Result<String, String> {
         .map_err(|e| format!("{}", e))?;
     if read as u64 > cap {
         return Err(format!(
-            "file exceeds read ceiling of {} bytes (raise SKY_FILE_READ_MAX or use File.readFileLimit): {}",
+            "file exceeds read ceiling of {} bytes (raise IPE_FILE_READ_MAX or use File.readFileLimit): {}",
             cap, path
         ));
     }
@@ -472,11 +472,11 @@ mod read_ceiling_tests {
         let p = std::env::temp_dir().join(format!("sky_rc_over_{}.txt", std::process::id()));
         std::fs::write(&p, vec![b'x'; 8192]).unwrap();
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("SKY_FILE_READ_MAX", "1024") };
+        unsafe { std::env::set_var("IPE_FILE_READ_MAX", "1024") };
         let res: SkyResult<String, String> =
             block(file_read_file(p.to_string_lossy().into_owned()));
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("SKY_FILE_READ_MAX") };
+        unsafe { std::env::remove_var("IPE_FILE_READ_MAX") };
         let _ = std::fs::remove_file(&p);
         assert!(
             matches!(res, SkyResult::Err(_)),
@@ -670,7 +670,7 @@ mod spawn_blocking_tests {
         // Large enough that the read takes measurable (not instant) wall time.
         std::fs::write(&p, vec![b'x'; 64 * 1024 * 1024]).unwrap(); // 64 MiB
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("SKY_FILE_READ_MAX", (128 * 1024 * 1024).to_string()) };
+        unsafe { std::env::set_var("IPE_FILE_READ_MAX", (128 * 1024 * 1024).to_string()) };
         let path = p.to_string_lossy().into_owned();
 
         let ticks = rt.block_on(async move {
@@ -689,7 +689,7 @@ mod spawn_blocking_tests {
         });
 
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("SKY_FILE_READ_MAX") };
+        unsafe { std::env::remove_var("IPE_FILE_READ_MAX") };
         let _ = std::fs::remove_file(&p);
 
         assert!(

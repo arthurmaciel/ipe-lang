@@ -1,7 +1,7 @@
-# Full Float Set/Dict keys (lifting SKY-L0117) + locale-correct case mapping (D.3)
+# Full Float Set/Dict keys (lifting IPE-L0117) + locale-correct case mapping (D.3)
 
 > Backlog item D.3 (Longer-horizon): "Full floating-point Set/Dict keys
-> (ordered-float) + locale-correct case mapping. Lifts SKY-L0117."
+> (ordered-float) + locale-correct case mapping. Lifts IPE-L0117."
 > Spec+plan written 2026-07-10. Two independent sub-designs share this
 > doc because the backlog row couples them; they are separately
 > landable. Design-only; no code has changed.
@@ -9,7 +9,7 @@
 > **One-line decisions:** (a) key-position `Float` lowers to
 > `ordered_float::OrderedFloat<f64>` (total order, NaN == NaN, NaN
 > sorts greatest), wrapped/unwrapped at the collection boundary in
-> emitted code, retiring SKY-L0117; (b) default `toUpper`/`toLower`/
+> emitted code, retiring IPE-L0117; (b) default `toUpper`/`toLower`/
 > `casefold` stay locale-independent; locale-aware mapping ships as a
 > new explicit-locale surface (`Locale` opaque type +
 > `String.toUpperIn/toLowerIn : Locale -> String -> String`) backed by
@@ -22,11 +22,11 @@
 
 Sky's `Float` is `comparable`, so the type checker accepts `Set Float`
 and `Dict Float v` — but the Rust backend rejects both at lowering with
-SKY-L0117, because its backings have trait bounds `f64` cannot meet:
+IPE-L0117, because its backings have trait bounds `f64` cannot meet:
 
 - Diagnostic: `crates/sky_diagnostics/src/code.rs:194-195` ("Float is
   not a valid Set element or Dict key on the Rust backend"); explain
-  page `crates/sky_diagnostics/explain/SKY-L0117.md`.
+  page `crates/sky_diagnostics/explain/IPE-L0117.md`.
 - Gates: `crates/sky_lower/src/lower.rs:4840-4852` (Dict annotation
   path), `4854-4864` (Set), the parallel `Decoder` path, and the
   post-inference `reject_float_keyed_collection` at `5919-5938`.
@@ -82,12 +82,12 @@ correct): add them to `docs/divergences-from-sky.md` superseding A17's
 restriction text, and to `docs/divergences-from-elm.md`. Programs not
 using NaN keys are behaviour-identical to both references.
 
-**A4 — Retire SKY-L0117.** Remove the three lowering gates and the
+**A4 — Retire IPE-L0117.** Remove the three lowering gates and the
 `Feature::FloatKeyedCollection` plumbing; mark the diagnostic code
-retired following the SKY-L0105 precedent (code stays reserved, explain
+retired following the IPE-L0105 precedent (code stays reserved, explain
 page rewritten to "retired — Float keys are fully supported since
 <version>; historical restriction was …", so old links keep teaching).
-Update `SKY-L0117.md`'s workaround text accordingly.
+Update `IPE-L0117.md`'s workaround text accordingly.
 
 **Scope note:** only leaf `Float` keys. Composite comparable keys
 (tuples containing Float) follow the same wrapper at leaf position
@@ -213,11 +213,11 @@ Part A (`runtime/tests/` + `tests/golden/`):
   `Just v`), plus `dict_keys` order deterministic with NaN last.
 - `float_key_set_ops` (runtime unit): union/diff/intersect/member with
   NaN present; sorted iteration.
-- Goldens `d3_dict_float_keys` / `d3_set_float` (`SKY_E2E=1`): a Sky
+- Goldens `d3_dict_float_keys` / `d3_set_float` (`IPE_E2E=1`): a Sky
   program exercising `Dict Float String` + `Set Float` end-to-end;
   non-NaN fixture byte-equivalent to the Go oracle; NaN fixture marked
   `oracle_divergence = true` with the A3 reason.
-- Negative-regression: the old SKY-L0117 fixture flipped from
+- Negative-regression: the old IPE-L0117 fixture flipped from
   expect-diagnostic to expect-success (the lift proof).
 - Property test (proptest, matching #66 house pattern): for arbitrary
   `Vec<f64>` (NaN/inf-inclusive), `Set.member x (Set.fromList xs)` ⇔
@@ -230,7 +230,7 @@ Part B:
   `casefoldIn tr` Turkic fold.
 - `locale_from_tag`: valid tags parse; garbage/empty → `Nothing`
   (parse-don't-validate pin).
-- Golden `d3_locale_case` (`SKY_E2E=1`): Sky-level round trip; no Go
+- Golden `d3_locale_case` (`IPE_E2E=1`): Sky-level round trip; no Go
   oracle exists (new surface) → recorded as Ipê-only expected output
   per the Go-failure/new-surface convention.
 - Feature-gating pin: a golden NOT using locale kernels asserts the

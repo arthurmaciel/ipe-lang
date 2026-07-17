@@ -8,7 +8,7 @@
 //! * an input shape that is *valid Sky the supported subset does not model yet*
 //!   (polymorphism, higher-order values, extra kernels, …) becomes a
 //!   [`ipe_diagnostics::Diagnostic::Lower`] carrying the offending node's span
-//!   and the matching `SKY-L01##` feature — the "not supported yet" channel;
+//!   and the matching `IPE-L01##` feature — the "not supported yet" channel;
 //! * a *genuinely-unreachable* state (a foreign symbol, a missing `FuncId`, a
 //!   type slot the solver did not record, an unresolved scrutinee enum) becomes
 //!   a [`ipe_diagnostics::Diagnostic::CompilerBug`] — the "compiler is broken"
@@ -159,7 +159,7 @@ enum HttpFieldTy {
 /// same `IrType::HttpRequest` / `ipe_runtime::HttpRequest` regardless of
 /// which path its type reached emission through. Without the shared test a
 /// value built via the former and consumed via the latter (or vice versa)
-/// would diverge (SKY-I0001), one side folding to the opaque runtime type, the
+/// would diverge (IPE-I0001), one side folding to the opaque runtime type, the
 /// other falling back to a backend-synthesised struct with a different name.
 ///
 /// Checking field TYPES here (not just names) is
@@ -237,7 +237,7 @@ fn is_server_response_canon_shape(
 /// [`HTTP_REQUEST_FIELD_TYPES`]? Built-in leaf types (`String` / `Bool` /
 /// `Int` / `List`) are `Ty::Con` with an empty `module` (built-ins have no
 /// user-defined home) — checked defensively alongside the name, though
-/// SKY-N0026 (see `ipe_canon::resolve`) already forbids a user type from
+/// IPE-N0026 (see `ipe_canon::resolve`) already forbids a user type from
 /// shadowing these reserved names, so the module check can never fire in
 /// practice.
 fn ty_matches_http_field(ty: &Ty, expected: HttpFieldTy, interner: &Interner) -> bool {
@@ -417,7 +417,7 @@ fn is_websocket_cfg_canon_shape(
 const CACHE_STATS_FIELDS: &[&str] = &["evictions", "hits", "misses"];
 
 /// Is `ty` the built-in `Int` — an empty-module, arg-less `Con` named `Int`?
-/// Shared by the two all-`Int` Cache-record shape tests. `SKY-N0026` forbids a
+/// Shared by the two all-`Int` Cache-record shape tests. `IPE-N0026` forbids a
 /// user type shadowing `Int`, so the module check can never fire in practice
 /// but is asserted defensively (mirrors [`ty_matches_http_field`]).
 fn ty_is_int(ty: &Ty, interner: &Interner) -> bool {
@@ -976,7 +976,7 @@ fn is_builtin_collection(interner: &Interner, name: Symbol) -> bool {
 /// `Result` or a user-declared union — as opposed to a builtin COLLECTION
 /// (`List`/`Dict`/`Set`) or an opaque boxed wrapper?
 ///
-/// SKY-L0114 narrowing: `Ok f` / `Just f` construct the RUNTIME
+/// IPE-L0114 narrowing: `Ok f` / `Just f` construct the RUNTIME
 /// `SkyResult`/`SkyMaybe` enums, whose derives are generic-bounded
 /// (`impl<T: Clone> Clone for SkyMaybe<T>`, `src/runtime/rust/src/core.rs`)
 /// — the TYPE `SkyMaybe<Box<dyn Fn(..)->R>>` compiles regardless of whether
@@ -1012,8 +1012,8 @@ fn is_enum_like_con_head(interner: &Interner, name: Symbol) -> bool {
 /// `type Opt a = Som a | Non` (region `Opt (Int -> Int)`). The field instantiates
 /// to a function only at the use site, so the only place to see it is the use
 /// site's region type. Fail-closed: a record-field carrier is the
-/// first-class-function gap ([`Feature::FirstClassFunctions`], SKY-L0107) and a
-/// constructor-payload carrier is [`Feature::CtorPayloadFunction`] (SKY-L0114) —
+/// first-class-function gap ([`Feature::FirstClassFunctions`], IPE-L0107) and a
+/// constructor-payload carrier is [`Feature::CtorPayloadFunction`] (IPE-L0114) —
 /// see [`con_payload_carries_function`]; never broken Rust.
 ///
 /// Exception: a built-in opaque boxed wrapper ([`is_opaque_boxed_wrapper`] —
@@ -1077,8 +1077,8 @@ fn embeds_nonderivable_function(interner: &Interner, ty: &Ty) -> bool {
 ///
 /// This distinguishes the two carriers [`embeds_nonderivable_function`] flags so
 /// the diagnostic names the right one: a `Con`-headed region is a
-/// constructor-payload function (SKY-L0114, [`Feature::CtorPayloadFunction`]); a
-/// `Record`-headed region (or any other) is a record-field function (SKY-L0107,
+/// constructor-payload function (IPE-L0114, [`Feature::CtorPayloadFunction`]); a
+/// `Record`-headed region (or any other) is a record-field function (IPE-L0107,
 /// [`Feature::FirstClassFunctions`]). Only the *head* is inspected — the gate
 /// has already confirmed a function is embedded somewhere; this picks the
 /// blame label, so the outermost carrier is the one named.
@@ -1252,7 +1252,7 @@ fn ir_contains_fun(ty: &IrType) -> bool {
 //               must use `{name}.clone()` so the closure is re-callable.
 //   NonClone  — types that do NOT implement `Clone` (functions, tasks, decoders,
 //               server opaques, …); capturing one in a non-callee position is
-//               a SKY-L0125 diagnostic.
+//               a IPE-L0125 diagnostic.
 //
 // This is conservative: when unsure → `NonClone` (fail-closed, never a
 // silent cargo failure).
@@ -1440,7 +1440,7 @@ fn clone_class_named_composite<'a>(parts: impl Iterator<Item = &'a IrType>) -> C
 //       let / case / inner-lambda binders are handled.
 //   (c) `rewrite_captured_clones` — given a lowered IR body and the classified
 //       capture sets, replace `Var` reads of `CloneOk` captures with
-//       `CloneVar` (`.clone()`) and return SKY-L0125 for `NonClone` captures
+//       `CloneVar` (`.clone()`) and return IPE-L0125 for `NonClone` captures
 //       outside direct callee position.
 //
 // `Lowerer::captured_locals` drives (a)+(b) and returns the classified
@@ -1587,7 +1587,7 @@ fn pat_binds_any_in(pat: &Pat, set: &BTreeSet<Symbol>) -> bool {
 /// * `Var(s)` where `s ∈ clone_set` → `CloneVar(s)` (runtime `.clone()`)
 /// * `Var(s)` where `s ∈ noncl_set` AND `s` is the DIRECT callee of an
 ///   `Apply` → kept bare (`Fn::call` borrows the receiver — verified green)
-/// * `Var(s)` where `s ∈ noncl_set` elsewhere → `Err(SKY-L0125)`
+/// * `Var(s)` where `s ∈ noncl_set` elsewhere → `Err(IPE-L0125)`
 /// * all others → unchanged (not captured, or `CopyLeaf`)
 ///
 /// Shadow discipline mirrors [`rewrite_var_to_apply`]: `Let` / `Destructure`
@@ -4229,7 +4229,7 @@ fn apply_kernel_type_param_bounds(
 // rewrite above (only applied to `CloneClass::CloneOk` bindings, which get
 // `.clone()` inserted), a `CloneClass::NonClone` fn-carrying binding used more
 // than once in a CONSUMING position has no sound rewrite available — it is
-// rejected with SKY-L0127 ([`Feature::FunctionValueReuse`]) instead.
+// rejected with IPE-L0127 ([`Feature::FunctionValueReuse`]) instead.
 //
 // [`count_fn_value_uses`] mirrors [`count_var_uses`] with exactly one
 // difference: an [`Expr::Apply`] whose `func` is DIRECTLY `sym` is a call —
@@ -4355,7 +4355,7 @@ fn count_fn_value_uses_apply(sym: Symbol, func: &Expr, args: &[Expr]) -> usize {
             .sum::<usize>()
 }
 
-/// T4: fail closed with [`Feature::FunctionValueReuse`] (SKY-L0127) if
+/// T4: fail closed with [`Feature::FunctionValueReuse`] (IPE-L0127) if
 /// `sym` — a binding whose IR type embeds a function ([`ir_contains_fun`])
 /// and does not derive `Clone` ([`CloneClass::NonClone`]) — is CONSUMED more
 /// than once in `body`.
@@ -5756,7 +5756,7 @@ fn scan_kernel_usage(expr: &Expr, usage: &mut KernelUsage) {
 
 /// Build a [`Diagnostic::Lower`] for a feature the lowerer does not model
 /// yet, carrying the offending node's source `span`. This is the
-/// "not supported yet" channel (`SKY-L01##`), distinct from [`bug`] ("the
+/// "not supported yet" channel (`IPE-L01##`), distinct from [`bug`] ("the
 /// compiler is broken"): the input is valid Sky the supported subset has not reached.
 const fn unsupported(span: Span, feature: Feature) -> Diagnostic {
     Diagnostic::Lower {
@@ -6333,7 +6333,7 @@ pub struct Lowerer<'a> {
     /// Symbols whose BINDER kind can carry the `Arc<dyn Fn>` promotion: plain
     /// `let` names (`PVar`) and def/lambda parameters — the binder sites that
     /// run the fn-value promotion pass. The capture-clone classifier in
-    /// `lower_lambda` routes a captured pure-`Fun` symbol OUT of the SKY-L0126
+    /// `lower_lambda` routes a captured pure-`Fun` symbol OUT of the IPE-L0126
     /// fail-close only when its binder is registered here (the binder site will
     /// see the capture on the LOWERED scope — eta-synthesized closures included
     /// — and promote the binding's carrier). A fn-typed symbol bound by a
@@ -6342,11 +6342,11 @@ pub struct Lowerer<'a> {
     /// interior mutability so the lowering walk stays over a shared `&self`.
     promotable_fn_binders: std::cell::RefCell<BTreeSet<Symbol>>,
     /// Fail-close signal: pure-`Fun` captures the classifier routed AWAY from
-    /// SKY-L0126 on the promise that the symbol's binder site will decide the
+    /// IPE-L0126 on the promise that the symbol's binder site will decide the
     /// carrier, keyed by symbol with the capturing lambda's span. Each binder
     /// site consumes its symbol's entry; a binder that cannot resolve the
     /// binding to a `Fun` shape (region disagreement) re-raises the original
-    /// SKY-L0126 instead of emitting a `.clone()` on a non-`Clone` `Box`
+    /// IPE-L0126 instead of emitting a `.clone()` on a non-`Clone` `Box`
     /// (E0599 — a SEAL break). Cleared per def.
     deferred_fun_captures: std::cell::RefCell<BTreeMap<Symbol, Span>>,
 }
@@ -7448,18 +7448,18 @@ impl<'a> Lowerer<'a> {
     ///
     /// A mis-arity `Task` reached through a constructor FIELD type
     /// (`type J a = J (Task Error a Bool)`) never passes through
-    /// `normalize_annotation_ty`, so E1's SKY-T0016 gate does not fire — it
+    /// `normalize_annotation_ty`, so E1's IPE-T0016 gate does not fire — it
     /// reaches `ir_type_from_canon`'s `"Task"` dispatch directly, which would
     /// otherwise raise a `CompilerBug` ICE. This predicate lets `lower_enum`
-    /// fail closed with the SAME clean SKY-T0016 diagnostic before that happens.
+    /// fail closed with the SAME clean IPE-T0016 diagnostic before that happens.
     /// A mis-arity `Task` in a constructor field is ALWAYS wrong, never a
     /// legitimate program.
     /// Find a mis-arity async carrier (`Task`/`Cmd`/`Sub`) anywhere in a
     /// canonical type, returning `(carrier_name, found_arity)`. `Task` is
     /// well-formed at arity 1 (internal unary) or 2 (`Task Error a`);
     /// `Cmd`/`Sub` take exactly 1 (`Cmd msg`). Any other arity would trip
-    /// `ir_type_from_canon`'s catch-all `CompilerBug` (SKY-I0001), so
-    /// `lower_enum`'s Gate 0a fails closed on it with a clean SKY-T0016.
+    /// `ir_type_from_canon`'s catch-all `CompilerBug` (IPE-I0001), so
+    /// `lower_enum`'s Gate 0a fails closed on it with a clean IPE-T0016.
     /// (Cmd/Sub coverage added after the review found the Task-only gate
     /// left the siblings ICE-ing, contrary to the item title.)
     fn task_arity_in_canon(&self, t: &canon::Type) -> Option<(&'static str, usize)> {
@@ -7551,7 +7551,7 @@ impl<'a> Lowerer<'a> {
                 // Gate 0a: a mis-arity `Task` in a constructor payload
                 // (`J (Task Error a Bool)`) would trip `ir_type_from_canon`'s
                 // `"Task"` catch-all `CompilerBug`. Fail closed with the clean
-                // SKY-T0016 diagnostic (`TypeError::TaskArity`) at the ctor span,
+                // IPE-T0016 diagnostic (`TypeError::TaskArity`) at the ctor span,
                 // matching E1's annotation-path behaviour. A well-formed
                 // `Task Error a` (arity 2) is NOT rejected here — it lowers to a
                 // `Variant` carrying `IrType::Task`, and the derive-demotion
@@ -7902,7 +7902,7 @@ impl<'a> Lowerer<'a> {
                 self.fn_is_async.set(matches!(ret, IrType::Task(_)));
                 // Params are promotable fn binders for the body's capture
                 // classifier (an inner lambda capturing a pure-`Fun` param
-                // defers to the param loop below instead of SKY-L0126).
+                // defers to the param loop below instead of IPE-L0126).
                 let param_syms: Vec<Symbol> = params.iter().map(|(s, _)| *s).collect();
                 let body_result =
                     self.with_promotable_fn_binders(param_syms, || self.lower_expr(body));
@@ -8028,7 +8028,7 @@ impl<'a> Lowerer<'a> {
                 // Typed arm does — so a `Ty::Var` reachable from `solved_ty`
                 // (region-zonked, hence solver-tagged) that IS one of these
                 // quantified vars lowers to `IrType::Generic(sym)` instead of
-                // hitting `ir_type_from_ty`'s SKY-L0102 fail-closed arm.
+                // hitting `ir_type_from_ty`'s IPE-L0102 fail-closed arm.
                 // Absent/empty entry (the common case — most untyped defs stay
                 // fully monomorphic): `current_poly_tvars` stays empty, byte-
                 // identical to before this feature existed.
@@ -8092,7 +8092,7 @@ impl<'a> Lowerer<'a> {
                     // Concrete solved types lower cleanly; a free `Ty::Var` in
                     // a parameter or return position that is NOT one of this
                     // def's own quantified vars surfaces as
-                    // `Feature::Polymorphism` (SKY-L0102) rather than emitting
+                    // `Feature::Polymorphism` (IPE-L0102) rather than emitting
                     // unsound `any`-shaped parameters — fail-closed by design
                     // (Divergence D1: an ambiguous instantiation the reference
                     // erasure-accepts is rejected here, strictly safer).
@@ -8284,7 +8284,7 @@ impl<'a> Lowerer<'a> {
     /// with [`ir_type_from_ty`].
     ///
     /// A free [`Ty::Var`] in a parameter or return position surfaces as
-    /// [`Feature::Polymorphism`] (SKY-L0102): the unannotated function is
+    /// [`Feature::Polymorphism`] (IPE-L0102): the unannotated function is
     /// polymorphic, and the backend has no source-level name with which to
     /// emit a `<T>` generic.  Fail-closed — never emits unsound `any`-shaped
     /// parameters.
@@ -8364,9 +8364,9 @@ impl<'a> Lowerer<'a> {
             let canon::Type::Lambda(arg, rest) = cur else {
                 // More parameter patterns than the annotation has arrows. The
                 // type checker rejects this first (the body's inferred arity
-                // cannot unify with the shorter annotation → SKY-T0001), so
+                // cannot unify with the shorter annotation → IPE-T0001), so
                 // reaching it here is a genuine invariant violation, not a
-                // missing feature. (Slated to become a dedicated SKY-T0004
+                // missing feature. (Slated to become a dedicated IPE-T0004
                 // at the type-checking boundary.)
                 return Err(bug(
                     "ipe_lower::split_typed_sig",
@@ -8426,7 +8426,7 @@ impl<'a> Lowerer<'a> {
     /// path cannot disagree with itself about what a pattern param means
     /// (the design rejects upstream's asymmetric lambda-vs-def lowering).
     ///
-    /// The SKY-T0015 gate (exhaustiveness phase, before lowering) has already
+    /// The IPE-T0015 gate (exhaustiveness phase, before lowering) has already
     /// proven `pat` irrefutable, so only irrefutable shapes are reachable:
     ///
     /// * `PVar(s)` — the param IS the name: `(s, ir_ty)`, no prologue, zero cost.
@@ -8437,7 +8437,7 @@ impl<'a> Lowerer<'a> {
     ///   COMPLETE field set from the param's SOLVED type (not a name heuristic).
     ///
     /// A refutable pattern is a fail-closed [`bug`] — it can no longer reach the
-    /// lowerer (SKY-T0015 rejected it), so reaching this arm is an invariant
+    /// lowerer (IPE-T0015 rejected it), so reaching this arm is an invariant
     /// violation, never a user error and never an emitted panic arm.
     fn lower_param(
         &self,
@@ -8459,7 +8459,7 @@ impl<'a> Lowerer<'a> {
                 let binder = self.lower_param_binder_pat(pat, pat.span)?;
                 Ok(((fresh, ir_ty), Some((fresh, binder))))
             }
-            // Refutable — rejected upstream by SKY-T0015. Fail closed.
+            // Refutable — rejected upstream by IPE-T0015. Fail closed.
             canon::Pattern_::PCtor { .. }
             | canon::Pattern_::PInt(_)
             | canon::Pattern_::PBool(_)
@@ -8468,7 +8468,7 @@ impl<'a> Lowerer<'a> {
             | canon::Pattern_::PList(_)
             | canon::Pattern_::PCons(_, _) => Err(bug(
                 "ipe_lower::lower_param",
-                "refutable parameter pattern reached the lowerer — the SKY-T0015 \
+                "refutable parameter pattern reached the lowerer — the IPE-T0015 \
                  irrefutability gate should have rejected it",
             )),
         }
@@ -8723,7 +8723,7 @@ impl<'a> Lowerer<'a> {
                 // like `Std.Ui.Grid` / `Std.Ui.Transition` — selects
                 // `UiAttribute`).  Without this arm an annotation such as
                 // `columns : List Track -> Attribute msg` reaches the `other =>`
-                // ICE with an empty home (SKY-I0001).
+                // ICE with an empty home (IPE-I0001).
                 "Attribute" if args.len() == 1 => {
                     let msg = self.ir_type_from_canon(
                         args.first().ok_or_else(|| {
@@ -8799,7 +8799,7 @@ impl<'a> Lowerer<'a> {
                 // `LiveRoute page` is parametric on the page type it builds:
                 // a bare `LiveRoute` annotation cannot
                 // type-check (the solver's `LiveRoute` Con carries exactly one
-                // argument, so a 0-arg annotation is a Con-arity SKY-T0001
+                // argument, so a 0-arg annotation is a Con-arity IPE-T0001
                 // before lowering); a miss here is an invariant violation.
                 "LiveRoute" if args.len() == 1 => {
                     let page = self.ir_type_from_canon(
@@ -8922,7 +8922,7 @@ impl<'a> Lowerer<'a> {
                 other => {
                     // Every type reaching here has `home = []` but is NOT a
                     // known builtin.  `ipe_canon::canonicalise_type` now emits
-                    // SKY-N0002 (`TypeNotFound`) for any unknown unqualified type
+                    // IPE-N0002 (`TypeNotFound`) for any unknown unqualified type
                     // at compile time, so this arm is an invariant-violation ICE —
                     // it can no longer be triggered by valid user code.
                     Err(bug(
@@ -8930,7 +8930,7 @@ impl<'a> Lowerer<'a> {
                         format!(
                             "type constructor `{other}` with empty home reached the \
                              lowerer — should have been caught by canon TypeNotFound \
-                             (SKY-N0002)"
+                             (IPE-N0002)"
                         ),
                     ))
                 }
@@ -9082,7 +9082,7 @@ impl<'a> Lowerer<'a> {
     /// via [`Self::ir_type_from_ty`] to classify it by [`clone_class`].
     /// Returns `(symbol, ir_type_option)` pairs; `None` means the region type
     /// was unavailable (treated as bare / copy by the caller — safe default,
-    /// no `CloneVar` inserted, no SKY-L0125).
+    /// no `CloneVar` inserted, no IPE-L0125).
     fn captured_locals(
         &self,
         lambda_param_pats: &[&canon::Pattern],
@@ -9107,7 +9107,7 @@ impl<'a> Lowerer<'a> {
     /// T3 capture-clone rewrite for a closure body: classify the free locals
     /// captured by the closure (from its CANON body) and rewrite the LOWERED
     /// `body` — `CloneOk` reads become `CloneVar` (`.clone()`), `NonClone` captures
-    /// outside the depth-0 callee position fail-close SKY-L0125/L0126.
+    /// outside the depth-0 callee position fail-close IPE-L0125/L0126.
     ///
     /// A captured pure-`Fun` symbol whose binder can carry the `Arc<dyn Fn>`
     /// promotion (a plain `let` name or a def/lambda param — see
@@ -9116,7 +9116,7 @@ impl<'a> Lowerer<'a> {
     /// scope, eta-synthesized closures included — decides the carrier
     /// (`SharedLambda` + relays + read shims) from the same structural facts.
     /// The deferral is recorded so a binder that cannot resolve the `Fun` shape
-    /// re-raises this SKY-L0126 instead of leaking an unsound bare `Box`
+    /// re-raises this IPE-L0126 instead of leaking an unsound bare `Box`
     /// capture (fail-closed both ways).
     fn rewrite_lambda_captures(
         &self,
@@ -9281,7 +9281,7 @@ impl<'a> Lowerer<'a> {
                 // `Task.fail` (which never produces a value) or `\_ -> NoOp`
                 // after `System.exit` (which diverges) — map the free variable
                 // to `IrType::Json` (`JsonVal` / `any`) instead of raising
-                // `SKY-L0102`.  This matches the Haskell reference:
+                // `IPE-L0102`.  This matches the Haskell reference:
                 // `Can.PAnything -> (GoIr.GoParam "_" "any", [])`.
                 let ir_ty = if matches!(&pat.value, canon::Pattern_::PAnything) {
                     self.ir_type_from_ty_json(arg, pat.span)?
@@ -9342,7 +9342,7 @@ impl<'a> Lowerer<'a> {
         // type.  When the lambda's return type is a compound type containing a
         // free `Ty::Var` (e.g. `Task a` inside a polymorphic function like
         // `wrap : String -> Task Error a -> Task Error a`), the strict
-        // `ir_type_from_ty` fails with SKY-L0102 (Polymorphism).
+        // `ir_type_from_ty` fails with IPE-L0102 (Polymorphism).
         // `ir_type_from_ty_json` maps the free `Ty::Var` to `IrType::Json`
         // instead — a sound stand-in since the Rust type is unified by the
         // surrounding kernel call site.
@@ -9362,7 +9362,7 @@ impl<'a> Lowerer<'a> {
         // Register this lambda's own params as promotable fn binders while the
         // body is lowered, so an INNER lambda capturing one of them routes to
         // the deferral (the param loop below promotes the carrier) instead of
-        // fail-closing SKY-L0126.
+        // fail-closing IPE-L0126.
         let param_syms: Vec<Symbol> = ir_params.iter().map(|(s, _)| *s).collect();
         let mut body = self.with_promotable_fn_binders(param_syms, || self.lower_expr(cur_body))?;
         self.fn_is_async.set(prev_async);
@@ -9376,7 +9376,7 @@ impl<'a> Lowerer<'a> {
         }
         // T3: Capture-clone rewrite — classify free locals captured
         // by this closure and replace CloneOk reads with `.clone()`, emitting
-        // SKY-L0125 for NonClone captures outside callee position.
+        // IPE-L0125 for NonClone captures outside callee position.
         body = self.rewrite_lambda_captures(&all_param_pats, cur_body, span, body)?;
         // Fold each destructuring param's `Destructure` around the body,
         // OUTERMOST-first (reverse of source order) so the first parameter's
@@ -9494,7 +9494,7 @@ impl<'a> Lowerer<'a> {
             Ty::Unit => Ok(IrType::Unit),
             // Reserved builtin names are matched first. This precedence is sound
             // because `ipe_canon`'s `RESERVED_BUILTIN_TYPES` gate (resolve.rs,
-            // SKY-N0026) rejects any user `type` / `type alias` whose name is one
+            // IPE-N0026) rejects any user `type` / `type alias` whose name is one
             // of these builtin constructors, so those arms can never silently
             // override a user `type Int = …` / `type Html = …`.
             //
@@ -9860,7 +9860,7 @@ impl<'a> Lowerer<'a> {
                 // fails and it falls through to the `UiPlain` arms below,
                 // unchanged. This closes the exit-0-then-cargo-fail hole (HOF
                 // `applyTo _ Magenta` emitting a `UiPlain::Color` slot) and the
-                // SKY-I0001 ty-vs-canon disagreement on `{ c : Color }` literals.
+                // IPE-I0001 ty-vs-canon disagreement on `{ c : Color }` literals.
                 _ if self
                     .enum_variants
                     .contains_key(&(ModPath(module.clone()), *name)) =>
@@ -9941,7 +9941,7 @@ impl<'a> Lowerer<'a> {
                 // user-declared `type Value` still resolves as its own enum here.
                 // The parametric reserved builtins (`Decoder` / `Cmd` / `Html` /
                 // …) stay ABOVE the guard — they are name-reserved
-                // (`RESERVED_BUILTIN_TYPES`, SKY-N0026) and so can never collide
+                // (`RESERVED_BUILTIN_TYPES`, IPE-N0026) and so can never collide
                 // with a program union.
                 "Value" => Ok(IrType::Json),
                 // Name resolution guarantees every type constructor resolves to
@@ -9952,14 +9952,14 @@ impl<'a> Lowerer<'a> {
                     // solver propagates `module` from the canonical `home` set by
                     // `canonicalise_type`, so `module = []` on a non-builtin Con
                     // here means the annotation had an unknown type — which canon
-                    // now rejects with SKY-N0002 before the solver runs.  This arm
+                    // now rejects with IPE-N0002 before the solver runs.  This arm
                     // is therefore an invariant-violation ICE.
                     Err(bug(
                         "ipe_lower::ir_type_from_ty",
                         format!(
                             "type constructor `{other}` with empty home reached the \
                              lowerer — should have been caught by canon TypeNotFound \
-                             (SKY-N0002)"
+                             (IPE-N0002)"
                         ),
                     ))
                 }
@@ -10097,7 +10097,7 @@ impl<'a> Lowerer<'a> {
             // position the backend does not yet model), not an invariant
             // violation, so it surfaces as a `Diagnostic::Lower` with the span
             // — never a `CompilerBug` for well-typed input.
-            // [SKY-L0102, feature: polymorphism]
+            // [IPE-L0102, feature: polymorphism]
             Ty::Var(v) => self.poly_tvar_symbol(*v).map_or_else(
                 || Err(unsupported(span, Feature::Polymorphism)),
                 |sym| Ok(IrType::Generic(sym)),
@@ -10163,7 +10163,7 @@ impl<'a> Lowerer<'a> {
     /// type containing a free `Ty::Var` (e.g. `Result Error a` in a
     /// `Cmd.perform` callback) — this helper recurses into every compound
     /// type arm and maps each `Ty::Var` leaf to [`IrType::Json`] rather than
-    /// failing with [`Feature::Polymorphism`] (SKY-L0102).
+    /// failing with [`Feature::Polymorphism`] (IPE-L0102).
     ///
     /// SEAL fix: a `Ty::Var` leaf must first be checked against
     /// `current_poly_tvars` — the SAME check `ir_type_from_ty` (line ~6176)
@@ -10462,7 +10462,7 @@ impl<'a> Lowerer<'a> {
     /// does not compile. Storing a function in a `let` works (no derive is
     /// involved); storing one in a record is the documented first-class gap
     /// until the record struct can carry a non-deriving function field.
-    /// [SKY-L0107, feature: first-class-functions]
+    /// [IPE-L0107, feature: first-class-functions]
     fn reject_function_valued_field(&self, value: &canon::Expr) -> DResult<()> {
         if let Some(Ty::Fun(_, _)) = self.region_ty(value.span) {
             return Err(unsupported(value.span, Feature::FirstClassFunctions));
@@ -10483,9 +10483,9 @@ impl<'a> Lowerer<'a> {
     ///
     /// The diagnostic names the carrier: a function reaching a CONSTRUCTOR
     /// payload (region head is a user enum `Con`) gets the constructor-payload
-    /// message blaming this construction site (SKY-L0114,
+    /// message blaming this construction site (IPE-L0114,
     /// [`Feature::CtorPayloadFunction`]); a function reaching a RECORD field gets
-    /// the record-field message (SKY-L0107, [`Feature::FirstClassFunctions`]).
+    /// the record-field message (IPE-L0107, [`Feature::FirstClassFunctions`]).
     fn reject_function_through_type_var(&self, e: &canon::Expr) -> DResult<()> {
         if !matches!(
             &e.value,
@@ -10760,7 +10760,7 @@ impl<'a> Lowerer<'a> {
                     // has an uninferrable `SkyCmd<_>` type that `cargo build`
                     // rejects with E0282.  Call `ir_type_from_ty` on the region
                     // type here; it naturally raises `Feature::Polymorphism`
-                    // (SKY-L0102) when the `msg` argument is still a free var,
+                    // (IPE-L0102) when the `msg` argument is still a free var,
                     // failing closed at `skyc` rather than emitting invalid Rust.
                     // An anchored `msg` (inferred from a sibling `Cmd`/`Sub` in
                     // the same batch) succeeds and falls through to the standard
@@ -10875,7 +10875,7 @@ impl<'a> Lowerer<'a> {
     /// variable) needs a `Clone`-bounded type parameter, because the backend
     /// copies the base with `.clone()`. Bounded generics are unsupported, so a generic
     /// record update is a not-yet gap ([`Feature::BoundedRecordUpdate`],
-    /// SKY-L0111) rather than broken Rust. The base's solved region type tells us
+    /// IPE-L0111) rather than broken Rust. The base's solved region type tells us
     /// whether it is generic; a monomorphic update is byte-identical to b3.
     fn lower_update(&self, base: &canon::Expr, fields: &[(Symbol, canon::Expr)]) -> DResult<Expr> {
         if let Some(base_ty) = self.region_ty(base.span)
@@ -11083,14 +11083,14 @@ impl<'a> Lowerer<'a> {
     /// The Rust backend emits the runtime entry call by reading the cfg record's
     /// field expressions directly (see `emit_{live,tui,webview}_call`), so the cfg
     /// MUST be an inline `canon::Expr_::Record`. A let-bound / piped / call-result
-    /// cfg has no literal fields to read and is rejected here with `SKY-L0119`
+    /// cfg has no literal fields to read and is rejected here with `IPE-L0119`
     /// ([`Feature::LetBoundAppCfg`]) at the argument's span — never allowed to
     /// reach emit, where it would fire a spanless `CompilerBug`.
     ///
     /// For `Webview.app`, the nested `window` field must itself be an inline
     /// record literal and its `size` field an inline 2-tuple literal (the G4 emit
     /// gates). Those are validated here on the canon fields (which carry spans) so
-    /// a let-bound `window`/`size` gets `SKY-L0119` at the offending span, not an
+    /// a let-bound `window`/`size` gets `IPE-L0119` at the offending span, not an
     /// ICE.
     fn lower_app_entry_cfg(&self, peek: &Callee, arg0: &canon::Expr) -> DResult<Expr> {
         let canon::Expr_::Record(fields) = &arg0.value else {
@@ -11104,7 +11104,7 @@ impl<'a> Lowerer<'a> {
 
     /// Webview `window` must be an inline record and `window.size` an inline
     /// tuple. Checked on canon (spanned) fields; a present-but-non-literal shape
-    /// is `SKY-L0119` at that value's span. A MISSING window/size is left
+    /// is `IPE-L0119` at that value's span. A MISSING window/size is left
     /// untouched — the constrain scheme enforces the 5-field shape, so absence is
     /// a genuine compiler bug handled fail-closed by emit's field lookup.
     fn reject_non_literal_webview_window(&self, fields: &[(Symbol, canon::Expr)]) -> DResult<()> {
@@ -11204,7 +11204,7 @@ impl<'a> Lowerer<'a> {
                     if let Some(arg0) = args.first() {
                         // Borrow `peek` for the gate BEFORE moving it into the
                         // returned `Expr::Call`.  A non-literal cfg (let-bound,
-                        // piped, call-result) is rejected here with SKY-L0119
+                        // piped, call-result) is rejected here with IPE-L0119
                         // rather than reaching emit's spanless `CompilerBug`.
                         let lowered_cfg = self.lower_app_entry_cfg(&peek, arg0)?;
                         return Ok(Intercepted::Done(Expr::Call {
@@ -11220,7 +11220,7 @@ impl<'a> Lowerer<'a> {
                 //
                 // Same pattern as `Live.app`: intercept the single cfg-record arg
                 // BEFORE the uniform `lower_expr` path so function-typed fields
-                // (init/update/view/subscriptions/onKey) do not trip SKY-L0107.
+                // (init/update/view/subscriptions/onKey) do not trip IPE-L0107.
                 // TuiApp / TuiProgram.
                 // WebviewApp — the extra `window` field is a plain record
                 //   value (no functions); `lower_app_entry_cfg` additionally
@@ -11228,10 +11228,10 @@ impl<'a> Lowerer<'a> {
                 //   literals (the G4 emit gates).
                 // CliProgram — 5-field cfg (init/update/view/subscriptions/
                 //   onLine), all function-typed; without this arm every real
-                //   `Cli.program` call would trip SKY-L0107 and the emit_cli
+                //   `Cli.program` call would trip IPE-L0107 and the emit_cli
                 //   path could never fire.
                 // A non-literal cfg (let-bound, piped, etc.) is rejected here with
-                // SKY-L0119 at the argument span — fail-closed, never an ICE.
+                // IPE-L0119 at the argument span — fail-closed, never an ICE.
                 Callee::Kernel(
                     KernelFn::TuiApp
                     | KernelFn::TuiProgram
@@ -11256,7 +11256,7 @@ impl<'a> Lowerer<'a> {
                 // Input kernels take TWO arguments: `(attrs : List Attr, cfg : Cfg)`.
                 // The cfg record contains function-valued fields (e.g. `onChange :
                 // String -> msg`), which the per-field `reject_function_valued_field`
-                // gate would reject as SKY-L0107 if lowered through the uniform path.
+                // gate would reject as IPE-L0107 if lowered through the uniform path.
                 //
                 // Fix: lower `args[0]` (attrs list) normally — it never carries
                 // function values — and lower `args[1]` (the cfg record) via
@@ -11267,7 +11267,7 @@ impl<'a> Lowerer<'a> {
                 //
                 // A non-literal cfg arg is currently unsupported (emit would ICE); it
                 // is fail-closed via the `Expr::Record` guard in emit_expr.rs rather
-                // than a separate SKY-L0119 here, since only literal cfg forms
+                // than a separate IPE-L0119 here, since only literal cfg forms
                 // are wired and a non-literal would produce a CompilerBug diagnostic
                 // with a clear location at the emit boundary.
                 Callee::Kernel(
@@ -11287,7 +11287,7 @@ impl<'a> Lowerer<'a> {
                         let lowered_attrs = self.lower_expr(attrs_arg)?;
                         let canon::Expr_::Record(fields) = &cfg_arg.value else {
                             // Non-literal cfg: fall through to uniform path, which
-                            // surfaces SKY-L0107 on the function-valued field — a
+                            // surfaces IPE-L0107 on the function-valued field — a
                             // clear, actionable diagnostic at the right span.
                             return Ok(Intercepted::Fallthrough(Some(peek)));
                         };
@@ -11305,7 +11305,7 @@ impl<'a> Lowerer<'a> {
                 // (emit_live.rs T5).  Route it through the same
                 // `lower_app_entry_cfg` path as `Live.app` so any code that
                 // still calls the deprecated form compiles rather than hitting
-                // SKY-L0118.  The emit branch (T5) will select `live_app` vs
+                // IPE-L0118.  The emit branch (T5) will select `live_app` vs
                 // `live_app_routed` based on whether the Model has a `page` field.
                 Callee::Kernel(KernelFn::LiveAppRouted) if args.len() == 1 => {
                     if let Some(arg0) = args.first() {
@@ -11987,7 +11987,7 @@ impl<'a> Lowerer<'a> {
                     Some(CloneClass::CopyLeaf | CloneClass::NonClone) => {}
                     // None — T7: the slot type is genuinely indeterminate
                     // (a non-Fun type whose resolution failed).  Conservatively
-                    // fail-close with SKY-L0126: we cannot prove the Var is
+                    // fail-close with IPE-L0126: we cannot prove the Var is
                     // Copy-safe, and a NonClone value would produce E0525 at cargo.
                     // (T7b Fun-arrow case is handled in `slot_classes` above.)
                     None => {
@@ -12047,7 +12047,7 @@ impl<'a> Lowerer<'a> {
             // missing-arg slot — the common case for diverging / always-failing
             // tasks passed to `Task.andThen` or `Cmd.perform` where the result
             // type `a` is never constrained — maps to `IrType::Json` (`JsonVal`)
-            // instead of raising SKY-L0102.  The eta-param is only a closure
+            // instead of raising IPE-L0102.  The eta-param is only a closure
             // binder forwarded verbatim to the full kernel call; its concrete
             // Rust type is unified by the compiler from the call site, so
             // `JsonVal` is a sound stand-in for any unconstrained `Ty::Var`.
@@ -12073,7 +12073,7 @@ impl<'a> Lowerer<'a> {
         // `ret_ty` is `Task a` (a 1-arg Task) and `a` is a free `Ty::Var`
         // (the common case for polymorphic helpers like
         // `wrap : String -> Task Error a -> Task Error a`), the strict
-        // `ir_type_from_ty` would fail with SKY-L0102 (Polymorphism).
+        // `ir_type_from_ty` would fail with IPE-L0102 (Polymorphism).
         // `ir_type_from_ty_json` maps the free `Ty::Var` to `IrType::Json`
         // instead — a sound stand-in since the eta-lambda's return slot is
         // type-unified by the kernel signature at the call site.
@@ -12237,7 +12237,7 @@ impl<'a> Lowerer<'a> {
         // Build the missing parameter list from argument positions
         // `supplied..arity`. Use the JSON-friendly variant so a free `Ty::Var` in
         // an unconstrained slot maps to `IrType::Json` rather than raising
-        // SKY-L0102 — sound because the residual closure's slot is type-unified
+        // IPE-L0102 — sound because the residual closure's slot is type-unified
         // by the surrounding application context.
         for (offset, arg_ty) in arg_tys.get(supplied..).unwrap_or(&[]).iter().enumerate() {
             let sym = *self.eta_params.get(offset).ok_or_else(|| {
@@ -12289,7 +12289,7 @@ impl<'a> Lowerer<'a> {
     ///
     /// * `Var(sym)` supplied args are rewritten to `CloneVar(sym)` when the slot
     ///   type is `CloneOk`; left bare for `CopyLeaf`.  `NonClone` or unknown types
-    ///   surface [`Feature::NonCloneCapture`] (SKY-L0126).
+    ///   surface [`Feature::NonCloneCapture`] (IPE-L0126).
     /// * Non-`Var` complex expressions in `CloneOk` slots are hoisted to a
     ///   `let __sky_cap_i = <expr>` binding outside the lambda so each call reads
     ///   a captured binding (closing the re-evaluation / `FnOnce` hazard).
@@ -12372,7 +12372,7 @@ impl<'a> Lowerer<'a> {
         }
         // Build the missing parameter list from argument positions `supplied..arity`.
         // Use the JSON-friendly variant so a free `Ty::Var` in an unconstrained
-        // slot maps to `IrType::Json` rather than raising SKY-L0102.
+        // slot maps to `IrType::Json` rather than raising IPE-L0102.
         for (offset, arg_ty) in arg_tys.get(supplied..).unwrap_or(&[]).iter().enumerate() {
             let sym = *self.eta_params.get(offset).ok_or_else(|| {
                 bug(
@@ -13905,7 +13905,7 @@ impl<'a> Lowerer<'a> {
             ) => Ok(4),
             // ── Std.Auth / Stream / HttpStream — fail-closed kernels ──
             // These kernels are registered in the qualifier table but have no
-            // lower arm (they hit SKY-L0108).  callee_arity is consulted
+            // lower arm (they hit IPE-L0108).  callee_arity is consulted
             // before lowering, so each variant must declare its correct arity
             // (matching the `decl()` table in ipe_kernels).
             Callee::Kernel(
@@ -14210,7 +14210,7 @@ impl<'a> Lowerer<'a> {
     /// (`ipe_types::constrain::constrain_var_kernel`'s `hof_kernel_result`
     /// `TyBounds` tie, Tier 2 — see
     /// `docs/adr/0016-andmap-arity-gate-type-obligation.md` §3.2):
-    /// Tier 2 already rejects the hazard as a type error (`SKY-T0014`)
+    /// Tier 2 already rejects the hazard as a type error (`IPE-T0014`)
     /// before lowering ever runs; this backstop gives a second, independent
     /// line of defense keyed on the ACTUAL kernel-call resolution boundary
     /// rather than any particular AST shape. Scope note: this Tier-1
@@ -15283,7 +15283,7 @@ impl<'a> Lowerer<'a> {
                     ("Decimal", "subPercent") => Ok(Callee::Kernel(KernelFn::DecSubPercent)),
                     ("Decimal", "formatWith") => Ok(Callee::Kernel(KernelFn::DecFormatWith)),
                     // A kernel beyond the wired set.
-                    // [SKY-L0108, feature: kernels]
+                    // [IPE-L0108, feature: kernels]
                     (q, m) => {
                         let _ = (q, m);
                         Err(unsupported(callee.span, Feature::Kernels))
@@ -15344,7 +15344,7 @@ impl<'a> Lowerer<'a> {
             // type is `String`.
             "append" => Ok(BinOp::Append),
             // The remaining list operator (`::` → `cons`) awaits the list type.
-            // [SKY-L0101, feature: binops]
+            // [IPE-L0101, feature: binops]
             _ => Err(unsupported(span, Feature::BinOps)),
         }
     }
@@ -15352,7 +15352,7 @@ impl<'a> Lowerer<'a> {
     /// Lower a constructor payload sub-pattern. The lowerer binds a payload field to a
     /// variable or ignores it with `_`; the lowerer also admits a TUPLE payload of
     /// those (`Just (a, b)`), lowered element-wise. A nested constructor /
-    /// literal / record / cons sub-pattern is the nested-payload gap (SKY-L0112),
+    /// literal / record / cons sub-pattern is the nested-payload gap (IPE-L0112),
     /// surfaced fail-closed rather than mis-lowered.
     fn lower_payload_pat(&self, p: &canon::Pattern) -> DResult<Pat> {
         match &p.value {
@@ -15378,7 +15378,7 @@ impl<'a> Lowerer<'a> {
             // can coerce a top-level `String` SCRUTINEE via `.as_str()`
             // (`basics-24-tui-kitchen-sink` SEAL violation sibling —
             // `SkyMaybe::Just(SkyMaybe::Just("x"))` is E0308, `expected String,
-            // found &str`). Fail-closed (SKY-L0116), the exact sibling of the
+            // found &str`). Fail-closed (IPE-L0116), the exact sibling of the
             // PList / PCons gate below. Class 4 item C2.
             canon::Pattern_::PStr(_) => Err(unsupported(p.span, Feature::NestedCtorDiscrimination)),
             // An alias `inner as name` lowers to the IR binding-with-subpattern.
@@ -15398,8 +15398,8 @@ impl<'a> Lowerer<'a> {
             // resolved `type_name` / variant / sub-patterns, so the IR
             // `Pat::Ctor` is built directly and recurses. Whether the resulting
             // (refutable) nested shape is exhaustive is the exhaustiveness
-            // checker's call (SKY-T0010); a second arm for the same top-level
-            // constructor is gated separately (SKY-L0116).
+            // checker's call (IPE-T0010); a second arm for the same top-level
+            // constructor is gated separately (IPE-L0116).
             canon::Pattern_::PCtor {
                 home,
                 type_name,
@@ -15440,7 +15440,7 @@ impl<'a> Lowerer<'a> {
             // `lower_arm_pat` (which owns the whole arm + body). Reaching a
             // PList / PCons HERE means the shape is nested via some OTHER path
             // (two levels deep, `Ok (Just (h :: t))`, out of this item's scope) —
-            // fail-closed (SKY-L0116). Class 4 item C.
+            // fail-closed (IPE-L0116). Class 4 item C.
             canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _) => {
                 Err(unsupported(p.span, Feature::NestedCtorDiscrimination))
             }
@@ -15452,7 +15452,7 @@ impl<'a> Lowerer<'a> {
     /// tuple of those always matches, so the resulting `Destructure` (or a
     /// tuple function parameter) is a sound, exhaustive Rust binding. A
     /// REFUTABLE element — a constructor (a literal once those land) — could
-    /// fail to match and is the tuple-pattern gap (SKY-L0115), surfaced
+    /// fail to match and is the tuple-pattern gap (IPE-L0115), surfaced
     /// fail-closed rather than emitted as a refutable `let`.
     fn lower_destructure_pat(&self, p: &canon::Pattern) -> DResult<Pat> {
         match &p.value {
@@ -15467,7 +15467,7 @@ impl<'a> Lowerer<'a> {
             }
             // A constructor or literal element is REFUTABLE — it could fail to
             // match — so it cannot bind irrefutably in a `let` / parameter
-            // destructure. This is the tuple-pattern gap (SKY-L0115), surfaced
+            // destructure. This is the tuple-pattern gap (IPE-L0115), surfaced
             // fail-closed.
             canon::Pattern_::PCtor { .. }
             | canon::Pattern_::PInt(_)
@@ -15475,7 +15475,7 @@ impl<'a> Lowerer<'a> {
             | canon::Pattern_::PChar(_)
             | canon::Pattern_::PStr(_) => Err(unsupported(p.span, Feature::TuplePatternMatch)),
             // An alias `inner as name` is irrefutable exactly when `inner` is, so
-            // it recurses: a refutable inner surfaces the same SKY-L0115 gap.
+            // it recurses: a refutable inner surfaces the same IPE-L0115 gap.
             canon::Pattern_::PAlias(inner, name) => Ok(Pat::Alias(
                 Box::new(self.lower_destructure_pat(inner)?),
                 name.value,
@@ -15495,7 +15495,7 @@ impl<'a> Lowerer<'a> {
                 self.lower_record_pat(fields, ty, p.span)
             }
             // List / cons elements are refutable AND have no `Vec` match lowering
-            // in an irrefutable destructure position — fail-closed (SKY-L0116).
+            // in an irrefutable destructure position — fail-closed (IPE-L0116).
             canon::Pattern_::PList(_) | canon::Pattern_::PCons(_, _) => {
                 Err(unsupported(p.span, Feature::NestedCtorDiscrimination))
             }
@@ -15574,8 +15574,8 @@ impl<'a> Lowerer<'a> {
     ///
     /// Returns `Ok(true)` to proceed (the caller falls through to the general
     /// flat-`match` lowering), `Ok(false)` for an unsupported product shape (the
-    /// caller raises SKY-L0115), or `Err` for the polymorphic-element gate
-    /// (SKY-L0102) — a precise diagnostic rather than the generic product gap.
+    /// caller raises IPE-L0115), or `Err` for the polymorphic-element gate
+    /// (IPE-L0102) — a precise diagnostic rather than the generic product gap.
     fn tuple_case_supported(
         &self,
         scrut: &canon::Expr,
@@ -15635,7 +15635,7 @@ impl<'a> Lowerer<'a> {
         // path — a slice pattern needs `&[T]` from an owned `Vec`, which only the
         // literal-tuple scrutinee can produce (there are no element expressions to
         // `.as_slice()`-wrap a variable tuple column). Such a column at ANY depth
-        // therefore stays fail-closed (SKY-L0115) rather than emit a whole-value
+        // therefore stays fail-closed (IPE-L0115) rather than emit a whole-value
         // `match` that would `cargo`-fail (`&[T]` against an owned `Vec` element).
         let Some(elems) = literal_elems else {
             let any_col_needs_literal_tuple_path = branches.iter().any(|br| {
@@ -15677,7 +15677,7 @@ impl<'a> Lowerer<'a> {
     /// Does this tuple COLUMN (or any structural sub-pattern nested inside it)
     /// contain a leaf — a list literal (`PList`) or a cons (`PCons`) — that ONLY
     /// the coerced-column (literal-tuple) path can lower soundly, so a variable
-    /// (by-value whole) scrutinee carrying it must stay fail-closed (SKY-L0115)?
+    /// (by-value whole) scrutinee carrying it must stay fail-closed (IPE-L0115)?
     ///
     /// The by-value whole path (non-literal tuple scrutinee) matches the tuple
     /// value directly and applies NO per-column `.as_slice()` coercion at any
@@ -15989,7 +15989,7 @@ impl<'a> Lowerer<'a> {
         acc: Expr,
     ) -> DResult<Expr> {
         // Consume this binder's deferred fn-capture signal (if any): the capture
-        // classifier routed a pure-`Fun` capture of `name` away from SKY-L0126 on
+        // classifier routed a pure-`Fun` capture of `name` away from IPE-L0126 on
         // the promise that THIS site decides the carrier. If the binding cannot
         // be resolved to a `Fun` shape below, the original fail-close is
         // re-raised (never a `.clone()` on a non-`Clone` `Box`).
@@ -16186,7 +16186,7 @@ impl<'a> Lowerer<'a> {
         // Plain `let` names (`PVar`) are promotable fn binders: a pure-`Fun`
         // capture of one routes to the binder-site promotion in `lower_let_pvar`
         // (decided on the LOWERED scope, eta-synthesized closures included)
-        // instead of fail-closing SKY-L0126 at the capture. Destructure-bound
+        // instead of fail-closing IPE-L0126 at the capture. Destructure-bound
         // names are deliberately NOT registered — their binder has no carrier
         // promotion, so their fn captures keep today's honest fail-close.
         let names: Vec<Symbol> = bindings
@@ -16314,7 +16314,7 @@ impl<'a> Lowerer<'a> {
             // heads plus (optionally) a `_` catch-all lowers to a native Rust
             // tuple `match` — Rust's own pattern-match compiler resolves the
             // product discrimination, so no bespoke exhaustiveness lowering is
-            // needed (SKY-T0010 already proved coverage before lowering). The
+            // needed (IPE-T0010 already proved coverage before lowering). The
             // supported-shape and per-column soundness gates are in
             // `tuple_case_supported`; when they pass, control falls through to the
             // general flat-`match` path below, which lowers each tuple arm head
@@ -16332,8 +16332,8 @@ impl<'a> Lowerer<'a> {
         // the arms are emitted one-to-one rather than grouped one-per-constructor.
         // Coverage over the nested shape is the exhaustiveness checker's call: it
         // runs before lowering, so a non-exhaustive nested `case` is already
-        // SKY-T0010 and never reaches here, and a redundant nested arm is already
-        // SKY-T0011. The `Match` constructors below carry only a cheap
+        // IPE-T0010 and never reaches here, and a redundant nested arm is already
+        // IPE-T0011. The `Match` constructors below carry only a cheap
         // necessary-condition backstop (every top constructor present / a
         // structural catch-all), never re-deriving that proof.
         //
@@ -16342,7 +16342,7 @@ impl<'a> Lowerer<'a> {
         // set. Any other mix (literal heads, a wildcard / variable catch-all, an
         // alias head, or a constructor + catch-all) takes the FLAT refutable
         // `Match::new_flat` path, whose backstop is structural.
-        // Redundancy demotion: SKY-T0011 is a WARNING, so arms AFTER
+        // Redundancy demotion: IPE-T0011 is a WARNING, so arms AFTER
         // an irrefutable catch-all can now reach lowering. They are provably
         // unreachable — the exhaustiveness pass already warned — so DROP them
         // here (semantics-preserving; the Go reference compiles the same
@@ -16375,7 +16375,7 @@ impl<'a> Lowerer<'a> {
                 // (`Just "live"`) desugars to a fresh binder in that arg slot PLUS
                 // an arm guard PLUS (for the list case) body-prelude bindings.
                 // `None` → the ordinary `lower_arm_pat` path (which keeps a
-                // still-unsupported nested list fail-closed SKY-L0116).
+                // still-unsupported nested list fail-closed IPE-L0116).
                 let (arm_pat, arm_guard, nested_bindings) =
                     match self.desugar_ctor_nested_special_args(&br.pat)? {
                         Some((pat, guard, bindings)) => (pat, guard, bindings),
@@ -16439,7 +16439,7 @@ impl<'a> Lowerer<'a> {
             })
             .collect::<DResult<Vec<_>>>()?;
 
-        // (SKY-L0128): reject dispatch-needing `as`-aliases in by-value
+        // (IPE-L0128): reject dispatch-needing `as`-aliases in by-value
         // match positions before they reach the backend.
         Self::gate_by_value_dispatch_needing_aliases(&arms, branches)?;
 
@@ -16447,7 +16447,7 @@ impl<'a> Lowerer<'a> {
         // rustc — its guard may fall through — so the arm set is only Rust-
         // exhaustive when a trailing irrefutable catch-all follows. Every
         // reachable Sky program of the repro shape (`Just (h::t) -> … ; _ -> …`)
-        // already has one (its own SKY-T0010 exhaustiveness check requires
+        // already has one (its own IPE-T0010 exhaustiveness check requires
         // covering `Just []`). Without a trailing catch-all the emitted `match`
         // would be a rustc non-exhaustive error, so keep that residual shape
         // (e.g. `Just (h::t)` + `Just []` + `Nothing`, exhaustive at Sky level
@@ -16477,7 +16477,7 @@ impl<'a> Lowerer<'a> {
         // annotated generic — both route the element var through the same
         // `current_poly_tvars` generic path. A non-binding list `case`
         // (`[] -> … ; _ :: _ -> …`) clones nothing and was never affected. The
-        // former SKY-L0102 gate here predated the universal `Clone`-bound
+        // former IPE-L0102 gate here predated the universal `Clone`-bound
         // injection and rejected sound programs (an exit-1 where the backend
         // would build) — removed.
 
@@ -16539,7 +16539,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// fail-closed gate (SKY-L0128). Mirrors the backend's per-match mode
+    /// fail-closed gate (IPE-L0128). Mirrors the backend's per-match mode
     /// decision (`emit_match_scrutinee` / `tuple_col_modes`) EXACTLY: STR and
     /// LIST modes match the scrutinee by REFERENCE (`.as_str()` /
     /// `.as_slice()`), where Rust's default binding modes make `name @ inner`
@@ -16610,7 +16610,7 @@ impl<'a> Lowerer<'a> {
     /// constructor pattern (whose payload sub-patterns recurse through
     /// [`Self::lower_payload_pat`]). A tuple / record head is the destructure
     /// path (handled by the single-arm branch of [`Self::lower_case`]); reaching
-    /// it here is a multi-arm product `case`, the tuple-pattern gap (SKY-L0115).
+    /// it here is a multi-arm product `case`, the tuple-pattern gap (IPE-L0115).
     fn lower_arm_pat(&self, p: &canon::Pattern) -> DResult<Pat> {
         match &p.value {
             canon::Pattern_::PVar(s) => Ok(Pat::Var(*s)),
@@ -16656,7 +16656,7 @@ impl<'a> Lowerer<'a> {
             }
             // A record case-arm head in a multi-arm `case` still needs the
             // scrutinee's record type to recover the complete field set; the
-            // multi-arm record shape remains the tuple-pattern gap (SKY-L0115).
+            // multi-arm record shape remains the tuple-pattern gap (IPE-L0115).
             canon::Pattern_::PRecord(_) => Err(unsupported(p.span, Feature::TuplePatternMatch)),
             // A list (`[a, b]`) or cons (`x :: xs`) case-arm head flattens to the
             // slice-shaped IR [`Pat::Slice`].
@@ -16688,7 +16688,7 @@ impl<'a> Lowerer<'a> {
     /// Returns `Ok(None)` when `p` is not a `PCtor` head OR none of its direct
     /// args is a supportable nested list / string literal (the caller then
     /// lowers the arm the ordinary way — a nested list reached via
-    /// `lower_payload_pat` stays fail-closed SKY-L0116, e.g. two levels deep).
+    /// `lower_payload_pat` stays fail-closed IPE-L0116, e.g. two levels deep).
     /// Returns `Ok(Some((ir_pat, guard, bindings)))` otherwise, where
     /// `bindings` are prepended to the arm body as a right-nested `Expr::Let`
     /// chain in order (head element clones, which BORROW the fresh `Vec`,
@@ -16921,7 +16921,7 @@ impl<'a> Lowerer<'a> {
                         }
                         // Any other tail shape (an alias / literal / constructor /
                         // tuple / record in tail position) is not a list pattern
-                        // this lowerer models. [SKY-L0116]
+                        // this lowerer models. [IPE-L0116]
                         _ => return Err(unsupported(tail.span, Feature::NestedCtorDiscrimination)),
                     }
                 }
@@ -16941,7 +16941,7 @@ impl<'a> Lowerer<'a> {
     /// variable binds the rest list; a wildcard ignores it. A richer tail (an
     /// alias, or a sub-list pattern to match against the rest) is not modelled
     /// yet — it would need a slice binding shape the backend does not emit.
-    /// [SKY-L0116]
+    /// [IPE-L0116]
     const fn lower_rest_pat(p: &canon::Pattern) -> DResult<Pat> {
         match &p.value {
             canon::Pattern_::PVar(s) => Ok(Pat::Var(*s)),
@@ -17197,7 +17197,7 @@ mod tests {
     //
     // These variants appear in `KernelFn::ALL` (and are therefore present in
     // `stdlib_index`) but have NO legacy arm in `lower_callee`.  Passing them
-    // with `id = None` hits the SKY-L0108 fallthrough → `Err(Diagnostic::Lower)`;
+    // with `id = None` hits the IPE-L0108 fallthrough → `Err(Diagnostic::Lower)`;
     // they cannot be covered by the decl-equiv-legacy test.
     //
     // EMITTABILITY VERDICT (ipe_backend_rust/src/emit_expr.rs, `emit_tea_call`):
@@ -17299,7 +17299,7 @@ mod tests {
     ///
     /// * A transposed `decl()` (e.g. `HtmlRender` declares `("Html", "foo")`
     ///   instead of `("Html", "render")`) produces the wrong lookup key →
-    ///   either the arm doesn't match (SKY-L0108 Err) or the wrong variant
+    ///   either the arm doesn't match (IPE-L0108 Err) or the wrong variant
     ///   returns (`assert_eq` fails).
     ///
     /// * A wrong legacy arm (e.g. `("Html", "render") => Callee::Kernel(Other)`)

@@ -27,7 +27,7 @@
 //! cargo test -p skyc --test golden_i193_oninput_reused_capture
 //!
 //! # full E2E:
-//! SKY_E2E=1 cargo test -p skyc --test golden_i193_oninput_reused_capture
+//! IPE_E2E=1 cargo test -p skyc --test golden_i193_oninput_reused_capture
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -95,11 +95,11 @@ fn i193_oninput_skyc_accepts_and_hoists_capture_clone() {
 }
 
 /// cargo-0 ∧ run-correct: emitted project compiles (no E0382) and renders the
-/// row.  Gated on `SKY_E2E=1` — the only check that catches the original SEAL
+/// row.  Gated on `IPE_E2E=1` — the only check that catches the original SEAL
 /// violation (E0382 from `cargo build`, invisible to `skyc`).
 #[test]
 fn i193_oninput_cargo_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

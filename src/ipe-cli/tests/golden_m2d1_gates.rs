@@ -4,7 +4,7 @@
 //! (`Number` via `+ - *`, `Comparable` via `< > <= >=`) generalises to a Rust
 //! generic carrying the matching trait bound. Using such a function at a type
 //! that does not satisfy the bound — here `double` (which needs `Number`)
-//! instantiated at `Bool` — must be rejected at type-checking time (SKY-T0014),
+//! instantiated at `Bool` — must be rejected at type-checking time (IPE-T0014),
 //! never left to fail when `cargo` compiles the emitted Rust. This is the
 //! soundness floor for bounded generics: skyc accepting a program it cannot
 //! lower to compiling Rust is forbidden.
@@ -18,7 +18,7 @@
 //! quietly accepts a function argument (returning `false`). The Rust backend
 //! instead lowers `==` to the static `PartialEq` operator, which Rust never
 //! derives for a function — so emitting it would fail `cargo`. skyc therefore
-//! rejects equality instantiated at a function type here (SKY-T0014) rather than
+//! rejects equality instantiated at a function type here (IPE-T0014) rather than
 //! reproduce a comparison that has no sound Rust meaning.
 
 use std::path::{Path, PathBuf};
@@ -60,7 +60,7 @@ fn number_generic_at_bool_is_sky_t0014() {
     assert_gate(
         "gate_unsatisfied",
         "m2d1_gate_unsatisfied_emit",
-        ipe_diagnostics::SKY_T0014,
+        ipe_diagnostics::IPE_T0014,
     );
 }
 
@@ -69,6 +69,6 @@ fn equality_generic_at_function_is_sky_t0014() {
     assert_gate(
         "gate_eq_function",
         "m2d1_gate_eq_function_emit",
-        ipe_diagnostics::SKY_T0014,
+        ipe_diagnostics::IPE_T0014,
     );
 }

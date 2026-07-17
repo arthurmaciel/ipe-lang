@@ -170,7 +170,7 @@ query-graph redesign.
 | `source_text(FileId)` | `Arc<str>`, one per `.sky` file | low | Byte-equal re-save is a no-op at the boundary |
 | `file_set()` | `Arc<BTreeSet<FileId>>` | low | In-scope source set from the scope walk |
 | `project_config()` | typed `ProjectConfig` (parsed `sky.toml`), **field-granular** | high | Editing `[log].level` must not invalidate codegen; editing `entry` must |
-| `codegen_flags()` | typed (`SKY_DCE`, `SKY_SOLVER_BUDGET`, budget factor, env-prefix) | high | Build-affecting env parsed to typed inputs — closes the hidden-env hole |
+| `codegen_flags()` | typed (`IPE_DCE`, `IPE_SOLVER_BUDGET`, budget factor, env-prefix) | high | Build-affecting env parsed to typed inputs — closes the hidden-env hole |
 | `ffi_package_interface(PackageId)` | `Arc<VerifiedFfiInterface>` | high | Per-package (Q1); reserved seam while FFI is parked |
 | `compiler_revision()` | content hash seeded from the `ipe` binary's own build hash | high | Bumps invalidate everything on a compiler upgrade |
 | `toolchain_fingerprint()` | rustc/toolchain identity | high | Affects emit + FFI. Source is not a watched file → re-derived per revision + **hard-refuse on mid-session change** (see durability rule) |
@@ -403,7 +403,7 @@ composes salsa's minimal recompute with cargo's incremental engine and the live
 runtime's existing SSE reconnect.
 
 > **Note:** `skyc` today stops at emit and never invokes cargo (only an
-> `SKY_E2E`-gated test does). `ipe watch` (and an integrated `ipe build`) must
+> `IPE_E2E`-gated test does). `ipe watch` (and an integrated `ipe build`) must
 > add the cargo-build + run orchestration that does not exist yet. `ipe watch`
 > composes an integrated `ipe build` cargo step rather than owning a private
 > divergent driver.

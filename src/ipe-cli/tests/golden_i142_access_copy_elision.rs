@@ -14,10 +14,10 @@
 //! (last-use analysis) is explicitly deferred — spec §3.5.
 //!
 //! Two layers:
-//! * an emission-level regression (no `SKY_E2E`) asserting the Copy/non-Copy
+//! * an emission-level regression (no `IPE_E2E`) asserting the Copy/non-Copy
 //!   split in the generated Rust text, and
 //! * an E2E build+run proving correctness is unaffected
-//!   (`SKY_E2E=1 cargo test -p skyc --test golden_i142_access_copy_elision`).
+//!   (`IPE_E2E=1 cargo test -p skyc --test golden_i142_access_copy_elision`).
 
 use std::path::{Path, PathBuf};
 
@@ -69,7 +69,7 @@ fn emit_fixture(out_name: &str) -> String {
     emitted
 }
 
-/// Emission-level regression (unit-tier, no `SKY_E2E`): the `Int` field read
+/// Emission-level regression (unit-tier, no `IPE_E2E`): the `Int` field read
 /// must be BARE while the `String` field read keeps `.clone()` — proving the
 /// type-directed split actually took effect, not merely that the program still
 /// happens to run (which a no-op fix would also pass).
@@ -111,7 +111,7 @@ fn copy_field_reads_bare_heap_field_keeps_clone() {
 /// exact expected value.
 #[test]
 fn copy_field_no_clone_compiles_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

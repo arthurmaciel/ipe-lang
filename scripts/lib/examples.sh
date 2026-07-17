@@ -42,17 +42,17 @@ all_examples() {
 
 # ── _build_stdlib_index: ONE-TIME in-memory index of stdlib module paths ──────
 # ADAPTED: this repo's stdlib source lives under src/stdlib (and, once it
-# lands, a top-level sky-stdlib/). SKY_STDLIB_DIRS is a space-separated list of
+# lands, a top-level sky-stdlib/). IPE_STDLIB_DIRS is a space-separated list of
 # roots to index; both are scanned so a bare/partial stdlib import (`import
 # System` → Sky.Core.System) resolves regardless of which tree owns it. Every
 # `/`-delimited suffix of each module path (minus `.sky`) is recorded as an O(1)
 # key. The BUILT flag is the idempotency guard across re-sources.
-SKY_STDLIB_DIRS="${SKY_STDLIB_DIRS:-src/stdlib sky-stdlib}"
+IPE_STDLIB_DIRS="${IPE_STDLIB_DIRS:-src/stdlib sky-stdlib}"
 declare -gA _SKY_STDLIB_INDEX
 _build_stdlib_index() {
   [ -n "${_SKY_STDLIB_INDEX_BUILT:-}" ] && return 0
   local f rest root
-  for root in $SKY_STDLIB_DIRS; do
+  for root in $IPE_STDLIB_DIRS; do
     [ -d "$root" ] || continue
     while IFS= read -r f; do
       # index keys are relative to the stdlib ROOT (so Sky/Core/String.sky →

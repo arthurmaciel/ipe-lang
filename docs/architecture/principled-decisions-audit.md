@@ -89,7 +89,7 @@ the reference shape.
   `skyc fix` — neither exists in Elm.
 
 - **Exhaustiveness with witnesses** (#14). `NonExhaustiveCase { missing }`
-  (SKY-T0010) lists uncovered constructors, and the no-`_ ->`-catchall walker
+  (IPE-T0010) lists uncovered constructors, and the no-`_ ->`-catchall walker
   discipline makes a newly-added variant a compile error rather than a silently
   swallowed case — stricter than Elm's wildcard-tolerant matches.
 
@@ -251,13 +251,13 @@ P2 Correctness because a wrong resolution can only occur at a bare use, which is
 exactly where the check still fires.
 
 `resolve.rs check_and_inject_value`/`inject_ctors_for_type` raise
-`NameError::AmbiguousImport` (SKY-N0024) at import registration whenever two dep
+`NameError::AmbiguousImport` (IPE-N0024) at import registration whenever two dep
 modules expose the same unqualified name — regardless of whether it is ever used
 bare. Two `exposing (..)` imports that share names (Set+Dict both expose
 `empty`/`insert`/`member`/`map`/`filter`/`union`/`foldl`) are rejected even when
 the program qualifies every reference. Track `unqual_origins` as
 `name → set-of-source-modules` without erroring at registration; register the
-name as ambiguous rather than binding it; raise SKY-N0024 only when a bare
+name as ambiguous rather than binding it; raise IPE-N0024 only when a bare
 identifier resolves onto an ambiguous name. Eager rejection has a
 simplicity/invalid-states merit, but the shared-unused-name state is genuinely
 valid, so completeness wins under the gate. Preserves the existing message +
@@ -272,7 +272,7 @@ two-module witness list.
 so a leading `\t` = 1 column; Sky-Haskell's `Space.hs` arbitrarily uses 4. Both
 are arbitrary, and a tab/space-mixed file can parse into a block structure that
 differs from its visual indentation — and the two compilers disagree. Elm makes
-this a hard syntax error. Emit a new `SKY-P####` ("tabs are not allowed in
+this a hard syntax error. Emit a new `IPE-P####` ("tabs are not allowed in
 indentation; use spaces") when a tab appears in leading whitespace, eliminating
 the layout ambiguity by construction rather than picking a magic width. Low
 real-world frequency (most code uses spaces) but closes a genuine "code means
@@ -327,7 +327,7 @@ like a function/channel/map/ellipsis, refusing to emit a broken wrapper — the
 correct boundary discipline for the security-critical `ipe add` path. When
 porting the consumer (task #42), reproduce rejection-at-boundary: an untrusted
 introspected type either parses into a typed, representable `FfiType` (smart
-constructor) or is rejected with a typed `SKY-F####` diagnostic — never emitted
+constructor) or is rejected with a typed `IPE-F####` diagnostic — never emitted
 speculatively. Pair with the filed sandbox gate (task #41) and the
 shell-injection surface at `FfiGen.hs:280` (single-quote-wrapped `pkgPaths`
 concatenated into a shell string — use argv arrays, no shell string). Design
@@ -358,9 +358,9 @@ incremental gain is the second caret, not new information.
 0→disabled. Haskell adds a **structural** default:
 `max(DEFAULT_SOLVER_BUDGET, constraint_count * 200)` — catching an
 N-constraints → ≫N·factor-steps blow-up while scaling the guard with program
-size. When `SKY_SOLVER_BUDGET` is unset, compute
+size. When `IPE_SOLVER_BUDGET` is unset, compute
 `max(DEFAULT_SOLVER_BUDGET, constraints.len() * 200)`, honour a
-`SKY_SOLVER_BUDGET_FACTOR` override, keep 0=disabled / N=absolute. Low value —
+`IPE_SOLVER_BUDGET_FACTOR` override, keep 0=disabled / N=absolute. Low value —
 5M is already generous; pure guard-rail tuning, no soundness change. Worth doing
 when large multi-module programs land.
 

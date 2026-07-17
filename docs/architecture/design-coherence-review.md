@@ -22,12 +22,12 @@
 | `ctor-payload-function-design.md` (#90) | **READY** (with 2 required amendments) | Reuse-gate code L0121 → **L0122** (C1); hard ordering: #94 lands first (C2) |
 | `effect-modules-kernel-plan.md` (#111) | **NOT PRESENT** | The single largest sweep unblock (5 examples) has no design artifact — highest-priority doc gap |
 | `kernel-registration-backlog.md` | **NEEDS-FIX** | `Task.perform` mis-signatured + mis-tiered; `Std.Live.Head` already landed; `List.filterMap` missing from the backlog entirely |
-| `routed-live-app-design.md` (#108) | **NEEDS-FIX** (doc drift; landed code is sound) | Part B `RoutedLiveCheck` undocumented; §6's SKY-L0119 is taken → **L0123**; unify step-4 re-binding omission unrecorded (§7.3); routed-lambda silent-unrouted hole |
+| `routed-live-app-design.md` (#108) | **NEEDS-FIX** (doc drift; landed code is sound) | Part B `RoutedLiveCheck` undocumented; §6's IPE-L0119 is taken → **L0123**; unify step-4 re-binding omission unrecorded (§7.3); routed-lambda silent-unrouted hole |
 | `oracle-and-tiered-verification.md` (#51/#110) | **NEEDS-FIX** (staleness only) | §4 item 1 / §8 item 1 (HTML normalizer) landed via `63f57b2` after the doc was written — retier `body` mode |
 | `parity-gap-snapshot.md` | **READY** (as a dated snapshot) | 2 rows already overtaken (ex-33 parser fix `e586668`; #108 implemented); Fix-4 cost estimate collapses per the `Task.perform` correction |
 | `parallel-lane-plan.md` | **STALE — supersede** | Pre-#108 ground truth; keep only the cluster-ownership protocol + the §6 rejection rationale |
 | `docs/ideas/idea-7-effect-do-block-design.md` | **READY** | No conflicts; correctly deferred post-parity |
-| `docs/divergences-from-sky.md` | **NEEDS-FIX** (2 edits) | B-route-param's "upgrade to SKY-L0121" → **L0123** (C1); B16 must be revised when #104's Clone-predicate fix lands |
+| `docs/divergences-from-sky.md` | **NEEDS-FIX** (2 edits) | B-route-param's "upgrade to IPE-L0121" → **L0123** (C1); B16 must be revised when #104's Clone-predicate fix lands |
 
 ---
 
@@ -136,7 +136,7 @@ Seal-tiering marking (Opus adversarial review before commit) is correct.
 3. **Ordering vs #90:** this design must land **before or together with** #90's
    Stage 1 — see C2. Add that constraint to §5.
 4. §3.3's residual (cfg field is neither FuncValue nor Lambda) is narrower than
-   the doc implies: per landed A16 (`SKY-L0119`, `code.rs:303`) the cfg itself
+   the doc implies: per landed A16 (`IPE-L0119`, `code.rs:303`) the cfg itself
    must be an inline record literal, so only the *field* expressions can be
    odd shapes. The fail-closed option in §3.3 (reject non-FuncValue/non-Lambda
    `view`/`update` fields) is therefore cheap and consistent with the A16
@@ -154,7 +154,7 @@ obligations recorded for whenever it lands:
   first** — if #104's liveness pass covers the same emit sites, #89 should
   reuse it, not add a second pass (one liveness engine, two consumers). See C3.
 - If it mints a diagnostic code, the next free slot after this review's
-  assignments is **SKY-L0124** (see C1).
+  assignments is **IPE-L0124** (see C1).
 
 ### 1.4 `ctor-payload-function-design.md` (#90) — READY with amendments
 
@@ -169,7 +169,7 @@ gated at their actual unsound sites.
 **Required amendments:**
 
 1. **Step 4's new code is NOT L0121** — renumber `Feature::FunctionValueReuse`
-   to **SKY-L0122** (C1).
+   to **IPE-L0122** (C1).
 2. **Hard ordering constraint (add to §6):** T2 deletes `lower_enum`'s
    `ir_contains_fun` decl gate, which is what makes an fn-carrying **Msg**
    type (`type Msg = WithK (Int -> Int)`) representable at all. After T2,
@@ -178,7 +178,7 @@ gated at their actual unsound sites.
    #90 Stage 1**, otherwise T2 opens a seal hole on the app-entry surface.
    The design's §4 checklist covers Model (L0120 row) but is silent on Msg —
    add the row: "Live/Tui/Webview **Msg** holding `Maybe (a->b)` / declared fn
-   payload → #94 gate → SKY-L0121".
+   payload → #94 gate → IPE-L0121".
 3. Minor: §3 step 4's consuming-use counter is a deliberate interim that #104
    supersedes — state explicitly that #104's landing must *keep the L0122
    diagnostic semantics* for non-Clone carriers (same fixture set), so the
@@ -251,12 +251,12 @@ tier structure and the Lane A/Lane B split are sound.
   `LiveRoute`. The parametrisation is what lets the scheme thread
   `page = var(2)` from routes into `notFound`.
 - **T4:** `LiveAppRouted` aliased to the same `lower_app_entry_cfg` path
-  (`lower.rs:3323`) — design option (a); SKY-L0118 kept as tombstone.
+  (`lower.rs:3323`) — design option (a); IPE-L0118 kept as tombstone.
 - **T5:** emit branch + `set_page` + `live_app_routed` (`emit_live.rs:260-290`,
   `routed_page_field:374`).
 - **T6:** `route_param_get` (`emit_live.rs:333`) with String/Int/Float/Bool
   conversions and a **`Diagnostic::CompilerBug`** for other payloads — NOT the
-  design's proposed SKY-L0119.
+  design's proposed IPE-L0119.
 
 **Required fixes:**
 
@@ -266,17 +266,17 @@ tier structure and the Lane A/Lane B split are sound.
    `resolve_routed_live_checks` at `sky_types/src/lib.rs:448`, run from
    `lib.rs:120`): one check per `Live.app` call site, deferred until the solver
    settles; if the settled Model has a `page` field, `notFound` is unified with
-   `Model.page` (SKY-T0001 on mismatch, pre-empting the emitted `set_page`
+   `Model.page` (IPE-T0001 on mismatch, pre-empting the emitted `set_page`
    closure's E0308/E0631). This is a genuine design addition — the
    conditional `Model.page ≡ notFound` constraint is inexpressible as a plain
    build-time HM constraint. Add a §5-bis describing it, plus the
    phantom-parametric `LiveRoute` refinement of item T3 above.
-2. **§6's SKY-L0119 proposal is dead — the code is taken.** Verified
-   `code.rs:196/303`: `SKY-L0119` = "app entry cfg must be an inline record
+2. **§6's IPE-L0119 proposal is dead — the code is taken.** Verified
+   `code.rs:196/303`: `IPE-L0119` = "app entry cfg must be an inline record
    literal" (ledger A16). The landed interim is `CompilerBug` in
    `route_param_get`; the ledger's B-route-param says "to be upgraded to …
-   SKY-L0121" which collides with #94. Per C1 the route-payload diagnostic is
-   **SKY-L0123**. Update §6 and the ledger entry.
+   IPE-L0121" which collides with #94. Per C1 the route-payload diagnostic is
+   **IPE-L0123**. Update §6 and the ledger entry.
 3. **The unify step-4 tail re-binding omission is real and recorded NOWHERE
    actionable.** The design's own §4 pseudocode carries the comment "Re-point
    `ext1` and `ext2` at records that carry the *other* side's extras + the
@@ -341,7 +341,7 @@ separately). Already-overtaken rows to note when refreshing:
 Written against HEAD `940dd15` with #106/#107 "in flight" — several rounds
 ago. Specifics now wrong:
 - The sweep-frontier table (§0) disagrees with the authoritative snapshot
-  (e.g. it lists 26/29/37 as SKY-P0001 parse failures; the snapshot measures
+  (e.g. it lists 26/29/37 as IPE-P0001 parse failures; the snapshot measures
   26→N0004 `Input`, 29→T0001, 37→N0004 `Region`).
 - `error-module-design.md` correction, #98/#47 compiled-source subsystem,
   `Std.Live.Head` (round-1 Lane-B class work) — landed.
@@ -374,14 +374,14 @@ when built). No conflicts with the banked designs. Two consistency notes:
 
 The ledger is in good shape overall (B15 resolution, A15–A17 additions, and
 the pending-impl honesty on L0121 are exemplary). Required edits:
-1. **B-route-param:** "to be upgraded to a proper diagnostic code `SKY-L0121`
-   in a follow-up task" → **`SKY-L0123`** (C1). Also move the entry from its
+1. **B-route-param:** "to be upgraded to a proper diagnostic code `IPE-L0121`
+   in a follow-up task" → **`IPE-L0123`** (C1). Also move the entry from its
    current position (appended after the "Could not confirm / verify" section)
    up into §2 with a proper `B18` number, and bump the §Counts.
 2. **B16 (#104 last-use):** the entry describes clone-all-but-last as if
    universally applicable. When #104's Clone-predicate amendment (§1.1 fix 1)
    lands, extend B16: non-Clone-renderable carriers (fn-embedding, Task/Cmd/
-   Sub/Decoder/Db) are *diagnosed* on multi-consuming-use (SKY-L0122), never
+   Sub/Decoder/Db) are *diagnosed* on multi-consuming-use (IPE-L0122), never
    cloned — still strictly better than the reference, which has no gate at all.
 3. (No edit needed, recorded for the executor) A15's L0121 claim is the
    canonical one and wins C1.
@@ -390,14 +390,14 @@ the pending-impl honesty on L0121 are exemplary). Required edits:
 
 ## 2. CONFLICTS — decisions the executor must follow
 
-### C1 — SKY-L0121 is claimed by THREE designs. Assignment is final as follows.
+### C1 — IPE-L0121 is claimed by THREE designs. Assignment is final as follows.
 
 | Code | Owner | Claimants displaced |
 |---|---|---|
-| **SKY-L0121** | `InadmissibleAppMsg` (#94 Msg gate) | — (strongest claim: ledger A15 + README-liftable table + seal-gates design all already cross-reference it) |
-| **SKY-L0122** | `Feature::FunctionValueReuse` (#90 Stage 1 step 4) | was "L0121, next free slot after L0120" in `ctor-payload-function-design.md` |
-| **SKY-L0123** | Route `:param` payload rejection (#108 follow-up, upgrades `route_param_get`'s `CompilerBug`) | was "SKY-L0119" in `routed-live-app-design.md` §6 (L0119 is taken by the cfg-literal diagnostic, `code.rs:303`) and "SKY-L0121" in the ledger's B-route-param |
-| SKY-L0124 | next free — reserved for #89 if it needs one | |
+| **IPE-L0121** | `InadmissibleAppMsg` (#94 Msg gate) | — (strongest claim: ledger A15 + README-liftable table + seal-gates design all already cross-reference it) |
+| **IPE-L0122** | `Feature::FunctionValueReuse` (#90 Stage 1 step 4) | was "L0121, next free slot after L0120" in `ctor-payload-function-design.md` |
+| **IPE-L0123** | Route `:param` payload rejection (#108 follow-up, upgrades `route_param_get`'s `CompilerBug`) | was "IPE-L0119" in `routed-live-app-design.md` §6 (L0119 is taken by the cfg-literal diagnostic, `code.rs:303`) and "IPE-L0121" in the ledger's B-route-param |
+| IPE-L0124 | next free — reserved for #89 if it needs one | |
 
 Rationale: minimize renumbering of already-cross-referenced docs; L0121-as-Msg
 appears in two committed documents. Each landing PR must grep
@@ -427,7 +427,7 @@ post-#90 regression proving the ordering held.
 with two consumers:
 - Clone-renderable non-`Copy` bindings → clone-all-but-last (the #104 rule).
 - Non-Clone-renderable bindings (fn-carrying, Task/Cmd/Sub/Decoder/Db) →
-  >1 consuming use = **SKY-L0122 diagnostic** (the #90 interim gate's
+  >1 consuming use = **IPE-L0122 diagnostic** (the #90 interim gate's
   semantics, absorbed into the general pass when #104 lands; #90's standalone
   counter is an explicitly temporary bridge).
 #99 stays a separate local pattern fix (the design's §8 two-pass verdict is
@@ -496,10 +496,10 @@ rationale, still valid). Doc lane items run concurrently.
    `simple`, moves 00 and 16 forward. ~1 day total.
 3. **#94 + #95** (one PR series; A2 `fn_param_ty` first — closes #95, hardens
    #94's recovery, and fixes #108's silent-unrouted hole per C4). Mints
-   SKY-L0121.
+   IPE-L0121.
 4. **#99** (self-contained pattern-renderer fix; smaller than #104; unblocks
    the as-pattern corpus).
-5. **#90 Stage 1** (after #94 per C2). Mints SKY-L0122.
+5. **#90 Stage 1** (after #94 per C2). Mints IPE-L0122.
 6. **#104** (after the §1.1 Clone-predicate amendment is written into the
    design; absorbs #90's reuse gate per C3). Then file/execute **#104b**.
 7. **Region + Input registration** (parity Fix 2, 4 examples) — can interleave

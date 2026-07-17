@@ -3,7 +3,7 @@ module Main exposing (main)
 import Sky.Core.Error as Error
 
 -- Task.onError with a lambda: `e` must be inferred as `Error` (not a free
--- variable) so the handler compiles without SKY-L0102 ("polymorphic
+-- variable) so the handler compiles without IPE-L0102 ("polymorphic
 -- parameter").  Fixed by pinning the handler-parameter type to the concrete
 -- `Error` type in the kernel_ty dispatch for onError/mapError.  `Task.fail`
 -- is likewise pinned to `Error -> Task Error a`, hence `Error.unexpected`

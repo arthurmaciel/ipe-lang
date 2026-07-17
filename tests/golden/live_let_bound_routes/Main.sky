@@ -1,6 +1,6 @@
 module Main exposing (main)
 
--- SKY-I0001 regression: a top-level `routeTable` binding whose type is inferred
+-- IPE-I0001 regression: a top-level `routeTable` binding whose type is inferred
 -- as `List LiveRoute` (the opaque route-descriptor type) MUST type-check and
 -- lower successfully.  Before #106 / #108 this pattern caused an ICE because
 -- the emitter assumed all route-list elements were inlined Expr::Ctor nodes.
@@ -55,7 +55,7 @@ subscriptions _model =
     Sub.none
 
 -- The route table is a top-level binding — its type is inferred as
--- `List LiveRoute`.  This is the SKY-I0001 shape.
+-- `List LiveRoute`.  This is the IPE-I0001 shape.
 routeTable =
     [ Live.route "/" CounterPage
     , Live.route "/about" AboutPage

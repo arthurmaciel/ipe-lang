@@ -49,7 +49,7 @@ columns, and one VERDICT:
   `DIFFER`; **AMBER** = `go-ref-broken` (upstream, not counted RED);
   `skip` = neutral. **PASS iff no RED row.**
 - **CI** — `.github/workflows/examples-sweep.yml`, ubuntu + macOS matrix,
-  `continue-on-error: true`, env `SKY_SWEEP_NO_EQUIV=1` (BUILD+RUN only). It is
+  `continue-on-error: true`, env `IPE_SWEEP_NO_EQUIV=1` (BUILD+RUN only). It is
   **informational**: prints the table into the job summary, uploads the
   scoreboard artifact, surfaces the verdict, but does not fail the workflow.
 - `ci.yml` is untouched and independent: `fmt` / `clippy -D warnings` /
@@ -65,7 +65,7 @@ columns, and one VERDICT:
    read path `check_parity` **NEVER invokes Go**: it re-hashes `Main.sky`, hard-
    fails on a stale hash, and diffs skyc's stdout against the cached bytes.
    `tools/refresh-oracle` (re)captures the cache by running the **real Go `sky`**
-   (`SKY_GO_ORACLE`, default `../sky/sky-out/sky`) **once, locally** — Go
+   (`IPE_GO_ORACLE`, default `../sky/sky-out/sky`) **once, locally** — Go
    success → cache Go bytes; Go failure / non-zero → cache skyc bytes with
    `oracle_divergence=true`. Rigour invariants (match / stale / missing /
    divergence) are unit-pinned. **This is already option (a), battle-tested —
@@ -73,9 +73,9 @@ columns, and one VERDICT:
 
 2. **Examples-sweep EQUIVALENCE (ported but dormant).** A **separate** path:
    `equivalence_for()` builds the Go reference **live** via `build_go()` /
-   `SKY_GO_BIN` and compares per shape (stdout diff / route-body diff via
+   `IPE_GO_BIN` and compares per shape (stdout diff / route-body diff via
    `equivalence_normalize_html.py` / boot floor / pty via `equivalence_tui_grid.py`). This
-   is option (b), and it is **phased off** (`SKY_SWEEP_NO_EQUIV=1`) because the
+   is option (b), and it is **phased off** (`IPE_SWEEP_NO_EQUIV=1`) because the
    Haskell `sky` compiler is not present in this repo or in CI. **Examples
    carry NO oracle files today** (`find examples -name expected_go.txt` → none).
 
@@ -127,7 +127,7 @@ GitHub CI**, and we do not want to build it there. Three options:
 | Option | Mechanism | Go/Haskell in CI? | Verdict |
 |---|---|---|---|
 | **(a) Vendored cached reference** | commit `expected_go.txt` per example, generated once locally via the real Sky-Go / an example-level `refresh-oracle`; sweep EQUIVALENCE diffs Rust output against it | **No** | **Recommended (gating path)** |
-| (b) Live Go reference in CI | a dedicated job builds GHC/cabal `sky` + Go toolchain, generates references live, drops `SKY_SWEEP_NO_EQUIV` | Yes (heavy) | Rejected as the gate; kept as an audit |
+| (b) Live Go reference in CI | a dedicated job builds GHC/cabal `sky` + Go toolchain, generates references live, drops `IPE_SWEEP_NO_EQUIV` | Yes (heavy) | Rejected as the gate; kept as an audit |
 | (c) Hybrid | (a) gates every PR; a nightly non-gating (b) job **re-refreshes/audits** the cache against a live Go build to catch drift | Nightly only | **Recommended overall** |
 
 ### Recommendation: (c) — cached-gating + nightly live-refresh audit
@@ -186,7 +186,7 @@ only stdout; (3) it reuses the identical `oracle::Meta` format + divergence
 tags (`sanctioned:` / `divergence:` / auto Go-failure) so the divergence policy
 is one mechanism across goldens and examples. The sweep's `equivalence_for()` then
 gains a cached-compare branch (diff Rust output vs the committed reference)
-selected when `SKY_GO_BIN` is absent — mirroring `check_parity`. **Until that
+selected when `IPE_GO_BIN` is absent — mirroring `check_parity`. **Until that
 lands the EQUIVALENCE column stays `—` (phase 1).** The port already keeps
 `build_go()`/`equivalence_for()` intact so this is a wiring change, not a rebuild.
 
@@ -238,7 +238,7 @@ Staged gating:
    `examples-sweep.yml` `continue-on-error → false` for the BUILD+RUN columns:
    a RED build/run row now fails the workflow (matching upstream).
 2. **A5 green** — vendor the cached example references, wire the `equivalence_for()`
-   cached-compare branch, drop `SKY_SWEEP_NO_EQUIV`. EQUIVALENCE goes live and gates:
+   cached-compare branch, drop `IPE_SWEEP_NO_EQUIV`. EQUIVALENCE goes live and gates:
    a `DIFFER` fails CI; `go-ref-broken` stays AMBER.
 3. **A6 — DONE** — push to `arthurmaciel/ipe-lang`; CI runs the full gating
    sweep; **green everywhere = the example-parity milestone is complete.** FFI

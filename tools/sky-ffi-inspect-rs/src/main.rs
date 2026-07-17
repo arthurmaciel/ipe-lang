@@ -1894,7 +1894,7 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
                 .unwrap_or_default();
             let self_rust = for_val.map(rustdoc_type_to_rust_str).unwrap_or_default();
 
-            if std::env::var("SKY_FFI_DBG").is_ok() {
+            if std::env::var("IPE_FFI_DBG").is_ok() {
                 eprintln!("[DBG0] impl block: self_sky={self_sky:?} self_rust={self_sky:?}");
             }
             if self_sky.is_empty() {
@@ -1958,7 +1958,7 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
             };
             let struct_generics = for_val.and_then(|v| struct_generics_of(v, index));
 
-            if std::env::var("SKY_FFI_DBG").is_ok() {
+            if std::env::var("IPE_FFI_DBG").is_ok() {
                 eprintln!(
                     "[DBG0b] about to walk items: self_sky={self_sky:?} is_inherent={is_inherent_impl} items_count={}",
                     impl_data["items"].as_array().map(|a| a.len()).unwrap_or(0)
@@ -1969,7 +1969,7 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
             if let Some(items) = impl_data["items"].as_array() {
                 for method_id in items {
                     let id = item_id_to_str(method_id);
-                    if std::env::var("SKY_FFI_DBG").is_ok() {
+                    if std::env::var("IPE_FFI_DBG").is_ok() {
                         eprintln!(
                             "[DBG1] impl method id={id:?} self_sky={self_sky:?} is_inherent={is_inherent_impl}"
                         );
@@ -2133,7 +2133,7 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
                             // parse_fn_item's `recv.m()` method-call form) closes
                             // that gap. A non-trait inherent non-generic method
                             // stays on parse_fn_item (no qualifier needed).
-                            if std::env::var("SKY_FFI_DBG").is_ok() {
+                            if std::env::var("IPE_FFI_DBG").is_ok() {
                                 eprintln!(
                                     "[DBG2] method={method_name:?} self_sky={self_sky:?} self_rust={self_rust:?} is_inherent={is_inherent_impl} generic_bearing={generic_bearing} trait_self_concrete={trait_self_concrete}"
                                 );
@@ -2197,7 +2197,7 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
                                 &aliases,
                                 Some((&self_sky, &self_rust)),
                             );
-                            if std::env::var("SKY_FFI_DBG").is_ok() {
+                            if std::env::var("IPE_FFI_DBG").is_ok() {
                                 eprintln!(
                                     "[DBG] parse_fn_item({:?}, self_sky={:?}, self_rust={:?}) => {:?}",
                                     method_name,
@@ -2305,7 +2305,7 @@ fn parse_rustdoc(doc: &serde_json::Value, crate_name: &str, version: &str) -> Pk
             // [#73 Part A] A GENERIC struct (e.g. `FirestoreWithMetadata<T>`) cannot
             // have field accessors emitted: `recv_path` below uses `args: null`
             // (the BARE struct name), which for `Foo<T>` is E0107 "missing generics"
-            // (surfaced under SKY_DCE=0 full-surface). The field type may also mention
+            // (surfaced under IPE_DCE=0 full-surface). The field type may also mention
             // the unbound `T`. Fail-closed DROP the whole struct's field accessors when
             // it has any TYPE or CONST generic param (lifetime-only generics are elided
             // and stay fine).
@@ -5437,7 +5437,7 @@ fn std_trait_tag(trait_node: &serde_json::Value) -> Option<&'static str> {
         let key = item_id_to_str(id);
         // (1) Confirmed std by resolved canonical path.
         if let Some(tag) = STD_TRAIT_BY_ID.with(|m| m.borrow().get(&key).copied()) {
-            if std::env::var("SKY_FFI_DBG").is_ok() {
+            if std::env::var("IPE_FFI_DBG").is_ok() {
                 eprintln!(
                     "[STD_TRAIT_TAG] id={key:?} path={:?} → STD_TRAIT_BY_ID hit",
                     trait_node.get("path")
@@ -5449,7 +5449,7 @@ fn std_trait_tag(trait_node: &serde_json::Value) -> Option<&'static str> {
         let in_local_type_ids = LOCAL_TYPE_IDS.with(|s| s.borrow().contains(&key));
         let in_reachable_paths = REACHABLE_PATHS.with(|c| c.borrow().contains_key(&key));
         let is_local = in_local_type_ids || in_reachable_paths;
-        if std::env::var("SKY_FFI_DBG").is_ok() {
+        if std::env::var("IPE_FFI_DBG").is_ok() {
             eprintln!(
                 "[STD_TRAIT_TAG] id={key:?} path={:?} in_local_type_ids={in_local_type_ids} in_reachable_paths={in_reachable_paths}",
                 trait_node.get("path")
@@ -9079,7 +9079,7 @@ fn try_parametric_stub(
     // `AsRef<str>+AsRef<Path>` conflict → None → also drops.
     //
     // Constraint 7 (no panic/index/unwrap): uses .get()/if let/match throughout.
-    if std::env::var("SKY_FFI_DBG").is_ok() {
+    if std::env::var("IPE_FFI_DBG").is_ok() {
         eprintln!(
             "[MONO-PRE] method={method_name:?} tyvars={:?} all_bounds_keys={:?}",
             tyvars,
@@ -10545,7 +10545,7 @@ fn sky_of_typeref(tr: &TypeRef, tyvars: &[String], self_sky: &str) -> String {
     match tr {
         TypeRef::Param(i) => tyvars.get(*i).cloned().unwrap_or_else(|| "a".to_string()),
         TypeRef::Prim(p) => match p.as_str() {
-            // [#95] Map EVERY numeric width to its Sky carrier — the SKY-FACING
+            // [#95] Map EVERY numeric width to its Sky carrier — the IPE-FACING
             // type is always `Int`/`Float`, never a foreign width. #95 made the
             // call-AST `TypeRef` PRESERVE the foreign width (`usize`/`u32`/`f32`)
             // so the Haskell codegen can coerce it; but this renderer builds the

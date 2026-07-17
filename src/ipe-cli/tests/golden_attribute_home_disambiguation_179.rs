@@ -34,7 +34,7 @@
 //! Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test golden_attribute_home_disambiguation_179
+//! IPE_E2E=1 cargo test golden_attribute_home_disambiguation_179
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -47,7 +47,7 @@ fn repo_root() -> PathBuf {
 }
 
 /// Compile / build / run the golden and return its run outcome. Gated on
-/// `SKY_E2E=1`.
+/// `IPE_E2E=1`.
 fn build_run_attribute_home_179() -> support::RunOutcome {
     let root = repo_root();
     let dir = root
@@ -78,7 +78,7 @@ fn build_run_attribute_home_179() -> support::RunOutcome {
 
 #[test]
 fn attribute_home_disambiguation_179_builds_and_renders() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

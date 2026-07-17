@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 -- greet is a signed top-level effectful helper; its annotation uses the
--- canonical two-arg `Task Error ()` form (previously rejected as SKY-T0001
+-- canonical two-arg `Task Error ()` form (previously rejected as IPE-T0001
 -- before the `normalize_annotation_ty` fix: "expected Task Error (), found
 -- Task ()").  The fix reduces Task Error a → Task a in the solver so the
 -- kernel-built unary Task type unifies with the annotation.

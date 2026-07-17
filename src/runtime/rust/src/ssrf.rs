@@ -10,7 +10,7 @@
 //!
 //! ## SSRF protection (opt-in)
 //!
-//! Set `SKY_HTTP_DENY_PRIVATE=1` (or `on` / `true`) to block requests whose
+//! Set `IPE_HTTP_DENY_PRIVATE=1` (or `on` / `true`) to block requests whose
 //! resolved host is loopback, RFC-1918 private, link-local, unique-local (ULA),
 //! unspecified, or v4-mapped-private. OFF by default so dev against `localhost`
 //! keeps working.
@@ -22,26 +22,26 @@ use url::Url;
 ///
 /// Default-ON in production (PRINCIPLES #1: the safe outcome must be the default
 /// for untrusted input). The decision:
-///   * `SKY_HTTP_DENY_PRIVATE` set to a truthy value (`1`/`on`/`true`) → ON.
-///   * `SKY_HTTP_DENY_PRIVATE` set to anything else (`0`/`off`/`false`/…) → OFF
+///   * `IPE_HTTP_DENY_PRIVATE` set to a truthy value (`1`/`on`/`true`) → ON.
+///   * `IPE_HTTP_DENY_PRIVATE` set to anything else (`0`/`off`/`false`/…) → OFF
 ///     (explicit opt-out, so a production deploy that genuinely needs to reach a
 ///     private host can disable it deliberately).
-///   * `SKY_HTTP_DENY_PRIVATE` UNSET → tied to the production gate
-///     (`production_from_env`): ON in production (`ENV`/`SKY_ENV` not in
+///   * `IPE_HTTP_DENY_PRIVATE` UNSET → tied to the production gate
+///     (`production_from_env`): ON in production (`ENV`/`IPE_ENV` not in
 ///     {unset, dev, development, local}), OFF in dev so localhost development
 ///     keeps working unchanged.
 ///
 /// Env is read only through the crate's locked accessors (`read_env_var` +
 /// `production_from_env`), never raw `std::env`.
 pub(crate) fn ssrf_deny_private_enabled() -> bool {
-    match crate::system::read_env_var("SKY_HTTP_DENY_PRIVATE") {
+    match crate::system::read_env_var("IPE_HTTP_DENY_PRIVATE") {
         Ok(v) => matches!(v.to_ascii_lowercase().trim(), "1" | "on" | "true"),
         Err(_) => crate::telemetry::production_from_env(),
     }
 }
 
 /// Returns `true` when the address belongs to a range that must be blocked
-/// under `SKY_HTTP_DENY_PRIVATE`:
+/// under `IPE_HTTP_DENY_PRIVATE`:
 ///
 /// - loopback        (127.0.0.0/8, ::1)
 /// - RFC-1918        (10/8, 172.16/12, 192.168/16)
@@ -161,7 +161,7 @@ pub(crate) fn resolve_first_non_private_addr_with_port(
     if let Ok(ip) = host.parse::<IpAddr>() {
         if is_private_ip(ip) {
             return Err(format!(
-                "http: blocked: private/loopback host {} (SKY_HTTP_DENY_PRIVATE)",
+                "http: blocked: private/loopback host {} (IPE_HTTP_DENY_PRIVATE)",
                 ip
             ));
         }
@@ -173,7 +173,7 @@ pub(crate) fn resolve_first_non_private_addr_with_port(
         Ok(it) => it,
         Err(e) => {
             return Err(format!(
-                "http: blocked: could not resolve host {:?}: {} (SKY_HTTP_DENY_PRIVATE)",
+                "http: blocked: could not resolve host {:?}: {} (IPE_HTTP_DENY_PRIVATE)",
                 host, e
             ));
         }
@@ -184,7 +184,7 @@ pub(crate) fn resolve_first_non_private_addr_with_port(
         let ip = sock_addr.ip();
         if is_private_ip(ip) {
             return Err(format!(
-                "http: blocked: private/loopback host {:?} resolved to {} (SKY_HTTP_DENY_PRIVATE)",
+                "http: blocked: private/loopback host {:?} resolved to {} (IPE_HTTP_DENY_PRIVATE)",
                 host, ip
             ));
         }
@@ -195,13 +195,13 @@ pub(crate) fn resolve_first_non_private_addr_with_port(
 
     first_ok.ok_or_else(|| {
         format!(
-            "http: blocked: host {:?} resolved to no addresses (SKY_HTTP_DENY_PRIVATE)",
+            "http: blocked: host {:?} resolved to no addresses (IPE_HTTP_DENY_PRIVATE)",
             host
         )
     })
 }
 
-/// WebSocket SSRF pin: when `SKY_HTTP_DENY_PRIVATE` is on, resolve `url`'s host to
+/// WebSocket SSRF pin: when `IPE_HTTP_DENY_PRIVATE` is on, resolve `url`'s host to
 /// a vetted non-private `SocketAddr` (with the real ws/wss port) so the caller can
 /// dial THAT addr — closing the DNS-rebinding TOCTOU that an unpinned
 /// `connect_async` (which re-resolves the name at connect) would leave open.
@@ -219,14 +219,14 @@ pub(crate) fn ssrf_pinned_ws_addr(url: &str) -> Result<Option<SocketAddr>, Strin
     }
     let parsed = Url::parse(url).map_err(|e| {
         format!(
-            "ws: blocked: invalid URL {:?}: {} (SKY_HTTP_DENY_PRIVATE)",
+            "ws: blocked: invalid URL {:?}: {} (IPE_HTTP_DENY_PRIVATE)",
             url, e
         )
     })?;
     let scheme = parsed.scheme();
     let host = parsed
         .host_str()
-        .ok_or_else(|| "ws: blocked: URL has no host (SKY_HTTP_DENY_PRIVATE)".to_string())?;
+        .ok_or_else(|| "ws: blocked: URL has no host (IPE_HTTP_DENY_PRIVATE)".to_string())?;
     let port = parsed
         .port_or_known_default()
         .unwrap_or(if scheme == "wss" { 443 } else { 80 });
@@ -241,7 +241,7 @@ pub(crate) fn ssrf_pinned_ws_addr(url: &str) -> Result<Option<SocketAddr>, Strin
 /// this once left open (validate-then-discard: the vetted address was not the one
 /// reqwest re-resolved at connect) is now CLOSED by `http_client::DenyPrivateResolver`,
 /// a `reqwest::dns::Resolve` that runs `is_private_ip` at resolution time for EVERY
-/// hop under `SKY_HTTP_DENY_PRIVATE` (so reqwest connects only to vetted addrs, no
+/// hop under `IPE_HTTP_DENY_PRIVATE` (so reqwest connects only to vetted addrs, no
 /// re-resolve by name). This function remains the literal/scheme guard and a
 /// belt-and-suspenders layer — IP-literal redirect targets bypass the resolver, so
 /// the per-hop `ssrf_check_url` call is still mandatory.
@@ -260,7 +260,7 @@ pub(crate) fn ssrf_check_url(url: &str) -> Result<(), String> {
         Ok(u) => u,
         Err(e) => {
             return Err(format!(
-                "http: blocked: invalid URL {:?}: {} (SKY_HTTP_DENY_PRIVATE)",
+                "http: blocked: invalid URL {:?}: {} (IPE_HTTP_DENY_PRIVATE)",
                 url, e
             ));
         }
@@ -274,7 +274,7 @@ pub(crate) fn ssrf_check_url(url: &str) -> Result<(), String> {
     let scheme = parsed.scheme();
     if scheme != "http" && scheme != "https" && scheme != "ws" && scheme != "wss" {
         return Err(format!(
-            "http: blocked: scheme {:?} is not http/https/ws/wss (SKY_HTTP_DENY_PRIVATE)",
+            "http: blocked: scheme {:?} is not http/https/ws/wss (IPE_HTTP_DENY_PRIVATE)",
             scheme
         ));
     }
@@ -283,7 +283,7 @@ pub(crate) fn ssrf_check_url(url: &str) -> Result<(), String> {
     let host = match parsed.host_str() {
         Some(h) => h,
         None => {
-            return Err("http: blocked: URL has no host (SKY_HTTP_DENY_PRIVATE)".to_string());
+            return Err("http: blocked: URL has no host (IPE_HTTP_DENY_PRIVATE)".to_string());
         }
     };
 

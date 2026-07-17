@@ -1,4 +1,4 @@
-//! Regression gate — a LOWERING diagnostic (SKY-L0126, a forwarded fn-value
+//! Regression gate — a LOWERING diagnostic (IPE-L0126, a forwarded fn-value
 //! capture) raised in a dependency module must attribute to the module that
 //! actually OWNS the failing def, not to a byte-offset collision in another
 //! merged module.
@@ -6,7 +6,7 @@
 //! This is the lowering-pass analogue of `golden_t0012_cross_module_attr`
 //! (which covers a post-solve field-access error). In
 //! `36-composite-server`, `guarded h = wrap (rateLimit … h)` in `Server.sky`
-//! raises SKY-L0126; if lowering diagnostics carry only a bare, file-local
+//! raises IPE-L0126; if lowering diagnostics carry only a bare, file-local
 //! byte `Span` with no owning module, the driver's `source_for_span` heuristic
 //! picks whichever merged def numerically CONTAINS that offset with the
 //! smallest `lo_dist` — which can be `Main.sky`'s `runMigrate`
@@ -58,7 +58,7 @@ fn try_build(name: &str) -> Result<(), String> {
     skyc::build_with_sibling_discovery(&entry, &out, &runtime).map_err(|e| e.to_string())
 }
 
-/// The SKY-L0126 must blame `Dep.sky` (which owns the forwarded-capture def),
+/// The IPE-L0126 must blame `Dep.sky` (which owns the forwarded-capture def),
 /// never the byte-colliding `Main.sky`.
 #[test]
 fn l0126_lower_error_attributes_to_owning_module() {
@@ -66,7 +66,7 @@ fn l0126_lower_error_attributes_to_owning_module() {
     let Err(err) = try_build("cross_module_attr_lowering") else {
         return;
     };
-    assert!(err.contains("SKY-L0126"), "expected SKY-L0126, got:\n{err}");
+    assert!(err.contains("IPE-L0126"), "expected IPE-L0126, got:\n{err}");
     assert!(
         err.contains("Dep.sky"),
         "lowering error must attribute to the owning module Dep.sky, got:\n{err}"

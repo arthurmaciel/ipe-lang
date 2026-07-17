@@ -258,7 +258,7 @@ Legend:
 | **Std.Db.*** (open/connect/exec/query/queryDecode/migrate/withTransaction, all stores) | **DOES-NOT** | — | SQL drivers are server-only; connection strings are secrets. Substitute (if ever) is a distinct opt-in `Std.Browser.Store` over IndexedDB — **never** a `Std.Db` alias (that would make the SQL surface representable client-side, re-opening the gate). |
 | **Sky.Live session stores** (memory/sqlite/redis/postgres/firestore) | **DOES-NOT** | — | Server-side persistence. A hydrated client holds only an opaque server-issued token (§Q6). |
 | **Std.Auth** register/login/setRole | **DOES-NOT** | — | Server user tables + secret. |
-| **Auth.signToken / signTokenWithClaims** | **DOES-NOT** | — | **Crown-jewel gate.** Signing needs `SKY_AUTH_TOKEN_SECRET`; the kernel is absent, so the secret has no client consumer. |
+| **Auth.signToken / signTokenWithClaims** | **DOES-NOT** | — | **Crown-jewel gate.** Signing needs `IPE_AUTH_TOKEN_SECRET`; the kernel is absent, so the secret has no client consumer. |
 | **Auth.verifyToken** (HS256 shared-secret path) | **DOES-NOT** | — | Same secret. RS256/public-key verify is the separate COMPILES path above. |
 | **Std.Email.send** | **DOES-NOT** | — | Provider API keys are secrets; send via a server endpoint over `Http.post`. |
 | **Sky.Http.Server** (+ Stream, Middleware, RateLimit, WebSocket **server**) | **DOES-NOT** | — | A browser tab is not a server. (Note the split: WebSocket *client* SUBSTITUTE; WebSocket *server* DOES-NOT.) |
@@ -392,7 +392,7 @@ white-screen — every abort leaves a classified errId in the console first.
 
 **Threat model.** The client `.wasm` bundle is fully public: shipped to every
 visitor, trivially `wasm2wat`-inspectable, strings extractable.
-`SKY_AUTH_TOKEN_SECRET`, DB connection strings, `Auth` signing internals, any
+`IPE_AUTH_TOKEN_SECRET`, DB connection strings, `Auth` signing internals, any
 provider key **MUST NEVER** compile into a client-targeted bundle. This is a
 **compile-time** guarantee, not a lint — *make invalid states unrepresentable at
 the target boundary.*
@@ -421,7 +421,7 @@ or any un-allowlisted kernel fails at **canonicalisation (name resolution)** wit
 an unbound-name-for-target error:
 
 > `Auth.signToken` is a server-only effect and has no denotation for target
-> `wasm`. It consumes `SKY_AUTH_TOKEN_SECRET`, which must never ship to a public
+> `wasm`. It consumes `IPE_AUTH_TOKEN_SECRET`, which must never ship to a public
 > browser bundle. Move it behind a server route and call it from the client via
 > `Cmd.perform (Http.post "/api/…") ToMsg`.
 
@@ -468,16 +468,16 @@ reading names explicitly enumerated in a `[wasm].publicEnv` allowlist. The
 allowlist is **authoritative and default-deny** (a denylist alone misses
 `STRIPE_SK`, `MY_PRIVATE_THING`, any unanticipated name). Layered on top: a
 secret-name **denylist** (`*_SECRET`, `*_TOKEN`, `*_KEY`, `*_PASSWORD`,
-`DATABASE_URL`, and the internal `SKY_*` namespace) — an allowlisted name
+`DATABASE_URL`, and the internal `IPE_*` namespace) — an allowlisted name
 matching it is a **build error**, forcing the author to confirm. So
-`SKY_AUTH_TOKEN_SECRET` can be neither read (no `getenv` kernel) nor allowlisted
-(schema rejects `SKY_*`).
+`IPE_AUTH_TOKEN_SECRET` can be neither read (no `getenv` kernel) nor allowlisted
+(schema rejects `IPE_*`).
 
 ### Secret-specific foreclosures (enumerated)
 
 | Hazard | Foreclosure |
 |---|---|
-| `SKY_AUTH_TOKEN_SECRET` | Double-gated: `System.getenv` and `Auth.signToken`/HS256-`verifyToken` are both DOES-NOT. No reader, no consumer. A hardcoded secret String is inert (no signing kernel to consume it). Cannot be allowlisted. |
+| `IPE_AUTH_TOKEN_SECRET` | Double-gated: `System.getenv` and `Auth.signToken`/HS256-`verifyToken` are both DOES-NOT. No reader, no consumer. A hardcoded secret String is inert (no signing kernel to consume it). Cannot be allowlisted. |
 | DB credentials / connection strings | `Std.Db.*` + `System.getenv` DOES-NOT → no consumer. IndexedDB (v2) is a separate credential-free module. |
 | JWT signing internals | `Auth.signToken`/HS256-`verifyToken` DOES-NOT; only public-key `Jwt.verifyRs256 pubKey` is representable client-side. |
 | Email / provider API keys | `Std.Email` DOES-NOT. |
@@ -562,7 +562,7 @@ Three modes:
      *contents* — so serialising the raw server-produced `Model` would leak by
      construction: a `Model` field populated server-side (`Auth.signToken`,
      `Db.query`, `System.getenv` are all legal on the native SSR producer) can
-     carry `SKY_AUTH_TOKEN_SECRET`, a session secret, or a password hash straight
+     carry `IPE_AUTH_TOKEN_SECRET`, a session secret, or a password hash straight
      into the public page. The gate never sees it, because it lives in Model
      *data*, not in a client kernel call. **Therefore the island serialises ONLY
      a distinct, app-declared `HydrationState` (a.k.a. `PublicModel`) type that
@@ -656,7 +656,7 @@ plus `ipe build --target wasm`:
 mode      = "spa"              # spa (MVP) | hydrate (MVP+1) | off (default)
 entry     = "src/Client.sky"   # client entry; its reachability closure is the bundle
 mount     = "#app"             # SPA mount node
-publicEnv = ["API_BASE_URL"]   # default-deny allowlist; rejects SKY_* / secret patterns
+publicEnv = ["API_BASE_URL"]   # default-deny allowlist; rejects IPE_* / secret patterns
 optLevel  = "z"
 ```
 

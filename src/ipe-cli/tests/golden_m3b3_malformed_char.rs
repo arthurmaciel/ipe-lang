@@ -3,7 +3,7 @@
 //! An unrecognised escape inside a char literal (e.g. `'\q'`) resolves to
 //! backslash + char — two scalar values — which violates the single-character
 //! invariant the char backend relies on. The lexer rejects it at lex time as
-//! SKY-P0015 (`MalformedChar`) with NO emit, in BOTH pattern position and
+//! IPE-P0015 (`MalformedChar`) with NO emit, in BOTH pattern position and
 //! scrutinee position. Recognised escapes (`\n \t \r \\ \" \' \0`) and plain
 //! chars are all exactly one scalar value, so no valid program regresses.
 //!
@@ -39,8 +39,8 @@ fn assert_malformed_char(fixture: &str, out_suffix: &str) {
     };
     assert_eq!(
         got,
-        Some(ipe_diagnostics::SKY_P0015),
-        "fixture {fixture}: expected SKY-P0015, got build result {built:?}"
+        Some(ipe_diagnostics::IPE_P0015),
+        "fixture {fixture}: expected IPE-P0015, got build result {built:?}"
     );
 
     // Soundness floor: a rejected program emits nothing.

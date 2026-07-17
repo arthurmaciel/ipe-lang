@@ -17,7 +17,7 @@
 
 > **`ipe build` ⇒ `cargo build`.** The only sound error direction is *over-drop
 > at introspection* (a bindable symbol silently omitted — a completeness bug,
-> never a soundness bug) plus *reject-at-decode with `SKY-F4400`* (an
+> never a soundness bug) plus *reject-at-decode with `IPE-F4400`* (an
 > unrenderable foreign-call AST refused before emission). **Under-bind is
 > forbidden** — a binding emitted that `cargo` then rejects breaks
 > "if it compiles, it works" at the FFI seam. Between over-drop and under-bind,
@@ -36,7 +36,7 @@ Two design rules derive everything below:
 2. **Make invalid states unrepresentable.** Kernel origin is a sum type; the
    accessor-flag soup collapses into a closed `FnKind`; call kinds / by-kinds /
    closure kinds are closed enums with no catch-all; an unrenderable
-   foreign-call AST is rejected at decode as `SKY-F4400`, never emit-and-cargo-fail.
+   foreign-call AST is rejected at decode as `IPE-F4400`, never emit-and-cargo-fail.
 
 Principle order throughout: **security > correctness > soundness > efficiency >
 completeness > readability.**
@@ -67,7 +67,7 @@ domain constructors and the same `validate_call`. The `Call` AST written into
 warm build re-runs the identical `TryFrom` validators on read (so a
 hand-corrupted cache is re-rejected). Drift is impossible **by code structure**:
 there is one `Call` domain type with one fallible constructor, and both entry
-points construct through it. `SKY-F4400` fires at whichever site sees the
+points construct through it. `IPE-F4400` fires at whichever site sees the
 defect first; the build-time `kernel.json` decode is the authority a warm build
 depends on. Ports `validateCall`/`parseCall` (`sky/…/Rust/FfiCall.hs:756-820`).
 
@@ -122,12 +122,12 @@ with **no process capability** — the RCE surface is confined to one crate.
 
 ```
 ipe_ffi
-├── diag.rs        Diagnostic + SKY-F#### codes (no String errors on public surface)
+├── diag.rs        Diagnostic + IPE-F#### codes (no String errors on public surface)
 ├── num_coerce.rs  LEAF. saturating scalar coercion, no deps           (M-C)
 ├── naming.rs      SSOT: wrapper_ref_name, module/kernel names, sentinels
 ├── pkginfo.rs     wire DTOs + validating TryFrom → domain PkgInfo/FnInfo (M-A)
 ├── typeref.rs     TypeRef enum + hand-written Visitor + Ty mapper       (M-A/M-B)
-├── call.rs        Call AST + validate_call → SKY-F4400                  (M-B)  KEYSTONE
+├── call.rs        Call AST + validate_call → IPE-F4400                  (M-B)  KEYSTONE
 ├── emit/{ipei,kernel,bindings}.rs   three emitters + BEGIN/END sentinels (M-D)
 ├── instance.rs    generic monomorphisation, MODELLABLE_5, closure-Clone (M-E)
 ├── async_bridge.rs async→Task Error a wrapper body (design now, impl later)(M-G)
@@ -135,7 +135,7 @@ ipe_ffi
 ```
 
 **Error discipline (project-wide).** Every fallible `ipe_ffi` public function
-returns `Result<T, Diagnostic>` carrying an `SKY-F####` code. There is **no
+returns `Result<T, Diagnostic>` carrying an `IPE-F####` code. There is **no
 `Result<_, String>` / `Task String`** anywhere on a public surface — the
 Haskell `Either String Call` / `fail String` (`FfiCall.hs:756-820`) becomes
 `Result<Call, Diagnostic>` with a closed `CallDefect` reason enum. (The
@@ -161,12 +161,12 @@ source range it ports.
   decoder; it is the sole constructor, so no unvalidated `FnInfo` can exist.
 - The accessor-flag cluster (`is_field`/`is_field_set`/`is_enum_ctor`/`_tag`/
   `_extract`) collapses into a closed **`FnShape`** sum; two-flags-set →
-  `SKY-F4402` reject-that-fn (over-drop one binding, keep the package). This
+  `IPE-F4402` reject-that-fn (over-drop one binding, keep the package). This
   carries the single `Fallibility` bit (R0.4).
 - `CallKind` (`method`/`function`), `ByKind` (`ref`/`refmut`/`value`),
   `ClosureKind` (`Fn`/`FnMut`/`FnOnce`), `Effect` (`pure`/`fallible`/`effectful`)
   decode as closed enums **with no catch-all** — an unknown string is a hard
-  serde/`SKY-F4401` error, never a defaulted variant.
+  serde/`IPE-F4401` error, never a defaulted variant.
 - **Identifiers are validated newtypes at the decode boundary.** `RustIdent` /
   `ModulePath` / `FieldName` have private constructors validating
   `^[A-Za-z_][A-Za-z0-9_]*$`. A crate that names a symbol
@@ -192,7 +192,7 @@ passthrough `:145-153,222`); ident/literal safety `sky/…/Rust/Ffi.hs:50,412-41
 | `TypeRef` AST → Rust source | `render_type_ref` | emit `_bindings.rs` | total, **no `"F?"` fallback** — the only unrepresentable case (nested/non-direct closure) is rejected by `validate_call` check 6 (D3); a `TRClosure` reaching the non-direct path is a `CompilerBug`-class diagnostic, never a leaked `"F?"` string |
 | `FnInfo` → ipê `Ty` | `sky_type_of` | seed `.ipei` HM env | total |
 | ipê `Ty` → Rust type (concrete) | `ty_to_rust` | wrapper param/ret | total on closed set, emit-only `→ String` fallback tolerated ONLY on the non-`call` shared path (unknown means over-drop already happened upstream) |
-| ipê `Ty` → Rust type (generic slot) | `ty_to_rust_closed` | generic bindability gate | **fallible, no fallback** — record/tuple/fn/bare-TVar/opaque → `Err` → `SKY-F4400` |
+| ipê `Ty` → Rust type (generic slot) | `ty_to_rust_closed` | generic bindability gate | **fallible, no fallback** — record/tuple/fn/bare-TVar/opaque → `Err` → `IPE-F4400` |
 
 `TypeRef` deserializes via a **hand-written single-key `Visitor`**, not
 `#[serde(untagged)]` — untagged swallows *which* variant failed (destroying
@@ -240,12 +240,12 @@ documented clamp per NumCoerce, not a `-1 → 3.4e38` sign-flip." Satisfies
 `numSaturate:58`, `numWidenScalar:93`; return widening `Ffi.hs:577-645`;
 param narrowing call site `FfiCall.hs:510`.
 
-### D3 — `Call` decode gate: `validate_call` inside `TryFrom` → `SKY-F4400`
+### D3 — `Call` decode gate: `validate_call` inside `TryFrom` → `IPE-F4400`
 
 **Decision.** `Call`/`Receiver`/`ByKind`/`ClosureKind` are closed enums.
 `Call`'s only constructor is `TryFrom<(wire::Call, n_params)> →
 Result<Call, Diagnostic>`, running the seven structural checks *inside* decode.
-The error is a `Diagnostic { code: SKY-F4400, span, reason: CallDefect }` where
+The error is a `Diagnostic { code: IPE-F4400, span, reason: CallDefect }` where
 `CallDefect` is a **closed enum** of the seven defect classes
 (`ParamRefOutOfRange`, `ReceiverKindMismatch`, `ArgIndexNegative`,
 `ArgIndexDuplicated`, `ArgIndexGap`, `ArgTypeArityMismatch`,
@@ -258,7 +258,7 @@ gap-free from 0; (4) arg indices unique; (5) `arg_types.len() == call_arity`;
 (7) every `iter_adapters` index targets a `Vec<_>` slot.
 
 **Rationale.** Convert every ill-formed foreign call into a first-class
-`SKY-F4400` *before* emission, so `render_call` over an `Ok(Call)` is total and
+`IPE-F4400` *before* emission, so `render_call` over an `Ok(Call)` is total and
 cannot emit-and-cargo-fail (closes the `Vec<closure>` E0412, use-after-move,
 `.into_iter()`-on-non-Vec classes at the parse boundary).
 
@@ -274,7 +274,7 @@ validated `RustIdent`), `rust_module_name` (`uuid → Rust.Uuid`),
 constants. **No emitter constructs a name independently.** The three emitters
 iterate the same `&[FnInfo]` and key every artifact off `wrapper_ref_name`, so
 the `.ipei` binding name, the `kernel.json` `"name"`, the `_bindings.rs`
-`// SKY-FFI-WRAPPER BEGIN <ref>` sentinel, and the S4 DCE `FfiRef` reachability
+`// IPE-FFI-WRAPPER BEGIN <ref>` sentinel, and the S4 DCE `FfiRef` reachability
 key are **byte-equal by construction** — three-way name skew (an under-bind that
 link-fails) is structurally impossible. The Rust target always disambiguates, so
 the shared emitter's `disambMethods :: Bool` is dropped (Rust-only, always-on).
@@ -521,7 +521,7 @@ scheduling M-E.
 
 > **Note — polymorphic-passthrough generics are NOT open; they are LOCKED as
 > reject.** A generic FFI slot instantiated at a bare tyvar (a call site inside
-> a still-polymorphic ipê function) fails `ty_to_rust_closed` → `SKY-F4400` at
+> a still-polymorphic ipê function) fails `ty_to_rust_closed` → `IPE-F4400` at
 > the call site. No erased `func(any) any` fallback — that is the eval-hole the
 > design forbids. The user must monomorphise at the boundary. This is a stated
 > expressiveness limitation and the only sound answer.
@@ -536,12 +536,12 @@ crate's 76 000 symbols), deduped by `(callee, types)`, gated by `check_instance`
 **before** any Rust is emitted. Per instance, per type-param, in order:
 
 1. **Closed-set check** (`ty_to_rust_closed`): non-nameable Rust type →
-   `mk_closed_set_error` `SKY-F4400`.
+   `mk_closed_set_error` `IPE-F4400`.
 2. **Trait-bound check** (only on args that passed 1): bound ∉ `MODELLABLE_5` →
    `mk_unmodellable_bound_error` (names the *bound*); bound ∈ set but concrete
    lacks it → `mk_trait_bound_error` (e.g. `f64` at a `Hash`/`Eq`/`Ord` slot).
 
-A reject at a *reached* call site is a loud `SKY-F4400`; a bound outside
+A reject at a *reached* call site is a loud `IPE-F4400`; a bound outside
 `MODELLABLE_5` on an *unused* symbol is over-drop (silent, sound).
 
 **MODELLABLE_5 two-way drift fence.** `{Hash, Eq, Ord, Clone, Default}` exists on
@@ -554,7 +554,7 @@ user's cargo build.
 **Closure-capture Clone gate.** `Fn`/`FnMut` slots re-clone every capture per call
 (owned-clone bridge `FfiCall.hs:627-651`) → every capture must be *positively*
 `Clone` via a closed **allowlist** (`ty_to_rust_closed` → `rust_type_is_clone`,
-never a denylist); first non-Clone → `SKY-F4400`. `FnOnce` is moved once, never
+never a denylist); first non-Clone → `IPE-F4400`. `FnOnce` is moved once, never
 gated (`FfiCall.hs:581-583`). The `traits_of_rust_type` table must be
 **re-verified cell-by-cell against sky-rust's actual runtime derives** (notably
 `SkyMaybe` derives *no* Default/Hash/Eq, and `f64`/`f32` are Clone+Default only —
@@ -578,11 +578,11 @@ NOW  Inspector-hardening slice (below): B0.0 de-workspaces it FIRST (edits share
 M-A  wire→domain decode: RustIdent/ModulePath newtypes, FnShape+Effect+Fallibility
      closed sums, hand-written TypeRef Visitor
 M-C  NumCoerce leaf (saturating, sanctioned divergence, try_from for usize/isize)
-M-B  Call decode → CallDefect/SKY-F4400 gate → render_call total
+M-B  Call decode → CallDefect/IPE-F4400 gate → render_call total
         ▶ FIXTURE 107 (semver) artifact byte-diff green  (no M4 needed)
 M-D  three emitters, one wrapper_ref_name SSOT, one Fallibility bit,
      compile_error! fence + catch_unwind from day one
-M-E  demand-driven generic instances + per-instance SKY-F4400 + MODELLABLE_5
+M-E  demand-driven generic instances + per-instance IPE-F4400 + MODELLABLE_5
      two-way fence + closure-Clone gate     [prereq: OPEN-2]
      ── consumer wiring (.ipei seed + KernelId lowering) requires M4 ──
 M-F  driver (argv-exec, ipe_sandbox-wrapped, dynamic pinned+featured Cargo.toml,
@@ -664,7 +664,7 @@ the panel.
   rev/branch/tag mutual-exclusion belongs to the ported driver (M-F).
 - **Rename `sky-ffi-inspect-rs` → `ipe-ffi-inspect`.** **DEFER** to the
   post-completion namespace sweep — renaming the crate, the
-  `SKY_FFI_INSPECTOR_RS` probe (`Ffi.hs:307`), the `bin/` walk-up (`Ffi.hs:319`),
+  `IPE_FFI_INSPECTOR_RS` probe (`Ffi.hs:307`), the `bin/` walk-up (`Ffi.hs:319`),
   and the `[sky-ffi]` diagnostic prefix (`Ffi.hs:149`) mid-port would churn the
   byte-diff anchors. Cosmetic; not load-bearing for hardening.
 

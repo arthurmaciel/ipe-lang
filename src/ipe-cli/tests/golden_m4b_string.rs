@@ -16,11 +16,11 @@
 //! * `String.dropLeft 2 "héllo"` → `"llo"` — rune-based drop: drops 'h' and 'é'
 //!   (each one rune) and returns the three remaining runes.
 //!
-//! Every test is gated on `SKY_E2E=1`; without it the test returns early (the
+//! Every test is gated on `IPE_E2E=1`; without it the test returns early (the
 //! compile-output gates above it still run). Run with:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test golden_m4b_string
+//! IPE_E2E=1 cargo test golden_m4b_string
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -38,9 +38,9 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 
 /// Compile `tests/golden/<name>/Main.sky`, build the emitted Cargo project,
 /// run it, and assert its stdout matches the Go oracle cached in
-/// `expected_go.txt` / `oracle.meta`. Gated on `SKY_E2E=1`.
+/// `expected_go.txt` / `oracle.meta`. Gated on `IPE_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

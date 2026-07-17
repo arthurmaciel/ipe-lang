@@ -21,7 +21,7 @@
 //! ```
 //!
 //! to stdout `3\n`, exit 0 (hand-verified in a temp dir). The `end_to_end_*`
-//! test (gated on `SKY_E2E=1`) drives the same hand-built IR through the Rust
+//! test (gated on `IPE_E2E=1`) drives the same hand-built IR through the Rust
 //! backend, builds the emitted crate, runs it, and asserts the identical `3` —
 //! the soundness-floor regression for a value laundered through a tuple-carrying
 //! payload destructured by a tuple pattern.
@@ -218,7 +218,7 @@ fn unit_value_and_type_render() -> DResult<()> {
 /// Full spine: build the `Wrap` IR, emit, vendor the runtime, `cargo build`,
 /// run, and assert `3` — the Go-backend value for `fstOf (MkWrap (3, 4))`. The
 /// soundness-floor regression for a value laundered through a tuple-carrying
-/// payload destructured by a tuple pattern. Gated on `SKY_E2E=1`.
+/// payload destructured by a tuple pattern. Gated on `IPE_E2E=1`.
 #[test]
 fn end_to_end_ctor_tuple_field_prints_three() -> DResult<()> {
     let mut interner = Interner::new();
@@ -227,7 +227,7 @@ fn end_to_end_ctor_tuple_field_prints_three() -> DResult<()> {
 }
 
 /// Emit `prog`, vendor the runtime into a temp dir named `slot`, `cargo build`,
-/// run the binary, and assert its stdout equals `expected`. Gated on `SKY_E2E=1`
+/// run the binary, and assert its stdout equals `expected`. Gated on `IPE_E2E=1`
 /// so the default `cargo test` stays fast and offline.
 fn build_and_assert(
     interner: &Interner,
@@ -235,7 +235,7 @@ fn build_and_assert(
     slot: &str,
     expected: &str,
 ) -> DResult<()> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -292,7 +292,7 @@ fn io_bug(path: &Path, e: &std::io::Error) -> Diagnostic {
 }
 
 fn resolve_runtime() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("SKY_RUNTIME_DIR") {
+    if let Ok(dir) = std::env::var("IPE_RUNTIME_DIR") {
         let p = PathBuf::from(dir);
         if p.is_dir() {
             return Some(p);

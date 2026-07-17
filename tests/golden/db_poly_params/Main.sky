@@ -1,6 +1,6 @@
 module Main exposing (main)
 
--- T0001 regression (SKY-T0001 poly-params fix):
+-- T0001 regression (IPE-T0001 poly-params fix):
 --   `Db.exec` / `Db.query` accept `List a` (polymorphic params), so callers may
 --   pass `List Int`, `List String`, or `List SqlValue` without a type mismatch.
 --

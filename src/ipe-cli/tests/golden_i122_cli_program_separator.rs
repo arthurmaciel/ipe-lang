@@ -12,10 +12,10 @@
 //! This test asserts the CORRECT (Go-parity) glued-together behavior so
 //! a future "fix" doesn't reintroduce that divergence.
 //!
-//! Gated on `SKY_E2E=1`. Run:
+//! Gated on `IPE_E2E=1`. Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_i122_cli_program_separator
+//! IPE_E2E=1 cargo test -p skyc --test golden_i122_cli_program_separator
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -29,7 +29,7 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn cli_program_glues_consecutive_renders_matching_go_oracle() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
