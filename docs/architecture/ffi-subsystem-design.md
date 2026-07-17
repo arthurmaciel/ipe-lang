@@ -43,7 +43,7 @@ completeness > readability.**
 
 Path conventions in citations: `sky/` = Haskell generator
 (`/home/arthur/Documentos/comp/sky/src/Ipê/Build/`); `insp` = vendored inspector
-(`/home/arthur/Documentos/comp/sky-rust/tools/sky-ffi-inspect-rs/src/main.rs`);
+(`/home/arthur/Documentos/comp/sky-rust/tools/ipe-ffi-inspector/src/main.rs`);
 target seams = `/home/arthur/Documentos/comp/sky-rust/crates/`.
 
 ---
@@ -598,7 +598,7 @@ M-G  async → Task Error a (FutureExt::catch_unwind, single Task-owned reactor,
 
 ### Verdict: **YES, but only after B0.0 de-workspaces the inspector; until then it shares the workspace target/lock and is NOT disjoint.**
 
-`tools/sky-ffi-inspect-rs` has **no dependency on the ipê workspace**
+`tools/ipe-ffi-inspector` has **no dependency on the ipê workspace**
 (`sky_*`/`ipe_*`) and **no dependency on the M4 registry** (which does not
 exist). But it is **currently a member of the root `[workspace]`
 (`Cargo.toml:18`)**, so today it shares the workspace `target/` and the single
@@ -618,20 +618,20 @@ the panel.
 ### Exact disjoint task list
 
 - **B0.0 — de-workspace the inspector (BLOCKING prerequisite for all of B0).**
-  `tools/sky-ffi-inspect-rs` is currently a member of the root `[workspace]`
+  `tools/ipe-ffi-inspector` is currently a member of the root `[workspace]`
   (`Cargo.toml:18`), so it shares the workspace `target/` and the single root
   `Cargo.lock`. Two consequences make this a hard prerequisite: (a) the
   "safe-to-build-in-isolation / touches-nothing-shared / blocks-nothing" verdict
   is literally false while it is a workspace member; (b) B0.1's "vendor + commit
   `Cargo.lock`" is **impossible** while it is a member — a Cargo workspace has
   exactly one root lockfile, so the inspector cannot own its own. B0.0:
-  **remove `tools/sky-ffi-inspect-rs` from the root workspace's `members`**, give
+  **remove `tools/ipe-ffi-inspector` from the root workspace's `members`**, give
   the inspector its **own `target/`**, its **own `Cargo.lock`**, and its **own
   dir-scoped `rust-toolchain.toml`** (the nightly pin B0.1 needs). Only *after*
   B0.0 is the slice genuinely disjoint and parallel-worktree-able. **B0.0 edits
   the shared root `Cargo.toml`**, so it must run **when the primary build lane is
   idle** (it is not itself worktree-isolatable — it mutates the shared manifest).
-- **B0.1 — reproducibility pin.** Add `tools/sky-ffi-inspect-rs/rust-toolchain.toml`
+- **B0.1 — reproducibility pin.** Add `tools/ipe-ffi-inspector/rust-toolchain.toml`
   with the **nightly pin** (rustdoc JSON is nightly-only; the exact channel is
   the drift-fence anchor and the byte-diff determinism anchor). Vendor + commit
   `Cargo.lock`. Pin `serde` / `serde_json` / `tempfile` to exact versions. Add a
@@ -662,7 +662,7 @@ the panel.
   git-URL scheme/host charset at its own entry now — a testable gate independent
   of the absent M-F driver. The full https-only + host allowlist +
   rev/branch/tag mutual-exclusion belongs to the ported driver (M-F).
-- **Rename `sky-ffi-inspect-rs` → `ipe-ffi-inspect`.** **DEFER** to the
+- **Rename `ipe-ffi-inspector` → `ipe-ffi-inspect`.** **DEFER** to the
   post-completion namespace sweep — renaming the crate, the
   `IPE_FFI_INSPECTOR_RS` probe (`Ffi.hs:307`), the `bin/` walk-up (`Ffi.hs:319`),
   and the `[sky-ffi]` diagnostic prefix (`Ffi.hs:149`) mid-port would churn the

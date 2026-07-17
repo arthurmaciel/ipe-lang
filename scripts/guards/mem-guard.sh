@@ -23,7 +23,7 @@
 #
 # Watched process names (basename of comm; Linux comm truncates at 15 chars):
 #   Always-kill at PROC_MB:  cargo, rustc, cc1, cc1plus, cc, collect2, ld,
-#                            ld.lld, lld, lld-link, ipe, sky-ffi-inspect,
+#                            ld.lld, lld, lld-link, ipe, ipe-ffi-inspector,
 #                            rust-analyzer
 #   Last-resort at PANIC_MB: claude, node, ghostty (the host of *this* session —
 #                            only killed when they themselves are the runaway,
@@ -41,7 +41,7 @@ LOG="${MEM_GUARD_LOG:-/tmp/mem-guard.log}"
 DRY="${MEM_GUARD_DRY:-}"
 
 # basename(comm) regexes
-ALWAYS_KILL_RE='^(cargo|rustc|cc1|cc1plus|cc|collect2|ld|ld\.lld|lld|lld-link|ipe|sky-ffi-inspect|rust-analyzer)$'
+ALWAYS_KILL_RE='^(cargo|rustc|cc1|cc1plus|cc|collect2|ld|ld\.lld|lld|lld-link|ipe|ipe-ffi-inspector|rust-analyzer)$'
 PANIC_KILL_RE='^(claude|node|ghostty)$'
 
 log() {
