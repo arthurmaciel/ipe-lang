@@ -1,0 +1,873 @@
+//! The `ipe add` / `ipe install` / `ipe remove` driver: source gating,
+//! cache-artifact management, dynamic manifest lines, and sentinel DCE.
+//!
+//! Everything that touches an untrusted input is a parse-don't-validate
+//! newtype ([`CrateName`], [`GitSource`]) — a value that exists has already
+//! passed the gate, so no command-line or network step needs a defensive
+//! re-check. There is NO shell anywhere: the inspector invocation is a
+//! typed argv the caller hands to the `ipe_sandbox` jail — this crate
+//! stays process-capability-free; the CLI composes [`inspector_argv`] +
+//! `ipe_sandbox::run_in_bwrap_jail` + [`install_from_inspection`].
+//!
+//! The CLI owns the interactive trust confirmation; this module supplies
+//! the gate, the summary text, and the file-level operations.
+
+use std::collections::BTreeSet;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+
+use crate::diag::{Diagnostic, SourceDefect};
+use crate::naming::{WRAPPER_END_SENTINEL, WRAPPER_SENTINEL_PREFIX};
+use crate::pkginfo::PkgInfo;
+
+// ── crate-name gate ─────────────────────────────────────────────────────────
+
+/// A validated crate name (`^[A-Za-z0-9_-]+$`, non-empty) — the only form
+/// that can reach an inspector argv.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrateName(String);
+
+impl CrateName {
+    /// Validate and wrap a crate name.
+    ///
+    /// # Errors
+    ///
+    /// `IPE-F4411` when the name is empty or carries a character outside
+    /// `[A-Za-z0-9_-]` (a shell metacharacter can never reach an argv).
+    pub fn parse(s: &str) -> Result<Self, Diagnostic> {
+        let legal = !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        if legal {
+            Ok(Self(s.to_owned()))
+        } else {
+            Err(Diagnostic::SourceRejected {
+                source: s.to_owned(),
+                defect: SourceDefect::CrateNameIllegal,
+            })
+        }
+    }
+
+    /// The validated name.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+// ── git-source gate ─────────────────────────────────────────────────────────
+
+/// The raw pin flags as the CLI collects them, before the gate.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RawGitPin {
+    /// `--rev` value, when given.
+    pub rev: Option<String>,
+    /// `--branch` value, when given.
+    pub branch: Option<String>,
+    /// `--tag` value, when given.
+    pub tag: Option<String>,
+}
+
+/// A validated git revision pin — at most one of rev/branch/tag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GitPin {
+    /// `--rev <commit>`.
+    Rev(String),
+    /// `--branch <name>`.
+    Branch(String),
+    /// `--tag <name>`.
+    Tag(String),
+    /// No pin — the repository default branch.
+    Default,
+}
+
+/// The git hosts a source may name. Defaults to the public forges; the
+/// operator extends or replaces it via `IPE_FFI_GIT_HOSTS`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostAllowlist(Vec<String>);
+
+impl Default for HostAllowlist {
+    fn default() -> Self {
+        Self(vec![
+            "github.com".to_owned(),
+            "gitlab.com".to_owned(),
+            "codeberg.org".to_owned(),
+        ])
+    }
+}
+
+impl HostAllowlist {
+    /// Parse a comma-separated override (the `IPE_FFI_GIT_HOSTS` value);
+    /// empty/whitespace-only input keeps the default list.
+    #[must_use]
+    pub fn from_override(raw: &str) -> Self {
+        let hosts: Vec<String> = raw
+            .split(',')
+            .map(str::trim)
+            .filter(|h| !h.is_empty())
+            .map(str::to_owned)
+            .collect();
+        if hosts.is_empty() {
+            Self::default()
+        } else {
+            Self(hosts)
+        }
+    }
+
+    /// The allowlisted hosts.
+    #[must_use]
+    pub fn hosts(&self) -> &[String] {
+        &self.0
+    }
+}
+
+/// A validated git source. A value of this type is, by existence, https,
+/// host-charset-clean, host-allowlisted, and carries at most one pin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitSource {
+    url: String,
+    host: String,
+    pin: GitPin,
+}
+
+impl GitSource {
+    /// Run the full gate over a raw URL + raw pin flags.
+    ///
+    /// # Errors
+    ///
+    /// `IPE-F4411` naming the first broken rule; nothing has touched a
+    /// command or the network when this returns.
+    pub fn parse(
+        raw_url: &str,
+        pin: &RawGitPin,
+        hosts: &HostAllowlist,
+    ) -> Result<Self, Diagnostic> {
+        let reject = |defect: SourceDefect| Diagnostic::SourceRejected {
+            source: raw_url.to_owned(),
+            defect,
+        };
+        let Some(rest) = raw_url.strip_prefix("https://") else {
+            return Err(reject(SourceDefect::SchemeNotHttps));
+        };
+        let host = rest.split(['/', '?', '#']).next().unwrap_or("").to_owned();
+        if host.is_empty() {
+            return Err(reject(SourceDefect::HostMissing));
+        }
+        let host_clean = host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+        if !host_clean {
+            return Err(reject(SourceDefect::HostCharsetIllegal { host }));
+        }
+        if !hosts.0.iter().any(|h| h == &host) {
+            return Err(reject(SourceDefect::HostNotAllowlisted {
+                host,
+                allowed: hosts.0.clone(),
+            }));
+        }
+        if raw_url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            return Err(reject(SourceDefect::HostCharsetIllegal { host }));
+        }
+        let present: Vec<&'static str> = [
+            ("rev", pin.rev.is_some()),
+            ("branch", pin.branch.is_some()),
+            ("tag", pin.tag.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(n, set)| set.then_some(n))
+        .collect();
+        if present.len() > 1 {
+            return Err(reject(SourceDefect::MultiplePins { present }));
+        }
+        let gate_pin = |v: &str| -> Result<String, Diagnostic> {
+            let legal = !v.is_empty()
+                && !v.starts_with('-')
+                && !v.chars().any(|c| c.is_whitespace() || c.is_control());
+            if legal {
+                Ok(v.to_owned())
+            } else {
+                Err(reject(SourceDefect::PinIllegal { got: v.to_owned() }))
+            }
+        };
+        let pin = if let Some(r) = &pin.rev {
+            GitPin::Rev(gate_pin(r)?)
+        } else if let Some(b) = &pin.branch {
+            GitPin::Branch(gate_pin(b)?)
+        } else if let Some(t) = &pin.tag {
+            GitPin::Tag(gate_pin(t)?)
+        } else {
+            GitPin::Default
+        };
+        Ok(Self {
+            url: raw_url.to_owned(),
+            host,
+            pin,
+        })
+    }
+
+    /// The validated URL.
+    #[must_use]
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    /// The validated host.
+    #[must_use]
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    /// The validated pin.
+    #[must_use]
+    pub const fn pin(&self) -> &GitPin {
+        &self.pin
+    }
+}
+
+// ── inspector invocation (typed argv, no shell) ─────────────────────────────
+
+/// The inspector argv for one crate. Every element originates from a
+/// validated newtype, so the argv is injection-free by construction; the
+/// caller wraps it in the `ipe_sandbox` jail.
+#[must_use]
+pub fn inspector_argv(
+    krate: &CrateName,
+    features: &[String],
+    git: Option<&GitSource>,
+) -> Vec<OsString> {
+    let mut argv: Vec<OsString> = Vec::new();
+    if !features.is_empty() {
+        argv.push("--features".into());
+        argv.push(features.join(",").into());
+    }
+    if let Some(g) = git {
+        argv.push("--git".into());
+        argv.push(g.url().into());
+        match g.pin() {
+            GitPin::Rev(r) => {
+                argv.push("--rev".into());
+                argv.push(r.into());
+            }
+            GitPin::Branch(b) => {
+                argv.push("--branch".into());
+                argv.push(b.into());
+            }
+            GitPin::Tag(t) => {
+                argv.push("--tag".into());
+                argv.push(t.into());
+            }
+            GitPin::Default => {}
+        }
+    }
+    argv.push(krate.as_str().into());
+    argv
+}
+
+/// The trust-decision summary printed BEFORE any fetch: what will be
+/// compiled, from where, and how much of it.
+#[must_use]
+pub fn trust_summary(
+    krate: &CrateName,
+    version: &str,
+    git: Option<&GitSource>,
+    transitive_count: usize,
+) -> String {
+    use std::fmt::Write;
+    let mut out = format!(
+        "About to fetch and COMPILE untrusted code:\n  crate:      {}\n",
+        krate.as_str()
+    );
+    // Writing into a String is infallible.
+    if !version.is_empty() {
+        let _ = writeln!(out, "  version:    {version}");
+    }
+    if let Some(g) = git {
+        let _ = writeln!(out, "  git source: {}", g.url());
+    }
+    let _ = write!(
+        out,
+        "  transitive dependencies to compile: {transitive_count}\n\
+         Compiling runs the crate's build scripts and proc-macros (inside the\n\
+         isolation jail). Continue?"
+    );
+    out
+}
+
+// ── project-local cache ─────────────────────────────────────────────────────
+
+/// The filesystem slug for a crate's cache artifacts.
+#[must_use]
+pub fn slugify(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// The four artifact paths for one bound crate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactPaths {
+    /// The `.ipei` type-environment seed.
+    pub ipei: PathBuf,
+    /// The `kernel.json` call registry.
+    pub kernel_json: PathBuf,
+    /// The `_bindings.rs` wrapper module.
+    pub bindings: PathBuf,
+    /// The `coverage.md` over-drop report.
+    pub coverage: PathBuf,
+}
+
+/// The project-local FFI artifact cache (`<project>/.ipe/cache/ffi/rust`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FfiCache {
+    root: PathBuf,
+}
+
+impl FfiCache {
+    /// The cache under a project root.
+    #[must_use]
+    pub fn at_project_root(project_root: &Path) -> Self {
+        Self {
+            root: project_root.join(".ipe/cache/ffi/rust"),
+        }
+    }
+
+    /// The cache directory itself.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// The artifact paths for a slug.
+    #[must_use]
+    pub fn artifact_paths(&self, slug: &str) -> ArtifactPaths {
+        ArtifactPaths {
+            ipei: self.root.join(format!("{slug}.ipei")),
+            kernel_json: self.root.join(format!("{slug}.kernel.json")),
+            bindings: self.root.join(format!("{slug}_bindings.rs")),
+            coverage: self.root.join(format!("{slug}.coverage.md")),
+        }
+    }
+
+    /// Emit and write all four artifacts for a validated package.
+    ///
+    /// # Errors
+    ///
+    /// `IPE-F4412` naming the first path that could not be written.
+    pub fn write_package(&self, pkg: &PkgInfo) -> Result<ArtifactPaths, Diagnostic> {
+        let io_err = |path: &Path, e: &std::io::Error| Diagnostic::ArtifactIo {
+            path: path.to_string_lossy().into_owned(),
+            detail: e.to_string(),
+        };
+        std::fs::create_dir_all(&self.root).map_err(|e| io_err(&self.root, &e))?;
+        let paths = self.artifact_paths(&slugify(pkg.name()));
+        let writes: [(&Path, String); 4] = [
+            (&paths.ipei, crate::emit::emit_ipei(pkg)),
+            (&paths.kernel_json, crate::emit::emit_kernel_json(pkg)),
+            (&paths.bindings, crate::bindings::emit_bindings(pkg)),
+            (&paths.coverage, emit_coverage(pkg)),
+        ];
+        for (path, contents) in &writes {
+            std::fs::write(path, contents).map_err(|e| io_err(path, &e))?;
+        }
+        Ok(paths)
+    }
+
+    /// Delete a slug's four artifacts (`ipe remove`). Already-absent files
+    /// are fine — removal is idempotent.
+    ///
+    /// # Errors
+    ///
+    /// `IPE-F4412` naming the first path that exists but cannot be deleted.
+    pub fn remove_package(&self, slug: &str) -> Result<(), Diagnostic> {
+        let paths = self.artifact_paths(slug);
+        for path in [
+            &paths.ipei,
+            &paths.kernel_json,
+            &paths.bindings,
+            &paths.coverage,
+        ] {
+            match std::fs::remove_file(path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(Diagnostic::ArtifactIo {
+                        path: path.to_string_lossy().into_owned(),
+                        detail: e.to_string(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Decode one inspection document and write its artifacts — the shared
+/// tail of `ipe add` and `ipe install`.
+///
+/// A package whose inspector error channel is non-empty is refused: an
+/// unusable inspection must never seed a cache.
+///
+/// # Errors
+///
+/// The decode diagnostic, the inspector's fail-closed refusal, or an
+/// `IPE-F4412` write failure.
+pub fn install_from_inspection(
+    cache: &FfiCache,
+    inspection_json: &str,
+) -> Result<(PkgInfo, ArtifactPaths), Diagnostic> {
+    let pkg = PkgInfo::decode_json(inspection_json)?;
+    if !pkg.errors().is_empty() {
+        return Err(Diagnostic::WireMalformed {
+            context: format!("crate `{}`", pkg.name()),
+            defect: crate::diag::WireDefect::Json {
+                detail: format!("the inspector failed closed: {}", pkg.errors().join("; ")),
+            },
+        });
+    }
+    let paths = cache.write_package(&pkg)?;
+    Ok((pkg, paths))
+}
+
+// ── coverage report (the over-drop keystone made visible) ───────────────────
+
+/// The `coverage.md` artifact: what was bound, what was refused, and why.
+#[must_use]
+pub fn emit_coverage(pkg: &PkgInfo) -> String {
+    use std::fmt::Write;
+    let mut out = format!(
+        "# FFI coverage — `{}` {}\n\nBound functions: {}\n",
+        pkg.name(),
+        pkg.version(),
+        pkg.fns().len()
+    );
+    if pkg.dropped().is_empty() {
+        out.push_str("Dropped bindings: none\n");
+    } else {
+        // Writing into a String is infallible.
+        let _ = writeln!(out, "Dropped bindings: {}\n", pkg.dropped().len());
+        out.push_str("| Reason |\n|---|\n");
+        for d in pkg.dropped() {
+            let _ = writeln!(out, "| {d} |");
+        }
+    }
+    if !pkg.notes().is_empty() {
+        out.push_str("\n## Inspector notes\n\n");
+        for note in pkg.notes() {
+            let _ = writeln!(out, "- {note}");
+        }
+    }
+    out
+}
+
+// ── dynamic manifest lines ──────────────────────────────────────────────────
+
+/// The `[dependencies]` lines a program using this crate's bindings needs.
+///
+/// One exact pinned version per resolved crate — never a guessed name,
+/// never `"*"` — with the effective feature set on the primary crate.
+///
+/// # Errors
+///
+/// A dep with no resolved version fails loudly (an unpinned line would be
+/// an under-bind waiting to happen).
+pub fn cargo_dep_lines(pkg: &PkgInfo) -> Result<Vec<String>, Diagnostic> {
+    let missing_version = |name: &str| Diagnostic::WireMalformed {
+        context: format!("transitive dep `{name}`"),
+        defect: crate::diag::WireDefect::Json {
+            detail: "missing resolved version (an unpinned dependency line is forbidden)"
+                .to_owned(),
+        },
+    };
+    let mut lines = Vec::new();
+    if pkg.transitive_deps().is_empty() {
+        // No probe metadata: pin the primary crate from the package header.
+        if pkg.version().is_empty() {
+            return Err(missing_version(pkg.name()));
+        }
+        let name = crate::bindings::pkg_to_crate_import(pkg.pkg_path()).replace('_', "-");
+        lines.push(render_dep_line(&name, pkg.version(), pkg.features()));
+        return Ok(lines);
+    }
+    for dep in pkg.transitive_deps() {
+        if dep.version.is_empty() {
+            return Err(missing_version(&dep.name));
+        }
+        // The primary crate (the lib ident matching the package) carries the
+        // effective feature set rustdoc succeeded with.
+        let features = if dep.ident.as_str() == pkg.name() {
+            pkg.features()
+        } else {
+            &[]
+        };
+        lines.push(render_dep_line(&dep.name, &dep.version, features));
+    }
+    lines.sort();
+    Ok(lines)
+}
+
+fn render_dep_line(name: &str, version: &str, features: &[String]) -> String {
+    if features.is_empty() {
+        format!("{name} = \"={version}\"")
+    } else {
+        let quoted: Vec<String> = features.iter().map(|f| format!("\"{f}\"")).collect();
+        format!(
+            "{name} = {{ version = \"={version}\", features = [{}] }}",
+            quoted.join(", ")
+        )
+    }
+}
+
+// ── S4 sentinel DCE ─────────────────────────────────────────────────────────
+
+/// Text-slice a `_bindings.rs` on the wrapper sentinels, keeping preamble
+/// unconditionally and only the REACHED wrapper regions.
+///
+/// No Rust is parsed. Conservative-keep: anything outside a well-formed
+/// BEGIN/END pair (including a malformed region) is kept, so the shake can
+/// never under-keep (an under-bind); over-keep is dead code cargo strips.
+#[must_use]
+pub fn shake_bindings(source: &str, reached: &BTreeSet<String>) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut skipping = false;
+    for line in source.lines() {
+        if let Some(ref_name) = line.trim_end().strip_prefix(WRAPPER_SENTINEL_PREFIX) {
+            skipping = !reached.contains(ref_name);
+        }
+        let is_end = line.trim_end() == WRAPPER_END_SENTINEL;
+        if !skipping {
+            out.push_str(line);
+            out.push('\n');
+        }
+        if is_end {
+            skipping = false;
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── source gates ────────────────────────────────────────────────────
+
+    #[test]
+    fn crate_name_gate_kills_shell_shapes() {
+        assert!(CrateName::parse("semver").is_ok());
+        assert!(CrateName::parse("serde-json").is_ok());
+        assert!(CrateName::parse("box_1").is_ok());
+        for bad in ["", "a b", "a;rm -rf /", "a$(x)", "名前", "a/b"] {
+            assert!(
+                matches!(
+                    CrateName::parse(bad),
+                    Err(Diagnostic::SourceRejected {
+                        defect: SourceDefect::CrateNameIllegal,
+                        ..
+                    })
+                ),
+                "{bad:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn git_gate_enforces_scheme_host_allowlist_and_single_pin() {
+        let hosts = HostAllowlist::default();
+        let none = RawGitPin::default();
+        let ok =
+            GitSource::parse("https://github.com/acme/mylib", &none, &hosts).expect("accepted");
+        assert_eq!(ok.host(), "github.com");
+        assert_eq!(*ok.pin(), GitPin::Default);
+
+        let http = GitSource::parse("http://github.com/acme/mylib", &none, &hosts);
+        assert!(matches!(
+            http,
+            Err(Diagnostic::SourceRejected {
+                defect: SourceDefect::SchemeNotHttps,
+                ..
+            })
+        ));
+        let file = GitSource::parse("file:///etc/passwd", &none, &hosts);
+        assert!(matches!(
+            file,
+            Err(Diagnostic::SourceRejected {
+                defect: SourceDefect::SchemeNotHttps,
+                ..
+            })
+        ));
+        let evil_host = GitSource::parse("https://evil$host/x", &none, &hosts);
+        assert!(matches!(
+            evil_host,
+            Err(Diagnostic::SourceRejected {
+                defect: SourceDefect::HostCharsetIllegal { .. },
+                ..
+            })
+        ));
+        let off_list = GitSource::parse("https://example.com/acme/mylib", &none, &hosts);
+        assert!(matches!(
+            off_list,
+            Err(Diagnostic::SourceRejected {
+                defect: SourceDefect::HostNotAllowlisted { .. },
+                ..
+            })
+        ));
+        let two_pins = RawGitPin {
+            rev: Some("abc".into()),
+            tag: Some("v1".into()),
+            ..RawGitPin::default()
+        };
+        let multi = GitSource::parse("https://github.com/acme/mylib", &two_pins, &hosts);
+        assert!(matches!(
+            multi,
+            Err(Diagnostic::SourceRejected {
+                defect: SourceDefect::MultiplePins { present },
+                ..
+            }) if present == vec!["rev", "tag"]
+        ));
+        // An option-shaped pin value can never reach an argv.
+        let opt_pin = RawGitPin {
+            rev: Some("--upload-pack=/bin/sh".into()),
+            ..RawGitPin::default()
+        };
+        let inj = GitSource::parse("https://github.com/acme/mylib", &opt_pin, &hosts);
+        assert!(matches!(
+            inj,
+            Err(Diagnostic::SourceRejected {
+                defect: SourceDefect::PinIllegal { .. },
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn host_allowlist_override_replaces_the_default() {
+        let hosts = HostAllowlist::from_override("example.com, github.com");
+        assert_eq!(hosts.hosts(), ["example.com", "github.com"]);
+        let ok = GitSource::parse(
+            "https://example.com/acme/mylib",
+            &RawGitPin::default(),
+            &hosts,
+        );
+        assert!(ok.is_ok());
+        // Empty override keeps the default.
+        assert_eq!(HostAllowlist::from_override("  "), HostAllowlist::default());
+    }
+
+    #[test]
+    fn inspector_argv_is_typed_and_shell_free() {
+        let krate = CrateName::parse("semver").expect("legal");
+        let hosts = HostAllowlist::default();
+        let git = GitSource::parse(
+            "https://github.com/acme/semver",
+            &RawGitPin {
+                tag: Some("v1.0.26".into()),
+                ..RawGitPin::default()
+            },
+            &hosts,
+        )
+        .expect("accepted");
+        let argv = inspector_argv(&krate, &["std".to_owned()], Some(&git));
+        let rendered: Vec<String> = argv
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                "--features",
+                "std",
+                "--git",
+                "https://github.com/acme/semver",
+                "--tag",
+                "v1.0.26",
+                "semver"
+            ]
+        );
+    }
+
+    // ── cache + artifacts ───────────────────────────────────────────────
+
+    fn semver_pkg() -> PkgInfo {
+        PkgInfo::decode_json(
+            &json!({
+                "pkg": "semver",
+                "name": "semver",
+                "version": "1.0.26",
+                "functions": [
+                    {
+                        "name": "parse",
+                        "params": [{"name": "text", "type": "String", "ipeType": "String", "rustType": "&str"}],
+                        "results": [{"name": "", "type": "Result Error Version", "rustType": "Result<Version, Error>"}],
+                        "effect": "fallible"
+                    },
+                    {
+                        "name": "confused",
+                        "effect": "pure",
+                        "isField": true,
+                        "isEnumCtor": true,
+                        "enumVariant": "V",
+                        "enumKind": "unit"
+                    }
+                ],
+                "errors": [],
+                "notes": ["facade guidance"],
+                "transitiveDeps": [
+                    {"ident": "semver", "name": "semver", "version": "1.0.26"},
+                    {"ident": "serde_json", "name": "serde-json", "version": "1.0.145"}
+                ],
+                "features": ["std"]
+            })
+            .to_string(),
+        )
+        .expect("decodes")
+    }
+
+    #[test]
+    fn cache_round_trip_writes_and_removes_the_four_artifacts() {
+        let tmp = std::env::temp_dir().join(format!("ipe-ffi-cache-test-{}", std::process::id()));
+        let cache = FfiCache::at_project_root(&tmp);
+        let pkg = semver_pkg();
+        let paths = cache.write_package(&pkg).expect("writes");
+        for p in [
+            &paths.ipei,
+            &paths.kernel_json,
+            &paths.bindings,
+            &paths.coverage,
+        ] {
+            assert!(p.is_file(), "{} must exist", p.display());
+        }
+        let ipei = std::fs::read_to_string(&paths.ipei).expect("readable");
+        assert!(ipei.starts_with("module Rust.Semver"));
+        let coverage = std::fs::read_to_string(&paths.coverage).expect("readable");
+        assert!(coverage.contains("Bound functions: 1"), "{coverage}");
+        assert!(coverage.contains("Dropped bindings: 1"), "{coverage}");
+        assert!(coverage.contains("contradictory shape flags"), "{coverage}");
+        assert!(coverage.contains("facade guidance"), "{coverage}");
+        cache.remove_package("semver").expect("removes");
+        assert!(!paths.ipei.exists());
+        // Idempotent: removing again is fine.
+        cache.remove_package("semver").expect("idempotent");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn install_refuses_a_failed_closed_inspection() {
+        let tmp = std::env::temp_dir().join(format!("ipe-ffi-refuse-test-{}", std::process::id()));
+        let cache = FfiCache::at_project_root(&tmp);
+        let failed = json!({
+            "pkg": "semver",
+            "name": "semver",
+            "functions": [],
+            "errors": ["rustdoc failed"]
+        })
+        .to_string();
+        let r = install_from_inspection(&cache, &failed);
+        assert!(matches!(r, Err(Diagnostic::WireMalformed { .. })), "{r:?}");
+        assert!(
+            !cache.root().exists(),
+            "a refused install must write nothing"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn slug_is_lowercase_alnum_underscore() {
+        assert_eq!(slugify("semver"), "semver");
+        assert_eq!(slugify("Serde-Json"), "serde_json");
+    }
+
+    // ── manifest lines ──────────────────────────────────────────────────
+
+    #[test]
+    fn dep_lines_are_pinned_exact_with_primary_features() {
+        let lines = cargo_dep_lines(&semver_pkg()).expect("renders");
+        assert_eq!(
+            lines,
+            vec![
+                "semver = { version = \"=1.0.26\", features = [\"std\"] }",
+                "serde-json = \"=1.0.145\"",
+            ]
+        );
+        // No wildcard anywhere, ever.
+        assert!(lines.iter().all(|l| !l.contains('*')));
+    }
+
+    #[test]
+    fn dep_line_without_a_resolved_version_fails_loudly() {
+        let pkg = PkgInfo::decode_json(
+            &json!({
+                "pkg": "semver",
+                "name": "semver",
+                "functions": [],
+                "errors": [],
+                "transitiveDeps": [{"ident": "semver", "name": "semver", "version": ""}]
+            })
+            .to_string(),
+        )
+        .expect("decodes");
+        assert!(cargo_dep_lines(&pkg).is_err());
+    }
+
+    #[test]
+    fn primary_line_falls_back_to_the_package_header_when_no_probe_data() {
+        let pkg = PkgInfo::decode_json(
+            &json!({
+                "pkg": "serde_json",
+                "name": "serde_json",
+                "version": "1.0.145",
+                "functions": [],
+                "errors": []
+            })
+            .to_string(),
+        )
+        .expect("decodes");
+        assert_eq!(
+            cargo_dep_lines(&pkg).expect("renders"),
+            vec!["serde-json = \"=1.0.145\""]
+        );
+    }
+
+    // ── sentinel DCE ────────────────────────────────────────────────────
+
+    #[test]
+    fn shake_keeps_preamble_and_reached_regions_only() {
+        let pkg = semver_pkg();
+        let full = crate::bindings::emit_bindings(&pkg);
+        let reached = BTreeSet::from(["parse".to_owned()]);
+        let shaken = shake_bindings(&full, &reached);
+        // Preamble survives (fence + uses).
+        assert!(shaken.contains("compile_error!"), "{shaken}");
+        assert!(shaken.contains("use crate::*;"), "{shaken}");
+        // The reached wrapper survives with its sentinels.
+        assert!(
+            shaken.contains("// IPE-FFI-WRAPPER BEGIN parse"),
+            "{shaken}"
+        );
+        assert!(shaken.contains("pub fn semver_parse"), "{shaken}");
+        // An unreached wrapper is gone.
+        let none: BTreeSet<String> = BTreeSet::new();
+        let empty = shake_bindings(&full, &none);
+        assert!(!empty.contains("pub fn semver_parse"), "{empty}");
+        assert!(empty.contains("use crate::*;"), "{empty}");
+        // Shaking with everything reached is the identity on regions.
+        let all = BTreeSet::from(["parse".to_owned()]);
+        assert_eq!(shake_bindings(&full, &all), shaken);
+    }
+
+    #[test]
+    fn trust_summary_names_the_compile_decision() {
+        let krate = CrateName::parse("semver").expect("legal");
+        let s = trust_summary(&krate, "1.0.26", None, 12);
+        assert!(s.contains("semver"), "{s}");
+        assert!(s.contains("1.0.26"), "{s}");
+        assert!(s.contains("12"), "{s}");
+        assert!(s.contains("COMPILE"), "{s}");
+    }
+}
