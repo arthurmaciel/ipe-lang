@@ -94,6 +94,19 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::Unit => "()".to_owned(),
         IrType::Task(inner) => format!("IpeTask<{}>", render_type(ctx, inner, generics)?),
         IrType::Enum { home, name, args } => {
+            // A foreign opaque FFI type renders as its REAL Rust path — its
+            // placeholder union is never emitted as an enum ([`ipe_lower`]
+            // skips `Rust.*`-home unions), so the bare enum name would dangle.
+            // Opaque foreign types are non-generic by construction.
+            if ctx.is_foreign_interface_home(home) {
+                if !args.is_empty() {
+                    return Err(Diagnostic::CompilerBug {
+                        where_: "ipe_backend_rust::render_type",
+                        detail: "foreign opaque FFI type rendered with type arguments".to_owned(),
+                    });
+                }
+                return ctx.foreign_type_path(home, *name);
+            }
             // Special-case builtin Http.Stream ADTs that are NOT registered as
             // synthetic `EnumDef`s but appear in user type annotations.
             //

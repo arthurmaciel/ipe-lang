@@ -616,6 +616,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
 ///
 /// Propagates any [`Diagnostic`] from the `Cargo.toml`/runtime-module
 /// construction (e.g. a drifted server/db/tui/webview manifest anchor).
+#[allow(clippy::too_many_lines)] // one linear manifest/runtime assembly pass
 fn assemble_project_files(
     ctx: &EmitCtx,
     rust_sources: Vec<(RelPath, String)>,
@@ -697,6 +698,13 @@ fn assemble_project_files(
     // `lettre` only when the program uses `Email.send`.
     let cargo_toml = if ctx.uses_email {
         email_cargo_toml(&cargo_toml)?
+    } else {
+        cargo_toml
+    };
+    // Foreign-crate FFI: append the bound crates' pinned [dependencies] lines
+    // (exact versions + effective feature sets, pre-merged by the driver).
+    let cargo_toml = if ctx.uses_ffi {
+        ffi_cargo_toml(&cargo_toml, ctx)?
     } else {
         cargo_toml
     };
@@ -793,6 +801,35 @@ fn assemble_project_files(
         RelPath::new("src/ipe_runtime/config.rs")?,
         runtime_config_rs,
     );
+    // Foreign-crate FFI: write the wrapper module and declare it from the
+    // crate root. File-count-agnostic (shared by the single-file and split
+    // assembly paths), so the two stay byte-identical.
+    if ctx.uses_ffi {
+        let ffi = ctx.ffi.as_ref().ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::assemble_project_files",
+            detail: "program lowers foreign-wrapper calls but the driver supplied no FFI \
+                     emission inputs (RustBackend::with_ffi)"
+                .to_owned(),
+        })?;
+        // S4 sentinel DCE (design D7): keep only the wrapper regions the
+        // program REACHES. Reachability is read straight off the emitted
+        // source — every `Callee::Ffi` renders as `crate::ffi::<ident>`, so a
+        // scan of the already-emitted files is exhaustive by construction.
+        // This is what lets a program bind a 76k-symbol crate yet compile only
+        // the handful of wrappers it calls — and keeps a generator gap in some
+        // UNUSED wrapper (an exotic lifetime/borrow shape the emitter renders
+        // wrong) from breaking a build that never calls it.
+        let reached = reached_ffi_idents(&files);
+        let shaken = shake_ffi_by_fn_ident(&ffi.bindings_source, &reached);
+        files.insert(RelPath::new("src/ffi.rs")?, shaken);
+        let main = files
+            .get_mut("src/main.rs")
+            .ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "ipe_backend_rust::project::assemble_project_files",
+                detail: "no src/main.rs in the assembled file set".to_owned(),
+            })?;
+        main.push_str("\nmod ffi;\n");
+    }
     Ok(EmittedProject { files, cargo_toml })
 }
 
@@ -1682,6 +1719,139 @@ fn email_cargo_toml(base: &str) -> DResult<String> {
     let mut result = String::with_capacity(base.len() + lettre_dep.len());
     result.push_str(base.get(..anchor_pos).unwrap_or(""));
     result.push_str(&lettre_dep);
+    result.push_str(base.get(anchor_pos..).unwrap_or(""));
+    Ok(result)
+}
+
+/// The `crate::ffi::<ident>` wrapper identifiers referenced anywhere in the
+/// emitted Rust sources — the program's reached FFI wrapper set.
+///
+/// Every `ipe_ir::Callee::Ffi` lowers to a `crate::ffi::<ident>(` call
+/// (`emit_expr::callee_name`), so scanning the emitted text is an exhaustive,
+/// parse-free reachability oracle.
+fn reached_ffi_idents(files: &BTreeMap<RelPath, String>) -> std::collections::BTreeSet<String> {
+    const MARK: &str = "crate::ffi::";
+    let mut out = std::collections::BTreeSet::new();
+    for text in files.values() {
+        let mut rest: &str = text;
+        while let Some(pos) = rest.find(MARK) {
+            let after = &rest[pos + MARK.len()..];
+            let ident: String = after
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !ident.is_empty() {
+                out.insert(ident);
+            }
+            rest = after;
+        }
+    }
+    out
+}
+
+/// The FFI wrapper-module sentinel bounds (mirror of `ipe_ffi::naming`; the
+/// backend may not depend on `ipe_ffi`, so the wire-format literals are
+/// re-stated here — a pure text protocol, stable by contract).
+const FFI_WRAPPER_BEGIN: &str = "// IPE-FFI-WRAPPER BEGIN ";
+const FFI_WRAPPER_END: &str = "// IPE-FFI-WRAPPER END";
+
+/// Text-slice the wrapper module on its BEGIN/END sentinels, keeping preamble
+/// unconditionally and only the regions whose `pub fn <ident>(` is reached.
+///
+/// Conservative-keep: a region whose `pub fn` ident cannot be read (a shape
+/// the scan does not recognise) is KEPT, so the shake never drops a wrapper
+/// the program calls (an under-bind); over-keep is dead code cargo strips.
+fn shake_ffi_by_fn_ident(
+    source: &str,
+    reached: &std::collections::BTreeSet<String>,
+) -> String {
+    let mut out = String::with_capacity(source.len());
+    // Buffer one wrapper region until its `pub fn` ident is known, then
+    // decide keep/drop for the whole region.
+    let mut region: Option<(String, bool)> = None; // (buffered text, reached?)
+    for line in source.lines() {
+        if line.trim_end().starts_with(FFI_WRAPPER_BEGIN) {
+            region = Some((String::new(), false));
+        }
+        if let Some((buf, keep)) = region.as_mut() {
+            buf.push_str(line);
+            buf.push('\n');
+            if let Some(rest) = line.trim_start().strip_prefix("pub fn ") {
+                let ident: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                // An ident we cannot read is conservatively kept.
+                *keep = ident.is_empty() || reached.contains(&ident);
+            }
+            if line.trim_end() == FFI_WRAPPER_END {
+                if *keep {
+                    out.push_str(buf);
+                }
+                region = None;
+            }
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    // A dangling unterminated region (malformed) is kept whole.
+    if let Some((buf, _)) = region {
+        out.push_str(&buf);
+    }
+    out
+}
+
+/// Append the bound FFI crates' pinned `[dependencies]` lines (driver-merged,
+/// exact versions, effective feature sets) before the `[profile.dev]` anchor.
+///
+/// # Errors
+///
+/// [`Diagnostic::CompilerBug`] when the FFI emission inputs are absent while
+/// the program uses FFI, or when the manifest anchor drifted.
+fn ffi_cargo_toml(base: &str, ctx: &EmitCtx) -> DResult<String> {
+    const PROFILE_ANCHOR: &str = "[profile.dev]";
+    let ffi = ctx.ffi.as_ref().ok_or_else(|| Diagnostic::CompilerBug {
+        where_: "ipe_backend_rust::project::ffi_cargo_toml",
+        detail: "program lowers foreign-wrapper calls but the driver supplied no FFI \
+                 emission inputs (RustBackend::with_ffi)"
+            .to_owned(),
+    })?;
+    // Keys the base manifest already declares under a `[...dependencies]`
+    // table: re-declaring one (uuid's transitive `futures-util`, say) is a
+    // hard `cargo` duplicate-key error, so those lines are skipped — the
+    // base pin governs and cargo's resolver unifies the shared graph.
+    let mut base_keys: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    let mut in_deps = false;
+    for raw in base.lines() {
+        let line = raw.trim();
+        if line.starts_with('[') {
+            in_deps = line.contains("dependencies");
+            continue;
+        }
+        if in_deps && let Some((name, _)) = line.split_once('=') {
+            base_keys.insert(name.trim());
+        }
+    }
+    let mut dep_block = String::new();
+    for line in &ffi.dep_lines {
+        let key = line.split('=').next().unwrap_or(line).trim();
+        if base_keys.contains(key) {
+            continue;
+        }
+        dep_block.push_str(line);
+        dep_block.push('\n');
+    }
+    dep_block.push('\n');
+    let anchor_pos = base
+        .find(PROFILE_ANCHOR)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::ffi_cargo_toml",
+            detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
+        })?;
+    let mut result = String::with_capacity(base.len() + dep_block.len());
+    result.push_str(base.get(..anchor_pos).unwrap_or(""));
+    result.push_str(&dep_block);
     result.push_str(base.get(anchor_pos..).unwrap_or(""));
     Ok(result)
 }

@@ -55,6 +55,26 @@ pub enum DbDriver {
     Postgres,
 }
 
+/// The consumer-side FFI emission inputs.
+///
+/// Assembled by the driver from the project's installed FFI artifact cache
+/// and threaded in via [`RustBackend::with_ffi`]. Ignored entirely when the
+/// program lowers no [`ipe_ir::Callee::Ffi`] call (`uses_ffi` stays false).
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct FfiEmit {
+    /// `"Rust.<Crate>.<TypeName>"` → absolute Rust path
+    /// (`"Rust.Semver.Version"` → `"::semver::Version"`) for every opaque
+    /// foreign type an installed interface module declares.
+    pub foreign_types: BTreeMap<String, String>,
+    /// Pinned `[dependencies]` lines for the bound crates (exact versions +
+    /// effective feature sets — never `"*"`), pre-merged and de-duplicated by
+    /// the driver.
+    pub dep_lines: Vec<String>,
+    /// The full `src/ffi.rs` content: every installed crate's wrapper module
+    /// (`pub mod <slug> { … }` + `pub use <slug>::*;`).
+    pub bindings_source: String,
+}
+
 /// The Rust code-generation backend.
 ///
 /// Holds a reference to the [`Interner`] used to build the program, so it can
@@ -63,6 +83,7 @@ pub enum DbDriver {
 pub struct RustBackend<'a> {
     interner: &'a Interner,
     db_driver: DbDriver,
+    ffi: Option<FfiEmit>,
 }
 
 impl<'a> RustBackend<'a> {
@@ -74,6 +95,7 @@ impl<'a> RustBackend<'a> {
         Self {
             interner,
             db_driver: DbDriver::Sqlite,
+            ffi: None,
         }
     }
 
@@ -82,6 +104,15 @@ impl<'a> RustBackend<'a> {
     #[must_use]
     pub const fn with_db_driver(mut self, driver: DbDriver) -> Self {
         self.db_driver = driver;
+        self
+    }
+
+    /// Supply the consumer-side FFI emission inputs (from the project's
+    /// installed FFI artifact cache). No-op on programs that lower no
+    /// foreign-wrapper call.
+    #[must_use]
+    pub fn with_ffi(mut self, ffi: Option<FfiEmit>) -> Self {
+        self.ffi = ffi;
         self
     }
 
@@ -96,7 +127,7 @@ impl<'a> RustBackend<'a> {
     /// Propagates any [`Diagnostic`] from [`EmitCtx::build`] or
     /// [`project::emit_spine`].
     pub fn emit_spine(&self, program: &Program) -> DResult<String> {
-        let ctx = EmitCtx::build(self.interner, program, self.db_driver)?;
+        let ctx = EmitCtx::build(self.interner, program, self.db_driver, self.ffi.clone())?;
         project::emit_spine(&ctx, program)
     }
 
@@ -110,7 +141,7 @@ impl<'a> RustBackend<'a> {
     /// Propagates any [`Diagnostic`] from [`EmitCtx::build`] or
     /// [`project::emit_module_file`].
     pub fn emit_module_file(&self, program: &Program, home: &ModPath) -> DResult<String> {
-        let ctx = EmitCtx::build(self.interner, program, self.db_driver)?;
+        let ctx = EmitCtx::build(self.interner, program, self.db_driver, self.ffi.clone())?;
         project::emit_module_file(
             &ctx,
             program,
@@ -139,7 +170,7 @@ impl<'a> RustBackend<'a> {
         spine_text: &str,
         module_texts: &BTreeMap<ModPath, String>,
     ) -> DResult<EmittedProject> {
-        let ctx = EmitCtx::build(self.interner, program, self.db_driver)?;
+        let ctx = EmitCtx::build(self.interner, program, self.db_driver, self.ffi.clone())?;
         project::assemble_split_manifest(&ctx, program, spine_text, module_texts)
     }
 }
@@ -175,7 +206,7 @@ impl Backend for RustBackend<'_> {
     }
 
     fn emit(&self, program: &Program) -> DResult<EmittedProject> {
-        let ctx = EmitCtx::build(self.interner, program, self.db_driver)?;
+        let ctx = EmitCtx::build(self.interner, program, self.db_driver, self.ffi.clone())?;
         project::emit_program(&ctx, program)
     }
 }
@@ -334,6 +365,15 @@ pub(crate) struct EmitCtx<'a> {
     /// email::*;` to the emitted `ipe_runtime/mod.rs` and adds the `lettre`
     /// dependency to the emitted `Cargo.toml`.
     pub(crate) uses_email: bool,
+    /// `true` when the program lowers at least one [`ipe_ir::Callee::Ffi`]
+    /// foreign-wrapper call. When set,
+    /// [`crate::project::assemble_project_files`] writes `src/ffi.rs` (from
+    /// [`Self::ffi`]), declares `mod ffi;` in `src/main.rs`, and appends the
+    /// bound crates' pinned `[dependencies]` lines to the emitted `Cargo.toml`.
+    pub(crate) uses_ffi: bool,
+    /// The driver-supplied FFI emission inputs. Required (fail-closed) when
+    /// [`Self::uses_ffi`] is set; ignored otherwise.
+    pub(crate) ffi: Option<FfiEmit>,
     /// The Rust type name for the emitted `SqlValue` enum (e.g. `MainSqlValue`).
     /// `None` when `uses_db` is `false`.
     pub(crate) sqlvalue_rust_name: Option<String>,
@@ -392,7 +432,12 @@ pub(crate) struct EmitCtx<'a> {
 impl<'a> EmitCtx<'a> {
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::similar_names)] // `uses_ui` / `uses_tui` are intentionally similar
-    fn build(interner: &'a Interner, program: &Program, db_driver: DbDriver) -> DResult<Self> {
+    fn build(
+        interner: &'a Interner,
+        program: &Program,
+        db_driver: DbDriver,
+        ffi: Option<FfiEmit>,
+    ) -> DResult<Self> {
         let mut enum_names: BTreeMap<(ModPath, Symbol), String> = BTreeMap::new();
         let mut variant_fields: BTreeMap<(ModPath, Symbol, Symbol), Vec<IrType>> = BTreeMap::new();
         let mut enum_variants: BTreeMap<(ModPath, Symbol), VariantList> = BTreeMap::new();
@@ -753,6 +798,9 @@ impl<'a> EmitCtx<'a> {
         // detect outbound Ipe.WebSocket client usage.
         let uses_websocket = program.modules.iter().any(|m| m.uses_websocket);
 
+        // detect foreign-crate FFI wrapper usage.
+        let uses_ffi = program.modules.iter().any(|m| m.uses_ffi);
+
         Ok(Self {
             interner,
             uses_db,
@@ -767,6 +815,8 @@ impl<'a> EmitCtx<'a> {
             uses_auth,
             uses_websocket,
             uses_email,
+            uses_ffi,
+            ffi,
             sqlvalue_rust_name,
             sqlfield_rust_name,
             enum_names,
@@ -778,6 +828,46 @@ impl<'a> EmitCtx<'a> {
             record_structs,
             record_by_fieldset,
         })
+    }
+
+    /// Is `home` a driver-generated FFI interface module (`Rust.*`)? The
+    /// `Rust.*` namespace is origin-reserved at canonicalisation, so the home
+    /// prefix IS the provenance.
+    pub(crate) fn is_foreign_interface_home(&self, home: &ModPath) -> bool {
+        home.0
+            .first()
+            .and_then(|s| self.interner.resolve(*s))
+            .is_some_and(|s| s == "Rust")
+    }
+
+    /// The absolute Rust path for a foreign opaque type declared by an FFI
+    /// interface module (`(Rust.Semver, Version)` → `::semver::Version`).
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic::CompilerBug`] when no FFI emission inputs were supplied
+    /// or the type is absent from the map — the driver derives the map and
+    /// the interface modules from the SAME artifacts, so a miss is an
+    /// internal invariant violation, surfaced rather than emitted as a
+    /// dangling Rust type.
+    pub(crate) fn foreign_type_path(&self, home: &ModPath, name: Symbol) -> DResult<String> {
+        let mut key = String::new();
+        for seg in &home.0 {
+            key.push_str(self.resolve_ident(*seg)?);
+            key.push('.');
+        }
+        key.push_str(self.resolve_ident(name)?);
+        self.ffi
+            .as_ref()
+            .and_then(|f| f.foreign_types.get(&key))
+            .cloned()
+            .ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "backend.foreign_type_path",
+                detail: format!(
+                    "foreign opaque type `{key}` has no Rust path in the FFI emission \
+                     inputs — the driver must supply every installed crate's opaque map"
+                ),
+            })
     }
 
     /// Does user enum `sym`'s rendered Rust type support the full
@@ -2216,13 +2306,14 @@ mod record_struct_namespace_tests {
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_ffi: false,
             }],
         };
 
         // `EmitCtx::build` itself must still succeed today — the
         // record-vs-enum collision is a PRE-EXISTING gap `build` does not
         // check; this task adds the check as a SEPARATE, explicit gate.
-        let ctx = EmitCtx::build(&interner, &program, DbDriver::Sqlite)?;
+        let ctx = EmitCtx::build(&interner, &program, DbDriver::Sqlite, None)?;
         assert_eq!(ctx.record_structs().len(), 1);
         assert_eq!(
             ctx.record_structs().first().map(|r| r.name.as_str()),
@@ -2283,10 +2374,11 @@ mod record_struct_namespace_tests {
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_ffi: false,
             }],
         };
 
-        let ctx = EmitCtx::build(&interner, &program, DbDriver::Sqlite)?;
+        let ctx = EmitCtx::build(&interner, &program, DbDriver::Sqlite, None)?;
         ctx.assert_record_structs_disjoint_from_type_namespace(&BTreeSet::new())
     }
 }

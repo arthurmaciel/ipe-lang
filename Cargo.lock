@@ -1935,10 +1935,12 @@ dependencies = [
  "ipe_canon",
  "ipe_db",
  "ipe_diagnostics",
+ "ipe_ffi",
  "ipe_intern",
  "ipe_ir",
  "ipe_lower",
  "ipe_parse",
+ "ipe_sandbox",
  "ipe_types",
  "ipe_watch",
  "notify",
@@ -2069,6 +2071,7 @@ version = "0.0.0"
 name = "ipe_ffi"
 version = "0.0.0"
 dependencies = [
+ "ipe_canon",
  "ipe_diagnostics",
  "serde",
  "serde_json",
