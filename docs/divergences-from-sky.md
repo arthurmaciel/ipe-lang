@@ -936,6 +936,30 @@ reference behaviour to match. *Verified:* the four checked-in golden manifests
 (`edition = "2024"`), byte-compared against emitted output by
 `crates/ipe/tests/support/mod.rs`. *Sanctioned:* yes (`divergence:`).
 
+### A20 — Static-build allocator default: pure-Rust dlmalloc, not mimalloc
+The reference's musl-static path defaults to the C `mimalloc` allocator
+(`static_alloc = ["mimalloc"]` in its emitted manifest). ipê's static path
+defaults to pure-Rust `dlmalloc`, with `mimalloc` demoted to an explicit,
+noticed opt-in (`--allocator mimalloc`) — the full trade study and AUTO table
+live in `docs/architecture/static-compilation.md`. *Rationale:* security
+principle #1 over efficiency #4 — the pure-Rust default removes the C
+toolchain, `build.rs`, unsafe C-FFI boundary, and frozen vendored-C
+supply-chain surface from every static build, while still clearing the musl
+malloc throughput cliff; dlmalloc is Rust std's wasm allocator (one audited
+allocator across static-native and wasm). The concurrent-churn delta versus
+mimalloc on the ipê runtime is not yet measured (the measure-before-finalize
+bench sizes the opt-in recommendation; it does not decide the default — the
+principle order does). Three reference warn-paths tighten into typed
+refusals/gates for the same reason: unknown allocator names are a parse-time
+rejection (closed enum, no string fallthrough), `system` malloc on musl needs
+a two-key acknowledgment (`--allow-slow-allocator` / `allowSlowAllocator`)
+instead of warn-and-proceed, and an unbuildable static request (macOS,
+webview) is refused instead of silently degraded to a dynamic artifact.
+*Verified:* `src/ipe-cli/src/build_plan.rs` + `src/ipe-cli/tests/static_emit.rs`
+(refusals, AUTO rows, ldd-asserted musl e2e); the static examples sweep
+(`IPE_SWEEP_STATIC=1`) and the `static` CI workflow keep both allocator arms
+green. *Sanctioned:* yes (`divergence:`).
+
 ---
 
 ## 4. Stdlib / surface divergences
@@ -1021,6 +1045,7 @@ API-shape review):
 | `Ipe.Ui` HTML | skeleton + `<style>` reset | compact inline CSS, no reset block | Separate renderer; byte-parity later |
 | Runtime | shared fork baseline | strict superset (auth/jwt/SSRF/decimal/cache/env/telemetry hardening) | Security/correctness/soundness |
 | Float sci-notation | exp ≥ 21 (reference Rust) | exp ≥ 6 (Go `%v` parity) — **confirmed vs Go 1.26.2 (#52)** | ipê matches Go; the reference's Rust fork diverges |
+| Static-build allocator | mimalloc (C) default | pure-Rust dlmalloc default; mimalloc = noticed opt-in; warn-paths → typed refusals | Security #1 > efficiency #4; C-free static path |
 | Clone strategy (non-`Copy` bindings) | use-count ≥ 2 → clone ALL reads (including last) | true last-use: clone all-but-last owned reads, last moves; borrow reads exempt | Rust move semantics; N−1 clones vs N |
 | As-pattern alias in match arm | drops alias name → E0425 on use (latent bug) | binds whole by move, reconstructs inner from clone | Correctness; reference latent bug fixed |
 | Model admissibility | dynamic (Go reflects at runtime; no compile-time gate) | static `IPE-L0120` gate at `ipe` | Rust static trait bounds (seal) |
