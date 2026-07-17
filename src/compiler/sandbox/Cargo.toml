@@ -1,0 +1,12 @@
+[package]
+name = "ipe_sandbox"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description = "Isolation jail for compiling/inspecting untrusted foreign crates: bubblewrap-primary, proven-unshare fallback, fail-closed refusal"
+
+[dependencies]
+ipe_diagnostics = { path = "../diagnostics" }
+
+[lints]
+workspace = true

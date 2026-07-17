@@ -249,6 +249,12 @@ pub const IPE_F4400: Code = Code("IPE-F4400");
 pub const IPE_F4401: Code = Code("IPE-F4401");
 /// a foreign function declares contradictory shape flags
 pub const IPE_F4402: Code = Code("IPE-F4402");
+/// no isolation jail can be established for compiling an untrusted crate
+pub const IPE_F4410: Code = Code("IPE-F4410");
+/// a git source for a foreign crate was rejected
+pub const IPE_F4411: Code = Code("IPE-F4411");
+/// an FFI cache artifact cannot be read or written
+pub const IPE_F4412: Code = Code("IPE-F4412");
 
 // ---------------------------------------------------------------------------
 // Internal (IPE-I####)
@@ -283,6 +289,7 @@ pub const IPE_I0203: Code = Code("IPE-I0203");
 /// outside the taxonomy (impossible to construct outside this crate) falls back
 /// to the generic internal-error title rather than panicking.
 #[must_use]
+#[allow(clippy::too_many_lines)] // one arm per taxonomy code — an exhaustive table, not branching logic
 pub fn title(c: Code) -> &'static str {
     match c {
         IPE_P0001 => "unexpected token",
@@ -370,6 +377,9 @@ pub fn title(c: Code) -> &'static str {
         IPE_F4400 => "a foreign-call description cannot be rendered as valid Rust",
         IPE_F4401 => "a foreign binding's inspection data is malformed",
         IPE_F4402 => "a foreign function declares contradictory shape flags",
+        IPE_F4410 => "no isolation jail can be established for compiling an untrusted crate",
+        IPE_F4411 => "a git source for a foreign crate was rejected",
+        IPE_F4412 => "an FFI cache artifact cannot be read or written",
         IPE_I0001 => "internal compiler error",
         IPE_I0010 => "intern: unresolved symbol",
         IPE_I0011 => "intern: symbol table exhausted",
@@ -481,6 +491,9 @@ pub fn explain_page(c: Code) -> Option<&'static str> {
         IPE_F4400 => Some(include_str!("../explain/IPE-F4400.md")),
         IPE_F4401 => Some(include_str!("../explain/IPE-F4401.md")),
         IPE_F4402 => Some(include_str!("../explain/IPE-F4402.md")),
+        IPE_F4410 => Some(include_str!("../explain/IPE-F4410.md")),
+        IPE_F4411 => Some(include_str!("../explain/IPE-F4411.md")),
+        IPE_F4412 => Some(include_str!("../explain/IPE-F4412.md")),
         IPE_I0001 => Some(include_str!("../explain/IPE-I0001.md")),
         IPE_I0010 => Some(include_str!("../explain/IPE-I0010.md")),
         IPE_I0011 => Some(include_str!("../explain/IPE-I0011.md")),
@@ -511,8 +524,9 @@ pub const ALL_CODES: &[Code] = &[
     IPE_L0105, IPE_L0106, IPE_L0107, IPE_L0108, IPE_L0110, IPE_L0111, IPE_L0112, IPE_L0113,
     IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119, IPE_L0120, IPE_L0121,
     IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127, IPE_L0128, IPE_L0200,
-    IPE_F4400, IPE_F4401, IPE_F4402, IPE_I0001, IPE_I0010, IPE_I0011, IPE_I0100, IPE_I0101,
-    IPE_I0102, IPE_I0103, IPE_I0200, IPE_I0201, IPE_I0202, IPE_I0203,
+    IPE_F4400, IPE_F4401, IPE_F4402, IPE_F4410, IPE_F4411, IPE_F4412, IPE_I0001, IPE_I0010,
+    IPE_I0011, IPE_I0100, IPE_I0101, IPE_I0102, IPE_I0103, IPE_I0200, IPE_I0201, IPE_I0202,
+    IPE_I0203,
 ];
 
 #[cfg(test)]
@@ -520,8 +534,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn taxonomy_has_ninety_four_codes() {
-        assert_eq!(ALL_CODES.len(), 94);
+    fn taxonomy_has_ninety_seven_codes() {
+        assert_eq!(ALL_CODES.len(), 97);
     }
 
     #[test]
@@ -539,7 +553,7 @@ mod tests {
             assert!(s.starts_with("IPE-"), "{s} bad prefix");
             assert!(seen.insert(s), "{s} duplicated");
         }
-        assert_eq!(seen.len(), 94);
+        assert_eq!(seen.len(), 97);
     }
 
     /// CI coverage gate: every taxonomy code has a conforming explain page.
