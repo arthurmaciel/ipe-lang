@@ -240,6 +240,13 @@ impl Call {
         &self.arg_types
     }
 
+    /// The method receiver, when the call is a method (validation proved the
+    /// method ⇔ receiver correspondence).
+    #[must_use]
+    pub const fn receiver(&self) -> Option<Receiver> {
+        self.receiver
+    }
+
     /// The wrapper return type reference.
     #[must_use]
     pub const fn ret(&self) -> &InnerTypeRef {
