@@ -7497,7 +7497,7 @@ impl<'a> Lowerer<'a> {
     /// the reference); the type IS the shared `IrType::Decoder` carrier
     /// (`ipe_runtime::json::Decoder<E, T>`), and every `Decoder a` annotation
     /// already lowers to it via the ABOVE-guard `Decoder` arm. Skip its `EnumDef`
-    /// so the backend never emits a phantom-param `enum StdConfigDecoder<T1>`
+    /// so the backend never emits a phantom-param `enum IpeConfigDecoder<T1>`
     /// (E0392) — the nullary `Decoder` ctor is opaque (never constructed or
     /// matched in Ipê source), so no enum is needed. Same shape as
     /// [`Self::is_cache_handle_union`].
@@ -7505,25 +7505,25 @@ impl<'a> Lowerer<'a> {
         self.interner.resolve(u.name) == Some("Decoder")
             && matches!(
                 u.home.as_slice(),
-                [a, b] if self.interner.resolve(*a) == Some("Std")
+                [a, b] if self.interner.resolve(*a) == Some("Ipe")
                     && self.interner.resolve(*b) == Some("Config")
             )
     }
 
     /// is `(module, name)` the `Ipe.Cache.Cache` opaque handle type —
-    /// module `["Std", "Cache"]`, name `Cache`? Its `k`/`v` args are dropped at
+    /// module `["Ipe", "Cache"]`, name `Cache`? Its `k`/`v` args are dropped at
     /// lowering (backed by the non-generic runtime `IpeCacheHandle`).
     fn is_cache_handle_con(&self, module: &[Symbol], name: Symbol) -> bool {
         self.interner.resolve(name) == Some("Cache")
             && matches!(
                 module,
-                [a, b] if self.interner.resolve(*a) == Some("Std")
+                [a, b] if self.interner.resolve(*a) == Some("Ipe")
                     && self.interner.resolve(*b) == Some("Cache")
             )
     }
 
     /// is `u` the `Ipe.Email.EmailProvider` opaque ADT — module
-    /// `["Std", "Email"]`, name `EmailProvider`? Backed by the runtime enum
+    /// `["Ipe", "Email"]`, name `EmailProvider`? Backed by the runtime enum
     /// `ipe_runtime::email::EmailProvider`, so its `EnumDef` is suppressed.
     fn is_email_provider_union(&self, u: &canon::Union) -> bool {
         self.is_email_provider_con(&u.home, u.name)
@@ -7534,7 +7534,7 @@ impl<'a> Lowerer<'a> {
         self.interner.resolve(name) == Some("EmailProvider")
             && matches!(
                 module,
-                [a, b] if self.interner.resolve(*a) == Some("Std")
+                [a, b] if self.interner.resolve(*a) == Some("Ipe")
                     && self.interner.resolve(*b) == Some("Email")
             )
     }
