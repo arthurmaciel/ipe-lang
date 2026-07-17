@@ -5,7 +5,7 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
-ipe_diagnostics = { path = "../ipe_diagnostics" }
+ipe_diagnostics = { path = "../diagnostics" }
 # Phase 6.5 (symbol-relocation persistence): `Symbol`'s ambient-interner
 # `serde::Serialize`/`Deserialize` impls — see the type's own doc for why a
 # derived impl is impossible (a `Symbol` is a process-local interner index)

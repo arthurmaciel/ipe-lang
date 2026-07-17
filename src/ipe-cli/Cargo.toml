@@ -13,22 +13,22 @@ name = "skyc"
 path = "src/main.rs"
 
 [dependencies]
-ipe_intern = { path = "../compiler/ipe_intern" }
-ipe_diagnostics = { path = "../compiler/ipe_diagnostics" }
-ipe_parse = { path = "../compiler/ipe_parse" }
-ipe_db = { path = "../compiler/ipe_db" }
-ipe_canon = { path = "../compiler/ipe_canon" }
-ipe_types = { path = "../compiler/ipe_types" }
-ipe_lower = { path = "../compiler/ipe_lower" }
-ipe_ir = { path = "../compiler/ipe_ir" }
-ipe_backend = { path = "../compiler/ipe_backend" }
-ipe_backend_rust = { path = "../compiler/ipe_backend_rust" }
+ipe_intern = { path = "../compiler/intern" }
+ipe_diagnostics = { path = "../compiler/diagnostics" }
+ipe_parse = { path = "../compiler/parse" }
+ipe_db = { path = "../compiler/db" }
+ipe_canon = { path = "../compiler/canon" }
+ipe_types = { path = "../compiler/types" }
+ipe_lower = { path = "../compiler/lower" }
+ipe_ir = { path = "../compiler/ir" }
+ipe_backend = { path = "../compiler/backend" }
+ipe_backend_rust = { path = "../compiler/backend/rust" }
 # Phase 7 (`crate::watch` — Tasks 21-25): the confined watcher + process
 # supervisor primitives, and the two crates `watch.rs` drives directly —
 # `salsa` for `Cancelled::catch`/`Setter` (Task 25's cancellation) and
 # `notify` for the raw filesystem watch (Task 21). Same salsa pin as
 # `ipe_db` (`crates/ipe_db/Cargo.toml`) — one version across the workspace.
-ipe_watch = { path = "../compiler/ipe_watch" }
+ipe_watch = { path = "../compiler/watch" }
 salsa = "=0.27.2"
 notify = "8"
 # Phase 6 (Task 19/20): the on-disk build cache (`src/cache.rs`) — content

@@ -30,12 +30,12 @@ use crate::rust_file::{Partitioned, RustFileId, partition_items};
 
 /// The golden program, embedded at compile time. The fixed runtime-bindings
 /// block (kernel wrappers, golden lines 45–127) is an exact substring of it.
-const GOLDEN: &str = include_str!("../../../../tests/golden/basics/main.rs");
+const GOLDEN: &str = include_str!("../../../../../tests/golden/basics/main.rs");
 
 /// The project `Cargo.toml`, embedded verbatim from the golden. The backend
 /// emits the same manifest for every program (dependency set is fixed by the
 /// runtime).
-const CARGO_TOML: &str = include_str!("../../../../tests/golden/basics/Cargo.toml");
+const CARGO_TOML: &str = include_str!("../../../../../tests/golden/basics/Cargo.toml");
 
 /// The generated `ipe_runtime/mod.rs` — the curated set of runtime modules whose
 /// dependencies are satisfied by [`CARGO_TOML`]. The vendored runtime source
@@ -43,10 +43,10 @@ const CARGO_TOML: &str = include_str!("../../../../tests/golden/basics/Cargo.tom
 /// pull crates outside the base manifest); the driver overwrites it with this
 /// trimmed version. The backend emits a fixed base module set, then appends the
 /// modules a program's kernels require.
-const RUNTIME_MOD_RS: &str = include_str!("../../../../tests/golden/basics/ipe_runtime/mod.rs");
+const RUNTIME_MOD_RS: &str = include_str!("../../../../../tests/golden/basics/ipe_runtime/mod.rs");
 
 /// The generated `ipe_runtime/config.rs` (DB/config bindings — empty by default).
-const RUNTIME_CONFIG_RS: &str = include_str!("../../../../tests/golden/basics/ipe_runtime/config.rs");
+const RUNTIME_CONFIG_RS: &str = include_str!("../../../../../tests/golden/basics/ipe_runtime/config.rs");
 
 // ── db-enabled manifest fragments ──────────────────────────────────
 
@@ -311,7 +311,7 @@ pub fn auth_set_role(conn: Db, user_id: i64, role: String) -> SkyTask<()> {\n   
 /// non-db build (hypothetically possible via feature flag override) degrades
 /// gracefully rather than failing with undefined types.
 const RUNTIME_CONFIG_RS_DB_SQLITE: &str =
-    include_str!("../../../../src/runtime/rust/src/config.rs");
+    include_str!("../../../../../src/runtime/rust/src/config.rs");
 
 /// The `ipe_runtime/config.rs` emitted for db-enabled programs targeting
 /// Postgres (`sky.toml`'s `[database] driver = "postgres"`). Same symbol
@@ -320,7 +320,7 @@ const RUNTIME_CONFIG_RS_DB_SQLITE: &str =
 /// `db_auto_id_column`), so `db.rs` is byte-identical across both driver
 /// builds.
 const RUNTIME_CONFIG_RS_DB_POSTGRES: &str =
-    include_str!("../../../../src/runtime/rust/src/config_postgres.rs");
+    include_str!("../../../../../src/runtime/rust/src/config_postgres.rs");
 
 /// The `Diagnostic::CompilerBug` raised when a golden anchor is absent — a
 /// drifted-golden invariant violation, surfaced (SKY-I0203) instead of a silent

@@ -79,7 +79,8 @@ fn every_kernel_name_resolves_to_runtime_fn() {
         .join("..")
         .join("..")
         .join("compiler")
-        .join("ipe_backend_rust")
+        .join("backend")
+        .join("rust")
         .join("src")
         .join("naming.rs");
     let naming_src = std::fs::read_to_string(&naming_path)
