@@ -273,6 +273,77 @@ fn sky_toml_rust_section_parses_and_rejects_typos() {
     );
 }
 
+/// TLS must stay rustls with the BUNDLED webpki roots in every manifest
+/// source the emitted project is assembled from. A native-TLS or
+/// native-roots backend links OpenSSL / reads the host cert store — either
+/// silently breaks the fully-static musl artifact (dynamic libssl) or makes
+/// it host-dependent (no `/etc/ssl` in a `scratch` container).
+///
+/// Three sources write dependency lines into an emitted `Cargo.toml`:
+/// the golden base manifest, the vendored runtime's manifest, and the
+/// surgery strings in the backend's `project.rs`. All three are scanned.
+#[test]
+fn tls_stays_rustls_with_bundled_roots_in_every_manifest_source() {
+    let root = repo_root();
+    let sources = [
+        root.join("tests/golden/basics/Cargo.toml"),
+        root.join("src/runtime/rust/Cargo.toml"),
+        root.join("src/compiler/backend/rust/src/project.rs"),
+    ];
+    for path in &sources {
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        for forbidden in ["native-tls", "openssl", "rustls-tls-native-roots"] {
+            assert!(
+                !text.contains(forbidden),
+                "{}: contains {forbidden:?} — TLS must stay rustls-only with bundled \
+                 webpki roots (static-compilation contract)",
+                path.display()
+            );
+        }
+    }
+
+    // The reqwest dep line itself: rustls backend, default features off (the
+    // default feature set would pull no TLS at all — `rustls-tls` bundles
+    // webpki-roots, keeping cert verification host-independent).
+    for path in [
+        root.join("tests/golden/basics/Cargo.toml"),
+        root.join("src/runtime/rust/Cargo.toml"),
+    ] {
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        let reqwest = text
+            .lines()
+            .find(|l| l.trim_start().starts_with("reqwest"))
+            .unwrap_or_else(|| panic!("{}: no reqwest dep line", path.display()));
+        assert!(
+            reqwest.contains("default-features = false") && reqwest.contains(r#""rustls-tls""#),
+            "{}: reqwest must be default-features = false + rustls-tls: {reqwest}",
+            path.display()
+        );
+    }
+
+    // The other TLS-capable deps are pinned to their rustls arms.
+    let runtime = std::fs::read_to_string(root.join("src/runtime/rust/Cargo.toml"))
+        .unwrap_or_else(|e| panic!("read runtime manifest: {e}"));
+    let lettre = runtime
+        .lines()
+        .find(|l| l.trim_start().starts_with("lettre"))
+        .unwrap_or_else(|| panic!("runtime manifest: no lettre dep line"));
+    assert!(
+        lettre.contains("default-features = false") && lettre.contains(r#""tokio1-rustls-tls""#),
+        "lettre must be default-features = false + tokio1-rustls-tls: {lettre}"
+    );
+    let sqlx = runtime
+        .lines()
+        .find(|l| l.trim_start().starts_with("sqlx"))
+        .unwrap_or_else(|| panic!("runtime manifest: no sqlx dep line"));
+    assert!(
+        sqlx.contains(r#""runtime-tokio-rustls""#),
+        "sqlx must use the runtime-tokio-rustls arm: {sqlx}"
+    );
+}
+
 /// Full static proof (THE SEAL, end to end): emit `examples/01-hello-world`
 /// under the dlmalloc static plan, `cargo build` it standalone for musl with
 /// CWD = the emitted crate dir (cargo discovers `.cargo/config.toml` from
