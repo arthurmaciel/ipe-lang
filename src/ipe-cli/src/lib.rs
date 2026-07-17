@@ -18,6 +18,7 @@
 pub mod build_plan;
 mod cache;
 pub mod ffi;
+mod lsp;
 pub mod project;
 pub mod stdlib;
 pub mod watch;
@@ -1261,7 +1262,8 @@ const USAGE: &str = "usage:\n  \
      ipe remove <crate>\n  \
      ipe install [--yes]\n  \
      ipe explain [<CODE>]\n  \
-     ipe fix <entry.ipe> [--yes]";
+     ipe fix <entry.ipe> [--yes]\n  \
+     ipe lsp";
 
 /// Parse `argv` (excluding the program name) and run the requested command.
 ///
@@ -1277,6 +1279,7 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
         Some((cmd, rest)) if cmd == "remove" => ffi::run_remove(rest),
         Some((cmd, rest)) if cmd == "install" => ffi::run_install(rest),
         Some((cmd, rest)) if cmd == "fix" => run_fix(rest),
+        Some((cmd, rest)) if cmd == "lsp" => lsp::run_lsp(rest),
         _ => Err(CliError::Usage(USAGE)),
     }
 }

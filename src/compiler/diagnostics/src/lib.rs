@@ -29,7 +29,7 @@ pub use diagnostic::{
     LetDefect, LowerError, ModelLeaf, NameError, ParseError, SpanRole, Suggestion, TokenKind,
     TyDoc, TypeDeclDefect, TypeError,
 };
-pub use render::render;
+pub use render::{plain_message, render, render_ty};
 pub use span::{Located, Span};
 
 #[cfg(test)]

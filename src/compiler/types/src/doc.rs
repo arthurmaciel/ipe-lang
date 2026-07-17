@@ -83,7 +83,9 @@ fn resolve_module(interner: &Interner, module: &[Symbol]) -> DResult<Box<str>> {
 }
 
 /// Render a resolved [`Ty`] (post-solve, read back by `zonk`) into an owned
-/// [`TyDoc`]. The `Ty` is already bounded by `zonk`'s per-call node cap, so this
+/// [`TyDoc`].
+///
+/// The `Ty` is already bounded by `zonk`'s per-call node cap, so this
 /// recursion is bounded well under the native-stack ceiling.
 ///
 /// # Errors

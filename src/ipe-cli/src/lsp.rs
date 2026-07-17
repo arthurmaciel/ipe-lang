@@ -1,0 +1,67 @@
+//! `ipe lsp` — the JSON-RPC-over-stdio language server subcommand.
+//!
+//! The server loop and every feature handler live in `ipe_lsp_server` /
+//! `ipe_lsp_features`; this module supplies the one driver-side ingredient
+//! the server cannot own — project resolution. [`DriverLoader`] routes
+//! through the SAME manifest/sibling-discovery/stdlib-injection code path
+//! `ipe build` and `ipe watch` use, so the module set the editor analyzes
+//! can never diverge from the one the batch build compiles.
+
+use std::path::Path;
+
+use ipe_lsp_server::{LoadError, LoadedFile, LoadedProject, ProjectLoader};
+
+use crate::{CliError, USAGE, project, watch};
+
+struct DriverLoader;
+
+impl ProjectLoader for DriverLoader {
+    fn load(
+        &self,
+        workspace_root: Option<&Path>,
+        open_file: &Path,
+        open_text: Option<&str>,
+    ) -> Result<LoadedProject, LoadError> {
+        // A workspace folder holding a manifest wins; otherwise resolve from
+        // the opened file exactly like `ipe build <file.ipe>` would
+        // (manifest walk-up, else sibling discovery).
+        let entry = workspace_root
+            .filter(|root| root.join("sky.toml").is_file())
+            .map_or_else(|| open_file.to_path_buf(), Path::to_path_buf);
+        let overlay = if entry == open_file { open_text } else { None };
+        let resolved = watch::resolve_project_sources(&entry, overlay).map_err(|e| LoadError {
+            detail: e.to_string(),
+        })?;
+        let mut sources = resolved.sources;
+        let mut discovered = resolved.discovered;
+        let injected = project::inject_compiled_std_closure(&mut sources, &mut discovered);
+        let files = sources
+            .into_iter()
+            .map(|(module, (path, text))| {
+                let origin = if injected.contains(&module) {
+                    ipe_canon::ModuleOrigin::EmbeddedStdlib
+                } else {
+                    ipe_canon::ModuleOrigin::User
+                };
+                (module, LoadedFile { path, text, origin })
+            })
+            .collect();
+        Ok(LoadedProject {
+            files,
+            entry_module: resolved.entry_path,
+        })
+    }
+}
+
+/// `ipe lsp` — serve the Language Server Protocol over stdio until the
+/// client disconnects.
+///
+/// # Errors
+/// [`CliError`] on misuse (unexpected arguments) or a protocol-level
+/// failure; never for a compile diagnostic (those flow to the editor).
+pub fn run_lsp(rest: &[String]) -> Result<(), CliError> {
+    if !rest.is_empty() {
+        return Err(CliError::Usage(USAGE));
+    }
+    ipe_lsp_server::run_stdio(&DriverLoader).map_err(|e| CliError::UsageOwned(format!("lsp: {e}")))
+}
