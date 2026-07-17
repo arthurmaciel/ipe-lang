@@ -70,12 +70,12 @@ fn i193_skyc_accepts_asymmetric_arms() {
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i193_asymmetric_arms_cloneok_skyc_out");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         eprintln!("SKIP asymmetric_arms_cloneok: runtime not available");
         return;
     };
 
-    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for asymmetric_arms_cloneok: {:?}",
@@ -128,14 +128,14 @@ fn i193_idempotent() {
     let _ = std::fs::remove_dir_all(&out1);
     let _ = std::fs::remove_dir_all(&out2);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         eprintln!("SKIP i193_idempotent: runtime not available");
         return;
     };
 
-    let b1 = skyc::build_with_sibling_discovery(&entry, &out1, &runtime);
+    let b1 = ipe::build_with_sibling_discovery(&entry, &out1, &runtime);
     assert!(b1.is_ok(), "pass 1 must succeed: {:?}", b1.err());
-    let b2 = skyc::build_with_sibling_discovery(&entry, &out2, &runtime);
+    let b2 = ipe::build_with_sibling_discovery(&entry, &out2, &runtime);
     assert!(b2.is_ok(), "pass 2 must succeed: {:?}", b2.err());
 
     let main1 = std::fs::read_to_string(out1.join("src").join("main.rs"))
@@ -163,11 +163,11 @@ fn i193_cargo_builds_and_runs() {
     let out = std::env::temp_dir().join("skyc_i193_asymmetric_arms_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(built.is_ok(), "skyc build must succeed: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted("asymmetric_arms_cloneok", &out);

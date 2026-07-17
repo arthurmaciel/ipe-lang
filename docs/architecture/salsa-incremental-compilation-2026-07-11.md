@@ -1221,7 +1221,7 @@ and gives every test in `crates/skyc/src/cache.rs` and the
 deterministic, parallel-safe handle with no global state at all.
 
 **Default cache location: colocated with `out_dir`.** `<out_dir>/
-.skyc-cache` — chosen so the EXISTING "force a clean rebuild" ritual
+.ipe-cache` — chosen so the EXISTING "force a clean rebuild" ritual
 (`rm -rf <out_dir>`) also resets the cache, with no new mental model or
 second directory to remember to clean. `IPE_BUILD_CACHE_DIR` overrides this
 for a shared/global cache location; `IPE_BUILD_CACHE=0` disables the cache
@@ -1672,7 +1672,7 @@ were watching the old file's inode directly.
 **Generated dirs excluded by construction.** `is_excluded_dir_name` /
 `under_excluded_dir` cover `target/`, `.git/`, `node_modules/`, `dist/`,
 `.ipe/` (the project-local incremental state dir the design doc reserves),
-`.skyc-cache/` (Phase 6's on-disk build cache — see §12.4's default
+`.ipe-cache/` (Phase 6's on-disk build cache — see §12.4's default
 location), and `sky-out/` (the conventional build-output dir this repo's
 example projects use) — `WatchScope::is_relevant` checks this BEFORE
 canonicalising, so an excluded-dir event storm (a `cargo build` writing

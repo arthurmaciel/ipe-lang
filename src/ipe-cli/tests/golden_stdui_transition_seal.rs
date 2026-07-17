@@ -20,7 +20,7 @@ mod support;
 
 #[allow(clippy::expect_used)]
 fn runtime() -> PathBuf {
-    skyc::resolve_runtime().expect("runtime must resolve for transition seal test")
+    ipe::resolve_runtime().expect("runtime must resolve for transition seal test")
 }
 
 /// A minimal Std.Ui program exercising BOTH transition entry points: the
@@ -62,7 +62,7 @@ main =
 // other's `create_dir_all` (a NotFound flake). A per-test slot removes the
 // shared-path contention entirely.
 #[allow(clippy::expect_used)]
-fn build_transition_project(slot: &str) -> (PathBuf, Result<(), skyc::CliError>) {
+fn build_transition_project(slot: &str) -> (PathBuf, Result<(), ipe::CliError>) {
     let out =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("stdui_transition_seal_{slot}"));
     let _ = std::fs::remove_dir_all(&out);
@@ -71,7 +71,7 @@ fn build_transition_project(slot: &str) -> (PathBuf, Result<(), skyc::CliError>)
     let entry = src.join("Main.ipe");
     std::fs::write(&entry, MAIN_SKY).expect("write Main.ipe");
     let emit = out.join("emit");
-    let res = skyc::build(&entry, &emit, &runtime());
+    let res = ipe::build(&entry, &emit, &runtime());
     (emit, res)
 }
 

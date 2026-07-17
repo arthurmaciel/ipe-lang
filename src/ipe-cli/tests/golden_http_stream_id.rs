@@ -10,7 +10,7 @@
 //! the `IpeStreamId` Rust newtype in the runtime + routes it through `enum_name`
 //! in the emitter.
 //!
-//! This test uses `skyc::emit_ir_text` (parse → canon → types → lower → IR text)
+//! This test uses `ipe::emit_ir_text` (parse → canon → types → lower → IR text)
 //! which stops before Rust emission — originally chosen to verify the type
 //! scheme and lowering without hitting an UNRELATED Http-builder synthesizer
 //! limitation (IPE-I0001 on `Http.defaultRequest`'s struct-literal emission,
@@ -18,7 +18,7 @@
 //! `HttpRequest` fieldset in an annotation). That limitation is closed (see
 //! `golden_m5b_http.rs`'s `http_default_request_emits_without_signature_consumer`
 //! for the dedicated regression) — `http_stream_open_full_emit_succeeds` below
-//! now exercises the full `skyc::build` path this fixture originally had to
+//! now exercises the full `ipe::build` path this fixture originally had to
 //! route around.
 
 use std::path::{Path, PathBuf};
@@ -40,7 +40,7 @@ fn http_stream_open_returns_stream_id_not_int() {
         .join("http_stream_id")
         .join("Main.ipe");
 
-    let result = skyc::emit_ir_text(&entry);
+    let result = ipe::emit_ir_text(&entry);
     assert!(
         result.is_ok(),
         "HttpStream.open typed as `Task Error StreamId` must pass type-check + lower \
@@ -67,11 +67,11 @@ fn http_stream_open_full_emit_succeeds() {
     let out = std::env::temp_dir().join("skyc_i148_http_stream_id_full_emit");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for HttpStream.open's HttpRequest arg (no \

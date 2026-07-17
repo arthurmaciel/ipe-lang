@@ -8,7 +8,7 @@
 //! ## Architecture
 //!
 //! 1. A minimal Sky.Webview counter program is written to a temp dir.
-//! 2. `skyc::build` compiles it (parse → canon → types → lower → emit Rust).
+//! 2. `ipe::build` compiles it (parse → canon → types → lower → emit Rust).
 //! 3. `oracle::build_rust_binary` runs `cargo build` on the emitted project —
 //!    the shared Cargo target lets wry/tao/webkit2gtk compile once and be reused.
 //!
@@ -135,10 +135,10 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::Pat
     let out_dir = std::env::temp_dir().join(format!("webview_e2e_{test_name}_emitted"));
     let _ = std::fs::remove_dir_all(&out_dir);
 
-    let runtime = skyc::resolve_runtime()
+    let runtime = ipe::resolve_runtime()
         .map_err(|e| -> BoxError { format!("{test_name}: runtime unavailable: {e}").into() })?;
 
-    skyc::build(&entry, &out_dir, &runtime)
+    ipe::build(&entry, &out_dir, &runtime)
         .map_err(|e| -> BoxError { format!("{test_name}: skyc build failed: {e}").into() })?;
 
     let exe = oracle::build_rust_binary(test_name, &out_dir)
@@ -299,7 +299,7 @@ main =
 /// End-to-end guard: a let-bound `window` on `Webview.app` must produce a clean
 /// user-facing `IPE-L0119` diagnostic during lowering — NOT an
 /// internal-compiler-error (`IPE-I0001`) from the emit-stage G4 `Expr::Record`
-/// guard. Compile-only (`skyc::build`) — no `cargo build`, so it runs fast and
+/// guard. Compile-only (`ipe::build`) — no `cargo build`, so it runs fast and
 /// needs no wry/tao toolchain, and it exercises the whole parse → canon → types
 /// → lower pipeline end-to-end (unlike the isolated lower unit test).
 #[test]
@@ -312,15 +312,15 @@ fn let_bound_webview_window_is_sky_l0119_not_ice() {
 
     let out = std::env::temp_dir().join("l0119_webview_window_out");
     let _ = std::fs::remove_dir_all(&out);
-    let runtime = skyc::resolve_runtime().expect("runtime available");
+    let runtime = ipe::resolve_runtime().expect("runtime available");
 
-    let err = skyc::build(&entry, &out, &runtime)
+    let err = ipe::build(&entry, &out, &runtime)
         .expect_err("a let-bound window must be rejected, not compiled");
     // Borrow `err` so it stays available for the assertion message. `None` means
     // the error was not a `Pipeline` diagnostic at all — a failure just as much as
     // the wrong code (so the assertion is non-vacuous on both axes).
     let code = match &err {
-        skyc::CliError::Pipeline { diag, .. } => Some(diag.code()),
+        ipe::CliError::Pipeline { diag, .. } => Some(diag.code()),
         _ => None,
     };
     assert_eq!(

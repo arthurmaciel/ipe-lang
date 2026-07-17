@@ -24,7 +24,7 @@
 
 use std::path::{Path, PathBuf};
 
-use skyc::CliError;
+use ipe::CliError;
 
 mod support;
 
@@ -44,10 +44,10 @@ fn built_code(root: &Path, name: &str) -> (Result<(), CliError>, PathBuf) {
     let entry = fixture_entry(root, name);
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_emit"));
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return (Ok(()), out); // resolver unavailable — the caller skips
     };
-    (skyc::build(&entry, &out, &runtime), out)
+    (ipe::build(&entry, &out, &runtime), out)
 }
 
 /// Build a green fixture, assert acceptance, and (under `IPE_E2E=1`) build the
@@ -55,7 +55,7 @@ fn built_code(root: &Path, name: &str) -> (Result<(), CliError>, PathBuf) {
 /// that a now-accepted shape does not exit-0-then-cargo-fail.
 fn assert_accepted_runs(name: &str, expected_stdout: &str) {
     let root = repo_root();
-    if skyc::resolve_runtime().is_err() {
+    if ipe::resolve_runtime().is_err() {
         return;
     }
     let (built, out) = built_code(&root, name);
@@ -82,7 +82,7 @@ fn assert_accepted_runs(name: &str, expected_stdout: &str) {
 /// an accept-then-cargo-fail.
 fn assert_gated(name: &str, expected: ipe_diagnostics::Code) {
     let root = repo_root();
-    if skyc::resolve_runtime().is_err() {
+    if ipe::resolve_runtime().is_err() {
         return;
     }
     let (built, _out) = built_code(&root, name);

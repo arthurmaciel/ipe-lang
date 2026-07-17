@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 
 mod support;
 
-use skyc::CliError;
+use ipe::CliError;
 
 /// The `sky-rust` workspace root (two levels up from this crate's manifest).
 fn repo_root() -> PathBuf {
@@ -51,11 +51,11 @@ fn rejects_cleanly_or_builds_and_runs_never_silent_cargo_fail() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m2c_function_field_gate_emit");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve: {:?}", runtime.err());
     let Ok(runtime) = runtime else { return };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
 
     // The minimal sound outcome: a clean first-class-function diagnostic.
     if let Err(CliError::Pipeline { diag, .. }) = &built {

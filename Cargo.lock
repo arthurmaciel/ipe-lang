@@ -1926,6 +1926,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipe"
+version = "0.0.0"
+dependencies = [
+ "hex",
+ "ipe_backend",
+ "ipe_backend_rust",
+ "ipe_canon",
+ "ipe_db",
+ "ipe_diagnostics",
+ "ipe_intern",
+ "ipe_ir",
+ "ipe_lower",
+ "ipe_parse",
+ "ipe_types",
+ "ipe_watch",
+ "notify",
+ "oracle",
+ "salsa",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "ipe-runtime-rust"
 version = "0.1.0"
 dependencies = [
@@ -3431,8 +3454,8 @@ dependencies = [
 name = "refresh-oracle"
 version = "0.0.0"
 dependencies = [
+ "ipe",
  "oracle",
- "skyc",
 ]
 
 [[package]]
@@ -3995,29 +4018,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
-]
-
-[[package]]
-name = "skyc"
-version = "0.0.0"
-dependencies = [
- "hex",
- "ipe_backend",
- "ipe_backend_rust",
- "ipe_canon",
- "ipe_db",
- "ipe_diagnostics",
- "ipe_intern",
- "ipe_ir",
- "ipe_lower",
- "ipe_parse",
- "ipe_types",
- "ipe_watch",
- "notify",
- "oracle",
- "salsa",
- "serde_json",
- "sha2",
 ]
 
 [[package]]

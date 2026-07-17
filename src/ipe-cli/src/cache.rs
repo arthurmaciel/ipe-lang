@@ -281,7 +281,7 @@ pub fn derive_epoch() -> Option<String> {
 ///
 /// - `IPE_BUILD_CACHE=0` (also `off` / `false`) disables the cache entirely.
 /// - `IPE_BUILD_CACHE_DIR=<path>` overrides the default location.
-/// - Otherwise: `<out_dir>/.skyc-cache` — colocated with the build output
+/// - Otherwise: `<out_dir>/.ipe-cache` — colocated with the build output
 ///   so `rm -rf <out_dir>` (the existing "force a clean rebuild" ritual)
 ///   also resets the cache, with no new mental model to learn.
 #[must_use]
@@ -295,7 +295,7 @@ pub fn env_cache_dir(out_dir: &Path) -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("IPE_BUILD_CACHE_DIR") {
         return Some(PathBuf::from(dir));
     }
-    Some(out_dir.join(".skyc-cache"))
+    Some(out_dir.join(".ipe-cache"))
 }
 
 fn entry_file_path(cache_root: &Path, epoch: &str, key: &str) -> PathBuf {
@@ -580,7 +580,7 @@ mod tests {
 
     #[test]
     fn store_and_load_round_trip() {
-        let dir = std::env::temp_dir().join(format!("skyc-cache-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("ipe-cache-test-{}", std::process::id()));
         let cache_root = dir.join("cache-root-round-trip");
         let mut files = BTreeMap::new();
         files.insert(
@@ -611,7 +611,7 @@ mod tests {
     #[test]
     fn try_load_treats_corrupt_entry_as_a_miss() {
         let dir =
-            std::env::temp_dir().join(format!("skyc-cache-test-corrupt-{}", std::process::id()));
+            std::env::temp_dir().join(format!("ipe-cache-test-corrupt-{}", std::process::id()));
         let cache_root = dir.join("cache-root-corrupt");
         let path = entry_file_path(&cache_root, "epoch", "key");
         fs::create_dir_all(path.parent().expect("has parent")).expect("mkdir must succeed");
@@ -634,7 +634,7 @@ mod tests {
         // inherits that rejection via `.ok()` rather than accidentally
         // routing around it.
         let dir =
-            std::env::temp_dir().join(format!("skyc-cache-test-poison-{}", std::process::id()));
+            std::env::temp_dir().join(format!("ipe-cache-test-poison-{}", std::process::id()));
         let cache_root = dir.join("cache-root-poison");
         let path = entry_file_path(&cache_root, "epoch", "key");
         fs::create_dir_all(path.parent().expect("has parent")).expect("mkdir must succeed");
@@ -657,9 +657,9 @@ mod tests {
         // `crates/skyc/src/lib.rs`'s cache integration tests via the
         // explicit-cache-dir seam, never via `std::env::set_var` — see that
         // module's doc for why).
-        let out_dir = Path::new("/tmp/skyc-cache-dir-does-not-need-to-exist");
+        let out_dir = Path::new("/tmp/ipe-cache-dir-does-not-need-to-exist");
         let default = env_cache_dir(out_dir);
-        assert_eq!(default, Some(out_dir.join(".skyc-cache")));
+        assert_eq!(default, Some(out_dir.join(".ipe-cache")));
     }
 
     // -----------------------------------------------------------------

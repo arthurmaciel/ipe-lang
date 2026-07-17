@@ -81,7 +81,7 @@
 
 use std::path::{Path, PathBuf};
 
-use skyc::CliError;
+use ipe::CliError;
 
 mod support;
 
@@ -112,11 +112,11 @@ fn built_code(root: &Path, name: &str) -> (Result<(), CliError>, PathBuf) {
     let entry = fixture_entry(root, name);
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_emit"));
     let _ = std::fs::remove_dir_all(&out);
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     let Ok(runtime) = runtime else {
         return (Ok(()), out); // resolver unavailable in this environment — skip below
     };
-    (skyc::build(&entry, &out, &runtime), out)
+    (ipe::build(&entry, &out, &runtime), out)
 }
 
 // ── T1/T2: direct construction now ACCEPTED ─────────────────────────────────
@@ -127,7 +127,7 @@ fn built_code(root: &Path, name: &str) -> (Result<(), CliError>, PathBuf) {
 #[test]
 fn result_and_map_fn_payload_accepted() {
     let root = repo_root();
-    if skyc::resolve_runtime().is_err() {
+    if ipe::resolve_runtime().is_err() {
         return;
     }
     let (built, out) = built_code(&root, "result_and_map_fn_payload");
@@ -154,7 +154,7 @@ fn result_and_map_fn_payload_accepted() {
 #[test]
 fn maybe_and_map_fn_payload_accepted() {
     let root = repo_root();
-    if skyc::resolve_runtime().is_err() {
+    if ipe::resolve_runtime().is_err() {
         return;
     }
     let (built, out) = built_code(&root, "maybe_and_map_fn_payload");
@@ -194,7 +194,7 @@ fn maybe_and_map_fn_payload_accepted() {
 #[test]
 fn let_bound_fn_payload_accepted() {
     let root = repo_root();
-    if skyc::resolve_runtime().is_err() {
+    if ipe::resolve_runtime().is_err() {
         return;
     }
     let (built, out) = built_code(&root, "let_bound_fn_payload");
@@ -222,7 +222,7 @@ fn let_bound_fn_payload_accepted() {
 #[test]
 fn let_bound_maybe_fn_payload_accepted() {
     let root = repo_root();
-    if skyc::resolve_runtime().is_err() {
+    if ipe::resolve_runtime().is_err() {
         return;
     }
     let (built, out) = built_code(&root, "let_bound_maybe_fn_payload");
@@ -250,7 +250,7 @@ fn let_bound_maybe_fn_payload_accepted() {
 #[test]
 fn ctor_decl_fn_payload_accepted() {
     let root = repo_root();
-    if skyc::resolve_runtime().is_err() {
+    if ipe::resolve_runtime().is_err() {
         return;
     }
     let (built, out) = built_code(&root, "ctor_decl_fn_payload");
@@ -278,7 +278,7 @@ fn ctor_decl_fn_payload_accepted() {
 #[test]
 fn fn_extracted_called_twice_accepted() {
     let root = repo_root();
-    if skyc::resolve_runtime().is_err() {
+    if ipe::resolve_runtime().is_err() {
         return;
     }
     let (built, out) = built_code(&root, "fn_extracted_called_twice");
@@ -333,7 +333,7 @@ fn fn_extracted_called_twice_accepted() {
 ///   passing this assertion).
 fn assert_hof_curried_rejected(name: &str) {
     let root = repo_root();
-    if skyc::resolve_runtime().is_err() {
+    if ipe::resolve_runtime().is_err() {
         return;
     }
     let (built, _out) = built_code(&root, name);
@@ -415,17 +415,17 @@ fn and_map_record_field_extraction_stays_gated() {
 #[test]
 fn and_map_cross_module_annotated_wrapper_accepted() {
     let root = repo_root();
-    if skyc::resolve_runtime().is_err() {
+    if ipe::resolve_runtime().is_err() {
         return;
     }
     let entry = fixture_src_entry(&root, "and_map_cross_module_wrapper_accepted");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("l0114_and_map_cross_module_wrapper_accepted_emit");
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "an annotated andMap wrapper reused cross-module at two arity-1-safe \
@@ -444,17 +444,17 @@ fn and_map_cross_module_annotated_wrapper_accepted() {
 #[test]
 fn and_map_forwarder_curried_is_sky_t0014() {
     let root = repo_root();
-    if skyc::resolve_runtime().is_err() {
+    if ipe::resolve_runtime().is_err() {
         return;
     }
     let entry = fixture_src_entry(&root, "and_map_forwarder_curried_is_t0014");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("l0114_and_map_forwarder_curried_is_t0014_emit");
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     let code = match &built {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
         _ => None,
@@ -477,7 +477,7 @@ fn and_map_forwarder_curried_is_sky_t0014() {
 #[test]
 fn lambda_param_reuse_gated() {
     let root = repo_root();
-    if skyc::resolve_runtime().is_err() {
+    if ipe::resolve_runtime().is_err() {
         return;
     }
     let (built, _out) = built_code(&root, "lambda_param_reuse_gated");
@@ -498,7 +498,7 @@ fn lambda_param_reuse_gated() {
 #[test]
 fn lambda_param_call_twice_accepted() {
     let root = repo_root();
-    if skyc::resolve_runtime().is_err() {
+    if ipe::resolve_runtime().is_err() {
         return;
     }
     let (built, out) = built_code(&root, "lambda_param_call_twice_accepted");
@@ -526,7 +526,7 @@ fn lambda_param_call_twice_accepted() {
 #[test]
 fn fn_carrier_reuse_gated() {
     let root = repo_root();
-    if skyc::resolve_runtime().is_err() {
+    if ipe::resolve_runtime().is_err() {
         return;
     }
     let (built, _out) = built_code(&root, "fn_carrier_reuse_gated");
@@ -549,7 +549,7 @@ fn fn_carrier_reuse_gated() {
 /// concrete `Fun` found at a forwarder's own external call site).
 fn assert_rejected_t0014(name: &str) {
     let root = repo_root();
-    if skyc::resolve_runtime().is_err() {
+    if ipe::resolve_runtime().is_err() {
         return;
     }
     let (built, _out) = built_code(&root, name);
@@ -570,7 +570,7 @@ fn assert_rejected_t0014(name: &str) {
 /// whose absence let attempts 1-4 ship exit-0-then-cargo-fail bugs.
 fn assert_accepted_runs(name: &str, expected_stdout: &str) {
     let root = repo_root();
-    if skyc::resolve_runtime().is_err() {
+    if ipe::resolve_runtime().is_err() {
         return;
     }
     let (built, out) = built_code(&root, name);
@@ -657,7 +657,7 @@ fn and_map_untyped_double_forwarder_arity1_accepted() {
 #[test]
 fn and_map_cross_module_untyped_forwarder_curried_rejected() {
     let root = repo_root();
-    if skyc::resolve_runtime().is_err() {
+    if ipe::resolve_runtime().is_err() {
         return;
     }
     let entry = fixture_src_entry(
@@ -667,10 +667,10 @@ fn and_map_cross_module_untyped_forwarder_curried_rejected() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("l0114_and_map_cross_module_untyped_forwarder_curried_emit");
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     let code = match &built {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
         _ => None,

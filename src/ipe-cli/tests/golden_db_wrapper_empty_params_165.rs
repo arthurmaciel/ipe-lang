@@ -96,12 +96,12 @@ fn db_wrapper_empty_params_165_skyc_accepts_and_emits_sql_param_bound() {
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("db_wrapper_empty_params_165_skyc_out");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         eprintln!("SKIP db_wrapper_empty_params_165: runtime not available");
         return;
     };
 
-    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for db_wrapper_empty_params_165: {:?}",
@@ -162,11 +162,11 @@ fn db_wrapper_empty_params_165_cargo_builds_and_runs() {
     let out = std::env::temp_dir().join("skyc_db_wrapper_empty_params_165_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for db_wrapper_empty_params_165: {:?}",

@@ -12,14 +12,14 @@
 //! `crates/ipe_backend_rust/src/project.rs`'s `mod tests` covers the
 //! `db_cargo_toml` / template-selection half in isolation. This test proves
 //! the two halves are actually wired together end-to-end through
-//! `skyc::build_project`.
+//! `ipe::build_project`.
 
 use std::fs;
 use std::path::PathBuf;
 
 #[allow(clippy::expect_used)]
 fn runtime() -> PathBuf {
-    skyc::resolve_runtime().expect("runtime must resolve for this test")
+    ipe::resolve_runtime().expect("runtime must resolve for this test")
 }
 
 /// Minimal Db-kernel-using Sky program — enough to set `EmitCtx::uses_db =
@@ -68,7 +68,7 @@ fn postgres_driver_selects_postgres_config_template() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("pg_reachability_postgres_select");
     let _ = fs::remove_dir_all(&out);
 
-    let built = skyc::build_project(&dir.join("sky.toml"), &out, &runtime());
+    let built = ipe::build_project(&dir.join("sky.toml"), &out, &runtime());
     assert!(
         built.is_ok(),
         "build_project must succeed for a postgres-driver db-using project: {:?}",
@@ -131,7 +131,7 @@ fn postgres_driver_project_cargo_builds() {
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("pg_reachability_postgres_cargo_build");
     let _ = fs::remove_dir_all(&out);
 
-    let built = skyc::build_project(&dir.join("sky.toml"), &out, &runtime());
+    let built = ipe::build_project(&dir.join("sky.toml"), &out, &runtime());
     assert!(
         built.is_ok(),
         "build_project must succeed for a postgres-driver db-using project: {:?}",
@@ -170,7 +170,7 @@ fn no_database_section_still_selects_sqlite_config_template() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("pg_reachability_sqlite_default");
     let _ = fs::remove_dir_all(&out);
 
-    let built = skyc::build_project(&dir.join("sky.toml"), &out, &runtime());
+    let built = ipe::build_project(&dir.join("sky.toml"), &out, &runtime());
     assert!(
         built.is_ok(),
         "build_project must succeed for the default (no [database] section) project: {:?}",

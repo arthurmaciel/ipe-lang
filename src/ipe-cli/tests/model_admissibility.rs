@@ -14,9 +14,9 @@
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-/// Compile `source` through `skyc::build`, returning the pipeline result. The
+/// Compile `source` through `ipe::build`, returning the pipeline result. The
 /// emitted project is written to a per-test temp dir; `cargo` is never invoked.
-fn compile(test_name: &str, source: &str) -> Result<Result<(), skyc::CliError>, BoxError> {
+fn compile(test_name: &str, source: &str) -> Result<Result<(), ipe::CliError>, BoxError> {
     let ipe_dir = std::env::temp_dir().join(format!("model_adm_{test_name}_sky"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
     std::fs::create_dir_all(&ipe_dir)?;
@@ -26,8 +26,8 @@ fn compile(test_name: &str, source: &str) -> Result<Result<(), skyc::CliError>, 
     let out_dir = std::env::temp_dir().join(format!("model_adm_{test_name}_out"));
     let _ = std::fs::remove_dir_all(&out_dir);
 
-    let runtime = skyc::resolve_runtime().map_err(|e| -> BoxError { format!("{e:?}").into() })?;
-    Ok(skyc::build(&entry, &out_dir, &runtime))
+    let runtime = ipe::resolve_runtime().map_err(|e| -> BoxError { format!("{e:?}").into() })?;
+    Ok(ipe::build(&entry, &out_dir, &runtime))
 }
 
 /// Assert compilation failed with the given diagnostic code.
@@ -38,7 +38,7 @@ fn assert_rejected_with(
 ) -> Result<(), BoxError> {
     match compile(test_name, source)? {
         Ok(()) => Err(format!("{test_name}: expected {expected_code}, but skyc succeeded").into()),
-        Err(skyc::CliError::Pipeline { diag, .. }) => {
+        Err(ipe::CliError::Pipeline { diag, .. }) => {
             assert_eq!(
                 diag.code().as_str(),
                 expected_code,

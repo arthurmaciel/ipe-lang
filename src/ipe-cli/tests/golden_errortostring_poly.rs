@@ -39,7 +39,7 @@ fn golden_entry(root: &Path, name: &str) -> PathBuf {
         .join("Main.ipe")
 }
 
-fn try_build(entry: &Path) -> Result<PathBuf, skyc::CliError> {
+fn try_build(entry: &Path) -> Result<PathBuf, ipe::CliError> {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(
         entry
             .parent()
@@ -47,10 +47,10 @@ fn try_build(entry: &Path) -> Result<PathBuf, skyc::CliError> {
             .unwrap_or_default(),
     );
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return Ok(out);
     };
-    skyc::build(entry, &out, &runtime)?;
+    ipe::build(entry, &out, &runtime)?;
     Ok(out)
 }
 
@@ -67,12 +67,12 @@ fn e2e_enabled() -> bool {
 fn errortostring_polymorphic_compiles() {
     let root = repo_root();
     let entry = golden_entry(&root, "m_sky_test_stringify");
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m_sky_test_stringify");
     let _ = std::fs::remove_dir_all(&out);
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "errorToString polymorphic / Eq+Stringify multi-bound must compile: {:?}",
@@ -90,10 +90,10 @@ fn errortostring_polymorphic_e2e() {
     let entry = golden_entry(&root, "m_sky_test_stringify");
     let out = std::env::temp_dir().join("skyc_m_sky_test_stringify_e2e");
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(built.is_ok(), "must compile: {:?}", built.err());
     let outcome = support::build_and_run_emitted("m_sky_test_stringify", &out);
     assert_eq!(outcome.exit_code, Some(0));
@@ -105,12 +105,12 @@ fn errortostring_polymorphic_e2e() {
 fn eqshow_eq_plus_stringify_compiles() {
     let root = repo_root();
     let entry = golden_entry(&root, "m_errortostring_eqshow");
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m_errortostring_eqshow");
     let _ = std::fs::remove_dir_all(&out);
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "Eq+Stringify multi-bound on annotation var must compile: {:?}",
@@ -128,10 +128,10 @@ fn eqshow_e2e() {
     let entry = golden_entry(&root, "m_errortostring_eqshow");
     let out = std::env::temp_dir().join("skyc_m_errortostring_eqshow_e2e");
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(built.is_ok(), "must compile: {:?}", built.err());
     let outcome = support::build_and_run_emitted("m_errortostring_eqshow", &out);
     assert_eq!(outcome.exit_code, Some(0));
@@ -193,12 +193,12 @@ fn standard_libs_errortostring_blocker_gone() {
     }
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("00_standard_libs_gate");
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let result = skyc::build_project(&manifest, &out, &runtime);
+    let result = ipe::build_project(&manifest, &out, &runtime);
     match &result {
-        Err(skyc::CliError::Pipeline { diag, .. }) => {
+        Err(ipe::CliError::Pipeline { diag, .. }) => {
             let msg = format!("{diag:?}");
             assert!(
                 !msg.contains("Test.ipe") || !msg.contains("errorToString expected"),

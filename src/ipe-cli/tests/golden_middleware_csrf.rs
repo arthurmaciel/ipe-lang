@@ -20,7 +20,7 @@ fn out_dir() -> PathBuf {
 }
 
 /// Compile the fixture; `None` (skip) when the runtime cannot be resolved.
-fn compile() -> Option<Result<(), skyc::CliError>> {
+fn compile() -> Option<Result<(), ipe::CliError>> {
     let entry = repo_root()
         .join("tests")
         .join("golden")
@@ -28,10 +28,10 @@ fn compile() -> Option<Result<(), skyc::CliError>> {
         .join("Main.ipe");
     let out = out_dir();
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return None;
     };
-    Some(skyc::build(&entry, &out, &runtime))
+    Some(ipe::build(&entry, &out, &runtime))
 }
 
 /// A `Server.post` route wrapped in `Middleware.withCsrf` must be skyc-0 and

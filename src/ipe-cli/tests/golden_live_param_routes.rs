@@ -31,7 +31,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use skyc::CliError;
+use ipe::CliError;
 
 fn repo_root() -> PathBuf {
     let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
@@ -52,10 +52,10 @@ fn compile_solo() -> Option<Result<(), CliError>> {
         .join("Main.ipe");
     let out = solo_out();
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return None;
     };
-    Some(skyc::build(&entry, &out, &runtime))
+    Some(ipe::build(&entry, &out, &runtime))
 }
 
 /// Compile an inline source through the skyc pipeline (no cargo).
@@ -67,10 +67,10 @@ fn compile_src(test_name: &str, source: &str) -> Option<Result<(), CliError>> {
     std::fs::write(&entry, source).ok()?;
     let out = std::env::temp_dir().join(format!("param_routes_{test_name}_out"));
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return None;
     };
-    Some(skyc::build(&entry, &out, &runtime))
+    Some(ipe::build(&entry, &out, &runtime))
 }
 
 /// MIXED: one nullary route + one `:param` route in the SAME routes list.

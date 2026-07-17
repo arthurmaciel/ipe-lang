@@ -2,8 +2,8 @@
 # scripts/fuzz-ill-typed.sh — ill-typed (rejection) fuzzer for the Ipê/sky-rust port.
 #
 # INVERSE of fuzz-well-typed.sh. Property:
-#   An ILL-TYPED Sky program MUST be REJECTED by `skyc` (exit != 0).
-#   A false-acceptance — skyc exits 0 on an ill-typed program — is a
+#   An ILL-TYPED Sky program MUST be REJECTED by `ipe` (exit != 0).
+#   A false-acceptance — ipe exits 0 on an ill-typed program — is a
 #   REAL SOUNDNESS BUG. Any such finding is copied to
 #   /tmp/sky-fuzz-neg/FAILURES/ and the script exits non-zero.
 #
@@ -63,7 +63,7 @@
 #   --seed N           Start seed (default $RANDOM)
 #   --keep             Keep tempdir on success
 #   --quiet            Suppress per-iter progress; print summary only
-#   --build-timeout N  skyc build timeout in seconds (default 60)
+#   --build-timeout N  ipe build timeout in seconds (default 60)
 #   --base-sanity      Run base-compile sanity check then exit
 #   --cat-demo         Demo one rejected mutant per category then exit
 #   IPE_FUZZ_NEG_FULL=1  Shorthand for --iters 1000
@@ -107,9 +107,9 @@ done
 [[ -z "$SEED" ]] && SEED=$RANDOM
 
 # ── Preflight ─────────────────────────────────────────────────────────────────
-if [[ ! -x "$SKYC_BIN" ]]; then
-    echo "ERROR: skyc binary not found at '$SKYC_BIN'" >&2
-    echo "  Build: cargo build -p skyc  (or set SKYC_BIN=...)" >&2
+if [[ ! -x "$IPE_BIN" ]]; then
+    echo "ERROR: ipe binary not found at '$IPE_BIN'" >&2
+    echo "  Build: cargo build -p ipe  (or set IPE_BIN=...)" >&2
     exit 2
 fi
 
@@ -120,7 +120,7 @@ if [[ -n "$FREE_KB" && "$FREE_KB" -lt 2097152 ]]; then
 fi
 
 if ! pgrep -f 'mem-guard\.sh' >/dev/null 2>&1; then
-    echo "WARN: mem-guard.sh not running — a runaway skyc can pressure host memory." >&2
+    echo "WARN: mem-guard.sh not running — a runaway ipe can pressure host memory." >&2
 fi
 
 # ── Deterministic PRNG (same LCG as fuzz-well-typed.sh) ──────────────────────
@@ -138,18 +138,18 @@ entry = "src/Main.ipe"
 EOF
 }
 
-# ── Run skyc; return 0 iff skyc REJECTED (exit != 0) ─────────────────────────
+# ── Run ipe; return 0 iff ipe REJECTED (exit != 0) ─────────────────────────
 # Also checks that expected_code appears in stderr when non-empty.
-# Output: the skyc stderr (for code-extraction in demo mode).
-run_skyc_expect_reject() {
+# Output: the ipe stderr (for code-extraction in demo mode).
+run_ipe_expect_reject() {
     local dir=$1 expected_code=${2:-""}
     local log="$dir/build.log"
     : > "$log"
     local rc=0
     ( cd "$dir" && timeout "$BUILD_TIMEOUT" \
-      "$SKYC_BIN" build src/Main.ipe --out sky-out/rust >"$log" 2>&1 ) || rc=$?
+      "$IPE_BIN" build src/Main.ipe --out sky-out/rust >"$log" 2>&1 ) || rc=$?
     if [[ "$rc" -eq 0 ]]; then
-        # FALSE ACCEPTANCE: skyc returned 0 on an ill-typed program.
+        # FALSE ACCEPTANCE: ipe returned 0 on an ill-typed program.
         echo "FALSE-ACCEPTANCE"
         return 1
     fi
@@ -157,7 +157,7 @@ run_skyc_expect_reject() {
         echo "TIMEOUT"
         return 1
     fi
-    # skyc rejected (rc != 0) — good.
+    # ipe rejected (rc != 0) — good.
     if [[ -n "$expected_code" ]]; then
         if grep -q "$expected_code" "$log"; then
             echo "REJECTED-WITH-CODE"
@@ -170,15 +170,15 @@ run_skyc_expect_reject() {
     return 0
 }
 
-# ── Run skyc; return 0 iff skyc ACCEPTED (exit 0) ────────────────────────────
+# ── Run ipe; return 0 iff ipe ACCEPTED (exit 0) ────────────────────────────
 # Used only for the base sanity check.
-run_skyc_expect_accept() {
+run_ipe_expect_accept() {
     local dir=$1
     local log="$dir/build.log"
     : > "$log"
     local rc=0
     ( cd "$dir" && timeout "$BUILD_TIMEOUT" \
-      "$SKYC_BIN" build src/Main.ipe --out sky-out/rust >"$log" 2>&1 ) || rc=$?
+      "$IPE_BIN" build src/Main.ipe --out sky-out/rust >"$log" 2>&1 ) || rc=$?
     [[ "$rc" -eq 0 ]]
 }
 
@@ -620,7 +620,7 @@ save_false_acceptance() {
     printf 'seed=%s label=%s expected_code=%s\n' \
         "$seed" "$label" "$code" > "$dst/SUMMARY"
     printf '\n=== FALSE ACCEPTANCE BUG REPORT ===\n'
-    printf 'skyc accepted an ILL-TYPED program:\n'
+    printf 'ipe accepted an ILL-TYPED program:\n'
     printf '  seed:   %s\n' "$seed"
     printf '  label:  %s\n' "$label"
     printf '  expect: %s\n' "$code"
@@ -663,7 +663,7 @@ run_base_sanity() {
         local bdir="$FUZZ_DIR/base-$name"
         setup_project "$bdir"
         "base_$name" > "$bdir/src/Main.ipe"
-        if run_skyc_expect_accept "$bdir"; then
+        if run_ipe_expect_accept "$bdir"; then
             printf '  OK:   %s\n' "$label"
         else
             printf '  FAIL: %s — base did not compile (harness bug or compiler regression)\n' "$label"
@@ -709,14 +709,14 @@ run_cat_demo() {
         : > "$log"
         local rc=0
         ( cd "$ddir" && timeout "$BUILD_TIMEOUT" \
-          "$SKYC_BIN" build src/Main.ipe --out sky-out/rust >"$log" 2>&1 ) || rc=$?
+          "$IPE_BIN" build src/Main.ipe --out sky-out/rust >"$log" 2>&1 ) || rc=$?
 
         if [[ "$rc" -eq 0 ]]; then
-            printf '  RESULT: FALSE ACCEPTANCE (skyc exit 0) — SOUNDNESS BUG!\n'
+            printf '  RESULT: FALSE ACCEPTANCE (ipe exit 0) — SOUNDNESS BUG!\n'
             printf '  src: %s/src/Main.ipe\n' "$ddir"
             demo_ok=0
         elif [[ "$rc" -eq 124 ]]; then
-            printf '  RESULT: TIMEOUT (skyc hung)\n'
+            printf '  RESULT: TIMEOUT (ipe hung)\n'
             demo_ok=0
         else
             if grep -q "$code" "$log" 2>/dev/null; then
@@ -771,7 +771,7 @@ run_iter() {
     : > "$log"
     local rc=0
     ( cd "$iterdir" && timeout "$BUILD_TIMEOUT" \
-      "$SKYC_BIN" build src/Main.ipe --out sky-out/rust >"$log" 2>&1 ) || rc=$?
+      "$IPE_BIN" build src/Main.ipe --out sky-out/rust >"$log" 2>&1 ) || rc=$?
 
     if [[ "$rc" -eq 0 ]]; then
         echo "FALSE-ACCEPTANCE label=$label expected=$code"
@@ -782,7 +782,7 @@ run_iter() {
         return 1
     fi
 
-    # skyc rejected — correct. Report how closely the code matched.
+    # ipe rejected — correct. Report how closely the code matched.
     if grep -q "$code" "$log" 2>/dev/null; then
         echo "REJECTED-OK label=$label code=$code"
     else
@@ -812,7 +812,7 @@ fi
 # MAIN LOOP
 # ═══════════════════════════════════════════════════════════════════════════════
 echo "sky-fuzz-neg: mode=ill-typed iters=$ITERS start_seed=$SEED"
-echo "sky-fuzz-neg: skyc=$SKYC_BIN"
+echo "sky-fuzz-neg: ipe=$IPE_BIN"
 echo "sky-fuzz-neg: catalogue_size=$CATALOGUE_SIZE build_timeout=${BUILD_TIMEOUT}s"
 echo "sky-fuzz-neg: failures_dir=$FAILURES_DIR"
 echo "sky-fuzz-neg: property: every ill-typed mutant must be REJECTED (exit != 0)"
@@ -898,7 +898,7 @@ if [[ "$false_acceptances" -gt 0 ]]; then
 fi
 
 if [[ "$timeouts" -gt 0 ]]; then
-    echo "sky-fuzz-neg: WARNING — $timeouts timeout(s). Investigate: skyc hung on some ill-typed programs."
+    echo "sky-fuzz-neg: WARNING — $timeouts timeout(s). Investigate: ipe hung on some ill-typed programs."
 fi
 
 if [[ "$rejected" -eq "$ITERS" ]]; then

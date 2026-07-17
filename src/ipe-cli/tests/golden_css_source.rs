@@ -16,7 +16,7 @@ mod support;
 
 #[allow(clippy::expect_used)]
 fn runtime() -> PathBuf {
-    skyc::resolve_runtime().expect("runtime must resolve for css golden")
+    ipe::resolve_runtime().expect("runtime must resolve for css golden")
 }
 
 fn repo_root() -> PathBuf {
@@ -40,7 +40,7 @@ fn css_source_builds_and_injects_leaf_kernels() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("css_source_emit");
     let _ = std::fs::remove_dir_all(&out);
 
-    let res = skyc::build_project(&css_manifest(), &out, &runtime());
+    let res = ipe::build_project(&css_manifest(), &out, &runtime());
     assert!(
         res.is_ok(),
         "Std.Css project must build (inject → canon-as-stdlib → lower → emit): {:?}",
@@ -83,7 +83,7 @@ fn css_e2e_neutralises_injection() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("css_source_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let res = skyc::build_project(&css_manifest(), &out, &runtime());
+    let res = ipe::build_project(&css_manifest(), &out, &runtime());
     assert!(res.is_ok(), "Std.Css build must succeed: {:?}", res.err());
 
     let outcome = support::build_and_run_emitted("spike-css-source", &out);

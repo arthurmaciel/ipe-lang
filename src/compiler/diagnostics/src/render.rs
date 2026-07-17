@@ -11,7 +11,7 @@
 //!    gutter, the primary span underlined with `^` and an inline payload-derived
 //!    label, plus any secondary span underlined with `-` and its own label.
 //! 4. **help / note** — the structured [`Diagnostic::help`] lines, then a
-//!    `= note:` footer pointing at `skyc explain <CODE>`.
+//!    `= note:` footer pointing at `ipe explain <CODE>`.
 //!
 //! The function is pure and **deterministic**: every list is walked in producer
 //! order, there is no `HashMap` iteration, byte→line/col is a checked, clamped
@@ -142,13 +142,13 @@ pub fn render(d: &Diagnostic, file: &str, source: &str) -> String {
         footer.push("note: this is a bug in Sky, please report it".to_string());
         footer.push(format!(
             "note: I'm not sure what went wrong here — sorry about that. This is likely a gap \
-             in the Sky Rust compiler. Please report it (with this source + `skyc --version`) \
+             in the Sky Rust compiler. Please report it (with this source + `ipe --version`) \
              at: {ISSUE_TRACKER_URL}"
         ));
     }
     // Every coded diagnostic keeps the explain-page pointer as its last note.
     footer.push(format!(
-        "note: run `skyc explain {}` for more information",
+        "note: run `ipe explain {}` for more information",
         code.as_str()
     ));
 
@@ -979,7 +979,7 @@ mod tests {
             "underline:\n{out}"
         );
         assert!(
-            out.contains("= note: run `skyc explain IPE-T0001` for more information"),
+            out.contains("= note: run `ipe explain IPE-T0001` for more information"),
             "footer:\n{out}"
         );
         // No ANSI in the non-tty test environment.
@@ -1042,7 +1042,7 @@ mod tests {
             "detail surfaced:\n{out}"
         );
         assert!(out.contains("= note: this is a bug in Sky, please report it"));
-        assert!(out.contains("= note: run `skyc explain IPE-I0001` for more information"));
+        assert!(out.contains("= note: run `ipe explain IPE-I0001` for more information"));
         let _ = IPE_I0001;
     }
 
@@ -1194,7 +1194,7 @@ mod tests {
         // Footer still ends with the explain pointer.
         assert!(
             out.trim_end()
-                .ends_with("note: run `skyc explain IPE-I0001` for more information"),
+                .ends_with("note: run `ipe explain IPE-I0001` for more information"),
             "explain pointer last:\n{out}"
         );
     }

@@ -21,11 +21,11 @@
 //!
 //! Both tests are pure skyc-pipeline checks (no cargo build / runtime binary
 //! required), so they run without `IPE_E2E=1`.  They return early if
-//! [`skyc::resolve_runtime`] cannot locate the embedded runtime.
+//! [`ipe::resolve_runtime`] cannot locate the embedded runtime.
 
 use std::path::{Path, PathBuf};
 
-use skyc::CliError;
+use ipe::CliError;
 
 fn repo_root() -> PathBuf {
     let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
@@ -44,11 +44,11 @@ fn run_skyc(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>> {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         // Runtime not available in this environment — skip.
         return None;
     };
-    Some(skyc::build(&entry, &out, &runtime))
+    Some(ipe::build(&entry, &out, &runtime))
 }
 
 /// NEGATIVE gate: `Event.onInput` with a `Bool -> msg`

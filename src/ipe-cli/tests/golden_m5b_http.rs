@@ -61,7 +61,7 @@ fn build_run(name: &str) -> (PathBuf, support::RunOutcome) {
     let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else {
         return (
@@ -72,7 +72,7 @@ fn build_run(name: &str) -> (PathBuf, support::RunOutcome) {
             },
         );
     };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(built.is_ok(), "build failed for {name}: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted(name, &out);
@@ -146,7 +146,7 @@ fn http_response_fields() {
 /// instead of resolving a name through the record-shape registry.
 ///
 /// This is the default-gate (emit-only, no `IPE_E2E`) companion to
-/// `http_response_fields` above: it needs only `skyc::build` to succeed and
+/// `http_response_fields` above: it needs only `ipe::build` to succeed and
 /// inspects the emitted Rust text, so it runs without a cargo build and
 /// cannot be silently reintroduced without failing `cargo nextest` (unlike
 /// the `IPE_E2E`-gated golden, which is invisible to the default gate).
@@ -157,14 +157,14 @@ fn http_default_request_emits_without_signature_consumer() {
     let out = std::env::temp_dir().join("skyc_m5b_http_default_request_no_sig_emit");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         // Mirrors the byte goldens' resolve dependency — skip rather than
         // false-fail when the runtime dir can't be resolved in this
         // environment.
         return;
     };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for a HttpRequest built via \

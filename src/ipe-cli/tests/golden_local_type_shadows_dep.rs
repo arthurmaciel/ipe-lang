@@ -15,7 +15,7 @@
 //! `inject_dep_type`'s existing dep-vs-dep clash check EXACTLY, closing the
 //! asymmetry for the local-vs-dep case (both unions and aliases).
 //!
-//! This test only checks that `skyc::build` fails with IPE-N0012 (does NOT build
+//! This test only checks that `ipe::build` fails with IPE-N0012 (does NOT build
 //! or run the emitted Rust project; does NOT require `IPE_E2E`).
 //!
 //! Run:
@@ -43,11 +43,11 @@ fn try_build(name: &str) -> Result<(), String> {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_skyc_out"));
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         eprintln!("SKIP {name}: runtime not available");
         return Ok(());
     };
-    skyc::build_with_sibling_discovery(&entry, &out, &runtime).map_err(|e| e.to_string())
+    ipe::build_with_sibling_discovery(&entry, &out, &runtime).map_err(|e| e.to_string())
 }
 
 /// The exact two-module repro from item D — `Main` declares `type Color`

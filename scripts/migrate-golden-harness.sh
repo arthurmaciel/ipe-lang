@@ -26,7 +26,7 @@
 #
 # After running, ALWAYS:
 #   rustfmt --edition 2024 <changed files>
-#   cargo test -p skyc --test <changed test> ...   # prove each batch green
+#   cargo test -p ipe --test <changed test> ...   # prove each batch green
 #
 set -euo pipefail
 
@@ -159,4 +159,4 @@ done
 
 echo "---"
 echo "migrated: $migrated   skipped (nonstandard/unchanged): $skipped"
-echo "Now run: rustfmt --edition 2024 <migrated files> && cargo test -p skyc --test <...>"
+echo "Now run: rustfmt --edition 2024 <migrated files> && cargo test -p ipe --test <...>"

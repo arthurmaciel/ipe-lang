@@ -59,12 +59,12 @@ fn i198_skyc_accepts_and_renders_send_only_fnonce_param() {
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i198_decoder_payload_mapper_skyc_out");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         eprintln!("SKIP decoder_payload_mapper: runtime not available");
         return;
     };
 
-    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for decoder_payload_mapper: {:?}",
@@ -108,11 +108,11 @@ fn i198_cargo_builds_and_runs() {
     let out = std::env::temp_dir().join("skyc_i198_decoder_payload_mapper_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for decoder_payload_mapper: {:?}",

@@ -43,9 +43,9 @@ fn golden_dir(name: &str) -> PathBuf {
     repo_root().join("tests").join("golden").join(name)
 }
 
-fn diag_code(err: &skyc::CliError) -> Option<ipe_diagnostics::Code> {
+fn diag_code(err: &ipe::CliError) -> Option<ipe_diagnostics::Code> {
     match err {
-        skyc::CliError::Pipeline { diag, .. } => Some(diag.code()),
+        ipe::CliError::Pipeline { diag, .. } => Some(diag.code()),
         _ => None,
     }
 }
@@ -66,12 +66,12 @@ fn subset_access_skyc_accepts_and_resolves_superset_struct() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("row_poly_subset_access_skyc_out");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         eprintln!("SKIP row_poly_subset_access: runtime not available");
         return;
     };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must accept row_poly_subset_access (P2, subset field \
@@ -108,10 +108,10 @@ fn subset_access_cargo_builds_and_prints_ada() {
     let out = std::env::temp_dir().join("skyc_row_poly_subset_access_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for row_poly_subset_access: {:?}",
@@ -149,12 +149,12 @@ fn subset_pattern_skyc_accepts_and_completes_superset_pattern() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("row_poly_subset_pattern_skyc_out");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         eprintln!("SKIP row_poly_subset_pattern: runtime not available");
         return;
     };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must accept row_poly_subset_pattern (P5 case pattern + \
@@ -192,10 +192,10 @@ fn subset_pattern_cargo_builds_and_prints_iri_ada_bo() {
     let out = std::env::temp_dir().join("skyc_row_poly_subset_pattern_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for row_poly_subset_pattern: {:?}",
@@ -233,11 +233,11 @@ fn closed_superset_is_sky_t0001() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_out"));
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         eprintln!("SKIP {name}: runtime not available");
         return;
     };
-    let res = skyc::build(&entry, &out, &runtime);
+    let res = ipe::build(&entry, &out, &runtime);
     assert!(res.is_err(), "{name} must fail to compile");
     let Err(err) = res else { return };
     assert_eq!(
@@ -282,11 +282,11 @@ fn two_different_supersets_is_sky_t0001() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_out"));
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         eprintln!("SKIP {name}: runtime not available");
         return;
     };
-    let res = skyc::build(&entry, &out, &runtime);
+    let res = ipe::build(&entry, &out, &runtime);
     assert!(res.is_err(), "{name} must fail to compile");
     let Err(err) = res else { return };
     assert_eq!(
@@ -323,11 +323,11 @@ fn row_var_annotation_is_sky_p0001() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_out"));
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         eprintln!("SKIP {name}: runtime not available");
         return;
     };
-    let res = skyc::build(&entry, &out, &runtime);
+    let res = ipe::build(&entry, &out, &runtime);
     assert!(res.is_err(), "{name} must fail to compile");
     let Err(err) = res else { return };
     assert_eq!(

@@ -7,7 +7,7 @@
 //! ## Architecture
 //!
 //! 1. A minimal Sky.Live counter program is written to a temp dir.
-//! 2. `skyc::build` compiles it (parse → canon → types → lower → emit Rust).
+//! 2. `ipe::build` compiles it (parse → canon → types → lower → emit Rust).
 //! 3. `oracle::build_rust_binary` runs `cargo build` on the emitted project —
 //!    the shared Cargo target (`~/.cargo/config.toml`) lets axum/tokio/serde
 //!    compile once and be reused.
@@ -309,10 +309,10 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxEr
     let out_dir = std::env::temp_dir().join(format!("live_e2e_{test_name}_emitted"));
     let _ = std::fs::remove_dir_all(&out_dir);
 
-    let runtime = skyc::resolve_runtime()
+    let runtime = ipe::resolve_runtime()
         .map_err(|e| -> BoxError { format!("{test_name}: runtime unavailable: {e}").into() })?;
 
-    skyc::build(&entry, &out_dir, &runtime)
+    ipe::build(&entry, &out_dir, &runtime)
         .map_err(|e| -> BoxError { format!("{test_name}: skyc build failed: {e}").into() })?;
 
     let exe = oracle::build_rust_binary(test_name, &out_dir)

@@ -20,7 +20,7 @@ mod support;
 
 #[allow(clippy::expect_used)]
 fn runtime() -> PathBuf {
-    skyc::resolve_runtime().expect("runtime must resolve for grid seal test")
+    ipe::resolve_runtime().expect("runtime must resolve for grid seal test")
 }
 
 /// A minimal Std.Ui program exercising BOTH grid entry points:
@@ -54,7 +54,7 @@ main =
 // the two tests here run in parallel by default; a shared path would let one
 // test's `remove_dir_all` race the other's `create_dir_all`. A per-test slot
 // removes the shared-path contention entirely.
-fn build_grid_project(slot: &str) -> (PathBuf, Result<(), skyc::CliError>) {
+fn build_grid_project(slot: &str) -> (PathBuf, Result<(), ipe::CliError>) {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("stdui_grid_seal_{slot}"));
     let _ = std::fs::remove_dir_all(&out);
     let src = out.join("src");
@@ -62,7 +62,7 @@ fn build_grid_project(slot: &str) -> (PathBuf, Result<(), skyc::CliError>) {
     let entry = src.join("Main.ipe");
     std::fs::write(&entry, MAIN_SKY).expect("write Main.ipe");
     let emit = out.join("emit");
-    let res = skyc::build(&entry, &emit, &runtime());
+    let res = ipe::build(&entry, &emit, &runtime());
     (emit, res)
 }
 

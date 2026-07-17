@@ -21,7 +21,7 @@
 
 use std::path::{Path, PathBuf};
 
-use skyc::CliError;
+use ipe::CliError;
 
 mod support;
 
@@ -48,10 +48,10 @@ fn assert_l0115_gate(fixture: &str, out_suffix: &str) {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     let got = match &built {
         Err(CliError::Pipeline { diag, .. }) => Some(diag.code()),
         _ => None,
@@ -72,10 +72,10 @@ fn nested_tuple_str_column_builds() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("tuple_nested_coerce_str_gate");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let built = skyc::build(&fixture_entry("i_tuple_nested_coerce_str"), &out, &runtime);
+    let built = ipe::build(&fixture_entry("i_tuple_nested_coerce_str"), &out, &runtime);
     assert!(
         built.is_ok(),
         "a string-literal column nested in a nested-tuple column on a variable \
@@ -94,10 +94,10 @@ fn nested_tuple_str_column_cargo_builds_and_runs() {
     let out = std::env::temp_dir().join("skyc_tuple_nested_coerce_str_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let built = skyc::build(&fixture_entry("i_tuple_nested_coerce_str"), &out, &runtime);
+    let built = ipe::build(&fixture_entry("i_tuple_nested_coerce_str"), &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for i_tuple_nested_coerce_str: {:?}",

@@ -28,9 +28,9 @@ fn false_marker() -> bool {
 #[test]
 fn run_no_args_returns_usage_error() {
     let args: Vec<String> = vec!["run".to_owned()];
-    let result = skyc::run_cli(&args);
+    let result = ipe::run_cli(&args);
     assert!(
-        matches!(result, Err(skyc::CliError::Usage(_))),
+        matches!(result, Err(ipe::CliError::Usage(_))),
         "expected Usage error for bare `skyc run`, got: {result:?}"
     );
 }
@@ -46,9 +46,9 @@ fn run_unknown_flag_returns_usage_error() {
         "Main.ipe".to_owned(),
         "--bogus-flag".to_owned(),
     ];
-    let result = skyc::run_cli(&args);
+    let result = ipe::run_cli(&args);
     assert!(
-        matches!(result, Err(skyc::CliError::Usage(_))),
+        matches!(result, Err(ipe::CliError::Usage(_))),
         "expected Usage error for unknown flag after entry, got: {result:?}"
     );
 }
@@ -74,7 +74,7 @@ fn run_subcommand_builds_and_executes_hello_program() {
 
     // Resolve the runtime dir (skips the test when IPE_RUNTIME_DIR is unset
     // and the walk-up also fails, which happens in CI without the repo tree).
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(
         runtime.is_ok(),
         "runtime must resolve for E2E test: {runtime:?}"
@@ -99,7 +99,7 @@ fn run_subcommand_builds_and_executes_hello_program() {
     // function + cargo build directly to verify SEAL, then run the binary as a
     // child process to check stdout.  This exercises the same code paths as
     // run_run without sacrificing the test runner.
-    let built = skyc::build(&entry, &out_dir, &runtime_dir);
+    let built = ipe::build(&entry, &out_dir, &runtime_dir);
     assert!(built.is_ok(), "skyc build step must succeed: {built:?}");
 
     let cargo_status = std::process::Command::new("cargo")

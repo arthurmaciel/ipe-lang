@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# remeasure.sh — rebuild skyc, run every example through it, and print the first
+# remeasure.sh — rebuild ipe, run every example through it, and print the first
 # blocker per example (or PASS), diffing against the last run. This is the
 # "measure" half of the refill cadence: it SURFACES new/changed blockers so a
 # human can triage which are mechanical (→ backlog.jsonl [progdev-safe], loop-eligible)
@@ -10,18 +10,18 @@
 #   scripts/progressive-development/remeasure.sh            # all examples
 #   scripts/progressive-development/remeasure.sh 00 12 37   # only matching dirs
 #
-# Env: MASTER_GATE_TARGET (~/.cache/master-gate-target) — where skyc is built.
+# Env: MASTER_GATE_TARGET (~/.cache/master-gate-target) — where ipe is built.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 TARGET="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}"
 RUNTIME="$(pwd)/src/runtime/rust/src/sky_runtime"
 SNAP="docs/architecture/remeasure-snapshot.tsv"
 
-echo "remeasure: building skyc (CARGO_TARGET_DIR=$TARGET) …"
-CARGO_TARGET_DIR="$TARGET" timeout 1800 cargo build -p skyc >/tmp/remeasure-build.log 2>&1 \
-    || { echo "skyc build FAILED — see /tmp/remeasure-build.log"; tail -20 /tmp/remeasure-build.log; exit 1; }
-SKYC="$TARGET/debug/skyc"
-[ -x "$SKYC" ] || { echo "skyc binary not found at $SKYC"; exit 1; }
+echo "remeasure: building ipe (CARGO_TARGET_DIR=$TARGET) …"
+CARGO_TARGET_DIR="$TARGET" timeout 1800 cargo build -p ipe >/tmp/remeasure-build.log 2>&1 \
+    || { echo "ipe build FAILED — see /tmp/remeasure-build.log"; tail -20 /tmp/remeasure-build.log; exit 1; }
+IPE="$TARGET/debug/ipe"
+[ -x "$IPE" ] || { echo "ipe binary not found at $IPE"; exit 1; }
 
 # Select example dirs: all, or only those matching the given prefixes.
 dirs=()
@@ -38,7 +38,7 @@ pass=0; fail=0
 for d in "${dirs[@]}"; do
     name="$(basename "$d")"
     [ -f "$d/src/Main.ipe" ] || continue
-    out="$(cd "$d" && IPE_RUNTIME_DIR="$RUNTIME" timeout 150 "$SKYC" build src/Main.ipe 2>&1)"; rc=$?
+    out="$(cd "$d" && IPE_RUNTIME_DIR="$RUNTIME" timeout 150 "$IPE" build src/Main.ipe 2>&1)"; rc=$?
     if [ "$rc" -eq 0 ]; then
         blk="PASS"; pass=$((pass+1))
     else
