@@ -1,0 +1,145 @@
+-- | Ipe.Task — Task combinator surface (Layer 3 Sky source, M5a).
+--
+-- All functions are aliased to the runtime kernel via `Ffi.kernel`. The HM
+-- type schemes below govern how the type-checker treats each combinator
+-- when user code calls `Task.<fn>`. `Error` in the type signatures is the
+-- implicit error channel — the real `SkyError` enum at the Rust level
+-- (`SkyError::Error(kind, info)`, backlog #85/#160), not a plain `String`.
+module Ipe.Task exposing
+    ( succeed, fail
+    , map, andThen
+    , mapError, onError
+    , fromResult, andThenResult
+    , sequence, parallel
+    , lazy
+    , run
+    , RetryPolicy
+    , linearBackoff, exponentialBackoff
+    , withJitter
+    , retryOn, withRetryOn
+    , defaultRetryPolicy
+    , withMaxAttempts, withBaseMs, withKind
+    , retryWith
+    )
+
+
+import Ipe.Ffi as Ffi
+
+
+-- ── Construction ─────────────────────────────────────────────────────────────
+
+succeed : a -> Task Error a
+succeed = Ffi.kernel "Task_succeed"
+
+fail : Error -> Task Error a
+fail = Ffi.kernel "Task_fail"
+
+
+-- ── Transformation ───────────────────────────────────────────────────────────
+
+map : (a -> b) -> Task Error a -> Task Error b
+map = Ffi.kernel "Task_map"
+
+andThen : (a -> Task Error b) -> Task Error a -> Task Error b
+andThen = Ffi.kernel "Task_andThen"
+
+
+-- ── Error channel ────────────────────────────────────────────────────────────
+
+mapError : (Error -> Error) -> Task Error a -> Task Error a
+mapError = Ffi.kernel "Task_mapError"
+
+onError : (Error -> Task Error a) -> Task Error a -> Task Error a
+onError = Ffi.kernel "Task_onError"
+
+
+-- ── Result bridges ───────────────────────────────────────────────────────────
+
+fromResult : Result Error a -> Task Error a
+fromResult = Ffi.kernel "Task_fromResult"
+
+andThenResult : (a -> Result Error b) -> Task Error a -> Task Error b
+andThenResult = Ffi.kernel "Task_andThenResult"
+
+
+-- ── Concurrency ──────────────────────────────────────────────────────────────
+
+sequence : List (Task Error a) -> Task Error (List a)
+sequence = Ffi.kernel "Task_sequence"
+
+parallel : List (Task Error a) -> Task Error (List a)
+parallel = Ffi.kernel "Task_parallel"
+
+
+-- ── Deferred evaluation ──────────────────────────────────────────────────────
+
+lazy : (() -> Task Error a) -> Task Error a
+lazy = Ffi.kernel "Task_lazy"
+
+
+-- ── Execution ────────────────────────────────────────────────────────────────
+
+run : Task Error a -> Result Error a
+run = Ffi.kernel "Task_run"
+
+
+-- ── Retry policy ─────────────────────────────────────────────────────────────
+
+-- | Retry configuration for `retryWith`.
+-- Fields:
+--   maxAttempts  — maximum number of attempts (including the first).
+--   baseMs       — base delay between attempts in milliseconds.
+--   jitter       — if True, add randomised jitter to each delay.
+--   kind         — 0 = linear (constant delay), 1 = exponential (base * 2^(attempt-1)).
+--   shouldRetry  — predicate; True means retry on this error.
+type alias RetryPolicy e =
+    { maxAttempts : Int
+    , baseMs : Int
+    , jitter : Bool
+    , kind : Int
+    , shouldRetry : e -> Bool
+    }
+
+-- | `linearBackoff maxAttempts delayMs` — linear (constant) delay policy,
+-- retries on all errors.
+linearBackoff : Int -> Int -> RetryPolicy e
+linearBackoff = Ffi.kernel "Task_linearBackoff"
+
+-- | `exponentialBackoff maxAttempts baseMs` — exponential back-off policy,
+-- retries on all errors.
+exponentialBackoff : Int -> Int -> RetryPolicy e
+exponentialBackoff = Ffi.kernel "Task_exponentialBackoff"
+
+-- | `withJitter policy` — enable random jitter on the policy's delays.
+withJitter : RetryPolicy e -> RetryPolicy e
+withJitter = Ffi.kernel "Task_withJitter"
+
+-- | `retryOn pred policy` — replace the shouldRetry predicate.
+retryOn : (e -> Bool) -> RetryPolicy e -> RetryPolicy e
+retryOn = Ffi.kernel "Task_retryOn"
+
+-- | Alias for `retryOn` — same semantics, more pipeline-friendly name.
+withRetryOn : (e -> Bool) -> RetryPolicy e -> RetryPolicy e
+withRetryOn = Ffi.kernel "Task_withRetryOn"
+
+-- | Default retry policy: 3 attempts, 500 ms exponential back-off, no jitter,
+-- retry on all errors.
+defaultRetryPolicy : RetryPolicy e
+defaultRetryPolicy = Ffi.kernel "Task_defaultRetryPolicy"
+
+-- | `withMaxAttempts n policy` — set the maximum number of attempts.
+withMaxAttempts : Int -> RetryPolicy e -> RetryPolicy e
+withMaxAttempts = Ffi.kernel "Task_withMaxAttempts"
+
+-- | `withBaseMs ms policy` — set the base delay in milliseconds.
+withBaseMs : Int -> RetryPolicy e -> RetryPolicy e
+withBaseMs = Ffi.kernel "Task_withBaseMs"
+
+-- | `withKind k policy` — set the delay kind: 0 = linear, 1 = exponential.
+withKind : Int -> RetryPolicy e -> RetryPolicy e
+withKind = Ffi.kernel "Task_withKind"
+
+-- | `retryWith policy task` — run `task`, retrying according to `policy`
+-- when it fails.
+retryWith : RetryPolicy Error -> Task Error a -> Task Error a
+retryWith = Ffi.kernel "Task_retryWith"

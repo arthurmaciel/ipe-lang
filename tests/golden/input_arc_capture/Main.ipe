@@ -11,7 +11,7 @@ import Ipe.Log exposing (println)
 -- BACKLOG #191 regression — a non-Copy binding captured into an Input `Arc`
 -- callback AND reused by a sibling.
 --
--- Pre-fix: `ipe build` exits 0, but the emitted Rust fails `cargo build` with
+-- Pre-fix: `skyc build` exits 0, but the emitted Rust fails `cargo build` with
 -- E0382 ("use of moved value: `habit`"). The lowerer pre-clones the checkbox
 -- `onChange` callback's captured `habit` (`let habit = habit.clone(); Lambda`),
 -- but `arc_callback_wrap` then re-wrapped the WHOLE block in

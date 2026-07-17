@@ -2,7 +2,7 @@ module Main exposing (main)
 
 -- Deep self-tail-recursion (#49): 2,000,000 iterations. Without TCO the Rust
 -- backend recurses and overflows the thread stack (SIGABRT — an unclassifiable
--- process death from well-typed Ipê). With TCO the body emits a flat
+-- process death from well-typed Sky). With TCO the body emits a flat
 -- `loop { … continue }`, so the stack stays constant. Value: 2000000.
 
 count : Int -> Int -> Int

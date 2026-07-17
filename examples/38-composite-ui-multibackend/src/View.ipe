@@ -100,7 +100,7 @@ header model =
               , Font.bold
               , Font.size 20
               ]
-              (Ui.text "Ipê Habits")
+              (Ui.text "Sky Habits")
         , Ui.el
               [ Font.color (Ui.rgb 220 230 245), Font.size 13, Ui.alignRight ]
               (Ui.text ("Day " ++ ToString.fromInt model.todayIndex))
@@ -384,7 +384,7 @@ footer =
         [ Ui.el
               [ Font.color muted, Font.size 12 ]
               (Ui.text
-                  "Ipê composite test app · examples/38-composite-ui-multibackend")
+                  "Sky composite test app · examples/38-composite-ui-multibackend")
         , Ui.el
               [ Ui.alignRight, Font.color muted, Font.size 12 ]
               (Ui.text "Live · Tui · Webview from one source")

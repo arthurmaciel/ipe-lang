@@ -5,7 +5,7 @@ module Main exposing (main)
 -- token is byte-identical to the genuine Go-backend token captured from the
 -- equivalent builder-API program `Jwt.encode (Jwt.rs256 privKey) (claims …)`.
 -- See oracle.meta (divergence note) and the byte-parity assertion in
--- crates/ipe/tests/golden_m5b_uuid_jwt.rs.
+-- crates/skyc/tests/golden_m5b_uuid_jwt.rs.
 -- SECURITY: this key is test-only; it exists solely to exercise the codec path.
 main =
     let

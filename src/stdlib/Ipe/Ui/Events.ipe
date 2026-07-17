@@ -1,0 +1,38 @@
+-- | Ipe.Ui.Events — re-exports of event helpers (onClick / onSubmit / onInput) for `Ipe.Ui`.
+module Ipe.Ui.Events exposing (onClick, onSubmit, onInput)
+
+-- Ipe.Ui.Events — re-exports of the event helpers that live on
+-- Ipe.Ui itself, grouped here for users who prefer importing
+-- events from a dedicated sub-module.
+--
+-- Tier 1 ships static rendering only — the AttrEvent constructor
+-- is recorded on the Element but the inline-style renderer drops
+-- it. Tier 2 wires AttrEvent through Ipe.Html.Events for actual
+-- Ipe.Live event dispatch.
+
+import Ipe.Prelude exposing (..)
+import Ipe.Ui as Ui
+
+
+onClick : msg -> Ui.Attribute msg
+onClick m = Ui.onClick m
+
+
+-- Divergence from upstream Sky: the Rust `Ui.onSubmit` kernel is
+-- `(a -> msg) -> Attribute msg` — it takes a form-decoder function
+-- (the typed-record-arg pattern `onSubmit DoSignIn`, where
+-- `DoSignIn : LoginForm -> Msg`). Upstream Sky's `onSubmit` is the
+-- permissive `a -> Attribute b`; this re-export mirrors the Rust
+-- kernel's function-arg contract so the wrapper type-checks against
+-- it (recorded in docs/divergences-from-sky.md).
+onSubmit : (a -> msg) -> Ui.Attribute msg
+onSubmit m = Ui.onSubmit m
+
+
+-- Divergence from upstream Sky (same rationale as `onSubmit`): the
+-- Rust `Ui.onInput` kernel is `(String -> msg) -> Attribute msg` — it
+-- takes a handler from the input's String value to a Msg. Upstream
+-- Sky's re-export is `msg -> Attribute msg`; this mirrors the Rust
+-- kernel's function-arg contract.
+onInput : (String -> msg) -> Ui.Attribute msg
+onInput m = Ui.onInput m

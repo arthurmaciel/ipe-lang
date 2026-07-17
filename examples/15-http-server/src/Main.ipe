@@ -28,7 +28,7 @@ handleHome : Handler
 handleHome req =
     Task.succeed
         (Server.html
-            """<h1>Ipê HTTP Server</h1>
+            """<h1>Sky HTTP Server</h1>
 <ul>
     <li><a href='/hello/world'>Hello World</a></li>
     <li><a href='/api/status'>API Status</a></li>
@@ -54,7 +54,7 @@ handleHello req =
 
 handleStatus : Handler
 handleStatus req =
-    Task.succeed (Server.json "{\"status\":\"ok\",\"server\":\"Ipê\"}")
+    Task.succeed (Server.json "{\"status\":\"ok\",\"server\":\"Sky\"}")
 
 
 handleEcho : Handler

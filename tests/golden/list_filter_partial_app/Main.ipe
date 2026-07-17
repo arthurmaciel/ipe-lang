@@ -15,7 +15,7 @@ import Ipe.Log exposing (println)
 -- never actually needed (each calls the predicate through a shared `&self`
 -- borrow, never cloning it). The fix drops the spurious `Clone` bound from
 -- every affected `Ipe.List` HOF kernel; this fixture pins the
--- partial-application shape end-to-end (ipe accepts it AND the emitted
+-- partial-application shape end-to-end (skyc accepts it AND the emitted
 -- Rust both compiles and runs to the expected output).
 
 isAbove : Int -> Int -> Bool
@@ -29,7 +29,7 @@ main =
             [ 1, 2, 3, 4, 5, 6 ]
 
         -- `isAbove 3` is a partial application: a closure over `threshold`
-        -- that itself closes over another already-boxed Ipê function value.
+        -- that itself closes over another already-boxed Sky function value.
         aboveThree =
             List.filter (isAbove 3) items
 

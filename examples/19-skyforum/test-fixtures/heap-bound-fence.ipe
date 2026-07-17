@@ -31,7 +31,7 @@ import Ipe.Ui.Region as Region
 import Ipe.Ui.Input as Input
 
 
--- Local typed-anchor for Ipe.Ui's `none` — Ipê's canonicaliser
+-- Local typed-anchor for Ipe.Ui's `none` — Sky's canonicaliser
 -- currently strips the type parameter when re-exporting it
 -- cross-module, so we re-define it locally.
 noneEl : Element msg
@@ -528,7 +528,7 @@ findPost target posts =
 -- Render the comment tree under a given parent (parentId = 0 for
 -- top-level). Recurses on children, indenting each level by `depth`
 -- pixels. `depth` is the actual pixel indent so we don't re-multiply
--- inside the tree (sidesteps Ipê's HM friction with int arithmetic
+-- inside the tree (sidesteps Sky's HM friction with int arithmetic
 -- across recursive calls).
 commentTreeView : List Comment -> Int -> Int -> Int -> Element Msg
 commentTreeView allComments postId parentId depth =

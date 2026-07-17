@@ -12,7 +12,7 @@ import Ipe.Prelude exposing (..)
 -- from the constructor arg, so `Box::new(closure)` used to pin the CONCRETE
 -- closure type `SkyResult<_, Box<{closure@…}>>` — which never unsize-coerces
 -- to `SkyResult<E, Box<dyn Fn(..)->.. + Send>>` across the `let` boundary and
--- reached `cargo build` as E0308 (ipe-accept / cargo-reject seal hole).
+-- reached `cargo build` as E0308 (skyc-accept / cargo-reject seal hole).
 --
 -- `applyIt`'s param is annotated `Result Error (Int -> Int)` so the fn-carrier
 -- crosses a FUNCTION boundary — Rust's whole-function inference cannot patch

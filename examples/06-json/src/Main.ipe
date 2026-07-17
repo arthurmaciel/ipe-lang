@@ -26,7 +26,7 @@ type alias UserProfile =
 --
 -- The type alias name `Profile` is also a constructor function
 -- (v0.7.26+), so we don't need a separate `makeProfile` helper.
--- Ipê auto-generates `Profile : String -> Int -> Bool -> Profile`
+-- Sky auto-generates `Profile : String -> Int -> Bool -> Profile`
 -- from the field declaration order (same convention Elm uses for
 -- the same construct).
 type alias Profile =
@@ -171,7 +171,7 @@ listExample =
         result =
             Decode.decodeString
                 todoListDecoder
-                "[{\"id\":1,\"title\":\"Buy milk\",\"done\":false},{\"id\":2,\"title\":\"Write Ipê\",\"done\":true}]"
+                "[{\"id\":1,\"title\":\"Buy milk\",\"done\":false},{\"id\":2,\"title\":\"Write Sky\",\"done\":true}]"
     in
         Result.withDefault
             "list error"
@@ -266,7 +266,7 @@ parseFlag value =
 
 -- All three Results combine via map3 — no nested case, no andThen
 -- pyramid, no makeProfile helper. The type alias `Profile` IS the
--- constructor, courtesy of Ipê's auto-generated record constructors.
+-- constructor, courtesy of Sky's auto-generated record constructors.
 profileFromInputs name age active =
     Result.map3
         Profile
@@ -319,7 +319,7 @@ traverseExample =
 -- ============================================================
 main =
     let
-        _ = println "=== Ipê JSON Examples ==="
+        _ = println "=== Sky JSON Examples ==="
         _ = println ""
         _ = println "1. Simple encoding:"
         _ = println encodeSimple

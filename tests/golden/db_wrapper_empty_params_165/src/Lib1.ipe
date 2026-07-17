@@ -3,7 +3,7 @@ module Lib1 exposing (queryOrLog, execOrLog)
 import Ipe.System as System
 
 
--- BACKLOG #165 regression: a Ipê-defined WRAPPER function around `Db.exec` /
+-- BACKLOG #165 regression: a Sky-defined WRAPPER function around `Db.exec` /
 -- `Db.query` (never the kernel called directly) forwards its own polymorphic
 -- `args : List a` parameter straight into the kernel's params position —
 -- exactly `examples/17-skymon`'s `Lib.Database.exec` / `.query` /
@@ -28,8 +28,8 @@ import Ipe.System as System
 --   * the empty-list call SITE with a bare, ambiguous `Vec::new()` argument —
 --     E0283 ("type annotations needed").
 --
--- `ipe` accepted the program (exit 0) while `cargo build` on the emitted
--- Rust rejected it — a ipe-accepts/cargo-rejects SEAL violation.
+-- `skyc` accepted the program (exit 0) while `cargo build` on the emitted
+-- Rust rejected it — a skyc-accepts/cargo-rejects SEAL violation.
 conn =
     case Task.run (Db.open "sqlite" "/tmp/sky_db_wrapper_empty_params_165_golden.db") of
         Ok c ->

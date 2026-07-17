@@ -8,7 +8,7 @@ import Ipe.Log exposing (println)
 -- carrier (`List (Int -> Bool)`). The pre-fix head-only synthesis gate saw the
 -- field head as `Con "List"` (not `Lambda`) and synthesised an auto-constructor,
 -- so the backend emitted a `#[derive(Clone, Debug, PartialEq)]` struct over a
--- `Box<dyn Fn>` field — ipe exit-0 then a cargo build failure (the seal hole).
+-- `Box<dyn Fn>` field — skyc exit-0 then a cargo build failure (the seal hole).
 -- With the recursive gate NO constructor is synthesised, so merely NAMING this
 -- alias (declared, never constructed) builds clean.
 type alias Handlers =

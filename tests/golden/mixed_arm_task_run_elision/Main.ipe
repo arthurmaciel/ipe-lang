@@ -19,7 +19,7 @@ import Ipe.Log exposing (println)
 -- while the `fn main` epilogue's `block_on(sky_main())` unconditionally
 -- requires `SkyTask<A>` (E0308: expected `Pin<Box<dyn Future…>>`, found
 -- `SkyResult<…>`) — the identical failure mode as the original bug, despite
--- `ipe build` exiting 0.
+-- `skyc build` exiting 0.
 --
 -- Closed by widening `emit_func`'s `sky_main_wrap` fallback (previously only
 -- `func.ret == Unit`) to also cover `func.ret == Result(_, A)` with elision

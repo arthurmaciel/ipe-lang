@@ -100,4 +100,4 @@ viewStatusFooter =
     div
         [style
             "text-align: center; margin-top: 32px; color: #475569; font-size: 12px"]
-        [text "Powered by SkyMon • Built with Ipê"]
+        [text "Powered by SkyMon • Built with Sky"]

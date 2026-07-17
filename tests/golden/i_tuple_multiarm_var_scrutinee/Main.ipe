@@ -11,7 +11,7 @@ import Ipe.Log exposing (println)
 -- could drive a tuple `match`, so a variable scrutinee fell fail-closed as
 -- IPE-L0115. It now lowers to a by-value whole `match pair { (_, Passed) => …,
 -- (name, Failed(_)) => … }` — no per-column coercion, matches the tuple value
--- directly. ipe-0 ⟹ cargo-0.
+-- directly. skyc-0 ⟹ cargo-0.
 type Outcome
     = Passed
     | Failed Int

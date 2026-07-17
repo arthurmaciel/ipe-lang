@@ -56,7 +56,7 @@ fn css_source_builds_and_injects_leaf_kernels() {
     let emitted = support::read_all_emitted_src(&out);
     // The compiled Ipe.Css render fold is homed + prefixed as compiled source.
     assert!(
-        emitted.contains("std_css_stylesheet") && emitted.contains("std_css_render_rule"),
+        emitted.contains("ipe_css_stylesheet") && emitted.contains("ipe_css_render_rule"),
         "emitted Rust must carry the compiled Ipe.Css render fold"
     );
     // Free-string entries route through the leaf security kernels (the SOLE Rust
