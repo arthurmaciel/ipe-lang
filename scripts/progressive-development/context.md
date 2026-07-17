@@ -72,7 +72,7 @@ Haskell/Go backend or upstream. Cargo targets go under `~/.cache/ipe/` only
 
 ## 6. The gate (the only thing that authorises a commit)
 ```
-touch runtime/tests/*.rs crates/skyc/tests/*.rs
+touch runtime/tests/*.rs src/ipe-cli/tests/*.rs
 CARGO_TARGET_DIR="${MASTER_GATE_TARGET:-$HOME/.cache/ipe/gate-target}" timeout 3000 cargo nextest run --workspace
 CARGO_TARGET_DIR="${MASTER_GATE_TARGET:-$HOME/.cache/ipe/gate-target}" timeout 1800 cargo nextest run -p sky-runtime-rust --features full
 CARGO_TARGET_DIR="${MASTER_GATE_TARGET:-$HOME/.cache/ipe/gate-target}" timeout 600 cargo test --doc --workspace

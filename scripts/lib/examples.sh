@@ -6,7 +6,7 @@
 # LOGIC (is_out_of_scope / build_set) is preserved VERBATIM — it is the authority
 # on which examples belong to the Rust backend. Only two paths are adapted for
 # this repo: the sky-stdlib index scan (this repo's stdlib lives under
-# crates/skyc/stdlib, not sky-stdlib/) and the equivalence-classification overrides
+# src/stdlib, not sky-stdlib/) and the equivalence-classification overrides
 # path (scripts/, not runtime-rust/scripts/).
 #
 # DERIVED, NOT HARDCODED. Every set is computed at call time from the example
@@ -41,13 +41,13 @@ all_examples() {
 }
 
 # ── _build_stdlib_index: ONE-TIME in-memory index of stdlib module paths ──────
-# ADAPTED: this repo's stdlib source lives under crates/skyc/stdlib (and, once it
+# ADAPTED: this repo's stdlib source lives under src/stdlib (and, once it
 # lands, a top-level sky-stdlib/). SKY_STDLIB_DIRS is a space-separated list of
 # roots to index; both are scanned so a bare/partial stdlib import (`import
 # System` → Sky.Core.System) resolves regardless of which tree owns it. Every
 # `/`-delimited suffix of each module path (minus `.sky`) is recorded as an O(1)
 # key. The BUILT flag is the idempotency guard across re-sources.
-SKY_STDLIB_DIRS="${SKY_STDLIB_DIRS:-crates/skyc/stdlib sky-stdlib}"
+SKY_STDLIB_DIRS="${SKY_STDLIB_DIRS:-src/stdlib sky-stdlib}"
 declare -gA _SKY_STDLIB_INDEX
 _build_stdlib_index() {
   [ -n "${_SKY_STDLIB_INDEX_BUILT:-}" ] && return 0

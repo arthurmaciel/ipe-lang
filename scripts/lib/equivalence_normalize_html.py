@@ -20,7 +20,7 @@ normaliser collapses so a diff shows only behaviourally-meaningful divergences:
     anzellai/sky PR #136) landed a fix in Go `v0.17.1`; the pinned oracle
     (`tools/oracle/README.md`, currently `v0.17.3`) is newer, so the Go side no
     longer produces truncated coordinates. `Sky.Core.String.fromFloat` in this
-    repo's Rust runtime (`runtime/src/sky_runtime/string.rs`) is a byte-for-byte
+    repo's Rust runtime (`src/runtime/rust/src/sky_runtime/string.rs`) is a byte-for-byte
     port of Go's `strconv.FormatFloat(f, 'g', -1, 64)`, verified against real
     oracle probes — so there is no float-*formatting* divergence between the two
     backends to paper over either. A blanket `'#'` mask on every SVG coordinate

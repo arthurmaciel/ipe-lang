@@ -1,0 +1,2107 @@
+#![forbid(unsafe_code)]
+//! `sky_parse` — the lexer + layout + recursive-descent parser for the
+//! supported subset of Sky.
+//!
+//! Entry point: [`parse_module`]. It consumes source text plus a mutable
+//! [`Interner`] and produces a [`sky_syntax::Module`], or a typed
+//! [`sky_diagnostics::Diagnostic`]. The parser is a hand-written recursive
+//! descent port of the Haskell compiler's `Sky.Parse.*`, narrowed to the
+//! nodes the supported subset exercises. Recursion is bounded by
+//! [`parser::MAX_DEPTH`] so adversarial input cannot overflow the stack.
+
+mod layout;
+mod lexer;
+mod parser;
+
+use sky_diagnostics::DResult;
+use sky_intern::Interner;
+use sky_syntax::Module;
+
+pub use parser::MAX_DEPTH;
+
+/// Parse a complete module from source text.
+///
+/// # Errors
+/// Returns a [`sky_diagnostics::Diagnostic`] if the source cannot be lexed or
+/// does not form a valid module, or [`sky_diagnostics::ParseError::TooDeep`]
+/// if the recursion-depth guard trips.
+pub fn parse_module(src: &str, interner: &mut Interner) -> DResult<Module> {
+    let toks = lexer::lex(src)?;
+    let mut p = parser::Parser::new(toks, interner);
+    p.parse_module()
+}
+
+/// Token-level scan of the module paths named by `import` in `src`.
+///
+/// Lexes `src` with the real lexer and returns the dotted path of every
+/// `Ident` token that immediately follows an `import` keyword token — exactly
+/// the token shape [`parse_module`]'s import parser consumes (one `import`
+/// token, then one dotted-identifier token; the layout filter never splices
+/// tokens between them). Because the parser reads this same token stream,
+/// every import edge in a successfully parsed module's AST appears in this
+/// scan. The scan may *over*-approximate (an `import` keyword token outside
+/// the header is a parse error, not an edge) but can never miss an AST edge —
+/// the load-bearing property for the driver's SKY-N0021 import-cycle gate.
+///
+/// Returns `None` when `src` does not lex. An unlexable module cannot parse,
+/// so it contributes no AST import edges; callers may substitute a heuristic
+/// scan for ordering purposes only.
+#[must_use]
+pub fn scan_import_paths(src: &str) -> Option<Vec<Vec<String>>> {
+    let toks = lexer::lex(src).ok()?;
+    let mut out: Vec<Vec<String>> = Vec::new();
+    for pair in toks.windows(2) {
+        let [first, second] = pair else { continue };
+        if first.kind == lexer::Tok::Import
+            && let lexer::Tok::Ident(text) = &second.kind
+        {
+            out.push(text.split('.').map(str::to_owned).collect());
+        }
+    }
+    Some(out)
+}
+
+/// Token-level scan of every identifier word occurring in `src` — the
+/// program-derived collision universe for the lowerer's fresh-name pools
+/// (`Interner::set_fresh_avoid`).
+///
+/// Lexes `src` with the real lexer and collects, for every `Ident` token,
+/// the full (possibly dotted) text AND each dot-segment — a superset of every
+/// identifier string [`parse_module`] interns from this module. Triple-quoted
+/// strings contribute the words inside their `{{…}}` interpolation regions
+/// (the canonicaliser resolves those as real identifier references); plain
+/// string/char literal contents and comments contribute nothing, matching
+/// what the parser actually interns.
+///
+/// Soundness shape: the set must OVER-approximate the module's user
+/// identifiers (a missing identifier could let a minted fresh name capture
+/// it); extra words only skip more candidates.
+///
+/// Returns `None` when `src` does not lex (an unlexable module cannot parse,
+/// so it never reaches lowering; callers may substitute a raw word scan for
+/// totality).
+#[must_use]
+pub fn scan_identifier_words(src: &str) -> Option<std::collections::BTreeSet<String>> {
+    let toks = lexer::lex(src).ok()?;
+    let mut words = std::collections::BTreeSet::new();
+    for tok in &toks {
+        match &tok.kind {
+            lexer::Tok::Ident(text) => {
+                words.insert(text.clone());
+                for segment in text.split('.') {
+                    words.insert(segment.to_owned());
+                }
+            }
+            lexer::Tok::TripleStr(raw) => {
+                // `{{expr}}` interpolation bodies are canonicalised as real
+                // expressions; collect their identifier-shaped words.
+                let mut rest = raw.as_str();
+                while let Some(open) = rest.find("{{") {
+                    let after = rest.get(open.saturating_add(2)..).unwrap_or("");
+                    let Some(close) = after.find("}}") else {
+                        break;
+                    };
+                    let body = after.get(..close).unwrap_or("");
+                    for word in
+                        body.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                    {
+                        if !word.is_empty() {
+                            words.insert(word.to_owned());
+                        }
+                    }
+                    rest = after.get(close.saturating_add(2)..).unwrap_or("");
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(words)
+}
+
+#[cfg(test)]
+// Triple-string lexer tests use `toks[0]` after asserting `toks.len() == 1`.
+// The index is provably in-bounds at that point; suppressing the lint is
+// cleaner than restructuring all assertions.
+#[allow(clippy::indexing_slicing)]
+mod tests {
+    use super::*;
+    use sky_syntax::{Exposed, Exposing, Expr_, Pattern_, TypeAnnotation, Value};
+
+    const GOLDEN: &str = include_str!("../../../../tests/golden/basics/Main.sky");
+
+    fn find_value<'a>(m: &'a Module, i: &Interner, name: &str) -> Option<&'a Value> {
+        m.values
+            .iter()
+            .map(|v| &v.value)
+            .find(|v| i.resolve(v.name.value) == Some(name))
+    }
+
+    #[test]
+    fn parses_golden_module_structure() {
+        let mut i = Interner::new();
+        let result = parse_module(GOLDEN, &mut i);
+        assert!(result.is_ok(), "golden must parse: {result:?}");
+        let Ok(m) = result else { return };
+
+        // Module header: name `Main`, exposing (main).
+        assert_eq!(m.name.value.len(), 1);
+        assert_eq!(
+            m.name.value.first().and_then(|&s| i.resolve(s)),
+            Some("Main")
+        );
+        assert!(matches!(
+            &m.exposing.value,
+            Exposing::List(items)
+                if items.len() == 1
+                    && items.first().is_some_and(|e| matches!(e.value, Exposed::Value(_)))
+        ));
+
+        // One import: Sky.Core.Prelude exposing (..).
+        assert_eq!(m.imports.len(), 1);
+        if let Some(imp) = m.imports.first() {
+            let segs: Vec<&str> = imp
+                .name
+                .value
+                .iter()
+                .filter_map(|&s| i.resolve(s))
+                .collect();
+            assert_eq!(segs, ["Sky", "Core", "Prelude"]);
+            assert!(imp.alias.is_none());
+            assert!(matches!(imp.exposing.value, Exposing::All));
+        }
+
+        // One union: Msg { Increment, Decrement }.
+        assert_eq!(m.unions.len(), 1);
+        if let Some(union) = m.unions.first().map(|u| &u.value) {
+            assert_eq!(i.resolve(union.name.value), Some("Msg"));
+            assert_eq!(union.ctors.len(), 2);
+            assert_eq!(
+                union.ctors.first().and_then(|c| i.resolve(c.value.name)),
+                Some("Increment")
+            );
+            assert_eq!(
+                union.ctors.get(1).and_then(|c| i.resolve(c.value.name)),
+                Some("Decrement")
+            );
+            assert!(union.ctors.first().is_some_and(|c| c.value.args.is_empty()));
+        }
+
+        // Two values: `update` (annotated, two patterns, case body) and `main`.
+        assert_eq!(m.values.len(), 2);
+
+        let update = find_value(&m, &i, "update");
+        assert!(update.is_some(), "update value present");
+        if let Some(uval) = update {
+            assert_eq!(uval.patterns.len(), 2);
+            assert!(
+                uval.patterns
+                    .first()
+                    .is_some_and(|p| matches!(p.value, Pattern_::PVar(_)))
+            );
+            assert!(
+                uval.patterns
+                    .get(1)
+                    .is_some_and(|p| matches!(p.value, Pattern_::PVar(_)))
+            );
+
+            // Annotation: Msg -> Int -> Int (two nested arrows, all TType leaves).
+            assert!(uval.type_annotation.as_ref().is_some_and(|ann| matches!(
+                &ann.value,
+                TypeAnnotation::TLambda(a, rest)
+                    if matches!(**a, TypeAnnotation::TType(_, _, _))
+                        && matches!(
+                            &**rest,
+                            TypeAnnotation::TLambda(b, c)
+                                if matches!(**b, TypeAnnotation::TType(_, _, _))
+                                    && matches!(**c, TypeAnnotation::TType(_, _, _))
+                        )
+            )));
+
+            // Body is a `case` with two arms, each a Binops body.
+            assert!(
+                matches!(&uval.body.value, Expr_::Case(s, _) if matches!(s.value, Expr_::VarLocal(_)))
+            );
+            if let Expr_::Case(_, arms) = &uval.body.value {
+                assert_eq!(arms.len(), 2);
+                for (pat, body) in arms {
+                    assert!(matches!(pat.value, Pattern_::PCtor(_, _, _)));
+                    assert!(matches!(body.value, Expr_::Binops(_, _)));
+                }
+            }
+        }
+
+        // `main`: no patterns, no annotation, nested Call body.
+        let main = find_value(&m, &i, "main");
+        assert!(main.is_some(), "main value present");
+        if let Some(mval) = main {
+            assert!(mval.patterns.is_empty());
+            assert!(mval.type_annotation.is_none());
+            assert!(
+                matches!(&mval.body.value, Expr_::Call(c, _) if matches!(c.value, Expr_::VarLocal(_)))
+            );
+            if let Expr_::Call(_, args) = &mval.body.value {
+                assert_eq!(args.len(), 1);
+                // The single argument is itself a Call (String.fromInt (...)).
+                assert!(
+                    args.first()
+                        .is_some_and(|a| matches!(a.value, Expr_::Call(_, _)))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn qualified_name_in_body_is_var_qual() {
+        let mut i = Interner::new();
+        let result = parse_module(GOLDEN, &mut i);
+        assert!(result.is_ok());
+        let Ok(m) = result else { return };
+        let main = find_value(&m, &i, "main");
+        assert!(main.is_some(), "main present");
+        // main = println (String.fromInt (update Increment 0))
+        let inner = main.and_then(|mv| match &mv.body.value {
+            Expr_::Call(_, outer_args) => outer_args.first(),
+            _ => None,
+        });
+        let qual = inner.and_then(|arg0| match &arg0.value {
+            Expr_::Call(inner_callee, _) => Some(&inner_callee.value),
+            _ => None,
+        });
+        assert!(
+            qual.is_some_and(|q| matches!(
+                q,
+                Expr_::VarQual(qsym, nsym)
+                    if i.resolve(*qsym) == Some("String") && i.resolve(*nsym) == Some("fromInt")
+            )),
+            "expected String.fromInt VarQual, got {qual:?}"
+        );
+    }
+
+    /// A tiny deterministic xorshift PRNG — no external dependency.
+    fn xorshift(state: &mut u64) -> u64 {
+        let mut x = *state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        *state = x;
+        x
+    }
+
+    /// The error code a bad source produces, or `"OK"` when it (unexpectedly)
+    /// parses. Comparing the wire string keeps the assertions readable without
+    /// importing every taxonomy constant.
+    fn err_code(src: &str) -> String {
+        let mut i = Interner::new();
+        match parse_module(src, &mut i) {
+            Ok(_) => "OK".to_owned(),
+            Err(d) => d.code().as_str().to_owned(),
+        }
+    }
+
+    /// A well-formed module header so a per-construct test isolates the body.
+    const HDR: &str = "module Main exposing (main)\n";
+
+    #[test]
+    fn full_operator_set_parses_into_a_binops_chain() {
+        // Every core operator must lex + parse; the body becomes a flat
+        // `Binops` chain (precedence is resolved later, at canonicalisation).
+        let mut i = Interner::new();
+        let src = format!(
+            "{HDR}f a b c =\n    a + b * c - a / b == c /= a < b > c <= a >= b && c || a\n"
+        );
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "all operators must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let f = find_value(&m, &i, "f");
+        assert!(
+            f.is_some_and(|v| matches!(v.body.value, Expr_::Binops(ref ops, _) if ops.len() == 12)),
+            "body is a 12-operator flat chain, got {:?}",
+            f.map(|v| &v.body.value)
+        );
+    }
+
+    #[test]
+    fn single_param_lambda_parses_with_body() {
+        // `\x -> x + 1` is a one-parameter lambda whose body greedily captures
+        // the whole `x + 1` operator chain.
+        let mut i = Interner::new();
+        let src = format!("{HDR}f =\n    \\x -> x + 1\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "lambda must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let f = find_value(&m, &i, "f");
+        let body = f.map(|v| &v.body.value);
+        assert!(
+            matches!(
+                body,
+                Some(Expr_::Lambda(params, b))
+                    if params.len() == 1 && matches!(b.value, Expr_::Binops(..))
+            ),
+            "expected a 1-param lambda over a binop body, got {body:?}"
+        );
+    }
+
+    #[test]
+    fn multi_param_lambda_parses_all_params() {
+        // `\a b -> a + b` is a two-parameter lambda.
+        let mut i = Interner::new();
+        let src = format!("{HDR}f =\n    \\a b -> a + b\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "multi-param lambda must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let f = find_value(&m, &i, "f");
+        assert!(
+            f.and_then(|v| match &v.body.value {
+                Expr_::Lambda(params, _) => Some(params.len()),
+                _ => None,
+            }) == Some(2),
+            "expected a 2-param lambda, got {:?}",
+            f.map(|v| &v.body.value)
+        );
+    }
+
+    #[test]
+    fn parenthesised_lambda_is_applied() {
+        // `(\x -> x) 5` parses as an application whose callee is the lambda.
+        let mut i = Interner::new();
+        let src = format!("{HDR}f =\n    (\\x -> x) 5\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "applied lambda must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let f = find_value(&m, &i, "f");
+        assert!(
+            f.is_some_and(|v| matches!(
+                &v.body.value,
+                Expr_::Call(callee, args)
+                    if matches!(callee.value, Expr_::Lambda(..)) && args.len() == 1
+            )),
+            "expected a Call with a Lambda callee, got {:?}",
+            f.map(|v| &v.body.value)
+        );
+    }
+
+    #[test]
+    fn lambda_without_arrow_is_a_parse_error() {
+        // `\x x` — no `->` after the parameters.
+        assert_eq!(err_code(&format!("{HDR}f =\n    \\x 1\n")), "SKY-P0001");
+    }
+
+    #[test]
+    fn lambda_without_params_is_a_parse_error() {
+        // `\ -> 1` — a zero-parameter lambda is outside the grammar.
+        assert_eq!(err_code(&format!("{HDR}f =\n    \\ -> 1\n")), "SKY-P0001");
+    }
+
+    #[test]
+    fn lone_ampersand_is_unknown_char() {
+        // A single `&` is not a Sky operator (only `&&`); it lexes as SKY-P0010.
+        assert_eq!(err_code(&format!("{HDR}x = 1 & 2")), "SKY-P0010");
+    }
+
+    #[test]
+    fn lexer_errors_carry_their_codes() {
+        // SKY-P0010 unknown character.
+        assert_eq!(err_code("module Main exposing (main)\nx = @"), "SKY-P0010");
+        // SKY-P0011 stray '.'.
+        assert_eq!(err_code("."), "SKY-P0011");
+        // SKY-P0012 number joined to a name.
+        assert_eq!(err_code("123abc"), "SKY-P0012");
+        // SKY-P0013 integer literal out of range.
+        assert_eq!(err_code("99999999999999999999999"), "SKY-P0013");
+    }
+
+    #[test]
+    fn float_literals_lex_to_float_tokens() {
+        use lexer::{Tok, lex};
+        let kinds = |src: &str| -> Vec<Tok> {
+            lex(src).map_or_else(
+                |_| Vec::new(),
+                |toks| toks.into_iter().map(|t| t.kind).collect(),
+            )
+        };
+        // Plain fraction, whole-number fraction, and both exponent shapes.
+        assert_eq!(kinds("1.5"), vec![Tok::Float(1.5)]);
+        assert_eq!(kinds("3.0"), vec![Tok::Float(3.0)]);
+        assert_eq!(kinds("1.5e3"), vec![Tok::Float(1500.0)]);
+        assert_eq!(kinds("2e-2"), vec![Tok::Float(0.02)]);
+        assert_eq!(kinds("6E2"), vec![Tok::Float(600.0)]);
+        // An integer with no fraction / exponent stays an `Int`.
+        assert_eq!(kinds("42"), vec![Tok::Int(42)]);
+        // `1..5` is a range, not a float: the `..` is not consumed as a point.
+        assert_eq!(kinds("1..5"), vec![Tok::Int(1), Tok::DotDot, Tok::Int(5)]);
+    }
+
+    #[test]
+    fn pipe_operators_lex_as_single_tokens() {
+        use lexer::{Tok, lex};
+        let kinds = |src: &str| -> Vec<Tok> {
+            lex(src).map_or_else(
+                |_| Vec::new(),
+                |toks| toks.into_iter().map(|t| t.kind).collect(),
+            )
+        };
+        // `|>` is a single PipeGt token (forward pipe), not Pipe + Gt.
+        assert_eq!(kinds("|>"), vec![Tok::PipeGt]);
+        // `<|` is a single LtPipe token (backward pipe), not Lt + Pipe.
+        assert_eq!(kinds("<|"), vec![Tok::LtPipe]);
+        // Maximal munch non-regression: `||` remains PipePipe, not two Pipes or
+        // a PipeGt/PipePipe confusion.
+        assert_eq!(kinds("||"), vec![Tok::PipePipe]);
+        // `<=` remains Le (not LtPipe then Equals).
+        assert_eq!(kinds("<="), vec![Tok::Le]);
+        // A lone `|` remains Pipe.
+        assert_eq!(kinds("|"), vec![Tok::Pipe]);
+        // A lone `<` remains Lt.
+        assert_eq!(kinds("<"), vec![Tok::Lt]);
+        // `|> x` in context.
+        assert_eq!(kinds("|> x"), vec![Tok::PipeGt, Tok::Ident("x".to_owned())]);
+        // `<| x` in context.
+        assert_eq!(kinds("<| x"), vec![Tok::LtPipe, Tok::Ident("x".to_owned())]);
+        // `|||` is PipePipe + lone Pipe (maximal munch takes exactly two `|`).
+        assert_eq!(kinds("|||"), vec![Tok::PipePipe, Tok::Pipe]);
+        // `|>>` is PipeGt + lone Gt (maximal munch on `|>`, then `>` is bare).
+        assert_eq!(kinds("|>>"), vec![Tok::PipeGt, Tok::Gt]);
+    }
+
+    #[test]
+    fn pipe_operator_parses_in_expression() {
+        // Both pipe operators must parse in a flat Binops chain.
+        let mut i = Interner::new();
+        let src = format!("{HDR}f x =\n    x |> String.fromInt\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "`|>` must parse: {m:?}");
+
+        let mut i2 = Interner::new();
+        let src2 = format!("{HDR}f x =\n    String.fromInt <| x\n");
+        let m2 = parse_module(&src2, &mut i2);
+        assert!(m2.is_ok(), "`<|` must parse: {m2:?}");
+    }
+
+    #[test]
+    fn plus_plus_lexes_as_one_append_token() {
+        use lexer::{Tok, lex};
+        let kinds = |src: &str| -> Vec<Tok> {
+            lex(src).map_or_else(
+                |_| Vec::new(),
+                |toks| toks.into_iter().map(|t| t.kind).collect(),
+            )
+        };
+        // `++` is a single append token (maximal munch of `+`), not two `Plus`.
+        assert_eq!(kinds("++"), vec![Tok::PlusPlus]);
+        // A lone `+` is still arithmetic addition.
+        assert_eq!(kinds("+"), vec![Tok::Plus]);
+        // A spaced pair is two separate `Plus` tokens — only adjacency forms `++`.
+        assert_eq!(kinds("+ +"), vec![Tok::Plus, Tok::Plus]);
+        // Maximal munch takes exactly two: `+++` is `++` then a trailing `+`.
+        assert_eq!(kinds("+++"), vec![Tok::PlusPlus, Tok::Plus]);
+        // In context: a string append chain `"a" ++ "b"`.
+        assert_eq!(
+            kinds("\"a\" ++ \"b\""),
+            vec![
+                Tok::Str("a".to_owned()),
+                Tok::PlusPlus,
+                Tok::Str("b".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn leading_dot_is_not_a_float() {
+        // Elm-style requires a leading digit, so `.5` is a stray `.` (SKY-P0011),
+        // never a float.
+        assert_eq!(err_code(".5"), "SKY-P0011");
+    }
+
+    #[test]
+    fn trailing_exponent_marker_is_joined_name() {
+        // `1.5e` has no digit after the exponent marker, so the `e` reads as a
+        // name joined to the number (SKY-P0012) rather than an exponent.
+        assert_eq!(err_code("1.5e"), "SKY-P0012");
+        // A letter immediately after a float is likewise a joined name.
+        assert_eq!(err_code("1.5x"), "SKY-P0012");
+    }
+
+    #[test]
+    fn float_past_f64_max_is_p0016() {
+        use lexer::{Tok, lex};
+        let kinds = |src: &str| -> Vec<Tok> {
+            lex(src).map_or_else(
+                |_| Vec::new(),
+                |toks| toks.into_iter().map(|t| t.kind).collect(),
+            )
+        };
+        // `1e400` overflows f64 to infinity; rejecting it (rather than silently
+        // accepting `inf`) keeps parity with the Go reference. A finite literal,
+        // including the largest in-range exponent, still lexes cleanly.
+        assert_eq!(err_code("1e400"), "SKY-P0016");
+        assert_eq!(err_code("1.0e309"), "SKY-P0016");
+        assert_eq!(kinds("1e308"), vec![Tok::Float(1e308)]);
+        // A genuine `0.0` is finite and must not be mistaken for an overflow.
+        assert_eq!(kinds("0.0"), vec![Tok::Float(0.0)]);
+    }
+
+    #[test]
+    fn malformed_module_header_is_p0020() {
+        // Not `module`.
+        assert_eq!(err_code("import X exposing (..)"), "SKY-P0020");
+        // Module name not an identifier.
+        assert_eq!(err_code("module = x"), "SKY-P0020");
+        // Missing `exposing`.
+        assert_eq!(err_code("module Main"), "SKY-P0020");
+    }
+
+    #[test]
+    fn malformed_exposing_list_is_p0021() {
+        // Missing `(`.
+        assert_eq!(err_code("module Main exposing main)"), "SKY-P0021");
+        // Bad separator between items.
+        assert_eq!(err_code("module Main exposing (a b)"), "SKY-P0021");
+    }
+
+    #[test]
+    fn missing_equals_is_p0030() {
+        assert_eq!(err_code(&format!("{HDR}foo 5")), "SKY-P0030");
+    }
+
+    #[test]
+    fn malformed_type_declaration_is_p0031() {
+        // Missing type name.
+        assert_eq!(err_code(&format!("{HDR}type = Foo")), "SKY-P0031");
+        // Missing `=` before constructors.
+        assert_eq!(err_code(&format!("{HDR}type Foo Bar")), "SKY-P0031");
+        // Constructor not uppercase.
+        assert_eq!(err_code(&format!("{HDR}type Foo = bar")), "SKY-P0031");
+    }
+
+    #[test]
+    fn type_args_on_non_constructor_is_p0040() {
+        assert_eq!(err_code(&format!("{HDR}x : a Int\nx = 5")), "SKY-P0040");
+    }
+
+    #[test]
+    fn expected_type_is_p0041() {
+        // A token that cannot begin a type.
+        assert_eq!(err_code(&format!("{HDR}x : =\nx = 5")), "SKY-P0041");
+        // A dotted uppercase type now PARSES (qualified type support):
+        // `Foo.Bar` becomes TType("Foo", ["Bar"], []) — canonicalisation (not
+        // the parser) is responsible for validating that `Foo` is a known module.
+        assert_eq!(err_code(&format!("{HDR}x : Foo.Bar\nx = 5")), "OK");
+    }
+
+    #[test]
+    fn unclosed_delimiter_is_p0050() {
+        assert_eq!(err_code(&format!("{HDR}main = (5")), "SKY-P0050");
+    }
+
+    #[test]
+    fn malformed_case_is_p0060() {
+        // `of` missing after the scrutinee.
+        assert_eq!(err_code(&format!("{HDR}main = case 5")), "SKY-P0060");
+        // `->` missing in a branch.
+        let missing_arrow = format!("{HDR}main =\n    case main of\n        Foo 5\n");
+        assert_eq!(err_code(&missing_arrow), "SKY-P0060");
+    }
+
+    #[test]
+    fn inline_let_parses_into_a_let_node() {
+        // `let x = 2 in x + x` is a single-binding `Let` whose body is a Binops.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    let x = 2 in x + x\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "inline let must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let v = find_value(&m, &i, "v");
+        assert!(
+            v.is_some_and(|v| matches!(&v.body.value, Expr_::Let(b, body)
+                if b.len() == 1
+                    && b.first().is_some_and(|bb| matches!(&bb.pat.value, Pattern_::PVar(s) if i.resolve(*s) == Some("x")))
+                    && b.first().is_some_and(|bb| matches!(bb.body.value, Expr_::Int(2)))
+                    && matches!(body.value, Expr_::Binops(_, _)))),
+            "v body is `let x = 2 in x + x`, got {:?}",
+            v.map(|v| &v.body.value)
+        );
+    }
+
+    #[test]
+    fn multi_binding_let_parses_every_binding() {
+        // Layout-aligned bindings; a later binding may read an earlier one.
+        let mut i = Interner::new();
+        let src =
+            format!("{HDR}v : Int\nv =\n    let\n        a = 1\n        b = a\n    in\n    b\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "multi-binding let must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let names: Vec<&str> = match find_value(&m, &i, "v").map(|v| &v.body.value) {
+            Some(Expr_::Let(bindings, _)) => bindings
+                .iter()
+                .filter_map(|b| match &b.pat.value {
+                    Pattern_::PVar(s) => i.resolve(*s),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        assert_eq!(names, vec!["a", "b"], "both bindings, in order");
+    }
+
+    #[test]
+    fn let_tuple_and_record_destructure_parse() {
+        // `let (a, b) = p` is a tuple-pattern binder; `let { x, y } = r` a
+        // record-pattern binder. Both must parse into the matching `Pattern_`.
+        let mut i = Interner::new();
+        let src =
+            format!("{HDR}v : Int\nv =\n    let (a, b) = p\n        {{ x, y }} = r\n    in a\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "let-destructure must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let Some(Expr_::Let(bindings, _)) = find_value(&m, &i, "v").map(|v| &v.body.value) else {
+            assert!(black_box_false(), "v body is a Let");
+            return;
+        };
+        assert_eq!(bindings.len(), 2, "two destructure bindings");
+        assert!(
+            bindings
+                .first()
+                .is_some_and(|b| matches!(&b.pat.value, Pattern_::PTuple(es) if es.len() == 2)),
+            "first binder is a 2-tuple pattern, got {:?}",
+            bindings.first().map(|b| &b.pat.value)
+        );
+        assert!(
+            bindings
+                .get(1)
+                .is_some_and(|b| matches!(&b.pat.value, Pattern_::PRecord(fs) if fs.len() == 2)),
+            "second binder is a 2-field record pattern, got {:?}",
+            bindings.get(1).map(|b| &b.pat.value)
+        );
+    }
+
+    #[test]
+    fn record_pattern_parses_in_a_case_arm() {
+        // `{ x, y } -> …` is a field-pun record pattern at the arm head.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    case r of\n        {{ x, y }} -> x\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "record-pattern case must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let Some(Expr_::Case(_, arms)) = find_value(&m, &i, "v").map(|v| &v.body.value) else {
+            assert!(black_box_false(), "v body is a Case");
+            return;
+        };
+        assert!(
+            arms.first()
+                .is_some_and(|(p, _)| matches!(&p.value, Pattern_::PRecord(fs) if fs.len() == 2)),
+            "arm head is a 2-field record pattern"
+        );
+    }
+
+    /// A runtime `false` the optimiser cannot fold, so `assert!(black_box_false())`
+    /// fails a test without tripping `clippy::assertions_on_constants`.
+    fn black_box_false() -> bool {
+        std::hint::black_box(false)
+    }
+
+    #[test]
+    fn string_and_char_literal_expressions_parse() {
+        // `"hi"` is a string literal (escapes resolved); `'a'` a char literal.
+        let mut i = Interner::new();
+        let src = format!("{HDR}s =\n    \"h\\ti\"\nc =\n    'a'\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "string/char literals must parse: {m:?}");
+        let Ok(m) = m else { return };
+        assert!(
+            matches!(find_value(&m, &i, "s").map(|v| &v.body.value), Some(Expr_::Str(t)) if t == "h\ti"),
+            "s body is the unescaped string `h<tab>i`, got {:?}",
+            find_value(&m, &i, "s").map(|v| &v.body.value)
+        );
+        assert!(
+            matches!(find_value(&m, &i, "c").map(|v| &v.body.value), Some(Expr_::Char(t)) if t == "a"),
+            "c body is the char `a`, got {:?}",
+            find_value(&m, &i, "c").map(|v| &v.body.value)
+        );
+    }
+
+    #[test]
+    fn literal_and_bool_patterns_in_case_parse() {
+        // Int / Bool / String / wildcard literal arm heads.
+        let mut i = Interner::new();
+        let src = format!(
+            "{HDR}v : Int\nv =\n    case n of\n        0 -> 1\n        True -> 2\n        \"hi\" -> 3\n        _ -> 4\n"
+        );
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "literal-pattern case must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let Some(Expr_::Case(_, arms)) = find_value(&m, &i, "v").map(|v| &v.body.value) else {
+            assert!(black_box_false(), "v body is a Case");
+            return;
+        };
+        let kinds: Vec<&Pattern_> = arms.iter().map(|(p, _)| &p.value).collect();
+        assert!(
+            matches!(kinds.as_slice(), [
+                Pattern_::PInt(0),
+                Pattern_::PBool(true),
+                Pattern_::PStr(s),
+                Pattern_::PAnything,
+            ] if s == "hi"),
+            "arm heads are 0 / True / \"hi\" / _, got {kinds:?}"
+        );
+    }
+
+    #[test]
+    fn as_alias_pattern_parses() {
+        // `(m as k) -> …` aliases the whole matched value to `k`.
+        let mut i = Interner::new();
+        let src =
+            format!("{HDR}v : Int\nv =\n    case n of\n        0 -> 0\n        (m as k) -> k\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "alias pattern must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let Some(Expr_::Case(_, arms)) = find_value(&m, &i, "v").map(|v| &v.body.value) else {
+            assert!(black_box_false(), "v body is a Case");
+            return;
+        };
+        assert!(
+            arms.get(1).is_some_and(|(p, _)| matches!(
+                &p.value,
+                Pattern_::PAlias(inner, name)
+                    if matches!(inner.value, Pattern_::PVar(_)) && i.resolve(name.value) == Some("k")
+            )),
+            "second arm head is `m as k`, got {:?}",
+            arms.get(1).map(|(p, _)| &p.value)
+        );
+    }
+
+    #[test]
+    fn unterminated_string_is_p0014() {
+        assert_eq!(err_code(&format!("{HDR}s =\n    \"oops\n")), "SKY-P0014");
+    }
+
+    #[test]
+    fn malformed_char_is_p0015() {
+        // Empty char literal `''`.
+        assert_eq!(err_code(&format!("{HDR}c =\n    ''\n")), "SKY-P0015");
+        // Multi-character char literal `'ab'`.
+        assert_eq!(err_code(&format!("{HDR}c =\n    'ab'\n")), "SKY-P0015");
+        // Unrecognised escapes resolve to backslash + char (two scalar values),
+        // which violates the single-character invariant → SKY-P0015.
+        assert_eq!(err_code(&format!("{HDR}c =\n    '\\q'\n")), "SKY-P0015");
+        assert_eq!(err_code(&format!("{HDR}c =\n    '\\z'\n")), "SKY-P0015");
+        // Recognised escapes and plain chars stay valid (single scalar value).
+        assert_eq!(err_code(&format!("{HDR}c =\n    '\\n'\n")), "OK");
+        assert_eq!(err_code(&format!("{HDR}c =\n    '\\0'\n")), "OK");
+        assert_eq!(err_code(&format!("{HDR}c =\n    'a'\n")), "OK");
+    }
+
+    #[test]
+    fn malformed_let_is_p0061() {
+        // No bindings before `in`.
+        assert_eq!(err_code(&format!("{HDR}v =\n    let in 0\n")), "SKY-P0061");
+        // Missing `=` after the binding name.
+        assert_eq!(
+            err_code(&format!("{HDR}v =\n    let x 2 in x\n")),
+            "SKY-P0061"
+        );
+        // Parameters present but `=` never arrives (`in` is not a binder atom):
+        // MissingEquals, not a silent swallow.
+        assert_eq!(
+            err_code(&format!("{HDR}v =\n    let f x in f\n")),
+            "SKY-P0061"
+        );
+        // Missing `in` after the bindings.
+        assert_eq!(
+            err_code(&format!("{HDR}v =\n    let x = 2\n    x\n")),
+            "SKY-P0061"
+        );
+        // An uppercase binding name is not a value binding.
+        assert_eq!(
+            err_code(&format!("{HDR}v =\n    let X = 2 in X\n")),
+            "SKY-P0061"
+        );
+    }
+
+    #[test]
+    fn inline_if_parses_into_an_if_node() {
+        // `if c then 1 else 0` is a single-branch `If` plus a final else.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    if v < 0 then 1 else 0\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "inline if must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let v = find_value(&m, &i, "v");
+        assert!(
+            v.is_some_and(|v| matches!(&v.body.value, Expr_::If(branches, els)
+                if branches.len() == 1
+                    && branches.first().is_some_and(|(_, b)| matches!(b.value, Expr_::Int(1)))
+                    && matches!(els.value, Expr_::Int(0)))),
+            "v body is `if v < 0 then 1 else 0`, got {:?}",
+            v.map(|v| &v.body.value)
+        );
+    }
+
+    #[test]
+    fn else_if_chain_records_every_branch() {
+        // `if … then … else if … then … else …` records two `(cond, branch)`
+        // pairs plus the final else, in source order.
+        let mut i = Interner::new();
+        let src = format!(
+            "{HDR}v : Int\nv =\n    if v > 0 then\n        1\n    else if v < 0 then\n        2\n    else\n        0\n"
+        );
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "else-if chain must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let shape = match find_value(&m, &i, "v").map(|v| &v.body.value) {
+            Some(Expr_::If(branches, els)) => {
+                Some((branches.len(), matches!(els.value, Expr_::Int(0))))
+            }
+            _ => None,
+        };
+        assert_eq!(
+            shape,
+            Some((2, true)),
+            "two `(cond, branch)` pairs and a final `else 0`"
+        );
+    }
+
+    #[test]
+    fn tuple_literal_parses_into_a_tuple_node() {
+        // `(1, 2)` is a 2-element `Tuple`; `(1, 2, 3)` is a 3-element one.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    (1, 2)\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "tuple must parse: {m:?}");
+        let Ok(m) = m else { return };
+        assert!(
+            find_value(&m, &i, "v").is_some_and(|v| matches!(&v.body.value, Expr_::Tuple(es)
+                if es.len() == 2
+                    && matches!(es.first().map(|e| &e.value), Some(Expr_::Int(1)))
+                    && matches!(es.get(1).map(|e| &e.value), Some(Expr_::Int(2))))),
+            "v body is the 2-tuple `(1, 2)`"
+        );
+
+        let mut i3 = Interner::new();
+        let src3 = format!("{HDR}v : Int\nv =\n    (1, 2, 3)\n");
+        let m3 = parse_module(&src3, &mut i3);
+        assert!(m3.is_ok(), "3-tuple must parse: {m3:?}");
+        let Ok(m3) = m3 else { return };
+        assert!(
+            find_value(&m3, &i3, "v")
+                .is_some_and(|v| matches!(&v.body.value, Expr_::Tuple(es) if es.len() == 3)),
+            "v body is the 3-tuple `(1, 2, 3)`"
+        );
+    }
+
+    #[test]
+    fn parenthesised_single_expr_is_not_a_tuple() {
+        // `(1)` is the parenthesised `Int`, unwrapped — never a 1-tuple.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    (1)\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "paren group must parse: {m:?}");
+        let Ok(m) = m else { return };
+        assert!(
+            find_value(&m, &i, "v").is_some_and(|v| matches!(v.body.value, Expr_::Int(1))),
+            "v body is the unwrapped `Int(1)`, not a Tuple"
+        );
+    }
+
+    #[test]
+    fn unit_value_parses_into_expr_unit() {
+        // `()` is the unit value: empty parentheses parse to `Expr_::Unit`,
+        // never a tuple, a paren-group, or a parse error.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v =\n    ()\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "unit value must parse: {m:?}");
+        let Ok(m) = m else { return };
+        assert!(
+            find_value(&m, &i, "v").is_some_and(|v| matches!(v.body.value, Expr_::Unit)),
+            "v body is `Expr_::Unit`"
+        );
+    }
+
+    #[test]
+    fn tuple_pattern_in_function_parameter_parses_into_a_ptuple() {
+        // `fst (a, b) = a` — a tuple pattern in parameter position, with two
+        // variable elements.
+        let mut i = Interner::new();
+        let src = format!("{HDR}fst : (a, b) -> a\nfst (a, b) =\n    a\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "tuple-parameter pattern must parse: {m:?}");
+        let Ok(m) = m else { return };
+        assert!(
+            find_value(&m, &i, "fst").is_some_and(|v| v.patterns.first().is_some_and(|p| {
+                matches!(&p.value, Pattern_::PTuple(es)
+                    if es.len() == 2
+                        && matches!(es.first().map(|e| &e.value), Some(Pattern_::PVar(_)))
+                        && matches!(es.get(1).map(|e| &e.value), Some(Pattern_::PVar(_))))
+            })),
+            "fst's parameter is a 2-element tuple pattern of variables"
+        );
+    }
+
+    #[test]
+    fn tuple_pattern_in_case_arm_parses_into_a_ptuple() {
+        // `case p of (a, b) -> a` — a tuple pattern as a `case` arm head.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    case (1, 2) of\n        (a, b) -> a\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "tuple case-arm pattern must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let arm_is_tuple = find_value(&m, &i, "v").is_some_and(|v| {
+            matches!(&v.body.value, Expr_::Case(_, arms)
+                if arms.first().is_some_and(|(pat, _)|
+                    matches!(&pat.value, Pattern_::PTuple(es) if es.len() == 2)))
+        });
+        assert!(
+            arm_is_tuple,
+            "the single case arm is a 2-element tuple pattern"
+        );
+    }
+
+    #[test]
+    fn unclosed_tuple_is_p0050() {
+        // A tuple opened but never closed surfaces the unclosed-delimiter code,
+        // the same as a plain parenthesised group.
+        assert_eq!(err_code(&format!("{HDR}v =\n    (1, 2\n")), "SKY-P0050");
+    }
+
+    #[test]
+    fn tuple_type_annotation_parses_into_a_ttuple() {
+        // `fst : (a, b) -> a` — a tuple type in argument position. The annotation
+        // is `TLambda(TTuple([TVar a, TVar b]), TVar a)`. Before M2B this failed
+        // at parse with SKY-P0050; it now unblocks `fst`/`snd`.
+        let mut i = Interner::new();
+        let src = format!("{HDR}fst : (a, b) -> a\nfst t =\n    t\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "tuple-type annotation must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let shape = find_value(&m, &i, "fst").and_then(|v| v.type_annotation.clone());
+        assert!(
+            shape.is_some_and(|ann| matches!(
+                &ann.value,
+                TypeAnnotation::TLambda(arg, ret)
+                    if matches!(
+                        &**arg,
+                        TypeAnnotation::TTuple(elems)
+                            if elems.len() == 2
+                                && matches!(elems.first(), Some(TypeAnnotation::TVar(_)))
+                                && matches!(elems.get(1), Some(TypeAnnotation::TVar(_)))
+                    )
+                        && matches!(&**ret, TypeAnnotation::TVar(_))
+            )),
+            "annotation is `(a, b) -> a` with a 2-element TTuple argument"
+        );
+    }
+
+    #[test]
+    fn three_element_tuple_type_annotation_parses() {
+        // A 3-tuple type `(a, b, c)` carries all three members in order.
+        let mut i = Interner::new();
+        let src = format!("{HDR}f : (a, b, c) -> a\nf t =\n    t\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "3-tuple-type annotation must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let arity = find_value(&m, &i, "f")
+            .and_then(|v| v.type_annotation.clone())
+            .and_then(|ann| match ann.value {
+                TypeAnnotation::TLambda(arg, _) => match *arg {
+                    TypeAnnotation::TTuple(elems) => Some(elems.len()),
+                    _ => None,
+                },
+                _ => None,
+            });
+        assert_eq!(arity, Some(3), "argument is a 3-element TTuple");
+    }
+
+    #[test]
+    fn parenthesised_single_type_is_not_a_tuple() {
+        // `(a) -> a` is a parenthesised single type, unwrapped to `a` — never a
+        // 1-tuple. The annotation is the plain arrow `TLambda(TVar, TVar)`.
+        let mut i = Interner::new();
+        let src = format!("{HDR}f : (a) -> a\nf x =\n    x\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "paren-group type must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let shape = find_value(&m, &i, "f").and_then(|v| v.type_annotation.clone());
+        assert!(
+            shape.is_some_and(|ann| matches!(
+                &ann.value,
+                TypeAnnotation::TLambda(arg, ret)
+                    if matches!(&**arg, TypeAnnotation::TVar(_))
+                        && matches!(&**ret, TypeAnnotation::TVar(_))
+            )),
+            "annotation is the unwrapped `a -> a`, not a TTuple"
+        );
+    }
+
+    #[test]
+    fn unit_type_annotation_parses_into_a_tunit() {
+        // `()` in type position is the unit type — distinct from a tuple and from
+        // a parenthesised group. The argument is `TUnit`.
+        let mut i = Interner::new();
+        let src = format!("{HDR}f : () -> a\nf x =\n    x\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "unit-type annotation must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let shape = find_value(&m, &i, "f").and_then(|v| v.type_annotation.clone());
+        assert!(
+            shape.is_some_and(|ann| matches!(
+                &ann.value,
+                TypeAnnotation::TLambda(arg, _) if matches!(&**arg, TypeAnnotation::TUnit)
+            )),
+            "annotation argument is TUnit"
+        );
+    }
+
+    #[test]
+    fn unclosed_tuple_type_is_p0050() {
+        // A tuple type opened but never closed surfaces the unclosed-delimiter
+        // code, the same as a plain parenthesised type group.
+        assert_eq!(err_code(&format!("{HDR}f : (a, b")), "SKY-P0050");
+    }
+
+    #[test]
+    fn record_type_annotation_parses_into_a_trecord() {
+        // `wrap : a -> { value : a }` — a record type in return position. The
+        // annotation is `TLambda(TVar a, TRecord [(value, TVar a)])`.
+        let mut i = Interner::new();
+        let src = format!("{HDR}wrap : a -> {{ value : a }}\nwrap x =\n    x\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "record-type annotation must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let shape = find_value(&m, &i, "wrap").and_then(|v| v.type_annotation.clone());
+        assert!(
+            shape.is_some_and(|ann| matches!(
+                &ann.value,
+                TypeAnnotation::TLambda(arg, ret)
+                    if matches!(&**arg, TypeAnnotation::TVar(_))
+                        && matches!(
+                            &**ret,
+                            TypeAnnotation::TRecord(fields)
+                                if fields.len() == 1
+                                    && matches!(
+                                        fields.first(),
+                                        Some((_, TypeAnnotation::TVar(_)))
+                                    )
+                        )
+            )),
+            "annotation is `a -> {{ value : a }}` with a 1-field TRecord return"
+        );
+    }
+
+    #[test]
+    fn multi_field_record_type_annotation_parses() {
+        // `{ first : a, second : b }` — fields kept in source order.
+        let mut i = Interner::new();
+        let src = format!("{HDR}pair : a -> b -> {{ first : a, second : b }}\npair x y =\n    x\n");
+        let m = parse_module(&src, &mut i);
+        assert!(
+            m.is_ok(),
+            "two-field record-type annotation must parse: {m:?}"
+        );
+        let Ok(m) = m else { return };
+        let arity = find_value(&m, &i, "pair")
+            .and_then(|v| v.type_annotation.clone())
+            .and_then(|ann| match ann.value {
+                TypeAnnotation::TLambda(_, ret) => match *ret {
+                    TypeAnnotation::TLambda(_, ret2) => match *ret2 {
+                        TypeAnnotation::TRecord(fields) => Some(fields.len()),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                _ => None,
+            });
+        assert_eq!(arity, Some(2), "return type is a 2-field TRecord");
+    }
+
+    #[test]
+    fn record_type_alias_body_parses() {
+        // `type alias Box a = { value : a }` — the alias body is a TRecord.
+        let mut i = Interner::new();
+        let src = format!("{HDR}type alias Box a = {{ value : a }}\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "record-type alias must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let alias = m.aliases.first();
+        assert!(
+            alias.is_some_and(|a| matches!(
+                &a.value.body.value,
+                TypeAnnotation::TRecord(fields)
+                    if fields.len() == 1
+            )),
+            "alias body is a 1-field TRecord"
+        );
+    }
+
+    #[test]
+    fn empty_record_type_parses_into_empty_trecord() {
+        // `{}` in type position is the empty record type — valid, yields `TRecord []`.
+        // Mirrors the Haskell reference (Type.hs line 131-133):
+        //   Just '}' -> char mkError '}' >> return (TRecord [] Nothing)
+        let mut i = Interner::new();
+        let m = parse_module(&format!("{HDR}f : {{}}\nf =\n    0\n"), &mut i);
+        assert!(m.is_ok(), "empty record type must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let ann = find_value(&m, &i, "f")
+            .and_then(|v| v.type_annotation.as_ref())
+            .map(|a| &a.value);
+        assert!(
+            matches!(ann, Some(TypeAnnotation::TRecord(fields)) if fields.is_empty()),
+            "type annotation must be an empty TRecord, got {ann:?}"
+        );
+    }
+
+    #[test]
+    fn empty_record_type_with_spaces_parses() {
+        // `{  }` (spaces inside) must also parse — the layout filter allows
+        // whitespace between `{` and `}`.
+        let m = parse_module(
+            &format!("{HDR}f : {{  }}\nf =\n    0\n"),
+            &mut Interner::new(),
+        );
+        assert!(m.is_ok(), "empty record type with spaces must parse: {m:?}");
+    }
+
+    #[test]
+    fn empty_record_type_alias_parses() {
+        // `type alias Model = {}` — the empty record as an alias body.
+        // This is the construct that appears in examples/29-webview-threejs-spike.
+        let mut i = Interner::new();
+        let m = parse_module(&format!("{HDR}type alias Model = {{}}\n"), &mut i);
+        assert!(m.is_ok(), "empty-record type alias must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let body = m.aliases.first().map(|a| &a.value.body.value);
+        assert!(
+            matches!(body, Some(TypeAnnotation::TRecord(fields)) if fields.is_empty()),
+            "alias body must be an empty TRecord, got {body:?}"
+        );
+    }
+
+    #[test]
+    fn empty_record_literal_parses_into_record_node() {
+        // `{}` in expression position is a valid empty record literal.
+        // Mirrors Haskell's Expression.hs line 309-311:
+        //   Just '}' -> char mkError '}' >> return (Src.Record [])
+        let mut i = Interner::new();
+        let m = parse_module(&format!("{HDR}v : Int\nv =\n    {{}}\n"), &mut i);
+        assert!(m.is_ok(), "empty record literal must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let shape = match find_value(&m, &i, "v").map(|v| &v.body.value) {
+            Some(Expr_::Record(fields)) => Some(fields.len()),
+            _ => None,
+        };
+        assert_eq!(shape, Some(0), "empty record literal yields Record with 0 fields");
+    }
+
+    #[test]
+    fn record_type_missing_colon_is_rejected() {
+        // A record-type field needs a `:` between name and type.
+        assert!(
+            parse_module(
+                &format!("{HDR}f : {{ value a }}\nf =\n    0\n"),
+                &mut Interner::new()
+            )
+            .is_err(),
+            "a record-type field without `:` must be rejected"
+        );
+    }
+
+    #[test]
+    fn record_literal_parses_into_a_record_node() {
+        // `{ x = 1, y = 2 }` is a two-field `Record`, fields in source order.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    {{ x = 1, y = 2 }}\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "record literal must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let names: Vec<&str> = match find_value(&m, &i, "v").map(|v| &v.body.value) {
+            Some(Expr_::Record(fields)) => fields
+                .iter()
+                .filter_map(|(n, _)| i.resolve(n.value))
+                .collect(),
+            _ => Vec::new(),
+        };
+        assert_eq!(names, vec!["x", "y"], "both fields, in source order");
+    }
+
+    #[test]
+    fn record_update_parses_into_an_update_node() {
+        // `{ p | x = 41 }` is an `Update` over base `p` with one updated field.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    {{ p | x = 41, y = 7 }}\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "record update must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let shape = match find_value(&m, &i, "v").map(|v| &v.body.value) {
+            Some(Expr_::Update(base, fields)) => {
+                let names: Vec<&str> = fields
+                    .iter()
+                    .filter_map(|(n, _)| i.resolve(n.value))
+                    .collect();
+                i.resolve(base.value) == Some("p") && names == vec!["x", "y"]
+            }
+            _ => false,
+        };
+        assert!(shape, "v body is `Update p [x, y]`, base + fields in order");
+    }
+
+    #[test]
+    fn field_access_parses_into_an_access_chain() {
+        // `p.x` is `Access (VarLocal p) x`; `p.x.y` nests it.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    p.x.y\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "field access must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let shape = match find_value(&m, &i, "v").map(|v| &v.body.value) {
+            // outer: (…).y
+            Some(Expr_::Access(inner, outer_field)) => {
+                match (&inner.value, i.resolve(outer_field.value)) {
+                    // inner: (p).x
+                    (Expr_::Access(base, inner_field), Some("y")) => {
+                        match (&base.value, i.resolve(inner_field.value)) {
+                            (Expr_::VarLocal(p), Some("x")) => i.resolve(*p) == Some("p"),
+                            _ => false,
+                        }
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        };
+        assert!(shape, "v body is `Access (Access p x) y`");
+    }
+
+    #[test]
+    fn field_access_on_parenthesised_var_parses(/* #6 */) {
+        // `(r).value` — field access on a parenthesised variable. The `.` is a
+        // standalone `Tok::Dot` (the parens break the bare-ident dotted run), so
+        // it must be resolved as a postfix access, not rejected as a stray dot.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v =\n    (r).value\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "`(r).value` must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let shape = match find_value(&m, &i, "v").map(|v| &v.body.value) {
+            Some(Expr_::Access(base, field)) => {
+                matches!(&base.value, Expr_::VarLocal(r) if i.resolve(*r) == Some("r"))
+                    && i.resolve(field.value) == Some("value")
+            }
+            _ => false,
+        };
+        assert!(shape, "v body is `Access (VarLocal r) value`");
+    }
+
+    #[test]
+    fn field_access_on_call_result_parses(/* #6 */) {
+        // `(wrap 1).value` — field access on a call result. Field access binds
+        // tighter than application, so `.value` attaches to the `(wrap 1)` atom.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v =\n    (wrap 1).value\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "`(wrap 1).value` must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let shape = match find_value(&m, &i, "v").map(|v| &v.body.value) {
+            Some(Expr_::Access(base, field)) => {
+                matches!(&base.value, Expr_::Call(callee, args)
+                    if matches!(&callee.value, Expr_::VarLocal(w) if i.resolve(*w) == Some("wrap"))
+                        && args.len() == 1)
+                    && i.resolve(field.value) == Some("value")
+            }
+            _ => false,
+        };
+        assert!(shape, "v body is `Access (Call wrap [1]) value`");
+    }
+
+    #[test]
+    fn chained_field_access_on_parenthesised_expr_parses(/* #6 */) {
+        // `((nested).a).b` — chained access. The lexer folds the `a.b` after the
+        // first dot into one dotted identifier; each segment becomes a separate
+        // access node, yielding `Access (Access (Access nested a) b) …`. Here the
+        // inner `(nested).a` is one atom, then `.b` applies to the whole group.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v =\n    ((nested).a).b\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "`((nested).a).b` must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let shape = match find_value(&m, &i, "v").map(|v| &v.body.value) {
+            // outer: (…).b
+            Some(Expr_::Access(inner, outer_field)) => {
+                match (&inner.value, i.resolve(outer_field.value)) {
+                    // inner: (nested).a
+                    (Expr_::Access(base, inner_field), Some("b")) => {
+                        matches!(&base.value, Expr_::VarLocal(n) if i.resolve(*n) == Some("nested"))
+                            && i.resolve(inner_field.value) == Some("a")
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        };
+        assert!(shape, "v body is `Access (Access nested a) b`");
+    }
+
+    #[test]
+    fn lone_dot_is_still_a_stray_dot(/* #6 regression */) {
+        // A `.` not part of `..` and not introducing a field access is still the
+        // typed stray-dot lex error — the #6 fix must not swallow it.
+        assert_eq!(err_code(&format!("{HDR}v =\n    1 . 2\n")), "SKY-P0011");
+    }
+
+    #[test]
+    fn qualified_uppercase_name_is_not_field_access() {
+        // `String.fromInt` keeps its `VarQual` shape — only a lowercase head is
+        // a record field access.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v =\n    String.fromInt 1\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "qualified call must parse: {m:?}");
+        let Ok(m) = m else { return };
+        assert!(
+            find_value(&m, &i, "v").is_some_and(|v| matches!(&v.body.value, Expr_::Call(callee, _)
+                if matches!(callee.value, Expr_::VarQual(_, _)))),
+            "callee stays a VarQual, not an Access"
+        );
+    }
+
+    #[test]
+    fn empty_record_literal_in_expression_parses() {
+        // `{}` in expression position is valid — mirrors Haskell's Expression.hs
+        // line 309-311: `Just '}' -> char '}' >> return (Src.Record [])`.
+        // This test replaces the old `empty_record_is_rejected` which assumed
+        // the empty record was outside the grammar.
+        let mut i = Interner::new();
+        let m = parse_module(&format!("{HDR}v =\n    {{}}\n"), &mut i);
+        assert!(m.is_ok(), "empty record literal `{{}}` must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let shape = match find_value(&m, &i, "v").map(|v| &v.body.value) {
+            Some(Expr_::Record(fields)) => Some(fields.len()),
+            _ => None,
+        };
+        assert_eq!(shape, Some(0), "empty record literal yields Record with 0 fields");
+    }
+
+    #[test]
+    fn unclosed_record_is_unexpected_eof() {
+        // A record opened but never closed runs the input out cleanly.
+        assert_eq!(err_code(&format!("{HDR}v =\n    {{ x = 1\n")), "SKY-P0002");
+    }
+
+    #[test]
+    fn malformed_if_is_p0062() {
+        // Missing `then` after the condition.
+        assert_eq!(
+            err_code(&format!("{HDR}v =\n    if v 1 else 0\n")),
+            "SKY-P0062"
+        );
+        // Missing `else` after the `then` branch.
+        assert_eq!(
+            err_code(&format!("{HDR}v =\n    if v then 1\n")),
+            "SKY-P0062"
+        );
+        // Absent condition (`if then …`).
+        assert_eq!(
+            err_code(&format!("{HDR}v =\n    if then 1 else 0\n")),
+            "SKY-P0062"
+        );
+    }
+
+    #[test]
+    fn unexpected_token_is_p0001() {
+        // A token that cannot begin an expression.
+        assert_eq!(err_code(&format!("{HDR}main = )")), "SKY-P0001");
+        // SHOULD-FIX: a qualified constructor in pattern position is rejected.
+        let qual_ctor = format!("{HDR}main =\n    case main of\n        Foo.Bar -> 1\n");
+        assert_eq!(err_code(&qual_ctor), "SKY-P0001");
+    }
+
+    #[test]
+    fn unexpected_eof_is_p0002() {
+        assert_eq!(err_code(&format!("{HDR}main =")), "SKY-P0002");
+    }
+
+    #[test]
+    fn nesting_too_deep_is_p0003() {
+        let deep = format!("{HDR}main = {}", "(".repeat(400));
+        assert_eq!(err_code(&deep), "SKY-P0003");
+    }
+
+    #[test]
+    fn fuzz_random_bytes_never_panics_and_errors() {
+        // Feed many 1 KB blobs of random bytes; the parser must reject every
+        // one with a typed error and must never panic.
+        let mut seed: u64 = 0x5DEE_CE66_D00D_F00D;
+        for _ in 0..256 {
+            let mut bytes = Vec::with_capacity(1024);
+            for _ in 0..1024 {
+                let r = xorshift(&mut seed);
+                bytes.push(u8::try_from(r & 0xFF).unwrap_or(0));
+            }
+            let s = String::from_utf8_lossy(&bytes).into_owned();
+            let mut i = Interner::new();
+            let result = parse_module(&s, &mut i);
+            assert!(result.is_err(), "random bytes must not parse as a module");
+        }
+    }
+
+    #[test]
+    fn parses_non_parametric_type_alias() {
+        let mut i = Interner::new();
+        let src = "module Main exposing (v)\n\
+                   type alias Count = Int\n\n\
+                   v : Count\n\
+                   v =\n    0\n";
+        let result = parse_module(src, &mut i);
+        assert!(result.is_ok(), "alias must parse: {result:?}");
+        let Ok(m) = result else { return };
+        assert_eq!(m.aliases.len(), 1, "one alias collected");
+        assert_eq!(m.unions.len(), 0, "alias is not a union");
+        let Some(alias) = m.aliases.first().map(|a| &a.value) else {
+            return;
+        };
+        assert_eq!(i.resolve(alias.name.value), Some("Count"));
+        assert!(alias.vars.is_empty(), "non-parametric alias has no vars");
+        assert!(
+            matches!(&alias.body.value, TypeAnnotation::TType(_, segs, args)
+                if segs.last().and_then(|&s| i.resolve(s)) == Some("Int") && args.is_empty()),
+            "body is the `Int` constructor, got {:?}",
+            alias.body.value
+        );
+    }
+
+    #[test]
+    fn parses_parametric_alias_capturing_its_vars() {
+        // The parser captures a parametric alias's declared vars so
+        // canonicalisation can substitute use-site arguments and expand the body.
+        // `alias` stays a soft keyword: a union is still distinguished from a
+        // `type alias`.
+        let mut i = Interner::new();
+        let src = "module Main exposing (v)\n\
+                   type alias Pair a = a\n\n\
+                   v : Int\n\
+                   v =\n    0\n";
+        let result = parse_module(src, &mut i);
+        assert!(result.is_ok(), "parametric alias must parse: {result:?}");
+        let Ok(m) = result else { return };
+        assert_eq!(m.aliases.len(), 1, "one alias expected");
+        let Some(alias) = m.aliases.first().map(|a| &a.value) else {
+            return;
+        };
+        assert_eq!(i.resolve(alias.name.value), Some("Pair"));
+        assert_eq!(alias.vars.len(), 1, "one declared type parameter");
+        assert_eq!(
+            alias.vars.first().and_then(|v| i.resolve(v.value)),
+            Some("a")
+        );
+    }
+
+    #[test]
+    fn type_without_alias_keyword_is_still_a_union() {
+        // Guard the soft-keyword look-ahead: `type Foo = …` is a union, never an
+        // alias, even though `alias` is just an identifier.
+        let mut i = Interner::new();
+        let src = "module Main exposing (v)\n\
+                   type Foo = Bar | Baz\n\n\
+                   v : Int\n\
+                   v =\n    0\n";
+        let result = parse_module(src, &mut i);
+        assert!(result.is_ok(), "union must parse: {result:?}");
+        let Ok(m) = result else { return };
+        assert_eq!(m.unions.len(), 1, "one union");
+        assert_eq!(m.aliases.len(), 0, "no aliases");
+    }
+
+    #[test]
+    fn parses_negative_int_literal() {
+        // `(-5)` in atom (prefix) position folds the sign into a signed
+        // `Expr_::Int(-5)` node, mirroring the Go reference's `Src.Negate` of a
+        // numeric literal. The parens are unwrapped, so the body is the literal.
+        let mut i = Interner::new();
+        let src = "module Main exposing (v)\n\nv =\n    (-5)\n";
+        let result = parse_module(src, &mut i);
+        assert!(
+            result.is_ok(),
+            "negative int literal must parse: {result:?}"
+        );
+        let Ok(m) = result else { return };
+        let v = find_value(&m, &i, "v");
+        assert!(
+            v.is_some_and(|val| matches!(val.body.value, Expr_::Int(-5))),
+            "body must be Int(-5)"
+        );
+    }
+
+    #[test]
+    fn parses_negative_float_literal() {
+        // `(-2.7)` folds to `Expr_::Float(-2.7)`.
+        let mut i = Interner::new();
+        let src = "module Main exposing (v)\n\nv =\n    (-2.7)\n";
+        let result = parse_module(src, &mut i);
+        assert!(
+            result.is_ok(),
+            "negative float literal must parse: {result:?}"
+        );
+        let Ok(m) = result else { return };
+        let v = find_value(&m, &i, "v");
+        assert!(
+            v.is_some_and(
+                |val| matches!(val.body.value, Expr_::Float(f) if (f + 2.7).abs() < 1e-9)
+            ),
+            "body must be Float(-2.7)"
+        );
+    }
+
+    #[test]
+    fn parses_negative_literal_as_application_argument() {
+        // `f (-5)`: the negative literal is the (parenthesised) argument; the
+        // body is a `Call` with one `Int(-5)` argument. This is the shape the
+        // Math goldens rely on (`Math.abs (-5)`, `Math.floor (-2.7)`, …).
+        let mut i = Interner::new();
+        let src = "module Main exposing (v)\n\nv f =\n    f (-5)\n";
+        let result = parse_module(src, &mut i);
+        assert!(result.is_ok(), "f (-5) must parse: {result:?}");
+        let Ok(m) = result else { return };
+        let v = find_value(&m, &i, "v");
+        let is_call_neg = v.is_some_and(|val| match &val.body.value {
+            Expr_::Call(_, args) => {
+                args.len() == 1 && matches!(args.first().map(|a| &a.value), Some(Expr_::Int(-5)))
+            }
+            _ => false,
+        });
+        assert!(is_call_neg, "body must be Call(f, [Int(-5)])");
+    }
+
+    #[test]
+    fn binary_subtraction_is_unaffected_by_negative_literal_parsing() {
+        // `2 - 5` stays a subtraction (a `Binops` chain), never a negative
+        // literal: the `-` is consumed as an infix operator after the `2`
+        // operand, so prefix negation parsing never sees it.
+        let mut i = Interner::new();
+        let src = "module Main exposing (v)\n\nv =\n    2 - 5\n";
+        let result = parse_module(src, &mut i);
+        assert!(result.is_ok(), "subtraction must parse: {result:?}");
+        let Ok(m) = result else { return };
+        let v = find_value(&m, &i, "v");
+        assert!(
+            v.is_some_and(|val| matches!(&val.body.value, Expr_::Binops(ops, _) if ops.len() == 1)),
+            "body must be a one-operator Binops chain (subtraction)"
+        );
+    }
+
+    #[test]
+    fn space_between_minus_and_literal_is_not_a_negative_literal() {
+        // Go matches a negative literal only when the `-` is immediately
+        // followed by the digit (no space). `(- 5)` therefore is not a negative
+        // literal and, with no operand before the `-`, is a parse error rather
+        // than a silently-accepted negation.
+        let mut i = Interner::new();
+        let src = "module Main exposing (v)\n\nv =\n    (- 5)\n";
+        let result = parse_module(src, &mut i);
+        assert!(
+            result.is_err(),
+            "`(- 5)` (space after `-`) must NOT parse as a negative literal"
+        );
+    }
+
+    // ── Unary negation on identifiers / expressions ──────────────────────────
+    //
+    // Port of the Haskell `exprAtom_` `Negate` arm (Expression.hs:356–367):
+    // `-e` in prefix position desugars to `Call(VarLocal("negate"), [e])`.
+    // The upstream both-branches-produce-Negate rule extends negation beyond
+    // numeric literals to identifiers and parenthesised expressions.
+
+    #[test]
+    fn negation_of_identifier_desugars_to_negate_call() {
+        // `-cents` → `Call(VarLocal("negate"), [VarLocal("cents")])`.
+        // This is the exact shape that triggered SKY-P0001 in
+        // 37-composite-live-shop / State.sky:156:
+        //   `if cents < 0 then -cents else cents`
+        let mut i = Interner::new();
+        let src = format!("{HDR}v cents =\n    -cents\n");
+        let result = parse_module(&src, &mut i);
+        assert!(result.is_ok(), "-cents must parse: {result:?}");
+        let Ok(m) = result else { return };
+        let v = find_value(&m, &i, "v");
+        assert!(
+            v.is_some_and(|val| match &val.body.value {
+                Expr_::Call(callee, args) =>
+                    matches!(callee.value, Expr_::VarLocal(s) if i.resolve(s) == Some("negate"))
+                        && args.len() == 1
+                        && matches!(
+                            args.first().map(|a| &a.value),
+                            Some(Expr_::VarLocal(s)) if i.resolve(*s) == Some("cents")
+                        ),
+                _ => false,
+            }),
+            "body must be Call(negate, [VarLocal(cents)]), got {:?}",
+            v.map(|val| &val.body.value)
+        );
+    }
+
+    #[test]
+    fn negation_in_if_then_else_parses() {
+        // `if c < 0 then -c else c` — the `-c` in the `then` branch is in
+        // prefix (atom) position, not after any complete expression, so it
+        // must parse as unary negation desugared to `negate c`.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v c =\n    if c < 0 then -c else c\n");
+        let result = parse_module(&src, &mut i);
+        assert!(result.is_ok(), "if c < 0 then -c else c must parse: {result:?}");
+        let Ok(m) = result else { return };
+        let v = find_value(&m, &i, "v");
+        // Body is an `If`; the `then` branch is `negate c` (a Call).
+        assert!(
+            v.is_some_and(|val| matches!(&val.body.value, Expr_::If(_, _))),
+            "body must be an If expression"
+        );
+    }
+
+    #[test]
+    fn negation_then_binary_add_parses_correctly() {
+        // `-x + y` → `Binops([(Call(negate,[x]), "+")], y)`.
+        // Negation binds tighter than the binary `+` operator — the `-x` is an
+        // atom, and `+ y` is the infix continuation.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v x y =\n    -x + y\n");
+        let result = parse_module(&src, &mut i);
+        assert!(result.is_ok(), "-x + y must parse: {result:?}");
+        let Ok(m) = result else { return };
+        let v = find_value(&m, &i, "v");
+        // Body is a Binops chain; first operand is the negate call.
+        assert!(
+            v.is_some_and(|val| matches!(&val.body.value,
+                Expr_::Binops(ops, _) if ops.len() == 1
+                    && matches!(ops.first(), Some((e, _))
+                        if matches!(e.value, Expr_::Call(_, _)))
+            )),
+            "body must be Binops with negate-call as first operand"
+        );
+    }
+
+    #[test]
+    fn parenthesised_negation_of_identifier_is_negate_call() {
+        // `f (-x)` — inside the parens, `-x` is in prefix position.
+        // The paren unwraps to `Call(negate, [x])`, which becomes the argument
+        // to `f`: `Call(f, [Call(negate, [x])])`.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v f x =\n    f (-x)\n");
+        let result = parse_module(&src, &mut i);
+        assert!(result.is_ok(), "f (-x) must parse: {result:?}");
+        let Ok(m) = result else { return };
+        let v = find_value(&m, &i, "v");
+        let is_call_negate = v.is_some_and(|val| match &val.body.value {
+            Expr_::Call(_, args) => args.len() == 1
+                && matches!(
+                    args.first().map(|a| &a.value),
+                    Some(Expr_::Call(c, inner_args))
+                        if matches!(c.value, Expr_::VarLocal(s) if i.resolve(s) == Some("negate"))
+                        && inner_args.len() == 1
+                ),
+            _ => false,
+        });
+        assert!(is_call_negate, "body must be Call(f, [Call(negate, [x])])");
+    }
+
+    #[test]
+    fn binary_subtraction_still_works_after_unary_negate_fix() {
+        // `a - b` stays a Binops([(a, "-")], b): the `-` is consumed as a
+        // binary operator after the complete expression `a`, so
+        // `parse_negative_literal` is never invoked.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v a b =\n    a - b\n");
+        let result = parse_module(&src, &mut i);
+        assert!(result.is_ok(), "a - b must parse: {result:?}");
+        let Ok(m) = result else { return };
+        let v = find_value(&m, &i, "v");
+        assert!(
+            v.is_some_and(|val| matches!(&val.body.value,
+                Expr_::Binops(ops, _) if ops.len() == 1
+            )),
+            "a - b must be a one-operator Binops chain"
+        );
+    }
+
+    #[test]
+    fn double_minus_binary_then_unary_parses() {
+        // `a - -b` — first `-` is the binary subtraction operator (after `a`),
+        // second `-` is in atom position for the RHS, desugaring to `negate b`.
+        // Result: `Binops([(a, "-")], Call(negate, [b]))`.
+        let mut i = Interner::new();
+        let src = format!("{HDR}v a b =\n    a - -b\n");
+        let result = parse_module(&src, &mut i);
+        assert!(result.is_ok(), "a - -b must parse: {result:?}");
+        let Ok(m) = result else { return };
+        let v = find_value(&m, &i, "v");
+        assert!(
+            v.is_some_and(|val| matches!(&val.body.value,
+                Expr_::Binops(ops, tail)
+                    if ops.len() == 1
+                    && matches!(tail.value, Expr_::Call(_, _))
+            )),
+            "a - -b must be Binops([(a, -)], Call(negate, [b]))"
+        );
+    }
+
+    #[test]
+    fn space_between_minus_and_ident_is_a_parse_error() {
+        // `(- x)` (space between `-` and the identifier) must fail.
+        // Mirrors the Haskell behaviour: `exprAtom_` has no `spaces` call after
+        // consuming `-`, so a space before the operand causes the nested atom
+        // parse to fail (consumed error, no backtrack).
+        let src = format!("{HDR}v x =\n    (- x)\n");
+        assert!(
+            parse_module(&src, &mut Interner::new()).is_err(),
+            "`(- x)` with space must NOT parse"
+        );
+    }
+
+    // ── Pipe-operator lexer maximal-munch tests ───────────────────────────────
+
+    /// `|>` lexes as a single `PipeGt` token (maximal munch), not as
+    /// `Pipe` then `Gt`. `||` still lexes as `PipePipe` (non-regression).
+    #[test]
+    fn pipe_forward_lexes_as_single_token() {
+        use crate::lexer::{Tok, lex};
+        let tokens = lex("|>").expect("|> must lex");
+        assert_eq!(tokens.len(), 1, "|> must produce exactly one token");
+        let tok = tokens.first().expect("|> token vec must be non-empty");
+        assert_eq!(tok.kind, Tok::PipeGt, "|> must lex as PipeGt, not Pipe+Gt");
+
+        // Non-regression: `||` stays PipePipe.
+        let or_tokens = lex("||").expect("|| must lex");
+        assert_eq!(or_tokens.len(), 1, "|| must produce exactly one token");
+        let or_tok = or_tokens.first().expect("|| token vec must be non-empty");
+        assert_eq!(or_tok.kind, Tok::PipePipe, "|| must lex as PipePipe");
+    }
+
+    /// `<|` lexes as a single `LtPipe` token (maximal munch), not as
+    /// `Lt` then `Pipe`. `<=` still lexes as `Le` (non-regression).
+    #[test]
+    fn pipe_backward_lexes_as_single_token() {
+        use crate::lexer::{Tok, lex};
+        let tokens = lex("<|").expect("<| must lex");
+        assert_eq!(tokens.len(), 1, "<| must produce exactly one token");
+        let tok = tokens.first().expect("<| token vec must be non-empty");
+        assert_eq!(tok.kind, Tok::LtPipe, "<| must lex as LtPipe, not Lt+Pipe");
+
+        // Non-regression: `<=` stays Le.
+        let le_tokens = lex("<=").expect("<= must lex");
+        assert_eq!(le_tokens.len(), 1, "<= must produce exactly one token");
+        let le_tok = le_tokens.first().expect("<= token vec must be non-empty");
+        assert_eq!(le_tok.kind, Tok::Le, "<= must lex as Le");
+    }
+
+    // ── GAP 4: block comments ─────────────────────────────────────────────────
+
+    /// A well-formed block comment is invisible to the parser.
+    #[test]
+    fn block_comment_is_skipped() {
+        assert_eq!(err_code(&format!("{HDR}main = {{- ignored -}} 1")), "OK");
+    }
+
+    /// A block comment can nest: `{- {- inner -} outer -}`.
+    #[test]
+    fn nested_block_comment_is_skipped() {
+        assert_eq!(
+            err_code(&format!("{HDR}main = {{- {{- nested -}} -}} 1")),
+            "OK"
+        );
+    }
+
+    /// An unterminated block comment is SKY-P0017.
+    #[test]
+    fn unterminated_block_comment_is_p0017() {
+        assert_eq!(
+            err_code(&format!("{HDR}main = {{- never closed")),
+            "SKY-P0017"
+        );
+    }
+
+    /// A block comment between top-level bindings is whitespace to the parser.
+    #[test]
+    fn block_comment_between_definitions_is_skipped() {
+        let src = format!("{HDR}a = 1\n{{- between defs -}}\nb = 2\n");
+        assert_eq!(err_code(&src), "OK");
+    }
+
+    // ── GAP 2: integer-division operator `//` ────────────────────────────────
+
+    /// `//` lexes as a single `SlashSlash` token (maximal munch).
+    #[test]
+    fn int_div_lexes_as_single_token() {
+        use crate::lexer::{Tok, lex};
+        let tokens = lex("//").expect("// must lex");
+        assert_eq!(tokens.len(), 1, "// must produce exactly one token");
+        let tok = tokens.first().expect("// token vec must be non-empty");
+        assert_eq!(tok.kind, Tok::SlashSlash, "// must lex as SlashSlash");
+
+        // Non-regression: `/=` stays SlashEq, `/` stays Slash.
+        let ne_tokens = lex("/=").expect("/= must lex");
+        assert_eq!(ne_tokens.len(), 1);
+        assert_eq!(ne_tokens.first().map(|t| &t.kind), Some(&Tok::SlashEq));
+
+        let div_tokens = lex("/").expect("/ must lex");
+        assert_eq!(div_tokens.len(), 1);
+        assert_eq!(div_tokens.first().map(|t| &t.kind), Some(&Tok::Slash));
+    }
+
+    /// `a // b` parses as a Binops chain with the `//` operator.
+    #[test]
+    fn int_div_parses_as_binop() {
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv = 10 // 3\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "10 // 3 must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let v = find_value(&m, &i, "v");
+        assert!(
+            v.is_some_and(|v| matches!(&v.body.value, Expr_::Binops(ops, _)
+                if ops.iter().any(|(_, op)| i.resolve(op.value) == Some("//")))),
+            "body must be a Binops with operator `//`"
+        );
+    }
+
+    // ── GAP 3: let-bound functions ────────────────────────────────────────────
+
+    /// `let f x = body in f` desugars to a Lambda inside the let binding.
+    #[test]
+    fn let_fn_desugars_to_lambda() {
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    let f x = x in f 1\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "let f x = x must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let v = find_value(&m, &i, "v");
+        assert!(
+            v.is_some_and(|v| matches!(&v.body.value, Expr_::Let(bindings, _)
+            if bindings.first().is_some_and(|b|
+                matches!(&b.pat.value, Pattern_::PVar(_))
+                && matches!(&b.body.value, Expr_::Lambda(params, _) if params.len() == 1)
+            ))),
+            "let binding body must be a Lambda with one param"
+        );
+    }
+
+    /// `let f x y = body in f` desugars to a multi-parameter Lambda.
+    #[test]
+    fn let_fn_two_params_desugars_to_lambda() {
+        let mut i = Interner::new();
+        let src = format!("{HDR}v : Int\nv =\n    let add x y = x in add 1 2\n");
+        let m = parse_module(&src, &mut i);
+        assert!(m.is_ok(), "let add x y = x must parse: {m:?}");
+        let Ok(m) = m else { return };
+        let v = find_value(&m, &i, "v");
+        assert!(
+            v.is_some_and(|v| matches!(&v.body.value, Expr_::Let(bindings, _)
+            if bindings.first().is_some_and(|b|
+                matches!(&b.body.value, Expr_::Lambda(params, _) if params.len() == 2)
+            ))),
+            "let binding body must be a Lambda with two params"
+        );
+    }
+
+    // ── GAP 1: qualified type names ────────────────────────────────────────────
+
+    /// A qualified type annotation `Module.Type` parses successfully.
+    #[test]
+    fn qualified_type_in_annotation_parses() {
+        assert_eq!(
+            err_code(&format!("{HDR}x : String.String\nx = \"hi\"")),
+            "OK"
+        );
+    }
+
+    /// A deeply qualified type `Db.Decode.Decoder` parses (qualifier is "Db.Decode").
+    #[test]
+    fn deeply_qualified_type_in_annotation_parses() {
+        assert_eq!(
+            err_code(&format!("{HDR}x : Db.Decode.Decoder\nx = 0")),
+            "OK"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Triple-quoted string regression tests
+    // -----------------------------------------------------------------------
+    // Reference: Sky.Parse.String.findTripleClose (Haskell) — the closing
+    // terminator is exactly `"""`, never a lone `"`.
+
+    /// A triple-quoted string containing a lone `"` must not terminate early.
+    /// This is the core 33-websocket-echo regression: inline HTML such as
+    /// `<div class="card">` caused a premature close on the `"` after `class=`,
+    /// making the rest lex as identifiers and triggering a misleading SKY-N0001.
+    #[test]
+    fn triple_string_lone_quote_does_not_terminate_early() {
+        use lexer::{Tok, lex};
+        // A triple-quoted string with an embedded `"` (HTML attribute value).
+        let src = r#""""<div class="card"></div>""""#;
+        let toks = lex(src).expect("triple string with lone quote must lex");
+        assert_eq!(toks.len(), 1, "must produce exactly one token");
+        assert_eq!(
+            toks.first().map(|t| t.kind.clone()),
+            Some(Tok::TripleStr(r#"<div class="card"></div>"#.to_owned())),
+            "content including embedded quote is preserved verbatim"
+        );
+    }
+
+    /// A triple-quoted string containing `""` (two consecutive quotes) must
+    /// also lex correctly — two quotes are literal, not a premature close.
+    #[test]
+    fn triple_string_two_consecutive_quotes_are_literal() {
+        use lexer::{Tok, lex};
+        // `""` inside triple quotes is literal content, not an early close.
+        let src = "\"\"\"before\"\"after\"\"\"";
+        let toks = lex(src).expect("triple string with double quote must lex");
+        assert_eq!(toks.len(), 1);
+        assert_eq!(
+            toks.first().map(|t| t.kind.clone()),
+            Some(Tok::TripleStr("before\"\"after".to_owned())),
+        );
+    }
+
+    /// `{{interp}}` inside a triple-quoted string is preserved verbatim at the
+    /// lexer stage (interpolation is resolved downstream by the canonicaliser,
+    /// mirroring `findTripleClose` which performs no escape resolution).
+    #[test]
+    fn triple_string_interpolation_braces_preserved_verbatim() {
+        use lexer::{Tok, lex};
+        let src = "\"\"\"hello {{name}}!\"\"\"";
+        let toks = lex(src).expect("triple string with interpolation must lex");
+        assert_eq!(toks.len(), 1);
+        assert_eq!(
+            toks.first().map(|t| t.kind.clone()),
+            Some(Tok::TripleStr("hello {{name}}!".to_owned())),
+        );
+    }
+
+    /// `\{{` (escaped open brace) inside a triple-quoted string is preserved
+    /// verbatim — the lexer does not resolve it; the canonicaliser does.
+    #[test]
+    fn triple_string_escaped_brace_preserved_verbatim() {
+        use lexer::{Tok, lex};
+        let src = r#""""price: \{{amount}}""""#;
+        let toks = lex(src).expect("triple string with escaped brace must lex");
+        assert_eq!(toks.len(), 1);
+        assert_eq!(
+            toks.first().map(|t| t.kind.clone()),
+            Some(Tok::TripleStr(r"price: \{{amount}}".to_owned())),
+        );
+    }
+
+    /// `\\` inside a triple-quoted string is preserved verbatim (two backslashes
+    /// in the source → two backslashes in the token content; the canonicaliser
+    /// collapses them to one).
+    #[test]
+    fn triple_string_double_backslash_preserved_verbatim() {
+        use lexer::{Tok, lex};
+        let src = "\"\"\"a\\\\b\"\"\"";
+        let toks = lex(src).expect("triple string with double backslash must lex");
+        assert_eq!(toks.len(), 1);
+        assert_eq!(
+            toks.first().map(|t| t.kind.clone()),
+            Some(Tok::TripleStr("a\\\\b".to_owned())),
+        );
+    }
+
+    /// A multiline triple-quoted string spanning real newlines lexes correctly.
+    #[test]
+    fn triple_string_spanning_newlines_lexes() {
+        use lexer::{Tok, lex};
+        let src = "\"\"\"line one\nline two\nline three\"\"\"";
+        let toks = lex(src).expect("multiline triple string must lex");
+        assert_eq!(toks.len(), 1);
+        assert_eq!(
+            toks.first().map(|t| t.kind.clone()),
+            Some(Tok::TripleStr("line one\nline two\nline three".to_owned())),
+        );
+    }
+
+    /// A triple-quoted string with embedded `"` parses successfully at the
+    /// module level — confirming no downstream SKY-N0001 leaks through.
+    #[test]
+    fn triple_string_with_quote_parses_in_module_context() {
+        // If the lexer terminated early on the `"`, the rest would be mis-lexed
+        // as identifiers and the module parser would fail with SKY-N0001 or a
+        // similar error rather than "OK".
+        assert_eq!(
+            err_code(&format!(
+                "{HDR}html =\n    \"\"\"<div class=\"card\">hello</div>\"\"\"\n"
+            )),
+            "OK"
+        );
+    }
+
+    /// An unterminated triple-quoted string reports SKY-P0014 (same as a
+    /// single-line unterminated string), not a misleading identifier error.
+    #[test]
+    fn unterminated_triple_string_is_p0014() {
+        use lexer::lex;
+        let result = lex("\"\"\"oops no close");
+        assert!(result.is_err(), "unterminated triple string must fail");
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.code().as_str(),
+            "SKY-P0014",
+            "unterminated triple string is SKY-P0014, got {err:?}"
+        );
+    }
+
+    /// An empty triple-quoted string `""""""` is valid and yields an empty string.
+    // Regression: AUD-11 — dotted Access chains must be bounded by MAX_DEPTH.
+    // A token with >MAX_DEPTH dot-segments caused unbounded stack nesting via
+    // ident_expr's rest loop; a postfix dot followed by such a token did the
+    // same via parse_atom_postfix's split loop.
+    #[test]
+    fn dotted_ident_exceeding_max_depth_is_p0003() {
+        // `y.a.a.a...` (300k .a segments) lexes as ONE Ident token and is
+        // lowered via ident_expr's rest loop — the primary attack surface.
+        let src = format!("{HDR}x = y{}", ".a".repeat(300_000));
+        assert_eq!(
+            err_code(&src),
+            "SKY-P0003",
+            "deeply nested dotted ident must be rejected, not panic"
+        );
+    }
+
+    #[test]
+    fn postfix_dot_exceeding_max_depth_is_p0003() {
+        // `(y).a.a.a...` → RParen + Dot + Ident("a.a.a...") — exercised via
+        // parse_atom_postfix's segment loop, the second guard site.
+        let src = format!("{HDR}x = (y){}", ".a".repeat(300_000));
+        assert_eq!(
+            err_code(&src),
+            "SKY-P0003",
+            "deeply nested postfix dot chain must be rejected, not panic"
+        );
+    }
+
+    #[test]
+    fn empty_triple_string_lexes_to_empty_str() {
+        use lexer::{Tok, lex};
+        let toks = lex("\"\"\"\"\"\"").expect("empty triple string must lex");
+        assert_eq!(toks.len(), 1);
+        assert_eq!(
+            toks.first().map(|t| t.kind.clone()),
+            Some(Tok::TripleStr(String::new()))
+        );
+    }
+
+    /// Regression non-regression: regular single-line strings still lex
+    /// correctly after the triple-string dispatch was introduced.
+    #[test]
+    fn single_line_string_unaffected_by_triple_dispatch() {
+        use lexer::{Tok, lex};
+        let toks = lex("\"hello world\"").expect("single string must lex");
+        assert_eq!(toks.len(), 1);
+        assert_eq!(
+            toks.first().map(|t| t.kind.clone()),
+            Some(Tok::Str("hello world".to_owned()))
+        );
+        // Escape still resolved in single-line strings.
+        let toks2 = lex("\"a\\tb\"").expect("escaped single string must lex");
+        assert_eq!(
+            toks2.first().map(|t| t.kind.clone()),
+            Some(Tok::Str("a\tb".to_owned()))
+        );
+    }
+}

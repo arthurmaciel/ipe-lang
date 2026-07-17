@@ -86,7 +86,7 @@ export SKYC_BIN="${SKYC_BIN:-$CARGO_TARGET_DIR/release/skyc}"
 
 # ── Vendored runtime dir (skyc --runtime) ────────────────────────────────────
 # skyc's build vendors the runtime module tree into each emitted crate. Left
-# UNSET it auto-resolves by walking up to `$REPO/runtime/src/sky_runtime`
-# (resolve_runtime() in crates/skyc/src/lib.rs). We export the explicit path so
+# UNSET it auto-resolves by walking up to `$REPO/src/runtime/rust/src/sky_runtime`
+# (resolve_runtime() in src/ipe-cli/src/lib.rs). We export the explicit path so
 # the sweep is independent of the invocation CWD; callers may override.
-export SKY_RUNTIME_DIR="${SKY_RUNTIME_DIR:-$REPO/runtime/src/sky_runtime}"
+export SKY_RUNTIME_DIR="${SKY_RUNTIME_DIR:-$REPO/src/runtime/rust/src/sky_runtime}"
