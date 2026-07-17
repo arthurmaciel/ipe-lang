@@ -9,7 +9,7 @@ use super::helpers::{
     ui_column_, ui_el_, ui_html_attribute_, ui_input_, ui_on_bool_, ui_on_input_, ui_row_,
     ui_spacing_,
 };
-use crate::core::SkyMaybe;
+use crate::core::IpeMaybe;
 use std::sync::Arc;
 
 // ---- Label + LabelPosition --------------------------------------------------
@@ -44,14 +44,14 @@ pub struct Placeholder<M> {
     pub content: Element<M>,
 }
 
-impl<M> crate::stringify::SkyStringify for Label<M> {
-    fn sky_show(&self) -> String {
+impl<M> crate::stringify::IpeStringify for Label<M> {
+    fn ipe_show(&self) -> String {
         "<label>".to_string()
     }
 }
 
-impl<M> crate::stringify::SkyStringify for Placeholder<M> {
-    fn sky_show(&self) -> String {
+impl<M> crate::stringify::IpeStringify for Placeholder<M> {
+    fn ipe_show(&self) -> String {
         "<placeholder>".to_string()
     }
 }
@@ -184,7 +184,7 @@ fn input_base_<M: Clone>(
     attrs: Vec<Attribute<M>>,
     on_change: Arc<dyn Fn(String) -> M + Send + Sync>,
     text: String,
-    placeholder: SkyMaybe<Placeholder<M>>,
+    placeholder: IpeMaybe<Placeholder<M>>,
     label: Label<M>,
 ) -> Element<M> {
     let (layout_attrs, control_attrs) = split_layout_attrs(attrs);
@@ -196,7 +196,7 @@ fn input_base_<M: Clone>(
         base_attrs.push(ui_html_attribute_("autocomplete".into(), ac.into()));
     }
     base_attrs.push(ui_on_input_(on_change));
-    if let SkyMaybe::Just(ph) = placeholder
+    if let IpeMaybe::Just(ph) = placeholder
         && let Some(ph_text) = placeholder_text_of(&ph.content)
     {
         base_attrs.push(ui_html_attribute_("placeholder".into(), ph_text));
@@ -212,7 +212,7 @@ pub fn input_text_<M: Clone>(
     attrs: Vec<Attribute<M>>,
     on_change: Arc<dyn Fn(String) -> M + Send + Sync>,
     text: String,
-    placeholder: SkyMaybe<Placeholder<M>>,
+    placeholder: IpeMaybe<Placeholder<M>>,
     label: Label<M>,
 ) -> Element<M> {
     input_base_("text", None, attrs, on_change, text, placeholder, label)
@@ -223,7 +223,7 @@ pub fn input_email_<M: Clone>(
     attrs: Vec<Attribute<M>>,
     on_change: Arc<dyn Fn(String) -> M + Send + Sync>,
     text: String,
-    placeholder: SkyMaybe<Placeholder<M>>,
+    placeholder: IpeMaybe<Placeholder<M>>,
     label: Label<M>,
 ) -> Element<M> {
     input_base_("email", None, attrs, on_change, text, placeholder, label)
@@ -234,7 +234,7 @@ pub fn input_username_<M: Clone>(
     attrs: Vec<Attribute<M>>,
     on_change: Arc<dyn Fn(String) -> M + Send + Sync>,
     text: String,
-    placeholder: SkyMaybe<Placeholder<M>>,
+    placeholder: IpeMaybe<Placeholder<M>>,
     label: Label<M>,
 ) -> Element<M> {
     input_base_(
@@ -253,7 +253,7 @@ pub fn input_search_<M: Clone>(
     attrs: Vec<Attribute<M>>,
     on_change: Arc<dyn Fn(String) -> M + Send + Sync>,
     text: String,
-    placeholder: SkyMaybe<Placeholder<M>>,
+    placeholder: IpeMaybe<Placeholder<M>>,
     label: Label<M>,
 ) -> Element<M> {
     input_base_("search", None, attrs, on_change, text, placeholder, label)
@@ -264,7 +264,7 @@ pub fn input_current_password_<M: Clone>(
     attrs: Vec<Attribute<M>>,
     on_change: Arc<dyn Fn(String) -> M + Send + Sync>,
     text: String,
-    placeholder: SkyMaybe<Placeholder<M>>,
+    placeholder: IpeMaybe<Placeholder<M>>,
     label: Label<M>,
 ) -> Element<M> {
     input_base_(
@@ -283,7 +283,7 @@ pub fn input_new_password_<M: Clone>(
     attrs: Vec<Attribute<M>>,
     on_change: Arc<dyn Fn(String) -> M + Send + Sync>,
     text: String,
-    placeholder: SkyMaybe<Placeholder<M>>,
+    placeholder: IpeMaybe<Placeholder<M>>,
     label: Label<M>,
 ) -> Element<M> {
     input_base_(
@@ -304,7 +304,7 @@ pub fn input_multiline_<M: Clone>(
     attrs: Vec<Attribute<M>>,
     on_change: Arc<dyn Fn(String) -> M + Send + Sync>,
     text: String,
-    placeholder: SkyMaybe<Placeholder<M>>,
+    placeholder: IpeMaybe<Placeholder<M>>,
     label: Label<M>,
     spellcheck: bool,
 ) -> Element<M> {
@@ -315,7 +315,7 @@ pub fn input_multiline_<M: Clone>(
         ui_html_attribute_("value".into(), text),
         ui_on_input_(on_change),
     ];
-    if let SkyMaybe::Just(ph) = placeholder
+    if let IpeMaybe::Just(ph) = placeholder
         && let Some(ph_text) = placeholder_text_of(&ph.content)
     {
         base_attrs.push(ui_html_attribute_("placeholder".into(), ph_text));
@@ -408,8 +408,8 @@ pub struct RadioOption<M> {
     pub label: Element<M>,
 }
 
-impl<M> crate::stringify::SkyStringify for RadioOption<M> {
-    fn sky_show(&self) -> String {
+impl<M> crate::stringify::IpeStringify for RadioOption<M> {
+    fn ipe_show(&self) -> String {
         format!("<RadioOption {}>", self.value)
     }
 }

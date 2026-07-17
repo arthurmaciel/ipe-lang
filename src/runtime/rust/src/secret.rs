@@ -7,7 +7,7 @@
 //! the ONLY way to obtain a `Secret` is through [`secret_from_string`] (the
 //! seal), and the ONLY way to get the plaintext back out is through
 //! [`secret_reveal`] (the single greppable un-parse). Every other path —
-//! `Debug`, the Sky-level `SkyStringify` (backing `toString` / interpolation /
+//! `Debug`, the Sky-level `IpeStringify` (backing `toString` / interpolation /
 //! `Log.*With`), equality — is **safe by construction**: each has a
 //! hand-written impl on `Secret` itself, so there is no OTHER impl a caller
 //! could accidentally reach that would expose the plaintext.
@@ -26,10 +26,10 @@
 //!   `ipe_types::concrete_super_ok` / `emitted_bound_satisfied`.
 //! * `Debug` — hand-written, ALWAYS returns the fixed redacted placeholder,
 //!   regardless of the wrapped value.
-//! * `SkyStringify` — hand-written, ALWAYS returns the same redacted
+//! * `IpeStringify` — hand-written, ALWAYS returns the same redacted
 //!   placeholder. This is the trait that backs `toString` / string
 //!   interpolation / `Log.*With`'s attr-list stringification
-//!   (`ipe_runtime::stringify::SkyStringify`), so logging a `Secret` directly
+//!   (`ipe_runtime::stringify::IpeStringify`), so logging a `Secret` directly
 //!   is safe by construction — the caller does not need to remember to call
 //!   `Secret.redacted` first.
 //! * NO `Display`, NO `Hash`, NO `Ord`, NO `serde::Serialize` /
@@ -65,7 +65,7 @@
 use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
-use super::stringify::SkyStringify;
+use super::stringify::IpeStringify;
 
 /// The fixed placeholder every stringification path returns, regardless of
 /// the wrapped value. Never formatted with the payload interpolated in —
@@ -107,13 +107,13 @@ impl std::fmt::Debug for Secret {
     }
 }
 
-impl SkyStringify for Secret {
+impl IpeStringify for Secret {
     /// Backs Sky's `toString` / string interpolation / `Log.*With` attr
     /// stringification. ALWAYS the fixed placeholder — a caller that logs a
     /// `Secret` directly (forgetting to call `Secret.redacted` first) gets
     /// the safe redacted output automatically rather than a compile error
     /// whose only fix is remembering the very escape hatch they forgot.
-    fn sky_show(&self) -> String {
+    fn ipe_show(&self) -> String {
         REDACTED.to_owned()
     }
 }
@@ -153,7 +153,7 @@ pub fn secret_reveal(mut s: Secret) -> String {
 
 /// `Secret.redacted : Secret -> String` — the EXPLICIT redaction accessor.
 /// Also exactly what `toString` / interpolation gives automatically via
-/// [`SkyStringify`] above; exists as a named, discoverable, non-`Debug`-
+/// [`IpeStringify`] above; exists as a named, discoverable, non-`Debug`-
 /// reliant way to get a display-safe placeholder string (e.g. to embed in a
 /// user-facing message: `"using key " ++ Secret.redacted k`).
 #[must_use]
@@ -212,7 +212,7 @@ mod tests {
 
     // ── (b) every plausible accidental-stringification path is redacted ────
     //
-    // `{:?}` (Debug), `.sky_show()` (the trait backing Sky's `toString` /
+    // `{:?}` (Debug), `.ipe_show()` (the trait backing Sky's `toString` /
     // string interpolation / `Log.*With`), and `Secret.redacted` are the
     // THREE paths that exist on `Secret` and all three are tested here to
     // never expose the payload. The other two plausible leak paths —
@@ -240,21 +240,21 @@ mod tests {
     }
 
     #[test]
-    fn sky_show_never_exposes_the_payload() {
+    fn ipe_show_never_exposes_the_payload() {
         let s = secret_from_string(PAYLOAD.to_owned());
-        let shown = s.sky_show();
+        let shown = s.ipe_show();
         assert_eq!(shown, REDACTED);
         assert!(!shown.contains(PAYLOAD));
     }
 
     /// A `Vec<Secret>` (the shape `Log.*With`'s attr list lowers to) renders
-    /// every element through [`SkyStringify`]'s blanket `Vec<T>` impl
+    /// every element through [`IpeStringify`]'s blanket `Vec<T>` impl
     /// (`stringify.rs`) — proves the redaction survives the SAME container
     /// path real Sky code takes when logging a list containing a secret.
     #[test]
     fn secret_inside_a_vec_stringifies_redacted() {
         let v = vec![secret_from_string(PAYLOAD.to_owned())];
-        let shown = v.sky_show();
+        let shown = v.ipe_show();
         assert!(!shown.contains(PAYLOAD));
         assert!(shown.contains(REDACTED));
     }
@@ -268,7 +268,7 @@ mod tests {
         for payload in ["", "<redacted>", "{}", "{:?}", "a\nb\tc"] {
             let s = secret_from_string(payload.to_owned());
             assert_eq!(format!("{s:?}"), REDACTED);
-            assert_eq!(s.sky_show(), REDACTED);
+            assert_eq!(s.ipe_show(), REDACTED);
         }
     }
 }

@@ -4,7 +4,7 @@
 //! GENUINELY UNCONSTRAINED — a discarded / empty / phantom position — the
 //! emitted Rust must carry a default turbofish so `cargo build` succeeds. Before
 //! the fix these shapes `skyc build`-accepted (exit 0) but the emitted
-//! `sky_mod_main.rs` failed `cargo build` with `E0282`/`E0283` "type annotations
+//! `ipe_mod_main.rs` failed `cargo build` with `E0282`/`E0283` "type annotations
 //! needed" — the exit-0-then-cargo-fail SEAL violation.
 //!
 //! The fixture exercises every covered kernel shape in an ambiguous position:

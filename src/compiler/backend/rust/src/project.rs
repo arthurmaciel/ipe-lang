@@ -113,7 +113,7 @@ const RUNTIME_MOD_RS_AUTH_APPEND: &str = "pub mod auth;\npub use auth::*;\n";
 ///
 /// `ssrf.rs` (`ws_client`'s SSRF validators) is already part of the base
 /// `mod.rs` (the always-present `http_client` module also needs it), so no
-/// `ssrf` append is required here. `tea.rs` (whose `SkySub<M>` the
+/// `ssrf` append is required here. `tea.rs` (whose `IpeSub<M>` the
 /// `sub_subscribe_ws_*` fns return) is force-appended alongside this in
 /// [`assemble_project_files`], mirroring the `uses_server` rule.
 const RUNTIME_MOD_RS_WEBSOCKET_APPEND: &str = "pub mod ws_client;\npub use ws_client::*;\n";
@@ -225,13 +225,13 @@ const RUNTIME_MOD_RS_WEBVIEW_APPEND: &str = "#[cfg(feature = \"webview\")]\npub 
 /// lives in `live/pubsub.rs` because it needs the session-aware broker.
 ///
 /// `LiveReq` MUST be re-exported here (transitive-closure invariant). The
-/// runtime's `db.rs` module contains a `#[cfg(feature = "live")] impl SkyRow for
+/// runtime's `db.rs` module contains a `#[cfg(feature = "live")] impl IpeRow for
 /// super::LiveReq` block — `super::LiveReq` means `ipe_runtime::LiveReq`. In the
 /// real runtime source `mod.rs` uses `pub use live::*;` which surfaces `LiveReq`
 /// (via `live/mod.rs`'s own `pub use req::*;`), but the emitted project uses a
 /// selective export list.  Without `LiveReq` here, any program that uses BOTH Db
 /// and Live kernels fails with E0412 (`LiveReq in super` not found) at
-/// `db.rs:impl SkyRow for super::LiveReq`.
+/// `db.rs:impl IpeRow for super::LiveReq`.
 ///
 /// The `route` sub-module is referenced by path (`ipe_runtime::live::route::Route`)
 /// not via `pub use live::*;` (to avoid surfacing the internal `store` / `req`
@@ -239,17 +239,17 @@ const RUNTIME_MOD_RS_WEBVIEW_APPEND: &str = "#[cfg(feature = \"webview\")]\npub 
 const RUNTIME_MOD_RS_LIVE_APPEND: &str = "#[cfg(feature = \"live\")]\npub mod live;\n\
      #[cfg(feature = \"live\")]\npub use live::{live_app, live_app_routed, live_render_static, sub_subscribe_topic, cmd_publish, cmd_publish_no_echo, pubsub_publish, pubsub_publish_no_echo, LiveReq};\n";
 
-/// The `SkyCmd<M>` and `SkySub<M>` project-level type aliases emitted when the
+/// The `IpeCmd<M>` and `IpeSub<M>` project-level type aliases emitted when the
 /// program uses TEA kernels. Placed immediately after `runtime_bindings()` (the
-/// block that also contains `SkyTask<A>` and `Decoder<T>`).
-const TEA_TYPE_ALIASES: &str = "pub type SkyCmd<M> = ipe_runtime::tea::SkyCmd<M>;\n\
-     pub type SkySub<M> = ipe_runtime::tea::SkySub<M>;\n";
+/// block that also contains `IpeTask<A>` and `Decoder<T>`).
+const TEA_TYPE_ALIASES: &str = "pub type IpeCmd<M> = ipe_runtime::tea::IpeCmd<M>;\n\
+     pub type IpeSub<M> = ipe_runtime::tea::IpeSub<M>;\n";
 
 // ── Std.Auth — concrete wrappers emitted when uses_auth is true ────────
 
 /// Concrete wrappers appended to `main.rs` when the program uses Std.Auth
 /// kernels.  Each wrapper specialises the generic `E` type parameter to
-/// `SkyError` so call sites in user function bodies compile without requiring
+/// `IpeError` so call sites in user function bodies compile without requiring
 /// a turbofish annotation.
 ///
 /// `auth_sign_token` / `auth_verify_token` take a Sky-typed
@@ -269,36 +269,36 @@ const TEA_TYPE_ALIASES: &str = "pub type SkyCmd<M> = ipe_runtime::tea::SkyCmd<M>
 /// three.  When `uses_db` is also true the `db` feature is in the generated
 /// project's defaults and the db-gated wrappers become active.
 const AUTH_WRAPPERS: &str = "\
-pub fn auth_hash_password(pw: String) -> SkyResult<SkyError, String> {\n    \
+pub fn auth_hash_password(pw: String) -> IpeResult<IpeError, String> {\n    \
     ipe_runtime::auth::auth_hash_password(pw)\n\
 }\n\
-pub fn auth_hash_password_cost(pw: String, cost: i64) -> SkyResult<SkyError, String> {\n    \
+pub fn auth_hash_password_cost(pw: String, cost: i64) -> IpeResult<IpeError, String> {\n    \
     ipe_runtime::auth::auth_hash_password_cost(pw, cost)\n\
 }\n\
-pub fn auth_verify_password(pw: String, hash: String) -> SkyResult<SkyError, bool> {\n    \
+pub fn auth_verify_password(pw: String, hash: String) -> IpeResult<IpeError, bool> {\n    \
     ipe_runtime::auth::auth_verify_password(pw, hash)\n\
 }\n\
-pub fn auth_password_strength(pw: String) -> SkyResult<SkyError, String> {\n    \
+pub fn auth_password_strength(pw: String) -> IpeResult<IpeError, String> {\n    \
     ipe_runtime::auth::auth_password_strength(pw)\n\
 }\n\
 pub fn auth_sign_token(\n    \
     secret: ipe_runtime::secret::Secret, claims: HashMap<String, String>, expiry_seconds: i64,\n\
-) -> SkyResult<SkyError, String> {\n    \
+) -> IpeResult<IpeError, String> {\n    \
     ipe_runtime::auth::auth_sign_token(ipe_runtime::secret::secret_reveal(secret), claims, expiry_seconds)\n\
 }\n\
-pub fn auth_verify_token(secret: ipe_runtime::secret::Secret, token: String) -> SkyResult<SkyError, HashMap<String, String>> {\n    \
+pub fn auth_verify_token(secret: ipe_runtime::secret::Secret, token: String) -> IpeResult<IpeError, HashMap<String, String>> {\n    \
     ipe_runtime::auth::auth_verify_token(ipe_runtime::secret::secret_reveal(secret), token)\n\
 }\n\
 #[cfg(feature = \"db\")]\n\
-pub fn auth_register(conn: Db, email: String, password: String) -> SkyTask<i64> {\n    \
+pub fn auth_register(conn: Db, email: String, password: String) -> IpeTask<i64> {\n    \
     ipe_runtime::auth::auth_register(conn, email, password)\n\
 }\n\
 #[cfg(feature = \"db\")]\n\
-pub fn auth_login(conn: Db, email: String, password: String) -> SkyTask<i64> {\n    \
+pub fn auth_login(conn: Db, email: String, password: String) -> IpeTask<i64> {\n    \
     ipe_runtime::auth::auth_login(conn, email, password)\n\
 }\n\
 #[cfg(feature = \"db\")]\n\
-pub fn auth_set_role(conn: Db, user_id: i64, role: String) -> SkyTask<()> {\n    \
+pub fn auth_set_role(conn: Db, user_id: i64, role: String) -> IpeTask<()> {\n    \
     ipe_runtime::auth::auth_set_role(conn, user_id, role)\n\
 }\n\
 ";
@@ -354,7 +354,7 @@ fn bucket_or_bug<'p>(
 /// The fixed kernel-wrapper prelude emitted between the user types and the user
 /// functions (golden lines 45–127).
 ///
-/// These bindings (`SkyError`, the `log_*` / `system_*` / `time_*` / … wrappers)
+/// These bindings (`IpeError`, the `log_*` / `system_*` / `time_*` / … wrappers)
 /// are identical for every program, so they are sliced out of the embedded
 /// golden rather than hand-retyped — the same drift-free strategy the
 /// preamble/epilogue use. The slice is anchored entirely on its *own* content
@@ -367,7 +367,7 @@ fn bucket_or_bug<'p>(
 /// from the embedded golden — a drifted-golden invariant violation, surfaced
 /// instead of a silent empty slice.
 fn runtime_bindings() -> DResult<&'static str> {
-    const START: &str = "pub use ipe_runtime::error::SkyError;";
+    const START: &str = "pub use ipe_runtime::error::IpeError;";
     const END: &str = "    ipe_runtime::http_client::http_parse_query(raw)\n}\n";
     let start = GOLDEN.find(START).ok_or_else(|| anchor_missing(START))?;
     let rest = GOLDEN.get(start..).ok_or_else(|| anchor_missing(START))?;
@@ -380,16 +380,16 @@ fn runtime_bindings() -> DResult<&'static str> {
 #[allow(clippy::too_many_lines)]
 pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject> {
     // Partition every user item by the Rust file it belongs in. The
-    // number of DISTINCT `RustFileId::SkyModule` buckets — NEVER counting the
-    // always-possible `Spine` bucket (§3.3: "counts `SkyModule` buckets only,
+    // number of DISTINCT `RustFileId::IpeModule` buckets — NEVER counting the
+    // always-possible `Spine` bucket (§3.3: "counts `IpeModule` buckets only,
     // never `Spine`") — is the trigger for the real per-module split:
-    //   • 0 or 1 distinct SkyModule bucket → the Spine-collapse invariant
+    //   • 0 or 1 distinct IpeModule bucket → the Spine-collapse invariant
     //     fires and we emit today's byte-identical single `src/main.rs`.
     //   • 2+ → the real split materialises (`emit_spine` + one
     //     `emit_module_file` per bucket + the `main.rs` barrel lines).
     let partition = partition_items(program, ctx.interner);
 
-    // The DISTINCT `SkyModule` homes, in first-encounter (linker/topological)
+    // The DISTINCT `IpeModule` homes, in first-encounter (linker/topological)
     // order — the SAME warm/cold-stable order `type_order`/`func_order` use
     // (see [`Partitioned`]). A module can appear in `func_order` but not
     // `type_order` (e.g. a func-only module like `mm_diamond`'s `D`), so the
@@ -412,7 +412,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
     // synthesised record struct's name collides with a user enum's name, a
     // function name, or a `mod_ident`. In the single-file collapse case no
     // `mod` declarations are written, so the honest set is empty; in the real
-    // split every `SkyModule` bucket contributes its `mod_ident` (§2.1.1's new
+    // split every `IpeModule` bucket contributes its `mod_ident` (§2.1.1's new
     // namespace, whose intra-set uniqueness `assert_mod_idents_unique` already
     // guarantees — this check is the DISJOINTNESS obligation against the
     // record-struct namespace).
@@ -420,7 +420,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         module_homes
             .iter()
             .filter_map(|id| match id {
-                RustFileId::SkyModule(home) => {
+                RustFileId::IpeModule(home) => {
                     Some(rust_file::resolve_mod_ident(home, ctx.interner))
                 }
                 RustFileId::Spine => None,
@@ -432,7 +432,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
     ctx.assert_record_structs_disjoint_from_type_namespace(&mod_idents)?;
 
     // The emitted Rust source files (`src/main.rs` plus, in the real split,
-    // one `src/sky_mods/<ident>.rs` per module). The manifest + runtime-module
+    // one `src/ipe_mods/<ident>.rs` per module). The manifest + runtime-module
     // files below are file-count-agnostic and shared by both branches.
     let mut rust_sources: Vec<(RelPath, String)> = Vec::new();
 
@@ -443,31 +443,31 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         // `fn main()`) + the flat glob barrel that re-exports every module's
         // items at the crate root.
         let mut main_rs = emit_spine(ctx, program)?;
-        // Barrel lines (§2.1), one pair per distinct SkyModule home, in the
+        // Barrel lines (§2.1), one pair per distinct IpeModule home, in the
         // deterministic first-encounter order computed above:
-        //   #[path = "sky_mods/sky_mod_<home>.rs"]
-        //   mod sky_mod_<home>;
-        //   pub(crate) use sky_mod_<home>::*;
+        //   #[path = "ipe_mods/ipe_mod_<home>.rs"]
+        //   mod ipe_mod_<home>;
+        //   pub(crate) use ipe_mod_<home>::*;
         // The `#[path]` attribute is load-bearing: `main.rs` is the crate root,
-        // so a BARE `mod sky_mod_<home>;` would resolve to a crate-root sibling
-        // `src/sky_mod_<home>.rs`, NOT the `src/sky_mods/<ident>.rs` file this
+        // so a BARE `mod ipe_mod_<home>;` would resolve to a crate-root sibling
+        // `src/ipe_mod_<home>.rs`, NOT the `src/ipe_mods/<ident>.rs` file this
         // design places (§2.1). `#[path]` is resolved relative to the declaring
         // file's directory (`src/`), so it points the module at the real file
-        // under `sky_mods/` — closing an E0583 "file not found for module"
+        // under `ipe_mods/` — closing an E0583 "file not found for module"
         // exit-0-then-cargo-fail (THE SEAL) that a bare `mod` decl would ship.
         // Because every user name is already globally unique (§1.3) and this
         // re-exports every module at the crate root, each per-module file's
         // `use crate::*;` sees every Spine item and every other module's item.
         main_rs.push('\n');
         for id in &module_homes {
-            let RustFileId::SkyModule(home) = id else {
+            let RustFileId::IpeModule(home) = id else {
                 continue;
             };
             let ident = rust_file::resolve_mod_ident(home, ctx.interner)?;
             // Built via `push_str` fragments rather than one `push_str(&format!)`
             // to satisfy `clippy::format_push_string` (denied via pedantic) —
             // no intermediate allocation, same bytes.
-            main_rs.push_str("#[path = \"sky_mods/");
+            main_rs.push_str("#[path = \"ipe_mods/");
             main_rs.push_str(&ident);
             main_rs.push_str(".rs\"]\nmod ");
             main_rs.push_str(&ident);
@@ -477,19 +477,19 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         }
         rust_sources.push((RelPath::new("src/main.rs")?, main_rs));
 
-        // One `src/sky_mods/<ident>.rs` per module, carrying ONLY that home's
+        // One `src/ipe_mods/<ident>.rs` per module, carrying ONLY that home's
         // `pub(crate)` items behind a `use crate::*;` glob header.
         for id in &module_homes {
-            let RustFileId::SkyModule(home) = id else {
+            let RustFileId::IpeModule(home) = id else {
                 continue;
             };
             let ident = rust_file::resolve_mod_ident(home, ctx.interner)?;
             let file = emit_module_file(ctx, program, id)?;
-            rust_sources.push((RelPath::new(format!("src/sky_mods/{ident}.rs"))?, file));
+            rust_sources.push((RelPath::new(format!("src/ipe_mods/{ident}.rs"))?, file));
         }
     } else {
         // ── The Spine-collapse invariant (§3.3) ──────────────────────────────
-        // Exactly ONE distinct `SkyModule` bucket (or none): inline that one
+        // Exactly ONE distinct `IpeModule` bucket (or none): inline that one
         // module's types/funcs into a single `src/main.rs`. THIS BRANCH IS
         // LOAD-BEARING — every single-module golden must stay byte-identical to
         // this inline layout: preamble, user types (via `type_order`), Spine
@@ -541,14 +541,14 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
 
         out.push('\n');
 
-        // Fixed kernel-wrapper prelude (SkyError, SkyTask<A>, Decoder<T>, …).
+        // Fixed kernel-wrapper prelude (IpeError, IpeTask<A>, Decoder<T>, …).
         out.push_str(runtime_bindings()?);
 
-        // TEA kernels → the SkyCmd<M> / SkySub<M> type aliases.
+        // TEA kernels → the IpeCmd<M> / IpeSub<M> type aliases.
         if ctx.uses_tea {
             out.push_str(TEA_TYPE_ALIASES);
         }
-        // Std.Auth kernels → concrete E = SkyError wrappers.
+        // Std.Auth kernels → concrete E = IpeError wrappers.
         if ctx.uses_auth {
             out.push_str(AUTH_WRAPPERS);
         }
@@ -556,7 +556,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
 
         // User functions, walked via `func_order` (its OWN first-encounter
         // order over `program.modules[..].funcs`). `partition_items` never
-        // routes a `Func` into `Spine`, so funcs land purely in `SkyModule`
+        // routes a `Func` into `Spine`, so funcs land purely in `IpeModule`
         // buckets.
         for file_id in func_order {
             let (_, funcs) = bucket_or_bug(buckets, file_id)?;
@@ -575,8 +575,8 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         // performs this same switch on its own — the anchor lives in the
         // epilogue, which is Spine-only.)
         if ctx.uses_webview {
-            const BLOCK_ON_ANCHOR: &str = "block_on(sky_main())";
-            const BLOCK_ON_THREAD_REPLACEMENT: &str = "block_on_current_thread(sky_main())";
+            const BLOCK_ON_ANCHOR: &str = "block_on(ipe_main())";
+            const BLOCK_ON_THREAD_REPLACEMENT: &str = "block_on_current_thread(ipe_main())";
             let replaced = out.replacen(BLOCK_ON_ANCHOR, BLOCK_ON_THREAD_REPLACEMENT, 1);
             if replaced == out {
                 return Err(Diagnostic::CompilerBug {
@@ -599,7 +599,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
 }
 
 /// Assemble the final [`EmittedProject`] from the already-rendered Rust source
-/// files (`src/main.rs` plus, in the real split, each `src/sky_mods/<ident>.rs`)
+/// files (`src/main.rs` plus, in the real split, each `src/ipe_mods/<ident>.rs`)
 /// — appending the manifest (`Cargo.toml`) and the trimmed runtime module
 /// files (`ipe_runtime/mod.rs` + `config.rs`).
 ///
@@ -708,12 +708,12 @@ fn assemble_project_files(
         }
         // `tea` must be included whenever user code uses TEA kernels directly,
         // OR whenever `uses_server` is true — because `http_stream.rs` (included
-        // via SERVER_APPEND) uses `SkySub` from `tea.rs` via `use super::*;`.
+        // via SERVER_APPEND) uses `IpeSub` from `tea.rs` via `use super::*;`.
         // Guarded as a union so a program using both emits `pub mod tea;` exactly
         // once (E0428). Transitive-closure invariant: any module depended on by an
         // included module MUST itself be included (same rule as http_header).
         // `uses_websocket` also forces `tea`: `ws_client.rs`'s `sub_subscribe_ws_*`
-        // fns return `SkySub<M>` (from `tea.rs`) via `use super::*`, so a
+        // fns return `IpeSub<M>` (from `tea.rs`) via `use super::*`, so a
         // connect/send-only program (no explicit Sub kernel ⇒ no `uses_tea`) still
         // needs `tea` declared — same transitive-closure rule as `uses_server`.
         if ctx.uses_tea || ctx.uses_server || ctx.uses_websocket {
@@ -781,7 +781,7 @@ fn assemble_project_files(
 
     let mut files = BTreeMap::new();
     // The emitted Rust source files: `src/main.rs` always, plus one
-    // `src/sky_mods/<ident>.rs` per module in the real-split case. In the
+    // `src/ipe_mods/<ident>.rs` per module in the real-split case. In the
     // single-file collapse case `rust_sources` holds exactly the one
     // byte-identical `src/main.rs`.
     for (path, text) in rust_sources {
@@ -827,7 +827,7 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
     // The Spine bucket's `SqlValue`/`SqlField` enums, in insertion order —
     // rendered where the user types would sit in the single-file layout, i.e.
     // immediately before the record structs (§2.2's ordering rule). No
-    // `SkyModule` bucket enums are emitted here — those are `emit_module_file`.
+    // `IpeModule` bucket enums are emitted here — those are `emit_module_file`.
     if let Some((spine_enums, _)) = buckets.get(&RustFileId::Spine) {
         for &def in spine_enums {
             out.push_str(&emit_enum(ctx, def)?);
@@ -859,12 +859,12 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
     out.push_str(&epilogue()?);
 
     // ── G3: Webview main-thread entry switch ──────────────────────────────
-    // The `block_on(sky_main())` anchor lives in the epilogue, which is
+    // The `block_on(ipe_main())` anchor lives in the epilogue, which is
     // Spine-only — so under the split this scan sees a strictly smaller
     // haystack than the whole concatenated `main.rs` (design doc §2.3).
     if ctx.uses_webview {
-        const BLOCK_ON_ANCHOR: &str = "block_on(sky_main())";
-        const BLOCK_ON_THREAD_REPLACEMENT: &str = "block_on_current_thread(sky_main())";
+        const BLOCK_ON_ANCHOR: &str = "block_on(ipe_main())";
+        const BLOCK_ON_THREAD_REPLACEMENT: &str = "block_on_current_thread(ipe_main())";
         let replaced = out.replacen(BLOCK_ON_ANCHOR, BLOCK_ON_THREAD_REPLACEMENT, 1);
         if replaced == out {
             return Err(Diagnostic::CompilerBug {
@@ -882,14 +882,14 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
     Ok(out)
 }
 
-/// Render the `SkyModule(home)` file's text for one Sky module's OWN
+/// Render the `IpeModule(home)` file's text for one Sky module's OWN
 /// declarations (design doc §2.1): ONLY that `home`'s `EnumDef`s + `Func`s,
 /// each `pub(crate)`-visible (not the bare `pub` the single-file layout uses,
 /// since these now live inside a `mod` block), opening with the flat-barrel
 /// `use crate::*;` glob so every `Spine`/other-module item is in scope.
 ///
 /// A `home` with no items in `program` (never the real driver path — every
-/// `SkyModule` file materialises FROM a non-empty bucket) yields just the
+/// `IpeModule` file materialises FROM a non-empty bucket) yields just the
 /// `use crate::*;` header.
 ///
 /// **This function is NOT on the public emission path** — see [`emit_spine`].
@@ -929,13 +929,13 @@ pub fn emit_module_file(ctx: &EmitCtx, program: &Program, home: &RustFileId) -> 
 /// file-count-dependent assembly the single-file [`emit_program`] path also
 /// does in its `>= 2` branch — computing the deterministic first-encounter
 /// module order, the fail-closed `mod_ident` uniqueness gate, the record-struct
-/// disjointness gate, the `main.rs` barrel lines, and the `src/sky_mods/*.rs`
+/// disjointness gate, the `main.rs` barrel lines, and the `src/ipe_mods/*.rs`
 /// file list — then delegates the file-count-AGNOSTIC manifest/runtime block to
 /// the shared [`assemble_project_files`]. It never re-renders any user item;
 /// the texts are taken verbatim, so the salsa `emit_manifest` query's output is
 /// byte-identical to `emit_program`'s split output for the same program.
 ///
-/// PRECONDITION (`>= 2` distinct `SkyModule` homes): this is the real-split
+/// PRECONDITION (`>= 2` distinct `IpeModule` homes): this is the real-split
 /// path. The single-home / zero-home collapse case never reaches here —
 /// `emit_manifest` routes it straight to `emit_program` for the byte-identical
 /// single-`main.rs` output (§4.4).
@@ -953,7 +953,7 @@ pub fn assemble_split_manifest(
 ) -> DResult<EmittedProject> {
     let partition = partition_items(program, ctx.interner);
 
-    // The distinct `SkyModule` homes in first-encounter (linker/topological)
+    // The distinct `IpeModule` homes in first-encounter (linker/topological)
     // order — the SAME union `emit_program`'s split branch computes, driving
     // both the barrel lines and the per-module file list.
     let mut module_homes: Vec<RustFileId> = Vec::new();
@@ -969,11 +969,11 @@ pub fn assemble_split_manifest(
     }
 
     // Fail closed if a synthesised record struct's name collides with a
-    // `mod_ident` (every SkyModule home contributes its ident in the split).
+    // `mod_ident` (every IpeModule home contributes its ident in the split).
     let mod_idents: BTreeSet<String> = module_homes
         .iter()
         .filter_map(|id| match id {
-            RustFileId::SkyModule(home) => Some(rust_file::resolve_mod_ident(home, ctx.interner)),
+            RustFileId::IpeModule(home) => Some(rust_file::resolve_mod_ident(home, ctx.interner)),
             RustFileId::Spine => None,
         })
         .collect::<DResult<BTreeSet<String>>>()?;
@@ -982,16 +982,16 @@ pub fn assemble_split_manifest(
     let mut rust_sources: Vec<(RelPath, String)> = Vec::new();
 
     // `main.rs` = the given spine text + the flat glob barrel, one pair per
-    // distinct SkyModule home in first-encounter order (byte-identical to
+    // distinct IpeModule home in first-encounter order (byte-identical to
     // `emit_program`'s split branch).
     let mut main_rs = spine_text.to_owned();
     main_rs.push('\n');
     for id in &module_homes {
-        let RustFileId::SkyModule(home) = id else {
+        let RustFileId::IpeModule(home) = id else {
             continue;
         };
         let ident = rust_file::resolve_mod_ident(home, ctx.interner)?;
-        main_rs.push_str("#[path = \"sky_mods/");
+        main_rs.push_str("#[path = \"ipe_mods/");
         main_rs.push_str(&ident);
         main_rs.push_str(".rs\"]\nmod ");
         main_rs.push_str(&ident);
@@ -1001,10 +1001,10 @@ pub fn assemble_split_manifest(
     }
     rust_sources.push((RelPath::new("src/main.rs")?, main_rs));
 
-    // One `src/sky_mods/<ident>.rs` per module, its text taken verbatim from
+    // One `src/ipe_mods/<ident>.rs` per module, its text taken verbatim from
     // the demanded per-file query output.
     for id in &module_homes {
-        let RustFileId::SkyModule(home) = id else {
+        let RustFileId::IpeModule(home) = id else {
             continue;
         };
         let ident = rust_file::resolve_mod_ident(home, ctx.interner)?;
@@ -1013,13 +1013,13 @@ pub fn assemble_split_manifest(
             .ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "ipe_backend_rust::project::assemble_split_manifest",
                 detail: format!(
-                    "no rendered text supplied for SkyModule home ident {ident:?} — \
+                    "no rendered text supplied for IpeModule home ident {ident:?} — \
                  emit_manifest must demand emit_rust_file for every home in \
                  program_rust_file_ids"
                 ),
             })?;
         rust_sources.push((
-            RelPath::new(format!("src/sky_mods/{ident}.rs"))?,
+            RelPath::new(format!("src/ipe_mods/{ident}.rs"))?,
             text.clone(),
         ));
     }
@@ -1034,7 +1034,7 @@ pub fn assemble_split_manifest(
 /// top-level `main.rs` declaration). Inside a per-module `mod` file the crate
 /// root re-exports them via a glob barrel, so `pub(crate)` is both sufficient
 /// and correct. Operates on the FIRST `pub enum `/`pub fn ` occurrence only —
-/// an enum's trailing `impl … SkyStringify` block carries no `pub`, and a
+/// an enum's trailing `impl … IpeStringify` block carries no `pub`, and a
 /// rendered item's declaration keyword is always at its head (or immediately
 /// after a leading `#[derive(...)]` line for an enum) — so this narrows
 /// exactly the one declaration keyword, never a substring inside a body.
@@ -2011,7 +2011,7 @@ mod tests {
     /// `RUNTIME_MOD_RS_LIVE_APPEND` must re-export `LiveReq` from the `live`
     /// module.
     ///
-    /// Root cause: `db.rs` has `#[cfg(feature = "live")] impl SkyRow for
+    /// Root cause: `db.rs` has `#[cfg(feature = "live")] impl IpeRow for
     /// super::LiveReq` — `super::LiveReq` means `ipe_runtime::LiveReq`.  The
     /// runtime source's `mod.rs` uses `pub use live::*;` which surfaces `LiveReq`
     /// (via `live/mod.rs`'s `pub use req::*;`).  The emitted project uses a

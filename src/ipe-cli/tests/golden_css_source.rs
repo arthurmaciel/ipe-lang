@@ -48,9 +48,9 @@ fn css_source_builds_and_injects_leaf_kernels() {
     );
 
     // The compiled `Std.Css` module lowers to its OWN Rust file under
-    // `src/sky_mods/` once the per-Sky-module split
+    // `src/ipe_mods/` once the per-Sky-module split
     // fires — this program has two distinct homes (`Main` + `Std.Css`). Scan
-    // the WHOLE emitted Sky-side tree (main.rs + sky_mods/*.rs) so both the
+    // the WHOLE emitted Sky-side tree (main.rs + ipe_mods/*.rs) so both the
     // presence assertions (render fold + leaf security kernels) and the
     // negative retired-enum assertion hold wherever the split placed the code.
     let emitted = support::read_all_emitted_src(&out);

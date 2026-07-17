@@ -15,7 +15,7 @@
 //! nested lambda's return-type slot inside a polymorphic `Def::Typed` body
 //! solves to the SAME free var as the enclosing function's own quantified
 //! `a` — so the unconditional Json fallback emitted a closure typed
-//! `Fn(..) -> SkyTask<JsonVal>` at a call site expecting `SkyTask<T1>`: a
+//! `Fn(..) -> IpeTask<JsonVal>` at a call site expecting `IpeTask<T1>`: a
 //! clean exit-0-then-cargo-fail (2x E0308).
 //!
 //! A second, independent layer of the SAME bug was found while chasing this:
@@ -88,9 +88,9 @@ fn poly_task_on_error_nested_green() {
         "withErrorReporting must lower to a generic Rust fn over T1; got:\n{main_rs}"
     );
     assert!(
-        !main_rs.contains("SkyTask<JsonVal>"),
-        "withErrorReporting's internal closures must stay typed SkyTask<T1>, \
-         never fall back to SkyTask<JsonVal> (the #164 E0308 exit-0-then-cargo-fail \
+        !main_rs.contains("IpeTask<JsonVal>"),
+        "withErrorReporting's internal closures must stay typed IpeTask<T1>, \
+         never fall back to IpeTask<JsonVal> (the #164 E0308 exit-0-then-cargo-fail \
          shape); got:\n{main_rs}"
     );
 
@@ -109,7 +109,7 @@ fn poly_task_on_error_nested_green() {
     // <4-char token>)" wrapper — proving Task.onError's fallback actually
     // fires with the right (generic, not JsonVal-erased) error type at
     // runtime. `Error.toString` on an `Error.unexpected` payload prefixes
-    // "Unexpected: " (see `ipe_runtime::error::SkyError::to_sky_string`) —
+    // "Unexpected: " (see `ipe_runtime::error::IpeError::to_sky_string`) —
     // that prefix is genuine runtime behaviour, not part of this fixture's
     // own message text.
     assert!(

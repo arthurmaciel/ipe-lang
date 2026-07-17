@@ -86,10 +86,10 @@ fn ok_out_dir() -> PathBuf {
 /// Compile a fixture into its own out dir; `None` (skip) when the runtime
 /// cannot be resolved.
 fn compile(fixture: &str, tag: &str, out: &PathBuf) -> Option<Result<(), skyc::CliError>> {
-    let sky_dir = std::env::temp_dir().join(format!("i180_{tag}_sky"));
-    let _ = std::fs::remove_dir_all(&sky_dir);
-    std::fs::create_dir_all(&sky_dir).ok()?;
-    let entry = sky_dir.join("Main.sky");
+    let ipe_dir = std::env::temp_dir().join(format!("i180_{tag}_sky"));
+    let _ = std::fs::remove_dir_all(&ipe_dir);
+    std::fs::create_dir_all(&ipe_dir).ok()?;
+    let entry = ipe_dir.join("Main.sky");
     std::fs::write(&entry, fixture).ok()?;
     let _ = std::fs::remove_dir_all(out);
     let Ok(runtime) = skyc::resolve_runtime() else {

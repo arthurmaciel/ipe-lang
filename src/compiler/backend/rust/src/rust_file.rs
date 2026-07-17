@@ -5,7 +5,7 @@
 //! `emit_program` writes at most one file — no `mod` items exist for two of
 //! them to collide over (see `project.rs::emit_program`'s own comment on this
 //! point). Their caller appears once `emit_program` partitions output across
-//! multiple `SkyModule` files.
+//! multiple `IpeModule` files.
 #![allow(dead_code)]
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -18,27 +18,27 @@ use crate::naming;
 
 /// Which Rust file a program's item (an [`ipe_ir::EnumDef`] or
 /// [`ipe_ir::Func`]) is declared in. `Spine` is the always-present entry
-/// file (`src/main.rs`); a `SkyModule` is one Sky module's OWN file
-/// (`src/sky_mods/<ident>.rs`), materialised only when 2+ distinct homes are
+/// file (`src/main.rs`); a `IpeModule` is one Sky module's OWN file
+/// (`src/ipe_mods/<ident>.rs`), materialised only when 2+ distinct homes are
 /// present (the Spine-collapse invariant — see the design doc §3.3).
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum RustFileId {
     Spine,
-    SkyModule(ModPath),
+    IpeModule(ModPath),
 }
 
 /// The Rust module identifier for Sky module path `home` — e.g.
-/// `["Std", "Palette"]` → `sky_mod_std_palette`, `["Lib"]` → `sky_mod_lib`.
+/// `["Std", "Palette"]` → `ipe_mod_std_palette`, `["Lib"]` → `ipe_mod_lib`.
 ///
 /// Reuses the same base fold [`naming::module_prefix`] already applies for
-/// the value/type case, snake-cased and prefixed with `sky_mod_` to keep it
+/// the value/type case, snake-cased and prefixed with `ipe_mod_` to keep it
 /// visually distinct from the vendored `ipe_runtime` module tree. This is a
 /// Folds a `ModPath` to the Rust identifier for its `mod` declaration; needed
 /// only once emission spans more than one file.
 #[must_use]
 pub fn mod_ident(home: &[&str]) -> String {
     format!(
-        "sky_mod_{}",
+        "ipe_mod_{}",
         naming::to_snake_case(&naming::module_prefix(home))
     )
 }
@@ -50,9 +50,9 @@ pub fn mod_ident(home: &[&str]) -> String {
 ///
 /// Reachable outside this module:
 /// [`crate::project::emit_program`] needs it to compute both the
-/// `src/sky_mods/<mod_ident>.rs` file paths and the `main.rs` barrel lines
+/// `src/ipe_mods/<mod_ident>.rs` file paths and the `main.rs` barrel lines
 /// (`#[path = …] mod <ident>;` / `pub(crate) use <ident>::*;`) for each
-/// [`RustFileId::SkyModule`] bucket, from the SAME fold
+/// [`RustFileId::IpeModule`] bucket, from the SAME fold
 /// [`assert_mod_idents_unique`] proves collision-free. (`pub` here is
 /// module-scoped — `rust_file` is a private module, so this is not part of the
 /// crate's external API.)
@@ -72,7 +72,7 @@ pub fn resolve_mod_ident(home: &ModPath, interner: &Interner) -> DResult<String>
     Ok(mod_ident(&segs))
 }
 
-/// Fail closed if two DISTINCT `home`s among `ids`' [`RustFileId::SkyModule`]
+/// Fail closed if two DISTINCT `home`s among `ids`' [`RustFileId::IpeModule`]
 /// entries fold to the same [`mod_ident`]. Mirrors the EXISTING
 /// `func_names.values().any(...)` / `enum_names.values().any(...)`
 /// fail-closed pattern (`crate::lib`) — same `Diagnostic::Name::
@@ -82,7 +82,7 @@ pub fn resolve_mod_ident(home: &ModPath, interner: &Interner) -> DResult<String>
 pub fn assert_mod_idents_unique(ids: &[RustFileId], interner: &Interner) -> DResult<()> {
     let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for id in ids {
-        let RustFileId::SkyModule(home) = id else {
+        let RustFileId::IpeModule(home) = id else {
             continue;
         };
         let ident = resolve_mod_ident(home, interner)?;
@@ -101,7 +101,7 @@ pub fn assert_mod_idents_unique(ids: &[RustFileId], interner: &Interner) -> DRes
 
 /// The result of [`partition_items`]: every item bucketed by its
 /// [`RustFileId`] home, plus the two DETERMINISTIC emission orders
-/// `project::emit_program` walks the `SkyModule` buckets in.
+/// `project::emit_program` walks the `IpeModule` buckets in.
 ///
 /// # Why `type_order`/`func_order` exist, and why NOT `buckets`' own key order
 ///
@@ -123,7 +123,7 @@ pub fn assert_mod_idents_unique(ids: &[RustFileId], interner: &Interner) -> DRes
 /// not an alphabetical or symbol-id one. Confirmed NOT alphabetical either:
 /// `B` < `C` < `D` lexically, but the golden is `D`, `C`, `B`.
 ///
-/// `type_order`/`func_order` instead record each distinct `SkyModule`
+/// `type_order`/`func_order` instead record each distinct `IpeModule`
 /// `home`'s FIRST-ENCOUNTER position while walking `program.modules[..].
 /// types` / `.funcs` in THEIR OWN vector order — exactly the traversal the
 /// direct-walk code performs (two independent `for module in &program.
@@ -156,14 +156,14 @@ pub struct Partitioned<'p> {
 /// `synthetic_sqlfield_enum`) carry the empty canonical `home` — the SAME
 /// documented Prelude-built-in home every OTHER hand-built-IR item with an
 /// empty `home` carries. Left unpatched, the generic empty-home fallback
-/// below would route them into whichever `SkyModule` bucket the program's
+/// below would route them into whichever `IpeModule` bucket the program's
 /// entry-point module happens to own — contradicting §2.2's decision that
 /// they are fixed to `Spine`, unconditionally, alongside the DB-projection
 /// impl blocks that reference them. So they are detected BY NAME, before
 /// the generic empty-home fallback runs, reusing the exact detection idiom
 /// `EmitCtx::build`'s `uses_db` scan already applies
 /// (`crate::lib`'s `uses_db` / `sqlvalue_rust_name` / `sqlfield_rust_name`).
-/// (SqlValue/SqlField route to `Spine`, never a `SkyModule` bucket, so they
+/// (SqlValue/SqlField route to `Spine`, never a `IpeModule` bucket, so they
 /// never enter `type_order` either — same invariant as `buckets`.)
 pub fn partition_items<'p>(program: &'p Program, interner: &Interner) -> Partitioned<'p> {
     let mut out: BTreeMap<RustFileId, (Vec<&'p EnumDef>, Vec<&'p Func>)> = BTreeMap::new();
@@ -192,7 +192,7 @@ pub fn partition_items<'p>(program: &'p Program, interner: &Interner) -> Partiti
             } else {
                 def.home.clone()
             };
-            let file_id = RustFileId::SkyModule(home);
+            let file_id = RustFileId::IpeModule(home);
             if type_seen.insert(file_id.clone()) {
                 type_order.push(file_id.clone());
             }
@@ -204,7 +204,7 @@ pub fn partition_items<'p>(program: &'p Program, interner: &Interner) -> Partiti
             } else {
                 func.home.clone()
             };
-            let file_id = RustFileId::SkyModule(home);
+            let file_id = RustFileId::IpeModule(home);
             if func_seen.insert(file_id.clone()) {
                 func_order.push(file_id.clone());
             }
@@ -228,7 +228,7 @@ mod tests {
 
     #[test]
     fn spine_is_not_a_sky_module() {
-        assert_ne!(RustFileId::Spine, RustFileId::SkyModule(ModPath(vec![])));
+        assert_ne!(RustFileId::Spine, RustFileId::IpeModule(ModPath(vec![])));
     }
 
     #[test]
@@ -236,8 +236,8 @@ mod tests {
         let a = mod_ident(&["Std", "Palette"]);
         let b = mod_ident(&["Lib"]);
         assert_ne!(a, b);
-        assert_eq!(a, "sky_mod_std_palette");
-        assert_eq!(b, "sky_mod_lib");
+        assert_eq!(a, "ipe_mod_std_palette");
+        assert_eq!(b, "ipe_mod_lib");
     }
 
     #[test]
@@ -255,8 +255,8 @@ mod tests {
         let std_seg = interner.intern("Std")?;
         let ui_seg = interner.intern("Ui")?;
         let ids = vec![
-            RustFileId::SkyModule(ModPath(vec![combined])),
-            RustFileId::SkyModule(ModPath(vec![std_seg, ui_seg])),
+            RustFileId::IpeModule(ModPath(vec![combined])),
+            RustFileId::IpeModule(ModPath(vec![std_seg, ui_seg])),
         ];
         let result = assert_mod_idents_unique(&ids, &interner);
         assert!(
@@ -272,8 +272,8 @@ mod tests {
         let lib = interner.intern("Lib")?;
         let main = interner.intern("Main")?;
         let ids = vec![
-            RustFileId::SkyModule(ModPath(vec![lib])),
-            RustFileId::SkyModule(ModPath(vec![main])),
+            RustFileId::IpeModule(ModPath(vec![lib])),
+            RustFileId::IpeModule(ModPath(vec![main])),
         ];
         assert_mod_idents_unique(&ids, &interner)
     }
@@ -370,7 +370,7 @@ mod tests {
         assert_eq!(
             buckets.len(),
             2,
-            "two distinct non-empty homes must produce exactly two SkyModule buckets"
+            "two distinct non-empty homes must produce exactly two IpeModule buckets"
         );
         assert!(!buckets.contains_key(&RustFileId::Spine));
         Ok(())
@@ -451,7 +451,7 @@ mod tests {
         };
         let Partitioned { buckets, .. } = partition_items(&program, &interner);
 
-        let key = RustFileId::SkyModule(ModPath(vec![main_mod]));
+        let key = RustFileId::IpeModule(ModPath(vec![main_mod]));
         let (enums, _) = buckets
             .get(&key)
             .expect("expected the Main-name fallback bucket");
@@ -508,7 +508,7 @@ mod tests {
             "both SqlValue and SqlField must route to Spine"
         );
         assert!(
-            !buckets.contains_key(&RustFileId::SkyModule(ModPath(vec![main_mod]))),
+            !buckets.contains_key(&RustFileId::IpeModule(ModPath(vec![main_mod]))),
             "SqlValue/SqlField must NEVER fall into the generic empty-home module fallback"
         );
         Ok(())
@@ -574,8 +574,8 @@ mod tests {
             ..
         } = partition_items(&program, &interner);
 
-        let zeta_id = RustFileId::SkyModule(ModPath(vec![zeta_mod]));
-        let alpha_id = RustFileId::SkyModule(ModPath(vec![alpha_mod]));
+        let zeta_id = RustFileId::IpeModule(ModPath(vec![zeta_mod]));
+        let alpha_id = RustFileId::IpeModule(ModPath(vec![alpha_mod]));
 
         assert_eq!(
             type_order,

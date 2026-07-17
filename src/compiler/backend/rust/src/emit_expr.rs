@@ -2,7 +2,7 @@
 //!
 //! Ports the relevant arms of `Sky/Generate/Rust/Builder/ExprEmitter.hs` and
 //! the function-item shape from `ModuleEmitter.hs`. The byte target is golden
-//! `main.rs` lines 129–137 (`main_update` / `sky_main`).
+//! `main.rs` lines 129–137 (`main_update` / `ipe_main`).
 
 use core::fmt::Write as _;
 
@@ -35,8 +35,8 @@ fn indent_of(level: usize) -> String {
 /// first use (i.e., a non-`Clone` type), making a multi-use `let` binding
 /// cause E0382 "use of moved value".
 ///
-/// The primary case is `Vec<SkyTask<A>>`: a list whose element type is or
-/// contains a task.  `SkyTask<A>` is a `Pin<Box<dyn Future …>>` — it has no
+/// The primary case is `Vec<IpeTask<A>>`: a list whose element type is or
+/// contains a task.  `IpeTask<A>` is a `Pin<Box<dyn Future …>>` — it has no
 /// `Clone` impl because polling a future to completion consumes it.  Sky's
 /// pure semantics guarantee re-evaluation is always correct, so the emitter
 /// can safely inline the value expression at every use site.
@@ -56,7 +56,7 @@ fn indent_of(level: usize) -> String {
 /// than guessed at (see AUD-04 follow-up in backlog.md).
 fn expr_value_is_non_clone(expr: &Expr) -> bool {
     match expr {
-        // A list whose element is a task (or contains one) — Vec<SkyTask<A>>
+        // A list whose element is a task (or contains one) — Vec<IpeTask<A>>
         // is move-only.
         Expr::List { elem, .. } => ir_type_contains_task(elem),
         Expr::Tuple(items) => items.iter().any(expr_value_is_non_clone),
@@ -894,7 +894,7 @@ const fn op_str(op: BinOp) -> &'static str {
         BinOp::Ge => ">=",
         BinOp::And => "&&",
         BinOp::Or => "||",
-        // `IntDiv` is routed through ipe_runtime::math::sky_int_div in the
+        // `IntDiv` is routed through ipe_runtime::math::ipe_int_div in the
         // Expr::BinOp handler — it must never reach the infix `op_str` path.
         // `//` here is a Rust line comment, making silent corruption impossible:
         // any accidental infix emit would comment out the rest of the expression.
@@ -947,7 +947,7 @@ pub fn callee_name(ctx: &EmitCtx, callee: &Callee) -> DResult<String> {
 
 /// Whether a kernel's runtime function takes its two arguments in the OPPOSITE
 /// order to the Sky call. The `Maybe` / `Result` mapping combinators are
-/// container-first in the runtime (`sky_maybe_map(m, f)`) but function-first in
+/// container-first in the runtime (`ipe_maybe_map(m, f)`) but function-first in
 /// Sky (`Maybe.map f m`); every other wired kernel matches the Sky order. Used by
 /// the [`Expr::Call`] emitter to reverse the rendered argument list.
 const fn kernel_swaps_first_two(k: ipe_ir::KernelFn) -> bool {
@@ -957,8 +957,8 @@ const fn kernel_swaps_first_two(k: ipe_ir::KernelFn) -> bool {
             | KernelFn::MaybeAndThen
             | KernelFn::ResultMap
             // `Result.andThen f r` / `Result.mapError f r` — Sky passes the
-            // fn first; the runtime `sky_result_and_then(r, f)` /
-            // `sky_result_map_error(r, f)` take the container first.
+            // fn first; the runtime `ipe_result_and_then(r, f)` /
+            // `ipe_result_map_error(r, f)` take the container first.
             | KernelFn::ResultAndThen
             | KernelFn::ResultMapError
             // `JsonDec.andThen f decoder` — Sky passes fn first; Rust runtime
@@ -991,7 +991,7 @@ const fn kernel_swaps_first_two(k: ipe_ir::KernelFn) -> bool {
 /// redaction) live inside the runtime entry points; the emitter only
 /// wraps the response record.
 ///
-/// All three network kernels emit explicit `::<SkyError>` turbofish so
+/// All three network kernels emit explicit `::<IpeError>` turbofish so
 /// Rust can infer the error channel even when the `Err` arm is discarded.
 /// The closure parameter is typed `|r: ipe_runtime::HttpResponse|` so
 /// the closure's input type is never ambiguous.
@@ -1047,7 +1047,7 @@ fn emit_http_call(
             let url_s = emit_expr_at(ctx, url, indent, child, generics)?;
             Ok(Some(format!(
                 "task_map(Box::new({conv}), \
-                 ipe_runtime::http_client::http_get::<SkyError>({url_s}))"
+                 ipe_runtime::http_client::http_get::<IpeError>({url_s}))"
             )))
         }
         KernelFn::HttpPost => {
@@ -1065,7 +1065,7 @@ fn emit_http_call(
             let body_s = emit_expr_at(ctx, body_arg, indent, child, generics)?;
             Ok(Some(format!(
                 "task_map(Box::new({conv}), \
-                 ipe_runtime::http_client::http_post::<SkyError>({url_s}, {body_s}))"
+                 ipe_runtime::http_client::http_post::<IpeError>({url_s}, {body_s}))"
             )))
         }
         KernelFn::HttpRequest => {
@@ -1095,7 +1095,7 @@ fn emit_http_call(
             // Rust keywords); the runtime names are string literals.
             Ok(Some(format!(
                 "({{ let __req = {req_s}; task_map(Box::new({conv}), \
-                 ipe_runtime::http_client::http_request::<SkyError>(\
+                 ipe_runtime::http_client::http_request::<IpeError>(\
                  ipe_runtime::HttpRequest {{ \
                  method: __req.method, url: __req.url, body: __req.body, \
                  headers: __req.headers, timeout: __req.timeout, \
@@ -1408,7 +1408,7 @@ fn emit_task_retry_call(
             // 3 attempts, 500 ms, exponential (kind=1), no jitter, always-retry.
             Ok(Some(format!(
                 "{rp_name} {{ baseMs: 500i64, jitter: false, kind: 1i64, \
-                 maxAttempts: 3i64, shouldRetry: Box::new(|_: SkyError| true) }}"
+                 maxAttempts: 3i64, shouldRetry: Box::new(|_: IpeError| true) }}"
             )))
         }
         KernelFn::TaskLinearBackoff => {
@@ -1425,7 +1425,7 @@ fn emit_task_retry_call(
             let ms_s = emit_expr_at(ctx, ms, indent, child, generics)?;
             Ok(Some(format!(
                 "{rp_name} {{ baseMs: {ms_s}, jitter: false, kind: 0i64, \
-                 maxAttempts: {n_s}, shouldRetry: Box::new(|_: SkyError| true) }}"
+                 maxAttempts: {n_s}, shouldRetry: Box::new(|_: IpeError| true) }}"
             )))
         }
         KernelFn::TaskExponentialBackoff => {
@@ -1444,7 +1444,7 @@ fn emit_task_retry_call(
             let ms_s = emit_expr_at(ctx, ms, indent, child, generics)?;
             Ok(Some(format!(
                 "{rp_name} {{ baseMs: {ms_s}, jitter: false, kind: 1i64, \
-                 maxAttempts: {n_s}, shouldRetry: Box::new(|_: SkyError| true) }}"
+                 maxAttempts: {n_s}, shouldRetry: Box::new(|_: IpeError| true) }}"
             )))
         }
         KernelFn::TaskWithJitter => {
@@ -1525,8 +1525,8 @@ fn emit_task_retry_call(
         }
         KernelFn::TaskRetryWith => {
             // `retryWith policy task` — decompose policy, call runtime.
-            // The `shouldRetry` field is `Box<dyn Fn(SkyError) -> bool>` but
-            // `task_retry_with` expects `impl Fn(&SkyError) -> bool`.  The adapter
+            // The `shouldRetry` field is `Box<dyn Fn(IpeError) -> bool>` but
+            // `task_retry_with` expects `impl Fn(&IpeError) -> bool`.  The adapter
             // closure bridges the gap by cloning the (cheap String) error ref.
             let policy = args.first().ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "ipe_backend_rust::emit_task_retry_call",
@@ -1547,7 +1547,7 @@ fn emit_task_retry_call(
                  __sky_p.baseMs, \
                  __sky_p.jitter, \
                  __sky_p.kind, \
-                 move |__sky_e: &SkyError| (__sky_sr)(__sky_e.clone()), \
+                 move |__sky_e: &IpeError| (__sky_sr)(__sky_e.clone()), \
                  move || {{ {task_s} }}\
                  ) }}"
             )))
@@ -1890,7 +1890,7 @@ fn emit_db_call(
         // ── DbGet*: (field, row) — row is passed by reference so the same row
         // binding can be used in multiple consecutive accessor calls within a
         // single expression (e.g. inside a `list_map_consume` lambda that reads
-        // several columns). The runtime functions take `row: &R where R: SkyRow`.
+        // several columns). The runtime functions take `row: &R where R: IpeRow`.
         KernelFn::DbGetString | KernelFn::DbGetInt | KernelFn::DbGetBool | KernelFn::DbGetField => {
             let field_e = arg!(0, "field")?;
             let row_e = arg!(1, "row")?;
@@ -2029,7 +2029,7 @@ fn emit_db_call(
 ///   actual code path — the emitted list expression already has `Vec` type.)
 ///
 /// * **`CmdPerform`** — `Task Error a -> (Result Error a -> msg) -> Cmd msg`;
-///   the callback must be boxed as a `Box<dyn Fn(SkyResult<A>) -> M + Send + 'static>`.
+///   the callback must be boxed as a `Box<dyn Fn(IpeResult<A>) -> M + Send + 'static>`.
 ///   Emits `cmd_perform(<task>, Box::new(<f>))`.
 ///
 /// * **`SubEvery` / `TimeEvery`** — `Int -> msg -> Sub msg`; these pass
@@ -2131,10 +2131,10 @@ fn emit_tea_call(
         // Both map to the standard N-arg emit path (runtime live/pubsub.rs).
         KernelFn::CmdPublish | KernelFn::CmdPublishNoEcho => Ok(None),
         // ── Std.PubSub.publish / publishNoEcho ────────────────────────────
-        // `pubsub_publish<T, E>(topic, payload) -> SkyTask<E, i64>` — T (payload)
-        // infers from arg 1; E (error) appears ONLY in the SkyTask<E, i64> result,
-        // so anchor it to SkyError with `<_, SkyError>` (T first, E second).
-        // Mirror of the CsvParse `::<SkyError>` anchor; two generic slots because T
+        // `pubsub_publish<T, E>(topic, payload) -> IpeTask<E, i64>` — T (payload)
+        // infers from arg 1; E (error) appears ONLY in the IpeTask<E, i64> result,
+        // so anchor it to IpeError with `<_, IpeError>` (T first, E second).
+        // Mirror of the CsvParse `::<IpeError>` anchor; two generic slots because T
         // precedes E.  `pubsub_publish` is re-exported at ipe_runtime root via
         // `pub use live::*`, so no full path needed in the emitted crate.
         KernelFn::PubSubPublish | KernelFn::PubSubPublishNoEcho => {
@@ -2144,7 +2144,7 @@ fn emit_tea_call(
             let payload_s = emit_expr_at(ctx, payload_e, indent, child, generics)?;
             let name = kernel_name(*k); // "pubsub_publish" / "pubsub_publish_no_echo"
             Ok(Some(format!(
-                "{name}::<_, SkyError>({topic_s}, {payload_s})"
+                "{name}::<_, IpeError>({topic_s}, {payload_s})"
             )))
         }
         // ── Sky.Core.WebSocket: onOpen / onMessage / onClose / onError ───────────
@@ -2314,7 +2314,7 @@ fn emit_server_call(
         // `Sky.Http.Server.Stream.stream : String -> (StreamWriter -> Task Error ()) -> Task Error Response`
         //
         // `server_stream_stream`'s bound is
-        // `H: Fn(StreamWriter) -> SkyTask<E, ()> + Send + Sync + 'static`,
+        // `H: Fn(StreamWriter) -> IpeTask<E, ()> + Send + Sync + 'static`,
         // and unlike `sub_subscribe_stream` (relaxed to Send-only — see that
         // fn's doc comment in `http_stream.rs`), THIS `+Sync` bound is
         // genuinely required: `server_stream_stream` internally does
@@ -5725,7 +5725,7 @@ pub fn emit_expr(
 /// * **Arity-0 primitive decoders** (`JsonDecString/Int/Float/Bool`) — these
 ///   carry a free `E: From<String>` type parameter that Rust cannot infer when
 ///   passed to another polymorphic function (e.g. `decode_from_json_string`).
-///   Emits with an explicit `SkyError` turbofish.
+///   Emits with an explicit `IpeError` turbofish.
 ///
 /// * **`JsonDecSucceed | DbDecSucceed`** applied to any argument — `decode_succeed`
 ///   expects a `Box<dyn Fn() -> A + Send>` FACTORY (not a raw value).
@@ -5753,7 +5753,7 @@ fn emit_json_decoder_call(
     child: u16,
     generics: GenericScope,
 ) -> DResult<Option<String>> {
-    // ── Arity-0 primitives — turbofish SkyError ──────────────────────────────
+    // ── Arity-0 primitives — turbofish IpeError ──────────────────────────────
     if args.is_empty()
         && matches!(
             callee,
@@ -5772,7 +5772,7 @@ fn emit_json_decoder_call(
         )
     {
         let name = callee_name(ctx, callee)?;
-        return Ok(Some(format!("{name}::<SkyError>()")));
+        return Ok(Some(format!("{name}::<IpeError>()")));
     }
     // ── succeed(arg) — JsonDecSucceed / DbDecSucceed / ConfigSucceed share
     //    decode_succeed (Config over the same carrier).
@@ -5812,12 +5812,12 @@ fn emit_json_decoder_call(
                 return Ok(Some(format!("decode_succeed(curry{n}({closure}))")));
             }
             // Case 3: any other value — factory-wrap so it is called per run.
-            // Turbofish `<SkyError, _>` pins the error type when there is no
+            // Turbofish `<IpeError, _>` pins the error type when there is no
             // surrounding pipeline to drive inference (E0283 otherwise).
             other => {
                 let val = emit_expr_at(ctx, other, indent, child, generics)?;
                 return Ok(Some(format!(
-                    "decode_succeed::<SkyError, _>({{ let __sky_succeed = {val}; Box::new(move || __sky_succeed.clone()) }})"
+                    "decode_succeed::<IpeError, _>({{ let __sky_succeed = {val}; Box::new(move || __sky_succeed.clone()) }})"
                 )));
             }
         }
@@ -5907,7 +5907,7 @@ pub fn emit_expr_at(
                 // the total helper that matches Sky-Go `rt.IntDiv` semantics:
                 // b==0 → panic("attempt to divide by zero") (abort, exit 101);
                 // i64::MIN / -1 → i64::MIN (wrapping, no abort).
-                BinOp::IntDiv => Ok(format!("ipe_runtime::math::sky_int_div({l}, {r})")),
+                BinOp::IntDiv => Ok(format!("ipe_runtime::math::ipe_int_div({l}, {r})")),
                 // Every remaining operator has a sound Rust infix form.
                 BinOp::Add
                 | BinOp::Sub
@@ -5928,7 +5928,7 @@ pub fn emit_expr_at(
             // composes inline anywhere an expression is expected:
             // `({ let <name> = <value>; <body> })`.
             //
-            // `Vec<SkyTask<A>>` (a list of tasks) is non-Clone: using the binding
+            // `Vec<IpeTask<A>>` (a list of tasks) is non-Clone: using the binding
             // more than once causes E0382 "use of moved value" because the first
             // call moves the Vec.  Sky has pure/immutable semantics so re-
             // evaluating the value at each use site is always correct — inline it
@@ -6069,10 +6069,10 @@ pub fn emit_expr_at(
             // `dict_empty::<String, i64>(…)`.
             let pin_turbofish = pin.turbofish();
             // `Std.Csv` parse kernels are generic over the error channel
-            // (`csv_parse<E: From<String>>(...) -> SkyResult<E, CsvDoc>`); a
+            // (`csv_parse<E: From<String>>(...) -> IpeResult<E, CsvDoc>`); a
             // `Result`-returning call whose `Err` arm is often discarded leaves
-            // `E` unconstrained (E0283). Anchor it to `SkyError`, mirroring the
-            // network kernels (`http_get::<SkyError>`) and the arity-0 JSON
+            // `E` unconstrained (E0283). Anchor it to `IpeError`, mirroring the
+            // network kernels (`http_get::<IpeError>`) and the arity-0 JSON
             // decoders. Only the `E`-free parse entries need it; `encode`
             // returns a bare `String` (no `E`).
             let turbofish: &str = if pin_turbofish.is_empty()
@@ -6080,7 +6080,7 @@ pub fn emit_expr_at(
                     callee,
                     Callee::Kernel(KernelFn::CsvParse | KernelFn::CsvParseWithDelimiter)
                 ) {
-                "::<SkyError>"
+                "::<IpeError>"
             } else {
                 pin_turbofish
             };
@@ -6089,7 +6089,7 @@ pub fn emit_expr_at(
                 parts.push(emit_expr_at(ctx, arg, indent, child, generics)?);
             }
             // A handful of Maybe/Result kernels take the container BEFORE the
-            // function in the runtime (`sky_maybe_map(m, f)`) whereas Sky passes
+            // function in the runtime (`ipe_maybe_map(m, f)`) whereas Sky passes
             // the function first (`Maybe.map f m`). The lowerer keeps the Sky
             // order; re-point the two arguments here so the runtime call is
             // well-formed.
@@ -6113,7 +6113,7 @@ pub fn emit_expr_at(
             // `head :: tail` renders through the runtime's move-only list prepend.
             let h = emit_expr_at(ctx, head, indent, child, generics)?;
             let t = emit_expr_at(ctx, tail, indent, child, generics)?;
-            Ok(format!("ipe_runtime::list::sky_list_cons({h}, {t})"))
+            Ok(format!("ipe_runtime::list::ipe_list_cons({h}, {t})"))
         }
         Expr::ListIndexClone { list, index } => {
             // Clone the element at a constant index — the arm guard already
@@ -6193,8 +6193,8 @@ pub fn emit_expr_at(
         // pool argument (see `emit_db_call`).
         //
         // The closure parameter type and return type are inferred by Rust from
-        // the task_and_then signature — `effect_s: SkyTask<A>` pins A (the
-        // discarded type) and `rest_s: SkyTask<B>` pins B (the result type),
+        // the task_and_then signature — `effect_s: IpeTask<A>` pins A (the
+        // discarded type) and `rest_s: IpeTask<B>` pins B (the result type),
         // avoiding the incorrect hardcoded `()` that would fail for any non-unit
         // effect type or non-unit rest type.
         Expr::TaskSeq { effect, rest } => {
@@ -6224,7 +6224,7 @@ pub fn emit_expr_at(
         // `let _ = <task>` binding appears inside a non-Task (sync) function,
         // e.g. a helper that returns Vec<Row> or () but still wants to fire a
         // logging side-effect. `task_run` is the blocking scheduler entry point
-        // in ipe_runtime (`pub fn task_run<E,A>(task: SkyTask<E,A>) -> SkyResult<E,A>`).
+        // in ipe_runtime (`pub fn task_run<E,A>(task: IpeTask<E,A>) -> IpeResult<E,A>`).
         //
         // AUD-04: `effect` and `rest` share ONE scope here (no closure), but
         // `effect`'s own evaluation can still move a variable `rest` needs next
@@ -6336,7 +6336,7 @@ fn emit_ctor(
 ) -> DResult<String> {
     let child = depth + 1;
     // A built-in `Maybe` / `Result` constructor routes to the runtime enum
-    // (`SkyMaybe::Just(..)`, `SkyResult::Err(..)`); its payload is never a
+    // (`IpeMaybe::Just(..)`, `IpeResult::Err(..)`); its payload is never a
     // self-recursive user field, so no field-boxing lookup applies.
     if let Some(runtime) = ctx.builtin_runtime_enum(home, ty) {
         let path = format!("{runtime}::{}", ctx.emit_ident(variant)?);
@@ -7901,7 +7901,7 @@ fn emit_apply(
 /// type-pinned smart-pointer closure.
 ///
 /// For the server-handler shape (`ServerRequest -> Task Error ServerResponse`,
-/// which renders as `ServerHandler<SkyError>` — an `Arc<dyn Fn(…)>` alias in
+/// which renders as `ServerHandler<IpeError>` — an `Arc<dyn Fn(…)>` alias in
 /// the runtime), emits `Arc::new(<name>)` so the coercion produces the correct
 /// runtime type.  For every other `Fun` shape, emits `Box::new(<name>)` as
 /// before (`Box<dyn Fn(..) -> R + Send + 'static>`).
@@ -7918,8 +7918,8 @@ fn emit_apply(
 /// Does a function value / lambda of IR type `ty` fill one of the runtime's
 /// `Arc<dyn Fn + Send + Sync>` callback slots (so it must be boxed with
 /// `Arc::new`, not `Box::new`)? The shapes:
-///   • `ServerHandler<E>`: `Fn(ServerRequest) -> SkyTask<E, ServerResponse>`
-///   • `WsServerCfg` callbacks, `-> SkyTask<E, ()>`:
+///   • `ServerHandler<E>`: `Fn(ServerRequest) -> IpeTask<E, ServerResponse>`
+///   • `WsServerCfg` callbacks, `-> IpeTask<E, ()>`:
 ///       - `Fn(WsHandle)`           (onConnect / onClose)
 ///       - `Fn(WsHandle, String)`   (onMessage)
 ///       - `Fn(WsHandle, Error)`    (onError — 2nd param is the error type,
@@ -7927,7 +7927,7 @@ fn emit_apply(
 ///
 /// This MUST dispatch on the `IrType` STRUCTURE, never on the rendered type
 /// string. `render_type` renders `ServerHandler<E>` as the type-ALIAS name
-/// `"ServerHandler<SkyError>"` — NOT the expanded `"Arc<dyn Fn…>"` — so a
+/// `"ServerHandler<IpeError>"` — NOT the expanded `"Arc<dyn Fn…>"` — so a
 /// `starts_with("Arc<")` string test silently misclassifies every handler shape
 /// as `Box` and reintroduces the E0308 seal break for inline
 /// `Server.post path (\req -> …)` handler lambdas (the regression this shared
@@ -8008,8 +8008,8 @@ pub fn emit_lambda_unboxed(
 /// closure type — which only unsize-coerces to `Box<dyn Fn(..) -> ..>` when the
 /// surrounding position supplies the trait-object target (a kernel call arg, a
 /// return slot, …). A lambda that flows into a `let` binding first, or into a
-/// built-in `Ok`/`Just` payload (which routes to the runtime `SkyResult`/
-/// `SkyMaybe` enum whose generic argument is inferred from the constructor arg,
+/// built-in `Ok`/`Just` payload (which routes to the runtime `IpeResult`/
+/// `IpeMaybe` enum whose generic argument is inferred from the constructor arg,
 /// NOT from a field type), has no such target at the box site, so Rust pins the
 /// concrete closure type and a LATER use against `Box<dyn Fn>` fails as E0308.
 /// Pinning the trait object HERE — the same technique [`emit_func_value`] uses
@@ -8126,7 +8126,7 @@ fn render_bounds(bounds: BoundSet, n: usize) -> String {
         traits.push("'static".to_owned());
     }
     if bounds.has_send() {
-        // `Send` auto-trait: a bare `msg` value moved into a `SkySub::Source`
+        // `Send` auto-trait: a bare `msg` value moved into a `IpeSub::Source`
         // closure (`Box<dyn FnOnce(..) + Send>`) — e.g. `WebSocket.onOpen`'s
         // `msg` into `sub_subscribe_ws_open<M: Send + 'static>`. Pushed after the
         // `'static` lifetime bound (a lifetime must precede trait bounds).
@@ -8151,8 +8151,8 @@ fn render_bounds(bounds: BoundSet, n: usize) -> String {
     if bounds.has_show() {
         // Sky `toString` / `Log.*With`: the value must render. Fully qualified —
         // the trait is not in the Rust prelude. Every emitted record/ADT + every
-        // scalar has a `SkyStringify` impl.
-        traits.push("crate::ipe_runtime::stringify::SkyStringify".to_owned());
+        // scalar has a `IpeStringify` impl.
+        traits.push("crate::ipe_runtime::stringify::IpeStringify".to_owned());
     }
     if bounds.has_ord_total() {
         // `Ord` (total order) for a `Set` element / sorted `Dict` op; carries
@@ -8181,12 +8181,12 @@ fn render_bounds(bounds: BoundSet, n: usize) -> String {
     }
     if bounds.has_sky_row() {
         // Db field-accessor row obligation: a wildcard `any` generic that
-        // flows into a `Db.get*` accessor gains `SkyRow` so the runtime's generic
-        // `db_get_*<R: SkyRow>(field, &row)` call type-checks and monomorphises
+        // flows into a `Db.get*` accessor gains `IpeRow` so the runtime's generic
+        // `db_get_*<R: IpeRow>(field, &row)` call type-checks and monomorphises
         // per call site. Fully qualified — the trait is not re-exported at the
         // emitted crate's `pub use ipe_runtime::*` root. Added ONLY to the `any`
         // var and ONLY when the body calls `db_get_*` (see [`emit_func`]).
-        traits.push("ipe_runtime::db::SkyRow".to_owned());
+        traits.push("ipe_runtime::db::IpeRow".to_owned());
     }
     if bounds.has_display() {
         // `Basics.toString` obligation: a generic type-param that flows
@@ -8285,23 +8285,23 @@ fn elide_task_run_tail(expr: &Expr) -> Option<Expr> {
     }
 }
 
-/// [`emit_func`]'s `sky_main` synchronous-body wrap decision.
+/// [`emit_func`]'s `ipe_main` synchronous-body wrap decision.
 ///
-/// When `sky_main` was NOT elided (its body is not — or not uniformly in
+/// When `ipe_main` was NOT elided (its body is not — or not uniformly in
 /// every tail position — a `Task.run` call), the function currently returns
 /// its declared value type directly, but the entry-point epilogue calls
-/// `block_on(sky_main())`, which requires `sky_main` to return `SkyTask<A>`
+/// `block_on(ipe_main())`, which requires `ipe_main` to return `IpeTask<A>`
 /// (an unevaluated future), never a resolved value.
 ///
 /// Two declared-return shapes reach here, and BOTH wrap the body rather than
-/// change its VALUE — `sky_main`'s body already runs to completion
+/// change its VALUE — `ipe_main`'s body already runs to completion
 /// synchronously either way (a bare `task_run()` call blocks in place); the
 /// wrap only reshapes the return type so `block_on` type-checks:
 ///
 /// * `func.ret == Unit` — Sky CLI programs that use synchronous `task_run()`
 ///   calls (instead of building a top-level Task pipeline). The caller wraps:
-///   `let _r = { <original body> }; task_succeed(())` — `sky_main` returns
-///   `SkyTask<()>`, discarding the body's (unit) value. Signalled by the
+///   `let _r = { <original body> }; task_succeed(())` — `ipe_main` returns
+///   `IpeTask<()>`, discarding the body's (unit) value. Signalled by the
 ///   returned `wrap_unit = true`.
 /// * `func.ret == Result(_, A)` with elision declined — the argv-dispatch
 ///   idiom's MIXED-arm sibling gap (adversarial-review Finding B): some
@@ -8313,21 +8313,21 @@ fn elide_task_run_tail(expr: &Expr) -> Option<Expr> {
 ///   partial elision (mismatched Task/Result arm shapes cannot render as one
 ///   `match` of a single type) — but the body AS A WHOLE already evaluates
 ///   synchronously to one uniform `Result e a`. The caller wraps:
-///   `task_from_result({ <original body> })` — `sky_main` returns `SkyTask<A>`,
+///   `task_from_result({ <original body> })` — `ipe_main` returns `IpeTask<A>`,
 ///   an ALREADY-RESOLVED future carrying the body's actual computed
-///   `Ok`/`Err`, so `block_on` unwraps it back to the exact `SkyResult<E, A>`
+///   `Ok`/`Err`, so `block_on` unwraps it back to the exact `IpeResult<E, A>`
 ///   the un-wrapped body would have produced directly; `fn main`'s
 ///   `Ok(_)`/`Err(e)` epilogue match sees identical values. Signalled by
 ///   `Some(Task(ok_ty))` in the returned `Option`.
 ///
 /// Returns `(wrap_unit, wrap_result_ok_ty)` — at most one is ever set (`Unit`
 /// and `Result` are disjoint [`IrType`] shapes).
-fn sky_main_wrap_decision(
+fn ipe_main_wrap_decision(
     name: &str,
     elided_ret: Option<&IrType>,
     func_ret: &IrType,
 ) -> (bool, Option<IrType>) {
-    if name != "sky_main" || elided_ret.is_some() {
+    if name != "ipe_main" || elided_ret.is_some() {
         return (false, None);
     }
     match func_ret {
@@ -8341,7 +8341,7 @@ fn sky_main_wrap_decision(
 ///
 /// Shape: `pub fn <name>[<generics>](<params>) -> <ret> {\n    <body>\n}\n`. A
 /// monomorphic function (empty `type_params`) emits no generic clause, so its
-/// output is byte-identical to the golden `main_update` / `sky_main`. A
+/// output is byte-identical to the golden `main_update` / `ipe_main`. A
 /// fully-parametric function quantifying `[a, b]` emits `pub fn name<T1, T2>(..)`
 /// and renders every [`IrType::Generic`] in its signature / body through the
 /// matching scope. A variable carrying a [`BoundSet`] gains its
@@ -8351,12 +8351,12 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     let name = ctx.func_name(func.id)?.to_owned();
 
     // ── Entry-point Task.run elision ──────────────────────────────────────────
-    // When `sky_main` is `main = someTask |> Task.run`, the lowerer sets:
+    // When `ipe_main` is `main = someTask |> Task.run`, the lowerer sets:
     //   func.body = Call(TaskRun | TaskPerform, [inner_task])
     //   func.ret  = IrType::Result(IrType::Error, A)
     //
-    // The Rust epilogue calls `block_on(sky_main())`, which requires `sky_main`
-    // to return `SkyTask<A>` (an unevaluated future), NOT `SkyResult<E, A>`.
+    // The Rust epilogue calls `block_on(ipe_main())`, which requires `ipe_main`
+    // to return `IpeTask<A>` (an unevaluated future), NOT `IpeResult<E, A>`.
     // Elide the outer `task_run(...)` wrapper: use the inner task expression as
     // the body and convert the return type from `Result(Error, A)` to `Task(A)`.
     //
@@ -8364,8 +8364,8 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     // `argv`-dispatch idiom branches on `System.args` before picking which app to
     // run, e.g. `main = case List.head argsList of Just "live" -> Live.app cfg
     // |> Task.run; _ -> Tui.app cfg |> Task.run`. Every arm still tail-calls
-    // `Task.run`, so the SAME elision must apply — otherwise `sky_main` keeps
-    // its `SkyResult<E, A>` return type and `block_on(sky_main())` mismatches
+    // `Task.run`, so the SAME elision must apply — otherwise `ipe_main` keeps
+    // its `IpeResult<E, A>` return type and `block_on(ipe_main())` mismatches
     // exactly as the flat case would (a real SEAL violation found on
     // `examples/24-tui-kitchen-sink`, BACKLOG "24-tui-kitchen-sink").
     // `elide_task_run_tail` recurses through every tail-position control-flow
@@ -8373,7 +8373,7 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     // EVERY leaf in tail position is a `Task.run` / `Task.perform` call — a
     // partial elision is never produced, so the rewritten body always has a
     // single uniform `Task<A>` shape.
-    let elided: Option<(Expr, IrType)> = if name == "sky_main"
+    let elided: Option<(Expr, IrType)> = if name == "ipe_main"
         && let IrType::Result(_, ok_ty) = &func.ret
     {
         elide_task_run_tail(&func.body).map(|body| (body, IrType::Task(ok_ty.clone())))
@@ -8385,18 +8385,18 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
         None => (&func.body, None),
     };
 
-    // ── sky_main synchronous-body wrap ────────────────────────────────────────
-    // When sky_main was NOT elided, `block_on(sky_main())` still needs
-    // `SkyTask<A>`. See `sky_main_wrap_decision`'s doc comment for the full
+    // ── ipe_main synchronous-body wrap ────────────────────────────────────────
+    // When ipe_main was NOT elided, `block_on(ipe_main())` still needs
+    // `IpeTask<A>`. See `ipe_main_wrap_decision`'s doc comment for the full
     // rationale (the CLI `task_run()`-calls idiom AND Finding B's mixed-arm
     // sibling gap).
-    let (sky_main_wrap_unit, sky_main_wrap_result_ok_ty) =
-        sky_main_wrap_decision(&name, elided_ret.as_ref(), &func.ret);
-    let sky_main_wrap = sky_main_wrap_unit || sky_main_wrap_result_ok_ty.is_some();
-    let wrapped_task_owned: Option<IrType> = if sky_main_wrap_unit {
+    let (ipe_main_wrap_unit, ipe_main_wrap_result_ok_ty) =
+        ipe_main_wrap_decision(&name, elided_ret.as_ref(), &func.ret);
+    let ipe_main_wrap = ipe_main_wrap_unit || ipe_main_wrap_result_ok_ty.is_some();
+    let wrapped_task_owned: Option<IrType> = if ipe_main_wrap_unit {
         Some(IrType::Task(Box::new(IrType::Unit)))
     } else {
-        sky_main_wrap_result_ok_ty
+        ipe_main_wrap_result_ok_ty
     };
     let ret_ty: &IrType = wrapped_task_owned
         .as_ref()
@@ -8431,15 +8431,15 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     // falls through), so it unifies with any `-> R` — no `break value`. A
     // non-`TailLoop` body (the common case) routes to the ordinary value emitter,
     // which is exhaustive and fail-closed for any stray TCO node.
-    let body = if sky_main_wrap_unit {
-        // Wrap the synchronous body so sky_main returns SkyTask<()>; the
+    let body = if ipe_main_wrap_unit {
+        // Wrap the synchronous body so ipe_main returns IpeTask<()>; the
         // body's own (unit) value is discarded, only its side effects matter.
         let inner = emit_expr(ctx, body_expr, 1, generics)?;
         format!("let _r = {{ {inner} }};\n    task_succeed(())")
-    } else if sky_main_wrap {
+    } else if ipe_main_wrap {
         // Mixed-arm Task.run-elision-declined wrap (Finding B): the body
         // already evaluates synchronously to a `Result e a` — carry that
-        // ACTUAL value into an already-resolved `SkyTask<a>` rather than
+        // ACTUAL value into an already-resolved `IpeTask<a>` rather than
         // discarding it, so `fn main`'s Ok/Err match sees the real outcome.
         let inner = emit_expr(ctx, body_expr, 1, generics)?;
         format!("task_from_result({{ {inner} }})")
@@ -8466,7 +8466,7 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
         }
     };
 
-    // the SkyRow bound (for a wildcard `any` param flowing into a
+    // the IpeRow bound (for a wildcard `any` param flowing into a
     // `Db.get*` accessor) is decided STRUCTURALLY at lowering time and carried
     // in the param's `BoundSet` — the generic clause just renders the BoundSet.
     let generic_clause = render_fn_generics(func, ret_is_task);
@@ -8491,7 +8491,7 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
 /// over-constrain callers of pure record-constructors (e.g. `wrap : a -> {
 /// value : a }` must accept any `Clone` type, not only `Send + 'static` ones).
 ///
-/// The `SkyRow` bound (for a wildcard `any` param that flows into a
+/// The `IpeRow` bound (for a wildcard `any` param that flows into a
 /// `Db.get*` accessor) is already recorded in the relevant param's [`BoundSet`]
 /// by the lowerer's structural IR walk (`ipe_lower`'s `apply_db_row_bounds` /
 /// `body_calls_db_get_on_param`), so this function simply renders whatever

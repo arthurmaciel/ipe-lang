@@ -47,9 +47,9 @@ fn spike_project_builds_and_injects_compiled_source() {
         res.err()
     );
 
-    // Read `main.rs` PLUS every `sky_mods/*.rs` the per-Sky-module split
+    // Read `main.rs` PLUS every `ipe_mods/*.rs` the per-Sky-module split
     // may have written: the compiled `Std.Palette` source
-    // is emitted into its own `sky_mods/sky_mod_std_palette.rs`, not inline
+    // is emitted into its own `ipe_mods/ipe_mod_std_palette.rs`, not inline
     // in `main.rs`. The shared helper keeps the substring assertions below
     // robust to WHICH file the split placed each symbol in (same discrimination
     // the golden harness uses).

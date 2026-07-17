@@ -60,7 +60,7 @@ fn task_bad_error_channel_is_sky_t0001() {
 /// Error, found String"). An over-polymorphic `K::TaskFail` scheme
 /// (`fun(var(1), task(var(0)))`) would let a bare `String` argument HM-check and
 /// only blow up later at the emitted project's `cargo build` (E0308,
-/// `SkyError` vs `String`) — a "compilation successful, then `cargo build`
+/// `IpeError` vs `String`) — a "compilation successful, then `cargo build`
 /// fails" class violation. The scheme is pinned to `fun(error_ty(),
 /// task(var(0)))`, matching `mapError`/`onError` and the bundled
 /// `Sky.Core.Task.sky:33` annotation (`fail : Error -> Task Error a`), so the

@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use salsa::Setter as _;
 use ipe_db::{
-    ImportResolution, ModuleOrigin, SkyDatabase, SourceFile, SourceRoot, canonicalize,
+    ImportResolution, ModuleOrigin, IpeDatabase, SourceFile, SourceRoot, canonicalize,
     module_interface, resolve_imports,
 };
 use ipe_diagnostics::{Diagnostic, NameError};
@@ -52,10 +52,10 @@ impl EventLog {
 }
 
 /// A database whose `WillExecute` events land in the returned log.
-fn logged_db() -> (SkyDatabase, EventLog) {
+fn logged_db() -> (IpeDatabase, EventLog) {
     let log = EventLog::default();
     let sink = log.clone();
-    let db = SkyDatabase::with_event_callback(Box::new(move |event: salsa::Event| {
+    let db = IpeDatabase::with_event_callback(Box::new(move |event: salsa::Event| {
         if let salsa::EventKind::WillExecute { database_key } = event.kind {
             sink.push(format!("{database_key:?}"));
         }
@@ -63,12 +63,12 @@ fn logged_db() -> (SkyDatabase, EventLog) {
     (db, log)
 }
 
-fn file(db: &SkyDatabase, path: &[&str], text: &str) -> SourceFile {
+fn file(db: &IpeDatabase, path: &[&str], text: &str) -> SourceFile {
     file_with_origin(db, path, text, ModuleOrigin::User)
 }
 
 fn file_with_origin(
-    db: &SkyDatabase,
+    db: &IpeDatabase,
     path: &[&str],
     text: &str,
     origin: ModuleOrigin,
@@ -81,7 +81,7 @@ fn file_with_origin(
     )
 }
 
-fn root_of(db: &SkyDatabase, files: &[(&[&str], SourceFile)]) -> SourceRoot {
+fn root_of(db: &IpeDatabase, files: &[(&[&str], SourceFile)]) -> SourceRoot {
     SourceRoot::new(db, files_map(files))
 }
 

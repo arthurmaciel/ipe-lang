@@ -50,7 +50,7 @@ pub fn diff<M>(old: &Html<M>, new: &Html<M>) -> Vec<Patch> {
 
 // ─── internal helpers ─────────────────────────────────────────────────────────
 
-fn sky_id<M>(n: &Html<M>) -> Option<&str> {
+fn ipe_id<M>(n: &Html<M>) -> Option<&str> {
     if let Html::HElement(_, attrs, _) = n {
         for a in attrs {
             if let Attribute::Attr(k, v) = a
@@ -84,10 +84,10 @@ fn diff_node<M>(old: &Html<M>, new: &Html<M>, out: &mut Vec<Patch>) {
     };
     let _ = ot;
     // Patch id targets the element currently in the DOM — the OLD tree's id
-    // (Go parity: `old.SkyID`). Borrowed: `Patch::for_id` copies it only when
+    // (Go parity: `old.IpeID`). Borrowed: `Patch::for_id` copies it only when
     // a Patch is actually built, so an unchanged element pair allocates
     // nothing here (efficiency-audit §6 medium).
-    let id: &str = sky_id(old).unwrap_or("");
+    let id: &str = ipe_id(old).unwrap_or("");
 
     // Attribute + event delta.
     let mut p = Patch::for_id(id);

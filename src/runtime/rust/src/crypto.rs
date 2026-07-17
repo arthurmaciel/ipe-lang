@@ -6,14 +6,14 @@ use super::*;
 // the Sky signature is `String`, so the Rust side must return a hex `String` too.
 // (A prior `Vec<i64>` return diverged from both the Sky type and Go: a Sky call
 // site treating the result as a String/Bytes mismatched at codegen.)
-pub fn crypto_random_bytes<E: From<String> + Send + 'static>(n: i64) -> SkyTask<E, String> {
+pub fn crypto_random_bytes<E: From<String> + Send + 'static>(n: i64) -> IpeTask<E, String> {
     use aes_gcm::aead::{OsRng, rand_core::RngCore};
     Box::pin(async move {
         // SECURITY: Mirror Go oracle exactly: reject size <= 0 || size > 1024
         // (rt.go ~l6536: `if size <= 0 || size > 1024 { return ErrInvalidInput }`)
         // to prevent unbounded attacker-controlled allocation (DoS vector).
         if n <= 0 || n > 1024 {
-            return SkyResult::Err(
+            return IpeResult::Err(
                 "Crypto.randomBytes: size must be 1..1024"
                     .to_string()
                     .into(),
@@ -43,7 +43,7 @@ fn hex_lower(buf: &[u8]) -> String {
 // WITHOUT padding (rt.go ~l6560: `base64.RawURLEncoding.EncodeToString(b)`) — the
 // `-_` alphabet, no `=` pad. Width `n` is bytes of ENTROPY; the returned string is
 // longer (ceil(n*4/3) chars). (A prior hex encoding diverged from Go's base64.)
-pub fn crypto_random_token<E: From<String> + Send + 'static>(n: i64) -> SkyTask<E, String> {
+pub fn crypto_random_token<E: From<String> + Send + 'static>(n: i64) -> IpeTask<E, String> {
     use aes_gcm::aead::{OsRng, rand_core::RngCore};
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
     Box::pin(async move {
@@ -51,7 +51,7 @@ pub fn crypto_random_token<E: From<String> + Send + 'static>(n: i64) -> SkyTask<
         // (rt.go ~l6553: `if size <= 0 || size > 1024 { return ErrInvalidInput }`)
         // to prevent unbounded attacker-controlled allocation (DoS vector).
         if n <= 0 || n > 1024 {
-            return SkyResult::Err(
+            return IpeResult::Err(
                 "Crypto.randomToken: size must be 1..1024"
                     .to_string()
                     .into(),
@@ -158,7 +158,7 @@ pub fn crypto_hmac_sha512(key: String, msg: String) -> String {
 pub fn crypto_rsa_sha256_sign<E: From<String>>(
     key_pem: String,
     msg: String,
-) -> SkyResult<E, String> {
+) -> IpeResult<E, String> {
     use base64::{Engine, engine::general_purpose::STANDARD};
     use rsa::{
         pkcs1::DecodeRsaPrivateKey,
@@ -174,7 +174,7 @@ pub fn crypto_rsa_sha256_sign<E: From<String>>(
         _ => match rsa::RsaPrivateKey::from_pkcs1_pem(&key_pem) {
             Ok(k) => k,
             _ => {
-                return SkyResult::Err(
+                return IpeResult::Err(
                     "Crypto.rsaSha256Sign: could not parse the private key"
                         .to_string()
                         .into(),
@@ -189,11 +189,11 @@ pub fn crypto_rsa_sha256_sign<E: From<String>>(
     let signature = match signing_key.try_sign(msg.as_bytes()) {
         Ok(s) => s,
         Err(e) => {
-            return SkyResult::Err(format!("Crypto.rsaSha256Sign: signing failed: {}", e).into());
+            return IpeResult::Err(format!("Crypto.rsaSha256Sign: signing failed: {}", e).into());
         }
     };
     // Go returns base64.StdEncoding (standard base64, with padding) — match exactly.
-    SkyResult::Ok(STANDARD.encode(signature.to_bytes()))
+    IpeResult::Ok(STANDARD.encode(signature.to_bytes()))
 }
 
 /// Sky `rsaSha256Verify : String -> String -> String -> Bool`
@@ -293,7 +293,7 @@ fn aead_read_key(name: &str, key: &str) -> Result<Vec<u8>, String> {
 pub fn crypto_aes_gcm_encrypt<E: From<String>>(
     key: String,
     plaintext: String,
-) -> SkyResult<E, String> {
+) -> IpeResult<E, String> {
     use aes_gcm::{
         Aes256Gcm, KeyInit, Nonce,
         aead::{Aead, OsRng, rand_core::RngCore},
@@ -301,13 +301,13 @@ pub fn crypto_aes_gcm_encrypt<E: From<String>>(
     use base64::{Engine, engine::general_purpose::STANDARD};
     let k = match aead_read_key("Crypto.aesGcmEncrypt", &key) {
         Ok(k) => k,
-        Err(e) => return SkyResult::Err(e.into()),
+        Err(e) => return IpeResult::Err(e.into()),
     };
     // aead_read_key validated len == 32 just above, so the Err is structurally
-    // unreachable — but propagate into the existing SkyResult channel rather than panic.
+    // unreachable — but propagate into the existing IpeResult channel rather than panic.
     let cipher = match Aes256Gcm::new_from_slice(&k) {
         Ok(c) => c,
-        Err(e) => return SkyResult::Err(format!("Crypto.aesGcmEncrypt: {}", e).into()),
+        Err(e) => return IpeResult::Err(format!("Crypto.aesGcmEncrypt: {}", e).into()),
     };
     let mut nonce_bytes = [0u8; 12];
     OsRng.fill_bytes(&mut nonce_bytes);
@@ -316,9 +316,9 @@ pub fn crypto_aes_gcm_encrypt<E: From<String>>(
         Ok(ct) => {
             let mut out = nonce_bytes.to_vec();
             out.extend_from_slice(&ct);
-            SkyResult::Ok(STANDARD.encode(out))
+            IpeResult::Ok(STANDARD.encode(out))
         }
-        Err(e) => SkyResult::Err(format!("Crypto.aesGcmEncrypt: {}", e).into()),
+        Err(e) => IpeResult::Err(format!("Crypto.aesGcmEncrypt: {}", e).into()),
     }
 }
 
@@ -326,21 +326,21 @@ pub fn crypto_aes_gcm_encrypt<E: From<String>>(
 pub fn crypto_aes_gcm_decrypt<E: From<String>>(
     key: String,
     encoded: String,
-) -> SkyResult<E, String> {
+) -> IpeResult<E, String> {
     use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
     use base64::{Engine, engine::general_purpose::STANDARD};
     let k = match aead_read_key("Crypto.aesGcmDecrypt", &key) {
         Ok(k) => k,
-        Err(e) => return SkyResult::Err(e.into()),
+        Err(e) => return IpeResult::Err(e.into()),
     };
     let buf = match STANDARD.decode(encoded.as_bytes()) {
         Ok(b) => b,
         Err(e) => {
-            return SkyResult::Err(format!("Crypto.aesGcmDecrypt: invalid base64: {}", e).into());
+            return IpeResult::Err(format!("Crypto.aesGcmDecrypt: invalid base64: {}", e).into());
         }
     };
     if buf.len() < 12 {
-        return SkyResult::Err(
+        return IpeResult::Err(
             "Crypto.aesGcmDecrypt: ciphertext too short"
                 .to_string()
                 .into(),
@@ -349,7 +349,7 @@ pub fn crypto_aes_gcm_decrypt<E: From<String>>(
     let (nonce_bytes, ct) = buf.split_at(12);
     let cipher = match Aes256Gcm::new_from_slice(&k) {
         Ok(c) => c,
-        Err(e) => return SkyResult::Err(format!("Crypto.aesGcmDecrypt: {}", e).into()),
+        Err(e) => return IpeResult::Err(format!("Crypto.aesGcmDecrypt: {}", e).into()),
     };
     match cipher.decrypt(Nonce::from_slice(nonce_bytes), ct) {
         // A Sky String is UTF-8 by construction. Go's oracle returns string(pt)
@@ -357,14 +357,14 @@ pub fn crypto_aes_gcm_decrypt<E: From<String>>(
         // would silently corrupt the plaintext. Reject non-UTF-8 plaintext with a
         // structured Err instead — total, and surfaces the mismatch at the boundary.
         Ok(pt) => match String::from_utf8(pt) {
-            Ok(s) => SkyResult::Ok(s),
-            Err(_) => SkyResult::Err(
+            Ok(s) => IpeResult::Ok(s),
+            Err(_) => IpeResult::Err(
                 "Crypto.aesGcmDecrypt: decrypted plaintext is not valid UTF-8"
                     .to_string()
                     .into(),
             ),
         },
-        Err(e) => SkyResult::Err(format!("Crypto.aesGcmDecrypt: {}", e).into()),
+        Err(e) => IpeResult::Err(format!("Crypto.aesGcmDecrypt: {}", e).into()),
     }
 }
 
@@ -372,7 +372,7 @@ pub fn crypto_aes_gcm_decrypt<E: From<String>>(
 pub fn crypto_chacha20_encrypt<E: From<String>>(
     key: String,
     plaintext: String,
-) -> SkyResult<E, String> {
+) -> IpeResult<E, String> {
     use base64::{Engine, engine::general_purpose::STANDARD};
     use chacha20poly1305::{
         ChaCha20Poly1305, KeyInit, Nonce,
@@ -380,11 +380,11 @@ pub fn crypto_chacha20_encrypt<E: From<String>>(
     };
     let k = match aead_read_key("Crypto.chacha20Encrypt", &key) {
         Ok(k) => k,
-        Err(e) => return SkyResult::Err(e.into()),
+        Err(e) => return IpeResult::Err(e.into()),
     };
     let cipher = match ChaCha20Poly1305::new_from_slice(&k) {
         Ok(c) => c,
-        Err(e) => return SkyResult::Err(format!("Crypto.chacha20Encrypt: {}", e).into()),
+        Err(e) => return IpeResult::Err(format!("Crypto.chacha20Encrypt: {}", e).into()),
     };
     let mut nonce_bytes = [0u8; 12];
     OsRng.fill_bytes(&mut nonce_bytes);
@@ -393,9 +393,9 @@ pub fn crypto_chacha20_encrypt<E: From<String>>(
         Ok(ct) => {
             let mut out = nonce_bytes.to_vec();
             out.extend_from_slice(&ct);
-            SkyResult::Ok(STANDARD.encode(out))
+            IpeResult::Ok(STANDARD.encode(out))
         }
-        Err(e) => SkyResult::Err(format!("Crypto.chacha20Encrypt: {}", e).into()),
+        Err(e) => IpeResult::Err(format!("Crypto.chacha20Encrypt: {}", e).into()),
     }
 }
 
@@ -403,21 +403,21 @@ pub fn crypto_chacha20_encrypt<E: From<String>>(
 pub fn crypto_chacha20_decrypt<E: From<String>>(
     key: String,
     encoded: String,
-) -> SkyResult<E, String> {
+) -> IpeResult<E, String> {
     use base64::{Engine, engine::general_purpose::STANDARD};
     use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce, aead::Aead};
     let k = match aead_read_key("Crypto.chacha20Decrypt", &key) {
         Ok(k) => k,
-        Err(e) => return SkyResult::Err(e.into()),
+        Err(e) => return IpeResult::Err(e.into()),
     };
     let buf = match STANDARD.decode(encoded.as_bytes()) {
         Ok(b) => b,
         Err(e) => {
-            return SkyResult::Err(format!("Crypto.chacha20Decrypt: invalid base64: {}", e).into());
+            return IpeResult::Err(format!("Crypto.chacha20Decrypt: invalid base64: {}", e).into());
         }
     };
     if buf.len() < 12 {
-        return SkyResult::Err(
+        return IpeResult::Err(
             "Crypto.chacha20Decrypt: ciphertext too short"
                 .to_string()
                 .into(),
@@ -426,20 +426,20 @@ pub fn crypto_chacha20_decrypt<E: From<String>>(
     let (nonce_bytes, ct) = buf.split_at(12);
     let cipher = match ChaCha20Poly1305::new_from_slice(&k) {
         Ok(c) => c,
-        Err(e) => return SkyResult::Err(format!("Crypto.chacha20Decrypt: {}", e).into()),
+        Err(e) => return IpeResult::Err(format!("Crypto.chacha20Decrypt: {}", e).into()),
     };
     match cipher.decrypt(Nonce::from_slice(nonce_bytes), ct) {
         // A Sky String is UTF-8 by construction (see aesGcmDecrypt note). Reject
         // non-UTF-8 plaintext with a structured Err rather than lossy-corrupting it.
         Ok(pt) => match String::from_utf8(pt) {
-            Ok(s) => SkyResult::Ok(s),
-            Err(_) => SkyResult::Err(
+            Ok(s) => IpeResult::Ok(s),
+            Err(_) => IpeResult::Err(
                 "Crypto.chacha20Decrypt: decrypted plaintext is not valid UTF-8"
                     .to_string()
                     .into(),
             ),
         },
-        Err(e) => SkyResult::Err(format!("Crypto.chacha20Decrypt: {}", e).into()),
+        Err(e) => IpeResult::Err(format!("Crypto.chacha20Decrypt: {}", e).into()),
     }
 }
 
@@ -468,49 +468,49 @@ pub fn crypto_chacha_key_from_password(password: String, salt: String) -> String
 // `crypto_chacha20_encrypt<E>`, `crypto_chacha20_decrypt<E>`,
 // `crypto_rsa_sha256_sign<E>` above use a flexible `E: From<String>` bound so
 // the error type can be inferred from context. Generated Sky code sets
-// `SkyError = ipe_runtime::error::SkyError`, but Rust's
+// `IpeError = ipe_runtime::error::IpeError`, but Rust's
 // type inference cannot pin `E` when the error arm is discarded (e.g.
-// `Err _ ->` in a case expression). These concrete aliases pin `E = SkyError`
+// `Err _ ->` in a case expression). These concrete aliases pin `E = IpeError`
 // up-front, eliminating the ambiguity without changing runtime semantics.
 
 /// Generated-code alias for `crypto_aes_gcm_encrypt` with `E = String`.
-pub fn sky_aes_gcm_encrypt(
+pub fn ipe_aes_gcm_encrypt(
     key: String,
     plaintext: String,
-) -> SkyResult<crate::error::SkyError, String> {
+) -> IpeResult<crate::error::IpeError, String> {
     crypto_aes_gcm_encrypt(key, plaintext)
 }
 
 /// Generated-code alias for `crypto_aes_gcm_decrypt` with `E = String`.
-pub fn sky_aes_gcm_decrypt(
+pub fn ipe_aes_gcm_decrypt(
     key: String,
     encoded: String,
-) -> SkyResult<crate::error::SkyError, String> {
+) -> IpeResult<crate::error::IpeError, String> {
     crypto_aes_gcm_decrypt(key, encoded)
 }
 
 /// Generated-code alias for `crypto_chacha20_encrypt` with `E = String`.
-pub fn sky_chacha20_encrypt(
+pub fn ipe_chacha20_encrypt(
     key: String,
     plaintext: String,
-) -> SkyResult<crate::error::SkyError, String> {
+) -> IpeResult<crate::error::IpeError, String> {
     crypto_chacha20_encrypt(key, plaintext)
 }
 
 /// Generated-code alias for `crypto_chacha20_decrypt` with `E = String`.
-pub fn sky_chacha20_decrypt(
+pub fn ipe_chacha20_decrypt(
     key: String,
     encoded: String,
-) -> SkyResult<crate::error::SkyError, String> {
+) -> IpeResult<crate::error::IpeError, String> {
     crypto_chacha20_decrypt(key, encoded)
 }
 
 /// Generated-code alias for `crypto_rsa_sha256_sign` with `E = String`.
 #[cfg(feature = "crypto")]
-pub fn sky_crypto_rsa_sha256_sign(
+pub fn ipe_crypto_rsa_sha256_sign(
     key_pem: String,
     msg: String,
-) -> SkyResult<crate::error::SkyError, String> {
+) -> IpeResult<crate::error::IpeError, String> {
     crypto_rsa_sha256_sign(key_pem, msg)
 }
 
@@ -583,12 +583,12 @@ TsgxkiXH9sjXrPHT1hXn2tKCv9MkR8MD1Ndh6jo7inBZUK0YG7H6Jx0CAwEAAQ==
     #[test]
     fn test_rsa_sign_verify_roundtrip() {
         let msg = "hello, sky".to_string();
-        let sig: SkyResult<String, String> =
+        let sig: IpeResult<String, String> =
             crypto_rsa_sha256_sign(RSA_PRIV_PEM.to_string(), msg.clone());
         // Sign returns standard base64 (mirrors Go's base64.StdEncoding).
         let sig_b64 = match sig {
-            SkyResult::Ok(s) => s,
-            SkyResult::Err(e) => panic!("sign failed: {}", e),
+            IpeResult::Ok(s) => s,
+            IpeResult::Err(e) => panic!("sign failed: {}", e),
         };
         // Verify takes the PUBLIC key, not the private key (mirrors Go oracle).
         assert!(crypto_rsa_sha256_verify(

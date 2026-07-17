@@ -13,8 +13,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::broadcast;
 
-use crate::core::{SkyResult, SkyTask, ok_res};
-use crate::tea::{SkyCmd, SkySub};
+use crate::core::{IpeResult, IpeTask, ok_res};
+use crate::tea::{IpeCmd, IpeSub};
 
 /// Per-topic broadcast buffer. A subscriber that lags more than this many
 /// messages gets `RecvError::Lagged` (handled by skipping, never panicking).
@@ -147,14 +147,14 @@ fn live_running() -> bool {
 /// (raw handlers, post-init, scheduled jobs). Resolves to the subscriber count,
 /// or an error when no Live app is running in this process (Go's `Unavailable`).
 /// Server-side publishes carry an empty origin, so echo-default is a no-op.
-pub fn pubsub_publish<T, E>(topic: String, payload: T) -> SkyTask<E, i64>
+pub fn pubsub_publish<T, E>(topic: String, payload: T) -> IpeTask<E, i64>
 where
     T: Clone + Send + 'static,
     E: From<String> + Send + 'static,
 {
     Box::pin(async move {
         if !live_running() {
-            return SkyResult::Err(E::from(
+            return IpeResult::Err(E::from(
                 "PubSub.publish: no Live.app running in this process".to_string(),
             ));
         }
@@ -163,14 +163,14 @@ where
 }
 
 /// `PubSub.publishNoEcho` — same, with the SkipOrigin bit set.
-pub fn pubsub_publish_no_echo<T, E>(topic: String, payload: T) -> SkyTask<E, i64>
+pub fn pubsub_publish_no_echo<T, E>(topic: String, payload: T) -> IpeTask<E, i64>
 where
     T: Clone + Send + 'static,
     E: From<String> + Send + 'static,
 {
     Box::pin(async move {
         if !live_running() {
-            return SkyResult::Err(E::from(
+            return IpeResult::Err(E::from(
                 "PubSub.publishNoEcho: no Live.app running in this process".to_string(),
             ));
         }
@@ -180,29 +180,29 @@ where
 
 /// `Cmd.publish topic payload` — echo-by-default broadcast. The payload `T` is
 /// captured in the thunk; the dispatch loop supplies the origin sid.
-pub fn cmd_publish<T, M>(topic: String, payload: T) -> SkyCmd<M>
+pub fn cmd_publish<T, M>(topic: String, payload: T) -> IpeCmd<M>
 where
     T: Clone + Send + 'static,
 {
-    SkyCmd::Publish(Box::new(move |origin| {
+    IpeCmd::Publish(Box::new(move |origin| {
         broker::<T>().publish(&topic, payload, origin, false)
     }))
 }
 
 /// `Cmd.publishNoEcho topic payload` — sets the SkipOrigin bit; the publisher's
 /// own subscription is suppressed receiver-side.
-pub fn cmd_publish_no_echo<T, M>(topic: String, payload: T) -> SkyCmd<M>
+pub fn cmd_publish_no_echo<T, M>(topic: String, payload: T) -> IpeCmd<M>
 where
     T: Clone + Send + 'static,
 {
-    SkyCmd::Publish(Box::new(move |origin| {
+    IpeCmd::Publish(Box::new(move |origin| {
         broker::<T>().publish(&topic, payload, origin, true)
     }))
 }
 
 tokio::task_local! {
     /// The session sid in scope while a session's subscriptions are being
-    /// (re)materialised. Read synchronously inside the SkySub::Source closure
+    /// (re)materialised. Read synchronously inside the IpeSub::Source closure
     /// so the spawned recv loop captures the owning session's sid for
     /// SkipOrigin filtering. Unset (→ "") outside a session.
     static SESSION_SID: String;
@@ -226,7 +226,7 @@ fn current_session_sid() -> String {
 /// time, while `with_session_sid` is in scope), not inside the spawn closure.
 /// The captured `owner_sid` is then moved into the spawn closure so the async
 /// recv loop has the correct sid even after the task-local scope has ended.
-pub fn sub_subscribe_topic<T, M, F>(topic: String, to_msg: F) -> SkySub<M>
+pub fn sub_subscribe_topic<T, M, F>(topic: String, to_msg: F) -> IpeSub<M>
 where
     T: Clone + Send + 'static,
     M: Send + 'static,
@@ -236,7 +236,7 @@ where
 {
     // Read sid synchronously while with_session_sid's sync_scope is active.
     let owner_sid = current_session_sid();
-    SkySub::Source(Box::new(move |emit| {
+    IpeSub::Source(Box::new(move |emit| {
         let mut rx = broker::<T>().subscribe(&topic);
         tokio::spawn(async move {
             loop {
@@ -320,7 +320,7 @@ mod tests {
             sub_subscribe_topic::<String, String, _>(topic.to_string(), |p| p)
         });
         let handle = match sub {
-            SkySub::Source(spawn) => spawn(emit),
+            IpeSub::Source(spawn) => spawn(emit),
             _ => unreachable!("subscribeTopic builds a Source"),
         };
         tokio::time::sleep(std::time::Duration::from_millis(20)).await; // let it subscribe
@@ -339,19 +339,19 @@ mod tests {
     #[tokio::test]
     async fn pubsub_publish_errs_without_live_app() {
         // LIVE_RUNNING starts false; no serve_live runs in a unit test.
-        let t: SkyTask<String, i64> = pubsub_publish::<u8, String>("t".to_string(), 1);
+        let t: IpeTask<String, i64> = pubsub_publish::<u8, String>("t".to_string(), 1);
         match t.await {
-            SkyResult::Err(e) => assert!(e.contains("no Live.app")),
-            SkyResult::Ok(_) => panic!("expected Err Unavailable"),
+            IpeResult::Err(e) => assert!(e.contains("no Live.app")),
+            IpeResult::Ok(_) => panic!("expected Err Unavailable"),
         }
     }
 
     #[tokio::test]
     async fn pubsub_publish_no_echo_errs_without_live_app() {
-        let t: SkyTask<String, i64> = pubsub_publish_no_echo::<u8, String>("t".to_string(), 1);
+        let t: IpeTask<String, i64> = pubsub_publish_no_echo::<u8, String>("t".to_string(), 1);
         match t.await {
-            SkyResult::Err(e) => assert!(e.contains("no Live.app")),
-            SkyResult::Ok(_) => panic!("expected Err Unavailable"),
+            IpeResult::Err(e) => assert!(e.contains("no Live.app")),
+            IpeResult::Ok(_) => panic!("expected Err Unavailable"),
         }
     }
 

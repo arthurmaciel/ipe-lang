@@ -69,7 +69,7 @@ fn i201_skyc_accepts_and_emits_clone_bounded_generic() {
         built.err()
     );
 
-    // `Lib`'s recursive pair lowers to its own Rust file under `src/sky_mods/`
+    // `Lib`'s recursive pair lowers to its own Rust file under `src/ipe_mods/`
     // once the per-Sky-module split fires — scan the whole emitted Sky-side tree.
     let emitted = support::read_all_emitted_src(&out);
 

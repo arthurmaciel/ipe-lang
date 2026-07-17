@@ -7,7 +7,7 @@
 //!
 //! The fix changes the scheme to `fun(http_request(), task(stream_id()))` where
 //! `stream_id()` resolves to the opaque `StreamId` builtin type, and introduces
-//! the `SkyStreamId` Rust newtype in the runtime + routes it through `enum_name`
+//! the `IpeStreamId` Rust newtype in the runtime + routes it through `enum_name`
 //! in the emitter.
 //!
 //! This test uses `skyc::emit_ir_text` (parse → canon → types → lower → IR text)

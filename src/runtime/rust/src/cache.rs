@@ -1,7 +1,7 @@
 //! Std.Cache — a bounded LRU cache with optional TTL + running stats.
 //!
 //! Handle-based: `cache_new_raw` returns an `i64` handle wrapped in the opaque
-//! `SkyCacheHandle` (the Sky `Cache k v` lowers to this non-generic enum — the
+//! `IpeCacheHandle` (the Sky `Cache k v` lowers to this non-generic enum — the
 //! handle carries no type args; `k`/`v` live only on the kernel calls). The
 //! other kernels take the unwrapped `i64`.
 //!
@@ -27,9 +27,9 @@ use std::time::{Duration, Instant};
 
 /// The opaque Sky `Cache k v` — a non-generic handle wrapper. The variant name
 /// `Cache` matches the Sky constructor so the codegen lowers `Cache.Cache raw`
-/// to `SkyCacheHandle::Cache(raw)` and `case c of Cache raw -> …` to a match.
+/// to `IpeCacheHandle::Cache(raw)` and `case c of Cache raw -> …` to a match.
 #[derive(Clone, Debug, PartialEq)]
-pub enum SkyCacheHandle {
+pub enum IpeCacheHandle {
     Cache(i64),
 }
 
@@ -94,7 +94,7 @@ fn with_slot<R>(handle: i64, default: R, f: impl FnOnce(&mut Slot) -> R) -> R {
 }
 
 /// `Cache.newRaw : CacheCfg -> Task Error Int` — allocate a cache, return its handle.
-pub fn cache_new_raw<E: Send + From<String> + 'static>(cfg: CacheCfg) -> SkyTask<E, i64> {
+pub fn cache_new_raw<E: Send + From<String> + 'static>(cfg: CacheCfg) -> IpeTask<E, i64> {
     Box::pin(async move {
         // `maxBytes` is not enforced on the Rust backend: the value is erased to a
         // `Box<dyn Any>`, so per-entry byte accounting isn't available without a
@@ -137,7 +137,7 @@ pub fn cache_new_raw<E: Send + From<String> + 'static>(cfg: CacheCfg) -> SkyTask
 }
 
 /// `Cache.putRaw : Int -> k -> v -> Task Error ()`.
-pub fn cache_put<E, K, V>(handle: i64, key: K, value: V) -> SkyTask<E, ()>
+pub fn cache_put<E, K, V>(handle: i64, key: K, value: V) -> IpeTask<E, ()>
 where
     E: Send + From<String> + 'static,
     K: PartialEq + Send + 'static,
@@ -206,14 +206,14 @@ where
 }
 
 /// `Cache.getRaw : Int -> k -> Task Error (Maybe v)`.
-pub fn cache_get<E, K, V>(handle: i64, key: K) -> SkyTask<E, SkyMaybe<V>>
+pub fn cache_get<E, K, V>(handle: i64, key: K) -> IpeTask<E, IpeMaybe<V>>
 where
     E: Send + From<String> + 'static,
     K: PartialEq + Send + 'static,
     V: Clone + Send + 'static,
 {
     Box::pin(async move {
-        let out = with_slot(handle, SkyMaybe::Nothing, |slot| {
+        let out = with_slot(handle, IpeMaybe::Nothing, |slot| {
             slot.seq = slot.seq.saturating_add(1);
             let seq = slot.seq;
             let now = Instant::now();
@@ -256,16 +256,16 @@ where
             match outcome {
                 Outcome::Hit(v) => {
                     slot.hits = slot.hits.saturating_add(1);
-                    SkyMaybe::Just(v)
+                    IpeMaybe::Just(v)
                 }
                 Outcome::Expired => {
                     slot.misses = slot.misses.saturating_add(1);
                     slot.entries = slot.entries.saturating_sub(1);
-                    SkyMaybe::Nothing
+                    IpeMaybe::Nothing
                 }
                 Outcome::Miss => {
                     slot.misses = slot.misses.saturating_add(1);
-                    SkyMaybe::Nothing
+                    IpeMaybe::Nothing
                 }
             }
         });
@@ -274,7 +274,7 @@ where
 }
 
 /// `Cache.removeRaw : Int -> k -> Task Error ()`.
-pub fn cache_remove<E, K>(handle: i64, key: K) -> SkyTask<E, ()>
+pub fn cache_remove<E, K>(handle: i64, key: K) -> IpeTask<E, ()>
 where
     E: Send + From<String> + 'static,
     K: PartialEq + Send + 'static,
@@ -301,7 +301,7 @@ where
 }
 
 /// `Cache.clearRaw : Int -> Task Error ()`.
-pub fn cache_clear<E: Send + From<String> + 'static>(handle: i64) -> SkyTask<E, ()> {
+pub fn cache_clear<E: Send + From<String> + 'static>(handle: i64) -> IpeTask<E, ()> {
     Box::pin(async move {
         with_slot(handle, (), |slot| {
             slot.store = None;
@@ -312,12 +312,12 @@ pub fn cache_clear<E: Send + From<String> + 'static>(handle: i64) -> SkyTask<E, 
 }
 
 /// `Cache.sizeRaw : Int -> Task Error Int`.
-pub fn cache_size<E: Send + From<String> + 'static>(handle: i64) -> SkyTask<E, i64> {
+pub fn cache_size<E: Send + From<String> + 'static>(handle: i64) -> IpeTask<E, i64> {
     Box::pin(async move { ok_res(with_slot(handle, 0, |slot| slot.entries)) })
 }
 
 /// `Cache.statsRaw : Int -> Task Error { hits, misses, evictions }`.
-pub fn cache_stats<E: Send + From<String> + 'static>(handle: i64) -> SkyTask<E, CacheStats> {
+pub fn cache_stats<E: Send + From<String> + 'static>(handle: i64) -> IpeTask<E, CacheStats> {
     Box::pin(async move {
         let s = with_slot(
             handle,
@@ -340,70 +340,70 @@ pub fn cache_stats<E: Send + From<String> + 'static>(handle: i64) -> SkyTask<E, 
 mod tests {
     use super::*;
 
-    fn run<T: Send + 'static>(t: SkyTask<SkyError, T>) -> T {
+    fn run<T: Send + 'static>(t: IpeTask<IpeError, T>) -> T {
         match crate::task::block_on(t) {
-            SkyResult::Ok(v) => v,
-            SkyResult::Err(_) => panic!("cache task failed"),
+            IpeResult::Ok(v) => v,
+            IpeResult::Err(_) => panic!("cache task failed"),
         }
     }
 
     #[test]
     fn put_get_size_remove_stats() {
-        let h = run(cache_new_raw::<SkyError>(CacheCfg {
+        let h = run(cache_new_raw::<IpeError>(CacheCfg {
             maxEntries: 8,
             ttlMs: 0,
             maxBytes: 0,
         }));
-        run(cache_put::<SkyError, String, String>(
+        run(cache_put::<IpeError, String, String>(
             h,
             "a".into(),
             "1".into(),
         ));
-        run(cache_put::<SkyError, String, String>(
+        run(cache_put::<IpeError, String, String>(
             h,
             "b".into(),
             "2".into(),
         ));
-        assert_eq!(run(cache_size::<SkyError>(h)), 2);
+        assert_eq!(run(cache_size::<IpeError>(h)), 2);
         assert_eq!(
-            run(cache_get::<SkyError, String, String>(h, "a".into())),
-            SkyMaybe::Just("1".into())
+            run(cache_get::<IpeError, String, String>(h, "a".into())),
+            IpeMaybe::Just("1".into())
         );
         assert_eq!(
-            run(cache_get::<SkyError, String, String>(h, "z".into())),
-            SkyMaybe::Nothing
+            run(cache_get::<IpeError, String, String>(h, "z".into())),
+            IpeMaybe::Nothing
         );
-        run(cache_remove::<SkyError, String>(h, "a".into()));
+        run(cache_remove::<IpeError, String>(h, "a".into()));
         assert_eq!(
-            run(cache_get::<SkyError, String, String>(h, "a".into())),
-            SkyMaybe::Nothing
+            run(cache_get::<IpeError, String, String>(h, "a".into())),
+            IpeMaybe::Nothing
         );
-        assert_eq!(run(cache_size::<SkyError>(h)), 1);
-        let st = run(cache_stats::<SkyError>(h));
+        assert_eq!(run(cache_size::<IpeError>(h)), 1);
+        let st = run(cache_stats::<IpeError>(h));
         assert_eq!(st.hits, 1);
         assert_eq!(st.misses, 2);
     }
 
     #[test]
     fn lru_eviction_over_capacity() {
-        let h = run(cache_new_raw::<SkyError>(CacheCfg {
+        let h = run(cache_new_raw::<IpeError>(CacheCfg {
             maxEntries: 2,
             ttlMs: 0,
             maxBytes: 0,
         }));
-        run(cache_put::<SkyError, String, i64>(h, "a".into(), 1));
-        run(cache_put::<SkyError, String, i64>(h, "b".into(), 2));
-        let _ = run(cache_get::<SkyError, String, i64>(h, "a".into())); // touch a (b now LRU)
-        run(cache_put::<SkyError, String, i64>(h, "c".into(), 3)); // evicts b
-        assert_eq!(run(cache_size::<SkyError>(h)), 2);
+        run(cache_put::<IpeError, String, i64>(h, "a".into(), 1));
+        run(cache_put::<IpeError, String, i64>(h, "b".into(), 2));
+        let _ = run(cache_get::<IpeError, String, i64>(h, "a".into())); // touch a (b now LRU)
+        run(cache_put::<IpeError, String, i64>(h, "c".into(), 3)); // evicts b
+        assert_eq!(run(cache_size::<IpeError>(h)), 2);
         assert_eq!(
-            run(cache_get::<SkyError, String, i64>(h, "b".into())),
-            SkyMaybe::Nothing
+            run(cache_get::<IpeError, String, i64>(h, "b".into())),
+            IpeMaybe::Nothing
         );
         assert_eq!(
-            run(cache_get::<SkyError, String, i64>(h, "a".into())),
-            SkyMaybe::Just(1)
+            run(cache_get::<IpeError, String, i64>(h, "a".into())),
+            IpeMaybe::Just(1)
         );
-        assert_eq!(run(cache_stats::<SkyError>(h)).evictions, 1);
+        assert_eq!(run(cache_stats::<IpeError>(h)).evictions, 1);
     }
 }

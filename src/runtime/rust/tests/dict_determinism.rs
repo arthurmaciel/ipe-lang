@@ -54,11 +54,11 @@ fn get_present_is_just_absent_is_nothing() {
     let d = build_string(&[("x", 7)]);
     assert!(matches!(
         ipe_runtime_rust::dict::dict_get("x".to_string(), d.clone()),
-        SkyMaybe::Just(7)
+        IpeMaybe::Just(7)
     ));
     assert!(matches!(
         ipe_runtime_rust::dict::dict_get("missing".to_string(), d),
-        SkyMaybe::Nothing
+        IpeMaybe::Nothing
     ));
 }
 
@@ -88,7 +88,7 @@ fn empty_dict_ops_are_total() {
     let d: std::collections::HashMap<String, i64> = ipe_runtime_rust::dict::dict_empty();
     assert!(matches!(
         ipe_runtime_rust::dict::dict_get("a".to_string(), d.clone()),
-        SkyMaybe::Nothing
+        IpeMaybe::Nothing
     ));
     assert!(!ipe_runtime_rust::dict::dict_member("a".to_string(), d.clone()));
     assert_eq!(
@@ -106,7 +106,7 @@ fn from_list_last_wins_on_duplicate_key() {
     // HashMap::from_iter keeps the last value for a duplicate key.
     assert!(matches!(
         ipe_runtime_rust::dict::dict_get("k".to_string(), d),
-        SkyMaybe::Just(2)
+        IpeMaybe::Just(2)
     ));
 }
 

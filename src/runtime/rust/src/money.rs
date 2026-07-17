@@ -7,7 +7,7 @@
 //! convert the Currency into its ISO 4217 code (a String) before calling
 //! these kernels — so every function below takes the code as a plain String.
 
-use super::{Decimal, SkyMaybe, SkyResult};
+use super::{Decimal, IpeMaybe, IpeResult};
 use rust_decimal::Decimal as RD;
 use rust_decimal::RoundingStrategy;
 use rust_decimal::prelude::ToPrimitive;
@@ -176,9 +176,9 @@ pub fn money_set_rate<E: From<String>>(
     from: String,
     to: String,
     rate: Decimal,
-) -> SkyResult<E, ()> {
+) -> IpeResult<E, ()> {
     if rate.0.is_zero() || rate.0.is_sign_negative() {
-        return SkyResult::Err("Money.setRate: rate must be positive".to_string().into());
+        return IpeResult::Err("Money.setRate: rate must be positive".to_string().into());
     }
     let from = from.trim().to_uppercase();
     let to = to.trim().to_uppercase();
@@ -186,14 +186,14 @@ pub fn money_set_rate<E: From<String>>(
     // generous) so the registry key can't be a memory-amplification vector.
     const MAX_CODE_LEN: usize = 16;
     if from.len() > MAX_CODE_LEN || to.len() > MAX_CODE_LEN {
-        return SkyResult::Err("Money.setRate: currency code too long".to_string().into());
+        return IpeResult::Err("Money.setRate: currency code too long".to_string().into());
     }
     let mut map = rates().lock().unwrap_or_else(|e| e.into_inner());
     // Bound the registry: distinct (from,to) pairs would otherwise accumulate
     // without limit (memory-DoS). Updating an existing pair is always allowed.
     const MAX_RATES: usize = 4096;
     if map.len() >= MAX_RATES && !map.contains_key(&(from.clone(), to.clone())) {
-        return SkyResult::Err("Money.setRate: rate registry is full".to_string().into());
+        return IpeResult::Err("Money.setRate: rate registry is full".to_string().into());
     }
     map.insert((from.clone(), to.clone()), rate.0);
     // Auto-inverse so consumers don't need both directions.
@@ -215,22 +215,22 @@ pub fn money_set_rate<E: From<String>>(
             );
         }
     }
-    SkyResult::Ok(())
+    IpeResult::Ok(())
 }
 
 /// `getRate : Code -> Code -> Result Error Decimal`.
 /// from == to returns 1.0; else looks up. Missing → Err.
-pub fn money_get_rate<E: From<String>>(from: String, to: String) -> SkyResult<E, Decimal> {
+pub fn money_get_rate<E: From<String>>(from: String, to: String) -> IpeResult<E, Decimal> {
     let from = from.trim().to_uppercase();
     let to = to.trim().to_uppercase();
     if from == to {
-        return SkyResult::Ok(Decimal(RD::from(1)));
+        return IpeResult::Ok(Decimal(RD::from(1)));
     }
     let map = rates().lock().unwrap_or_else(|e| e.into_inner());
     match map.get(&(from.clone(), to.clone())) {
-        Some(r) => SkyResult::Ok(Decimal(*r)),
+        Some(r) => IpeResult::Ok(Decimal(*r)),
         None => {
-            SkyResult::Err(format!("Money.getRate: no rate registered for {}→{}", from, to).into())
+            IpeResult::Err(format!("Money.getRate: no rate registered for {}→{}", from, to).into())
         }
     }
 }
@@ -250,10 +250,10 @@ pub fn money_has_rate(from: String, to: String) -> bool {
 /// Sky source calls `Ffi.callPure "Money_clearRates" []` — empty args list,
 /// the peephole emits `money_clear_rates()` with no args. The runtime
 /// takes no params accordingly.
-pub fn money_clear_rates<E: From<String>>() -> SkyResult<E, ()> {
+pub fn money_clear_rates<E: From<String>>() -> IpeResult<E, ()> {
     let mut map = rates().lock().unwrap_or_else(|e| e.into_inner());
     map.clear();
-    SkyResult::Ok(())
+    IpeResult::Ok(())
 }
 
 // ── Allocate (fair split with residue distributed early) ───────────
@@ -349,10 +349,10 @@ pub fn money_allocate(places: i64, parts: i64, amount: Decimal) -> Vec<Decimal> 
     out
 }
 
-// Silence unused-warning on SkyMaybe import (kept for symmetry with sibling kernels).
+// Silence unused-warning on IpeMaybe import (kept for symmetry with sibling kernels).
 #[allow(dead_code)]
-fn _unused_skymaybe<T>() -> SkyMaybe<T> {
-    SkyMaybe::Nothing
+fn _unused_skymaybe<T>() -> IpeMaybe<T> {
+    IpeMaybe::Nothing
 }
 
 #[cfg(test)]
@@ -474,36 +474,36 @@ mod tests {
     fn test_money_rates_roundtrip() {
         let _guard = rate_test_lock();
         // Clear any rates from prior tests
-        let _: SkyResult<String, ()> = money_clear_rates();
+        let _: IpeResult<String, ()> = money_clear_rates();
         // Set USD->EUR = 0.9; auto-registers EUR->USD ≈ 1.111
-        let _: SkyResult<String, ()> = money_set_rate("USD".into(), "EUR".into(), d("0.9"));
+        let _: IpeResult<String, ()> = money_set_rate("USD".into(), "EUR".into(), d("0.9"));
         assert!(money_has_rate("USD".into(), "EUR".into()));
         assert!(money_has_rate("EUR".into(), "USD".into()));
-        let r: SkyResult<String, Decimal> = money_get_rate("USD".into(), "EUR".into());
+        let r: IpeResult<String, Decimal> = money_get_rate("USD".into(), "EUR".into());
         match r {
-            SkyResult::Ok(v) => assert_eq!(v.0.to_string(), "0.9"),
-            SkyResult::Err(_) => panic!("getRate USD->EUR failed"),
+            IpeResult::Ok(v) => assert_eq!(v.0.to_string(), "0.9"),
+            IpeResult::Err(_) => panic!("getRate USD->EUR failed"),
         }
         // Identity
-        let r2: SkyResult<String, Decimal> = money_get_rate("USD".into(), "USD".into());
-        if let SkyResult::Ok(v) = r2 {
+        let r2: IpeResult<String, Decimal> = money_get_rate("USD".into(), "USD".into());
+        if let IpeResult::Ok(v) = r2 {
             assert_eq!(v.0, RD::from(1));
         } else {
             panic!("identity rate failed");
         }
         // Missing
-        let r3: SkyResult<String, Decimal> = money_get_rate("USD".into(), "XYZ".into());
-        assert!(matches!(r3, SkyResult::Err(_)));
+        let r3: IpeResult<String, Decimal> = money_get_rate("USD".into(), "XYZ".into());
+        assert!(matches!(r3, IpeResult::Err(_)));
     }
 
     #[test]
     fn test_money_set_rate_negative_rejected() {
         let _guard = rate_test_lock();
-        let _: SkyResult<String, ()> = money_clear_rates();
-        let r: SkyResult<String, ()> = money_set_rate("USD".into(), "EUR".into(), d("-1"));
-        assert!(matches!(r, SkyResult::Err(_)));
-        let r: SkyResult<String, ()> = money_set_rate("USD".into(), "EUR".into(), d("0"));
-        assert!(matches!(r, SkyResult::Err(_)));
+        let _: IpeResult<String, ()> = money_clear_rates();
+        let r: IpeResult<String, ()> = money_set_rate("USD".into(), "EUR".into(), d("-1"));
+        assert!(matches!(r, IpeResult::Err(_)));
+        let r: IpeResult<String, ()> = money_set_rate("USD".into(), "EUR".into(), d("0"));
+        assert!(matches!(r, IpeResult::Err(_)));
     }
 
     #[test]

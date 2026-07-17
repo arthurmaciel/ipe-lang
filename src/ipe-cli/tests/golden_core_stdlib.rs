@@ -10,7 +10,7 @@
 //! arm + fail-closed `stdlib_scheme` entry + `FIRST_SCHEMED` membership:
 //!
 //! * `Result.andThen` / `Result.mapError` reuse the container-first runtime
-//!   (`sky_result_and_then(r, f)` / new `sky_result_map_error(r, f)`); the
+//!   (`ipe_result_and_then(r, f)` / new `ipe_result_map_error(r, f)`); the
 //!   emitter reverses the Sky `(fn, result)` order via `kernel_swaps_first_two`
 //!   (verified here — a wrong arg order would short-circuit the WRONG channel).
 //! * `String.{containsIn,startsWithIn,endsWithIn}` are haystack-first

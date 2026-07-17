@@ -100,10 +100,10 @@ fn result_maybe_combinators() {
 /// over a genuinely-free error var, called UNPINNED (no result-type
 /// annotation). Defaulting the handler's `PAnything` param to
 /// `IrType::Json` while the `Ok "concrete"` value side defaults the same
-/// free `e` to `IrType::Error` (`SkyError`) would leave the emitted
-/// `FnOnce(JsonVal)` closure unable to unify with the `SkyResult<SkyError, _>`
+/// free `e` to `IrType::Error` (`IpeError`) would leave the emitted
+/// `FnOnce(JsonVal)` closure unable to unify with the `IpeResult<IpeError, _>`
 /// value, so cargo rejects it with E0277 despite skyc exit-0. The handler
-/// binder retypes to `SkyError`; this gate proves the whole pipeline
+/// binder retypes to `IpeError`; this gate proves the whole pipeline
 /// (skyc → cargo build → run) succeeds and prints `concrete`.
 #[test]
 fn result_map_error_wildcard_handler() {

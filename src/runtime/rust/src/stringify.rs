@@ -1,4 +1,4 @@
-//! `SkyStringify` — the total Sky value stringifier.
+//! `IpeStringify` — the total Sky value stringifier.
 //!
 //! Backs `Basics.errorToString` (and `Sky.Test.debugShow`, which is just
 //! `errorToString v`). Go's `Basics_errorToString` returns a `String`
@@ -6,13 +6,13 @@
 //! for everything else. The Rust backend mirrors `%v` EXACTLY but TOTALLY:
 //! every type reachable from a generic `errorToString` call implements this
 //! trait (runtime primitives below; every codegen-emitted record/ADT gets a
-//! `SkyStringify` impl from `src/Sky/Generate/Rust/Builder/Emitter.hs`).
+//! `IpeStringify` impl from `src/Sky/Generate/Rust/Builder/Emitter.hs`).
 //!
 //! Why a trait, not `Debug`: `Debug` QUOTES a `String` (`"hi"`), diverging
 //! from Go's unquoted `hi`. A `Display` re-bind is not total (no codegen type
-//! emits `Display`). `SkyStringify` is the total, Go-faithful middle path.
+//! emits `Display`). `IpeStringify` is the total, Go-faithful middle path.
 //!
-//! Totality contract: `sky_show` NEVER panics — no `unwrap`/`expect`/indexing.
+//! Totality contract: `ipe_show` NEVER panics — no `unwrap`/`expect`/indexing.
 //! A type with no meaningful `%v` analogue (function-typed fields) renders a
 //! best-effort placeholder rather than failing.
 //!
@@ -25,39 +25,39 @@
 //! - `R{1,"x"}` (Sky record)   -> `{1 x}`     (fields in _fieldIndex order)
 //! - `map[string]int{...}`     -> `map[a:1 b:2]` (keys SORTED, space-separated)
 
-use crate::core::{SkyMaybe, SkyResult};
+use crate::core::{IpeMaybe, IpeResult};
 use std::collections::HashMap;
 
 /// Total Sky stringifier. One method, infallible, never panics.
-pub trait SkyStringify {
+pub trait IpeStringify {
     /// Render `self` byte-identically to Go's `Basics_errorToString` / `%v`.
-    fn sky_show(&self) -> String;
+    fn ipe_show(&self) -> String;
 }
 
 // ─── Autoref specialization: total field rendering ───────────────────────────
 //
-// A codegen-emitted `impl SkyStringify for <GeneratedType>` renders each field
-// by calling the field's stringifier. If it called `field.sky_show()` directly,
-// a field of a RUNTIME type that doesn't impl `SkyStringify` (e.g.
+// A codegen-emitted `impl IpeStringify for <GeneratedType>` renders each field
+// by calling the field's stringifier. If it called `field.ipe_show()` directly,
+// a field of a RUNTIME type that doesn't impl `IpeStringify` (e.g.
 // `http_stream::ChunkEvent`) would be a `type-checks ⇒ cargo-fails` E0599 — a
 // soundness-floor regression, and a whack-a-mole (every unhandled runtime type
 // is a latent failure).
 //
 // The dispatch makes field rendering TOTAL BY CONSTRUCTION via dtolnay's
-// autoref-specialization: a field renders via `SkyStringify` IF its type impls
+// autoref-specialization: a field renders via `IpeStringify` IF its type impls
 // it, ELSE falls back to `Debug`. EVERY codegen + runtime type derives `Debug`,
 // so this can NEVER fail to compile, regardless of field type.
 //
 // Mechanism: codegen emits `(&Wrap(&value)).dispatch()` at a CONCRETE field
 // type. `Wrap<&T>: ViaSkyStringify` (no autoref) is preferred over
-// `&Wrap<T>: ViaDebug` (one autoref) when `T: SkyStringify`; otherwise only the
+// `&Wrap<T>: ViaDebug` (one autoref) when `T: IpeStringify`; otherwise only the
 // `Debug` impl applies. The dispatch is concrete-type-only by design — a generic
 // `fn<T>` frame can't select either arm (the same method name on both traits is
 // ambiguous when T's bounds are unknown), so the dispatch is emitted INLINE at
-// each field site (where the type is concrete or a `SkyStringify + Debug`-bounded
+// each field site (where the type is concrete or a `IpeStringify + Debug`-bounded
 // generic), NOT routed through a generic free function.
-// (`basics_error_to_string<T: SkyStringify>` keeps its bound: a top-level
-// `errorToString aString` must stay unquoted, which the SkyStringify path
+// (`basics_error_to_string<T: IpeStringify>` keeps its bound: a top-level
+// `errorToString aString` must stay unquoted, which the IpeStringify path
 // guarantees; the autoref-`Debug` fallback would quote a String at a generic
 // frame.)
 
@@ -67,22 +67,22 @@ pub trait SkyStringify {
 #[doc(hidden)]
 pub struct Wrap<T>(pub T);
 
-/// Higher-priority arm: a `Wrap<&T>` where `T: SkyStringify` renders via the
+/// Higher-priority arm: a `Wrap<&T>` where `T: IpeStringify` renders via the
 /// trait (Go-`%v`-faithful — String unquoted, nested generated types via their
 /// own impl). Selected with ZERO autoref, so it beats the `Debug` fallback.
 #[doc(hidden)]
 pub trait ViaSkyStringify {
     fn dispatch(&self) -> String;
 }
-impl<T: SkyStringify> ViaSkyStringify for Wrap<&T> {
+impl<T: IpeStringify> ViaSkyStringify for Wrap<&T> {
     fn dispatch(&self) -> String {
-        self.0.sky_show()
+        self.0.ipe_show()
     }
 }
 
 /// Lower-priority arm: ANY `Wrap<T>` where `T: Debug` renders via `Debug`.
 /// Reached only by ONE autoref (`&Wrap<T>`), so it loses to `ViaSkyStringify`
-/// whenever the field type impls `SkyStringify`. Every type derives `Debug`,
+/// whenever the field type impls `IpeStringify`. Every type derives `Debug`,
 /// so this arm is always available — the dispatch can never E0599.
 #[doc(hidden)]
 pub trait ViaDebug {
@@ -96,26 +96,26 @@ impl<T: core::fmt::Debug> ViaDebug for &Wrap<T> {
 
 // ─── Scalars ────────────────────────────────────────────────────────────────
 
-impl SkyStringify for String {
+impl IpeStringify for String {
     // Go: a String returns verbatim (UNQUOTED). This is the primary fix.
-    fn sky_show(&self) -> String {
+    fn ipe_show(&self) -> String {
         self.clone()
     }
 }
 
-impl SkyStringify for str {
-    fn sky_show(&self) -> String {
+impl IpeStringify for str {
+    fn ipe_show(&self) -> String {
         self.to_string()
     }
 }
 
-impl SkyStringify for i64 {
-    fn sky_show(&self) -> String {
+impl IpeStringify for i64 {
+    fn ipe_show(&self) -> String {
         self.to_string()
     }
 }
 
-impl SkyStringify for f64 {
+impl IpeStringify for f64 {
     // Go's `%v` on a float64 is `strconv.FormatFloat(f, 'g', -1, 64)`: the
     // shortest round-trippable digits, formatted with `%e` when the decimal
     // exponent is < -4 or >= 6 and `%f` otherwise, with `+Inf`/`-Inf`/`NaN`
@@ -125,7 +125,7 @@ impl SkyStringify for f64 {
     // (1e21 -> "1000000000000000000000" instead of Go's "1e+21"). Bridge the
     // gap totally: handle the non-finite cases, then reformat Rust's shortest
     // scientific output to Go's `%g`-`%e` shape only when Go would use it.
-    fn sky_show(&self) -> String {
+    fn ipe_show(&self) -> String {
         let f = *self;
         if f.is_nan() {
             return "NaN".to_string();
@@ -162,61 +162,61 @@ impl SkyStringify for f64 {
     }
 }
 
-impl SkyStringify for bool {
-    fn sky_show(&self) -> String {
+impl IpeStringify for bool {
+    fn ipe_show(&self) -> String {
         self.to_string()
     }
 }
 
-impl SkyStringify for () {
+impl IpeStringify for () {
     // Sky `()` is Go's empty struct; `%v` renders `{}`. Rare in errorToString,
     // kept total for completeness.
-    fn sky_show(&self) -> String {
+    fn ipe_show(&self) -> String {
         "{}".to_string()
     }
 }
 
 // ─── References / boxes (delegate) ───────────────────────────────────────────
 
-impl<T: SkyStringify + ?Sized> SkyStringify for &T {
-    fn sky_show(&self) -> String {
-        (**self).sky_show()
+impl<T: IpeStringify + ?Sized> IpeStringify for &T {
+    fn ipe_show(&self) -> String {
+        (**self).ipe_show()
     }
 }
 
-impl<T: SkyStringify + ?Sized> SkyStringify for Box<T> {
-    fn sky_show(&self) -> String {
-        (**self).sky_show()
+impl<T: IpeStringify + ?Sized> IpeStringify for Box<T> {
+    fn ipe_show(&self) -> String {
+        (**self).ipe_show()
     }
 }
 
 // ─── Lists ───────────────────────────────────────────────────────────────────
 
-impl<T: SkyStringify> SkyStringify for Vec<T> {
+impl<T: IpeStringify> IpeStringify for Vec<T> {
     // Go slice `%v`: `[a b c]` — space-separated, square brackets, empty -> `[]`.
-    fn sky_show(&self) -> String {
-        let parts: Vec<String> = self.iter().map(|x| x.sky_show()).collect();
+    fn ipe_show(&self) -> String {
+        let parts: Vec<String> = self.iter().map(|x| x.ipe_show()).collect();
         format!("[{}]", parts.join(" "))
     }
 }
 
-impl<T: SkyStringify> SkyStringify for [T] {
-    fn sky_show(&self) -> String {
-        let parts: Vec<String> = self.iter().map(|x| x.sky_show()).collect();
+impl<T: IpeStringify> IpeStringify for [T] {
+    fn ipe_show(&self) -> String {
+        let parts: Vec<String> = self.iter().map(|x| x.ipe_show()).collect();
         format!("[{}]", parts.join(" "))
     }
 }
 
 // ─── Maps ────────────────────────────────────────────────────────────────────
 
-impl<K: SkyStringify + Ord, V: SkyStringify> SkyStringify for HashMap<K, V> {
+impl<K: IpeStringify + Ord, V: IpeStringify> IpeStringify for HashMap<K, V> {
     // Go map `%v`: `map[k1:v1 k2:v2]` with keys SORTED, space-separated.
-    fn sky_show(&self) -> String {
+    fn ipe_show(&self) -> String {
         let mut entries: Vec<(&K, &V)> = self.iter().collect();
         entries.sort_by(|a, b| a.0.cmp(b.0));
         let parts: Vec<String> = entries
             .iter()
-            .map(|(k, v)| format!("{}:{}", k.sky_show(), v.sky_show()))
+            .map(|(k, v)| format!("{}:{}", k.ipe_show(), v.ipe_show()))
             .collect();
         format!("map[{}]", parts.join(" "))
     }
@@ -224,76 +224,76 @@ impl<K: SkyStringify + Ord, V: SkyStringify> SkyStringify for HashMap<K, V> {
 
 // ─── Tuples (Sky tuples render like Go's T2/T3 structs: `{a b ...}`) ─────────
 
-impl<A: SkyStringify, B: SkyStringify> SkyStringify for (A, B) {
-    fn sky_show(&self) -> String {
-        format!("{{{} {}}}", self.0.sky_show(), self.1.sky_show())
+impl<A: IpeStringify, B: IpeStringify> IpeStringify for (A, B) {
+    fn ipe_show(&self) -> String {
+        format!("{{{} {}}}", self.0.ipe_show(), self.1.ipe_show())
     }
 }
 
-impl<A: SkyStringify, B: SkyStringify, C: SkyStringify> SkyStringify for (A, B, C) {
-    fn sky_show(&self) -> String {
+impl<A: IpeStringify, B: IpeStringify, C: IpeStringify> IpeStringify for (A, B, C) {
+    fn ipe_show(&self) -> String {
         format!(
             "{{{} {} {}}}",
-            self.0.sky_show(),
-            self.1.sky_show(),
-            self.2.sky_show()
+            self.0.ipe_show(),
+            self.1.ipe_show(),
+            self.2.ipe_show()
         )
     }
 }
 
-impl<A, B, C, D> SkyStringify for (A, B, C, D)
+impl<A, B, C, D> IpeStringify for (A, B, C, D)
 where
-    A: SkyStringify,
-    B: SkyStringify,
-    C: SkyStringify,
-    D: SkyStringify,
+    A: IpeStringify,
+    B: IpeStringify,
+    C: IpeStringify,
+    D: IpeStringify,
 {
-    fn sky_show(&self) -> String {
+    fn ipe_show(&self) -> String {
         format!(
             "{{{} {} {} {}}}",
-            self.0.sky_show(),
-            self.1.sky_show(),
-            self.2.sky_show(),
-            self.3.sky_show()
+            self.0.ipe_show(),
+            self.1.ipe_show(),
+            self.2.ipe_show(),
+            self.3.ipe_show()
         )
     }
 }
 
 // ─── Sky core ADTs ───────────────────────────────────────────────────────────
 
-impl<T: SkyStringify> SkyStringify for SkyMaybe<T> {
+impl<T: IpeStringify> IpeStringify for IpeMaybe<T> {
     // Go renders a Sky `Maybe` (a flattened-struct ADT) with a leaked layout
     // (`{tag payload}` + zero-init inactive fields) that a Rust enum cannot
     // reproduce. Best-effort, total, and human-useful: `Just <v>` / `Nothing`.
     // Documented residual: NOT byte-identical to Go's ADT `%v` (see module doc).
-    fn sky_show(&self) -> String {
+    fn ipe_show(&self) -> String {
         match self {
-            SkyMaybe::Just(v) => format!("Just {}", v.sky_show()),
-            SkyMaybe::Nothing => "Nothing".to_string(),
+            IpeMaybe::Just(v) => format!("Just {}", v.ipe_show()),
+            IpeMaybe::Nothing => "Nothing".to_string(),
         }
     }
 }
 
-impl<E: SkyStringify, A: SkyStringify> SkyStringify for SkyResult<E, A> {
-    // Best-effort (same ADT-layout residual as SkyMaybe): `Ok <a>` / `Err <e>`.
-    fn sky_show(&self) -> String {
+impl<E: IpeStringify, A: IpeStringify> IpeStringify for IpeResult<E, A> {
+    // Best-effort (same ADT-layout residual as IpeMaybe): `Ok <a>` / `Err <e>`.
+    fn ipe_show(&self) -> String {
         match self {
-            SkyResult::Ok(a) => format!("Ok {}", a.sky_show()),
-            SkyResult::Err(e) => format!("Err {}", e.sky_show()),
+            IpeResult::Ok(a) => format!("Ok {}", a.ipe_show()),
+            IpeResult::Err(e) => format!("Err {}", e.ipe_show()),
         }
     }
 }
 
 // ─── Runtime opaque value types that flow into errorToString/debugShow ───────
-// These are real runtime types (not codegen-emitted), so their SkyStringify
+// These are real runtime types (not codegen-emitted), so their IpeStringify
 // impls live HERE. A generated ADT can carry them as a payload (e.g.
 // `Money(Decimal, …)`, `Claims(Vec<(String, JsonVal)>)`); the codegen's enum
-// `sky_show` calls `.sky_show()` on the payload, so the type must impl it.
+// `ipe_show` calls `.ipe_show()` on the payload, so the type must impl it.
 
-impl SkyStringify for crate::decimal::Decimal {
+impl IpeStringify for crate::decimal::Decimal {
     // Reuse the canonical Decimal renderer (normalized, no trailing zeros) —
     // matches `Decimal.toString`. Total (no panic).
-    fn sky_show(&self) -> String {
+    fn ipe_show(&self) -> String {
         crate::decimal::decimal_to_string(*self)
     }
 }
@@ -302,16 +302,16 @@ impl SkyStringify for crate::decimal::Decimal {
 // impl so a project that doesn't enable `json` still compiles (the unconditional
 // form was an E0433 `unresolved crate serde_json` on default features).
 #[cfg(feature = "json")]
-impl SkyStringify for serde_json::Value {
+impl IpeStringify for serde_json::Value {
     // Best-effort, total: the compact JSON text. Not Go's flattened-struct `%v`
     // layout (a JSON value has no Go-struct analogue), but human-useful and never
     // panics. `to_string` on serde_json::Value is infallible.
-    fn sky_show(&self) -> String {
+    fn ipe_show(&self) -> String {
         self.to_string()
     }
 }
 
-// NB: `SkyError` is `type SkyError = String` (see config.rs), so it stringifies
+// NB: `IpeError` is `type IpeError = String` (see config.rs), so it stringifies
 // through the `String` impl above — rendering its message verbatim, exactly
 // like Go's `error.Error()` branch in `Basics_errorToString`. No separate impl
 // is needed (and a separate one would conflict with the `String` impl).
@@ -322,31 +322,31 @@ mod tests {
 
     #[test]
     fn string_unquoted() {
-        assert_eq!("hi".to_string().sky_show(), "hi");
+        assert_eq!("hi".to_string().ipe_show(), "hi");
     }
     #[test]
     fn str_unquoted() {
-        assert_eq!("hi".sky_show(), "hi");
+        assert_eq!("hi".ipe_show(), "hi");
     }
     #[test]
     fn empty_string() {
-        assert_eq!(String::new().sky_show(), "");
+        assert_eq!(String::new().ipe_show(), "");
     }
     #[test]
     fn int_plain() {
-        assert_eq!(42i64.sky_show(), "42");
+        assert_eq!(42i64.ipe_show(), "42");
     }
     #[test]
     fn bool_plain() {
-        assert_eq!(true.sky_show(), "true");
+        assert_eq!(true.ipe_show(), "true");
     }
     #[test]
     fn float_plain() {
-        assert_eq!(42.5f64.sky_show(), "42.5");
+        assert_eq!(42.5f64.ipe_show(), "42.5");
     }
     #[test]
     fn float_whole() {
-        assert_eq!(1.0f64.sky_show(), "1");
+        assert_eq!(1.0f64.ipe_show(), "1");
     }
 
     #[test]
@@ -355,54 +355,54 @@ mod tests {
         // Oracle: Go 1.26.2 `go run probe.go` (see reference-audit.md item 27). The cut
         // to scientific notation is a FLAT decimal-exponent >= 6 (and < -4), NOT 21.
         // Positional class (exp in [-4, 6)):
-        assert_eq!(99999.0f64.sky_show(), "99999"); // exp 4
-        assert_eq!(1e5f64.sky_show(), "100000"); // exp 5
-        assert_eq!(999999.0f64.sky_show(), "999999"); // exp 5 (lower guard)
-        assert_eq!(123456.789f64.sky_show(), "123456.789");
-        assert_eq!(0.0001f64.sky_show(), "0.0001"); // exp -4 boundary
+        assert_eq!(99999.0f64.ipe_show(), "99999"); // exp 4
+        assert_eq!(1e5f64.ipe_show(), "100000"); // exp 5
+        assert_eq!(999999.0f64.ipe_show(), "999999"); // exp 5 (lower guard)
+        assert_eq!(123456.789f64.ipe_show(), "123456.789");
+        assert_eq!(0.0001f64.ipe_show(), "0.0001"); // exp -4 boundary
         // Scientific class (exp >= 6) — these DISCRIMINATE 6 from 21:
-        assert_eq!(1e6f64.sky_show(), "1e+06"); // exp 6 — 21 would print "1000000"
-        assert_eq!(1000001.0f64.sky_show(), "1.000001e+06"); // not a 1e6 special-case
-        assert_eq!(1234567.0f64.sky_show(), "1.234567e+06");
-        assert_eq!(1e15f64.sky_show(), "1e+15"); // 21 would print 16 zeros
-        assert_eq!(1e20f64.sky_show(), "1e+20"); // 21 would print 21 digits
-        assert_eq!(1e21f64.sky_show(), "1e+21");
+        assert_eq!(1e6f64.ipe_show(), "1e+06"); // exp 6 — 21 would print "1000000"
+        assert_eq!(1000001.0f64.ipe_show(), "1.000001e+06"); // not a 1e6 special-case
+        assert_eq!(1234567.0f64.ipe_show(), "1.234567e+06");
+        assert_eq!(1e15f64.ipe_show(), "1e+15"); // 21 would print 16 zeros
+        assert_eq!(1e20f64.ipe_show(), "1e+20"); // 21 would print 21 digits
+        assert_eq!(1e21f64.ipe_show(), "1e+21");
         // Scientific class (exp <= -5):
-        assert_eq!(1e-5f64.sky_show(), "1e-05");
+        assert_eq!(1e-5f64.ipe_show(), "1e-05");
         // Negative zero (shared positional branch): Go true -0.0 -> "-0".
-        assert_eq!((-0.0f64).sky_show(), "-0");
+        assert_eq!((-0.0f64).ipe_show(), "-0");
         // Non-finite (shared branch):
-        assert_eq!(f64::INFINITY.sky_show(), "+Inf");
-        assert_eq!(f64::NEG_INFINITY.sky_show(), "-Inf");
-        assert_eq!(f64::NAN.sky_show(), "NaN");
-        assert_eq!((-1.5f64).sky_show(), "-1.5");
+        assert_eq!(f64::INFINITY.ipe_show(), "+Inf");
+        assert_eq!(f64::NEG_INFINITY.ipe_show(), "-Inf");
+        assert_eq!(f64::NAN.ipe_show(), "NaN");
+        assert_eq!((-1.5f64).ipe_show(), "-1.5");
     }
 
     #[test]
     fn vec_int_space_separated() {
-        assert_eq!(vec![1i64, 2, 3].sky_show(), "[1 2 3]");
+        assert_eq!(vec![1i64, 2, 3].ipe_show(), "[1 2 3]");
     }
     #[test]
     fn vec_string_unquoted() {
-        assert_eq!(vec!["a".to_string(), "b".to_string()].sky_show(), "[a b]");
+        assert_eq!(vec!["a".to_string(), "b".to_string()].ipe_show(), "[a b]");
     }
     #[test]
     fn vec_empty() {
         let v: Vec<i64> = vec![];
-        assert_eq!(v.sky_show(), "[]");
+        assert_eq!(v.ipe_show(), "[]");
     }
     #[test]
     fn vec_nested() {
-        assert_eq!(vec![vec![1i64, 2], vec![3, 4]].sky_show(), "[[1 2] [3 4]]");
+        assert_eq!(vec![vec![1i64, 2], vec![3, 4]].ipe_show(), "[[1 2] [3 4]]");
     }
 
     #[test]
     fn tuple2() {
-        assert_eq!((1i64, "a".to_string()).sky_show(), "{1 a}");
+        assert_eq!((1i64, "a".to_string()).ipe_show(), "{1 a}");
     }
     #[test]
     fn tuple3() {
-        assert_eq!((1i64, "a".to_string(), true).sky_show(), "{1 a true}");
+        assert_eq!((1i64, "a".to_string(), true).ipe_show(), "{1 a true}");
     }
 
     #[test]
@@ -411,39 +411,39 @@ mod tests {
         m.insert("b".to_string(), 2);
         m.insert("a".to_string(), 1);
         m.insert("c".to_string(), 3);
-        assert_eq!(m.sky_show(), "map[a:1 b:2 c:3]");
+        assert_eq!(m.ipe_show(), "map[a:1 b:2 c:3]");
     }
 
     #[test]
     fn maybe_just() {
-        assert_eq!(SkyMaybe::Just(5i64).sky_show(), "Just 5");
+        assert_eq!(IpeMaybe::Just(5i64).ipe_show(), "Just 5");
     }
     #[test]
     fn maybe_nothing() {
-        let n: SkyMaybe<i64> = SkyMaybe::Nothing;
-        assert_eq!(n.sky_show(), "Nothing");
+        let n: IpeMaybe<i64> = IpeMaybe::Nothing;
+        assert_eq!(n.ipe_show(), "Nothing");
     }
     #[test]
     fn result_ok() {
-        let r: SkyResult<String, i64> = SkyResult::Ok(7);
-        assert_eq!(r.sky_show(), "Ok 7");
+        let r: IpeResult<String, i64> = IpeResult::Ok(7);
+        assert_eq!(r.ipe_show(), "Ok 7");
     }
     #[test]
     fn result_err() {
-        let r: SkyResult<String, i64> = SkyResult::Err("boom".to_string());
-        assert_eq!(r.sky_show(), "Err boom");
+        let r: IpeResult<String, i64> = IpeResult::Err("boom".to_string());
+        assert_eq!(r.ipe_show(), "Err boom");
     }
 
     // ─── Autoref-specialization dispatch (total field rendering) ─────────────
 
-    // (a) A `String` field renders UNQUOTED via the SkyStringify arm.
+    // (a) A `String` field renders UNQUOTED via the IpeStringify arm.
     #[test]
     fn dispatch_string_unquoted() {
         let s = "hi".to_string();
         assert_eq!(Wrap(&s).dispatch(), "hi");
     }
 
-    // (b) A type that impls ONLY `Debug` (NOT SkyStringify) renders via the
+    // (b) A type that impls ONLY `Debug` (NOT IpeStringify) renders via the
     // Debug fallback — NO compile error (this is the whole point: total by
     // construction). Mirrors a runtime payload type like `http_stream::ChunkEvent`.
     #[derive(Debug)]
@@ -464,8 +464,8 @@ mod tests {
         name: String,
         debug_only: OnlyDebug,
     }
-    impl SkyStringify for GenStruct {
-        fn sky_show(&self) -> String {
+    impl IpeStringify for GenStruct {
+        fn ipe_show(&self) -> String {
             // Exactly what codegen now emits per field.
             format!(
                 "{{{} {}}}",
@@ -482,6 +482,6 @@ mod tests {
             debug_only: OnlyDebug { x: 7 },
         };
         // String field unquoted; Debug-only field via fallback — never E0599.
-        assert_eq!(g.sky_show(), "{alice OnlyDebug { x: 7 }}");
+        assert_eq!(g.ipe_show(), "{alice OnlyDebug { x: 7 }}");
     }
 }

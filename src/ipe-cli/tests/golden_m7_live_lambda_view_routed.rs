@@ -57,10 +57,10 @@ fn out_dir() -> PathBuf {
 
 /// Compile the fixture; `None` (skip) when the runtime cannot be resolved.
 fn compile() -> Option<Result<(), skyc::CliError>> {
-    let sky_dir = std::env::temp_dir().join("m7_live_lambda_view_routed_sky");
-    let _ = std::fs::remove_dir_all(&sky_dir);
-    std::fs::create_dir_all(&sky_dir).ok()?;
-    let entry = sky_dir.join("Main.sky");
+    let ipe_dir = std::env::temp_dir().join("m7_live_lambda_view_routed_sky");
+    let _ = std::fs::remove_dir_all(&ipe_dir);
+    std::fs::create_dir_all(&ipe_dir).ok()?;
+    let entry = ipe_dir.join("Main.sky");
     std::fs::write(&entry, LIVE_LAMBDA_VIEW_ROUTED).ok()?;
     let out = out_dir();
     let _ = std::fs::remove_dir_all(&out);

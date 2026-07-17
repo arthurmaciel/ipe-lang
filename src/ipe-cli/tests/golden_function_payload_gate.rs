@@ -7,7 +7,7 @@
 //! runtime/derive machinery already tolerates a function payload there — the
 //! derive-demotion fixpoint drops `MainBox<T1>`'s `#[derive(Clone, Debug,
 //! PartialEq)]` when a field is not derivable, and its hand-written
-//! `SkyStringify` impl renders the non-derivable field as `<fn>` instead of
+//! `IpeStringify` impl renders the non-derivable field as `<fn>` instead of
 //! calling a derive. So this fixture now takes the BUILD-AND-RUN branch below —
 //! `skyc` accepts it, `cargo` builds it, and it runs, printing `2`
 //! (`(\n -> n + 1) 1 == 2`).

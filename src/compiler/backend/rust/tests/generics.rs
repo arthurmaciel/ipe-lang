@@ -185,7 +185,7 @@ fn emits_generic_function_signature() -> DResult<()> {
     // The monomorphic entry carries NO generic clause — the empty `type_params`
     // path emits no generic clause.
     assert!(
-        main_rs.contains("pub fn sky_main() -> SkyTask<()> {"),
+        main_rs.contains("pub fn ipe_main() -> IpeTask<()> {"),
         "monomorphic `main` emits no generic clause:\n{main_rs}"
     );
     // Exactly ONE generic function is emitted; both call sites target it and

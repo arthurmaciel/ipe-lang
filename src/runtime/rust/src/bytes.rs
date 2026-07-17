@@ -8,11 +8,11 @@
 //! conversion via `bytes_from_string` / `bytes_to_string`.
 //!
 //! All functions are total: no `unwrap` / `expect` / `panic` / raw indexing.
-//! Fallible operations return `SkyMaybe<T>` (Sky's `Maybe`).
+//! Fallible operations return `IpeMaybe<T>` (Sky's `Maybe`).
 
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 
-use super::SkyMaybe;
+use super::IpeMaybe;
 
 // ── Arity-0 ──────────────────────────────────────────────────────────────
 
@@ -44,10 +44,10 @@ pub fn bytes_from_string(s: String) -> Vec<u8> {
 /// `Bytes.toString : Bytes -> Maybe String` — UTF-8-decode bytes into a string.
 ///
 /// Returns `Just s` when the buffer is valid UTF-8, `Nothing` otherwise.
-pub fn bytes_to_string(b: Vec<u8>) -> SkyMaybe<String> {
+pub fn bytes_to_string(b: Vec<u8>) -> IpeMaybe<String> {
     match String::from_utf8(b) {
-        Ok(s) => SkyMaybe::Just(s),
-        Err(_) => SkyMaybe::Nothing,
+        Ok(s) => IpeMaybe::Just(s),
+        Err(_) => IpeMaybe::Nothing,
     }
 }
 
@@ -55,14 +55,14 @@ pub fn bytes_to_string(b: Vec<u8>) -> SkyMaybe<String> {
 ///
 /// Accepts lowercase and uppercase hex digits. Returns `Nothing` when the
 /// input has an odd number of characters or contains any non-hex character.
-pub fn bytes_from_hex(s: String) -> SkyMaybe<Vec<u8>> {
+pub fn bytes_from_hex(s: String) -> IpeMaybe<Vec<u8>> {
     // Odd-length inputs can never be valid hex (every byte needs two digits).
     if !s.len().is_multiple_of(2) {
-        return SkyMaybe::Nothing;
+        return IpeMaybe::Nothing;
     }
     match hex::decode(&s) {
-        Ok(bytes) => SkyMaybe::Just(bytes),
-        Err(_) => SkyMaybe::Nothing,
+        Ok(bytes) => IpeMaybe::Just(bytes),
+        Err(_) => IpeMaybe::Nothing,
     }
 }
 
@@ -74,10 +74,10 @@ pub fn bytes_to_hex(b: Vec<u8>) -> String {
 /// `Bytes.fromBase64 : String -> Maybe Bytes` — standard (RFC 4648) base-64 decode.
 ///
 /// Returns `Nothing` on invalid padding or non-base-64 characters.
-pub fn bytes_from_base64(s: String) -> SkyMaybe<Vec<u8>> {
+pub fn bytes_from_base64(s: String) -> IpeMaybe<Vec<u8>> {
     match B64.decode(s.as_bytes()) {
-        Ok(bytes) => SkyMaybe::Just(bytes),
-        Err(_) => SkyMaybe::Nothing,
+        Ok(bytes) => IpeMaybe::Just(bytes),
+        Err(_) => IpeMaybe::Nothing,
     }
 }
 
@@ -161,14 +161,14 @@ mod tests {
     #[test]
     fn to_string_roundtrips_ascii() {
         let b = bytes_from_string("Hi!".to_string());
-        assert!(matches!(bytes_to_string(b), SkyMaybe::Just(ref s) if s == "Hi!"));
+        assert!(matches!(bytes_to_string(b), IpeMaybe::Just(ref s) if s == "Hi!"));
     }
 
     #[test]
     fn to_string_nothing_on_invalid_utf8() {
         // 0x9e alone is not a valid UTF-8 sequence.
         let b = vec![0x9e_u8];
-        assert!(matches!(bytes_to_string(b), SkyMaybe::Nothing));
+        assert!(matches!(bytes_to_string(b), IpeMaybe::Nothing));
     }
 
     // ── fromHex / toHex ─────────────────────────────────────────────────
@@ -182,14 +182,14 @@ mod tests {
     #[test]
     fn from_hex_ascii_roundtrip() {
         let b = bytes_from_hex("486921".to_string());
-        assert!(matches!(b, SkyMaybe::Just(ref v) if *v == vec![0x48, 0x69, 0x21]));
+        assert!(matches!(b, IpeMaybe::Just(ref v) if *v == vec![0x48, 0x69, 0x21]));
     }
 
     #[test]
     fn from_hex_odd_length_nothing() {
         assert!(matches!(
             bytes_from_hex("abc".to_string()),
-            SkyMaybe::Nothing
+            IpeMaybe::Nothing
         ));
     }
 
@@ -197,7 +197,7 @@ mod tests {
     fn from_hex_non_hex_char_nothing() {
         assert!(matches!(
             bytes_from_hex("zz".to_string()),
-            SkyMaybe::Nothing
+            IpeMaybe::Nothing
         ));
     }
 
@@ -206,11 +206,11 @@ mod tests {
         // 0x9e 0xfe — high bytes that are not valid UTF-8.
         let b = bytes_from_hex("9efe".to_string());
         match b {
-            SkyMaybe::Just(v) => {
+            IpeMaybe::Just(v) => {
                 assert_eq!(v, vec![0x9e, 0xfe]);
                 assert_eq!(bytes_to_hex(v), "9efe");
             }
-            SkyMaybe::Nothing => panic!("expected Just"),
+            IpeMaybe::Nothing => panic!("expected Just"),
         }
     }
 
@@ -225,14 +225,14 @@ mod tests {
     #[test]
     fn from_base64_ascii_roundtrip() {
         let b = bytes_from_base64("SGkh".to_string());
-        assert!(matches!(b, SkyMaybe::Just(ref v) if *v == vec![0x48, 0x69, 0x21]));
+        assert!(matches!(b, IpeMaybe::Just(ref v) if *v == vec![0x48, 0x69, 0x21]));
     }
 
     #[test]
     fn from_base64_invalid_nothing() {
         assert!(matches!(
             bytes_from_base64("not valid base64!@#".to_string()),
-            SkyMaybe::Nothing
+            IpeMaybe::Nothing
         ));
     }
 
@@ -242,8 +242,8 @@ mod tests {
         let b64 = bytes_to_base64(orig.clone());
         assert_eq!(b64, "nv4=");
         match bytes_from_base64(b64) {
-            SkyMaybe::Just(v) => assert_eq!(v, orig),
-            SkyMaybe::Nothing => panic!("expected Just"),
+            IpeMaybe::Just(v) => assert_eq!(v, orig),
+            IpeMaybe::Nothing => panic!("expected Just"),
         }
     }
 
@@ -305,25 +305,25 @@ mod tests {
         assert_eq!(bytes_to_hex(ascii.clone()), "486921");
         assert_eq!(bytes_to_base64(ascii.clone()), "SGkh");
         assert_eq!(bytes_length(ascii.clone()), 3);
-        assert!(matches!(bytes_to_string(ascii), SkyMaybe::Just(ref s) if s == "Hi!"));
+        assert!(matches!(bytes_to_string(ascii), IpeMaybe::Just(ref s) if s == "Hi!"));
     }
 
     #[test]
     fn corpus_binary_surface() {
         let binary = match bytes_from_hex("9efe".to_string()) {
-            SkyMaybe::Just(v) => v,
-            SkyMaybe::Nothing => panic!("expected Just"),
+            IpeMaybe::Just(v) => v,
+            IpeMaybe::Nothing => panic!("expected Just"),
         };
         assert_eq!(bytes_to_hex(binary.clone()), "9efe");
         assert_eq!(bytes_to_base64(binary.clone()), "nv4=");
         assert_eq!(bytes_length(binary.clone()), 2);
-        assert!(matches!(bytes_to_string(binary.clone()), SkyMaybe::Nothing));
+        assert!(matches!(bytes_to_string(binary.clone()), IpeMaybe::Nothing));
 
         // round-trip binary through base64 back to hex
         let b64 = bytes_to_base64(binary.clone());
         match bytes_from_base64(b64) {
-            SkyMaybe::Just(v) => assert_eq!(bytes_to_hex(v), "9efe"),
-            SkyMaybe::Nothing => panic!("expected Just from base64 roundtrip"),
+            IpeMaybe::Just(v) => assert_eq!(bytes_to_hex(v), "9efe"),
+            IpeMaybe::Nothing => panic!("expected Just from base64 roundtrip"),
         }
     }
 }

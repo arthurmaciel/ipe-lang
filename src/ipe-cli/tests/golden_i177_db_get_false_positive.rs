@@ -1,10 +1,10 @@
 //! FALSE-POSITIVE guard — the structural IR-level detection.
 //!
-//! Deciding the `+ SkyRow` bound on a wildcard-`any` param by
+//! Deciding the `+ IpeRow` bound on a wildcard-`any` param by
 //! a TEXT scan of the emitted Rust body (`rendered_body.contains("db_get_")`)
 //! false-positives on text that is NOT a
-//! runtime row accessor, appending `+ SkyRow` — a reference to the
-//! `#[cfg(feature = "db")]` trait `ipe_runtime::db::SkyRow` — to a crate that
+//! runtime row accessor, appending `+ IpeRow` — a reference to the
+//! `#[cfg(feature = "db")]` trait `ipe_runtime::db::IpeRow` — to a crate that
 //! never imports `Std.Db`. Result: `skyc` exit 0, then `cargo` fails with
 //! `error[E0433]: could not find db in ipe_runtime`. A SEAL violation
 //! (skyc-0-then-cargo-fail).
@@ -44,8 +44,8 @@ fn entry_path(root: &Path, fixture: &str) -> PathBuf {
         .join("Main.sky")
 }
 
-/// skyc-0 ∧ NO spurious `SkyRow` bound — checked unconditionally (cheap, no
-/// `cargo`). A `SkyRow` reference in the emitted Rust of a DB-less crate is the
+/// skyc-0 ∧ NO spurious `IpeRow` bound — checked unconditionally (cheap, no
+/// `cargo`). A `IpeRow` reference in the emitted Rust of a DB-less crate is the
 /// E0433 SEAL violation this probe guards against.
 // The `expect` guards a test-support invariant: a build asserted successful
 // just above MUST have written `src/main.rs`; an unreadable file here means the
@@ -73,9 +73,9 @@ fn assert_skyc_accepts_without_sky_row(fixture: &str) {
         .expect("emitted main.rs must exist");
 
     assert!(
-        !emitted.contains("SkyRow"),
-        "the wildcard-`any` fn must NOT gain a `SkyRow` bound — its body makes no \
-         `Db.get*` kernel call, and the crate has no `db` feature, so a `SkyRow` \
+        !emitted.contains("IpeRow"),
+        "the wildcard-`any` fn must NOT gain a `IpeRow` bound — its body makes no \
+         `Db.get*` kernel call, and the crate has no `db` feature, so a `IpeRow` \
          reference is the E0433 SEAL violation #177 guards against; got main.rs:\n{emitted}"
     );
 }

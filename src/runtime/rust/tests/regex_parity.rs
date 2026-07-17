@@ -51,7 +51,7 @@ fn regex_match_golden() {
 
 // ── GOLDEN: Regex find ──────────────────────────────────────────────────────
 //
-// Go oracle: `Regex_find(pattern, s)` → SkyMaybe<String>
+// Go oracle: `Regex_find(pattern, s)` → IpeMaybe<String>
 // regexp.FindString — first leftmost match or Nothing.
 
 #[test]
@@ -59,29 +59,29 @@ fn regex_find_golden() {
     // Go: Regex_find(`\d+`, "a1b22c") = Just "1" (first digit run)
     assert_eq!(
         regex_find(r"\d+".to_string(), "a1b22c".to_string()),
-        SkyMaybe::Just("1".to_string()),
+        IpeMaybe::Just("1".to_string()),
         r"find \d+ in 'a1b22c' must return first match '1'"
     );
     // Go: Regex_find(`\d+`, "abc") = Nothing
     assert_eq!(
         regex_find(r"\d+".to_string(), "abc".to_string()),
-        SkyMaybe::Nothing,
+        IpeMaybe::Nothing,
         r"find \d+ in 'abc' must be Nothing"
     );
     // Go: Regex_find(`[a-z]+`, "123abc456") = Just "abc"
     assert_eq!(
         regex_find(r"[a-z]+".to_string(), "123abc456".to_string()),
-        SkyMaybe::Just("abc".to_string())
+        IpeMaybe::Just("abc".to_string())
     );
     // Go: Regex_find(`\d{3}`, "12 345 6789") = Just "345"
     assert_eq!(
         regex_find(r"\d{3}".to_string(), "12 345 6789".to_string()),
-        SkyMaybe::Just("345".to_string())
+        IpeMaybe::Just("345".to_string())
     );
     // Invalid pattern → Nothing
     assert_eq!(
         regex_find(r"[unclosed".to_string(), "x".to_string()),
-        SkyMaybe::Nothing
+        IpeMaybe::Nothing
     );
 }
 
@@ -241,7 +241,7 @@ fn regex_handles_empty_string_inputs() {
     assert!(!regex_match(r"\d+".to_string(), "".to_string()));
     assert_eq!(
         regex_find(r"\d+".to_string(), "".to_string()),
-        SkyMaybe::Nothing
+        IpeMaybe::Nothing
     );
     assert!(regex_find_all(r"\d+".to_string(), "".to_string()).is_empty());
     assert_eq!(

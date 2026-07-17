@@ -81,9 +81,9 @@ fn grid_module_resolves_and_emits_kernel() {
     );
 
     // The compiled `Std.Ui.Grid` module lowers to its OWN Rust file under
-    // `src/sky_mods/` once the per-Sky-module split
+    // `src/ipe_mods/` once the per-Sky-module split
     // fires — this program has two distinct homes (`Main` + `Std.Ui.Grid`).
-    // Scan the WHOLE emitted Sky-side tree (main.rs + sky_mods/*.rs) so the
+    // Scan the WHOLE emitted Sky-side tree (main.rs + ipe_mods/*.rs) so the
     // assertion holds wherever the split correctly placed the helper calls.
     let emitted = support::read_all_emitted_src(&emit);
 

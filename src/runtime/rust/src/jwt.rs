@@ -33,7 +33,7 @@
 //! recorded interim limitation — see `docs/architecture/divergence-policy.md`
 //! ("Sky.Core.Jwt API surface").
 
-use super::SkyResult;
+use super::IpeResult;
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
@@ -105,7 +105,7 @@ pub(crate) fn exp_is_zero(token: &str) -> bool {
 pub fn jwt_encode_hs256<E: From<String>>(
     secret: String,
     claims_json: String,
-) -> SkyResult<E, String> {
+) -> IpeResult<E, String> {
     // An HMAC key shorter than 32 bytes (256 bits) is below the RFC 7518 §3.2
     // floor for HS256 and yields a low-entropy / forgeable signing secret —
     // a 1-byte key mints a token anyone can re-sign. Reject it rather than emit
@@ -113,7 +113,7 @@ pub fn jwt_encode_hs256<E: From<String>>(
     // Std.Auth applies upstream, closing the gap for a direct misconfigured
     // Jwt.* caller that bypasses Std.Auth.
     if secret.len() < 32 {
-        return SkyResult::Err(
+        return IpeResult::Err(
             "jwt-encode: HS256 secret must be at least 32 bytes (RFC 7518 §3.2)"
                 .to_string()
                 .into(),
@@ -121,7 +121,7 @@ pub fn jwt_encode_hs256<E: From<String>>(
     }
     let payload = match payload_json(&claims_json) {
         Ok(p) => p,
-        Err(e) => return SkyResult::Err(format!("jwt-encode: {}", e).into()),
+        Err(e) => return IpeResult::Err(format!("jwt-encode: {}", e).into()),
     };
     let signing_input = format!(
         "{}.{}",
@@ -137,19 +137,19 @@ pub fn jwt_encode_hs256<E: From<String>>(
         Ok(b) => b,
         // Unreachable: crypto_hmac_sha256 always returns valid lowercase hex.
         // Route to Err rather than panic to keep the kernel total.
-        Err(e) => return SkyResult::Err(format!("jwt-encode: internal hmac decode: {}", e).into()),
+        Err(e) => return IpeResult::Err(format!("jwt-encode: internal hmac decode: {}", e).into()),
     };
     let sig = b64u(&mac_bytes);
-    SkyResult::Ok(format!("{}.{}", signing_input, sig))
+    IpeResult::Ok(format!("{}.{}", signing_input, sig))
 }
 
 /// Sky `Jwt_decodeHs256 : String -> String -> Result Error String`
-pub fn jwt_decode_hs256<E: From<String>>(secret: String, token: String) -> SkyResult<E, String> {
+pub fn jwt_decode_hs256<E: From<String>>(secret: String, token: String) -> IpeResult<E, String> {
     // Reject verification under a sub-32-byte HMAC key — see jwt_encode_hs256.
     // A token "verified" with a low-entropy key carries no real authenticity
     // guarantee; mirror the 32-byte floor in auth.rs / Std.Auth (RFC 7518 §3.2).
     if secret.len() < 32 {
-        return SkyResult::Err(
+        return IpeResult::Err(
             "jwt-decode: HS256 secret must be at least 32 bytes (RFC 7518 §3.2)"
                 .to_string()
                 .into(),
@@ -159,7 +159,7 @@ pub fn jwt_decode_hs256<E: From<String>>(secret: String, token: String) -> SkyRe
     // (set below) would hit on an `exp` of 0. See `exp_is_zero` — exp 0 is
     // always expired, so this matches Go's `now >= exp` rejection.
     if exp_is_zero(&token) {
-        return SkyResult::Err("jwt-decode: token has expired".to_string().into());
+        return IpeResult::Err("jwt-decode: token has expired".to_string().into());
     }
     let key = DecodingKey::from_secret(secret.as_bytes());
     let mut validation = Validation::new(Algorithm::HS256);
@@ -195,10 +195,10 @@ pub fn jwt_decode_hs256<E: From<String>>(secret: String, token: String) -> SkyRe
     validation.validate_aud = false;
     match decode::<JsonValue>(&token, &key, &validation) {
         Ok(data) => match serde_json::to_string(&data.claims) {
-            Ok(s) => SkyResult::Ok(s),
-            Err(e) => SkyResult::Err(format!("jwt-decode: re-encode claims: {}", e).into()),
+            Ok(s) => IpeResult::Ok(s),
+            Err(e) => IpeResult::Err(format!("jwt-decode: re-encode claims: {}", e).into()),
         },
-        Err(e) => SkyResult::Err(format!("jwt-decode: {}", e).into()),
+        Err(e) => IpeResult::Err(format!("jwt-decode: {}", e).into()),
     }
 }
 
@@ -208,10 +208,10 @@ pub fn jwt_decode_hs256<E: From<String>>(secret: String, token: String) -> SkyRe
 pub fn jwt_encode_rs256<E: From<String>>(
     key_pem: String,
     claims_json: String,
-) -> SkyResult<E, String> {
+) -> IpeResult<E, String> {
     let payload = match payload_json(&claims_json) {
         Ok(p) => p,
-        Err(e) => return SkyResult::Err(format!("jwt-encode-rs: {}", e).into()),
+        Err(e) => return IpeResult::Err(format!("jwt-encode-rs: {}", e).into()),
     };
     let signing_input = format!(
         "{}.{}",
@@ -225,29 +225,29 @@ pub fn jwt_encode_rs256<E: From<String>>(
     // Its Err message already suppresses key-structure detail (no key leak).
     let std_b64: String =
         match super::crypto::crypto_rsa_sha256_sign::<String>(key_pem, signing_input.clone()) {
-            SkyResult::Ok(s) => s,
+            IpeResult::Ok(s) => s,
             // Keep the message generic so no structural hint about the key leaks.
-            SkyResult::Err(_) => {
-                return SkyResult::Err("jwt-encode-rs: invalid RSA key".to_string().into());
+            IpeResult::Err(_) => {
+                return IpeResult::Err("jwt-encode-rs: invalid RSA key".to_string().into());
             }
         };
     let sig = standard_to_url(&std_b64);
-    SkyResult::Ok(format!("{}.{}", signing_input, sig))
+    IpeResult::Ok(format!("{}.{}", signing_input, sig))
 }
 
 /// Sky `Jwt_decodeRs256 : String -> String -> Result Error String`
-pub fn jwt_decode_rs256<E: From<String>>(key_pem: String, token: String) -> SkyResult<E, String> {
+pub fn jwt_decode_rs256<E: From<String>>(key_pem: String, token: String) -> IpeResult<E, String> {
     // Guard the u64 underflow that reject_tokens_expiring_in_less_than = 1
     // (set below) would hit on an `exp` of 0. See `exp_is_zero` — exp 0 is
     // always expired, so this matches Go's `now >= exp` rejection.
     if exp_is_zero(&token) {
-        return SkyResult::Err("jwt-decode-rs: token has expired".to_string().into());
+        return IpeResult::Err("jwt-decode-rs: token has expired".to_string().into());
     }
     let key = match DecodingKey::from_rsa_pem(key_pem.as_bytes()) {
         Ok(k) => k,
         // Suppress the parse-error detail to avoid leaking structural hints
         // about the key material (e.g. PEM framing, DER structure).
-        Err(_) => return SkyResult::Err("jwt-decode-rs: invalid RSA key".to_string().into()),
+        Err(_) => return IpeResult::Err("jwt-decode-rs: invalid RSA key".to_string().into()),
     };
     let mut validation = Validation::new(Algorithm::RS256);
     // Go's oracle rejects at `now >= exp` with zero clock skew (validateTime →
@@ -282,10 +282,10 @@ pub fn jwt_decode_rs256<E: From<String>>(key_pem: String, token: String) -> SkyR
     validation.validate_aud = false;
     match decode::<JsonValue>(&token, &key, &validation) {
         Ok(data) => match serde_json::to_string(&data.claims) {
-            Ok(s) => SkyResult::Ok(s),
-            Err(e) => SkyResult::Err(format!("jwt-decode-rs: re-encode: {}", e).into()),
+            Ok(s) => IpeResult::Ok(s),
+            Err(e) => IpeResult::Err(format!("jwt-decode-rs: re-encode: {}", e).into()),
         },
-        Err(e) => SkyResult::Err(format!("jwt-decode-rs: {}", e).into()),
+        Err(e) => IpeResult::Err(format!("jwt-decode-rs: {}", e).into()),
     }
 }
 
@@ -294,30 +294,30 @@ pub fn jwt_decode_rs256<E: From<String>>(key_pem: String, token: String) -> SkyR
 // The generic `jwt_encode_hs256<E: From<String>>` and friends cannot be
 // called directly from generated code where the `Err` arm may be discarded —
 // Rust cannot infer `E` in that context. These monomorphic aliases pin
-// `E = SkyError` and are what `naming::kernel_name()` maps the Jwt kernels to,
-// mirroring the `sky_aes_gcm_encrypt` pattern in `crypto.rs`.
+// `E = IpeError` and are what `naming::kernel_name()` maps the Jwt kernels to,
+// mirroring the `ipe_aes_gcm_encrypt` pattern in `crypto.rs`.
 //
 // SECURITY: only the error message crosses the `From<String>` boundary; no
 // key material is included in error text (see the suppressed RSA key detail
 // above). These wrappers add no new logging surface.
 
 /// Generated-code alias for `jwt_encode_hs256` with `E = String`.
-pub fn sky_jwt_encode_hs256(secret: String, claims_json: String) -> SkyResult<crate::error::SkyError, String> {
+pub fn ipe_jwt_encode_hs256(secret: String, claims_json: String) -> IpeResult<crate::error::IpeError, String> {
     jwt_encode_hs256(secret, claims_json)
 }
 
 /// Generated-code alias for `jwt_decode_hs256` with `E = String`.
-pub fn sky_jwt_decode_hs256(secret: String, token: String) -> SkyResult<crate::error::SkyError, String> {
+pub fn ipe_jwt_decode_hs256(secret: String, token: String) -> IpeResult<crate::error::IpeError, String> {
     jwt_decode_hs256(secret, token)
 }
 
 /// Generated-code alias for `jwt_encode_rs256` with `E = String`.
-pub fn sky_jwt_encode_rs256(key_pem: String, claims_json: String) -> SkyResult<crate::error::SkyError, String> {
+pub fn ipe_jwt_encode_rs256(key_pem: String, claims_json: String) -> IpeResult<crate::error::IpeError, String> {
     jwt_encode_rs256(key_pem, claims_json)
 }
 
 /// Generated-code alias for `jwt_decode_rs256` with `E = String`.
-pub fn sky_jwt_decode_rs256(key_pem: String, token: String) -> SkyResult<crate::error::SkyError, String> {
+pub fn ipe_jwt_decode_rs256(key_pem: String, token: String) -> IpeResult<crate::error::IpeError, String> {
     jwt_decode_rs256(key_pem, token)
 }
 
@@ -336,20 +336,20 @@ pub fn sky_jwt_decode_rs256(key_pem: String, token: String) -> SkyResult<crate::
 
 /// `Jwt.claims : Claims` — returns an empty JSON object to start the builder
 /// chain.  Backed as `serde_json::Value::Object` (IrType::Json).
-pub fn sky_jwt_claims() -> JsonValue {
+pub fn ipe_jwt_claims() -> JsonValue {
     JsonValue::Object(serde_json::Map::new())
 }
 
 /// `Jwt.hs256 : String -> Algorithm` — builds an HS256 algorithm descriptor.
-/// The algorithm is encoded as `"HS256:<secret>"` so `sky_jwt_encode` /
-/// `sky_jwt_decode` can parse out the algorithm and the key in one pass.
-pub fn sky_jwt_hs256(secret: String) -> String {
+/// The algorithm is encoded as `"HS256:<secret>"` so `ipe_jwt_encode` /
+/// `ipe_jwt_decode` can parse out the algorithm and the key in one pass.
+pub fn ipe_jwt_hs256(secret: String) -> String {
     format!("HS256:{}", secret)
 }
 
 /// `Jwt.rs256 : String -> Algorithm` — builds an RS256 algorithm descriptor.
 /// Encoded as `"RS256:<pem>"`.
-pub fn sky_jwt_rs256(key_pem: String) -> String {
+pub fn ipe_jwt_rs256(key_pem: String) -> String {
     format!("RS256:{}", key_pem)
 }
 
@@ -372,17 +372,17 @@ fn claims_set(claims: JsonValue, key: &str, value: JsonValue) -> JsonValue {
 }
 
 /// `Jwt.subject : String -> Claims -> Claims` — sets the `sub` claim.
-pub fn sky_jwt_subject(sub: String, claims: JsonValue) -> JsonValue {
+pub fn ipe_jwt_subject(sub: String, claims: JsonValue) -> JsonValue {
     claims_set(claims, "sub", JsonValue::String(sub))
 }
 
 /// `Jwt.issuer : String -> Claims -> Claims` — sets the `iss` claim.
-pub fn sky_jwt_issuer(iss: String, claims: JsonValue) -> JsonValue {
+pub fn ipe_jwt_issuer(iss: String, claims: JsonValue) -> JsonValue {
     claims_set(claims, "iss", JsonValue::String(iss))
 }
 
 /// `Jwt.audience : String -> Claims -> Claims` — sets the `aud` claim.
-pub fn sky_jwt_audience(aud: String, claims: JsonValue) -> JsonValue {
+pub fn ipe_jwt_audience(aud: String, claims: JsonValue) -> JsonValue {
     claims_set(claims, "aud", JsonValue::String(aud))
 }
 
@@ -391,22 +391,22 @@ pub fn sky_jwt_audience(aud: String, claims: JsonValue) -> JsonValue {
 /// milliseconds but the JWT spec and the Go oracle use Unix SECONDS.  The
 /// Sky stdlib's `Jwt.sky` passes the value straight through as a JSON number,
 /// so we mirror that — the caller is responsible for providing the right unit.
-pub fn sky_jwt_expires_at(exp: i64, claims: JsonValue) -> JsonValue {
+pub fn ipe_jwt_expires_at(exp: i64, claims: JsonValue) -> JsonValue {
     claims_set(claims, "exp", JsonValue::Number(serde_json::Number::from(exp)))
 }
 
 /// `Jwt.notBefore : Int -> Claims -> Claims` — sets the `nbf` claim.
-pub fn sky_jwt_not_before(nbf: i64, claims: JsonValue) -> JsonValue {
+pub fn ipe_jwt_not_before(nbf: i64, claims: JsonValue) -> JsonValue {
     claims_set(claims, "nbf", JsonValue::Number(serde_json::Number::from(nbf)))
 }
 
 /// `Jwt.issuedAt : Int -> Claims -> Claims` — sets the `iat` claim.
-pub fn sky_jwt_issued_at(iat: i64, claims: JsonValue) -> JsonValue {
+pub fn ipe_jwt_issued_at(iat: i64, claims: JsonValue) -> JsonValue {
     claims_set(claims, "iat", JsonValue::Number(serde_json::Number::from(iat)))
 }
 
 /// `Jwt.jwtId : String -> Claims -> Claims` — sets the `jti` claim.
-pub fn sky_jwt_jwt_id(jti: String, claims: JsonValue) -> JsonValue {
+pub fn ipe_jwt_jwt_id(jti: String, claims: JsonValue) -> JsonValue {
     claims_set(claims, "jti", JsonValue::String(jti))
 }
 
@@ -416,7 +416,7 @@ pub fn sky_jwt_jwt_id(jti: String, claims: JsonValue) -> JsonValue {
 /// `serde_json::Value` at runtime, exactly like `Claims`), so it is inserted
 /// directly — a string / int / bool / nested object all round-trip with the
 /// correct token bytes.
-pub fn sky_jwt_with_claim(key: String, value: JsonValue, claims: JsonValue) -> JsonValue {
+pub fn ipe_jwt_with_claim(key: String, value: JsonValue, claims: JsonValue) -> JsonValue {
     claims_set(claims, &key, value)
 }
 
@@ -424,10 +424,10 @@ pub fn sky_jwt_with_claim(key: String, value: JsonValue, claims: JsonValue) -> J
 /// using the algorithm encoded in `algorithm_descriptor`.
 /// Delegates to `jwt_encode_hs256` / `jwt_encode_rs256` after serialising the
 /// claims through the Go-parity JSON encoder (sorted keys).
-pub fn sky_jwt_encode(
+pub fn ipe_jwt_encode(
     algorithm_descriptor: String,
     claims: JsonValue,
-) -> SkyResult<crate::error::SkyError, String> {
+) -> IpeResult<crate::error::IpeError, String> {
     // Serialise the claims through the Go-parity encoder so the payload bytes
     // match those produced by `Jwt.encode` in the Go backend.
     let claims_json = super::json_enc_encode(0, claims);
@@ -436,7 +436,7 @@ pub fn sky_jwt_encode(
     } else if let Some(pem) = algorithm_descriptor.strip_prefix("RS256:") {
         jwt_encode_rs256(pem.to_string(), claims_json)
     } else {
-        SkyResult::Err(
+        IpeResult::Err(
             format!(
                 "jwt-encode: unknown algorithm descriptor (expected HS256:… or RS256:…): {}",
                 &algorithm_descriptor[..algorithm_descriptor.len().min(20)]
@@ -455,22 +455,22 @@ pub fn sky_jwt_encode(
 ///   absent claim              → accept (optional)
 /// Returns the raw payload JSON string (base64url-decoded middle segment).
 /// No wall-clock access; deterministic on `now`.
-pub fn sky_jwt_decode(
+pub fn ipe_jwt_decode(
     algorithm_descriptor: String,
     now: i64,
     token: String,
-) -> SkyResult<crate::error::SkyError, String> {
+) -> IpeResult<crate::error::IpeError, String> {
     // 1. Split token into three segments.
     let parts: Vec<&str> = token.splitn(3, '.').collect();
     if parts.len() != 3 {
-        return SkyResult::Err("jwt-decode: malformed token (expected 3 segments)".into());
+        return IpeResult::Err("jwt-decode: malformed token (expected 3 segments)".into());
     }
 
     // 2. Verify the signature only — disable jsonwebtoken's built-in time checks.
     //    We apply reference-exact time validation manually below.
     if let Some(secret) = algorithm_descriptor.strip_prefix("HS256:") {
         if secret.len() < 32 {
-            return SkyResult::Err(
+            return IpeResult::Err(
                 "jwt-decode: HS256 secret must be at least 32 bytes (RFC 7518 §3.2)".into(),
             );
         }
@@ -481,12 +481,12 @@ pub fn sky_jwt_decode(
         val.required_spec_claims = HashSet::new();
         val.validate_aud = false;
         if decode::<JsonValue>(&token, &key, &val).is_err() {
-            return SkyResult::Err("jwt-decode: invalid signature".into());
+            return IpeResult::Err("jwt-decode: invalid signature".into());
         }
     } else if let Some(pem) = algorithm_descriptor.strip_prefix("RS256:") {
         let key = match DecodingKey::from_rsa_pem(pem.as_bytes()) {
             Ok(k) => k,
-            Err(_) => return SkyResult::Err("jwt-decode: invalid RS256 public key".into()),
+            Err(_) => return IpeResult::Err("jwt-decode: invalid RS256 public key".into()),
         };
         let mut val = Validation::new(Algorithm::RS256);
         val.validate_exp = false;
@@ -494,10 +494,10 @@ pub fn sky_jwt_decode(
         val.required_spec_claims = HashSet::new();
         val.validate_aud = false;
         if decode::<JsonValue>(&token, &key, &val).is_err() {
-            return SkyResult::Err("jwt-decode: invalid signature".into());
+            return IpeResult::Err("jwt-decode: invalid signature".into());
         }
     } else {
-        return SkyResult::Err(
+        return IpeResult::Err(
             format!(
                 "jwt-decode: unknown algorithm descriptor (expected HS256:… or RS256:…): {}",
                 &algorithm_descriptor[..algorithm_descriptor.len().min(20)]
@@ -510,15 +510,15 @@ pub fn sky_jwt_decode(
     // `parts.len() != 3` already returned above, but never index even when
     // provably safe — `.get` keeps this fail-closed instead of panicking.
     let Some(payload_segment) = parts.get(1) else {
-        return SkyResult::Err("jwt-decode: malformed token (expected 3 segments)".into());
+        return IpeResult::Err("jwt-decode: malformed token (expected 3 segments)".into());
     };
     let payload_bytes = match URL_SAFE_NO_PAD.decode(payload_segment.as_bytes()) {
         Ok(b) => b,
-        Err(_) => return SkyResult::Err("jwt-decode: payload base64url decode failed".into()),
+        Err(_) => return IpeResult::Err("jwt-decode: payload base64url decode failed".into()),
     };
     let payload_json = match String::from_utf8(payload_bytes) {
         Ok(s) => s,
-        Err(_) => return SkyResult::Err("jwt-decode: payload is not valid UTF-8".into()),
+        Err(_) => return IpeResult::Err("jwt-decode: payload is not valid UTF-8".into()),
     };
 
     // 4. Manual time validation matching reference semantics exactly.
@@ -528,17 +528,17 @@ pub fn sky_jwt_decode(
     if let Some(exp) = claims_val.get("exp").and_then(|v| v.as_i64()) {
         // pastClaim: now >= exp  → expired
         if now >= exp {
-            return SkyResult::Err("Jwt.decode: token has expired".into());
+            return IpeResult::Err("Jwt.decode: token has expired".into());
         }
     }
     if let Some(nbf) = claims_val.get("nbf").and_then(|v| v.as_i64()) {
         // futureClaim: now < nbf  → not yet valid
         if now < nbf {
-            return SkyResult::Err("Jwt.decode: token is not yet valid".into());
+            return IpeResult::Err("Jwt.decode: token is not yet valid".into());
         }
     }
 
-    SkyResult::Ok(payload_json)
+    IpeResult::Ok(payload_json)
 }
 
 #[cfg(test)]
@@ -556,13 +556,13 @@ mod tests {
     fn hs256_token_is_byte_identical_to_go() {
         let secret = "test-secret-key-0123456789abcdef".to_string();
         let claims = r#"{"sub":"alice","exp":9999999999}"#.to_string();
-        let token: SkyResult<String, String> = jwt_encode_hs256(secret, claims);
+        let token: IpeResult<String, String> = jwt_encode_hs256(secret, claims);
         match token {
-            SkyResult::Ok(t) => assert_eq!(
+            IpeResult::Ok(t) => assert_eq!(
                 t, GO_HS256_TOKEN,
                 "HS256 token must match the Go backend byte-for-byte"
             ),
-            SkyResult::Err(e) => panic!("encode: {}", e),
+            IpeResult::Err(e) => panic!("encode: {}", e),
         }
     }
 
@@ -585,13 +585,13 @@ mod tests {
     #[test]
     fn rs256_token_is_byte_identical_to_go() {
         let claims = r#"{"sub":"bob","exp":9999999999}"#.to_string();
-        let token: SkyResult<String, String> = jwt_encode_rs256(RS256_PRIV_PEM.to_string(), claims);
+        let token: IpeResult<String, String> = jwt_encode_rs256(RS256_PRIV_PEM.to_string(), claims);
         match token {
-            SkyResult::Ok(t) => assert_eq!(
+            IpeResult::Ok(t) => assert_eq!(
                 t, GO_RS256_TOKEN,
                 "RS256 token must match the Go backend byte-for-byte"
             ),
-            SkyResult::Err(e) => panic!("encode-rs: {}", e),
+            IpeResult::Err(e) => panic!("encode-rs: {}", e),
         }
     }
 
@@ -600,15 +600,15 @@ mod tests {
         // >= 32 bytes to clear the RFC 7518 §3.2 HS256 secret floor.
         let secret = "roundtrip-secret-0123456789abcdef".to_string();
         let claims = r#"{"sub":"alice","exp":9999999999}"#.to_string();
-        let token: SkyResult<String, String> = jwt_encode_hs256(secret.clone(), claims.clone());
+        let token: IpeResult<String, String> = jwt_encode_hs256(secret.clone(), claims.clone());
         let token = match token {
-            SkyResult::Ok(t) => t,
-            SkyResult::Err(e) => panic!("encode: {}", e),
+            IpeResult::Ok(t) => t,
+            IpeResult::Err(e) => panic!("encode: {}", e),
         };
-        let decoded: SkyResult<String, String> = jwt_decode_hs256(secret, token);
+        let decoded: IpeResult<String, String> = jwt_decode_hs256(secret, token);
         let decoded = match decoded {
-            SkyResult::Ok(s) => s,
-            SkyResult::Err(e) => panic!("decode: {}", e),
+            IpeResult::Ok(s) => s,
+            IpeResult::Err(e) => panic!("decode: {}", e),
         };
         assert!(decoded.contains("alice"));
     }
@@ -616,17 +616,17 @@ mod tests {
     #[test]
     fn test_hs256_wrong_secret_fails() {
         // Both secrets >= 32 bytes (RFC 7518 §3.2 floor); they differ so verify fails.
-        let token: SkyResult<String, String> = jwt_encode_hs256(
+        let token: IpeResult<String, String> = jwt_encode_hs256(
             "right-secret-0123456789abcdef0123".to_string(),
             r#"{"sub":"x","exp":9999999999}"#.to_string(),
         );
         let token = match token {
-            SkyResult::Ok(t) => t,
-            SkyResult::Err(e) => panic!("encode: {}", e),
+            IpeResult::Ok(t) => t,
+            IpeResult::Err(e) => panic!("encode: {}", e),
         };
-        let bad: SkyResult<String, String> =
+        let bad: IpeResult<String, String> =
             jwt_decode_hs256("wrong-secret-0123456789abcdef0123".to_string(), token);
-        assert!(matches!(bad, SkyResult::Err(_)));
+        assert!(matches!(bad, IpeResult::Err(_)));
     }
 
     /// Seconds since the Unix epoch, for building boundary-exercising claims.
@@ -645,14 +645,14 @@ mod tests {
         // uses a far-future exp and never crosses the boundary.
         let secret = "expiry-secret-0123456789abcdef0123".to_string();
         let claims = format!(r#"{{"sub":"x","exp":{}}}"#, now_unix() - 30);
-        let token: SkyResult<String, String> = jwt_encode_hs256(secret.clone(), claims);
+        let token: IpeResult<String, String> = jwt_encode_hs256(secret.clone(), claims);
         let token = match token {
-            SkyResult::Ok(t) => t,
-            SkyResult::Err(e) => panic!("encode: {}", e),
+            IpeResult::Ok(t) => t,
+            IpeResult::Err(e) => panic!("encode: {}", e),
         };
-        let decoded: SkyResult<String, String> = jwt_decode_hs256(secret, token);
+        let decoded: IpeResult<String, String> = jwt_decode_hs256(secret, token);
         assert!(
-            matches!(decoded, SkyResult::Err(_)),
+            matches!(decoded, IpeResult::Err(_)),
             "an HS256 token expired 30s ago must be rejected (no clock-skew leeway)"
         );
     }
@@ -661,16 +661,16 @@ mod tests {
     fn test_rs256_expired_token_rejected() {
         // exp 30s in the PAST — RS256 counterpart of the HS256 leeway guard.
         let claims = format!(r#"{{"sub":"bob","exp":{}}}"#, now_unix() - 30);
-        let token: SkyResult<String, String> = jwt_encode_rs256(RS256_PRIV_PEM.to_string(), claims);
+        let token: IpeResult<String, String> = jwt_encode_rs256(RS256_PRIV_PEM.to_string(), claims);
         let token = match token {
-            SkyResult::Ok(t) => t,
-            SkyResult::Err(e) => panic!("encode-rs: {}", e),
+            IpeResult::Ok(t) => t,
+            IpeResult::Err(e) => panic!("encode-rs: {}", e),
         };
         // Verify with the matching SPKI public key (the decode path takes a
         // public PEM). A successful signature check then trips the expiry guard.
-        let decoded: SkyResult<String, String> = jwt_decode_rs256(RS256_PUB_PEM.to_string(), token);
+        let decoded: IpeResult<String, String> = jwt_decode_rs256(RS256_PUB_PEM.to_string(), token);
         assert!(
-            matches!(decoded, SkyResult::Err(_)),
+            matches!(decoded, IpeResult::Err(_)),
             "an RS256 token expired 30s ago must be rejected (no clock-skew leeway)"
         );
     }
@@ -678,11 +678,11 @@ mod tests {
     #[test]
     fn test_hs256_empty_secret_rejected() {
         // Empty HMAC secret → forgeable token; both encode and verify must refuse.
-        let enc: SkyResult<String, String> =
+        let enc: IpeResult<String, String> =
             jwt_encode_hs256(String::new(), r#"{"sub":"x","exp":9999999999}"#.to_string());
-        assert!(matches!(enc, SkyResult::Err(_)));
-        let dec: SkyResult<String, String> = jwt_decode_hs256(String::new(), "a.b.c".to_string());
-        assert!(matches!(dec, SkyResult::Err(_)));
+        assert!(matches!(enc, IpeResult::Err(_)));
+        let dec: IpeResult<String, String> = jwt_decode_hs256(String::new(), "a.b.c".to_string());
+        assert!(matches!(dec, IpeResult::Err(_)));
     }
 
     /// Parity edge: `now == exp` must REJECT, matching Go's `now >= exp`
@@ -696,14 +696,14 @@ mod tests {
         let secret = "exp-edge-secret-0123456789abcdef0".to_string();
         let exp = now_unix(); // now == exp
         let claims = format!(r#"{{"sub":"x","exp":{}}}"#, exp);
-        let token: SkyResult<String, String> = jwt_encode_hs256(secret.clone(), claims);
+        let token: IpeResult<String, String> = jwt_encode_hs256(secret.clone(), claims);
         let token = match token {
-            SkyResult::Ok(t) => t,
-            SkyResult::Err(e) => panic!("encode: {}", e),
+            IpeResult::Ok(t) => t,
+            IpeResult::Err(e) => panic!("encode: {}", e),
         };
-        let decoded: SkyResult<String, String> = jwt_decode_hs256(secret, token);
+        let decoded: IpeResult<String, String> = jwt_decode_hs256(secret, token);
         assert!(
-            matches!(decoded, SkyResult::Err(_)),
+            matches!(decoded, IpeResult::Err(_)),
             "now == exp must be rejected to match Go's `now >= exp`"
         );
     }
@@ -724,12 +724,12 @@ mod tests {
             let exp = now_unix() + 1; // now == exp - 1
             let claims = format!(r#"{{"sub":"x","exp":{}}}"#, exp);
             let token = match jwt_encode_hs256::<String>(secret.clone(), claims) {
-                SkyResult::Ok(t) => t,
-                SkyResult::Err(e) => panic!("encode: {}", e),
+                IpeResult::Ok(t) => t,
+                IpeResult::Err(e) => panic!("encode: {}", e),
             };
             if matches!(
                 jwt_decode_hs256::<String>(secret.clone(), token),
-                SkyResult::Ok(_)
+                IpeResult::Ok(_)
             ) {
                 accepted = true;
                 break;
@@ -750,14 +750,14 @@ mod tests {
         let secret = "nbf-edge-secret-0123456789abcdef0".to_string();
         let nbf = now_unix(); // now == nbf
         let claims = format!(r#"{{"sub":"x","nbf":{}}}"#, nbf);
-        let token: SkyResult<String, String> = jwt_encode_hs256(secret.clone(), claims);
+        let token: IpeResult<String, String> = jwt_encode_hs256(secret.clone(), claims);
         let token = match token {
-            SkyResult::Ok(t) => t,
-            SkyResult::Err(e) => panic!("encode: {}", e),
+            IpeResult::Ok(t) => t,
+            IpeResult::Err(e) => panic!("encode: {}", e),
         };
-        let decoded: SkyResult<String, String> = jwt_decode_hs256(secret, token);
+        let decoded: IpeResult<String, String> = jwt_decode_hs256(secret, token);
         assert!(
-            matches!(decoded, SkyResult::Ok(_)),
+            matches!(decoded, IpeResult::Ok(_)),
             "now == nbf must be accepted to match Go's `now >= nbf`"
         );
     }
@@ -771,17 +771,17 @@ mod tests {
         let secret = "no-exp-secret-0123456789abcdef0123".to_string();
         // claims with only `sub` — no `exp`, no `nbf`.
         let claims = r#"{"sub":"alice"}"#.to_string();
-        let token: SkyResult<String, String> = jwt_encode_hs256(secret.clone(), claims);
+        let token: IpeResult<String, String> = jwt_encode_hs256(secret.clone(), claims);
         let token = match token {
-            SkyResult::Ok(t) => t,
-            SkyResult::Err(e) => panic!("encode: {}", e),
+            IpeResult::Ok(t) => t,
+            IpeResult::Err(e) => panic!("encode: {}", e),
         };
-        let decoded: SkyResult<String, String> = jwt_decode_hs256(secret, token);
+        let decoded: IpeResult<String, String> = jwt_decode_hs256(secret, token);
         assert!(
-            matches!(decoded, SkyResult::Ok(_)),
+            matches!(decoded, IpeResult::Ok(_)),
             "an HS256 token with no exp claim must be accepted (non-expiring, matching Go)"
         );
-        if let SkyResult::Ok(s) = decoded {
+        if let IpeResult::Ok(s) = decoded {
             assert!(s.contains("alice"), "decoded claims must include sub:alice");
         }
     }
@@ -794,14 +794,14 @@ mod tests {
         let secret = "nbf-secret-0123456789abcdef0123456".to_string();
         // nbf 300s in the future, no exp (non-expiring).
         let claims = format!(r#"{{"sub":"x","nbf":{}}}"#, now_unix() + 300);
-        let token: SkyResult<String, String> = jwt_encode_hs256(secret.clone(), claims);
+        let token: IpeResult<String, String> = jwt_encode_hs256(secret.clone(), claims);
         let token = match token {
-            SkyResult::Ok(t) => t,
-            SkyResult::Err(e) => panic!("encode: {}", e),
+            IpeResult::Ok(t) => t,
+            IpeResult::Err(e) => panic!("encode: {}", e),
         };
-        let decoded: SkyResult<String, String> = jwt_decode_hs256(secret, token);
+        let decoded: IpeResult<String, String> = jwt_decode_hs256(secret, token);
         assert!(
-            matches!(decoded, SkyResult::Err(_)),
+            matches!(decoded, IpeResult::Err(_)),
             "an HS256 token with nbf 300s in the future must be rejected (no leeway, matching Go)"
         );
     }
@@ -810,17 +810,17 @@ mod tests {
     #[test]
     fn test_rs256_no_exp_accepted() {
         let claims = r#"{"sub":"bob"}"#.to_string();
-        let token: SkyResult<String, String> = jwt_encode_rs256(RS256_PRIV_PEM.to_string(), claims);
+        let token: IpeResult<String, String> = jwt_encode_rs256(RS256_PRIV_PEM.to_string(), claims);
         let token = match token {
-            SkyResult::Ok(t) => t,
-            SkyResult::Err(e) => panic!("encode-rs: {}", e),
+            IpeResult::Ok(t) => t,
+            IpeResult::Err(e) => panic!("encode-rs: {}", e),
         };
-        let decoded: SkyResult<String, String> = jwt_decode_rs256(RS256_PUB_PEM.to_string(), token);
+        let decoded: IpeResult<String, String> = jwt_decode_rs256(RS256_PUB_PEM.to_string(), token);
         assert!(
-            matches!(decoded, SkyResult::Ok(_)),
+            matches!(decoded, IpeResult::Ok(_)),
             "an RS256 token with no exp claim must be accepted (non-expiring, matching Go)"
         );
-        if let SkyResult::Ok(s) = decoded {
+        if let IpeResult::Ok(s) = decoded {
             assert!(s.contains("bob"), "decoded claims must include sub:bob");
         }
     }
@@ -829,19 +829,19 @@ mod tests {
     #[test]
     fn test_rs256_future_nbf_rejected() {
         let claims = format!(r#"{{"sub":"bob","nbf":{}}}"#, now_unix() + 300);
-        let token: SkyResult<String, String> = jwt_encode_rs256(RS256_PRIV_PEM.to_string(), claims);
+        let token: IpeResult<String, String> = jwt_encode_rs256(RS256_PRIV_PEM.to_string(), claims);
         let token = match token {
-            SkyResult::Ok(t) => t,
-            SkyResult::Err(e) => panic!("encode-rs: {}", e),
+            IpeResult::Ok(t) => t,
+            IpeResult::Err(e) => panic!("encode-rs: {}", e),
         };
-        let decoded: SkyResult<String, String> = jwt_decode_rs256(RS256_PUB_PEM.to_string(), token);
+        let decoded: IpeResult<String, String> = jwt_decode_rs256(RS256_PUB_PEM.to_string(), token);
         assert!(
-            matches!(decoded, SkyResult::Err(_)),
+            matches!(decoded, IpeResult::Err(_)),
             "an RS256 token with nbf 300s in the future must be rejected (no leeway, matching Go)"
         );
     }
 
-    // ── sky_jwt_decode (3-arg builder-API) unit tests ─────────────────────────
+    // ── ipe_jwt_decode (3-arg builder-API) unit tests ─────────────────────────
 
     fn make_token_with_time(exp: Option<i64>, nbf: Option<i64>) -> String {
         let secret = "test-secret-key-0123456789abcdef".to_string();
@@ -854,90 +854,90 @@ mod tests {
         }
         let claims = format!("{{{}}}", parts.join(","));
         match jwt_encode_hs256::<String>(secret, claims) {
-            SkyResult::Ok(t) => t,
-            SkyResult::Err(e) => panic!("encode: {}", e),
+            IpeResult::Ok(t) => t,
+            IpeResult::Err(e) => panic!("encode: {}", e),
         }
     }
 
     /// now=500, exp=1000, nbf=100 → Ok (valid window).
     #[test]
-    fn sky_jwt_decode_valid_window() {
+    fn ipe_jwt_decode_valid_window() {
         let tok = make_token_with_time(Some(1000), Some(100));
         let desc = "HS256:test-secret-key-0123456789abcdef".to_string();
         assert!(
-            matches!(sky_jwt_decode(desc, 500, tok), SkyResult::Ok(_)),
+            matches!(ipe_jwt_decode(desc, 500, tok), IpeResult::Ok(_)),
             "now=500 inside [nbf=100, exp=1000) must succeed"
         );
     }
 
     /// now=1000 >= exp=1000 → Err (expired; boundary: >= not >).
     #[test]
-    fn sky_jwt_decode_expired_at_boundary() {
+    fn ipe_jwt_decode_expired_at_boundary() {
         let tok = make_token_with_time(Some(1000), None);
         let desc = "HS256:test-secret-key-0123456789abcdef".to_string();
         assert!(
-            matches!(sky_jwt_decode(desc, 1000, tok), SkyResult::Err(_)),
+            matches!(ipe_jwt_decode(desc, 1000, tok), IpeResult::Err(_)),
             "now==exp must be rejected (now >= exp semantics)"
         );
     }
 
     /// now=99 < nbf=100 → Err (not yet valid).
     #[test]
-    fn sky_jwt_decode_nbf_future() {
+    fn ipe_jwt_decode_nbf_future() {
         let tok = make_token_with_time(None, Some(100));
         let desc = "HS256:test-secret-key-0123456789abcdef".to_string();
         assert!(
-            matches!(sky_jwt_decode(desc, 99, tok), SkyResult::Err(_)),
+            matches!(ipe_jwt_decode(desc, 99, tok), IpeResult::Err(_)),
             "now=99 < nbf=100 must be rejected"
         );
     }
 
     /// now=100 == nbf=100 → Ok (boundary: now < nbf is false → accept).
     #[test]
-    fn sky_jwt_decode_nbf_at_boundary() {
+    fn ipe_jwt_decode_nbf_at_boundary() {
         let tok = make_token_with_time(Some(1000), Some(100));
         let desc = "HS256:test-secret-key-0123456789abcdef".to_string();
         assert!(
-            matches!(sky_jwt_decode(desc, 100, tok), SkyResult::Ok(_)),
+            matches!(ipe_jwt_decode(desc, 100, tok), IpeResult::Ok(_)),
             "now==nbf must be accepted (now < nbf is false)"
         );
     }
 
     /// Token with no exp/nbf → Ok for any now.
     #[test]
-    fn sky_jwt_decode_no_time_claims() {
+    fn ipe_jwt_decode_no_time_claims() {
         let tok = make_token_with_time(None, None);
         let desc = "HS256:test-secret-key-0123456789abcdef".to_string();
         assert!(
-            matches!(sky_jwt_decode(desc, 9999999999, tok), SkyResult::Ok(_)),
+            matches!(ipe_jwt_decode(desc, 9999999999, tok), IpeResult::Ok(_)),
             "token without exp/nbf must be accepted regardless of now"
         );
     }
 
     /// Wrong key → Err (invalid signature, constant-time path).
     #[test]
-    fn sky_jwt_decode_wrong_key() {
+    fn ipe_jwt_decode_wrong_key() {
         let tok = make_token_with_time(Some(9999999999), None);
         let desc = "HS256:wrong-secret-key-0123456789abcde".to_string();
         assert!(
-            matches!(sky_jwt_decode(desc, 500, tok), SkyResult::Err(_)),
+            matches!(ipe_jwt_decode(desc, 500, tok), IpeResult::Err(_)),
             "wrong key must be rejected"
         );
     }
 
     /// Return value is the payload JSON string (verified base64url-decode).
     #[test]
-    fn sky_jwt_decode_returns_payload_json() {
+    fn ipe_jwt_decode_returns_payload_json() {
         let tok = make_token_with_time(Some(9999999999), None);
         let desc = "HS256:test-secret-key-0123456789abcdef".to_string();
-        match sky_jwt_decode(desc, 500, tok) {
-            SkyResult::Ok(payload) => {
+        match ipe_jwt_decode(desc, 500, tok) {
+            IpeResult::Ok(payload) => {
                 assert!(
                     payload.contains("\"sub\"") || payload.contains("\"exp\""),
                     "payload must be the decoded claims JSON: {payload}"
                 );
             }
-            SkyResult::Err(e) => panic!("unexpected err: {e}"),
+            IpeResult::Err(e) => panic!("unexpected err: {e}"),
         }
     }
 }

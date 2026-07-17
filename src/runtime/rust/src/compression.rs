@@ -77,7 +77,7 @@ fn zstd_compress_bytes(data: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 /// Compression.gzip : Bytes -> Task Error Bytes
-pub fn compression_gzip<E: From<String> + Send + 'static>(data: Vec<u8>) -> SkyTask<E, Vec<u8>> {
+pub fn compression_gzip<E: From<String> + Send + 'static>(data: Vec<u8>) -> IpeTask<E, Vec<u8>> {
     Box::pin(async move {
         // gzip is CPU-bound; offload to the blocking pool so it can't
         // starve the tokio worker thread polling this future (same rationale
@@ -87,21 +87,21 @@ pub fn compression_gzip<E: From<String> + Send + 'static>(data: Vec<u8>) -> SkyT
         // `tokio::task::spawn_blocking` unconditionally — no `cfg` needed.
         match tokio::task::spawn_blocking(move || gzip_bytes(&data)).await {
             Ok(Ok(b)) => ok_res(b),
-            Ok(Err(e)) => SkyResult::Err(format!("Compression.gzip: {}", e).into()),
+            Ok(Err(e)) => IpeResult::Err(format!("Compression.gzip: {}", e).into()),
             Err(_) => {
-                SkyResult::Err("Compression.gzip: compression task panicked".to_string().into())
+                IpeResult::Err("Compression.gzip: compression task panicked".to_string().into())
             }
         }
     })
 }
 
 /// Compression.gunzip : Bytes -> Task Error Bytes
-pub fn compression_gunzip<E: From<String> + Send + 'static>(data: Vec<u8>) -> SkyTask<E, Vec<u8>> {
+pub fn compression_gunzip<E: From<String> + Send + 'static>(data: Vec<u8>) -> IpeTask<E, Vec<u8>> {
     Box::pin(async move {
         match tokio::task::spawn_blocking(move || gunzip_bytes(&data)).await {
             Ok(Ok(b)) => ok_res(b),
-            Ok(Err(e)) => SkyResult::Err(format!("Compression.gunzip: {}", e).into()),
-            Err(_) => SkyResult::Err(
+            Ok(Err(e)) => IpeResult::Err(format!("Compression.gunzip: {}", e).into()),
+            Err(_) => IpeResult::Err(
                 "Compression.gunzip: decompression task panicked"
                     .to_string()
                     .into(),
@@ -113,12 +113,12 @@ pub fn compression_gunzip<E: From<String> + Send + 'static>(data: Vec<u8>) -> Sk
 /// Compression.zstdCompress : Bytes -> Task Error Bytes
 pub fn compression_zstd_compress<E: From<String> + Send + 'static>(
     data: Vec<u8>,
-) -> SkyTask<E, Vec<u8>> {
+) -> IpeTask<E, Vec<u8>> {
     Box::pin(async move {
         match tokio::task::spawn_blocking(move || zstd_compress_bytes(&data)).await {
             Ok(Ok(b)) => ok_res(b),
-            Ok(Err(e)) => SkyResult::Err(format!("Compression.zstdCompress: {}", e).into()),
-            Err(_) => SkyResult::Err(
+            Ok(Err(e)) => IpeResult::Err(format!("Compression.zstdCompress: {}", e).into()),
+            Err(_) => IpeResult::Err(
                 "Compression.zstdCompress: compression task panicked"
                     .to_string()
                     .into(),
@@ -130,12 +130,12 @@ pub fn compression_zstd_compress<E: From<String> + Send + 'static>(
 /// Compression.zstdDecompress : Bytes -> Task Error Bytes
 pub fn compression_zstd_decompress<E: From<String> + Send + 'static>(
     data: Vec<u8>,
-) -> SkyTask<E, Vec<u8>> {
+) -> IpeTask<E, Vec<u8>> {
     Box::pin(async move {
         match tokio::task::spawn_blocking(move || zstd_decompress_capped(&data)).await {
             Ok(Ok(b)) => ok_res(b),
-            Ok(Err(e)) => SkyResult::Err(format!("Compression.zstdDecompress: {}", e).into()),
-            Err(_) => SkyResult::Err(
+            Ok(Err(e)) => IpeResult::Err(format!("Compression.zstdDecompress: {}", e).into()),
+            Err(_) => IpeResult::Err(
                 "Compression.zstdDecompress: decompression task panicked"
                     .to_string()
                     .into(),
@@ -169,13 +169,13 @@ mod tests {
     #[test]
     fn gzip_roundtrip() {
         let orig = b"hello, sky - gzip round-trip with some length to compress".to_vec();
-        let z: SkyResult<String, Vec<u8>> = task_run(compression_gzip(orig.clone()));
+        let z: IpeResult<String, Vec<u8>> = task_run(compression_gzip(orig.clone()));
         let comp = match z {
-            SkyResult::Ok(c) => c,
+            IpeResult::Ok(c) => c,
             _ => panic!("gzip failed"),
         };
-        let back: SkyResult<String, Vec<u8>> = task_run(compression_gunzip(comp));
-        assert!(matches!(back, SkyResult::Ok(ref b) if *b == orig));
+        let back: IpeResult<String, Vec<u8>> = task_run(compression_gunzip(comp));
+        assert!(matches!(back, IpeResult::Ok(ref b) if *b == orig));
     }
 
     #[test]
@@ -183,44 +183,44 @@ mod tests {
         // High bytes (> 127) that are not valid UTF-8 must round-trip without
         // truncation — the old Latin-1 bridge would silently corrupt these.
         let orig: Vec<u8> = (0u8..=255u8).collect();
-        let z: SkyResult<String, Vec<u8>> = task_run(compression_gzip(orig.clone()));
+        let z: IpeResult<String, Vec<u8>> = task_run(compression_gzip(orig.clone()));
         let comp = match z {
-            SkyResult::Ok(c) => c,
+            IpeResult::Ok(c) => c,
             _ => panic!("gzip binary failed"),
         };
-        let back: SkyResult<String, Vec<u8>> = task_run(compression_gunzip(comp));
-        assert!(matches!(back, SkyResult::Ok(ref b) if *b == orig));
+        let back: IpeResult<String, Vec<u8>> = task_run(compression_gunzip(comp));
+        assert!(matches!(back, IpeResult::Ok(ref b) if *b == orig));
     }
 
     #[test]
     fn zstd_roundtrip() {
         let orig = b"zstd payload zstd payload zstd payload".to_vec();
-        let z: SkyResult<String, Vec<u8>> = task_run(compression_zstd_compress(orig.clone()));
+        let z: IpeResult<String, Vec<u8>> = task_run(compression_zstd_compress(orig.clone()));
         let comp = match z {
-            SkyResult::Ok(c) => c,
+            IpeResult::Ok(c) => c,
             _ => panic!("zstd failed"),
         };
-        let back: SkyResult<String, Vec<u8>> = task_run(compression_zstd_decompress(comp));
-        assert!(matches!(back, SkyResult::Ok(ref b) if *b == orig));
+        let back: IpeResult<String, Vec<u8>> = task_run(compression_zstd_decompress(comp));
+        assert!(matches!(back, IpeResult::Ok(ref b) if *b == orig));
     }
 
     #[test]
     fn zstd_roundtrip_binary() {
         let orig: Vec<u8> = (0u8..=255u8).collect();
-        let z: SkyResult<String, Vec<u8>> = task_run(compression_zstd_compress(orig.clone()));
+        let z: IpeResult<String, Vec<u8>> = task_run(compression_zstd_compress(orig.clone()));
         let comp = match z {
-            SkyResult::Ok(c) => c,
+            IpeResult::Ok(c) => c,
             _ => panic!("zstd binary failed"),
         };
-        let back: SkyResult<String, Vec<u8>> = task_run(compression_zstd_decompress(comp));
-        assert!(matches!(back, SkyResult::Ok(ref b) if *b == orig));
+        let back: IpeResult<String, Vec<u8>> = task_run(compression_zstd_decompress(comp));
+        assert!(matches!(back, IpeResult::Ok(ref b) if *b == orig));
     }
 
     #[test]
     fn gunzip_rejects_garbage() {
-        let bad: SkyResult<String, Vec<u8>> =
+        let bad: IpeResult<String, Vec<u8>> =
             task_run(compression_gunzip(b"not a gzip stream".to_vec()));
-        assert!(matches!(bad, SkyResult::Err(_)));
+        assert!(matches!(bad, IpeResult::Err(_)));
     }
 
     /// Verify that gunzip rejects a payload that would expand beyond the cap.
@@ -230,9 +230,9 @@ mod tests {
     fn gunzip_rejects_decompression_bomb() {
         // Build a gzip of 34 bytes (> 16-byte cap we will set).
         let plain = b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"; // 34 bytes
-        let compressed: SkyResult<String, Vec<u8>> = task_run(compression_gzip(plain.to_vec()));
+        let compressed: IpeResult<String, Vec<u8>> = task_run(compression_gzip(plain.to_vec()));
         let comp = match compressed {
-            SkyResult::Ok(c) => c,
+            IpeResult::Ok(c) => c,
             _ => panic!("gzip failed"),
         };
 
@@ -265,10 +265,10 @@ mod tests {
     #[test]
     fn zstd_rejects_decompression_bomb() {
         let plain = b"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"; // 34 bytes
-        let compressed: SkyResult<String, Vec<u8>> =
+        let compressed: IpeResult<String, Vec<u8>> =
             task_run(compression_zstd_compress(plain.to_vec()));
         let comp = match compressed {
-            SkyResult::Ok(c) => c,
+            IpeResult::Ok(c) => c,
             _ => panic!("zstd compress failed"),
         };
 
@@ -323,8 +323,8 @@ mod tests {
                     tokio::task::yield_now().await;
                 }
             });
-            let fut: SkyTask<String, Vec<u8>> = compression_zstd_compress(payload);
-            let _res: SkyResult<String, Vec<u8>> = fut.await;
+            let fut: IpeTask<String, Vec<u8>> = compression_zstd_compress(payload);
+            let _res: IpeResult<String, Vec<u8>> = fut.await;
             ticker.abort();
             counter.load(std::sync::atomic::Ordering::Relaxed)
         });
@@ -357,8 +357,8 @@ mod tests {
                     tokio::task::yield_now().await;
                 }
             });
-            let fut: SkyTask<String, Vec<u8>> = compression_gzip(payload);
-            let _res: SkyResult<String, Vec<u8>> = fut.await;
+            let fut: IpeTask<String, Vec<u8>> = compression_gzip(payload);
+            let _res: IpeResult<String, Vec<u8>> = fut.await;
             ticker.abort();
             counter.load(std::sync::atomic::Ordering::Relaxed)
         });

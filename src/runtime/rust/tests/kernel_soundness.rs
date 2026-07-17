@@ -107,7 +107,7 @@ fn seeded_int_hi_le_lo_returns_lo() {
 
 #[test]
 fn seeded_choice_empty_is_nothing_not_panic() {
-    let (m, _): (SkyMaybe<i64>, i64) = ipe_runtime_rust::random::random_seeded_choice(42, vec![]);
+    let (m, _): (IpeMaybe<i64>, i64) = ipe_runtime_rust::random::random_seeded_choice(42, vec![]);
     assert!(m.is_nothing());
 }
 
@@ -141,7 +141,7 @@ proptest! {
 fn decimal_div_by_zero_is_err() {
     let a = ipe_runtime_rust::decimal::decimal_from_int(10);
     let zero = ipe_runtime_rust::decimal::decimal_from_int(0);
-    let r = ipe_runtime_rust::decimal::decimal_div::<SkyError>(a, zero);
+    let r = ipe_runtime_rust::decimal::decimal_div::<IpeError>(a, zero);
     assert!(r.is_err());
 }
 
@@ -149,7 +149,7 @@ fn decimal_div_by_zero_is_err() {
 fn decimal_mod_by_zero_is_err() {
     let a = ipe_runtime_rust::decimal::decimal_from_int(10);
     let zero = ipe_runtime_rust::decimal::decimal_from_int(0);
-    let r = ipe_runtime_rust::decimal::decimal_mod::<SkyError>(a, zero);
+    let r = ipe_runtime_rust::decimal::decimal_mod::<IpeError>(a, zero);
     assert!(r.is_err());
 }
 
@@ -157,7 +157,7 @@ fn decimal_mod_by_zero_is_err() {
 fn decimal_div_normal_is_ok() {
     let a = ipe_runtime_rust::decimal::decimal_from_int(10);
     let b = ipe_runtime_rust::decimal::decimal_from_int(4);
-    let r = ipe_runtime_rust::decimal::decimal_div::<SkyError>(a, b);
+    let r = ipe_runtime_rust::decimal::decimal_div::<IpeError>(a, b);
     assert!(r.is_ok());
     let q = r.with_default(ipe_runtime_rust::decimal::decimal_from_int(0));
     assert_eq!(ipe_runtime_rust::decimal::decimal_to_string(q), "2.5");

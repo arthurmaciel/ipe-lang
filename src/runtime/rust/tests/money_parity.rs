@@ -14,9 +14,9 @@ use ipe_runtime_rust::*;
 // ── decimal helper ─────────────────────────────────────────────────────────
 
 fn d(s: &str) -> ipe_runtime_rust::decimal::Decimal {
-    match decimal_from_string::<SkyError>(s.to_string()) {
-        SkyResult::Ok(v) => v,
-        SkyResult::Err(e) => panic!("bad decimal literal {s:?}: {e}"),
+    match decimal_from_string::<IpeError>(s.to_string()) {
+        IpeResult::Ok(v) => v,
+        IpeResult::Err(e) => panic!("bad decimal literal {s:?}: {e}"),
     }
 }
 
@@ -213,10 +213,10 @@ fn rate_test_lock() -> std::sync::MutexGuard<'static, ()> {
 #[test]
 fn fx_rate_round_trip_matches_go() {
     let _g = rate_test_lock();
-    let _: SkyResult<SkyError, ()> = money_clear_rates();
+    let _: IpeResult<IpeError, ()> = money_clear_rates();
 
     // setRate: USD→EUR = 0.92
-    let set: SkyResult<SkyError, ()> =
+    let set: IpeResult<IpeError, ()> =
         money_set_rate("USD".to_string(), "EUR".to_string(), d("0.92"));
     assert!(set.is_ok(), "setRate must succeed for a positive rate");
 
@@ -227,66 +227,66 @@ fn fx_rate_round_trip_matches_go() {
     assert!(!money_has_rate("USD".to_string(), "GBP".to_string()));
 
     // getRate: USD→EUR = 0.92
-    let got: SkyResult<SkyError, ipe_runtime_rust::decimal::Decimal> =
+    let got: IpeResult<IpeError, ipe_runtime_rust::decimal::Decimal> =
         money_get_rate("USD".to_string(), "EUR".to_string());
     assert!(got.is_ok());
-    if let SkyResult::Ok(v) = got {
+    if let IpeResult::Ok(v) = got {
         assert_eq!(decimal_to_string(v), "0.92");
     }
 
     // Same-currency always returns 1 (Go: `if from == to { return 1, true }`)
-    let same: SkyResult<SkyError, ipe_runtime_rust::decimal::Decimal> =
+    let same: IpeResult<IpeError, ipe_runtime_rust::decimal::Decimal> =
         money_get_rate("USD".to_string(), "USD".to_string());
     assert!(same.is_ok());
-    if let SkyResult::Ok(v) = same {
+    if let IpeResult::Ok(v) = same {
         assert_eq!(decimal_to_string(v), "1");
     }
 
     // Unregistered pair → Err
-    let missing: SkyResult<SkyError, ipe_runtime_rust::decimal::Decimal> =
+    let missing: IpeResult<IpeError, ipe_runtime_rust::decimal::Decimal> =
         money_get_rate("USD".to_string(), "GBP".to_string());
     assert!(missing.is_err(), "getRate for unregistered pair must Err");
 
-    let _: SkyResult<SkyError, ()> = money_clear_rates();
+    let _: IpeResult<IpeError, ()> = money_clear_rates();
 }
 
 #[test]
 fn fx_auto_inverse_rate_capped_to_16_dp_matches_go() {
     let _g = rate_test_lock();
-    let _: SkyResult<SkyError, ()> = money_clear_rates();
+    let _: IpeResult<IpeError, ()> = money_clear_rates();
 
     // setRate USD→EUR = 3 ⇒ auto-inverse EUR→USD = 1/3. Go derives the inverse
     // with shopspring's `Div` (DivisionPrecision = 16, half-away-from-zero), so
     // getRate of the inverse pair is sixteen 3s — Sky-Rust caps identically.
-    let set: SkyResult<SkyError, ()> = money_set_rate("USD".to_string(), "EUR".to_string(), d("3"));
+    let set: IpeResult<IpeError, ()> = money_set_rate("USD".to_string(), "EUR".to_string(), d("3"));
     assert!(set.is_ok(), "setRate must succeed for a positive rate");
 
-    let fwd: SkyResult<SkyError, ipe_runtime_rust::decimal::Decimal> =
+    let fwd: IpeResult<IpeError, ipe_runtime_rust::decimal::Decimal> =
         money_get_rate("USD".to_string(), "EUR".to_string());
     assert!(fwd.is_ok());
-    if let SkyResult::Ok(v) = fwd {
+    if let IpeResult::Ok(v) = fwd {
         assert_eq!(decimal_to_string(v), "3");
     }
 
-    let inv: SkyResult<SkyError, ipe_runtime_rust::decimal::Decimal> =
+    let inv: IpeResult<IpeError, ipe_runtime_rust::decimal::Decimal> =
         money_get_rate("EUR".to_string(), "USD".to_string());
     assert!(inv.is_ok());
-    if let SkyResult::Ok(v) = inv {
+    if let IpeResult::Ok(v) = inv {
         assert_eq!(decimal_to_string(v), "0.3333333333333333");
     }
 
-    let _: SkyResult<SkyError, ()> = money_clear_rates();
+    let _: IpeResult<IpeError, ()> = money_clear_rates();
 }
 
 #[test]
 fn set_rate_zero_and_negative_rejected_matches_go() {
     let _g = rate_test_lock();
-    let _: SkyResult<SkyError, ()> = money_clear_rates();
+    let _: IpeResult<IpeError, ()> = money_clear_rates();
     // Go oracle: "rate must be positive" → Err on zero or negative
-    let r: SkyResult<SkyError, ()> = money_set_rate("USD".to_string(), "EUR".to_string(), d("0"));
+    let r: IpeResult<IpeError, ()> = money_set_rate("USD".to_string(), "EUR".to_string(), d("0"));
     assert!(r.is_err(), "setRate(0) must fail");
-    let r2: SkyResult<SkyError, ()> =
+    let r2: IpeResult<IpeError, ()> =
         money_set_rate("USD".to_string(), "EUR".to_string(), d("-0.5"));
     assert!(r2.is_err(), "setRate(-0.5) must fail");
-    let _: SkyResult<SkyError, ()> = money_clear_rates();
+    let _: IpeResult<IpeError, ()> = money_clear_rates();
 }

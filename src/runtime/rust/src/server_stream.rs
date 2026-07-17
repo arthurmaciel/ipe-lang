@@ -41,7 +41,7 @@ pub enum StreamWriter {
 }
 
 /// Handler with its Sky error type E erased: the effect IS the emits, the
-/// SkyResult is discarded (parity with the Go dispatcher's `_ = task.await`).
+/// IpeResult is discarded (parity with the Go dispatcher's `_ = task.await`).
 type ErasedStreamHandler =
     Arc<dyn Fn(StreamWriter) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
@@ -94,10 +94,10 @@ const STREAM_CHAN_BUFFER: usize = 16;
 /// because the HM type scheme uses the `StreamWriter` opaque type for
 /// `Stream.emit` / `Stream.finish` / `Stream.withContentType`.  The user
 /// closure receives a `StreamWriter` and passes it directly to those kernels.
-pub fn server_stream_stream<E, H>(content_type: String, handler: H) -> SkyTask<E, ServerResponse>
+pub fn server_stream_stream<E, H>(content_type: String, handler: H) -> IpeTask<E, ServerResponse>
 where
     E: Send + 'static,
-    H: Fn(StreamWriter) -> SkyTask<E, ()> + Send + Sync + 'static,
+    H: Fn(StreamWriter) -> IpeTask<E, ()> + Send + Sync + 'static,
 {
     // Erase E: the registry can't name the project's error type. The handler's
     // returned task is driven to completion; its result is dropped.
@@ -118,7 +118,7 @@ where
         .unwrap_or_else(|e| e.into_inner())
         .insert(token, erased);
     Box::pin(async move {
-        SkyResult::Ok(ServerResponse {
+        IpeResult::Ok(ServerResponse {
             status: 200,
             body: format!("{}{}:{}", SENTINEL_PREFIX, sentinel_nonce(), token),
             headers: HashMap::new(),
@@ -134,7 +134,7 @@ where
 pub fn server_stream_emit<E: From<String> + Send + 'static>(
     chunk: String,
     writer: StreamWriter,
-) -> SkyTask<E, ()> {
+) -> IpeTask<E, ()> {
     let StreamWriter::StreamWriter(id) = writer;
     Box::pin(async move {
         let sender = stream_senders()
@@ -144,14 +144,14 @@ pub fn server_stream_emit<E: From<String> + Send + 'static>(
             .cloned();
         match sender {
             Some(tx) => match tx.send(chunk).await {
-                Ok(()) => SkyResult::Ok(()),
+                Ok(()) => IpeResult::Ok(()),
                 // Receiver dropped — client disconnected. Surface as an error so
                 // a relay's forEachChunk fail-fast stops pulling the upstream.
                 Err(_) => {
-                    SkyResult::Err("server.stream emit: client disconnected".to_string().into())
+                    IpeResult::Err("server.stream emit: client disconnected".to_string().into())
                 }
             },
-            None => SkyResult::Ok(()),
+            None => IpeResult::Ok(()),
         }
     })
 }
@@ -161,14 +161,14 @@ pub fn server_stream_emit<E: From<String> + Send + 'static>(
 /// return; explicit when the handler wants to release the connection early.
 pub fn server_stream_finish<E: From<String> + Send + 'static>(
     writer: StreamWriter,
-) -> SkyTask<E, ()> {
+) -> IpeTask<E, ()> {
     let StreamWriter::StreamWriter(id) = writer;
     Box::pin(async move {
         stream_senders()
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&id);
-        SkyResult::Ok(())
+        IpeResult::Ok(())
     })
 }
 
@@ -179,8 +179,8 @@ pub fn server_stream_finish<E: From<String> + Send + 'static>(
 pub fn server_stream_with_content_type<E: From<String> + Send + 'static>(
     _ct: String,
     _writer: StreamWriter,
-) -> SkyTask<E, ()> {
-    Box::pin(async move { SkyResult::Ok(()) })
+) -> IpeTask<E, ()> {
+    Box::pin(async move { IpeResult::Ok(()) })
 }
 
 /// Called from server.rs `to_axum_response`. If `r.body` carries the streaming

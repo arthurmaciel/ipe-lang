@@ -4,7 +4,7 @@
 //!
 //! Choosing the smart-pointer constructor by testing the RENDERED type string
 //! with `typed.starts_with("Arc<")` is unsound: `render_type` emits a
-//! `ServerHandler<E>` slot as the type-ALIAS name `"ServerHandler<SkyError>"`,
+//! `ServerHandler<E>` slot as the type-ALIAS name `"ServerHandler<IpeError>"`,
 //! NOT the expanded `"Arc<dyn Fn…>"` — so the string test misclassifies every
 //! inline `Server.post path (\req -> …)` handler lambda as `Box`, emitting
 //! `Box::new(move |req: ServerRequest| …)` into an `Arc<dyn Fn>` field. `skyc`
@@ -94,7 +94,7 @@ fn ws_onerror_lines(src: &str) -> String {
         .join("\n")
 }
 
-/// The WS `onError` callback — `Fn(WsHandle, Error) -> SkyTask<()>` — fills an
+/// The WS `onError` callback — `Fn(WsHandle, Error) -> IpeTask<()>` — fills an
 /// `Arc<dyn Fn(WsHandle, E)>` setter slot, so it must box with `Arc::new`. Its
 /// second param is the error type (NOT `String` like `onMessage`), the shape
 /// that `wants_arc_ctor` / `render_type` originally omitted → generic

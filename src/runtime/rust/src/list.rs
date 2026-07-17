@@ -1,31 +1,31 @@
 //! Sky.Core.List kernel — the single home for the List runtime surface.
 
-use super::SkyMaybe;
+use super::IpeMaybe;
 
 /// `Sky.Core.List.length` — element count (kernel-routed call sites; the pure-Sky
-/// `sky_core_list_length` is the recursive stdlib form).
+/// `ipe_core_list_length` is the recursive stdlib form).
 pub fn list_length<T>(xs: Vec<T>) -> i64 {
     xs.len() as i64
 }
 
 /// `Sky.Core.List.head : List a -> Maybe a` — the first element, or `Nothing`
 /// on the empty list. Total (no indexing panic).
-pub fn list_head<T>(xs: Vec<T>) -> SkyMaybe<T> {
+pub fn list_head<T>(xs: Vec<T>) -> IpeMaybe<T> {
     match xs.into_iter().next() {
-        Some(x) => SkyMaybe::Just(x),
-        None => SkyMaybe::Nothing,
+        Some(x) => IpeMaybe::Just(x),
+        None => IpeMaybe::Nothing,
     }
 }
 
 /// `Sky.Core.List.tail : List a -> Maybe (List a)` — everything after the first
 /// element, or `Nothing` on the empty list. Total (no indexing panic); mirrors
 /// the pure-Sky `tail` (`[] -> Nothing`, `(_ :: rest) -> Just rest`).
-pub fn list_tail<T>(xs: Vec<T>) -> SkyMaybe<Vec<T>> {
+pub fn list_tail<T>(xs: Vec<T>) -> IpeMaybe<Vec<T>> {
     if xs.is_empty() {
-        SkyMaybe::Nothing
+        IpeMaybe::Nothing
     } else {
         // Drop the head; the remaining elements move into the tail vector.
-        SkyMaybe::Just(xs.into_iter().skip(1).collect())
+        IpeMaybe::Just(xs.into_iter().skip(1).collect())
     }
 }
 
@@ -80,11 +80,11 @@ pub fn list_is_empty<T>(xs: Vec<T>) -> bool {
 
 /// Sky `filterMap : (a -> Maybe b) -> List a -> List b`.
 /// Applies `f` to each element; keeps only `Just` results.
-pub fn list_filter_map<A, B>(f: impl Fn(A) -> SkyMaybe<B>, xs: Vec<A>) -> Vec<B> {
+pub fn list_filter_map<A, B>(f: impl Fn(A) -> IpeMaybe<B>, xs: Vec<A>) -> Vec<B> {
     xs.into_iter()
         .filter_map(|x| match f(x) {
-            SkyMaybe::Just(v) => Some(v),
-            SkyMaybe::Nothing => None,
+            IpeMaybe::Just(v) => Some(v),
+            IpeMaybe::Nothing => None,
         })
         .collect()
 }
@@ -93,8 +93,8 @@ pub fn list_filter_map<A, B>(f: impl Fn(A) -> SkyMaybe<B>, xs: Vec<A>) -> Vec<B>
 
 /// Sky `::` cons — emitted by codegen for the cons operator.
 // No `T: Clone` bound — `once(x).chain(xs)` only MOVES, so cons works for
-// move-only element types too (e.g. `Cmd.batch [SkyCmd, …]`; SkyCmd isn't Clone).
-pub fn sky_list_cons<T>(x: T, xs: Vec<T>) -> Vec<T> {
+// move-only element types too (e.g. `Cmd.batch [IpeCmd, …]`; IpeCmd isn't Clone).
+pub fn ipe_list_cons<T>(x: T, xs: Vec<T>) -> Vec<T> {
     std::iter::once(x).chain(xs).collect()
 }
 
@@ -121,7 +121,7 @@ pub fn list_foldl<T0, T1>(f: impl Fn(T0, T1) -> T1, init: T1, list: Vec<T0>) -> 
 pub fn list_foldr<T0, T1>(f: impl Fn(T0, T1) -> T1, init: T1, list: Vec<T0>) -> T1 {
     let mut acc = init;
     // `into_iter().rev()` yields OWNED items, so no clone (and no `T0: Clone`
-    // bound) is needed — matching `sky_list_cons`'s move-only-friendly shape.
+    // bound) is needed — matching `ipe_list_cons`'s move-only-friendly shape.
     for item in list.into_iter().rev() {
         acc = f(item, acc);
     }
@@ -184,13 +184,13 @@ pub fn list_all<T0>(f: impl Fn(T0) -> bool, list: Vec<T0>) -> bool {
 /// Iterative (short-circuits); total. `T0: Clone` is the same element-clone
 /// bound as `list_filter`; the predicate itself carries no `Clone` bound
 /// (see the note above `list_foldl`).
-pub fn list_find<T0: Clone>(f: impl Fn(T0) -> bool, list: Vec<T0>) -> SkyMaybe<T0> {
+pub fn list_find<T0: Clone>(f: impl Fn(T0) -> bool, list: Vec<T0>) -> IpeMaybe<T0> {
     for x in list {
         if f(x.clone()) {
-            return SkyMaybe::Just(x);
+            return IpeMaybe::Just(x);
         }
     }
-    SkyMaybe::Nothing
+    IpeMaybe::Nothing
 }
 
 // ── Sorting (mirrors Go's List_sort / List_sortBy; sortWith added for Rust) ──
@@ -308,7 +308,7 @@ mod tests {
         assert!(!list_all(above, vec![1, 2, 3, 4, 5]));
 
         let above: Box<dyn Fn(i64) -> bool + Send> = Box::new(move |x| x > threshold);
-        assert_eq!(list_find(above, vec![1, 2, 3, 4, 5]), SkyMaybe::Just(4));
+        assert_eq!(list_find(above, vec![1, 2, 3, 4, 5]), IpeMaybe::Just(4));
 
         let max_fn: Box<dyn Fn(i64, i64) -> i64 + Send> =
             Box::new(|v, acc| if v > acc { v } else { acc });
@@ -377,7 +377,7 @@ mod tests {
     fn is_empty_and_cons_and_zip_edges() {
         assert!(list_is_empty(Vec::<i64>::new()));
         assert!(!list_is_empty(vec![1]));
-        assert_eq!(sky_list_cons(0, vec![1, 2]), vec![0, 1, 2]);
+        assert_eq!(ipe_list_cons(0, vec![1, 2]), vec![0, 1, 2]);
         // zip truncates to the shorter operand (Elm/Go parity).
         assert_eq!(list_zip(vec![1, 2, 3], vec![4, 5]), vec![(1, 4), (2, 5)]);
     }
@@ -388,9 +388,9 @@ mod tests {
         let result = list_filter_map(
             |x| {
                 if x % 2 == 0 {
-                    SkyMaybe::Just(x * 2)
+                    IpeMaybe::Just(x * 2)
                 } else {
-                    SkyMaybe::Nothing
+                    IpeMaybe::Nothing
                 }
             },
             xs,
@@ -401,21 +401,21 @@ mod tests {
     #[test]
     fn test_filter_map_all_nothing() {
         let xs: Vec<i64> = vec![1, 2, 3];
-        let result = list_filter_map(|_: i64| SkyMaybe::<i64>::Nothing, xs);
+        let result = list_filter_map(|_: i64| IpeMaybe::<i64>::Nothing, xs);
         assert!(result.is_empty());
     }
 
     #[test]
     fn test_filter_map_all_just() {
         let xs: Vec<i64> = vec![1, 2, 3];
-        let result = list_filter_map(|x| SkyMaybe::Just(x + 10), xs);
+        let result = list_filter_map(|x| IpeMaybe::Just(x + 10), xs);
         assert_eq!(result, vec![11i64, 12, 13]);
     }
 
     #[test]
     fn test_filter_map_empty() {
         let xs: Vec<i64> = vec![];
-        let result = list_filter_map(SkyMaybe::Just, xs);
+        let result = list_filter_map(IpeMaybe::Just, xs);
         assert!(result.is_empty());
     }
 

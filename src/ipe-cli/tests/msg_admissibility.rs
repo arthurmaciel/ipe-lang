@@ -20,10 +20,10 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 /// Compile `source` through `skyc::build`, returning the pipeline result.
 fn compile(test_name: &str, source: &str) -> Result<Result<(), skyc::CliError>, BoxError> {
-    let sky_dir = std::env::temp_dir().join(format!("msg_adm_{test_name}_sky"));
-    let _ = std::fs::remove_dir_all(&sky_dir);
-    std::fs::create_dir_all(&sky_dir)?;
-    let entry = sky_dir.join("Main.sky");
+    let ipe_dir = std::env::temp_dir().join(format!("msg_adm_{test_name}_sky"));
+    let _ = std::fs::remove_dir_all(&ipe_dir);
+    std::fs::create_dir_all(&ipe_dir)?;
+    let entry = ipe_dir.join("Main.sky");
     std::fs::write(&entry, source)?;
 
     let out_dir = std::env::temp_dir().join(format!("msg_adm_{test_name}_out"));

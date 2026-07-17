@@ -171,19 +171,19 @@ impl<T> Drop for AliasableBox<T> {
 }
 
 // Field order is LOAD-BEARING (invariant 2): `dep` before `owner`.
-struct SkyFluentSel {
+struct IpeFluentSel {
     dep: Sel<'static>,       // field 0 → dropped FIRST (releases borrow)
     owner: AliasableBox<Db>, // field 1 → dropped SECOND (frees pointee)
 }
 
-struct SkyFluentSelected {
+struct IpeFluentSelected {
     dep: Selected<'static>,
     owner: AliasableBox<Db>,
 }
 
-impl SkyFluentSel {
+impl IpeFluentSel {
     /// The ONE lifetime-launder unsafe site (composed with the aliasable owner).
-    fn new(db: Db) -> SkyFluentSel {
+    fn new(db: Db) -> IpeFluentSel {
         let owner = AliasableBox::new(db);
         // SAFETY (invariants 1-5): `dep` borrows `*owner` via the aliasable raw
         // pointer (moving `owner` performs no unique retag → the borrow survives
@@ -193,23 +193,23 @@ impl SkyFluentSel {
         // `*owner` (every step re-bundles; the terminal returns owned).
         let dep: Sel<'static> =
             unsafe { core::mem::transmute::<Sel<'_>, Sel<'static>>(owner.borrow().fluent()) };
-        SkyFluentSel { dep, owner }
+        IpeFluentSel { dep, owner }
     }
 }
 
 /// CHAIN step (SAFE — no new unsafe): move the aliasable owner along, transform dep.
-fn limit_step(b: SkyFluentSel, n: usize) -> SkyFluentSel {
-    let SkyFluentSel { dep, owner } = b; // aliasable move = no unique retag
-    SkyFluentSel {
+fn limit_step(b: IpeFluentSel, n: usize) -> IpeFluentSel {
+    let IpeFluentSel { dep, owner } = b; // aliasable move = no unique retag
+    IpeFluentSel {
         dep: dep.limit(n),
         owner,
     }
 }
 
 /// CHAIN step that changes the builder type (SAFE): carry `owner` to the next bundle.
-fn rows_step(b: SkyFluentSel) -> SkyFluentSelected {
-    let SkyFluentSel { dep, owner } = b;
-    SkyFluentSelected {
+fn rows_step(b: IpeFluentSel) -> IpeFluentSelected {
+    let IpeFluentSel { dep, owner } = b;
+    IpeFluentSelected {
         dep: dep.rows(),
         owner,
     }
@@ -225,8 +225,8 @@ fn rows_step(b: SkyFluentSel) -> SkyFluentSelected {
 /// async terminal this is automatic: the owner lives alongside the spawned future
 /// and is dropped when the future completes — outside this synchronous builder
 /// fn's frame.) Returning owner is a move, not a free → no protected write.
-fn run_terminal(b: SkyFluentSelected) -> (Vec<String>, AliasableBox<Db>) {
-    let SkyFluentSelected { dep, owner } = b;
+fn run_terminal(b: IpeFluentSelected) -> (Vec<String>, AliasableBox<Db>) {
+    let IpeFluentSelected { dep, owner } = b;
     let out = dep.run(); // shared READ of *owner — allowed under the protector
     (out, owner) // hand owner back; caller frees it out-of-frame
 }
@@ -239,7 +239,7 @@ mod tests {
     /// is UB-free under MIRI (transmute + drop order + chained moves all sound).
     #[test]
     fn bundle_chain_is_ub_free() {
-        let b = SkyFluentSel::new(Db::new());
+        let b = IpeFluentSel::new(Db::new());
         let b = limit_step(b, 2);
         let b = rows_step(b);
         let (out, owner) = run_terminal(b);
@@ -256,7 +256,7 @@ mod tests {
     /// protector. (Generated terminal/discard code must obey the same rule.)
     #[test]
     fn bundle_dropped_without_terminal_is_ub_free() {
-        let b = SkyFluentSel::new(Db::new());
+        let b = IpeFluentSel::new(Db::new());
         let _b = limit_step(b, 1);
         // `_b` falls out of scope HERE → drop glue, no by-value-arg protector.
     }
@@ -267,7 +267,7 @@ mod tests {
     fn many_bundles_no_cross_aliasing() {
         let mut outs = Vec::new();
         for i in 0..8usize {
-            let b = SkyFluentSel::new(Db::new());
+            let b = IpeFluentSel::new(Db::new());
             let b = limit_step(b, i % 4);
             let b = rows_step(b);
             let (rows, owner) = run_terminal(b);

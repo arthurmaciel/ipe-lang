@@ -100,7 +100,7 @@ impl<'a> RustBackend<'a> {
         project::emit_spine(&ctx, program)
     }
 
-    /// Render one `SkyModule(home)` file's Rust text for `program` (see
+    /// Render one `IpeModule(home)` file's Rust text for `program` (see
     /// [`project::emit_module_file`]). ADDITIVE entry point: NOT
     /// on the public emission path. Builds the [`EmitCtx`] the same way
     /// [`Backend::emit`] does, then delegates.
@@ -114,7 +114,7 @@ impl<'a> RustBackend<'a> {
         project::emit_module_file(
             &ctx,
             program,
-            &rust_file::RustFileId::SkyModule(home.clone()),
+            &rust_file::RustFileId::IpeModule(home.clone()),
         )
     }
 
@@ -146,7 +146,7 @@ impl<'a> RustBackend<'a> {
 
 /// The DISTINCT Sky-module `home`s the backend would emit an OWN Rust file for.
 ///
-/// Every [`rust_file::RustFileId::SkyModule`] bucket [`rust_file::
+/// Every [`rust_file::RustFileId::IpeModule`] bucket [`rust_file::
 /// partition_items`] produces, `Spine` excluded (`Spine` is not a per-module
 /// home — it is the always-present entry file). This is the `home`-set
 /// quantifier `ipe_db::program_rust_file_ids` wraps in a
@@ -163,7 +163,7 @@ pub fn rust_file_homes(program: &Program, interner: &Interner) -> BTreeSet<ModPa
         .buckets
         .into_keys()
         .filter_map(|id| match id {
-            rust_file::RustFileId::SkyModule(home) => Some(home),
+            rust_file::RustFileId::IpeModule(home) => Some(home),
             rust_file::RustFileId::Spine => None,
         })
         .collect()
@@ -185,7 +185,7 @@ impl Backend for RustBackend<'_> {
 type VariantList = Vec<(Symbol, Vec<IrType>)>;
 
 /// A canonical record field list: `(Sky field name, field type)` pairs sorted by
-/// field name. The order is the struct's declaration / `SkyStringify` read order.
+/// field name. The order is the struct's declaration / `IpeStringify` read order.
 type RecordFields = Vec<(String, IrType)>;
 
 /// Every DISTINCT field-type shape observed for one field-name set, in
@@ -200,7 +200,7 @@ type CanonicalShape = (RecordFields, Vec<Symbol>);
 /// A synthesised Rust struct for one distinct CLOSED record shape.
 ///
 /// `fields` is the field set in canonical (field-name ascending) order — the
-/// order the struct is declared in and the order its `SkyStringify` body reads.
+/// order the struct is declared in and the order its `IpeStringify` body reads.
 pub(crate) struct RecordStruct {
     /// The deduplicated, collision-free Rust struct name (e.g. `RecXY`).
     pub name: String,
@@ -273,8 +273,8 @@ pub(crate) struct EmitCtx<'a> {
     ///
     /// * appends `pub mod tea; pub use tea::*;` to the emitted
     ///   `ipe_runtime/mod.rs`, making `cmd_none` / `sub_every` / … available;
-    /// * adds `pub type SkyCmd<M> = ipe_runtime::tea::SkyCmd<M>;` and
-    ///   `pub type SkySub<M> = ipe_runtime::tea::SkySub<M>;` to `main.rs`.
+    /// * adds `pub type IpeCmd<M> = ipe_runtime::tea::IpeCmd<M>;` and
+    ///   `pub type IpeSub<M> = ipe_runtime::tea::IpeSub<M>;` to `main.rs`.
     ///
     /// `tea.rs` is ungated (no `live` cargo feature needed); the only
     /// dependency is `tokio`, which is already in the default feature set.
@@ -1093,7 +1093,7 @@ impl<'a> EmitCtx<'a> {
     /// is this the `Std.Cache.Cache` opaque handle type — home
     /// `["Std", "Cache"]`, name `Cache`, and NOT a user-declared enum of the
     /// same name (absent from `enum_names`)? Backed by the runtime
-    /// `SkyCacheHandle`; the render/ctor/pattern paths route there.
+    /// `IpeCacheHandle`; the render/ctor/pattern paths route there.
     pub(crate) fn is_cache_handle_type(&self, home: &ModPath, ty: Symbol) -> bool {
         self.interner.resolve(ty) == Some("Cache")
             && !self.enum_names.contains_key(&(home.clone(), ty))
@@ -1106,20 +1106,20 @@ impl<'a> EmitCtx<'a> {
 
     fn enum_name(&self, home: &ModPath, ty: Symbol) -> DResult<&str> {
         // `StreamId` is a builtin opaque Http.Stream type backed by the runtime
-        // struct `SkyStreamId`.  It has no synthetic `EnumDef` injection (unlike
+        // struct `IpeStreamId`.  It has no synthetic `EnumDef` injection (unlike
         // `SqlValue`), so it is not in `enum_names`; we route it here instead.
         // `ChunkEvent` is handled analogously via a dedicated arm in `render_type`.
         if home.0.is_empty() && matches!(self.interner.resolve(ty), Some("StreamId")) {
             // SAFETY: this literal has 'static lifetime; the returned &str
             // is valid for the duration of the emit pass.
-            return Ok("SkyStreamId");
+            return Ok("IpeStreamId");
         }
-        // `Std.Cache.Cache` → the non-generic runtime enum `SkyCacheHandle`
+        // `Std.Cache.Cache` → the non-generic runtime enum `IpeCacheHandle`
         // (its `EnumDef` is suppressed in `ipe_lower`, so it is absent from
         // `enum_names`). The type-position render drops the phantom `k`/`v` args
         // via a dedicated `render_type` arm before reaching here.
         if self.is_cache_handle_type(home, ty) {
-            return Ok("SkyCacheHandle");
+            return Ok("IpeCacheHandle");
         }
         self.enum_names
             .get(&(home.clone(), ty))
@@ -1147,7 +1147,7 @@ impl<'a> EmitCtx<'a> {
     /// The runtime enum path for a built-in constructor's type, or `None` for a
     /// user-declared enum. `Maybe` / `Result` are not user `type` declarations —
     /// their constructors (`Just` / `Nothing` / `Ok` / `Err`) are Prelude
-    /// built-ins backed by the runtime's `SkyMaybe` / `SkyResult`, whose variant
+    /// built-ins backed by the runtime's `IpeMaybe` / `IpeResult`, whose variant
     /// names match Sky's verbatim. A `Some` result steers constructor and pattern
     /// emission to the runtime type (no user-enum field-boxing lookup applies, as
     /// neither is self-recursive).
@@ -1160,43 +1160,43 @@ impl<'a> EmitCtx<'a> {
             return None;
         }
         match self.interner.resolve(ty) {
-            Some("Maybe") => Some("SkyMaybe"),
-            Some("Result") => Some("SkyResult"),
-            // `Order` is backed by `SkyOrder` — the `#[repr(u8)]` enum
+            Some("Maybe") => Some("IpeMaybe"),
+            Some("Result") => Some("IpeResult"),
+            // `Order` is backed by `IpeOrder` — the `#[repr(u8)]` enum
             // from the runtime crate, in scope via `pub use ipe_runtime::*`.
-            // Constructor emission: `SkyOrder::LT` / `SkyOrder::EQ` / `SkyOrder::GT`.
-            Some("Order") => Some("SkyOrder"),
+            // Constructor emission: `IpeOrder::LT` / `IpeOrder::EQ` / `IpeOrder::GT`.
+            Some("Order") => Some("IpeOrder"),
             // `ChunkEvent` — the builtin `Sky.Core.Http.Stream` chunk event enum
-            // backed by `ipe_runtime::http_stream::ChunkEvent<SkyError>`.
+            // backed by `ipe_runtime::http_stream::ChunkEvent<IpeError>`.
             // Constructor names match Sky's verbatim: `Chunk` / `Done` / `Errored`.
             // NOTE: This returns the bare name "ChunkEvent" (without generic args)
             // so that pattern paths emit `ChunkEvent::Chunk(...)`, not
-            // `ChunkEvent<SkyError>::Chunk(...)` (invalid Rust syntax).
-            // Type-position rendering adds the `<SkyError>` via a special arm in
+            // `ChunkEvent<IpeError>::Chunk(...)` (invalid Rust syntax).
+            // Type-position rendering adds the `<IpeError>` via a special arm in
             // `emit_types::render_type` BEFORE the general `ctx.enum_name` path.
             Some("ChunkEvent") => Some("ChunkEvent"),
-            // `Error` is backed by `SkyError` — a single
+            // `Error` is backed by `IpeError` — a single
             // tuple-variant enum whose constructor shares the type's name
             // (`enum_variants[(Prelude, error)] = [error]`, set in
-            // `ipe_lower`), so this emits `SkyError::Error(kind, info)` via
+            // `ipe_lower`), so this emits `IpeError::Error(kind, info)` via
             // the SAME path `Maybe`/`Result` use above.
-            Some("Error") => Some("SkyError"),
-            // `ErrorKind` is backed by `SkyErrorKind` (#repr(u8), mirrors
-            // `Order`/`SkyOrder`). Constructor emission: `SkyErrorKind::Io` /
+            Some("Error") => Some("IpeError"),
+            // `ErrorKind` is backed by `IpeErrorKind` (#repr(u8), mirrors
+            // `Order`/`IpeOrder`). Constructor emission: `IpeErrorKind::Io` /
             // `::Network` / etc.
-            Some("ErrorKind") => Some("SkyErrorKind"),
-            // `ErrorDetails` is backed by `SkyErrorDetails`. Constructor names
+            Some("ErrorKind") => Some("IpeErrorKind"),
+            // `ErrorDetails` is backed by `IpeErrorDetails`. Constructor names
             // match Sky source verbatim:
             // `FfiPanic` / `TypeMismatch` / `HttpStatus` / `JsonDecode` /
             // `Custom`.
-            Some("ErrorDetails") => Some("SkyErrorDetails"),
+            Some("ErrorDetails") => Some("IpeErrorDetails"),
             // `Std.Cache.Cache` is backed by the non-generic runtime enum
-            // `SkyCacheHandle { Cache(i64) }`. Its `EnumDef` is suppressed in
+            // `IpeCacheHandle { Cache(i64) }`. Its `EnumDef` is suppressed in
             // `ipe_lower` (no `enum_names` entry, so the guard above lets this
             // fire), so the `Cache` ctor + `case … of Cache raw` pattern route
-            // to `SkyCacheHandle::Cache`. A user's own `type Cache …` DOES get an
+            // to `IpeCacheHandle::Cache`. A user's own `type Cache …` DOES get an
             // `EnumDef` (registered in `enum_names`) and short-circuits above.
-            Some("Cache") => Some("SkyCacheHandle"),
+            Some("Cache") => Some("IpeCacheHandle"),
             // `Std.Email.EmailProvider` is backed by the runtime enum
             // `ipe_runtime::email::EmailProvider` (variant names `Resend`/`Ses`/
             // `SendGrid`/`Smtp` match the Sky ctors verbatim). Its `EnumDef` is
@@ -1293,7 +1293,7 @@ fn collect_record_shapes(
         IrType::Set(a) => {
             collect_record_shapes(interner, a, shapes)?;
         }
-        // `Decoder<T>`, `SkyTask<E,A>`, `SkyCmd<M>`, `SkySub<M>` are opaque
+        // `Decoder<T>`, `IpeTask<E,A>`, `IpeCmd<M>`, `IpeSub<M>` are opaque
         // aliases; descend into the inner type for any nested record shape.
         IrType::Decoder(inner)
         | IrType::Task(inner)
@@ -1439,7 +1439,7 @@ fn type_reaches_enum(
                 || type_reaches_enum(v, target, enums, visited)
         }
         IrType::Set(a) => type_reaches_enum(a, target, enums, visited),
-        // `Decoder<T>` / `Task<A>` / `SkyCmd<M>` / `SkySub<M>` are all heap-
+        // `Decoder<T>` / `Task<A>` / `IpeCmd<M>` / `IpeSub<M>` are all heap-
         // allocated; descend into their inner types for completeness.
         IrType::Decoder(inner) | IrType::Task(inner) | IrType::Cmd(inner) | IrType::Sub(inner) => {
             type_reaches_enum(inner, target, enums, visited)
@@ -1785,8 +1785,8 @@ fn skeleton_ty(ty: &IrType, idx: &mut BTreeMap<Symbol, usize>, out: &mut String)
             skeleton_ty(a, idx, out);
             out.push('>');
         }
-        // `SkyCmd<M>` / `SkySub<M>` carry a message type parameter; recurse so
-        // `SkyCmd<G0>` and `SkyCmd<G1>` (alpha-equivalent) get the same key.
+        // `IpeCmd<M>` / `IpeSub<M>` carry a message type parameter; recurse so
+        // `IpeCmd<G0>` and `IpeCmd<G1>` (alpha-equivalent) get the same key.
         IrType::Cmd(inner) => {
             out.push_str("Cmd<");
             skeleton_ty(inner, idx, out);

@@ -28,9 +28,9 @@
 //! that `import Std.Webview`s always links + never panics. No panic vectors: the
 //! stub returns `Err`; the real path routes every fallible call through `Err`.
 
-use super::core::SkyTask;
+use super::core::IpeTask;
 use super::html::Html;
-use super::tea::{SkyCmd, SkySub};
+use super::tea::{IpeCmd, IpeSub};
 
 /// Window configuration — mirrors Sky's closed `WindowCfg { title, size }`.
 #[allow(non_snake_case)]
@@ -47,7 +47,7 @@ pub struct WebviewAppCfg;
 #[cfg(not(feature = "webview"))]
 mod imp {
     use super::*;
-    use crate::core::SkyResult;
+    use crate::core::IpeResult;
 
     /// Stub `webview_app` — compiled when the `webview` feature is off (no system
     /// webview libraries). Returns a graceful `Err` with a remediation message.
@@ -58,18 +58,18 @@ mod imp {
         _view: FView,
         _subscriptions: FSubs,
         _window: WebviewWindowCfg,
-    ) -> SkyTask<E, ()>
+    ) -> IpeTask<E, ()>
     where
         E: Send + From<String> + 'static,
         Model: Clone + Send + 'static,
         Msg: Clone + Send + 'static,
-        FInit: Fn(()) -> (Model, SkyCmd<Msg>) + Send + 'static,
-        FUpdate: Fn(Msg, Model) -> (Model, SkyCmd<Msg>) + Send + 'static,
+        FInit: Fn(()) -> (Model, IpeCmd<Msg>) + Send + 'static,
+        FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + 'static,
         FView: Fn(Model) -> Html<Msg> + Send + 'static,
-        FSubs: Fn(Model) -> SkySub<Msg> + Send + 'static,
+        FSubs: Fn(Model) -> IpeSub<Msg> + Send + 'static,
     {
         Box::pin(async move {
-            SkyResult::Err(
+            IpeResult::Err(
                 "Webview.app: this Sky build has no native webview backend. Rebuild \
                  with `--features webview` on a machine with the webview dev \
                  libraries (Linux: webkit2gtk + libsoup; macOS: WKWebView; Windows: \
@@ -84,7 +84,7 @@ mod imp {
 #[cfg(feature = "webview")]
 mod imp {
     use super::*;
-    use crate::core::{SkyResult, ok_res};
+    use crate::core::{IpeResult, ok_res};
     use crate::html::{assign_sky_ids, render_html};
     use crate::live::dispatch::build_index;
 
@@ -122,10 +122,10 @@ mod imp {
     /// The synchronous webview event loop doesn't pump tokio, so a real (non-`None`)
     /// `Cmd` returned from `init`/`update` is dropped. Warn ONCE so this otherwise-
     /// silent dropped-effect behaviour is observable rather than a quiet surprise.
-    fn warn_dropped_cmd_if_real<M>(cmd: &SkyCmd<M>) {
+    fn warn_dropped_cmd_if_real<M>(cmd: &IpeCmd<M>) {
         use std::sync::Once;
         static WARNED: Once = Once::new();
-        if !matches!(cmd, SkyCmd::None) {
+        if !matches!(cmd, IpeCmd::None) {
             WARNED.call_once(|| {
                 eprintln!(
                     "[sky.webview] warn: a non-`Cmd.none` command was returned but \
@@ -139,7 +139,7 @@ mod imp {
     /// Parse `{skyId, event, args}` (from the bridge) without serde.
     fn parse_ipc(body: &str) -> Option<(String, String, Vec<String>)> {
         let v: serde_json::Value = serde_json::from_str(body).ok()?;
-        let sky_id = v.get("skyId")?.as_str()?.to_string();
+        let ipe_id = v.get("skyId")?.as_str()?.to_string();
         let event = v.get("event")?.as_str()?.to_string();
         let args = v
             .get("args")
@@ -150,7 +150,7 @@ mod imp {
                     .collect()
             })
             .unwrap_or_default();
-        Some((sky_id, event, args))
+        Some((ipe_id, event, args))
     }
 
     /// Render the view to an `(html_body, HandlerIndex)` pair, stamping sky-ids.
@@ -179,7 +179,7 @@ mod imp {
     ///
     /// The future has no `.await` after the (`!Send`) window/webview are created
     /// — `event_loop.run` is synchronous + diverging — so the future stays `Send`
-    /// (`SkyTask`'s bound) while the webview itself never crosses an await.
+    /// (`IpeTask`'s bound) while the webview itself never crosses an await.
     /// Async `Cmd.perform` / `Sub.every` are a follow-on (the synchronous event
     /// loop doesn't pump tokio); `Cmd.none` works.
     #[allow(clippy::type_complexity)]
@@ -189,15 +189,15 @@ mod imp {
         view: FView,
         _subscriptions: FSubs,
         window: WebviewWindowCfg,
-    ) -> SkyTask<E, ()>
+    ) -> IpeTask<E, ()>
     where
         E: Send + From<String> + 'static,
         Model: Clone + Send + 'static,
         Msg: Clone + Send + 'static,
-        FInit: Fn(()) -> (Model, SkyCmd<Msg>) + Send + 'static,
-        FUpdate: Fn(Msg, Model) -> (Model, SkyCmd<Msg>) + Send + 'static,
+        FInit: Fn(()) -> (Model, IpeCmd<Msg>) + Send + 'static,
+        FUpdate: Fn(Msg, Model) -> (Model, IpeCmd<Msg>) + Send + 'static,
         FView: Fn(Model) -> Html<Msg> + Send + 'static,
-        FSubs: Fn(Model) -> SkySub<Msg> + Send + 'static,
+        FSubs: Fn(Model) -> IpeSub<Msg> + Send + 'static,
     {
         Box::pin(async move {
             use tao::dpi::LogicalSize;
@@ -232,7 +232,7 @@ mod imp {
                 .build(&event_loop)
             {
                 Ok(win) => win,
-                Err(e) => return SkyResult::Err(format!("Webview.app: window: {e}").into()),
+                Err(e) => return IpeResult::Err(format!("Webview.app: window: {e}").into()),
             };
 
             let (mut model, _cmd0) = init(());
@@ -268,7 +268,7 @@ mod imp {
             };
             let webview = match built {
                 Ok(wv) => wv,
-                Err(e) => return SkyResult::Err(format!("Webview.app: webview: {e}").into()),
+                Err(e) => return IpeResult::Err(format!("Webview.app: webview: {e}").into()),
             };
 
             event_loop.run(move |event, _target, control_flow| {
@@ -281,8 +281,8 @@ mod imp {
                         *control_flow = ControlFlow::Exit;
                     }
                     Event::UserEvent(UserEvent::Ipc(body)) => {
-                        if let Some((sky_id, ev, args)) = parse_ipc(&body) {
-                            if let Some(msg) = index.resolve(&sky_id, &ev, &args) {
+                        if let Some((ipe_id, ev, args)) = parse_ipc(&body) {
+                            if let Some(msg) = index.resolve(&ipe_id, &ev, &args) {
                                 let (next, _cmd) = update(msg, model.clone());
                                 warn_dropped_cmd_if_real(&_cmd);
                                 model = next;

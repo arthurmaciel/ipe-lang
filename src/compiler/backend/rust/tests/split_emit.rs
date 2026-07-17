@@ -162,7 +162,7 @@ fn emit_spine_holds_program_wide_content_not_module_items() -> DResult<()> {
         "spine must carry the entry point `fn main()`"
     );
     assert!(
-        spine.contains("pub use ipe_runtime::error::SkyError;"),
+        spine.contains("pub use ipe_runtime::error::IpeError;"),
         "spine must carry the fixed kernel-wrapper prelude"
     );
 
@@ -252,7 +252,7 @@ fn emit_spine_carries_sqlvalue_sqlfield_before_record_structs_for_db() -> DResul
     let lib_file = backend.emit_module_file(&program, &lib_home)?;
     assert!(
         !lib_file.contains("SqlValue") && !lib_file.contains("SqlField"),
-        "the Db enums must never land in a SkyModule file, got:\n{lib_file}"
+        "the Db enums must never land in a IpeModule file, got:\n{lib_file}"
     );
     Ok(())
 }

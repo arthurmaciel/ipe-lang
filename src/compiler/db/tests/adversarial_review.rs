@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use salsa::Setter as _;
-use ipe_db::{ModuleOrigin, SkyDatabase, SourceFile, SourceRoot, canonicalize, module_interface};
+use ipe_db::{ModuleOrigin, IpeDatabase, SourceFile, SourceRoot, canonicalize, module_interface};
 
 #[derive(Clone, Default)]
 struct EventLog(Arc<Mutex<Vec<String>>>);
@@ -49,10 +49,10 @@ impl EventLog {
     }
 }
 
-fn logged_db() -> (SkyDatabase, EventLog) {
+fn logged_db() -> (IpeDatabase, EventLog) {
     let log = EventLog::default();
     let sink = log.clone();
-    let db = SkyDatabase::with_event_callback(Box::new(move |event: salsa::Event| {
+    let db = IpeDatabase::with_event_callback(Box::new(move |event: salsa::Event| {
         if let salsa::EventKind::WillExecute { database_key } = event.kind {
             sink.push(format!("{database_key:?}"));
         }
@@ -60,7 +60,7 @@ fn logged_db() -> (SkyDatabase, EventLog) {
     (db, log)
 }
 
-fn file(db: &SkyDatabase, path: &[&str], text: &str) -> SourceFile {
+fn file(db: &IpeDatabase, path: &[&str], text: &str) -> SourceFile {
     SourceFile::new(
         db,
         path.iter().map(|s| (*s).to_owned()).collect(),
@@ -69,7 +69,7 @@ fn file(db: &SkyDatabase, path: &[&str], text: &str) -> SourceFile {
     )
 }
 
-fn root_of(db: &SkyDatabase, files: &[(&[&str], SourceFile)]) -> SourceRoot {
+fn root_of(db: &IpeDatabase, files: &[(&[&str], SourceFile)]) -> SourceRoot {
     let map: BTreeMap<Vec<String>, SourceFile> = files
         .iter()
         .map(|(path, f)| (path.iter().map(|s| (*s).to_owned()).collect(), *f))

@@ -255,8 +255,8 @@ pub fn build_with_sibling_discovery(
 /// given a file entry the Haskell driver locates the project root (where
 /// `sky.toml` lives) before calling `buildProject`, so the full module graph
 /// is compiled instead of just the single entry file.
-fn find_manifest_for_sky_file(sky_file: &Path) -> Option<PathBuf> {
-    let mut dir = sky_file.parent()?;
+fn find_manifest_for_sky_file(ipe_file: &Path) -> Option<PathBuf> {
+    let mut dir = ipe_file.parent()?;
     loop {
         let candidate = dir.join("sky.toml");
         if candidate.is_file() {
@@ -373,7 +373,7 @@ fn compile_modules_observed(
 
     // The lowered-IR cache tier (see `crate::cache`'s module doc
     // section for the full design). A hit here skips parse -> canon -> link
-    // -> infer -> lower ENTIRELY — no `SkyDatabase` is constructed at all —
+    // -> infer -> lower ENTIRELY — no `IpeDatabase` is constructed at all —
     // running only `RustBackend::emit` over the relocated `Program` before
     // falling through to the SAME disk-write + tier-1-warming path a full
     // pipeline run uses. The `ir_key` deliberately excludes `db_driver`
@@ -420,7 +420,7 @@ fn compile_modules_observed(
     // cold and per-invocation, and queries are demanded in the fixed topo
     // order, so the interning sequence — and therefore emitted bytes — is
     // deterministic across runs (golden-suite-enforced).
-    let db = ipe_db::SkyDatabase::new();
+    let db = ipe_db::IpeDatabase::new();
     let source_root = create_source_root(&db, &sources, &injected);
     // The config input (see `ipe_db::BuildConfig`'s doc for why this
     // is narrowed to `db_driver` rather than the full `sky.toml` shape). A
@@ -475,7 +475,7 @@ fn compile_modules_observed(
 /// IPE-N0025-rejected.
 #[must_use]
 pub fn create_source_root(
-    db: &ipe_db::SkyDatabase,
+    db: &ipe_db::IpeDatabase,
     sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
     injected: &std::collections::BTreeSet<Vec<String>>,
 ) -> ipe_db::SourceRoot {
@@ -519,7 +519,7 @@ pub fn create_source_root(
 /// [`CliError::Pipeline`] carrying the first compiler diagnostic.
 #[allow(clippy::too_many_lines)]
 pub fn compile_prepared(
-    db: &ipe_db::SkyDatabase,
+    db: &ipe_db::IpeDatabase,
     source_root: ipe_db::SourceRoot,
     sources: &BTreeMap<Vec<String>, (PathBuf, String)>,
     entry_path: &[String],
@@ -2125,7 +2125,7 @@ main =
     }
 
     // -----------------------------------------------------------------------
-    // Regression: Task.run elision — sky_main must return SkyTask<A>
+    // Regression: Task.run elision — ipe_main must return IpeTask<A>
     // -----------------------------------------------------------------------
 
     /// Regression for the `Task.run` elision in `emit_func`.
@@ -2133,17 +2133,17 @@ main =
     /// `main = someTask |> Task.run` lowers to:
     ///   `func.ret  = IrType::Result(Error, A)`
     ///   `func.body = Call(TaskRun, [inner])`
-    /// Emitting `task_run(inner)` from `emit_func` returns `SkyResult<E, A>`,
-    /// but the epilogue calls `block_on(sky_main())`, which requires
-    /// `SkyTask<A>` — an `E0308 mismatched types` Rust compile error.
+    /// Emitting `task_run(inner)` from `emit_func` returns `IpeResult<E, A>`,
+    /// but the epilogue calls `block_on(ipe_main())`, which requires
+    /// `IpeTask<A>` — an `E0308 mismatched types` Rust compile error.
     ///
     /// So the emitter detects the `Call(TaskRun|TaskPerform, [inner])` body in
-    /// `sky_main`, emits `inner` directly, and rewrites the return type from
+    /// `ipe_main`, emits `inner` directly, and rewrites the return type from
     /// `Result(Error, A)` → `Task(A)`.
     ///
     /// This test verifies that the emitted `src/main.rs` contains
-    /// `fn sky_main() -> SkyTask<` and does NOT contain `task_run(` at the
-    /// `sky_main` definition site.
+    /// `fn ipe_main() -> IpeTask<` and does NOT contain `task_run(` at the
+    /// `ipe_main` definition site.
     #[test]
     fn task_run_main_emits_skytask_not_skyresult() {
         // A minimal Sky.Cli-style program: main = task |> Task.run
@@ -2179,19 +2179,19 @@ main =
         let emitted = fs::read_to_string(&main_rs).expect("emitted main.rs must exist after build");
 
         assert!(
-            emitted.contains("fn sky_main() -> SkyTask<"),
-            "sky_main must return SkyTask<…>, got signature region:\n{}",
+            emitted.contains("fn ipe_main() -> IpeTask<"),
+            "ipe_main must return IpeTask<…>, got signature region:\n{}",
             emitted
                 .lines()
-                .filter(|l| l.contains("sky_main")
-                    || l.contains("SkyTask")
-                    || l.contains("SkyResult"))
+                .filter(|l| l.contains("ipe_main")
+                    || l.contains("IpeTask")
+                    || l.contains("IpeResult"))
                 .collect::<Vec<_>>()
                 .join("\n")
         );
         assert!(
-            !emitted.contains("fn sky_main() -> SkyResult"),
-            "sky_main must NOT return SkyResult (Task.run elision missing)"
+            !emitted.contains("fn ipe_main() -> IpeResult"),
+            "ipe_main must NOT return IpeResult (Task.run elision missing)"
         );
 
         let _ = fs::remove_dir_all(&dir);

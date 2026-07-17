@@ -1,19 +1,19 @@
 //! `examples/27-multi-session-chat`'s `cargo build`.
 //!
 //! Without the fix, `skyc build` exits 0, but the emitted Rust fails `cargo build`
-//! with E0277 (`the trait bound T1: SkyRow is not satisfied`) at every
+//! with E0277 (`the trait bound T1: IpeRow is not satisfied`) at every
 //! `db_get_string("field".to_string(), &(payload))` call inside a function
 //! whose only generic is the wildcard `any` PARAM (example 27's
 //! `decodeChatMessage : any -> ChatMessage` / `init : any -> …`).
 //!
 //! Root cause: the runtime's field accessors are generic
-//! `db_get_*<R: SkyRow>(field, &row)`, but the emitted enclosing function
+//! `db_get_*<R: IpeRow>(field, &row)`, but the emitted enclosing function
 //! carried an unbounded `<T1: Clone>` param, so its body's
-//! `db_get_string(_, &payload)` could not prove `payload: SkyRow`.
+//! `db_get_string(_, &payload)` could not prove `payload: IpeRow`.
 //!
 //! Fix (`crates/ipe_ir/src/ir.rs` + `crates/ipe_lower/src/lower.rs`): a new
 //! `BoundSet::IPE_ROW` flag, rendered by `render_bounds` as
-//! `ipe_runtime::db::SkyRow`. The lowerer decides the bound STRUCTURALLY, at
+//! `ipe_runtime::db::IpeRow`. The lowerer decides the bound STRUCTURALLY, at
 //! IR level (`apply_db_row_bounds` / `body_calls_db_get_on_param`): it fires
 //! ONLY when the fn body contains an actual `Db.get*` KERNEL application whose
 //! ROW argument is a `Var`/`CloneVar` reference to the wildcard `any` param
@@ -46,7 +46,7 @@ fn entry_path(root: &Path) -> PathBuf {
         .join("Main.sky")
 }
 
-/// skyc-0: the compiler must accept the program AND emit `+ SkyRow` on the
+/// skyc-0: the compiler must accept the program AND emit `+ IpeRow` on the
 /// wildcard-`any` decoder function's own generic while leaving the record
 /// STRUCT unbounded — checked unconditionally (cheap, no `cargo`), independent
 /// of the `IPE_E2E` gate below.
@@ -72,28 +72,28 @@ fn i177_skyc_accepts_and_bounds_fn_not_struct() {
     let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
         .expect("emitted main.rs must exist");
 
-    // The decoder function's wildcard-`any` generic gains the `SkyRow` bound so
+    // The decoder function's wildcard-`any` generic gains the `IpeRow` bound so
     // its `db_get_string(_, &payload)` body type-checks (E0277 half).
     assert!(
-        emitted.contains("ipe_runtime::db::SkyRow"),
-        "the wildcard-`any` decoder function must carry the `SkyRow` bound so \
+        emitted.contains("ipe_runtime::db::IpeRow"),
+        "the wildcard-`any` decoder function must carry the `IpeRow` bound so \
          its `db_get_string` body type-checks (#177); got main.rs:\n{emitted}"
     );
     assert!(
-        emitted.contains("pub fn main_decode_row<T1: Clone + ipe_runtime::db::SkyRow>"),
+        emitted.contains("pub fn main_decode_row<T1: Clone + ipe_runtime::db::IpeRow>"),
         "the bound belongs on the decoder FUNCTION's generic param, not \
          elsewhere (#177); got main.rs:\n{emitted}"
     );
 
     // The record struct itself MUST stay unbounded — it is reused in non-row
     // contexts (mirrors the reference's `TypeEmitter.hs` policy). A `struct`
-    // line carrying `SkyRow` would be an over-bound regression.
+    // line carrying `IpeRow` would be an over-bound regression.
     for line in emitted.lines() {
         let trimmed = line.trim_start();
         if trimmed.starts_with("pub struct ") || trimmed.starts_with("struct ") {
             assert!(
-                !line.contains("SkyRow"),
-                "the record struct must NOT carry a `SkyRow` bound — it stays \
+                !line.contains("IpeRow"),
+                "the record struct must NOT carry a `IpeRow` bound — it stays \
                  reusable in non-row contexts (#177); offending line: {line}"
             );
         }

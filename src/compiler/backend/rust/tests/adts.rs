@@ -3,7 +3,7 @@
 //! These exercise the enum pipeline beyond nullary variants:
 //!
 //! * a GENERIC ADT (`type Maybe a = Just a | Nothing`) emits a generic Rust enum
-//!   (`pub enum MainMaybe<T1> { Just(T1), Nothing }`) + a bounded `SkyStringify`
+//!   (`pub enum MainMaybe<T1> { Just(T1), Nothing }`) + a bounded `IpeStringify`
 //!   impl; a use-site `Maybe Int` renders `MainMaybe<i64>`,
 //! * a CONCRETE payload ADT (`type Shape = Circle Float | Rect Float Float`)
 //!   emits tuple variants and a `%v`-faithful stringify,
@@ -369,10 +369,10 @@ fn generic_enum_def_construction_and_pattern_emit() -> DResult<()> {
         out.contains("pub enum MainMaybe<T1> {\n    Just(T1),\n    Nothing,\n}"),
         "generic enum definition missing or wrong:\n{out}"
     );
-    // Bounded generic SkyStringify impl with a payload-binding arm.
+    // Bounded generic IpeStringify impl with a payload-binding arm.
     assert!(
-        out.contains("impl<T1: SkyStringify + std::fmt::Debug> SkyStringify for MainMaybe<T1> {"),
-        "generic SkyStringify impl clause missing:\n{out}"
+        out.contains("impl<T1: IpeStringify + std::fmt::Debug> IpeStringify for MainMaybe<T1> {"),
+        "generic IpeStringify impl clause missing:\n{out}"
     );
     assert!(
         out.contains(
@@ -504,7 +504,7 @@ fn concrete_multi_field_enum_emits() -> DResult<()> {
         "concrete payload enum definition missing or wrong:\n{out}"
     );
     assert!(
-        out.contains("impl SkyStringify for MainShape {"),
+        out.contains("impl IpeStringify for MainShape {"),
         "non-generic enum must have an unparameterised impl:\n{out}"
     );
     // Two-field stringify arm: `Rect <f0> <f1>`.

@@ -21,21 +21,21 @@
 //! the leaf kernels are primitive-typed, so nothing here can `skyc`-succeed and
 //! then `cargo`-fail.
 
-use crate::core::SkyMaybe;
+use crate::core::IpeMaybe;
 use crate::css_safety::{
     SafeCssPropertyName, SafeCssSelector, SafeCssValue, strip_style_close,
 };
 
 /// Lift a policy `Option<String>` into the Sky `Maybe String` runtime
-/// representation (`SkyMaybe<String>`), matching every other `String -> Maybe
+/// representation (`IpeMaybe<String>`), matching every other `String -> Maybe
 /// String` kernel (e.g. `uuid_parse`). The backend schemes these three kernels
-/// as `String -> Maybe String`, so the emitted call site expects `SkyMaybe`, not
+/// as `String -> Maybe String`, so the emitted call site expects `IpeMaybe`, not
 /// `Option`.
 #[inline]
-fn to_sky_maybe(opt: Option<String>) -> SkyMaybe<String> {
+fn to_sky_maybe(opt: Option<String>) -> IpeMaybe<String> {
     match opt {
-        Some(clean) => SkyMaybe::Just(clean),
-        None => SkyMaybe::Nothing,
+        Some(clean) => IpeMaybe::Just(clean),
+        None => IpeMaybe::Nothing,
     }
 }
 
@@ -44,7 +44,7 @@ fn to_sky_maybe(opt: Option<String>) -> SkyMaybe<String> {
 /// breakout / script-sink byte, else `Nothing` (the Sky side drops the
 /// declaration).
 #[must_use]
-pub fn safe_value(v: String) -> SkyMaybe<String> {
+pub fn safe_value(v: String) -> IpeMaybe<String> {
     to_sky_maybe(SafeCssValue::parse(&v).map(|s| s.as_str().to_string()))
 }
 
@@ -52,7 +52,7 @@ pub fn safe_value(v: String) -> SkyMaybe<String> {
 /// (charset `[A-Za-z0-9-]`, custom props `--foo` included); `Nothing` closes the
 /// key-injection vector (`background:url(x);y`).
 #[must_use]
-pub fn safe_prop_name(k: String) -> SkyMaybe<String> {
+pub fn safe_prop_name(k: String) -> IpeMaybe<String> {
     to_sky_maybe(SafeCssPropertyName::parse(&k).map(|s| s.as_str().to_string()))
 }
 
@@ -60,7 +60,7 @@ pub fn safe_prop_name(k: String) -> SkyMaybe<String> {
 /// string through the strict structural allowlist; `Nothing` (drop the rule)
 /// closes `{ } ; @ < / \`-based breakout (`@import`-via-selector included).
 #[must_use]
-pub fn safe_selector(sel: String) -> SkyMaybe<String> {
+pub fn safe_selector(sel: String) -> IpeMaybe<String> {
     to_sky_maybe(SafeCssSelector::parse(&sel).map(|s| s.as_str().to_string()))
 }
 
@@ -76,11 +76,11 @@ pub fn strip_style_close_kernel(s: String) -> String {
 mod tests {
     use super::*;
 
-    /// Collapse a `SkyMaybe<String>` to `Option<&str>` for terse assertions.
-    fn opt(m: &SkyMaybe<String>) -> Option<&str> {
+    /// Collapse a `IpeMaybe<String>` to `Option<&str>` for terse assertions.
+    fn opt(m: &IpeMaybe<String>) -> Option<&str> {
         match m {
-            SkyMaybe::Just(s) => Some(s.as_str()),
-            SkyMaybe::Nothing => None,
+            IpeMaybe::Just(s) => Some(s.as_str()),
+            IpeMaybe::Nothing => None,
         }
     }
 
@@ -89,20 +89,20 @@ mod tests {
         // expression() / mid-value url(javascript:) / breakout chars dropped.
         assert!(matches!(
             safe_value("expression(alert(1))".into()),
-            SkyMaybe::Nothing
+            IpeMaybe::Nothing
         ));
         assert!(matches!(
             safe_value("0; background:url(javascript:alert(1))".into()),
-            SkyMaybe::Nothing
+            IpeMaybe::Nothing
         ));
         assert!(matches!(
             safe_value("red</style><script>alert(1)</script>".into()),
-            SkyMaybe::Nothing
+            IpeMaybe::Nothing
         ));
         // CSS-hex-escaped bypass (`\65 ` → 'e') dropped too.
         assert!(matches!(
             safe_value("\\65 xpression(alert(1))".into()),
-            SkyMaybe::Nothing
+            IpeMaybe::Nothing
         ));
         // benign values pass through unchanged.
         assert_eq!(opt(&safe_value("#ff6600".into())), Some("#ff6600"));
@@ -117,7 +117,7 @@ mod tests {
     fn safe_prop_name_drops_smuggle_keeps_custom_props() {
         assert!(matches!(
             safe_prop_name("background:url(x);y".into()),
-            SkyMaybe::Nothing
+            IpeMaybe::Nothing
         ));
         assert_eq!(opt(&safe_prop_name("--brand".into())), Some("--brand"));
         assert_eq!(
@@ -130,11 +130,11 @@ mod tests {
     fn safe_selector_drops_breakout_keeps_structure() {
         assert!(matches!(
             safe_selector("body{}</style><script>".into()),
-            SkyMaybe::Nothing
+            IpeMaybe::Nothing
         ));
         assert!(matches!(
             safe_selector("@import url(x)".into()),
-            SkyMaybe::Nothing
+            IpeMaybe::Nothing
         ));
         // media query + structural selectors pass.
         assert_eq!(

@@ -1,7 +1,7 @@
 //! Regression for adversarial-review Finding B — a sibling gap of the
 //! `tui_entry_case_taskrun` SEAL fix (`golden_tui_entry_case_seal.rs`, same
 //! BACKLOG "24-tui-kitchen-sink" row) one hop past that fix's scope: a
-//! `case`-dispatched `sky_main` where SOME tail leaves call `Task.run` and
+//! `case`-dispatched `ipe_main` where SOME tail leaves call `Task.run` and
 //! OTHER tail leaves are a plain `Result`-typed expression with no `Task.run`
 //! at all (the realistic validate-then-run idiom, `Err e -> Err e; Ok cfg ->
 //! app cfg |> Task.run`).
@@ -10,17 +10,17 @@
 //! elision would leave some arms `Task`-shaped and others `Result`-shaped,
 //! which cannot render as one Rust `match` of a single type — genuinely
 //! all-or-nothing) — and otherwise nothing makes the crate compile:
-//! `sky_main` keeps its declared `SkyResult<E, A>` return type while the
-//! `fn main` epilogue's `block_on(sky_main())` unconditionally requires
-//! `SkyTask<A>` (E0308: expected `Pin<Box<dyn Future…>>`, found
-//! `SkyResult<…>`) — `skyc build` exit 0, `cargo build` fail.
+//! `ipe_main` keeps its declared `IpeResult<E, A>` return type while the
+//! `fn main` epilogue's `block_on(ipe_main())` unconditionally requires
+//! `IpeTask<A>` (E0308: expected `Pin<Box<dyn Future…>>`, found
+//! `IpeResult<…>`) — `skyc build` exit 0, `cargo build` fail.
 //!
-//! So `emit_func`'s `sky_main_wrap` fallback (which fires for `func.ret ==
+//! So `emit_func`'s `ipe_main_wrap` fallback (which fires for `func.ret ==
 //! Unit`) also covers `func.ret == Result(_, A)`
 //! with elision declined: the body already evaluates synchronously to one
 //! uniform `Result e a` (`Task.run` blocks in place; the non-Task arm is a
 //! bare `Result` value), so it wraps in `task_from_result({ <original body>
-//! })` — an ALREADY-RESOLVED `SkyTask<A>` carrying the body's actual computed
+//! })` — an ALREADY-RESOLVED `IpeTask<A>` carrying the body's actual computed
 //! `Ok`/`Err`, not a discarded one (contrast the sibling `Unit`-return wrap,
 //! which discards the body's value and always returns `task_succeed(())`).
 //!
@@ -64,8 +64,8 @@ fn built_main_rs(root: &Path, out: &Path) -> (Result<(), skyc::CliError>, Option
     (built, main_rs)
 }
 
-/// `sky_main` must return `SkyTask<…>` (the wrapped shape the
-/// `block_on(sky_main())` epilogue requires), never `SkyResult<…>` — even
+/// `ipe_main` must return `IpeTask<…>` (the wrapped shape the
+/// `block_on(ipe_main())` epilogue requires), never `IpeResult<…>` — even
 /// though the body's arms are a genuine MIX of `Task.run` calls and plain
 /// `Result` expressions, so `elide_task_run_tail` cannot elide.
 #[test]
@@ -82,24 +82,24 @@ fn mixed_arm_entry_point_wraps_to_skytask() {
     };
 
     assert!(
-        main_rs.contains("fn sky_main() -> SkyTask<"),
-        "sky_main must return SkyTask<…> even when its case arms MIX \
+        main_rs.contains("fn ipe_main() -> IpeTask<"),
+        "ipe_main must return IpeTask<…> even when its case arms MIX \
          Task.run calls with plain Result expressions — the \
-         block_on(sky_main()) epilogue requires a Task, not a Result. Got \
+         block_on(ipe_main()) epilogue requires a Task, not a Result. Got \
          signature region:\n{}",
         main_rs
             .lines()
-            .filter(|l| l.contains("sky_main") || l.contains("SkyTask") || l.contains("SkyResult"))
+            .filter(|l| l.contains("ipe_main") || l.contains("IpeTask") || l.contains("IpeResult"))
             .collect::<Vec<_>>()
             .join("\n")
     );
     assert!(
-        !main_rs.contains("fn sky_main() -> SkyResult<"),
-        "sky_main must not return SkyResult<…> — that is the un-wrapped \
-         shape that mismatches block_on's SkyTask<…> parameter.\n{}",
+        !main_rs.contains("fn ipe_main() -> IpeResult<"),
+        "ipe_main must not return IpeResult<…> — that is the un-wrapped \
+         shape that mismatches block_on's IpeTask<…> parameter.\n{}",
         main_rs
             .lines()
-            .filter(|l| l.contains("sky_main"))
+            .filter(|l| l.contains("ipe_main"))
             .collect::<Vec<_>>()
             .join("\n")
     );
@@ -108,7 +108,7 @@ fn mixed_arm_entry_point_wraps_to_skytask() {
 /// The wrap must carry the body's ACTUAL computed value through
 /// `task_from_result`, not discard it the way the sibling `Unit`-return wrap
 /// discards its body via `task_succeed(())` — the Ok/Err arms must remain the
-/// exact `SkyResult` the un-wrapped body would have produced.
+/// exact `IpeResult` the un-wrapped body would have produced.
 #[test]
 fn mixed_arm_entry_point_wraps_via_task_from_result() {
     let root = repo_root();
@@ -124,7 +124,7 @@ fn mixed_arm_entry_point_wraps_via_task_from_result() {
 
     assert!(
         main_rs.contains("task_from_result({"),
-        "expected sky_main's body to wrap in task_from_result({{ .. }}) so \
+        "expected ipe_main's body to wrap in task_from_result({{ .. }}) so \
          the body's actual Ok/Err value is preserved (not discarded like \
          the Unit-return task_succeed(()) wrap); got:\n{main_rs}",
     );

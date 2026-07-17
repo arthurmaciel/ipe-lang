@@ -61,7 +61,7 @@ fn disambiguate_user_fn_name(default_snake: &str) -> Option<String> {
 
 /// Convert a Sky module-prefixed name to `UpperCamelCase` (used for type names).
 ///
-/// `Sky_Core_Error_Error` → `SkyCoreErrorError`, `Main_Msg` → `MainMsg`.
+/// `Sky_Core_Error_Error` → `IpeCoreErrorError`, `Main_Msg` → `MainMsg`.
 /// An underscore is dropped and the following character upper-cased; a trailing
 /// underscore with no successor is kept verbatim (mirrors the Haskell pattern
 /// `go ('_':c:cs)` falling through to `go (c:cs)` when there is no `c`).
@@ -93,7 +93,7 @@ pub fn to_camel_case(s: &str) -> String {
 
 /// Convert a Sky module-prefixed name to `snake_case` (used for function names).
 ///
-/// `Sky_Core_List_map` → `sky_core_list_map`, `Main_update` → `main_update`.
+/// `Sky_Core_List_map` → `ipe_core_list_map`, `Main_update` → `main_update`.
 /// Mirrors the Haskell `toSnakeCase`: the leading character is lower-cased; an
 /// underscore followed by a character emits `_` plus the lower-cased successor;
 /// an interior upper-case character emits `_` plus its lower-case form.
@@ -242,13 +242,13 @@ pub fn enum_name(module: &[&str], ty: &str) -> String {
 /// The Rust function name for a top-level value: `module_value(["Main"],
 /// "update")` → `main_update`.
 ///
-/// The program entry `main` in module `Main` is special-cased to `sky_main`
-/// (the fixed `fn main` entry-point in the epilogue calls `sky_main()`), matching
+/// The program entry `main` in module `Main` is special-cased to `ipe_main`
+/// (the fixed `fn main` entry-point in the epilogue calls `ipe_main()`), matching
 /// the Haskell `rustName` rule in `ModuleEmitter.hs`.
 #[must_use]
 pub fn module_value(module: &[&str], name: &str) -> String {
     if name == "main" && module == ["Main"] {
-        return "sky_main".to_owned();
+        return "ipe_main".to_owned();
     }
     // A record type-alias auto-constructor is the ONLY top-level value
     // whose Sky name begins with an uppercase letter (the parser forces every
@@ -372,7 +372,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::ListTake => "list_take",
         KernelFn::ListDrop => "list_drop",
         KernelFn::ListZip => "list_zip",
-        KernelFn::ListCons => "sky_list_cons",
+        KernelFn::ListCons => "ipe_list_cons",
         KernelFn::ListIsEmpty => "list_is_empty",
         KernelFn::ListConcatMap => "list_concat_map",
         KernelFn::ListIndexedMap => "list_indexed_map",
@@ -400,35 +400,35 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // ── end Basics numerics ──────────────────────────────────────
         // ── Error kernels (Sky.Core.Error — real Error/ErrorKind ADT) ──
         // Each message constructor classifies its own `ErrorKind` at
-        // construction (`ipe_runtime::error::SkyError`, not a shared
+        // construction (`ipe_runtime::error::IpeError`, not a shared
         // string-identity). `toString` reuses the existing `errorToString`
         // runtime (`basics_error_to_string`).
-        KernelFn::ErrorUnexpected => "sky_error_unexpected",
-        KernelFn::ErrorInvalidInput => "sky_error_invalid_input",
-        KernelFn::ErrorIo => "sky_error_io",
-        KernelFn::ErrorNetwork => "sky_error_network",
-        KernelFn::ErrorFfi => "sky_error_ffi",
-        KernelFn::ErrorDecode => "sky_error_decode",
-        KernelFn::ErrorConflict => "sky_error_conflict",
-        KernelFn::ErrorUnavailable => "sky_error_unavailable",
+        KernelFn::ErrorUnexpected => "ipe_error_unexpected",
+        KernelFn::ErrorInvalidInput => "ipe_error_invalid_input",
+        KernelFn::ErrorIo => "ipe_error_io",
+        KernelFn::ErrorNetwork => "ipe_error_network",
+        KernelFn::ErrorFfi => "ipe_error_ffi",
+        KernelFn::ErrorDecode => "ipe_error_decode",
+        KernelFn::ErrorConflict => "ipe_error_conflict",
+        KernelFn::ErrorUnavailable => "ipe_error_unavailable",
         // ── CssSafety (Sky.Core.CssSafety — Std.Css leaf kernels) ──────
         // The bare runtime fn names, re-exported at the `ipe_runtime` root via
         // `pub use css::*`. `safe_value`/`safe_prop_name`/`safe_selector` return
-        // `SkyMaybe<String>`; `strip_style_close_kernel` returns `String`.
+        // `IpeMaybe<String>`; `strip_style_close_kernel` returns `String`.
         KernelFn::CssSafetySafeValue => "safe_value",
         KernelFn::CssSafetySafePropName => "safe_prop_name",
         KernelFn::CssSafetySafeSelector => "safe_selector",
         KernelFn::CssSafetyStripStyleClose => "strip_style_close_kernel",
-        KernelFn::ErrorTimeout => "sky_error_timeout",
-        KernelFn::ErrorNotFound => "sky_error_not_found",
-        KernelFn::ErrorPermissionDenied => "sky_error_permission_denied",
+        KernelFn::ErrorTimeout => "ipe_error_timeout",
+        KernelFn::ErrorNotFound => "ipe_error_not_found",
+        KernelFn::ErrorPermissionDenied => "ipe_error_permission_denied",
         KernelFn::ErrorToString => "basics_error_to_string",
-        KernelFn::ErrorWithMessage => "sky_error_with_message",
-        KernelFn::ErrorIsRetryable => "sky_error_is_retryable",
-        KernelFn::ErrorWithDetails => "sky_error_with_details",
+        KernelFn::ErrorWithMessage => "ipe_error_with_message",
+        KernelFn::ErrorIsRetryable => "ipe_error_is_retryable",
+        KernelFn::ErrorWithDetails => "ipe_error_with_details",
         KernelFn::MaybeWithDefault => "maybe_with_default",
-        KernelFn::MaybeMap => "sky_maybe_map",
-        KernelFn::MaybeAndThen => "sky_maybe_and_then",
+        KernelFn::MaybeMap => "ipe_maybe_map",
+        KernelFn::MaybeAndThen => "ipe_maybe_and_then",
         KernelFn::MaybeMap2 => "maybe_map2",
         KernelFn::MaybeMap3 => "maybe_map3",
         KernelFn::MaybeMap4 => "maybe_map4",
@@ -436,9 +436,9 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::MaybeAndMap => "maybe_and_map",
         KernelFn::MaybeCombine => "maybe_combine",
         KernelFn::ResultWithDefault => "result_with_default",
-        KernelFn::ResultMap => "sky_result_map",
-        KernelFn::ResultAndThen => "sky_result_and_then",
-        KernelFn::ResultMapError => "sky_result_map_error",
+        KernelFn::ResultMap => "ipe_result_map",
+        KernelFn::ResultAndThen => "ipe_result_and_then",
+        KernelFn::ResultMapError => "ipe_result_map_error",
         KernelFn::ResultMap2 => "result_map2",
         KernelFn::ResultMap3 => "result_map3",
         KernelFn::ResultMap4 => "result_map4",
@@ -543,12 +543,12 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::EncodingHexEncode => "encoding_hex_encode",
         // Decoders return `Result Error String`. The upstream runtime uses a
         // generic `E: From<String>` bound for flexibility, but generated Sky code
-        // always sets `SkyError = String`. Rust cannot infer `E` when the error
+        // always sets `IpeError = String`. Rust cannot infer `E` when the error
         // arm is `Err _ ->` (discarded), so we route to concrete aliases that pin
         // `E = String`, eliminating the ambiguity without changing semantics.
-        KernelFn::EncodingBase64Decode => "sky_base64_decode",
-        KernelFn::EncodingUrlDecode => "sky_url_decode",
-        KernelFn::EncodingHexDecode => "sky_encoding_hex_decode",
+        KernelFn::EncodingBase64Decode => "ipe_base64_decode",
+        KernelFn::EncodingUrlDecode => "ipe_url_decode",
+        KernelFn::EncodingHexDecode => "ipe_encoding_hex_decode",
         // ── JsonEnc kernels ────────────────────────────────────────────
         KernelFn::JsonEncString => "json_enc_string",
         KernelFn::JsonEncInt => "json_enc_int",
@@ -594,47 +594,47 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::CryptoHmacSha512 => "crypto_hmac_sha512",
         // Concrete alias pins E=String — avoids type-inference ambiguity when
         // the Err arm is discarded in generated Sky code.
-        KernelFn::CryptoRsaSha256Sign => "sky_crypto_rsa_sha256_sign",
+        KernelFn::CryptoRsaSha256Sign => "ipe_crypto_rsa_sha256_sign",
         KernelFn::CryptoRsaSha256Verify => "crypto_rsa_sha256_verify",
         KernelFn::CryptoConstantTimeEqual => "crypto_constant_time_equal",
         // Concrete aliases pin E=String for all AEAD Result-returning functions.
-        KernelFn::CryptoAesGcmEncrypt => "sky_aes_gcm_encrypt",
-        KernelFn::CryptoAesGcmDecrypt => "sky_aes_gcm_decrypt",
-        KernelFn::CryptoChacha20Encrypt => "sky_chacha20_encrypt",
-        KernelFn::CryptoChacha20Decrypt => "sky_chacha20_decrypt",
+        KernelFn::CryptoAesGcmEncrypt => "ipe_aes_gcm_encrypt",
+        KernelFn::CryptoAesGcmDecrypt => "ipe_aes_gcm_decrypt",
+        KernelFn::CryptoChacha20Encrypt => "ipe_chacha20_encrypt",
+        KernelFn::CryptoChacha20Decrypt => "ipe_chacha20_decrypt",
         KernelFn::CryptoAesKeyFromPassword => "crypto_aes_key_from_password",
         KernelFn::CryptoChachaKeyFromPassword => "crypto_chacha_key_from_password",
         KernelFn::CryptoRandomBytes => "crypto_random_bytes",
         KernelFn::CryptoRandomToken => "crypto_random_token",
         // ── Uuid kernels ──────────────────────────────────────────────
         // uuid_v4 / uuid_v7 are `() -> Task Error String`: entropy is
-        // an effect, so they return `SkyTask<E, String>` (E inferred from the
+        // an effect, so they return `IpeTask<E, String>` (E inferred from the
         // enclosing Task chain, like `crypto_random_token`).
         KernelFn::UuidV4 => "uuid_v4",
         KernelFn::UuidV7 => "uuid_v7",
-        // uuid_parse returns SkyMaybe<String> — no E type, no concretisation.
+        // uuid_parse returns IpeMaybe<String> — no E type, no concretisation.
         KernelFn::UuidParse => "uuid_parse",
         // ── Jwt kernels ───────────────────────────────────────────────
         // Concrete aliases pin E=String so Rust can infer the error type at
         // call sites where the Err arm is discarded (matches the Crypto pattern).
-        KernelFn::JwtEncodeHs256 => "sky_jwt_encode_hs256",
-        KernelFn::JwtDecodeHs256 => "sky_jwt_decode_hs256",
-        KernelFn::JwtEncodeRs256 => "sky_jwt_encode_rs256",
-        KernelFn::JwtDecodeRs256 => "sky_jwt_decode_rs256",
+        KernelFn::JwtEncodeHs256 => "ipe_jwt_encode_hs256",
+        KernelFn::JwtDecodeHs256 => "ipe_jwt_decode_hs256",
+        KernelFn::JwtEncodeRs256 => "ipe_jwt_encode_rs256",
+        KernelFn::JwtDecodeRs256 => "ipe_jwt_decode_rs256",
         // ── Jwt builder API ────────────────────────────────────
-        KernelFn::JwtClaims => "sky_jwt_claims",
-        KernelFn::JwtHs256 => "sky_jwt_hs256",
-        KernelFn::JwtRs256 => "sky_jwt_rs256",
-        KernelFn::JwtSubject => "sky_jwt_subject",
-        KernelFn::JwtIssuer => "sky_jwt_issuer",
-        KernelFn::JwtAudience => "sky_jwt_audience",
-        KernelFn::JwtExpiresAt => "sky_jwt_expires_at",
-        KernelFn::JwtNotBefore => "sky_jwt_not_before",
-        KernelFn::JwtIssuedAt => "sky_jwt_issued_at",
-        KernelFn::JwtJwtId => "sky_jwt_jwt_id",
-        KernelFn::JwtWithClaim => "sky_jwt_with_claim",
-        KernelFn::JwtEncode => "sky_jwt_encode",
-        KernelFn::JwtDecode => "sky_jwt_decode",
+        KernelFn::JwtClaims => "ipe_jwt_claims",
+        KernelFn::JwtHs256 => "ipe_jwt_hs256",
+        KernelFn::JwtRs256 => "ipe_jwt_rs256",
+        KernelFn::JwtSubject => "ipe_jwt_subject",
+        KernelFn::JwtIssuer => "ipe_jwt_issuer",
+        KernelFn::JwtAudience => "ipe_jwt_audience",
+        KernelFn::JwtExpiresAt => "ipe_jwt_expires_at",
+        KernelFn::JwtNotBefore => "ipe_jwt_not_before",
+        KernelFn::JwtIssuedAt => "ipe_jwt_issued_at",
+        KernelFn::JwtJwtId => "ipe_jwt_jwt_id",
+        KernelFn::JwtWithClaim => "ipe_jwt_with_claim",
+        KernelFn::JwtEncode => "ipe_jwt_encode",
+        KernelFn::JwtDecode => "ipe_jwt_decode",
         // ── Task combinators ────────────────────────────────────────────
         KernelFn::TaskSucceed => "task_succeed",
         KernelFn::TaskFail => "task_fail",
@@ -1239,7 +1239,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // ── Cli app-entry ───────────────────────────────────────────────
         // CliProgram is emitted via the dedicated emit_cli_call path;
         // kernel_name is kept for match exhaustiveness.
-        KernelFn::CliProgram => "sky_cli_program_",
+        KernelFn::CliProgram => "ipe_cli_program_",
         // ── Std.Auth runtime function names (auth.rs) ──────────────────
         KernelFn::AuthHashPassword => "auth_hash_password",
         KernelFn::AuthHashPasswordCost => "auth_hash_password_cost",
@@ -1345,13 +1345,13 @@ mod tests {
     #[test]
     fn camel_case_module_prefixed() {
         assert_eq!(to_camel_case("Main_Msg"), "MainMsg");
-        assert_eq!(to_camel_case("Sky_Core_Error_Error"), "SkyCoreErrorError");
+        assert_eq!(to_camel_case("Sky_Core_Error_Error"), "IpeCoreErrorError");
     }
 
     #[test]
     fn snake_case_module_prefixed() {
         assert_eq!(to_snake_case("Main_update"), "main_update");
-        assert_eq!(to_snake_case("Sky_Core_List_map"), "sky_core_list_map");
+        assert_eq!(to_snake_case("Sky_Core_List_map"), "ipe_core_list_map");
     }
 
     #[test]
@@ -1362,7 +1362,7 @@ mod tests {
 
     #[test]
     fn entry_main_is_sky_main() {
-        assert_eq!(module_value(&["Main"], "main"), "sky_main");
+        assert_eq!(module_value(&["Main"], "main"), "ipe_main");
         // `main` outside the `Main` module is NOT the entry.
         assert_eq!(module_value(&["Other"], "main"), "other_main");
     }

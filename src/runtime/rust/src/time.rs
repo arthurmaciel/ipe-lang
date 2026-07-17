@@ -2,7 +2,7 @@
 use super::*;
 
 #[cfg(feature = "tokio")]
-pub fn time_now<E: Send + 'static>(_: ()) -> SkyTask<E, i64> {
+pub fn time_now<E: Send + 'static>(_: ()) -> IpeTask<E, i64> {
     Box::pin(async move {
         let ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -13,7 +13,7 @@ pub fn time_now<E: Send + 'static>(_: ()) -> SkyTask<E, i64> {
 }
 
 #[cfg(feature = "tokio")]
-pub fn time_sleep<E: Send + 'static>(ms: i64) -> SkyTask<E, ()> {
+pub fn time_sleep<E: Send + 'static>(ms: i64) -> IpeTask<E, ()> {
     Box::pin(async move {
         // Clamp negative ms to 0: `ms as u64` on a negative wraps to a near-
         // infinite Duration (permanent deadlock from a well-typed Time.sleep).
@@ -23,7 +23,7 @@ pub fn time_sleep<E: Send + 'static>(ms: i64) -> SkyTask<E, ()> {
 }
 
 #[cfg(feature = "tokio")]
-pub fn time_unix_millis<E: Send + 'static>(_: ()) -> SkyTask<E, i64> {
+pub fn time_unix_millis<E: Send + 'static>(_: ()) -> IpeTask<E, i64> {
     time_now(())
 }
 
@@ -119,30 +119,30 @@ pub fn time_format_rfc3339(ms: i64) -> String {
 use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Timelike, Utc, Weekday};
 use chrono_tz::Tz;
 
-fn parse_zone<E: From<String>>(z: &str) -> SkyResult<E, Tz> {
+fn parse_zone<E: From<String>>(z: &str) -> IpeResult<E, Tz> {
     match z.parse::<Tz>() {
-        Ok(t) => SkyResult::Ok(t),
-        Err(_) => SkyResult::Err(format!("Std.Time: unknown zone: {}", z).into()),
+        Ok(t) => IpeResult::Ok(t),
+        Err(_) => IpeResult::Err(format!("Std.Time: unknown zone: {}", z).into()),
     }
 }
 
-fn millis_to_zoned<E: From<String>>(zone: &str, ms: i64) -> SkyResult<E, DateTime<Tz>> {
+fn millis_to_zoned<E: From<String>>(zone: &str, ms: i64) -> IpeResult<E, DateTime<Tz>> {
     let tz = match parse_zone::<E>(zone) {
-        SkyResult::Ok(t) => t,
-        SkyResult::Err(e) => return SkyResult::Err(e),
+        IpeResult::Ok(t) => t,
+        IpeResult::Err(e) => return IpeResult::Err(e),
     };
     match Utc.timestamp_millis_opt(ms).single() {
-        Some(utc) => SkyResult::Ok(utc.with_timezone(&tz)),
-        None => SkyResult::Err(format!("Std.Time: epoch ms out of range: {}", ms).into()),
+        Some(utc) => IpeResult::Ok(utc.with_timezone(&tz)),
+        None => IpeResult::Err(format!("Std.Time: epoch ms out of range: {}", ms).into()),
     }
 }
 
-pub fn time_in_zone<E: From<String>>(zone: String, ms: i64) -> SkyResult<E, String> {
+pub fn time_in_zone<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, String> {
     let dt = match millis_to_zoned::<E>(&zone, ms) {
-        SkyResult::Ok(d) => d,
-        SkyResult::Err(e) => return SkyResult::Err(e),
+        IpeResult::Ok(d) => d,
+        IpeResult::Err(e) => return IpeResult::Err(e),
     };
-    SkyResult::Ok(dt.to_rfc3339())
+    IpeResult::Ok(dt.to_rfc3339())
 }
 
 // Saturating arithmetic: extreme caller-controlled Ints would otherwise
@@ -214,27 +214,27 @@ pub fn time_add_years(years: i64, ms: i64) -> i64 {
     time_add_months(years.saturating_mul(12), ms)
 }
 
-fn zoned_field<E: From<String>, F>(zone: String, ms: i64, f: F) -> SkyResult<E, i64>
+fn zoned_field<E: From<String>, F>(zone: String, ms: i64, f: F) -> IpeResult<E, i64>
 where
     F: FnOnce(DateTime<Tz>) -> i64,
 {
     let dt = match millis_to_zoned::<E>(&zone, ms) {
-        SkyResult::Ok(d) => d,
-        SkyResult::Err(e) => return SkyResult::Err(e),
+        IpeResult::Ok(d) => d,
+        IpeResult::Err(e) => return IpeResult::Err(e),
     };
-    SkyResult::Ok(f(dt))
+    IpeResult::Ok(f(dt))
 }
 
-pub fn time_year<E: From<String>>(z: String, ms: i64) -> SkyResult<E, i64> {
+pub fn time_year<E: From<String>>(z: String, ms: i64) -> IpeResult<E, i64> {
     zoned_field(z, ms, |dt| dt.year() as i64)
 }
-pub fn time_month<E: From<String>>(z: String, ms: i64) -> SkyResult<E, i64> {
+pub fn time_month<E: From<String>>(z: String, ms: i64) -> IpeResult<E, i64> {
     zoned_field(z, ms, |dt| dt.month() as i64)
 }
-pub fn time_day<E: From<String>>(z: String, ms: i64) -> SkyResult<E, i64> {
+pub fn time_day<E: From<String>>(z: String, ms: i64) -> IpeResult<E, i64> {
     zoned_field(z, ms, |dt| dt.day() as i64)
 }
-pub fn time_day_of_week<E: From<String>>(z: String, ms: i64) -> SkyResult<E, i64> {
+pub fn time_day_of_week<E: From<String>>(z: String, ms: i64) -> IpeResult<E, i64> {
     zoned_field(z, ms, |dt| match dt.weekday() {
         Weekday::Mon => 1,
         Weekday::Tue => 2,
@@ -245,18 +245,18 @@ pub fn time_day_of_week<E: From<String>>(z: String, ms: i64) -> SkyResult<E, i64
         Weekday::Sun => 7,
     })
 }
-pub fn time_day_of_year<E: From<String>>(z: String, ms: i64) -> SkyResult<E, i64> {
+pub fn time_day_of_year<E: From<String>>(z: String, ms: i64) -> IpeResult<E, i64> {
     zoned_field(z, ms, |dt| dt.ordinal() as i64)
 }
-pub fn time_week_of_year<E: From<String>>(z: String, ms: i64) -> SkyResult<E, i64> {
+pub fn time_week_of_year<E: From<String>>(z: String, ms: i64) -> IpeResult<E, i64> {
     zoned_field(z, ms, |dt| dt.iso_week().week() as i64)
 }
-pub fn time_is_weekend<E: From<String>>(z: String, ms: i64) -> SkyResult<E, bool> {
+pub fn time_is_weekend<E: From<String>>(z: String, ms: i64) -> IpeResult<E, bool> {
     let dt = match millis_to_zoned::<E>(&z, ms) {
-        SkyResult::Ok(d) => d,
-        SkyResult::Err(e) => return SkyResult::Err(e),
+        IpeResult::Ok(d) => d,
+        IpeResult::Err(e) => return IpeResult::Err(e),
     };
-    SkyResult::Ok(matches!(dt.weekday(), Weekday::Sat | Weekday::Sun))
+    IpeResult::Ok(matches!(dt.weekday(), Weekday::Sat | Weekday::Sun))
 }
 
 pub fn time_is_leap_year(y: i64) -> bool {
@@ -305,58 +305,58 @@ fn local_midnight_in_zone<E: From<String>>(
     se: u32,
     mi_lli: u32,
     target_date: impl Fn(DateTime<Tz>) -> NaiveDate,
-) -> SkyResult<E, i64> {
+) -> IpeResult<E, i64> {
     let dt = match millis_to_zoned::<E>(&zone, ms) {
-        SkyResult::Ok(d) => d,
-        SkyResult::Err(e) => return SkyResult::Err(e),
+        IpeResult::Ok(d) => d,
+        IpeResult::Err(e) => return IpeResult::Err(e),
     };
     let date = target_date(dt);
     let local = match date.and_hms_milli_opt(h, mi, se, mi_lli) {
         Some(l) => l,
-        None => return SkyResult::Err("Std.Time: invalid date components".to_string().into()),
+        None => return IpeResult::Err("Std.Time: invalid date components".to_string().into()),
     };
     match dt.timezone().from_local_datetime(&local).single() {
-        Some(z) => SkyResult::Ok(z.timestamp_millis()),
-        None => SkyResult::Err("Std.Time: ambiguous local time".to_string().into()),
+        Some(z) => IpeResult::Ok(z.timestamp_millis()),
+        None => IpeResult::Err("Std.Time: ambiguous local time".to_string().into()),
     }
 }
 
-pub fn time_start_of_day<E: From<String>>(zone: String, ms: i64) -> SkyResult<E, i64> {
+pub fn time_start_of_day<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, i64> {
     local_midnight_in_zone(zone, ms, 0, 0, 0, 0, |dt| dt.date_naive())
 }
-pub fn time_end_of_day<E: From<String>>(zone: String, ms: i64) -> SkyResult<E, i64> {
+pub fn time_end_of_day<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, i64> {
     match time_start_of_day::<E>(zone, ms) {
-        SkyResult::Ok(start) => SkyResult::Ok(start + 86_400_000 - 1),
-        SkyResult::Err(e) => SkyResult::Err(e),
+        IpeResult::Ok(start) => IpeResult::Ok(start + 86_400_000 - 1),
+        IpeResult::Err(e) => IpeResult::Err(e),
     }
 }
-pub fn time_start_of_week<E: From<String>>(zone: String, ms: i64) -> SkyResult<E, i64> {
+pub fn time_start_of_week<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, i64> {
     local_midnight_in_zone(zone, ms, 0, 0, 0, 0, |dt| {
         let wd = dt.weekday().num_days_from_monday();
         dt.date_naive() - Duration::days(wd as i64)
     })
 }
-pub fn time_start_of_month<E: From<String>>(zone: String, ms: i64) -> SkyResult<E, i64> {
+pub fn time_start_of_month<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, i64> {
     local_midnight_in_zone(zone, ms, 0, 0, 0, 0, |dt| {
         NaiveDate::from_ymd_opt(dt.year(), dt.month(), 1).unwrap_or(dt.date_naive())
     })
 }
-pub fn time_end_of_month<E: From<String>>(zone: String, ms: i64) -> SkyResult<E, i64> {
+pub fn time_end_of_month<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, i64> {
     let dt = match millis_to_zoned::<E>(&zone, ms) {
-        SkyResult::Ok(d) => d,
-        SkyResult::Err(e) => return SkyResult::Err(e),
+        IpeResult::Ok(d) => d,
+        IpeResult::Err(e) => return IpeResult::Err(e),
     };
     let dim = time_days_in_month(dt.year() as i64, dt.month() as i64) as u32;
     let target = NaiveDate::from_ymd_opt(dt.year(), dt.month(), dim);
     let target_date = target.unwrap_or(dt.date_naive());
     local_midnight_in_zone::<E>(zone, ms, 23, 59, 59, 999, move |_| target_date)
 }
-pub fn time_start_of_year<E: From<String>>(zone: String, ms: i64) -> SkyResult<E, i64> {
+pub fn time_start_of_year<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, i64> {
     local_midnight_in_zone(zone, ms, 0, 0, 0, 0, |dt| {
         NaiveDate::from_ymd_opt(dt.year(), 1, 1).unwrap_or(dt.date_naive())
     })
 }
-pub fn time_end_of_year<E: From<String>>(zone: String, ms: i64) -> SkyResult<E, i64> {
+pub fn time_end_of_year<E: From<String>>(zone: String, ms: i64) -> IpeResult<E, i64> {
     local_midnight_in_zone(zone, ms, 23, 59, 59, 999, |dt| {
         NaiveDate::from_ymd_opt(dt.year(), 12, 31).unwrap_or(dt.date_naive())
     })
@@ -366,18 +366,18 @@ pub fn time_format_in_zone<E: From<String>>(
     pattern: String,
     zone: String,
     ms: i64,
-) -> SkyResult<E, String> {
+) -> IpeResult<E, String> {
     let dt = match millis_to_zoned::<E>(&zone, ms) {
-        SkyResult::Ok(d) => d,
-        SkyResult::Err(e) => return SkyResult::Err(e),
+        IpeResult::Ok(d) => d,
+        IpeResult::Err(e) => return IpeResult::Err(e),
     };
     // Non-panicking render: same risk as time_format — stray `%` in a
     // Sky-supplied pattern causes DelayedFormat::fmt to return Err, which
     // to_string() turns into a panic. Use write! and fall back to "".
     let mut out = String::new();
     match std::fmt::write(&mut out, format_args!("{}", dt.format(&pattern))) {
-        Ok(()) => SkyResult::Ok(out),
-        Err(_) => SkyResult::Ok(String::new()),
+        Ok(()) => IpeResult::Ok(out),
+        Err(_) => IpeResult::Ok(String::new()),
     }
 }
 
@@ -420,11 +420,11 @@ pub fn time_from_parts<E: From<String>>(
     h: i64,
     mins: i64,
     s: i64,
-) -> SkyResult<E, i64> {
+) -> IpeResult<E, i64> {
     let tz: Tz = match zone.parse() {
         Ok(t) => t,
         Err(_) => {
-            return SkyResult::Err(format!("Time.fromParts: unknown timezone {:?}", zone).into());
+            return IpeResult::Err(format!("Time.fromParts: unknown timezone {:?}", zone).into());
         }
     };
     // AUD-09: parse `y` into chrono's i32 domain rather than truncating — a
@@ -437,7 +437,7 @@ pub fn time_from_parts<E: From<String>>(
     }) {
         Some(n) => n,
         None => {
-            return SkyResult::Err(
+            return IpeResult::Err(
                 format!(
                     "Time.fromParts: invalid date parts {}-{:02}-{:02} {:02}:{:02}:{:02}",
                     y, m, d, h, mins, s
@@ -447,8 +447,8 @@ pub fn time_from_parts<E: From<String>>(
         }
     };
     match tz.from_local_datetime(&naive).single() {
-        Some(zoned) => SkyResult::Ok(zoned.with_timezone(&Utc).timestamp_millis()),
-        None => SkyResult::Err(format!(
+        Some(zoned) => IpeResult::Ok(zoned.with_timezone(&Utc).timestamp_millis()),
+        None => IpeResult::Err(format!(
             "Time.fromParts: ambiguous/non-existent local time {}-{:02}-{:02} {:02}:{:02}:{:02} in {}",
             y, m, d, h, mins, s, zone).into()),
     }
@@ -456,39 +456,39 @@ pub fn time_from_parts<E: From<String>>(
 
 /// `zoneOffset zone ms -> Result Error Int` — UTC offset in seconds for the
 /// instant in the given zone. Unknown zones return Err.
-pub fn time_zone_offset<E: From<String>>(zone_name: String, ms: i64) -> SkyResult<E, i64> {
+pub fn time_zone_offset<E: From<String>>(zone_name: String, ms: i64) -> IpeResult<E, i64> {
     use chrono::Offset;
     let utc: DateTime<Utc> = match Utc.timestamp_millis_opt(ms).single() {
         Some(t) => t,
-        None => return SkyResult::Err(format!("Time.zoneOffset: invalid epoch ms {}", ms).into()),
+        None => return IpeResult::Err(format!("Time.zoneOffset: invalid epoch ms {}", ms).into()),
     };
     match zone_name.parse::<Tz>() {
-        Ok(tz) => SkyResult::Ok(
+        Ok(tz) => IpeResult::Ok(
             tz.from_utc_datetime(&utc.naive_utc())
                 .offset()
                 .fix()
                 .local_minus_utc() as i64,
         ),
         Err(_) => {
-            SkyResult::Err(format!("Time.zoneOffset: unknown timezone {:?}", zone_name).into())
+            IpeResult::Err(format!("Time.zoneOffset: unknown timezone {:?}", zone_name).into())
         }
     }
 }
 
 /// `zoneName zone ms -> Result Error String` — short timezone abbreviation
 /// (e.g. "EST", "PDT"). Unknown zones return Err.
-pub fn time_zone_name<E: From<String>>(zone_name: String, ms: i64) -> SkyResult<E, String> {
+pub fn time_zone_name<E: From<String>>(zone_name: String, ms: i64) -> IpeResult<E, String> {
     let utc: DateTime<Utc> = match Utc.timestamp_millis_opt(ms).single() {
         Some(t) => t,
-        None => return SkyResult::Err(format!("Time.zoneName: invalid epoch ms {}", ms).into()),
+        None => return IpeResult::Err(format!("Time.zoneName: invalid epoch ms {}", ms).into()),
     };
     match zone_name.parse::<Tz>() {
-        Ok(tz) => SkyResult::Ok(
+        Ok(tz) => IpeResult::Ok(
             tz.from_utc_datetime(&utc.naive_utc())
                 .format("%Z")
                 .to_string(),
         ),
-        Err(_) => SkyResult::Err(format!("Time.zoneName: unknown timezone {:?}", zone_name).into()),
+        Err(_) => IpeResult::Err(format!("Time.zoneName: unknown timezone {:?}", zone_name).into()),
     }
 }
 
@@ -501,21 +501,21 @@ mod time_advanced_tests {
 
     #[test]
     fn test_in_zone_utc() {
-        let r: SkyResult<String, String> = time_in_zone("UTC".to_string(), T1);
-        assert!(matches!(r, SkyResult::Ok(ref s) if s.contains("2026")));
+        let r: IpeResult<String, String> = time_in_zone("UTC".to_string(), T1);
+        assert!(matches!(r, IpeResult::Ok(ref s) if s.contains("2026")));
     }
 
     #[test]
     fn test_in_zone_unknown() {
-        let r: SkyResult<String, String> = time_in_zone("Not/AZone".to_string(), T1);
-        assert!(matches!(r, SkyResult::Err(_)));
+        let r: IpeResult<String, String> = time_in_zone("Not/AZone".to_string(), T1);
+        assert!(matches!(r, IpeResult::Err(_)));
     }
 
     #[test]
     fn test_day_of_week_friday() {
-        let r: SkyResult<String, i64> = time_day_of_week("UTC".to_string(), T1);
+        let r: IpeResult<String, i64> = time_day_of_week("UTC".to_string(), T1);
         assert!(
-            matches!(r, SkyResult::Ok(d) if (1..=7).contains(&d)),
+            matches!(r, IpeResult::Ok(d) if (1..=7).contains(&d)),
             "got {:?}",
             r
         );
@@ -555,46 +555,46 @@ mod time_advanced_tests {
 
     #[test]
     fn test_from_parts_epoch_utc() {
-        let r: SkyResult<String, i64> = time_from_parts("UTC".into(), 1970, 1, 1, 0, 0, 0);
-        assert!(matches!(r, SkyResult::Ok(0)));
+        let r: IpeResult<String, i64> = time_from_parts("UTC".into(), 1970, 1, 1, 0, 0, 0);
+        assert!(matches!(r, IpeResult::Ok(0)));
     }
 
     #[test]
     fn test_from_parts_invalid_returns_err() {
-        let r1: SkyResult<String, i64> = time_from_parts("UTC".into(), 2024, 13, 1, 0, 0, 0); // month 13
-        let r2: SkyResult<String, i64> = time_from_parts("UTC".into(), 2024, 2, 30, 0, 0, 0); // Feb 30
-        let r3: SkyResult<String, i64> = time_from_parts("Not/AZone".into(), 2024, 1, 1, 0, 0, 0);
-        assert!(matches!(r1, SkyResult::Err(_)));
-        assert!(matches!(r2, SkyResult::Err(_)));
-        assert!(matches!(r3, SkyResult::Err(_))); // unknown timezone
+        let r1: IpeResult<String, i64> = time_from_parts("UTC".into(), 2024, 13, 1, 0, 0, 0); // month 13
+        let r2: IpeResult<String, i64> = time_from_parts("UTC".into(), 2024, 2, 30, 0, 0, 0); // Feb 30
+        let r3: IpeResult<String, i64> = time_from_parts("Not/AZone".into(), 2024, 1, 1, 0, 0, 0);
+        assert!(matches!(r1, IpeResult::Err(_)));
+        assert!(matches!(r2, IpeResult::Err(_)));
+        assert!(matches!(r3, IpeResult::Err(_))); // unknown timezone
     }
 
     #[test]
     fn test_zone_offset_utc() {
-        let r: SkyResult<String, i64> = time_zone_offset("UTC".into(), 0);
-        assert!(matches!(r, SkyResult::Ok(0)));
+        let r: IpeResult<String, i64> = time_zone_offset("UTC".into(), 0);
+        assert!(matches!(r, IpeResult::Ok(0)));
     }
 
     #[test]
     fn test_zone_offset_ny_winter() {
         // 1970-01-01 00:00 UTC; America/New_York was EST (-5h) on that day.
-        let r: SkyResult<String, i64> = time_zone_offset("America/New_York".into(), 0);
-        assert!(matches!(r, SkyResult::Ok(v) if v == -5 * 3_600));
+        let r: IpeResult<String, i64> = time_zone_offset("America/New_York".into(), 0);
+        assert!(matches!(r, IpeResult::Ok(v) if v == -5 * 3_600));
     }
 
     #[test]
     fn test_zone_name_utc() {
-        let r: SkyResult<String, String> = time_zone_name("UTC".into(), 0);
+        let r: IpeResult<String, String> = time_zone_name("UTC".into(), 0);
         match r {
-            SkyResult::Ok(name) => assert!(name == "UTC" || name == "Z"),
-            SkyResult::Err(_) => panic!("UTC should be a known timezone"),
+            IpeResult::Ok(name) => assert!(name == "UTC" || name == "Z"),
+            IpeResult::Err(_) => panic!("UTC should be a known timezone"),
         }
     }
 
     #[test]
     fn test_zone_offset_unknown_returns_err() {
-        let r: SkyResult<String, i64> = time_zone_offset("Not/AZone".into(), 0);
-        assert!(matches!(r, SkyResult::Err(_)));
+        let r: IpeResult<String, i64> = time_zone_offset("Not/AZone".into(), 0);
+        assert!(matches!(r, IpeResult::Err(_)));
     }
 
     // ── go-parity kernels ─────────────────────────

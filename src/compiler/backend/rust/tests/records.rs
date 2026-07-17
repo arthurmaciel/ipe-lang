@@ -3,7 +3,7 @@
 //! These exercise the synthesised-struct pipeline that turns closed record
 //! shapes into named Rust structs:
 //!
-//! * one `#[derive(Clone, Debug, PartialEq)]` struct + `SkyStringify` impl per
+//! * one `#[derive(Clone, Debug, PartialEq)]` struct + `IpeStringify` impl per
 //!   distinct field-name set, deduplicated across the program,
 //! * record literal → struct literal, access → `.field`, update → a
 //!   clone-and-reassign block,
@@ -191,14 +191,14 @@ fn synthesises_struct_literal_access_and_update() -> DResult<()> {
         ),
         "struct definition missing or wrong shape:\n{out}"
     );
-    // SkyStringify impl mirroring Go `%v` (`{v0 v1}`), in field order.
+    // IpeStringify impl mirroring Go `%v` (`{v0 v1}`), in field order.
     assert!(
         out.contains(
-            "impl SkyStringify for RecXY {\n    fn sky_show(&self) -> String {\n        \
+            "impl IpeStringify for RecXY {\n    fn ipe_show(&self) -> String {\n        \
              format!(\"{{{} {}}}\", (&ipe_runtime::stringify::Wrap(&self.x)).dispatch(), \
              (&ipe_runtime::stringify::Wrap(&self.y)).dispatch())"
         ),
-        "SkyStringify impl missing or wrong:\n{out}"
+        "IpeStringify impl missing or wrong:\n{out}"
     );
     // Literal → struct literal.
     assert!(

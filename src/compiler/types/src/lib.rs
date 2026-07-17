@@ -640,7 +640,7 @@ pub(crate) fn concrete_super_ok(interner: &Interner, bounds: TyBounds, ty: &Ty) 
         && (!bounds.has_comparable_key() || ord_ok)
         // Stringify (`toString` / `Log.*With`): showable iff it contains no
         // function anywhere — the SAME "no function nested" rule as equatable,
-        // since every non-function type derives `SkyStringify`.
+        // since every non-function type derives `IpeStringify`.
         && (!bounds.has_show() || ty_is_equatable(ty))
         && (!bounds.has_append() || appendable_ok)
         // See `emitted_bound_satisfied`'s matching comment — same
@@ -875,7 +875,7 @@ impl RequestFields {
 /// `(req).<field>.clone()` (see `emit_expr` `Access`), reading the
 /// `ipe_runtime::live::LiveReq` struct directly. Every field name + type here
 /// matches that struct (`path`/`query`/`method` = bare `String`;
-/// `params`/`headers`/`cookies` = `Dict String String`, i.e. `SkyDict<String>`).
+/// `params`/`headers`/`cookies` = `Dict String String`, i.e. `IpeDict<String>`).
 struct LiveReqFields {
     /// The `"LiveReq"` type-constructor symbol (opaque Sky.Live request Con).
     con: Symbol,
@@ -972,8 +972,8 @@ enum ErrFieldTy {
 /// `docs/adr/0017-error-payload-nominal-identity.md`).
 ///
 /// These three types are opaque `Con`s at the type level (so a bare record
-/// literal cannot masquerade as the runtime's concrete `SkyPanicInfo` /
-/// `SkyTypeInfo` / `SkyErrorInfo` structs — that shape was an
+/// literal cannot masquerade as the runtime's concrete `IpePanicInfo` /
+/// `IpeTypeInfo` / `IpeErrorInfo` structs — that shape was an
 /// exit-0-then-cargo-fail), but their fields stay READABLE: the deferred
 /// [`FieldAccess`] pass resolves `p.message` / `t.expected` / `info.details`
 /// against this table, exactly like the opaque server `Request` type does via

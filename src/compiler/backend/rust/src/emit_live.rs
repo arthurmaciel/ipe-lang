@@ -291,9 +291,9 @@ fn emit_live_route(
 ///
 /// The `init` function is passed directly — after B1 constrain, the solver pins
 /// its first parameter type to `LiveReq`, so the emitted Rust function already
-/// has signature `fn(_req: LiveReq) -> (Model, SkyCmd<Msg>)`.
+/// has signature `fn(_req: LiveReq) -> (Model, IpeCmd<Msg>)`.
 ///
-/// `update` is `Fn(Msg, Model) -> (Model, SkyCmd<Msg>)` — multi-param Sky
+/// `update` is `Fn(Msg, Model) -> (Model, IpeCmd<Msg>)` — multi-param Sky
 /// functions are lowered as uncurried Rust fns, matching the runtime bound.
 ///
 /// Store kind and path are read from process env at call time (never compiled in)

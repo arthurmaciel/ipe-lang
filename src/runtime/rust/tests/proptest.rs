@@ -10,28 +10,28 @@ use ipe_runtime_rust::*;
 proptest! {
     #[test]
     fn result_with_default_ok(def: i64, x: i64) {
-        let r: SkyResult<&str, i64> = SkyResult::Ok(x);
+        let r: IpeResult<&str, i64> = IpeResult::Ok(x);
         prop_assert_eq!(result_with_default(def, r), x);
     }
 
     #[test]
     fn result_with_default_err(def: i64, s: String) {
-        let r: SkyResult<String, i64> = SkyResult::Err(s);
+        let r: IpeResult<String, i64> = IpeResult::Err(s);
         prop_assert_eq!(result_with_default(def, r), def);
     }
 
     #[test]
     fn result_map_id(x: i64) {
-        let r: SkyResult<&str, i64> = SkyResult::Ok(x);
-        let mapped = sky_result_map(r, |v| v);
-        prop_assert_eq!(mapped, SkyResult::Ok(x));
+        let r: IpeResult<&str, i64> = IpeResult::Ok(x);
+        let mapped = ipe_result_map(r, |v| v);
+        prop_assert_eq!(mapped, IpeResult::Ok(x));
     }
 
     #[test]
     fn maybe_map_id(x: i64) {
-        let m: SkyMaybe<i64> = SkyMaybe::Just(x);
-        let mapped = sky_maybe_map(m, |v| v);
-        prop_assert_eq!(mapped, SkyMaybe::Just(x));
+        let m: IpeMaybe<i64> = IpeMaybe::Just(x);
+        let mapped = ipe_maybe_map(m, |v| v);
+        prop_assert_eq!(mapped, IpeMaybe::Just(x));
     }
 }
 
@@ -63,7 +63,7 @@ proptest! {
     fn string_to_int_roundtrip(n: i64) {
         let s = string_from_int(n);
         let parsed = string_to_int(s);
-        prop_assert_eq!(parsed, SkyMaybe::Just(n));
+        prop_assert_eq!(parsed, IpeMaybe::Just(n));
     }
 }
 
@@ -75,40 +75,40 @@ proptest! {
 mod task_tests {
     use ipe_runtime_rust::*;
 
-    fn run<A: Send + 'static>(task: SkyTask<SkyError, A>) -> SkyResult<SkyError, A> {
+    fn run<A: Send + 'static>(task: IpeTask<IpeError, A>) -> IpeResult<IpeError, A> {
         task_run(task)
     }
 
-    fn mk_task<A: Send + 'static>(a: A) -> SkyTask<SkyError, A> {
-        ipe_runtime_rust::task::task_succeed::<SkyError, A>(a)
+    fn mk_task<A: Send + 'static>(a: A) -> IpeTask<IpeError, A> {
+        ipe_runtime_rust::task::task_succeed::<IpeError, A>(a)
     }
 
     #[test]
     fn task_succeed_ok() {
-        assert_eq!(run(mk_task(42)), SkyResult::Ok(42));
+        assert_eq!(run(mk_task(42)), IpeResult::Ok(42));
     }
 
     #[test]
     fn task_map_ok() {
         let f = |x: i64| x + 1;
-        assert_eq!(run(task_map(f, mk_task(41))), SkyResult::Ok(42));
+        assert_eq!(run(task_map(f, mk_task(41))), IpeResult::Ok(42));
     }
 
     #[test]
     fn task_and_then_ok() {
         let f = |x: i64| mk_task(x * 2);
-        assert_eq!(run(task_and_then(mk_task(21), f)), SkyResult::Ok(42));
+        assert_eq!(run(task_and_then(mk_task(21), f)), IpeResult::Ok(42));
     }
 
     #[test]
     fn task_fail_is_err() {
-        let err: SkyError = str_err("boom");
-        let t: SkyTask<SkyError, i64> = ipe_runtime_rust::task::task_fail::<SkyError, i64>(err);
+        let err: IpeError = str_err("boom");
+        let t: IpeTask<IpeError, i64> = ipe_runtime_rust::task::task_fail::<IpeError, i64>(err);
         assert!(run(t).is_err());
     }
 
     // `System.getenv : String -> Task Error String`. Regression guard: it MUST
-    // return a `SkyTask` (not a bare `String`), or it fails to type-check in any
+    // return a `IpeTask` (not a bare `String`), or it fails to type-check in any
     // `Task.andThen`/`Task.run` position — and an unset var MUST short-circuit
     // with `Err` (mirroring Go's `System_getenv` ErrNotFound), not `Ok("")`,
     // so a chained Task fails identically on both backends.
@@ -116,17 +116,17 @@ mod task_tests {
     fn system_getenv_present_is_ok() {
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::set_var("IPE_TEST_GETENV_PRESENT", "hello") };
-        let t: SkyTask<SkyError, String> =
-            system_getenv::<SkyError>("IPE_TEST_GETENV_PRESENT".to_string());
-        assert_eq!(run(t), SkyResult::Ok("hello".to_string()));
+        let t: IpeTask<IpeError, String> =
+            system_getenv::<IpeError>("IPE_TEST_GETENV_PRESENT".to_string());
+        assert_eq!(run(t), IpeResult::Ok("hello".to_string()));
     }
 
     #[test]
     fn system_getenv_unset_is_err() {
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::remove_var("IPE_TEST_GETENV_UNSET_XYZ_42") };
-        let t: SkyTask<SkyError, String> =
-            system_getenv::<SkyError>("IPE_TEST_GETENV_UNSET_XYZ_42".to_string());
+        let t: IpeTask<IpeError, String> =
+            system_getenv::<IpeError>("IPE_TEST_GETENV_UNSET_XYZ_42".to_string());
         assert!(run(t).is_err());
     }
 
@@ -142,17 +142,17 @@ mod task_tests {
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::remove_var("IPE_TEST_INT_UNSET") };
         assert_eq!(
-            run(system_getenv_int::<SkyError>("IPE_TEST_INT_OK".to_string())),
-            SkyResult::Ok(42)
+            run(system_getenv_int::<IpeError>("IPE_TEST_INT_OK".to_string())),
+            IpeResult::Ok(42)
         );
         assert!(
-            run(system_getenv_int::<SkyError>(
+            run(system_getenv_int::<IpeError>(
                 "IPE_TEST_INT_BAD".to_string()
             ))
             .is_err()
         );
         assert!(
-            run(system_getenv_int::<SkyError>(
+            run(system_getenv_int::<IpeError>(
                 "IPE_TEST_INT_UNSET".to_string()
             ))
             .is_err()
@@ -170,25 +170,25 @@ mod task_tests {
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::remove_var("IPE_TEST_BOOL_UNSET") };
         assert_eq!(
-            run(system_getenv_bool::<SkyError>(
+            run(system_getenv_bool::<IpeError>(
                 "IPE_TEST_BOOL_T".to_string()
             )),
-            SkyResult::Ok(true)
+            IpeResult::Ok(true)
         );
         assert_eq!(
-            run(system_getenv_bool::<SkyError>(
+            run(system_getenv_bool::<IpeError>(
                 "IPE_TEST_BOOL_F".to_string()
             )),
-            SkyResult::Ok(false)
+            IpeResult::Ok(false)
         );
         assert!(
-            run(system_getenv_bool::<SkyError>(
+            run(system_getenv_bool::<IpeError>(
                 "IPE_TEST_BOOL_BAD".to_string()
             ))
             .is_err()
         );
         assert!(
-            run(system_getenv_bool::<SkyError>(
+            run(system_getenv_bool::<IpeError>(
                 "IPE_TEST_BOOL_UNSET".to_string()
             ))
             .is_err()
@@ -199,16 +199,16 @@ mod task_tests {
     fn system_get_arg_in_and_out_of_range() {
         // index 0 is the program name (the test binary) — always present.
         assert!(matches!(
-            run(system_get_arg::<SkyError>(0)),
-            SkyResult::Ok(SkyMaybe::Just(_))
+            run(system_get_arg::<IpeError>(0)),
+            IpeResult::Ok(IpeMaybe::Just(_))
         ));
         assert_eq!(
-            run(system_get_arg::<SkyError>(9999)),
-            SkyResult::Ok(SkyMaybe::Nothing)
+            run(system_get_arg::<IpeError>(9999)),
+            IpeResult::Ok(IpeMaybe::Nothing)
         );
         assert_eq!(
-            run(system_get_arg::<SkyError>(-1)),
-            SkyResult::Ok(SkyMaybe::Nothing)
+            run(system_get_arg::<IpeError>(-1)),
+            IpeResult::Ok(IpeMaybe::Nothing)
         );
     }
 }
@@ -225,27 +225,27 @@ mod json_tests {
     fn json_int_roundtrip() {
         let json = ipe_runtime_rust::json::json_enc_int(42);
         let encoded = ipe_runtime_rust::json::json_enc_encode(0, json);
-        let decoder: Decoder<SkyError, i64> = ipe_runtime_rust::json::json_decode_int();
+        let decoder: Decoder<IpeError, i64> = ipe_runtime_rust::json::json_decode_int();
         let decoded = ipe_runtime_rust::json::decode_from_json_string(decoder, encoded);
-        assert_eq!(decoded, SkyResult::Ok(42));
+        assert_eq!(decoded, IpeResult::Ok(42));
     }
 
     #[test]
     fn json_string_roundtrip() {
         let json = ipe_runtime_rust::json::json_enc_string("hello".to_string());
         let encoded = ipe_runtime_rust::json::json_enc_encode(0, json);
-        let decoder: Decoder<SkyError, String> = ipe_runtime_rust::json::json_decode_string();
+        let decoder: Decoder<IpeError, String> = ipe_runtime_rust::json::json_decode_string();
         let decoded = ipe_runtime_rust::json::decode_from_json_string(decoder, encoded);
-        assert_eq!(decoded, SkyResult::Ok("hello".to_string()));
+        assert_eq!(decoded, IpeResult::Ok("hello".to_string()));
     }
 
     #[test]
     fn json_bool_roundtrip() {
         let json = ipe_runtime_rust::json::json_enc_bool(true);
         let encoded = ipe_runtime_rust::json::json_enc_encode(0, json);
-        let decoder: Decoder<SkyError, bool> = ipe_runtime_rust::json::json_decode_bool();
+        let decoder: Decoder<IpeError, bool> = ipe_runtime_rust::json::json_decode_bool();
         let decoded = ipe_runtime_rust::json::decode_from_json_string(decoder, encoded);
-        assert_eq!(decoded, SkyResult::Ok(true));
+        assert_eq!(decoded, IpeResult::Ok(true));
     }
 }
 
@@ -260,7 +260,7 @@ fn string_is_empty_true() {
 
 #[test]
 fn string_to_int_fails_on_bad_input() {
-    assert_eq!(string_to_int("not a number".to_string()), SkyMaybe::Nothing);
+    assert_eq!(string_to_int("not a number".to_string()), IpeMaybe::Nothing);
 }
 
 #[test]
@@ -288,7 +288,7 @@ proptest! {
     // to_u8_array succeeds iff the input length matches N; never panics.
     #[test]
     fn to_u8_array_len_checked(xs in proptest::collection::vec(0i64..256, 0..40)) {
-        let r: SkyResult<String, [u8; 16]> = to_u8_array(&xs);
+        let r: IpeResult<String, [u8; 16]> = to_u8_array(&xs);
         if xs.len() == 16 {
             prop_assert!(r.is_ok());
         } else {
@@ -300,16 +300,16 @@ proptest! {
     #[test]
     fn to_array_len_checked(xs in proptest::collection::vec(proptest::prelude::any::<i64>(), 0..16usize)) {
         const N: usize = 8;
-        let result: SkyResult<SkyError, [i64; N]> = to_array::<SkyError, i64, N>(&xs);
+        let result: IpeResult<IpeError, [i64; N]> = to_array::<IpeError, i64, N>(&xs);
         if xs.len() == N {
-            prop_assert!(matches!(result, SkyResult::Ok(_)));
-            if let SkyResult::Ok(arr) = result {
+            prop_assert!(matches!(result, IpeResult::Ok(_)));
+            if let IpeResult::Ok(arr) = result {
                 for i in 0..N {
                     prop_assert_eq!(arr[i], xs[i]);
                 }
             }
         } else {
-            prop_assert!(matches!(result, SkyResult::Err(_)));
+            prop_assert!(matches!(result, IpeResult::Err(_)));
         }
     }
 }
@@ -347,7 +347,7 @@ mod email_smtp_tests {
             user: String::new(),
             pass: String::new(),
         };
-        let t = email_send::<SkyError>(EmailProvider::Smtp(cfg), msg("a@b.com"));
+        let t = email_send::<IpeError>(EmailProvider::Smtp(cfg), msg("a@b.com"));
         assert!(task_run(t).is_err());
     }
 
@@ -361,7 +361,7 @@ mod email_smtp_tests {
             user: String::new(),
             pass: String::new(),
         };
-        let t = email_send::<SkyError>(EmailProvider::Smtp(cfg), msg("not-an-email"));
+        let t = email_send::<IpeError>(EmailProvider::Smtp(cfg), msg("not-an-email"));
         assert!(task_run(t).is_err());
     }
 }

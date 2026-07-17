@@ -66,7 +66,7 @@ pub struct Module {
     /// Set by `ipe_lower::lower::Lowerer::run` when any call site resolves to a
     /// `KernelFn::is_tea()` variant.  The backend reads this flag to decide
     /// whether to append `pub mod tea; pub use tea::*;` to the emitted
-    /// `ipe_runtime/mod.rs` and to add `SkyCmd` / `SkySub` type aliases.
+    /// `ipe_runtime/mod.rs` and to add `IpeCmd` / `IpeSub` type aliases.
     pub uses_tea: bool,
     /// `true` when the lowerer detected at least one Sky.Http.Server kernel call
     /// (`Server.get/post/put/delete/any/api/static/listen`, response builders,
@@ -276,14 +276,14 @@ impl BoundSet {
     /// concrete element type, not just the one instantiation the function
     /// happened to be lowered against.
     const SQL_PARAM: u16 = 1 << 10;
-    /// The `SkyRow` bound: a wildcard `any` generic that flows into a
+    /// The `IpeRow` bound: a wildcard `any` generic that flows into a
     /// `Db.get*` field accessor (`Db.getString`/`getInt`/`getBool`/`getField`)
-    /// gains `ipe_runtime::db::SkyRow` so the generic body type-checks and
+    /// gains `ipe_runtime::db::IpeRow` so the generic body type-checks and
     /// monomorphises per call site against the row's real shape (a query result
     /// `Dict String String`, a pub/sub `Dict` payload, or the typed `LiveReq` an
     /// `init` handler receives). The runtime's `db_get_*` helpers are generic
-    /// over `R: SkyRow`; without this bound the emitted body's `db_get_string(_,
-    /// &payload)` call cannot prove `payload: SkyRow` (E0277). Added ONLY to the
+    /// over `R: IpeRow`; without this bound the emitted body's `db_get_string(_,
+    /// &payload)` call cannot prove `payload: IpeRow` (E0277). Added ONLY to the
     /// wildcard `any` variable and ONLY when the body actually calls a `db_get_*`
     /// — no blast radius on genuine named type variables (`a`, `msg`).
     const IPE_ROW: u16 = 1 << 11;
@@ -338,7 +338,7 @@ impl BoundSet {
     const STATIC: u16 = 1 << 13;
     /// The `Send` auto-trait bound: a generic type-param whose VALUE is moved
     /// into a runtime consumer that requires `Send` — a `Sub` message value
-    /// stored in a `SkySub::Source` closure that is itself `Box<dyn FnOnce(..) +
+    /// stored in a `IpeSub::Source` closure that is itself `Box<dyn FnOnce(..) +
     /// Send>` (e.g. `Sky.Core.WebSocket.onOpen`'s bare `msg`, which flows into
     /// `sub_subscribe_ws_open<M: Send + 'static>`). Unlike the boxed-CALLBACK
     /// `'static` bound ([`Self::STATIC`]), the value here is a bare `msg`, not a
@@ -413,7 +413,7 @@ impl BoundSet {
         Self(self.0 | Self::EQ)
     }
 
-    /// This set with the `SkyStringify` (Sky `toString` / `Log.*With`) bound.
+    /// This set with the `IpeStringify` (Sky `toString` / `Log.*With`) bound.
     #[must_use]
     pub const fn with_show(self) -> Self {
         Self(self.0 | Self::SHOW)
@@ -438,7 +438,7 @@ impl BoundSet {
         Self(self.0 | Self::SQL_PARAM)
     }
 
-    /// This set with the `SkyRow` (Db field-accessor row) bound — see
+    /// This set with the `IpeRow` (Db field-accessor row) bound — see
     /// [`Self::IPE_ROW`].
     #[must_use]
     pub const fn with_sky_row(self) -> Self {
@@ -502,7 +502,7 @@ impl BoundSet {
         self.0 & Self::EQ != 0
     }
 
-    /// Whether the `SkyStringify` bound is set.
+    /// Whether the `IpeStringify` bound is set.
     #[must_use]
     pub const fn has_show(self) -> bool {
         self.0 & Self::SHOW != 0
@@ -527,7 +527,7 @@ impl BoundSet {
         self.0 & Self::SQL_PARAM != 0
     }
 
-    /// Whether the `SkyRow` (Db field-accessor row) bound is set — see
+    /// Whether the `IpeRow` (Db field-accessor row) bound is set — see
     /// [`Self::IPE_ROW`].
     #[must_use]
     pub const fn has_sky_row(self) -> bool {
@@ -602,8 +602,8 @@ pub enum IrType {
     Char,
     Unit,
     /// A task producing a value of type `A` (`Task Error A` in Sky). Renders as
-    /// the project-level alias `SkyTask<A>` (which expands to
-    /// `ipe_runtime::SkyTask<SkyError, A>`). Replaces the former `TaskUnit`
+    /// the project-level alias `IpeTask<A>` (which expands to
+    /// `ipe_runtime::IpeTask<IpeError, A>`). Replaces the former `TaskUnit`
     /// leaf — `Task Error ()` is now `Task(Box::new(Unit))`.
     Task(Box<Self>),
     /// A user-declared enum type, applied to its type arguments.
@@ -624,13 +624,13 @@ pub enum IrType {
         args: Vec<Self>,
     },
     /// The built-in `Maybe a` type, carrying its element type. Renders as the
-    /// runtime's `SkyMaybe<T>`. Distinct from a user [`IrType::Enum`] so the
+    /// runtime's `IpeMaybe<T>`. Distinct from a user [`IrType::Enum`] so the
     /// backend maps it to the shared runtime representation (and the type
     /// checker / lowerer never need a synthetic `type Maybe a = …` declaration).
     Maybe(Box<Self>),
     /// The built-in `Result e a` type, carrying its error type then its success
     /// type (Sky's `Result e a` argument order). Renders as the runtime's
-    /// `SkyResult<E, A>`.
+    /// `IpeResult<E, A>`.
     Result(Box<Self>, Box<Self>),
     /// The built-in `List a` type, carrying its element type. Renders as the
     /// runtime's `Vec<T>` (the representation the Rust runtime's list kernels
@@ -756,7 +756,7 @@ pub enum IrType {
     ///
     /// Backs `Sky.Core.Json.Decode`.  Renders as
     /// `Decoder<T>` using the emitted project's preamble type alias:
-    /// `pub type Decoder<T> = ipe_runtime::json::Decoder<SkyError, T>`.
+    /// `pub type Decoder<T> = ipe_runtime::json::Decoder<IpeError, T>`.
     Decoder(Box<Self>),
     /// The `Db` connection pool type — an opaque handle to an open database
     /// connection pool (`Std.Db`).
@@ -769,15 +769,15 @@ pub enum IrType {
     /// A `Cmd msg` value — an opaque command produced by the `update` function
     /// and passed back to the TEA runtime.
     ///
-    /// Renders as `SkyCmd<T>` via the project-level alias
-    /// `pub type SkyCmd<M> = ipe_runtime::tea::SkyCmd<M>`.
+    /// Renders as `IpeCmd<T>` via the project-level alias
+    /// `pub type IpeCmd<M> = ipe_runtime::tea::IpeCmd<M>`.
     /// The inner type is the message type `M`.
     Cmd(Box<Self>),
     /// A `Sub msg` value — an opaque subscription descriptor returned by
     /// the `subscriptions` function.
     ///
-    /// Renders as `SkySub<T>` via the project-level alias
-    /// `pub type SkySub<M> = ipe_runtime::tea::SkySub<M>`.
+    /// Renders as `IpeSub<T>` via the project-level alias
+    /// `pub type IpeSub<M> = ipe_runtime::tea::IpeSub<M>`.
     /// The inner type is the message type `M`.
     Sub(Box<Self>),
     // ── Sky.Http.Server opaque types ────────────────────────────────────
@@ -826,7 +826,7 @@ pub enum IrType {
     /// `Ws.broadcast` / `Ws.closeClient`.  Never stored in a Sky.Live Model.
     WebSocketServer,
     /// `WebSocketServerCfg` — opaque WebSocket server configuration.  Renders
-    /// as `WsServerCfg<SkyError>`.
+    /// as `WsServerCfg<IpeError>`.
     ///
     /// Constructed by `Ws.defaultCfg` and threaded through the `Ws.with*`
     /// builder chain; consumed by `Ws.upgrade`.  Phantom `msg` type parameter
@@ -879,9 +879,9 @@ pub enum IrType {
     LiveRoute(Box<Self>),
     /// The built-in `Order` type — the result of `Basics.compare`.
     ///
-    /// Renders as `ipe_runtime::SkyOrder` (the `#[repr(u8)]` enum exposed from
+    /// Renders as `ipe_runtime::IpeOrder` (the `#[repr(u8)]` enum exposed from
     /// the runtime's `basics` module and re-exported via `pub use basics::*`).
-    /// Constructors `LT / EQ / GT` emit as `ipe_runtime::SkyOrder::LT` etc.
+    /// Constructors `LT / EQ / GT` emit as `ipe_runtime::IpeOrder::LT` etc.
     /// via the `builtin_runtime_enum` path in the backend (no synthetic
     /// `EnumDef` is injected — the enum lives entirely in the runtime crate).
     ///
@@ -900,16 +900,16 @@ pub enum IrType {
 
     /// The built-in `ErrorKind` type — `Error`'s 11-variant classification
     ///
-    /// Renders as `ipe_runtime::error::SkyErrorKind` (a `#[repr(u8)]` enum,
+    /// Renders as `ipe_runtime::error::IpeErrorKind` (a `#[repr(u8)]` enum,
     /// same convention as [`IrType::Order`]). Constructors (`Io` / `Network` /
     /// …) emit via the `builtin_runtime_enum` path — no synthetic `EnumDef`.
     ErrorKind,
 
     /// The built-in `Error` type — `Error ErrorKind ErrorInfo`.
     ///
-    /// Renders as `ipe_runtime::error::SkyError`. Sole constructor shares its
+    /// Renders as `ipe_runtime::error::IpeError`. Sole constructor shares its
     /// name with the type (`enum_variants[(Prelude, error)] = [error]`, set in
-    /// `ipe_lower`), so it emits as the tuple variant `SkyError::Error(kind,
+    /// `ipe_lower`), so it emits as the tuple variant `IpeError::Error(kind,
     /// info)` via the SAME `builtin_runtime_enum` path `Maybe`/`Result` use —
     /// no synthetic `EnumDef`, no new emitter mechanism.
     ///
@@ -921,7 +921,7 @@ pub enum IrType {
     /// The built-in `ErrorDetails` type — the 5-variant enrichment union
     /// carried optionally on `ErrorInfo.details`.
     ///
-    /// Renders as `ipe_runtime::error::SkyErrorDetails`. Constructor names
+    /// Renders as `ipe_runtime::error::IpeErrorDetails`. Constructor names
     /// match Sky source verbatim (`FfiPanic` / `TypeMismatch` / `HttpStatus`
     /// / `JsonDecode` / `Custom`) and emit via the SAME `builtin_runtime_enum`
     /// path [`IrType::Error`]/[`IrType::ErrorKind`] use — no synthetic
@@ -933,7 +933,7 @@ pub enum IrType {
     /// field level (SEAL fix — see `docs/architecture/
     /// docs/adr/0017-error-payload-nominal-identity.md`).
     ///
-    /// Renders as `ipe_runtime::error::SkyErrorInfo`. NOT a structural
+    /// Renders as `ipe_runtime::error::IpeErrorInfo`. NOT a structural
     /// record: a bare record literal cannot construct it (the type checker
     /// rejects the unification), so the backend never has to reconcile a
     /// synthesized record struct with the runtime's concrete type — the
@@ -946,14 +946,14 @@ pub enum IrType {
     /// `{ message : String, stack : List String }` at the field level (SEAL
     /// fix; same design as [`IrType::ErrorInfo`]).
     ///
-    /// Renders as `ipe_runtime::error::SkyPanicInfo`.
+    /// Renders as `ipe_runtime::error::IpePanicInfo`.
     PanicInfo,
 
     /// The built-in NOMINAL `TypeInfo` type — `TypeMismatch`'s payload,
     /// `{ expected : String, actual : String }` at the field level (SEAL fix
     /// same design as [`IrType::ErrorInfo`]).
     ///
-    /// Renders as `ipe_runtime::error::SkyTypeInfo`.
+    /// Renders as `ipe_runtime::error::IpeTypeInfo`.
     TypeInfo,
 
     /// `Std.Db.Sql`'s opaque WHERE-fragment type — SQL injection closed by
@@ -978,7 +978,7 @@ pub enum IrType {
     /// path (this is ALSO the WASM hydration-island containment predicate a
     /// future `HydrationState` field-type gate consults, per
     /// `docs/architecture/wasm-target.md` §Q6 — nothing to build yet, the
-    /// target does not exist). `Debug` and the Sky-facing `SkyStringify` (the
+    /// target does not exist). `Debug` and the Sky-facing `IpeStringify` (the
     /// trait backing `toString` / interpolation / `Log.*With`) are BOTH
     /// hand-written on the runtime type to ALWAYS render a fixed
     /// `"<redacted>"` placeholder, never the wrapped value — see
@@ -1067,7 +1067,7 @@ pub enum IrType {
     /// `ipe_runtime::email::EmailProvider`.
     ///
     /// The Sky union's own [`EnumDef`] is SUPPRESSED in `ipe_lower` (same
-    /// mechanism as `SkyCacheHandle`): the runtime enum IS the canonical
+    /// mechanism as `IpeCacheHandle`): the runtime enum IS the canonical
     /// representation, and the Sky ctor names (`Resend`/`Ses`/`SendGrid`/`Smtp`)
     /// match the runtime variant names verbatim, so construction and pattern
     /// matching route directly onto the runtime enum. Mirrors the reference's
@@ -1182,16 +1182,16 @@ pub fn ir_type_is_derivable(
         | IrType::Unit
         | IrType::Bytes
         | IrType::Json
-        // `SkyOrder` derives Clone + Copy + PartialEq + Eq + Debug — fully derivable.
+        // `IpeOrder` derives Clone + Copy + PartialEq + Eq + Debug — fully derivable.
         // `Decimal` derives Clone + Copy + PartialEq + Eq + Debug — fully derivable.
-        // `SkyErrorKind` derives Clone + Copy + PartialEq + Eq + Debug.
-        // `SkyError` derives Clone + PartialEq + Debug (not Copy — carries a
-        // heap-allocated `String` message; not `Eq` — its `SkyErrorInfo`
-        // field carries a `SkyMaybe`, which is `PartialEq`-only).
-        // `SkyErrorDetails` derives Clone + PartialEq + Eq + Debug (backlog
+        // `IpeErrorKind` derives Clone + Copy + PartialEq + Eq + Debug.
+        // `IpeError` derives Clone + PartialEq + Debug (not Copy — carries a
+        // heap-allocated `String` message; not `Eq` — its `IpeErrorInfo`
+        // field carries a `IpeMaybe`, which is `PartialEq`-only).
+        // `IpeErrorDetails` derives Clone + PartialEq + Eq + Debug (backlog
         // follow-up).
-        // `SkyErrorInfo` derives Clone + PartialEq + Debug (not Eq — carries
-        // a `SkyMaybe`); `SkyPanicInfo`/`SkyTypeInfo` derive Clone +
+        // `IpeErrorInfo` derives Clone + PartialEq + Debug (not Eq — carries
+        // a `IpeMaybe`); `IpePanicInfo`/`IpeTypeInfo` derive Clone +
         // PartialEq + Eq + Debug (SEAL fix).
         // `SqlFragment` derives Clone + PartialEq (hand-written Debug; see
         // its own doc) — fully derivable, not serde (see `ir_type_is_serde`).
@@ -1333,12 +1333,12 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::Bytes
         | IrType::Json
         | IrType::Generic(_)
-        // `Order` (LT/EQ/GT) is a plain no-payload enum; SkyOrder derives serde.
+        // `Order` (LT/EQ/GT) is a plain no-payload enum; IpeOrder derives serde.
         // `Decimal` is a Copy newtype; rust_decimal supports serde via feature.
-        // `SkyErrorKind`/`SkyError`/`SkyErrorDetails` derive serde — `Error`
+        // `IpeErrorKind`/`IpeError`/`IpeErrorDetails` derive serde — `Error`
         // must serialize to round-trip through a Live session store (e.g. a
         // Model's `historyError : Maybe Error` field). The nominal payload
-        // types `SkyErrorInfo`/`SkyPanicInfo`/`SkyTypeInfo` derive serde for
+        // types `IpeErrorInfo`/`IpePanicInfo`/`IpeTypeInfo` derive serde for
         // the same reason (they ride inside `Error`; SEAL fix).
         | IrType::Order
         | IrType::Decimal
@@ -1452,7 +1452,7 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
 ///
 /// A transparent carrier (list / set / tuple / dict / result / maybe / record /
 /// enum) is `Clone` iff every element it carries is — one non-`Clone` member
-/// poisons the whole composite, matching the emitted Rust (`SkyMaybe<T>: Clone`
+/// poisons the whole composite, matching the emitted Rust (`IpeMaybe<T>: Clone`
 /// requires `T: Clone`, etc.).
 ///
 /// The match is exhaustive with no wildcard: a new [`IrType`] variant must make
@@ -1541,7 +1541,7 @@ pub fn carrier_is_clone(ty: &IrType) -> bool {
 /// * [`IrType::Decoder`] — a nominal runtime struct, not a first-class function
 ///   value; its inner `Box<dyn Fn>` field is a runtime implementation detail.
 /// * Composites carrying a `Fun` (`Maybe (Int -> Int)`, tuples, records, …) —
-///   their carrier is the composite (`SkyMaybe<Box<dyn Fn>>`); promoting the
+///   their carrier is the composite (`IpeMaybe<Box<dyn Fn>>`); promoting the
 ///   inner slot would require type-position carrier changes across every
 ///   constructor and consumer, so their capture/reuse stays fail-closed
 ///   (IPE-L0126 / IPE-L0127).
@@ -1692,7 +1692,7 @@ pub enum Expr {
         items: Vec<Self>,
     },
     /// A cons `head :: tail` — prepend one element to a list. Renders through the
-    /// runtime's `sky_list_cons(head, tail)`, the move-only list prepend.
+    /// runtime's `ipe_list_cons(head, tail)`, the move-only list prepend.
     Cons {
         head: Box<Self>,
         tail: Box<Self>,
@@ -1836,7 +1836,7 @@ pub enum Expr {
     /// Force-and-sequence a Task effect, discarding its result, then continue
     /// with `rest`. Produced by `lower_let` when a `let _ = <task>` binding
     /// discards a Task-typed value; the backend emits
-    /// `task_and_then(Box::new(move |_: ()| -> SkyTask<()> { <rest> }), <effect>)`.
+    /// `task_and_then(Box::new(move |_: ()| -> IpeTask<()> { <rest> }), <effect>)`.
     /// This is the auto-force fix (F1): without `TaskSeq`, the future would be
     /// silently dropped unawaited.
     TaskSeq {
@@ -1848,7 +1848,7 @@ pub enum Expr {
     /// `lower_let` when a `let _ = <task>` binding discards a Task-typed value
     /// inside a **non-Task** (sync) function. The backend emits
     /// `{ let _ = task_run(effect); rest }`. This avoids the E0308 type-mismatch
-    /// that arises when `task_and_then(...)` (returning `SkyTask<E,B>`) is placed
+    /// that arises when `task_and_then(...)` (returning `IpeTask<E,B>`) is placed
     /// in a context whose expected type is not a Task.
     TaskSeqSync {
         effect: Box<Self>,
@@ -1901,18 +1901,18 @@ pub enum CallPin {
     None,
     /// A single free element/value type defaulted to `i64` — `::<i64>`.
     /// Used by `list_head` / `list_tail` / `set_empty` and the `task_fail`
-    /// main-crate wrapper (`fn task_fail<A>(…) -> SkyTask<A>`, error already
-    /// pinned to `SkyError`).
+    /// main-crate wrapper (`fn task_fail<A>(…) -> IpeTask<A>`, error already
+    /// pinned to `IpeError`).
     DefaultI64,
     /// A free key AND value defaulted to a String-keyed i64-valued map —
     /// `::<String, i64>`. Used by `dict_empty` (`fn dict_empty<K, V>()`).
     DefaultDict,
     /// Two inferred leading parameters and a trailing free type defaulted to
-    /// `i64` — `::<_, _, i64>`. Used by `sky_result_map_error<E, F, A>` where
+    /// `i64` — `::<_, _, i64>`. Used by `ipe_result_map_error<E, F, A>` where
     /// the `Ok` type `A` is discarded (the value comes only from an `Err`).
     DefaultResultMapErr,
     /// A single free error/phantom parameter pinned to the project's canonical
-    /// error type — `::<SkyError>`. Used by `decimal_from_string<E: From<String>>`
+    /// error type — `::<IpeError>`. Used by `decimal_from_string<E: From<String>>`
     /// when the `Err` channel is discarded.
     ErrSkyError,
 }
@@ -1923,12 +1923,12 @@ impl CallPin {
     /// [`Self::None`] renders the empty string, so an unpinned call emits no
     /// turbofish.
     ///
-    /// The concrete default types (`i64` / `String` / `SkyError`) mirror the
+    /// The concrete default types (`i64` / `String` / `IpeError`) mirror the
     /// Go/Haskell reference's polymorphic-kernel defaults: a genuinely
     /// unconstrained parameter has no observable effect on behaviour (the value
     /// is discarded / the collection is empty / the task never yields), so any
     /// inhabited default is sound — `i64` and `String` are the reference's
-    /// canonical choices, `SkyError` the project's canonical error type.
+    /// canonical choices, `IpeError` the project's canonical error type.
     #[must_use]
     pub const fn turbofish(self) -> &'static str {
         match self {
@@ -1936,7 +1936,7 @@ impl CallPin {
             Self::DefaultI64 => "::<i64>",
             Self::DefaultDict => "::<String, i64>",
             Self::DefaultResultMapErr => "::<_, _, i64>",
-            Self::ErrSkyError => "::<SkyError>",
+            Self::ErrSkyError => "::<IpeError>",
         }
     }
 }
@@ -2015,7 +2015,7 @@ pub enum BinOp {
     /// panics on `b == 0` (divide by zero) **and** on `i64::MIN / -1`
     /// (signed overflow); `//` is a Rust line comment, so it cannot be
     /// emitted literally. The backend routes this variant through the total
-    /// helper `ipe_runtime::math::sky_int_div(l, r)`, never via `op_str`.
+    /// helper `ipe_runtime::math::ipe_int_div(l, r)`, never via `op_str`.
     IntDiv,
     /// String append `++`. Unlike the infix arithmetic/comparison operators,
     /// this has no single Rust infix form for two `String`s, so the backend

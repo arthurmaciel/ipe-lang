@@ -757,7 +757,7 @@ fn ty_contains_var(ty: &Ty) -> bool {
 ///
 /// A field of a synthesised record struct whose type embeds a `Box<dyn Fn>`
 /// cannot satisfy the struct's derived `Clone`/`Debug`/`PartialEq` nor its
-/// `SkyStringify` impl — so the field type carrying a function is the unsound
+/// `IpeStringify` impl — so the field type carrying a function is the unsound
 /// shape. Used by [`embeds_nonderivable_function`] to test a payload field.
 fn ty_contains_fun(ty: &Ty) -> bool {
     match ty {
@@ -772,7 +772,7 @@ fn ty_contains_fun(ty: &Ty) -> bool {
 /// context suppression (let-bound shape). Recursively clear a
 /// [`CallPin::DefaultI64`] from any `task_fail(…)` call that is the VALUE of a
 /// `let` / `Destructure` binding: the binding slot's type (emitted as an
-/// explicit `let eta_N: SkyTask<T> = …` annotation) already fixes the phantom
+/// explicit `let eta_N: IpeTask<T> = …` annotation) already fixes the phantom
 /// success, so an `::<i64>` turbofish there would be an E0308 conflict (the
 /// pipe/eta shape `Task.fail e |> Task.andThen f`). A bare / lambda-tail
 /// `task_fail` — never a binding value — keeps its needed default pin.
@@ -854,7 +854,7 @@ fn clear_let_bound_task_fail_pins(expr: Expr) -> Expr {
         // An `Expr::Apply` applies a first-class function value whose parameter
         // types are concrete, so every argument slot is typed — a `task_fail`
         // in argument position is pinned by that slot (the backend materialises
-        // it as a typed `let eta_N: SkyTask<T> = <arg>` binding), exactly like a
+        // it as a typed `let eta_N: IpeTask<T> = <arg>` binding), exactly like a
         // `let` value. This is the pipe/eta shape `Task.fail e |> Task.andThen f`
         // that never reaches `lower_call_uniform`'s equal-arity path. Declaw the
         // `task_fail` pin here so the slot's type wins (E0308 otherwise).
@@ -938,7 +938,7 @@ fn clear_let_bound_task_fail_pins(expr: Expr) -> Expr {
 
 /// The built-in, heap-boxed OPAQUE wrapper type constructors whose payload the
 /// runtime stores behind a `Box<dyn Fn>` / trait object and NEVER derives
-/// `Clone`/`Debug`/`PartialEq`/`SkyStringify` over.
+/// `Clone`/`Debug`/`PartialEq`/`IpeStringify` over.
 ///
 /// A function in one of their type arguments is therefore legitimate — a
 /// `Decoder (a -> b)` factory is the entire point of `JsonDec.succeed makeRecord
@@ -977,9 +977,9 @@ fn is_builtin_collection(interner: &Interner, name: Symbol) -> bool {
 /// (`List`/`Dict`/`Set`) or an opaque boxed wrapper?
 ///
 /// IPE-L0114 narrowing: `Ok f` / `Just f` construct the RUNTIME
-/// `SkyResult`/`SkyMaybe` enums, whose derives are generic-bounded
-/// (`impl<T: Clone> Clone for SkyMaybe<T>`, `src/runtime/rust/src/core.rs`)
-/// — the TYPE `SkyMaybe<Box<dyn Fn(..)->R>>` compiles regardless of whether
+/// `IpeResult`/`IpeMaybe` enums, whose derives are generic-bounded
+/// (`impl<T: Clone> Clone for IpeMaybe<T>`, `src/runtime/rust/src/core.rs`)
+/// — the TYPE `IpeMaybe<Box<dyn Fn(..)->R>>` compiles regardless of whether
 /// `T` satisfies the bound; only *using* `.clone()`/`==`/stringify on it would
 /// fail, and each such use is independently gated (type-checker's
 /// `ty_is_equatable`, the Model gate, the serde-derive gate). A
@@ -1002,7 +1002,7 @@ fn is_enum_like_con_head(interner: &Interner, name: Symbol) -> bool {
 /// contains a function?
 ///
 /// A record synthesises to a Rust struct, and a user enum to a Rust enum, both
-/// deriving `Clone`/`Debug`/`PartialEq` + `SkyStringify` — none of which a
+/// deriving `Clone`/`Debug`/`PartialEq` + `IpeStringify` — none of which a
 /// `Box<dyn Fn>` field satisfies — so either would emit Rust that does not build.
 /// The syntactic [`Lowerer::reject_function_valued_field`] gate only sees a
 /// *literally* function-typed field value; this catches the case it misses — a
@@ -1126,7 +1126,7 @@ fn collect_type_vars(t: &canon::Type, out: &mut BTreeSet<Symbol>) {
 
 /// Does this IR type embed a function type anywhere? An enum variant whose
 /// payload field carries a `Box<dyn Fn>` cannot satisfy the enum's derived
-/// `Clone`/`Debug`/`PartialEq` nor its `SkyStringify` impl, so a function-bearing
+/// `Clone`/`Debug`/`PartialEq` nor its `IpeStringify` impl, so a function-bearing
 /// field is the fail-closed first-class gap.
 /// Does `ty` mention any opaque `Sky.Http.Server` runtime type
 /// (`ServerRequest` / `ServerResponse` / `ServerRoute` / `ServerCookie`)?
@@ -1167,7 +1167,7 @@ fn ir_contains_fun(ty: &IrType) -> bool {
     match ty {
         // A curried `FnOnce` chain is the same boxed-closure family as `Fun`.
         IrType::Fun(_, _) | IrType::FnOnceChain(_, _) => true,
-        // `SkyTask<E,A>`, `SkyCmd<M>`, `SkySub<M>` are opaque runtime types; the
+        // `IpeTask<E,A>`, `IpeCmd<M>`, `IpeSub<M>` are opaque runtime types; the
         // inner type parameter might itself embed a function, so recurse.
         IrType::Task(inner) | IrType::Cmd(inner) | IrType::Sub(inner) => ir_contains_fun(inner),
         IrType::Int
@@ -1284,8 +1284,8 @@ fn clone_class(t: &IrType) -> CloneClass {
         // Runtime-verified Clone types.
         // Str(String), Bytes(Vec<u8>), Json(serde_json::Value), Db(Arc-backed),
         // UiPlain (element.rs derives Clone), LiveReq (req.rs derives Clone).
-        // Error: SkyError derives Clone (not Copy — carries a heap `String`).
-        // ErrorDetails: SkyErrorDetails derives Clone (not Copy — carries
+        // Error: IpeError derives Clone (not Copy — carries a heap `String`).
+        // ErrorDetails: IpeErrorDetails derives Clone (not Copy — carries
         // heap-allocated `String`/`Vec<String>` payloads).
         // `SqlFragment` is `#[derive(Clone, PartialEq)]` (no Copy — carries a
         // heap-allocated `String` + `Vec<SqlParam>`).
@@ -1342,7 +1342,7 @@ fn clone_class(t: &IrType) -> CloneClass {
         | IrType::Generic(_) => CloneClass::NonClone,
         // Composite: CloneOk iff all components CloneOk (no NonClone part).
         // `Maybe`, `List`, `Set`, `Result`, `Dict` are NAMED Rust types
-        // (`SkyMaybe<T>`, `Vec<T>`, `BTreeSet<T>`, `SkyResult<E,A>`,
+        // (`IpeMaybe<T>`, `Vec<T>`, `BTreeSet<T>`, `IpeResult<E,A>`,
         // `HashMap<K,V>`) — they never implement `Copy` even when every element
         // is `Copy`. Use `clone_class_named_composite` to floor `CopyLeaf` → `CloneOk`
         // so T5 inserts `.clone()` for multi-use bindings (e.g. `Vec<i64>`).
@@ -3765,10 +3765,10 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
 }
 
 // ── Kernel→type-param-bound propagation — structural IR detection ─────────────
-// (SkyRow, Display — one shared walk, a kernel→bound map.)
+// (IpeRow, Display — one shared walk, a kernel→bound map.)
 //
 // Some runtime kernels are generic over a type parameter with a Rust trait bound
-// — `db_get_*<R: SkyRow>(field: String, row: &R)`,
+// — `db_get_*<R: IpeRow>(field: String, row: &R)`,
 // `basics_to_string<T: std::fmt::Display>(v: T)`. When such a kernel is
 // applied to a value whose Sky type is a generic/wildcard type-param, the
 // enclosing emitted function must carry the kernel's Rust bound on THAT generic
@@ -3788,14 +3788,14 @@ fn count_var_uses(sym: Symbol, expr: &Expr) -> usize {
 // a `Callee::Kernel(..)`; and a call on a CONCRETE value does not reference the
 // generic param.
 //
-// `DbGetById` (arity 3, `db_get_by_id`) is deliberately EXCLUDED from the SkyRow
-// obligation — it takes a `Db` handle, not a row, so it never obliges `SkyRow`.
+// `DbGetById` (arity 3, `db_get_by_id`) is deliberately EXCLUDED from the IpeRow
+// obligation — it takes a `Db` handle, not a row, so it never obliges `IpeRow`.
 //
 // The shared walk is `body_calls_kernel_on_param`; each obligation supplies its
 // own `matcher`. `apply_kernel_type_param_bounds` iterates the map.
 
 /// Is `k` one of the four row-field accessors `db_get_*(field, &row)` whose row
-/// argument obliges its type to be `SkyRow`?
+/// argument obliges its type to be `IpeRow`?
 const fn is_db_row_accessor(k: KernelFn) -> bool {
     matches!(
         k,
@@ -3810,7 +3810,7 @@ const fn is_db_row_accessor(k: KernelFn) -> bool {
 ///
 /// `matcher(tracked, k, args)` answers, for the currently-tracked symbol
 /// `tracked`, whether the call `Callee::Kernel(k)` applied to `args` obligates
-/// it — e.g. SkyRow's `is_db_row_accessor(k) && args[1] is Var(tracked)` (`SkyRow`),
+/// it — e.g. IpeRow's `is_db_row_accessor(k) && args[1] is Var(tracked)` (`IpeRow`),
 /// or Display's `k == BasicsToString && args[0] is Var(tracked)` (`Display`). Every
 /// distinct kernel→bound obligation is expressed as one such matcher; the
 /// STRUCTURAL walk (shadow discipline + alias-transparency) is shared, so a new
@@ -3945,7 +3945,7 @@ fn body_calls_kernel_on_param(
 
 /// Is `args[idx]` a direct `Var`/`CloneVar` reference to `tracked`? The shared
 /// "the param sits in the bound-obliging arg position" test for every
-/// direct-arg-position kernel→bound matcher (Shape A: `SkyRow` at arg 1,
+/// direct-arg-position kernel→bound matcher (Shape A: `IpeRow` at arg 1,
 /// `Display` at arg 0).
 fn arg_is_tracked_var(args: &[Expr], idx: usize, tracked: Symbol) -> bool {
     matches!(args.get(idx), Some(Expr::Var(s) | Expr::CloneVar(s)) if *s == tracked)
@@ -3953,7 +3953,7 @@ fn arg_is_tracked_var(args: &[Expr], idx: usize, tracked: Symbol) -> bool {
 
 /// Is `*tv` a wildcard-`any` generic (a fresh `anyp_`-pooled binder minted by
 /// `split_typed_sig`, or the raw `any` symbol) rather than a genuine named tvar
-/// (`a`/`msg`)? The `SkyRow` bound is restricted to wildcards; the
+/// (`a`/`msg`)? The `IpeRow` bound is restricted to wildcards; the
 /// `Display` bound applies to BOTH.
 fn is_wildcard_any_tv(interner: &Interner, tv: Symbol) -> bool {
     interner
@@ -4116,10 +4116,10 @@ fn body_boxes_generic_callback(tv: Symbol, expr: &Expr) -> bool {
     }
 }
 
-/// GENERAL kernel→type-param-bound propagation (`SkyRow` + `Display`,
-/// generalising the original single-purpose `Db.get*`→`SkyRow` walk).
+/// GENERAL kernel→type-param-bound propagation (`IpeRow` + `Display`,
+/// generalising the original single-purpose `Db.get*`→`IpeRow` walk).
 ///
-/// A kernel whose Rust signature bounds a type parameter — `db_get_*<R: SkyRow>`,
+/// A kernel whose Rust signature bounds a type parameter — `db_get_*<R: IpeRow>`,
 /// `basics_to_string<T: std::fmt::Display>` — obliges that Rust bound on the Sky
 /// generic its argument resolves to. When such a kernel is applied,
 /// alias-transparently, to a value whose type is `Generic(tv)`, we add the
@@ -4132,11 +4132,11 @@ fn body_boxes_generic_callback(tv: Symbol, expr: &Expr) -> bool {
 /// Each obligation supplies a `matcher(tracked, k, args)` — does this kernel
 /// call obligate `tracked` (the exact arg position that the kernel bounds holds
 /// a `Var`/`CloneVar` of it)? — and a wildcard-only flag: is the bound
-/// restricted to wildcard `any` params (as the `SkyRow` bound is), or does it apply
+/// restricted to wildcard `any` params (as the `IpeRow` bound is), or does it apply
 /// to named tvars too (as the `Display` bound does)? The matched `BoundSet` builder records
 /// the Rust bound.
 ///
-/// A subtlety in the `SkyRow` case: a param has TWO distinct symbols. `tv` is
+/// A subtlety in the `IpeRow` case: a param has TWO distinct symbols. `tv` is
 /// the TYPE-VARIABLE symbol that names the Rust generic `T{n}`; the VALUE binder
 /// the body references (`payload`, `x`) is a SEPARATE symbol, found in `params`
 /// as the `(binder, IrType::Generic(tv))` pair. So the walk resolves `tv`'s
@@ -4153,13 +4153,13 @@ fn apply_kernel_type_param_bounds(
     params: &[(Symbol, IrType)],
     body: &Expr,
 ) {
-    // SkyRow: a `Db.get*(field, &row)` accessor whose ROW arg (index 1)
+    // IpeRow: a `Db.get*(field, &row)` accessor whose ROW arg (index 1)
     // is the tracked param. Wildcard-`any`-only: a genuine named tvar never
     // legitimately flows into a row accessor, and restricting to wildcards keeps
-    // the record struct + reusable generics clean (see SkyRow's false-positive
+    // the record struct + reusable generics clean (see IpeRow's false-positive
     // golden). `DbGetById` (arity 3) takes a `Db` handle, not a row, so it is
     // excluded by `is_db_row_accessor`.
-    let sky_row_matcher = |tracked: Symbol, k: KernelFn, args: &[Expr]| -> bool {
+    let ipe_row_matcher = |tracked: Symbol, k: KernelFn, args: &[Expr]| -> bool {
         is_db_row_accessor(k) && arg_is_tracked_var(args, 1, tracked)
     };
     // Display: a `Basics.toString(x)` application whose sole arg (index 0)
@@ -4173,7 +4173,7 @@ fn apply_kernel_type_param_bounds(
     // `Sub.subscribeWebSocket raw kind msg` — the bare `msg` (arg index 2) is
     // MOVED into the `sub_subscribe_ws_open<M: Send + 'static>` runtime fn (the
     // backend peephole routes the "open" kind there), which stores it in a
-    // `SkySub::Source` closure that is `Box<dyn FnOnce(..) + Send>`. The value
+    // `IpeSub::Source` closure that is `Box<dyn FnOnce(..) + Send>`. The value
     // therefore needs `Send + 'static`. The message/close/error kinds pass a
     // BOXED callback (already `Send + 'static`), so this obligation is about the
     // bare-value onOpen path — but firing it whenever `msg` is a tracked Var is
@@ -4194,8 +4194,8 @@ fn apply_kernel_type_param_bounds(
                     && body_calls_kernel_on_param(*binder, body, matcher)
             })
         };
-        // SkyRow — wildcard-only.
-        if is_wildcard && fires_on(&sky_row_matcher) {
+        // IpeRow — wildcard-only.
+        if is_wildcard && fires_on(&ipe_row_matcher) {
             *bounds = bounds.with_sky_row();
         }
         // Display — wildcard OR named.
@@ -6288,7 +6288,7 @@ pub struct Lowerer<'a> {
     /// `String` binder in that ctor-arg slot plus an arm guard
     /// (`binder == "live"`), instead of a bare literal pattern. Rust cannot
     /// literal-match a `&str` pattern against an owned `String` ctor FIELD
-    /// (`SkyMaybe::Just(String)`) the way it can against a raw `&str`
+    /// (`IpeMaybe::Just(String)`) the way it can against a raw `&str`
     /// scrutinee — the same "a Vec/String enum field cannot be pattern-
     /// matched inline" shape [`Self::nested_cons_binders`] documents, applied
     /// to `String` instead of `List`. Sized by
@@ -7144,12 +7144,12 @@ impl<'a> Lowerer<'a> {
         let mut types_ir: Vec<TypeDef> = Vec::with_capacity(self.m.unions.len());
         for u in &self.m.unions {
             // `Std.Cache`'s opaque `type Cache k v = Cache Int` is backed
-            // by the NON-generic runtime enum `SkyCacheHandle { Cache(i64) }` —
+            // by the NON-generic runtime enum `IpeCacheHandle { Cache(i64) }` —
             // the handle carries no type args (`k`/`v` live only on the kernel
             // calls). Skip its `EnumDef` entirely so the backend never emits a
             // generic `enum StdCacheCache<T1, T2> { Cache(i64) }` with unused
             // params (E0392); the `builtin_runtime_enum` / `enum_name` overrides
-            // route the type + `Cache` ctor + pattern to `SkyCacheHandle`
+            // route the type + `Cache` ctor + pattern to `IpeCacheHandle`
             // instead (mirrors the reference's `runtimeOpaqueTypes` mapping). We
             // still call `lower_enum` for its side effect of validating the ctor
             // payload (a `Task`-arity / polymorphism error must still surface).
@@ -7166,7 +7166,7 @@ impl<'a> Lowerer<'a> {
             // Skip its `EnumDef` so the backend never emits a duplicate
             // `StdEmailEmailProvider`; the `builtin_runtime_enum` / `enum_name`
             // overrides route the type + ctors + patterns to the runtime enum
-            // (mirrors the `SkyCacheHandle` suppression + the reference's
+            // (mirrors the `IpeCacheHandle` suppression + the reference's
             // `runtimeOpaqueTypes` mapping). `lower_enum` is still called above
             // for its ctor-payload validation side effect.
             if self.is_email_provider_union(u) {
@@ -7244,7 +7244,7 @@ impl<'a> Lowerer<'a> {
 
         // detect whether any TEA kernel call is present. The backend uses
         // this flag to append `pub mod tea; pub use tea::*;` to mod.rs and to
-        // add `SkyCmd<M>` / `SkySub<M>` type aliases.
+        // add `IpeCmd<M>` / `IpeSub<M>` type aliases.
         let uses_tea = kernel_usage.tea;
 
         // detect whether any Sky.Http.Server kernel call is present, OR any
@@ -7488,7 +7488,7 @@ impl<'a> Lowerer<'a> {
 
     /// is `u` the `Std.Cache.Cache` opaque handle union — home
     /// `["Std", "Cache"]`, name `Cache`? Its `EnumDef` is suppressed (the type
-    /// is backed by the runtime `SkyCacheHandle`); the backend routes the type +
+    /// is backed by the runtime `IpeCacheHandle`); the backend routes the type +
     /// ctor + pattern there via `builtin_runtime_enum`/`enum_name` overrides.
     fn is_cache_handle_union(&self, u: &canon::Union) -> bool {
         self.is_cache_handle_con(&u.home, u.name)
@@ -7515,7 +7515,7 @@ impl<'a> Lowerer<'a> {
 
     /// is `(module, name)` the `Std.Cache.Cache` opaque handle type —
     /// module `["Std", "Cache"]`, name `Cache`? Its `k`/`v` args are dropped at
-    /// lowering (backed by the non-generic runtime `SkyCacheHandle`).
+    /// lowering (backed by the non-generic runtime `IpeCacheHandle`).
     fn is_cache_handle_con(&self, module: &[Symbol], name: Symbol) -> bool {
         self.interner.resolve(name) == Some("Cache")
             && matches!(
@@ -7583,7 +7583,7 @@ impl<'a> Lowerer<'a> {
                 // `ipe_backend_rust::emit_types`) drops the enum's
                 // `#[derive(Clone, Debug, PartialEq)]` whenever any field
                 // (transitively) embeds `IrType::Fun`, and the hand-written
-                // `SkyStringify` impl renders a non-derivable field as the
+                // `IpeStringify` impl renders a non-derivable field as the
                 // `<fn>` placeholder instead of calling a derive. No gate
                 // needed at declaration time; see
                 // `docs/adr/0015-constructor-payload-functions-narrowed-gates.md`.
@@ -7990,7 +7990,7 @@ impl<'a> Lowerer<'a> {
                 }
                 // General kernel→type-param-bound propagation: a param that flows
                 // into a bound-obliging kernel gains that kernel's Rust bound —
-                // SkyRow (`Db.get*`→`SkyRow`, wildcard-only) + Display
+                // IpeRow (`Db.get*`→`IpeRow`, wildcard-only) + Display
                 // (`toString`→`Display`, any tvar). See
                 // `apply_kernel_type_param_bounds`.
                 apply_kernel_type_param_bounds(
@@ -8142,7 +8142,7 @@ impl<'a> Lowerer<'a> {
                     }
                     let mut type_params =
                         compute_type_params(quantified_syms, var_bounds, &params, &ret);
-                    // General kernel→type-param-bound propagation (SkyRow +
+                    // General kernel→type-param-bound propagation (IpeRow +
                     // Display) — see `apply_kernel_type_param_bounds`.
                     apply_kernel_type_param_bounds(
                         self.interner,
@@ -8238,7 +8238,7 @@ impl<'a> Lowerer<'a> {
         if b.has_eq() {
             set = set.with_eq();
         }
-        // Stringify (`toString` / `Log.*With`) → Rust `SkyStringify`. Like `eq`,
+        // Stringify (`toString` / `Log.*With`) → Rust `IpeStringify`. Like `eq`,
         // it adds no `Copy` (a single stringify moves/borrows the value); the
         // multi-use case is the general Clone concern, not Stringify-specific.
         if b.has_show() {
@@ -8537,7 +8537,7 @@ impl<'a> Lowerer<'a> {
                 "Float" => Ok(IrType::Float),
                 "Bool" => Ok(IrType::Bool),
                 // `Order` is the built-in three-way comparison result type.
-                // Backed by `ipe_runtime::SkyOrder` (repr(u8) enum: LT/EQ/GT).
+                // Backed by `ipe_runtime::IpeOrder` (repr(u8) enum: LT/EQ/GT).
                 "Order" => Ok(IrType::Order),
                 // `Decimal` is the Std.Decimal arbitrary-precision type.
                 // Backed by `ipe_runtime::decimal::Decimal` (rust_decimal newtype).
@@ -8550,18 +8550,18 @@ impl<'a> Lowerer<'a> {
                 "Secret" => Ok(IrType::Secret),
                 "String" => Ok(IrType::Str),
                 // `Error` is Sky's fixed error-channel type — backed by the real
-                // `ipe_runtime::error::SkyError` ADT, no
+                // `ipe_runtime::error::IpeError` ADT, no
                 // longer merged with `String`. `ErrorKind` mirrors `Order`.
                 "Error" => Ok(IrType::Error),
                 "ErrorKind" => Ok(IrType::ErrorKind),
                 // `ErrorDetails` — the 5-variant enrichment union carried on
                 // `ErrorInfo.details : Maybe ErrorDetails`. Backed by
-                // `ipe_runtime::error::SkyErrorDetails`.
+                // `ipe_runtime::error::IpeErrorDetails`.
                 "ErrorDetails" => Ok(IrType::ErrorDetails),
                 // The NOMINAL error-payload types (SEAL fix) —
                 // annotatable via canon's `EXTRA_BUILTIN_TYPE_NAMES`. Backed
-                // by `ipe_runtime::error::{SkyErrorInfo, SkyPanicInfo,
-                // SkyTypeInfo}`.
+                // by `ipe_runtime::error::{IpeErrorInfo, IpePanicInfo,
+                // IpeTypeInfo}`.
                 "ErrorInfo" => Ok(IrType::ErrorInfo),
                 "PanicInfo" => Ok(IrType::PanicInfo),
                 "TypeInfo" => Ok(IrType::TypeInfo),
@@ -8604,7 +8604,7 @@ impl<'a> Lowerer<'a> {
                 // `Task Error a` — the canonical user annotation has two type
                 // args: the error type (arg 0, always the implicit `Error`) and
                 // the success type (arg 1). The IR discards the error type since
-                // it is always `SkyError = String` at the Rust level.
+                // it is always `IpeError = String` at the Rust level.
                 "Task" if args.len() == 2 => {
                     let inner =
                         self.ir_type_from_canon(args.get(1).ok_or_else(task_arg_bug)?, generics)?;
@@ -8794,7 +8794,7 @@ impl<'a> Lowerer<'a> {
                 "Migration" => Ok(self.migration_record_ir()),
                 // `WebSocketServer` — opaque per-peer WsHandle.
                 "WebSocketServer" => Ok(IrType::WebSocketServer),
-                // `WebSocketServerCfg` — opaque WsServerCfg<SkyError>.
+                // `WebSocketServerCfg` — opaque WsServerCfg<IpeError>.
                 "WebSocketServerCfg" => Ok(IrType::WebSocketServerCfg),
                 // `LiveRoute page` is parametric on the page type it builds:
                 // a bare `LiveRoute` annotation cannot
@@ -8864,7 +8864,7 @@ impl<'a> Lowerer<'a> {
                     .contains_key(&(ModPath(home.clone()), *name)) =>
                 {
                     // drop the phantom `k`/`v` of `Std.Cache.Cache k v`
-                    // (backed by the non-generic `SkyCacheHandle`) — twin of the
+                    // (backed by the non-generic `IpeCacheHandle`) — twin of the
                     // solved-Ty arm; see its comment for the E0283 rationale.
                     let ir_args = if self.is_cache_handle_con(home, *name) {
                         Vec::new()
@@ -9512,7 +9512,7 @@ impl<'a> Lowerer<'a> {
                 "Float" => Ok(IrType::Float),
                 "Bool" => Ok(IrType::Bool),
                 // `Order` is the built-in three-way comparison result type.
-                // Backed by `ipe_runtime::SkyOrder` (repr(u8) enum: LT/EQ/GT).
+                // Backed by `ipe_runtime::IpeOrder` (repr(u8) enum: LT/EQ/GT).
                 "Order" => Ok(IrType::Order),
                 // `Decimal` is the Std.Decimal arbitrary-precision type.
                 // Backed by `ipe_runtime::decimal::Decimal` (rust_decimal newtype).
@@ -9525,7 +9525,7 @@ impl<'a> Lowerer<'a> {
                 "Secret" => Ok(IrType::Secret),
                 // `Algorithm` shares the `String` IR representation.
                 "String" | "Algorithm" => Ok(IrType::Str),
-                // `Error` — backed by the real `ipe_runtime::error::SkyError` ADT
+                // `Error` — backed by the real `ipe_runtime::error::IpeError` ADT
                 // no longer merged with `String`. Lambda
                 // parameters typed as `Error` (e.g. the `e` in `\e -> ...` when
                 // `onError`/`mapError` pins the handler) lower here too.
@@ -9535,8 +9535,8 @@ impl<'a> Lowerer<'a> {
                 // the same time.
                 "ErrorDetails" => Ok(IrType::ErrorDetails),
                 // The NOMINAL error-payload types (SEAL fix) —
-                // backed by `ipe_runtime::error::{SkyErrorInfo, SkyPanicInfo,
-                // SkyTypeInfo}`. Pattern-bound payloads (`Error _ info ->` /
+                // backed by `ipe_runtime::error::{IpeErrorInfo, IpePanicInfo,
+                // IpeTypeInfo}`. Pattern-bound payloads (`Error _ info ->` /
                 // `FfiPanic p ->`) get these solved Cons, so unannotated
                 // helpers over them lower to the runtime types and agree with
                 // their call sites.
@@ -9575,7 +9575,7 @@ impl<'a> Lowerer<'a> {
                     "Task applied to wrong number of type arguments",
                 )),
                 // The built-in `Maybe a` / `Result e a` map to dedicated IR
-                // types (the runtime's `SkyMaybe` / `SkyResult`); they are not
+                // types (the runtime's `IpeMaybe` / `IpeResult`); they are not
                 // user `type` declarations, so they precede the enum lookup.
                 "Maybe" if args.len() == 1 => {
                     let elem =
@@ -9620,7 +9620,7 @@ impl<'a> Lowerer<'a> {
                     Ok(IrType::Set(Box::new(elem)))
                 }
                 // `Decoder a` — the opaque JSON decoder type.
-                // Maps to `ipe_runtime::json::Decoder<SkyError, T>`, aliased as
+                // Maps to `ipe_runtime::json::Decoder<IpeError, T>`, aliased as
                 // `Decoder<T>` in the emitted project's preamble.
                 "Decoder" if args.len() == 1 => {
                     let inner = self.ir_type_from_ty(
@@ -9639,8 +9639,8 @@ impl<'a> Lowerer<'a> {
                 "Db" => Ok(IrType::Db),
                 // `Cmd msg` / `Sub msg` — the TEA command and subscription types.
                 // Each carries exactly one type argument (the
-                // message type `M`).  Maps to `ipe_runtime::tea::SkyCmd<M>` /
-                // `ipe_runtime::tea::SkySub<M>`, aliased in the emitted preamble.
+                // message type `M`).  Maps to `ipe_runtime::tea::IpeCmd<M>` /
+                // `ipe_runtime::tea::IpeSub<M>`, aliased in the emitted preamble.
                 "Cmd" if args.len() == 1 => {
                     let inner = self.ir_type_from_ty(
                         args.first().ok_or_else(|| {
@@ -9704,7 +9704,7 @@ impl<'a> Lowerer<'a> {
                 "Migration" => Ok(self.migration_record_ir()),
                 // `WebSocketServer` — opaque per-peer WsHandle.
                 "WebSocketServer" => Ok(IrType::WebSocketServer),
-                // `WebSocketServerCfg` — opaque WsServerCfg<SkyError>.
+                // `WebSocketServerCfg` — opaque WsServerCfg<IpeError>.
                 "WebSocketServerCfg" => Ok(IrType::WebSocketServerCfg),
                 // ── Std.Ui / Std.Html parametric type constructors ────────
                 // Mirror of `ir_type_from_canon` (which handles user-written
@@ -9872,7 +9872,7 @@ impl<'a> Lowerer<'a> {
                     // under.
                     //
                     // `Std.Cache.Cache k v` is backed by the NON-generic
-                    // runtime `SkyCacheHandle`, so drop its `k`/`v` args here —
+                    // runtime `IpeCacheHandle`, so drop its `k`/`v` args here —
                     // otherwise they surface as unused generic params on the
                     // `Std.Cache` wrapper fns (`new : CacheCfg -> Task Error
                     // (Cache k v)` whose result no longer mentions them), an
@@ -10173,8 +10173,8 @@ impl<'a> Lowerer<'a> {
     /// -> Task Error a`'s internal `report`/`logAndFail` closures) has its
     /// return type solved as the SAME free var as the enclosing function's
     /// `a`. Mapping it to `IrType::Json` unconditionally emits a closure
-    /// typed `Fn(..) -> SkyTask<JsonVal>` where the call site expects
-    /// `SkyTask<T1>` — an E0308 exit-0-then-cargo-fail. Checking
+    /// typed `Fn(..) -> IpeTask<JsonVal>` where the call site expects
+    /// `IpeTask<T1>` — an E0308 exit-0-then-cargo-fail. Checking
     /// `current_poly_tvars` first routes the enclosing-generic case to
     /// `IrType::Generic(sym)` (`T1`, matching the function's own
     /// quantification), and only a var with NO enclosing binder — the
@@ -10226,14 +10226,14 @@ impl<'a> Lowerer<'a> {
                     }
                     "Result" if args.len() == 2 => {
                         // A free `Ty::Var` in the ERROR slot must pin to
-                        // `IrType::Error` (`SkyError`), NOT the Json fallback:
+                        // `IrType::Error` (`IpeError`), NOT the Json fallback:
                         // the emitted `ok_res` wrapper (`ResultOkDefault`, see
                         // the ctor-lowering arm) pins an unresolved error type
-                        // to the project's `SkyError` — "the canonical
+                        // to the project's `IpeError` — "the canonical
                         // default" — so a type ANNOTATION derived from the
                         // same free var (e.g. an eta-param binder for a piped
                         // `Ok f |> Result.andMap …`) must agree, or the
-                        // emitted `let eta_0: SkyResult<JsonVal, _> = ok_res(…)`
+                        // emitted `let eta_0: IpeResult<JsonVal, _> = ok_res(…)`
                         // is an E0308 exit-0-then-cargo-fail (found while
                         // gating the 5th attempt: the
                         // `result_and_map_fn_payload` positive-path
@@ -10753,11 +10753,11 @@ impl<'a> Lowerer<'a> {
                 // own declared signature.
                 if matches!(&callee, Callee::Kernel(_)) && self.callee_arity(&callee)? == 0 {
                     // ── TEA gate: `Cmd.none` / `Sub.none` carry an opaque
-                    // `msg` type-parameter (`SkyCmd<M>` / `SkySub<M>`).  When the
+                    // `msg` type-parameter (`IpeCmd<M>` / `IpeSub<M>`).  When the
                     // HM solver leaves `msg` as a free `Ty::Var` — the common
                     // shape here since there is no update loop to anchor `msg`
                     // via a user `Msg` ADT — the emitted `cmd_none()` / `sub_none()`
-                    // has an uninferrable `SkyCmd<_>` type that `cargo build`
+                    // has an uninferrable `IpeCmd<_>` type that `cargo build`
                     // rejects with E0282.  Call `ir_type_from_ty` on the region
                     // type here; it naturally raises `Feature::Polymorphism`
                     // (IPE-L0102) when the `msg` argument is still a free var,
@@ -11386,13 +11386,13 @@ impl<'a> Lowerer<'a> {
     /// * `Dict.empty` — `Dict k v`; either key OR value free
     ///   (`dict_empty<K, V>`). Default `::<String, i64>`.
     /// * `Task.fail` — `Task a`; the phantom success `a` (the main-crate wrapper
-    ///   `task_fail<A>` already pins the error to `SkyError`). `::<i64>`.
+    ///   `task_fail<A>` already pins the error to `IpeError`). `::<i64>`.
     /// * `Result.mapError` — `Result f a`; the `Ok` type `a` when the input was
-    ///   an `Err` (`sky_result_map_error<E, F, A>`). `::<_, _, i64>`.
+    ///   an `Err` (`ipe_result_map_error<E, F, A>`). `::<_, _, i64>`.
     /// * `Decimal.fromString` / `Decimal.div` / `Decimal.mod` — `Result e
     ///   Decimal`; the discarded error `e`
     ///   (`decimal_from_string`/`decimal_div`/`decimal_mod<E: From<String>>`).
-    ///   `::<SkyError>`.
+    ///   `::<IpeError>`.
     ///
     /// A second, ARGUMENT-driven family pins a list-consuming kernel whose sole
     /// free `T` comes only from a `Vec<T>` argument and never appears in the
@@ -11525,7 +11525,7 @@ impl<'a> Lowerer<'a> {
                 _ => CallPin::None,
             },
             // `Task a` — pin when the success `a` is free (the wrapper's error is
-            // already `SkyError`).
+            // already `IpeError`).
             KernelFn::TaskFail => match ty {
                 Ty::Con { name, args, .. }
                     if self.interner.resolve(*name) == Some("Task")
@@ -11547,17 +11547,17 @@ impl<'a> Lowerer<'a> {
             },
             // `Result e Decimal` — pin the error channel `e` (1st arg). Sky's
             // `Decimal.fromString : String -> Result Error Decimal` fixes `e` to
-            // the canonical `Error`, whose only Rust inhabitant is `SkyError`, so
+            // the canonical `Error`, whose only Rust inhabitant is `IpeError`, so
             // the pin is unconditional whenever the result is a `Result`. Unlike
             // the free-collection kernels, the ambiguity here is NOT a free var:
             // the solver DOES resolve `e` to `Error`, but the runtime bound
             // `decimal_from_string<E: From<String>>` cannot be back-inferred once
-            // the `Err` arm is discarded (`sky_test_err` / `result_with_default`),
+            // the `Err` arm is discarded (`ipe_test_err` / `result_with_default`),
             // so rustc reports E0283 even though Sky knows the type. Pinning
-            // `::<SkyError>` restores it without changing behaviour.
+            // `::<IpeError>` restores it without changing behaviour.
             // `decimal_div` / `decimal_mod` share the same
             // `<E: From<String>>` shape and the same erased-error ambiguity as
-            // `decimal_from_string` (e.g. `sky_test_err (Dec.div a zero)`).
+            // `decimal_from_string` (e.g. `ipe_test_err (Dec.div a zero)`).
             KernelFn::DecFromString | KernelFn::DecDiv | KernelFn::DecMod => match ty {
                 Ty::Con { name, .. } if self.interner.resolve(*name) == Some("Result") => {
                     CallPin::ErrSkyError
@@ -11573,7 +11573,7 @@ impl<'a> Lowerer<'a> {
 
     /// Re-align a `Result.mapError` error-HANDLER wildcard-lambda param
     /// that defaulted to `IrType::Json` onto the value side's `IrType::Error`
-    /// (`SkyError`) default.
+    /// (`IpeError`) default.
     ///
     /// `Result.mapError : (e -> f) -> Result e a -> Result f a` keeps `e`
     /// polymorphic. A wildcard `\_ -> …` handler over a genuinely-free `e`
@@ -11581,7 +11581,7 @@ impl<'a> Lowerer<'a> {
     /// and a bare free `Ty::Var` there defaults to `IrType::Json`. But the
     /// `Ok "concrete"` value side pins the SAME free `e` to `IrType::Error`
     /// (`ok_res` / `ResultOkDefault`). One var, two defaults → emitted
-    /// `FnOnce(JsonVal)` closure vs `SkyResult<SkyError, _>` value → E0277
+    /// `FnOnce(JsonVal)` closure vs `IpeResult<IpeError, _>` value → E0277
     /// (exit-0-then-cargo-fail SEAL breach).
     ///
     /// Fix — "one defaulting policy, both sides": when the handler is the
@@ -11702,13 +11702,13 @@ impl<'a> Lowerer<'a> {
                 if args.len() == arity {
                     // `Ok x` whose `Result e a` error type `e` is still
                     // unconstrained after solving would emit an ambiguous
-                    // `SkyResult<_, _>` that rustc rejects (E0282). Route it to
+                    // `IpeResult<_, _>` that rustc rejects (E0282). Route it to
                     // the runtime's `ok_res`, which pins the error type to the
-                    // project's `SkyError`. Sound: the `Err` arm is unreachable
+                    // project's `IpeError`. Sound: the `Err` arm is unreachable
                     // for an `Ok`, so any error type yields identical behaviour;
-                    // `SkyError` is the canonical default. A constrained `e`
+                    // `IpeError` is the canonical default. A constrained `e`
                     // (e.g. an annotated `Result String Int`) keeps the direct
-                    // `SkyResult::Ok` form, byte-identical to before.
+                    // `IpeResult::Ok` form, byte-identical to before.
                     if arity == 1
                         && self.resolve(*name)? == "Ok"
                         && self.result_error_unresolved(call_span)
@@ -11760,9 +11760,9 @@ impl<'a> Lowerer<'a> {
                         let pin = self.kernel_turbofish_pin(&resolved, args, call_span);
                         // re-align a `Result.mapError` wildcard-handler
                         // binder that defaulted to `IrType::Json` onto the
-                        // value side's `IrType::Error` (`SkyError`) default,
-                        // so the emitted closure's `FnOnce(SkyError)` unifies
-                        // with the `SkyResult<SkyError, _>` value (else E0277,
+                        // value side's `IrType::Error` (`IpeError`) default,
+                        // so the emitted closure's `FnOnce(IpeError)` unifies
+                        // with the `IpeResult<IpeError, _>` value (else E0277,
                         // an exit-0-then-cargo-fail SEAL breach).
                         let mut lowered_args = lowered_args;
                         Self::retype_result_map_error_handler(&resolved, &mut lowered_args);
@@ -12541,7 +12541,7 @@ impl<'a> Lowerer<'a> {
                 // is itself a partial application of a first-class value (`f 1 2`
                 // where `f a = \b -> \c -> …`: `f` consumes its one param, then
                 // the 2-arg returned closure gets only one surplus arg). The
-                // reference emits `SkyCall(f(1), 2)` — a residual closure. Match
+                // reference emits `IpeCall(f(1), 2)` — a residual closure. Match
                 // it by eta-expanding: capture the direct `Call(f, head)` result
                 // and the surplus args into a closure taking the still-missing
                 // params. `eta_expand_over_partial` builds exactly that.
@@ -14160,7 +14160,7 @@ impl<'a> Lowerer<'a> {
     /// unconstrained error type `e` after solving. True only when the solved
     /// region type is a `Result` constructor whose first argument (the error
     /// type) is an unresolved [`Ty::Var`] — the case the backend cannot emit as a
-    /// bare `SkyResult::Ok` without tripping rustc's E0282 ambiguity. A missing
+    /// bare `IpeResult::Ok` without tripping rustc's E0282 ambiguity. A missing
     /// region type or a concrete error type yields `false`.
     fn result_error_unresolved(&self, span: Span) -> bool {
         match self.region_ty(span) {
@@ -15327,7 +15327,7 @@ impl<'a> Lowerer<'a> {
             // `//` is integer-only (idiv). Raw Rust `/` on i64 panics on
             // b==0 (DivisionByZero) AND on i64::MIN/-1 (signed overflow).
             // BinOp::IntDiv routes through the total helper
-            // `ipe_runtime::math::sky_int_div`, making the panicking i64-/
+            // `ipe_runtime::math::ipe_int_div`, making the panicking i64-/
             // unrepresentable in the IR.
             "idiv" => Ok(BinOp::IntDiv),
             "eq" => Ok(BinOp::Eq),
@@ -15377,7 +15377,7 @@ impl<'a> Lowerer<'a> {
             // match a `&str` pattern against an owned `String` field the way it
             // can coerce a top-level `String` SCRUTINEE via `.as_str()`
             // (`basics-24-tui-kitchen-sink` SEAL violation sibling —
-            // `SkyMaybe::Just(SkyMaybe::Just("x"))` is E0308, `expected String,
+            // `IpeMaybe::Just(IpeMaybe::Just("x"))` is E0308, `expected String,
             // found &str`). Fail-closed (IPE-L0116), the exact sibling of the
             // PList / PCons gate below. Class 4 item C2.
             canon::Pattern_::PStr(_) => Err(unsupported(p.span, Feature::NestedCtorDiscrimination)),
@@ -16225,7 +16225,7 @@ impl<'a> Lowerer<'a> {
                 //     lowers to `{ let _ = task_run(effect); rest }` — blocks on
                 //     the task and discards the result, then continues with rest
                 //     in a non-Task context.  This avoids E0308 (type mismatch:
-                //     expected Vec<...> / () / Db, found SkyTask<...>).
+                //     expected Vec<...> / () / Db, found IpeTask<...>).
                 canon::Pattern_::PAnything => {
                     if self.is_task_typed(b.body.span) {
                         if self.fn_is_async.get() {
@@ -16674,9 +16674,9 @@ impl<'a> Lowerer<'a> {
     /// * a string-literal sub-pattern (`Just "live"`, `Ok "done"`) into a fresh
     ///   `String` binder PLUS an arm-level equality guard (`binder == "live"`)
     ///   — the sibling shape: Rust cannot literal-match a `&str` pattern
-    ///   against an owned `String` ctor FIELD (`SkyMaybe::Just(String)`) the
+    ///   against an owned `String` ctor FIELD (`IpeMaybe::Just(String)`) the
     ///   way it can coerce a top-level `String` SCRUTINEE to `&str`
-    ///   (`basics-24-tui-kitchen-sink` SEAL violation — `SkyMaybe::Just("live")`
+    ///   (`basics-24-tui-kitchen-sink` SEAL violation — `IpeMaybe::Just("live")`
     ///   is E0308, `expected String, found &str`).
     ///
     /// Both shapes share one root cause: an enum FIELD (`Vec<T>` / `String`)
@@ -17202,8 +17202,8 @@ mod tests {
     //
     // EMITTABILITY VERDICT (ipe_backend_rust/src/emit_expr.rs, `emit_tea_call`):
     //
-    //   KernelFn::PubSubPublish       → Ok(Some("pubsub_publish::<_, SkyError>(…)"))  [emittable]
-    //   KernelFn::PubSubPublishNoEcho → Ok(Some("pubsub_publish_no_echo::<_, SkyError>(…)"))  [emittable]
+    //   KernelFn::PubSubPublish       → Ok(Some("pubsub_publish::<_, IpeError>(…)"))  [emittable]
+    //   KernelFn::PubSubPublishNoEcho → Ok(Some("pubsub_publish_no_echo::<_, IpeError>(…)"))  [emittable]
     //
     // PubSubPublish and PubSubPublishNoEcho are in ALL (and hence in
     // stdlib_index) but the qualifier "PubSub" is absent from QUALIFIERS in
@@ -17212,7 +17212,7 @@ mod tests {
     // `Ffi.kernel "PubSub_publish"` alias fast-path (`id = Some`, set by
     // `ipe_canon::resolve::detect_kernel_alias`).  Both
     // have a real type scheme (`String -> a -> Task Error Int`) and a
-    // dedicated emit arm — they emit `pubsub_publish::<_, SkyError>(topic,
+    // dedicated emit arm — they emit `pubsub_publish::<_, IpeError>(topic,
     // payload)`.  They remain here (no legacy arm) so the
     // decl-equiv-legacy test skips them.
     // The stdlib families (Regex / Path / Trace /

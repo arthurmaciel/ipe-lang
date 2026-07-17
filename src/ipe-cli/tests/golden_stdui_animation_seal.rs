@@ -95,8 +95,8 @@ fn animation_module_resolves_and_emits_kernel() {
     );
 
     // The compiled `Std.Ui.Animation` module lowers to its OWN Rust file under
-    // `src/sky_mods/` (per-Sky-module split), so scan the WHOLE emitted Sky-side
-    // tree (main.rs + sky_mods/*.rs) for the helper call.
+    // `src/ipe_mods/` (per-Sky-module split), so scan the WHOLE emitted Sky-side
+    // tree (main.rs + ipe_mods/*.rs) for the helper call.
     let emitted = support::read_all_emitted_src(&emit);
 
     let calls = emitted.matches("ui_animate_raw_(").count();

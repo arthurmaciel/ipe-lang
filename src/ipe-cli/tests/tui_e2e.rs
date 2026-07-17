@@ -162,15 +162,15 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 /// Compile a Sky program string, build the emitted Rust project, and return
 /// the path to the compiled binary.
-fn compile_and_build(test_name: &str, sky_source: &str) -> Result<std::path::PathBuf, BoxError> {
-    let sky_dir = std::env::temp_dir().join(format!("tui_e2e_{test_name}_sky"));
-    let _ = std::fs::remove_dir_all(&sky_dir);
-    std::fs::create_dir_all(&sky_dir).map_err(|e| -> BoxError {
+fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::PathBuf, BoxError> {
+    let ipe_dir = std::env::temp_dir().join(format!("tui_e2e_{test_name}_sky"));
+    let _ = std::fs::remove_dir_all(&ipe_dir);
+    std::fs::create_dir_all(&ipe_dir).map_err(|e| -> BoxError {
         format!("{test_name}: cannot create sky source dir: {e}").into()
     })?;
 
-    let entry = sky_dir.join("Main.sky");
-    std::fs::write(&entry, sky_source)
+    let entry = ipe_dir.join("Main.sky");
+    std::fs::write(&entry, ipe_source)
         .map_err(|e| -> BoxError { format!("{test_name}: cannot write Main.sky: {e}").into() })?;
 
     let out_dir = std::env::temp_dir().join(format!("tui_e2e_{test_name}_emitted"));
@@ -212,15 +212,15 @@ fn compile_and_build(test_name: &str, sky_source: &str) -> Result<std::path::Pat
 fn tui_onkey_record_typechecks() {
     // ── helper: write Sky source to a temp file, run skyc::build, check ok ──
     fn compile_ok(label: &str, source: &str) -> String {
-        let sky_dir = std::env::temp_dir().join(format!("tui_onkey_{label}_sky"));
-        let _ = std::fs::remove_dir_all(&sky_dir);
-        let created = std::fs::create_dir_all(&sky_dir);
+        let ipe_dir = std::env::temp_dir().join(format!("tui_onkey_{label}_sky"));
+        let _ = std::fs::remove_dir_all(&ipe_dir);
+        let created = std::fs::create_dir_all(&ipe_dir);
         assert!(
             created.is_ok(),
             "{label}: cannot create temp dir: {created:?}"
         );
 
-        let entry = sky_dir.join("Main.sky");
+        let entry = ipe_dir.join("Main.sky");
         let wrote = std::fs::write(&entry, source);
         assert!(wrote.is_ok(), "{label}: cannot write Main.sky: {wrote:?}");
 

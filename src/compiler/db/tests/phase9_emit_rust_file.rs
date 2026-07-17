@@ -15,7 +15,7 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use ipe_backend_rust::DbDriver;
-use ipe_db::{BuildConfig, Db as _, ModuleOrigin, RustFileId, SkyDatabase, SourceFile, SourceRoot};
+use ipe_db::{BuildConfig, Db as _, ModuleOrigin, RustFileId, IpeDatabase, SourceFile, SourceRoot};
 use ipe_ir::ModPath;
 
 /// A shared, poison-safe log of executed-query debug keys — the same
@@ -49,10 +49,10 @@ impl EventLog {
     }
 }
 
-fn logged_db() -> (SkyDatabase, EventLog) {
+fn logged_db() -> (IpeDatabase, EventLog) {
     let log = EventLog::default();
     let sink = log.clone();
-    let db = SkyDatabase::with_event_callback(Box::new(move |event: salsa::Event| {
+    let db = IpeDatabase::with_event_callback(Box::new(move |event: salsa::Event| {
         if let salsa::EventKind::WillExecute { database_key } = event.kind {
             sink.push(format!("{database_key:?}"));
         }
@@ -60,7 +60,7 @@ fn logged_db() -> (SkyDatabase, EventLog) {
     (db, log)
 }
 
-fn file(db: &SkyDatabase, path: &[&str], text: &str) -> SourceFile {
+fn file(db: &IpeDatabase, path: &[&str], text: &str) -> SourceFile {
     SourceFile::new(
         db,
         path.iter().map(|s| (*s).to_owned()).collect(),
@@ -69,7 +69,7 @@ fn file(db: &SkyDatabase, path: &[&str], text: &str) -> SourceFile {
     )
 }
 
-fn root_of(db: &SkyDatabase, files: &[(&[&str], SourceFile)]) -> SourceRoot {
+fn root_of(db: &IpeDatabase, files: &[(&[&str], SourceFile)]) -> SourceRoot {
     SourceRoot::new(
         db,
         files
@@ -88,7 +88,7 @@ fn root_of(db: &SkyDatabase, files: &[(&[&str], SourceFile)]) -> SourceRoot {
 /// `allow-expect-in-tests` covers `#[test]` fns but not a free helper, so the
 /// allow is explicit).
 #[allow(clippy::expect_used)]
-fn mod_path(db: &SkyDatabase, segs: &[&str]) -> ModPath {
+fn mod_path(db: &IpeDatabase, segs: &[&str]) -> ModPath {
     let mut interner = db.interner().lock();
     ModPath(
         segs.iter()
@@ -103,7 +103,7 @@ fn mod_path(db: &SkyDatabase, segs: &[&str]) -> ModPath {
 
 #[test]
 fn rust_file_id_interns_distinct_homes_distinctly() {
-    let db = SkyDatabase::new();
+    let db = IpeDatabase::new();
     let lib = mod_path(&db, &["Lib"]);
     let main = mod_path(&db, &["Main"]);
 
@@ -148,7 +148,7 @@ const MAIN_IMPORTS_BOTH: &str = "module Main exposing (answer)\n\n\
     import Extra exposing (bonus)\n\n\
     answer : Int\nanswer = helper + bonus\n";
 
-fn two_module_root(db: &SkyDatabase) -> (SourceRoot, SourceFile, SourceFile) {
+fn two_module_root(db: &IpeDatabase) -> (SourceRoot, SourceFile, SourceFile) {
     let lib = file(db, &["Lib"], LIB);
     let main = file(db, &["Main"], MAIN_IMPORTS_LIB);
     let root = root_of(db, &[(&["Lib"], lib), (&["Main"], main)]);
@@ -162,7 +162,7 @@ fn two_module_root(db: &SkyDatabase) -> (SourceRoot, SourceFile, SourceFile) {
 /// assertion should surface loudly.
 #[allow(clippy::expect_used)]
 fn file_id_for<'db>(
-    db: &'db SkyDatabase,
+    db: &'db IpeDatabase,
     root: SourceRoot,
     entry: SourceFile,
     segs: &[&str],
@@ -378,7 +378,7 @@ fn emit_manifest_matches_emit_project_for_two_modules() {
     );
     assert_eq!(
         via_manifest.files, via_project.files,
-        "every emitted file (main.rs barrel + each sky_mods/*.rs) must be byte-identical \
+        "every emitted file (main.rs barrel + each ipe_mods/*.rs) must be byte-identical \
          between emit_manifest's assemble-from-pieces path and emit_project's inline split"
     );
 }

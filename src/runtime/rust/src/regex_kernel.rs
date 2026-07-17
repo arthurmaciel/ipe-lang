@@ -1,7 +1,7 @@
 //! Regex kernels for Sky.Core.Regex. Invalid patterns NEVER panic — they
 //! return identity / false / empty / Nothing per the Sky stdlib contract.
 
-use super::SkyMaybe;
+use super::IpeMaybe;
 use regex::Regex;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -48,13 +48,13 @@ pub fn regex_match(pattern: String, s: String) -> bool {
 }
 
 /// Sky `find : String -> String -> Maybe String`
-pub fn regex_find(pattern: String, s: String) -> SkyMaybe<String> {
+pub fn regex_find(pattern: String, s: String) -> IpeMaybe<String> {
     match compiled(&pattern) {
         Some(re) => match re.find(&s) {
-            Some(m) => SkyMaybe::Just(m.as_str().to_string()),
-            None => SkyMaybe::Nothing,
+            Some(m) => IpeMaybe::Just(m.as_str().to_string()),
+            None => IpeMaybe::Nothing,
         },
-        None => SkyMaybe::Nothing,
+        None => IpeMaybe::Nothing,
     }
 }
 
@@ -130,12 +130,12 @@ mod tests {
     #[test]
     fn test_find() {
         let m = regex_find(r"\d+".to_string(), "foo 42 bar".to_string());
-        assert!(matches!(m, SkyMaybe::Just(ref s) if s == "42"));
+        assert!(matches!(m, IpeMaybe::Just(ref s) if s == "42"));
         let none = regex_find(r"\d+".to_string(), "no digits here".to_string());
-        assert!(matches!(none, SkyMaybe::Nothing));
+        assert!(matches!(none, IpeMaybe::Nothing));
         // Invalid pattern -> Nothing
         let bad = regex_find(r"[unclosed".to_string(), "x".to_string());
-        assert!(matches!(bad, SkyMaybe::Nothing));
+        assert!(matches!(bad, IpeMaybe::Nothing));
     }
 
     #[test]
