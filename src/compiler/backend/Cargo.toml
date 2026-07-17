@@ -5,8 +5,8 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
-ipe_ir = { path = "../ipe_ir" }
-ipe_diagnostics = { path = "../ipe_diagnostics" }
+ipe_ir = { path = "../ir" }
+ipe_diagnostics = { path = "../diagnostics" }
 # Phase 6 (Task 19): `EmittedProject` / `RelPath` need to round-trip through
 # the on-disk build cache (`skyc::cache`). See `RelPath`'s manual
 # `Serialize`/`Deserialize` impls for why `#[derive]` alone would be unsound

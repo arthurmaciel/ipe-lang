@@ -5,9 +5,9 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
-ipe_intern = { path = "../ipe_intern" }
-ipe_diagnostics = { path = "../ipe_diagnostics" }
-ipe_kernels = { path = "../ipe_kernels" }
+ipe_intern = { path = "../intern" }
+ipe_diagnostics = { path = "../diagnostics" }
+ipe_kernels = { path = "../kernels" }
 # Phase 6.5 (symbol-relocation persistence): every `ipe_ir` type derives
 # `Serialize`/`Deserialize` (relying on `ipe_intern::Symbol`'s ambient-
 # interner impls for the embedded `Symbol` fields) so `ipe_ir::Program` can

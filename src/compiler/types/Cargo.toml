@@ -5,16 +5,16 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
-ipe_intern = { path = "../ipe_intern" }
-ipe_diagnostics = { path = "../ipe_diagnostics" }
-ipe_canon = { path = "../ipe_canon" }
+ipe_intern = { path = "../intern" }
+ipe_diagnostics = { path = "../diagnostics" }
+ipe_canon = { path = "../canon" }
 # Leaf crate (deps: ipe_intern + ipe_diagnostics only) → clean down-edge, no
 # cycle. Needed to name `StdlibKernel` in the parse-once kernel-scheme registry
 # (`stdlib_scheme`) that the `VarKernel { id }` constrain arm delegates to.
-ipe_kernels = { path = "../ipe_kernels" }
+ipe_kernels = { path = "../kernels" }
 
 [dev-dependencies]
-ipe_parse = { path = "../ipe_parse" }
+ipe_parse = { path = "../parse" }
 
 [lints]
 workspace = true
