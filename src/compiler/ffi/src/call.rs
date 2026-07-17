@@ -225,10 +225,26 @@ impl Call {
         self.is_async
     }
 
+    /// Whether the callee is a trait associated fn/method — the shape whose
+    /// only correct render is UFCS (`<Self as Trait>::m`). The flat-field
+    /// `_bindings.rs` emitter skips such a binding entirely; it is emitted by
+    /// the generic-instance path instead.
+    #[must_use]
+    pub const fn has_trait_qualifier(&self) -> bool {
+        self.trait_qualifier.is_some()
+    }
+
     /// The declared argument type of each wrapper value-arg, in slot order.
     #[must_use]
     pub fn arg_types(&self) -> &[ArgTypeRef] {
         &self.arg_types
+    }
+
+    /// The method receiver, when the call is a method (validation proved the
+    /// method ⇔ receiver correspondence).
+    #[must_use]
+    pub const fn receiver(&self) -> Option<Receiver> {
+        self.receiver
     }
 
     /// The wrapper return type reference.
