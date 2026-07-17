@@ -286,6 +286,11 @@ pub fn bwrap_argv(
     argv.push("--ro-bind".into());
     argv.push("/".into());
     argv.push("/".into());
+    // A fresh minimal devtmpfs: the ro-bound host `/dev` nodes carry no device
+    // permissions inside the user namespace, so `/dev/null` opens fail EACCES
+    // — which cargo hits when wiring child stdio.
+    argv.push("--dev".into());
+    argv.push("/dev".into());
     for tmpfs in ["/home", "/root", "/tmp"] {
         argv.push("--tmpfs".into());
         argv.push(tmpfs.into());

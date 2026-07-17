@@ -676,6 +676,11 @@ pub fn cargo_dep_lines(pkg: &PkgInfo) -> Result<Vec<String>, Diagnostic> {
         return Ok(lines);
     }
     for dep in pkg.transitive_deps() {
+        // The inspector's own probe scaffold registers as a workspace member
+        // during introspection; it is not a real registry package.
+        if dep.name.starts_with("_ipe_ffi_probe") {
+            continue;
+        }
         if dep.version.is_empty() {
             return Err(missing_version(&dep.name));
         }
