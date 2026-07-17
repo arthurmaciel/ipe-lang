@@ -1761,10 +1761,7 @@ const FFI_WRAPPER_END: &str = "// IPE-FFI-WRAPPER END";
 /// Conservative-keep: a region whose `pub fn` ident cannot be read (a shape
 /// the scan does not recognise) is KEPT, so the shake never drops a wrapper
 /// the program calls (an under-bind); over-keep is dead code cargo strips.
-fn shake_ffi_by_fn_ident(
-    source: &str,
-    reached: &std::collections::BTreeSet<String>,
-) -> String {
+fn shake_ffi_by_fn_ident(source: &str, reached: &std::collections::BTreeSet<String>) -> String {
     let mut out = String::with_capacity(source.len());
     // Buffer one wrapper region until its `pub fn` ident is known, then
     // decide keep/drop for the whole region.
