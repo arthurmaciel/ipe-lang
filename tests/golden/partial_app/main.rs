@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -31,7 +31,6 @@ type Value = JsonVal;
 // ===========================================
 // USER TYPES
 // ===========================================
-
 
 pub use ipe_runtime::error::IpeError;
 pub fn str_err(s: &str) -> IpeError {
@@ -240,13 +239,50 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 }
 
 pub fn main_f(a: i64) -> Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> {
-    { let __sky_fn: Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> = Box::new(move |b: i64, c: i64| -> i64 { ((a + b) + c) }); __sky_fn }
+    {
+        let __sky_fn: Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> =
+            Box::new(move |b: i64, c: i64| -> i64 { ((a + b) + c) });
+        __sky_fn
+    }
 }
 pub fn main_add3(a: i64, b: i64, c: i64) -> i64 {
     ((a + b) + c)
 }
 pub fn ipe_main() -> IpeTask<()> {
-    ({ let g = main_f(1); ({ let h = { let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> = Box::new(move |eta_0: i64| -> i64 { (g)(2, eta_0) }); __sky_fn }; ({ let boundPartial = (h)(3); ({ let overPartial = ({ let eta_0: i64 = 3; (main_f(10))(20, eta_0) }); ({ let pipePartial = ({ let eta_0: i64 = 100; main_add3(1, 2, eta_0) }); task_and_then(log_println(string_from_int(boundPartial)), Box::new(move |_| { task_and_then(log_println(string_from_int(overPartial)), Box::new(move |_| { log_println(string_from_int(pipePartial)) })) })) }) }) }) }) })
+    ({
+        let g = main_f(1);
+        ({
+            let h = {
+                let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+                    Box::new(move |eta_0: i64| -> i64 { (g)(2, eta_0) });
+                __sky_fn
+            };
+            ({
+                let boundPartial = (h)(3);
+                ({
+                    let overPartial = ({
+                        let eta_0: i64 = 3;
+                        (main_f(10))(20, eta_0)
+                    });
+                    ({
+                        let pipePartial = ({
+                            let eta_0: i64 = 100;
+                            main_add3(1, 2, eta_0)
+                        });
+                        task_and_then(
+                            log_println(string_from_int(boundPartial)),
+                            Box::new(move |_| {
+                                task_and_then(
+                                    log_println(string_from_int(overPartial)),
+                                    Box::new(move |_| log_println(string_from_int(pipePartial))),
+                                )
+                            }),
+                        )
+                    })
+                })
+            })
+        })
+    })
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

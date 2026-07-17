@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -47,15 +47,38 @@ pub enum MainSqlValue {
 impl IpeStringify for MainSqlValue {
     fn ipe_show(&self) -> String {
         match self {
-            MainSqlValue::SqlString(p0) => format!("SqlString {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch()),
-            MainSqlValue::SqlInt(p0) => format!("SqlInt {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch()),
-            MainSqlValue::SqlFloat(p0) => format!("SqlFloat {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch()),
-            MainSqlValue::SqlBool(p0) => format!("SqlBool {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch()),
-            MainSqlValue::SqlBytes(p0) => format!("SqlBytes {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch()),
-            MainSqlValue::SqlTime(p0) => format!("SqlTime {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch()),
-            MainSqlValue::SqlDecimal(p0) => format!("SqlDecimal {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch()),
-            MainSqlValue::SqlMoney(p0) => format!("SqlMoney {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch()),
-            MainSqlValue::SqlNull(p0) => format!("SqlNull {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch()),
+            MainSqlValue::SqlString(p0) => format!(
+                "SqlString {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch()
+            ),
+            MainSqlValue::SqlInt(p0) => {
+                format!("SqlInt {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
+            MainSqlValue::SqlFloat(p0) => format!(
+                "SqlFloat {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch()
+            ),
+            MainSqlValue::SqlBool(p0) => {
+                format!("SqlBool {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
+            MainSqlValue::SqlBytes(p0) => format!(
+                "SqlBytes {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch()
+            ),
+            MainSqlValue::SqlTime(p0) => {
+                format!("SqlTime {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
+            MainSqlValue::SqlDecimal(p0) => format!(
+                "SqlDecimal {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch()
+            ),
+            MainSqlValue::SqlMoney(p0) => format!(
+                "SqlMoney {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch()
+            ),
+            MainSqlValue::SqlNull(p0) => {
+                format!("SqlNull {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
         }
     }
 }
@@ -67,7 +90,10 @@ pub enum MainSqlField {
 impl IpeStringify for MainSqlField {
     fn ipe_show(&self) -> String {
         match self {
-            MainSqlField::SetField(p0) => format!("SetField {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch()),
+            MainSqlField::SetField(p0) => format!(
+                "SetField {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch()
+            ),
             MainSqlField::OmitField => "OmitField".to_string(),
         }
     }
@@ -88,7 +114,9 @@ impl MainSqlValue {
             Self::SqlTime(v) => ipe_runtime::db::SqlParam::Int(v),
             Self::SqlDecimal(v) => ipe_runtime::db::SqlParam::Text(v),
             Self::SqlMoney(v) => ipe_runtime::db::SqlParam::Text(v),
-            Self::SqlNull(inner) => ipe_runtime::db::SqlParam::Null(Box::new(inner.into_sql_param())),
+            Self::SqlNull(inner) => {
+                ipe_runtime::db::SqlParam::Null(Box::new(inner.into_sql_param()))
+            }
         }
     }
 }
@@ -315,7 +343,6 @@ pub fn crypto_random_token(n: i64) -> IpeTask<String> {
 pub fn http_parse_query(raw: String) -> HashMap<String, String> {
     ipe_runtime::http_client::http_parse_query(raw)
 }
-
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;
 // the codegen routes Ffi.kernel calls directly, but some construction

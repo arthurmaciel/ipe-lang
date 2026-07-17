@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -40,8 +40,14 @@ pub enum MainShape {
 impl IpeStringify for MainShape {
     fn ipe_show(&self) -> String {
         match self {
-            MainShape::Circle(p0) => format!("Circle {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch()),
-            MainShape::Rect(p0, p1) => format!("Rect {} {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch(), (&ipe_runtime::stringify::Wrap(p1)).dispatch()),
+            MainShape::Circle(p0) => {
+                format!("Circle {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
+            MainShape::Rect(p0, p1) => format!(
+                "Rect {} {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch(),
+                (&ipe_runtime::stringify::Wrap(p1)).dispatch()
+            ),
         }
     }
 }
@@ -259,7 +265,9 @@ pub fn main_area(s: MainShape) -> i64 {
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int((main_area(MainShape::Rect(4, 5)) + main_area(MainShape::Circle(2)))))
+    log_println(string_from_int(
+        (main_area(MainShape::Rect(4, 5)) + main_area(MainShape::Circle(2))),
+    ))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

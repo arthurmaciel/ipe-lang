@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -41,7 +41,9 @@ impl IpeStringify for MainRChain {
     fn ipe_show(&self) -> String {
         match self {
             MainRChain::REnd => "REnd".to_string(),
-            MainRChain::RNode(p0) => format!("RNode {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch()),
+            MainRChain::RNode(p0) => {
+                format!("RNode {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
         }
     }
 }
@@ -52,7 +54,11 @@ pub struct RecRestVal {
 }
 impl IpeStringify for RecRestVal {
     fn ipe_show(&self) -> String {
-        format!("{{{} {}}}", (&ipe_runtime::stringify::Wrap(&self.rest)).dispatch(), (&ipe_runtime::stringify::Wrap(&self.val)).dispatch())
+        format!(
+            "{{{} {}}}",
+            (&ipe_runtime::stringify::Wrap(&self.rest)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.val)).dispatch()
+        )
     }
 }
 
@@ -265,11 +271,22 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 pub fn main_sum_r(c: MainRChain) -> i64 {
     match c {
         MainRChain::REnd => 0,
-        MainRChain::RNode(rec) => { let rec = *rec; ((rec).val + main_sum_r((rec).rest.clone())) },
+        MainRChain::RNode(rec) => {
+            let rec = *rec;
+            ((rec).val + main_sum_r((rec).rest.clone()))
+        }
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(main_sum_r(MainRChain::RNode(Box::new(RecRestVal { rest: MainRChain::RNode(Box::new(RecRestVal { rest: MainRChain::REnd, val: 2 })), val: 3 })))))
+    log_println(string_from_int(main_sum_r(MainRChain::RNode(Box::new(
+        RecRestVal {
+            rest: MainRChain::RNode(Box::new(RecRestVal {
+                rest: MainRChain::REnd,
+                val: 2,
+            })),
+            val: 3,
+        },
+    )))))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;
