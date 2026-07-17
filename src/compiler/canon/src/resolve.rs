@@ -216,6 +216,24 @@ const KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES: &[&str] = &[
     "VNode",
 ];
 
+/// `true` when `name` is any Ipê built-in TYPE name a user (or a
+/// driver-generated FFI interface) module may NOT soundly declare as its own
+/// opaque type.
+///
+/// The union of the reserved set (`IPE-N0026`), the lowerer's extra
+/// explicit-arm names, and the kernel-implicit prelude type names — the
+/// SINGLE source of truth for "is this a built-in type name". Downstream
+/// crates that must agree with canon's reservation — the FFI interface
+/// generator's shadow gate, notably — call THIS rather than re-listing the
+/// names, so a name added to any list above can never drift out of sync with
+/// a hand-copied duplicate elsewhere.
+#[must_use]
+pub fn is_reserved_builtin_type_name(name: &str) -> bool {
+    RESERVED_BUILTIN_TYPES.contains(&name)
+        || EXTRA_BUILTIN_TYPE_NAMES.contains(&name)
+        || KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES.contains(&name)
+}
+
 /// The subset of [`RESERVED_BUILTIN_TYPES`] that a trusted
 /// [`ModuleOrigin::EmbeddedStdlib`] module is permitted to DEFINE, while a
 /// [`ModuleOrigin::User`] module stays rejected (IPE-N0026).

@@ -7,6 +7,7 @@ description = "Shim-free Rust-crate FFI binding generator: typed decode of inspe
 
 [dependencies]
 ipe_diagnostics = { path = "../diagnostics" }
+ipe_canon = { path = "../canon" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

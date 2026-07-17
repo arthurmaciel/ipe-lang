@@ -10,13 +10,13 @@
 //! Inclusion is gated fail-closed: a function reaches the interface only when
 //! its wrapper region actually exists in `_bindings.rs`, its signature's
 //! opaque foreign types all resolve to unambiguous Rust paths, and no foreign
-//! type shadows an Ipê builtin head. Anything else is skipped with a recorded
+//! type shadows an Ipê reserved builtin type. Anything else is skipped with a
 //! reason (over-drop, never an under-bind that `cargo` rejects).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use crate::emit::{ipe_builtin_heads, opaque_names_in, wrapper_ipe_signature};
+use crate::emit::{opaque_names_in, wrapper_ipe_signature};
 use crate::pkginfo::{FnInfo, PkgInfo};
 
 /// Ipê keywords that can never be a binding name in the generated module.
@@ -134,85 +134,69 @@ fn path_tokens(raw: &str) -> Vec<(String, String)> {
     out
 }
 
-/// Collect the foreign NOMINAL base names that reach the Ipê signature from
-/// one foreign type string. Mirrors [`crate::emit::foreign_to_ipe`]'s
-/// structure: containers recurse, a `Result`'s error arm folds into the typed
-/// `Error` at the boundary (so it never reaches the signature and is NOT
-/// collected), scalars/strings map to builtins and are not nominal.
-fn foreign_nominal_bases(t: &str, out: &mut BTreeSet<String>) {
-    let t = t.trim();
-    let t = t.strip_prefix('&').unwrap_or(t).trim();
-    let t = t.strip_prefix("mut ").unwrap_or(t).trim();
-    // Rust containers.
-    for ctor in ["Option", "Vec"] {
-        if let Some(rest) = t.strip_prefix(ctor)
-            && let Some(inner) = rest.trim().strip_prefix('<')
-            && let Some(inner) = inner.strip_suffix('>')
-        {
-            foreign_nominal_bases(inner, out);
-            return;
+/// Collect every foreign NOMINAL base name reachable from one Rust type
+/// string — the generic HEAD and each generic ARGUMENT, recursively.
+///
+/// `stripe::Response<stripe::CheckoutSession>` yields both `Response` and
+/// `CheckoutSession`; `Vec<semver::Error>` yields `Error`. A base is a
+/// capitalised identifier (a type), never a scalar/lifetime/module segment.
+fn foreign_nominal_bases(raw: &str, out: &mut BTreeSet<String>) {
+    let mut token = String::new();
+    let flush = |token: &mut String, out: &mut BTreeSet<String>| {
+        // The last `::`-segment of the token is the type's own name.
+        let base = token.rsplit("::").next().unwrap_or(token);
+        if base.chars().next().is_some_and(char::is_uppercase) {
+            out.insert(base.to_owned());
+        }
+        token.clear();
+    };
+    for c in raw.chars() {
+        if c.is_alphanumeric() || c == '_' || c == ':' {
+            token.push(c);
+        } else {
+            // `<`, `,`, `>`, `&`, ` `, `(`, `)` all break a nominal token —
+            // so a generic head and its args each flush separately.
+            flush(&mut token, out);
         }
     }
-    if let Some(rest) = t.strip_prefix("Result")
-        && let Some(inner) = rest.trim().strip_prefix('<')
-        && let Some(inner) = inner.strip_suffix('>')
-    {
-        // Ok arm only — the error arm folds into the typed `Error`.
-        let ok = inner.split(',').next().unwrap_or(inner);
-        foreign_nominal_bases(ok, out);
-        return;
-    }
-    // Ipê containers — the inspector's `type` field carries already-mapped
-    // Ipê spellings for scalar-ish positions.
-    for ctor in ["Maybe ", "List "] {
-        if let Some(inner) = t.strip_prefix(ctor) {
-            foreign_nominal_bases(inner.trim_start_matches('(').trim_end_matches(')'), out);
-            return;
-        }
-    }
-    if let Some(inner) = t.strip_prefix("Result Error ") {
-        foreign_nominal_bases(inner.trim_start_matches('(').trim_end_matches(')'), out);
-        return;
-    }
-    match t {
-        // Rust scalar/string leaves plus their Ipê spellings — none nominal.
-        "str" | "String" | "OsStr" | "OsString" | "Path" | "PathBuf" | "CStr" | "CString"
-        | "bool" | "char" | "()" | "i8" | "i16" | "i32" | "i64" | "i128" | "u8" | "u16" | "u32"
-        | "u64" | "u128" | "isize" | "usize" | "f32" | "f64" | "error" | "" | "Int" | "Float"
-        | "Bool" | "Char" => {}
-        other => {
-            let base = other.rsplit_once("::").map_or(other, |(_, l)| l);
-            let base = base.split('<').next().unwrap_or(base).trim();
-            if base.chars().next().is_some_and(char::is_uppercase) {
-                out.insert(base.to_owned());
-            }
-        }
-    }
+    flush(&mut token, out);
 }
 
-/// `true` when the fn's Ipê-visible signature would carry a foreign nominal
-/// whose base name shadows an Ipê builtin head (`semver::Error` vs the
-/// builtin `Error`) — such a signature silently means the BUILTIN on the Ipê
-/// side while the wrapper expects the foreign type, an E0308 `cargo` would
-/// reject.
-fn shadows_builtin_head(f: &FnInfo) -> bool {
+/// The Ok arm of a `Result<Ok, Err>` type string (any path prefix), else the
+/// input unchanged. A foreign error type in the ERR position folds into the
+/// typed Ipê `Error` at the wrapper boundary — it never reaches the Ipê
+/// signature, so it must be excluded from the reserved-collision scan (else a
+/// legitimate `Result<Version, semver::Error>` would be over-dropped on its
+/// harmless `Error` arm).
+fn result_ok_arm(raw: &str) -> &str {
+    let Some(open) = raw.find("Result<") else {
+        return raw;
+    };
+    let inner = raw.get(open + "Result<".len()..).unwrap_or("");
+    let mut depth = 0_i32;
+    for (i, c) in inner.char_indices() {
+        match c {
+            '<' | '(' => depth += 1,
+            '>' | ')' => depth -= 1,
+            ',' if depth == 0 => return inner.get(..i).unwrap_or(inner).trim(),
+            _ => {}
+        }
+    }
+    inner
+}
+
+/// The first foreign nominal in `f`'s parameter / result / receiver types
+/// that collides with an Ipê reserved builtin type name, if any.
+fn foreign_reserved_collision(f: &FnInfo) -> Option<String> {
     let mut bases = BTreeSet::new();
     for p in f.params().iter().chain(f.results().iter()) {
-        // `rust_type` is the Rust-side truth when the inspector supplied it;
-        // `foreign_ty` may already carry the mapped Ipê spelling.
-        let src = if p.rust_type.is_empty() {
-            &p.foreign_ty
-        } else {
-            &p.rust_type
-        };
-        foreign_nominal_bases(src, &mut bases);
+        foreign_nominal_bases(result_ok_arm(&p.rust_type), &mut bases);
+        foreign_nominal_bases(result_ok_arm(&p.foreign_ty), &mut bases);
     }
-    if f.recv_type().chars().next().is_some_and(char::is_uppercase) {
-        bases.insert(f.recv_type().to_owned());
-    }
+    foreign_nominal_bases(f.recv_rust_type(), &mut bases);
     bases
-        .iter()
-        .any(|b| ipe_builtin_heads().contains(&b.as_str()))
+        .into_iter()
+        .find(|b| ipe_canon::is_reserved_builtin_type_name(b))
 }
 
 /// `true` when `name` is a well-formed Ipê value identifier the generated
@@ -242,6 +226,7 @@ fn contains_tuple(sig: &str) -> bool {
 
 /// Build the consumer-side interface for one validated package.
 #[must_use]
+#[allow(clippy::too_many_lines)] // one linear per-binding gate cascade
 pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
     let module_name = crate::naming::rust_module_name(pkg.pkg_path());
     let kernel_name = crate::naming::rust_kernel_name(pkg.pkg_path());
@@ -279,8 +264,18 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
             skip("no wrapper region in _bindings.rs", &mut skipped);
             continue;
         }
-        if shadows_builtin_head(f) {
-            skip("a foreign type shadows an Ipê builtin head", &mut skipped);
+        // A foreign nominal that collides with an Ipê reserved builtin type is
+        // unsound TWO ways: one that folds onto a builtin HEAD (`semver::Error`
+        // → the Ipê `Error`, while the wrapper keeps `semver::Error` — an
+        // E0308), and one that would be DECLARED as an opaque `type X`
+        // (`stripe::Response` → `IPE-N0026`). The raw-type scan below catches
+        // the head-fold case (which never reaches the signature's opaque set);
+        // the sig-opaque scan further down catches the declared-opaque case.
+        if let Some(bad) = foreign_reserved_collision(f) {
+            skip(
+                &format!("foreign type `{bad}` shadows an Ipê reserved builtin type"),
+                &mut skipped,
+            );
             continue;
         }
         let sig = wrapper_ipe_signature(f);
@@ -296,8 +291,23 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
             );
             continue;
         }
+        // The opaque foreign types the SIGNATURE would declare (`type X`) —
+        // the ground truth for both the reserved-builtin collision gate and
+        // the path-resolvability gate. Reading the final signature (not the
+        // raw `rust_type`) catches an inspector `ipeType` override that maps a
+        // generic head like `stripe::Response<…>` to the bare `Response`.
         let mut opaques = BTreeSet::new();
         opaque_names_in(&sig, &mut opaques);
+        if let Some(bad) = opaques
+            .iter()
+            .find(|n| ipe_canon::is_reserved_builtin_type_name(n))
+        {
+            skip(
+                &format!("foreign type `{bad}` shadows an Ipê reserved builtin type"),
+                &mut skipped,
+            );
+            continue;
+        }
         if let Some(bad) = opaques.iter().find(|n| poisoned.contains(*n)) {
             skip(
                 &format!("foreign type `{bad}` is claimed by two distinct Rust paths"),
@@ -444,7 +454,7 @@ mod tests {
                 .skipped
                 .iter()
                 .any(|s| s.ref_name == "explain_from_error"
-                    && s.reason.contains("shadows an Ipê builtin head")),
+                    && s.reason.contains("shadows an Ipê reserved builtin type")),
             "{:?}",
             iface.skipped
         );

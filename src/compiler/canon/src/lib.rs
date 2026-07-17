@@ -20,7 +20,7 @@ use ipe_diagnostics::DResult;
 use ipe_intern::{Interner, Symbol};
 
 pub use env::{CtorHome, Env, STDLIB_MODULE_QUALIFIERS, VarHome};
-pub use resolve::ModuleOrigin;
+pub use resolve::{ModuleOrigin, is_reserved_builtin_type_name};
 
 /// A type alias exported by a module in its raw (unresolved) source form.
 ///
