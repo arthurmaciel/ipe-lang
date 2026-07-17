@@ -174,7 +174,7 @@ async fn do_connect<E: From<String> + Send + 'static>(
     // without this check the WebSocket surface would connect with no
     // deny-private guard, letting an attacker-controlled URL reach internal
     // services the Http client blocks.
-    if let Err(msg) = crate::ssrf::ssrf_validate_url(&url) {
+    if let Err(msg) = super::ssrf::ssrf_validate_url(&url) {
         return IpeResult::Err(msg.into());
     }
     // Build the handshake request so custom headers (e.g. Authorization) from
@@ -241,7 +241,7 @@ async fn do_connect<E: From<String> + Send + 'static>(
     // re-resolve the name to a rebind target at connect time — closing the
     // resolve->connect TOCTOU that the bare ssrf_validate_url check above leaves
     // open (it validates a name that connect_async would resolve again).
-    let pinned = match crate::ssrf::ssrf_pinned_ws_addr(&url) {
+    let pinned = match super::ssrf::ssrf_pinned_ws_addr(&url) {
         Ok(p) => p,
         Err(msg) => return IpeResult::Err(msg.into()),
     };
