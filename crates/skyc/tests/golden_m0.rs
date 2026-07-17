@@ -1,4 +1,4 @@
-//! Milestone-0 end-to-end gate: `skyc` must emit `main.rs` byte-identical to the
+//! End-to-end gate: `skyc` must emit `main.rs` byte-identical to the
 //! Haskell-reference golden, and (behind `SKY_E2E=1`) the emitted project must
 //! build and print `1`.
 

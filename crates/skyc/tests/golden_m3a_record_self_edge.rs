@@ -1,4 +1,4 @@
-//! Milestone-3a recursion-soundness gate: a self-edge routed through a RECORD
+//! Recursion-soundness gate: a self-edge routed through a RECORD
 //! payload. `skyc` must emit `main.rs` byte-identical to the checked-in golden,
 //! and (behind `SKY_E2E=1`) the emitted project must build and print `5`.
 //!
@@ -8,11 +8,11 @@
 //!
 //! `RNode`'s payload is the record `{ rest : RChain, val : Int }`, whose `rest`
 //! field reaches `RChain` again — the type-size cycle `RChain -> RecRestVal ->
-//! RChain` is closed *through a record*. The pre-fix backend boxed only a direct
-//! self-edge, so it emitted `RNode(RecRestVal)` with `RecRestVal { rest:
-//! MainRChain, .. }` — mutually infinite-sized Rust types (E0072): `skyc` exited
-//! 0 and the crate then failed `cargo build`. The fix boxes the cyclic
-//! enum-payload edge (`RNode(Box<RecRestVal>)`), which breaks the cycle without
+//! RChain` is closed *through a record*. Boxing only a direct self-edge would
+//! emit `RNode(RecRestVal)` with `RecRestVal { rest: MainRChain, .. }` —
+//! mutually infinite-sized Rust types (E0072): `skyc` exits 0 and the crate then
+//! fails `cargo build`. So the backend boxes the cyclic enum-payload edge
+//! (`RNode(Box<RecRestVal>)`), which breaks the cycle without
 //! touching the record struct, balanced by `Box::new` at construction and a
 //! deref at pattern binding (`let rec = *rec;`).
 //!
@@ -66,8 +66,8 @@ fn emits_byte_identical_main_rs() {
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
 /// record-self-edge ADT program prints `5`. Gated on `SKY_E2E=1`. This is the
-/// soundness-floor regression for a self-edge through a record: before the fix
-/// the crate did not build at all (E0072).
+/// soundness-floor regression for a self-edge through a record: without boxing
+/// it the crate does not build at all (E0072).
 #[test]
 fn end_to_end_builds_and_prints_five() {
     if std::env::var("SKY_E2E").is_err() {

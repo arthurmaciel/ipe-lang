@@ -1,4 +1,4 @@
-//! SEAL regression for backlog #210 "Std.Email family". A typed `EmailMessage`
+//! SEAL regression for "Std.Email family". A typed `EmailMessage`
 //! built via `Email.defaultMessage` + `with*` builders is fed directly to
 //! `Email.send`, and the `EmailProvider` ADT is constructed via its `Resend`
 //! ctor.
@@ -127,9 +127,9 @@ fn email_literals_emit_runtime_structs_and_provider_variant() {
 }
 
 /// The load-bearing SEAL proof: under `SKY_E2E=1`, actually `cargo build` the
-/// emitted crate. Pre-fix `Std.Email` fail-closed at skyc time (SKY-N0028);
-/// post-fix skyc-0 AND the emitted crate — with the vendored `email` module and
-/// the injected `lettre` dep — `cargo build`s exit 0.
+/// emitted crate. Without kernel backing `Std.Email` fail-closes at skyc time
+/// (SKY-N0028); with it, skyc-0 AND the emitted crate — with the vendored
+/// `email` module and the injected `lettre` dep — `cargo build`s exit 0.
 #[test]
 fn email_send_nominal_fold_seal_builds() {
     let root = repo_root();

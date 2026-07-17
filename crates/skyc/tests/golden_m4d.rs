@@ -1,4 +1,4 @@
-//! M4d `Sky.Core.Dict` + `Sky.Core.Set` parity gate.
+//! `Sky.Core.Dict` + `Sky.Core.Set` parity gate.
 //!
 //! Dict golden tests exercise the `Dict` kernel family end-to-end:
 //!

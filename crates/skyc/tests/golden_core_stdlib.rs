@@ -1,14 +1,12 @@
-//! #76 slice — core-stdlib kernels unbacked after the Phase-E exit-0 seal are
-//! now CALLABLE from user code.
+//! Core-stdlib kernels are CALLABLE from user code.
 //!
-//! Before this task, a qualified `Result.andThen` / `Result.mapError` /
+//! Without a kernel binding, a qualified `Result.andThen` / `Result.mapError` /
 //! `String.containsIn` / `String.startsWithIn` / `String.endsWithIn` and the
-//! Prelude `clamp` were canon members with `id = None` — so post-seal they
-//! failed closed with `error[SKY-L0108]: kernel function not available yet` at
-//! the first such call (the `Ty::Var(u32::MAX)` fallback that used to type them
-//! as free variables was deleted in commit 2681973).
+//! Prelude `clamp` would be canon members with `id = None` — failing closed with
+//! `error[SKY-L0108]: kernel function not available yet` at the first such call
+//! (there is no `Ty::Var(u32::MAX)` fallback typing them as free variables).
 //!
-//! The fix wires each as a kernel — `KernelFn` variant + `d(...)` decl + lower
+//! Each is wired as a kernel — `KernelFn` variant + `d(...)` decl + lower
 //! arm + fail-closed `stdlib_scheme` entry + `FIRST_SCHEMED` membership:
 //!
 //! * `Result.andThen` / `Result.mapError` reuse the container-first runtime

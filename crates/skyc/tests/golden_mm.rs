@@ -1,11 +1,11 @@
-//! Multi-module golden tests (Defect-5 mandate).
+//! Multi-module golden tests.
 //!
 //! Two kinds of assertion live here:
 //!
 //! **Positive fixtures** (`mm_local_pkg`, `mm_diamond`) compile successfully
 //! and the emitted `main.rs` is byte-identical to the checked-in golden.
-//! They also verify that `skyc build_project` doesn't regress on the three
-//! blockers that were fixed in this milestone:
+//! They also verify that `skyc build_project` handles three
+//! multi-module blockers:
 //!   * Defect 1 — kernel imports (`Sky.Core.Prelude`) accepted without
 //!     SKY-N0020.
 //!   * Defect 2 — same-named functions in different modules emit distinct
@@ -18,9 +18,8 @@
 //! `notexposed` → N0022, `pathmismatch` → N0023, `ambigval`/`ambigctor`/
 //! `samedef` → N0024, `reserved` → N0025, `sametype` → N0012.
 //!
-//! The golden `main.rs` files were captured by running `skyc` against the
-//! fixture and committing the output. Single-file goldens remain
-//! byte-identical after this milestone.
+//! The golden `main.rs` files are the checked-in output of `skyc` against each
+//! fixture.
 
 use std::path::{Path, PathBuf};
 
@@ -85,7 +84,7 @@ fn mm_diamond_emits_byte_identical_main_rs() {
 
     // Seal half: D's `base` function must appear exactly once (D compiled once,
     // shared by B and C). D is a genuine own-home module, so the per-Sky-module
-    // split (Phase 5 Milestone C) places `d_base` in `src/sky_mods/sky_mod_d.rs`
+    // split places `d_base` in `src/sky_mods/sky_mod_d.rs`
     // — scan the WHOLE emitted Sky-side tree (main.rs + sky_mods/*.rs) for the
     // count, robust to that placement. The directory-diff helper above cannot
     // express a substring-count assertion, so this reads the source directly.

@@ -1,4 +1,4 @@
-//! Milestone-3a fail-closed gates: each shape M3a does not model must surface a
+//! Fail-closed gates: each unmodelled ADT shape must surface a
 //! clean, span-carrying diagnostic — never a panic, an internal compiler bug, or
 //! silent cargo-failing Rust.
 //!
@@ -10,8 +10,8 @@
 //! its own Rust `match` arm in source order. Its positive regression lives in
 //! `golden_m3b4_nested` / `golden_m3b4_two_same_ctor`.)
 //!
-//! Note: the partial-ctor-application gap (formerly SKY-L0113) was closed in
-//! #147. Positive regressions live in `golden_i147_ctor_as_fn_seal`.
+//! Note: the partial-ctor-application gap (formerly SKY-L0113) is closed.
+//! Positive regressions live in `golden_i147_ctor_as_fn_seal`.
 //!
 //! Each is driven through the full `skyc` pipeline and asserted to produce its
 //! exact code, locking the gap so it can never regress into a worse failure mode.

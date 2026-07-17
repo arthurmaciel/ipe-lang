@@ -1,4 +1,4 @@
-//! M7 dual-attribute bridge Phase-0 gate (FOLLOW-UP 4, reduced) —
+//! Dual-attribute bridge gate —
 //! mixing `Std.Ui` typed attributes (`Font.bold`, `Background.color`) with a
 //! `Std.Html` node (`Html.div` / `Html.text`) embedded via `Ui.html`.
 //!
@@ -26,12 +26,12 @@
 //! * No internal direction markers (`__col`, `__row`) leak into the output.
 //! * The full path `Std.Ui` + `Std.Html` kernel mix builds and runs.
 //!
-//! ## Phase-0 scope note
+//! ## Scope note
 //!
 //! The full dual-Attribute+Event golden (mixing typed Std.Ui attributes and
-//! Html.Events event handlers) is blocked in Phase-0 by the `UiCtor::HtmlEvent`
+//! Html.Events event handlers) is blocked by the `UiCtor::HtmlEvent`
 //! emit-arm gap (SKY-I0###).  This reduced golden avoids event kernels and
-//! exercises only the attribute + Html-node bridge, which is buildable today.
+//! exercises only the attribute + Html-node bridge.
 //!
 //! Run:
 //!

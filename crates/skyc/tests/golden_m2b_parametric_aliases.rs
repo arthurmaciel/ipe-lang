@@ -1,4 +1,4 @@
-//! Milestone-2B parametric-type-alias gate: `skyc` must emit `main.rs`
+//! Parametric-type-alias gate: `skyc` must emit `main.rs`
 //! byte-identical to the checked-in golden for a program that annotates a
 //! function with a **parametric** `type alias` (`type alias Pair a = ( a, a )`,
 //! used as `addPair : Pair Int -> Int`), and (behind `SKY_E2E=1`) the emitted
@@ -22,7 +22,7 @@
 //! ```
 //!
 //! `addPair (20, 22) = 42` (the body returns 42 when the pair equals `(20, 22)`;
-//! the M2 subset has no tuple element access yet, so equality recovers the value,
+//! this subset has no tuple element access, so equality recovers the value,
 //! mirroring the `m2_tuple_annotations` golden). The `end_to_end_*` test below
 //! asserts the Rust backend reaches the identical `42`. Running the Go toolchain
 //! inside `cargo test` is impractical (it needs the Haskell `sky` binary plus a

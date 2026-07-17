@@ -1,4 +1,4 @@
-//! #199 nested-capture + outer-by-value-arg SEAL lock.
+//! Nested-capture + outer-by-value-arg SEAL lock.
 //!
 //! A non-Copy (`CloneOk`) binding used BOTH as a closure-capture into a NESTED
 //! `move` closure (a `Task.map`/`Task.andThen` continuation nested inside the
@@ -7,10 +7,10 @@
 //! by-value argument in the SAME enclosing expression — the 07-todo-cli
 //! `addTodo` / `markDone` / `runApp` / `listTodos` shape.
 //!
-//! #193 hoisted the OUTER capturing lambda's pre-clone but never descended into
-//! its body, so a FURTHER-nested closure moved the shadowed clone out of the
+//! Hoisting only the OUTER capturing lambda's pre-clone without descending into
+//! its body lets a FURTHER-nested closure move the shadowed clone out of the
 //! outer `Box<dyn Fn>` → E0507 ("cannot move out of a captured variable in an
-//! `Fn` closure"). The fix:
+//! `Fn` closure"). So:
 //!   * `rewrite_multiuse_clones`'s `Lambda`/`SharedLambda` arms now descend via
 //!     `force_shared_capture_clones`, wrapping every nested capturing lambda;
 //!   * `lower_lambda` runs the `CloneOk` multi-use rewrite over its OWN params

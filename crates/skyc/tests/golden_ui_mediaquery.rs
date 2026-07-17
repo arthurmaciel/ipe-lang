@@ -1,8 +1,7 @@
-//! E2E golden for `Ui.mediaQuery` — the 1-of-20 kernel deliberately deferred
-//! from the 2026-07-10 Std.Ui/Html wiring batch, wired 2026-07-11 (see
+//! E2E golden for `Ui.mediaQuery` (see
 //! `docs/adr/0019-ui-mediaquery-safe-boundary.md`). Also exercises
-//! `Ui.breakpoint`, which now delegates to the same marker-emitting mechanism
-//! instead of the Phase-0 eager-passthrough stub.
+//! `Ui.breakpoint`, which delegates to the same marker-emitting mechanism
+//! rather than an eager-passthrough stub.
 //!
 //! ## Oracle provenance
 //!

@@ -1,4 +1,4 @@
-//! M5a Task / Io / Time / System / Random / File parity gate — effect sequencing,
+//! Task / Io / Time / System / Random / File parity gate — effect sequencing,
 //! Task combinators, and the error channel.
 //!
 //! All tests are gated on `SKY_E2E=1`; without it they return early so the
@@ -105,11 +105,11 @@ fn error_channel() {
 // ── Task Error () signed helper ───────────────────────────────────────────────
 
 /// `greet : String -> Task Error ()` is a signed top-level effectful helper.
-/// Previously rejected with SKY-T0001 "expected Task Error (), found Task ()"
-/// because the kernel builds a unary `Task a` while the annotation was
-/// converted to a binary `Task Error a` by `from_canon`.
-/// `normalize_annotation_ty` now reduces 2-arg `Task Error a` → 1-arg `Task a`
-/// at all annotation sites.  Expected output: `Hello, World!`.
+/// The kernel builds a unary `Task a` while `from_canon` converts the
+/// annotation to a binary `Task Error a`; without reconciliation this is a
+/// SKY-T0001 "expected Task Error (), found Task ()". `normalize_annotation_ty`
+/// reduces 2-arg `Task Error a` → 1-arg `Task a` at all annotation sites.
+/// Expected output: `Hello, World!`.
 #[test]
 fn task_signed_helper() {
     assert_runs_and_matches_oracle("m5a_task_signed_helper");

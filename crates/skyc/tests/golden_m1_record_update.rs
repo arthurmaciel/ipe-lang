@@ -1,4 +1,4 @@
-//! Milestone-1 record-update gate: `skyc` must emit `main.rs` byte-identical to
+//! Record-update gate: `skyc` must emit `main.rs` byte-identical to
 //! the checked-in golden for a program that builds a record, functionally
 //! updates one field, and reads both records' fields, and (behind `SKY_E2E=1`)
 //! the emitted project must build and print `43`.

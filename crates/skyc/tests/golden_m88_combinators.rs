@@ -1,4 +1,4 @@
-//! #88 `Result` / `Maybe` applicative-combinator parity gate — the `mapN` /
+//! `Result` / `Maybe` applicative-combinator parity gate — the `mapN` /
 //! `andMap` / `combine` / `traverse` family wired as kernels.
 //!
 //! Exercises, end-to-end (skyc → emitted Cargo project → build → run):
@@ -37,7 +37,7 @@
 //! ORACLE DIVERGENCE (`oracle_divergence = true`): the Go reference compiler
 //! cannot produce a reference for this exact program — its `Error` module
 //! surface differs (Go requires `import Error`; the Rust port exposes the
-//! `Error.*` constructors as a prelude kernel qualifier, #86) AND
+//! `Error.*` constructors as a prelude kernel qualifier) AND
 //! `Result.traverse` is not in the Go reference's `sky-stdlib/Sky/Core/Result.sky`
 //! `exposing` list.  Both are pre-existing, sanctioned divergences; the cached
 //! expected output is skyc's own, per `docs/architecture/divergence-policy.md`.
@@ -96,15 +96,15 @@ fn result_maybe_combinators() {
     assert_runs_and_matches_oracle("m88_result_maybe_combinators");
 }
 
-/// #183 SEAL positive — `Result.mapError` with a wildcard handler `\_ -> …`
+/// SEAL positive — `Result.mapError` with a wildcard handler `\_ -> …`
 /// over a genuinely-free error var, called UNPINNED (no result-type
-/// annotation). The handler's `PAnything` param used to default to
-/// `IrType::Json` while the `Ok "concrete"` value side defaulted the same
-/// free `e` to `IrType::Error` (`SkyError`); the emitted `FnOnce(JsonVal)`
-/// closure then failed to unify with the `SkyResult<SkyError, _>` value and
-/// cargo rejected it with E0277 despite skyc exit-0. The fix retypes the
-/// handler binder to `SkyError`; this gate proves the whole pipeline
-/// (skyc → cargo build → run) now succeeds and prints `concrete`.
+/// annotation). Defaulting the handler's `PAnything` param to
+/// `IrType::Json` while the `Ok "concrete"` value side defaults the same
+/// free `e` to `IrType::Error` (`SkyError`) would leave the emitted
+/// `FnOnce(JsonVal)` closure unable to unify with the `SkyResult<SkyError, _>`
+/// value, so cargo rejects it with E0277 despite skyc exit-0. The handler
+/// binder retypes to `SkyError`; this gate proves the whole pipeline
+/// (skyc → cargo build → run) succeeds and prints `concrete`.
 #[test]
 fn result_map_error_wildcard_handler() {
     assert_runs_and_matches_oracle("m88_result_map_error_wildcard");

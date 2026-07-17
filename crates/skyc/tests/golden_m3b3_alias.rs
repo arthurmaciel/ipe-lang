@@ -1,4 +1,4 @@
-//! Milestone-3b-3 alias / `as` patterns: `case n of 0 -> … ; (m as k) -> …`.
+//! Alias / `as` patterns: `case n of 0 -> … ; (m as k) -> …`.
 //! An `as` binds the whole matched value (`k`) alongside its inner pattern's
 //! binder (`m`), and a trailing variable is an irrefutable catch-all. `skyc`
 //! must emit `main.rs` byte-identical to the checked-in golden, and (behind

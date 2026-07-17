@@ -1,4 +1,4 @@
-//! #151 seal — let-fn captured as a callback lambda (callee position) and
+//! Seal — let-fn captured as a callback lambda (callee position) and
 //! let-fn forwarded to a kernel in a polymorphic context.
 //!
 //! **c01**: A let-fn `process : Int -> Int -> Int` is `NonClone` in the
@@ -6,11 +6,11 @@
 //! scope and passes it as a callback `\m -> process n m` to `List.map`
 //! (Apply.args position).
 //!
-//! Pre-fix c01: `rewrite_captured_clones` propagated `noncl_set = {process}`
-//! into the lambda argument at depth+1; the callee-position exemption
-//! (`depth == 0`) did not fire at depth 1 → spurious SKY-L0126.
+//! c01: propagating `noncl_set = {process}` into the lambda argument at depth+1
+//! would make the callee-position exemption (`depth == 0`) miss at depth 1 →
+//! spurious SKY-L0126.
 //!
-//! Fix c01: the `Apply` arm of `rewrite_captured_clones` clears `noncl_set`
+//! So the `Apply` arm of `rewrite_captured_clones` clears `noncl_set`
 //! for any `Expr::Lambda` in argument position before recursing.  Lambdas in
 //! argument position are callbacks already fully validated by their own
 //! `lower_lambda` pass at depth 0.  Lambdas in func position (immediately-
@@ -20,12 +20,12 @@
 //! **c02**: A let-fn `report` is forwarded to `Task.onError` inside a
 //! polymorphic helper `wrap : String -> Task Error a -> Task Error a`.
 //!
-//! Pre-fix c02: `eta_expand_partial` classified `Var(report)` in the partial
-//! application `Task.onError report` as slot-class `None` because
-//! `ir_type_from_ty` failed when resolving `Error -> Task Error a` (the `a`
-//! is still a free `Ty::Var`).  T7 conservatism turned `None` into SKY-L0126.
+//! c02: classifying `Var(report)` in the partial application `Task.onError
+//! report` as slot-class `None` (because `ir_type_from_ty` fails resolving
+//! `Error -> Task Error a` while `a` is still a free `Ty::Var`) would let T7
+//! conservatism turn `None` into SKY-L0126.
 //!
-//! Fix c02: a `Ty::Fun` slot whose type resolution fails only due to a nested
+//! So a `Ty::Fun` slot whose type resolution fails only due to a nested
 //! type variable maps to `Some(NonClone)` instead of `None`.  Forwarding the
 //! Var into an `impl FnOnce` slot is a plain ownership transfer — correct.
 //!
@@ -49,7 +49,7 @@ fn repo_root() -> PathBuf {
 // ── c01 — let-fn in callee position inside nested lambda (green after fix) ───
 
 /// `applyInner n = List.map (\m -> process n m) [1,2,3]` — `process` is
-/// `NonClone` in callee position inside the inner lambda.  Pre-fix: `SKY-L0126`.
+/// `NonClone` in callee position inside the inner lambda.  Without the fix, `SKY-L0126`.
 /// Post-fix: skyc build succeeds; cargo build + run produce "11, 12, 13".
 #[test]
 fn c01_nested_let_fn_callee_green() {

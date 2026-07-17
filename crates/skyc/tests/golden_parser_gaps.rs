@@ -1,7 +1,7 @@
-//! Parser-gaps golden gate — build+run fixtures for the parser features whose
-//! coverage previously stopped at parse-level unit tests. Non-negotiable #9
-//! ("every new feature becomes a regression test") requires a build+run golden
-//! per feature, not just an AST-shape assertion; this file closes that gap for
+//! Parser-gaps golden gate — build+run fixtures for parser features that
+//! otherwise have coverage only at parse-level unit tests. The
+//! "every new feature becomes a regression test" rule requires a build+run
+//! golden per feature, not just an AST-shape assertion; this file covers
 //! five surfaces.
 //!
 //! ## Positives (build → run → byte-diff against the cached oracle)

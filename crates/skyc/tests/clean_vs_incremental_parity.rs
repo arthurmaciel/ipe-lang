@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Task 18 — the clean-vs-incremental parity gate (NON-NEGOTIABLE).
+//! The clean-vs-incremental parity gate (NON-NEGOTIABLE).
 //!
 //! For any edit sequence, the emitted project from an **incrementally
 //! updated** (warm) database must be byte-identical to the emitted project
@@ -94,8 +94,8 @@ fn cold_compile(user: &UserSources) -> CompileOutcome {
 struct WarmSession {
     db: sky_db::SkyDatabase,
     root: Option<sky_db::SourceRoot>,
-    // A STABLE `BuildConfig` handle across the whole sequence — Phase-5
-    // §10.2's own recorded warning: constructing a fresh `BuildConfig` per
+    // A STABLE `BuildConfig` handle across the whole sequence:
+    // constructing a fresh `BuildConfig` per
     // `compile_prepared` call would give `emit_project` a different memo key
     // every demand, silently defeating the seam's memoization on the warm
     // side (the gate would never actually exercise a cache hit for emit).

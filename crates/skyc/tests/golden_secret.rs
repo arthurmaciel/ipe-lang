@@ -1,6 +1,6 @@
-//! `Sky.Core.Secret` positive goldens (backlog #44) — build + run + assert on
+//! `Sky.Core.Secret` positive goldens — build + run + assert on
 //! stdout directly (no cached-oracle comparison: `Secret` has no Go/Haskell
-//! counterpart, same `oracle_divergence` posture as `SqlFragment`/#61's
+//! counterpart, same `oracle_divergence` posture as `SqlFragment`'s
 //! goldens, but simple enough that a direct stdout assertion is clearer than
 //! standing up oracle-cache scaffolding for a feature with no oracle to
 //! diverge FROM).
@@ -103,7 +103,7 @@ fn equality_is_constant_time_and_structural() {
 }
 
 /// A record containing a `Secret` field stays fully derivable
-/// (`Clone`/`Debug`/`PartialEq`) — the #44 derive-blast-radius fix. Record
+/// (`Clone`/`Debug`/`PartialEq`) — the derive-blast-radius fix. Record
 /// `==` recurses into `Secret`'s own equality; `{ r | f = v }` requires
 /// `Clone` on every field including the `Secret` one.
 #[test]

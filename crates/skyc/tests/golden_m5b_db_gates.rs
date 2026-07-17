@@ -1,4 +1,4 @@
-//! `Std.Db.Sql` negative gate (backlog #61): a naive string-concatenated WHERE
+//! `Std.Db.Sql` negative gate: a naive string-concatenated WHERE
 //! clause must be REJECTED at `skyc` compile time, never accepted and left to
 //! misbehave (or be silently injectable) at runtime. This is the core
 //! "parse, don't validate" property the `SqlFragment` newtype exists to
@@ -49,7 +49,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code)
 /// `Db.findWhere conn "products" ("qty > " ++ "9")` — a plain `String` (built
 /// by `++`, not any `Sql.*` combinator) where `SqlFragment` is required —
 /// must be rejected with `SKY-T0001` at the call site. This is the exact
-/// injection shape `Db.unsafeFindWhere` used to accept at runtime; `skyc` now
+/// injection shape a raw `Db.unsafeFindWhere` would accept at runtime; `skyc`
 /// refuses it before a single byte of Rust is emitted.
 #[test]
 fn db_findwhere_string_is_t0001() {

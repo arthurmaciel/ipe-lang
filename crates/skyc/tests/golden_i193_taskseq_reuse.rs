@@ -1,4 +1,4 @@
-//! #193 taskseq/pipeline reuse lock — `lower_let_pvar` covers `TaskSeq`.
+//! Taskseq/pipeline reuse lock — `lower_let_pvar` covers `TaskSeq`.
 //!
 //! A `CloneOk` binding (`String`) captured inside a `Task.andThen` continuation
 //! lambda AND used again after it (the 07-todo-cli `conn`/`rows` shape).

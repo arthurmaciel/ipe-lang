@@ -1,4 +1,4 @@
-//! #218 clone-relay across an intermediate closure boundary — SEAL regression.
+//! Clone-relay across an intermediate closure boundary — SEAL regression.
 //!
 //! A `let`-bound function (`insertRow`) read only at lambda-nesting depth >= 2,
 //! reached through a pipeline-synthesized intermediate `move` closure
@@ -8,19 +8,19 @@
 //! `needs_shared_capture` promotes `insertRow` to a `SharedLambda`
 //! (`Arc<dyn Fn>`); the pipeline stage synthesizes a real intermediate closure
 //! via `eta_expand_partial` (the non-Copy `x` pre-clone wrap defeats the
-//! direct-call collapse). Pre-fix, `wrap_shared_lambda_if_needed` decided
+//! direct-call collapse). Without the fix, `wrap_shared_lambda_if_needed` decided
 //! `needs_wrap` on the PRE-recursion body via the lambda-opaque
 //! `sym_referenced_directly`, so the intermediate closure — which reaches
 //! `insertRow` only through a DEEPER lambda — never got its pre-clone and
 //! move-captured `insertRow` out of the enclosing `Fn` env → E0507.
 //!
-//! Fix: recurse FIRST, decide `needs_wrap` on the PROCESSED body — the inner
-//! lambda's wrap plants a direct `CloneVar(insertRow)` read in the intermediate
-//! closure's body, so the intermediate's post-recursion check sees it and wraps
-//! too. The pre-clone relays outward through every boundary.
+//! So it recurses FIRST and decides `needs_wrap` on the PROCESSED body — the
+//! inner lambda's wrap plants a direct `CloneVar(insertRow)` read in the
+//! intermediate closure's body, so the intermediate's post-recursion check sees
+//! it and wraps too. The pre-clone relays outward through every boundary.
 //!
-//! THE SEAL: skyc-0 => cargo-0. Pre-fix this program was skyc-0 but cargo-101
-//! (E0507 on `insertRow`), the exact 18-job-queue failure shape.
+//! THE SEAL: skyc-0 => cargo-0. Without the fix this program is skyc-0 but
+//! cargo-101 (E0507 on `insertRow`), the 18-job-queue failure shape.
 //!
 //! Run:
 //! ```text
@@ -81,7 +81,7 @@ fn i218_clone_relay_skyc_accepts() {
     );
 }
 
-/// cargo-0 ∧ run-correct: gated on `SKY_E2E=1` — THE SEAL for #218.
+/// cargo-0 ∧ run-correct: gated on `SKY_E2E=1` — THE SEAL.
 #[test]
 fn i218_clone_relay_cargo_builds_and_runs() {
     if std::env::var("SKY_E2E").is_err() {

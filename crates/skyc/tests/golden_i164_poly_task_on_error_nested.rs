@@ -1,4 +1,4 @@
-//! #164 seal — E0308 pair. `examples/18-job-queue`'s `withErrorReporting :
+//! Seal — E0308 pair. `examples/18-job-queue`'s `withErrorReporting :
 //! String -> Task Error a -> Task Error a` defines internal error-handling
 //! closures (`logAndFail`, `report`) whose bodies are MULTI-STEP pipelines
 //! (`Crypto.randomToken 4 |> Task.andThen (\errId -> logAndFail e errId)`),
@@ -79,7 +79,7 @@ fn poly_task_on_error_nested_green() {
 
     // Structural check independent of SKY_E2E: the emitted Rust must be
     // generic over the helper's own type param (T1), never `JsonVal`. This
-    // is exactly the SEAL-violating shape #164 closes — assert it here so a
+    // is exactly the SEAL-violating shape this closes — assert it here so a
     // future regression fails even when SKY_E2E is not set (CI-cheap gate).
     let main_rs = std::fs::read_to_string(out.join("src").join("main.rs"))
         .expect("emitted main.rs must exist after a successful skyc build");

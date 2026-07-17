@@ -1,4 +1,4 @@
-//! Milestone-3a concrete payload-ADT gate: a non-generic enum whose
+//! Concrete payload-ADT gate: a non-generic enum whose
 //! constructors carry fields. `skyc` must emit `main.rs` byte-identical to the
 //! checked-in golden, and (behind `SKY_E2E=1`) the emitted project must build
 //! and print `32`.

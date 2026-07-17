@@ -4,14 +4,14 @@
 //! merged module.
 //!
 //! This is the lowering-pass analogue of `golden_t0012_cross_module_attr`
-//! (which covers a post-solve field-access error). Historical context (#221,
-//! `36-composite-server`): `guarded h = wrap (rateLimit … h)` in `Server.sky`
-//! raised SKY-L0126, but lowering diagnostics carried only a bare, file-local
-//! byte `Span` with no owning module. The driver's `source_for_span` heuristic
-//! then picked whichever merged def numerically CONTAINS that offset with the
-//! smallest `lo_dist` — in the pristine tree that was `Main.sky`'s `runMigrate`
-//! (its body started ~46 bytes before the offset while the real owner
-//! `Server.run` started ~1000 before), so the user saw the phantom
+//! (which covers a post-solve field-access error). In
+//! `36-composite-server`, `guarded h = wrap (rateLimit … h)` in `Server.sky`
+//! raises SKY-L0126; if lowering diagnostics carry only a bare, file-local
+//! byte `Span` with no owning module, the driver's `source_for_span` heuristic
+//! picks whichever merged def numerically CONTAINS that offset with the
+//! smallest `lo_dist` — which can be `Main.sky`'s `runMigrate`
+//! (its body starts ~46 bytes before the offset while the real owner
+//! `Server.run` starts ~1000 before), so the user sees the phantom
 //! `--> Main.sky:73`.
 //!
 //! Fix: `sky_lower::lower` now pairs its diagnostic with the failing def's
@@ -22,8 +22,8 @@
 //! This fixture is tuned so the failing `Dep.sky` span sits at a byte offset
 //! that the OLD heuristic mis-attributes to `Main.sky` (its `main` body span
 //! numerically contains the offset with a smaller `lo_dist` than the padded
-//! `Dep.composed` body). Pre-fix this rendered `--> Main.sky:20`; post-fix it
-//! renders `--> Dep.sky`.
+//! `Dep.composed` body). This must render `--> Dep.sky`, not the `-->
+//! Main.sky:20` the OLD heuristic produces.
 //!
 //! Run:
 //! ```text

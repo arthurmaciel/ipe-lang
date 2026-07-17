@@ -1,4 +1,4 @@
-//! Milestone-1 binary-operator gate: `skyc` must emit `main.rs` byte-identical
+//! Binary-operator gate: `skyc` must emit `main.rs` byte-identical
 //! to the checked-in golden for the full operator set, and (behind `SKY_E2E=1`)
 //! the emitted project must build and print `13`.
 //!

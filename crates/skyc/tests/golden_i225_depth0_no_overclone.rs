@@ -1,7 +1,7 @@
-//! #225 depth-0 no over-clone — efficiency (ADR-0002 lean discipline).
+//! Depth-0 no over-clone — efficiency (ADR-0002 lean discipline).
 //!
 //! A param (`msg`) captured ONCE into a single closure that is its LAST use
-//! must not receive a spurious depth-0 pre-clone. Pre-fix, the open-coded
+//! must not receive a spurious depth-0 pre-clone. Without the fix, the open-coded
 //! `n == 1` binder branch called `force_shared_capture_clones` directly, which
 //! wrapped EVERY directly-referencing lambda — including the OUTERMOST
 //! (depth-0) pipeline-synthesized `move |eta_0|` closure — minting a spurious
@@ -38,7 +38,7 @@ fn entry_path(root: &Path) -> PathBuf {
 /// skyc-0: the compiler accepts the program AND does NOT mint the spurious
 /// depth-0 over-clone closure. The pipeline stage `eta_0` must be a plain
 /// `let` value binding (`let eta_0: SkyTask`), never a capturing
-/// `move |eta_0|` closure — the pre-fix over-clone signature.
+/// `move |eta_0|` closure — the over-clone signature.
 #[test]
 fn i225_depth0_no_overclone_skyc_accepts_lean() {
     let root = repo_root();

@@ -1,4 +1,4 @@
-//! #91 seal regression: the `Std.Live` / `Std.Tui` / `Std.Webview` app-entry
+//! The `Std.Live` / `Std.Tui` / `Std.Webview` app-entry
 //! Model-admissibility gate.
 //!
 //! `live_app` bounds its Model `serde::Serialize + serde::de::DeserializeOwned +
@@ -160,7 +160,7 @@ main =
         }
 "#;
 
-// backlog #44: a `Secret` Model field must be rejected for `Std.Live` — a
+// A `Secret` Model field must be rejected for `Std.Live` — a
 // `Secret` must NEVER round-trip through the session store. `Secret` is
 // NON-serde by design (`ir_type_is_serde(Secret) = false`), so this is the
 // SAME mechanism as `LIVE_CMD_MODEL` / `LIVE_HTML_MODEL` above, not a new gate.
@@ -299,7 +299,7 @@ fn live_model_with_html_field_is_rejected() -> Result<(), BoxError> {
     assert_rejected_with("live_html", LIVE_HTML_MODEL, "SKY-L0120")
 }
 
-/// backlog #44: `Secret` in a Live Model is a compile-time `SKY-L0120`, never
+/// `Secret` in a Live Model is a compile-time `SKY-L0120`, never
 /// a session-store leak — see `LIVE_SECRET_MODEL`'s doc comment.
 #[test]
 fn live_model_with_secret_field_is_rejected() -> Result<(), BoxError> {
@@ -316,18 +316,20 @@ fn tui_model_with_cmd_field_is_rejected() -> Result<(), BoxError> {
     assert_rejected_with("tui_cmd", TUI_CMD_MODEL, "SKY-L0120")
 }
 
-// ── #95 lambda-`view` gate-bypass regressions ────────────────────────────────
+// ── lambda-`view` gate-bypass regressions ────────────────────────────────
 //
-// `model_ty_of_view` used to match ONLY `Expr::FuncValue`, so a cfg whose
-// `view` was an inline LAMBDA returned `None` and the caller skipped the gate
-// (fail-open): an inadmissible Model behind a lambda `view` sailed past #91
-// and `cargo`-failed on the missing serde bound. The #95 fix routes the
-// recovery through the Lambda-aware `fn_param_ty`, closing the bypass. These
-// fixtures pin both directions: the gate now FIRES for a lambda `view` with a
-// bad Model, and does NOT false-reject a lambda `view` with a plain Model.
+// `model_ty_of_view` must match a lambda `view`, not ONLY `Expr::FuncValue`:
+// matching only `FuncValue` returns `None` for an inline LAMBDA and the caller
+// skips the gate (fail-open), letting an inadmissible Model behind a lambda
+// `view` sail past the gate and `cargo`-fail on the missing serde bound.
+// Routing the recovery through the Lambda-aware `fn_param_ty` closes the
+// bypass. These fixtures pin both directions: the gate FIRES for a lambda
+// `view` with a bad Model, and does NOT false-reject a lambda `view` with a
+// plain Model.
 
-/// #95 core regression: Model has a `Cmd` field AND `view` is an inline
-/// lambda. Pre-fix: skyc-0 then cargo-fail (gate skipped). Post-fix: SKY-L0120.
+/// Model has a `Cmd` field AND `view` is an inline lambda. A `FuncValue`-only
+/// gate would skip this (skyc-0 then cargo-fail); the Lambda-aware gate rejects
+/// it with SKY-L0120.
 const LIVE_LAMBDA_VIEW_CMD_MODEL: &str = r"module Main exposing (main)
 
 import Std.Live as Live
@@ -360,7 +362,7 @@ main =
         }
 ";
 
-/// #95 non-regression control: plain-data Model + lambda `view` must still be
+/// Non-regression control: plain-data Model + lambda `view` must be
 /// ACCEPTED — proves the Lambda arm recovers the Model without false-rejecting.
 const LIVE_LAMBDA_VIEW_GOOD: &str = r"module Main exposing (main)
 

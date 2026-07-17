@@ -1,11 +1,11 @@
-//! #99 — refutable match-arm `as`-alias over a non-Copy payload.
+//! Refutable match-arm `as`-alias over a non-Copy payload.
 //!
-//! GREEN side: `Just ((a, b) as w)` over `Maybe (String, String)` used to
+//! GREEN side: `Just ((a, b) as w)` over `Maybe (String, String)` must not
 //! emit `Just(w @ (a, b))` in a by-value arm — a Rust partial move (E0382)
 //! the moment the arm body reads `w` after `a`/`b` (skyc exit 0, cargo
-//! exit 101: the exact exit-0-then-cargo-fail seal class). The fix binds
+//! exit 101: the exact exit-0-then-cargo-fail seal class). Instead it binds
 //! the whole payload once and re-derives the inner bindings from a clone
-//! (the #96 strategy, extended to by-value match arms).
+//! (the same strategy, extended to by-value match arms).
 //!
 //! RED side: an alias over a dispatch-NEEDING inner (`(Just x) as inner`
 //! nested in a ctor payload) is SKY-L0128 fail-closed — the clone-rebuild
@@ -28,8 +28,8 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
     root.join("tests").join("golden").join(name)
 }
 
-/// The alias-over-dispatch-free-tuple shape must be skyc-0 (proving the
-/// pre-fix lowering-side path accepts it) — cheap tier, always runs.
+/// The alias-over-dispatch-free-tuple shape must be skyc-0 (the lowering-side
+/// path accepts it) — cheap tier, always runs.
 #[test]
 fn i99_alias_tuple_match_arm_is_skyc_ok() {
     let root = repo_root();
@@ -74,10 +74,10 @@ fn i99_alias_tuple_match_arm_builds_and_runs() {
     );
 }
 
-/// #99 self-edge regression (found by the #99 review): an `as`-alias over a
+/// Self-edge case: an `as`-alias over a
 /// CYCLIC self-edge (recursive) ctor field is boxed in the emitted enum, so
-/// the clone-rebuild re-derivation must unbox the temp — pre-fix both the
-/// alias binder and the inner binder stayed `Box<Tree>` (skyc-0, cargo-E0308).
+/// the clone-rebuild re-derivation must unbox the temp — otherwise both the
+/// alias binder and the inner binder stay `Box<Tree>` (skyc-0, cargo-E0308).
 #[test]
 fn i99_alias_over_self_edge_is_skyc_ok() {
     let root = repo_root();

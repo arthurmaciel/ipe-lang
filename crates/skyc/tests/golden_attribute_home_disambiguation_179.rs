@@ -1,4 +1,4 @@
-//! E2E regression golden for #179 / #185 — `Attribute<msg>` type-identity
+//! E2E regression golden for `Attribute<msg>` type-identity
 //! disambiguation between `sky_runtime::html::Attribute` and
 //! `sky_runtime::ui::element::Attribute`.
 //!
@@ -6,13 +6,13 @@
 //!
 //! `Attribute` exists in BOTH `Std.Ui` (→ `ui::element::Attribute`) and
 //! `Std.Html.Attributes` (→ `html::Attribute`).  The lowerer disambiguates by
-//! `is_html = home contains "Html"`, but a bare/aliased `Attribute` from a
-//! stdlib module previously reached the empty-home sentinel (stdlib imports are
+//! `is_html = home contains "Html"`. If a bare/aliased `Attribute` from a
+//! stdlib module reaches the empty-home sentinel (stdlib imports are
 //! skipped by both the dep-injection loop and the `qualifier_paths`
-//! construction), so `is_html` always failed and BOTH the bare-exposed form
-//! (`Std.Live.Head.pairToAttr`, #179) and the qualified form
-//! (`Std.Ui.Chart.svgRootAttrs`, #185) mis-lowered `Attribute msg` to
-//! `ui::element::Attribute` while their `Attr.attribute` bodies produced
+//! construction), `is_html` always fails and BOTH the bare-exposed form
+//! (`Std.Live.Head.pairToAttr`) and the qualified form
+//! (`Std.Ui.Chart.svgRootAttrs`) mis-lower `Attribute msg` to
+//! `ui::element::Attribute` while their `Attr.attribute` bodies produce
 //! `html::Attribute` — an exit-0-then-cargo-fail E0308 SEAL violation.
 //!
 //! ## What is tested
@@ -109,7 +109,7 @@ fn attribute_home_disambiguation_179_builds_and_renders() {
         "svgRootAttrs role attribute must render\n--- stdout ---\n{rendered}"
     );
     // Attributes produced by `pairToAttr` (bare exposed `Attribute` from
-    // Std.Html.Attributes, mapped over a list) — the exact #179 shape.
+    // Std.Html.Attributes, mapped over a list) — the exact target shape.
     assert!(
         rendered.contains("width=\"100\"") && rendered.contains("height=\"40\""),
         "pairToAttr-produced width/height attributes must render\n--- stdout ---\n{rendered}"

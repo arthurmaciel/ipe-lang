@@ -1,6 +1,6 @@
-//! BACKLOG #177 regression — `examples/27-multi-session-chat`'s `cargo build`.
+//! `examples/27-multi-session-chat`'s `cargo build`.
 //!
-//! Pre-fix: `skyc build` exits 0, but the emitted Rust fails `cargo build`
+//! Without the fix, `skyc build` exits 0, but the emitted Rust fails `cargo build`
 //! with E0277 (`the trait bound T1: SkyRow is not satisfied`) at every
 //! `db_get_string("field".to_string(), &(payload))` call inside a function
 //! whose only generic is the wildcard `any` PARAM (example 27's

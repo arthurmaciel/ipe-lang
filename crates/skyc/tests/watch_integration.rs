@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
-//! End-to-end proofs for `ipe watch` (`crate::watch`, Phase 7 — Tasks
-//! 21-24; Task 25's cancellation proof lives separately in
+//! End-to-end proofs for `ipe watch` (`crate::watch`). The cancellation proof
+//! lives separately in
 //! `watch_cancellation.rs`, deterministically, since racing a real
 //! file-save against warm salsa recompute — which is DELIBERATELY fast —
 //! is not a reliable timing window for an E2E test).

@@ -1,4 +1,4 @@
-//! Milestone-5 pipe-operator gate: `|>` (forward, left-associative, prec 0)
+//! Pipe-operator gate: `|>` (forward, left-associative, prec 0)
 //! and `<|` (backward, right-associative, prec 0) desugar to `Call` nodes in
 //! the canonicaliser and produce byte-identical `main.rs` output to the
 //! checked-in goldens.

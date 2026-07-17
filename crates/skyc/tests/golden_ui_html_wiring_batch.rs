@@ -1,12 +1,12 @@
-//! E2E golden for the #76 20-kernel wiring batch (BACKLOG "Sweep to green" —
-//! #45's exhaustiveness gate list of 20 reachable-but-unbacked `qual_vars`
+//! E2E golden for the 20-kernel wiring batch — the exhaustiveness gate's list
+//! of 20 reachable-but-unbacked `qual_vars`
 //! members: `Ui.image/disabled/paddingEach/clipX/clipY/scrollbarX/
 //! scrollbarY/onFile/onPseudo/hover/focus/focusVisible/active`,
 //! `Html.toString/voidNode/doctype/titleNode/htmlNode/headNode`,
 //! `Background.linearGradient`).
 //!
-//! `Ui.mediaQuery` is NOT exercised here — it was deferred from this batch
-//! and wired 2026-07-11 with its own golden (`golden_ui_mediaquery.rs`; see
+//! `Ui.mediaQuery` is NOT exercised here — it has its own golden
+//! (`golden_ui_mediaquery.rs`; see
 //! `docs/adr/0019-ui-mediaquery-safe-boundary.md`).
 //!
 //! ## Oracle provenance

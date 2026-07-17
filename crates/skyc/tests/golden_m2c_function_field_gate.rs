@@ -1,4 +1,4 @@
-//! Milestone-2C soundness gate: a function value reaching a record field
+//! Soundness gate: a function value reaching a record field
 //! THROUGH a type variable must NEVER emit cargo-failing Rust silently.
 //!
 //! The shape — `wrap : a -> { value : a }` applied as `wrap (\n -> n + 1)` —
@@ -76,7 +76,7 @@ fn rejects_cleanly_or_builds_and_runs_never_silent_cargo_fail() {
         built.err()
     );
 
-    // Proper support landed (an eager `Box<dyn Fn>` coercion): the emitted crate
+    // With proper support (an eager `Box<dyn Fn>` coercion), the emitted crate
     // MUST build and run with the semantically-correct output. Gated on SKY_E2E
     // so default runs stay fast.
     if std::env::var("SKY_E2E").is_err() {

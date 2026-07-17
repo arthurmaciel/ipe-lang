@@ -1,4 +1,4 @@
-//! Milestone-3b-2 record + nested patterns, end to end. The fixture exercises,
+//! Record + nested patterns, end to end. The fixture exercises,
 //! in one program:
 //!
 //! * a nested TUPLE sub-pattern inside a constructor payload (`Wrap (a, c)`),
@@ -60,7 +60,7 @@ fn emits_byte_identical_main_rs() {
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
 /// program prints `83` — the same value the Go backend produces. Gated on
 /// `SKY_E2E=1` so the default `cargo test` stays fast. This is the soundness-floor
-/// regression for record + nested pattern lowering.
+/// Regression for record + nested pattern lowering.
 #[test]
 fn end_to_end_builds_and_prints_eighty_three() {
     if std::env::var("SKY_E2E").is_err() {

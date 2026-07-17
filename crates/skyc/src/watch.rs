@@ -1,4 +1,4 @@
-//! `ipe watch` — Phase 7 of the incremental-compilation plan (Tasks 21-25).
+//! `ipe watch`.
 //!
 //! The salsa-aware orchestrator that wires [`sky_watch`]'s salsa-agnostic
 //! primitives (confined watcher, debounce, process supervisor) to THIS
@@ -8,7 +8,7 @@
 //! the salsa port.
 //!
 //! Authoritative design: `docs/architecture/incremental-compilation-and-watch.md`
-//! §Q2. Phase-7 addendum:
+//! §Q2. Addendum:
 //! `docs/architecture/salsa-incremental-compilation-2026-07-11.md`.
 //!
 //! ## Architecture
@@ -18,31 +18,31 @@
 //! 1. **notify watcher thread** (owned by the `notify::Watcher` handle) —
 //!    pushes every IN-SCOPE raw path change onto an `mpsc` channel. The
 //!    [`sky_watch::WatchScope::is_relevant`] filter runs INSIDE the event
-//!    callback, so an excluded-dir storm never reaches the channel at all
-//!    (Task 21). The callback ALSO rejects `EventKind::Access` (open/read)
+//!    callback, so an excluded-dir storm never reaches the channel at all.
+//!    The callback ALSO rejects `EventKind::Access` (open/read)
 //!    and `EventKind::Other` before that filter even runs — load-bearing,
 //!    not an optimisation: `resolve_project_sources` opens every in-scope
 //!    file on every rebuild, and without this exclusion that OPEN is
-//!    itself an observable event that would queue another rebuild forever
-//!    (see the Phase-7 spec addendum's "a real bug the E2E suite caught").
+//!    itself an observable event that would queue another rebuild forever.
 //!    One Access sub-variant, `Close(Write)`, is deliberately EXEMPTED from
 //!    that rejection — it is the write-completion proof a debounce window
-//!    alone cannot substitute for; see the callback's own doc comment and
-//!    the Phase-7 spec addendum's coalescing-race write-up for why.
+//!    alone cannot substitute for; see the callback's own doc comment for
+//!    why.
 //! 2. **coalesce thread** — [`sky_watch::coalesce_loop`] turns that raw
-//!    stream into settled batches (Task 22's debounce half).
+//!    stream into settled batches (the debounce half).
 //! 3. **compile worker thread** (spawned fresh per rebuild cycle) — holds a
 //!    CLONED [`sky_db::SkyDatabase`] handle and runs [`compile_prepared`]
 //!    inside [`salsa::Cancelled::catch`]. The orchestrator thread never runs
 //!    a salsa query itself; it only mutates inputs (which is what makes a
-//!    superseding edit cancel the in-flight worker — see Task 25 below).
+//!    superseding edit cancel the in-flight worker — see the cancellation
+//!    section below).
 //!
 //! The orchestrator drains one unified `mpsc::Receiver<OrchestratorEvent>`
 //! that both the coalesce thread and every worker/cargo-wait thread feed —
 //! a single blocking `recv()` with **no busy-polling**, and no risk of two
 //! event sources racing on separate wakeups.
 //!
-//! ## Task 25 — cancellation, and why it needs no extra machinery
+//! ## Cancellation, and why it needs no extra machinery
 //!
 //! Salsa's `#[salsa::input]` setters require `&mut SkyDatabase` (routed
 //! through `zalsa_mut()`), which — per `salsa::Storage`'s own documented
@@ -67,14 +67,11 @@
 //! - the orchestrator then spawns a FRESH worker against the just-synced
 //!   (latest) state.
 //!
-//! This is exactly rust-analyzer's own cancellation pattern, and it needed
-//! zero new synchronisation primitives beyond what salsa already provides —
-//! confirming the Phase-7 brief's own framing that Task 25 "investigate
-//! whether salsa's own query system offers a built-in cancellation
-//! mechanism… which would be the architecturally correct approach."
+//! This is exactly rust-analyzer's own cancellation pattern, and it needs
+//! zero new synchronisation primitives beyond what salsa already provides.
 //!
-//! `cargo build` cancellation (also required by Task 22 — "never overlapping
-//! cargo builds") uses the portable equivalent for a plain OS process: the
+//! `cargo build` cancellation (never overlapping cargo builds) uses the
+//! portable equivalent for a plain OS process: the
 //! orchestrator holds the `Child` handle directly and calls `.kill()` on a
 //! superseding batch; a dedicated per-build "waiter" thread blocks on
 //! `.wait()` and reports completion (or, if killed, a status the
@@ -113,14 +110,14 @@ pub enum WatchEvent {
     /// `generation`'s compile finished with a compiler diagnostic — the
     /// running process (if any) is untouched (INV-3).
     CompileFailed { generation: u64 },
-    /// `generation`'s compile was cancelled by a superseding edit (Task 25)
+    /// `generation`'s compile was cancelled by a superseding edit
     /// — never reported to the end user, but observable here for tests.
     CompileCancelled { generation: u64 },
     /// `generation`'s `cargo build` failed — the running process (if any)
     /// is untouched (INV-3).
     CargoFailed { generation: u64 },
     /// `generation`'s `cargo build` was killed because a newer batch
-    /// superseded it (Task 22's "never overlapping cargo builds").
+    /// superseded it ("never overlapping cargo builds").
     CargoKilled { generation: u64 },
     /// `generation` reached [`sky_watch::SupervisorState::apply_green`] and
     /// this was the outcome.
@@ -541,8 +538,8 @@ fn run_inner(
             // exempts (`Close(Write)` — see below); the exemption cannot
             // reopen the self-trigger hole.
             //
-            // `Close(Write)` exemption (independent review, coalescing
-            // race): `std::fs::write` — and most editors' "atomic-ish"
+            // `Close(Write)` exemption (coalescing race):
+            // `std::fs::write` — and most editors' "atomic-ish"
             // save path — is `open(O_TRUNC) → write() → close()`, which is
             // NOT one atomic filesystem operation. `open(O_TRUNC)` alone
             // can fire `Modify(Data)` (truncating IS a data change) the
@@ -558,9 +555,8 @@ fn run_inner(
             // considers the batch settled and fires a rebuild that reads a
             // GENUINELY EMPTY file on disk (`SKY-P0020` "malformed module
             // header"), followed shortly by a second, correct rebuild once
-            // the writer finally catches up and closes the file. Previously
-            // filtering out EVERY `Access` variant (including
-            // `Close(Write)`) discarded the one signal that is only ever
+            // the writer finally catches up and closes the file.
+            // `Close(Write)` is the one signal that is only ever
             // emitted once a write-mode file handle is actually `close()`d
             // — which, by the writing process's own fd lifecycle, can only
             // happen AFTER its `write()` call returns. Letting that specific
@@ -571,8 +567,8 @@ fn run_inner(
             // by construction (keyed off the syscall that is a
             // write-completion PROOF), not by widening a timing margin and
             // hoping it's wide enough. `Create`/`Modify`/`Remove`/`Any` (the
-            // "imprecise backend" catch-all) all still pass through
-            // unconditionally, same as before.
+            // "imprecise backend" catch-all) all pass through
+            // unconditionally, unaffected by this exemption.
             let is_write_close = matches!(
                 event.kind,
                 notify::EventKind::Access(notify::event::AccessKind::Close(
@@ -688,8 +684,8 @@ fn run_inner(
                 );
 
                 // Single-flight: a superseding batch kills any in-flight
-                // cargo build immediately (Task 22 — "never overlapping
-                // cargo builds"). Only a signal is sent here (`kill`, never
+                // cargo build immediately ("never overlapping cargo
+                // builds"). Only a signal is sent here (`kill`, never
                 // a blocking `wait`) — the build's own waiter thread (see
                 // `spawn_cargo_build`) observes the exit via its own poll
                 // and reports `CargoOutcome::Killed`, so this arm never
@@ -723,7 +719,7 @@ fn run_inner(
                     })
                     .collect();
 
-                // This call BLOCKS (Task 25) until any in-flight compile
+                // This call BLOCKS until any in-flight compile
                 // worker's cancelled query unwinds and drops its database
                 // clone — see the module doc's cancellation walkthrough.
                 let root = if let Some(root) = source_root {
@@ -931,7 +927,7 @@ fn is_sky_live_project(emitted: &sky_backend::EmittedProject) -> bool {
 /// convention this repo's own `server_e2e.rs` test suite already
 /// establishes) be driven by `--port` exactly like a Sky.Live app is.
 ///
-/// Also implements Task 24's watch-scoped half of L0+ session continuity —
+/// Also provides the watch-scoped half of session continuity —
 /// default the dev session store to `sqlite` (persisted under `out_dir`,
 /// confined to the emit tree's parent so the emit→cargo bridge's
 /// `src/`-only prune pass never touches it) unless the caller's OWN
@@ -965,7 +961,7 @@ fn spawn_command(exe_path: &Path, env: &[(String, String)]) -> Command {
     cmd
 }
 
-/// Task 24's own warning half: called once, at watch startup, so it is
+/// The `memory`-store warning: called once, at watch startup, so it is
 /// printed exactly once per session rather than on every rebuild.
 ///
 /// # Errors

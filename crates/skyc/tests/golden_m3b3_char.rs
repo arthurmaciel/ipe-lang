@@ -1,4 +1,4 @@
-//! Milestone-3b-3 character literal patterns: `case c of 'a' -> … ; 'b' -> … ;
+//! Character literal patterns: `case c of 'a' -> … ; 'b' -> … ;
 //! _ -> …`. Char is an OPEN type, so a wildcard catch-all completes the cover.
 //! `skyc` must emit `main.rs` byte-identical to the checked-in golden, and
 //! (behind `SKY_E2E=1`) the emitted project must build and print `2`.

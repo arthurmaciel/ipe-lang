@@ -1,4 +1,4 @@
-//! Milestone-3b-3 literal patterns: `case n of 0 -> … ; 1 -> … ; _ -> …`. Int
+//! Literal patterns: `case n of 0 -> … ; 1 -> … ; _ -> …`. Int
 //! literal arms over an OPEN type, completed by a wildcard catch-all, with
 //! `String`-literal arm bodies. `skyc` must emit `main.rs` byte-identical to the
 //! checked-in golden, and (behind `SKY_E2E=1`) the emitted project must build

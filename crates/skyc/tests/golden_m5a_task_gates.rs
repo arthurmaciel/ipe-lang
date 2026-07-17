@@ -1,4 +1,4 @@
-//! M5a Task type-annotation gate: the error channel of `Task E a` must always be
+//! Task type-annotation gate: the error channel of `Task E a` must always be
 //! `Error`.  Any annotation `Task <X> a` where `X` is not `Error` (e.g. `Task String
 //! Int`, `Task Int a`) is a hard type-error, surfacing SKY-T0001 from
 //! `normalize_annotation_ty` with message "expected Error, found X".
@@ -57,15 +57,14 @@ fn task_bad_error_channel_is_sky_t0001() {
 }
 
 /// `Task.fail "plain string"` must be rejected with SKY-T0001 ("expected
-/// Error, found String"). Class-7 fix (2026-07-10, `db_crud`/`db_transaction`
-/// E2E hardening): `K::TaskFail`'s scheme used to be over-polymorphic
-/// (`fun(var(1), task(var(0)))`), so a bare `String` argument HM-checked and
-/// only blew up later at the emitted project's `cargo build` (E0308,
+/// Error, found String"). An over-polymorphic `K::TaskFail` scheme
+/// (`fun(var(1), task(var(0)))`) would let a bare `String` argument HM-check and
+/// only blow up later at the emitted project's `cargo build` (E0308,
 /// `SkyError` vs `String`) — a "compilation successful, then `cargo build`
-/// fails" class violation. The scheme is now pinned to `fun(error_ty(),
+/// fails" class violation. The scheme is pinned to `fun(error_ty(),
 /// task(var(0)))`, matching `mapError`/`onError` and the bundled
 /// `Sky.Core.Task.sky:33` annotation (`fail : Error -> Task Error a`), so the
-/// mismatch is now caught at `skyc` type-check time. This also pins the
+/// mismatch is caught at `skyc` type-check time. This also pins the
 /// divergence from upstream Sky's polymorphic `fail : e -> Task e a`
 /// (`docs/divergences-from-sky.md`, "`Task` error-channel scheme is
 /// monomorphic") — a future "restore Elm-parity polymorphism" change cannot
@@ -79,10 +78,10 @@ fn task_fail_string_literal_is_sky_t0001() {
     );
 }
 
-/// #32 review follow-up: a mis-arity `Cmd` ANNOTATION (`Cmd Int Bool` — Cmd
+/// A mis-arity `Cmd` ANNOTATION (`Cmd Int Bool` — Cmd
 /// takes exactly ONE message type) must be a clean SKY-T0016, not the
-/// SKY-I0001 ICE the Task-only gate left the sibling carriers with.
-/// `normalize_annotation_ty` now validates Cmd/Sub arity too.
+/// SKY-I0001 ICE a Task-only gate would leave the sibling carriers with.
+/// `normalize_annotation_ty` validates Cmd/Sub arity too.
 #[test]
 fn cmd_annotation_wrong_arity_is_sky_t0016_not_ice() {
     assert_gate(
@@ -92,9 +91,9 @@ fn cmd_annotation_wrong_arity_is_sky_t0016_not_ice() {
     );
 }
 
-/// #32 review follow-up: a mis-arity `Sub` in a CTOR PAYLOAD must be a clean
-/// SKY-T0016 at the ctor span, via `lower_enum`'s Gate 0a (generalized from
-/// Task to all three async carriers).
+/// A mis-arity `Sub` in a CTOR PAYLOAD must be a clean
+/// SKY-T0016 at the ctor span, via `lower_enum`'s Gate 0a (covering all three
+/// async carriers).
 #[test]
 fn sub_ctor_payload_wrong_arity_is_sky_t0016_not_ice() {
     assert_gate(
@@ -104,12 +103,12 @@ fn sub_ctor_payload_wrong_arity_is_sky_t0016_not_ice() {
     );
 }
 
-/// #32 (E1): a `Task` ANNOTATION with the wrong arity (`Task Error Int Bool`,
-/// three type arguments) must surface a clean SKY-T0016 diagnostic — NOT the
-/// former generic `CompilerBug` ICE ("please report"). Reachable from source
+/// A `Task` ANNOTATION with the wrong arity (`Task Error Int Bool`,
+/// three type arguments) must surface a clean SKY-T0016 diagnostic — NOT a
+/// generic `CompilerBug` ICE ("please report"). Reachable from source
 /// because canonicalisation validates arity only for type *aliases*, never for a
 /// non-alias constructor application like `Task`. `normalize_annotation_ty`'s
-/// mis-arity arm now fails closed with `TypeError::TaskArity`.
+/// mis-arity arm fails closed with `TypeError::TaskArity`.
 #[test]
 fn task_annotation_arity_three_is_sky_t0016_not_ice() {
     assert_gate(

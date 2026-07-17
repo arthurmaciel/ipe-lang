@@ -1,9 +1,9 @@
 //! Multi-arm tuple `case` — the tuple-pattern gap close.
 //!
 //! A `case` on a LITERAL tuple with more than one arm (or a refutable column)
-//! used to fail-closed as SKY-L0115 (the "tuple pattern not supported here yet"
-//! product gap). It now lowers to a native Rust tuple `match`, matching each
-//! column against its own slice / `&str` coercion:
+//! lowers to a native Rust tuple `match`, matching each column against its own
+//! slice / `&str` coercion (rather than fail-closing as SKY-L0115, the "tuple
+//! pattern not supported here yet" product gap):
 //!
 //! ```text
 //! match (xs.as_slice(), ys.as_slice()) {
@@ -21,7 +21,7 @@
 //!
 //! Gate check (fast, always): `skyc build` succeeds — no SKY-L0115.
 //! Green check (`SKY_E2E=1`): the emitted Rust cargo-builds AND runs, proving the
-//! seal (skyc-0 ⟹ cargo-0) for the new tuple-match codegen.
+//! Seal (skyc-0 ⟹ cargo-0) for the new tuple-match codegen.
 //!
 //! ```text
 //! SKY_E2E=1 cargo test -p skyc --test golden_tuple_multiarm_case

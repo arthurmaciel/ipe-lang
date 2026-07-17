@@ -1,4 +1,4 @@
-//! #149 seal — `NonClone` Var forwarded as a HOF callback must not emit SKY-L0126.
+//! Seal — `NonClone` Var forwarded as a HOF callback must not emit SKY-L0126.
 //!
 //! Root cause (b): the slot type for `Task.andThen writeAll` IS resolved by
 //! `ir_type_from_ty`, but it resolves to `IrType::Fun` whose `clone_class` is
@@ -6,8 +6,8 @@
 //! `return Err(SKY-L0126)` — even when the Var is merely forwarded as a `FnOnce`
 //! callback that consumes it exactly once.
 //!
-//! Fix: in `eta_expand_partial`, the `Some(CloneClass::NonClone)` arm for a
-//! bare `Expr::Var` now falls through (`{}`) — the Var is bare-moved into the
+//! In `eta_expand_partial`, the `Some(CloneClass::NonClone)` arm for a
+//! bare `Expr::Var` falls through (`{}`) — the Var is bare-moved into the
 //! fresh eta-lambda.  The `None` arm (genuinely unknown slot type) keeps the
 //! conservative L0126 fail-close.
 //!
@@ -57,9 +57,9 @@ fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
 // ── A1 — NonClone Var (let-bound fn) forwarded to Task.andThen ───────────────
 
 /// `go = step` where `step : String -> Task Error String`, then
-/// `Task.succeed "hello" |> Task.andThen go`.  Before #149 this emitted
-/// SKY-L0126 ("non-Clone capture in a closure is not yet supported").
-/// After the fix it must compile and, when run, print "hello!".
+/// `Task.succeed "hello" |> Task.andThen go`.  This must not emit
+/// SKY-L0126 ("non-Clone capture in a closure is not yet supported");
+/// it compiles and, when run, prints "hello!".
 #[test]
 fn a1_noncl_var_task_and_then_compiles() {
     assert_skyc_ok("i149_noncl_var_hof", "i149_noncl_var_hof_emit");

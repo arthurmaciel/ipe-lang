@@ -1,7 +1,7 @@
-//! BACKLOG #191 regression — a non-Copy binding captured into an Input `Arc`
+//! A non-Copy binding captured into an Input `Arc`
 //! callback AND reused by a sibling.
 //!
-//! Pre-fix: `skyc build` exits 0, but the emitted Rust fails `cargo build` with
+//! Without the fix, `skyc build` exits 0, but the emitted Rust fails `cargo build` with
 //! E0382 ("use of moved value: `habit`"). The lowerer pre-clones the checkbox
 //! `onChange` callback's captured `habit`
 //! (`let habit = habit.clone(); Lambda { … }`), but `arc_callback_wrap` then
@@ -66,13 +66,13 @@ fn i191_skyc_accepts_and_hoists_capture_clone() {
 
     // The pre-clone must be HOISTED outside the `Arc`'s `move` closure — the
     // `let habit = habit.clone();` immediately precedes `::std::sync::Arc::new`
-    // (the #191 fix), so the Arc owns the clone and the original survives.
+    // (the fix), so the Arc owns the clone and the original survives.
     assert!(
         emitted.contains("let habit = habit.clone(); ::std::sync::Arc::new"),
         "the capture-clone must be hoisted OUTSIDE the Arc `move` closure (#191); \
          got main.rs:\n{emitted}"
     );
-    // Guard against the pre-fix shape: the clone must NOT sit inside the Arc's
+    // Guard against the unfixed shape: the clone must NOT sit inside the Arc's
     // `move |_x|` body (which would re-move the free outer `habit`).
     assert!(
         !emitted.contains("Arc::new(move |_x| (({ let habit = habit.clone();"),

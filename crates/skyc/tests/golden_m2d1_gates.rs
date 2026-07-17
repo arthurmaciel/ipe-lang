@@ -1,4 +1,4 @@
-//! Milestone-2d-1 super-type soundness gate.
+//! Super-type soundness gate.
 //!
 //! A generic function whose body constrains a type variable to a Sky super-type
 //! (`Number` via `+ - *`, `Comparable` via `< > <= >=`) generalises to a Rust

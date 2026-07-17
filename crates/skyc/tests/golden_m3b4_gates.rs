@@ -1,4 +1,4 @@
-//! Milestone-3b-4 fail-closed gate: with the same-top-constructor restriction
+//! Fail-closed gate: with the same-top-constructor restriction
 //! lifted, exhaustiveness over the nested shape is still proven BEFORE emit.
 //!
 //! A NESTED non-exhaustive `case` (`Som (Som x) -> … ; Non -> …`, missing

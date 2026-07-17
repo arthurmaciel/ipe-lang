@@ -1,7 +1,7 @@
-//! #56 gate — row-poly subset/superset record resolution (A7 watch).
+//! Gate — row-poly subset/superset record resolution (A7 watch).
 //!
 //! `docs/adr/0018-row-poly-records-pinned-before-lowering.md` records the
-//! 2026-07-10 investigation's verdict: **no defect found**. Every
+//! verdict: **no defect found**. Every
 //! row-polymorphic subset/superset record shape reachable through ipê's
 //! surface today either resolves end-to-end in parity with the reference
 //! compiler, or is rejected with the same verdict the reference gives
@@ -21,7 +21,7 @@
 //! | `row_poly_subset_pattern` | P5, P7 | accept | subset `case` pattern AND subset lambda pattern (through `List.map`) over a superset scrutinee; emitted pattern completes to the superset struct (`RecAgeName { age: _, name, .. }`); `SKY_E2E=1` prints `Iri: Ada, Bo` |
 //! | `row_poly_closed_superset_neg` | P4 | reject | CLOSED record annotation called with a superset arg → SKY-T0001 |
 //! | `row_poly_two_supersets_neg` | P6 (class-1 tripwire) | reject | unannotated let-bound getter called with two DIFFERENT superset shapes → SKY-T0001 |
-//! | `row_poly_annotation_gap` | P1 (gap canary, #56b) | reject | row-var record annotation `{ r \| f : T }` does not parse → SKY-P0001 |
+//! | `row_poly_annotation_gap` | P1 (gap canary) | reject | row-var record annotation `{ r \| f : T }` does not parse → SKY-P0001 |
 //!
 //! Run the E2E accept-path bodies (real `cargo build` + run) with:
 //! ```text
@@ -97,8 +97,7 @@ fn subset_access_skyc_accepts_and_resolves_superset_struct() {
 /// cargo-0 ∧ run-0: the emitted project actually compiles and prints the
 /// field it read. Gated on `SKY_E2E=1` — matches the reference compiler's
 /// own output for the identical shape (proof-matrix row P2: "accept; prints
-/// `Ada`"), hand-verified against `sky v0.16.29` during the #56
-/// investigation and re-confirmed for this exact fixture.
+/// `Ada`"), hand-verified against `sky v0.16.29`.
 #[test]
 fn subset_access_cargo_builds_and_prints_ada() {
     if std::env::var("SKY_E2E").is_err() {
@@ -181,8 +180,8 @@ fn subset_pattern_skyc_accepts_and_completes_superset_pattern() {
 /// values read through both subset patterns. Gated on `SKY_E2E=1` — matches
 /// the reference compiler's own output for the identical shapes
 /// (proof-matrix rows P5 "prints (same)" and P7 "prints `Ada, Bo`"),
-/// hand-verified against `sky v0.16.29` during the #56 investigation and
-/// re-confirmed for this exact combined fixture (`Iri: Ada, Bo`).
+/// hand-verified against `sky v0.16.29` for this combined fixture
+/// (`Iri: Ada, Bo`).
 #[test]
 fn subset_pattern_cargo_builds_and_prints_iri_ada_bo() {
     if std::env::var("SKY_E2E").is_err() {
@@ -266,9 +265,9 @@ fn closed_superset_is_sky_t0001() {
 /// exercise `promote_untyped_boundaries`/Boundary Scheme Promotion, which
 /// only generalizes MODULE-level bindings, not local `let`s. Do not read
 /// this fixture as a regression gate for the class-1 cross-module
-/// generalization mechanism (confirmed by independent review, 2026-07-10 —
-/// no cross-module two-superset fixture exists in this repo today; a real
-/// class-1 coupling tripwire would need one). It DOES still pin the correct
+/// generalization mechanism (no cross-module two-superset fixture exists in
+/// this repo; a real class-1 coupling tripwire would need one). It DOES still
+/// pin the correct
 /// no-let-poly-over-rows invariant described above: flipping this fixture
 /// to accept without adding per-record-shape callee monomorphisation to the
 /// backend would reintroduce the A7 exact-key miss as an ICE (best case) or
@@ -303,13 +302,12 @@ fn two_different_supersets_is_sky_t0001() {
 }
 
 // ---------------------------------------------------------------------------
-// row_poly_annotation_gap — P1, the #56b completeness-gap canary. Reject,
+// row_poly_annotation_gap — P1, the completeness-gap canary. Reject,
 // SKY-P0001. Compile-time only, no gate.
 // ---------------------------------------------------------------------------
 
 /// The row-var record annotation syntax `{ r | name : String }` does not
-/// parse — SKY-P0001 ("found `|`, expected `:`"). Filed as backlog row
-/// `#56b` (Post-completion, corpus-unused, non-sweep-blocking): the
+/// parse — SKY-P0001 ("found `|`, expected `:`"). The
 /// reference parses this, types the row var, and monomorphises the callee
 /// per record-shape instantiation in its backend; ipê's backend cannot yet
 /// do the per-shape monomorphisation the syntax would require, so the

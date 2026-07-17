@@ -57,8 +57,8 @@ main =
 "#;
 
 // `slot` gives each `#[test]` its OWN project dir under CARGO_TARGET_TMPDIR:
-// the two tests here run in parallel by default and previously shared one
-// `stdui_transition_seal` path, so one test's `remove_dir_all` could race the
+// the two tests here run in parallel by default, and a shared
+// `stdui_transition_seal` path would let one test's `remove_dir_all` race the
 // other's `create_dir_all` (a NotFound flake). A per-test slot removes the
 // shared-path contention entirely.
 #[allow(clippy::expect_used)]
@@ -89,7 +89,7 @@ fn transition_module_resolves_and_emits_kernel() {
     );
 
     // The compiled `Std.Ui.Transition` module lowers to its OWN Rust file
-    // under `src/sky_mods/` once the per-Sky-module split (Phase 5 Milestone C)
+    // under `src/sky_mods/` once the per-Sky-module split
     // fires — this program has two distinct homes (`Main` + `Std.Ui.Transition`).
     // Scan the WHOLE emitted Sky-side tree (main.rs + sky_mods/*.rs) so the
     // assertion holds wherever the split correctly placed the helper calls.

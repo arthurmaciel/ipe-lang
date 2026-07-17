@@ -1,7 +1,7 @@
-//! #224 destructure move-ownership — SEAL regression.
+//! Destructure move-ownership — SEAL regression.
 //!
 //! A `let (a, b) = pair` destructure binder whose CloneOk component `a` is read
-//! TWICE by value in the body. Pre-fix, destructure was the ONE binder kind
+//! TWICE by value in the body. Without the fix, destructure was the ONE binder kind
 //! that never invoked the count/clone/relay machinery, so the emitted
 //! `string_append(a, string_append(a, b))` moved `a` twice → skyc-0 but
 //! cargo-101 (E0382 use of moved value). The fix routes every destructure
@@ -66,7 +66,7 @@ fn i224_destructure_skyc_accepts_and_clones_reused_component() {
     );
 }
 
-/// cargo-0 ∧ run-correct: gated on `SKY_E2E=1` — THE SEAL for #224.
+/// cargo-0 ∧ run-correct: gated on `SKY_E2E=1` — THE SEAL.
 #[test]
 fn i224_destructure_cargo_builds_and_runs() {
     if std::env::var("SKY_E2E").is_err() {

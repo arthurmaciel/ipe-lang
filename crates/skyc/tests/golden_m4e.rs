@@ -1,4 +1,4 @@
-//! M4e `Sky.Core.Bytes` parity gate — `Bytes` as a distinct `Vec<u8>` primitive.
+//! `Sky.Core.Bytes` parity gate — `Bytes` as a distinct `Vec<u8>` primitive.
 //!
 //! These golden tests exercise the `Sky.Core.Bytes` kernel family end-to-end:
 //!

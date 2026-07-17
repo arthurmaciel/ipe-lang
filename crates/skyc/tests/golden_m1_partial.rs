@@ -1,4 +1,4 @@
-//! Milestone-1 partial / over-application gate: `skyc` must emit `main.rs`
+//! Partial / over-application gate: `skyc` must emit `main.rs`
 //! byte-identical to the checked-in golden for curried partial application
 //! (eta-expansion) and over-application (saturation), and (behind `SKY_E2E=1`)
 //! the emitted project must build and print `15`.

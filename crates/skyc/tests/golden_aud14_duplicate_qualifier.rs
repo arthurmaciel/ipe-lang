@@ -31,9 +31,9 @@ fn write_project(dir: &std::path::Path, files: &[(&str, &str)]) -> bool {
 }
 
 /// Two distinct modules, `A` and `B`, both imported under the explicit alias
-/// `Utils`. Pre-fix this silently resolved `Utils.format` to whichever import
-/// was LAST in source order (`B`'s), with no diagnostic — a well-typed
-/// program producing a wrong-module resolution.
+/// `Utils`. Without the collision check this silently resolves `Utils.format`
+/// to whichever import is LAST in source order (`B`'s), with no diagnostic — a
+/// well-typed program producing a wrong-module resolution.
 #[test]
 fn distinct_modules_sharing_an_explicit_alias_is_rejected() {
     let Ok(runtime) = skyc::resolve_runtime() else {
@@ -90,7 +90,7 @@ fn distinct_modules_sharing_an_explicit_alias_is_rejected() {
 
 /// Positive control: re-importing the SAME dep module under the same
 /// qualifier twice (a diamond-dependency shape) must stay accepted — the
-/// fix only rejects a clash between two DIFFERENT dep modules.
+/// check only rejects a clash between two DIFFERENT dep modules.
 #[test]
 fn same_module_reimported_under_same_alias_is_accepted() {
     let Ok(runtime) = skyc::resolve_runtime() else {

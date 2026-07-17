@@ -1,6 +1,6 @@
-//! M4c `Sky.Core.Math` parity gate — two classes of golden in one file:
+//! `Sky.Core.Math` parity gate — two classes of golden in one file:
 //!
-//! 1. **Divergence from Sky** (PR #136). `Math.min` / `Math.max` are polymorphic
+//! 1. **Divergence from Sky**. `Math.min` / `Math.max` are polymorphic
 //!    `comparable` (`a -> a -> a`, Elm `Basics.min`/`max`). Sky routes BOTH
 //!    arguments through `AsInt` before the compare, coercing floats to `Int`
 //!    (`AsInt 0.4 = 0`, `AsInt 1.3 = 1`) and yielding a meaningless compare for
@@ -82,7 +82,7 @@ fn math_max_int() {
     assert_runs_and_matches_oracle("m4c_math_max_int");
 }
 
-// ── min / max — Float (divergence-from-sky #136: polymorphic compare, no AsInt coercion) ──
+// ── min / max — Float (divergence-from-sky: polymorphic compare, no AsInt coercion) ──
 
 /// `Math.min 0.4 1.3` → `0.4`. Sky's `AsInt` coercion gives `0`; Sky-Rust
 /// compares `f64`s directly and returns `0.4` unchanged. Divergence from Sky,
@@ -99,7 +99,7 @@ fn math_max_float_no_truncation() {
     assert_runs_and_matches_oracle("m4c_math_max_float");
 }
 
-// ── min / max — String (divergence-from-sky #136: lexicographic polymorphic compare) ──
+// ── min / max — String (divergence-from-sky: lexicographic polymorphic compare) ──
 
 /// `Math.min "b" "a"` → `"a"`. Polymorphic compare on `String` (lexicographic).
 /// Sky's `AsInt` compare is not meaningful on String. Divergence from Sky,

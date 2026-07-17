@@ -20,8 +20,8 @@
 //! 4. An identifier rename A -> B -> A within a SINGLE module (not a module
 //!    rename) — round-tripping a name back to its original spelling.
 //!
-//! Any warm/cold divergence found here is a CRITICAL finding: the Task-18
-//! gate would be falsely green.
+//! Any warm/cold divergence found here is a CRITICAL finding: the
+//! clean-vs-incremental parity gate would be falsely green.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

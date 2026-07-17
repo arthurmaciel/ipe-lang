@@ -1,4 +1,4 @@
-//! #104 + #112 seal — multi-use-clone rewrite (T5).
+//! Seal — multi-use-clone rewrite (T5).
 //!
 //! A `CloneOk` local used more than once in its scope must be `.clone()`d on
 //! all but the syntactically last occurrence, or emitted Rust fails E0382
@@ -6,11 +6,11 @@
 //!
 //! Two sub-classes covered:
 //!
-//! * **#104 — let-binding with multiple direct uses**
+//! * **let-binding with multiple direct uses**
 //!   `let s = String.fromInt n in if String.length s < 2 then "0" ++ s else s`
 //!   `string_length(s)` moves `s` in Rust; both `if`-branches reuse it.
 //!
-//! * **#112 — lambda capture + post-capture use**
+//! * **lambda capture + post-capture use**
 //!   `let mapped = List.map (\x -> String.append prefix x) items in … prefix …`
 //!   The `move` closure steals `prefix`; the trailing `++ prefix ++ …` fails.
 //!
@@ -34,7 +34,7 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-// ── F1 — #104: let-binding multi-use ─────────────────────────────────────────
+// ── F1 — let-binding multi-use ─────────────────────────────────────────
 
 /// `pad2 7` must print `"07"`.  Without T5 the emitted `string_length(s)` would
 /// move `s`, making the branches' reuse E0382.
@@ -77,7 +77,7 @@ fn f1_multiuse_let_clone() {
     );
 }
 
-// ── F2 — #112: lambda capture + post-capture use ─────────────────────────────
+// ── F2 — lambda capture + post-capture use ─────────────────────────────
 
 /// `format "sky-" ["one","two"]` must print `"sky-one,sky-two[sky-]"`.
 /// Without T5 the `move` closure steals `prefix`; the trailing

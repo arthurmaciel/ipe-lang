@@ -1,4 +1,4 @@
-//! Integration + security golden for compiled-source `Std.Css` (#47).
+//! Integration + security golden for compiled-source `Std.Css`.
 //!
 //! `Std.Css` is compiled pure Sky source (`crates/skyc/stdlib/Std/Css.sky`); its
 //! only Rust surface is the four `Sky.Core.CssSafety` leaf security kernels
@@ -48,7 +48,7 @@ fn css_source_builds_and_injects_leaf_kernels() {
     );
 
     // The compiled `Std.Css` module lowers to its OWN Rust file under
-    // `src/sky_mods/` once the per-Sky-module split (Phase 5 Milestone C)
+    // `src/sky_mods/` once the per-Sky-module split
     // fires — this program has two distinct homes (`Main` + `Std.Css`). Scan
     // the WHOLE emitted Sky-side tree (main.rs + sky_mods/*.rs) so both the
     // presence assertions (render fold + leaf security kernels) and the
@@ -98,14 +98,14 @@ fn css_e2e_neutralises_injection() {
         "benign stylesheet must render:\n{stdout}"
     );
 
-    // #105 non-regression: a benign `keyframes` still renders its frames.
+    // non-regression: a benign `keyframes` still renders its frames.
     assert!(
         stdout.contains("opacity: 0") && stdout.contains("opacity: 1"),
         "benign keyframes must render:\n{stdout}"
     );
 
     // Security: NONE of the injection payloads survive in any form —
-    // including the #105 `@import` (CSS-level SSRF) vector newly gated on
+    // including the `@import` (CSS-level SSRF) vector newly gated on
     // `raw` / `keyframes` bodies.
     for needle in [
         "</style",

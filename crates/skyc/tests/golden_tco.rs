@@ -1,9 +1,9 @@
-//! Tail-call optimization (#49) end-to-end regressions.
+//! Tail-call optimization end-to-end regressions.
 //!
 //! The soundness proof: a deep self-tail-recursive Sky function runs to
 //! completion under a CAPPED main-thread stack (`tco_count`, 2,000,000 iters at
-//! 512 KiB). Pre-fix the same fixture SIGABRTs (`exit_code == None`) because a
-//! Rust stack overflow trips the guard page and `abort()`s — NOT a catchable
+//! 512 KiB). Without TCO the same fixture SIGABRTs (`exit_code == None`) because
+//! a Rust stack overflow trips the guard page and `abort()`s — NOT a catchable
 //! panic, so the panic classifier never runs. TCO rewrites the body to a flat
 //! `loop { … continue }`, keeping the stack constant.
 //!

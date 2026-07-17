@@ -1,4 +1,4 @@
-//! M2-lex float-literal parity gate: Elm-style float literals (`1.5`, `3.0`,
+//! Float-literal parity gate: Elm-style float literals (`1.5`, `3.0`,
 //! `1.5e3`, `2e-2`) lex to [`sky_syntax::ast::Expr_::Float`], type as the `Float`
 //! constructor, and lower to an f64-typed Rust literal — a whole-number value
 //! keeps its decimal point (`1500.0`) so it never types as an integer.

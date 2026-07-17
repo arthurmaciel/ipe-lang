@@ -1,4 +1,4 @@
-//! Milestone-1 first-class-function gate: `skyc` must emit `main.rs`
+//! First-class-function gate: `skyc` must emit `main.rs`
 //! byte-identical to the checked-in golden for higher-order functions (a
 //! function-typed parameter applied inside the callee), a top-level function
 //! passed as a value by name, and a top-level function returned as a value —

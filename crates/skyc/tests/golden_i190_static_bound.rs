@@ -1,6 +1,6 @@
-//! BACKLOG #190 regression — a generic-typed callback boxed as `+ 'static`.
+//! A generic-typed callback boxed as `+ 'static`.
 //!
-//! Pre-fix: `skyc build` exits 0, but the emitted Rust fails `cargo build` with
+//! Without the fix, `skyc build` exits 0, but the emitted Rust fails `cargo build` with
 //! E0310 ("the parameter type `T1` may not live long enough") at the
 //! `Box::new(pair_to_attr)` that a `List.map pairToAttr attrs` call emits. The
 //! mapper `pairToAttr` is generic over `msg` (its result is `Attribute msg`), so
@@ -75,10 +75,10 @@ fn i190_skyc_accepts_and_bounds_fn_static() {
         "the generic that flows into the boxed `+ 'static` mapper callback must \
          carry the leading `'static` lifetime bound (#190); got main.rs:\n{emitted}"
     );
-    // The boxed mapper slot the bound serves. (#184 broadened every boxed
-    // first-class fn value to `+ Send + Sync + 'static` so a user callback can
-    // forward into the runtime's `Arc<dyn Fn + Send + Sync>` UI slots; the
-    // `'static` half is what #190 propagates onto T1.)
+    // The boxed mapper slot the bound serves. (Every boxed first-class fn value
+    // carries `+ Send + Sync + 'static` so a user callback can forward into the
+    // runtime's `Arc<dyn Fn + Send + Sync>` UI slots; the `'static` half
+    // propagates onto T1.)
     assert!(
         emitted.contains("Box<dyn Fn((String, String)) -> sky_runtime::html::Attribute<T1> + Send + Sync + 'static>"),
         "the mapper callback must box into a `+ Send + Sync + 'static` trait object (#190/#184); got \

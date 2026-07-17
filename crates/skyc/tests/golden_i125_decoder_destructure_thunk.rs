@@ -1,16 +1,16 @@
-//! #125 — Decoder thunk coverage: tuple-destructure + record-field binders.
+//! Decoder thunk coverage: tuple-destructure + record-field binders.
 //!
-//! `#89` Fix C thunk-wrapped only `PVar` Decoder bindings; every other
-//! binding-pattern shape (`PTuple`, `PRecord`, `PAlias` over either) fell
+//! Thunk-wrapping only `PVar` Decoder bindings leaves every other
+//! binding-pattern shape (`PTuple`, `PRecord`, `PAlias` over either) falling
 //! through to a plain `Expr::Destructure` with NO Decoder-awareness, so a
-//! reused Decoder-typed component double-moved at `cargo build` (skyc exit
-//! 0, cargo exit 101 — the exit-0-then-cargo-fail seal class). The fix
-//! (spec §2.2) wraps the WHOLE destructure value in a zero-arg thunk and
-//! rewrites every free read of every bound name to a fresh, masked
+//! reused Decoder-typed component double-moves at `cargo build` (skyc exit
+//! 0, cargo exit 101 — the exit-0-then-cargo-fail seal class). So (spec §2.2)
+//! the WHOLE destructure value is wrapped in a zero-arg thunk and
+//! every free read of every bound name rewritten to a fresh, masked
 //! re-destructure of a thunk call: `{ let (d1, _) = (destr_thunk_N)(); d1 }`.
 //!
-//! RED-run witness (pre-fix, 2026-07-11, worktree of `732407e`): all three
-//! fixtures were skyc-0 and cargo-101 with EXACTLY this rustc error:
+//! Without the thunk, all three fixtures are skyc-0 and cargo-101 with EXACTLY
+//! this rustc error:
 //!
 //! ```text
 //! error[E0382]: use of moved value: `nameDecoder`
@@ -23,9 +23,9 @@
 //!       `json::Decoder<SkyError, std::string::String>`, which does not implement the `Copy` trait
 //! ```
 //!
-//! (The record fixture's pre-fix error names the same binder moved out of the
-//! record struct's `let Rec { nameDecoder, .. } = …;`; the case fixture's
-//! names the single-arm `case`'s tuple binder — identical E0382 class.)
+//! (Without the thunk, the record fixture's error names the same binder moved
+//! out of the record struct's `let Rec { nameDecoder, .. } = …;`; the case
+//! fixture's names the single-arm `case`'s tuple binder — identical E0382 class.)
 //!
 //! Spec: `docs/adr/0011-emitter-clone-borrow-discipline.md` §2.
 //!
@@ -62,8 +62,8 @@ fn assert_skyc_ok(name: &str) -> PathBuf {
     out
 }
 
-/// `SKY_E2E` tier: the emitted project must cargo-build (proving the
-/// RED-run E0382 recorded above is gone) AND run printing `Alice|Bob`
+/// `SKY_E2E` tier: the emitted project must cargo-build (no
+/// E0382 like the one recorded above) AND run printing `Alice|Bob`
 /// (proving the reused Decoder component decodes BOTH payloads correctly —
 /// not just "compiles").
 fn assert_e2e_output(name: &str) {
@@ -110,8 +110,8 @@ fn i125_decoder_case_destructure_reuse_compiles_and_runs() {
 /// `Expr::Destructure` path. Reuses the existing `m3b2_let_destructure`
 /// golden's `main.rs` byte-snapshot (`let (a, b) = (40, 2)` + a record
 /// binder), asserting the emitted Rust is byte-identical to the checked-in
-/// pre-#125 snapshot AND carries no thunk binder — proving the fast path
-/// really is untouched, not merely still-running.
+/// snapshot AND carries no thunk binder — proving the Decoder-free fast path
+/// is untouched, not merely still-running.
 #[test]
 fn i125_non_decoder_destructure_fast_path_byte_identical() {
     let out = assert_skyc_ok("m3b2_let_destructure");
@@ -125,9 +125,8 @@ fn i125_non_decoder_destructure_fast_path_byte_identical() {
         !emitted.contains("destr_thunk"),
         "#125 must not thunk a Decoder-free destructure"
     );
-    // Byte-diff half: emitted `src/main.rs` must equal the checked-in pre-#125
+    // Byte-diff half: emitted `src/main.rs` must equal the checked-in
     // golden `main.rs` — routed through the shared directory-diff helper (which
-    // compares `<out>/src/main.rs` against `<golden_dir>/main.rs`), replacing the
-    // former hand-rolled `assert_eq!(Some(emitted), want.ok(), ..)`.
+    // compares `<out>/src/main.rs` against `<golden_dir>/main.rs`).
     support::assert_emitted_project_matches_golden_dir(&out, &golden_dir);
 }

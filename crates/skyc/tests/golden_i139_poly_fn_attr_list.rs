@@ -1,4 +1,4 @@
-//! #139 seal — polymorphic-function attribute lists.
+//! Seal — polymorphic-function attribute lists.
 //!
 //! Regression: `IrType::Ui { msg }` inside an annotated-polymorphic function
 //! was lowering `msg` to `IrType::Unit`, emitting `Attribute<()>` instead of
@@ -32,7 +32,7 @@ fn repo_root() -> PathBuf {
 ///
 /// * compile through `skyc` (exit 0)
 /// * emit `Attribute<T1>` — not `Attribute<()>` — in attribute-list positions
-/// * build through `cargo build` (exit 0; was E0308 pre-fix)
+/// * build through `cargo build` (exit 0; E0308 without the fix)
 /// * run and print rendered HTML that contains "counter"
 #[test]
 fn poly_fn_attr_list_skyc_and_cargo_zero() {
