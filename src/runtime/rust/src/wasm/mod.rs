@@ -31,10 +31,10 @@ use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
+use crate::core::{IpeResult, IpeTask};
 use crate::dom::{HandlerIndex, LiveReq, build_index, diff::Patch, diff::diff};
 use crate::html::{FormData, Html, assign_sky_ids, render_html};
 use crate::tea::{IpeCmd, IpeSub};
-use crate::core::{IpeResult, IpeTask};
 
 /// Root sky-id path — matches the Live/Webview renderers so a future
 /// SSR-adopt path sees identical ids.
