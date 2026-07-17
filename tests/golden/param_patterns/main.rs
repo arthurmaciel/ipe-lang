@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -39,7 +39,11 @@ pub struct RecXY {
 }
 impl IpeStringify for RecXY {
     fn ipe_show(&self) -> String {
-        format!("{{{} {}}}", (&ipe_runtime::stringify::Wrap(&self.x)).dispatch(), (&ipe_runtime::stringify::Wrap(&self.y)).dispatch())
+        format!(
+            "{{{} {}}}",
+            (&ipe_runtime::stringify::Wrap(&self.x)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.y)).dispatch()
+        )
     }
 }
 
@@ -252,7 +256,10 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 pub fn main_apply_i(f: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>, x: i64) -> i64 {
     (f)(x)
 }
-pub fn main_apply_p(f: Box<dyn Fn((i64, i64)) -> i64 + Send + Sync + 'static>, p: (i64, i64)) -> i64 {
+pub fn main_apply_p(
+    f: Box<dyn Fn((i64, i64)) -> i64 + Send + Sync + 'static>,
+    p: (i64, i64),
+) -> i64 {
     (f)(p)
 }
 pub fn main_apply_r(f: Box<dyn Fn(RecXY) -> i64 + Send + Sync + 'static>, r: RecXY) -> i64 {
@@ -265,13 +272,23 @@ pub fn main_ignore_arg(arg_0: i64) -> i64 {
     7
 }
 pub fn main_sum_pair(arg_1: (i64, i64)) -> i64 {
-    ({ let (a, b) = arg_1; (a + b) })
+    ({
+        let (a, b) = arg_1;
+        (a + b)
+    })
 }
 pub fn main_get_y(arg_2: RecXY) -> i64 {
-    ({ let RecXY { x: _, y, .. } = arg_2; y })
+    ({
+        let RecXY { x: _, y, .. } = arg_2;
+        y
+    })
 }
 pub fn main_first_of_alias(arg_3: (i64, i64)) -> i64 {
-    ({ let whole = arg_3; let (a, b) = whole.clone(); a })
+    ({
+        let whole = arg_3;
+        let (a, b) = whole.clone();
+        a
+    })
 }
 pub fn main_countdown(arg_4: (i64, i64)) -> i64 {
     let mut arg_4 = arg_4;
@@ -290,7 +307,53 @@ pub fn main_countdown(arg_4: (i64, i64)) -> i64 {
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(((((((((main_apply_i({ let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> = Box::new(move |arg_5: i64| -> i64 { 42 }); __sky_fn }, 0) + main_apply_p({ let __sky_fn: Box<dyn Fn((i64, i64)) -> i64 + Send + Sync + 'static> = Box::new(move |arg_6: (i64, i64)| -> i64 { ({ let (a, b) = arg_6; (a + b) }) }); __sky_fn }, (1, 2))) + main_apply_r({ let __sky_fn: Box<dyn Fn(RecXY) -> i64 + Send + Sync + 'static> = Box::new(move |arg_7: RecXY| -> i64 { ({ let RecXY { x, y: _, .. } = arg_7; x }) }); __sky_fn }, RecXY { x: 10, y: 5 })) + main_apply_m({ let __sky_fn: Box<dyn Fn(i64, i64, (i64, i64)) -> i64 + Send + Sync + 'static> = Box::new(move |arg_8: i64, x: i64, arg_9: (i64, i64)| -> i64 { ({ let (a, b) = arg_9; ((x + a) + b) }) }); __sky_fn })) + main_ignore_arg(99)) + main_sum_pair((4, 5))) + main_get_y(RecXY { x: 1, y: 8 })) + main_first_of_alias((6, 7))) + main_countdown((5, 0)))))
+    log_println(string_from_int(
+        ((((((((main_apply_i(
+            {
+                let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+                    Box::new(move |arg_5: i64| -> i64 { 42 });
+                __sky_fn
+            },
+            0,
+        ) + main_apply_p(
+            {
+                let __sky_fn: Box<dyn Fn((i64, i64)) -> i64 + Send + Sync + 'static> =
+                    Box::new(move |arg_6: (i64, i64)| -> i64 {
+                        ({
+                            let (a, b) = arg_6;
+                            (a + b)
+                        })
+                    });
+                __sky_fn
+            },
+            (1, 2),
+        )) + main_apply_r(
+            {
+                let __sky_fn: Box<dyn Fn(RecXY) -> i64 + Send + Sync + 'static> =
+                    Box::new(move |arg_7: RecXY| -> i64 {
+                        ({
+                            let RecXY { x, y: _, .. } = arg_7;
+                            x
+                        })
+                    });
+                __sky_fn
+            },
+            RecXY { x: 10, y: 5 },
+        )) + main_apply_m({
+            let __sky_fn: Box<dyn Fn(i64, i64, (i64, i64)) -> i64 + Send + Sync + 'static> =
+                Box::new(move |arg_8: i64, x: i64, arg_9: (i64, i64)| -> i64 {
+                    ({
+                        let (a, b) = arg_9;
+                        ((x + a) + b)
+                    })
+                });
+            __sky_fn
+        })) + main_ignore_arg(99))
+            + main_sum_pair((4, 5)))
+            + main_get_y(RecXY { x: 1, y: 8 }))
+            + main_first_of_alias((6, 7)))
+            + main_countdown((5, 0))),
+    ))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

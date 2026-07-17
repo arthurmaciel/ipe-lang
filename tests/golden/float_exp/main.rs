@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -31,7 +31,6 @@ type Value = JsonVal;
 // ===========================================
 // USER TYPES
 // ===========================================
-
 
 pub use ipe_runtime::error::IpeError;
 pub fn str_err(s: &str) -> IpeError {
@@ -246,7 +245,11 @@ pub fn main_large() -> f64 {
     1000000000000000000000.0
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(format!("{}{}", string_from_float(main_small()), format!("{}{}", "|".to_string(), string_from_float(main_large()))))
+    log_println(format!(
+        "{}{}",
+        string_from_float(main_small()),
+        format!("{}{}", "|".to_string(), string_from_float(main_large()))
+    ))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;
