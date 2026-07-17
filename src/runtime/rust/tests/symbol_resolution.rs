@@ -98,7 +98,7 @@ fn every_kernel_name_resolves_to_runtime_fn() {
     );
 
     // ── 2. Walk src/runtime/rust/src/**/*.rs: collect all `pub fn` names ─
-    let runtime_src_dir = root.join("src").join("ipe_runtime");
+    let runtime_src_dir = root.join("src");
     let mut runtime_fns: HashSet<String> = HashSet::new();
     let fn_re = regex::Regex::new(r"pub fn ([a-z_][a-z0-9_]*)").expect("fn_re");
 

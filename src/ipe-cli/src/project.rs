@@ -581,7 +581,7 @@ import String
 
         let injected = super::inject_compiled_std_closure(&mut sources, &mut discovered);
 
-        let palette = vec!["Std".to_owned(), "Palette".to_owned()];
+        let palette = vec!["Ipe".to_owned(), "Palette".to_owned()];
         assert!(injected.contains(&palette), "Ipe.Palette must be injected");
         assert!(sources.contains_key(&palette), "source seeded");
         assert!(
@@ -629,7 +629,7 @@ import String
                     .to_owned(),
             ),
         );
-        let palette = vec!["Std".to_owned(), "Palette".to_owned()];
+        let palette = vec!["Ipe".to_owned(), "Palette".to_owned()];
         sources.insert(
             palette.clone(),
             (

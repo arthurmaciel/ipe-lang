@@ -631,14 +631,14 @@ mod tests {
     /// Segment lookup resolves a compiled-source module and rejects a non-member.
     #[test]
     fn compiled_source_segment_lookup() {
-        let palette = vec!["Std".to_owned(), "Palette".to_owned()];
+        let palette = vec!["Ipe".to_owned(), "Palette".to_owned()];
         assert!(is_compiled_source_segments(&palette));
         assert!(compiled_std_source_segments(&palette).is_some());
 
-        let log = vec!["Std".to_owned(), "Log".to_owned()];
+        let log = vec!["Ipe".to_owned(), "Log".to_owned()];
         assert!(!is_compiled_source_segments(&log), "Ipe.Log is a kernel");
 
-        let nope = vec!["Std".to_owned(), "Nope".to_owned()];
+        let nope = vec!["Ipe".to_owned(), "Nope".to_owned()];
         assert!(!is_compiled_source_segments(&nope));
     }
 }

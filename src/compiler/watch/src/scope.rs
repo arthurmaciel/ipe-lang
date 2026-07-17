@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 /// The source-extension this project's `.ipe` modules use. Kept as a single
 /// named constant so a future rename only touches one place.
-pub const SOURCE_EXTENSION: &str = "sky";
+pub const SOURCE_EXTENSION: &str = "ipe";
 
 /// The generated / vendor directories a confined watch must never observe —
 /// watching them would self-trigger a rebuild loop (the watcher's own output
