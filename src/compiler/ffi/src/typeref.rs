@@ -322,6 +322,29 @@ impl InnerTypeRef {
     pub fn is_vec_ctor(&self) -> bool {
         matches!(self, Self::Ctor(nm, _) if nm == "::Vec" || nm == "Vec")
     }
+
+    /// Re-serialize to the wire JSON shape. The cached `kernel.json` carries
+    /// this re-serialization of the ALREADY-VALIDATED domain value, so a warm
+    /// build re-runs the identical decode gate on read.
+    #[must_use]
+    pub fn to_wire_json(&self) -> serde_json::Value {
+        use serde_json::json;
+        match self {
+            Self::Param(i) => json!({"param": i}),
+            Self::Prim(p) => json!({"prim": p}),
+            Self::Ctor(nm, args) => {
+                if args.is_empty() {
+                    json!({"ctor": nm})
+                } else {
+                    let rendered: Vec<serde_json::Value> =
+                        args.iter().map(Self::to_wire_json).collect();
+                    json!({"ctor": nm, "args": rendered})
+                }
+            }
+            Self::SerdeValue => json!({"serdeValue": true}),
+            Self::SerdeValueRef => json!({"serdeValueRef": true}),
+        }
+    }
 }
 
 impl ArgTypeRef {
@@ -346,6 +369,31 @@ impl ArgTypeRef {
             Self::Inner(t) => t.any_serde(),
             Self::Closure { arg_types, ret, .. } => {
                 arg_types.iter().any(InnerTypeRef::any_serde) || ret.any_serde()
+            }
+        }
+    }
+
+    /// Re-serialize to the wire JSON shape (see
+    /// [`InnerTypeRef::to_wire_json`]).
+    #[must_use]
+    pub fn to_wire_json(&self) -> serde_json::Value {
+        use serde_json::json;
+        match self {
+            Self::Inner(t) => t.to_wire_json(),
+            Self::Closure {
+                kind,
+                by_ref,
+                arg_types,
+                ret,
+            } => {
+                let args: Vec<serde_json::Value> =
+                    arg_types.iter().map(InnerTypeRef::to_wire_json).collect();
+                json!({"closure": {
+                    "kind": kind.as_str(),
+                    "byRef": by_ref,
+                    "argTypes": args,
+                    "ret": ret.to_wire_json(),
+                }})
             }
         }
     }

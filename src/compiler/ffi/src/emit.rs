@@ -1,0 +1,420 @@
+//! The `.ipei` and `kernel.json` emitters — two of the three artifacts.
+//!
+//! Both iterate the same validated [`PkgInfo`] and key every entry off
+//! [`FnInfo::wrapper_ref_name`], so the `.ipei` binding name and the
+//! `kernel.json` `"name"` are byte-equal by construction. The Ipê-visible
+//! signature is built ONCE per function ([`wrapper_ipe_signature`]) from the
+//! single stored [`Fallibility`] bit, so the two artifacts cannot disagree on
+//! getter fallibility.
+
+use std::collections::BTreeSet;
+
+use crate::pkginfo::{Effect, Fallibility, FnInfo, Param, PkgInfo};
+
+/// Map a foreign Rust type string to its Ipê type, used only when the
+/// inspector supplied no `ipeType` override.
+///
+/// Integer widths carry as `Int`, floats as `Float`; `Option`/`Vec`/`Result`
+/// map to their Ipê containers; anything else is a nominal opaque name
+/// (module path stripped). There is deliberately NO `any` arm.
+#[must_use]
+pub fn foreign_to_ipe(t: &str) -> String {
+    let t = t.trim();
+    let t = t.strip_prefix('&').unwrap_or(t).trim();
+    let t = t.strip_prefix("mut ").unwrap_or(t).trim();
+    if let Some(inner) = strip_container(t, "Option") {
+        return format!("Maybe {}", paren_multi(&foreign_to_ipe(inner)));
+    }
+    if let Some(inner) = strip_container(t, "Vec") {
+        return format!("List {}", paren_multi(&foreign_to_ipe(inner)));
+    }
+    if let Some(inner) = strip_container(t, "Result") {
+        // The foreign error arm folds into the typed Ipê `Error` at the
+        // boundary — never a type param, never a `String` error.
+        let ok = inner.split(',').next().unwrap_or(inner).trim();
+        return format!("Result Error {}", paren_multi(&foreign_to_ipe(ok)));
+    }
+    match t {
+        "str" | "String" | "OsStr" | "OsString" | "Path" | "PathBuf" | "CStr" | "CString" => {
+            "String".to_owned()
+        }
+        "bool" => "Bool".to_owned(),
+        "char" => "Char".to_owned(),
+        "()" => "()".to_owned(),
+        "i8" | "i16" | "i32" | "i64" | "i128" | "u8" | "u16" | "u32" | "u64" | "u128" | "isize"
+        | "usize" => "Int".to_owned(),
+        "f32" | "f64" => "Float".to_owned(),
+        other => {
+            // Nominal opaque: strip the module path and any generic args.
+            let base = other.rsplit_once("::").map_or(other, |(_, l)| l);
+            let base = base.split('<').next().unwrap_or(base).trim();
+            if base.is_empty() {
+                "()".to_owned()
+            } else {
+                base.to_owned()
+            }
+        }
+    }
+}
+
+/// Strip `Ctor<inner>` down to `inner` when `t` is that container.
+fn strip_container<'a>(t: &'a str, ctor: &str) -> Option<&'a str> {
+    t.strip_prefix(ctor)
+        .and_then(|rest| rest.trim().strip_prefix('<'))
+        .and_then(|rest| rest.strip_suffix('>'))
+}
+
+/// Parenthesise a multi-word type when it nests under another constructor.
+fn paren_multi(s: &str) -> String {
+    if s.contains(' ') && !s.starts_with('(') {
+        format!("({s})")
+    } else {
+        s.to_owned()
+    }
+}
+
+/// The Ipê type of one foreign param/result: the inspector's override when
+/// present, else the [`foreign_to_ipe`] fallback.
+#[must_use]
+pub fn param_ipe_type(p: &Param) -> String {
+    if p.ipe_type.is_empty() {
+        foreign_to_ipe(&p.foreign_ty)
+    } else {
+        p.ipe_type.clone()
+    }
+}
+
+/// Build the full Ipê-visible signature for one binding.
+///
+/// The result wrapper is decided by the single stored [`Fallibility`] bit
+/// plus the effect class: an infallible accessor is bare (`Version -> Int`),
+/// an effectful wrapper lifts to `Task Error a`, everything else is
+/// `Result Error a`. Constructed directly from parts — there is no
+/// wrap-then-strip step for the two emitters to disagree over.
+#[must_use]
+pub fn wrapper_ipe_signature(f: &FnInfo) -> String {
+    let param_sig = if f.params().is_empty() {
+        "()".to_owned()
+    } else {
+        let parts: Vec<String> = f.params().iter().map(param_ipe_type).collect();
+        parts.join(" -> ")
+    };
+    let non_err: Vec<&Param> = f
+        .results()
+        .iter()
+        .filter(|r| r.foreign_ty != "error")
+        .collect();
+    let inner_ok = match non_err.as_slice() {
+        [] => "()".to_owned(),
+        [single] => param_ipe_type(single),
+        multi => {
+            let parts: Vec<String> = multi.iter().map(|p| param_ipe_type(p)).collect();
+            format!("({})", parts.join(", "))
+        }
+    };
+    let result_ty = match f.fallibility() {
+        Fallibility::Infallible => inner_ok,
+        Fallibility::TaskError => {
+            // An inspector-rendered `Result e a` already carries the fallible
+            // layer; peel to the Ok payload before re-wrapping.
+            let ok = inner_ok
+                .strip_prefix("Result Error ")
+                .map_or(inner_ok.as_str(), str::trim)
+                .to_owned();
+            let carrier = if f.effect() == Effect::Effectful {
+                "Task Error"
+            } else {
+                "Result Error"
+            };
+            format!("{carrier} {}", paren_multi(&ok))
+        }
+    };
+    format!("{param_sig} -> {result_ty}")
+}
+
+/// The Ipê builtin heads that never need an opaque-type declaration.
+const IPE_BUILTIN_HEADS: &[&str] = &[
+    "String", "Int", "Float", "Bool", "Char", "List", "Dict", "Set", "Maybe", "Result", "Task",
+    "Error",
+];
+
+/// Every opaque foreign type name referenced by a signature: capitalised
+/// identifier tokens that are not Ipê builtins.
+fn opaque_names_in(sig: &str, out: &mut BTreeSet<String>) {
+    for token in sig.split(|c: char| !c.is_alphanumeric() && c != '_') {
+        let starts_upper = token.chars().next().is_some_and(char::is_uppercase);
+        if starts_upper && !IPE_BUILTIN_HEADS.contains(&token) {
+            out.insert(token.to_owned());
+        }
+    }
+}
+
+/// Emit the `.ipei` type-environment seed.
+///
+/// Contains the module header, one nominal opaque-type declaration per
+/// referenced foreign type (so the seed is complete — a `Ty::Con` no module
+/// declares would dangle), and one HM signature per binding.
+#[must_use]
+pub fn emit_ipei(pkg: &PkgInfo) -> String {
+    use std::fmt::Write;
+    let module = crate::naming::rust_module_name(pkg.pkg_path());
+    let mut out = format!("module {module} exposing (..)\n\n");
+    let sigs: Vec<(String, String)> = pkg
+        .fns()
+        .iter()
+        .map(|f| (f.wrapper_ref_name(), wrapper_ipe_signature(f)))
+        .collect();
+    let mut opaque = BTreeSet::new();
+    for (_, sig) in &sigs {
+        opaque_names_in(sig, &mut opaque);
+    }
+    for name in &opaque {
+        // Writing into a String is infallible.
+        let _ = writeln!(out, "type {name}");
+    }
+    if !opaque.is_empty() {
+        out.push('\n');
+    }
+    for (name, sig) in &sigs {
+        let _ = writeln!(out, "{name} : {sig}");
+    }
+    out
+}
+
+/// Emit `kernel.json`.
+///
+/// One entry per binding keyed by the same `wrapper_ref_name`, the shared
+/// signature string, and — for a parametric binding — the generic block
+/// whose call AST is the RE-SERIALIZATION of the validated domain
+/// [`crate::call::Call`] (a warm build re-runs the identical decode gate on
+/// read).
+#[must_use]
+pub fn emit_kernel_json(pkg: &PkgInfo) -> String {
+    let module = crate::naming::rust_module_name(pkg.pkg_path());
+    let kernel = crate::naming::rust_kernel_name(pkg.pkg_path());
+    let functions: Vec<serde_json::Value> = pkg
+        .fns()
+        .iter()
+        .map(|f| {
+            let mut o = serde_json::Map::new();
+            o.insert("name".into(), f.wrapper_ref_name().into());
+            o.insert("arity".into(), f.params().len().max(1).into());
+            o.insert("ipeType".into(), wrapper_ipe_signature(f).into());
+            if let Some(g) = f.generic() {
+                o.insert(
+                    "generic".into(),
+                    serde_json::json!({
+                        "params": g.params,
+                        "bounds": g.bounds,
+                        "call": g.call.to_wire_json(),
+                    }),
+                );
+            }
+            serde_json::Value::Object(o)
+        })
+        .collect();
+    let mut doc = serde_json::Map::new();
+    doc.insert("moduleName".into(), module.into());
+    doc.insert("kernelName".into(), kernel.into());
+    doc.insert("package".into(), pkg.pkg_path().into());
+    doc.insert("functions".into(), functions.into());
+    if !pkg.transitive_deps().is_empty() {
+        let deps: Vec<serde_json::Value> = pkg
+            .transitive_deps()
+            .iter()
+            .map(|d| {
+                serde_json::json!({
+                    "ident": d.ident.as_str(),
+                    "name": d.name,
+                    "version": d.version,
+                })
+            })
+            .collect();
+        doc.insert("transitiveDeps".into(), deps.into());
+    }
+    if !pkg.features().is_empty() {
+        doc.insert("features".into(), serde_json::json!(pkg.features()));
+    }
+    let mut text = serde_json::to_string_pretty(&serde_json::Value::Object(doc))
+        .unwrap_or_else(|_| "{}".to_owned());
+    text.push('\n');
+    text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn semver_pkg() -> PkgInfo {
+        let doc = serde_json::json!({
+            "pkg": "semver",
+            "name": "semver",
+            "version": "1.0.26",
+            "functions": [
+                {
+                    "name": "parse",
+                    "params": [{"name": "text", "type": "&str", "ipeType": "String"}],
+                    "results": [{"name": "", "type": "Result<Version, Error>"}],
+                    "effect": "fallible"
+                },
+                {
+                    "name": "major_field",
+                    "params": [{"name": "self", "type": "&Version", "ipeType": "Version"}],
+                    "results": [{"name": "", "type": "u64"}],
+                    "effect": "pure",
+                    "recvType": "Version",
+                    "isField": true
+                },
+                {
+                    "name": "to_string",
+                    "params": [{"name": "self", "type": "&Version", "ipeType": "Version"}],
+                    "results": [{"name": "", "type": "String"}],
+                    "effect": "effectful",
+                    "recvType": "Version"
+                }
+            ],
+            "errors": [],
+            "transitiveDeps": [
+                {"ident": "semver", "name": "semver", "version": "1.0.26"}
+            ],
+            "features": ["std"]
+        });
+        PkgInfo::decode_json(&doc.to_string()).expect("decodes")
+    }
+
+    #[test]
+    fn foreign_fallback_mapping_covers_the_closed_table() {
+        assert_eq!(foreign_to_ipe("u64"), "Int");
+        assert_eq!(foreign_to_ipe("f32"), "Float");
+        assert_eq!(foreign_to_ipe("&str"), "String");
+        assert_eq!(foreign_to_ipe("bool"), "Bool");
+        assert_eq!(foreign_to_ipe("()"), "()");
+        assert_eq!(foreign_to_ipe("Option<u8>"), "Maybe Int");
+        assert_eq!(foreign_to_ipe("Vec<String>"), "List String");
+        assert_eq!(
+            foreign_to_ipe("Result<Version, Error>"),
+            "Result Error Version"
+        );
+        assert_eq!(foreign_to_ipe("semver::Version"), "Version");
+        assert_eq!(foreign_to_ipe("Vec<Option<i32>>"), "List (Maybe Int)");
+    }
+
+    #[test]
+    fn signatures_read_the_single_fallibility_bit() {
+        let pkg = semver_pkg();
+        let sigs: Vec<String> = pkg.fns().iter().map(wrapper_ipe_signature).collect();
+        assert_eq!(
+            sigs,
+            vec![
+                // Fallible plain fn: Result-wrapped once, never doubled.
+                "String -> Result Error Version".to_owned(),
+                // Field getter: bare (the infallible bit).
+                "Version -> Int".to_owned(),
+                // Effectful plain fn: Task-lifted.
+                "Version -> Task Error String".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn ipei_seed_declares_every_opaque_type_and_every_binding() {
+        let pkg = semver_pkg();
+        let ipei = emit_ipei(&pkg);
+        let expected = "module Rust.Semver exposing (..)\n\n\
+                        type Version\n\n\
+                        parse : String -> Result Error Version\n\
+                        major_field_from_version : Version -> Int\n\
+                        to_string_from_version : Version -> Task Error String\n";
+        assert_eq!(ipei, expected);
+    }
+
+    #[test]
+    fn kernel_json_keys_off_the_same_wrapper_ref_names() {
+        let pkg = semver_pkg();
+        let text = emit_kernel_json(&pkg);
+        let doc: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
+        assert_eq!(doc.pointer("/moduleName"), Some(&"Rust.Semver".into()));
+        assert_eq!(doc.pointer("/kernelName"), Some(&"Rust_Semver".into()));
+        let functions = doc
+            .pointer("/functions")
+            .and_then(serde_json::Value::as_array)
+            .expect("functions array");
+        let names: Vec<&str> = functions
+            .iter()
+            .map(|f| {
+                f.pointer("/name")
+                    .and_then(serde_json::Value::as_str)
+                    .expect("name")
+            })
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "parse",
+                "major_field_from_version",
+                "to_string_from_version"
+            ]
+        );
+        // The .ipei and kernel.json signatures are the SAME string per fn.
+        let ipei = emit_ipei(&pkg);
+        for f in functions {
+            let name = f
+                .pointer("/name")
+                .and_then(serde_json::Value::as_str)
+                .expect("name");
+            let sig = f
+                .pointer("/ipeType")
+                .and_then(serde_json::Value::as_str)
+                .expect("ipeType");
+            assert!(
+                ipei.contains(&format!("{name} : {sig}")),
+                "{name} signature must match the .ipei seed"
+            );
+        }
+        assert_eq!(
+            doc.pointer("/transitiveDeps/0/ident"),
+            Some(&"semver".into())
+        );
+        assert_eq!(doc.pointer("/features/0"), Some(&"std".into()));
+    }
+
+    #[test]
+    fn generic_block_round_trips_through_the_validated_call() {
+        let doc = serde_json::json!({
+            "pkg": "box1",
+            "name": "box1",
+            "functions": [{
+                "name": "make",
+                "params": [{"name": "value", "type": "T"}],
+                "results": [{"name": "", "type": "Box1<T>"}],
+                "effect": "pure",
+                "generic": {
+                    "params": ["a"],
+                    "bounds": {"a": ["Clone"]},
+                    "call": {
+                        "kind": "function",
+                        "path": ["::box1", "Box1"],
+                        "typeArgs": [{"param": 0}],
+                        "method": "make",
+                        "args": [0],
+                        "argTypes": [{"param": 0}],
+                        "ret": {"ctor": "::box1::Box1", "args": [{"param": 0}]}
+                    }
+                }
+            }],
+            "errors": []
+        });
+        let pkg = PkgInfo::decode_json(&doc.to_string()).expect("decodes");
+        let text = emit_kernel_json(&pkg);
+        let parsed: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
+        let call = parsed
+            .pointer("/functions/0/generic/call")
+            .expect("generic call present");
+        // The re-serialized call decodes through the same gate it came from.
+        let redecoded = crate::call::Call::decode(1, call.clone(), "make").expect("re-decodes");
+        assert_eq!(
+            redecoded.render_body(&["a".to_owned()]),
+            "::box1::Box1::<A>::make(arg0)"
+        );
+    }
+}
