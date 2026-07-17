@@ -726,7 +726,12 @@ fn run_inner(
                     ipe_db::sync_source_root(&mut db_main, root, &desired);
                     root
                 } else {
-                    let root = crate::create_source_root(&db_main, &sources, &injected);
+                    let root = crate::create_source_root(
+                        &db_main,
+                        &sources,
+                        &injected,
+                        &std::collections::BTreeSet::new(),
+                    );
                     source_root = Some(root);
                     root
                 };
