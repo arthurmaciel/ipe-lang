@@ -96,18 +96,19 @@ mod tests {
     const GOLDEN: &str = include_str!("../../../../../tests/golden/basics/main.rs");
 
     #[test]
-    fn preamble_matches_golden_lines_1_to_30() -> DResult<()> {
-        // Lines 1..=30: header through the blank line closing the USER TYPES
-        // banner (the next line, 31, is the first user type definition).
-        let expected: String = GOLDEN.split_inclusive('\n').take(30).collect();
+    fn preamble_matches_golden_lines_1_to_34() -> DResult<()> {
+        // Lines 1..=34: header (incl. the cfg-gated allocator arms) through the
+        // blank line closing the USER TYPES banner (the next line, 35, is the
+        // first user type definition).
+        let expected: String = GOLDEN.split_inclusive('\n').take(34).collect();
         assert_eq!(preamble()?, expected);
         Ok(())
     }
 
     #[test]
-    fn epilogue_matches_golden_lines_139_to_end() -> DResult<()> {
-        // Lines 261..=end: the `Ffi.kernel` polyfill through `fn main`.
-        let expected: String = GOLDEN.split_inclusive('\n').skip(260).collect();
+    fn epilogue_matches_golden_lines_265_to_end() -> DResult<()> {
+        // Lines 265..=end: the `Ffi.kernel` polyfill through `fn main`.
+        let expected: String = GOLDEN.split_inclusive('\n').skip(264).collect();
         assert_eq!(epilogue()?, expected);
         Ok(())
     }
