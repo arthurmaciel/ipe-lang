@@ -151,6 +151,12 @@ pub struct Module {
     /// `lettre` dependency (the only extra crate `email.rs` needs beyond the
     /// base manifest) to the emitted `Cargo.toml`.
     pub uses_email: bool,
+    /// `true` when the lowerer lowered at least one [`Callee::Ffi`] call —
+    /// a foreign-crate wrapper forwarder from a driver-generated FFI
+    /// interface module. The backend reads this flag to declare `mod ffi;`
+    /// in the emitted crate root and to append the bound crates'
+    /// `[dependencies]` lines to the emitted `Cargo.toml`.
+    pub uses_ffi: bool,
 }
 
 /// A user-declared type. The IR models user types as enums (Ipê's `type`
@@ -1880,6 +1886,13 @@ pub enum Expr {
 pub enum Callee {
     Func(FuncId),
     Kernel(KernelFn),
+    /// A foreign-crate FFI wrapper (`crate::ffi::<ident>`), reachable only
+    /// through a driver-generated FFI interface module's forwarder body.
+    /// `ident` is the emitted `_bindings.rs` wrapper `pub fn` identifier,
+    /// validated as a Rust identifier at canonicalisation.
+    Ffi {
+        ident: Symbol,
+    },
 }
 
 /// A per-call-site turbofish pin for a polymorphic kernel.
@@ -3437,6 +3450,7 @@ mod tests {
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_ffi: false,
             }],
         };
         let clone = program.clone();
@@ -3930,6 +3944,7 @@ mod serde_persistence_tests {
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_ffi: false,
             }],
         })
     }
@@ -3995,6 +4010,7 @@ mod serde_persistence_tests {
                 uses_auth: false,
                 uses_websocket: false,
                 uses_email: false,
+                uses_ffi: false,
             }],
         };
         let json = {

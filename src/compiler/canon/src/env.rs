@@ -12,6 +12,8 @@ use ipe_diagnostics::DResult;
 use ipe_intern::{Interner, Symbol};
 use ipe_kernels::StdlibKernel;
 
+use crate::resolve::ModuleOrigin;
+
 /// Authoritative map from a stdlib module's full import path to its canonical
 /// qualifier short-name.
 ///
@@ -212,6 +214,11 @@ pub struct Env {
     /// `canon_equals_registry` tripwire test can validate parity with
     /// `qual_vars` without touching any downstream path.
     pub stdlib_index: Rc<BTreeMap<(Symbol, Symbol), StdlibKernel>>,
+    /// The module's driver-vouched trust provenance. `Ffi.binding` bodies
+    /// resolve ONLY under [`ModuleOrigin::FfiInterface`]; any other origin
+    /// falls through to ordinary qualified-name resolution (and fails there —
+    /// `Ffi` is not an importable module).
+    pub origin: ModuleOrigin,
 }
 
 impl Env {

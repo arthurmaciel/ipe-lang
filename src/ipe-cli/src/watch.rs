@@ -738,7 +738,7 @@ fn run_inner(
                     }
                     cfg
                 } else {
-                    let cfg = ipe_db::BuildConfig::new(&db_main, resolved.db_driver);
+                    let cfg = ipe_db::BuildConfig::new(&db_main, resolved.db_driver, None);
                     config = Some(cfg);
                     cfg
                 };

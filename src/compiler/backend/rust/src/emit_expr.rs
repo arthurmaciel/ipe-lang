@@ -942,6 +942,10 @@ pub fn callee_name(ctx: &EmitCtx, callee: &Callee) -> DResult<String> {
     match callee {
         Callee::Func(id) => Ok(ctx.func_name(*id)?.to_owned()),
         Callee::Kernel(k) => Ok(kernel_name(*k).to_owned()),
+        // A foreign wrapper lives in the emitted `src/ffi.rs` module; the
+        // absolute `crate::ffi::` path keeps it unambiguous from every
+        // emitted file. The identifier was validated at canonicalisation.
+        Callee::Ffi { ident } => Ok(format!("crate::ffi::{}", ctx.resolve_ident(*ident)?)),
     }
 }
 

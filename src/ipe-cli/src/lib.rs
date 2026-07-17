@@ -427,7 +427,7 @@ fn compile_modules_observed(
     // fresh `BuildConfig` per one-shot invocation is fine here — unlike the
     // clean-vs-incremental parity gate's warm sequence, this driver never
     // re-demands `emit_project` against a second config instance.
-    let config = ipe_db::BuildConfig::new(&db, db_driver);
+    let config = ipe_db::BuildConfig::new(&db, db_driver, None);
 
     let emitted = match compile_prepared(&db, source_root, &sources, entry_path, blame_path, config)
     {
@@ -1878,7 +1878,7 @@ mod tests {
         let index = code_index();
         let lines = index.lines().count();
         assert_eq!(lines, ALL_CODES.len(), "one line per code");
-        assert_eq!(ALL_CODES.len(), 94, "taxonomy is 94 codes");
+        assert_eq!(ALL_CODES.len(), 97, "taxonomy is 97 codes");
         assert!(
             index.contains("IPE-T0001  type mismatch"),
             "index pairs code with title"

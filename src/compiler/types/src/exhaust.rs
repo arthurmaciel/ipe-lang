@@ -374,6 +374,14 @@ fn check_expr(
             }
             Ok(())
         }
+        // An FFI wrapper call has no callee sub-expression; only its value
+        // arguments carry checkable structure.
+        canon::Expr_::ForeignCall { args, .. } => {
+            for a in args {
+                check_expr(a, sigs, interner, warnings)?;
+            }
+            Ok(())
+        }
         canon::Expr_::Binop { lhs, rhs, .. } => {
             check_expr(lhs, sigs, interner, warnings)?;
             check_expr(rhs, sigs, interner, warnings)

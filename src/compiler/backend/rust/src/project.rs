@@ -616,6 +616,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
 ///
 /// Propagates any [`Diagnostic`] from the `Cargo.toml`/runtime-module
 /// construction (e.g. a drifted server/db/tui/webview manifest anchor).
+#[allow(clippy::too_many_lines)] // one linear manifest/runtime assembly pass
 fn assemble_project_files(
     ctx: &EmitCtx,
     rust_sources: Vec<(RelPath, String)>,
@@ -697,6 +698,13 @@ fn assemble_project_files(
     // `lettre` only when the program uses `Email.send`.
     let cargo_toml = if ctx.uses_email {
         email_cargo_toml(&cargo_toml)?
+    } else {
+        cargo_toml
+    };
+    // Foreign-crate FFI: append the bound crates' pinned [dependencies] lines
+    // (exact versions + effective feature sets, pre-merged by the driver).
+    let cargo_toml = if ctx.uses_ffi {
+        ffi_cargo_toml(&cargo_toml, ctx)?
     } else {
         cargo_toml
     };
@@ -793,6 +801,25 @@ fn assemble_project_files(
         RelPath::new("src/ipe_runtime/config.rs")?,
         runtime_config_rs,
     );
+    // Foreign-crate FFI: write the wrapper module and declare it from the
+    // crate root. File-count-agnostic (shared by the single-file and split
+    // assembly paths), so the two stay byte-identical.
+    if ctx.uses_ffi {
+        let ffi = ctx.ffi.as_ref().ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::assemble_project_files",
+            detail: "program lowers foreign-wrapper calls but the driver supplied no FFI \
+                     emission inputs (RustBackend::with_ffi)"
+                .to_owned(),
+        })?;
+        files.insert(RelPath::new("src/ffi.rs")?, ffi.bindings_source.clone());
+        let main = files
+            .get_mut("src/main.rs")
+            .ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "ipe_backend_rust::project::assemble_project_files",
+                detail: "no src/main.rs in the assembled file set".to_owned(),
+            })?;
+        main.push_str("\nmod ffi;\n");
+    }
     Ok(EmittedProject { files, cargo_toml })
 }
 
@@ -1682,6 +1709,40 @@ fn email_cargo_toml(base: &str) -> DResult<String> {
     let mut result = String::with_capacity(base.len() + lettre_dep.len());
     result.push_str(base.get(..anchor_pos).unwrap_or(""));
     result.push_str(&lettre_dep);
+    result.push_str(base.get(anchor_pos..).unwrap_or(""));
+    Ok(result)
+}
+
+/// Append the bound FFI crates' pinned `[dependencies]` lines (driver-merged,
+/// exact versions, effective feature sets) before the `[profile.dev]` anchor.
+///
+/// # Errors
+///
+/// [`Diagnostic::CompilerBug`] when the FFI emission inputs are absent while
+/// the program uses FFI, or when the manifest anchor drifted.
+fn ffi_cargo_toml(base: &str, ctx: &EmitCtx) -> DResult<String> {
+    const PROFILE_ANCHOR: &str = "[profile.dev]";
+    let ffi = ctx.ffi.as_ref().ok_or_else(|| Diagnostic::CompilerBug {
+        where_: "ipe_backend_rust::project::ffi_cargo_toml",
+        detail: "program lowers foreign-wrapper calls but the driver supplied no FFI \
+                 emission inputs (RustBackend::with_ffi)"
+            .to_owned(),
+    })?;
+    let mut dep_block = String::new();
+    for line in &ffi.dep_lines {
+        dep_block.push_str(line);
+        dep_block.push('\n');
+    }
+    dep_block.push('\n');
+    let anchor_pos = base
+        .find(PROFILE_ANCHOR)
+        .ok_or_else(|| Diagnostic::CompilerBug {
+            where_: "ipe_backend_rust::project::ffi_cargo_toml",
+            detail: format!("Cargo.toml anchor {PROFILE_ANCHOR:?} not found — golden drifted"),
+        })?;
+    let mut result = String::with_capacity(base.len() + dep_block.len());
+    result.push_str(base.get(..anchor_pos).unwrap_or(""));
+    result.push_str(&dep_block);
     result.push_str(base.get(anchor_pos..).unwrap_or(""));
     Ok(result)
 }
