@@ -110,7 +110,7 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         IrType::Db => "Db".to_owned(),
         IrType::Cmd(inner) => format!("Cmd {}", ir_type_name(interner, inner)),
         IrType::Sub(inner) => format!("Sub {}", ir_type_name(interner, inner)),
-        // M6 opaque server types — source-facing names match Sky stdlib.
+        // Opaque server types — source-facing names match Sky stdlib.
         IrType::ServerRequest => "Request".to_owned(),
         IrType::ServerResponse => "Response".to_owned(),
         IrType::ServerRoute => "Route".to_owned(),
@@ -364,7 +364,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::ErrorWithMessage => "Error.withMessage",
         KernelFn::ErrorIsRetryable => "Error.isRetryable",
         KernelFn::ErrorWithDetails => "Error.withDetails",
-        // CssSafety (Sky.Core.CssSafety — Std.Css leaf security kernels, #47)
+        // CssSafety (Sky.Core.CssSafety — Std.Css leaf security kernels)
         KernelFn::CssSafetySafeValue => "CssSafety.safeValue",
         KernelFn::CssSafetySafePropName => "CssSafety.safePropName",
         KernelFn::CssSafetySafeSelector => "CssSafety.safeSelector",
@@ -738,7 +738,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::ConfigLoadFromFile => "Config.loadFromFile",
         // Std.Email
         KernelFn::EmailSend => "Email.send",
-        // TEA Cmd / Sub / Time.every (wired)
+        // TEA Cmd / Sub / Time.every
         KernelFn::CmdNone => "Cmd.none",
         KernelFn::CmdBatch => "Cmd.batch",
         KernelFn::CmdPerform => "Cmd.perform",
@@ -746,7 +746,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::SubBatch => "Sub.batch",
         KernelFn::SubEvery => "Sub.every",
         KernelFn::TimeEvery => "Time.every",
-        // M6 reserved
+        // reserved
         KernelFn::CmdPublish => "Cmd.publish",
         KernelFn::CmdPublishNoEcho => "Cmd.publishNoEcho",
         KernelFn::SubSubscribeTopic => "Sub.subscribeTopic",
@@ -969,7 +969,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HtmlP => "Html.p",
         KernelFn::HtmlInput => "Html.input",
         KernelFn::HtmlImg => "Html.img",
-        // batch 2: Std.Html element builders.
+        // Std.Html element builders.
         KernelFn::HtmlH1 => "Html.h1",
         KernelFn::HtmlH2 => "Html.h2",
         KernelFn::HtmlH3 => "Html.h3",
@@ -1062,7 +1062,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HtmlAttribute => "Attr.attribute",
         KernelFn::HtmlBoolAttribute => "Attr.boolAttribute",
         KernelFn::HtmlNoAttr => "Attr.noAttr",
-        // Phase-1a event-attribute builders
+        // event-attribute builders
         KernelFn::UiOnClick => "Ui.onClick",
         KernelFn::UiOnFocus => "Ui.onFocus",
         KernelFn::UiOnBlur => "Ui.onBlur",
@@ -1367,8 +1367,7 @@ fn variant_name(interner: &Interner, v: &Variant) -> String {
 }
 
 /// The debug-text suffix for one type parameter's bounds: empty for an
-/// unbounded variable (so a structurally-parametric function's rendering is
-/// byte-identical to the M2a form), or `: Add+Sub+…` listing each set flag in a
+/// unbounded variable, or `: Add+Sub+…` listing each set flag in a
 /// fixed order. This is the IR's human-readable dump, not the Rust emission —
 /// the backend renders the real `::core::ops::*` / `PartialOrd` spellings.
 fn bound_suffix(bounds: BoundSet) -> String {
@@ -1783,7 +1782,7 @@ mod tests {
     use crate::ir::{CallPin, FuncId, OnFormKind};
     use sky_diagnostics::DResult;
 
-    /// Build the canonical M0 program: a `Main` module with a `Msg` enum and a
+    /// Build the canonical program: a `Main` module with a `Msg` enum and a
     /// `main` function whose body is `Log.println (String.fromInt 1)`, plus a
     /// `tick` function with a `Match` over `Msg`.
     #[allow(clippy::too_many_lines)]

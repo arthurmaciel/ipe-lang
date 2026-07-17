@@ -6,7 +6,7 @@
 //! parse tree) plus a mutable [`Interner`] and produces a name-resolved
 //! [`ast::Module`], or a typed [`sky_diagnostics::Diagnostic`]. Every variable
 //! reference is classified — local binding, top-level binding, stdlib kernel,
-//! or data constructor — by porting the M0 subset of the Haskell compiler's
+//! or data constructor — by porting the supported subset of the Haskell compiler's
 //! `Sky.Canonicalise.{Module,Expression,Pattern,Type,Environment}`.
 
 pub mod ast;
@@ -793,7 +793,7 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // #78 — stdlib import-alias registration.
+    // Stdlib import-alias registration.
     // ─────────────────────────────────────────────────────────────────────────
 
     /// Parse + canonicalise a single module through the MULTI-module entry
@@ -1674,7 +1674,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------
-    // #102 — a LOCAL `type X` / `type alias X` shadowing a dep-imported `X`
+    // A LOCAL `type X` / `type alias X` shadowing a dep-imported `X`
     // must be rejected at the declaration with SKY-N0012 (`DuplicateType`),
     // not a downstream SKY-T0001. See `canonicalise_with_env`'s dep-shadow
     // pre-pass and docs/adr/0010-pattern-and-lowering-completeness.md
@@ -1778,8 +1778,8 @@ mod tests {
 
     #[test]
     fn same_module_duplicate_type_still_uses_first_declared_span() {
-        // The EXISTING same-module duplicate path (the unchanged `seen_types`
-        // loop) is untouched by the #102 dep-shadow pre-pass: two `type Color`
+        // The same-module duplicate path (the `seen_types`
+        // loop) is separate from the dep-shadow pre-pass: two `type Color`
         // declarations in ONE module still report the FIRST-declared span, not
         // the `Span::DUMMY` the dep-shadow path uses.
         let err = canon_err(
@@ -1803,7 +1803,7 @@ mod tests {
         );
     }
 
-    /// **Phase-A/E tripwire: registry ↔ canon parity, now a full subset gate.**
+    /// **Tripwire: registry ↔ canon parity, a full subset gate.**
     ///
     /// Forward direction (registry → canon): for every
     /// [`sky_kernels::StdlibKernel`] variant in `ALL`, if the variant's
@@ -1819,9 +1819,8 @@ mod tests {
     ///
     /// Reverse direction (canon → registry, "G1"): for every non-excluded
     /// qualifier's members, `VarHome::Kernel(Some(sk), ..)` entries are
-    /// checked for exact id propagation (unchanged since Phase B).  **Phase E
-    /// Task 3** extends this into a FULL SUBSET GATE: it additionally asserts
-    /// no non-excluded member sits on `VarHome::Kernel(None, ..)` — i.e. every
+    /// checked for exact id propagation. As a FULL SUBSET GATE it additionally
+    /// asserts no non-excluded member sits on `VarHome::Kernel(None, ..)` — i.e. every
     /// kernel the resolver/canon layer recognises (every `qual_vars` member,
     /// short of the deliberately-excluded alias namespaces and the
     /// structurally-unreachable `KNOWN_UNBACKED` set proven disjoint by
@@ -1833,8 +1832,8 @@ mod tests {
     /// `StdlibKernel::ALL` — it does NOT re-verify the type-scheme table's
     /// own fail-closed behaviour. That guarantee (`skyc`'s exit-0-then-
     /// cargo-fail class `PRINCIPLES.md` calls out: a kernel the resolver
-    /// recognises but the type-scheme table does not cover) is a SEPARATE,
-    /// already-landed invariant owned by
+    /// recognises but the type-scheme table does not cover) is a SEPARATE
+    /// invariant owned by
     /// `sky_types::constrain::kernel_scheme_or_unsupported`'s unconditional
     /// `.ok_or(Err(..))` (no flexible-type-variable fallback exists there).
     /// A future regression in that function would sail through this test
@@ -1897,11 +1896,11 @@ mod tests {
             );
         }
 
-        // ── G1 reverse check (Phase B/E Task 3): canon → registry ────────────
+        // ── G1 reverse check: canon → registry ───────────────────────────────
         // For every qual_vars entry that carries id = Some(actual_sk) (i.e.
         // was resolved against stdlib_index at parse time), verify that the
         // stored id EXACTLY MATCHES stdlib_index[(qual, name)].  A second pass
-        // (Phase E Task 3) additionally proves the reverse direction is a FULL
+        // additionally proves the reverse direction is a FULL
         // SUBSET GATE: every non-excluded qual_vars member must resolve to a
         // concrete id in the first place — a `VarHome::Kernel(None, ..)` here
         // means QUALIFIERS in env.rs names a member with NO matching
@@ -1951,10 +1950,10 @@ mod tests {
         .into_iter()
         .collect();
 
-        // Deliberately-unbacked-but-reachable members (Task 3 design addition
-        // — the spec's `excluded_quals` is qualifier-granular and would blind
-        // the whole gate for e.g. String's ~30 real kernels; a single
-        // known-holdout member needs a member-granular exception instead).
+        // Deliberately-unbacked-but-reachable members. `excluded_quals` is
+        // qualifier-granular and would blind the whole gate for e.g. String's
+        // ~30 real kernels; a single known-holdout member needs a
+        // member-granular exception instead.
         // Unlike `excluded_quals` (alias namespaces that resolve elsewhere),
         // these are genuine `id = None` holes: `QUALIFIERS` in env.rs names
         // them (so they parse + canonicalise) but `sky_kernels::StdlibKernel`
@@ -1964,11 +1963,11 @@ mod tests {
         // (`error[SKY-L0108]: kernel function not available yet`) via
         // `constrain_var_kernel`'s existing `id.and_then(..)` — never
         // silently — so listing them here does not violate the
-        // exit-0-then-cargo-fail property Task 3 exists to close; it makes
-        // the already-fail-closed state explicit and machine-checked instead
-        // of an untracked hole this new gate would otherwise panic on.
+        // exit-0-then-cargo-fail property this gate exists to protect; it makes
+        // the fail-closed state explicit and machine-checked instead
+        // of an untracked hole the gate would otherwise panic on.
         //
-        // Two are pre-existing, deliberate holdouts documented in
+        // Two are deliberate holdouts documented in
         // `crates/skyc/tests/golden_core_stdlib.rs`'s header comment:
         //   - `String.toChar` — no runtime fn; ambiguous Char-vs-Maybe-Char
         //     semantics.
@@ -1978,18 +1977,16 @@ mod tests {
         //     self-documentation (harmless duplicate — `excluded_quals` skips
         //     the whole qualifier before this set is even consulted).
         //
-        // The remaining 20 were discovered while landing this Task 3 gate
-        // (2026-07-10) — the `docs/adr/0020-html-ui-live-kernel-arity-tripwire.md` derivation only
-        // audited kernels that already had a `StdlibKernel` id (a TYPES-side
-        // `Ty::Var(u32::MAX)`-class hole); these have no id at all yet, a
-        // CANON-side hole one layer earlier. Each is a real Std.Ui / Std.Html
-        // surface named in `QUALIFIERS` (env.rs) with no matching
-        // `sky_kernels::StdlibKernel::decl()` entry — i.e. not-yet-ported
-        // advanced UI features (pseudo-classes, media queries, gradients,
-        // HTML-document-level nodes), not typos or drift. Filed for
-        // follow-up; NOT implemented here (implementing 20 kernels with real
-        // runtime backing is out of scope for the exhaustiveness-gate task
-        // that landed this list — see the lane report for #45).
+        // The remaining 20 are a CANON-side hole one layer earlier than the
+        // `docs/adr/0020-html-ui-live-kernel-arity-tripwire.md` derivation,
+        // which only audited kernels that already had a `StdlibKernel` id (a
+        // TYPES-side `Ty::Var(u32::MAX)`-class hole); these have no id at all
+        // yet. Each is a real Std.Ui / Std.Html surface named in `QUALIFIERS`
+        // (env.rs) with no matching `sky_kernels::StdlibKernel::decl()` entry —
+        // i.e. not-yet-ported advanced UI features (pseudo-classes, media
+        // queries, gradients, HTML-document-level nodes), not typos or drift.
+        // Implementing 20 kernels with real runtime backing is out of scope
+        // for the exhaustiveness gate.
         let deliberately_unbacked_members: std::collections::BTreeSet<(&str, &str)> = [
             ("String", "toChar"),
             ("Basics", "toString"),
@@ -2025,7 +2022,7 @@ mod tests {
         .into_iter()
         .collect();
 
-        // G1 forward-propagation check (unchanged since Phase B): every
+        // G1 forward-propagation check: every
         // `VarHome::Kernel(Some(actual_sk), m, f)` entry's id must match
         // `stdlib_index[(m, f)]` exactly.
         for (qual_sym, members) in env.qual_vars.iter() {
@@ -2060,7 +2057,7 @@ mod tests {
             }
         }
 
-        // Phase E Task 3 subset gate: every non-excluded qual_vars member
+        // Subset gate: every non-excluded qual_vars member
         // must resolve to a concrete StdlibKernel id. Pulled into a free
         // function (below) so `qual_vars_subset_gate_catches_unbacked_member`
         // can prove — with a tiny synthetic fixture, no full `Env::initial`
@@ -2089,12 +2086,12 @@ mod tests {
         );
     }
 
-    /// Core of the Phase E Task 3 subset gate: collect one description string
+    /// Core of the subset gate: collect one description string
     /// per `VarHome::Kernel(None, ..)` member found in `qual_vars`, skipping
     /// qualifiers in `excluded_quals` and `(qualifier, name)` pairs in
     /// `deliberately_unbacked_members`. An empty return means every
     /// non-excluded, non-deliberately-unbacked member resolves to a concrete
-    /// `StdlibKernel` id — the property this task's gate exists to enforce
+    /// `StdlibKernel` id — the property the gate exists to enforce
     /// (`crates/sky_canon/src/lib.rs`'s `canon_equals_registry`).
     fn qual_vars_none_violations(
         qual_vars: &std::collections::BTreeMap<
@@ -2131,15 +2128,14 @@ mod tests {
         unbacked
     }
 
-    /// **Mandatory #45 regression proof**: the Phase E Task 3 subset gate
+    /// **Regression proof**: the subset gate
     /// (`qual_vars_none_violations`, exercised for real by
     /// `canon_equals_registry`) actually FIRES on a kernel-without-scheme,
     /// rather than being a check that just happens to stay silent on today's
     /// (already-clean-of-undocumented-holes) table. This is the direct,
-    /// durable proof that closing #45's exit-0-then-cargo-fail class is not
-    /// merely a green test but a gate that provably catches the exact defect
-    /// class `PRINCIPLES.md` names: "a kernel that the resolver recognises
-    /// but the type-scheme table does not cover."
+    /// durable proof that the gate provably catches the exact
+    /// exit-0-then-cargo-fail defect class `PRINCIPLES.md` names: "a kernel
+    /// that the resolver recognises but the type-scheme table does not cover."
     ///
     /// Builds a minimal synthetic `qual_vars`-shaped fixture — bypassing
     /// `Env::initial` entirely — with one qualifier holding a
@@ -2157,9 +2153,8 @@ mod tests {
         let mut members = std::collections::BTreeMap::new();
         // A kernel the resolver recognises (it is a real qual_vars member)
         // but the type-scheme table cannot possibly cover, because — like
-        // the real drift Task 3 caught during development (`Ui.image`,
-        // `Html.doctype`, etc.) — no matching `StdlibKernel::ALL` entry
-        // exists for it at all.
+        // real drift such as `Ui.image` / `Html.doctype` — no matching
+        // `StdlibKernel::ALL` entry exists for it at all.
         members.insert(name_sym, VarHome::Kernel(None, qual_sym, name_sym));
 
         let mut qual_vars = std::collections::BTreeMap::new();
@@ -2221,11 +2216,11 @@ mod tests {
         );
     }
 
-    /// Phase E — Task 0 gate. The `KNOWN_UNBACKED` kernels (`PubSub.publish` /
+    /// The `KNOWN_UNBACKED` kernels (`PubSub.publish` /
     /// `PubSub.publishNoEcho`) are UNREACHABLE from any user program: their
     /// `"PubSub"` qualifier is absent from `env.qual_vars`, so canonicalisation
     /// never mints a `VarKernel` for them. This is the fact that keeps the
-    /// `stdlib_scheme` totality flip (Phase E Task 1) sound — the `None` arm the
+    /// `stdlib_scheme` totality flip sound — the `None` arm the
     /// two `PubSub` variants return can never be hit on a real resolution path.
     ///
     /// Mirrors `sky_types` `KNOWN_UNBACKED` (guarded there by
@@ -2259,7 +2254,7 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // #82 — record type-alias auto-constructor (SKY-N0001).
+    // Record type-alias auto-constructor (SKY-N0001).
     // ─────────────────────────────────────────────────────────────────────────
 
     /// Flatten an arrow type into `(arg types…, final result type)`.
@@ -2569,7 +2564,7 @@ mod tests {
         // A config-record alias with an ARROW-headed field must NOT synthesize a
         // constructor — its body would be a record literal with a function field,
         // which the lowerer rejects (SKY-L0107), and there is no DCE to prune an
-        // unused one. It keeps its pre-#82 behaviour: a type only.
+        // unused one. It stays a type only, with no synthesized constructor.
         let mut i = Interner::new();
         let m = canon_ok(
             &mut i,
@@ -2611,7 +2606,7 @@ mod tests {
 
     #[test]
     fn nested_function_in_derive_carrier_has_no_ctor() {
-        // SEAL FIX (#82). A field whose function is NESTED inside a derive carrier
+        // SEAL FIX. A field whose function is NESTED inside a derive carrier
         // — `List (Int -> Bool)` (head `Con "List"`, not `Lambda`) — was MISSED by
         // the earlier head-only gate: a ctor was synthesised, the backend emitted a
         // `#[derive(Clone, Debug, PartialEq)]` struct over a `Box<dyn Fn>` field,
@@ -2639,7 +2634,7 @@ mod tests {
 
     #[test]
     fn opaque_wrapper_field_record_alias_gets_no_ctor() {
-        // ROUND-2 SEAL FIX (#82). An opaque boxed-wrapper in FIELD position
+        // ROUND-2 SEAL FIX. An opaque boxed-wrapper in FIELD position
         // (`Decoder` / `Cmd` / `Sub` / `Task`) is ITSELF non-derivable as a
         // struct field — its runtime rep (`Box<dyn Fn>` / boxed-thunk enum /
         // `Pin<Box<dyn Future>>`) impls no Clone/Debug/PartialEq/SkyStringify.
@@ -2649,7 +2644,7 @@ mod tests {
         // merely NAMING the alias builds clean and no dangling ctor value exists.
         // Use only builtin type args (`Int`, `Error`) so the test is not
         // sensitive to whether an undefined user ADT (`Msg`) compiles.
-        // #138: unknown unqualified type names now fail closed with SKY-N0002;
+        // Unknown unqualified type names fail closed with SKY-N0002;
         // the test's intent (no ctor for opaque-field alias) does not depend on
         // the specific type argument — `Cmd Int` tests the same gate as `Cmd Msg`.
         for (decl, field_ty) in [
@@ -2756,14 +2751,14 @@ mod tests {
         );
     }
 
-    // ── #97: `import Sky.*/Std.* exposing (member)` brings stdlib VALUE members
+    // ── `import Sky.*/Std.* exposing (member)` brings stdlib VALUE members
     // into UNQUALIFIED scope ─────────────────────────────────────────────────
 
     #[test]
     fn stdlib_exposing_brings_value_into_unqualified_scope() {
         // `import Std.Live exposing (app, route)` → bare `app` resolves to the
         // same `VarKernel { module: Live, name: app }` a `Live.app` reference
-        // would (#97). Previously this was `SKY-N0001` "app not found".
+        // would. Previously this was `SKY-N0001` "app not found".
         let src = "module Main exposing (main)\n\
                    import Std.Live exposing (app, route)\n\n\
                    main = app\n";
@@ -2850,7 +2845,7 @@ mod tests {
 
     #[test]
     fn stdlib_exposing_wildcard_allows_local_shadow() {
-        // #98: `exposing (..)` on a stdlib module floods the LOW-PRIORITY
+        // `exposing (..)` on a stdlib module floods the LOW-PRIORITY
         // wildcard tier. A local `map` must NOT collide (no `DuplicateValue`) and
         // a bare `map` use must resolve to the LOCAL binding, silently shadowing
         // the wildcard member.
@@ -2872,7 +2867,7 @@ mod tests {
         );
     }
 
-    // ── #98: `import Sky.*/Std.* exposing (..)` floods the low-priority wildcard
+    // ── `import Sky.*/Std.* exposing (..)` floods the low-priority wildcard
     // tier ─────────────────────────────────────────────────────────────────────
 
     #[test]
@@ -3029,7 +3024,7 @@ mod tests {
 
     #[test]
     fn explicit_exposing_still_collides_with_local() {
-        // #97 non-regression: an EXPLICIT `exposing (app)` still hard-collides
+        // An EXPLICIT `exposing (app)` hard-collides
         // with a local `app` (`DuplicateValue`) — unlike a wildcard member.
         let err = canon_err(
             "module Main exposing (main)\n\
@@ -3050,7 +3045,7 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // #98 — ModuleOrigin: unforgeable stdlib trust tag.
+    // ModuleOrigin: unforgeable stdlib trust tag.
     // ─────────────────────────────────────────────────────────────────────────
 
     /// Canonicalise `src` with an explicit [`ModuleOrigin`], returning the result.
@@ -3137,14 +3132,14 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // #103 — ModuleOrigin-gated reserved-builtin exemption (last Std.Css prereq).
+    // ModuleOrigin-gated reserved-builtin exemption.
     //
-    // #100 threaded the unforgeable `ModuleOrigin`; #101 made the lowerer
-    // home-aware (the nullary Std.Ui opaque names sit BELOW the `enum_variants`
-    // guard). So the canon reservation of those names is no longer load-bearing
+    // The unforgeable `ModuleOrigin` and the home-aware lowerer (the nullary
+    // Std.Ui opaque names sit BELOW the `enum_variants` guard) together mean the
+    // canon reservation of those names is not load-bearing
     // for lowering-soundness, and a trusted `EmbeddedStdlib` module — the
     // canonical definer — is exempt for that subset while USER modules stay
-    // rejected (option A: keep the user-facing "cannot shadow Length" guarantee).
+    // rejected (keeping the user-facing "cannot shadow Length" guarantee).
     // ─────────────────────────────────────────────────────────────────────────
 
     #[test]
@@ -3285,13 +3280,13 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // #146 — Std.Ui.Lazy: module registration regression
+    // Std.Ui.Lazy: module registration regression
     // ─────────────────────────────────────────────────────────────────────────
 
     /// `import Std.Ui.Lazy as Lazy` followed by a bare `Lazy.lazy` call must
-    /// resolve without a name error.  Before #146 the qualifier "Lazy" was
-    /// absent from `STDLIB_MODULE_QUALIFIERS` / `QUALIFIERS`, so any reference
-    /// to `Lazy.lazy` fired `NameError::ValueNotFound`.
+    /// resolve without a name error.  If the qualifier "Lazy" were
+    /// absent from `STDLIB_MODULE_QUALIFIERS` / `QUALIFIERS`, any reference
+    /// to `Lazy.lazy` would fire `NameError::ValueNotFound`.
     #[test]
     fn lazy_module_lazy_resolves_without_name_error() {
         let err = canon_err(

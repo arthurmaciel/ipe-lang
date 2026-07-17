@@ -9,7 +9,7 @@
 // dotfiles (`std::path::Path::extension(".bashrc")` → None, Go's
 // `filepath.Ext(".bashrc")` → ".bashrc"). The Rust backend's Go≡Rust equivalence
 // target runs on Linux, where Go's filepath uses `/`, so we implement Unix
-// filepath exactly. (Audit 2026-06-19, correctness/parity — was deferred.)
+// filepath exactly. (Audit finding: correctness/parity.)
 //
 // Routing (Kernel.hs fallthrough — all map cleanly via toSnakeCase):
 //   ("Path", "base")       / ("Sky.Core.Path", "base")       -> "path_base"

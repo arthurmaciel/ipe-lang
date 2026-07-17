@@ -54,7 +54,7 @@ mod tests {
 
     // NB: form-target structs gain `#[derive(Default)] #[serde(default)]` in
     // codegen (Emitter.hs) so a missing form field decodes to the field's zero
-    // value — Go json.Unmarshal parity (#37). These test structs mirror that.
+    // value — Go json.Unmarshal parity. These test structs mirror that.
     #[derive(serde::Deserialize, Default, PartialEq, Debug)]
     #[serde(default)]
     struct Creds {
@@ -89,7 +89,7 @@ mod tests {
         );
     }
 
-    // The #37 contract record: a String + an i64. Exercises the three cases the
+    // The contract record: a String + an i64. Exercises the three cases the
     // Go json.Unmarshal parity demands.
     #[derive(serde::Deserialize, Default, PartialEq, Debug)]
     #[serde(default)]
@@ -195,13 +195,12 @@ mod tests {
         );
     }
 
-    // #37 regression: a form-target record with a `Maybe`-typed optional field
-    // (`note : Maybe String` → `SkyMaybe<String>`) is idiomatic. Pre-fix the
-    // codegen `#[derive(Default)]` on this struct cargo-failed E0277 because
-    // `SkyMaybe<T>` had no `Default`. Part A's `impl Default for SkyMaybe`
-    // (= `Nothing`) makes it qualify for the lenient stamp, so a MISSING `note`
-    // decodes to `Nothing` (the exact case #37 fixes — the missing-field
-    // leniency, Go's `json.Unmarshal` nil parity).
+    // A form-target record with a `Maybe`-typed optional field
+    // (`note : Maybe String` → `SkyMaybe<String>`) is idiomatic. The codegen
+    // `#[derive(Default)]` on this struct requires `SkyMaybe<T>: Default`, which
+    // `impl Default for SkyMaybe` (= `Nothing`) supplies, so a MISSING `note`
+    // decodes to `Nothing` (the missing-field leniency, Go's `json.Unmarshal`
+    // nil parity).
     //
     // NB on a PRESENT value: `SkyMaybe` derives serde's default (externally-
     // tagged) representation, so a bare urlencoded `note=hello` does NOT
@@ -209,8 +208,7 @@ mod tests {
     // `Nothing` tag. Surfacing a present optional form value into `Just` is a
     // separate serde-representation concern (it would need `#[serde(untagged)]`
     // / a custom deserialize on `SkyMaybe`, which also touches the session-store
-    // serialization contract) and is OUT OF SCOPE for #37, whose breach is the
-    // missing-field E0277 cargo-fail. We assert the in-scope behaviour: missing
+    // serialization contract). We assert the in-scope behaviour: missing
     // → Nothing (no cargo-fail, Msg dispatches), present-bare → decode declines.
     #[derive(serde::Deserialize, Default, PartialEq, Debug)]
     #[serde(default)]
@@ -224,9 +222,9 @@ mod tests {
     fn decode_form_maybe_field_missing_is_nothing() {
         use crate::sky_runtime::core::SkyMaybe;
 
-        // The #37 fix: `note` absent → Nothing (Go decodes a missing nullable to
-        // nil), decode SUCCEEDS, Msg dispatches. Pre-fix this struct could not
-        // even be CONSTRUCTED (its `#[derive(Default)]` was an E0277 cargo-fail).
+        // `note` absent → Nothing (Go decodes a missing nullable to nil), decode
+        // SUCCEEDS, Msg dispatches. This relies on the struct's
+        // `#[derive(Default)]` (which needs `SkyMaybe<T>: Default`, else E0277).
         let mut without_note = FormData::new();
         without_note.insert("email".to_string(), "a@b.c".to_string());
         without_note.insert("password".to_string(), "pw".to_string());
@@ -250,9 +248,9 @@ mod tests {
         let _unbounded: crate::sky_runtime::core::SkyMaybe<NonDefault> = Default::default();
     }
 
-    // #37 Part B: a form-target carrying a NON-Default field (here a `bool`-keyed
-    // ADT modelled as a Rust enum) does NOT get the lenient `#[derive(Default)]`
-    // stamp in codegen — it keeps the STRICT pre-#37 emission (plain
+    // A form-target carrying a NON-Default field (here a `bool`-keyed ADT
+    // modelled as a Rust enum) does NOT get the lenient `#[derive(Default)]`
+    // stamp in codegen — it keeps the STRICT emission (plain
     // `serde::Deserialize`, no `Default`/`serde(default)`). That still compiles
     // and still decodes; it just lacks missing-field leniency. This struct
     // MIRRORS that strict emission (note: no `Default`, no `#[serde(default)]`).
@@ -284,8 +282,8 @@ mod tests {
         );
 
         // Missing the non-defaultable `tier` → strict decode ERRORS (no leniency),
-        // exactly the pre-#37 behaviour the strict emission preserves. It does
-        // NOT cargo-fail; it just returns Err — acceptable for the rare
+        // exactly the behaviour the strict emission preserves. It does NOT
+        // cargo-fail; it just returns Err — acceptable for the rare
         // enum/Result-field form.
         let mut partial = FormData::new();
         partial.insert("email".to_string(), "a@b.c".to_string());
@@ -293,9 +291,9 @@ mod tests {
         assert!(r2.is_err());
     }
 
-    // #42: a PRESENT optional form field (`note=hello`) must decode to
-    // `Just("hello")`, not decline the whole form. The #37 fix covered the
-    // MISSING case (absent field → Nothing); this covers the PRESENT case.
+    // A PRESENT optional form field (`note=hello`) must decode to
+    // `Just("hello")`, not decline the whole form. This complements the MISSING
+    // case (absent field → Nothing) with the PRESENT case.
     //
     // Root cause: `SkyMaybe` derives serde with the default externally-tagged repr
     // (`{"Just":"hello"}` / `"Nothing"`); form data posts a bare string `"hello"`,
@@ -309,7 +307,7 @@ mod tests {
     fn decode_form_maybe_field_present_is_just() {
         use crate::sky_runtime::core::SkyMaybe;
 
-        // Present `note=hello` → Just("hello"). Pre-fix: decode declines (None).
+        // Present `note=hello` → Just("hello").
         let mut with_note = FormData::new();
         with_note.insert("email".to_string(), "a@b.c".to_string());
         with_note.insert("password".to_string(), "pw".to_string());
@@ -324,7 +322,7 @@ mod tests {
             })
         );
 
-        // Absent `note` still → Nothing (regression from #37).
+        // Absent `note` still → Nothing.
         let mut without_note = FormData::new();
         without_note.insert("email".to_string(), "a@b.c".to_string());
         without_note.insert("password".to_string(), "pw".to_string());
@@ -340,7 +338,7 @@ mod tests {
     }
 
     // Session-store round-trip: serialize SkyMaybe → JSON → deserialize must
-    // preserve the value. This catches any regression from the #42 Deserialize change.
+    // preserve the value. This guards the custom `SkyMaybe` Deserialize.
     #[test]
     fn sky_maybe_session_store_round_trip() {
         use crate::sky_runtime::core::SkyMaybe;

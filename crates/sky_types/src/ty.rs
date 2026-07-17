@@ -1,14 +1,14 @@
-//! The two type levels of inference, ported from the M0 subset of
+//! The two type levels of inference, ported from the supported subset of
 //! `Sky.Type.Type` (derivative of elm/compiler's `Type.Type`, BSD-3-Clause).
 //!
 //! * [`Ty`] — the *resolved*, immutable, canonical type read back after the
 //!   solver settles. This is what [`crate::SolvedTypes`] hands to the lowerer.
 //! * [`Content`] / [`FlatType`] — the *solver-level* descriptors stored inside
 //!   union-find nodes during inference (mirrors Haskell `Content` / `FlatType`,
-//!   narrowed to the M0 lattice: functions, type-constructor applications, and
-//!   unit; no records / tuples / aliases / super-types yet).
+//!   narrowed to the supported lattice: functions, type-constructor
+//!   applications, and unit; no records / tuples / aliases / super-types yet).
 //!
-//! # Open records (#108 `RoutedLiveApp` / #56 row-poly)
+//! # Open records (`RoutedLiveApp` / row-poly)
 //!
 //! Row-polymorphic records mirror `../sky`'s `TRecord (Map …) (Maybe var)` /
 //! `Record1 map var` / `EmptyRecord1`.
@@ -22,7 +22,7 @@
 //! At the solver level, [`FlatType::EmptyRecord`] is the closed-tail sentinel
 //! (mirrors `EmptyRecord1`); an open tail is a plain [`Content::Flex`] variable.
 //! The only open records currently are the `Live.app` / `Tui.app` /
-//! `Webview.app` kernel cfg records (T3, #108), which absorb optional fields
+//! `Webview.app` kernel cfg records, which absorb optional fields
 //! (`head` / `consoleAuth` / `guard` / `status` / `onKey` …) without forcing
 //! every app to enumerate empty optionals.
 
@@ -33,7 +33,7 @@ use sky_intern::Symbol;
 
 use crate::unionfind::VarId;
 
-/// A resolved type (post-solve, immutable). M0 subset.
+/// A resolved type (post-solve, immutable).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Ty {
     /// A type variable. Carries a raw `u32` from ONE OF TWO DISJOINT id
@@ -110,7 +110,7 @@ pub const fn tag_solver_var(id: VarId) -> u32 {
 /// Strip [`SOLVER_VAR_TAG`] from a [`Ty::Var`] raw, recovering the bare
 /// union-find [`VarId`]. A no-op on a raw that was never tagged.
 ///
-/// SEAL fix (#164): `SolvedTypes::poly_var_map`'s "typed-rigids" entries
+/// SEAL fix: `SolvedTypes::poly_var_map`'s "typed-rigids" entries
 /// (`sky_types::lib.rs` around line 347) are keyed by the BARE union-find
 /// representative — a typed binding's own `params`/`ret` are read straight
 /// from its annotation, never zonked, so they were never tagged in the first
@@ -192,8 +192,8 @@ impl TyBounds {
     const SHOW: u16 = 1 << 7;
     /// The append obligation (`++` → `Appendable a ⊇ { String, List a }`).
     const APPEND: u16 = 1 << 8;
-    /// The higher-order-kernel callback-result obligation (#90 T3,
-    /// generalized in the 5th attempt): this variable is the final RESULT of
+    /// The higher-order-kernel callback-result obligation: this variable is
+    /// the final RESULT of
     /// a callback arrow that a `Maybe`/`Result` higher-order kernel FULLY
     /// APPLIES at runtime — `b` in `map`'s `(a -> b)`, `v` in `map2..5`'s
     /// `(a -> … -> v)`, `f` in `mapError`'s `(e -> f)`, and `b` in `andMap`'s
@@ -218,7 +218,7 @@ impl TyBounds {
     /// `queryDecode`). The Rust runtime can bind a bare `String` / `Int` /
     /// `Float` / `Bool` or the `SqlValue` ADT as a SQL parameter (each has a
     /// `From<T> for SqlParam` impl in `sky_runtime::db`); nothing else does.
-    /// Backend realises this as `T{n}: Into<sky_runtime::db::SqlParam>` (#165).
+    /// Backend realises this as `T{n}: Into<sky_runtime::db::SqlParam>`.
     /// Mirrors the Set/Dict comparable-key obligation shape: attached to a
     /// kernel's scheme var, propagated through union-find unification, and
     /// (unlike the comparable-key obligations) defaulted to `SqlValue` when a
@@ -417,7 +417,7 @@ pub enum Content {
 }
 
 /// A concrete type structure whose children are union-find variables (so
-/// unification can refine them in place). Mirrors Haskell `FlatType`, M0 subset.
+/// unification can refine them in place). Mirrors Haskell `FlatType`.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum FlatType {
     /// Function `arg -> result`.

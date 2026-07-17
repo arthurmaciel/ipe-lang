@@ -42,9 +42,9 @@ pub enum Attribute<M> {
 /// too — `ui_on_submit_` / `html_on_raw_` close over a
 /// `decode_form_or_warn::<T>` call for the CONCRETE record type `T`, recovered
 /// by ordinary Rust generic inference on the handler closure's own signature
-/// at the codegen call site, never `Arc<dyn Any>` (#109/#156 — the former
-/// `OnRaw` variant, which erased the payload behind `Arc<dyn Any>` and was
-/// consequently NEVER dispatchable in any backend, is deleted).
+/// at the codegen call site, never `Arc<dyn Any>`. A payload erased behind
+/// `Arc<dyn Any>` would be undispatchable in any backend, so no such variant
+/// exists.
 #[derive(Clone)]
 pub enum Event<M> {
     OnMsg(String, M),
@@ -138,7 +138,7 @@ const VOID: &[&str] = &[
 
 /// True for HTML void elements (no children, self-closing). Exposed for the
 /// style-injection pass, which must hoist a `<style>` to a sibling slot after a
-/// void element because `render_into` emits no children for void tags (#409).
+/// void element because `render_into` emits no children for void tags.
 /// Its sole consumer is `live/style_inject.rs`, so it is `live`-gated (webview
 /// enables `live` too); a non-live build that gained a caller would fail loud.
 #[cfg(feature = "live")]
@@ -514,8 +514,8 @@ fn is_dangerous_attr_name(name: &str) -> bool {
 /// build one runs the full attribute-name policy — `is_safe_html_name` (charset:
 /// no structural-breakout bytes) AND `!is_dangerous_attr_name` (no script-bearing
 /// names) — exactly once. Every emit sink consumes a `SafeAttrName` instead of a
-/// raw `&str`, so a sink CANNOT forget a check: the divergence that left
-/// `htmlAttrToString` exposed (guardian, 2026-06-27) becomes unrepresentable.
+/// raw `&str`, so a sink CANNOT forget a check: an unchecked sink leaving
+/// `htmlAttrToString` exposed is unrepresentable.
 /// NB: element tag names and event-marker names are NOT attribute names — they
 /// keep the plain `is_safe_html_name` gate.
 struct SafeAttrName<'a>(&'a str);
@@ -779,7 +779,7 @@ pub fn html_render_<M>(node: Html<M>) -> String {
     render_html(&node)
 }
 
-// --- Std.Html.Attributes builder kernels (#76 corpus-used direct-backing) ---
+// --- Std.Html.Attributes builder kernels (corpus-used direct-backing) ---
 //
 // Every builder produces the runtime `Attribute<M>` value the render sink
 // already knows how to neutralise. SECURITY (P1): the value string is escaped
@@ -834,7 +834,7 @@ pub fn html_no_attr_<M>() -> Attribute<M> {
     Attribute::NoAttr
 }
 
-/// `Std.Html.Events.{onClick,onFocus,onBlur,onMouseOver,onMouseOut}` (#107) —
+/// `Std.Html.Events.{onClick,onFocus,onBlur,onMouseOver,onMouseOut}` —
 /// a zero-wire-arg event whose `Msg` dispatches as-is. The `name` is the fixed
 /// DOM event name supplied by the compile-time `html_event_wire_name` (never
 /// attacker data).
@@ -843,7 +843,7 @@ pub fn html_on_msg_<M>(name: String, msg: M) -> Attribute<M> {
     Attribute::EventAttr(Event::OnMsg(name, msg))
 }
 
-/// `Std.Html.Events.{onInput,onChange,onKeyDown,onKeyUp}` (#107) — a
+/// `Std.Html.Events.{onInput,onChange,onKeyDown,onKeyUp}` — a
 /// value-carrying event; the handler receives the input string. The compiler
 /// Arc-wraps the emitted Sky fn before this call.
 #[must_use]
@@ -854,7 +854,7 @@ pub fn html_on_string_<M>(
     Attribute::EventAttr(Event::OnString(name, handler))
 }
 
-/// `Std.Html.Events.{onBool,onCheck}` (#107) — a checkbox-state event; the
+/// `Std.Html.Events.{onBool,onCheck}` — a checkbox-state event; the
 /// handler receives the checked bool.
 #[must_use]
 pub fn html_on_bool_<M>(
@@ -864,14 +864,14 @@ pub fn html_on_bool_<M>(
     Attribute::EventAttr(Event::OnBool(name, handler))
 }
 
-/// `Std.Html.Events.onSubmit` (#107) — a heterogeneous-payload event whose
+/// `Std.Html.Events.onSubmit` — a heterogeneous-payload event whose
 /// handler argument type `T` is DECOUPLED from `M` at the Sky type level (a
 /// form's `onSubmit DoSignIn` must not force `LoginForm` into the surrounding
 /// `Html msg`'s type). `T` stays a free HM variable in `constrain.rs`'s
 /// scheme; at CODEGEN time Rust's ordinary generic inference recovers the
 /// CONCRETE `T` from the handler closure `f`'s own monomorphized signature —
-/// no runtime type erasure, no `Arc<dyn Any>`, no downcast (#109/#156, closes
-/// the PRINCIPLES.md no-`dyn Any` exception this used to be). Builds
+/// no runtime type erasure, no `Arc<dyn Any>`, no downcast — honouring the
+/// PRINCIPLES.md no-`dyn Any` rule. Builds
 /// `Event::OnForm` directly, reusing the already-correct, already-tested
 /// `HandlerIndex::resolve_form` + `decode_form_or_warn` dispatch path.
 ///
@@ -879,7 +879,7 @@ pub fn html_on_bool_<M>(
 /// `naming.rs` / emit-site literals / parity tooling), this is no longer a
 /// "raw" escape hatch — it fully participates in typed dispatch.
 ///
-/// #162: the `F: ... + Sync` bound below is genuinely required (`Event`'s
+/// The `F: ... + Sync` bound below is genuinely required (`Event`'s
 /// `OnForm` slot stores `Arc<dyn Fn(FormData) -> Option<M> + Send + Sync>` —
 /// the VNode tree is shared across the live session's dispatch table, so the
 /// handler must be safely readable from any thread that services a request).
@@ -921,7 +921,7 @@ pub fn html_on_raw_<M, T, F: Fn(T) -> M>(_name: String, _payload: F) -> Attribut
     Attribute::NoAttr
 }
 
-/// `Std.Html.Events.onSubmit` BARE-VALUE shape (#167) — dispatch a FIXED
+/// `Std.Html.Events.onSubmit` BARE-VALUE shape — dispatch a FIXED
 /// `msg`, ignoring the submitted `FormData` entirely. Complements
 /// `html_on_raw_` (the typed-record decode shape above): the "form fields
 /// are already synced into Model via `onInput`/`onChange`; submit just
@@ -1091,9 +1091,8 @@ mod tests {
         assert!(SafeAttrName::parse("onload").is_none() && SafeAttrName::parse("srcdoc").is_none());
     }
 
-    // SECURITY regression (guardian 2026-06-27): the sibling sink
-    // `Std.Html.attrToString` must drop the SAME script-bearing names as
-    // render_into — both now route through SafeAttrName.
+    // SECURITY: the sibling sink `Std.Html.attrToString` must drop the SAME
+    // script-bearing names as render_into — both route through SafeAttrName.
     #[test]
     fn attr_to_string_drops_event_handler_and_srcdoc() {
         let onload: String =
@@ -1507,7 +1506,7 @@ mod tests {
         assert!(out.contains("&lt;b&gt;raw&lt;/b&gt;"), "{out}");
     }
 
-    // ── #46: attribute-builder injection regressions (design §Q6 #1–5, #10) ────
+    // ── attribute-builder injection regressions (design §Q6 #1–5, #10) ────
 
     #[test]
     fn attr_value_quote_breakout_is_escaped() {
@@ -1621,7 +1620,7 @@ mod tests {
         );
     }
 
-    // ── #76: 20-kernel wiring batch — Html document-node regressions ─────────
+    // ── Html document-node regressions ─────────
 
     #[test]
     fn html_doctype_helper_wraps_doctype_wrapper_tag() {

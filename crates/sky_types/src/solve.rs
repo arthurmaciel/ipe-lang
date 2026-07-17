@@ -1,10 +1,11 @@
-//! The constraint solver, ported from the M0-relevant core of
+//! The constraint solver, ported from the relevant core of
 //! `Sky.Type.Solve` (derivative of elm/compiler's `Type.Solve`,
 //! BSD-3-Clause).
 //!
 //! The reference solver threads ranks / marks / generalisation for full
-//! let-polymorphism. The M0 subset has no nested `let`-generalisation to model,
-//! so solving reduces to: run every generated equality [`Constraint`] through
+//! let-polymorphism. The supported subset has no nested `let`-generalisation
+//! to model, so solving reduces to: run every generated equality
+//! [`Constraint`] through
 //! the unifier, in order, sharing one [`Budget`]. The defensive solver-step
 //! bound (`SKY_SOLVER_BUDGET`) carries over verbatim in spirit.
 
@@ -16,14 +17,14 @@ use crate::unify::unify;
 use crate::unionfind::{UnionFind, VarId};
 
 /// Default cap on solver steps before bailing — matches the Haskell
-/// `defaultSolverBudget`. M0 programs consume well under a thousand steps; the
-/// cap exists purely to bound adversarial blow-up.
+/// `defaultSolverBudget`. Ordinary programs consume well under a thousand
+/// steps; the cap exists purely to bound adversarial blow-up.
 pub const DEFAULT_SOLVER_BUDGET: u64 = 5_000_000;
 
 /// Environment variable that overrides [`DEFAULT_SOLVER_BUDGET`].
 pub const BUDGET_ENV: &str = "SKY_SOLVER_BUDGET";
 
-/// A single M0 constraint: the types of two solver variables must unify. The
+/// A single constraint: the types of two solver variables must unify. The
 /// [`Span`] is the source region blamed in any resulting [`TypeError`].
 /// `home` is the module path that owns the expression emitting this constraint
 /// — populated by [`constrain::Builder`] from the currently-processed def's

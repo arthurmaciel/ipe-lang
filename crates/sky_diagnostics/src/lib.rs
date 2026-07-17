@@ -75,7 +75,7 @@ mod tests {
 
     #[test]
     fn coarse_variants_still_construct() {
-        // Additive guarantee: every Milestone-0 variant remains buildable.
+        // Additive guarantee: every coarse variant remains buildable.
         let _ = Diagnostic::Parse {
             span: Span::DUMMY,
             msg: ParseError::TooDeep,

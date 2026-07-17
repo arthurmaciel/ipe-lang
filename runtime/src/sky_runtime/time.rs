@@ -597,7 +597,7 @@ mod time_advanced_tests {
         assert!(matches!(r, SkyResult::Err(_)));
     }
 
-    // ── New kernels (go-parity gaps sweep 2026-06-15) ─────────────────────────
+    // ── go-parity kernels ─────────────────────────
 
     #[test]
     fn test_add_millis() {

@@ -99,7 +99,7 @@ pub fn basics_clamp<T: PartialOrd>(lo: T, hi: T, x: T) -> T {
     }
 }
 
-// ── Basics numerics (#115) ──────────────────────────────────────────────────
+// ── Basics numerics ──────────────────────────────────────────────────
 
 /// Sky `negate : number -> number` — unary negation on Int or Float.
 ///
@@ -145,7 +145,7 @@ pub fn basics_abs<T: PartialOrd + SaturatingNeg + Copy + Default>(x: T) -> T {
     if x < zero { x.saturating_neg() } else { x }
 }
 
-// ── end Basics numerics (#115) ──────────────────────────────────────────────
+// ── end Basics numerics ──────────────────────────────────────────────
 
 /// Sky `errorToString : a -> String` — universal Sky stringifier.
 /// Used by Sky.Test.debugShow and friends to render any Sky value into
@@ -159,9 +159,9 @@ pub fn basics_error_to_string<T: crate::sky_runtime::stringify::SkyStringify>(v:
     v.sky_show()
 }
 
-// Sky.Core.Error's runtime kernels moved to `error.rs` (backlog #85/#160 —
-// `Error` is now the real `sky_runtime::error::SkyError` ADT, not a bare
-// `String`). `Error.toString` still reuses `basics_error_to_string` above.
+// Sky.Core.Error's runtime kernels live in `error.rs` — `Error` is the real
+// `sky_runtime::error::SkyError` ADT, not a bare `String`. `Error.toString`
+// reuses `basics_error_to_string` above.
 
 /// Sky `Debug.toString` — the `{{expr}}` string-interpolation stringifier.
 /// Display-based, NOT Debug: a `String` interpolates as itself (no surrounding
@@ -188,8 +188,6 @@ pub fn basics_to_string<T: std::fmt::Display>(v: T) -> String {
 mod tests {
     use super::*;
 
-    // Sky.Core.Error kernel tests moved to `error.rs` (backlog #85/#160 — the
-    // real ADT superseded the string-identity slice these tests exercised).
     #[test]
     fn error_to_string_renders_kind_and_message() {
         // `Error.toString` reuses `basics_error_to_string`, dispatching through

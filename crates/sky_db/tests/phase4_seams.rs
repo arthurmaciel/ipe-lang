@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
-//! Phase-4 proofs (spec:
-//! `docs/architecture/salsa-incremental-compilation-2026-07-11.md` §5 row 4 —
-//! plan Tasks 12 and 13).
+//! Coarse per-program seam proofs (spec:
+//! `docs/architecture/salsa-incremental-compilation-2026-07-11.md` §5 row 4).
 //!
 //! [`sky_db::typecheck`] and [`sky_db::lower_program`] are the coarse
 //! per-program SEAMS over `sky_types::infer_attributed` / `sky_lower::lower`:
@@ -88,14 +87,14 @@ const ENTRY_WITH_TWO_DEPS: &str = "module Entry exposing (e)\n\n\
     e = visible + c\n";
 
 // ---------------------------------------------------------------------------
-// typecheck (Task 12 — the coarse per-program SEAM)
+// typecheck — the coarse per-program SEAM
 // ---------------------------------------------------------------------------
 
 /// Coarse-but-memoized, the `linked_program` pattern: a repeat demand and a
 /// byte-equal re-save execute nothing; a reachable dep's body edit
-/// re-executes the whole solve (documented coarseness — true per-module
-/// `typecheck(ModuleId)` is the recorded Phase-4 follow-up, not shipped
-/// here).
+/// re-executes the whole solve (documented coarseness — a true per-module
+/// `typecheck(ModuleId)` query is finer than this seam, which is
+/// program-wide).
 #[test]
 fn typecheck_memoized_coarse_floor() {
     let (mut db, log) = logged_db();
@@ -138,8 +137,7 @@ fn typecheck_memoized_coarse_floor() {
 /// body (unrelated to sibling module A — no import edge between them) still
 /// forces a full re-execution of `typecheck`, because both are merged into
 /// the SAME `linked_program`. A true per-module query would leave an
-/// A-only-dependent memo untouched here; this seam does not, and the gap is
-/// the documented Phase-4 follow-up.
+/// A-only-dependent memo untouched here; this seam does not.
 #[test]
 fn typecheck_is_program_wide_not_per_module() {
     let (mut db, log) = logged_db();
@@ -163,7 +161,7 @@ fn typecheck_is_program_wide_not_per_module() {
 }
 
 // ---------------------------------------------------------------------------
-// lower_program (Task 13 — the coarse per-program SEAM, typecheck's sibling)
+// lower_program — the coarse per-program SEAM, typecheck's sibling
 // ---------------------------------------------------------------------------
 
 /// Same coarse-but-memoized shape as `typecheck`, one layer further down the

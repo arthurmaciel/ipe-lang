@@ -1,30 +1,26 @@
 #![forbid(unsafe_code)]
-//! Phase 8 — the LSP handoff seam (spec:
-//! `docs/architecture/salsa-incremental-compilation-2026-07-11.md` §15 —
-//! plan Task 26, `docs/superpowers/plans/2026-07-03-incremental-salsa.md`
-//! "Phase F").
+//! The LSP handoff seam (spec:
+//! `docs/architecture/salsa-incremental-compilation-2026-07-11.md` §15).
 //!
-//! **Scope, exactly per the plan's own wording**: "this task is seam +
-//! integration test only; the LSP feature itself is Tier-3 #4" (tracked
-//! separately as BACKLOG row E.3). This file does NOT implement an LSP
-//! server, JSON-RPC framing, or editor integration — it proves the salsa
-//! database `sky_db` already ships is directly reusable, unmodified, by an
-//! LSP-shaped request loop: in-memory buffer inputs (no disk read),
-//! `Send`-safe cross-thread reuse (one worker thread per demand, exactly
-//! `ipe watch`'s Task-25 orchestrator/worker split — see
-//! `crates/skyc/src/watch.rs`'s own doc comment), and salsa's own
-//! cancellation firing on a `typecheck` demand exactly as it already does
-//! on `ipe watch`'s `compile_prepared` (`crates/skyc/tests/
-//! watch_cancellation.rs`).
+//! **Scope**: seam + integration test only; the LSP feature itself is a
+//! separate deliverable. This file does NOT implement an LSP server,
+//! JSON-RPC framing, or editor integration — it proves the salsa database
+//! `sky_db` already ships is directly reusable, unmodified, by an LSP-shaped
+//! request loop: in-memory buffer inputs (no disk read), `Send`-safe
+//! cross-thread reuse (one worker thread per demand, exactly `ipe watch`'s
+//! orchestrator/worker split — see `crates/skyc/src/watch.rs`'s own doc
+//! comment), and salsa's own cancellation firing on a `typecheck` demand
+//! exactly as it already does on `ipe watch`'s `compile_prepared`
+//! (`crates/skyc/tests/watch_cancellation.rs`).
 //!
-//! Nothing in `sky_db` needed to change for this: [`sky_db::SourceFile`] /
+//! Nothing in `sky_db` needs to change for this: [`sky_db::SourceFile`] /
 //! [`sky_db::SourceRoot`] are plain salsa inputs the driver already sets
 //! from disk-read text ([`sky_db::sync_source_root`]) — an LSP driver sets
 //! the exact same inputs from an unsaved editor buffer instead. `sky_db`'s
-//! own module doc already states the invariant this seam depends on
-//! (INV-1): "no query here touches `std::fs`, `std::env`, or the clock" —
-//! this test suite never creates a temp file or opens a real path, which is
-//! the structural (not merely observed) proof that the access pattern below
+//! own module doc states the invariant this seam depends on (INV-1): "no
+//! query here touches `std::fs`, `std::env`, or the clock" — this test
+//! suite never creates a temp file or opens a real path, which is the
+//! structural (not merely observed) proof that the access pattern below
 //! never routes through a file-reading path.
 
 use std::panic::AssertUnwindSafe;
@@ -71,7 +67,7 @@ const ENTRY_TYPE_ERROR: &str = "module Main exposing (main)\n\nimport A exposing
 
 /// The LSP's request loop must be able to hand a database clone to a
 /// worker thread per demand (exactly [`sky_db::SkyDatabase`]'s existing
-/// `Clone` + `ipe watch`'s own orchestrator/worker split). This is a
+/// `Clone` + `ipe watch`'s orchestrator/worker split). This is a
 /// compile-time assertion, not a runtime one: if a future change to
 /// `SharedInterner` or the `salsa::Storage<SkyDatabase>` field ever made the
 /// database `!Send`, this line fails to compile rather than the property
@@ -85,8 +81,8 @@ const _: fn() = || {
 // (a) In-memory buffer inputs drive diagnostics + navigation, no disk I/O
 // ---------------------------------------------------------------------------
 
-/// The LSP-shaped access pattern from the plan's own Task-26 test-first
-/// spec: "`set_source_text` on an open buffer, demand `typecheck` for
+/// The LSP-shaped access pattern from the test-first spec:
+/// "`set_source_text` on an open buffer, demand `typecheck` for
 /// diagnostics, demand `parse`/`resolve_imports` for navigation" — driven
 /// entirely against in-memory [`SourceFile`] inputs, then a simulated
 /// keystroke (an in-place buffer edit) whose effect every re-demand
@@ -102,7 +98,7 @@ fn lsp_shaped_buffer_edit_drives_diagnostics_and_navigation_in_memory() {
     let root = root_of(&db, &[(&["A"], a), (&["Main"], entry)]);
 
     // Diagnostics: `typecheck` is the same coarse per-program seam `ipe
-    // watch` already consumes (Phase 4, §9 of the spec) — an LSP's
+    // watch` already consumes (§9 of the spec) — an LSP's
     // publishDiagnostics push would demand exactly this.
     let solved =
         sky_db::typecheck(&db, root, entry).expect("well-typed buffer must type-check clean");
@@ -154,16 +150,16 @@ fn lsp_shaped_buffer_edit_drives_diagnostics_and_navigation_in_memory() {
 
 // ---------------------------------------------------------------------------
 // (c) Cancellation on the next keystroke, using the LSP's own diagnostics
-// query directly (not `skyc::compile_prepared`) — proving the mechanism
-// Task 25 already wired for `ipe watch` is genuinely query-agnostic.
+// query directly (not `skyc::compile_prepared`) — proving the cancellation
+// mechanism already wired for `ipe watch` is genuinely query-agnostic.
 // ---------------------------------------------------------------------------
 
 /// Mirrors `crates/skyc/tests/watch_cancellation.rs`'s
 /// `compile_worker_is_cancelled_by_a_concurrent_input_edit`, but against
 /// [`sky_db::typecheck`] directly (the LSP's own diagnostics demand) rather
-/// than `skyc::compile_prepared` — proving Task 25's cancellation mechanism
-/// is a property of the DATABASE, not of `ipe watch`'s particular call
-/// chain, so the LSP inherits it for free.
+/// than `skyc::compile_prepared` — proving the cancellation mechanism is a
+/// property of the DATABASE, not of `ipe watch`'s particular call chain, so
+/// the LSP inherits it for free.
 ///
 /// Deterministic, no wall-clock race (same technique as the watch proof):
 /// an event callback signals the worker's FIRST `WillExecute`, guaranteeing
@@ -190,7 +186,7 @@ fn lsp_diagnostics_query_is_cancelled_by_the_next_keystroke_and_converges_to_lat
     // The LSP demands diagnostics for the open buffer on a background
     // worker thread — never on the request-loop thread itself — holding a
     // CLONED database handle, exactly `ipe watch`'s orchestrator/worker
-    // split (Task 25's own doc comment in `crates/skyc/src/watch.rs`).
+    // split (see the doc comment in `crates/skyc/src/watch.rs`).
     let db_worker = db.clone();
     let worker = thread::spawn(move || {
         salsa::Cancelled::catch(AssertUnwindSafe(|| {
@@ -224,9 +220,8 @@ fn lsp_diagnostics_query_is_cancelled_by_the_next_keystroke_and_converges_to_lat
     // The db converges to the LATEST input state with no manual recovery:
     // a plain fresh demand right after the cancelled worker joins sees the
     // edited buffer and reports the NEW diagnostic — proving no stale
-    // result was committed anywhere along the cancelled query's path (the
-    // plan's own acceptance criterion: "the db converges to the latest
-    // input state; no stale result is committed").
+    // result was committed anywhere along the cancelled query's path: the db
+    // converges to the latest input state; no stale result is committed.
     sky_db::typecheck(&db, root, entry)
         .expect_err("a fresh demand after the cancelling edit must see the edited buffer");
 }

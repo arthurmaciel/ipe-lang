@@ -1,5 +1,5 @@
 //! The canonicalisation environment: the name → resolution tables consulted
-//! during name resolution. Port of the M0 subset of
+//! during name resolution. Port of the supported subset of
 //! `Sky.Canonicalise.Environment`.
 //!
 //! Iteration order is never observable (lookups only), but the tables are
@@ -57,9 +57,9 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Sky", "Core", "Encoding"], "Encoding"),
     (&["Sky", "Core", "Crypto"], "Crypto"),
     (&["Sky", "Core", "Uuid"], "Uuid"),
-    // `Sky.Core.Secret` — opaque secret-string wrapper (backlog #44).
+    // `Sky.Core.Secret` — opaque secret-string wrapper.
     (&["Sky", "Core", "Secret"], "Secret"),
-    // `Sky.Core.CssSafety` — the four Std.Css leaf security kernels (#47). This
+    // `Sky.Core.CssSafety` — the four Std.Css leaf security kernels. This
     // is a KERNEL qualifier (imported by the compiled-source `Std.Css`); `Std.Css`
     // itself stays OUT of this table (it is compiled source, registered in skyc's
     // `COMPILED_STD_MODULES`), so the `compiled_vs_kernel_qualifier_disjoint`
@@ -76,7 +76,7 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Sky", "Core", "Random"], "Random"),
     (&["Sky", "Core", "File"], "File"),
     (&["Sky", "Core", "Http"], "Http"),
-    // NOTE — `Sky.Core.Path` (#202) and `Sky.Core.Regex` (#194) are DELIBERATELY
+    // NOTE — `Sky.Core.Path` and `Sky.Core.Regex` are DELIBERATELY
     // absent here. They are COMPILED-SOURCE Layer-3 modules (registered in
     // `skyc::stdlib::COMPILED_STD_MODULES`): their members are point-free
     // `Ffi.kernel "Path_*"` / `"Regex_*"` aliases that `detect_kernel_alias`
@@ -94,16 +94,16 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Std", "Sub"], "Sub"),
     (&["Std", "Db"], "Db"),
     (&["Std", "Db", "Decode"], "Db.Decode"),
-    (&["Std", "Db", "Sql"], "Sql"), // backlog #61 — SqlFragment builder
+    (&["Std", "Db", "Sql"], "Sql"), // SqlFragment builder
     (&["Std", "Time"], "Time"),
     (&["Std", "System"], "System"),
     (&["Std", "Ui"], "Ui"),
     (&["Std", "Ui", "Background"], "Background"),
     (&["Std", "Ui", "Border"], "Border"),
     (&["Std", "Ui", "Font"], "Font"),
-    (&["Std", "Ui", "Region"], "Region"), // #117
-    (&["Std", "Ui", "Input"], "Input"),   // Task #124
-    (&["Std", "Ui", "Lazy"], "Lazy"),     // #146
+    (&["Std", "Ui", "Region"], "Region"),
+    (&["Std", "Ui", "Input"], "Input"),
+    (&["Std", "Ui", "Lazy"], "Lazy"),
     (&["Std", "Ui", "Keyed"], "Keyed"),   // sky-key diff identity
     (&["Std", "Decimal"], "Decimal"),     // arbitrary-precision decimal arithmetic
     (&["Std", "Html"], "Html"),
@@ -112,14 +112,14 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Std", "Live"], "Live"),
     (&["Std", "Tui"], "Tui"),
     (&["Std", "Webview"], "Webview"),
-    // ── Effect stdlib modules (#111) ────────────────────────────────────────
+    // ── Effect stdlib modules ───────────────────────────────────────────────
     (&["Std", "Cli"], "Cli"),
     (&["Sky", "Cli"], "Cli"),
     (&["Std", "Auth"], "Auth"),
     (&["Sky", "Auth"], "Auth"),
     (&["Sky", "Http", "Server", "Stream"], "Stream"),
     (&["Sky", "Core", "Http", "Stream"], "HttpStream"),
-    // #127: Sky.Http.Server.WebSocket (12 kernels).
+    // Sky.Http.Server.WebSocket (12 kernels).
     (&["Sky", "Http", "Server", "WebSocket"], "Ws"),
 ];
 
@@ -132,15 +132,15 @@ pub enum VarHome {
     TopLevel(Vec<Symbol>),
     /// A stdlib kernel function.
     ///
-    /// `id` is `Some` when the kernel was resolved against `stdlib_index` at
-    /// parse time (Phase B fast path in `lower_callee`); `None` for entries
-    /// present in `qual_vars` but not yet wired into the registry (legacy
+    /// `id` is `Some` when the kernel resolves against `stdlib_index` at
+    /// parse time (the fast path in `lower_callee`); `None` for entries
+    /// present in `qual_vars` but not wired into the registry (the
     /// string-match fallback in `lower_callee`).  `module` and `name` are
-    /// always present for diagnostics and the legacy path.
+    /// always present for diagnostics and that fallback path.
     Kernel(Option<StdlibKernel>, Symbol, Symbol),
 }
 
-/// One origin of a wildcard-exposed stdlib value member (#98).
+/// One origin of a wildcard-exposed stdlib value member.
 ///
 /// Records the resolved kernel [`VarHome`] together with the user's import
 /// `dep_path` (e.g. `["Std", "Html"]`) so an ambiguous bare use can name every
@@ -192,7 +192,7 @@ pub struct Env {
     /// to `VarCtor` — needed for compiled-source ADTs like `Std.Money`'s
     /// `Currency` constructors accessed as `Money.USD`, `Money.EUR`, etc.
     pub qual_ctors: Rc<BTreeMap<Symbol, BTreeMap<Symbol, CtorHome>>>,
-    /// **Low-priority wildcard-exposed stdlib value members (#98).**
+    /// **Low-priority wildcard-exposed stdlib value members.**
     ///
     /// A bare value name maps to the set of stdlib modules that flooded it into
     /// unqualified scope via `import M exposing (..)`, keyed by canonical
@@ -208,13 +208,13 @@ pub struct Env {
     /// use, that use is `AmbiguousImport` (SKY-N0024) AT THE USE SITE, never a
     /// silent last-wins.
     pub wildcard_vars: Rc<BTreeMap<Symbol, BTreeMap<Symbol, WildcardOrigin>>>,
-    /// **Phase-A parse-once registry index.**  Maps `(qualifier_sym, name_sym)`
+    /// **Parse-once registry index.**  Maps `(qualifier_sym, name_sym)`
     /// to the typed [`StdlibKernel`] variant, built anti-drift from
     /// [`StdlibKernel::ALL`] in `install_prelude_qualifiers`.
     ///
-    /// Phase B will thread this through `VarHome::Kernel`; Phase A exposes it
-    /// here so the `canon_equals_registry` tripwire test can validate parity
-    /// with `qual_vars` without touching any downstream path.
+    /// Threaded through `VarHome::Kernel`, and exposed here so the
+    /// `canon_equals_registry` tripwire test can validate parity with
+    /// `qual_vars` without touching any downstream path.
     pub stdlib_index: Rc<BTreeMap<(Symbol, Symbol), StdlibKernel>>,
 }
 
@@ -231,7 +231,7 @@ impl Env {
             home,
             ..Self::default()
         };
-        // Phase B: install_prelude_qualifiers MUST run first — it populates
+        // install_prelude_qualifiers MUST run first — it populates
         // stdlib_index, which install_builtin_vars consults for the fast-path id.
         env.install_prelude_qualifiers(interner)?;
         env.install_builtin_ctors(interner)?;
@@ -253,7 +253,7 @@ impl Env {
         let maybe = interner.intern("Maybe")?;
         let result = interner.intern("Result")?;
         let bool_ = interner.intern("Bool")?;
-        // Db ADTs (M5b-db).
+        // Db ADTs.
         let sqlvalue = interner.intern("SqlValue")?;
         let sqlfield = interner.intern("SqlField")?;
         // Sky.Core.Http.Stream ADTs (HttpStream kernel qualifier — not a compiled
@@ -261,7 +261,7 @@ impl Env {
         // `build_module_exports`; they must be pre-registered here instead).
         let chunkev = interner.intern("ChunkEvent")?;
         let streamid = interner.intern("StreamId")?;
-        // Sky.Core.Error ADTs (E-12, #152).
+        // Sky.Core.Error ADTs.
         //
         // `Error` is both a type name (currently `SkyError = String` in the runtime)
         // and a constructor `Error ErrorKind ErrorInfo` — arity 2.  Registering the
@@ -274,7 +274,7 @@ impl Env {
         let error_type = interner.intern("Error")?;
         let errorkind = interner.intern("ErrorKind")?;
         // `ErrorDetails` — the 5-variant enrichment union carried optionally on
-        // `ErrorInfo.details : Maybe ErrorDetails` (backlog #85 follow-up, same
+        // `ErrorInfo.details : Maybe ErrorDetails` (same
         // registration recipe as `ErrorKind`).
         let errordetails = interner.intern("ErrorDetails")?;
         // (constructor name, owning built-in type, index within the type, arity).
@@ -285,7 +285,7 @@ impl Env {
             ("Nothing", maybe, 1, 0),
             ("Ok", result, 0, 1),
             ("Err", result, 1, 1),
-            // ── SqlValue variants (M5b-db) ────────────────────────────────────
+            // ── SqlValue variants ─────────────────────────────────────────────
             // Index order matches the `StdDbSqlValue` enum emitted by the backend
             // and the `into_sql_param()` dispatch in the runtime; DO NOT reorder.
             ("SqlString", sqlvalue, 0, 1),
@@ -297,7 +297,7 @@ impl Env {
             ("SqlDecimal", sqlvalue, 6, 1), // lossless TEXT decimal representation
             ("SqlMoney", sqlvalue, 7, 1),   // "ISO_CODE AMOUNT" format (TEXT)
             ("SqlNull", sqlvalue, 8, 1),    // type-witness inner value → Null
-            // ── SqlField variants (M5b-db) ────────────────────────────────────
+            // ── SqlField variants ─────────────────────────────────────────────
             ("SetField", sqlfield, 0, 1), // SetField : SqlValue -> SqlField
             ("OmitField", sqlfield, 1, 0), // OmitField : SqlField (nullary)
             // ── ChunkEvent variants (Sky.Core.Http.Stream) ───────────────────
@@ -310,7 +310,7 @@ impl Env {
             // ── StreamId (Sky.Core.Http.Stream) ──────────────────────────────
             // StreamId : Int -> StreamId (opaque wrapper used in Stream.open return)
             ("StreamId", streamid, 0, 1),
-            // ── Error / ErrorKind (E-12, #152) ────────────────────────────────
+            // ── Error / ErrorKind ─────────────────────────────────────────────
             // `Error : ErrorKind -> ErrorInfo -> Error` — arity 2.
             // Registering this fixes N0003 for patterns `Error kind info ->`.
             ("Error", error_type, 0, 2),
@@ -327,7 +327,7 @@ impl Env {
             ("Conflict", errorkind, 8, 0),
             ("Unavailable", errorkind, 9, 0),
             ("Unexpected", errorkind, 10, 0),
-            // ── ErrorDetails variants (backlog #85 follow-up) ─────────────────
+            // ── ErrorDetails variants ─────────────────────────────────────────
             // `FfiPanic : PanicInfo -> ErrorDetails`
             // `TypeMismatch : TypeInfo -> ErrorDetails`
             // `HttpStatus : Int -> ErrorDetails`
@@ -435,11 +435,11 @@ impl Env {
         }
     }
 
-    /// Built-in unqualified variables (from the Prelude). M0 subset of
+    /// Built-in unqualified variables (from the Prelude). Supported subset of
     /// `Environment.builtinVars`.
     ///
     /// Must run AFTER `install_prelude_qualifiers` so `stdlib_index` is
-    /// populated and the Phase-B id fast-path can be threaded in.
+    /// populated and the id fast-path can be threaded in.
     fn install_builtin_vars(&mut self, interner: &mut Interner) -> DResult<()> {
         let basics = interner.intern("Basics")?;
         let error_sym = interner.intern("Error")?;
@@ -461,13 +461,13 @@ impl Env {
             // can look up its scheme without hitting SKY-L0108.
             ("errorToString", error_sym, "toString"),
             ("println", log, "println"),
-            // ── Basics numerics (#115) ──────────────────────────────────────
+            // ── Basics numerics ─────────────────────────────────────────────
             ("negate", basics, "negate"),
             ("abs", basics, "abs"),
             ("sqrt", basics, "sqrt"),
             ("min", basics, "min"),
             ("max", basics, "max"),
-            // ── end Basics numerics (#115) ──────────────────────────────────
+            // ── end Basics numerics ─────────────────────────────────────────
         ] {
             let key = interner.intern(name)?;
             let func_sym = interner.intern(func)?;
@@ -477,7 +477,7 @@ impl Env {
         Ok(())
     }
 
-    /// Auto-qualified prelude kernel modules. M0 subset of
+    /// Auto-qualified prelude kernel modules. Supported subset of
     /// `Environment.preludeQualifiers` — `String.fromInt`, `String.fromFloat`,
     /// etc. resolve without an explicit `import String`.
     #[allow(clippy::too_many_lines)] // declarative table — extracting a helper would obscure the data
@@ -564,7 +564,7 @@ impl Env {
                     "zip",
                     "isEmpty",
                     "cons",
-                    // ── List batch (#119) ────────────────────────────────────
+                    // ── List batch ───────────────────────────────────────────
                     "filterMap",
                     "sortBy",
                 ],
@@ -599,10 +599,10 @@ impl Env {
                     "traverse",
                 ],
             ),
-            // `Sky.Core.Error` — the real `Error ErrorKind ErrorInfo` ADT (backlog
-            // #85/#160). Message constructors + nullary constructors + `toString`
+            // `Sky.Core.Error` — the real `Error ErrorKind ErrorInfo` ADT.
+            // Message constructors + nullary constructors + `toString`
             // render + `withMessage` modifier + `isRetryable` classification +
-            // `withDetails` modifier (backlog #85 follow-up — attaches the
+            // `withDetails` modifier (attaches the
             // `ErrorDetails` union to `ErrorInfo.details : Maybe ErrorDetails`).
             (
                 "Error",
@@ -624,7 +624,7 @@ impl Env {
                     "withDetails",
                 ],
             ),
-            // `Sky.Core.CssSafety` — the four Std.Css leaf security kernels (#47):
+            // `Sky.Core.CssSafety` — the four Std.Css leaf security kernels:
             // three `String -> Maybe String` parsers + the `String -> String`
             // `<style>`-breakout floor. Imported (and called unqualified) by the
             // compiled-source `Std.Css`.
@@ -638,9 +638,9 @@ impl Env {
                 ],
             ),
             // `Std.Log` — qualified form (`import Std.Log as Log`). `println`/
-            // `info`/`debug`/`warn`/`error` are backed (task #78); the `*With`
+            // `info`/`debug`/`warn`/`error` are backed; the `*With`
             // variants take Stringify-bounded attrs and stay fail-closed
-            // (SKY-L0108) until #77 adds the Stringify obligation.
+            // (SKY-L0108) until the Stringify obligation is added.
             (
                 "Log",
                 &[
@@ -715,7 +715,7 @@ impl Env {
                     "compare", "negate", "abs", "sqrt", "min", "max",
                 ],
             ),
-            // `Sky.Core.Dict` — associative map kernels (M4d).
+            // `Sky.Core.Dict` — associative map kernels.
             (
                 "Dict",
                 &[
@@ -723,7 +723,7 @@ impl Env {
                     "values", "toList", "fromList", "map", "foldl", "union",
                 ],
             ),
-            // `Sky.Core.Set` — set kernels (M4d).
+            // `Sky.Core.Set` — set kernels.
             (
                 "Set",
                 &[
@@ -739,7 +739,7 @@ impl Env {
                     "diff",
                 ],
             ),
-            // `Sky.Core.Bytes` — byte-buffer kernels (M4e).
+            // `Sky.Core.Bytes` — byte-buffer kernels.
             (
                 "Bytes",
                 &[
@@ -756,7 +756,7 @@ impl Env {
                     "slice",
                 ],
             ),
-            // `Sky.Core.Encoding` — text encoding helpers (M4f).
+            // `Sky.Core.Encoding` — text encoding helpers.
             (
                 "Encoding",
                 &[
@@ -768,14 +768,14 @@ impl Env {
                     "hexDecode",
                 ],
             ),
-            // `Sky.Core.Json.Encode` — JSON encoder (M4g).
+            // `Sky.Core.Json.Encode` — JSON encoder.
             (
                 "JsonEnc",
                 &[
                     "string", "int", "float", "bool", "null", "list", "object", "encode",
                 ],
             ),
-            // `Sky.Core.Json.Decode` — JSON decoder combinators (M4h).
+            // `Sky.Core.Json.Decode` — JSON decoder combinators.
             (
                 "JsonDec",
                 &[
@@ -798,12 +798,12 @@ impl Env {
                     "map4",
                 ],
             ),
-            // `Sky.Core.Json.Decode.Pipeline` — pipeline-style record decoders (M4h).
+            // `Sky.Core.Json.Decode.Pipeline` — pipeline-style record decoders.
             (
                 "JsonDecP",
                 &["required", "optional", "custom", "requiredAt"],
             ),
-            // `Sky.Core.Crypto` — hashes / HMAC / RSA / AEAD / key-derivation / random (M5a).
+            // `Sky.Core.Crypto` — hashes / HMAC / RSA / AEAD / key-derivation / random.
             (
                 "Crypto",
                 &[
@@ -826,17 +826,17 @@ impl Env {
                     "randomToken",
                 ],
             ),
-            // `Sky.Core.Uuid` — UUID generation and parsing (M5b).
+            // `Sky.Core.Uuid` — UUID generation and parsing.
             // `v4` and `v7` are arity-0 (bare value); `parse` is arity-1.
             ("Uuid", &["v4", "v7", "parse"]),
-            // `Sky.Core.Secret` — opaque secret-string wrapper (backlog #44).
+            // `Sky.Core.Secret` — opaque secret-string wrapper.
             // `fromString` is the seal; `reveal` is the single greppable
             // un-parse; `redacted` is the explicit "<redacted>" accessor.
             ("Secret", &["fromString", "reveal", "redacted"]),
-            // `Sky.Core.Jwt` — JWT encode/decode for HS256 and RS256 (M5b),
+            // `Sky.Core.Jwt` — JWT encode/decode for HS256 and RS256,
             // plus builder API: claims / hs256 / rs256 / subject / issuer /
             // audience / expiresAt / notBefore / issuedAt / jwtId / withClaim /
-            // encode / decode (D-00 / #152).
+            // encode / decode.
             (
                 "Jwt",
                 &[
@@ -844,7 +844,7 @@ impl Env {
                     "decodeHs256",
                     "encodeRs256",
                     "decodeRs256",
-                    // builder API (D-00 / #152)
+                    // builder API
                     "claims",
                     "hs256",
                     "rs256",
@@ -860,7 +860,7 @@ impl Env {
                     "decode",
                 ],
             ),
-            // `Sky.Core.Task` — Task combinators (M5a) + retry surface.
+            // `Sky.Core.Task` — Task combinators + retry surface.
             (
                 "Task",
                 &[
@@ -890,9 +890,9 @@ impl Env {
                     "withKind",
                 ],
             ),
-            // `Sky.Core.Io` — I/O effects (M5a).
+            // `Sky.Core.Io` — I/O effects.
             ("Io", &["readLine", "writeStdout", "writeStderr"]),
-            // `Sky.Core.Time` — time effects (M5a) + M5c TEA tick subscription.
+            // `Sky.Core.Time` — time effects + TEA tick subscription.
             (
                 "Time",
                 &[
@@ -906,7 +906,7 @@ impl Env {
                     "daysInMonth",
                 ],
             ),
-            // `Sky.Core.System` — system effects (M5a).
+            // `Sky.Core.System` — system effects.
             (
                 "System",
                 &[
@@ -923,9 +923,9 @@ impl Env {
                     "exit",
                 ],
             ),
-            // `Sky.Core.Random` — random effects (M5a).
+            // `Sky.Core.Random` — random effects.
             ("Random", &["int", "float", "choice"]),
-            // `Sky.Core.File` — file effects (M5a).
+            // `Sky.Core.File` — file effects.
             (
                 "File",
                 &[
@@ -946,7 +946,7 @@ impl Env {
                     "delete",
                 ],
             ),
-            // `Sky.Core.Http` — outbound HTTP client (M5b).
+            // `Sky.Core.Http` — outbound HTTP client.
             // `get` / `post` / `request` are effect kernels (Task Error
             // HttpResponse); `parseQuery` is a pure kernel (String -> Dict
             // String String); the `with*` builders + `defaultRequest` are ALSO
@@ -973,18 +973,18 @@ impl Env {
                     "parseQuery",
                 ],
             ),
-            // ── M5c/M5d/M5e: TEA Cmd / Sub kernels ──────────────────────────────
-            // `Cmd.publish` / `Cmd.publishNoEcho` are wired in M5e; runtime
-            // `cmd_publish` / `cmd_publish_no_echo` exist in live/pubsub.rs.
-            // `PubSub.*` still absent — qualifier "PubSub" lands in M6.
-            // `Sub.subscribeTopic` is wired (M5d): runtime `sub_subscribe_topic`
-            // exists in live/pubsub.rs; emit path uses the standard N-arg route.
+            // ── TEA Cmd / Sub kernels ───────────────────────────────────────────
+            // `Cmd.publish` / `Cmd.publishNoEcho` are backed by runtime
+            // `cmd_publish` / `cmd_publish_no_echo` in live/pubsub.rs.
+            // The `PubSub.*` qualifier is not registered here.
+            // `Sub.subscribeTopic` is backed by runtime `sub_subscribe_topic`
+            // in live/pubsub.rs; emit path uses the standard N-arg route.
             (
                 "Cmd",
                 &["none", "batch", "perform", "publish", "publishNoEcho"],
             ),
             ("Sub", &["none", "batch", "every", "subscribeTopic"]),
-            // ── Db kernels (M5b-db) ─────────────────────────────────────────────
+            // ── Db kernels ──────────────────────────────────────────────────────
             // `Std.Db` — database connection + query surface.
             // All effect-returning kernels (Task Error …) and pure helpers
             // (`getString`, `getInt`, `getBool`, `getField`) are registered here.
@@ -1021,9 +1021,8 @@ impl Env {
                     "defaultMigration",
                 ],
             ),
-            // `Std.Db.Sql` — typed, parameterized WHERE-fragment builder
-            // (backlog #61). Replaces the removed `Db.unsafeFindWhere` raw-
-            // string escape hatch: a `SqlFragment` can only be built through
+            // `Std.Db.Sql` — typed, parameterized WHERE-fragment builder.
+            // A `SqlFragment` can only be built through
             // these combinators, so a naive string-concatenated WHERE clause
             // is a type error (`String` where `SqlFragment` is expected) at
             // `Db.findWhere` / `Db.deleteWhere`, not a runtime injection risk.
@@ -1051,7 +1050,7 @@ impl Env {
                     "like",
                 ],
             ),
-            // `Std.Db.Decode` — row decoder combinators (M5b-db).
+            // `Std.Db.Decode` — row decoder combinators.
             // The qualifier string contains a dot ("Db.Decode") which the parser
             // produces correctly for the 3-segment path `Db.Decode.string` — see
             // sky_parse::parser::ident_expr (qualifier = init.join(".")).
@@ -1062,7 +1061,7 @@ impl Env {
                     "succeed", "fail", "map2", "map3", "map4", "required", "optional",
                 ],
             ),
-            // M6: Sky.Http.Server kernels.
+            // Sky.Http.Server kernels.
             (
                 "Server",
                 &[
@@ -1091,7 +1090,7 @@ impl Env {
                     "withCookie",
                 ],
             ),
-            // M6: Sky.Http.Middleware kernels.
+            // Sky.Http.Middleware kernels.
             (
                 "Middleware",
                 &[
@@ -1102,9 +1101,9 @@ impl Env {
                     "withCsrf",
                 ],
             ),
-            // M6: Sky.Http.RateLimit kernels.
+            // Sky.Http.RateLimit kernels.
             ("RateLimit", &["allow"]),
-            // ── M7: Std.Ui — element / attribute / color / layout builders ──────
+            // ── Std.Ui — element / attribute / color / layout builders ──────────
             // `layout` and `layoutWith` are render kernels; the rest are element /
             // attribute / length / color value builders wired as kernel helpers.
             // All names below resolve as `VarHome::Kernel("Ui", name)` so that
@@ -1225,7 +1224,7 @@ impl Env {
                     "descLabel",
                 ],
             ),
-            // ── M7: Std.Ui.Background sub-module ─────────────────────────────────
+            // ── Std.Ui.Background sub-module ─────────────────────────────────────
             (
                 "Background",
                 &[
@@ -1238,7 +1237,7 @@ impl Env {
                     "linearGradient",
                 ],
             ),
-            // ── M7: Std.Ui.Border sub-module ─────────────────────────────────────
+            // ── Std.Ui.Border sub-module ─────────────────────────────────────────
             (
                 "Border",
                 &[
@@ -1259,7 +1258,7 @@ impl Env {
                     "hoverRounded",
                 ],
             ),
-            // ── M7: Std.Ui.Font sub-module ───────────────────────────────────────
+            // ── Std.Ui.Font sub-module ───────────────────────────────────────────
             (
                 "Font",
                 &[
@@ -1294,7 +1293,7 @@ impl Env {
                     "hoverSize",
                 ],
             ),
-            // ── #117: Std.Ui.Region sub-module ───────────────────────────────────
+            // ── Std.Ui.Region sub-module ─────────────────────────────────────────
             (
                 "Region",
                 &[
@@ -1308,7 +1307,7 @@ impl Env {
                     "announceUrgently",
                 ],
             ),
-            // ── #124: Std.Ui.Input sub-module ────────────────────────────────────
+            // ── Std.Ui.Input sub-module ──────────────────────────────────────────
             (
                 "Input",
                 &[
@@ -1332,11 +1331,11 @@ impl Env {
                     "radioRow",
                 ],
             ),
-            // ── #146: Std.Ui.Lazy sub-module ─────────────────────────────────────
+            // ── Std.Ui.Lazy sub-module ───────────────────────────────────────────
             ("Lazy", &["lazy", "lazy2", "lazy3", "lazy4", "lazy5"]),
             // ── Std.Ui.Keyed — sky-key for diff identity ─────────────────────────
             ("Keyed", &["column", "row"]),
-            // ── M7: Std.Html — typed HTML element / text surface ─────────────────
+            // ── Std.Html — typed HTML element / text surface ─────────────────────
             // `render` / `escapeHtml` / `escapeAttr` / `attrToString` are render
             // kernels; all element-builder names create `Html msg` values.
             (
@@ -1439,7 +1438,7 @@ impl Env {
                     "linkNode",
                 ],
             ),
-            // ── M7: Std.Html.Attributes alias ────────────────────────────────────
+            // ── Std.Html.Attributes alias ────────────────────────────────────────
             (
                 "Attr",
                 &[
@@ -1470,7 +1469,7 @@ impl Env {
                     "noAttr",
                 ],
             ),
-            // ── M7: Std.Html.Events alias ─────────────────────────────────────────
+            // ── Std.Html.Events alias ─────────────────────────────────────────────
             (
                 "Event",
                 &[
@@ -1488,13 +1487,13 @@ impl Env {
                     "onMsg",
                 ],
             ),
-            // ── M7: Sky.Live / Std.Live app-entry kernels ────────────────────────
+            // ── Sky.Live / Std.Live app-entry kernels ────────────────────────────
             ("Live", &["app", "appRouted", "route", "renderStatic"]),
-            // ── M7: Sky.Tui / Std.Tui app-entry kernels ──────────────────────────
+            // ── Sky.Tui / Std.Tui app-entry kernels ──────────────────────────────
             ("Tui", &["app", "program"]),
-            // ── M7: Sky.Webview / Std.Webview app-entry kernel ───────────────────
+            // ── Sky.Webview / Std.Webview app-entry kernel ───────────────────────
             ("Webview", &["app"]),
-            // ── #111: Effect stdlib modules ───────────────────────────────────────
+            // ── Effect stdlib modules ─────────────────────────────────────────────
             // Std.Cli / Sky.Cli — line-oriented TEA app-entry (fully wired).
             ("Cli", &["program"]),
             // Std.Auth / Sky.Auth — authentication helpers (fail-closed: no lower
@@ -1563,7 +1562,7 @@ impl Env {
                     "formatWith",
                 ],
             ),
-            // #127: Sky.Http.Server.WebSocket (12 kernels, fully wired).
+            // Sky.Http.Server.WebSocket (12 kernels).
             (
                 "Ws",
                 &[
@@ -1583,7 +1582,7 @@ impl Env {
             ),
         ];
 
-        // ── M7: Per-qualifier function name aliases ───────────────────────────
+        // ── Per-qualifier function name aliases ───────────────────────────────
         // Maps a Sky-source alias name (e.g. `htmlRender`) to its canonical
         // kernel function name (e.g. `render`) within a qualifier module, so
         // `Html.htmlRender` and `Std.Html.htmlRender` both produce
@@ -1603,7 +1602,7 @@ impl Env {
             ("Html", "htmlAttrToString", "attrToString"),
         ];
 
-        // ── M7: Qualifier module aliases (Std.X / Sky.X → short canonical) ───
+        // ── Qualifier module aliases (Std.X / Sky.X → short canonical) ────────
         // Clones every entry from the canonical qualifier's member map into the
         // alias qualifier key. Because each entry already holds
         // `VarHome::Kernel(canonical_sym, fn_sym)` (NOT the alias key's symbol),
@@ -1629,17 +1628,17 @@ impl Env {
             ("Sky.Ui", "Ui"),
             ("Sky.Live", "Live"),
             ("Sky.Tui", "Tui"),
-            // ── #111: Effect stdlib module aliases ────────────────────────────────
+            // ── Effect stdlib module aliases ──────────────────────────────────────
             ("Sky.Cli", "Cli"),
             ("Std.Auth", "Auth"),
             ("Sky.Auth", "Auth"),
             ("Sky.Http.Server.Stream", "Stream"),
             ("Sky.Core.Http.Stream", "HttpStream"),
-            // #127: Sky.Http.Server.WebSocket alias.
+            // Sky.Http.Server.WebSocket alias.
             ("Sky.Http.Server.WebSocket", "Ws"),
-            // #124: Std.Ui.Input sub-module.
+            // Std.Ui.Input sub-module.
             ("Std.Ui.Input", "Input"),
-            // #146: Std.Ui.Lazy sub-module.
+            // Std.Ui.Lazy sub-module.
             ("Std.Ui.Lazy", "Lazy"),
             // Std.Ui.Keyed sub-module.
             ("Std.Ui.Keyed", "Keyed"),
@@ -1647,7 +1646,7 @@ impl Env {
             ("Std.Decimal", "Decimal"),
         ];
 
-        // ── Phase-B: build stdlib_index FIRST so all VarHome::Kernel(id, ..)
+        // Build stdlib_index FIRST so all VarHome::Kernel(id, ..)
         // insertions below can look up the pre-resolved id.
         // Derived from StdlibKernel::ALL + decl() — anti-drift by construction.
         // Skip internal-only qualifiers (e.g. "_internal_").
@@ -1666,16 +1665,16 @@ impl Env {
             let mut module = BTreeMap::new();
             for func in *funcs {
                 let func_sym = interner.intern(func)?;
-                // Phase B: thread the pre-resolved id into VarHome so
+                // Thread the pre-resolved id into VarHome so
                 // lower_callee can use the fast path for registered kernels.
                 //
-                // #107: `Std.Html.Events` (`Event`) resolves to the DEDICATED
+                // `Std.Html.Events` (`Event`) resolves to the DEDICATED
                 // `Html*` event kernels (`HtmlOnClick` …), which produce
                 // `Std.Html.Attribute msg` (`html_attr`) — the same nominal type
                 // the `Std.Html.Attributes` builders and every element builder's
-                // `List (html_attr msg)` slot use. (Before #107 these aliased to
+                // `List (html_attr msg)` slot use. (They must NOT alias to
                 // the `Ui` event kernels, which produce the `Std.Ui.Attribute`
-                // variant — so `button [ onClick Msg ]` failed to unify.) `onMsg`
+                // variant — that makes `button [ onClick Msg ]` fail to unify.) `onMsg`
                 // is the generic alias for `onClick`. All members are registered
                 // under `(Event, name)` in `stdlib_index`, so the id is always
                 // `Some` and `lower_callee`'s fast path returns the `Html*`

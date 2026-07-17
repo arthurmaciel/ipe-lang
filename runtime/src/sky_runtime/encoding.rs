@@ -19,19 +19,17 @@ const QUERY: &AsciiSet = &NON_ALPHANUMERIC
 
 // ── Bytes-on-Rust convention ──────────────────────────────────────────────
 //
-// TEXT path (task #55a): the `Encoding.*` kernels below treat their `String`
-// argument as TEXT and go through its UTF-8 bytes (`s.as_bytes()` on encode,
+// TEXT path: the `Encoding.*` kernels below treat their `String` argument as
+// TEXT and go through its UTF-8 bytes (`s.as_bytes()` on encode,
 // `String::from_utf8` on decode) — byte-for-byte with the Go backend, which
-// encodes `[]byte(goString)` (UTF-8). This closes the old silent-truncation hole
-// (`c as u8` dropped every codepoint > 255) and makes `decode(encode s) == Ok s`
-// for every `String`. ASCII is unchanged; only non-ASCII moves from the old
-// Latin-1 bytes to the correct UTF-8 bytes.
+// encodes `[]byte(goString)` (UTF-8). This avoids silent truncation (`c as u8`
+// dropping every codepoint > 255) and makes `decode(encode s) == Ok s` for
+// every `String`. Non-ASCII goes through the correct UTF-8 bytes, not Latin-1.
 //
-// BYTE path (task #55b, completed): the Latin-1 `sky_bytes` / `bytes_to_sky`
-// helpers that the old binary pipelines (compression / email / websocket) used
-// have been deleted. Those pipelines now operate on `Vec<u8>` end-to-end and no
-// longer need a String↔bytes bridge. The `Encoding.*` text path and the JWT path
-// (jwt.rs, which owns its own raw-byte base64/hex) are unaffected.
+// BYTE path: the binary pipelines (compression / email / websocket) operate on
+// `Vec<u8>` end-to-end and need no String↔bytes bridge. The `Encoding.*` text
+// path and the JWT path (jwt.rs, which owns its own raw-byte base64/hex) are
+// unaffected.
 
 /// Decode an application/x-www-form-urlencoded component: `+` -> space, `%XX` ->
 /// byte (best-effort). Shared by the HTTP server's query parser and the HTTP
@@ -74,9 +72,8 @@ pub(crate) fn form_url_decode(s: &str) -> String {
 }
 
 /// Sky `base64Encode : String -> String` — encodes the input's UTF-8 bytes
-/// (Go parity: `base64.StdEncoding.EncodeToString([]byte(s))`). ASCII is
-/// byte-identical to the old path; non-ASCII now matches Go instead of silently
-/// truncating codepoints > 255 (task #55a).
+/// (Go parity: `base64.StdEncoding.EncodeToString([]byte(s))`). Non-ASCII
+/// matches Go rather than silently truncating codepoints > 255.
 pub fn base64_encode(s: String) -> String {
     B64.encode(s.as_bytes())
 }
@@ -84,8 +81,7 @@ pub fn base64_encode(s: String) -> String {
 /// Sky `base64Decode : String -> Result Error String` — decodes to bytes, then
 /// requires them to be valid UTF-8 (the Sky `String` invariant), so
 /// `base64Decode (base64Encode s) == Ok s` for every `String s`. Non-UTF-8
-/// payloads surface as `Err` (raw-byte round-tripping lives on `Std.Bytes`),
-/// task #55a.
+/// payloads surface as `Err` (raw-byte round-tripping lives on `Std.Bytes`).
 pub fn base64_decode<E: From<String>>(s: String) -> SkyResult<E, String> {
     match B64.decode(s.as_bytes()) {
         Ok(bytes) => match String::from_utf8(bytes) {
@@ -121,9 +117,8 @@ pub fn url_decode<E: From<String>>(s: String) -> SkyResult<E, String> {
 }
 
 /// Sky `hexEncode : String -> String` — encodes the input's UTF-8 bytes
-/// (Go parity: `hex.EncodeToString([]byte(s))`). ASCII byte-identical to the old
-/// path; non-ASCII now matches Go instead of truncating codepoints > 255
-/// (task #55a).
+/// (Go parity: `hex.EncodeToString([]byte(s))`). Non-ASCII matches Go rather
+/// than truncating codepoints > 255.
 pub fn encoding_hex_encode(s: String) -> String {
     hex::encode(s.as_bytes())
 }
@@ -132,8 +127,8 @@ pub fn encoding_hex_encode(s: String) -> String {
 /// requires them to be valid UTF-8 (the Sky `String` invariant), so
 /// `hexDecode (hexEncode s) == Ok s` for every `String s`. Non-UTF-8 payloads
 /// (e.g. the hex of a raw digest) surface as `Err`; use `Std.Bytes.fromHex` to
-/// round-trip arbitrary bytes. Task #55a. (jwt.rs owns its own `hex::decode` on
-/// raw `&[u8]` and never routed through this kernel.)
+/// round-trip arbitrary bytes. (jwt.rs owns its own `hex::decode` on raw
+/// `&[u8]` and never routes through this kernel.)
 pub fn encoding_hex_decode<E: From<String>>(s: String) -> SkyResult<E, String> {
     match hex::decode(&s) {
         Ok(bytes) => match String::from_utf8(bytes) {
@@ -146,12 +141,12 @@ pub fn encoding_hex_decode<E: From<String>>(s: String) -> SkyResult<E, String> {
     }
 }
 
-// ── Concrete (non-generic) wrappers for generated Sky code (M4f) ─────────────
+// ── Concrete (non-generic) wrappers for generated Sky code ─────────────
 //
 // The generic `base64_decode<E>`, `url_decode<E>`, `encoding_hex_decode<E>` above
 // use a flexible `E: From<String>` bound so the error type can be inferred from
 // surrounding context. Generated Sky code sets `SkyError = sky_runtime::error::
-// SkyError` (backlog #85/#160), but Rust's type inference cannot pin `E` when
+// SkyError`, but Rust's type inference cannot pin `E` when
 // the error arm discards the value (e.g. `Err _ ->` in a case expression).
 // These concrete aliases pin `E = SkyError` up-front, eliminating the
 // ambiguity without changing the runtime semantics — construction still
@@ -172,16 +167,14 @@ pub fn sky_encoding_hex_decode(s: String) -> SkyResult<crate::sky_runtime::error
     encoding_hex_decode(s)
 }
 
-// ── Sky.Core.Bytes kernels (M4e) ─────────────────────────────────────────
+// ── Sky.Core.Bytes kernels ─────────────────────────────────────────
 //
-// Removed: the Latin-1 String-based Bytes kernel implementations
+// `Bytes` is a distinct primitive (`Vec<u8>`); its kernel implementations
 // (`bytes_to_hex`, `bytes_from_hex`, `bytes_to_base64`, `bytes_from_base64`,
-// `bytes_to_string`, `bytes_length`) that backed the OLD `type alias Bytes =
-// String` convention are superseded by M4e. Sky-Rust now makes `Bytes` a
-// distinct primitive (`Vec<u8>`); the new implementations live in `bytes.rs`.
-// The `sky_bytes` / `bytes_to_sky` helpers below are KEPT because they are
-// still used by `encoding.rs`, `compression.rs`, `ws_client.rs`, `server.rs`,
-// and `email.rs` for their own Latin-1 byte-pipeline needs.
+// `bytes_to_string`, `bytes_length`) live in `bytes.rs`, not on a
+// `type alias Bytes = String` convention. The `sky_bytes` / `bytes_to_sky`
+// helpers below serve the Latin-1 byte-pipeline needs of `encoding.rs`,
+// `compression.rs`, `ws_client.rs`, `server.rs`, and `email.rs`.
 
 #[cfg(test)]
 mod tests {
@@ -195,7 +188,7 @@ mod tests {
         assert!(matches!(decoded, SkyResult::Ok(ref s) if s == "Hello, Sky!"));
     }
 
-    // #55a — non-ASCII goes through UTF-8 (Go parity), not Latin-1 truncation.
+    // non-ASCII goes through UTF-8 (Go parity), not Latin-1 truncation.
     #[test]
     fn base64_hex_nonascii_match_go_utf8_bytes() {
         // Go: base64/hex of []byte("café") = UTF-8 bytes 63 61 66 C3 A9.
@@ -212,9 +205,10 @@ mod tests {
         assert!(matches!(hx, SkyResult::Ok(ref s) if s == "café €"));
     }
 
-    // SECURITY (#55a): two strings that differ only ABOVE codepoint 255 must NOT
-    // collide after base64 (the old `c as u8` truncated both to 0xAC → identical
-    // Basic-auth headers = credential confusion). '€'=U+20AC, '¬'=U+00AC.
+    // SECURITY: two strings that differ only ABOVE codepoint 255 must NOT
+    // collide after base64 (a truncating `c as u8` would map both to 0xAC →
+    // identical Basic-auth headers = credential confusion). '€'=U+20AC,
+    // '¬'=U+00AC.
     #[test]
     fn base64_no_collision_above_255() {
         let euro = base64_encode("p€".to_string());

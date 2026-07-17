@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 //! Phase-3 spine proofs (spec:
-//! `docs/architecture/salsa-incremental-compilation-2026-07-11.md` §5 row 3 —
-//! plan Tasks 9 and 11).
+//! `docs/architecture/salsa-incremental-compilation-2026-07-11.md` §5 row 3).
 //!
 //! - [`sky_db::topo_order`]: memoized dep-first order; an import cycle is a
 //!   SKY-N0021 **value**, never salsa's dependency-cycle panic.
@@ -90,7 +89,7 @@ const CYCLIC_A: &str = "module A exposing (a)\n\nimport B\n\na = 1\n";
 const CYCLIC_B: &str = "module B exposing (b)\n\nimport A\n\nb = 2\n";
 
 // ---------------------------------------------------------------------------
-// topo_order (Task 11 scaffold)
+// topo_order
 // ---------------------------------------------------------------------------
 
 /// Dep-first order with the entry last; memoized on repeat demand.
@@ -157,7 +156,7 @@ fn topo_order_cycle_is_a_value_not_a_panic() {
 }
 
 // ---------------------------------------------------------------------------
-// linked_program (Task 11 — the coarse spine)
+// linked_program (the coarse spine)
 // ---------------------------------------------------------------------------
 
 /// The linked module carries every module's defs (whole-program merge).
@@ -182,8 +181,8 @@ fn linked_program_links_all_modules() {
 }
 
 /// Coarse-but-memoized: a repeat demand and a byte-equal re-save execute
-/// nothing; a dep body edit re-executes the spine (documented coarseness —
-/// Phase 4 refines below this seam).
+/// nothing; a dep body edit re-executes the spine (the spine links at
+/// whole-program granularity, so any semantic edit re-links).
 #[test]
 fn linked_program_memoized_coarse_floor() {
     let (mut db, log) = logged_db();
@@ -218,7 +217,7 @@ fn linked_program_memoized_coarse_floor() {
 }
 
 // ---------------------------------------------------------------------------
-// kernel_types (Task 9)
+// kernel_types
 // ---------------------------------------------------------------------------
 
 /// The kernel table is derived once and is independent of source edits: a

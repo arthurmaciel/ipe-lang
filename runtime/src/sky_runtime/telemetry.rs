@@ -341,12 +341,10 @@ pub fn errors_total() -> u64 {
 
 // ===========================================
 // Labeled metric registry + Prometheus exposition (Go parity:
-// telemetry/store.go + prometheus.go). Before this, /_sky/metrics emitted a
-// single unlabeled `sky_live_requests_total` line — no labels, no other series,
-// so an operator pointing Prometheus/Grafana at a Rust Sky binary got zero
-// route/status/SSE breakdown. This adds labeled counters + gauges keyed by
-// (name, sorted-labels) and a canonical 0.0.4 text renderer. Latency histograms
-// (request_seconds / msg_seconds) are a tracked follow-up.
+// telemetry/store.go + prometheus.go). Labeled counters + gauges + histograms
+// keyed by (name, sorted-labels), rendered as canonical 0.0.4 text — giving an
+// operator pointing Prometheus/Grafana at a Rust Sky binary the full
+// route/status/SSE breakdown.
 // ===========================================
 
 use std::collections::BTreeMap;
@@ -558,7 +556,7 @@ fn prom_type_token(v: &MetricValue) -> &'static str {
 }
 
 /// Per-metric HELP line for the exposition header. Unknown names get a generic
-/// help line (still well-formed for scrapers). The TYPE header is now derived
+/// help line (still well-formed for scrapers). The TYPE header is derived
 /// from the stored `MetricValue` variant via `prom_type_token`, so the two
 /// can't contradict each other.
 fn metric_help(name: &str) -> &'static str {

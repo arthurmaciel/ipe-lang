@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
-//! Phase-2 incrementality proofs (spec:
-//! `docs/architecture/salsa-incremental-compilation-2026-07-11.md` §5 row 2 —
-//! plan Tasks 5/6/7/8).
+//! Incrementality proofs (spec:
+//! `docs/architecture/salsa-incremental-compilation-2026-07-11.md` §5 row 2).
 //!
 //! The load-bearing test is `module_interface_firewall`: a body-only edit to
 //! a dep module re-executes the dep's `canonicalize` but NOT its importer's —
@@ -129,8 +128,8 @@ fn canonicalize_granularity() {
     );
 }
 
-/// THE Phase-2 proof (plan Task 7 firewall): a body-only edit to dep A
-/// re-runs `canonicalize(A)` and `module_interface(A)`, but the interface
+/// Incrementality proof (the module-interface firewall): a body-only edit to
+/// dep A re-runs `canonicalize(A)` and `module_interface(A)`, but the interface
 /// value comes out EQUAL, salsa backdates it, and the importer's
 /// `canonicalize(B)` memo is validated WITHOUT re-executing.
 #[test]
@@ -166,9 +165,8 @@ fn module_interface_firewall() {
     assert_eq!(warm, after, "importer's canon result must be byte-stable");
 }
 
-/// The completeness counterpart (plan Task 7 gate, canon tier): changing the
-/// dep's EXPORT surface must punch through the firewall and re-canonicalise
-/// the importer.
+/// The completeness counterpart (canon tier): changing the dep's EXPORT
+/// surface must punch through the firewall and re-canonicalise the importer.
 #[test]
 fn module_interface_completeness() {
     let (mut db, log) = logged_db();
@@ -189,8 +187,8 @@ fn module_interface_completeness() {
     );
 }
 
-/// Closed-enum resolution values (plan Task 6): in-set imports resolve to the
-/// dep's `SourceFile`; kernel/missing imports are `Unresolved`.
+/// Closed-enum resolution values: in-set imports resolve to the dep's
+/// `SourceFile`; kernel/missing imports are `Unresolved`.
 #[test]
 fn resolve_imports_shape() {
     let (db, _log) = logged_db();
@@ -217,7 +215,7 @@ fn resolve_imports_shape() {
     assert_eq!(resolutions.as_ref(), &expected);
 }
 
-/// Add-a-module (plan Task 6): a previously-missing import flips
+/// Add-a-module: a previously-missing import flips
 /// `Unresolved` → `Resolved` when the file set gains the module, and the
 /// importer re-canonicalises from red to green.
 #[test]
@@ -262,7 +260,7 @@ fn resolve_imports_add_module() {
     );
 }
 
-/// Delete-a-module (plan Task 6): removing an imported module flips its
+/// Delete-a-module: removing an imported module flips its
 /// importer red — never a stale green from the old memo.
 #[test]
 fn resolve_imports_delete_module() {
@@ -289,7 +287,7 @@ fn resolve_imports_delete_module() {
     );
 }
 
-/// Rename (plan Task 6): retargeting the module path re-resolves importers;
+/// Rename: retargeting the module path re-resolves importers;
 /// fixing the importer's `import` line restores green.
 #[test]
 fn resolve_imports_rename_module() {
@@ -326,7 +324,7 @@ fn resolve_imports_rename_module() {
     assert!(canonicalize(&db, root, b).is_ok());
 }
 
-/// Shadow (plan Task 6 / driver trust tag): a USER file squatting on a
+/// Shadow (driver trust tag): a USER file squatting on a
 /// `Std.…` path stays SKY-N0025-rejected, while the same path with the
 /// driver-vouched `EmbeddedStdlib` origin canonicalises.
 #[test]

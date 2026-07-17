@@ -153,7 +153,7 @@ impl<'a> SafeCssValue<'a> {
     /// Parse and validate a CSS property value.
     ///
     /// Returns `None` (silently drop) when any dangerous pattern is found —
-    /// in either the raw value or its CSS-escape-decoded form (#105).
+    /// in either the raw value or its CSS-escape-decoded form.
     pub(crate) fn parse(v: &'a str) -> Option<Self> {
         let low = v.to_ascii_lowercase();
         if has_dangerous_css_pattern(&low) {
@@ -445,7 +445,7 @@ mod tests {
 
     #[test]
     fn value_rejects_hex_escaped_expression_and_scheme_sinks() {
-        // #105 part 2: CSS backslash-hex escapes (CSS Syntax L3 §4.3.7)
+        // CSS backslash-hex escapes (CSS Syntax L3 §4.3.7)
         // decode to a blocked keyword / breakout char ANYWHERE a token is
         // lexed. The raw substring scan misses these; the decode-then-rescan
         // pass catches them.

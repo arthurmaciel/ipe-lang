@@ -1,7 +1,7 @@
 // File kernel stubs — generic over E.
 use super::*;
 
-// ── #129: shared blocking-pool helper ───────────────────────────────────────
+// ── shared blocking-pool helper ───────────────────────────────────────
 //
 // Every kernel in this module does a blocking `std::fs` syscall inside its
 // `Box::pin(async move { ... })` body. On a tokio worker thread (the shape
@@ -574,10 +574,9 @@ mod read_file_limit_tests {
 }
 
 /// Sibling of `read_file_limit_tests` for `File.readFileBytes`'s own fixed
-/// 10 MiB cap (backlog "hardening follow-ups": `readFileBytes` used to
-/// silently truncate at the cap via `take(DEFAULT_CAP).read_to_end(..)` with
-/// no post-read size check, instead of erroring — same class as
-/// `readFileLimit`'s TOCTOU, fixed in commit 706f026).
+/// 10 MiB cap: `readFileBytes` must ERROR when a file exceeds the cap, not
+/// silently truncate at it via `take(DEFAULT_CAP).read_to_end(..)` with no
+/// post-read size check — the same class as `readFileLimit`'s TOCTOU.
 #[cfg(test)]
 mod read_file_bytes_tests {
     use super::*;
@@ -647,7 +646,7 @@ mod spawn_blocking_tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    /// #129 regression: on a SINGLE-WORKER (current_thread) runtime, a
+    /// Reactor-starvation guard: on a SINGLE-WORKER (current_thread) runtime, a
     /// blocking `std::fs` read called directly on the polled future would
     /// starve every other task on that runtime until the read completes.
     /// This proves `file_read_file` offloads the blocking read to tokio's

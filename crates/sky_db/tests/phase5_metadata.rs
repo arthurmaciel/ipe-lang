@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 //! Phase-5 proofs (spec:
-//! `docs/architecture/salsa-incremental-compilation-2026-07-11.md` §5 row 5 —
-//! plan Task 14).
+//! `docs/architecture/salsa-incremental-compilation-2026-07-11.md` §5 row 5).
 //!
 //! [`sky_db::program_metadata`] is the coarse, LOCKED whole-program
 //! DCE-reachability seam over [`sky_db::lower_program`]'s output: it depends
@@ -89,7 +88,7 @@ const IMPORTER_B: &str = "module B exposing (b)\n\nimport A exposing (visible)\n
 
 /// Coarse-but-memoized: a repeat demand and a byte-equal re-save execute
 /// nothing; a reachable dep's body edit re-executes the whole computation —
-/// the same shape `typecheck`/`lower_program` proved in Phase 4, now one
+/// the same shape the coarse `typecheck`/`lower_program` seams hold, now one
 /// layer further down the pipeline.
 #[test]
 fn program_metadata_memoized_coarse_floor() {

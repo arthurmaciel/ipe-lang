@@ -58,8 +58,8 @@ pub(crate) fn ssrf_deny_private_enabled() -> bool {
 ///
 /// The std `Ipv4Addr` predicates for CGNAT / benchmarking / reserved are
 /// nightly-only (`is_shared`/`is_benchmarking`/`is_reserved`), so the extra
-/// ranges are matched by octet here (audit finding L1, 2026-06-22: RFC-1918-only
-/// coverage left 100.64/10 + 240/4 reachable under the deny-private guard).
+/// ranges are matched by octet here (audit finding L1: RFC-1918-only coverage
+/// left 100.64/10 + 240/4 reachable under the deny-private guard).
 pub(crate) fn is_private_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
@@ -401,7 +401,7 @@ mod tests {
 
     #[test]
     fn is_private_ip_extra_reserved_ranges_blocked() {
-        // audit L1 (2026-06-22): non-RFC-1918 ranges that std's is_private misses.
+        // audit L1: non-RFC-1918 ranges that std's is_private misses.
         assert!(is_private_ip("100.64.0.1".parse().unwrap())); // CGNAT lo
         assert!(is_private_ip("100.127.255.255".parse().unwrap())); // CGNAT hi
         assert!(is_private_ip("192.0.0.192".parse().unwrap())); // IETF protocol

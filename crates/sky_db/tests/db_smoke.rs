@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
-//! Plan Task 1 smoke: the database constructs, is a `salsa::Database`, and
-//! drops cleanly.
+//! Smoke: the database constructs, is a `salsa::Database`, and drops cleanly.
 
 use sky_db::SkyDatabase;
 

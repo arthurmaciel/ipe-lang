@@ -90,7 +90,7 @@ pub fn crypto_sha512(s: String) -> String {
 /// surface. They MUST NOT be used as a security primitive (password hashing,
 /// signatures, integrity against an adversary) — those paths use SHA-256/512 +
 /// HMAC + bcrypt/PBKDF2 elsewhere in this module. Removing them would break Go
-/// parity; the hardening is this contract note. (Audit 2026-06-19, low/weak-crypto.)
+/// parity; the hardening is this contract note. (Audit finding: low/weak-crypto.)
 ///
 /// Sky `sha1 : String -> String` — hex-encoded SHA-1 digest.
 pub fn crypto_sha1(s: String) -> String {
@@ -265,7 +265,7 @@ const AEAD_KEY_BYTES: usize = 32;
 // other, so this is a cross-backend interop contract, NOT a Rust-local knob.
 // It is below current OWASP guidance (≈600k for PBKDF2-SHA256); raising it is a
 // COORDINATED cross-backend migration (re-derive + re-encrypt existing data),
-// not a unilateral Rust change. (Audit 2026-06-19, low/weak-crypto — accepted,
+// not a unilateral Rust change. (Audit finding: low/weak-crypto — accepted,
 // parity/key-compat-locked.)
 const PBKDF2_ITERS: u32 = 100_000;
 
@@ -462,13 +462,13 @@ pub fn crypto_chacha_key_from_password(password: String, salt: String) -> String
     crypto_aes_key_from_password(password, salt)
 }
 
-// ── Concrete (non-generic) wrappers for generated Sky code (M5a) ─────────────
+// ── Concrete (non-generic) wrappers for generated Sky code ─────────────
 //
 // The generic `crypto_aes_gcm_encrypt<E>`, `crypto_aes_gcm_decrypt<E>`,
 // `crypto_chacha20_encrypt<E>`, `crypto_chacha20_decrypt<E>`,
 // `crypto_rsa_sha256_sign<E>` above use a flexible `E: From<String>` bound so
 // the error type can be inferred from context. Generated Sky code sets
-// `SkyError = sky_runtime::error::SkyError` (backlog #85/#160), but Rust's
+// `SkyError = sky_runtime::error::SkyError`, but Rust's
 // type inference cannot pin `E` when the error arm is discarded (e.g.
 // `Err _ ->` in a case expression). These concrete aliases pin `E = SkyError`
 // up-front, eliminating the ambiguity without changing runtime semantics.

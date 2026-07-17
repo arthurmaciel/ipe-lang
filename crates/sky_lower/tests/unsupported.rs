@@ -1,4 +1,4 @@
-//! Each M0-unsupported feature must lower to a `Diagnostic::Lower` carrying the
+//! Each unsupported feature must lower to a `Diagnostic::Lower` carrying the
 //! offending node's span and the right `SKY-L01##` code — never a `CompilerBug`.
 //!
 //! These build the canonical AST + solved types directly (rather than through
@@ -67,7 +67,7 @@ fn run_with_regions(
         poly_var_map: BTreeMap::new(),
         untyped_type_params: BTreeMap::new(),
     };
-    // `lower` now pairs its diagnostic with the owning def's `home` (#221 fix B);
+    // `lower` pairs its diagnostic with the owning def's `home`;
     // these single-module gap tests assert only on the diagnostic, so drop it.
     lower(&m, &types, interner).map_err(|(d, _home)| d)
 }
@@ -175,7 +175,7 @@ fn unannotated_fn_with_polymorphic_solved_type_fails_with_polymorphism() -> DRes
 
 /// An unannotated function with a fully-concrete solved type (`f x = 0`,
 /// solved as `Int -> Int`) lowers cleanly without a type annotation — the
-/// gate that used to emit SKY-L0106 is now lifted for monomorphic bindings.
+/// SKY-L0106 gate does not apply to monomorphic bindings.
 #[test]
 fn unannotated_fn_with_concrete_solved_type_lowers_cleanly() -> DResult<()> {
     let mut i = Interner::new();
@@ -252,8 +252,8 @@ fn wildcard_parameter_lowers_to_a_fresh_binder() -> DResult<()> {
 
 #[test]
 fn function_type_in_annotation_argument_lowers_to_fun() -> DResult<()> {
-    // `f : (Int -> Int) -> Int` — a higher-order argument now lowers to a boxed
-    // `Fn` parameter type `Fun([Int], Int)` (M1 first-class functions), not an
+    // `f : (Int -> Int) -> Int` — a higher-order argument lowers to a boxed
+    // `Fn` parameter type `Fun([Int], Int)` (first-class functions), not an
     // unsupported-feature diagnostic.
     let mut i = Interner::new();
     let f = i.intern("f")?;
@@ -323,7 +323,7 @@ fn parametric_annotation_lowers_to_generic_func() -> DResult<()> {
 
 /// A type variable left unresolved in *value* position (the solver never pinned
 /// it to a concrete instance — e.g. an under-determined polymorphic value) is an
-/// M2a feature gap, not an invariant violation: it surfaces as `SKY-L0102`
+/// polymorphism feature gap, not an invariant violation: it surfaces as `SKY-L0102`
 /// (`Feature::Polymorphism`) carrying the binding span, never a `CompilerBug`.
 #[test]
 fn unresolved_type_variable_in_value_position() -> DResult<()> {
@@ -350,11 +350,10 @@ fn unresolved_type_variable_in_value_position() -> DResult<()> {
 
 #[test]
 fn task_with_non_unit_result() -> DResult<()> {
-    // M5a lifts the SKY-L0104 gate: `Task Int` (and all `Task a`) now lower
-    // successfully to `IrType::Task(IrType::Int)`. This test was previously
-    // checking for the Feature::TaskResults error; it now checks the positive
-    // path — the lowering must succeed and the function's return type must be
-    // the parametric Task IR type.
+    // There is no SKY-L0104 gate: `Task Int` (and all `Task a`) lower
+    // successfully to `IrType::Task(IrType::Int)`. This test checks the
+    // positive path — the lowering must succeed and the function's return type
+    // must be the parametric Task IR type.
     let mut i = Interner::new();
     let f = i.intern("f")?;
     let task = i.intern("Task")?;
@@ -395,8 +394,8 @@ fn task_with_non_unit_result() -> DResult<()> {
 
 #[test]
 fn inferred_function_type_in_value_position_lowers_to_fun() -> DResult<()> {
-    // An inferred function type `Int -> Int` in value position now lowers to the
-    // boxed `Fn` return type `Fun([Int], Int)` (M1 first-class functions).
+    // An inferred function type `Int -> Int` in value position lowers to the
+    // boxed `Fn` return type `Fun([Int], Int)` (first-class functions).
     let mut i = Interner::new();
     let f = i.intern("f")?;
     let int_name = i.intern("Int")?;

@@ -816,18 +816,17 @@ fn page_response(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
     let html = render_page_full(sid, &live_base_path(), body, csrf_token);
-    // Session cookie carries `Secure` in production / frame-ancestors mode (was
-    // unconditionally omitted — a downgrade hole), OR when this specific
-    // request arrived over TLS at a trusted proxy (`request_is_https`, opt-in
-    // via `SKY_TRUSTED_PROXY` — closes the gap where `csrf::cookies_secure()`
-    // snapshots `production_from_env() || frame_ancestors().is_some()` ONCE at
-    // process start and never inspects this request's TLS / `X-Forwarded-Proto`,
-    // so a dev process fronted by a TLS proxy used to emit a non-Secure session
-    // cookie even though the browser connection was HTTPS). The untrusted-proxy
-    // case (operator hasn't set `SKY_TRUSTED_PROXY`) keeps the pre-existing
-    // ENV-only behaviour — still SOUND, just not maximally precise, because it
-    // never marks a cookie Secure incorrectly, only potentially fails to mark
-    // one Secure that could safely have been.
+    // Session cookie carries `Secure` in production / frame-ancestors mode, OR
+    // when this specific request arrived over TLS at a trusted proxy
+    // (`request_is_https`, opt-in via `SKY_TRUSTED_PROXY` — closes the gap where
+    // `csrf::cookies_secure()` snapshots `production_from_env() ||
+    // frame_ancestors().is_some()` ONCE at process start and never inspects this
+    // request's TLS / `X-Forwarded-Proto`, so a dev process fronted by a TLS
+    // proxy would otherwise emit a non-Secure session cookie even though the
+    // browser connection was HTTPS). The untrusted-proxy case (operator hasn't
+    // set `SKY_TRUSTED_PROXY`) keeps ENV-only behaviour — still SOUND, just not
+    // maximally precise, because it never marks a cookie Secure incorrectly,
+    // only potentially fails to mark one Secure that could safely have been.
     //
     // NOTE: this does NOT change the `__Host-` cookie-NAME decision
     // (`csrf::cookies_secure()`, still process-global) — the cookie's identity
@@ -903,8 +902,8 @@ fn live_max_body_bytes() -> usize {
 #[cfg(test)]
 mod live_max_body_bytes_tests {
     // SKY_LIVE_MAX_BODY_BYTES=0 must floor at the default, not disable the
-    // body (matching server::max_body's already-correct `.filter(|&n| n > 0)`
-    // — the missing floor previously 413'd every /_sky/event POST).
+    // body (matching server::max_body's `.filter(|&n| n > 0)`). Without the
+    // floor a 0 value would 413 every /_sky/event POST.
     //
     // This tests the parsing/filtering formula directly rather than mutating
     // the real env var: `std::env::set_var` is not thread-safe under a

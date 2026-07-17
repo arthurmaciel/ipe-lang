@@ -306,10 +306,10 @@ pub fn money_allocate(places: i64, parts: i64, amount: Decimal) -> Vec<Decimal> 
     // Decimal scale may be > 0, so `to_string()` can render "3.00" — which
     // `parse::<i64>()` then REJECTS, silently dropping the remainder pennies and
     // mis-distributing the allocation. Convert via the numeric `to_i64()` (scale-
-    // independent) instead of a string round-trip. (Audit 2026-06-19, correctness.)
-    // Distribute the residue TOWARD ZERO by sign. The prior `.max(0)` dropped the
-    // residue entirely for a NEGATIVE total → the shares no longer summed to the
-    // input (correctness bug). For a negative remainder, |rem_int| early slots get
+    // independent) instead of a string round-trip. (Audit finding: correctness.)
+    // Distribute the residue TOWARD ZERO by sign. A `.max(0)` would drop the
+    // residue entirely for a NEGATIVE total → the shares would no longer sum to
+    // the input. For a negative remainder, |rem_int| early slots get
     // `base - 1` (more negative); for positive, `base + 1` — either way the shares
     // sum back to the exact input.
     let rem_int = remainder.trunc().to_i64().unwrap_or(0);

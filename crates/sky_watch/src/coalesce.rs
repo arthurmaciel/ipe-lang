@@ -1,5 +1,5 @@
-//! Task 22 (debounce half) — coalesce a storm of raw filesystem events into
-//! a single settled batch per "pause in activity".
+//! Coalesce a storm of raw filesystem events into a single settled batch per
+//! "pause in activity".
 //!
 //! Editors save via tmp-write + rename (often 2-3 raw events per logical
 //! save), format-on-save chains a second write shortly after the first, and

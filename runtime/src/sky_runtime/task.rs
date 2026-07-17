@@ -198,7 +198,7 @@ pub fn task_run<E: From<String> + Send + 'static, A: Send + 'static>(
 //
 // Runs every task concurrently, collecting the `Ok` values in INPUT order.
 //
-// EARLY-CANCEL (the load-bearing correctness property — task #65). On the first
+// EARLY-CANCEL (the load-bearing correctness property). On the first
 // failure we return `Err` immediately AND abort every still-running sibling.
 // Aborting is mandatory: a tokio `JoinHandle` that is merely DROPPED becomes
 // DETACHED — the spawned task keeps running to completion in the background.
@@ -569,7 +569,7 @@ mod retry_tests {
     }
 }
 
-// Task.parallel early-cancel / abort regression (task #65).
+// Task.parallel early-cancel / abort regression.
 //
 // Proves the two guarantees of the reworked `task_parallel`:
 //   1. On the FIRST `Err`, every still-running sibling is ABORTED — its

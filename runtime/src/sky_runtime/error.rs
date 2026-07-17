@@ -1,11 +1,10 @@
-//! Sky.Core.Error: the rich, typed `Error` ADT (backlog #85/#160).
+//! Sky.Core.Error: the rich, typed `Error` ADT.
 //!
 //! Ported from the ancestor Go/Haskell design (`sky-stdlib/Sky/Core/Error.sky`
 //! in the reference repo): `Error = Error ErrorKind ErrorInfo`, an 11-variant
-//! `ErrorKind` classification, message-carrying `ErrorInfo`, and (backlog
-//! #85 follow-up) the 5-variant `ErrorDetails` union (`FfiPanic`/
-//! `TypeMismatch`/`HttpStatus`/`JsonDecode`/`Custom`) carried optionally on
-//! `ErrorInfo.details : Maybe ErrorDetails`.
+//! `ErrorKind` classification, message-carrying `ErrorInfo`, and the 5-variant
+//! `ErrorDetails` union (`FfiPanic`/`TypeMismatch`/`HttpStatus`/`JsonDecode`/
+//! `Custom`) carried optionally on `ErrorInfo.details : Maybe ErrorDetails`.
 //!
 //! Kind-based classification (`isRetryable`, pattern matching, `toString`)
 //! and the `details` enrichment are both fully real and load-bearing today.
@@ -18,7 +17,7 @@
 //! `ErrorInfo` itself already had before this pass; see
 //! `docs/divergences-from-sky.md`'s `B-ErrorADT` entry).
 //!
-//! Backed by `builtin_runtime_enum` (mirrors `Order`/`SkyOrder`, #123):
+//! Backed by `builtin_runtime_enum` (mirrors `Order`/`SkyOrder`):
 //! `Error`'s sole constructor shares its name with the type
 //! (`sky_lower`'s `enum_variants` table), so it emits as the tuple variant
 //! `SkyError::Error(kind, info)` via the SAME generic constructor/pattern
@@ -33,7 +32,7 @@ use crate::sky_runtime::core::SkyMaybe;
 /// Sky's `ErrorKind` — 11 nullary variants. Repr(u8) for a compact, sound,
 /// exhaustively-matched runtime type (mirrors `SkyOrder`'s convention).
 /// Variant order matches canon's registration (`crates/sky_canon/src/env.rs`,
-/// "E-12, #152") — do not reorder without updating that table.
+/// "E-12") — do not reorder without updating that table.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 pub enum SkyErrorKind {
@@ -71,7 +70,7 @@ impl SkyErrorKind {
 }
 
 /// Sky's `PanicInfo` — `FfiPanic`'s payload: `{ message : String, stack :
-/// List String }` (backlog #85 follow-up).
+/// List String }`.
 #[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SkyPanicInfo {
     pub message: String,
@@ -79,15 +78,15 @@ pub struct SkyPanicInfo {
 }
 
 /// Sky's `TypeInfo` — `TypeMismatch`'s payload: `{ expected : String, actual
-/// : String }` (backlog #85 follow-up).
+/// : String }`.
 #[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SkyTypeInfo {
     pub expected: String,
     pub actual: String,
 }
 
-/// Sky's `ErrorDetails` — the 5-variant enrichment union (backlog #85
-/// follow-up). Constructor names match Sky source verbatim
+/// Sky's `ErrorDetails` — the 5-variant enrichment union. Constructor names
+/// match Sky source verbatim
 /// (`sky_backend_rust`'s `builtin_runtime_enum("ErrorDetails")` routes
 /// `FfiPanic` / `TypeMismatch` / `HttpStatus` / `JsonDecode` / `Custom`
 /// straight to these variants — no synthetic `EnumDef`).
@@ -100,8 +99,7 @@ pub enum SkyErrorDetails {
     Custom(String),
 }
 
-/// Sky's `ErrorInfo` — `{ message : String, details : Maybe ErrorDetails }`
-/// (backlog #85/#160; `details` added by the #85 follow-up).
+/// Sky's `ErrorInfo` — `{ message : String, details : Maybe ErrorDetails }`.
 ///
 /// No `#[derive(Eq)]`: `SkyMaybe<T>` (the `details` field's carrier) derives
 /// only `PartialEq`, not `Eq` (see `core.rs`'s `SkyMaybe` doc), so `Eq` here
@@ -127,7 +125,7 @@ pub enum SkyError {
 
 impl SkyError {
     /// Every message constructor defaults `details = Nothing`, mirroring the
-    /// reference design's `mkInfo` smart constructor (backlog #85 follow-up).
+    /// reference design's `mkInfo` smart constructor.
     fn with(kind: SkyErrorKind, message: String) -> Self {
         Self::Error(kind, SkyErrorInfo { message, details: SkyMaybe::Nothing })
     }
@@ -193,8 +191,8 @@ impl SkyError {
         )
     }
 
-    /// Sky `Error.withDetails : ErrorDetails -> Error -> Error` (backlog #85
-    /// follow-up) — keeps kind and message, sets `details = Just <details>`.
+    /// Sky `Error.withDetails : ErrorDetails -> Error -> Error` — keeps kind
+    /// and message, sets `details = Just <details>`.
     /// This is the sanctioned way to attach `ErrorDetails` to a live `Error`
     /// value from Sky source (see module doc for why raw record-literal
     /// construction of `ErrorInfo`/`PanicInfo`/`TypeInfo` is not supported).
@@ -211,10 +209,9 @@ impl fmt::Display for SkyError {
     }
 }
 
-// ── Sky.Core.Error kernels (backlog #85/#160) ────────────────────────────────
-// Each message constructor now classifies its own `ErrorKind` at construction
-// (previously all eight shared one string-identity runtime symbol, per the
-// "minimal Error = String slice, #86" note this supersedes).
+// ── Sky.Core.Error kernels ────────────────────────────────
+// Each message constructor classifies its own `ErrorKind` at construction,
+// rather than sharing one string-identity runtime symbol across all eight.
 
 #[must_use]
 pub fn sky_error_unexpected(msg: String) -> SkyError {
@@ -273,8 +270,7 @@ pub fn sky_error_with_message(msg: String, old: SkyError) -> SkyError {
 pub fn sky_error_is_retryable(e: SkyError) -> bool {
     e.is_retryable()
 }
-/// `Error.withDetails : ErrorDetails -> Error -> Error` (backlog #85
-/// follow-up).
+/// `Error.withDetails : ErrorDetails -> Error -> Error`.
 #[must_use]
 pub fn sky_error_with_details(details: SkyErrorDetails, old: SkyError) -> SkyError {
     old.with_details(details)
@@ -292,12 +288,11 @@ impl crate::sky_runtime::stringify::SkyStringify for SkyError {
     }
 }
 
-/// Compatibility bridge: existing kernel call sites across the runtime that
-/// still produce a bare `String` error (the pre-#160 shape) keep compiling —
-/// `?`/`.into()` on a `String` now yields an `Unexpected`-classified `Error`
-/// instead of losing type information. Migrating each such call site to a
-/// properly-classified constructor (`SkyError::io`, `::network`, …) is the
-/// explicit follow-up this pass files (see module doc + backlog).
+/// Compatibility bridge: kernel call sites across the runtime that produce a
+/// bare `String` error keep compiling — `?`/`.into()` on a `String` yields an
+/// `Unexpected`-classified `Error` instead of losing type information. Such
+/// call sites should migrate to a properly-classified constructor
+/// (`SkyError::io`, `::network`, …).
 impl From<String> for SkyError {
     fn from(message: String) -> Self {
         Self::unexpected(message)

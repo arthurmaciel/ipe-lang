@@ -14,9 +14,8 @@
 //!
 //! Spool backend: in-memory (bounded) here — covers transient outages + retry.
 //! File-spool restart-durability (`SKY_CONSOLE_SPOOL_MODE=file`, Go's
-//! `exporter_spool.go`) is a noted parity extension; its env knobs
-//! (`SKY_CONSOLE_SPOOL_*`) are NOT yet read — a future file backend will wire
-//! them in.
+//! `exporter_spool.go`, env knobs `SKY_CONSOLE_SPOOL_*`) is a parity extension
+//! the in-memory backend does not provide; those env knobs are not read.
 //!
 //! `live`-gated. Best-effort, no panic vectors: bounded offer queue (drop on
 //! full), push failures fall back to the spool, the spool itself is bounded

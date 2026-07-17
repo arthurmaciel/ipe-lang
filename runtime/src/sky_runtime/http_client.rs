@@ -297,7 +297,7 @@ async fn do_request<E: From<String> + Send + 'static>(
     let mut headers = HashMap::new();
     for (k, v) in resp.headers() {
         if let Ok(s) = v.to_str() {
-            // MIME-case parity (#33 §6.1): reqwest's `HeaderName::as_str()`
+            // MIME-case parity: reqwest's `HeaderName::as_str()`
             // ALWAYS returns lower-case, but the Go reference stores response
             // headers canonicalised (`net/http.Header` always is) — a Sky
             // program's `Dict.get "Content-Type" resp.headers` must find the
@@ -440,7 +440,7 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 mod tests {
     use super::*;
 
-    /// #33 §6.1 wiring seal: the response-header collection loop must route
+    /// Wiring seal: the response-header collection loop must route
     /// every key through `http_header::canonical_header` (reqwest's
     /// `HeaderName::as_str()` is always lower-case; Go's `net/http.Header` is
     /// always canonical — `Dict.get "Content-Type"` parity depends on it).

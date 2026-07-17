@@ -1,7 +1,7 @@
 //! Executable form of the `ffi-call-task-dynamic-dispatch` divergence spec
 //! (`runtime-rust/docs/superpowers/specs/2026-06-15-ffi-call-task-dynamic-dispatch-design.md`).
 //!
-//! WHY THIS IS AN INTENTIONAL DIVERGENCE (DOCUMENT_INTENTIONAL, not future-work):
+//! WHY THIS IS AN INTENTIONAL DIVERGENCE (documented, not future-work):
 //!
 //! Go's `Ffi_callTask` (`runtime-go/rt/rt.go`) is a runtime *registry* lookup
 //! keyed by `fmt.Sprintf("%v", name)` over auto-generated Go-package FFI
@@ -27,9 +27,8 @@
 //!      are `Ffi.kernel "Name"` aliases resolved by the Stage-4 call-site
 //!      rewrite / direct-dispatch paths. `Ffi.callTask`'s real consumer is
 //!      auto-generated Go-package bindings, which require a Go runtime and are
-//!      out of scope on `target=rust`. The "sub-project D / Task-emitting
-//!      kernels" framing in the old polyfill comment is a misattribution and is
-//!      retired by the spec.
+//!      out of scope on `target=rust`. `Ffi.callTask` is NOT a "Task-emitting
+//!      kernels" path — effectful kernels never route through it.
 //!
 //! The *static* shape (`Ffi.callPure "<Kernel>" [lit]`) is handled entirely at
 //! compile time by the Rust codegen peephole — it never reaches a polyfill —
@@ -45,11 +44,9 @@
 //!   - the static-dispatch identity path (`Ffi.toAny`) stays a no-op pass-through.
 //!
 //! NOTE ON THE EXPECTED SUBSTRING: the panic *rationale* wording is owned by the
-//! polyfill/README editor and is being re-dispositioned (the stale
-//! "sub-project D" phrasing is retired). The message-independent, stable anchor
-//! that survives every spec-described rewrite is the `"Ffi.callTask"` /
-//! `"Ffi.callPure"` call-site prefix — so the assertions match on that, not on
-//! the volatile rationale text.
+//! polyfill/README editor and can be reworded freely. The message-independent,
+//! stable anchor is the `"Ffi.callTask"` / `"Ffi.callPure"` call-site prefix —
+//! so the assertions match on that, not on the volatile rationale text.
 
 use sky_runtime_rust::{ffi_call_pure_polyfill, ffi_call_task_polyfill, ffi_to_any_polyfill};
 

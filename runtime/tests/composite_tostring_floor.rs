@@ -61,8 +61,8 @@
 //!
 //! 3. **The function-field subset is non-deterministic by construction.** Go
 //!    renders a func-typed field as `0x<addr>` — a process address that changes
-//!    per run (same class already reclassified out of equiv for
-//!    `35-composite-generics`). Rust cannot reproduce a Go func address.
+//!    per run (the same non-deterministic class as `35-composite-generics`,
+//!    which is excluded from equiv). Rust cannot reproduce a Go func address.
 //!
 //! 4. **Unverifiable here.** Zero upstream `examples/` interpolate or `toString`
 //!    a record/ADT into stdout (every `{{…}}` site is a pre-stringified scalar),

@@ -263,19 +263,15 @@ where
         // Inline render (a closure borrowing `view` would make the future non-Send).
         // Fallible writes (NOT print!/println!, which panic on a broken pipe).
         //
-        // #122 was reopened and reverted: a prior version of this code forced
-        // a trailing "\n" after EVERY render, on the theory that consecutive
-        // renders must always land on their own line. That is a real
-        // divergence from the Go oracle: `runtime-go/rt/cli.go`'s
-        // `cliPrintView` is explicit that it "writes the result to stdout
-        // WITHOUT a trailing newline (the user's prompt formatting decides
-        // whether to add one)" — Go only ever appends ONE newline, at
-        // `fmt.Println()` after the event loop exits (same as here). This is
-        // intentional REPL-prompt design: `examples/20-cli-counter`'s `view`
-        // returns `"count=" ++ ... ++ "  (+, -, r, q) > "` with NO trailing
-        // newline so the cursor stays on the prompt line for the user's
-        // input. Forcing a newline after every render broke that UX and was
-        // never checked against the Go reference before landing. An app that
+        // A render must NOT force a trailing "\n": that would diverge from the
+        // Go oracle. `runtime-go/rt/cli.go`'s `cliPrintView` is explicit that
+        // it "writes the result to stdout WITHOUT a trailing newline (the
+        // user's prompt formatting decides whether to add one)" — Go only ever
+        // appends ONE newline, at `fmt.Println()` after the event loop exits
+        // (same as here). This is intentional REPL-prompt design:
+        // `examples/20-cli-counter`'s `view` returns
+        // `"count=" ++ ... ++ "  (+, -, r, q) > "` with NO trailing newline so
+        // the cursor stays on the prompt line for the user's input. An app that
         // wants each render on its own line supplies its own trailing "\n"
         // in its `view` string, exactly as the Go contract requires — see
         // `tests/golden/i122_cli_program_view_separator` for a fixture that

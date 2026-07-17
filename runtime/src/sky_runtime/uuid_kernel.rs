@@ -3,7 +3,7 @@
 //! Module is `uuid_kernel` (not `uuid`) to avoid clashing with the `uuid`
 //! crate; functions use the `::uuid::` extern path.
 //!
-//! # Entropy is an EFFECT, not a pure value (task #54)
+//! # Entropy is an EFFECT, not a pure value
 //!
 //! `v4` / `v7` draw fresh entropy on every call, so they are typed on the
 //! effect tier — `Sky.Core.Uuid.{v4,v7} : () -> Task Error String`, called
@@ -39,7 +39,7 @@ pub fn uuid_v4<E: From<String> + Send + 'static>(_: ()) -> SkyTask<E, String> {
 /// token / session id / password-reset nonce (use `crypto_random_token` for
 /// those). `v4` is random (getrandom/CSPRNG) but UUIDs are still only 122 bits of
 /// formatted entropy — prefer `crypto_random_token` for security tokens.
-/// (Audit 2026-06-19, low — documented contract.)
+/// (Audit finding: low — documented contract.)
 pub fn uuid_v7<E: From<String> + Send + 'static>(_: ()) -> SkyTask<E, String> {
     Box::pin(async move { ok_res(::uuid::Uuid::now_v7().to_string()) })
 }

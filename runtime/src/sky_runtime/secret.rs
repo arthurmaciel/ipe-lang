@@ -1,9 +1,9 @@
 //! `Sky.Core.Secret` — an opaque wrapper for sensitive strings (API keys,
 //! passwords, tokens) that CANNOT be accidentally leaked via `Debug`,
-//! stringification, logging, or serialization (backlog #44).
+//! stringification, logging, or serialization.
 //!
 //! Mirrors `Std.Db.Sql`'s `SqlFragment` "opaque newtype with typed
-//! constructors" convention (`db.rs`'s `SqlFragment` doc block, backlog #61):
+//! constructors" convention (`db.rs`'s `SqlFragment` doc block):
 //! the ONLY way to obtain a `Secret` is through [`secret_from_string`] (the
 //! seal), and the ONLY way to get the plaintext back out is through
 //! [`secret_reveal`] (the single greppable un-parse). Every other path —

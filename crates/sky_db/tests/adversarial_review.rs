@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Independent adversarial-review probes for the Phase-2 `module_interface`
+//! Independent adversarial-review probes for the `module_interface`
 //! firewall (salsa backdating). These attack the sharpest under-invalidation
 //! vectors NOT covered by `phase2_incrementality.rs`:
 //!

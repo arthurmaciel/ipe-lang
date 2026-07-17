@@ -505,7 +505,7 @@ mod tests {
 
     #[test]
     fn taxonomy_has_ninety_one_codes() {
-        assert_eq!(ALL_CODES.len(), 91); // #90: +SKY-L0127; #99: +SKY-L0128; #32: +SKY-T0016; builtin-record-update: +SKY-T0017; #196: +SKY-N0028
+        assert_eq!(ALL_CODES.len(), 91);
     }
 
     #[test]
@@ -523,7 +523,7 @@ mod tests {
             assert!(s.starts_with("SKY-"), "{s} bad prefix");
             assert!(seen.insert(s), "{s} duplicated");
         }
-        assert_eq!(seen.len(), 91); // #90: +SKY-L0127; #99: +SKY-L0128; #32: +SKY-T0016; builtin-record-update: +SKY-T0017; #196: +SKY-N0028
+        assert_eq!(seen.len(), 91);
     }
 
     /// CI coverage gate: every taxonomy code has a conforming explain page.
