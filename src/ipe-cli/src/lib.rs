@@ -15,6 +15,7 @@
 //!
 //! Errors are typed ([`CliError`]); no operation panics or unwraps.
 
+pub mod build_plan;
 mod cache;
 pub mod project;
 pub mod stdlib;
@@ -66,6 +67,16 @@ pub enum CliError {
         input: String,
         suggestions: Vec<&'static str>,
     },
+    /// A static-build request was refused (typed reason — see
+    /// [`build_plan::Refusal`]). Refusal means NO artifact: the build asked
+    /// to be static is never silently degraded to a dynamic one.
+    StaticRefusal(build_plan::Refusal),
+}
+
+impl From<build_plan::Refusal> for CliError {
+    fn from(refusal: build_plan::Refusal) -> Self {
+        Self::StaticRefusal(refusal)
+    }
 }
 
 impl fmt::Display for CliError {
@@ -82,6 +93,7 @@ impl fmt::Display for CliError {
                 "could not locate the Sky runtime; \
                  set IPE_RUNTIME_DIR to an explicit path or pass --runtime <dir>"
             ),
+            Self::StaticRefusal(refusal) => write!(f, "static build refused: {refusal}"),
             Self::UnknownCode { input, suggestions } => {
                 write!(f, "unknown error code `{input}`")?;
                 match suggestions.split_first() {
@@ -101,6 +113,20 @@ impl fmt::Display for CliError {
 
 impl std::error::Error for CliError {}
 
+/// Options modifying how a build is WRITTEN, not what is compiled.
+///
+/// The static plan is applied post-emit at write time — the compile pipeline
+/// and its on-disk caches stay untouched (their keys deliberately exclude
+/// the plan; the transform is a deterministic function of the plan applied
+/// on cache-hit and cache-miss paths alike).
+#[derive(Clone, Copy, Default)]
+pub struct BuildOptions {
+    /// `Some` — staticize the emitted project (activate the planned
+    /// allocator feature, add the generated `.cargo/config.toml`). `None` —
+    /// normal dynamic build; also removes a stale generated static config.
+    pub static_plan: Option<ipe_backend_rust::static_build::StaticPlan>,
+}
+
 /// Build `entry` into a Rust Cargo project under `out_dir`, vendoring the
 /// runtime module tree from `runtime_dir`.
 ///
@@ -108,6 +134,20 @@ impl std::error::Error for CliError {}
 /// Returns [`CliError::Pipeline`] when the compiler rejects the program,
 /// [`CliError::Io`] on any filesystem failure.
 pub fn build(entry: &Path, out_dir: &Path, runtime_dir: &Path) -> Result<(), CliError> {
+    build_with_options(entry, out_dir, runtime_dir, BuildOptions::default())
+}
+
+/// [`build`] with explicit [`BuildOptions`] (the static-plan-aware variant).
+///
+/// # Errors
+/// As [`build`], plus [`CliError::StaticRefusal`] when the emitted app shape
+/// cannot be static (an `Ipe.Webview` app under a static plan).
+pub fn build_with_options(
+    entry: &Path,
+    out_dir: &Path,
+    runtime_dir: &Path,
+    options: BuildOptions,
+) -> Result<(), CliError> {
     let source = fs::read_to_string(entry).map_err(|e| io_err(entry, e))?;
 
     // Parse ONCE with a throwaway interner to learn the entry's declared module
@@ -151,6 +191,7 @@ pub fn build(entry: &Path, out_dir: &Path, runtime_dir: &Path) -> Result<(), Cli
         runtime_dir,
         entry,
         ipe_backend_rust::DbDriver::Sqlite,
+        options,
     )
 }
 
@@ -178,6 +219,21 @@ pub fn build_with_sibling_discovery(
     entry: &Path,
     out_dir: &Path,
     runtime_dir: &Path,
+) -> Result<(), CliError> {
+    build_with_sibling_discovery_with_options(entry, out_dir, runtime_dir, BuildOptions::default())
+}
+
+/// [`build_with_sibling_discovery`] with explicit [`BuildOptions`] (the
+/// static-plan-aware variant).
+///
+/// # Errors
+/// As [`build_with_sibling_discovery`], plus [`CliError::StaticRefusal`]
+/// when the emitted app shape cannot be static.
+pub fn build_with_sibling_discovery_with_options(
+    entry: &Path,
+    out_dir: &Path,
+    runtime_dir: &Path,
+    options: BuildOptions,
 ) -> Result<(), CliError> {
     let source = fs::read_to_string(entry).map_err(|e| io_err(entry, e))?;
     let pipeline_err = |diag: Diagnostic| CliError::Pipeline {
@@ -244,6 +300,7 @@ pub fn build_with_sibling_discovery(
         runtime_dir,
         entry,
         ipe_backend_rust::DbDriver::Sqlite,
+        options,
     )
 }
 
@@ -298,6 +355,7 @@ pub(crate) enum CacheOutcome {
 /// # Errors
 /// [`CliError::Pipeline`] carrying the first compiler diagnostic; [`CliError::Io`]
 /// on any filesystem failure.
+#[allow(clippy::too_many_arguments)]
 fn compile_modules(
     sources: BTreeMap<Vec<String>, (PathBuf, String)>,
     discovered: Vec<project::DiscoveredModule>,
@@ -306,6 +364,7 @@ fn compile_modules(
     runtime_dir: &Path,
     blame_path: &Path,
     db_driver: ipe_backend_rust::DbDriver,
+    options: BuildOptions,
 ) -> Result<(), CliError> {
     let cache_dir = cache::env_cache_dir(out_dir);
     compile_modules_observed(
@@ -317,6 +376,7 @@ fn compile_modules(
         blame_path,
         db_driver,
         cache_dir.as_deref(),
+        options,
     )
     .0
 }
@@ -350,6 +410,7 @@ fn compile_modules_observed(
     blame_path: &Path,
     db_driver: ipe_backend_rust::DbDriver,
     cache_dir: Option<&Path>,
+    options: BuildOptions,
 ) -> (Result<(), CliError>, CacheOutcome) {
     // Inject the transitive compiled-source stdlib closure. `injected` is the
     // driver's unforgeable record of which module paths are trusted stdlib
@@ -366,7 +427,7 @@ fn compile_modules_observed(
         && let Some(emitted) = cache::try_load(root, epoch, &cache_key)
     {
         return (
-            write_emitted_project(&emitted, out_dir, runtime_dir),
+            write_emitted_project(&emitted, out_dir, runtime_dir, options.static_plan.as_ref()),
             CacheOutcome::Hit,
         );
     }
@@ -399,7 +460,12 @@ fn compile_modules_observed(
                 // other cache-write in this module.
                 cache::store(root, epoch, &cache_key, &emitted);
                 return (
-                    write_emitted_project(&emitted, out_dir, runtime_dir),
+                    write_emitted_project(
+                        &emitted,
+                        out_dir,
+                        runtime_dir,
+                        options.static_plan.as_ref(),
+                    ),
                     CacheOutcome::IrHit,
                 );
             }
@@ -460,7 +526,7 @@ fn compile_modules_observed(
     }
 
     (
-        write_emitted_project(&emitted, out_dir, runtime_dir),
+        write_emitted_project(&emitted, out_dir, runtime_dir, options.static_plan.as_ref()),
         CacheOutcome::Miss,
     )
 }
@@ -806,15 +872,75 @@ pub fn compile_prepared(
 /// invalidate its own build cache. This is a pure driver-boundary filesystem
 /// operation — no salsa query touches disk (INV-1).
 ///
+/// Under a static plan (see `docs/architecture/static-compilation.md`) the
+/// intended project additionally gets the planned allocator feature spliced
+/// into `Cargo.toml` and a generated `.cargo/config.toml` — and an
+/// `Ipe.Webview` shape is refused BEFORE any file is written (a webview app
+/// links the system webview; a "static" artifact would be a lie). A
+/// non-static build removes a stale generated config so `+crt-static` can
+/// never leak from an earlier static build into later ones.
+///
 /// # Errors
-/// [`CliError::Io`] on any filesystem failure.
+/// [`CliError::Io`] on any filesystem failure; [`CliError::StaticRefusal`]
+/// for a webview shape under a static plan; [`CliError::Pipeline`] on a
+/// backend-invariant breach (manifest anchor drift).
 fn write_emitted_project(
     emitted: &ipe_backend::EmittedProject,
     out_dir: &Path,
     runtime_dir: &Path,
+    static_plan: Option<&ipe_backend_rust::static_build::StaticPlan>,
 ) -> Result<(), CliError> {
-    let manifest = build_emit_manifest(emitted, runtime_dir)?;
-    reconcile_emitted_project(&manifest, out_dir)
+    use ipe_backend_rust::static_build;
+
+    let mut manifest = build_emit_manifest(emitted, runtime_dir)?;
+    if let Some(plan) = static_plan {
+        if static_build::manifest_is_webview(&emitted.cargo_toml).map_err(backend_invariant_err)? {
+            return Err(CliError::StaticRefusal(build_plan::Refusal::WebviewStatic));
+        }
+        let cargo_toml = static_build::staticize_manifest(&emitted.cargo_toml, plan.allocator)
+            .map_err(backend_invariant_err)?;
+        manifest.insert(PathBuf::from("Cargo.toml"), cargo_toml);
+        manifest.insert(
+            PathBuf::from(".cargo/config.toml"),
+            static_build::cargo_config(plan),
+        );
+    }
+    reconcile_emitted_project(&manifest, out_dir)?;
+    if static_plan.is_none() {
+        remove_stale_static_config(out_dir)?;
+    }
+    Ok(())
+}
+
+/// Map a backend-invariant [`Diagnostic`] (a `CompilerBug` from manifest
+/// surgery — no owning source file) onto the pipeline error channel, blamed
+/// on the emitted manifest.
+fn backend_invariant_err(diag: Diagnostic) -> CliError {
+    CliError::Pipeline {
+        file: PathBuf::from("Cargo.toml"),
+        src: String::new(),
+        diag,
+    }
+}
+
+/// Remove a stale GENERATED `.cargo/config.toml` from the project root — and
+/// only a generated one: the file is deleted solely when it starts with
+/// [`ipe_backend_rust::static_build::CARGO_CONFIG_MARKER`], so a config a
+/// user placed there by hand is never touched. Needed because the
+/// reconciler's prune pass is scoped to `out_dir/src` and cannot own
+/// root-level files.
+fn remove_stale_static_config(out_dir: &Path) -> Result<(), CliError> {
+    let path = out_dir.join(".cargo").join("config.toml");
+    match fs::read_to_string(&path) {
+        Ok(text) if text.starts_with(ipe_backend_rust::static_build::CARGO_CONFIG_MARKER) => {
+            match fs::remove_file(&path) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(io_err(&path, e)),
+            }
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Assemble the complete intended on-disk project, relative to `out_dir`:
@@ -1009,6 +1135,21 @@ pub fn build_project(
     out_dir: &Path,
     runtime_dir: &Path,
 ) -> Result<(), CliError> {
+    build_project_with_options(manifest_path, out_dir, runtime_dir, BuildOptions::default())
+}
+
+/// [`build_project`] with explicit [`BuildOptions`] (the static-plan-aware
+/// variant).
+///
+/// # Errors
+/// As [`build_project`], plus [`CliError::StaticRefusal`] when the emitted
+/// app shape cannot be static.
+pub fn build_project_with_options(
+    manifest_path: &Path,
+    out_dir: &Path,
+    runtime_dir: &Path,
+    options: BuildOptions,
+) -> Result<(), CliError> {
     let manifest = project::parse_manifest(manifest_path)?;
     let discovered = project::discover_modules(&manifest.src_root)?;
 
@@ -1034,6 +1175,7 @@ pub fn build_project(
         runtime_dir,
         manifest_path,
         manifest.driver,
+        options,
     )
 }
 
@@ -1085,6 +1227,8 @@ pub fn resolve_runtime() -> Result<PathBuf, CliError> {
 /// The top-level usage hint, listing every subcommand and flag.
 const USAGE: &str = "usage:\n  \
      ipe build <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]\n  \
+     \x20         [--static] [--target <triple>] [--allocator <auto|system|dlmalloc|talc|mimalloc>]\n  \
+     \x20         [--allow-slow-allocator]\n  \
      ipe run   <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [-- <args>...]\n  \
      ipe watch <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [--port <n>]\n  \
      ipe explain [<CODE>]\n  \
@@ -1140,7 +1284,9 @@ fn run_watch(rest: &[String]) -> Result<(), CliError> {
     watch::run(&opts)
 }
 
-/// `ipe build <entry.ipe> [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]`.
+/// `ipe build <entry.ipe> [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]
+/// [--static] [--target <triple>] [--allocator <choice>]
+/// [--allow-slow-allocator]`.
 fn run_build(rest: &[String]) -> Result<(), CliError> {
     let mut it = rest.iter();
     let entry = it.next().ok_or(CliError::Usage(USAGE))?.clone();
@@ -1148,15 +1294,32 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
     let mut runtime: Option<String> = None;
     let mut emit_ir = false;
     let mut fix = false;
+    let mut static_flag = false;
+    let mut target: Option<String> = None;
+    let mut allocator: Option<build_plan::AllocatorChoice> = None;
+    let mut allow_slow_allocator = false;
     while let Some(flag) = it.next() {
         match flag.as_str() {
             "--out" => out = Some(it.next().ok_or(CliError::Usage(USAGE))?.clone()),
             "--runtime" => runtime = Some(it.next().ok_or(CliError::Usage(USAGE))?.clone()),
             "--emit-ir" => emit_ir = true,
             "--fix" => fix = true,
+            "--static" => static_flag = true,
+            "--target" => target = Some(it.next().ok_or(CliError::Usage(USAGE))?.clone()),
+            "--allocator" => {
+                let raw = it.next().ok_or(CliError::Usage(USAGE))?;
+                allocator = Some(build_plan::AllocatorChoice::parse(raw)?);
+            }
+            "--allow-slow-allocator" => allow_slow_allocator = true,
             _ => return Err(CliError::Usage(USAGE)),
         }
     }
+    let cli_layer = build_plan::StaticRequestLayer {
+        static_build: static_flag.then_some(true),
+        target,
+        allocator,
+        allow_slow_allocator: allow_slow_allocator.then_some(true),
+    };
 
     let entry_path = PathBuf::from(&entry);
 
@@ -1205,12 +1368,34 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
         find_manifest_for_sky_file(&entry_path)
     };
 
+    // Static-request precedence: CLI flags > env (IPE_STATIC / IPE_TARGET /
+    // IPE_ALLOC) > sky.toml [rust] > AUTO. Resolved ONCE into a typed plan
+    // (or a typed refusal — no artifact) before any compilation starts.
+    let toml_layer = match &manifest {
+        Some(m) => project::parse_manifest(m)?.static_request,
+        None => build_plan::StaticRequestLayer::default(),
+    };
+    let merged = cli_layer.or(build_plan::env_layer()?).or(toml_layer);
+    let static_plan = build_plan::resolve(&merged)?;
+    if let Some(plan) = &static_plan {
+        build_plan::preflight(plan)?;
+        if plan.allocator == ipe_backend_rust::static_build::StaticAllocator::Mimalloc {
+            // The design's explicit opt-in notice: the C cost is acknowledged,
+            // never silent.
+            eprintln!(
+                "note: mimalloc adds a C toolchain and unsafe FFI, vendors C source, and \
+                 freezes it into the artifact for CVE-rebuild purposes; chosen explicitly."
+            );
+        }
+    }
+    let options = BuildOptions { static_plan };
+
     // No sky.toml found: compile entry + all sibling .ipe files in the same
     // directory. Byte-identical to `build` when the directory holds only the
     // entry file (regression-covered by the golden suite).
     manifest.map_or_else(
-        || build_with_sibling_discovery(&entry_path, &out_dir, &runtime_dir),
-        |m| build_project(&m, &out_dir, &runtime_dir),
+        || build_with_sibling_discovery_with_options(&entry_path, &out_dir, &runtime_dir, options),
+        |m| build_project_with_options(&m, &out_dir, &runtime_dir, options),
     )
 }
 
@@ -1878,7 +2063,7 @@ mod tests {
         let index = code_index();
         let lines = index.lines().count();
         assert_eq!(lines, ALL_CODES.len(), "one line per code");
-        assert_eq!(ALL_CODES.len(), 94, "taxonomy is 94 codes");
+        assert_eq!(ALL_CODES.len(), 97, "taxonomy is 97 codes");
         assert!(
             index.contains("IPE-T0001  type mismatch"),
             "index pairs code with title"
@@ -2499,6 +2684,7 @@ main =
             Path::new("<cache-e2e>"),
             ipe_backend_rust::DbDriver::Sqlite,
             Some(&cache_dir),
+            BuildOptions::default(),
         );
         assert!(
             result_a.is_ok(),
@@ -2532,6 +2718,7 @@ main =
             Path::new("<cache-e2e>"),
             ipe_backend_rust::DbDriver::Sqlite,
             Some(&cache_dir),
+            BuildOptions::default(),
         );
         assert!(
             result_b.is_ok(),
@@ -2624,6 +2811,7 @@ main =
             Path::new("<p>"),
             ipe_backend_rust::DbDriver::Sqlite,
             Some(&cache_dir),
+            BuildOptions::default(),
         );
         assert!(
             result_a.is_ok(),
@@ -2652,6 +2840,7 @@ main =
             Path::new("<p>"),
             ipe_backend_rust::DbDriver::Postgres,
             Some(&cache_dir),
+            BuildOptions::default(),
         );
         assert!(
             result_b.is_ok(),
@@ -2712,6 +2901,7 @@ main =
             Path::new("<p>"),
             ipe_backend_rust::DbDriver::Sqlite,
             Some(&cache_dir),
+            BuildOptions::default(),
         );
         assert!(
             result_a.is_ok(),
@@ -2743,6 +2933,7 @@ main =
             Path::new("<p>"),
             ipe_backend_rust::DbDriver::Postgres,
             Some(&cache_dir),
+            BuildOptions::default(),
         );
         assert!(
             result_b.is_ok(),
@@ -2797,6 +2988,7 @@ main =
             Path::new("<cache-e2e>"),
             ipe_backend_rust::DbDriver::Sqlite,
             None,
+            BuildOptions::default(),
         );
         assert!(result.is_ok(), "compile must succeed: {:?}", result.err());
         assert_eq!(
