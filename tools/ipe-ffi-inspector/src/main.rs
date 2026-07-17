@@ -510,6 +510,9 @@ fn main() {
             "--allow-build-scripts" => {
                 ALLOW_BUILD_SCRIPTS.with(|c| c.set(true));
             }
+            "--fetch-only" => {
+                FETCH_ONLY.with(|c| c.set(true));
+            }
             "--manifest" => {
                 i += 1;
                 if i < raw_args.len() {
@@ -957,6 +960,19 @@ edition = "2021"
 
     // Fetch first (uses cargo cache — fast on repeated calls)
     fetch_dep(&manifest_str)?;
+
+    // Two-phase sandbox: the fetch phase populates the scoped CARGO_HOME
+    // registry (network on) and STOPS here — before `check_build_consent` /
+    // rustdoc expand any proc-macro or build script. No foreign code runs
+    // while egress is available; the introspect phase re-runs offline.
+    if FETCH_ONLY.with(std::cell::Cell::get) {
+        return Ok((
+            "{}".to_owned(),
+            req_version.unwrap_or("").to_owned(),
+            Vec::new(),
+            Vec::new(),
+        ));
+    }
 
     // AUD-10: consent gate BEFORE rustdoc — see `check_build_consent`'s doc
     // comment for why this must run here and not after.
@@ -3878,6 +3894,12 @@ thread_local! {
     // chain, without threading a new parameter through every call site (including
     // the multi-crate `--manifest` fan-out).
     static ALLOW_BUILD_SCRIPTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    // Two-phase FFI sandbox: `--fetch-only` runs the network-on fetch phase
+    // (populate the scoped CARGO_HOME registry) and exits BEFORE any rustdoc /
+    // proc-macro / build-script expansion, so no foreign code runs while
+    // network egress is available. The subsequent introspect phase re-runs the
+    // inspector offline with no egress.
+    static FETCH_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static TAIL_AUDIT_DROPS: std::cell::RefCell<Vec<(String, bool, String)>> =
         const { std::cell::RefCell::new(Vec::new()) };
     // Wall #3 coverage: per-symbol generic-stub drops (always recorded — the
