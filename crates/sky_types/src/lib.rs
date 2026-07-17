@@ -2762,6 +2762,60 @@ mod tests {
         }
     }
 
+    /// Regression against the SKY-T0011 false-positive class (the ex10-shaped
+    /// bug): a `case` whose arms cover every constructor of a closed union
+    /// EXACTLY ONCE — no trailing `_`, no redundant arm — must emit ZERO
+    /// `RedundantCaseBranch` warnings, even when the same function body also
+    /// contains attribute-list / call / list sub-expressions (the
+    /// `[class "…"]`-shaped nodes a `view` function is built from). The
+    /// redundancy walk runs only over real `case` arm matrices; it must never
+    /// mis-attribute a "redundant" verdict to a `List` / `Call` node that is not
+    /// a `case` arm at all. Mirrors `redundant_case_branch_names_constructor`
+    /// (which locks the true-positive) so the two together pin the checker to
+    /// fire on genuinely-subsumed arms and nowhere else.
+    #[test]
+    fn exhaustive_case_with_attr_lists_emits_no_redundant_warning() {
+        // Three-constructor `Msg`, each arm once, no `_`; the `view` helper wraps
+        // the branch bodies in list literals (`[a, b]`) and calls (`f […]`) — the
+        // exact shapes the false positive mis-blamed at "line 71 col 23".
+        let src = "module Main exposing (main)\n\
+                   import Sky.Core.Prelude exposing (..)\n\
+                   type Msg = Increment | Decrement | Reset\n\
+                   step : Msg -> Int -> Int\n\
+                   step msg n =\n        case msg of\n\
+                   \x20           Increment -> n + 1\n\
+                   \x20           Decrement -> n - 1\n\
+                   \x20           Reset -> 0\n\
+                   view : Int -> List Int\n\
+                   view n =\n        wrap [ n, n + 1 ] [ n - 1 ]\n\
+                   wrap : List Int -> List Int -> List Int\n\
+                   wrap a b =\n        List.append a b\n\
+                   main =\n    println (String.fromInt (step Reset 0))\n";
+        let Some((m, mut i)) = canon_src(src) else {
+            return;
+        };
+        let r = infer(&m, &mut i);
+        let types = r.expect("an exhaustive, non-redundant program must type-check");
+        let redundant: Vec<_> = types
+            .warnings
+            .iter()
+            .filter(|w| {
+                matches!(
+                    w,
+                    Diagnostic::Type {
+                        msg: TypeError::RedundantCaseBranch { .. },
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert!(
+            redundant.is_empty(),
+            "an exhaustive case with no redundant arm must emit ZERO SKY-T0011, \
+             got {redundant:?}"
+        );
+    }
+
     /// SKY-L0124 (#153 follow-up): a `Live.app` with a non-empty `routes` list
     /// whose Model has NO `page` field emits a **warning**, not an error. The
     /// program still type-checks (Go's `applyRoute` no-ops the same shape); the
