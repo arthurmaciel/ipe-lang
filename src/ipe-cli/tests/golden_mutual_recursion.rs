@@ -1,6 +1,6 @@
 //! Recursion-soundness gate: MUTUALLY-recursive ADTs whose size
 //! cycle is closed only through enum-payload edges (`Even -> Odd -> Even`).
-//! `skyc` must emit `main.rs` byte-identical to the checked-in golden, and
+//! `ipe` must emit `main.rs` byte-identical to the checked-in golden, and
 //! (behind `IPE_E2E=1`) the emitted project must build and print `5`.
 //!
 //! ```text
@@ -10,7 +10,7 @@
 //!
 //! Neither enum is *directly* self-recursive — `Even` carries an `Odd` and
 //! `Odd` carries an `Even` — so boxing only a direct self-edge would emit two
-//! enums that are each infinite-sized in Rust (E0072): `skyc` exits 0 and the
+//! enums that are each infinite-sized in Rust (E0072): `ipe` exits 0 and the
 //! emitted crate then fails `cargo build`. So the backend boxes at least one
 //! enum-payload edge of every type-size cycle, so each enum
 //! stays finite-sized, balanced by `Box::new` at construction and a deref at

@@ -1,7 +1,7 @@
 # Efficiency Audit — 2026-07-02
 
 Merged ledger from six performance-audit partitions across the Rust backend:
-the type solver (`sky_types`), the Sky→IR lowerer (`sky_lower`), the Rust
+the type solver (`sky_types`), the Ipê→IR lowerer (`sky_lower`), the Rust
 emitter (`sky_backend_rust`), the parser/canonicaliser/interner
 (`sky_parse` / `sky_canon` / `sky_intern`), the runtime hot paths
 (`runtime/src/sky_runtime`), and a data-structure cross-cut (interner /
@@ -173,7 +173,7 @@ dominant defect is the per-scope full-`Env` clone.
 ## 6. Runtime hot paths — `runtime/src/sky_runtime`
 
 Hottest paths reachable from emitted programs: `html.rs` render/escape,
-`live/diff.rs` SSE diff, `ui/render.rs` Std.Ui→Html, `tea.rs`/`list.rs` kernels.
+`live/diff.rs` SSE diff, `ui/render.rs` Ipe.Ui→Html, `tea.rs`/`list.rs` kernels.
 
 | file:line | impact | title | fix | safety-note summary |
 |---|---|---|---|---|
@@ -181,7 +181,7 @@ Hottest paths reachable from emitted programs: `html.rs` render/escape,
 | `live/diff.rs:145-176` (diff_attrs collect) | **high** | SSE attr diff clones every key AND value of every element into two owned HashMaps per diff | Borrow: `HashMap<&str,&str>` over the attr slices; comparison works unchanged; only `insert_safe_attr` (already copying) allocs, and only for changed attrs. | Same changed/added/removed key set regardless of owned-vs-borrowed; same `insert_safe_attr` XSS gate on same pairs. Iteration order already unordered → no observable shift. Lifetimes sound (slices outlive the local maps). |
 | `live/diff.rs:88` | medium | `diff_node` eagerly allocs the sky-id String for every element pair, even when no patch is emitted | `let id: &str = sky_id(old).unwrap_or("");` — `Patch::for_id(&str)` already does the single `.into()` only when a Patch is built. | Identical patches; only eager materialisation deferred to the points that already copy it. Borrow bounded by `old`. |
 | `live/diff.rs:235-241` (render_children) | medium | Whole-subtree replace renders each child into its own String before concatenating | Expose `pub(crate) render_into(node, &mut String)` and write children directly into the shared accumulator — no per-child String. | `render_html` = new String + `render_into`; concat order + content unchanged. Same recursion, same `MAX_HTML_DEPTH` cap. |
-| `ui/render.rs:160-348` (build_style_string) | medium | Std.Ui style builder allocs one String per CSS declaration then joins | Write directly into a single String with a running `;` separator (helper prepends `;` when non-empty); drop the `Vec<String>` + join. | `;`-joined declarations in same order → byte-identical. CSS security gates (SafeCssPropertyName/Value, dangerous-URL, saturating_add) unchanged. |
+| `ui/render.rs:160-348` (build_style_string) | medium | Ipe.Ui style builder allocs one String per CSS declaration then joins | Write directly into a single String with a running `;` separator (helper prepends `;` when non-empty); drop the `Vec<String>` + join. | `;`-joined declarations in same order → byte-identical. CSS security gates (SafeCssPropertyName/Value, dangerous-URL, saturating_add) unchanged. |
 | `ui/render.rs:81,98` (SafeCssValue::parse) | low | CSS value gate allocs two Strings per user style value (`to_ascii_lowercase` + filtered `collect`) | Run the cheap breakout-char checks against the borrowed original; build the whitespace-stripped lowercase buffer lazily only if those pass. | **Must preserve the exact match set** (`;{}`, `</`, `/*`, `@import`, whitespace-insensitive script-sink list). Verify against `css_midvalue_injection_dropped`/`css_dangerous_key_dropped` before landing — else leave as-is (security > efficiency). |
 
 ---
@@ -208,7 +208,7 @@ recorded so a future pass does not "optimize" them into a regression.
 
 - **Runtime `list_filter` per-element clone** (`runtime/src/sky_runtime/list.rs:120-122`).
   `list.into_iter().filter(|x| f(x.clone()))` clones each element to feed the
-  predicate. Passing `&T0` would require a codegen-wide closure-ABI change (Sky
+  predicate. Passing `&T0` would require a codegen-wide closure-ABI change (Ipê
   predicates lower as `Fn(T0)->bool`, by value — same reason `list_sort_by`
   carries `A: Clone`), and could alter move/borrow semantics of user closures.
   **Rejected:** trades soundness of the closure ABI (principle 3) for speed.

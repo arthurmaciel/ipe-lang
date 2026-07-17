@@ -1,7 +1,7 @@
 # WASM / browser target for ipê
 
 > **Status:** design-locked (this document). No code, no build yet.
-> **Scope:** running ipê in the browser — client-side apps (SPA + Sky.Live
+> **Scope:** running ipê in the browser — client-side apps (SPA + Ipe.Live
 > hydration) and an online playground.
 > **Principle ordering (binding for every decision below):** security >
 > correctness > soundness > efficiency > completeness > readability.
@@ -39,7 +39,7 @@ a fork survived critique, it is listed under **Open decisions** for the user.
    (server effects have no denotation at canonicalisation), (2) module partition
    + reachability closure, (3) the emitted `Cargo.toml` dep-floor. Reject the
    `Task`-capability-row as a v1 mechanism.
-7. **Q6 — Sky.Live:** **both** pure-SPA and isomorphic SSR + hydration. Pure-SPA
+7. **Q6 — Ipe.Live:** **both** pure-SPA and isomorphic SSR + hydration. Pure-SPA
    ships MVP; hydration is design-locked, built MVP+1. Opt-in via a `[wasm]`
    `sky.toml` section + `ipe build --target wasm`.
 8. **Q7 — playground:** B1 (server-compile) now; B2 (front-end + IR interpreter
@@ -57,9 +57,9 @@ a fork survived critique, it is listed under **Open decisions** for the user.
     `console_error_panic_hook` emits a classified diagnostic (`console.error` +
     errId, incl. `StackOverflow`) before the instance dies — never a *silent*
     white-screen, but not a recovered UI either.
-11. **Top 5 CANNOT-compile:** `File.*`; `Process.run`; `Std.Db.*` (server SQL +
+11. **Top 5 CANNOT-compile:** `File.*`; `Process.run`; `Ipe.Db.*` (server SQL +
     connection strings); `Auth.signToken` / HS256 `verifyToken` / `register` /
-    `login` / `setRole`; `Sky.Http.Server.*` + Sky.Live session stores. Also
+    `login` / `setRole`; `Ipe.Http.Server.*` + Ipe.Live session stores. Also
     `System.getenv`/`exit`, `Email.send`.
 12. **Open decisions** (§Open): reqwest-wasm vs raw `web-sys` fetch; JWT/bcrypt
     WASM crate maturity; the IndexedDB substitute module shape (v2); the
@@ -73,7 +73,7 @@ a fork survived critique, it is listed under **Open decisions** for the user.
 
 - **Target A — compile ipê PROGRAMS to WASM.** A TEA app (`init`/`update`/
   `view`) runs client-side and drives the real DOM: a SPA, or the client half of
-  a Sky.Live SSR + hydration page. This is the product — the "real online
+  a Ipe.Live SSR + hydration page. This is the product — the "real online
   experience." **Priority 1.** ~85% reuse (front-end unchanged; runtime
   VNode/diff/render already ported; the backend already emits a cargo crate that
   targets `wasm32` cleanly for WASM-compatible deps).
@@ -117,7 +117,7 @@ Target triple: **`wasm32-unknown-unknown` + wasm-bindgen** (browser/DOM). **Not*
 
 ### Emitted-crate changes under `--target wasm`
 
-The emitter (`emit_expr.rs` / `emit_types.rs`) is **target-agnostic** — Sky
+The emitter (`emit_expr.rs` / `emit_types.rs`) is **target-agnostic** — Ipê
 values lower to the same Rust. Only two files branch on target:
 
 **`project.rs` — a WASM manifest template** (a fourth manifest alongside
@@ -180,11 +180,11 @@ runtime-agnostic, so only the *driver* changes.
 `cargo build --target wasm32-unknown-unknown --release`, then the `wasm-bindgen`
 CLI to emit `.wasm` + JS glue + a minimal `index.html` shell, then `wasm-opt -Oz`
 for size. This mirrors the existing cgo auto-detect the driver uses for
-Sky.Webview.
+Ipe.Webview.
 
-**Size posture.** DCE prunes Sky-side dead code; whole-program DCE + `opt-level=z`
+**Size posture.** DCE prunes Ipê-side dead code; whole-program DCE + `opt-level=z`
 + `lto` + `wasm-opt -Oz` cap the Rust dep graph. `chrono-tz` bundles the full
-IANA database — feature-gate it so apps not using `Std.Time` zones do not pay
+IANA database — feature-gate it so apps not using `Ipe.Time` zones do not pay
 for it. A client-bundle size budget gate is an Open decision.
 
 ---
@@ -240,39 +240,39 @@ Legend:
 | Http.get/post/request | SUBSTITUTE | `fetch` (reqwest-wasm primary; raw `web-sys` fetch fallback — Open) | Full `HttpResponse{status,body,headers}`. **New client failure modes** (CORS, forbidden headers, timeout via `AbortController`) surface as `Task.fail (Error …)` — never a trap, never `Task String`. |
 | Time.now / unixMillis | SUBSTITUTE | `Date.now()` / `performance.now()` | — |
 | Time.sleep / every | SUBSTITUTE | `setTimeout` / `setInterval` (gloo-timers) | — |
-| Time.format* / addMillis / diffMillis; Std.Time (chrono/chrono-tz) | COMPILES | — | tz data bundled; feature-gate `chrono-tz` (§Q2). |
+| Time.format* / addMillis / diffMillis; Ipe.Time (chrono/chrono-tz) | COMPILES | — | tz data bundled; feature-gate `chrono-tz` (§Q2). |
 | Random.* (entropy) | SUBSTITUTE | `crypto.getRandomValues` | Seeded splitmix64 variants are pure COMPILES. |
 | Crypto.randomBytes / randomToken | SUBSTITUTE | `crypto.getRandomValues` | — |
 | Log.* | SUBSTITUTE | `console.{debug,info,warn,error}` | Structured fields → console object. |
 | Io.writeStdout / writeStderr | SUBSTITUTE | `console.log` / `console.error` | — |
 | Io.readLine | **DOES-NOT** | — | No blocking stdin. Diagnostic points at `Ui.input` (a *different* API — not a silent substitute). |
-| Std.Live.Head (title/meta) | COMPILES | `document.title` / meta via web-sys (SPA); server-owned in hydrate mode | — |
-| Cache (Std.Cache LRU+TTL) | COMPILES | — | In-memory; bounded by tab memory. |
+| Ipe.Live.Head (title/meta) | COMPILES | `document.title` / meta via web-sys (SPA); server-owned in hydrate mode | — |
+| Cache (Ipe.Cache LRU+TTL) | COMPILES | — | In-memory; bounded by tab memory. |
 | Trace (span/event/attr) | SUBSTITUTE (degraded) | `console.group`; optional `fetch`/`sendBeacon` OTLP push | Hub-exporter-with-token DOES-NOT (bearer is a secret). |
-| WebSocket **client** (`Sky.Core.WebSocket`) | SUBSTITUTE | `web_sys::WebSocket` | Natural client↔server channel; can replace SSE for server-pushed Msgs. |
+| WebSocket **client** (`Ipe.WebSocket`) | SUBSTITUTE | `web_sys::WebSocket` | Natural client↔server channel; can replace SSE for server-pushed Msgs. |
 | Http.Stream (client upstream read as Sub) | SUBSTITUTE | `fetch` + `ReadableStream` | Post-MVP-optional. |
-| **File.*** (read/write/exists/mkdir/readDir/temp/copy/rename) | **DOES-NOT** | — | No filesystem. v2 *may* add an opt-in `Std.Browser.File` over the File System Access API / OPFS — a **distinct** module, never `Sky.Core.File`. |
+| **File.*** (read/write/exists/mkdir/readDir/temp/copy/rename) | **DOES-NOT** | — | No filesystem. v2 *may* add an opt-in `Ipe.Browser.File` over the File System Access API / OPFS — a **distinct** module, never `Ipe.File`. |
 | **Process.run** | **DOES-NOT** | — | No subprocess. |
 | **System.exit** (Diverging) | **DOES-NOT** | — | No process to exit; would be a trap. |
 | **System.getenv / getenvInt / getenvBool / setenv / unsetenv / args / cwd / loadEnv** | **DOES-NOT** | — | Reading process env is server-only **and** the sharpest secret-capture vector. Public build-time config flows ONLY through a distinct allowlisted kernel (§Q5), never `getenv`. |
-| **Std.Db.*** (open/connect/exec/query/queryDecode/migrate/withTransaction, all stores) | **DOES-NOT** | — | SQL drivers are server-only; connection strings are secrets. Substitute (if ever) is a distinct opt-in `Std.Browser.Store` over IndexedDB — **never** a `Std.Db` alias (that would make the SQL surface representable client-side, re-opening the gate). |
-| **Sky.Live session stores** (memory/sqlite/redis/postgres/firestore) | **DOES-NOT** | — | Server-side persistence. A hydrated client holds only an opaque server-issued token (§Q6). |
-| **Std.Auth** register/login/setRole | **DOES-NOT** | — | Server user tables + secret. |
+| **Ipe.Db.*** (open/connect/exec/query/queryDecode/migrate/withTransaction, all stores) | **DOES-NOT** | — | SQL drivers are server-only; connection strings are secrets. Substitute (if ever) is a distinct opt-in `Ipe.Browser.Store` over IndexedDB — **never** a `Ipe.Db` alias (that would make the SQL surface representable client-side, re-opening the gate). |
+| **Ipe.Live session stores** (memory/sqlite/redis/postgres/firestore) | **DOES-NOT** | — | Server-side persistence. A hydrated client holds only an opaque server-issued token (§Q6). |
+| **Ipe.Auth** register/login/setRole | **DOES-NOT** | — | Server user tables + secret. |
 | **Auth.signToken / signTokenWithClaims** | **DOES-NOT** | — | **Crown-jewel gate.** Signing needs `IPE_AUTH_TOKEN_SECRET`; the kernel is absent, so the secret has no client consumer. |
 | **Auth.verifyToken** (HS256 shared-secret path) | **DOES-NOT** | — | Same secret. RS256/public-key verify is the separate COMPILES path above. |
-| **Std.Email.send** | **DOES-NOT** | — | Provider API keys are secrets; send via a server endpoint over `Http.post`. |
-| **Sky.Http.Server** (+ Stream, Middleware, RateLimit, WebSocket **server**) | **DOES-NOT** | — | A browser tab is not a server. (Note the split: WebSocket *client* SUBSTITUTE; WebSocket *server* DOES-NOT.) |
-| **Std.Live.Console / consoleAuth** | **DOES-NOT** | — | Server-mounted dev console. |
+| **Ipe.Email.send** | **DOES-NOT** | — | Provider API keys are secrets; send via a server endpoint over `Http.post`. |
+| **Ipe.Http.Server** (+ Stream, Middleware, RateLimit, WebSocket **server**) | **DOES-NOT** | — | A browser tab is not a server. (Note the split: WebSocket *client* SUBSTITUTE; WebSocket *server* DOES-NOT.) |
+| **Ipe.Live.Console / consoleAuth** | **DOES-NOT** | — | Server-mounted dev console. |
 
-### TEA + Std.Ui — COMPILES (the headline)
+### TEA + Ipe.Ui — COMPILES (the headline)
 
-`Std.Ui` (`row`/`column`/`el`/`grid`/`text`/`button`/`input`/`form`, the
+`Ipe.Ui` (`row`/`column`/`el`/`grid`/`text`/`button`/`input`/`form`, the
 `Background`/`Border`/`Font`/`Region`/`Input` sub-modules, pseudo-classes, media
 queries, transitions/animations) renders through the ported `render.rs` to
 `Html<M>`; the client driver (§Q4) turns that into real DOM via `web-sys`.
-Inline-style + `<style data-sky-*>` injection compiles. Sky.Tui and Sky.Webview
+Inline-style + `<style data-sky-*>` injection compiles. Ipe.Tui and Ipe.Webview
 backends are irrelevant to WASM. The minimal first-target subset is "everything
-`render.rs` already emits"; no primitive is dropped a priori (unlike Sky.Tui,
+`render.rs` already emits"; no primitive is dropped a priori (unlike Ipe.Tui,
 which drops gradients/fine letter-spacing).
 
 **Effect-tier summary.** Pure + fallible-pure → 100% compile. Effects → compile
@@ -402,7 +402,7 @@ defence-in-depth. Reject the `Task`-capability-row as a v1 mechanism (below).
 
 ### Layer 1 — Target-keyed kernel registry (the floor: the effect has no denotation)
 
-The kernel registry (`crates/skyc/src/stdlib.rs` + the backend kernel table) is
+The kernel registry (`crates/ipe/src/stdlib.rs` + the backend kernel table) is
 **parameterised by `Target` (`Native` | `WasmClient`)**. The client table is an
 **allowlist, default-deny**: under `--target wasm` a kernel has a client
 denotation **only if it is explicitly tagged `WasmClient`-safe** in the registry
@@ -442,7 +442,7 @@ modules; `server` for anything importing a DOES-NOT module). Rules:
 - the client build computes the **reachability closure** from the client entry
   point; if the closure transitively touches a `server` module or a DOES-NOT
   kernel, it is a **hard error naming the exact import path** (e.g. `Main(client)
-  → View(shared) → Data(server: imports Std.Db)`).
+  → View(shared) → Data(server: imports Ipe.Db)`).
 
 This supplies the *transitive/compositional* guarantee — a helper that
 transitively uses `Db` cannot be reached from a client-rooted computation — and
@@ -463,7 +463,7 @@ ship.
 ### Config: default-deny allowlist (+ layered secret denylist)
 
 `System.getenv` is DOES-NOT (Layer 1) — there is no client env-read. Public
-build-time config flows **only** through a distinct kernel (`Std.Env.public`)
+build-time config flows **only** through a distinct kernel (`Ipe.Env.public`)
 reading names explicitly enumerated in a `[wasm].publicEnv` allowlist. The
 allowlist is **authoritative and default-deny** (a denylist alone misses
 `STRIPE_SK`, `MY_PRIVATE_THING`, any unanticipated name). Layered on top: a
@@ -478,15 +478,15 @@ matching it is a **build error**, forcing the author to confirm. So
 | Hazard | Foreclosure |
 |---|---|
 | `IPE_AUTH_TOKEN_SECRET` | Double-gated: `System.getenv` and `Auth.signToken`/HS256-`verifyToken` are both DOES-NOT. No reader, no consumer. A hardcoded secret String is inert (no signing kernel to consume it). Cannot be allowlisted. |
-| DB credentials / connection strings | `Std.Db.*` + `System.getenv` DOES-NOT → no consumer. IndexedDB (v2) is a separate credential-free module. |
+| DB credentials / connection strings | `Ipe.Db.*` + `System.getenv` DOES-NOT → no consumer. IndexedDB (v2) is a separate credential-free module. |
 | JWT signing internals | `Auth.signToken`/HS256-`verifyToken` DOES-NOT; only public-key `Jwt.verifyRs256 pubKey` is representable client-side. |
-| Email / provider API keys | `Std.Email` DOES-NOT. |
+| Email / provider API keys | `Ipe.Email` DOES-NOT. |
 | Silent env bake-in | `publicEnv` allowlist (default-deny) + secret-name denylist. |
 | Server-effect-in-client | Layer-1 unbound-name at canon or Layer-2 reachability-closure error — never a runtime stub. |
 
 ### WASM ↔ JS/DOM boundary + FFI + CSP
 
-- **No arbitrary FFI in WASM.** The `sky add github.com/…` FFI subsystem is a
+- **No arbitrary FFI in WASM.** The `ipe add github.com/…` FFI subsystem is a
   native-target concept; the client target's *only* host surface is the fixed,
   audited `web-sys`/`js-sys` allowlist the runtime ships. A user cannot bind
   arbitrary JS — the FFI kernel is `server`-tagged and unrepresentable
@@ -537,7 +537,7 @@ independent reason (§Open).
 
 ---
 
-## Q6 — Sky.Live: SSR + hydration decision
+## Q6 — Ipe.Live: SSR + hydration decision
 
 **Decision.** Support **both** pure-SPA and isomorphic SSR + hydration.
 **Pure-SPA ships in the MVP** (strictly less machinery — no `adopt` path, no
@@ -636,7 +636,7 @@ Three modes:
      vs 64-bit native; length/offset math that overflowed silently on 64-bit can
      wrap at a *lower* bound on WASM — the checked-arithmetic kernels (§Q4) close
      this, but it is a real cross-target divergence to test.
-     (d) **locale/timezone** — `Std.Time` formatting must pin an explicit
+     (d) **locale/timezone** — `Ipe.Time` formatting must pin an explicit
      locale/zone (the bundled `chrono-tz` data), never read a host locale, so SSR
      and client format identically.
    - The gate does the heavy lifting: the client closure (`update`/`view`/
@@ -645,7 +645,7 @@ Three modes:
      `Cmd.perform (Http.post "/api/…")`.
 3. **Pure client SPA (MVP).** Static HTML shell + WASM bundle; `init` runs
    client-side; all effects client-side; data via `fetch` to a separate headless
-   `Sky.Http.Server` (compiled `--target native`). Deployable to any static
+   `Ipe.Http.Server` (compiled `--target native`). Deployable to any static
    host/CDN; offline-capable PWA by nature.
 
 **Opt-in mechanism.** A `[wasm]` section in `sky.toml` (composes with `[live]`),
@@ -697,7 +697,7 @@ needs the usual container/resource/time-limit isolation.
 
 **B2 — fully-client compile via the interpreter tier.** Shipping `rustc`+cargo to
 a browser tab is **infeasible** (not a preference — even Rust's own playground
-compiles server-side); a WASM `skyc` front-end gets you to typecheck + `sky_ir`
+compiles server-side); a WASM `ipe` front-end gets you to typecheck + `sky_ir`
 and **no runnable program**. The gap is closed by the roadmap's **interpreter
 tier** (Position A LOCKED; the interpreter is justified there by REPL +
 WASM/portability). Ship the front-end (`parse → canonicalise → type → sky_ir`)
@@ -713,7 +713,7 @@ mostly reuse of A once the interpreter exists.
   `ipe build`." H12 is extended to cover the WASM targets; the example sweep
   gains WASM rows (build + run under `--target wasm`).
 - The interpreter runs under the **same target-keyed kernel registry** in
-  `WasmClient` mode, so a playground snippet touching `Std.Db`/`Auth.signToken`
+  `WasmClient` mode, so a playground snippet touching `Ipe.Db`/`Auth.signToken`
   gets the same unbound-name error. The playground is sandboxed **by
   construction**; the secret boundary holds identically in interpreted mode.
 - The interpreter is a fixed evaluator: user ipê source is *data it evaluates*,
@@ -733,7 +733,7 @@ AOT path well before B2.
 
 ---
 
-## Divergences from Sky/Elm (stated factually)
+## Divergences from Ipê/Elm (stated factually)
 
 - **Elm compiles its compiler to JS and runs the playground fully client-side.**
   ipê's AOT compiler cannot: it emits Rust and delegates final codegen to
@@ -770,8 +770,8 @@ AOT path well before B2.
    Validate at build; the verify API-split (RS256 public-key only, client-side)
    narrows the surface.
 3. **IndexedDB / File-System-Access substitutes (v2).** If a client storage
-   surface is added, it MUST be a **distinct, namespaced module** (`Std.Browser.
-   Store` / `Std.Browser.File`) with **no** SQL surface — never a `Std.Db` alias
+   surface is added, it MUST be a **distinct, namespaced module** (`Ipe.Browser.
+   Store` / `Ipe.Browser.File`) with **no** SQL surface — never a `Ipe.Db` alias
    — so server DB code cannot typecheck against it. Confirm the shape when v2 is
    scoped.
 4. **`Task`-capability-row endgame.** Rejected for v1/v2 (§Q5). Reconsider only
@@ -780,7 +780,7 @@ AOT path well before B2.
    a possible third target for edge/serverless deploy (preserves more of
    File/System). Decide if/when edge deploy is on the roadmap.
 6. **Client-bundle size budget gate.** Whether the build fails / warns past a
-   size threshold, and where DCE reaches into the Rust dep graph vs the Sky side.
+   size threshold, and where DCE reaches into the Rust dep graph vs the Ipê side.
 7. **`Cmd.publish` cross-tab.** Whether `BroadcastChannel` cross-tab pub/sub is
    in-scope for MVP or an add-on; `publishNoEcho`'s cross-*process* bit is
    meaningless client-side.
@@ -794,12 +794,12 @@ AOT path well before B2.
   point where the manifest becomes computed-from-used-kernels.
 - `crates/sky_backend_rust/src/preamble.rs` — `#[wasm_bindgen(start)]` /
   `hydrate` entry + `spawn_local` driver (WASM branch).
-- `crates/skyc/src/stdlib.rs` (+ backend kernel table) — target-keyed kernel
+- `crates/ipe/src/stdlib.rs` (+ backend kernel table) — target-keyed kernel
   registry (`Native` | `WasmClient`) as a **default-deny allowlist** (a kernel is
   client-representable only if explicitly `WasmClient`-tagged); the Layer-1 gate.
-- `crates/skyc` canonicaliser — module `server`/`client`/`shared` classification
+- `crates/ipe` canonicaliser — module `server`/`client`/`shared` classification
   + reachability-closure check (Layer 2).
-- `crates/skyc` type checker — **`HydrationState` field-type gate**: the type
+- `crates/ipe` type checker — **`HydrationState` field-type gate**: the type
   serialised into the hydration island must have only client/shared-safe field
   types (reject any transitively secret/server-only field type at the
   declaration). Blocker-1 fix.

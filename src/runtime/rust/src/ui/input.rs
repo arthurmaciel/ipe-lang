@@ -1,4 +1,4 @@
-//! `Std.Ui.Input` kernel helpers -- typed form controls.
+//! `Ipe.Ui.Input` kernel helpers -- typed form controls.
 //!
 //! Mirrors `sky-stdlib/Std/Ui/Input.ipe` variant-for-variant.
 //! Every public function carries a trailing underscore matching
@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 /// `LabelPosition` -- which side the visible label is placed relative to its
 /// control. Mirrors `type LabelPosition = AbovePos | BelowPos | LeftPos | RightPos`
-/// in `Std.Ui.Input`.
+/// in `Ipe.Ui.Input`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LabelPosition {
     AbovePos,
@@ -128,7 +128,7 @@ fn is_layout_attr<M>(attr: &Attribute<M>) -> bool {
 
 /// If `layout_attrs` is non-empty, return `[AttrWidth Fill, AttrHeight Fill]`
 /// so the hoisted wrapper inherits sensible defaults. Mirrors
-/// `implicitFillIfHoisted` in `Std.Ui.Input`.
+/// `implicitFillIfHoisted` in `Ipe.Ui.Input`.
 fn implicit_fill_if_hoisted<M>(layout_attrs: &[Attribute<M>]) -> Vec<Attribute<M>> {
     if layout_attrs.is_empty() {
         vec![]
@@ -177,7 +177,7 @@ fn wrap_with_label<M: Clone>(
 // ---- Text-family controls ---------------------------------------------------
 
 /// Shared core for `text / email / username / search / currentPassword /
-/// newPassword`. Mirrors `inputBase` in `Std.Ui.Input`.
+/// newPassword`. Mirrors `inputBase` in `Ipe.Ui.Input`.
 fn input_base_<M: Clone>(
     input_type: &'static str,
     autocomplete: Option<&'static str>,
@@ -346,7 +346,7 @@ pub fn input_checkbox_<M: Clone + Send + Sync + 'static>(
     let toggle_msg = on_change(!checked);
     let check_val = if checked { "true" } else { "false" };
     // The checkbox change event delivers a Bool; we ignore it and always
-    // toggle (matches the Sky source's `cfg.onChange (not cfg.checked)`).
+    // toggle (matches the Ipê source's `cfg.onChange (not cfg.checked)`).
     let check_input_attrs = vec![
         ui_html_attribute_("type".into(), "checkbox".into()),
         ui_html_attribute_("value".into(), check_val.into()),
@@ -399,7 +399,7 @@ pub fn input_slider_<M: Clone>(
 /// `RadioOption msg` — a single radio choice.
 ///
 /// Mirrors `type RadioOption msg = RadioOption String (Element msg)` in
-/// `Std.Ui.Input`. Constructed via [`input_option_`].
+/// `Ipe.Ui.Input`. Constructed via [`input_option_`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct RadioOption<M> {
     /// The wire value submitted when this option is selected.
@@ -445,7 +445,7 @@ fn radio_core_<M: Clone + Send + Sync + 'static>(
             ui_html_attribute_("checked".into(), check_val.into()),
             // Use on_bool_ (the bool-valued change event on radio) to deliver
             // the wire value. The closure ignores the Bool payload and always
-            // emits the message for THIS option — matches Sky's onClick-per-label
+            // emits the message for THIS option — matches Ipê's onClick-per-label
             // convention from CLAUDE.md §Radio convention.
             ui_on_bool_(Arc::new(move |_b: bool| on_click_msg.clone())),
         ];

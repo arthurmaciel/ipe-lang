@@ -1,23 +1,23 @@
 //! `Ipe.Math` parity gate — two classes of golden in one file:
 //!
-//! 1. **Divergence from Sky**. `Math.min` / `Math.max` are polymorphic
-//!    `comparable` (`a -> a -> a`, Elm `Basics.min`/`max`). Sky routes BOTH
+//! 1. **Divergence from Ipê**. `Math.min` / `Math.max` are polymorphic
+//!    `comparable` (`a -> a -> a`, Elm `Basics.min`/`max`). Ipê routes BOTH
 //!    arguments through `AsInt` before the compare, coercing floats to `Int`
 //!    (`AsInt 0.4 = 0`, `AsInt 1.3 = 1`) and yielding a meaningless compare for
-//!    `String`. Sky-Rust compares at the argument's actual type and returns the
-//!    lesser / greater value unchanged. These goldens assert against Sky-Rust's
+//!    `String`. Ipê-Rust compares at the argument's actual type and returns the
+//!    lesser / greater value unchanged. These goldens assert against Ipê-Rust's
 //!    own recorded output via a `sanctioned.divergence` marker tagged
 //!    `divergence:`. Rationale: Elm-conformance.
 //!
-//!      * `Math.min 0.4 1.3` → `0.4`   (Sky's `AsInt` coercion gives `0`)
-//!      * `Math.max 0.4 1.3` → `1.3`   (Sky's `AsInt` coercion gives `1`)
-//!      * `Math.min "b" "a"` → `"a"`   (lexicographic; Sky's `AsInt` compare is
+//!      * `Math.min 0.4 1.3` → `0.4`   (Ipê's `AsInt` coercion gives `0`)
+//!      * `Math.max 0.4 1.3` → `1.3`   (Ipê's `AsInt` coercion gives `1`)
+//!      * `Math.min "b" "a"` → `"a"`   (lexicographic; Ipê's `AsInt` compare is
 //!        not meaningful on String)
 //!      * `Math.max "b" "a"` → `"b"`
 //!
-//! 2. **Go parity** — the rest. Here Sky's output is the target, so the cached
+//! 2. **Go parity** — the rest. Here Ipê's output is the target, so the cached
 //!    oracle is the Go output (`oracle_divergence = false`) and Sky-Rust must
-//!    match it byte-for-byte: `Math.min` / `Math.max` on `Int` (Sky's `AsInt`
+//!    match it byte-for-byte: `Math.min` / `Math.max` on `Int` (Ipê's `AsInt`
 //!    path gives the correct result for integers), `abs`, `sqrt` (incl. the
 //!    `sqrt (-1.0)` NaN domain edge), `pow`, `round` (half-away-from-zero, both
 //!    signs), `floor` / `ceil` / `trunc` on a negative (the three round
@@ -44,7 +44,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 
 /// Compile `tests/golden/<name>/Main.ipe`, build the emitted Cargo project,
 /// run it, and assert its stdout matches the cached oracle (the Go reference
-/// for a parity case, or Sky-Rust's own recorded output for a `divergence:`
+/// for a parity case, or Ipê-Rust's own recorded output for a `divergence:`
 /// entry). Gated on `IPE_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
     if std::env::var("IPE_E2E").is_err() {
@@ -84,16 +84,16 @@ fn math_max_int() {
 
 // ── min / max — Float (divergence-from-sky: polymorphic compare, no AsInt coercion) ──
 
-/// `Math.min 0.4 1.3` → `0.4`. Sky's `AsInt` coercion gives `0`; Sky-Rust
-/// compares `f64`s directly and returns `0.4` unchanged. Divergence from Sky,
+/// `Math.min 0.4 1.3` → `0.4`. Ipê's `AsInt` coercion gives `0`; Ipê-Rust
+/// compares `f64`s directly and returns `0.4` unchanged. Divergence from Ipê,
 /// rationale: Elm-conformance.
 #[test]
 fn math_min_float_no_truncation() {
     assert_runs_and_matches_oracle("math_min_float");
 }
 
-/// `Math.max 0.4 1.3` → `1.3`. Sky's `AsInt` coercion gives `1`; Sky-Rust
-/// returns `1.3`. Divergence from Sky, rationale: Elm-conformance.
+/// `Math.max 0.4 1.3` → `1.3`. Ipê's `AsInt` coercion gives `1`; Ipê-Rust
+/// returns `1.3`. Divergence from Ipê, rationale: Elm-conformance.
 #[test]
 fn math_max_float_no_truncation() {
     assert_runs_and_matches_oracle("math_max_float");
@@ -102,14 +102,14 @@ fn math_max_float_no_truncation() {
 // ── min / max — String (divergence-from-sky: lexicographic polymorphic compare) ──
 
 /// `Math.min "b" "a"` → `"a"`. Polymorphic compare on `String` (lexicographic).
-/// Sky's `AsInt` compare is not meaningful on String. Divergence from Sky,
+/// Ipê's `AsInt` compare is not meaningful on String. Divergence from Ipê,
 /// rationale: Elm-conformance.
 #[test]
 fn math_min_string_lexicographic() {
     assert_runs_and_matches_oracle("math_min_string");
 }
 
-/// `Math.max "b" "a"` → `"b"`. Divergence from Sky, rationale: Elm-conformance.
+/// `Math.max "b" "a"` → `"b"`. Divergence from Ipê, rationale: Elm-conformance.
 #[test]
 fn math_max_string_lexicographic() {
     assert_runs_and_matches_oracle("math_max_string");

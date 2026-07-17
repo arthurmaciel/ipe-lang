@@ -1,4 +1,4 @@
-//! Sky.Core.WebSocket — outbound WebSocket client (tokio-tungstenite).
+//! Ipe.WebSocket — outbound WebSocket client (tokio-tungstenite).
 //!
 //! Task-tier: connect/connectWith/send/sendBinary/close/closeWithCode via a
 //! per-socket registry (a write-command mpsc + a frames broadcast). Receive:
@@ -26,24 +26,24 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use tokio_tungstenite::tungstenite::Message;
 
-/// Sky.Core.WebSocket.WebSocketMessage — bridged so the runtime can build frames.
-/// Variant names match the Sky constructors (Text / Binary).
+/// Ipe.WebSocket.WebSocketMessage — bridged so the runtime can build frames.
+/// Variant names match the Ipê constructors (Text / Binary).
 ///
-/// The backend emits this type AS the Sky `WebSocketMessage` ADT (the enum decl
-/// is bridged, not user-emitted), so it must carry the same derives a real Sky
+/// The backend emits this type AS the Ipê `WebSocketMessage` ADT (the enum decl
+/// is bridged, not user-emitted), so it must carry the same derives a real Ipê
 /// enum gets — `serde::{Serialize, Deserialize}` in particular, since a Live
 /// `Msg` variant like `GotFrame WebSocketMessage` is serialized to/from the
 /// session store and the wire.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum WsClientMessage {
     Text(String),
-    /// Binary frames carry raw bytes (`Vec<u8>`) — no Latin-1 bridge. Sky code
+    /// Binary frames carry raw bytes (`Vec<u8>`) — no Latin-1 bridge. Ipê code
     /// that needs to inspect binary payload passes it through `Bytes.*` kernels.
     Binary(Vec<u8>),
 }
 
-/// Sky.Core.WebSocket.CloseCode — bridged so the runtime can build close codes
-/// for onClose's toMsg. Variant names match the Sky constructors. Carries the
+/// Ipe.WebSocket.CloseCode — bridged so the runtime can build close codes
+/// for onClose's toMsg. Variant names match the Ipê constructors. Carries the
 /// same serde derives as [`WsClientMessage`] for the same Live-`Msg` reason.
 #[allow(non_snake_case)]
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -73,7 +73,7 @@ enum WsEvent {
     Error(String),
 }
 
-/// Sky.Core.WebSocket.WebSocketCfg — built in Sky (defaultCfg + with*).
+/// Ipe.WebSocket.WebSocketCfg — built in Ipê (defaultCfg + with*).
 #[allow(non_snake_case)]
 #[derive(Clone, Debug)]
 pub struct WsClientCfg {
@@ -127,7 +127,7 @@ static WS_CLIENT_NEXT_ID: AtomicI64 = AtomicI64::new(1);
 
 /// Redact any `user:pass@` userinfo from a URL before it is echoed in an error
 /// message. WebSocket URLs legitimately carry credentials (`ws://user:pass@host`),
-/// and connect-error strings flow to `Std.Log` / structured logs, so the raw URL
+/// and connect-error strings flow to `Ipe.Log` / structured logs, so the raw URL
 /// would leak the secret (PRINCIPLES #1: no secret leakage into errors/logs).
 /// Parse-and-rebuild via the `url` crate when possible; fall back to a manual
 /// `scheme://...@` strip so a URL the parser rejects (the bad-url error path)
@@ -417,7 +417,7 @@ async fn do_connect<E: From<String> + Send + 'static>(
     ok_res(id)
 }
 
-/// WebSocket.connect : String -> Task Error Int (raw id; Sky wraps in WebSocket)
+/// WebSocket.connect : String -> Task Error Int (raw id; Ipê wraps in WebSocket)
 pub fn web_socket_connect<E: From<String> + Send + 'static>(url: String) -> IpeTask<E, i64> {
     Box::pin(do_connect(url, Vec::new(), 30000, 0))
 }
@@ -519,7 +519,7 @@ pub fn web_socket_close_with_code<E: From<String> + Send + 'static>(
 ) -> IpeTask<E, ()> {
     Box::pin(async move {
         // A WebSocket close code is a u16 (RFC 6455 §7.4). A bare `code as u16`
-        // SILENTLY TRUNCATES a Sky `Int` outside 0..=65535 (e.g. 70000 → 4464),
+        // SILENTLY TRUNCATES a Ipê `Int` outside 0..=65535 (e.g. 70000 → 4464),
         // which is worse than rejecting it because the wrapped value can land on
         // a *different valid* code. Out-of-range → 1000 (normal closure).
         let ws_code = u16::try_from(code).unwrap_or(1000);
@@ -595,7 +595,7 @@ fn ws_registered(socket_id: i64) -> bool {
 /// codegen first routes a client `onMessage` subscription here. The `Send`-only
 /// bound is DEFENSIVE / PRE-WIRING: these three client-side subs
 /// (`_message` / `_close` / `_error`) are currently UNREACHABLE — no `KernelFn`
-/// variant routes codegen to them yet (the whole `Sky.Core.WebSocket` client
+/// variant routes codegen to them yet (the whole `Ipe.WebSocket` client
 /// surface is unwired) — so the future wiring commit does not ship
 /// exit-0-then-cargo-fail on day one.
 pub fn sub_subscribe_ws_message<M, F>(socket_id: i64, to_msg: F) -> IpeSub<M>

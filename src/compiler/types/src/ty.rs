@@ -165,7 +165,7 @@ pub enum RowTail {
 /// A bare type variable is structurally parametric — the body passes it through
 /// untouched, so any type works. The moment a body adds it (`x + x`), orders
 /// it (`a > b`), or compares it for equality (`a == b`), the variable is no
-/// longer "any type": it must be a type that supports that operation. Sky's
+/// longer "any type": it must be a type that supports that operation. Ipê's
 /// relevant super-types are **Number** (the numeric operators `+ - *`, satisfied
 /// by `Int` / `Float`), **Comparable** (the ordering comparisons `< > <= >=`,
 /// satisfied by the scalar primitives), and **Equatable** (the equality
@@ -199,7 +199,7 @@ impl TyBounds {
     /// `(a -> … -> v)`, `f` in `mapError`'s `(e -> f)`, and `b` in `andMap`'s
     /// payload `Con (a -> b)`. It must not itself be a function: every such
     /// runtime kernel takes an exact-arity `FnOnce(..) -> R` closure, while
-    /// the IR FLATTENS a curried Sky function into one multi-parameter `Fun`
+    /// the IR FLATTENS a curried Ipê function into one multi-parameter `Fun`
     /// — so a callback with residual arity (its result is another arrow) has
     /// no sound lowering and would reach `cargo build` as E0277/E0308. The
     /// 4th-attempt version of this bit covered ONLY `andMap`; the identical
@@ -254,7 +254,7 @@ impl TyBounds {
         Self(Self::EQ)
     }
     /// The Set-element obligation: this variable is used as a `Set` element, so
-    /// it must be a Sky `comparable` whose Rust backing — `BTreeSet<A>` —
+    /// it must be a Ipê `comparable` whose Rust backing — `BTreeSet<A>` —
     /// requires `A : Ord`. Distinct from [`Self::ord`] (which renders Rust
     /// `PartialOrd`, insufficient for `BTreeSet`'s key requirement): a generic
     /// `a -> Set a` must lift `Ord` onto its emitted type parameter.
@@ -263,7 +263,7 @@ impl TyBounds {
         Self(Self::SET_ELEM)
     }
     /// The Dict-key obligation: this variable is used as a `Dict` key, so it
-    /// must be a Sky `comparable` whose Rust backing — `HashMap<K, V>` with
+    /// must be a Ipê `comparable` whose Rust backing — `HashMap<K, V>` with
     /// determinism-sorted key iteration — requires `K : Hash + Eq + Ord`.
     /// Distinct from [`Self::ord`] / [`Self::eq`] (which render `PartialOrd` /
     /// `PartialEq`, neither of which satisfies `HashMap`'s `Hash + Eq` nor the
@@ -359,8 +359,8 @@ impl TyBounds {
     pub const fn has_sql_param(self) -> bool {
         self.0 & Self::SQL_PARAM != 0
     }
-    /// Whether this variable carries a Sky `comparable`-key obligation — used as
-    /// a `Set` element or a `Dict` key. Both are satisfied by exactly the Sky
+    /// Whether this variable carries a Ipê `comparable`-key obligation — used as
+    /// a `Set` element or a `Dict` key. Both are satisfied by exactly the Ipê
     /// `comparable` scalar primitives at type-check; the per-container Rust
     /// trait differences (`Ord` vs `Hash + Eq + Ord`) surface only at emission.
     #[must_use]
@@ -399,7 +399,7 @@ pub enum Content {
     /// share one rigid node (via the per-signature instantiation map), so they are
     /// `equivalent`; two different variables are separate nodes that cannot unify.
     Rigid,
-    /// A variable constrained to a Sky super-type ([`TyBounds`]) but not yet
+    /// A variable constrained to a Ipê super-type ([`TyBounds`]) but not yet
     /// pinned to a concrete structure. `rigid` distinguishes a super-typed
     /// *annotation skolem* (it must stay generic, surfacing its obligations as
     /// trait bounds on the emitted type parameter) from a super-typed *flex* (an

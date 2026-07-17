@@ -2,7 +2,7 @@
 
 A fast, sqlite-backed **code-relation index** over BOTH the Ipê repo (this one)
 and the Sky reference repo (`../sky`). Ask it "where is X defined", "who imports
-Y", "which Sky kernels still need a Rust impl" — one answer, instantly, instead
+Y", "which Ipê kernels still need a Rust impl" — one answer, instantly, instead
 of grepping and guessing.
 
 **Rule of thumb:** reach for `ipe-index` before `rg` for structural questions
@@ -16,7 +16,7 @@ of grepping and guessing.
 # From the Ipê repo root. The wrapper builds the Rust binary on first run.
 scripts/ipe-index index          # build the index (both repos) → .ipe-index/index.db
 scripts/ipe-index locate Lowerer # where is `Lowerer` defined / impl'd?
-scripts/ipe-index parity --gaps  # which kernels differ between Sky-Go and Ipê-Rust?
+scripts/ipe-index parity --gaps  # which kernels differ between Ipê-Go and Ipê-Rust?
 scripts/ipe-index wakeup         # one-screen digest of the whole index
 ```
 
@@ -38,7 +38,7 @@ results tell you which repo they came from:
 
 | Tag   | Repo      | What lives there |
 |-------|-----------|------------------|
-| `ipe:`| `.`       | Ipê Rust compiler (`crates/`), runtime (`runtime/`), tooling (`tools/`), Sky stdlib (`*.ipe`) |
+| `ipe:`| `.`       | Ipê Rust compiler (`crates/`), runtime (`runtime/`), tooling (`tools/`), Ipê stdlib (`*.ipe`) |
 | `sky:`| `../sky`  | Sky Haskell compiler (`src/Sky/`), Go backend+runtime (`runtime-go/`), Sky stdlib, the Rust ancestor (`runtime-rust/`) |
 
 So a result reads `ipe:crates/sky_lower/src/lower.rs:2518` or
@@ -53,7 +53,7 @@ So a result reads `ipe:crates/sky_lower/src/lower.rs:2518` or
 | TypeScript / JS   | function, arrow-const | `import` / `export … from` |
 | Haskell           | signatures + `data`/`newtype`/`type`/`class` + **equation defs** (deduped) | `import` |
 | Bash              | `name()` functions | `source` / `.` |
-| Sky               | bindings, `Ffi.kernel` decls | `import` |
+| Ipê               | bindings, `Ffi.kernel` decls | `import` |
 
 ---
 
@@ -79,13 +79,13 @@ ipe:crates/sky_kernels/src/lib.rs:1174:6  impl
 `rdeps` example (who depends on a module, exact — won't fold in `Data.List`):
 
 ```bash
-ipe-index rdeps Sky.Core.List --subtree   # also matches Sky.Core.List.*
+ipe-index rdeps Ipe.List --subtree   # also matches Ipe.List.*
 ipe-index rdeps sky_ir --count            # just the number
 ```
 
 ### Cross-repo kernel parity (the headline feature)
 
-Reconciles Sky-Go kernel impls against Ipê-Rust kernel impls in one table —
+Reconciles Ipê-Go kernel impls against Ipê-Rust kernel impls in one table —
 this IS the kernel-porting backlog.
 
 ```bash
@@ -96,14 +96,14 @@ ipe-index parity --gaps     # only the real gaps
 Reading a `--gaps` row:
 
 ```
-go-only    Math.isNaN   go=1 rust=0  route=sky:src/Sky/Generate/Go/Kernel.hs:441  go=sky:runtime-go/rt/rt.go:7146  rust=<missing>
+go-only    Math.isNaN   go=1 rust=0  route=sky:src/Ipê/Generate/Go/Kernel.hs:441  go=sky:runtime-go/rt/rt.go:7146  rust=<missing>
 rust-only  Basics.abs   go=0 rust=1  route=…  go=<missing>  rust=ipe:runtime/src/sky_runtime/basics.rs:120
 ```
 
 | Verdict        | Meaning |
 |----------------|---------|
-| `go-only`      | Sky-Go has it, Ipê-Rust does not → **a real port TODO** |
-| `rust-only`    | Ipê-Rust has it, Sky-Go doesn't |
+| `go-only`      | Ipê-Go has it, Ipê-Rust does not → **a real port TODO** |
+| `rust-only`    | Ipê-Rust has it, Ipê-Go doesn't |
 | `orphan-route` | routed in `Kernel.hs` but neither backend implements it |
 | `ok`           | both sides implement it |
 
@@ -141,7 +141,7 @@ automatically.
 
 - `.git/hooks/post-commit` (this repo) → `ipe-index index` (background, quiet).
 - `../sky/.git/hooks/post-commit` → rebuilds the SAME shared index from the Sky
-  side. The binary and DB live in this repo; the Sky hook reaches back across
+  side. The binary and DB live in this repo; the Ipê hook reaches back across
   the sibling path.
 
 Hooks are local (`.git/hooks/`, not committed). After a fresh clone, re-run

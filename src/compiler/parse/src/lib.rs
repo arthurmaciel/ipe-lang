@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 //! `ipe_parse` — the lexer + layout + recursive-descent parser for the
-//! supported subset of Sky.
+//! supported subset of Ipê.
 //!
 //! Entry point: [`parse_module`]. It consumes source text plus a mutable
 //! [`Interner`] and produces a [`ipe_syntax::Module`], or a typed
@@ -392,7 +392,7 @@ mod tests {
 
     #[test]
     fn lone_ampersand_is_unknown_char() {
-        // A single `&` is not a Sky operator (only `&&`); it lexes as IPE-P0010.
+        // A single `&` is not a Ipê operator (only `&&`); it lexes as IPE-P0010.
         assert_eq!(err_code(&format!("{HDR}x = 1 & 2")), "IPE-P0010");
     }
 

@@ -12,7 +12,7 @@
 //! ## Why a full usefulness algorithm (not a shallow head check)
 //!
 //! The Rust backend renders each `case` arm as a native `match` arm and relies
-//! on rustc to type-check it; a Sky `case` that is non-exhaustive over NESTED
+//! on rustc to type-check it; a Ipê `case` that is non-exhaustive over NESTED
 //! patterns (`Just (Just a) -> …`, missing `Just Nothing`) would compile here
 //! and then fail downstream with rustc's `E0004` — an exit-0-then-cargo-fail.
 //! So this pass must be at least as strong as Rust's for nested patterns: it
@@ -788,7 +788,7 @@ fn rebuild(head: &Head, arity: usize, mut w: Vec<UPat>) -> Vec<UPat> {
     row
 }
 
-/// Render a witness pattern to its Sky surface spelling for the diagnostic.
+/// Render a witness pattern to its Ipê surface spelling for the diagnostic.
 /// `atom` requests parentheses when the pattern would otherwise be ambiguous as
 /// a constructor argument (a non-nullary ADT application).
 fn render_upat(p: &UPat, interner: &Interner, atom: bool) -> DResult<String> {

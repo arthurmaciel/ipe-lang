@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Source AST for the Sky compiler. This is the raw parse tree the parser
+//! Source AST for the Ipê compiler. This is the raw parse tree the parser
 //! produces and name resolution (`ipe_canon`) consumes. It mirrors the
 //! supported subset of the Haskell compiler's `Sky.AST.Source`.
 

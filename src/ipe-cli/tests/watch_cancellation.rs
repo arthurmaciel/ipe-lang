@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 //! Cancellation proof: a concurrent input edit cancels an in-flight
 //! `compile_prepared` demand via salsa's OWN cancellation mechanism — the
-//! exact pattern `crates/skyc/src/watch.rs`'s orchestrator relies on (see
+//! exact pattern `crates/ipe/src/watch.rs`'s orchestrator relies on (see
 //! that module's doc comment "Cancellation, and why it needs no
 //! extra machinery").
 //!

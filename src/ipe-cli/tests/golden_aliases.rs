@@ -1,4 +1,4 @@
-//! Type-alias gate: `skyc` must emit `main.rs` byte-identical to the
+//! Type-alias gate: `ipe` must emit `main.rs` byte-identical to the
 //! checked-in golden for a program that annotates a function with a
 //! non-parametric `type alias`, and (behind `IPE_E2E=1`) the emitted project
 //! must build and print `42`.

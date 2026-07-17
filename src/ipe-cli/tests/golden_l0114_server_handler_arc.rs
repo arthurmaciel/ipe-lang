@@ -7,9 +7,9 @@
 //! `ServerHandler<E>` slot as the type-ALIAS name `"ServerHandler<IpeError>"`,
 //! NOT the expanded `"Arc<dyn Fn…>"` — so the string test misclassifies every
 //! inline `Server.post path (\req -> …)` handler lambda as `Box`, emitting
-//! `Box::new(move |req: ServerRequest| …)` into an `Arc<dyn Fn>` field. `skyc`
+//! `Box::new(move |req: ServerRequest| …)` into an `Arc<dyn Fn>` field. `ipe`
 //! still exits 0, but the emitted crate fails `cargo build` with E0308
-//! (`expected Arc…, found Box…`) — a break of THE SEAL (skyc exit-0 must imply
+//! (`expected Arc…, found Box…`) — a break of THE SEAL (ipe exit-0 must imply
 //! the emitted Rust cargo-builds). So both `emit_lambda` and
 //! `emit_func_value` route through the shared structural `wants_arc_ctor` helper
 //! that matches on the `IrType` shape, never the rendered string.
@@ -63,7 +63,7 @@ fn server_handler_lambda_boxes_with_arc_not_box() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for the server-handler fixture: {:?}",
+        "ipe build must succeed for the server-handler fixture: {:?}",
         built.err()
     );
 
@@ -98,7 +98,7 @@ fn ws_onerror_lines(src: &str) -> String {
 /// `Arc<dyn Fn(WsHandle, E)>` setter slot, so it must box with `Arc::new`. Its
 /// second param is the error type (NOT `String` like `onMessage`), the shape
 /// that `wants_arc_ctor` / `render_type` originally omitted → generic
-/// `Box<dyn Fn>` → skyc-0-then-cargo-fail E0308. Emit-only guard, default gate.
+/// `Box<dyn Fn>` → ipe-0-then-cargo-fail E0308. Emit-only guard, default gate.
 #[test]
 fn ws_on_error_callback_boxes_with_arc_not_box() {
     let root = repo_root();
@@ -117,7 +117,7 @@ fn ws_on_error_callback_boxes_with_arc_not_box() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for the WS onError fixture: {:?}",
+        "ipe build must succeed for the WS onError fixture: {:?}",
         built.err()
     );
 

@@ -8,7 +8,7 @@
 > own text.
 > **Tree state at review:** HEAD `49ab842` (task #73); #108 implementation
 > present but uncommitted (`constrain.rs`, `unify.rs`, `ty.rs`, `lower.rs`,
-> `emit_live.rs`, `skyc/lib.rs`, `live_e2e.rs` modified).
+> `emit_live.rs`, `ipe/lib.rs`, `live_e2e.rs` modified).
 
 ---
 
@@ -21,7 +21,7 @@
 | `seal-jsondecp-design.md` (#89) | **NOT PRESENT** | Cannot review — still being written. Executor must NOT start #89 until it exists and C3 is honoured |
 | `ctor-payload-function-design.md` (#90) | **READY** (with 2 required amendments) | Reuse-gate code L0121 → **L0122** (C1); hard ordering: #94 lands first (C2) |
 | `effect-modules-kernel-plan.md` (#111) | **NOT PRESENT** | The single largest sweep unblock (5 examples) has no design artifact — highest-priority doc gap |
-| `kernel-registration-backlog.md` | **NEEDS-FIX** | `Task.perform` mis-signatured + mis-tiered; `Std.Live.Head` already landed; `List.filterMap` missing from the backlog entirely |
+| `kernel-registration-backlog.md` | **NEEDS-FIX** | `Task.perform` mis-signatured + mis-tiered; `Ipe.Live.Head` already landed; `List.filterMap` missing from the backlog entirely |
 | `routed-live-app-design.md` (#108) | **NEEDS-FIX** (doc drift; landed code is sound) | Part B `RoutedLiveCheck` undocumented; §6's IPE-L0119 is taken → **L0123**; unify step-4 re-binding omission unrecorded (§7.3); routed-lambda silent-unrouted hole |
 | `oracle-and-tiered-verification.md` (#51/#110) | **NEEDS-FIX** (staleness only) | §4 item 1 / §8 item 1 (HTML normalizer) landed via `63f57b2` after the doc was written — retier `body` mode |
 | `parity-gap-snapshot.md` | **READY** (as a dated snapshot) | 2 rows already overtaken (ex-33 parser fix `e586668`; #108 implemented); Fix-4 cost estimate collapses per the `Task.perform` correction |
@@ -186,14 +186,14 @@ gated at their actual unsound sites.
 
 **Execution-readiness:** high. Seal-tiering (Opus review, YES) correct.
 The `golden_m3a_function_payload_gate.rs` either-branch test being pre-written
-for the lift is verified (`skyc/tests/golden_m3a_function_payload_gate.rs`).
+for the lift is verified (`ipe/tests/golden_m3a_function_payload_gate.rs`).
 
 ### 1.5 `effect-modules-kernel-plan.md` (#111) — NOT PRESENT
 
 Not on disk. This is the **most urgent missing design**: the parity snapshot's
 critical path ranks #111 as Fix 1 (5 examples: 12, 20, 28, 30, 32), and the
-kernel backlog defers four heavy modules to it (`Std.Auth`, `Std.Cli`,
-`Sky.Core.Http.Stream`, `Sky.Http.Server.Stream`). Until it exists, Lane A has
+kernel backlog defers four heavy modules to it (`Ipe.Auth`, `Ipe.Cli`,
+`Ipe.Http.Stream`, `Ipe.Http.Server.Stream`). Until it exists, Lane A has
 no implementable spec for the largest single unblock. Recorded obligations:
 - It must state the Cmd/Task entry contract it assumes. Note: **"#116
   entry-contract" has NO in-repo artifact** — `rg '#116'` over `docs/` +
@@ -224,17 +224,17 @@ tier structure and the Lane A/Lane B split are sound.
    same variant" suggestion is wrong — alias `Task.perform → TaskRun`, do NOT
    involve `Cmd.perform`. This re-orders the critical path: `simple` and
    00-standard-libs' first blocker clear for near-zero cost.
-2. **`Std.Live.Head` already landed** (commit `3904173`,
-   `crates/skyc/stdlib/Std/Live/Head.ipe` + `stdlib.rs:220` verified). Remove
+2. **`Ipe.Live.Head` already landed** (commit `3904173`,
+   `crates/ipe/stdlib/Std/Live/Head.ipe` + `stdlib.rs:220` verified). Remove
    from Tier 2 (item 9), Lane B table, and Top-5 (item 5). Example 38's next
-   blocker is `Std.Ui.Region` — which the parity snapshot (later the same day)
+   blocker is `Ipe.Ui.Region` — which the parity snapshot (later the same day)
    already shows.
 3. **`List.filterMap` is missing from the backlog entirely.** The parity
-   snapshot records it as 16-skychess's *first* blocker (N0005); the backlog
-   lists 16-skychess only under `Error.ErrorKind` (task #85). Both are real —
+   snapshot records it as 16-ipehess's *first* blocker (N0005); the backlog
+   lists 16-ipehess only under `Error.ErrorKind` (task #85). Both are real —
    filterMap fires first. Add `List.filterMap` as a Tier-1 thin kernel
-   (upstream `Sky.Core.List`); the deduped count becomes 28.
-4. Typo: `Stime.isLeapYear` → `Std.Time.isLeapYear` (§1 table, row
+   (upstream `Ipe.List`); the deduped count becomes 28.
+4. Typo: `Stime.isLeapYear` → `Ipe.Time.isLeapYear` (§1 table, row
    00-standard-libs).
 
 ### 1.7 `routed-live-app-design.md` (#108) — NEEDS-FIX (doc drift; the landed code itself is sound where checked)
@@ -320,12 +320,12 @@ real-oracle status **provided** the false-green audit obligations
 canonicalisation, CRLF folding) were honoured in the wiring — verify that,
 then re-tier: server/live faithful-port slices with green `body` EQUIVALENCE are
 Opus-retired. §8's remaining items: pty grid normalizer (open), playwright
-stack (open), release-skyc rebuild (open), CI phase-2 flip (open), 65-fixture
+stack (open), release-ipe rebuild (open), CI phase-2 flip (open), 65-fixture
 corpus (open).
 
 ### 1.9 `parity-gap-snapshot.md` — READY as a dated snapshot
 
-Honest, measured, correctly caveated (skyc-0 only; cargo-tier tracked
+Honest, measured, correctly caveated (ipe-0 only; cargo-tier tracked
 separately). Already-overtaken rows to note when refreshing:
 - **ex-33** triple-quoted-string parser bug: fixed by `e586668` (post-snapshot).
 - **#108 caveat rows (09, 25, 34):** implementation now in the working tree;
@@ -344,7 +344,7 @@ ago. Specifics now wrong:
   (e.g. it lists 26/29/37 as IPE-P0001 parse failures; the snapshot measures
   26→N0004 `Input`, 29→T0001, 37→N0004 `Region`).
 - `error-module-design.md` correction, #98/#47 compiled-source subsystem,
-  `Std.Live.Head` (round-1 Lane-B class work) — landed.
+  `Ipe.Live.Head` (round-1 Lane-B class work) — landed.
 - Round-2/3 sketch items partially done: #51 oracle activation (done, §1.8),
   `-cents` prefix-neg (done, #114 `1806aa2`).
 
@@ -415,7 +415,7 @@ app-entry admissibility are different judgments and both designs agree on the
 split. **But the ordering is load-bearing:** today `type Msg = WithK (Int ->
 Int)` is unrepresentable (killed at declaration by `lower_enum`'s
 `ir_contains_fun`, `lower.rs:1581`). #90 T2 deletes that gate. If #90 lands
-first, an fn-carrying Msg compiles through `skyc` and dies at cargo on the
+first, an fn-carrying Msg compiles through `ipe` and dies at cargo on the
 `Msg: Clone` bound — a seal regression introduced by #90.
 **Execution rule: #94 (+#95) lands strictly before #90 Stage 1.** #90's §4
 checklist gains a Msg row; #94's fixture 2 (`LIVE_FUNC_MSG`) becomes the
@@ -487,8 +487,8 @@ rationale, still valid). Doc lane items run concurrently.
    T1–T3 if not yet done (C6); (b) the routed-lambda consistency fixture
    *even if red* (documents C4's hole); (c) file the #56 step-4 re-binding
    sub-item + code comment (§1.7 fix 3); (d) run T8 sweep gate. Cheapest path
-   to 3 more skyc-0 examples (09, 25, 34).
-2. **Kernel Tier-1 batch** (cheap, high example yield, keeps skyc-0 count
+   to 3 more ipe-0 examples (09, 25, 34).
+2. **Kernel Tier-1 batch** (cheap, high example yield, keeps ipe-0 count
    moving while seal reviews queue): `Time.timeString`, `Cmd.publish` +
    `publishNoEcho` + `Sub.subscribeTopic` (ALL-wiring), `Font.lineThrough`,
    `Time.isLeapYear`/`daysInMonth`, **`Task.perform` → `TaskRun` alias**
@@ -518,7 +518,7 @@ not the build lane. With the `Task.perform` correction, the recomputed
 cheapest-first build order is: #108 close-out (3) → Tier-1 batch (5+) →
 Region/Input (4) → #111 (5, once designed) — while the seal queue
 (#94/#95 → #99 → #90 → #104) interleaves as the review-gated track protecting
-the exit-0 ⇒ cargo-0 invariant that all the skyc-0 wins ultimately rest on.
+the exit-0 ⇒ cargo-0 invariant that all the ipe-0 wins ultimately rest on.
 Nothing in the banked set is mis-ordered beyond the corrections above; the one
 genuine inversion found is that #95 was tiered as "gate hardening" but is in
 fact a **functional fix for already-landed #108 behavior** (C4) and moves up

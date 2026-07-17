@@ -1,6 +1,6 @@
 //! CI drift gate: asserts ZERO MISMATCH rows in the parity matrix.
 //!
-//! Run: `cargo test -p skyc parity_matrix_drift`
+//! Run: `cargo test -p ipe parity_matrix_drift`
 //!
 //! MISMATCH = a wired kernel whose naming.rs symbol doesn't exist as a pub fn
 //! in the runtime, or whose `lower_callee()` arm is missing.  These are bugs.
@@ -17,7 +17,7 @@ use std::process::Command;
 
 /// Path to the workspace root — detected from `CARGO_MANIFEST_DIR`.
 fn workspace_root() -> std::path::PathBuf {
-    // CARGO_MANIFEST_DIR for skyc is `crates/skyc/`; workspace root is two levels up.
+    // CARGO_MANIFEST_DIR for ipe is `crates/ipe/`; workspace root is two levels up.
     let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
     std::path::PathBuf::from(manifest)
         .parent()

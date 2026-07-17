@@ -8,16 +8,16 @@ LSP quick-fix surface, and this document fixes the boundary between them.
 Related specs: `ipe-lsp.md` (diagnostics publishing, code actions, the G2
 `VerifiedEdit` gate, hazard L-A), `incremental-compilation-and-watch.md` /
 `salsa-incremental-compilation-2026-07-11.md` (the query layer a lint query
-joins), `divergence-policy.md`. Reference departure: the Sky compiler
+joins), `divergence-policy.md`. Reference departure: the Ipê compiler
 (`../sky`) ships **no lint subsystem** — no lint pass, no lint CLI command, no
-per-site suppression (verified against `src/Sky/` and the CLI surface; its
-`Sky/Lsp/Diag.hs` republishes compiler diagnostics only). This tool is an
+per-site suppression (verified against `src/Ipê/` and the CLI surface; its
+`Ipê/Lsp/Diag.hs` republishes compiler diagnostics only). This tool is an
 intentional capability **beyond** the reference, ledgered in
 `docs/divergences-from-sky.md` §6.
 
 Naming: crates and codes use the current `sky_*` / `IPE-*` prefixes; they
 rename with roadmap C.1 (`ipe_*`, `IPE-*`). CLI shown as `ipe lint`
-(today spelled `skyc lint`).
+(today spelled `ipe lint`).
 
 ---
 
@@ -28,8 +28,8 @@ rename with roadmap C.1 (`ipe_*`, `IPE-*`). CLI shown as `ipe lint`
 
 | Concern | Decision |
 |---|---|
-| Analyzer identity | A **third consumer of the compiler's own artifacts** (parse AST + canon AST + `SolvedTypes`), never a second analyzer. A lint rule cannot parse, resolve, or infer anything itself — it reads what `skyc` computed. |
-| Crate | New `crates/sky_lint`: rule trait, driver, registry, rules. CLI subcommand in `skyc`; LSP surfacing via `sky_lsp` (its Phase 3). |
+| Analyzer identity | A **third consumer of the compiler's own artifacts** (parse AST + canon AST + `SolvedTypes`), never a second analyzer. A lint rule cannot parse, resolve, or infer anything itself — it reads what `ipe` computed. |
+| Crate | New `crates/sky_lint`: rule trait, driver, registry, rules. CLI subcommand in `ipe`; LSP surfacing via `sky_lsp` (its Phase 3). |
 | Rule API | elm-review-style **visitor schema over a single driver walk** (one AST traversal for N rules), with a typed `LintContext` exposing solved types by span. Rules are Rust impls registered in a closed `ALL_RULES` table with a drift test (the `sky_kernels` pattern). |
 | Identity + levels | Dual identity per rule: stable code `IPE-W####` + kebab-case name (`unused-import`). clippy-style levels `allow`/`warn`/`deny`; defaults per rule; config in `sky.toml [lint]`; per-site `-- @allow(<rule>) <reason>` directive with mandatory reason. |
 | Findings | Lint findings are `sky_diagnostics::Diagnostic`s (new `Lint` variant) — one rendering pipeline, one `explain` surface, one `Suggestion`/`Applicability` fix model, one LSP publishing path. |
@@ -40,7 +40,7 @@ rename with roadmap C.1 (`ipe_*`, `IPE-*`). CLI shown as `ipe lint`
 
 ## 1. Positioning — what kind of tool this is
 
-**Source-level, not compiler-gated.** `skyc build` acceptance does not depend
+**Source-level, not compiler-gated.** `ipe build` acceptance does not depend
 on lint findings (the one rule that changes *acceptance* — the closed-union
 catch-all check — therefore lives in the compiler, not here; see the companion
 design). Lint is what a team turns on in CI and the editor: style, dead code,
@@ -102,15 +102,15 @@ sky_types ──► SolvedTypes┘        │
                                   ├── registry: ALL_RULES + drift test
                                   ├── rules/: one file per rule
                                   └── config: LintConfig (from sky.toml + CLI)
-consumers:  skyc lint (CLI)  ·  sky_lsp (diagnostics + quick-fixes)  ·  salsa query (later)
+consumers:  ipe lint (CLI)  ·  sky_lsp (diagnostics + quick-fixes)  ·  salsa query (later)
 ```
 
 - `sky_lint` is a leaf of the front-end DAG: it depends on
   `sky_parse` + `sky_canon` + `sky_types` + `sky_diagnostics` and nothing
-  depends on it except `skyc` and (later) `sky_lsp`.
+  depends on it except `ipe` and (later) `sky_lsp`.
 - **No I/O in the crate** (the LSP INV-1 discipline): `sky_lint` takes ASTs,
   types, source text, and a parsed `LintConfig`; file reading and `sky.toml`
-  parsing stay in `skyc`. A rule that reads the filesystem is a
+  parsing stay in `ipe`. A rule that reads the filesystem is a
   compile-time-visible design error.
 - Determinism: findings are sorted (file, span, code) before emission; rule
   iteration order is the registry order. Same input ⇒ byte-identical output.
@@ -222,12 +222,12 @@ Lint {
 
 What this buys, structurally:
 - **Rendering** — the existing rustc/Elm-style report renderer works unchanged
-  (caret snippet, help lines, `skyc explain IPE-W0101` pointer).
+  (caret snippet, help lines, `ipe explain IPE-W0101` pointer).
 - **`explain`** — lint explain pages join `crates/sky_diagnostics/explain/`
-  and the `skyc explain` index; they follow the compiler-as-kind-teacher
+  and the `ipe explain` index; they follow the compiler-as-kind-teacher
   standard (progressive ELI10→deep, runnable before/after snippets).
 - **Fixes** — `Suggestion { span, replacement, applicability }` is already the
-  crate's fix model and `skyc fix` already applies it; `ipe lint --fix` reuses
+  crate's fix model and `ipe fix` already applies it; `ipe lint --fix` reuses
   the same application machinery.
 - **LSP** — `sky_lsp` publishes `Diagnostic`s; lint findings arrive on the
   same channel with severity mapped from the resolved level
@@ -270,7 +270,7 @@ allow = ["case-bool-to-if"]
 float-money = "deny"
 ```
 
-Parsed in `skyc` (`project.rs`) into a typed `LintConfig` at the boundary —
+Parsed in `ipe` (`project.rs`) into a typed `LintConfig` at the boundary —
 unknown rule/category names are a **configuration error** (parse, don't
 validate: a typo'd rule name silently linting nothing is the invalid state).
 
@@ -310,7 +310,7 @@ closed-union rule (companion design) — one grammar, one parser, one table.
   `Applicability` (the existing enum: `MachineApplicable` / `MaybeIncorrect` /
   `HasPlaceholders`).
 - `ipe lint --fix` applies `MachineApplicable` edits (others are printed, or
-  applied per-edit interactively like `skyc fix`).
+  applied per-edit interactively like `ipe fix`).
 - **Verify-before-write** (LSP G2 applied to the CLI): edits are applied to an
   in-memory copy, the copy is re-run through parse→canon→types (+ a re-lint),
   and only a clean result is written to disk. On failure nothing is written
@@ -349,7 +349,7 @@ ipe lint <entry.ipe | project-dir | sky.toml>
 ```
 
 Exit codes: `0` clean or warn-only · `1` ≥1 deny finding · `2` usage/config
-error. `ipe lint --list` and `skyc explain IPE-W####` are the discovery
+error. `ipe lint --list` and `ipe explain IPE-W####` are the discovery
 surface.
 
 ## 10. Rule catalogue v1
@@ -394,7 +394,7 @@ Fix column: MA = MachineApplicable, MI = MaybeIncorrect, HP = HasPlaceholders,
 | Rule | Detects | Inputs | Level | Fix |
 |---|---|---|---|---|
 | `task-string-error` | a binding/region typed `Task String a` or `Result String a` (CLAUDE.md: never `String` as error type) | T | deny | — (points at `Error`) |
-| `float-money` | `Float`-typed binding whose name matches money vocabulary (`price`, `amount`, `total`, `balance`, …) | C+T | warn (heuristic — honest: name matching can false-positive, so it may never be deny) | — (points at `Std.Money`) |
+| `float-money` | `Float`-typed binding whose name matches money vocabulary (`price`, `amount`, `total`, `balance`, …) | C+T | warn (heuristic — honest: name matching can false-positive, so it may never be deny) | — (points at `Ipe.Money`) |
 | `password-oninput` | `onInput` handler attached alongside `type "password"` on the same input attr list | P+C | deny | — (teaches the `onSubmit` pattern) |
 | `secret-in-log` | identifier with secret vocabulary (`password`, `token`, `secret`, `apiKey`) flowing as a `Log.*` / `println` argument | C | warn (heuristic) | — |
 | `data-sky-eval` | the forbidden `data-sky-eval` attribute string in a view | P | deny | MA remove |
@@ -402,7 +402,7 @@ Fix column: MA = MachineApplicable, MI = MaybeIncorrect, HP = HasPlaceholders,
 **Honest limits, stated in each rule's explain page:** the two heuristic rules
 (`float-money`, `secret-in-log`) match *names*, not information flow — they
 catch the common blunder, not a determined mistake, and are capped below
-`deny` by policy until a typed carrier (e.g. `Sky.Core.Secret`, ledgered
+`deny` by policy until a typed carrier (e.g. `Ipe.Secret`, ledgered
 B-Secret) lets them become type-directed.
 
 ### Style (W03xx) — default `allow` (opt-in)
@@ -444,9 +444,9 @@ independently useful. Gates listed per phase.
   `crates/sky_lint` (RuleMeta/Rule/Cx/Findings/registry + drift tests);
   `Diagnostic::Lint` + `IPE-W` range in `sky_diagnostics` (+ `ALL_CODES`
   count test update); driver walk over parse+canon+`SolvedTypes`;
-  `skyc lint` CLI (human format, exit policy); **two seed rules**
+  `ipe lint` CLI (human format, exit policy); **two seed rules**
   (`unused-import`, `case-bool-to-if`) with explain pages + fixtures.
-  *Gate:* corpus run over `examples/` + `crates/skyc/stdlib` — every finding
+  *Gate:* corpus run over `examples/` + `crates/ipe/stdlib` — every finding
   on our own corpus is triaged: real (fixed in the same change) or a
   false-positive (rule fixed). A rule that cannot go corpus-clean does not
   ship.

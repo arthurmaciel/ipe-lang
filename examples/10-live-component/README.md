@@ -1,11 +1,11 @@
 # Live Component
 
-Demonstrates the Sky.Live component protocol -- nested components with independent state and message passing.
+Demonstrates the Ipe.Live component protocol -- nested components with independent state and message passing.
 
 ## Build & Run
 
 ```bash
-sky build src/Main.ipe
+ipe build src/Main.ipe
 ./sky-out/app
 ```
 

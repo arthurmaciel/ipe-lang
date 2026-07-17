@@ -1,6 +1,6 @@
 //! Tail-call optimization end-to-end regressions.
 //!
-//! The soundness proof: a deep self-tail-recursive Sky function runs to
+//! The soundness proof: a deep self-tail-recursive Ipê function runs to
 //! completion under a CAPPED main-thread stack (`tco_count`, 2,000,000 iters at
 //! 512 KiB). Without TCO the same fixture SIGABRTs (`exit_code == None`) because
 //! a Rust stack overflow trips the guard page and `abort()`s — NOT a catchable

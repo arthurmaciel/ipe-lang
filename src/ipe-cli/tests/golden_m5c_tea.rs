@@ -1,6 +1,6 @@
 //! TEA construct-only gate — `Cmd` / `Sub` construction wiring.
 //!
-//! These tests compile Sky programs that construct `Cmd` and `Sub` values and
+//! These tests compile Ipê programs that construct `Cmd` and `Sub` values and
 //! immediately discard them, then print `"ok"`.  This confirms that:
 //!
 //! * `Cmd.none`, `Cmd.batch`, `Cmd.perform`, `Sub.none`, `Sub.batch`,
@@ -21,7 +21,7 @@
 //! ## Oracle provenance
 //!
 //! Marked `oracle_divergence = true` (sanctioned): the Go reference compiler
-//! has no equivalent Rust TEA constructors; Sky-Rust's own output is the
+//! has no equivalent Rust TEA constructors; Ipê-Rust's own output is the
 //! authoritative reference.
 //!
 //! ## Golden catalogue
@@ -144,7 +144,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code)
 
 /// `let _ = Cmd.none in println "ok"` — `Cmd.none` appears in isolation with
 /// no sibling to pin its `msg` type.  The HM solver leaves `msg` as a free
-/// type variable; skyc must exit 1 with IPE-L0102, never emit Rust that
+/// type variable; ipe must exit 1 with IPE-L0102, never emit Rust that
 /// `cargo build` rejects with E0282 ("type annotations needed for
 /// `tea::IpeCmd<_>`").
 #[test]

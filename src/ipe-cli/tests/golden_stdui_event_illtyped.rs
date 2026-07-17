@@ -1,5 +1,5 @@
 //! `Ipe.Html.Events.onInput` handler-payload gate: a Bool handler must be
-//! REJECTED BY skyc with IPE-T0001 — never exit 0 and defer to cargo.
+//! REJECTED BY ipe with IPE-T0001 — never exit 0 and defer to cargo.
 //!
 //! ## Context
 //!
@@ -13,13 +13,13 @@
 //! ## What is tested
 //!
 //! * **Negative** (`stdui_event_illtyped`): `Event.onInput (\b -> SetChecked b)`
-//!   (Bool handler on a String event) → skyc reports IPE-T0001 (type mismatch),
+//!   (Bool handler on a String event) → ipe reports IPE-T0001 (type mismatch),
 //!   never exits 0.
 //!
 //! * **Positive** (`stdui_event_oninput`): `Event.onInput (\s -> SetText s)`
-//!   (String handler, well-typed) → skyc succeeds (build returns `Ok`).
+//!   (String handler, well-typed) → ipe succeeds (build returns `Ok`).
 //!
-//! Both tests are pure skyc-pipeline checks (no cargo build / runtime binary
+//! Both tests are pure ipe-pipeline checks (no cargo build / runtime binary
 //! required), so they run without `IPE_E2E=1`.  They return early if
 //! [`ipe::resolve_runtime`] cannot locate the embedded runtime.
 
@@ -32,7 +32,7 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// Run the skyc pipeline on the named fixture and return the build result.
+/// Run the ipe pipeline on the named fixture and return the build result.
 /// Returns `None` (skip) when the embedded runtime cannot be resolved.
 fn run_skyc(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>> {
     let root = repo_root();
@@ -52,10 +52,10 @@ fn run_skyc(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>> {
 }
 
 /// NEGATIVE gate: `Event.onInput` with a `Bool -> msg`
-/// handler must be rejected by skyc with IPE-T0001.
+/// handler must be rejected by ipe with IPE-T0001.
 ///
 /// Without the fix, `constrain.rs` fell to `Ty::Var(u32::MAX)` for the `"Event"`
-/// qualifier → skyc exited 0 → cargo emitted E0308.
+/// qualifier → ipe exited 0 → cargo emitted E0308.
 /// Post-fix: `Some("Ui" | "Event")` arm unifies `Bool -> msg` with the
 /// expected `String -> msg` → IPE-T0001 at the type-checking stage.
 #[test]
@@ -76,7 +76,7 @@ fn event_oninput_illtyped_bool_handler_is_sky_t0001() {
 }
 
 /// POSITIVE sentinel: `Event.onInput` with a correct
-/// `String -> msg` handler must compile (skyc build returns `Ok`).
+/// `String -> msg` handler must compile (ipe build returns `Ok`).
 ///
 /// This confirms the widened qualifier arm in `constrain.rs` does not
 /// break well-typed `Event.onInput` usage.

@@ -18,7 +18,7 @@ expand/add-arms/keep-open code actions),
 LSP seam) and `incremental-compilation-and-watch.md` (INV-1..5, H-ledger).
 
 Naming: new crates use the current `sky_*` prefix and rename to `ipe_*`
-with roadmap C.1; the subcommand is spelled `ipe lsp` (today `skyc lsp`).
+with roadmap C.1; the subcommand is spelled `ipe lsp` (today `ipe lsp`).
 
 ---
 
@@ -29,7 +29,7 @@ The LSP is the language's soundness story made visible at every keystroke:
 1. **One analyzer, literally.** The server owns no parser, no resolver, no
    solver, no formatter. Every diagnostic, hover type, completion candidate,
    rename edit, and folding range is computed by the *same* `sky_db` salsa
-   queries `skyc build` and `ipe watch` run. Disagreement with the compiler
+   queries `ipe build` and `ipe watch` run. Disagreement with the compiler
    is not "unlikely" — it has no code path.
 2. **A build-breaking edit is unrepresentable.** Every synthesized
    `WorkspaceEdit` (code action, quick-fix, rename, auto-import, file
@@ -55,7 +55,7 @@ The LSP is the language's soundness story made visible at every keystroke:
 
 Principles order (hard): security > correctness > soundness > efficiency >
 completeness > readability. For the LSP the sharpest edges are
-**correctness > efficiency** (a fast answer that disagrees with `skyc`, or
+**correctness > efficiency** (a fast answer that disagrees with `ipe`, or
 a stale hover, is a defect no latency win excuses) and **completeness
 gated by soundness** (a capability we cannot make sound is not advertised
 — refuse, don't fake; §11 lists these explicitly).
@@ -65,7 +65,7 @@ gated by soundness** (a capability we cannot make sound is not advertised
 ## 2. Substrate survey — what exists today (facts, verified against code)
 
 **The salsa layer is landed and gate-proven.** `crates/sky_db` ships, on
-the production `skyc` path:
+the production `ipe` path:
 
 | Tier | Queries (all tracked, memoized, errors-as-values) |
 |---|---|
@@ -88,7 +88,7 @@ Load-bearing properties the LSP builds on, each already proven by test:
   `Cancelled::{Local,PendingWrite}` when the main thread sets an input,
   and a fresh demand converges to the edited state (`lsp_seam.rs`).
 - **Warm == cold** — the clean-vs-incremental parity gate
-  (`crates/skyc/tests/clean_vs_incremental_parity.rs`) byte-diffs
+  (`crates/ipe/tests/clean_vs_incremental_parity.rs`) byte-diffs
   warm-database rebuilds against cold builds across the golden corpus,
   including adversarial edit sequences.
 - **`typecheck` is whole-program-coarse.** It is keyed `(root, entry)` and
@@ -103,7 +103,7 @@ Load-bearing properties the LSP builds on, each already proven by test:
 codes; `explain_page(Code)`/`title(Code)` with a drift test that every
 code has a conforming page; `HelpLine::Suggest(Suggestion { span,
 replacement, applicability })` with `Applicability
-{ MachineApplicable | HasPlaceholders | MaybeIncorrect }`; `skyc fix`
+{ MachineApplicable | HasPlaceholders | MaybeIncorrect }`; `ipe fix`
 already applies suggestions. `sky_types::infer_attributed` returns
 `(Diagnostic, home)` and `SolvedTypes` exposes `env` (type per binding),
 `regions` (type per sub-expression span, home-keyed), `bounds` — hover's
@@ -112,7 +112,7 @@ data source exists today; the driver's `home_to_source` map is the exact
 
 **What does NOT exist** (each shapes the plan):
 
-- **No `lsp` subcommand, no LSP crates.** `skyc` dispatches
+- **No `lsp` subcommand, no LSP crates.** `ipe` dispatches
   `build`/`run`/`watch`/`explain`/`fix` only.
 - **No formatter.** There is no `fmt` subcommand and no Format crate in
   this workspace (the reference's `sky fmt` is Haskell-side, not ported).
@@ -454,7 +454,7 @@ debounce window, not the solve); on a mid-size project the settled-edit
 diagnostics latency equals one whole-program solve. That is the same cost
 `ipe watch` pays per rebuild today and is acceptable for v1; it is stated
 in the docs rather than papered over. The per-module refinement is the
-single highest-leverage follow-up and benefits `skyc`/`watch`/LSP alike.
+single highest-leverage follow-up and benefits `ipe`/`watch`/LSP alike.
 
 Targets once per-module typecheck lands: warm hover p50 < 5 ms; settled
 body-edit diagnostics < 100 ms; completion first request < 100 ms, warm
@@ -472,7 +472,7 @@ golden/inline expectations.
 ### Phase 0 — spine (ships diagnostics)
 
 Crates `sky_lsp_server` + `sky_lsp_features`; `lsp-server`/`lsp-types`
-pinned; `ipe lsp` dispatch arm in `skyc`.
+pinned; `ipe lsp` dispatch arm in `ipe`.
 
 1. Position mapper FIRST — property-tested UTF-16↔byte (+utf-8
    negotiation), everything depends on it.
@@ -504,7 +504,7 @@ snapshots over the example corpus; broken-buffer degradation tests
 `collect_references` walker (find references, document highlight);
 derived symbol-index query (workspace symbols); go-to-type-definition;
 signature help; inlay hints; pull diagnostics with revision-fingerprint
-`resultId`s; compiler-`Suggestion` code actions (the existing `skyc fix`
+`resultId`s; compiler-`Suggestion` code actions (the existing `ipe fix`
 channel surfaced with `Applicability` mapping).
 
 *Gate:* reference-set golden over the corpus (catches a

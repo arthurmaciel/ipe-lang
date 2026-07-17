@@ -10,7 +10,7 @@ import Ipe.Log exposing (println)
 -- (State.seedHistoryHelp) needs. Before the tuple-match close this was rejected
 -- fail-closed as IPE-L0115; now it lowers to a native Rust tuple `match`
 -- (`match (xs.as_slice(), ys.as_slice()) { ([a, xrest @ ..], [b, yrest @ ..]) =>
--- …, _ => … }`), skyc-0 ⟹ cargo-0.
+-- …, _ => … }`), ipe-0 ⟹ cargo-0.
 zipSum : List Int -> List Int -> List Int -> List Int
 zipSum xs ys acc =
     case ( xs, ys ) of

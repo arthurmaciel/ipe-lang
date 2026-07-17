@@ -10,7 +10,7 @@ walks the typed tree, computes character-cell layout against a
 
 This is the "write once" proof-of-concept: in principle, the same
 view function would render correctly under Ipe.Live (HTML), Ipe.Tui
-(this), and a future Sky.Gui (gio). For now we only validate the Tui
+(this), and a future Ipê.Gui (gio). For now we only validate the Tui
 side.
 
 Keys:
@@ -112,7 +112,7 @@ view model =
         , Font.color (Ui.rgb 220 220 230)
         ]
         [ Ui.el [ Font.color (Ui.rgb 142 200 168) ]
-            (Ui.text "Sky TUI Stopwatch — Element view")
+            (Ui.text "Ipê TUI Stopwatch — Element view")
         , Ui.el [ Font.color (Ui.rgb 220 220 230) ]
             (Ui.text (formatElapsed model.elapsedMs))
         , Ui.el [ Font.color (Ui.rgb 150 150 170) ]

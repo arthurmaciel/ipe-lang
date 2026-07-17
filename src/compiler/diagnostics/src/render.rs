@@ -131,7 +131,7 @@ pub fn render(d: &Diagnostic, file: &str, source: &str) -> String {
         }
     }
     // Humble messaging: an internal compiler error (every `IPE-I*`) is a gap in
-    // Sky, not the reader's fault. Apologise plainly, Elm-style, and point at
+    // Ipê, not the reader's fault. Apologise plainly, Elm-style, and point at
     // the one issue tracker — never a raw backtrace, never false confidence.
     if severity == Severity::Bug {
         if let Diagnostic::CompilerBug { detail, .. } = d

@@ -8,7 +8,7 @@
 > **One-line decision:** after #116's auto-run entry contract lands,
 > the two *surface* bindings `Task.run` and `Task.perform` are removed
 > from the resolver with a dedicated removed-surface diagnostic +
-> `skyc fix` codemod; the **internal** `task_run` runtime kernel and the
+> `ipe fix` codemod; the **internal** `task_run` runtime kernel and the
 > `KernelFn::TaskRun` lowering path stay (the entry boundary and the
 > `let _ = TaskExpr` auto-force still emit them). `Task.perform` is
 > deleted outright and its name is **reserved** for a possible future
@@ -16,7 +16,7 @@
 
 ## Problem statement
 
-Sky exposes two synchronous Task-forcing kernels:
+Ipê exposes two synchronous Task-forcing kernels:
 
 - `Task.run : Task e a -> Result e a` — `../sky/sky-stdlib/Sky/Core/Task.sky:85-88`
 - `Task.perform : Task e a -> Result e a` — same file, lines 90–96;
@@ -47,7 +47,7 @@ Current inventory in the Rust port (all confirmed 2026-07-10):
 | Runtime | `runtime/src/sky_runtime/task.rs:191-195` — `task_run` = `block_on`, panic→Err, total |
 
 Corpus pressure: 95 occurrences across 35 files in `../sky/examples/`
-(top: `17-skymon` 18, `38-composite-ui-multibackend` 6, `16-skychess` 6,
+(top: `17-skymon` 18, `38-composite-ui-multibackend` 6, `16-ipehess` 6,
 `00-standard-libs` 6); 7 occurrences in the port's own
 `tests/golden/` corpus (`http_stream_id` 4,
 `wildcard_lambda_pany` 2, `poly_task_on_error` 1). This is
@@ -110,9 +110,9 @@ coverage later wants Elm's `Task.perform : (a -> msg) -> Task Never a
 -> Cmd msg` / `Task.attempt`, the name is clean for it. Note this in
 the divergence entry so nobody "helpfully" re-adds the alias.
 
-### D4 — Migration: `skyc fix` codemod + CI patch queue
+### D4 — Migration: `ipe fix` codemod + CI patch queue
 
-Ship a `skyc fix` migration in the same change (the patch-queue design
+Ship a `ipe fix` migration in the same change (the patch-queue design
 says mechanical departures ship with their migrator, and CI generates
 the example patches BY RUNNING the migrator — the queue doubles as the
 migrator's E2E test):
@@ -163,7 +163,7 @@ Order of operations (after #116 is landed and green):
    `constrain.rs:3570-3571`; `naming.rs:585` arm;
    `sky_ir/src/pretty.rs:521`; `lower.rs:7053` half). Exhaustive-match
    friction is the checklist: rustc will list every arm.
-4. `skyc fix` codemod (mechanical rewrites per D4) + its tests.
+4. `ipe fix` codemod (mechanical rewrites per D4) + its tests.
 5. Regenerate the port's own 7 golden usages via the codemod
    (`tests/golden/http_stream_id`, `poly_task_on_error`,
    `wildcard_lambda_pany`) — these become the first migrator
@@ -184,7 +184,7 @@ Order of operations (after #116 is landed and green):
 - `i128_removed_task_run_midflow` — `let r = Task.run t in …` → assert
   the keep-it-in-Task hint variant.
 - `i128_removed_task_perform` — same three shapes for `Task.perform`.
-- Codemod unit tests: each mechanical rewrite idempotent (`skyc fix`
+- Codemod unit tests: each mechanical rewrite idempotent (`ipe fix`
   twice = once), non-mechanical shape reported not rewritten.
 - E2E (`IPE_E2E=1`): the three regenerated goldens (step 5) build, run,
   and stay byte-equivalent to their pre-existing `expected_go.txt`

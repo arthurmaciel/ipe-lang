@@ -16,10 +16,10 @@
 //!
 //! ```text
 //! # compile-only check (fast, no IPE_E2E needed):
-//! cargo test -p skyc --test golden_i149_noncl_var_hof
+//! cargo test -p ipe --test golden_i149_noncl_var_hof
 //!
 //! # full E2E (run emitted binary):
-//! IPE_E2E=1 cargo test -p skyc --test golden_i149_noncl_var_hof
+//! IPE_E2E=1 cargo test -p ipe --test golden_i149_noncl_var_hof
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -49,7 +49,7 @@ fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for fixture {fixture}: {:?}",
+        "ipe build must succeed for fixture {fixture}: {:?}",
         built.err()
     );
 }
@@ -84,7 +84,7 @@ fn a1_noncl_var_task_and_then_compiles() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for noncl_var_hof: {:?}",
+        "ipe build must succeed for noncl_var_hof: {:?}",
         built.err()
     );
 

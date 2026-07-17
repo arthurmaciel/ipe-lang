@@ -3,7 +3,7 @@
 //! A non-Copy record captured into a `Ui.onInput` callback AND reused by a
 //! sibling `onPress` button in the same view.
 //!
-//! **Without the fix, ** `skyc` exits 0, but the emitted Rust fails `cargo build` with
+//! **Without the fix, ** `ipe` exits 0, but the emitted Rust fails `cargo build` with
 //! E0382 ("use of moved value").  The lowerer's multi-use-clone rewrite wraps
 //! the `onInput` Lambda in `let item = item.clone(); Lambda { … }`, but the
 //! inline-wrap emitter (`KernelFn::UiOnInput`) then places the whole block
@@ -24,10 +24,10 @@
 //! Run:
 //! ```text
 //! # fast (no cargo):
-//! cargo test -p skyc --test golden_i193_oninput_reused_capture
+//! cargo test -p ipe --test golden_i193_oninput_reused_capture
 //!
 //! # full E2E:
-//! IPE_E2E=1 cargo test -p skyc --test golden_i193_oninput_reused_capture
+//! IPE_E2E=1 cargo test -p ipe --test golden_i193_oninput_reused_capture
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -46,7 +46,7 @@ fn entry_path(root: &Path) -> PathBuf {
         .join("Main.ipe")
 }
 
-/// skyc-0: the compiler must accept the program AND emit the capture-clone `let`
+/// ipe-0: the compiler must accept the program AND emit the capture-clone `let`
 /// OUTSIDE the `ui_on_input_` Arc closure — checked unconditionally (no cargo).
 ///
 /// This is the exact assertion that the E0382 SEAL break cannot recur for the
@@ -68,7 +68,7 @@ fn i193_oninput_skyc_accepts_and_hoists_capture_clone() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for oninput_reused_capture: {:?}",
+        "ipe build must succeed for oninput_reused_capture: {:?}",
         built.err()
     );
 
@@ -96,7 +96,7 @@ fn i193_oninput_skyc_accepts_and_hoists_capture_clone() {
 
 /// cargo-0 ∧ run-correct: emitted project compiles (no E0382) and renders the
 /// row.  Gated on `IPE_E2E=1` — the only check that catches the original SEAL
-/// violation (E0382 from `cargo build`, invisible to `skyc`).
+/// violation (E0382 from `cargo build`, invisible to `ipe`).
 #[test]
 fn i193_oninput_cargo_builds_and_runs() {
     if std::env::var("IPE_E2E").is_err() {
@@ -113,7 +113,7 @@ fn i193_oninput_cargo_builds_and_runs() {
     let Ok(runtime) = runtime else { return };
 
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
-    assert!(built.is_ok(), "skyc build must succeed: {:?}", built.err());
+    assert!(built.is_ok(), "ipe build must succeed: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted("oninput_reused_capture", &out);
     assert_eq!(

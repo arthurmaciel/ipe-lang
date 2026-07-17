@@ -1,6 +1,6 @@
-//! Encoding kernels for Sky.Core.Encoding — base64 / url-percent / hex
+//! Encoding kernels for Ipe.Encoding — base64 / url-percent / hex
 //! All fns mirror the Go runtime's `stdlib_extra.go` Encoding kernel behaviour
-//! and the Sky-side signatures declared in `sky-stdlib/Sky/Core/Encoding.ipe`.
+//! and the Ipê-side signatures declared in `sky-stdlib/Ipê/Core/Encoding.ipe`.
 
 use super::IpeResult;
 
@@ -71,17 +71,17 @@ pub(crate) fn form_url_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Sky `base64Encode : String -> String` — encodes the input's UTF-8 bytes
+/// Ipê `base64Encode : String -> String` — encodes the input's UTF-8 bytes
 /// (Go parity: `base64.StdEncoding.EncodeToString([]byte(s))`). Non-ASCII
 /// matches Go rather than silently truncating codepoints > 255.
 pub fn base64_encode(s: String) -> String {
     B64.encode(s.as_bytes())
 }
 
-/// Sky `base64Decode : String -> Result Error String` — decodes to bytes, then
-/// requires them to be valid UTF-8 (the Sky `String` invariant), so
+/// Ipê `base64Decode : String -> Result Error String` — decodes to bytes, then
+/// requires them to be valid UTF-8 (the Ipê `String` invariant), so
 /// `base64Decode (base64Encode s) == Ok s` for every `String s`. Non-UTF-8
-/// payloads surface as `Err` (raw-byte round-tripping lives on `Std.Bytes`).
+/// payloads surface as `Err` (raw-byte round-tripping lives on `Ipe.Bytes`).
 pub fn base64_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
     match B64.decode(s.as_bytes()) {
         Ok(bytes) => match String::from_utf8(bytes) {
@@ -94,7 +94,7 @@ pub fn base64_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
     }
 }
 
-/// Sky `urlEncode : String -> String` — Go url.QueryEscape semantics: space
+/// Ipê `urlEncode : String -> String` — Go url.QueryEscape semantics: space
 /// becomes `+` (not %20); the ASCII unreserved set (`A-Za-z0-9` plus `-_.~`)
 /// is left verbatim; every other byte is percent-encoded.
 pub fn url_encode(s: String) -> String {
@@ -106,7 +106,7 @@ pub fn url_encode(s: String) -> String {
         .replace("%20", "+")
 }
 
-/// Sky `urlDecode : String -> Result Error String` — QueryUnescape: `+` -> space,
+/// Ipê `urlDecode : String -> Result Error String` — QueryUnescape: `+` -> space,
 /// then percent-decode (so a literal `%2B` round-trips back to `+`).
 pub fn url_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
     let spaced = s.replace('+', " ");
@@ -116,17 +116,17 @@ pub fn url_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
     }
 }
 
-/// Sky `hexEncode : String -> String` — encodes the input's UTF-8 bytes
+/// Ipê `hexEncode : String -> String` — encodes the input's UTF-8 bytes
 /// (Go parity: `hex.EncodeToString([]byte(s))`). Non-ASCII matches Go rather
 /// than truncating codepoints > 255.
 pub fn encoding_hex_encode(s: String) -> String {
     hex::encode(s.as_bytes())
 }
 
-/// Sky `hexDecode : String -> Result Error String` — decodes to bytes, then
-/// requires them to be valid UTF-8 (the Sky `String` invariant), so
+/// Ipê `hexDecode : String -> Result Error String` — decodes to bytes, then
+/// requires them to be valid UTF-8 (the Ipê `String` invariant), so
 /// `hexDecode (hexEncode s) == Ok s` for every `String s`. Non-UTF-8 payloads
-/// (e.g. the hex of a raw digest) surface as `Err`; use `Std.Bytes.fromHex` to
+/// (e.g. the hex of a raw digest) surface as `Err`; use `Ipe.Bytes.fromHex` to
 /// round-trip arbitrary bytes. (jwt.rs owns its own `hex::decode` on raw
 /// `&[u8]` and never routes through this kernel.)
 pub fn encoding_hex_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
@@ -141,11 +141,11 @@ pub fn encoding_hex_decode<E: From<String>>(s: String) -> IpeResult<E, String> {
     }
 }
 
-// ── Concrete (non-generic) wrappers for generated Sky code ─────────────
+// ── Concrete (non-generic) wrappers for generated Ipê code ─────────────
 //
 // The generic `base64_decode<E>`, `url_decode<E>`, `encoding_hex_decode<E>` above
 // use a flexible `E: From<String>` bound so the error type can be inferred from
-// surrounding context. Generated Sky code sets `IpeError = ipe_runtime::error::
+// surrounding context. Generated Ipê code sets `IpeError = ipe_runtime::error::
 // IpeError`, but Rust's type inference cannot pin `E` when
 // the error arm discards the value (e.g. `Err _ ->` in a case expression).
 // These concrete aliases pin `E = IpeError` up-front, eliminating the
@@ -167,7 +167,7 @@ pub fn ipe_encoding_hex_decode(s: String) -> IpeResult<crate::error::IpeError, S
     encoding_hex_decode(s)
 }
 
-// ── Sky.Core.Bytes kernels ─────────────────────────────────────────
+// ── Ipe.Bytes kernels ─────────────────────────────────────────
 //
 // `Bytes` is a distinct primitive (`Vec<u8>`); its kernel implementations
 // (`bytes_to_hex`, `bytes_from_hex`, `bytes_to_base64`, `bytes_from_base64`,

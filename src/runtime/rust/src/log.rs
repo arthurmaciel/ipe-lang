@@ -1,4 +1,4 @@
-// Log helpers — Go-format parity for `Std.Log.*`.
+// Log helpers — Go-format parity for `Ipe.Log.*`.
 //
 // The plain + JSON line shapes mirror `runtime-go/rt/rt.go`'s `logEmit`
 // byte-for-byte (modulo the genuinely-nondeterministic timestamp):
@@ -10,7 +10,7 @@
 // Stream routing matches Go: warn + error → stderr, debug + info → stdout.
 // `IPE_LOG_LEVEL` gates output (debug < info < warn < error; default info);
 // `IPE_LOG_FORMAT=json` switches to the JSON shape. Each line is also mirrored
-// into the telemetry ring (the Sky Console reads it).
+// into the telemetry ring (the Ipê Console reads it).
 //
 // `Log.println` is a SEPARATE bare line with NO prefix (Go's `Log_println` is a
 // raw `fmt.Println`); codegen routes it to `log_println`, never to `log_info`.
@@ -172,10 +172,10 @@ pub fn log_info<E: Send + 'static>(msg: String) -> IpeTask<E, ()> {
 }
 
 // `Log.*With : String -> List a -> Task` is polymorphic in the attr element
-// (Sky callers pass a flat `List String` — `["errId", id]` — OR a key/value
+// (Ipê callers pass a flat `List String` — `["errId", id]` — OR a key/value
 // `List (String, String)` — `[("errId", id), …]`). The attrs slot is generic
 // over its element type `A`, bounded by `IpeStringify` — the TOTAL Go-`%v`
-// stringifier every Sky-representable type implements (String unquoted, tuples
+// stringifier every Ipê-representable type implements (String unquoted, tuples
 // as `{k v}`, generated records/ADTs via their codegen-emitted impl). A plain
 // `Display` bound is insufficient: tuples + generated types don't implement
 // `Display`, so it fails to compile (E0277) at any tuple/record call site.

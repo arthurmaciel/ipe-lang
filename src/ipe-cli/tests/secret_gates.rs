@@ -1,9 +1,9 @@
 //! `Ipe.Secret` negative gates: every plausible
 //! accidental-stringification / accidental-leak path that is NOT redacted
-//! must instead be REJECTED at `skyc` compile time — never accepted and left
+//! must instead be REJECTED at `ipe` compile time — never accepted and left
 //! to misbehave (or leak) at runtime, and never deferred to a `cargo`
-//! failure (the SEAL). Companion to `crates/skyc/tests/golden_secret.rs`
-//! (the positive goldens) and `crates/skyc/tests/model_admissibility.rs`
+//! failure (the SEAL). Companion to `crates/ipe/tests/golden_secret.rs`
+//! (the positive goldens) and `crates/ipe/tests/model_admissibility.rs`
 //! (`live_model_with_secret_field_is_rejected`, the Model-gate IPE-L0120
 //! case).
 //!

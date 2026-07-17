@@ -15,7 +15,7 @@
 //! Gated on `IPE_E2E=1`. Run:
 //!
 //! ```text
-//! IPE_E2E=1 cargo test -p skyc --test golden_i122_cli_program_separator
+//! IPE_E2E=1 cargo test -p ipe --test golden_i122_cli_program_separator
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -47,7 +47,7 @@ fn cli_program_glues_consecutive_renders_matching_go_oracle() {
     let Ok(runtime) = runtime else { return };
 
     let built = ipe::build(&entry, &out, &runtime);
-    assert!(built.is_ok(), "skyc build must succeed: {:?}", built.err());
+    assert!(built.is_ok(), "ipe build must succeed: {:?}", built.err());
 
     // Two stdin lines → two loop-body renders (count 0 → 1 → 2), then EOF.
     let outcome =

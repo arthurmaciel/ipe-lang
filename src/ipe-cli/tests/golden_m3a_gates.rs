@@ -13,7 +13,7 @@
 //! Note: the partial-ctor-application gap (formerly IPE-L0113) is closed.
 //! Positive regressions live in `golden_i147_ctor_as_fn_seal`.
 //!
-//! Each is driven through the full `skyc` pipeline and asserted to produce its
+//! Each is driven through the full `ipe` pipeline and asserted to produce its
 //! exact code, locking the gap so it can never regress into a worse failure mode.
 
 use std::path::{Path, PathBuf};

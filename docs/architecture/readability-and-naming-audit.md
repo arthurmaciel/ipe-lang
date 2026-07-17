@@ -6,7 +6,7 @@
 
 ## 1. Framing
 
-Sky's operating principle order is fixed:
+Ipê's operating principle order is fixed:
 
 > **security > correctness > soundness > efficiency > completeness > readability**
 
@@ -31,7 +31,7 @@ below is therefore **RISK-FLAGGED**:
 | **CONTRACT-TOUCHING** | Crosses a crate's public API, OR is a stringly key (kernel qualifier `String`/`Db.Decode`/`idiv`, error code `IPE-L0119`, runtime symbol name, JSON wire field) OR is otherwise golden-oracle-observable. Can silently break correctness/soundness — **coordinate-with-tests**, do not rename in isolation. |
 
 **Coordination / anti-double-churn:** this backlog is intended to ride the
-**Tier-3 mechanical passes already scheduled** — the `Sky → Ipê` rename (task
+**Tier-3 mechanical passes already scheduled** — the `Ipê → Ipê` rename (task
 **#59**) and the post-parity **simplification sweep**. Doing these renames as a
 separate pass would touch the same files twice. The naming work should be folded
 into #59 so the tree is re-tokenised once. **Until the compiler reaches Go
@@ -55,8 +55,8 @@ Legend — Lens: `HP` higher-principle · `NT` name-truthfulness · `DA` de-abbr
 | **F1** | `sky_lower/lower.rs:3213` (`callee_arity`, Kernel arms) vs `sky_kernels/lib.rs:555` (`decl().arity`) | Hand-maintained ~400-line per-kernel arity `match`, parallel to `decl().arity` | `Callee::Kernel(k) => Ok(k.decl().arity as usize)` | HP | correctness (two hand-maintained tables **already disagree** — drift class of task #58) | **CONTRACT-TOUCHING** (changes saturation/eta decisions); add `callee_arity(k)==decl().arity` tripwire | Verified drift: `decl()`=0 for `TimeNow`/`TimeUnixMillis`/`SystemArgs`/`SystemCwd`/`IoReadLine`, but `callee_arity`=1; `RandomFloat` `decl()` vs `callee_arity`=2. Latent exit-0-then-cargo-fail. |
 | **F2** | `sky_kernels/lib.rs:846-847` (`UuidV4/V7`→arity **1**) vs `:874,876,878` (`TimeNow`/`TimeUnixMillis`/`SystemArgs`→arity **0**) | `decl().arity` counts the unit arg inconsistently for `() -> Task a` kernels | Pick ONE rule for `() -> Task a`; document it on the `arity` field | NT | correctness (precondition for F1; scheme "arrow-count == decl().arity" tripwire keys off this) | **CONTRACT-TOUCHING** (golden/scheme tripwire) | Confirmed at HEAD: `Uuid.v4 => d(..,1,..)`, `Time.now => d(..,0,..)`. The coexisting conventions are *what force* F1 to diverge. |
 | **H2** | `sky_types/unify.rs:45` `super_concrete_ok` vs `lib.rs:286` `concrete_super_ok` (+ `lib.rs:258` `emitted_bound_satisfied`) | Two near-anagram names for a soundness pair doing *different* jobs (head pin-check vs deep resolved-check) | `head_pin_satisfies_bounds` / `resolved_ty_satisfies_bounds` / `generic_use_satisfies_bounds` | NT | correctness (editing the wrong one of a soundness pair is a live hazard) | SAFE-MECHANICAL (`super_concrete_ok` private; `concrete_super_ok` `pub(crate)`, single caller `unify.rs:171`) | The transposition actively defeats the reader's ability to tell head-check from deep-check. |
-| **H1d** *(diagnostics)* | `sky_diagnostics/code.rs:25` `struct Code(&'static str)`; wildcards `code.rs:307`,`:400` | Stringly newtype forces wildcard `_ =>` arms in `title`/`explain_page` | `enum Code { P0001, … }` with exhaustive `as_str()`/`title()`/`explain_page()` | HP | correctness/soundness (rule-2; project "no `_ ->` catchall" rule) | **CONTRACT-TOUCHING** — `as_str()` wire form `"IPE-T0001"` is `skyc explain`/golden-observable, byte-preserve | Newtype gives forgeability protection but *not* exhaustiveness. Enum makes "code without title/page" a compile error and kills H2d at the root. |
-| **H2d** *(skyc)* | `skyc/lib.rs:41` `ALL_CODES` vs authoritative `code.rs:409` `ALL` (`#[cfg(test)]`-only) | Second hand-maintained taxonomy copy; **has drifted** | Promote `pub const ALL: &[Code]` from diagnostics; skyc consumes it; delete local copy | HP | correctness (live user-visible bug) | **CONTRACT-TOUCHING** — restores 8 codes to `explain`/index output | **Verified drift at HEAD:** `ALL_CODES` omits `IPE-P0016,P0017,T0014,L0114,L0115,L0116,L0117,L0119` — all have `title` arms *and* `include_str!` pages. `skyc explain IPE-L0117` currently returns `UnknownCode`. |
+| **H1d** *(diagnostics)* | `sky_diagnostics/code.rs:25` `struct Code(&'static str)`; wildcards `code.rs:307`,`:400` | Stringly newtype forces wildcard `_ =>` arms in `title`/`explain_page` | `enum Code { P0001, … }` with exhaustive `as_str()`/`title()`/`explain_page()` | HP | correctness/soundness (rule-2; project "no `_ ->` catchall" rule) | **CONTRACT-TOUCHING** — `as_str()` wire form `"IPE-T0001"` is `ipe explain`/golden-observable, byte-preserve | Newtype gives forgeability protection but *not* exhaustiveness. Enum makes "code without title/page" a compile error and kills H2d at the root. |
+| **H2d** *(ipe)* | `ipe/lib.rs:41` `ALL_CODES` vs authoritative `code.rs:409` `ALL` (`#[cfg(test)]`-only) | Second hand-maintained taxonomy copy; **has drifted** | Promote `pub const ALL: &[Code]` from diagnostics; ipe consumes it; delete local copy | HP | correctness (live user-visible bug) | **CONTRACT-TOUCHING** — restores 8 codes to `explain`/index output | **Verified drift at HEAD:** `ALL_CODES` omits `IPE-P0016,P0017,T0014,L0114,L0115,L0116,L0117,L0119` — all have `title` arms *and* `include_str!` pages. `ipe explain IPE-L0117` currently returns `UnknownCode`. |
 | **A1** *(runtime)* | `runtime/.../live/diff.rs:8` `Patch.attrs: HashMap<String,String>` | Empty-string value overloaded: "set attr to `\"\"`" vs "remove attr" are byte-identical | in-Rust `enum AttrDelta { Set(String), Remove }` + hand-written `Serialize` emitting identical wire bytes | HP | correctness (rule-2; `value=""` vs remove) | **CONTRACT-TOUCHING** (JSON wire consumed by `live/client.js` + Go-parity golden) — freeze wire, change only in-Rust repr | Representable-but-invalid state inherited from Go parity. Latent live-diff correctness hole. |
 | **N2** | `sky_types/constrain.rs:1269` `normalize_annotation_ty` | Named "normalize" but also *rejects* (IPE-T0001) non-`Error` Task channel | `normalize_and_check_annotation` (or document the reject in the header) | NT | correctness (a parse-don't-validate boundary; name hides the validate half) | SAFE-MECHANICAL (private) | Under-informs: reader expects a total normalizer, not a fallible parser. |
 | **N1d** | `sky_diagnostics/code.rs:224`,`311` doc | Doc claims `title`/`explain_page` "Total over the taxonomy" — the signature cannot enforce it | Soften doc to name the wildcard as a drift-risk fallback, OR fix via H1d | NT | correctness (doc vs behaviour) | SAFE-MECHANICAL (doc-only) | Until H1d lands the "total" claim is false; a reader trusts it. |
@@ -76,8 +76,8 @@ Legend — Lens: `HP` higher-principle · `NT` name-truthfulness · `DA` de-abbr
 | **D2** | `sky_types/ty.rs:183-213` `Content::Flex`, `Content::Super{..}` | `Super` reads as the keyword; `Flex` outlier | `Content::Flexible`, `Content::SuperTyped{..}` | DA/NT | readability | SAFE-MECHANICAL (`Content`/`FlatType` crate-private, never `pub use`) | `Rigid`/`Structure` already spelled out. |
 | **D3** | `sky_types/ty.rs:65` `TyBounds` (re-exported `lib.rs:43`); doc calls contents "obligations" | Abbrev + doc/name mismatch | `TypeBounds` (DA) or `Obligations`/`SuperBounds` (NT) | DA/NT | readability | **CONTRACT-TOUCHING** (cross-crate; lowerer emits trait-bounds) | Bundle with D1. |
 | **D4** | `sky_types/constrain.rs:5169` `zonk`, `:5133` `ZonkTask`, `:5282` `zonk_underflow` | GHC jargon | `read_back` / `ReadBackTask` / `read_back_underflow` (or `resolve_var`) | DA | readability | SAFE-MECHANICAL (crate-internal; `pub fn` in private `mod constrain`) | Module doc has to gloss it (`constrain.rs:14`). Same port-fidelity **OPEN** call as D1. |
-| **DA1** *(skyc)* | `skyc/lib.rs:864` `let a = line.trim()` | Trimmed yes/no reply | `answer` | DA | readability | SAFE-MECHANICAL (fn-local) | — |
-| **DA2** *(skyc)* | `skyc/lib.rs:881` `let tmp = …` | Sibling temp-file `PathBuf`, not scratch | `temp_path` | DA | readability | SAFE-MECHANICAL (fn-local) | — |
+| **DA1** *(ipe)* | `ipe/lib.rs:864` `let a = line.trim()` | Trimmed yes/no reply | `answer` | DA | readability | SAFE-MECHANICAL (fn-local) | — |
+| **DA2** *(ipe)* | `ipe/lib.rs:881` `let tmp = …` | Sibling temp-file `PathBuf`, not scratch | `temp_path` | DA | readability | SAFE-MECHANICAL (fn-local) | — |
 
 ---
 
@@ -97,7 +97,7 @@ Legend — Lens: `HP` higher-principle · `NT` name-truthfulness · `DA` de-abbr
 These are intentionally stringly *at their layer* and are the compiler's
 cross-crate dispatch contract. Renaming a value here is a silent
 correctness/soundness break (an unmatched arm falls through to the
-`Ty::Var(u32::MAX)` fail-closed hole → skyc-OK then cargo-fail, the
+`Ty::Var(u32::MAX)` fail-closed hole → ipe-OK then cargo-fail, the
 exit-0-then-cargo-fail class).
 
 - **Kernel `(qualifier, name)` primary key** — `sky_kernels/lib.rs:55-71`,
@@ -114,8 +114,8 @@ exit-0-then-cargo-fail class).
   `constrain.rs` `kernel_ty`. **Frozen.** (The *field* name `qual_vars` is
   accurate; a `type QualVarTable = …` alias is optional low-value SAFE-MECHANICAL.)
 - **Error-code wire forms** — `Code::as_str()` → `"IPE-T0001"` etc. are
-  `skyc explain`/golden-observable. Any H1d/H2d work must byte-preserve them.
-- **Runtime Sky-facing kernel names** — `list_foldr`, `sky_list_cons`,
+  `ipe explain`/golden-observable. Any H1d/H2d work must byte-preserve them.
+- **Runtime Ipê-facing kernel names** — `list_foldr`, `sky_list_cons`,
   `dict_union`, `strip_style_close`, `canonical_header`, `render_html`, … are
   emitted-by-name and Go-wire-parity-observable. **Frozen.**
 - **Cross-crate `StdlibKernel`** — used at `constrain.rs:1426,1459,1477` but
@@ -144,12 +144,12 @@ cosmetic pass.
 
 3. **H1d/H2d — `Code`-as-string forces non-exhaustive dispatch + a drifted
    duplicate taxonomy** *(H2d is a live user-visible `explain` bug).* Verified:
-   `skyc/lib.rs:41 ALL_CODES` omits 8 real page-backed codes
+   `ipe/lib.rs:41 ALL_CODES` omits 8 real page-backed codes
    (`IPE-P0016,P0017,T0014,L0114,L0115,L0116,L0117,L0119`), so
-   `skyc explain IPE-L0117` returns `UnknownCode` today. **H2d must be fixed on
+   `ipe explain IPE-L0117` returns `UnknownCode` today. **H2d must be fixed on
    its own even if H1d (enum-ify `Code`) is deferred.** Making `Code` an enum
    structurally eliminates the wildcard mislabel (N1d) and the duplication in one
-   move — highest single-fix leverage in the diagnostics/skyc area.
+   move — highest single-fix leverage in the diagnostics/ipe area.
 
 4. **A1 — `Patch.attrs` empty-string overload** *(rule-2, contract-touching).*
    `live/diff.rs:8` cannot distinguish `value=""` from attribute-removal on the
@@ -219,7 +219,7 @@ mechanical rename `rustc` proves total.
 
 ## 6. Coordination note
 
-- **Fold into task #59 (`Sky → Ipê` rename)** and the **post-parity
+- **Fold into task #59 (`Ipê → Ipê` rename)** and the **post-parity
   simplification sweep** — both Tier 3, both re-tokenise the whole tree. Running
   the P6 renames as a separate pass doubles the churn on every file.
 - **Do not start any P6 item before the compiler reaches Go parity + the exit-0

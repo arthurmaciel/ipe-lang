@@ -5,7 +5,7 @@
 //! §"Cross-session persistence" (**LOCKED, Option B**).
 //!
 //! Everything in-process is memoized, but nothing survives ACROSS process
-//! invocations — every `skyc build` starts a cold [`ipe_db::IpeDatabase`].
+//! invocations — every `ipe build` starts a cold [`ipe_db::IpeDatabase`].
 //! This module closes that gap for the coarse, whole-project granularity
 //! that genuinely exists (`ipe_db::emit_project`'s output — see this
 //! module's own doc section below for why that is a deliberate, documented
@@ -39,7 +39,7 @@
 //! `files` maps `RelPath -> String`, `cargo_toml` is a `String`), so it
 //! serializes and deserializes losslessly with zero cross-process identity
 //! risk. The practical win is AT LEAST as large as literal IR caching would
-//! give for `skyc build`'s actual use case (a cold-start cache hit skips
+//! give for `ipe build`'s actual use case (a cold-start cache hit skips
 //! parse -> canon -> link -> infer -> lower -> emit ENTIRELY, not just
 //! infer -> lower -> emit), at the cost of not serving a hypothetical
 //! future interpreter tier that wants to consume `ipe_ir` directly (design
@@ -69,7 +69,7 @@
 //!
 //! ## Version epoch (toolchain refuse-don't-guess)
 //!
-//! [`derive_epoch`] hashes the CURRENTLY RUNNING `skyc` binary's own bytes
+//! [`derive_epoch`] hashes the CURRENTLY RUNNING `ipe` binary's own bytes
 //! (`compiler_revision()`, matching the design doc's row verbatim: "content
 //! hash seeded from the `ipe` binary's own build hash") together with the
 //! active `rustc`'s `-vV` output (`toolchain_fingerprint()`). The epoch is a
@@ -77,7 +77,7 @@
 //! compared after a hit — so "refuse, don't guess" is achieved BY
 //! CONSTRUCTION, the same mechanism the design doc's FFI cache uses ("stale
 //! entry has a different address -> unreachable miss", H1/H4 in the hazard
-//! ledger): a `cargo build`/`cargo install` of `skyc` OR a `rustup update`
+//! ledger): a `cargo build`/`cargo install` of `ipe` OR a `rustup update`
 //! moves every subsequent build to a DIFFERENT directory, so entries from
 //! the old compiler/toolchain pairing are never even looked up, let alone
 //! trusted. There is nothing to "refuse" at lookup time because the stale
@@ -234,7 +234,7 @@ pub fn compute_ir_key(
     hex::encode(hasher.finalize())
 }
 
-/// The whole-project content hash of the CURRENTLY RUNNING `skyc` binary's
+/// The whole-project content hash of the CURRENTLY RUNNING `ipe` binary's
 /// bytes — the design doc's `compiler_revision()`. `None` when the running
 /// executable cannot be located or read (never a hard error: the cache is
 /// simply unavailable for this invocation).
@@ -317,13 +317,13 @@ pub fn try_load(cache_root: &Path, epoch: &str, key: &str) -> Option<EmittedProj
 /// `key`/`epoch`. Every failure (directory creation, serialize, write,
 /// rename) is silently swallowed — a cache-write failure must never turn a
 /// successful build into a reported failure. Writes atomically (tmp file +
-/// rename) so a concurrent reader (a second `skyc build` racing this one)
+/// rename) so a concurrent reader (a second `ipe build` racing this one)
 /// never observes a partially-written entry; a torn read is impossible, a
 /// missing-then-appearing file is the only visible race, which `try_load`
 /// already treats as an ordinary miss.
 ///
 /// The tmp file name is suffixed with this process's PID (mirroring
-/// `write_atomic`'s existing convention) so two CONCURRENT `skyc build`
+/// `write_atomic`'s existing convention) so two CONCURRENT `ipe build`
 /// invocations computing the SAME key never write to the same tmp path —
 /// without that, two racing writers could interleave into one file before
 /// either renamed it, corrupting the entry a third reader might load in
@@ -654,7 +654,7 @@ mod tests {
         // Pure-function shape avoided here on purpose: `env_cache_dir` reads
         // process env, so this test only checks the UNSET default (the
         // env-mutation cases are exercised end-to-end in
-        // `crates/skyc/src/lib.rs`'s cache integration tests via the
+        // `crates/ipe/src/lib.rs`'s cache integration tests via the
         // explicit-cache-dir seam, never via `std::env::set_var` — see that
         // module's doc for why).
         let out_dir = Path::new("/tmp/ipe-cache-dir-does-not-need-to-exist");
@@ -816,7 +816,7 @@ mod tests {
     /// **Cross-process id-drift proof, at the on-disk cache boundary.**
     /// Stores a `Program` written through one interner, then loads it
     /// through a COMPLETELY DIFFERENT, differently-polluted interner (the
-    /// scenario a real `skyc build` -> `skyc build` sequence produces: a
+    /// scenario a real `ipe build` -> `ipe build` sequence produces: a
     /// fresh `Interner::new()` per invocation). Asserts the relocated
     /// `Program`'s structural content (via `ipe_ir::pretty::pretty`,
     /// resolved-name comparison — not raw `Symbol` equality, which is not

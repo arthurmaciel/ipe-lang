@@ -38,7 +38,7 @@
 //!      assertion true while relaxing the bound under the wasm cfg only.
 //!
 //! Keep this small, deterministic, dependency-free, and panic-free on every
-//! Sky-reachable path.
+//! Ipê-reachable path.
 
 use ipe_runtime_rust::*;
 

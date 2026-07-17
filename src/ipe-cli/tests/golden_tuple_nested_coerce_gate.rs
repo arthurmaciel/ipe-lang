@@ -1,7 +1,7 @@
 //! A coercing leaf nested inside a nested-TUPLE column on a
 //! VARIABLE (non-literal) tuple scrutinee.
 //!
-//! Two shapes, two outcomes (both SEAL-clean — never skyc-0-then-cargo-fail):
+//! Two shapes, two outcomes (both SEAL-clean — never ipe-0-then-cargo-fail):
 //!
 //! * PROBE E — a string LITERAL (`PStr`) nested in a nested-tuple column:
 //!   `case v of ( ( "x", n ), A ) -> …` on `v : ((String,Int), Tag)`.
@@ -9,7 +9,7 @@
 //!   a fresh binder plus an `if __sgN.as_str() == "lit"` match guard, so it lowers
 //!   to `match v { ((__sg0, n), Tag::A) if __sg0.as_str() == "x" => … }` — a
 //!   by-value binder + `as_str()` guard, sound for a variable scrutinee (mirrors
-//!   the reference's `renderPatGuarded`). skyc-0 ⟹ cargo-0 ⟹ the right arm fires.
+//!   the reference's `renderPatGuarded`). ipe-0 ⟹ cargo-0 ⟹ the right arm fires.
 //!
 //! * PROBE G — a CONS sub-pattern (`PCons`) nested in a nested-tuple column:
 //!   `case v of ( ( x :: _, n ), A ) -> …` on `v : ((List Int,Int), Tag)`.
@@ -17,7 +17,7 @@
 //!   owned `Vec`, which only the literal-tuple coerced-column path can produce
 //!   (there are no element expressions to `.as_slice()`-wrap a variable tuple
 //!   column). So a `PList` / `PCons` column at any depth stays an honest
-//!   skyc-fail, never an exit-0-then-cargo-fail.
+//!   ipe-fail, never an exit-0-then-cargo-fail.
 
 use std::path::{Path, PathBuf};
 
@@ -60,13 +60,13 @@ fn assert_l0115_gate(fixture: &str, out_suffix: &str) {
         got,
         Some(ipe_diagnostics::IPE_L0115),
         "fixture {fixture}: a list / cons sub-pattern nested in a nested-tuple column \
-         must fail closed to IPE-L0115 (never skyc-0-then-cargo-fail); got build \
+         must fail closed to IPE-L0115 (never ipe-0-then-cargo-fail); got build \
          result {built:?}"
     );
 }
 
 /// PROBE E: a string literal (`PStr`) nested inside a nested-tuple column now
-/// LOWERS (fast gate — `skyc build` succeeds).
+/// LOWERS (fast gate — `ipe build` succeeds).
 #[test]
 fn nested_tuple_str_column_builds() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("tuple_nested_coerce_str_gate");
@@ -100,7 +100,7 @@ fn nested_tuple_str_column_cargo_builds_and_runs() {
     let built = ipe::build(&fixture_entry("i_tuple_nested_coerce_str"), &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for i_tuple_nested_coerce_str: {:?}",
+        "ipe build must succeed for i_tuple_nested_coerce_str: {:?}",
         built.err()
     );
     let outcome = support::build_and_run_emitted("i_tuple_nested_coerce_str", &out);

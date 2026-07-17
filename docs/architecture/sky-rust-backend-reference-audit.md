@@ -3,14 +3,14 @@
 ## Framing
 
 `../sky` on branch `feat/runtime-rust` is the **reference**: it is a freely
-available implementation of the Sky→Rust path that already passes the entire
+available implementation of the Ipê→Rust path that already passes the entire
 non-FFI example set, so its behaviour is the parity oracle for ipê. The two
 trees share a **vendored runtime fork** — the 48 `src/sky_runtime/*.rs` modules
 carry identical names on both sides, so runtime divergence is *within-module*
 (behavioural / parity / kernel-coverage drift), not structural. The real
 divergence is in the **backend**: the reference emits Rust from a Haskell
-compiler (`src/Sky/Generate/Rust/*.hs` + `src/Sky/Build/Rust/*.hs`), while ipê
-is Rust-all-the-way (`skyc`) with the work split across `crates/sky_lower`,
+compiler (`src/Ipê/Generate/Rust/*.hs` + `src/Ipê/Build/Rust/*.hs`), while ipê
+is Rust-all-the-way (`ipe`) with the work split across `crates/sky_lower`,
 `crates/sky_types`, and `crates/sky_backend_rust`. Because the host language
 differs, we port **strategies and invariants, not literal code**. Every finding
 below is judged strictly against the PRINCIPLES order — **security > correctness
@@ -34,7 +34,7 @@ not yet built on one side, or tooling ergonomics).
 | 2 | Kernel dispatch | `(mod,name)` string `case`; **fail-open** snake_case default | closed 406-variant `KernelFn`; **fail-closed** IPE-L0108 | **O+** | security → correctness | keep; add typed FFI arm at FFI-phase |
 | 3 | Case-arm pattern emission (top level) | raw `match`, slice patterns, Maybe/Result bridge | same + explicit ctor field-count `CompilerBug` guard | **O+** | soundness | keep |
 | 4 | Nested list/cons/record inside ctor payload | recurses, compiles | fail-closed `Err(NestedCtorDiscrimination/NestedPayloadPatterns)` | **~** (ours safer, less complete) | soundness > completeness | close completeness gap — **pre-sweep** |
-| 5 | Refutable function-arg patterns (`f (Just x) =`) | synthesize `let…else { panic! }` (reachable panic) | reject at lower (IPE-L0115/0116) | **O+** | soundness ("no panic from well-typed Sky") | close via front-end desugar, NOT their panic — **pre-sweep/before-push** |
+| 5 | Refutable function-arg patterns (`f (Just x) =`) | synthesize `let…else { panic! }` (reachable panic) | reject at lower (IPE-L0115/0116) | **O+** | soundness ("no panic from well-typed Ipê") | close via front-end desugar, NOT their panic — **pre-sweep/before-push** |
 | 6 | Bare `.field` accessor-as-function | `Can.Accessor` → closure | not representable (no AST variant) | **~** (front-end gap) | completeness | front-end AST work — **pre-sweep** |
 | 7 | Tail-call optimization | `TailCallOpt.hs` analysis; **Go-only** emission; Rust backend has NO TCO | absent (task #49) | **T+** (vs Go); tie (vs their Rust) | soundness (constant stack vs uncatchable overflow trap) | port analysis, author Rust `loop` emission ourselves — **before-push (#49)** |
 | 8 | Kernel type source of truth (#45 root) | `.ipe` annotation is the ONE typed source; unknown kernel = unbound-name error | duplicate hand-kept `kernel_ty` table + `Ty::Var(u32::MAX)` fallback | **T+** | parse-don't-validate / invalid-states | single fail-closed source + parity tripwire — **pre-sweep (#45)** |
@@ -47,10 +47,10 @@ not yet built on one side, or tooling ergonomics).
 | 15 | Crate-version single source + drift guard | `crate-specs.toml` embedded SSOT + `crate_specs_sync.rs` drift test | typed `crate_specs.rs` `const CrateSpec` table (name+version SSOT) read by every `*_cargo_toml` surgery fn; co-located `crate_specs_match_manifests` drift test asserts SSOT ≡ `runtime/Cargo.toml` (all 11) **and** ≡ golden base manifest (tokio) | **O+ (closed #50)** | invalid-states + correctness | done — typed const table (deliberately Rust consts, not re-parsed TOML: compiler-checked structured data over string re-parse); drift test additionally covers the golden base manifest the reference lacks |
 | 16 | Feature-toggle manifest surgery | table-driven from `CrateSpec` renders | anchored `replacen`, fail-loud `CompilerBug` on anchor miss | **O+** | soundness | keep surgery; only sink versions into SSOT |
 | 17 | FFI crate binding (FfiCall/FfiInstance) | typed `Call` ADT + `FromJSON`-time `validateCall`; per-instantiation bindability gate + `E4400`; `cargoProfilePanicIsUnwind` guard | absent | **T+** (ours absent) | security → correctness | port invariants verbatim, no string-hole template — **FFI-phase (#42)** |
-| 18 | FFI inspector runner / sandbox | `quoteShell` arg-quoting only; **no build sandbox** (RCE-on-`sky add` exposure) | absent | **~** (arg-quote worth porting; sandbox is a gap BOTH miss) | security (top) | port arg-quoting #40; sandbox is ipê net-new hardening — **#41 (exceeds reference)** |
+| 18 | FFI inspector runner / sandbox | `quoteShell` arg-quoting only; **no build sandbox** (RCE-on-`ipe add` exposure) | absent | **~** (arg-quote worth porting; sandbox is a gap BOTH miss) | security (top) | port arg-quoting #40; sandbox is ipê net-new hardening — **#41 (exceeds reference)** |
 | 19 | Console mini-app pre-build | atomic tmp+rename publish, crash-safe fingerprint-last ordering | absent | **~** | build ergonomics | reuse patterns when built — **post-DONE** |
 | 20 | Go-parity oracle harness (rust-equivalence/equivalence-corpus/equivalence-render) | 3-layer differential vs Go reference; render normalizers drive strict UI diff | normalizers vendored byte-identical but **undriven**; sweep defaults `NO_EQUIV=1` | **T+** | correctness (green build ≠ correct) | stand up Go oracle, port corpus then render — **pre-DONE (literal endgame gate)** |
-| 21 | Deterministic parity fixtures (`tests/sky/`, 140) | end-to-end Sky projects pinning kernel/codegen behaviour on both backends | none (only 8 vendored soundness + 3 numeric-parity tests) | **T+** | correctness | port non-FFI subset, prioritize silent-divergence classes — **pre-sweep** |
+| 21 | Deterministic parity fixtures (`tests/sky/`, 140) | end-to-end Ipê projects pinning kernel/codegen behaviour on both backends | none (only 8 vendored soundness + 3 numeric-parity tests) | **T+** | correctness | port non-FFI subset, prioritize silent-divergence classes — **pre-sweep** |
 | 22 | Security render fixtures (`69-html-render-parity`, `70-style-injection`) | executable `</style>`-breakout + script-verbatim assertions | prose in `css-attr-injection-safe-emit.md`; styleNode hole open | **T+** | security | port as stored-HTML snapshots (no oracle needed) — **pre-sweep, gates #47** |
 | 23 | Emitted-code soundness harvester (`quality-audit.sh`) | enumerates panic/unsafe/`dyn Any`/lossy-cast over generated code | clippy hard-deny on vendored runtime only; not over emitted projects | **T+** (partial) | soundness | port pointed at `sky-out/rust/` — **before-push** |
 | 24 | Harness self-tests (`examples_test.sh`, `keep_go_parity_test.sh`) | test the sweep classifier itself | absent | **T+** | correctness | port alongside equivalence harness — **with equivalence port** |
@@ -169,7 +169,7 @@ to.
    the already-vendored `equivalence_normalize_html.py` / `equivalence_tui_grid.py`
    normalizers); flip `examples-sweep.sh` off `IPE_SWEEP_NO_EQUIV`; port the
    harness self-tests. Author the non-FFI subset of `tests/sky/` as ipê
-   fixtures now (they double as skyc goldens), prioritizing the
+   fixtures now (they double as ipe goldens), prioritizing the
    silent-divergence classes: json HTML-escape, float display threshold,
    Dict/Set determinism, money rounding, the 6 `kernel-parity-probe*`. *NEW:
    "Go oracle + equivalence harness". Roadmap: fixtures pre-sweep; oracle + render
@@ -179,7 +179,7 @@ to.
    - Port `70-style-injection` and `69-html-render-parity` as stored-HTML
      snapshot fixtures NOW (no Go oracle needed): they assert the `</style>`
      breakout-strip and script/style-verbatim rules, and become the acceptance
-     test for the open `Std.Html.styleNode` verbatim XSS hole. *Task #47 gate.
+     test for the open `Ipe.Html.styleNode` verbatim XSS hole. *Task #47 gate.
      Roadmap: pre-sweep.*
    - When the FFI consumer lands, mirror the reference's `Call` typed-AST with
      `FromJSON`-time `validateCall` (hole-misplacement unrepresentable), the
@@ -189,7 +189,7 @@ to.
      `try_from`-for-platform-widths invariants verbatim. Port `quoteShell`
      arg-quoting at inspector wiring. The build **sandbox is ipê net-new
      hardening** — the reference runs `cargo build` on untrusted crates
-     un-sandboxed (RCE-on-`sky add`), so here ipê must exceed, not mirror.
+     un-sandboxed (RCE-on-`ipe add`), so here ipê must exceed, not mirror.
      *Tasks #40 (arg-quote), #41 (sandbox, exceeds ref), #42 (consumer +
      NumCoerce). Roadmap: FFI-phase.*
 
@@ -209,7 +209,7 @@ Front-end / lowering (block affected sweep fixtures):
 - Nested list/cons/record inside a ctor payload (`Just (h :: t)`, `Ok {name}`).
 - Refutable function-argument patterns (`f (Just x) = …`) — close via
   front-end desugar to `case`, never a panic.
-- No TCO — tail-recursive Sky stack-overflow-traps on long lists.
+- No TCO — tail-recursive Ipê stack-overflow-traps on long lists.
 
 Behavioural parity (dormant until Go oracle):
 - No executable Go≡Rust behavioural guarantee at all — only emission goldens.
@@ -223,7 +223,7 @@ Behavioural parity (dormant until Go oracle):
 Unbuilt subsystems (arrive with their kernels, not principle gaps):
 - Opaque `IrType` coverage for Csv, Cache, Email, WebSocket (client+server),
   Http client + Http.Stream, Server.Stream writer.
-- FFI scalar coercion entirely (no Sky↔foreign numeric width binding possible).
+- FFI scalar coercion entirely (no Ipê↔foreign numeric width binding possible).
 - Function-typed ADT/record fields under `derive`/`Clone`.
 - Whole FFI inspect→emit path (`43-114 ffi-*` corpus), console pre-build cache.
 
@@ -285,7 +285,7 @@ pre-sweep; #47 + F7 before push; sweep; parity; push; FFI post-DONE):
 - **Explicit ctor field-count `CompilerBug` guard** in case emission, which the
   reference lacks.
 - **Fail-closed refusal of refutable arg patterns** vs their contained runtime
-  `panic!` — soundness ("no panic from well-typed Sky") outranks the
+  `panic!` — soundness ("no panic from well-typed Ipê") outranks the
   completeness they gain.
 - **Anchored manifest surgery with fail-loud `CompilerBug`** on every anchor
   miss — matches their CrateSpecs `error`-on-missing posture; only the version

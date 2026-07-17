@@ -1,4 +1,4 @@
-//! Regression gate: skyc must exit 0 on multi-module projects.
+//! Regression gate: ipe must exit 0 on multi-module projects.
 //!
 //! Historical context: `Ui/Charts.ipe` in example 17 originally used `(Html Msg)`
 //! in annotations without `import State exposing (..)`.  The Rust compiler ICE'd
@@ -18,7 +18,7 @@
 //!
 //! Run:
 //! ```text
-//! cargo test -p skyc --test golden_cross_module_type_res
+//! cargo test -p ipe --test golden_cross_module_type_res
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -79,7 +79,7 @@ fn ex10_live_component_exits_zero() {
 ///
 /// 1. **`FontFamily` scheme bug** (from prior session): `constrain.rs`
 ///    declared `K::FontFamily => fun(list(string()), attr(var(0)))` but the
-///    Sky API is `Font.family : String -> Attribute msg`.  The wrong `List
+///    Ipê API is `Font.family : String -> Attribute msg`.  The wrong `List
 ///    String` scheme leaked a phantom `String = List String` constraint into
 ///    the merged solve, which surfaced as a spurious IPE-T0001 at the `::` cons
 ///    site in `State.ipe:158` — a completely unrelated line.  Fixed by

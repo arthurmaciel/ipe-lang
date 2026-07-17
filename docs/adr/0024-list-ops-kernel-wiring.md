@@ -1,7 +1,7 @@
 Status: Accepted
 Date: 2026-07-09
 
-# 0024. The nine unwired list operations are kernels, not pure-Sky routing
+# 0024. The nine unwired list operations are kernels, not pure-Ipê routing
 
 ## Context
 
@@ -10,13 +10,13 @@ Nine list operations (`take`, `drop`, `append`, `concat`, `concatMap`, `zip`,
 member array but lacked kernel registry entries, lowerer arms, and constrain
 schemes, so calling any produced `error[IPE-L0108]: kernel function not
 available yet`. The design question was whether to complete kernel wiring or
-route these to the pure-Sky `Sky.Core.List` bodies.
+route these to the pure-Ipê `Ipe.List` bodies.
 
 ## Decision
 
 Wire all nine as kernels. The forcing fact: `List.x` resolves through canon's
 prelude-qualifier install to `VarHome::Kernel` *unconditionally* — it never
-reaches the compiled `Sky.Core.List` source. Kernel is the only wiring that (a)
+reaches the compiled `Ipe.List` source. Kernel is the only wiring that (a)
 makes the name callable, (b) yields a fail-closed constrain scheme (no
 `Ty::Var(u32::MAX)` fallback, mandatory under the seal), and (c) reuses the
 proven kernel emission path already used by the 10 wired List kernels. For the
@@ -25,9 +25,9 @@ stack — strictly better than the pure-Sky O(N)-stack recursion the Go backend
 uses, output-identical); the HOF runtime fns (`concatMap`, `indexedMap`) already
 exist. `indexedMap`, missing from canon's member array, is added.
 
-Rejected alternative: **pure-Sky routing** — it would require re-pointing every
+Rejected alternative: **pure-Ipê routing** — it would require re-pointing every
 canon `List` member from `VarHome::Kernel` to `VarHome::TopLevel`, guaranteeing
-`Sky.Core.List` is compiled as a dep (it currently is not), and surviving the
+`Ipe.List` is compiled as a dep (it currently is not), and surviving the
 "cannot infer T2" cross-module higher-order-function inference hole for the
 function-carrying members. Strictly larger, higher-risk, zero
 security/correctness/soundness benefit.

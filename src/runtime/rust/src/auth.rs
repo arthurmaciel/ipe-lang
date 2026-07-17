@@ -1,6 +1,6 @@
-//! Std.Auth kernels — authentication helpers.
+//! Ipe.Auth kernels — authentication helpers.
 //!
-//! Two tiers (matches the Sky-side `Std.Auth` doc):
+//! Two tiers (matches the Ipê-side `Ipe.Auth` doc):
 //!   - Pure crypto (Result Error _): hashPassword/Cost, verifyPassword,
 //!     passwordStrength, signToken, verifyToken.
 //!   - DB flows (Task Error _): register, login, setRole.
@@ -30,13 +30,13 @@ fn dummy_bcrypt_hash() -> &'static str {
 
 // ─── Pure crypto kernels ──────────────────────────────────────────────
 
-/// Sky `hashPassword : String -> Result Error String`. Bcrypt with default
+/// Ipê `hashPassword : String -> Result Error String`. Bcrypt with default
 /// cost 12 (matches Go runtime).
 pub fn auth_hash_password<E: From<String>>(pw: String) -> IpeResult<E, String> {
     auth_hash_password_cost(pw, 12)
 }
 
-/// Sky `hashPasswordCost : String -> Int -> Result Error String`. Clamps cost to
+/// Ipê `hashPasswordCost : String -> Int -> Result Error String`. Clamps cost to
 /// [4, 15] (4 = fast for tests, 12 = production default, 14–15 = high security).
 /// The bcrypt VALID range is [4, 31], but cost is caller-controlled: each +1
 /// DOUBLES the work, so cost 31 is a single-call CPU-exhaustion DoS (~years per
@@ -60,7 +60,7 @@ pub fn auth_hash_password_cost<E: From<String>>(pw: String, cost: i64) -> IpeRes
     }
 }
 
-/// Sky `verifyPassword : String -> String -> Result Error Bool`.
+/// Ipê `verifyPassword : String -> String -> Result Error Bool`.
 /// `verifyPassword candidate hash` — true if candidate hashes to the same hash.
 pub fn auth_verify_password<E: From<String>>(pw: String, hash: String) -> IpeResult<E, bool> {
     match bcrypt::verify(&pw, &hash) {
@@ -69,7 +69,7 @@ pub fn auth_verify_password<E: From<String>>(pw: String, hash: String) -> IpeRes
     }
 }
 
-/// Sky `passwordStrength : String -> Result Error String`. Validates length
+/// Ipê `passwordStrength : String -> Result Error String`. Validates length
 /// and character variety; returns a strength rating on Ok.
 ///   <8 chars  → Err "too short"
 ///   >72 bytes → Err "too long" (bcrypt limit)
@@ -111,9 +111,9 @@ pub fn auth_password_strength<E: From<String>>(pw: String) -> IpeResult<E, Strin
 
 // ─── JWT kernels (HS256) ──────────────────────────────────────────────
 
-/// Sky `signToken : String -> a -> Int -> Result Error String`.
+/// Ipê `signToken : String -> a -> Int -> Result Error String`.
 /// `signToken secret claims expirySeconds`. `claims` is a string-keyed map of
-/// string values at the runtime level (Sky's polymorphic `a` resolves to
+/// string values at the runtime level (Ipê's polymorphic `a` resolves to
 /// HashMap<String,String> at the FFI boundary). Adds `exp` (now + expirySeconds)
 /// and `iat` (now) claims, mirroring Go's Auth_signToken. Secret must be ≥32
 /// bytes (matches Go's production gate).
@@ -166,8 +166,8 @@ pub fn auth_sign_token<E: From<String>>(
     }
 }
 
-/// Sky `verifyToken : String -> String -> Result Error a`. Verifies signature
-/// and `exp`. Returns the claims as a `HashMap<String, String>` (Sky-side
+/// Ipê `verifyToken : String -> String -> Result Error a`. Verifies signature
+/// and `exp`. Returns the claims as a `HashMap<String, String>` (Ipê-side
 /// resolves polymorphic `a` to this shape at the FFI boundary).
 pub fn auth_verify_token<E: From<String>>(
     secret: String,
@@ -205,7 +205,7 @@ pub fn auth_verify_token<E: From<String>>(
     // validate_nbf = false, so a token carrying a future `nbf` (e.g. a
     // scheduled/delayed-grant token minted elsewhere under the same secret)
     // would otherwise be accepted before its valid-from time. Matches the
-    // documented Sky.Core.Jwt contract (signature + exp + nbf checked).
+    // documented Ipe.Jwt contract (signature + exp + nbf checked).
     validation.validate_nbf = true;
     // Auth.signToken accepts arbitrary claims (including an `aud` key) with
     // no expected-audience argument on this generic decoder. jsonwebtoken's
@@ -269,7 +269,7 @@ async fn ensure_users_schema<E: From<String> + Send>(conn: &Db) -> IpeResult<E, 
 }
 
 #[cfg(feature = "db")]
-/// Sky `register : Db -> String -> String -> Task Error Int`.
+/// Ipê `register : Db -> String -> String -> Task Error Int`.
 /// Creates a new user. Returns the new user id.
 pub fn auth_register<E: Send + From<String> + 'static>(
     conn: Db,
@@ -329,7 +329,7 @@ pub fn auth_register<E: Send + From<String> + 'static>(
 }
 
 #[cfg(feature = "db")]
-/// Sky `login : Db -> String -> String -> Task Error Int`.
+/// Ipê `login : Db -> String -> String -> Task Error Int`.
 /// Authenticates the user. Returns user id on success. Does NOT leak whether
 /// the email exists vs. password was wrong — both paths return the same
 /// generic "invalid credentials" error.
@@ -389,7 +389,7 @@ pub fn auth_login<E: Send + From<String> + 'static>(
 }
 
 #[cfg(feature = "db")]
-/// Sky `setRole : Db -> Int -> String -> Task Error ()`.
+/// Ipê `setRole : Db -> Int -> String -> Task Error ()`.
 /// Sets the user's role. No-op if the user doesn't exist (returns Ok).
 pub fn auth_set_role<E: Send + From<String> + 'static>(
     conn: Db,

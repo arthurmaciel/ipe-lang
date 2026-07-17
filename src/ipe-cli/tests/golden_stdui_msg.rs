@@ -2,7 +2,7 @@
 //! `Ui.layout` inside a function annotated `Msg -> Html Msg` must produce
 //! well-typed emitted Rust (no `E0308` from cargo).
 //!
-//! The golden compiles `tests/golden/stdui_msg/Main.ipe` through `skyc`,
+//! The golden compiles `tests/golden/stdui_msg/Main.ipe` through `ipe`,
 //! builds the emitted Rust project with the shared cargo target, runs the
 //! binary, and checks its stdout against the cached oracle
 //! (`tests/golden/stdui_msg/oracle.meta` + `expected_go.txt`).
@@ -12,7 +12,7 @@
 //!
 //! This is a DIVERGENCE golden (`oracle_divergence = true`).  The Go reference
 //! compiler emits a different HTML skeleton.  `expected_go.txt` therefore holds
-//! skyc's OWN output — the Rust-backend correct rendering — rather than the Go
+//! ipe's OWN output — the Rust-backend correct rendering — rather than the Go
 //! oracle.  The divergence is documented in
 //! `tests/golden/stdui_msg/sanctioned.divergence`.
 //!
@@ -65,7 +65,7 @@ fn build_run_msg() -> (PathBuf, support::RunOutcome) {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for stdui_msg: {:?}",
+        "ipe build must succeed for stdui_msg: {:?}",
         built.err()
     );
 
@@ -75,7 +75,7 @@ fn build_run_msg() -> (PathBuf, support::RunOutcome) {
 
 /// Full E2E smoke test: `Ui.layout` inside a `Msg -> Html Msg` function must
 /// compile, build, run, and produce the cached expected HTML.
-/// Divergence golden — the expected value is skyc's own correct output.
+/// Divergence golden — the expected value is ipe's own correct output.
 #[test]
 fn ui_layout_turbofish_uses_enclosing_msg_type() {
     if std::env::var("IPE_E2E").is_err() {

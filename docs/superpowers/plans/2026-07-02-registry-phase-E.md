@@ -263,7 +263,7 @@ bidirectional on module qualifiers (`registry ≡ canon`), and add the
    existing forward loop and G1 reverse loop. For every `(qual_sym, members)`
    in `env.qual_vars` whose resolved qualifier is a *module* qualifier (i.e.
    NOT in the sanctioned alias/prelude exclusion set already declared in that
-   test — `Basics`, `Attr`, `Event`, `Std.*`, `Sky.*`), assert every member
+   test — `Basics`, `Attr`, `Event`, `Ipe.*`, `Ipê.*`), assert every member
    that is a `VarHome::Kernel` carries `id = Some`:
 
    ```rust
@@ -271,7 +271,7 @@ bidirectional on module qualifiers (`registry ≡ canon`), and add the
    // Every kernel installed under a real MODULE qualifier must resolve to a
    // StdlibKernel id. A `None` here is a canon-listed-but-unregistered kernel —
    // exactly the state E3 forbids by dropping the Option. The sanctioned
-   // exclusions (Basics helper aliases, Std.*/Sky.* namespace aliases) are the
+   // exclusions (Basics helper aliases, Ipe.*/Ipê.* namespace aliases) are the
    // same `excluded_quals` set used by the G1 reverse loop.
    for (qual_sym, members) in &env.qual_vars {
        let qual_str = interner.resolve(*qual_sym).unwrap_or("<unknown>");

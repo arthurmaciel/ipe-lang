@@ -18,15 +18,15 @@
 //!   * `force_shared_capture_clones`'s `TaskSeq` arm pre-clones the continuation
 //!     capture OUTSIDE the emitter-synthesised `move |_|` closure.
 //!
-//! This golden pins skyc-0 ⇒ cargo-0 ⇒ correct run for every sub-shape.
+//! This golden pins ipe-0 ⇒ cargo-0 ⇒ correct run for every sub-shape.
 //!
 //! Run:
 //! ```text
-//! # fast (skyc-0 + emit assertions, no cargo):
-//! cargo test -p skyc --test golden_i199_nested_capture_outer_arg
+//! # fast (ipe-0 + emit assertions, no cargo):
+//! cargo test -p ipe --test golden_i199_nested_capture_outer_arg
 //!
-//! # full E2E (skyc-0 ⇒ cargo-0 ⇒ run):
-//! IPE_E2E=1 cargo test -p skyc --test golden_i199_nested_capture_outer_arg
+//! # full E2E (ipe-0 ⇒ cargo-0 ⇒ run):
+//! IPE_E2E=1 cargo test -p ipe --test golden_i199_nested_capture_outer_arg
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -45,7 +45,7 @@ fn entry_path(root: &Path) -> PathBuf {
         .join("Main.ipe")
 }
 
-/// skyc-0: the compiler must accept the nested-capture + outer-arg program, and
+/// ipe-0: the compiler must accept the nested-capture + outer-arg program, and
 /// the emitted Rust must carry the per-closure pre-clone hoist for every reused
 /// non-Copy binding.
 #[test]
@@ -64,7 +64,7 @@ fn i199_skyc_accepts_and_hoists() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for nested_capture_outer_arg: {:?}",
+        "ipe build must succeed for nested_capture_outer_arg: {:?}",
         built.err()
     );
 
@@ -93,7 +93,7 @@ fn i199_skyc_accepts_and_hoists() {
     );
 }
 
-/// cargo-0 ∧ run-correct: gated on `IPE_E2E=1`. The SEAL — skyc-0 must imply the
+/// cargo-0 ∧ run-correct: gated on `IPE_E2E=1`. The SEAL — ipe-0 must imply the
 /// emitted Rust cargo-builds (no E0507/E0382) and runs to the expected output.
 #[test]
 fn i199_cargo_builds_and_runs() {
@@ -111,7 +111,7 @@ fn i199_cargo_builds_and_runs() {
     let Ok(runtime) = runtime else { return };
 
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
-    assert!(built.is_ok(), "skyc build must succeed: {:?}", built.err());
+    assert!(built.is_ok(), "ipe build must succeed: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted("nested_capture_outer_arg", &out);
     assert_eq!(

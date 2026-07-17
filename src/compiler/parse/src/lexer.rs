@@ -1,4 +1,4 @@
-//! Layout-aware lexer for the supported subset of Sky.
+//! Layout-aware lexer for the supported subset of Ipê.
 //!
 //! This is a Rust port of the relevant pieces of the Haskell compiler's
 //! `Sky.Parse.{Primitives,Space,Number,Symbol,Variable}` — narrowed to the

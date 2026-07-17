@@ -10,7 +10,7 @@
 //! Set golden tests exercise the `Set` kernel family:
 //!
 //! * `Set.member`                    → `True` (`oracle_divergence` = true — Go's
-//!   `Set_member` panics on `rt.IpeSet`; skyc output is the reference)
+//!   `Set_member` panics on `rt.IpeSet`; ipe output is the reference)
 //! * Set union / diff / intersect / dedup sizes → `4 1 2 3` (Go parity)
 //!
 //! Every test is gated on `IPE_E2E=1`; without it the test returns early. Run:
@@ -94,7 +94,7 @@ fn dict_keys_count() {
 /// `Set.member 3 (Set.fromList [1, 2, 3])` → `True`.
 ///
 /// `oracle_divergence` = true — Go's `Set_member` panics at runtime on
-/// `rt.IpeSet`; skyc's correct output (`True`) is the reference.
+/// `rt.IpeSet`; ipe's correct output (`True`) is the reference.
 #[test]
 fn set_member_present() {
     assert_runs_and_matches_oracle("set_member");
@@ -119,7 +119,7 @@ fn set_ops_sizes() {
 /// would reject it.
 ///
 /// `oracle_divergence` = true — the Go oracle program exits non-zero on this
-/// shape; skyc's `4` is the reference (same class as `set_member`).
+/// shape; ipe's `4` is the reference (same class as `set_member`).
 #[test]
 fn set_generic_add_to() {
     assert_runs_and_matches_oracle("set_generic");

@@ -1,12 +1,12 @@
-# Multi-session chat — `Std.Cmd.publish` + `Std.Sub.subscribeTopic`
+# Multi-session chat — `Ipe.Cmd.publish` + `Ipe.Sub.subscribeTopic`
 
-Chatroom demo proving Sky.Live's pub/sub stack end-to-end: two browser
+Chatroom demo proving Ipe.Live's pub/sub stack end-to-end: two browser
 tabs in the same room exchange messages in real time without polling.
 
 ## Build & run
 
 ```bash
-sky build src/Main.ipe
+ipe build src/Main.ipe
 ./sky-out/app
 ```
 

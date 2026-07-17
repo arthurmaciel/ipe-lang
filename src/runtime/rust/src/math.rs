@@ -1,6 +1,6 @@
-//! Sky.Core.Math kernels.
+//! Ipe.Math kernels.
 //!
-//! Signatures from src/Sky/Type/Constrain/Expression.hs:
+//! Signatures from src/Ipê/Type/Constrain/Expression.hs:
 //!   abs    : Int -> Int                  (integer abs)
 //!   min    : a -> a -> a                 (polymorphic; monomorphised at call site)
 //!   max    : a -> a -> a
@@ -34,7 +34,7 @@ pub fn math_nan() -> f64 {
     f64::NAN
 }
 
-/// Returns `true` if `x` is NaN (IEEE 754).  Sky `Math.isNaN : Float -> Bool`.
+/// Returns `true` if `x` is NaN (IEEE 754).  Ipê `Math.isNaN : Float -> Bool`.
 pub fn math_is_nan(x: f64) -> bool {
     x.is_nan()
 }
@@ -44,13 +44,13 @@ pub fn math_abs(x: i64) -> i64 {
     x.checked_abs().unwrap_or(i64::MAX)
 }
 
-/// Integer division for Sky's `//` operator.
+/// Integer division for Ipê's `//` operator.
 ///
-/// Parity target: Sky-Go `rt.IntDiv` (`runtime-go/rt/rt.go`).
+/// Parity target: Ipê-Go `rt.IntDiv` (`runtime-go/rt/rt.go`).
 ///
 /// Two cases the bare Rust `a / b` cannot handle on `i64`:
 ///
-/// 1. `b == 0` — Rust panics "attempt to divide by zero"; Sky-Go also panics
+/// 1. `b == 0` — Rust panics "attempt to divide by zero"; Ipê-Go also panics
 ///    (`panic("rt.IntDiv: integer division by zero")`), classified as
 ///    `DivisionByZero` by the top-level recover and exits 101. We reproduce
 ///    the **panic** deliberately (not a silent 0): a `panic!` here carries the
@@ -59,19 +59,19 @@ pub fn math_abs(x: i64) -> i64 {
 ///    the `intdiv_by_zero_aborts_exit_101` golden.
 ///
 ///    NOTE: Elm's `5 // 0 == 0` (returns 0) is a different design choice and
-///    is **not** this port's target. Diverging from Sky-Go to Elm-0 requires
+///    is **not** this port's target. Diverging from Ipê-Go to Elm-0 requires
 ///    an explicit `sanctioned.divergence` marker — never an implementer's call.
 ///
 /// 2. `i64::MIN / -1` — Rust panics "attempt to divide with overflow" even
 ///    when `overflow-checks = false`, because this is an unconditional hardware
-///    trap on x86-64. Sky-Go uses two's-complement Go integer arithmetic and
+///    trap on x86-64. Ipê-Go uses two's-complement Go integer arithmetic and
 ///    returns `i64::MIN` (wraps silently). `wrapping_div` reproduces that.
 ///
 /// For every other `(a, b)` pair the result is identical to `a / b` (truncate
 /// toward zero — Go spec, Elm spec, Rust `wrapping_div` all agree).
 //
 // `clippy::panic` is suppressed here deliberately: this panic IS the
-// DivisionByZero abort that Sky-Go models. The lint exists to prevent
+// DivisionByZero abort that Ipê-Go models. The lint exists to prevent
 // accidental panics; this is a classified, tested, intentional one. The
 // `intdiv_by_zero_aborts_exit_101` golden verifies exit 101 / empty stdout.
 #[allow(clippy::panic)]
@@ -115,7 +115,7 @@ pub fn math_ceil(x: f64) -> i64 {
     x.ceil() as i64
 }
 
-/// Sky `round : Float -> Int` — half-away-from-zero (Go's `math.Round` semantics
+/// Ipê `round : Float -> Int` — half-away-from-zero (Go's `math.Round` semantics
 /// match this). Rust's `f64::round` also goes half-away-from-zero, so we just cast.
 pub fn math_round(x: f64) -> i64 {
     x.round() as i64
@@ -124,7 +124,7 @@ pub fn math_trunc(x: f64) -> i64 {
     x.trunc() as i64
 }
 
-// Exponential / logarithmic (Sky.Core.Math: exp, exp2, log [natural], log2, log10).
+// Exponential / logarithmic (Ipe.Math: exp, exp2, log [natural], log2, log10).
 pub fn math_exp(x: f64) -> f64 {
     x.exp()
 }

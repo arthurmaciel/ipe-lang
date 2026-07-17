@@ -17,7 +17,7 @@
 //!
 //! Run:
 //! ```text
-//! IPE_E2E=1 cargo test -p skyc --test golden_i186_display_false_positive
+//! IPE_E2E=1 cargo test -p ipe --test golden_i186_display_false_positive
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -36,7 +36,7 @@ fn entry_path(root: &Path) -> PathBuf {
         .join("Main.ipe")
 }
 
-/// skyc-0 ∧ the wildcard row generic carries `IpeRow` but NOT `Display` —
+/// ipe-0 ∧ the wildcard row generic carries `IpeRow` but NOT `Display` —
 /// checked unconditionally (cheap, no `cargo`).
 #[test]
 fn i186_false_positive_skyc_no_spurious_display() {
@@ -54,7 +54,7 @@ fn i186_false_positive_skyc_no_spurious_display() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for display_false_positive: {:?}",
+        "ipe build must succeed for display_false_positive: {:?}",
         built.err()
     );
 
@@ -102,7 +102,7 @@ fn i186_false_positive_cargo_builds_and_runs() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for display_false_positive: {:?}",
+        "ipe build must succeed for display_false_positive: {:?}",
         built.err()
     );
 

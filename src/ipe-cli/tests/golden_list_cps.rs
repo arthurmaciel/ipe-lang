@@ -4,7 +4,7 @@
 //! process death) on a big list.
 //!
 //! Backend note (verified against this tree): the List surface that is
-//! REACHABLE from a compilable Sky-Rust program is the kernel subset —
+//! REACHABLE from a compilable Ipê-Rust program is the kernel subset —
 //! `map` / `filter` / `foldl` / `foldr` / `length` / `head` / `tail` / `member`
 //! / `range` / `reverse` — and each of those routes to an ITERATIVE Rust
 //! runtime kernel over `Vec` (`src/runtime/rust/src/list.rs`), with no
@@ -15,16 +15,16 @@
 //! `Some(0)`. It is a standing guard against a future regression that re-routes
 //! any reachable List op onto a body-recursive path.
 //!
-//! The pure-Sky combinators that WERE naively body-recursive in the non-tail
+//! The pure-Ipê combinators that WERE naively body-recursive in the non-tail
 //! position — `append` / `concat` / `concatMap` / `take` / `zip` /
 //! `indexedMap` — carry accumulator/CPS bodies in
 //! `crates/skyc/stdlib/Sky/Core/List.ipe` (byte-identical to upstream
-//! `sky-stdlib/Sky/Core/List.ipe`). They are CALLABLE, but as
-//! ITERATIVE Rust KERNELS (not by routing to those pure-Sky bodies): canon
+//! `sky-stdlib/Ipê/Core/List.ipe`). They are CALLABLE, but as
+//! ITERATIVE Rust KERNELS (not by routing to those pure-Ipê bodies): canon
 //! anchors every `List.x` to `VarHome::Kernel` unconditionally, so the kernel
 //! path is the only exit-0-safe wiring (see
 //! `docs/adr/0024-list-ops-kernel-wiring.md`). Those kernels are constant-
-//! stack too — strictly better than the O(N)-stack pure-Sky recursion the Go
+//! stack too — strictly better than the O(N)-stack pure-Ipê recursion the Go
 //! backend uses — so the soundness thesis holds by a different mechanism. The
 //! pure-Sky `List.ipe` bodies stay as the (currently unreached) upstream-parity
 //! reference for the eventual migration once typed-lambda lowering closes the

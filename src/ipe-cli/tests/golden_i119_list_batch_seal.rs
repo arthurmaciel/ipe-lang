@@ -12,7 +12,7 @@
 //! emits `error[IPE-L0108]: kernel function not available yet`.
 //!
 //! Gated on `IPE_E2E=1`. Run:
-//! `IPE_E2E=1 cargo test -p skyc --test golden_i119_list_batch_seal`
+//! `IPE_E2E=1 cargo test -p ipe --test golden_i119_list_batch_seal`
 
 use std::path::{Path, PathBuf};
 

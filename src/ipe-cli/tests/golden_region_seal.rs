@@ -1,5 +1,5 @@
 //! Seal — all 8 `Ipe.Ui.Region` kernel members exercised inside
-//! `Ui.layout`.  Asserts skyc-0 ∧ cargo-0.
+//! `Ui.layout`.  Asserts ipe-0 ∧ cargo-0.
 //!
 //! Kernels under test:
 //! * `Region.mainContent`, `navigation`, `footer`, `aside` — nullary landmark attrs
@@ -10,7 +10,7 @@
 //! Gated on `IPE_E2E=1`. Run:
 //!
 //! ```text
-//! IPE_E2E=1 cargo test -p skyc --test golden_i117_region_seal
+//! IPE_E2E=1 cargo test -p ipe --test golden_i117_region_seal
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -38,11 +38,11 @@ fn region_all_members_skyc_and_cargo_zero() {
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    // skyc-0: compiler must succeed.
+    // ipe-0: compiler must succeed.
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for region_seal: {:?}",
+        "ipe build must succeed for region_seal: {:?}",
         built.err()
     );
 

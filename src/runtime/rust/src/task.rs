@@ -17,11 +17,11 @@ where
     }
 }
 
-// Main-thread driver for the Sky.Webview entry shape.
+// Main-thread driver for the Ipe.Webview entry shape.
 //
 // `block_on` (above) drives the entry future on a SPAWNED OS thread (so a
 // panic inside the future can be `.join()`-mapped to an `Err` instead of
-// aborting the process). That spawn is fatal for Sky.Webview: tao/winit's
+// aborting the process). That spawn is fatal for Ipe.Webview: tao/winit's
 // `EventLoop` and Cocoa's `NSApplication` MUST be created and run on the
 // process's TRUE main thread on macOS (a hard Cocoa requirement — there is no
 // any-thread escape hatch), and Windows likewise expects the main thread. The
@@ -43,7 +43,7 @@ where
 // boundary classifies it). That is acceptable for the webview shape: the
 // webview path itself is total (window/webview construction failure returns
 // `IpeResult::Err`), so a panic would be a genuine compiler/runtime bug, not a
-// well-typed-Sky-reachable abort.
+// well-typed-Ipê-reachable abort.
 pub fn block_on_current_thread<E, A>(future: IpeTask<E, A>) -> IpeResult<E, A>
 where
     E: From<String> + Send + 'static,
@@ -115,7 +115,7 @@ where
 }
 
 /// `Task.lazy : (() -> Task e a) -> Task e a`.
-/// Sky closures of type `() -> Task e a` are lowered as `FnOnce(()) -> IpeTask`
+/// Ipê closures of type `() -> Task e a` are lowered as `FnOnce(()) -> IpeTask`
 /// (unit-arg), so the wrapper must accept `(())` and pass it through.
 pub fn task_lazy<E: Send + 'static, A: Send + 'static>(
     f: impl FnOnce(()) -> IpeTask<E, A> + Send + 'static,
@@ -202,7 +202,7 @@ pub fn task_run<E: From<String> + Send + 'static, A: Send + 'static>(
 // failure we return `Err` immediately AND abort every still-running sibling.
 // Aborting is mandatory: a tokio `JoinHandle` that is merely DROPPED becomes
 // DETACHED — the spawned task keeps running to completion in the background.
-// For an effectful Sky task that means its observable side effect (a second DB
+// For an effectful Ipê task that means its observable side effect (a second DB
 // write, a duplicate charge, a duplicate email) would still fire AFTER the
 // batch has already been reported as failed — a double-write / double-charge
 // hazard. `abort()` on each survivor closes that hole. (Reference: ../sky's

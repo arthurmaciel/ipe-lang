@@ -143,7 +143,7 @@ struct Builtins {
     /// `Ipe.Set` type constructor symbol.
     set: Symbol,
     /// `Ipe.Bytes` type constructor symbol.
-    /// Divergence from Sky: Bytes is a distinct primitive in Sky-Rust (Vec<u8>),
+    /// Divergence from Ipê: Bytes is a distinct primitive in Ipê-Rust (Vec<u8>),
     /// not a String alias as in the Go reference.
     bytes: Symbol,
     /// The interned `Error` symbol, used to validate the error channel in
@@ -189,7 +189,7 @@ struct Builtins {
     /// the runtime backs them with concrete structs (`IpePanicInfo` /
     /// `IpeTypeInfo` / `IpeErrorInfo`), so a structural lowering
     /// (project-local synthesized struct) would fail `cargo build` after a
-    /// clean `skyc` exit. Field ACCESS on them stays available through
+    /// clean `ipe` exit. Field ACCESS on them stays available through
     /// `resolve_deferred`'s builtin-record field tables.
     panicinfo: Symbol,
     typeinfo: Symbol,
@@ -218,9 +218,9 @@ struct Builtins {
     http_f_url: Symbol,
     /// `"timeout"` — `HttpRequest` only.
     http_f_timeout: Symbol,
-    /// `"followRedirects"` — `HttpRequest` only (camelCase Sky field name).
+    /// `"followRedirects"` — `HttpRequest` only (camelCase Ipê field name).
     http_f_follow_redirects: Symbol,
-    /// `"maxRedirects"` — `HttpRequest` only (camelCase Sky field name).
+    /// `"maxRedirects"` — `HttpRequest` only (camelCase Ipê field name).
     http_f_max_redirects: Symbol,
     /// `"contentType"` — `Ipe.Http.Server.Response` record field (camelCase).
     server_f_content_type: Symbol,
@@ -325,7 +325,7 @@ struct Builtins {
     /// `IrType::UiPlain(UiPlain::PseudoClass)` via the
     /// `"PseudoClass"` arm in `ipe_lower::ir_type_from_ty`.
     pseudo_class: Symbol,
-    /// `"Value"` — the opaque JSON value type (`Value = any` in Sky) produced /
+    /// `"Value"` — the opaque JSON value type (`Value = any` in Ipê) produced /
     /// consumed by the `JsonEnc.*` encoders. Lowered to `IrType::Json`
     /// (`serde_json::Value`, re-exported as `JsonVal`) via the `"Value"` arm in
     /// `ipe_lower::ir_type_from_ty`. A distinct interned symbol so the `JsonEnc`
@@ -590,7 +590,7 @@ impl Builtins {
             errorinfo: interner.intern("ErrorInfo")?,
             tv_a: interner.intern("a")?,
             tv_e: interner.intern("e")?,
-            // Http field names (camelCase, as they appear in Sky source).
+            // Http field names (camelCase, as they appear in Ipê source).
             http_f_body: interner.intern("body")?,
             http_f_headers: interner.intern("headers")?,
             http_f_status: interner.intern("status")?,
@@ -830,12 +830,12 @@ impl Builtins {
         // `PanicInfo` / `TypeInfo` / `ErrorInfo` — NOMINAL opaque Cons, not
         // structural records (SEAL fix; see the `TypeNames` field
         // doc). A bare record literal (`FfiPanic { message = …, stack = … }`)
-        // now fails to unify with a clean skyc-time type mismatch instead of
+        // now fails to unify with a clean ipe-time type mismatch instead of
         // lowering to a synthesized struct that fails `cargo build` against
         // the runtime's `IpePanicInfo`/`IpeTypeInfo`/`IpeErrorInfo`. Field
         // access on values of these types resolves through
         // `resolve_deferred`'s builtin-record field tables (the `Request`
-        // recipe); construction from Sky source goes through the smart
+        // recipe); construction from Ipê source goes through the smart
         // constructors (`Error.io`/… + `Error.withDetails`) only.
         let panic_info_ty = Ty::Con {
             module: Vec::new(),
@@ -1071,7 +1071,7 @@ impl Builtins {
             ),
             // SqlDecimal wraps a String decimal representation (lossless TEXT
             // serialisation matching Go's shopspring.Decimal.String()).
-            // Minimal wiring: Sky users write `SqlDecimal "1234.56"` rather than
+            // Minimal wiring: Ipê users write `SqlDecimal "1234.56"` rather than
             // a native Decimal value (native Decimal is not yet an IrType).
             (
                 self.sql_decimal,
@@ -1082,7 +1082,7 @@ impl Builtins {
             ),
             // SqlMoney wraps a String in "ISO_CODE AMOUNT" format (TEXT).
             // Minimal wiring matching Go's sqlMoneyToString / db_decode_money.
-            // Sky users write `SqlMoney "USD 1234.56"`.
+            // Ipê users write `SqlMoney "USD 1234.56"`.
             (
                 self.sql_money,
                 CtorScheme {
@@ -1770,7 +1770,7 @@ impl<'a> Builder<'a> {
     }
 
     /// Mint a fresh super-typed flexible variable carrying `bounds` — a value
-    /// the body has constrained to a Sky super-type (numeric / ordered /
+    /// the body has constrained to a Ipê super-type (numeric / ordered /
     /// equatable) but not yet to a concrete type. It pins to any matching type,
     /// or — when it meets an annotation skolem — lifts that skolem's obligations
     /// so the generic parameter is emitted with the matching trait bound.
@@ -2022,7 +2022,7 @@ impl<'a> Builder<'a> {
                 self.structure(FlatType::Record(field_vars, ext))
             }
             Ty::Var(id) => {
-                // `any` is Sky's wildcard type-variable name. In annotations it
+                // `any` is Ipê's wildcard type-variable name. In annotations it
                 // means "I don't care about this type" — each occurrence is an
                 // INDEPENDENT fresh flex UV, NOT a shared rigid skolem. Sharing
                 // would force all occurrences to the same type; rigid would
@@ -2268,7 +2268,7 @@ impl<'a> Builder<'a> {
     /// `Task a`, validating that the error channel is the `Error` type, and
     /// recursively normalise nested occurrences in any composite type.
     ///
-    /// Sky mandates `Task Error a` as the canonical user-facing form, but the
+    /// Ipê mandates `Task Error a` as the canonical user-facing form, but the
     /// type-checker's internal model is unary `Task a` — the error channel is
     /// always `Error` and therefore implicit in the IR.  This bridge is applied
     /// to every result of [`from_canon`] so user annotations unify with the
@@ -2384,7 +2384,7 @@ impl<'a> Builder<'a> {
                 } else if args.is_empty() && self.interner.resolve(name) == Some("HttpRequest") {
                     // `HttpRequest` is a stdlib type alias for a structural record
                     // (`{ body, followRedirects, headers, maxRedirects, method,
-                    // timeout, url }`).  The Rust port has no Sky-source stdlib
+                    // timeout, url }`).  The Rust port has no Ipê-source stdlib
                     // files, so the canonicaliser never registers `HttpRequest` as a
                     // type alias — it falls through to an opaque `Con`.  Expand it
                     // here so user annotations like `upstreamRequest : HttpRequest`
@@ -2440,7 +2440,7 @@ impl<'a> Builder<'a> {
                     // `Ipe.Http.Server.Response` is a record alias
                     // `{ status : Int, body : String, headers : Dict String
                     // String, contentType : String }` (reference
-                    // `Sky/Http/Server.ipe:66`). Expand structurally — same
+                    // `Ipê/Http/Server.ipe:66`). Expand structurally — same
                     // mechanism as `HttpResponse` above — so a handler can build
                     // it as a record literal and read fields off it.
                     let mk = |n: Symbol| Ty::Con {
@@ -2582,7 +2582,7 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// The Sky `comparable`-key obligation a kernel's element/key variable
+    /// The Ipê `comparable`-key obligation a kernel's element/key variable
     /// carries, keyed off the resolved [`StdlibKernel`] id via its
     /// `decl().qualifier` (parse-once — never a re-inspected module string).
     /// `Set`'s element is keyed by `BTreeSet` (`Ord`) and `Dict`'s key by a
@@ -2659,7 +2659,7 @@ impl<'a> Builder<'a> {
     ///   `T: PartialOrd` and a function / record argument is rejected rather than
     ///   emitting an unbounded `math_min<T>(…)` that `cargo` rejects.
     /// * `Set` / `Dict` kernels — the element / key (raw scheme-variable 0 in
-    ///   every Set / Dict kernel) carries the Sky `comparable`-key obligation
+    ///   every Set / Dict kernel) carries the Ipê `comparable`-key obligation
     ///   ([`Self::key_obligation_for`]). The base scheme (now in
     ///   [`Self::stdlib_scheme`]) is instantiated, then variable 0 is tied to a
     ///   fresh super-typed variable carrying that obligation, so a
@@ -2667,7 +2667,7 @@ impl<'a> Builder<'a> {
     ///   instead of emitting an unbounded `set_insert::<T>` / `dict_insert::<T>`
     ///   call `cargo` rejects, and a generic `a -> Set a` lifts `Ord` (Set) /
     ///   `Hash + Eq + Ord` (Dict) onto its annotation skolem (see `bounds_for`).
-    ///   This is also more conservative than Sky's runtime, which keys a Set /
+    ///   This is also more conservative than Ipê's runtime, which keys a Set /
     ///   Dict on a stringified value.
     #[allow(clippy::too_many_lines)]
     fn constrain_var_kernel(
@@ -2811,7 +2811,7 @@ impl<'a> Builder<'a> {
             // `docs/adr/0016-andmap-arity-gate-type-obligation.md`).
             // Every `Maybe`/`Result` higher-order kernel FULLY APPLIES its
             // callback at runtime (`FnOnce(..) -> R` with an exact arity),
-            // while the IR flattens a curried Sky function into one
+            // while the IR flattens a curried Ipê function into one
             // multi-parameter `Fun` — so a callback with residual arity (its
             // final result var instantiates to another arrow) has no sound
             // lowering and would reach `cargo build` as E0277/E0308. Tie the
@@ -2820,7 +2820,7 @@ impl<'a> Builder<'a> {
             // carrying the `hof_kernel_result` obligation — same
             // `stdlib_scheme` + tie shape as the Dict/Set key obligation
             // above, so this is a genuine TYPE-LEVEL check that survives
-            // arbitrary Sky-level aliasing (direct call, piped, `let`-bound,
+            // arbitrary Ipê-level aliasing (direct call, piped, `let`-bound,
             // bare-value re-export, higher-order argument, record-field
             // extraction, import alias) by construction — the obligation is
             // attached to the union-find variable `constrain_var_kernel`
@@ -2957,7 +2957,7 @@ impl<'a> Builder<'a> {
     ) -> DResult<VarId> {
         let span = e.span;
         let var = match &e.value {
-            // An integer literal is `Number`-polymorphic (Elm/Sky `number`): it
+            // An integer literal is `Number`-polymorphic (Elm/Ipê `number`): it
             // may resolve to `Int` OR `Float` depending on context, and defaults
             // to `Int` when the program never pins it (the post-solve defaulting
             // loop closes an unpinned `Super { Number }` to `Int`).  This lets
@@ -3617,7 +3617,7 @@ impl<'a> Builder<'a> {
         };
         // `Ipe.Http.Server.Response` is a record alias `{ status : Int, body :
         // String, headers : Dict String String, contentType : String }`
-        // (reference `Sky/Http/Server.ipe:66`), NOT an opaque nominal. Every
+        // (reference `Ipê/Http/Server.ipe:66`), NOT an opaque nominal. Every
         // server kernel that produces/consumes a `Response` schemes over this
         // record so a handler-built record literal — and a field read off a
         // `Response` — unify with the kernel signatures. The record folds to the
@@ -3741,7 +3741,7 @@ impl<'a> Builder<'a> {
         };
         // Ipe.Email: `EmailProvider` opaque ADT (runtime
         // `ipe_runtime::email::EmailProvider`). Empty-module `Con` (home-
-        // insensitive lowering, same posture as `ws_server`); the Sky
+        // insensitive lowering, same posture as `ws_server`); the Ipê
         // `type EmailProvider` declaration unifies with it structurally by name.
         let email_provider = || Ty::Con {
             module: Vec::new(),
@@ -4099,7 +4099,7 @@ impl<'a> Builder<'a> {
                 fun(maybe(var(0)), maybe(var(1))),
             ),
             // `map2 : (a -> b -> v) -> Maybe a -> Maybe b -> Maybe v`. The N-ary
-            // function is CURRIED at the Sky type level (`a -> b -> v`); the
+            // function is CURRIED at the Ipê type level (`a -> b -> v`); the
             // backend passes the multi-arg Rust fn value directly (mirrors
             // JsonDec.map2). var(0)=a, var(1)=b, .., last=v.
             K::MaybeMap2 => fun(
@@ -4446,13 +4446,13 @@ impl<'a> Builder<'a> {
             K::DbClose => fun(db(), task_unit()),
             K::DbExecRaw => fun(db(), fun(string(), task(int()))),
             // `exec`/`query`/`queryDecode` accept `List a` (polymorphic) — any
-            // Sky type that can be bound as a SQL parameter: `List String`,
+            // Ipê type that can be bound as a SQL parameter: `List String`,
             // `List Int`, `List Float`, `List Bool`, or `List SqlValue` (typed
             // mixed-type binding introduced in v0.16.26).  The emitter routes all
             // three to `db_exec_params` / `db_query_params` /
             // `db_query_decode_params`, converting elements via
             // `ipe_runtime::db::SqlParam::from` which is implemented for every
-            // Sky-primitive type as well as for the generated `StdDbSqlValue`.
+            // Ipê-primitive type as well as for the generated `StdDbSqlValue`.
             K::DbExec => fun(db(), fun(string(), fun(list(var(0)), task(int())))),
             K::DbQuery => fun(
                 db(),
@@ -4738,7 +4738,7 @@ impl<'a> Builder<'a> {
                 }
                 ipe_kernels::HtmlEventShape::Bool => fun(fun(bool_ty(), var(0)), html_attr(var(0))),
                 // `onSubmit : a -> Attribute msg` — the handler `var(1)` stays
-                // an unconstrained HM var here (Sky-level polymorphism only —
+                // an unconstrained HM var here (Ipê-level polymorphism only —
                 // see `html.rs`'s `Event::OnForm` for the runtime-typed
                 // construction, not `Event::OnRaw`, which no longer exists).
                 ipe_kernels::HtmlEventShape::Raw => fun(var(1), html_attr(var(0))),
@@ -4780,7 +4780,7 @@ impl<'a> Builder<'a> {
                         // connects each route ctor's page type to `notFound`'s
                         // page type through the SAME var(2), so a type mismatch
                         // between them is caught here (IPE-T0001) instead of
-                        // passing skyc and failing later in cargo (E0308).
+                        // passing ipe and failing later in cargo (E0308).
                         m.insert(self.builtins.live_f_routes, list(live_route(var(2))));
                         // notFound : page
                         m.insert(self.builtins.live_f_not_found, var(2));
@@ -4975,7 +4975,7 @@ impl<'a> Builder<'a> {
             // hole); they get their scheme here, authored from the runtime
             // signature + `.ipe` HM signature. No parity oracle exists, so
             // correctness is pinned by `first_schemed_were_holes` (each is a
-            // genuine hole) plus skyc→cargo build fixtures. Every arrow-count
+            // genuine hole) plus ipe→cargo build fixtures. Every arrow-count
             // equals `decl().arity` — the invariant
             // `eta_expand_partial` relies on when peeling `arity` arrows off the
             // inferred callee type.
@@ -5073,7 +5073,7 @@ impl<'a> Builder<'a> {
                 fun(int(), fun(claims_ty(), claims_ty()))
             }
             // `Jwt.withClaim : String -> JsonEnc.Value -> Claims -> Claims`
-            // Matches the reference `Sky/Core/Jwt.ipe:79` — the value is any
+            // Matches the reference `Ipê/Core/Jwt.ipe:79` — the value is any
             // encoded JSON node (`JsonEnc.string`/`.int`/`.object`/…), so an
             // `Int`/`Bool`/nested-object custom claim round-trips with the right
             // token bytes. Both `Value` and `Claims` are `serde_json::Value` at
@@ -5251,7 +5251,7 @@ impl<'a> Builder<'a> {
 
             // Ui.breakpoint + Breakpoint constants.
             //
-            // Sanctioned divergence from Sky Go: `Breakpoint` is typed as
+            // Sanctioned divergence from Ipê Go: `Breakpoint` is typed as
             // `String` in the Rust port rather than as a distinct opaque type
             // (see `docs/divergences-from-sky.md` §B-Breakpoint).  Users cannot
             // fabricate arbitrary `Breakpoint` values because all constructors
@@ -5800,7 +5800,7 @@ impl<'a> Builder<'a> {
 
             // ── Ipe.CssSafety (4 — Ipe.Css leaf security kernels) ──
             //    The three parsers are `String -> Maybe String` (`None` => the
-            //    Sky side drops the declaration/rule via `CssDropped` /
+            //    Ipê side drops the declaration/rule via `CssDropped` /
             //    `CssRuleDropped`); `stripStyleClose` is the `String -> String`
             //    breakout floor. Runtime `safe_value` / `safe_prop_name` /
             //    `safe_selector` return `IpeMaybe<String>` (mirrors `uuid_parse`);
@@ -5856,7 +5856,7 @@ impl<'a> Builder<'a> {
             K::AuthPasswordStrength => fun(string(), result(error_ty(), string())),
             // signToken : Secret -> Dict String String -> Int -> Result Error String
             // AUD-06 (seal): a flex `claims` `var(0)` would unify with ANY
-            // type, so skyc would accept a record/Int/whatever as claims while
+            // type, so ipe would accept a record/Int/whatever as claims while
             // the emitted wrapper is pinned to `HashMap<String,String>`
             // (project.rs AUTH_WRAPPERS + runtime/auth.rs), no coercion at
             // lowering → cargo fail on any non-Dict claims (exit-0-then-cargo-
@@ -6154,7 +6154,7 @@ impl<'a> Builder<'a> {
             K::SqlColumn => fun(string(), sqlfragment()),
             // `Sql.param : SqlValue -> SqlFragment` — binds a single `?`.
             K::SqlParam => fun(sqlvalue(), sqlfragment()),
-            // `int` / `string` / `float` / `bool` are Sky-level type
+            // `int` / `string` / `float` / `bool` are Ipê-level type
             // narrowings of `param` (sugar — see the kernel decl doc): same
             // shape, scalar argument instead of the `SqlValue` ADT.
             K::SqlInt => fun(int(), sqlfragment()),
@@ -7207,7 +7207,7 @@ mod registry_phase_c_tests {
     /// and receive their scheme directly from their runtime + `.ipe`
     /// signatures. No parity oracle exists; correctness is pinned by
     /// `first_schemed_were_holes` (the scheme closes a genuine hole) plus the
-    /// skyc→cargo build fixtures. GROWS per family; never shrinks.
+    /// ipe→cargo build fixtures. GROWS per family; never shrinks.
     ///
     /// Notable members:
     /// - Crypto AEAD (`aesGcm*`/`chacha20*`) and Jwt ENCODE

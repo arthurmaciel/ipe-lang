@@ -4,7 +4,7 @@
 //!
 //! **Positive fixtures** (`mm_local_pkg`, `mm_diamond`) compile successfully
 //! and the emitted `main.rs` is byte-identical to the checked-in golden.
-//! They also verify that `skyc build_project` handles three
+//! They also verify that `ipe build_project` handles three
 //! multi-module blockers:
 //!   * Defect 1 — kernel imports (`Ipe.Prelude`) accepted without
 //!     IPE-N0020.
@@ -18,7 +18,7 @@
 //! `notexposed` → N0022, `pathmismatch` → N0023, `ambigval`/`ambigctor`/
 //! `samedef` → N0024, `reserved` → N0025, `sametype` → N0012.
 //!
-//! The golden `main.rs` files are the checked-in output of `skyc` against each
+//! The golden `main.rs` files are the checked-in output of `ipe` against each
 //! fixture.
 
 use std::path::{Path, PathBuf};
@@ -83,9 +83,9 @@ fn mm_diamond_emits_byte_identical_main_rs() {
     support::assert_emitted_project_matches_golden_dir(&out, &fixture);
 
     // Seal half: D's `base` function must appear exactly once (D compiled once,
-    // shared by B and C). D is a genuine own-home module, so the per-Sky-module
+    // shared by B and C). D is a genuine own-home module, so the per-Ipê-module
     // split places `d_base` in `src/ipe_mods/ipe_mod_d.rs`
-    // — scan the WHOLE emitted Sky-side tree (main.rs + ipe_mods/*.rs) for the
+    // — scan the WHOLE emitted Ipê-side tree (main.rs + ipe_mods/*.rs) for the
     // count, robust to that placement. The directory-diff helper above cannot
     // express a substring-count assertion, so this reads the source directly.
     let emitted = support::read_all_emitted_src(&out);
@@ -206,7 +206,7 @@ fn mm_neg_ambigctor_is_sky_n0024() {
 }
 
 // ---------------------------------------------------------------------------
-// Negative: reserved namespace (`Sky.*` / `Ipe.*`) → IPE-N0025
+// Negative: reserved namespace (`Ipê.*` / `Ipe.*`) → IPE-N0025
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -240,7 +240,7 @@ fn mm_neg_sametype_is_sky_n0012() {
 // Lib.helper : Int -> Int; Main calls `Lib.helper "str"` — qualified, so
 // IPE-N0024 does not fire.  Before the constrain re-key fix, `top_level` was
 // keyed by bare Symbol so a same-named `Main.helper` (if present) would
-// overwrite `Lib.helper`'s entry, making skyc exit 0 and emit wrong-type Rust
+// overwrite `Lib.helper`'s entry, making ipe exit 0 and emit wrong-type Rust
 // that fails only at `cargo build` (E0308).  After the fix, `Lib.helper` is
 // looked up under its own `(["Lib"], "helper")` key and the mismatch is
 // diagnosed as IPE-T0001 right here, never reaching codegen.

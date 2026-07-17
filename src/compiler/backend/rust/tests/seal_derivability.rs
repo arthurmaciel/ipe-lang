@@ -3,7 +3,7 @@
 //! `#[derive(Clone, Debug, PartialEq)]`.
 //!
 //! Before the seal, `emit_types` stamped that derive on every generated struct /
-//! enum, so a well-typed record like `{ dec : Decoder Int }` made `skyc` exit 0
+//! enum, so a well-typed record like `{ dec : Decoder Int }` made `ipe` exit 0
 //! and then `cargo build` fail (E0277 `Clone` / E0369 `==` / E0599
 //! `IpeStringify`) — the highest-bar exit-0-then-cargo-fail breach. The gate is
 //! now a function of a computed derivability flag ([`ipe_ir::ir_type_is_derivable`]
@@ -251,12 +251,12 @@ fn enum_with_function_payload_has_no_derive() -> DResult<()> {
 /// PartialEq`) but NOT serde-supporting (`Html<M>` is not `Serialize`). Gating
 /// the serde derive on the `CDPeq` flag (`is_derivable`) would force
 /// `#[derive(..., serde::Serialize, serde::Deserialize)]` onto such a record →
-/// `skyc` exit 0 then `cargo` E0277. The gate instead reads the per-record
+/// `ipe` exit 0 then `cargo` E0277. The gate instead reads the per-record
 /// serde flag (`is_serde`): the helper keeps its `CDPeq` derive WITHOUT serde,
 /// while a sibling all-primitive record still gets the serde derive.
 ///
 /// This is the emit-text half of the seal (fast, no cargo). The cargo-buildable
-/// half is proven end-to-end by `skyc`'s `live_e2e::live_html_helper_record_build_only`.
+/// half is proven end-to-end by `ipe`'s `live_e2e::live_html_helper_record_build_only`.
 #[test]
 fn live_html_helper_record_gets_cdpeq_without_serde() -> DResult<()> {
     let mut interner = Interner::new();

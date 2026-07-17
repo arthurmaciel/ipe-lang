@@ -1,5 +1,5 @@
-//! Regex kernels for Sky.Core.Regex. Invalid patterns NEVER panic — they
-//! return identity / false / empty / Nothing per the Sky stdlib contract.
+//! Regex kernels for Ipe.Regex. Invalid patterns NEVER panic — they
+//! return identity / false / empty / Nothing per the Ipê stdlib contract.
 
 use super::IpeMaybe;
 use regex::Regex;
@@ -16,7 +16,7 @@ const REGEX_CACHE_CAP: usize = 256;
 
 /// Compile `pattern`, reusing a cached `Regex` when one exists. Returns
 /// `None` for an invalid pattern — callers degrade to identity/false/empty
-/// per the Sky stdlib contract (NEVER panic). Total: the `Mutex` lock is
+/// per the Ipê stdlib contract (NEVER panic). Total: the `Mutex` lock is
 /// only ever held briefly here and any `PoisonError` is recovered via
 /// `into_inner`, so a panic in another thread can't wedge this path.
 fn compiled(pattern: &str) -> Option<Arc<Regex>> {
@@ -39,7 +39,7 @@ fn compiled(pattern: &str) -> Option<Arc<Regex>> {
     Some(re)
 }
 
-/// Sky `match : String -> String -> Bool`. Pattern first, then haystack.
+/// Ipê `match : String -> String -> Bool`. Pattern first, then haystack.
 pub fn regex_match(pattern: String, s: String) -> bool {
     match compiled(&pattern) {
         Some(re) => re.is_match(&s),
@@ -47,7 +47,7 @@ pub fn regex_match(pattern: String, s: String) -> bool {
     }
 }
 
-/// Sky `find : String -> String -> Maybe String`
+/// Ipê `find : String -> String -> Maybe String`
 pub fn regex_find(pattern: String, s: String) -> IpeMaybe<String> {
     match compiled(&pattern) {
         Some(re) => match re.find(&s) {
@@ -58,7 +58,7 @@ pub fn regex_find(pattern: String, s: String) -> IpeMaybe<String> {
     }
 }
 
-/// Sky `findAll : String -> String -> List String`
+/// Ipê `findAll : String -> String -> List String`
 pub fn regex_find_all(pattern: String, s: String) -> Vec<String> {
     match compiled(&pattern) {
         Some(re) => re.find_iter(&s).map(|m| m.as_str().to_string()).collect(),
@@ -66,7 +66,7 @@ pub fn regex_find_all(pattern: String, s: String) -> Vec<String> {
     }
 }
 
-/// Sky `replace : String -> String -> String -> String` (pattern, replacement, input).
+/// Ipê `replace : String -> String -> String -> String` (pattern, replacement, input).
 pub fn regex_replace(pattern: String, replacement: String, s: String) -> String {
     match compiled(&pattern) {
         Some(re) => re.replace_all(&s, replacement.as_str()).to_string(),
@@ -74,7 +74,7 @@ pub fn regex_replace(pattern: String, replacement: String, s: String) -> String 
     }
 }
 
-/// Sky `split : String -> String -> List String`.
+/// Ipê `split : String -> String -> List String`.
 ///
 /// Mirrors Go's `regexp.Split(s, -1)` (split on every match) rather than
 /// Rust's `Regex::split`. The two diverge on zero-width matches: Go's Split

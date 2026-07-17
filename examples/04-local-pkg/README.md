@@ -1,11 +1,11 @@
 # Local Packages
 
-Multi-module project showing how to import and use local Sky modules (`Lib.Utils`).
+Multi-module project showing how to import and use local Ipê modules (`Lib.Utils`).
 
 ## Build & Run
 
 ```bash
-sky build src/Main.ipe
+ipe build src/Main.ipe
 ./sky-out/app
 ```
 

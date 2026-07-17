@@ -6,7 +6,7 @@
 
 > **GOAL CORRECTION (coordinator, 2026-07-04; premise corrected by the
 > async-bridge conciliation, 2026-07-04) — supersedes this doc's scope +
-> P-ordering.** The goal is fully-automatic, UNIVERSAL (every crate) Sky→Rust
+> P-ordering.** The goal is fully-automatic, UNIVERSAL (every crate) Ipê→Rust
 > FFI. **The acceptance metric is `../sky/examples/rust/skyshop-rs` running with
 > ZERO manual shims for firestore, firebase, and stripe, plus DCE of unused FFI
 > functions/values** (bind/emit only the used subset; stripe visible surface =
@@ -95,7 +95,7 @@ feat/runtime-rust v0.17.2-1204 (`c818e081`).
   dep closure runs under `cargo check`, and proc-macros execute during both
   compile and rustdoc phases. The reference runs this **unsandboxed**, via
   `sh -c` + shell-quoting from Haskell
-  (`src/Sky/Build/Rust/Ffi.hs:216-222`,
+  (`src/Ipê/Build/Rust/Ffi.hs:216-222`,
   `readProcessWithExitCode "sh" ["-c", cmd']`). Crate names are gated by
   `safe_crate_name` (`main.rs:3756`, `[A-Za-z0-9_-]+`), git URLs are only
   shell-quoted. This is the gap our sandbox (#41) is for — a **sanctioned
@@ -105,7 +105,7 @@ feat/runtime-rust v0.17.2-1204 (`c818e081`).
   `transitive_deps` (locked versions, WALL-B #75), `features` (the effective
   feature set rustdoc actually succeeded with, #100 Part B —
   `main.rs:982-986` in our vendored copy). Each `Function` carries `name`,
-  typed `params`/`results` (Sky type + Rust type per param), **`effect`
+  typed `params`/`results` (Ipê type + Rust type per param), **`effect`
   (`main.rs:50` — pure/fallible/effectful; present in BOTH Go and Rust
   inspectors)**, receiver/method metadata, field/enum-binding flags
   (`is_enum_ctor`/`is_enum_tag`/`is_enum_extract`), `self_returning`
@@ -141,36 +141,36 @@ feat/runtime-rust v0.17.2-1204 (`c818e081`).
 - **CLI:** `app/Main.hs:878-996` (`addHandler`). For Rust it discovers the
   Cargo package name (Main.hs:919) and invokes the inspector — which ships
   **embedded in the sky binary** (`Sky.Build.EmbeddedInspectorRust`,
-  imported at `src/Sky/Build/Rust/Ffi.hs:44`; materialized to
+  imported at `src/Ipê/Build/Rust/Ffi.hs:44`; materialized to
   `<dir>/bin/sky-ffi-inspect-rs`, `Ffi.hs:319`). Git sources are supported
   (`--git URL --rev|--branch|--tag`, `Ffi.hs:122-125`) and a manifest mode
   inspects multiple crates in one process (WALL-G #84, `Ffi.hs:175`).
 - **Artifacts** (`generateRustBindings`, `Ffi.hs:195-219`), all under
-  `.skycache/ffi/rust/`:
+  `.ipe-cache/ffi/rust/`:
   - `<slug>_bindings.rs` — the wrapper crate source (direct `::crate::fn`
     calls, sync `SkyResult` wrappers);
-  - `<slug>.skyi` — the Sky-typed catalogue seeding the HM env
+  - `<slug>.skyi` — the Ipê-typed catalogue seeding the HM env
     (`FfiGen.hs:1924-2022` for the Go twin; comment-based signatures with
     `[pure|fallible|effectful]` effect annotations);
   - `<slug>.kernel.json` — the registry entry consumed at every warm build.
-- **Registry:** `src/Sky/Build/FfiRegistry.hs:273-284` —
-  `loadRegistry BackendRust` reads ONLY `.skycache/ffi/rust/`; if empty it
+- **Registry:** `src/Ipê/Build/FfiRegistry.hs:273-284` —
+  `loadRegistry BackendRust` reads ONLY `.ipe-cache/ffi/rust/`; if empty it
   warns about stale legacy layout and returns an **empty registry — there is
   NO Go-FFI fallback**. `[go.dependencies]` is inert under
   `backend = "rust"` (`app/Main.hs:1087-1095`, "the Rust codegen can't link
   Go packages"). Kernel names derive as `Rust_<Crate>`
   (`FfiGen.hs:419-433`).
 - **DCE:** FFI refs are tracked as `FfiRef kernelName fnName`
-  (`src/Sky/Build/Dce.hs:19-22, 64-66`); unreached bindings never emit.
+  (`src/Ipê/Build/Dce.hs:19-22, 64-66`); unreached bindings never emit.
   This is the 76k-symbol scale answer, together with per-crate
   `.kernel.json` caching (warm builds never re-run the inspector) and
   bounded-parallel inspection (`app/Main.hs:1013`, QSem +
   `IPE_INSTALL_PARALLEL`).
-- **Generics — the (A)-model** (`src/Sky/Build/Rust/FfiInstance.hs:1-30`):
+- **Generics — the (A)-model** (`src/Ipê/Build/Rust/FfiInstance.hs:1-30`):
   ONE `<T: bounds>` generic Rust wrapper per generic FFI fn; **rustc
   monomorphises the call sites** (unlike the Go model's N per-instance
   wrappers). Separately, a per-used-instantiation bindability check proves
-  every concrete type-arg lies in the closed Sky↔Rust set and satisfies the
+  every concrete type-arg lies in the closed Ipê↔Rust set and satisfies the
   declared bounds via a static closed-set × trait table; violations are
   first-class E4400 diagnostics keyed to the call-site region — never a
   silent drop.
@@ -178,7 +178,7 @@ feat/runtime-rust v0.17.2-1204 (`c818e081`).
   `[dependencies]` line per FFI crate at the **exact locked version** from
   `transitive_deps`, plus the **effective feature set** the inspector
   succeeded with (`FfiGen.hs:186-201`; crate-version SSOT at
-  `src/Sky/Generate/Rust/Builder/crate-specs.toml`).
+  `src/Ipê/Generate/Rust/Builder/crate-specs.toml`).
 
 ### 1.3 The Rust runtime's FFI stance (identical to ours)
 
@@ -196,7 +196,7 @@ feat/runtime-rust v0.17.2-1204 (`c818e081`).
 - Capability gating: `runtime-rust/Cargo.toml:74-119` defines the feature
   lattice (`db`, `crypto`, `server`, `http_client`, `websocket_client`,
   `live`, `webview`, …); the compiler's AST walker
-  (`src/Sky/Generate/Rust/Builder/Walker.hs:72-203`) detects kernel usage
+  (`src/Ipê/Generate/Rust/Builder/Walker.hs:72-203`) detects kernel usage
   and the emitter (`Emitter.hs:~1121-1131`) enables only the needed
   features per program.
 
@@ -204,7 +204,7 @@ feat/runtime-rust v0.17.2-1204 (`c818e081`).
 
 - The Rust-backend example sweep **excludes** every Go-FFI example:
   `runtime-rust/scripts/lib/examples.sh:47-128` (`is_out_of_scope`) admits
-  only `Sky.*`/`Std.*`, **`Rust.*` FFI wrapper imports**, and local
+  only `Ipê.*`/`Ipe.*`, **`Rust.*` FFI wrapper imports**, and local
   modules; `13-skyshop` (Go Stripe/Firestore) is out of scope by
   construction (`examples.sh:53`).
 - The Rust-native skyshop, `examples/rust/skyshop-rs/sky.toml`, binds
@@ -227,7 +227,7 @@ feat/runtime-rust v0.17.2-1204 (`c818e081`).
 | `runtime/src/sky_runtime/ffi_polyfills.rs` + `runtime/tests/ffi_call_task_divergence.rs` | Vendored parity with the reference's runtime; the divergence test asserts dynamic `Ffi.callTask`/`callPure` panic with actionable messages and `Ffi.toAny` is identity (no erasure) |
 | `docs/architecture/kernel-registry-design.md` | Two-tier `KernelId = Stdlib(StdlibKernel) \| Ffi(FfiKernelId)` — closed enum for stdlib exhaustiveness (F1), opaque index for open FFI (R0.2). This is the M4 dependency the consumer side blocks on |
 | `sky-rust-backend:ffi-audit` skill | Already carried in-repo; wraps the inspector for the ~50-crate bindability audit |
-| Compiler `Ffi.kernel` handling | Stage-4 kernel aliasing works for stdlib (`crates/skyc/stdlib/Sky/Core/Dict.ipe:42` etc.); no `sky add`-style consumer exists yet — that is #42 |
+| Compiler `Ffi.kernel` handling | Stage-4 kernel aliasing works for stdlib (`crates/ipe/stdlib/Ipê/Core/Dict.ipe:42` etc.); no `ipe add`-style consumer exists yet — that is #42 |
 
 ---
 
@@ -329,7 +329,7 @@ shape: pure → bare value; fallible → `SkyResult`; effectful/async →
 `Task Error a` via M-G's bridge (`futures::FutureExt::catch_unwind` on the
 pinned future, spawn onto the executor's reactor, never `block_on` inside
 it). Every foreign call — sync or async — is wrapped in a catch-unwind
-boundary so a foreign panic becomes a Sky `Err`, preserving "well-typed Ipê
+boundary so a foreign panic becomes a Ipê `Err`, preserving "well-typed Ipê
 never panics". The wrapper crate carries the `compile_error!` fence
 `#[cfg(panic = "abort")]` so a `panic=abort` profile cannot silently void
 the boundary. Dynamic dispatch stays refused: the two panicking polyfills
@@ -385,7 +385,7 @@ here + in `docs/divergences-from-sky.md` when implemented.
 | Inspector distribution | TH-embedded in sky binary (`EmbeddedInspectorRust`, `Ffi.hs:44,319`) | separate toolchain binary, argv-exec'd | **diverge** — jail needs an exec boundary; TH embedding is a Haskell-ism |
 | Inspector invocation | `sh -c` + quoteShell, unsandboxed (`Ffi.hs:216-222`) | argv exec inside bwrap/unshare jail | **diverge — strictly better** (RCE gate; Principle 1) |
 | Toolchain pin | nightly channel only, no `Cargo.lock` | pinned nightly version + committed lock (#40 B0.1) | **diverge — strictly better** (reproducibility) |
-| Cache layout | `.skycache/ffi/rust/<slug>.{skyi,kernel.json,_bindings.rs}`, warm builds never re-inspect (`FfiRegistry.hs:273-284`) | `.ipecache/ffi/rust/`, same artifacts, `.ipei` extension; cache key includes nightly pin | **adopt** (+ key hardening) |
+| Cache layout | `.ipe-cache/ffi/rust/<slug>.{skyi,kernel.json,_bindings.rs}`, warm builds never re-inspect (`FfiRegistry.hs:273-284`) | `.ipecache/ffi/rust/`, same artifacts, `.ipei` extension; cache key includes nightly pin | **adopt** (+ key hardening) |
 | Cross-backend fallback | none — Rust registry empty ⇒ empty, Go deps inert (`Main.hs:1087-1095`) | N/A — we have no Go backend at all | **adopt** (simpler: only one registry dir) |
 | Kernel naming / import surface | `Rust_<Crate>` / `Rust.<Crate>` (`FfiGen.hs:419-433`) | same (post-rename: surface stays `Rust.<Crate>`) | **adopt** |
 | Registry integration | data-driven `.kernel.json` registry beside closed stdlib dispatch | two-tier `KernelId = Stdlib(enum) \| Ffi(u32)` | **adopt** semantics; our shape is stronger (F1 exhaustiveness kept) |
@@ -468,7 +468,7 @@ therefore mostly CONFIRMED, not obsoleted. Explicit dispositions:
 5. **New decisions this doc adds:** (a) inspector ships as a separate
    argv-exec'd toolchain binary, NOT embedded (reference embeds via
    Haskell TH — §3.1, §5); (b) the M-D acceptance byte-diff target is the
-   reference's `.skycache/ffi/rust/` artifacts for fixtures 107-114, with
+   reference's `.ipe-cache/ffi/rust/` artifacts for fixtures 107-114, with
    every intentional difference (`.ipei` extension, `Result Error`
    erasure, NumCoerce saturation) enumerated in the diff filter and in
    `docs/divergences-from-sky.md`; (c) `effect` decodes into a closed enum
@@ -484,7 +484,7 @@ therefore mostly CONFIRMED, not obsoleted. Explicit dispositions:
 - **M4 registry timing:** P5 blocks on it; if M4 slips, P1-P4 + P6's
   byte-diff harness can still complete (the harness drives `ipe_ffi` as a
   library, no compiler wiring needed).
-- **`.ipei` naming vs rename sweep:** the Sky→Ipê rename (task #59) will
+- **`.ipei` naming vs rename sweep:** the Ipê→Ipê rename (task #59) will
   hit `.skyi`→`.ipei` and `Rust.<Crate>` import prose; keep the extension
   decision here so the rename doesn't fork it.
 - **Nightly-pin lifecycle:** rustdoc JSON format is unstable; the pin bump

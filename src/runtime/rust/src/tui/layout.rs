@@ -1,9 +1,9 @@
-//! Element → ANSI frame — the structured Sky.Tui renderer + focus/input model.
+//! Element → ANSI frame — the structured Ipe.Tui renderer + focus/input model.
 //!
-//! Walks the shared `ipe_runtime::ui::Element` tree (the SAME tree Sky.Live
+//! Walks the shared `ipe_runtime::ui::Element` tree (the SAME tree Ipe.Live
 //! renders to HTML) and lays it out to terminal cells by reading the TYPED
 //! attributes directly — never CSS. Mirrors Go's `tui_ui.go`. Recognises the
-//! `Std.Ui.Input.*` widgets (`TaggedNode "input"/"textarea"/"button"` carrying
+//! `Ipe.Ui.Input.*` widgets (`TaggedNode "input"/"textarea"/"button"` carrying
 //! `AttrAttribute "type"/"value"/"placeholder"` + `AttrEvent`), collects them as
 //! focusables in tab order, renders the focused one with a buffer + cursor, and
 //! reports their positions for scroll-into-view.
@@ -25,9 +25,9 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 const CANVAS_W: usize = 1280;
 const CANVAS_H: usize = 720;
 /// Hard ceiling on any single program-controlled cell dimension. `Ui.px`/`Ui.vw`/
-/// `Ui.vh` / `Ui.fillPortion` take an arbitrary Sky `Int`, so a resolved cell
+/// `Ui.vh` / `Ui.fillPortion` take an arbitrary Ipê `Int`, so a resolved cell
 /// count must be clamped before it reaches a `.repeat()` / Vec allocation or a
-/// fill loop — otherwise a well-typed Sky.Tui view can request an OOM / capacity
+/// fill loop — otherwise a well-typed Ipe.Tui view can request an OOM / capacity
 /// panic. 100_000 is far above any real terminal (Go's tui cap is 50_000).
 const MAX_CELLS: usize = 100_000;
 
@@ -169,7 +169,7 @@ struct Walked {
     /// `__gridMin` value — the minimum column WIDTH in logical px (set by
     /// `Ui.gridColumns N`). The actual column COUNT is `availW / cells_x(min)`.
     grid_min_px: i64,
-    /// Explicit column tracks from `Std.Ui.Grid.columns`/`tracks`
+    /// Explicit column tracks from `Ipe.Ui.Grid.columns`/`tracks`
     /// (`grid-template-columns`). Empty → auto-flow (`grid_min_px`). A
     /// `repeat()`/`minmax()` spec is left empty (falls back to auto-flow).
     grid_cols: Vec<GridTrack>,
@@ -656,7 +656,7 @@ fn walk_attrs<M>(attrs: &[Attribute<M>], inherited: Style) -> Walked {
             Attribute::AttrStyle(k, _) if k == "__row" => w.dir = Dir::Row,
             Attribute::AttrStyle(k, _) if k == "__col" => w.dir = Dir::Column,
             Attribute::AttrStyle(k, _) if k == "__grid" => w.is_grid = true,
-            // Std.Ui.Grid.columns/tracks → native AttrGridTracks(cols, rows).
+            // Ipe.Ui.Grid.columns/tracks → native AttrGridTracks(cols, rows).
             // Parse the column tracks; a non-empty parse turns this into an explicit
             // grid (audit #13). repeat()/minmax() → empty → auto-flow fallback.
             Attribute::AttrGridTracks(cols, _rows) => {
@@ -699,7 +699,7 @@ fn walk_attrs<M>(attrs: &[Attribute<M>], inherited: Style) -> Walked {
             Attribute::AttrBorderWidthEach(t, r, b, l)
                 if t.saturating_add(*r).saturating_add(*b).saturating_add(*l) > 0 =>
             {
-                // Saturating: each side is an arbitrary Sky `Int`; a plain
+                // Saturating: each side is an arbitrary Ipê `Int`; a plain
                 // `t + r + b + l` overflows i64 (debug panic) on large widths.
                 border_width = t
                     .saturating_add(*r)
@@ -910,7 +910,7 @@ fn apply_padding(inner: Rendered, w: &Walked, canvas: Canvas, self_style: Style)
     let right = canvas.cells_x(w.pad_right);
     let inner_w = inner.block.width();
     // Saturating + clamped: `left`/`right` derive from `Ui.padding N` (arbitrary
-    // Sky Int); an unclamped `inner_w + left + right` can overflow usize and, at
+    // Ipê Int); an unclamped `inner_w + left + right` can overflow usize and, at
     // any rate, feed `" ".repeat(total_w)` an OOM-sized count. MAX_CELLS is the
     // same ceiling every other repeat site uses.
     let total_w = inner_w
@@ -979,7 +979,7 @@ fn render_input<M: Clone>(
     } else {
         attr_str(attrs, "type").unwrap_or("text").to_string()
     };
-    // Sanitize value/placeholder: both are seeded from Sky `Attr.value` /
+    // Sanitize value/placeholder: both are seeded from Ipê `Attr.value` /
     // `Attr.placeholder` (attacker-controllable model data) and rendered into the
     // terminal stream — an unescaped `\x1b` would inject ANSI/OSC sequences.
     let value: String = attr_str(attrs, "value")
@@ -1155,7 +1155,7 @@ fn render_input<M: Clone>(
     // lightened by 38; real content + cursor paint over the track.
     let is_text_like = !matches!(input_type.as_str(), "checkbox" | "radio" | "range");
     // Border frame spec — a bordered input draws a REAL 1-cell box (correct
-    // Std.Ui: Border.width > 0 ⇒ a frame). Suppressing the frame (a Go-mirror)
+    // Ipe.Ui: Border.width > 0 ⇒ a frame). Suppressing the frame (a Go-mirror)
     // so the border only widens the track would show no border.
     let mut bw = 0i64;
     let mut bcolor: Option<Color> = None;
@@ -1214,7 +1214,7 @@ fn render_input<M: Clone>(
         block.reverse_cell_at(cl, cc);
     }
     // Multiline: honour a fixed `Ui.height (px)` — normalise to EXACTLY that many
-    // rows, scrolling the window to keep the cursor row visible (correct Std.Ui: a
+    // rows, scrolling the window to keep the cursor row visible (correct Ipe.Ui: a
     // fixed-height textarea scrolls internally; it neither grows with content nor
     // shrinks below its height).
     if is_multiline && let Some(rows) = height_cells(attrs, ctx.canvas) {
@@ -1329,7 +1329,7 @@ fn render_node<M: Clone>(
             }
         }
         Element::Raw(h) => {
-            // `Ui.html` (Std.Html escape hatch): the terminal can't render markup,
+            // `Ui.html` (Ipe.Html escape hatch): the terminal can't render markup,
             // so degrade to the node's TEXT content (word-wrapped) instead of a
             // blank region (audit #22). Empty → nothing.
             let text = html_text(h);
@@ -1617,7 +1617,7 @@ fn render_node<M: Clone>(
     }
 }
 
-/// Flatten the visible text of a `Std.Html` node (for the `Ui.html` raw escape
+/// Flatten the visible text of a `Ipe.Html` node (for the `Ui.html` raw escape
 /// hatch rendered in a terminal): concatenate `HText`/`HRaw` leaves, recursing
 /// into elements. Markup/attrs are dropped — the terminal shows text only.
 fn html_text<M>(h: &Html<M>) -> String {
@@ -1743,7 +1743,7 @@ fn render_grid<M: Clone>(
     ctx: &mut Ctx<M>,
     content_avail: usize,
 ) -> Rendered {
-    // Explicit tracks (Std.Ui.Grid.columns/tracks) → size each column from its
+    // Explicit tracks (Ipe.Ui.Grid.columns/tracks) → size each column from its
     // px/fr/auto spec (audit #13); else auto-flow by grid_min_px.
     if !w.grid_cols.is_empty() {
         return render_grid_tracked(kids, w, ctx, content_avail);
@@ -1791,7 +1791,7 @@ fn render_grid<M: Clone>(
     vstack(rows, gap_y, w.style.bg)
 }
 
-/// Explicit-track grid (`Std.Ui.Grid.columns`/`tracks`): size each column from its
+/// Explicit-track grid (`Ipe.Ui.Grid.columns`/`tracks`): size each column from its
 /// px/fr/auto spec, lay children row-major into those columns with the spacing
 /// gap. fr tracks split the leftover after px tracks + gaps; auto ≈ 1fr.
 fn render_grid_tracked<M: Clone>(
@@ -1806,7 +1806,7 @@ fn render_grid_tracked<M: Clone>(
     let ncols = w.grid_cols.len().max(1);
     let avail = content_avail.max(1);
     let total_gap = gap_x.saturating_mul(ncols.saturating_sub(1));
-    // Saturating folds, not `.sum()`: a well-typed Sky `Grid.px N` / `Grid.fr N`
+    // Saturating folds, not `.sum()`: a well-typed Ipê `Grid.px N` / `Grid.fr N`
     // takes an arbitrary Int, so an unclamped sum of large track weights
     // overflows usize — in release that wraps to a tiny `fr_total` divisor →
     // huge per-track width → `" ".repeat(huge)` OOM/capacity panic (top-critical
@@ -2417,7 +2417,7 @@ pub fn render_with_focus<M: Clone>(
     (frame, ctx.focusables, content_h)
 }
 
-/// `Std.Ui` Element → ANSI frame, no focus (used by the layout tests + any
+/// `Ipe.Ui` Element → ANSI frame, no focus (used by the layout tests + any
 /// caller that doesn't need the input model).
 pub fn element_to_cells<M: Clone>(view: &Element<M>, cols: usize, rows: usize) -> String {
     let mut inputs = InputRegistry::new();

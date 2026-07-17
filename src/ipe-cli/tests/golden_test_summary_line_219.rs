@@ -9,7 +9,7 @@
 //! Go oracle. This test pins the summary line so the divergence cannot return.
 //!
 //! Gated on `IPE_E2E=1`. Run:
-//! `IPE_E2E=1 cargo test -p skyc --test golden_test_summary_line_219`.
+//! `IPE_E2E=1 cargo test -p ipe --test golden_test_summary_line_219`.
 
 use std::path::{Path, PathBuf};
 

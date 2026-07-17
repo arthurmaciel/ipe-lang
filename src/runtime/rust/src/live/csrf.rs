@@ -1,4 +1,4 @@
-//! Sky.Live CSRF protection + security response headers.
+//! Ipe.Live CSRF protection + security response headers.
 //!
 //! Mirror of Go's `csrf_middleware.go` (double-submit cookie) + `setSecurityHeaders`
 //! (live.go), with a few hardening additions over the Go oracle:
@@ -11,7 +11,7 @@
 //!   - `X-Content-Type-Options: nosniff` + a restrictive `Permissions-Policy`
 //!     beyond Go's header set.
 //!
-//! The Sky.Live client POSTs JSON to `/_sky/event` with an `X-Sky-Csrf` header
+//! The Ipe.Live client POSTs JSON to `/_sky/event` with an `X-Sky-Csrf` header
 //! (never a form body), so the middleware validates header-vs-cookie WITHOUT
 //! reading the request body — no buffering, no body-consumption hazard.
 
@@ -35,7 +35,7 @@ pub fn csrf_cookie_name() -> &'static str {
         "__sky_csrf"
     }
 }
-/// The header the client echoes the token in (Go parity: `X-Sky-Csrf`).
+/// The header the client echoes the token in (Go parity: `X-Ipê-Csrf`).
 pub const CSRF_HEADER: &str = "x-sky-csrf";
 
 /// CSRF protection is ON by default; `IPE_CSRF=off|0|false` disables it
@@ -56,7 +56,7 @@ pub fn csrf_enabled() -> bool {
 }
 
 // `frame_ancestors` + `security_headers` were relocated to the always-compiled
-// `telemetry` module so the Sky.Http.Server path can share them (the `live`
+// `telemetry` module so the Ipe.Http.Server path can share them (the `live`
 // module is DCE'd out of server-only builds). Re-exported here so existing
 // `csrf::frame_ancestors` / `csrf::security_headers` call sites keep resolving.
 pub use crate::telemetry::{frame_ancestors, security_headers};
@@ -190,8 +190,8 @@ fn origin_mismatch(headers: &HeaderMap) -> bool {
 }
 
 /// The axum middleware. Validates CSRF on mutating, non-exempt requests; passes
-/// everything else through. Reads only headers (the Sky.Live POST body is JSON
-/// with the token in `X-Sky-Csrf`, so no body buffering is needed).
+/// everything else through. Reads only headers (the Ipe.Live POST body is JSON
+/// with the token in `X-Ipê-Csrf`, so no body buffering is needed).
 pub async fn csrf_middleware(
     req: axum::extract::Request,
     next: axum::middleware::Next,
@@ -238,4 +238,4 @@ pub async fn csrf_middleware(
 }
 
 // `security_headers` now lives in `telemetry` (re-exported at the top of this
-// module) so the Sky.Http.Server path can share it.
+// module) so the Ipe.Http.Server path can share it.

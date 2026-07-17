@@ -1,8 +1,8 @@
-//! Sky.Tui — terminal cell grid + total rune sanitisation.
+//! Ipe.Tui — terminal cell grid + total rune sanitisation.
 //!
 //! Pure (no terminal I/O): the building block for the cell renderer. Every
 //! access is total — out-of-bounds writes are no-ops, reads return `None`, and
-//! `sanitize_rune` maps control bytes to a space — so no Sky-reachable path can
+//! `sanitize_rune` maps control bytes to a space — so no Ipê-reachable path can
 //! panic or index out of bounds (the `#![cfg_attr(not(test), deny(...))]` gate).
 
 use unicode_width::UnicodeWidthChar;

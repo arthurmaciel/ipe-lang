@@ -8,7 +8,7 @@
 //! |---|---|---|
 //! | `fn_capture_eta_promoted` | sibling let-bound fn value captured by an ETA-SYNTHESIZED residual closure (`guarded f = wrap (inc f)`) | IPE-L0126 |
 //! | `fn_value_reuse_promoted` | pure fn-typed `let` consumed > 1× (direct arg moves + two partial-application eta captures) | IPE-L0127 |
-//! | `fn_param_capture_promoted` | fn-typed PARAM forwarded non-callee inside an eta closure (`g = apply f`) | skyc-green, cargo E0507 (SEAL break) |
+//! | `fn_param_capture_promoted` | fn-typed PARAM forwarded non-callee inside an eta closure (`g = apply f`) | ipe-green, cargo E0507 (SEAL break) |
 //!
 //! The promotion decision runs on the LOWERED scope (the IR walkers see the
 //! eta-synthesized closures a canon-level scan structurally cannot), flips

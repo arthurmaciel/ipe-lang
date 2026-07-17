@@ -11,11 +11,11 @@
 //!     { author = Db.getString "author" r }   -- row arg `r`, an alias of `payload`
 //! ```
 //!
-//! → `skyc build` exit 0, but the emitted `main_decode_row<T1: Clone>` (NO
+//! → `ipe build` exit 0, but the emitted `main_decode_row<T1: Clone>` (NO
 //! `IpeRow`) fails `cargo build` with E0277. The BASE commit's old body-TEXT
 //! scan happened to bound it (the alias still renders as
 //! `db_get_string(_, &r)`), so the structural rewrite REGRESSED this case — a
-//! skyc-0-then-cargo-fail SEAL violation.
+//! ipe-0-then-cargo-fail SEAL violation.
 //!
 //! The fix makes the walk alias-transparent (mirroring the alias-chain
 //! resolution in `flows_into_sync_kernel_call`): a value-preserving
@@ -26,7 +26,7 @@
 //!
 //! Run:
 //! ```text
-//! IPE_E2E=1 cargo test -p skyc --test golden_i177_db_get_alias_row
+//! IPE_E2E=1 cargo test -p ipe --test golden_i177_db_get_alias_row
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -45,7 +45,7 @@ fn entry_path(root: &Path, fixture: &str) -> PathBuf {
         .join("Main.ipe")
 }
 
-/// skyc-0 ∧ `+ IpeRow` lands on the decoder fn's wildcard-`any` generic even
+/// ipe-0 ∧ `+ IpeRow` lands on the decoder fn's wildcard-`any` generic even
 /// though the row arg is an ALIAS of the param — checked unconditionally
 /// (cheap, no `cargo`). The record STRUCT must stay unbounded.
 // The `expect` guards a test-support invariant: a build asserted successful
@@ -66,7 +66,7 @@ fn assert_skyc_bounds_fn_not_struct(fixture: &str) {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for {fixture}: {:?}",
+        "ipe build must succeed for {fixture}: {:?}",
         built.err()
     );
 
@@ -115,7 +115,7 @@ fn assert_cargo_builds_and_runs(fixture: &str) {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for {fixture}: {:?}",
+        "ipe build must succeed for {fixture}: {:?}",
         built.err()
     );
 

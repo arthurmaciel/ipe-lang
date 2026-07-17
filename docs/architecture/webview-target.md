@@ -1,12 +1,12 @@
-# Sky.Webview — app-entry wiring target
+# Ipe.Webview — app-entry wiring target
 
 Status: design-locked (v0.1). Implementation not started.
 Scope: wire `Webview.app { init, update, view, subscriptions, window }` through ipê
 so a desktop app opens a native window via the system webview, reusing the proven
-Sky.Live (Phase-1b) and Sky.Tui (Phase-1c) app-entry mechanics.
+Ipe.Live (Phase-1b) and Ipe.Tui (Phase-1c) app-entry mechanics.
 Ordering of concerns: security > correctness > soundness > efficiency > completeness > readability.
 Two invariants: PARSE, DON'T VALIDATE; MAKE INVALID STATES UNREPRESENTABLE. No runtime
-panic from well-typed Sky. No exit-0-then-cargo-fail.
+panic from well-typed Ipê. No exit-0-then-cargo-fail.
 
 ---
 
@@ -21,13 +21,13 @@ panic from well-typed Sky. No exit-0-then-cargo-fail.
 7. The bridge is in-process: initial `render` → `with_html`; DOM events → `window.ipc.postMessage` → `parse_ipc` → reused Live `HandlerIndex::resolve` → `update` → re-render → `evaluate_script("__skyApply(...)")` full-body `innerHTML` swap. No HTTP, SSE, or session store.
 8. The single genuinely-new soundness-critical deliverable (hard Phase-1d requirement): under `uses_webview`, the emitted `fn main` must call `block_on_current_thread(sky_main())` (not the thread-spawning `block_on`), applied as an anchor-asserted `replacen`-once that emits `CompilerBug` on anchor drift (fail-loud, never a silent no-op). Omission = exit-0 at compile, death on first paint; its runtime regression is the Tier-B xvfb paint test.
 9. `Cmd.perform` / `Sub.every` are dropped with a one-time stderr warning in v0.1 — documented limitation, observable, never a panic; `Cmd.none` works.
-10. Feature gating is structural, not a toggle: `--features webview` unconditionally needs the system webview dev libs; `skyc` preflights `pkg-config webkit2gtk-4.1 libsoup-3.0` and emits an actionable diagnostic.
-11. Security posture is inherited from Sky.Live verbatim: `render_html` escapes every text/attr node; the single `evaluate_script` slot is safe because it is a JS-*execution* context (not an HTML parse) and `json_str` (= `serde_json::to_string`) escapes the literal delimiters + control bytes — NOT because it escapes U+2028/U+2029 (it does not; see Q6). No `data-sky-eval`/`new Function()`, local-content-only (`with_html`, never `with_url`), fail-closed IPC. No new sink.
+10. Feature gating is structural, not a toggle: `--features webview` unconditionally needs the system webview dev libs; `ipe` preflights `pkg-config webkit2gtk-4.1 libsoup-3.0` and emits an actionable diagnostic.
+11. Security posture is inherited from Ipe.Live verbatim: `render_html` escapes every text/attr node; the single `evaluate_script` slot is safe because it is a JS-*execution* context (not an HTML parse) and `json_str` (= `serde_json::to_string`) escapes the literal delimiters + control bytes — NOT because it escapes U+2028/U+2029 (it does not; see Q6). No `data-sky-eval`/`new Function()`, local-content-only (`with_html`, never `with_url`), fail-closed IPC. No new sink.
 12. Golden: three tiers — build+link (real + stub), xvfb spawn/render/no-crash, and a round-trip coverage tier that never pollutes the shipped runtime.
 
 ## Testing-golden verdict
 
-- Tier A — build + link (BLOCKING, everywhere): `skyc` exit-0 on a Webview example, then `cargo build --features webview` links the real webkit2gtk-4.1/libsoup-3.0, AND `--no-default-features` links the stub (graceful `Err`). Forecloses exit-0-then-cargo-fail and proves graceful degradation.
+- Tier A — build + link (BLOCKING, everywhere): `ipe` exit-0 on a Webview example, then `cargo build --features webview` links the real webkit2gtk-4.1/libsoup-3.0, AND `--no-default-features` links the stub (graceful `Err`). Forecloses exit-0-then-cargo-fail and proves graceful degradation.
 - Tier B — xvfb spawn/render/no-crash (BLOCKING on this host, loud-skip on displayless CI): `timeout 20 xvfb-run -a ./app`; assert window realizes, initial view paints, process alive-at-timeout / clean SIGTERM. Never silent-green: degrade to a `smoke skipped: no display surface` log.
 - Tier C — round-trip coverage (mandatory floor + optional driven smoke): a `#[cfg(feature="webview")]` runtime unit test driving `render()` → `HandlerIndex::resolve(sky_id,ev,args)` → `update()` → re-`render()` and asserting the model advances (the click-is-a-no-op guard, deterministic, no display). Optionally, a compile-time-gated (`#[cfg(feature="webview_smoke")]`, NOT env-var-gated) driven synthetic-IPC smoke through the real event loop under xvfb — never a production-runtime branch.
 
@@ -95,7 +95,7 @@ two fundamental rules forbid; a resolved-but-unschemed Webview kernel is a compi
 `Ty::Var` fallback.
 
 The byte-match cannot be proven by inspection or by a unit test — it is only PROVEN by a Tier-A
-build+link running against a REAL Webview example: `skyc` exit-0 followed by `cargo build --features
+build+link running against a REAL Webview example: `ipe` exit-0 followed by `cargo build --features
 webview` linking clean. A constrain-arm typo (a mistyped qualifier, a wrong `var()` index, a
 dropped field) still type-checks via the `Ty::Var(u32::MAX)` catch-all and reopens the
 exit-0-then-cargo-fail class SILENTLY — there is no earlier signal. Therefore the Webview example
@@ -117,7 +117,7 @@ exactly TWO structural conditions, and no more:
 `title` need NOT be a literal: it is a plain `String`-typed slot, so ANY `String`-typed expression
 (a `let`-bound name, a `String.append`, a function call) lowers fine — emit passes the lowered
 expression straight into the `title:` field. The gate predicate must therefore be precise on both
-edges: NOT over-broad (it must not reject a computed `title`, e.g. `title = "Sky — " ++ appName`),
+edges: NOT over-broad (it must not reject a computed `title`, e.g. `title = "Ipê — " ++ appName`),
 and NOT under-broad (a non-literal `size` — `size = dims` or `size = computeSize model` — must be
 caught HERE, at lower, not allowed to reach emit's tuple-destructure where it would surface as a
 deep `CompilerBug`). Emit the reject with a clean user-facing diagnostic
@@ -233,7 +233,7 @@ webkit2gtk/libsoup on the first attempt. A machine without the libs fails at car
 feature-OFF stub (`webview.rs:47`) compiles cleanly and returns a graceful `Err` at call time; the
 ipê build emits feature-ON whenever `uses_webview`.
 
-Dev-experience preflight. When `ctx.uses_webview`, `skyc` runs `pkg-config --exists webkit2gtk-4.1
+Dev-experience preflight. When `ctx.uses_webview`, `ipe` runs `pkg-config --exists webkit2gtk-4.1
 libsoup-3.0` on Linux and emits an actionable diagnostic naming the apt/brew package, rather than
 letting cargo vomit a raw linker error.
 
@@ -249,7 +249,7 @@ this host are verified present at the versions wry 0.55 expects.
 
 DECISION — three tiers (verdict restated from the top of this doc):
 
-- Tier A — build + link, BLOCKING everywhere. `skyc` compiles a `webview-smoke` example clean (exit-0); `cargo build --features webview` links the real webkit2gtk-4.1/libsoup-3.0; `cargo build --no-default-features` links the stub (graceful `Err`). Exercises the whole chain (constrain → L0107 exemption → lower → emit_webview → manifest → native link → main-thread entry) and proves graceful degradation.
+- Tier A — build + link, BLOCKING everywhere. `ipe` compiles a `webview-smoke` example clean (exit-0); `cargo build --features webview` links the real webkit2gtk-4.1/libsoup-3.0; `cargo build --no-default-features` links the stub (graceful `Err`). Exercises the whole chain (constrain → L0107 exemption → lower → emit_webview → manifest → native link → main-thread entry) and proves graceful degradation.
 - Tier B — xvfb spawn/render/no-crash, BLOCKING on this (verified-capable) host, loud-skip on displayless CI. `timeout 20 xvfb-run -a ./app`; assert the window realizes, the initial view paints, and the process is alive at the timeout / exits cleanly on SIGTERM. Never silent-green: a display-surface failure degrades to a clear skip log.
 - Tier C — round-trip coverage without a production seam. A `#[cfg(feature="webview")]` runtime unit test drives `render()` → `HandlerIndex::resolve(sky_id, ev, args)` → `update()` → re-`render()` and asserts the model advances (counter 0→1). This is the click-is-a-no-op guard (CLAUDE.md §9: `--build-only` cannot catch it), deterministic, no display, no production pollution. Optionally, a compile-time-gated (`#[cfg(feature="webview_smoke")]`, NOT env-var-gated) driven synthetic-IPC smoke through the real event loop under xvfb (OPEN DECISION 3).
 
@@ -268,14 +268,14 @@ simulation; that would be a dishonest golden.
 ## Q6 — security posture
 
 DECISION. The webview loads only app-rendered, local HTML — the entire attack surface is
-app-controlled content, defended by reusing Sky.Live's sanitizer unchanged.
+app-controlled content, defended by reusing Ipe.Live's sanitizer unchanged.
 
 - render_html sanitization parity. The body comes exclusively from `render_html`, which HTML-escapes every text + attribute node (INVARIANT comment, `webview.rs:106`). The `document.body.innerHTML = html` in `__skyApply` is therefore not an XSS sink for user data. Any FUTURE raw-HTML renderer node becomes the XSS boundary and must be audited in `render_html`, not here — the Webview port adds ZERO new sink.
 - No eval of app content. `BRIDGE_JS` is a fixed, audited constant with no `data-sky-eval` / `new Function()`. The only outbound `evaluate_script` call is `window.__skyApply(<json_str(body)>)`, where `json_str` = `serde_json::to_string(body)`. The re-render payload cannot break out of the JS string literal — but note the precise reason, because the obvious one is WRONG. Stock `serde_json::to_string` does NOT escape U+2028/U+2029 (serde emits those raw, unlike Go's `encoding/json`); do not claim a U+2028 escaping guarantee that the encoder does not provide. The no-breakout conclusion holds for two independent reasons: (1) the sink is a JS-*execution* context (`evaluate_script("window.__skyApply(...)")`), NOT an HTML-parse context, so `</script>` / `<` breakouts are structurally inapplicable — there is no HTML parser between the string and the engine; and (2) on wry 0.55's ES2019+ engines (WebKitGTK 2.50 / modern WKWebView / WebView2), U+2028/U+2029 are legal string-literal characters and do not terminate the literal. serde's `\"` / `\\` / control-char escaping closes the remaining literal-delimiter and control-byte breakout. WARNING to future maintainers: this reasoning is sink-specific. A different sink — e.g. splicing `json_str(body)` into an inline `<script>` HTML block that goes through an HTML parser — would face BOTH the `</script>` breakout AND (on a legacy/HTML-context engine) the U+2028 line-terminator hazard, neither of which `json_str` guards against. Do NOT route a new sink through `json_str` trusting a U+2028 guarantee that does not exist.
 - Local content only. `with_html(...)` loads inline app HTML in-process; there is no `.with_url`, no remote navigation, no network fetch.
 - Fail-closed IPC. `parse_ipc` is `serde_json::from_str(...).ok()?` — a malformed/hostile IPC body yields `None` (no panic, no dispatch). `HandlerIndex::resolve` returns `None` for an unknown sky-id/event (no fabricated Msg). The only IPC producer is the fixed `BRIDGE_JS` in a no-remote-load webview, so there is no external injector; the parse path is fail-closed by construction. IPC-arg indexing uses `args.get(i).cloned().unwrap_or_default()`-style access — no `.unwrap`, no index-panic.
-- No new secrets surface. No session store, no cookies, no HTTP server — the multi-tenant/console/auth attack surfaces of Sky.Live do not exist for Webview.
-- No panic from well-typed Sky. Every fallible step routes through `Err` (window build `:235`, webview build `:271`, stub `:72`); `event_loop.run` diverges; `json_str`'s unreachable Err arm has a total fallback. On a machine without libs (feature-ON, libs-missing) the failure is at cargo link, not at runtime — consistent with "if it compiles, it works". Preserve this by never adding an `.unwrap()` in the emitted call path.
+- No new secrets surface. No session store, no cookies, no HTTP server — the multi-tenant/console/auth attack surfaces of Ipe.Live do not exist for Webview.
+- No panic from well-typed Ipê. Every fallible step routes through `Err` (window build `:235`, webview build `:271`, stub `:72`); `event_loop.run` diverges; `json_str`'s unreachable Err arm has a total fallback. On a machine without libs (feature-ON, libs-missing) the failure is at cargo link, not at runtime — consistent with "if it compiles, it works". Preserve this by never adding an `.unwrap()` in the emitted call path.
 
 ---
 
@@ -326,7 +326,7 @@ sky_runtime::webview::webview_app(
 | non-literal `window` / non-literal `size` → emit can't field-extract / can't destructure | lower/emit | Lower gate fails-closed on BOTH `window` inline `Expr::Record` AND `size` inline 2-tuple literal; `title` stays any `String`-typed expr. Precise predicate: not over-broad (computed `title` allowed) nor under-broad (non-literal `size` caught at lower, never reaching emit's `CompilerBug`). Emit keeps `require Expr::Record` + `require Expr::Tuple` as defense-in-depth. |
 | generic record emitter for `window` → distinct Rust type | emit_webview | Construct nominal `WebviewWindowCfg` by name. |
 | manifest compose order / duplicate `live` | project.rs | `uses_webview ⇒ uses_live` runs server+live first; `webview_cargo_toml` last; fail-loud anchors. |
-| missing native libs | cargo link | `skyc` pkg-config preflight with actionable diagnostic; stub path links + `Err`. |
+| missing native libs | cargo link | `ipe` pkg-config preflight with actionable diagnostic; stub path links + `Err`. |
 | Cmd/Sub silently dropped | v0.1 sync loop | `warn_dropped_cmd_if_real` (one-time stderr); typed uniformly; no panic. |
 | click-is-a-no-op regression | headless test | Tier-C runtime round-trip unit test (build-only can't catch it). |
 | new XSS / eval hole | DOM patch | Reuse `render_html` (escapes all) + `__skyApply` sink is a JS-execution context (not HTML-parse) with `json_str` literal-escaping — NOT a U+2028 guarantee (serde does not escape U+2028/U+2029; see Q6); no `data-sky-eval`; local-content-only; fail-closed IPC. |
@@ -335,13 +335,13 @@ sky_runtime::webview::webview_app(
 
 ## OPEN DECISIONS
 
-1. Input / focus preservation parity (v0.1) — PINNED to option (a). Sky.Live hardens against re-render destroying uncontrolled input state (focus-preserving DOM replacer; password fields carry no `value`; open-`<select>` defence). A naive full-body `innerHTML = nbody` blows focus, caret position, in-flight input text, and open dropdowns on every Msg. RESOLUTION (a): add a small, bounded save/restore of `document.activeElement`'s value + selection (`selectionStart`/`selectionEnd`) around the innerHTML assignment inside the fixed `BRIDGE_JS` constant, keyed by the element's `sky-id`. HARD CONSTRAINT: the restore MUST use property assignment (`el.value = savedValue; el.selectionStart = …`), NEVER concatenation of the saved value into an HTML string. Property assignment sets a live DOM node's property directly — it never re-enters the HTML parser and never re-enters `eval`, so it opens ZERO new injection path (in contrast, splicing the saved value back into `innerHTML` would resurrect an XSS sink). The saved value stays entirely client-side and is never round-tripped to Rust. IMPORTANT — the doc must NOT claim Sky.Live input-preservation parity: this save/restore covers the focused element's value + caret only, not Live's full uncontrolled-field matrix (every uncontrolled INPUT/TEXTAREA/SELECT, password-field-carries-no-`value`, open-`<select>` defence). It is a UX/correctness gap, not a security gap — the in-flight input remains client-side and is therefore never a secret leak. State the residual gap explicitly rather than implying parity.
+1. Input / focus preservation parity (v0.1) — PINNED to option (a). Ipe.Live hardens against re-render destroying uncontrolled input state (focus-preserving DOM replacer; password fields carry no `value`; open-`<select>` defence). A naive full-body `innerHTML = nbody` blows focus, caret position, in-flight input text, and open dropdowns on every Msg. RESOLUTION (a): add a small, bounded save/restore of `document.activeElement`'s value + selection (`selectionStart`/`selectionEnd`) around the innerHTML assignment inside the fixed `BRIDGE_JS` constant, keyed by the element's `sky-id`. HARD CONSTRAINT: the restore MUST use property assignment (`el.value = savedValue; el.selectionStart = …`), NEVER concatenation of the saved value into an HTML string. Property assignment sets a live DOM node's property directly — it never re-enters the HTML parser and never re-enters `eval`, so it opens ZERO new injection path (in contrast, splicing the saved value back into `innerHTML` would resurrect an XSS sink). The saved value stays entirely client-side and is never round-tripped to Rust. IMPORTANT — the doc must NOT claim Ipe.Live input-preservation parity: this save/restore covers the focused element's value + caret only, not Live's full uncontrolled-field matrix (every uncontrolled INPUT/TEXTAREA/SELECT, password-field-carries-no-`value`, open-`<select>` defence). It is a UX/correctness gap, not a security gap — the in-flight input remains client-side and is therefore never a secret leak. State the residual gap explicitly rather than implying parity.
 
 2. Manifest dependency-emission mechanism. Whether `webview_cargo_toml` DIRECT-INJECTS `wry = "0.55"` + `tao = "0.35"` into the emitted project manifest, or relies on FEATURE-FORWARDING from the vendored runtime's `webview = ["wry","tao","live"]` mapping, depends on whether the vendored runtime is an in-project module (single Cargo.toml → direct-inject) or a path sub-crate (features forward). RESOLVE by reading `project.rs` and mirroring `live_cargo_toml`'s proven mechanism exactly — do not invent a new one. Tier-A build+link catches any drift.
 
 3. Driven synthetic-IPC smoke (Tier C, optional half). Whether to build the compile-time-gated (`#[cfg(feature="webview_smoke")]`) driven-IPC smoke through the real event loop under xvfb for v0.1, or ship with only the pure-function round-trip unit test as the floor. The env-var-gated production-runtime seam is REJECTED regardless. Recommendation: unit-test floor mandatory; compile-time driven smoke as a fast-follow if the unit test proves insufficient against a real regression.
 
-4. CLAUDE.md doc consistency (REQUIRED follow-up, out of scope for THIS doc-only edit). The CLAUDE.md / user-doc line "Sky.Webview v0.1 (desktop, macOS)" and "macOS in v0.1; Linux/Windows in v0.2" contradicts the Rust runtime's shipping Linux-now GTK path (this spec's Q4 platform scope: Linux-now, cross-platform by construction). That CLAUDE.md text MUST be corrected in the SAME change that ships Webview wiring — not before (the arm doesn't exist yet) and not after (a shipped feature with a doc that contradicts it is a stale-claim trap for the next AI-authored app). NOTE: do not edit CLAUDE.md as part of the present doc-only pass; this is recorded here purely as the tracked follow-up to bundle with the implementation change.
+4. CLAUDE.md doc consistency (REQUIRED follow-up, out of scope for THIS doc-only edit). The CLAUDE.md / user-doc line "Ipe.Webview v0.1 (desktop, macOS)" and "macOS in v0.1; Linux/Windows in v0.2" contradicts the Rust runtime's shipping Linux-now GTK path (this spec's Q4 platform scope: Linux-now, cross-platform by construction). That CLAUDE.md text MUST be corrected in the SAME change that ships Webview wiring — not before (the arm doesn't exist yet) and not after (a shipped feature with a doc that contradicts it is a stale-claim trap for the next AI-authored app). NOTE: do not edit CLAUDE.md as part of the present doc-only pass; this is recorded here purely as the tracked follow-up to bundle with the implementation change.
 
 ---
 

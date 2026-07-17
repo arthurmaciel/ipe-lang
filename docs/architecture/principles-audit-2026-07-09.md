@@ -4,7 +4,7 @@ Whole-codebase audit of the **Ipê Rust project only** (`crates/`, `runtime/`,
 `tools/` — `../sky` excluded) against `PRINCIPLES.md`: the 6 ranked principles
 (1 Security · 2 Correctness · 3 Soundness · 4 Efficiency · 5 Completeness ·
 6 Readability), the two fundamental rules (PARSE-DON'T-VALIDATE ·
-MAKE-INVALID-STATES-UNREPRESENTABLE), and **the seal** (skyc exit 0 ⟹ cargo
+MAKE-INVALID-STATES-UNREPRESENTABLE), and **the seal** (ipe exit 0 ⟹ cargo
 build exit 0; concrete-over-generic; no `dyn Any`).
 
 Method: 12 Fable auditors, one per subsystem partition, read-only, each reporting
@@ -14,7 +14,7 @@ every high/critical finding.
 > **Run status — COMPLETE.** All **12 of 12 partitions audited** and the full
 > **adversarial-verify pass ran**. Run 1 (2026-07-08→09) tripped the weekly limit
 > after 7 partitions; the resume (run 2) completed the remaining 5 (`types-seal`,
-> `canon-rules`, `parse-input`, `kernels-diagnostics`, `skyc-tools`) plus every
+> `canon-rules`, `parse-input`, `kernels-diagnostics`, `ipe-tools`) plus every
 > owed verify. **14 high/critical findings confirmed real** by adversarial verify;
 > **1 refuted** — types-seal `unify.rs:373-389` open-record (the verifier found the
 > closed-record guard already covers the case: a caught false positive, recorded
@@ -47,7 +47,7 @@ fall through to `pool`. Two-DB regression test.
 ### 🔴 seal — Multiple `any` occurrences collapse to ONE shared Rust generic
 `crates/sky_lower/src/lower.rs:4331-4343` (+ `:3540-3553`)
 The checker gives every `any` a fresh flex UV per occurrence (`constrain.rs:1576`),
-so `f : any -> any -> Int; f _ _ = 0` called `f "x" 3` is well-typed → skyc exit 0.
+so `f : any -> any -> Int; f _ _ = 0` called `f "x" 3` is well-typed → ipe exit 0.
 But the lowerer maps each param `any` to `IrType::Generic(v)` keyed by the single
 interned `"any"` Symbol → backend emits `fn main_f<T1>(a: T1, b: T1)` → call
 `main_f("x".into(), 3)` fails cargo **E0308**. Exactly the named seal class; the
@@ -85,7 +85,7 @@ Attribute); otherwise pin to the concrete `any` carrier or fail-closed.
 `crates/sky_ir/src/ir.rs:1626-1628`
 Doc claims Match's only constructor validates arm exhaustiveness, but this `pub`
 escape hatch builds a Match from arbitrary arms (empty vec → `match x {}` → E0004,
-no Sky diagnostic). **Fix:** replace with a shape-preserving `map_bodies` combinator
+no Ipê diagnostic). **Fix:** replace with a shape-preserving `map_bodies` combinator
 that cannot change patterns; or `pub(crate)`-seal + debug-assert arm shapes.
 
 ---
@@ -114,11 +114,11 @@ textual pass.
 
 ### 🟡 seal — No emitted-name collision guard for functions (non-injective snake_case)
 `crates/sky_backend_rust/src/lib.rs:341-344`
-`_` is a legal Sky ident char, so `fooBar` and `foo_bar` are distinct values →
+`_` is a legal Ipê ident char, so `fooBar` and `foo_bar` are distinct values →
 both snake-case to `main_foo_bar` → two `fn main_foo_bar` → **E0428**. The enum
 path guards this (`:300-314`) and records dedup with suffixes; the func path
 inserts blind. **Fix:** mirror the enum guard — dedup with numeric suffix or
-fail-closed naming both Sky sources.
+fail-closed naming both Ipê sources.
 
 ### 🟡 seal — TaskSeqSync has no clone-capture handling (use-after-move)
 `crates/sky_backend_rust/src/emit_expr.rs:4860-4865`
@@ -136,7 +136,7 @@ or thunk per use.
 
 ### ⚪ seal — `emit_ident` mangles only Rust keywords (runtime-symbol shadowing)
 `crates/sky_backend_rust/src/lib.rs:818-820`
-Locals emitted verbatim + `pub use sky_runtime::*` → a Sky local named `task_run`/
+Locals emitted verbatim + `pub use sky_runtime::*` → a Ipê local named `task_run`/
 `dict_get` shadows the glob import; a subsequent kernel emission resolves to the
 local → E0618/type error. **Fix:** emit kernel calls fully-qualified
 (`sky_runtime::task::task_run`), or extend the mangle set with the runtime's
@@ -171,7 +171,7 @@ the `exp==0` underflow as jwt.rs does); add the boundary regression.
 
 ### 🟠 seal — `Auth.signToken`/`verifyToken` claims typed flex `var(0)` vs monomorphic `HashMap`
 `crates/sky_types/src/constrain.rs:4859,4862`
-Scheme types claims as `var(0)` (unifies with anything → skyc exit 0) but the wrapper
+Scheme types claims as `var(0)` (unifies with anything → ipe exit 0) but the wrapper
 is pinned to `claims: HashMap<String,String>` (`project.rs:256`, `auth.rs:120`), no
 coercion at lowering → any non-`Dict String String` claims → cargo fail. **Fix:** pin
 both schemes to `dict(string(), string())` (concrete-over-generic); record the Go
@@ -206,7 +206,7 @@ framing, body caps). Residual:
   (`live/csrf.rs:141`): cross-site POST folds forged telemetry into the console (dev
   only; prod fails closed). **Fix:** remove from `is_exempt_path`, or bind dev-open to
   loopback + missing-Origin.
-- ⚪ security — **Sky.Http.Server WS upgrade does no Origin check outside production**
+- ⚪ security — **Ipe.Http.Server WS upgrade does no Origin check outside production**
   (`server.rs:974`): empty `originPatterns` + non-prod ENV → any Origin upgraded (CSWSH).
   **Fix:** default-deny cross-origin when patterns empty, independent of the ENV gate.
 - ⚪ correctness — **`live_max_body_bytes()` lacks the `>0` floor** `server::max_body` has
@@ -271,7 +271,7 @@ Beyond the verified txn-routing hole above:
 
 ## rt-core-soundness (audit complete · ⧗verify-owed)
 
-Posture very strong — **no reachable panic/unwrap/OOB/downcast from well-typed Sky**;
+Posture very strong — **no reachable panic/unwrap/OOB/downcast from well-typed Ipê**;
 fallible paths Maybe/Result-typed, casts clamp-then-narrow, sorts `catch_unwind`-guarded,
 integer overflow wraps (Go parity via emitted `overflow-checks=false`). Residual:
 
@@ -293,7 +293,7 @@ and pins the root to `Int` **without checking the class's accumulated union boun
 Obligations union across a class (`unify.rs:166`); once one entry defaults the class to
 Int, later entries validate against `Structure(Int)` but the defaulting entry's own
 `Append` obligation is never checked. Witness (well-formed, ill-typed): `f x = (x ++ x) + 1`
-— the `Append` super is created first, then `Number`; skyc accepts → cargo fail. Order-dependent
+— the `Append` super is created first, then `Number`; ipe accepts → cargo fail. Order-dependent
 exit-0-then-cargo-fail. **Fix:** in the defaulting arm gate the pin on the class union bounds —
 if `bounds.has_append()` return `super_unsatisfied` (IPE-T0014) instead of defaulting.
 
@@ -323,7 +323,7 @@ a seen-set to `occurs()`; in zonk surface `InfiniteType` on a revisited root; co
 acyclicity comments.
 
 ### ⚪ correctness — `Bool` admitted as Comparable (`True < False` type-checks)
-`crates/sky_types/src/unify.rs:60` (+ `lib.rs:415`) — Elm/Sky exclude Bool from `comparable`;
+`crates/sky_types/src/unify.rs:60` (+ `lib.rs:415`) — Elm/Ipê exclude Bool from `comparable`;
 Ipê's ord set includes it → acceptance divergence. **Fix:** drop `"Bool"` from both gates, or
 record as a sanctioned divergence with a golden test.
 
@@ -352,7 +352,7 @@ or deferred `AmbiguousImport` at the qualified use site. Never blind-overwrite.
   origin, emit `AmbiguousImport`/`DuplicateType`.
 - ⚪ correctness — **A module's own `exposing (typo)` is never validated** → silently exports nothing
   (`resolve.rs:1744`). **Fix:** emit `ExposedButNotDefined` + did-you-mean.
-- ⚪ completeness — **A typo'd `Sky.*`/`Std.*` import is silently skipped** (`resolve.rs:492`).
+- ⚪ completeness — **A typo'd `Ipê.*`/`Ipe.*` import is silently skipped** (`resolve.rs:492`).
   **Fix:** `ModuleNotFound` + Levenshtein over `STDLIB_MODULE_QUALIFIERS`.
 
 ---
@@ -380,13 +380,13 @@ in `lex_ident` (reject once at lex time — parse-don't-validate at the boundary
 
 ## kernels-diagnostics (audit complete · verified)
 
-### 🟠 completeness — Authoritative code list is test-private; `skyc explain` drifted (17 of 85 codes unresolvable) ✓verdict
+### 🟠 completeness — Authoritative code list is test-private; `ipe explain` drifted (17 of 85 codes unresolvable) ✓verdict
 `crates/sky_diagnostics/src/code.rs:451-469`
-The taxonomy's `ALL` slice is under `#[cfg(test)]` and not exported, so skyc hand-mirrors it
-(`skyc/src/lib.rs:41-110`, 68 codes vs 85) — while every rendered diagnostic footer tells users
-to run `skyc explain <code>`. 17 actively-produced codes (IPE-L0114..L0126, IPE-T0014/15, …) are
+The taxonomy's `ALL` slice is under `#[cfg(test)]` and not exported, so ipe hand-mirrors it
+(`ipe/src/lib.rs:41-110`, 68 codes vs 85) — while every rendered diagnostic footer tells users
+to run `ipe explain <code>`. 17 actively-produced codes (IPE-L0114..L0126, IPE-T0014/15, …) are
 unresolvable. **Fix:** promote `ALL` to `pub const ALL_CODES` (single source of truth), delete
-skyc's mirror, iterate the one list in `run_explain`/`suggestions`.
+ipe's mirror, iterate the one list in `run_explain`/`suggestions`.
 
 - 🟡 invalid-states — **`StdlibKernel::ALL` is a hand-maintained 790-entry mirror with no completeness
   tripwire** (`sky_kernels/src/lib.rs:2270`) — the exact drift that caused the HtmlStyleNode id=None
@@ -405,7 +405,7 @@ skyc's mirror, iterate the one list in `run_explain`/`suggestions`.
 
 ---
 
-## skyc-tools (audit complete · verified)
+## ipe-tools (audit complete · verified)
 
 ### 🟠 security — Unsandboxed `cargo fetch` + nightly rustdoc executes untrusted crate build.rs/proc-macros (RCE) ✓verdict
 `tools/sky-ffi-inspect-rs/src/main.rs:1161` (+ `:1286`)
@@ -425,13 +425,13 @@ metadata --offline` build-script denylist + a loud `--allow-build-scripts` gate.
   (`tools/parity-matrix/src/main.rs:915`) → masks `lower_arm_missing` MISMATCH from the CI seal gate.
   **Fix:** anchor the scan to the `fn lower_callee` body + `=> Callee::Kernel(...)` arms.
 - ⚪ correctness — **`extract_imports_from_source` reads `import X` inside multiline strings**
-  (`skyc/src/project.rs:457`) → phantom graph edges / bogus IPE-N0021 cycle. **Fix:** track triple-quote
+  (`ipe/src/project.rs:457`) → phantom graph edges / bogus IPE-N0021 cycle. **Fix:** track triple-quote
   state or reuse the parsed header.
 - ⚪ security — **`write_atomic` predictable temp name (symlink-follow) + drops original file mode**
-  (`skyc/src/lib.rs:1154`): `skyc fix` in a shared dir → symlink clobber; 0600→0644 permission
+  (`ipe/src/lib.rs:1154`): `ipe fix` in a shared dir → symlink clobber; 0600→0644 permission
   downgrade. **Fix:** `create_new` (O_EXCL) + random suffix + `fchmod` to original mode.
 - ⚪ parse-don't-validate — **Invalid `IPE_RUNTIME_DIR` silently ignored** (falls back to the walk;
-  version-skew → seal-adjacent cargo-fail) (`skyc/src/lib.rs:657`). **Fix:** typed error, honour or reject.
+  version-skew → seal-adjacent cargo-fail) (`ipe/src/lib.rs:657`). **Fix:** typed error, honour or reject.
 - ⚪ correctness — **`find_rustdoc_json` falls back to ANY `*.json`** → can bind a stale/wrong crate's
   rustdoc (`ffi-inspect main.rs:1265`). **Fix:** resolve the true lib-target name from `cargo metadata`.
 
@@ -453,7 +453,7 @@ All 14 verified. Security + seal first:
 10. 🟠 `constrain.rs:4859` — pin Auth claims scheme to `dict(string,string)` (seal).
 11. 🟠 `resolve.rs:1586` — qualifier ownership, no last-wins overwrite (correctness).
 12. 🟠 `config.rs:10`/`project.rs:284` — wire real `IPE_DB_URL` (correctness).
-13. 🟠 `code.rs:456` — promote `ALL_CODES` public, delete skyc's drifting mirror (completeness).
+13. 🟠 `code.rs:456` — promote `ALL_CODES` public, delete ipe's drifting mirror (completeness).
 
 Confirmed-real items are mirrored into `BACKLOG.md`
 (Security/hardening tier, AUD-01..15) per the no-deferral rule.

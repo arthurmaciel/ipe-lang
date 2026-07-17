@@ -5,7 +5,7 @@ Demonstrates the Task effect boundary -- the separation between pure functions a
 ## Build & Run
 
 ```bash
-sky build src/Main.ipe
+ipe build src/Main.ipe
 ./sky-out/app
 ```
 

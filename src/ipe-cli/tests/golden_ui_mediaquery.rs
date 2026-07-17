@@ -12,7 +12,7 @@
 //!
 //! ## What is tested
 //!
-//! * `skyc build` compiles `tests/golden/ui_mediaquery/Main.ipe`
+//! * `ipe build` compiles `tests/golden/ui_mediaquery/Main.ipe`
 //!   (canon → types → lower → Rust backend) — i.e. `Ui.mediaQuery` is no
 //!   longer a `deliberately_unbacked_members` hole.
 //! * The emitted Rust project `cargo build`s and the binary runs and exits 0.
@@ -66,7 +66,7 @@ fn ui_mediaquery_compiles_builds_and_renders_markers() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for ui_mediaquery: {:?}",
+        "ipe build must succeed for ui_mediaquery: {:?}",
         built.err()
     );
 

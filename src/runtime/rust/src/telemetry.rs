@@ -1,7 +1,7 @@
-//! In-process telemetry sink — the data the Sky Console renders.
+//! In-process telemetry sink — the data the Ipê Console renders.
 //!
-//! Always compiled (so `Std.Log.*` can feed it regardless of features); the
-//! Sky.Live `console` module exposes it over HTTP. Bounded ring buffers (logs +
+//! Always compiled (so `Ipe.Log.*` can feed it regardless of features); the
+//! Ipe.Live `console` module exposes it over HTTP. Bounded ring buffers (logs +
 //! errors) plus monotonic request/error counters. Mirrors the in-RAM tier of
 //! Go's console (`runtime-go/rt/console*.go`), minus the SQLite spill.
 //!
@@ -26,7 +26,7 @@ pub struct LogEntry {
     pub message: String,
 }
 
-/// One completed trace span (Std.Trace.span).
+/// One completed trace span (Ipe.Trace.span).
 #[derive(Clone)]
 pub struct SpanEntry {
     pub ts_ms: u64,
@@ -101,7 +101,7 @@ fn export_span(ts_ms: u64, name: &str, dur_us: u64, ok: bool) {
 #[inline]
 fn export_span(_ts_ms: u64, _name: &str, _dur_us: u64, _ok: bool) {}
 
-/// Record a completed trace span (called from `Std.Trace.span`).
+/// Record a completed trace span (called from `Ipe.Trace.span`).
 pub fn record_span(name: &str, dur_us: u64, ok: bool) {
     let ts = now_ms();
     push_bounded(
@@ -156,7 +156,7 @@ pub fn production_from_env() -> bool {
 }
 
 /// Floating "🔍 Console" link injected into every dev-mode `text/html` response
-/// — both the Sky.Live page path and every buffered Sky.Http.Server response
+/// — both the Ipe.Live page path and every buffered Ipe.Http.Server response
 /// (Go parity: `devBannerHTML`, `dev_banner.go`). Lives here (the always-compiled
 /// telemetry module) rather than under `live` so the server path (`server.rs`,
 /// where the `live` module is DCE'd out of server-only builds) can reach it too.
@@ -256,7 +256,7 @@ pub fn inject_dev_banner(body: &str, banner: &str) -> String {
 /// cookie name / CSP framing decision within a single request).
 ///
 /// Lives here (the always-compiled telemetry module) rather than under `live`
-/// so the Sky.Http.Server path (`server.rs`) can reach it too — the `live`
+/// so the Ipe.Http.Server path (`server.rs`) can reach it too — the `live`
 /// module is DCE'd out of server-only builds.
 pub fn frame_ancestors() -> Option<&'static str> {
     use std::sync::OnceLock;
@@ -278,7 +278,7 @@ pub fn frame_ancestors() -> Option<&'static str> {
 }
 
 /// Safe-by-default security response headers (Go parity: `setSecurityHeaders`,
-/// live.go:3557 — applied on both the Sky.Live page path and the Sky.Http.Server
+/// live.go:3557 — applied on both the Ipe.Live page path and the Ipe.Http.Server
 /// response path, rt.go:7838). Returned as owned `(name, value)` pairs so each
 /// caller splices them into its response builder only when the header is unset
 /// (an explicit handler override wins).
@@ -305,7 +305,7 @@ pub fn security_headers() -> Vec<(&'static str, String)> {
     h
 }
 
-/// Record a structured log line (called from `Std.Log.*`). Errors also land in
+/// Record a structured log line (called from `Ipe.Log.*`). Errors also land in
 /// the error ring + bump the error counter.
 pub fn record_log(level: &str, message: &str) {
     let ts = now_ms();
@@ -343,7 +343,7 @@ pub fn errors_total() -> u64 {
 // Labeled metric registry + Prometheus exposition (Go parity:
 // telemetry/store.go + prometheus.go). Labeled counters + gauges + histograms
 // keyed by (name, sorted-labels), rendered as canonical 0.0.4 text — giving an
-// operator pointing Prometheus/Grafana at a Rust Sky binary the full
+// operator pointing Prometheus/Grafana at a Rust Ipê binary the full
 // route/status/SSE breakdown.
 // ===========================================
 
@@ -564,7 +564,7 @@ fn metric_help(name: &str) -> &'static str {
         "ipe_live_requests_total" => "Total HTTP requests served, by method and status.",
         "ipe_live_sse_drops_total" => "SSE patches dropped due to a full per-session buffer.",
         "ipe_live_sse_connections_total" => "Total SSE connections opened.",
-        "ipe_live_sessions_active" => "Currently-active Sky.Live sessions.",
+        "ipe_live_sessions_active" => "Currently-active Ipe.Live sessions.",
         "ipe_live_errors_total" => "Total responses with a 5xx status.",
         "ipe_live_request_seconds" => "HTTP request latency in seconds.",
         "ipe_live_msg_seconds" => "Msg-handling latency in seconds, by Msg variant name.",
@@ -748,7 +748,7 @@ mod tests {
         );
 
         // A >64-byte leading ident truncates to 64 without leaking (synthetic
-        // Debug — real Sky variant idents are short; this proves the cap).
+        // Debug — real Ipê variant idents are short; this proves the cap).
         struct LongIdent;
         impl std::fmt::Debug for LongIdent {
             fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {

@@ -5,9 +5,9 @@
 //! standing up oracle-cache scaffolding for a feature with no oracle to
 //! diverge FROM).
 //!
-//! Companion files: `crates/skyc/tests/secret_gates.rs` (negative gates —
+//! Companion files: `crates/ipe/tests/secret_gates.rs` (negative gates —
 //! `mySecret ++ "x"` rejected at compile time) and
-//! `crates/skyc/tests/model_admissibility.rs`
+//! `crates/ipe/tests/model_admissibility.rs`
 //! (`live_model_with_secret_field_is_rejected`, the Model-gate IPE-L0120
 //! case).
 //!
@@ -146,7 +146,7 @@ fn logging_a_secret_directly_never_leaks() {
     );
 }
 
-// ── (c) the one non-Sky-code serialization-adjacent path: Auth's typed boundary ──
+// ── (c) the one non-Ipê-code serialization-adjacent path: Auth's typed boundary ──
 
 /// `Auth.signToken` / `Auth.verifyToken` are re-typed to take `Secret` (not
 /// `String`) at the signing-key position. Full sign -> verify round trip
@@ -164,7 +164,7 @@ fn auth_sign_verify_round_trip_with_secret_key() {
 
 // ── Pure compile-only smoke (always runs, no IPE_E2E / no cargo) ───────────
 
-/// All five fixtures above must at least `skyc`-compile cleanly even when
+/// All five fixtures above must at least `ipe`-compile cleanly even when
 /// `IPE_E2E` is unset (CI without the heavy cargo-build tier still catches a
 /// type-check regression).
 #[test]

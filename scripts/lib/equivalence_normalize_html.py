@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Canonicalise a Sky.Live page's #sky-root subtree for Go≡Rust equivalence.
+"""Canonicalise a Ipe.Live page's #sky-root subtree for Go≡Rust equivalence.
 
 The Go and Rust backends are committed to BEHAVIOURAL parity, not byte-identical
 output: several surface forms are legitimate implementation freedoms that this
@@ -19,13 +19,13 @@ normaliser collapses so a diff shows only behaviourally-meaningful divergences:
     Go bug this used to hide (`Math.min`/`Math.max` truncating Float args to Int,
     anzellai/sky PR #136) landed a fix in Go `v0.17.1`; the pinned oracle
     (`tools/oracle/README.md`, currently `v0.17.3`) is newer, so the Go side no
-    longer produces truncated coordinates. `Sky.Core.String.fromFloat` in this
+    longer produces truncated coordinates. `Ipe.String.fromFloat` in this
     repo's Rust runtime (`src/runtime/rust/src/sky_runtime/string.rs`) is a byte-for-byte
     port of Go's `strconv.FormatFloat(f, 'g', -1, 64)`, verified against real
     oracle probes — so there is no float-*formatting* divergence between the two
     backends to paper over either. A blanket `'#'` mask on every SVG coordinate
     was therefore a Rule-1 false-green hole (BACKLOG #110 sub-item 1): a genuine
-    skyc coordinate regression (wrong scale, off-by-one, wrong precision) would
+    ipe coordinate regression (wrong scale, off-by-one, wrong precision) would
     render as an empty diff. Numeric tokens inside a coordinate-bearing SVG attr
     (`d`, `x`, `y`, `points`, `viewBox`, …) are rounded to a fixed tolerance
     (`SVG_COORD_TOLERANCE_DIGITS`) and re-serialised canonically: this still
@@ -262,7 +262,7 @@ class RootExtractor(HTMLParser):
 
 
 def extract_sky_root(html):
-    """Return the #sky-root element subtree (the rendered Std.Ui view), or '' —
+    """Return the #sky-root element subtree (the rendered Ipe.Ui view), or '' —
     we compare the VIEW, not the page shell (Go inlines client JS, Rust externalises
     it; the shell legitimately differs)."""
     if 'id="sky-root"' not in html:

@@ -3,10 +3,10 @@
 
 Covers BACKLOG #110 sub-item 1: `equivalence_normalize_html.py` used to mask every
 SVG coordinate attribute to the literal `'#'` before diffing Go-oracle output
-against skyc/Rust output. That is a Rule-1 false-green hole (see
+against ipe/Rust output. That is a Rule-1 false-green hole (see
 docs/architecture/go-oracle-fixture-corpus-plan.md §3.3 and
 docs/architecture/class2-tier1-sweep-fix-spec-2026-07-09.md §3.1): a genuine
-skyc SVG-coordinate regression (wrong scale, off-by-one, wrong precision)
+ipe SVG-coordinate regression (wrong scale, off-by-one, wrong precision)
 would render as an empty diff under the blanket mask.
 
 The tests below prove:
@@ -42,8 +42,8 @@ def old_mask(v):
 
 
 def page_with_bar(x, y, width, height):
-    """A minimal Sky.Live #sky-root page carrying one SVG <rect> — the shape
-    Std.Ui.Chart.bar emits (src/stdlib/Std/Ui/Chart.ipe)."""
+    """A minimal Ipe.Live #sky-root page carrying one SVG <rect> — the shape
+    Ipe.Ui.Chart.bar emits (src/stdlib/Std/Ui/Chart.ipe)."""
     return (
         '<html><body><div id="sky-root">'
         '<svg width="480" height="200">'
@@ -124,7 +124,7 @@ class OldMaskWasAFalseGreenHoleTests(unittest.TestCase):
 
     def test_old_mask_would_have_hidden_a_coordinate_regression(self):
         correct = page_with_bar(x=10, y=20, width=40, height=80)
-        # A skyc regression that emits the WRONG bar height (e.g. the
+        # A ipe regression that emits the WRONG bar height (e.g. the
         # Math.min/max float-truncation class of bug, or a wrong-scale bug):
         regressed = page_with_bar(x=10, y=20, width=40, height=999)
 

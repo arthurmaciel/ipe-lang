@@ -22,10 +22,10 @@
 //!
 //! ```text
 //! # green suite:
-//! IPE_E2E=1 cargo test -p skyc --test golden_i130_seal
+//! IPE_E2E=1 cargo test -p ipe --test golden_i130_seal
 //!
 //! # gate check only (fast):
-//! cargo test -p skyc --test golden_i130_seal
+//! cargo test -p ipe --test golden_i130_seal
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -98,7 +98,7 @@ fn c01_enum_capture_fix1() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for enum_capture: {:?}",
+        "ipe build must succeed for enum_capture: {:?}",
         built.err()
     );
 
@@ -145,7 +145,7 @@ fn c02_record_capture_fix1() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for record_capture: {:?}",
+        "ipe build must succeed for record_capture: {:?}",
         built.err()
     );
 
@@ -193,7 +193,7 @@ fn c13_complex_arg_hoist_t4() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for complex_arg_hoist: {:?}",
+        "ipe build must succeed for complex_arg_hoist: {:?}",
         built.err()
     );
 
@@ -266,7 +266,7 @@ fn c14_nested_lambda_noncopy_promoted_accepts() {
 /// Same audit flipped ServerRequest/ServerResponse/ServerRoute/ServerCookie/
 /// `HttpRequest` to `CloneOk` (all derive `Clone`).
 ///
-/// skyc must exit 0.  The cargo/runtime layer is covered by the
+/// ipe must exit 0.  The cargo/runtime layer is covered by the
 /// 30-sse-server-demo sweep entry (a server fixture can't run-to-exit here).
 #[test]
 fn c05_streamwriter_capture_forward() {
@@ -301,12 +301,12 @@ fn c05_streamwriter_capture_forward() {
 /// captures `header`/`body`; if the re-embedded box MOVED them out on the
 /// first call the wrapper would degrade to `FnOnce` → `server_stream_stream`'s
 /// `Fn` bound rejects it (2x `E0507: cannot move out of a captured variable
-/// in an Fn closure`, AFTER `skyc` exit 0 — a SEAL break).
+/// in an Fn closure`, AFTER `ipe` exit 0 — a SEAL break).
 ///
 /// So the arm pre-clones every free local the handler captures INSIDE the
 /// wrapper body, so the box moves fresh clones and the wrapper stays `Fn`.
 ///
-/// Unlike `c05` (skyc exit-0 only), this asserts the EMITTED CRATE cargo-builds
+/// Unlike `c05` (ipe exit-0 only), this asserts the EMITTED CRATE cargo-builds
 /// — the layer where this surfaces. A listening-server fixture cannot
 /// run-to-exit, so a successful `cargo build` IS the acceptance. E2E-gated
 /// (`IPE_E2E=1`) so the default fast pass stays emit-only.
@@ -335,7 +335,7 @@ fn c06_stream_string_capture_seal() {
         return;
     }
     // Build-only: the fixture is a listening server, so it cannot run-to-exit.
-    // A successful cargo build is the seal (skyc-0 ⇒ cargo builds).
+    // A successful cargo build is the seal (ipe-0 ⇒ cargo builds).
     let built_bin = oracle::build_rust_binary("stream_string_capture", &out);
     assert!(
         built_bin.is_ok(),

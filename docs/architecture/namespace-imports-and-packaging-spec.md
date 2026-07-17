@@ -2,9 +2,9 @@
 
 > **Status: Accepted (design) — not yet implemented.** Becomes an ADR once
 > landed (per `docs/adr/README.md`). Supersedes `flat-namespace-redesign.md`
-> (which covered only the Sky.Core+Std flatten; this subsumes it).
+> (which covered only the Ipê.Core+Std flatten; this subsumes it).
 >
-> Scope: the canonical import surface for the language after the Sky→Ipê rename.
+> Scope: the canonical import surface for the language after the Ipê→Ipê rename.
 > Governs first-party stdlib, the FFI boundary, local modules, and third-party
 > packages — and which library *origins* are allowed for each.
 
@@ -25,7 +25,7 @@ The namespace *encodes the trust boundary*:
   FFI-specific rules (sandbox, eff/`Task` typing, unsafe audit) exactly at these
   sites.
 
-Collapses today's `Sky.Core.*` **and** `Std.*` into the single `Ipe.*` surface.
+Collapses today's `Ipe.*` **and** `Ipe.*` into the single `Ipe.*` surface.
 
 ### D2. `Ipe.` is canonical; common core is auto-preluded bare
 
@@ -51,7 +51,7 @@ every future stdlib module a backward-compat break.
 
 ### D4. Names describe *what*; the manifest/lockfile owns *where* + *which version*
 
-Reject Sky's `import Github.Com.Stripe.StripeGo.V84 as Stripe` pattern — baking
+Reject Ipê's `import Github.Com.Stripe.StripeGo.V84 as Stripe` pattern — baking
 origin+version into the module name is brittle (a repo move breaks source),
 verbose, and leaks infra into code. Instead:
 
@@ -92,7 +92,7 @@ deps). Adopt the Go model:
 
 ## Migration relationship
 
-- Executes as part of / after the Sky→Ipê rename (`docs/rename/`), since it
+- Executes as part of / after the Ipê→Ipê rename (`docs/rename/`), since it
   renames the stdlib import surface. The rename's rule table already **DEFERS**
   the stdlib namespace to this redesign — this spec is that deferred work.
 - `flat-namespace-redesign.md` is superseded by this document.

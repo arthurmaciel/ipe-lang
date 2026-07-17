@@ -10,7 +10,7 @@ import Ipe.Log exposing (println)
 
 -- BACKLOG #190 regression — a generic-typed callback boxed as `+ 'static`.
 --
--- Pre-fix: `skyc build` exits 0, but the emitted Rust fails `cargo build` with
+-- Pre-fix: `ipe build` exits 0, but the emitted Rust fails `cargo build` with
 -- E0310 ("the parameter type `T1` may not live long enough") at the
 -- `Box::new(pair_to_attr)` the `List.map` call emits. `pairToAttr` is generic
 -- over `msg` (its result is `Attribute msg`), so coercing it to the mapper slot
@@ -23,7 +23,7 @@ import Ipe.Log exposing (println)
 --
 -- Fix (`BoundSet::STATIC` + `body_boxes_generic_callback` in `sky_lower`): a
 -- generic that flows into a boxed `+ 'static` callback gains the `'static`
--- lifetime bound. Every concrete Sky type is `'static`, so it never breaks a
+-- lifetime bound. Every concrete Ipê type is `'static`, so it never breaks a
 -- caller.
 type Msg
     = NoOp

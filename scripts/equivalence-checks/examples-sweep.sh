@@ -267,7 +267,7 @@ equivalence_for() {
       fi
       scen="$(scenario_for "$n")"
       if [ "$WEB_OK" = 1 ]; then
-        # Full browser scenario — the gold standard for Sky.Live equivalence.
+        # Full browser scenario — the gold standard for Ipe.Live equivalence.
         exercise_live "$rbin" "$n" "$(free_port)" "$scen" "$rsl" || rok=0; reap
         build_go "$d" "$n" || { printf 'go-ref-broken\tGo build failed\n'; return 0; }
         exercise_live "$d/sky-out/app" "$n" "$(free_port)" "$scen" "$gol" || gok=0; reap
@@ -277,11 +277,11 @@ equivalence_for() {
         else printf 'DIFFER\tRust fails scenario %s where Go passes\n' "$scen"; fi
       else
         # No browser stack — fall back to normalised HTML body comparison.
-        # Sky.Live serves a full HTML page at GET / with id="sky-root"; the
+        # Ipe.Live serves a full HTML page at GET / with id="sky-root"; the
         # normaliser collapses implementation-freedom surface (sky-id format,
         # attr order, event encoding, style delivery) so the diff is
         # behaviourally meaningful. Same exercise_server_equiv path used for
-        # Sky.Http.Server body mode, but driven against a Live server.
+        # Ipe.Http.Server body mode, but driven against a Live server.
         build_go "$d" "$n" || { printf 'go-ref-broken\tGo build failed\n'; return 0; }
         local res equivalencelog; equivalencelog="$(diag "$n" equivalence)"
         res="$(exercise_server_equiv "$d/sky-out/app" "$rbin" "$d" "$equivalencelog")"

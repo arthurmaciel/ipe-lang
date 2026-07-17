@@ -101,7 +101,7 @@ pub fn assert_emitted_project_matches_golden_dir(emitted_out: &Path, golden_dir:
         pairs.push(("Cargo.toml".to_owned(), emitted_out.join("Cargo.toml")));
     }
 
-    // Per-Sky-module split files: when the emitted
+    // Per-Ipê-module split files: when the emitted
     // project splits into `src/ipe_mods/<mod>.rs`, each is compared byte-for-byte
     // against `<golden_dir>/ipe_mods/<mod>.rs`. The comparison is SYMMETRIC —
     // the union of the emitted set and the golden set is walked, so an emitted
@@ -166,9 +166,9 @@ pub fn assert_emitted_project_matches_golden_dir(emitted_out: &Path, golden_dir:
     );
 }
 
-/// Concatenate the text of every emitted Sky-side `.rs` file under
+/// Concatenate the text of every emitted Ipê-side `.rs` file under
 /// `<emitted_out>/src` — `src/main.rs` plus every `src/ipe_mods/*.rs` the
-/// per-Sky-module split may have written — into ONE
+/// per-Ipê-module split may have written — into ONE
 /// string, so a substring assertion is robust to WHICH file the split placed
 /// a symbol in.
 ///
@@ -225,7 +225,7 @@ pub fn read_all_emitted_src(emitted_out: &Path) -> String {
     combined
 }
 
-/// Outcome of building and running an emitted Sky project.
+/// Outcome of building and running an emitted Ipê project.
 // Fields are only accessed from E2E test functions (`build_and_run_emitted`
 // callers), which are absent from test binaries that skip the E2E suite (e.g.
 // `golden_mm`).  `build_and_run_emitted` itself carries its own allow;
@@ -242,7 +242,7 @@ pub struct RunOutcome {
 /// running it, returning `Ok(())` on a successful `cargo build` or `Err` with
 /// cargo's stderr. Used by SEAL goldens whose kernel is network-effectful (e.g.
 /// `Email.send`) so a run has no deterministic stdout — the SEAL proof there is
-/// that skyc-0 ⇒ the emitted crate `cargo build`s. Delegates to
+/// that ipe-0 ⇒ the emitted crate `cargo build`s. Delegates to
 /// [`oracle::build_rust_binary`].
 #[allow(dead_code)] // not every golden test binary exercises every helper
 pub fn build_emitted(golden_name: &str, emitted_dir: &Path) -> Result<(), String> {
@@ -428,7 +428,7 @@ pub fn build_and_run_stack_limited(
 /// than diffing against a stale `expected_go.txt`. A missing oracle is likewise
 /// a hard failure — never a skip. When the golden is marked `oracle_divergence`
 /// (the Go oracle fails on this shape, or we follow a different target), the
-/// comparison is against skyc's own recorded-correct output.
+/// comparison is against ipe's own recorded-correct output.
 #[allow(dead_code)] // exercised by the goldens that opt into cached parity
 pub fn assert_go_parity(golden_name: &str, golden_dir: &Path, skyc_stdout: &str) {
     let outcome = oracle::check_parity(golden_dir, golden_name, skyc_stdout);

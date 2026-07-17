@@ -2,7 +2,7 @@
 //! `Ipe.Ui.Grid` module (26-ui-showcase: `__gridTracks` sentinel silently
 //! dropped by the web renderer's `SafeCssPropertyName` gate).
 //!
-//! `Ipe.Ui.Grid.columns`/`rows`/`tracks` are pure-Sky wrappers over the native
+//! `Ipe.Ui.Grid.columns`/`rows`/`tracks` are pure-Ipê wrappers over the native
 //! `Ui.gridTracksRaw : String -> String -> Attribute msg` kernel
 //! (`KernelFn::UiGridTracksRaw`), which constructs `AttrGridTracks(cols, rows)`.
 //! This test proves the whole seam:
@@ -75,15 +75,15 @@ fn grid_module_resolves_and_emits_kernel() {
     let (emit, res) = build_grid_project("emit");
     assert!(
         res.is_ok(),
-        "skyc build with `import Ipe.Ui.Grid` must succeed \
+        "ipe build with `import Ipe.Ui.Grid` must succeed \
          (native gridTracksRaw + compiled module): {:?}",
         res.err()
     );
 
     // The compiled `Ipe.Ui.Grid` module lowers to its OWN Rust file under
-    // `src/ipe_mods/` once the per-Sky-module split
+    // `src/ipe_mods/` once the per-Ipê-module split
     // fires — this program has two distinct homes (`Main` + `Ipe.Ui.Grid`).
-    // Scan the WHOLE emitted Sky-side tree (main.rs + ipe_mods/*.rs) so the
+    // Scan the WHOLE emitted Ipê-side tree (main.rs + ipe_mods/*.rs) so the
     // assertion holds wherever the split correctly placed the helper calls.
     let emitted = support::read_all_emitted_src(&emit);
 

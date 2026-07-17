@@ -21,7 +21,7 @@ type Kind
 
 
 -- The `Piece` constructor (`Piece : Kind -> Colour -> Piece`) is
--- auto-generated from the type alias above (Sky v0.7.26+).
+-- auto-generated from the type alias above (Ipê v0.7.26+).
 oppositeColour : Colour -> Colour
 oppositeColour colour =
     case colour of

@@ -7,11 +7,11 @@ before invoking `equivalence_normalize_html.py`) passes every body through RAW a
 the DIFFER is a plain byte diff. The row-note wording "normalized-HTML
 fallback" describes the *mode* the sweep fell back to for live-shaped
 examples, not what actually ran here — all four are `Server.listen`
-(Sky.Http.Server) apps on the `body` equivalence mode, raw compare.
+(Ipe.Http.Server) apps on the `body` equivalence mode, raw compare.
 
 ## Per-example verdict + evidence
 
-Method: fresh `skyc` (`master-gate-target/debug/skyc`, built at HEAD
+Method: fresh `ipe` (`master-gate-target/debug/ipe`, built at HEAD
 `1ba31988`) → `skyc build sky.toml --out sky-out/rust` → `cargo build` →
 Go reference via pinned `tools/oracle/bin/sky` (v0.17.3, `IPE_RUNTIME_DIR`
 unset) → boot each binary, `curl` every comparable GET route, full-body
@@ -24,9 +24,9 @@ unset) → boot each binary, `curl` every comparable GET route, full-body
 | 32-sse-relay | `/` (`/upstream` `/relay` skipped: streaming) | REAL — banner-only | Sole diff = same anchor appended. |
 | 33-websocket-echo | `/` (`/ws` skipped: ws) | REAL — banner-only | Full-document page: Go injects the anchor before `</body>`; Rust body otherwise byte-identical incl. `</body></html>`. |
 
-One class, four instances: **Go's Sky.Http.Server injects the dev-console
+One class, four instances: **Go's Ipe.Http.Server injects the dev-console
 banner into every `text/html` response in dev mode; our Rust
-Sky.Http.Server never does.** Every other byte of every compared route is
+Ipe.Http.Server never does.** Every other byte of every compared route is
 identical — codegen, HTML escaping, headers-to-body behaviour, JSON and
 redirect routes all match.
 
@@ -49,11 +49,11 @@ response:
       `/_sky/console`, attribute-escaped — **not ported**. ← the observed diff.
 3. `MountEmbeddedConsole(mux)` + `MountObservabilityEndpoints(mux)` before
    user routes (the surface the banner links to) — **not ported** for
-   Sky.Http.Server; our `server_listen` (server.rs:670) mounts only user
+   Ipe.Http.Server; our `server_listen` (server.rs:670) mounts only user
    routes + CatchPanicLayer.
 
 Our runtime HAS a byte-exact port of `devBannerHTML` — but only on the
-Sky.Live path: `live/mod.rs::dev_console_banner` (private, called by
+Ipe.Live path: `live/mod.rs::dev_console_banner` (private, called by
 `render_page_full`; test `banner_byte_matches_go_dev_banner_markup` pins
 Go's exact bytes). It is unreachable from the server path twice over:
 private fn, and the `live` feature is OFF in emitted server apps (example
@@ -63,7 +63,7 @@ in its `server.rs` — we faithfully mirrored a hole; the Go runtime is the
 oracle, and the oracle injects.
 
 Structural framing (fix-the-structure): `to_axum_response` is the single
-choke point every buffered Sky.Http.Server response passes through. Go's
+choke point every buffered Ipe.Http.Server response passes through. Go's
 dev-mode post-processing pipeline belongs there *as a unit*; porting it
 piecemeal (headers yes, CSRF-inject no, banner no) is exactly how this
 class of silent divergence arises.
@@ -97,7 +97,7 @@ class of silent divergence arises.
   the pinned Go-bytes test against the shared helper; (c) E2E golden or
   sweep re-run — the four examples flip DIFFER → `equivalence-body N`.
 
-**Phase 2 — console + observability mounts for Sky.Http.Server
+**Phase 2 — console + observability mounts for Ipe.Http.Server
 (completeness, separate backlog item).** Go mounts `MountEmbeddedConsole`
 + `MountObservabilityEndpoints` on the server mux before user routes; our
 `server_listen` mounts nothing, so the injected banner's `/_sky/console`

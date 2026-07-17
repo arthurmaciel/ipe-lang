@@ -1,5 +1,5 @@
 //! Gate: a record `type alias` introduces a value-level
-//! auto-constructor (IPE-N0001 fix). The `skyc` pipeline must emit a project
+//! auto-constructor (IPE-N0001 fix). The `ipe` pipeline must emit a project
 //! that builds and RUNS with the constructor binding fields **positionally in
 //! declared order** — including the decisive same-typed order oracle, partial
 //! application, a parametric record alias, and a bare reference reified into a
@@ -119,8 +119,8 @@ fn record_ctor_and_literal_share_one_struct() {
 /// NESTED inside a derive carrier (`List (Int -> Bool)`) must synthesise NO
 /// constructor: the earlier head-only gate saw `Con "List"` (not `Lambda`) and
 /// synthesised one, so the backend emitted a `#[derive(Clone, Debug, PartialEq)]`
-/// struct over a `Box<dyn Fn>` field — skyc exit-0 then a cargo failure. This
-/// emit-only check (default suite) confirms skyc succeeds AND that no struct for
+/// struct over a `Box<dyn Fn>` field — ipe exit-0 then a cargo failure. This
+/// emit-only check (default suite) confirms ipe succeeds AND that no struct for
 /// the alias is emitted (no ctor). The companion `…_builds_and_runs` (`IPE_E2E`)
 /// proves the emitted project actually cargo-builds — the decisive seal proof.
 #[test]
@@ -137,7 +137,7 @@ fn seal_fn_field_alias_emits_no_struct() {
     let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve: {:?}", runtime.err());
     let Ok(runtime) = runtime else { return };
-    // skyc MUST succeed — a function-embedding alias that is merely NAMED
+    // ipe MUST succeed — a function-embedding alias that is merely NAMED
     // (declared, never constructed) is a valid program.
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
@@ -163,8 +163,8 @@ fn seal_fn_field_alias_emits_no_struct() {
 }
 
 /// SEAL PROOF (`IPE_E2E`). The emitted project for the function-embedding
-/// record alias must actually cargo-BUILD and run clean — skyc exit-0 AND cargo
-/// exit-0. This is the exact class that regressed: skyc-success without a matching
+/// record alias must actually cargo-BUILD and run clean — ipe exit-0 AND cargo
+/// exit-0. This is the exact class that regressed: ipe-success without a matching
 /// cargo-success is the seal violation.
 #[test]
 fn seal_fn_field_alias_builds_and_runs() {
@@ -184,7 +184,7 @@ fn seal_fn_field_alias_builds_and_runs() {
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
     let built = ipe::build(&entry, &out, &runtime);
-    assert!(built.is_ok(), "skyc build failed: {:?}", built.err());
+    assert!(built.is_ok(), "ipe build failed: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted("record_ctor_fn_field", &out);
     assert_eq!(
@@ -199,8 +199,8 @@ fn seal_fn_field_alias_builds_and_runs() {
 /// EXEMPTED the opaque head (it mirrored the lowerer's function-embedding
 /// payload-scan) and synthesised one, so the backend emitted a
 /// `#[derive(Clone, Debug, PartialEq)]` + `impl IpeStringify` struct over the
-/// non-derivable `Decoder` value — skyc exit-0 then cargo-101 (the seal hole).
-/// This emit-only check (default suite) confirms skyc succeeds AND that no struct
+/// non-derivable `Decoder` value — ipe exit-0 then cargo-101 (the seal hole).
+/// This emit-only check (default suite) confirms ipe succeeds AND that no struct
 /// for the alias is emitted (no ctor). The companion `…_builds_and_runs`
 /// (`IPE_E2E`) proves the emitted project actually cargo-builds.
 #[test]
@@ -217,7 +217,7 @@ fn seal_opaque_field_alias_emits_no_struct() {
     let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve: {:?}", runtime.err());
     let Ok(runtime) = runtime else { return };
-    // skyc MUST succeed — an opaque-wrapper-field alias that is merely NAMED
+    // ipe MUST succeed — an opaque-wrapper-field alias that is merely NAMED
     // (declared, never constructed) is a valid program.
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
@@ -245,7 +245,7 @@ fn seal_opaque_field_alias_emits_no_struct() {
 
 /// ROUND-2 SEAL PROOF (`IPE_E2E`). The emitted project for the
 /// opaque-wrapper-field record alias must actually cargo-BUILD and run clean —
-/// skyc exit-0 AND cargo exit-0. Round-1 regressed exactly here: skyc-success
+/// ipe exit-0 AND cargo exit-0. Round-1 regressed exactly here: ipe-success
 /// without a matching cargo-success (E0277/E0369/E0599 over `Decoder`).
 #[test]
 fn seal_opaque_field_alias_builds_and_runs() {
@@ -265,7 +265,7 @@ fn seal_opaque_field_alias_builds_and_runs() {
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
     let built = ipe::build(&entry, &out, &runtime);
-    assert!(built.is_ok(), "skyc build failed: {:?}", built.err());
+    assert!(built.is_ok(), "ipe build failed: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted("record_ctor_opaque_field", &out);
     assert_eq!(
@@ -277,10 +277,10 @@ fn seal_opaque_field_alias_builds_and_runs() {
 
 /// ROUND-2 SEAL FAIL-CLOSED. The same opaque-wrapper-field alias, but the
 /// alias name is USED as a value constructor (`D Decode.int`). Because synthesis
-/// declined, no top-level value `D` exists, so this must fail CLOSED at skyc with
-/// IPE-N0001 — NEVER skyc-0-then-cargo-fail. `ipe::build` must return `Err` and
+/// declined, no top-level value `D` exists, so this must fail CLOSED at ipe with
+/// IPE-N0001 — NEVER ipe-0-then-cargo-fail. `ipe::build` must return `Err` and
 /// emit nothing. This is the decisive contrast to the seal hole: the same source
-/// shape that round-1 emitted-then-cargo-failed is now rejected at skyc.
+/// shape that round-1 emitted-then-cargo-failed is now rejected at ipe.
 #[test]
 fn seal_opaque_field_used_as_ctor_fails_closed() {
     let root = repo_root();
@@ -299,12 +299,12 @@ fn seal_opaque_field_used_as_ctor_fails_closed() {
     assert!(
         built.is_err(),
         "using an opaque-wrapper-field alias as a ctor must fail CLOSED at skyc, \
-         not skyc-0-then-cargo-fail"
+         not ipe-0-then-cargo-fail"
     );
     // Fail-closed at the name-resolution stage: no `main.rs` was emitted.
     assert!(
         !out.join("src").join("main.rs").exists(),
-        "a fail-closed skyc build must not emit a project"
+        "a fail-closed ipe build must not emit a project"
     );
 }
 

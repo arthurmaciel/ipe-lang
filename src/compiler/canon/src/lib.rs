@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 //! `ipe_canon` — name resolution / canonicalisation for the Milestone-0 subset
-//! of Sky.
+//! of Ipê.
 //!
 //! Entry point: [`canonicalise`]. It consumes a [`ipe_syntax::Module`] (the raw
 //! parse tree) plus a mutable [`Interner`] and produces a name-resolved
@@ -117,7 +117,7 @@ pub fn canonicalise(m: &ipe_syntax::Module, interner: &mut Interner) -> DResult<
 /// Unlike [`canonicalise`], this function:
 /// * validates `m`'s declared module name against `expected_path` — emits
 ///   [`ipe_diagnostics::NameError::ModulePathMismatch`] when they disagree
-/// * rejects `Sky` / `Std` as the first path segment — emits
+/// * rejects `Ipê` / `Std` as the first path segment — emits
 ///   [`ipe_diagnostics::NameError::ReservedNamespace`]
 /// * resolves each local `import` against `deps`, injecting exports into the
 ///   name-resolution environment — emits
@@ -911,7 +911,7 @@ mod tests {
 
     #[test]
     fn unknown_stdlib_alias_stays_fail_closed() {
-        // A `Sky.*` path with no registered canonical qualifier must NOT invent
+        // A `Ipê.*` path with no registered canonical qualifier must NOT invent
         // one: the alias reference surfaces UnknownModule at its use site.
         let src = "module Main exposing (main)\n\
                    import Ipe.Nonexistent as N\n\n\
@@ -939,7 +939,7 @@ mod tests {
     #[test]
     fn stdlib_module_paths_target_a_known_qualifier() {
         // Anti-drift (no dangling target): every canonical named in the path
-        // table is a real registered qualifier, and every path is `Sky.*`/`Ipe.*`.
+        // table is a real registered qualifier, and every path is `Ipê.*`/`Ipe.*`.
         let mut i = Interner::new();
         let home = vec![i.intern("Main").expect("intern Main")];
         let env = Env::initial(home, &mut i).expect("build env");
@@ -1830,7 +1830,7 @@ mod tests {
     /// **Scope note (this crate has no dependency on `ipe_types`):** this
     /// test proves `QUALIFIERS` (env.rs) stays consistent with
     /// `StdlibKernel::ALL` — it does NOT re-verify the type-scheme table's
-    /// own fail-closed behaviour. That guarantee (`skyc`'s exit-0-then-
+    /// own fail-closed behaviour. That guarantee (`ipe`'s exit-0-then-
     /// cargo-fail class `PRINCIPLES.md` calls out: a kernel the resolver
     /// recognises but the type-scheme table does not cover) is a SEPARATE
     /// invariant owned by
@@ -1925,7 +1925,7 @@ mod tests {
         //   Basics, Attr, Event                    — non-module prelude names
         //   Ipe.Html, Ipe.Ui, Ipe.Html.Attributes,
         //   Ipe.Html.Events, Ipe.Live, Ipe.Tui, Ipe.Webview  — Ipe.* aliases
-        //   Ipe.Html, Ipe.Ui, Ipe.Live, Ipe.Tui    — Sky.* aliases
+        //   Ipe.Html, Ipe.Ui, Ipe.Live, Ipe.Tui    — Ipê.* aliases
         //
         // Note: QUALIFIER_ALIASES clone their members INCLUDING the id, so the
         // alias entries are correct by construction.  The exclusion exists only
@@ -1968,7 +1968,7 @@ mod tests {
         // of an untracked hole the gate would otherwise panic on.
         //
         // Two are deliberate holdouts documented in
-        // `crates/skyc/tests/golden_core_stdlib.rs`'s header comment:
+        // `crates/ipe/tests/golden_core_stdlib.rs`'s header comment:
         //   - `String.toChar` — no runtime fn; ambiguous Char-vs-Maybe-Char
         //     semantics.
         //   - `Basics.toString` — polymorphic `a -> String` needs a
@@ -2610,7 +2610,7 @@ mod tests {
         // — `List (Int -> Bool)` (head `Con "List"`, not `Lambda`) — was MISSED by
         // the earlier head-only gate: a ctor was synthesised, the backend emitted a
         // `#[derive(Clone, Debug, PartialEq)]` struct over a `Box<dyn Fn>` field,
-        // and skyc exited 0 while cargo failed (the seal violation). The recursive
+        // and ipe exited 0 while cargo failed (the seal violation). The recursive
         // gate now declines synthesis, so merely NAMING the alias builds clean.
         let cases = [
             "type alias T =\n    { xs : List (Int -> Int) }\n",
@@ -2639,7 +2639,7 @@ mod tests {
         // struct field — its runtime rep (`Box<dyn Fn>` / boxed-thunk enum /
         // `Pin<Box<dyn Future>>`) impls no Clone/Debug/PartialEq/IpeStringify.
         // Round-1 synthesised a ctor here, so the backend emitted a
-        // `#[derive(…)]` struct over the wrapper and skyc-0 then cargo-101 (the
+        // `#[derive(…)]` struct over the wrapper and ipe-0 then cargo-101 (the
         // seal hole). The struct-derivability gate now DECLINES synthesis, so
         // merely NAMING the alias builds clean and no dangling ctor value exists.
         // Use only builtin type args (`Int`, `Error`) so the test is not
@@ -2751,7 +2751,7 @@ mod tests {
         );
     }
 
-    // ── `import Sky.*/Ipe.* exposing (member)` brings stdlib VALUE members
+    // ── `import Ipê.*/Ipe.* exposing (member)` brings stdlib VALUE members
     // into UNQUALIFIED scope ─────────────────────────────────────────────────
 
     #[test]
@@ -2867,7 +2867,7 @@ mod tests {
         );
     }
 
-    // ── `import Sky.*/Ipe.* exposing (..)` floods the low-priority wildcard
+    // ── `import Ipê.*/Ipe.* exposing (..)` floods the low-priority wildcard
     // tier ─────────────────────────────────────────────────────────────────────
 
     #[test]
@@ -3208,7 +3208,7 @@ mod tests {
     // IPE-N0010 regression: type-alias name coinciding with an ADT constructor
     // must NOT produce a DuplicateValue error.  The TYPE namespace (`type alias`)
     // and the CONSTRUCTOR namespace (`type … = Ctor`) are distinct in both
-    // Elm and Sky.  Reproduces the failure seen in
+    // Elm and Ipê.  Reproduces the failure seen in
     // examples/25-sky-console/src/State.ipe where `type Tab = Overview | …`
     // and `type alias Overview = { … }` coexist in the same module.
     // ─────────────────────────────────────────────────────────────────────────

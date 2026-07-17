@@ -21,7 +21,7 @@ module Main exposing (main)
 --      serving — no hand-rolled Ipe.Http.Server, no second
 --      process, no `webview_go` shim.
 --
---   2. The same Sky source you'd write for a Ipe.Live page works
+--   2. The same Ipê source you'd write for a Ipe.Live page works
 --      for a Ipe.Webview desktop app — `Ipe.Html.script`,
 --      `Ipe.Html.link`, `Ipe.Html.node "canvas"`, etc all render
 --      identically.

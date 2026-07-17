@@ -1,4 +1,4 @@
-//! Sky.Tui — raw-byte key decoder.
+//! Ipe.Tui — raw-byte key decoder.
 //!
 //! Pure: decodes one keypress from a raw terminal byte buffer into a
 //! `(TuiKey, consumed)` pair, byte-for-byte mirroring the Go backend's

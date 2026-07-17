@@ -3,7 +3,7 @@ import Ipe.Prelude exposing (..)
 
 -- Same top-level constructor across several arms, discriminated by a NESTED
 -- constructor sub-pattern. `Som (Som x)` and `Som Non` both head-match `Som`
--- and differ only in the inner `Opt`; `Non` covers the rest. Each Sky arm
+-- and differ only in the inner `Opt`; `Non` covers the rest. Each Ipê arm
 -- lowers to its OWN Rust `match` arm, in source order, so Rust's match resolves
 -- the overlap and ordering natively — no one-arm-per-constructor grouping.
 type Opt a = Som a | Non

@@ -5,7 +5,7 @@ Date: 2026-07-04
 
 ## Context
 
-The example corpus writes the canonical, reference-shaped Sky.Live entry point:
+The example corpus writes the canonical, reference-shaped Ipe.Live entry point:
 
 ```elm
 main =
@@ -53,7 +53,7 @@ This **converges toward the reference**, retiring our invented divergence.
 
 ### Round-4 seal fixes (parametric rendering)
 
-Three adversarial holes were closed to keep `skyc` exit-0 ⇒ `cargo` exit-0:
+Three adversarial holes were closed to keep `ipe` exit-0 ⇒ `cargo` exit-0:
 parametric `IrType::LiveRoute(page)` renders `Route<Page>` (not a bare `Route`,
 which was E0107); lambda-view routed detection goes through the shared
 `fn_param_ty` (a lambda `view` was silently emitted non-routed); and a per-route
@@ -80,7 +80,7 @@ emit, driven by the variant's payload field types (which emit already has):
 
 The `other` arm is the parse-don't-validate boundary: a `:param` segment is
 inherently a URL string; feeding it to a payload the runtime cannot derive from
-a string is a program error, surfaced as a Sky diagnostic where the type is
+a string is a program error, surfaced as a Ipê diagnostic where the type is
 known — never an opaque downstream `rustc` E0308. Missing captures and malformed
 numerics degrade to `unwrap_or_default` (`0`/`0.0`/`false`), the same
 never-panic spirit as the reference's String path. (Whether malformed numeric

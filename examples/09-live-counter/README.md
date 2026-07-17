@@ -1,11 +1,11 @@
 # Live Counter
 
-Interactive counter using Sky.Live with server-sent events (SSE). Demonstrates the TEA pattern (model / update / view) running server-side with live UI updates.
+Interactive counter using Ipe.Live with server-sent events (SSE). Demonstrates the TEA pattern (model / update / view) running server-side with live UI updates.
 
 ## Build & Run
 
 ```bash
-sky build src/Main.ipe
+ipe build src/Main.ipe
 ./sky-out/app
 ```
 

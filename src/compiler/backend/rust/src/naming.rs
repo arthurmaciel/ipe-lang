@@ -1,6 +1,6 @@
-//! Sky → Rust identifier naming rules.
+//! Ipê → Rust identifier naming rules.
 //!
-//! Ports the relevant arms of `Sky/Generate/Rust/Builder/Naming.hs`:
+//! Ports the relevant arms of `Ipê/Generate/Rust/Builder/Naming.hs`:
 //! `toCamelCase` / `toSnakeCase` and the module-prefixing used to derive Rust
 //! type and function names. The conversions are written generally so they
 //! match the reference across every module, not just `Main`.
@@ -59,7 +59,7 @@ fn disambiguate_user_fn_name(default_snake: &str) -> Option<String> {
     }
 }
 
-/// Convert a Sky module-prefixed name to `UpperCamelCase` (used for type names).
+/// Convert a Ipê module-prefixed name to `UpperCamelCase` (used for type names).
 ///
 /// `Sky_Core_Error_Error` → `IpeCoreErrorError`, `Main_Msg` → `MainMsg`.
 /// An underscore is dropped and the following character upper-cased; a trailing
@@ -91,7 +91,7 @@ pub fn to_camel_case(s: &str) -> String {
     out
 }
 
-/// Convert a Sky module-prefixed name to `snake_case` (used for function names).
+/// Convert a Ipê module-prefixed name to `snake_case` (used for function names).
 ///
 /// `Sky_Core_List_map` → `ipe_core_list_map`, `Main_update` → `main_update`.
 /// Mirrors the Haskell `toSnakeCase`: the leading character is lower-cased; an
@@ -127,7 +127,7 @@ pub fn to_snake_case(s: &str) -> String {
     out
 }
 
-/// The dotted module prefix rendered with `_` separators (`["Sky","Core","Io"]`
+/// The dotted module prefix rendered with `_` separators (`["Ipê","Core","Io"]`
 /// → `Sky_Core_Io`). This matches `moduleNameToRust` (dots → underscores) when
 /// the path is supplied as already-split segments.
 ///
@@ -251,7 +251,7 @@ pub fn module_value(module: &[&str], name: &str) -> String {
         return "ipe_main".to_owned();
     }
     // A record type-alias auto-constructor is the ONLY top-level value
-    // whose Sky name begins with an uppercase letter (the parser forces every
+    // whose Ipê name begins with an uppercase letter (the parser forces every
     // other value / function name lowercase). Snake-casing it would fold the
     // case and could COLLIDE with a same-spelled lowercase value in the same
     // module — e.g. `type alias Row = { … }` yields the constructor `Row`, and a
@@ -259,7 +259,7 @@ pub fn module_value(module: &[&str], name: &str) -> String {
     // duplicate-definition / wrong-arity miscompile). Emit the constructor's
     // name VERBATIM (case-preserved) so the ident keeps an uppercase letter and
     // is therefore provably disjoint from every snake-cased (all-lowercase)
-    // value name, while remaining injective across constructors (Sky names are
+    // value name, while remaining injective across constructors (Ipê names are
     // unique per module) and across modules (the snake-cased module prefix). The
     // module-level `#![allow(non_snake_case)]` suppresses the style lint.
     if name.chars().next().is_some_and(char::is_uppercase) {
@@ -449,8 +449,8 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // `Math.min` / `Math.max` map to the runtime's generic
         // `math_min<T: PartialOrd>` / `math_max<T: PartialOrd>`: a real
         // polymorphic compare at the argument's actual type — NO `Int`
-        // coercion, NO float truncation. Divergence from Sky:
-        // Sky routes args through AsInt; Sky-Rust follows Elm's polymorphic
+        // coercion, NO float truncation. Divergence from Ipê:
+        // Ipê routes args through AsInt; Ipê-Rust follows Elm's polymorphic
         // comparable (a -> a -> a). Rationale: Elm-conformance.
         // ── Basics numerics: BasicsSqrt / BasicsMin / BasicsMax merged here ──
         KernelFn::BasicsSqrt | KernelFn::MathSqrt => "math_sqrt",
@@ -542,7 +542,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::EncodingUrlEncode => "url_encode",
         KernelFn::EncodingHexEncode => "encoding_hex_encode",
         // Decoders return `Result Error String`. The upstream runtime uses a
-        // generic `E: From<String>` bound for flexibility, but generated Sky code
+        // generic `E: From<String>` bound for flexibility, but generated Ipê code
         // always sets `IpeError = String`. Rust cannot infer `E` when the error
         // arm is `Err _ ->` (discarded), so we route to concrete aliases that pin
         // `E = String`, eliminating the ambiguity without changing semantics.
@@ -593,7 +593,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::CryptoHmacSha256 => "crypto_hmac_sha256",
         KernelFn::CryptoHmacSha512 => "crypto_hmac_sha512",
         // Concrete alias pins E=String — avoids type-inference ambiguity when
-        // the Err arm is discarded in generated Sky code.
+        // the Err arm is discarded in generated Ipê code.
         KernelFn::CryptoRsaSha256Sign => "ipe_crypto_rsa_sha256_sign",
         KernelFn::CryptoRsaSha256Verify => "crypto_rsa_sha256_verify",
         KernelFn::CryptoConstantTimeEqual => "crypto_constant_time_equal",
@@ -729,14 +729,14 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::HttpWithMaxRedirects => "http_with_max_redirects",
         // ── Db kernels ─────────────────────────────────────────────
         // `DbExec`/`DbQuery`/`DbQueryDecode` → `db_exec_params` / `db_query_params` /
-        // `db_query_decode_params`.  The Sky surface type is polymorphic
+        // `db_query_decode_params`.  The Ipê surface type is polymorphic
         // (`exec : Db -> String -> List a -> Task Error Int`) so `a` may be
         // `String`, `Int`, `Float`, `Bool`, or `SqlValue`.  The emitter projects
         // the params list via `ipe_runtime::db::SqlParam::from` which is
         // implemented for all of those types (runtime primitives + generated
         // `StdDbSqlValue`).  The untyped `db_exec(Vec<String>)` variant in the
         // runtime is retained for direct Rust test use but is not emitted
-        // for Sky source.
+        // for Ipê source.
         KernelFn::DbConnect => "db_connect",
         KernelFn::DbOpen => "db_open",
         KernelFn::DbClose => "db_close",
@@ -763,7 +763,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::DbWithTransaction => "db_with_transaction",
         KernelFn::DbMigrate => "db_migrate_apply",
         // Never emitted as a call — `emit_expr` intercepts it into an inline
-        // `Migration` struct literal. Name kept for completeness/`sky doc`.
+        // `Migration` struct literal. Name kept for completeness/`ipe doc`.
         KernelFn::DbDefaultMigration => "db_default_migration",
         // ── Db.Decode kernels ───────────────────────────────────────
         KernelFn::DbDecString => "db_decode_string",
@@ -779,7 +779,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::DbDecMoney => "db_decode_money",
         // ── Ipe.Db.Sql — SqlFragment builder ───────────────────
         // `int`/`string`/`float`/`bool` share `sql_param`'s runtime symbol —
-        // each is a Sky-level type narrowing of the same generic
+        // each is a Ipê-level type narrowing of the same generic
         // `sql_param::<T: Into<SqlParam>>`, so no separate runtime fn exists.
         KernelFn::SqlColumn => "sql_column",
         KernelFn::SqlParam
@@ -1369,7 +1369,7 @@ mod tests {
 
     #[test]
     fn record_ctor_name_is_case_preserved_and_collision_free() {
-        // a record-alias auto-constructor's uppercase Sky name must NOT
+        // a record-alias auto-constructor's uppercase Ipê name must NOT
         // snake-case-fold into a same-spelled lowercase value's ident.
         assert_eq!(module_value(&["Main"], "Row"), "main_Row");
         assert_eq!(module_value(&["Main"], "row"), "main_row");

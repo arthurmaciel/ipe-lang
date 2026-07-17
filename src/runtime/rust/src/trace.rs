@@ -1,4 +1,4 @@
-// Std.Trace — opt-in app-level tracing spans / events / attributes.
+// Ipe.Trace — opt-in app-level tracing spans / events / attributes.
 //
 // Mirrors the contract from the Go runtime: `span name task` runs `task` and
 // returns its result UNCHANGED (the value/error flow through untouched), plus a
@@ -37,7 +37,7 @@ pub fn trace_span<E: Send + 'static, A: Send + 'static>(
         let result = task.await;
         let elapsed = start.elapsed();
         let ok = matches!(result, IpeResult::Ok(_));
-        // Always record the span into the telemetry ring (the Sky Console reads
+        // Always record the span into the telemetry ring (the Ipê Console reads
         // it); the stderr line stays opt-in via IPE_TRACE.
         super::telemetry::record_span(&name, elapsed.as_micros() as u64, ok);
         if on {

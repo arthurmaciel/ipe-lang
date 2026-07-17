@@ -20,13 +20,13 @@ Two distinct defects compose:
    representation: partial application of a sibling *let-bound* function value
    (`wrap`, carrier `Box<dyn Fn>`, non-`Clone`) synthesizes a residual closure
    that reads `Var(wrap)` at closure depth 1, where the lowerer's depth-0
-   callee-position exemption does not apply → fail-closed IPE-L0126. Legal Sky;
+   callee-position exemption does not apply → fail-closed IPE-L0126. Legal Ipê;
    Go reference runs it; the reference Rust backend handles this exact shape
    (`rateLimit … h` is named verbatim in its comments) via a **clonable
    `Arc<dyn Fn>` carrier + pre-cloned captures**.
 
 2. **Diagnostic misattribution** — lowering diagnostics carry only a
-   file-local byte `Span`, no module home. `skyc`'s `source_for_span`
+   file-local byte `Span`, no module home. `ipe`'s `source_for_span`
    heuristic maps the Server.ipe span onto whatever merged def numerically
    contains those bytes with the closest `lo` — in the pristine tree that is
    `Main.ipe`'s `runMigrate` → the phantom `Main.ipe:73:2`.
@@ -41,7 +41,7 @@ generics) and reads it anywhere except as the *direct callee at depth 0*.
 Under the current `Box<dyn Fn>` carrier, forwarding such a capture into an
 inner `move` closure would move it out of the outer environment on first call
 → the outer closure degrades to `FnOnce` → rustc E0525 at cargo time; the
-lowerer rejects instead (THE SEAL: fail closed at skyc time).
+lowerer rejects instead (THE SEAL: fail closed at ipe time).
 
 The caret at `Main.ipe:73:2` covers `(\db ->` — but byte-mapping proves the
 span belongs to Server.ipe (see (c2)). `runMigrate` compiles clean when
@@ -113,7 +113,7 @@ classifier and the emitter's carrier choice are two hand-maintained tables
 with no single source of truth; that drift is the same defect class one shape
 over.
 
-### (c2) The misattribution — `crates/skyc/src/lib.rs:657-698`
+### (c2) The misattribution — `crates/ipe/src/lib.rs:657-698`
 
 Lowering diagnostics carry a bare `Span` (file-local byte offsets,
 `sky_diagnostics/src/span.rs` — no file id). After `link::link` merges all
@@ -132,7 +132,7 @@ while the single underlying error (Server.ipe `wrap`) never changed.
 Instrumented runs show exactly ONE L0126 fire in every layout.
 
 The typecheck path already solved this class: `sky_db::typecheck` /
-`infer_attributed` returns `(diag, home)` and skyc resolves `home` exactly
+`infer_attributed` returns `(diag, home)` and ipe resolves `home` exactly
 (lib.rs:716-726, the #144 fix). Lowering never got the same treatment even
 though `Lowerer::current_home` knows the answer at every `unsupported()` site.
 
@@ -177,7 +177,7 @@ in-flight clone-relay equivalent). Then:
   class unrepresentable, not patched per-site.
 - Call sites go through `Fn::call` on `&self` exactly as today.
 
-**Invariant:** *every value type a Sky closure can capture implements
+**Invariant:** *every value type a Ipê closure can capture implements
 `Clone`* — equivalently, acceptance of a well-typed capture never depends on
 its syntactic position. This is the make-invalid-states-unrepresentable form;
 PRINCIPLES.md already names the ad-hoc alternative as the #172 anti-pattern
@@ -197,7 +197,7 @@ depth-0 callee) and `wrap`/`guarded` are each used 2-4×, which trips
 
 Thread `current_home` into lowering diagnostics the same way typecheck does:
 lowering error channel becomes `(Diagnostic, ModPath)` (or `Diagnostic` gains
-an optional `home`), and skyc's `span_attributed_err` (lib.rs:743) resolves
+an optional `home`), and ipe's `span_attributed_err` (lib.rs:743) resolves
 `home_to_source` exactly, falling back to the heuristic only for genuinely
 homeless spans (`Span::DUMMY`). **Invariant:** *a diagnostic's span is only
 ever resolved against the source text of the module that produced it.*
@@ -226,7 +226,7 @@ Fix A (carrier):
 Fix B (attribution):
 - `crates/sky_lower` (attach home at `unsupported()`/`bug()` construction or
   at the `lower_def` boundary), `crates/sky_db` (lowering query error type),
-  `crates/skyc/src/lib.rs` (`span_attributed_err`), `crates/sky_diagnostics`
+  `crates/ipe/src/lib.rs` (`span_attributed_err`), `crates/sky_diagnostics`
   (only if `Diagnostic` itself carries the home).
 
 Regression tests that should exist:
@@ -237,7 +237,7 @@ Regression tests that should exist:
 2. Multi-module attribution test: dep-module lowering error whose span lands
    inside an unrelated entry-module def byte range; assert the rendered path
    is the dep file (extend the existing `CliError::Pipeline { file, .. }`
-   assertions around `crates/skyc/src/lib.rs:2278/2382`).
+   assertions around `crates/ipe/src/lib.rs:2278/2382`).
 3. `examples/36-composite-server` sweep row (auto-included by the disk-derived
    build_set) as the integration gate.
 

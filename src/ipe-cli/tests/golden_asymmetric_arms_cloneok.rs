@@ -22,10 +22,10 @@
 //! Run:
 //! ```text
 //! # fast (no cargo):
-//! cargo test -p skyc --test golden_i193_asymmetric_arms_cloneok
+//! cargo test -p ipe --test golden_i193_asymmetric_arms_cloneok
 //!
 //! # full E2E:
-//! IPE_E2E=1 cargo test -p skyc --test golden_i193_asymmetric_arms_cloneok
+//! IPE_E2E=1 cargo test -p ipe --test golden_i193_asymmetric_arms_cloneok
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -44,7 +44,7 @@ fn entry_path(root: &Path) -> PathBuf {
         .join("Main.ipe")
 }
 
-/// skyc-0 + clone-count snapshot: the compiler must accept the program and
+/// ipe-0 + clone-count snapshot: the compiler must accept the program and
 /// emit the correct clone/move pattern for both arm orderings (once-A/twice-B
 /// and twice-A/once-B) with a post-match tail use (T=1).
 ///
@@ -78,7 +78,7 @@ fn i193_skyc_accepts_asymmetric_arms() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for asymmetric_arms_cloneok: {:?}",
+        "ipe build must succeed for asymmetric_arms_cloneok: {:?}",
         built.err()
     );
 
@@ -94,7 +94,7 @@ fn i193_skyc_accepts_asymmetric_arms() {
     // Pattern: in `format_tag`, the tail `label` appears AFTER the match result
     // `result` is bound — look for the final "]" concat which carries `label`
     // bare.  We check that `label` appears at all (the binding is used), and that
-    // the function compiles (skyc-0 above).
+    // the function compiles (ipe-0 above).
     assert!(
         emitted.contains("format_tag"),
         "emitted main.rs must contain the format_tag function"
@@ -168,7 +168,7 @@ fn i193_cargo_builds_and_runs() {
     let Ok(runtime) = runtime else { return };
 
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
-    assert!(built.is_ok(), "skyc build must succeed: {:?}", built.err());
+    assert!(built.is_ok(), "ipe build must succeed: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted("asymmetric_arms_cloneok", &out);
     assert_eq!(

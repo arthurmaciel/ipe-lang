@@ -68,9 +68,9 @@ fn super_concrete_ok(interner: &Interner, bounds: TyBounds, flat: &FlatType) -> 
                     && args.len() == 1
                     && interner.resolve(*name) == Some("List")
         );
-    // A `Set` element / `Dict` key obligation is a Sky `comparable` — the same
+    // A `Set` element / `Dict` key obligation is a Ipê `comparable` — the same
     // scalar set ordering admits. `Float` passes here (it IS `comparable` in
-    // Sky, so the typing follows Sky), and the Rust-backend reality that `f64`
+    // Ipê, so the typing follows Ipê), and the Rust-backend reality that `f64`
     // is neither `Ord` nor `Hash` is enforced at lowering with a dedicated
     // diagnostic — not as a confusing type mismatch at this head pin.
     (!bounds.has_number() || number_ok)
@@ -145,7 +145,7 @@ pub fn unify(
         // most often a numeric literal (`Super { Number }`).  Letting the two merge
         // would silently accept `f : a -> a; f x = x + 1`, where the literal `1`
         // forces the annotated-generic `a` to a concrete numeric representation.
-        // Elm (and the Sky reference) reject exactly this: `a` was annotated fully
+        // Elm (and the Ipê reference) reject exactly this: `a` was annotated fully
         // parametric, so a body that adds a concrete literal to it is a type error.
         // (`double : a -> a; double x = x + x` — no literal — never reaches this
         // arm: its operand super meets the rigid `x` as `Super{flex}` vs

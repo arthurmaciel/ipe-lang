@@ -1,7 +1,7 @@
 //! Canonical AST — the name-resolved tree the type checker consumes.
 //!
 //! Rust port of the supported subset of the Haskell compiler's
-//! `Sky.AST.Canonical` (itself a derivative work of elm/compiler's
+//! `Ipê.AST.Canonical` (itself a derivative work of elm/compiler's
 //! `AST.Canonical`, BSD-3-Clause). Every variable is fully resolved: a
 //! reference is classified as a local binding, a top-level binding of a named
 //! module, a stdlib kernel function, or a data constructor. Only the nodes the

@@ -1,7 +1,7 @@
 # Idea 7 — The `do` effect block (design)
 
 > **Status:** DESIGNED (2026-07-04). Implementation deferred **post-parity**
-> (this is a syntactic divergence from Elm/Sky, not oracle-verifiable — it must
+> (this is a syntactic divergence from Elm/Ipê, not oracle-verifiable — it must
 > not compete with the examples-sweep-green push). Supersedes the three earlier
 > candidate spellings (Gleam `use`, `Task.block` + `!`, Roc bare `!`) — filed
 > in `docs/divergences-from-sky.md#planned-future-divergences` §6.5.
@@ -22,7 +22,7 @@ do
 
 - **Task-only.** Not `Result`/`Maybe` (§3).
 - **Keyword `do`**, not a function-shaped `Task.block`, not `perform` (§4).
-- **No `let` inside the block** — pure binds are bare `x = e`, reusing Sky's
+- **No `let` inside the block** — pure binds are bare `x = e`, reusing Ipê's
   existing definition-binding shape (§4).
 - **Desugars to `Task.andThen`** — no Monad typeclass, zero runtime cost (§6).
 - **Short-circuits to the first `Err`** — `Task.andThen` semantics (§7).
@@ -47,7 +47,7 @@ queryUser uid
 ```
 
 **Crucial scoping note — this is NOT primarily a TEA/frontend problem.** In
-idiomatic Elm/Sky TEA, sequential effects are decomposed into **Msg
+idiomatic Elm/Ipê TEA, sequential effects are decomposed into **Msg
 transitions**: `Task.attempt`/`Cmd.perform` turns a Task into a `Cmd` whose
 result returns as a Msg, so a multi-step flow becomes separate `update`
 handlers, not a nested chain — and that's deliberate (you *want* to update the
@@ -55,10 +55,10 @@ Model and paint intermediate UI between steps). `Task.andThen` is used in TEA
 only for short, atomic sub-sequences you don't want to interrupt with a Msg.
 
 The deep pyramid is a **server / CLI / script** phenomenon — Node-style
-sequential I/O with no UI to update between steps (`Sky.Http.Server`,
-`Sky.Cli`, background jobs; e.g. `examples/07-todo-cli`, `examples/18-job-queue`).
-Elm never had that surface (browser-only); Sky does. **So the `do` block is
-sugar for Sky's non-TEA effect surface** — a real but bounded footprint. That
+sequential I/O with no UI to update between steps (`Ipe.Http.Server`,
+`Ipe.Cli`, background jobs; e.g. `examples/07-todo-cli`, `examples/18-job-queue`).
+Elm never had that surface (browser-only); Ipê does. **So the `do` block is
+sugar for Ipê's non-TEA effect surface** — a real but bounded footprint. That
 footprint is the justification; weigh the feature against it.
 
 ## 3. Why Task-only (a principle, not a preference)
@@ -82,14 +82,14 @@ is a syntactic form (can't be aliased or passed) — a form disguised as a
 qualified name. `do` is an honest keyword and the established name for exactly
 this construct (Haskell / PureScript / Idris).
 
-**Why not `perform`:** `perform` already means something in Sky —
+**Why not `perform`:** `perform` already means something in Ipê —
 `Cmd.perform task toMsg` and `Task.perform` are the TEA functions that *run* a
 Task. A `perform` block keyword would collide head-on with them.
 
-**Why no `let` inside the block:** Elm/Sky require `let … in` *always* — there
+**Why no `let` inside the block:** Elm/Ipê require `let … in` *always* — there
 is no bare `let x = e` statement. Rather than invent a bare `let` (a wart), the
 block drops `let` entirely: pure binds are bare `x = e`, which is **already
-Sky's binding shape** at module level (`main = …`, `foo x = …`). So inside a
+Ipê's binding shape** at module level (`main = …`, `foo x = …`). So inside a
 `do` block, `n = e` reads like a local definition — not a new syntax. `let … in`
 stays the *expression*-level binder, unchanged, everywhere else. (Eliminating
 `let … in` language-wide, Roc-style, is a separate and much larger identity
@@ -215,7 +215,7 @@ structured log are attached.
 
 ## 8. What it retires + the `Debug.*` relationship
 
-**Retires the `let _ = TaskExpr` auto-force.** Today Sky auto-forces a discarded
+**Retires the `let _ = TaskExpr` auto-force.** Today Ipê auto-forces a discarded
 Task binding (`let _ = println "x" in …` runs the effect via `rt.AnyTaskRun`).
 That overloads Elm-valid-but-*inert* syntax (`let _ = …` is a pure no-op in Elm)
 to mean "perform" — a hidden effect keyed off a discarded wildcard. The `do`
@@ -253,10 +253,10 @@ tailExpr  ::= expr                                    -- required final expressi
 
 - `do` becomes a reserved keyword.
 - `<-` is a single token (Elm freed it). Disambiguation with compare-to-negative
-  `x < -3` is already handled by Sky's rule that negative literals need
+  `x < -3` is already handled by Ipê's rule that negative literals need
   parentheses (`x < (-3)`), so no new lexer rule.
 - Parser distinguishes the three `stmt` forms by scanning for a top-level `<-`
-  then `=` at brace/paren depth 0 (Sky has no `=` operator in expressions; `=`
+  then `=` at brace/paren depth 0 (Ipê has no `=` operator in expressions; `=`
   only appears inside `{ … }` records) — unambiguous.
 
 ## 11. Deliberately NOT done
@@ -300,7 +300,7 @@ update `templates/CLAUDE.md` + `docs/` in the same commit (template-sync rule).
 
 1. **Pattern binds in `<-` / `=`.** Allow `(a, b) <- e` and `{ x, y } = e`
    (destructuring binds)? Lean **yes** — they desugar through the same `\p ->`
-   / `let p =` and Sky already supports the patterns (#96). Refutable patterns
+   / `let p =` and Ipê already supports the patterns (#96). Refutable patterns
    in `<-` (e.g. `Just x <- e`) would need a failure story — lean **disallow**
    (require irrefutable), since Task has no `MonadFail`; use an explicit
    `case` on the bound value instead.

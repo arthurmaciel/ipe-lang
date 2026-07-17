@@ -10,20 +10,20 @@
 # path (scripts/, not runtime-rust/scripts/).
 #
 # DERIVED, NOT HARDCODED. Every set is computed at call time from the example
-# dirs on disk + their Sky source. The ONLY thing that excludes an example is
+# dirs on disk + their Ipê source. The ONLY thing that excludes an example is
 # Go-FFI, because the Rust backend does not bind Go packages. A greenfield
 # example that has never built on Rust SURFACES as a real failure rather than
 # being silently filtered out.
 #
 # THE GO-FFI SIGNAL IS THE IMPORT, NOT `[go.dependencies]`. The real Go-FFI tell
-# is a Sky `import` of a Go-PACKAGE module — one that resolves to neither a Sky
+# is a Ipê `import` of a Go-PACKAGE module — one that resolves to neither a Ipê
 # stdlib module nor a local project `.ipe` file (`Github.Com.…`, `Net.Http`,
 # `Fyne.…`).
 #
 # Provides (all FUNCTIONS — call them, don't read arrays):
 #   all_examples            → every candidate example dir, one per line (no trailing /).
 #   is_out_of_scope <dir>   → exit 0 IFF Go-FFI (imports an unresolvable Go-pkg module).
-#   is_web_example  <dir>   → exit 0 IFF Sky.Live / Sky.Http.Server (browser-drivable).
+#   is_web_example  <dir>   → exit 0 IFF Ipe.Live / Ipe.Http.Server (browser-drivable).
 #   example_shape   <dir>   → tui|webview|fyne|server|live|cli
 #   build_set               → all_examples − Go-FFI (the BUILD sweep set).
 #   run_set / perf_set      → == build_set.
@@ -44,7 +44,7 @@ all_examples() {
 # ADAPTED: this repo's stdlib source lives under src/stdlib (and, once it
 # lands, a top-level sky-stdlib/). IPE_STDLIB_DIRS is a space-separated list of
 # roots to index; both are scanned so a bare/partial stdlib import (`import
-# System` → Sky.Core.System) resolves regardless of which tree owns it. Every
+# System` → Ipe.System) resolves regardless of which tree owns it. Every
 # `/`-delimited suffix of each module path (minus `.ipe`) is recorded as an O(1)
 # key. The BUILT flag is the idempotency guard across re-sources.
 IPE_STDLIB_DIRS="${IPE_STDLIB_DIRS:-src/stdlib sky-stdlib}"
@@ -55,8 +55,8 @@ _build_stdlib_index() {
   for root in $IPE_STDLIB_DIRS; do
     [ -d "$root" ] || continue
     while IFS= read -r f; do
-      # index keys are relative to the stdlib ROOT (so Sky/Core/String.ipe →
-      # Sky/Core/String, Core/String, String), mirroring the source layout.
+      # index keys are relative to the stdlib ROOT (so Ipê/Core/String.ipe →
+      # Ipê/Core/String, Core/String, String), mirroring the source layout.
       rest="${f#"$root"/}"; rest="${rest%.ipe}"
       while :; do
         _SKY_STDLIB_INDEX["$rest"]=1
@@ -71,11 +71,11 @@ _build_stdlib_index() {
 }
 
 # ── is_out_of_scope <dir>: the ONLY exclusion is Go-FFI (IMPORT signal) ──────
-# Return 0 (exclude) IFF the example imports a Go-PACKAGE module: a Sky `import`
-# whose module name resolves to NEITHER a Sky stdlib module NOR a local project
+# Return 0 (exclude) IFF the example imports a Go-PACKAGE module: a Ipê `import`
+# whose module name resolves to NEITHER a Ipê stdlib module NOR a local project
 # `.ipe` file. The recursive `.ipe` walk is load-bearing: some examples hide
 # their `Github.Com.…`/`Net.Http`/`Fyne.…` imports inside Lib.* submodules.
-#   • prefix Sky. / Std.  → Sky stdlib          → IN scope
+#   • prefix Ipê. / Ipe.  → Ipê stdlib          → IN scope
 #   • prefix Rust.        → Rust-FFI wrapper crate → IN scope
 #   • dotted name suffix-matches the stdlib index → IN scope
 #   • dotted name resolves to a `.ipe` under the project → IN (local mod)
@@ -90,7 +90,7 @@ is_out_of_scope() {
   _build_stdlib_index
   while read -r m; do
     [ -z "$m" ] && continue
-    case "$m" in Sky.*|Std.*|Rust.*) continue ;; esac # Sky stdlib / Rust-FFI wrapper → in scope
+    case "$m" in Ipê.*|Ipe.*|Rust.*) continue ;; esac # Ipê stdlib / Rust-FFI wrapper → in scope
     rel="${m//.//}"
     [ -n "${_SKY_STDLIB_INDEX[$rel]:-}" ] && continue
     if [ -z "$localdone" ]; then
@@ -116,13 +116,13 @@ is_live_network_cli() {
   return 1
 }
 
-# ── is_web_example <dir>: Sky.Live OR Sky.Http.Server (browser-drivable) ─────
+# ── is_web_example <dir>: Ipe.Live OR Ipe.Http.Server (browser-drivable) ─────
 is_web_example() {
-  _shape_match "$1/src" 'Std\.Live|Live\.app|Server\.listen|Sky\.Http\.Server'
+  _shape_match "$1/src" 'Std\.Live|Live\.app|Server\.listen|Ipê\.Http\.Server'
 }
 
 # ── example_shape <dir>: tui|webview|fyne|server|live|cli ────────────────────
-# `_shape_match` strips Sky line comments (`--…`) from every matching line before
+# `_shape_match` strips Ipê line comments (`--…`) from every matching line before
 # re-testing, so a doc comment naming a backend can't misclassify the example.
 _shape_match() { # $1=src dir  $2=regex
   rg --no-filename -e "$2" "$1" 2>/dev/null | sed 's/--.*$//' | rg -q -e "$2" 2>/dev/null
@@ -133,7 +133,7 @@ example_shape() {
   elif _shape_match "$s" 'Std\.Webview|Webview\.app';        then echo webview
   elif _shape_match "$s" 'Fyne';                             then echo fyne
   elif _shape_match "$s" 'Std\.Live|Live\.app';              then echo live
-  elif _shape_match "$s" 'Server\.listen|Sky\.Http\.Server'; then echo server
+  elif _shape_match "$s" 'Server\.listen|Ipê\.Http\.Server'; then echo server
   else echo cli; fi
 }
 

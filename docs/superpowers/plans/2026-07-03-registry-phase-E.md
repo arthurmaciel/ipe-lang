@@ -57,7 +57,7 @@ Current committed shape (verified against HEAD 2026-07-03):
 
 ## Goal / definition of done
 
-After Phase E, **skyc cannot exit 0 on a program that references an un-typeable kernel**. Concretely:
+After Phase E, **ipe cannot exit 0 on a program that references an un-typeable kernel**. Concretely:
 
 1. `Ty::Var(u32::MAX)` appears **nowhere** in the source tree (enforced by a source-level test).
 2. `stdlib_scheme` is a wildcard-free match: every `StdlibKernel` except the explicit
@@ -88,10 +88,10 @@ Companion (independent, soundness-adjacent): #45 reserved-builtin-type-name gate
    reachable kernel is *guaranteed* a concrete scheme, so no un-typed kernel reaches codegen.
 
 **Two hard project rules (non-negotiable):**
-- **R1 — Never `sky build` / `cargo build` from the repo root** (overwrites the compiler binary
+- **R1 — Never `ipe build` / `cargo build` from the repo root** (overwrites the compiler binary
   in `sky-out/`). Run `sky check` / `sky build` only inside an `examples/<dir>`; run crate builds
   as `cargo build -p <crate>` / `cargo test -p <crate>` from the workspace, never a root
-  `sky build`.
+  `ipe build`.
 - **R2 — Every long-running command is timeout-bounded and mem-guard is running.** Wrap cabal/cargo
   test and any sweep in `timeout`; tee output to a file once and re-read it; confirm
   `scripts/guards/mem-guard.sh` is alive before a full build. No unbounded waits, no orphan background loops.
@@ -208,7 +208,7 @@ already be proven to carry `Some(id)` (Task 3's subset gate). Do Task 3, then:
    Any lower site needing the runtime name reads `decl(id).emit` / `decl(id).qualifier` (already the
    Phase-A `EmitRef` mechanism).
 
-Retain a diagnostics breadcrumb by reconstruction, not storage: error/`sky doc` sites call
+Retain a diagnostics breadcrumb by reconstruction, not storage: error/`ipe doc` sites call
 `id.decl()` on demand. This matches design OPEN DECISION 3.
 
 - **Verify:** `cargo build` workspace + `cargo test` per touched crate (`sky_canon`, `sky_types`,
@@ -287,9 +287,9 @@ The exit-0-then-cargo-fail class is now closed by construction; this task proves
 - `timeout 3600 cabal test` (or the workspace `cargo test` equivalent for the Rust crates) — zero
   failures; pending count unchanged.
 - Example sweep via the plugin skill `sky-rust-backend:examples-sweep` (or `scripts/example-sweep.sh`
-  with its `run_with_timeout 10` intact) — every example builds **and runs**; a skyc-exit-0 that used
-  to fail at `cargo` can no longer occur because an un-typeable kernel now fails skyc at
-  type-check with IPE-L0108. Confirm no example newly fails at skyc (that would be a real un-schemed
+  with its `run_with_timeout 10` intact) — every example builds **and runs**; a ipe-exit-0 that used
+  to fail at `cargo` can no longer occur because an un-typeable kernel now fails ipe at
+  type-check with IPE-L0108. Confirm no example newly fails at ipe (that would be a real un-schemed
   reachable kernel — Task 0 should have caught it; if it appears here, Task 0's reachable set was
   incomplete).
 - Go-parity goldens byte-identical (per memory: m4/m7 oracle goldens must not shift — the seal is
@@ -307,7 +307,7 @@ command `timeout`-bounded; mem-guard alive; clean up background loops before dec
 
 | # | Risk | Likelihood | Mitigation |
 |---|---|---|---|
-| **R-A (riskiest)** | Deleting `kernel_ty` (Task 1c) strands a *reachable* kernel that was silently riding the `Ty::Var(u32::MAX)` fallback (a family missed by Uuid/Encoding/Css), turning a previously-"green" example red at skyc. | Med | Task 0 `stdlib_scheme_total_over_reachable` is the machine gate; run it **and** the example sweep at Task 1b (before the 1c deletion) so the failure surfaces as an inert IPE-L0108 while the legacy table still exists as a rollback. |
+| **R-A (riskiest)** | Deleting `kernel_ty` (Task 1c) strands a *reachable* kernel that was silently riding the `Ty::Var(u32::MAX)` fallback (a family missed by Uuid/Encoding/Css), turning a previously-"green" example red at ipe. | Med | Task 0 `stdlib_scheme_total_over_reachable` is the machine gate; run it **and** the example sweep at Task 1b (before the 1c deletion) so the failure surfaces as an inert IPE-L0108 while the legacy table still exists as a rollback. |
 | R-B | Dropping `module`/`name` (Task 2) removes info a future FFI consumer node reuses. | Low | FFI is parked and resolves `Rust.*` to a *separate* `KernelId::Ffi` callee per design Q4 — not this stdlib `VarKernel`. Recorded as Open Decision 2; reconstruct diagnostics from `decl(id)`. |
 | R-C | `stdlib_scheme_matches_legacy` loses its oracle when `kernel_ty` is deleted (Task 1c), silently weakening the Go-parity guarantee for RELOCATED families. | Med | Freeze a per-kernel `Ty` snapshot oracle before deleting `kernel_ty`; never drop the parity check outright. |
 | R-D | #45 gate (Task 4) rejects a legitimate corpus `type Color`, breaking an example. | Low-Med | Grep the corpus first; if hit, it is the latent miscompile — coordinate a rename PR; keep Task 4 non-blocking to the seal. |

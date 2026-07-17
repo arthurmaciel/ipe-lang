@@ -27,7 +27,7 @@
 //!
 //! Run:
 //! ```text
-//! cargo test -p skyc --test golden_i138_total_resolution
+//! cargo test -p ipe --test golden_i138_total_resolution
 //! ```
 
 use std::path::{Path, PathBuf};

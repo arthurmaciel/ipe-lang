@@ -15,7 +15,7 @@ import Ipe.Log exposing (println)
     base, so the seed under-counted.  The MAX-seed change (#193) then made the
     consuming argument the "last counted" use → bare move → the later update
     base `(rec).clone()` read a moved value → E0382.  This is exactly the
-    `16-skychess` `selectIfWhite` shape reduced to one file.
+    `16-ipehess` `selectIfWhite` shape reduced to one file.
 -}
 type alias Model =
     { tag : String

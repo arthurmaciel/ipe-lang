@@ -2,7 +2,7 @@
 
 > Root-cause + implementation spec for the BACKLOG "Hardening follow-ups" row
 > *"Pre-existing E2E failures found while landing #61"*
-> (`crates/skyc/tests/golden_m5b_db.rs`'s `db_crud` / `db_transaction`).
+> (`crates/ipe/tests/golden_m5b_db.rs`'s `db_crud` / `db_transaction`).
 > All file:line pointers below verified against master `2bc2a67`
 > (2026-07-10). Design-only pass — no fix implemented here; a Track-1 lane
 > lands §3 and §4 as two independent commits.
@@ -12,8 +12,8 @@
 > ```bash
 > cd /home/arthur/Documentos/comp/sky-rust
 > CARGO_TARGET_DIR=~/.cache/sky-rust-target-track2-dbcrud IPE_E2E=1 \
->   cargo nextest run -p skyc --test golden_m5b_db -E 'test(db_crud) or test(db_transaction)'
-> # → 2 tests run: 0 passed, 2 failed  (db_crud in 0.05s at skyc type-check;
+>   cargo nextest run -p ipe --test golden_m5b_db -E 'test(db_crud) or test(db_transaction)'
+> # → 2 tests run: 0 passed, 2 failed  (db_crud in 0.05s at ipe type-check;
 > #    db_transaction after the full emitted-project cargo build)
 > ```
 
@@ -42,12 +42,12 @@
 
 ---
 
-## §1 — Failure A: `db_crud` fails skyc type-check (IPE-T0001 Dict vs List)
+## §1 — Failure A: `db_crud` fails ipe type-check (IPE-T0001 Dict vs List)
 
 ### Symptom
 
 ```
-skyc: error[IPE-T0001]: type mismatch
+ipe: error[IPE-T0001]: type mismatch
   --> tests/golden/db_crud/Main.ipe:18:29
    |
 18 |                             Db.insertRow txconn
@@ -88,7 +88,7 @@ scheme and left the two consumers of the old surface stale:
 * the emitter arms `crates/sky_backend_rust/src/emit_expr.rs:1565`
   (DbInsertRow) and `:1579` (DbUpdateById) still emit
   `({row_s}).into_iter().collect::<HashMap<String, String>>()` with comments
-  claiming "the Sky type is `List (String, String)`";
+  claiming "the Ipê type is `List (String, String)`";
 * the lowering arity-table comments `crates/sky_lower/src/lower.rs:7530`
   and `:7566` still document the List surface.
 
@@ -101,7 +101,7 @@ parameter. The fixture is what's stale.
 * Scheme: `crates/sky_types/src/constrain.rs:3883` (DbInsertRow),
   `:3894` (DbUpdateById) — both `dict(string(), string())`. **Keep.**
 * Runtime: `runtime/src/sky_runtime/db.rs` `db_insert_row` /
-  `db_update_by_id` take `HashMap<String, String>`; Sky `Dict String String`
+  `db_update_by_id` take `HashMap<String, String>`; Ipê `Dict String String`
   lowers to exactly `HashMap<String, String>`
   (`runtime/src/sky_runtime/dict.rs:15` — `pub type SkyDict<T> =
   HashMap<String, T>`). The surface and the runtime now agree with zero
@@ -133,7 +133,7 @@ not a gate.
    (DbInsertRow) and `:1579-…` (DbUpdateById): drop the
    `.into_iter().collect::<HashMap<String, String>>()` wrap — pass
    `{row_s}` straight through (the arg is already `HashMap<String,
-   String>`) — and rewrite both arm comments to say the Sky surface is
+   String>`) — and rewrite both arm comments to say the Ipê surface is
    `Dict String String` (upstream parity, `bdbc572`). Per the
    prefer-concrete-codegen principle, do not keep a defensive re-collect
    over an already-correct type.
@@ -146,7 +146,7 @@ not a gate.
 
 ### Regression coverage
 
-`golden_m5b_db.rs::db_crud` (`crates/skyc/tests/golden_m5b_db.rs:159`)
+`golden_m5b_db.rs::db_crud` (`crates/ipe/tests/golden_m5b_db.rs:159`)
 itself is the regression test — it runs the full
 type-check → emit → cargo build → run → oracle-compare pipeline under
 `IPE_E2E=1` and the check-only tier without it. No new test needed. If the
@@ -160,7 +160,7 @@ step 2 emits the identical runtime value.
 
 ### Symptom
 
-skyc succeeds; the emitted project fails:
+ipe succeeds; the emitted project fails:
 
 ```
 error[E0308]: mismatched types
@@ -209,9 +209,9 @@ kernel-call path) passes the String expression through verbatim, and rustc
 is the first thing to object. "Compilation successful → cargo build fails"
 is exactly the failure class the project's own principles forbid.
 
-The over-polymorphic scheme also contradicts skyc's own bundled stdlib,
+The over-polymorphic scheme also contradicts ipe's own bundled stdlib,
 which already declares the pinned form
-(`crates/skyc/stdlib/Sky/Core/Task.ipe:33`):
+(`crates/ipe/stdlib/Ipê/Core/Task.ipe:33`):
 
 ```elm
 fail : Error -> Task Error a
@@ -224,7 +224,7 @@ fail : Error -> Task Error a
 `SkyError::unexpected`), so emitting `task_fail(({e}).into())` would compile
 for both String and SkyError arguments (reflexive `From<T> for T` covers the
 latter). **Rejected** — it converts the value but not the type judgement:
-the Sky-side HM type of the error channel would still be `String`, while
+the Ipê-side HM type of the error channel would still be `String`, while
 every recovery-side wrapper (`task_on_error` handler param, `task_map_error`
 fn) is pinned to `SkyError`. `Task.fail "x" |> Task.onError (\e ->
 println (String.toUpper e))` would HM-check (`e : String`) and then fail the
@@ -241,10 +241,10 @@ codegen with a proper IPE-T0001.
    ```
 
    One line. Aligns `fail` with `mapError`/`onError`'s already-pinned
-   channel and with `crates/skyc/stdlib/Sky/Core/Task.ipe:33`.
+   channel and with `crates/ipe/stdlib/Ipê/Core/Task.ipe:33`.
 
 2. **Fixtures** (all three call sites in the tree; verified via
-   `rg 'Task\.fail "' crates/skyc/stdlib examples tests` — stdlib and
+   `rg 'Task\.fail "' crates/ipe/stdlib examples tests` — stdlib and
    examples have zero String-arg call sites, all examples already pass
    `Error.unexpected …` / `Error.io …` values):
    * `tests/golden/db_transaction/Main.ipe:49` →
@@ -261,10 +261,10 @@ codegen with a proper IPE-T0001.
    outputs unchanged: none of the three fixtures print the error value
    itself (the m5a pair prints a constant `recovered`; db_transaction's
    handler discards `err`). If the m5a fixtures' doc comments in
-   `crates/skyc/tests/golden_m5a_task.rs:17,26,95,117` quote the old source,
+   `crates/ipe/tests/golden_m5a_task.rs:17,26,95,117` quote the old source,
    refresh the quotes.
 
-3. **Stale prose** — `crates/skyc/stdlib/Sky/Core/Task.ipe:6` still says
+3. **Stale prose** — `crates/ipe/stdlib/Ipê/Core/Task.ipe:6` still says
    *"always `SkyError = String` at the Rust level"*; update to describe the
    `5db4cd3` enum (`SkyError::Error(kind, info)`).
 
@@ -285,10 +285,10 @@ codegen with a proper IPE-T0001.
 ### Regression coverage
 
 Closes three currently-red E2E tests, which are the regression tests:
-`golden_m5b_db.rs::db_transaction` (`crates/skyc/tests/golden_m5b_db.rs:175`),
+`golden_m5b_db.rs::db_transaction` (`crates/ipe/tests/golden_m5b_db.rs:175`),
 `golden_m5a_task.rs::error_channel` (`:98`) and `::task_map_error_lambda`
 (`:123`). Additionally add one **negative** check-only test (no `IPE_E2E`
-needed): a program containing `Task.fail "oops"` must now fail skyc with
+needed): a program containing `Task.fail "oops"` must now fail ipe with
 IPE-T0001 `expected Error, found String` — this pins the scheme so a future
 "restore Elm-parity polymorphism" change can't silently reopen the
 ill-typed-emission hole without confronting the recorded divergence.
@@ -303,11 +303,11 @@ fixture-dominated), §2 second (touches the scheme).
 Per-fix verification:
 
 ```bash
-CARGO_TARGET_DIR=… IPE_E2E=1 cargo nextest run -p skyc --test golden_m5b_db \
+CARGO_TARGET_DIR=… IPE_E2E=1 cargo nextest run -p ipe --test golden_m5b_db \
   -E 'test(db_crud) or test(db_transaction)'
-CARGO_TARGET_DIR=… IPE_E2E=1 cargo nextest run -p skyc --test golden_m5a_task \
+CARGO_TARGET_DIR=… IPE_E2E=1 cargo nextest run -p ipe --test golden_m5a_task \
   -E 'test(error_channel) or test(task_map_error_lambda)'
-cargo test -p sky_types -p sky_lower -p skyc          # non-E2E tiers
+cargo test -p sky_types -p sky_lower -p ipe          # non-E2E tiers
 ```
 
 plus the standard sweep gate before merge. Neither fix touches `SqlValue` /

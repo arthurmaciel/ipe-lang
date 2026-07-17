@@ -12,7 +12,7 @@
 //! as `IrType::Fun`, which `render_type` emits as the SHARED callback form
 //! `Box<dyn Fn(a) -> b + Send + Sync>`. The producer supplies `FnOnce + Send`;
 //! the consumer's param expected `Fn + Send + Sync` → wrong trait (`Fn` vs
-//! `FnOnce`) AND an unsatisfiable `+ Sync` → skyc-0-then-cargo-fail
+//! `FnOnce`) AND an unsatisfiable `+ Sync` → ipe-0-then-cargo-fail
 //! (E0308 / E0277).
 //!
 //! Fix (`crates/ipe_lower/src/lower.rs`, `retype_decoder_payload_mapper`): at
@@ -26,7 +26,7 @@
 //!
 //! Run:
 //! ```text
-//! IPE_E2E=1 cargo test -p skyc --test golden_i198_decoder_payload_mapper
+//! IPE_E2E=1 cargo test -p ipe --test golden_i198_decoder_payload_mapper
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -45,7 +45,7 @@ fn entry_path(root: &Path) -> PathBuf {
         .join("Main.ipe")
 }
 
-/// skyc-0: the compiler must accept the program AND render the mapper lambda's
+/// ipe-0: the compiler must accept the program AND render the mapper lambda's
 /// function-typed payload parameter as the runtime's Send-only `FnOnce` chain —
 /// checked unconditionally (cheap, no `cargo`), independent of the `IPE_E2E`
 /// gate. This is the exact assertion the E0308/E0277 SEAL break cannot recur:
@@ -67,7 +67,7 @@ fn i198_skyc_accepts_and_renders_send_only_fnonce_param() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for decoder_payload_mapper: {:?}",
+        "ipe build must succeed for decoder_payload_mapper: {:?}",
         built.err()
     );
 
@@ -96,7 +96,7 @@ fn i198_skyc_accepts_and_renders_send_only_fnonce_param() {
 /// cargo-0 ∧ run-0: the emitted project actually compiles with `rustc` (no
 /// E0308 / E0277 from the payload-param `Fn`/`FnOnce` + `Sync` mismatch) and
 /// prints the decoded result. Gated on `IPE_E2E=1` — the only check that would
-/// have caught the original SEAL violation (skyc-0, cargo-fail).
+/// have caught the original SEAL violation (ipe-0, cargo-fail).
 #[test]
 fn i198_cargo_builds_and_runs() {
     if std::env::var("IPE_E2E").is_err() {
@@ -115,7 +115,7 @@ fn i198_cargo_builds_and_runs() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for decoder_payload_mapper: {:?}",
+        "ipe build must succeed for decoder_payload_mapper: {:?}",
         built.err()
     );
 

@@ -17,7 +17,7 @@
 //!
 //! ## What is tested
 //!
-//! * `skyc build` compiles `tests/golden/attribute_home_disambiguation_179/
+//! * `ipe build` compiles `tests/golden/attribute_home_disambiguation_179/
 //!   Main.ipe` (canon → types → lower → Rust backend).
 //! * The emitted Rust project `cargo build`s (the type-identity fix means the
 //!   `html::Attribute`-producing bodies now agree with their return-type
@@ -27,7 +27,7 @@
 //!   `svgRootAttrs`-style list, proving the `html::Attribute` list flowed into
 //!   the `Html.node` slot without a cast.
 //!
-//! `oracle_divergence = true` — the assertion is skyc's own correct render, not
+//! `oracle_divergence = true` — the assertion is ipe's own correct render, not
 //! a Go oracle diff; the point is the Attribute NEWTYPE identity, which the Go
 //! backend does not model.
 //!
@@ -69,7 +69,7 @@ fn build_run_attribute_home_179() -> support::RunOutcome {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for attribute_home_disambiguation_179: {:?}",
+        "ipe build must succeed for attribute_home_disambiguation_179: {:?}",
         built.err()
     );
 

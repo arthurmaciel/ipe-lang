@@ -4,7 +4,7 @@
 //! Root cause: `f x = (x ++ x) + 1` gave `x` both `Append` and `Number`
 //! super-type obligations. The defaulting arm fired on `has_number()` and
 //! pinned `x` to `Int` WITHOUT checking whether `Int` satisfied `Append`
-//! (it does not). skyc accepted (exit 0) and emitted Rust that `cargo`
+//! (it does not). ipe accepted (exit 0) and emitted Rust that `cargo`
 //! rejected — a seal violation.
 //!
 //! Fix: before pinning to `Int`, call `concrete_super_ok(interner, bounds,

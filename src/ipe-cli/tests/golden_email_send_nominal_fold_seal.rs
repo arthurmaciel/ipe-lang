@@ -3,7 +3,7 @@
 //! `Email.send`, and the `EmailProvider` ADT is constructed via its `Resend`
 //! ctor.
 //!
-//! Before the fold, `Ipe.Email` fail-closed at skyc time with IPE-N0028 (no
+//! Before the fold, `Ipe.Email` fail-closed at ipe time with IPE-N0028 (no
 //! registered `Email_send` kernel). Registering the kernel across every
 //! anti-drift site AND folding the `EmailMessage` / `Attachment` record shapes
 //! (plus the `EmailProvider` ADT) to their nominal runtime types
@@ -11,7 +11,7 @@
 //! a builder-constructed message + a `Resend` ctor construct the exact runtime
 //! types the `email_send` kernel takes. A backend-synthesised `Rec…` struct or
 //! a duplicate `StdEmailEmailProvider` enum would mismatch that boundary with
-//! E0308 — the classic skyc-0-then-cargo-fail SEAL violation this pins shut.
+//! E0308 — the classic ipe-0-then-cargo-fail SEAL violation this pins shut.
 //!
 //! ## Why the emit-only assertions run in the DEFAULT gate
 //!
@@ -97,7 +97,7 @@ fn email_literals_emit_runtime_structs_and_provider_variant() {
     let (built, app_rs) = built_app_rs(&root, &out);
     assert!(
         built.is_ok(),
-        "email_send_nominal_fold_seal: must be accepted (skyc-0), got: {built:?}"
+        "email_send_nominal_fold_seal: must be accepted (ipe-0), got: {built:?}"
     );
     let Some(app_rs) = app_rs else {
         return; // resolver unavailable — skip, matches the other goldens
@@ -127,8 +127,8 @@ fn email_literals_emit_runtime_structs_and_provider_variant() {
 }
 
 /// The load-bearing SEAL proof: under `IPE_E2E=1`, actually `cargo build` the
-/// emitted crate. Without kernel backing `Ipe.Email` fail-closes at skyc time
-/// (IPE-N0028); with it, skyc-0 AND the emitted crate — with the vendored
+/// emitted crate. Without kernel backing `Ipe.Email` fail-closes at ipe time
+/// (IPE-N0028); with it, ipe-0 AND the emitted crate — with the vendored
 /// `email` module and the injected `lettre` dep — `cargo build`s exit 0.
 #[test]
 fn email_send_nominal_fold_seal_builds() {
@@ -142,7 +142,7 @@ fn email_send_nominal_fold_seal_builds() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "email_send_nominal_fold_seal: must be accepted (skyc-0), got: {built:?}"
+        "email_send_nominal_fold_seal: must be accepted (ipe-0), got: {built:?}"
     );
 
     if std::env::var("IPE_E2E").is_err() {
@@ -150,7 +150,7 @@ fn email_send_nominal_fold_seal_builds() {
     }
     // The `email.send` kernel is network-effectful (no deterministic stdout
     // without a live provider), so the SEAL proof is the cargo BUILD, not a run:
-    // skyc-0 ⇒ the emitted crate compiles.
+    // ipe-0 ⇒ the emitted crate compiles.
     let outcome = support::build_emitted("email_send_nominal_fold_seal", &out);
     assert!(
         outcome.is_ok(),

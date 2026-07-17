@@ -1,7 +1,7 @@
 //! `Ipe.Uuid` + `Ipe.Jwt` gate —
 //! UUID generation/parsing and JWT HS256/RS256 encode/decode.
 //!
-//! Every test compiles a Sky program through `skyc`, builds the emitted Rust
+//! Every test compiles a Ipê program through `ipe`, builds the emitted Rust
 //! project with the shared cargo target, runs the binary, and checks its stdout
 //! against the cached oracle (`tests/golden/m5b_*/oracle.meta` +
 //! `expected_go.txt`). All tests are gated on `IPE_E2E=1`; without it they
@@ -18,14 +18,14 @@
 //!   `decodeRs256`); the Go backend exposes only the builder API
 //!   (`Jwt.encode` / `hs256` / `rs256` / `claims` / `decode`). So this exact
 //!   `Main.ipe` does not compile on the Go reference and the cached expected is
-//!   skyc's own output, NOT a Go run of the same source.
+//!   ipe's own output, NOT a Go run of the same source.
 //!
 //! * **UUID (`m5b_uuid_*`) — soundness divergence.** `Uuid.v4` / `Uuid.v7` are
 //!   typed on the EFFECT tier (`() -> Task Error String`) because
 //!   entropy is not a memoizable pure value; the Go reference still types them as
 //!   bare `Uuid.v4 : String` (Limitation #7), so these Task-sequenced programs
 //!   are not co-typable with the Go backend and cannot be Go-oracled. The cached
-//!   expected is skyc's (semantically correct) output. `Uuid.parse` is the pure
+//!   expected is ipe's (semantically correct) output. `Uuid.parse` is the pure
 //!   `String -> Maybe String` parser on both backends.
 //!
 //! ## Byte-parity with Go IS proven — separately and explicitly
@@ -156,7 +156,7 @@ fn assert_token_byte_identical_to_go(name: &str, go_token: &str) {
 ///
 /// Recorded soundness divergence (NOT Go-parity): the Go reference types
 /// `Uuid.v4` as a bare `String` (Limitation #7) and cannot express this
-/// Task-sequenced program. Expected holds skyc's correct output.
+/// Task-sequenced program. Expected holds ipe's correct output.
 #[test]
 fn uuid_format() {
     assert_runs_and_matches_oracle("uuid_format");
@@ -180,7 +180,7 @@ fn uuid_distinct() {
 /// Output: `"ok"`.
 ///
 /// Recorded divergence (NOT Go-parity): the Go reference returns `Nothing` for
-/// the canonical UUID on this shape. Expected holds skyc's correct output.
+/// the canonical UUID on this shape. Expected holds ipe's correct output.
 #[test]
 fn uuid_parse() {
     assert_runs_and_matches_oracle("uuid_parse");

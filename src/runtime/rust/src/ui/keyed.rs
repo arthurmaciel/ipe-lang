@@ -1,6 +1,6 @@
-//! `Std.Ui.Keyed` kernel helpers — sky-key diff identity.
+//! `Ipe.Ui.Keyed` kernel helpers — sky-key diff identity.
 //!
-//! **ipê v1 semantics: KEY DISCARDED.** Sky's Go runtime uses the key string to
+//! **ipê v1 semantics: KEY DISCARDED.** Ipê's Go runtime uses the key string to
 //! stabilise the VNode diff (similar to Elm's `Html.Keyed`); ipê v1 does not yet
 //! have a key-aware differ.  The key is accepted but dropped, which is semantically
 //! correct (keys are a performance hint, not a behavioural contract).

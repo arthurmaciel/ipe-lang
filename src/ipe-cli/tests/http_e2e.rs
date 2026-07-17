@@ -8,7 +8,7 @@
 //!
 //! Each test:
 //!
-//! 1. Writes a Sky program to a fresh temp dir.
+//! 1. Writes a Ipê program to a fresh temp dir.
 //! 2. Compiles it through `ipe::build` (full pipeline: parse → canon → types →
 //!    lower → emit Rust).
 //! 3. Builds the emitted Cargo project with the shared target via
@@ -27,7 +27,7 @@
 //! `http_ssrf_deny_loopback` does NOT start a fixture server.  It sets
 //! `IPE_HTTP_DENY_PRIVATE=1`, points `Http.get` at the loopback address, and
 //! asserts the runtime blocks the request (`DENIED` on stdout).  Proves the guard
-//! works end-to-end (Sky source → emitted Rust → `ipe_runtime` SSRF check).
+//! works end-to-end (Ipê source → emitted Rust → `ipe_runtime` SSRF check).
 //!
 //! Run:
 //!
@@ -47,11 +47,11 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/// Compile a Sky program string, build the emitted Rust project, and return
+/// Compile a Ipê program string, build the emitted Rust project, and return
 /// the path to the compiled binary.
 ///
 /// Creates a unique temp dir per test name, writes `Main.ipe`, runs the full
-/// skyc pipeline, then delegates the Cargo build to `oracle::build_rust_binary`.
+/// ipe pipeline, then delegates the Cargo build to `oracle::build_rust_binary`.
 ///
 /// # Errors
 ///
@@ -74,7 +74,7 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxEr
         .map_err(|e| -> BoxError { format!("{test_name}: runtime unavailable: {e}").into() })?;
 
     ipe::build(&entry, &out_dir, &runtime)
-        .map_err(|e| -> BoxError { format!("{test_name}: skyc build failed: {e}").into() })?;
+        .map_err(|e| -> BoxError { format!("{test_name}: ipe build failed: {e}").into() })?;
 
     let exe = oracle::build_rust_binary(test_name, &out_dir)
         .map_err(|e| -> BoxError { format!("{test_name}: cargo build failed: {e}").into() })?;
@@ -128,7 +128,7 @@ fn start_fixture(
     Ok((url, handle))
 }
 
-// Sky source shared between GET and POST tests.  The program reads the fixture
+// Ipê source shared between GET and POST tests.  The program reads the fixture
 // URL from the `IPE_HTTP_TEST_URL` env var, performs the request, and prints
 // `<status>\n<body>` so the test can assert both independently.
 
@@ -159,7 +159,7 @@ main =
 // Http.get propagates past the andThen (which short-circuits on failure) and into
 // the onError handler, which prints "DENIED"; the andThen success branch prints
 // the status, so a guard that FAILED to fire would print "200", not "DENIED".
-// Using nested calls (no |> operator) avoids Sky layout-rule parse ambiguity
+// Using nested calls (no |> operator) avoids Ipê layout-rule parse ambiguity
 // when the pipe sits at a continuation line.
 const IPE_HTTP_SSRF_PROGRAM: &str = r#"module Main exposing (main)
 
@@ -177,9 +177,9 @@ main =
 
 /// `Http.get` against a raw TCP fixture returns the expected status and body.
 ///
-/// The fixture server responds with HTTP 200 and body `hello get`.  The Sky
+/// The fixture server responds with HTTP 200 and body `hello get`.  The Ipê
 /// program prints `200\nhello get`.  Proves the full pipeline end-to-end:
-/// Sky source → skyc → emitted Rust → `ipe_runtime` `Http.get` → parsed response.
+/// Ipê source → ipe → emitted Rust → `ipe_runtime` `Http.get` → parsed response.
 ///
 /// # Errors
 ///
@@ -218,7 +218,7 @@ fn http_get_fixture() -> Result<(), BoxError> {
 
 /// `Http.post` against a raw TCP fixture returns the expected status and body.
 ///
-/// The fixture server responds with HTTP 201 and body `hello post`.  The Sky
+/// The fixture server responds with HTTP 201 and body `hello post`.  The Ipê
 /// program prints `201\nhello post`.  Proves `Http.post` posts the body and
 /// reads the response correctly.
 ///

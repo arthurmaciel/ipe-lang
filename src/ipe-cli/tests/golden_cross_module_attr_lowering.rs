@@ -27,7 +27,7 @@
 //!
 //! Run:
 //! ```text
-//! cargo test -p skyc --test golden_l0126_cross_module_attr
+//! cargo test -p ipe --test golden_l0126_cross_module_attr
 //! ```
 
 use std::path::{Path, PathBuf};

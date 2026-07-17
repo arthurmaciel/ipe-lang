@@ -1,4 +1,4 @@
-//! Lambda + application gate: `skyc` must emit `main.rs`
+//! Lambda + application gate: `ipe` must emit `main.rs`
 //! byte-identical to the checked-in golden for anonymous functions (`\x -> e`,
 //! multi-parameter `\a b -> e`, and an outer-local capture), and (behind
 //! `IPE_E2E=1`) the emitted project must build and print `62`.

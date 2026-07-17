@@ -13,7 +13,7 @@
 //!
 //! `oracle_divergence = true`: the Go reference compiler (`sky dev`) does not
 //! expose `Html.htmlRender` and exits 1 on this source.  `expected_go.txt` holds
-//! skyc's own correct output — the Rust-backend HTML with the click event wired.
+//! ipe's own correct output — the Rust-backend HTML with the click event wired.
 //!
 //! ## What is tested
 //!
@@ -64,7 +64,7 @@ fn build_run_onclick() -> (PathBuf, support::RunOutcome) {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for stdui_onclick: {:?}",
+        "ipe build must succeed for stdui_onclick: {:?}",
         built.err()
     );
 

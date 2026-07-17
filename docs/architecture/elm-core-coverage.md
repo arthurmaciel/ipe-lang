@@ -30,22 +30,22 @@ Result, Set, String, Task, Tuple — 17 total, all verified against the
 registry.
 
 > **Audit basis.** The authoritative ipê stdlib for the Rust port is the set
-> embedded by `crates/skyc/src/stdlib.rs` (17 `Sky.Core.*` modules: `Basics`,
+> embedded by `crates/ipe/src/stdlib.rs` (17 `Ipe.*` modules: `Basics`,
 > `Maybe`, `Result`, `List`, `String`, `Char`, `Dict`, `Set`, `Bytes`,
 > `Crypto`, `Task`, `Io`, `Time`, `System`, `Random`, `File`, `Http`). The
 > larger `sky-out/.ipe-stdlib/` tree is a reference-compiler artifact and is
-> **not** what skyc ships. A name counts as reachable only when it both
+> **not** what ipe ships. A name counts as reachable only when it both
 > resolves — via the embedded module's `exposing` list or the auto-prelude
 > `QUALIFIERS` table in `crates/sky_canon/src/env.rs` — **and** carries a
-> concrete type, either from a Sky-source body/annotation or from a matched
+> concrete type, either from a Ipê-source body/annotation or from a matched
 > arm of `kernel_ty` in `crates/sky_types/src/constrain.rs`. `kernel_ty`'s
 > catch-all returns an unconstrained type variable, so a name that only hits
 > the fallback is treated as *not* usably typed. Notably, ipê has **no**
 > `Array`, `Bitwise`, `Tuple`, `Debug`, `Process`, or `Platform` module, and
 > no `Order` or `Never` type; the numeric surface beyond the language
-> operators lives in `Sky.Core.Math` (typed in `kernel_ty` and registered in
+> operators lives in `Ipe.Math` (typed in `kernel_ty` and registered in
 > `QUALIFIERS`, though not embedded as source); tuple helpers are
-> `Basics.fst`/`snd`; `Cmd`/`Sub` are `Std.Cmd`/`Std.Sub`.
+> `Basics.fst`/`snd`; `Cmd`/`Sub` are `Ipe.Cmd`/`Ipe.Sub`.
 
 ---
 
@@ -122,20 +122,20 @@ core types. Everything here is exposed by default in every Elm module.
 | Function / Type | Signature | ipê status |
 |---|---|---|
 | `toFloat` | `Int -> Float` | ✗ (no `Int -> Float` widening kernel; `String.toFloat` is unrelated) |
-| `round` | `Float -> Int` | ✓ (`Sky.Core.Math.round`, same sig) |
-| `floor` | `Float -> Int` | ✓ (`Sky.Core.Math.floor`) |
+| `round` | `Float -> Int` | ✓ (`Ipe.Math.round`, same sig) |
+| `floor` | `Float -> Int` | ✓ (`Ipe.Math.floor`) |
 | `ceiling` | `Float -> Int` | ~ (`Math.ceil` — name differs: `ceil` vs `ceiling`) |
 | `truncate` | `Float -> Int` | ~ (`Math.trunc` — name differs: `trunc` vs `truncate`) |
 | `max` | `comparable -> comparable -> comparable` | ✓ (`Math.max`, Ord-bounded `a -> a -> a`) |
 | `min` | `comparable -> comparable -> comparable` | ✓ (`Math.min`, Ord-bounded) |
 | `compare` | `comparable -> comparable -> Order` | ~ (registered `Basics` qualifier but `kernel_ty` has no arm → unconstrained-var fallback; no `Order` type / `LT`/`EQ`/`GT`) |
-| `not` | `Bool -> Bool` | ✓ (`Sky.Core.Basics.not`, Sky source) |
+| `not` | `Bool -> Bool` | ✓ (`Ipe.Basics.not`, Ipê source) |
 | `xor` | `Bool -> Bool -> Bool` | ✗ (no boolean `xor`) |
 | `modBy` | `Int -> Int -> Int` | ~ (registered `Basics` qualifier but no typed kernel arm; `Math.mod` is `Float -> Float -> Float`) |
 | `remainderBy` | `Int -> Int -> Int` | ✗ (`Math.remainder` is `Float -> Float -> Float`; no Int form) |
 | `negate` | `number -> number` | ~ (registered `Basics` qualifier but no typed kernel arm; no `Math.negate`) |
 | `abs` | `number -> number` | ~ (`Math.abs` is `Int -> Int` only — no Float/`number` form) |
-| `clamp` | `number -> number -> number -> number` | ✓ (`Sky.Core.Basics.clamp`, Sky source) |
+| `clamp` | `number -> number -> number -> number` | ✓ (`Ipe.Basics.clamp`, Ipê source) |
 | `sqrt` | `Float -> Float` | ✓ (`Math.sqrt`) |
 | `logBase` | `Float -> Float -> Float` | ✗ (`Math` has `log`/`log2`/`log10`, no `logBase`) |
 | `e` | `Float` | ✓ (`Math.e`) |
@@ -154,8 +154,8 @@ core types. Everything here is exposed by default in every Elm module.
 | `fromPolar` | `( Float, Float ) -> ( Float, Float )` | ✗ |
 | `isNaN` | `Float -> Bool` | ✗ (`Math.nan` is a constant, not a predicate) |
 | `isInfinite` | `Float -> Bool` | ✗ (`Math.inf` is a constant, not a predicate) |
-| `identity` | `a -> a` | ✓ (`Sky.Core.Basics.identity`, Sky source) |
-| `always` | `a -> b -> a` | ✓ (`Sky.Core.Basics.always`, Sky source) |
+| `identity` | `a -> a` | ✓ (`Ipe.Basics.identity`, Ipê source) |
+| `always` | `a -> b -> a` | ✓ (`Ipe.Basics.always`, Ipê source) |
 | `never` | `Never -> a` | ✗ (no `Never` type) |
 
 ---
@@ -186,19 +186,19 @@ Functions over single Unicode characters.
 
 | Function / Type | Signature | ipê status |
 |---|---|---|
-| `isUpper` | `Char -> Bool` | ✓ (`Sky.Core.Char.isUpper`) |
-| `isLower` | `Char -> Bool` | ✓ (`Sky.Core.Char.isLower`) |
-| `isAlpha` | `Char -> Bool` | ✓ (`Sky.Core.Char.isAlpha`) |
+| `isUpper` | `Char -> Bool` | ✓ (`Ipe.Char.isUpper`) |
+| `isLower` | `Char -> Bool` | ✓ (`Ipe.Char.isLower`) |
+| `isAlpha` | `Char -> Bool` | ✓ (`Ipe.Char.isAlpha`) |
 | `isAlphaNum` | `Char -> Bool` | ✗ |
-| `isDigit` | `Char -> Bool` | ✓ (`Sky.Core.Char.isDigit`) |
+| `isDigit` | `Char -> Bool` | ✓ (`Ipe.Char.isDigit`) |
 | `isOctDigit` | `Char -> Bool` | ✗ |
 | `isHexDigit` | `Char -> Bool` | ✗ |
 | `toUpper` | `Char -> Char` | ~ (`Char.toUpper : Char -> String` — returns a single-rune String, not `Char`) |
 | `toLower` | `Char -> Char` | ~ (`Char.toLower : Char -> String` — returns a single-rune String, not `Char`) |
 | `toLocaleUpper` | `Char -> Char` | ✗ |
 | `toLocaleLower` | `Char -> Char` | ✗ |
-| `toCode` | `Char -> Int` | ✓ (`Sky.Core.Char.toCode`) |
-| `fromCode` | `Int -> Char` | ✓ (`Sky.Core.Char.fromCode`) |
+| `toCode` | `Char -> Int` | ✓ (`Ipe.Char.toCode`) |
+| `fromCode` | `Int -> Char` | ✓ (`Ipe.Char.fromCode`) |
 
 ---
 
@@ -210,7 +210,7 @@ before `--optimize` builds.
 | Function / Type | Signature | ipê status |
 |---|---|---|
 | `toString` | `a -> String` | ~ (no `Debug` module; the `String.fromInt`/`fromFloat`/`fromChar` family + a registered-but-untyped `Basics.toString` qualifier are the nearest analogues) |
-| `log` | `String -> a -> a` | ✗ (no `Debug.log`; `Std.Log` is a `Task`-tier logger, not the value-passthrough dev helper) |
+| `log` | `String -> a -> a` | ✗ (no `Debug.log`; `Ipe.Log` is a `Task`-tier logger, not the value-passthrough dev helper) |
 | `todo` | `String -> a` | ✗ (no `Debug.todo`) |
 
 ---
@@ -225,7 +225,7 @@ Immutable dictionary keyed by any `comparable`.
 
 | Function / Type | Signature | ipê status |
 |---|---|---|
-| `empty` | `Dict k v` | ✓ (`Sky.Core.Dict.empty`) |
+| `empty` | `Dict k v` | ✓ (`Ipe.Dict.empty`) |
 | `singleton` | `comparable -> v -> Dict comparable v` | ✗ |
 | `insert` | `comparable -> v -> Dict comparable v -> Dict comparable v` | ✓ |
 | `update` | `comparable -> (Maybe v -> Maybe v) -> Dict comparable v -> Dict comparable v` | ✗ |
@@ -259,9 +259,9 @@ Operations on ordered, homogeneous linked lists.
 | `(::)` | `a -> List a -> List a` | ✓ (cons operator + `List.cons`) |
 | `singleton` | `a -> List a` | ✗ |
 | `repeat` | `Int -> a -> List a` | ✗ |
-| `range` | `Int -> Int -> List Int` | ✓ (`Sky.Core.List.range`) |
-| `map` | `(a -> b) -> List a -> List b` | ✓ (Sky source) |
-| `indexedMap` | `(Int -> a -> b) -> List a -> List b` | ✓ (exposed by `Sky.Core.List`; not in auto-prelude — needs explicit import) |
+| `range` | `Int -> Int -> List Int` | ✓ (`Ipe.List.range`) |
+| `map` | `(a -> b) -> List a -> List b` | ✓ (Ipê source) |
+| `indexedMap` | `(Int -> a -> b) -> List a -> List b` | ✓ (exposed by `Ipe.List`; not in auto-prelude — needs explicit import) |
 | `foldl` | `(a -> b -> b) -> b -> List a -> b` | ✓ |
 | `foldr` | `(a -> b -> b) -> b -> List a -> b` | ✓ |
 | `filter` | `(a -> Bool) -> List a -> List a` | ✓ |
@@ -306,7 +306,7 @@ Optional values.
 
 | Function / Type | Signature | ipê status |
 |---|---|---|
-| `withDefault` | `a -> Maybe a -> a` | ✓ (`Sky.Core.Maybe`, Sky source) |
+| `withDefault` | `a -> Maybe a -> a` | ✓ (`Ipe.Maybe`, Ipê source) |
 | `map` | `(a -> b) -> Maybe a -> Maybe b` | ✓ |
 | `map2` | `(a -> b -> value) -> Maybe a -> Maybe b -> Maybe value` | ✓ |
 | `map3` | `(a -> b -> c -> value) -> Maybe a -> Maybe b -> Maybe c -> Maybe value` | ✓ |
@@ -347,8 +347,8 @@ Commands — effects the runtime performs.
 
 | Function / Type | Signature | ipê status |
 |---|---|---|
-| `none` | `Cmd msg` | ✓ (`Std.Cmd.none`) |
-| `batch` | `List (Cmd msg) -> Cmd msg` | ✓ (`Std.Cmd.batch`) |
+| `none` | `Cmd msg` | ✓ (`Ipe.Cmd.none`) |
+| `batch` | `List (Cmd msg) -> Cmd msg` | ✓ (`Ipe.Cmd.batch`) |
 | `map` | `(a -> msg) -> Cmd a -> Cmd msg` | ✗ (no `Cmd.map`; ipê exposes `Cmd.perform` instead, which is Elm's `Task.perform`) |
 
 ---
@@ -363,8 +363,8 @@ Subscriptions — external events the runtime listens for.
 
 | Function / Type | Signature | ipê status |
 |---|---|---|
-| `none` | `Sub msg` | ✓ (`Std.Sub.none`) |
-| `batch` | `List (Sub msg) -> Sub msg` | ✓ (`Std.Sub.batch`) |
+| `none` | `Sub msg` | ✓ (`Ipe.Sub.none`) |
+| `batch` | `List (Sub msg) -> Sub msg` | ✓ (`Ipe.Sub.batch`) |
 | `map` | `(a -> msg) -> Sub a -> Sub msg` | ✗ (no `Sub.map`; ipê exposes `Sub.every` instead) |
 
 ---
@@ -380,7 +380,7 @@ Lightweight green-thread primitives.
 | Function / Type | Signature | ipê status |
 |---|---|---|
 | `spawn` | `Task x a -> Task y Id` | ✗ (no `Process.spawn`; concurrency is `Task.parallel` / `Cmd`) |
-| `sleep` | `Float -> Task x ()` | ~ (`Sky.Core.Time.sleep : Float -> Task Error ()` — same semantics, different module) |
+| `sleep` | `Float -> Task x ()` | ~ (`Ipe.Time.sleep : Float -> Task Error ()` — same semantics, different module) |
 | `kill` | `Id -> Task x ()` | ✗ (no `Process.kill`) |
 
 ---
@@ -395,7 +395,7 @@ Computations that may fail with a typed error.
 
 | Function / Type | Signature | ipê status |
 |---|---|---|
-| `withDefault` | `a -> Result x a -> a` | ✓ (`Sky.Core.Result`, Sky source) |
+| `withDefault` | `a -> Result x a -> a` | ✓ (`Ipe.Result`, Ipê source) |
 | `map` | `(a -> value) -> Result x a -> Result x value` | ✓ |
 | `map2` | `(a -> b -> value) -> Result x a -> Result x b -> Result x value` | ✓ |
 | `map3` | `(a -> b -> c -> value) -> Result x a -> Result x b -> Result x c -> Result x value` | ✓ |
@@ -418,7 +418,7 @@ Immutable set of unique `comparable` values.
 
 | Function / Type | Signature | ipê status |
 |---|---|---|
-| `empty` | `Set a` | ✓ (`Sky.Core.Set.empty`) |
+| `empty` | `Set a` | ✓ (`Ipe.Set.empty`) |
 | `singleton` | `comparable -> Set comparable` | ✗ |
 | `insert` | `comparable -> Set comparable -> Set comparable` | ✓ |
 | `remove` | `comparable -> Set comparable -> Set comparable` | ✓ |
@@ -448,7 +448,7 @@ Operations on UTF-16 text.
 
 | Function / Type | Signature | ipê status |
 |---|---|---|
-| `isEmpty` | `String -> Bool` | ✓ (`Sky.Core.String`) |
+| `isEmpty` | `String -> Bool` | ✓ (`Ipe.String`) |
 | `length` | `String -> Int` | ✓ |
 | `reverse` | `String -> String` | ✓ |
 | `repeat` | `Int -> String -> String` | ✓ |
@@ -507,7 +507,7 @@ Asynchronous operations that may fail.
 
 | Function / Type | Signature | ipê status |
 |---|---|---|
-| `succeed` | `a -> Task x a` | ✓ (`Sky.Core.Task.succeed : a -> Task Error a`) |
+| `succeed` | `a -> Task x a` | ✓ (`Ipe.Task.succeed : a -> Task Error a`) |
 | `fail` | `x -> Task x a` | ✓ (`fail : Error -> Task Error a`) |
 | `map` | `(a -> b) -> Task x a -> Task x b` | ✓ |
 | `map2` | `(a -> b -> result) -> Task x a -> Task x b -> Task x result` | ✗ |
@@ -530,8 +530,8 @@ Helpers for pairs.
 | Function / Type | Signature | ipê status |
 |---|---|---|
 | `pair` | `a -> b -> ( a, b )` | ✗ (tuple literals only; no `Tuple` module) |
-| `first` | `( a, b ) -> a` | ~ (`Sky.Core.Basics.fst` — name differs) |
-| `second` | `( a, b ) -> b` | ~ (`Sky.Core.Basics.snd` — name differs) |
+| `first` | `( a, b ) -> a` | ~ (`Ipe.Basics.fst` — name differs) |
+| `second` | `( a, b ) -> b` | ~ (`Ipe.Basics.snd` — name differs) |
 | `mapFirst` | `(a -> x) -> ( a, b ) -> ( x, b )` | ✗ |
 | `mapSecond` | `(b -> y) -> ( a, b ) -> ( a, y )` | ✗ |
 | `mapBoth` | `(a -> x) -> (b -> y) -> ( a, b ) -> ( x, y )` | ✗ |
@@ -633,7 +633,7 @@ are missing (only `Time.sleep` covers `Process.sleep`).
 - **`Basics.abs`.** `Math.abs` is `Int -> Int` only; Elm's `abs : number ->
   number` also covers `Float`. No Float `abs`.
 - **Math namespace vs Elm `Basics`.** `round`/`floor`/`sqrt`/`e`/`pi`/trig live
-  under `Sky.Core.Math`, not auto-exposed `Basics`; `ceiling`→`ceil` and
+  under `Ipe.Math`, not auto-exposed `Basics`; `ceiling`→`ceil` and
   `truncate`→`trunc` also rename. Decide whether to re-export the Math numerics
   through the default prelude to match Elm's zero-import ergonomics.
 - **`Char.toUpper`/`toLower` return `String`.** ipê types these as

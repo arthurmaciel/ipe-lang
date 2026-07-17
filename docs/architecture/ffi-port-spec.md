@@ -11,8 +11,8 @@
 > **Scope split.** The inspector (`tools/sky-ffi-inspect-rs/src/main.rs`, 18.5k
 > LOC) is **vendored and works** as a `PkgInfo` JSON producer (post-macro-expansion
 > rustdoc-JSON; fail-closed over-drop). The **generator** — Haskell in `../sky`,
-> `src/Sky/Build/Rust/{Ffi.hs (1616), FfiInstance.hs (952), FfiCall.hs (820)}` +
-> `NumCoerce.hs` + naming, with `src/Sky/Build/FfiGen.hs (1996)` as the shared
+> `src/Ipê/Build/Rust/{Ffi.hs (1616), FfiInstance.hs (952), FfiCall.hs (820)}` +
+> `NumCoerce.hs` + naming, with `src/Ipê/Build/FfiGen.hs (1996)` as the shared
 > `.ipei`/`kernel.json` emission reference — is **absent** and must be ported to a
 > new `ipe_ffi` crate. The whole consumer side (kernel-registry M4, `.ipei`
 > type-env seeding, dynamic `Cargo.toml` injection, `ipe add/install/remove`
@@ -338,7 +338,7 @@ does not start M-D/M-E against a `KernelFn` enum that has to be re-keyed later.
   concrete instantiations (`SolvedTypes.regions → IrType`); lower passes the
   concrete instance to the registry entry, and `synthesiseGenericWrapper` emits
   the monomorphic wrapper. Keep foreign generic entries instantiable per call site.
-- **Closure soundness:** a Sky lambda captured into a multi-call `Fn`/`FnMut` slot
+- **Closure soundness:** a Ipê lambda captured into a multi-call `Fn`/`FnMut` slot
   must be `Clone` (`closureNeedsClone`, `FfiCall.hs:581`; capture gate
   `FfiInstance.hs:322-390`) — else `IPE-F4400`. This is the boundary that keeps
   "well-typed ipê never panics" across FFI.
@@ -362,7 +362,7 @@ does not start M-D/M-E against a `KernelFn` enum that has to be re-keyed later.
   vanish — the firestore #73/#100 class, `main.rs:464-474`). Never emit `"*"`.
 - **`~/.cache/ipe/ffi/rust/` cache.** `<crate>.ipei`, `<crate>.kernel.json`,
   `<crate>_bindings.rs`, `<crate>.coverage.md` (never regenerated on warm cache;
-  explicit `ipe add`/`install` step, mirroring the sky watch-cache rule).
+  explicit `ipe add`/`install` step, mirroring the ipe watch-cache rule).
 - **Acceptance:** `ipe add`/`remove` round-trip on a shim-free crate; a
   from-scratch `ipe install` regenerates the cache; malicious-crate-name and
   bad-git-URL are refused before any compile.

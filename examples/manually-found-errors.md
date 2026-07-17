@@ -11,19 +11,19 @@ Console is poor - it is not run at a different port. Why? With Ctrl-C is the app
 71 |               [class "counter-buttons"]
    |                       ^ `_` is already handled
    |
-   = note: run `skyc explain IPE-T0011` for more information
+   = note: run `ipe explain IPE-T0011` for more information
 
 12-skyvote  Sign-up doesn't work. Sign in to vote too.
 14-task-demo    OK
 15-http-server  OK (is the server shutting down gracefully?)
-16-skychess OK
+16-ipehess OK
 17-skymon   Got a warning[IPE-T0011]: redundant case branch
    --> src/Lib/Auth.ipe:236:6
     |
 236 |     else
     |      ^ `_` is already handled
     |
-    = note: run `skyc explain IPE-T0011` for more information
+    = note: run `ipe explain IPE-T0011` for more information
 
 warning[IPE-T0011]: redundant case branch
    --> src/Page/MonitorDetail.ipe:230:45
@@ -31,7 +31,7 @@ warning[IPE-T0011]: redundant case branch
 230 |               [ onClick (Navigate DashboardPage), class "btn btn-primary" ]
     |                                             ^ `_` is already handled
     |
-    = note: run `skyc explain IPE-T0011` for more information
+    = note: run `ipe explain IPE-T0011` for more information
    Other errors: "Add alert" doesn't work
 18-job-queue    Gross error: error[E0507]: cannot move out of `insertRow`, a captured variable in an `Fn` closure
    --> src/main.rs:424:682
@@ -54,7 +54,7 @@ help: consider cloning the value before moving it into the closure
 error[E0507]: cannot move out of `selectRecent`, a captured variable in an `Fn` closure
    --> src/main.rs:427:790
     |
-427 | ...et selectRecent = { let __sky_fn: ::std::sync::Arc<dyn Fn(Db) -> Sky...<Vec<sky_runtime::db::SqlParam>>()) }); __sky_fn }; ({ let readAll = { let __sky_fn: Box<dyn Fn(Db) -> SkyTask<Vec<HashMap<String, String>>> + Send + Sync + 'static> = Box::new(move |db: Db| -> SkyTask<Vec<HashMap<String, String>>> { (({ let db = db.clone(); { let __sky_fn: Box<dyn Fn(SkyTask<i64>) -> SkyTask<Vec<HashMap<String, String>>> + Send + Sync + 'static> = Box::new(move |eta_0: SkyTask<i64>| -> SkyTask<Vec<HashMap<String, String>>> { task_and_then(eta_0, ({ let db = db.clone(); ({ let selectRecent = selectRecent.cl...
+427 | ...et selectRecent = { let __sky_fn: ::std::sync::Arc<dyn Fn(Db) -> Ipê...<Vec<sky_runtime::db::SqlParam>>()) }); __sky_fn }; ({ let readAll = { let __sky_fn: Box<dyn Fn(Db) -> SkyTask<Vec<HashMap<String, String>>> + Send + Sync + 'static> = Box::new(move |db: Db| -> SkyTask<Vec<HashMap<String, String>>> { (({ let db = db.clone(); { let __sky_fn: Box<dyn Fn(SkyTask<i64>) -> SkyTask<Vec<HashMap<String, String>>> + Send + Sync + 'static> = Box::new(move |eta_0: SkyTask<i64>| -> SkyTask<Vec<HashMap<String, String>>> { task_and_then(eta_0, ({ let db = db.clone(); ({ let selectRecent = selectRecent.cl...
     |       ------------   --------------------------------------------------...--------------------------------------------------                                                                                                                               ------------------------------------------------------ captured by this `Fn` closure                                                                                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `selectRecent` is moved here                                         ------------ variable moved due to use in closure
     |       |              |
     |       |              move occurs because `selectRecent` has type `Arc<dyn Fn(Pool<Sqlite>) -> Pin<Box<...>> + Send + Sync>`, which does not implement the `Copy` trait
@@ -81,7 +81,7 @@ Compare to Go
     |             ^^^^^^^^ 1 route(s) declared but the Model has no `page` field — routing is disabled and the routes are ignored
     |
     = note: the `routes` list has 1 route(s) but the Model has no `page` field, so routing is disabled and every URL serves the same app. The routed-page field must be named exactly `page` (of the `Page` ADT whose constructors appear as route destinations). Rename the field to `page`, or remove the `routes` list if routing is not needed.
-    = note: run `skyc explain IPE-L0124` for more information
+    = note: run `ipe explain IPE-L0124` for more information
 
 Multiline is not working. 
 Have to compare with Go
@@ -94,7 +94,7 @@ warning[IPE-L0124]: `Live.app` routes list is non-empty but Model has no `page` 
    |     ^^^ 1 route(s) declared but the Model has no `page` field — routing is disabled and the routes are ignored
    |
    = note: the `routes` list has 1 route(s) but the Model has no `page` field, so routing is disabled and every URL serves the same app. The routed-page field must be named exactly `page` (of the `Page` ADT whose constructors appear as route destinations). Rename the field to `page`, or remove the `routes` list if routing is not needed.
-   = note: run `skyc explain IPE-L0124` for more information
+   = note: run `ipe explain IPE-L0124` for more information
 
 
 ## 26-ui-showcase
@@ -106,9 +106,9 @@ Sending message is not working - it even appears on a second browser tab, but th
 ## 28-streaming-chat   
 2026/07/15 23:39:36 [sky.live] session store: memory (ttl=30m0s)
 2026/07/15 23:39:36 [sky.live] session store: memory (ttl=30m0s)
-[sky.console] inline console mounted as Sky.Live sub-app at /_sky/console mode=dev-open
+[sky.console] inline console mounted as Ipe.Live sub-app at /_sky/console mode=dev-open
 [sky.live] listening on http://0.0.0.0:8000
-Sky.Live listening on :8000
+Ipe.Live listening on :8000
 [error] ForeignError (ref 1df6ffd5): reqwest::Error { kind: Request, url: "http://localhost:8765/stream", source: hyper_util::client::legacy::Error(Connect, ConnectError("tcp connect error", 127.0.0.1:8765, Os { code: 111, kind: ConnectionRefused, message: "Connection refused" })) }
 [error] ForeignError (ref 1a718632): reqwest::Error { kind: Request, url: "http://localhost:8765/stream", source: hyper_util::client::legacy::Error(Connect, ConnectError("tcp connect error", 127.0.0.1:8765, Os { code: 111, kind: ConnectionRefused, message: "Connection refused" })) }
 [error] ForeignError (ref 03102b26): reqwest::Error { kind: Request, url: "http://localhost:8765/stream", source: hyper_util::client::legacy::Error(Connect, ConnectError("tcp connect error", 127.0.0.1:8765, Os { code: 111, kind: ConnectionRefused, message: "Connection refused" })) }
@@ -341,7 +341,7 @@ warning[IPE-L0124]: `Live.app` routes list is non-empty but Model has no `page` 
     |                                                ^^^^^^^^ 1 route(s) declared but the Model has no `page` field — routing is disabled and the routes are ignored
     |
     = note: the `routes` list has 1 route(s) but the Model has no `page` field, so routing is disabled and every URL serves the same app. The routed-page field must be named exactly `page` (of the `Page` ADT whose constructors appear as route destinations). Rename the field to `page`, or remove the `routes` list if routing is not needed.
-    = note: run `skyc explain IPE-L0124` for more information
+    = note: run `ipe explain IPE-L0124` for more information
 
     Updating crates.io index
      Locking 461 packages to latest Rust 1.99.0-nightly compatible versions

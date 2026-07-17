@@ -1,6 +1,6 @@
 //! `examples/27-multi-session-chat`'s `cargo build`.
 //!
-//! Without the fix, `skyc build` exits 0, but the emitted Rust fails `cargo build`
+//! Without the fix, `ipe build` exits 0, but the emitted Rust fails `cargo build`
 //! with E0277 (`the trait bound T1: IpeRow is not satisfied`) at every
 //! `db_get_string("field".to_string(), &(payload))` call inside a function
 //! whose only generic is the wildcard `any` PARAM (example 27's
@@ -46,7 +46,7 @@ fn entry_path(root: &Path) -> PathBuf {
         .join("Main.ipe")
 }
 
-/// skyc-0: the compiler must accept the program AND emit `+ IpeRow` on the
+/// ipe-0: the compiler must accept the program AND emit `+ IpeRow` on the
 /// wildcard-`any` decoder function's own generic while leaving the record
 /// STRUCT unbounded — checked unconditionally (cheap, no `cargo`), independent
 /// of the `IPE_E2E` gate below.
@@ -65,7 +65,7 @@ fn i177_skyc_accepts_and_bounds_fn_not_struct() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for db_get_skyrow_bound: {:?}",
+        "ipe build must succeed for db_get_skyrow_bound: {:?}",
         built.err()
     );
 
@@ -103,7 +103,7 @@ fn i177_skyc_accepts_and_bounds_fn_not_struct() {
 /// cargo-0 ∧ run-0: the emitted project actually compiles with `rustc` and
 /// prints the decoded record fields. Gated on `IPE_E2E=1` — a real
 /// `cargo build`, the only check that would have caught the original SEAL
-/// violation (E0277 on `examples/27-multi-session-chat`, `skyc build` clean).
+/// violation (E0277 on `examples/27-multi-session-chat`, `ipe build` clean).
 #[test]
 fn i177_cargo_builds_and_runs() {
     if std::env::var("IPE_E2E").is_err() {
@@ -122,7 +122,7 @@ fn i177_cargo_builds_and_runs() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for db_get_skyrow_bound: {:?}",
+        "ipe build must succeed for db_get_skyrow_bound: {:?}",
         built.err()
     );
 

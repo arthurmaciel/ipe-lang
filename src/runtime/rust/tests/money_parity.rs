@@ -1,4 +1,4 @@
-//! Go≡Rust parity fixtures for Std.Money kernels.
+//! Go≡Rust parity fixtures for Ipe.Money kernels.
 //!
 //! Every assertion mirrors the Go oracle in
 //! `runtime-go/rt/money_kernel.go` and associated tests.
@@ -178,7 +178,7 @@ fn allocate_zero_and_negative_parts_return_empty() {
 
 // ── GOLDEN: Money add + format ───────────────────────────────────────────────
 //
-// Sky: `Money.add (Money.fromMajor USD 10) (Money.fromMajor USD 5.50)
+// Ipê: `Money.add (Money.fromMajor USD 10) (Money.fromMajor USD 5.50)
 //        |> Money.format`
 // Go parity: Dec.add(10.00, 5.50) = 15.50 → format("USD", 15.50) = "$15.50"
 
@@ -257,7 +257,7 @@ fn fx_auto_inverse_rate_capped_to_16_dp_matches_go() {
 
     // setRate USD→EUR = 3 ⇒ auto-inverse EUR→USD = 1/3. Go derives the inverse
     // with shopspring's `Div` (DivisionPrecision = 16, half-away-from-zero), so
-    // getRate of the inverse pair is sixteen 3s — Sky-Rust caps identically.
+    // getRate of the inverse pair is sixteen 3s — Ipê-Rust caps identically.
     let set: IpeResult<IpeError, ()> = money_set_rate("USD".to_string(), "EUR".to_string(), d("3"));
     assert!(set.is_ok(), "setRate must succeed for a positive rate");
 

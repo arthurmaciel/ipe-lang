@@ -27,7 +27,7 @@ w n = []
 emits `pub fn main_w<T1: Clone>(n: i64) -> Vec<T1>` — generic ONLY in the
 return position. A call site that pins the element type compiles; a call site
 that never pins it (`let _ = w 1`) is rustc **E0282** ("type annotations
-needed") — a skyc-exit-0 / cargo-fail SEAL breach. (Empirically: skyc accepts
+needed") — a ipe-exit-0 / cargo-fail SEAL breach. (Empirically: ipe accepts
 the program above; whether cargo fails depends on the call sites, which is
 exactly what makes it a silent trap.)
 
@@ -51,7 +51,7 @@ injection).
 Non-UI Cons no longer inject. The downstream "wildcard-`any` return-type fix"
 block then calls `ir_type_from_ty(body_ty)` WITHOUT the injected mapping; the
 embedded free `Ty::Var` makes that fail with `Feature::Polymorphism`
-(IPE-L0102) — i.e. the shape **fails closed with a Sky diagnostic** instead
+(IPE-L0102) — i.e. the shape **fails closed with a Ipê diagnostic** instead
 of emitting a return-position-only generic that can E0282 at arbitrary call
 sites.
 
@@ -71,7 +71,7 @@ injection.
 1. UI positive (must stay green): existing Webview/Live `view : Model -> any`
    goldens (the shape the injection serves) — no change.
 2. Non-UI negative: `w : Int -> any; w n = []` with an unpinning call site →
-   skyc REJECTS with IPE-L0102 (never exit-0). Golden asserting the
+   ipe REJECTS with IPE-L0102 (never exit-0). Golden asserting the
    diagnostic.
 3. Non-UI `Maybe`: `m : Int -> any; m n = Nothing` — same rejection class.
 

@@ -21,11 +21,11 @@
 #     • stderr contains one of the PANIC_RE markers (see below)
 #     • a build/run timeout
 #
-#   TRUE POSITIVE: `42 // 0` (Sky integer division by zero) triggers the
+#   TRUE POSITIVE: `42 // 0` (Ipê integer division by zero) triggers the
 #   DivisionByZero classifier, exits 101. Demonstrated in --tp-demo mode.
 #
 # Property:
-#   A random WELL-TYPED Sky program MUST (a) build successfully with ipe+cargo
+#   A random WELL-TYPED Ipê program MUST (a) build successfully with ipe+cargo
 #   (it is well-typed by construction; a build failure IS a soundness bug) AND
 #   (b) run without panicking and exit 0.  Any deviation is a soundness violation.
 #
@@ -134,21 +134,21 @@ PANIC_RE='^\[error\] [A-Za-z]+ \(ref |"kind":"[A-Za-z]|thread .* panicked at|RUS
 lcg_next() { echo $(( (1103515245 * $1 + 12345) & 0x7FFFFFFF )); }
 bint()      { echo $(( $2 + ($1 % ($3 - $2 + 1)) )); }
 
-# ── Six well-typed Sky program templates ─────────────────────────────────────
+# ── Six well-typed Ipê program templates ─────────────────────────────────────
 # Each is well-typed by construction — slot fills (Int literals, alphanum
 # Strings, bounded Int-list literals) satisfy the declared types. A violation
 # would be a compiler soundness bug, not a template bug. The templates are
 # direct ports of the Haskell reference fuzzer's templates, adjusted only where
 # the Rust/Ipê stdlib surface differs from the Go surface (it doesn't — the
-# Sky source surface is identical).
+# Ipê source surface is identical).
 
 template_arith() {
     local n1=$1 n2=$2 n3=$3
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 main =
     println (String.fromInt (let x_a = $n1 in x_a + $n2 * $n3))
@@ -160,8 +160,8 @@ template_strconcat() {
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 main =
     println ("prefix-" ++ String.fromInt $n1 ++ "-suffix-" ++ "$s1")
@@ -173,8 +173,8 @@ template_listmap() {
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 main =
     println (String.fromInt (List.length (List.map (\x -> x + $n1) $lst)))
@@ -186,8 +186,8 @@ template_maybechain() {
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 main =
     println (String.fromInt (Maybe.withDefault $n1 (Maybe.map (\x -> x * 2) (Just $n2))))
@@ -199,8 +199,8 @@ template_resultpipeline() {
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 main =
     println (String.fromInt (Result.withDefault 0 (Result.map (\x -> x + $n1) (Ok $n2))))
@@ -212,8 +212,8 @@ template_paramrecord() {
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 type alias Box a =
     { value : a, label : String }
@@ -241,8 +241,8 @@ template_adt_case() {
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 type Color
     = Red
@@ -269,8 +269,8 @@ template_let_poly() {
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 main =
     let
@@ -290,10 +290,10 @@ template_higher_order() {
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.List as List
-import Sky.Core.String as String
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Log exposing (println)
 
 addN : Int -> Int -> Int
 addN n x =
@@ -315,8 +315,8 @@ template_record_update() {
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 type alias Point =
     { x : Int, y : Int, label : String }
@@ -337,8 +337,8 @@ template_tuple() {
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 main =
     let
@@ -357,9 +357,9 @@ template_recursion() {
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.List as List
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
+import Ipe.Log exposing (println)
 
 sumList : List Int -> Int -> Int
 sumList xs acc =
@@ -379,8 +379,8 @@ template_if_nested_let() {
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 main =
     let
@@ -406,9 +406,9 @@ template_pipeline() {
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.String as String
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.Log exposing (println)
 
 double : Int -> Int
 double x = x * 2
@@ -429,10 +429,10 @@ template_dict_ops() {
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Dict as Dict
-import Sky.Core.Maybe as Maybe
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Dict as Dict
+import Ipe.Maybe as Maybe
+import Ipe.Log exposing (println)
 
 main =
     let
@@ -452,9 +452,9 @@ template_set_ops() {
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Set as Set
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Set as Set
+import Ipe.Log exposing (println)
 
 main =
     let
@@ -475,9 +475,9 @@ template_maybe_andmap() {
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Maybe as Maybe
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Maybe as Maybe
+import Ipe.Log exposing (println)
 
 main =
     let
@@ -497,9 +497,9 @@ template_result_map2() {
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Result as Result
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Result as Result
+import Ipe.Log exposing (println)
 
 main =
     let
@@ -523,9 +523,9 @@ template_multiline_interp() {
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.String as String
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.Log exposing (println)
 
 main =
     let
@@ -554,7 +554,7 @@ template_mm_2type_reuse() {
     cat > "$libdst" <<EOF
 module Lib exposing (ident)
 
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- Untyped on purpose: the boundary-scheme promotion must generalize this
 -- def at the module boundary so each importer use instantiates it fresh.
@@ -563,9 +563,9 @@ EOF
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 import Lib exposing (ident)
-import Std.Log exposing (println)
+import Ipe.Log exposing (println)
 
 main =
     println (String.fromInt (ident $n1) ++ "|" ++ ident "$s1")
@@ -580,7 +580,7 @@ template_mm_value_binding() {
     cat > "$libdst" <<EOF
 module Lib exposing (empty)
 
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- Untyped value binding: promoted to a scheme at the boundary; importers
 -- may use it as List Int AND List String.
@@ -589,9 +589,9 @@ EOF
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 import Lib
-import Std.Log exposing (println)
+import Ipe.Log exposing (println)
 
 main =
     println
@@ -610,7 +610,7 @@ template_mm_number_helper() {
     cat > "$libdst" <<EOF
 module Lib exposing (plus)
 
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- Untyped Number-bounded helper. Single-type cross-module use is accepted;
 -- Int+Float dual use is D2-rejected by design (see class1 spec).
@@ -619,9 +619,9 @@ EOF
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 import Lib
-import Std.Log exposing (println)
+import Ipe.Log exposing (println)
 
 main =
     println (String.fromInt (Lib.plus $n1 $n2))
@@ -636,7 +636,7 @@ template_mm_recursive_pair() {
     cat > "$libdst" <<EOF
 module Lib exposing (evenLen, oddLen)
 
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- Mutually-recursive untyped pair, polymorphic in the element type. The
 -- boundary promotion must generalize the GROUP so importers can use it at
@@ -654,9 +654,9 @@ EOF
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 import Lib
-import Std.Log exposing (println)
+import Ipe.Log exposing (println)
 
 main =
     let a = if Lib.evenLen $lst then "E" else "O" in
@@ -771,7 +771,7 @@ run_iter() {
             # doesn't drift under repeated invocation. Prefer 01-hello-world
             # which is the unconditional pass example in this port. Fall back
             # to a synthesised template if no corpus example is available.
-            # NOTE: 00-standard-libs imports Std.Money which has a pre-existing
+            # NOTE: 00-standard-libs imports Ipe.Money which has a pre-existing
             # stdlib type error (unrelated to soundness under test) — skip it.
             local corpus_src=""
             for _corpus_cand in \
@@ -896,7 +896,7 @@ save_failure() {
 }
 
 # ── True-positive demo ────────────────────────────────────────────────────────
-# A WELL-TYPED Sky program that panics at runtime: `42 // 0`.
+# A WELL-TYPED Ipê program that panics at runtime: `42 // 0`.
 # The `//` operator is integer division; divisor 0 triggers the
 # sky_runtime::math::sky_int_div panic path, classified as DivisionByZero,
 # exit 101. The detector must flag it.
@@ -911,8 +911,8 @@ run_tp_demo() {
     cat > "$tp_dir/src/Main.ipe" <<'EOF'
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 main =
     println (String.fromInt (42 // 0))
@@ -989,7 +989,7 @@ EOF
         echo "  The runtime appears to have absorbed the division-by-zero without"
         echo "  panicking (exit 0 + no panic marker). This means either:"
         echo "    a) The Rust runtime handles 42 // 0 gracefully (returns 0 or Err),"
-        echo "       which is a sanctioned divergence from Sky-Go (see math.rs)."
+        echo "       which is a sanctioned divergence from Ipê-Go (see math.rs)."
         echo "    b) There is a bug in the detector (check PANIC_RE)."
         echo "  In either case: report as a finding (see --tp-demo output above)."
         [[ "$KEEP" -eq 0 ]] && rm -rf "$tp_dir"

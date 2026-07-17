@@ -7,7 +7,7 @@
 //! scrutinee position. Recognised escapes (`\n \t \r \\ \" \' \0`) and plain
 //! chars are all exactly one scalar value, so no valid program regresses.
 //!
-//! Each fixture is driven through the full `skyc` pipeline and asserted to
+//! Each fixture is driven through the full `ipe` pipeline and asserted to
 //! produce its exact code AND to leave no `main.rs` behind (exit-1, no emit).
 
 use std::path::{Path, PathBuf};

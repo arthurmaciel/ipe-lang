@@ -2,11 +2,11 @@
 //!
 //! Several `case` arms head-match the SAME top-level constructor (`Som`) and
 //! discriminate on a nested constructor sub-pattern (`Som (Som x)` vs `Som Non`)
-//! before a final `Non` arm. Each Sky arm lowers to its OWN Rust `match` arm in
+//! before a final `Non` arm. Each Ipê arm lowers to its OWN Rust `match` arm in
 //! source order; Rust's `match` resolves the overlap and ordering natively, so
 //! there is no one-arm-per-constructor grouping.
 //!
-//! `skyc` must emit `main.rs` byte-identical to the checked-in golden, and
+//! `ipe` must emit `main.rs` byte-identical to the checked-in golden, and
 //! (behind `IPE_E2E=1`) the emitted project must build and print `52`.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at

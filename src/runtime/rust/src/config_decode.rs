@@ -1,11 +1,11 @@
 #![allow(clippy::type_complexity)]
-// Std.Config — typed TOML / YAML / JSON config decoders.
+// Ipe.Config — typed TOML / YAML / JSON config decoders.
 //
 // Config reuses the JSON Decoder representation (`Decoder<E, T>` over a
 // `serde_json::Value`): TOML and YAML are parsed into the same `Value`, then the
 // decoder runs unchanged. The combinators (string / int / float / bool / field /
 // at / list / map / andThen / succeed / fail) ARE the shared `decode_*` kernels — the
-// Sky codegen maps `Config.*` straight onto them. Only the format front-ends,
+// Ipê codegen maps `Config.*` straight onto them. Only the format front-ends,
 // `nullable`, and `loadFromFile` live here, because Config's signatures put the
 // source `String` FIRST (`decodeToml : String -> Decoder a -> Result Error a`),
 // the opposite of `decode_from_json_string`'s decoder-first argument order.
@@ -13,8 +13,8 @@ use super::json::{Decoder, JsonVal};
 use super::*;
 
 // Config.nullable : Decoder a -> Decoder (Maybe a)
-// Returns Sky's IpeMaybe (not Rust Option) so the decoded value matches the
-// `Maybe a` the Sky annotation lowers to.
+// Returns Ipê's IpeMaybe (not Rust Option) so the decoded value matches the
+// `Maybe a` the Ipê annotation lowers to.
 pub fn config_nullable<E: From<String> + 'static, T: 'static + Send>(
     decoder: Decoder<E, T>,
 ) -> Decoder<E, IpeMaybe<T>> {

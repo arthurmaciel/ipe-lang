@@ -1,7 +1,7 @@
-//! Std.Ui style-marker injection — Rust port of Go's `applyStyleInjections`
+//! Ipe.Ui style-marker injection — Rust port of Go's `applyStyleInjections`
 //! (live.go:872-1110).
 //!
-//! The shared `Std.Ui` stdlib emits `data-sky-{mq,pc,tr,anim}-*` marker
+//! The shared `Ipe.Ui` stdlib emits `data-sky-{mq,pc,tr,anim}-*` marker
 //! *attributes* on elements for `Ui.breakpoint` / `Ui.mediaQuery`,
 //! `Background.hoverColor` / `Ui.onPseudo`, `Transition.attribute`, and
 //! `Animation.attribute`. The Go backend consumes them into sky-id-scoped
@@ -193,8 +193,8 @@ fn strip_markers<M>(attrs: &mut Vec<Attribute<M>>, markers: &[&str]) {
 }
 
 // `strip_style_close` moved to the shared `css_safety` module (design §Q5: one
-// policy, one place). Imported below so the Std.Ui pseudo-class / media-query
-// `<style>` path and the Std.Css / styleNode `<style>` sink share the identical
+// policy, one place). Imported below so the Ipe.Ui pseudo-class / media-query
+// `<style>` path and the Ipe.Css / styleNode `<style>` sink share the identical
 // close-tag stripper.
 use super::super::css_safety::{
     SafeCssMediaQuery, SafeCssValue, sink_safe_declaration_list, sink_safe_keyframes_body,
@@ -261,7 +261,7 @@ fn build_pc<M>(ipe_id: &str, attrs: &[Attribute<M>]) -> String {
 }
 
 /// Wire-format pseudo-class tag → (selector, hover-gated). Keep in lock-step
-/// with `pseudoClassTag` in Std.Ui.ipe / Go's `pseudoSelectorForTag`.
+/// with `pseudoClassTag` in Ipe.Ui.ipe / Go's `pseudoSelectorForTag`.
 fn pseudo_selector_for_tag(tag: &str) -> Option<(&'static str, bool)> {
     match tag {
         "h" => Some((":hover", true)),

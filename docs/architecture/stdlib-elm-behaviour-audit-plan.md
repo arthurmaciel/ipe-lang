@@ -56,7 +56,7 @@ function. Concretely, per module family:
    *observable-order* equivalence), `==` structural-equality corners
    (functions inside data: Elm throws — Ipê/Go?).
 5. **Time/Random** — only *contract* shapes (Elm's `Random` is a pure
-   generator; Sky's is entropy-backed Task — already a filed E-series
+   generator; Ipê's is entropy-backed Task — already a filed E-series
    divergence; audit records it as covered, doesn't relitigate).
 
 **Out of scope:** API presence/naming (C.4's job, already matrixed);
@@ -68,8 +68,8 @@ effect-model differences already ledgered in
 The audit is **fixture-driven, three-column, and verdict-producing**.
 For each behaviour probed:
 
-1. **Write the probe once, as a Sky program** (plus a runtime-level
-   Rust unit test where the behaviour isn't reachable from Sky syntax).
+1. **Write the probe once, as a Ipê program** (plus a runtime-level
+   Rust unit test where the behaviour isn't reachable from Ipê syntax).
    Probes live as goldens under `tests/golden/d2_<module>_<behaviour>/`
    following the existing `oracle.meta` format, and as
    `runtime/tests/<module>_elm_audit.rs` following the

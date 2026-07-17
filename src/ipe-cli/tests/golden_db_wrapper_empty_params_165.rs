@@ -1,13 +1,13 @@
 //! `examples/17-skymon`'s `cargo build` failure.
 //!
-//! Without the fix, `skyc build` exits 0, but the emitted Rust fails `cargo build`
+//! Without the fix, `ipe build` exits 0, but the emitted Rust fails `cargo build`
 //! with 6x E0277 (the trait bound `SqlParam: From<T1>` is not satisfied)
 //! and 3x E0283 (`type annotations needed` / `cannot infer type of the type
 //! parameter T declared on the struct Vec`) at every
 //! `lib_database_query_or_log(label, queryStr, Vec::new())` call site (an
 //! empty-params `Ipe.Db` query helper).
 //!
-//! Root cause: a Sky-defined WRAPPER function around `Db.exec` / `Db.query`
+//! Root cause: a Ipê-defined WRAPPER function around `Db.exec` / `Db.query`
 //! (never the kernel called directly) forwards its own polymorphic
 //! `args : List a` parameter into the kernel's params position. The type
 //! checker's `Db.exec` / `Db.query` / `Db.queryDecode` scheme leaves that
@@ -33,7 +33,7 @@
 //!    `constrain_var_kernel` — the same `stdlib_scheme` + tie shape already
 //!    used for the Set/Dict comparable-key obligation.
 //! 2. A dangling (never otherwise pinned) `sql_param`-obligated flex
-//!    variable now DEFAULTS to Sky's own `SqlValue` ADT (mirroring the
+//!    variable now DEFAULTS to Ipê's own `SqlValue` ADT (mirroring the
 //!    existing `Number` → `Int` defaulting arm) instead of falling through
 //!    to the `IrType::Json` wildcard — closes the E0283 half.
 //! 3. The obligation realises as `BoundSet::sql_param` →
@@ -67,7 +67,7 @@
 //!
 //! Run:
 //! ```text
-//! IPE_E2E=1 cargo test -p skyc --test golden_db_wrapper_empty_params_165
+//! IPE_E2E=1 cargo test -p ipe --test golden_db_wrapper_empty_params_165
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -79,7 +79,7 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// skyc-0: the compiler must accept the 3-module program AND emit the
+/// ipe-0: the compiler must accept the 3-module program AND emit the
 /// `Into<ipe_runtime::db::SqlParam>` bound on the wrapper functions' own
 /// generic (the E0277 half of #165) — checked unconditionally (cheap, no
 /// `cargo`), independent of the `IPE_E2E` gate below.
@@ -104,7 +104,7 @@ fn db_wrapper_empty_params_165_skyc_accepts_and_emits_sql_param_bound() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for db_wrapper_empty_params_165: {:?}",
+        "ipe build must succeed for db_wrapper_empty_params_165: {:?}",
         built.err()
     );
 
@@ -145,7 +145,7 @@ fn db_wrapper_empty_params_165_skyc_accepts_and_emits_sql_param_bound() {
 /// prints the two rows read back through the empty-params wrapper call.
 /// Gated on `IPE_E2E=1` — a real `cargo build`, the only check that would
 /// have caught the original SEAL violation (9x rustc error on
-/// `examples/17-skymon`, `skyc build` itself was clean).
+/// `examples/17-skymon`, `ipe build` itself was clean).
 #[test]
 fn db_wrapper_empty_params_165_cargo_builds_and_runs() {
     if std::env::var("IPE_E2E").is_err() {
@@ -169,7 +169,7 @@ fn db_wrapper_empty_params_165_cargo_builds_and_runs() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for db_wrapper_empty_params_165: {:?}",
+        "ipe build must succeed for db_wrapper_empty_params_165: {:?}",
         built.err()
     );
 

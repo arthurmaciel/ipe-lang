@@ -35,12 +35,12 @@ reference into ipê's tree.
 | Bucket | Count | Disposition |
 |---|---:|---|
 | Total fixtures in `tests/sky/` | **140** | — |
-| **FFI-dependent** (declare `[rust.dependencies]` OR `import Sky.Ffi`) | **75** | **OUT of scope** until the FFI phase — the whole shim-free Rust-crate binding path (`43–114 ffi-*`, the `01–16` crate demos, `40/41/42/46` struct/enum-accessor codegen, `44-wide-int`, `45/46/47/48` builder-crate tests, `58-ffi-calltask-static`) needs the inspector→emit subsystem ipê has not built yet. |
-| **Non-FFI, in scope** | **65** | The corpus to author now. Each doubles as a skyc golden. |
+| **FFI-dependent** (declare `[rust.dependencies]` OR `import Ipê.Ffi`) | **75** | **OUT of scope** until the FFI phase — the whole shim-free Rust-crate binding path (`43–114 ffi-*`, the `01–16` crate demos, `40/41/42/46` struct/enum-accessor codegen, `44-wide-int`, `45/46/47/48` builder-crate tests, `58-ffi-calltask-static`) needs the inspector→emit subsystem ipê has not built yet. |
+| **Non-FFI, in scope** | **65** | The corpus to author now. Each doubles as a ipe golden. |
 
 The FFI/non-FFI split was derived mechanically: a fixture is FFI iff its
 `sky.toml` has a `[rust.dependencies]` table or its `Main.ipe` imports
-`Sky.Ffi`. This matches reference-audit items 20/21/22
+`Ipê.Ffi`. This matches reference-audit items 20/21/22
 (`docs/architecture/sky-rust-backend-reference-audit.md`).
 
 **Count of non-FFI fixtures in scope: 65.**
@@ -53,7 +53,7 @@ Shape drives the equivalence mode (reference `equivalence_mode` in `lib/examples
 `cli→stdout`, `server→body`, `live→scenario`, `tui→pty`, `webview→none`.
 
 **Divergence class** = the specific Go-vs-ipê behaviour each fixture guards.
-`SILENT` classes pass skyc but mismatch Go with *no error* — the dangerous ones.
+`SILENT` classes pass ipe but mismatch Go with *no error* — the dangerous ones.
 `ERROR`/`STRUCT` classes surface as a build/run failure or a visible structural
 diff.
 
@@ -72,7 +72,7 @@ diff.
 | 9 | `65-crypto-random-encoding` | randomBytes hex length / randomToken base64url length + alphabet | **SILENT** |
 | 10 | `64-log-with-attrs` | `Log.*With` attr flattening (SkyStringify bound) + plain/json line shape | SILENT (post-TS-norm) |
 | 11 | `60-errortostring-string` | `Basics.errorToString`/SkyStringify on a String | **SILENT** |
-| 12 | `23-char` | `Sky.Core.Char` classification kernels | SILENT |
+| 12 | `23-char` | `Ipe.Char` classification kernels | SILENT |
 | 13 | `53-cons-pattern-tuple` | cons-pattern destructure of tuple elements (length-guard) | ERROR |
 | 14 | `56-list-sort` | `List.sortWith`/`sortBy` ordering | SILENT |
 | 15 | `44-curried-return` | curried-function return codegen | ERROR |
@@ -83,7 +83,7 @@ diff.
 | 20 | `59-result-passthrough-nosig` | Result passthrough without sig | ERROR |
 | 21 | `62-nonclone-capture` | non-Clone capture in closure | ERROR |
 | 22 | `45-usermod-kernel-collision` | user module vs kernel name collision | ERROR |
-| 23 | `49-bytes-core` | `Sky.Core.Bytes` fromHex/toHex/base64 (note: reference held this out — `E0282` E-pinning gap) | ERROR |
+| 23 | `49-bytes-core` | `Ipe.Bytes` fromHex/toHex/base64 (note: reference held this out — `E0282` E-pinning gap) | ERROR |
 | 24 | `101-task-rethunk` | Task re-thunk lowering | ERROR |
 | 25 | `102-task-rethunk-free-tvar` | Task re-thunk with free tvar | ERROR |
 | 26 | `103-task-rethunk-discard` | Task re-thunk discard + File effect | ERROR |
@@ -93,14 +93,14 @@ diff.
 | 30 | `25-retry` | `Task.retryWith` policy/backoff | SILENT |
 | 31 | `61-retry-transient` | retry on transient File error | SILENT |
 | 32 | `26-stream-cli` | `Http.Stream.forEachChunk` CLI drain | STRUCT |
-| 33 | `31-system-env-chain` | `System.*` env read/set chain (`Sky.Core.Pure`) | SILENT |
-| 34 | `37-cache-cli` | `Std.Cache` LRU/TTL hits/misses/evictions counters | SILENT |
+| 33 | `31-system-env-chain` | `System.*` env read/set chain (`Ipe.Pure`) | SILENT |
+| 34 | `37-cache-cli` | `Ipe.Cache` LRU/TTL hits/misses/evictions counters | SILENT |
 | 35 | `42-ws-client-onmessage` | WebSocket client onMessage sub | STRUCT |
-| 36 | `17-db-todo-cli` | `Std.Db` CRUD CLI + two-level error | STRUCT |
-| 37 | `18-auth-signup` | `Std.Auth` register/login (bcrypt/JWT) — secret never stringified | SECURITY |
-| 38 | `19-config` | `Std.Config` TOML/YAML/JSON typed decode | STRUCT |
-| 39 | `20-email` | `Std.Email` provider ADT (dry-run) | STRUCT |
-| 40 | `68-db-migrate-cli` | `Std.Db.migrate` versioned + checksum | STRUCT |
+| 36 | `17-db-todo-cli` | `Ipe.Db` CRUD CLI + two-level error | STRUCT |
+| 37 | `18-auth-signup` | `Ipe.Auth` register/login (bcrypt/JWT) — secret never stringified | SECURITY |
+| 38 | `19-config` | `Ipe.Config` TOML/YAML/JSON typed decode | STRUCT |
+| 39 | `20-email` | `Ipe.Email` provider ADT (dry-run) | STRUCT |
+| 40 | `68-db-migrate-cli` | `Ipe.Db.migrate` versioned + checksum | STRUCT |
 | 41 | `66-db-postgres-compile` | Db + Postgres **build-only** compile gate | ERROR |
 | 42 | `67-db-sqlvalue-params` | SqlValue mixed-type param binding end-to-end | ERROR/SILENT |
 
@@ -131,14 +131,14 @@ diff.
 | 58 | `33-live-pubsub` | `Cmd.publish`/`Sub.subscribeTopic` echo | STRUCT |
 | 59 | `34-live-pubsub-dict` | **Dict-keyed** pubsub state (Dict determinism in render) | **SILENT** |
 | 60 | `35-live-db-startup` | DB-at-startup Cmd sequencing | STRUCT |
-| 61 | `40-live-ui` | `Std.Ui` layout → HTML (`fill`/flex emission) | **SILENT (render)** |
+| 61 | `40-live-ui` | `Ipe.Ui` layout → HTML (`fill`/flex emission) | **SILENT (render)** |
 | 62 | `50-event-handler-arc` | event-handler Arc-wrap (onClick round-trip Msg identity) | STRUCT |
 
 ### 1d. TUI / pty mode (2)
 
 | # | Fixture | Divergence class | Silent? |
 |---|---|---|---|
-| 63 | `38-tui-ui` | `Std.Ui`→ANSI cell grid (layout + SGR styling) | **SILENT (render)** |
+| 63 | `38-tui-ui` | `Ipe.Ui`→ANSI cell grid (layout + SGR styling) | **SILENT (render)** |
 | 64 | `41-tui-input` | TUI input widget cells + cursor | **SILENT (render)** |
 
 ### 1e. Webview / none mode (1)
@@ -151,7 +151,7 @@ diff.
 
 ## 2. Prioritized port order — silent-divergence classes FIRST
 
-Silent classes (pass skyc, mismatch Go, *no error*) are the dangerous ones and
+Silent classes (pass ipe, mismatch Go, *no error*) are the dangerous ones and
 are ported first. This is a burndown against a fixed target, not a coverage
 tick.
 
@@ -233,7 +233,7 @@ and CRLF handling.
 
 ### 3.1 Drop-in steps
 
-1. **Author the 65 fixtures** under `crates/skyc/tests/sky/<name>/` (mirroring
+1. **Author the 65 fixtures** under `crates/ipe/tests/sky/<name>/` (mirroring
    the reference layout `src/Main.ipe` + `sky.toml`). They double as skyc
    goldens. Port in the Tier 0→4 order above.
 2. **Port `equivalence-corpus.sh`** (pure-stdlib deterministic-stdout driver) into
@@ -330,10 +330,10 @@ fixtures that can land as **stored-HTML snapshots with no Go oracle** (they
 assert *ipê's* output is safe, an absolute property, not a Go-relative one):
 
 - **`70-style-injection`** — the security gate. Asserts a hostile
-  `Std.Css`/`Raw`/`property` value cannot break out of the `<style>` body
+  `Ipe.Css`/`Raw`/`property` value cannot break out of the `<style>` body
   (`</style><script>`, `expression()`, `js:`/`data:` URL neutralized). This is
-  the fixture that catches the open `Std.Html.styleNode → HRaw <style>` hole
-  (styleNode emits the body verbatim; the `Std.Ui` path is protected, styleNode
+  the fixture that catches the open `Ipe.Html.styleNode → HRaw <style>` hole
+  (styleNode emits the body verbatim; the `Ipe.Ui` path is protected, styleNode
   is not).
 - **`69-html-render-parity`** — asserts the `#sky-root` structural render +
   attribute escaping (`SafeAttrName` forbids `on*`/`srcdoc`; `escape_attr`
@@ -353,8 +353,8 @@ same security batch.
 
 ## 5. Honest first-run expectation
 
-skyc is **pre-parity** (M-phase kernels incomplete: Set/Dict obligations,
-json encode/decode, decimal/money, `Std.Ui`/style emit, live/tui/webview
+ipe is **pre-parity** (M-phase kernels incomplete: Set/Dict obligations,
+json encode/decode, decimal/money, `Ipe.Ui`/style emit, live/tui/webview
 backends are partially or not landed). Authoring all 65 fixtures now yields a
 corpus that is **mostly RED on the first run — by design.** The corpus is the
 **target of the port, not a today-pass gate.**
@@ -367,7 +367,7 @@ Expected first-run shape:
   `codegen-*`.
 - **Likely RED until the owning phase lands:** anything touching Set/Dict
   determinism, json escaping, decimal/money rounding (M4d/M4g/M4h/numeric),
-  `Std.Ui`/style emit and the live/tui/server/webview/db/auth backends
+  `Ipe.Ui`/style emit and the live/tui/server/webview/db/auth backends
   (M5/M6/F7 and later). `kernel-parity-probe*`, `alloc-stress`, the `27–35`
   live set, `38/41` tui, `39-webview`, `17/18/19/20/66/68` db/auth all fall
   here.

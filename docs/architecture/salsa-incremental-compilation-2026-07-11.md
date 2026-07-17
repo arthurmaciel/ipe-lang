@@ -18,21 +18,21 @@
 
 ## 1. Current stage boundaries (surveyed at HEAD, 2026-07-11)
 
-The workspace is a DAG of stage crates. The driver (`crates/skyc/src/lib.rs`)
+The workspace is a DAG of stage crates. The driver (`crates/ipe/src/lib.rs`)
 runs them one-shot, front to back, on every invocation:
 
 | Stage | Crate | Entry point | Granularity today |
 |---|---|---|---|
 | Intern | `sky_intern` | `Interner::intern(&mut self, &str)` | `&mut`-threaded through every pass; per-`compile_modules` instance |
 | Parse | `sky_parse` | `parse_module(&str, &mut Interner) -> DResult<Module>` | per module |
-| Imports (for topo) | `skyc::project` | `extract_imports_from_source(&str)` (string-scan, pre-parse) | per module |
+| Imports (for topo) | `ipe::project` | `extract_imports_from_source(&str)` (string-scan, pre-parse) | per module |
 | Canonicalise | `sky_canon` | `canonicalise_module_with_origin(&Module, expected_path, &dep_exports, origin, &mut Interner)` | per module, dep-first, threads `BTreeMap<Vec<Symbol>, ModuleExports>` |
 | Link | `sky_canon::link` | `link(entry, Vec<canon::Module>, &Interner)` | **whole-program merge into ONE module** |
 | Infer | `sky_types` | over the linked module | whole-program |
 | Lower | `sky_lower` | over the linked module | whole-program |
 | Emit | `sky_backend_rust` | `RustBackend::emit` | whole-program |
 
-Driver flow (`compile_modules`, `crates/skyc/src/lib.rs`): inject compiled-source
+Driver flow (`compile_modules`, `crates/ipe/src/lib.rs`): inject compiled-source
 stdlib closure → `topological_order` (imports via string-scan) → per-module
 parse+canon loop with one shared `Interner` → link → infer → lower → emit →
 write project. Structural facts that shape the salsa port:
@@ -44,7 +44,7 @@ write project. Structural facts that shape the salsa port:
   whose numeric values depend on interning order. Any salsa query that parses
   must share ONE interner with the rest of the pipeline or symbol identity
   breaks (plan Task 3).
-- **`skyc` is one-shot.** There is no long-lived process yet (`ipe watch` is
+- **`ipe` is one-shot.** There is no long-lived process yet (`ipe watch` is
   plan Phase E); cargo is not invoked by `build` (only the `IPE_E2E`-gated
   test). So Phase 1's job is the *seam*: the salsa database exists, the
   earliest queries run on the production path, and behavior is byte-identical.
@@ -62,7 +62,7 @@ minors and the plan (Task 1) mandates a deliberate, reviewed bump.
 ## 3. Phase 1 — what ships now
 
 Phase 1 = plan Tasks **1, 2 (trimmed), 3 (Option 3a), 4, and the imports half
-of 5**, wired onto the production `skyc` path.
+of 5**, wired onto the production `ipe` path.
 
 ### 3.1 New crate `crates/sky_db`
 
@@ -127,7 +127,7 @@ cleanup candidate, unchanged from the plan.
 | Query | Depends on | Returns |
 |---|---|---|
 | `parse(db, SourceFile)` | `text(self)` (+ shared interner, append-only) | `Result<Arc<sky_syntax::Module>, Diagnostic>` — errors are **values**, never panics/`?`-escapes (a query is total) |
-| `imports(db, SourceFile)` | `text(self)` | `Arc<Vec<Vec<String>>>` via the same string-scan the driver used (`extract_imports_from_source`, moved into `sky_db`, re-exported from `skyc::project`) |
+| `imports(db, SourceFile)` | `text(self)` | `Arc<Vec<Vec<String>>>` via the same string-scan the driver used (`extract_imports_from_source`, moved into `sky_db`, re-exported from `ipe::project`) |
 
 **Why `imports` stays a string-scan (parity choice).** Today the topo sort runs
 *before* parse and works even on files whose parse would fail. Deriving
@@ -136,7 +136,7 @@ blame for unparseable modules — an observable behavior change that belongs
 behind the parity gate, not in the byte-identical Phase 1. Recorded as a
 Phase-2 upgrade.
 
-### 3.5 Wiring behind the one-shot `skyc` entry (byte-identical)
+### 3.5 Wiring behind the one-shot `ipe` entry (byte-identical)
 
 `compile_modules` now: constructs a cold `SkyDatabase` per invocation, creates
 `SourceFile` inputs for every module in `sources` + the `SourceRoot` set, and
@@ -149,7 +149,7 @@ Phase-2 upgrade.
 The interning sequence (parse module₁ → intern expected-path₁ → canon₁ → parse
 module₂ → …) is unchanged, the database is cold, and `imports` interns nothing
 — so emitted bytes are identical by construction. The golden-oracle SEAL
-(140+ `golden_*` byte-diff tests in `crates/skyc/tests/`) is the enforcement.
+(140+ `golden_*` byte-diff tests in `crates/ipe/tests/`) is the enforcement.
 
 INV-1 note: both tracked functions read only their salsa inputs (+ the
 append-only interner). No `std::fs` / `std::env` / clock on any tracked path;
@@ -180,7 +180,7 @@ survives across revisions on a production path (Phase 2+).
 
 | Phase | Plan tasks | Content |
 |---|---|---|
-| **1 (this spec — DONE)** | 1, 2-trim, 3a, 4, 5-imports | db + inputs + `parse`/`imports` queries on the skyc path, memo-hit proof |
+| **1 (this spec — DONE)** | 1, 2-trim, 3a, 4, 5-imports | db + inputs + `parse`/`imports` queries on the ipe path, memo-hit proof |
 | **2 (DONE — see §7)** | 5 (AST imports), 6, 7, 8 | `resolve_imports` closed-enum edge (add/delete/rename/shadow), `module_interface` firewall + completeness gate, `canonicalize(ModuleId)` tracked |
 | 3 | 9, 11, 18 | `kernel_types()`, coarse whole-program spine (`linked_program()` wrapping link→infer→lower→emit), **stand up the clean-vs-incremental parity gate EARLY** |
 | **4 (implemented — see §9; coarse fallback, NOT per-module)** | 12, 13 | per-module `typecheck`/`lower` (riskiest; gated by 18; coarse floor is the sanctioned fallback) |
@@ -209,7 +209,7 @@ survives across revisions on a production path (Phase 2+).
 
 ## 7. Phase 2 — implemented (2026-07-11)
 
-Phase 2 = plan Tasks **5 (AST imports), 6, 7, 8** on the production `skyc`
+Phase 2 = plan Tasks **5 (AST imports), 6, 7, 8** on the production `ipe`
 path: the canonicalisation tier is now three tracked queries in `sky_db`, and
 the driver's per-module parse+canon loop is a per-module `canonicalize`
 demand. The `dep_exports` accumulation map is gone from the driver — the
@@ -257,7 +257,7 @@ cross-module observable.
 ### 7.3 Byte-identity argument (why the SEAL stays green)
 
 The old loop's interning sequence per module was: memoized parse →
-expected-path interning → canon (which interns `Sky`/`Std`/env internals).
+expected-path interning → canon (which interns `Ipê`/`Std`/env internals).
 `canonicalize` reproduces it exactly: it demands parse / resolutions / dep
 interfaces **before** its single interner lock scope (dep interfaces are memo
 hits under topo-order demand; `resolve_imports` and the did-you-mean universe
@@ -299,7 +299,7 @@ byte-identical emit. Enforced by the 140+ golden byte-diff tests.
    (an `import` token outside the header) is harmless for cycle detection.
    Source that does not lex falls back to the historical line scan for
    ordering only — an unlexable module cannot parse and contributes no AST
-   edges. Regression tests: `skyc/tests/adversarial_scan_gap_cycle.rs`,
+   edges. Regression tests: `ipe/tests/adversarial_scan_gap_cycle.rs`,
    `sky_db/tests/adversarial_review.rs`. A *direct* demand on a cyclic graph
    (test/LSP misuse, bypassing the driver's gate) still hits salsa's cycle
    panic — fail-loud, never a stale or silently-fixpointed value.
@@ -337,7 +337,7 @@ byte-identical emit. Enforced by the 140+ golden byte-diff tests.
 | `resolve_imports_add_module` | missing dep: red (N0020) → add file to `SourceRoot` → resolution flips `Resolved`, importer re-canons green |
 | `resolve_imports_delete_module` | green → remove dep from the set → red (never a stale green) |
 | `resolve_imports_rename_module` | rename dep module → importer red; fix the `import` line → green |
-| `stdlib_shadow_stays_rejected` | user file at `Std.…` stays IPE-N0025-rejected; same path with driver-vouched `EmbeddedStdlib` origin canonicalises |
+| `stdlib_shadow_stays_rejected` | user file at `Ipe.…` stays IPE-N0025-rejected; same path with driver-vouched `EmbeddedStdlib` origin canonicalises |
 
 ---
 
@@ -350,12 +350,12 @@ across the full golden corpus, closing §3.3's recorded warm-db limitation.
 
 ### 8.1 Task 18 — the parity gate, and what it caught
 
-`crates/skyc/tests/clean_vs_incremental_parity.rs`. Both sides drive
-`skyc::compile_prepared` — THE production pipeline (see §8.3) — never a
+`crates/ipe/tests/clean_vs_incremental_parity.rs`. Both sides drive
+`ipe::compile_prepared` — THE production pipeline (see §8.3) — never a
 copy:
 
 - **cold side**: fresh db built from the final source state (exactly what a
-  one-shot `skyc build` does);
+  one-shot `ipe build` does);
 - **warm side**: ONE database reused across a scripted edit sequence,
   inputs reconciled per state via the new `sky_db::sync_source_root`
   driver-boundary helper.
@@ -430,7 +430,7 @@ internally; the query is the Phase-4 seam for per-module `typecheck`.
 ### 8.3 Task 11 — the coarse `linked_program()` spine
 
 - `sky_db::topological_order_paths` is now the SINGLE topo algorithm
-  (moved from `skyc::project`, which delegates); the memoized
+  (moved from `ipe::project`, which delegates); the memoized
   `topo_order(db, root, entry)` query runs it over the `SourceRoot` keys
   with `imports`-query edges. A cycle returns the IPE-N0021 diagnostic as
   a **value** — and because `linked_program` gates on `topo_order` before
@@ -481,7 +481,7 @@ order for every reachable module — is order-independent and unchanged.
 
 | Test | Asserts |
 |---|---|
-| `skyc::clean_vs_incremental_parity` (5 tests) | THE gate — see §8.1 |
+| `ipe::clean_vs_incremental_parity` (5 tests) | THE gate — see §8.1 |
 | `sky_db::phase3_spine topo_order_dep_first_and_memoized` | dep-first order; repeat demand memoized |
 | `topo_order_cycle_is_a_value_not_a_panic` | IPE-N0021 as value from both `topo_order` and `linked_program` on a cyclic graph |
 | `linked_program_links_all_modules` | whole-program merge carries every module's defs + the entry name |
@@ -582,7 +582,7 @@ entry)` (`crates/sky_db/src/lib.rs`):
   `typecheck(root, entry)` (a guaranteed memo hit when the driver demands
   `typecheck` first, which it does), locks the interner again, and calls
   `sky_lower::lower` unchanged.
-- `compile_prepared` (`crates/skyc/src/lib.rs`) now demands
+- `compile_prepared` (`crates/ipe/src/lib.rs`) now demands
   `sky_db::typecheck` then `sky_db::lower_program` instead of calling
   `sky_types::infer_attributed` / `sky_lower::lower` directly. The
   `home_to_source` diagnostic-blame map and the `fresh_avoid` set are still
@@ -670,7 +670,7 @@ In priority order, matching the two coupling sources found in §9.1:
 | `typecheck_is_program_wide_not_per_module` | editing an UNRELATED sibling module's body still re-executes the whole seam — the coarseness is a regression-proof, not just an absence of a finer test |
 | `lower_program_memoized_coarse_floor` | same shape one layer down; `typecheck` and `lower_program` re-execute in lockstep on a dep edit |
 | `lower_program_short_circuits_on_typecheck_error` | a red program never reaches `sky_lower::lower` — `lower_program`'s error is `typecheck`'s own diagnostic, verbatim |
-| `skyc::clean_vs_incremental_parity` (5 tests, re-run) | still green — zero golden-file changes, proving the lock-scope restructuring preserved the exact interning sequence |
+| `ipe::clean_vs_incremental_parity` (5 tests, re-run) | still green — zero golden-file changes, proving the lock-scope restructuring preserved the exact interning sequence |
 
 ---
 
@@ -743,7 +743,7 @@ discipline `CLAUDE.md` §8 requires of the Go/Haskell compiler's AST walkers,
 applied here to the Rust IR).
 
 **Wired onto the production path as a forward seam.** `compile_prepared`
-(`crates/skyc/src/lib.rs`) now demands `sky_db::program_metadata` right after
+(`crates/ipe/src/lib.rs`) now demands `sky_db::program_metadata` right after
 `lower_program`, before emission — mirroring `kernel_types`'s Phase-3
 "materialized before it has a real consumer" status. Nothing downstream
 reads its value (no pruning pass exists), so this demand changes ZERO
@@ -758,7 +758,7 @@ lower-error short-circuit, the no-entry fallback).
 
 The design table's shape (`docs/architecture/incremental-compilation-and-
 watch.md` row `emit_rust_file(RustFileId)`) requires a `RustFileId` domain —
-one Rust file per Sky module, so a body edit to ONE module changes only that
+one Rust file per Ipê module, so a body edit to ONE module changes only that
 file's text. Reading `sky_backend_rust::project::emit_program` end to end
 (the mandatory survey before writing anything) found this domain **does not
 exist anywhere in the pipeline today**, for two independent, compounding
@@ -767,18 +767,18 @@ recorded for lowering:
 
 1. **Phase 4's finding still applies one layer further down.**
    `sky_lower::lower` always produces exactly ONE `sky_ir::Module`
-   (`Program { modules: vec![module] }`) regardless of how many Sky source
+   (`Program { modules: vec![module] }`) regardless of how many Ipê source
    modules were linked — so there is no `program_ir_module(ModuleId)` to key
    `emit_rust_file`'s `owner` dependency on, mirroring the exact
    whole-program IR coupling §9.1 documented for typecheck/lower.
-2. **NEW: the backend itself emits ONE `src/main.rs`, not one file per Sky
+2. **NEW: the backend itself emits ONE `src/main.rs`, not one file per Ipê
    module, even given a hypothetical per-module IR.**
    `emit_program` (`crates/sky_backend_rust/src/project.rs:332`) iterates
    `program.modules` and concatenates EVERY module's types then EVERY
    module's funcs into a single growing `String`, written once as
    `files.insert(RelPath::new("src/main.rs")?, out)`. The only OTHER files
    ever produced are two small, program-wide-flag-driven runtime shims
-   (`sky_runtime/mod.rs`, `sky_runtime/config.rs`) — neither varies per Sky
+   (`sky_runtime/mod.rs`, `sky_runtime/config.rs`) — neither varies per Ipê
    module either. There is currently no `RustFileId` value space to iterate
    at all, coarse or fine.
 
@@ -788,13 +788,13 @@ already existed as plain whole-program functions, so wrapping them in a
 tracked query cost nothing and genuinely proved memoization. There is no
 equivalent safe move here: the only way to give `emit_rust_file` a REAL
 per-file domain is to split `emit_program`'s monolithic `main.rs` into
-one `.rs` per Sky module — which requires, at minimum, (a) `mod`
+one `.rs` per Ipê module — which requires, at minimum, (a) `mod`
 declarations and cross-module `pub`/`use` visibility in the emitted Rust
 (today every def is a bare top-level item in ONE file, so cross-module name
 resolution is free — splitting reintroduces a whole visibility design), (b)
 an ownership rule for `EmitCtx::record_structs()` — the deduplicated,
 program-wide closed-record-shape table — deciding which Rust file a shared
-synthesised struct lives in when two different Sky modules construct the
+synthesised struct lives in when two different Ipê modules construct the
 same shape, (c) relocating the fixed kernel-wrapper prelude / `main()`
 entry / TEA-alias block that today anchors the single file, and (d) **every
 one of the 140+ `golden_*` byte-diff tests currently pins ONE
@@ -818,7 +818,7 @@ to need its OWN new salsa input (`DbDriver`'s selection has no existing
 input home — Phase 1 §3.2 explicitly trimmed `project_config()` for having
 zero consumers, and Task 17 is exactly where that input belongs) threaded
 through EVERY call site of `compile_prepared`, INCLUDING the Task-18 parity
-gate itself (`crates/skyc/tests/clean_vs_incremental_parity.rs`) — touching
+gate itself (`crates/ipe/tests/clean_vs_incremental_parity.rs`) — touching
 the gate's call shape for a memoization win with no real per-call-site
 value (a fresh salsa input recreated on every warm-side call would defeat
 the very memoization being proven) was judged not worth the risk this
@@ -843,7 +843,7 @@ session. **Continuation scope for the next session, in priority order:**
 ### 10.3 Task 16 — the emit→cargo bridge, shipped at the granularity that
 ### exists today
 
-`crates/skyc/src/lib.rs`'s `write_emitted_project` is now three functions
+`crates/ipe/src/lib.rs`'s `write_emitted_project` is now three functions
 implementing the content-gated-write + manifest-driven-prune shape at the
 CURRENT emit granularity (whole-project `EmittedProject` + the vendored
 runtime tree) — the per-file split blocked in §10.2 is not a precondition
@@ -865,13 +865,13 @@ complete set of paths a build produces, however many files that is today.
   write entirely when the content already matches, so an unchanged warm
   rebuild touches NO mtimes and therefore never bumps `cargo`'s own
   incremental-build invalidation. The actual write reuses the PRE-EXISTING
-  `write_atomic` helper (previously only used by `sky doctor --fix`'s
+  `write_atomic` helper (previously only used by `ipe doctor --fix`'s
   patch-application path) rather than a second, parallel atomic-write
   implementation — one tmp-then-rename code path, with its established
   cleanup-on-rename-failure behaviour, now serves both callers.
 - **`prune_orphaned_files`** (H7) walks `out_dir/src` AFTER every write and
   deletes any file whose path is not a manifest key — an orphaned/stale
-  `.rs` left over from a deleted Sky module, or a file removed from the
+  `.rs` left over from a deleted Ipê module, or a file removed from the
   vendored runtime tree upstream, can no longer linger and silently keep
   compiling. Scope is deliberately confined to `out_dir/src`: the walk never
   touches the project root, so `Cargo.lock`, a `target/` build-cache
@@ -932,7 +932,7 @@ earns its place the same way `db_driver` had to.
    Task 16 does not become easier or harder once Task 15 eventually lands
    (the manifest shape is agnostic to how many files it contains).
 5. **`write_atomic` reuse over a parallel implementation** — one atomic-write
-   code path for both `sky doctor --fix` and the emit→cargo bridge; a second
+   code path for both `ipe doctor --fix` and the emit→cargo bridge; a second
    implementation is a second place for a rename-on-failure bug to hide.
 
 ### 10.6 Phase-5 proof tests
@@ -944,7 +944,7 @@ earns its place the same way `db_driver` had to.
 | `program_metadata_excludes_unreached_function` | a function nothing reachable calls is absent from `reachable_funcs` — the actual DCE-reachability proof |
 | `program_metadata_reachability_is_transitive` | a function reachable only via an intermediate call is included |
 | `program_metadata_no_entry_falls_back_to_conservative_reachable_everything` | no `main` binding → every function reachable (never under-reports) |
-| `skyc::clean_vs_incremental_parity` (5 tests, re-run) | still green — `program_metadata`'s production-path demand and the emit→cargo bridge rewrite change zero emitted bytes |
+| `ipe::clean_vs_incremental_parity` (5 tests, re-run) | still green — `program_metadata`'s production-path demand and the emit→cargo bridge rewrite change zero emitted bytes |
 
 ---
 
@@ -1044,21 +1044,21 @@ SAME lazy-stable-handle shape `root` already used, applied to `config` too.
 | `emit_project_config_change_does_not_retrigger_lower` | a `db_driver`-only edit re-executes `emit_project` but ZERO executions of `linked_program`/`typecheck`/`lower_program` — the mission proof |
 | `emit_project_source_edit_retriggers_lower_and_emit` | the other direction: a plain source edit (config untouched) re-executes the whole chain through to `emit_project` |
 | `emit_project_short_circuits_on_lower_error` | never reaches `RustBackend::emit` on ill-typed input; surfaces `lower_program`'s own diagnostic verbatim |
-| `skyc::clean_vs_incremental_parity` (5 tests, re-run) | still green — the `compile_prepared` signature change (`db_driver` → `config`) and the `emit_project` wiring change zero emitted bytes |
-| `skyc::adversarial_review_parity_probe` (4 tests, re-run) | still green |
+| `ipe::clean_vs_incremental_parity` (5 tests, re-run) | still green — the `compile_prepared` signature change (`db_driver` → `config`) and the `emit_project` wiring change zero emitted bytes |
+| `ipe::adversarial_review_parity_probe` (4 tests, re-run) | still green |
 
 ---
 
 ## 12. Phase 6 — on-disk build cache (Tasks 19/20), at `EmittedProject`
 ## granularity: a deliberate, recorded divergence from literal "lowered IR"
 
-Phase 6 = plan Tasks **19, 20**. Headline result: `skyc build` now survives
+Phase 6 = plan Tasks **19, 20**. Headline result: `ipe build` now survives
 ACROSS process invocations for the first time — Phases 1–5 proved every
 front-end/back-end stage memoizes correctly WITHIN one process's salsa
-database, but every `skyc build` still started that database cold. A
+database, but every `ipe build` still started that database cold. A
 same-project, same-toolchain rebuild with no source changes now skips the
 ENTIRE compile pipeline (parse through emit) via a content-addressed,
-version-epoch-gated on-disk cache (`crates/skyc/src/cache.rs`).
+version-epoch-gated on-disk cache (`crates/ipe/src/cache.rs`).
 
 Same discipline as Phase 4 (§9.1) and Phase 5 (§10.2): survey the design
 doc's literal wording BEFORE writing anything, and when the literal shape
@@ -1107,7 +1107,7 @@ risk whatsoever — no relocation pass needed, because there is nothing left
 to relocate by the time `RustBackend::emit` has already resolved every
 `Symbol` to its final Rust identifier text.
 
-**Why this is not a lesser win, for `skyc build`'s actual use case.** A
+**Why this is not a lesser win, for `ipe build`'s actual use case.** A
 cache hit at the `EmittedProject` level skips parse → canon → link → infer
 → lower → emit ENTIRELY — strictly MORE work skipped than a literal
 lowered-IR cache would give (which would still re-run `RustBackend::emit`
@@ -1124,7 +1124,7 @@ changes, not the addressing scheme.
 
 ### 12.2 The content-address key (Task 19)
 
-`cache::compute_project_key` (`crates/skyc/src/cache.rs`) hashes, with
+`cache::compute_project_key` (`crates/ipe/src/cache.rs`) hashes, with
 explicit little-endian length-prefixed framing for every variable-length
 field (never delimiter-joined — proven by
 `key_is_delimiter_collision_safe`, which checks `[["AB"],["C"]]` and
@@ -1154,12 +1154,12 @@ salsa-tracked path — INV-1 holds: no `std::fs`/subprocess spawn on any
 tracked query):
 
 - **`compiler_revision()`** — a content hash of the CURRENTLY RUNNING
-  `skyc` binary's own bytes (`std::env::current_exe()` + `sha2`), matching
+  `ipe` binary's own bytes (`std::env::current_exe()` + `sha2`), matching
   the design doc's row verbatim: "content hash seeded from the `ipe`
   binary's own build hash." This is the axis that actually matters most in
   THIS repo's dev loop: `[workspace.package] version = "0.0.0"` never
   bumps, so a version-string-only epoch would have silently reused a stale
-  cache across every `cargo build`/`cargo install` of `skyc` itself during
+  cache across every `cargo build`/`cargo install` of `ipe` itself during
   active development — exactly the under-invalidation this project's
   principles order ranks above any efficiency gain. Hashing the actual
   binary bytes closes that gap unconditionally, with no manual version-bump
@@ -1172,7 +1172,7 @@ The epoch is used as a DIRECTORY PREFIX
 lookup. This is what makes "refuse, don't guess" structural rather than a
 runtime check, mirroring the design doc's own FFI-cache hazard-ledger
 entries (H1/H4: "stale entry has a different address → unreachable miss"):
-a `cargo build` of `skyc`, or a `rustup update`, moves every subsequent
+a `cargo build` of `ipe`, or a `rustup update`, moves every subsequent
 build to a DIFFERENT directory. There is nothing to "refuse" at lookup
 time — old entries are not merely stale, they are unreachable by
 construction; the driver never even looks in the old directory. Either
@@ -1187,13 +1187,13 @@ doc's toolchain-fingerprint row is written for `ipe watch`'s LIVE SESSION
 behaviour: hard-refuse a REBUILD mid-session with `toolchain changed (was
 A, now B) — restart 'ipe watch'`, keeping the last-good binary alive. That
 UX needs a live watch session to refuse INTO — Phase 7 (unscheduled here).
-What Task 20 delivers now, for the one-shot `skyc build` driver that exists
+What Task 20 delivers now, for the one-shot `ipe build` driver that exists
 today, is the version-epoch gate ITSELF — the sound foundation Phase 7's
 watch-specific UX builds on, not a lesser version of it.
 
 ### 12.4 Wiring — the driver-boundary-only cache check
 
-`compile_modules` (`crates/skyc/src/lib.rs`) delegates to a new
+`compile_modules` (`crates/ipe/src/lib.rs`) delegates to a new
 `compile_modules_observed`, which computes the cache key + epoch BEFORE any
 `sky_db::SkyDatabase` is constructed. On a hit, the WHOLE salsa pipeline is
 bypassed entirely — no database, no `SourceRoot`, nothing — only
@@ -1216,7 +1216,7 @@ current standard library signature, and this crate is
 `#![forbid(unsafe_code)]`; threading the cache root explicitly instead
 sidesteps that entirely, avoids any same-process env-mutation race (moot
 under `cargo nextest`'s per-test-process isolation, but avoided anyway),
-and gives every test in `crates/skyc/src/cache.rs` and the
+and gives every test in `crates/ipe/src/cache.rs` and the
 `on_disk_cache_hit_serves_a_tampered_entry_verbatim` end-to-end proof a
 deterministic, parallel-safe handle with no global state at all.
 
@@ -1232,7 +1232,7 @@ outright.
 Two identical builds producing identical output does NOT by itself prove a
 cache was consulted (a correct, deterministic compiler would produce the
 same bytes twice regardless). `on_disk_cache_hit_serves_a_tampered_entry_
-verbatim` (`crates/skyc/src/lib.rs`'s test module) closes that gap
+verbatim` (`crates/ipe/src/lib.rs`'s test module) closes that gap
 directly: compile once (a genuine miss, populates the cache), locate the
 single entry the build just wrote, TAMPER with its `cargo_toml` field with
 a sentinel no fresh compile of the SAME source could ever produce, then
@@ -1257,7 +1257,7 @@ through `String::deserialize` then `RelPath::new`, so the SAME validation a
 fresh in-process emission gets is enforced on every value that ever crosses
 the disk boundary. Proven by `emitted_project_deserialize_rejects_a_
 poisoned_key` (`sky_backend`) and `try_load_treats_a_poisoned_relpath_
-entry_as_a_miss` (`skyc::cache`) — the second test specifically checks the
+entry_as_a_miss` (`ipe::cache`) — the second test specifically checks the
 CACHE LAYER inherits the rejection via `Result::ok()` rather than
 accidentally routing around it (e.g. a hypothetical raw-bytes fallback path
 would have reintroduced exactly this hole).
@@ -1267,7 +1267,7 @@ would have reintroduced exactly this hole).
 1. **Cache the `EmittedProject`, not the literal `sky_ir::Program`** — a
    deliberate, recorded substitution for the design doc's literal "lowered
    IR" wording, forced by `Symbol`'s process-local identity (§12.1). Not a
-   lesser win for `skyc build`'s actual use case (MORE work is skipped, not
+   lesser win for `ipe build`'s actual use case (MORE work is skipped, not
    less); the one thing it cannot serve (an unscheduled future interpreter
    tier) is paid for by nobody today.
 2. **Version epoch = compiler-binary content hash + rustc fingerprint, both
@@ -1295,7 +1295,7 @@ would have reintroduced exactly this hole).
 
 | Test | Asserts |
 |---|---|
-| `skyc::cache::tests key_is_deterministic` | same inputs hash to the same key |
+| `ipe::cache::tests key_is_deterministic` | same inputs hash to the same key |
 | `key_changes_with_source_text` / `key_changes_with_db_driver` / `key_changes_with_entry_path` | each key ingredient is load-bearing |
 | `key_changes_with_module_add_and_remove` | module-identity (not just content) is in the key — the design doc's cache-key-completeness note |
 | `key_changes_with_module_origin` | the trust-origin axis is in the key |
@@ -1305,9 +1305,9 @@ would have reintroduced exactly this hole).
 | `try_load_treats_a_poisoned_relpath_entry_as_a_miss` | a syntactically-valid-but-unsafe `RelPath` entry is discarded whole, not partially trusted |
 | `env_cache_dir_respects_disable_and_override` | the env-var resolution the STABLE entry points use |
 | `sky_backend relpath_deserialize_rejects_escaping_paths` / `emitted_project_deserialize_rejects_a_poisoned_key` | §12.6's security property, at the type level |
-| `skyc::on_disk_cache_hit_serves_a_tampered_entry_verbatim` | the mission proof — a tampered on-disk entry is served VERBATIM, proving the driver reads and trusts the cache rather than merely reproducing a deterministic answer |
-| `skyc::cache_dir_none_disables_caching_entirely` | `cache_dir: None` never creates a cache directory and always reports `Miss` |
-| `skyc::clean_vs_incremental_parity` / `adversarial_review_parity_probe` (re-run) | still green — the cache sits entirely outside `compile_prepared`; the parity gate's call shape is untouched by Phase 6 |
+| `ipe::on_disk_cache_hit_serves_a_tampered_entry_verbatim` | the mission proof — a tampered on-disk entry is served VERBATIM, proving the driver reads and trusts the cache rather than merely reproducing a deterministic answer |
+| `ipe::cache_dir_none_disables_caching_entirely` | `cache_dir: None` never creates a cache directory and always reports `Miss` |
+| `ipe::clean_vs_incremental_parity` / `adversarial_review_parity_probe` (re-run) | still green — the cache sits entirely outside `compile_prepared`; the parity gate's call shape is untouched by Phase 6 |
 
 ---
 
@@ -1317,7 +1317,7 @@ would have reintroduced exactly this hole).
 Phase 6.5 revisits §12.1's Phase-6 divergence — "cache `EmittedProject`, not
 the literal `sky_ir::Program`, because `Symbol` is process-local" — and
 closes it completely rather than leaving it recorded. Headline result:
-`skyc build` now has a SECOND, earlier on-disk cache tier keyed on
+`ipe build` now has a SECOND, earlier on-disk cache tier keyed on
 `sky_db::lower_program`'s own inputs (source + entry, deliberately
 EXCLUDING `db_driver`), so a cache hit here skips parse → canon → link →
 infer → lower entirely — no `sky_db::SkyDatabase` is even constructed — and
@@ -1457,7 +1457,7 @@ never partially trusted" contract Phase 6 established for `RelPath`.
 
 ### 13.4 Wiring — what a hit skips, and where the tier sits
 
-`crates/skyc/src/cache.rs`'s "Phase 6.5" section adds `compute_ir_key`
+`crates/ipe/src/cache.rs`'s "Phase 6.5" section adds `compute_ir_key`
 (deliberately narrower than `compute_project_key` — no `db_driver`
 parameter at all, since `lower_program` never reads it),
 `try_load_ir`/`store_ir` (installing a `SerdeInternerGuard` around exactly
@@ -1467,7 +1467,7 @@ format is at least as sensitive to a stale compiler binary as the emitted
 text is, and reusing one epoch scheme is simpler and strictly sound
 (over-invalidating on a toolchain change costs nothing real).
 
-`compile_modules_observed` (`crates/skyc/src/lib.rs`) tries the
+`compile_modules_observed` (`crates/ipe/src/lib.rs`) tries the
 `EmittedProject` tier first (unchanged); on a miss, tries the IR tier
 BEFORE constructing any `sky_db::SkyDatabase`:
 
@@ -1520,10 +1520,10 @@ wrong resolved name, not just a coincidentally-matching one:
    already existed for the `--emit-ir` developer flag — rather than raw
    `Program == Program` equality, because two independently-relocated
    `Program`s are not expected to share numeric ids, only meaning.
-3. **`skyc::cache::tests::ir_cache_hit_survives_cross_process_symbol_id_drift`**
+3. **`ipe::cache::tests::ir_cache_hit_survives_cross_process_symbol_id_drift`**
    — the same three-interner/`pretty`-comparison proof at the ON-DISK cache
    boundary (`store_ir` then `try_load_ir` through unrelated interners).
-4. **`skyc::tests::on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim`**
+4. **`ipe::tests::on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim`**
    — the END-TO-END mission proof, mirroring Phase 6's own
    `on_disk_cache_hit_serves_a_tampered_entry_verbatim` one tier earlier:
    compile once through the REAL `compile_modules_observed` driver
@@ -1534,7 +1534,7 @@ wrong resolved name, not just a coincidentally-matching one:
    exercised, and assert the SENTINEL reaches the materialised `main.rs` —
    proof the driver reads, relocates, AND RE-EMITS the on-disk entry,
    never silently recompiling or discarding the tamper.
-5. **`skyc::tests::ir_cache_hit_reuses_lowered_program_across_a_db_driver_only_edit`**
+5. **`ipe::tests::ir_cache_hit_reuses_lowered_program_across_a_db_driver_only_edit`**
    — the coverage proof: a `db_driver`-only edit against a warm cache
    MISSES the `EmittedProject` tier but HITS the IR tier
    (`CacheOutcome::IrHit`), the concrete case this tier exists to cover
@@ -1593,14 +1593,14 @@ wrong resolved name, not just a coincidentally-matching one:
 | `deserialize_rejects_unknown_kernel_tag` | a forged `StdlibKernel` tag is rejected, never silently coerced |
 | `deserialize_rejects_emptied_tampered_match` | `Match`'s hand-written `Deserialize` actually revalidates |
 | `deserialize_accepts_single_arm_ctor_headed_match_new_flat_does_not_reverify_full_coverage` | §13.2's honestly-scoped gap, pinned as a regression test |
-| `skyc::cache::tests compute_ir_key_is_deterministic_and_excludes_db_driver` / `compute_ir_key_changes_with_source_text` | the IR-tier key's own ingredients |
+| `ipe::cache::tests compute_ir_key_is_deterministic_and_excludes_db_driver` / `compute_ir_key_changes_with_source_text` | the IR-tier key's own ingredients |
 | `ir_store_and_load_round_trip_within_one_interner` | the on-disk IR tier's basic round trip |
 | `ir_cache_hit_survives_cross_process_symbol_id_drift` | §13.5 layer 3 |
 | `ir_try_load_treats_corrupt_entry_as_a_miss` / `ir_try_load_treats_a_poisoned_symbol_entry_as_a_miss` | corrupt JSON and a poisoned `Symbol` string are both plain misses |
 | `ir_env_extension_does_not_collide_with_emitted_project_tier` | the two tiers' on-disk filenames cannot alias each other |
-| `skyc::tests on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim` | §13.5 layer 4 — the END-TO-END mission proof, through the real driver |
+| `ipe::tests on_disk_ir_cache_hit_serves_a_tampered_entry_verbatim` | §13.5 layer 4 — the END-TO-END mission proof, through the real driver |
 | `ir_cache_hit_reuses_lowered_program_across_a_db_driver_only_edit` | §13.5 layer 5 — the coverage proof (`CacheOutcome::IrHit` on a driver-only edit) |
-| `skyc::tests` (full suite, re-run) / `skyc::cache::tests` (full suite, re-run) | still green — zero regressions on every pre-existing Phase 1–6 test |
+| `ipe::tests` (full suite, re-run) / `ipe::cache::tests` (full suite, re-run) | still green — zero regressions on every pre-existing Phase 1–6 test |
 ## 14. Phase 7 — `ipe watch` (Tasks 21-25): confined watcher, debounce,
 ## last-good state machine, cancellation — shipped; L0+ split, one half
 ## honestly scoped as a continuation
@@ -1628,23 +1628,23 @@ cutting half (recorded, not forced — see §14.6).
   debounce half — `coalesce_loop`), `process.rs` (Task 23 —
   `SupervisorState`/`LastGoodBinary`/readiness probing). Depends only on
   `notify` (the confined watcher) and `sha2` (content-hash, same pin as
-  `skyc`'s own build cache). Knows nothing about `sky_db`, `SkyDatabase`, or
+  `ipe`'s own build cache). Knows nothing about `sky_db`, `SkyDatabase`, or
   the compile pipeline — every primitive here is unit-tested in isolation
   (13 tests, no `cargo build` in the loop, sub-second).
-- **`crates/skyc/src/watch.rs`** (new module in the existing driver crate) —
+- **`crates/ipe/src/watch.rs`** (new module in the existing driver crate) —
   the salsa-aware orchestrator: owns the `SkyDatabase`, wires `sky_watch`'s
   primitives to `compile_prepared`/`write_emitted_project` (Phases 1-6's own
   production pipeline — no divergent copy), and implements Task 22's
   recompute half, Task 24's watch-scoped default, and Task 25's
-  cancellation. New CLI subcommand: `skyc watch <entry> [--out <dir>]
+  cancellation. New CLI subcommand: `ipe watch <entry> [--out <dir>]
   [--runtime <dir>] [--port <n>]`.
 
 **Why two crates, not one.** `sky_watch`'s primitives (a confined path
 allowlist, a debounce coalescer, a process supervisor) are useful — and
 independently testable — without any salsa knowledge at all; folding them
-into `skyc` would make Task 21's own soundness properties (symlink
+into `ipe` would make Task 21's own soundness properties (symlink
 foreclosure, bounded event intake) untestable without paying a `cargo
-build`'s cost per test. `watch.rs` stays inside `skyc` because it needs
+build`'s cost per test. `watch.rs` stays inside `ipe` because it needs
 private items (`write_emitted_project`, `find_manifest_for_sky_file`) that
 child modules of the SAME crate see for free (Rust's privacy is module-tree
 based) — exporting them as `pub(crate)`-vs-a-new-crate boundary would have
@@ -1753,7 +1753,7 @@ introduces no second source of truth for "what changed." Salsa's red-green
 algorithm underneath (Phases 2-6) is what actually delivers the minimal
 recompute — a body-only edit still only re-canonicalises one module,
 re-links, and (per Phase 4's documented coarse floor) re-typechecks/
-re-lowers/re-emits the whole program, exactly as a warm `skyc build` would.
+re-lowers/re-emits the whole program, exactly as a warm `ipe build` would.
 
 **Never overlapping cargo builds.** The orchestrator is strictly
 single-flight at BOTH layers: a superseding settled batch (a) blocks on
@@ -1768,7 +1768,7 @@ doesn't match its current counter — the concrete mechanism behind "a stale
 completion from an already-superseded cycle is silently ignored."
 
 **`cargo build` did not exist as an orchestration step before Phase 7** —
-confirmed by the design doc's own note (§Q2: "`skyc` today stops at emit
+confirmed by the design doc's own note (§Q2: "`ipe` today stops at emit
 and never invokes cargo… `ipe watch` must add the cargo-build + run
 orchestration that does not exist yet"). `watch.rs`'s `spawn_cargo_build`
 is that missing piece: `cargo build --message-format=json` in `out_dir`,
@@ -1776,7 +1776,7 @@ JSON-parsed for the produced `executable` artifact path (a small,
 independent re-implementation of the SAME parsing `tools/oracle`'s
 `build_rust_binary` already does for the golden-test harness — kept
 separate deliberately, since `oracle` is a dev-dependency-only test utility
-and `skyc`'s shipped binary must not depend on it; see `crates/skyc/
+and `ipe`'s shipped binary must not depend on it; see `crates/ipe/
 Cargo.toml`'s own comment on this). No shared warm-target-dir / `sccache`
 wiring is added beyond what the ambient `cargo` invocation already picks up
 from the user's own `~/.cargo/config.toml` — matching how the existing
@@ -1809,30 +1809,30 @@ means AT THE TYPE LEVEL: there is no code path from `NotRunning`/`Running`
 back to itself that a red build can reach.
 
 **Readiness, scoped honestly.** The design doc bifurcates readiness as
-"`/_sky/readyz` for Sky.Live; alive + optional health for CLI." This Rust
+"`/_sky/readyz` for Ipe.Live; alive + optional health for CLI." This Rust
 port's runtime (`runtime/src/sky_runtime/live/observability.rs`) DOES
-already expose `/_sky/readyz` for Sky.Live apps — confirmed by direct
-inspection, not assumed — so `watch.rs` detects a Sky.Live project (the
+already expose `/_sky/readyz` for Ipe.Live apps — confirmed by direct
+inspection, not assumed — so `watch.rs` detects a Ipe.Live project (the
 emitted `src/main.rs` containing the literal, compiler-controlled string
 `sky_runtime::live::live_app` — deterministic text, not user input, so a
 substring check is sound here) and probes the real endpoint over a raw
-HTTP GET. Every OTHER app shape (`Sky.Http.Server`, which has no readiness
-endpoint in this port yet, AND whose listen port is a Sky-source-level
+HTTP GET. Every OTHER app shape (`Ipe.Http.Server`, which has no readiness
+endpoint in this port yet, AND whose listen port is a Ipê-source-level
 argument this driver cannot statically know — confirmed by inspecting
 `runtime/src/sky_runtime/server.rs`, which has no `readyz`/`healthz`
 route at all) falls back to `AliveGrace { grace }`: ready once the process
 has stayed alive past a bounded grace window. This is the HONEST
 application of the design doc's own bifurcation, not a weakened stand-in
-for a `Sky.Http.Server`-specific readyz endpoint that does not exist to
+for a `Ipe.Http.Server`-specific readyz endpoint that does not exist to
 probe.
 
 **Recorded, narrower gap: one-shot CLI programs.** `AliveGrace`'s
 "still-alive-after-grace ⇒ ready" model assumes a LONG-RUNNING process. A
-genuine one-shot `Sky.Cli` program (prints something, exits 0) would be
+genuine one-shot `Ipe.Cli` program (prints something, exits 0) would be
 judged "failed readiness" by this exact probe, because it exits before the
 grace window elapses — `apply_green` would then treat it as a broken
 build and attempt `RespawnLastGood`. `ipe watch` today is therefore
-scoped to LONG-RUNNING app shapes (Sky.Live, Sky.Http.Server, Sky.Tui) —
+scoped to LONG-RUNNING app shapes (Ipe.Live, Ipe.Http.Server, Ipe.Tui) —
 the shapes the design doc's own Q2/Q3/Q4 discussion is about (rebuild +
 RESTART implies a persistent process). A "rebuild and re-run once" mode
 for one-shot CLI/batch programs is a genuinely different supervision model
@@ -1889,7 +1889,7 @@ salsa source rather than copying rust-analyzer's implementation.
 **Proven deterministically, not by racing wall-clock timing against warm
 salsa recompute** (which is, by design, fast — the whole point of the
 salsa port — making a real end-to-end file-save race an UNRELIABLE test
-window). `crates/skyc/tests/watch_cancellation.rs`
+window). `crates/ipe/tests/watch_cancellation.rs`
 (`compile_worker_is_cancelled_by_a_concurrent_input_edit`) registers an
 event callback on the WORKER's database that signals the FIRST
 `WillExecute`; the main thread waits for that signal (guaranteeing the
@@ -1930,7 +1930,7 @@ assumed) before writing anything:
   store to sqlite; warns if the app configures memory" — needed ZERO
   runtime or backend changes: it is purely an env-injection decision at
   the point `watch.rs` spawns the child process.
-- **`/_sky/readyz` exists for Sky.Live** (used directly by Task 23's
+- **`/_sky/readyz` exists for Ipe.Live** (used directly by Task 23's
   readiness probe, §14.4) — confirming the "readiness-gated handoff" half
   of L0+ is achievable with the runtime as it stands today.
 - **The persisted session blob uses `serde_json`, not the design doc's
@@ -1951,7 +1951,7 @@ caller's own environment already sets `IPE_LIVE_STORE` (respected
 verbatim in that case); `warn_if_memory_store` prints a one-time warning
 at watch startup if the user has explicitly configured `memory`. This
 directly satisfies the test-first bullet the plan itself names for this
-task ("Watch defaults Sky.Live dev session store to sqlite; if the app
+task ("Watch defaults Ipe.Live dev session store to sqlite; if the app
 configures memory, watch warns") and, combined with the ALREADY-EXISTING
 SqliteStore + the ALREADY-EXISTING SSE auto-reconnect the browser's own
 runtime JS ships with, delivers the L0 floor in full: rebuild + restart +
@@ -1971,7 +1971,7 @@ to fall into:
    `sky_backend_rust` to compute and emit a structural hash of the Model
    type's fields (names, `_fieldIndex` order, resolved types recursively)
    as a constant in EVERY emitted `main.rs` — a new backend responsibility
-   that changes `main.rs`'s content for every Sky.Live golden fixture,
+   that changes `main.rs`'s content for every Ipe.Live golden fixture,
    which means re-baselining a slice of the 140+-test golden-oracle SEAL
    as part of what is supposed to be a watch-tooling task. The backend
    DOES already walk the Model's field structure when emitting the
@@ -1981,7 +1981,7 @@ to fall into:
    reviewed session, not a rushed addition under a "watch mode" mission
    umbrella.
 2. **The store format change (JSON → length-prefixed schema-tag header +
-   bincode body) is a behavioural change to EVERY Sky.Live app's session
+   bincode body) is a behavioural change to EVERY Ipe.Live app's session
    persistence, not just sessions restarted under `ipe watch`.** Swapping
    `SqliteStore`'s (and `PostgresStore`'s) wire format needs its own
    correctness argument and test coverage independent of watch — sessions
@@ -1995,7 +1995,7 @@ to fall into:
    into `live_shutdown_signal`'s existing graceful-drain path
    (`runtime/src/sky_runtime/live/mod.rs`) to push the frame to every open
    SSE connection before the connection closes. This is real, valuable,
-   additive runtime work — but it is RUNTIME work (every Sky.Live app
+   additive runtime work — but it is RUNTIME work (every Ipe.Live app
    gets it, not just watch-triggered restarts), not watch-tooling work,
    and the current `SessionStore` trait genuinely has no seam for it
    today (confirmed by reading `store.rs`'s trait definition end to end,
@@ -2022,17 +2022,17 @@ items 2 and 3 follow from it).
 | `sky_watch::scope::tests` (7 tests) | `WatchedPath::confine` accepts a descendant, rejects an outside path, rejects a symlink escaping root (H18); `WatchScope::build` excludes `target/`/`.git/`, refuses an entry dir outside root, accepts `sky.toml` + rejects an unrelated extension, survives a delete-event path (file no longer exists but is still recognisable as in-scope) |
 | `sky_watch::coalesce::tests` (4 tests) | a 20-event burst coalesces to ONE batch; a byte-identical resend of the same path still yields one entry; a continuous 40ms-interval trickle only flushes at the ~150ms hard cap (real wall-clock, tight windows); a disconnected raw channel stops the loop promptly (no hang) |
 | `sky_watch::process::tests` (5 tests) | `LastGoodBinary::hash` is deterministic and content-sensitive; `SupervisorState::fresh()` starts `NotRunning`; `apply_green` spawns a long-running process and reports `Spawned`; a byte-identical candidate reports `UnchangedBinary` with no restart; a restart candidate that fails readiness respawns the ORIGINAL last-good artifact through the SAME path-aware `spawn` closure (the ledger item 9 regression proof — unix-gated, shells out to `/bin/sleep` + `/bin/false`) |
-| `skyc::watch_cancellation compile_worker_is_cancelled_by_a_concurrent_input_edit` | THE Task-25 mission proof — see §14.5 |
-| `skyc::watch_cancellation the_same_fixture_compiles_cleanly_without_a_concurrent_edit` | negative control — the fixture is valid on its own |
-| `skyc::watch_integration watch_rebuild_on_save_swaps_the_running_binary` (`IPE_E2E=1`) | a real cold build+spawn serves v1; editing the source triggers a warm rebuild that swaps the running binary to serve v2 — the full Task 21→25 pipeline, end to end, against a real `Sky.Http.Server` fixture and a real spawned process |
-| `skyc::watch_integration watch_keeps_last_good_binary_alive_on_a_syntax_error` (`IPE_E2E=1`) | INV-3, end to end — a deliberate parse error leaves the v1 server running and responding; fixing the source recovers to v2 |
-| `skyc::watch_integration watch_coalesces_a_rapid_double_save_into_one_rebuild` (`IPE_E2E=1`) | two writes 20ms apart (inside the configured 120ms quiescence window) produce exactly ONE `WatchEvent::RebuildStarted` and the LAST write (v3) is what ships — Task 22's debounce property proven against the real orchestrator, not just the isolated `sky_watch::coalesce` unit tests |
+| `ipe::watch_cancellation compile_worker_is_cancelled_by_a_concurrent_input_edit` | THE Task-25 mission proof — see §14.5 |
+| `ipe::watch_cancellation the_same_fixture_compiles_cleanly_without_a_concurrent_edit` | negative control — the fixture is valid on its own |
+| `ipe::watch_integration watch_rebuild_on_save_swaps_the_running_binary` (`IPE_E2E=1`) | a real cold build+spawn serves v1; editing the source triggers a warm rebuild that swaps the running binary to serve v2 — the full Task 21→25 pipeline, end to end, against a real `Ipe.Http.Server` fixture and a real spawned process |
+| `ipe::watch_integration watch_keeps_last_good_binary_alive_on_a_syntax_error` (`IPE_E2E=1`) | INV-3, end to end — a deliberate parse error leaves the v1 server running and responding; fixing the source recovers to v2 |
+| `ipe::watch_integration watch_coalesces_a_rapid_double_save_into_one_rebuild` (`IPE_E2E=1`) | two writes 20ms apart (inside the configured 120ms quiescence window) produce exactly ONE `WatchEvent::RebuildStarted` and the LAST write (v3) is what ships — Task 22's debounce property proven against the real orchestrator, not just the isolated `sky_watch::coalesce` unit tests |
 
 ### 14.8 Phase-7 decisions ledger
 
 1. **Two crates, salsa-agnostic vs salsa-aware** — `sky_watch` (Tasks
    21/23's primitives) has zero `sky_db` dependency and is independently,
-   cheaply testable; `crates/skyc/src/watch.rs` (Tasks 22/24/25) is where
+   cheaply testable; `crates/ipe/src/watch.rs` (Tasks 22/24/25) is where
    salsa awareness lives, reusing `compile_prepared` unchanged (§14.1).
 2. **Rescan-and-let-`sync_source_root`-filter, not hand-tracked changed
    paths** — one source of truth for "what actually changed" (§14.3).
@@ -2046,9 +2046,9 @@ items 2 and 3 follow from it).
    primitives** — verified against the pinned source, proven
    deterministically via an event-callback synchronisation point rather
    than a wall-clock race (§14.5).
-5. **`AliveGrace` over a guessed port for `Sky.Http.Server` readiness** —
-   the honest application of the design doc's CLI-vs-Sky.Live readiness
-   bifurcation, given this port's runtime has no `Sky.Http.Server` readyz
+5. **`AliveGrace` over a guessed port for `Ipe.Http.Server` readiness** —
+   the honest application of the design doc's CLI-vs-Ipe.Live readiness
+   bifurcation, given this port's runtime has no `Ipe.Http.Server` readyz
    endpoint and no reliable way to learn the app's listen port statically
    (§14.4).
 6. **One-shot CLI program supervision is a recorded, narrower scope gap**
@@ -2095,13 +2095,13 @@ items 2 and 3 follow from it).
 The mechanism-level design in §14.1-13.8 was independently re-verified sound,
 but the full-workspace gate (`cargo nextest run --workspace`, clippy clean)
 had never actually exercised the three `IPE_E2E=1` scenarios in
-`crates/skyc/tests/watch_integration.rs` to a genuine pass — every previous
+`crates/ipe/tests/watch_integration.rs` to a genuine pass — every previous
 attempt (implementer + two reviewers) either hung past nextest's SIGTERM
 ceiling or was never run to completion. This session root-caused and closed
 three real bugs, then ran every scenario to completion (see the proof table
 below) — the thing that had not been achieved before.
 
-**Bug 1 — shutdown deadlock (`crates/skyc/src/watch.rs::run_inner`).** The
+**Bug 1 — shutdown deadlock (`crates/ipe/src/watch.rs::run_inner`).** The
 `notify::Watcher` local (`watcher`) is the SOLE owner of a live `raw_tx`
 clone (moved into its own event callback at construction; never `.clone()`d
 anywhere else in the file — confirmed by grep before the fix, not assumed).
@@ -2180,7 +2180,7 @@ blocked forever on `evt_rx.recv()` with no way to ever receive a
 holding a real port) orphaned permanently. `sky_watch`'s process-group
 defence (`PR_SET_PDEATHSIG`) used elsewhere in this workspace
 (`runtime/src/sky_runtime/live/console_proxy.rs`, the ONE sanctioned
-`unsafe` site — see `PRINCIPLES.md`) is NOT available here: both `skyc` and
+`unsafe` site — see `PRINCIPLES.md`) is NOT available here: both `ipe` and
 `sky_watch` are `#![forbid(unsafe_code)]`, so a second `unsafe`
 `pre_exec`/`prctl` site is off the table by construction, not merely by
 convention. **Fix**: `WatchHandle` now carries a `done_rx` (paired with a
@@ -2197,14 +2197,14 @@ orchestrator confirms teardown is DONE, not merely requested. Since
 `drop` — Rust always runs `Drop` during ordinary unwinding, so this closes
 both the "forgot to call `stop()`" and the "panicked while holding one"
 shapes the review named. Separately investigated and recorded rather than
-implemented: whether `ipe watch`'s own CLI-direct invocation path (`skyc::
+implemented: whether `ipe watch`'s own CLI-direct invocation path (`ipe::
 watch::run`, no `WatchHandle` at all) needs an OS signal handler for
 Ctrl-C/SIGTERM. It does not, for the common case — the spawned child
 inherits the SAME process group as the parent by default (`spawn_command`/
 `spawn_cargo_build` never call `.process_group()`), so an interactive
 terminal's Ctrl-C already SIGINTs the whole foreground process group,
 child included, with no code change needed. A supervisor that sends SIGTERM
-to only the `skyc` PID (systemd, a container orchestrator without process-
+to only the `ipe` PID (systemd, a container orchestrator without process-
 group propagation) would still orphan the child — a real, narrower gap,
 recorded here rather than silently left undocumented, but out of THIS
 review's explicitly-scoped bug (the embedder/`WatchHandle` leak) and not
@@ -2213,7 +2213,7 @@ substantially larger signal-handling floor (`ctrlc`/`signal-hook` + making
 `run()`'s blocking call interruptible) than three-bug-fix scope justifies.
 
 **Proof — all three E2E scenarios run to completion, sequentially, this
-session** (`IPE_E2E=1 cargo nextest run -p skyc --test watch_integration
+session** (`IPE_E2E=1 cargo nextest run -p ipe --test watch_integration
 --test-threads 1 <name>`, one at a time):
 
 | Scenario | Result |
@@ -2229,7 +2229,7 @@ the SIGTERM ceiling every time); scenario 3 additionally failed
 deterministically 3/3 under CPU stress before the Bug-2 fix.
 
 **New regression test** — `dropping_a_watch_handle_without_stop_still_reaps_
-the_supervised_child` (`crates/skyc/tests/watch_integration.rs`,
+the_supervised_child` (`crates/ipe/tests/watch_integration.rs`,
 Linux-only): starts a real watch session, confirms the child is serving,
 locates its PID via `/proc/<pid>/environ` (matching the `IPE_LIVE_PORT`
 `ipe watch` itself injects — deliberately NOT matching on the executable's
@@ -2244,9 +2244,9 @@ wait already did the waiting).
 **Local scoped verification this session** (deliberately NOT the full
 `--workspace` gate — that is the orchestrator's own independently-dispatched
 review's job): `cargo check --workspace --all-targets` clean;
-`cargo clippy -p skyc -p sky_watch --all-targets -- -D warnings` clean
+`cargo clippy -p ipe -p sky_watch --all-targets -- -D warnings` clean
 (one `clippy::doc_markdown` pedantic fix along the way — backticked
-`` `stop()` `` in a doc comment); every `crates/skyc/tests/watch_*.rs` E2E
+`` `stop()` `` in a doc comment); every `crates/ipe/tests/watch_*.rs` E2E
 scenario passes both sequentially and concurrently, repeatedly, including
 under deliberate CPU stress for the coalescing fix specifically.
 
@@ -2277,7 +2277,7 @@ prove: "an integration test that drives the db like an LSP would:
 diagnostics, demand `parse`/`resolve_imports` for navigation, cancel on the
 next keystroke — all without touching disk." Three questions, surveyed
 against the actual Phase 1–7 code (`crates/sky_db/src/lib.rs`,
-`crates/skyc/src/watch.rs`) before writing anything, exactly the discipline
+`crates/ipe/src/watch.rs`) before writing anything, exactly the discipline
 every prior phase in this document opens with:
 
 1. **Can inputs be set from an in-memory buffer instead of a disk read?**
@@ -2300,7 +2300,7 @@ every prior phase in this document opens with:
    forbid).
 2. **Is `SkyDatabase` `Send` and safe to reuse across a request-loop-shaped
    access pattern (repeated demand → mutate input → re-demand)?** Yes,
-   already, and already load-bearing: `crates/skyc/src/watch.rs`'s Task-22
+   already, and already load-bearing: `crates/ipe/src/watch.rs`'s Task-22
    orchestrator has cloned `SkyDatabase` into a freshly-spawned
    `thread::spawn` closure on every rebuild cycle since Phase 7 shipped
    (§14.1's "compile worker thread… holds a CLONED `sky_db::SkyDatabase`
@@ -2323,9 +2323,9 @@ every prior phase in this document opens with:
    is a property of the DATABASE and its `#[salsa::input]` setters, not of
    `compile_prepared`'s particular call graph. §15.2's cancellation test
    demands [`sky_db::typecheck`] DIRECTLY — the LSP's own diagnostics
-   query, never routing through `skyc::compile_prepared` at all — and
+   query, never routing through `ipe::compile_prepared` at all — and
    observes the identical `Cancelled::Local | Cancelled::PendingWrite`
-   outcome Phase 7's own proof (`crates/skyc/tests/watch_cancellation.rs`)
+   outcome Phase 7's own proof (`crates/ipe/tests/watch_cancellation.rs`)
    established for the watch path.
 
 **Conclusion, stated as plainly as the survey supports**: nothing in
@@ -2339,10 +2339,10 @@ and this section are.
 
 ### 15.2 The integration test (`crates/sky_db/tests/lsp_seam.rs`)
 
-Two tests, both driving `sky_db` directly (no dependency on `skyc` at
-all — this is deliberately narrower than `crates/skyc/tests/
+Two tests, both driving `sky_db` directly (no dependency on `ipe` at
+all — this is deliberately narrower than `crates/ipe/tests/
 watch_cancellation.rs`'s dependency footprint, because the seam being
-proved belongs to `sky_db` itself, not to `skyc`'s driver wiring around
+proved belongs to `sky_db` itself, not to `ipe`'s driver wiring around
 it):
 
 1. **`lsp_shaped_buffer_edit_drives_diagnostics_and_navigation_in_memory`**
@@ -2379,11 +2379,11 @@ it):
    The single new line (`assert_send::<SkyDatabase>()`) upgrades an
    IMPLICIT property (inferred from `watch.rs` happening to compile) to an
    EXPLICIT, independently-checked one.
-2. **The proof test depends on `sky_db` only, not `skyc`** — deliberately
+2. **The proof test depends on `sky_db` only, not `ipe`** — deliberately
    narrower than `watch_cancellation.rs`. The seam this phase proves
    belongs to the database itself (any tracked query, demanded from any
-   driver); routing the proof through `skyc::compile_prepared` would have
-   conflated "the database supports this" with "`skyc`'s driver happens to
+   driver); routing the proof through `ipe::compile_prepared` would have
+   conflated "the database supports this" with "`ipe`'s driver happens to
    exercise it," which is a weaker claim than the one this phase needs to
    record for a not-yet-built LSP driver to rely on.
 3. **`typecheck`, not a hypothetical per-module query, is the diagnostics

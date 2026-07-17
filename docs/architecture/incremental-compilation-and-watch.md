@@ -4,7 +4,7 @@
 > commitment beyond the locked decisions below). Supersedes the memory note
 > `incremental-compilation-salsa.md` for scope purposes.
 > **Implementation status:** Phase 1 (salsa db + `SourceFile`/`SourceRoot`
-> inputs + `parse`/`imports` tracked queries on the one-shot `skyc` path)
+> inputs + `parse`/`imports` tracked queries on the one-shot `ipe` path)
 > landed 2026-07-11 — see
 > `docs/architecture/salsa-incremental-compilation-2026-07-11.md`.
 >
@@ -13,7 +13,7 @@
 > **PARSE, DON'T VALIDATE** and **MAKE INVALID STATES UNREPRESENTABLE**.
 > The paramount hazard is incremental **under-invalidation** — a stale build
 > that looks correct is a correctness violation and outranks any efficiency
-> gain. Hot-reload must never open a dynamic-code / `eval` hole; Sky.Live's
+> gain. Hot-reload must never open a dynamic-code / `eval` hole; Ipe.Live's
 > no-`data-sky-eval` + strict-CSP (no `unsafe-eval`) posture is a hard
 > invariant at every reload level.
 
@@ -42,10 +42,10 @@
 4. **Q4 — Does watch alone feel immediate?** **YES — conditionally.** It buys
    the *illusion of continuity* (you never lose your place), not literal
    sub-100ms instantaneity; raw latency is ~1–few seconds bounded by cargo
-   compile+link. The illusion holds for Sky.Live web (and Sky.Tui) **when** (a)
+   compile+link. The illusion holds for Ipe.Live web (and Ipe.Tui) **when** (a)
    the dev session store is persistent (sqlite default), (b) the cargo relink
    long-pole is tamed (fast linker + runtime/app crate split), and (c) the
-   browser reconnects to a restored Model. It degrades for Sky.Webview, CLI /
+   browser reconnects to a restored Model. It degrades for Ipe.Webview, CLI /
    long-running jobs, and rich transient client-only state — the cases the
    interpreter tier later makes instant universally.
 
@@ -70,7 +70,7 @@ Five invariants form the floor. A violation of any is a release blocker.
   binary.
 - **INV-4 (Confined watch).** The watcher observes only a typed, canonicalised,
   project-root-confined path set. No symlink escape; bounded event intake.
-- **INV-5 (Owned artifacts).** The emitted Rust project is skyc-owned. Disk↔salsa
+- **INV-5 (Owned artifacts).** The emitted Rust project is ipe-owned. Disk↔salsa
   reconciliation is content-hash based; mtime is never trusted for correctness
   (only as a cargo-facing optimisation).
 
@@ -86,7 +86,7 @@ unrepresentable.
 **Decision.** The pure compiler pipeline is a salsa query graph spanning
 `sky_parse → sky_canon → sky_types → sky_lower → sky_ir → sky_backend_rust`,
 with the durable incremental cut-point at **`sky_ir`**. The
-`skyc → emitted Rust project → cargo` step is *outside* salsa. The **FFI
+`ipe → emitted Rust project → cargo` step is *outside* salsa. The **FFI
 subsystem's generation stays a coarse content-hash cache outside the graph**;
 its typed interface (`.ipei` + `kernel.json`) enters as a per-package salsa
 **input**.
@@ -336,9 +336,9 @@ project is a **pure function of `emit_manifest()`**, never an accretion:
    structurally impossible (INV-5).
 
 **Transactional emission.** Compute the full `emit_manifest` in memory; reconcile
-to disk only if **all** Sky-side stages (parse→emit) succeeded. On a Sky-side
+to disk only if **all** Ipê-side stages (parse→emit) succeeded. On a Ipê-side
 failure, disk is left at the last consistent state and the running binary is
-untouched. If Sky succeeds but cargo fails, sources are consistent (they
+untouched. If Ipê succeeds but cargo fails, sources are consistent (they
 type-checked) and the last-good binary keeps serving.
 
 ### Cross-session persistence
@@ -402,7 +402,7 @@ last-good binary alive on any failing rebuild**.
 composes salsa's minimal recompute with cargo's incremental engine and the live
 runtime's existing SSE reconnect.
 
-> **Note:** `skyc` today stops at emit and never invokes cargo (only an
+> **Note:** `ipe` today stops at emit and never invokes cargo (only an
 > `IPE_E2E`-gated test does). `ipe watch` (and an integrated `ipe build`) must
 > add the cargo-build + run orchestration that does not exist yet. `ipe watch`
 > composes an integrated `ipe build` cargo step rather than owning a private
@@ -523,7 +523,7 @@ old-alive-while-new-spawns shape.
   the binary **only on the latter** — the analog of the Haskell "printed success
   before `go build` ran" bug.
 - **`LastGoodBinary` is only constructible** for a build+process that passed its
-  readiness probe (`/_sky/readyz` for Sky.Live; alive + optional health for
+  readiness probe (`/_sky/readyz` for Ipe.Live; alive + optional health for
   CLI). A failed build never produces one (parse-don't-validate at the process
   boundary). It captures **the on-disk artifact path + its content hash** (not
   merely a handle to the live process), so after `StopOld` kills the old process
@@ -543,7 +543,7 @@ stop-before-spawn**: **SIGTERM old → await port release (bounded grace → SIG
 boot, port-bind race, wedged init), the watcher **re-execs the last-good artifact
 from disk** (`RespawnLastGood`) and reports the new binary as broken — so the user
 is never stranded even though the old *process* was already killed (H16 holds via
-the on-disk artifact, not a live spare process). The browser's existing Sky.Live
+the on-disk artifact, not a live spare process). The browser's existing Ipe.Live
 SSE machinery auto-reconnects (immediate `hello` handshake, 8 s hello watchdog,
 35 s heartbeat, exponential backoff, `__skyEventQueue` replay). `init` does not
 re-run (per-session), so with a persistent store the user lands on their restored
@@ -650,7 +650,7 @@ security > correctness > soundness.
 `memory`, which is **lost on restart**: a watch-triggered restart wipes all
 sessions, `init` re-runs fresh, and the user loses form contents / current page /
 scroll on every save — destroying the very illusion L0 rests on. **Decision:
-`ipe watch` defaults the Sky.Live dev session store to `sqlite`** (file-backed,
+`ipe watch` defaults the Ipe.Live dev session store to `sqlite`** (file-backed,
 survives restart), distinct from the app's production `[live].store`; if the app
 explicitly configures `memory`, watch warns. This single change converts L0 from
 "fast reload that resets my screen" into "I edited, the screen updated where I
@@ -761,7 +761,7 @@ and the `data-sky-eval` ban are untouched at every level.
 ## Q4 — Does `ipe watch` ALONE feel immediate? (LOCKED: YES, conditionally)
 
 **Decision.** **YES** — `ipe watch` alone (L0+) produces the *illusion of
-immediate update* for Sky.Live web apps, making L1/L2 a later refinement rather
+immediate update* for Ipe.Live web apps, making L1/L2 a later refinement rather
 than a v1 requirement — **under the conditions below**. It buys the **illusion of
 continuity** (you never lose your place), **not** literal sub-100 ms
 instantaneity.
@@ -772,7 +772,7 @@ session-store restore + per-session `init` landing the user back on their exact
 Model after a brief reconnect flash — continuity is the emotionally salient
 component of immediacy.
 
-### Latency budget (single body-edit, Sky.Live)
+### Latency budget (single body-edit, Ipe.Live)
 
 | Term | Estimate | Notes |
 |---|---|---|
@@ -806,7 +806,7 @@ component of immediacy.
 
 ### Where L0 visibly breaks the illusion (the honest boundary)
 
-The continuity illusion is TRUE for **Sky.Live web** (and **Sky.Tui** — redraw
+The continuity illusion is TRUE for **Ipe.Live web** (and **Ipe.Tui** — redraw
 survives restart fine) with a persisted session and a fast rebuild, and degrades
 progressively for:
 
@@ -817,7 +817,7 @@ progressively for:
   scroll, focus (the `diff` focus-preservation is for patches, not restarts).
 - **(d) Large Model** where deserialize+re-render is slow, or **rebuild > ~2–3 s**
   (flicker becomes a visible reload).
-- **(e) Non-web shapes:** **Sky.Webview** restart re-opens a native window
+- **(e) Non-web shapes:** **Ipe.Webview** restart re-opens a native window
   (jarring); **CLI / long-running jobs** lose in-progress work.
 
 These are the cases the interpreter-tier L1/L2 later makes instant *universally* —
@@ -833,7 +833,7 @@ broadcast"). This stops being sufficient exactly at cases (b)–(e) above.
 ### Measurement / regression gate (CLAUDE.md "spotted = filed")
 
 The illusion bar gets a concrete regression test: an e2e that measures
-save→repaint under a fixed budget on a reference Sky.Live example, so "instant
+save→repaint under a fixed budget on a reference Ipe.Live example, so "instant
 enough" is enforced, not asserted. A budget breach files a task.
 
 ---
@@ -849,7 +849,7 @@ hole. Each hazard is foreclosed by one of the two fundamental rules.
 | H2 | A query reads a hidden input (env var, `sky.toml` field, clock, FS) → stale result | under-invalidation | All external data **parsed once into typed salsa inputs**; DAG crates have no `std::fs`/`std::env` on the query path |
 | H3 | `module_interface` firewall omits a type-directed-lowering-visible fact → downstream emits stale Rust | under-invalidation | Interface = **sound over-approximation of all cross-module observables incl. resolved types**; "when in doubt, include it" — release gate |
 | H4 | On-disk lowered-IR entry reused when inputs changed | under-invalidation | Entry **content-addressed by complete input set**; **version-epoch directory** wiped on compiler upgrade |
-| H5 | skyc trusts a hand-edited emitted `.rs` (mtime newer) | drift | Emitted project is **skyc-owned**; reconcile by content hash, regenerate on mismatch (INV-5) |
+| H5 | ipe trusts a hand-edited emitted `.rs` (mtime newer) | drift | Emitted project is **ipe-owned**; reconcile by content hash, regenerate on mismatch (INV-5) |
 | H6 | Global DCE/mono firewalled behind interfaces → dead-fn-promoted-to-live not re-emitted | under-invalidation | `program_metadata()` depends on **full lowered-IR set**, re-runs every build; downstream early-cuts on byte-identical metadata |
 | H7 | Orphan/stale emitted `.rs` lingers and still compiles | invalid state | `emit_manifest` authoritative; **delete anything not in it** |
 | H8 | Cargo spurious rebuild from identical-byte rewrite | efficiency (not soundness) | Content-gated write; touch mtime only on real content change |

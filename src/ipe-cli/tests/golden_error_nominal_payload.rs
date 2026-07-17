@@ -2,7 +2,7 @@
 //! golden for the NOMINAL `PanicInfo` / `TypeInfo` / `ErrorInfo` payload types.
 //!
 //! Pins the coherence half (the negative half lives in
-//! `crates/skyc/tests/error_record_literal_gates.rs`):
+//! `crates/ipe/tests/error_record_literal_gates.rs`):
 //!
 //! * the three names are annotatable builtins (`describePanic : PanicInfo ->
 //!   String` resolves and compiles);
@@ -17,10 +17,10 @@
 //!
 //! ```text
 //! # compile-only check (fast, no IPE_E2E needed):
-//! cargo test -p skyc --test golden_error_nominal_payload
+//! cargo test -p ipe --test golden_error_nominal_payload
 //!
 //! # full E2E (run the emitted binary, assert stdout):
-//! IPE_E2E=1 cargo test -p skyc --test golden_error_nominal_payload
+//! IPE_E2E=1 cargo test -p ipe --test golden_error_nominal_payload
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -49,7 +49,7 @@ fn error_nominal_payload_compiles() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for error_nominal_payload: {:?}",
+        "ipe build must succeed for error_nominal_payload: {:?}",
         built.err()
     );
 }
@@ -74,7 +74,7 @@ fn error_nominal_payload_runs_and_prints_expected_output() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for error_nominal_payload: {:?}",
+        "ipe build must succeed for error_nominal_payload: {:?}",
         built.err()
     );
 

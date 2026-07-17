@@ -4,7 +4,7 @@
 //! position binds BOTH the whole and its sub-parts. Rust's `name @ (a, b)`
 //! spelling moves them from the SAME value — a partial move (E0382) for any
 //! non-`Copy` payload. Emitting `let whole @ (a, b) = arg;` for `((a, b) as
-//! whole)` over `(String, String)` is `skyc`-0 then `cargo`-101. So the whole
+//! whole)` over `(String, String)` is `ipe`-0 then `cargo`-101. So the whole
 //! binds first and the sub-parts destructure from a CLONE, so every binder is
 //! independently owned:
 //!
@@ -24,7 +24,7 @@
 //!
 //! Two locks:
 //!
-//! 1. `skyc` emits `main.rs` byte-identical to the checked-in golden — which
+//! 1. `ipe` emits `main.rs` byte-identical to the checked-in golden — which
 //!    records that NO by-value alias renders as `name @ inner`; every alias
 //!    binds the whole then clones the sub-shape.
 //! 2. Behind `IPE_E2E=1` the emitted project BUILDS (the seal: was `cargo`-101)
@@ -101,7 +101,7 @@ fn no_by_value_alias_uses_at_subpattern() {
 
 /// Full spine: build the emitted Cargo project, run it, assert it prints
 /// `pqpqrsrstutuhcdcd`, exit 0. Gated on `IPE_E2E=1`. This is the SEAL: before
-/// the fix the by-value alias binding was `skyc`-0 then `cargo`-101 (E0382);
+/// the fix the by-value alias binding was `ipe`-0 then `cargo`-101 (E0382);
 /// the clean build + correct output prove whole AND parts are independently
 /// owned and live.
 #[test]

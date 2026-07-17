@@ -1,6 +1,6 @@
 //! Ipe.Html.Attributes family end-to-end golden.
 //!
-//! Compiles `tests/golden/html_attrs/Main.ipe` through `skyc`, builds the
+//! Compiles `tests/golden/html_attrs/Main.ipe` through `ipe`, builds the
 //! emitted Rust project with the shared cargo target, runs the binary, and
 //! asserts on the rendered HTML. Gated on `IPE_E2E=1`.
 //!
@@ -8,7 +8,7 @@
 //!
 //! * Fixed-key string attrs (`class` / `id` / `href` / `value` / `type_` /
 //!   `placeholder`) render with the correct wire name — including the
-//!   Sky-keyword-avoidance fixup `type_` → `type`.
+//!   Ipê-keyword-avoidance fixup `type_` → `type`.
 //! * Fixed-key bool attrs render bare-when-true (`checked`) and omitted-when-
 //!   false (`disabled`).
 //! * The generic `attribute k v` / `boolAttribute k b` builders round-trip.
@@ -43,7 +43,7 @@ fn html_attributes_family_renders_and_escapes() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for html_attrs: {:?}",
+        "ipe build must succeed for html_attrs: {:?}",
         built.err()
     );
 

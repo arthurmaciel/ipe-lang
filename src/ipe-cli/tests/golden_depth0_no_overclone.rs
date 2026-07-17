@@ -15,8 +15,8 @@
 //!
 //! Run:
 //! ```text
-//! cargo test -p skyc --test golden_i225_depth0_no_overclone
-//! IPE_E2E=1 cargo test -p skyc --test golden_i225_depth0_no_overclone
+//! cargo test -p ipe --test golden_i225_depth0_no_overclone
+//! IPE_E2E=1 cargo test -p ipe --test golden_i225_depth0_no_overclone
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -35,7 +35,7 @@ fn entry_path(root: &Path) -> PathBuf {
         .join("Main.ipe")
 }
 
-/// skyc-0: the compiler accepts the program AND does NOT mint the spurious
+/// ipe-0: the compiler accepts the program AND does NOT mint the spurious
 /// depth-0 over-clone closure. The pipeline stage `eta_0` must be a plain
 /// `let` value binding (`let eta_0: IpeTask`), never a capturing
 /// `move |eta_0|` closure — the over-clone signature.
@@ -54,7 +54,7 @@ fn i225_depth0_no_overclone_skyc_accepts_lean() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for depth0_no_overclone: {:?}",
+        "ipe build must succeed for depth0_no_overclone: {:?}",
         built.err()
     );
 
@@ -96,7 +96,7 @@ fn i225_depth0_no_overclone_cargo_builds_and_runs() {
     };
 
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
-    assert!(built.is_ok(), "skyc build must succeed: {:?}", built.err());
+    assert!(built.is_ok(), "ipe build must succeed: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted("depth0_no_overclone", &out);
     assert_eq!(

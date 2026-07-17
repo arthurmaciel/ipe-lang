@@ -21,15 +21,15 @@ viewAbout model =
                   []
                   [ text
                         "This application is a production-grade example built with "
-                  , strong [] [text "Sky"]
+                  , strong [] [text "Ipê"]
                   , text
                         " -- a pure-functional, ML-family programming language that compiles to Go."
                   ]
-            , h2 [] [text "Built with Sky"]
+            , h2 [] [text "Built with Ipê"]
             , p
                   []
                   [text
-                      "Sky combines the safety of Hindley-Milner type inference with Go's performance and ecosystem. This app demonstrates:"]
+                      "Ipê combines the safety of Hindley-Milner type inference with Go's performance and ecosystem. This app demonstrates:"]
             , ul
                   []
                   [ li
@@ -42,7 +42,7 @@ viewAbout model =
                         []
                         [ strong [] [text "Type-safe HTML & CSS"]
                         , text
-                              " -- All markup and styles are generated with Sky's type-safe builders. No templates, no CSS files."
+                              " -- All markup and styles are generated with Ipê's type-safe builders. No templates, no CSS files."
                         ]
                   , li
                         []
@@ -66,7 +66,7 @@ viewAbout model =
                         ]
                   ]
             , h2 [] [text "Architecture"]
-            , p [] [text "SkyVote is structured as a multi-module Sky project:"]
+            , p [] [text "SkyVote is structured as a multi-module Ipê project:"]
             , ul
                   []
                   [ li
@@ -124,5 +124,5 @@ viewAbout model =
             , p
                   []
                   [text
-                      "Sky is open source and under active development. Visit the project repository to learn more about the language, read the documentation, or contribute."]
+                      "Ipê is open source and under active development. Visit the project repository to learn more about the language, read the documentation, or contribute."]
             ])

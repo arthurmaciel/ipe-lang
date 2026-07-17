@@ -1,4 +1,4 @@
-# Std.Ui / Sky.Live / Sky.Tui / Sky.Webview — authoritative backend-wiring spec
+# Ipe.Ui / Ipe.Live / Ipe.Tui / Ipe.Webview — authoritative backend-wiring spec
 
 Single source of truth for the locked parallel-executor swarm. Synthesised from
 the 4 guardian designs (ui / live / tui / webview). Where the 4 disagreed, this
@@ -40,11 +40,11 @@ make-invalid-states-unrepresentable + SIMPLER):**
 ```rust
 // crates/sky_ir/src/ir.rs — add to enum IrType (after ServerResponse, L499)
 
-/// msg-parametric Std.Ui / Std.Html opaque type. `ctor` selects which runtime
+/// msg-parametric Ipe.Ui / Ipe.Html opaque type. `ctor` selects which runtime
 /// enum; `msg` is the M type arg. Illegal combinations are unrepresentable —
 /// the tag enum admits exactly the five UI type constructors.
 Ui { ctor: UiCtor, msg: Box<IrType> },
-/// nullary Std.Ui support enum (no type param).
+/// nullary Ipe.Ui support enum (no type param).
 UiPlain(UiPlain),
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -100,28 +100,28 @@ not glob-exported. This is soundness trap **T2** (§6).
 INVARIANT (element.rs L15): runtime variant names + field order MUST stay identical to
 `../sky/sky-stdlib/Std/Ui.sky` (L39-190) and `Std/Html.sky`. The opaque alias HIDES drift
 — a mismatch mis-renders at runtime instead of failing to build. The Element-render
-byte-diff golden (§5) is the ONLY safety net. Any new Std.Ui variant is a lockstep
+byte-diff golden (§5) is the ONLY safety net. Any new Ipe.Ui variant is a lockstep
 runtime + mapping change.
 
-### 1.4 Constructors stay pure-Sky; render/layout is a kernel (the pivotal decision)
+### 1.4 Constructors stay pure-Ipê; render/layout is a kernel (the pivotal decision)
 
-`Std.Ui` and `Std.Html` are 100% pure Sky (zero `Ffi.kernel`). Every constructor
+`Ipe.Ui` and `Ipe.Html` are 100% pure Ipê (zero `Ffi.kernel`). Every constructor
 (`el/row/column/text/button/link/image/input/form/paragraph/textColumn/grid/none/html`,
 every `Background/Border/Font/Region/Input/Grid/Transition/Transform/Animation/Responsive/Css`
 helper, every `Length`/`Color` builder, every `Html.*`, every `Events.on*`) returns a
 clean `Element msg` / `Attribute msg` / `Html msg` / `Event msg` over the mapped runtime
-enums. These compile as ordinary Sky — **no kernel, no `any`.**
+enums. These compile as ordinary Ipê — **no kernel, no `any`.**
 
-The ONLY part that cannot be represented soundly in Sky-over-Rust is the render/layout
+The ONLY part that cannot be represented soundly in Ipê-over-Rust is the render/layout
 chain (`renderElement`/`layout`/`layoutWith` return `any` in the stdlib; `Raw any` /
 `AttrEvent any` fields). **DECISION (security > correctness > soundness):** port the
 render chain to a runtime kernel:
 
 - New `runtime/src/sky_runtime/ui/render.rs`: `ui_layout` / `ui_layout_with`, signature
-  `Element<M> -> Html<M>` (Sky sig `layout : List (Ui.Attribute msg) -> Element msg -> Html msg`,
+  `Element<M> -> Html<M>` (Ipê sig `layout : List (Ui.Attribute msg) -> Element msg -> Html msg`,
   the stdlib `-> any` sanctioned to `-> Html msg`). Internal helpers `render_node_as`,
   `build_style_string`, `width_css_in`, `height_css_in`, `collect_html_attrs`,
-  `pick_semantic_tag`, `tag_for_description` are private to this file — no Sky binding,
+  `pick_semantic_tag`, `tag_for_description` are private to this file — no Ipê binding,
   no kernel enum entry.
 
 This (a) removes the `any`-return hazard, (b) co-locates CSS `style="…"` string emission
@@ -132,25 +132,25 @@ goldens. It is simpler AND more secure, so it wins on principle order.
 ### 1.5 Enum-suppression + ctor-redirect (Maybe/Result mechanism, NOT synthetic EnumDef)
 
 These ADTs are SUPPRESSED (runtime already defines them), not injected like `SqlValue`.
-Add the type names to lower.rs's "do not emit a Sky enum def" set (parallel to Maybe/Result).
+Add the type names to lower.rs's "do not emit a Ipê enum def" set (parallel to Maybe/Result).
 User constructors/patterns redirect to the runtime variant paths:
 
 **Type-name -> IrType (lower.rs, module-origin-keyed — see T2):**
 
 | (home module, type name) | IrType |
 |---|---|
-| `(Std.Ui, Element)` | `Ui{Element}` |
-| `(Std.Ui, Attribute)` | `Ui{UiAttribute}` |
-| `(Std.Ui, Length/Color/HAlign/VAlign/Location/PseudoClass/Description/LayoutContext)` | `UiPlain(_)` |
-| `(Std.Html, Html)` | `Ui{Html}` |
-| `(Std.Html.Attributes, Attribute)` | `Ui{HtmlAttribute}` |
-| `(Std.Html.Events, Event)` | `Ui{HtmlEvent}` |
-| `(Sky.Live.*, Request/LiveReq)` | `LiveReq` |
-| `(Sky.Live.*, Route)` | `LiveRoute` |
+| `(Ipe.Ui, Element)` | `Ui{Element}` |
+| `(Ipe.Ui, Attribute)` | `Ui{UiAttribute}` |
+| `(Ipe.Ui, Length/Color/HAlign/VAlign/Location/PseudoClass/Description/LayoutContext)` | `UiPlain(_)` |
+| `(Ipe.Html, Html)` | `Ui{Html}` |
+| `(Ipe.Html.Attributes, Attribute)` | `Ui{HtmlAttribute}` |
+| `(Ipe.Html.Events, Event)` | `Ui{HtmlEvent}` |
+| `(Ipe.Live.*, Request/LiveReq)` | `LiveReq` |
+| `(Ipe.Live.*, Route)` | `LiveRoute` |
 
 **Constructor-symbol redirect (lower.rs ctor lowering):**
 
-| Sky ctor | Runtime variant path |
+| Ipê ctor | Runtime variant path |
 |---|---|
 | `Empty/Text/Node/TaggedNode/Raw` | `sky_runtime::ui::element::Element::{Empty,Text,Node,TaggedNode,Raw}` |
 | `NoAttribute … AttrAnimation` (40) | `sky_runtime::ui::element::Attribute::*` |
@@ -166,7 +166,7 @@ Event handlers box as `Arc::new(move |…| …)` (capturing closures), matching 
 
 ### 1.6 Render kernels (the shared render surface)
 
-| Sky binding (constrain.rs kernel_ty) | KernelFn | runtime fn (ui/render.rs) |
+| Ipê binding (constrain.rs kernel_ty) | KernelFn | runtime fn (ui/render.rs) |
 |---|---|---|
 | `layout : List (Ui.Attribute msg) -> Element msg -> Html msg` | `UiLayout` | `ui_layout` |
 | `layoutWith : { wrapperAttrs, rootAttrs } -> Element msg -> Html msg` | `UiLayoutWith` | `ui_layout_with` |
@@ -215,7 +215,7 @@ goes through `flock-edit.sh` (§6). Below is the exact union so nothing overlaps
 ### `crates/sky_types/src/constrain.rs` (`kernel_ty`)
 - Add TYPE entries keyed by **`(home, name)`** (memory: multi-module `constrain` bare-Symbol
   keying is a known blocker — MUST key by module here so `Ui.layout` never conflates with a
-  user `layout`): `(Std.Ui, layout)`, `(Std.Ui, layoutWith)`, `(Std.Html, render/escapeHtml/escapeAttr/attrToString)`,
+  user `layout`): `(Ipe.Ui, layout)`, `(Ipe.Ui, layoutWith)`, `(Ipe.Html, render/escapeHtml/escapeAttr/attrToString)`,
   `(Live, app/route/renderStatic)`, `(Tui, program/app)`, `(Webview, app)`.
 - App cfg records return real `Ty::Record` with function-typed fields; return `Task Error ()`.
   Tui cfg: 5 closed required fields + row-open tail for optional `guard/canvasWidth/canvasHeight`;
@@ -260,7 +260,7 @@ goes through `flock-edit.sh` (§6). Below is the exact union so nothing overlaps
 - `("Html", &[node,text,raw,div,span,a,…])`, `("Attr", &[…])`, `("Event", &[onClick,onInput,onSubmit,…])`
 - `("Live", &[app,route,renderStatic,api,lifecycle])`, `("Tui", &[app,program])`, `("Webview", &[app,WindowCfg,AppCfg,defaultWindow,withTitle,withSize])`
 - Submodule qualifiers: `Background Border Font Region Input Grid Transition Transform Animation Responsive Css Keyed Lazy Chart`.
-- Note: `Std.Ui`/`Std.Html`/`Std.Html.Events` are compiled from stdlib source; confirm the
+- Note: `Ipe.Ui`/`Ipe.Html`/`Ipe.Html.Events` are compiled from stdlib source; confirm the
   sky-rust build embeds `Std/Ui.sky` et al. (the way `../sky` does). Constructors resolve by
   import; only the app/render kernel qualifiers are strictly needed in QUALIFIERS.
 
@@ -285,7 +285,7 @@ goes through `flock-edit.sh` (§6). Below is the exact union so nothing overlaps
     both hold, add both names once; never emit a duplicate `"live"` entry (webview's transitive
     `live` must not be double-declared). Reuse the anchor logic with a set, not append-blind.
 
-### module-flags plumbing (skyc / driver)
+### module-flags plumbing (ipe / driver)
 - Thread `uses_ui/uses_live/uses_tui/uses_webview` from lowerer -> backend ctx wherever
   `uses_server`/`uses_tea` are threaded.
 
@@ -293,30 +293,30 @@ goes through `flock-edit.sh` (§6). Below is the exact union so nothing overlaps
 
 ## 3. DISJOINT PER-SURFACE FILE PARTITION (no two surfaces own the same non-shared file)
 
-### Std.Ui (foundational surface)
+### Ipe.Ui (foundational surface)
 - `runtime/src/sky_runtime/ui/render.rs` (NEW) — `ui_layout`/`ui_layout_with` + private
   `render_node_as`/`build_style_string`/`width_css_in`/`height_css_in`/`collect_html_attrs`/
   `pick_semantic_tag`/`tag_for_description`. The render engine. Security-critical (T3, T5).
-- `runtime/src/sky_runtime/ui/mod.rs` — ONE additive line `pub mod render;` (Std.Ui-owned edit).
+- `runtime/src/sky_runtime/ui/mod.rs` — ONE additive line `pub mod render;` (Ipe.Ui-owned edit).
 - `crates/sky_backend_rust/src/emit_ui.rs` (NEW) — emit bodies for `UiLayout`/`UiLayoutWith`
   + the 4 Html kernels.
-- `crates/sky_backend_rust/tests/golden/ui_render/**` + `crates/skyc/tests/golden_stdui_render.rs`.
+- `crates/sky_backend_rust/tests/golden/ui_render/**` + `crates/ipe/tests/golden_stdui_render.rs`.
 
-### Sky.Live
+### Ipe.Live
 - `crates/sky_backend_rust/src/emit_live.rs` (NEW) — `LiveApp`/`LiveAppRouted`/`LiveRoute`/
   `LiveRenderStatic` peepholes: app record-splice (single-page vs routed via literal `page`
   field detection, `set_page` closure, store cfg, init-arg adapt), form-event peepholes.
-- `crates/skyc/tests/live_e2e.rs` + `crates/skyc/tests/goldens/live/**`.
+- `crates/ipe/tests/live_e2e.rs` + `crates/ipe/tests/goldens/live/**`.
 - Live writes NO runtime code (reuses live/* as-is).
 
-### Sky.Tui
+### Ipe.Tui
 - `crates/sky_backend_rust/src/emit_tui.rs` (NEW) — `TuiProgram`/`TuiApp` cfg destructure +
   the onKey `{kind,value}` adapter closure (fail-closed typed diagnostic on any other shape).
 - `runtime/tests/tui_render_golden.rs` (NEW) — `render_with_focus` ANSI-cell byte-diff.
-- `crates/skyc/tests/golden/m7_tui_program/**` + `crates/skyc/tests/golden/m7_tui_app_element/**`.
+- `crates/ipe/tests/golden/m7_tui_program/**` + `crates/ipe/tests/golden/m7_tui_app_element/**`.
 - Tui writes NO runtime code (reuses tui/* as-is).
 
-### Sky.Webview
+### Ipe.Webview
 - `crates/sky_backend_rust/src/emit_webview.rs` (NEW) — `emit_webview_app`: destructure the
   single `AppCfg` record into the 5 positional runtime args + `WebviewWindowCfg{title,size}`;
   fail-closed non-literal-cfg gate (T-WV3).
@@ -348,11 +348,11 @@ Land, in this order, and FREEZE the shared registries:
    `project.rs`: the 4 feature injectors + dedup.
 7. `emit_expr.rs`: 4 one-line dispatch arms + 4 `mod` decls (bodies are stubs returning a
    `CompilerBug`/`todo`-free typed error until their per-surface file lands — but land the
-   Std.Ui `emit_ui.rs` body in this phase, see 8).
+   Ipe.Ui `emit_ui.rs` body in this phase, see 8).
 8. **`runtime/src/sky_runtime/ui/render.rs`** — port `renderElement`/`layout`/`buildStyleString`
    (T1, T3, T5); wire `ui/mod.rs`; land `emit_ui.rs`.
 
-**FREEZE GATE (go/no-go for fan-out):** the Std.Ui constructor golden + the backend-independent
+**FREEZE GATE (go/no-go for fan-out):** the Ipe.Ui constructor golden + the backend-independent
 Element-render byte-diff golden (§5.1/§5.2) MUST pass, AND the whole workspace must `cargo build`
 clean with the new exhaustive matches. Only after this gate do the shared registries freeze and
 parallel work begin. Rationale: the Element/Html contract is FOUNDATIONAL — Live/Tui/Webview all
@@ -362,7 +362,7 @@ fan-out is an exit-0-then-cargo-fail generator.
 ### Phase 1 — PARALLEL FAN-OUT (three executors, disjoint files only)
 After freeze, Live / Tui / Webview run concurrently, each writing ONLY its disjoint files (§3):
 - Live: `emit_live.rs` + live goldens.
-- Tui: `emit_tui.rs` + `tui_render_golden.rs` + tui goldens. (`TuiProgram` has NO Std.Ui
+- Tui: `emit_tui.rs` + `tui_render_golden.rs` + tui goldens. (`TuiProgram` has NO Ipe.Ui
   dependency and can even start during Phase 0; `TuiApp` needs the frozen Element contract.)
 - Webview: `emit_webview.rs` + `webview.rs` Cmd/Sub close + webview goldens + xvfb smoke.
 
@@ -378,7 +378,7 @@ Honest-test rule (repeated memory lesson): every golden MUST include the DIVERGI
 keyed reorder, empty collections, route-arity underflow) — not just a clean `<div>` — or the
 XSS/style/bounds gates are untested.
 
-### 5.1 Std.Ui constructor golden (`golden_stdui_render.rs`)
+### 5.1 Ipe.Ui constructor golden (`golden_stdui_render.rs`)
 Fixtures exercising every constructor + submodule attr -> compile -> run -> emitted HTML string
 byte-equals the Go oracle (`../sky`). Security probes REQUIRED: `AttrBgImage "url(javascript:…)"`,
 `Ui.htmlAttribute "onclick" "x"`, `link {url="javascript:alert(1)"}` -> assert sanitised/dropped.
@@ -420,8 +420,8 @@ golden: `webview_app(` 5-arg destructure + `WebviewWindowCfg{…}` + current-thr
 
 ### 5.7 Feature-injection + build gate
 UI-only, Live, Tui, Webview fixtures each produce a `Cargo.toml` with exactly the right feature
-set (assert no `live` double-declare under `webview`). Every fixture must `skyc`-emit AND
-`cargo build` (bounded per-fixture; no full local sweep — push to CI). Green skyc + red cargo is
+set (assert no `live` double-declare under `webview`). Every fixture must `ipe`-emit AND
+`cargo build` (bounded per-fixture; no full local sweep — push to CI). Green ipe + red cargo is
 a BLOCKING failure (exit-0-then-cargo-fail).
 
 ---
@@ -438,7 +438,7 @@ a BLOCKING failure (exit-0-then-cargo-fail).
   NEVER `_ =>` (project non-regression rule). A missing arm is a compile error by construction.
 - Feature injection is load-bearing against exit-0-then-cargo-fail: `uses_*` set on any reachable
   kernel call -> project.rs injects the feature. A UI/Live/Tui/Webview program that doesn't get its
-  feature is a green-skyc / red-cargo failure. The §5.7 gate is the sentinel.
+  feature is a green-ipe / red-cargo failure. The §5.7 gate is the sentinel.
 
 ### Soundness rules
 - `#![forbid(unsafe_code)]` stays clean on all compiler crates. No new `unsafe`. `crossterm`/`wry`/
@@ -451,11 +451,11 @@ a BLOCKING failure (exit-0-then-cargo-fail).
   precedent. Record field enumeration by `_fieldIndex`.
 
 ### Blocking soundness traps (block-on-sight)
-- **T1 (`any`-render):** never compile `renderElement`/`layout` from Sky; never add `IrType::Any`/
+- **T1 (`any`-render):** never compile `renderElement`/`layout` from Ipê; never add `IrType::Any`/
   `Box<dyn Any>` (defeats `Html<M>: PartialEq` the diff needs, reintroduces coercion panics). Render
   is the `ui_layout` kernel. `Raw`/`AttrEvent` args flow as concrete `Html<M>`/`html::Attribute<M>`.
 - **T2 (Attribute/Event name collision):** `resolve(name)` returns bare `"Attribute"` for BOTH
-  `Std.Ui` and `Std.Html.Attributes`, and `"Event"` for `Std.Html.Events`. Key type mapping on
+  `Ipe.Ui` and `Ipe.Html.Attributes`, and `"Event"` for `Ipe.Html.Events`. Key type mapping on
   MODULE ORIGIN. Render both `Attribute` families by fully-qualified path. Compounds with the open
   multi-module `constrain` bare-Symbol blocker (memory) — key `kernel_ty` by `(home,name)` in lockstep.
 - **T3 (CSS injection in `build_style_string`):** `AttrStyle`/`AttrBgImage`/gradient/`AttrAttribute`
@@ -475,9 +475,9 @@ a BLOCKING failure (exit-0-then-cargo-fail).
   type-directed emit; on any other shape raise a typed pre-cargo diagnostic (fail-closed), never a
   guessed struct. v1 rejects optional `guard`/`canvasWidth`/`canvasHeight` with a clear diagnostic
   (SIMPLER, fail-closed) rather than silently dropping.
-- **Tui.app gating:** `TuiApp` (Element view) must not emit before the Std.Ui contract is frozen
-  (Phase 0), else it references unwired constructors -> green skyc / red cargo. `TuiProgram` (String
-  view) is Std.Ui-independent and may ship first.
+- **Tui.app gating:** `TuiApp` (Element view) must not emit before the Ipe.Ui contract is frozen
+  (Phase 0), else it references unwired constructors -> green ipe / red cargo. `TuiProgram` (String
+  view) is Ipe.Ui-independent and may ship first.
 - **Webview main-thread (T-WV1):** emit `block_on_current_thread` when `uses_webview`; spawned-thread
   `block_on` for a webview program aborts tao/Cocoa/GTK. Fail SAFE — if in doubt, current-thread.
 - **Webview Cmd/Sub (T-WV2):** must land `UserEvent::Msg` + tokio-handle dispatch + interval subs;
@@ -493,7 +493,7 @@ a BLOCKING failure (exit-0-then-cargo-fail).
 1. `runtime/src/sky_runtime/tui/app.rs` — stringly-typed key wire protocol
    (`on_key: Fn(String,String)->Msg`, `kind == "mouse"` / `value.contains('Z')` substring tests).
    Proposed: thread the existing `key.rs` `TuiKey` ADT typed through the channel; convert
-   `TuiKey -> KeyEvent` at the single Sky boundary.
+   `TuiKey -> KeyEvent` at the single Ipê boundary.
 2. `runtime/src/sky_runtime/ui/element.rs` — `AttrAttribute(String,String)`/`AttrStyle(String,String)`
    carry attacker-influenceable name+value as bare strings; safety rests on a documented render-time
    contract. Proposed: a `SafeAttrName` newtype smart constructor at the `htmlAttribute`/`style`

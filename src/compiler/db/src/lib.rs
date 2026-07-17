@@ -28,7 +28,7 @@
 //! driver. Interning is **append-only** — symbols are never freed or
 //! renumbered — so a memoized `Module` from an earlier revision always
 //! resolves against the current interner. Symbol *numbering* depends on the
-//! query-demand order; the one-shot `skyc` driver demands queries in a fixed
+//! query-demand order; the one-shot `ipe` driver demands queries in a fixed
 //! topological order against a cold database, so emitted bytes are identical
 //! to the non-incremental pipeline (enforced by the golden-oracle suite).
 //! Warm-db reuse stays confined to tests until the clean-vs-incremental
@@ -105,7 +105,7 @@ pub trait Db: salsa::Database {
     fn interner(&self) -> &SharedInterner;
 }
 
-/// The concrete Sky compiler database.
+/// The concrete Ipê compiler database.
 #[salsa::db]
 #[derive(Clone, Default)]
 pub struct IpeDatabase {
@@ -678,7 +678,7 @@ pub type TypecheckResult = Result<Arc<ipe_types::SolvedTypes>, (Diagnostic, Vec<
 /// Promotion, the field-access/record-update deferred-resolution fixpoint,
 /// routed-`Live.app` witness checks — all operate over that single joint
 /// constraint set. Splitting this into a true `typecheck(ModuleId)` query
-/// would require re-deriving Sky's cross-module generalization semantics on
+/// would require re-deriving Ipê's cross-module generalization semantics on
 /// top of a scoped per-module solve seeded from deps' TYPED interfaces
 /// (schemes, not just the canon-level `ModuleExports` [`module_interface`]
 /// carries today) — a structural redesign of `constrain.rs`, not a
@@ -725,7 +725,7 @@ pub fn lower_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> LowerR
 // (spec: `docs/architecture/phase5-emit-rust-file-design-2026-07-12.md` §4.1)
 // ---------------------------------------------------------------------------
 
-/// One Rust source file the backend emits for a Sky module's OWN
+/// One Rust source file the backend emits for a Ipê module's OWN
 /// declarations (§4.1). A genuine `#[salsa::interned]` key: interning the
 /// same `home` twice returns the same salsa id, so a per-file emit query
 /// keyed on it memoizes independently of every OTHER file.
@@ -742,7 +742,7 @@ pub fn lower_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> LowerR
 /// no new trait work.
 #[salsa::interned(debug)]
 pub struct RustFileId {
-    /// The Sky module's defining path (`ipe_ir::Func::home` /
+    /// The Ipê module's defining path (`ipe_ir::Func::home` /
     /// `EnumDef::home`'s value) — never empty on the real driver path.
     pub home: ipe_ir::ModPath,
 }
@@ -841,15 +841,15 @@ pub fn emit_project(
 
 /// The memoized text of ONE emitted Rust file.
 ///
-/// `Spine`'s content, or a single Sky-module's own file. Same
+/// `Spine`'s content, or a single Ipê-module's own file. Same
 /// `Result<Arc<..>, Diagnostic>` shape as [`EmitResult`], carrying the
 /// rendered `String` rather than a whole project.
 pub type EmitTextResult = Result<Arc<String>, (Diagnostic, Vec<Symbol>)>;
 
-/// The set of [`RustFileId`]s the program emits an OWN Sky-module file for —
+/// The set of [`RustFileId`]s the program emits an OWN Ipê-module file for —
 /// the `home`-set quantifier (§4.2). Mirrors `program_metadata`'s
 /// `program_modules()` role in the original design doc: it makes "which files
-/// exist" a first-class, salsa-tracked value, so an add/delete of a Sky module
+/// exist" a first-class, salsa-tracked value, so an add/delete of a Ipê module
 /// (which changes the `home` set) is a VISIBLE dependency edge, not an implicit
 /// side effect of [`lower_program`] re-running.
 ///
@@ -890,7 +890,7 @@ pub fn program_rust_file_ids(
 /// The `Spine` tier's text (§4.2): preamble, kernel-wrapper prelude, record
 /// structs, DB-projection impls, TEA/Auth aliases, epilogue, `fn main()`, and
 /// the `Spine`-bucket `SqlValue`/`SqlField` enums — everything that is
-/// program-wide rather than Sky-module-owned. The `mod`/`pub(crate) use`
+/// program-wide rather than Ipê-module-owned. The `mod`/`pub(crate) use`
 /// barrel lines are NOT baked in here (they are a pure function of
 /// [`program_rust_file_ids`]); [`emit_manifest`] appends them during assembly,
 /// keeping this query's memoized value byte-stable under a barrel-only change.

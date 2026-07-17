@@ -1,8 +1,8 @@
-//! Sky.Core.Basics kernels: modBy + errorToString.
+//! Ipe.Basics kernels: modBy + errorToString.
 //!
 //! Mirrors Go's runtime-go/rt/rt.go (Basics_modByT, etc.).
 
-/// Sky `modBy : Int -> Int -> Int`. Divisor-first convention (Elm/pipeline order).
+/// Ipê `modBy : Int -> Int -> Int`. Divisor-first convention (Elm/pipeline order).
 /// Mirrors Go's `Basics_modByT` exactly:
 ///   - divisor == 0  → 0
 ///   - r = n % divisor; if r < 0 { r += divisor }
@@ -22,7 +22,7 @@ pub fn basics_mod_by(divisor: i64, n: i64) -> i64 {
     if r < 0 { r.wrapping_add(divisor) } else { r }
 }
 
-/// The result of Sky's `Basics.compare` — a typed three-way comparison.
+/// The result of Ipê's `Basics.compare` — a typed three-way comparison.
 ///
 /// Sanctioned divergence from the Sky/Go backend: Go's `Basics_compareT`
 /// returns `-1 / 0 / 1` as a plain `int`.  The Rust backend returns a typed
@@ -36,13 +36,13 @@ pub enum IpeOrder {
     GT = 2,
 }
 
-/// Sky `compare : comparable -> comparable -> Order`.
+/// Ipê `compare : comparable -> comparable -> Order`.
 ///
 /// Mirrors Go's `Basics_compareT` semantics: `LT` when `a < b`, `GT` when
-/// `a > b`, `EQ` otherwise.  The `PartialOrd` bound is correct here: Sky's
+/// `a > b`, `EQ` otherwise.  The `PartialOrd` bound is correct here: Ipê's
 /// `comparable` covers `Int`, `Float`, `String`, `Char`, `Bool` — all of
 /// which implement `PartialOrd` in Rust.  NaN-producing operations (`Float`)
-/// follow Rust's `PartialOrd` convention (NaN is unordered); Sky does not
+/// follow Rust's `PartialOrd` convention (NaN is unordered); Ipê does not
 /// expose a `Float` NaN literal so this is sound in practice.
 pub fn basics_compare<T: PartialOrd>(a: T, b: T) -> IpeOrder {
     if a < b {
@@ -54,7 +54,7 @@ pub fn basics_compare<T: PartialOrd>(a: T, b: T) -> IpeOrder {
     }
 }
 
-/// Sky `fst : (a, b) -> a` / `snd : (a, b) -> b`. Pure in stdlib, but the
+/// Ipê `fst : (a, b) -> a` / `snd : (a, b) -> b`. Pure in stdlib, but the
 /// Prelude re-export lowers as a `VarKernel "Basics" "fst"`, so the Rust
 /// backend routes it to a runtime kernel. Tuples lower to Rust tuples.
 pub fn basics_fst<A, B>(t: (A, B)) -> A {
@@ -64,7 +64,7 @@ pub fn basics_snd<A, B>(t: (A, B)) -> B {
     t.1
 }
 
-/// Sky `identity : a -> a` and `always : a -> b -> a`. Pure in the stdlib
+/// Ipê `identity : a -> a` and `always : a -> b -> a`. Pure in the stdlib
 /// (`identity x = x`, `always x _ = x`) but the Prelude re-export lowers each as
 /// a `VarKernel "Basics" …`, so the Rust backend routes them to runtime kernels
 /// (same convention as `fst`/`snd`). `always` is the tupled 2-arg form the
@@ -77,12 +77,12 @@ pub fn basics_always<A, B>(x: A, _y: B) -> A {
     x
 }
 
-/// Sky `not : Bool -> Bool` — boolean negation.
+/// Ipê `not : Bool -> Bool` — boolean negation.
 pub fn basics_not(b: bool) -> bool {
     !b
 }
 
-/// Sky `clamp : comparable -> comparable -> comparable -> comparable`
+/// Ipê `clamp : comparable -> comparable -> comparable -> comparable`
 /// (`clamp lo hi x`). Polymorphic over any `PartialOrd` type — mirrors
 /// `math_min` / `math_max`, so the type-checker's `Comparable a` obligation
 /// (an `Ord` super-var, see `constrain_var_kernel`) rejects a function / record
@@ -101,11 +101,11 @@ pub fn basics_clamp<T: PartialOrd>(lo: T, hi: T, x: T) -> T {
 
 // ── Basics numerics ──────────────────────────────────────────────────
 
-/// Sky `negate : number -> number` — unary negation on Int or Float.
+/// Ipê `negate : number -> number` — unary negation on Int or Float.
 ///
 /// This is also the runtime target for the `-x` desugar in the parser
 /// (`negate x`). Both `i64` and `f64` implement `Neg<Output = Self>`, so
-/// the same generic function covers both Sky numeric primitives with no
+/// the same generic function covers both Ipê numeric primitives with no
 /// runtime type dispatch — matching Go's natural `-x` operator.
 pub fn basics_negate<T: ::core::ops::Neg<Output = T>>(x: T) -> T {
     -x
@@ -132,7 +132,7 @@ impl SaturatingNeg for f64 {
     }
 }
 
-/// Sky `abs : number -> number` — absolute value on Int or Float.
+/// Ipê `abs : number -> number` — absolute value on Int or Float.
 ///
 /// Uses `T::default()` as the zero sentinel (`0_i64` / `0.0_f64`), both of
 /// which satisfy `Default`. The `Copy` bound allows reusing `x` after the
@@ -147,8 +147,8 @@ pub fn basics_abs<T: PartialOrd + SaturatingNeg + Copy + Default>(x: T) -> T {
 
 // ── end Basics numerics ──────────────────────────────────────────────
 
-/// Sky `errorToString : a -> String` — universal Sky stringifier.
-/// Used by Sky.Test.debugShow and friends to render any Sky value into
+/// Ipê `errorToString : a -> String` — universal Ipê stringifier.
+/// Used by Ipe.Test.debugShow and friends to render any Ipê value into
 /// a diagnostic string. Backed by the total `IpeStringify` trait, which
 /// mirrors Go's `Basics_errorToString` EXACTLY: a `String` renders UNQUOTED
 /// (`hi`, not `"hi"`), scalars render like `%v`, and slices/tuples/maps follow
@@ -159,11 +159,11 @@ pub fn basics_error_to_string<T: crate::stringify::IpeStringify>(v: T) -> String
     v.ipe_show()
 }
 
-// Sky.Core.Error's runtime kernels live in `error.rs` — `Error` is the real
+// Ipe.Error's runtime kernels live in `error.rs` — `Error` is the real
 // `ipe_runtime::error::IpeError` ADT, not a bare `String`. `Error.toString`
 // reuses `basics_error_to_string` above.
 
-/// Sky `Debug.toString` — the `{{expr}}` string-interpolation stringifier.
+/// Ipê `Debug.toString` — the `{{expr}}` string-interpolation stringifier.
 /// Display-based, NOT Debug: a `String` interpolates as itself (no surrounding
 /// quotes) and scalars format like Go's `%v`. Mirrors Go's `Debug_toString`
 /// (`String → s`, else `Sprintf("%v", …)`).
@@ -171,7 +171,7 @@ pub fn debug_to_string<T: std::fmt::Display>(v: T) -> String {
     format!("{}", v)
 }
 
-/// Sky `Basics.toString : a -> String` — Go's `fmt.Sprintf("%v", …)`. Display-
+/// Ipê `Basics.toString : a -> String` — Go's `fmt.Sprintf("%v", …)`. Display-
 /// based (NOT Debug, so a `String` renders unquoted and scalars format like Go's
 /// `%v`); same semantics as `Debug.toString`. The `Display` bound is deliberate:
 /// `toString` on a scalar (Int/Float/Bool/String) is the overwhelmingly common
@@ -208,7 +208,7 @@ mod tests {
     }
     #[test]
     fn test_mod_by_negative_dividend_positive_divisor() {
-        // -1 % 3 = -1 in Rust; Sky/Elm wants 2 (same sign as divisor)
+        // -1 % 3 = -1 in Rust; Ipê/Elm wants 2 (same sign as divisor)
         assert_eq!(basics_mod_by(3, -1), 2);
         assert_eq!(basics_mod_by(3, -4), 2);
     }

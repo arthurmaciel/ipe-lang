@@ -1,15 +1,15 @@
-# SSE relay (#373) — `Sky.Core.Http.Stream.forEachChunk`
+# SSE relay (#373) — `Ipe.Http.Stream.forEachChunk`
 
 Canonical example for the **synchronous-relay shape** — the bridge
-that lets a plain `Sky.Http.Server` handler forward an upstream
+that lets a plain `Ipe.Http.Server` handler forward an upstream
 streaming response chunk-for-chunk to its own client, without going
-through Sky.Live's update-loop Sub dispatch (which is unavailable
+through Ipe.Live's update-loop Sub dispatch (which is unavailable
 in handler goroutines).
 
 ## Run
 
 ```bash
-sky run src/Main.ipe
+ipe run src/Main.ipe
 curl --no-buffer http://localhost:8001/relay
 ```
 
@@ -20,7 +20,7 @@ once at the end.
 ## Architecture
 
 ```
-browser/curl ──GET /relay──> Sky.Http.Server (port 8001)
+browser/curl ──GET /relay──> Ipe.Http.Server (port 8001)
                                  │
                                  │ Http.Stream.open upstreamReq
                                  ▼
@@ -30,7 +30,7 @@ browser/curl ──GET /relay──> Sky.Http.Server (port 8001)
                                  │ HttpStream.forEachChunk hdl
                                  │   (\chunk -> Server.Stream.emit chunk writer)
                                  ▼
-browser/curl <───chunked SSE── Sky.Http.Server
+browser/curl <───chunked SSE── Ipe.Http.Server
 ```
 
 ## Code shape

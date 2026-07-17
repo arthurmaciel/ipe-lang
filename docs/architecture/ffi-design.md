@@ -1,7 +1,7 @@
-# Sky → Rust FFI — architecture (design-with-it-in-mind)
+# Ipê → Rust FFI — architecture (design-with-it-in-mind)
 
 > **Status:** standing design constraint. Written 2026-06-27.
-> **Directive:** develop the Sky Rust compiler *with Sky→Rust FFI in mind* — the
+> **Directive:** develop the Ipê Rust compiler *with Ipê→Rust FFI in mind* — the
 > pipeline, IR, type system, backend, and Cargo emission must accommodate FFI from
 > the start, even though FFI itself is implemented at a later milestone.
 > **Reference:** the Haskell FFI subsystem — `Build/Rust/{Ffi,FfiInstance,FfiCall}.hs`,
@@ -31,33 +31,33 @@ sibling) drops in on the same rails.
 
 ## The FFI pipeline (mirrors the Haskell)
 
-`sky add <crate>` →
+`ipe add <crate>` →
 1. **Introspect** — run `rustdoc --output-format=json` (or the `sky-ffi-inspect-rs`
    tool) on the crate in **its own process**; parse the JSON for exported fns,
    types, generics, trait bounds.
-2. **Map types** — Rust type ⇄ Sky type (`FfiTypeParser` analogue). Opaque foreign
-   types become Sky nominal `Con{ module, name }` (our `Ty::Con` already carries
+2. **Map types** — Rust type ⇄ Ipê type (`FfiTypeParser` analogue). Opaque foreign
+   types become Ipê nominal `Con{ module, name }` (our `Ty::Con` already carries
    module+name+args, so this fits). Primitives map directly; `Result`/`Option`
-   bridge to Sky `Result`/`Maybe`.
-3. **Emit three artifacts** (cached under `.skycache/ffi/rust/`):
-   - `<crate>.skyi` — Sky-typed signatures, so the **type checker** resolves FFI
+   bridge to Ipê `Result`/`Maybe`.
+3. **Emit three artifacts** (cached under `.ipe-cache/ffi/rust/`):
+   - `<crate>.skyi` — Ipê-typed signatures, so the **type checker** resolves FFI
      call sites (parse-don't-validate: an FFI call is type-checked against the
      `.skyi`, not validated later).
    - a **kernel-registry table** entry (`<crate>.kernel.json` analogue) — consumed
      by canon/lower to resolve the call to a `KernelId`.
-   - `<crate>_bindings.rs` — the **wrapper**: Sky→Rust adapters (coercion, error
-     wrapping) with each foreign call inside `catch_unwind` (panic → Sky `Err`).
+   - `<crate>_bindings.rs` — the **wrapper**: Ipê→Rust adapters (coercion, error
+     wrapping) with each foreign call inside `catch_unwind` (panic → Ipê `Err`).
 
 ## Where each compiler stage accommodates FFI
 
 | Stage | FFI hook (build it expecting this) |
 |---|---|
-| `sky_parse` | FFI-imported names are ordinary qualified refs; no new syntax needed for *calling* them. `sky add` is a CLI/driver concern, not grammar. |
+| `sky_parse` | FFI-imported names are ordinary qualified refs; no new syntax needed for *calling* them. `ipe add` is a CLI/driver concern, not grammar. |
 | `sky_canon` | resolve an FFI-qualified name to a `KernelId` via the registry (loaded from `.skyi`/table) — same path as a stdlib `VarKernel`. |
 | `sky_types` | load FFI signatures from `.skyi` into the env; type-check FFI call sites against them. Opaque foreign types unify nominally. |
 | `sky_lower` | FFI call → `Call { Kernel(id), args }`; thread concrete generic instantiations (Wall #2) into the registry entry so the wrapper generator can monomorphise. |
 | `sky_backend_rust` | emit the call to the wrapper fn; **emit/collect the wrapper `.rs` into `EmittedProject.files`**; **inject the FFI crate into the emitted `Cargo.toml` `[dependencies]`**. |
-| `skyc` (driver) | `sky add`/`install`/`remove`; run the inspector; manage `.skycache/ffi/`. |
+| `ipe` (driver) | `sky add`/`install`/`remove`; run the inspector; manage `.ipe-cache/ffi/`. |
 | new `sky_ffi` crate | the inspector + type-parser + binding generator, **isolated** (see security). |
 
 ### Two things that must evolve from their M0 shape (foreseen, not blockers)
@@ -73,16 +73,16 @@ FFI is the **highest-risk surface** in the whole compiler. Gates (the guardian
 ruled on this in the brainstorm):
 - **Build-script / proc-macro ACE.** Introspecting or building a foreign crate
   runs its `build.rs` + proc-macros = arbitrary code at build time
-  (supply-chain). `sky add` MUST emit an explicit warning and treat adding a crate
+  (supply-chain). `ipe add` MUST emit an explicit warning and treat adding a crate
   as a trust decision. Run the inspector in its **own process**, **fail-closed** on
   any inspector error (never emit partial/guessed bindings).
 - **No injection from crate metadata.** Foreign crate/type/fn names flow into
   generated Rust source — validate them as identifiers; **never** string-
   interpolate untrusted metadata into code unescaped (a malicious crate name must
-  not break out of the wrapper). Same discipline as `Std.Ui`'s HTML escaping.
+  not break out of the wrapper). Same discipline as `Ipe.Ui`'s HTML escaping.
 - **Soundness bridge (`catch_unwind`).** Every foreign call in the wrapper is
-  wrapped so a panicking/aborting FFI fn becomes a Sky `Err`, preserving Sky's
-  guarantee (b) — *well-typed Sky never panics* — **across** the FFI boundary.
+  wrapped so a panicking/aborting FFI fn becomes a Ipê `Err`, preserving Ipê's
+  guarantee (b) — *well-typed Ipê never panics* — **across** the FFI boundary.
   (Caveat: `panic = "abort"` defeats `catch_unwind`; document the build-profile
   requirement, mirror the Haskell's unwind-mode handling.)
 - **Bounded.** A huge crate (Stripe-SDK-scale, 76k symbols in the Haskell
@@ -103,7 +103,7 @@ foreign generic entries instantiable per call site (mirrors the Haskell
 
 FFI is a **sibling of stdlib breadth** (both ride the kernel registry):
 - **M4** introduces the registry (stdlib kernels move onto it).
-- **M4.5 / M5-adjacent**: the `sky_ffi` crate + `sky add` + dynamic Cargo emission
+- **M4.5 / M5-adjacent**: the `sky_ffi` crate + `ipe add` + dynamic Cargo emission
   + the security gates above. A real first milestone target is a small, safe crate
   (e.g. a pure-data crate) end-to-end, then scale toward the Stripe-SDK benchmark.
 

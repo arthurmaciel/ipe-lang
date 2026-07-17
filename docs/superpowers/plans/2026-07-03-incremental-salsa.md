@@ -55,11 +55,11 @@ under-invalidation.
 
 - **Mid-rename `sky_*` → `ipe_*` (#59).** This plan uses the **current** crate
   names (`sky_parse`, `sky_canon`, `sky_types`, `sky_lower`, `sky_ir`,
-  `sky_backend_rust`, `skyc`, `sky_intern`). If the rename lands first, s/sky_/ipe_/
+  `sky_backend_rust`, `ipe`, `sky_intern`). If the rename lands first, s/sky_/ipe_/
   mechanically; nothing here depends on the prefix. The new crate introduced
   below is named `sky_db` under current convention (→ `ipe_db`).
-- **Whole-program link is the structural crux.** `skyc::build_project`
-  (crates/skyc/src/lib.rs:246) parses+canonicalises each module dep-first, then
+- **Whole-program link is the structural crux.** `ipe::build_project`
+  (crates/ipe/src/lib.rs:246) parses+canonicalises each module dep-first, then
   **`sky_canon::link::link(...)` merges them into ONE module**, and runs
   `sky_types::infer` / `sky_lower::lower` / `RustBackend::emit` on the *linked
   single module*. Today typecheck/lower/emit are **whole-program, not per-module**.
@@ -72,7 +72,7 @@ under-invalidation.
   crates/sky_intern/src/lib.rs:50). Salsa queries are pure over an immutable `&db`.
   Reconciling this is the interning story (Task 3) and is a prerequisite for every
   tracked query.
-- **cargo is not invoked today.** `skyc::build`/`build_project` stop at writing
+- **cargo is not invoked today.** `ipe::build`/`build_project` stop at writing
   emitted files; only an `IPE_E2E`-gated test runs cargo (lib.rs:1116). The
   emit→cargo bridge + integrated `ipe build` cargo step are net-new (Task 15/16).
 
@@ -112,7 +112,7 @@ unchanged value (proves inputs are independent).
 **Do.** Model the spec's input table exactly:
 - `source_text(FileId) -> Arc<str>` (low durability), `file_set() -> Arc<BTreeSet<FileId>>` (low).
 - `project_config() -> ProjectConfig` (high) — a **typed** parse of `sky.toml`
-  (reuse `skyc::project::parse_manifest`), NOT a raw string.
+  (reuse `ipe::project::parse_manifest`), NOT a raw string.
 - `codegen_flags() -> CodegenFlags` (high) — `IPE_DCE`, `IPE_SOLVER_BUDGET`,
   budget factor, env-prefix parsed to typed fields (closes the hidden-env hole, H2).
 - `ffi_package_interface(PackageId) -> Arc<VerifiedFfiInterface>` (high) — **reserve
@@ -355,7 +355,7 @@ backend-agnostic.
 **Goal.** The on-disk emitted project is a **pure function of `emit_manifest()`**,
 never an accretion.
 **Test first.**
-- **Prune test (H7):** delete a Sky module; rebuild; assert its emitted `.rs` is
+- **Prune test (H7):** delete a Ipê module; rebuild; assert its emitted `.rs` is
   **removed** from disk (orphan deletion), not lingering.
 - **Content-gated write (H8):** a comment-only edit that yields byte-identical emit
   writes **zero** files (mtime not bumped → no cargo rebuild).
@@ -364,7 +364,7 @@ never an accretion.
 intended project (`emit_rust_file(ALL)` + `program_modules()` + `project_config()`).
 Reconciler: compare bytes to disk, write only if different (atomic tmp+rename),
 **delete anything under the emit root not in the manifest** (INV-5). **Transactional:**
-reconcile only if ALL Sky-side stages succeeded; on a Sky-side failure leave disk
+reconcile only if ALL Ipê-side stages succeeded; on a Ipê-side failure leave disk
 at last consistent state and the running binary untouched (INV-3).
 
 ### Task 16 — Integrated `ipe build` cargo step (net-new orchestration)
@@ -524,7 +524,7 @@ event-driven monitoring over polling wait-loops (CLAUDE.md §2/§3).
 **Goal.** A watch-triggered restart lands the user back on their exact Model — the
 load-bearing L0+ element — without ever blind-casting a stale blob.
 **Test first.**
-- Watch defaults Sky.Live dev session store to `sqlite`; if the app configures
+- Watch defaults Ipe.Live dev session store to `sqlite`; if the app configures
   `memory`, watch warns.
 - **Schema-tag reject-before-deserialize (H24):** change the Model type, restart;
   assert the old blob is **rejected on tag mismatch before the deserializer sees the

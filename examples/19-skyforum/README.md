@@ -1,11 +1,11 @@
 # SkyForum
 
-A Reddit/HackerNews-style demo built with Sky.Live and Std.Ui. The view layer is split across multiple modules (State / Update / View.Common / View.Posts / View.Detail / View.Compose / View.Login).
+A Reddit/HackerNews-style demo built with Ipe.Live and Ipe.Ui. The view layer is split across multiple modules (State / Update / View.Common / View.Posts / View.Detail / View.Compose / View.Login).
 
 ## Build & Run
 
 ```bash
-sky build src/Main.ipe
+ipe build src/Main.ipe
 ./sky-out/app
 ```
 

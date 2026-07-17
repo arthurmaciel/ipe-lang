@@ -1,4 +1,4 @@
-//! Kernel-function registry — the single closed enum covering every Sky
+//! Kernel-function registry — the single closed enum covering every Ipê
 //! stdlib kernel.
 //!
 //! # DAG constraint
@@ -64,7 +64,7 @@ pub enum HtmlEventShape {
     Bool,
     /// Heterogeneous payload whose handler type is DECOUPLED from `msg`
     /// (`onSubmit`: `a -> Attribute msg`). `msg`/the payload type stay free at
-    /// the Sky/HM level only; the codegen-side runtime constructor
+    /// the Ipê/HM level only; the codegen-side runtime constructor
     /// (`html_on_raw_`) now builds `Event::OnForm` with the concrete payload
     /// type recovered via Rust generic inference — never `Arc<dyn Any>` at
     /// runtime.
@@ -85,7 +85,7 @@ pub struct StdlibDecl {
     pub qualifier: &'static str,
     /// The canonical function name (e.g. `"fromInt"`, `"pi"`).
     pub name: &'static str,
-    /// Sky-level arity: number of arguments before the result.
+    /// Ipê-level arity: number of arguments before the result.
     pub arity: u8,
     /// Which subsystem owns emission of this kernel.
     pub class: KernelClass,
@@ -94,7 +94,7 @@ pub struct StdlibDecl {
     pub emit: &'static str,
 }
 
-/// Every stdlib kernel function known to the Sky compiler.
+/// Every stdlib kernel function known to the Ipê compiler.
 ///
 /// Variant order matches `lower.rs` `lower_callee` declaration order so that
 /// the discriminant values are stable across a rename cycle.
@@ -220,14 +220,14 @@ pub enum StdlibKernel {
     /// `compare : comparable -> comparable -> Order` — three-way comparison.
     ///
     /// Returns `LT` / `EQ` / `GT` (a typed Rust enum on the Rust backend;
-    /// `-1 / 0 / 1` int on the Go/Sky backend — sanctioned divergence).
+    /// `-1 / 0 / 1` int on the Go/Ipê backend — sanctioned divergence).
     /// The `comparable` (`Ord`) constraint is enforced via `constrain_var_kernel`.
     BasicsCompare,
     // ── end Basics numerics ──────────────────────────────────────────
     // ── Error (Ipe.Error — minimal `Error = String` slice) ─────────
     // Message-carrying constructors: `String -> Error`. With `IpeError = String`
     // the message IS the error value, so all eight collapse to one identity
-    // runtime symbol (`ipe_error_from_message`); the distinct Sky-level names are
+    // runtime symbol (`ipe_error_from_message`); the distinct Ipê-level names are
     // preserved for the rich-ADT upgrade.
     ErrorUnexpected,
     ErrorInvalidInput,
@@ -254,7 +254,7 @@ pub enum StdlibKernel {
     // The FOUR primitive leaf shims over the audited `css_safety` policy that the
     // compiled-source `Ipe.Css` funnels every free-string entry through (PARSE,
     // DON'T VALIDATE). `safeValue`/`safePropName`/`safeSelector` are the
-    // `String -> Maybe String` parsers (`None` => the Sky side drops the
+    // `String -> Maybe String` parsers (`None` => the Ipê side drops the
     // declaration/rule); `stripStyleClose` is the `String -> String` breakout
     // floor for a raw `<style>` body.
     CssSafetySafeValue,
@@ -1183,7 +1183,7 @@ pub enum StdlibKernel {
     // ── Ipe.Ui.Lazy ────────────────────────────────────────────────────
     /// `Lazy.lazy : (a -> Element msg) -> a -> Element msg`
     ///
-    /// **Eager in v1.** Sky's Go runtime memoises the subtree; ipê evaluates
+    /// **Eager in v1.** Ipê's Go runtime memoises the subtree; ipê evaluates
     /// immediately (no keyed LRU available before the TEA diff layer).  The
     /// divergence is recorded in `docs/divergences-from-sky.md` §B-Lazy.
     LazyLazy,
@@ -1420,7 +1420,7 @@ pub enum StdlibKernel {
     // Csv/Compression). Routed via the compiled-source `Ipe.Cache` Layer-3
     // surface + `Ffi.kernel "Cache_*"` aliases. Class `Pure` (the effect lives
     // in the `Task` scheme, same as File/Io/Http). All kernels take the raw
-    // `Int` handle; the surface `Cache k v` ADT is unwrapped in Sky source.
+    // `Int` handle; the surface `Cache k v` ADT is unwrapped in Ipê source.
     /// `Cache.newRaw : CacheCfg -> Task Error Int` — allocate, return the handle.
     CacheNewRaw,
     /// `Cache.getRaw : Int -> k -> Task Error (Maybe v)` — look up a key.
@@ -1483,7 +1483,7 @@ pub enum StdlibKernel {
     // Task-effectful; runtime `ipe_runtime::email::email_send`. Routed via the
     // compiled-source `Ipe.Email` Layer-3 surface + `Ffi.kernel "Email_send"`.
     // Class `Pure` (the effect lives in the `Task` scheme, same as File/Http).
-    // Takes the runtime `EmailProvider` enum + `EmailMessage` struct (the Sky
+    // Takes the runtime `EmailProvider` enum + `EmailMessage` struct (the Ipê
     // ADT / record aliases fold to those nominal runtime types).
     /// `Email.send : EmailProvider -> EmailMessage -> Task Error String`.
     EmailSend,
@@ -2718,7 +2718,7 @@ impl StdlibKernel {
             Self::DecFormatWith => d("Decimal", "formatWith", 4, Pure, "decimal_format_with"),
             // ── Ipe.Db.Sql — SqlFragment builder ───────────────
             Self::SqlColumn => d("Sql", "column", 1, Db, "sql_column"),
-            // `int` / `string` / `float` / `bool` are Sky-level type
+            // `int` / `string` / `float` / `bool` are Ipê-level type
             // narrowings of `param`; all five share the `sql_param` runtime
             // symbol (see the emit-side note in `ipe_backend_rust::naming`).
             Self::SqlParam => d("Sql", "param", 1, Db, "sql_param"),
@@ -4516,7 +4516,7 @@ impl StdlibKernel {
     }
 
     /// The wire attribute name for a fixed-key `Ipe.Html.Attributes` builder.
-    /// Matches the member name except for the two Sky-keyword-avoidance
+    /// Matches the member name except for the two Ipê-keyword-avoidance
     /// spellings `type_`→`type` and `for_`→`for`. `None` for any non-fixed-key
     /// variant (the generic `attribute`/`boolAttribute` carry the key as a
     /// runtime argument, `noAttr` has none).

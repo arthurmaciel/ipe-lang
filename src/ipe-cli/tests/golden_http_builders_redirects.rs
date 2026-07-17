@@ -10,7 +10,7 @@
 //! Compile-tier assertion runs always; the run-tier requires `IPE_E2E=1`:
 //!
 //! ```text
-//! IPE_E2E=1 cargo test -p skyc --test golden_m5b_http_builders_redirects
+//! IPE_E2E=1 cargo test -p ipe --test golden_m5b_http_builders_redirects
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -37,11 +37,11 @@ fn redirect_builders_compile_and_run() {
     assert!(runtime.is_ok(), "runtime must resolve: {:?}", runtime.err());
     let Ok(runtime) = runtime else { return };
 
-    // skyc-0: the three builders must resolve through the kernel path.
+    // ipe-0: the three builders must resolve through the kernel path.
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for http_builders_redirects: {:?}",
+        "ipe build must succeed for http_builders_redirects: {:?}",
         built.err()
     );
 

@@ -1,13 +1,13 @@
 //! Class 7 §3 regression: `sky.toml`'s `[database] driver = "postgres"` must
 //! actually change what gets emitted — before this fix it was a silent no-op
-//! (`crates/skyc/src/project.rs`'s manifest parser didn't even recognise a
+//! (`crates/ipe/src/project.rs`'s manifest parser didn't even recognise a
 //! `[database]` section, and `ipe_backend_rust::project::emit_program` always
 //! wrote the sqlite `config.rs` template regardless of what `sky.toml` said).
 //!
 //! No live Postgres needed: this only proves the STRUCTURAL wiring —
 //! manifest → `RustBackend::with_db_driver` → `EmitCtx::db_driver` →
 //! `emit_program`'s config.rs/Cargo.toml selection — actually threads the
-//! driver choice through to the emitted project's files. `crates/skyc/src/project.rs`'s
+//! driver choice through to the emitted project's files. `crates/ipe/src/project.rs`'s
 //! `mod tests` covers the manifest-parsing half in isolation;
 //! `crates/ipe_backend_rust/src/project.rs`'s `mod tests` covers the
 //! `db_cargo_toml` / template-selection half in isolation. This test proves
@@ -22,7 +22,7 @@ fn runtime() -> PathBuf {
     ipe::resolve_runtime().expect("runtime must resolve for this test")
 }
 
-/// Minimal Db-kernel-using Sky program — enough to set `EmitCtx::uses_db =
+/// Minimal Db-kernel-using Ipê program — enough to set `EmitCtx::uses_db =
 /// true` (any `Db.*` call site does), nothing more. Never built/run (no
 /// `IPE_E2E` gate here) — this test only inspects the EMITTED files, not
 /// runtime behaviour (which needs a live Postgres and is out of scope for the
@@ -110,7 +110,7 @@ fn postgres_driver_selects_postgres_config_template() {
 }
 
 /// `IPE_E2E` tier: the emitted Postgres-driver project must actually
-/// `cargo build` (isolated target dir) — proves the seal (skyc exit 0
+/// `cargo build` (isolated target dir) — proves the seal (ipe exit 0
 /// implies cargo build exit 0) for the whole Postgres codegen path, not just
 /// the config.rs/Cargo.toml source-text assertions above. This is the check
 /// that catches a SEAL violation where an exclusive

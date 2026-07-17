@@ -11,7 +11,7 @@ module Main exposing (main)
 -- the emit tier's `route_param_get` conversion path was dead code.
 --
 -- Post-fix (per-route witness): nullary routes AND param routes type-check
--- into one routes list, skyc exits 0, the emitted project cargo-builds, and
+-- into one routes list, ipe exits 0, the emitted project cargo-builds, and
 -- a GET on `/u/:id` delivers the captured param to the page constructor.
 
 import Ipe.Live as Live

@@ -47,7 +47,7 @@ fn spike_project_builds_and_injects_compiled_source() {
         res.err()
     );
 
-    // Read `main.rs` PLUS every `ipe_mods/*.rs` the per-Sky-module split
+    // Read `main.rs` PLUS every `ipe_mods/*.rs` the per-Ipê-module split
     // may have written: the compiled `Ipe.Palette` source
     // is emitted into its own `ipe_mods/ipe_mod_std_palette.rs`, not inline
     // in `main.rs`. The shared helper keeps the substring assertions below

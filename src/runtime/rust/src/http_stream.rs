@@ -1,4 +1,4 @@
-//! Sky.Core.Http.Stream — incremental HTTP response bodies (client side).
+//! Ipe.Http.Stream — incremental HTTP response bodies (client side).
 //!
 //! Mirror of `runtime-go/rt/http_stream.go`. Reads an outbound HTTP response
 //! body chunk-by-chunk via reqwest's `bytes_stream()` instead of buffering the
@@ -10,16 +10,16 @@
 //!     once the response headers arrive; register the byte stream under an id.
 //!   * `forEachChunk : StreamId -> (String -> Task Error ()) -> Task Error ()`
 //!     — synchronous drain (the relay shape — usable inside a plain
-//!     Sky.Http.Server handler, no TEA loop required).
+//!     Ipe.Http.Server handler, no TEA loop required).
 //!   * `close : StreamId -> Task Error ()` — drop the stream / release the conn.
 //!
 //! The Sub-tier `chunks` (dispatching `ChunkEvent` Msgs into a TEA update loop)
 //! is ported via `sub_subscribe_stream` + the bridged `ChunkEvent` enum below —
 //! it drives a `Cli.program` (or any `cli_program`-hosted) TEA loop, the same
-//! way `ws_client`'s `onMessage` does. (The Sky.Live *web* SSE driver remains a
+//! way `ws_client`'s `onMessage` does. (The Ipe.Live *web* SSE driver remains a
 //! separate deferred arc; this is the in-process Sub path.)
 //!
-//! `StreamId` stays a generated Sky enum (`StreamId Int`); these kernels only
+//! `StreamId` stays a generated Ipê enum (`StreamId Int`); these kernels only
 //! ever deal with the raw `i64` (the stdlib wraps/unwraps at the boundary).
 
 use super::*;
@@ -30,21 +30,21 @@ use std::sync::{Mutex, OnceLock};
 
 /// Opaque handle for an in-flight HTTP streaming response.
 ///
-/// Mirrors `type StreamId = StreamId Int` from `Sky.Core.Http.Stream`.
+/// Mirrors `type StreamId = StreamId Int` from `Ipe.Http.Stream`.
 /// The inner `i64` is a monotonic registry key; zero is reserved ("uninitialised
 /// model field must never resolve to a real stream").
 ///
 /// `#[derive(Copy)]` so it can be passed by value to Task closures without
-/// cloning — matches the Sky source's usage as a plain record field.
+/// cloning — matches the Ipê source's usage as a plain record field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct IpeStreamId(pub i64);
 
-/// `Sky.Core.Http.Stream.ChunkEvent` — one incremental event on a stream.
+/// `Ipe.Http.Stream.ChunkEvent` — one incremental event on a stream.
 /// Bridged (via `runtimeOpaqueTypes`) so the runtime can CONSTRUCT it to hand to
 /// the user's `toMsg : ChunkEvent -> msg` callback; user code only ever
-/// pattern-matches it. Generic over the Sky error type `E` (always `IpeError`
+/// pattern-matches it. Generic over the Ipê error type `E` (always `IpeError`
 /// in practice — pinned at the call site) because `Errored` carries an `Error`.
-/// Variant names match the Sky constructors verbatim so codegen's match arms
+/// Variant names match the Ipê constructors verbatim so codegen's match arms
 /// (`ChunkEvent::Chunk(s)` / `::Done` / `::Errored(e)`) resolve through the
 /// `pub type` alias the bridge emits.
 // Serde derives: a Live `Msg` may carry a `ChunkEvent` payload, and Live
@@ -93,10 +93,10 @@ fn next_stream_id() -> i64 {
     }
 }
 
-/// `Sky.Core.Http.Stream.open : HttpRequest -> Task Error StreamId`
+/// `Ipe.Http.Stream.open : HttpRequest -> Task Error StreamId`
 ///
 /// Returns a `IpeStreamId` handle wrapping the raw i64 registry key, matching
-/// the upstream `Sky.Core.Http.Stream.open` declared return type.
+/// the upstream `Ipe.Http.Stream.open` declared return type.
 ///
 /// No whole-request timeout — streams may run for minutes (LLM completions);
 /// a 30s connect timeout bounds the header stage only.
@@ -144,7 +144,7 @@ pub fn http_stream_open<E: From<String> + Send + 'static>(
             // [B8] The reqwest error `Debug`/`Display` (and `req.url`) can echo the
             // target URL / request headers / bearer / API key. Route through the
             // correlation-id redaction helper: raw detail → server log under a ref
-            // id; Sky sees only a fixed generic message.
+            // id; Ipê sees only a fixed generic message.
             Err(e) => return IpeResult::Err(ipe_error_from_foreign(e)),
         };
         // HTTP error statuses (4xx/5xx) still surface as a stream — the body may
@@ -166,11 +166,11 @@ pub fn http_stream_open<E: From<String> + Send + 'static>(
     })
 }
 
-/// `Sky.Core.Http.Stream.forEachChunk : StreamId -> (String -> Task Error ()) -> Task Error ()`
+/// `Ipe.Http.Stream.forEachChunk : StreamId -> (String -> Task Error ()) -> Task Error ()`
 ///
 /// Drains the stream synchronously from the calling task, invoking `body chunk`
 /// per chunk. Bridges the client consumer to a server producer
-/// (`Server.Stream.emit`) inside one Sky.Http.Server handler — the relay shape.
+/// (`Server.Stream.emit`) inside one Ipe.Http.Server handler — the relay shape.
 ///
 /// Semantics (parity with the Go runtime):
 ///   * clean EOF              → Ok ()
@@ -217,7 +217,7 @@ where
     })
 }
 
-/// `Sky.Core.Http.Stream.close : StreamId -> Task Error ()`
+/// `Ipe.Http.Stream.close : StreamId -> Task Error ()`
 /// Idempotent — closing an unknown / already-closed id is a no-op.
 pub fn http_stream_close<E: From<String> + Send + 'static>(sid: IpeStreamId) -> IpeTask<E, ()> {
     let id = sid.0;
@@ -246,7 +246,7 @@ fn chunk_subscribed() -> &'static Mutex<HashSet<i64>> {
     R.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-/// Sky.Core.Http.Stream.chunks → `Sub_subscribeStream`.
+/// Ipe.Http.Stream.chunks → `Sub_subscribeStream`.
 ///
 /// Returns a `IpeSub::Source` that, on first subscribe for `id`, spawns a
 /// detached task draining the parked response and dispatching a `ChunkEvent`
@@ -264,7 +264,7 @@ fn chunk_subscribed() -> &'static Mutex<HashSet<i64>> {
 /// (deliberately `+Send`-only, since a trait object's auto-trait set is
 /// exactly its bound list), so a `+ Sync` bound could never hold regardless of
 /// what the boxed closure captured and every `Http.Stream.chunks` subscription
-/// would fail `cargo build` with E0277 despite `skyc` accepting the program (a
+/// would fail `cargo build` with E0277 despite `ipe` accepting the program (a
 /// THE-SEAL violation). The bound matches the actual (Send-only) usage rather
 /// than re-wrapping the box in a fresh closure at the emit site (the technique
 /// used for `html_on_raw_` / `ui_on_submit_` / `Ui.on*`), because THOSE

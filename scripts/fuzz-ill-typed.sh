@@ -2,7 +2,7 @@
 # scripts/fuzz-ill-typed.sh — ill-typed (rejection) fuzzer for the Ipê/sky-rust port.
 #
 # INVERSE of fuzz-well-typed.sh. Property:
-#   An ILL-TYPED Sky program MUST be REJECTED by `ipe` (exit != 0).
+#   An ILL-TYPED Ipê program MUST be REJECTED by `ipe` (exit != 0).
 #   A false-acceptance — ipe exits 0 on an ill-typed program — is a
 #   REAL SOUNDNESS BUG. Any such finding is copied to
 #   /tmp/sky-fuzz-neg/FAILURES/ and the script exits non-zero.
@@ -196,8 +196,8 @@ base_record() {
     cat <<'EOF'
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 type alias Point =
     { x : Int, y : Int, value : Int }
@@ -221,8 +221,8 @@ base_arith() {
     cat <<'EOF'
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 main =
     let
@@ -240,8 +240,8 @@ base_string_ops() {
     cat <<'EOF'
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 main =
     let
@@ -259,8 +259,8 @@ base_if_expr() {
     cat <<'EOF'
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 main =
     let
@@ -274,15 +274,15 @@ EOF
 # ── Base for cat 5: Maybe ADT usage ──────────────────────────────────────────
 # Used for:
 #   Cat 5 — Nothing applied to an extra arg (`Nothing 42`)
-# NOTE: Sky's Rust backend does not support multi-clause pattern matching on
+# NOTE: Ipê's Rust backend does not support multi-clause pattern matching on
 # function params (IPE-P0030 / top-level pattern dispatch). Use a single
 # clause with a case expression instead.
 base_maybe_usage() {
     cat <<'EOF'
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 safeDiv : Int -> Int -> Maybe Int
 safeDiv a b =
@@ -307,8 +307,8 @@ base_adt_exhaustive() {
     cat <<'EOF'
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 type Shape
     = Circle
@@ -329,7 +329,7 @@ EOF
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SIX MUTATION STRATEGIES
-# Each function writes an ILL-TYPED Sky program to stdout.
+# Each function writes an ILL-TYPED Ipê program to stdout.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Cat 1 — undefined field access (.value<SEED> doesn't exist on Point)
@@ -339,8 +339,8 @@ mutant_undef_field() {
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 type alias Point =
     { x : Int, y : Int, value : Int }
@@ -361,8 +361,8 @@ mutant_undef_var() {
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 main =
     let
@@ -381,8 +381,8 @@ mutant_unknown_member() {
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 main =
     let
@@ -400,8 +400,8 @@ mutant_type_mismatch_strlen() {
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 main =
     println (String.fromInt (String.length $n))
@@ -416,8 +416,8 @@ mutant_type_mismatch_if() {
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 main =
     let
@@ -435,8 +435,8 @@ mutant_ctor_arity() {
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 main =
     let
@@ -456,8 +456,8 @@ mutant_nonexhaustive_case() {
     cat <<'EOF'
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 type Shape
     = Circle
@@ -489,8 +489,8 @@ mutant_same_module_2type() {
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 ident x = x
 
@@ -513,16 +513,16 @@ mutant_cross_module_bad_inst() {
     cat > "$libdst" <<'EOF'
 module Lib exposing (inc)
 
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 inc n = n + 1
 EOF
     cat <<EOF
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 import Lib
-import Std.Log exposing (println)
+import Ipe.Log exposing (println)
 
 main =
     println (String.fromInt (Lib.inc "oops$n"))

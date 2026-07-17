@@ -393,7 +393,7 @@ pub enum NameError {
         name: Box<str>,
         modules: Box<[Box<str>]>,
     },
-    /// A local module's name starts with `Sky` or `Std`, which are reserved for
+    /// A local module's name starts with `Ipê` or `Std`, which are reserved for
     /// the standard library. [IPE-N0025]
     ReservedNamespace { name: Box<str> },
     /// A user `type` / `type alias` declaration reuses a name the compiler
@@ -416,7 +416,7 @@ pub enum NameError {
     /// alias) names a kernel that is not registered in the kernel table. The
     /// `alias` is the raw string; `module` / `function` are its first-`_` split.
     /// FAIL-CLOSED (THE SEAL): accepting this would emit a call to a kernel that
-    /// does not exist, type-checking in `skyc` but failing the downstream Rust
+    /// does not exist, type-checking in `ipe` but failing the downstream Rust
     /// build — so the alias is rejected at compile time. [IPE-N0028]
     UnknownKernelAlias {
         alias: Box<str>,
@@ -497,7 +497,7 @@ pub enum TypeError {
         expected: usize,
         found: usize,
     },
-    /// A generic binding whose body constrains a type variable to a Sky
+    /// A generic binding whose body constrains a type variable to a Ipê
     /// super-type — `Number` (`+ - *`) or `Comparable` (`< > <= >=`) — is used
     /// at a type that does not provide those operations (`double True`, where
     /// `double` needs `Number`), or at a type that stays non-concrete (the
@@ -617,14 +617,14 @@ pub enum Feature {
     /// IPE-T0010), so an unsupported shape reaching here is gated cleanly rather
     /// than mis-lowered. [IPE-L0116]
     NestedCtorDiscrimination,
-    /// A `Set Float` or `Dict Float v`. Sky's `Float` is `comparable`, so the
-    /// type checker accepts it (the typing follows Sky); but the Rust backings
+    /// A `Set Float` or `Dict Float v`. Ipê's `Float` is `comparable`, so the
+    /// type checker accepts it (the typing follows Ipê); but the Rust backings
     /// — `BTreeSet<f64>` / `HashMap<f64, V>` — cannot exist, because `f64`
     /// implements neither `Ord` (no total order: NaN) nor `Hash` / `Eq`. This
     /// is a deliberate backend divergence, not an unimplemented feature: a
     /// `Float`-keyed collection has no sound Rust representation in the standard
     /// library, so it is rejected here at lowering rather than emitting Rust
-    /// `cargo` rejects. Divergence from Sky, rationale: Rust backend capability.
+    /// `cargo` rejects. Divergence from Ipê, rationale: Rust backend capability.
     /// [IPE-L0117]
     FloatKeyedCollection,
     /// `Live.appRouted` (the URL-routing variant of the `Ipe.Live` entry point)
@@ -715,7 +715,7 @@ pub enum LowerError {
     /// `Tui`/`Webview` need `Clone`). `app` drives the wording, `field` names the
     /// offending Model field (empty when the Model is not a record), and `leaf`
     /// categorises the payload. Converts a would-be `cargo` trait-bound failure
-    /// into a fail-closed `skyc` error. [IPE-L0120]
+    /// into a fail-closed `ipe` error. [IPE-L0120]
     InadmissibleAppModel {
         app: AppShape,
         field: Box<str>,
@@ -727,7 +727,7 @@ pub enum LowerError {
     /// Debug`). The predicate used is `ir_type_is_derivable` (NOT serde), so
     /// `Html`/`Element`/`Color`-carrying Msg variants are accepted (they derive
     /// `Clone + Debug + PartialEq`). Converts a would-be `cargo` trait-bound
-    /// failure into a fail-closed `skyc` error. [IPE-L0122]
+    /// failure into a fail-closed `ipe` error. [IPE-L0122]
     InadmissibleAppMsg {
         app: AppShape,
         field: Box<str>,
@@ -849,7 +849,7 @@ pub enum Hint {
 }
 
 /// How confidently a [`Suggestion`] can be applied to source, mirroring rustc's
-/// model. Governs whether `skyc fix` may auto-apply the edit.
+/// model. Governs whether `ipe fix` may auto-apply the edit.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Applicability {
     /// The replacement is correct and self-contained; eligible for auto-patch.
@@ -892,7 +892,7 @@ pub enum HelpLine {
     SecondarySpan { span: Span, role: SpanRole },
     /// Name a constructor missing from an exhaustive match.
     MissingConstructor(Box<str>),
-    /// A concrete, span-scoped fix the reader can apply (and `skyc fix` may
+    /// A concrete, span-scoped fix the reader can apply (and `ipe fix` may
     /// auto-apply when [`Applicability::MachineApplicable`]).
     Suggest(Suggestion),
 }

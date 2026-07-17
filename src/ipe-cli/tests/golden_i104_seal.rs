@@ -19,10 +19,10 @@
 //!
 //! ```text
 //! # full E2E (cargo build + run):
-//! IPE_E2E=1 cargo test -p skyc --test golden_i104_seal
+//! IPE_E2E=1 cargo test -p ipe --test golden_i104_seal
 //!
 //! # gate only (fast, no cargo):
-//! cargo test -p skyc --test golden_i104_seal
+//! cargo test -p ipe --test golden_i104_seal
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -60,7 +60,7 @@ fn f1_multiuse_let_clone() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for multiuse_let_clone: {:?}",
+        "ipe build must succeed for multiuse_let_clone: {:?}",
         built.err()
     );
 
@@ -104,7 +104,7 @@ fn f2_closure_capture_reuse() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for closure_capture_reuse: {:?}",
+        "ipe build must succeed for closure_capture_reuse: {:?}",
         built.err()
     );
 

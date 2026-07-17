@@ -19,7 +19,7 @@ headFor model =
         , Head.metaProperty "og:url" meta.canonical
         , Head.metaProperty "og:image" "https://example.com/og/skybazaar.png"
         , Head.themeColor "#12294f"
-        , Head.rss "/rss.xml" "Sky Bazaar new arrivals"
+        , Head.rss "/rss.xml" "Ipê Bazaar new arrivals"
         ]
 
 type alias PageMeta =
@@ -34,7 +34,7 @@ pageMeta model =
     case model.page of
 
         HomePage ->
-            { title = "Sky Bazaar — carefully made things"
+            { title = "Ipê Bazaar — carefully made things"
             , description = "A tiny demo storefront exercising Ipe.Live, Ipe.Ui, and pub/sub."
             , canonical = "https://shop.example/"
             }
@@ -43,31 +43,31 @@ pageMeta model =
             case findProductBySlug slug model.products of
 
                 Just p ->
-                    { title = p.name ++ " · Sky Bazaar"
+                    { title = p.name ++ " · Ipê Bazaar"
                     , description = p.description
                     , canonical = "https://shop.example/products/" ++ p.slug
                     }
 
                 Nothing ->
-                    { title = "Sky Bazaar · product"
+                    { title = "Ipê Bazaar · product"
                     , description = "Product detail page."
                     , canonical = "https://shop.example/products/" ++ slug
                     }
 
         CartPage ->
-            { title = "Your cart · Sky Bazaar"
+            { title = "Your cart · Ipê Bazaar"
             , description = "Items selected for checkout."
             , canonical = "https://shop.example/cart"
             }
 
         AnalyticsPage ->
-            { title = "Analytics · Sky Bazaar"
+            { title = "Analytics · Ipê Bazaar"
             , description = "Revenue and category breakdowns."
             , canonical = "https://shop.example/analytics"
             }
 
         SignInPage ->
-            { title = "Sign in · Sky Bazaar"
+            { title = "Sign in · Ipê Bazaar"
             , description = "Sign in to checkout."
             , canonical = "https://shop.example/sign-in"
             }

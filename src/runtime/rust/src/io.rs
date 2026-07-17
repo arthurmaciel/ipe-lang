@@ -1,4 +1,4 @@
-// Sky.Core.Io — line-oriented stdio. All effectful, so IpeTask-returning.
+// Ipe.Io — line-oriented stdio. All effectful, so IpeTask-returning.
 use super::*;
 
 use std::io::Write;

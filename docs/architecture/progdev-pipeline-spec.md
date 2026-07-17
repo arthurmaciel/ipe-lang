@@ -12,7 +12,7 @@ Gating steps, cheapest → most expensive (measured/observed on this box):
 
 | Step | Cost | Currency |
 |---|---|---|
-| skyc type-check / lowering (one example) | sub-sec–secs | compute (~0 tok) |
+| ipe type-check / lowering (one example) | sub-sec–secs | compute (~0 tok) |
 | `remeasure.sh` sweep (incremental/cached) | ~6–30 s | compute |
 | no-panic fuzzer (30 iters) | ~1.5 min | compute |
 | `cargo clippy -p <crate> --all-targets` (sccache-warm) | ~30 s–2 min | compute |
@@ -58,26 +58,26 @@ Token logic: Opus for the *reasoning* (design, review, audit); Sonnet for the
 ## 2. Per-item pipeline
 
 ```
-MECHANICAL:  [no design] → Sonnet impl → clippy -p → review → skyc-verify → INTEGRATE
-GUARDIAN:    Opus design(+early-out) → Sonnet impl → clippy -p → review → skyc-verify → INTEGRATE
+MECHANICAL:  [no design] → Sonnet impl → clippy -p → review → ipe-verify → INTEGRATE
+GUARDIAN:    Opus design(+early-out) → Sonnet impl → clippy -p → review → ipe-verify → INTEGRATE
 ```
 
 **Per-lane self-checks (parallel, sccache, per-lane target — NO workspace test):**
 1. `cargo clippy -p <changed-crate> --all-targets` — compile + lint the changed
    crate. Bail on error/warning. (~1 min)
 2. **review** (Opus, reads diff, no build) — the *dominant kill*; runs before any
-   skyc rebuild so doomed fixes don't pay for a compiler build. Bail on REJECT.
-3. **skyc-verify** — build skyc + rerun the example: blocker cleared + example
+   ipe rebuild so doomed fixes don't pay for a compiler build. Bail on REJECT.
+3. **ipe-verify** — build ipe + rerun the example: blocker cleared + example
    builds/runs. Priciest per-lane step → last, only on review-survivors.
 
 **Order rationale:** cheapest-that-kills-most first. clippy-p catches
-non-compiling; review catches unsoundness (most failures); skyc-verify confirms
+non-compiling; review catches unsoundness (most failures); ipe-verify confirms
 it actually works — each gate strictly cheaper-before-costlier.
 
 **When a per-lane filter fails (who owns it):**
 - `clippy -p` (compile error / lint) → **Sonnet iterates IN-LANE** (fix + rerun,
   cap ~3). Implementation-level, Sonnet's job, cheap, has the context. No restart.
-- `skyc-verify` (example blocker not cleared) → **Sonnet iterates IN-LANE**
+- `ipe-verify` (example blocker not cleared) → **Sonnet iterates IN-LANE**
   (cap ~3): "make the target actually compile." Still failing after the cap ⇒ the
   DESIGN is wrong → bounce to design (consumes an attempt).
 - **review REJECT** (unsound / hack / wrong approach) → **NEVER a Sonnet patch.**
@@ -131,7 +131,7 @@ parallelizing it buys nothing. Parallelism only helps the authoring portion.
 **Safety mechanisms (where the risk lives):**
 1. **Per-lane targets** added to `KEEP_TARGETS` via prefix-match so `reclaim_disk`
    never deletes an in-use target.
-2. **Memory bound** — N concurrent `cargo build -p skyc` peak ~2–4 GB each; N=2
+2. **Memory bound** — N concurrent `cargo build -p ipe` peak ~2–4 GB each; N=2
    safe on the 15 GB box (mem-guard backstop). Disk = N×~10 GB → check floor
    before spawning.
 3. **Serial worktree setup** before launching authors (no concurrent
@@ -167,7 +167,7 @@ a retry (design reused) is cheap enough to keep serial if it simplifies scheduli
 Rules:
 - **`cargo test --workspace` runs ONCE per integration batch** — never inside an
   authoring agent, never doubled (self-gate + master), never before review.
-- Authoring agents self-check with **`clippy -p` + skyc-verify only**.
+- Authoring agents self-check with **`clippy -p` + ipe-verify only**.
 - The final **clippy is incremental `--workspace`** (= changed + dependents; the
   sound minimum). The per-lane `clippy -p` pre-filters so it's cheap confirmation.
 - **Bisect** a red batch; don't revert-all.
@@ -184,7 +184,7 @@ autopilot (until 2 dry passes = converged):
     1. convergence check: HEAD unchanged since last cycle AND 0 actionable? dry++; 2 → STOP.
     2. MECHANICAL burn (if actionable mechanical):
          orchestrate: 3 author-only lanes (Sonnet, sccache, per-lane target)
-           each: impl → clippy -p → review → skyc-verify   (survivors only)
+           each: impl → clippy -p → review → ipe-verify   (survivors only)
          integrate batch 3–4: union-reconcile → ONE cargo test --workspace
            + incremental clippy --workspace + fuzzer(30). red → bisect. keep green.
          continue (loop)
@@ -198,7 +198,7 @@ autopilot (until 2 dry passes = converged):
          pick ≤3 DISJOINT-subsystem items (MAX_GUARDIAN/cycle)
          each lane (parallel, per-lane target, sccache):
            Opus design (class-routed) → early-out if unsound → escalate
-           Sonnet impl → clippy -p → review (Opus, class-routed) → skyc-verify
+           Sonnet impl → clippy -p → review (Opus, class-routed) → ipe-verify
          integrate survivors 1–2 at a time (serial, re-gate between):
            merge → ONE cargo test --workspace + incremental clippy + fuzzer(30)
            green → LANDED ; red → revert to captured pre-sha, save resume
@@ -268,7 +268,7 @@ autopilot (until 2 dry passes = converged):
   reconciled (2 `pedantic` fixes) so the nightly gate is clean, not permanently red.
 - **v4 (2026-07-07)** — added the status-header design (progdev-status.txt + watch.sh fixed header + heartbeat markers): task / type / start / phase / model / attempt, all script-known.
 - **v3 (2026-07-07)** — filed the per-lane failure ownership rule (clippy-p /
-  skyc-verify → Sonnet iterates in-lane, cap ~3; review REJECT → re-design as a
+  ipe-verify → Sonnet iterates in-lane, cap ~3; review REJECT → re-design as a
   fresh attempt, never a Sonnet patch). Added the liveness-UX item (HH:MM
   timestamps + a spinner/pulse around silent gates).
 - **v2 (2026-07-07)** — mechanical author lanes **2→3** (→4 if land-rate holds),
@@ -282,6 +282,6 @@ autopilot (until 2 dry passes = converged):
   lane cap stays low — for p^k + conflict + attribution reasons, NOT disk.
 - **v1 (2026-07-07)** — initial spec. Derived from the cost model + the observed
   ~8–12→~1 `cargo test` reduction, review-before-gate (failures are review-
-  dominated), sccache-backed per-lane `clippy -p` + skyc-verify, small
+  dominated), sccache-backed per-lane `clippy -p` + ipe-verify, small
   attributable integration batches, mechanical-vs-guardian differentiation.
   Not yet implemented — current code still self-gates with workspace `cargo test`.

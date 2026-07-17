@@ -1,11 +1,11 @@
 #![allow(clippy::ptr_arg)]
-// Sky Runtime — Core types (always included)
+// Ipê Runtime — Core types (always included)
 // Generic over E (error type).  Builder.hs emits `use ipe_runtime::*;`
 // and thin wrappers that instantiate E = IpeError.
 //
 // This module is the home for the core TYPES (IpeMaybe / IpeResult / IpeTask)
 // and their combinators, plus the byte-sequence FFI coercion. The String and
-// List kernels live in their named Sky-module homes — `string.rs` and
+// List kernels live in their named Ipê-module homes — `string.rs` and
 // `list.rs` — re-exported through `mod.rs`'s glob so call sites are unaffected.
 
 use std::future::Future;
@@ -31,7 +31,7 @@ pub fn str_err<E: From<String>>(s: &str) -> E {
 /// Convert a foreign FFI error into the project's error type — REDACTED.
 ///
 /// Used by the fallible(-async) FFI wrapper bodies to flatten a foreign
-/// `Result<T, E>` Err arm into a Sky-compatible error:
+/// `Result<T, E>` Err arm into a Ipê-compatible error:
 ///
 ///   `Ok(Err(e)) => IpeResult::Err(ipe_error_from_foreign(e))`
 ///
@@ -40,12 +40,12 @@ pub fn str_err<E: From<String>>(s: &str) -> E {
 /// type is accepted — `Debug` is universal and always available.
 ///
 /// [B8 SECURITY — load-bearing] The foreign error's raw `Debug` is NEVER
-/// surfaced to the Sky side. A real network/auth client error (a reqwest/hyper
+/// surfaced to the Ipê side. A real network/auth client error (a reqwest/hyper
 /// transport failure, a stripe API error) can echo the request URL, request
 /// headers, a bearer token, or an API key in its `Debug`. So we follow Go's
 /// two-level error pattern: the raw `Debug` detail is logged SERVER-SIDE under a
 /// fresh correlation id (operators can trace it), and ONLY a fixed generic
-/// message carrying that id is returned to Sky (`Error.toString` shows
+/// message carrying that id is returned to Ipê (`Error.toString` shows
 /// `external operation failed (ref <id>)`, never the secret-bearing detail).
 ///
 /// Same generic `E: From<String>` contract as `str_err` — the project provides
@@ -60,7 +60,7 @@ pub fn ipe_error_from_foreign<ForeignE: std::fmt::Debug, E: From<String>>(e: For
 /// [B8] Server-log a foreign FFI error's raw `Debug` detail under a correlation
 /// id, honouring `IPE_LOG_FORMAT=json`. The detail is for OPERATORS ONLY — it can
 /// carry secrets / PII / internal paths from a transport error — so it goes to
-/// the SERVER LOG (stderr), never to the Sky-visible message. Mirrors the
+/// the SERVER LOG (stderr), never to the Ipê-visible message. Mirrors the
 /// `classify_and_log_panic` log shape (kind `ForeignError`). Total — no
 /// unwrap/index/panic.
 fn log_foreign_error(err_id: &str, detail: &str) {
@@ -107,7 +107,7 @@ pub fn set_env_default(key: &str, val: &str) {
 // ===========================================
 // Disconnected-store placeholders (closure-Model `Default`)
 // ===========================================
-// A Sky.Live Model with function-typed fields (`Arc<dyn Fn(..) -> IpeTask<..>>`,
+// A Ipe.Live Model with function-typed fields (`Arc<dyn Fn(..) -> IpeTask<..>>`,
 // e.g. the console's `store`) can't be serialized, so the codegen serde-skips
 // those fields and reconstructs them via `Default` from these helpers. Each is a
 // closure of the right arity that yields a STRUCTURED `Task` error (never a
@@ -160,23 +160,23 @@ pub fn disconnected_fn3<
 }
 
 // ===========================================
-// Byte-sequence FFI coercion (Sky List Int <-> Rust bytes)
+// Byte-sequence FFI coercion (Ipê List Int <-> Rust bytes)
 // ===========================================
 
-/// Sky `List Int` (Vec<i64>) -> owned bytes. Each element is narrowed `as u8`,
+/// Ipê `List Int` (Vec<i64>) -> owned bytes. Each element is narrowed `as u8`,
 /// mirroring the numeric param narrowing the FFI codegen already emits.
 /// Used for `&[u8]` and `Vec<u8>` parameters.
 pub fn to_u8_vec(xs: &[i64]) -> Vec<u8> {
     xs.iter().map(|&x| x as u8).collect()
 }
 
-/// Owned/borrowed bytes -> Sky `List Int` (Vec<i64>). Used for byte results.
+/// Owned/borrowed bytes -> Ipê `List Int` (Vec<i64>). Used for byte results.
 pub fn from_u8_slice(bs: &[u8]) -> Vec<i64> {
     bs.iter().map(|&b| b as i64).collect()
 }
 
-/// Sky `List Int` -> `[u8; N]`. A length mismatch returns `Err` and never
-/// panics (honours "no runtime panic from well-typed Sky code"). Used for
+/// Ipê `List Int` -> `[u8; N]`. A length mismatch returns `Err` and never
+/// panics (honours "no runtime panic from well-typed Ipê code"). Used for
 /// `[u8; N]` / `&[u8; N]` parameters; the generated wrapper instantiates
 /// `E = IpeError` and the concrete `N`.
 pub fn to_u8_array<E: From<String>, const N: usize>(xs: &[i64]) -> IpeResult<E, [u8; N]> {
@@ -191,7 +191,7 @@ pub fn to_u8_array<E: From<String>, const N: usize>(xs: &[i64]) -> IpeResult<E, 
     ok_res(a)
 }
 
-/// Sky `List T` (Rust `&[T]`) -> fixed-size `[T; N]` with length check.
+/// Ipê `List T` (Rust `&[T]`) -> fixed-size `[T; N]` with length check.
 /// Mirrors `to_u8_array`'s never-panic discipline: returns `IpeResult::Err`
 /// with a clear message on length mismatch. T: Clone is sufficient — the
 /// elements are cloned out into the array.
@@ -211,7 +211,7 @@ pub fn to_array<E: From<String>, T: Clone, const N: usize>(xs: &[T]) -> IpeResul
 // ===========================================
 // The serde derive is UNCONDITIONAL but its impls are generic-BOUND (the macro
 // emits `impl<T: Serialize> … for IpeMaybe<T>`), so a `IpeMaybe<NonSerde>` is
-// unaffected — yet a Sky.Live model carrying a `Maybe X` field (X serde-able)
+// unaffected — yet a Ipe.Live model carrying a `Maybe X` field (X serde-able)
 // serialises for the session store. Without this, any model with a `Maybe`/
 // `Result` field failed E0277. NOTE: `serde` is therefore a NON-OPTIONAL dep in
 // the runtime crate (core.rs is always compiled) — do NOT re-add `optional = true`.
@@ -378,7 +378,7 @@ pub fn ipe_maybe_and_then<T, U>(m: IpeMaybe<T>, f: impl FnOnce(T) -> IpeMaybe<U>
     }
 }
 
-/// `IpeMaybe<T>` -> `Option<T>` for FFI parameter coercion: a Sky `Maybe X`
+/// `IpeMaybe<T>` -> `Option<T>` for FFI parameter coercion: a Ipê `Maybe X`
 /// argument reaches the wrapper as `IpeMaybe<X>` but the underlying crate fn
 /// takes `Option<…>`. The generated wrapper calls this then adapts the inner
 /// value (`.as_deref()` for `Option<&str>`, `.map(|x| x as u16)` for narrowed
@@ -433,7 +433,7 @@ pub fn ipe_result_and_then<E, A, B>(
 
 /// `Result.mapError : (e -> f) -> Result e a -> Result f a`. Container-first in
 /// the runtime (matching `ipe_result_map` / `ipe_result_and_then`); the emitter
-/// reverses the Sky `(fn, result)` order via `kernel_swaps_first_two`. Maps the
+/// reverses the Ipê `(fn, result)` order via `kernel_swaps_first_two`. Maps the
 /// `Err` channel and leaves the `Ok` value untouched — total, no panic path.
 pub fn ipe_result_map_error<E, F, A>(
     r: IpeResult<E, A>,
@@ -465,7 +465,7 @@ pub fn maybe_with_default<A>(def: A, m: IpeMaybe<A>) -> A {
 // `Result.traverse : (a -> Result e b) -> List a -> Result e (List b)`. Maps
 // `f` across the list, collecting the `Ok` values; the FIRST `Err` (in list
 // order) short-circuits with the real error. No `Clone` bound — each element is
-// MOVED into `f`, matching the Sky pure-Sky one-pass definition. Total: no
+// MOVED into `f`, matching the Ipê pure-Ipê one-pass definition. Total: no
 // unwrap/index/panic (`Vec::push` grows, never indexes).
 pub fn result_traverse<T0, T1, E>(
     f: impl Fn(T0) -> IpeResult<E, T1>,
@@ -484,12 +484,12 @@ pub fn result_traverse<T0, T1, E>(
 // ===========================================
 // Result / Maybe applicative combinators (mapN / andMap / combine)
 // ===========================================
-// FUNCTION-FIRST argument order (matches the Sky call surface AND the JsonDec
+// FUNCTION-FIRST argument order (matches the Ipê call surface AND the JsonDec
 // `decode_mapN` runtime shape), so NO `kernel_swaps_first_two` entry is needed.
-// The N-ary function is a MULTI-ARG Rust fn value — a Sky arity-N function /
+// The N-ary function is a MULTI-ARG Rust fn value — a Ipê arity-N function /
 // record-alias auto-constructor lowers to `impl Fn(A, .., N) -> V`, so `f(a, b,
 // ..)` type-checks. Each combinator is TOTAL: the first `Err` / `Nothing` in
-// Sky evaluation order short-circuits; the `Ok` / `Just` value type is never
+// Ipê evaluation order short-circuits; the `Ok` / `Just` value type is never
 // indexed or unwrapped. No panic, no `unsafe`, no allocation beyond the result.
 
 /// `Result.map2 : (a -> b -> v) -> Result e a -> Result e b -> Result e v`.
@@ -749,15 +749,15 @@ pub fn maybe_combine<A>(maybes: Vec<IpeMaybe<A>>) -> IpeMaybe<Vec<A>> {
 // Synchronous-panic gate (Go parity: rt.LogPanicAndExit)
 // ===========================================
 // The generated `fn main()` installs this FIRST so any panic that escapes the
-// synchronous Sky path — a div-by-zero (`a / 0`), an index-out-of-range, an
-// arithmetic overflow, etc. — is CLASSIFIED into a Sky error kind, logged
+// synchronous Ipê path — a div-by-zero (`a / 0`), an index-out-of-range, an
+// arithmetic overflow, etc. — is CLASSIFIED into a Ipê error kind, logged
 // structurally with a short correlation id, and the process exits 1 — instead of
 // dumping a raw Rust backtrace. Mirrors Go's `defer rt.LogPanicAndExit()` on
 // every emitted `func main()` (CLAUDE.md "Synchronous-panic gate"). The hook is
 // total (no unwrap/index/panic of its own) and honours `IPE_LOG_FORMAT=json`.
 
-/// Map a Rust panic message to a Sky error classification (Go's panic-class
-/// taxonomy, restricted to the kinds reachable from well-typed Sky on the typed
+/// Map a Rust panic message to a Ipê error classification (Go's panic-class
+/// taxonomy, restricted to the kinds reachable from well-typed Ipê on the typed
 /// Rust backend — TypeMismatch/CoerceFailure are Go-runtime-only).
 fn classify_panic(msg: &str) -> &'static str {
     let m = msg.to_ascii_lowercase();
@@ -787,7 +787,7 @@ fn short_err_id() -> String {
 /// Extract a panic payload's message, classify it, emit the structured/plain
 /// server-side log line (honouring `IPE_LOG_FORMAT=json`), and RETURN the 8-hex
 /// correlation errId. SHARED by the exit-on-panic hook (`install_panic_classifier`,
-/// used for Sky.Cli/Tui binaries) and the server/live `CatchPanicLayer` responder
+/// used for Ipe.Cli/Tui binaries) and the server/live `CatchPanicLayer` responder
 /// (`server::panic_response`).
 ///
 /// Two load-bearing properties:
@@ -829,10 +829,10 @@ pub fn classify_and_log_panic(payload: &(dyn std::any::Any + Send)) -> String {
 /// The JSON body for a server `CatchPanicLayer` 500: classifies + logs the panic
 /// SERVER-SIDE (errId) via `classify_and_log_panic`, then returns a body carrying
 /// ONLY the errId — NEVER the panic message. The SINGLE source of the 500 body
-/// shape, shared by Sky.Http.Server and Sky.Live (each wraps it in a 500 Response
+/// shape, shared by Ipe.Http.Server and Ipe.Live (each wraps it in a 500 Response
 /// at its own `CatchPanicLayer::custom` site). Axum-free, so it lives in the
 /// always-compiled `core` — the generated project includes `server.rs` only for
-/// Sky.Http.Server apps, so a Live-only app can't reference a server-module fn.
+/// Ipe.Http.Server apps, so a Live-only app can't reference a server-module fn.
 ///
 /// SECURITY: `err_id` (8 lowercase-hex chars) is the ONLY value interpolated; the
 /// rest is a fixed literal. A panic message (free-form, may carry secrets / PII /
@@ -844,7 +844,7 @@ pub fn panic_500_body(payload: &(dyn std::any::Any + Send)) -> String {
 
 /// Install the classifying panic hook. Idempotent in effect (re-installing just
 /// replaces the hook). Called at the top of generated `fn main()` for non-server
-/// shapes (Sky.Cli/Tui); server/live binaries rely on the per-request
+/// shapes (Ipe.Cli/Tui); server/live binaries rely on the per-request
 /// `CatchPanicLayer` instead (so a handler panic returns a 500, not exit).
 ///
 /// **Design note — hook logs then RESUMES the unwind (never calls exit).** Calling
@@ -869,7 +869,7 @@ pub fn install_panic_classifier() {
         let _ = classify_and_log_panic(info.payload());
         // Do NOT call process::exit — let the panic unwind propagate so that
         // catch_unwind callers (tokio task spawn, block_on thread join, async-FFI
-        // wrappers) can absorb it and map it to a Sky Err value.
+        // wrappers) can absorb it and map it to a Ipê Err value.
     }));
 }
 
@@ -1109,7 +1109,7 @@ mod tests {
         assert_eq!(classify_panic("something else entirely"), "Unexpected");
     }
 
-    // [B8] The Sky-visible message NEVER contains the foreign error's Debug detail
+    // [B8] The Ipê-visible message NEVER contains the foreign error's Debug detail
     // (which can carry a bearer token / API key / URL from a transport error). It
     // is a fixed generic message + a correlation id only.
     #[derive(Debug)]

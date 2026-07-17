@@ -5,7 +5,7 @@ import Ipe.Task as Task
 import Ipe.Log exposing (println)
 
 -- Minimal repro for the `24-tui-kitchen-sink` SEAL violation (BACKLOG "Sweep
--- to green" row): `skyc build` exits 0 but the emitted crate fails `cargo
+-- to green" row): `ipe build` exits 0 but the emitted crate fails `cargo
 -- build` with two INDEPENDENT E0308 errors, both on the entry-point shape
 -- `main = case <Maybe String scrutinee> of Just "literal" -> task |>
 -- Task.run; _ -> task |> Task.run` (the Ipe.Tui `argv`-dispatch idiom:

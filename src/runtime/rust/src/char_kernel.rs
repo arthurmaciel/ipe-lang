@@ -1,6 +1,6 @@
-//! Sky.Core.Char kernels — single-code-point helpers.
+//! Ipe.Char kernels — single-code-point helpers.
 //!
-//! A Sky `Char` lowers to a Rust `char` (one Unicode scalar value), so these
+//! A Ipê `Char` lowers to a Rust `char` (one Unicode scalar value), so these
 //! kernels take/return `char` directly — no `any` boxing. Mirrors the Go
 //! runtime's `Char_*` functions (`runtime-go/rt/rt.go`):
 //!
@@ -10,7 +10,7 @@
 //! precise General_Category (GC). Rust std's `char` predicates are BROADER and
 //! would diverge:
 //!
-//! | Sky      | Go                  | GC(s)                    | Rust std (rejected)                       |
+//! | Ipê      | Go                  | GC(s)                    | Rust std (rejected)                       |
 //! |----------|---------------------|--------------------------|-------------------------------------------|
 //! | isDigit  | `unicode.IsDigit`   | `Nd`                     | `is_numeric` = `Nd|Nl|No` (catches `'²'`) |
 //! | isLower  | `unicode.IsLower`   | `Ll`                     | `is_lowercase` adds `Other_Lowercase`     |

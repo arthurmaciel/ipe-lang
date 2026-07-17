@@ -2,12 +2,12 @@
 //! (`docs/adr/0017-error-payload-nominal-identity.md`): a bare record literal
 //! must NOT construct the nominal error-payload types `PanicInfo` / `TypeInfo` /
 //! `ErrorInfo`. Under structural registration each fixture would be an
-//! exit-0-then-cargo-fail (well-typed in skyc, but the emitted Rust passes a
+//! exit-0-then-cargo-fail (well-typed in ipe, but the emitted Rust passes a
 //! project-local synthesized record struct where the runtime's concrete
 //! `IpePanicInfo`/`IpeTypeInfo`/`IpeErrorInfo` is required — E0308). They
-//! are ordinary IPE-T0001 type mismatches at `skyc` time.
+//! are ordinary IPE-T0001 type mismatches at `ipe` time.
 //!
-//! Companion positive golden: `crates/skyc/tests/
+//! Companion positive golden: `crates/ipe/tests/
 //! golden_error_nominal_payload.rs` (field access + nominal-annotated helpers
 //! stay green).
 //!

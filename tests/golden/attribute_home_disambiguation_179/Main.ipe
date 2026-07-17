@@ -10,7 +10,7 @@ module Main exposing (main)
 --
 -- Before the fix the bare `Attribute` resolved to the empty-home sentinel, so
 -- the lowerer's `is_html` check failed and picked `ui::element::Attribute`,
--- while the body produced `html::Attribute` → E0308 at cargo build (skyc still
+-- while the body produced `html::Attribute` → E0308 at cargo build (ipe still
 -- exited 0: a SEAL violation). Feeding the list into an SVG node (`Html.node`,
 -- which takes `List (html::Attribute)`) locks in the html home so a solver
 -- mismatch (`expected Html.Attribute, found Ipe.Html.Attributes.Attribute`)

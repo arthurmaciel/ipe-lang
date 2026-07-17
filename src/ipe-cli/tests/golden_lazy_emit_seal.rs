@@ -13,7 +13,7 @@
 //! * `Lazy.lazy2 viewPair "first" "second"` — arity-2 closure with TWO
 //!   DISTINGUISHABLE args: emits `lazy_lazy2_(..., a, b)` (arg ORDER matters;
 //!   a swap is silent past the mechanical gate).
-//! * skyc exit 0 — prior diagnostic was IPE-I0001, this asserts it is gone.
+//! * ipe exit 0 — prior diagnostic was IPE-I0001, this asserts it is gone.
 //! * Emitted main.rs contains both `lazy_lazy_(` and `lazy_lazy2_(` call sites.
 //! * The emitted Rust project builds without errors (seal: no exit-0-then-cargo-fail).
 //! * The binary exits 0 and its stdout contains "hello", "first", and "second"
@@ -22,7 +22,7 @@
 //! Gated on `IPE_E2E=1`. Run:
 //!
 //! ```text
-//! IPE_E2E=1 cargo test -p skyc --test golden_i146_lazy_emit_seal
+//! IPE_E2E=1 cargo test -p ipe --test golden_i146_lazy_emit_seal
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -50,11 +50,11 @@ fn lazy_emit_seal_skyc_cargo_and_run_zero() {
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    // skyc-0: prior diagnostic was IPE-I0001 LazyLazy no emit arm.
+    // ipe-0: prior diagnostic was IPE-I0001 LazyLazy no emit arm.
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for lazy_emit_seal (IPE-I0001 must be gone): {:?}",
+        "ipe build must succeed for lazy_emit_seal (IPE-I0001 must be gone): {:?}",
         built.err()
     );
 
@@ -70,7 +70,7 @@ fn lazy_emit_seal_skyc_cargo_and_run_zero() {
         "emitted main.rs must call lazy_lazy2_; got:\n{emitted}"
     );
 
-    // cargo-0 ∧ run-0: seal — skyc exit 0 must NOT be followed by cargo fail.
+    // cargo-0 ∧ run-0: seal — ipe exit 0 must NOT be followed by cargo fail.
     let outcome = support::build_and_run_emitted("lazy_emit_seal", &out);
     assert_eq!(
         outcome.exit_code,

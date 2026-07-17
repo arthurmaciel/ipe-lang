@@ -10,7 +10,7 @@
 //! site is not syntactically a function — so a region-based gate in the lowerer
 //! catches it and surfaces the documented first-class-function gap (IPE-L0107).
 //!
-//! This test pins the regression: the driver must produce EITHER a clean Sky
+//! This test pins the regression: the driver must produce EITHER a clean Ipê
 //! diagnostic (IPE-L0107) OR — should proper support land later (an eager
 //! `Box<dyn Fn>` coercion at the construction site) — Rust that builds and runs
 //! with the semantically-correct output (`42`, since
@@ -19,7 +19,7 @@
 //!
 //! Note on the Go oracle: the Go reference compiler at
 //! `/home/arthur/Documentos/comp/sky/sky-out/sky` ALSO fails this shape today —
-//! its codegen emits Go that `go build` rejects (E5001 "Sky compiler bug",
+//! its codegen emits Go that `go build` rejects (E5001 "Ipê compiler bug",
 //! `cannot call f ... any is not a function`), hand-verified in a temp dir. So
 //! the Rust clean diagnostic is a strict improvement over the Go reference, not
 //! a divergence: `42` is the value the language *semantics* specify, which the

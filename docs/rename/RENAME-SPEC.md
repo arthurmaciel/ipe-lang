@@ -1,4 +1,4 @@
-# Sky → Ipê rename — execution spec (#212)
+# Ipê → Ipê rename — execution spec (#212)
 
 > **Status: PLAN / awaiting approval.** This is the durable approval artifact.
 > No file is renamed until (1) the `approved` column in `rename-rules.tsv` is
@@ -7,7 +7,7 @@
 
 ## Why this document exists
 
-The rename is ~38k token occurrences across ~1604 files (`Sky` 14.3k / `sky`
+The rename is ~38k token occurrences across ~1604 files (`Ipê` 14.3k / `sky`
 19.3k / `SKY` 4.3k). A naive global `sed` corrupts the build in three ways, so
 the rename is gated, classed, and human-approved before any mutation. The
 `approved` column in `rename-rules.tsv` is the gate.
@@ -16,21 +16,21 @@ the rename is gated, classed, and human-approved before any mutation. The
 
 | Source | Target | Applies to |
 |---|---|---|
-| `Sky`  | `Ipe` | Rust identifiers, crate names, code (ASCII, no accent — Rust idents cannot carry `ê`) |
+| `Ipê`  | `Ipe` | Rust identifiers, crate names, code (ASCII, no accent — Rust idents cannot carry `ê`) |
 | `sky`  | `ipe` | lowercase code, paths, commands, env-var lowercasing |
 | `SKY`  | `IPE` | diagnostic prefixes, env-var prefixes, screaming-case consts |
-| `Sky`  | `Ipê` | **doc prose only** (`*.md` sentences naming the language — accented) |
+| `Ipê`  | `Ipê` | **doc prose only** (`*.md` sentences naming the language — accented) |
 
 Prose gets the accent (`Ipê`); code never does (`Ipe`). Keep them distinct.
 
 ## The three ways a naive rename breaks the build (the traps)
 
 1. **Upstream refs.** `../sky` (358 refs) is the READ-ONLY Haskell/Go reference
-   repo — it stays `Sky`/`sky` forever. `docs/divergences-from-sky.md` and every
-   prose mention of the *ancestor language* stay `Sky`. A blind sed renames
+   repo — it stays `Ipê`/`sky` forever. `docs/divergences-from-sky.md` and every
+   prose mention of the *ancestor language* stay `Ipê`. A blind sed renames
    these and silently rewrites history + breaks reference paths.
-2. **Stdlib namespace churn.** `Sky.Core.*` / `Sky.Ffi` / `Std.*` are DEFERRED
-   to the separate namespace-redesign phase (which flattens `Sky.Core` + `Std`
+2. **Stdlib namespace churn.** `Ipe.*` / `Ipê.Ffi` / `Ipe.*` are DEFERRED
+   to the separate namespace-redesign phase (which flattens `Ipê.Core` + `Std`
    into one auto-imported namespace). Mechanically renaming them to `Ipe.Core.*`
    now is wasted work — the flatten throws it away. Do NOT touch the stdlib
    import namespace in this rename.
@@ -56,22 +56,22 @@ Prose gets the accent (`Ipê`); code never does (`Ipe`). Keep them distinct.
 Batches 1–4 interlock (the tree must stay buildable), so they land as **one
 coordinated pass**, re-gated after, not as independent merges:
 
-1. **Rust surface** — crate dir+pkg renames (`sky_*`→`ipe_*`, `skyc`→`ipe`,
-   `sky-runtime-rust`→`ipe-runtime-rust`), `use` paths, internal `Sky*` idents,
+1. **Rust surface** — crate dir+pkg renames (`sky_*`→`ipe_*`, `ipe`→`ipe`,
+   `sky-runtime-rust`→`ipe-runtime-rust`), `use` paths, internal `Ipê*` idents,
    `Cargo.toml` deps, workspace members.
 2. **Contracts** — `IPE-`→`IPE-` diagnostic codes; `IPE_`→`IPE_` env vars **with
    `scripts/lib/env.sh` + every script + memory updated in lockstep** (these are
    build-harness contracts — a mismatch silently skips E2E).
 3. **Artifacts** — `.ipe`→`.ipe` extension (examples, goldens' `Main.ipe`, stdlib
    source, compiler file-discovery, `sky.toml` `entry`), `sky.toml`→`ipe.toml`,
-   `sky-out/`→`ipe-out/`, `.skycache`→`.ipecache`. Then **regenerate goldens via
+   `sky-out/`→`ipe-out/`, `.ipe-cache`→`.ipecache`. Then **regenerate goldens via
    `refresh-oracle`**.
-4. **Gate** — full four-lane §6 gate green; fresh `skyc`→`ipe` builds + the full
+4. **Gate** — full four-lane §6 gate green; fresh `ipe`→`ipe` builds + the full
    examples sweep green under the new names.
-5. **Docs prose** (`*.md` `Sky`→`Ipê`) — lands **after** code is green, as its own
+5. **Docs prose** (`*.md` `Ipê`→`Ipê`) — lands **after** code is green, as its own
    commit; MUST-STAY prose (ancestor-language mentions, `../sky`, README line)
    excluded.
-6. **DEFERRED, not in this rename** — stdlib import namespace (`Sky.Core.*` etc.)
+6. **DEFERRED, not in this rename** — stdlib import namespace (`Ipe.*` etc.)
    → the namespace-redesign phase. `skydex`→`ipe-index` split → its own task.
 
 ## Method (how a class is applied safely)

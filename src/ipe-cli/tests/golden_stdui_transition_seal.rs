@@ -2,7 +2,7 @@
 //! `Ipe.Ui.Transition` module (26-ui-showcase blocker: IPE-N0004 unknown
 //! module `Transition`).
 //!
-//! `Ipe.Ui.Transition.attribute` / `attributeUnsafe` are pure-Sky wrappers over
+//! `Ipe.Ui.Transition.attribute` / `attributeUnsafe` are pure-Ipê wrappers over
 //! the native `Ui.transitionRaw : String -> Bool -> Attribute msg` kernel
 //! (`KernelFn::UiTransitionRaw`), which constructs `AttrTransition shorthand
 //! respect`.  This test proves the whole seam:
@@ -11,7 +11,7 @@
 //!   * the emit lowers both entry points to `ui_transition_raw_(<shorthand>,
 //!     <respect>)` with the CORRECT respect flag (`true` for `attribute`,
 //!     `false` for `attributeUnsafe`);
-//!   * (`IPE_E2E`) the emitted Cargo project builds — the seal: skyc exit-0 ⟹
+//!   * (`IPE_E2E`) the emitted Cargo project builds — the seal: ipe exit-0 ⟹
 //!     cargo exit-0 — and renders the CSS `transition:` shorthand.
 
 use std::path::PathBuf;
@@ -83,15 +83,15 @@ fn transition_module_resolves_and_emits_kernel() {
     let (emit, res) = build_transition_project("emit");
     assert!(
         res.is_ok(),
-        "skyc build with `import Ipe.Ui.Transition` must succeed \
+        "ipe build with `import Ipe.Ui.Transition` must succeed \
          (native transitionRaw + compiled module): {:?}",
         res.err()
     );
 
     // The compiled `Ipe.Ui.Transition` module lowers to its OWN Rust file
-    // under `src/ipe_mods/` once the per-Sky-module split
+    // under `src/ipe_mods/` once the per-Ipê-module split
     // fires — this program has two distinct homes (`Main` + `Ipe.Ui.Transition`).
-    // Scan the WHOLE emitted Sky-side tree (main.rs + ipe_mods/*.rs) so the
+    // Scan the WHOLE emitted Ipê-side tree (main.rs + ipe_mods/*.rs) so the
     // assertion holds wherever the split correctly placed the helper calls.
     let emitted = support::read_all_emitted_src(&emit);
 

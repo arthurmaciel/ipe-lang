@@ -6,9 +6,9 @@ module Main exposing (main)
 -- (empty list) and `notFound = Increment` — a constructor from the WRONG ADT
 -- (`Msg`, not `Page`).
 --
--- Expected: skyc rejects with IPE-T0001 (type mismatch: Msg vs Page).
+-- Expected: ipe rejects with IPE-T0001 (type mismatch: Msg vs Page).
 -- Before Part B: the empty-routes hole let var(2) unify with Msg (the type of
--- `Increment`), so skyc exited 0, then cargo emitted E0631 / E0308.
+-- `Increment`), so ipe exited 0, then cargo emitted E0631 / E0308.
 
 import Ipe.Live as Live
 import Ipe.Ui as Ui
