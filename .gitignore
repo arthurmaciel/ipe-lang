@@ -47,3 +47,7 @@ scripts/progressive-development/.backlog.lock
 scripts/progressive-development/backlog.svg
 scripts/progressive-development/backlog.png
 scripts/progressive-development/backlog.mmd
+
+# FFI inspector run artifacts (coverage reports) — run outputs, never source
+tools/ipe-ffi-inspector/.ipe/
+tools/ipe-ffi-inspector/.skycache/
