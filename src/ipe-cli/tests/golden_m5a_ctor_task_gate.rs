@@ -44,8 +44,7 @@ fn build_fixture(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>
 /// ICE / `CompilerBug`.
 #[test]
 fn ctor_task_arity_three_is_sky_t0016_not_ice() {
-    let Some(built) = build_fixture("gate_ctor_task_arity", "m5a_gate_ctor_task_arity_emit")
-    else {
+    let Some(built) = build_fixture("gate_ctor_task_arity", "m5a_gate_ctor_task_arity_emit") else {
         return; // runtime unresolvable in this environment — skip.
     };
     let got = match &built {

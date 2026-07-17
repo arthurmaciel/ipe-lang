@@ -202,10 +202,12 @@ fn watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_skyc_process()
     let Some(status) = status else {
         let _ = skyc_proc.kill();
         let _ = skyc_proc.wait();
-        return Err("skyc must exit within a bounded wait after a PID-only SIGTERM \
+        return Err(
+            "skyc must exit within a bounded wait after a PID-only SIGTERM \
                     (pre-fix: it died instantly via the default disposition, but the \
                     orphaned child kept the port)"
-            .into());
+                .into(),
+        );
     };
     assert!(
         status.success(),
@@ -247,13 +249,15 @@ fn spawn_never_installs_a_sigterm_forwarder() -> Result<(), BoxError> {
         eprintln!("skipping (embedded runtime not resolvable)");
         return Ok(());
     };
-    let opts =
-        ipe::watch::WatchOptions::new(ipe_dir.join("Main.ipe"), out_dir, runtime_dir);
+    let opts = ipe::watch::WatchOptions::new(ipe_dir.join("Main.ipe"), out_dir, runtime_dir);
     let (join, handle) = ipe::watch::spawn(opts);
 
     // Let the orchestrator finish setup and enter its event loop.
     std::thread::sleep(Duration::from_millis(300));
-    assert!(!join.is_finished(), "sanity: the watch loop must be running");
+    assert!(
+        !join.is_finished(),
+        "sanity: the watch loop must be running"
+    );
 
     let status = std::process::Command::new("kill")
         .arg("-TERM")
@@ -304,8 +308,8 @@ fn spawn_never_installs_a_sigterm_forwarder() -> Result<(), BoxError> {
 /// a second SIGTERM is not a documented or relied-upon escape hatch.
 #[cfg(target_os = "linux")]
 #[test]
-fn double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_sigkill()
--> Result<(), BoxError> {
+fn double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_sigkill() -> Result<(), BoxError>
+{
     if std::env::var("IPE_E2E").is_err() {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());

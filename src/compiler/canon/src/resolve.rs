@@ -495,7 +495,14 @@ pub fn canonicalise_module_with_origin(
         .keys()
         .map(|p| path_to_dot_string(interner, p))
         .collect();
-    canonicalise_module_in_project(m, expected_path, &dep_refs, &known_modules, origin, interner)
+    canonicalise_module_in_project(
+        m,
+        expected_path,
+        &dep_refs,
+        &known_modules,
+        origin,
+        interner,
+    )
 }
 
 /// Canonicalise a module against per-dep export references plus an explicit
@@ -543,9 +550,7 @@ pub fn canonicalise_module_in_project(
     // vouched for its provenance (unforgeable tag), never because the text says
     // `module Ipe.…`.
     let ipe_sym = interner.intern("Ipe")?;
-    if origin == ModuleOrigin::User
-        && home.first().copied().is_some_and(|s| s == ipe_sym)
-    {
+    if origin == ModuleOrigin::User && home.first().copied().is_some_and(|s| s == ipe_sym) {
         let name = path_to_dot_string(interner, &home);
         return Err(Diagnostic::Name {
             span: m.name.span,
@@ -585,12 +590,7 @@ pub fn canonicalise_module_in_project(
         // ordinary `deps.get` + `inject_dep_exports`, resolving byte-identically
         // to a user dependency. Presence in `deps` is the single discriminator:
         // a genuine kernel is never in `deps`, a compiled-source module always is.
-        if dep_path
-            .first()
-            .copied()
-            .is_some_and(|s| s == ipe_sym)
-            && !deps.contains_key(dep_path)
-        {
+        if dep_path.first().copied().is_some_and(|s| s == ipe_sym) && !deps.contains_key(dep_path) {
             continue;
         }
         // IPE-N0020: dep module must have been discovered + canonicalised before
@@ -637,12 +637,7 @@ pub fn canonicalise_module_in_project(
     for import in &m.imports {
         let dep_path = &import.name.value;
         // Skip stdlib kernel imports (not in `deps`).
-        if dep_path
-            .first()
-            .copied()
-            .is_some_and(|s| s == ipe_sym)
-            && !deps.contains_key(dep_path)
-        {
+        if dep_path.first().copied().is_some_and(|s| s == ipe_sym) && !deps.contains_key(dep_path) {
             continue;
         }
         let qualifier = import
@@ -689,27 +684,31 @@ pub fn canonicalise_module_in_project(
     let injected_alias_snapshot: Vec<(Symbol, crate::ExportedAlias)> = injected_aliases
         .iter()
         .map(|(&name, def)| {
-            (name, crate::ExportedAlias { params: def.params.clone(), body: def.body.clone() })
+            (
+                name,
+                crate::ExportedAlias {
+                    params: def.params.clone(),
+                    body: def.body.clone(),
+                },
+            )
         })
         .collect();
 
-    let (canon_mod, kernel_aliases) =
-        canonicalise_with_env(
-            m,
-            &mut env,
-            &mut type_home_map,
-            &qualifier_paths,
-            injected_aliases,
-            origin,
-            interner,
-        )?;
+    let (canon_mod, kernel_aliases) = canonicalise_with_env(
+        m,
+        &mut env,
+        &mut type_home_map,
+        &qualifier_paths,
+        injected_aliases,
+        origin,
+        interner,
+    )?;
     // The record-alias auto-constructors that were actually synthesized:
     // exactly the defs whose name is an alias name. A function-field alias is
     // gated out of synthesis, so it is absent here and must NOT be exported as a
     // value — deriving the set from the real defs keeps exports and synthesis in
     // lockstep (no re-derivation that could drift).
-    let own_alias_names: BTreeSet<Symbol> =
-        m.aliases.iter().map(|a| a.value.name.value).collect();
+    let own_alias_names: BTreeSet<Symbol> = m.aliases.iter().map(|a| a.value.name.value).collect();
     let synth_ctor_names: BTreeSet<Symbol> = canon_mod
         .defs
         .iter()
@@ -823,7 +822,10 @@ fn register_stdlib_import_aliases(
         // a later `Alias.member` resolves to the same `VarKernel` a canonical
         // reference would (the lowerer's kernel match arms are unaffected).
         if let Some(members) = env.qual_vars.get(&canonical).cloned() {
-            std::rc::Rc::make_mut(&mut env.qual_vars).entry(alias).or_default().extend(members);
+            std::rc::Rc::make_mut(&mut env.qual_vars)
+                .entry(alias)
+                .or_default()
+                .extend(members);
         }
     }
     Ok(())
@@ -888,11 +890,7 @@ fn inject_stdlib_exposed_values(
     for import in &m.imports {
         let dep_path = &import.name.value;
         // Only `Sky.*` / `Ipe.*` imports name compiler stdlib modules.
-        if !dep_path
-            .first()
-            .copied()
-            .is_some_and(|s| s == ipe_sym)
-        {
+        if !dep_path.first().copied().is_some_and(|s| s == ipe_sym) {
             continue;
         }
         // Open imports (`exposing (..)`) are a no-op — see the doc comment.
@@ -1168,11 +1166,7 @@ fn inject_stdlib_wildcard_values(
     for import in &m.imports {
         let dep_path = &import.name.value;
         // Only `Sky.*` / `Ipe.*` imports name compiler stdlib modules.
-        if !dep_path
-            .first()
-            .copied()
-            .is_some_and(|s| s == ipe_sym)
-        {
+        if !dep_path.first().copied().is_some_and(|s| s == ipe_sym) {
             continue;
         }
         // Only open imports (`exposing (..)`) flood the wildcard tier; the
@@ -1195,13 +1189,16 @@ fn inject_stdlib_wildcard_values(
             // (or an aliased re-import) overwrites its own prior origin rather
             // than registering a phantom second candidate that would fake an
             // ambiguity with itself.
-            std::rc::Rc::make_mut(&mut env.wildcard_vars).entry(name).or_default().insert(
-                canonical,
-                WildcardOrigin {
-                    home,
-                    dep_path: dep_owned.clone(),
-                },
-            );
+            std::rc::Rc::make_mut(&mut env.wildcard_vars)
+                .entry(name)
+                .or_default()
+                .insert(
+                    canonical,
+                    WildcardOrigin {
+                        home,
+                        dep_path: dep_owned.clone(),
+                    },
+                );
         }
     }
     Ok(())
@@ -1456,8 +1453,10 @@ fn canonicalise_with_env(
         // is a kernel alias naming an unregistered kernel — never a silent
         // TopLevel fall-through that would emit a dangling call.
         if let Some(alias) = detect_kernel_alias(&v.value, env, interner)? {
-            env.vars
-                .insert(name, VarHome::Kernel(Some(alias.id), alias.module, alias.function));
+            env.vars.insert(
+                name,
+                VarHome::Kernel(Some(alias.id), alias.module, alias.function),
+            );
             kernel_aliases.insert(name, alias);
         } else {
             env.vars.insert(name, VarHome::TopLevel(home.clone()));
@@ -1604,13 +1603,9 @@ fn field_type_nonderivable(interner: &Interner, t: &canon::Type) -> bool {
             // payload. Otherwise recurse: a carrier (`List`/`Maybe`/`Result`/…)
             // is non-derivable exactly when one of its arguments is.
             is_opaque_boxed_wrapper_canon(interner, *name)
-                || args
-                    .iter()
-                    .any(|a| field_type_nonderivable(interner, a))
+                || args.iter().any(|a| field_type_nonderivable(interner, a))
         }
-        canon::Type::Tuple(elems) => elems
-            .iter()
-            .any(|e| field_type_nonderivable(interner, e)),
+        canon::Type::Tuple(elems) => elems.iter().any(|e| field_type_nonderivable(interner, e)),
         canon::Type::Record(fields) => fields
             .iter()
             .any(|(_, f)| field_type_nonderivable(interner, f)),
@@ -1971,13 +1966,18 @@ fn inject_dep_exports(
     let qualifier = import
         .alias
         .unwrap_or_else(|| dep_path.last().copied().unwrap_or_else(name_zero));
-    let qual_map = std::rc::Rc::make_mut(&mut env.qual_vars).entry(qualifier).or_default();
+    let qual_map = std::rc::Rc::make_mut(&mut env.qual_vars)
+        .entry(qualifier)
+        .or_default();
     for &v in &dep.values {
         // A dep value that is a Stage-4 kernel alias resolves as its kernel, so a
         // qualified `Alias.f` routes straight to the kernel dispatch — never a
         // `TopLevel(dep_path)` reference to a def the alias module never emits.
         if let Some(alias) = dep.kernel_aliases.get(&v) {
-            qual_map.insert(v, VarHome::Kernel(Some(alias.id), alias.module, alias.function));
+            qual_map.insert(
+                v,
+                VarHome::Kernel(Some(alias.id), alias.module, alias.function),
+            );
         } else {
             qual_map.insert(v, VarHome::TopLevel(dep_path.clone()));
         }
@@ -1989,9 +1989,13 @@ fn inject_dep_exports(
     // user's `exposing (...)` clause — qualified access does not require the
     // name to be in the exposing list (only unqualified access does).
     if !dep.ctors.is_empty() {
-        let qual_ctor_map = std::rc::Rc::make_mut(&mut env.qual_ctors).entry(qualifier).or_default();
+        let qual_ctor_map = std::rc::Rc::make_mut(&mut env.qual_ctors)
+            .entry(qualifier)
+            .or_default();
         for (ctor_sym, ctor_home) in &dep.ctors {
-            qual_ctor_map.entry(*ctor_sym).or_insert_with(|| ctor_home.clone());
+            qual_ctor_map
+                .entry(*ctor_sym)
+                .or_insert_with(|| ctor_home.clone());
         }
     }
 
@@ -2838,12 +2842,7 @@ fn resolve_qual_var(
                         name,
                         members
                             .keys()
-                            .chain(
-                                env.qual_ctors
-                                    .get(&qualifier)
-                                    .iter()
-                                    .flat_map(|m| m.keys()),
-                            )
+                            .chain(env.qual_ctors.get(&qualifier).iter().flat_map(|m| m.keys()))
                             .copied(),
                         interner,
                     ),
@@ -3361,7 +3360,9 @@ pub fn detect_kernel_alias(
     // matching the runtime's `KernelMod_funcName` convention. A string with no
     // `_`, or an empty module/function half, is a malformed alias and fails
     // closed the same way an unknown kernel does.
-    let split = raw.split_once('_').filter(|(m, f)| !m.is_empty() && !f.is_empty());
+    let split = raw
+        .split_once('_')
+        .filter(|(m, f)| !m.is_empty() && !f.is_empty());
     // A `IPE-N0028` for the alias — its `module` / `function` are the split
     // halves (empty when the string is malformed, so the message still renders).
     let unknown_alias = |module: Box<str>, function: Box<str>| Diagnostic::Name {
@@ -3654,7 +3655,10 @@ fn resolve_simple_interp_ref(
         // Leading digit but not a valid `Int`/`Float` (e.g. `1e400`, `0xFF`,
         // `9z`): fall back to the literal `{{...}}` string rather than emit a
         // `VarLocal` that would ICE. Mirrors the "too complex → literal" policy.
-        return Ok(Located::new(span, canon::Expr_::Str(format!("{{{{{s}}}}}"))));
+        return Ok(Located::new(
+            span,
+            canon::Expr_::Str(format!("{{{{{s}}}}}")),
+        ));
     }
     if let Some(dot_pos) = s.find('.') {
         let first = &s[..dot_pos];

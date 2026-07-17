@@ -109,7 +109,10 @@ fn add_sub_mul_exact() {
         s(ipe_runtime_rust::decimal::decimal_sub(d("5"), d("2.5"))),
         "2.5"
     );
-    assert_eq!(s(ipe_runtime_rust::decimal::decimal_mul(d("1.5"), d("4"))), "6");
+    assert_eq!(
+        s(ipe_runtime_rust::decimal::decimal_mul(d("1.5"), d("4"))),
+        "6"
+    );
 }
 
 #[test]
@@ -153,8 +156,14 @@ fn mod_by_zero_is_err() {
 
 #[test]
 fn neg_and_abs() {
-    assert_eq!(s(ipe_runtime_rust::decimal::decimal_neg(d("3.14"))), "-3.14");
-    assert_eq!(s(ipe_runtime_rust::decimal::decimal_abs(d("-3.14"))), "3.14");
+    assert_eq!(
+        s(ipe_runtime_rust::decimal::decimal_neg(d("3.14"))),
+        "-3.14"
+    );
+    assert_eq!(
+        s(ipe_runtime_rust::decimal::decimal_abs(d("-3.14"))),
+        "3.14"
+    );
 }
 
 // ── Banker's rounding (Decimal.round matches Go RoundBank) ─────────────────
@@ -174,9 +183,15 @@ fn bankers_rounding_ties_go_to_even() {
         "3.5 rounds to even 4 (banker's rounding)"
     );
     // 0.5 rounds to 0 (even)
-    assert_eq!(s(ipe_runtime_rust::decimal::decimal_round(0, d("0.5"))), "0");
+    assert_eq!(
+        s(ipe_runtime_rust::decimal::decimal_round(0, d("0.5"))),
+        "0"
+    );
     // 1.5 rounds to 2 (even)
-    assert_eq!(s(ipe_runtime_rust::decimal::decimal_round(0, d("1.5"))), "2");
+    assert_eq!(
+        s(ipe_runtime_rust::decimal::decimal_round(0, d("1.5"))),
+        "2"
+    );
 }
 
 // ── toStringFixed — Go StringFixed uses half-away-from-zero ─────────────────
@@ -185,7 +200,10 @@ fn bankers_rounding_ties_go_to_even() {
 fn to_string_fixed_adds_trailing_zeros() {
     // Go: `Decimal_toStringFixed 2 3` = "3.00"
     assert_eq!(
-        ipe_runtime_rust::decimal::decimal_to_string_fixed(2, ipe_runtime_rust::decimal::decimal_from_int(3)),
+        ipe_runtime_rust::decimal::decimal_to_string_fixed(
+            2,
+            ipe_runtime_rust::decimal::decimal_from_int(3)
+        ),
         "3.00"
     );
     // `Decimal_toStringFixed 2 3.1` = "3.10"
@@ -221,12 +239,18 @@ fn to_string_fixed_uses_half_away_from_zero_not_bankers() {
 fn percent_of_basic() {
     // Go: `Decimal_percentOf 10 100` = "10" (10% of 100)
     assert_eq!(
-        s(ipe_runtime_rust::decimal::decimal_percent_of(d("10"), d("100"))),
+        s(ipe_runtime_rust::decimal::decimal_percent_of(
+            d("10"),
+            d("100")
+        )),
         "10"
     );
     // Go: `Decimal_percentOf 20 100` = "20"
     assert_eq!(
-        s(ipe_runtime_rust::decimal::decimal_percent_of(d("20"), d("100"))),
+        s(ipe_runtime_rust::decimal::decimal_percent_of(
+            d("20"),
+            d("100")
+        )),
         "20"
     );
 }
@@ -246,12 +270,18 @@ fn percent_of_fractional_rounded_matches_go() {
 fn add_percent_and_sub_percent() {
     // Go: `Decimal_addPercent 10 100` = "110"
     assert_eq!(
-        s(ipe_runtime_rust::decimal::decimal_add_percent(d("10"), d("100"))),
+        s(ipe_runtime_rust::decimal::decimal_add_percent(
+            d("10"),
+            d("100")
+        )),
         "110"
     );
     // Go: `Decimal_subPercent 10 100` = "90"
     assert_eq!(
-        s(ipe_runtime_rust::decimal::decimal_sub_percent(d("10"), d("100"))),
+        s(ipe_runtime_rust::decimal::decimal_sub_percent(
+            d("10"),
+            d("100")
+        )),
         "90"
     );
 }
@@ -307,7 +337,12 @@ fn format_with_uses_half_away_from_zero_not_bankers() {
     // Go's formatWith calls StringFixed which is half-away-from-zero.
     // Banker's (current Rust) would give "2.54".
     assert_eq!(
-        ipe_runtime_rust::decimal::decimal_format_with("".to_string(), ".".to_string(), 2, d("2.545")),
+        ipe_runtime_rust::decimal::decimal_format_with(
+            "".to_string(),
+            ".".to_string(),
+            2,
+            d("2.545")
+        ),
         "2.55",
         "formatWith must match Go StringFixed (half-away-from-zero)"
     );
@@ -318,9 +353,18 @@ fn format_with_uses_half_away_from_zero_not_bankers() {
 #[test]
 fn comparisons_match_go() {
     // Go: `Decimal_compare 5 7` = -1, `compare 7 5` = 1, `compare 5 5` = 0
-    assert_eq!(ipe_runtime_rust::decimal::decimal_compare(d("5"), d("7")), -1);
-    assert_eq!(ipe_runtime_rust::decimal::decimal_compare(d("7"), d("5")), 1);
-    assert_eq!(ipe_runtime_rust::decimal::decimal_compare(d("5"), d("5")), 0);
+    assert_eq!(
+        ipe_runtime_rust::decimal::decimal_compare(d("5"), d("7")),
+        -1
+    );
+    assert_eq!(
+        ipe_runtime_rust::decimal::decimal_compare(d("7"), d("5")),
+        1
+    );
+    assert_eq!(
+        ipe_runtime_rust::decimal::decimal_compare(d("5"), d("5")),
+        0
+    );
     // Bool predicates
     assert!(ipe_runtime_rust::decimal::decimal_lt(d("5"), d("7")));
     assert!(!ipe_runtime_rust::decimal::decimal_gt(d("5"), d("7")));
@@ -332,8 +376,14 @@ fn comparisons_match_go() {
 
 #[test]
 fn min_max_match_go() {
-    assert_eq!(s(ipe_runtime_rust::decimal::decimal_min(d("3"), d("5"))), "3");
-    assert_eq!(s(ipe_runtime_rust::decimal::decimal_max(d("3"), d("5"))), "5");
+    assert_eq!(
+        s(ipe_runtime_rust::decimal::decimal_min(d("3"), d("5"))),
+        "3"
+    );
+    assert_eq!(
+        s(ipe_runtime_rust::decimal::decimal_max(d("3"), d("5"))),
+        "5"
+    );
 }
 
 // ── Sign predicates ──────────────────────────────────────────────────────────
@@ -355,11 +405,17 @@ fn sign_predicates_match_go() {
 fn round_half_up_matches_go() {
     // Go: `Decimal_roundHalfUp 0 2.5` = "3" (half-away-from-zero)
     assert_eq!(
-        s(ipe_runtime_rust::decimal::decimal_round_half_up(0, d("2.5"))),
+        s(ipe_runtime_rust::decimal::decimal_round_half_up(
+            0,
+            d("2.5")
+        )),
         "3"
     );
     assert_eq!(
-        s(ipe_runtime_rust::decimal::decimal_round_half_up(0, d("3.5"))),
+        s(ipe_runtime_rust::decimal::decimal_round_half_up(
+            0,
+            d("3.5")
+        )),
         "4"
     );
 }
@@ -367,7 +423,10 @@ fn round_half_up_matches_go() {
 #[test]
 fn truncate_floor_ceil_match_go() {
     // truncate: toward zero
-    assert_eq!(s(ipe_runtime_rust::decimal::decimal_truncate(0, d("3.7"))), "3");
+    assert_eq!(
+        s(ipe_runtime_rust::decimal::decimal_truncate(0, d("3.7"))),
+        "3"
+    );
     assert_eq!(
         s(ipe_runtime_rust::decimal::decimal_truncate(0, d("-3.7"))),
         "-3"

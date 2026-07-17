@@ -67,10 +67,7 @@ fn user_color_via_hof_resolves_to_own_enum() {
     }
 
     let root = repo_root();
-    let dir = root
-        .join("tests")
-        .join("golden")
-        .join("user_color_hof");
+    let dir = root.join("tests").join("golden").join("user_color_hof");
     let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i101_user_color_hof_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -137,10 +134,7 @@ fn user_color_in_record_field_agrees_across_paths() {
     }
 
     let root = repo_root();
-    let dir = root
-        .join("tests")
-        .join("golden")
-        .join("user_color_record");
+    let dir = root.join("tests").join("golden").join("user_color_record");
     let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i101_user_color_record_e2e");
     let _ = std::fs::remove_dir_all(&out);

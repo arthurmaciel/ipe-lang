@@ -86,10 +86,7 @@ pub fn matches_any<Page>(routes: &[Route<Page>], path: &str) -> bool {
 
 /// Name→value params for the first route matching `path` — for `req.params`.
 /// Zips the matched pattern's `:name` segments with the captured values.
-pub fn match_params<Page>(
-    routes: &[Route<Page>],
-    path: &str,
-) -> crate::dict::IpeDict<String> {
+pub fn match_params<Page>(routes: &[Route<Page>], path: &str) -> crate::dict::IpeDict<String> {
     use crate::dict::IpeDict;
     for rt in routes {
         if let Some(values) = match_route(&rt.pattern, path) {

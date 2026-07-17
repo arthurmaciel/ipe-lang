@@ -102,8 +102,8 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Ui", "Region"], "Region"),
     (&["Ipe", "Ui", "Input"], "Input"),
     (&["Ipe", "Ui", "Lazy"], "Lazy"),
-    (&["Ipe", "Ui", "Keyed"], "Keyed"),   // sky-key diff identity
-    (&["Ipe", "Decimal"], "Decimal"),     // arbitrary-precision decimal arithmetic
+    (&["Ipe", "Ui", "Keyed"], "Keyed"), // sky-key diff identity
+    (&["Ipe", "Decimal"], "Decimal"),   // arbitrary-precision decimal arithmetic
     (&["Ipe", "Html"], "Html"),
     (&["Ipe", "Html", "Attributes"], "Attr"),
     (&["Ipe", "Html", "Events"], "Event"),
@@ -979,7 +979,16 @@ impl Env {
                 "Cmd",
                 &["none", "batch", "perform", "publish", "publishNoEcho"],
             ),
-            ("Sub", &["none", "batch", "every", "subscribeTopic", "subscribeWebSocket"]),
+            (
+                "Sub",
+                &[
+                    "none",
+                    "batch",
+                    "every",
+                    "subscribeTopic",
+                    "subscribeWebSocket",
+                ],
+            ),
             // ── Db kernels ──────────────────────────────────────────────────────
             // `Ipe.Db` — database connection + query surface.
             // All effect-returning kernels (Task Error …) and pure helpers

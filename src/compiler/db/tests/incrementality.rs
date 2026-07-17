@@ -8,8 +8,8 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use salsa::Setter as _;
 use ipe_db::{IpeDatabase, SourceFile, imports, parse, set_text_if_changed};
+use salsa::Setter as _;
 
 const MOD_A: &str = "module A exposing (a)\n\na = 1\n";
 const MOD_B: &str = "module B exposing (b)\n\nb = 2\n";

@@ -4,8 +4,8 @@
 //! so each test asserts BOTH the happy path AND that the failure path returns
 //! `IpeResult::Err` rather than panicking / wrapping / indexing out of bounds.
 
-use proptest::prelude::*;
 use ipe_runtime_rust::*;
+use proptest::prelude::*;
 
 // ── byte <-> List Int round-trips ──────────────────────────────────────────
 
@@ -60,8 +60,10 @@ fn to_u8_array_zero_length_ok_on_empty_err_on_nonempty() {
 
 #[test]
 fn to_array_generic_exact_ok_mismatch_err() {
-    let ok =
-        ipe_runtime_rust::core::to_array::<IpeError, String, 2>(&["a".to_string(), "b".to_string()]);
+    let ok = ipe_runtime_rust::core::to_array::<IpeError, String, 2>(&[
+        "a".to_string(),
+        "b".to_string(),
+    ]);
     assert!(ok.is_ok());
     assert_eq!(
         ok.with_default([String::new(), String::new()]),
@@ -94,7 +96,9 @@ fn ipe_maybe_map_and_then_with_default() {
     );
 
     assert_eq!(
-        ipe_runtime_rust::core::ipe_maybe_and_then(IpeMaybe::Just(10i64), |x| IpeMaybe::Just(x * 2)),
+        ipe_runtime_rust::core::ipe_maybe_and_then(IpeMaybe::Just(10i64), |x| IpeMaybe::Just(
+            x * 2
+        )),
         IpeMaybe::Just(20)
     );
     assert_eq!(
@@ -130,15 +134,19 @@ fn ipe_result_map_and_then_with_default() {
     assert!(ok.is_ok() && !ok.is_err());
     assert!(err.is_err() && !err.is_ok());
 
-    let mapped = ipe_runtime_rust::core::ipe_result_map(IpeResult::<IpeError, i64>::Ok(10), |x| x + 5);
+    let mapped =
+        ipe_runtime_rust::core::ipe_result_map(IpeResult::<IpeError, i64>::Ok(10), |x| x + 5);
     assert_eq!(mapped.with_default(0), 15);
-    let mapped_err =
-        ipe_runtime_rust::core::ipe_result_map(IpeResult::<IpeError, i64>::Err(str_err("e")), |x| x + 5);
+    let mapped_err = ipe_runtime_rust::core::ipe_result_map(
+        IpeResult::<IpeError, i64>::Err(str_err("e")),
+        |x| x + 5,
+    );
     assert!(mapped_err.is_err());
 
-    let chained = ipe_runtime_rust::core::ipe_result_and_then(IpeResult::<IpeError, i64>::Ok(10), |x| {
-        IpeResult::Ok(x * 3)
-    });
+    let chained =
+        ipe_runtime_rust::core::ipe_result_and_then(IpeResult::<IpeError, i64>::Ok(10), |x| {
+            IpeResult::Ok(x * 3)
+        });
     assert_eq!(chained.with_default(0), 30);
     let chained_to_err =
         ipe_runtime_rust::core::ipe_result_and_then(IpeResult::<IpeError, i64>::Ok(10), |_| {
@@ -157,7 +165,10 @@ fn ipe_result_map_and_then_with_default() {
         42
     );
     assert_eq!(
-        ipe_runtime_rust::core::result_with_default(0i64, IpeResult::<IpeError, i64>::Err(str_err("x"))),
+        ipe_runtime_rust::core::result_with_default(
+            0i64,
+            IpeResult::<IpeError, i64>::Err(str_err("x"))
+        ),
         0
     );
 }

@@ -113,7 +113,9 @@ fn poly_task_on_error_nested_green() {
     // that prefix is genuine runtime behaviour, not part of this fixture's
     // own message text.
     assert!(
-        outcome.stdout.contains("hello | Unexpected: op.fail failed (ref "),
+        outcome
+            .stdout
+            .contains("hello | Unexpected: op.fail failed (ref "),
         "expected the ok path to print 'hello' and the fail path to print \
          the wrapped 'Unexpected: op.fail failed (ref ...)' message; got:\n{}",
         outcome.stdout

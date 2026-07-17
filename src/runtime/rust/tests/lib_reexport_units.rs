@@ -1,46 +1,10 @@
-//! Runtime crate unit tests (relocated from the former src/lib.rs standalone wrapper).
-#[cfg(test)]` modules — skipped when `cfg(test)` is on — and the
-//! separate `tests/` integration crates, which don't inherit this attribute)
-//! uses these freely. The only `#[allow(clippy::panic)]` in the crate are the 2
-//! `ffi_polyfills` dynamic-dispatch fallbacks (unconstrained generic `T` return
-//! → no total value); see README "Soundness attention points".
-//!
-//! # `unsafe` posture
-//! The crate is NOT under a blanket `#![forbid(unsafe_code)]` because there is
-//! exactly one legitimate `unsafe` block: the `pre_exec` / `prctl(PR_SET_PDEATHSIG)`
-//! parent-death-signal hardening in `live::console_proxy` (Linux-only, async-
-//! signal-safe, best-effort — see its `// SAFETY:` note). That single carve-out
-//! is the reason a crate-wide forbid is not applied. Every other module is
-//! `unsafe`-free; security-sensitive kernels (`jwt`, `crypto`, `auth`) contain
-//! no `unsafe` whatsoever. The panic-class `deny`s above plus the
-//! `unwrap_used`/`expect_used` denies in `Cargo.toml` are the enforced floor for
-//! the no-runtime-errors guarantee; introducing `unsafe` anywhere else would be
-//! a deliberate, reviewed addition (the lone existing block predates this note).
-
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::indexing_slicing,
-        clippy::panic,
-        clippy::unreachable,
-        // Promoted from the quality-audit advisory set to a HARD deny: these are
-        // all panic vectors a well-typed Sky program must never reach. `cargo
-        // clippy` now FAILS on any of them in non-test runtime code, so risky
-        // code cannot be merged (CI security-audit gate + local clippy enforce
-        // it). See `## Settled rules` in CLAUDE.md.
-        clippy::todo,
-        clippy::unimplemented,
-        clippy::panic_in_result_fn
-    )
-)]
-
-pub mod ipe_runtime;
-pub use ipe_runtime::*;
+//! Runtime crate unit tests, relocated from the former `src/lib.rs` standalone
+//! wrapper. Exercises the flat re-exports of `ipe_runtime_rust` (the `[lib]`
+//! root at `src/mod.rs`) — `IpeResult`, `IpeMaybe`, and the core kernels.
 
 // ============================================================================
 // Tests (re-exported for `cargo test` coverage)
 // ============================================================================
-#[cfg(test)]
 mod tests {
     use ipe_runtime_rust::*;
 

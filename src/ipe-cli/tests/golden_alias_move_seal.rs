@@ -37,9 +37,7 @@ mod support;
 use support::repo_root;
 
 fn fixture_dir(root: &Path) -> PathBuf {
-    root.join("tests")
-        .join("golden")
-        .join("alias_move_seal")
+    root.join("tests").join("golden").join("alias_move_seal")
 }
 
 #[test]
@@ -61,10 +59,7 @@ fn emits_byte_identical_main_rs() {
     // the emitted `src/main.rs` against the golden `main.rs`). Replaces the
     // former hand-rolled `read_to_string` + `assert_eq!` pair with the shared
     // harness helper.
-    support::assert_emitted_project_matches_golden_dir(
-        &out,
-        support::golden_dir_of(&golden),
-    );
+    support::assert_emitted_project_matches_golden_dir(&out, support::golden_dir_of(&golden));
 }
 
 /// The seal invariant asserted independently of the byte lock: NO by-value

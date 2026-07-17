@@ -103,10 +103,7 @@ fn f1_firstclass_curried_and_shadow() {
     }
 
     let root = repo_root();
-    let dir = root
-        .join("tests")
-        .join("golden")
-        .join("firstclass_curried");
+    let dir = root.join("tests").join("golden").join("firstclass_curried");
     let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i121_firstclass_curried_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -166,10 +163,7 @@ fn f2_firstclass_arity0() {
     }
 
     let root = repo_root();
-    let dir = root
-        .join("tests")
-        .join("golden")
-        .join("firstclass_arity0");
+    let dir = root.join("tests").join("golden").join("firstclass_arity0");
     let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i121_firstclass_arity0_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -210,10 +204,7 @@ fn f3_partial_noncopy() {
     }
 
     let root = repo_root();
-    let dir = root
-        .join("tests")
-        .join("golden")
-        .join("partial_noncopy");
+    let dir = root.join("tests").join("golden").join("partial_noncopy");
     let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i121_partial_noncopy_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -308,10 +299,7 @@ fn f5_capture_fn_called_control() {
     }
 
     let root = repo_root();
-    let dir = root
-        .join("tests")
-        .join("golden")
-        .join("capture_fn_called");
+    let dir = root.join("tests").join("golden").join("capture_fn_called");
     let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i121_capture_fn_called_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -400,10 +388,7 @@ fn f7_succeed_curried() {
     }
 
     let root = repo_root();
-    let dir = root
-        .join("tests")
-        .join("golden")
-        .join("succeed_curried");
+    let dir = root.join("tests").join("golden").join("succeed_curried");
     let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i121_succeed_curried_e2e");
     let _ = std::fs::remove_dir_all(&out);

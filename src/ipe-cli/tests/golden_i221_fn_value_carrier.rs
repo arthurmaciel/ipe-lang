@@ -32,7 +32,10 @@ mod support;
 use support::repo_root;
 
 fn entry_of(root: &Path, name: &str) -> PathBuf {
-    root.join("tests").join("golden").join(name).join("Main.ipe")
+    root.join("tests")
+        .join("golden")
+        .join(name)
+        .join("Main.ipe")
 }
 
 fn assert_byte_identical(name: &str) {

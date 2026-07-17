@@ -43,10 +43,7 @@ fn assert_byte_identical(name: &str) {
     // the emitted `src/main.rs` against the golden `main.rs`). Replaces the
     // former hand-rolled `read_to_string` + `assert_eq!` pair with the shared
     // harness helper.
-    support::assert_emitted_project_matches_golden_dir(
-        &out,
-        support::golden_dir_of(&golden),
-    );
+    support::assert_emitted_project_matches_golden_dir(&out, support::golden_dir_of(&golden));
 }
 
 fn assert_runs_and_matches_oracle(name: &str) {

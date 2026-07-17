@@ -6,7 +6,9 @@ use super::IpeResult;
 use rust_decimal::{Decimal as RD, prelude::FromPrimitive};
 
 /// Opaque Sky `Decimal` — newtype around rust_decimal::Decimal.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, serde::Serialize, serde::Deserialize,
+)]
 pub struct Decimal(pub RD);
 
 use rust_decimal::RoundingStrategy;

@@ -42,10 +42,7 @@ fn emits_byte_identical_main_rs() {
     // the emitted `src/main.rs` against the golden `main.rs`). Replaces the
     // former hand-rolled `read_to_string` + `assert_eq!` pair with the shared
     // harness helper.
-    support::assert_emitted_project_matches_golden_dir(
-        &out,
-        support::golden_dir_of(&golden),
-    );
+    support::assert_emitted_project_matches_golden_dir(&out, support::golden_dir_of(&golden));
 }
 
 /// Full spine: compile, build, run, assert stdout `2` — the Go-backend value.
@@ -70,7 +67,10 @@ fn end_to_end_builds_and_prints_two() {
     let outcome = support::build_and_run_emitted("char_pattern", &out);
     support::assert_go_parity(
         "char_pattern",
-        &repo_root().join("tests").join("golden").join("char_pattern"),
+        &repo_root()
+            .join("tests")
+            .join("golden")
+            .join("char_pattern"),
         &outcome.stdout,
     );
     assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");

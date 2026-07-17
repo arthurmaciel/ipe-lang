@@ -47,10 +47,7 @@ fn repo_root() -> PathBuf {
 /// Gated on `IPE_E2E=1`.
 fn build_run_layoutwith() -> (PathBuf, support::RunOutcome) {
     let root = repo_root();
-    let dir = root
-        .join("tests")
-        .join("golden")
-        .join("stdui_layoutwith");
+    let dir = root.join("tests").join("golden").join("stdui_layoutwith");
     let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_m7_stdui_layoutwith_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -111,9 +108,5 @@ fn layoutwith_inline_cfg_applies_wrapper_and_root_attrs() {
     );
 
     support::assert_go_parity("stdui_layoutwith", &dir, html);
-    assert_eq!(
-        outcome.exit_code,
-        Some(0),
-        "stdui_layoutwith: must exit 0"
-    );
+    assert_eq!(outcome.exit_code, Some(0), "stdui_layoutwith: must exit 0");
 }

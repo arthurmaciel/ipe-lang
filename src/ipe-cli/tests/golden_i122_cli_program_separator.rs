@@ -50,11 +50,8 @@ fn cli_program_glues_consecutive_renders_matching_go_oracle() {
     assert!(built.is_ok(), "skyc build must succeed: {:?}", built.err());
 
     // Two stdin lines → two loop-body renders (count 0 → 1 → 2), then EOF.
-    let outcome = support::build_and_run_emitted_with_stdin(
-        "cli_program_view_separator",
-        &out,
-        b"a\nb\n",
-    );
+    let outcome =
+        support::build_and_run_emitted_with_stdin("cli_program_view_separator", &out, b"a\nb\n");
 
     assert_eq!(outcome.exit_code, Some(0));
     // Go-parity: renders glue together (view supplies no separator of its

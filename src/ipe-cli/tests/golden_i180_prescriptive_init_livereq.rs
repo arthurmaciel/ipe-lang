@@ -153,7 +153,9 @@ fn live_init_reads_req_path_cargo_builds() {
     }
     live_init_reads_req_path_field();
 
-    let target = std::env::temp_dir().join("i180").join("init_reads_req_path");
+    let target = std::env::temp_dir()
+        .join("i180")
+        .join("init_reads_req_path");
     let build = std::process::Command::new("cargo")
         .arg("build")
         .env("CARGO_TARGET_DIR", &target)

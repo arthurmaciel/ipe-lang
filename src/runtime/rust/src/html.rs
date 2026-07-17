@@ -1648,8 +1648,7 @@ mod tests {
     fn html_title_node_escapes_text() {
         // titleNode wraps via HText (escaped), not HRaw — a `<` in the title
         // must not break out of the tag.
-        let t: Html<()> =
-            crate::ui::helpers::html_title_node_("<script>x</script>".to_owned());
+        let t: Html<()> = crate::ui::helpers::html_title_node_("<script>x</script>".to_owned());
         let out = render_html(&t);
         assert!(
             !out.contains("<script>"),

@@ -46,7 +46,8 @@ const CARGO_TOML: &str = include_str!("../../../../../tests/golden/basics/Cargo.
 const RUNTIME_MOD_RS: &str = include_str!("../../../../../tests/golden/basics/ipe_runtime/mod.rs");
 
 /// The generated `ipe_runtime/config.rs` (DB/config bindings — empty by default).
-const RUNTIME_CONFIG_RS: &str = include_str!("../../../../../tests/golden/basics/ipe_runtime/config.rs");
+const RUNTIME_CONFIG_RS: &str =
+    include_str!("../../../../../tests/golden/basics/ipe_runtime/config.rs");
 
 // ── db-enabled manifest fragments ──────────────────────────────────
 

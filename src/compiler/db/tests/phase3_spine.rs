@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use ipe_db::{
-    Db as _, ModuleOrigin, IpeDatabase, SourceFile, SourceRoot, kernel_types, linked_program,
+    Db as _, IpeDatabase, ModuleOrigin, SourceFile, SourceRoot, kernel_types, linked_program,
     sync_source_root, topo_order,
 };
 use ipe_diagnostics::{Diagnostic, NameError};

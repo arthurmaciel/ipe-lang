@@ -84,8 +84,7 @@ fn list_filter_partial_app_compiles() {
         built.err()
     );
 
-    let outcome =
-        support::build_and_run_emitted("list_filter_partial_app", &e2e_out);
+    let outcome = support::build_and_run_emitted("list_filter_partial_app", &e2e_out);
     assert_eq!(
         outcome.exit_code,
         Some(0),

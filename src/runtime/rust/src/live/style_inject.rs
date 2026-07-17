@@ -770,9 +770,7 @@ mod tests {
         let evil = "s } body { display:none } .x:hover {".to_owned();
         let pseudo = ui_on_pseudo_::<()>(
             ui_hover_(),
-            vec![crate::ui::element::Attribute::AttrFontFamily(
-                evil,
-            )],
+            vec![crate::ui::element::Attribute::AttrFontFamily(evil)],
         );
         let mut html = ui_layout(vec![pseudo], Element::Text("hi".to_owned()));
         assign_sky_ids(&mut html, "r");
@@ -797,9 +795,7 @@ mod tests {
             .to_owned();
         let pseudo = ui_on_pseudo_::<()>(
             ui_hover_(),
-            vec![crate::ui::element::Attribute::AttrBgImage(
-                evil,
-            )],
+            vec![crate::ui::element::Attribute::AttrBgImage(evil)],
         );
         let mut html = ui_layout(vec![pseudo], Element::Text("hi".to_owned()));
         assign_sky_ids(&mut html, "r");

@@ -16,7 +16,7 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use ipe_backend_rust::DbDriver;
-use ipe_db::{BuildConfig, ModuleOrigin, IpeDatabase, SourceFile, SourceRoot};
+use ipe_db::{BuildConfig, IpeDatabase, ModuleOrigin, SourceFile, SourceRoot};
 
 /// A shared, poison-safe log of executed-query debug keys.
 #[derive(Clone, Default)]

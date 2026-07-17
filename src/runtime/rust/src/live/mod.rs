@@ -747,9 +747,7 @@ fn cookie_path_for(base: &str) -> String {
 /// reaches this child only through the parent proxy, which strips the prefix
 /// before forwarding — so the child's own router stays root-relative.
 fn live_base_path() -> String {
-    normalise_base_path(
-        &crate::system::read_env_var("IPE_LIVE_BASE_PATH").unwrap_or_default(),
-    )
+    normalise_base_path(&crate::system::read_env_var("IPE_LIVE_BASE_PATH").unwrap_or_default())
 }
 
 /// The active session cookie name (read AND write must agree, so both
@@ -1671,11 +1669,7 @@ where
             struct SessionGauge;
             impl Drop for SessionGauge {
                 fn drop(&mut self) {
-                    crate::telemetry::metric_add_gauge(
-                        "ipe_live_sessions_active",
-                        &[],
-                        -1,
-                    );
+                    crate::telemetry::metric_add_gauge("ipe_live_sessions_active", &[], -1);
                 }
             }
             // Pin the STRONG entry Arc into the stream state for the connection's
