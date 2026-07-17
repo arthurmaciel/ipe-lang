@@ -10,8 +10,8 @@ module Main exposing (main)
 -- Before Part B: the empty-routes hole let var(2) unify with Msg (the type of
 -- `Increment`), so skyc exited 0, then cargo emitted E0631 / E0308.
 
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 
 type Page
     = CounterPage

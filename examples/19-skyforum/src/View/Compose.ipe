@@ -1,12 +1,12 @@
 module View.Compose exposing (..)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.String as String
-import Std.Ui as Ui
-import Std.Ui exposing (Element)
-import Std.Ui.Background as Background
-import Std.Ui.Border as Border
-import Std.Ui.Font as Font
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.Ui as Ui
+import Ipe.Ui exposing (Element)
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Font as Font
 import State exposing (..)
 import View.Common exposing (clickable)
 

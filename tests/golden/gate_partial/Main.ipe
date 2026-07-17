@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- Partial ctor application: `Node Leaf 1` supplies 2 of 3 args to a ctor
 -- of arity 3, leaving one `Tree` arg still needed.  Since #147 this is

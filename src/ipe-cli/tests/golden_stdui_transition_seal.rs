@@ -1,12 +1,12 @@
-//! Seal gate for the native `Std.Ui.transitionRaw` primitive + the compiled
-//! `Std.Ui.Transition` module (26-ui-showcase blocker: IPE-N0004 unknown
+//! Seal gate for the native `Ipe.Ui.transitionRaw` primitive + the compiled
+//! `Ipe.Ui.Transition` module (26-ui-showcase blocker: IPE-N0004 unknown
 //! module `Transition`).
 //!
-//! `Std.Ui.Transition.attribute` / `attributeUnsafe` are pure-Sky wrappers over
+//! `Ipe.Ui.Transition.attribute` / `attributeUnsafe` are pure-Sky wrappers over
 //! the native `Ui.transitionRaw : String -> Bool -> Attribute msg` kernel
 //! (`KernelFn::UiTransitionRaw`), which constructs `AttrTransition shorthand
 //! respect`.  This test proves the whole seam:
-//!   * `import Std.Ui.Transition` resolves (no IPE-N0004 regression);
+//!   * `import Ipe.Ui.Transition` resolves (no IPE-N0004 regression);
 //!   * `transitionRaw` type-checks as `String -> Bool -> Attribute msg`;
 //!   * the emit lowers both entry points to `ui_transition_raw_(<shorthand>,
 //!     <respect>)` with the CORRECT respect flag (`true` for `attribute`,
@@ -23,14 +23,14 @@ fn runtime() -> PathBuf {
     ipe::resolve_runtime().expect("runtime must resolve for transition seal test")
 }
 
-/// A minimal Std.Ui program exercising BOTH transition entry points: the
+/// A minimal Ipe.Ui program exercising BOTH transition entry points: the
 /// a11y-gated `attribute` (respect = True) and the opt-out `attributeUnsafe`
 /// (respect = False).
 const MAIN_SKY: &str = r#"module Main exposing (main)
 
-import Std.Html as Html
-import Std.Ui as Ui
-import Std.Ui.Transition as Transition
+import Ipe.Html as Html
+import Ipe.Ui as Ui
+import Ipe.Ui.Transition as Transition
 
 
 main =
@@ -75,7 +75,7 @@ fn build_transition_project(slot: &str) -> (PathBuf, Result<(), ipe::CliError>) 
     (emit, res)
 }
 
-/// `Std.Ui.Transition` resolves (no IPE-N0004), type-checks, and the emit
+/// `Ipe.Ui.Transition` resolves (no IPE-N0004), type-checks, and the emit
 /// lowers both wrappers to `ui_transition_raw_` with the correct respect flags.
 #[test]
 #[allow(clippy::expect_used)]
@@ -83,14 +83,14 @@ fn transition_module_resolves_and_emits_kernel() {
     let (emit, res) = build_transition_project("emit");
     assert!(
         res.is_ok(),
-        "skyc build with `import Std.Ui.Transition` must succeed \
+        "skyc build with `import Ipe.Ui.Transition` must succeed \
          (native transitionRaw + compiled module): {:?}",
         res.err()
     );
 
-    // The compiled `Std.Ui.Transition` module lowers to its OWN Rust file
+    // The compiled `Ipe.Ui.Transition` module lowers to its OWN Rust file
     // under `src/ipe_mods/` once the per-Sky-module split
-    // fires — this program has two distinct homes (`Main` + `Std.Ui.Transition`).
+    // fires — this program has two distinct homes (`Main` + `Ipe.Ui.Transition`).
     // Scan the WHOLE emitted Sky-side tree (main.rs + ipe_mods/*.rs) so the
     // assertion holds wherever the split correctly placed the helper calls.
     let emitted = support::read_all_emitted_src(&emit);

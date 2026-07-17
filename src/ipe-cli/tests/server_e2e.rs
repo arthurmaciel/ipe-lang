@@ -1,4 +1,4 @@
-//! Honest end-to-end tests for `Sky.Http.Server` — `Server.listen`,
+//! Honest end-to-end tests for `Ipe.Http.Server` — `Server.listen`,
 //! `Server.get`, `Server.text`, and `Server.param`.
 //!
 //! All tests are gated on `IPE_E2E=1`.  Without it they return early so the
@@ -52,7 +52,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// * `GET /greet/:name`  → body `hi <name>` (exercises `Server.param`)
 const IPE_SERVER_PROGRAM: &str = r#"module Main exposing (main)
 
-import Sky.Http.Server as Server
+import Ipe.Http.Server as Server
 
 main =
     let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr "IPE_SERVER_PORT" "8080"))
@@ -235,7 +235,7 @@ fn spawn_and_wait_ready_with_env(
 /// Route: `POST /echo` → body `Server.body req`
 const IPE_POST_ECHO_PROGRAM: &str = r#"module Main exposing (main)
 
-import Sky.Http.Server as Server
+import Ipe.Http.Server as Server
 
 main =
     let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr "IPE_SERVER_PORT" "8080"))
@@ -252,7 +252,7 @@ main =
 /// → body `<method>|<path>|<probe>|<q>|<tag>`
 const IPE_INTROSPECT_PROGRAM: &str = r#"module Main exposing (main)
 
-import Sky.Http.Server as Server
+import Ipe.Http.Server as Server
 
 main =
     let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr "IPE_SERVER_PORT" "8080"))
@@ -276,8 +276,8 @@ main =
 /// `Db.open` here for clarity.
 const IPE_SERVER_AND_DB_PROGRAM: &str = r#"module Main exposing (main)
 
-import Sky.Http.Server as Server
-import Std.Db as Db
+import Ipe.Http.Server as Server
+import Ipe.Db as Db
 
 main =
     Task.andThen
@@ -297,8 +297,8 @@ main =
 /// CSRF-protected `POST /action`.
 const IPE_CSRF_PROGRAM: &str = r#"module Main exposing (main)
 
-import Sky.Http.Server as Server
-import Sky.Http.Middleware as Middleware
+import Ipe.Http.Server as Server
+import Ipe.Http.Middleware as Middleware
 
 handle : Server.Request -> Task Error Server.Response
 handle _req =
@@ -812,7 +812,7 @@ fn csrf_legit_post_with_matching_token_allowed() -> Result<(), BoxError> {
 /// `Secure` attribute is gated on the REQUEST-scoped TLS signal
 /// (`X-Forwarded-Proto: https`, only honoured when the operator opts in via
 /// `IPE_TRUSTED_PROXY`), not just a process-wide `ENV` snapshot — closing
-/// the same ENV-vs-TLS gap already fixed for the Sky.Live session cookie
+/// the same ENV-vs-TLS gap already fixed for the Ipe.Live session cookie
 /// (`src/runtime/rust/src/live/mod.rs::page_response`,
 /// `request_is_https`). The `server.rs` side needed a real design
 /// adaptation (not a copy-paste of the session-cookie fix): the signal has

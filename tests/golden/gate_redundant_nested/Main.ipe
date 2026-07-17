@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- A NESTED redundant arm: `Som x` (a bare variable payload) already matches
 -- every `Som _` value, so the later `Som (Som y)` arm covers nothing new. The

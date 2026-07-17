@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- A NESTED non-exhaustive `case`: the `Som` arm only matches when its inner
 -- value is itself `Som`, so `Som Non` is uncovered. The usefulness checker must

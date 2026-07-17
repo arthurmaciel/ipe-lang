@@ -6,14 +6,14 @@ module Decode exposing (..)
 --   * Json.Decode.Pipeline (required / optional)
 --   * Result.combine
 --   * Maybe and Result combinators
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.String as String
-import Sky.Core.List as List
-import Sky.Core.Maybe as Maybe
-import Sky.Core.Result as Result
-import Sky.Core.Json.Decode as JsonDec
-import Sky.Core.Json.Decode.Pipeline as Pipeline
-import Sky.Core.Error as Error exposing (Error)
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+import Ipe.Result as Result
+import Ipe.Json.Decode as JsonDec
+import Ipe.Json.Decode.Pipeline as Pipeline
+import Ipe.Error as Error exposing (Error)
 import State exposing (Transaction)
 
 

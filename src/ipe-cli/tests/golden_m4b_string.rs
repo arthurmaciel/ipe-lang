@@ -1,7 +1,7 @@
-//! Sky.Core.String parity gate: String and Char kernel functions compile
+//! Ipe.String parity gate: String and Char kernel functions compile
 //! and run with Go parity (rune-correct, byte-for-byte output match).
 //!
-//! Surfaces the full `Sky.Core.String` and `Sky.Core.Char` kernel sets,
+//! Surfaces the full `Ipe.String` and `Ipe.Char` kernel sets,
 //! mirroring the Go runtime's `String_*` / `Char_*` helpers. Key semantic
 //! invariants verified here:
 //!

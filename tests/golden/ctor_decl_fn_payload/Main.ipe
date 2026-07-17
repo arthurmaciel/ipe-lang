@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- #90 Stage 1: a DECLARED function-typed constructor payload used to trip
 -- IPE-L0114 at the union declaration (`lower_enum`'s decl-site gate). #87's

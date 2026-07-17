@@ -1,4 +1,4 @@
-//! `Sky.Core.Secret` positive goldens — build + run + assert on
+//! `Ipe.Secret` positive goldens — build + run + assert on
 //! stdout directly (no cached-oracle comparison: `Secret` has no Go/Haskell
 //! counterpart, same `oracle_divergence` posture as `SqlFragment`'s
 //! goldens, but simple enough that a direct stdout assertion is clearer than

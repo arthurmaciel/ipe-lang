@@ -12,8 +12,8 @@ module Main exposing (main)
 --
 -- skyc MUST exit 0 AND the emitted project MUST cargo-build.
 
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 
 type Page
     = CounterPage

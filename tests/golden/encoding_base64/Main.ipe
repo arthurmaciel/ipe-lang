@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-import Sky.Core.Encoding as Encoding
+import Ipe.Encoding as Encoding
 
 -- base64Encode "hello" = "aGVsbG8=" and base64Decode "aGVsbG8=" = "hello".
 -- Uses a known constant on the decode side to avoid moving `encoded` twice.

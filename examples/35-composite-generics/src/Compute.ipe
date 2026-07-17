@@ -9,16 +9,16 @@ module Compute exposing (..)
 --   * Regex.match / find / findAll / replace
 --   * String.toUpper / replace / slice
 --   * Dict (typed Int key + String key) and Set
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.String as String
-import Sky.Core.List as List
-import Sky.Core.Maybe as Maybe
-import Sky.Core.Result as Result
-import Sky.Core.Math as Math
-import Sky.Core.Crypto as Crypto
-import Sky.Core.Regex as Regex
-import Sky.Core.Dict as Dict
-import Std.Decimal as Dec exposing (Decimal)
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+import Ipe.Result as Result
+import Ipe.Math as Math
+import Ipe.Crypto as Crypto
+import Ipe.Regex as Regex
+import Ipe.Dict as Dict
+import Ipe.Decimal as Dec exposing (Decimal)
 import State exposing (Transaction, EnrichedRow, Bucket(..))
 
 

@@ -1,7 +1,7 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 -- #90 T3, the 12th shape (the one that broke the 4th attempt, revert
 -- 2a7b0d6): an ANNOTATED DOUBLE FORWARDER. `am1`'s obligated `b`

@@ -1,21 +1,21 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.String as String
-import Std.Cmd as Cmd
-import Std.Css exposing (..)
-import Std.Html exposing (..)
-import Std.Html.Attributes exposing (..)
-import Std.Html.Events exposing (onClick)
-import Std.Live exposing (app, route)
-import Std.Log as Log
-import Std.Sub as Sub
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.Cmd as Cmd
+import Ipe.Css exposing (..)
+import Ipe.Html exposing (..)
+import Ipe.Html.Attributes exposing (..)
+import Ipe.Html.Events exposing (onClick)
+import Ipe.Live exposing (app, route)
+import Ipe.Log as Log
+import Ipe.Sub as Sub
 
 
 
 -- MULTI-TIER CONSOLE SHOWCASE
 --
--- A single Sky.Live binary with four logical tiers:
+-- A single Ipe.Live binary with four logical tiers:
 --
 --   /         host       — overview + nav
 --   /billing  billing    — emits Stripe-style log lines
@@ -148,7 +148,7 @@ view model =
     div [ style "max-width: 720px; margin: 40px auto; padding: 24px; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; color: #1c1c1c;" ]
         [ h1 [] [ text "Multi-Tier Console Showcase" ]
         , p [ style "color: #555; line-height: 1.5;" ]
-            [ text "Single Sky.Live binary serving four logical tiers. Each tier emits logs tagged with "
+            [ text "Single Ipe.Live binary serving four logical tiers. Each tier emits logs tagged with "
             , code [] [ text "service.namespace" ]
             , text "; the inline console at "
             , a [ href "/_sky/console" ] [ text "/_sky/console" ]

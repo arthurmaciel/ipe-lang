@@ -1,4 +1,4 @@
-//! `Sky.Core.Dict` + `Sky.Core.Set` parity gate.
+//! `Ipe.Dict` + `Ipe.Set` parity gate.
 //!
 //! Dict golden tests exercise the `Dict` kernel family end-to-end:
 //!

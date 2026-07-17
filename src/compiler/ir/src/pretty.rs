@@ -49,7 +49,7 @@ fn sym_name(interner: &Interner, sym: Symbol) -> String {
         .map_or_else(|| format!("<sym#{}>", sym.as_raw()), str::to_owned)
 }
 
-/// Render a dotted module path, e.g. `Sky.Core.Io`.
+/// Render a dotted module path, e.g. `Ipe.Io`.
 fn mod_path_name(interner: &Interner, path: &ModPath) -> String {
     path.0
         .iter()
@@ -119,10 +119,10 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         IrType::StreamWriter => "StreamWriter".to_owned(),
         // HTTP request handle (opaque, structural record folded to this variant).
         IrType::HttpRequest => "HttpRequest".to_owned(),
-        // Sky.Http.Server.WebSocket opaque handles.
+        // Ipe.Http.Server.WebSocket opaque handles.
         IrType::WebSocketServer => "WebSocketServer".to_owned(),
         IrType::WebSocketServerCfg => "WebSocketServerCfg".to_owned(),
-        // Std.Ui / Std.Html parametric types.
+        // Ipe.Ui / Ipe.Html parametric types.
         IrType::Ui { ctor, msg } => {
             let ctor_name = match ctor {
                 UiCtor::Html => "Html",
@@ -130,10 +130,10 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
                 UiCtor::UiAttribute => "Ui.Attribute",
                 UiCtor::HtmlAttribute => "Html.Attribute",
                 UiCtor::HtmlEvent => "Html.Event",
-                // Std.Ui.Input parametric label / placeholder types.
+                // Ipe.Ui.Input parametric label / placeholder types.
                 UiCtor::Label => "Input.Label",
                 UiCtor::Placeholder => "Input.Placeholder",
-                // Std.Ui.Input radio option type.
+                // Ipe.Ui.Input radio option type.
                 UiCtor::RadioOption => "Input.RadioOption",
             };
             format!("{} {}", ctor_name, ir_type_name(interner, msg))
@@ -209,14 +209,14 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         IrType::TypeInfo => "TypeInfo".to_owned(),
         IrType::SqlFragment => "SqlFragment".to_owned(),
         IrType::Secret => "Secret".to_owned(),
-        // Std.Cache config / stats records.
+        // Ipe.Cache config / stats records.
         IrType::CacheCfg => "CacheCfg".to_owned(),
         IrType::CacheStats => "CacheStats".to_owned(),
-        // Sky.Core.WebSocket connect-config record.
+        // Ipe.WebSocket connect-config record.
         IrType::WebSocketClientCfg => "WebSocketCfg".to_owned(),
-        // Std.Csv document record.
+        // Ipe.Csv document record.
         IrType::CsvDoc => "Csv".to_owned(),
-        // Std.Email records + provider ADT (surface names as the Sky author sees).
+        // Ipe.Email records + provider ADT (surface names as the Sky author sees).
         IrType::EmailMessage => "EmailMessage".to_owned(),
         IrType::EmailAttachment => "Attachment".to_owned(),
         IrType::EmailSesConfig => "SesConfig".to_owned(),
@@ -348,7 +348,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::BasicsMin => "Basics.min",
         KernelFn::BasicsMax => "Basics.max",
         // ── end Basics numerics ──────────────────────────────────────
-        // ── Error kernels (Sky.Core.Error — minimal `Error = String` slice) ─
+        // ── Error kernels (Ipe.Error — minimal `Error = String` slice) ─
         KernelFn::ErrorUnexpected => "Error.unexpected",
         KernelFn::ErrorInvalidInput => "Error.invalidInput",
         KernelFn::ErrorIo => "Error.io",
@@ -364,7 +364,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::ErrorWithMessage => "Error.withMessage",
         KernelFn::ErrorIsRetryable => "Error.isRetryable",
         KernelFn::ErrorWithDetails => "Error.withDetails",
-        // CssSafety (Sky.Core.CssSafety — Std.Css leaf security kernels)
+        // CssSafety (Ipe.CssSafety — Ipe.Css leaf security kernels)
         KernelFn::CssSafetySafeValue => "CssSafety.safeValue",
         KernelFn::CssSafetySafePropName => "CssSafety.safePropName",
         KernelFn::CssSafetySafeSelector => "CssSafety.safeSelector",
@@ -661,7 +661,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::DbDecRequired => "Db.Decode.required",
         KernelFn::DbDecOptional => "Db.Decode.optional",
         KernelFn::DbDecMoney => "Db.Decode.money",
-        // ── Std.Db.Sql — SqlFragment builder ───────────────────
+        // ── Ipe.Db.Sql — SqlFragment builder ───────────────────
         KernelFn::SqlColumn => "Sql.column",
         KernelFn::SqlParam => "Sql.param",
         KernelFn::SqlInt => "Sql.int",
@@ -684,33 +684,33 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::SecretFromString => "Secret.fromString",
         KernelFn::SecretReveal => "Secret.reveal",
         KernelFn::SecretRedacted => "Secret.redacted",
-        // Sky.Core.Regex
+        // Ipe.Regex
         KernelFn::RegexMatch => "Regex.match",
         KernelFn::RegexFind => "Regex.find",
         KernelFn::RegexFindAll => "Regex.findAll",
         KernelFn::RegexReplace => "Regex.replace",
         KernelFn::RegexSplit => "Regex.split",
-        // Sky.Core.Path
+        // Ipe.Path
         KernelFn::PathBase => "Path.base",
         KernelFn::PathDir => "Path.dir",
         KernelFn::PathExt => "Path.ext",
         KernelFn::PathIsAbsolute => "Path.isAbsolute",
-        // Std.Trace
+        // Ipe.Trace
         KernelFn::TraceSpan => "Trace.span",
         KernelFn::TraceEvent => "Trace.event",
         KernelFn::TraceAttr => "Trace.attr",
-        // Std.Compression
+        // Ipe.Compression
         KernelFn::CompressionGzip => "Compression.gzip",
         KernelFn::CompressionGunzip => "Compression.gunzip",
         KernelFn::CompressionZstdCompress => "Compression.zstdCompress",
         KernelFn::CompressionZstdDecompress => "Compression.zstdDecompress",
-        // Std.Csv
+        // Ipe.Csv
         KernelFn::CsvParse => "Csv.parse",
         KernelFn::CsvParseWithDelimiter => "Csv.parseWithDelimiter",
         KernelFn::CsvEncode => "Csv.encode",
         KernelFn::CsvEncodeWithDelimiter => "Csv.encodeWithDelimiter",
         KernelFn::CsvParseStreamFromFile => "Csv.parseStreamFromFile",
-        // Std.Cache (the `*Raw` kernel aliases; the surface names carry
+        // Ipe.Cache (the `*Raw` kernel aliases; the surface names carry
         // no `Raw` suffix but the pretty form names the underlying kernel).
         KernelFn::CacheNewRaw => "Cache.newRaw",
         KernelFn::CacheGet => "Cache.getRaw",
@@ -719,7 +719,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::CacheClear => "Cache.clearRaw",
         KernelFn::CacheSize => "Cache.sizeRaw",
         KernelFn::CacheStats => "Cache.statsRaw",
-        // Std.Config
+        // Ipe.Config
         KernelFn::ConfigString => "Config.string",
         KernelFn::ConfigInt => "Config.int",
         KernelFn::ConfigFloat => "Config.float",
@@ -736,7 +736,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::ConfigDecodeYaml => "Config.decodeYaml",
         KernelFn::ConfigDecodeJson => "Config.decodeJson",
         KernelFn::ConfigLoadFromFile => "Config.loadFromFile",
-        // Std.Email
+        // Ipe.Email
         KernelFn::EmailSend => "Email.send",
         // TEA Cmd / Sub / Time.every
         KernelFn::CmdNone => "Cmd.none",
@@ -752,7 +752,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::SubSubscribeTopic => "Sub.subscribeTopic",
         KernelFn::PubSubPublish => "PubSub.publish",
         KernelFn::PubSubPublishNoEcho => "PubSub.publishNoEcho",
-        // Sky.Http.Server kernels
+        // Ipe.Http.Server kernels
         KernelFn::ServerGet => "Server.get",
         KernelFn::ServerPost => "Server.post",
         KernelFn::ServerPut => "Server.put",
@@ -782,24 +782,24 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::MiddlewareWithRateLimit => "Middleware.withRateLimit",
         KernelFn::MiddlewareWithCsrf => "Middleware.withCsrf",
         KernelFn::RateLimitAllow => "RateLimit.allow",
-        // ── Std.Ui / Std.Html render kernels ─────────────────────────────
+        // ── Ipe.Ui / Ipe.Html render kernels ─────────────────────────────
         KernelFn::UiLayout => "Ui.layout",
         KernelFn::UiLayoutWith => "Ui.layoutWith",
         KernelFn::HtmlRender => "Html.render",
         KernelFn::HtmlEscapeText => "Html.escapeText",
         KernelFn::HtmlEscapeAttr => "Html.escapeAttr",
         KernelFn::HtmlAttrToString => "Html.attrToString",
-        // ── Std.Live app-entry kernels ───────────────────────────────────
+        // ── Ipe.Live app-entry kernels ───────────────────────────────────
         KernelFn::LiveApp => "Live.app",
         KernelFn::LiveAppRouted => "Live.appRouted",
         KernelFn::LiveRoute => "Live.route",
         KernelFn::LiveRenderStatic => "Live.renderStatic",
-        // ── Std.Tui app-entry kernels ────────────────────────────────────
+        // ── Ipe.Tui app-entry kernels ────────────────────────────────────
         KernelFn::TuiProgram => "Tui.program",
         KernelFn::TuiApp => "Tui.app",
-        // ── Std.Webview app-entry kernel ─────────────────────────────────
+        // ── Ipe.Webview app-entry kernel ─────────────────────────────────
         KernelFn::WebviewApp => "Webview.app",
-        // ── Std.Ui element builders ──────────────────────────────────────
+        // ── Ipe.Ui element builders ──────────────────────────────────────
         KernelFn::UiNone => "Ui.none",
         KernelFn::UiText => "Ui.text",
         KernelFn::UiHtml => "Ui.html",
@@ -813,7 +813,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::UiButton => "Ui.button",
         KernelFn::UiLink => "Ui.link",
         KernelFn::UiImage => "Ui.image",
-        // ── Std.Ui attribute builders ────────────────────────────────────
+        // ── Ipe.Ui attribute builders ────────────────────────────────────
         KernelFn::UiSpacing => "Ui.spacing",
         KernelFn::UiPadding => "Ui.padding",
         KernelFn::UiPaddingXY => "Ui.paddingXY",
@@ -834,7 +834,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::UiScrollbarX => "Ui.scrollbarX",
         KernelFn::UiScrollbarY => "Ui.scrollbarY",
         KernelFn::UiGridColumns => "Ui.gridColumns",
-        // ── Std.Ui Length builders ───────────────────────────────────────
+        // ── Ipe.Ui Length builders ───────────────────────────────────────
         KernelFn::UiPx => "Ui.px",
         KernelFn::UiFill => "Ui.fill",
         KernelFn::UiContent => "Ui.content",
@@ -844,7 +844,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::UiVw => "Ui.vw",
         KernelFn::UiMinimum => "Ui.minimum",
         KernelFn::UiMaximum => "Ui.maximum",
-        // ── Std.Ui Color builders ────────────────────────────────────────
+        // ── Ipe.Ui Color builders ────────────────────────────────────────
         KernelFn::UiRgb => "Ui.rgb",
         KernelFn::UiRgba => "Ui.rgba",
         KernelFn::UiWhite => "Ui.white",
@@ -930,10 +930,10 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::FontHoverSize => "Font.hoverSize",
         KernelFn::HtmlAttrTabindex => "Attr.tabindex",
         KernelFn::HtmlAttrRows => "Attr.rows",
-        // ── Std.Ui.Keyed ──────────────────────────────────────────────────────
+        // ── Ipe.Ui.Keyed ──────────────────────────────────────────────────────
         KernelFn::KeyedColumn => "Keyed.column",
         KernelFn::KeyedRow => "Keyed.row",
-        // ── Std.Ui.Region ──────────────────────────────────────────────
+        // ── Ipe.Ui.Region ──────────────────────────────────────────────
         KernelFn::RegionMainContent => "Region.mainContent",
         KernelFn::RegionNavigation => "Region.navigation",
         KernelFn::RegionFooter => "Region.footer",
@@ -969,7 +969,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HtmlP => "Html.p",
         KernelFn::HtmlInput => "Html.input",
         KernelFn::HtmlImg => "Html.img",
-        // Std.Html element builders.
+        // Ipe.Html element builders.
         KernelFn::HtmlH1 => "Html.h1",
         KernelFn::HtmlH2 => "Html.h2",
         KernelFn::HtmlH3 => "Html.h3",
@@ -1038,7 +1038,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HtmlSource => "Html.source",
         KernelFn::HtmlTrack => "Html.track",
         KernelFn::HtmlWbr => "Html.wbr",
-        // Std.Html.Attributes builders (source-facing names).
+        // Ipe.Html.Attributes builders (source-facing names).
         KernelFn::HtmlAttrClass => "Attr.class",
         KernelFn::HtmlAttrId => "Attr.id",
         KernelFn::HtmlAttrHref => "Attr.href",
@@ -1075,7 +1075,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::UiOnBool => "Ui.onBool",
         KernelFn::UiOnSubmit => "Ui.onSubmit",
         KernelFn::UiOnFile => "Ui.onFile",
-        // Std.Html.Events builders (produce Std.Html.Attribute).
+        // Ipe.Html.Events builders (produce Ipe.Html.Attribute).
         KernelFn::HtmlOnClick => "Event.onClick",
         KernelFn::HtmlOnFocus => "Event.onFocus",
         KernelFn::HtmlOnBlur => "Event.onBlur",
@@ -1106,7 +1106,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::HttpStreamForEachChunk => "HttpStream.forEachChunk",
         KernelFn::HttpStreamClose => "HttpStream.close",
         KernelFn::HttpStreamChunks => "HttpStream.chunks",
-        // ── Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
+        // ── Ipe.Http.Server.WebSocket (12 kernels) ─────────────────────
         KernelFn::WsDefaultCfg => "Ws.defaultCfg",
         KernelFn::WsWithOnConnect => "Ws.withOnConnect",
         KernelFn::WsWithOnMessage => "Ws.withOnMessage",
@@ -1119,7 +1119,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::WsSendBinaryToClient => "Ws.sendBinaryToClient",
         KernelFn::WsBroadcast => "Ws.broadcast",
         KernelFn::WsCloseClient => "Ws.closeClient",
-        // ── Sky.Core.WebSocket — outbound WebSocket client ─────────────
+        // ── Ipe.WebSocket — outbound WebSocket client ─────────────
         KernelFn::WebSocketConnect => "WebSocket.connect",
         KernelFn::WebSocketConnectWith => "WebSocket.connectWith",
         KernelFn::WebSocketSend => "WebSocket.send",
@@ -1127,7 +1127,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::WebSocketClose => "WebSocket.close",
         KernelFn::WebSocketCloseWithCode => "WebSocket.closeWithCode",
         KernelFn::SubSubscribeWebSocket => "Sub.subscribeWebSocket",
-        // ── Std.Ui.Input ───────────────────────────────────────────────
+        // ── Ipe.Ui.Input ───────────────────────────────────────────────
         KernelFn::InputLabelAbove => "Input.labelAbove",
         KernelFn::InputLabelBelow => "Input.labelBelow",
         KernelFn::InputLabelLeft => "Input.labelLeft",
@@ -1146,7 +1146,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::InputOption => "Input.option",
         KernelFn::InputRadio => "Input.radio",
         KernelFn::InputRadioRow => "Input.radioRow",
-        // ── Std.Ui.Lazy ────────────────────────────────────────────────
+        // ── Ipe.Ui.Lazy ────────────────────────────────────────────────
         KernelFn::LazyLazy => "Lazy.lazy",
         KernelFn::LazyLazy2 => "Lazy.lazy2",
         KernelFn::LazyLazy3 => "Lazy.lazy3",
@@ -1175,7 +1175,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::UiOnRight => "Ui.onRight",
         KernelFn::UiInFront => "Ui.inFront",
         KernelFn::UiBehind => "Ui.behind",
-        // ── Std.Decimal ───────────────────────────────────────────────────────
+        // ── Ipe.Decimal ───────────────────────────────────────────────────────
         KernelFn::DecZero => "Decimal.zero",
         KernelFn::DecOne => "Decimal.one",
         KernelFn::DecOneHundred => "Decimal.oneHundred",

@@ -1,7 +1,7 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 -- #90 T3: TRIPLE forwarder — the escape chain is arbitrarily deep; the
 -- fail-closed arm rejects at the FIRST hop (`am1` inside `am2`), so depth

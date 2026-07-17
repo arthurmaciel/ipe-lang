@@ -7,17 +7,17 @@ module Server exposing (run)
 --
 -- The composite intentionally calls every middleware once so the
 -- regression set catches a misregistered kernel sig.
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Dict as Dict
-import Sky.Core.String as String
-import Sky.Core.Task as Task
-import Sky.Core.Error exposing (Error)
-import Sky.Http.Server as HttpServer
-import Sky.Http.Server exposing (Request, Response)
-import Sky.Http.RateLimit as RateLimit
+import Ipe.Prelude exposing (..)
+import Ipe.Dict as Dict
+import Ipe.String as String
+import Ipe.Task as Task
+import Ipe.Error exposing (Error)
+import Ipe.Http.Server as HttpServer
+import Ipe.Http.Server exposing (Request, Response)
+import Ipe.Http.RateLimit as RateLimit
 import Middleware
-import Std.Cache as Cache
-import Std.Log as Log
+import Ipe.Cache as Cache
+import Ipe.Log as Log
 import Routes.Auth as AuthRoutes
 import Routes.Todos as TodosRoutes
 import Routes.Health as HealthRoutes
@@ -33,7 +33,7 @@ run cfg bootMs db cache =
         cors h = Middleware.withCors cfg.corsOrigins h
         -- Two-layer middleware stack: CORS + structured request logging.
         -- We intentionally compose via the runtime kernel rather than
-        -- through `Sky.Http.Middleware`'s `Handler -> Handler` shape
+        -- through `Ipe.Http.Middleware`'s `Handler -> Handler` shape
         -- (which the stdlib leaves an undeclared free type variable —
         -- see Middleware.ipe for the typed re-binding).
         wrap h = cors (Middleware.withLogging h)
@@ -50,7 +50,7 @@ run cfg bootMs db cache =
                 [ ( "port", String.fromInt cfg.port )
                 , ( "rateLimitProbe", probeRateLimit )
                 ]
-        -- Sky.Http.Server's net/http-based dispatcher routes by path
+        -- Ipe.Http.Server's net/http-based dispatcher routes by path
         -- only (Route.Method is captured but unused in Server_listen).
         -- We dispatch GET vs POST on the same /api/todos pathname here.
         todosByMethod req =

@@ -43,7 +43,7 @@ use crate::ast;
 /// Returns [`NameError::DuplicateType`] (IPE-N0012) when two unions share the
 /// SAME nominal identity `(home, name)` — the same type declared twice in one
 /// home module. Two DIFFERENT homes declaring the same short name
-/// (`Std.Palette.Color` and `Main.Color`) are NOT a duplicate: they mangle to
+/// (`Ipe.Palette.Color` and `Main.Color`) are NOT a duplicate: they mangle to
 /// distinct Rust enums downstream (`StdPaletteColor` vs `MainColor`), so the
 /// gate keys on `(home, name)`, not `name` alone. This makes "two types with
 /// the same nominal identity in the linked program" unrepresentable while

@@ -1,6 +1,6 @@
 module D exposing (base)
 
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 base : Int
 base = 42

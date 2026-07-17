@@ -7,17 +7,17 @@ module Lib.AuthHandlers exposing
     , handleSignOut
     )
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Result as Result
-import Sky.Core.Maybe exposing (..)
-import Sky.Core.String as String
-import Std.Log exposing (println)
-import Std.Cmd as Cmd
+import Ipe.Prelude exposing (..)
+import Ipe.Result as Result
+import Ipe.Maybe exposing (..)
+import Ipe.String as String
+import Ipe.Log exposing (println)
+import Ipe.Cmd as Cmd
 import State exposing (..)
 import Lib.Auth as Auth
 import Lib.Db as Db
 import Lib.Ideas as Ideas
-import Sky.Core.Error as Error exposing (Error(..), ErrorKind(..))
+import Ipe.Error as Error exposing (Error(..), ErrorKind(..))
 
 
 handleSignInSuccess user model =

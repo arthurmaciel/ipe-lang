@@ -1,10 +1,10 @@
 module Main exposing (main)
 
-import Std.Html exposing (..)
-import Std.Html.Attributes exposing (..)
+import Ipe.Html exposing (..)
+import Ipe.Html.Attributes exposing (..)
 
 
--- #76: Std.Html.Attributes family end-to-end golden. Exercises fixed-key
+-- #76: Ipe.Html.Attributes family end-to-end golden. Exercises fixed-key
 -- string attrs (class/id/href/value/type_/placeholder), fixed-key bool attrs
 -- (checked/disabled), the generic `attribute`/`boolAttribute` builders, and
 -- the render-sink SECURITY gate (a hostile `attribute "onclick" ...` and an

@@ -1,6 +1,6 @@
 module View.Login exposing (..)
 
--- Login form using the Sky.Live "form + onSubmit" pattern
+-- Login form using the Ipe.Live "form + onSubmit" pattern
 -- (CLAUDE.md "Forms with passwords"). Three wins over per-keystroke
 -- onInput on the password field:
 --
@@ -9,7 +9,7 @@ module View.Login exposing (..)
 --   2. The secret never lives in Model — it only exists in the
 --      browser DOM until form submit, then briefly in DoSignIn's
 --      typed record arg until update consumes it. With per-keystroke
---      onInput it would round-trip through every Sky.Live session
+--      onInput it would round-trip through every Ipe.Live session
 --      store write (Redis / Postgres / Firestore).
 --   3. Race-free submit reads the live DOM value not a debounced
 --      keystroke — no possibility of dropping the last character if
@@ -19,13 +19,13 @@ module View.Login exposing (..)
 -- {"username":"...","password":"..."} directly into the typed
 -- LoginForm record via case-insensitive json.Unmarshal. Field
 -- names in LoginForm MUST match the input `name` attrs.
-import Sky.Core.Prelude exposing (..)
-import Std.Ui as Ui
-import Std.Ui exposing (Element)
-import Std.Ui.Background as Background
-import Std.Ui.Border as Border
-import Std.Ui.Font as Font
-import Std.Ui.Region as Region
+import Ipe.Prelude exposing (..)
+import Ipe.Ui as Ui
+import Ipe.Ui exposing (Element)
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Font as Font
+import Ipe.Ui.Region as Region
 import State exposing (..)
 
 

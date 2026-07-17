@@ -1,7 +1,7 @@
 module Main exposing (main)
 
-import Std.Html as Html
-import Std.Ui as Ui
+import Ipe.Html as Html
+import Ipe.Ui as Ui
 
 
 -- Phase-1a regression sentinel (issue #43): `staticHtml` has return type

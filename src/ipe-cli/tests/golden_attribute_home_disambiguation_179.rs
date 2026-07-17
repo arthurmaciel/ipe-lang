@@ -4,14 +4,14 @@
 //!
 //! ## The bug
 //!
-//! `Attribute` exists in BOTH `Std.Ui` (→ `ui::element::Attribute`) and
-//! `Std.Html.Attributes` (→ `html::Attribute`).  The lowerer disambiguates by
+//! `Attribute` exists in BOTH `Ipe.Ui` (→ `ui::element::Attribute`) and
+//! `Ipe.Html.Attributes` (→ `html::Attribute`).  The lowerer disambiguates by
 //! `is_html = home contains "Html"`. If a bare/aliased `Attribute` from a
 //! stdlib module reaches the empty-home sentinel (stdlib imports are
 //! skipped by both the dep-injection loop and the `qualifier_paths`
 //! construction), `is_html` always fails and BOTH the bare-exposed form
-//! (`Std.Live.Head.pairToAttr`) and the qualified form
-//! (`Std.Ui.Chart.svgRootAttrs`) mis-lower `Attribute msg` to
+//! (`Ipe.Live.Head.pairToAttr`) and the qualified form
+//! (`Ipe.Ui.Chart.svgRootAttrs`) mis-lower `Attribute msg` to
 //! `ui::element::Attribute` while their `Attr.attribute` bodies produce
 //! `html::Attribute` — an exit-0-then-cargo-fail E0308 SEAL violation.
 //!
@@ -23,7 +23,7 @@
 //!   `html::Attribute`-producing bodies now agree with their return-type
 //!   annotations) and the binary runs and exits 0.
 //! * The rendered `<svg>` carries the attributes from BOTH a polymorphic-msg
-//!   `pairToAttr` (bare `Attribute` exposed from `Std.Html.Attributes`) and a
+//!   `pairToAttr` (bare `Attribute` exposed from `Ipe.Html.Attributes`) and a
 //!   `svgRootAttrs`-style list, proving the `html::Attribute` list flowed into
 //!   the `Html.node` slot without a cast.
 //!
@@ -109,7 +109,7 @@ fn attribute_home_disambiguation_179_builds_and_renders() {
         "svgRootAttrs role attribute must render\n--- stdout ---\n{rendered}"
     );
     // Attributes produced by `pairToAttr` (bare exposed `Attribute` from
-    // Std.Html.Attributes, mapped over a list) — the exact target shape.
+    // Ipe.Html.Attributes, mapped over a list) — the exact target shape.
     assert!(
         rendered.contains("width=\"100\"") && rendered.contains("height=\"40\""),
         "pairToAttr-produced width/height attributes must render\n--- stdout ---\n{rendered}"

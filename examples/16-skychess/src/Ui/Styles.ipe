@@ -1,7 +1,7 @@
 module Ui.Styles exposing (globalStyles)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Css exposing (..)
+import Ipe.Prelude exposing (..)
+import Ipe.Css exposing (..)
 
 -- Design tokens
 primary = hex "6366f1"

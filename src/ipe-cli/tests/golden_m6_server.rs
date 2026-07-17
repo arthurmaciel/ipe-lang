@@ -1,4 +1,4 @@
-//! `Sky.Http.Server` request-accessor clone-emit golden.
+//! `Ipe.Http.Server` request-accessor clone-emit golden.
 //!
 //! This test pins the `.clone()` insertion behaviour for request accessor
 //! kernels (`Server.body` / `Server.path` / `Server.method` /

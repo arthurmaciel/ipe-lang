@@ -23,28 +23,28 @@ pub enum KernelClass {
     /// System, Random, File, Http — everything that does not belong to a
     /// specialised subsystem.
     Pure,
-    /// `Std.Db` / `Db.Decode` kernels.
+    /// `Ipe.Db` / `Db.Decode` kernels.
     Db,
-    /// `Sky.Http.Server` / Middleware / `RateLimit` kernels.
+    /// `Ipe.Http.Server` / Middleware / `RateLimit` kernels.
     Server,
     /// `Cmd` / `Sub` / `Time.every` TEA wiring kernels, including reserved
     /// pub/sub variants.
     Tea,
-    /// `Std.Ui` / `Std.Html` element and attribute builders.
+    /// `Ipe.Ui` / `Ipe.Html` element and attribute builders.
     Ui,
-    /// `Std.Live` app-entry kernels.
+    /// `Ipe.Live` app-entry kernels.
     Live,
-    /// `Std.Tui` app-entry kernels.
+    /// `Ipe.Tui` app-entry kernels.
     Tui,
-    /// `Std.Webview` app-entry kernel.
+    /// `Ipe.Webview` app-entry kernel.
     Webview,
-    /// `Std.Cli` / `Sky.Cli` app-entry kernel.
+    /// `Ipe.Cli` / `Ipe.Cli` app-entry kernel.
     Cli,
     /// Reserved for the FFI kernel tier.
     Ffi,
 }
 
-/// The event-payload shape of a `Std.Html.Events` builder.
+/// The event-payload shape of a `Ipe.Html.Events` builder.
 ///
 /// Drives both the constrain scheme (the argument type) and the backend emit
 /// arm (which `html::Event` variant to construct). Making the shape an ADT —
@@ -224,7 +224,7 @@ pub enum StdlibKernel {
     /// The `comparable` (`Ord`) constraint is enforced via `constrain_var_kernel`.
     BasicsCompare,
     // ── end Basics numerics ──────────────────────────────────────────
-    // ── Error (Sky.Core.Error — minimal `Error = String` slice) ─────────
+    // ── Error (Ipe.Error — minimal `Error = String` slice) ─────────
     // Message-carrying constructors: `String -> Error`. With `IpeError = String`
     // the message IS the error value, so all eight collapse to one identity
     // runtime symbol (`ipe_error_from_message`); the distinct Sky-level names are
@@ -250,9 +250,9 @@ pub enum StdlibKernel {
     // Modifier: `ErrorDetails -> Error -> Error`
     // (attaches the `ErrorDetails` union to `ErrorInfo.details`).
     ErrorWithDetails,
-    // ── CssSafety (Sky.Core.CssSafety — Std.Css leaf security kernels) ───
+    // ── CssSafety (Ipe.CssSafety — Ipe.Css leaf security kernels) ───
     // The FOUR primitive leaf shims over the audited `css_safety` policy that the
-    // compiled-source `Std.Css` funnels every free-string entry through (PARSE,
+    // compiled-source `Ipe.Css` funnels every free-string entry through (PARSE,
     // DON'T VALIDATE). `safeValue`/`safePropName`/`safeSelector` are the
     // `String -> Maybe String` parsers (`None` => the Sky side drops the
     // declaration/rule); `stripStyleClose` is the `String -> String` breakout
@@ -522,7 +522,7 @@ pub enum StdlibKernel {
     TimeSleep,
     TimeUnixMillis,
     TimeTimeString,
-    // `Std.Time` pure calendar helpers (no I/O). Reference:
+    // `Ipe.Time` pure calendar helpers (no I/O). Reference:
     // `Ffi.callPure "Time_isLeapYear"` / `"Time_daysInMonth"`.
     TimeIsLeapYear,
     TimeDaysInMonth,
@@ -640,7 +640,7 @@ pub enum StdlibKernel {
     PubSubPublish,
     /// `PubSub.publishNoEcho` — reserved; absent from [`Self::ALL`].
     PubSubPublishNoEcho,
-    // ── Sky.Http.Server / Middleware / RateLimit ─────────────────────────────
+    // ── Ipe.Http.Server / Middleware / RateLimit ─────────────────────────────
     ServerGet,
     ServerPost,
     ServerPut,
@@ -670,14 +670,14 @@ pub enum StdlibKernel {
     MiddlewareWithRateLimit,
     MiddlewareWithCsrf,
     RateLimitAllow,
-    // ── Std.Ui / Std.Html render kernels ─────────────────────────────────
+    // ── Ipe.Ui / Ipe.Html render kernels ─────────────────────────────────
     UiLayout,
     UiLayoutWith,
     HtmlRender,
     HtmlEscapeText,
     HtmlEscapeAttr,
     HtmlAttrToString,
-    // ── Std.Ui element builders ──────────────────────────────────────────
+    // ── Ipe.Ui element builders ──────────────────────────────────────────
     UiNone,
     UiText,
     UiHtml,
@@ -695,7 +695,7 @@ pub enum StdlibKernel {
     /// `Ui.image : List Attr -> { src : String, description : String } -> Element msg`
     /// — renders `<img src=… alt=…>` (a void `TaggedNode`, no children).
     UiImage,
-    // ── Std.Ui nearby attribute builders (absolute-positioned overlays) ──
+    // ── Ipe.Ui nearby attribute builders (absolute-positioned overlays) ──
     /// `Ui.above : Element msg -> Attribute msg`
     UiAbove,
     /// `Ui.below : Element msg -> Attribute msg`
@@ -708,7 +708,7 @@ pub enum StdlibKernel {
     UiInFront,
     /// `Ui.behind : Element msg -> Attribute msg`
     UiBehind,
-    // ── Std.Ui attribute builders ────────────────────────────────────────
+    // ── Ipe.Ui attribute builders ────────────────────────────────────────
     UiSpacing,
     UiPadding,
     UiPaddingXY,
@@ -735,7 +735,7 @@ pub enum StdlibKernel {
     /// `Ui.scrollbarY : Attribute msg` — `AttrOverflow "hidden" "auto"`.
     UiScrollbarY,
     UiGridColumns,
-    // ── Std.Ui Length builders ───────────────────────────────────────────
+    // ── Ipe.Ui Length builders ───────────────────────────────────────────
     UiPx,
     UiFill,
     UiContent,
@@ -745,7 +745,7 @@ pub enum StdlibKernel {
     UiVw,
     UiMinimum,
     UiMaximum,
-    // ── Std.Ui Color builders ────────────────────────────────────────────
+    // ── Ipe.Ui Color builders ────────────────────────────────────────────
     UiRgb,
     UiRgba,
     UiWhite,
@@ -804,7 +804,7 @@ pub enum StdlibKernel {
     HtmlP,
     HtmlInput,
     HtmlImg,
-    // ── Std.Html ELEMENT builders (tag-as-data) ──────────
+    // ── Ipe.Html ELEMENT builders (tag-as-data) ──────────
     // Container elements (arity-2 attrs->children) and void elements (arity-1
     // attrs) that all route through the generic `html_node_` runtime sink with
     // their wire tag from `html_element_tag`. See `is_html_container`/`is_html_void`.
@@ -884,7 +884,7 @@ pub enum StdlibKernel {
     HtmlSource,
     HtmlTrack,
     HtmlWbr,
-    // ── Std.Html.Attributes builders (corpus-used direct-backing) ───────
+    // ── Ipe.Html.Attributes builders (corpus-used direct-backing) ───────
     // String fixed-key attributes (`String -> Attribute msg`). The wire key is
     // the member name except `type_`→`type` / `for_`→`for` (see `html_attr_key`).
     HtmlAttrClass,
@@ -912,15 +912,15 @@ pub enum StdlibKernel {
     HtmlAttribute,     // `attribute : String -> String -> Attribute msg`
     HtmlBoolAttribute, // `boolAttribute : String -> Bool -> Attribute msg`
     HtmlNoAttr,        // `noAttr : Attribute msg`
-    // ── Std.Live app-entry kernels ───────────────────────────────────────
+    // ── Ipe.Live app-entry kernels ───────────────────────────────────────
     LiveApp,
     LiveAppRouted,
     LiveRoute,
     LiveRenderStatic,
-    // ── Std.Tui app-entry kernels ────────────────────────────────────────
+    // ── Ipe.Tui app-entry kernels ────────────────────────────────────────
     TuiProgram,
     TuiApp,
-    // ── Std.Webview app-entry kernel ─────────────────────────────────────
+    // ── Ipe.Webview app-entry kernel ─────────────────────────────────────
     WebviewApp,
     // ── event-attribute builders ─────────────────────────────────────────
     UiOnClick,
@@ -938,11 +938,11 @@ pub enum StdlibKernel {
     /// `"sky-file"`; the browser-side driver reads the chosen file, base64
     /// data-URL-encodes it, and dispatches the URL string to the handler.
     UiOnFile,
-    // ── Std.Html.Events builders — produce `Std.Html.Attribute msg`
-    // (`html_attr`), so they unify with `Std.Html.Attributes` builders and the
-    // element builders' `List (Std.Html.Attribute msg)` slot. Distinct from the
-    // `UiOn*` kernels above, which produce the `Std.Ui.Attribute` variant for
-    // the Std.Ui element family. Emit constructs `html::Attribute::EventAttr`.
+    // ── Ipe.Html.Events builders — produce `Ipe.Html.Attribute msg`
+    // (`html_attr`), so they unify with `Ipe.Html.Attributes` builders and the
+    // element builders' `List (Ipe.Html.Attribute msg)` slot. Distinct from the
+    // `UiOn*` kernels above, which produce the `Ipe.Ui.Attribute` variant for
+    // the Ipe.Ui element family. Emit constructs `html::Attribute::EventAttr`.
     HtmlOnClick,
     HtmlOnFocus,
     HtmlOnBlur,
@@ -954,7 +954,7 @@ pub enum StdlibKernel {
     HtmlOnKeyDown,
     HtmlOnKeyUp,
     HtmlOnBool,
-    // ── Std.Ui extended attribute builders ───────────────────────
+    // ── Ipe.Ui extended attribute builders ───────────────────────
     // Ui namespace — aspect-ratio + htmlAttribute + name/style/cinemascope
     UiSquare,        // nullary Attr: "1 / 1"
     UiWidescreen,    // nullary Attr: "16 / 9"
@@ -1072,9 +1072,9 @@ pub enum StdlibKernel {
     HtmlAttrTabindex, // Int → HtmlAttr
     HtmlAttrRows,     // Int → HtmlAttr  (<textarea rows="N">)
     // ── Effect stdlib modules ────────────────────────────────────────
-    // Std.Cli / Sky.Cli — line-oriented TEA app-entry (fully wired).
+    // Ipe.Cli / Ipe.Cli — line-oriented TEA app-entry (fully wired).
     CliProgram,
-    // Std.Auth / Sky.Auth — authentication helpers (fail-closed: no lower arm
+    // Ipe.Auth / Ipe.Auth — authentication helpers (fail-closed: no lower arm
     // yet → IPE-L0108 at lower time; qualified registration removes N0004).
     AuthHashPassword,
     AuthHashPasswordCost,
@@ -1085,19 +1085,19 @@ pub enum StdlibKernel {
     AuthRegister,
     AuthLogin,
     AuthSetRole,
-    // Sky.Http.Server.Stream — server-side streaming HTTP (fail-closed).
+    // Ipe.Http.Server.Stream — server-side streaming HTTP (fail-closed).
     StreamStream,
     StreamEmit,
     StreamFinish,
     StreamWithContentType,
-    // Sky.Core.Http.Stream — client-side HTTP streaming (fail-closed).
+    // Ipe.Http.Stream — client-side HTTP streaming (fail-closed).
     HttpStreamOpen,
     HttpStreamForEachChunk,
     HttpStreamClose,
     /// `Http.Stream.chunks sid toMsg` — subscribes to stream chunks; returns `Sub msg`.
     /// Classified as TEA (not server) because it returns `IpeSub<M>`.
     HttpStreamChunks,
-    // ── Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
+    // ── Ipe.Http.Server.WebSocket (12 kernels) ─────────────────────
     WsDefaultCfg,           // WebSocketServerCfg (arity 0)
     WsWithOnConnect,        // (WebSocketServer -> Task Error ()) -> WebSocketServerCfg -> WebSocketServerCfg (arity 2)
     WsWithOnMessage,        // (WebSocketServer -> String -> Task Error ()) -> WebSocketServerCfg -> WebSocketServerCfg (arity 2)
@@ -1110,7 +1110,7 @@ pub enum StdlibKernel {
     WsSendBinaryToClient,   // WebSocketServer -> Bytes -> Task Error () (arity 2)
     WsBroadcast,            // List WebSocketServer -> String -> Task Error () (arity 2)
     WsCloseClient,          // WebSocketServer -> Task Error () (arity 1)
-    // ── Sky.Core.WebSocket — outbound WebSocket client (7 kernels) ──
+    // ── Ipe.WebSocket — outbound WebSocket client (7 kernels) ──
     // The 6 Task-tier kernels take/return a raw `Int` socket id (the stdlib
     // wraps it in the `WebSocket` ADT). `Sub_subscribeWebSocket` is the single
     // `any`-typed Sub-tier kernel the stdlib routes onOpen/onMessage/onClose/
@@ -1123,7 +1123,7 @@ pub enum StdlibKernel {
     WebSocketClose,          // Int -> Task Error () (arity 1)
     WebSocketCloseWithCode,  // Int -> String -> Int -> Task Error () (arity 3)
     SubSubscribeWebSocket,   // Int -> String -> (any -> msg) -> Sub msg (arity 3)
-    // ── Std.Ui.Region ──────────────────────────────────────────────
+    // ── Ipe.Ui.Region ──────────────────────────────────────────────
     RegionMainContent,      // Attribute msg (arity 0)
     RegionNavigation,       // Attribute msg (arity 0)
     RegionFooter,           // Attribute msg (arity 0)
@@ -1143,7 +1143,7 @@ pub enum StdlibKernel {
     UiDescLiveAssertive, // Description (arity 0)
     UiDescHeading,       // Int -> Description (arity 1)
     UiDescLabel,         // String -> Description (arity 1)
-    // ── Std.Ui.Input ──────────────────────────────────────────────────
+    // ── Ipe.Ui.Input ──────────────────────────────────────────────────
     /// `Input.labelAbove : List (Attribute msg) -> Element msg -> Label msg`
     InputLabelAbove,
     /// `Input.labelBelow : List (Attribute msg) -> Element msg -> Label msg`
@@ -1180,7 +1180,7 @@ pub enum StdlibKernel {
     InputRadio,
     /// `Input.radioRow : List (Attribute msg) -> { onChange, options, selected, label } -> Element msg`
     InputRadioRow,
-    // ── Std.Ui.Lazy ────────────────────────────────────────────────────
+    // ── Ipe.Ui.Lazy ────────────────────────────────────────────────────
     /// `Lazy.lazy : (a -> Element msg) -> a -> Element msg`
     ///
     /// **Eager in v1.** Sky's Go runtime memoises the subtree; ipê evaluates
@@ -1195,13 +1195,13 @@ pub enum StdlibKernel {
     LazyLazy4,
     /// `Lazy.lazy5 : (a -> b -> c -> d -> e -> Element msg) -> a -> b -> c -> d -> e -> Element msg` (eager)
     LazyLazy5,
-    // ── Std.Ui.Keyed — sky-key for diff identity ─────────────────────────
+    // ── Ipe.Ui.Keyed — sky-key for diff identity ─────────────────────────
     /// `Keyed.column : List (Attribute msg) -> List (String, Element msg) -> Element msg`
     KeyedColumn,
     /// `Keyed.row : List (Attribute msg) -> List (String, Element msg) -> Element msg`
     KeyedRow,
 
-    // ── Std.Decimal — arbitrary-precision decimal arithmetic ──────────────
+    // ── Ipe.Decimal — arbitrary-precision decimal arithmetic ──────────────
     /// `Decimal.zero : Decimal`
     DecZero,
     /// `Decimal.one : Decimal`
@@ -1282,7 +1282,7 @@ pub enum StdlibKernel {
     DecSubPercent,
     /// `Decimal.formatWith : String -> String -> Int -> Decimal -> String`
     DecFormatWith,
-    // ── Std.Db.Sql — SqlFragment builder ───────────────────────
+    // ── Ipe.Db.Sql — SqlFragment builder ───────────────────────
     // Typed, parameterized WHERE-fragment combinators. Replace the removed
     // `Db.unsafeFindWhere` raw-string escape hatch: a `SqlFragment` can only be
     // constructed through these kernels, so SQL injection via a hand-built
@@ -1335,7 +1335,7 @@ pub enum StdlibKernel {
     DbFindWhere,
     /// `Db.deleteWhere : Db -> String -> SqlFragment -> Task Error Int`
     DbDeleteWhere,
-    // ── Sky.Core.Secret — opaque secret-string wrapper ─────────
+    // ── Ipe.Secret — opaque secret-string wrapper ─────────
     // The ONLY public constructor: every `Secret` value traces back to one of
     // these calls. Never derivable from a bare `String` implicitly.
     /// `Secret.fromString : String -> Secret` — the seal; construction boundary.
@@ -1347,8 +1347,8 @@ pub enum StdlibKernel {
     /// `ipe_runtime::secret`'s hand-written `IpeStringify` impl).
     SecretRedacted,
 
-    // ── Sky.Core.Regex — RE2 helpers ──────────────────────────────────
-    // Pure, total kernels routed via the compiled-source `Sky.Core.Regex`
+    // ── Ipe.Regex — RE2 helpers ──────────────────────────────────
+    // Pure, total kernels routed via the compiled-source `Ipe.Regex`
     // Layer-3 surface + `Ffi.kernel "Regex_*"` aliases. Runtime fns
     // (`ipe_runtime::regex_kernel::*`) are re-exported ungated — no feature gate
     // and no `project.rs` thread needed (the emitted `mod.rs` declares
@@ -1364,8 +1364,8 @@ pub enum StdlibKernel {
     /// `Regex.split : String -> String -> List String` — split on every match.
     RegexSplit,
 
-    // ── Sky.Core.Path — pure filesystem-path helpers ───────────────────
-    // Pure, total kernels routed via the compiled-source `Sky.Core.Path`
+    // ── Ipe.Path — pure filesystem-path helpers ───────────────────
+    // Pure, total kernels routed via the compiled-source `Ipe.Path`
     // Layer-3 surface + `Ffi.kernel "Path_*"` aliases. Runtime fns
     // (`ipe_runtime::path::*`) are re-exported ungated (same posture as Regex).
     /// `Path.base : String -> String` — final path component.
@@ -1377,7 +1377,7 @@ pub enum StdlibKernel {
     /// `Path.isAbsolute : String -> Bool` — does the path start from the root?
     PathIsAbsolute,
 
-    // ── Std.Trace — opt-in tracing spans ──────────────────────────────
+    // ── Ipe.Trace — opt-in tracing spans ──────────────────────────────
     // Task-effectful; runtime fns `ipe_runtime::trace::*` are re-exported
     // (emitted `mod.rs` declares `trace` unconditionally). Class `Pure` (the
     // effect lives in the `Task` scheme, same as File/Io/Http).
@@ -1388,7 +1388,7 @@ pub enum StdlibKernel {
     /// `Trace.attr : String -> String -> Task Error ()` — annotate the span.
     TraceAttr,
 
-    // ── Std.Compression — gzip + zstd ─────────────────────────────────
+    // ── Ipe.Compression — gzip + zstd ─────────────────────────────────
     // Task-effectful; runtime `ipe_runtime::compression::*`. Operates on `Bytes`
     // (`Vec<u8>`) to match the runtime `compression_*(Vec<u8>) -> Vec<u8>` shape.
     /// `Compression.gzip : Bytes -> Task Error Bytes`.
@@ -1400,7 +1400,7 @@ pub enum StdlibKernel {
     /// `Compression.zstdDecompress : Bytes -> Task Error Bytes`.
     CompressionZstdDecompress,
 
-    // ── Std.Csv — RFC 4180 encode/decode ──────────────────────────────
+    // ── Ipe.Csv — RFC 4180 encode/decode ──────────────────────────────
     // Runtime `ipe_runtime::csv::*`. `Csv` is the record
     // `{ header : List String, rows : List (List String) }`.
     /// `Csv.parse : String -> Result Error Csv`.
@@ -1414,10 +1414,10 @@ pub enum StdlibKernel {
     /// `Csv.parseStreamFromFile : String -> Task Error (List (List String))`.
     CsvParseStreamFromFile,
 
-    // ── Std.Cache — in-memory LRU + TTL cache ─────────────────────────
+    // ── Ipe.Cache — in-memory LRU + TTL cache ─────────────────────────
     // Task-effectful; runtime `ipe_runtime::cache::*` (the emitted `mod.rs`
     // declares `cache` unconditionally — same ungated-vendoring posture as
-    // Csv/Compression). Routed via the compiled-source `Std.Cache` Layer-3
+    // Csv/Compression). Routed via the compiled-source `Ipe.Cache` Layer-3
     // surface + `Ffi.kernel "Cache_*"` aliases. Class `Pure` (the effect lives
     // in the `Task` scheme, same as File/Io/Http). All kernels take the raw
     // `Int` handle; the surface `Cache k v` ADT is unwrapped in Sky source.
@@ -1436,7 +1436,7 @@ pub enum StdlibKernel {
     /// `Cache.statsRaw : Int -> Task Error { hits, misses, evictions }`.
     CacheStats,
 
-    // ── Std.Config — typed TOML/YAML/JSON decoders ────────────────────
+    // ── Ipe.Config — typed TOML/YAML/JSON decoders ────────────────────
     // Config shares the JSON `Decoder<E, T>` carrier and its `decode_*`
     // combinator runtime fns: `string`/`int`/`float`/`bool`/`field`/`at`/
     // `list`/`map`/`andThen`/`succeed`/`fail` route to the SAME runtime fns
@@ -1479,9 +1479,9 @@ pub enum StdlibKernel {
     ConfigDecodeJson,
     /// `Config.loadFromFile : String -> Decoder a -> Task Error a`.
     ConfigLoadFromFile,
-    // ── Std.Email — provider-abstract email send ──────────────────────
+    // ── Ipe.Email — provider-abstract email send ──────────────────────
     // Task-effectful; runtime `ipe_runtime::email::email_send`. Routed via the
-    // compiled-source `Std.Email` Layer-3 surface + `Ffi.kernel "Email_send"`.
+    // compiled-source `Ipe.Email` Layer-3 surface + `Ffi.kernel "Email_send"`.
     // Class `Pure` (the effect lives in the `Task` scheme, same as File/Http).
     // Takes the runtime `EmailProvider` enum + `EmailMessage` struct (the Sky
     // ADT / record aliases fold to those nominal runtime types).
@@ -1621,7 +1621,7 @@ impl StdlibKernel {
             Self::BasicsMax => d("Basics", "max", 2, Pure, "math_max"),
             Self::BasicsCompare => d("Basics", "compare", 2, Pure, "basics_compare"),
             // ── end Basics numerics ──────────────────────────────────────
-            // ── Error (Sky.Core.Error — real Error/ErrorKind ADT) ──
+            // ── Error (Ipe.Error — real Error/ErrorKind ADT) ──
             // Each message constructor classifies its own `ErrorKind` at
             // construction (`ipe_runtime::error::IpeError`, no longer a
             // shared string-identity). `toString` reuses the existing
@@ -1649,7 +1649,7 @@ impl StdlibKernel {
             Self::ErrorWithMessage => d("Error", "withMessage", 2, Pure, "ipe_error_with_message"),
             Self::ErrorIsRetryable => d("Error", "isRetryable", 1, Pure, "ipe_error_is_retryable"),
             Self::ErrorWithDetails => d("Error", "withDetails", 2, Pure, "ipe_error_with_details"),
-            // ── CssSafety (Sky.Core.CssSafety — Std.Css leaf kernels) ────
+            // ── CssSafety (Ipe.CssSafety — Ipe.Css leaf kernels) ────
             // The `emit` symbols are the bare runtime fn names re-exported at the
             // `ipe_runtime` root (`pub use css::*`): `safe_value` /
             // `safe_prop_name` / `safe_selector` / `strip_style_close_kernel`.
@@ -2099,7 +2099,7 @@ impl StdlibKernel {
             Self::PubSubPublishNoEcho => {
                 d("PubSub", "publishNoEcho", 2, Tea, "pubsub_publish_no_echo")
             }
-            // ── Sky.Http.Server / Middleware / RateLimit ─────────────────────
+            // ── Ipe.Http.Server / Middleware / RateLimit ─────────────────────
             Self::ServerGet => d("Server", "get", 2, Server, "server_get"),
             Self::ServerPost => d("Server", "post", 2, Server, "server_post"),
             Self::ServerPut => d("Server", "put", 2, Server, "server_put"),
@@ -2151,14 +2151,14 @@ impl StdlibKernel {
                 d("Middleware", "withCsrf", 1, Server, "middleware_with_csrf")
             }
             Self::RateLimitAllow => d("RateLimit", "allow", 4, Server, "rate_limit_allow"),
-            // ── Std.Ui / Std.Html render kernels ─────────────────────────
+            // ── Ipe.Ui / Ipe.Html render kernels ─────────────────────────
             Self::UiLayout => d("Ui", "layout", 2, Ui, "ui_layout"),
             Self::UiLayoutWith => d("Ui", "layoutWith", 2, Ui, "ui_layout_with"),
             Self::HtmlRender => d("Html", "render", 1, Ui, "html_render_"),
             Self::HtmlEscapeText => d("Html", "escapeHtml", 1, Ui, "html_escape_text_"),
             Self::HtmlEscapeAttr => d("Html", "escapeAttr", 1, Ui, "html_escape_attr_"),
             Self::HtmlAttrToString => d("Html", "attrToString", 1, Ui, "html_attr_to_string_"),
-            // ── Std.Ui element builders ──────────────────────────────────
+            // ── Ipe.Ui element builders ──────────────────────────────────
             Self::UiNone => d("Ui", "none", 0, Ui, "ui_none_"),
             Self::UiText => d("Ui", "text", 1, Ui, "ui_text_"),
             Self::UiHtml => d("Ui", "html", 1, Ui, "ui_html_"),
@@ -2173,14 +2173,14 @@ impl StdlibKernel {
             Self::UiLink => d("Ui", "link", 2, Ui, "ui_link_"),
             Self::UiForm => d("Ui", "form", 2, Ui, "ui_form_"),
             Self::UiImage => d("Ui", "image", 2, Ui, "ui_image_"),
-            // ── Std.Ui nearby attribute builders ───────────────────────
+            // ── Ipe.Ui nearby attribute builders ───────────────────────
             Self::UiAbove => d("Ui", "above", 1, Ui, "ui_above_"),
             Self::UiBelow => d("Ui", "below", 1, Ui, "ui_below_"),
             Self::UiOnLeft => d("Ui", "onLeft", 1, Ui, "ui_on_left_"),
             Self::UiOnRight => d("Ui", "onRight", 1, Ui, "ui_on_right_"),
             Self::UiInFront => d("Ui", "inFront", 1, Ui, "ui_in_front_"),
             Self::UiBehind => d("Ui", "behind", 1, Ui, "ui_behind_"),
-            // ── Std.Ui attribute builders ────────────────────────────────
+            // ── Ipe.Ui attribute builders ────────────────────────────────
             Self::UiSpacing => d("Ui", "spacing", 1, Ui, "ui_spacing_"),
             Self::UiPadding => d("Ui", "padding", 1, Ui, "ui_padding_"),
             Self::UiPaddingXY => d("Ui", "paddingXY", 2, Ui, "ui_padding_xy_"),
@@ -2201,7 +2201,7 @@ impl StdlibKernel {
             Self::UiScrollbarX => d("Ui", "scrollbarX", 0, Ui, "ui_scrollbar_x_"),
             Self::UiScrollbarY => d("Ui", "scrollbarY", 0, Ui, "ui_scrollbar_y_"),
             Self::UiGridColumns => d("Ui", "gridColumns", 1, Ui, "ui_grid_columns_"),
-            // ── Std.Ui Length builders ───────────────────────────────────
+            // ── Ipe.Ui Length builders ───────────────────────────────────
             Self::UiPx => d("Ui", "px", 1, Ui, "ui_px_"),
             Self::UiFill => d("Ui", "fill", 0, Ui, "ui_fill_"),
             Self::UiContent => d("Ui", "content", 0, Ui, "ui_content_"),
@@ -2211,7 +2211,7 @@ impl StdlibKernel {
             Self::UiVw => d("Ui", "vw", 1, Ui, "ui_vw_"),
             Self::UiMinimum => d("Ui", "minimum", 2, Ui, "ui_minimum_"),
             Self::UiMaximum => d("Ui", "maximum", 2, Ui, "ui_maximum_"),
-            // ── Std.Ui Color builders ────────────────────────────────────
+            // ── Ipe.Ui Color builders ────────────────────────────────────
             Self::UiRgb => d("Ui", "rgb", 3, Ui, "ui_rgb_"),
             Self::UiRgba => d("Ui", "rgba", 4, Ui, "ui_rgba_"),
             Self::UiWhite => d("Ui", "white", 0, Ui, "ui_white_"),
@@ -2260,7 +2260,7 @@ impl StdlibKernel {
             Self::HtmlP => d("Html", "p", 2, Ui, "html_p_"),
             Self::HtmlInput => d("Html", "input", 1, Ui, "html_input_"),
             Self::HtmlImg => d("Html", "img", 1, Ui, "html_img_"),
-            // ── Std.Html element builders (tag baked via decl name) ─
+            // ── Ipe.Html element builders (tag baked via decl name) ─
             Self::HtmlH1 => d("Html", "h1", 2, Ui, "html_node_"),
             Self::HtmlH2 => d("Html", "h2", 2, Ui, "html_node_"),
             Self::HtmlH3 => d("Html", "h3", 2, Ui, "html_node_"),
@@ -2329,7 +2329,7 @@ impl StdlibKernel {
             Self::HtmlSource => d("Html", "source", 1, Ui, "html_node_"),
             Self::HtmlTrack => d("Html", "track", 1, Ui, "html_node_"),
             Self::HtmlWbr => d("Html", "wbr", 1, Ui, "html_node_"),
-            // ── Std.Html.Attributes builders ────────────────────────────
+            // ── Ipe.Html.Attributes builders ────────────────────────────
             // Qualifier "Attr" matches the `QUALIFIERS` table in env.rs. Emit
             // routes through the two generic runtime helpers; the fixed key is
             // supplied by the emit arm (see `html_attr_key`).
@@ -2356,15 +2356,15 @@ impl StdlibKernel {
             Self::HtmlAttribute => d("Attr", "attribute", 2, Ui, "html_named_attr_"),
             Self::HtmlBoolAttribute => d("Attr", "boolAttribute", 2, Ui, "html_bool_named_attr_"),
             Self::HtmlNoAttr => d("Attr", "noAttr", 0, Ui, "html_no_attr_"),
-            // ── Std.Live app-entry kernels ───────────────────────────────
+            // ── Ipe.Live app-entry kernels ───────────────────────────────
             Self::LiveApp => d("Live", "app", 1, Live, "live_app"),
             Self::LiveAppRouted => d("Live", "appRouted", 1, Live, "live_app_routed"),
             Self::LiveRoute => d("Live", "route", 2, Live, "live_route"),
             Self::LiveRenderStatic => d("Live", "renderStatic", 2, Live, "live_render_static"),
-            // ── Std.Tui app-entry kernels ────────────────────────────────
+            // ── Ipe.Tui app-entry kernels ────────────────────────────────
             Self::TuiProgram => d("Tui", "program", 1, Tui, "tui_app"),
             Self::TuiApp => d("Tui", "app", 1, Tui, "tui_app_ui"),
-            // ── Std.Webview app-entry kernel ─────────────────────────────
+            // ── Ipe.Webview app-entry kernel ─────────────────────────────
             Self::WebviewApp => d("Webview", "app", 1, Webview, "webview_app"),
             // ── event-attribute builders ─────────────────────────────────
             Self::UiOnClick => d("Ui", "onClick", 1, Ui, "ui_on_click_"),
@@ -2379,7 +2379,7 @@ impl StdlibKernel {
             Self::UiOnBool => d("Ui", "onBool", 1, Ui, "ui_on_bool_"),
             Self::UiOnSubmit => d("Ui", "onSubmit", 1, Ui, "ui_on_submit_"),
             Self::UiOnFile => d("Ui", "onFile", 1, Ui, "ui_on_file_"),
-            // ── Std.Html.Events builders (qualifier "Event" — matches the
+            // ── Ipe.Html.Events builders (qualifier "Event" — matches the
             // `QUALIFIERS` table in env.rs). Each produces `html::Attribute<M>`
             // via a dedicated runtime constructor (family `Ui` so emit routes
             // through `emit_ui_call`). The emit arm supplies the fixed wire
@@ -2480,9 +2480,9 @@ impl StdlibKernel {
             Self::HtmlAttrTabindex => d("Attr", "tabindex", 1, Ui, "html_attr_tabindex_"),
             Self::HtmlAttrRows => d("Attr", "rows", 1, Ui, "html_attr_rows_"),
             // ── Effect stdlib modules ────────────────────────────────────
-            // Std.Cli / Sky.Cli app-entry.
+            // Ipe.Cli / Ipe.Cli app-entry.
             Self::CliProgram => d("Cli", "program", 1, KernelClass::Cli, "cli_program"),
-            // Std.Auth / Sky.Auth (fail-closed: qual-registered only, no lower arm).
+            // Ipe.Auth / Ipe.Auth (fail-closed: qual-registered only, no lower arm).
             Self::AuthHashPassword => d("Auth", "hashPassword", 1, Pure, "auth_hash_password"),
             Self::AuthHashPasswordCost => d(
                 "Auth",
@@ -2506,7 +2506,7 @@ impl StdlibKernel {
             Self::AuthRegister => d("Auth", "register", 3, Pure, "auth_register"),
             Self::AuthLogin => d("Auth", "login", 3, Pure, "auth_login"),
             Self::AuthSetRole => d("Auth", "setRole", 3, Pure, "auth_set_role"),
-            // Sky.Http.Server.Stream (fail-closed: qual-registered only, no lower arm).
+            // Ipe.Http.Server.Stream (fail-closed: qual-registered only, no lower arm).
             Self::StreamStream => d("Stream", "stream", 2, Server, "server_stream_stream"),
             Self::StreamEmit => d("Stream", "emit", 2, Server, "server_stream_emit"),
             Self::StreamFinish => d("Stream", "finish", 1, Server, "server_stream_finish"),
@@ -2517,7 +2517,7 @@ impl StdlibKernel {
                 Server,
                 "server_stream_with_content_type",
             ),
-            // Sky.Core.Http.Stream (fail-closed: qual-registered only, no lower arm).
+            // Ipe.Http.Stream (fail-closed: qual-registered only, no lower arm).
             Self::HttpStreamOpen => d("HttpStream", "open", 1, Pure, "http_stream_open"),
             Self::HttpStreamForEachChunk => d(
                 "HttpStream",
@@ -2528,7 +2528,7 @@ impl StdlibKernel {
             ),
             Self::HttpStreamClose => d("HttpStream", "close", 1, Pure, "http_stream_close"),
             Self::HttpStreamChunks => d("HttpStream", "chunks", 2, Pure, "sub_subscribe_stream"),
-            // ── Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
+            // ── Ipe.Http.Server.WebSocket (12 kernels) ─────────────────────
             Self::WsDefaultCfg => d("Ws", "defaultCfg", 0, Server, "ws_server_default_cfg"),
             Self::WsWithOnConnect => d(
                 "Ws",
@@ -2571,7 +2571,7 @@ impl StdlibKernel {
             ),
             Self::WsBroadcast => d("Ws", "broadcast", 2, Server, "ws_server_broadcast"),
             Self::WsCloseClient => d("Ws", "closeClient", 1, Server, "ws_server_close_client"),
-            // ── Sky.Core.WebSocket — outbound WebSocket client (7 kernels) ──
+            // ── Ipe.WebSocket — outbound WebSocket client (7 kernels) ──
             // The Task-tier six are `Pure`-classed (plain effects, default N-arg
             // emit like `Http.get`); the runtime fns live in `ws_client.rs`
             // (gated by the `websocket_client` feature the backend adds via the
@@ -2596,7 +2596,7 @@ impl StdlibKernel {
             Self::SubSubscribeWebSocket => {
                 d("Sub", "subscribeWebSocket", 3, Tea, "sub_subscribe_ws_message")
             }
-            // ── Std.Ui.Region ──────────────────────────────────────────────
+            // ── Ipe.Ui.Region ──────────────────────────────────────────────
             Self::RegionMainContent => d("Region", "mainContent", 0, Ui, "ui_region_main_content_"),
             Self::RegionNavigation => d("Region", "navigation", 0, Ui, "ui_region_navigation_"),
             Self::RegionFooter => d("Region", "footer", 0, Ui, "ui_region_footer_"),
@@ -2626,7 +2626,7 @@ impl StdlibKernel {
             }
             Self::UiDescHeading => d("Ui", "descHeading", 1, Ui, "ui_desc_heading_"),
             Self::UiDescLabel => d("Ui", "descLabel", 1, Ui, "ui_desc_label_"),
-            // ── Std.Ui.Input ───────────────────────────────────────────
+            // ── Ipe.Ui.Input ───────────────────────────────────────────
             Self::InputLabelAbove => d("Input", "labelAbove", 2, Ui, "input_label_above_"),
             Self::InputLabelBelow => d("Input", "labelBelow", 2, Ui, "input_label_below_"),
             Self::InputLabelLeft => d("Input", "labelLeft", 2, Ui, "input_label_left_"),
@@ -2648,16 +2648,16 @@ impl StdlibKernel {
             Self::InputOption => d("Input", "option", 2, Ui, "input_option_"),
             Self::InputRadio => d("Input", "radio", 2, Ui, "input_radio_"),
             Self::InputRadioRow => d("Input", "radioRow", 2, Ui, "input_radio_row_"),
-            // ── Std.Ui.Lazy ─────────────────────────────────────��──────
+            // ── Ipe.Ui.Lazy ─────────────────────────────────────��──────
             Self::LazyLazy => d("Lazy", "lazy", 2, Ui, "lazy_lazy_"),
             Self::LazyLazy2 => d("Lazy", "lazy2", 3, Ui, "lazy_lazy2_"),
             Self::LazyLazy3 => d("Lazy", "lazy3", 4, Ui, "lazy_lazy3_"),
             Self::LazyLazy4 => d("Lazy", "lazy4", 5, Ui, "lazy_lazy4_"),
             Self::LazyLazy5 => d("Lazy", "lazy5", 6, Ui, "lazy_lazy5_"),
-            // ── Std.Ui.Keyed ────────────────────────────────────────────────
+            // ── Ipe.Ui.Keyed ────────────────────────────────────────────────
             Self::KeyedColumn => d("Keyed", "column", 2, Ui, "keyed_column_"),
             Self::KeyedRow => d("Keyed", "row", 2, Ui, "keyed_row_"),
-            // ── Std.Decimal — arbitrary-precision decimal arithmetic ──────────
+            // ── Ipe.Decimal — arbitrary-precision decimal arithmetic ──────────
             Self::DecZero => d("Decimal", "zero", 0, Pure, "decimal_zero"),
             Self::DecOne => d("Decimal", "one", 0, Pure, "decimal_one"),
             Self::DecOneHundred => d("Decimal", "oneHundred", 0, Pure, "decimal_one_hundred"),
@@ -2704,7 +2704,7 @@ impl StdlibKernel {
             Self::DecAddPercent => d("Decimal", "addPercent", 2, Pure, "decimal_add_percent"),
             Self::DecSubPercent => d("Decimal", "subPercent", 2, Pure, "decimal_sub_percent"),
             Self::DecFormatWith => d("Decimal", "formatWith", 4, Pure, "decimal_format_with"),
-            // ── Std.Db.Sql — SqlFragment builder ───────────────
+            // ── Ipe.Db.Sql — SqlFragment builder ───────────────
             Self::SqlColumn => d("Sql", "column", 1, Db, "sql_column"),
             // `int` / `string` / `float` / `bool` are Sky-level type
             // narrowings of `param`; all five share the `sql_param` runtime
@@ -2729,11 +2729,11 @@ impl StdlibKernel {
             Self::SqlLike => d("Sql", "like", 2, Db, "sql_like"),
             Self::DbFindWhere => d("Db", "findWhere", 3, Db, "db_find_where"),
             Self::DbDeleteWhere => d("Db", "deleteWhere", 3, Db, "db_delete_where"),
-            // ── Sky.Core.Secret — opaque secret-string wrapper ─
+            // ── Ipe.Secret — opaque secret-string wrapper ─
             Self::SecretFromString => d("Secret", "fromString", 1, Pure, "secret_from_string"),
             Self::SecretReveal => d("Secret", "reveal", 1, Pure, "secret_reveal"),
             Self::SecretRedacted => d("Secret", "redacted", 1, Pure, "secret_redacted"),
-            // ── Sky.Core.Regex ────────────────────────────────────────
+            // ── Ipe.Regex ────────────────────────────────────────
             // Runtime names MUST match `ipe_runtime::regex_kernel::*` exactly
             // (note `regex_find_all`). Class `Pure` — the kernels are total/pure
             // (no effect); the HM scheme carries no `Task`.
@@ -2742,19 +2742,19 @@ impl StdlibKernel {
             Self::RegexFindAll => d("Regex", "findAll", 2, Pure, "regex_find_all"),
             Self::RegexReplace => d("Regex", "replace", 3, Pure, "regex_replace"),
             Self::RegexSplit => d("Regex", "split", 2, Pure, "regex_split"),
-            // ── Sky.Core.Path ─────────────────────────────────────────
+            // ── Ipe.Path ─────────────────────────────────────────
             // Runtime names MUST match `ipe_runtime::path::*` exactly
             // (`path_is_absolute`). Pure/total, no effect.
             Self::PathBase => d("Path", "base", 1, Pure, "path_base"),
             Self::PathDir => d("Path", "dir", 1, Pure, "path_dir"),
             Self::PathExt => d("Path", "ext", 1, Pure, "path_ext"),
             Self::PathIsAbsolute => d("Path", "isAbsolute", 1, Pure, "path_is_absolute"),
-            // ── Std.Trace ─────────────────────────────────────────────
+            // ── Ipe.Trace ─────────────────────────────────────────────
             // Runtime names MUST match `ipe_runtime::trace::*` exactly.
             Self::TraceSpan => d("Trace", "span", 2, Pure, "trace_span"),
             Self::TraceEvent => d("Trace", "event", 1, Pure, "trace_event"),
             Self::TraceAttr => d("Trace", "attr", 2, Pure, "trace_attr"),
-            // ── Std.Compression ───────────────────────────────────────
+            // ── Ipe.Compression ───────────────────────────────────────
             // Runtime names MUST match `ipe_runtime::compression::*` exactly.
             Self::CompressionGzip => d("Compression", "gzip", 1, Pure, "compression_gzip"),
             Self::CompressionGunzip => d("Compression", "gunzip", 1, Pure, "compression_gunzip"),
@@ -2772,7 +2772,7 @@ impl StdlibKernel {
                 Pure,
                 "compression_zstd_decompress",
             ),
-            // ── Std.Csv ───────────────────────────────────────────────
+            // ── Ipe.Csv ───────────────────────────────────────────────
             Self::CsvParse => d("Csv", "parse", 1, Pure, "csv_parse"),
             Self::CsvParseWithDelimiter => d(
                 "Csv",
@@ -2796,7 +2796,7 @@ impl StdlibKernel {
                 Pure,
                 "csv_parse_stream_from_file",
             ),
-            // ── Std.Cache ─────────────────────────────────────────────
+            // ── Ipe.Cache ─────────────────────────────────────────────
             // Runtime names MUST match `ipe_runtime::cache::*` exactly. Alias
             // strings `Cache_newRaw`/`Cache_get`/… split to qualifier `Cache` +
             // the `*Raw`-stripped `name` written here; the emit column is the
@@ -2809,7 +2809,7 @@ impl StdlibKernel {
             Self::CacheSize => d("Cache", "size", 1, Pure, "cache_size"),
             Self::CacheStats => d("Cache", "stats", 1, Pure, "cache_stats"),
 
-            // ── Std.Config ────────────────────────────────────────────
+            // ── Ipe.Config ────────────────────────────────────────────
             // The 11 combinator/primitive kernels share the JSON `decode_*`
             // runtime fns; the 5 format/nullable/load kernels are Config-own
             // (`ipe_runtime::config_decode::*`).
@@ -2831,7 +2831,7 @@ impl StdlibKernel {
             Self::ConfigLoadFromFile => {
                 d("Config", "loadFromFile", 2, Pure, "config_load_from_file")
             }
-            // ── Std.Email ─────────────────────────────────────────────
+            // ── Ipe.Email ─────────────────────────────────────────────
             // Alias `Email_send` splits to qualifier `Email` + name `send`; the
             // emit column is the runtime fn `ipe_runtime::email::email_send`.
             Self::EmailSend => d("Email", "send", 2, Pure, "email_send"),
@@ -2954,7 +2954,7 @@ impl StdlibKernel {
         Self::BasicsMax,
         Self::BasicsCompare,
         // ── end Basics numerics ──────────────────────────────────────
-        // Error (Sky.Core.Error — minimal `Error = String` slice)
+        // Error (Ipe.Error — minimal `Error = String` slice)
         Self::ErrorUnexpected,
         Self::ErrorInvalidInput,
         Self::ErrorIo,
@@ -2970,7 +2970,7 @@ impl StdlibKernel {
         Self::ErrorWithMessage,
         Self::ErrorIsRetryable,
         Self::ErrorWithDetails,
-        // CssSafety (Sky.Core.CssSafety — Std.Css leaf security kernels)
+        // CssSafety (Ipe.CssSafety — Ipe.Css leaf security kernels)
         Self::CssSafetySafeValue,
         Self::CssSafetySafePropName,
         Self::CssSafetySafeSelector,
@@ -3291,7 +3291,7 @@ impl StdlibKernel {
         // tripwire skips; kept here so they appear in the registry index)
         Self::PubSubPublish,
         Self::PubSubPublishNoEcho,
-        // Sky.Http.Server / Middleware / RateLimit
+        // Ipe.Http.Server / Middleware / RateLimit
         Self::ServerGet,
         Self::ServerPost,
         Self::ServerPut,
@@ -3419,7 +3419,7 @@ impl StdlibKernel {
         Self::HtmlP,
         Self::HtmlInput,
         Self::HtmlImg,
-        // Std.Html element builders (container + void).
+        // Ipe.Html element builders (container + void).
         Self::HtmlH1,
         Self::HtmlH2,
         Self::HtmlH3,
@@ -3488,7 +3488,7 @@ impl StdlibKernel {
         Self::HtmlSource,
         Self::HtmlTrack,
         Self::HtmlWbr,
-        // Std.Html.Attributes builders (all registered under "Attr" in
+        // Ipe.Html.Attributes builders (all registered under "Attr" in
         // env.rs QUALIFIERS).
         Self::HtmlAttrClass,
         Self::HtmlAttrId,
@@ -3542,7 +3542,7 @@ impl StdlibKernel {
         Self::UiOnBool,
         Self::UiOnSubmit,
         Self::UiOnFile,
-        // Std.Html.Events builders (produce html_attr)
+        // Ipe.Html.Events builders (produce html_attr)
         Self::HtmlOnClick,
         Self::HtmlOnFocus,
         Self::HtmlOnBlur,
@@ -3636,7 +3636,7 @@ impl StdlibKernel {
         Self::HttpStreamForEachChunk,
         Self::HttpStreamClose,
         Self::HttpStreamChunks,
-        // ── Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
+        // ── Ipe.Http.Server.WebSocket (12 kernels) ─────────────────────
         Self::WsDefaultCfg,
         Self::WsWithOnConnect,
         Self::WsWithOnMessage,
@@ -3649,7 +3649,7 @@ impl StdlibKernel {
         Self::WsSendBinaryToClient,
         Self::WsBroadcast,
         Self::WsCloseClient,
-        // ── Sky.Core.WebSocket — outbound WebSocket client (7 kernels) ──
+        // ── Ipe.WebSocket — outbound WebSocket client (7 kernels) ──
         Self::WebSocketConnect,
         Self::WebSocketConnectWith,
         Self::WebSocketSend,
@@ -3657,7 +3657,7 @@ impl StdlibKernel {
         Self::WebSocketClose,
         Self::WebSocketCloseWithCode,
         Self::SubSubscribeWebSocket,
-        // ── Std.Ui.Region ──────────────────────────────────────────────
+        // ── Ipe.Ui.Region ──────────────────────────────────────────────
         Self::RegionMainContent,
         Self::RegionNavigation,
         Self::RegionFooter,
@@ -3677,7 +3677,7 @@ impl StdlibKernel {
         Self::UiDescLiveAssertive,
         Self::UiDescHeading,
         Self::UiDescLabel,
-        // ── Std.Ui.Input ───────────────────────────────────────────────
+        // ── Ipe.Ui.Input ───────────────────────────────────────────────
         Self::InputLabelAbove,
         Self::InputLabelBelow,
         Self::InputLabelLeft,
@@ -3696,16 +3696,16 @@ impl StdlibKernel {
         Self::InputOption,
         Self::InputRadio,
         Self::InputRadioRow,
-        // ── Std.Ui.Lazy ────────────────────────────────────────────────
+        // ── Ipe.Ui.Lazy ────────────────────────────────────────────────
         Self::LazyLazy,
         Self::LazyLazy2,
         Self::LazyLazy3,
         Self::LazyLazy4,
         Self::LazyLazy5,
-        // ── Std.Ui.Keyed ──────────────────────────────────────────────────────
+        // ── Ipe.Ui.Keyed ──────────────────────────────────────────────────────
         Self::KeyedColumn,
         Self::KeyedRow,
-        // ── Std.Decimal ───────────────────────────────────────────────────────
+        // ── Ipe.Decimal ───────────────────────────────────────────────────────
         Self::DecZero,
         Self::DecOne,
         Self::DecOneHundred,
@@ -3770,33 +3770,33 @@ impl StdlibKernel {
         Self::SecretFromString,
         Self::SecretReveal,
         Self::SecretRedacted,
-        // ── Sky.Core.Regex ────────────────────────────────────────────
+        // ── Ipe.Regex ────────────────────────────────────────────
         Self::RegexMatch,
         Self::RegexFind,
         Self::RegexFindAll,
         Self::RegexReplace,
         Self::RegexSplit,
-        // ── Sky.Core.Path ─────────────────────────────────────────────
+        // ── Ipe.Path ─────────────────────────────────────────────
         Self::PathBase,
         Self::PathDir,
         Self::PathExt,
         Self::PathIsAbsolute,
-        // ── Std.Trace ─────────────────────────────────────────────────
+        // ── Ipe.Trace ─────────────────────────────────────────────────
         Self::TraceSpan,
         Self::TraceEvent,
         Self::TraceAttr,
-        // ── Std.Compression ───────────────────────────────────────────
+        // ── Ipe.Compression ───────────────────────────────────────────
         Self::CompressionGzip,
         Self::CompressionGunzip,
         Self::CompressionZstdCompress,
         Self::CompressionZstdDecompress,
-        // ── Std.Csv ───────────────────────────────────────────────────
+        // ── Ipe.Csv ───────────────────────────────────────────────────
         Self::CsvParse,
         Self::CsvParseWithDelimiter,
         Self::CsvEncode,
         Self::CsvEncodeWithDelimiter,
         Self::CsvParseStreamFromFile,
-        // ── Std.Cache ─────────────────────────────────────────────────
+        // ── Ipe.Cache ─────────────────────────────────────────────────
         Self::CacheNewRaw,
         Self::CacheGet,
         Self::CachePut,
@@ -3820,7 +3820,7 @@ impl StdlibKernel {
         Self::ConfigDecodeYaml,
         Self::ConfigDecodeJson,
         Self::ConfigLoadFromFile,
-        // ── Std.Email ─────────────────────────────────────────────────
+        // ── Ipe.Email ─────────────────────────────────────────────────
         Self::EmailSend,
     ];
 
@@ -3871,7 +3871,7 @@ impl StdlibKernel {
                 | Self::DbDecRequired
                 | Self::DbDecOptional
                 | Self::DbDecMoney
-                // ── Std.Db.Sql — classified `Db` like
+                // ── Ipe.Db.Sql — classified `Db` like
                 // `Db.Decode.*` above: no live connection is touched by the
                 // combinators, but the runtime types they build on
                 // (`SqlFragment` / `SqlParam`) live in this crate's
@@ -3924,7 +3924,7 @@ impl StdlibKernel {
         )
     }
 
-    /// `true` when this variant belongs to the `Sky.Http.Server` / Middleware
+    /// `true` when this variant belongs to the `Ipe.Http.Server` / Middleware
     /// / `RateLimit` subsystem.
     #[must_use]
     pub const fn is_server(self) -> bool {
@@ -3959,16 +3959,16 @@ impl StdlibKernel {
                 | Self::MiddlewareWithRateLimit
                 | Self::MiddlewareWithCsrf
                 | Self::RateLimitAllow
-                // ── Sky.Http.Server.Stream (server-side) ───────────────────
+                // ── Ipe.Http.Server.Stream (server-side) ───────────────────
                 | Self::StreamStream
                 | Self::StreamEmit
                 | Self::StreamFinish
                 | Self::StreamWithContentType
-                // ── Sky.Core.Http.Stream (client-side relay) ───────────────
+                // ── Ipe.Http.Stream (client-side relay) ───────────────
                 | Self::HttpStreamOpen
                 | Self::HttpStreamForEachChunk
                 | Self::HttpStreamClose
-                // ── Sky.Http.Server.WebSocket (12 kernels) ─────────────
+                // ── Ipe.Http.Server.WebSocket (12 kernels) ─────────────
                 | Self::WsDefaultCfg
                 | Self::WsWithOnConnect
                 | Self::WsWithOnMessage
@@ -3984,7 +3984,7 @@ impl StdlibKernel {
         )
     }
 
-    /// `true` when this variant is an outbound `Sky.Core.WebSocket` CLIENT
+    /// `true` when this variant is an outbound `Ipe.WebSocket` CLIENT
     /// kernel (the 6 Task-tier connect/send/close kernels plus the Sub-tier
     /// `Sub.subscribeWebSocket`).
     ///
@@ -4006,8 +4006,8 @@ impl StdlibKernel {
         )
     }
 
-    /// `true` when this variant belongs to the `Std.Auth` kernel family
-    /// (`Std.Auth.hashPassword` / `verifyPassword` / `signToken` / `verifyToken` /
+    /// `true` when this variant belongs to the `Ipe.Auth` kernel family
+    /// (`Ipe.Auth.hashPassword` / `verifyPassword` / `signToken` / `verifyToken` /
     /// `register` / `login` / `setRole` and companions).
     ///
     /// Used by `ipe_lower` to detect `uses_auth` and emit the `auth` module into
@@ -4028,7 +4028,7 @@ impl StdlibKernel {
         )
     }
 
-    /// `true` when this variant belongs to the `Std.Ui` / `Std.Html`
+    /// `true` when this variant belongs to the `Ipe.Ui` / `Ipe.Html`
     /// subsystem.
     #[must_use]
     #[allow(clippy::too_many_lines)] // exhaustive Ui/Html kernel enumeration
@@ -4305,7 +4305,7 @@ impl StdlibKernel {
                 | Self::FontHoverSize
                 | Self::HtmlAttrTabindex
                 | Self::HtmlAttrRows
-                // ── Std.Ui.Region ──────────────────────────────────────
+                // ── Ipe.Ui.Region ──────────────────────────────────────
                 | Self::RegionMainContent
                 | Self::RegionNavigation
                 | Self::RegionFooter
@@ -4325,7 +4325,7 @@ impl StdlibKernel {
                 | Self::UiDescLiveAssertive
                 | Self::UiDescHeading
                 | Self::UiDescLabel
-                // ── Std.Ui.Input ───────────────────────────────────────
+                // ── Ipe.Ui.Input ───────────────────────────────────────
                 | Self::InputLabelAbove
                 | Self::InputLabelBelow
                 | Self::InputLabelLeft
@@ -4344,19 +4344,19 @@ impl StdlibKernel {
                 | Self::InputOption
                 | Self::InputRadio
                 | Self::InputRadioRow
-                // ── Std.Ui.Lazy ────────────────────────────────────────
+                // ── Ipe.Ui.Lazy ────────────────────────────────────────
                 | Self::LazyLazy
                 | Self::LazyLazy2
                 | Self::LazyLazy3
                 | Self::LazyLazy4
                 | Self::LazyLazy5
-                // ── Std.Ui.Keyed ────────────────────────────────────────────
+                // ── Ipe.Ui.Keyed ────────────────────────────────────────────
                 | Self::KeyedColumn
                 | Self::KeyedRow
         )
     }
 
-    /// The fixed wire event name for a `Std.Html.Events` builder (`onClick` →
+    /// The fixed wire event name for a `Ipe.Html.Events` builder (`onClick` →
     /// `"click"`). `None` for any non-Html-event variant. The name is a
     /// compile-time constant (never attacker data) that the emit arm passes to
     /// the `html_on_*_` runtime constructor.
@@ -4372,7 +4372,7 @@ impl StdlibKernel {
             Self::HtmlOnInput => "input",
             Self::HtmlOnKeyDown => "keydown",
             Self::HtmlOnKeyUp => "keyup",
-            // `onBool` mirrors `Std.Html.Events.onCheck` — the checkbox check
+            // `onBool` mirrors `Ipe.Html.Events.onCheck` — the checkbox check
             // state arrives on the `change` DOM event, same wire name as
             // `onChange`.
             Self::HtmlOnChange | Self::HtmlOnBool => "change",
@@ -4380,7 +4380,7 @@ impl StdlibKernel {
         })
     }
 
-    /// The event payload shape of a `Std.Html.Events` builder, driving both the
+    /// The event payload shape of a `Ipe.Html.Events` builder, driving both the
     /// constrain scheme and the emit arm. `None` for any non-Html-event variant.
     #[must_use]
     pub const fn html_event_shape(self) -> Option<HtmlEventShape> {
@@ -4434,12 +4434,12 @@ impl StdlibKernel {
     /// value is referenced.
     ///
     /// Deliberately excludes the WebSocket server-config callbacks and the
-    /// `Sky.Http.Server` request-handler shape: both are ALREADY immune by a
+    /// `Ipe.Http.Server` request-handler shape: both are ALREADY immune by a
     /// different, structural mechanism —
     /// `ipe_backend_rust::emit_expr::wants_arc_ctor` recognises their FIXED
     /// closure shape at the closure's OWN construction site and boxes with
     /// `Arc::new` there, regardless of inline-vs-`let`-bound. `Ui.on*` /
-    /// `Std.Html.Events.on*` / `Stream.stream` have no such fixed structural
+    /// `Ipe.Html.Events.on*` / `Stream.stream` have no such fixed structural
     /// shape (their callback's argument/return type is the app's own
     /// polymorphic `msg`), so they need this USAGE-SITE detection instead.
     #[must_use]
@@ -4463,7 +4463,7 @@ impl StdlibKernel {
         )
     }
 
-    /// `true` for a `Std.Html.Attributes` string-valued fixed-key builder
+    /// `true` for a `Ipe.Html.Attributes` string-valued fixed-key builder
     /// (`class`/`id`/… — `String -> Attribute msg`). Used by the backend emit
     /// arm to route through `html_named_attr_` with the wire key from
     /// [`Self::html_attr_key`].
@@ -4487,7 +4487,7 @@ impl StdlibKernel {
         )
     }
 
-    /// `true` for a `Std.Html.Attributes` bool-valued fixed-key builder
+    /// `true` for a `Ipe.Html.Attributes` bool-valued fixed-key builder
     /// (`checked`/`disabled`/… — `Bool -> Attribute msg`).
     #[must_use]
     pub const fn is_html_bool_attr(self) -> bool {
@@ -4503,7 +4503,7 @@ impl StdlibKernel {
         )
     }
 
-    /// The wire attribute name for a fixed-key `Std.Html.Attributes` builder.
+    /// The wire attribute name for a fixed-key `Ipe.Html.Attributes` builder.
     /// Matches the member name except for the two Sky-keyword-avoidance
     /// spellings `type_`→`type` and `for_`→`for`. `None` for any non-fixed-key
     /// variant (the generic `attribute`/`boolAttribute` carry the key as a
@@ -4535,7 +4535,7 @@ impl StdlibKernel {
         })
     }
 
-    /// `true` for a Std.Html CONTAINER element builder
+    /// `true` for a Ipe.Html CONTAINER element builder
     /// (`h1`/`nav`/`table`/... — `List Attr -> List Html -> Html msg`). The
     /// backend emit arm routes these through `html_node_(tag, attrs, children)`
     /// with the wire tag from [`Self::html_element_tag`]. Excludes the older
@@ -4603,7 +4603,7 @@ impl StdlibKernel {
         )
     }
 
-    /// `true` for a Std.Html VOID element builder
+    /// `true` for a Ipe.Html VOID element builder
     /// (`br`/`hr`/`meta`/`link`/... — `List Attr -> Html msg`, no children).
     /// The emit arm routes these through `html_node_(tag, attrs, vec![])`; the
     /// render sink self-closes any tag in its `VOID` set and drops children, so
@@ -4627,7 +4627,7 @@ impl StdlibKernel {
         )
     }
 
-    /// The wire tag name for a Std.Html element builder
+    /// The wire tag name for a Ipe.Html element builder
     /// (container or void). `None` for any non-element variant. The name is the
     /// HTML tag emitted verbatim as the first `html_node_` argument.
     #[must_use]
@@ -4700,7 +4700,7 @@ impl StdlibKernel {
         })
     }
 
-    /// `true` when this variant belongs to the `Std.Live` app-entry subsystem.
+    /// `true` when this variant belongs to the `Ipe.Live` app-entry subsystem.
     #[must_use]
     pub const fn is_live(self) -> bool {
         matches!(
@@ -4718,31 +4718,31 @@ impl StdlibKernel {
         )
     }
 
-    /// `true` when this variant belongs to the `Std.Tui` app-entry subsystem.
+    /// `true` when this variant belongs to the `Ipe.Tui` app-entry subsystem.
     #[must_use]
     pub const fn is_tui(self) -> bool {
         matches!(self, Self::TuiProgram | Self::TuiApp)
     }
 
-    /// `true` when this variant is the `Std.Webview` app-entry kernel.
+    /// `true` when this variant is the `Ipe.Webview` app-entry kernel.
     #[must_use]
     pub const fn is_webview(self) -> bool {
         matches!(self, Self::WebviewApp)
     }
 
-    /// `true` when this variant is the `Std.Cli` / `Sky.Cli` app-entry kernel.
+    /// `true` when this variant is the `Ipe.Cli` / `Ipe.Cli` app-entry kernel.
     #[must_use]
     pub const fn is_cli(self) -> bool {
         matches!(self, Self::CliProgram)
     }
 
-    /// `true` when this variant belongs to the `Sky.Core.CssSafety` leaf
-    /// security-kernel family (the `Std.Css` backing): `safe_value` /
+    /// `true` when this variant belongs to the `Ipe.CssSafety` leaf
+    /// security-kernel family (the `Ipe.Css` backing): `safe_value` /
     /// `safe_prop_name` / `safe_selector` / `strip_style_close_kernel`.
     ///
     /// These kernels live in `ipe_runtime::css` (which glob-re-exports their
     /// bare names) and depend only on `ipe_runtime::css_safety`. A program that
-    /// uses `Std.Css` WITHOUT any `Std.Ui` / `Std.Html` kernel does NOT set
+    /// uses `Ipe.Css` WITHOUT any `Ipe.Ui` / `Ipe.Html` kernel does NOT set
     /// `uses_ui`, so the backend consults this predicate to decide whether the
     /// emitted `ipe_runtime/mod.rs` must declare `css_safety` / `css` (and
     /// `pub use css::*`) on its own — otherwise the bare `safe_value` … names

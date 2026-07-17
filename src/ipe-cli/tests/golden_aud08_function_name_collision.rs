@@ -54,22 +54,22 @@ fn distinct_functions_folding_to_the_same_rust_name_are_rejected() {
             (
                 "UiBorder.ipe",
                 "module UiBorder exposing (rounded)\n\
-                 import Sky.Core.Prelude exposing (..)\n\n\
+                 import Ipe.Prelude exposing (..)\n\n\
                  rounded : Int -> Int\n\
                  rounded x = x\n",
             ),
             (
                 "Ui.ipe",
                 "module Ui exposing (borderRounded)\n\
-                 import Sky.Core.Prelude exposing (..)\n\n\
+                 import Ipe.Prelude exposing (..)\n\n\
                  borderRounded : Int -> Int\n\
                  borderRounded x = x + 1\n",
             ),
             (
                 "Main.ipe",
                 "module Main exposing (main)\n\
-                 import Sky.Core.Prelude exposing (..)\n\
-                 import Std.Log exposing (println)\n\
+                 import Ipe.Prelude exposing (..)\n\
+                 import Ipe.Log exposing (println)\n\
                  import UiBorder\n\
                  import Ui\n\n\
                  main = println (String.fromInt (UiBorder.rounded 1 + Ui.borderRounded 1))\n",
@@ -127,15 +127,15 @@ fn distinct_functions_with_distinct_rust_names_are_accepted() {
             (
                 "Lib.ipe",
                 "module Lib exposing (helper)\n\
-                 import Sky.Core.Prelude exposing (..)\n\n\
+                 import Ipe.Prelude exposing (..)\n\n\
                  helper : Int -> Int\n\
                  helper x = x\n",
             ),
             (
                 "Main.ipe",
                 "module Main exposing (main)\n\
-                 import Sky.Core.Prelude exposing (..)\n\
-                 import Std.Log exposing (println)\n\
+                 import Ipe.Prelude exposing (..)\n\
+                 import Ipe.Log exposing (println)\n\
                  import Lib\n\n\
                  main = println (String.fromInt (Lib.helper 1))\n",
             ),

@@ -30,7 +30,7 @@ fn program(name: Symbol, types: Vec<TypeDef>, funcs: Vec<Func>) -> Program {
 }
 
 /// Like [`program`] but lets the test set `uses_live`, so the emitter takes the
-/// Std.Live serde-derive path (SEAL gate exercise).
+/// Ipe.Live serde-derive path (SEAL gate exercise).
 fn program_with_live(
     name: Symbol,
     types: Vec<TypeDef>,
@@ -246,7 +246,7 @@ fn enum_with_function_payload_has_no_derive() -> DResult<()> {
     Ok(())
 }
 
-/// seal: in a `Std.Live` program, a NON-Model view-helper record that holds
+/// seal: in a `Ipe.Live` program, a NON-Model view-helper record that holds
 /// an `Html` field is `CDPeq`-supporting (`Html<M>` derives `Clone, Debug,
 /// PartialEq`) but NOT serde-supporting (`Html<M>` is not `Serialize`). Gating
 /// the serde derive on the `CDPeq` flag (`is_derivable`) would force

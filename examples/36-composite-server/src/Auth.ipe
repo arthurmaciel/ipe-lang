@@ -1,18 +1,18 @@
 module Auth exposing (hashPassword, verifyPassword, mintToken, verifyBearer, claimsDecoder)
 
--- Wraps Std.Auth + Sky.Core.Jwt with the composite's typed AuthClaims
+-- Wraps Ipe.Auth + Ipe.Jwt with the composite's typed AuthClaims
 -- record.  Exercises both the pure crypto tier (hashPassword /
 -- verifyPassword / signToken / verifyToken) and the typed-builder
 -- alternative (Jwt.encode / Jwt.decode) so a regression in either
 -- surface lands here.
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.String as String
-import Sky.Core.Result as Result
-import Sky.Core.Error as Error exposing (Error)
-import Sky.Core.Json.Decode as JsonDec
-import Sky.Core.Json.Encode as JsonEnc
-import Sky.Core.Jwt as Jwt
-import Std.Auth as StdAuth
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.Result as Result
+import Ipe.Error as Error exposing (Error)
+import Ipe.Json.Decode as JsonDec
+import Ipe.Json.Encode as JsonEnc
+import Ipe.Jwt as Jwt
+import Ipe.Auth as StdAuth
 import State exposing (AuthClaims)
 
 
@@ -32,9 +32,9 @@ verifyPassword password storedHash =
 
 
 -- Build a JWT carrying the user's id + email + expiry, signed with
--- the configured HS256 secret.  Uses Sky.Core.Jwt directly so the
+-- the configured HS256 secret.  Uses Ipe.Jwt directly so the
 -- composite exercises the typed-builder surface alongside the
--- short-form Std.Auth.signToken in the suite below.
+-- short-form Ipe.Auth.signToken in the suite below.
 mintToken : String -> Int -> Int -> AuthClaims -> Result Error String
 mintToken secret nowSeconds ttlSeconds payload =
     let

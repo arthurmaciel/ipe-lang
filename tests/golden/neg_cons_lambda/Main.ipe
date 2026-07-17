@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- A cons param `\(x :: xs) ->`: `x :: xs` fails to match `[]`, so it is refutable
 -- and rejected as IPE-T0015. It PARSES (as a parenthesised cons pattern), so the

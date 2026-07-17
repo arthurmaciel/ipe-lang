@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- `Node` declares three fields; this pattern binds only two — IPE-T0013.
 type Tree = Leaf | Node Tree Int Tree

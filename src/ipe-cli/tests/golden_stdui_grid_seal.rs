@@ -1,12 +1,12 @@
 //! Seal gate for the native `Ui.gridTracksRaw` primitive and the compiled
-//! `Std.Ui.Grid` module (26-ui-showcase: `__gridTracks` sentinel silently
+//! `Ipe.Ui.Grid` module (26-ui-showcase: `__gridTracks` sentinel silently
 //! dropped by the web renderer's `SafeCssPropertyName` gate).
 //!
-//! `Std.Ui.Grid.columns`/`rows`/`tracks` are pure-Sky wrappers over the native
+//! `Ipe.Ui.Grid.columns`/`rows`/`tracks` are pure-Sky wrappers over the native
 //! `Ui.gridTracksRaw : String -> String -> Attribute msg` kernel
 //! (`KernelFn::UiGridTracksRaw`), which constructs `AttrGridTracks(cols, rows)`.
 //! This test proves the whole seam:
-//!   * `import Std.Ui.Grid` resolves (no IPE-N0004 regression);
+//!   * `import Ipe.Ui.Grid` resolves (no IPE-N0004 regression);
 //!   * `gridTracksRaw` type-checks as `String -> String -> Attribute msg`;
 //!   * the emit lowers both `Grid.columns` and `Grid.tracks` to
 //!     `ui_grid_tracks_raw_(…)` — NO `__gridTracks` sentinel in emitted Rust;
@@ -23,13 +23,13 @@ fn runtime() -> PathBuf {
     ipe::resolve_runtime().expect("runtime must resolve for grid seal test")
 }
 
-/// A minimal Std.Ui program exercising BOTH grid entry points:
+/// A minimal Ipe.Ui program exercising BOTH grid entry points:
 /// `Grid.columns` (cols only, rows = "") and `Grid.tracks` (both axes).
 const MAIN_SKY: &str = r#"module Main exposing (main)
 
-import Std.Html as Html
-import Std.Ui as Ui
-import Std.Ui.Grid as Grid
+import Ipe.Html as Html
+import Ipe.Ui as Ui
+import Ipe.Ui.Grid as Grid
 
 
 main =
@@ -66,7 +66,7 @@ fn build_grid_project(slot: &str) -> (PathBuf, Result<(), ipe::CliError>) {
     (emit, res)
 }
 
-/// `Std.Ui.Grid` resolves (no IPE-N0004), type-checks, and the emit lowers
+/// `Ipe.Ui.Grid` resolves (no IPE-N0004), type-checks, and the emit lowers
 /// both `Grid.columns` and `Grid.tracks` to `ui_grid_tracks_raw_` — with NO
 /// `__gridTracks` sentinel leaking into the emitted Rust.
 #[test]
@@ -75,14 +75,14 @@ fn grid_module_resolves_and_emits_kernel() {
     let (emit, res) = build_grid_project("emit");
     assert!(
         res.is_ok(),
-        "skyc build with `import Std.Ui.Grid` must succeed \
+        "skyc build with `import Ipe.Ui.Grid` must succeed \
          (native gridTracksRaw + compiled module): {:?}",
         res.err()
     );
 
-    // The compiled `Std.Ui.Grid` module lowers to its OWN Rust file under
+    // The compiled `Ipe.Ui.Grid` module lowers to its OWN Rust file under
     // `src/ipe_mods/` once the per-Sky-module split
-    // fires — this program has two distinct homes (`Main` + `Std.Ui.Grid`).
+    // fires — this program has two distinct homes (`Main` + `Ipe.Ui.Grid`).
     // Scan the WHOLE emitted Sky-side tree (main.rs + ipe_mods/*.rs) so the
     // assertion holds wherever the split correctly placed the helper calls.
     let emitted = support::read_all_emitted_src(&emit);

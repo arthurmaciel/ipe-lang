@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-import Sky.Core.Encoding as Encoding
+import Ipe.Encoding as Encoding
 
 -- Go url.QueryEscape leaves the ASCII unreserved set (A-Za-z0-9 plus the four
 -- marks `-` `_` `.` `~`) verbatim, while `+` and `@` ARE escaped (%2B / %40).

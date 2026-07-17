@@ -1,12 +1,12 @@
 module Lib.SafeQuery exposing (runReadOnly, isSelectOnly)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.String as String
-import Sky.Core.Result as Result
-import Sky.Core.Dict as Dict
-import Sky.Core.Task as Task
-import Sky.Core.Error as Error exposing (Error)
-import Std.Db as Db
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.Result as Result
+import Ipe.Dict as Dict
+import Ipe.Task as Task
+import Ipe.Error as Error exposing (Error)
+import Ipe.Db as Db
 
 
 -- Run a query ONLY if it is a SELECT/WITH statement.

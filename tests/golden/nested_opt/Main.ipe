@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- Same top-level constructor across several arms, discriminated by a NESTED
 -- constructor sub-pattern. `Som (Som x)` and `Som Non` both head-match `Som`

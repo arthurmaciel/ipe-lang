@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-import Sky.Core.Encoding as Encoding
+import Ipe.Encoding as Encoding
 
 main =
     case Encoding.base64Decode "not-valid-base64!!" of

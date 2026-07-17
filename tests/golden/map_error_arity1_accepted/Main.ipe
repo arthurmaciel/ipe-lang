@@ -1,7 +1,7 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 -- #90 T3 green twin: `Result.mapError` with an arity-1 callback. The Ok
 -- payload is pinned to Int via `check`'s annotation (an UNPINNED payload

@@ -1,12 +1,12 @@
-//! `Std.Html.Events.onInput` handler-payload gate: a Bool handler must be
+//! `Ipe.Html.Events.onInput` handler-payload gate: a Bool handler must be
 //! REJECTED BY skyc with IPE-T0001 — never exit 0 and defer to cargo.
 //!
 //! ## Context
 //!
-//! `Std.Html.Events.*` resolves to the dedicated `Html*` event kernels,
-//! which produce a `Std.Html.Attribute msg` (`html_attr`) — the same nominal
-//! type Std.Html attribute + element builders use. The fixtures host the event
-//! on a Std.Html element (`Html.input`) where an Html attribute belongs. The
+//! `Ipe.Html.Events.*` resolves to the dedicated `Html*` event kernels,
+//! which produce a `Ipe.Html.Attribute msg` (`html_attr`) — the same nominal
+//! type Ipe.Html attribute + element builders use. The fixtures host the event
+//! on a Ipe.Html element (`Html.input`) where an Html attribute belongs. The
 //! payload-shape check (`(String -> msg)` argument) is the same across event
 //! surfaces.
 //!

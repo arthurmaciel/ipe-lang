@@ -1,10 +1,10 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.List as List
-import Sky.Core.String as String
-import Sky.Core.Task as Task
-import Std.Log as Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Task as Task
+import Ipe.Log as Log exposing (println)
 
 
 -- AUD-04 witness 3 (multi-use Task-list let-inlining, near a colliding

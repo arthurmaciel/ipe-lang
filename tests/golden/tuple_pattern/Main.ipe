@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- A tuple pattern in a function parameter: the generic `fst` / `snd`
 -- projections. `(a, b)` destructures the single tuple argument irrefutably.

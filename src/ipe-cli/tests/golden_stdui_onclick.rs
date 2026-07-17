@@ -1,4 +1,4 @@
-//! Sentinel: genuine bottom-up M-propagation for Std.Ui event subtrees.
+//! Sentinel: genuine bottom-up M-propagation for Ipe.Ui event subtrees.
 //!
 //! This golden covers: a non-view function (`staticHtml : String`)
 //! that renders an event-bearing subtree (`el [onClick Bump] (text "x")`) must

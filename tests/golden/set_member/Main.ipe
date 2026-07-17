@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-import Sky.Core.Set as Set
+import Ipe.Set as Set
 
 main =
     println (if Set.member 3 (Set.fromList [1, 2, 3]) then "True" else "False")

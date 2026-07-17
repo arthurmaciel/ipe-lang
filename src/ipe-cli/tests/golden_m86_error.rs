@@ -1,4 +1,4 @@
-//! `Sky.Core.Error` module qualifier — minimal `Error = String` slice.
+//! `Ipe.Error` module qualifier — minimal `Error = String` slice.
 //!
 //! Gated on `IPE_E2E=1`; without it the test returns early so the default
 //! `cargo test` stays fast.

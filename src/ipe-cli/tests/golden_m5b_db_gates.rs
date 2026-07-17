@@ -1,4 +1,4 @@
-//! `Std.Db.Sql` negative gate: a naive string-concatenated WHERE
+//! `Ipe.Db.Sql` negative gate: a naive string-concatenated WHERE
 //! clause must be REJECTED at `skyc` compile time, never accepted and left to
 //! misbehave (or be silently injectable) at runtime. This is the core
 //! "parse, don't validate" property the `SqlFragment` newtype exists to

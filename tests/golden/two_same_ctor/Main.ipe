@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- Two `case` arms head-match the SAME top constructor (`Wrap`) and discriminate
 -- on a nested LITERAL sub-pattern: `Wrap 0` versus `Wrap n`. With the prior

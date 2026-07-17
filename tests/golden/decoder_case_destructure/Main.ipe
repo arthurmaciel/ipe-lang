@@ -7,7 +7,7 @@ module Main exposing (main)
 -- `lower_let`'s.
 -- Expected: Alice|Bob
 
-import Sky.Core.Json.Decode as JsonDec
+import Ipe.Json.Decode as JsonDec
 
 
 buildPair : () -> ( JsonDec.Decoder String, JsonDec.Decoder Int )

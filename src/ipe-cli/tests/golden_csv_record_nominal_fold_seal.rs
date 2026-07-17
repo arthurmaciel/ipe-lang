@@ -1,4 +1,4 @@
-//! Regression for the "Std.Csv record literal vs nominal `CsvDoc` mismatch at
+//! Regression for the "Ipe.Csv record literal vs nominal `CsvDoc` mismatch at
 //! the kernel boundary". A record literal of the canonical `Csv`
 //! shape `{ header : List String, rows : List (List String) }` fed directly to
 //! `Csv.encode` must not be emitted as a backend-synthesised `RecHeaderRows`

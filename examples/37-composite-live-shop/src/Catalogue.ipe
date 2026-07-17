@@ -1,7 +1,7 @@
 module Catalogue exposing (seedProducts, seedSales, sortProducts, filterProducts)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.List as List
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
 import State exposing (..)
 
 

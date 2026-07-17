@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- A3 (#147 seal). `Wrap : String -> Box` passed as a higher-order function
 -- argument: `applyMk Wrap "hello"` — the callee slot is typed `String -> Box`.

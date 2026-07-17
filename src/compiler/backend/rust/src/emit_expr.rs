@@ -2130,7 +2130,7 @@ fn emit_tea_call(
         // `Cmd.publishNoEcho : String -> Dict String String -> Cmd msg`
         // Both map to the standard N-arg emit path (runtime live/pubsub.rs).
         KernelFn::CmdPublish | KernelFn::CmdPublishNoEcho => Ok(None),
-        // ── Std.PubSub.publish / publishNoEcho ────────────────────────────
+        // ── Ipe.PubSub.publish / publishNoEcho ────────────────────────────
         // `pubsub_publish<T, E>(topic, payload) -> IpeTask<E, i64>` — T (payload)
         // infers from arg 1; E (error) appears ONLY in the IpeTask<E, i64> result,
         // so anchor it to IpeError with `<_, IpeError>` (T first, E second).
@@ -2147,7 +2147,7 @@ fn emit_tea_call(
                 "{name}::<_, IpeError>({topic_s}, {payload_s})"
             )))
         }
-        // ── Sky.Core.WebSocket: onOpen / onMessage / onClose / onError ───────────
+        // ── Ipe.WebSocket: onOpen / onMessage / onClose / onError ───────────
         // `Sub_subscribeWebSocket : Int -> String -> (any -> msg) -> Sub msg`.
         //
         // The four `on*` stdlib wrappers all funnel through this single
@@ -2245,7 +2245,7 @@ fn stream_handler_capture_prologue(ctx: &EmitCtx, handler: &Expr) -> DResult<Str
     Ok(prologue)
 }
 
-/// Handle a `Sky.Http.Server` / `Middleware` / `RateLimit` kernel call.
+/// Handle a `Ipe.Http.Server` / `Middleware` / `RateLimit` kernel call.
 ///
 /// Returns `Ok(None)` for all wired server kernels (they all use the standard
 /// N-arg call path — no boxing or special argument transformation needed).
@@ -2311,7 +2311,7 @@ fn emit_server_call(
             Ok(Some(format!("{fn_name}({name_s}, {req_s}.clone())")))
         }
 
-        // `Sky.Http.Server.Stream.stream : String -> (StreamWriter -> Task Error ()) -> Task Error Response`
+        // `Ipe.Http.Server.Stream.stream : String -> (StreamWriter -> Task Error ()) -> Task Error Response`
         //
         // `server_stream_stream`'s bound is
         // `H: Fn(StreamWriter) -> IpeTask<E, ()> + Send + Sync + 'static`,
@@ -2379,15 +2379,15 @@ fn emit_server_call(
         | KernelFn::MiddlewareWithRateLimit
         | KernelFn::MiddlewareWithCsrf
         | KernelFn::RateLimitAllow
-        // ── Sky.Http.Server.Stream (server-side streaming) ─────────────
+        // ── Ipe.Http.Server.Stream (server-side streaming) ─────────────
         | KernelFn::StreamEmit
         | KernelFn::StreamFinish
         | KernelFn::StreamWithContentType
-        // ── Sky.Core.Http.Stream (client-side relay) ───────────────────
+        // ── Ipe.Http.Stream (client-side relay) ───────────────────
         | KernelFn::HttpStreamOpen
         | KernelFn::HttpStreamForEachChunk
         | KernelFn::HttpStreamClose
-        // ── Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
+        // ── Ipe.Http.Server.WebSocket (12 kernels) ─────────────────────
         | KernelFn::WsDefaultCfg
         | KernelFn::WsWithOnConnect
         | KernelFn::WsWithOnMessage
@@ -2450,10 +2450,10 @@ fn lookup_field<'f>(
 /// Arc-wrap an already-emitted callback expression so it fills a runtime
 /// `Arc<dyn Fn(_) -> _ + Send + Sync>` slot.
 ///
-/// The `Std.Ui.Input.*` runtime functions (`input_text_`, `input_slider_`,
+/// The `Ipe.Ui.Input.*` runtime functions (`input_text_`, `input_slider_`,
 /// `input_checkbox_`, `input_radio_`, …) take their callback fields (`onChange`,
 /// checkbox `icon`) as `Arc<dyn Fn(_) -> _ + Send + Sync + 'static>` — the same
-/// shared-callback shape every Sky.Ui / Sky.Live event slot uses. But an
+/// shared-callback shape every Ipe.Ui / Ipe.Live event slot uses. But an
 /// `onChange` field expression lowers as an ordinary value: a bare
 /// `Msg`-constructor eta-expands to a plain lambda, and both [`emit_lambda`] and
 /// [`emit_func_value`] pin `Box::new(..)` for every non-Server/WS `Fun` shape
@@ -2473,7 +2473,7 @@ fn arc_callback_wrap(f_s: &str) -> String {
     format!("::std::sync::Arc::new(move |_x| ({f_s})(_x))")
 }
 
-/// Emit a `Std.Ui.Input.*` callback field, Arc-wrapping it for the runtime's
+/// Emit a `Ipe.Ui.Input.*` callback field, Arc-wrapping it for the runtime's
 /// `Arc<dyn Fn(_) -> _ + Send + Sync>` slot (see [`arc_callback_wrap`]) while
 /// HOISTING any leading capture-clone `let`s OUTSIDE the `Arc`'s `move` closure.
 ///
@@ -2542,7 +2542,7 @@ fn emit_arc_callback_field(
     Ok(format!("{{ {prefix}{arc} }}"))
 }
 
-/// Handle `Std.Ui` / `Std.Html` kernel calls.
+/// Handle `Ipe.Ui` / `Ipe.Html` kernel calls.
 ///
 /// The render kernels (`UiLayout`, `UiLayoutWith`, `HtmlRender`,
 /// `HtmlEscapeText`, `HtmlEscapeAttr`, `HtmlAttrToString`) emit calls to
@@ -2573,7 +2573,7 @@ fn emit_ui_call(
         return Ok(None);
     }
     match k {
-        // ── Std.Ui / Std.Html render kernels ─────────────────────────────────
+        // ── Ipe.Ui / Ipe.Html render kernels ─────────────────────────────────
 
         // `Ui.layout : List (Attribute msg) -> Element msg -> Html msg`
         //
@@ -2739,7 +2739,7 @@ fn emit_ui_call(
             )))
         }
 
-        // ── Std.Ui element builders ───────────────────────────────────────────
+        // ── Ipe.Ui element builders ───────────────────────────────────────────
 
         // `Ui.none : Element msg`
         KernelFn::UiNone => Ok(Some("ipe_runtime::ui::helpers::ui_none_()".to_owned())),
@@ -3078,7 +3078,7 @@ fn emit_ui_call(
             )))
         }
 
-        // ── Std.Ui attribute builders ─────────────────────────────────────────
+        // ── Ipe.Ui attribute builders ─────────────────────────────────────────
 
         // `Ui.spacing : Int -> Attribute msg`
         KernelFn::UiSpacing => {
@@ -3243,7 +3243,7 @@ fn emit_ui_call(
             )))
         }
 
-        // ── Std.Ui Length builders ────────────────────────────────────────────
+        // ── Ipe.Ui Length builders ────────────────────────────────────────────
 
         // `Ui.px : Int -> Length`
         KernelFn::UiPx => {
@@ -3332,7 +3332,7 @@ fn emit_ui_call(
             )))
         }
 
-        // ── Std.Ui Color builders ─────────────────────────────────────────────
+        // ── Ipe.Ui Color builders ─────────────────────────────────────────────
 
         // `Ui.rgb : Int -> Int -> Int -> Color`
         KernelFn::UiRgb => {
@@ -3711,7 +3711,7 @@ fn emit_ui_call(
             "ipe_runtime::ui::helpers::ui_font_italic_()".to_owned(),
         )),
 
-        // ── extended Std.Ui / Font / Background / Border builders ──
+        // ── extended Ipe.Ui / Font / Background / Border builders ──
 
         // Ui namespace — nullary aspect-ratio attrs
         KernelFn::UiSquare => Ok(Some("ipe_runtime::ui::helpers::ui_square_()".to_owned())),
@@ -4244,7 +4244,7 @@ fn emit_ui_call(
             )))
         }
 
-        // ── Std.Ui.Region ──────────────────────────────────────────────
+        // ── Ipe.Ui.Region ──────────────────────────────────────────────
 
         // `Region.mainContent : Attribute msg`
         KernelFn::RegionMainContent => Ok(Some(
@@ -4378,7 +4378,7 @@ fn emit_ui_call(
             )))
         }
 
-        // ── Std.Ui.Input — Label constructors ──────────────────────────
+        // ── Ipe.Ui.Input — Label constructors ──────────────────────────
         KernelFn::InputLabelAbove => {
             let [attrs_e, el_e] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -4462,7 +4462,7 @@ fn emit_ui_call(
             )))
         }
 
-        // ── Std.Ui.Input — text-family controls ────────────────────────
+        // ── Ipe.Ui.Input — text-family controls ────────────────────────
         KernelFn::InputText
         | KernelFn::InputEmail
         | KernelFn::InputUsername
@@ -4803,7 +4803,7 @@ fn emit_ui_call(
             )))
         }
 
-        // ── Std.Html element builders ─────────────────────────────────────────
+        // ── Ipe.Html element builders ─────────────────────────────────────────
 
         // `Html.text : String -> Html msg`
         KernelFn::HtmlTextNode => {
@@ -5017,7 +5017,7 @@ fn emit_ui_call(
             )))
         }
 
-        // ── Std.Html element builders (tag-as-data) ──────────────────
+        // ── Ipe.Html element builders (tag-as-data) ──────────────────
         //
         // Every container (`h1`/`nav`/`table`/…) and void (`br`/`hr`/`link`/…)
         // element routes through the SAME generic `html_node_(tag, attrs, children)`
@@ -5312,7 +5312,7 @@ fn emit_ui_call(
             Ok(Some(call))
         }
 
-        // ── Std.Html.Events builders ────────────────────────────────────
+        // ── Ipe.Html.Events builders ────────────────────────────────────
         // Produce a `html::Attribute::EventAttr(Event::On*)` via a dedicated
         // runtime constructor. The fixed wire event name (`"click"`, `"input"`,
         // …) is a compile-time constant from `html_event_wire_name`; the payload
@@ -5439,7 +5439,7 @@ fn emit_ui_call(
             Ok(Some(call))
         }
 
-        // ── Std.Html.Attributes builders ─────────────────────────────────
+        // ── Ipe.Html.Attributes builders ─────────────────────────────────
         // Fixed-key string attr: `class v` → `html_named_attr_("class", v)`.
         // The key is a compile-time literal (never attacker data); the VALUE is
         // escaped at the render sink (`escape_attr`), so no escaping here.
@@ -5573,7 +5573,7 @@ fn emit_ui_call(
             Ok(Some(s))
         }
 
-        // ── Std.Ui.Keyed — sky-key diff identity ─────────────────────────────
+        // ── Ipe.Ui.Keyed — sky-key diff identity ─────────────────────────────
         // `Keyed.column : List Attr -> List (String, Element msg) -> Element msg`
         KernelFn::KeyedColumn => {
             let [attrs_e, children_e] = args else {
@@ -5604,7 +5604,7 @@ fn emit_ui_call(
             )))
         }
 
-        // ── Std.Ui.Lazy — deferred subtree helpers ───────────────────────────
+        // ── Ipe.Ui.Lazy — deferred subtree helpers ───────────────────────────
         // Each variant carries (f, a..e) — f is a function-valued Sky expr;
         // we eta-wrap it so any callable shape (fn item, Box<dyn Fn>, closure)
         // is accepted by the `impl Fn` bound without Arc overhead.
@@ -6039,7 +6039,7 @@ pub fn emit_expr_at(
                 {
                     return Ok(result);
                 }
-                // Std.Ui / Std.Html / Std.Live / Std.Tui / Std.Webview kernels.
+                // Ipe.Ui / Ipe.Html / Ipe.Live / Ipe.Tui / Ipe.Webview kernels.
                 if let Some(result) =
                     emit_ui_call(ctx, callee, args, *on_form, indent, child, generics)?
                 {
@@ -6068,7 +6068,7 @@ pub fn emit_expr_at(
             // suffix goes between the kernel name and its `(` argument list:
             // `dict_empty::<String, i64>(…)`.
             let pin_turbofish = pin.turbofish();
-            // `Std.Csv` parse kernels are generic over the error channel
+            // `Ipe.Csv` parse kernels are generic over the error channel
             // (`csv_parse<E: From<String>>(...) -> IpeResult<E, CsvDoc>`); a
             // `Result`-returning call whose `Err` arm is often discarded leaves
             // `E` unconstrained (E0283). Anchor it to `IpeError`, mirroring the
@@ -7481,21 +7481,21 @@ const HTTP_REQUEST_FIELDS: &[&str] = &[
     "url",
 ];
 
-/// the sorted `Std.Cache.CacheCfg` field-name set — a record literal with
+/// the sorted `Ipe.Cache.CacheCfg` field-name set — a record literal with
 /// exactly these names (and no registered synthesised struct, because the
 /// lowerer folded the shape to `IrType::CacheCfg`) constructs the runtime
 /// `ipe_runtime::cache::CacheCfg` struct. Mirrors [`HTTP_REQUEST_FIELDS`]; kept
 /// in sync with `ipe_lower::lower::CACHE_CFG_FIELDS`.
 const CACHE_CFG_FIELDS: &[&str] = &["maxBytes", "maxEntries", "ttlMs"];
 
-/// the sorted `Std.Csv.Csv` field-name set — a record literal with exactly
+/// the sorted `Ipe.Csv.Csv` field-name set — a record literal with exactly
 /// these names (and no registered synthesised struct, because the lowerer
 /// folded the shape to `IrType::CsvDoc`) constructs the runtime
 /// `ipe_runtime::csv::CsvDoc` struct. Mirrors [`CACHE_CFG_FIELDS`]; kept in
 /// sync with `ipe_lower::lower::CSV_DOC_FIELDS`.
 const CSV_DOC_FIELDS: &[&str] = &["header", "rows"];
 
-/// the sorted `Sky.Core.WebSocket.WebSocketCfg` field-name set — a record
+/// the sorted `Ipe.WebSocket.WebSocketCfg` field-name set — a record
 /// literal with exactly these names (and no registered synthesised struct,
 /// because the lowerer folded the shape to `IrType::WebSocketClientCfg`)
 /// constructs the runtime `ipe_runtime::ws_client::WsClientCfg` struct. Mirrors
@@ -7503,7 +7503,7 @@ const CSV_DOC_FIELDS: &[&str] = &["header", "rows"];
 /// `ipe_lower::lower::WEBSOCKET_CFG_FIELD_TYPES`.
 const WEBSOCKET_CFG_FIELDS: &[&str] = &["headers", "pingInterval", "timeout", "url"];
 
-/// the sorted `Sky.Http.Server.Response` field-name set. A record literal
+/// the sorted `Ipe.Http.Server.Response` field-name set. A record literal
 /// with exactly these names (and no registered synthesised struct, because the
 /// lowerer folded the shape to `IrType::ServerResponse`) constructs the runtime
 /// `ipe_runtime::server::ServerResponse` struct. That struct carries one EXTRA
@@ -7512,13 +7512,13 @@ const WEBSOCKET_CFG_FIELDS: &[&str] = &["headers", "pingInterval", "timeout", "u
 /// to `Vec::new()`. Kept in sync with `ipe_lower::lower::SERVER_RESPONSE_FIELD_TYPES`.
 const SERVER_RESPONSE_FIELDS: &[&str] = &["body", "contentType", "headers", "status"];
 
-/// the sorted `Std.Email` record field-name sets. A record literal with exactly
+/// the sorted `Ipe.Email` record field-name sets. A record literal with exactly
 /// one of these name-sets (and no registered synthesised struct, because the
 /// lowerer folded the shape to the matching `IrType::Email*`) constructs the
 /// runtime struct (re-exported bare via `pub use email::*`). Mirror of the
 /// `CsvDoc` fall-through; kept in sync with `ipe_lower::lower::EMAIL_*_FIELDS`.
 /// The four name-sets are mutually distinct, so the name-only match is exact
-/// (soundness note: a genuine `Std.Email` literal never gets a registered
+/// (soundness note: a genuine `Ipe.Email` literal never gets a registered
 /// struct because the lowerer intercepts it into the `IrType::Email*` fold
 /// first — the same rationale as `CsvDoc`).
 const EMAIL_MESSAGE_FIELDS: &[&str] = &[
@@ -7617,7 +7617,7 @@ fn emit_record(
                     .iter()
                     .zip(SERVER_RESPONSE_FIELDS.iter())
                     .all(|(a, b)| a.as_str() == *b);
-            // Std.Email fall-throughs — same rationale as `CsvDoc`: a
+            // Ipe.Email fall-throughs — same rationale as `CsvDoc`: a
             // `defaultMessage`/`defaultAttachment`/… built literal has no
             // registered struct (folded to the matching `IrType::Email*`), so it
             // constructs the runtime struct (re-exported bare via `pub use
@@ -8360,7 +8360,7 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     // Elide the outer `task_run(...)` wrapper: use the inner task expression as
     // the body and convert the return type from `Result(Error, A)` to `Task(A)`.
     //
-    // This is not always a FLAT `Call(TaskRun, …)` body — the Sky.Tui / Sky.Live
+    // This is not always a FLAT `Call(TaskRun, …)` body — the Ipe.Tui / Ipe.Live
     // `argv`-dispatch idiom branches on `System.args` before picking which app to
     // run, e.g. `main = case List.head argsList of Just "live" -> Live.app cfg
     // |> Task.run; _ -> Tui.app cfg |> Task.run`. Every arm still tail-calls

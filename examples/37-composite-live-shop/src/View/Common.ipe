@@ -1,15 +1,15 @@
 module View.Common exposing (..)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.String as String
-import Sky.Core.ToString as ToString
-import Std.Ui as Ui
-import Std.Ui exposing (Element)
-import Std.Ui.Background as Background
-import Std.Ui.Border as Border
-import Std.Ui.Font as Font
-import Std.Ui.Region as Region
-import Std.Ui.Responsive as Responsive exposing (DeviceClass(..))
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.ToString as ToString
+import Ipe.Ui as Ui
+import Ipe.Ui exposing (Element)
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Font as Font
+import Ipe.Ui.Region as Region
+import Ipe.Ui.Responsive as Responsive exposing (DeviceClass(..))
 import State exposing (..)
 
 
@@ -154,7 +154,7 @@ footer =
         [ Ui.el
               [ Font.color muted, Font.size 12, Ui.alignLeft ]
               (Ui.text
-                  "Sky.Live composite test app · examples/37-composite-live-shop")
+                  "Ipe.Live composite test app · examples/37-composite-live-shop")
         , Ui.el
               [ Font.color muted, Font.size 12, Ui.alignRight ]
               (Ui.text "© 2026 Sky Bazaar")
@@ -178,7 +178,7 @@ mobileHint =
 
 
 -- Wrapper that swaps to a single-column flow on phones by changing
--- the rendered Element via Std.Ui.Responsive. Picks the layout type
+-- the rendered Element via Ipe.Ui.Responsive. Picks the layout type
 -- per device class — phones get a column, larger screens a row.
 adaptStack : Viewport -> List (Element Msg) -> Element Msg
 adaptStack vp children =

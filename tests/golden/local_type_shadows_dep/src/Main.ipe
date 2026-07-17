@@ -1,8 +1,8 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 import Dep exposing (Color(..))
-import Std.Log exposing (println)
+import Ipe.Log exposing (println)
 
 type Color = Warm | Cool
 

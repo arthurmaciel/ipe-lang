@@ -1,10 +1,10 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Jwt as Jwt
-import Sky.Core.Json.Encode as JsonEnc
-import Sky.Core.Result as Result
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Jwt as Jwt
+import Ipe.Json.Encode as JsonEnc
+import Ipe.Result as Result
+import Ipe.Log exposing (println)
 
 
 -- #217 contract-drift regression: `Jwt.withClaim` takes a `JsonEnc.Value`

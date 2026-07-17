@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 import Lib exposing (Box(..), unbox)
 
 -- The annotation names the type with its module qualifier: `Lib.Box Int`.

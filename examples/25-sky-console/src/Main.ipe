@@ -1,23 +1,23 @@
 module Main exposing (main)
 
--- Sky Console (Phase A — Std.Ui Sky.Live mini-app).
+-- Sky Console (Phase A — Ipe.Ui Ipe.Live mini-app).
 --
--- Phase A: standalone Sky.Live example that proves the Std.Ui UI
+-- Phase A: standalone Ipe.Live example that proves the Ipe.Ui UI
 -- works typed end-to-end with mocked data. Once green, the same
 -- source moves to sky-stdlib/Sky/Internal/Console/ in Phase B and
 -- the runtime auto-mounts it under /_sky/console.
 --
 -- No hand-written JS in this source — every interaction is
--- onClick → Msg → update → re-render via Sky.Live's framework
+-- onClick → Msg → update → re-render via Ipe.Live's framework
 -- wire (SSE + POST /_sky/event). Multi-module split so the
 -- type-checker stays well below the heap-exhaustion limit
 -- (CLAUDE.md Limitation #17).
-import Sky.Core.Prelude exposing (..)
-import Std.Cmd as Cmd
-import Std.Sub as Sub
-import Std.Live exposing (app, route)
-import Std.Ui as Ui
-import Std.Ui exposing (Element)
+import Ipe.Prelude exposing (..)
+import Ipe.Cmd as Cmd
+import Ipe.Sub as Sub
+import Ipe.Live exposing (app, route)
+import Ipe.Ui as Ui
+import Ipe.Ui exposing (Element)
 import State exposing (..)
 import View exposing (view)
 

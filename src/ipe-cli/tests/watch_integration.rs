@@ -25,7 +25,7 @@ use ipe::watch::{WatchEvent, WatchHandle, WatchOptions};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-/// A minimal `Sky.Http.Server` fixture, parameterised on the response body
+/// A minimal `Ipe.Http.Server` fixture, parameterised on the response body
 /// so a test can edit it in place and observe the swap. Reads its port from
 /// `IPE_SERVER_PORT` — the SAME convention `server_e2e.rs` already
 /// establishes in this repo, and what `watch::child_env` drives from
@@ -33,7 +33,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 fn server_fixture(body: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Sky.Http.Server as Server\n\n\
+         import Ipe.Http.Server as Server\n\n\
          main =\n    \
              let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr \"IPE_SERVER_PORT\" \"8080\"))\n    \
              in\n    \

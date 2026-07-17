@@ -1,29 +1,29 @@
 module Routes.Todos exposing (handleList, handleCreate, handleDelete, todoCreateDecoder, encodeTodo)
 
 -- Authenticated CRUD over the `todos` table.  Exercises:
---   * Sky.Http.Server.param (URL captures)
---   * Sky.Http.Server.header (Authorization)
---   * Std.Db.{query, insertRow, deleteById, findOneByField}
---   * Std.PubSub.publish (fired on every new todo — Task-shaped pub
---     from inside a Sky.Http.Server handler, NOT a Sky.Live update
+--   * Ipe.Http.Server.param (URL captures)
+--   * Ipe.Http.Server.header (Authorization)
+--   * Ipe.Db.{query, insertRow, deleteById, findOneByField}
+--   * Ipe.PubSub.publish (fired on every new todo — Task-shaped pub
+--     from inside a Ipe.Http.Server handler, NOT a Ipe.Live update
 --     return)
---   * Sky.Core.Crypto.randomToken (per-todo id)
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Dict as Dict
-import Sky.Core.List as List
-import Sky.Core.Maybe as Maybe
-import Sky.Core.String as String
-import Sky.Core.Task as Task
-import Sky.Core.Time as Time
-import Sky.Core.Error as Error exposing (Error)
-import Sky.Core.Json.Decode as JsonDec
-import Sky.Core.Json.Encode as JsonEnc
-import Sky.Core.Crypto as Crypto
-import Sky.Http.Server as Server
-import Sky.Http.Server exposing (Request, Response)
-import Std.Db as Db
-import Std.Log as Log
-import Std.PubSub as PubSub
+--   * Ipe.Crypto.randomToken (per-todo id)
+import Ipe.Prelude exposing (..)
+import Ipe.Dict as Dict
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+import Ipe.String as String
+import Ipe.Task as Task
+import Ipe.Time as Time
+import Ipe.Error as Error exposing (Error)
+import Ipe.Json.Decode as JsonDec
+import Ipe.Json.Encode as JsonEnc
+import Ipe.Crypto as Crypto
+import Ipe.Http.Server as Server
+import Ipe.Http.Server exposing (Request, Response)
+import Ipe.Db as Db
+import Ipe.Log as Log
+import Ipe.PubSub as PubSub
 import Auth
 import State exposing (Config, Todo, TodoCreate, AuthClaims)
 

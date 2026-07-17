@@ -138,11 +138,11 @@ struct Builtins {
     err: Symbol,
     true_: Symbol,
     false_: Symbol,
-    /// `Sky.Core.Dict` type constructor symbol.
+    /// `Ipe.Dict` type constructor symbol.
     dict: Symbol,
-    /// `Sky.Core.Set` type constructor symbol.
+    /// `Ipe.Set` type constructor symbol.
     set: Symbol,
-    /// `Sky.Core.Bytes` type constructor symbol.
+    /// `Ipe.Bytes` type constructor symbol.
     /// Divergence from Sky: Bytes is a distinct primitive in Sky-Rust (Vec<u8>),
     /// not a String alias as in the Go reference.
     bytes: Symbol,
@@ -222,11 +222,11 @@ struct Builtins {
     http_f_follow_redirects: Symbol,
     /// `"maxRedirects"` — `HttpRequest` only (camelCase Sky field name).
     http_f_max_redirects: Symbol,
-    /// `"contentType"` — `Sky.Http.Server.Response` record field (camelCase).
+    /// `"contentType"` — `Ipe.Http.Server.Response` record field (camelCase).
     server_f_content_type: Symbol,
-    /// `"name"` — `Std.Db.Migration` record field.
+    /// `"name"` — `Ipe.Db.Migration` record field.
     migration_f_name: Symbol,
-    /// `"sql"` — `Std.Db.Migration` record field.
+    /// `"sql"` — `Ipe.Db.Migration` record field.
     migration_f_sql: Symbol,
     // ── Db type symbols ──────────────────────────────────────────────────────
     /// `"Db"` — the opaque database connection pool type constructor.
@@ -235,10 +235,10 @@ struct Builtins {
     sqlvalue: Symbol,
     /// `"SqlField"` — the sum type for PATCH-style field-set / field-omit SQL params.
     sqlfield: Symbol,
-    /// `"SqlFragment"` — `Std.Db.Sql`'s opaque, parameterized WHERE-fragment
+    /// `"SqlFragment"` — `Ipe.Db.Sql`'s opaque, parameterized WHERE-fragment
     /// type.
     sqlfragment: Symbol,
-    /// `"Secret"` — `Sky.Core.Secret`'s opaque, sealed secret-string wrapper
+    /// `"Secret"` — `Ipe.Secret`'s opaque, sealed secret-string wrapper
     /// type.
     secret: Symbol,
     // ── SqlValue constructor name symbols ─────────────────────────────────────
@@ -257,8 +257,8 @@ struct Builtins {
     set_field: Symbol,
     omit_field: Symbol,
     // ── Shared row-decoder type (JSON) ────────────────────────────────────────
-    /// `"Decoder"` — the opaque decoder type constructor shared by `Sky.Core.Json.Decode`
-    /// and `Std.Db.Decode`. Represented in the IR as `IrType::Decoder(Box<IrType>)`.
+    /// `"Decoder"` — the opaque decoder type constructor shared by `Ipe.Json.Decode`
+    /// and `Ipe.Db.Decode`. Represented in the IR as `IrType::Decoder(Box<IrType>)`.
     decoder: Symbol,
     // ── TEA Cmd / Sub type constructor symbols ────────────────────────────────
     /// `"Cmd"` — the opaque command type constructor `Cmd msg`.
@@ -267,7 +267,7 @@ struct Builtins {
     /// `"Sub"` — the opaque subscription type constructor `Sub msg`.
     /// Represented in the IR as `IrType::Sub(Box<IrType>)`.
     sub: Symbol,
-    // ── Sky.Http.Server opaque type constructor symbols ───────────────────────
+    // ── Ipe.Http.Server opaque type constructor symbols ───────────────────────
     /// `"Request"` — the opaque server request type.
     server_request: Symbol,
     /// `"Response"` — the opaque server response type.
@@ -277,23 +277,23 @@ struct Builtins {
     /// `"Cookie"` — the opaque server cookie type.
     server_cookie: Symbol,
     /// `"Handler"` — the `Request -> Task Error Response` alias from
-    /// `Sky.Http.Server`. Pre-interned so `constrain_def` can detect a
+    /// `Ipe.Http.Server`. Pre-interned so `constrain_def` can detect a
     /// `handler : Handler` annotation and expand it to the full arrow type
     /// before the parameter-loop runs (fixes IPE-T0004 for handler bindings).
     handler: Symbol,
-    // ── Sky.Http.Server.Stream opaque type constructor symbol ───────────
+    // ── Ipe.Http.Server.Stream opaque type constructor symbol ───────────
     /// `"StreamWriter"` — the opaque stream writer handle passed to the
     /// `Stream.stream` callback and consumed by `Stream.emit` /
     /// `Stream.finish` / `Stream.withContentType`.
     stream_writer: Symbol,
-    // ── Sky.Http.Server.WebSocket opaque type constructor symbols ────────
+    // ── Ipe.Http.Server.WebSocket opaque type constructor symbols ────────
     /// `"WebSocketServer"` — the opaque per-peer WebSocket handle (`WsHandle`).
     ws_server: Symbol,
     /// `"WebSocketServerCfg"` — the opaque WebSocket server configuration
     /// (`WsServerCfg<IpeError>`).
     ws_server_cfg: Symbol,
-    // ── Std.Ui / Std.Html parametric type constructor symbols ─────────────────
-    /// `"Attribute"` — Std.Ui attribute type constructor `Attribute msg`.
+    // ── Ipe.Ui / Ipe.Html parametric type constructor symbols ─────────────────
+    /// `"Attribute"` — Ipe.Ui attribute type constructor `Attribute msg`.
     ///
     /// Used to build Ui kernel type schemes so the HM solver constrains
     /// `List (Attribute msg)` arguments (e.g. `layout [] child`) to a concrete
@@ -303,23 +303,23 @@ struct Builtins {
     /// bare `Vec::new()` that Rust rejects with E0283 when M cannot be inferred
     /// from elsewhere in the expression.
     attribute: Symbol,
-    /// `"Element"` — Std.Ui element type constructor `Element msg`.
+    /// `"Element"` — Ipe.Ui element type constructor `Element msg`.
     element: Symbol,
-    /// `"Html"` — Html type constructor `Html msg` (shared by Std.Html and
-    /// Std.Ui render entry points).
+    /// `"Html"` — Html type constructor `Html msg` (shared by Ipe.Html and
+    /// Ipe.Ui render entry points).
     html_con: Symbol,
-    /// `"Length"` — Std.Ui nullary length type produced by `Ui.px` / `Ui.fill`
+    /// `"Length"` — Ipe.Ui nullary length type produced by `Ui.px` / `Ui.fill`
     /// / `Ui.minimum` / …. Lowered to `IrType::UiPlain(UiPlain::Length)` via the
     /// `"Length"` arm in `ipe_lower::ir_type_from_ty`.
     length: Symbol,
-    /// `"Color"` — Std.Ui nullary colour type produced by `Ui.rgb` / `Ui.rgba`
+    /// `"Color"` — Ipe.Ui nullary colour type produced by `Ui.rgb` / `Ui.rgba`
     /// / `Ui.white` / …. Lowered to `IrType::UiPlain(UiPlain::Color)`.
     color: Symbol,
-    /// `"Description"` — Std.Ui semantic description type produced by `Ui.descMain`
+    /// `"Description"` — Ipe.Ui semantic description type produced by `Ui.descMain`
     /// / `Ui.descNavigation` / …. Lowered to `IrType::UiPlain(UiPlain::Description)`
     /// via the `"Description"` arm in `ipe_lower::ir_type_from_ty`.
     description: Symbol,
-    /// `"PseudoClass"` — Std.Ui nullary pseudo-class-selector type produced by
+    /// `"PseudoClass"` — Ipe.Ui nullary pseudo-class-selector type produced by
     /// `Ui.hover` / `Ui.focus` / `Ui.focusVisible` / `Ui.active` / `Ui.disabled`
     /// and consumed by `Ui.onPseudo`. Lowered to
     /// `IrType::UiPlain(UiPlain::PseudoClass)` via the
@@ -340,7 +340,7 @@ struct Builtins {
     lw_wrapper_attrs: Symbol,
     /// `"rootAttrs"` — the second field in the `Ui.layoutWith` config record.
     lw_root_attrs: Symbol,
-    // ── Std.Live / Sky.Live opaque type constructor symbols ───────────────────
+    // ── Ipe.Live / Ipe.Live opaque type constructor symbols ───────────────────
     /// `"LiveReq"` — opaque request threaded through `Live.app`'s `init`.
     live_req: Symbol,
     /// `"LiveRoute"` — opaque route descriptor returned by `Live.route`.
@@ -391,14 +391,14 @@ struct Builtins {
     /// `"label"` — the label field of the `Ui.button` config record.
     /// Typed as `Element msg`.
     btn_f_label: Symbol,
-    // ── Std.Ui.Input type constructor + cfg field symbols ─────────────
-    /// `"Label"` — the `Label msg` type constructor from `Std.Ui.Input`.
+    // ── Ipe.Ui.Input type constructor + cfg field symbols ─────────────
+    /// `"Label"` — the `Label msg` type constructor from `Ipe.Ui.Input`.
     /// Lowered to `IrType::Ui { ctor: UiCtor::Label, msg }`.
     input_label_con: Symbol,
-    /// `"Placeholder"` — the `Placeholder msg` type constructor from `Std.Ui.Input`.
+    /// `"Placeholder"` — the `Placeholder msg` type constructor from `Ipe.Ui.Input`.
     /// Lowered to `IrType::Ui { ctor: UiCtor::Placeholder, msg }`.
     input_placeholder_con: Symbol,
-    /// `"RadioOption"` — the `RadioOption msg` type constructor from `Std.Ui.Input`.
+    /// `"RadioOption"` — the `RadioOption msg` type constructor from `Ipe.Ui.Input`.
     /// Lowered to `IrType::Ui { ctor: UiCtor::RadioOption, msg }`.
     input_radio_option_con: Symbol,
     /// `"onChange"` — the onChange field of Input text/multiline/password cfg records.
@@ -425,9 +425,9 @@ struct Builtins {
     input_f_options: Symbol,
     /// `"selected"` — the selected field of the radio/radioRow cfg record.
     input_f_selected: Symbol,
-    // ── Sky.Core.Http.Stream opaque StreamId type constructor ─────────────────
+    // ── Ipe.Http.Stream opaque StreamId type constructor ─────────────────
     /// `"StreamId"` — the opaque stream identifier type constructor from
-    /// `Sky.Core.Http.Stream`. Backed by `ipe_runtime::http_stream::IpeStreamId`.
+    /// `Ipe.Http.Stream`. Backed by `ipe_runtime::http_stream::IpeStreamId`.
     /// No synthetic `EnumDef` is injected; the backend handles it via a special
     /// case in `enum_name` that maps the symbol to the runtime struct.
     stream_id: Symbol,
@@ -486,32 +486,32 @@ struct Builtins {
     /// a `String` in the form `"HS256:<secret>"` or `"RS256:<pem>"`.  Built
     /// by `Jwt.hs256` / `Jwt.rs256` and consumed by `Jwt.encode` / `Jwt.decode`.
     jwt_algorithm: Symbol,
-    // ── Std.Decimal opaque type constructor symbol ────────────────────────────
+    // ── Ipe.Decimal opaque type constructor symbol ────────────────────────────
     /// `"Decimal"` — the opaque arbitrary-precision decimal type constructor
-    /// from `Std.Decimal`.  Backed by `ipe_runtime::decimal::Decimal` (wrapping
+    /// from `Ipe.Decimal`.  Backed by `ipe_runtime::decimal::Decimal` (wrapping
     /// `rust_decimal::Decimal`).  Zero type arguments.  Lowered to
     /// `IrType::Decimal` by `ir_type_from_ty` / `ir_type_from_canon`.
     decimal: Symbol,
-    // ── Std.Csv record field symbols ─────────────────────────────────────
-    /// `"header"` — `Std.Csv.Csv.header : List String`.
+    // ── Ipe.Csv record field symbols ─────────────────────────────────────
+    /// `"header"` — `Ipe.Csv.Csv.header : List String`.
     csv_f_header: Symbol,
-    /// `"rows"` — `Std.Csv.Csv.rows : List (List String)`.
+    /// `"rows"` — `Ipe.Csv.Csv.rows : List (List String)`.
     csv_f_rows: Symbol,
-    // ── Std.Cache record field symbols ───────────────────────────────────
-    /// `"maxEntries"` — `Std.Cache.CacheCfg.maxEntries : Int`.
+    // ── Ipe.Cache record field symbols ───────────────────────────────────
+    /// `"maxEntries"` — `Ipe.Cache.CacheCfg.maxEntries : Int`.
     cache_f_max_entries: Symbol,
-    /// `"ttlMs"` — `Std.Cache.CacheCfg.ttlMs : Int`.
+    /// `"ttlMs"` — `Ipe.Cache.CacheCfg.ttlMs : Int`.
     cache_f_ttl_ms: Symbol,
-    /// `"maxBytes"` — `Std.Cache.CacheCfg.maxBytes : Int`.
+    /// `"maxBytes"` — `Ipe.Cache.CacheCfg.maxBytes : Int`.
     cache_f_max_bytes: Symbol,
-    /// `"hits"` — `Std.Cache.stats` return field `hits : Int`.
+    /// `"hits"` — `Ipe.Cache.stats` return field `hits : Int`.
     cache_f_hits: Symbol,
-    /// `"misses"` — `Std.Cache.stats` return field `misses : Int`.
+    /// `"misses"` — `Ipe.Cache.stats` return field `misses : Int`.
     cache_f_misses: Symbol,
-    /// `"evictions"` — `Std.Cache.stats` return field `evictions : Int`.
+    /// `"evictions"` — `Ipe.Cache.stats` return field `evictions : Int`.
     cache_f_evictions: Symbol,
-    // ── Sky.Core.WebSocket.WebSocketCfg record field symbols ─────────────
-    /// `"url"` — `Sky.Core.WebSocket.WebSocketCfg.url : String`.
+    // ── Ipe.WebSocket.WebSocketCfg record field symbols ─────────────
+    /// `"url"` — `Ipe.WebSocket.WebSocketCfg.url : String`.
     ws_f_url: Symbol,
     /// `"headers"` — `WebSocketCfg.headers : List (String, String)`.
     ws_f_headers: Symbol,
@@ -519,8 +519,8 @@ struct Builtins {
     ws_f_timeout: Symbol,
     /// `"pingInterval"` — `WebSocketCfg.pingInterval : Int`.
     ws_f_ping_interval: Symbol,
-    // ── Std.Email type + record field symbols ────────────────────────────
-    /// `"EmailProvider"` — the opaque `Std.Email.EmailProvider` ADT constructor
+    // ── Ipe.Email type + record field symbols ────────────────────────────
+    /// `"EmailProvider"` — the opaque `Ipe.Email.EmailProvider` ADT constructor
     /// (`Resend`/`Ses`/`SendGrid`/`Smtp`).  Backed by
     /// `ipe_runtime::email::EmailProvider`; lowered to `IrType::EmailProvider`.
     email_provider: Symbol,
@@ -623,18 +623,18 @@ impl Builtins {
             // TEA Cmd / Sub type constructors.
             cmd: interner.intern("Cmd")?,
             sub: interner.intern("Sub")?,
-            // Sky.Http.Server opaque types.
+            // Ipe.Http.Server opaque types.
             server_request: interner.intern("Request")?,
             server_response: interner.intern("Response")?,
             server_route: interner.intern("Route")?,
             server_cookie: interner.intern("Cookie")?,
             handler: interner.intern("Handler")?,
-            // Sky.Http.Server.Stream opaque handle.
+            // Ipe.Http.Server.Stream opaque handle.
             stream_writer: interner.intern("StreamWriter")?,
-            // Sky.Http.Server.WebSocket opaque handles.
+            // Ipe.Http.Server.WebSocket opaque handles.
             ws_server: interner.intern("WebSocketServer")?,
             ws_server_cfg: interner.intern("WebSocketServerCfg")?,
-            // Std.Ui / Std.Html parametric type constructor symbols.
+            // Ipe.Ui / Ipe.Html parametric type constructor symbols.
             attribute: interner.intern("Attribute")?,
             element: interner.intern("Element")?,
             html_con: interner.intern("Html")?,
@@ -645,7 +645,7 @@ impl Builtins {
             json_value: interner.intern("Value")?,
             lw_wrapper_attrs: interner.intern("wrapperAttrs")?,
             lw_root_attrs: interner.intern("rootAttrs")?,
-            // Std.Live / Sky.Live opaque types + cfg field names.
+            // Ipe.Live / Ipe.Live opaque types + cfg field names.
             live_req: interner.intern("LiveReq")?,
             live_route_con: interner.intern("LiveRoute")?,
             live_f_init: interner.intern("init")?,
@@ -667,7 +667,7 @@ impl Builtins {
             // Ui.button cfg field names.
             btn_f_on_press: interner.intern("onPress")?,
             btn_f_label: interner.intern("label")?,
-            // Std.Ui.Input type constructors + cfg field names.
+            // Ipe.Ui.Input type constructors + cfg field names.
             input_label_con: interner.intern("Label")?,
             input_placeholder_con: interner.intern("Placeholder")?,
             input_radio_option_con: interner.intern("RadioOption")?,
@@ -677,31 +677,31 @@ impl Builtins {
             input_f_checked: interner.intern("checked")?,
             input_f_icon: interner.intern("icon")?,
             input_f_spellcheck: interner.intern("spellcheck")?,
-            // Std.Ui.Input.slider cfg fields.
+            // Ipe.Ui.Input.slider cfg fields.
             input_f_value: interner.intern("value")?,
             input_f_min: interner.intern("min")?,
             input_f_max: interner.intern("max")?,
             input_f_step: interner.intern("step")?,
-            // Std.Ui.Input.radio / radioRow cfg fields.
+            // Ipe.Ui.Input.radio / radioRow cfg fields.
             input_f_options: interner.intern("options")?,
             input_f_selected: interner.intern("selected")?,
-            // Sky.Core.Http.Stream: StreamId opaque handle type.
+            // Ipe.Http.Stream: StreamId opaque handle type.
             stream_id: interner.intern("StreamId")?,
             csv_f_header: interner.intern("header")?,
             csv_f_rows: interner.intern("rows")?,
-            // ── Std.Cache record field symbols ──────────────────────────
+            // ── Ipe.Cache record field symbols ──────────────────────────
             cache_f_max_entries: interner.intern("maxEntries")?,
             cache_f_ttl_ms: interner.intern("ttlMs")?,
             cache_f_max_bytes: interner.intern("maxBytes")?,
             cache_f_hits: interner.intern("hits")?,
             cache_f_misses: interner.intern("misses")?,
             cache_f_evictions: interner.intern("evictions")?,
-            // ── Sky.Core.WebSocket.WebSocketCfg record field symbols ────
+            // ── Ipe.WebSocket.WebSocketCfg record field symbols ────
             ws_f_url: interner.intern("url")?,
             ws_f_headers: interner.intern("headers")?,
             ws_f_timeout: interner.intern("timeout")?,
             ws_f_ping_interval: interner.intern("pingInterval")?,
-            // ── Std.Email type + record field symbols ───────────────────
+            // ── Ipe.Email type + record field symbols ───────────────────
             email_provider: interner.intern("EmailProvider")?,
             email_f_from: interner.intern("from")?,
             email_f_to: interner.intern("to")?,
@@ -743,7 +743,7 @@ impl Builtins {
             // ── JWT builder opaque type constructor symbols (D-00) ──────────────
             jwt_claims: interner.intern("Claims")?,
             jwt_algorithm: interner.intern("Algorithm")?,
-            // ── Std.Decimal opaque type constructor ──────────────────────────────
+            // ── Ipe.Decimal opaque type constructor ──────────────────────────────
             decimal: interner.intern("Decimal")?,
         })
     }
@@ -2098,7 +2098,7 @@ impl<'a> Builder<'a> {
                 // type as fresh *flex* variables (see [`Self::instantiate`]).
                 // ── Handler alias expansion (T0004 fix) ───────────────
                 // `Handler` is the stdlib alias `Request -> Task Error Response`
-                // (Sky.Http.Server).  A binding annotated as `Handler` with one
+                // (Ipe.Http.Server).  A binding annotated as `Handler` with one
                 // parameter (e.g. `handleHome : Handler; handleHome req = …`)
                 // would fire T0004 because the annotation is a nullary `Con`, not
                 // a `Lambda`.  Expand it to the full arrow type here, before the
@@ -2437,7 +2437,7 @@ impl<'a> Builder<'a> {
                     resp_fields.insert(self.builtins.http_f_status, int());
                     Ok(Ty::Record(resp_fields, RowTail::Closed))
                 } else if args.is_empty() && self.interner.resolve(name) == Some("Response") {
-                    // `Sky.Http.Server.Response` is a record alias
+                    // `Ipe.Http.Server.Response` is a record alias
                     // `{ status : Int, body : String, headers : Dict String
                     // String, contentType : String }` (reference
                     // `Sky/Http/Server.ipe:66`). Expand structurally — same
@@ -2462,7 +2462,7 @@ impl<'a> Builder<'a> {
                     resp_fields.insert(self.builtins.http_f_status, int());
                     Ok(Ty::Record(resp_fields, RowTail::Closed))
                 } else if args.is_empty() && self.interner.resolve(name) == Some("Migration") {
-                    // `Std.Db.Migration` is a record alias
+                    // `Ipe.Db.Migration` is a record alias
                     // `{ name : String, sql : String }` (reference
                     // `Std/Db.ipe:237`). Expand structurally so a program can
                     // build migrations as record literals in a `List Migration`.
@@ -2511,7 +2511,7 @@ impl<'a> Builder<'a> {
 
     /// Check whether `ty` is the built-in `Error` type — a nullary type
     /// constructor named `"Error"`.  The module path is intentionally ignored so
-    /// both bare `Error` and fully-qualified `Sky.Core.Error.Error` are accepted.
+    /// both bare `Error` and fully-qualified `Ipe.Error.Error` are accepted.
     fn is_error_ty(&self, ty: &Ty) -> bool {
         matches!(
             ty,
@@ -2593,11 +2593,11 @@ impl<'a> Builder<'a> {
         match k.decl().qualifier {
             "Set" => Some(TyBounds::set_elem()),
             "Dict" => Some(TyBounds::dict_key()),
-            // `Std.Cache`'s key variable is raw scheme-var 0 in `get` /
+            // `Ipe.Cache`'s key variable is raw scheme-var 0 in `get` /
             // `put` / `remove` (`Int -> k -> …`), and the runtime scans keys by
             // `PartialEq` (`cache_get`/`cache_put`/`cache_remove` bound
             // `K: PartialEq`). Attaching the EQ obligation lifts `PartialEq`
-            // onto the emitted `Std.Cache` wrapper's key type parameter. The
+            // onto the emitted `Ipe.Cache` wrapper's key type parameter. The
             // key-less kernels (`newRaw`/`clear`/`size`/`stats`) have no
             // scheme-var 0, so the `vars.get(&0)` tie is a no-op for them.
             "Cache" => Some(TyBounds::eq()),
@@ -3519,7 +3519,7 @@ impl<'a> Builder<'a> {
             name: self.builtins.order,
             args: Vec::new(),
         };
-        // `Decimal` is a zero-argument constructor (Std.Decimal).
+        // `Decimal` is a zero-argument constructor (Ipe.Decimal).
         let decimal = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.decimal,
@@ -3571,7 +3571,7 @@ impl<'a> Builder<'a> {
             name: self.builtins.db,
             args: Vec::new(),
         };
-        // `Std.Db.Migration` is a record alias `{ name : String, sql : String }`
+        // `Ipe.Db.Migration` is a record alias `{ name : String, sql : String }`
         // (reference `Std/Db.ipe:237`). `Db.migrate` schemes over `List
         // Migration`, and `Db.defaultMigration` returns one — so a program can
         // build migrations as record literals. The record folds to a synthesised
@@ -3598,13 +3598,13 @@ impl<'a> Builder<'a> {
             name: self.builtins.sqlfield,
             args: Vec::new(),
         };
-        // `SqlFragment` — `Std.Db.Sql`'s opaque WHERE-fragment type.
+        // `SqlFragment` — `Ipe.Db.Sql`'s opaque WHERE-fragment type.
         let sqlfragment = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.sqlfragment,
             args: Vec::new(),
         };
-        // `Secret` — `Sky.Core.Secret`'s opaque sealed secret-string type.
+        // `Secret` — `Ipe.Secret`'s opaque sealed secret-string type.
         let secret = || Ty::Con {
             module: Vec::new(),
             name: self.builtins.secret,
@@ -3615,7 +3615,7 @@ impl<'a> Builder<'a> {
             name: self.builtins.server_request,
             args: Vec::new(),
         };
-        // `Sky.Http.Server.Response` is a record alias `{ status : Int, body :
+        // `Ipe.Http.Server.Response` is a record alias `{ status : Int, body :
         // String, headers : Dict String String, contentType : String }`
         // (reference `Sky/Http/Server.ipe:66`), NOT an opaque nominal. Every
         // server kernel that produces/consumes a `Response` schemes over this
@@ -3668,7 +3668,7 @@ impl<'a> Builder<'a> {
             args: Vec::new(),
         };
         // `stream_id()` — the opaque `StreamId` handle from
-        // `Sky.Core.Http.Stream`. Backed at runtime by
+        // `Ipe.Http.Stream`. Backed at runtime by
         // `ipe_runtime::http_stream::IpeStreamId` (a newtype over `i64`).
         // Used as the return type of `HttpStream.open` and the first argument
         // of `forEachChunk`, `close`, and `chunks`.
@@ -3742,7 +3742,7 @@ impl<'a> Builder<'a> {
             m.insert(self.builtins.ws_f_ping_interval, int());
             Ty::Record(m, RowTail::Closed)
         };
-        // Std.Email: `EmailProvider` opaque ADT (runtime
+        // Ipe.Email: `EmailProvider` opaque ADT (runtime
         // `ipe_runtime::email::EmailProvider`). Empty-module `Con` (home-
         // insensitive lowering, same posture as `ws_server`); the Sky
         // `type EmailProvider` declaration unifies with it structurally by name.
@@ -3783,10 +3783,10 @@ impl<'a> Builder<'a> {
             name: self.builtins.attribute,
             args: vec![m],
         };
-        // `Std.Html.Attribute` — SAME name as `Std.Ui.Attribute` (`attr` above)
+        // `Ipe.Html.Attribute` — SAME name as `Ipe.Ui.Attribute` (`attr` above)
         // but module-qualified with `html_con`, so `ir_type_from_ty`'s T2
         // disambiguation selects `HtmlAttribute`, matching the runtime
-        // `Vec<html::Attribute<M>>` that every Std.Html node kernel takes
+        // `Vec<html::Attribute<M>>` that every Ipe.Html node kernel takes
         // (div/span/a/button/p/input/img/node/styleNode/attrToString). Using the
         // bare Ui `attr` for these would mis-select the Ui attribute variant.
         let html_attr = |m: Ty| Ty::Con {
@@ -3804,7 +3804,7 @@ impl<'a> Builder<'a> {
             name: self.builtins.html_con,
             args: vec![m],
         };
-        // `label_t(msg)` — `Label msg` from `Std.Ui.Input`.
+        // `label_t(msg)` — `Label msg` from `Ipe.Ui.Input`.
         // Lowered to `IrType::Ui { ctor: UiCtor::Label, msg }` via the `"Label"`
         // arm in `ipe_lower::ir_type_from_ty`. The type carries the module path
         // `[input_con]` so it doesn't collide with any user `type Label`.
@@ -3816,21 +3816,21 @@ impl<'a> Builder<'a> {
             name: self.builtins.input_label_con,
             args: vec![m],
         };
-        // `placeholder_t(msg)` — `Placeholder msg` from `Std.Ui.Input`.
+        // `placeholder_t(msg)` — `Placeholder msg` from `Ipe.Ui.Input`.
         // Lowered to `IrType::Ui { ctor: UiCtor::Placeholder, msg }`.
         let placeholder_t = |m: Ty| Ty::Con {
             module: Vec::new(),
             name: self.builtins.input_placeholder_con,
             args: vec![m],
         };
-        // `radio_option_t(msg)` — `RadioOption msg` from `Std.Ui.Input`.
+        // `radio_option_t(msg)` — `RadioOption msg` from `Ipe.Ui.Input`.
         // Lowered to `IrType::Ui { ctor: UiCtor::RadioOption, msg }`.
         let radio_option_t = |m: Ty| Ty::Con {
             module: Vec::new(),
             name: self.builtins.input_radio_option_con,
             args: vec![m],
         };
-        // Nullary Std.Ui plain types (`Length` / `Color`) — lowered to
+        // Nullary Ipe.Ui plain types (`Length` / `Color`) — lowered to
         // `IrType::UiPlain(UiPlain::Length | UiPlain::Color)`.
         let length = || Ty::Con {
             module: Vec::new(),
@@ -4666,7 +4666,7 @@ impl<'a> Builder<'a> {
                 fun(dict(var(0), var(1)), dict(var(0), var(1))),
             ),
 
-            // ── Std.Ui layout / element / event (already schemed in kernel_ty) ──
+            // ── Ipe.Ui layout / element / event (already schemed in kernel_ty) ──
             K::UiLayout => fun(list(attr(var(0))), fun(elem_t(var(0)), html_t(var(0)))),
             K::UiLayoutWith => {
                 let cfg_rec = Ty::Record({
@@ -4689,7 +4689,7 @@ impl<'a> Builder<'a> {
                 list(attr(var(0))),
                 fun(list(elem_t(var(0))), elem_t(var(0))),
             ),
-            // ── Std.Ui nearby attribute builders ─────────────────────────────────
+            // ── Ipe.Ui nearby attribute builders ─────────────────────────────────
             // `Ui.above/below/onLeft/onRight/inFront/behind : Element msg -> Attribute msg`
             K::UiAbove
             | K::UiBelow
@@ -4717,8 +4717,8 @@ impl<'a> Builder<'a> {
             // var(1) = the form-data record type (decoupled from var(0) = msg)
             K::UiOnSubmit => fun(fun(var(1), var(0)), attr(var(0))),
 
-            // ── Std.Html.Events builders — produce `Std.Html.Attribute
-            // msg` (`html_attr`), matching the `Std.Html.Attributes` builders
+            // ── Ipe.Html.Events builders — produce `Ipe.Html.Attribute
+            // msg` (`html_attr`), matching the `Ipe.Html.Attributes` builders
             // and the element builders' `List (html_attr msg)` slot. The arg
             // shape is dictated by `html_event_shape`; the `Raw` (onSubmit) form
             // DECOUPLES the handler type (`var(1)`) from `msg` (`var(0)`) so a
@@ -4747,7 +4747,7 @@ impl<'a> Builder<'a> {
                 ipe_kernels::HtmlEventShape::Raw => fun(var(1), html_attr(var(0))),
             },
 
-            // ── Std.Live app-entry (open 6-field scheme) ──
+            // ── Ipe.Live app-entry (open 6-field scheme) ──
             //
             // Mirrors `../sky/src/Sky/Type/Constrain/Expression.hs:2674-2695`.
             // The cfg record is OPEN (row variable `var(3)` = `appExt`) so the
@@ -4823,12 +4823,12 @@ impl<'a> Builder<'a> {
             K::LiveRoute => fun(string(), fun(var(1), live_route(var(0)))),
             K::LiveRenderStatic => fun(fun(var(0), html_t(var(1))), fun(var(0), task_unit())),
 
-            // ── Std.Tui app-entry ──────────────────────────────────────────────
+            // ── Ipe.Tui app-entry ──────────────────────────────────────────────
             //
             // Haskell reference (`Sky/Type/Constrain/Expression.hs`):
             //
             //   Tui.app   – 4 required fields; `onKey` optional via open row.
-            //               view : model -> any  (Element for Std.Ui, String for
+            //               view : model -> any  (Element for Ipe.Ui, String for
             //               raw ANSI; Haskell uses `any` wildcard).
             //   Tui.program – 5 required fields including `onKey : any -> msg`.
             //               `any` means the key-event type is UNCONSTRAINED —
@@ -4919,7 +4919,7 @@ impl<'a> Builder<'a> {
                 fun(cfg_rec, task_unit())
             }
 
-            // ── Std.Cli / Sky.Cli app-entry ─────────────────────
+            // ── Ipe.Cli / Ipe.Cli app-entry ─────────────────────
             // `Cli.program : { init : () -> (model, Cmd msg)
             //                , update : msg -> model -> (model, Cmd msg)
             //                , view : model -> String
@@ -4946,7 +4946,7 @@ impl<'a> Builder<'a> {
                 fun(cfg_rec, task_unit())
             }
 
-            // ── Std.Webview app-entry (already schemed in kernel_ty) ──
+            // ── Ipe.Webview app-entry (already schemed in kernel_ty) ──
             K::WebviewApp => {
                 let tup = tuple2(var(0), cmd(var(1)));
                 let window_ty = Ty::Record(
@@ -5091,7 +5091,7 @@ impl<'a> Builder<'a> {
             //    Encoders `String -> String` (UTF-8 bytes, Go parity);
             //    decoders `String -> Result Error String` (decoded bytes must be
             //    valid UTF-8 — non-UTF-8 payloads surface as `Err`; raw bytes go
-            //    through `Std.Bytes`). Each is a `Ty::Var(u32::MAX)` hole. ──
+            //    through `Ipe.Bytes`). Each is a `Ty::Var(u32::MAX)` hole. ──
             K::EncodingBase64Encode | K::EncodingUrlEncode | K::EncodingHexEncode => {
                 fun(string(), string())
             }
@@ -5099,7 +5099,7 @@ impl<'a> Builder<'a> {
                 fun(string(), result(error_ty(), string()))
             }
 
-            // ── Std.Html / Std.Ui / Sky.Live rendering (42) ──
+            // ── Ipe.Html / Ipe.Ui / Ipe.Live rendering (42) ──
             // The Html/Ui/Background/Border/Font rendering family. `attr(m)` /
             // `elem_t(m)` / `html_t(m)` are the msg-polymorphic opaque cons;
             // `length()` / `color()` are the nullary value cons. Each is a
@@ -5110,17 +5110,17 @@ impl<'a> Builder<'a> {
             // is EXCLUDED (REACHABLE_BUT_UNLOWERED) — its lowering is
             // `Feature::RoutedLiveApp` unsupported, so a caller fails closed.
 
-            // Std.Html serialise / escape (arity 1).
+            // Ipe.Html serialise / escape (arity 1).
             K::HtmlRender => fun(html_t(var(0)), string()),
             K::HtmlEscapeText | K::HtmlEscapeAttr => fun(string(), string()),
             K::HtmlAttrToString => fun(html_attr(var(0)), string()),
 
-            // Std.Ui element builders (arity 0 / 1).
+            // Ipe.Ui element builders (arity 0 / 1).
             K::UiNone => elem_t(var(0)),
             K::UiText => fun(string(), elem_t(var(0))),
             K::UiHtml => fun(html_t(var(0)), elem_t(var(0))),
 
-            // Std.Ui / Font attribute builders — nullary (arity 0).
+            // Ipe.Ui / Font attribute builders — nullary (arity 0).
             K::UiCenterX
             | K::UiCenterY
             | K::UiAlignLeft
@@ -5209,7 +5209,7 @@ impl<'a> Builder<'a> {
                 fun(list(Ty::Tuple(vec![float(), color()])), attr(var(0))),
             ),
 
-            // Std.Ui — two Int args (arity 2).
+            // Ipe.Ui — two Int args (arity 2).
             K::UiPaddingXY => fun(int(), fun(int(), attr(var(0)))),
 
             // ── Ui.paddingEach ──────────────────────────────────────────────────
@@ -5235,18 +5235,18 @@ impl<'a> Builder<'a> {
             K::UiStyle => fun(string(), fun(string(), attr(var(0)))),
             // `Ui.transitionRaw : String -> Bool -> Attribute msg` — the CSS
             // transition shorthand + a respect-`prefers-reduced-motion` flag.
-            // Native surface backing `Std.Ui.Transition.attribute` /
+            // Native surface backing `Ipe.Ui.Transition.attribute` /
             // `attributeUnsafe`.
             K::UiTransitionRaw => fun(string(), fun(bool_ty(), attr(var(0)))),
             // `Ui.gridTracksRaw : String -> String -> Attribute msg` — CSS
             // grid-template-columns (first arg) and grid-template-rows (second arg).
-            // Native surface backing `Std.Ui.Grid.columns`/`rows`/`tracks`.
+            // Native surface backing `Ipe.Ui.Grid.columns`/`rows`/`tracks`.
             K::UiGridTracksRaw => fun(string(), fun(string(), attr(var(0)))),
             // `Ui.animateRaw : String -> String -> String -> Bool -> Attribute msg`
             // — keyframe-animation name, the animation shorthand tail
             // (`<dur>ms <easing> <delay>ms <iter> <fill>`), the `@keyframes`
             // body, and a respect-`prefers-reduced-motion` flag. Native surface
-            // backing `Std.Ui.Animation.attribute`.
+            // backing `Ipe.Ui.Animation.attribute`.
             K::UiAnimateRaw => fun(
                 string(),
                 fun(string(), fun(string(), fun(bool_ty(), attr(var(0))))),
@@ -5286,11 +5286,11 @@ impl<'a> Builder<'a> {
                 fun(list(attr(var(0))), attr(var(0))),
             ),
 
-            // Std.Html leaf nodes (arity 1).
+            // Ipe.Html leaf nodes (arity 1).
             K::HtmlTextNode | K::HtmlRawNode => fun(string(), html_t(var(0))),
 
-            // Std.Html generic node (arity 3 — tag, attrs, children). Attrs are
-            // `Std.Html.Attribute` (html_attr) — matches `Vec<html::Attribute>`.
+            // Ipe.Html generic node (arity 3 — tag, attrs, children). Attrs are
+            // `Ipe.Html.Attribute` (html_attr) — matches `Vec<html::Attribute>`.
             K::HtmlNode => fun(
                 string(),
                 fun(
@@ -5317,24 +5317,24 @@ impl<'a> Builder<'a> {
             // `Html.toString : Html msg -> String` — alias of `Html.render`.
             K::HtmlToString => fun(html_t(var(0)), string()),
 
-            // Std.Html container nodes (arity 2 — attrs, children; tag baked).
+            // Ipe.Html container nodes (arity 2 — attrs, children; tag baked).
             K::HtmlDiv | K::HtmlSpan | K::HtmlA | K::HtmlButton | K::HtmlP
             | K::HtmlH1 | K::HtmlH2 | K::HtmlH3 | K::HtmlH4 | K::HtmlH5 | K::HtmlH6 | K::HtmlNav | K::HtmlSection | K::HtmlArticle | K::HtmlHeader | K::HtmlHeaderNode | K::HtmlCodeNode | K::HtmlMainNode | K::HtmlFooterNode | K::HtmlFooter | K::HtmlMain | K::HtmlAside | K::HtmlUl | K::HtmlOl | K::HtmlLi | K::HtmlTable | K::HtmlThead | K::HtmlTbody | K::HtmlTfoot | K::HtmlTr | K::HtmlTh | K::HtmlTd | K::HtmlTextarea | K::HtmlSelect | K::HtmlOption | K::HtmlLabel | K::HtmlForm | K::HtmlFieldset | K::HtmlLegend | K::HtmlPre | K::HtmlCode | K::HtmlStrong | K::HtmlEm | K::HtmlSmall | K::HtmlBlockquote | K::HtmlFigure | K::HtmlFigcaption | K::HtmlDetails | K::HtmlSummary | K::HtmlDialog | K::HtmlVideo | K::HtmlAudio | K::HtmlCanvas | K::HtmlIframe | K::HtmlProgress | K::HtmlMeter | K::HtmlScript | K::HtmlBody | K::HtmlTitle | K::HtmlHtmlNode | K::HtmlHeadNode => fun(
                 list(html_attr(var(0))),
                 fun(list(html_t(var(0))), html_t(var(0))),
             ),
 
-            // Std.Html void nodes (arity 1 — attrs only).
+            // Ipe.Html void nodes (arity 1 — attrs only).
             K::HtmlInput | K::HtmlImg | K::HtmlBr | K::HtmlHr | K::HtmlMeta | K::HtmlLink | K::HtmlLinkNode | K::HtmlArea | K::HtmlBase | K::HtmlCol | K::HtmlEmbed | K::HtmlSource | K::HtmlTrack | K::HtmlWbr => fun(list(html_attr(var(0))), html_t(var(0))),
 
-            // Std.Html styleNode (arity 2 — attrs, css string; F7). The
+            // Ipe.Html styleNode (arity 2 — attrs, css string; F7). The
             // runtime bakes `strip_style_close` on the css. RELOCATED — matches
             // the legacy `kernel_ty(Html, styleNode)` byte-for-byte (html_attr +
-            // html_t). `List (Std.Html.Attribute msg) -> String -> Html msg`.
+            // html_t). `List (Ipe.Html.Attribute msg) -> String -> Html msg`.
             K::HtmlStyleNode => fun(list(html_attr(var(0))), fun(string(), html_t(var(0)))),
 
-            // ── Std.Html.Attributes builders ────────────────────────────
-            // String fixed-key: `String -> Std.Html.Attribute msg`.
+            // ── Ipe.Html.Attributes builders ────────────────────────────
+            // String fixed-key: `String -> Ipe.Html.Attribute msg`.
             K::HtmlAttrClass
             | K::HtmlAttrId
             | K::HtmlAttrHref
@@ -5348,7 +5348,7 @@ impl<'a> Builder<'a> {
             | K::HtmlAttrStyle
             | K::HtmlAttrTitle
             | K::HtmlAttrAutocomplete => fun(string(), html_attr(var(0))),
-            // Bool fixed-key: `Bool -> Std.Html.Attribute msg`.
+            // Bool fixed-key: `Bool -> Ipe.Html.Attribute msg`.
             K::HtmlAttrChecked
             | K::HtmlAttrDisabled
             | K::HtmlAttrReadonly
@@ -5365,7 +5365,7 @@ impl<'a> Builder<'a> {
             // Textarea rows attribute — `Int -> HtmlAttribute msg`.
             K::HtmlAttrRows => fun(int(), html_attr(var(0))),
 
-            // ── Std.Ui.Keyed ──────────────────────────────────────────────────
+            // ── Ipe.Ui.Keyed ──────────────────────────────────────────────────
             // `Keyed.column / Keyed.row : List (Attribute msg) -> List (String, Element msg) -> Element msg`
             K::KeyedColumn
             | K::KeyedRow => {
@@ -5375,7 +5375,7 @@ impl<'a> Builder<'a> {
                 )
             }
 
-            // ── Std.Decimal ───────────────────────────────────────────────────
+            // ── Ipe.Decimal ───────────────────────────────────────────────────
             // Construction.
             K::DecZero | K::DecOne | K::DecOneHundred => decimal(),
             K::DecFromString => fun(string(), result(error_ty(), decimal())),
@@ -5425,7 +5425,7 @@ impl<'a> Builder<'a> {
                 fun(string(), fun(string(), fun(int(), fun(decimal(), string()))))
             }
 
-            // ── Std.Ui.Region ──────────────────────────────────────────
+            // ── Ipe.Ui.Region ──────────────────────────────────────────
             // Nullary region landmark attrs — `Attribute msg`.
             K::RegionMainContent
             | K::RegionNavigation
@@ -5453,7 +5453,7 @@ impl<'a> Builder<'a> {
             K::UiDescHeading => fun(int(), description()),
             K::UiDescLabel => fun(string(), description()),
 
-            // ── Std.Ui.Input ──────────────────────────────────────────
+            // ── Ipe.Ui.Input ──────────────────────────────────────────
             //
             // Label constructors: `List (Attribute msg) -> Element msg -> Label msg`
             K::InputLabelAbove | K::InputLabelBelow | K::InputLabelLeft | K::InputLabelRight => {
@@ -5576,7 +5576,7 @@ impl<'a> Builder<'a> {
                 fun(list(attr(var(0))), fun(cfg_rec, elem_t(var(0))))
             }
 
-            // ── Std.Ui.Input radio group ───────────────────────────────
+            // ── Ipe.Ui.Input radio group ───────────────────────────────
             //
             // `Input.option : String -> Element msg -> RadioOption msg`
             K::InputOption => fun(string(), fun(elem_t(var(0)), radio_option_t(var(0)))),
@@ -5624,7 +5624,7 @@ impl<'a> Builder<'a> {
                 fun(list(attr(var(0))), fun(cfg_rec, elem_t(var(0))))
             }
 
-            // ── Std.Ui.Lazy ────────────────────────────────────────────
+            // ── Ipe.Ui.Lazy ────────────────────────────────────────────
             // lazy  : (a -> Element msg) -> a -> Element msg
             K::LazyLazy => fun(
                 fun(var(0), elem_t(var(1))),
@@ -5703,7 +5703,7 @@ impl<'a> Builder<'a> {
             ),
             K::JsonDecPCustom => fun(dec(var(0)), fun(dec(fun(var(0), var(1))), dec(var(1)))),
 
-            // ── Std.Config (16) — the shared `Decoder a` carrier (`dec(a)`),
+            // ── Ipe.Config (16) — the shared `Decoder a` carrier (`dec(a)`),
             //    over TOML/YAML/JSON. Combinator/primitive schemes are identical
             //    to `Json.Decode`'s (same runtime `decode_*` fns); the format
             //    front-ends put the source `String` FIRST, then the decoder. ──
@@ -5734,7 +5734,7 @@ impl<'a> Builder<'a> {
             //    used during lowering (runtime `ok_res(a) -> Result e a`). ──
             K::ResultOkDefault => fun(var(0), result(var(1), var(0))),
 
-            // ── Std.Ui Length builders (result type `Length`) — runtime
+            // ── Ipe.Ui Length builders (result type `Length`) — runtime
             //    `ui_px_(i64) -> Length`, `ui_fill_() -> Length`, etc. `Length`
             //    lowers to `IrType::UiPlain(UiPlain::Length)`. Arrow-count ==
             //    `decl().arity` for every arm. ──
@@ -5742,7 +5742,7 @@ impl<'a> Builder<'a> {
             K::UiFill | K::UiContent | K::UiShrink => length(),
             K::UiMinimum | K::UiMaximum => fun(int(), fun(length(), length())),
 
-            // ── Std.Ui Color builders (result type `Color`) — runtime
+            // ── Ipe.Ui Color builders (result type `Color`) — runtime
             //    `ui_rgb_(i64,i64,i64) -> Color`, `ui_rgba_(i64,i64,i64,f64) ->
             //    Color`, `ui_white_() -> Color`, etc. `Color` lowers to
             //    `IrType::UiPlain(UiPlain::Color)`. ──
@@ -5752,7 +5752,7 @@ impl<'a> Builder<'a> {
             // colorCss : Color -> String
             K::UiColorCss => fun(color(), string()),
 
-            // ── Sky.Core.Json.Encode (8) — the `JsonEnc.*` encoders. `Value =
+            // ── Ipe.Json.Encode (8) — the `JsonEnc.*` encoders. `Value =
             //    any` maps to `IrType::Json` (`JsonVal`) via the `"Value"` arm in
             //    `ipe_lower::ir_type_from_ty`. Runtime: `json_enc_string(String)
             //    -> JsonVal`, `json_enc_null() -> JsonVal` (arity 0),
@@ -5771,7 +5771,7 @@ impl<'a> Builder<'a> {
             K::JsonEncObject => fun(list(tuple2(string(), value())), value()),
             K::JsonEncEncode => fun(int(), fun(value(), string())),
 
-            // ── Sky.Core.Error (15 — real Error/ErrorKind/ErrorDetails ADT) ──
+            // ── Ipe.Error (15 — real Error/ErrorKind/ErrorDetails ADT) ──
             //    `Error` is `Error ErrorKind ErrorInfo` (`Error`'s own ctor scheme
             //    is registered in `ctor_schemes()`), backed at runtime by the real
             //    `ipe_runtime::error::IpeError` enum (`IrType::Error`), not
@@ -5801,7 +5801,7 @@ impl<'a> Builder<'a> {
             K::ErrorIsRetryable => fun(error_ty(), bool_ty()),
             K::ErrorWithDetails => fun(errordetails_ty(), fun(error_ty(), error_ty())),
 
-            // ── Sky.Core.CssSafety (4 — Std.Css leaf security kernels) ──
+            // ── Ipe.CssSafety (4 — Ipe.Css leaf security kernels) ──
             //    The three parsers are `String -> Maybe String` (`None` => the
             //    Sky side drops the declaration/rule via `CssDropped` /
             //    `CssRuleDropped`); `stripStyleClose` is the `String -> String`
@@ -5813,7 +5813,7 @@ impl<'a> Builder<'a> {
             }
             K::CssSafetyStripStyleClose => fun(string(), string()),
 
-            // ── Sky.Core.Uuid (3) — ENTROPY IS AN EFFECT ──
+            // ── Ipe.Uuid (3) — ENTROPY IS AN EFFECT ──
             //    `v4`/`v7` draw fresh entropy per call, so they are typed on the
             //    effect tier `() -> Task Error String` (runtime `uuid_v4::<E>(_:
             //    ())` / `uuid_v7::<E>(_: ())` return `IpeTask<E, String>`),
@@ -5848,7 +5848,7 @@ impl<'a> Builder<'a> {
             //    their schemes above; not in this arm.
             K::LiveAppRouted => return None,
 
-            // ── Std.Auth (9 kernels) ──────────────────────────────────────
+            // ── Ipe.Auth (9 kernels) ──────────────────────────────────────
             // hashPassword : String -> Result Error String
             K::AuthHashPassword => fun(string(), result(error_ty(), string())),
             // hashPasswordCost : String -> Int -> Result Error String
@@ -5888,7 +5888,7 @@ impl<'a> Builder<'a> {
             // setRole : Db -> Int -> String -> Task Error ()
             K::AuthSetRole => fun(db(), fun(int(), fun(string(), task_unit()))),
 
-            // ── Sky.Core.Secret — opaque secret-string wrapper ────
+            // ── Ipe.Secret — opaque secret-string wrapper ────
             // `fromString` is the seal (construction boundary); `reveal` is the
             // single greppable un-parse; `redacted` is the explicit "<redacted>"
             // accessor (also what `toString`/interpolation gives automatically —
@@ -5902,7 +5902,7 @@ impl<'a> Builder<'a> {
             K::SecretReveal => fun(secret(), string()),
             K::SecretRedacted => fun(secret(), string()),
 
-            // ── Sky.Http.Server.Stream (4 kernels) ────────────────────────
+            // ── Ipe.Http.Server.Stream (4 kernels) ────────────────────────
             // stream : String -> (StreamWriter -> Task Error ()) -> Task Error Response
             // The callback receives an opaque `StreamWriter` handle; emit/finish
             // consume the same handle directly (no Int unwrap layer needed).
@@ -5914,12 +5914,12 @@ impl<'a> Builder<'a> {
             // withContentType : String -> StreamWriter -> Task Error ()
             K::StreamWithContentType => fun(string(), fun(sw(), task_unit())),
 
-            // ── Sky.Core.Http.Stream (4 kernels) ──────────────────────────
+            // ── Ipe.Http.Stream (4 kernels) ──────────────────────────
             // open : HttpRequest -> Task Error StreamId
             //
             // Returns an opaque `StreamId` handle wrapping the raw i64 stream
             // registry key.  Typed to match upstream
-            // `Sky.Core.Http.Stream.open`'s declared return type.
+            // `Ipe.Http.Stream.open`'s declared return type.
             K::HttpStreamOpen => fun(http_request(), task(stream_id())),
             // forEachChunk : StreamId -> (String -> Task Error ()) -> Task Error ()
             K::HttpStreamForEachChunk => {
@@ -5931,7 +5931,7 @@ impl<'a> Builder<'a> {
             // ChunkEvent is opaque from the runtime; modelled as `var(0)`.
             K::HttpStreamChunks => fun(stream_id(), fun(fun(var(0), var(1)), sub(var(1)))),
 
-            // ── Sky.Http.Server.WebSocket (12 kernels) ────────────────────
+            // ── Ipe.Http.Server.WebSocket (12 kernels) ────────────────────
             // defaultCfg : WebSocketServerCfg
             // Arity-0: the return type IS the scheme (no `fun` wrapper).
             K::WsDefaultCfg => wscfg(),
@@ -5962,7 +5962,7 @@ impl<'a> Builder<'a> {
             // closeClient : WebSocketServer -> Task Error ()
             K::WsCloseClient => fun(wsh(), task_unit()),
 
-            // ── Sky.Core.WebSocket — outbound WebSocket client ─────────────
+            // ── Ipe.WebSocket — outbound WebSocket client ─────────────
             // The Task-tier six take/return a raw `Int` socket id (the stdlib
             // wraps it in the `WebSocket` ADT). `connectWith` takes the nominal
             // `WebSocketCfg` record (`{ url, headers, timeout, pingInterval }`),
@@ -5998,7 +5998,7 @@ impl<'a> Builder<'a> {
                 fun(int(), fun(string(), fun(var(0), sub(var(1)))))
             }
 
-            // ── Sky.Core.Regex (5 kernels) ────────────────────────────────
+            // ── Ipe.Regex (5 kernels) ────────────────────────────────
             // Concrete, monomorphic schemes (no type vars): RE2 helpers over
             // `String`. `match` returns `Bool`; `find` a `Maybe String`;
             // `findAll`/`split` a `List String`; `replace` is arity-3
@@ -6010,7 +6010,7 @@ impl<'a> Builder<'a> {
             K::RegexReplace => fun(string(), fun(string(), fun(string(), string()))),
             K::RegexSplit => fun(string(), fun(string(), list(string()))),
 
-            // ── Sky.Core.Path (4 kernels) ─────────────────────────────────
+            // ── Ipe.Path (4 kernels) ─────────────────────────────────
             // Pure path helpers over `String`. `base`/`dir`/`ext` return
             // `String`; `isAbsolute` returns `Bool`. Runtime total/pure
             // (`ipe_runtime::path::*`, re-exported ungated).
@@ -6019,7 +6019,7 @@ impl<'a> Builder<'a> {
             K::PathExt => fun(string(), string()),
             K::PathIsAbsolute => fun(string(), bool_ty()),
 
-            // ── Std.Trace (3 kernels) ─────────────────────────────────────
+            // ── Ipe.Trace (3 kernels) ─────────────────────────────────────
             // `span : String -> Task a -> Task a` — the wrapped Task's value flows
             // through untouched; the error channel is the implicit `Error`.
             // `event : String -> Task ()`; `attr : String -> String -> Task ()`.
@@ -6027,7 +6027,7 @@ impl<'a> Builder<'a> {
             K::TraceEvent => fun(string(), task_unit()),
             K::TraceAttr => fun(string(), fun(string(), task_unit())),
 
-            // ── Std.Compression (4 kernels) ───────────────────────────────
+            // ── Ipe.Compression (4 kernels) ───────────────────────────────
             // `Bytes -> Task Bytes` — the Rust runtime `compression_*` takes and
             // returns `Vec<u8>` (`Bytes` lowers to `Vec<u8>`), a documented
             // divergence from the Go backend's `String`-as-bytes shape.
@@ -6036,7 +6036,7 @@ impl<'a> Builder<'a> {
             K::CompressionZstdCompress => fun(bytes(), task(bytes())),
             K::CompressionZstdDecompress => fun(bytes(), task(bytes())),
 
-            // ── Std.Csv (5 kernels) ───────────────────────────────────────
+            // ── Ipe.Csv (5 kernels) ───────────────────────────────────────
             // `Csv` is the closed record `{ header : List String,
             // rows : List (List String) }` (runtime `ipe_runtime::csv::CsvDoc`).
             K::CsvParse => fun(string(), result(error_ty(), csv_rec())),
@@ -6047,7 +6047,7 @@ impl<'a> Builder<'a> {
             K::CsvEncodeWithDelimiter => fun(string(), fun(csv_rec(), string())),
             K::CsvParseStreamFromFile => fun(string(), task(list(list(string())))),
 
-            // ── Std.Cache (7 kernels) ─────────────────────────────────────
+            // ── Ipe.Cache (7 kernels) ─────────────────────────────────────
             // All take the raw `Int` handle. `k`/`v` are the surface key/value
             // type variables (`var(0)`/`var(1)`); the runtime scans keys by
             // `PartialEq`. `newRaw` takes the `CacheCfg` record, `stats` returns
@@ -6060,7 +6060,7 @@ impl<'a> Builder<'a> {
             K::CacheSize => fun(int(), task(int())),
             K::CacheStats => fun(int(), task(cache_stats_rec())),
 
-            // ── Std.Email ─────────────────────────────────────────────────────────
+            // ── Ipe.Email ─────────────────────────────────────────────────────────
             // send : EmailProvider -> EmailMessage -> Task Error String
             K::EmailSend => fun(
                 email_provider(),
@@ -6150,7 +6150,7 @@ impl<'a> Builder<'a> {
                 fun(rec_arg, attr(var(0)))
             }
 
-            // ── Std.Db.Sql — SqlFragment builder ───────────────
+            // ── Ipe.Db.Sql — SqlFragment builder ───────────────
             //
             // `Sql.column : String -> SqlFragment` — validated column/table
             // reference (dot-accepting, so `users.id` is legal).
@@ -7162,7 +7162,7 @@ mod registry_phase_c_tests {
             K::DictMap,
             K::DictInsert,
             K::DictFoldl,
-            // Std.Ui layout / element / event (17)
+            // Ipe.Ui layout / element / event (17)
             K::UiLayout,
             K::UiLayoutWith,
             K::UiEl,
@@ -7191,16 +7191,16 @@ mod registry_phase_c_tests {
             K::UiOnKeyUp,
             K::UiOnBool,
             K::UiOnSubmit,
-            // Std.Live app-entry (3)
+            // Ipe.Live app-entry (3)
             K::LiveApp,
             K::LiveRoute,
             K::LiveRenderStatic,
-            // Std.Tui app-entry (2)
+            // Ipe.Tui app-entry (2)
             K::TuiApp,
             K::TuiProgram,
-            // Std.Webview app-entry (1)
+            // Ipe.Webview app-entry (1)
             K::WebviewApp,
-            // Std.Html styleNode (1 — F7; parity checked by
+            // Ipe.Html styleNode (1 — F7; parity checked by
             // stdlib_scheme_matches_legacy).
             K::HtmlStyleNode,
         ]
@@ -7217,12 +7217,12 @@ mod registry_phase_c_tests {
     ///   (`encodeHs256`/`encodeRs256`): registry `decl().arity` is 2 to match
     ///   the Rust runtime (the AEAD nonce is internal; encode takes secret +
     ///   claims-JSON), so the arrow-count == arity invariant holds.
-    /// - Std.Ui `Length` builders (`px`/`fill`/`content`/`shrink`/
-    ///   `fillPortion`/`vh`/`vw`/`minimum`/`maximum`), Std.Ui `Color` builders
+    /// - Ipe.Ui `Length` builders (`px`/`fill`/`content`/`shrink`/
+    ///   `fillPortion`/`vh`/`vw`/`minimum`/`maximum`), Ipe.Ui `Color` builders
     ///   (`rgb`/`rgba`/`white`/`black`/`transparent`), and the
-    ///   `Sky.Core.Json.Encode` encoders: `Length` / `Color` lower to
+    ///   `Ipe.Json.Encode` encoders: `Length` / `Color` lower to
     ///   `IrType::UiPlain(_)` and the JSON `Value` type to `IrType::Json`.
-    /// - `Sky.Core.Uuid` (`v4`/`v7` as `() -> Task Error String` — entropy is
+    /// - `Ipe.Uuid` (`v4`/`v7` as `() -> Task Error String` — entropy is
     ///   an effect; `parse` as the pure `String -> Maybe String` parser).
     /// - The `List` combinators and the `Encoding` codecs (UTF-8 text path,
     ///   Go parity).
@@ -7280,7 +7280,7 @@ mod registry_phase_c_tests {
             K::CharToUpper,
             K::CharToCode,
             K::CharFromCode,
-            // Error (13 — Sky.Core.Error minimal `Error = String` slice)
+            // Error (13 — Ipe.Error minimal `Error = String` slice)
             K::ErrorUnexpected,
             K::ErrorInvalidInput,
             K::ErrorIo,
@@ -7296,7 +7296,7 @@ mod registry_phase_c_tests {
             K::ErrorWithMessage,
             K::ErrorIsRetryable,
             K::ErrorWithDetails,
-            // CssSafety (4 — Std.Css leaf security kernels). Each is a hole
+            // CssSafety (4 — Ipe.Css leaf security kernels). Each is a hole
             // (`kernel_ty` has no CssSafety arm → `Ty::Var(u32::MAX)`) unless
             // schemed above; the three parsers are `String -> Maybe String`,
             // `stripStyleClose` is `String -> String`.
@@ -7369,7 +7369,7 @@ mod registry_phase_c_tests {
             K::JsonDecPRequiredAt,
             // Result internal okDefault (1)
             K::ResultOkDefault,
-            // Std.Ui Length builders (9) — result type `Length`
+            // Ipe.Ui Length builders (9) — result type `Length`
             K::UiPx,
             K::UiFill,
             K::UiContent,
@@ -7379,14 +7379,14 @@ mod registry_phase_c_tests {
             K::UiVw,
             K::UiMinimum,
             K::UiMaximum,
-            // Std.Ui Color builders (6) — result type `Color`
+            // Ipe.Ui Color builders (6) — result type `Color`
             K::UiRgb,
             K::UiRgba,
             K::UiWhite,
             K::UiBlack,
             K::UiTransparent,
             K::UiColorCss,
-            // Sky.Core.Json.Encode (8) — `Value` positions map to `IrType::Json`
+            // Ipe.Json.Encode (8) — `Value` positions map to `IrType::Json`
             K::JsonEncString,
             K::JsonEncInt,
             K::JsonEncFloat,
@@ -7481,14 +7481,14 @@ mod registry_phase_c_tests {
             // Each is a `Ty::Var(u32::MAX)` hole (`kernel_ty` has no Encoding
             // arm), confirmed by `first_schemed_were_holes`. The runtime text
             // path is UTF-8 (Go parity); byte round-tripping lives in
-            // `Std.Bytes`.
+            // `Ipe.Bytes`.
             K::EncodingBase64Encode,
             K::EncodingBase64Decode,
             K::EncodingUrlEncode,
             K::EncodingUrlDecode,
             K::EncodingHexEncode,
             K::EncodingHexDecode,
-            // Std.Html / Std.Ui / Sky.Live rendering family (42).
+            // Ipe.Html / Ipe.Ui / Ipe.Live rendering family (42).
             // All genuine `Ty::Var(u32::MAX)` holes (legacy `kernel_ty` has no
             // Html/Ui/Background/Border/Font arm). Verified vs runtime + lower
             // `callee_arity` in docs/adr/0020-html-ui-live-kernel-arity-tripwire.md.
@@ -7536,7 +7536,7 @@ mod registry_phase_c_tests {
             K::HtmlP,
             K::HtmlInput,
             K::HtmlImg,
-            // Std.Html element builders (first-schemed — no legacy).
+            // Ipe.Html element builders (first-schemed — no legacy).
             K::HtmlH1,
             K::HtmlH2,
             K::HtmlH3,
@@ -7603,7 +7603,7 @@ mod registry_phase_c_tests {
             K::HtmlSource,
             K::HtmlTrack,
             K::HtmlWbr,
-            // Std.Html.Attributes builders (first-schemed — no legacy).
+            // Ipe.Html.Attributes builders (first-schemed — no legacy).
             K::HtmlAttrClass,
             K::HtmlAttrId,
             K::HtmlAttrHref,
@@ -7627,7 +7627,7 @@ mod registry_phase_c_tests {
             K::HtmlAttribute,
             K::HtmlBoolAttribute,
             K::HtmlNoAttr,
-            // Std.Html.Events builders (first-schemed — no legacy).
+            // Ipe.Html.Events builders (first-schemed — no legacy).
             K::HtmlOnClick,
             K::HtmlOnFocus,
             K::HtmlOnBlur,
@@ -7642,7 +7642,7 @@ mod registry_phase_c_tests {
             // NB: HtmlStyleNode is NOT here — it is RELOCATED (`Html.styleNode`
             // is schemed in the legacy `kernel_ty` table, F7), so its parity is
             // checked by `stdlib_scheme_matches_legacy`.
-            // ── Tier 1: extended Std.Ui / Font / Background / Border builders ──
+            // ── Tier 1: extended Ipe.Ui / Font / Background / Border builders ──
             K::UiSquare,
             K::UiWidescreen,
             K::UiCinemascope,
@@ -7702,9 +7702,9 @@ mod registry_phase_c_tests {
             K::FontDisabledColor,
             K::FontHoverSize,
             K::HtmlAttrTabindex,
-            // Std.Cli / Sky.Cli app-entry — brand-new kernel, no legacy oracle.
+            // Ipe.Cli / Ipe.Cli app-entry — brand-new kernel, no legacy oracle.
             K::CliProgram,
-            // ── Std.Auth (9 kernels) — schemed + lowered, moved from REACHABLE_BUT_UNLOWERED ──
+            // ── Ipe.Auth (9 kernels) — schemed + lowered, moved from REACHABLE_BUT_UNLOWERED ──
             K::AuthHashPassword,
             K::AuthHashPasswordCost,
             K::AuthVerifyPassword,
@@ -7714,17 +7714,17 @@ mod registry_phase_c_tests {
             K::AuthRegister,
             K::AuthLogin,
             K::AuthSetRole,
-            // ── Sky.Http.Server.Stream (4 kernels) ─────────────────────────
+            // ── Ipe.Http.Server.Stream (4 kernels) ─────────────────────────
             K::StreamStream,
             K::StreamEmit,
             K::StreamFinish,
             K::StreamWithContentType,
-            // ── Sky.Core.Http.Stream (4 kernels) ───────────────────────────
+            // ── Ipe.Http.Stream (4 kernels) ───────────────────────────
             K::HttpStreamOpen,
             K::HttpStreamForEachChunk,
             K::HttpStreamClose,
             K::HttpStreamChunks,
-            // ── Sky.Http.Server.WebSocket (12 kernels) ─────────────────────
+            // ── Ipe.Http.Server.WebSocket (12 kernels) ─────────────────────
             K::WsDefaultCfg,
             K::WsWithOnConnect,
             K::WsWithOnMessage,
@@ -7737,7 +7737,7 @@ mod registry_phase_c_tests {
             K::WsSendBinaryToClient,
             K::WsBroadcast,
             K::WsCloseClient,
-            // ── Sky.Core.WebSocket — outbound WebSocket client (7 kernels) ──
+            // ── Ipe.WebSocket — outbound WebSocket client (7 kernels) ──
             K::WebSocketConnect,
             K::WebSocketConnectWith,
             K::WebSocketSend,
@@ -7745,7 +7745,7 @@ mod registry_phase_c_tests {
             K::WebSocketClose,
             K::WebSocketCloseWithCode,
             K::SubSubscribeWebSocket,
-            // ── Std.Ui.Region — all 8 landmark/live-region attrs ──
+            // ── Ipe.Ui.Region — all 8 landmark/live-region attrs ──
             K::RegionMainContent,
             K::RegionNavigation,
             K::RegionFooter,
@@ -7765,7 +7765,7 @@ mod registry_phase_c_tests {
             K::UiDescLiveAssertive,
             K::UiDescHeading,
             K::UiDescLabel,
-            // ── Std.Ui.Input ───────────────────────────────────────────
+            // ── Ipe.Ui.Input ───────────────────────────────────────────
             K::InputLabelAbove,
             K::InputLabelBelow,
             K::InputLabelLeft,
@@ -7784,7 +7784,7 @@ mod registry_phase_c_tests {
             K::InputOption,
             K::InputRadio,
             K::InputRadioRow,
-            // ── Std.Ui.Lazy ────────────────────────────────────────────
+            // ── Ipe.Ui.Lazy ────────────────────────────────────────────
             K::LazyLazy,
             K::LazyLazy2,
             K::LazyLazy3,
@@ -7803,7 +7803,7 @@ mod registry_phase_c_tests {
             K::BorderShadow,
             K::BorderGlow,
             K::BorderInnerShadow,
-            // ── 20 Std.Ui / Std.Html / Background kernels — the
+            // ── 20 Ipe.Ui / Ipe.Html / Background kernels — the
             // exhaustiveness gate list. No legacy `kernel_ty` entry — pure
             // holes.
             K::UiImage,
@@ -7826,10 +7826,10 @@ mod registry_phase_c_tests {
             K::UiFocusVisible,
             K::UiActive,
             K::UiDisabled,
-            // ── Std.Ui.Keyed (column + row) ──────────────────────────────────
+            // ── Ipe.Ui.Keyed (column + row) ──────────────────────────────────
             K::KeyedColumn,
             K::KeyedRow,
-            // ── Std.Decimal (40 kernels) ──────────────────────────────────────
+            // ── Ipe.Decimal (40 kernels) ──────────────────────────────────────
             K::DecZero,
             K::DecOne,
             K::DecOneHundred,
@@ -7872,7 +7872,7 @@ mod registry_phase_c_tests {
             K::DecFormatWith,
             // ── Textarea rows attr ─────────────────────────────────────────────
             K::HtmlAttrRows,
-            // ── Std.Db.Sql — SqlFragment builder (19) ──────────────
+            // ── Ipe.Db.Sql — SqlFragment builder (19) ──────────────
             K::SqlColumn,
             K::SqlParam,
             K::SqlInt,
@@ -7899,37 +7899,37 @@ mod registry_phase_c_tests {
             // relocating a legacy `kernel_ty` scheme. Its DbDec siblings are
             // RELOCATED; this one is deliberately not (hole XOR relocation).
             K::DbDecMoney,
-            // ── Sky.Core.Secret (3) ─────────────────────────────
+            // ── Ipe.Secret (3) ─────────────────────────────
             K::SecretFromString,
             K::SecretReveal,
             K::SecretRedacted,
-            // ── Sky.Core.Regex (5) ─────────────────────────────────────
+            // ── Ipe.Regex (5) ─────────────────────────────────────
             K::RegexMatch,
             K::RegexFind,
             K::RegexFindAll,
             K::RegexReplace,
             K::RegexSplit,
-            // ── Sky.Core.Path (4) ──────────────────────────────────────
+            // ── Ipe.Path (4) ──────────────────────────────────────
             K::PathBase,
             K::PathDir,
             K::PathExt,
             K::PathIsAbsolute,
-            // ── Std.Trace (3) ──────────────────────────────────────────
+            // ── Ipe.Trace (3) ──────────────────────────────────────────
             K::TraceSpan,
             K::TraceEvent,
             K::TraceAttr,
-            // ── Std.Compression (4) ────────────────────────────────────
+            // ── Ipe.Compression (4) ────────────────────────────────────
             K::CompressionGzip,
             K::CompressionGunzip,
             K::CompressionZstdCompress,
             K::CompressionZstdDecompress,
-            // ── Std.Csv (5) ────────────────────────────────────────────
+            // ── Ipe.Csv (5) ────────────────────────────────────────────
             K::CsvParse,
             K::CsvParseWithDelimiter,
             K::CsvEncode,
             K::CsvEncodeWithDelimiter,
             K::CsvParseStreamFromFile,
-            // ── Std.Cache (7) ──────────────────────────────────────────
+            // ── Ipe.Cache (7) ──────────────────────────────────────────
             K::CacheNewRaw,
             K::CacheGet,
             K::CachePut,
@@ -7937,7 +7937,7 @@ mod registry_phase_c_tests {
             K::CacheClear,
             K::CacheSize,
             K::CacheStats,
-            // ── Std.Config (16) ────────────────────────────────────
+            // ── Ipe.Config (16) ────────────────────────────────────
             K::ConfigString,
             K::ConfigInt,
             K::ConfigFloat,
@@ -7954,9 +7954,9 @@ mod registry_phase_c_tests {
             K::ConfigDecodeYaml,
             K::ConfigDecodeJson,
             K::ConfigLoadFromFile,
-            // ── Std.Email (1) ──────────────────────────────────────────
+            // ── Ipe.Email (1) ──────────────────────────────────────────
             K::EmailSend,
-            // ── Std.PubSub (2) ─────────────────────────────────────
+            // ── Ipe.PubSub (2) ─────────────────────────────────────
             // Runtime exists, emit arm present (`pubsub_publish::<_, IpeError>`),
             // scheme `String -> a -> Task Error Int`.
             K::PubSubPublish,

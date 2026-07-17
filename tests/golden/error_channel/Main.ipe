@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-import Sky.Core.Error as Error
+import Ipe.Error as Error
 
 -- Task.fail creates a failed task; Task.onError recovers it with a handler.
 -- The lambda `\e -> println "recovered"` names the error parameter `e` but

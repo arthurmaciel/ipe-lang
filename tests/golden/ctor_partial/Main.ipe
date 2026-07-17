@@ -1,7 +1,7 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.List as List
-import Sky.Core.String as String
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
+import Ipe.String as String
 
 -- A2 (#147 seal). `Tagged : String -> Int -> Item` (arity 2).
 -- `Tagged "item"` partially applies one arg, returning `Int -> Item`.

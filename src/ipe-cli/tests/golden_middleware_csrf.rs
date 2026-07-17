@@ -1,6 +1,6 @@
-//! `Sky.Http.Middleware.withCsrf` golden.
+//! `Ipe.Http.Middleware.withCsrf` golden.
 //!
-//! Pins that a `Sky.Http.Server` route wrapped in `Middleware.withCsrf` emits
+//! Pins that a `Ipe.Http.Server` route wrapped in `Middleware.withCsrf` emits
 //! `middleware_with_csrf(...)` and that the emitted crate `cargo build`s (the
 //! Seal: `skyc` exit 0 implies `cargo build` exit 0).
 //!

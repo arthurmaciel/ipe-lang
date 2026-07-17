@@ -73,7 +73,7 @@ fn ex10_live_component_exits_zero() {
     );
 }
 
-/// Example 19 (skyforum) — 8-module Sky.Live app.
+/// Example 19 (skyforum) — 8-module Ipe.Live app.
 ///
 /// Two regressions covered by this test:
 ///

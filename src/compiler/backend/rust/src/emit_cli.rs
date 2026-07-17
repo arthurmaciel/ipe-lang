@@ -1,4 +1,4 @@
-//! Emission for `Std.Cli` / `Sky.Cli` app-entry kernel.
+//! Emission for `Ipe.Cli` / `Ipe.Cli` app-entry kernel.
 //!
 //! Wires one Cli kernel:
 //!
@@ -30,7 +30,7 @@ use crate::EmitCtx;
 use crate::emit_expr::{callee_name, emit_expr_at};
 use crate::emit_types::GenericScope;
 
-/// Dispatch a `Std.Cli` / `Sky.Cli` kernel call.
+/// Dispatch a `Ipe.Cli` / `Ipe.Cli` kernel call.
 ///
 /// Returns `Some(emitted)` for `CliProgram`; `None` for any other variant
 /// (defensive — the caller already guards on `k.is_cli()`).

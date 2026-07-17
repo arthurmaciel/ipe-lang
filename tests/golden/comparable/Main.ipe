@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 maxOf : a -> a -> a
 maxOf p q = if p > q then p else q

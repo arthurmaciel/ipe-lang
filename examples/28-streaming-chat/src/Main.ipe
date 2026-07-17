@@ -4,7 +4,7 @@ module Main exposing (main)
 --
 -- Simulates an LLM-streaming chat. User types a prompt, hits send,
 -- and the reply paints token-by-token (one chunk every ~100 ms) via
--- Sky.Core.Http.Stream — NOT by polling, NOT by waiting for the full
+-- Ipe.Http.Stream — NOT by polling, NOT by waiting for the full
 -- reply.
 --
 -- ARCHITECTURE
@@ -18,7 +18,7 @@ module Main exposing (main)
 --    So we only subscribe while a stream is in flight.
 --
 --  * Chunked Chunk -> append text to model.reply; view re-renders;
---    SSE patches the open browser tab via the standard Sky.Live wire.
+--    SSE patches the open browser tab via the standard Ipe.Live wire.
 --
 --  * Chunked Done / Errored -> close the stream + clear
 --    activeStream so subscriptions stops re-evaluating.
@@ -27,20 +27,20 @@ module Main exposing (main)
 -- a tiny Go binary that streams 20 chunks @ 100 ms each. The
 -- verification probe (scripts/verify-streaming-chat.sh) boots both.
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.String as String
-import Sky.Core.List as List
-import Sky.Core.Task as Task
-import Sky.Core.Error as Error exposing (Error)
-import Sky.Core.Http as Http exposing (HttpRequest)
-import Sky.Core.Http.Stream as HttpStream exposing (StreamId, ChunkEvent(..))
-import Std.Log exposing (println)
-import Std.Html exposing (..)
-import Std.Html.Attributes exposing (..)
-import Std.Html.Events exposing (onSubmit)
-import Std.Live exposing (app, route)
-import Std.Cmd as Cmd
-import Std.Sub as Sub
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.List as List
+import Ipe.Task as Task
+import Ipe.Error as Error exposing (Error)
+import Ipe.Http as Http exposing (HttpRequest)
+import Ipe.Http.Stream as HttpStream exposing (StreamId, ChunkEvent(..))
+import Ipe.Log exposing (println)
+import Ipe.Html exposing (..)
+import Ipe.Html.Attributes exposing (..)
+import Ipe.Html.Events exposing (onSubmit)
+import Ipe.Live exposing (app, route)
+import Ipe.Cmd as Cmd
+import Ipe.Sub as Sub
 
 
 -- ─── Mock upstream ──────────────────────────────────────────────
@@ -218,11 +218,11 @@ view model =
               [class "app"]
               [ header
                     [class "topbar"]
-                    [ h1 [] [text "Sky.Live · streaming chat"]
+                    [ h1 [] [text "Ipe.Live · streaming chat"]
                     , p
                           [class "hint"]
                           [text
-                              "Type a prompt; the reply paints token-by-token via Sky.Core.Http.Stream."]
+                              "Type a prompt; the reply paints token-by-token via Ipe.Http.Stream."]
                     ]
               , div [class "content"]
                     [ historyView model.history

@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-import Sky.Core.Error as Error
+import Ipe.Error as Error
 
 -- Task.onError with a lambda: `e` must be inferred as `Error` (not a free
 -- variable) so the handler compiles without IPE-L0102 ("polymorphic

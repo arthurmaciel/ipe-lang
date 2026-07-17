@@ -1,31 +1,31 @@
 module Main exposing (main)
 
 -- examples/38-composite-ui-multibackend — ONE Sky source rendering
--- IDENTICALLY across Sky.Live (web), Sky.Tui (terminal), and
--- Sky.Webview (desktop). The shared View module owns Model + view;
+-- IDENTICALLY across Ipe.Live (web), Ipe.Tui (terminal), and
+-- Ipe.Webview (desktop). The shared View module owns Model + view;
 -- this file's sole job is to argv-dispatch into the right backend
 -- entry point.
 --
---   ./sky-out/app             →  Sky.Live  on  :8006  (default)
---   ./sky-out/app --tui       →  Sky.Tui   (ANSI cells, full screen)
---   ./sky-out/app --webview   →  Sky.Webview (macOS only; stub
+--   ./sky-out/app             →  Ipe.Live  on  :8006  (default)
+--   ./sky-out/app --tui       →  Ipe.Tui   (ANSI cells, full screen)
+--   ./sky-out/app --webview   →  Ipe.Webview (macOS only; stub
 --                                elsewhere returns Err Error at
 --                                runtime per CLAUDE.md §Webview).
 --
 -- Per CLAUDE.md, `sky build` flips to CGO_ENABLED=1 when it sees
 -- `rt.Webview_app` in the emitted Go — so this app builds with
 -- cgo on macOS and falls back to the stub on other platforms.
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.List as List
-import Sky.Core.System as System
-import Sky.Core.Task as Task
-import Sky.Core.Time as Time
-import Std.Cmd as Cmd
-import Std.Live as Live
-import Std.Sub as Sub
-import Std.Sub exposing (Sub)
-import Std.Tui as Tui
-import Std.Webview as Webview
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
+import Ipe.System as System
+import Ipe.Task as Task
+import Ipe.Time as Time
+import Ipe.Cmd as Cmd
+import Ipe.Live as Live
+import Ipe.Sub as Sub
+import Ipe.Sub exposing (Sub)
+import Ipe.Tui as Tui
+import Ipe.Webview as Webview
 import Head
 import State exposing (..)
 import Update exposing (update)

@@ -1,10 +1,10 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Csv as Csv
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Csv as Csv
+import Ipe.Log exposing (println)
 
--- Regression fixture for the BACKLOG row "Std.Csv record literal vs nominal
+-- Regression fixture for the BACKLOG row "Ipe.Csv record literal vs nominal
 -- CsvDoc mismatch at the kernel boundary": a record literal of the canonical
 -- `Csv` shape `{ header : List String, rows : List (List String) }` is fed
 -- DIRECTLY to `Csv.encode`, and a `Csv.parse` result is field-accessed via

@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- A lambda bound to a name, then applied: `inc 41` is 42.
 -- A lambda capturing an outer local: `(\x -> x + n) 5` with n = 10 is 15.

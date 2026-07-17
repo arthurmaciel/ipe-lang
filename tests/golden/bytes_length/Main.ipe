@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-import Sky.Core.Bytes as Bytes
+import Ipe.Bytes as Bytes
 
 main =
     let

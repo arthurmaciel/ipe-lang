@@ -1,7 +1,7 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 -- #158: a nested-cons payload whose element type flows through a GENERIC
 -- function parameter (`firstOr : b -> Maybe (List b) -> b`). The backend emits

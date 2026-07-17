@@ -196,7 +196,7 @@ fn resolve_imports_shape() {
     let b = file(
         &db,
         &["B"],
-        "module B exposing (b)\n\nimport A exposing (visible)\nimport Sky.Core.Prelude\n\nb = visible\n",
+        "module B exposing (b)\n\nimport A exposing (visible)\nimport Ipe.Prelude\n\nb = visible\n",
     );
     let root = root_of(&db, &[(&["A"], a), (&["B"], b)]);
 
@@ -325,7 +325,7 @@ fn resolve_imports_rename_module() {
 }
 
 /// Shadow (driver trust tag): a USER file squatting on a
-/// `Std.…` path stays IPE-N0025-rejected, while the same path with the
+/// `Ipe.…` path stays IPE-N0025-rejected, while the same path with the
 /// driver-vouched `EmbeddedStdlib` origin canonicalises.
 #[test]
 fn stdlib_shadow_stays_rejected() {
@@ -333,7 +333,7 @@ fn stdlib_shadow_stays_rejected() {
     let squatter = file(
         &db,
         &["Std", "Fake"],
-        "module Std.Fake exposing (x)\n\nx = 1\n",
+        "module Ipe.Fake exposing (x)\n\nx = 1\n",
     );
     let root = root_of(&db, &[(&["Std", "Fake"], squatter)]);
     let red = canonicalize(&db, root, squatter);
@@ -354,7 +354,7 @@ fn stdlib_shadow_stays_rejected() {
     let genuine = file_with_origin(
         &db2,
         &["Std", "Fake"],
-        "module Std.Fake exposing (x)\n\nx : Int\nx = 1\n",
+        "module Ipe.Fake exposing (x)\n\nx : Int\nx = 1\n",
         ModuleOrigin::EmbeddedStdlib,
     );
     let root2 = root_of(&db2, &[(&["Std", "Fake"], genuine)]);

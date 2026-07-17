@@ -236,7 +236,7 @@ pub(crate) struct RecordStruct {
     /// subset of derivable leaves). The emitter reads this flag — NOT
     /// `is_derivable` — to gate the serde derive under `uses_live`, so a
     /// `CDPeq`-but-not-serde record (a view-helper holding `Html` / `Element` /
-    /// `Color` / a `UiPlain` value) in a Std.Live program never gets serde forced
+    /// `Color` / a `UiPlain` value) in a Ipe.Live program never gets serde forced
     /// onto it and therefore never exit-0-then-cargo-fails on `E0277` (upholds
     /// the SEAL).
     pub is_serde: bool,
@@ -279,7 +279,7 @@ pub(crate) struct EmitCtx<'a> {
     /// `tea.rs` is ungated (no `live` cargo feature needed); the only
     /// dependency is `tokio`, which is already in the default feature set.
     pub(crate) uses_tea: bool,
-    /// `true` when the program uses at least one Sky.Http.Server kernel.
+    /// `true` when the program uses at least one Ipe.Http.Server kernel.
     /// When set, [`crate::project::emit_program`]:
     ///
     /// * adds `"server"` to the default features of the emitted `Cargo.toml`
@@ -288,40 +288,40 @@ pub(crate) struct EmitCtx<'a> {
     /// * appends `pub mod server; pub use server::*; pub mod server_stream;
     ///   pub use server_stream::*;` to the emitted `ipe_runtime/mod.rs`.
     pub(crate) uses_server: bool,
-    /// `true` when the program uses at least one `Std.Ui` / `Std.Html` kernel.
+    /// `true` when the program uses at least one `Ipe.Ui` / `Ipe.Html` kernel.
     /// When set, [`crate::project::emit_program`] appends
     /// `pub mod ui;` to the emitted `ipe_runtime/mod.rs`.
     pub(crate) uses_ui: bool,
-    /// `true` when the program uses at least one `Std.Live` / `Sky.Live`
+    /// `true` when the program uses at least one `Ipe.Live` / `Ipe.Live`
     /// app-entry kernel.  When set, the emitted project gains the `"live"`
     /// Cargo feature, serde derives on all emitted types, and
     /// `ipe_runtime::live` wired into the runtime module set.
     pub(crate) uses_live: bool,
-    /// `true` when the program uses at least one `Std.Tui` / `Sky.Tui`
+    /// `true` when the program uses at least one `Ipe.Tui` / `Ipe.Tui`
     /// app-entry kernel.  When set, the emitted project gains the `"tui"`
     /// Cargo feature and the tui module is wired into `ipe_runtime/mod.rs`.
     pub(crate) uses_tui: bool,
-    /// `true` when the program uses at least one `Std.Webview` app-entry kernel.
+    /// `true` when the program uses at least one `Ipe.Webview` app-entry kernel.
     /// When set, the emitted project gains the `"webview"` Cargo feature
     /// (which transitively pulls `"live"`) and the main entry is switched to
     /// `block_on_current_thread` (tao/Cocoa requires the process main thread).
     pub(crate) uses_webview: bool,
-    /// `true` when the program uses at least one `Sky.Core.CssSafety` leaf
-    /// security kernel (the `Std.Css` backing).  When set (independently of
+    /// `true` when the program uses at least one `Ipe.CssSafety` leaf
+    /// security kernel (the `Ipe.Css` backing).  When set (independently of
     /// [`Self::uses_ui`]), [`crate::project::emit_program`] declares
     /// `css_safety` / `css` (`pub use css::*`) in the emitted
     /// `ipe_runtime/mod.rs` so the bare `safe_value` / `safe_prop_name` /
     /// `safe_selector` / `strip_style_close_kernel` names are in scope — a pure
-    /// `Std.Css` program never sets `uses_ui`, so the UI append alone would leave
+    /// `Ipe.Css` program never sets `uses_ui`, so the UI append alone would leave
     /// those names undeclared (E0425).
     pub(crate) uses_css: bool,
-    /// `true` when the program uses at least one `Std.Auth` kernel
+    /// `true` when the program uses at least one `Ipe.Auth` kernel
     /// (`Auth.hashPassword`, `Auth.verifyPassword`, `Auth.signToken`,
     /// `Auth.verifyToken`, `Auth.register`, `Auth.login`, `Auth.setRole`, etc.).
     /// When set, [`crate::project::emit_program`] appends
     /// `pub mod auth; pub use auth::*;` to the emitted `ipe_runtime/mod.rs`.
     pub(crate) uses_auth: bool,
-    /// `true` when the program uses at least one outbound `Sky.Core.WebSocket`
+    /// `true` when the program uses at least one outbound `Ipe.WebSocket`
     /// client kernel (`WebSocket.connect` / `send` / `close` / … or an `on*`
     /// subscription).  When set, [`crate::project::assemble_project_files`] adds
     /// the `websocket_client` feature (+ `tokio-tungstenite` dep) to the emitted
@@ -329,7 +329,7 @@ pub(crate) struct EmitCtx<'a> {
     /// emitted `ipe_runtime/mod.rs` — the `ws_client` module is feature-gated and
     /// NOT part of the base module set.
     pub(crate) uses_websocket: bool,
-    /// `true` when the program uses the `Std.Email` `Email.send` kernel. When
+    /// `true` when the program uses the `Ipe.Email` `Email.send` kernel. When
     /// set, [`crate::project::emit_program`] appends `pub mod email; pub use
     /// email::*;` to the emitted `ipe_runtime/mod.rs` and adds the `lettre`
     /// dependency to the emitted `Cargo.toml`.
@@ -374,7 +374,7 @@ pub(crate) struct EmitCtx<'a> {
     /// monotone whole-program fixpoint parallel to [`Self::enum_derivable`]: an
     /// enum is non-serde iff some variant payload reaches a non-serde leaf (the
     /// non-derivable set PLUS the `Clone`-only UI value/carrier types, per
-    /// [`ipe_ir::ir_type_is_serde`]). Read by the Sky.Live app-entry Model gate
+    /// [`ipe_ir::ir_type_is_serde`]). Read by the Ipe.Live app-entry Model gate
     /// (upholds the SEAL). Whole-program so cross-module `IrType::Enum`
     /// references resolve soundly.
     enum_serde: BTreeMap<(ModPath, Symbol), bool>,
@@ -408,7 +408,7 @@ impl<'a> EmitCtx<'a> {
                 let TypeDef::Enum(def) = ty;
                 // The emitted Rust type name is derived from the type's HOME
                 // module (its defining module), NOT the merged entry module the
-                // linker pooled it into — so `Std.Palette.Shade` → `StdPaletteShade`
+                // linker pooled it into — so `Ipe.Palette.Shade` → `StdPaletteShade`
                 // and `Lib.Color` → `LibColor`, while a single-module program
                 // (home == entry) stays byte-identical (`Main.Msg` → `MainMsg`).
                 // When `def.home` is empty (IR built directly in backend unit
@@ -423,7 +423,7 @@ impl<'a> EmitCtx<'a> {
                         .map(|s| resolve_sym(interner, *s))
                         .collect::<DResult<Vec<&str>>>()?
                 };
-                // Sky.Core.WebSocket's `WebSocketMessage` / `CloseCode` ADTs are
+                // Ipe.WebSocket's `WebSocketMessage` / `CloseCode` ADTs are
                 // BRIDGED to the runtime enums `WsClientMessage` / `WsCloseCode`
                 // (the `sub_subscribe_ws_*` fns take/produce those). Overriding the
                 // emitted enum name here makes every reference — the type in a
@@ -608,7 +608,7 @@ impl<'a> EmitCtx<'a> {
         // monotonically demoted if any variant payload reaches a non-serde leaf
         // or a (currently-estimated) non-serde enum. Non-serde only propagates
         // (true → false), so the loop reaches a fixpoint in at most `enum count`
-        // passes. Read by the Sky.Live Model-admissibility gate.
+        // passes. Read by the Ipe.Live Model-admissibility gate.
         let mut enum_serde: BTreeMap<(ModPath, Symbol), bool> =
             enum_variants.keys().map(|k| (k.clone(), true)).collect();
         loop {
@@ -733,10 +733,10 @@ impl<'a> EmitCtx<'a> {
         // set on the module.
         let uses_tea = program.modules.iter().any(|m| m.uses_tea);
 
-        // detect whether any Sky.Http.Server kernel is used.
+        // detect whether any Ipe.Http.Server kernel is used.
         let uses_server = program.modules.iter().any(|m| m.uses_server);
 
-        // detect Std.Ui / Std.Html / Std.Live / Std.Tui / Std.Webview usage.
+        // detect Ipe.Ui / Ipe.Html / Ipe.Live / Ipe.Tui / Ipe.Webview usage.
         let (uses_ui, uses_live, uses_tui, uses_webview) = (
             program.modules.iter().any(|m| m.uses_ui),
             program.modules.iter().any(|m| m.uses_live),
@@ -744,15 +744,15 @@ impl<'a> EmitCtx<'a> {
             program.modules.iter().any(|m| m.uses_webview),
         );
 
-        // detect Std.Css (Sky.Core.CssSafety) leaf-kernel usage.
+        // detect Ipe.Css (Ipe.CssSafety) leaf-kernel usage.
         let uses_css = program.modules.iter().any(|m| m.uses_css);
 
-        // detect Std.Auth kernel usage.
+        // detect Ipe.Auth kernel usage.
         let uses_auth = program.modules.iter().any(|m| m.uses_auth);
-        // detect Std.Email kernel usage.
+        // detect Ipe.Email kernel usage.
         let uses_email = program.modules.iter().any(|m| m.uses_email);
 
-        // detect outbound Sky.Core.WebSocket client usage.
+        // detect outbound Ipe.WebSocket client usage.
         let uses_websocket = program.modules.iter().any(|m| m.uses_websocket);
 
         Ok(Self {
@@ -802,7 +802,7 @@ impl<'a> EmitCtx<'a> {
     /// Resolved from the whole-program serde fixpoint computed at
     /// [`Self::build`]. A symbol that is not a user enum defaults to `true`
     /// (builtins are distinct `IrType` variants and never reach this lookup as a
-    /// bare enum name). Used by the Sky.Live Model-admissibility gate.
+    /// bare enum name). Used by the Ipe.Live Model-admissibility gate.
     pub(crate) fn enum_is_serde(&self, home: &ModPath, sym: Symbol) -> bool {
         self.enum_serde
             .get(&(home.clone(), sym))
@@ -1090,7 +1090,7 @@ impl<'a> EmitCtx<'a> {
         Ok(naming::mangle_reserved(self.resolve_ident(sym)?.to_owned()))
     }
 
-    /// is this the `Std.Cache.Cache` opaque handle type — home
+    /// is this the `Ipe.Cache.Cache` opaque handle type — home
     /// `["Std", "Cache"]`, name `Cache`, and NOT a user-declared enum of the
     /// same name (absent from `enum_names`)? Backed by the runtime
     /// `IpeCacheHandle`; the render/ctor/pattern paths route there.
@@ -1114,7 +1114,7 @@ impl<'a> EmitCtx<'a> {
             // is valid for the duration of the emit pass.
             return Ok("IpeStreamId");
         }
-        // `Std.Cache.Cache` → the non-generic runtime enum `IpeCacheHandle`
+        // `Ipe.Cache.Cache` → the non-generic runtime enum `IpeCacheHandle`
         // (its `EnumDef` is suppressed in `ipe_lower`, so it is absent from
         // `enum_names`). The type-position render drops the phantom `k`/`v` args
         // via a dedicated `render_type` arm before reaching here.
@@ -1130,7 +1130,7 @@ impl<'a> EmitCtx<'a> {
             })
     }
 
-    /// `true` when `(home, ty)` is a `Sky.Core.WebSocket` ADT bridged to a
+    /// `true` when `(home, ty)` is a `Ipe.WebSocket` ADT bridged to a
     /// runtime enum (`WebSocketMessage` / `CloseCode`) — its Sky decl is
     /// suppressed because the runtime already defines the type. See
     /// [`websocket_bridge_rust_name`].
@@ -1166,7 +1166,7 @@ impl<'a> EmitCtx<'a> {
             // from the runtime crate, in scope via `pub use ipe_runtime::*`.
             // Constructor emission: `IpeOrder::LT` / `IpeOrder::EQ` / `IpeOrder::GT`.
             Some("Order") => Some("IpeOrder"),
-            // `ChunkEvent` — the builtin `Sky.Core.Http.Stream` chunk event enum
+            // `ChunkEvent` — the builtin `Ipe.Http.Stream` chunk event enum
             // backed by `ipe_runtime::http_stream::ChunkEvent<IpeError>`.
             // Constructor names match Sky's verbatim: `Chunk` / `Done` / `Errored`.
             // NOTE: This returns the bare name "ChunkEvent" (without generic args)
@@ -1190,14 +1190,14 @@ impl<'a> EmitCtx<'a> {
             // `FfiPanic` / `TypeMismatch` / `HttpStatus` / `JsonDecode` /
             // `Custom`.
             Some("ErrorDetails") => Some("IpeErrorDetails"),
-            // `Std.Cache.Cache` is backed by the non-generic runtime enum
+            // `Ipe.Cache.Cache` is backed by the non-generic runtime enum
             // `IpeCacheHandle { Cache(i64) }`. Its `EnumDef` is suppressed in
             // `ipe_lower` (no `enum_names` entry, so the guard above lets this
             // fire), so the `Cache` ctor + `case … of Cache raw` pattern route
             // to `IpeCacheHandle::Cache`. A user's own `type Cache …` DOES get an
             // `EnumDef` (registered in `enum_names`) and short-circuits above.
             Some("Cache") => Some("IpeCacheHandle"),
-            // `Std.Email.EmailProvider` is backed by the runtime enum
+            // `Ipe.Email.EmailProvider` is backed by the runtime enum
             // `ipe_runtime::email::EmailProvider` (variant names `Resend`/`Ses`/
             // `SendGrid`/`Smtp` match the Sky ctors verbatim). Its `EnumDef` is
             // suppressed in `ipe_lower` (no `enum_names` entry, so the guard
@@ -1353,7 +1353,7 @@ fn collect_record_shapes(
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc
-        // Std.Email records + provider ADT are folded to nominal runtime
+        // Ipe.Email records + provider ADT are folded to nominal runtime
         // structs — no structural record shape to synthesise.
         | IrType::EmailMessage
         | IrType::EmailAttachment
@@ -1501,7 +1501,7 @@ fn type_reaches_enum(
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc
-        // Std.Email records + provider ADT are monomorphic runtime types —
+        // Ipe.Email records + provider ADT are monomorphic runtime types —
         // no reachable enum edge to `target`.
         | IrType::EmailMessage
         | IrType::EmailAttachment
@@ -1582,7 +1582,7 @@ fn contains_generic(ty: &IrType) -> bool {
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc
-        // Std.Email records + provider ADT are monomorphic — no generic
+        // Ipe.Email records + provider ADT are monomorphic — no generic
         // parameters.
         | IrType::EmailMessage
         | IrType::EmailAttachment
@@ -1689,7 +1689,7 @@ fn collect_generics(ty: &IrType, out: &mut Vec<Symbol>) {
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc
-        // Std.Email records + provider ADT are monomorphic — no generics.
+        // Ipe.Email records + provider ADT are monomorphic — no generics.
         | IrType::EmailMessage
         | IrType::EmailAttachment
         | IrType::EmailSesConfig
@@ -1999,7 +1999,7 @@ fn match_template(
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc
-        // Std.Email records + provider ADT are monomorphic runtime-type leaves.
+        // Ipe.Email records + provider ADT are monomorphic runtime-type leaves.
         | IrType::EmailMessage
         | IrType::EmailAttachment
         | IrType::EmailSesConfig
@@ -2132,7 +2132,7 @@ fn resolve_sym(interner: &Interner, sym: Symbol) -> DResult<&str> {
         })
 }
 
-/// The runtime enum name a `Sky.Core.WebSocket` ADT is BRIDGED to, or `None`
+/// The runtime enum name a `Ipe.WebSocket` ADT is BRIDGED to, or `None`
 /// for any other type.
 ///
 /// `WebSocketMessage` and `CloseCode` are declared in the stdlib with

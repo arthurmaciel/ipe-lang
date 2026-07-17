@@ -10,7 +10,7 @@ module Main exposing (main)
 -- (Calling `Set.insert { x = 1 } Set.empty` directly is the eager-pin sibling
 -- and surfaces IPE-T0001; both fail closed with no Rust emitted.)
 
-import Sky.Core.Set as Set
+import Ipe.Set as Set
 
 
 singletonSet : a -> Set a

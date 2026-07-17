@@ -156,7 +156,7 @@ mod tests {
                     && items.first().is_some_and(|e| matches!(e.value, Exposed::Value(_)))
         ));
 
-        // One import: Sky.Core.Prelude exposing (..).
+        // One import: Ipe.Prelude exposing (..).
         assert_eq!(m.imports.len(), 1);
         if let Some(imp) = m.imports.first() {
             let segs: Vec<&str> = imp

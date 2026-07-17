@@ -1,10 +1,10 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Task as Task
-import Std.Html as Html
-import Std.Ui as Ui exposing (Element)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Task as Task
+import Ipe.Html as Html
+import Ipe.Ui as Ui exposing (Element)
+import Ipe.Log exposing (println)
 
 
 -- BACKLOG #172 regression, shape (2): a promoted Arc-root handler and a

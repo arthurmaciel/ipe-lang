@@ -1,9 +1,9 @@
 module Update exposing (update)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.List as List
-import Sky.Core.String as String
-import Std.Cmd as Cmd
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Cmd as Cmd
 import State exposing (..)
 
 

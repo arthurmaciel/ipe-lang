@@ -1,5 +1,5 @@
 module Lib exposing (visible)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 visible : Int
 visible = 1
 hidden : Int

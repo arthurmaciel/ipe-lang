@@ -14,7 +14,7 @@
 //! `oracle_divergence = true` — this is a brand-new Rust-only kernel batch
 //! with no Go reference behaviour to diff against structurally (the CSS/HTML
 //! shape is verified by direct assertions below, matching the semantics
-//! documented in `../sky`'s `Std.Ui.sky` / `Std.Html.sky` source, not a cached
+//! documented in `../sky`'s `Ipe.Ui.sky` / `Ipe.Html.sky` source, not a cached
 //! oracle file).
 //!
 //! ## What is tested

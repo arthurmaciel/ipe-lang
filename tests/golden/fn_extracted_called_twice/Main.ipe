@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- #90 T4: calling an extracted function value MORE THAN ONCE is sound — a
 -- `Box<dyn Fn>` call borrows (`Fn::call(&self, ..)`), never moves. Only a

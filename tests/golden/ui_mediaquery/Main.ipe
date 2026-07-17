@@ -1,12 +1,12 @@
 module Main exposing (main)
 
-import Std.Html as Html
-import Std.Ui as Ui
-import Std.Ui.Background as Background
+import Ipe.Html as Html
+import Ipe.Ui as Ui
+import Ipe.Ui.Background as Background
 
 
 -- E2E smoke test for `Ui.mediaQuery` (the 1-of-20 kernel deferred from the
--- 2026-07-10 Std.Ui/Html wiring batch, wired 2026-07-11 — see
+-- 2026-07-10 Ipe.Ui/Html wiring batch, wired 2026-07-11 — see
 -- docs/architecture/ui-mediaquery-design-2026-07-11.md). Also exercises
 -- `Ui.breakpoint`, which now delegates to the same marker-emitting
 -- mechanism instead of the Phase-0 passthrough stub.

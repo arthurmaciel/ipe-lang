@@ -1,11 +1,11 @@
 module Main exposing (main)
 
-import Std.Html as Html
-import Std.Ui as Ui
-import Std.Ui.Font as Font
+import Ipe.Html as Html
+import Ipe.Ui as Ui
+import Ipe.Ui.Font as Font
 
 
--- Phase-0 Std.Ui smoke test: Ui.layoutWith with inline cfg literal.
+-- Phase-0 Ipe.Ui smoke test: Ui.layoutWith with inline cfg literal.
 -- Verifies that wrapperAttrs (Ui.padding 12) and rootAttrs (Ui.spacing 6)
 -- are honored in the rendered HTML — i.e. that the emit-site field-extraction
 -- properly wires ui_layout_with_vecs and does NOT silently drop the cfg.

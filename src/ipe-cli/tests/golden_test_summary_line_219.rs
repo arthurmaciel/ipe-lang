@@ -1,7 +1,7 @@
-//! Regression — `Sky.Test.runMain` must print the pass/fail SUMMARY line
+//! Regression — `Ipe.Test.runMain` must print the pass/fail SUMMARY line
 //! to stdout, matching the Go reference.
 //!
-//! The Go/Haskell reference `Sky.Test.summarise` prints exactly one line,
+//! The Go/Haskell reference `Ipe.Test.summarise` prints exactly one line,
 //! `"<pass> passed, <fail> failed (<total> total)"`, before `runMain` picks the
 //! exit code. The Rust fork's `summarise` was simplified to a pure predicate
 //! with NO output, so a `Test.runMain tests` program (e.g. example

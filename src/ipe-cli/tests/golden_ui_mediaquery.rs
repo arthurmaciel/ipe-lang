@@ -6,7 +6,7 @@
 //! ## Oracle provenance
 //!
 //! `oracle_divergence = true` — verified by direct assertions against the
-//! semantics documented in `../sky`'s `Std.Ui.sky` `mediaQuery` (wrapper
+//! semantics documented in `../sky`'s `Ipe.Ui.sky` `mediaQuery` (wrapper
 //! `<div>` carrying `data-sky-mq-q` / `data-sky-mq-rules` markers), not a
 //! cached oracle file.
 //!

@@ -1,8 +1,8 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.String as String
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.Log exposing (println)
 
 -- #99 self-edge regression (found by the #99 review, f15): an `as`-alias
 -- over a CYCLIC self-edge (recursive) constructor field is boxed

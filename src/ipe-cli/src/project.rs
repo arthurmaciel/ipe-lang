@@ -317,8 +317,8 @@ where
 
 /// Transitively inject every compiled-source stdlib module the graph imports.
 ///
-/// For each compiled-source module (`Std.Palette`, later `Std.Css` /
-/// `Sky.Core.Error`) reachable from the current `sources`, seed a synthetic
+/// For each compiled-source module (`Ipe.Palette`, later `Ipe.Css` /
+/// `Ipe.Error`) reachable from the current `sources`, seed a synthetic
 /// source entry + [`DiscoveredModule`] so the EXISTING topo → dep-first
 /// canonicalise → link path handles it unchanged.
 ///
@@ -326,7 +326,7 @@ where
 /// table** — the driver's unforgeable record of which modules are trusted
 /// `EmbeddedStdlib` source. A path is added to this set ONLY when a NEW synthetic
 /// entry is inserted; if `sources` already holds the key (a user file squatting
-/// on `Std.Palette`, or an earlier injection), injection is skipped and the path
+/// on `Ipe.Palette`, or an earlier injection), injection is skipped and the path
 /// is NOT tagged trusted. So a hostile `src/Std/Palette.ipe` is canonicalised as
 /// `ModuleOrigin::User` and stays IPE-N0025-rejected.
 ///
@@ -357,7 +357,7 @@ pub fn inject_compiled_std_closure(
         }
         let Some(embedded) = crate::stdlib::compiled_std_source_segments(&path) else {
             // Not a compiled-source module (kernel import inside an embedded
-            // source, e.g. `Sky.Core.Prelude`): leave it kernel-resolved.
+            // source, e.g. `Ipe.Prelude`): leave it kernel-resolved.
             continue;
         };
 
@@ -563,14 +563,14 @@ import String
 
     #[test]
     fn inject_closure_seeds_compiled_source_module() {
-        // A Main importing Std.Palette gets the embedded source injected + a
+        // A Main importing Ipe.Palette gets the embedded source injected + a
         // DiscoveredModule pushed, and the path is recorded as trusted.
         let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
         sources.insert(
             vec!["Main".to_owned()],
             (
                 PathBuf::from("src/Main.ipe"),
-                "module Main exposing (main)\nimport Std.Palette exposing (..)\nmain = 0\n"
+                "module Main exposing (main)\nimport Ipe.Palette exposing (..)\nmain = 0\n"
                     .to_owned(),
             ),
         );
@@ -582,7 +582,7 @@ import String
         let injected = super::inject_compiled_std_closure(&mut sources, &mut discovered);
 
         let palette = vec!["Std".to_owned(), "Palette".to_owned()];
-        assert!(injected.contains(&palette), "Std.Palette must be injected");
+        assert!(injected.contains(&palette), "Ipe.Palette must be injected");
         assert!(sources.contains_key(&palette), "source seeded");
         assert!(
             discovered.iter().any(|m| m.module_path == palette),
@@ -598,7 +598,7 @@ import String
             vec!["Main".to_owned()],
             (
                 PathBuf::from("src/Main.ipe"),
-                "module Main exposing (main)\nimport Sky.Core.Prelude exposing (..)\nmain = 0\n"
+                "module Main exposing (main)\nimport Ipe.Prelude exposing (..)\nmain = 0\n"
                     .to_owned(),
             ),
         );
@@ -617,7 +617,7 @@ import String
 
     #[test]
     fn inject_closure_does_not_tag_user_squat_as_trusted() {
-        // SECURITY: a user file already occupying the Std.Palette key is NOT
+        // SECURITY: a user file already occupying the Ipe.Palette key is NOT
         // overwritten and NOT tagged trusted — it will canonicalise as User and
         // hit IPE-N0025.
         let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
@@ -625,7 +625,7 @@ import String
             vec!["Main".to_owned()],
             (
                 PathBuf::from("src/Main.ipe"),
-                "module Main exposing (main)\nimport Std.Palette exposing (..)\nmain = 0\n"
+                "module Main exposing (main)\nimport Ipe.Palette exposing (..)\nmain = 0\n"
                     .to_owned(),
             ),
         );
@@ -634,7 +634,7 @@ import String
             palette.clone(),
             (
                 PathBuf::from("src/Std/Palette.ipe"),
-                "module Std.Palette exposing (..)\ntoHex = 0\n".to_owned(),
+                "module Ipe.Palette exposing (..)\ntoHex = 0\n".to_owned(),
             ),
         );
         let mut discovered = vec![
@@ -651,7 +651,7 @@ import String
         let injected = super::inject_compiled_std_closure(&mut sources, &mut discovered);
         assert!(
             !injected.contains(&palette),
-            "a user file squatting on Std.Palette must NOT be tagged trusted"
+            "a user file squatting on Ipe.Palette must NOT be tagged trusted"
         );
         // The user's source is preserved (not clobbered by the embed).
         let (_, src) = sources.get(&palette).expect("user source kept");

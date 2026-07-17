@@ -7,8 +7,8 @@ module Main exposing (main)
 -- `Error.withMessage` / `Error.withDetails` modifiers).
 -- See tests/golden/error_record_literal_panicinfo/.
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 
 main =

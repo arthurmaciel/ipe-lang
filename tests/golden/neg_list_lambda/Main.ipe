@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- A bracket-list lambda param `\[a] ->` is refutable (fails on `[]` and longer
 -- lists). Like `\1 ->`, the parser's param grammar rejects a bare list pattern

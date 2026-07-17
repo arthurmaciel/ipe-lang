@@ -1,5 +1,5 @@
-//! Stdlib-functions parity gate: the kernel-anchored `Sky.Core.List`,
-//! `Sky.Core.Maybe`, and `Sky.Core.Result` combinators compile and run with Go
+//! Stdlib-functions parity gate: the kernel-anchored `Ipe.List`,
+//! `Ipe.Maybe`, and `Ipe.Result` combinators compile and run with Go
 //! parity.
 //!
 //! The `List` type + literals + `::`, the `Maybe` / `Result` /

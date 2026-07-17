@@ -1,13 +1,13 @@
 module Main exposing (main)
 
-import Sky.Core.Crypto as Crypto
-import Sky.Core.Http as Http
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Result as Result
-import Sky.Core.String as String
-import Sky.Core.Task as Task
-import Sky.Core.Time as Time
-import Std.Log exposing (println)
+import Ipe.Crypto as Crypto
+import Ipe.Http as Http
+import Ipe.Prelude exposing (..)
+import Ipe.Result as Result
+import Ipe.String as String
+import Ipe.Task as Task
+import Ipe.Time as Time
+import Ipe.Log exposing (println)
 
 
 main =

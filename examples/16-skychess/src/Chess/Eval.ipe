@@ -2,10 +2,10 @@
 -- Positive = white advantage, negative = black advantage
 module Chess.Eval exposing (evaluate)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Dict as Dict
-import Sky.Core.List as List
-import Sky.Core.Maybe as Maybe
+import Ipe.Prelude exposing (..)
+import Ipe.Dict as Dict
+import Ipe.List as List
+import Ipe.Maybe as Maybe
 import Chess.Piece exposing (..)
 import Chess.Board as Board
 
