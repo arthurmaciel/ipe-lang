@@ -1,7 +1,7 @@
 //! Single source of truth for the crate VERSIONS the Rust codegen emits into a
 //! generated project's `Cargo.toml`. Edit a version HERE; `project.rs`'s
 //! manifest-surgery functions read it, so a version can never drift between the
-//! emitter, `runtime/Cargo.toml`, and `tests/golden/m0/Cargo.toml`.
+//! emitter, `runtime/Cargo.toml`, and `tests/golden/basics/Cargo.toml`.
 //!
 //! Feature lists + `optional` flags stay inline in `project.rs` (they depend on
 //! usage). Only the version SPEC lives here. The `crate_specs_match_manifests`
@@ -175,12 +175,12 @@ mod tests {
     fn crate_specs_match_manifests() {
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let runtime_path = manifest.join("../../runtime/Cargo.toml");
-        let golden_path = manifest.join("../../tests/golden/m0/Cargo.toml");
+        let golden_path = manifest.join("../../tests/golden/basics/Cargo.toml");
 
         let runtime_txt = std::fs::read_to_string(&runtime_path)
             .expect("crate_specs drift guard: cannot read runtime/Cargo.toml");
         let golden_txt = std::fs::read_to_string(&golden_path)
-            .expect("crate_specs drift guard: cannot read tests/golden/m0/Cargo.toml");
+            .expect("crate_specs drift guard: cannot read tests/golden/basics/Cargo.toml");
 
         let runtime = parse_deps(&runtime_txt, true);
         let golden = parse_deps(&golden_txt, true);
@@ -203,7 +203,7 @@ mod tests {
                 && g_ver != spec.version
             {
                 problems.push(format!(
-                    "{}: SSOT = {}, tests/golden/m0/Cargo.toml = {g_ver}",
+                    "{}: SSOT = {}, tests/golden/basics/Cargo.toml = {g_ver}",
                     spec.name, spec.version
                 ));
             }

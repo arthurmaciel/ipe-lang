@@ -372,7 +372,7 @@ at last consistent state and the running binary untouched (INV-3).
 **Goal.** A real `ipe build` that runs emit → reconcile → **timeout-bounded cargo
 build** and distinguishes "lowering succeeded" from "cargo succeeded" (H9).
 **Test first.** Reuse/promote the `SKY_E2E` cargo test (lib.rs:1116) into a
-first-class, timeout-bounded `ipe build` integration test on `tests/golden/m0`:
+first-class, timeout-bounded `ipe build` integration test on `tests/golden/basics`:
 emit → cargo build → run → assert prints `42`. Assert the "cargo built" signal is
 distinct from the "lowering succeeded" signal.
 **Do.** Add the cargo invocation (`CGO`-equivalent path detection is Go-only, N/A

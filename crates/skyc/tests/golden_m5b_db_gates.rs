@@ -54,7 +54,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code)
 #[test]
 fn db_findwhere_string_is_t0001() {
     assert_gate(
-        "m5b_db_gate_findwhere_string",
+        "db_gate_findwhere_string",
         "m5b_db_gate_findwhere_string_emit",
         sky_diagnostics::SKY_T0001,
     );

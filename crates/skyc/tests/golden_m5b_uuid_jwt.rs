@@ -32,7 +32,7 @@
 //!
 //! Although the shared-`Main.sky` oracle cannot run the flat-kernel program on
 //! Go, the produced JWT bytes ARE byte-identical to the Go backend. The
-//! `m5b_jwt_hs256_bytes` / `m5b_jwt_rs256_bytes` goldens print the token, and
+//! `jwt_hs256_bytes` / `jwt_rs256_bytes` goldens print the token, and
 //! [`jwt_hs256_bytes`] / [`jwt_rs256_bytes`] assert that printed token equals a
 //! token captured verbatim from the Go reference compiler running the
 //! equivalent builder-API program (`Jwt.encode (Jwt.hs256 secret) (claims …)`).
@@ -41,23 +41,23 @@
 //!
 //! ## Golden catalogue
 //!
-//! * `m5b_uuid_format` — `Uuid.v4`/`v7` (each `() -> Task Error String`)
+//! * `uuid_format` — `Uuid.v4`/`v7` (each `() -> Task Error String`)
 //!   sequenced with `Task.andThen`: length is 36 and the version nibble is
 //!   `4`/`7`; a fresh `v4` round-trips through `Uuid.parse`.  Output: `"ok"`.
-//! * `m5b_uuid_distinct` — SOUNDNESS regression: two `Uuid.v4 ()` calls yield
+//! * `uuid_distinct` — SOUNDNESS regression: two `Uuid.v4 ()` calls yield
 //!   DIFFERENT ids (entropy is an effect, not a CSE-able pure value).  Output:
 //!   `"ok-distinct"`.
-//! * `m5b_uuid_parse` — `Uuid.parse "not-a-uuid"` → `Nothing`;
+//! * `uuid_parse` — `Uuid.parse "not-a-uuid"` → `Nothing`;
 //!   `Uuid.parse "<valid-uuid>"` → `Just _`.  Output: `"ok"`.
-//! * `m5b_jwt_hs256_roundtrip` — `encodeHs256` then `decodeHs256` with the same
+//! * `jwt_hs256_roundtrip` — `encodeHs256` then `decodeHs256` with the same
 //!   32-byte key succeeds.  Output: `"ok"`.
-//! * `m5b_jwt_hs256_tamper` — appending `"x"` to an HS256 token makes
+//! * `jwt_hs256_tamper` — appending `"x"` to an HS256 token makes
 //!   `decodeHs256` reject it.  Output: `"tamper-detected"`.
-//! * `m5b_jwt_rs256_roundtrip` — `encodeRs256` (PKCS#8 RSA-2048) then
+//! * `jwt_rs256_roundtrip` — `encodeRs256` (PKCS#8 RSA-2048) then
 //!   `decodeRs256` (SPKI public key) round-trips.  Output: `"ok"`.
-//! * `m5b_jwt_hs256_bytes` — prints the HS256 token; asserted byte-identical to
+//! * `jwt_hs256_bytes` — prints the HS256 token; asserted byte-identical to
 //!   the captured Go token.
-//! * `m5b_jwt_rs256_bytes` — prints the RS256 token; asserted byte-identical to
+//! * `jwt_rs256_bytes` — prints the RS256 token; asserted byte-identical to
 //!   the captured Go token (RS256/PKCS#1 v1.5 is deterministic).
 //!
 //! Run:
@@ -73,13 +73,13 @@ mod support;
 /// The genuine Go-backend HS256 token for the equivalent builder-API program
 /// `Jwt.encode (Jwt.hs256 "test-secret-key-0123456789abcdef")
 ///  (claims |> subject "alice" |> expiresAt 9999999999)`, captured verbatim
-/// from the Go reference compiler. `m5b_jwt_hs256_bytes` must reproduce it.
+/// from the Go reference compiler. `jwt_hs256_bytes` must reproduce it.
 const GO_HS256_TOKEN: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjk5OTk5OTk5OTksInN1YiI6ImFsaWNlIn0.O6u4Zgjn9lL3myvfLfP5QFaGIHx-KBfzZ7lgkbJL_N0";
 
 /// The genuine Go-backend RS256 token for the equivalent builder-API program
 /// over the same fixed RSA-2048 key and `claims |> subject "bob" |> expiresAt …`,
 /// captured verbatim from the Go reference compiler. RS256 (PKCS#1 v1.5) is
-/// deterministic, so `m5b_jwt_rs256_bytes` must reproduce it byte for byte.
+/// deterministic, so `jwt_rs256_bytes` must reproduce it byte for byte.
 const GO_RS256_TOKEN: &str = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjk5OTk5OTk5OTksInN1YiI6ImJvYiJ9.GJ29fLyt4u8M_CMSvhSizRpjWXEDsrVtDL92QOX27HwB9YvKI4_ksftEN8-wK1xiT5y1tmrWmUs3_UHPTepyCJ9Y02JDphZ5X4k0784CIKxNvdr1RcAn-V24Wyc_rTFOELDR9XeBPNIhYRzVuQnaQ27PbmpF3skoyH40eOI7emrTVlbPhkgnWsoULuKOEI3yF9VU62QFoPDEuio_59LMcuk2EZrnh-Rql1zF5cNixt30_Vu5mUwBHkYZ2J2ZEm_S2VIrXvIluIfp5pzNmOK1TdLv9yQHY1PPcfcvHizHK4IKnMNTXrkk8W0NCaP5faf4hzaZVPIoqJ7D220PHPgWEg";
 
 fn repo_root() -> PathBuf {
@@ -159,7 +159,7 @@ fn assert_token_byte_identical_to_go(name: &str, go_token: &str) {
 /// Task-sequenced program. Expected holds skyc's correct output.
 #[test]
 fn uuid_format() {
-    assert_runs_and_matches_oracle("m5b_uuid_format");
+    assert_runs_and_matches_oracle("uuid_format");
 }
 
 // ── UUID distinctness (entropy-is-an-effect soundness proof) ─────────────────
@@ -171,7 +171,7 @@ fn uuid_format() {
 /// `"ok-distinct"`.
 #[test]
 fn uuid_distinct() {
-    assert_runs_and_matches_oracle("m5b_uuid_distinct");
+    assert_runs_and_matches_oracle("uuid_distinct");
 }
 
 // ── UUID parse ────────────────────────────────────────────────────────────────
@@ -183,7 +183,7 @@ fn uuid_distinct() {
 /// the canonical UUID on this shape. Expected holds skyc's correct output.
 #[test]
 fn uuid_parse() {
-    assert_runs_and_matches_oracle("m5b_uuid_parse");
+    assert_runs_and_matches_oracle("uuid_parse");
 }
 
 // ── JWT HS256 round-trip ──────────────────────────────────────────────────────
@@ -195,7 +195,7 @@ fn uuid_parse() {
 /// backend); the token bytes are Go-identical — see [`jwt_hs256_bytes`].
 #[test]
 fn jwt_hs256_roundtrip() {
-    assert_runs_and_matches_oracle("m5b_jwt_hs256_roundtrip");
+    assert_runs_and_matches_oracle("jwt_hs256_roundtrip");
 }
 
 // ── JWT HS256 tamper detection ────────────────────────────────────────────────
@@ -204,7 +204,7 @@ fn jwt_hs256_roundtrip() {
 /// Output: `"tamper-detected"`. Recorded API-surface divergence.
 #[test]
 fn jwt_hs256_tamper() {
-    assert_runs_and_matches_oracle("m5b_jwt_hs256_tamper");
+    assert_runs_and_matches_oracle("jwt_hs256_tamper");
 }
 
 // ── JWT RS256 round-trip ──────────────────────────────────────────────────────
@@ -216,7 +216,7 @@ fn jwt_hs256_tamper() {
 /// [`jwt_rs256_bytes`].
 #[test]
 fn jwt_rs256_roundtrip() {
-    assert_runs_and_matches_oracle("m5b_jwt_rs256_roundtrip");
+    assert_runs_and_matches_oracle("jwt_rs256_roundtrip");
 }
 
 // ── JWT HS256 byte-parity with Go ─────────────────────────────────────────────
@@ -227,7 +227,7 @@ fn jwt_rs256_roundtrip() {
 /// express through the shared-`Main.sky` oracle.
 #[test]
 fn jwt_hs256_bytes() {
-    assert_token_byte_identical_to_go("m5b_jwt_hs256_bytes", GO_HS256_TOKEN);
+    assert_token_byte_identical_to_go("jwt_hs256_bytes", GO_HS256_TOKEN);
 }
 
 // ── JWT RS256 byte-parity with Go ─────────────────────────────────────────────
@@ -237,7 +237,7 @@ fn jwt_hs256_bytes() {
 /// deterministic).
 #[test]
 fn jwt_rs256_bytes() {
-    assert_token_byte_identical_to_go("m5b_jwt_rs256_bytes", GO_RS256_TOKEN);
+    assert_token_byte_identical_to_go("jwt_rs256_bytes", GO_RS256_TOKEN);
 }
 
 // ── JWT builder-API Jwt.decode with caller-supplied now ───────────────────────

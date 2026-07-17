@@ -50,8 +50,8 @@ fn filter_map_keeps_just_results() {
     if std::env::var("SKY_E2E").is_err() {
         return;
     }
-    let dir = compile_golden("i119_filter_map_seal");
-    let out = support::build_and_run_emitted("i119_filter_map_seal", &dir);
+    let dir = compile_golden("filter_map_seal");
+    let out = support::build_and_run_emitted("filter_map_seal", &dir);
     assert_eq!(
         out.exit_code,
         Some(0),
@@ -72,8 +72,8 @@ fn sort_by_stable_by_age() {
     if std::env::var("SKY_E2E").is_err() {
         return;
     }
-    let dir = compile_golden("i119_sort_by_seal");
-    let out = support::build_and_run_emitted("i119_sort_by_seal", &dir);
+    let dir = compile_golden("sort_by_seal");
+    let out = support::build_and_run_emitted("sort_by_seal", &dir);
     assert_eq!(
         out.exit_code,
         Some(0),

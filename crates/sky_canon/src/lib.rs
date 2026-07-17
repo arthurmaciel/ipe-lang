@@ -191,7 +191,7 @@ mod tests {
     use sky_diagnostics::{Diagnostic, NameError};
     use sky_intern::Symbol;
 
-    const GOLDEN: &str = include_str!("../../../tests/golden/m0/Main.sky");
+    const GOLDEN: &str = include_str!("../../../tests/golden/basics/Main.sky");
 
     /// Parse + canonicalise the golden M0 module. Returns `None` (failing the
     /// caller's assertions) rather than panicking, per the no-panic gate.

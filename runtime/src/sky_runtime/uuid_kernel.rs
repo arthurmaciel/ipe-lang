@@ -14,7 +14,7 @@
 //! backend still carries via its bare `Uuid.v4 : String` shape). The generation
 //! runs INSIDE the returned future's body, so each `.run()` of the task
 //! re-evaluates and yields a distinct id — proved by the `v4_two_runs_differ`
-//! unit test here and the `m5b_uuid_distinct` E2E golden.
+//! unit test here and the `uuid_distinct` E2E golden.
 //!
 //! `parse` stays PURE (`String -> Maybe String`): it inspects an existing
 //! string with no entropy and no side effect — a genuine parser, not the

@@ -48,7 +48,7 @@
 
 ```
 skyc: error[SKY-T0001]: type mismatch
-  --> tests/golden/m5b_db_crud/Main.sky:18:29
+  --> tests/golden/db_crud/Main.sky:18:29
    |
 18 |                             Db.insertRow txconn
    |                             ^^^^^^^^^^^^ expected List (String, String), found Dict String String
@@ -82,7 +82,7 @@ and `examples/27-*` (written against upstream) exercises the Dict surface.
 unsanctioned divergence from upstream. But `bdbc572` changed only the type
 scheme and left the two consumers of the old surface stale:
 
-* the golden fixture `tests/golden/m5b_db_crud/Main.sky:20,26` still passes
+* the golden fixture `tests/golden/db_crud/Main.sky:20,26` still passes
   raw list-of-tuples literals (its header comment, lines 3–5, still
   describes the "Vec<(String,String)>→HashMap conversion");
 * the emitter arms `crates/sky_backend_rust/src/emit_expr.rs:1565`
@@ -112,7 +112,7 @@ parameter. The fixture is what's stale.
 A copy of the fixture with the two literals wrapped in `Dict.fromList`
 type-checks, emits, `cargo check`s **and runs green with the current
 compiler, unmodified**, producing exactly the oracle output
-(`tests/golden/m5b_db_crud/expected_go.txt`: `apple/5` / `apple/10` /
+(`tests/golden/db_crud/expected_go.txt`: `apple/5` / `apple/10` /
 `deleted`). The emitter's now-redundant
 `.into_iter().collect::<HashMap<String, String>>()` still compiles when fed
 a `HashMap` (HashMap → pair-iterator → HashMap round-trip), so the fixture
@@ -121,7 +121,7 @@ not a gate.
 
 ### Fix
 
-1. **Fixture** — `tests/golden/m5b_db_crud/Main.sky`:
+1. **Fixture** — `tests/golden/db_crud/Main.sky`:
    * line 20: `[ ( "id", "1" ), ( "name", "apple" ), ( "qty", "5" ) ]` →
      `(Dict.fromList [ ( "id", "1" ), ( "name", "apple" ), ( "qty", "5" ) ])`
    * line 26: `[ ( "qty", "10" ) ]` → `(Dict.fromList [ ( "qty", "10" ) ])`
@@ -170,12 +170,12 @@ error[E0308]: mismatched types
 ```
 
 from the fixture's `Task.fail "rollback-test"`
-(`tests/golden/m5b_db_transaction/Main.sky:49`).
+(`tests/golden/db_transaction/Main.sky:49`).
 
 ### Root cause — `5db4cd3` turned `SkyError` into a real enum; the `Task.fail` scheme still admits any `e`
 
 The emitted prelude wrapper has pinned the error channel since day one
-(`tests/golden/m0/main.rs:123`, included verbatim into every emitted
+(`tests/golden/basics/main.rs:123`, included verbatim into every emitted
 project via `runtime_bindings()` at
 `crates/sky_backend_rust/src/project.rs:331`):
 
@@ -188,7 +188,7 @@ Until `5db4cd3` this was harmless because the same prelude declared
 three String-error fixtures were genuinely green. `5db4cd3` replaced the
 alias with the 11-kind `pub enum SkyError`
 (`runtime/src/sky_runtime/error.rs:75`) and re-exported it into the prelude
-(`tests/golden/m0/main.rs:45`), but added no compensating conversion at the
+(`tests/golden/basics/main.rs:45`), but added no compensating conversion at the
 one call-site shape that still hands the wrapper a raw `String`.
 
 The type checker cannot catch this today because the kernel scheme is
@@ -247,15 +247,15 @@ codegen with a proper SKY-T0001.
    `rg 'Task\.fail "' crates/skyc/stdlib examples tests` — stdlib and
    examples have zero String-arg call sites, all examples already pass
    `Error.unexpected …` / `Error.io …` values):
-   * `tests/golden/m5b_db_transaction/Main.sky:49` →
+   * `tests/golden/db_transaction/Main.sky:49` →
      `Task.fail (Error.unexpected "rollback-test")`
-   * `tests/golden/m5a_error_channel/Main.sky:12` →
+   * `tests/golden/error_channel/Main.sky:12` →
      `Task.fail (Error.unexpected "an error")`
-   * `tests/golden/m5a_task_map_error_lambda/Main.sky:10` →
+   * `tests/golden/task_map_error_lambda/Main.sky:10` →
      `Task.fail (Error.unexpected "an error")`
 
    The `Error.unexpected …` shape is already green end-to-end today:
-   `tests/golden/m86_error_module/Main.sky` emits
+   `tests/golden/error_module/Main.sky` emits
    `task_fail(sky_error_unexpected("boom".to_string()))` and passes a full
    `cargo check` (validated on a scratch emission at `2bc2a67`). Expected
    outputs unchanged: none of the three fixtures print the error value

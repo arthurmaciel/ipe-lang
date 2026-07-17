@@ -55,7 +55,7 @@ fn assert_malformed_char(fixture: &str, out_suffix: &str) {
 #[test]
 fn unrecognised_escape_in_pattern_position_is_sky_p0015() {
     assert_malformed_char(
-        "m3b3_gate_malformed_char_pattern",
+        "gate_malformed_char_pattern",
         "m3b3_gate_malformed_char_pattern_emit",
     );
 }
@@ -63,7 +63,7 @@ fn unrecognised_escape_in_pattern_position_is_sky_p0015() {
 #[test]
 fn unrecognised_escape_in_scrutinee_position_is_sky_p0015() {
     assert_malformed_char(
-        "m3b3_gate_malformed_char_scrutinee",
+        "gate_malformed_char_scrutinee",
         "m3b3_gate_malformed_char_scrutinee_emit",
     );
 }

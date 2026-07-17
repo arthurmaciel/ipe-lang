@@ -14,19 +14,19 @@
 //!
 //! Three scenarios:
 //!
-//! * **A1** (`i147_ctor_map_bare`) — nullary-arity-1 ctor passed bare to
+//! * **A1** (`ctor_map_bare`) — nullary-arity-1 ctor passed bare to
 //!   `List.map`: `List.map Wrap [1,2,3]` → `[Wrap(1), Wrap(2), Wrap(3)]`.
-//! * **A2** (`i147_ctor_partial`) — partial multi-arg ctor + T4 String capture:
+//! * **A2** (`ctor_partial`) — partial multi-arg ctor + T4 String capture:
 //!   `Tagged "item"` mapped over `[10, 20, 30]` → `"item:10, item:20, item:30"`.
-//! * **A3** (`i147_ctor_field`) — ctor as a HOF argument (user-fn taking `String -> Box`):
+//! * **A3** (`ctor_field`) — ctor as a HOF argument (user-fn taking `String -> Box`):
 //!   `applyMk Wrap "hello"` → `"hello"`. (Records cannot hold function-typed fields
 //!   per SKY-L0107; the equivalent "first-class ctor" story holds via HOF arguments.)
 //!
-//! All three also verify that the `m3a_gate_partial` fixture (formerly the
+//! All three also verify that the `gate_partial` fixture (formerly the
 //! SKY-L0113 gate) now COMPILES SUCCESSFULLY as a positive regression.
 //!
 //! Gated: green fixtures (A1-A3) require `SKY_E2E=1` for the cargo build+run
-//! step; the `m3a_gate_partial` positive-compile check runs always.
+//! step; the `gate_partial` positive-compile check runs always.
 //!
 //! ```text
 //! # green suite (cargo-0 required):
@@ -68,13 +68,13 @@ fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
     );
 }
 
-// ── m3a_gate_partial positive-compile (formerly SKY-L0113 gate) ──────────────
+// ── gate_partial positive-compile (formerly SKY-L0113 gate) ──────────────
 
-/// The `m3a_gate_partial` fixture (`Node x 1` — arity-3 ctor with 2 supplied
+/// The `gate_partial` fixture (`Node x 1` — arity-3 ctor with 2 supplied
 /// args) must COMPILE SUCCESSFULLY (not surface SKY-L0113).
 #[test]
 fn m3a_gate_partial_now_compiles() {
-    assert_skyc_ok("m3a_gate_partial", "i147_m3a_gate_partial_positive");
+    assert_skyc_ok("gate_partial", "i147_m3a_gate_partial_positive");
 }
 
 // ── A1 — bare ctor passed to List.map ────────────────────────────────────────
@@ -84,7 +84,7 @@ fn m3a_gate_partial_now_compiles() {
 /// and joined → `"1, 2, 3"`.
 #[test]
 fn a1_ctor_map_bare() {
-    assert_skyc_ok("i147_ctor_map_bare", "i147_ctor_map_bare_emit");
+    assert_skyc_ok("ctor_map_bare", "i147_ctor_map_bare_emit");
 
     if std::env::var("SKY_E2E").is_err() {
         return;
@@ -94,7 +94,7 @@ fn a1_ctor_map_bare() {
     let entry = root
         .join("tests")
         .join("golden")
-        .join("i147_ctor_map_bare")
+        .join("ctor_map_bare")
         .join("Main.sky");
     let out = std::env::temp_dir().join("skyc_i147_ctor_map_bare_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -106,11 +106,11 @@ fn a1_ctor_map_bare() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for i147_ctor_map_bare: {:?}",
+        "skyc build must succeed for ctor_map_bare: {:?}",
         built.err()
     );
 
-    let outcome = support::build_and_run_emitted("i147_ctor_map_bare", &out);
+    let outcome = support::build_and_run_emitted("ctor_map_bare", &out);
     assert_eq!(
         outcome.exit_code,
         Some(0),
@@ -131,7 +131,7 @@ fn a1_ctor_map_bare() {
 /// Expected output: `"item:10, item:20, item:30"`.
 #[test]
 fn a2_ctor_partial_multiarg_with_clone() {
-    assert_skyc_ok("i147_ctor_partial", "i147_ctor_partial_emit");
+    assert_skyc_ok("ctor_partial", "i147_ctor_partial_emit");
 
     if std::env::var("SKY_E2E").is_err() {
         return;
@@ -141,7 +141,7 @@ fn a2_ctor_partial_multiarg_with_clone() {
     let entry = root
         .join("tests")
         .join("golden")
-        .join("i147_ctor_partial")
+        .join("ctor_partial")
         .join("Main.sky");
     let out = std::env::temp_dir().join("skyc_i147_ctor_partial_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -153,11 +153,11 @@ fn a2_ctor_partial_multiarg_with_clone() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for i147_ctor_partial: {:?}",
+        "skyc build must succeed for ctor_partial: {:?}",
         built.err()
     );
 
-    let outcome = support::build_and_run_emitted("i147_ctor_partial", &out);
+    let outcome = support::build_and_run_emitted("ctor_partial", &out);
     assert_eq!(
         outcome.exit_code,
         Some(0),
@@ -178,7 +178,7 @@ fn a2_ctor_partial_multiarg_with_clone() {
 /// then calls.  Expected output: `"hello"`.
 #[test]
 fn a3_ctor_stored_in_record_field() {
-    assert_skyc_ok("i147_ctor_field", "i147_ctor_field_emit");
+    assert_skyc_ok("ctor_field", "i147_ctor_field_emit");
 
     if std::env::var("SKY_E2E").is_err() {
         return;
@@ -188,7 +188,7 @@ fn a3_ctor_stored_in_record_field() {
     let entry = root
         .join("tests")
         .join("golden")
-        .join("i147_ctor_field")
+        .join("ctor_field")
         .join("Main.sky");
     let out = std::env::temp_dir().join("skyc_i147_ctor_field_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -200,11 +200,11 @@ fn a3_ctor_stored_in_record_field() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for i147_ctor_field: {:?}",
+        "skyc build must succeed for ctor_field: {:?}",
         built.err()
     );
 
-    let outcome = support::build_and_run_emitted("i147_ctor_field", &out);
+    let outcome = support::build_and_run_emitted("ctor_field", &out);
     assert_eq!(
         outcome.exit_code,
         Some(0),

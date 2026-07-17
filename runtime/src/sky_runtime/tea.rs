@@ -274,7 +274,7 @@ where
         // the cursor stays on the prompt line for the user's input. An app that
         // wants each render on its own line supplies its own trailing "\n"
         // in its `view` string, exactly as the Go contract requires — see
-        // `tests/golden/i122_cli_program_view_separator` for a fixture that
+        // `tests/golden/cli_program_view_separator` for a fixture that
         // deliberately does NOT do this and therefore glues renders
         // together, matching Go byte-for-byte.
         let _ = std::io::stdout().write_all(view(model.clone()).as_bytes());

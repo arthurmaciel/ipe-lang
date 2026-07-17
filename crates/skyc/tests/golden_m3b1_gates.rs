@@ -83,14 +83,14 @@ fn assert_e2e_prints_three(out: &Path) {
 
 #[test]
 fn multi_arm_tuple_case_lowers_and_runs() {
-    if let Some(out) = build_ok("m3b1_gate_multiarm", "m3b1_gate_multiarm_emit") {
+    if let Some(out) = build_ok("gate_multiarm", "m3b1_gate_multiarm_emit") {
         assert_e2e_prints_three(&out);
     }
 }
 
 #[test]
 fn refutable_tuple_element_lowers_and_runs() {
-    if let Some(out) = build_ok("m3b1_gate_refutable", "m3b1_gate_refutable_emit") {
+    if let Some(out) = build_ok("gate_refutable", "m3b1_gate_refutable_emit") {
         assert_e2e_prints_three(&out);
     }
 }

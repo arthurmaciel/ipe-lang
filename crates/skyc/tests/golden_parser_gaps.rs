@@ -13,16 +13,16 @@
 //! reference compiler produces byte-identical stdout, captured via
 //! `refresh-oracle`.
 //!
-//! * `m2lex_intdiv` — `//` integer division. `20 // 2` → `10` and `(-7) // 2` →
+//! * `intdiv` — `//` integer division. `20 // 2` → `10` and `(-7) // 2` →
 //!   `-3` (truncation toward zero, Go + Elm parity; a floor-division backend
 //!   would give `-4`). Output: `"10 -3"`.
-//! * `m2lex_intdiv_minint` — F6 regression: `i64::MIN // -1`. Raw Rust `/`
+//! * `intdiv_minint` — F6 regression: `i64::MIN // -1`. Raw Rust `/`
 //!   panics here unconditionally (signed-overflow hardware trap); Sky-Go
 //!   returns `i64::MIN` (two's-complement wrap). `sky_int_div` reproduces this
 //!   via `wrapping_div`. Output: `"-9223372036854775808"`, exit 0.
-//! * `m1_let_fn` — a let-bound *function* (`inc n = n + 1`) applied inside the
+//! * `let_fn` — a let-bound *function* (`inc n = n + 1`) applied inside the
 //!   `in` body. Output: `"30"`.
-//! * `m0_blockcomment` — a `{- … -}` block comment containing an em-dash plus a
+//! * `blockcomment` — a `{- … -}` block comment containing an em-dash plus a
 //!   nested `{- {- -} -}` comment; both are skipped and the program prints.
 //!   Output: `"ok"`.
 //!
@@ -37,11 +37,11 @@
 //!
 //! ## Negatives (assert the exact `SKY-*` diagnostic / runtime classification)
 //!
-//! * `m2lex_intdiv_divzero` — `10 // 0` at runtime. The runtime classifies this
+//! * `intdiv_divzero` — `10 // 0` at runtime. The runtime classifies this
 //!   as `DivisionByZero` and aborts with exit code 101 (a Rust panic), rather
 //!   than emitting a wrong answer. Asserted by building + running the emitted
 //!   binary and checking the exit code (gated on `SKY_E2E`).
-//! * `m0_blockcomment_unterminated` — a `{-` that is never closed → `SKY-P0017`
+//! * `blockcomment_unterminated` — a `{-` that is never closed → `SKY-P0017`
 //!   (unterminated block comment). This is a sanctioned stricter behaviour: the
 //!   Go oracle leniently swallows the unterminated comment to EOF and builds an
 //!   empty program, so there is no oracle to diff — the diagnostic code is the
@@ -101,17 +101,17 @@ fn assert_single_oracle(name: &str) {
 
 #[test]
 fn intdiv_builds_and_matches_oracle() {
-    assert_single_oracle("m2lex_intdiv");
+    assert_single_oracle("intdiv");
 }
 
 #[test]
 fn let_fn_builds_and_matches_oracle() {
-    assert_single_oracle("m1_let_fn");
+    assert_single_oracle("let_fn");
 }
 
 #[test]
 fn blockcomment_builds_and_matches_oracle() {
-    assert_single_oracle("m0_blockcomment");
+    assert_single_oracle("blockcomment");
 }
 
 // ---------------------------------------------------------------------------
@@ -154,7 +154,7 @@ fn intdiv_by_zero_aborts_exit_101() {
     if std::env::var("SKY_E2E").is_err() {
         return;
     }
-    let name = "m2lex_intdiv_divzero";
+    let name = "intdiv_divzero";
     let dir = golden_dir(name);
     let entry = dir.join("Main.sky");
     let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
@@ -186,7 +186,7 @@ fn intdiv_by_zero_aborts_exit_101() {
 /// `a.wrapping_div(b)` for non-zero divisors, reproducing Go's result.
 #[test]
 fn intdiv_minint_by_neg1_does_not_panic() {
-    assert_single_oracle("m2lex_intdiv_minint");
+    assert_single_oracle("intdiv_minint");
 }
 
 // ---------------------------------------------------------------------------
@@ -202,7 +202,7 @@ fn diag_code(err: &skyc::CliError) -> Option<sky_diagnostics::Code> {
 
 #[test]
 fn unterminated_blockcomment_is_sky_p0017() {
-    let name = "m0_blockcomment_unterminated";
+    let name = "blockcomment_unterminated";
     let entry = golden_dir(name).join("Main.sky");
     let out = std::env::temp_dir().join(format!("skyc_{name}"));
     let _ = std::fs::remove_dir_all(&out);

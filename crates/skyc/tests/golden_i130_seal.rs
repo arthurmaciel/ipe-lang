@@ -86,7 +86,7 @@ fn c01_enum_capture_fix1() {
     let entry = root
         .join("tests")
         .join("golden")
-        .join("i130_enum_capture")
+        .join("enum_capture")
         .join("Main.sky");
     let out = std::env::temp_dir().join("skyc_i130_enum_capture_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -98,11 +98,11 @@ fn c01_enum_capture_fix1() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for i130_enum_capture: {:?}",
+        "skyc build must succeed for enum_capture: {:?}",
         built.err()
     );
 
-    let outcome = support::build_and_run_emitted("i130_enum_capture", &out);
+    let outcome = support::build_and_run_emitted("enum_capture", &out);
     assert_eq!(
         outcome.exit_code,
         Some(0),
@@ -133,7 +133,7 @@ fn c02_record_capture_fix1() {
     let entry = root
         .join("tests")
         .join("golden")
-        .join("i130_record_capture")
+        .join("record_capture")
         .join("Main.sky");
     let out = std::env::temp_dir().join("skyc_i130_record_capture_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -145,11 +145,11 @@ fn c02_record_capture_fix1() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for i130_record_capture: {:?}",
+        "skyc build must succeed for record_capture: {:?}",
         built.err()
     );
 
-    let outcome = support::build_and_run_emitted("i130_record_capture", &out);
+    let outcome = support::build_and_run_emitted("record_capture", &out);
     assert_eq!(
         outcome.exit_code,
         Some(0),
@@ -181,7 +181,7 @@ fn c13_complex_arg_hoist_t4() {
     let entry = root
         .join("tests")
         .join("golden")
-        .join("i130_complex_arg_hoist")
+        .join("complex_arg_hoist")
         .join("Main.sky");
     let out = std::env::temp_dir().join("skyc_i130_complex_arg_hoist_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -193,11 +193,11 @@ fn c13_complex_arg_hoist_t4() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for i130_complex_arg_hoist: {:?}",
+        "skyc build must succeed for complex_arg_hoist: {:?}",
         built.err()
     );
 
-    let outcome = support::build_and_run_emitted("i130_complex_arg_hoist", &out);
+    let outcome = support::build_and_run_emitted("complex_arg_hoist", &out);
     assert_eq!(
         outcome.exit_code,
         Some(0),
@@ -231,7 +231,7 @@ fn c14_nested_lambda_noncopy_promoted_accepts() {
     let entry = root
         .join("tests")
         .join("golden")
-        .join("i130_nested_lambda_noncopy")
+        .join("nested_lambda_noncopy")
         .join("Main.sky");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i130_nested_lambda_noncopy_accept");
     let _ = std::fs::remove_dir_all(&out);
@@ -249,7 +249,7 @@ fn c14_nested_lambda_noncopy_promoted_accepts() {
     if std::env::var("SKY_E2E").is_err() {
         return;
     }
-    let outcome = support::build_and_run_emitted("i130_nested_lambda_noncopy", &out);
+    let outcome = support::build_and_run_emitted("nested_lambda_noncopy", &out);
     assert_eq!(outcome.exit_code, Some(0), "exit 0");
     assert_eq!(outcome.stdout.trim(), "6", "composed (*2) 3 = 6");
 }
@@ -274,9 +274,9 @@ fn c05_streamwriter_capture_forward() {
     let entry = root
         .join("tests")
         .join("golden")
-        .join("i130_streamwriter_capture")
+        .join("streamwriter_capture")
         .join("Main.sky");
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i130_streamwriter_capture");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("streamwriter_capture");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = skyc::resolve_runtime() else {
@@ -316,9 +316,9 @@ fn c06_stream_string_capture_seal() {
     let entry = root
         .join("tests")
         .join("golden")
-        .join("i233_stream_string_capture")
+        .join("stream_string_capture")
         .join("Main.sky");
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i233_stream_string_capture");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("stream_string_capture");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = skyc::resolve_runtime() else {
@@ -336,7 +336,7 @@ fn c06_stream_string_capture_seal() {
     }
     // Build-only: the fixture is a listening server, so it cannot run-to-exit.
     // A successful cargo build is the seal (skyc-0 ⇒ cargo builds).
-    let built_bin = oracle::build_rust_binary("i233_stream_string_capture", &out);
+    let built_bin = oracle::build_rust_binary("stream_string_capture", &out);
     assert!(
         built_bin.is_ok(),
         "emitted crate must cargo-build (was 2x E0507 on the stream handler): {}",

@@ -37,7 +37,7 @@ fn cli_program_glues_consecutive_renders_matching_go_oracle() {
     let dir = root
         .join("tests")
         .join("golden")
-        .join("i122_cli_program_view_separator");
+        .join("cli_program_view_separator");
     let entry = dir.join("Main.sky");
     let out = std::env::temp_dir().join("skyc_i122_cli_program_view_separator_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -51,7 +51,7 @@ fn cli_program_glues_consecutive_renders_matching_go_oracle() {
 
     // Two stdin lines → two loop-body renders (count 0 → 1 → 2), then EOF.
     let outcome = support::build_and_run_emitted_with_stdin(
-        "i122_cli_program_view_separator",
+        "cli_program_view_separator",
         &out,
         b"a\nb\n",
     );

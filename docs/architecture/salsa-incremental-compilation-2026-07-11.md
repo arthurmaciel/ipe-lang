@@ -375,7 +375,7 @@ hazard — symbol *numbering* leaking into emitted bytes — does NOT occur on
 this corpus. What DID leak was the lowerer's fresh-name pools:
 `Interner::fresh_symbols` skipped any candidate already **interned**, so a
 warm rebuild skipped the previous build's own `eta_0…` and minted
-`eta_16…` into the emitted Rust (caught on `i121_firstclass_curried`,
+`eta_16…` into the emitted Rust (caught on `firstclass_curried`,
 `eta_16/eta_17` vs `eta_0/eta_1`) — interner-as-untracked-state inside
 lowering. All six pools (`eta_`, `cap_`, `arg_`, `anyp_`, `destr_thunk_`,
 `ncons_`) had the defect.

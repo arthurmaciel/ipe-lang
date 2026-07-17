@@ -6,14 +6,14 @@
 //!
 //! Four programs exercise the surface end to end:
 //!
-//! * `m4a_maybe` — `case (Just 42) of Just n -> n ; Nothing -> 0`, prints `42`.
+//! * `maybe_stdlib` — `case (Just 42) of Just n -> n ; Nothing -> 0`, prints `42`.
 //!   `Maybe a` lowers to the runtime's `SkyMaybe<T>`; the construction and the
 //!   pattern both route to it.
-//! * `m4a_result` — `case (Ok 7) of Ok n -> n ; Err _ -> 0`, prints `7`.
+//! * `result_stdlib` — `case (Ok 7) of Ok n -> n ; Err _ -> 0`, prints `7`.
 //!   `Result e a` lowers to the runtime's `SkyResult<E, A>`.
-//! * `m4a_bool` — `if True then "yes" else "no"`, prints `yes`. `True` / `False`
+//! * `bool_stdlib` — `if True then "yes" else "no"`, prints `yes`. `True` / `False`
 //!   lower to the Rust `true` / `false` keyword constants.
-//! * `m4a_list` — `1 :: 2 :: [3, 4, 5]` built and passed to a function, prints
+//! * `list_stdlib` — `1 :: 2 :: [3, 4, 5]` built and passed to a function, prints
 //!   `7`. The list literal lowers to `vec![…]` and `::` to the runtime's
 //!   `sky_list_cons`, over the runtime's `Vec<T>` list representation.
 //!
@@ -86,40 +86,40 @@ fn assert_runs_and_matches_oracle(name: &str) {
 
 #[test]
 fn maybe_value_and_pattern_emit_byte_identical_main_rs() {
-    assert_byte_identical("m4a_maybe");
+    assert_byte_identical("maybe_stdlib");
 }
 
 #[test]
 fn result_value_and_pattern_emit_byte_identical_main_rs() {
-    assert_byte_identical("m4a_result");
+    assert_byte_identical("result_stdlib");
 }
 
 #[test]
 fn bool_value_emits_byte_identical_main_rs() {
-    assert_byte_identical("m4a_bool");
+    assert_byte_identical("bool_stdlib");
 }
 
 #[test]
 fn list_literal_and_cons_emit_byte_identical_main_rs() {
-    assert_byte_identical("m4a_list");
+    assert_byte_identical("list_stdlib");
 }
 
 #[test]
 fn maybe_builds_and_prints_forty_two() {
-    assert_runs_and_matches_oracle("m4a_maybe");
+    assert_runs_and_matches_oracle("maybe_stdlib");
 }
 
 #[test]
 fn result_builds_and_prints_seven() {
-    assert_runs_and_matches_oracle("m4a_result");
+    assert_runs_and_matches_oracle("result_stdlib");
 }
 
 #[test]
 fn bool_builds_and_prints_yes() {
-    assert_runs_and_matches_oracle("m4a_bool");
+    assert_runs_and_matches_oracle("bool_stdlib");
 }
 
 #[test]
 fn list_builds_and_prints_seven() {
-    assert_runs_and_matches_oracle("m4a_list");
+    assert_runs_and_matches_oracle("list_stdlib");
 }

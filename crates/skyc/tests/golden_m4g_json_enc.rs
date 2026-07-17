@@ -7,23 +7,23 @@
 //!   `JsonEnc.encode 0` — a nested `{name, age, tags:[…]}` object at compact
 //!   (indent=0) output.  Go: `json.Marshal(map[string]any{})` sorts keys
 //!   alphabetically → `"age" < "name" < "tags"`.
-//!   (`m4g_json_enc_object_compact`)
+//!   (`json_enc_object_compact`)
 //!
 //! * Same object at `encode 2` — 2-space pretty-print matching Go's
 //!   `json.MarshalIndent(val, "", "  ")`.
-//!   (`m4g_json_enc_object_pretty`)
+//!   (`json_enc_object_pretty`)
 //!
 //! * Float encoding across Go's floatEncoder thresholds — `1.5`, `1e20`,
 //!   `1e-6`, `1.23e17` — plus `bool`/`null`.  Pins the decimal-vs-exponent
 //!   selection and `e±NN` shape against Go, where serde's Ryū default would
 //!   diverge (`1e20` → exponent form, etc.).
-//!   (`m4g_json_enc_float`)
+//!   (`json_enc_float`)
 //!
 //! * `JsonEnc.string` over a value carrying `"`, `<`, `>`, `&`, U+2028, and
 //!   U+2029 — the full set Go's `encoding/json` HTML-escapes by default
 //!   (`\"`, `<`, `>`, `&`, `\\u2028`, `\\u2029`).  serde escapes
 //!   only `\"`, so this pins the HTML-escape pass.
-//!   (`m4g_json_enc_escape`)
+//!   (`json_enc_escape`)
 //!
 //! Every test is gated on `SKY_E2E=1`; without it the test returns early.  Run:
 //!
@@ -75,7 +75,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 /// Keys sorted: `"age" < "name" < "tags"`.  Output: compact JSON line.
 #[test]
 fn json_enc_object_compact() {
-    assert_runs_and_matches_oracle("m4g_json_enc_object_compact");
+    assert_runs_and_matches_oracle("json_enc_object_compact");
 }
 
 // ── pretty object (indent 2) ─────────────────────────────────────────────────
@@ -84,7 +84,7 @@ fn json_enc_object_compact() {
 /// 2-space indentation.
 #[test]
 fn json_enc_object_pretty() {
-    assert_runs_and_matches_oracle("m4g_json_enc_object_pretty");
+    assert_runs_and_matches_oracle("json_enc_object_pretty");
 }
 
 // ── float + bool + null scalars ──────────────────────────────────────────────
@@ -94,7 +94,7 @@ fn json_enc_object_pretty() {
 /// `"1.5 100000000000000000000 0.000001 123000000000000000 true null"`.
 #[test]
 fn json_enc_float_bool_null() {
-    assert_runs_and_matches_oracle("m4g_json_enc_float");
+    assert_runs_and_matches_oracle("json_enc_float");
 }
 
 // ── string escaping ──────────────────────────────────────────────────────────
@@ -104,5 +104,5 @@ fn json_enc_float_bool_null() {
 /// `\u2029`) against `serde_json`, which escapes only `\"`.
 #[test]
 fn json_enc_string_escape() {
-    assert_runs_and_matches_oracle("m4g_json_enc_escape");
+    assert_runs_and_matches_oracle("json_enc_escape");
 }

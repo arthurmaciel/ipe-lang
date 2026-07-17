@@ -230,7 +230,7 @@ fn sources_of(pairs: &[(&[&str], &str)]) -> UserSources {
 }
 
 // A curried first-class function value forces the lowerer's `eta_` pool (the
-// exact class golden fixture `i121_firstclass_curried` uses).
+// exact class golden fixture `firstclass_curried` uses).
 const MAIN: &[&str] = &["Main"];
 
 const BASE: &str = "module Main exposing (main)\n\

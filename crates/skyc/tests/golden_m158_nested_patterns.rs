@@ -101,7 +101,7 @@ fn assert_gated(name: &str, expected: sky_diagnostics::Code) {
 
 #[test]
 fn nested_record_payload_accepted() {
-    assert_accepted_runs("m158_nested_record_payload", "Ada");
+    assert_accepted_runs("nested_record_payload", "Ada");
 }
 
 /// Residual-scope probe: a record nested TWO levels deep (`Ok (Just {name})`).
@@ -109,28 +109,28 @@ fn nested_record_payload_accepted() {
 /// every level of `PCtor` recursion. Confirmed here rather than assumed.
 #[test]
 fn nested_record_two_levels_accepted() {
-    assert_accepted_runs("m158_nested_record_two_levels", "Ada");
+    assert_accepted_runs("nested_record_two_levels", "Ada");
 }
 
 // ── Repro 1: cons / list sub-pattern nested in a ctor payload (was SKY-L0116) ─
 
 #[test]
 fn nested_cons_payload_accepted() {
-    assert_accepted_runs("m158_nested_cons_payload", "1");
+    assert_accepted_runs("nested_cons_payload", "1");
 }
 
 /// THE decisive soundness test: `Just []` must FALL THROUGH the `Just (h::t)`
 /// guarded arm to the wildcard and print `0`, never panic.
 #[test]
 fn nested_cons_payload_fallthrough_prints_zero() {
-    assert_accepted_runs("m158_nested_cons_payload_fallthrough", "0");
+    assert_accepted_runs("nested_cons_payload_fallthrough", "0");
 }
 
 /// A CLOSED list literal nested in a ctor payload (`Just [a, b]`) — exact-length
 /// guard (`.len() == 2`) plus indexed head bindings.
 #[test]
 fn nested_cons_closed_list_accepted() {
-    assert_accepted_runs("m158_nested_cons_closed_list", "30");
+    assert_accepted_runs("nested_cons_closed_list", "30");
 }
 
 /// A nested-cons payload whose element type flows through a generic function
@@ -138,7 +138,7 @@ fn nested_cons_closed_list_accepted() {
 /// are sound and the shape is accepted.
 #[test]
 fn nested_cons_generic_elem_accepted() {
-    assert_accepted_runs("m158_nested_cons_generic_elem", "1");
+    assert_accepted_runs("nested_cons_generic_elem", "1");
 }
 
 // ── Residual scope: guard-non-exhaustive stays fail-closed ───────────────────
@@ -149,7 +149,7 @@ fn nested_cons_generic_elem_accepted() {
 #[test]
 fn nested_cons_no_fallback_stays_gated() {
     assert_gated(
-        "m158_nested_cons_no_fallback_gated",
+        "nested_cons_no_fallback_gated",
         sky_diagnostics::SKY_L0116,
     );
 }
@@ -164,7 +164,7 @@ fn nested_cons_no_fallback_stays_gated() {
 #[test]
 fn nested_strlit_two_levels_stays_gated() {
     assert_gated(
-        "m158_nested_strlit_two_levels_gated",
+        "nested_strlit_two_levels_gated",
         sky_diagnostics::SKY_L0116,
     );
 }
@@ -175,5 +175,5 @@ fn nested_strlit_two_levels_stays_gated() {
 /// over-tightening the gate.
 #[test]
 fn nested_strlit_ctor_payload_accepted() {
-    assert_accepted_runs("m158_nested_strlit_ctor_payload", "live");
+    assert_accepted_runs("nested_strlit_ctor_payload", "live");
 }

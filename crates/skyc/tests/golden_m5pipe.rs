@@ -5,11 +5,11 @@
 //!
 //! Five programs exercise the surface end to end:
 //!
-//! * `m5pipe_chain`          — multi-step forward pipe prints `3`.
-//! * `m5pipe_backward`       — `<|` right-assoc + looser-than-`+` prints `3`.
-//! * `m5pipe_multiline`      — leading-`|>` continuation lines in a `let` binding.
-//! * `m5pipe_prec_vs_arith`  — `2 + 3 |> String.fromInt` groups `+` first → `"5"`.
-//! * `m5pipe_mixed_append`   — `"a" ++ "b" |> String.toUpper` groups `++` first → `"AB"`.
+//! * `chain`          — multi-step forward pipe prints `3`.
+//! * `backward`       — `<|` right-assoc + looser-than-`+` prints `3`.
+//! * `multiline`      — leading-`|>` continuation lines in a `let` binding.
+//! * `prec_vs_arith`  — `2 + 3 |> String.fromInt` groups `+` first → `"5"`.
+//! * `mixed_append`   — `"a" ++ "b" |> String.toUpper` groups `++` first → `"AB"`.
 //!
 //! Behavioural-parity oracle: `oracle_divergence = false` for all five — the Go
 //! backend produces identical stdout (`3`, `3`, `3`, `5`, `AB`).
@@ -75,52 +75,52 @@ fn assert_runs_and_matches_oracle(name: &str) {
 
 #[test]
 fn pipe_chain_emits_byte_identical_main_rs() {
-    assert_byte_identical("m5pipe_chain");
+    assert_byte_identical("chain");
 }
 
 #[test]
 fn pipe_backward_emits_byte_identical_main_rs() {
-    assert_byte_identical("m5pipe_backward");
+    assert_byte_identical("backward");
 }
 
 #[test]
 fn pipe_multiline_emits_byte_identical_main_rs() {
-    assert_byte_identical("m5pipe_multiline");
+    assert_byte_identical("multiline");
 }
 
 #[test]
 fn pipe_prec_vs_arith_emits_byte_identical_main_rs() {
-    assert_byte_identical("m5pipe_prec_vs_arith");
+    assert_byte_identical("prec_vs_arith");
 }
 
 #[test]
 fn pipe_mixed_append_emits_byte_identical_main_rs() {
-    assert_byte_identical("m5pipe_mixed_append");
+    assert_byte_identical("mixed_append");
 }
 
 // ── E2E oracle tests (gated on SKY_E2E=1) ────────────────────────────────────
 
 #[test]
 fn pipe_chain_builds_and_prints_three() {
-    assert_runs_and_matches_oracle("m5pipe_chain");
+    assert_runs_and_matches_oracle("chain");
 }
 
 #[test]
 fn pipe_backward_builds_and_prints_three() {
-    assert_runs_and_matches_oracle("m5pipe_backward");
+    assert_runs_and_matches_oracle("backward");
 }
 
 #[test]
 fn pipe_multiline_builds_and_prints_three() {
-    assert_runs_and_matches_oracle("m5pipe_multiline");
+    assert_runs_and_matches_oracle("multiline");
 }
 
 #[test]
 fn pipe_prec_vs_arith_builds_and_prints_five() {
-    assert_runs_and_matches_oracle("m5pipe_prec_vs_arith");
+    assert_runs_and_matches_oracle("prec_vs_arith");
 }
 
 #[test]
 fn pipe_mixed_append_builds_and_prints_ab() {
-    assert_runs_and_matches_oracle("m5pipe_mixed_append");
+    assert_runs_and_matches_oracle("mixed_append");
 }

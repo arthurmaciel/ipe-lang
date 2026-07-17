@@ -44,7 +44,7 @@ fn build_fixture(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>
 /// ICE / `CompilerBug`.
 #[test]
 fn ctor_task_arity_three_is_sky_t0016_not_ice() {
-    let Some(built) = build_fixture("m5a_gate_ctor_task_arity", "m5a_gate_ctor_task_arity_emit")
+    let Some(built) = build_fixture("gate_ctor_task_arity", "m5a_gate_ctor_task_arity_emit")
     else {
         return; // runtime unresolvable in this environment — skip.
     };
@@ -64,7 +64,7 @@ fn ctor_task_arity_three_is_sky_t0016_not_ice() {
 /// spec's decision to NOT add a new rejection here (symmetric with Item B).
 #[test]
 fn ctor_task_well_formed_builds() {
-    let Some(built) = build_fixture("m5a_ctor_task_ok", "m5a_ctor_task_ok_emit") else {
+    let Some(built) = build_fixture("ctor_task_ok", "m5a_ctor_task_ok_emit") else {
         return; // runtime unresolvable in this environment — skip.
     };
     // Whatever else, it must NOT be a Task-arity rejection and must NOT be an

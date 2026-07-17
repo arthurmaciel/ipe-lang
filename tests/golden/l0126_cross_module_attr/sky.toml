@@ -1,3 +1,0 @@
-name = "l0126_cross_module_attr"
-version = "0.1.0"
-entry = "src/Main.sky"

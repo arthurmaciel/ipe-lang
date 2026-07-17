@@ -17,17 +17,17 @@
 //!
 //! ## Golden catalogue
 //!
-//! * `m5b_http_parse_query` — `Http.parseQuery "a=1&b=two%20words&a=ignored&c"`
+//! * `http_parse_query` — `Http.parseQuery "a=1&b=two%20words&a=ignored&c"`
 //!   first-key-wins, percent-decodes, empty-value for key-only, sorted via
 //!   `Dict.toList`. Output: three `key=value` lines.
 //!
-//! * `m5b_http_builders` — `defaultRequest |> withMethod "POST" |> withTimeout
+//! * `http_builders` — `defaultRequest |> withMethod "POST" |> withTimeout
 //!   5000 |> withHeader "A" "1" |> withHeader "B" "2" |> withBody "hello"`.
 //!   Prints `.method`, `.url`, `.timeout`, `.body`, and `.headers` (comma-joined).
 //!   Confirms pure builder chain, record-update syntax, and that `withHeader`
 //!   prepends (latest-added first) matching the Go reference.
 //!
-//! * `m5b_http_response_fields` — constructs an `HttpResponse` literal
+//! * `http_response_fields` — constructs an `HttpResponse` literal
 //!   `{ status = 200, body = "ok", headers = Dict.fromList […] }`, reads back
 //!   `.status`, `.body`, and `Dict.get "X-Test"`. Proves the
 //!   `{body, headers, status}` fieldset synthesises correctly.
@@ -97,7 +97,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 /// lines (sorted by `Dict.toList`).  Go-parity oracle.
 #[test]
 fn http_parse_query() {
-    assert_runs_and_matches_oracle("m5b_http_parse_query");
+    assert_runs_and_matches_oracle("http_parse_query");
 }
 
 // ── Http builder chain ────────────────────────────────────────────────────────
@@ -107,7 +107,7 @@ fn http_parse_query() {
 /// Go-parity oracle.
 #[test]
 fn http_builders() {
-    assert_runs_and_matches_oracle("m5b_http_builders");
+    assert_runs_and_matches_oracle("http_builders");
 }
 
 // ── HttpResponse record literal + field access ────────────────────────────────
@@ -118,7 +118,7 @@ fn http_builders() {
 /// oracle.
 #[test]
 fn http_response_fields() {
-    assert_runs_and_matches_oracle("m5b_http_response_fields");
+    assert_runs_and_matches_oracle("http_response_fields");
 }
 
 // ── `HttpRequest` opaque-type regression (no signature ever spells the
@@ -138,7 +138,7 @@ fn http_response_fields() {
 /// backend-SYNTHESISED struct via `record_struct_by_key` to build the struct
 /// literal — such a struct is only registered when some signature
 /// independently carries the same fieldset as a plain (non-opaque) record
-/// (e.g. `m5b_http_builders`'s explicitly-annotated `printReq` parameter).
+/// (e.g. `http_builders`'s explicitly-annotated `printReq` parameter).
 /// With no such signature anywhere in the program, no struct is
 /// registered and the lookup raises SKY-I0001, even though the value's
 /// runtime type is correctly known throughout. So the arm emits
@@ -153,7 +153,7 @@ fn http_response_fields() {
 #[test]
 fn http_default_request_emits_without_signature_consumer() {
     let root = repo_root();
-    let entry = golden_dir(&root, "m5b_http_response_fields").join("Main.sky");
+    let entry = golden_dir(&root, "http_response_fields").join("Main.sky");
     let out = std::env::temp_dir().join("skyc_m5b_http_default_request_no_sig_emit");
     let _ = std::fs::remove_dir_all(&out);
 

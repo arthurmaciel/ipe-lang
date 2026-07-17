@@ -17,7 +17,7 @@ import Lib2
 -- mixed-param path). `args` stays `List SqlValue` at every non-empty call
 -- site so the fixture isolates the ONE variable #165 is actually about:
 -- empty vs. non-empty, not cross-call-site type diversity (a separate,
--- already-covered concern — `tests/golden/m5b_db_poly_params`).
+-- already-covered concern — `tests/golden/db_poly_params`).
 --
 -- Expected output: "gadget,widget" (two rows, ordered by name).
 main =

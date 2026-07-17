@@ -320,7 +320,7 @@ shape anyway, so this refusal is rarely reached.)
 ### 3.4 Emitted `Cargo.toml` — mutually-exclusive allocator features
 
 Replaces `../sky`'s single `static_alloc = ["mimalloc"]` (currently inherited in
-`tests/golden/m0/Cargo.toml`) with a per-allocator feature family, so the choice
+`tests/golden/basics/Cargo.toml`) with a per-allocator feature family, so the choice
 is a feature selection and "both allocators" is impossible to express:
 
 ```toml
@@ -656,7 +656,7 @@ absent — a second-order security win reinforcing the default.
 
 ## Open decisions (for the user)
 
-- **D1 — Golden rebaseline authority.** `tests/golden/m0/Cargo.toml` already ships
+- **D1 — Golden rebaseline authority.** `tests/golden/basics/Cargo.toml` already ships
   `static_alloc = ["mimalloc"]` and `main.rs` emits the mimalloc
   `#[global_allocator]`. This design rips out that inherited mimalloc default in
   favour of the `alloc_*` feature family with a dlmalloc default. Who signs off on

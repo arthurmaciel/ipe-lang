@@ -99,7 +99,7 @@ recorded reference.
   bytes — **byte-identical to Go for BOTH ASCII and non-ASCII**. The
   silent-truncation hole (a real security bug: two Basic-auth passwords differing
   only above 0xFF collided) is closed; codepoints > 255 no longer collapse.
-  Golden `m4f_encoding_nonascii` now carries `oracle_divergence = false`.
+  Golden `encoding_nonascii` now carries `oracle_divergence = false`.
 - **Related behavior change (recorded):** `base64Decode` / `hexDecode` now require
   the decoded bytes to be valid UTF-8 and return `Err` otherwise (previously a
   never-erroring lossy Latin-1 reinterpretation). This keeps
@@ -150,7 +150,7 @@ recorded reference.
   arity-0 kernel codegen), so its length/version-nibble checks differ.
 - **Go-oracle relationship:** Go succeeds; checks differ on this shape.
 - **Rationale:** arity-0 kernel codegen. **Sanctioned:** yes (`sanctioned:`).
-  Golden `m5b_uuid_format`.
+  Golden `uuid_format`.
 
 ### B8 — `Uuid.parse` accepts a canonical UUID
 - **Differs:** ipê's `Uuid.parse` returns `Just` for a canonical hyphenated UUID
@@ -158,7 +158,7 @@ recorded reference.
   same canonical UUID on this shape.
 - **Go-oracle relationship:** Go succeeds; ipê is semantically correct.
 - **Rationale:** correctness. **Sanctioned:** yes (`sanctioned:`). Golden
-  `m5b_uuid_parse`.
+  `uuid_parse`.
 
 ### B9 — `Sky.Core.Jwt` flat + builder surfaces (✅ both shipped, corrected 2026-07-09)
 - **No longer differs — closed.** ipê surfaces BOTH the four flat kernels
@@ -185,7 +185,7 @@ recorded reference.
 - **Go-oracle relationship:** byte-identical, both call surfaces.
 - **Sanctioned:** yes (`divergence:` — offering both surfaces is strictly
   additive over Go). Goldens `m5b_jwt_*`, `m_jwt_decode_now`,
-  `i217_jwt_withclaim_value`.
+  `jwt_withclaim_value`.
 
 ### B10 — `Std.Db` emits Rust + `sqlx` (vs Go + SQLite/cgo)
 - **Differs:** the full `Std.Db` surface is shared, but Go emits Go+SQLite (cgo)
@@ -205,7 +205,7 @@ recorded reference.
   trailing spaces). Both render semantically-correct Flexbox layouts.
 - **Go-oracle relationship:** Go succeeds; HTML bytes differ.
 - **Rationale:** the two are separate renderers; strict byte-parity for HTML is a
-  later goal. **Sanctioned:** yes (`divergence:`). Goldens `m7_stdui*`.
+  later goal. **Sanctioned:** yes (`divergence:`). Goldens `stdui*`.
 
 ### B12 — `Cmd` / `Sub` are construct-only on ipê
 - **Differs:** ipê provides TEA `Cmd`/`Sub` constructors; the Go backend has no
@@ -213,17 +213,17 @@ recorded reference.
   authoritative reference.
 - **Go-oracle relationship:** Go has no equivalent surface.
 - **Rationale:** TEA-everywhere surface. **Sanctioned:** yes (`sanctioned:`).
-  Goldens `m5c_cmd_ctors` / `m5c_sub_ctors` / `m5c_perform_ctor`.
+  Goldens `cmd_ctors` / `sub_ctors` / `perform_ctor`.
 
 ### B13 — Shapes the Go reference cannot build (ipê compiles + runs)
 - **Differs:** several well-typed ipê programs are rejected by the Go reference's
   front-end, so ipê's output is recorded as the reference:
-  - Recursive enum through a **tuple** payload — `type Chain = ChainEnd | ChainNode (Chain, Int)` (Go parse error; ipê boxes the cyclic edge so the Rust enum stays finite-sized). Golden `m3a_tuple_self_edge`.
-  - Recursive enum through a **record** payload — `type RChain = REnd | RNode { rest : RChain, val : Int }` (Go parse error). Golden `m3a_record_self_edge`.
-  - `Std.Ui` with `Html.htmlRender` — not exposed by the Go oracle (`sky dev`), which exits 1; ipê compiles and runs. Goldens `m7_stdui_onclick` / `m7_stdui_oninput_closure`.
-  - `Set` generic / member on shapes the Go oracle exits 1 on. Goldens `m4d_set_generic` / `m4d_set_member`.
-  - Invalid-encoding decode input where the Go oracle exits 1; ipê returns `Err`. Golden `m4f_encoding_invalid`.
-  - Partial application of a sibling **let-bound** function value (`wrap f x = f x + 1; guarded f = wrap (inc f)`) — Go emits `wrap(oneArg)` against the flattened 2-arity local and fails `go build` (`not enough arguments in call to wrap`); ipê eta-expands the residual and Arc-promotes the captured value. Golden `i221_fn_capture_eta_promoted` (output `4`, hand-computed language semantics).
+  - Recursive enum through a **tuple** payload — `type Chain = ChainEnd | ChainNode (Chain, Int)` (Go parse error; ipê boxes the cyclic edge so the Rust enum stays finite-sized). Golden `tuple_self_edge`.
+  - Recursive enum through a **record** payload — `type RChain = REnd | RNode { rest : RChain, val : Int }` (Go parse error). Golden `record_self_edge`.
+  - `Std.Ui` with `Html.htmlRender` — not exposed by the Go oracle (`sky dev`), which exits 1; ipê compiles and runs. Goldens `stdui_onclick` / `stdui_oninput_closure`.
+  - `Set` generic / member on shapes the Go oracle exits 1 on. Goldens `set_generic` / `set_member`.
+  - Invalid-encoding decode input where the Go oracle exits 1; ipê returns `Err`. Golden `encoding_invalid`.
+  - Partial application of a sibling **let-bound** function value (`wrap f x = f x + 1; guarded f = wrap (inc f)`) — Go emits `wrap(oneArg)` against the flattened 2-arity local and fails `go build` (`not enough arguments in call to wrap`); ipê eta-expands the residual and Arc-promotes the captured value. Golden `fn_capture_eta_promoted` (output `4`, hand-computed language semantics).
 - **Go-oracle relationship:** Go-failure (auto kind-1); ipê handles the shape.
 - **Rationale:** capability/coverage; ipê's output is correct on these shapes.
 - **Sanctioned:** yes (auto Go-failure).
@@ -387,8 +387,8 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   unrepresentable". The Sky Haskell compiler's `findWithDefault ""` is a known
   deferred-failure hole; this is the stricter-is-better class.
 - **Sanctioned:** yes (`sanctioned:`). Regression gate: `golden_i138_total_resolution`
-  (error fixtures `i138_empty_home_bridge` / `i138_optbridge` → must emit
-  SKY-N0002 not SKY-I0001; positive control `i138_kernel_implicit_positive` →
+  (error fixtures `empty_home_bridge` / `optbridge` → must emit
+  SKY-N0002 not SKY-I0001; positive control `kernel_implicit_positive` →
   must compile clean).
 
 ### B22 — Function value in a `Maybe`/`Result`/user-union constructor payload (#90 Stage 1)
@@ -431,7 +431,7 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   `Maybe.andThen`/`Result.andThen`/`Result.traverse` need no obligation:
   their callback results are `Con`-headed in the scheme itself, so a curried
   callback is already a plain type mismatch (pinned by the
-  `l0114_and_then_fn_payload_accepted` fixture, which also proves a callback
+  `and_then_fn_payload_accepted` fixture, which also proves a callback
   legitimately returning `Ok fn` stays accepted and computes correctly). A lowering-time
   backstop (`reject_curried_andmap_payload`, re-anchored inside
   `lower_callee` itself — the single funnel EVERY kernel/top-level reference
@@ -475,9 +475,9 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   `interface{}`-boxed-value class as B-below): a case-arm-extracted function
   value sometimes fails `go build` outright (`invalid operation: cannot call
   f (variable of interface type any): any is not a function` —
-  `m3a_function_payload_gate`, `l0114_ctor_decl_fn_payload`,
-  `l0114_fn_extracted_called_twice`) and sometimes builds but computes the
-  WRONG value (`l0114_result_and_map_fn_payload`, `l0114_maybe_and_map_fn_payload`
+  `function_payload_gate`, `ctor_decl_fn_payload`,
+  `fn_extracted_called_twice`) and sometimes builds but computes the
+  WRONG value (`result_and_map_fn_payload`, `maybe_and_map_fn_payload`
   — Go silently returns the untransformed `ra` operand instead of applying the
   boxed function, verified against an unambiguous named-function probe:
   `Ok addTen |> Result.andMap (Ok 5)` prints `5` under Go, not the correct
@@ -493,19 +493,19 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   for the T3 two-tier design.
 - **Sanctioned:** yes (`sanctioned:` for the Go-succeeds-but-differs shapes;
   Go-failure divergence for the shapes that don't `go build`). Goldens
-  `l0114_result_and_map_fn_payload`, `l0114_maybe_and_map_fn_payload`,
-  `l0114_ctor_decl_fn_payload`, `l0114_fn_extracted_called_twice`,
-  `m3a_function_payload_gate` (flipped from its reject branch to its
+  `result_and_map_fn_payload`, `maybe_and_map_fn_payload`,
+  `ctor_decl_fn_payload`, `fn_extracted_called_twice`,
+  `function_payload_gate` (flipped from its reject branch to its
   build-and-run branch). Negative controls (aliasing-shape matrix, must stay
   a clean diagnostic — SKY-T0001 / SKY-T0014 / SKY-L0114, never a cargo-fail;
-  no oracle needed): `l0114_and_map_curried_stays_gated`,
-  `l0114_and_map_let_bound_alias_stays_gated`,
-  `l0114_and_map_bare_alias_stays_gated`,
-  `l0114_and_map_higher_order_arg_stays_gated`,
-  `l0114_and_map_record_field_stays_gated`,
-  `l0114_and_map_forwarder_curried_is_t0014`, `l0127_fn_carrier_reuse_gated`,
-  `l0127_lambda_param_reuse_gated`. Positive cross-module control (must stay
-  ACCEPTED): `l0114_and_map_cross_module_wrapper_accepted`.
+  no oracle needed): `and_map_curried_stays_gated`,
+  `and_map_let_bound_alias_stays_gated`,
+  `and_map_bare_alias_stays_gated`,
+  `and_map_higher_order_arg_stays_gated`,
+  `and_map_record_field_stays_gated`,
+  `and_map_forwarder_curried_is_t0014`, `fn_carrier_reuse_gated`,
+  `lambda_param_reuse_gated`. Positive cross-module control (must stay
+  ACCEPTED): `and_map_cross_module_wrapper_accepted`.
 - **Revert-incident history (2026-07-10, THREE reverts before this landing).**
   (1) `f80f05a` landed, reverted (`dbd876b`): the SKY-L0127 reuse gate was
   wired at 4 call sites (Def params, `let`-bindings, match-arm bindings) but
@@ -532,8 +532,8 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   inside `lower_callee` — the actual single funnel, proven by inspection to
   be the only path any kernel/top-level reference can lower through. Every
   exact failing shape from all three incidents is now a permanent fixture:
-  `l0127_lambda_param_reuse_gated` (Bug 1), `l0114_and_map_let_bound_alias_stays_gated`
-  (Bug 2), `l0114_and_map_bare_alias_stays_gated` (Bug 3) — plus new fixtures
+  `lambda_param_reuse_gated` (Bug 1), `and_map_let_bound_alias_stays_gated`
+  (Bug 2), `and_map_bare_alias_stays_gated` (Bug 3) — plus new fixtures
   for higher-order-argument and record-field-extraction aliasing (neither
   incident found these bypassed, but the design doc named them as unexplored
   shapes to verify rather than assume closed) and the cross-module annotated-
@@ -932,7 +932,7 @@ emitted edition to 2024 keeps vendored-source acceptance and downstream
 project and the runtime source it embeds must share one edition; there is no
 Go-parity oracle for a Rust edition, so this is a Rust-only property with no
 reference behaviour to match. *Verified:* the four checked-in golden manifests
-`tests/golden/{m0,mm_diamond,mm_local_pkg,multi_mod_split_pilot}/Cargo.toml`
+`tests/golden/{basics,mm_diamond,mm_local_pkg,multi_mod_split_pilot}/Cargo.toml`
 (`edition = "2024"`), byte-compared against emitted output by
 `crates/skyc/tests/support/mod.rs`. *Sanctioned:* yes (`divergence:`).
 
@@ -1062,12 +1062,12 @@ API-shape review):
   `find tests/golden -name sanctioned.divergence | wc -l` — the
   hand-maintained per-family sub-counts drifted twice in one day and are
   retired; families span `Math`/`Bytes`/`Encoding`/`Jwt`/`Db` (incl.
-  B-DbDecMoney's `m5b_db_decode_money`, backlog #34, and the
-  `m5b_db_find_by_field` coverage golden)/`Ui`/`Cmd`/`Sub`/`Uuid`,
+  B-DbDecMoney's `db_decode_money`, backlog #34, and the
+  `db_find_by_field` coverage golden)/`Ui`/`Cmd`/`Sub`/`Uuid`,
   Go-failure kind-1 shapes, Money/case/toFloat sanctioned entries, and the
-  B22 ctor-payload-function set (`l0114_maybe_and_map_fn_payload`,
-  `l0114_result_and_map_fn_payload`,
-  `l0114_and_map_untyped_double_forwarder_arity1`). B23 is pure
+  B22 ctor-payload-function set (`maybe_and_map_fn_payload`,
+  `result_and_map_fn_payload`,
+  `and_map_untyped_double_forwarder_arity1`). B23 is pure
   under-acceptance, not a Go-sanctioned divergence, so it adds no entries
   to this count. B16/B17 goldens pending.
 - **Architectural divergences:** 18 (A1–A18). A8 and A13 are reference-ahead on

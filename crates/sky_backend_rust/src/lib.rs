@@ -9,7 +9,7 @@
 //! Sky → Rust identifier rules.
 //!
 //! The single correctness gate is byte-equality against the golden program
-//! (`tests/golden/m0/main.rs`).
+//! (`tests/golden/basics/main.rs`).
 //!
 //! The [`sky_ir`] boundary carries [`sky_intern::Symbol`]s, not strings, so the
 //! backend resolves them through the [`sky_intern::Interner`] it is constructed

@@ -49,7 +49,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code)
 #[test]
 fn non_exhaustive_int_case_is_sky_t0010() {
     assert_gate(
-        "m3b3_gate_nonexhaustive",
+        "gate_nonexhaustive_open_int",
         "m3b3_gate_nonexhaustive_emit",
         sky_diagnostics::SKY_T0010,
     );
@@ -63,7 +63,7 @@ fn redundant_branch_after_catch_all_is_sky_t0011_warning_build_succeeds() {
     let entry = root
         .join("tests")
         .join("golden")
-        .join("m3b3_gate_redundant")
+        .join("gate_redundant")
         .join("Main.sky");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m3b3_gate_redundant_emit");
     let _ = std::fs::remove_dir_all(&out);

@@ -3,15 +3,15 @@
 //! These golden tests exercise the `Sky.Core.Bytes` kernel family end-to-end:
 //!
 //! * `Bytes.length` / `Bytes.isEmpty` on `Bytes.empty` and a non-empty buffer
-//!   → `"0 5 1 0"` (`m4e_bytes_length`)
+//!   → `"0 5 1 0"` (`bytes_length`)
 //! * `Bytes.toHex` / `Bytes.fromHex` roundtrip, including a non-UTF-8 buffer
-//!   → `"486921 486921 9efe"` (`m4e_bytes_hex`)
+//!   → `"486921 486921 9efe"` (`bytes_hex`)
 //! * `Bytes.toBase64` / `Bytes.fromBase64` roundtrip, including a non-UTF-8 buffer
-//!   → `"SGkh 486921 nv4="` (`m4e_bytes_base64`)
+//!   → `"SGkh 486921 nv4="` (`bytes_base64`)
 //! * `Bytes.toString` (UTF-8 decode — `Just` for ASCII, `Nothing` for binary)
-//!   + `Bytes.append` → `"Hi! <invalid> 486921486921"` (`m4e_bytes_roundtrip`)
+//!   + `Bytes.append` → `"Hi! <invalid> 486921486921"` (`bytes_roundtrip`)
 //! * `Bytes.slice` — half-open interval, clamp on out-of-bounds, empty on
-//!   zero-length range → `"656c6c 0 4"` (`m4e_bytes_slice`)
+//!   zero-length range → `"656c6c 0 4"` (`bytes_slice`)
 //!
 //! All five goldens carry `oracle_divergence = true` because Sky/Go defines
 //! `type alias Bytes = String` (the Go `string` type is a byte sequence, making
@@ -70,7 +70,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 /// → 0 (false).  Output: `"0 5 1 0"`.
 #[test]
 fn bytes_length_and_is_empty() {
-    assert_runs_and_matches_oracle("m4e_bytes_length");
+    assert_runs_and_matches_oracle("bytes_length");
 }
 
 // ── Bytes.toHex + Bytes.fromHex ───────────────────────────────────────────────
@@ -80,7 +80,7 @@ fn bytes_length_and_is_empty() {
 /// Output: `"486921 486921 9efe"`.
 #[test]
 fn bytes_hex_roundtrip() {
-    assert_runs_and_matches_oracle("m4e_bytes_hex");
+    assert_runs_and_matches_oracle("bytes_hex");
 }
 
 // ── Bytes.toBase64 + Bytes.fromBase64 ────────────────────────────────────────
@@ -90,7 +90,7 @@ fn bytes_hex_roundtrip() {
 /// Output: `"SGkh 486921 nv4="`.
 #[test]
 fn bytes_base64_roundtrip() {
-    assert_runs_and_matches_oracle("m4e_bytes_base64");
+    assert_runs_and_matches_oracle("bytes_base64");
 }
 
 // ── Bytes.toString — UTF-8 decode ────────────────────────────────────────────
@@ -100,7 +100,7 @@ fn bytes_base64_roundtrip() {
 /// `"486921486921"`.  Output: `"Hi! <invalid> 486921486921"`.
 #[test]
 fn bytes_roundtrip_and_append() {
-    assert_runs_and_matches_oracle("m4e_bytes_roundtrip");
+    assert_runs_and_matches_oracle("bytes_roundtrip");
 }
 
 // ── Bytes.slice ───────────────────────────────────────────────────────────────
@@ -110,5 +110,5 @@ fn bytes_roundtrip_and_append() {
 /// Output: `"656c6c 0 4"`.
 #[test]
 fn bytes_slice() {
-    assert_runs_and_matches_oracle("m4e_bytes_slice");
+    assert_runs_and_matches_oracle("bytes_slice");
 }

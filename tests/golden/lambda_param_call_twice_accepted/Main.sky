@@ -1,0 +1,14 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- #90 T4 sound-companion of `lambda_param_reuse_gated`: a fn-carrying
+-- LAMBDA parameter CALLED twice (callee position, `f 1` / `f 2`) is
+-- unlimited — `Box<dyn Fn>::call` borrows via `&self`, never moves — so the
+-- new lambda-own-`ir_params` reuse gate must NOT reject this. Proves the
+-- revert-incident Bug 1 fix (wiring `reject_fn_value_reuse` into
+-- `lower_lambda`) does not over-reject the sound case.
+main =
+    let
+        applyTwice = \f -> f 1 + f 2
+    in
+    println (String.fromInt (applyTwice (\x -> x + 1)))

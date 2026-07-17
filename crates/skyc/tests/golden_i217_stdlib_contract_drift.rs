@@ -114,32 +114,32 @@ fn e2e_build_and_run(name: &str, expect_stdout_contains: &str) {
 /// `Jwt.withClaim` accepts a `JsonEnc.Value` argument (string AND int claims).
 #[test]
 fn i217_jwt_with_claim_accepts_json_value() {
-    assert_skyc_accepts("i217_jwt_withclaim_value");
+    assert_skyc_accepts("jwt_withclaim_value");
 }
 
 #[test]
 fn i217_jwt_with_claim_e2e() {
-    e2e_build_and_run("i217_jwt_withclaim_value", "ok");
+    e2e_build_and_run("jwt_withclaim_value", "ok");
 }
 
 /// `Db.migrate` takes `List Migration`, where `Migration` is the record alias.
 #[test]
 fn i217_db_migration_record_accepted() {
-    assert_skyc_accepts("i217_db_migration_record");
+    assert_skyc_accepts("db_migration_record");
 }
 
 #[test]
 fn i217_db_migration_record_e2e() {
-    e2e_build_and_run("i217_db_migration_record", "applied:");
+    e2e_build_and_run("db_migration_record", "applied:");
 }
 
 /// `Response` used as a record — literal construction + field projection.
 #[test]
 fn i217_server_response_record_accepted() {
-    assert_skyc_accepts("i217_server_response_record");
+    assert_skyc_accepts("server_response_record");
 }
 
 #[test]
 fn i217_server_response_record_e2e() {
-    e2e_build_and_run("i217_server_response_record", "429");
+    e2e_build_and_run("server_response_record", "429");
 }

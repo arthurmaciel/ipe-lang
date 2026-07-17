@@ -194,7 +194,7 @@ v0.1 limitation, not a soundness hole and not a panic.
 THE MAIN-THREAD ENTRY SWITCH — HARD Phase-1d REQUIREMENT, the single genuinely-new
 soundness-critical deliverable of this whole wiring (no Live/Tui analog; every other hole is a clone
 of a proven sibling mechanic). The golden epilogue emits `block_on(sky_main())`
-(`tests/golden/m0/main.rs:287`), which drives the future on a `std::thread::spawn`ed OS thread
+(`tests/golden/basics/main.rs:287`), which drives the future on a `std::thread::spawn`ed OS thread
 (`task.rs:14`). This is fatal for Webview: tao/winit's `EventLoop` + Cocoa's `NSApplication` require
 the event loop on the process's TRUE main thread (hard on macOS, expected on Windows, cleanest on
 Linux GTK). The runtime provides `block_on_current_thread` (`task.rs:47`, a current-thread tokio
@@ -348,5 +348,5 @@ sky_runtime::webview::webview_app(
 ## Load-bearing files
 
 - Runtime: `runtime/src/sky_runtime/webview.rs` (`webview_app` :186, `WebviewWindowCfg` :38, `BRIDGE_JS` / `__skyApply` :94-110, `render` :157, `warn_dropped_cmd_if_real` :125); `runtime/src/sky_runtime/task.rs` (`block_on` :5, `block_on_current_thread` :47); `runtime/Cargo.toml:98` (`webview` feature).
-- Wiring sites: `crates/sky_types/src/constrain.rs` (new arm + 3 interned symbols); `crates/sky_lower/src/lower.rs` (L0107 intercept + inline-window gate + `uses_webview⇒uses_live`; resolve :4049); new `crates/sky_backend_rust/src/emit_webview.rs` + `crates/sky_backend_rust/src/emit_expr.rs` (dispatch); `crates/sky_backend_rust/src/project.rs` (`webview_cargo_toml` + mod.rs append + entry switch); `crates/sky_backend_rust/src/preamble.rs` + `tests/golden/m0/main.rs:287` (entry rewrite).
+- Wiring sites: `crates/sky_types/src/constrain.rs` (new arm + 3 interned symbols); `crates/sky_lower/src/lower.rs` (L0107 intercept + inline-window gate + `uses_webview⇒uses_live`; resolve :4049); new `crates/sky_backend_rust/src/emit_webview.rs` + `crates/sky_backend_rust/src/emit_expr.rs` (dispatch); `crates/sky_backend_rust/src/project.rs` (`webview_cargo_toml` + mod.rs append + entry switch); `crates/sky_backend_rust/src/preamble.rs` + `tests/golden/basics/main.rs:287` (entry rewrite).
 - Reference templates: `crates/sky_backend_rust/src/emit_tui.rs`, `emit_live.rs`, and the `live_cargo_toml` / `tui_cargo_toml` injectors in `project.rs`.

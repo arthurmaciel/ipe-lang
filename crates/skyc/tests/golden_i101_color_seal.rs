@@ -70,7 +70,7 @@ fn user_color_via_hof_resolves_to_own_enum() {
     let dir = root
         .join("tests")
         .join("golden")
-        .join("i101_user_color_hof");
+        .join("user_color_hof");
     let entry = dir.join("Main.sky");
     let out = std::env::temp_dir().join("skyc_i101_user_color_hof_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -83,7 +83,7 @@ fn user_color_via_hof_resolves_to_own_enum() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for i101_user_color_hof: {:?}",
+        "skyc build must succeed for user_color_hof: {:?}",
         built.err()
     );
 
@@ -112,7 +112,7 @@ fn user_color_via_hof_resolves_to_own_enum() {
     );
 
     // cargo build + run must succeed (pre-#101: cargo-101 / E0433).
-    let outcome = support::build_and_run_emitted("i101_user_color_hof", &out);
+    let outcome = support::build_and_run_emitted("user_color_hof", &out);
     assert_eq!(outcome.exit_code, Some(0), "must exit 0 (was cargo-101)");
     assert!(
         outcome.stdout.contains("magenta"),
@@ -140,7 +140,7 @@ fn user_color_in_record_field_agrees_across_paths() {
     let dir = root
         .join("tests")
         .join("golden")
-        .join("i101_user_color_record");
+        .join("user_color_record");
     let entry = dir.join("Main.sky");
     let out = std::env::temp_dir().join("skyc_i101_user_color_record_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -152,7 +152,7 @@ fn user_color_in_record_field_agrees_across_paths() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for i101_user_color_record: {:?}",
+        "skyc build must succeed for user_color_record: {:?}",
         built.err()
     );
 
@@ -162,7 +162,7 @@ fn user_color_in_record_field_agrees_across_paths() {
         "record field `c : Color` must resolve to `MainColor` on both paths"
     );
 
-    let outcome = support::build_and_run_emitted("i101_user_color_record", &out);
+    let outcome = support::build_and_run_emitted("user_color_record", &out);
     assert_eq!(
         outcome.exit_code,
         Some(0),

@@ -229,13 +229,13 @@ Flip / refresh:
 6. `m4f_encoding_nonascii_divergence` → `expected_go.txt` = `café Y2Fmw6k=
    636166c3a9`; DELETE `sanctioned.divergence`; set `oracle_divergence=false`;
    rewrite `Main.sky`; regenerate `main_sky_sha256` + oracle.
-7. Anti-mask: add non-ASCII companions to `m4f_encoding_base64`/`hex` (currently
+7. Anti-mask: add non-ASCII companions to `encoding_base64`/`hex` (currently
    ASCII-only — the exact golden-mask that hid this). Add a café url case to
-   `m4f_encoding_url*` to lock the already-correct UTF-8 url path.
+   `encoding_url*` to lock the already-correct UTF-8 url path.
 
 Untouched + documented:
 
-8. JWT goldens (`m5b_jwt_hs256_bytes`, #62) stay byte-identical. Add a one-line
+8. JWT goldens (`jwt_hs256_bytes`, #62) stay byte-identical. Add a one-line
    assert/comment in jwt.rs + the golden recording "JWT does not route through
    Encoding.*" so no future reader reintroduces the stale dependency.
 
@@ -322,4 +322,4 @@ ws_client,server}.rs`; Sky surfaces `Std/{Compression,Email}`,
 `Sky/Core/WebSocket` (+ constrain schemes/lowering); `crates/sky_types/src/
 constrain.rs` (FIRST_SCHEMED :5663, stdlib_scheme arms, exclusion notes
 :2920/:5660, Phase-E :1503 left in place); `tests/golden/m4f_encoding_*`,
-`m5b_jwt_hs256_bytes`.
+`jwt_hs256_bytes`.
