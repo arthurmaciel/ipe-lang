@@ -8,7 +8,7 @@
 > hand-written shims* for the pure/sync class, mirroring the behaviour of the
 > Haskell generator in `../sky` — not its bytes.
 >
-> **Scope split.** The inspector (`tools/sky-ffi-inspect-rs/src/main.rs`, 18.5k
+> **Scope split.** The inspector (`tools/ipe-ffi-inspector/src/main.rs`, 18.5k
 > LOC) is **vendored and works** as a `PkgInfo` JSON producer (post-macro-expansion
 > rustdoc-JSON; fail-closed over-drop). The **generator** — Haskell in `../sky`,
 > `src/Ipê/Build/Rust/{Ffi.hs (1616), FfiInstance.hs (952), FfiCall.hs (820)}` +
@@ -68,7 +68,7 @@ crate name. It is the single highest-risk surface in the toolchain (risk #1).
   (`Ffi.hs:runRustInspectorWith`, ~118-131) passes `--git <url>` with only
   `quoteShell` applied — no host allowlist, no scheme/charset gate. A crafted git
   URL reaches `cargo`'s git resolver (risk #2 / supply-chain).
-- **No lock/toolchain pin.** `tools/sky-ffi-inspect-rs` ships **no
+- **No lock/toolchain pin.** `tools/ipe-ffi-inspector` ships **no
   `rust-toolchain.toml` and no `Cargo.lock`** (verified). Every inspect resolves
   "latest semver-compatible", so the *inspector's own* build is non-reproducible
   and network-dependent.
@@ -168,9 +168,9 @@ ipê workspace, so this milestone is doc/disjoint-parallel-safe (see §E) and ca
 run concurrently with the generator port's design milestones.
 
 ### B0.1 Pin reproducibility (blocks nondeterministic inspects)
-- Add `tools/sky-ffi-inspect-rs/rust-toolchain.toml` with a **nightly pin**
+- Add `tools/ipe-ffi-inspector/rust-toolchain.toml` with a **nightly pin**
   (rustdoc JSON is nightly-only; the exact channel is the drift-fence anchor).
-- Vendor `tools/sky-ffi-inspect-rs/Cargo.lock` (commit it).
+- Vendor `tools/ipe-ffi-inspector/Cargo.lock` (commit it).
 - Pin the three deps (`serde`, `serde_json`, `tempfile`) to exact versions.
 - Restore these under a nightly CI job that rebuilds the inspector from the pin.
 
@@ -178,7 +178,7 @@ run concurrently with the generator port's design milestones.
 The inspector currently carries **42 `unwrap()` lines (45 occurrences), 57 `expect(...)`, 31 `panic!`**
 (verified). Its `Cargo.toml` **already carries a `[lints.clippy]` block that
 deliberately sets `unwrap_used` / `expect_used` / `panic = "allow"`, with a
-justifying comment** (`tools/sky-ffi-inspect-rs/Cargo.toml:12-19`). So B0.2 is a
+justifying comment** (`tools/ipe-ffi-inspector/Cargo.toml:12-19`). So B0.2 is a
 **REVERSAL of that deliberate decision** — flip those three to **deny** — not an
 additive tightening on a clean slate; it exposes the ~130 call sites the `allow`
 was chosen to avoid churning. rustdoc JSON is attacker-influenced (a malicious
@@ -436,7 +436,7 @@ divergence (e.g. the saturating u64→i64 in M-C) is recorded as
 | Work | Lane |
 |---|---|
 | This spec (M-0 §A/§B docs) | doc-only, parallel-safe |
-| **M-0 inspector hardening** | **disjoint `tools/sky-ffi-inspect-rs` crate — no ipê-workspace dep; parallel-safe with the design milestones of C** |
+| **M-0 inspector hardening** | **disjoint `tools/ipe-ffi-inspector` crate — no ipê-workspace dep; parallel-safe with the design milestones of C** |
 | M-A/M-B/M-C (`ipe_ffi` decode + coercion, pure logic) | new-crate, mostly parallel; but M-B/M-C are leaves M-D/M-E depend on, so land them first |
 | **M4 kernel registry** | **serializes the whole consumer side — M-D onward blocks on it** |
 | M-D/M-E/M-F/M-G | serialize behind the **shared workspace `target/`** (any change to registry/canon/lower/backend forces a workspace rebuild) and behind M4 |

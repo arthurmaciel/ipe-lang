@@ -18,7 +18,7 @@ members = [
     "tools/oracle",
     "tools/refresh-oracle",
     "src/runtime/rust",
-    "tools/sky-ffi-inspect-rs",
+    "tools/ipe-ffi-inspector",
     "tools/parity-matrix",
 ]
 
