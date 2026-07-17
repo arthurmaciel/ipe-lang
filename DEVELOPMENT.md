@@ -96,13 +96,13 @@ key → cold recompiles + more RAM pressure. All cargo targets live under
 `SKY_ORACLE_SHARED_TARGET`. `cargo nextest run -p skyc` recompiles ALL ~155
 skyc test binaries — scope to `--test <name>` when you need one.
 
-### 1. Memory safety — `scripts/mem-guard.sh` MUST run during dev
+### 1. Memory safety — `scripts/guards/mem-guard.sh` MUST run during dev
 
 A runaway compiler-tooling process can OOM the host. Treat absence of
 mem-guard like a missing `set -e`.
 
 ```bash
-nohup ./scripts/mem-guard.sh > /tmp/mem-guard.out 2>&1 &
+nohup ./scripts/guards/mem-guard.sh > /tmp/mem-guard.out 2>&1 &
 disown                                # survives shell exit
 ```
 
@@ -131,7 +131,7 @@ pkill -f "playwright"; pkill -f "chromium"
 pkill -f "examples/.*/sky-out/app"
 
 # mem-guard alive?
-pgrep -f mem-guard.sh >/dev/null || (nohup ./scripts/mem-guard.sh > /tmp/mem-guard.out 2>&1 & disown)
+pgrep -f mem-guard.sh >/dev/null || (nohup ./scripts/guards/mem-guard.sh > /tmp/mem-guard.out 2>&1 & disown)
 ```
 
 **Prefer the Monitor tool** (orchestrator only — lanes are foreground-only,
@@ -244,7 +244,7 @@ type-check+codegen succeed, surfacing as a file-copy/"build failed" error that
 **masquerades as a codegen regression** and wastes the whole run on
 mis-diagnosis — always read the actual build log before blaming a code change.
 
-`scripts/disk-guard.sh` (sibling to mem-guard) polls free disk and reclaims
+`scripts/guards/disk-guard.sh` (sibling to mem-guard) polls free disk and reclaims
 disposable caches BEFORE the disk fills, in a fixed safety order:
 `~/.cache/sccache` first (self-healing), then orphaned cargo target dirs
 (identified by their `CACHEDIR.TAG` content, not by name), never a dir with a

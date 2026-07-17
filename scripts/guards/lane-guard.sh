@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/lane-guard.sh — stalled/dead build-lane detector for the Ipê
+# scripts/guards/lane-guard.sh — stalled/dead build-lane detector for the Ipê
 # (Sky->Rust) dev sessions, sibling to mem-guard.sh and disk-guard.sh.
 #
 # Background: a dispatched background Agent can die silently to
@@ -22,12 +22,12 @@
 # worktree that might hold uncommitted in-progress work).
 #
 # Usage:
-#   ./scripts/lane-guard.sh                      # one poll pass, prints findings, exits
-#   watch -n 900 ./scripts/lane-guard.sh          # simple standalone repeat (no state dir needed
+#   ./scripts/guards/lane-guard.sh                      # one poll pass, prints findings, exits
+#   watch -n 900 ./scripts/guards/lane-guard.sh          # simple standalone repeat (no state dir needed
 #                                                  # across runs if you don't care about the
 #                                                  # "unchanged since LAST poll" comparison — see
 #                                                  # LANE_GUARD_STATE_DIR below for that)
-#   nohup ./scripts/lane-guard.sh --loop >/tmp/lane-guard.out 2>&1 & disown   # background daemon
+#   nohup ./scripts/guards/lane-guard.sh --loop >/tmp/lane-guard.out 2>&1 & disown   # background daemon
 #
 # Tunables (env vars, all optional):
 #   LANE_GUARD_INTERVAL     poll interval when run with --loop (seconds).  default 1800 (30 min)
