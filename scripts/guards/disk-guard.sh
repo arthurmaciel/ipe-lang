@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/disk-guard.sh — disk-space kill-switch for the Ipê (Sky->Rust) dev
+# scripts/guards/disk-guard.sh — disk-space kill-switch for the Ipê (Sky->Rust) dev
 # sessions, sibling to mem-guard.sh.
 #
 # Background: this session runs several parallel `git worktree` build lanes,
@@ -48,9 +48,9 @@
 # tier 3). See safe_rm_rf()'s own comment.
 #
 # Usage:
-#   ./scripts/disk-guard.sh                             # foreground, logs to stderr + /tmp/disk-guard.log
-#   nohup ./scripts/disk-guard.sh >/tmp/disk-guard.out 2>&1 & disown   # background for the session
-#   DISK_GUARD_DRY=1 ./scripts/disk-guard.sh            # log-only rehearsal, never deletes
+#   ./scripts/guards/disk-guard.sh                             # foreground, logs to stderr + /tmp/disk-guard.log
+#   nohup ./scripts/guards/disk-guard.sh >/tmp/disk-guard.out 2>&1 & disown   # background for the session
+#   DISK_GUARD_DRY=1 ./scripts/guards/disk-guard.sh            # log-only rehearsal, never deletes
 #
 # Tunables (env vars, all optional):
 #   DISK_GUARD_WARN_GB       log-only warning floor (GB).            default 20

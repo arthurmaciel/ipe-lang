@@ -204,9 +204,9 @@ esac; done
 # and LEAVE it running on exit — unlike watch.sh, which is autopilot-scoped.
 ensure_mem_guard() {
     pgrep -f mem-guard.sh >/dev/null 2>&1 && return 0
-    [ -x scripts/mem-guard.sh ] || die "scripts/mem-guard.sh missing/not executable — cannot start the memory kill-switch"
+    [ -x scripts/guards/mem-guard.sh ] || die "scripts/guards/mem-guard.sh missing/not executable — cannot start the memory kill-switch"
     log "mem-guard.sh not running — dispatching it (memory kill-switch)"
-    nohup ./scripts/mem-guard.sh >/tmp/mem-guard.out 2>&1 & disown
+    nohup ./scripts/guards/mem-guard.sh >/tmp/mem-guard.out 2>&1 & disown
     for _ in 1 2 3 4 5; do
         pgrep -f mem-guard.sh >/dev/null 2>&1 && { log "mem-guard.sh up (pid $(pgrep -f mem-guard.sh | head -1))"; return 0; }
         sleep 1

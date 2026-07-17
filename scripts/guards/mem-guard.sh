@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# scripts/mem-guard.sh — memory kill-switch for the Ipê (Sky→Rust) dev sessions.
+# scripts/guards/mem-guard.sh — memory kill-switch for the Ipê (Sky→Rust) dev sessions.
 #
 # Background: a runaway `cargo`/`rustc`/linker (or `skyc`, or a wedged agent
 # session) can pin the machine to swap and force a hard reboot. This watchdog
 # polls memory every few seconds and SIGKILLs the heaviest watched process
-# before that happens. Linux port of ../sky/scripts/mem-guard.sh: free memory
+# before that happens. Linux port of ../sky/scripts/guards/mem-guard.sh: free memory
 # comes from /proc/meminfo `MemAvailable` (not macOS `vm_stat`), and the watched
 # set is the Rust toolchain (not the Haskell one).
 #
 # Usage:
-#   ./scripts/mem-guard.sh                          # foreground, logs to stderr + /tmp/mem-guard.log
-#   nohup ./scripts/mem-guard.sh >/tmp/mem-guard.out 2>&1 & disown   # background for the session
-#   MEM_GUARD_PROC_MB=4000 ./scripts/mem-guard.sh   # tighter per-proc cap
+#   ./scripts/guards/mem-guard.sh                          # foreground, logs to stderr + /tmp/mem-guard.log
+#   nohup ./scripts/guards/mem-guard.sh >/tmp/mem-guard.out 2>&1 & disown   # background for the session
+#   MEM_GUARD_PROC_MB=4000 ./scripts/guards/mem-guard.sh   # tighter per-proc cap
 #
 # Tunables (env vars, all optional):
 #   MEM_GUARD_PROC_MB        per-process RSS kill threshold (MB).       default 6000

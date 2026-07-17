@@ -94,7 +94,7 @@ Companion (independent, soundness-adjacent): #45 reserved-builtin-type-name gate
   `sky build`.
 - **R2 — Every long-running command is timeout-bounded and mem-guard is running.** Wrap cabal/cargo
   test and any sweep in `timeout`; tee output to a file once and re-read it; confirm
-  `scripts/mem-guard.sh` is alive before a full build. No unbounded waits, no orphan background loops.
+  `scripts/guards/mem-guard.sh` is alive before a full build. No unbounded waits, no orphan background loops.
 
 **Test-first, each commit cargo-green:** every task lands its assertion (or a compile-time
 exhaustiveness change) *before* the deletion it justifies, and the workspace + example sweep stay
