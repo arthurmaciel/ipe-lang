@@ -983,7 +983,7 @@ impl Env {
                 "Cmd",
                 &["none", "batch", "perform", "publish", "publishNoEcho"],
             ),
-            ("Sub", &["none", "batch", "every", "subscribeTopic"]),
+            ("Sub", &["none", "batch", "every", "subscribeTopic", "subscribeWebSocket"]),
             // ── Db kernels ──────────────────────────────────────────────────────
             // `Std.Db` — database connection + query surface.
             // All effect-returning kernels (Task Error …) and pure helpers
