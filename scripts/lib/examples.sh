@@ -30,9 +30,14 @@
 #   equivalence_mode <dir>        → none|stdout|body|scenario|pty (DERIVED, overrides on top).
 
 # ── all_examples: every candidate dir on disk, trailing slash stripped ───────
+# The first-party `examples/NN-*` set always. With IPE_SWEEP_MIRROR_SKY=1 the
+# mirrored+patched upstream set under `examples/sky/NN-*` (materialised by
+# lib/sky_mirror.sh before the sweep loop) is included too — same shape/Go-FFI
+# derivation applies to both.
 all_examples() {
-  local d
-  for d in examples/[0-9]*/ examples/simple/ examples/test_pkg/ examples/rust/*/; do
+  local d globs=(examples/[0-9]*/ examples/simple/ examples/test_pkg/ examples/rust/*/)
+  [ "${IPE_SWEEP_MIRROR_SKY:-0}" = 1 ] && globs+=(examples/sky/[0-9]*/)
+  for d in "${globs[@]}"; do
     [ -d "$d" ] || continue
     d="${d%/}"
     [ -f "$d/src/Main.ipe" ] || continue

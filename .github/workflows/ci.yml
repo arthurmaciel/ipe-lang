@@ -122,15 +122,15 @@ jobs:
   # indirectly through a DEPENDENCY's own `unsafe` (interning/IR/union-find
   # data structures are exactly the kind of code that leans on library
   # invariants) plus Stacked/Tree-Borrows aliasing violations, not scanning
-  # for a nonexistent `unsafe` block of ours. `sky_db` (the salsa
+  # for a nonexistent `unsafe` block of ours. `ipe_db` (the salsa
   # incremental-compilation database — the other candidate with genuinely
   # complex invariants, per docs/architecture/ci-and-hosting.md §3.5) was
-  # evaluated and rejected: `cargo +nightly miri test -p sky_db` timed out
+  # evaluated and rejected: `cargo +nightly miri test -p ipe_db` timed out
   # after 280s on the FIRST of 3 tests (salsa's internal thread-pool/
   # generation-counter machinery is impractical under Miri's interpretation
-  # overhead). `skyc`/`sky_canon`/`sky_parse`/`sky_backend`/`runtime` are
+  # overhead). `ipe`/`ipe_canon`/`ipe_parse`/`ipe_backend`/`runtime` are
   # out of scope for a different reason: they spawn real subprocesses / do
-  # real I/O (E2E tests, `sky_backend::cache`'s on-disk cache, the runtime's
+  # real I/O (E2E tests, `ipe_backend::cache`'s on-disk cache, the runtime's
   # HTTP/DB/websocket kernels), which Miri can't interpret at all.
   miri:
     runs-on: ubuntu-latest
@@ -140,42 +140,56 @@ jobs:
         with:
           components: miri
       - uses: Swatinem/rust-cache@v2
-      - run: cargo +nightly miri test -p sky_intern -p sky_ir -p sky_types -p sky_lower -p sky_diagnostics -p sky_backend_rust
+      - run: cargo +nightly miri test -p ipe_intern -p ipe_ir -p ipe_types -p ipe_lower -p ipe_diagnostics -p ipe_backend_rust
 
-  # E2E builds+runs the emitted Rust per golden (the soundness floor). Sharded
-  # across runners via nextest partitioning. Behavioural parity vs the Go oracle
-  # rides the CACHED oracle (committed expected_go.txt — see
+  # E2E builds+runs the emitted Rust per golden (THE SEAL — the soundness floor:
+  # every `ipe`-exit-0 golden's emitted Cargo project must `cargo build` + run).
+  # Sharded across runners via nextest partitioning. Behavioural parity vs the Go
+  # oracle rides the CACHED oracle (committed expected_go.txt — see
   # docs/architecture/e2e-and-oracle-caching.md), so NO Go toolchain is needed here.
   #
-  # Requires the full Sky runtime. Until the repo reorg vendors it
-  # (docs/architecture/repo-layout-and-mirroring.md → vendor/upstream-sky), the
-  # shard self-skips and CI stays green; it auto-activates once the runtime lands.
+  # The Ipê runtime lives IN-REPO at src/runtime/rust/src (the `ipe-runtime-rust`
+  # crate); `ipe::resolve_runtime()` finds it by walking up from the repo root, so
+  # no separate vendoring step is required. IPE_RUNTIME_DIR is set explicitly as a
+  # belt-and-braces (CWD-independent under nextest).
+  #
+  # NON-GATING FOR NOW (`continue-on-error: true`). The prior form gated on a
+  # `vendor/upstream-sky/...` path that never landed, so E2E ALWAYS self-skipped —
+  # THE SEAL was never enforced in CI. Pointing it at the in-repo runtime turns it
+  # back on, which surfaces a real pre-existing backlog the skip had masked: ~101
+  # of 450 goldens are oracle-stale (their `Main.ipe` sha no longer matches the
+  # cached `oracle.meta` after the `.sky`→`.ipe` + namespace-flatten renames — a
+  # `refresh-oracle` regeneration is owed) and the `adts` enum-stringify emit has
+  # its own red. Those are tracked blockers, not a reason to keep E2E blind, so the
+  # job runs and reports without failing CI. FLIP `continue-on-error` to false once
+  # the oracle backlog is regenerated and the adts red is fixed — then a SEAL
+  # regression (an `ipe`-exit-0 golden whose emit fails `cargo build`, exactly the
+  # `dom`/`html` base-template class fixed here) fails CI as it should.
   e2e:
     runs-on: ubuntu-latest
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive          # vendor/upstream-sky once it exists
       - uses: dtolnay/rust-toolchain@stable
       - uses: mozilla-actions/sccache-action@v0.0.6
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
-      - name: Detect vendored runtime
-        id: rt
+      # Reclaim runner disk before the E2E build: each emitted golden crate pulls
+      # the full runtime dep tree (axum/tokio/sqlx/serde) into the shared target.
+      - name: Free disk space
         run: |
-          if [ -d vendor/upstream-sky/runtime-rust/src/sky_runtime ]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Sky runtime not vendored yet — E2E shard ${{ matrix.shard }}/4 skipped (enables after vendor/upstream-sky lands)"
-          fi
-      - name: E2E shard ${{ matrix.shard }}/4
-        if: steps.rt.outputs.available == 'true'
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /usr/share/swift || true
+          sudo rm -rf /opt/hostedtoolcache/CodeQL /opt/microsoft /opt/google/chrome /opt/az || true
+          sudo swapoff -a || true; sudo rm -f /swapfile /mnt/swapfile || true
+          sudo apt-get clean || true
+          df -h /
+      - name: E2E shard ${{ matrix.shard }}/4 (THE SEAL — build+run emitted Rust)
         env:
           IPE_E2E: "1"
-          IPE_RUNTIME_DIR: ${{ github.workspace }}/vendor/upstream-sky/runtime-rust/src/sky_runtime
+          IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
         run: cargo nextest run --workspace --partition count:${{ matrix.shard }}/4
