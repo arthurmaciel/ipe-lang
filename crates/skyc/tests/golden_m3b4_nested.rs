@@ -22,7 +22,7 @@ use support::repo_root;
 fn example_entry(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
-        .join("m3b4_nested_opt")
+        .join("nested_opt")
         .join("Main.sky")
 }
 
@@ -33,7 +33,7 @@ fn emits_byte_identical_main_rs() {
     let golden = root
         .join("tests")
         .join("golden")
-        .join("m3b4_nested_opt")
+        .join("nested_opt")
         .join("main.rs");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m3b4_nested_opt_emit");
     let _ = std::fs::remove_dir_all(&out);
@@ -76,13 +76,13 @@ fn end_to_end_builds_and_prints_fifty_two() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(built.is_ok(), "build failed: {:?}", built.err());
 
-    let outcome = support::build_and_run_emitted("m3b4_nested_opt", &out);
+    let outcome = support::build_and_run_emitted("nested_opt", &out);
     support::assert_go_parity(
-        "m3b4_nested_opt",
+        "nested_opt",
         &repo_root()
             .join("tests")
             .join("golden")
-            .join("m3b4_nested_opt"),
+            .join("nested_opt"),
         &outcome.stdout,
     );
     assert_eq!(outcome.exit_code, Some(0), "exit 0, matching the Go oracle");

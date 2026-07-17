@@ -1,0 +1,31 @@
+module Main exposing (main)
+
+-- Companion to `set_record_gate` for the GENERIC-FUNCTION path.
+-- `singletonSet` is a generic `a -> Set a` forwarder built on `Set.fromList`.
+-- The Set element variable carries the Sky `comparable`-key obligation
+-- (`TyBounds::set_elem`, → Rust `Ord`), so the forwarder generalises to a Rust
+-- generic bounded by `Ord`.  Instantiating it at a RECORD — which Rust cannot
+-- order — is rejected here at type-check (SKY-T0014) rather than emitting an
+-- unbounded `singleton_set::<T>` that `cargo` cannot build.
+-- (Calling `Set.insert { x = 1 } Set.empty` directly is the eager-pin sibling
+-- and surfaces SKY-T0001; both fail closed with no Rust emitted.)
+
+import Sky.Core.Set as Set
+
+
+singletonSet : a -> Set a
+singletonSet x =
+    Set.fromList [ x ]
+
+
+rec : { x : Int }
+rec =
+    { x = 1 }
+
+
+main =
+    let
+        _ =
+            singletonSet rec
+    in
+    println (String.fromInt 0)

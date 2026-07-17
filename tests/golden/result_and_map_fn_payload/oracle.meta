@@ -1,0 +1,6 @@
+# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
+main_sky_sha256 = 718353329235760b828bd7dfaf0d904645711f6c5af231f23218f3dac0d0a4d0
+go_sky_version = sky v0.16.29
+exit_code = 0
+oracle_divergence = true
+divergence_reason = sanctioned: Go backend codegen bug for a function value boxed through `Ok`/`Just` (the same `any`-typed-carrier class documented in function_payload_gate and ctor_decl_fn_payload, where Go's generated code cannot correctly call an `interface{}`-boxed function). Here it does not hard-fail `go build` — it silently computes the WRONG result: `Ok (\x -> x + 1) |> Result.andMap (Ok 2)` should be `Ok 3` per `Sky.Core.Result.andMap`'s own definition (`Ok (fn a)`), but the compiled Go binary prints `2` (`ra` passed through unchanged, the function never actually invoked). Verified directly against `/usr/local/bin/sky` (v0.16.29) with an unambiguous named-function probe (`Ok addTen |> Result.andMap (Ok 5)` with `addTen x = x + 10`): Go prints `5`, not the correct `15`. Rust's `Box<dyn Fn>` kernel call (`result_and_map`) computes the semantically correct value. Divergence from Sky, rationale: Go backend bug (not a Sky-Rust behavior choice).

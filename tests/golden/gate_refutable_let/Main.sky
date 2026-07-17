@@ -1,0 +1,17 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- A REFUTABLE `let` destructure: the binder `(Wrap x)` is a constructor pattern,
+-- not an irrefutable variable / wildcard / tuple-of-those. A `let` binder is a
+-- BINDING position — it must match every value of its type — so a refutable
+-- binder is rejected up front by the irrefutability gate as SKY-T0015 (the same
+-- gate that rejects `\(Just x) ->`). Even though `Wrap` is the only constructor
+-- (so it structurally always matches), the syntactic gate is conservative: bind
+-- the whole value and `case` on it. This keeps the backend from ever emitting a
+-- refutable Rust `let` that rustc would reject (an exit-0-then-cargo-fail).
+-- Irrefutable `let (a, b) = …` / `let { x } = …` binders are supported
+-- (see `let_destructure`).
+type Wrapper = Wrap Int
+
+main =
+    println (String.fromInt (let (Wrap x) = Wrap 42 in x))

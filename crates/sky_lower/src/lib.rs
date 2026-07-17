@@ -212,7 +212,7 @@ mod tests {
     use sky_diagnostics::{Diagnostic, Feature, LowerError};
     use sky_ir::{BinOp, Callee, Expr, IrType, KernelFn, Pat, TypeDef};
 
-    const GOLDEN: &str = include_str!("../../../tests/golden/m0/Main.sky");
+    const GOLDEN: &str = include_str!("../../../tests/golden/basics/Main.sky");
 
     /// Parse → canonicalise → infer the golden M0 module, then return the
     /// lowered program alongside the interner. Returns `None` (failing the

@@ -62,7 +62,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 /// `Dict.get "a" (Dict.insert "a" 42 Dict.empty)` → `42`.
 #[test]
 fn dict_get_present() {
-    assert_runs_and_matches_oracle("m4d_dict_get");
+    assert_runs_and_matches_oracle("dict_get");
 }
 
 // ── Dict.get — absent key ─────────────────────────────────────────────────────
@@ -70,7 +70,7 @@ fn dict_get_present() {
 /// `Maybe.withDefault (-1) (Dict.get "b" …)` → `-1`.
 #[test]
 fn dict_get_absent() {
-    assert_runs_and_matches_oracle("m4d_dict_absent");
+    assert_runs_and_matches_oracle("dict_absent");
 }
 
 // ── Dict.fromList → Dict.toList → List.length ─────────────────────────────────
@@ -78,7 +78,7 @@ fn dict_get_absent() {
 /// `List.length (Dict.toList (Dict.fromList [(…, …), …]))` → `3`.
 #[test]
 fn dict_round_trip_length() {
-    assert_runs_and_matches_oracle("m4d_dict_length");
+    assert_runs_and_matches_oracle("dict_length");
 }
 
 // ── Dict.keys count ───────────────────────────────────────────────────────────
@@ -86,7 +86,7 @@ fn dict_round_trip_length() {
 /// `List.length (Dict.keys (Dict.fromList [(…, …), …]))` → `3`.
 #[test]
 fn dict_keys_count() {
-    assert_runs_and_matches_oracle("m4d_dict_keys");
+    assert_runs_and_matches_oracle("dict_keys");
 }
 
 // ── Set.member ────────────────────────────────────────────────────────────────
@@ -97,7 +97,7 @@ fn dict_keys_count() {
 /// `rt.SkySet`; skyc's correct output (`True`) is the reference.
 #[test]
 fn set_member_present() {
-    assert_runs_and_matches_oracle("m4d_set_member");
+    assert_runs_and_matches_oracle("set_member");
 }
 
 // ── Set union / diff / intersect / dedup sizes ───────────────────────────────
@@ -106,7 +106,7 @@ fn set_member_present() {
 /// dedup-fromList size `3` → `"4 1 2 3"`.
 #[test]
 fn set_ops_sizes() {
-    assert_runs_and_matches_oracle("m4d_set_ops");
+    assert_runs_and_matches_oracle("set_ops");
 }
 
 // ── Generic `a -> Set a` — the comparable-key bound lifts onto the skolem ─────
@@ -122,5 +122,5 @@ fn set_ops_sizes() {
 /// shape; skyc's `4` is the reference (same class as `set_member`).
 #[test]
 fn set_generic_add_to() {
-    assert_runs_and_matches_oracle("m4d_set_generic");
+    assert_runs_and_matches_oracle("set_generic");
 }

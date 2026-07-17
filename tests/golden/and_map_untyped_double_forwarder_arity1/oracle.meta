@@ -1,0 +1,6 @@
+# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.
+main_sky_sha256 = 556eb71de83db2f4d67edca0c0c18850c9ae2c198479be45b33c1597cfb4f99f
+go_sky_version = sky v0.16.29
+exit_code = 0
+oracle_divergence = true
+divergence_reason = sanctioned: Go backend codegen bug for a function value boxed through `Ok`/`Just` — the same silently-wrong-result class documented in maybe_and_map_fn_payload / result_and_map_fn_payload (the `interface{}`-boxed function is never actually invoked by the Go `andMap` kernel). Here the payload flows through an unannotated same-module double forwarder before reaching `Result.andMap`: correct output is `42` (`inc 41`), but the compiled Go binary (verified against /usr/local/bin/sky v0.16.29) prints `41` — the payload passed through unapplied. Rust's `Box<dyn Fn>` kernel call computes the semantically correct value. Divergence from Sky, rationale: Go backend bug (not a Sky-Rust behavior choice).

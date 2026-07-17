@@ -1,0 +1,18 @@
+module Main exposing (main)
+import Sky.Core.Prelude exposing (..)
+
+-- A parametric type alias: `Pair a` is a homogeneous 2-tuple. The parameter
+-- `a` is substituted at every use site, then the alias is expanded away.
+type alias Pair a =
+    ( a, a )
+
+-- Annotated with `Pair Int`, which expands to `( Int, Int )` — the binding
+-- compiles exactly as if written `addPair : ( Int, Int ) -> Int`. The body
+-- recovers 42 from the pair by equality (the M2 subset has no tuple element
+-- access yet), mirroring the tuple_annotations golden.
+addPair : Pair Int -> Int
+addPair p =
+    if p == (20, 22) then 42 else 0
+
+main =
+    println (String.fromInt (addPair (20, 22)))

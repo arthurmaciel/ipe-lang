@@ -160,11 +160,11 @@ fn errortostring_on_function_rejected_at_typecheck() {
 #[test]
 fn annotation_rigid_plus_literal_still_fails() {
     let root = repo_root();
-    // Reuse the existing m2d1_gate_unsatisfied fixture which exercises `double`
+    // Reuse the existing gate_unsatisfied fixture which exercises `double`
     // (Number-bound) at Bool → T0014; the annotation-rigid+literal case
     // (`f : a -> a; f x = x + 1` → T0001) is separately exercised via a
     // transient fixture here.
-    let entry = golden_entry(&root, "m2d1_gate_unsatisfied");
+    let entry = golden_entry(&root, "gate_unsatisfied");
     let res = try_build(&entry);
     assert!(
         res.is_err(),

@@ -6,26 +6,26 @@
 //!
 //! ## Golden catalogue
 //!
-//! * `m5a_effect_sequencing` — `let _ = println "step 1" in println "step 2"`.
+//! * `effect_sequencing` — `let _ = println "step 1" in println "step 2"`.
 //!   The F1 auto-force rule (`let _ = Task in rest`) must sequence both effects;
 //!   both lines appear in order on stdout.
 //!
-//! * `m5a_task_combinators` — `Task.andThen (\n -> println …) (Task.succeed 42)`.
+//! * `task_combinators` — `Task.andThen (\n -> println …) (Task.succeed 42)`.
 //!   `Task.succeed` lifts a pure value; `Task.andThen` chains the effectful
 //!   continuation.  Expected output: `42`.
 //!
-//! * `m5a_error_channel` — `Task.onError (\e -> println "recovered") (Task.fail
+//! * `error_channel` — `Task.onError (\e -> println "recovered") (Task.fail
 //!   (Error.unexpected "an error"))`. `Task.fail` creates a failed task;
 //!   `Task.onError` recovers it. `Task.fail` is pinned to `Error -> Task Error
 //!   a` (class-7 fix), so the argument is an `Error`, not a bare `String`.
 //!   Expected output: `recovered`.
 //!
-//! * `m5a_task_signed_helper` — `greet : String -> Task Error ()` signed top-level
+//! * `task_signed_helper` — `greet : String -> Task Error ()` signed top-level
 //!   helper called from `main`.  Guards the `normalize_annotation_ty` fix that
 //!   reconciles the canonical 2-arg annotation with the kernel's unary `Task a`.
 //!   Expected output: `Hello, World!`.
 //!
-//! * `m5a_task_map_error_lambda` — `Task.onError (\e -> println "recovered") …`.
+//! * `task_map_error_lambda` — `Task.onError (\e -> println "recovered") …`.
 //!   The lambda's `e` parameter must be inferred as `Error` (not a free variable)
 //!   so the handler compiles without SKY-L0102.  Expected output: `recovered`.
 //!
@@ -79,7 +79,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 /// via the F1 auto-force rule, producing `step 1\nstep 2\n` on stdout.
 #[test]
 fn effect_sequencing() {
-    assert_runs_and_matches_oracle("m5a_effect_sequencing");
+    assert_runs_and_matches_oracle("effect_sequencing");
 }
 
 // ── Task combinators ─────────────────────────────────────────────────────────
@@ -89,7 +89,7 @@ fn effect_sequencing() {
 /// printing `42` on stdout.
 #[test]
 fn task_combinators() {
-    assert_runs_and_matches_oracle("m5a_task_combinators");
+    assert_runs_and_matches_oracle("task_combinators");
 }
 
 // ── Error channel ────────────────────────────────────────────────────────────
@@ -99,7 +99,7 @@ fn task_combinators() {
 /// `recovered` on stdout.
 #[test]
 fn error_channel() {
-    assert_runs_and_matches_oracle("m5a_error_channel");
+    assert_runs_and_matches_oracle("error_channel");
 }
 
 // ── Task Error () signed helper ───────────────────────────────────────────────
@@ -112,7 +112,7 @@ fn error_channel() {
 /// Expected output: `Hello, World!`.
 #[test]
 fn task_signed_helper() {
-    assert_runs_and_matches_oracle("m5a_task_signed_helper");
+    assert_runs_and_matches_oracle("task_signed_helper");
 }
 
 // ── onError / mapError lambda ─────────────────────────────────────────────────
@@ -126,5 +126,5 @@ fn task_signed_helper() {
 /// Expected output: `recovered`.
 #[test]
 fn task_map_error_lambda() {
-    assert_runs_and_matches_oracle("m5a_task_map_error_lambda");
+    assert_runs_and_matches_oracle("task_map_error_lambda");
 }

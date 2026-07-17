@@ -47,7 +47,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code)
 #[test]
 fn non_exhaustive_nested_same_ctor_case_is_sky_t0010() {
     assert_gate(
-        "m3b4_gate_nonexhaustive",
+        "gate_nonexhaustive_nested_same_ctor",
         "m3b4_gate_nonexhaustive_emit",
         sky_diagnostics::SKY_T0010,
     );
@@ -63,7 +63,7 @@ fn non_exhaustive_nested_same_ctor_case_is_sky_t0010() {
 #[test]
 fn all_top_ctors_covered_with_nested_literal_gap_is_sky_t0010() {
     assert_gate(
-        "m3b4_floor_sentinel",
+        "floor_sentinel",
         "m3b4_floor_sentinel_emit",
         sky_diagnostics::SKY_T0010,
     );

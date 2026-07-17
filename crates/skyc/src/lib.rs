@@ -1796,7 +1796,7 @@ mod tests {
             .join("..")
             .join("tests")
             .join("golden")
-            .join("m0")
+            .join("basics")
             .join("Main.sky")
     }
 

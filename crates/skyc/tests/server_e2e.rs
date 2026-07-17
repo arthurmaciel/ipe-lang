@@ -291,7 +291,7 @@ main =
 "#;
 
 /// Sky server exercising `Middleware.withCsrf` end-to-end.  Mirrors
-/// `tests/golden/m6_middleware_csrf/Main.sky` but adds a `GET /action` route
+/// `tests/golden/middleware_csrf/Main.sky` but adds a `GET /action` route
 /// (also wrapped in `Middleware.withCsrf`) so a real HTTP client can mint the
 /// double-submit cookie via a safe-method request before probing the
 /// CSRF-protected `POST /action`.

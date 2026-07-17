@@ -292,12 +292,12 @@ pointer. Confirm the `impl Fn`-ness of `task_map`/`task_map_error`/
 
 **Reach: effectively the entire 70-golden byte suite.** Every emitted
 `main.rs` carries the prelude shim whose `task_map`/`task_map_error` params
-render `Box<dyn Fn>` (confirmed `tests/golden/m0/main.rs:126-141`), plus every
+render `Box<dyn Fn>` (confirmed `tests/golden/basics/main.rs:126-141`), plus every
 golden that emits a user closure or first-class function value carries a
 `{ let __sky_fn: Box<dyn Fn…> = Box::new(…) }` (confirmed
-`m4a_fns_foldl/main.rs:239`, `m1_lambdas/main.rs:239`,
-`m1_firstclass/main.rs:238`). The `Box<dyn FnOnce>` continuations
-(`task_and_then` at `m0/main.rs:135`) stay Box. So the diff per golden is a
+`fns_foldl/main.rs:239`, `lambdas/main.rs:239`,
+`firstclass/main.rs:238`). The `Box<dyn FnOnce>` continuations
+(`task_and_then` at `basics/main.rs:135`) stay Box. So the diff per golden is a
 mechanical `Box<dyn Fn(` → `Arc<dyn Fn(` and `Box::new(` → `Arc::new(` at
 exactly the `Fn` (not `FnOnce`) carrier sites — NOT a wholesale replace.
 
@@ -325,7 +325,7 @@ Strategy:
    - Any Server/WS golden (if present) — the ServerHandler alias arm stays but
      the WS arm is deleted (§1.2); confirm WS callback goldens stay
      byte-identical (they already rendered Arc).
-   - `i216_partial_app`, `m1_partial`, `m1_firstclass` — partial-application
+   - `partial_app`, `partial`, `firstclass` — partial-application
      and first-class-value goldens exercise `eta_expand_*` and
      `emit_func_value`; their diff proves the eta path flips cleanly.
    - The `l0105_*` move-seal goldens — these encode the OLD fail-close
@@ -464,8 +464,8 @@ full byte-golden sweep is the FINAL gate. Tag `fix-a-pre` at HEAD for rollback.
 **Phase 3 — golden regen + audit.**
 - Bless-regenerate all 70 `main.rs`; `git diff --stat` review; confirm every
   hunk is a `Fn`-carrier Box→Arc and nothing logical (§6).
-- Hand-audit `l0105_*` (move-seal negatives) and `i216_partial_app`/
-  `m1_partial`/`m1_firstclass` (§6).
+- Hand-audit `l0105_*` (move-seal negatives) and `partial_app`/
+  `partial`/`firstclass` (§6).
 - Add the 3 new goldens (§6 minimal trigger + 2 companions).
 - Gate: full `nextest -p sky_backend_rust` green; `git diff` is carrier-only.
 
@@ -534,17 +534,17 @@ fixture is a REFUTABILITY / parse negative (`SKY-P0001` / `SKY-T0015`), NOT a
 
 | Fixture | Rejects with | Touched by carrier flip? |
 |---|---|---|
-| `l0105_neg_int_lambda` | SKY-P0001 (`\1 ->` bare literal param) | No |
-| `l0105_neg_list_lambda` | SKY-P0001 (`\[a] ->`) | No |
-| `l0105_neg_ctor_lambda` | SKY-T0015 (`\(Just x) ->` refutable) | No |
-| `l0105_neg_cons_lambda` | SKY-T0015 (`\(x :: xs) ->`) | No |
-| `l0105_neg_nested_tuple` | SKY-T0015 (`\(a, Just x) ->`) | No |
-| `l0105_neg_ctor_def` | SKY-T0015 (`f (Just x) =`) | No |
-| `l0105_neg_money_ctor_param` | SKY-T0015 (`amount (Money d _) =`) | No |
+| `neg_int_lambda` | SKY-P0001 (`\1 ->` bare literal param) | No |
+| `neg_list_lambda` | SKY-P0001 (`\[a] ->`) | No |
+| `neg_ctor_lambda` | SKY-T0015 (`\(Just x) ->` refutable) | No |
+| `neg_cons_lambda` | SKY-T0015 (`\(x :: xs) ->`) | No |
+| `neg_nested_tuple` | SKY-T0015 (`\(a, Just x) ->`) | No |
+| `neg_ctor_def` | SKY-T0015 (`f (Just x) =`) | No |
+| `neg_money_ctor_param` | SKY-T0015 (`amount (Money d _) =`) | No |
 
 All seven reject at the parser / irrefutability gate, strictly BEFORE lowering's
 `clone_class` runs, so the carrier flip cannot turn any of them into an accept.
-`l0105_alias_move_seal` and `l0105_param_patterns` are POSITIVE (`main.rs`
+`alias_move_seal` and `param_patterns` are POSITIVE (`main.rs`
 present) — they byte-churn Box→Arc mechanically, no re-classification.
 
 **The negatives that DO flip are the `l0127_*` (fn-value-reuse gate),**
@@ -552,9 +552,9 @@ asserted in `crates/skyc/tests/golden_l0114_ctor_payload_function.rs`:
 
 | Test fn | Fixture | Reused type | Post-flip disposition |
 |---|---|---|---|
-| `fn_carrier_reuse_gated` | `l0127_fn_carrier_reuse_gated` | `Maybe (Int -> Int)` let-binding, `consume mf + consume mf` | **Was SKY-L0127; NOW ACCEPT + run.** `clone_class(Maybe(Fun))` = `clone_class_named_composite([Fun])` = `CloneOk` once `Fun` is `CloneOk`; the `Maybe (Arc<dyn Fn>)` clones per use, cargo-builds. Re-classify: assert exit-0 + emitted runs, output `4`. |
-| `lambda_param_reuse_gated` | `l0127_lambda_param_reuse_gated` | `Maybe (Int -> Int)` lambda param reused | **Was SKY-L0127; NOW ACCEPT + run**, same reason, output `4`. |
-| `lambda_param_call_twice_accepted` | `l0127_lambda_param_call_twice_accepted` | `f 1 + f 2` (callee) | Stays GREEN, unchanged (already accepted; callee-position). |
+| `fn_carrier_reuse_gated` | `fn_carrier_reuse_gated` | `Maybe (Int -> Int)` let-binding, `consume mf + consume mf` | **Was SKY-L0127; NOW ACCEPT + run.** `clone_class(Maybe(Fun))` = `clone_class_named_composite([Fun])` = `CloneOk` once `Fun` is `CloneOk`; the `Maybe (Arc<dyn Fn>)` clones per use, cargo-builds. Re-classify: assert exit-0 + emitted runs, output `4`. |
+| `lambda_param_reuse_gated` | `lambda_param_reuse_gated` | `Maybe (Int -> Int)` lambda param reused | **Was SKY-L0127; NOW ACCEPT + run**, same reason, output `4`. |
+| `lambda_param_call_twice_accepted` | `lambda_param_call_twice_accepted` | `f 1 + f 2` (callee) | Stays GREEN, unchanged (already accepted; callee-position). |
 
 Both `*_reuse_gated` re-classifications are **make-invalid-states-unrepresentable
 in the correct direction**: the state they rejected is no longer invalid once
@@ -653,7 +653,7 @@ Two questions this raises, and the pre-registered answers:
   clone per non-last use), but it means a golden exercising a multi-use `Fun`
   `let`-binding that ALSO hits `needs_shared_capture`/`flows_into_sync_kernel_call`
   (the S4b `#164`/`#168`/`#172` families: `i164_*`, `i168_*`, `i172_*`,
-  `i191_input_arc_capture`) may show a diff BEYOND the type string. **Phase 3
+  `input_arc_capture`) may show a diff BEYOND the type string. **Phase 3
   must eyeball these specific goldens by hand, not bless-accept blindly.** If a
   diff there is a `Var→CloneVar` at a non-last multi-use position, it is the
   intended lean clone and is accepted; if it changes control flow or drops a
@@ -837,7 +837,7 @@ argument is `impl Fn` (`list_map`, `list_filter`, `list_foldl`, `list_foldr`,
 `task_map`, `task_and_then`, … — 53 `impl Fn`/`impl FnOnce` param sites across
 the runtime) fails `cargo build` with E0277. Confirmed by ISOLATED clean builds
 (fresh per-golden target, no cache contamination) of the freshly-emitted
-`m4a_fns_map` and `m4a_fns_foldl`: both `error[E0277]` — `Arc<dyn Fn>` where the
+`fns_map` and `fns_foldl`: both `error[E0277]` — `Arc<dyn Fn>` where the
 kernel wants `impl Fn`. This is a skyc-exit-0-then-cargo-fail across the entire
 HOF surface — the exact class THE SEAL forbids. The universal-Arc flip is
 therefore rejected outright.
@@ -910,7 +910,7 @@ for a sound fix:
    `Call` not an `Expr::Lambda`). The `SharedLambda` promotion is gated `if let
    Expr::Lambda = value`, so `g` stayed `Box<dyn Fn>` — and `g.clone()` on a
    `Box<dyn Fn>` is `E0599` (Box<dyn Fn> is not `Clone`). Confirmed by isolated
-   build of `i216_partial_app`. So the promotion path must be generalised to
+   build of `partial_app`. So the promotion path must be generalised to
    change the CARRIER of any captured fn-value (lambda literal, partial-app
    `Call` result, top-level fn-item reference) to `Arc<dyn Fn>` — not just
    lambda literals — before any `.clone()` relay is minted on it.

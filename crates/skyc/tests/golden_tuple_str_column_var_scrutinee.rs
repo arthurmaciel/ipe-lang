@@ -35,7 +35,7 @@ fn fixture_entry() -> PathBuf {
     repo_root()
         .join("tests")
         .join("golden")
-        .join("i182_tuple_str_column_var_scrutinee")
+        .join("tuple_str_column_var_scrutinee")
         .join("Main.sky")
 }
 
@@ -77,11 +77,11 @@ fn str_column_var_scrutinee_cargo_builds_and_runs() {
     let built = skyc::build(&fixture_entry(), &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for i182_tuple_str_column_var_scrutinee: {:?}",
+        "skyc build must succeed for tuple_str_column_var_scrutinee: {:?}",
         built.err()
     );
 
-    let outcome = support::build_and_run_emitted("i182_tuple_str_column_var_scrutinee", &out);
+    let outcome = support::build_and_run_emitted("tuple_str_column_var_scrutinee", &out);
     assert_eq!(
         outcome.exit_code,
         Some(0),

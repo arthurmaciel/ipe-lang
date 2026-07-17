@@ -127,7 +127,7 @@ mod tests {
     use super::*;
     use sky_syntax::{Exposed, Exposing, Expr_, Pattern_, TypeAnnotation, Value};
 
-    const GOLDEN: &str = include_str!("../../../tests/golden/m0/Main.sky");
+    const GOLDEN: &str = include_str!("../../../tests/golden/basics/Main.sky");
 
     fn find_value<'a>(m: &'a Module, i: &Interner, name: &str) -> Option<&'a Value> {
         m.values

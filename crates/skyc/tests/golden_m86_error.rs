@@ -5,7 +5,7 @@
 //!
 //! ## Golden catalogue
 //!
-//! * `m86_error_module` — `Task.onError (\e -> println (Error.toString e))
+//! * `error_module` — `Task.onError (\e -> println (Error.toString e))
 //!   (Task.fail (Error.unexpected "boom"))`. Exercises the whole minimal Error
 //!   surface end-to-end: `Error.unexpected` (message constructor, `String ->
 //!   Error`), `Task.fail` on an `Error`-channel value, `Task.onError` with an
@@ -60,5 +60,5 @@ fn assert_runs_and_matches_oracle(name: &str) {
 /// The full minimal-Error round-trip: construct → fail → recover → render.
 #[test]
 fn error_module_round_trip() {
-    assert_runs_and_matches_oracle("m86_error_module");
+    assert_runs_and_matches_oracle("error_module");
 }

@@ -63,7 +63,7 @@
 //!   call site (across BOTH `Lib2` and `Main`) so the fixture isolates the
 //!   ONE variable this is actually about — empty vs. non-empty — rather
 //!   than cross-call-site type diversity, a separate, already-covered
-//!   concern (`tests/golden/m5b_db_poly_params`).
+//!   concern (`tests/golden/db_poly_params`).
 //!
 //! Run:
 //! ```text

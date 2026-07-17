@@ -6,9 +6,9 @@
 //!
 //! | Fixture | Shape | Without promotion |
 //! |---|---|---|
-//! | `i221_fn_capture_eta_promoted` | sibling let-bound fn value captured by an ETA-SYNTHESIZED residual closure (`guarded f = wrap (inc f)`) | SKY-L0126 |
-//! | `i221_fn_value_reuse_promoted` | pure fn-typed `let` consumed > 1× (direct arg moves + two partial-application eta captures) | SKY-L0127 |
-//! | `i221_fn_param_capture_promoted` | fn-typed PARAM forwarded non-callee inside an eta closure (`g = apply f`) | skyc-green, cargo E0507 (SEAL break) |
+//! | `fn_capture_eta_promoted` | sibling let-bound fn value captured by an ETA-SYNTHESIZED residual closure (`guarded f = wrap (inc f)`) | SKY-L0126 |
+//! | `fn_value_reuse_promoted` | pure fn-typed `let` consumed > 1× (direct arg moves + two partial-application eta captures) | SKY-L0127 |
+//! | `fn_param_capture_promoted` | fn-typed PARAM forwarded non-callee inside an eta closure (`g = apply f`) | skyc-green, cargo E0507 (SEAL break) |
 //!
 //! The promotion decision runs on the LOWERED scope (the IR walkers see the
 //! eta-synthesized closures a canon-level scan structurally cannot), flips
@@ -18,8 +18,8 @@
 //! binding keeps the lean `Box` carrier.
 //!
 //! Behavioural-parity oracle: the Go reference toolchain compiles and runs
-//! `i221_fn_value_reuse_promoted` (`47`) and `i221_fn_param_capture_promoted`
-//! (`13`) to the asserted stdout. `i221_fn_capture_eta_promoted` is REJECTED
+//! `fn_value_reuse_promoted` (`47`) and `fn_param_capture_promoted`
+//! (`13`) to the asserted stdout. `fn_capture_eta_promoted` is REJECTED
 //! by the Go backend (`not enough arguments in call to wrap` — the same
 //! local-fn-value partial-application arity gap this promotion closes), so its
 //! `4` is the hand-computed language-semantics value; accepting the shape is a
@@ -74,30 +74,30 @@ fn assert_e2e_prints(name: &str, want_stdout: &str) {
 
 #[test]
 fn eta_synthesized_capture_emits_byte_identical_main_rs() {
-    assert_byte_identical("i221_fn_capture_eta_promoted");
+    assert_byte_identical("fn_capture_eta_promoted");
 }
 
 #[test]
 fn eta_synthesized_capture_end_to_end() {
-    assert_e2e_prints("i221_fn_capture_eta_promoted", "4\n");
+    assert_e2e_prints("fn_capture_eta_promoted", "4\n");
 }
 
 #[test]
 fn fn_value_reuse_emits_byte_identical_main_rs() {
-    assert_byte_identical("i221_fn_value_reuse_promoted");
+    assert_byte_identical("fn_value_reuse_promoted");
 }
 
 #[test]
 fn fn_value_reuse_end_to_end() {
-    assert_e2e_prints("i221_fn_value_reuse_promoted", "47\n");
+    assert_e2e_prints("fn_value_reuse_promoted", "47\n");
 }
 
 #[test]
 fn fn_param_capture_emits_byte_identical_main_rs() {
-    assert_byte_identical("i221_fn_param_capture_promoted");
+    assert_byte_identical("fn_param_capture_promoted");
 }
 
 #[test]
 fn fn_param_capture_end_to_end() {
-    assert_e2e_prints("i221_fn_param_capture_promoted", "13\n");
+    assert_e2e_prints("fn_param_capture_promoted", "13\n");
 }

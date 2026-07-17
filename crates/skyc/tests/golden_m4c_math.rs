@@ -73,13 +73,13 @@ fn assert_runs_and_matches_oracle(name: &str) {
 /// `Math.min 3 7` → `3`.
 #[test]
 fn math_min_int() {
-    assert_runs_and_matches_oracle("m4c_math_min_int");
+    assert_runs_and_matches_oracle("math_min_int");
 }
 
 /// `Math.max 3 7` → `7`.
 #[test]
 fn math_max_int() {
-    assert_runs_and_matches_oracle("m4c_math_max_int");
+    assert_runs_and_matches_oracle("math_max_int");
 }
 
 // ── min / max — Float (divergence-from-sky: polymorphic compare, no AsInt coercion) ──
@@ -89,14 +89,14 @@ fn math_max_int() {
 /// rationale: Elm-conformance.
 #[test]
 fn math_min_float_no_truncation() {
-    assert_runs_and_matches_oracle("m4c_math_min_float");
+    assert_runs_and_matches_oracle("math_min_float");
 }
 
 /// `Math.max 0.4 1.3` → `1.3`. Sky's `AsInt` coercion gives `1`; Sky-Rust
 /// returns `1.3`. Divergence from Sky, rationale: Elm-conformance.
 #[test]
 fn math_max_float_no_truncation() {
-    assert_runs_and_matches_oracle("m4c_math_max_float");
+    assert_runs_and_matches_oracle("math_max_float");
 }
 
 // ── min / max — String (divergence-from-sky: lexicographic polymorphic compare) ──
@@ -106,13 +106,13 @@ fn math_max_float_no_truncation() {
 /// rationale: Elm-conformance.
 #[test]
 fn math_min_string_lexicographic() {
-    assert_runs_and_matches_oracle("m4c_math_min_string");
+    assert_runs_and_matches_oracle("math_min_string");
 }
 
 /// `Math.max "b" "a"` → `"b"`. Divergence from Sky, rationale: Elm-conformance.
 #[test]
 fn math_max_string_lexicographic() {
-    assert_runs_and_matches_oracle("m4c_math_max_string");
+    assert_runs_and_matches_oracle("math_max_string");
 }
 
 // ── abs ──────────────────────────────────────────────────────────────────────
@@ -120,7 +120,7 @@ fn math_max_string_lexicographic() {
 /// `Math.abs (-5)` → `5`. Integer absolute value (`AsInt` is correct here).
 #[test]
 fn math_abs() {
-    assert_runs_and_matches_oracle("m4c_math_abs");
+    assert_runs_and_matches_oracle("math_abs");
 }
 
 // ── sqrt + NaN domain edge ────────────────────────────────────────────────────
@@ -128,13 +128,13 @@ fn math_abs() {
 /// `Math.sqrt 2.0` → `1.4142135623730951`.
 #[test]
 fn math_sqrt() {
-    assert_runs_and_matches_oracle("m4c_math_sqrt");
+    assert_runs_and_matches_oracle("math_sqrt");
 }
 
 /// `Math.sqrt (-1.0)` → `NaN`. Domain edge: `string_from_float` special-cases NaN.
 #[test]
 fn math_sqrt_negative_is_nan() {
-    assert_runs_and_matches_oracle("m4c_math_sqrt_neg");
+    assert_runs_and_matches_oracle("math_sqrt_neg");
 }
 
 // ── pow ──────────────────────────────────────────────────────────────────────
@@ -142,7 +142,7 @@ fn math_sqrt_negative_is_nan() {
 /// `Math.pow 2.0 10.0` → `1024`. Arity-2 exponentiation.
 #[test]
 fn math_pow() {
-    assert_runs_and_matches_oracle("m4c_math_pow");
+    assert_runs_and_matches_oracle("math_pow");
 }
 
 // ── round — half-away-from-zero, both signs ───────────────────────────────────
@@ -150,13 +150,13 @@ fn math_pow() {
 /// `Math.round 2.5` → `3`. Go `math.Round` rounds halves away from zero.
 #[test]
 fn math_round_half_away() {
-    assert_runs_and_matches_oracle("m4c_math_round");
+    assert_runs_and_matches_oracle("math_round");
 }
 
 /// `Math.round (-2.5)` → `-3`. Half-away-from-zero on the negative side.
 #[test]
 fn math_round_negative_half_away() {
-    assert_runs_and_matches_oracle("m4c_math_round_neg");
+    assert_runs_and_matches_oracle("math_round_neg");
 }
 
 // ── floor / ceil / trunc — the three round a negative differently ─────────────
@@ -164,19 +164,19 @@ fn math_round_negative_half_away() {
 /// `Math.floor (-2.7)` → `-3`. Toward −∞.
 #[test]
 fn math_floor_negative() {
-    assert_runs_and_matches_oracle("m4c_math_floor");
+    assert_runs_and_matches_oracle("math_floor");
 }
 
 /// `Math.ceil (-2.7)` → `-2`. Toward +∞.
 #[test]
 fn math_ceil_negative() {
-    assert_runs_and_matches_oracle("m4c_math_ceil");
+    assert_runs_and_matches_oracle("math_ceil");
 }
 
 /// `Math.trunc (-2.7)` → `-2`. Toward zero.
 #[test]
 fn math_trunc_negative() {
-    assert_runs_and_matches_oracle("m4c_math_trunc");
+    assert_runs_and_matches_oracle("math_trunc");
 }
 
 // ── mod vs remainder ──────────────────────────────────────────────────────────
@@ -184,13 +184,13 @@ fn math_trunc_negative() {
 /// `Math.mod 7.0 3.0` → `1`. Modulo carrying the dividend's sign (Go `math.Mod`).
 #[test]
 fn math_mod() {
-    assert_runs_and_matches_oracle("m4c_math_mod");
+    assert_runs_and_matches_oracle("math_mod");
 }
 
 /// `Math.remainder 7.0 3.0` → `1`. IEEE 754 remainder (Go `math.Remainder`).
 #[test]
 fn math_remainder() {
-    assert_runs_and_matches_oracle("m4c_math_remainder");
+    assert_runs_and_matches_oracle("math_remainder");
 }
 
 // ── constants ─────────────────────────────────────────────────────────────────
@@ -198,17 +198,17 @@ fn math_remainder() {
 /// `Math.pi` → `3.141592653589793`. Zero-arity Float constant.
 #[test]
 fn math_pi() {
-    assert_runs_and_matches_oracle("m4c_math_pi");
+    assert_runs_and_matches_oracle("math_pi");
 }
 
 /// `Math.nan` → `NaN`. `string_from_float` special-cases NaN.
 #[test]
 fn math_nan() {
-    assert_runs_and_matches_oracle("m4c_math_nan");
+    assert_runs_and_matches_oracle("math_nan");
 }
 
 /// `Math.isNaN Math.nan` → `True`; `Math.isNaN 1.0` → `False`.
 #[test]
 fn math_is_nan() {
-    assert_runs_and_matches_oracle("m4c_math_is_nan");
+    assert_runs_and_matches_oracle("math_is_nan");
 }

@@ -106,7 +106,7 @@ fn f1_firstclass_curried_and_shadow() {
     let dir = root
         .join("tests")
         .join("golden")
-        .join("i121_firstclass_curried");
+        .join("firstclass_curried");
     let entry = dir.join("Main.sky");
     let out = std::env::temp_dir().join("skyc_i121_firstclass_curried_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -118,7 +118,7 @@ fn f1_firstclass_curried_and_shadow() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for i121_firstclass_curried: {:?}",
+        "skyc build must succeed for firstclass_curried: {:?}",
         built.err()
     );
 
@@ -129,7 +129,7 @@ fn f1_firstclass_curried_and_shadow() {
         "T6 eta-adapter param must appear in emitted source"
     );
 
-    let outcome = support::build_and_run_emitted("i121_firstclass_curried", &out);
+    let outcome = support::build_and_run_emitted("firstclass_curried", &out);
     assert_eq!(
         outcome.exit_code,
         Some(0),
@@ -169,7 +169,7 @@ fn f2_firstclass_arity0() {
     let dir = root
         .join("tests")
         .join("golden")
-        .join("i121_firstclass_arity0");
+        .join("firstclass_arity0");
     let entry = dir.join("Main.sky");
     let out = std::env::temp_dir().join("skyc_i121_firstclass_arity0_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -181,11 +181,11 @@ fn f2_firstclass_arity0() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for i121_firstclass_arity0: {:?}",
+        "skyc build must succeed for firstclass_arity0: {:?}",
         built.err()
     );
 
-    let outcome = support::build_and_run_emitted("i121_firstclass_arity0", &out);
+    let outcome = support::build_and_run_emitted("firstclass_arity0", &out);
     assert_eq!(
         outcome.exit_code,
         Some(0),
@@ -213,7 +213,7 @@ fn f3_partial_noncopy() {
     let dir = root
         .join("tests")
         .join("golden")
-        .join("i121_partial_noncopy");
+        .join("partial_noncopy");
     let entry = dir.join("Main.sky");
     let out = std::env::temp_dir().join("skyc_i121_partial_noncopy_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -225,11 +225,11 @@ fn f3_partial_noncopy() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for i121_partial_noncopy: {:?}",
+        "skyc build must succeed for partial_noncopy: {:?}",
         built.err()
     );
 
-    let outcome = support::build_and_run_emitted("i121_partial_noncopy", &out);
+    let outcome = support::build_and_run_emitted("partial_noncopy", &out);
     assert_eq!(
         outcome.exit_code,
         Some(0),
@@ -264,7 +264,7 @@ fn f4_lambda_capture_noncopy_and_f11_shadow() {
     let dir = root
         .join("tests")
         .join("golden")
-        .join("i121_lambda_capture_noncopy");
+        .join("lambda_capture_noncopy");
     let entry = dir.join("Main.sky");
     let out = std::env::temp_dir().join("skyc_i121_lambda_capture_noncopy_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -276,11 +276,11 @@ fn f4_lambda_capture_noncopy_and_f11_shadow() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for i121_lambda_capture_noncopy: {:?}",
+        "skyc build must succeed for lambda_capture_noncopy: {:?}",
         built.err()
     );
 
-    let outcome = support::build_and_run_emitted("i121_lambda_capture_noncopy", &out);
+    let outcome = support::build_and_run_emitted("lambda_capture_noncopy", &out);
     assert_eq!(
         outcome.exit_code,
         Some(0),
@@ -311,7 +311,7 @@ fn f5_capture_fn_called_control() {
     let dir = root
         .join("tests")
         .join("golden")
-        .join("i121_capture_fn_called");
+        .join("capture_fn_called");
     let entry = dir.join("Main.sky");
     let out = std::env::temp_dir().join("skyc_i121_capture_fn_called_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -323,7 +323,7 @@ fn f5_capture_fn_called_control() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for i121_capture_fn_called (control): {:?}",
+        "skyc build must succeed for capture_fn_called (control): {:?}",
         built.err()
     );
 
@@ -336,7 +336,7 @@ fn f5_capture_fn_called_control() {
          got emitted source containing .clone()"
     );
 
-    let outcome = support::build_and_run_emitted("i121_capture_fn_called", &out);
+    let outcome = support::build_and_run_emitted("capture_fn_called", &out);
     assert_eq!(
         outcome.exit_code,
         Some(0),
@@ -365,7 +365,7 @@ fn f6_capture_fn_forwarded_promoted_accepts() {
     let entry = root
         .join("tests")
         .join("golden")
-        .join("i121_capture_fn_forwarded")
+        .join("capture_fn_forwarded")
         .join("Main.sky");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i121_capture_fn_forwarded_accept");
     let _ = std::fs::remove_dir_all(&out);
@@ -383,7 +383,7 @@ fn f6_capture_fn_forwarded_promoted_accepts() {
     if std::env::var("SKY_E2E").is_err() {
         return;
     }
-    let outcome = support::build_and_run_emitted("i121_capture_fn_forwarded", &out);
+    let outcome = support::build_and_run_emitted("capture_fn_forwarded", &out);
     assert_eq!(outcome.exit_code, Some(0), "exit 0");
     assert_eq!(outcome.stdout.trim(), "5", "applyTwice (+1) 3 = 5");
 }
@@ -403,7 +403,7 @@ fn f7_succeed_curried() {
     let dir = root
         .join("tests")
         .join("golden")
-        .join("i121_succeed_curried");
+        .join("succeed_curried");
     let entry = dir.join("Main.sky");
     let out = std::env::temp_dir().join("skyc_i121_succeed_curried_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -415,11 +415,11 @@ fn f7_succeed_curried() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for i121_succeed_curried: {:?}",
+        "skyc build must succeed for succeed_curried: {:?}",
         built.err()
     );
 
-    let outcome = support::build_and_run_emitted("i121_succeed_curried", &out);
+    let outcome = support::build_and_run_emitted("succeed_curried", &out);
     assert_eq!(
         outcome.exit_code,
         Some(0),
@@ -448,7 +448,7 @@ fn f8_curried_three_arrows() {
     let dir = root
         .join("tests")
         .join("golden")
-        .join("i121_curried_three_arrows");
+        .join("curried_three_arrows");
     let entry = dir.join("Main.sky");
     let out = std::env::temp_dir().join("skyc_i121_curried_three_arrows_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -460,11 +460,11 @@ fn f8_curried_three_arrows() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for i121_curried_three_arrows: {:?}",
+        "skyc build must succeed for curried_three_arrows: {:?}",
         built.err()
     );
 
-    let outcome = support::build_and_run_emitted("i121_curried_three_arrows", &out);
+    let outcome = support::build_and_run_emitted("curried_three_arrows", &out);
     assert_eq!(
         outcome.exit_code,
         Some(0),
@@ -497,7 +497,7 @@ fn f9_decoder_thunk_capture() {
     let dir = root
         .join("tests")
         .join("golden")
-        .join("i121_decoder_thunk_capture");
+        .join("decoder_thunk_capture");
     let entry = dir.join("Main.sky");
     let out = std::env::temp_dir().join("skyc_i121_decoder_thunk_capture_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -509,11 +509,11 @@ fn f9_decoder_thunk_capture() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for i121_decoder_thunk_capture: {:?}",
+        "skyc build must succeed for decoder_thunk_capture: {:?}",
         built.err()
     );
 
-    let outcome = support::build_and_run_emitted("i121_decoder_thunk_capture", &out);
+    let outcome = support::build_and_run_emitted("decoder_thunk_capture", &out);
     assert_eq!(
         outcome.exit_code,
         Some(0),
@@ -546,7 +546,7 @@ fn f9_decoder_thunk_capture() {
 #[test]
 fn f10_generic_curried_gate_l0126() {
     assert_skyc_gate(
-        "i121_generic_curried",
+        "generic_curried",
         "i121_generic_curried_gate",
         sky_diagnostics::SKY_L0126,
     );
@@ -572,7 +572,7 @@ fn f11_pipeline_custom_curried() {
     let dir = root
         .join("tests")
         .join("golden")
-        .join("i121_pipeline_custom_curried");
+        .join("pipeline_custom_curried");
     let entry = dir.join("Main.sky");
     let out = std::env::temp_dir().join("skyc_i121_pipeline_custom_curried_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -584,11 +584,11 @@ fn f11_pipeline_custom_curried() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for i121_pipeline_custom_curried: {:?}",
+        "skyc build must succeed for pipeline_custom_curried: {:?}",
         built.err()
     );
 
-    let outcome = support::build_and_run_emitted("i121_pipeline_custom_curried", &out);
+    let outcome = support::build_and_run_emitted("pipeline_custom_curried", &out);
     assert_eq!(
         outcome.exit_code,
         Some(0),

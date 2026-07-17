@@ -10236,7 +10236,7 @@ impl<'a> Lowerer<'a> {
                         // emitted `let eta_0: SkyResult<JsonVal, _> = ok_res(…)`
                         // is an E0308 exit-0-then-cargo-fail (found while
                         // gating the 5th attempt: the
-                        // `l0114_result_and_map_fn_payload` positive-path
+                        // `result_and_map_fn_payload` positive-path
                         // fixture). One defaulting policy, both sides.
                         let err_ty = args.first().ok_or_else(result_arg_bug)?;
                         let err = if matches!(err_ty, Ty::Var(_)) {
@@ -15376,7 +15376,7 @@ impl<'a> Lowerer<'a> {
             // positions is an owned `String` FIELD, and Rust cannot literal-
             // match a `&str` pattern against an owned `String` field the way it
             // can coerce a top-level `String` SCRUTINEE via `.as_str()`
-            // (`m0-24-tui-kitchen-sink` SEAL violation sibling —
+            // (`basics-24-tui-kitchen-sink` SEAL violation sibling —
             // `SkyMaybe::Just(SkyMaybe::Just("x"))` is E0308, `expected String,
             // found &str`). Fail-closed (SKY-L0116), the exact sibling of the
             // PList / PCons gate below. Class 4 item C2.
@@ -16676,7 +16676,7 @@ impl<'a> Lowerer<'a> {
     ///   — the sibling shape: Rust cannot literal-match a `&str` pattern
     ///   against an owned `String` ctor FIELD (`SkyMaybe::Just(String)`) the
     ///   way it can coerce a top-level `String` SCRUTINEE to `&str`
-    ///   (`m0-24-tui-kitchen-sink` SEAL violation — `SkyMaybe::Just("live")`
+    ///   (`basics-24-tui-kitchen-sink` SEAL violation — `SkyMaybe::Just("live")`
     ///   is E0308, `expected String, found &str`).
     ///
     /// Both shapes share one root cause: an enum FIELD (`Vec<T>` / `String`)

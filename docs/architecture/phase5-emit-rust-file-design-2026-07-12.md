@@ -536,7 +536,7 @@ changes. Pure test-infrastructure risk.
 > per-Sky-module split CORRECTLY fires for them — the actual blast radius is
 > ~6 goldens, not zero. Two classes were missed by the original survey: (a)
 > genuine USER multi-module fixtures (`mm_diamond` = B/C/D/Main, `mm_local_pkg`
-> = Lib/Main, `class1_boundary_scheme_field_result` = Lib1/Lib2/Main), each
+> = Lib/Main, `boundary_scheme_field_result` = Lib1/Lib2/Main), each
 > carrying 2+ distinct user `home`s; and (b) programs importing a Layer-3
 > **stdlib** module compiled to Sky source (`Std.Css`, `Std.Ui.Grid`,
 > `Std.Ui.Transition`) — the stdlib module carries its OWN `home` distinct
@@ -1552,7 +1552,7 @@ cargo test -p skyc --test 'golden_*' --no-fail-fast
 2. Enumerate every red test. Partition each into single-home (a real bug —
    step 4) vs genuinely-multi-home (the split correctly firing — step 3).
    The verified multi-home set is the §3.3 table: `mm_diamond`, `mm_local_pkg`,
-   `class1_boundary_scheme_field_result` (user multi-module); `css_source`,
+   `boundary_scheme_field_result` (user multi-module); `css_source`,
    `stdui_grid_seal`, `stdui_transition_seal` (stdlib-source import).
 
 3. For each genuinely-multi-home golden, regenerate to the correct new shape

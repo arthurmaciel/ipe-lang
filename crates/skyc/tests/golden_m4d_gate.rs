@@ -15,7 +15,7 @@
 //!   fails closed at type-check as `SKY-T0014` (super-type unsatisfied — the
 //!   generic's binding-bound variable is instantiated at a non-comparable type,
 //!   the same path `Math.min` / `maxOf` take for ordering). Analogous to the
-//!   `m4c_math_min_rec_gate` / `m4c_math_min_fn_gate` pair.
+//!   `math_min_rec_gate` / `math_min_fn_gate` pair.
 //! * **`Float` element / key** (`Set Float` / `Dict Float v`): `Float` IS Sky
 //!   `comparable`, so the type checker accepts it; but Rust's `f64` is neither
 //!   `Ord` nor `Hash` / `Eq`, so `BTreeSet<f64>` / `HashMap<f64, _>` cannot
@@ -75,7 +75,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code)
 #[test]
 fn set_record_element_is_sky_t0001() {
     assert_gate(
-        "m4d_set_record_gate",
+        "set_record_gate",
         "m4d_set_record_gate_emit",
         sky_diagnostics::SKY_T0001,
     );
@@ -85,7 +85,7 @@ fn set_record_element_is_sky_t0001() {
 #[test]
 fn dict_adt_key_is_sky_t0001() {
     assert_gate(
-        "m4d_dict_adt_gate",
+        "dict_adt_gate",
         "m4d_dict_adt_gate_emit",
         sky_diagnostics::SKY_T0001,
     );
@@ -98,7 +98,7 @@ fn dict_adt_key_is_sky_t0001() {
 #[test]
 fn set_float_element_is_sky_l0117() {
     assert_gate(
-        "m4d_set_float_gate",
+        "set_float_gate",
         "m4d_set_float_gate_emit",
         sky_diagnostics::SKY_L0117,
     );
@@ -109,7 +109,7 @@ fn set_float_element_is_sky_l0117() {
 #[test]
 fn dict_float_key_is_sky_l0117() {
     assert_gate(
-        "m4d_dict_float_gate",
+        "dict_float_gate",
         "m4d_dict_float_gate_emit",
         sky_diagnostics::SKY_L0117,
     );
@@ -128,7 +128,7 @@ fn dict_float_key_is_sky_l0117() {
 #[test]
 fn set_float_inline_is_sky_l0117() {
     assert_gate(
-        "m4d_set_float_inline_gate",
+        "set_float_inline_gate",
         "m4d_set_float_inline_gate_emit",
         sky_diagnostics::SKY_L0117,
     );
@@ -139,7 +139,7 @@ fn set_float_inline_is_sky_l0117() {
 #[test]
 fn set_float_let_is_sky_l0117() {
     assert_gate(
-        "m4d_set_float_let_gate",
+        "set_float_let_gate",
         "m4d_set_float_let_gate_emit",
         sky_diagnostics::SKY_L0117,
     );
@@ -151,7 +151,7 @@ fn set_float_let_is_sky_l0117() {
 #[test]
 fn set_float_mapped_is_sky_l0117() {
     assert_gate(
-        "m4d_set_float_mapped_gate",
+        "set_float_mapped_gate",
         "m4d_set_float_mapped_gate_emit",
         sky_diagnostics::SKY_L0117,
     );
@@ -162,7 +162,7 @@ fn set_float_mapped_is_sky_l0117() {
 #[test]
 fn set_float_insert_is_sky_l0117() {
     assert_gate(
-        "m4d_set_float_insert_gate",
+        "set_float_insert_gate",
         "m4d_set_float_insert_gate_emit",
         sky_diagnostics::SKY_L0117,
     );
@@ -173,7 +173,7 @@ fn set_float_insert_is_sky_l0117() {
 #[test]
 fn dict_float_inline_is_sky_l0117() {
     assert_gate(
-        "m4d_dict_float_inline_gate",
+        "dict_float_inline_gate",
         "m4d_dict_float_inline_gate_emit",
         sky_diagnostics::SKY_L0117,
     );
@@ -184,7 +184,7 @@ fn dict_float_inline_is_sky_l0117() {
 #[test]
 fn dict_float_let_is_sky_l0117() {
     assert_gate(
-        "m4d_dict_float_let_gate",
+        "dict_float_let_gate",
         "m4d_dict_float_let_gate_emit",
         sky_diagnostics::SKY_L0117,
     );
@@ -195,7 +195,7 @@ fn dict_float_let_is_sky_l0117() {
 #[test]
 fn dict_float_insert_is_sky_l0117() {
     assert_gate(
-        "m4d_dict_float_insert_gate",
+        "dict_float_insert_gate",
         "m4d_dict_float_insert_gate_emit",
         sky_diagnostics::SKY_L0117,
     );
@@ -210,7 +210,7 @@ fn dict_float_insert_is_sky_l0117() {
 // the forwarder at a non-comparable type (record or user ADT) is rejected at
 // type-check as `SKY-T0014` (super-type unsatisfied), exactly as `Math.min`
 // does for ordering.  This is the direct Set / Dict analogue of
-// `m4c_math_min_rec_gate` / `m4c_math_min_fn_gate`.
+// `math_min_rec_gate` / `math_min_fn_gate`.
 
 /// `singletonSet : a -> Set a` (body `Set.fromList [x]`) called at `{ x : Int }` —
 /// a record is not comparable, so the generic is rejected at the call site with
@@ -218,7 +218,7 @@ fn dict_float_insert_is_sky_l0117() {
 #[test]
 fn set_rec_via_fn_is_sky_t0014() {
     assert_gate(
-        "m4d_set_rec_fn_gate",
+        "set_rec_fn_gate",
         "m4d_set_rec_fn_gate_emit",
         sky_diagnostics::SKY_T0014,
     );
@@ -230,7 +230,7 @@ fn set_rec_via_fn_is_sky_t0014() {
 #[test]
 fn set_adt_via_fn_is_sky_t0014() {
     assert_gate(
-        "m4d_set_adt_fn_gate",
+        "set_adt_fn_gate",
         "m4d_set_adt_fn_gate_emit",
         sky_diagnostics::SKY_T0014,
     );
@@ -242,7 +242,7 @@ fn set_adt_via_fn_is_sky_t0014() {
 #[test]
 fn dict_rec_via_fn_is_sky_t0014() {
     assert_gate(
-        "m4d_dict_rec_fn_gate",
+        "dict_rec_fn_gate",
         "m4d_dict_rec_fn_gate_emit",
         sky_diagnostics::SKY_T0014,
     );
@@ -254,7 +254,7 @@ fn dict_rec_via_fn_is_sky_t0014() {
 #[test]
 fn dict_adt_via_fn_is_sky_t0014() {
     assert_gate(
-        "m4d_dict_adt_fn_gate",
+        "dict_adt_fn_gate",
         "m4d_dict_adt_fn_gate_emit",
         sky_diagnostics::SKY_T0014,
     );

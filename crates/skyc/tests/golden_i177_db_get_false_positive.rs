@@ -10,9 +10,9 @@
 //! (skyc-0-then-cargo-fail).
 //!
 //! Two minimal well-typed repros:
-//!   * probe C (`i177_db_get_false_positive_string_literal`): a wildcard-`any`
+//!   * probe C (`db_get_false_positive_string_literal`): a wildcard-`any`
 //!     fn whose body contains the STRING LITERAL `"db_get_string called on …"`.
-//!   * probe D (`i177_db_get_false_positive_user_symbol`): a benign user fn
+//!   * probe D (`db_get_false_positive_user_symbol`): a benign user fn
 //!     `dbGetLabel` lowering to `main_db_get_label`, called from a
 //!     wildcard-`any` fn.
 //!
@@ -122,23 +122,23 @@ fn assert_cargo_builds_and_runs(fixture: &str, expected_stdout: &str) {
 
 #[test]
 fn i177_false_positive_string_literal_skyc_no_sky_row() {
-    assert_skyc_accepts_without_sky_row("i177_db_get_false_positive_string_literal");
+    assert_skyc_accepts_without_sky_row("db_get_false_positive_string_literal");
 }
 
 #[test]
 fn i177_false_positive_string_literal_cargo_builds_and_runs() {
     assert_cargo_builds_and_runs(
-        "i177_db_get_false_positive_string_literal",
+        "db_get_false_positive_string_literal",
         "db_get_string called on the payload",
     );
 }
 
 #[test]
 fn i177_false_positive_user_symbol_skyc_no_sky_row() {
-    assert_skyc_accepts_without_sky_row("i177_db_get_false_positive_user_symbol");
+    assert_skyc_accepts_without_sky_row("db_get_false_positive_user_symbol");
 }
 
 #[test]
 fn i177_false_positive_user_symbol_cargo_builds_and_runs() {
-    assert_cargo_builds_and_runs("i177_db_get_false_positive_user_symbol", "label:payload");
+    assert_cargo_builds_and_runs("db_get_false_positive_user_symbol", "label:payload");
 }

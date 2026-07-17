@@ -1,0 +1,3 @@
+name = "cross_module_attr_lowering"
+version = "0.1.0"
+entry = "src/Main.sky"

@@ -93,7 +93,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 /// short-circuit behaviour on the first `Err` / `Nothing`.
 #[test]
 fn result_maybe_combinators() {
-    assert_runs_and_matches_oracle("m88_result_maybe_combinators");
+    assert_runs_and_matches_oracle("result_maybe_combinators");
 }
 
 /// SEAL positive — `Result.mapError` with a wildcard handler `\_ -> …`
@@ -107,5 +107,5 @@ fn result_maybe_combinators() {
 /// (skyc → cargo build → run) succeeds and prints `concrete`.
 #[test]
 fn result_map_error_wildcard_handler() {
-    assert_runs_and_matches_oracle("m88_result_map_error_wildcard");
+    assert_runs_and_matches_oracle("result_map_error_wildcard");
 }

@@ -156,46 +156,46 @@ fn assert_cargo_builds_and_runs(fixture: &str) {
 
 #[test]
 fn i172_inline_lambda_skyc_unifies_to_arc() {
-    assert_skyc_unifies_to_arc("i172_mixed_arc_box_inline_lambda");
+    assert_skyc_unifies_to_arc("mixed_arc_box_inline_lambda");
 }
 
 #[test]
 fn i172_inline_lambda_cargo_builds_and_runs() {
-    assert_cargo_builds_and_runs("i172_mixed_arc_box_inline_lambda");
+    assert_cargo_builds_and_runs("mixed_arc_box_inline_lambda");
 }
 
 // ── Shape (2): top-level function reference sibling (Expr::FuncValue) ──────────
 
 #[test]
 fn i172_funcvalue_skyc_unifies_to_arc() {
-    assert_skyc_unifies_to_arc("i172_mixed_arc_box_funcvalue");
+    assert_skyc_unifies_to_arc("mixed_arc_box_funcvalue");
 }
 
 #[test]
 fn i172_funcvalue_cargo_builds_and_runs() {
-    assert_cargo_builds_and_runs("i172_mixed_arc_box_funcvalue");
+    assert_cargo_builds_and_runs("mixed_arc_box_funcvalue");
 }
 
 // ── Shape (3): let-bound lambda read as a Var sibling ─────────────────────────
 
 #[test]
 fn i172_var_sibling_skyc_unifies_to_arc() {
-    assert_skyc_unifies_to_arc("i172_mixed_arc_box_var_sibling");
+    assert_skyc_unifies_to_arc("mixed_arc_box_var_sibling");
 }
 
 #[test]
 fn i172_var_sibling_cargo_builds_and_runs() {
-    assert_cargo_builds_and_runs("i172_mixed_arc_box_var_sibling");
+    assert_cargo_builds_and_runs("mixed_arc_box_var_sibling");
 }
 
 // ── Shape (4): case/match with a FuncValue sibling arm ────────────────────────
 
 #[test]
 fn i172_match_funcvalue_skyc_unifies_to_arc() {
-    assert_skyc_unifies_to_arc("i172_mixed_arc_box_match_funcvalue");
+    assert_skyc_unifies_to_arc("mixed_arc_box_match_funcvalue");
 }
 
 #[test]
 fn i172_match_funcvalue_cargo_builds_and_runs() {
-    assert_cargo_builds_and_runs("i172_mixed_arc_box_match_funcvalue");
+    assert_cargo_builds_and_runs("mixed_arc_box_match_funcvalue");
 }

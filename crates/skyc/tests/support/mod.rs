@@ -91,7 +91,7 @@ pub fn golden_dir_of(golden: &Path) -> &Path {
 pub fn assert_emitted_project_matches_golden_dir(emitted_out: &Path, golden_dir: &Path) {
     // (golden-relative name, emitted path). `main.rs` is always compared;
     // `Cargo.toml` only when the golden dir checks one in — mirroring what the
-    // hand-rolled per-file assertions did (all compared `main.rs`; only `m0`
+    // hand-rolled per-file assertions did (all compared `main.rs`; only `basics`
     // carried a golden manifest, other goldens do not).
     let mut pairs: Vec<(String, PathBuf)> = vec![(
         "main.rs".to_owned(),

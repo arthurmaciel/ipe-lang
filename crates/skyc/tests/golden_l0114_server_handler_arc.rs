@@ -21,7 +21,7 @@
 //! how the regression reached `master` green. This test needs only the emitted
 //! Rust text (no cargo build), so it runs in the DEFAULT gate and can never be
 //! silently regressed again. It reuses the existing
-//! `m6_server_request_accessors` fixture, whose sole lambda is the inline
+//! `server_request_accessors` fixture, whose sole lambda is the inline
 //! `Server.post "/introspect/:tag" (\req -> …)` handler.
 
 use std::path::{Path, PathBuf};
@@ -48,7 +48,7 @@ fn server_handler_lambda_boxes_with_arc_not_box() {
     let entry = root
         .join("tests")
         .join("golden")
-        .join("m6_server_request_accessors")
+        .join("server_request_accessors")
         .join("Main.sky");
     let out = std::env::temp_dir().join("skyc_l0114_server_handler_arc");
     let _ = std::fs::remove_dir_all(&out);
@@ -105,7 +105,7 @@ fn ws_on_error_callback_boxes_with_arc_not_box() {
     let entry = root
         .join("tests")
         .join("golden")
-        .join("l0114_ws_onerror")
+        .join("ws_onerror")
         .join("Main.sky");
     let out = std::env::temp_dir().join("skyc_l0114_ws_onerror_arc");
     let _ = std::fs::remove_dir_all(&out);

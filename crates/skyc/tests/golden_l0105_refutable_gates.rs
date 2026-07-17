@@ -59,7 +59,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code)
 #[test]
 fn ctor_lambda_param_is_sky_t0015() {
     assert_gate(
-        "l0105_neg_ctor_lambda",
+        "neg_ctor_lambda",
         "l0105_neg_ctor_lambda_emit",
         sky_diagnostics::SKY_T0015,
     );
@@ -68,7 +68,7 @@ fn ctor_lambda_param_is_sky_t0015() {
 #[test]
 fn ctor_def_head_param_is_sky_t0015() {
     assert_gate(
-        "l0105_neg_ctor_def",
+        "neg_ctor_def",
         "l0105_neg_ctor_def_emit",
         sky_diagnostics::SKY_T0015,
     );
@@ -77,7 +77,7 @@ fn ctor_def_head_param_is_sky_t0015() {
 #[test]
 fn tuple_param_with_refutable_element_is_sky_t0015() {
     assert_gate(
-        "l0105_neg_nested_tuple",
+        "neg_nested_tuple",
         "l0105_neg_nested_tuple_emit",
         sky_diagnostics::SKY_T0015,
     );
@@ -86,7 +86,7 @@ fn tuple_param_with_refutable_element_is_sky_t0015() {
 #[test]
 fn cons_lambda_param_is_sky_t0015() {
     assert_gate(
-        "l0105_neg_cons_lambda",
+        "neg_cons_lambda",
         "l0105_neg_cons_lambda_emit",
         sky_diagnostics::SKY_T0015,
     );
@@ -95,7 +95,7 @@ fn cons_lambda_param_is_sky_t0015() {
 #[test]
 fn bare_int_literal_lambda_param_is_parse_rejected() {
     assert_gate(
-        "l0105_neg_int_lambda",
+        "neg_int_lambda",
         "l0105_neg_int_lambda_emit",
         sky_diagnostics::SKY_P0001,
     );
@@ -104,7 +104,7 @@ fn bare_int_literal_lambda_param_is_parse_rejected() {
 #[test]
 fn bare_list_lambda_param_is_parse_rejected() {
     assert_gate(
-        "l0105_neg_list_lambda",
+        "neg_list_lambda",
         "l0105_neg_list_lambda_emit",
         sky_diagnostics::SKY_P0001,
     );
@@ -116,7 +116,7 @@ fn bare_list_lambda_param_is_parse_rejected() {
 #[test]
 fn single_ctor_union_def_param_is_sky_t0015() {
     assert_gate(
-        "l0105_neg_money_ctor_param",
+        "neg_money_ctor_param",
         "l0105_neg_money_ctor_param_emit",
         sky_diagnostics::SKY_T0015,
     );

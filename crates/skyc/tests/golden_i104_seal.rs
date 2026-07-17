@@ -48,7 +48,7 @@ fn f1_multiuse_let_clone() {
     let entry = root
         .join("tests")
         .join("golden")
-        .join("i104_multiuse_let_clone")
+        .join("multiuse_let_clone")
         .join("Main.sky");
     let out = std::env::temp_dir().join("skyc_i104_multiuse_let_clone_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -60,11 +60,11 @@ fn f1_multiuse_let_clone() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for i104_multiuse_let_clone: {:?}",
+        "skyc build must succeed for multiuse_let_clone: {:?}",
         built.err()
     );
 
-    let outcome = support::build_and_run_emitted("i104_multiuse_let_clone", &out);
+    let outcome = support::build_and_run_emitted("multiuse_let_clone", &out);
     assert_eq!(
         outcome.exit_code,
         Some(0),
@@ -92,7 +92,7 @@ fn f2_closure_capture_reuse() {
     let entry = root
         .join("tests")
         .join("golden")
-        .join("i112_closure_capture_reuse")
+        .join("closure_capture_reuse")
         .join("Main.sky");
     let out = std::env::temp_dir().join("skyc_i112_closure_capture_reuse_e2e");
     let _ = std::fs::remove_dir_all(&out);
@@ -104,11 +104,11 @@ fn f2_closure_capture_reuse() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for i112_closure_capture_reuse: {:?}",
+        "skyc build must succeed for closure_capture_reuse: {:?}",
         built.err()
     );
 
-    let outcome = support::build_and_run_emitted("i112_closure_capture_reuse", &out);
+    let outcome = support::build_and_run_emitted("closure_capture_reuse", &out);
     assert_eq!(
         outcome.exit_code,
         Some(0),
