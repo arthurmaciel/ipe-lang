@@ -7,7 +7,7 @@ module Main exposing (main)
 -- T3 applied to the thunk body rewrites `Var(field)` → `CloneVar(field)` so
 -- the thunk is `Fn` (re-callable) and both decodes succeed.
 
-import Sky.Core.Json.Decode as JsonDec
+import Ipe.Json.Decode as JsonDec
 
 
 main =

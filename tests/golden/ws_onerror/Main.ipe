@@ -8,12 +8,12 @@ module Main exposing (main)
 -- `render_type` only matched `[WebSocketServer, Str]` (onMessage), so onError
 -- fell to the generic `Box<dyn Fn>` arm and skyc-0 then cargo-failed E0308.
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Task as Task
-import Sky.Core.Error exposing (Error)
-import Sky.Http.Server as Server
-import Sky.Http.Server exposing (Request, Response)
-import Sky.Http.Server.WebSocket as Ws
+import Ipe.Prelude exposing (..)
+import Ipe.Task as Task
+import Ipe.Error exposing (Error)
+import Ipe.Http.Server as Server
+import Ipe.Http.Server exposing (Request, Response)
+import Ipe.Http.Server.WebSocket as Ws
 
 handleWs : Request -> Task Error Response
 handleWs req =

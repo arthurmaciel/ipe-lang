@@ -1,22 +1,22 @@
 module View exposing (view, viewElement)
 
--- The SHARED view module — used by Sky.Live, Sky.Tui, and
--- Sky.Webview entry points alike. `viewElement` is the backend-
+-- The SHARED view module — used by Ipe.Live, Ipe.Tui, and
+-- Ipe.Webview entry points alike. `viewElement` is the backend-
 -- agnostic Element tree; `view` wraps it with `Ui.layout` for the
 -- HTML-shaped backends (Live + Webview). Tui consumes
 -- `viewElement` directly.
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.List as List
-import Sky.Core.String as String
-import Sky.Core.ToString as ToString
-import Std.Ui as Ui
-import Std.Ui exposing (Element)
-import Std.Ui.Background as Background
-import Std.Ui.Border as Border
-import Std.Ui.Chart as Chart
-import Std.Ui.Font as Font
-import Std.Ui.Input as Input
-import Std.Ui.Region as Region
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.ToString as ToString
+import Ipe.Ui as Ui
+import Ipe.Ui exposing (Element)
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Chart as Chart
+import Ipe.Ui.Font as Font
+import Ipe.Ui.Input as Input
+import Ipe.Ui.Region as Region
 import State exposing (..)
 
 
@@ -75,8 +75,8 @@ viewElement model =
         ]
 
 
--- HTML-shaped wrapper — feeds the Sky.Live + Sky.Webview entry
--- points (both consume Html via Ui.layout). Sky.Tui takes
+-- HTML-shaped wrapper — feeds the Ipe.Live + Ipe.Webview entry
+-- points (both consume Html via Ui.layout). Ipe.Tui takes
 -- `viewElement` directly.
 view : Model -> any
 view model =

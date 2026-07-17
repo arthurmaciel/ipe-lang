@@ -1,12 +1,12 @@
 module Main exposing (main)
 
--- Compiled-source `Std.Css` (#47) end-to-end: benign rendering + the three
+-- Compiled-source `Ipe.Css` (#47) end-to-end: benign rendering + the three
 -- CSS-injection vectors the ratified security posture must neutralise at
 -- CONSTRUCTION (value gate, property-name gate, selector gate) with the
--- `stripStyleClose` breakout floor. `Std.Css` is compiled pure Sky; only the
--- four `Sky.Core.CssSafety` leaf kernels are Rust.
-import Sky.Core.Prelude exposing (..)
-import Std.Css exposing (..)
+-- `stripStyleClose` breakout floor. `Ipe.Css` is compiled pure Sky; only the
+-- four `Ipe.CssSafety` leaf kernels are Rust.
+import Ipe.Prelude exposing (..)
+import Ipe.Css exposing (..)
 
 
 -- Benign: renders exactly (Go byte-parity — same pure-Sky fold).

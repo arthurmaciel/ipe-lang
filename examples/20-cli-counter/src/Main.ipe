@@ -1,9 +1,9 @@
 module Main exposing (main)
 
 {-|
-20-cli-counter — first end-to-end demo of Sky.Cli, the line-oriented
+20-cli-counter — first end-to-end demo of Ipe.Cli, the line-oriented
 TEA backend. Same `init / update / view / subscriptions` shape as
-Sky.Live, plus a CLI-specific `onLine : String -> Msg` that maps
+Ipe.Live, plus a CLI-specific `onLine : String -> Msg` that maps
 each stdin line to a Msg.
 
 Run:
@@ -16,13 +16,13 @@ Then type:
     q     quit (or Ctrl-D)
 -}
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.String as String
-import Sky.Core.System as System
-import Sky.Core.Task as Task
-import Std.Cli as Cli
-import Std.Cmd as Cmd
-import Std.Sub as Sub
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.System as System
+import Ipe.Task as Task
+import Ipe.Cli as Cli
+import Ipe.Cmd as Cmd
+import Ipe.Sub as Sub
 
 
 type Msg

@@ -1,8 +1,8 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Io as Io
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Io as Io
+import Ipe.Log exposing (println)
 
 
 -- AUD-04 witness 4 (TaskSeqSync use-after-move — the one AUD-04 site with

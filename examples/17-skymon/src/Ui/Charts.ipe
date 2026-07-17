@@ -1,10 +1,10 @@
 module Ui.Charts exposing (sparkline, statusBar)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.List as List
-import Sky.Core.String as String
-import Std.Html exposing (..)
-import Std.Html.Attributes exposing (..)
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Html exposing (..)
+import Ipe.Html.Attributes exposing (..)
 import State exposing (..)
 
 

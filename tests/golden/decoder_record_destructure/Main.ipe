@@ -6,7 +6,7 @@ module Main exposing (main)
 -- the struct once, so the second `decodeString` read is rustc E0382.
 -- Expected: Alice|Bob
 
-import Sky.Core.Json.Decode as JsonDec
+import Ipe.Json.Decode as JsonDec
 
 
 buildDecoders : () -> { nameDecoder : JsonDec.Decoder String, ageDecoder : JsonDec.Decoder Int }

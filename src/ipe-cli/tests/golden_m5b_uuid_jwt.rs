@@ -1,4 +1,4 @@
-//! `Sky.Core.Uuid` + `Sky.Core.Jwt` gate —
+//! `Ipe.Uuid` + `Ipe.Jwt` gate —
 //! UUID generation/parsing and JWT HS256/RS256 encode/decode.
 //!
 //! Every test compiles a Sky program through `skyc`, builds the emitted Rust

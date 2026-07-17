@@ -1,14 +1,14 @@
-//! Seal gate for the native `Std.Ui.animateRaw` primitive + the compiled
-//! `Std.Ui.Animation` module (26-ui-showcase blocker #175: IPE-N0004 unknown
+//! Seal gate for the native `Ipe.Ui.animateRaw` primitive + the compiled
+//! `Ipe.Ui.Animation` module (26-ui-showcase blocker #175: IPE-N0004 unknown
 //! module `Animation`).
 //!
-//! `Std.Ui.Animation.attribute` is a pure-Sky wrapper over the native
+//! `Ipe.Ui.Animation.attribute` is a pure-Sky wrapper over the native
 //! `Ui.animateRaw : String -> String -> String -> Bool -> Attribute msg` kernel
 //! (`KernelFn::UiAnimateRaw`), which constructs `AttrAnimation name shorthand
 //! keyframes respect`.  This test proves the whole seam:
-//!   * `import Std.Ui.Animation` resolves (no IPE-N0004 regression) — the module
-//!     also transitively pulls in its `Std.Ui.Transition` (`Easing`) and
-//!     `Std.Ui.Transform` (`Prop`/`propsToCss`) sibling ports;
+//!   * `import Ipe.Ui.Animation` resolves (no IPE-N0004 regression) — the module
+//!     also transitively pulls in its `Ipe.Ui.Transition` (`Easing`) and
+//!     `Ipe.Ui.Transform` (`Prop`/`propsToCss`) sibling ports;
 //!   * `Animation.attribute` type-checks against the `Spec` record;
 //!   * the emit lowers to `ui_animate_raw_(<name>, <shorthand>, <keyframes>,
 //!     <respect>)` — the four-arg native helper;
@@ -24,20 +24,20 @@ fn runtime() -> PathBuf {
     ipe::resolve_runtime().expect("runtime must resolve for animation seal test")
 }
 
-/// A minimal Std.Ui program exercising `Animation.attribute`. NOTE: the
+/// A minimal Ipe.Ui program exercising `Animation.attribute`. NOTE: the
 /// `keyframes` list is left EMPTY deliberately. A populated keyframe list routes
-/// through `Std.Ui.Transform.propsToCss`, whose refutable tuple patterns
+/// through `Ipe.Ui.Transform.propsToCss`, whose refutable tuple patterns
 /// (`( "transform", v ) -> …`) hit the still-unimplemented `IPE-L0115
 /// TuplePatternMatch` lowering — an INDEPENDENT blocker from this
 /// module's resolution + kernel wiring. Empty keyframes still fully
 /// exercise `Ui.animateRaw` (name + shorthand tail + empty body + respect flag),
-/// so the seal this test guards — `Std.Ui.Animation` resolves and its
+/// so the seal this test guards — `Ipe.Ui.Animation` resolves and its
 /// `attribute` lowers to the native kernel — is proven without depending on it.
 const MAIN_SKY: &str = r#"module Main exposing (main)
 
-import Std.Html as Html
-import Std.Ui as Ui
-import Std.Ui.Animation as Animation
+import Ipe.Html as Html
+import Ipe.Ui as Ui
+import Ipe.Ui.Animation as Animation
 
 
 main =
@@ -75,26 +75,26 @@ fn build_animation_project(slot: &str) -> (PathBuf, Result<(), ipe::CliError>) {
     (emit, res)
 }
 
-/// `Std.Ui.Animation` resolves (no IPE-N0004), type-checks, and the emit lowers
+/// `Ipe.Ui.Animation` resolves (no IPE-N0004), type-checks, and the emit lowers
 /// `Animation.attribute` to the four-arg `ui_animate_raw_` native helper.
 ///
-/// Now supported: `Std.Ui.Transform`'s refutable tuple `case`s
+/// Now supported: `Ipe.Ui.Transform`'s refutable tuple `case`s
 /// (`( "transform", v ) -> …` — a VARIABLE tuple scrutinee with a string-literal
 /// column) now lower to a native `match pair { (__sg0, v) if __sg0.as_str() ==
 /// "transform" => … }` (a by-value binder + `as_str()` guard), so the whole
-/// `import Std.Ui.Animation` → `Std.Ui.Transform` seam builds end to end.
+/// `import Ipe.Ui.Animation` → `Ipe.Ui.Transform` seam builds end to end.
 #[test]
 #[allow(clippy::expect_used)]
 fn animation_module_resolves_and_emits_kernel() {
     let (emit, res) = build_animation_project("emit");
     assert!(
         res.is_ok(),
-        "skyc build with `import Std.Ui.Animation` must succeed \
+        "skyc build with `import Ipe.Ui.Animation` must succeed \
          (native animateRaw + compiled module): {:?}",
         res.err()
     );
 
-    // The compiled `Std.Ui.Animation` module lowers to its OWN Rust file under
+    // The compiled `Ipe.Ui.Animation` module lowers to its OWN Rust file under
     // `src/ipe_mods/` (per-Sky-module split), so scan the WHOLE emitted Sky-side
     // tree (main.rs + ipe_mods/*.rs) for the helper call.
     let emitted = support::read_all_emitted_src(&emit);

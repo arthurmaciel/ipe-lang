@@ -1,14 +1,14 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.String as String
-import Std.Html exposing (..)
-import Std.Html.Attributes exposing (..)
-import Std.Css exposing (..)
-import Std.Live exposing (app, route)
-import Std.Html.Events exposing (onClick)
-import Std.Cmd as Cmd
-import Std.Sub as Sub
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.Html exposing (..)
+import Ipe.Html.Attributes exposing (..)
+import Ipe.Css exposing (..)
+import Ipe.Live exposing (app, route)
+import Ipe.Html.Events exposing (onClick)
+import Ipe.Cmd as Cmd
+import Ipe.Sub as Sub
 import Counter exposing (Counter)
 
 -- ======================================================

@@ -22,13 +22,13 @@ use std::time::{Duration, Instant};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-/// The same minimal `Sky.Http.Server` fixture `watch_integration.rs` uses:
+/// The same minimal `Ipe.Http.Server` fixture `watch_integration.rs` uses:
 /// long-running (never exits on its own), reads its port from
 /// `IPE_SERVER_PORT` (what `watch::child_env` injects from `--port`).
 fn server_fixture(body: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
-         import Sky.Http.Server as Server\n\n\
+         import Ipe.Http.Server as Server\n\n\
          main =\n    \
              let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr \"IPE_SERVER_PORT\" \"8080\"))\n    \
              in\n    \

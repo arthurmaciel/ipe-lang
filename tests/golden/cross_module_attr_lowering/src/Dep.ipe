@@ -1,8 +1,8 @@
 module Dep exposing (composed)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Task as Task
-import Sky.Core.Error exposing (Error)
+import Ipe.Prelude exposing (..)
+import Ipe.Task as Task
+import Ipe.Error exposing (Error)
 
 
 -- The forwarded capture must be a GENUINELY non-Clone carrier (a `Task`) so

@@ -1,4 +1,4 @@
-//! Std.Html.Attributes family end-to-end golden.
+//! Ipe.Html.Attributes family end-to-end golden.
 //!
 //! Compiles `tests/golden/html_attrs/Main.ipe` through `skyc`, builds the
 //! emitted Rust project with the shared cargo target, runs the binary, and

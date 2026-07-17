@@ -1,10 +1,10 @@
 module Main exposing (main)
 
-import Std.Html exposing (..)
-import Std.Html.Attributes exposing (..)
+import Ipe.Html exposing (..)
+import Ipe.Html.Attributes exposing (..)
 
 
--- #76 batch 2: Std.Html ELEMENT family end-to-end golden. Proves the tag-as-data
+-- #76 batch 2: Ipe.Html ELEMENT family end-to-end golden. Proves the tag-as-data
 -- lowering renders the CORRECT tag for each builder — NOT the pre-batch wrong-
 -- render fold (nav→<p>, h1→<p>, br→<img>, header→<div>, link→<a>). Containers
 -- (nav/h1/table/tr/td/th/thead/tbody/ul/li/section/header/footer/a) open+close

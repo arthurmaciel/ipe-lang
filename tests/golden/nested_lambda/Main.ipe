@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- One declared parameter but a three-arrow type: the body is a nested lambda
 -- chain `\b -> \c -> ...`. The lowerer flattens the chain into a single

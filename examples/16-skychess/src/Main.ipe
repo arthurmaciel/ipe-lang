@@ -1,22 +1,22 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Result as Result
-import Sky.Core.Maybe exposing (..)
-import Sky.Core.List as List
-import Sky.Core.Dict as Dict
-import Sky.Core.String as String
-import Std.Html exposing (..)
-import Std.Html.Attributes exposing (..)
-import Std.Log exposing (println)
-import Std.Live exposing (app, route)
-import Std.Html.Events exposing (onClick)
-import Std.Cmd as Cmd
-import Std.Sub as Sub
-import Std.Time as Time
+import Ipe.Prelude exposing (..)
+import Ipe.Result as Result
+import Ipe.Maybe exposing (..)
+import Ipe.List as List
+import Ipe.Dict as Dict
+import Ipe.String as String
+import Ipe.Html exposing (..)
+import Ipe.Html.Attributes exposing (..)
+import Ipe.Log exposing (println)
+import Ipe.Live exposing (app, route)
+import Ipe.Html.Events exposing (onClick)
+import Ipe.Cmd as Cmd
+import Ipe.Sub as Sub
+import Ipe.Time as Time
 import State exposing (..)
 import Lib.Games as Games
-import Sky.Core.Error as Error exposing (Error(..), ErrorKind(..))
+import Ipe.Error as Error exposing (Error(..), ErrorKind(..))
 import Lib.GameLogic as Logic
 import Chess.Board as Board
 import Chess.Piece exposing (..)
@@ -92,7 +92,7 @@ view model =
 -- Only subscribe to the AI tick when it's actually the AI's turn and
 -- the game is live. An unconditional `Time.every 500 ComputerMove`
 -- fires the message every 500ms regardless of game state — on
--- Sky.Live <= 1.0.0 the runtime already suppresses byte-identical
+-- Ipe.Live <= 1.0.0 the runtime already suppresses byte-identical
 -- views, but we also want the AI to not burn dispatch cycles on the
 -- human's turn, while the game is finished, or on the home page.
 subscriptions model =

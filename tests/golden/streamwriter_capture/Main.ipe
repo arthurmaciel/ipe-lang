@@ -12,9 +12,9 @@ module Main exposing (main)
 -- This fixture asserts skyc exit-0; the cargo/runtime layer is covered by
 -- the 30-sse-server-demo sweep entry.
 
-import Sky.Http.Server as Server
-import Sky.Http.Server.Stream as Stream
-import Sky.Core.Task as Task
+import Ipe.Http.Server as Server
+import Ipe.Http.Server.Stream as Stream
+import Ipe.Task as Task
 
 emitTick : Stream.StreamWriter -> Int -> Task Error ()
 emitTick writer n =

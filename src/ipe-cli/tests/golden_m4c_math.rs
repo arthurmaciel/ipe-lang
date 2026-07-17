@@ -1,4 +1,4 @@
-//! `Sky.Core.Math` parity gate — two classes of golden in one file:
+//! `Ipe.Math` parity gate — two classes of golden in one file:
 //!
 //! 1. **Divergence from Sky**. `Math.min` / `Math.max` are polymorphic
 //!    `comparable` (`a -> a -> a`, Elm `Basics.min`/`max`). Sky routes BOTH

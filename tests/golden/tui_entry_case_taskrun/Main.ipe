@@ -1,17 +1,17 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Task as Task
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Task as Task
+import Ipe.Log exposing (println)
 
 -- Minimal repro for the `24-tui-kitchen-sink` SEAL violation (BACKLOG "Sweep
 -- to green" row): `skyc build` exits 0 but the emitted crate fails `cargo
 -- build` with two INDEPENDENT E0308 errors, both on the entry-point shape
 -- `main = case <Maybe String scrutinee> of Just "literal" -> task |>
--- Task.run; _ -> task |> Task.run` (the Sky.Tui `argv`-dispatch idiom:
+-- Task.run; _ -> task |> Task.run` (the Ipe.Tui `argv`-dispatch idiom:
 -- `case List.head argsList of Just "live" -> Live.app {...} |> Task.run; _
 -- -> Tui.app {...} |> Task.run`, minimised down to plain `println`/`Task`
--- calls so the fixture needs no Sky.Tui / Sky.Live dependency).
+-- calls so the fixture needs no Ipe.Tui / Ipe.Live dependency).
 --
 -- Defect 1 — string-literal ctor-payload sub-pattern: `Just "live"` lowered
 -- the nested literal straight to a bare `Pat::Str`, emitted as

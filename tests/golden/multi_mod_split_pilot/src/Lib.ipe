@@ -1,6 +1,6 @@
 module Lib exposing (Status(..), label, seedAndCount)
 
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 
 {-| A small user enum owned by `Lib` — its Rust name (`LibStatus`) proves the
@@ -23,7 +23,7 @@ label status =
             "seeded"
 
 
-{-| A real `Std.Db` call owned by `Lib` — creates a trivial table, inserts two
+{-| A real `Ipe.Db` call owned by `Lib` — creates a trivial table, inserts two
 typed rows via `SqlValue` params, and counts them. Its presence makes the
 program's `uses_db` true, so the backend injects the synthetic
 `SqlValue`/`SqlField` enums (§2.2) alongside this multi-module split.

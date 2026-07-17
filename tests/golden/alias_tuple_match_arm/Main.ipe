@@ -1,7 +1,7 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 -- #99: an `as`-alias over a dispatch-free tuple inside a by-value ctor
 -- payload. Pre-fix this emitted `Just(w @ (a, b))` over a non-Copy

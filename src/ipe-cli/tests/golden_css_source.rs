@@ -1,7 +1,7 @@
-//! Integration + security golden for compiled-source `Std.Css`.
+//! Integration + security golden for compiled-source `Ipe.Css`.
 //!
-//! `Std.Css` is compiled pure Sky source (`crates/skyc/stdlib/Std/Css.ipe`); its
-//! only Rust surface is the four `Sky.Core.CssSafety` leaf security kernels
+//! `Ipe.Css` is compiled pure Sky source (`crates/skyc/stdlib/Std/Css.ipe`); its
+//! only Rust surface is the four `Ipe.CssSafety` leaf security kernels
 //! (`safeValue` / `safePropName` / `safeSelector` / `stripStyleClose`). These
 //! lock:
 //!   * the module injects → canonicalises-as-stdlib → lowers → emits (a Std-homed
@@ -31,7 +31,7 @@ fn css_manifest() -> PathBuf {
         .join("sky.toml")
 }
 
-/// The compiled-source `Std.Css` resolves + lowers like a user module: the
+/// The compiled-source `Ipe.Css` resolves + lowers like a user module: the
 /// project builds (no `IPE-N0001 stylesheet not found`), the emitted Rust carries
 /// the Std-homed render fold, and it routes free strings through the leaf
 /// security kernels (`safe_value` / `safe_selector`).
@@ -43,21 +43,21 @@ fn css_source_builds_and_injects_leaf_kernels() {
     let res = ipe::build_project(&css_manifest(), &out, &runtime());
     assert!(
         res.is_ok(),
-        "Std.Css project must build (inject → canon-as-stdlib → lower → emit): {:?}",
+        "Ipe.Css project must build (inject → canon-as-stdlib → lower → emit): {:?}",
         res.err()
     );
 
-    // The compiled `Std.Css` module lowers to its OWN Rust file under
+    // The compiled `Ipe.Css` module lowers to its OWN Rust file under
     // `src/ipe_mods/` once the per-Sky-module split
-    // fires — this program has two distinct homes (`Main` + `Std.Css`). Scan
+    // fires — this program has two distinct homes (`Main` + `Ipe.Css`). Scan
     // the WHOLE emitted Sky-side tree (main.rs + ipe_mods/*.rs) so both the
     // presence assertions (render fold + leaf security kernels) and the
     // negative retired-enum assertion hold wherever the split placed the code.
     let emitted = support::read_all_emitted_src(&out);
-    // The compiled Std.Css render fold is homed + prefixed as compiled source.
+    // The compiled Ipe.Css render fold is homed + prefixed as compiled source.
     assert!(
         emitted.contains("std_css_stylesheet") && emitted.contains("std_css_render_rule"),
-        "emitted Rust must carry the compiled Std.Css render fold"
+        "emitted Rust must carry the compiled Ipe.Css render fold"
     );
     // Free-string entries route through the leaf security kernels (the SOLE Rust
     // surface). Their presence proves the gate is wired, not bypassed.
@@ -84,7 +84,7 @@ fn css_e2e_neutralises_injection() {
     let _ = std::fs::remove_dir_all(&out);
 
     let res = ipe::build_project(&css_manifest(), &out, &runtime());
-    assert!(res.is_ok(), "Std.Css build must succeed: {:?}", res.err());
+    assert!(res.is_ok(), "Ipe.Css build must succeed: {:?}", res.err());
 
     let outcome = support::build_and_run_emitted("spike-css-source", &out);
     assert_eq!(outcome.exit_code, Some(0), "emitted binary must exit 0");

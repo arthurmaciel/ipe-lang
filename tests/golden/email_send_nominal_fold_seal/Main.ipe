@@ -1,11 +1,11 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Task as Task
-import Std.Email as Email
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Task as Task
+import Ipe.Email as Email
+import Ipe.Log exposing (println)
 
--- SEAL fixture for backlog #210 "Std.Email family": a typed `EmailMessage`
+-- SEAL fixture for backlog #210 "Ipe.Email family": a typed `EmailMessage`
 -- built via `defaultMessage` + `with*` builders is fed DIRECTLY to
 -- `Email.send`, and the `EmailProvider` ADT is constructed via its `Resend`
 -- ctor. `sky_lower` folds the message / attachment / provider record + ADT
@@ -17,9 +17,9 @@ import Std.Log exposing (println)
 --
 -- The values are let-bound WITHOUT explicit `: Email.EmailMessage` annotations
 -- (an explicit alias annotation on a binding keeps the alias nominal instead of
--- expanding it — a pre-existing compiler limitation shared with `Std.Csv`, not
--- specific to `Std.Email`); inference flows the structural shape that folds to
--- the runtime struct, exactly as the `Std.Csv` seal fixture does.
+-- expanding it — a pre-existing compiler limitation shared with `Ipe.Csv`, not
+-- specific to `Ipe.Email`); inference flows the structural shape that folds to
+-- the runtime struct, exactly as the `Ipe.Csv` seal fixture does.
 --
 -- `IPE_EMAIL_DRY_RUN=1` short-circuits the provider and returns a synthetic id
 -- so the run needs no network; the printed line is `sent` on success.

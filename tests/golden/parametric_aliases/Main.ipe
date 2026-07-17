@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- A parametric type alias: `Pair a` is a homogeneous 2-tuple. The parameter
 -- `a` is substituted at every use site, then the alias is expanded away.

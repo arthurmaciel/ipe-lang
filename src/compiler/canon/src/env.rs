@@ -20,7 +20,7 @@ use ipe_kernels::StdlibKernel;
 /// `QUALIFIERS` table in [`Env::install_prelude_qualifiers`]).
 ///
 /// This is the single source of truth consulted by the canonicaliser when it
-/// registers a user's `import Sky.… as Alias` (or the Elm last-segment default)
+/// registers a user's `import Ipe.… as Alias` (or the Elm last-segment default)
 /// so the alias resolves to the same kernel members as the canonical qualifier.
 /// It is the Rust-port counterpart of the upstream Haskell
 /// `Sky.Canonicalise.Environment.staticKernelModules` (path → canonical name).
@@ -38,45 +38,45 @@ use ipe_kernels::StdlibKernel;
 ///   import path, so a newly-added kernel module cannot ship without a way for
 ///   users to `import … as Alias` it.
 ///
-/// Only real `Sky.*` / `Std.*` module paths belong here — the first segment must
-/// be `Sky` or `Std`, matching the guard in `resolve::register_stdlib_import_aliases`.
+/// Only real `Ipe.*` module paths belong here — the first segment must
+/// be `Ipe`, matching the guard in `resolve::register_stdlib_import_aliases`.
 pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
-    // ── Sky.Core.* pure + effect modules ────────────────────────────────────
-    (&["Sky", "Core", "Basics"], "Basics"),
-    (&["Sky", "Core", "Prelude"], "Basics"), // Prelude re-exports Basics
-    (&["Sky", "Core", "String"], "String"),
-    (&["Sky", "Core", "Char"], "Char"),
-    (&["Sky", "Core", "List"], "List"),
-    (&["Sky", "Core", "Maybe"], "Maybe"),
-    (&["Sky", "Core", "Result"], "Result"),
-    (&["Sky", "Core", "Error"], "Error"),
-    (&["Sky", "Core", "Math"], "Math"),
-    (&["Sky", "Core", "Dict"], "Dict"),
-    (&["Sky", "Core", "Set"], "Set"),
-    (&["Sky", "Core", "Bytes"], "Bytes"),
-    (&["Sky", "Core", "Encoding"], "Encoding"),
-    (&["Sky", "Core", "Crypto"], "Crypto"),
-    (&["Sky", "Core", "Uuid"], "Uuid"),
-    // `Sky.Core.Secret` — opaque secret-string wrapper.
-    (&["Sky", "Core", "Secret"], "Secret"),
-    // `Sky.Core.CssSafety` — the four Std.Css leaf security kernels. This
-    // is a KERNEL qualifier (imported by the compiled-source `Std.Css`); `Std.Css`
+    // ── Ipe.* pure + effect modules ────────────────────────────────────
+    (&["Ipe", "Basics"], "Basics"),
+    (&["Ipe", "Prelude"], "Basics"), // Prelude re-exports Basics
+    (&["Ipe", "String"], "String"),
+    (&["Ipe", "Char"], "Char"),
+    (&["Ipe", "List"], "List"),
+    (&["Ipe", "Maybe"], "Maybe"),
+    (&["Ipe", "Result"], "Result"),
+    (&["Ipe", "Error"], "Error"),
+    (&["Ipe", "Math"], "Math"),
+    (&["Ipe", "Dict"], "Dict"),
+    (&["Ipe", "Set"], "Set"),
+    (&["Ipe", "Bytes"], "Bytes"),
+    (&["Ipe", "Encoding"], "Encoding"),
+    (&["Ipe", "Crypto"], "Crypto"),
+    (&["Ipe", "Uuid"], "Uuid"),
+    // `Ipe.Secret` — opaque secret-string wrapper.
+    (&["Ipe", "Secret"], "Secret"),
+    // `Ipe.CssSafety` — the four Ipe.Css leaf security kernels. This
+    // is a KERNEL qualifier (imported by the compiled-source `Ipe.Css`); `Ipe.Css`
     // itself stays OUT of this table (it is compiled source, registered in skyc's
     // `COMPILED_STD_MODULES`), so the `compiled_vs_kernel_qualifier_disjoint`
     // invariant holds.
-    (&["Sky", "Core", "CssSafety"], "CssSafety"),
-    (&["Sky", "Core", "Jwt"], "Jwt"),
-    (&["Sky", "Core", "Json", "Encode"], "JsonEnc"),
-    (&["Sky", "Core", "Json", "Decode"], "JsonDec"),
-    (&["Sky", "Core", "Json", "Decode", "Pipeline"], "JsonDecP"),
-    (&["Sky", "Core", "Task"], "Task"),
-    (&["Sky", "Core", "Io"], "Io"),
-    (&["Sky", "Core", "Time"], "Time"),
-    (&["Sky", "Core", "System"], "System"),
-    (&["Sky", "Core", "Random"], "Random"),
-    (&["Sky", "Core", "File"], "File"),
-    (&["Sky", "Core", "Http"], "Http"),
-    // NOTE — `Sky.Core.Path` and `Sky.Core.Regex` are DELIBERATELY
+    (&["Ipe", "CssSafety"], "CssSafety"),
+    (&["Ipe", "Jwt"], "Jwt"),
+    (&["Ipe", "Json", "Encode"], "JsonEnc"),
+    (&["Ipe", "Json", "Decode"], "JsonDec"),
+    (&["Ipe", "Json", "Decode", "Pipeline"], "JsonDecP"),
+    (&["Ipe", "Task"], "Task"),
+    (&["Ipe", "Io"], "Io"),
+    (&["Ipe", "Time"], "Time"),
+    (&["Ipe", "System"], "System"),
+    (&["Ipe", "Random"], "Random"),
+    (&["Ipe", "File"], "File"),
+    (&["Ipe", "Http"], "Http"),
+    // NOTE — `Ipe.Path` and `Ipe.Regex` are DELIBERATELY
     // absent here. They are COMPILED-SOURCE Layer-3 modules (registered in
     // `ipe::stdlib::COMPILED_STD_MODULES`): their members are point-free
     // `Ffi.kernel "Path_*"` / `"Regex_*"` aliases that `detect_kernel_alias`
@@ -84,43 +84,39 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     // (runtime: `ipe_runtime::{path,regex_kernel}::*`). A module is EITHER a
     // kernel qualifier here OR compiled-source — never both
     // (`compiled_vs_kernel_qualifier_disjoint`), so these stay out of this table.
-    // ── Sky.Http.* server surface ───────────────────────────────────────────
-    (&["Sky", "Http", "Server"], "Server"),
-    (&["Sky", "Http", "Middleware"], "Middleware"),
-    (&["Sky", "Http", "RateLimit"], "RateLimit"),
-    // ── Std.* modules ───────────────────────────────────────────────────────
-    (&["Std", "Log"], "Log"),
-    (&["Std", "Cmd"], "Cmd"),
-    (&["Std", "Sub"], "Sub"),
-    (&["Std", "Db"], "Db"),
-    (&["Std", "Db", "Decode"], "Db.Decode"),
-    (&["Std", "Db", "Sql"], "Sql"), // SqlFragment builder
-    (&["Std", "Time"], "Time"),
-    (&["Std", "System"], "System"),
-    (&["Std", "Ui"], "Ui"),
-    (&["Std", "Ui", "Background"], "Background"),
-    (&["Std", "Ui", "Border"], "Border"),
-    (&["Std", "Ui", "Font"], "Font"),
-    (&["Std", "Ui", "Region"], "Region"),
-    (&["Std", "Ui", "Input"], "Input"),
-    (&["Std", "Ui", "Lazy"], "Lazy"),
-    (&["Std", "Ui", "Keyed"], "Keyed"),   // sky-key diff identity
-    (&["Std", "Decimal"], "Decimal"),     // arbitrary-precision decimal arithmetic
-    (&["Std", "Html"], "Html"),
-    (&["Std", "Html", "Attributes"], "Attr"),
-    (&["Std", "Html", "Events"], "Event"),
-    (&["Std", "Live"], "Live"),
-    (&["Std", "Tui"], "Tui"),
-    (&["Std", "Webview"], "Webview"),
+    // ── Ipe.Http.* server surface ───────────────────────────────────────────
+    (&["Ipe", "Http", "Server"], "Server"),
+    (&["Ipe", "Http", "Middleware"], "Middleware"),
+    (&["Ipe", "Http", "RateLimit"], "RateLimit"),
+    // ── Ipe.* modules ───────────────────────────────────────────────────────
+    (&["Ipe", "Log"], "Log"),
+    (&["Ipe", "Cmd"], "Cmd"),
+    (&["Ipe", "Sub"], "Sub"),
+    (&["Ipe", "Db"], "Db"),
+    (&["Ipe", "Db", "Decode"], "Db.Decode"),
+    (&["Ipe", "Db", "Sql"], "Sql"), // SqlFragment builder
+    (&["Ipe", "Ui"], "Ui"),
+    (&["Ipe", "Ui", "Background"], "Background"),
+    (&["Ipe", "Ui", "Border"], "Border"),
+    (&["Ipe", "Ui", "Font"], "Font"),
+    (&["Ipe", "Ui", "Region"], "Region"),
+    (&["Ipe", "Ui", "Input"], "Input"),
+    (&["Ipe", "Ui", "Lazy"], "Lazy"),
+    (&["Ipe", "Ui", "Keyed"], "Keyed"),   // sky-key diff identity
+    (&["Ipe", "Decimal"], "Decimal"),     // arbitrary-precision decimal arithmetic
+    (&["Ipe", "Html"], "Html"),
+    (&["Ipe", "Html", "Attributes"], "Attr"),
+    (&["Ipe", "Html", "Events"], "Event"),
+    (&["Ipe", "Live"], "Live"),
+    (&["Ipe", "Tui"], "Tui"),
+    (&["Ipe", "Webview"], "Webview"),
     // ── Effect stdlib modules ───────────────────────────────────────────────
-    (&["Std", "Cli"], "Cli"),
-    (&["Sky", "Cli"], "Cli"),
-    (&["Std", "Auth"], "Auth"),
-    (&["Sky", "Auth"], "Auth"),
-    (&["Sky", "Http", "Server", "Stream"], "Stream"),
-    (&["Sky", "Core", "Http", "Stream"], "HttpStream"),
-    // Sky.Http.Server.WebSocket (12 kernels).
-    (&["Sky", "Http", "Server", "WebSocket"], "Ws"),
+    (&["Ipe", "Cli"], "Cli"),
+    (&["Ipe", "Auth"], "Auth"),
+    (&["Ipe", "Http", "Server", "Stream"], "Stream"),
+    (&["Ipe", "Http", "Stream"], "HttpStream"),
+    // Ipe.Http.Server.WebSocket (12 kernels).
+    (&["Ipe", "Http", "Server", "WebSocket"], "Ws"),
 ];
 
 /// Where a (possibly qualified) variable resolves to.
@@ -143,7 +139,7 @@ pub enum VarHome {
 /// One origin of a wildcard-exposed stdlib value member.
 ///
 /// Records the resolved kernel [`VarHome`] together with the user's import
-/// `dep_path` (e.g. `["Std", "Html"]`) so an ambiguous bare use can name every
+/// `dep_path` (e.g. `["Ipe", "Html"]`) so an ambiguous bare use can name every
 /// contributing module in its diagnostic without re-deriving the path.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct WildcardOrigin {
@@ -189,7 +185,7 @@ pub struct Env {
     ///
     /// Populated when `import Foo as Alias` (user-module import) registers
     /// `dep.ctors` under the alias qualifier.  Lets `Alias.CtorName` resolve
-    /// to `VarCtor` — needed for compiled-source ADTs like `Std.Money`'s
+    /// to `VarCtor` — needed for compiled-source ADTs like `Ipe.Money`'s
     /// `Currency` constructors accessed as `Money.USD`, `Money.EUR`, etc.
     pub qual_ctors: Rc<BTreeMap<Symbol, BTreeMap<Symbol, CtorHome>>>,
     /// **Low-priority wildcard-exposed stdlib value members.**
@@ -256,12 +252,12 @@ impl Env {
         // Db ADTs.
         let sqlvalue = interner.intern("SqlValue")?;
         let sqlfield = interner.intern("SqlField")?;
-        // Sky.Core.Http.Stream ADTs (HttpStream kernel qualifier — not a compiled
+        // Ipe.Http.Stream ADTs (HttpStream kernel qualifier — not a compiled
         // source module, so their constructors are never registered via
         // `build_module_exports`; they must be pre-registered here instead).
         let chunkev = interner.intern("ChunkEvent")?;
         let streamid = interner.intern("StreamId")?;
-        // Sky.Core.Error ADTs.
+        // Ipe.Error ADTs.
         //
         // `Error` is both a type name (currently `IpeError = String` in the runtime)
         // and a constructor `Error ErrorKind ErrorInfo` — arity 2.  Registering the
@@ -300,14 +296,14 @@ impl Env {
             // ── SqlField variants ─────────────────────────────────────────────
             ("SetField", sqlfield, 0, 1), // SetField : SqlValue -> SqlField
             ("OmitField", sqlfield, 1, 0), // OmitField : SqlField (nullary)
-            // ── ChunkEvent variants (Sky.Core.Http.Stream) ───────────────────
+            // ── ChunkEvent variants (Ipe.Http.Stream) ───────────────────
             // Chunk : String -> ChunkEvent
             ("Chunk", chunkev, 0, 1),
             // Done : ChunkEvent
             ("Done", chunkev, 1, 0),
             // Errored : Error -> ChunkEvent
             ("Errored", chunkev, 2, 1),
-            // ── StreamId (Sky.Core.Http.Stream) ──────────────────────────────
+            // ── StreamId (Ipe.Http.Stream) ──────────────────────────────
             // StreamId : Int -> StreamId (opaque wrapper used in Stream.open return)
             ("StreamId", streamid, 0, 1),
             // ── Error / ErrorKind ─────────────────────────────────────────────
@@ -599,7 +595,7 @@ impl Env {
                     "traverse",
                 ],
             ),
-            // `Sky.Core.Error` — the real `Error ErrorKind ErrorInfo` ADT.
+            // `Ipe.Error` — the real `Error ErrorKind ErrorInfo` ADT.
             // Message constructors + nullary constructors + `toString`
             // render + `withMessage` modifier + `isRetryable` classification +
             // `withDetails` modifier (attaches the
@@ -624,10 +620,10 @@ impl Env {
                     "withDetails",
                 ],
             ),
-            // `Sky.Core.CssSafety` — the four Std.Css leaf security kernels:
+            // `Ipe.CssSafety` — the four Ipe.Css leaf security kernels:
             // three `String -> Maybe String` parsers + the `String -> String`
             // `<style>`-breakout floor. Imported (and called unqualified) by the
-            // compiled-source `Std.Css`.
+            // compiled-source `Ipe.Css`.
             (
                 "CssSafety",
                 &[
@@ -637,7 +633,7 @@ impl Env {
                     "stripStyleClose",
                 ],
             ),
-            // `Std.Log` — qualified form (`import Std.Log as Log`). `println`/
+            // `Ipe.Log` — qualified form (`import Ipe.Log as Log`). `println`/
             // `info`/`debug`/`warn`/`error` are backed; the `*With`
             // variants take Stringify-bounded attrs and stay fail-closed
             // (IPE-L0108) until the Stringify obligation is added.
@@ -655,7 +651,7 @@ impl Env {
                     "errorWith",
                 ],
             ),
-            // `Sky.Core.Math` — `min` / `max` are polymorphic `a -> a -> a`
+            // `Ipe.Math` — `min` / `max` are polymorphic `a -> a -> a`
             // (Elm `Basics.min`/`max` semantics). Wired in the lowerer to the
             // runtime's generic compare. All other Math kernels have concrete
             // monomorphic types (abs : Int->Int, sqrt : Float->Float, etc.).
@@ -715,7 +711,7 @@ impl Env {
                     "compare", "negate", "abs", "sqrt", "min", "max",
                 ],
             ),
-            // `Sky.Core.Dict` — associative map kernels.
+            // `Ipe.Dict` — associative map kernels.
             (
                 "Dict",
                 &[
@@ -723,7 +719,7 @@ impl Env {
                     "values", "toList", "fromList", "map", "foldl", "union",
                 ],
             ),
-            // `Sky.Core.Set` — set kernels.
+            // `Ipe.Set` — set kernels.
             (
                 "Set",
                 &[
@@ -739,7 +735,7 @@ impl Env {
                     "diff",
                 ],
             ),
-            // `Sky.Core.Bytes` — byte-buffer kernels.
+            // `Ipe.Bytes` — byte-buffer kernels.
             (
                 "Bytes",
                 &[
@@ -756,7 +752,7 @@ impl Env {
                     "slice",
                 ],
             ),
-            // `Sky.Core.Encoding` — text encoding helpers.
+            // `Ipe.Encoding` — text encoding helpers.
             (
                 "Encoding",
                 &[
@@ -768,14 +764,14 @@ impl Env {
                     "hexDecode",
                 ],
             ),
-            // `Sky.Core.Json.Encode` — JSON encoder.
+            // `Ipe.Json.Encode` — JSON encoder.
             (
                 "JsonEnc",
                 &[
                     "string", "int", "float", "bool", "null", "list", "object", "encode",
                 ],
             ),
-            // `Sky.Core.Json.Decode` — JSON decoder combinators.
+            // `Ipe.Json.Decode` — JSON decoder combinators.
             (
                 "JsonDec",
                 &[
@@ -798,12 +794,12 @@ impl Env {
                     "map4",
                 ],
             ),
-            // `Sky.Core.Json.Decode.Pipeline` — pipeline-style record decoders.
+            // `Ipe.Json.Decode.Pipeline` — pipeline-style record decoders.
             (
                 "JsonDecP",
                 &["required", "optional", "custom", "requiredAt"],
             ),
-            // `Sky.Core.Crypto` — hashes / HMAC / RSA / AEAD / key-derivation / random.
+            // `Ipe.Crypto` — hashes / HMAC / RSA / AEAD / key-derivation / random.
             (
                 "Crypto",
                 &[
@@ -826,14 +822,14 @@ impl Env {
                     "randomToken",
                 ],
             ),
-            // `Sky.Core.Uuid` — UUID generation and parsing.
+            // `Ipe.Uuid` — UUID generation and parsing.
             // `v4` and `v7` are arity-0 (bare value); `parse` is arity-1.
             ("Uuid", &["v4", "v7", "parse"]),
-            // `Sky.Core.Secret` — opaque secret-string wrapper.
+            // `Ipe.Secret` — opaque secret-string wrapper.
             // `fromString` is the seal; `reveal` is the single greppable
             // un-parse; `redacted` is the explicit "<redacted>" accessor.
             ("Secret", &["fromString", "reveal", "redacted"]),
-            // `Sky.Core.Jwt` — JWT encode/decode for HS256 and RS256,
+            // `Ipe.Jwt` — JWT encode/decode for HS256 and RS256,
             // plus builder API: claims / hs256 / rs256 / subject / issuer /
             // audience / expiresAt / notBefore / issuedAt / jwtId / withClaim /
             // encode / decode.
@@ -860,7 +856,7 @@ impl Env {
                     "decode",
                 ],
             ),
-            // `Sky.Core.Task` — Task combinators + retry surface.
+            // `Ipe.Task` — Task combinators + retry surface.
             (
                 "Task",
                 &[
@@ -890,9 +886,9 @@ impl Env {
                     "withKind",
                 ],
             ),
-            // `Sky.Core.Io` — I/O effects.
+            // `Ipe.Io` — I/O effects.
             ("Io", &["readLine", "writeStdout", "writeStderr"]),
-            // `Sky.Core.Time` — time effects + TEA tick subscription.
+            // `Ipe.Time` — time effects + TEA tick subscription.
             (
                 "Time",
                 &[
@@ -901,12 +897,12 @@ impl Env {
                     "unixMillis",
                     "every",
                     "timeString",
-                    // `Std.Time` pure calendar helpers (Int -> Bool / Int -> Int -> Int).
+                    // `Ipe.Time` pure calendar helpers (Int -> Bool / Int -> Int -> Int).
                     "isLeapYear",
                     "daysInMonth",
                 ],
             ),
-            // `Sky.Core.System` — system effects.
+            // `Ipe.System` — system effects.
             (
                 "System",
                 &[
@@ -923,9 +919,9 @@ impl Env {
                     "exit",
                 ],
             ),
-            // `Sky.Core.Random` — random effects.
+            // `Ipe.Random` — random effects.
             ("Random", &["int", "float", "choice"]),
-            // `Sky.Core.File` — file effects.
+            // `Ipe.File` — file effects.
             (
                 "File",
                 &[
@@ -946,7 +942,7 @@ impl Env {
                     "delete",
                 ],
             ),
-            // `Sky.Core.Http` — outbound HTTP client.
+            // `Ipe.Http` — outbound HTTP client.
             // `get` / `post` / `request` are effect kernels (Task Error
             // HttpResponse); `parseQuery` is a pure kernel (String -> Dict
             // String String); the `with*` builders + `defaultRequest` are ALSO
@@ -985,7 +981,7 @@ impl Env {
             ),
             ("Sub", &["none", "batch", "every", "subscribeTopic", "subscribeWebSocket"]),
             // ── Db kernels ──────────────────────────────────────────────────────
-            // `Std.Db` — database connection + query surface.
+            // `Ipe.Db` — database connection + query surface.
             // All effect-returning kernels (Task Error …) and pure helpers
             // (`getString`, `getInt`, `getBool`, `getField`) are registered here.
             // `SqlValue` / `SqlField` ADT constructors are handled by
@@ -1021,7 +1017,7 @@ impl Env {
                     "defaultMigration",
                 ],
             ),
-            // `Std.Db.Sql` — typed, parameterized WHERE-fragment builder.
+            // `Ipe.Db.Sql` — typed, parameterized WHERE-fragment builder.
             // A `SqlFragment` can only be built through
             // these combinators, so a naive string-concatenated WHERE clause
             // is a type error (`String` where `SqlFragment` is expected) at
@@ -1050,7 +1046,7 @@ impl Env {
                     "like",
                 ],
             ),
-            // `Std.Db.Decode` — row decoder combinators.
+            // `Ipe.Db.Decode` — row decoder combinators.
             // The qualifier string contains a dot ("Db.Decode") which the parser
             // produces correctly for the 3-segment path `Db.Decode.string` — see
             // ipe_parse::parser::ident_expr (qualifier = init.join(".")).
@@ -1061,7 +1057,7 @@ impl Env {
                     "succeed", "fail", "map2", "map3", "map4", "required", "optional",
                 ],
             ),
-            // Sky.Http.Server kernels.
+            // Ipe.Http.Server kernels.
             (
                 "Server",
                 &[
@@ -1090,7 +1086,7 @@ impl Env {
                     "withCookie",
                 ],
             ),
-            // Sky.Http.Middleware kernels.
+            // Ipe.Http.Middleware kernels.
             (
                 "Middleware",
                 &[
@@ -1101,9 +1097,9 @@ impl Env {
                     "withCsrf",
                 ],
             ),
-            // Sky.Http.RateLimit kernels.
+            // Ipe.Http.RateLimit kernels.
             ("RateLimit", &["allow"]),
-            // ── Std.Ui — element / attribute / color / layout builders ──────────
+            // ── Ipe.Ui — element / attribute / color / layout builders ──────────
             // `layout` and `layoutWith` are render kernels; the rest are element /
             // attribute / length / color value builders wired as kernel helpers.
             // All names below resolve as `VarHome::Kernel("Ui", name)` so that
@@ -1224,7 +1220,7 @@ impl Env {
                     "descLabel",
                 ],
             ),
-            // ── Std.Ui.Background sub-module ─────────────────────────────────────
+            // ── Ipe.Ui.Background sub-module ─────────────────────────────────────
             (
                 "Background",
                 &[
@@ -1237,7 +1233,7 @@ impl Env {
                     "linearGradient",
                 ],
             ),
-            // ── Std.Ui.Border sub-module ─────────────────────────────────────────
+            // ── Ipe.Ui.Border sub-module ─────────────────────────────────────────
             (
                 "Border",
                 &[
@@ -1258,7 +1254,7 @@ impl Env {
                     "hoverRounded",
                 ],
             ),
-            // ── Std.Ui.Font sub-module ───────────────────────────────────────────
+            // ── Ipe.Ui.Font sub-module ───────────────────────────────────────────
             (
                 "Font",
                 &[
@@ -1293,7 +1289,7 @@ impl Env {
                     "hoverSize",
                 ],
             ),
-            // ── Std.Ui.Region sub-module ─────────────────────────────────────────
+            // ── Ipe.Ui.Region sub-module ─────────────────────────────────────────
             (
                 "Region",
                 &[
@@ -1307,7 +1303,7 @@ impl Env {
                     "announceUrgently",
                 ],
             ),
-            // ── Std.Ui.Input sub-module ──────────────────────────────────────────
+            // ── Ipe.Ui.Input sub-module ──────────────────────────────────────────
             (
                 "Input",
                 &[
@@ -1331,11 +1327,11 @@ impl Env {
                     "radioRow",
                 ],
             ),
-            // ── Std.Ui.Lazy sub-module ───────────────────────────────────────────
+            // ── Ipe.Ui.Lazy sub-module ───────────────────────────────────────────
             ("Lazy", &["lazy", "lazy2", "lazy3", "lazy4", "lazy5"]),
-            // ── Std.Ui.Keyed — sky-key for diff identity ─────────────────────────
+            // ── Ipe.Ui.Keyed — sky-key for diff identity ─────────────────────────
             ("Keyed", &["column", "row"]),
-            // ── Std.Html — typed HTML element / text surface ─────────────────────
+            // ── Ipe.Html — typed HTML element / text surface ─────────────────────
             // `render` / `escapeHtml` / `escapeAttr` / `attrToString` are render
             // kernels; all element-builder names create `Html msg` values.
             (
@@ -1438,7 +1434,7 @@ impl Env {
                     "linkNode",
                 ],
             ),
-            // ── Std.Html.Attributes alias ────────────────────────────────────────
+            // ── Ipe.Html.Attributes alias ────────────────────────────────────────
             (
                 "Attr",
                 &[
@@ -1469,7 +1465,7 @@ impl Env {
                     "noAttr",
                 ],
             ),
-            // ── Std.Html.Events alias ─────────────────────────────────────────────
+            // ── Ipe.Html.Events alias ─────────────────────────────────────────────
             (
                 "Event",
                 &[
@@ -1487,16 +1483,16 @@ impl Env {
                     "onMsg",
                 ],
             ),
-            // ── Sky.Live / Std.Live app-entry kernels ────────────────────────────
+            // ── Ipe.Live / Ipe.Live app-entry kernels ────────────────────────────
             ("Live", &["app", "appRouted", "route", "renderStatic"]),
-            // ── Sky.Tui / Std.Tui app-entry kernels ──────────────────────────────
+            // ── Ipe.Tui / Ipe.Tui app-entry kernels ──────────────────────────────
             ("Tui", &["app", "program"]),
-            // ── Sky.Webview / Std.Webview app-entry kernel ───────────────────────
+            // ── Ipe.Webview / Ipe.Webview app-entry kernel ───────────────────────
             ("Webview", &["app"]),
             // ── Effect stdlib modules ─────────────────────────────────────────────
-            // Std.Cli / Sky.Cli — line-oriented TEA app-entry (fully wired).
+            // Ipe.Cli / Ipe.Cli — line-oriented TEA app-entry (fully wired).
             ("Cli", &["program"]),
-            // Std.Auth / Sky.Auth — authentication helpers (fail-closed: no lower
+            // Ipe.Auth / Ipe.Auth — authentication helpers (fail-closed: no lower
             // arm yet → IPE-L0108 at lower time; canon registration removes N0004).
             (
                 "Auth",
@@ -1512,11 +1508,11 @@ impl Env {
                     "setRole",
                 ],
             ),
-            // Sky.Http.Server.Stream — server-side streaming HTTP (fail-closed).
+            // Ipe.Http.Server.Stream — server-side streaming HTTP (fail-closed).
             ("Stream", &["stream", "emit", "finish", "withContentType"]),
-            // Sky.Core.Http.Stream — client-side HTTP streaming (fail-closed).
+            // Ipe.Http.Stream — client-side HTTP streaming (fail-closed).
             ("HttpStream", &["open", "forEachChunk", "close", "chunks"]),
-            // Std.Decimal — arbitrary-precision decimal arithmetic.
+            // Ipe.Decimal — arbitrary-precision decimal arithmetic.
             (
                 "Decimal",
                 &[
@@ -1562,7 +1558,7 @@ impl Env {
                     "formatWith",
                 ],
             ),
-            // Sky.Http.Server.WebSocket (12 kernels).
+            // Ipe.Http.Server.WebSocket (12 kernels).
             (
                 "Ws",
                 &[
@@ -1585,7 +1581,7 @@ impl Env {
         // ── Per-qualifier function name aliases ───────────────────────────────
         // Maps a Sky-source alias name (e.g. `htmlRender`) to its canonical
         // kernel function name (e.g. `render`) within a qualifier module, so
-        // `Html.htmlRender` and `Std.Html.htmlRender` both produce
+        // `Html.htmlRender` and `Ipe.Html.htmlRender` both produce
         // `VarKernel { module: html_sym, name: render_sym }` — which lower.rs
         // matches under the same `("Html", "render")` arm.
         //
@@ -1602,7 +1598,7 @@ impl Env {
             ("Html", "htmlAttrToString", "attrToString"),
         ];
 
-        // ── Qualifier module aliases (Std.X / Sky.X → short canonical) ────────
+        // ── Qualifier module aliases (Ipe.X / Sky.X → short canonical) ────────
         // Clones every entry from the canonical qualifier's member map into the
         // alias qualifier key. Because each entry already holds
         // `VarHome::Kernel(canonical_sym, fn_sym)` (NOT the alias key's symbol),
@@ -1614,36 +1610,29 @@ impl Env {
         // `clippy::items_after_statements`.
         const QUALIFIER_ALIASES: &[(&str, &str)] = &[
             // (alias_qualifier, canonical_qualifier)
-            ("Std.Html", "Html"),
-            ("Std.Ui", "Ui"),
-            ("Std.Html.Attributes", "Attr"),
-            ("Std.Html.Events", "Event"),
-            ("Std.Live", "Live"),
-            ("Std.Tui", "Tui"),
-            ("Std.Webview", "Webview"),
-            ("Std.Log", "Log"),
-            ("Sky.Core.Log", "Log"),
-            // Sky.* forms for consistency with other kernel module conventions.
-            ("Sky.Html", "Html"),
-            ("Sky.Ui", "Ui"),
-            ("Sky.Live", "Live"),
-            ("Sky.Tui", "Tui"),
+            ("Ipe.Html", "Html"),
+            ("Ipe.Ui", "Ui"),
+            ("Ipe.Html.Attributes", "Attr"),
+            ("Ipe.Html.Events", "Event"),
+            ("Ipe.Live", "Live"),
+            ("Ipe.Tui", "Tui"),
+            ("Ipe.Webview", "Webview"),
+            ("Ipe.Log", "Log"),
             // ── Effect stdlib module aliases ──────────────────────────────────────
-            ("Sky.Cli", "Cli"),
-            ("Std.Auth", "Auth"),
-            ("Sky.Auth", "Auth"),
-            ("Sky.Http.Server.Stream", "Stream"),
-            ("Sky.Core.Http.Stream", "HttpStream"),
-            // Sky.Http.Server.WebSocket alias.
-            ("Sky.Http.Server.WebSocket", "Ws"),
-            // Std.Ui.Input sub-module.
-            ("Std.Ui.Input", "Input"),
-            // Std.Ui.Lazy sub-module.
-            ("Std.Ui.Lazy", "Lazy"),
-            // Std.Ui.Keyed sub-module.
-            ("Std.Ui.Keyed", "Keyed"),
-            // Std.Decimal — arbitrary-precision decimal arithmetic.
-            ("Std.Decimal", "Decimal"),
+            ("Ipe.Cli", "Cli"),
+            ("Ipe.Auth", "Auth"),
+            ("Ipe.Http.Server.Stream", "Stream"),
+            ("Ipe.Http.Stream", "HttpStream"),
+            // Ipe.Http.Server.WebSocket alias.
+            ("Ipe.Http.Server.WebSocket", "Ws"),
+            // Ipe.Ui.Input sub-module.
+            ("Ipe.Ui.Input", "Input"),
+            // Ipe.Ui.Lazy sub-module.
+            ("Ipe.Ui.Lazy", "Lazy"),
+            // Ipe.Ui.Keyed sub-module.
+            ("Ipe.Ui.Keyed", "Keyed"),
+            // Ipe.Decimal — arbitrary-precision decimal arithmetic.
+            ("Ipe.Decimal", "Decimal"),
         ];
 
         // Build stdlib_index FIRST so all VarHome::Kernel(id, ..)
@@ -1668,12 +1657,12 @@ impl Env {
                 // Thread the pre-resolved id into VarHome so
                 // lower_callee can use the fast path for registered kernels.
                 //
-                // `Std.Html.Events` (`Event`) resolves to the DEDICATED
+                // `Ipe.Html.Events` (`Event`) resolves to the DEDICATED
                 // `Html*` event kernels (`HtmlOnClick` …), which produce
-                // `Std.Html.Attribute msg` (`html_attr`) — the same nominal type
-                // the `Std.Html.Attributes` builders and every element builder's
+                // `Ipe.Html.Attribute msg` (`html_attr`) — the same nominal type
+                // the `Ipe.Html.Attributes` builders and every element builder's
                 // `List (html_attr msg)` slot use. (They must NOT alias to
-                // the `Ui` event kernels, which produce the `Std.Ui.Attribute`
+                // the `Ui` event kernels, which produce the `Ipe.Ui.Attribute`
                 // variant — that makes `button [ onClick Msg ]` fail to unify.) `onMsg`
                 // is the generic alias for `onClick`. All members are registered
                 // under `(Event, name)` in `stdlib_index`, so the id is always

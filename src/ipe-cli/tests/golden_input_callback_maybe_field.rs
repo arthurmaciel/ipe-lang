@@ -1,6 +1,6 @@
-//! Regression lock — THE SEAL for `Std.Ui.Input.*` callback fields.
+//! Regression lock — THE SEAL for `Ipe.Ui.Input.*` callback fields.
 //!
-//! Every `Std.Ui.Input.*` runtime function (`input_text_`, `input_slider_`,
+//! Every `Ipe.Ui.Input.*` runtime function (`input_text_`, `input_slider_`,
 //! `input_checkbox_`, `input_radio_row_`, …) takes its callback fields
 //! (`onChange`, checkbox `icon`) as `Arc<dyn Fn(_) -> _ + Send + Sync + 'static>`.
 //! When the `onChange` field is a BARE `Msg`-constructor it eta-expands to a
@@ -78,7 +78,7 @@ fn build_run_input_callback() -> support::RunOutcome {
 }
 
 /// A bare-constructor `onChange` (and checkbox `icon`) on every
-/// `Std.Ui.Input.*` cfg record must Arc-wrap so the emitted Rust `cargo build`s
+/// `Ipe.Ui.Input.*` cfg record must Arc-wrap so the emitted Rust `cargo build`s
 /// (exit 0) and the binary runs (exit 0), rendering all four Input controls.
 #[test]
 fn input_callback_bare_ctor_arc_wraps_builds_and_runs() {

@@ -1,4 +1,4 @@
-//! End-to-end tests for `Std.Tui` / `Sky.Tui` — `Tui.app`, `Ui.column`,
+//! End-to-end tests for `Ipe.Tui` / `Ipe.Tui` — `Tui.app`, `Ui.column`,
 //! `Ui.el`, `Ui.text`, and `String.fromInt`.
 //!
 //! Non-E2E tests (no `IPE_E2E` required):
@@ -14,7 +14,7 @@
 //!
 //! ## Architecture
 //!
-//! 1. A minimal Sky.Tui counter program is written to a temp dir.
+//! 1. A minimal Ipe.Tui counter program is written to a temp dir.
 //! 2. `ipe::build` compiles it (parse → canon → types → lower → emit Rust).
 //! 3. `oracle::build_rust_binary` runs `cargo build` on the emitted project —
 //!    the shared Cargo target lets crossterm/tokio compile once and be reused.
@@ -55,12 +55,12 @@
 /// `String -> Msg` which conflicts with its use in `update`/`subscriptions`.
 ///
 /// Note: `view` returns `Element Msg` (NOT wrapped in `Ui.layout` → `Html Msg`
-/// like Sky.Live).  The Tui runtime renders the Element tree directly to ANSI
+/// like Ipe.Live).  The Tui runtime renders the Element tree directly to ANSI
 /// cells; there is no HTML step.
 const IPE_TUI_COUNTER: &str = r"module Main exposing (main)
 
-import Std.Tui as Tui
-import Std.Ui as Ui
+import Ipe.Tui as Tui
+import Ipe.Ui as Ui
 
 type alias KeyEvent = { kind : String, value : String }
 
@@ -117,7 +117,7 @@ main =
 // directly.
 const IPE_TUI_PROGRAM_ONKEY_RECORD: &str = r#"module Main exposing (main)
 
-import Std.Tui as Tui
+import Ipe.Tui as Tui
 
 type alias KeyEvent = { kind : String, value : String }
 
@@ -277,7 +277,7 @@ fn tui_onkey_record_typechecks() {
     );
 }
 
-/// Compile-only: the Sky.Tui counter emits a Cargo project with the `"tui"`
+/// Compile-only: the Ipe.Tui counter emits a Cargo project with the `"tui"`
 /// feature in the default feature list, `crossterm` and `unicode-width` deps,
 /// and `ipe_runtime::tui::tui_app_ui` in the `main` function.
 ///

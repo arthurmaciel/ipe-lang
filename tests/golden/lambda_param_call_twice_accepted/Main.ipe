@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- #90 T4 sound-companion of `lambda_param_reuse_gated`: a fn-carrying
 -- LAMBDA parameter CALLED twice (callee position, `f 1` / `f 2`) is

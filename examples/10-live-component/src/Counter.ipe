@@ -1,14 +1,14 @@
 module Counter exposing (..)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.String as String
-import Std.Html exposing (..)
-import Std.Html.Attributes exposing (..)
-import Std.Html.Events exposing (onClick)
-import Std.Cmd as Cmd
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.Html exposing (..)
+import Ipe.Html.Attributes exposing (..)
+import Ipe.Html.Events exposing (onClick)
+import Ipe.Cmd as Cmd
 
 -- ============================================================
--- Counter -- A reusable counter component for Sky.Live
+-- Counter -- A reusable counter component for Ipe.Live
 --
 -- Follows the component protocol:
 --   Counter.Counter  (type = module name)

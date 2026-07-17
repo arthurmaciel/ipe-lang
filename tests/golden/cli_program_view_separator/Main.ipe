@@ -6,7 +6,7 @@ module Main exposing (main)
 -- matching Go's `cliPrintView` contract byte-for-byte. An app that wants
 -- each render on its own line appends "\n" itself, as Go requires.
 
-import Std.Cli as Cli
+import Ipe.Cli as Cli
 
 type Msg
     = LineReceived String

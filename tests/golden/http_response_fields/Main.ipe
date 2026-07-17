@@ -5,8 +5,8 @@ module Main exposing (main)
 --   url field is readable.
 -- * A local HttpResponse record literal (same {body, headers, status} shape
 --   the task_map targets) proves field access compiles for the response side.
-import Sky.Core.Http as Http
-import Sky.Core.Dict as Dict
+import Ipe.Http as Http
+import Ipe.Dict as Dict
 
 
 main =

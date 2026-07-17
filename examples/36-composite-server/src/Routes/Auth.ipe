@@ -1,28 +1,28 @@
 module Routes.Auth exposing (handleRegister, handleLogin, credentialsDecoder)
 
 -- /api/register + /api/login handlers.  Decodes credentials from
--- the POST body, hashes the password, inserts a row via Std.Db,
+-- the POST body, hashes the password, inserts a row via Ipe.Db,
 -- mints a JWT via Auth.mintToken.  Exercises:
---   * Sky.Http.Server response builders (json + withStatus)
---   * Std.Db.insertRow + findOneByField
---   * Sky.Core.Json.{Decode,Encode}
---   * Sky.Core.Time.unixMillis  (via the Server module's caller)
---   * Sky.Core.Crypto.randomToken (for the user's request id audit log)
---   * Std.Log.errorWith for structured failures
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Dict as Dict
-import Sky.Core.String as String
-import Sky.Core.Maybe as Maybe
-import Sky.Core.Task as Task
-import Sky.Core.Time as Time
-import Sky.Core.Error as Error exposing (Error)
-import Sky.Core.Json.Decode as JsonDec
-import Sky.Core.Json.Encode as JsonEnc
-import Sky.Core.Crypto as Crypto
-import Sky.Http.Server as Server
-import Sky.Http.Server exposing (Request, Response)
-import Std.Db as Db
-import Std.Log as Log
+--   * Ipe.Http.Server response builders (json + withStatus)
+--   * Ipe.Db.insertRow + findOneByField
+--   * Ipe.Json.{Decode,Encode}
+--   * Ipe.Time.unixMillis  (via the Server module's caller)
+--   * Ipe.Crypto.randomToken (for the user's request id audit log)
+--   * Ipe.Log.errorWith for structured failures
+import Ipe.Prelude exposing (..)
+import Ipe.Dict as Dict
+import Ipe.String as String
+import Ipe.Maybe as Maybe
+import Ipe.Task as Task
+import Ipe.Time as Time
+import Ipe.Error as Error exposing (Error)
+import Ipe.Json.Decode as JsonDec
+import Ipe.Json.Encode as JsonEnc
+import Ipe.Crypto as Crypto
+import Ipe.Http.Server as Server
+import Ipe.Http.Server exposing (Request, Response)
+import Ipe.Db as Db
+import Ipe.Log as Log
 import Auth
 import State exposing (Config, Credentials, AuthClaims)
 

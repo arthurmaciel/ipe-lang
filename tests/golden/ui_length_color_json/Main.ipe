@@ -1,17 +1,17 @@
 module Main exposing (main)
 
-import Std.Html as Html
-import Std.Ui as Ui
-import Std.Ui.Background as Background
+import Ipe.Html as Html
+import Ipe.Ui as Ui
+import Ipe.Ui.Background as Background
 
 
 -- Registry Phase-D (#69) end-to-end gate. Exercises the newly-schemed
 -- type-constructor kernel families all the way through type -> lower -> emit
 -- -> run:
 --
---   * a Std.Ui `Length` value: `Ui.px 120` (fed to `Ui.width`) and
+--   * a Ipe.Ui `Length` value: `Ui.px 120` (fed to `Ui.width`) and
 --     `Ui.minimum 40 Ui.fill` (fed to `Ui.height`);
---   * a Std.Ui `Color` value: `Ui.rgb 0 128 255` (fed to `Background.color`);
+--   * a Ipe.Ui `Color` value: `Ui.rgb 0 128 255` (fed to `Background.color`);
 --   * a `JsonEnc.Value` program: `JsonEnc.object` / `string` / `int` /
 --     `encode`.
 --

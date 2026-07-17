@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- `eq2` constrains `a` to Equatable (its body compares with `==`). A function is
 -- the one shape `==` cannot handle — Rust derives `PartialEq` for primitives,

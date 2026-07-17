@@ -1,4 +1,4 @@
-//! `Sky.Core.Crypto` parity gate — hashes, HMAC, AEAD, key-derivation,
+//! `Ipe.Crypto` parity gate — hashes, HMAC, AEAD, key-derivation,
 //! constant-time comparison, and random primitives.
 //!
 //! Every test compiles a Sky program through `skyc`, builds the emitted Rust

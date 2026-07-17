@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- #90 Stage 1: `Just f` holding a function used to trip IPE-L0114
 -- unconditionally, making `Maybe.andMap` unusable.

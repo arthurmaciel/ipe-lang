@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- A REFUTABLE `let` destructure: the binder `(Wrap x)` is a constructor pattern,
 -- not an irrefutable variable / wildcard / tuple-of-those. A `let` binder is a

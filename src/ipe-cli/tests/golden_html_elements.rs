@@ -1,4 +1,4 @@
-//! Batch 2 — Std.Html ELEMENT family end-to-end golden.
+//! Batch 2 — Ipe.Html ELEMENT family end-to-end golden.
 //!
 //! Compiles `tests/golden/html_elements/Main.ipe` through `skyc`, builds the
 //! emitted Rust project with the shared cargo target, runs the binary, and

@@ -3,7 +3,7 @@ module Main exposing (main)
 -- #119 seal — List.filterMap : (a -> Maybe b) -> List a -> List b
 -- Applies f to each element, keeps only Just results, unwraps them.
 
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 parsePositive : Int -> Maybe String
 parsePositive n =

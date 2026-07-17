@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- Negative regression: `amount (Money d _) = d` is a refutable param on a
 -- single-constructor union — must still be rejected as IPE-T0015.

@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- NEGATIVE (AUD-12): x has both Append and Number obligations.
 -- Before the fix, skyc defaulted x to Int and accepted silently;

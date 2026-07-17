@@ -1,13 +1,13 @@
 module Page.Settings exposing (viewSettings)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.List as List
-import Sky.Core.Dict as Dict
-import Sky.Core.String as String
-import Sky.Core.Maybe as Maybe
-import Std.Html exposing (..)
-import Std.Html.Attributes exposing (..)
-import Std.Html.Events exposing (onClick, onInput)
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
+import Ipe.Dict as Dict
+import Ipe.String as String
+import Ipe.Maybe as Maybe
+import Ipe.Html exposing (..)
+import Ipe.Html.Attributes exposing (..)
+import Ipe.Html.Events exposing (onClick, onInput)
 import State exposing (..)
 import Lib.Database as Database
 import Ui.Layout as Layout

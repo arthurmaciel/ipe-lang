@@ -1,5 +1,5 @@
-//! End-to-end gate for the type-constructor kernel families: Std.Ui `Length`,
-//! Std.Ui `Color`, and the `Sky.Core.Json.Encode` `Value` encoders.
+//! End-to-end gate for the type-constructor kernel families: Ipe.Ui `Length`,
+//! Ipe.Ui `Color`, and the `Ipe.Json.Encode` `Value` encoders.
 //!
 //! Without a `stdlib_scheme` entry these kernels would be `Ty::Var(u32::MAX)`
 //! scheme holes in `ipe_types::constrain`. Their schemes make
@@ -14,7 +14,7 @@
 //! * `JsonEnc.object`/`string`/`int`/`encode`      → `{"age":36,"name":"ada"}`
 //!   (keys sorted alphabetically — Go `encoding/json` parity)
 //!
-//! Asserts on semantic substrings rather than an exact HTML oracle: the Std.Ui
+//! Asserts on semantic substrings rather than an exact HTML oracle: the Ipe.Ui
 //! HTML skeleton is a sanctioned Go-divergence (see `tests/golden/stdui`),
 //! but the CSS fragments emitted for `Length` / `Color` values and the compact
 //! JSON line are byte-stable and are what this slice actually exercises.

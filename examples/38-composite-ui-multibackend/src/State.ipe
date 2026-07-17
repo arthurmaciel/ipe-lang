@@ -2,12 +2,12 @@ module State exposing (..)
 
 -- examples/38-composite-ui-multibackend — pure types + helpers.
 --
--- No Std.Ui imports here so the per-module HM heap stays well below
--- Limitation #17's heap-exhaustion limit. The heavy Std.Ui unification
+-- No Ipe.Ui imports here so the per-module HM heap stays well below
+-- Limitation #17's heap-exhaustion limit. The heavy Ipe.Ui unification
 -- load lives in the View module.
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.List as List
-import Sky.Core.String as String
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
+import Ipe.String as String
 
 -- A "habit" carries an id, name, and a list of (day-index, done?)
 -- entries. Day index is whole-day count since the Unix epoch (UTC),
@@ -134,7 +134,7 @@ completionRate day habits =
 
 
 -- Past 7 days of completion rates ending on `today`. Used by both
--- the bar chart (Std.Ui.Chart.bar) and the summary line.
+-- the bar chart (Ipe.Ui.Chart.bar) and the summary line.
 recentRates : Int -> List Habit -> List Int
 recentRates today habits =
     List.map (\d -> completionRate d habits) (recentDays today)

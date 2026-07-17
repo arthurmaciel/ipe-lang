@@ -3,7 +3,7 @@ module Main exposing (main)
 -- #111 reconciler fixture: Cli.program is FULLY WIRED.
 -- Expected: skyc-0 AND cargo-0 on the emitted project.
 
-import Std.Cli as Cli
+import Ipe.Cli as Cli
 
 type Msg = GotLine String
 

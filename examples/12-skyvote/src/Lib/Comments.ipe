@@ -1,14 +1,14 @@
 module Lib.Comments exposing (createComment, getComments)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
-import Sky.Core.Crypto as Crypto
-import Sky.Core.String as String
-import Sky.Core.Time as Time
-import Sky.Core.Task as Task
-import Sky.Core.Result as Result
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
+import Ipe.Crypto as Crypto
+import Ipe.String as String
+import Ipe.Time as Time
+import Ipe.Task as Task
+import Ipe.Result as Result
 import Lib.Db as Db
-import Sky.Core.Error as Error exposing (Error)
+import Ipe.Error as Error exposing (Error)
 
 
 createComment : String -> String -> String -> Result Error ()

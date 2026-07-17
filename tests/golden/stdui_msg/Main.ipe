@@ -1,11 +1,11 @@
 module Main exposing (main)
 
-import Std.Html as Html
-import Std.Ui as Ui
-import Std.Ui.Font as Font
+import Ipe.Html as Html
+import Ipe.Ui as Ui
+import Ipe.Ui.Font as Font
 
 
--- Phase-0 Std.Ui regression: `Ui.layout` turbofish must use the enclosing
+-- Phase-0 Ipe.Ui regression: `Ui.layout` turbofish must use the enclosing
 -- function's return type `Html Msg` rather than the hardcoded `()`.
 -- Verifies that `main_static_view` emits `ui_layout::<MainMsg>(...)`,
 -- not `ui_layout::<()>(...)`, and that the HTML renders correctly.

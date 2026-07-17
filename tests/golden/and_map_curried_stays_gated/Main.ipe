@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- #90 T3 residual gate: a CURRIED (arity >= 2) payload function through
 -- `andMap` stays rejected — the IR flattens curried arrows, so the first

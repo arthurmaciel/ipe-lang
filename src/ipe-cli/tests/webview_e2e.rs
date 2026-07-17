@@ -1,4 +1,4 @@
-//! End-to-end tests for `Std.Webview` / `Sky.Webview` — `Webview.app`,
+//! End-to-end tests for `Ipe.Webview` / `Ipe.Webview` — `Webview.app`,
 //! `Ui.layout`, `Ui.column`, `Ui.el`, `Ui.text`, `Ui.button`, and
 //! `String.fromInt`.
 //!
@@ -7,7 +7,7 @@
 //!
 //! ## Architecture
 //!
-//! 1. A minimal Sky.Webview counter program is written to a temp dir.
+//! 1. A minimal Ipe.Webview counter program is written to a temp dir.
 //! 2. `ipe::build` compiles it (parse → canon → types → lower → emit Rust).
 //! 3. `oracle::build_rust_binary` runs `cargo build` on the emitted project —
 //!    the shared Cargo target lets wry/tao/webkit2gtk compile once and be reused.
@@ -33,7 +33,7 @@
 //! IPE_E2E=1 cargo test webview_e2e
 //! ```
 
-/// A minimal Sky.Webview counter app exercising the `Webview.app` wiring.
+/// A minimal Ipe.Webview counter app exercising the `Webview.app` wiring.
 ///
 /// Kernels exercised:
 /// - `Webview.app`   — constrain scheme + 5-field cfg with nested
@@ -47,9 +47,9 @@
 /// - `Cmd.none` / `Sub.none` — baseline TEA primitives
 ///
 /// Note: `view` wraps the Element tree in `Ui.layout [] (...) -> Html Msg`
-/// (unlike Sky.Tui, which renders the Element tree directly to ANSI cells).
+/// (unlike Ipe.Tui, which renders the Element tree directly to ANSI cells).
 /// This is required: the Webview runtime drives the same HTML renderer as
-/// Sky.Live — `Html Msg` is the bridge type.
+/// Ipe.Live — `Html Msg` is the bridge type.
 ///
 /// Note: `init` takes `()` (unit), matching `Ty::Unit` in the constrain
 /// scheme.  Using `Ty::Tuple([])` (empty tuple) is NOT equivalent — the two
@@ -64,10 +64,10 @@
 /// record literal — required by the G4 gate in `emit_webview.rs`.
 const IPE_WEBVIEW_COUNTER: &str = r#"module Main exposing (main)
 
-import Std.Webview as Webview
-import Std.Ui as Ui
-import Std.Cmd as Cmd
-import Std.Sub as Sub
+import Ipe.Webview as Webview
+import Ipe.Ui as Ui
+import Ipe.Cmd as Cmd
+import Ipe.Sub as Sub
 
 type Msg
     = Increment
@@ -147,7 +147,7 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::Pat
     Ok(std::path::PathBuf::from(exe))
 }
 
-/// Tier-A: skyc compiles the Sky.Webview counter, the emitted Rust project
+/// Tier-A: skyc compiles the Ipe.Webview counter, the emitted Rust project
 /// links (with the `webview` + `wry` + `tao` deps from the promoted default
 /// features), and the binary exists.
 ///
@@ -248,10 +248,10 @@ fn webview_counter_tier_b() -> Result<(), BoxError> {
 /// lower gate instead rejects it with `IPE-L0119` at the offending span.
 const IPE_WEBVIEW_LET_BOUND_WINDOW: &str = r#"module Main exposing (main)
 
-import Std.Webview as Webview
-import Std.Ui as Ui
-import Std.Cmd as Cmd
-import Std.Sub as Sub
+import Ipe.Webview as Webview
+import Ipe.Ui as Ui
+import Ipe.Cmd as Cmd
+import Ipe.Sub as Sub
 
 type Msg
     = Increment

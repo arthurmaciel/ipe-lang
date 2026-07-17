@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-import Sky.Core.Encoding as Encoding
+import Ipe.Encoding as Encoding
 
 -- Non-ASCII text under Encoding.base64Encode / hexEncode — GO PARITY (task #55a).
 --
@@ -10,7 +10,7 @@ import Sky.Core.Encoding as Encoding
 -- backends. (The pre-#55a Rust runtime used a Latin-1 char-as-byte model that
 -- truncated 'é' to a single 0xE9 byte; that silent-truncation hole is closed —
 -- codepoints > 255 no longer collapse. Raw-byte round-tripping now lives on
--- Std.Bytes / Vec<u8>.)
+-- Ipe.Bytes / Vec<u8>.)
 --
 -- The leading "café" literal anchors the list's element type to String (the
 -- current Rust-backend milestone cannot infer a list whose elements are all

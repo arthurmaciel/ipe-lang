@@ -1,11 +1,11 @@
 module Main exposing (main)
 
-import Std.Html as Html
-import Std.Ui as Ui
-import Std.Ui.Region as Region
+import Ipe.Html as Html
+import Ipe.Ui as Ui
+import Ipe.Ui.Region as Region
 
 
--- #117 seal — every Std.Ui.Region member used inside Ui.layout.
+-- #117 seal — every Ipe.Ui.Region member used inside Ui.layout.
 -- Asserts: skyc-0 ∧ cargo-0.
 
 

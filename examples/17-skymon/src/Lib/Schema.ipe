@@ -1,8 +1,8 @@
 module Lib.Schema exposing (initDb)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Task as Task
-import Std.Db as Db
+import Ipe.Prelude exposing (..)
+import Ipe.Task as Task
+import Ipe.Db as Db
 import Lib.Database exposing (conn)
 
 

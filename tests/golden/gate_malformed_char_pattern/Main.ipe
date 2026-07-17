@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- An unrecognised escape resolves to backslash + char, two scalar values, which
 -- violates the single-character invariant the char backend relies on. In

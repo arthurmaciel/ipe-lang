@@ -1,7 +1,7 @@
 //! Go-parity `Http` builders: `withUrl` / `withFollowRedirects` /
 //! `withMaxRedirects`.
 //!
-//! The Go reference's `Sky.Core.Http` exposes these three on top of the M5b
+//! The Go reference's `Ipe.Http` exposes these three on top of the M5b
 //! builder set; before this fix they did not exist anywhere in the Ipê kernel
 //! registry or `Http.ipe`. Each is a pure single-field record update on
 //! `HttpRequest`, emitted through `emit_http_builder_call`'s clone-and-reassign

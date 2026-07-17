@@ -3,10 +3,10 @@
 -- ======================================================
 module Ui.Components exposing (badge, statusBadge, ideaCard, statCard, emptyState)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Html exposing (..)
-import Std.Html.Attributes exposing (..)
-import Std.Html.Events exposing (onClick)
+import Ipe.Prelude exposing (..)
+import Ipe.Html exposing (..)
+import Ipe.Html.Attributes exposing (..)
+import Ipe.Html.Events exposing (onClick)
 import State exposing (..)
 import Lib.Db as Db
 import Lib.Ideas as Ideas

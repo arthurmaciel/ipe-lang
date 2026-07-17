@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- ONE generic enum instantiated at two distinct element types in one module:
 -- `Opt Int` (via `Som 41`) and `Opt Bool` (via `Som (1 == 1)`). The backend

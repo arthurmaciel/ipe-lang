@@ -1,4 +1,4 @@
-//! The `Std.Live` / `Std.Tui` / `Std.Webview` app-entry Msg-admissibility gate.
+//! The `Ipe.Live` / `Ipe.Tui` / `Ipe.Webview` app-entry Msg-admissibility gate.
 //!
 //! `live_app` bounds its Msg `Clone + Send + Sync + Debug + 'static`;
 //! `tui_app` / `webview_app` bound it `Clone + Send + 'static`. Without the
@@ -9,7 +9,7 @@
 //!
 //! KEY ASYMMETRY: `Html`-carrying Msg MUST be ACCEPTED. The predicate is
 //! `ir_type_is_derivable` (NOT serde) — `Html` derives Clone+Debug+PartialEq
-//! and is therefore admissible in a Msg, unlike in a `Sky.Live` Model (where
+//! and is therefore admissible in a Msg, unlike in a `Ipe.Live` Model (where
 //! serde is required). This fixture is the critical acceptance case.
 //!
 //! These tests are COMPILE-ONLY (they run the `skyc` pipeline + write the
@@ -63,11 +63,11 @@ fn assert_accepted(test_name: &str, source: &str) -> Result<(), BoxError> {
 
 // ── Rejection fixtures ────────────────────────────────────────────────────────
 
-/// `Sky.Live` app: Msg variant carries a `Cmd`. Must be rejected with IPE-L0125.
+/// `Ipe.Live` app: Msg variant carries a `Cmd`. Must be rejected with IPE-L0125.
 const LIVE_CMD_MSG: &str = r"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 
 type Msg
     = Tick
@@ -102,7 +102,7 @@ main =
         }
 ";
 
-/// `Sky.Live` app: Msg variant carries a function. A declared function-typed
+/// `Ipe.Live` app: Msg variant carries a function. A declared function-typed
 /// payload is sound on its own (derive-demotion keeps the emitted enum's
 /// derives correct), so it is NOT rejected at the declaration site
 /// (`IPE-L0114`); it falls through to the MORE PRECISE Msg-admissibility
@@ -110,8 +110,8 @@ main =
 /// bound because of the embedded function, `IPE-L0125`.
 const LIVE_FN_MSG: &str = r"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 
 type Msg
     = Noop
@@ -146,12 +146,12 @@ main =
         }
 ";
 
-/// `Sky.Live` app: `update` is an inline lambda; Msg carries a `Cmd`.
+/// `Ipe.Live` app: `update` is an inline lambda; Msg carries a `Cmd`.
 /// Exercises the `fn_param_ty` Lambda recovery path for Msg.
 const LIVE_LAMBDA_UPDATE_CMD_MSG: &str = r"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 
 type Msg
     = Tick
@@ -184,11 +184,11 @@ main =
         }
 ";
 
-/// `Sky.Tui` app: Msg variant carries a `Cmd`. Must be rejected with IPE-L0125.
+/// `Ipe.Tui` app: Msg variant carries a `Cmd`. Must be rejected with IPE-L0125.
 const TUI_CMD_MSG: &str = r"module Main exposing (main)
 
-import Std.Tui as Tui
-import Std.Ui as Ui
+import Ipe.Tui as Tui
+import Ipe.Ui as Ui
 
 type Msg
     = Increment
@@ -232,12 +232,12 @@ main =
         }
 ";
 
-/// `Sky.Tui` app: Msg variant carries a function. Same shape as
+/// `Ipe.Tui` app: Msg variant carries a function. Same shape as
 /// `LIVE_FN_MSG` — falls through to the Msg gate, `IPE-L0125`.
 const TUI_FN_MSG: &str = r"module Main exposing (main)
 
-import Std.Tui as Tui
-import Std.Ui as Ui
+import Ipe.Tui as Tui
+import Ipe.Ui as Ui
 
 type Msg
     = NoOp
@@ -280,15 +280,15 @@ main =
 
 // ── Acceptance fixtures ───────────────────────────────────────────────────────
 
-/// CRITICAL asymmetry fixture: `Sky.Live` Msg carries `Html Msg`.
+/// CRITICAL asymmetry fixture: `Ipe.Live` Msg carries `Html Msg`.
 /// `Html` derives Clone+Debug+PartialEq (derivable) but is NOT serde.
 /// The Msg gate uses derivable (not serde), so this MUST be ACCEPTED (skyc-0).
 /// If the gate incorrectly used serde, this would be rejected — breaking the
 /// invariant that Msg and Model use different admissibility predicates.
 const LIVE_HTML_MSG: &str = r"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 
 type Msg
     = Noop
@@ -323,11 +323,11 @@ main =
         }
 ";
 
-/// Plain-data Msg + `Sky.Live` app — the normal happy path. Must be accepted.
+/// Plain-data Msg + `Ipe.Live` app — the normal happy path. Must be accepted.
 const LIVE_PLAIN_MSG: &str = r"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 
 type Msg
     = Increment

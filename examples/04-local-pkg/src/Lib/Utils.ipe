@@ -1,7 +1,7 @@
 module Lib.Utils exposing (add, formatMessage)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.String as String
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
 
 
 add : Int -> Int -> Int

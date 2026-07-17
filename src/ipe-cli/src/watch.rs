@@ -150,7 +150,7 @@ pub struct WatchOptions {
     pub runtime_dir: PathBuf,
     /// The port injected as `IPE_LIVE_PORT` for the spawned child and probed
     /// for `/_sky/readyz` when the emitted project is detected as a
-    /// Sky.Live app. Harmless (ignored) for every other app shape.
+    /// Ipe.Live app. Harmless (ignored) for every other app shape.
     pub port: u16,
     pub debounce: ipe_watch::DebounceConfig,
     pub restart_timeouts: ipe_watch::RestartTimeouts,
@@ -901,16 +901,16 @@ fn run_inner(
     Ok(())
 }
 
-/// Detection heuristic for readiness strategy: the backend's Sky.Live entry
+/// Detection heuristic for readiness strategy: the backend's Ipe.Live entry
 /// point emission always contains the literal `ipe_runtime::live::live_app`
 /// call (`crates/ipe_backend_rust/src/emit_live.rs`) — deterministic,
 /// compiler-controlled text, not user input, so a substring check is sound
-/// here (unlike parsing arbitrary user text). Sky.Live apps get the
-/// precise `/_sky/readyz` probe; every other shape (Sky.Http.Server has no
+/// here (unlike parsing arbitrary user text). Ipe.Live apps get the
+/// precise `/_sky/readyz` probe; every other shape (Ipe.Http.Server has no
 /// readiness endpoint yet, and its listen port is a Sky-source-level
 /// argument this driver cannot statically know) falls back to
 /// `AliveGrace` — matching the design doc's own readiness bifurcation
-/// ("`/_sky/readyz` for Sky.Live; alive + optional health for CLI").
+/// ("`/_sky/readyz` for Ipe.Live; alive + optional health for CLI").
 fn is_sky_live_project(emitted: &ipe_backend::EmittedProject) -> bool {
     emitted
         .files
@@ -923,9 +923,9 @@ fn is_sky_live_project(emitted: &ipe_backend::EmittedProject) -> bool {
 ///
 /// Sets both `IPE_LIVE_PORT` and `IPE_SERVER_PORT` to the SAME configured
 /// port — harmless (ignored) for whichever app shape didn't ask for it, and
-/// what lets a `Sky.Http.Server` fixture that reads `IPE_SERVER_PORT` (the
+/// what lets a `Ipe.Http.Server` fixture that reads `IPE_SERVER_PORT` (the
 /// convention this repo's own `server_e2e.rs` test suite already
-/// establishes) be driven by `--port` exactly like a Sky.Live app is.
+/// establishes) be driven by `--port` exactly like a Ipe.Live app is.
 ///
 /// Also provides the watch-scoped half of session continuity —
 /// default the dev session store to `sqlite` (persisted under `out_dir`,

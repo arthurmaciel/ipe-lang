@@ -1,4 +1,4 @@
-//! Hermetic network tests for Sky.Core.Http — `Http.get`, `Http.post`, and the
+//! Hermetic network tests for Ipe.Http — `Http.get`, `Http.post`, and the
 //! SSRF deny-private guard.
 //!
 //! All tests are gated on `IPE_E2E=1`.  Without it they return early so the
@@ -134,7 +134,7 @@ fn start_fixture(
 
 const IPE_HTTP_GET_PROGRAM: &str = r#"module Main exposing (main)
 
-import Sky.Core.Http as Http
+import Ipe.Http as Http
 
 main =
     Task.andThen
@@ -144,7 +144,7 @@ main =
 
 const IPE_HTTP_POST_PROGRAM: &str = r#"module Main exposing (main)
 
-import Sky.Core.Http as Http
+import Ipe.Http as Http
 
 main =
     Task.andThen
@@ -163,7 +163,7 @@ main =
 // when the pipe sits at a continuation line.
 const IPE_HTTP_SSRF_PROGRAM: &str = r#"module Main exposing (main)
 
-import Sky.Core.Http as Http
+import Ipe.Http as Http
 
 main =
     Task.onError

@@ -57,10 +57,10 @@ const SUGGESTION_MAX_DISTANCE: usize = 2;
 ///   * `Value` — matched *after* the `enum_variants` guard, so a user
 ///     `type Value` already wins; it is not a silent-override hole.
 ///   * `Color`, `Length`, `HAlign`, `VAlign`, `Location`, `PseudoClass`,
-///     `Description`, `LayoutContext`, `LiveReq` — the nullary Std.Ui / Sky.Live
+///     `Description`, `LayoutContext`, `LiveReq` — the nullary Ipe.Ui / Ipe.Live
 ///     opaque names. Leaving them UNRESERVED is what lets a user ADT — and,
-///     crucially, a compiled-source `Std.Css` type (`Color` / `Length` / …) —
-///     declare them; the home-aware guard keeps the genuine Std.Ui
+///     crucially, a compiled-source `Ipe.Css` type (`Color` / `Length` / …) —
+///     declare them; the home-aware guard keeps the genuine Ipe.Ui
 ///     builtin resolving to `UiPlain`. Multiple shipped `.ipe` fixtures
 ///     (`dict_adt_gate`, `set_adt_fn_gate`, `mm_local_pkg`, …) already
 ///     declare `type Color` as a benign sample ADT and now lower correctly.
@@ -84,11 +84,11 @@ const RESERVED_BUILTIN_TYPES: &[&str] = &[
     "Sub",
     "SqlValue",
     "SqlField",
-    // `Std.Db.Sql`'s opaque WHERE-fragment type — reserved (not
+    // `Ipe.Db.Sql`'s opaque WHERE-fragment type — reserved (not
     // `EXTRA_BUILTIN_TYPE_NAMES`) so user shadowing of this security-tier type
     // is a hard canon error, matching the `SqlValue`/`SqlField` precedent.
     "SqlFragment",
-    // `Sky.Core.Secret`'s opaque sealed secret-string type —
+    // `Ipe.Secret`'s opaque sealed secret-string type —
     // reserved for the same reason as `SqlFragment`: a security-tier type
     // must not be shadowable by user code.
     "Secret",
@@ -123,7 +123,7 @@ const RESERVED_BUILTIN_TYPES: &[&str] = &[
 ///
 /// The names below are absent from `RESERVED_BUILTIN_TYPES` because they are
 /// either:
-/// * Nullary Std.Ui/Sky.Live opaque names whose lowerer arm sits BELOW the
+/// * Nullary Ipe.Ui/Ipe.Live opaque names whose lowerer arm sits BELOW the
 ///   `enum_variants` guard (so a user `type Color` wins by its real home) — and
 ///   therefore can never be shadowed in a user annotation either; OR
 /// * Additional opaque kernel types added after the original reservation list
@@ -135,7 +135,7 @@ const RESERVED_BUILTIN_TYPES: &[&str] = &[
 const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
     // Three-way comparison result (`lt`/`eq`/`gt`).
     "Order",
-    // Std.Ui plain types — lowerer guard is BELOW `enum_variants` so user ADTs
+    // Ipe.Ui plain types — lowerer guard is BELOW `enum_variants` so user ADTs
     // of the same name win via their real home; but annotations that name them
     // without a program-level definition still need the empty-home sentinel.
     "Color",
@@ -147,29 +147,29 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
     "Description",
     "LayoutContext",
     "LiveReq",
-    // Sky.Live / Sky.Http.Server / Sky.Http.Server.WebSocket opaque types.
+    // Ipe.Live / Ipe.Http.Server / Ipe.Http.Server.WebSocket opaque types.
     "LiveRoute",
     "StreamWriter",
     "HttpRequest",
     "WebSocketServer",
     "WebSocketServerCfg",
-    // Std.Ui.Input parametric label/placeholder types.
+    // Ipe.Ui.Input parametric label/placeholder types.
     "Label",
     "Placeholder",
-    // Std.Decimal opaque arbitrary-precision decimal type.
+    // Ipe.Decimal opaque arbitrary-precision decimal type.
     // Lowerer arm: `ir_type_from_canon` `"Decimal" => IrType::Decimal`.
     "Decimal",
-    // `Std.Db.Migration` record alias `{ name : String, sql : String }`
+    // `Ipe.Db.Migration` record alias `{ name : String, sql : String }`
     // (reference `Std/Db.ipe:237`). Structural record — `normalize_annotation_ty`
     // expands the name to the record; the lowerer keeps it a synthesised struct
     // (no opaque arm), so it is user-shadowable-safe like `HttpRequest`.
     "Migration",
-    // `Sky.Core.Error`'s `ErrorDetails` union.
+    // `Ipe.Error`'s `ErrorDetails` union.
     // Lowerer arm: `ir_type_from_canon` `"ErrorDetails" => IrType::ErrorDetails`.
     // (`ErrorKind` — registered the same way at the same lowerer site — is a
     // gap in this list.)
     "ErrorDetails",
-    // `Sky.Core.Error`'s NOMINAL payload types (see
+    // `Ipe.Error`'s NOMINAL payload types (see
     // `docs/adr/0017-error-payload-nominal-identity.md`).
     // Opaque nominal Cons backed
     // by `ipe_runtime::error::{IpePanicInfo, IpeTypeInfo, IpeErrorInfo}`, so
@@ -196,23 +196,23 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
 /// `VNode`). Registering them here is the canon-level fix; lowerer arms complete
 /// the end-to-end path.
 const KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES: &[&str] = &[
-    // `Request -> Task Error Response` alias from Sky.Http.Server.
+    // `Request -> Task Error Response` alias from Ipe.Http.Server.
     "Handler",
-    // `Html msg` — the top-level rendered HTML node type from Std.Html / Std.Ui.
+    // `Html msg` — the top-level rendered HTML node type from Ipe.Html / Ipe.Ui.
     // Needed so `viewFoo : Model -> Html Msg` annotations typecheck without
-    // `import Std.Html exposing (Html)`.
+    // `import Ipe.Html exposing (Html)`.
     "Html",
     // Opaque JSON value type (`Value = any` in Sky). The lowerer handles this
     // via an explicit arm placed after the `enum_variants` guard — so a user
     // `type Value` still wins, but a bare annotation compiles.
     "Value",
-    // `Handler -> Handler` middleware alias from Sky.Http.Middleware.
+    // `Handler -> Handler` middleware alias from Ipe.Http.Middleware.
     "Middleware",
-    // Sky.Live session object.
+    // Ipe.Live session object.
     "Session",
-    // Sky.Live session store.
+    // Ipe.Live session store.
     "Store",
-    // Virtual DOM node (Sky.Live diff engine).
+    // Virtual DOM node (Ipe.Live diff engine).
     "VNode",
 ];
 
@@ -220,12 +220,12 @@ const KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES: &[&str] = &[
 /// [`ModuleOrigin::EmbeddedStdlib`] module is permitted to DEFINE, while a
 /// [`ModuleOrigin::User`] module stays rejected (IPE-N0026).
 ///
-/// These are exactly the nullary Std.Ui / Sky.Live opaque names that sit
+/// These are exactly the nullary Ipe.Ui / Ipe.Live opaque names that sit
 /// BELOW the home-aware `enum_variants` guard in the lowerer
 /// (`ipe_lower::ir_type_from_ty` + `ir_type_from_canon`). Because the lowerer
 /// keys a program-defined `type Length` under its real `(home, name)`
 /// and resolves it to its OWN enum, a compiled-source stdlib module
-/// (`Std.Css` / the `Std.Palette` spike) can canonically DEFINE these types
+/// (`Ipe.Css` / the `Ipe.Palette` spike) can canonically DEFINE these types
 /// without a `UiPlain` hijack — so canon reservation is not
 /// load-bearing for lowering-soundness on this exact set.
 ///
@@ -234,7 +234,7 @@ const KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES: &[&str] = &[
 /// rather than a confusing dual-`Length` type-boundary error against the
 /// built-in `UiPlain::Length`). The carve-out is keyed on the UNFORGEABLE typed
 /// [`ModuleOrigin`], never on module text: a hostile user file named
-/// `Std.Css` is discovered as User source and gets NEITHER this exemption NOR
+/// `Ipe.Css` is discovered as User source and gets NEITHER this exemption NOR
 /// the IPE-N0025 namespace exemption.
 ///
 /// NOTE: the load-bearing built-in names whose lowerer arms sit ABOVE the
@@ -257,12 +257,12 @@ const STDLIB_DEFINABLE_UI_TYPES: &[&str] = &[
 /// The subset of [`RESERVED_BUILTIN_TYPES`] that a trusted
 /// [`ModuleOrigin::EmbeddedStdlib`] module may DEFINE as the source-level
 /// re-declaration of a shared opaque BOXED-WRAPPER carrier — as opposed to the
-/// nullary Std.Ui plain names in [`STDLIB_DEFINABLE_UI_TYPES`].
+/// nullary Ipe.Ui plain names in [`STDLIB_DEFINABLE_UI_TYPES`].
 ///
 /// `Decoder` is the shared row-decoder carrier (`IrType::Decoder`, runtime
-/// `ipe_runtime::json::Decoder<E, T>`). `Sky.Core.Json.Decode` names it as a
+/// `ipe_runtime::json::Decoder<E, T>`). `Ipe.Json.Decode` names it as a
 /// bare reserved builtin (no source declaration — it is a qualifier-only kernel
-/// module). `Std.Config` is a compiled-source module that `exposing (Decoder)`
+/// module). `Ipe.Config` is a compiled-source module that `exposing (Decoder)`
 /// and re-declares `type Decoder a = Decoder` to put the name in its export set,
 /// exactly as the Go/Haskell reference does — Config's decoders and JSON's share
 /// one carrier, differing only in the parse front-end.
@@ -281,9 +281,9 @@ const STDLIB_DEFINABLE_CARRIER_TYPES: &[&str] = &["Decoder"];
 /// constructor. See [`RESERVED_BUILTIN_TYPES`].
 ///
 /// A [`ModuleOrigin::EmbeddedStdlib`] module is exempt for the
-/// [`STDLIB_DEFINABLE_UI_TYPES`] subset (nullary Std.Ui plain names — `Std.Css`)
+/// [`STDLIB_DEFINABLE_UI_TYPES`] subset (nullary Ipe.Ui plain names — `Ipe.Css`)
 /// and the [`STDLIB_DEFINABLE_CARRIER_TYPES`] subset (shared opaque boxed-wrapper
-/// carriers — `Std.Config`'s `Decoder`). A [`ModuleOrigin::User`] module is gated
+/// carriers — `Ipe.Config`'s `Decoder`). A [`ModuleOrigin::User`] module is gated
 /// against the full reserved set, so the default user-facing behaviour is
 /// byte-identical.
 fn reject_reserved_builtin_type(
@@ -312,11 +312,11 @@ fn reject_reserved_builtin_type(
 
 /// Trust provenance of a module entering [`canonicalise_module_with_origin`].
 ///
-/// This is the *unforgeable* answer to upstream's "a user file named `Std.Auth`
+/// This is the *unforgeable* answer to upstream's "a user file named `Ipe.Auth`
 /// silently shadows the audited stdlib" supply-chain hazard. The tag is a value
 /// the build **driver** constructs — set to [`Self::EmbeddedStdlib`] *only* for a
 /// module whose source came from `skyc`'s compile-time embed table, and never
-/// derivable from module text. A hostile user file literally named `Std.Palette`
+/// derivable from module text. A hostile user file literally named `Ipe.Palette`
 /// is discovered as ordinary user source, tagged [`Self::User`], and stays
 /// rejected by the reserved-namespace gate (IPE-N0025).
 ///
@@ -328,7 +328,7 @@ pub enum ModuleOrigin {
     /// reserved-builtin-type gate.
     User,
     /// A compiled-source stdlib module injected from `skyc`'s embed table. Exempt
-    /// from IPE-N0025 (it legitimately declares `module Std.…`) and required to
+    /// from IPE-N0025 (it legitimately declares `module Ipe.…`) and required to
     /// be fully annotated (fail-closed gate below).
     EmbeddedStdlib,
 }
@@ -406,9 +406,9 @@ struct TypeCtx<'a> {
 pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::Module> {
     let home = m.name.value.clone();
     let mut env = Env::initial(home, interner)?;
-    // Register `import Sky.… as Alias` / `import Std.… as Alias` qualifiers.
+    // Register `import Sky.… as Alias` / `import Ipe.… as Alias` qualifiers.
     // The single-module path does no dep injection, but stdlib qualifier
-    // aliases must still resolve (`import Sky.Core.Json.Encode as Encode` →
+    // aliases must still resolve (`import Ipe.Json.Encode as Encode` →
     // `Encode.string`), so run the same registration the multi-module path uses.
     register_stdlib_import_aliases(&m.imports, &mut env, interner)?;
     // type_home_map and extra_aliases both start empty; canonicalise_with_env
@@ -417,7 +417,7 @@ pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::
     let mut type_home_map: BTreeMap<Symbol, Vec<Symbol>> = BTreeMap::new();
     let extra_aliases: BTreeMap<Symbol, AliasDef> = BTreeMap::new();
     // Single-module has no deps, so no user qualifiers to map — but a Html-family
-    // STDLIB import qualifier (`import Std.Html.Attributes as Attr`) still needs
+    // STDLIB import qualifier (`import Ipe.Html.Attributes as Attr`) still needs
     // its `["Html"]` type home folded so a qualified `Attr.Attribute` lowers to
     // `html::Attribute`.
     let mut qualifier_paths: BTreeMap<Symbol, Vec<Symbol>> = BTreeMap::new();
@@ -470,7 +470,7 @@ pub fn canonicalise_module(
 ///
 /// Identical to [`canonicalise_module`] except that an [`ModuleOrigin::EmbeddedStdlib`]
 /// module is (a) exempt from the IPE-N0025 reserved-namespace gate — it
-/// legitimately declares `module Std.…` — and (b) required to carry a type
+/// legitimately declares `module Ipe.…` — and (b) required to carry a type
 /// annotation on every top-level binding (fail-closed; see the gate at the end
 /// of this function). A [`ModuleOrigin::User`] module is treated exactly as
 /// before, so no user-facing behaviour changes on the default path.
@@ -536,19 +536,15 @@ pub fn canonicalise_module_in_project(
         });
     }
 
-    // IPE-N0025: `Sky` and `Std` are reserved for the compiler's own stdlib.
-    // User modules whose first path segment matches either are rejected here so
-    // they never shadow prelude symbols downstream. An EmbeddedStdlib module is
-    // the ONE legitimate definer of a `Std.…` / `Sky.…` home, so it is exempt —
-    // but ONLY because the driver vouched for its provenance (unforgeable tag),
-    // never because the text says `module Std.…`.
-    let ipe_sym = interner.intern("Sky")?;
-    let std_sym = interner.intern("Std")?;
+    // IPE-N0025: `Ipe` is reserved for the compiler's own stdlib. User modules
+    // whose first path segment is `Ipe` are rejected here so they never shadow
+    // prelude symbols downstream. An EmbeddedStdlib module is the ONE legitimate
+    // definer of an `Ipe.…` home, so it is exempt — but ONLY because the driver
+    // vouched for its provenance (unforgeable tag), never because the text says
+    // `module Ipe.…`.
+    let ipe_sym = interner.intern("Ipe")?;
     if origin == ModuleOrigin::User
-        && home
-            .first()
-            .copied()
-            .is_some_and(|s| s == ipe_sym || s == std_sym)
+        && home.first().copied().is_some_and(|s| s == ipe_sym)
     {
         let name = path_to_dot_string(interner, &home);
         return Err(Diagnostic::Name {
@@ -558,7 +554,7 @@ pub fn canonicalise_module_in_project(
     }
 
     let mut env = Env::initial(home.clone(), interner)?;
-    // Register user import aliases for stdlib (`Sky.*` / `Std.*`) modules BEFORE
+    // Register user import aliases for stdlib (`Sky.*` / `Ipe.*`) modules BEFORE
     // the dep-injection loop below. The loop bare-`continue`s for stdlib imports
     // (they need no dep injection), so alias registration is a separate,
     // self-contained pass keyed off the same authoritative path table.
@@ -580,11 +576,11 @@ pub fn canonicalise_module_in_project(
         let dep_path = &import.name.value;
         // IPE-kernel vs compiled-source discrimination (fail-closed).
         //
-        // A `Sky.*` / `Std.*` import is EITHER a kernel module whose qualifiers
+        // A `Sky.*` / `Ipe.*` import is EITHER a kernel module whose qualifiers
         // are pre-installed by `Env::initial` (absent from the user `deps` map —
         // a `deps.get` on it would spuriously IPE-N0020 every importer of
-        // `Sky.Core.Prelude`) OR a compiled-source stdlib module the build driver
-        // injected into `deps` (e.g. `Std.Palette` / `Std.Css`). The former stays
+        // `Ipe.Prelude`) OR a compiled-source stdlib module the build driver
+        // injected into `deps` (e.g. `Ipe.Palette` / `Ipe.Css`). The former stays
         // on the qualifier-only `continue` path; the latter falls through to the
         // ordinary `deps.get` + `inject_dep_exports`, resolving byte-identically
         // to a user dependency. Presence in `deps` is the single discriminator:
@@ -592,7 +588,7 @@ pub fn canonicalise_module_in_project(
         if dep_path
             .first()
             .copied()
-            .is_some_and(|s| s == ipe_sym || s == std_sym)
+            .is_some_and(|s| s == ipe_sym)
             && !deps.contains_key(dep_path)
         {
             continue;
@@ -644,7 +640,7 @@ pub fn canonicalise_module_in_project(
         if dep_path
             .first()
             .copied()
-            .is_some_and(|s| s == ipe_sym || s == std_sym)
+            .is_some_and(|s| s == ipe_sym)
             && !deps.contains_key(dep_path)
         {
             continue;
@@ -682,7 +678,7 @@ pub fn canonicalise_module_in_project(
     }
 
     // Fold Html-family STDLIB import qualifiers into `qualifier_paths` (→
-    // `["Html"]`) so a qualified `Attr.Attribute` (`import Std.Html.Attributes as
+    // `["Html"]`) so a qualified `Attr.Attribute` (`import Ipe.Html.Attributes as
     // Attr`) resolves to the `html::Attribute` home. Runs AFTER the
     // user-dep loop so a user qualifier that also names a Html dep keeps its real
     // dep path (`entry(..).or_insert` inside the helper is a no-op on a hit).
@@ -776,42 +772,37 @@ pub fn canonicalise_module_in_project(
     Ok((canon_mod, exports))
 }
 
-/// Register user import aliases for stdlib (`Sky.*` / `Std.*`) modules.
+/// Register user import aliases for stdlib (`Sky.*` / `Ipe.*`) modules.
 ///
 /// For every stdlib import, resolve its full path to the canonical qualifier
 /// (via [`Env::canonical_stdlib_qualifier`]) and register the user's *effective*
 /// qualifier — the explicit `as Alias`, else the Elm last-segment default —
 /// against the canonical qualifier's kernel members. This is what makes
-/// `import Sky.Core.Json.Encode as Encode` register `Encode` → the `JsonEnc`
-/// members, and `import Std.Ui as U` register `U` → the `Ui` members.
+/// `import Ipe.Json.Encode as Encode` register `Encode` → the `JsonEnc`
+/// members, and `import Ipe.Ui as U` register `U` → the `Ui` members.
 ///
 /// Idempotent when the effective qualifier already equals the canonical name
-/// (the common `import Std.Log as Log` case — `Log` is already registered).
+/// (the common `import Ipe.Log as Log` case — `Log` is already registered).
 ///
 /// A path that names no known stdlib module is left unregistered (fail-closed,
 /// per [`Env::canonical_stdlib_qualifier`]): any later `Alias.member` reference
 /// surfaces the ordinary `UnknownModule` diagnostic at its use site rather than
 /// resolving against an invented qualifier. This preserves the pre-existing
-/// behaviour for as-yet-unported stdlib modules (e.g. `Sky.Core.ToString`).
+/// behaviour for as-yet-unported stdlib modules (e.g. `Ipe.ToString`).
 ///
 /// # Errors
-/// [`Diagnostic::CompilerBug`] if interning `Sky` / `Std` or a canonical name
+/// [`Diagnostic::CompilerBug`] if interning `Ipe` or a canonical name
 /// exhausts the interner.
 fn register_stdlib_import_aliases(
     imports: &[src::Import],
     env: &mut Env,
     interner: &mut Interner,
 ) -> DResult<()> {
-    let ipe_sym = interner.intern("Sky")?;
-    let std_sym = interner.intern("Std")?;
+    let ipe_sym = interner.intern("Ipe")?;
     for import in imports {
         let dep_path = &import.name.value;
-        // Only `Sky.*` / `Std.*` imports name compiler stdlib modules.
-        if !dep_path
-            .first()
-            .copied()
-            .is_some_and(|s| s == ipe_sym || s == std_sym)
-        {
+        // Only `Ipe.*` imports name compiler stdlib modules.
+        if !dep_path.first().copied().is_some_and(|s| s == ipe_sym) {
             continue;
         }
         let Some(canonical) = env.canonical_stdlib_qualifier(dep_path, interner)? else {
@@ -839,7 +830,7 @@ fn register_stdlib_import_aliases(
 }
 
 /// Bring the stdlib VALUE members named in an explicit
-/// `import Sky.*/Std.* exposing (n1, n2, …)` list into UNQUALIFIED scope.
+/// `import Sky.*/Ipe.* exposing (n1, n2, …)` list into UNQUALIFIED scope.
 ///
 /// `import M exposing (member)` for a stdlib module registers value members
 /// into unqualified scope. Stdlib imports are skipped by the dep-injection loop
@@ -879,13 +870,13 @@ fn register_stdlib_import_aliases(
 /// explicit list above. Flooding every member into `seen_values` would wrongly
 /// turn a legal local shadow of a Prelude name (e.g. a user `map`) into a
 /// `DuplicateValue` and regress the corpus. The common wildcard case
-/// (`import Sky.Core.Prelude exposing (..)`) already works via the pre-installed
+/// (`import Ipe.Prelude exposing (..)`) already works via the pre-installed
 /// Prelude builtins + qualified access; correct open-import member flooding
 /// remains a follow-up.
 ///
 /// # Errors
 /// [`NameError::NameNotExposed`] / [`NameError::DuplicateValue`]; or
-/// [`Diagnostic::CompilerBug`] if interning `Sky` / `Std` / a name exhausts the
+/// [`Diagnostic::CompilerBug`] if interning `Ipe` / a name exhausts the
 /// interner.
 fn inject_stdlib_exposed_values(
     m: &src::Module,
@@ -893,15 +884,14 @@ fn inject_stdlib_exposed_values(
     seen_values: &mut BTreeMap<Symbol, Span>,
     interner: &mut Interner,
 ) -> DResult<()> {
-    let ipe_sym = interner.intern("Sky")?;
-    let std_sym = interner.intern("Std")?;
+    let ipe_sym = interner.intern("Ipe")?;
     for import in &m.imports {
         let dep_path = &import.name.value;
-        // Only `Sky.*` / `Std.*` imports name compiler stdlib modules.
+        // Only `Sky.*` / `Ipe.*` imports name compiler stdlib modules.
         if !dep_path
             .first()
             .copied()
-            .is_some_and(|s| s == ipe_sym || s == std_sym)
+            .is_some_and(|s| s == ipe_sym)
         {
             continue;
         }
@@ -964,8 +954,8 @@ fn inject_stdlib_exposed_values(
 }
 
 /// Builtin type names whose lowering (`ipe_lower::ir_type_from_{ty,canon}`)
-/// disambiguates by the `home` path — `Attribute` exists in BOTH `Std.Ui`
-/// (→ `ipe_runtime::ui::element::Attribute`) and `Std.Html.Attributes`
+/// disambiguates by the `home` path — `Attribute` exists in BOTH `Ipe.Ui`
+/// (→ `ipe_runtime::ui::element::Attribute`) and `Ipe.Html.Attributes`
 /// (→ `ipe_runtime::html::Attribute`), and the lowerer's `is_html = home
 /// contains "Html"` check drives the choice. `Event` is listed for the same
 /// home-driven precedent (currently single-ctor `html::Event`, so harmless).
@@ -981,12 +971,12 @@ const HOME_SENSITIVE_BUILTIN_TYPES: &[&str] = &["Attribute", "Event"];
 ///
 /// ## Why
 ///
-/// `Attribute` exists in BOTH `Std.Ui` (→ `ui::element::Attribute`) and
-/// `Std.Html.Attributes` (→ `html::Attribute`); the lowerer disambiguates by
+/// `Attribute` exists in BOTH `Ipe.Ui` (→ `ui::element::Attribute`) and
+/// `Ipe.Html.Attributes` (→ `html::Attribute`); the lowerer disambiguates by
 /// `is_html = home contains "Html"`. Without this fold, a bare `Attribute`
 /// exposed from a stdlib Html module reaches the empty-home sentinel (stdlib
 /// imports are skipped by the dep-injection loop), so `is_html` fails and the
-/// `Std.Live.Head.pairToAttr : (String,String) -> Attribute msg` shape
+/// `Ipe.Live.Head.pairToAttr : (String,String) -> Attribute msg` shape
 /// mis-lowers to `ui::element::Attribute` while its `Attr.attribute` body
 /// produces `html::Attribute` — an exit-0-then-cargo-fail E0308 SEAL violation.
 /// The bare path resolves via `resolve_unqualified_type_home`, which consults
@@ -994,11 +984,11 @@ const HOME_SENSITIVE_BUILTIN_TYPES: &[&str] = &["Attribute", "Event"];
 ///
 /// ## Why `["Html"]` and not the full dep path
 ///
-/// The HM constrainer builds the Std.Html attribute type as `Ty::Con { module:
+/// The HM constrainer builds the Ipe.Html attribute type as `Ty::Con { module:
 /// ["Html"], name: Attribute }` (`constrain.rs` `html_attr`). Recording the full
-/// `["Std","Html","Attributes"]` would mint a NOMINALLY-DISTINCT `Attribute` that
+/// `["Ipe","Html","Attributes"]` would mint a NOMINALLY-DISTINCT `Attribute` that
 /// fails to unify with `Html.node`'s parameter (`expected Html.Attribute, found
-/// Std.Html.Attributes.Attribute`). `["Html"]` matches the constrainer AND
+/// Ipe.Html.Attributes.Attribute`). `["Html"]` matches the constrainer AND
 /// satisfies the lowerer's `is_html` check.
 ///
 /// ## Scope and soundness
@@ -1012,7 +1002,7 @@ const HOME_SENSITIVE_BUILTIN_TYPES: &[&str] = &["Attribute", "Event"];
 ///   fallback also reads `type_home_map`) — the exact regression in
 ///   `26-ui-showcase/RegressionGates.testId : Ui.Attribute msg`.
 /// * **Conflict guard.** If the SAME module ALSO brings the Ui `Attribute` type
-///   into UNQUALIFIED scope (`import Std.Ui … exposing (Attribute)` or `exposing
+///   into UNQUALIFIED scope (`import Ipe.Ui … exposing (Attribute)` or `exposing
 ///   (..)`), a bare `Attribute` is genuinely ambiguous, so we record NOTHING and
 ///   leave the sentinel rather than silently pinning one home.
 /// * Runs BEFORE any value body is canonicalised.
@@ -1029,13 +1019,13 @@ fn inject_stdlib_exposed_type_homes(
     // Does this module bring the Ui `Attribute` TYPE into UNQUALIFIED scope?
     let ui_exposes_attribute = m.imports.iter().any(|import| {
         let dep = &import.name.value;
-        // Exactly `Std.Ui` (owner of the Ui `Attribute`), not a `Std.Ui.*`
+        // Exactly `Ipe.Ui` (owner of the Ui `Attribute`), not a `Ipe.Ui.*`
         // sub-module (which does not re-export it).
         let is_std_ui = dep.len() == 2
             && dep
                 .first()
                 .copied()
-                .is_some_and(|s| interner.resolve(s) == Some("Std"))
+                .is_some_and(|s| interner.resolve(s) == Some("Ipe"))
             && dep
                 .get(1)
                 .copied()
@@ -1090,7 +1080,7 @@ fn inject_stdlib_exposed_type_homes(
 ///
 /// Stdlib kernel imports are skipped by the ordinary `qualifier_paths`
 /// construction (they carry no `deps` entry), so a QUALIFIED `Attr.Attribute`
-/// (from `import Std.Html.Attributes as Attr`) used to fall through to the
+/// (from `import Ipe.Html.Attributes as Attr`) used to fall through to the
 /// by-name `type_home_map.get("Attribute")` — a single entry that cannot tell
 /// `Attr.Attribute` (Html) from `Ui.Attribute` (Ui), so both mis-lowered to the
 /// same newtype. Registering the qualifier here — `Attr` (and the canonical
@@ -1099,9 +1089,9 @@ fn inject_stdlib_exposed_type_homes(
 /// deliberately NOT folded) keeps falling through to the empty Ui sentinel.
 ///
 /// The `["Html"]` value is the SAME single-segment home the HM constrainer uses
-/// for the Std.Html attribute type (`constrain.rs` `html_attr`), so the emitted
+/// for the Ipe.Html attribute type (`constrain.rs` `html_attr`), so the emitted
 /// type unifies with `Html.node`'s parameter rather than minting a distinct
-/// `Std.Html.Attributes.Attribute`.
+/// `Ipe.Html.Attributes.Attribute`.
 ///
 /// A qualifier the user has ALSO bound to a real dep module keeps its dep path
 /// (`entry(..).or_insert` — the dep-path insertion runs first and wins).
@@ -1123,7 +1113,7 @@ fn fold_html_stdlib_qualifier_homes(
             continue;
         }
         // Effective qualifier: explicit `as Alias`, else the Elm last-segment
-        // default (`import Std.Html.Attributes` → `Attributes`).
+        // default (`import Ipe.Html.Attributes` → `Attributes`).
         let qualifier = import
             .alias
             .unwrap_or_else(|| dep_path.last().copied().unwrap_or_else(name_zero));
@@ -1135,7 +1125,7 @@ fn fold_html_stdlib_qualifier_homes(
 }
 
 /// Flood EVERY value member of a stdlib module named in
-/// `import Sky.*/Std.* exposing (..)` into the LOW-PRIORITY wildcard tier
+/// `import Sky.*/Ipe.* exposing (..)` into the LOW-PRIORITY wildcard tier
 /// ([`Env::wildcard_vars`]) so bare `div` / `text` / … resolve unqualified.
 ///
 /// This is the open-import counterpart of [`inject_stdlib_exposed_values`]. The
@@ -1168,21 +1158,20 @@ fn fold_html_stdlib_qualifier_homes(
 /// ordinary `IPE-N0001` at its use site.
 ///
 /// # Errors
-/// [`Diagnostic::CompilerBug`] if interning `Sky` / `Std` exhausts the interner.
+/// [`Diagnostic::CompilerBug`] if interning `Ipe` exhausts the interner.
 fn inject_stdlib_wildcard_values(
     m: &src::Module,
     env: &mut Env,
     interner: &mut Interner,
 ) -> DResult<()> {
-    let ipe_sym = interner.intern("Sky")?;
-    let std_sym = interner.intern("Std")?;
+    let ipe_sym = interner.intern("Ipe")?;
     for import in &m.imports {
         let dep_path = &import.name.value;
-        // Only `Sky.*` / `Std.*` imports name compiler stdlib modules.
+        // Only `Sky.*` / `Ipe.*` imports name compiler stdlib modules.
         if !dep_path
             .first()
             .copied()
-            .is_some_and(|s| s == ipe_sym || s == std_sym)
+            .is_some_and(|s| s == ipe_sym)
         {
             continue;
         }
@@ -1422,7 +1411,7 @@ fn canonicalise_with_env(
         seen_values.insert(name.value, name.span);
         env.vars.insert(name.value, VarHome::TopLevel(home.clone()));
     }
-    // Bring stdlib VALUE members named in an explicit `import Sky.*/Std.* exposing
+    // Bring stdlib VALUE members named in an explicit `import Sky.*/Ipe.* exposing
     // (name, …)` list into UNQUALIFIED scope. Runs after the synth-ctor
     // seeding and before the local-value pre-pass so an exposed name and a local
     // of the same name collide as `DuplicateValue` (mirrors the ctor-collision
@@ -1437,7 +1426,7 @@ fn canonicalise_with_env(
     // `type_home_map` first) sees the recorded home rather than the empty-home
     // sentinel that always mis-selects `UiAttribute`.
     inject_stdlib_exposed_type_homes(m, type_home_map, interner)?;
-    // Flood every member of an `import Sky.*/Std.* exposing (..)` stdlib
+    // Flood every member of an `import Sky.*/Ipe.* exposing (..)` stdlib
     // module into the LOW-PRIORITY wildcard tier. Deliberately does NOT touch
     // `seen_values` — a local / explicit-exposed / synth-ctor / prelude name of
     // the same spelling silently shadows a wildcard member (see the fn doc);
@@ -1994,7 +1983,7 @@ fn inject_dep_exports(
         }
     }
     // Register qualified constructors so `Alias.CtorName` resolves correctly.
-    // Needed for compiled-source ADTs (e.g. `Money.USD` from `import Std.Money
+    // Needed for compiled-source ADTs (e.g. `Money.USD` from `import Ipe.Money
     // as Money`) where constructors are not stdlib kernels and never enter
     // `qual_vars`.  We register ALL ctors from this dep regardless of the
     // user's `exposing (...)` clause — qualified access does not require the
@@ -2042,7 +2031,7 @@ fn check_and_inject_value(
     }
     unqual_origins.insert(name, dep_path.to_vec());
     // A kernel alias resolves unqualified to its kernel, same as it would
-    // qualified — otherwise `import Std.PubSub exposing (publish)` would bind
+    // qualified — otherwise `import Ipe.PubSub exposing (publish)` would bind
     // `publish` to a non-existent `TopLevel` def.
     let home = kernel_alias.map_or_else(
         || VarHome::TopLevel(dep_path.to_vec()),

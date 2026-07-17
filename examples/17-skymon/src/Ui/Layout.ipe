@@ -1,10 +1,10 @@
 module Ui.Layout exposing (page)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Maybe as Maybe
-import Std.Html exposing (..)
-import Std.Html.Attributes exposing (..)
-import Std.Html.Events exposing (onClick)
+import Ipe.Prelude exposing (..)
+import Ipe.Maybe as Maybe
+import Ipe.Html exposing (..)
+import Ipe.Html.Attributes exposing (..)
+import Ipe.Html.Events exposing (onClick)
 import State exposing (..)
 import Ui.Styles exposing (globalStyles)
 

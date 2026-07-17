@@ -1,6 +1,6 @@
 //! Dual-attribute bridge gate —
-//! mixing `Std.Ui` typed attributes (`Font.bold`, `Background.color`) with a
-//! `Std.Html` node (`Html.div` / `Html.text`) embedded via `Ui.html`.
+//! mixing `Ipe.Ui` typed attributes (`Font.bold`, `Background.color`) with a
+//! `Ipe.Html` node (`Html.div` / `Html.text`) embedded via `Ui.html`.
 //!
 //! The golden compiles `tests/golden/stdui_dualattr/Main.ipe` through
 //! `skyc`, builds the emitted Rust project with the shared cargo target, runs
@@ -21,14 +21,14 @@
 //! * `Ui.el [ Font.bold, Background.color (Ui.rgb 0 128 0) ]` emits
 //!   `font-weight:700;background-color:rgba(0,128,0,1)` on one element.
 //! * `Ui.html (Html.div [] [ Html.text "html-node" ])` bridges a raw Html node
-//!   into the Std.Ui element tree — the `UiCtor::Html` / `UiHtml` bridge path.
+//!   into the Ipe.Ui element tree — the `UiCtor::Html` / `UiHtml` bridge path.
 //! * `Ui.column [ Ui.spacing 8 ]` emits `gap:8px`.
 //! * No internal direction markers (`__col`, `__row`) leak into the output.
-//! * The full path `Std.Ui` + `Std.Html` kernel mix builds and runs.
+//! * The full path `Ipe.Ui` + `Ipe.Html` kernel mix builds and runs.
 //!
 //! ## Scope note
 //!
-//! The full dual-Attribute+Event golden (mixing typed Std.Ui attributes and
+//! The full dual-Attribute+Event golden (mixing typed Ipe.Ui attributes and
 //! Html.Events event handlers) is blocked by the `UiCtor::HtmlEvent`
 //! emit-arm gap (IPE-I0###).  This reduced golden avoids event kernels and
 //! exercises only the attribute + Html-node bridge.
@@ -79,7 +79,7 @@ fn build_run_dualattr() -> (PathBuf, support::RunOutcome) {
     (dir, outcome)
 }
 
-/// Full E2E smoke test: dual-attribute Std.Ui + Std.Html bridge must compile,
+/// Full E2E smoke test: dual-attribute Ipe.Ui + Ipe.Html bridge must compile,
 /// build, run, and produce the cached expected HTML.
 /// Divergence golden — the expected value is skyc's own correct output.
 #[test]

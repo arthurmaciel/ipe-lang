@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- REFUTABLE lambda param `\(Just x) ->`: `Just x` fails to match `Nothing`, so a
 -- parameter (a binding position) can never be a constructor pattern. Rejected up

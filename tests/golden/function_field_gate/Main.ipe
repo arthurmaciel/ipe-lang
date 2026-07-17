@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- A function value reaching a record field THROUGH a type variable:
 -- `wrap`'s field `value : a` instantiates to `Int -> Int` at this call,

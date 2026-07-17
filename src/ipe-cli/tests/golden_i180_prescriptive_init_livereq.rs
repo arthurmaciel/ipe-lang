@@ -32,8 +32,8 @@ use std::path::PathBuf;
 /// Non-routed for brevity; plain-data Model so the the admissibility gate
 /// passes, isolating the init-field + field-access behaviour.
 const LIVE_INIT_READS_REQ_PATH: &str = r#"module Main exposing (main)
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 type Page = HomePage
 type Msg = Noop
 type alias Model = { page : Page, path : String }
@@ -57,8 +57,8 @@ main =
 /// The SAME app but with `init : {} -> …` — the non-`LiveReq` shape the
 /// prescriptive scheme must reject with a clear IPE-T0001.
 const LIVE_INIT_UNIT_REJECTED: &str = r#"module Main exposing (main)
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 type Page = HomePage
 type Msg = Noop
 type alias Model = { page : Page }

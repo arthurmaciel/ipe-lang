@@ -37,8 +37,8 @@ use ipe::CliError;
 /// Part A's `LiveRoute page` parametric fix pins `var(2)` via route ctors to
 /// `Page`; `notFound = Increment` (Msg) then fails unification → IPE-T0001.
 const T4D_NONEMPTY_ROUTES_WRONG_NOTFOUND: &str = r#"module Main exposing (main)
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 type Page = CounterPage | AboutPage
 type Msg = Increment
 type alias Model = { page : Page, count : Int }
@@ -60,8 +60,8 @@ main =
 /// The route ctor forces `var(2) = Msg`; `notFound = CounterPage` (Page) then
 /// fails unification → IPE-T0001.
 const T4F_WRONG_ROUTE_CTOR_CORRECT_NOTFOUND: &str = r#"module Main exposing (main)
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 type Page = CounterPage | AboutPage
 type Msg = Increment
 type alias Model = { page : Page, count : Int }
@@ -82,8 +82,8 @@ main =
 /// MIX: non-empty routes with mixed types — one correct route ctor, one wrong
 /// route ctor. All route ctors share `var(2)`; the wrong ctor forces a mismatch.
 const MIX_MIXED_ROUTE_CTORS: &str = r#"module Main exposing (main)
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 type Page = CounterPage | AboutPage
 type Msg = Increment
 type alias Model = { page : Page, count : Int }
@@ -108,8 +108,8 @@ main =
 /// Type annotations are required to pass the lowerer (mirrors `LIVE_GOOD` in
 /// `model_admissibility.rs`).
 const NON_ROUTED_LIVE: &str = r"module Main exposing (main)
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 type Msg = Increment
 type alias Model = { count : Int }
 init : a -> ( Model, Cmd Msg )
@@ -138,8 +138,8 @@ main =
 /// Shape mirrors `examples/24-tui-kitchen-sink` (single nullary route, no
 /// `page` field in Model).
 const NON_ROUTED_LIVE_WITH_NONEMPTY_ROUTES: &str = r#"module Main exposing (main)
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 type Page = MainPage
 type Msg = Increment
 type alias Model = { count : Int }

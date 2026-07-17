@@ -1,7 +1,7 @@
-//! `Sky.Core.Encoding` parity gate — base64 / URL / hex encode-decode
+//! `Ipe.Encoding` parity gate — base64 / URL / hex encode-decode
 //! kernels with byte-for-byte Go parity.
 //!
-//! These golden tests exercise the `Sky.Core.Encoding` kernel family end-to-end:
+//! These golden tests exercise the `Ipe.Encoding` kernel family end-to-end:
 //!
 //! * `Encoding.base64Encode` / `Encoding.base64Decode` roundtrip using Go
 //!   `base64.StdEncoding` (standard alphabet with `=` padding, NOT URL-safe):

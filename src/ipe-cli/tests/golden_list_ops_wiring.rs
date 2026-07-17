@@ -1,4 +1,4 @@
-//! The non-HOF `Sky.Core.List` combinators are CALLABLE from user code.
+//! The non-HOF `Ipe.List` combinators are CALLABLE from user code.
 //!
 //! Before this task, a qualified `List.append` / `concat` / `take` / `drop` /
 //! `zip` / `cons` / `isEmpty` / `concatMap` call resolved (via the canon
@@ -15,7 +15,7 @@
 //! `ipe_list_cons`) and adding four total, iterative ones (`list_append`/
 //! `list_concat`/`list_take`/`list_is_empty`). Kernel (not pure-Sky routing) is
 //! the only exit-0-safe wiring: canon anchors `List.*` to `VarHome::Kernel`
-//! unconditionally, so the pure-Sky `Sky.Core.List` bodies are never on the
+//! unconditionally, so the pure-Sky `Ipe.List` bodies are never on the
 //! resolution path, and the two HOFs (`concatMap`/`indexedMap`) would trip the
 //! `cannot infer T2` cross-module inference hole under pure-Sky anyway.
 //!

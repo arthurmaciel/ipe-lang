@@ -17,10 +17,10 @@ module Main exposing (main)
 -- layer that caught #233); a server binary cannot run-to-exit, so the
 -- assertion is a successful cargo build.
 
-import Sky.Http.Server as Server
-import Sky.Http.Server.Stream as Stream
-import Sky.Core.Task as Task
-import Sky.Core.String as String
+import Ipe.Http.Server as Server
+import Ipe.Http.Server.Stream as Stream
+import Ipe.Task as Task
+import Ipe.String as String
 
 exportHandler : Server.Request -> Task Error Server.Response
 exportHandler _ =

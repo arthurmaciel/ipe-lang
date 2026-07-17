@@ -5,7 +5,7 @@
 //! and 3x E0283 (`type annotations needed` / `cannot infer type of the type
 //! parameter T declared on the struct Vec`) at every
 //! `lib_database_query_or_log(label, queryStr, Vec::new())` call site (an
-//! empty-params `Std.Db` query helper).
+//! empty-params `Ipe.Db` query helper).
 //!
 //! Root cause: a Sky-defined WRAPPER function around `Db.exec` / `Db.query`
 //! (never the kernel called directly) forwards its own polymorphic

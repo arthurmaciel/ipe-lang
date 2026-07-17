@@ -117,7 +117,7 @@ fn pipeline_error_renders_with_code_and_explain_pointer() {
         "rendered error must carry a coded header, got:\n{rendered}"
     );
     assert!(
-        rendered.contains("skyc explain"),
-        "rendered error must point at `skyc explain`, got:\n{rendered}"
+        rendered.contains("ipe explain"),
+        "rendered error must point at `ipe explain`, got:\n{rendered}"
     );
 }

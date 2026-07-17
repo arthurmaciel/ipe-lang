@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-import Sky.Core.Dict as Dict
+import Ipe.Dict as Dict
 
 
 prices : Dict Float Int

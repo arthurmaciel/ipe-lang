@@ -1,7 +1,7 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 -- #90 T3: ETA-REDUCED annotated forwarder (`am2 = am1`, no params) — the
 -- bare reference to `am1` still records a SchemeApp whose obligated `b`

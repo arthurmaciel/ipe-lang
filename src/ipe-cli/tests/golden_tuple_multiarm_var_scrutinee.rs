@@ -1,6 +1,6 @@
 //! Multi-arm / refutable tuple `case` on a NON-literal scrutinee.
 //!
-//! `Sky.Test.summarise` matches `case pair of ( _, Passed ) -> … ; ( name,
+//! `Ipe.Test.summarise` matches `case pair of ( _, Passed ) -> … ; ( name,
 //! Failed _ ) -> …`. The scrutinee `pair` is a VARIABLE, not a literal tuple, so
 //! the pre-tuple-match path (which needs the element expressions to apply
 //! per-column slice / `&str` coercions) did not apply and the arm fell
@@ -37,7 +37,7 @@ fn fixture_entry() -> PathBuf {
 }
 
 /// Fast gate: a multi-arm refutable tuple `case` on a VARIABLE scrutinee builds
-/// cleanly — the IPE-L0115 product gap is closed for the `Sky.Test.summarise`
+/// cleanly — the IPE-L0115 product gap is closed for the `Ipe.Test.summarise`
 /// shape.
 #[test]
 fn var_scrutinee_tuple_case_builds() {

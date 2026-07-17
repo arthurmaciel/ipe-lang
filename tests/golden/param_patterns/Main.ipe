@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- IPE-L0105 lambda / function parameter patterns (#96), the positive surface.
 -- Every binding position below is IRREFUTABLE, so each lowers to a synthetic

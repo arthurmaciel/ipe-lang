@@ -4,8 +4,8 @@ module Main exposing (main)
 --
 -- Two browser tabs in the same room see each other's messages in
 -- real time WITHOUT polling. Each session subscribes to the room's
--- topic via `Std.Sub.subscribeTopic` and broadcasts new messages via
--- `Std.Cmd.publish`. The publisher's own subscription also receives
+-- topic via `Ipe.Sub.subscribeTopic` and broadcasts new messages via
+-- `Ipe.Cmd.publish`. The publisher's own subscription also receives
 -- the broadcast (echo-by-default — matches Redis/NATS/MQTT
 -- semantics).
 --
@@ -18,22 +18,22 @@ module Main exposing (main)
 --
 -- See `docs/skylive/pubsub.md` for the user-facing tutorial and
 -- `docs/skylive/pubsub-design.md` for the architecture write-up.
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.String as String
-import Sky.Core.List as List
-import Sky.Core.Dict as Dict
-import Sky.Core.Task as Task
-import Sky.Core.Time as Time
-import Sky.Core.Error as Error exposing (Error(..), ErrorKind(..))
-import Std.Log exposing (println)
-import Sky.Core.System as System
-import Std.Html exposing (..)
-import Std.Html.Attributes exposing (..)
-import Std.Html.Events exposing (onSubmit)
-import Std.Live exposing (app, route)
-import Std.Cmd as Cmd
-import Std.Sub as Sub
-import Std.Db as Db
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.List as List
+import Ipe.Dict as Dict
+import Ipe.Task as Task
+import Ipe.Time as Time
+import Ipe.Error as Error exposing (Error(..), ErrorKind(..))
+import Ipe.Log exposing (println)
+import Ipe.System as System
+import Ipe.Html exposing (..)
+import Ipe.Html.Attributes exposing (..)
+import Ipe.Html.Events exposing (onSubmit)
+import Ipe.Live exposing (app, route)
+import Ipe.Cmd as Cmd
+import Ipe.Sub as Sub
+import Ipe.Db as Db
 
 -- ─── Model ───────────────────────────────────────────────────────
 type Page
@@ -329,7 +329,7 @@ view model =
               [class "app"]
               [ header
                     [class "topbar"]
-                    [ h1 [] [text "Sky.Live · multi-session chat"]
+                    [ h1 [] [text "Ipe.Live · multi-session chat"]
                     , p
                           [class "hint"]
                           [text

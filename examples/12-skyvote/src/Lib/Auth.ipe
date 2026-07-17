@@ -1,15 +1,15 @@
 module Lib.Auth exposing (hashPassword, verifyPassword, createUser, authenticateUser, getUserById)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Maybe exposing (..)
-import Sky.Core.List as List
-import Sky.Core.Result as Result
-import Sky.Core.String as String
-import Std.Log exposing (println)
-import Sky.Core.Crypto as Crypto
-import Std.Auth as Auth
+import Ipe.Prelude exposing (..)
+import Ipe.Maybe exposing (..)
+import Ipe.List as List
+import Ipe.Result as Result
+import Ipe.String as String
+import Ipe.Log exposing (println)
+import Ipe.Crypto as Crypto
+import Ipe.Auth as Auth
 import Lib.Db as Db
-import Sky.Core.Error as Error exposing (Error)
+import Ipe.Error as Error exposing (Error)
 
 
 hashPassword : String -> String

@@ -1,13 +1,13 @@
 module Main exposing (main)
 
-import Std.Html as Html
-import Std.Ui as Ui
-import Std.Ui.Background as Background
-import Std.Ui.Font as Font
+import Ipe.Html as Html
+import Ipe.Ui as Ui
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Font as Font
 
 
--- Phase-0 reduced dual-attribute bridge test: mixes Std.Ui.Attribute values
--- (Font.bold, Background.color) with a Std.Html node (Html.div / Html.text)
+-- Phase-0 reduced dual-attribute bridge test: mixes Ipe.Ui.Attribute values
+-- (Font.bold, Background.color) with a Ipe.Html node (Html.div / Html.text)
 -- embedded via Ui.html.  Exercises the UiCtor::UiAttribute + UiCtor::Html
 -- collision-adjacent path that is buildable in Phase 0 (no event kernels).
 -- oracle_divergence = true: Rust backend emits compact inline CSS.

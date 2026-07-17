@@ -7,8 +7,8 @@ module Main exposing (main)
 -- accepted (exit 0) and the emitted project failed `cargo build` with
 -- E0308 `expected SkyPanicInfo, found RecMessageStack`.
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 
 describe : ErrorDetails -> String

@@ -1,8 +1,8 @@
 //! A VARIABLE (non-literal) tuple `case` with a STRING-LITERAL column.
 //!
-//! `Std.Ui.Transform.propsToCss` matches `case pair of ( "transform", v ) -> …`
+//! `Ipe.Ui.Transform.propsToCss` matches `case pair of ( "transform", v ) -> …`
 //! (a variable scrutinee, a string-literal column) — used by
-//! `Std.Ui.Transform` / `Std.Ui.Animation` / `26-ui-showcase`. Admitting a
+//! `Ipe.Ui.Transform` / `Ipe.Ui.Animation` / `26-ui-showcase`. Admitting a
 //! variable tuple scrutinee while fail-closing any string-literal column to
 //! IPE-L0115 (no per-column `.as_str()` coercion on the by-value path) would
 //! reject this shape.
@@ -41,7 +41,7 @@ fn fixture_entry() -> PathBuf {
 
 /// Fast gate: a multi-arm tuple `case` on a VARIABLE scrutinee with a
 /// string-literal column builds cleanly — the IPE-L0115 gap is closed for the
-/// `Std.Ui.Transform.propsToCss` shape.
+/// `Ipe.Ui.Transform.propsToCss` shape.
 #[test]
 fn str_column_var_scrutinee_builds() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("tuple_str_col_var_scrut_gate");

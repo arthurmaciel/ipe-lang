@@ -1,11 +1,11 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Task as Task
-import Sky.Core.String as String
-import Sky.Http.Server as Server
-import Sky.Http.Server exposing (Request, Response, Handler)
-import Sky.Core.Error as Error exposing (Error)
+import Ipe.Prelude exposing (..)
+import Ipe.Task as Task
+import Ipe.String as String
+import Ipe.Http.Server as Server
+import Ipe.Http.Server exposing (Request, Response, Handler)
+import Ipe.Error as Error exposing (Error)
 
 
 main =
@@ -22,7 +22,7 @@ main =
 
 -- v0.16.4 — the `: Handler` head annotation is canonical Elm shape
 -- (`type alias Handler = Request -> Task Error Response` lives in
--- `Sky.Http.Server`).  The same handlers work with the long-form
+-- `Ipe.Http.Server`).  The same handlers work with the long-form
 -- `: Request -> Task Error Response` if you prefer to be explicit.
 handleHome : Handler
 handleHome req =

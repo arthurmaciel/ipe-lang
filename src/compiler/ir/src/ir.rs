@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use ipe_diagnostics::{DResult, Diagnostic};
 use ipe_intern::Symbol;
 
-/// A dotted module path, e.g. `Main` or `Sky.Core.Io`, as interned segments in
+/// A dotted module path, e.g. `Main` or `Ipe.Io`, as interned segments in
 /// source order.
 #[derive(
     Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, serde::Serialize, serde::Deserialize,
@@ -68,7 +68,7 @@ pub struct Module {
     /// whether to append `pub mod tea; pub use tea::*;` to the emitted
     /// `ipe_runtime/mod.rs` and to add `IpeCmd` / `IpeSub` type aliases.
     pub uses_tea: bool,
-    /// `true` when the lowerer detected at least one Sky.Http.Server kernel call
+    /// `true` when the lowerer detected at least one Ipe.Http.Server kernel call
     /// (`Server.get/post/put/delete/any/api/static/listen`, response builders,
     /// extractors, cookie helpers, middleware, `RateLimit.allow`) in the module's
     /// function bodies.
@@ -79,7 +79,7 @@ pub struct Module {
     /// append `pub mod server; pub use server::*; pub mod server_stream; pub use
     /// server_stream::*;` to the emitted `ipe_runtime/mod.rs`.
     pub uses_server: bool,
-    /// `true` when the lowerer detected at least one `Std.Ui` / `Std.Html`
+    /// `true` when the lowerer detected at least one `Ipe.Ui` / `Ipe.Html`
     /// kernel call (`Ui.layout`, `Ui.layoutWith`, `Html.render`, etc.) in the
     /// module's function bodies.
     ///
@@ -87,40 +87,40 @@ pub struct Module {
     /// `KernelFn::is_ui()` variant.  The backend reads this flag to decide
     /// whether to add `pub mod ui;` to the emitted `ipe_runtime/mod.rs`.
     pub uses_ui: bool,
-    /// `true` when the lowerer detected at least one `Std.Live` / `Sky.Live`
+    /// `true` when the lowerer detected at least one `Ipe.Live` / `Ipe.Live`
     /// kernel call (`Live.app`, `Live.appRouted`, `Live.route`, etc.) in the
     /// module's function bodies.
     ///
     /// Set by `ipe_lower` when any call site resolves to a
     /// `KernelFn::is_live()` variant.
     pub uses_live: bool,
-    /// `true` when the lowerer detected at least one `Std.Tui` / `Sky.Tui`
+    /// `true` when the lowerer detected at least one `Ipe.Tui` / `Ipe.Tui`
     /// kernel call (`Tui.app`, `Tui.program`) in the module's function bodies.
     ///
     /// Set by `ipe_lower` when any call site resolves to a
     /// `KernelFn::is_tui()` variant.
     pub uses_tui: bool,
-    /// `true` when the lowerer detected at least one `Std.Webview`
+    /// `true` when the lowerer detected at least one `Ipe.Webview`
     /// kernel call (`Webview.app`) in the module's function bodies.
     ///
     /// Set by `ipe_lower` when any call site resolves to a
     /// `KernelFn::is_webview()` variant.  Implies `uses_live` for the
     /// runtime dependency chain (webview pulls live transitively).
     pub uses_webview: bool,
-    /// `true` when the lowerer detected at least one `Sky.Core.CssSafety`
+    /// `true` when the lowerer detected at least one `Ipe.CssSafety`
     /// leaf security kernel (`CssSafety.safeValue` / `safePropName` /
-    /// `safeSelector` / `stripStyleClose` — the `Std.Css` backing) in the
+    /// `safeSelector` / `stripStyleClose` — the `Ipe.Css` backing) in the
     /// module's function bodies.
     ///
     /// Set by `ipe_lower` when any call site resolves to a
     /// `KernelFn::is_css()` variant.  The backend reads this flag to decide
     /// whether to declare `css_safety` / `css` (`pub use css::*`) in the emitted
-    /// `ipe_runtime/mod.rs` even when `uses_ui` is `false` — a pure `Std.Css`
-    /// program uses the css kernels without any `Std.Ui` / `Std.Html` render
+    /// `ipe_runtime/mod.rs` even when `uses_ui` is `false` — a pure `Ipe.Css`
+    /// program uses the css kernels without any `Ipe.Ui` / `Ipe.Html` render
     /// kernel, so the UI append would never fire and the bare kernel names would
     /// be out of scope (E0425).
     pub uses_css: bool,
-    /// `true` when the lowerer detected at least one `Std.Auth` kernel call
+    /// `true` when the lowerer detected at least one `Ipe.Auth` kernel call
     /// (`Auth.hashPassword`, `Auth.verifyPassword`, `Auth.signToken`,
     /// `Auth.verifyToken`, `Auth.register`, `Auth.login`, `Auth.setRole`, etc.)
     /// in the module's function bodies.
@@ -131,7 +131,7 @@ pub struct Module {
     /// `ipe_runtime/mod.rs`.
     pub uses_auth: bool,
     /// `true` when the lowerer detected at least one outbound
-    /// `Sky.Core.WebSocket` client kernel call (`WebSocket.connect` /
+    /// `Ipe.WebSocket` client kernel call (`WebSocket.connect` /
     /// `connectWith` / `send` / `sendBinary` / `close` / `closeWithCode`, or an
     /// `onOpen` / `onMessage` / `onClose` / `onError` subscription).
     ///
@@ -142,7 +142,7 @@ pub struct Module {
     /// ws_client::*;` to the emitted `ipe_runtime/mod.rs` — the `ws_client`
     /// runtime module is feature-gated and NOT part of the base module set.
     pub uses_websocket: bool,
-    /// `true` when the lowerer detected the `Std.Email` `Email.send` kernel call
+    /// `true` when the lowerer detected the `Ipe.Email` `Email.send` kernel call
     /// in the module's function bodies.
     ///
     /// Set by `ipe_lower` when a call site resolves to `KernelFn::EmailSend`.
@@ -270,7 +270,7 @@ impl BoundSet {
     /// The SQL-bind-parameter bound: realises the type checker's
     /// `TyBounds::sql_param` obligation as Rust `Into<ipe_runtime::db::SqlParam>`
     /// — a generic wrapper around `Db.exec` / `Db.query` / `Db.queryDecode`
-    /// (`Database.exec label sql args` in `examples/17-skymon`'s `Std.Db`
+    /// (`Database.exec label sql args` in `examples/17-skymon`'s `Ipe.Db`
     /// access layer) needs this bound on its own emitted type parameter so its
     /// body's `SqlParam::from`-style projection type-checks for the CALLER's
     /// concrete element type, not just the one instantiation the function
@@ -339,7 +339,7 @@ impl BoundSet {
     /// The `Send` auto-trait bound: a generic type-param whose VALUE is moved
     /// into a runtime consumer that requires `Send` — a `Sub` message value
     /// stored in a `IpeSub::Source` closure that is itself `Box<dyn FnOnce(..) +
-    /// Send>` (e.g. `Sky.Core.WebSocket.onOpen`'s bare `msg`, which flows into
+    /// Send>` (e.g. `Ipe.WebSocket.onOpen`'s bare `msg`, which flows into
     /// `sub_subscribe_ws_open<M: Send + 'static>`). Unlike the boxed-CALLBACK
     /// `'static` bound ([`Self::STATIC`]), the value here is a bare `msg`, not a
     /// callback — so it has its own kernel-on-param matcher. Always paired with
@@ -754,12 +754,12 @@ pub enum IrType {
     /// The `Decoder a` type — an opaque decoder that reads a JSON value and
     /// produces a value of type `a`.
     ///
-    /// Backs `Sky.Core.Json.Decode`.  Renders as
+    /// Backs `Ipe.Json.Decode`.  Renders as
     /// `Decoder<T>` using the emitted project's preamble type alias:
     /// `pub type Decoder<T> = ipe_runtime::json::Decoder<IpeError, T>`.
     Decoder(Box<Self>),
     /// The `Db` connection pool type — an opaque handle to an open database
-    /// connection pool (`Std.Db`).
+    /// connection pool (`Ipe.Db`).
     ///
     /// Renders as `Db` via the runtime re-export
     /// `pub use ipe_runtime::Db;` in the emitted crate preamble.  The type is
@@ -780,7 +780,7 @@ pub enum IrType {
     /// `pub type IpeSub<M> = ipe_runtime::tea::IpeSub<M>`.
     /// The inner type is the message type `M`.
     Sub(Box<Self>),
-    // ── Sky.Http.Server opaque types ────────────────────────────────────
+    // ── Ipe.Http.Server opaque types ────────────────────────────────────
     /// `Request` — opaque HTTP server request.  Renders as `ServerRequest`.
     ///
     /// Corresponds to `ipe_runtime::server::ServerRequest`.  Never synthesised
@@ -806,8 +806,8 @@ pub enum IrType {
     /// `Stream.emit` / `Stream.finish` / `Stream.withContentType`.  Never
     /// synthesised as a record struct; always treated as an opaque handle.
     StreamWriter,
-    /// `HttpRequest` — opaque HTTP request descriptor used by `Sky.Core.Http`
-    /// and `Sky.Core.Http.Stream`.  Renders as `HttpRequest`.
+    /// `HttpRequest` — opaque HTTP request descriptor used by `Ipe.Http`
+    /// and `Ipe.Http.Stream`.  Renders as `HttpRequest`.
     ///
     /// Corresponds to `ipe_runtime::http::HttpRequest`.  In Sky source, users
     /// write `HttpRequest` literals as structural records; the lowerer detects
@@ -815,15 +815,15 @@ pub enum IrType {
     /// `maxRedirects`, `method`, `timeout`, `url`) and folds it to this opaque
     /// variant instead of synthesising a backend record struct, so call sites
     /// that pass the value to `http_stream_open` / `http_request` kernels see
-    /// the correct runtime type.  Never stored in a Sky.Live Model.
+    /// the correct runtime type.  Never stored in a Ipe.Live Model.
     HttpRequest,
-    // ── Sky.Http.Server.WebSocket opaque type handles ──────────────────
+    // ── Ipe.Http.Server.WebSocket opaque type handles ──────────────────
     /// `WebSocketServer` — opaque per-peer WebSocket handle.  Renders as
     /// `WsHandle`.
     ///
     /// Passed to every `WsServerCfg` callback as the first argument; also
     /// accepted by `Ws.sendToClient` / `Ws.sendBinaryToClient` /
-    /// `Ws.broadcast` / `Ws.closeClient`.  Never stored in a Sky.Live Model.
+    /// `Ws.broadcast` / `Ws.closeClient`.  Never stored in a Ipe.Live Model.
     WebSocketServer,
     /// `WebSocketServerCfg` — opaque WebSocket server configuration.  Renders
     /// as `WsServerCfg<IpeError>`.
@@ -832,8 +832,8 @@ pub enum IrType {
     /// builder chain; consumed by `Ws.upgrade`.  Phantom `msg` type parameter
     /// dropped (D2 — see docs/adr/0023-websocket-server-kernel-only-typed-handles.md).
     WebSocketServerCfg,
-    // ── Std.Ui / Std.Html parametric types ──────────────────────────────
-    /// A parametric `Std.Ui` or `Std.Html` type — one that carries a message type
+    // ── Ipe.Ui / Ipe.Html parametric types ──────────────────────────────
+    /// A parametric `Ipe.Ui` or `Ipe.Html` type — one that carries a message type
     /// parameter `msg`.  The `ctor` field identifies which of the five
     /// message-parametric types this is; `msg` is the message type.
     ///
@@ -851,7 +851,7 @@ pub enum IrType {
         ctor: UiCtor,
         msg: Box<Self>,
     },
-    /// A nullary (non-parametric) `Std.Ui` type.  These are closed value types
+    /// A nullary (non-parametric) `Ipe.Ui` type.  These are closed value types
     /// that carry no message type parameter.
     ///
     /// | plain             | Rust type                                         |
@@ -890,7 +890,7 @@ pub enum IrType {
     /// pattern matching without a range-check.
     Order,
 
-    /// `Std.Decimal` — arbitrary-precision decimal arithmetic.
+    /// `Ipe.Decimal` — arbitrary-precision decimal arithmetic.
     ///
     /// Renders as `ipe_runtime::decimal::Decimal` (newtype around
     /// `rust_decimal::Decimal`).  Carries Copy + serde semantics; used as
@@ -956,7 +956,7 @@ pub enum IrType {
     /// Renders as `ipe_runtime::error::IpeTypeInfo`.
     TypeInfo,
 
-    /// `Std.Db.Sql`'s opaque WHERE-fragment type — SQL injection closed by
+    /// `Ipe.Db.Sql`'s opaque WHERE-fragment type — SQL injection closed by
     /// construction: a `SqlFragment` can only be built through the `Sql.*`
     /// combinator kernels, never from an arbitrary `String`.
     ///
@@ -967,7 +967,7 @@ pub enum IrType {
     /// bind may carry a revealed secret).
     SqlFragment,
 
-    /// `Sky.Core.Secret`'s opaque, sealed secret-string type — "secrets are
+    /// `Ipe.Secret`'s opaque, sealed secret-string type — "secrets are
     /// typed, never `fmt`-stringified": a `Secret` can only be built through
     /// `Secret.fromString`, never implicitly from a `String`.
     ///
@@ -985,7 +985,7 @@ pub enum IrType {
     /// `ipe_runtime::secret`'s module doc for the full design.
     Secret,
 
-    /// `Std.Cache`'s configuration record `{ maxEntries : Int, ttlMs : Int,
+    /// `Ipe.Cache`'s configuration record `{ maxEntries : Int, ttlMs : Int,
     /// maxBytes : Int }`. Renders as `ipe_runtime::cache::CacheCfg`.
     ///
     /// The lowerer folds any solved / annotated record matching that exact
@@ -994,10 +994,10 @@ pub enum IrType {
     /// constructs the runtime struct the `cache_new_raw` kernel takes, rather
     /// than a backend-synthesised `RecMaxBytes…` struct that would mismatch it
     /// (E0308). Fully `Clone` (derivable on the runtime struct); never stored in
-    /// a Sky.Live Model.
+    /// a Ipe.Live Model.
     CacheCfg,
 
-    /// `Std.Cache.stats`'s return record `{ hits : Int, misses : Int,
+    /// `Ipe.Cache.stats`'s return record `{ hits : Int, misses : Int,
     /// evictions : Int }`. Renders as `ipe_runtime::cache::CacheStats`.
     ///
     /// Folded the same way as [`IrType::CacheCfg`]: the `statsRaw` kernel
@@ -1008,7 +1008,7 @@ pub enum IrType {
     /// `.evictions` on the runtime struct's pub fields.
     CacheStats,
 
-    /// `Sky.Core.WebSocket`'s connect-configuration record `{ url : String,
+    /// `Ipe.WebSocket`'s connect-configuration record `{ url : String,
     /// headers : List (String, String), timeout : Int, pingInterval : Int }`.
     /// Renders as `ipe_runtime::ws_client::WsClientCfg`.
     ///
@@ -1018,10 +1018,10 @@ pub enum IrType {
     /// constructs the runtime struct the `web_socket_connect_with` kernel takes,
     /// rather than a backend-synthesised `RecHeaders…` struct that would mismatch
     /// it (E0308). Fully `Clone` (derivable on the runtime struct); never stored
-    /// in a Sky.Live Model.
+    /// in a Ipe.Live Model.
     WebSocketClientCfg,
 
-    /// `Std.Csv`'s document record `{ header : List String, rows : List (List
+    /// `Ipe.Csv`'s document record `{ header : List String, rows : List (List
     /// String) }`. Renders as `ipe_runtime::csv::CsvDoc`.
     ///
     /// The lowerer folds any solved / annotated record matching that exact
@@ -1031,10 +1031,10 @@ pub enum IrType {
     /// `csv_parse` kernel's `CsvDoc` return is field-accessed via `.header` /
     /// `.rows` — rather than a backend-synthesised `RecHeaderRows` struct that
     /// would mismatch it (E0308). Fully `Clone` (derivable on the runtime
-    /// struct); never stored in a Sky.Live Model.
+    /// struct); never stored in a Ipe.Live Model.
     CsvDoc,
 
-    /// `Std.Email`'s message record — 9 fields `{ from, to, cc, bcc, subject,
+    /// `Ipe.Email`'s message record — 9 fields `{ from, to, cc, bcc, subject,
     /// textBody, htmlBody, attachments, replyTo }`. Renders as
     /// `ipe_runtime::email::EmailMessage`.
     ///
@@ -1045,24 +1045,24 @@ pub enum IrType {
     /// record struct that would mismatch it (E0308). Fully `Clone`.
     EmailMessage,
 
-    /// `Std.Email`'s attachment record `{ filename : String, mimeType : String,
+    /// `Ipe.Email`'s attachment record `{ filename : String, mimeType : String,
     /// content : String }`. Renders as `ipe_runtime::email::EmailAttachment`
     /// (the runtime type name differs from the Sky alias `Attachment`; the
     /// `content` field carries bytes as the `Bytes`-alias `String`). Folded like
     /// [`IrType::EmailMessage`].
     EmailAttachment,
 
-    /// `Std.Email`'s SES config record `{ region : String, key : String,
+    /// `Ipe.Email`'s SES config record `{ region : String, key : String,
     /// secret : String }`. Renders as `ipe_runtime::email::SesConfig`. Folded
     /// like [`IrType::EmailMessage`].
     EmailSesConfig,
 
-    /// `Std.Email`'s SMTP config record `{ host : String, port : Int,
+    /// `Ipe.Email`'s SMTP config record `{ host : String, port : Int,
     /// user : String, pass : String }`. Renders as
     /// `ipe_runtime::email::SmtpConfig`. Folded like [`IrType::EmailMessage`].
     EmailSmtpConfig,
 
-    /// `Std.Email`'s `EmailProvider` ADT (`Resend String | Ses SesConfig |
+    /// `Ipe.Email`'s `EmailProvider` ADT (`Resend String | Ses SesConfig |
     /// SendGrid String | Smtp SmtpConfig`). Renders as
     /// `ipe_runtime::email::EmailProvider`.
     ///
@@ -1075,7 +1075,7 @@ pub enum IrType {
     EmailProvider,
 }
 
-/// Tag enum for the message-parametric `Std.Ui` / `Std.Html` types.
+/// Tag enum for the message-parametric `Ipe.Ui` / `Ipe.Html` types.
 ///
 /// Used inside [`IrType::Ui`] to select the correct Rust path at emission time.
 /// The set is intentionally small to keep the pattern match exhaustive without a
@@ -1084,27 +1084,27 @@ pub enum IrType {
 pub enum UiCtor {
     /// `Html msg` — a rendered HTML tree (`ipe_runtime::html::Html<M>`).
     Html,
-    /// `Element msg` — a Std.Ui layout element (`ipe_runtime::ui::element::Element<M>`).
+    /// `Element msg` — a Ipe.Ui layout element (`ipe_runtime::ui::element::Element<M>`).
     Element,
-    /// `Attribute msg` from `Std.Ui` — a layout attribute (`ipe_runtime::ui::element::Attribute<M>`).
+    /// `Attribute msg` from `Ipe.Ui` — a layout attribute (`ipe_runtime::ui::element::Attribute<M>`).
     UiAttribute,
-    /// `Attribute msg` from `Std.Html` / `Std.Html.Attributes` —
+    /// `Attribute msg` from `Ipe.Html` / `Ipe.Html.Attributes` —
     /// an HTML attribute (`ipe_runtime::html::Attribute<M>`).
     HtmlAttribute,
-    /// `Event msg` from `Std.Html.Events` —
+    /// `Event msg` from `Ipe.Html.Events` —
     /// an HTML event handler (`ipe_runtime::html::Event<M>`).
     HtmlEvent,
-    /// `Label msg` — a `Std.Ui.Input` label descriptor (`ipe_runtime::ui::input::Label<M>`).
+    /// `Label msg` — a `Ipe.Ui.Input` label descriptor (`ipe_runtime::ui::input::Label<M>`).
     Label,
-    /// `Placeholder msg` — a `Std.Ui.Input` placeholder descriptor
+    /// `Placeholder msg` — a `Ipe.Ui.Input` placeholder descriptor
     /// (`ipe_runtime::ui::input::Placeholder<M>`).
     Placeholder,
-    /// `RadioOption msg` — a `Std.Ui.Input` radio option descriptor
+    /// `RadioOption msg` — a `Ipe.Ui.Input` radio option descriptor
     /// (`ipe_runtime::ui::input::RadioOption<M>`).
     RadioOption,
 }
 
-/// Tag enum for the nullary (non-message-parametric) `Std.Ui` types.
+/// Tag enum for the nullary (non-message-parametric) `Ipe.Ui` types.
 ///
 /// Used inside [`IrType::UiPlain`] to select the correct Rust path at emission
 /// time.  The set is closed (eight variants).
@@ -1149,7 +1149,7 @@ pub enum UiPlain {
 ///   [`IrType::HttpRequest`] / [`IrType::WebSocketServer`] /
 ///   [`IrType::WebSocketServerCfg`] / [`IrType::LiveReq`] / [`IrType::LiveRoute`]
 ///   (each lacks at least `PartialEq`).
-/// * the two `Clone`-only `Std.Html` carriers [`UiCtor::HtmlAttribute`] /
+/// * the two `Clone`-only `Ipe.Html` carriers [`UiCtor::HtmlAttribute`] /
 ///   [`UiCtor::HtmlEvent`] (they hold `Arc<dyn Fn>` event handlers).
 ///
 /// A non-derivable leaf poisons every *transparent carrier* that reaches it
@@ -1216,7 +1216,7 @@ pub fn ir_type_is_derivable(
         | IrType::CsvDoc
         | IrType::Generic(_)
         | IrType::UiPlain(_) => true,
-        // The fully-derivable Std.Ui / Std.Html carriers vs the two Clone-only
+        // The fully-derivable Ipe.Ui / Ipe.Html carriers vs the two Clone-only
         // ones (`html::Attribute` / `html::Event`, which hold `Arc<dyn Fn>`).
         IrType::Ui { ctor, msg } => {
             matches!(
@@ -1250,7 +1250,7 @@ pub fn ir_type_is_derivable(
         // `WsHandle` / `WsServerCfg` are opaque handles — not fully derivable.
         | IrType::WebSocketServer
         | IrType::WebSocketServerCfg
-        // Std.Email runtime structs + the EmailProvider enum derive only
+        // Ipe.Email runtime structs + the EmailProvider enum derive only
         // Clone+Debug (no PartialEq) — not fully derivable.
         | IrType::EmailMessage
         | IrType::EmailAttachment
@@ -1282,7 +1282,7 @@ pub fn ir_type_is_derivable(
 /// Total predicate: does the Rust type that [`IrType`] renders to derive
 /// `serde::Serialize` **and** `serde::de::DeserializeOwned`?
 ///
-/// This is the authoritative admissibility gate for a `Std.Live` / `Sky.Live`
+/// This is the authoritative admissibility gate for a `Ipe.Live` / `Ipe.Live`
 /// **Model**: the live runtime persists the Model to the session store, so
 /// `live_app` bounds it "Serialize + `DeserializeOwned` + Clone + `PartialEq`".
 /// Without this gate a well-typed program that stores a non-serialisable value
@@ -1304,7 +1304,7 @@ pub fn ir_type_is_derivable(
 ///   Model never carries a free generic anyway).
 ///
 /// NON-serde leaves — the full non-derivable set (functions, the opaque
-/// effect/handle wrappers, the two `Clone`-only `Std.Html` carriers) PLUS the
+/// effect/handle wrappers, the two `Clone`-only `Ipe.Html` carriers) PLUS the
 /// derivable-but-not-`serde` UI value types:
 /// * every [`IrType::Ui`] carrier (`Html` / `Element` / ui-`Attribute` and the
 ///   two `html` carriers) — verified: `src/runtime/rust/src/{html,ui}` derive
@@ -1378,7 +1378,7 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::SqlFragment
         // `Secret` must NEVER round-trip through serde (session store, JSON
         // encode, anything) — derivable (see `ir_type_is_derivable`) but not
-        // serde. This is the load-bearing gate that makes a `Std.Live` Model
+        // serde. This is the load-bearing gate that makes a `Ipe.Live` Model
         // field of type `Secret` a compile-time IPE-L0120, not a session-store
         // leak.
         | IrType::Secret
@@ -1390,7 +1390,7 @@ pub fn ir_type_is_serde(ty: &IrType, enum_serde: &impl Fn(&ModPath, Symbol) -> b
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc
-        // Std.Email runtime structs + EmailProvider enum are kernel-boundary
+        // Ipe.Email runtime structs + EmailProvider enum are kernel-boundary
         // values (`email_send`), never persisted to a session store — the
         // runtime types carry no serde derive.
         | IrType::EmailMessage
@@ -1663,7 +1663,7 @@ pub enum Expr {
         /// reconstructs a `Call` MUST preserve this field.
         pin: CallPin,
         /// Type-directed form-submit handler classification for the
-        /// `onSubmit` kernel family (`Ui.onSubmit` / `Std.Html.Events.onSubmit`).
+        /// `onSubmit` kernel family (`Ui.onSubmit` / `Ipe.Html.Events.onSubmit`).
         /// The runtime's `Event::OnForm` slot accepts either a DECODER
         /// (`FormData -> Option<Msg>`, from a `T -> Msg` handler) or a FIXED
         /// value (`Msg`, from a bare non-function handler). Which one is a
@@ -1942,7 +1942,7 @@ impl CallPin {
 }
 
 /// How an `onSubmit`-family call ([`Expr::Call`] whose callee is
-/// `Ui.onSubmit` / `Std.Html.Events.onSubmit`) dispatches its handler.
+/// `Ui.onSubmit` / `Ipe.Html.Events.onSubmit`) dispatches its handler.
 ///
 /// The runtime `Event::OnForm` slot is `Arc<dyn Fn(FormData) -> Option<Msg>>`.
 /// A well-typed `onSubmit` handler is one of two SHAPES, distinguished ONLY by
@@ -1988,7 +1988,7 @@ pub enum OnFormKind {
 /// [`ipe_kernels::StdlibKernel::decl`] for per-variant metadata.
 pub type KernelFn = ipe_kernels::StdlibKernel;
 
-/// Re-export of the `Std.Html.Events` payload-shape ADT, so backend
+/// Re-export of the `Ipe.Html.Events` payload-shape ADT, so backend
 /// crates that already depend on `ipe_ir` (for `KernelFn`) can match on it
 /// without taking a direct `ipe_kernels` dependency.
 pub use ipe_kernels::HtmlEventShape;

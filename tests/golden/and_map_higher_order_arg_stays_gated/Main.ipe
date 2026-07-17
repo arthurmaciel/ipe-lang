@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- #90 T3 residual gate, HIGHER-ORDER-ARGUMENT aliasing shape: `Result.andMap`
 -- passed bare as an ARGUMENT expression to another function, which applies it

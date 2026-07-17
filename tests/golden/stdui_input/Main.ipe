@@ -1,7 +1,7 @@
 module Main exposing (main)
 
-import Std.Html as Html
-import Std.Ui as Ui
+import Ipe.Html as Html
+import Ipe.Ui as Ui
 
 
 -- stdui_input seal — Ui.input + Ui.describe + desc* constructors.

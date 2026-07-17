@@ -5,7 +5,7 @@
 //! false-positives on text that is NOT a
 //! runtime row accessor, appending `+ IpeRow` — a reference to the
 //! `#[cfg(feature = "db")]` trait `ipe_runtime::db::IpeRow` — to a crate that
-//! never imports `Std.Db`. Result: `skyc` exit 0, then `cargo` fails with
+//! never imports `Ipe.Db`. Result: `skyc` exit 0, then `cargo` fails with
 //! `error[E0433]: could not find db in ipe_runtime`. A SEAL violation
 //! (skyc-0-then-cargo-fail).
 //!

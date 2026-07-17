@@ -1,13 +1,13 @@
 module State exposing (..)
 
--- Pure types + same-shape helpers. No Std.Ui imports here, so the
+-- Pure types + same-shape helpers. No Ipe.Ui imports here, so the
 -- type-checker stays well below the heap-exhaustion limit (CLAUDE.md
 -- Limitation #17): the heavy unification load is in the per-View
 -- modules.
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.List as List
-import Sky.Core.Maybe as Maybe
-import Sky.Core.String as String
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+import Ipe.String as String
 
 -- ─── State types ─────────────────────────────────────────────────
 
@@ -42,7 +42,7 @@ type alias Session =
     { username : String }
 
 -- Form data for sign-in. Decoded from the wire `<form>` submit
--- payload directly into this typed record (Sky.Live's case-
+-- payload directly into this typed record (Ipe.Live's case-
 -- insensitive json.Unmarshal). Field names MUST match the form's
 -- input `name` attributes (lowercase here, matching `Ui.name`).
 -- The password lives only in this record while DoSignIn is
@@ -82,7 +82,7 @@ type Msg
     | SubmitComment Int
 
 
--- ─── Pure helpers (no Std.Ui dependency) ─────────────────────────
+-- ─── Pure helpers (no Ipe.Ui dependency) ─────────────────────────
 
 -- ─── Vote scoring ────────────────────────────────────────────────
 postScore : Post -> Int

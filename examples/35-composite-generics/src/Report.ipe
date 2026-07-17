@@ -6,15 +6,15 @@ module Report exposing (..)
 --   * ToString.fromInt / fromFloat / fromBool
 --   * Encoding.base64Encode / hexEncode / urlEncode
 --   * Math.round / abs
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.String as String
-import Sky.Core.List as List
-import Sky.Core.Maybe as Maybe
-import Sky.Core.Dict as Dict
-import Sky.Core.Math as Math
-import Sky.Core.Encoding as Encoding
-import Sky.Core.Json.Encode as JsonEnc
-import Sky.Core.ToString as ToString
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+import Ipe.Dict as Dict
+import Ipe.Math as Math
+import Ipe.Encoding as Encoding
+import Ipe.Json.Encode as JsonEnc
+import Ipe.ToString as ToString
 import State exposing (Transaction, EnrichedRow, Bucket(..), Report, BucketSummary)
 import Compute
 

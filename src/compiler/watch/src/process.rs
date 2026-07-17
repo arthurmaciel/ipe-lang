@@ -86,17 +86,17 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
 /// How readiness is probed for a freshly spawned candidate.
 ///
 /// Chosen by the caller from what it knows about the emitted project
-/// (Sky.Live apps expose `/_sky/readyz`; everything else falls back to a
+/// (Ipe.Live apps expose `/_sky/readyz`; everything else falls back to a
 /// plain TCP connect on the configured port, and finally to "did it stay
 /// alive" for a program that binds no port at all — matching the design
-/// doc's own bifurcation: "readiness probe (`/_sky/readyz` for Sky.Live;
+/// doc's own bifurcation: "readiness probe (`/_sky/readyz` for Ipe.Live;
 /// alive + optional health for CLI)").
 #[derive(Debug, Clone, Copy)]
 pub enum ReadinessCheck {
     /// GET `/_sky/readyz` on `127.0.0.1:port`; ready on any 2xx response.
     HttpReadyz { port: u16 },
     /// A bare TCP connect to `127.0.0.1:port` succeeding is enough (no
-    /// process-level readiness endpoint to ask, e.g. `Sky.Http.Server`).
+    /// process-level readiness endpoint to ask, e.g. `Ipe.Http.Server`).
     TcpConnect { port: u16 },
     /// No network surface at all (CLI / batch job) — "ready" means the
     /// process is still alive after `grace` has elapsed, never a network

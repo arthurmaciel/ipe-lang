@@ -1,4 +1,4 @@
-//! `Std.Db` gate — `SqlValue`-parameterized `Db.exec` + `Db.query` on an
+//! `Ipe.Db` gate — `SqlValue`-parameterized `Db.exec` + `Db.query` on an
 //! in-memory `SQLite` database via `Db.withTransaction`.
 //!
 //! Every test compiles a Sky program through `skyc`, builds the emitted Rust
@@ -250,7 +250,7 @@ fn db_find_by_conditions() {
     assert_runs_and_matches_oracle("db_find_by_conditions");
 }
 
-// ── Db.findWhere / Db.deleteWhere / Std.Db.Sql combinators ──────
+// ── Db.findWhere / Db.deleteWhere / Ipe.Db.Sql combinators ──────
 
 /// `Db.exec` INSERTs `"widget:10"` and `"gadget:7"` rows →
 /// `Db.findWhere conn "products" (Sql.gt (Sql.column "qty") (Sql.int 9))` →
@@ -281,7 +281,7 @@ fn db_delete_where() {
     assert_runs_and_matches_oracle("db_delete_where");
 }
 
-/// Exercises every `Std.Db.Sql` combinator at least once (column, param via
+/// Exercises every `Ipe.Db.Sql` combinator at least once (column, param via
 /// int/string/float/bool, eq, ne, gt, lt, gte, lte, and, or, not, isNull,
 /// isNotNull, like, inList non-empty AND the empty-list `(1 = 0)` shortcut)
 /// through three `Db.findWhere` calls. Output: `"widget|0|gadget"`.

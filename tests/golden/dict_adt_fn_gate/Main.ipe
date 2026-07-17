@@ -8,7 +8,7 @@ module Main exposing (main)
 -- (Calling `Dict.insert Red 1 Dict.empty` directly is the eager-pin sibling
 -- and surfaces IPE-T0001; both fail closed with no Rust emitted.)
 
-import Sky.Core.Dict as Dict
+import Ipe.Dict as Dict
 
 
 type Color

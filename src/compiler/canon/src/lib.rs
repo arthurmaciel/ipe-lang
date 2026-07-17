@@ -144,8 +144,8 @@ pub fn canonicalise_module(
 /// Like [`canonicalise_module`] but lets the build driver vouch that a module's
 /// source came from the compiler's own embedded stdlib table
 /// ([`ModuleOrigin::EmbeddedStdlib`]) — the ONLY way to legitimately declare a
-/// `module Std.…` / `module Sky.…` home without tripping IPE-N0025. The trust tag
-/// is unforgeable from module text: a user file named `Std.Foo` reaches this
+/// `module Ipe.…` / `module Ipe.…` home without tripping IPE-N0025. The trust tag
+/// is unforgeable from module text: a user file named `Ipe.Foo` reaches this
 /// function as [`ModuleOrigin::User`] and stays rejected.
 ///
 /// # Errors
@@ -698,7 +698,7 @@ mod tests {
 
     #[test]
     fn user_type_shadowing_builtin_rejected() {
-        // `Length` is a reserved built-in (`Std.Ui` nullary type) that the
+        // `Length` is a reserved built-in (`Ipe.Ui` nullary type) that the
         // lowerer matches ahead of the user-enum lookup; a user `type Length`
         // would be silently overridden, so canon must reject it (IPE-N0026).
         let src = "module Main exposing (main)\n\n\
@@ -731,7 +731,7 @@ mod tests {
     #[test]
     fn type_alias_shadowing_builtin_rejected() {
         // Aliases are gated identically — `type alias Html = String` shadows the
-        // built-in `Std.Html.Html`, which the lowerer maps to `IrType::Ui`.
+        // built-in `Ipe.Html.Html`, which the lowerer maps to `IrType::Ui`.
         let src = "module Main exposing (main)\n\n\
                    type alias Html = String\n\nmain = 0\n";
         let err = canon_err(src);
@@ -835,11 +835,11 @@ mod tests {
 
     #[test]
     fn stdlib_alias_registers_multisegment_json_encode() {
-        // The reported failure: `import Sky.Core.Json.Encode as Encode` then
+        // The reported failure: `import Ipe.Json.Encode as Encode` then
         // `Encode.string` used to error IPE-N0004 (unknown module `Encode`)
         // because the alias was never registered against the canonical `JsonEnc`.
         let src = "module Main exposing (main)\n\
-                   import Sky.Core.Json.Encode as Encode\n\n\
+                   import Ipe.Json.Encode as Encode\n\n\
                    main = Encode.string\n";
         let Some((m, i)) = canon_module_src(src) else {
             assert!(false_marker(), "aliased stdlib import must canonicalise");
@@ -852,7 +852,7 @@ mod tests {
     fn stdlib_alias_registers_multisegment_json_decode_pipeline() {
         // Deepest path (5 segments) → canonical `JsonDecP`.
         let src = "module Main exposing (main)\n\
-                   import Sky.Core.Json.Decode.Pipeline as P\n\n\
+                   import Ipe.Json.Decode.Pipeline as P\n\n\
                    main = P.required\n";
         let Some((m, i)) = canon_module_src(src) else {
             assert!(false_marker(), "aliased pipeline import must canonicalise");
@@ -863,13 +863,13 @@ mod tests {
 
     #[test]
     fn stdlib_alias_registers_std_module() {
-        // Completeness: a `Std.*` module aliased to a name differing from both
+        // Completeness: a `Ipe.*` module aliased to a name differing from both
         // the last segment and the canonical qualifier.
         let src = "module Main exposing (main)\n\
-                   import Std.Ui as U\n\n\
+                   import Ipe.Ui as U\n\n\
                    main = U.text\n";
         let Some((m, i)) = canon_module_src(src) else {
-            assert!(false_marker(), "aliased Std.Ui import must canonicalise");
+            assert!(false_marker(), "aliased Ipe.Ui import must canonicalise");
             return;
         };
         assert_main_is_kernel(&m, &i, "Ui", "text");
@@ -881,7 +881,7 @@ mod tests {
         // last segment (`Encode`) differs from the canonical qualifier
         // (`JsonEnc`), so the fix must register `Encode`, not only `JsonEnc`.
         let src = "module Main exposing (main)\n\
-                   import Sky.Core.Json.Encode\n\n\
+                   import Ipe.Json.Encode\n\n\
                    main = Encode.string\n";
         let Some((m, i)) = canon_module_src(src) else {
             assert!(false_marker(), "no-as stdlib import must canonicalise");
@@ -895,7 +895,7 @@ mod tests {
         // The single-module `canonicalise` entry also registers stdlib aliases
         // (it previously ignored imports entirely).
         let src = "module Main exposing (main)\n\
-                   import Sky.Core.Json.Encode as Encode\n\n\
+                   import Ipe.Json.Encode as Encode\n\n\
                    main = Encode.int\n";
         let mut i = Interner::new();
         let Ok(parsed) = ipe_parse::parse_module(src, &mut i) else {
@@ -914,7 +914,7 @@ mod tests {
         // A `Sky.*` path with no registered canonical qualifier must NOT invent
         // one: the alias reference surfaces UnknownModule at its use site.
         let src = "module Main exposing (main)\n\
-                   import Sky.Core.Nonexistent as N\n\n\
+                   import Ipe.Nonexistent as N\n\n\
                    main = N.foo\n";
         let mut i = Interner::new();
         let Ok(parsed) = ipe_parse::parse_module(src, &mut i) else {
@@ -939,13 +939,13 @@ mod tests {
     #[test]
     fn stdlib_module_paths_target_a_known_qualifier() {
         // Anti-drift (no dangling target): every canonical named in the path
-        // table is a real registered qualifier, and every path is `Sky.*`/`Std.*`.
+        // table is a real registered qualifier, and every path is `Sky.*`/`Ipe.*`.
         let mut i = Interner::new();
         let home = vec![i.intern("Main").expect("intern Main")];
         let env = Env::initial(home, &mut i).expect("build env");
         for (path, canonical) in crate::env::STDLIB_MODULE_QUALIFIERS {
             assert!(
-                matches!(path.first(), Some(&("Sky" | "Std"))),
+                matches!(path.first(), Some(&"Ipe")),
                 "path {path:?} must start with Sky or Std"
             );
             let sym = i.intern(canonical).expect("intern canonical");
@@ -964,7 +964,7 @@ mod tests {
         //
         // Primary qualifiers are the bare short-names (no `.`) plus the sole
         // dotted canonical `Db.Decode`; the other dotted `qual_vars` keys are the
-        // inline-qualifier convenience aliases (`Std.Html`, …), not import targets.
+        // inline-qualifier convenience aliases (`Ipe.Html`, …), not import targets.
         let mut i = Interner::new();
         let home = vec![i.intern("Main").expect("intern Main")];
         let env = Env::initial(home, &mut i).expect("build env");
@@ -1708,7 +1708,7 @@ mod tests {
              type Color = Red | Green | Blue\n",
             "module Main exposing (main)\n\
              import Dep exposing (Color(..))\n\
-             import Std.Log exposing (println)\n\n\
+             import Ipe.Log exposing (println)\n\n\
              type Color = Warm | Cool\n\n\
              describe : Color -> String\n\
              describe c =\n    case c of\n        Warm -> \"warm\"\n        Cool -> \"cool\"\n\n\
@@ -1736,7 +1736,7 @@ mod tests {
              type Color = Red | Green | Blue\n",
             "module Main exposing (main)\n\
              import Dep exposing (Color(..))\n\
-             import Std.Log exposing (println)\n\n\
+             import Ipe.Log exposing (println)\n\n\
              type alias Color = Int\n\n\
              main =\n    println \"hi\"\n",
         );
@@ -1763,7 +1763,7 @@ mod tests {
             "module Dep exposing (Color(..))\n\
              type Color = Red | Green | Blue\n",
             "module Main exposing (main)\n\
-             import Std.Log exposing (println)\n\n\
+             import Ipe.Log exposing (println)\n\n\
              type Color = Warm | Cool\n\n\
              describe : Color -> String\n\
              describe c =\n    case c of\n        Warm -> \"warm\"\n        Cool -> \"cool\"\n\n\
@@ -1923,9 +1923,9 @@ mod tests {
         // so stdlib_index keys differ; the forward check already covers the
         // canonical side):
         //   Basics, Attr, Event                    — non-module prelude names
-        //   Std.Html, Std.Ui, Std.Html.Attributes,
-        //   Std.Html.Events, Std.Live, Std.Tui, Std.Webview  — Std.* aliases
-        //   Sky.Html, Sky.Ui, Sky.Live, Sky.Tui    — Sky.* aliases
+        //   Ipe.Html, Ipe.Ui, Ipe.Html.Attributes,
+        //   Ipe.Html.Events, Ipe.Live, Ipe.Tui, Ipe.Webview  — Ipe.* aliases
+        //   Ipe.Html, Ipe.Ui, Ipe.Live, Ipe.Tui    — Sky.* aliases
         //
         // Note: QUALIFIER_ALIASES clone their members INCLUDING the id, so the
         // alias entries are correct by construction.  The exclusion exists only
@@ -1935,17 +1935,17 @@ mod tests {
             "Basics",
             "Attr",
             "Event",
-            "Std.Html",
-            "Std.Ui",
-            "Std.Html.Attributes",
-            "Std.Html.Events",
-            "Std.Live",
-            "Std.Tui",
-            "Std.Webview",
-            "Sky.Html",
-            "Sky.Ui",
-            "Sky.Live",
-            "Sky.Tui",
+            "Ipe.Html",
+            "Ipe.Ui",
+            "Ipe.Html.Attributes",
+            "Ipe.Html.Events",
+            "Ipe.Live",
+            "Ipe.Tui",
+            "Ipe.Webview",
+            "Ipe.Html",
+            "Ipe.Ui",
+            "Ipe.Live",
+            "Ipe.Tui",
         ]
         .into_iter()
         .collect();
@@ -1981,7 +1981,7 @@ mod tests {
         // `docs/adr/0020-html-ui-live-kernel-arity-tripwire.md` derivation,
         // which only audited kernels that already had a `StdlibKernel` id (a
         // TYPES-side `Ty::Var(u32::MAX)`-class hole); these have no id at all
-        // yet. Each is a real Std.Ui / Std.Html surface named in `QUALIFIERS`
+        // yet. Each is a real Ipe.Ui / Ipe.Html surface named in `QUALIFIERS`
         // (env.rs) with no matching `ipe_kernels::StdlibKernel::decl()` entry —
         // i.e. not-yet-ported advanced UI features (pseudo-classes, media
         // queries, gradients, HTML-document-level nodes), not typos or drift.
@@ -1990,7 +1990,7 @@ mod tests {
         let deliberately_unbacked_members: std::collections::BTreeSet<(&str, &str)> = [
             ("String", "toChar"),
             ("Basics", "toString"),
-            // Std.Ui — sized elements / attrs / pseudo-classes / media queries.
+            // Ipe.Ui — sized elements / attrs / pseudo-classes / media queries.
             ("Ui", "image"),
             ("Ui", "disabled"),
             ("Ui", "paddingEach"),
@@ -2009,14 +2009,14 @@ mod tests {
             ("Ui", "focus"),
             ("Ui", "focusVisible"),
             ("Ui", "active"),
-            // Std.Html — document-level nodes + display helper.
+            // Ipe.Html — document-level nodes + display helper.
             ("Html", "toString"),
             ("Html", "voidNode"),
             ("Html", "doctype"),
             ("Html", "titleNode"),
             ("Html", "htmlNode"),
             ("Html", "headNode"),
-            // Std.Ui.Background — gradients.
+            // Ipe.Ui.Background — gradients.
             ("Background", "linearGradient"),
         ]
         .into_iter()
@@ -2751,16 +2751,16 @@ mod tests {
         );
     }
 
-    // ── `import Sky.*/Std.* exposing (member)` brings stdlib VALUE members
+    // ── `import Sky.*/Ipe.* exposing (member)` brings stdlib VALUE members
     // into UNQUALIFIED scope ─────────────────────────────────────────────────
 
     #[test]
     fn stdlib_exposing_brings_value_into_unqualified_scope() {
-        // `import Std.Live exposing (app, route)` → bare `app` resolves to the
+        // `import Ipe.Live exposing (app, route)` → bare `app` resolves to the
         // same `VarKernel { module: Live, name: app }` a `Live.app` reference
         // would. Previously this was `IPE-N0001` "app not found".
         let src = "module Main exposing (main)\n\
-                   import Std.Live exposing (app, route)\n\n\
+                   import Ipe.Live exposing (app, route)\n\n\
                    main = app\n";
         let Some((m, i)) = canon_src(src) else {
             assert!(false_marker(), "exposing (app, route) must canonicalise");
@@ -2771,10 +2771,10 @@ mod tests {
 
     #[test]
     fn stdlib_exposing_println_resolves_unqualified() {
-        // `import Std.Log exposing (println)` → bare `println` resolves via the
+        // `import Ipe.Log exposing (println)` → bare `println` resolves via the
         // exposing path to `VarKernel { module: Log, name: println }`.
         let src = "module Main exposing (main)\n\
-                   import Std.Log exposing (println)\n\n\
+                   import Ipe.Log exposing (println)\n\n\
                    main = println\n";
         let Some((m, i)) = canon_src(src) else {
             assert!(false_marker(), "exposing (println) must canonicalise");
@@ -2789,7 +2789,7 @@ mod tests {
         // module surfaces `NameNotExposed`, never a dangling unqualified binding.
         let err = canon_err(
             "module Main exposing (main)\n\
-             import Std.Live exposing (bogusFn)\n\
+             import Ipe.Live exposing (bogusFn)\n\
              main = 0\n",
         );
         let Some(Diagnostic::Name {
@@ -2801,7 +2801,7 @@ mod tests {
             return;
         };
         assert_eq!(&**name, "bogusFn");
-        assert_eq!(&**module, "Std.Live");
+        assert_eq!(&**module, "Ipe.Live");
     }
 
     #[test]
@@ -2811,7 +2811,7 @@ mod tests {
         // rule that importing a name and defining it locally clash.
         let err = canon_err(
             "module Main exposing (main)\n\
-             import Std.Live exposing (app)\n\
+             import Ipe.Live exposing (app)\n\
              app = 1\n\
              main = 0\n",
         );
@@ -2834,7 +2834,7 @@ mod tests {
         // them as non-members. This must canonicalise cleanly.
         let ok = canon_src(
             "module Main exposing (main)\n\
-             import Std.Ui exposing (Element)\n\
+             import Ipe.Ui exposing (Element)\n\
              main = 0\n",
         );
         assert!(
@@ -2850,7 +2850,7 @@ mod tests {
         // a bare `map` use must resolve to the LOCAL binding, silently shadowing
         // the wildcard member.
         let src = "module Main exposing (main)\n\
-                   import Sky.Core.Prelude exposing (..)\n\
+                   import Ipe.Prelude exposing (..)\n\
                    map = 1\n\
                    main = map\n";
         let Some((m, i)) = canon_src(src) else {
@@ -2867,16 +2867,16 @@ mod tests {
         );
     }
 
-    // ── `import Sky.*/Std.* exposing (..)` floods the low-priority wildcard
+    // ── `import Sky.*/Ipe.* exposing (..)` floods the low-priority wildcard
     // tier ─────────────────────────────────────────────────────────────────────
 
     #[test]
     fn stdlib_wildcard_brings_member_into_unqualified_scope() {
-        // `import Std.Html exposing (..)` → bare `div` resolves to the same
+        // `import Ipe.Html exposing (..)` → bare `div` resolves to the same
         // `VarKernel { module: Html, name: div }` a `Html.div` reference would.
         // This is the exact 09-live-counter blocker (IPE-N0001 on bare `div`).
         let src = "module Main exposing (main)\n\
-                   import Std.Html exposing (..)\n\n\
+                   import Ipe.Html exposing (..)\n\n\
                    main = div\n";
         let Some((m, i)) = canon_src(src) else {
             assert!(false_marker(), "wildcard `div` must canonicalise");
@@ -2890,10 +2890,10 @@ mod tests {
         // A wildcard `text` and a qualified `Html.text` must produce the same
         // `VarKernel` (identical module + name), so lowering is unaffected.
         let bare = "module Main exposing (main)\n\
-                    import Std.Html exposing (..)\n\n\
+                    import Ipe.Html exposing (..)\n\n\
                     main = text\n";
         let qual = "module Main exposing (main)\n\
-                    import Std.Html\n\n\
+                    import Ipe.Html\n\n\
                     main = Html.text\n";
         let Some((mb, ib)) = canon_src(bare) else {
             assert!(false_marker(), "bare wildcard `text` must canonicalise");
@@ -2928,13 +2928,13 @@ mod tests {
 
     #[test]
     fn two_stdlib_wildcards_same_name_is_ambiguous_at_use() {
-        // Both `Std.Html` and `Std.Ui` export `text`. Two `exposing (..)` imports
+        // Both `Ipe.Html` and `Ipe.Ui` export `text`. Two `exposing (..)` imports
         // are BOTH legal at import time; a bare `text` USE is `AmbiguousImport`
         // (IPE-N0024), never a silent last-wins.
         let err = canon_err(
             "module Main exposing (main)\n\
-             import Std.Html exposing (..)\n\
-             import Std.Ui exposing (..)\n\
+             import Ipe.Html exposing (..)\n\
+             import Ipe.Ui exposing (..)\n\
              main = text\n",
         );
         let Some(Diagnostic::Name {
@@ -2947,8 +2947,8 @@ mod tests {
         };
         assert_eq!(&**name, "text");
         assert!(
-            modules.iter().any(|m| &**m == "Std.Html")
-                && modules.iter().any(|m| &**m == "Std.Ui"),
+            modules.iter().any(|m| &**m == "Ipe.Html")
+                && modules.iter().any(|m| &**m == "Ipe.Ui"),
             "both origins named, got {modules:?}"
         );
     }
@@ -2959,8 +2959,8 @@ mod tests {
         // long as no bare `text` is used (a non-shared name still resolves).
         let ok = canon_src(
             "module Main exposing (main)\n\
-             import Std.Html exposing (..)\n\
-             import Std.Ui exposing (..)\n\
+             import Ipe.Html exposing (..)\n\
+             import Ipe.Ui exposing (..)\n\
              main = div\n",
         );
         assert!(
@@ -2974,8 +2974,8 @@ mod tests {
         // A local binding silently shadows BOTH wildcard origins — no ambiguity,
         // no `DuplicateValue`.
         let src = "module Main exposing (main)\n\
-                   import Std.Html exposing (..)\n\
-                   import Std.Ui exposing (..)\n\
+                   import Ipe.Html exposing (..)\n\
+                   import Ipe.Ui exposing (..)\n\
                    text = 1\n\
                    main = text\n";
         let Some((m, i)) = canon_src(src) else {
@@ -2997,8 +2997,8 @@ mod tests {
         // An explicit `exposing (text)` (higher priority, in `env.vars`) wins over
         // a wildcard `text`; the pair is NOT ambiguous. Resolves to Html.text.
         let src = "module Main exposing (main)\n\
-                   import Std.Ui exposing (..)\n\
-                   import Std.Html exposing (text)\n\
+                   import Ipe.Ui exposing (..)\n\
+                   import Ipe.Html exposing (text)\n\
                    main = text\n";
         let Some((m, i)) = canon_src(src) else {
             assert!(false_marker(), "explicit exposure wins over wildcard");
@@ -3012,8 +3012,8 @@ mod tests {
         // Importing the same module under an alias AND a wildcard must not fake a
         // self-ambiguity (dedup by canonical qualifier).
         let src = "module Main exposing (main)\n\
-                   import Std.Html exposing (..)\n\
-                   import Std.Html as H exposing (..)\n\
+                   import Ipe.Html exposing (..)\n\
+                   import Ipe.Html as H exposing (..)\n\
                    main = div\n";
         let Some((m, i)) = canon_src(src) else {
             assert!(false_marker(), "same module twice must not be ambiguous");
@@ -3028,7 +3028,7 @@ mod tests {
         // with a local `app` (`DuplicateValue`) — unlike a wildcard member.
         let err = canon_err(
             "module Main exposing (main)\n\
-             import Std.Live exposing (app)\n\
+             import Ipe.Live exposing (app)\n\
              app = 1\n\
              main = 0\n",
         );
@@ -3060,21 +3060,21 @@ mod tests {
         canonicalise_module_with_origin(&parsed, &expected, &deps, origin, &mut i)
     }
 
-    /// The exact spike module, declaring `module Std.Palette` and matching its
+    /// The exact spike module, declaring `module Ipe.Palette` and matching its
     /// own ctor.
-    const PALETTE_SRC: &str = "module Std.Palette exposing (Shade(..), toHex)\n\
+    const PALETTE_SRC: &str = "module Ipe.Palette exposing (Shade(..), toHex)\n\
          type Shade = Dark | Light\n\
          toHex : Shade -> String\n\
          toHex shade =\n    case shade of\n        Dark -> \"#000\"\n        Light -> \"#fff\"\n";
 
     #[test]
     fn embedded_stdlib_origin_exempts_reserved_namespace() {
-        // The compiled-source path: a driver-vouched `Std.Palette` is accepted,
+        // The compiled-source path: a driver-vouched `Ipe.Palette` is accepted,
         // reserved-namespace gate exempted — it is the legitimate definer.
         let res = canon_with_origin(PALETTE_SRC, ModuleOrigin::EmbeddedStdlib);
         assert!(
             res.is_ok(),
-            "EmbeddedStdlib Std.Palette must canonicalise: {:?}",
+            "EmbeddedStdlib Ipe.Palette must canonicalise: {:?}",
             res.err()
         );
     }
@@ -3082,9 +3082,9 @@ mod tests {
     #[test]
     fn user_origin_std_module_is_reserved_namespace() {
         // SECURITY: the SAME text, tagged User (a hostile file literally named
-        // `Std.Palette`), stays N0025-rejected. Trust is the tag, not the name.
+        // `Ipe.Palette`), stays N0025-rejected. Trust is the tag, not the name.
         let err = canon_with_origin(PALETTE_SRC, ModuleOrigin::User)
-            .expect_err("user Std.Palette must be rejected");
+            .expect_err("user Ipe.Palette must be rejected");
         assert!(
             matches!(
                 &err,
@@ -3093,7 +3093,7 @@ mod tests {
                     ..
                 }
             ),
-            "hostile user Std.Palette must be IPE-N0025, got {err:?}"
+            "hostile user Ipe.Palette must be IPE-N0025, got {err:?}"
         );
     }
 
@@ -3102,7 +3102,7 @@ mod tests {
         // The fail-closed annotation gate: an EmbeddedStdlib module with an
         // un-annotated top-level binding is a compiler-internal error at canon,
         // never an exit-0-then-cargo-fail. `bad` has no signature.
-        let src = "module Std.Foo exposing (bad)\n\
+        let src = "module Ipe.Foo exposing (bad)\n\
              good : Int\n\
              good = 1\n\
              bad = good\n";
@@ -3135,7 +3135,7 @@ mod tests {
     // ModuleOrigin-gated reserved-builtin exemption.
     //
     // The unforgeable `ModuleOrigin` and the home-aware lowerer (the nullary
-    // Std.Ui opaque names sit BELOW the `enum_variants` guard) together mean the
+    // Ipe.Ui opaque names sit BELOW the `enum_variants` guard) together mean the
     // canon reservation of those names is not load-bearing
     // for lowering-soundness, and a trusted `EmbeddedStdlib` module — the
     // canonical definer — is exempt for that subset while USER modules stay
@@ -3144,11 +3144,11 @@ mod tests {
 
     #[test]
     fn embedded_stdlib_origin_exempts_reserved_ui_type() {
-        // The capability compiled-source `Std.Css` needs: DEFINE `type Length`
+        // The capability compiled-source `Ipe.Css` needs: DEFINE `type Length`
         // (a reserved built-in name). Exempt ONLY because the driver vouched for
         // the origin (unforgeable). The same text tagged User is N0026-rejected
         // — see `user_type_shadowing_builtin_rejected`.
-        let src = "module Std.Css exposing (Length(..))\n\
+        let src = "module Ipe.Css exposing (Length(..))\n\
              type Length = Px Int\n";
         let res = canon_with_origin(src, ModuleOrigin::EmbeddedStdlib);
         assert!(
@@ -3187,7 +3187,7 @@ mod tests {
         // home-aware `enum_variants` guard, so a same-named union would be
         // hijacked to `IrType::Ui` and mis-lower — even trusted stdlib must not
         // redefine it. Stays IPE-N0026 for EVERY origin.
-        let src = "module Std.Css exposing (Html(..))\n\
+        let src = "module Ipe.Css exposing (Html(..))\n\
              type Html = Blob\n";
         let err = canon_with_origin(src, ModuleOrigin::EmbeddedStdlib)
             .expect_err("EmbeddedStdlib `type Html` must still be reserved");
@@ -3280,10 +3280,10 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Std.Ui.Lazy: module registration regression
+    // Ipe.Ui.Lazy: module registration regression
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// `import Std.Ui.Lazy as Lazy` followed by a bare `Lazy.lazy` call must
+    /// `import Ipe.Ui.Lazy as Lazy` followed by a bare `Lazy.lazy` call must
     /// resolve without a name error.  If the qualifier "Lazy" were
     /// absent from `STDLIB_MODULE_QUALIFIERS` / `QUALIFIERS`, any reference
     /// to `Lazy.lazy` would fire `NameError::ValueNotFound`.
@@ -3291,7 +3291,7 @@ mod tests {
     fn lazy_module_lazy_resolves_without_name_error() {
         let err = canon_err(
             "module Main exposing (main)\n\
-             import Std.Ui.Lazy as Lazy\n\
+             import Ipe.Ui.Lazy as Lazy\n\
              main = Lazy.lazy identity 0\n",
         );
         assert!(
@@ -3314,7 +3314,7 @@ mod tests {
         ] {
             let src = format!(
                 "module Main exposing (main)\n\
-                 import Std.Ui.Lazy as Lazy\n\
+                 import Ipe.Ui.Lazy as Lazy\n\
                  main = Lazy.{name} identity{extra_args}\n"
             );
             let err = canon_err(&src);

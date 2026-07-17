@@ -1,13 +1,13 @@
 module Main exposing (main)
 
-import Std.Html as Html
-import Std.Ui as Ui
-import Std.Ui.Input as Input
+import Ipe.Html as Html
+import Ipe.Ui as Ui
+import Ipe.Ui.Input as Input
 
 
 -- #178 regression lock (SEAL: skyc-0 ⇒ cargo-0).
 --
--- Every `Std.Ui.Input.*` runtime function takes its callback fields
+-- Every `Ipe.Ui.Input.*` runtime function takes its callback fields
 -- (`onChange`, checkbox `icon`) as `Arc<dyn Fn(_) -> _ + Send + Sync>`. When the
 -- `onChange` field is a BARE Msg-constructor (`FilterChanged : String -> Msg`),
 -- it eta-expands to a plain lambda that the emitter used to box with `Box::new`

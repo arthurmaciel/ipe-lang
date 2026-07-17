@@ -1,4 +1,4 @@
-//! Emission for `Std.Webview` / `Sky.Webview` app-entry kernel.
+//! Emission for `Ipe.Webview` / `Ipe.Webview` app-entry kernel.
 //!
 //! Wires one Webview kernel:
 //!
@@ -34,7 +34,7 @@ use crate::EmitCtx;
 use crate::emit_expr::{callee_name, emit_expr_at};
 use crate::emit_types::GenericScope;
 
-/// Dispatch a `Std.Webview` / `Sky.Webview` kernel call.
+/// Dispatch a `Ipe.Webview` / `Ipe.Webview` kernel call.
 ///
 /// Returns `Some(emitted)` for `WebviewApp`; `None` for any other variant
 /// (defensive — the caller already guards on `k.is_webview()`).

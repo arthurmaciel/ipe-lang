@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-import Sky.Core.Error as Error
+import Ipe.Error as Error
 
 -- #86: the `Error` module qualifier. `Error.unexpected` builds a message-
 -- carrying Error (String-backed in this minimal slice); `Task.fail` raises it on

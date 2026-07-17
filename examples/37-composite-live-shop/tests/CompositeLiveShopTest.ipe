@@ -1,11 +1,11 @@
 module CompositeLiveShopTest exposing (main, tests)
 
--- Sky.Test assertions over the composite's pure helpers. Each
+-- Ipe.Test assertions over the composite's pure helpers. Each
 -- module participates so a regression anywhere in State / Catalogue
 -- surfaces here without spinning the runtime.
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.List as List
-import Sky.Test as Test exposing (Test)
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
+import Ipe.Test as Test exposing (Test)
 import State exposing (..)
 import Catalogue
 

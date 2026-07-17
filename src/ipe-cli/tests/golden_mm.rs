@@ -6,7 +6,7 @@
 //! and the emitted `main.rs` is byte-identical to the checked-in golden.
 //! They also verify that `skyc build_project` handles three
 //! multi-module blockers:
-//!   * Defect 1 — kernel imports (`Sky.Core.Prelude`) accepted without
+//!   * Defect 1 — kernel imports (`Ipe.Prelude`) accepted without
 //!     IPE-N0020.
 //!   * Defect 2 — same-named functions in different modules emit distinct
 //!     Rust names (no E0428 from `cargo build`).
@@ -46,7 +46,7 @@ fn runtime() -> PathBuf {
 // ---------------------------------------------------------------------------
 // Positive: mm_local_pkg
 // Local module (Lib) exposes a value + ADT + ctors; Main imports both Lib
-// and Sky.Core.Prelude. Exercises Defect-1 fix (kernel skip) and ensures the
+// and Ipe.Prelude. Exercises Defect-1 fix (kernel skip) and ensures the
 // emitted Rust compiles with distinct names.
 // ---------------------------------------------------------------------------
 
@@ -206,7 +206,7 @@ fn mm_neg_ambigctor_is_sky_n0024() {
 }
 
 // ---------------------------------------------------------------------------
-// Negative: reserved namespace (`Sky.*` / `Std.*`) → IPE-N0025
+// Negative: reserved namespace (`Sky.*` / `Ipe.*`) → IPE-N0025
 // ---------------------------------------------------------------------------
 
 #[test]

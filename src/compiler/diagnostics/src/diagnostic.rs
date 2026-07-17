@@ -240,7 +240,7 @@ pub enum IfDefect {
 /// `VarId`s or the interner.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum TyDoc {
-    /// A type constructor application, e.g. `List Int` or `Sky.Core.Maybe a`.
+    /// A type constructor application, e.g. `List Int` or `Ipe.Maybe a`.
     Con {
         module: Box<str>,
         name: Box<str>,
@@ -633,7 +633,7 @@ pub enum Feature {
     /// `cargo` rejects. Divergence from Sky, rationale: Rust backend capability.
     /// [IPE-L0117]
     FloatKeyedCollection,
-    /// `Live.appRouted` (the URL-routing variant of the `Sky.Live` entry point)
+    /// `Live.appRouted` (the URL-routing variant of the `Ipe.Live` entry point)
     /// is not yet wired on the Rust backend. Use the non-routed `Live.app` with
     /// `init`/`update`/`view`/`subscriptions` until routing support lands.
     /// [IPE-L0118]
@@ -667,16 +667,16 @@ pub enum Feature {
 /// required-trait wording rendered for [`LowerError::InadmissibleAppModel`].
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum AppShape {
-    /// `Std.Live` / `Sky.Live` — the Model is persisted to the session store, so
+    /// `Ipe.Live` / `Ipe.Live` — the Model is persisted to the session store, so
     /// it must be `serde`-serialisable (as well as `Clone` + `PartialEq`).
     Live,
-    /// `Std.Tui` / `Sky.Tui` — the Model is kept in memory, so it must be
+    /// `Ipe.Tui` / `Ipe.Tui` — the Model is kept in memory, so it must be
     /// `Clone`.
     Tui,
-    /// `Std.Webview` / `Sky.Webview` — the Model is kept in memory, so it must
+    /// `Ipe.Webview` / `Ipe.Webview` — the Model is kept in memory, so it must
     /// be `Clone`.
     Webview,
-    /// `Std.Cli` / `Sky.Cli` — the Model is kept in memory, so it must be
+    /// `Ipe.Cli` / `Ipe.Cli` — the Model is kept in memory, so it must be
     /// `Clone`.
     Cli,
 }
@@ -701,8 +701,8 @@ pub enum ModelLeaf {
     /// An opaque `Db` / server / live request or response handle.
     Handle,
     /// A view value — `Html` / `Element` / a UI `Attribute` / a `Color` or other
-    /// `Std.Ui` plain value. Clonable and comparable, but not serialisable; only
-    /// reachable as the offending leaf for a `Sky.Live` Model.
+    /// `Ipe.Ui` plain value. Clonable and comparable, but not serialisable; only
+    /// reachable as the offending leaf for a `Ipe.Live` Model.
     ViewValue,
 }
 
@@ -1213,12 +1213,12 @@ fn type_help(msg: &TypeError) -> Vec<HelpLine> {
 pub fn inadmissible_model_message(app: AppShape, field: &str, leaf: ModelLeaf) -> String {
     let (shape, requirement) = match app {
         AppShape::Live => (
-            "Sky.Live",
+            "Ipe.Live",
             "serialisable (it is persisted to the session store)",
         ),
-        AppShape::Tui => ("Sky.Tui", "clonable"),
-        AppShape::Webview => ("Sky.Webview", "clonable"),
-        AppShape::Cli => ("Sky.Cli", "clonable"),
+        AppShape::Tui => ("Ipe.Tui", "clonable"),
+        AppShape::Webview => ("Ipe.Webview", "clonable"),
+        AppShape::Cli => ("Ipe.Cli", "clonable"),
     };
     let leaf_phrase = match leaf {
         ModelLeaf::Function => "a function",
@@ -1249,10 +1249,10 @@ pub fn inadmissible_model_message(app: AppShape, field: &str, leaf: ModelLeaf) -
 #[must_use]
 pub fn inadmissible_msg_message(app: AppShape, field: &str, leaf: ModelLeaf) -> String {
     let shape = match app {
-        AppShape::Live => "Sky.Live",
-        AppShape::Tui => "Sky.Tui",
-        AppShape::Webview => "Sky.Webview",
-        AppShape::Cli => "Sky.Cli",
+        AppShape::Live => "Ipe.Live",
+        AppShape::Tui => "Ipe.Tui",
+        AppShape::Webview => "Ipe.Webview",
+        AppShape::Cli => "Ipe.Cli",
     };
     let leaf_phrase = match leaf {
         ModelLeaf::Function => "a function",

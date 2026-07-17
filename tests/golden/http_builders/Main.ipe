@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-import Sky.Core.Http as Http
+import Ipe.Http as Http
 
 
 -- Http builder chain test: verifies that Http.defaultRequest / Http.withMethod /

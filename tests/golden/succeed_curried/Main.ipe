@@ -6,8 +6,8 @@ module Main exposing (main)
 -- def-arity is 1 → E0593 inside the `curry2` bound before the fix.
 -- T6 emits the eta-adapter so the slot type and def-arity agree.
 
-import Sky.Core.Json.Decode as JsonDec
-import Sky.Core.Json.Decode.Pipeline as Pipe
+import Ipe.Json.Decode as JsonDec
+import Ipe.Json.Decode.Pipeline as Pipe
 
 
 mkPair : String -> (Int -> String)

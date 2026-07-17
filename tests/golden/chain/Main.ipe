@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- Forward pipe chain: `|>` left-associative at precedence 0.
 -- [1,2,3] |> List.map (+1) |> List.length == 3

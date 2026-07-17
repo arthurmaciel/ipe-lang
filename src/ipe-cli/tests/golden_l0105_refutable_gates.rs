@@ -168,7 +168,7 @@ fn standard_libs_sky_t0015_money_blocker_gone() {
             let msg = format!("{diag:?}");
             assert!(
                 !msg.contains("IPE-T0015") || (!msg.contains("Money") && !msg.contains("Test.ipe")),
-                "IPE-T0015 from Std/Money/Sky.Test must be gone after accessor fix; got: {msg}"
+                "IPE-T0015 from Std/Money/Ipe.Test must be gone after accessor fix; got: {msg}"
             );
         }
         Ok(()) => {}
@@ -176,7 +176,7 @@ fn standard_libs_sky_t0015_money_blocker_gone() {
             let msg = format!("{other:?}");
             assert!(
                 !msg.contains("IPE-T0015") || (!msg.contains("Money") && !msg.contains("Test.ipe")),
-                "IPE-T0015 from Std/Money/Sky.Test must be gone after accessor fix; got: {msg}"
+                "IPE-T0015 from Std/Money/Ipe.Test must be gone after accessor fix; got: {msg}"
             );
         }
     }

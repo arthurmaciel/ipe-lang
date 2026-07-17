@@ -1,4 +1,4 @@
-//! `Sky.Core.Secret` negative gates: every plausible
+//! `Ipe.Secret` negative gates: every plausible
 //! accidental-stringification / accidental-leak path that is NOT redacted
 //! must instead be REJECTED at `skyc` compile time — never accepted and left
 //! to misbehave (or leak) at runtime, and never deferred to a `cargo`

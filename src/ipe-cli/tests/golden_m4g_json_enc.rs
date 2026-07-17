@@ -1,4 +1,4 @@
-//! `Sky.Core.Json.Encode` parity gate — JSON encoder kernels with
+//! `Ipe.Json.Encode` parity gate — JSON encoder kernels with
 //! byte-for-byte Go parity.
 //!
 //! These golden tests exercise the `JsonEnc` kernel family end-to-end:

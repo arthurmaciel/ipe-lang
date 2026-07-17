@@ -1,16 +1,16 @@
 module View.Analytics exposing (analyticsView)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.List as List
-import Sky.Core.String as String
-import Sky.Core.ToString as ToString
-import Std.Ui as Ui
-import Std.Ui exposing (Element)
-import Std.Ui.Background as Background
-import Std.Ui.Border as Border
-import Std.Ui.Chart as Chart
-import Std.Ui.Font as Font
-import Std.Ui.Region as Region
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.ToString as ToString
+import Ipe.Ui as Ui
+import Ipe.Ui exposing (Element)
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Chart as Chart
+import Ipe.Ui.Font as Font
+import Ipe.Ui.Region as Region
 import State exposing (..)
 import View.Common as Common
 
@@ -25,7 +25,7 @@ analyticsView model =
         , Ui.paragraph
               [ Font.color Common.muted, Font.size 13 ]
               [Ui.text
-                  "Synthetic data — exists to exercise Std.Ui.Chart's line + bar + sparkline primitives."]
+                  "Synthetic data — exists to exercise Ipe.Ui.Chart's line + bar + sparkline primitives."]
         , Common.adaptStack
               model.viewport
               [ chartCard "Daily sales" (lineChart model.sales)
