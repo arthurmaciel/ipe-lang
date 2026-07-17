@@ -28,6 +28,7 @@ mod naming;
 mod preamble;
 mod project;
 mod rust_file;
+pub mod static_build;
 
 use std::collections::{BTreeMap, BTreeSet};
 
