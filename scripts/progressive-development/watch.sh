@@ -150,9 +150,9 @@ stalled_lines_multi() {
 # raw form for the plain/scrolling renderer), STALL_ACTIVE (0/1, color gate).
 compute_status_lines() {
     local mem_state disk_state lane_state free
-    mem_state="$(guard_state 'scripts/mem-guard\.sh')"
-    disk_state="$(guard_state 'scripts/disk-guard\.sh')"
-    lane_state="$(guard_state 'scripts/lane-guard\.sh')"
+    mem_state="$(guard_state 'scripts/guards/mem-guard\.sh')"
+    disk_state="$(guard_state 'scripts/guards/disk-guard\.sh')"
+    lane_state="$(guard_state 'scripts/guards/lane-guard\.sh')"
     free="$(free_disk_gb)"
     GL_L3="guards: mem-guard=${mem_state} disk-guard=${disk_state}(free=${free:-?}G) lane-guard=${lane_state}   $(backlog_line)"
     GL_L4="worktrees: $(worktree_line)"
