@@ -191,24 +191,38 @@ new `src/compiler/backend/rust/src/static_build.rs` (+ `lib.rs` export).
 - **Gate:** `IPE_E2E_STATIC=1 cargo test -p ipe --test static_e2e` green;
   manual `file`/`ldd`/run transcript recorded in the landing report.
 
-### M5 — Follow-ups (ordered, not yet started)
+### M5 — Follow-ups
 
-1. **TLS/static-compat regression guard** — manifest-scan test freezing
-   rustls-only + bundled webpki roots (no `rustls-tls-native-roots`).
-2. **Sweep `--static` variant** — `scripts/equivalence-checks/examples-sweep.sh`
-   builds every non-webview example static (CWD = crate dir per ground
-   truth 2) and `ldd`-asserts each; server-shape example serves a request.
-3. **`ipe run --static`** — same flags on `run`; cargo already runs with
-   CWD = crate dir there.
-4. **CI matrix** (spec §4.3, trimmed): linux-static-x64 (build+run in a
-   `scratch` container), linux-static-mimalloc, refusal negative tests,
-   supply-chain (`cargo audit`/`deny` over the emitted lock + SBOM).
-5. **`aarch64-unknown-linux-musl`** once a verifying host/CI lane exists (D6).
-6. **Windows `+crt-static` / wasm / `--macos-portable`** per the §2 matrix.
-7. **talc arena design** (A1) — requires a no-unsafe arena story first.
+1. **TLS/static-compat regression guard**  [LANDED] — manifest-scan test
+   (`static_emit.rs`) freezing rustls-only + bundled webpki roots (no
+   `rustls-tls-native-roots` / `native-tls` / `openssl`) across the golden
+   base manifest, the runtime manifest, and the `project.rs` surgery strings.
+2. **Sweep `--static` variant**  [LANDED] — `IPE_SWEEP_STATIC=1` on
+   `scripts/equivalence-checks/examples-sweep.sh`: per-example `--static`
+   build, cargo with CWD = crate dir (ground truth 2), `ldd`-asserted
+   (`not-static` = RED), static binary RUN (server shapes serve a request),
+   webview examples assert the typed refusal (`no-refusal` = RED).
+3. **`ipe run --static`**  [LANDED] — shared static-flag parser + plan
+   resolver across build/run; cargo gains `--target <triple>`; the binary is
+   located via `cargo metadata`'s `target_directory` (honours
+   `CARGO_TARGET_DIR` / user target-dir pins).
+4. **CI matrix**  [LANDED, trimmed per spec §4.3] —
+   `.github/workflows/static.yml`: linux-static-x64 × {dlmalloc, mimalloc},
+   refusal negative tests + gated e2e, `file`+`ldd` asserts, execution in a
+   `scratch` container, `cargo audit` over the emitted lockfile (uploaded as
+   the frozen-deps artifact).
+5. **`aarch64-unknown-linux-musl`** once a verifying host/CI lane exists
+   (D6) — until then the triple stays a typed refusal (SEAL-safe).
+6. **Windows `+crt-static` / wasm / `--macos-portable`** per the §2 matrix —
+   typed refusals until verifiable.
+7. **talc arena design** (A1) — requires a no-unsafe arena story first;
+   typed refusal stands.
 8. **D4 `zstd`→`ruzstd` + `ring` policy** — makes the pure-Rust
-   `link-self-contained` no-C-toolchain arm real.
+   `link-self-contained` no-C-toolchain arm real. `ruzstd` is
+   decompress-only, so the Compression feature's `zstdCompress` needs its own
+   answer — design work, not a dependency swap.
 9. **§4.5 measure-before-finalize bench** — sizes the mimalloc opt-in
-   recommendation and fills the divergence `<X>`; does not flip the default.
-10. **Divergence record** — sanctioned `oracle_divergence` for the allocator
-    default per `docs/architecture/divergence-policy.md`.
+   recommendation and fills the divergence `<X>`; does not flip the default
+   (D3 ownership open).
+10. **Divergence record**  [LANDED] — `docs/divergences-from-sky.md` A20 +
+    summary-table row (allocator default + warn-path→refusal tightening).

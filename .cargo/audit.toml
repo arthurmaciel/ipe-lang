@@ -1,0 +1,16 @@
+# cargo-audit configuration — the documented, justified advisory ignore-list
+# (mirror of deny.toml [advisories].ignore; keep the two in sync).
+
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 — rsa 0.9.x "Marvin Attack" (PKCS#1 v1.5 timing
+    # sidechannel). No fixed upstream release exists (the advisory's own
+    # Solution field says "no fixed upgrade available"); pulled in via
+    # `runtime`'s optional `crypto` feature for Sky.Core.Jwt RS256 sign/verify
+    # (jsonwebtoken -> rsa). Exposure is limited to SIGN (private key) +
+    # VERIFY (public key); the Marvin attack targets the PKCS#1 v1.5
+    # DECRYPTION oracle, which this codebase never exercises. Accepted +
+    # tracked in deny.toml; revisit when `rsa` ships a fix or a vetted
+    # constant-time RS256 alternative replaces it.
+    "RUSTSEC-2023-0071",
+]

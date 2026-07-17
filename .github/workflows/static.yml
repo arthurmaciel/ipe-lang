@@ -1,0 +1,138 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Static-compilation gate (design: docs/architecture/static-compilation.md).
+#
+# Proves the `--static` path end to end, per allocator arm:
+#   1. the typed refusal + emit-shape tests (`static_emit.rs`, incl. the
+#      IPE_E2E_STATIC musl build/run/ldd proof on the dlmalloc leg);
+#   2. a CLI-driven `ipe build --static` of a real example, cargo-built
+#      standalone for x86_64-unknown-linux-musl with CWD = the emitted crate
+#      dir (cargo discovers the generated .cargo/config.toml from CWD);
+#   3. `file` + `ldd` assertions — static-ness is asserted, never assumed;
+#   4. execution inside a `scratch` container: nothing in the filesystem but
+#      the binary itself, so a hidden runtime dependency (dynamic loader,
+#      libssl, host cert store, /etc/*) fails loudly here;
+#   5. supply-chain: `cargo audit` over the emitted crate's lockfile — static
+#      linking freezes every dep into the artifact, so the advisory gate must
+#      cover the exact frozen set — with the lockfile uploaded as the
+#      version-manifest artifact.
+#
+# Matrix: dlmalloc (the pure-Rust default) and mimalloc (the explicit C
+# opt-in — kept green so the acknowledged path cannot rot).
+# ─────────────────────────────────────────────────────────────────────────────
+name: static
+
+on:
+  push:
+    branches: [main, master]
+    paths-ignore:
+      - '**.md'
+  pull_request:
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch: {}
+
+concurrency:
+  group: static-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  linux-static-x64:
+    name: linux-static-x64 (${{ matrix.allocator }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        allocator: [dlmalloc, mimalloc]
+
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/sky-rust-target
+      IPE_NO_SCCACHE: '1'
+      STATIC_TRIPLE: x86_64-unknown-linux-musl
+      CARGO_HTTP_MULTIPLEXING: 'false'
+      CARGO_NET_RETRY: '5'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      # The emitted dep graph carries C compile units (zstd, ring) — the
+      # preflight requires a musl-capable C compiler; mimalloc adds its own.
+      - name: Install musl C toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Cache cargo target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ${{ github.workspace }}/.cache/sky-rust-target
+          key: ${{ runner.os }}-static-${{ matrix.allocator }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-static-${{ matrix.allocator }}-
+            ${{ runner.os }}-static-
+
+      - name: Build ipe
+        run: cargo build --release -p ipe
+
+      # Refusal negatives + emit shape + (dlmalloc leg) the gated musl
+      # build/run/ldd e2e, including `ipe run --static`.
+      - name: Static gates (refusals, emit shape, e2e)
+        env:
+          IPE_E2E_STATIC: ${{ matrix.allocator == 'dlmalloc' && '1' || '' }}
+        run: cargo test -p ipe --test static_emit
+
+      - name: ipe build --static (example, ${{ matrix.allocator }})
+        run: |
+          cd examples/01-hello-world
+          "$CARGO_TARGET_DIR/release/ipe" build sky.toml --out sky-out/rust \
+            --static --allocator ${{ matrix.allocator }}
+          cd sky-out/rust
+          cargo build --release --target "$STATIC_TRIPLE"
+
+      - name: Assert static-ness (file + ldd)
+        run: |
+          BIN="$CARGO_TARGET_DIR/$STATIC_TRIPLE/release/sky-app"
+          file "$BIN"
+          file "$BIN" | grep -Eq 'static-pie linked|statically linked'
+          LDD_OUT="$(ldd "$BIN" 2>&1 || true)"
+          echo "$LDD_OUT"
+          echo "$LDD_OUT" | grep -Eq 'statically linked|not a dynamic executable'
+
+      # The zero-runtime-deps proof: a `scratch` image holds NOTHING but the
+      # binary — no loader, no libc, no certs, no /etc. It must still run.
+      - name: Run in a scratch container
+        run: |
+          WORK="$(mktemp -d)"
+          cp "$CARGO_TARGET_DIR/$STATIC_TRIPLE/release/sky-app" "$WORK/"
+          printf 'FROM scratch\nCOPY sky-app /sky-app\nENTRYPOINT ["/sky-app"]\n' > "$WORK/Dockerfile"
+          docker build -t ipe-static-proof "$WORK"
+          OUT="$(docker run --rm ipe-static-proof)"
+          echo "scratch output: $OUT"
+          echo "$OUT" | grep -q 'Hello from Sky!'
+
+      # Advisory gate over the FROZEN dependency set (the emitted lockfile is
+      # exactly what is baked into the static artifact).
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: cargo audit (emitted lockfile)
+        run: cargo audit --file examples/01-hello-world/sky-out/rust/Cargo.lock
+
+      - name: Upload frozen-deps manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-frozen-deps-${{ matrix.allocator }}
+          path: examples/01-hello-world/sky-out/rust/Cargo.lock
+          if-no-files-found: warn
