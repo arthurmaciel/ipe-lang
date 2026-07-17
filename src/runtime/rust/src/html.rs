@@ -666,8 +666,7 @@ fn sanitise_url_attr<'a>(name: &str, value: &'a str) -> &'a str {
 /// fails policy is dropped, which also covers the removal sentinel (an empty
 /// value on a dangerous name must never reach `setAttribute`).
 ///
-/// `live`-gated: its sole consumer is `live/diff.rs` (the SSE patch builder).
-#[cfg(feature = "live")]
+/// Consumed by `dom/diff.rs` (the shared patch builder) — always compiled.
 pub(crate) fn safe_patch_attr<'a>(name: &'a str, value: &'a str) -> Option<(&'a str, &'a str)> {
     let SafeAttrName(safe_name) = SafeAttrName::parse(name)?;
     Some((safe_name, sanitise_url_attr(name, value)))
@@ -895,7 +894,7 @@ pub fn html_on_bool_<M>(
 /// arm) closes this by re-wrapping the boxed value in a freshly-declared
 /// closure at the call site instead of forwarding the box itself — see that
 /// arm's comment for the full mechanism.
-#[cfg(feature = "live")]
+#[cfg(any(feature = "live", feature = "wasm-client"))]
 #[must_use]
 pub fn html_on_raw_<M, T, F>(name: String, payload: F) -> Attribute<M>
 where
@@ -905,7 +904,7 @@ where
     Attribute::EventAttr(Event::OnForm(
         name,
         std::sync::Arc::new(move |fd: FormData| {
-            crate::live::form::decode_form_or_warn::<T>(fd).map(&payload)
+            crate::dom::form::decode_form_or_warn::<T>(fd).map(&payload)
         }),
     ))
 }
@@ -916,7 +915,7 @@ where
 /// degrading to a structural no-op attribute here is not a regression for
 /// Tui — it was never functional there and Tui has no form-submit wire
 /// concept.
-#[cfg(not(feature = "live"))]
+#[cfg(not(any(feature = "live", feature = "wasm-client")))]
 pub fn html_on_raw_<M, T, F: Fn(T) -> M>(_name: String, _payload: F) -> Attribute<M> {
     Attribute::NoAttr
 }
@@ -939,7 +938,7 @@ pub fn html_on_raw_<M, T, F: Fn(T) -> M>(_name: String, _payload: F) -> Attribut
 /// already `Clone` by construction (`HandlerIndex<M: Clone>` — every wire
 /// event handler, including plain `onClick`'s `Event::OnMsg`, already clones
 /// the dispatched value).
-#[cfg(feature = "live")]
+#[cfg(any(feature = "live", feature = "wasm-client"))]
 #[must_use]
 pub fn html_on_raw_fixed_<M: Clone + Send + Sync + 'static>(name: String, msg: M) -> Attribute<M> {
     Attribute::EventAttr(Event::OnForm(
@@ -950,7 +949,7 @@ pub fn html_on_raw_fixed_<M: Clone + Send + Sync + 'static>(name: String, msg: M
 
 /// Non-`live` builds — same degrade-to-no-op rationale as `html_on_raw_`
 /// above.
-#[cfg(not(feature = "live"))]
+#[cfg(not(any(feature = "live", feature = "wasm-client")))]
 pub fn html_on_raw_fixed_<M>(_name: String, _msg: M) -> Attribute<M> {
     Attribute::NoAttr
 }

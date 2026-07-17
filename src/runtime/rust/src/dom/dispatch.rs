@@ -1,4 +1,4 @@
-use crate::live::html::*;
+use crate::html::*;
 use std::collections::HashMap;
 
 /// Per-session handler index: maps `sky-id` → (`event-name` → the cloneable

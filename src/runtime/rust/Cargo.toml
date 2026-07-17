@@ -39,7 +39,9 @@ futures-util = { version = "0.3", optional = true }
 # declare serde non-optional. Generic-bound (`impl<T: Serialize>`) so a non-serde inner
 # type is unaffected.
 serde = { version = "1", features = ["derive"] }
-serde_urlencoded = { version = "0.7", optional = true }
+# NON-optional: `dom/form.rs` (always compiled — shared by the Live wire and
+# the browser-WASM sink) decodes typed form records through it. Pure serde.
+serde_urlencoded = "0.7"
 subtle = "2"
 # `Sky.Core.Secret` (backlog #44): zeroizes the backing buffer on `Drop` so a
 # revealed/discarded secret does not linger in freed heap memory. NON-optional
@@ -87,6 +89,32 @@ libc = "0.2"
 # native feature graph identical.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 uuid = { version = "1", features = ["v4", "v7", "js"] }
+# Browser sink (`wasm` module, feature `wasm-client`). Pinned exact
+# wasm-bindgen: the emitted-project glue is produced by the wasm-bindgen CLI,
+# which requires a byte-matching crate version.
+wasm-bindgen = { version = "=0.2.126", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+js-sys = { version = "0.3", optional = true }
+web-sys = { version = "0.3", optional = true, features = [
+    "Window",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "Node",
+    "Text",
+    "Event",
+    "EventTarget",
+    "console",
+    "HtmlInputElement",
+    "HtmlTextAreaElement",
+    "HtmlSelectElement",
+    "HtmlFormElement",
+    "FormData",
+    "KeyboardEvent",
+    "Location",
+    "HtmlDocument",
+] }
+console_error_panic_hook = { version = "0.1", optional = true }
 
 [features]
 default = []
@@ -132,8 +160,18 @@ websocket_client = ["tokio", "tokio-tungstenite", "futures-util", "url"]
 # projects get them via the always-on `crypto` default; the standalone `live`
 # feature must pull them directly. (`subtle` for the constant-time compare is a
 # non-optional dep; `OsRng` rides in with `aes-gcm`.) serde is non-optional now.
-live = ["server", "http_client", "serde_json", "serde_urlencoded", "async-trait", "aes-gcm", "sha2"]
+live = ["server", "http_client", "serde_json", "async-trait", "aes-gcm", "sha2"]
 full = ["async", "json", "db", "redis_store", "crypto", "compression", "csv_kernel", "cache_kernel", "tui", "config", "server", "http_client", "email", "websocket_client", "live"]
+# Browser-WASM TEA sink (`src/wasm/`): mount + patch-apply + delegated events.
+# Compiles only on wasm32 (the module is target-cfg'd); NOT in `full` — native
+# builds never link the wasm glue.
+wasm-client = [
+    "dep:wasm-bindgen",
+    "dep:wasm-bindgen-futures",
+    "dep:js-sys",
+    "dep:web-sys",
+    "dep:console_error_panic_hook",
+]
 
 [dev-dependencies]
 regex = "1"
