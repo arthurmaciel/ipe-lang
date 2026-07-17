@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -38,7 +38,10 @@ pub struct RecValue<T1> {
 }
 impl<T1: IpeStringify + std::fmt::Debug> IpeStringify for RecValue<T1> {
     fn ipe_show(&self) -> String {
-        format!("{{{}}}", (&ipe_runtime::stringify::Wrap(&self.value)).dispatch())
+        format!(
+            "{{{}}}",
+            (&ipe_runtime::stringify::Wrap(&self.value)).dispatch()
+        )
     }
 }
 

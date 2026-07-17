@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -31,7 +31,6 @@ type Value = JsonVal;
 // ===========================================
 // USER TYPES
 // ===========================================
-
 
 pub use ipe_runtime::error::IpeError;
 pub fn str_err(s: &str) -> IpeError {
@@ -243,10 +242,26 @@ pub fn main_abs_val(n: i64) -> i64 {
     (if (n < 0) { (0 - n) } else { n })
 }
 pub fn main_classify(n: i64) -> i64 {
-    (if (n > 0) { 1 } else { (if (n < 0) { 2 } else { 0 }) })
+    (if (n > 0) {
+        1
+    } else {
+        (if (n < 0) { 2 } else { 0 })
+    })
 }
 pub fn ipe_main() -> IpeTask<()> {
-    ({ let a = main_abs_val((0 - 7)); ({ let b = main_classify(5); ({ let c = main_classify((0 - 3)); ({ let total = ((a + b) + c); log_println(string_from_int(total)) }) }) }) })
+    ({
+        let a = main_abs_val((0 - 7));
+        ({
+            let b = main_classify(5);
+            ({
+                let c = main_classify((0 - 3));
+                ({
+                    let total = ((a + b) + c);
+                    log_println(string_from_int(total))
+                })
+            })
+        })
+    })
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

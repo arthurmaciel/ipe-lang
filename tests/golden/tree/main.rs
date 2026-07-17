@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -41,7 +41,12 @@ impl IpeStringify for MainTree {
     fn ipe_show(&self) -> String {
         match self {
             MainTree::Leaf => "Leaf".to_string(),
-            MainTree::Node(p0, p1, p2) => format!("Node {} {} {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch(), (&ipe_runtime::stringify::Wrap(p1)).dispatch(), (&ipe_runtime::stringify::Wrap(p2)).dispatch()),
+            MainTree::Node(p0, p1, p2) => format!(
+                "Node {} {} {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch(),
+                (&ipe_runtime::stringify::Wrap(p1)).dispatch(),
+                (&ipe_runtime::stringify::Wrap(p2)).dispatch()
+            ),
         }
     }
 }
@@ -255,11 +260,27 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 pub fn main_sum_tree(t: MainTree) -> i64 {
     match t {
         MainTree::Leaf => 0,
-        MainTree::Node(l, n, r) => { let l = *l; let r = *r; ((main_sum_tree(l) + n) + main_sum_tree(r)) },
+        MainTree::Node(l, n, r) => {
+            let l = *l;
+            let r = *r;
+            ((main_sum_tree(l) + n) + main_sum_tree(r))
+        }
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(main_sum_tree(MainTree::Node(Box::new(MainTree::Node(Box::new(MainTree::Leaf), 3, Box::new(MainTree::Leaf))), 4, Box::new(MainTree::Node(Box::new(MainTree::Leaf), 5, Box::new(MainTree::Leaf)))))))
+    log_println(string_from_int(main_sum_tree(MainTree::Node(
+        Box::new(MainTree::Node(
+            Box::new(MainTree::Leaf),
+            3,
+            Box::new(MainTree::Leaf),
+        )),
+        4,
+        Box::new(MainTree::Node(
+            Box::new(MainTree::Leaf),
+            5,
+            Box::new(MainTree::Leaf),
+        )),
+    ))))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

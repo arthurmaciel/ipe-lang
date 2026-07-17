@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -31,7 +31,6 @@ type Value = JsonVal;
 // ===========================================
 // USER TYPES
 // ===========================================
-
 
 pub use ipe_runtime::error::IpeError;
 pub fn str_err(s: &str) -> IpeError {
@@ -243,7 +242,56 @@ pub fn main_inc(a: i64, b: i64) -> i64 {
     (a + b)
 }
 pub fn ipe_main() -> IpeTask<()> {
-    ({ let wrap = { let __sky_fn: ::std::sync::Arc<dyn Fn(Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>, i64) -> i64 + Send + Sync + 'static> = ::std::sync::Arc::new(move |f: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>, x: i64| -> i64 { ((f)(x) + 1) }); __sky_fn }; ({ let guarded = ({ let wrap = wrap.clone(); { let __sky_fn: Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> = Box::new(move |f: i64, eta_0: i64| -> i64 { (({ let wrap = wrap.clone(); { let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> = Box::new(move |eta_0: i64| -> i64 { (wrap)({ let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> = Box::new(move |eta_0: i64| -> i64 { main_inc(f, eta_0) }); __sky_fn }, eta_0) }); __sky_fn } }))(eta_0) }); __sky_fn } }); ({ let r = (guarded)(1, 2); log_println(string_from_int(r)) }) }) })
+    ({
+        let wrap = {
+            let __sky_fn: ::std::sync::Arc<
+                dyn Fn(Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>, i64) -> i64
+                    + Send
+                    + Sync
+                    + 'static,
+            > = ::std::sync::Arc::new(
+                move |f: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>, x: i64| -> i64 {
+                    ((f)(x) + 1)
+                },
+            );
+            __sky_fn
+        };
+        ({
+            let guarded = ({
+                let wrap = wrap.clone();
+                {
+                    let __sky_fn: Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> =
+                        Box::new(move |f: i64, eta_0: i64| -> i64 {
+                            ({
+                                let wrap = wrap.clone();
+                                {
+                                    let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+                                        Box::new(move |eta_0: i64| -> i64 {
+                                            (wrap)(
+                                                {
+                                                    let __sky_fn: Box<
+                                                        dyn Fn(i64) -> i64 + Send + Sync + 'static,
+                                                    > = Box::new(move |eta_0: i64| -> i64 {
+                                                        main_inc(f, eta_0)
+                                                    });
+                                                    __sky_fn
+                                                },
+                                                eta_0,
+                                            )
+                                        });
+                                    __sky_fn
+                                }
+                            })(eta_0)
+                        });
+                    __sky_fn
+                }
+            });
+            ({
+                let r = (guarded)(1, 2);
+                log_println(string_from_int(r))
+            })
+        })
+    })
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

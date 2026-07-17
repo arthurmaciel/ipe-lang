@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -31,7 +31,6 @@ type Value = JsonVal;
 // ===========================================
 // USER TYPES
 // ===========================================
-
 
 pub use ipe_runtime::error::IpeError;
 pub fn str_err(s: &str) -> IpeError {
@@ -245,11 +244,33 @@ pub fn main_identity<T1: Clone>(x: T1) -> T1 {
 pub fn main_const<T1: Clone, T2: Clone>(x: T1, y: T2) -> T1 {
     x
 }
-pub fn main_apply<T1: Clone + Send + 'static, T2: Clone + Send + 'static>(f: Box<dyn Fn(T1) -> T2 + Send + Sync + 'static>, x: T1) -> T2 {
+pub fn main_apply<T1: Clone + Send + 'static, T2: Clone + Send + 'static>(
+    f: Box<dyn Fn(T1) -> T2 + Send + Sync + 'static>,
+    x: T1,
+) -> T2 {
     (f)(x)
 }
 pub fn ipe_main() -> IpeTask<()> {
-    ({ let n = main_identity(40); ({ let flag = main_identity((1 == 1)); ({ let c = main_const(2, (5 == 5)); ({ let r = main_apply({ let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> = Box::new(move |k: i64| -> i64 { (k + 0) }); __sky_fn }, (if flag { (n + c) } else { n })); log_println(string_from_int(r)) }) }) }) })
+    ({
+        let n = main_identity(40);
+        ({
+            let flag = main_identity((1 == 1));
+            ({
+                let c = main_const(2, (5 == 5));
+                ({
+                    let r = main_apply(
+                        {
+                            let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+                                Box::new(move |k: i64| -> i64 { (k + 0) });
+                            __sky_fn
+                        },
+                        (if flag { (n + c) } else { n }),
+                    );
+                    log_println(string_from_int(r))
+                })
+            })
+        })
+    })
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;
