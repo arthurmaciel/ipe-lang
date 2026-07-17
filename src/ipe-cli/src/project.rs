@@ -222,7 +222,7 @@ pub fn discover_modules(src_root: &Path) -> Result<Vec<DiscoveredModule>, CliErr
             if file_type.is_dir() {
                 stack.push_back(path);
             } else if file_type.is_file()
-                && path.extension().and_then(|e| e.to_str()) == Some("sky")
+                && path.extension().and_then(|e| e.to_str()) == Some("ipe")
                 && let Some(m) = file_to_module(src_root, &path)
             {
                 result.push(m);

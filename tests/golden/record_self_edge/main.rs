@@ -5,8 +5,8 @@
 #[global_allocator]
 static IPE_GLOBAL_ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-pub mod sky_runtime;
-pub use sky_runtime::*;
+pub mod ipe_runtime;
+pub use ipe_runtime::*;
 
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -18,10 +18,10 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
 // Basic types
-type SkyInt = i64;
-type SkyFloat = f64;
-type SkyBool = bool;
-type SkyString = String;
+type IpeInt = i64;
+type IpeFloat = f64;
+type IpeBool = bool;
+type IpeString = String;
 type Value = JsonVal;
 
 // ===========================================
@@ -33,11 +33,11 @@ pub enum MainRChain {
     REnd,
     RNode(Box<RecRestVal>),
 }
-impl SkyStringify for MainRChain {
-    fn sky_show(&self) -> String {
+impl IpeStringify for MainRChain {
+    fn ipe_show(&self) -> String {
         match self {
             MainRChain::REnd => "REnd".to_string(),
-            MainRChain::RNode(p0) => format!("RNode {}", (&sky_runtime::stringify::Wrap(p0)).dispatch()),
+            MainRChain::RNode(p0) => format!("RNode {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch()),
         }
     }
 }
@@ -46,216 +46,216 @@ pub struct RecRestVal {
     rest: MainRChain,
     val: i64,
 }
-impl SkyStringify for RecRestVal {
-    fn sky_show(&self) -> String {
-        format!("{{{} {}}}", (&sky_runtime::stringify::Wrap(&self.rest)).dispatch(), (&sky_runtime::stringify::Wrap(&self.val)).dispatch())
+impl IpeStringify for RecRestVal {
+    fn ipe_show(&self) -> String {
+        format!("{{{} {}}}", (&ipe_runtime::stringify::Wrap(&self.rest)).dispatch(), (&ipe_runtime::stringify::Wrap(&self.val)).dispatch())
     }
 }
 
-pub use sky_runtime::error::SkyError;
-pub fn str_err(s: &str) -> SkyError {
-    SkyError::unexpected(s.to_string())
+pub use ipe_runtime::error::IpeError;
+pub fn str_err(s: &str) -> IpeError {
+    IpeError::unexpected(s.to_string())
 }
 
-pub type SkyTask<A> = sky_runtime::SkyTask<SkyError, A>;
-pub type Decoder<T> = sky_runtime::json::Decoder<SkyError, T>;
+pub type IpeTask<A> = ipe_runtime::IpeTask<IpeError, A>;
+pub type Decoder<T> = ipe_runtime::json::Decoder<IpeError, T>;
 
-pub fn ok_res<A>(a: A) -> SkyResult<SkyError, A> {
-    sky_runtime::core::ok_res(a)
+pub fn ok_res<A>(a: A) -> IpeResult<IpeError, A> {
+    ipe_runtime::core::ok_res(a)
 }
-pub fn task_succeed<A: Send + 'static>(a: A) -> SkyTask<A> {
-    sky_runtime::task::task_succeed(a)
+pub fn task_succeed<A: Send + 'static>(a: A) -> IpeTask<A> {
+    ipe_runtime::task::task_succeed(a)
 }
-pub fn log_info(msg: String) -> SkyTask<()> {
-    sky_runtime::log::log_info(msg)
+pub fn log_info(msg: String) -> IpeTask<()> {
+    ipe_runtime::log::log_info(msg)
 }
-pub fn log_debug(msg: String) -> SkyTask<()> {
-    sky_runtime::log::log_debug(msg)
+pub fn log_debug(msg: String) -> IpeTask<()> {
+    ipe_runtime::log::log_debug(msg)
 }
-pub fn log_warn(msg: String) -> SkyTask<()> {
-    sky_runtime::log::log_warn(msg)
+pub fn log_warn(msg: String) -> IpeTask<()> {
+    ipe_runtime::log::log_warn(msg)
 }
-pub fn log_error(msg: String) -> SkyTask<()> {
-    sky_runtime::log::log_error(msg)
+pub fn log_error(msg: String) -> IpeTask<()> {
+    ipe_runtime::log::log_error(msg)
 }
-pub fn log_println(msg: String) -> SkyTask<()> {
-    sky_runtime::log::log_println(msg)
+pub fn log_println(msg: String) -> IpeTask<()> {
+    ipe_runtime::log::log_println(msg)
 }
-pub fn log_info_with<A: SkyStringify>(msg: String, attrs: Vec<A>) -> SkyTask<()> {
-    sky_runtime::log::log_info_with(msg, attrs)
+pub fn log_info_with<A: IpeStringify>(msg: String, attrs: Vec<A>) -> IpeTask<()> {
+    ipe_runtime::log::log_info_with(msg, attrs)
 }
-pub fn log_error_with<A: SkyStringify>(msg: String, attrs: Vec<A>) -> SkyTask<()> {
-    sky_runtime::log::log_error_with(msg, attrs)
+pub fn log_error_with<A: IpeStringify>(msg: String, attrs: Vec<A>) -> IpeTask<()> {
+    ipe_runtime::log::log_error_with(msg, attrs)
 }
-pub fn log_debug_with<A: SkyStringify>(msg: String, attrs: Vec<A>) -> SkyTask<()> {
-    sky_runtime::log::log_debug_with(msg, attrs)
+pub fn log_debug_with<A: IpeStringify>(msg: String, attrs: Vec<A>) -> IpeTask<()> {
+    ipe_runtime::log::log_debug_with(msg, attrs)
 }
-pub fn log_warn_with<A: SkyStringify>(msg: String, attrs: Vec<A>) -> SkyTask<()> {
-    sky_runtime::log::log_warn_with(msg, attrs)
+pub fn log_warn_with<A: IpeStringify>(msg: String, attrs: Vec<A>) -> IpeTask<()> {
+    ipe_runtime::log::log_warn_with(msg, attrs)
 }
-pub fn system_args(_: ()) -> SkyTask<Vec<String>> {
-    sky_runtime::system::system_args(())
+pub fn system_args(_: ()) -> IpeTask<Vec<String>> {
+    ipe_runtime::system::system_args(())
 }
-pub fn system_setenv(key: String, val: String) -> SkyTask<()> {
-    sky_runtime::system::system_setenv(key, val)
+pub fn system_setenv(key: String, val: String) -> IpeTask<()> {
+    ipe_runtime::system::system_setenv(key, val)
 }
-pub fn system_unsetenv(key: String) -> SkyTask<()> {
-    sky_runtime::system::system_unsetenv(key)
+pub fn system_unsetenv(key: String) -> IpeTask<()> {
+    ipe_runtime::system::system_unsetenv(key)
 }
-pub fn time_now(_: ()) -> SkyTask<i64> {
-    sky_runtime::time::time_now(())
+pub fn time_now(_: ()) -> IpeTask<i64> {
+    ipe_runtime::time::time_now(())
 }
-pub fn time_sleep(ms: i64) -> SkyTask<()> {
-    sky_runtime::time::time_sleep(ms)
+pub fn time_sleep(ms: i64) -> IpeTask<()> {
+    ipe_runtime::time::time_sleep(ms)
 }
-pub fn time_unix_millis(_: ()) -> SkyTask<i64> {
-    sky_runtime::time::time_unix_millis(())
+pub fn time_unix_millis(_: ()) -> IpeTask<i64> {
+    ipe_runtime::time::time_unix_millis(())
 }
-pub fn random_int(lo: i64, hi: i64) -> SkyTask<i64> {
-    sky_runtime::random::random_int(lo, hi)
+pub fn random_int(lo: i64, hi: i64) -> IpeTask<i64> {
+    ipe_runtime::random::random_int(lo, hi)
 }
-pub fn random_float(lo: f64, hi: f64) -> SkyTask<f64> {
-    sky_runtime::random::random_float(lo, hi)
+pub fn random_float(lo: f64, hi: f64) -> IpeTask<f64> {
+    ipe_runtime::random::random_float(lo, hi)
 }
-pub fn random_choice(items: Vec<String>) -> SkyTask<String> {
-    sky_runtime::random::random_choice(items)
+pub fn random_choice(items: Vec<String>) -> IpeTask<String> {
+    ipe_runtime::random::random_choice(items)
 }
-pub fn file_read_file(path: String) -> SkyTask<String> {
-    sky_runtime::file::file_read_file(path)
+pub fn file_read_file(path: String) -> IpeTask<String> {
+    ipe_runtime::file::file_read_file(path)
 }
-pub fn file_write_file(path: String, content: String) -> SkyTask<()> {
-    sky_runtime::file::file_write_file(path, content)
+pub fn file_write_file(path: String, content: String) -> IpeTask<()> {
+    ipe_runtime::file::file_write_file(path, content)
 }
-pub fn file_delete(path: String) -> SkyTask<()> {
-    sky_runtime::file::file_delete(path)
+pub fn file_delete(path: String) -> IpeTask<()> {
+    ipe_runtime::file::file_delete(path)
 }
 // ── Task combinators (M5a) ─────────────────────────────────────────────────
-pub fn task_fail<A: Send + 'static>(e: SkyError) -> SkyTask<A> {
-    sky_runtime::task::task_fail(e)
+pub fn task_fail<A: Send + 'static>(e: IpeError) -> IpeTask<A> {
+    ipe_runtime::task::task_fail(e)
 }
 pub fn task_map<A: Send + 'static, B: Send + 'static>(
     f: Box<dyn Fn(A) -> B + Send + 'static>,
-    t: SkyTask<A>,
-) -> SkyTask<B> {
-    sky_runtime::task::task_map(f, t)
+    t: IpeTask<A>,
+) -> IpeTask<B> {
+    ipe_runtime::task::task_map(f, t)
 }
 pub fn task_and_then<A: Send + 'static, B: Send + 'static>(
-    t: SkyTask<A>,
-    f: Box<dyn FnOnce(A) -> SkyTask<B> + Send + 'static>,
-) -> SkyTask<B> {
-    sky_runtime::task::task_and_then(t, f)
+    t: IpeTask<A>,
+    f: Box<dyn FnOnce(A) -> IpeTask<B> + Send + 'static>,
+) -> IpeTask<B> {
+    ipe_runtime::task::task_and_then(t, f)
 }
 pub fn task_map_error<A: Send + 'static>(
-    f: Box<dyn Fn(SkyError) -> SkyError + Send + 'static>,
-    t: SkyTask<A>,
-) -> SkyTask<A> {
-    sky_runtime::task::task_map_error(f, t)
+    f: Box<dyn Fn(IpeError) -> IpeError + Send + 'static>,
+    t: IpeTask<A>,
+) -> IpeTask<A> {
+    ipe_runtime::task::task_map_error(f, t)
 }
 pub fn task_on_error<A: Send + 'static>(
-    f: Box<dyn FnOnce(SkyError) -> SkyTask<A> + Send + 'static>,
-    t: SkyTask<A>,
-) -> SkyTask<A> {
-    sky_runtime::task::task_on_error(f, t)
+    f: Box<dyn FnOnce(IpeError) -> IpeTask<A> + Send + 'static>,
+    t: IpeTask<A>,
+) -> IpeTask<A> {
+    ipe_runtime::task::task_on_error(f, t)
 }
-pub fn task_from_result<A: Send + 'static>(r: SkyResult<SkyError, A>) -> SkyTask<A> {
-    sky_runtime::task::task_from_result(r)
+pub fn task_from_result<A: Send + 'static>(r: IpeResult<IpeError, A>) -> IpeTask<A> {
+    ipe_runtime::task::task_from_result(r)
 }
 pub fn task_and_then_result<A: Send + 'static, B: Send + 'static>(
-    f: Box<dyn Fn(A) -> SkyResult<SkyError, B> + Send + 'static>,
-    t: SkyTask<A>,
-) -> SkyTask<B> {
-    sky_runtime::task::task_and_then_result(f, t)
+    f: Box<dyn Fn(A) -> IpeResult<IpeError, B> + Send + 'static>,
+    t: IpeTask<A>,
+) -> IpeTask<B> {
+    ipe_runtime::task::task_and_then_result(f, t)
 }
-pub fn task_sequence<A: Send + 'static>(tasks: Vec<SkyTask<A>>) -> SkyTask<Vec<A>> {
-    sky_runtime::task::task_sequence(tasks)
+pub fn task_sequence<A: Send + 'static>(tasks: Vec<IpeTask<A>>) -> IpeTask<Vec<A>> {
+    ipe_runtime::task::task_sequence(tasks)
 }
-pub fn task_parallel<A: Send + 'static>(tasks: Vec<SkyTask<A>>) -> SkyTask<Vec<A>> {
-    sky_runtime::task::task_parallel(tasks)
+pub fn task_parallel<A: Send + 'static>(tasks: Vec<IpeTask<A>>) -> IpeTask<Vec<A>> {
+    ipe_runtime::task::task_parallel(tasks)
 }
-pub fn task_run<A: Send + 'static>(t: SkyTask<A>) -> SkyResult<SkyError, A> {
-    sky_runtime::task::task_run(t)
+pub fn task_run<A: Send + 'static>(t: IpeTask<A>) -> IpeResult<IpeError, A> {
+    ipe_runtime::task::task_run(t)
 }
 // ── Io kernels (M5a) ───────────────────────────────────────────────────────
-pub fn io_read_line(_: ()) -> SkyTask<String> {
-    sky_runtime::io::io_read_line(())
+pub fn io_read_line(_: ()) -> IpeTask<String> {
+    ipe_runtime::io::io_read_line(())
 }
-pub fn io_write_stdout(s: String) -> SkyTask<()> {
-    sky_runtime::io::io_write_stdout(s)
+pub fn io_write_stdout(s: String) -> IpeTask<()> {
+    ipe_runtime::io::io_write_stdout(s)
 }
-pub fn io_write_stderr(s: String) -> SkyTask<()> {
-    sky_runtime::io::io_write_stderr(s)
+pub fn io_write_stderr(s: String) -> IpeTask<()> {
+    ipe_runtime::io::io_write_stderr(s)
 }
 // ── System kernels (M5a) ───────────────────────────────────────────────────
-pub fn system_getenv(key: String) -> SkyTask<String> {
-    sky_runtime::system::system_getenv(key)
+pub fn system_getenv(key: String) -> IpeTask<String> {
+    ipe_runtime::system::system_getenv(key)
 }
 pub fn system_getenv_or(key: String, default: String) -> String {
-    sky_runtime::system::system_getenv_or(key, default)
+    ipe_runtime::system::system_getenv_or(key, default)
 }
-pub fn system_get_arg(n: i64) -> SkyTask<SkyMaybe<String>> {
-    sky_runtime::system::system_get_arg(n)
+pub fn system_get_arg(n: i64) -> IpeTask<IpeMaybe<String>> {
+    ipe_runtime::system::system_get_arg(n)
 }
-pub fn system_getenv_int(key: String) -> SkyTask<i64> {
-    sky_runtime::system::system_getenv_int(key)
+pub fn system_getenv_int(key: String) -> IpeTask<i64> {
+    ipe_runtime::system::system_getenv_int(key)
 }
-pub fn system_getenv_bool(key: String) -> SkyTask<bool> {
-    sky_runtime::system::system_getenv_bool(key)
+pub fn system_getenv_bool(key: String) -> IpeTask<bool> {
+    ipe_runtime::system::system_getenv_bool(key)
 }
-pub fn system_cwd(_: ()) -> SkyTask<String> {
-    sky_runtime::system::system_cwd(())
+pub fn system_cwd(_: ()) -> IpeTask<String> {
+    ipe_runtime::system::system_cwd(())
 }
-pub fn system_load_env(_: ()) -> SkyTask<()> {
-    sky_runtime::system::system_load_env(())
+pub fn system_load_env(_: ()) -> IpeTask<()> {
+    ipe_runtime::system::system_load_env(())
 }
 pub fn system_exit(code: i64) -> ! {
-    sky_runtime::system::system_exit(code)
+    ipe_runtime::system::system_exit(code)
 }
 // ── File kernels (M5a) ─────────────────────────────────────────────────────
-pub fn file_exists(path: String) -> SkyTask<bool> {
-    sky_runtime::file::file_exists(path)
+pub fn file_exists(path: String) -> IpeTask<bool> {
+    ipe_runtime::file::file_exists(path)
 }
-pub fn file_remove(path: String) -> SkyTask<()> {
-    sky_runtime::file::file_remove(path)
+pub fn file_remove(path: String) -> IpeTask<()> {
+    ipe_runtime::file::file_remove(path)
 }
-pub fn file_mkdir_all(path: String) -> SkyTask<()> {
-    sky_runtime::file::file_mkdir_all(path)
+pub fn file_mkdir_all(path: String) -> IpeTask<()> {
+    ipe_runtime::file::file_mkdir_all(path)
 }
-pub fn file_read_file_limit(path: String, limit: i64) -> SkyTask<String> {
-    sky_runtime::file::file_read_file_limit(path, limit)
+pub fn file_read_file_limit(path: String, limit: i64) -> IpeTask<String> {
+    ipe_runtime::file::file_read_file_limit(path, limit)
 }
-pub fn file_read_file_bytes(path: String) -> SkyTask<Vec<i64>> {
-    sky_runtime::file::file_read_file_bytes(path)
+pub fn file_read_file_bytes(path: String) -> IpeTask<Vec<i64>> {
+    ipe_runtime::file::file_read_file_bytes(path)
 }
-pub fn file_append(path: String, content: String) -> SkyTask<()> {
-    sky_runtime::file::file_append(path, content)
+pub fn file_append(path: String, content: String) -> IpeTask<()> {
+    ipe_runtime::file::file_append(path, content)
 }
-pub fn file_read_dir(path: String) -> SkyTask<Vec<String>> {
-    sky_runtime::file::file_read_dir(path)
+pub fn file_read_dir(path: String) -> IpeTask<Vec<String>> {
+    ipe_runtime::file::file_read_dir(path)
 }
-pub fn file_is_dir(path: String) -> SkyTask<bool> {
-    sky_runtime::file::file_is_dir(path)
+pub fn file_is_dir(path: String) -> IpeTask<bool> {
+    ipe_runtime::file::file_is_dir(path)
 }
-pub fn file_temp_file(prefix: String) -> SkyTask<String> {
-    sky_runtime::file::file_temp_file(prefix)
+pub fn file_temp_file(prefix: String) -> IpeTask<String> {
+    ipe_runtime::file::file_temp_file(prefix)
 }
-pub fn file_temp_dir(prefix: String) -> SkyTask<String> {
-    sky_runtime::file::file_temp_dir(prefix)
+pub fn file_temp_dir(prefix: String) -> IpeTask<String> {
+    ipe_runtime::file::file_temp_dir(prefix)
 }
-pub fn file_copy(src: String, dst: String) -> SkyTask<()> {
-    sky_runtime::file::file_copy(src, dst)
+pub fn file_copy(src: String, dst: String) -> IpeTask<()> {
+    ipe_runtime::file::file_copy(src, dst)
 }
-pub fn file_rename(src: String, dst: String) -> SkyTask<()> {
-    sky_runtime::file::file_rename(src, dst)
+pub fn file_rename(src: String, dst: String) -> IpeTask<()> {
+    ipe_runtime::file::file_rename(src, dst)
 }
-pub fn crypto_random_bytes(n: i64) -> SkyTask<String> {
-    sky_runtime::crypto::crypto_random_bytes(n)
+pub fn crypto_random_bytes(n: i64) -> IpeTask<String> {
+    ipe_runtime::crypto::crypto_random_bytes(n)
 }
-pub fn crypto_random_token(n: i64) -> SkyTask<String> {
-    sky_runtime::crypto::crypto_random_token(n)
+pub fn crypto_random_token(n: i64) -> IpeTask<String> {
+    ipe_runtime::crypto::crypto_random_token(n)
 }
 // ── Http kernels (M5b) ─────────────────────────────────────────────────────
 pub fn http_parse_query(raw: String) -> HashMap<String, String> {
-    sky_runtime::http_client::http_parse_query(raw)
+    ipe_runtime::http_client::http_parse_query(raw)
 }
 
 pub fn main_sum_r(c: MainRChain) -> i64 {
@@ -264,7 +264,7 @@ pub fn main_sum_r(c: MainRChain) -> i64 {
         MainRChain::RNode(rec) => { let rec = *rec; ((rec).val + main_sum_r((rec).rest.clone())) },
     }
 }
-pub fn sky_main() -> SkyTask<()> {
+pub fn ipe_main() -> IpeTask<()> {
     log_println(string_from_int(main_sum_r(MainRChain::RNode(Box::new(RecRestVal { rest: MainRChain::RNode(Box::new(RecRestVal { rest: MainRChain::REnd, val: 2 })), val: 3 })))))
 }
 
@@ -293,10 +293,10 @@ fn main() {
     // Synchronous-panic gate (Go parity: rt.LogPanicAndExit) —
     // classify an escaping panic (div-by-zero / index-OOB /
     // overflow) into a Sky error + exit 1, not a raw Rust backtrace.
-    sky_runtime::core::install_panic_classifier();
-    match block_on(sky_main()) {
-        SkyResult::Ok(_) => (),
-        SkyResult::Err(e) => {
+    ipe_runtime::core::install_panic_classifier();
+    match block_on(ipe_main()) {
+        IpeResult::Ok(_) => (),
+        IpeResult::Err(e) => {
             eprintln!("{:?}", e);
             std::process::exit(1);
         }

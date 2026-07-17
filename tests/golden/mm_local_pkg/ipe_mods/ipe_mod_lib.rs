@@ -5,8 +5,8 @@ pub(crate) enum LibColor {
     Red,
     Blue,
 }
-impl SkyStringify for LibColor {
-    fn sky_show(&self) -> String {
+impl IpeStringify for LibColor {
+    fn ipe_show(&self) -> String {
         match self {
             LibColor::Red => "Red".to_string(),
             LibColor::Blue => "Blue".to_string(),
