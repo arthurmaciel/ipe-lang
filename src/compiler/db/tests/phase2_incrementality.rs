@@ -208,7 +208,7 @@ fn resolve_imports_shape() {
     let expected = vec![
         (vec!["A".to_owned()], ImportResolution::Resolved(a)),
         (
-            vec!["Sky".to_owned(), "Core".to_owned(), "Prelude".to_owned()],
+            vec!["Ipe".to_owned(), "Prelude".to_owned()],
             ImportResolution::Unresolved,
         ),
     ];
@@ -332,10 +332,10 @@ fn stdlib_shadow_stays_rejected() {
     let (db, _log) = logged_db();
     let squatter = file(
         &db,
-        &["Std", "Fake"],
+        &["Ipe", "Fake"],
         "module Ipe.Fake exposing (x)\n\nx = 1\n",
     );
-    let root = root_of(&db, &[(&["Std", "Fake"], squatter)]);
+    let root = root_of(&db, &[(&["Ipe", "Fake"], squatter)]);
     let red = canonicalize(&db, root, squatter);
     assert!(
         matches!(
@@ -353,11 +353,11 @@ fn stdlib_shadow_stays_rejected() {
     let (db2, _log2) = logged_db();
     let genuine = file_with_origin(
         &db2,
-        &["Std", "Fake"],
+        &["Ipe", "Fake"],
         "module Ipe.Fake exposing (x)\n\nx : Int\nx = 1\n",
         ModuleOrigin::EmbeddedStdlib,
     );
-    let root2 = root_of(&db2, &[(&["Std", "Fake"], genuine)]);
+    let root2 = root_of(&db2, &[(&["Ipe", "Fake"], genuine)]);
     assert!(
         canonicalize(&db2, root2, genuine).is_ok(),
         "driver-vouched EmbeddedStdlib origin must pass the reserved-namespace gate"

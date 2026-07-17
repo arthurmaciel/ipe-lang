@@ -61,7 +61,7 @@ fn disambiguate_user_fn_name(default_snake: &str) -> Option<String> {
 
 /// Convert a Ipê module-prefixed name to `UpperCamelCase` (used for type names).
 ///
-/// `Sky_Core_Error_Error` → `IpeCoreErrorError`, `Main_Msg` → `MainMsg`.
+/// `Ipe_Core_Error_Error` → `IpeCoreErrorError`, `Main_Msg` → `MainMsg`.
 /// An underscore is dropped and the following character upper-cased; a trailing
 /// underscore with no successor is kept verbatim (mirrors the Haskell pattern
 /// `go ('_':c:cs)` falling through to `go (c:cs)` when there is no `c`).
@@ -93,7 +93,7 @@ pub fn to_camel_case(s: &str) -> String {
 
 /// Convert a Ipê module-prefixed name to `snake_case` (used for function names).
 ///
-/// `Sky_Core_List_map` → `ipe_core_list_map`, `Main_update` → `main_update`.
+/// `Ipe_Core_List_map` → `ipe_core_list_map`, `Main_update` → `main_update`.
 /// Mirrors the Haskell `toSnakeCase`: the leading character is lower-cased; an
 /// underscore followed by a character emits `_` plus the lower-cased successor;
 /// an interior upper-case character emits `_` plus its lower-case form.
@@ -128,7 +128,7 @@ pub fn to_snake_case(s: &str) -> String {
 }
 
 /// The dotted module prefix rendered with `_` separators (`["Ipê","Core","Io"]`
-/// → `Sky_Core_Io`). This matches `moduleNameToRust` (dots → underscores) when
+/// → `Ipe_Io`). This matches `moduleNameToRust` (dots → underscores) when
 /// the path is supplied as already-split segments.
 ///
 /// `pub` (rather than private) because `rust_file::mod_ident` reuses this exact
@@ -1345,13 +1345,13 @@ mod tests {
     #[test]
     fn camel_case_module_prefixed() {
         assert_eq!(to_camel_case("Main_Msg"), "MainMsg");
-        assert_eq!(to_camel_case("Sky_Core_Error_Error"), "IpeCoreErrorError");
+        assert_eq!(to_camel_case("Ipe_Core_Error_Error"), "IpeCoreErrorError");
     }
 
     #[test]
     fn snake_case_module_prefixed() {
         assert_eq!(to_snake_case("Main_update"), "main_update");
-        assert_eq!(to_snake_case("Sky_Core_List_map"), "ipe_core_list_map");
+        assert_eq!(to_snake_case("Ipe_Core_List_map"), "ipe_core_list_map");
     }
 
     #[test]

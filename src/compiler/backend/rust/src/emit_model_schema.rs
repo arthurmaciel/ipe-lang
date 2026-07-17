@@ -610,7 +610,7 @@ mod tests {
     #[test]
     fn wire_epoch_matches_runtime_constant() {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../runtime/rust/src/ipe_runtime/live/store.rs");
+            .join("../../../runtime/rust/src/live/store.rs");
         let text = std::fs::read_to_string(&path)
             .expect("wire-epoch drift guard: cannot read runtime live/store.rs");
         let needle = format!(

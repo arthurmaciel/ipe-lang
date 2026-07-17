@@ -163,7 +163,7 @@ mod tests {
                 .iter()
                 .filter_map(|&s| i.resolve(s))
                 .collect();
-            assert_eq!(segs, ["Sky", "Core", "Prelude"]);
+            assert_eq!(segs, ["Ipe", "Prelude"]);
             assert!(imp.alias.is_none());
             assert!(matches!(imp.exposing.value, Exposing::All));
         }
