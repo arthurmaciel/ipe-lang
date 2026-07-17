@@ -32,7 +32,7 @@
 //!    must surface `IPE-T0001` at skyc, never silently cargo-fail.
 //!
 //! 3. `ctor_span_attr_dep_module` — a function-bearing ctor in a dep module
-//!    must surface `IPE-L0114` attributed to `Dep.sky`, not `Main.sky`.
+//!    must surface `IPE-L0114` attributed to `Dep.ipe`, not `Main.ipe`.
 
 use std::path::{Path, PathBuf};
 
@@ -49,7 +49,7 @@ fn fixture_entry(root: &Path, name: &str) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join(name)
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 fn fixture_src_entry(root: &Path, name: &str) -> PathBuf {
@@ -57,7 +57,7 @@ fn fixture_src_entry(root: &Path, name: &str) -> PathBuf {
         .join("golden")
         .join(name)
         .join("src")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 /// Build-only seal: `BroadcastMsg any` — skyc exit 0 AND cargo build green.
@@ -125,7 +125,7 @@ fn any_ctor_payload_fail_closed() {
 }
 
 /// Misattribution seal: a function-bearing ctor in a dep module must surface
-/// IPE-L0114 attributed to `Dep.sky`, not the entry `Main.sky`.
+/// IPE-L0114 attributed to `Dep.ipe`, not the entry `Main.ipe`.
 #[test]
 fn ctor_span_attr_dep_module() {
     let root = repo_root();
@@ -148,11 +148,11 @@ fn ctor_span_attr_dep_module() {
         "expected IPE-L0114 for function-bearing ctor, got:\n{err_str}"
     );
     assert!(
-        err_str.contains("Dep.sky"),
-        "IPE-L0114 must attribute to Dep.sky (ctor-span attribution fix), got:\n{err_str}"
+        err_str.contains("Dep.ipe"),
+        "IPE-L0114 must attribute to Dep.ipe (ctor-span attribution fix), got:\n{err_str}"
     );
     assert!(
-        !err_str.contains("Main.sky"),
-        "IPE-L0114 must NOT mis-attribute to Main.sky, got:\n{err_str}"
+        !err_str.contains("Main.ipe"),
+        "IPE-L0114 must NOT mis-attribute to Main.ipe, got:\n{err_str}"
     );
 }

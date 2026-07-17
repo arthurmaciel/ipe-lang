@@ -77,7 +77,7 @@ of 5**, wired onto the production `skyc` path.
 
 | Input | Shape | Durability | Notes |
 |---|---|---|---|
-| `SourceFile { module_path: Vec<String>, text: String }` | one per in-scope `.sky` module | low (default) | `text` is the real input; `module_path` is carried for keying/diagnostics |
+| `SourceFile { module_path: Vec<String>, text: String }` | one per in-scope `.ipe` module | low (default) | `text` is the real input; `module_path` is carried for keying/diagnostics |
 | `SourceRoot { files: BTreeMap<Vec<String>, SourceFile> }` | the in-scope file set | low (default) | The spec's `file_set()` — the "ALL modules" quantifier as an explicit input |
 
 **Byte-equal re-save is a driver responsibility.** Salsa dirties on every
@@ -1660,7 +1660,7 @@ closing H18's symlink-escape hazard by construction, not by a runtime
 check a future edit could accidentally skip. `WatchScope::build(root,
 entry_dir)` assembles the design doc's exact allowlist — `sky.toml` (if
 present), the entry module's directory (recursive), `tests/` (if present)
-— and counts every in-scope `.sky` file up front, hard-refusing
+— and counts every in-scope `.ipe` file up front, hard-refusing
 (`ScopeError::TooManyFiles`) past `MAX_WATCHED_FILES` (200,000) rather than
 silently truncating (the DoS-guard half of H18).
 
@@ -1698,7 +1698,7 @@ hazard, not just path filtering.** `WatchScope::is_relevant` (Task 21)
 filters by PATH; it does not — did not, before this finding — filter by
 EVENT KIND. `notify`'s Linux (inotify) backend reports `Access(Open)`
 events for a file's mere OPEN/READ, not only for writes. The orchestrator's
-own `resolve_project_sources` (Task 22) opens every in-scope `.sky` file
+own `resolve_project_sources` (Task 22) opens every in-scope `.ipe` file
 AND reads the watched directory on EVERY rebuild cycle — so a watch
 session, on its own, generated an unbounded storm of `Access` events for
 the very files/directories its own rebuild had just read, each one queued
@@ -1710,7 +1710,7 @@ end-to-end test run (`watch_rebuild_on_save_swaps_the_running_binary`)
 never completed a single warm-rebuild cycle inside its 120 s budget;
 `eprintln!`-instrumenting the raw `notify` callback (temporarily, removed
 once the root cause was found) showed 50+ `Access(Open(Any))` events for
-`Main.sky` and its parent directory with ZERO source edits from the test.
+`Main.ipe` and its parent directory with ZERO source edits from the test.
 Root-cause fix, not a workaround: the raw-event callback now rejects
 `EventKind::Access(_)` and `EventKind::Other` (`event.kind.is_access()` +
 an explicit `Other` match) BEFORE a path ever reaches
@@ -2081,7 +2081,7 @@ items 2 and 3 follow from it).
 10. **`notify` ACCESS events are excluded at the raw-callback boundary, not
     downstream** — found by the E2E suite (the FIRST end-to-end run never
     completed a single rebuild cycle; instrumenting the raw callback showed
-    a `Main.sky`-open storm with zero real edits), root-caused to the
+    a `Main.ipe`-open storm with zero real edits), root-caused to the
     orchestrator's own file reads being observable as `Access(Open)` events
     on Linux/inotify, and fixed by rejecting `EventKind::Access`/`Other`
     BEFORE `WatchScope::is_relevant` ever runs — a narrow exclusion of the
@@ -2159,7 +2159,7 @@ hack)**: the raw-callback filter previously rejected EVERY
 signal that is only ever emitted once a WRITE-mode file handle is actually
 `close()`d, which, by the writing process's own fd lifecycle, can only
 happen AFTER its `write()` call has returned. `resolve_project_sources`
-only ever opens `.sky` files for READING (never writing), so it can never
+only ever opens `.ipe` files for READING (never writing), so it can never
 itself produce a `Close(Write)` event — letting this one variant through
 cannot reopen the Task-21 self-trigger hole (§14.8 ledger item 10) that
 motivated excluding `Access` in the first place. With `Close(Write)` now

@@ -25,7 +25,7 @@ mod tests {
     }
 
     /// Build, by hand, the Source AST the parser is expected to produce for
-    /// `tests/golden/basics/Main.sky`. Returns the module plus the interner so the
+    /// `tests/golden/basics/Main.ipe`. Returns the module plus the interner so the
     /// caller can resolve symbols if needed.
     fn golden_module(i: &mut Interner) -> DResult<Module> {
         let main = i.intern("main")?;

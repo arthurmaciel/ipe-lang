@@ -43,7 +43,7 @@ fn entry_path(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("oninput_reused_capture")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 /// skyc-0: the compiler must accept the program AND emit the capture-clone `let`

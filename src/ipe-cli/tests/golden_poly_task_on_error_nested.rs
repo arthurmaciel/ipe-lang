@@ -63,7 +63,7 @@ fn poly_task_on_error_nested_green() {
         .join("tests")
         .join("golden")
         .join("poly_task_on_error_nested")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("poly_task_on_error_nested");
     let _ = std::fs::remove_dir_all(&out);
 

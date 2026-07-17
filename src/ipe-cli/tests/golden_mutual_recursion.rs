@@ -18,7 +18,7 @@
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
 //! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the SAME
-//! `Main.sky` to stdout `5\n`, exit 0 — hand-verified in a temp dir. This is
+//! `Main.ipe` to stdout `5\n`, exit 0 — hand-verified in a temp dir. This is
 //! the soundness-floor regression for a value laundered through a boxed
 //! mutually-recursive payload, pinning the indirect-cycle gap so it can never
 //! regress to the silent exit-0-then-cargo-fail mode.
@@ -32,7 +32,7 @@ fn example_entry(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("mutual_recursion")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 #[test]

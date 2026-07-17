@@ -6,7 +6,7 @@ import Lib1
 import Lib2
 
 
--- BACKLOG #165 regression (see `Lib1.sky` for the full incident writeup).
+-- BACKLOG #165 regression (see `Lib1.ipe` for the full incident writeup).
 -- File-backed SQLite DB (`Lib1.conn`) so every pool connection shares the
 -- same persisted database; `CREATE TABLE IF NOT EXISTS` + `DELETE FROM`
 -- keeps re-runs idempotent.

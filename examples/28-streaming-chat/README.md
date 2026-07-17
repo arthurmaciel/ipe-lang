@@ -47,8 +47,8 @@ go run examples/28-streaming-chat/mock/main.go
 
 # Terminal 2 — Sky.Live app
 cd examples/28-streaming-chat
-sky build src/Main.sky
-sky run src/Main.sky
+sky build src/Main.ipe
+sky run src/Main.ipe
 # (listens on :8000)
 
 # Browser
@@ -77,7 +77,7 @@ PASS verify-streaming-chat
 
 ## Pointing at a real upstream
 
-Open `src/Main.sky` and replace `mockStreamUrl` with the SSE / chat-
+Open `src/Main.ipe` and replace `mockStreamUrl` with the SSE / chat-
 completion URL you want to drive. The request shape is the standard
 `HttpRequest` record — method / url / body / headers. For LLM
 upstreams, you typically set:

@@ -8,7 +8,7 @@
 //! The earliest front-end stages sit behind memoized salsa queries:
 //!
 //! - **Inputs** (the parse-don't-validate boundary): [`SourceFile`] (module
-//!   path + text, one per in-scope `.sky` module) and [`SourceRoot`] (the
+//!   path + text, one per in-scope `.ipe` module) and [`SourceRoot`] (the
 //!   in-scope file set — the design spec's `file_set()`).
 //! - **Tracked queries**: [`parse`] (per-file AST, errors as values) and
 //!   [`imports`] (per-file import list via the same string-scan the driver's
@@ -148,7 +148,7 @@ impl Db for IpeDatabase {
 // Inputs (the parse-don't-validate boundary; the driver sets these)
 // ---------------------------------------------------------------------------
 
-/// One in-scope `.sky` module: its module path (identity/diagnostic key) and
+/// One in-scope `.ipe` module: its module path (identity/diagnostic key) and
 /// full UTF-8 source text (the real input).
 #[salsa::input(debug)]
 pub struct SourceFile {

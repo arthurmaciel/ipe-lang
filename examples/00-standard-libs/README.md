@@ -8,7 +8,7 @@ and the effect-typed surface (`Task`, `System`, `Log`).
 
 ```bash
 sky run        # runs every assertion; exits 0 only when all pass
-sky test src/Main.sky   # alternative — Sky.Test discovery picks it up
+sky test src/Main.ipe   # alternative — Sky.Test discovery picks it up
 ```
 
 A failure here is **always** a regression — the modules covered are

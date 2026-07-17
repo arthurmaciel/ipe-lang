@@ -35,7 +35,7 @@ fn fixture_entry(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("email_send_nominal_fold_seal")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 /// Recursively concatenate every emitted `.rs` file under `dir`. The

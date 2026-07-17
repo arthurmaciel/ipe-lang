@@ -30,7 +30,7 @@ distributed hub.)
 ```bash
 cd examples/34-multi-tier-console
 rm -rf sky-out .skycache .skydeps   # clean slate
-sky build src/Main.sky
+sky build src/Main.ipe
 IPE_LIVE_PORT=8034 \
 IPE_CONSOLE_AUTH=token \
 IPE_CONSOLE_TOKEN=local-dev-token \

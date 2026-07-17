@@ -5,7 +5,7 @@ module Main exposing (main)
 -- Validates risk #2 from docs/skywebview/PLAN.md: does WebGL2 +
 -- Three.js work end-to-end through the system webview engine?
 --
--- Run it with `sky run src/Main.sky` — a native window opens
+-- Run it with `sky run src/Main.ipe` — a native window opens
 -- pointing at the spike scene. There's no separate `webview_go`
 -- shim, no separate Sky.Http.Server: the same Sky.Webview backend
 -- that powers every other Sky.Webview example handles loopback

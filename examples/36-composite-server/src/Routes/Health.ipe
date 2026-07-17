@@ -63,7 +63,7 @@ rebuildHealth cache bootMs =
                                                      "miss")))
 
 
--- Pure helper — easy to unit-test from CompositeServerTest.sky.  The
+-- Pure helper — easy to unit-test from CompositeServerTest.ipe.  The
 -- opaque "build" id is a base64 of the boot timestamp so we exercise
 -- Sky.Core.Encoding.base64Encode in the test suite too.
 uptimeBody : Int -> Int -> String

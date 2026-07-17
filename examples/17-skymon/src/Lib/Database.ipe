@@ -15,7 +15,7 @@ import Sky.Core.Error as Error exposing (Error(..), ErrorKind(..))
 -- rest of skymon's update / view code keeps its existing Result
 -- contracts unchanged. For long-running batched writes or background
 -- reads, factor into a top-level Task and dispatch via Cmd.perform —
--- see 18-job-queue/src/Main.sky for the canonical async pattern.
+-- see 18-job-queue/src/Main.ipe for the canonical async pattern.
 conn =
     case Task.run (Db.open "sqlite" "skymon.db") of
 

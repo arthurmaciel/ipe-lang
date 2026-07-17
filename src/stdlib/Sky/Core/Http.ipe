@@ -13,7 +13,7 @@
 --
 -- Builders (`defaultRequest` / `with*`) are pure Sky. `withHeader`
 -- PREPENDS the new pair (`(k, v) :: req.headers`) matching the Go
--- reference compiler's Sky.Core.Http.sky behaviour — latest-added header
+-- reference compiler's Sky.Core.Http.ipe behaviour — latest-added header
 -- is first in the list.
 module Sky.Core.Http exposing
     ( HttpRequest

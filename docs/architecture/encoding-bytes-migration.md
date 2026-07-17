@@ -6,8 +6,8 @@ ws_client.rs, server.rs, crates/sky_types/src/constrain.rs).
 
 > **SCOPE CORRECTION (2026-07-03, gap-1 enumeration before impl).** The panel
 > reasoned partly against the UPSTREAM `sky-stdlib/` tree. In the skyc PORT
-> (`crates/skyc/stdlib/`) there is **no `Compression.sky`, `Email.sky`, or
-> `WebSocket.sky`** — those modules are NOT ported yet, so they have no Sky-facing
+> (`crates/skyc/stdlib/`) there is **no `Compression.ipe`, `Email.ipe`, or
+> `WebSocket.ipe`** — those modules are NOT ported yet, so they have no Sky-facing
 > binary surface to re-type. The swarm's "atomic step-3" (re-type
 > Compression/Email/WebSocket binary payloads `String→Bytes`) is therefore MOOT
 > in this tree, and `sky_bytes`/`bytes_to_sky` CANNOT be deleted — the
@@ -228,7 +228,7 @@ Flip / refresh:
 
 6. `m4f_encoding_nonascii_divergence` → `expected_go.txt` = `café Y2Fmw6k=
    636166c3a9`; DELETE `sanctioned.divergence`; set `oracle_divergence=false`;
-   rewrite `Main.sky`; regenerate `main_sky_sha256` + oracle.
+   rewrite `Main.ipe`; regenerate `main_sky_sha256` + oracle.
 7. Anti-mask: add non-ASCII companions to `encoding_base64`/`hex` (currently
    ASCII-only — the exact golden-mask that hid this). Add a café url case to
    `encoding_url*` to lock the already-correct UTF-8 url path.

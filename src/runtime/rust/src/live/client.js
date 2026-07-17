@@ -1271,9 +1271,9 @@ function __skyInjectStatusBanner() {
   // tiny <style> with the variant rules.
   var style = document.createElement("style");
   style.textContent = "" +
-    "#__sky-status.sky-status--connected{display:none}" +
-    "#__sky-status.sky-status--reconnecting{background:#b45309}" +
-    "#__sky-status.sky-status--offline{background:#b91c1c}";
+    "#__sky-status.ipe-status--connected{display:none}" +
+    "#__sky-status.ipe-status--reconnecting{background:#b45309}" +
+    "#__sky-status.ipe-status--offline{background:#b91c1c}";
   document.head.appendChild(style);
   var msgEl = document.createElement("span");
   msgEl.className = "sky-status__msg";

@@ -127,7 +127,7 @@ mod tests {
     use super::*;
     use ipe_syntax::{Exposed, Exposing, Expr_, Pattern_, TypeAnnotation, Value};
 
-    const GOLDEN: &str = include_str!("../../../../tests/golden/basics/Main.sky");
+    const GOLDEN: &str = include_str!("../../../../tests/golden/basics/Main.ipe");
 
     fn find_value<'a>(m: &'a Module, i: &Interner, name: &str) -> Option<&'a Value> {
         m.values
@@ -1614,7 +1614,7 @@ mod tests {
     fn negation_of_identifier_desugars_to_negate_call() {
         // `-cents` → `Call(VarLocal("negate"), [VarLocal("cents")])`.
         // This is the exact shape that triggered IPE-P0001 in
-        // 37-composite-live-shop / State.sky:156:
+        // 37-composite-live-shop / State.ipe:156:
         //   `if cents < 0 then -cents else cents`
         let mut i = Interner::new();
         let src = format!("{HDR}v cents =\n    -cents\n");

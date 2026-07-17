@@ -44,7 +44,7 @@ Ipê" is nonsense; "ported from Ipê" is a lie. Protect them.
 | Files touched (any case) | **1 023** |
 | Workspace crates (all `sky_*` / `skyc`) | **12**: `sky_intern`, `sky_diagnostics`, `sky_kernels`, `sky_syntax`, `sky_parse`, `sky_canon`, `sky_types`, `sky_ir`, `sky_lower`, `sky_backend`, `sky_backend_rust`, `skyc` |
 | Other workspace members | `runtime` (module `sky_runtime`), `tools/oracle`, `tools/refresh-oracle`, `tools/sky-ffi-inspect-rs`; plus `plugins/sky-compiler` |
-| `.sky` source files | **459** (of which **269** are `Main.sky`) |
+| `.ipe` source files | **459** (of which **269** are `Main.ipe`) |
 | Runtime type names | `SkyResult` (1166), `SkyMaybe` (399), `SkyTask` (238), `SkyStringify` (133), `SkyError` (132), `SkyCmd` (84), `SkySub` (76), `SkyDict` (28), `SkyRow`, `SkySet`, `SkyEnv`, `SkyCacheHandle`, `SkyFluentSel`, `SkyID*` |
 | Runtime module dir | `runtime/src/sky_runtime/` → `runtime/src/ipe_runtime/` |
 | Stdlib namespace dir | `crates/skyc/stdlib/Sky/Core/` → `.../Ipe/Core/`; qualifiers `Sky.Core`, `Sky.Live`, `Sky.Http.Server(.Stream/.WebSocket)`, `Sky.Tui`, `Sky.Webview`, `Sky.Test` |
@@ -90,7 +90,7 @@ These name the **upstream Sky** project (the Haskell→Go compiler this repo was
 ported from) or the upstream Go binary/ecosystem. In them, the token `Sky` /
 `sky` referring to *that* project **stays**. Note the nuance: within these files,
 tokens that name **our own artifacts** — error codes (`IPE-L0108`), our source
-extension (`Main.sky`), our crate names — **still rename**; only the *upstream
+extension (`Main.ipe`), our crate names — **still rename**; only the *upstream
 project name* is frozen. This is why the list is **line-level**, never file-level.
 
 | # | File | What stays `Sky` | What still renames in it |
@@ -103,10 +103,10 @@ project name* is frozen. This is why the list is **line-level**, never file-leve
 | 6-18 | `docs/architecture/{repo-layout-and-mirroring, static-compilation, go-oracle-fixture-corpus-plan, examples-sweep-port, windows-ci-support, principled-decisions-audit, sweep-and-parity-plan, ffi-subsystem-design, ffi-sandbox-and-generator-impl-ready, ffi-port-spec, kernel-registry-design, ui-live-tui-webview-spec, tui-windows-ci}.md` | `../sky` sibling-checkout paths, "Go `sky`" binary, upstream-parity prose | our codes/crates/identifiers when named as ours |
 | 19 | `docs/superpowers/plans/*.md` (historical: `float-scinotation-verify`, `2026-06-26-...-m0-spine`, `phase4-...`, `examples-sweep-run`, `ci-and-push`, `secret-type`, `m5b-db-followups`, `let-bound-cfg-diagnostic`, `ffi-phase0-inspector`, `registry-phase-{D,E}`, `crate-spec-ssot`, `m5b-http-followups`, `m5a-task-followups`, `css-attr-injection-safe-emit`) | `../sky` paths + "Go reference" — these are frozen historical artifacts | **treat as frozen**: prefer to leave historical plans untouched except where they name a live path the harness reads |
 | 20 | `scripts/lib/env.sh` | `../sky` sibling-repo path variable (points at upstream checkout) | any `IPE_*` env var WE own that the script exports |
-| 21 | `tools/oracle/src/lib.rs`, `tools/refresh-oracle/src/main.rs` | "Go `sky` version" / the upstream Go binary name captured by the oracle | `MAIN_SKY`/`"Main.sky"` (OUR extension → `Main.ipe`), crate identifiers |
+| 21 | `tools/oracle/src/lib.rs`, `tools/refresh-oracle/src/main.rs` | "Go `sky` version" / the upstream Go binary name captured by the oracle | `MAIN_SKY`/`"Main.ipe"` (OUR extension → `Main.ipe`), crate identifiers |
 | 22 | `runtime/src/sky_runtime/{string,stringify}.rs` | any `../sky` provenance comment pointing at upstream | the module path itself renames (Task 2) |
 | 23 | `CLAUDE.md` (root) | passages describing the **upstream** Haskell→Go Sky compiler/release flow, `SkyDeploy` (upstream product), "Sky release" | our Rust tooling names, our env vars, our extension — **highest-ambiguity file, curate every line** |
-| 24 | `examples/32-sse-relay/{README.md,src/Main.sky}` | `SkyDeploy` agent-service (upstream product name) | the `.sky`→`.ipe` extension of the file itself |
+| 24 | `examples/32-sse-relay/{README.md,src/Main.ipe}` | `SkyDeploy` agent-service (upstream product name) | the `.ipe`→`.ipe` extension of the file itself |
 
 **Curation candidates flagged for guardian sign-off (decide during Task 1):**
 - `SkyDeploy` — upstream Go ecosystem product. Likely **stays** (proper product
@@ -164,16 +164,16 @@ goldens there).
 - Use word-boundary scoped replace (`\bSky<Name>\b`) to avoid touching substrings.
 - **Green gate:** `cargo build` + the golden diff tests + runtime unit tests green.
 
-### Task 4 — Source extension `.sky` → `.ipe` (+ `Main.sky`→`Main.ipe`)
-- `git mv` all **459** `.sky` files to `.ipe` (269 `Main.sky`→`Main.ipe`), across
+### Task 4 — Source extension `.ipe` → `.ipe` (+ `Main.ipe`→`Main.ipe`)
+- `git mv` all **459** `.ipe` files to `.ipe` (269 `Main.ipe`→`Main.ipe`), across
   `examples/`, `tests/golden/`, `crates/*/stdlib/`, `crates/*/tests/`, test-fixtures.
 - Rewrite the extension in the **toolchain that reads it**:
   - loader/driver in `crates/ipec/src/{lib,project,stdlib}.rs`,
   - parser entry (`crates/ipe_parse/src`),
   - `sky watch`/doc paths, `tools/oracle` (`MAIN_SKY = "Main.ipe"`, `sha256(Main.ipe)` comments),
-  - sweep harness `scripts/equivalence-checks/examples-sweep.sh` + `scripts/lib/{examples,checks,env}.sh` (`src/Main.sky`→`src/Main.ipe`, `*.sky` globs),
+  - sweep harness `scripts/equivalence-checks/examples-sweep.sh` + `scripts/lib/{examples,checks,env}.sh` (`src/Main.ipe`→`src/Main.ipe`, `*.ipe` globs),
   - `sky.toml` `entry = "src/Main.ipe"` fields.
-- **Exclusion gate:** in the historical `docs/superpowers/plans/*` (frozen), leave prose `Main.sky` mentions unless the harness reads that path.
+- **Exclusion gate:** in the historical `docs/superpowers/plans/*` (frozen), leave prose `Main.ipe` mentions unless the harness reads that path.
 - **Green gate:** `timeout 3600 cargo test` (golden + skyc/ipec integration) green; a spot example builds via the sweep harness.
 
 ### Task 5 — Stdlib namespace `Sky.Core`→`Ipe.Core` (+ `Sky.Live/Http.Server/Tui/Webview/Test`) — **RISKIEST**

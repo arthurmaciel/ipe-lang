@@ -37,7 +37,7 @@ fn fixture_entry(root: &Path, name: &str) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join(name)
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 fn built_code(root: &Path, name: &str) -> (Result<(), CliError>, PathBuf) {

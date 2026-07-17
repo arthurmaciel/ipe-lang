@@ -43,7 +43,7 @@ def old_mask(v):
 
 def page_with_bar(x, y, width, height):
     """A minimal Sky.Live #sky-root page carrying one SVG <rect> — the shape
-    Std.Ui.Chart.bar emits (src/stdlib/Std/Ui/Chart.sky)."""
+    Std.Ui.Chart.bar emits (src/stdlib/Std/Ui/Chart.ipe)."""
     return (
         '<html><body><div id="sky-root">'
         '<svg width="480" height="200">'

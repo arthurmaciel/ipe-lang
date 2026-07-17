@@ -18,7 +18,7 @@ the "write once, render anywhere" cross-backend story.
 
 ```bash
 cd examples/31-webview-stopwatch-ui
-sky build src/Main.sky
+sky build src/Main.ipe
 ./sky-out/app
 ```
 

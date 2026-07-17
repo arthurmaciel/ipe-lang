@@ -20,7 +20,7 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// Compile `tests/golden/input_radio_row/Main.sky` and assert it succeeds.
+/// Compile `tests/golden/input_radio_row/Main.ipe` and assert it succeeds.
 /// Skips silently when the runtime cannot be resolved (CI without runtime dir).
 #[test]
 fn input_radio_row_typechecks_and_lowers() {
@@ -29,7 +29,7 @@ fn input_radio_row_typechecks_and_lowers() {
         .join("tests")
         .join("golden")
         .join("input_radio_row")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i155_input_radio_row_emit");
     let _ = std::fs::remove_dir_all(&out);
 

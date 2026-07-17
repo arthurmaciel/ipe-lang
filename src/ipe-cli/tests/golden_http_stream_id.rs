@@ -28,7 +28,7 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// Parse + type-check + lower `tests/golden/http_stream_id/Main.sky`.
+/// Parse + type-check + lower `tests/golden/http_stream_id/Main.ipe`.
 /// Asserts the pipeline succeeds (no IPE-T0001 from mismatched `Int` vs
 /// `StreamId`, and no `callee_arity` panic from a missing lower arm).
 #[test]
@@ -38,7 +38,7 @@ fn http_stream_open_returns_stream_id_not_int() {
         .join("tests")
         .join("golden")
         .join("http_stream_id")
-        .join("Main.sky");
+        .join("Main.ipe");
 
     let result = skyc::emit_ir_text(&entry);
     assert!(
@@ -63,7 +63,7 @@ fn http_stream_open_full_emit_succeeds() {
         .join("tests")
         .join("golden")
         .join("http_stream_id")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i148_http_stream_id_full_emit");
     let _ = std::fs::remove_dir_all(&out);
 

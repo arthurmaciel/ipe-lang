@@ -38,14 +38,14 @@ fn write_project(dir: &Path, main: &str) -> bool {
     if fs::create_dir_all(&src).is_err() {
         return false;
     }
-    fs::write(src.join("Main.sky"), main).is_ok()
+    fs::write(src.join("Main.ipe"), main).is_ok()
 }
 
 fn e2e_enabled() -> bool {
     std::env::var("IPE_E2E").is_ok()
 }
 
-/// Compile `main` (a full `Main.sky` program) through the skyc frontend into an
+/// Compile `main` (a full `Main.ipe` program) through the skyc frontend into an
 /// emitted Rust project rooted at a per-`slug` temp dir. Asserts skyc exit 0 —
 /// a resolution/seal regression fails loudly. Returns the emitted-project dir.
 fn compile_module_probe(slug: &str, main: &str) -> Option<PathBuf> {
@@ -64,7 +64,7 @@ fn compile_module_probe(slug: &str, main: &str) -> Option<PathBuf> {
         write_project(&tmp, main),
         "must write the {slug} fixture project"
     );
-    let entry = tmp.join("src").join("Main.sky");
+    let entry = tmp.join("src").join("Main.ipe");
     let out =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("stdlib_seal_{slug}_{uid}_out"));
     let _ = fs::remove_dir_all(&out);

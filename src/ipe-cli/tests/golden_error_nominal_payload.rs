@@ -39,7 +39,7 @@ fn error_nominal_payload_compiles() {
         .join("tests")
         .join("golden")
         .join("error_nominal_payload")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("error_nominal_payload_out");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -64,7 +64,7 @@ fn error_nominal_payload_runs_and_prints_expected_output() {
         .join("tests")
         .join("golden")
         .join("error_nominal_payload")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_error_nominal_payload_e2e");
     let _ = std::fs::remove_dir_all(&out);
 

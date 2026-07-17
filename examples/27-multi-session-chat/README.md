@@ -6,7 +6,7 @@ tabs in the same room exchange messages in real time without polling.
 ## Build & run
 
 ```bash
-sky build src/Main.sky
+sky build src/Main.ipe
 ./sky-out/app
 ```
 

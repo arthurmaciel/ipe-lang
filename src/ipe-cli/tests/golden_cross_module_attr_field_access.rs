@@ -2,12 +2,12 @@
 //! to the module that actually OWNS the access, not to a byte-offset collision
 //! in another merged module.
 //!
-//! Historical context (12-skyvote): `info.message` in `Lib/AuthHandlers.sky`
+//! Historical context (12-skyvote): `info.message` in `Lib/AuthHandlers.ipe`
 //! failed to resolve (parked `Error`/`ErrorInfo` ADT leaves `info` a flex
 //! record). The deferred field-access pass (`resolve_deferred`) returned the
 //! diagnostic with an *empty* home, so the driver fell back to `source_for_span`
 //! — the byte-offset heuristic — which picked a numerically-closer `class` call
-//! in an unrelated `Page/Roadmap.sky` def. The user saw
+//! in an unrelated `Page/Roadmap.ipe` def. The user saw
 //! "`class` … has no field `message`" pointing at code that has nothing to do
 //! with the failing access.
 //!
@@ -16,10 +16,10 @@
 //! `infer_attributed` maps the error to the correct source file exactly, the
 //! same way solver errors already do.
 //!
-//! This fixture is tuned so the failing `Dep.sky` access sits at a byte offset
-//! that the old heuristic mis-attributes to `Main.sky` (its `main` body span
+//! This fixture is tuned so the failing `Dep.ipe` access sits at a byte offset
+//! that the old heuristic mis-attributes to `Main.ipe` (its `main` body span
 //! numerically contains the offset with a smaller `lo_dist` than `Dep`'s `bad`
-//! body). This must render `--> Dep.sky:15`, not the `--> Main.sky:9` the old
+//! body). This must render `--> Dep.ipe:15`, not the `--> Main.ipe:9` the old
 //! heuristic produces.
 //!
 //! Run:
@@ -41,7 +41,7 @@ fn try_build(name: &str) -> Result<(), String> {
         .join("golden")
         .join(name)
         .join("src")
-        .join("Main.sky");
+        .join("Main.ipe");
     if !entry.exists() {
         return Err(format!("fixture not found: {}", entry.display()));
     }
@@ -55,8 +55,8 @@ fn try_build(name: &str) -> Result<(), String> {
     skyc::build_with_sibling_discovery(&entry, &out, &runtime).map_err(|e| e.to_string())
 }
 
-/// The IPE-T0012 must blame `Dep.sky` (which owns `rec.missing`), never the
-/// byte-colliding `Main.sky`.
+/// The IPE-T0012 must blame `Dep.ipe` (which owns `rec.missing`), never the
+/// byte-colliding `Main.ipe`.
 #[test]
 fn t0012_field_error_attributes_to_owning_module() {
     // Runtime unavailable → try_build returns Ok as a skip. Nothing to assert.
@@ -65,11 +65,11 @@ fn t0012_field_error_attributes_to_owning_module() {
     };
     assert!(err.contains("IPE-T0012"), "expected IPE-T0012, got:\n{err}");
     assert!(
-        err.contains("Dep.sky:15"),
-        "field error must attribute to the owning module Dep.sky:15, got:\n{err}"
+        err.contains("Dep.ipe:15"),
+        "field error must attribute to the owning module Dep.ipe:15, got:\n{err}"
     );
     assert!(
-        !err.contains("Main.sky"),
-        "field error must NOT mis-attribute to the byte-colliding Main.sky, got:\n{err}"
+        !err.contains("Main.ipe"),
+        "field error must NOT mis-attribute to the byte-colliding Main.ipe, got:\n{err}"
     );
 }

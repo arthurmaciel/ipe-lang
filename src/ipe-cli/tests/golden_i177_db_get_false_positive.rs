@@ -41,7 +41,7 @@ fn entry_path(root: &Path, fixture: &str) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join(fixture)
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 /// skyc-0 ∧ NO spurious `IpeRow` bound — checked unconditionally (cheap, no

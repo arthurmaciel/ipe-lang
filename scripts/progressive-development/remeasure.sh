@@ -37,8 +37,8 @@ printf '%s\n' "$(printf '%.0s─' $(seq 1 78))"
 pass=0; fail=0
 for d in "${dirs[@]}"; do
     name="$(basename "$d")"
-    [ -f "$d/src/Main.sky" ] || continue
-    out="$(cd "$d" && IPE_RUNTIME_DIR="$RUNTIME" timeout 150 "$SKYC" build src/Main.sky 2>&1)"; rc=$?
+    [ -f "$d/src/Main.ipe" ] || continue
+    out="$(cd "$d" && IPE_RUNTIME_DIR="$RUNTIME" timeout 150 "$SKYC" build src/Main.ipe 2>&1)"; rc=$?
     if [ "$rc" -eq 0 ]; then
         blk="PASS"; pass=$((pass+1))
     else

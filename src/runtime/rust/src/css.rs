@@ -1,6 +1,6 @@
 //! `Std.Css` leaf security kernels.
 //!
-//! `Std.Css` is compiled **pure Sky source** (`crates/skyc/stdlib/Std/Css.sky`):
+//! `Std.Css` is compiled **pure Sky source** (`crates/skyc/stdlib/Std/Css.ipe`):
 //! the ADTs (`CssProp` / `CssRule` / `Length` / `Color` / keyword enums), the
 //! typed builders, and the render fold all live in Sky.  The ONLY Rust surface
 //! is the four *leaf* security kernels below — thin `pub` shims over the shared,

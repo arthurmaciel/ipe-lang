@@ -72,12 +72,12 @@ build_both() {
   ( cd "$d" && rm -rf sky-out .skycache .skydeps ) >/dev/null 2>&1
   # env -u IPE_RUNTIME_DIR: the exported Rust-runtime dir would leak into the Go
   # reference's build and read as go-ref-broken (same fix as examples-sweep.sh).
-  ( cd "$d" && env -u IPE_RUNTIME_DIR timeout 300 "$GO_ORACLE" build src/Main.sky ) >"$HIST/go-build.log" 2>&1 || { echo "  go build failed (see $HIST/go-build.log)"; return 1; }
+  ( cd "$d" && env -u IPE_RUNTIME_DIR timeout 300 "$GO_ORACLE" build src/Main.ipe ) >"$HIST/go-build.log" 2>&1 || { echo "  go build failed (see $HIST/go-build.log)"; return 1; }
   GO_BIN="$HIST/$(basename "$d").gobin"; cp -f "$d/sky-out/app" "$GO_BIN" || return 1
   ( cd "$d" && rm -rf sky-out .skycache .skydeps ) >/dev/null 2>&1
   # skyc: project build when a sky.toml exists (multi-module discovery), else the
   # single-file entry (same dispatch as examples-sweep.sh's skyc_build_target).
-  if [ -f "$d/sky.toml" ]; then tgt="sky.toml"; else tgt="src/Main.sky"; fi
+  if [ -f "$d/sky.toml" ]; then tgt="sky.toml"; else tgt="src/Main.ipe"; fi
   ( cd "$d" && timeout 600 "$SKYC_BIN" build "$tgt" --out sky-out/rust ) >"$HIST/rust-build.log" 2>&1 || { echo "  skyc build failed (see $HIST/rust-build.log)"; return 1; }
   ( cd "$d" && timeout 900 cargo build --manifest-path sky-out/rust/Cargo.toml ) >>"$HIST/rust-build.log" 2>&1 || { echo "  cargo build failed (see $HIST/rust-build.log)"; return 1; }
   RUST_BIN="$(resolve_bin "$d")"
@@ -135,7 +135,7 @@ PY
 equivalence_live() { # <example>
   local ex="$1" d="examples/$1"
   echo "live  $ex"
-  [ -f "$d/src/Main.sky" ] || { echo "  no such example"; return 2; }
+  [ -f "$d/src/Main.ipe" ] || { echo "  no such example"; return 2; }
   build_both "$d" || return 2
   serve_and_get "$GO_BIN"   "$HIST/$ex.go.html"   || { echo "  go did not serve"; return 2; }
   serve_and_get "$RUST_BIN" "$HIST/$ex.rust.html" || { echo "  rust did not serve"; return 2; }
@@ -152,7 +152,7 @@ equivalence_live() { # <example>
 equivalence_tui() { # <example> [rows]
   local ex="$1" rows="${2:-50}" cols=80 d="examples/$1"
   echo "tui   $ex (${cols}x${rows})"
-  [ -f "$d/src/Main.sky" ] || { echo "  no such example"; return 2; }
+  [ -f "$d/src/Main.ipe" ] || { echo "  no such example"; return 2; }
   python3 -c "import pyte" 2>/dev/null || { echo "  SKIP (pyte not installed)"; return 0; }
   build_both "$d" || return 2
   capture_tui "$GO_BIN"   "$HIST/$ex.go.raw"   "$rows" "$cols"

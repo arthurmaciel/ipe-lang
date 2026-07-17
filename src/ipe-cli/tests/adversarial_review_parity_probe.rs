@@ -38,7 +38,7 @@ fn prepared(user: &UserSources) -> (PreparedSources, std::collections::BTreeSet<
             (
                 p.clone(),
                 (
-                    PathBuf::from(format!("<advparity>/{}.sky", p.join("/"))),
+                    PathBuf::from(format!("<advparity>/{}.ipe", p.join("/"))),
                     text.clone(),
                 ),
             )

@@ -42,7 +42,7 @@ fn record_ctor_end_to_end_field_order() {
         .join("tests")
         .join("golden")
         .join("record_ctor")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_m82_record_ctor_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -73,7 +73,7 @@ fn record_ctor_and_literal_share_one_struct() {
         .join("tests")
         .join("golden")
         .join("record_ctor_twin")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m82_record_ctor_twin_emit");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -130,7 +130,7 @@ fn seal_fn_field_alias_emits_no_struct() {
         .join("tests")
         .join("golden")
         .join("record_ctor_fn_field")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m82_record_ctor_fn_field_emit");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -176,7 +176,7 @@ fn seal_fn_field_alias_builds_and_runs() {
         .join("tests")
         .join("golden")
         .join("record_ctor_fn_field")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_m82_record_ctor_fn_field_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -210,7 +210,7 @@ fn seal_opaque_field_alias_emits_no_struct() {
         .join("tests")
         .join("golden")
         .join("record_ctor_opaque_field")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m82_record_ctor_opaque_field_emit");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -257,7 +257,7 @@ fn seal_opaque_field_alias_builds_and_runs() {
         .join("tests")
         .join("golden")
         .join("record_ctor_opaque_field")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_m82_record_ctor_opaque_field_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -288,7 +288,7 @@ fn seal_opaque_field_used_as_ctor_fails_closed() {
         .join("tests")
         .join("golden")
         .join("record_ctor_opaque_ctor")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m82_record_ctor_opaque_ctor_emit");
     let _ = std::fs::remove_dir_all(&out);
 

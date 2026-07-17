@@ -28,7 +28,7 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// Run the skyc pipeline on `tests/golden/live_let_bound_routes/Main.sky`.
+/// Run the skyc pipeline on `tests/golden/live_let_bound_routes/Main.ipe`.
 /// Returns `None` when the embedded runtime is unavailable (skip).
 fn run_skyc() -> Option<Result<(), skyc::CliError>> {
     let root = repo_root();
@@ -36,7 +36,7 @@ fn run_skyc() -> Option<Result<(), skyc::CliError>> {
         .join("tests")
         .join("golden")
         .join("live_let_bound_routes")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m7_live_let_bound_routes_emit");
     let _ = std::fs::remove_dir_all(&out);
 

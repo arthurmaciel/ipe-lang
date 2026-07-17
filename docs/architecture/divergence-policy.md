@@ -60,7 +60,7 @@ This is a **deliberate, reviewed** choice — not a bug on either side.
 - `refresh-oracle` short-circuits straight to skyc's output and records it with
   `oracle_divergence = true` and `divergence_reason = sanctioned: <reason>`.
 
-In all three kinds the staleness gate (`sha256(Main.sky)`) and `check_parity`
+In all three kinds the staleness gate (`sha256(Main.ipe)`) and `check_parity`
 apply unchanged — the recorded expectation is still pinned to the source and
 diffed exactly. The leading tag (`Go oracle failed:` / `divergence:` /
 `sanctioned:`) is what lets the read side, the refresh logs, and a human
@@ -156,7 +156,7 @@ match Go exactly (`unicode.IsDigit`/`Nd`, `IsLower`/`Ll`, `IsUpper`/`Lu`,
   byte-equality assertions in `crates/skyc/tests/golden_m5b_uuid_jwt.rs` +
   `runtime/src/sky_runtime/jwt.rs`). Only the CALL SURFACE differs, so a
   Go-targeted program using the builder API does not yet compile on the Rust
-  backend, and the flat-kernel goldens cannot run the same `Main.sky` on the Go
+  backend, and the flat-kernel goldens cannot run the same `Main.ipe` on the Go
   oracle — hence `oracle_divergence = true` (`divergence:` reason) for every
   `m5b_jwt_*` golden, with skyc's own output cached. Recorded as `divergence:
   Sky.Core.Jwt flat encode/decode kernels are the Rust-backend M5b interim
@@ -164,7 +164,7 @@ match Go exactly (`unicode.IsDigit`/`Nd`, `IsLower`/`Ll`, `IsUpper`/`Lu`,
   deferred silently):** add the Go-shaped builder API (`Jwt.encode` / `hs256` /
   `rs256` / `claims` / `decode` + `Algorithm` / `Claims`) on the Rust backend so
   a Go-targeted JWT program compiles unchanged and the goldens become
-  shared-`Main.sky` Go-parity goldens — the byte layout is already identical, so
+  shared-`Main.ipe` Go-parity goldens — the byte layout is already identical, so
   this is a surface/API milestone, not a codec change.
 
 - **`Sky.Core.Uuid` — Rust evaluates the kernels where the Go reference differs
@@ -214,7 +214,7 @@ match Go exactly (`unicode.IsDigit`/`Nd`, `IsLower`/`Ll`, `IsUpper`/`Lu`,
    captures Sky-Rust's output as the expected and writes
    `oracle_divergence = true` + `divergence_reason = <tag> <reason>` — WITHOUT
    requiring Go to fail.
-4. Commit `Main.sky`, `expected_go.txt`, `oracle.meta`, and
+4. Commit `Main.ipe`, `expected_go.txt`, `oracle.meta`, and
    `sanctioned.divergence` together. For a `divergence:` entry, also add a
    one-line row to the registry above documenting the difference and rationale.
 

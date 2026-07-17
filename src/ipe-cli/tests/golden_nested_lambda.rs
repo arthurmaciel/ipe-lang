@@ -21,10 +21,10 @@
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
 //! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the SAME
-//! `Main.sky` to stdout `6\n`, exit 0 — verified by hand:
+//! `Main.ipe` to stdout `6\n`, exit 0 — verified by hand:
 //!
 //! ```text
-//! $ sky run tests/golden/nested_lambda/Main.sky   # Go backend
+//! $ sky run tests/golden/nested_lambda/Main.ipe   # Go backend
 //! 6
 //! ```
 //!
@@ -42,7 +42,7 @@ fn example_entry(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("nested_lambda")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 #[test]

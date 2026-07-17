@@ -9,7 +9,7 @@
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
 //! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the SAME
-//! `Main.sky` to stdout `20\n`, exit 0 — hand-verified in a temp dir:
+//! `Main.ipe` to stdout `20\n`, exit 0 — hand-verified in a temp dir:
 //! `combine (10, 3) = (10 + 3) + (10 - 3) = 13 + 7 = 20`.
 use std::path::{Path, PathBuf};
 
@@ -21,7 +21,7 @@ fn example_entry(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("alias_tuple")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 #[test]

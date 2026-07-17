@@ -19,7 +19,7 @@
 //!
 //! ## What is tested
 //!
-//! * `skyc build` compiles `tests/golden/ui_html_wiring_batch/Main.sky`
+//! * `skyc build` compiles `tests/golden/ui_html_wiring_batch/Main.ipe`
 //!   (canon → types → lower → Rust backend) for all 19 exercised kernels.
 //! * The emitted Rust project `cargo build`s and the binary runs and exits 0.
 //! * `Html.doctype` + `Html.htmlNode` + `Html.headNode` + `Html.titleNode` +
@@ -50,7 +50,7 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// Compile / build / run `tests/golden/ui_html_wiring_batch/Main.sky` and
+/// Compile / build / run `tests/golden/ui_html_wiring_batch/Main.ipe` and
 /// return the golden directory together with the run outcome. Gated on
 /// `IPE_E2E=1`.
 fn build_run_ui_html_wiring_batch() -> (PathBuf, support::RunOutcome) {
@@ -59,7 +59,7 @@ fn build_run_ui_html_wiring_batch() -> (PathBuf, support::RunOutcome) {
         .join("tests")
         .join("golden")
         .join("ui_html_wiring_batch");
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_ui_html_wiring_batch_e2e");
     let _ = std::fs::remove_dir_all(&out);
 

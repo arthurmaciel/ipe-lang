@@ -35,7 +35,7 @@ fn fixture_entry(fixture: &str) -> PathBuf {
         .join("tests")
         .join("golden")
         .join(fixture)
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 /// Build the named golden fixture and assert it surfaces exactly IPE-L0115 as a

@@ -22,7 +22,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 
 fn compile_golden(name: &str) -> PathBuf {
     let root = repo_root();
-    let entry = golden_dir(&root, name).join("Main.sky");
+    let entry = golden_dir(&root, name).join("Main.ipe");
     let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
     let runtime = skyc::resolve_runtime();
@@ -56,7 +56,7 @@ fn tostring_scalars_run() {
 #[test]
 fn log_info_with_stringify_attrs_compiles() {
     let root = repo_root();
-    let entry = golden_dir(&root, "m_log_with").join("Main.sky");
+    let entry = golden_dir(&root, "m_log_with").join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_m_log_with_e2e");
     let _ = std::fs::remove_dir_all(&out);
     let runtime = skyc::resolve_runtime();
@@ -78,7 +78,7 @@ fn log_info_with_stringify_attrs_compiles() {
 #[test]
 fn tostring_on_function_is_rejected_at_typecheck() {
     let root = repo_root();
-    let entry = golden_dir(&root, "m_tostring_fn_rejected").join("Main.sky");
+    let entry = golden_dir(&root, "m_tostring_fn_rejected").join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_m_tostring_fn_rejected_e2e");
     let _ = std::fs::remove_dir_all(&out);
     let runtime = skyc::resolve_runtime();

@@ -48,7 +48,7 @@ fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
         .join("tests")
         .join("golden")
         .join(fixture)
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 
@@ -76,7 +76,7 @@ fn assert_e2e_output(fixture: &str, expect_contains: &str) {
         .join("tests")
         .join("golden")
         .join(fixture)
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = std::env::temp_dir().join(format!("skyc_{fixture}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 

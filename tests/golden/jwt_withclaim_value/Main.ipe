@@ -8,7 +8,7 @@ import Std.Log exposing (println)
 
 
 -- #217 contract-drift regression: `Jwt.withClaim` takes a `JsonEnc.Value`
--- (the reference contract, `Sky/Core/Jwt.sky:79`), NOT a bare `String`.
+-- (the reference contract, `Sky/Core/Jwt.ipe:79`), NOT a bare `String`.
 -- Ported verbatim from the reference builder idiom: a string claim and an
 -- int claim, both threaded through `withClaim` as encoded JSON values.
 token : Result Error String

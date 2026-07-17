@@ -37,7 +37,7 @@ not yet built on one side, or tooling ergonomics).
 | 5 | Refutable function-arg patterns (`f (Just x) =`) | synthesize `let…else { panic! }` (reachable panic) | reject at lower (IPE-L0115/0116) | **O+** | soundness ("no panic from well-typed Sky") | close via front-end desugar, NOT their panic — **pre-sweep/before-push** |
 | 6 | Bare `.field` accessor-as-function | `Can.Accessor` → closure | not representable (no AST variant) | **~** (front-end gap) | completeness | front-end AST work — **pre-sweep** |
 | 7 | Tail-call optimization | `TailCallOpt.hs` analysis; **Go-only** emission; Rust backend has NO TCO | absent (task #49) | **T+** (vs Go); tie (vs their Rust) | soundness (constant stack vs uncatchable overflow trap) | port analysis, author Rust `loop` emission ourselves — **before-push (#49)** |
-| 8 | Kernel type source of truth (#45 root) | `.sky` annotation is the ONE typed source; unknown kernel = unbound-name error | duplicate hand-kept `kernel_ty` table + `Ty::Var(u32::MAX)` fallback | **T+** | parse-don't-validate / invalid-states | single fail-closed source + parity tripwire — **pre-sweep (#45)** |
+| 8 | Kernel type source of truth (#45 root) | `.ipe` annotation is the ONE typed source; unknown kernel = unbound-name error | duplicate hand-kept `kernel_ty` table + `Ty::Var(u32::MAX)` fallback | **T+** | parse-don't-validate / invalid-states | single fail-closed source + parity tripwire — **pre-sweep (#45)** |
 | 9 | Type-render fallback | `TypeRenderer.hs` unmatched → `"String"` default (2nd exit-0-cargo-fail) | `render_type : IrType → DResult`, closed enum, no default | **O+** | soundness floor | keep (contingent on #45 fix) |
 | 10 | Opaque-type rendering architecture | stringly-keyed `Map (String,String) String` + `{M}` placeholder subst | first-class closed `IrType` variants, structural `Box<IrType>` msg | **O+** | invalid-states | keep |
 | 11 | Record-alias resolution | best-superset row-poly widen; miss → `"String"` | exact sorted-key; miss → `CompilerBug` | **O+** (soundness) / theirs more complete | soundness > completeness | add superset fallback ONLY if a sweep example trips CompilerBug — **conditional pre-sweep** |
@@ -133,7 +133,7 @@ Each item names the concrete invariant to bring over and the task it attaches
 to.
 
 1. **Kernel type from the single declaration (#45).** Make the embedded
-   `Ffi.kernel` binding's own `.sky` HM annotation the source of a kernel's
+   `Ffi.kernel` binding's own `.ipe` HM annotation the source of a kernel's
    call-site type (or, per the banked Phase-C bridge, move the scheme INTO
    `StdlibDecl` so the registry is the single source). Delete the duplicate
    `kernel_ty` arm set and the `_ => Ty::Var(u32::MAX)` fallback; replace the

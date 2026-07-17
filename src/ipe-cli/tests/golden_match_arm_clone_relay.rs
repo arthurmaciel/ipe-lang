@@ -30,7 +30,7 @@ fn entry_path(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("match_arm_clone_relay")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 /// skyc-0: the compiler accepts the program AND relays `name` across the

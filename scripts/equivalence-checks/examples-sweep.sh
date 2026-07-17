@@ -11,13 +11,13 @@
 # compiler here is `skyc` (Rust-only cargo workspace), not the Haskell `sky`. The
 # BUILD step invokes:
 #
-#   ( cd <example> && skyc build <sky.toml | src/Main.sky> [--out sky-out/rust] )
+#   ( cd <example> && skyc build <sky.toml | src/Main.ipe> [--out sky-out/rust] )
 #   cargo build --manifest-path <example>/sky-out/rust/Cargo.toml
 #
 # skyc has NO `--backend` flag (it only targets Rust); it emits a self-contained
 # Cargo project under sky-out/rust/ with the runtime vendored into
 # src/sky_runtime, whose default package/binary is `sky-app`. Verified against
-# src/ipe-cli/src/lib.rs `run_build` (usage: `skyc build <entry.sky|project-dir|
+# src/ipe-cli/src/lib.rs `run_build` (usage: `skyc build <entry.ipe|project-dir|
 # sky.toml> [--out <dir>] [--runtime <dir>]`) + the E2E test in the same file that
 # builds sky-out and runs target/debug/sky-app.
 #
@@ -121,16 +121,16 @@ say "=== ipê EXAMPLES sweep @ $STAMP (repo: $REPO · skyc: $SKYC_BIN) ==="
 [ "$BUILD_ONLY" != 1 ] && [ "$NO_EQUIV" = 1 ] && say "  (IPE_SWEEP_NO_EQUIV=1 — BUILD+RUN; EQUIVALENCE skipped — the phase-1 default)"
 [ "$NO_EQUIV" = 1 ] || [ "$WEB_OK" = 1 ] || say "  NOTE: browser stack incomplete — scenario equivalence falls back to normalised HTML body comparison (GET / → #sky-root diff via equivalence_normalize_html.py)."
 
-# ── skyc build target for an example dir — sky.toml if present, else src/Main.sky
+# ── skyc build target for an example dir — sky.toml if present, else src/Main.ipe
 # skyc's project build (src/ipe-cli/src/lib.rs build_project) needs a sky.toml to
-# discover multi-module projects; the single-file build takes an entry `.sky`.
+# discover multi-module projects; the single-file build takes an entry `.ipe`.
 # All vendored examples ship sky.toml EXCEPT 26-ui-showcase (which is multi-module
 # but has no sky.toml — it will single-file-build and surface a real IPE-N0020 for
 # its local `RegressionGates` import until a sky.toml is added upstream). See the
 # port doc's TODO(verify).
 skyc_build_target() {
   local d="$1"
-  if [ -f "$d/sky.toml" ]; then echo "sky.toml"; else echo "src/Main.sky"; fi
+  if [ -f "$d/sky.toml" ]; then echo "sky.toml"; else echo "src/Main.ipe"; fi
 }
 
 # ── build_rust <dir> <example> → 0=ok; sets BUILD_CELL to the failure word ───
@@ -185,7 +185,7 @@ build_go() {
   # `rt/` package, yielding `undefined: rt.SetPortDefault` (every rt.* symbol) at
   # `go build`. `sky` has its own TH-embedded Go runtime, so the reference build
   # MUST run with IPE_RUNTIME_DIR unset. `env -u` scopes the unset to this child.
-  ( cd "$d" && env -u IPE_RUNTIME_DIR timeout 300 "$go_bin" build src/Main.sky >"$(diag "$n" go.build.log)" 2>&1 )
+  ( cd "$d" && env -u IPE_RUNTIME_DIR timeout 300 "$go_bin" build src/Main.ipe >"$(diag "$n" go.build.log)" 2>&1 )
   sync
   [ -x "$d/sky-out/app" ]
 }
@@ -387,7 +387,7 @@ exec {SWEEP_LOCK_FD}>"$SWEEP_LOCK_FILE"
 
 for d in "${EXAMPLES[@]}"; do
   n="$(basename "$d")"
-  [ -f "$d/src/Main.sky" ] || continue
+  [ -f "$d/src/Main.ipe" ] || continue
   DCUR="$d"
   shape="$(example_shape "$d")"
   mode="$(equivalence_mode "$d")"

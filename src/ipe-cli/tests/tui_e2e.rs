@@ -169,9 +169,9 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::Pat
         format!("{test_name}: cannot create sky source dir: {e}").into()
     })?;
 
-    let entry = ipe_dir.join("Main.sky");
+    let entry = ipe_dir.join("Main.ipe");
     std::fs::write(&entry, ipe_source)
-        .map_err(|e| -> BoxError { format!("{test_name}: cannot write Main.sky: {e}").into() })?;
+        .map_err(|e| -> BoxError { format!("{test_name}: cannot write Main.ipe: {e}").into() })?;
 
     let out_dir = std::env::temp_dir().join(format!("tui_e2e_{test_name}_emitted"));
     let _ = std::fs::remove_dir_all(&out_dir);
@@ -220,9 +220,9 @@ fn tui_onkey_record_typechecks() {
             "{label}: cannot create temp dir: {created:?}"
         );
 
-        let entry = ipe_dir.join("Main.sky");
+        let entry = ipe_dir.join("Main.ipe");
         let wrote = std::fs::write(&entry, source);
-        assert!(wrote.is_ok(), "{label}: cannot write Main.sky: {wrote:?}");
+        assert!(wrote.is_ok(), "{label}: cannot write Main.ipe: {wrote:?}");
 
         let out_dir = std::env::temp_dir().join(format!("tui_onkey_{label}_emitted"));
         let _ = std::fs::remove_dir_all(&out_dir);

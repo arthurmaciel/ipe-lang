@@ -121,7 +121,7 @@ codegen**, not runtime.
 | 12 | Error constructors are **kernels**, not source modules; `Error=String` so all 8 message ctors → one `sky_error_from_message` (Error) | **SYNC** | Already wired (#86 in flight). Verify lower/backend emit the kernel calls. |
 | 13 | FFI boundary `E: From<String>` + correlation-ID redaction; foreign `Debug` never reaches Sky (Error) | **ADOPT** | Port `sky_error_from_foreign` et al. into emitted preamble. **[B8 SECURITY]**, gates #40. |
 | 14 | Nullary Error ctors → distinct hardcoded strings; `withMessage` = `fn(new,_)→new` (Error) | **SYNC** | Already have; no change. |
-| 15 | Source-module Error approach infeasible (circular dep); kernel-path breaks the cycle → #85 parked (Error) | **ADOPT** | **Close #85** with note: runtime stays String-backed kernel-dispatched; rich ADT lives in `Sky.Core.Error.sky` but ctors lower to kernels. |
+| 15 | Source-module Error approach infeasible (circular dep); kernel-path breaks the cycle → #85 parked (Error) | **ADOPT** | **Close #85** with note: runtime stays String-backed kernel-dispatched; rich ADT lives in `Sky.Core.Error.ipe` but ctors lower to kernels. |
 | 16 | `runtimeOpaqueTypes` registry `{M}` bridge; `RPubUseAlias` vs `RAliasDefGen` (Ui/Html) | **SYNC** | Verify `emit_types.rs` has all 10+ Std.Ui entries + correct alias-kind split. |
 | 17 | `synCtor` auto-ctors for non-opaque record aliases (Ui/Html) | **ADOPT** | Confirm IPE-N0001 (#82) covers it; else implement synCtor equivalent. **Validate our just-shipped IPE-N0001 vs theirs.** |
 | 18 | `SkyStringify` placeholder-string strategy on opaque containers, no `M` recursion (Ui/Html) | **SYNC** | Runtime done. Emitter must gate `#[derive(SkyStringify)]` off non-Clone fields → same **#87** gate. |
@@ -189,7 +189,7 @@ codegen**, not runtime.
 5. **Complete #86 + close #85.** Verify lower/backend emit kernel calls for
    `Error.unexpected`/`Error.toString`/etc. (canon + kernels already wired).
    Then **close #85** with the parked-by-design note: runtime stays
-   String-backed, kernel-dispatched; rich ADT lives in `Sky.Core.Error.sky`
+   String-backed, kernel-dispatched; rich ADT lives in `Sky.Core.Error.ipe`
    source but constructors lower to kernels, never runtime constructors.
 
 6. **Wire #51 phase-2 EQUIVALENCE** once the Haskell `sky` binary is on PATH as

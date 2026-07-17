@@ -31,7 +31,7 @@ fn entry_path(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("taskseq_reuse")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 /// skyc-0: the compiler must accept the pipeline-reuse program.

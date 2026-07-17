@@ -36,7 +36,7 @@ fn golden_entry(name: &str) -> PathBuf {
         .join("tests")
         .join("golden")
         .join(name)
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 const FIXTURE: &str = "ambiguous_kernel_turbofish";

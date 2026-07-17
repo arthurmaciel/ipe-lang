@@ -22,7 +22,7 @@ Every proposal below is written to fit the mechanisms that already exist in the
 tree, so nothing needs a new subsystem:
 
 - **Two ways to ship a binding.**
-  1. **Pure Sky source** — a `.sky` module embedded via `include_str!` in
+  1. **Pure Sky source** — a `.ipe` module embedded via `include_str!` in
      `crates/skyc/src/stdlib.rs` (the 17 `Sky.Core.*` modules today), with an
      `exposing (…)` list. Bodies are recursive/`case`-based Sky, or
      `Ffi.kernel "Name"` aliases whose HM signature is written in Sky and whose
@@ -49,7 +49,7 @@ tree, so nothing needs a new subsystem:
   - `decl().arity` must equal the arrow count of `stdlib_scheme`. Arity-0
     kernels currently miscompile (Active limitation #7) — **every design below
     avoids nullary kernels** and takes an explicit first argument.
-  - `SkyError = String` at the runtime level (`Sky/Core/Task.sky` header):
+  - `SkyError = String` at the runtime level (`Sky/Core/Task.ipe` header):
     the typed `Error` is a stringly value under the hood today. The sub-domain
     error taxonomy (§7) is designed around that constraint.
 - **Existing parse-don't-validate exemplars to reuse, not reinvent.**
@@ -348,13 +348,13 @@ for Elm-portability, `Basics.fst`/`snd` for the ipê prelude, matching the
 `stdlib_scheme` via `tuple2`).
 
 **Registry/scheme fit.** None — pure Sky, embedded in `stdlib.rs` `include_str!`
-like `Basics.sky`. Zero kernel-registry churn. Relies only on the existing
+like `Basics.ipe`. Zero kernel-registry churn. Relies only on the existing
 tuple-pattern support.
 
 **Security / soundness.** Total, pure, no allocation surprises. Nothing to
 guard.
 
-**Effort.** Trivial (one ~10-line `.sky` file). **Roadmap slot: post-DONE**
+**Effort.** Trivial (one ~10-line `.ipe` file). **Roadmap slot: post-DONE**
 (bundle with the `List.sort`/`filterMap` pure-Sky gap-fill pass).
 
 **Open decision.** None. (Only: 2-tuple-only, matching Elm — no 3-tuple

@@ -6,7 +6,7 @@
 //!
 //! ## Positives (build → run → byte-diff against the cached oracle)
 //!
-//! Each single-file positive compiles `tests/golden/<name>/Main.sky` through
+//! Each single-file positive compiles `tests/golden/<name>/Main.ipe` through
 //! `skyc`, builds the emitted Rust project in the shared cargo target, runs it,
 //! and checks stdout against the cached Go oracle (`oracle.meta` +
 //! `expected_go.txt`). All three carry `oracle_divergence = false` — the Go
@@ -87,7 +87,7 @@ fn assert_single_oracle(name: &str) {
         return;
     }
     let dir = golden_dir(name);
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
@@ -156,7 +156,7 @@ fn intdiv_by_zero_aborts_exit_101() {
     }
     let name = "intdiv_divzero";
     let dir = golden_dir(name);
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
@@ -203,7 +203,7 @@ fn diag_code(err: &skyc::CliError) -> Option<ipe_diagnostics::Code> {
 #[test]
 fn unterminated_blockcomment_is_sky_p0017() {
     let name = "blockcomment_unterminated";
-    let entry = golden_dir(name).join("Main.sky");
+    let entry = golden_dir(name).join("Main.ipe");
     let out = std::env::temp_dir().join(format!("skyc_{name}"));
     let _ = std::fs::remove_dir_all(&out);
 

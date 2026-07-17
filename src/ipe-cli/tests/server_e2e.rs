@@ -81,9 +81,9 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxEr
         format!("{test_name}: cannot create sky source dir: {e}").into()
     })?;
 
-    let entry = ipe_dir.join("Main.sky");
+    let entry = ipe_dir.join("Main.ipe");
     std::fs::write(&entry, ipe_source)
-        .map_err(|e| -> BoxError { format!("{test_name}: cannot write Main.sky: {e}").into() })?;
+        .map_err(|e| -> BoxError { format!("{test_name}: cannot write Main.ipe: {e}").into() })?;
 
     let out_dir = std::env::temp_dir().join(format!("server_e2e_{test_name}_emitted"));
     let _ = std::fs::remove_dir_all(&out_dir);
@@ -291,7 +291,7 @@ main =
 "#;
 
 /// Sky server exercising `Middleware.withCsrf` end-to-end.  Mirrors
-/// `tests/golden/middleware_csrf/Main.sky` but adds a `GET /action` route
+/// `tests/golden/middleware_csrf/Main.ipe` but adds a `GET /action` route
 /// (also wrapped in `Middleware.withCsrf`) so a real HTTP client can mint the
 /// double-submit cookie via a safe-method request before probing the
 /// CSRF-protected `POST /action`.

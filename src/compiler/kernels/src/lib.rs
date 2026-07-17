@@ -602,7 +602,7 @@ pub enum StdlibKernel {
     DbWithTransaction,
     DbMigrate,
     /// `Db.defaultMigration : String -> Migration` — a Migration named with an
-    /// empty SQL body (reference `Std/Db.sky:246`).
+    /// empty SQL body (reference `Std/Db.ipe:246`).
     DbDefaultMigration,
     // ── Db.Decode ───────────────────────────────────────────────────────────
     DbDecString,

@@ -33,7 +33,7 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// Build `tests/golden/<fixture>/Main.sky`, assert it fails with `expected`, and
+/// Build `tests/golden/<fixture>/Main.ipe`, assert it fails with `expected`, and
 /// assert NO Rust was emitted (the pipeline stopped before codegen). Skips
 /// silently when the runtime cannot be resolved.
 fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code) {
@@ -42,7 +42,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code)
         .join("tests")
         .join("golden")
         .join(fixture)
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 

@@ -212,7 +212,7 @@ mod tests {
     use ipe_diagnostics::{Diagnostic, Feature, LowerError};
     use ipe_ir::{BinOp, Callee, Expr, IrType, KernelFn, Pat, TypeDef};
 
-    const GOLDEN: &str = include_str!("../../../../tests/golden/basics/Main.sky");
+    const GOLDEN: &str = include_str!("../../../../tests/golden/basics/Main.ipe");
 
     /// Parse → canonicalise → infer the golden M0 module, then return the
     /// lowered program alongside the interner. Returns `None` (failing the

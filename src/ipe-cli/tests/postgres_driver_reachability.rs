@@ -38,7 +38,7 @@ main =
         (Db.open \"sqlite\" \"sqlite::memory:\")
 ";
 
-/// Write a minimal project (`sky.toml` + `src/Main.sky`) under a fresh temp
+/// Write a minimal project (`sky.toml` + `src/Main.ipe`) under a fresh temp
 /// dir, with the given `[database]` section spliced in verbatim (empty string
 /// → no section at all, i.e. the default driver).
 #[allow(clippy::expect_used)]
@@ -47,7 +47,7 @@ fn write_project(test_name: &str, database_section: &str) -> PathBuf {
     let _ = fs::remove_dir_all(&dir);
     let src = dir.join("src");
     fs::create_dir_all(&src).expect("create src/");
-    fs::write(src.join("Main.sky"), MAIN_SKY).expect("write Main.sky");
+    fs::write(src.join("Main.ipe"), MAIN_SKY).expect("write Main.ipe");
     fs::write(
         dir.join("sky.toml"),
         format!("[project]\nname = \"pgtest\"\n{database_section}"),

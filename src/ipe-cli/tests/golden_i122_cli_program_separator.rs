@@ -38,7 +38,7 @@ fn cli_program_glues_consecutive_renders_matching_go_oracle() {
         .join("tests")
         .join("golden")
         .join("cli_program_view_separator");
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i122_cli_program_view_separator_e2e");
     let _ = std::fs::remove_dir_all(&out);
 

@@ -35,7 +35,7 @@ run cfg bootMs db cache =
         -- We intentionally compose via the runtime kernel rather than
         -- through `Sky.Http.Middleware`'s `Handler -> Handler` shape
         -- (which the stdlib leaves an undeclared free type variable —
-        -- see Middleware.sky for the typed re-binding).
+        -- see Middleware.ipe for the typed re-binding).
         wrap h = cors (Middleware.withLogging h)
         -- Per-request rate limit is enforced at the handler boundary
         -- via `RateLimit.allow` rather than `Middleware.withRateLimit`

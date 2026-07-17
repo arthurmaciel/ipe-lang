@@ -42,7 +42,7 @@ type alias BucketSummary =
     , topAccounts : List String
     }
 
--- Top-level report assembled by Report.sky.
+-- Top-level report assembled by Report.ipe.
 type alias Report =
     { rowCount : Int
     , uniqueAccounts : Int

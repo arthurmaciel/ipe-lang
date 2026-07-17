@@ -186,7 +186,7 @@ concatMap fn list =
 -- | `concatMapHelp fn list acc` — tail-recursive worker for
 -- `concatMap`.  Iter 28 dropped the explicit signature after the
 -- adversarial verification at 9f8a22da caught a regression in
--- `Std.Ui.Chart.lineOne` (`sky-out/.sky-stdlib/Std/Ui/Chart.sky:390`)
+-- `Std.Ui.Chart.lineOne` (`sky-out/.ipe-stdlib/Std/Ui/Chart.ipe:390`)
 -- where the explicit `(a -> List b) -> List a -> List b -> List b`
 -- shape over-constrained HM cross-module unification on
 -- `List.concatMap (lineOne cfg xR yR) seriesList`.  The inferred

@@ -23,7 +23,7 @@ rename with roadmap C.1 (`ipe_*`, `IPE-*`). CLI shown as `ipe lint`
 
 ## Executive summary
 
-`ipe lint` is an opinionated, extensible static-analysis tool for `.sky`/`.ipe`
+`ipe lint` is an opinionated, extensible static-analysis tool for `.ipe`/`.ipe`
 **source** programs — the elm-review / clippy analogue for ipê. Decisions:
 
 | Concern | Decision |
@@ -340,7 +340,7 @@ downstream of `typecheck`, incremental and cancellable for free).
 ## 9. CLI surface
 
 ```
-ipe lint <entry.sky | project-dir | sky.toml>
+ipe lint <entry.ipe | project-dir | sky.toml>
     [--fix]                    apply MachineApplicable fixes (verify-then-write)
     [--deny|--warn|--allow <rule|category>]...
     [--rule <name>]...         run only the named rules

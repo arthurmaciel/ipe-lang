@@ -34,19 +34,19 @@ fn scan_invisible_cycle_must_not_panic_the_driver() {
     // A → B via a TAB after `import`: the lexer's whitespace skip accepts it,
     // `extract_imports_from_source` (strip_prefix("import ")) does not.
     fs::write(
-        src.join("A.sky"),
+        src.join("A.ipe"),
         "module A exposing (a)\n\nimport\tB\n\na = 1\n",
     )
     .expect("write A");
     // B → A via a normal import: scan-visible.
     fs::write(
-        src.join("B.sky"),
+        src.join("B.ipe"),
         "module B exposing (b)\n\nimport A\n\nb = 2\n",
     )
     .expect("write B");
 
     let out = tmp.join("out");
-    let entry = src.join("A.sky");
+    let entry = src.join("A.ipe");
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         skyc::build_with_sibling_discovery(&entry, &out, &runtime)
     }));

@@ -1,6 +1,6 @@
 //! Integration + security golden for compiled-source `Std.Css`.
 //!
-//! `Std.Css` is compiled pure Sky source (`crates/skyc/stdlib/Std/Css.sky`); its
+//! `Std.Css` is compiled pure Sky source (`crates/skyc/stdlib/Std/Css.ipe`); its
 //! only Rust surface is the four `Sky.Core.CssSafety` leaf security kernels
 //! (`safeValue` / `safePropName` / `safeSelector` / `stripStyleClose`). These
 //! lock:

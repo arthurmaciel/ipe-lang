@@ -30,7 +30,7 @@ fn repo_root() -> PathBuf {
 /// The emitter inserts `.clone()` on the `ServerRequest` argument for every
 /// request accessor kernel.
 ///
-/// Reads the emitted `src/main.rs` from `server_request_accessors/Main.sky`
+/// Reads the emitted `src/main.rs` from `server_request_accessors/Main.ipe`
 /// and asserts each accessor call site contains `req.clone()` (or some
 /// expression ending in `.clone()`), preventing E0382 "use of moved value"
 /// when multiple accessors are called on the same binding in a single handler.
@@ -50,7 +50,7 @@ fn server_request_accessor_emit_inserts_clone() {
         .join("tests")
         .join("golden")
         .join("server_request_accessors")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_m6_server_request_accessors");
     let _ = std::fs::remove_dir_all(&out);
 

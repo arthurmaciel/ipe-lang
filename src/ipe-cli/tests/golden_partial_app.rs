@@ -10,17 +10,17 @@
 //! multi-parameter closure, so a value applied to too-few args must be
 //! eta-expanded into a residual closure `\eta... -> (value)(supplied..., eta...)`.
 //!
-//! Three shapes exercised (see `Main.sky`):
+//! Three shapes exercised (see `Main.ipe`):
 //!   * bound partial `g = f 1; h = g 2` -> `6`   (1 + 2 + 3),
 //!   * over-application `(f 10 20) 3`   -> `33`  (10 + 20 + 3),
 //!   * pipe partial `100 |> add3 1 2`   -> `103` (1 + 2 + 100).
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
 //! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the SAME
-//! `Main.sky` to stdout `6\n33\n103\n`, exit 0:
+//! `Main.ipe` to stdout `6\n33\n103\n`, exit 0:
 //!
 //! ```text
-//! $ sky run tests/golden/partial_app/Main.sky   # Go backend
+//! $ sky run tests/golden/partial_app/Main.ipe   # Go backend
 //! 6
 //! 33
 //! 103
@@ -40,7 +40,7 @@ fn example_entry(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("partial_app")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 #[test]

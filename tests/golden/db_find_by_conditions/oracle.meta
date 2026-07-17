@@ -3,4 +3,4 @@ main_sky_sha256 = bb8d1d967199c43ef941a623af829950ffe00c73647cde99d70b019ecd2cee
 go_sky_version = sky dev
 exit_code = 0
 oracle_divergence = true
-divergence_reason = sanctioned: this program uses Std.Db kernels (Db.open / Db.withTransaction / Db.exec / Db.findByConditions / Db.getString / Db.getInt) — the Go backend emits Go+SQLite (cgo) binaries while ipê emits Rust+sqlx; the SQLite in-memory connection-pool behaviour and row-type representation differ enough that a shared Main.sky cannot run on both backends. ipê's output is the correct reference.
+divergence_reason = sanctioned: this program uses Std.Db kernels (Db.open / Db.withTransaction / Db.exec / Db.findByConditions / Db.getString / Db.getInt) — the Go backend emits Go+SQLite (cgo) binaries while ipê emits Rust+sqlx; the SQLite in-memory connection-pool behaviour and row-type representation differ enough that a shared Main.ipe cannot run on both backends. ipê's output is the correct reference.

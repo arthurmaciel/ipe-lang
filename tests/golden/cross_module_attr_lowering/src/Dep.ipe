@@ -16,8 +16,8 @@ useTask t x =
 -- the def body, so this def's `body_span.lo` is a poor (large-`lo_dist`) match
 -- for the failing span. That is the exact condition (mirroring #221's
 -- `Server.run` enclosing `guarded`) under which the pre-fix-B byte-offset
--- heuristic prefers a numerically-closer Main.sky def and mis-blames it. Fix B
--- threads `Dep.composed`'s home so the diagnostic renders against Dep.sky.
+-- heuristic prefers a numerically-closer Main.ipe def and mis-blames it. Fix B
+-- threads `Dep.composed`'s home so the diagnostic renders against Dep.ipe.
 
 
 composed : Task Error Int -> Int -> Int

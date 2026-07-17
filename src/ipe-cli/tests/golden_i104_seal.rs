@@ -49,7 +49,7 @@ fn f1_multiuse_let_clone() {
         .join("tests")
         .join("golden")
         .join("multiuse_let_clone")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i104_multiuse_let_clone_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -93,7 +93,7 @@ fn f2_closure_capture_reuse() {
         .join("tests")
         .join("golden")
         .join("closure_capture_reuse")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i112_closure_capture_reuse_e2e");
     let _ = std::fs::remove_dir_all(&out);
 

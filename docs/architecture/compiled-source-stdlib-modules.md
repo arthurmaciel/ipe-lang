@@ -50,7 +50,7 @@ mechanisms that make it unrepresentable to violate:
       continue;   // qualifiers pre-installed by Env::initial
   }
   ```
-  So a `.sky` source under the `Std.`/`Sky.` namespace can never be injected —
+  So a `.ipe` source under the `Std.`/`Sky.` namespace can never be injected —
   this is the exact line that must be relaxed.
 - The port already ships a **Design-2 half-build** of CSS:
   `runtime/src/sky_runtime/css.rs` defines runtime `CssProp`/`CssRule`
@@ -60,19 +60,19 @@ mechanisms that make it unrepresentable to violate:
   per-declaration gating: rejects `@import`, `expression(...)`,
   `url(javascript:…)`, comment digraphs, tag-breakout) plus a
   fixpoint + case-insensitive `strip_style_close`.
-- No `crates/skyc/stdlib/Std/Css.sky` exists yet. `Css`/`Error` are **not** in
+- No `crates/skyc/stdlib/Std/Css.ipe` exists yet. `Css`/`Error` are **not** in
   `env.rs`'s `STDLIB_MODULE_QUALIFIERS`.
 
 The upstream Sky v0.17.2 mechanism (for reference): TH-embed `sky-stdlib/`,
-materialise it to `<outDir>/.sky-stdlib/` (cleared-first), append that dir as
+materialise it to `<outDir>/.ipe-stdlib/` (cleared-first), append that dir as
 the **last** discovery root, and resolve imports by *file presence* — present ⇒
 source module, absent ⇒ kernel. Type-checking is per-module (topo order, a
 two-pass fixpoint solve), **annotation-driven** generalisation — **not**
-whole-program let-generalisation. `Std/Css.sky` upstream is 1510 lines of 100%
+whole-program let-generalisation. `Std/Css.ipe` upstream is 1510 lines of 100%
 pure Sky, zero `Ffi.kernel`.
 
 Two upstream choices we deliberately **do not** copy: (a) stdlib root placed
-*last* so a stray user `Std/Auth.sky` silently shadows the audited
+*last* so a stray user `Std/Auth.ipe` silently shadows the audited
 implementation — a supply-chain hazard we reject (§2); (b) the general
 `Std.Html` `<style>` render path emits raw bodies verbatim with **no** breakout
 floor — a real gap we close at the render sink (§4).
@@ -89,8 +89,8 @@ from `env.rs`'s `STDLIB_MODULE_QUALIFIERS` (kernel qualifiers):
 ```rust
 pub struct CompiledStdModule { pub dotted: &'static str, pub source: &'static str }
 pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
-    CompiledStdModule { dotted: "Std.Css",        source: include_str!("../stdlib/Std/Css.sky") },
-    CompiledStdModule { dotted: "Sky.Core.Error", source: include_str!("../stdlib/Sky/Core/Error.sky") },
+    CompiledStdModule { dotted: "Std.Css",        source: include_str!("../stdlib/Std/Css.ipe") },
+    CompiledStdModule { dotted: "Sky.Core.Error", source: include_str!("../stdlib/Sky/Core/Error.ipe") },
 ];
 pub fn compiled_std_source(path: &[Symbol], interner: &Interner) -> Option<&'static str> { … }
 pub fn is_compiled_source(path: &[Symbol], interner: &Interner) -> bool { … }
@@ -121,7 +121,7 @@ pub fn inject_compiled_std_closure(
     //    matches is_compiled_source, do nothing — zero cost when unused.
     // 2. Pop a candidate compiled-Std module path P:
     //      - if `sources` already has key P -> skip  (BTreeMap key = free dedup)
-    //      - else insert (synthetic path "<embedded>/Std/Css.sky", embedded_src)
+    //      - else insert (synthetic path "<embedded>/Std/Css.ipe", embedded_src)
     //        into `sources` AND push DiscoveredModule { path, module_path: P }.
     // 3. Scan the embedded source's OWN imports; enqueue any that are
     //    themselves compiled-Std (Std->Std to fixpoint). Kernel imports inside
@@ -319,7 +319,7 @@ keep Design-2's ADT↔enum reflection.
 
 ### 4.2 Shape
 
-- `Std/Css.sky` is pure Sky: ADTs `CssProp` (incl. a `CssDropped` variant),
+- `Std/Css.ipe` is pure Sky: ADTs `CssProp` (incl. a `CssDropped` variant),
   `CssRule` (`CssRule | CssMedia | CssKeyframes | CssRaw`), `Length`, `Color`,
   and the bounded keyword enums, each with a narrow `*Raw` escape hatch.
 - **`CssProp` is exported as an OPAQUE type** (export the type, not the ctor —
@@ -396,7 +396,7 @@ exemptions, the annotation gate, and Std-homed-union ctor lowering — on a
 ~15-line surface, **before** authoring the 1500-line `Std.Css`.
 
 1. **SPIKE — tiny compiled-source module with its own ADT.**
-   - `crates/skyc/stdlib/Std/Palette.sky` (~15 lines, fully annotated):
+   - `crates/skyc/stdlib/Std/Palette.ipe` (~15 lines, fully annotated):
      `module Std.Palette exposing (Shade(..), toHex)` /
      `type Shade = Dark | Light` / `toHex : Shade -> String` case-matching
      `Shade`. Exercises the exact hard part impossible for a kernel: a
@@ -413,7 +413,7 @@ exemptions, the annotation gate, and Std-homed-union ctor lowering — on a
    - `resolve.rs`: relax the `:244` continue with `&& !deps.contains_key(dep_path)`;
      thread `ModuleOrigin`; exempt `EmbeddedStdlib` from N0025; add the
      fail-closed unannotated-top-level gate.
-   - `examples/spike-std-source/` (`sky.toml` + `src/Main.sky` doing
+   - `examples/spike-std-source/` (`sky.toml` + `src/Main.ipe` doing
      `import Std.Palette exposing (Shade(..), toHex)` and `toHex Dark`).
    - **GREEN gate:** `skyc build` exit-0 (no `IPE-N0020`/`N0025`), emits, then
      the emitted Cargo project `cargo build`s and **runs to the expected value**
@@ -430,7 +430,7 @@ exemptions, the annotation gate, and Std-homed-union ctor lowering — on a
    is closure-expanded (walk `extract_imports_from_source` on the embedded
    string) and ordered dep-first.
 
-4. **Author `Std/Css.sky`** — 19 ADTs (`CssProp` incl. `CssDropped`, `CssRule`
+4. **Author `Std/Css.ipe`** — 19 ADTs (`CssProp` incl. `CssDropped`, `CssRule`
    + variants, `Length`, `Color`, keyword enums), typed builders
    (`px`/`rem`/`hex`/`rgb`/`color`, pure Sky), render fold (pure Sky), and the
    gated `property`/`rule`/`media`/`raw` entries. `CssProp` exported opaque
@@ -461,7 +461,7 @@ exemptions, the annotation gate, and Std-homed-union ctor lowering — on a
 
 - **Upstream "stdlib root last ⇒ user shadows stdlib" + presence-based
   silent-kernel fallthrough.** Rejected on **security #1**. A stray
-  `Std/Auth.sky` silently overriding the audited bcrypt+JWT implementation is a
+  `Std/Auth.ipe` silently overriding the audited bcrypt+JWT implementation is a
   supply-chain hazard; a typo silently resolving to a phantom kernel is
   fail-open. We keep bundled stdlib authoritative (user `Std.`/`Sky.` = hard
   error) and make resolution fail-closed (source XOR registered kernel XOR clean

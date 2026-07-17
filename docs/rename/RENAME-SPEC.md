@@ -35,7 +35,7 @@ Prose gets the accent (`Ipê`); code never does (`Ipe`). Keep them distinct.
    now is wasted work — the flatten throws it away. Do NOT touch the stdlib
    import namespace in this rename.
 3. **Golden byte-compares.** Every `tests/golden/**/main.rs` is byte-compared to
-   emitted output. Renaming crate names / the `.sky` extension / emitted paths
+   emitted output. Renaming crate names / the `.ipe` extension / emitted paths
    changes emitted bytes, so ALL goldens must be regenerated via the sanctioned
    `refresh-oracle` path (never hand-edited) as part of the batch that changes
    emitted output.
@@ -62,7 +62,7 @@ coordinated pass**, re-gated after, not as independent merges:
 2. **Contracts** — `IPE-`→`IPE-` diagnostic codes; `IPE_`→`IPE_` env vars **with
    `scripts/lib/env.sh` + every script + memory updated in lockstep** (these are
    build-harness contracts — a mismatch silently skips E2E).
-3. **Artifacts** — `.sky`→`.ipe` extension (examples, goldens' `Main.sky`, stdlib
+3. **Artifacts** — `.ipe`→`.ipe` extension (examples, goldens' `Main.ipe`, stdlib
    source, compiler file-discovery, `sky.toml` `entry`), `sky.toml`→`ipe.toml`,
    `sky-out/`→`ipe-out/`, `.skycache`→`.ipecache`. Then **regenerate goldens via
    `refresh-oracle`**.
@@ -88,7 +88,7 @@ coordinated pass**, re-gated after, not as independent merges:
 ## Suggested executors (post-approval)
 
 Cheap Haiku agents, one per class, each with: its file set, the exclusion set,
-the casing triple, the no-`.sky`-namespace rule, and the "run the gate, revert
+the casing triple, the no-`.ipe`-namespace rule, and the "run the gate, revert
 on red" contract. Crate renames touch shared `Cargo.toml`/workspace files, so
 that batch is orchestrator-serial, not parallel. Docs prose parallelizes freely.
 

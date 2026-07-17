@@ -62,7 +62,7 @@ fn diag_code(err: &skyc::CliError) -> Option<ipe_diagnostics::Code> {
 /// without a miss. Checked unconditionally (cheap, no `cargo`).
 #[test]
 fn subset_access_skyc_accepts_and_resolves_superset_struct() {
-    let entry = golden_dir("row_poly_subset_access").join("Main.sky");
+    let entry = golden_dir("row_poly_subset_access").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("row_poly_subset_access_skyc_out");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -104,7 +104,7 @@ fn subset_access_cargo_builds_and_prints_ada() {
         return;
     }
 
-    let entry = golden_dir("row_poly_subset_access").join("Main.sky");
+    let entry = golden_dir("row_poly_subset_access").join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_row_poly_subset_access_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -145,7 +145,7 @@ fn subset_access_cargo_builds_and_prints_ada() {
 /// Checked unconditionally (cheap, no `cargo`).
 #[test]
 fn subset_pattern_skyc_accepts_and_completes_superset_pattern() {
-    let entry = golden_dir("row_poly_subset_pattern").join("Main.sky");
+    let entry = golden_dir("row_poly_subset_pattern").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("row_poly_subset_pattern_skyc_out");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -188,7 +188,7 @@ fn subset_pattern_cargo_builds_and_prints_iri_ada_bo() {
         return;
     }
 
-    let entry = golden_dir("row_poly_subset_pattern").join("Main.sky");
+    let entry = golden_dir("row_poly_subset_pattern").join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_row_poly_subset_pattern_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -229,7 +229,7 @@ fn subset_pattern_cargo_builds_and_prints_iri_ada_bo() {
 #[test]
 fn closed_superset_is_sky_t0001() {
     let name = "row_poly_closed_superset_neg";
-    let entry = golden_dir(name).join("Main.sky");
+    let entry = golden_dir(name).join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_out"));
     let _ = std::fs::remove_dir_all(&out);
 
@@ -278,7 +278,7 @@ fn closed_superset_is_sky_t0001() {
 #[test]
 fn two_different_supersets_is_sky_t0001() {
     let name = "row_poly_two_supersets_neg";
-    let entry = golden_dir(name).join("Main.sky");
+    let entry = golden_dir(name).join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_out"));
     let _ = std::fs::remove_dir_all(&out);
 
@@ -319,7 +319,7 @@ fn two_different_supersets_is_sky_t0001() {
 #[test]
 fn row_var_annotation_is_sky_p0001() {
     let name = "row_poly_annotation_gap";
-    let entry = golden_dir(name).join("Main.sky");
+    let entry = golden_dir(name).join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}_out"));
     let _ = std::fs::remove_dir_all(&out);
 

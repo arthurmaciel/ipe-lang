@@ -3,7 +3,7 @@
 //!
 //! The Go reference's `Sky.Core.Http` exposes these three on top of the M5b
 //! builder set; before this fix they did not exist anywhere in the Ipê kernel
-//! registry or `Http.sky`. Each is a pure single-field record update on
+//! registry or `Http.ipe`. Each is a pure single-field record update on
 //! `HttpRequest`, emitted through `emit_http_builder_call`'s clone-and-reassign
 //! block like its siblings (`withMethod` / `withTimeout` / `withBody`).
 //!
@@ -29,7 +29,7 @@ fn redirect_builders_compile_and_run() {
         .join("tests")
         .join("golden")
         .join("http_builders_redirects")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_m5b_http_builders_redirects_e2e");
     let _ = std::fs::remove_dir_all(&out);
 

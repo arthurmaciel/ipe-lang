@@ -37,7 +37,7 @@ fn entry_path(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("json_decode_pipeline")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 /// skyc-0: the compiler must accept the program AND render the function-typed

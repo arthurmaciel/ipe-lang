@@ -1,6 +1,6 @@
 -- | Sky.Test — lightweight in-process test framework.
 --
--- A port of the Haskell-backend `sky-stdlib/Sky/Test.sky`.
+-- A port of the Haskell-backend `sky-stdlib/Sky/Test.ipe`.
 --
 -- SIMPLIFICATIONS vs the reference:
 --  - `expectErrorKind` / `kindName` OMITTED: they require `Error` /

@@ -172,7 +172,7 @@ mod tests {
 
     #[test]
     fn base_no_dir() {
-        assert_eq!(path_base("hello.sky".to_string()), "hello.sky");
+        assert_eq!(path_base("hello.ipe".to_string()), "hello.ipe");
     }
 
     #[test]
@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn dir_bare_name() {
-        assert_eq!(path_dir("hello.sky".to_string()), ".");
+        assert_eq!(path_dir("hello.ipe".to_string()), ".");
     }
 
     #[test]

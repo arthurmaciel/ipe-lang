@@ -1,5 +1,5 @@
 error[IPE-N0002]: cannot find this type in scope
-  --> src/Main.sky:11:9
+  --> src/Main.ipe:11:9
    |
 11 | relay : Token -> String
    |         ^^^^^^^^^^^^^^^ unknown type

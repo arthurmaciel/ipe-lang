@@ -45,7 +45,7 @@ fn wildcard_lambda_pany_skyc_cargo_and_run_zero() {
         .join("tests")
         .join("golden")
         .join("wildcard_lambda_pany");
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_l0102_wildcard_lambda_pany_e2e");
     let _ = std::fs::remove_dir_all(&out);
 

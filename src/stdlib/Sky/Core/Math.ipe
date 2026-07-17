@@ -1,7 +1,7 @@
 -- | Sky.Core.Math — pure numeric helpers (Layer 3 Sky source).
 --
 -- Every function aliased to its runtime kernel via Stage 4
--- `Ffi.kernel`.  See `sky-stdlib/Sky/Core/String.sky` for the
+-- `Ffi.kernel`.  See `sky-stdlib/Sky/Core/String.ipe` for the
 -- migration pattern.
 module Sky.Core.Math exposing
     ( abs, min, max

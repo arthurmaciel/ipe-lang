@@ -174,7 +174,7 @@ recorded reference.
 - **`withClaim` value type converged (#217).** The builder API originally
   authored `Jwt.withClaim : String -> String -> Claims -> Claims`, an
   UNSANCTIONED narrowing of the reference `withClaim : String -> JsonEnc.Value
-  -> Claims -> Claims` (`Sky/Core/Jwt.sky:79`). This both rejected valid
+  -> Claims -> Claims` (`Sky/Core/Jwt.ipe:79`). This both rejected valid
   reference programs (`Jwt.withClaim "email" (JsonEnc.string e)` → IPE-T0001)
   and lost expressiveness (an `Int`/`Bool`/nested-object claim was
   inexpressible, and even the string case stored the value as a JSON *string* —
@@ -190,7 +190,7 @@ recorded reference.
 ### B10 — `Std.Db` emits Rust + `sqlx` (vs Go + SQLite/cgo)
 - **Differs:** the full `Std.Db` surface is shared, but Go emits Go+SQLite (cgo)
   binaries while ipê emits Rust+`sqlx`. The in-memory SQLite connection-pool
-  behavior and row-type representation differ enough that one `Main.sky` cannot
+  behavior and row-type representation differ enough that one `Main.ipe` cannot
   run identically on both backends.
 - **Go-oracle relationship:** both build; runtime representation differs, so ipê's
   output is the recorded reference.
@@ -965,7 +965,7 @@ API-shape review):
   `mapError : (Error -> Error) -> Task Error a -> Task Error a`,
   `onError : (Error -> Task Error a) -> Task Error a -> Task Error a`
   (`crates/sky_types/src/constrain.rs`, `K::TaskFail`/`K::TaskMapError`/
-  `K::TaskOnError`; `crates/skyc/stdlib/Sky/Core/Task.sky:33`). Rationale: the
+  `K::TaskOnError`; `crates/skyc/stdlib/Sky/Core/Task.ipe:33`). Rationale: the
   Rust runtime's task error channel is monomorphic end-to-end — every emitted
   wrapper is `SkyTask<A> = SkyTask<SkyError, A>` (`SkyError` is a real 11-kind
   enum since backlog #85/#160, not a type alias), and the project's own house
@@ -1231,7 +1231,7 @@ API-shape review):
 - **Converged:** The port's `Jwt.decode` previously diverged from the reference by
   dropping the `now : Int` parameter and delegating expiry validation to
   `jsonwebtoken`'s wall-clock `SystemTime::now()`. The reference
-  (`sky-stdlib/Sky/Core/Jwt.sky`) declares `decode : Algorithm -> Int -> String ->
+  (`sky-stdlib/Sky/Core/Jwt.ipe`) declares `decode : Algorithm -> Int -> String ->
   Result Error String`, where `now` is a caller-supplied Unix-epoch second and
   validation is deterministic. The port now matches this signature exactly.
 - **Go-oracle relationship:** Semantics are reference-exact: `now >= exp` → expired,
@@ -1254,7 +1254,7 @@ API-shape review):
 ### B-GridTracksRaw — `Ui.gridTracksRaw` native kernel vs reference sentinel `AttrStyle "__gridTracks"`
 - **Reference:** `../sky/sky-stdlib/Std/Ui/Grid.sky` implements `tracks`/`columns`/`rows`
   as `AttrStyle "__gridTracks" (cols ++ "|" ++ rows)` — a pure-Sky sentinel consumed
-  by the reference renderer's `findGridTemplate` (Ui.sky:2539) before raw-style emission.
+  by the reference renderer's `findGridTemplate` (Ui.ipe:2539) before raw-style emission.
 - **Port:** Uses a native `Ui.gridTracksRaw : String -> String -> Attribute msg` kernel
   (`KernelFn::UiGridTracksRaw`) that constructs a typed `Attribute::AttrGridTracks(cols, rows)`
   variant. The web renderer emits `grid-template-columns:{cols}` / `grid-template-rows:{rows}`
@@ -1541,7 +1541,7 @@ API-shape review):
   `onInput : (String -> msg) -> Ui.Attribute msg`); the upstream bare-value
   signatures would not type-check against the ipê kernel. `onClick` is unchanged
   (`msg -> Attribute msg` on both). Resolves the module fully (skyc-0 AND
-  cargo-0). Reference: `crates/skyc/stdlib/Std/Ui/Events.sky`.
+  cargo-0). Reference: `crates/skyc/stdlib/Std/Ui/Events.ipe`.
 - **Sanctioned:** yes, tagged `divergence` — an API-shape difference emergent
   from ipê's function-arg event-kernel schemes; the re-export must match the
   kernel it forwards to.

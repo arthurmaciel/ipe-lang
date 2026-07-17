@@ -34,7 +34,7 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// Compile / build / run `tests/golden/ui_length_color_json/Main.sky` and
+/// Compile / build / run `tests/golden/ui_length_color_json/Main.ipe` and
 /// assert the emitted binary renders the `Length` / `Color` CSS fragments and
 /// the compact JSON line. Gated on `IPE_E2E=1`.
 #[test]
@@ -48,7 +48,7 @@ fn ui_length_color_and_json_value_render_end_to_end() {
         .join("tests")
         .join("golden")
         .join("ui_length_color_json");
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_m7_ui_length_color_json_e2e");
     let _ = std::fs::remove_dir_all(&out);
 

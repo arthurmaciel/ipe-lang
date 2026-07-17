@@ -45,7 +45,7 @@ fn fixture_entry(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("http_request_name_only_fold_seal")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 /// Build the fixture and return the emitted `src/main.rs` text. `None` when

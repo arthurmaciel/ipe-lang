@@ -9,7 +9,7 @@
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
 //! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the SAME
-//! `Main.sky` to stdout `7\n`, exit 0 — hand-verified in a temp dir.
+//! `Main.ipe` to stdout `7\n`, exit 0 — hand-verified in a temp dir.
 use std::path::{Path, PathBuf};
 
 mod support;
@@ -20,7 +20,7 @@ fn example_entry(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("unit_pattern")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 #[test]

@@ -9,7 +9,7 @@
 //!
 //! ## Oracle provenance — what is and isn't Go-compared here
 //!
-//! These goldens are NOT shared-`Main.sky` Go-parity goldens. Two distinct
+//! These goldens are NOT shared-`Main.ipe` Go-parity goldens. Two distinct
 //! reasons (both recorded as `oracle_divergence = true` with a tagged reason in
 //! each golden's `sanctioned.divergence` marker):
 //!
@@ -17,7 +17,7 @@
 //!   FLAT kernels (`Jwt.encodeHs256` / `decodeHs256` / `encodeRs256` /
 //!   `decodeRs256`); the Go backend exposes only the builder API
 //!   (`Jwt.encode` / `hs256` / `rs256` / `claims` / `decode`). So this exact
-//!   `Main.sky` does not compile on the Go reference and the cached expected is
+//!   `Main.ipe` does not compile on the Go reference and the cached expected is
 //!   skyc's own output, NOT a Go run of the same source.
 //!
 //! * **UUID (`m5b_uuid_*`) — soundness divergence.** `Uuid.v4` / `Uuid.v7` are
@@ -30,7 +30,7 @@
 //!
 //! ## Byte-parity with Go IS proven — separately and explicitly
 //!
-//! Although the shared-`Main.sky` oracle cannot run the flat-kernel program on
+//! Although the shared-`Main.ipe` oracle cannot run the flat-kernel program on
 //! Go, the produced JWT bytes ARE byte-identical to the Go backend. The
 //! `jwt_hs256_bytes` / `jwt_rs256_bytes` goldens print the token, and
 //! [`jwt_hs256_bytes`] / [`jwt_rs256_bytes`] assert that printed token equals a
@@ -91,13 +91,13 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
     root.join("tests").join("golden").join(name)
 }
 
-/// Compile `tests/golden/<name>/Main.sky`, build the emitted Cargo project, run
+/// Compile `tests/golden/<name>/Main.ipe`, build the emitted Cargo project, run
 /// it, and return the golden directory plus the run outcome. The caller gates on
 /// `IPE_E2E`. Fails the test on any build/runtime error.
 fn build_run(name: &str) -> (PathBuf, support::RunOutcome) {
     let root = repo_root();
     let dir = golden_dir(&root, name);
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
@@ -224,7 +224,7 @@ fn jwt_rs256_roundtrip() {
 /// The HS256 token `encodeHs256` emits is byte-identical to the token the Go
 /// reference compiler produces for the equivalent builder-API program. This is
 /// the explicit Go-byte-equality proof the flat-kernel goldens otherwise can't
-/// express through the shared-`Main.sky` oracle.
+/// express through the shared-`Main.ipe` oracle.
 #[test]
 fn jwt_hs256_bytes() {
     assert_token_byte_identical_to_go("jwt_hs256_bytes", GO_HS256_TOKEN);

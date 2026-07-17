@@ -71,7 +71,7 @@ viewAbout model =
                   []
                   [ li
                         []
-                        [ codeNode [] [text "Main.sky"]
+                        [ codeNode [] [text "Main.ipe"]
                         , text " -- App entry point, routing, state management"
                         ]
                   , li

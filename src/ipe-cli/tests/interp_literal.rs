@@ -34,7 +34,7 @@ fn golden_entry(name: &str) -> PathBuf {
         .join("tests")
         .join("golden")
         .join(name)
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 /// skyc must ACCEPT the program — no IPE-I0001 ICE on a literal interpolation

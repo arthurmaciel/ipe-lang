@@ -44,7 +44,7 @@ fn entry_path(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("clone_relay_intermediate_eta")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 /// skyc-0: the compiler must accept the intermediate-boundary clone-relay

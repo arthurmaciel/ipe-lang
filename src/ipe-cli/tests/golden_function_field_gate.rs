@@ -41,7 +41,7 @@ fn example_entry(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("function_field_gate")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 #[test]

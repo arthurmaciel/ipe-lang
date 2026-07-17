@@ -10,7 +10,7 @@
 //	# Terminal 1
 //	go run examples/28-streaming-chat/mock/main.go
 //	# Terminal 2
-//	cd examples/28-streaming-chat && sky run src/Main.sky
+//	cd examples/28-streaming-chat && sky run src/Main.ipe
 //
 // The Playwright probe (scripts/verify-streaming-chat.sh) boots both
 // automatically.

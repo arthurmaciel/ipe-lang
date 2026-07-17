@@ -59,8 +59,8 @@ fn build_grid_project(slot: &str) -> (PathBuf, Result<(), skyc::CliError>) {
     let _ = std::fs::remove_dir_all(&out);
     let src = out.join("src");
     std::fs::create_dir_all(&src).expect("mk grid test project dirs");
-    let entry = src.join("Main.sky");
-    std::fs::write(&entry, MAIN_SKY).expect("write Main.sky");
+    let entry = src.join("Main.ipe");
+    std::fs::write(&entry, MAIN_SKY).expect("write Main.ipe");
     let emit = out.join("emit");
     let res = skyc::build(&entry, &emit, &runtime());
     (emit, res)

@@ -42,7 +42,7 @@ fn server_fixture(body: &str) -> String {
     )
 }
 
-/// A DELIBERATELY unparseable `.sky` file — a dangling `let` with no `in`,
+/// A DELIBERATELY unparseable `.ipe` file — a dangling `let` with no `in`,
 /// which fails at parse time (never reaches type-check, let alone emit).
 const BROKEN_SOURCE: &str = "module Main exposing (main)\n\nmain =\n    let x = 1\n";
 
@@ -148,8 +148,8 @@ fn start_watch(
 }
 
 fn write_main(ipe_dir: &Path, source: &str) -> Result<(), BoxError> {
-    std::fs::write(ipe_dir.join("Main.sky"), source)
-        .map_err(|e| -> BoxError { format!("write Main.sky: {e}").into() })
+    std::fs::write(ipe_dir.join("Main.ipe"), source)
+        .map_err(|e| -> BoxError { format!("write Main.ipe: {e}").into() })
 }
 
 /// Stop the watch session and propagate a thread panic (never swallowed) or
@@ -227,7 +227,7 @@ fn watch_rebuild_on_save_swaps_the_running_binary() -> Result<(), BoxError> {
 
     let sink = EventSink::default();
     let port = 19151;
-    let (join, handle) = start_watch(&ipe_dir.join("Main.sky"), &out_dir, port, &sink)?;
+    let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
 
     assert!(
         wait_for_body(port, "v1", Duration::from_secs(120)),
@@ -254,7 +254,7 @@ fn watch_keeps_last_good_binary_alive_on_a_syntax_error() -> Result<(), BoxError
 
     let sink = EventSink::default();
     let port = 19152;
-    let (join, handle) = start_watch(&ipe_dir.join("Main.sky"), &out_dir, port, &sink)?;
+    let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
 
     assert!(
         wait_for_body(port, "v1", Duration::from_secs(120)),
@@ -294,7 +294,7 @@ fn watch_coalesces_a_rapid_double_save_into_one_rebuild() -> Result<(), BoxError
 
     let sink = EventSink::default();
     let port = 19153;
-    let (join, handle) = start_watch(&ipe_dir.join("Main.sky"), &out_dir, port, &sink)?;
+    let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
 
     assert!(
         wait_for_body(port, "v1", Duration::from_secs(120)),
@@ -347,7 +347,7 @@ fn dropping_a_watch_handle_without_stop_still_reaps_the_supervised_child() -> Re
 
     let sink = EventSink::default();
     let port = 19155;
-    let (join, handle) = start_watch(&ipe_dir.join("Main.sky"), &out_dir, port, &sink)?;
+    let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
 
     assert!(
         wait_for_body(port, "v1", Duration::from_secs(120)),

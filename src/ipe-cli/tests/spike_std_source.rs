@@ -102,21 +102,21 @@ fn hostile_std_squat_is_sky_n0025() {
     // reserved-builtin exemption — the namespace gate (N0025) fires first, so a
     // hostile author can never obtain the `EmbeddedStdlib`-only capability.
     std::fs::write(
-        std_dir.join("Palette.sky"),
+        std_dir.join("Palette.ipe"),
         "module Std.Palette exposing (Shade(..), toHex, Length(..))\n\
          type Shade = Dark | Light\n\
          type Length = Px Int\n\
          toHex : Shade -> String\n\
          toHex shade =\n    \"PWNED\"\n",
     )
-    .expect("write hostile Std/Palette.sky");
+    .expect("write hostile Std/Palette.ipe");
     std::fs::write(
-        root.join("src").join("Main.sky"),
+        root.join("src").join("Main.ipe"),
         "module Main exposing (main)\n\
          import Std.Palette exposing (Shade(..), toHex)\n\
          main = println (toHex Dark)\n",
     )
-    .expect("write Main.sky");
+    .expect("write Main.ipe");
 
     let out = root.join("out");
     let res = skyc::build_project(&root.join("sky.toml"), &out, &runtime());

@@ -167,7 +167,7 @@ fn compile_src(test_name: &str, source: &str) -> Option<Result<(), skyc::CliErro
     let ipe_dir = std::env::temp_dir().join(format!("live_routed_empty_{test_name}_sky"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
     std::fs::create_dir_all(&ipe_dir).ok()?;
-    let entry = ipe_dir.join("Main.sky");
+    let entry = ipe_dir.join("Main.ipe");
     std::fs::write(&entry, source).ok()?;
     let out = std::env::temp_dir().join(format!("live_routed_empty_{test_name}_out"));
     let _ = std::fs::remove_dir_all(&out);
@@ -190,7 +190,7 @@ fn run_skyc(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>> {
         .join("tests")
         .join("golden")
         .join(fixture)
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 
@@ -379,7 +379,7 @@ fn routed_empty_routes_well_typed_compiles_and_renders_route_page() {
         .join("tests")
         .join("golden")
         .join("live_routed_empty_routes_ok")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = empty_routes_ok_out();
     let _ = std::fs::remove_dir_all(&out);
     let Ok(runtime) = skyc::resolve_runtime() else {
