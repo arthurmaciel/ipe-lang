@@ -22,6 +22,7 @@ pub mod diag;
 pub mod driver;
 pub mod emit;
 pub mod instance;
+pub mod interface;
 pub mod naming;
 pub mod num_coerce;
 pub mod pkginfo;
