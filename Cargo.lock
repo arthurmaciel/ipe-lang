@@ -2066,6 +2066,15 @@ name = "ipe_diagnostics"
 version = "0.0.0"
 
 [[package]]
+name = "ipe_ffi"
+version = "0.0.0"
+dependencies = [
+ "ipe_diagnostics",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ipe_intern"
 version = "0.0.0"
 dependencies = [

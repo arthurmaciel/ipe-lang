@@ -13,6 +13,7 @@ members = [
     "src/compiler/lower",
     "src/compiler/backend",
     "src/compiler/backend/rust",
+    "src/compiler/ffi",
     "src/compiler/watch",
     "src/ipe-cli",
     "tools/oracle",
