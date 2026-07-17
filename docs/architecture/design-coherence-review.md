@@ -313,12 +313,12 @@ properties are absolute, not Go-relative").
 raw byte floor) were **overtaken hours after writing** by commit `63f57b2`
 ("wire HTML normalizer into body-mode oracle comparison (#110)") — verified:
 `scripts/lib/checks.sh:283-299` pipes bodies through
-`equiv_normalize_html.py`, and `examples-sweep.sh:93` documents the scenario
+`equivalence_normalize_html.py`, and `examples-sweep.sh:93` documents the scenario
 fallback to normalized-body diff. Update the doc: `body` mode is promoted to
 real-oracle status **provided** the false-green audit obligations
 (`go-oracle-fixture-corpus-plan.md` §3 — SVG-coord mask, charref
 canonicalisation, CRLF folding) were honoured in the wiring — verify that,
-then re-tier: server/live faithful-port slices with green `body` EQUIV are
+then re-tier: server/live faithful-port slices with green `body` EQUIVALENCE are
 Opus-retired. §8's remaining items: pty grid normalizer (open), playwright
 stack (open), release-skyc rebuild (open), CI phase-2 flip (open), 65-fixture
 corpus (open).

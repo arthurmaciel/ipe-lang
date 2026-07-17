@@ -3,11 +3,11 @@
 **Verdict up front: REAL shared-class divergence, NOT harness fuzz.** The
 normalized-HTML fallback is not even in play: none of the compared bodies
 contains `id="sky-root"`, so `_norm_body_for_equiv` (checks for that marker
-before invoking `equiv_normalize_html.py`) passes every body through RAW and
+before invoking `equivalence_normalize_html.py`) passes every body through RAW and
 the DIFFER is a plain byte diff. The row-note wording "normalized-HTML
 fallback" describes the *mode* the sweep fell back to for live-shaped
 examples, not what actually ran here — all four are `Server.listen`
-(Sky.Http.Server) apps on the `body` equiv mode, raw compare.
+(Sky.Http.Server) apps on the `body` equivalence mode, raw compare.
 
 ## Per-example verdict + evidence
 
@@ -95,7 +95,7 @@ class of silent divergence arises.
 - Tests: (a) unit — injection before `</body>`, append fallback,
   non-HTML untouched, production/`SKY_DEV_BANNER` suppression; (b) reuse
   the pinned Go-bytes test against the shared helper; (c) E2E golden or
-  sweep re-run — the four examples flip DIFFER → `equiv-body N`.
+  sweep re-run — the four examples flip DIFFER → `equivalence-body N`.
 
 **Phase 2 — console + observability mounts for Sky.Http.Server
 (completeness, separate backlog item).** Go mounts `MountEmbeddedConsole`
@@ -119,10 +119,10 @@ Go's order). Own backlog item.
 
 ## Harness recommendation
 
-**No harness change.** The equiv is doing precisely its job — it caught a
+**No harness change.** The equivalence is doing precisely its job — it caught a
 real missing runtime feature. Do NOT pin these four in
-`equiv-classification.tsv` (loses the byte-compare that proved everything
-else identical), do NOT loosen `equiv_normalize_html.py` (it never ran
+`equivalence-classification.tsv` (loses the byte-compare that proved everything
+else identical), do NOT loosen `equivalence_normalize_html.py` (it never ran
 here), and do NOT boot the Go reference with `SKY_DEV_BANNER=off` (would
 mask this whole class permanently). One cosmetic nit, optional: the
 `DIFFER` row note for server-shape examples says "route body differs";

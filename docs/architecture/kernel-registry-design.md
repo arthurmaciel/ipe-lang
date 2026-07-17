@@ -347,7 +347,7 @@ were not re-counted; treat as approximate.
      A collision would make `stdlib_index`'s last-wins insert silently alias
      one variant onto another, breaking the `id = Some(k)` uniqueness
      guarantee.
-   - **Decl-equiv-legacy equivalence** (`decl(k).(qualifier,name)` matches
+   - **Decl-equivalence-legacy equivalence** (`decl(k).(qualifier,name)` matches
      the legacy string-match arm for every wired kernel) is delivered by
      `sky_lower::tests::decl_equiv_legacy_match`.  That test forces `id = None`
      so the legacy path runs; a wrong or missing arm causes the assert to fail.

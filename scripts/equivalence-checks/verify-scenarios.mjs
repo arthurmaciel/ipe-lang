@@ -1,4 +1,4 @@
-// Per-app end-to-end interaction scenarios used by scripts/web-verify.mjs.
+// Per-app end-to-end interaction scenarios used by scripts/equivalence-checks/web-verify.mjs.
 // Each scenario is async (page, opts) => void. Throw to fail.
 // `opts.baseUrl` available. `opts.pause(ms)` helps with video pacing.
 // `opts.skyEventPosts` is a live array the driver pushes to whenever a

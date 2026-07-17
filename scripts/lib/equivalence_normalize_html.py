@@ -39,7 +39,7 @@ inline `style=` layout, user attrs (data-test-id, href, …), which events each
 element handles, and now SVG coordinate VALUES (within tolerance). The textarea-
 value and console-badge regressions both surface here.
 
-Usage:  equiv_normalize_html.py <page.html>   # prints the canonical #sky-root form
+Usage:  equivalence_normalize_html.py <page.html>   # prints the canonical #sky-root form
 """
 import sys
 import re
@@ -291,6 +291,6 @@ def normalize(path):
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
-        sys.stderr.write('usage: equiv_normalize_html.py <page.html>\n')
+        sys.stderr.write('usage: equivalence_normalize_html.py <page.html>\n')
         sys.exit(2)
     sys.stdout.write(normalize(sys.argv[1]))

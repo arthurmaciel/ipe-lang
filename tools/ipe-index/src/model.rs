@@ -115,7 +115,7 @@ mod tests {
         assert_eq!(role_of("src/Sky/Parse/Lexer.hs"), Role::CompilerHs);
         assert_eq!(role_of("runtime-go/rt/rt.go"), Role::RuntimeGo);
         assert_eq!(role_of("sky-stdlib/Sky/Core/List.sky"), Role::StdlibSky);
-        assert_eq!(role_of("scripts/web-verify.mjs"), Role::ConsoleTs); // JS/TS/MJS not Other
+        assert_eq!(role_of("scripts/equivalence-checks/web-verify.mjs"), Role::ConsoleTs); // JS/TS/MJS not Other
         assert_eq!(lang_of("scripts/x.mjs"), Lang::Ts);
         assert_eq!(stage_of("src/Sky/Canonicalise/Module.hs"), Some(Stage::Canonicalise));
         assert_eq!(stage_of("src/Sky/Generate/Rust/Builder.hs"), Some(Stage::Generate));

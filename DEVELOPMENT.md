@@ -68,7 +68,7 @@ of the `KNOWN_UNBACKED` bucket), `sky_lower` (arity table +
 `.sky` modules, `sky.toml`). The `build_set` is **disk-derived**
 (`scripts/lib/examples.sh`) — every `examples/NN-*/src/Main.sky` whose imports
 resolve is auto-included; adding the dir IS the registration.
-`scripts/examples-sweep.sh`, per example: `skyc build … --out sky-out/rust` →
+`scripts/equivalence-checks/examples-sweep.sh`, per example: `skyc build … --out sky-out/rust` →
 `cargo build --manifest-path sky-out/rust/Cargo.toml` → run
 `sky-out/rust/target/debug/sky-app`. VERDICT PASS iff zero red rows. Modes:
 `SKY_SWEEP_BUILD_ONLY=1` (compile only), `SKY_SWEEP_NO_EQUIV=1` (build+run, no
@@ -269,7 +269,7 @@ rm -f /tmp/autopilot-gate.log /tmp/mem-guard.log
 df -h /
 ```
 
-**Automatic hygiene:** `scripts/examples-sweep.sh` aborts with a `< 5G free`
+**Automatic hygiene:** `scripts/equivalence-checks/examples-sweep.sh` aborts with a `< 5G free`
 guard before it starts; the loop's `reclaim_disk` (`autopilot.sh`) keeps the
 gate + shared-oracle + warm `lane-*` targets and reaps the rest. Worktree
 cleanup after every finished agent remains manual.
@@ -324,10 +324,10 @@ mid-build leaves half-written artifacts worse than a clean rebuild.
   compile-time + codegen behaviour; **`runtime/tests/*.rs`** for runtime-kernel
   soundness/parity; goldens are byte-compared and `SKY_E2E=1` builds+runs the
   emitted project (THE SEAL).
-- **Runtime verification.** The example sweep (`scripts/examples-sweep.sh`)
+- **Runtime verification.** The example sweep (`scripts/equivalence-checks/examples-sweep.sh`)
   builds AND runs each example, then diffs Rust≡Go stdout/body via the cached
   oracle; web scenarios drive Sky.Live + Sky.Http.Server through Playwright
-  (`scripts/web-verify.mjs`, `scripts/verify-scenarios.mjs`). A build-only
+  (`scripts/equivalence-checks/web-verify.mjs`, `scripts/equivalence-checks/verify-scenarios.mjs`). A build-only
   check doesn't catch the "click is a no-op" regression class.
 
 ### Release checklist (non-negotiable)
@@ -338,8 +338,8 @@ mid-build leaves half-written artifacts worse than a clean rebuild.
    run --workspace`, `cargo +nightly nextest run -p sky-runtime-rust --features
    full`, `cargo +nightly test --workspace --doc`, `cargo +nightly clippy
    --workspace --all-targets -- -D warnings`, fuzz.
-3. Example sweep green — `scripts/examples-sweep.sh` (per example: skyc build →
-   `cargo build` the emitted crate → run `sky-app` → Rust≡Go equiv). VERDICT
+3. Example sweep green — `scripts/equivalence-checks/examples-sweep.sh` (per example: skyc build →
+   `cargo build` the emitted crate → run `sky-app` → Rust≡Go equivalence). VERDICT
    PASS iff zero red rows (THE SEAL end-to-end).
 4. CI parity — `.github/workflows/{ci,examples-sweep,security}.yml` runs the
    same gate; cancel superseded in-progress `main` runs before pushing (see

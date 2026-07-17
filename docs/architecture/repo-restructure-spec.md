@@ -82,7 +82,7 @@ pure compiler-unit test belongs under `src/compiler/<crate>/tests/` instead.
 
 - `scripts/lib/env.sh` — `SKYC_BIN` candidate paths, `SKY_RUNTIME_DIR`,
   `REPO`-relative anchors.
-- `scripts/examples-sweep.sh` + `scripts/lib/examples.sh` — any `crates/`/
+- `scripts/equivalence-checks/examples-sweep.sh` + `scripts/lib/examples.sh` — any `crates/`/
   `runtime/` path assumptions.
 - Golden tests — path helpers that reach `crates/…`/`runtime/…` (e.g.
   `support::repo_root()` joins).

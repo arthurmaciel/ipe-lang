@@ -171,7 +171,7 @@ goldens there).
   - loader/driver in `crates/ipec/src/{lib,project,stdlib}.rs`,
   - parser entry (`crates/ipe_parse/src`),
   - `sky watch`/doc paths, `tools/oracle` (`MAIN_SKY = "Main.ipe"`, `sha256(Main.ipe)` comments),
-  - sweep harness `scripts/examples-sweep.sh` + `scripts/lib/{examples,checks,env}.sh` (`src/Main.sky`→`src/Main.ipe`, `*.sky` globs),
+  - sweep harness `scripts/equivalence-checks/examples-sweep.sh` + `scripts/lib/{examples,checks,env}.sh` (`src/Main.sky`→`src/Main.ipe`, `*.sky` globs),
   - `sky.toml` `entry = "src/Main.ipe"` fields.
 - **Exclusion gate:** in the historical `docs/superpowers/plans/*` (frozen), leave prose `Main.sky` mentions unless the harness reads that path.
 - **Green gate:** `timeout 3600 cargo test` (golden + skyc/ipec integration) green; a spot example builds via the sweep harness.

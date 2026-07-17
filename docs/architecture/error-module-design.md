@@ -285,7 +285,7 @@ added only where a boundary needs it.
    `withMessage`/`withDetails`; `kindLabel`. Add a **security regression**
    asserting a stack-bearing `Error` (`FfiPanic`) renders via `toString` with the
    stack **omitted**. Add a compile-fail regression that `Task String a` is a
-   type error. Gate landing behind the go-oracle equiv harness (task #51) — if
+   type error. Gate landing behind the go-oracle equivalence harness (task #51) — if
    upstream Go's `toString` format differs, it is a one-line change with the kind
    already in hand. Finally build at least one Live + one Db + one Task example
    end-to-end (`cargo build` of the emitted project), not just `skyc` exit-0.

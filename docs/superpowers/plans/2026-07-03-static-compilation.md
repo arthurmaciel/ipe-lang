@@ -32,7 +32,7 @@ naive reading of the spec.
 1. **`skyc build` is emit-only. It does NOT invoke `cargo build`.**
    `crates/skyc/src/lib.rs` `build()` (L182) and `build_project()` (L246) write
    the cargo project to `sky-out/rust/` and stop. The real `cargo build` runs
-   **externally**: `scripts/examples-sweep.sh:132` does
+   **externally**: `scripts/equivalence-checks/examples-sweep.sh:132` does
    `cd "$d" && cargo build --manifest-path sky-out/rust/Cargo.toml`; the only
    in-crate cargo invocation is the `SKY_E2E`-gated test at `lib.rs:1116`.
    ⇒ The `--target`/`--static` *build invocation* lives in the external runner
@@ -451,7 +451,7 @@ CLI wiring so the CLI feeds a proven-total resolver.
 
 **Files:** `crates/sky_backend_rust/src/project.rs` (return the config in
 `EmittedProject`), `crates/skyc/src/lib.rs` (write it under `out_dir/.cargo/`),
-`scripts/examples-sweep.sh` + CI (invocation CWD fix).
+`scripts/equivalence-checks/examples-sweep.sh` + CI (invocation CWD fix).
 
 **Why riskiest:** **cargo discovers `.cargo/config.toml` relative to the process
 CWD and its ancestors — NOT relative to `--manifest-path`.** The sweep runs
@@ -483,7 +483,7 @@ a `--build-only` sweep would pass and a naive reviewer would miss.
    collision).
 2. **Fix the invocation CWD** so cargo actually reads the emitted config: change
    the runner to `cd sky-out/rust && cargo build --target <triple> --features
-   alloc_<x> --locked` (CWD = the crate dir). Update `scripts/examples-sweep.sh`
+   alloc_<x> --locked` (CWD = the crate dir). Update `scripts/equivalence-checks/examples-sweep.sh`
    and the CI jobs. Document the trap inline.
 3. Add a **belt-and-braces assertion** in the static e2e (Task 9) that the produced
    binary is actually static (`file`/`ldd`) — so a config-not-picked-up regression
@@ -575,7 +575,7 @@ sweep.sh` (`--static` variant), `scripts/lib/checks.sh`.
    cross-linker is on PATH and error with an install hint. When `rustup` itself is
    absent, **fail-soft** (let cargo error) — refusing there is hostile to non-rustup
    toolchains.
-2. Add a `--static` mode to `scripts/examples-sweep.sh`: emit with `skyc build …
+2. Add a `--static` mode to `scripts/equivalence-checks/examples-sweep.sh`: emit with `skyc build …
    --static --target x86_64-unknown-linux-musl`, then `cd <crate> && cargo build
    --target … --features alloc_dlmalloc --locked` (CWD fix from Task 6). Keep the
    existing dynamic sweep intact (static is an *added* variant, not a replacement).
@@ -593,7 +593,7 @@ sweep.sh` (`--static` variant), `scripts/lib/checks.sh`.
 #[test] fn missing_rustup_is_fail_soft_not_refusal() { /* Ok(()) when rustup absent */ }
 ```
 
-**Automated verification:** `cargo test -p skyc`; `bash scripts/examples-sweep.sh
+**Automated verification:** `cargo test -p skyc`; `bash scripts/equivalence-checks/examples-sweep.sh
 --static --dry-run`.
 **Manual:** `rustup target add x86_64-unknown-linux-musl` once on the dev host.
 

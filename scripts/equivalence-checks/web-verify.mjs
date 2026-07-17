@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// scripts/web-verify.mjs — the `scenario`-mode Go≡Rust equivalence driver for
+// scripts/equivalence-checks/web-verify.mjs — the `scenario`-mode Go≡Rust equivalence driver for
 // `live`-shape examples (scripts/lib/checks.sh's exercise_live / examples-sweep.sh's
-// equiv_for "scenario" branch). Boots an ALREADY-BUILT binary, drives a real
+// equivalence_for "scenario" branch). Boots an ALREADY-BUILT binary, drives a real
 // headless Chromium against it via the scenario in verify-scenarios.mjs, and
 // exits 0/1 — the SAME driver runs against both the skyc-emitted Rust binary
 // AND the Go-oracle reference binary (see checks.sh's two exercise_live calls
-// in examples-sweep.sh's "scenario" equiv branch), so a real browser round-trip
+// in examples-sweep.sh's "scenario" equivalence branch), so a real browser round-trip
 // is the equivalence signal instead of the boot-floor fallback (both processes
 // merely listening).
 //
@@ -25,7 +25,7 @@
 // run the named scenario → screenshot + console/panic checks → kill → report.
 //
 // Usage:
-//   node scripts/web-verify.mjs <example-name> <port> <scenario> <abin>
+//   node scripts/equivalence-checks/web-verify.mjs <example-name> <port> <scenario> <abin>
 //
 // Exits 0 on pass, non-zero on any failure. See
 // docs/architecture/class2-tier1-sweep-fix-spec-2026-07-09.md §3.3.
@@ -40,7 +40,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
-const repoRoot   = path.resolve(__dirname, '..');
+const repoRoot   = path.resolve(__dirname, '../..');
 
 const exampleName  = process.argv[2];
 const port         = parseInt(process.argv[3] || '8000', 10);
@@ -60,7 +60,7 @@ if (!fs.existsSync(binary)) {
 // Fresh scratch run dir — cwd for the spawned binary AND the artefact output
 // dir. mkdtemp guarantees no collision between the Go-oracle invocation and
 // the Rust invocation of the SAME example that examples-sweep.sh runs
-// back-to-back (equiv_for's "scenario" branch calls exercise_live twice).
+// back-to-back (equivalence_for's "scenario" branch calls exercise_live twice).
 const runDir = fs.mkdtempSync(path.join(os.tmpdir(), `sky-webverify-${exampleName}-`));
 
 // ─── Helpers ────────────────────────────────────────────────────────
