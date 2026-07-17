@@ -1,13 +1,66 @@
 # Static compilation
 
-Status: design (spec-only). No code, no build wired yet.
+Status: **authoritative design** — this document owns every allocator /
+target / refusal decision. The execution sequencing lives in
+`docs/superpowers/plans/2026-07-03-static-compilation.md`; where the two
+disagree on a *decision*, this document wins, and where implementation
+reality forced an amendment, the amendment is recorded in
+[§ Implementation amendments](#implementation-amendments) below.
 
 This document specifies fully-static, portable single-binary artifacts for
 ipê, and the allocator chosen to avoid the static-libc malloc cliff without
 reflexively taking a C dependency. ipê emits a self-contained Rust cargo
-crate (`crates/sky_backend_rust` + the `crates/ipe/src/lib.rs` build path)
-and then cargo-builds it; static compilation is a build-config concern layered
-over that emitted crate.
+crate (`src/compiler/backend/rust` — crate `ipe_backend_rust` — driven by the
+`src/ipe-cli/src/lib.rs` build path, CLI crate/binary `ipe`); the emitted
+crate is cargo-built externally (`ipe build` is emit-only; `ipe run` and the
+examples sweep invoke `cargo build`). Static compilation is a build-config
+concern layered over that emitted crate.
+
+## Implementation amendments
+
+Amendments discovered while landing the first milestones. Each is
+principle-gated; none reverses a design decision — they narrow or correct it.
+
+- **A1 — talc is deferred, refused with a typed refusal.** The §3.5 talc
+  sketch (`ClaimOnOom::new(Span::empty())`) is not viable for a hosted
+  binary: an empty arena means every allocation fails, and talc 4.x's
+  `ClaimOnOom::new` is an `unsafe const fn` requiring a real static arena
+  with a hard heap cap — emitted `unsafe` plus an arbitrary memory ceiling,
+  both of which the generated-code posture rejects (soundness > completeness).
+  `--allocator talc` still parses (the enum stays closed) and resolves to a
+  typed refusal explaining the deferral and pointing at `dlmalloc`. Wiring
+  talc requires an arena design that passes the no-unsafe gate first.
+- **A2 — the static path is empirically verified on the full emitted dep
+  set.** The complete base-manifest dependency graph (tokio, reqwest/rustls
+  with `ring`'s C/asm, C `libzstd`, serde, …) builds for
+  `x86_64-unknown-linux-musl` with only
+  `rustflags = ["-C", "target-feature=+crt-static"]`, links via the default
+  driver with `musl-gcc` present, and the binary is `static-pie`,
+  `ldd` reports "statically linked", and it runs — for all three allocator
+  selections (none/system, `alloc_dlmalloc`, `alloc_mimalloc`). Because C
+  compile units (`zstd`, `ring`) are unconditional today, the pure-Rust
+  `link-self-contained` no-C-toolchain path in §3.6 stays aspirational until
+  D4 lands; the preflight therefore checks for a musl-capable C compiler
+  and refuses with an install hint when absent.
+- **A3 — first landing scope: `x86_64-unknown-linux-musl` only.** The
+  supported static-target enum is closed over what CI/dev hosts can actually
+  verify end-to-end. `aarch64-unknown-linux-musl`, Windows `+crt-static`,
+  wasm, and `--macos-portable` follow the §2 matrix as follow-up milestones;
+  an unverifiable triple today would risk exit-0-then-cargo-fail (a SEAL
+  violation), so unsupported triples get a typed refusal listing the
+  supported set.
+- **A4 — allocator versions need no `crate_specs` entry.** The allocator
+  dependency lines (versions included) live verbatim in the golden base
+  manifest `tests/golden/basics/Cargo.toml`; the static splice edits only the
+  `default = [...]` feature list. `crate_specs.rs` exists for surgery
+  functions that *write version lines*; the splice writes none, so adding
+  allocator entries there would create an SSOT with no reader.
+- **A5 — stale-config hygiene.** The emitted `.cargo/config.toml` is written
+  only for a static plan and carries a generated-by marker line; a subsequent
+  non-static build of the same out-dir removes the marker-carrying file, so a
+  stale static config can never silently leak `+crt-static` into later
+  builds. (The reconciler's prune pass is scoped to `out_dir/src` and cannot
+  own this file.)
 
 Decisions are gated on the project principle order:
 **security > correctness > soundness > efficiency > completeness > readability**,
@@ -339,7 +392,7 @@ mimalloc = { version = "0.1", optional = true, default-features = false }
 The builder passes at most one `--features alloc_*`. Only `alloc_mimalloc`
 introduces a `build.rs` / C compile unit. The emitter mutates the manifest via the
 same anchored-manifest approach the crate already uses for the `[profile.dev]`
-anchor in `crates/sky_backend_rust/src/project.rs`. Migrating the golden fixtures
+anchor in `src/compiler/backend/rust/src/project.rs`. Migrating the golden fixtures
 away from `static_alloc = ["mimalloc"]` to this feature family (and rebaselining
 the oracle byte-diff) is part of landing this design — see Open Decision D1.
 
@@ -422,10 +475,15 @@ no external linker binary, and only the C-dep arms name a cross-linker (which is
 then checked for presence by the §4.2 preflight). The §4.5 / CI gate (§4.3
 `linux-static-x64`) MUST verify the emitted config links **on a clean host** — no
 `rust-lld` on PATH, no `musl-tools` installed for the pure-Rust arm — so a
-PATH-assumption regression is caught before release. Interaction with the repo-root target-dir pin (the only content of
-the current `.cargo/config.toml`) is handled by writing the linker/rustflags into
-the *emitted crate's* config, leaving the workspace pin untouched — see Open
-Decision D2.
+PATH-assumption regression is caught before release. There is no repo-root
+`.cargo/config.toml` in this repo (D2's original premise was wrong — the
+target-dir pin lives in the user's `~/.cargo/config.toml` and in
+`CARGO_TARGET_DIR`, `scripts/lib/env.sh`); the emitted per-crate config is
+written into the emitted crate dir, never carries a `target-dir` key, and
+therefore cannot collide with any workspace pin. Because C compile units are
+unconditional today (A2), the shipped config carries `+crt-static` only and
+the preflight requires a musl-capable C compiler; the pure-Rust
+`link-self-contained` arm activates when D4 makes the default graph C-free.
 
 ### 3.7 App-shape refusals
 
@@ -662,10 +720,10 @@ absent — a second-order security win reinforcing the default.
   favour of the `alloc_*` feature family with a dlmalloc default. Who signs off on
   regenerating the goldens and rebaselining the oracle byte-diff, given mimalloc
   was landed without the pure-Rust weighing this study performed?
-- **D2 — `.cargo/config.toml` collision.** The emitted per-crate config carries
-  linker/rustflags; the repo-root `.cargo/config.toml` currently pins only the
-  shared target-dir. Confirm the emitted-crate config is written into the crate
-  dir (not the workspace root) and that the target-dir pin is preserved.
+- **D2 — `.cargo/config.toml` collision.** RESOLVED (see §3.6): there is no
+  repo-root `.cargo/config.toml`; the emitted per-crate config lives in the
+  emitted crate dir, carries no `target-dir` key, and is marker-guarded so a
+  later non-static build removes it (amendment A5).
 - **D3 — Measure-before-finalize ownership.** Who runs the §4.5 benchmark, on which
   fixture, and what exact throughput bar defines "clears the cliff" (≥1.0× A?
   ≥0.7× of mimalloc's 1.48×? ≥0.5× A)? The divergence reason-string `<X>` cannot be
