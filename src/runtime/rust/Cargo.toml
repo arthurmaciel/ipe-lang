@@ -82,6 +82,12 @@ tao = { version = "0.35", optional = true }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# wasm32 floor: uuid's entropy backend needs the getrandom js shim in the
+# browser; `js` is a no-op on native targets so scoping it here keeps the
+# native feature graph identical.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+uuid = { version = "1", features = ["v4", "v7", "js"] }
+
 [features]
 default = []
 async = ["tokio"]
