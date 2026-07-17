@@ -3,7 +3,7 @@ import Ipe.Prelude exposing (..)
 
 -- Positive regression: single-constructor union with case-expression accessors.
 -- `unwrap` must compile clean (irrefutable case, not refutable param).
--- Guards the seal: ipe exit-0 → emitted Rust must cargo build.
+-- Guards the seal: skyc exit-0 → emitted Rust must cargo build.
 
 type Wrap = Wrap Int
 

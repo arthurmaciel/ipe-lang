@@ -435,7 +435,7 @@ num n =
     Num n
 
 
--- Unit-argument bare constants (Ipê corpus arity — `Css.zero ()`).
+-- Unit-argument bare constants (Ipe corpus arity — `Css.zero ()`).
 zero : () -> Length
 zero _ =
     LenZero

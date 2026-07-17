@@ -11,7 +11,7 @@ module Main exposing (main)
 --   ./app clear                   Remove all completed todos
 --
 -- This example demonstrates the canonical CLI error-propagation
--- pattern under Ipê's effect-boundary doctrine: every Db.* op returns
+-- pattern under Sky's effect-boundary doctrine: every Db.* op returns
 -- `Task Error a`, the entire main loop is a single Task chain, and
 -- failures propagate via `Task.onError` to the top-level reporter
 -- which prints to stderr and `System.exit 1`s. No silent `let _ = …`
@@ -191,7 +191,7 @@ clearDone conn =
 showUsage : Task Error ()
 showUsage =
     let
-        _ = Log.info "Ipê TODO - A simple todo manager"
+        _ = Log.info "Sky TODO - A simple todo manager"
         _ = println ""
         _ = println "Usage:"
         _ = println "  ./app add <title>     Add a new todo"

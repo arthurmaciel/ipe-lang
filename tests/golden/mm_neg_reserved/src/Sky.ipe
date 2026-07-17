@@ -1,3 +1,0 @@
-module Ipê exposing (val)
-val : Int
-val = 1

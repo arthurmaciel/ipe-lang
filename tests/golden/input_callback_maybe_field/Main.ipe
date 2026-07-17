@@ -5,14 +5,14 @@ import Ipe.Ui as Ui
 import Ipe.Ui.Input as Input
 
 
--- #178 regression lock (SEAL: ipe-0 ⇒ cargo-0).
+-- #178 regression lock (SEAL: skyc-0 ⇒ cargo-0).
 --
 -- Every `Ipe.Ui.Input.*` runtime function takes its callback fields
 -- (`onChange`, checkbox `icon`) as `Arc<dyn Fn(_) -> _ + Send + Sync>`. When the
 -- `onChange` field is a BARE Msg-constructor (`FilterChanged : String -> Msg`),
 -- it eta-expands to a plain lambda that the emitter used to box with `Box::new`
 -- (the non-Server/WS `Fun` default) — a `Box<dyn Fn(_) -> _ + Send>` that does
--- NOT fill the `Arc<.. + Send + Sync>` slot. ipe accepted the program (exit 0)
+-- NOT fill the `Arc<.. + Send + Sync>` slot. skyc accepted the program (exit 0)
 -- but the emitted Rust failed `cargo build` with E0308 — a seal break.
 --
 -- This fixture exercises the exact shape from `examples/37-composite-live-shop`:
@@ -20,7 +20,7 @@ import Ipe.Ui.Input as Input
 -- field) AND a bare-constructor `onChange`, plus `Input.slider`,
 -- `Input.checkbox` (which ALSO has an `icon` Arc-callback field), and
 -- `Input.radioRow`. Non-E2E goldens (`i148`/`i155`) missed this because they
--- only check ipe lowering, never `cargo build`. This one cargo-builds and runs.
+-- only check skyc lowering, never `cargo build`. This one cargo-builds and runs.
 --
 -- oracle_divergence context: the Go oracle (`sky dev`) does not expose
 -- `Html.htmlRender`, so this test does not assert Go parity — it asserts the

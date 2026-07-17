@@ -7,7 +7,7 @@ import Ipe.Log exposing (println)
 
 -- BACKLOG #186 regression — `toString` on a wildcard `any` param.
 --
--- Pre-fix: `ipe build` exits 0, but the emitted Rust fails `cargo build`
+-- Pre-fix: `skyc build` exits 0, but the emitted Rust fails `cargo build`
 -- with E0277 (`the trait bound T1: std::fmt::Display is not satisfied`) at the
 -- `basics_to_string(x)` call inside a function whose only generic is the
 -- wildcard `any` PARAM. The runtime's `basics_to_string<T: std::fmt::Display>`

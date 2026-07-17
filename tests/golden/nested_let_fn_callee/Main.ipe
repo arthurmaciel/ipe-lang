@@ -13,7 +13,7 @@ module Main exposing (main)
 -- Post-fix: the `Expr::Lambda` arm of `rewrite_captured_clones` clears
 -- `inner_noncl` before descending, leaving inner lambda bodies to their own
 -- `lower_lambda` pass (which already processed them at depth 0).  This fixture
--- MUST be GREEN (ipe build succeeds) after the fix.
+-- MUST be GREEN (skyc build succeeds) after the fix.
 
 add : Int -> Int -> Int
 add a b =

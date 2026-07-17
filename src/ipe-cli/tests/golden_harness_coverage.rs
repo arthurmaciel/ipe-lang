@@ -70,32 +70,42 @@ fn golden_fixtures_dir() -> PathBuf {
 /// exists on disk.
 fn quoted_identifier_literals(src: &str) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
-    let bytes = src.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes.get(i) == Some(&b'"') {
-            let start = i + 1;
-            let mut j = start;
-            while j < bytes.len() && bytes.get(j) != Some(&b'"') {
-                // A raw/escaped-string body would break the identifier shape
-                // check below anyway; a backslash means "not a plain name".
-                if bytes.get(j) == Some(&b'\\') {
-                    j += 2;
+    for line in src.lines() {
+        // Skip comment lines. A `"name"` inside a doc/line comment is prose
+        // (e.g. the JSON-path example `at ["nested","score"]`), never a
+        // functional fixture reference — counting it produces a false positive
+        // against an unrelated same-named golden dir that happens to exist.
+        if line.trim_start().starts_with("//") {
+            continue;
+        }
+        let bytes = line.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes.get(i) == Some(&b'"') {
+                let start = i + 1;
+                let mut j = start;
+                while j < bytes.len() && bytes.get(j) != Some(&b'"') {
+                    // A raw/escaped-string body would break the identifier shape
+                    // check below anyway; a backslash means "not a plain name".
+                    if bytes.get(j) == Some(&b'\\') {
+                        j += 2;
+                        continue;
+                    }
+                    j += 1;
+                }
+                if j < bytes.len() {
+                    let body = &line[start..j];
+                    if !body.is_empty()
+                        && body.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                    {
+                        names.insert(body.to_owned());
+                    }
+                    i = j + 1;
                     continue;
                 }
-                j += 1;
             }
-            if j < bytes.len() {
-                let body = &src[start..j];
-                if !body.is_empty() && body.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
-                {
-                    names.insert(body.to_owned());
-                }
-                i = j + 1;
-                continue;
-            }
+            i += 1;
         }
-        i += 1;
     }
     names
 }

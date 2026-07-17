@@ -12,7 +12,7 @@ import Ipe.Log exposing (println)
 --
 -- Pre-fix, `sky_lower` synthesised a per-project `RecHeaderRows` struct for
 -- the literal while the `csv_encode` kernel takes `sky_runtime::csv::CsvDoc`:
--- `ipe` exited 0, but the emitted `cargo build` failed with E0308
+-- `skyc` exited 0, but the emitted `cargo build` failed with E0308
 -- (`expected CsvDoc, found RecHeaderRows`). The fold to the nominal
 -- `IrType::CsvDoc` (mirroring the `HttpRequest` / `CacheCfg` folds) makes the
 -- literal construct the runtime struct the kernel expects.

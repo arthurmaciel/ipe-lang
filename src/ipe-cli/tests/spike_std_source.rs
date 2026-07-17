@@ -56,7 +56,7 @@ fn spike_project_builds_and_injects_compiled_source() {
     let emitted = support::read_all_emitted_src(&out);
     // The Ipe.Palette function is homed + prefixed as compiled source.
     assert!(
-        emitted.contains("std_palette_to_hex"),
+        emitted.contains("ipe_palette_to_hex"),
         "emitted Rust must carry the compiled Ipe.Palette function:\n{emitted}"
     );
     // Its own constructors were defined AND matched (kernel-impossible).
@@ -70,7 +70,7 @@ fn spike_project_builds_and_injects_compiled_source() {
     // `UiPlain::Length`. A user module declaring `type Length` would have been
     // IPE-N0026-rejected before ever reaching lowering.
     assert!(
-        emitted.contains("std_palette_length_px"),
+        emitted.contains("ipe_palette_length_px"),
         "emitted Rust must carry the compiled Ipe.Palette `lengthPx` fn (reserved-name type defined by trusted stdlib):\n{emitted}"
     );
     assert!(
@@ -87,7 +87,7 @@ fn spike_project_builds_and_injects_compiled_source() {
 fn hostile_std_squat_is_sky_n0025() {
     let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("spike_hostile_squat");
     let _ = std::fs::remove_dir_all(&root);
-    let std_dir = root.join("src").join("Std");
+    let std_dir = root.join("src").join("Ipe");
     std::fs::create_dir_all(&std_dir).expect("mk hostile project dirs");
 
     std::fs::write(
@@ -109,7 +109,7 @@ fn hostile_std_squat_is_sky_n0025() {
          toHex : Shade -> String\n\
          toHex shade =\n    \"PWNED\"\n",
     )
-    .expect("write hostile Std/Palette.ipe");
+    .expect("write hostile Ipe/Palette.ipe");
     std::fs::write(
         root.join("src").join("Main.ipe"),
         "module Main exposing (main)\n\
