@@ -2090,8 +2090,7 @@ main =
 /// Wire sequence (mirrors the real browser):
 ///  1. `GET /`             → session + typed-record form page.
 ///  2. `GET /favicon.ico`  (same cookie) → MUST 404 and leave the session
-///                           untouched (the step that must not wipe
-///                           the handler index).
+///     untouched (the step that must not wipe the handler index).
 ///  3. `POST /_sky/event`  submit with form data → Msg must dispatch.
 ///  4. `GET /`             → re-rendered page must show the decoded value.
 ///

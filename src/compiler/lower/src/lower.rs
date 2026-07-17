@@ -1527,6 +1527,11 @@ fn canon_collect_free_locals(
                 canon_collect_free_locals(free, bound, a);
             }
         }
+        canon::Expr_::ForeignCall { args, .. } => {
+            for a in args {
+                canon_collect_free_locals(free, bound, a);
+            }
+        }
         canon::Expr_::Binop { lhs, rhs, .. } => {
             canon_collect_free_locals(free, bound, lhs);
             canon_collect_free_locals(free, bound, rhs);
@@ -3594,6 +3599,9 @@ fn find_first_varlocal_span(sym: Symbol, body: &canon::Expr) -> Option<Span> {
         // Compound forms — recurse left-to-right.
         canon::Expr_::Call(f, args) => find_first_varlocal_span(sym, f)
             .or_else(|| args.iter().find_map(|a| find_first_varlocal_span(sym, a))),
+        canon::Expr_::ForeignCall { args, .. } => {
+            args.iter().find_map(|a| find_first_varlocal_span(sym, a))
+        }
         canon::Expr_::Binop { lhs, rhs, .. } => {
             find_first_varlocal_span(sym, lhs).or_else(|| find_first_varlocal_span(sym, rhs))
         }
@@ -5608,6 +5616,9 @@ struct KernelUsage {
     websocket: bool,
     /// The `Ipe.Email` `Email.send` kernel.
     email: bool,
+    /// Any foreign-crate FFI wrapper call ([`Callee::Ffi`]) — gates the
+    /// emitted `mod ffi;` declaration + bound-crate `Cargo.toml` deps.
+    ffi: bool,
 }
 
 impl KernelUsage {
@@ -5624,6 +5635,7 @@ impl KernelUsage {
             && self.webview
             && self.websocket
             && self.email
+            && self.ffi
     }
 
     /// OR in the family flags for one kernel callee.
@@ -5657,18 +5669,20 @@ fn scan_kernel_usage(expr: &Expr, usage: &mut KernelUsage) {
     }
     match expr {
         Expr::Call { callee, args, .. } => {
-            if let Callee::Kernel(k) = callee {
-                usage.record(*k);
+            match callee {
+                Callee::Kernel(k) => usage.record(*k),
+                Callee::Ffi { .. } => usage.ffi = true,
+                Callee::Func(_) => {}
             }
             for a in args {
                 scan_kernel_usage(a, usage);
             }
         }
-        Expr::FuncValue { callee, .. } => {
-            if let Callee::Kernel(k) = callee {
-                usage.record(*k);
-            }
-        }
+        Expr::FuncValue { callee, .. } => match callee {
+            Callee::Kernel(k) => usage.record(*k),
+            Callee::Ffi { .. } => usage.ffi = true,
+            Callee::Func(_) => {}
+        },
         Expr::Apply { func, args } => {
             scan_kernel_usage(func, usage);
             for a in args {
@@ -6455,6 +6469,7 @@ pub fn count_destructure_param_sites(m: &canon::Module) -> usize {
             canon::Expr_::Call(callee, args) => {
                 walk_expr(callee) + args.iter().map(walk_expr).sum::<usize>()
             }
+            canon::Expr_::ForeignCall { args, .. } => args.iter().map(walk_expr).sum::<usize>(),
             canon::Expr_::Binop { lhs, rhs, .. } => walk_expr(lhs) + walk_expr(rhs),
             canon::Expr_::Case(scrut, branches) => {
                 walk_expr(scrut) + branches.iter().map(|b| walk_expr(&b.body)).sum::<usize>()
@@ -6591,6 +6606,7 @@ pub fn count_destructure_thunk_sites(m: &canon::Module) -> usize {
             canon::Expr_::Call(callee, args) => {
                 walk_expr(callee) + args.iter().map(walk_expr).sum::<usize>()
             }
+            canon::Expr_::ForeignCall { args, .. } => args.iter().map(walk_expr).sum::<usize>(),
             canon::Expr_::Binop { lhs, rhs, .. } => walk_expr(lhs) + walk_expr(rhs),
             canon::Expr_::If(branches, else_expr) => {
                 branches
@@ -6674,6 +6690,7 @@ pub fn count_nested_cons_payload_sites(m: &canon::Module) -> usize {
             canon::Expr_::Call(callee, args) => {
                 walk_expr(callee) + args.iter().map(walk_expr).sum::<usize>()
             }
+            canon::Expr_::ForeignCall { args, .. } => args.iter().map(walk_expr).sum::<usize>(),
             canon::Expr_::Binop { lhs, rhs, .. } => walk_expr(lhs) + walk_expr(rhs),
             canon::Expr_::If(branches, else_expr) => {
                 branches
@@ -6758,6 +6775,7 @@ pub fn count_nested_strlit_payload_sites(m: &canon::Module) -> usize {
             canon::Expr_::Call(callee, args) => {
                 walk_expr(callee) + args.iter().map(walk_expr).sum::<usize>()
             }
+            canon::Expr_::ForeignCall { args, .. } => args.iter().map(walk_expr).sum::<usize>(),
             canon::Expr_::Binop { lhs, rhs, .. } => walk_expr(lhs) + walk_expr(rhs),
             canon::Expr_::If(branches, else_expr) => {
                 branches
@@ -7158,6 +7176,15 @@ impl<'a> Lowerer<'a> {
             if self.is_cache_handle_union(u) || self.is_config_decoder_union(u) {
                 continue;
             }
+            // A foreign opaque type from an FFI interface module (`module
+            // Rust.<Crate>` — the `Rust.*` home is origin-reserved at canon).
+            // Its values ARE the real foreign Rust type (`::semver::Version`);
+            // emitting the placeholder union as a Rust enum would collide with
+            // every wrapper signature (E0308). The backend renders its uses
+            // via the crate's opaque-type path map instead.
+            if self.is_foreign_interface_union(u) {
+                continue;
+            }
             // `Ipe.Email`'s `type EmailProvider` is backed by the runtime enum
             // `ipe_runtime::email::EmailProvider` (ctor names match verbatim).
             // Skip its `EnumDef` so the backend never emits a duplicate
@@ -7289,6 +7316,10 @@ impl<'a> Lowerer<'a> {
         // `websocket_client` Cargo feature + `ws_client` runtime module.
         let uses_websocket = kernel_usage.websocket;
 
+        // detect foreign-crate FFI wrapper calls — the backend declares
+        // `mod ffi;` and appends the bound crates' Cargo.toml dep lines.
+        let uses_ffi = kernel_usage.ffi;
+
         let module = Module {
             name: ModPath(self.m.name.clone()),
             types: types_ir,
@@ -7305,6 +7336,7 @@ impl<'a> Lowerer<'a> {
             uses_auth,
             uses_websocket,
             uses_email,
+            uses_ffi,
         };
         Ok(Program {
             modules: vec![module],
@@ -7489,6 +7521,21 @@ impl<'a> Lowerer<'a> {
     /// ctor + pattern there via `builtin_runtime_enum`/`enum_name` overrides.
     fn is_cache_handle_union(&self, u: &canon::Union) -> bool {
         self.is_cache_handle_con(&u.home, u.name)
+    }
+
+    /// Is `u` a foreign opaque type declared by a driver-generated FFI
+    /// interface module? Keyed on the `Rust.*` home, which canon reserves for
+    /// [`ipe_canon::resolve::ModuleOrigin::FfiInterface`] modules — a user
+    /// module can never claim it, so the home prefix IS the provenance.
+    fn is_foreign_interface_union(&self, u: &canon::Union) -> bool {
+        self.is_foreign_interface_home(&u.home)
+    }
+
+    /// Is `home` a driver-generated FFI interface module (`Rust.*`)?
+    fn is_foreign_interface_home(&self, home: &[Symbol]) -> bool {
+        home.first()
+            .and_then(|s| self.interner.resolve(*s))
+            .is_some_and(|s| s == "Rust")
     }
 
     /// is `u` the `Ipe.Config.Decoder` opaque carrier re-declaration —
@@ -10539,6 +10586,22 @@ impl<'a> Lowerer<'a> {
             canon::Expr_::Char(c) => Ok(Expr::Char(c.clone())),
             canon::Expr_::Unit => Ok(Expr::Unit),
             canon::Expr_::VarLocal(s) => Ok(Expr::Var(*s)),
+            // A foreign wrapper call from an FFI interface module's forwarder
+            // body. Always saturated by construction — the driver-generated
+            // forwarder applies exactly its own parameters — so this lowers to
+            // a direct call with no partial-application machinery.
+            canon::Expr_::ForeignCall { ident, args } => {
+                let mut lowered = Vec::with_capacity(args.len());
+                for a in args {
+                    lowered.push(self.lower_expr(a)?);
+                }
+                Ok(Expr::Call {
+                    callee: Callee::Ffi { ident: *ident },
+                    args: lowered,
+                    pin: CallPin::None,
+                    on_form: OnFormKind::NotForm,
+                })
+            }
             canon::Expr_::VarCtor {
                 home,
                 type_name,
@@ -12721,6 +12784,16 @@ impl<'a> Lowerer<'a> {
     #[allow(clippy::match_same_arms)] // UI arity blocks are separate for documentation clarity
     fn callee_arity(&self, callee: &Callee) -> DResult<usize> {
         match callee {
+            // A foreign wrapper is only ever called saturated from its own
+            // driver-generated forwarder body ([`canon::Expr_::ForeignCall`]
+            // lowers to a direct call, never through the callee-resolution
+            // machinery that consults arity) — reaching here is an internal
+            // invariant violation.
+            Callee::Ffi { .. } => Err(bug(
+                "ipe_lower::callee_arity",
+                "Callee::Ffi reached arity resolution — foreign wrapper calls \
+                 are saturated by construction",
+            )),
             // Arity is fixed per kernel. Each variant is listed explicitly so a
             // new entry can never silently inherit a wrong count.
             // ── Math constants / Dict.empty / Set.empty — arity 0 ───────────
@@ -14173,6 +14246,18 @@ impl<'a> Lowerer<'a> {
     /// every `VarCtor` / ctor pattern names a declared constructor, so a miss is a
     /// violated invariant rather than user error.
     fn ctor_arity_of(&self, home: &ModPath, name: Symbol) -> DResult<usize> {
+        // A foreign opaque type's placeholder constructor is never exported
+        // (the FFI interface module exposes the type WITHOUT `(..)`), so a
+        // construction reaching lowering means the export gate leaked — fail
+        // closed rather than emit a reference to an enum that is never
+        // declared (the foreign type is the real `::crate::Type`).
+        if self.is_foreign_interface_home(&home.0) {
+            return Err(bug(
+                "ipe_lower::ctor_arity_of",
+                "constructor of a foreign opaque FFI type reached lowering — \
+                 FFI interface modules must not export their placeholder ctors",
+            ));
+        }
         self.ctor_arity
             .get(&(home.clone(), name))
             .copied()

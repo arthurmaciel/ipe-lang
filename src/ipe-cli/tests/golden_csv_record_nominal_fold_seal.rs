@@ -52,11 +52,11 @@ fn concat_emitted_rs(dir: &Path, out: &mut String) {
         let path = entry.path();
         if path.is_dir() {
             concat_emitted_rs(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            if let Ok(text) = std::fs::read_to_string(&path) {
-                out.push_str(&text);
-                out.push('\n');
-            }
+        } else if path.extension().is_some_and(|e| e == "rs")
+            && let Ok(text) = std::fs::read_to_string(&path)
+        {
+            out.push_str(&text);
+            out.push('\n');
         }
     }
 }

@@ -57,7 +57,7 @@ fn compile_worker_is_cancelled_by_a_concurrent_input_edit() {
         &db,
         BTreeMap::from([(a_path.clone(), a_file), (main_path.clone(), main_file)]),
     );
-    let config = BuildConfig::new(&db, ipe_backend_rust::DbDriver::Sqlite);
+    let config = BuildConfig::new(&db, ipe_backend_rust::DbDriver::Sqlite, None);
 
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
     sources.insert(a_path, (PathBuf::from("<test>/A.ipe"), DEP_A.to_owned()));
@@ -122,7 +122,7 @@ fn the_same_fixture_compiles_cleanly_without_a_concurrent_edit() {
         &db,
         BTreeMap::from([(a_path.clone(), a_file), (main_path.clone(), main_file)]),
     );
-    let config = BuildConfig::new(&db, ipe_backend_rust::DbDriver::Sqlite);
+    let config = BuildConfig::new(&db, ipe_backend_rust::DbDriver::Sqlite, None);
 
     let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
     sources.insert(a_path, (PathBuf::from("<test>/A.ipe"), DEP_A.to_owned()));

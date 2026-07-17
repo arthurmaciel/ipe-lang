@@ -23,6 +23,8 @@ ipe_lower = { path = "../compiler/lower" }
 ipe_ir = { path = "../compiler/ir" }
 ipe_backend = { path = "../compiler/backend" }
 ipe_backend_rust = { path = "../compiler/backend/rust" }
+ipe_ffi = { path = "../compiler/ffi" }
+ipe_sandbox = { path = "../compiler/sandbox" }
 # Phase 7 (`crate::watch` — Tasks 21-25): the confined watcher + process
 # supervisor primitives, and the two crates `watch.rs` drives directly —
 # `salsa` for `Cancelled::catch`/`Setter` (Task 25's cancellation) and

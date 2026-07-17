@@ -2950,6 +2950,7 @@ impl<'a> Builder<'a> {
         })
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per canonical expression form
     fn constrain_expr(
         &mut self,
         local: &BTreeMap<Symbol, VarId>,
@@ -2990,6 +2991,19 @@ impl<'a> Builder<'a> {
                 // registry scheme (`stdlib_scheme`) for migrated families,
                 // falling back to the legacy symbol-keyed table otherwise.
                 self.constrain_var_kernel(*id, *module, *name, span)?
+            }
+            canon::Expr_::ForeignCall { args, .. } => {
+                // A foreign wrapper call is the annotation-trusted boundary:
+                // the enclosing FfiInterface binding is REQUIRED to carry a
+                // full annotation (canon fails closed otherwise), and that
+                // annotation pins every parameter and the result. Arguments
+                // are constrained so their vars exist for the lowerer's
+                // region map; the call's own type is a fresh flexible var the
+                // annotation immediately determines.
+                for a in args {
+                    self.constrain_expr(local, a)?;
+                }
+                self.flex()?
             }
             canon::Expr_::VarCtor {
                 home,

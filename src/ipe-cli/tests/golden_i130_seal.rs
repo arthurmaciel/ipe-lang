@@ -42,6 +42,7 @@ fn repo_root() -> PathBuf {
 /// Assert that `ipe::build(fixture)` surfaces `expected` as a
 /// `CliError::Pipeline` diagnostic.  Runs WITHOUT `IPE_E2E` so the gate
 /// checks remain fast in the default CI pass.
+#[allow(dead_code)] // retained gate helper for env-gated fixtures
 fn assert_skyc_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code) {
     let root = repo_root();
     let entry = root

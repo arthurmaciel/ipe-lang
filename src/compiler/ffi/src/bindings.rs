@@ -931,6 +931,21 @@ pub fn emit_bindings(pkg: &PkgInfo) -> String {
     out
 }
 
+/// The `wrapper_ref_name` set whose wrapper regions [`emit_bindings`] emits.
+///
+/// The survivor gate the interface emitter keys off. Runs the SAME region
+/// emitter, so it cannot drift from the emitted text.
+#[must_use]
+pub fn surviving_ref_names(pkg: &PkgInfo) -> std::collections::BTreeSet<String> {
+    let kernel = rust_kernel_name(pkg.pkg_path());
+    let krate = pkg_to_crate_import(pkg.pkg_path());
+    pkg.fns()
+        .iter()
+        .filter(|f| !emit_fn_region(&krate, &kernel, f).is_empty())
+        .map(super::pkginfo::FnInfo::wrapper_ref_name)
+        .collect()
+}
+
 /// One binding's sentinel-bracketed wrapper region; empty when the binding is
 /// dropped (degenerate method / unresolved-generic receiver / trait fn).
 fn emit_fn_region(krate: &str, kernel_name: &str, f: &FnInfo) -> Vec<String> {

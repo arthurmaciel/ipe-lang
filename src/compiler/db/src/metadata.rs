@@ -307,13 +307,14 @@ fn walk_arm(
     walk_expr(&arm.body, direct_calls, types);
 }
 
-/// Record a [`Callee::Func`] reference; kernel callees carry no [`FuncId`].
+/// Record a [`Callee::Func`] reference; kernel and foreign-wrapper callees
+/// carry no [`FuncId`].
 fn walk_callee(callee: &Callee, direct_calls: &mut BTreeSet<FuncId>) {
     match callee {
         Callee::Func(id) => {
             direct_calls.insert(*id);
         }
-        Callee::Kernel(_) => {}
+        Callee::Kernel(_) | Callee::Ffi { .. } => {}
     }
 }
 
