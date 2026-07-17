@@ -46,7 +46,7 @@ use std::collections::HashMap;
 // SSRF deny-private helpers live in the reqwest-free `ssrf` module (so the
 // WebSocket client can validate URLs without linking reqwest). The reqwest-
 // coupled `ssrf_apply` + the request executor below import the three they use.
-use crate::ssrf::{resolve_first_non_private_addr, ssrf_check_url, ssrf_deny_private_enabled};
+use super::ssrf::{resolve_first_non_private_addr, ssrf_check_url, ssrf_deny_private_enabled};
 
 /// Ipe.Http.HttpResponse — field names/types match the Ipê record alias.
 #[derive(Clone, Debug)]
@@ -108,7 +108,7 @@ impl reqwest::dns::Resolve for DenyPrivateResolver {
                 let addrs: Vec<std::net::SocketAddr> = (host.as_str(), 0u16)
                     .to_socket_addrs()
                     .map_err(|e| e.to_string())?
-                    .filter(|a| !crate::ssrf::is_private_ip(a.ip()))
+                    .filter(|a| !super::ssrf::is_private_ip(a.ip()))
                     .collect();
                 if addrs.is_empty() {
                     Err("http: blocked: host resolves only to private/blocked addresses (IPE_HTTP_DENY_PRIVATE)".to_string())
