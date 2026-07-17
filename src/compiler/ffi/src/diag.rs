@@ -39,6 +39,17 @@ pub enum Diagnostic {
         /// The flag names that were simultaneously set.
         flags: Vec<&'static str>,
     },
+    /// `IPE-F4400` — a reached generic FFI call site (or the generic binding
+    /// itself) cannot be soundly bound: the instantiation falls outside the
+    /// closed bindable set, a trait bound is unsatisfied or unmodellable, or
+    /// a multi-call closure captures a non-Clone value. Raised at the call
+    /// site by the instance gate — never a deferred cargo failure.
+    GenericNotBindable {
+        /// The qualified Ipê callee (`Rust.Box1.make`).
+        callee: String,
+        /// Which bindability rule was broken.
+        defect: GenericBindDefect,
+    },
 }
 
 impl Diagnostic {
@@ -46,7 +57,7 @@ impl Diagnostic {
     #[must_use]
     pub const fn code(&self) -> Code {
         match self {
-            Self::CallUnrenderable { .. } => IPE_F4400,
+            Self::CallUnrenderable { .. } | Self::GenericNotBindable { .. } => IPE_F4400,
             Self::WireMalformed { .. } => IPE_F4401,
             Self::ShapeContradiction { .. } => IPE_F4402,
         }
@@ -78,11 +89,132 @@ impl fmt::Display for Diagnostic {
                     flags.join(" + ")
                 )
             }
+            Self::GenericNotBindable { callee, defect } => {
+                write!(f, "{}: `{callee}`: {defect}", self.code().as_str())
+            }
         }
     }
 }
 
 impl std::error::Error for Diagnostic {}
+
+/// Why a concrete instantiation type falls outside the closed bindable set.
+///
+/// A residual type variable means monomorphisation did not specialise the
+/// call — the sound answer is this rejection, never a boxed/`any` fallback.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClosedSetViolation {
+    /// A bare type variable survived monomorphisation.
+    UnresolvedTypeVariable(String),
+    /// A named constructor outside the closed set (opaque foreign types are
+    /// conservatively rejected pending derive-scan metadata).
+    NonClosedConstructor(String),
+    /// A record type.
+    RecordType,
+    /// A tuple type.
+    TupleType,
+    /// A function type.
+    FunctionType,
+    /// A type alias (unexpanded).
+    TypeAlias(String),
+}
+
+impl fmt::Display for ClosedSetViolation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnresolvedTypeVariable(n) => write!(f, "unresolved type variable `{n}`"),
+            Self::NonClosedConstructor(n) => write!(f, "non-closed type constructor `{n}`"),
+            Self::RecordType => write!(f, "record type"),
+            Self::TupleType => write!(f, "tuple type"),
+            Self::FunctionType => write!(f, "function type"),
+            Self::TypeAlias(n) => write!(f, "type alias `{n}`"),
+        }
+    }
+}
+
+/// The closed set of generic-FFI bindability defects (`IPE-F4400`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GenericBindDefect {
+    /// The instantiation type is outside the closed Ipê↔Rust bindable set.
+    OutsideClosedSet {
+        /// The type-param name.
+        param: String,
+        /// The rendered instantiation type.
+        ty: String,
+        /// Why the type is outside the set.
+        violation: ClosedSetViolation,
+    },
+    /// The bound is modellable but the concrete Rust type lacks the trait.
+    BoundUnsatisfied {
+        /// The type-param name.
+        param: String,
+        /// The rendered Ipê instantiation type.
+        ty: String,
+        /// The closed Rust type it maps to.
+        rust_ty: String,
+        /// The unsatisfied trait bound.
+        bound: String,
+    },
+    /// The declared bound is outside the modellable `MODELLABLE_5` table —
+    /// the backend cannot prove it holds for an arbitrary bindable type, so
+    /// it refuses to emit an unsound wrapper (names the BOUND, not the type).
+    UnmodellableBound {
+        /// The type-param name.
+        param: String,
+        /// The unmodellable trait bound.
+        bound: String,
+    },
+    /// An Ipê lambda captures a non-Clone value into a multi-call
+    /// (`Fn`/`FnMut`) closure slot, whose owned-clone bridge re-clones every
+    /// capture per call.
+    CaptureNotClone {
+        /// The captured variable name.
+        capture: String,
+        /// The rendered Ipê type of the capture.
+        ty: String,
+    },
+}
+
+impl fmt::Display for GenericBindDefect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OutsideClosedSet {
+                param,
+                ty,
+                violation,
+            } => write!(
+                f,
+                "type parameter `{param}` is instantiated at `{ty}` ({violation}), outside the \
+                 Ipê↔Rust bindable set; use a primitive (Int / Float / Bool / Char / String), a \
+                 `List` or `Maybe` of one, or bind a non-generic FFI wrapper for `{ty}`"
+            ),
+            Self::BoundUnsatisfied {
+                param,
+                ty,
+                rust_ty,
+                bound,
+            } => write!(
+                f,
+                "type parameter `{param}` is instantiated at `{ty}` (Rust `{rust_ty}`), but the \
+                 binding requires the Rust trait bound `{bound}` and `{rust_ty}` does not \
+                 implement `{bound}`"
+            ),
+            Self::UnmodellableBound { param, bound } => write!(
+                f,
+                "the binding declares the Rust trait bound `{bound}` on type parameter `{param}`, \
+                 but the backend can only model the bounds {{Hash, Eq, Ord, Clone, Default}}; it \
+                 will not emit an unsound generic wrapper — drop the `{bound}` bound or bind a \
+                 non-generic wrapper at the concrete type(s) you need"
+            ),
+            Self::CaptureNotClone { capture, ty } => write!(
+                f,
+                "capture `{capture}` of type `{ty}` is passed into a multi-call closure that Rust \
+                 requires to be `Fn + Clone`, but `{ty}` is not provably Clone; use a Clone-able \
+                 captured value, capture nothing, or pass it to a single-call FnOnce slot"
+            ),
+        }
+    }
+}
 
 /// The closed set of structural defects a foreign-call AST can carry.
 ///
