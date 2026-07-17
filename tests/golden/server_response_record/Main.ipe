@@ -1,15 +1,15 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Dict as Dict
-import Sky.Core.Task as Task
-import Sky.Core.Error exposing (Error)
-import Sky.Http.Server as Server
-import Sky.Http.Server exposing (Request, Response)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Dict as Dict
+import Ipe.Task as Task
+import Ipe.Error exposing (Error)
+import Ipe.Http.Server as Server
+import Ipe.Http.Server exposing (Request, Response)
+import Ipe.Log exposing (println)
 
 
--- #217 contract-drift regression: `Sky.Http.Server.Response` is a record
+-- #217 contract-drift regression: `Ipe.Http.Server.Response` is a record
 -- alias `{ status : Int, body : String, headers : Dict String String,
 -- contentType : String }` (reference `Sky/Http/Server.ipe:66`), NOT an
 -- opaque nominal. Ported verbatim from the reference idiom: build a

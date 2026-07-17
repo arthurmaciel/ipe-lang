@@ -1,13 +1,13 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.String as String
-import Std.Live as Live
-import Std.Ui as Ui exposing (Element)
-import Std.Ui.Background as Background
-import Std.Ui.Border as Border
-import Std.Ui.Chart as Chart
-import Std.Ui.Font as Font
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.Live as Live
+import Ipe.Ui as Ui exposing (Element)
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Chart as Chart
+import Ipe.Ui.Font as Font
 import RegressionGates
 
 type alias Model =
@@ -207,7 +207,7 @@ clipDemo =
 
 
 
--- ─── Chart demos (Std.Ui.Chart, v0.16.0 PR 4) ────────────────
+-- ─── Chart demos (Ipe.Ui.Chart, v0.16.0 PR 4) ────────────────
 
 
 lineChartDemo : Element Msg
@@ -361,7 +361,7 @@ view model =
         originalSections =
             [ Ui.el
                   [ Font.size 24, Font.bold, Font.color ink ]
-                  (Ui.text "Std.Ui showcase")
+                  (Ui.text "Ipe.Ui showcase")
             , section "fillPortion — 1 : 2 : 3" fillPortionDemo
             , section "height fill" heightFillDemo
             , section

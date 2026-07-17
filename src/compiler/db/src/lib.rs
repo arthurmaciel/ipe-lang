@@ -160,7 +160,7 @@ pub struct SourceFile {
     pub text: String,
     /// The driver-vouched trust tag. `EmbeddedStdlib` is only ever
     /// set by the driver for module paths it injected from the compiler's own
-    /// embed table — a user file squatting on `Std.Foo` arrives as `User` and
+    /// embed table — a user file squatting on `Ipe.Foo` arrives as `User` and
     /// stays IPE-N0025-rejected. Unforgeable from module text by construction:
     /// inputs are set exclusively at the driver boundary.
     pub origin: ModuleOrigin,

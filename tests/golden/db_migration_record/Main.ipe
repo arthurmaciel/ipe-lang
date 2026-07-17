@@ -1,12 +1,12 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Task as Task
-import Std.Db as Db
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Task as Task
+import Ipe.Db as Db
+import Ipe.Log exposing (println)
 
 
--- #217 contract-drift regression: `Std.Db.Migration` is a record alias
+-- #217 contract-drift regression: `Ipe.Db.Migration` is a record alias
 -- `{ name : String, sql : String }` (reference `Std/Db.ipe:237`) and
 -- `Db.migrate : Db -> List Migration -> Task Error (List String)`
 -- (reference `:300`) — NOT `List (String, String)`. Ported verbatim from

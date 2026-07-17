@@ -1,7 +1,7 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.String as String
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
 import ModA exposing (useA)
 import ModB exposing (makeB)
 

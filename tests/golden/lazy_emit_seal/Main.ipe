@@ -1,8 +1,8 @@
 module Main exposing (main)
 
-import Std.Html as Html
-import Std.Ui as Ui
-import Std.Ui.Lazy as Lazy
+import Ipe.Html as Html
+import Ipe.Ui as Ui
+import Ipe.Ui.Lazy as Lazy
 
 
 -- i146 regression: LazyLazy..LazyLazy5 emit arms.

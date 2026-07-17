@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- Boolean literal patterns: a `True` + `False` pair is a closed, exhaustive
 -- cover of `Bool` (no wildcard required).

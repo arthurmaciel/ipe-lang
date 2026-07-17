@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- A concrete (non-generic) payload ADT: `Circle` carries one field, `Rect` two.
 type Shape = Circle Int | Rect Int Int

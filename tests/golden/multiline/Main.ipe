@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- Multiline leading-operator pipeline inside a let binding.
 -- Tests that layout continuation works with `|>` on continuation lines.

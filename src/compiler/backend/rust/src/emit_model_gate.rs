@@ -1,4 +1,4 @@
-//! Model-admissibility gate for `Std.Live` / `Std.Tui` / `Std.Webview`
+//! Model-admissibility gate for `Ipe.Live` / `Ipe.Tui` / `Ipe.Webview`
 //! app-entry kernels.
 //!
 //! The app entry threads a **Model** state type through `init` / `update` /
@@ -11,7 +11,7 @@
 //!   non-`Clone` (i.e. non-derivable) Model is inadmissible.
 //!
 //! Without this gate a well-typed program storing a `Cmd` / `Sub` / `Task` /
-//! `Decoder` / `Db` / function — or, for `Sky.Live`, an `Html` / `Element` /
+//! `Decoder` / `Db` / function — or, for `Ipe.Live`, an `Html` / `Element` /
 //! `Color` — in its Model `skyc`-succeeds and then `cargo`-fails on the missing
 //! trait bound. This module extracts the Model type from the app cfg's `view`
 //! function and, if it fails the required predicate, returns a fail-closed
@@ -267,7 +267,7 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc
-        // Std.Email records + provider ADT are kernel-boundary values, not
+        // Ipe.Email records + provider ADT are kernel-boundary values, not
         // serde, never persisted to a session store — not valid Model leaves.
         | IrType::EmailMessage
         | IrType::EmailAttachment

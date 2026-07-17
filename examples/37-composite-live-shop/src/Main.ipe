@@ -1,20 +1,20 @@
 module Main exposing (main)
 
--- examples/37-composite-live-shop — Sky.Live composite test app.
+-- examples/37-composite-live-shop — Ipe.Live composite test app.
 --
--- A tiny e-commerce demo that exercises Sky.Live + Std.Ui's breadth:
+-- A tiny e-commerce demo that exercises Ipe.Live + Ipe.Ui's breadth:
 -- layout / Background / Border / Font / Region / Input / Chart /
--- Lazy / Keyed / Responsive + Std.Live.Head + pub/sub via
+-- Lazy / Keyed / Responsive + Ipe.Live.Head + pub/sub via
 -- Cmd.publish + Sub.subscribeTopic in a single fixture. Multi-module
 -- mandatory per CLAUDE.md Limitation #17.
-import Sky.Core.Prelude exposing (..)
-import Std.Cmd as Cmd
-import Std.Live exposing (app, route)
-import Std.Sub as Sub
-import Std.Ui as Ui
-import Std.Ui exposing (Element)
-import Std.Ui.Background as Background
-import Std.Ui.Font as Font
+import Ipe.Prelude exposing (..)
+import Ipe.Cmd as Cmd
+import Ipe.Live exposing (app, route)
+import Ipe.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Ui exposing (Element)
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Font as Font
 import Catalogue
 import Head
 import State exposing (..)

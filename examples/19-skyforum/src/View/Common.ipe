@@ -3,13 +3,13 @@ module View.Common exposing (..)
 -- App chrome shared across pages: top nav, session widget, footer,
 -- plus two low-level click helpers (clickable for inline links,
 -- navButton for chrome buttons).
-import Sky.Core.Prelude exposing (..)
-import Std.Ui as Ui
-import Std.Ui exposing (Element)
-import Std.Ui.Background as Background
-import Std.Ui.Border as Border
-import Std.Ui.Font as Font
-import Std.Ui.Region as Region
+import Ipe.Prelude exposing (..)
+import Ipe.Ui as Ui
+import Ipe.Ui exposing (Element)
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Font as Font
+import Ipe.Ui.Region as Region
 import State exposing (..)
 
 
@@ -75,4 +75,4 @@ pageFooter =
         , Font.color (Ui.rgb 130 130 130)
         , Region.footer
         ]
-        (Ui.text "skyforum — Sky.Live + Std.Ui demo, see examples/19-skyforum/")
+        (Ui.text "skyforum — Ipe.Live + Ipe.Ui demo, see examples/19-skyforum/")

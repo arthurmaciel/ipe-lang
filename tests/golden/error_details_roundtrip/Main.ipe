@@ -14,8 +14,8 @@ module Main exposing (main)
 -- arms only (proving their `PanicInfo`/`TypeInfo` record-payload ADT
 -- registration type-checks) without being constructed.
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 
 describeDetails : Maybe ErrorDetails -> String

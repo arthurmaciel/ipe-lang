@@ -1,4 +1,4 @@
-//! `Std.Ui` / `Std.Html` gate —
+//! `Ipe.Ui` / `Ipe.Html` gate —
 //! `Ui.layout` / `Ui.column` / `Ui.el` / `Ui.text` / `Ui.spacing` /
 //! `Background.color` / `Font.bold` / `Html.htmlRender` end-to-end smoke test.
 //!
@@ -18,9 +18,9 @@
 //!
 //! ## What is tested
 //!
-//! * `Std.Html` qualifier (`Std.Html.htmlRender`) resolves correctly via the
+//! * `Ipe.Html` qualifier (`Ipe.Html.htmlRender`) resolves correctly via the
 //!   qualifier-alias table (env.rs `QUALIFIER_ALIASES`).
-//! * `Std.Ui` qualifier (`Std.Ui.layout`, `Std.Ui.column`, etc.) resolves
+//! * `Ipe.Ui` qualifier (`Ipe.Ui.layout`, `Ipe.Ui.column`, etc.) resolves
 //!   correctly.
 //! * `Ui.column [Ui.spacing N]` emits `display:flex;flex-direction:column;gap:N`.
 //! * `Ui.el [Font.bold]` emits `font-weight:700`.
@@ -74,7 +74,7 @@ fn build_run_m7() -> (PathBuf, support::RunOutcome) {
     (dir, outcome)
 }
 
-/// Full E2E smoke test: `Std.Ui` + `Std.Html.htmlRender` must compile, build,
+/// Full E2E smoke test: `Ipe.Ui` + `Ipe.Html.htmlRender` must compile, build,
 /// run, and produce the cached expected HTML.  Divergence golden — the expected
 /// value is skyc's own correct output, not the Go oracle.
 #[test]

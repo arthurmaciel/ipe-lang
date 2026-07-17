@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- A tuple param whose ELEMENT is refutable (`Just x`): the tuple as a whole is
 -- refutable, so the IPE-T0015 gate blames the offending sub-pattern. This is the

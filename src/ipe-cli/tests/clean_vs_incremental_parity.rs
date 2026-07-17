@@ -340,7 +340,7 @@ fn sources_of(pairs: &[(&[&str], &str)]) -> UserSources {
 }
 
 const MAIN_V1: &str = "module Main exposing (main)\n\
-     import Sky.Core.Prelude exposing (..)\n\
+     import Ipe.Prelude exposing (..)\n\
      import Lib.Util exposing (bump)\n\n\
      main = println (String.fromInt (bump 41))\n";
 const UTIL_V1: &str = "module Lib.Util exposing (bump)\n\nbump x = x + 1\n";
@@ -350,18 +350,18 @@ const UTIL_WIDENED: &str =
 const UTIL_FLIPPED: &str =
     "module Lib.Util exposing (bump)\n\nbump : String -> String\nbump s = s ++ \"!\"\n";
 const MAIN_FLIPPED: &str = "module Main exposing (main)\n\
-     import Sky.Core.Prelude exposing (..)\n\
+     import Ipe.Prelude exposing (..)\n\
      import Lib.Util exposing (bump)\n\n\
      main = println (bump \"x\")\n";
 const EXTRA_MOD: &str = "module Lib.Extra exposing (offset)\n\noffset = 100\n";
 const MAIN_WITH_EXTRA: &str = "module Main exposing (main)\n\
-     import Sky.Core.Prelude exposing (..)\n\
+     import Ipe.Prelude exposing (..)\n\
      import Lib.Util exposing (bump)\n\
      import Lib.Extra exposing (offset)\n\n\
      main = println (String.fromInt (bump offset))\n";
 const HELPER_MOD: &str = "module Lib.Helper exposing (bump)\n\nbump x = x + 1\n";
 const MAIN_RENAMED: &str = "module Main exposing (main)\n\
-     import Sky.Core.Prelude exposing (..)\n\
+     import Ipe.Prelude exposing (..)\n\
      import Lib.Helper exposing (bump)\n\n\
      main = println (String.fromInt (bump 41))\n";
 

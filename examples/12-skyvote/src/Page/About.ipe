@@ -1,8 +1,8 @@
 module Page.About exposing (viewAbout)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Html exposing (..)
-import Std.Html.Attributes exposing (..)
+import Ipe.Prelude exposing (..)
+import Ipe.Html exposing (..)
+import Ipe.Html.Attributes exposing (..)
 import State exposing (..)
 import Ui.Layout as Layout
 
@@ -34,7 +34,7 @@ viewAbout model =
                   []
                   [ li
                         []
-                        [ strong [] [text "Sky.Live"]
+                        [ strong [] [text "Ipe.Live"]
                         , text
                               " -- Server-driven real-time UI. No client-side JavaScript framework needed. The server holds all state and sends minimal HTML patches over SSE."
                         ]

@@ -100,7 +100,7 @@ fn i138_optbridge_fails_n0002() {
 
 /// `Request` is in `RESERVED_BUILTIN_TYPES` and receives the empty-home
 /// sentinel regardless of whether the user explicitly imports
-/// `Sky.Http.Server`.  The `TypeNotFound` gate must NOT reject it.
+/// `Ipe.Http.Server`.  The `TypeNotFound` gate must NOT reject it.
 #[test]
 fn i138_kernel_implicit_positive_exits_zero() {
     try_build("kernel_implicit_positive")

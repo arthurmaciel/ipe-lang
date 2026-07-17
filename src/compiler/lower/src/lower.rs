@@ -187,7 +187,7 @@ const HTTP_REQUEST_FIELD_TYPES: &[(&str, HttpFieldTy)] = &[
     ("url", HttpFieldTy::Str),
 ];
 
-/// The canonical `Sky.Http.Server.Response` record shape as `(field name,
+/// The canonical `Ipe.Http.Server.Response` record shape as `(field name,
 /// expected field TYPE)` pairs, alphabetically sorted by name: `body`,
 /// `contentType`, `headers`, `status`. Matches the reference
 /// `Sky/Http/Server.ipe:66` record alias. A `Ty::Record` (or `canon::Type`)
@@ -358,14 +358,14 @@ fn is_http_request_canon_shape(fields: &mut [(&str, &canon::Type)], interner: &I
     )
 }
 
-/// the canonical `Std.Cache.CacheCfg` field-name set, alphabetically
+/// the canonical `Ipe.Cache.CacheCfg` field-name set, alphabetically
 /// sorted: `maxBytes`, `maxEntries`, `ttlMs` — all `Int`. Folded to the nominal
 /// `IrType::CacheCfg` (`ipe_runtime::cache::CacheCfg`) so a `Cache.defaultCfg`
 /// record literal constructs the runtime struct the `cache_new_raw` kernel
 /// takes (same mechanism as the `HttpRequest` fold above).
 const CACHE_CFG_FIELDS: &[&str] = &["maxBytes", "maxEntries", "ttlMs"];
 
-/// The canonical `Sky.Core.WebSocket.WebSocketCfg` field NAMES *and* TYPES,
+/// The canonical `Ipe.WebSocket.WebSocketCfg` field NAMES *and* TYPES,
 /// alphabetically sorted by name — `headers : List (String, String)`,
 /// `pingInterval : Int`, `timeout : Int`, `url : String`. A record of exactly
 /// this shape folds to the nominal `IrType::WebSocketClientCfg`
@@ -411,7 +411,7 @@ fn is_websocket_cfg_canon_shape(
     )
 }
 
-/// the canonical `Std.Cache.stats` return field-name set, alphabetically
+/// the canonical `Ipe.Cache.stats` return field-name set, alphabetically
 /// sorted: `evictions`, `hits`, `misses` — all `Int`. Folded to the nominal
 /// `IrType::CacheStats` (`ipe_runtime::cache::CacheStats`).
 const CACHE_STATS_FIELDS: &[&str] = &["evictions", "hits", "misses"];
@@ -466,7 +466,7 @@ fn is_all_int_canon_record_shape(
         .all(|((name, ty), expected_name)| *name == *expected_name && canon_ty_is_int(ty, interner))
 }
 
-/// The canonical `Std.Csv.Csv` record field-name set, alphabetically sorted:
+/// The canonical `Ipe.Csv.Csv` record field-name set, alphabetically sorted:
 /// `header`, `rows`. A record of exactly this shape (NAMES *and* the field
 /// TYPES `header : List String`, `rows : List (List String)`) folds to the
 /// nominal `IrType::CsvDoc` (`ipe_runtime::csv::CsvDoc`) so a record literal fed
@@ -542,8 +542,8 @@ fn is_csv_doc_canon_shape(fields: &mut [(&str, &canon::Type)], interner: &Intern
             && canon_ty_is_list_of_string(rty, 2, interner))
 }
 
-// ── #210 Std.Email record shapes ────────────────────────────────────────────
-// The four `Std.Email` record shapes fold to their nominal runtime structs
+// ── #210 Ipe.Email record shapes ────────────────────────────────────────────
+// The four `Ipe.Email` record shapes fold to their nominal runtime structs
 // (`ipe_runtime::email::{EmailMessage, EmailAttachment, SesConfig, SmtpConfig}`)
 // so a `defaultMessage`/`defaultAttachment`/… built record literal constructs
 // the exact struct the `email_send` kernel + the `EmailProvider` variant fields
@@ -1128,10 +1128,10 @@ fn collect_type_vars(t: &canon::Type, out: &mut BTreeSet<Symbol>) {
 /// payload field carries a `Box<dyn Fn>` cannot satisfy the enum's derived
 /// `Clone`/`Debug`/`PartialEq` nor its `IpeStringify` impl, so a function-bearing
 /// field is the fail-closed first-class gap.
-/// Does `ty` mention any opaque `Sky.Http.Server` runtime type
+/// Does `ty` mention any opaque `Ipe.Http.Server` runtime type
 /// (`ServerRequest` / `ServerResponse` / `ServerRoute` / `ServerCookie`)?
 ///
-/// `Sky.Http.Server.Response` is a record alias that folds to
+/// `Ipe.Http.Server.Response` is a record alias that folds to
 /// `IrType::ServerResponse`, so a program can *use* the server types — build a
 /// `Response` record literal, annotate `Request -> Task Error Response` — WITHOUT
 /// ever calling a server kernel. The `server` runtime module (which defines
@@ -1222,7 +1222,7 @@ fn ir_contains_fun(ty: &IrType) -> bool {
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc
-        // Std.Email records + provider ADT — plain data, no function.
+        // Ipe.Email records + provider ADT — plain data, no function.
         | IrType::EmailMessage
         | IrType::EmailAttachment
         | IrType::EmailSesConfig
@@ -1323,7 +1323,7 @@ fn clone_class(t: &IrType) -> CloneClass {
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc
-        // Std.Email runtime structs + provider enum are `Clone` (no `Copy`).
+        // Ipe.Email runtime structs + provider enum are `Clone` (no `Copy`).
         | IrType::EmailMessage
         | IrType::EmailAttachment
         | IrType::EmailSesConfig
@@ -2397,7 +2397,7 @@ fn needs_shared_capture(sym: Symbol, expr: &Expr) -> bool {
 // DIFFERENT class — a single, non-nested (depth-0) reference to a `let`-bound
 // closure passed straight into a kernel call whose runtime consumer itself
 // requires `Send + Sync` (`KernelFn::requires_sync_capture`, e.g.
-// `Ui.onSubmit` / `Ui.onInput` / `Std.Html.Events.on*` / `Stream.stream`).
+// `Ui.onSubmit` / `Ui.onInput` / `Ipe.Html.Events.on*` / `Stream.stream`).
 // The emit-site "re-wrap in a freshly-declared closure" technique only
 // launders a missing `+Sync` bound when the payload is constructed INLINE at
 // the call site; a `Var(sym)` referencing an ALREADY-BUILT `Box<dyn Fn +
@@ -4026,7 +4026,7 @@ fn ir_type_mentions_generic(ty: &IrType, tv: Symbol) -> bool {
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc
-        // Std.Email records + provider ADT are non-parametric — no type var.
+        // Ipe.Email records + provider ADT are non-parametric — no type var.
         | IrType::EmailMessage
         | IrType::EmailAttachment
         | IrType::EmailSesConfig
@@ -4212,7 +4212,7 @@ fn apply_kernel_type_param_bounds(
         // the tvar appears in the TYPE of a boxed callback (a `FuncValue` /
         // lambda passed to a HOF like `List.map`), not as an accessed value
         // binder, so it has its own structural walk over the whole body. `List.map
-        // pairToAttr attrs` in `Std.Live.Head.link` boxes the `T{n}`-generic
+        // pairToAttr attrs` in `Ipe.Live.Head.link` boxes the `T{n}`-generic
         // `pairToAttr` into `Box<dyn Fn(..) -> Attribute<T{n}> + Send + 'static>`,
         // which E0310s without `T{n}: 'static`.
         if body_boxes_generic_callback(*tv, body) {
@@ -5591,25 +5591,25 @@ struct KernelUsage {
     db: bool,
     /// Any TEA (`Cmd*` / `Sub*` / `TimeEvery`) kernel.
     tea: bool,
-    /// Any Sky.Http.Server kernel.
+    /// Any Ipe.Http.Server kernel.
     server: bool,
-    /// Any Std.Ui render kernel.
+    /// Any Ipe.Ui render kernel.
     ui: bool,
-    /// Any Std.Css (Sky.Core.CssSafety) leaf kernel — independent of
-    /// `ui`: a pure-Std.Css program uses no render kernel.
+    /// Any Ipe.Css (Ipe.CssSafety) leaf kernel — independent of
+    /// `ui`: a pure-Ipe.Css program uses no render kernel.
     css: bool,
-    /// Any Std.Auth kernel.
+    /// Any Ipe.Auth kernel.
     auth: bool,
-    /// Any Std.Live kernel.
+    /// Any Ipe.Live kernel.
     live: bool,
-    /// Any Std.Tui kernel.
+    /// Any Ipe.Tui kernel.
     tui: bool,
-    /// Any Std.Webview kernel.
+    /// Any Ipe.Webview kernel.
     webview: bool,
-    /// Any outbound `Sky.Core.WebSocket` client kernel — gates the
+    /// Any outbound `Ipe.WebSocket` client kernel — gates the
     /// `websocket_client` Cargo feature + `ws_client` runtime module.
     websocket: bool,
-    /// The `Std.Email` `Email.send` kernel.
+    /// The `Ipe.Email` `Email.send` kernel.
     email: bool,
 }
 
@@ -7143,7 +7143,7 @@ impl<'a> Lowerer<'a> {
     pub fn run(self) -> Result<Program, (Diagnostic, Vec<Symbol>)> {
         let mut types_ir: Vec<TypeDef> = Vec::with_capacity(self.m.unions.len());
         for u in &self.m.unions {
-            // `Std.Cache`'s opaque `type Cache k v = Cache Int` is backed
+            // `Ipe.Cache`'s opaque `type Cache k v = Cache Int` is backed
             // by the NON-generic runtime enum `IpeCacheHandle { Cache(i64) }` —
             // the handle carries no type args (`k`/`v` live only on the kernel
             // calls). Skip its `EnumDef` entirely so the backend never emits a
@@ -7161,7 +7161,7 @@ impl<'a> Lowerer<'a> {
             if self.is_cache_handle_union(u) || self.is_config_decoder_union(u) {
                 continue;
             }
-            // `Std.Email`'s `type EmailProvider` is backed by the runtime enum
+            // `Ipe.Email`'s `type EmailProvider` is backed by the runtime enum
             // `ipe_runtime::email::EmailProvider` (ctor names match verbatim).
             // Skip its `EnumDef` so the backend never emits a duplicate
             // `StdEmailEmailProvider`; the `builtin_runtime_enum` / `enum_name`
@@ -7223,7 +7223,7 @@ impl<'a> Lowerer<'a> {
         //      `into_field_param` impl blocks.
         //
         // The injection is skipped when no Db kernel is used — a program with
-        // no `import Std.Db` is not affected.
+        // no `import Ipe.Db` is not affected.
         // All nine kernel-family flags are collected in ONE pass over the
         // function bodies (see [`KernelUsage`]) instead of nine independent
         // full-AST walks.
@@ -7247,7 +7247,7 @@ impl<'a> Lowerer<'a> {
         // add `IpeCmd<M>` / `IpeSub<M>` type aliases.
         let uses_tea = kernel_usage.tea;
 
-        // detect whether any Sky.Http.Server kernel call is present, OR any
+        // detect whether any Ipe.Http.Server kernel call is present, OR any
         // function signature references a server type (a `Response` record
         // literal / `Request`-typed handler uses the server structs without
         // necessarily calling a server kernel). Either pulls in the `server`
@@ -7262,7 +7262,7 @@ impl<'a> Lowerer<'a> {
                     || f.params.iter().any(|(_, t)| ir_type_mentions_server(t))
             });
 
-        // detect Std.Ui / Std.Html / Std.Live / Std.Tui / Std.Webview usage.
+        // detect Ipe.Ui / Ipe.Html / Ipe.Live / Ipe.Tui / Ipe.Webview usage.
         // TUI runtime files (tui/app.rs, tui/layout.rs, tui/focus.rs) import
         // `super::super::ui` and `super::super::html` unconditionally, so
         // `uses_ui` must be true whenever `uses_tui` is true — even when the
@@ -7274,21 +7274,21 @@ impl<'a> Lowerer<'a> {
         let uses_live = kernel_usage.live;
         let uses_webview = kernel_usage.webview;
 
-        // detect Std.Css (Sky.Core.CssSafety) leaf-kernel usage. Independent
-        // of `uses_ui` — a pure-Std.Css program uses no render kernel.
+        // detect Ipe.Css (Ipe.CssSafety) leaf-kernel usage. Independent
+        // of `uses_ui` — a pure-Ipe.Css program uses no render kernel.
         let uses_css = kernel_usage.css;
 
-        // detect Std.Auth kernel usage — any of hashPassword, verifyPassword,
+        // detect Ipe.Auth kernel usage — any of hashPassword, verifyPassword,
         // signToken, verifyToken, register, login, setRole, and companions.  The
         // backend uses this flag to append `pub mod auth; pub use auth::*;` to
         // the emitted `ipe_runtime/mod.rs`.
         let uses_auth = kernel_usage.auth;
-        // detect `Std.Email` `Email.send` usage — the backend uses this flag to
+        // detect `Ipe.Email` `Email.send` usage — the backend uses this flag to
         // append `pub mod email; pub use email::*;` to the emitted
         // `ipe_runtime/mod.rs` and to add the `lettre` dependency.
         let uses_email = kernel_usage.email;
 
-        // detect outbound Sky.Core.WebSocket client usage — the backend adds the
+        // detect outbound Ipe.WebSocket client usage — the backend adds the
         // `websocket_client` Cargo feature + `ws_client` runtime module.
         let uses_websocket = kernel_usage.websocket;
 
@@ -7486,7 +7486,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// is `u` the `Std.Cache.Cache` opaque handle union — home
+    /// is `u` the `Ipe.Cache.Cache` opaque handle union — home
     /// `["Std", "Cache"]`, name `Cache`? Its `EnumDef` is suppressed (the type
     /// is backed by the runtime `IpeCacheHandle`); the backend routes the type +
     /// ctor + pattern there via `builtin_runtime_enum`/`enum_name` overrides.
@@ -7494,8 +7494,8 @@ impl<'a> Lowerer<'a> {
         self.is_cache_handle_con(&u.home, u.name)
     }
 
-    /// is `u` the `Std.Config.Decoder` opaque carrier re-declaration —
-    /// module `["Std", "Config"]`, name `Decoder`? `Std.Config` re-declares
+    /// is `u` the `Ipe.Config.Decoder` opaque carrier re-declaration —
+    /// module `["Std", "Config"]`, name `Decoder`? `Ipe.Config` re-declares
     /// `type Decoder a = Decoder` only to put the name in its export set (matching
     /// the reference); the type IS the shared `IrType::Decoder` carrier
     /// (`ipe_runtime::json::Decoder<E, T>`), and every `Decoder a` annotation
@@ -7513,7 +7513,7 @@ impl<'a> Lowerer<'a> {
             )
     }
 
-    /// is `(module, name)` the `Std.Cache.Cache` opaque handle type —
+    /// is `(module, name)` the `Ipe.Cache.Cache` opaque handle type —
     /// module `["Std", "Cache"]`, name `Cache`? Its `k`/`v` args are dropped at
     /// lowering (backed by the non-generic runtime `IpeCacheHandle`).
     fn is_cache_handle_con(&self, module: &[Symbol], name: Symbol) -> bool {
@@ -7525,14 +7525,14 @@ impl<'a> Lowerer<'a> {
             )
     }
 
-    /// is `u` the `Std.Email.EmailProvider` opaque ADT — module
+    /// is `u` the `Ipe.Email.EmailProvider` opaque ADT — module
     /// `["Std", "Email"]`, name `EmailProvider`? Backed by the runtime enum
     /// `ipe_runtime::email::EmailProvider`, so its `EnumDef` is suppressed.
     fn is_email_provider_union(&self, u: &canon::Union) -> bool {
         self.is_email_provider_con(&u.home, u.name)
     }
 
-    /// is `(module, name)` the `Std.Email.EmailProvider` opaque ADT?
+    /// is `(module, name)` the `Ipe.Email.EmailProvider` opaque ADT?
     fn is_email_provider_con(&self, module: &[Symbol], name: Symbol) -> bool {
         self.interner.resolve(name) == Some("EmailProvider")
             && matches!(
@@ -7598,7 +7598,7 @@ impl<'a> Lowerer<'a> {
             name: u.name,
             // Carry the union's DEFINING module (its home) so the backend derives
             // the emitted Rust enum name from the home, not the merged entry module
-            // `Std.Palette.Shade` → `StdPaletteShade`, `Lib.Color` →
+            // `Ipe.Palette.Shade` → `StdPaletteShade`, `Lib.Color` →
             // `LibColor`, `Main.Msg` → `MainMsg` (single-module unchanged).
             home: ModPath(u.home.clone()),
             type_params,
@@ -8509,7 +8509,7 @@ impl<'a> Lowerer<'a> {
     /// resolves to neither a builtin nor a declared union, or a `Type::Var`
     /// missing from the binding's free-variable set), so no node `span` is
     /// threaded — those are [`bug`]s, not span-carrying feature gaps.
-    /// The IR type of `Std.Db.Migration` — the record `{ name : String, sql :
+    /// The IR type of `Ipe.Db.Migration` — the record `{ name : String, sql :
     /// String }` (reference `Std/Db.ipe:237`). Both field names appear in every
     /// program that annotates `Migration` (the record literals / `defaultMigration`
     /// call sites intern them), so a read-only interner lookup resolves them; a
@@ -8539,13 +8539,13 @@ impl<'a> Lowerer<'a> {
                 // `Order` is the built-in three-way comparison result type.
                 // Backed by `ipe_runtime::IpeOrder` (repr(u8) enum: LT/EQ/GT).
                 "Order" => Ok(IrType::Order),
-                // `Decimal` is the Std.Decimal arbitrary-precision type.
+                // `Decimal` is the Ipe.Decimal arbitrary-precision type.
                 // Backed by `ipe_runtime::decimal::Decimal` (rust_decimal newtype).
                 "Decimal" => Ok(IrType::Decimal),
-                // `SqlFragment` is `Std.Db.Sql`'s opaque WHERE-fragment type
+                // `SqlFragment` is `Ipe.Db.Sql`'s opaque WHERE-fragment type
                 // Backed by `ipe_runtime::db::SqlFragment`.
                 "SqlFragment" => Ok(IrType::SqlFragment),
-                // `Secret` is `Sky.Core.Secret`'s opaque sealed secret-string
+                // `Secret` is `Ipe.Secret`'s opaque sealed secret-string
                 // type. Backed by `ipe_runtime::secret::Secret`.
                 "Secret" => Ok(IrType::Secret),
                 "String" => Ok(IrType::Str),
@@ -8674,7 +8674,7 @@ impl<'a> Lowerer<'a> {
                     )?;
                     Ok(IrType::Sub(Box::new(inner)))
                 }
-                // ── Std.Ui / Std.Html parametric type constructors ────────────
+                // ── Ipe.Ui / Ipe.Html parametric type constructors ────────────
                 // These are kernel types that carry a message type parameter `msg`.
                 // They appear in user annotations like `staticView : Msg -> Html Msg`
                 // and are lowered to `IrType::Ui { ctor, msg }` so the backend can
@@ -8682,7 +8682,7 @@ impl<'a> Lowerer<'a> {
                 // etc.) and so BLOCKER-1's `emit_func` can extract the enclosing
                 // function's `msg` type for the `ui_layout::<M>` turbofish.
                 //
-                // `Html msg` — the rendered HTML tree type from `Std.Html`.
+                // `Html msg` — the rendered HTML tree type from `Ipe.Html`.
                 "Html" if args.len() == 1 => {
                     let msg = self.ir_type_from_canon(
                         args.first().ok_or_else(|| {
@@ -8698,7 +8698,7 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
-                // `Element msg` — a Std.Ui layout element.
+                // `Element msg` — a Ipe.Ui layout element.
                 "Element" if args.len() == 1 => {
                     let msg = self.ir_type_from_canon(
                         args.first().ok_or_else(|| {
@@ -8714,13 +8714,13 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
-                // `Attribute msg` — a Std.Ui / Std.Html attribute.  Mirrors the
+                // `Attribute msg` — a Ipe.Ui / Ipe.Html attribute.  Mirrors the
                 // `ir_type_from_ty` "Attribute" arm: `Attribute` exists in BOTH
-                // `Std.Ui` and `Std.Html`, disambiguated by the `home` path
+                // `Ipe.Ui` and `Ipe.Html`, disambiguated by the `home` path
                 // (a path containing "Html" selects `HtmlAttribute`; everything
                 // else — `["Std","Ui"]`, `["Ui"]`, or empty for the
                 // builtin-injected form used by compiled-source stdlib modules
-                // like `Std.Ui.Grid` / `Std.Ui.Transition` — selects
+                // like `Ipe.Ui.Grid` / `Ipe.Ui.Transition` — selects
                 // `UiAttribute`).  Without this arm an annotation such as
                 // `columns : List Track -> Attribute msg` reaches the `other =>`
                 // ICE with an empty home (IPE-I0001).
@@ -8745,7 +8745,7 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
-                // `Event msg` — a Std.Ui / Std.Html event handler carrier.
+                // `Event msg` — a Ipe.Ui / Ipe.Html event handler carrier.
                 // Mirrors the `ir_type_from_ty` "Event" arm; same empty-home
                 // gap as `Attribute` for compiled-source stdlib annotations.
                 "Event" if args.len() == 1 => {
@@ -8763,7 +8763,7 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
-                // Sky.Live opaque types in annotations (mirrors `ir_type_from_ty`).
+                // Ipe.Live opaque types in annotations (mirrors `ir_type_from_ty`).
                 "LiveReq" => Ok(IrType::LiveReq),
                 // `StreamId` / `ChunkEvent` — builtin-registered Http.Stream ADTs
                 // (no synthetic EnumDef injection, so not in enum_variants).
@@ -8776,7 +8776,7 @@ impl<'a> Lowerer<'a> {
                 // `StreamWriter` — opaque server-side stream writer handle.
                 // Mirrors `ir_type_from_ty`'s "StreamWriter" arm.
                 "StreamWriter" => Ok(IrType::StreamWriter),
-                // `Std.Email.EmailProvider` — opaque ADT backed by the runtime
+                // `Ipe.Email.EmailProvider` — opaque ADT backed by the runtime
                 // enum. Home-guarded — mirrors `ir_type_from_ty`'s arm.
                 "EmailProvider" if self.is_email_provider_con(home, *name) => {
                     Ok(IrType::EmailProvider)
@@ -8786,7 +8786,7 @@ impl<'a> Lowerer<'a> {
                 // annotation `HttpRequest` maps directly to the runtime type via
                 // this opaque variant.
                 "HttpRequest" => Ok(IrType::HttpRequest),
-                // `Std.Db.Migration` — the record alias `{ name : String,
+                // `Ipe.Db.Migration` — the record alias `{ name : String,
                 // sql : String }` (reference `Std/Db.ipe:237`). Annotated
                 // directly (`migrations : List Db.Migration`), so expand it to
                 // the synthesised record here — mirrors how the type-checker's
@@ -8813,7 +8813,7 @@ impl<'a> Lowerer<'a> {
                     )?;
                     Ok(IrType::LiveRoute(Box::new(page)))
                 }
-                // ── Std.Ui.Input parametric types ──────────────────────────
+                // ── Ipe.Ui.Input parametric types ──────────────────────────
                 "Label" if args.len() == 1 => {
                     let msg = self.ir_type_from_canon(
                         args.first().ok_or_else(|| {
@@ -8863,7 +8863,7 @@ impl<'a> Lowerer<'a> {
                     .enum_variants
                     .contains_key(&(ModPath(home.clone()), *name)) =>
                 {
-                    // drop the phantom `k`/`v` of `Std.Cache.Cache k v`
+                    // drop the phantom `k`/`v` of `Ipe.Cache.Cache k v`
                     // (backed by the non-generic `IpeCacheHandle`) — twin of the
                     // solved-Ty arm; see its comment for the E0283 rationale.
                     let ir_args = if self.is_cache_handle_con(home, *name) {
@@ -8889,13 +8889,13 @@ impl<'a> Lowerer<'a> {
                 // consistency. Supports bare `Value` annotations
                 // on user functions (kernel-implicit Prelude type).
                 // `Claims` maps to the same opaque JSON accumulator.
-                // ── Kernel-implicit opaque server / Sky.Live types ────────
+                // ── Kernel-implicit opaque server / Ipe.Live types ────────
                 // These names are registered in `KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES`
                 // in ipe_canon so they pass N0002 without an explicit import.
                 // They all carry zero type arguments at the annotation level.
-                // `Handler` / `Middleware` — Sky.Http.Server function aliases.
-                // `Session` / `Store` — Sky.Live session-management opaques.
-                // `VNode` — Sky.Live virtual-DOM node.
+                // `Handler` / `Middleware` — Ipe.Http.Server function aliases.
+                // `Session` / `Store` — Ipe.Live session-management opaques.
+                // `VNode` — Ipe.Live virtual-DOM node.
                 // All map to `IrType::Json` (universal opaque serde_json::Value) so
                 // they can flow through the runtime without a dedicated Rust struct.
                 "Value" | "Claims" | "Handler" | "Middleware" | "Session" | "Store" | "VNode" => {
@@ -8905,11 +8905,11 @@ impl<'a> Lowerer<'a> {
                 // `Algorithm` — JWT signing algorithm descriptor encoded as a
                 // `String` ("HS256:<secret>" or "RS256:<pem>").
                 "Algorithm" => Ok(IrType::Str),
-                // ── Nullary Std.Ui plain types (no message parameter) ─────
+                // ── Nullary Ipe.Ui plain types (no message parameter) ─────
                 // Mirror of the `ir_type_from_ty` arms below.  Reached when a
                 // type annotation writes `Color`, `Length`, etc. at a position
                 // where canon emits a `Con { home: [], name, args: [] }` node —
-                // i.e. the genuine opaque Std.Ui builtin, not a user-defined
+                // i.e. the genuine opaque Ipe.Ui builtin, not a user-defined
                 // enum (the `enum_variants` guard above fires first for those).
                 "Length" => Ok(IrType::UiPlain(UiPlain::Length)),
                 "Color" => Ok(IrType::UiPlain(UiPlain::Color)),
@@ -9018,7 +9018,7 @@ impl<'a> Lowerer<'a> {
                 if is_server_response_canon_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::ServerResponse);
                 }
-                // fold the two nominal Std.Cache record shapes (annotation
+                // fold the two nominal Ipe.Cache record shapes (annotation
                 // path — e.g. `newRaw : CacheCfg -> …` / `statsRaw : … -> Task
                 // Error { hits, misses, evictions }`) — twin of the solved-Ty fold.
                 if is_all_int_canon_record_shape(&mut named_fields, CACHE_CFG_FIELDS, self.interner)
@@ -9032,18 +9032,18 @@ impl<'a> Lowerer<'a> {
                 ) {
                     return Ok(IrType::CacheStats);
                 }
-                // fold the nominal Std.Csv record annotation shape to the
+                // fold the nominal Ipe.Csv record annotation shape to the
                 // opaque runtime `IrType::CsvDoc` — twin of the solved-Ty fold.
                 if is_csv_doc_canon_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::CsvDoc);
                 }
-                // fold the nominal Sky.Core.WebSocket connect-config record
+                // fold the nominal Ipe.WebSocket connect-config record
                 // annotation shape to the opaque runtime `IrType::WebSocketClientCfg`
                 // — twin of the solved-Ty fold.
                 if is_websocket_cfg_canon_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::WebSocketClientCfg);
                 }
-                // fold the four nominal Std.Email record annotation shapes to
+                // fold the four nominal Ipe.Email record annotation shapes to
                 // their runtime structs — twin of the solved-Ty fold.
                 if is_email_message_canon_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::EmailMessage);
@@ -9498,11 +9498,11 @@ impl<'a> Lowerer<'a> {
             // of these builtin constructors, so those arms can never silently
             // override a user `type Int = …` / `type Html = …`.
             //
-            // The nullary Std.Ui / Sky.Live opaque names (`Length` / `Color` /
+            // The nullary Ipe.Ui / Ipe.Live opaque names (`Length` / `Color` /
             // `HAlign` / `VAlign` / `Location` / `PseudoClass` / `Description` /
             // `LayoutContext` / `LiveReq`) and `Value` are the exceptions:
             // moved them BELOW the `enum_variants` guard so a program union
-            // of the same name (a user ADT or a compiled-source `Std.Css` type)
+            // of the same name (a user ADT or a compiled-source `Ipe.Css` type)
             // wins by its `(home, name)` identity, and only a genuine opaque
             // builtin (no union entry) falls through to the `UiPlain` arm. This
             // matches `ir_type_from_canon`, so the inferred and annotated paths
@@ -9514,13 +9514,13 @@ impl<'a> Lowerer<'a> {
                 // `Order` is the built-in three-way comparison result type.
                 // Backed by `ipe_runtime::IpeOrder` (repr(u8) enum: LT/EQ/GT).
                 "Order" => Ok(IrType::Order),
-                // `Decimal` is the Std.Decimal arbitrary-precision type.
+                // `Decimal` is the Ipe.Decimal arbitrary-precision type.
                 // Backed by `ipe_runtime::decimal::Decimal` (rust_decimal newtype).
                 "Decimal" => Ok(IrType::Decimal),
-                // `SqlFragment` is `Std.Db.Sql`'s opaque WHERE-fragment type
+                // `SqlFragment` is `Ipe.Db.Sql`'s opaque WHERE-fragment type
                 // Backed by `ipe_runtime::db::SqlFragment`.
                 "SqlFragment" => Ok(IrType::SqlFragment),
-                // `Secret` is `Sky.Core.Secret`'s opaque sealed secret-string
+                // `Secret` is `Ipe.Secret`'s opaque sealed secret-string
                 // type. Backed by `ipe_runtime::secret::Secret`.
                 "Secret" => Ok(IrType::Secret),
                 // `Algorithm` shares the `String` IR representation.
@@ -9544,7 +9544,7 @@ impl<'a> Lowerer<'a> {
                 "PanicInfo" => Ok(IrType::PanicInfo),
                 "TypeInfo" => Ok(IrType::TypeInfo),
                 "Char" => Ok(IrType::Char),
-                // ── Kernel-implicit opaque server / Sky.Live types ────────
+                // ── Kernel-implicit opaque server / Ipe.Live types ────────
                 // Mirror of the `ir_type_from_canon` arms added at the same
                 // time: these are the HM-solved-type counterparts that fire when
                 // the type is propagated via the region map rather than read from
@@ -9688,7 +9688,7 @@ impl<'a> Lowerer<'a> {
                 "Cookie" => Ok(IrType::ServerCookie),
                 // `StreamWriter` — opaque stream writer handle.
                 "StreamWriter" => Ok(IrType::StreamWriter),
-                // `Std.Email.EmailProvider` — opaque ADT backed by the runtime
+                // `Ipe.Email.EmailProvider` — opaque ADT backed by the runtime
                 // enum. Home-guarded (`["Std","Email"]`) so a user `type
                 // EmailProvider` with a different home falls through to the
                 // program-enum guard below and wins by its own identity.
@@ -9698,7 +9698,7 @@ impl<'a> Lowerer<'a> {
                 // `HttpRequest` — opaque HTTP request descriptor.
                 // Mirrors `ir_type_from_canon`'s "HttpRequest" arm.
                 "HttpRequest" => Ok(IrType::HttpRequest),
-                // `Std.Db.Migration` record alias — mirrors
+                // `Ipe.Db.Migration` record alias — mirrors
                 // `ir_type_from_canon`'s "Migration" arm (defensive; the solved
                 // type of a migration value is normally a `Ty::Record`).
                 "Migration" => Ok(self.migration_record_ir()),
@@ -9706,7 +9706,7 @@ impl<'a> Lowerer<'a> {
                 "WebSocketServer" => Ok(IrType::WebSocketServer),
                 // `WebSocketServerCfg` — opaque WsServerCfg<IpeError>.
                 "WebSocketServerCfg" => Ok(IrType::WebSocketServerCfg),
-                // ── Std.Ui / Std.Html parametric type constructors ────────
+                // ── Ipe.Ui / Ipe.Html parametric type constructors ────────
                 // Mirror of `ir_type_from_canon` (which handles user-written
                 // type ANNOTATIONS).  This path handles SOLVED types from the
                 // HM region map — `list_elem_ir` calls here when lowering a
@@ -9716,7 +9716,7 @@ impl<'a> Lowerer<'a> {
                 // 1. The msg arg is recursed through `ir_type_from_ty_ui_msg`
                 //    (free `Ty::Var` → `IrType::Unit`, not `Json`, not error).
                 // 2. `Attribute` is disambiguated by `Ty::Con.module` (T2 trap:
-                //    BOTH `Std.Ui.Attribute` and `Std.Html.Attribute` exist —
+                //    BOTH `Ipe.Ui.Attribute` and `Ipe.Html.Attribute` exist —
                 //    check the module path, never just the name).
                 // 3. Plain Ui types (`Length`, `Color`, …) are nullary — no msg.
                 // 4. `LiveReq` maps to `IrType::LiveReq` (opaque init arg).
@@ -9750,9 +9750,9 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
-                // T2 trap: `Attribute` exists in BOTH `Std.Ui` and `Std.Html`.
+                // T2 trap: `Attribute` exists in BOTH `Ipe.Ui` and `Ipe.Html`.
                 // Disambiguate by `Ty::Con.module` — a module path containing
-                // "Html" identifies the `Std.Html.Attribute` form.
+                // "Html" identifies the `Ipe.Html.Attribute` form.
                 "Attribute" if args.len() == 1 => {
                     let msg = self.ir_type_from_ty_ui_msg(
                         args.first().ok_or_else(|| {
@@ -9793,7 +9793,7 @@ impl<'a> Lowerer<'a> {
                         msg: Box::new(msg),
                     })
                 }
-                // ── Std.Ui.Input parametric types ───────────────────────
+                // ── Ipe.Ui.Input parametric types ───────────────────────
                 // `Label msg` and `Placeholder msg` are kernel-reserved type
                 // names produced by `constrain`'s `label_t` / `placeholder_t`
                 // helper closures.  They are NOT user ADTs, so they precede the
@@ -9844,17 +9844,17 @@ impl<'a> Lowerer<'a> {
                     })
                 }
                 // ── Program-defined enum guard (home-aware) ──────────────
-                // Checked BEFORE the bare-name Std.Ui / Sky.Live opaque arms
+                // Checked BEFORE the bare-name Ipe.Ui / Ipe.Live opaque arms
                 // below, mirroring `ir_type_from_canon`'s ordering (the annotated
                 // path already places its enum guard ahead of every non-reserved
                 // name) so the inferred (ty) path and the annotated (canon) path
                 // resolve the SAME `(home, name)` identically.
                 //
                 // A program-defined `type Color` — a user ADT OR a compiled-source
-                // `Std.Css` type — is keyed in `enum_variants` under its real HOME
+                // `Ipe.Css` type — is keyed in `enum_variants` under its real HOME
                 // so it resolves to ITS OWN enum (`MainColor` /
                 // `StdCssColor`) instead of being hijacked to the opaque
-                // `UiPlain::Color`. A genuine Std.Ui builtin (`Length` / `Color` /
+                // `UiPlain::Color`. A genuine Ipe.Ui builtin (`Length` / `Color` /
                 // … that is NOT a program union — the real runtime `UiPlain`
                 // types) has no `enum_variants` entry for any home, so the guard
                 // fails and it falls through to the `UiPlain` arms below,
@@ -9871,10 +9871,10 @@ impl<'a> Lowerer<'a> {
                     // `Ty::Con`), which is the same identity the union was keyed
                     // under.
                     //
-                    // `Std.Cache.Cache k v` is backed by the NON-generic
+                    // `Ipe.Cache.Cache k v` is backed by the NON-generic
                     // runtime `IpeCacheHandle`, so drop its `k`/`v` args here —
                     // otherwise they surface as unused generic params on the
-                    // `Std.Cache` wrapper fns (`new : CacheCfg -> Task Error
+                    // `Ipe.Cache` wrapper fns (`new : CacheCfg -> Task Error
                     // (Cache k v)` whose result no longer mentions them), an
                     // uninferrable `T` at the call site (E0283).
                     let ir_args = if self.is_cache_handle_con(module, *name) {
@@ -9892,9 +9892,9 @@ impl<'a> Lowerer<'a> {
                         args: ir_args,
                     })
                 }
-                // ── Nullary Std.Ui plain types (no message parameter) ─────
+                // ── Nullary Ipe.Ui plain types (no message parameter) ─────
                 // Reached ONLY when `(home, name)` is NOT a program-defined enum
-                // (guard above) — i.e. the genuine opaque Std.Ui builtin. A
+                // (guard above) — i.e. the genuine opaque Ipe.Ui builtin. A
                 // program `type Color` / `type Length` never lands here.
                 "Length" => Ok(IrType::UiPlain(UiPlain::Length)),
                 "Color" => Ok(IrType::UiPlain(UiPlain::Color)),
@@ -9904,7 +9904,7 @@ impl<'a> Lowerer<'a> {
                 "PseudoClass" => Ok(IrType::UiPlain(UiPlain::PseudoClass)),
                 "Description" => Ok(IrType::UiPlain(UiPlain::Description)),
                 "LayoutContext" => Ok(IrType::UiPlain(UiPlain::LayoutContext)),
-                // ── Sky.Live opaque types ─────────────────────────────────
+                // ── Ipe.Live opaque types ─────────────────────────────────
                 "LiveReq" => Ok(IrType::LiveReq),
                 // `LiveRoute page` — the route descriptor produced by
                 // `Live.route`, parametric on the page type it builds.
@@ -10004,7 +10004,7 @@ impl<'a> Lowerer<'a> {
                 if is_http_request_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::HttpRequest);
                 }
-                // fold the `Sky.Http.Server.Response` record shape to the
+                // fold the `Ipe.Http.Server.Response` record shape to the
                 // opaque runtime `IrType::ServerResponse` — same rationale as
                 // HttpRequest: the server kernels produce/consume the runtime
                 // `ipe_runtime::ServerResponse` struct, so a synthesised `Rec…`
@@ -10013,7 +10013,7 @@ impl<'a> Lowerer<'a> {
                 if is_server_response_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::ServerResponse);
                 }
-                // fold the two nominal Std.Cache record shapes to their
+                // fold the two nominal Ipe.Cache record shapes to their
                 // runtime structs (CacheCfg / CacheStats) — same rationale as
                 // HttpRequest: the kernel takes/returns the runtime struct, so a
                 // synthesised `Rec…` struct would mismatch it (E0308).
@@ -10023,7 +10023,7 @@ impl<'a> Lowerer<'a> {
                 if is_all_int_record_shape(&mut named_fields, CACHE_STATS_FIELDS, self.interner) {
                     return Ok(IrType::CacheStats);
                 }
-                // fold the nominal Std.Csv record shape to the runtime `CsvDoc`
+                // fold the nominal Ipe.Csv record shape to the runtime `CsvDoc`
                 // struct — same rationale: `csv_encode` takes it and `csv_parse`
                 // returns it, so a synthesised `Rec…` struct would mismatch
                 // (E0308). A record literal fed to `Csv.encode` thus emits the
@@ -10031,14 +10031,14 @@ impl<'a> Lowerer<'a> {
                 if is_csv_doc_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::CsvDoc);
                 }
-                // fold the nominal Sky.Core.WebSocket connect-config record shape
+                // fold the nominal Ipe.WebSocket connect-config record shape
                 // to the runtime `WsClientCfg` struct — same rationale: the
                 // `web_socket_connect_with` kernel takes it, so a synthesised
                 // `Rec…` struct would mismatch it (E0308).
                 if is_websocket_cfg_shape(&mut named_fields, self.interner) {
                     return Ok(IrType::WebSocketClientCfg);
                 }
-                // fold the four nominal Std.Email record shapes to their runtime
+                // fold the four nominal Ipe.Email record shapes to their runtime
                 // structs — same rationale: `email_send` takes the `EmailMessage`
                 // (+ `EmailProvider` variant fields take the config structs), so a
                 // synthesised `Rec…` struct would mismatch (E0308). A record
@@ -11653,7 +11653,7 @@ impl<'a> Lowerer<'a> {
                     | KernelFn::DbDecMap3
                     | KernelFn::DbDecMap4
                     | KernelFn::DbDecAndThen
-                    // Std.Config shares the decoder carrier + `decode_map` /
+                    // Ipe.Config shares the decoder carrier + `decode_map` /
                     // `decode_and_then` runtime fns, so its single-parameter
                     // payload mappers need the same `Fun` → `FnOnceChain` retype.
                     | KernelFn::ConfigMap
@@ -11855,7 +11855,7 @@ impl<'a> Lowerer<'a> {
     /// value dispatched verbatim.
     ///
     /// * [`OnFormKind::NotForm`] — the callee is not `Ui.onSubmit` /
-    ///   `Std.Html.Events.onSubmit`. The field is inert; emission is
+    ///   `Ipe.Html.Events.onSubmit`. The field is inert; emission is
     ///   byte-identical.
     /// * [`OnFormKind::Decoder`] — the handler's solved type is an arrow
     ///   (`T -> Msg`): decode the form into `T`, map to `Msg`.
@@ -12756,7 +12756,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ErrorPermissionDenied
                 // ── Task.defaultRetryPolicy — arity 0 ────────────────────────
                 | KernelFn::TaskDefaultRetryPolicy
-                // ── Sky.Http.Server.WebSocket arity-0 ──────────────────
+                // ── Ipe.Http.Server.WebSocket arity-0 ──────────────────
                 | KernelFn::WsDefaultCfg
                 // ── Jwt builder: claims arity-0 ─────────────────
                 | KernelFn::JwtClaims,
@@ -13003,7 +13003,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ErrorToString
                 // `Error.isRetryable : Error -> Bool`
                 | KernelFn::ErrorIsRetryable
-                // ── CssSafety arity-1 (Std.Css leaf kernels) ─────────────
+                // ── CssSafety arity-1 (Ipe.Css leaf kernels) ─────────────
                 // `safeValue`/`safePropName`/`safeSelector : String -> Maybe String`
                 // `stripStyleClose : String -> String`
                 | KernelFn::CssSafetySafeValue
@@ -13098,7 +13098,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::JsonDecMap
                 | KernelFn::JsonDecAndThen
                 | KernelFn::JsonDecPCustom
-                // ── Time arity-2 (Std.Time calendar helper) ─────────────────
+                // ── Time arity-2 (Ipe.Time calendar helper) ─────────────────
                 | KernelFn::TimeDaysInMonth
                 // ── Math arity-2 (Float → Float → Float) ────────────────────
                 | KernelFn::MathPow
@@ -13336,7 +13336,7 @@ impl<'a> Lowerer<'a> {
             ) => Ok(5),
             // ── Result/Maybe map5 — arity 6 ────────────────────────────
             Callee::Kernel(KernelFn::ResultMap5 | KernelFn::MaybeMap5) => Ok(6),
-            // ── Std.Ui / Std.Html render kernels ─────────────────────────
+            // ── Ipe.Ui / Ipe.Html render kernels ─────────────────────────
             // Arity 0: nullary constants — no arguments.
             Callee::Kernel(
                 // `Ui.none : Element msg`
@@ -13409,7 +13409,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::FontSansSerif
                 | KernelFn::FontSerif
                 | KernelFn::FontMonospace
-                // ── Std.Ui.Region — arity-0 attrs ─────────────────────────
+                // ── Ipe.Ui.Region — arity-0 attrs ─────────────────────────
                 | KernelFn::RegionMainContent
                 | KernelFn::RegionNavigation
                 | KernelFn::RegionFooter
@@ -13463,7 +13463,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiHeight
                 // `Ui.gridColumns : Int -> Attribute msg`
                 | KernelFn::UiGridColumns
-                // ── Std.Ui nearby attribute builders — arity 1 ───────────
+                // ── Ipe.Ui nearby attribute builders — arity 1 ───────────
                 // `Ui.above/below/onLeft/onRight/inFront/behind : Element msg -> Attribute msg`
                 | KernelFn::UiAbove
                 | KernelFn::UiBelow
@@ -13514,7 +13514,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlInput
                 // `Html.img : List (Attribute msg) -> Html msg` (void element)
                 | KernelFn::HtmlImg
-                // ── Std.Html void element builders — arity 1 ────
+                // ── Ipe.Html void element builders — arity 1 ────
                 // `Html.br : List (Attribute msg) -> Html msg` (void element)
                 | KernelFn::HtmlBr
                 // `Html.hr : List (Attribute msg) -> Html msg` (void element)
@@ -13562,7 +13562,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiOnBool
                 // `Ui.onSubmit : (a -> msg) -> Attribute msg`
                 | KernelFn::UiOnSubmit
-                // ── Std.Html.Events builders — arity 1 (all shapes) ────
+                // ── Ipe.Html.Events builders — arity 1 (all shapes) ────
                 | KernelFn::HtmlOnClick
                 | KernelFn::HtmlOnFocus
                 | KernelFn::HtmlOnBlur
@@ -13587,7 +13587,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::WebviewApp
                 // `Cli.program : CliCfg model msg -> Task Error ()`
                 | KernelFn::CliProgram
-                // Std.Html.Attributes fixed-key builders (`String`/`Bool`
+                // Ipe.Html.Attributes fixed-key builders (`String`/`Bool`
                 // -> Attribute msg).
                 | KernelFn::HtmlAttrClass
                 | KernelFn::HtmlAttrId
@@ -13631,7 +13631,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::FontHoverSize
                 | KernelFn::HtmlAttrTabindex
                 | KernelFn::HtmlAttrRows
-                // ── Std.Ui.Region — arity-1 attrs ─────────────────────────
+                // ── Ipe.Ui.Region — arity-1 attrs ─────────────────────────
                 | KernelFn::RegionHeading
                 | KernelFn::RegionLabel
                 // ── Ui.input + Ui.describe + desc* arity-1 ──────────────────────
@@ -13639,7 +13639,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiDescribe
                 | KernelFn::UiDescHeading
                 | KernelFn::UiDescLabel
-                // ── Std.Ui.Input — arity-1 constructors ───────────────────
+                // ── Ipe.Ui.Input — arity-1 constructors ───────────────────
                 // `Input.labelHidden : String -> Label msg`
                 | KernelFn::InputLabelHidden
                 // ── 20-kernel wiring batch — arity 1 ─────────────────────
@@ -13703,7 +13703,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HtmlButton
                 // `Html.p : List (Attribute msg) -> List (Html msg) -> Html msg`
                 | KernelFn::HtmlP
-                // ── Std.Html container element builders — arity 2 ─
+                // ── Ipe.Html container element builders — arity 2 ─
                 // `Html.h1 : List (Attribute msg) -> List (Html msg) -> Html msg`
                 | KernelFn::HtmlH1
                 // `Html.h2 : List (Attribute msg) -> List (Html msg) -> Html msg`
@@ -13833,7 +13833,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::UiTransitionRaw
                 // `Ui.gridTracksRaw : String -> String -> Attribute msg`
                 | KernelFn::UiGridTracksRaw
-                // ── Std.Ui.Input — arity-2 constructors ───────────────────
+                // ── Ipe.Ui.Input — arity-2 constructors ───────────────────
                 // `Input.labelAbove : List (Attribute msg) -> Element msg -> Label msg`
                 | KernelFn::InputLabelAbove
                 // `Input.labelBelow : List (Attribute msg) -> Element msg -> Label msg`
@@ -13898,12 +13898,12 @@ impl<'a> Lowerer<'a> {
                 // `Ui.rgba : Int -> Int -> Int -> Float -> Color`
                 KernelFn::UiRgba
                 // `Ui.animateRaw : String -> String -> String -> Bool -> Attribute msg`
-                // Native surface backing `Std.Ui.Animation.attribute` — carries the
+                // Native surface backing `Ipe.Ui.Animation.attribute` — carries the
                 // keyframe name, animation shorthand tail, `@keyframes` body, and the
                 // respect-`prefers-reduced-motion` flag (see ui_animate_raw_).
                 | KernelFn::UiAnimateRaw,
             ) => Ok(4),
-            // ── Std.Auth / Stream / HttpStream — fail-closed kernels ──
+            // ── Ipe.Auth / Stream / HttpStream — fail-closed kernels ──
             // These kernels are registered in the qualifier table but have no
             // lower arm (they hit IPE-L0108).  callee_arity is consulted
             // before lowering, so each variant must declare its correct arity
@@ -13915,9 +13915,9 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::HttpStreamOpen
                 | KernelFn::HttpStreamClose
                 | KernelFn::UiColorCss
-                // ── Sky.Http.Server.WebSocket arity-1 ──────────────────
+                // ── Ipe.Http.Server.WebSocket arity-1 ──────────────────
                 | KernelFn::WsCloseClient
-                // ── Sky.Core.WebSocket client arity-1 ──────────────────
+                // ── Ipe.WebSocket client arity-1 ──────────────────
                 | KernelFn::WebSocketConnect
                 | KernelFn::WebSocketConnectWith
                 | KernelFn::WebSocketClose,
@@ -13931,7 +13931,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::StreamWithContentType
                 | KernelFn::HttpStreamForEachChunk
                 | KernelFn::HttpStreamChunks
-                // ── Sky.Http.Server.WebSocket arity-2 ──────────────────
+                // ── Ipe.Http.Server.WebSocket arity-2 ──────────────────
                 | KernelFn::WsWithOnConnect
                 | KernelFn::WsWithOnMessage
                 | KernelFn::WsWithOnClose
@@ -13942,7 +13942,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::WsSendToClient
                 | KernelFn::WsSendBinaryToClient
                 | KernelFn::WsBroadcast
-                // ── Sky.Core.WebSocket client arity-2 ──────────────────
+                // ── Ipe.WebSocket client arity-2 ──────────────────
                 | KernelFn::WebSocketSend
                 | KernelFn::WebSocketSendBinary,
             ) => Ok(2),
@@ -13951,13 +13951,13 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::AuthRegister
                 | KernelFn::AuthLogin
                 | KernelFn::AuthSetRole
-                // ── Sky.Core.WebSocket client arity-3 ──────────────────
+                // ── Ipe.WebSocket client arity-3 ──────────────────
                 // `closeWithCode : Int -> String -> Int -> Task Error ()`
                 // `subscribeWebSocket : Int -> String -> (any -> msg) -> Sub msg`
                 | KernelFn::WebSocketCloseWithCode
                 | KernelFn::SubSubscribeWebSocket,
             ) => Ok(3),
-            // ── Std.Ui.Lazy ────────────────────────────────────────────
+            // ── Ipe.Ui.Lazy ────────────────────────────────────────────
             // lazy  : (a -> Element msg) -> a -> Element msg          — arity 2
             Callee::Kernel(KernelFn::LazyLazy) => Ok(2),
             // Keyed.column/row : List Attr -> List (String, Element) -> Element — arity 2
@@ -13970,13 +13970,13 @@ impl<'a> Lowerer<'a> {
             Callee::Kernel(KernelFn::LazyLazy4) => Ok(5),
             // lazy5 : (a -> b -> c -> d -> e -> Element msg) -> …     — arity 6
             Callee::Kernel(KernelFn::LazyLazy5) => Ok(6),
-            // ── Std.Decimal — arity 0 ────────────────────────────────────────
+            // ── Ipe.Decimal — arity 0 ────────────────────────────────────────
             Callee::Kernel(
                 KernelFn::DecZero
                 | KernelFn::DecOne
                 | KernelFn::DecOneHundred,
             ) => Ok(0),
-            // ── Std.Decimal — arity 1 ────────────────────────────────────────
+            // ── Ipe.Decimal — arity 1 ────────────────────────────────────────
             Callee::Kernel(
                 KernelFn::DecFromString
                 | KernelFn::DecFromInt
@@ -13992,7 +13992,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DecIsPositive
                 | KernelFn::DecIsNegative,
             ) => Ok(1),
-            // ── Std.Decimal — arity 2 ────────────────────────────────────────
+            // ── Ipe.Decimal — arity 2 ────────────────────────────────────────
             Callee::Kernel(
                 KernelFn::DecFromMinor
                 | KernelFn::DecToStringFixed
@@ -14018,10 +14018,10 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::DecAddPercent
                 | KernelFn::DecSubPercent,
             ) => Ok(2),
-            // ── Std.Decimal — arity 4 ────────────────────────────────────────
+            // ── Ipe.Decimal — arity 4 ────────────────────────────────────────
             // `Decimal.formatWith : String -> String -> Int -> Decimal -> String`
             Callee::Kernel(KernelFn::DecFormatWith) => Ok(4),
-            // ── Std.Db.Sql — SqlFragment builder, arity 1 ──────
+            // ── Ipe.Db.Sql — SqlFragment builder, arity 1 ──────
             // `column : String -> SqlFragment`, `param : SqlValue -> SqlFragment`,
             // `int`/`string`/`float`/`bool : _ -> SqlFragment` (sugar over
             // `param`), `not`/`isNull`/`isNotNull : SqlFragment -> SqlFragment`.
@@ -14036,7 +14036,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::SqlIsNull
                 | KernelFn::SqlIsNotNull,
             ) => Ok(1),
-            // ── Std.Db.Sql — SqlFragment builder, arity 2 ─────────────────────
+            // ── Ipe.Db.Sql — SqlFragment builder, arity 2 ─────────────────────
             // `eq`/`ne`/`gt`/`lt`/`gte`/`lte`/`and`/`or : SqlFragment -> SqlFragment -> SqlFragment`,
             // `inList : SqlFragment -> List SqlValue -> SqlFragment`,
             // `like : SqlFragment -> String -> SqlFragment`.
@@ -14056,13 +14056,13 @@ impl<'a> Lowerer<'a> {
             // `findWhere : Db -> String -> SqlFragment -> Task Error (List Row)`
             // `deleteWhere : Db -> String -> SqlFragment -> Task Error Int`
             Callee::Kernel(KernelFn::DbFindWhere | KernelFn::DbDeleteWhere) => Ok(3),
-            // ── Sky.Core.Secret — opaque secret-string wrapper, arity 1 ──
+            // ── Ipe.Secret — opaque secret-string wrapper, arity 1 ──
             // `fromString : String -> Secret`, `reveal : Secret -> String`,
             // `redacted : Secret -> String`.
             Callee::Kernel(
                 KernelFn::SecretFromString | KernelFn::SecretReveal | KernelFn::SecretRedacted,
             ) => Ok(1),
-            // ── Sky.Core.Regex ─────────────────────────────────────────
+            // ── Ipe.Regex ─────────────────────────────────────────
             // `match`/`find`/`findAll`/`split : String -> String -> _` (arity 2);
             // `replace : String -> String -> String -> String` (arity 3).
             Callee::Kernel(
@@ -14072,25 +14072,25 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::RegexSplit,
             ) => Ok(2),
             Callee::Kernel(KernelFn::RegexReplace) => Ok(3),
-            // ── Sky.Core.Path — all four are `String -> _` (arity 1). ───
+            // ── Ipe.Path — all four are `String -> _` (arity 1). ───
             Callee::Kernel(
                 KernelFn::PathBase
                 | KernelFn::PathDir
                 | KernelFn::PathExt
                 | KernelFn::PathIsAbsolute,
             ) => Ok(1),
-            // ── Std.Trace — `span : String -> Task -> Task` (arity 2);
+            // ── Ipe.Trace — `span : String -> Task -> Task` (arity 2);
             // `event : String -> Task ()` (1); `attr : String -> String -> Task ()` (2).
             Callee::Kernel(KernelFn::TraceSpan | KernelFn::TraceAttr) => Ok(2),
             Callee::Kernel(KernelFn::TraceEvent) => Ok(1),
-            // ── Std.Compression — all four `String -> Task String` (arity 1).
+            // ── Ipe.Compression — all four `String -> Task String` (arity 1).
             Callee::Kernel(
                 KernelFn::CompressionGzip
                 | KernelFn::CompressionGunzip
                 | KernelFn::CompressionZstdCompress
                 | KernelFn::CompressionZstdDecompress,
             ) => Ok(1),
-            // ── Std.Csv ────────────────────────────────────────────────
+            // ── Ipe.Csv ────────────────────────────────────────────────
             // parse/encode/parseStreamFromFile → 1; parseWithDelimiter/
             // encodeWithDelimiter → 2.
             Callee::Kernel(
@@ -14099,7 +14099,7 @@ impl<'a> Lowerer<'a> {
             Callee::Kernel(
                 KernelFn::CsvParseWithDelimiter | KernelFn::CsvEncodeWithDelimiter,
             ) => Ok(2),
-            // ── Std.Cache ──────────────────────────────────────────────
+            // ── Ipe.Cache ──────────────────────────────────────────────
             // newRaw/clear/size/stats take one arg (a `CacheCfg` or the `Int`
             // handle); get/remove take (handle, key); put takes (handle, key, val).
             Callee::Kernel(
@@ -14110,7 +14110,7 @@ impl<'a> Lowerer<'a> {
             ) => Ok(1),
             Callee::Kernel(KernelFn::CacheGet | KernelFn::CacheRemove) => Ok(2),
             Callee::Kernel(KernelFn::CachePut) => Ok(3),
-            // ── Std.Config ─────────────────────────────────────────────
+            // ── Ipe.Config ─────────────────────────────────────────────
             // Primitive decoders (string/int/float/bool) are arity-0 bare
             // decoders; nullable/list/succeed/fail take one arg; field/at/map/
             // andThen and the format/load entry points take two (the source
@@ -14137,7 +14137,7 @@ impl<'a> Lowerer<'a> {
                 | KernelFn::ConfigDecodeJson
                 | KernelFn::ConfigLoadFromFile,
             ) => Ok(2),
-            // Std.Email — `send : EmailProvider -> EmailMessage -> Task Error String`.
+            // Ipe.Email — `send : EmailProvider -> EmailMessage -> Task Error String`.
             Callee::Kernel(KernelFn::EmailSend) => Ok(2),
             Callee::Func(id) => {
                 let idx = usize::try_from(id.as_raw()).unwrap_or(usize::MAX);
@@ -14338,7 +14338,7 @@ impl<'a> Lowerer<'a> {
                     // `compare : comparable -> comparable -> Order`
                     ("Basics", "compare") => Ok(Callee::Kernel(KernelFn::BasicsCompare)),
                     // ── end Basics numerics ────────────────────────────
-                    // ── Error kernels (Sky.Core.Error — minimal `Error = String`
+                    // ── Error kernels (Ipe.Error — minimal `Error = String`
                     //    slice) ─────────────────────────────────────────
                     ("Error", "unexpected") => Ok(Callee::Kernel(KernelFn::ErrorUnexpected)),
                     ("Error", "invalidInput") => Ok(Callee::Kernel(KernelFn::ErrorInvalidInput)),
@@ -14361,7 +14361,7 @@ impl<'a> Lowerer<'a> {
                     ("Error", "withMessage") => Ok(Callee::Kernel(KernelFn::ErrorWithMessage)),
                     ("Error", "isRetryable") => Ok(Callee::Kernel(KernelFn::ErrorIsRetryable)),
                     ("Error", "withDetails") => Ok(Callee::Kernel(KernelFn::ErrorWithDetails)),
-                    // ── CssSafety kernels (Sky.Core.CssSafety — Std.Css leaf
+                    // ── CssSafety kernels (Ipe.CssSafety — Ipe.Css leaf
                     //    security kernels) ──────────────────────────────
                     ("CssSafety", "safeValue") => Ok(Callee::Kernel(KernelFn::CssSafetySafeValue)),
                     ("CssSafety", "safePropName") => {
@@ -14763,7 +14763,7 @@ impl<'a> Lowerer<'a> {
                     ("Sub", "every") => Ok(Callee::Kernel(KernelFn::SubEvery)),
                     ("Sub", "subscribeTopic") => Ok(Callee::Kernel(KernelFn::SubSubscribeTopic)),
                     ("Time", "every") => Ok(Callee::Kernel(KernelFn::TimeEvery)),
-                    // ── Sky.Http.Server kernels ─────────────────────────────
+                    // ── Ipe.Http.Server kernels ─────────────────────────────
                     ("Server", "get") => Ok(Callee::Kernel(KernelFn::ServerGet)),
                     ("Server", "post") => Ok(Callee::Kernel(KernelFn::ServerPost)),
                     ("Server", "put") => Ok(Callee::Kernel(KernelFn::ServerPut)),
@@ -14799,7 +14799,7 @@ impl<'a> Lowerer<'a> {
                     }
                     ("Middleware", "withCsrf") => Ok(Callee::Kernel(KernelFn::MiddlewareWithCsrf)),
                     ("RateLimit", "allow") => Ok(Callee::Kernel(KernelFn::RateLimitAllow)),
-                    // ── Std.Ui / Std.Html render kernels ─────────────────
+                    // ── Ipe.Ui / Ipe.Html render kernels ─────────────────
                     ("Ui", "layout") => Ok(Callee::Kernel(KernelFn::UiLayout)),
                     ("Ui", "layoutWith") => Ok(Callee::Kernel(KernelFn::UiLayoutWith)),
                     ("Html", "render") => Ok(Callee::Kernel(KernelFn::HtmlRender)),
@@ -14813,7 +14813,7 @@ impl<'a> Lowerer<'a> {
                     }
                     ("Html", "escapeAttr") => Ok(Callee::Kernel(KernelFn::HtmlEscapeAttr)),
                     ("Html", "attrToString") => Ok(Callee::Kernel(KernelFn::HtmlAttrToString)),
-                    // ── Std.Ui element builders ───────────────────────────
+                    // ── Ipe.Ui element builders ───────────────────────────
                     ("Ui", "none") => Ok(Callee::Kernel(KernelFn::UiNone)),
                     ("Ui", "text") => Ok(Callee::Kernel(KernelFn::UiText)),
                     ("Ui", "html") => Ok(Callee::Kernel(KernelFn::UiHtml)),
@@ -14828,14 +14828,14 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "button") => Ok(Callee::Kernel(KernelFn::UiButton)),
                     ("Ui", "link") => Ok(Callee::Kernel(KernelFn::UiLink)),
                     ("Ui", "image") => Ok(Callee::Kernel(KernelFn::UiImage)),
-                    // ── Std.Ui nearby attribute builders ───────────────────
+                    // ── Ipe.Ui nearby attribute builders ───────────────────
                     ("Ui", "above") => Ok(Callee::Kernel(KernelFn::UiAbove)),
                     ("Ui", "below") => Ok(Callee::Kernel(KernelFn::UiBelow)),
                     ("Ui", "onLeft") => Ok(Callee::Kernel(KernelFn::UiOnLeft)),
                     ("Ui", "onRight") => Ok(Callee::Kernel(KernelFn::UiOnRight)),
                     ("Ui", "inFront") => Ok(Callee::Kernel(KernelFn::UiInFront)),
                     ("Ui", "behind") => Ok(Callee::Kernel(KernelFn::UiBehind)),
-                    // ── Std.Ui attribute builders ─────────────────────────
+                    // ── Ipe.Ui attribute builders ─────────────────────────
                     ("Ui", "spacing") => Ok(Callee::Kernel(KernelFn::UiSpacing)),
                     ("Ui", "padding") => Ok(Callee::Kernel(KernelFn::UiPadding)),
                     ("Ui", "paddingXY") => Ok(Callee::Kernel(KernelFn::UiPaddingXY)),
@@ -14860,7 +14860,7 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "scrollbarX") => Ok(Callee::Kernel(KernelFn::UiScrollbarX)),
                     ("Ui", "scrollbarY") => Ok(Callee::Kernel(KernelFn::UiScrollbarY)),
                     ("Ui", "gridColumns") => Ok(Callee::Kernel(KernelFn::UiGridColumns)),
-                    // ── Std.Ui Length builders ────────────────────────────
+                    // ── Ipe.Ui Length builders ────────────────────────────
                     ("Ui", "px") => Ok(Callee::Kernel(KernelFn::UiPx)),
                     ("Ui", "fill") => Ok(Callee::Kernel(KernelFn::UiFill)),
                     ("Ui", "content") => Ok(Callee::Kernel(KernelFn::UiContent)),
@@ -14870,7 +14870,7 @@ impl<'a> Lowerer<'a> {
                     ("Ui", "vw") => Ok(Callee::Kernel(KernelFn::UiVw)),
                     ("Ui", "minimum") => Ok(Callee::Kernel(KernelFn::UiMinimum)),
                     ("Ui", "maximum") => Ok(Callee::Kernel(KernelFn::UiMaximum)),
-                    // ── Std.Ui Color builders ─────────────────────────────
+                    // ── Ipe.Ui Color builders ─────────────────────────────
                     ("Ui", "rgb") => Ok(Callee::Kernel(KernelFn::UiRgb)),
                     ("Ui", "rgba") => Ok(Callee::Kernel(KernelFn::UiRgba)),
                     ("Ui", "white") => Ok(Callee::Kernel(KernelFn::UiWhite)),
@@ -14921,7 +14921,7 @@ impl<'a> Lowerer<'a> {
                     ("Html", "p") => Ok(Callee::Kernel(KernelFn::HtmlP)),
                     ("Html", "input") => Ok(Callee::Kernel(KernelFn::HtmlInput)),
                     ("Html", "img") => Ok(Callee::Kernel(KernelFn::HtmlImg)),
-                    // ── Std.Html element builders (canonical tag →
+                    // ── Ipe.Html element builders (canonical tag →
                     //    dedicated variant; the emit arm bakes the wire tag via
                     //    `html_element_tag`). Replaces the old wrong-render fold
                     //    (nav→<p>, h1→<p>, br→<img>, header→<div>, link→<a>). ──
@@ -14991,7 +14991,7 @@ impl<'a> Lowerer<'a> {
                     ("Html", "source") => Ok(Callee::Kernel(KernelFn::HtmlSource)),
                     ("Html", "track") => Ok(Callee::Kernel(KernelFn::HtmlTrack)),
                     ("Html", "wbr") => Ok(Callee::Kernel(KernelFn::HtmlWbr)),
-                    // ── Std.Html.Attributes builders (legacy arm; the
+                    // ── Ipe.Html.Attributes builders (legacy arm; the
                     //    id-fast-path handles these in practice, this arm keeps
                     //    decl() ⇔ legacy parity per `decl_equiv_legacy_match`). ──
                     ("Attr", "class") => Ok(Callee::Kernel(KernelFn::HtmlAttrClass)),
@@ -15017,8 +15017,8 @@ impl<'a> Lowerer<'a> {
                     ("Attr", "attribute") => Ok(Callee::Kernel(KernelFn::HtmlAttribute)),
                     ("Attr", "boolAttribute") => Ok(Callee::Kernel(KernelFn::HtmlBoolAttribute)),
                     ("Attr", "noAttr") => Ok(Callee::Kernel(KernelFn::HtmlNoAttr)),
-                    // ── event-attribute builders (Std.Ui qualifier) ──
-                    // `Ui.onClick` etc. produce the `Std.Ui.Attribute` variant.
+                    // ── event-attribute builders (Ipe.Ui qualifier) ──
+                    // `Ui.onClick` etc. produce the `Ipe.Ui.Attribute` variant.
                     // NB: the primary resolution path is the id fast-path above
                     // (env.rs threads the pre-resolved kernel id); these string
                     // arms are the legacy fallback for an `id = None` VarKernel.
@@ -15037,9 +15037,9 @@ impl<'a> Lowerer<'a> {
                     }
                     ("Ui", "onSubmit") => Ok(Callee::Kernel(KernelFn::UiOnSubmit)),
                     ("Ui", "onFile") => Ok(Callee::Kernel(KernelFn::UiOnFile)),
-                    // ── Std.Html.Events builders (Event qualifier) — produce
-                    // the `Std.Html.Attribute` variant so they compose with the
-                    // Std.Html element + attribute builders. Same fallback note
+                    // ── Ipe.Html.Events builders (Event qualifier) — produce
+                    // the `Ipe.Html.Attribute` variant so they compose with the
+                    // Ipe.Html element + attribute builders. Same fallback note
                     // as the `Ui` arms above (id fast-path is primary).
                     ("Event", "onClick" | "onMsg") => Ok(Callee::Kernel(KernelFn::HtmlOnClick)),
                     ("Event", "onFocus") => Ok(Callee::Kernel(KernelFn::HtmlOnFocus)),
@@ -15052,7 +15052,7 @@ impl<'a> Lowerer<'a> {
                     ("Event", "onKeyDown") => Ok(Callee::Kernel(KernelFn::HtmlOnKeyDown)),
                     ("Event", "onKeyUp") => Ok(Callee::Kernel(KernelFn::HtmlOnKeyUp)),
                     ("Event", "onBool") => Ok(Callee::Kernel(KernelFn::HtmlOnBool)),
-                    // ── extended Std.Ui attribute builders ────────
+                    // ── extended Ipe.Ui attribute builders ────────
                     ("Ui", "square") => Ok(Callee::Kernel(KernelFn::UiSquare)),
                     ("Ui", "widescreen") => Ok(Callee::Kernel(KernelFn::UiWidescreen)),
                     ("Ui", "cinemascope") => Ok(Callee::Kernel(KernelFn::UiCinemascope)),
@@ -15126,7 +15126,7 @@ impl<'a> Lowerer<'a> {
                     ("Font", "hoverSize") => Ok(Callee::Kernel(KernelFn::FontHoverSize)),
                     ("Attr", "tabindex") => Ok(Callee::Kernel(KernelFn::HtmlAttrTabindex)),
                     ("Attr", "rows") => Ok(Callee::Kernel(KernelFn::HtmlAttrRows)),
-                    // ── Std.Ui.Region sub-module ───────────────────────
+                    // ── Ipe.Ui.Region sub-module ───────────────────────
                     ("Region", "mainContent") => Ok(Callee::Kernel(KernelFn::RegionMainContent)),
                     ("Region", "navigation") => Ok(Callee::Kernel(KernelFn::RegionNavigation)),
                     ("Region", "footer") => Ok(Callee::Kernel(KernelFn::RegionFooter)),
@@ -15152,7 +15152,7 @@ impl<'a> Lowerer<'a> {
                     }
                     ("Ui", "descHeading") => Ok(Callee::Kernel(KernelFn::UiDescHeading)),
                     ("Ui", "descLabel") => Ok(Callee::Kernel(KernelFn::UiDescLabel)),
-                    // ── Std.Ui.Input ───────────────────────────────────
+                    // ── Ipe.Ui.Input ───────────────────────────────────
                     ("Input", "labelAbove") => Ok(Callee::Kernel(KernelFn::InputLabelAbove)),
                     ("Input", "labelBelow") => Ok(Callee::Kernel(KernelFn::InputLabelBelow)),
                     ("Input", "labelLeft") => Ok(Callee::Kernel(KernelFn::InputLabelLeft)),
@@ -15173,28 +15173,28 @@ impl<'a> Lowerer<'a> {
                     ("Input", "option") => Ok(Callee::Kernel(KernelFn::InputOption)),
                     ("Input", "radio") => Ok(Callee::Kernel(KernelFn::InputRadio)),
                     ("Input", "radioRow") => Ok(Callee::Kernel(KernelFn::InputRadioRow)),
-                    // ── Std.Ui.Lazy sub-module ──────────────────────────
+                    // ── Ipe.Ui.Lazy sub-module ──────────────────────────
                     ("Lazy", "lazy") => Ok(Callee::Kernel(KernelFn::LazyLazy)),
                     ("Lazy", "lazy2") => Ok(Callee::Kernel(KernelFn::LazyLazy2)),
                     ("Lazy", "lazy3") => Ok(Callee::Kernel(KernelFn::LazyLazy3)),
                     ("Lazy", "lazy4") => Ok(Callee::Kernel(KernelFn::LazyLazy4)),
                     ("Lazy", "lazy5") => Ok(Callee::Kernel(KernelFn::LazyLazy5)),
-                    // ── Std.Ui.Keyed ──────────────────────────────────────────
+                    // ── Ipe.Ui.Keyed ──────────────────────────────────────────
                     ("Keyed", "column") => Ok(Callee::Kernel(KernelFn::KeyedColumn)),
                     ("Keyed", "row") => Ok(Callee::Kernel(KernelFn::KeyedRow)),
-                    // ── Std.Live / Sky.Live app-entry kernels ─────────────
+                    // ── Ipe.Live / Ipe.Live app-entry kernels ─────────────
                     ("Live", "app") => Ok(Callee::Kernel(KernelFn::LiveApp)),
                     ("Live", "appRouted") => Ok(Callee::Kernel(KernelFn::LiveAppRouted)),
                     ("Live", "route") => Ok(Callee::Kernel(KernelFn::LiveRoute)),
                     ("Live", "renderStatic") => Ok(Callee::Kernel(KernelFn::LiveRenderStatic)),
-                    // ── Std.Tui / Sky.Tui app-entry kernels ──────────────
+                    // ── Ipe.Tui / Ipe.Tui app-entry kernels ──────────────
                     ("Tui", "program") => Ok(Callee::Kernel(KernelFn::TuiProgram)),
                     ("Tui", "app") => Ok(Callee::Kernel(KernelFn::TuiApp)),
-                    // ── Std.Webview / Sky.Webview app-entry kernel ────────
+                    // ── Ipe.Webview / Ipe.Webview app-entry kernel ────────
                     ("Webview", "app") => Ok(Callee::Kernel(KernelFn::WebviewApp)),
-                    // ── Std.Cli / Sky.Cli app-entry kernel ──────────────
+                    // ── Ipe.Cli / Ipe.Cli app-entry kernel ──────────────
                     ("Cli", "program") => Ok(Callee::Kernel(KernelFn::CliProgram)),
-                    // ── Std.Auth / Sky.Auth — auth helpers ──────────────
+                    // ── Ipe.Auth / Ipe.Auth — auth helpers ──────────────
                     ("Auth", "hashPassword") => Ok(Callee::Kernel(KernelFn::AuthHashPassword)),
                     ("Auth", "hashPasswordCost") => {
                         Ok(Callee::Kernel(KernelFn::AuthHashPasswordCost))
@@ -15208,21 +15208,21 @@ impl<'a> Lowerer<'a> {
                     ("Auth", "register") => Ok(Callee::Kernel(KernelFn::AuthRegister)),
                     ("Auth", "login") => Ok(Callee::Kernel(KernelFn::AuthLogin)),
                     ("Auth", "setRole") => Ok(Callee::Kernel(KernelFn::AuthSetRole)),
-                    // ── Sky.Http.Server.Stream — server-side streaming ───
+                    // ── Ipe.Http.Server.Stream — server-side streaming ───
                     ("Stream", "stream") => Ok(Callee::Kernel(KernelFn::StreamStream)),
                     ("Stream", "emit") => Ok(Callee::Kernel(KernelFn::StreamEmit)),
                     ("Stream", "finish") => Ok(Callee::Kernel(KernelFn::StreamFinish)),
                     ("Stream", "withContentType") => {
                         Ok(Callee::Kernel(KernelFn::StreamWithContentType))
                     }
-                    // ── Sky.Core.Http.Stream — client-side streaming ─────
+                    // ── Ipe.Http.Stream — client-side streaming ─────
                     ("HttpStream", "open") => Ok(Callee::Kernel(KernelFn::HttpStreamOpen)),
                     ("HttpStream", "forEachChunk") => {
                         Ok(Callee::Kernel(KernelFn::HttpStreamForEachChunk))
                     }
                     ("HttpStream", "close") => Ok(Callee::Kernel(KernelFn::HttpStreamClose)),
                     ("HttpStream", "chunks") => Ok(Callee::Kernel(KernelFn::HttpStreamChunks)),
-                    // ── Sky.Http.Server.WebSocket (12 kernels) ─────────────
+                    // ── Ipe.Http.Server.WebSocket (12 kernels) ─────────────
                     ("Ws", "defaultCfg") => Ok(Callee::Kernel(KernelFn::WsDefaultCfg)),
                     ("Ws", "withOnConnect") => Ok(Callee::Kernel(KernelFn::WsWithOnConnect)),
                     ("Ws", "withOnMessage") => Ok(Callee::Kernel(KernelFn::WsWithOnMessage)),
@@ -15241,7 +15241,7 @@ impl<'a> Lowerer<'a> {
                     }
                     ("Ws", "broadcast") => Ok(Callee::Kernel(KernelFn::WsBroadcast)),
                     ("Ws", "closeClient") => Ok(Callee::Kernel(KernelFn::WsCloseClient)),
-                    // ── Std.Decimal ───────────────────────────────────────────
+                    // ── Ipe.Decimal ───────────────────────────────────────────
                     ("Decimal", "zero") => Ok(Callee::Kernel(KernelFn::DecZero)),
                     ("Decimal", "one") => Ok(Callee::Kernel(KernelFn::DecOne)),
                     ("Decimal", "oneHundred") => Ok(Callee::Kernel(KernelFn::DecOneHundred)),
@@ -15628,7 +15628,7 @@ impl<'a> Lowerer<'a> {
         // `if __sgN.as_str() == "lit"` match guard — a by-value destructure whose
         // string equality is checked in the guard, sound for a variable scrutinee
         // exactly as it is for a literal one. This is what lets
-        // `Std.Ui.Transform.propsToCss`'s `case pair of ( "transform", v ) -> …`
+        // `Ipe.Ui.Transform.propsToCss`'s `case pair of ( "transform", v ) -> …`
         // lower (the real-world payload; mirrors the reference's `renderPatGuarded`).
         //
         // A LIST / CONS column (`PList` / `PCons`) still REQUIRES the coerced-column
@@ -16105,7 +16105,7 @@ impl<'a> Lowerer<'a> {
             // non-nested time, and through any number of `let`-alias hops —
             // into a kernel-call argument whose runtime consumer itself
             // requires `Send + Sync` (`Ui.onSubmit` / `Ui.onInput` /
-            // `Std.Html.Events.on*` / `Stream.stream`, see
+            // `Ipe.Html.Events.on*` / `Stream.stream`, see
             // `KernelFn::requires_sync_capture`) has the same soundness gap:
             // the emit-site "re-wrap in a freshly-declared closure" technique
             // only launders the missing `+Sync` bound when the payload
@@ -17046,7 +17046,7 @@ fn collect_ir_generic_syms(ty: &IrType, out: &mut BTreeSet<Symbol>) {
         | IrType::WebSocketClientCfg
         | IrType::CacheStats
         | IrType::CsvDoc
-        // Std.Email records + provider ADT are non-parametric — no generic syms.
+        // Ipe.Email records + provider ADT are non-parametric — no generic syms.
         | IrType::EmailMessage
         | IrType::EmailAttachment
         | IrType::EmailSesConfig
@@ -17225,33 +17225,33 @@ mod tests {
     const REGISTRY_ONLY_ALLOWLIST: &[KernelFn] = &[
         KernelFn::PubSubPublish,
         KernelFn::PubSubPublishNoEcho,
-        // Sky.Core.Regex
+        // Ipe.Regex
         KernelFn::RegexMatch,
         KernelFn::RegexFind,
         KernelFn::RegexFindAll,
         KernelFn::RegexReplace,
         KernelFn::RegexSplit,
-        // Sky.Core.Path
+        // Ipe.Path
         KernelFn::PathBase,
         KernelFn::PathDir,
         KernelFn::PathExt,
         KernelFn::PathIsAbsolute,
-        // Std.Trace
+        // Ipe.Trace
         KernelFn::TraceSpan,
         KernelFn::TraceEvent,
         KernelFn::TraceAttr,
-        // Std.Compression
+        // Ipe.Compression
         KernelFn::CompressionGzip,
         KernelFn::CompressionGunzip,
         KernelFn::CompressionZstdCompress,
         KernelFn::CompressionZstdDecompress,
-        // Std.Csv
+        // Ipe.Csv
         KernelFn::CsvParse,
         KernelFn::CsvParseWithDelimiter,
         KernelFn::CsvEncode,
         KernelFn::CsvEncodeWithDelimiter,
         KernelFn::CsvParseStreamFromFile,
-        // Std.Cache
+        // Ipe.Cache
         KernelFn::CacheNewRaw,
         KernelFn::CacheGet,
         KernelFn::CachePut,
@@ -17259,7 +17259,7 @@ mod tests {
         KernelFn::CacheClear,
         KernelFn::CacheSize,
         KernelFn::CacheStats,
-        // Std.Config
+        // Ipe.Config
         KernelFn::ConfigString,
         KernelFn::ConfigInt,
         KernelFn::ConfigFloat,
@@ -17276,7 +17276,7 @@ mod tests {
         KernelFn::ConfigDecodeYaml,
         KernelFn::ConfigDecodeJson,
         KernelFn::ConfigLoadFromFile,
-        // Sky.Core.WebSocket — outbound client. Resolved exclusively through the
+        // Ipe.WebSocket — outbound client. Resolved exclusively through the
         // `Ffi.kernel "WebSocket_*"` / `"Sub_subscribeWebSocket"` alias fast-path
         // (the `WebSocket` qualifier is a compiled-source module name, never a
         // legacy `QUALIFIERS` entry), so no legacy `lower_callee` arm exists.
@@ -17287,7 +17287,7 @@ mod tests {
         KernelFn::WebSocketClose,
         KernelFn::WebSocketCloseWithCode,
         KernelFn::SubSubscribeWebSocket,
-        // Std.Email
+        // Ipe.Email
         KernelFn::EmailSend,
     ];
 

@@ -1,7 +1,7 @@
 module Main exposing (main)
 
--- skynews — a HackerNews/Reddit-style demo built with Sky.Live and
--- Std.Ui. Demonstrates the layout DSL on a real interactive shape:
+-- skynews — a HackerNews/Reddit-style demo built with Ipe.Live and
+-- Ipe.Ui. Demonstrates the layout DSL on a real interactive shape:
 --
 --   - Posts list (homepage) with up-vote per post
 --   - Post detail page with nested comment thread (parent/child
@@ -11,27 +11,27 @@ module Main exposing (main)
 --   - Basic in-memory auth (sign in with any username/password
 --     to exercise the form pattern; no DB)
 --
--- All state lives in the Sky.Live session model — no DB, no
+-- All state lives in the Ipe.Live session model — no DB, no
 -- external services. This keeps the example focused on the view
--- layer (Std.Ui) and the TEA wiring (init/update/view), not on
+-- layer (Ipe.Ui) and the TEA wiring (init/update/view), not on
 -- persistence or auth correctness.
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.List as List
-import Sky.Core.Maybe as Maybe
-import Sky.Core.String as String
-import Std.Cmd as Cmd
-import Std.Sub as Sub
-import Std.Live exposing (app, route)
-import Std.Ui as Ui
-import Std.Ui exposing (Element)
-import Std.Ui.Background as Background
-import Std.Ui.Border as Border
-import Std.Ui.Font as Font
-import Std.Ui.Region as Region
-import Std.Ui.Input as Input
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
+import Ipe.Maybe as Maybe
+import Ipe.String as String
+import Ipe.Cmd as Cmd
+import Ipe.Sub as Sub
+import Ipe.Live exposing (app, route)
+import Ipe.Ui as Ui
+import Ipe.Ui exposing (Element)
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Font as Font
+import Ipe.Ui.Region as Region
+import Ipe.Ui.Input as Input
 
 
--- Local typed-anchor for Std.Ui's `none` — Sky's canonicaliser
+-- Local typed-anchor for Ipe.Ui's `none` — Sky's canonicaliser
 -- currently strips the type parameter when re-exporting it
 -- cross-module, so we re-define it locally.
 noneEl : Element msg
@@ -86,7 +86,7 @@ init _req =
         seedPosts =
             [ Post
                   1
-                  "Show SN: Sky.Ui — a typed elm-ui port for Sky.Live"
+                  "Show SN: Ipe.Ui — a typed elm-ui port for Ipe.Live"
                   "https://github.com/anzellai/sky"
                   "alice"
                   142
@@ -133,7 +133,7 @@ init _req =
                   1
                   101
                   "alice"
-                  "Yes, Std.Ui.Keyed handles that via the sky-key attribute."
+                  "Yes, Ipe.Ui.Keyed handles that via the sky-key attribute."
                   9
             , Comment
                   103
@@ -755,7 +755,7 @@ pageFooter =
         , Font.color (Ui.rgb 130 130 130)
         , Region.footer
         ]
-        (Ui.text "skynews — Sky.Live + Std.Ui demo, see examples/19-skynews/")
+        (Ui.text "skynews — Ipe.Live + Ipe.Ui demo, see examples/19-skynews/")
 
 
 -- ─── App wiring ─────────────────────────────────────────────────

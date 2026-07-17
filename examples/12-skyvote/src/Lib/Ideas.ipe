@@ -9,14 +9,14 @@ module Lib.Ideas exposing
     , updateStatus
     )
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Maybe exposing (..)
-import Sky.Core.List as List
-import Sky.Core.String as String
-import Std.Log exposing (println)
-import Sky.Core.Crypto as Crypto
+import Ipe.Prelude exposing (..)
+import Ipe.Maybe exposing (..)
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Log exposing (println)
+import Ipe.Crypto as Crypto
 import Lib.Db as Db
-import Sky.Core.Error as Error exposing (Error)
+import Ipe.Error as Error exposing (Error)
 
 
 createIdea : String -> String -> String -> String -> Result Error String

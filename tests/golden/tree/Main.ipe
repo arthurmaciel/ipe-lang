@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- A directly self-recursive ADT: `Node` carries two `Tree` fields, which the
 -- backend boxes so the Rust enum stays finite-sized, balanced by `Box::new` at

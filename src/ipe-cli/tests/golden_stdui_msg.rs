@@ -1,4 +1,4 @@
-//! Std.Ui type-annotation smoke test —
+//! Ipe.Ui type-annotation smoke test —
 //! `Ui.layout` inside a function annotated `Msg -> Html Msg` must produce
 //! well-typed emitted Rust (no `E0308` from cargo).
 //!

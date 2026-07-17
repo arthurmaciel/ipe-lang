@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- POSITIVE CONTROL (AUD-12): x has only a Number obligation (no Append).
 -- Must still default to Int after the fix.

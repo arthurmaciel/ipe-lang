@@ -1,15 +1,15 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.String as String
-import Std.Html exposing (..)
-import Std.Html.Attributes exposing (..)
-import Std.Css exposing (..)
-import Std.Live exposing (app, route)
-import Std.Html.Events exposing (onClick)
-import Std.Cmd as Cmd
-import Std.Sub as Sub
-import Std.Time as Time
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.Html exposing (..)
+import Ipe.Html.Attributes exposing (..)
+import Ipe.Css exposing (..)
+import Ipe.Live exposing (app, route)
+import Ipe.Html.Events exposing (onClick)
+import Ipe.Cmd as Cmd
+import Ipe.Sub as Sub
+import Ipe.Time as Time
 
 -- ======================================================
 -- MSG
@@ -128,7 +128,7 @@ viewPage model =
 viewCounter model =
     div
         [class "counter"]
-        [ h1 [] [text "Sky.Live Counter"]
+        [ h1 [] [text "Ipe.Live Counter"]
         , div
               [class "count"]
               [span [class "count-value"] [text (String.fromInt model.count)]]
@@ -150,11 +150,11 @@ viewCounter model =
 viewAbout =
     div
         [class "about"]
-        [ h1 [] [text "About Sky.Live"]
+        [ h1 [] [text "About Ipe.Live"]
         , p
               []
               [text
-                  "This is a Sky.Live application -- an HTTP-first, server-driven UI."]
+                  "This is a Ipe.Live application -- an HTTP-first, server-driven UI."]
         , p
               []
               [text

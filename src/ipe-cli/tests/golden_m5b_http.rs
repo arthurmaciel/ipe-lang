@@ -1,4 +1,4 @@
-//! `Sky.Core.Http` gate —
+//! `Ipe.Http` gate —
 //! `Http.parseQuery` (pure), `defaultRequest` + `with*` builder chain (pure),
 //! and `HttpResponse` record literal / field access (pure struct path).
 //!

@@ -1,5 +1,5 @@
 //! Multi-module split pilot fixture: a deliberately MULTI-MODULE program
-//! (`Main` + `Lib`) that ALSO uses `Std.Db`.
+//! (`Main` + `Lib`) that ALSO uses `Ipe.Db`.
 //!
 //! This is the ONE fixture that exercises the multi-module split AND the
 //! `SqlValue`/`SqlField` Spine-routing (design doc §2.2) together. `emit_program`
@@ -145,7 +145,7 @@ fn emits_split_spine_and_per_module_files() {
 }
 
 /// Full spine (gated on `IPE_E2E=1`): compile, build the emitted Cargo
-/// project, and run it. Proves THE SEAL — the multi-module + `Std.Db` emitted
+/// project, and run it. Proves THE SEAL — the multi-module + `Ipe.Db` emitted
 /// project actually `cargo build`s and runs. The two rows seeded in
 /// `Lib.seedAndCount` are counted and printed as `seeded:2`.
 #[test]

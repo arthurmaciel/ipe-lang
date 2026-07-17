@@ -1,7 +1,7 @@
 module Main exposing (main, eqShow)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 eqShow : a -> a -> String
 eqShow x y =

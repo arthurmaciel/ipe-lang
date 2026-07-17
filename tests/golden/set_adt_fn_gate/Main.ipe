@@ -6,7 +6,7 @@ module Main exposing (main)
 -- at `Color` is rejected at type-check (IPE-T0014) rather than emitting an
 -- unbounded `singleton_set::<T>` that `cargo` cannot build.
 
-import Sky.Core.Set as Set
+import Ipe.Set as Set
 
 
 type Color

@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- The two irrefutable LET-destructure examples from M3b-2, each evaluating to 42:
 --

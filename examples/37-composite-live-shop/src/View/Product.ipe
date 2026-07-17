@@ -1,13 +1,13 @@
 module View.Product exposing (productView)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.ToString as ToString
-import Std.Ui as Ui
-import Std.Ui exposing (Element)
-import Std.Ui.Background as Background
-import Std.Ui.Border as Border
-import Std.Ui.Font as Font
-import Std.Ui.Region as Region
+import Ipe.Prelude exposing (..)
+import Ipe.ToString as ToString
+import Ipe.Ui as Ui
+import Ipe.Ui exposing (Element)
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Font as Font
+import Ipe.Ui.Region as Region
 import State exposing (..)
 import View.Common as Common
 

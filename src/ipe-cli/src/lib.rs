@@ -115,7 +115,7 @@ pub fn build(entry: &Path, out_dir: &Path, runtime_dir: &Path) -> Result<(), Cli
     // graph core's N0023 (path mismatch) can never fire for a single-file build
     // (expected == declared by construction), while still routing a single-file
     // program through the SAME injection-aware pipeline as a project — so a
-    // single file importing `Std.Palette` injects the compiled source instead of
+    // single file importing `Ipe.Palette` injects the compiled source instead of
     // 404-ing (design §2.6). For a program with no compiled-source import the
     // core is emit-byte-identical to a plain single-module path (link over one
     // module is the identity — regression-covered by the golden suite).
@@ -470,7 +470,7 @@ fn compile_modules_observed(
 ///
 /// The trust tag: `EmbeddedStdlib` IFF the module path is in `injected` (the
 /// driver's unforgeable record from [`project::inject_compiled_std_closure`]).
-/// A user file squatting on `Std.Foo` is NOT in `injected` (injection skipped
+/// A user file squatting on `Ipe.Foo` is NOT in `injected` (injection skipped
 /// it on the pre-existing-key guard), so it is `User` and stays
 /// IPE-N0025-rejected.
 #[must_use]
@@ -2085,10 +2085,10 @@ mod tests {
     fn panything_wildcard_lambda_compiles_without_polymorphism_error() {
         const SRC: &str = "\
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Task as Task
-import Sky.Core.Error as Error exposing (Error)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Task as Task
+import Ipe.Error as Error exposing (Error)
+import Ipe.Log exposing (println)
 
 main =
     let
@@ -2146,13 +2146,13 @@ main =
     /// `ipe_main` definition site.
     #[test]
     fn task_run_main_emits_skytask_not_skyresult() {
-        // A minimal Sky.Cli-style program: main = task |> Task.run
+        // A minimal Ipe.Cli-style program: main = task |> Task.run
         // A shape prone to E0308 in the emitted Rust.
         const SRC: &str = "\
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Task as Task
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Task as Task
+import Ipe.Log exposing (println)
 
 main =
     println \"hello from task run\" |> Task.run

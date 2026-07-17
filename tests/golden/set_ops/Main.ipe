@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-import Sky.Core.Set as Set
+import Ipe.Set as Set
 
 main =
     let

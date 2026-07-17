@@ -1,4 +1,4 @@
-//! `Std.Ui.Lazy` emit arms, LazyLazy..LazyLazy5 end to end.
+//! `Ipe.Ui.Lazy` emit arms, LazyLazy..LazyLazy5 end to end.
 //!
 //! Regression for the emit arms: the Lazy kernels are registered in
 //! naming/constrain/lower, and the `KernelFn::LazyLazy`..`LazyLazy5` arms in

@@ -1,16 +1,16 @@
 module Main exposing (main)
 
-import Std.Html as Html
-import Std.Html.Events as Event
+import Ipe.Html as Html
+import Ipe.Html.Events as Event
 
 
--- #107 NEGATIVE sentinel (issue #45): `Std.Html.Events.onInput` expects
+-- #107 NEGATIVE sentinel (issue #45): `Ipe.Html.Events.onInput` expects
 -- `(String -> msg) -> Attribute msg`. Passing a `Bool -> msg` closure is a type
 -- mismatch that skyc MUST reject with IPE-T0001 — never exit 0 and defer the
 -- error to cargo.
 --
--- Hosted on a Std.Html element (`Html.input`): post-#107 `Std.Html.Events`
--- produces `Std.Html.Attribute`, which composes with Std.Html elements (pre-#107
+-- Hosted on a Ipe.Html element (`Html.input`): post-#107 `Ipe.Html.Events`
+-- produces `Ipe.Html.Attribute`, which composes with Ipe.Html elements (pre-#107
 -- this used `Ui.el`, relying on the removed Event→Ui conflation). The rejection
 -- is on the handler payload (`Bool` vs `String`), independent of the host.
 

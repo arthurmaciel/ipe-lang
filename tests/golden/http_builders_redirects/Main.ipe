@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-import Sky.Core.Http as Http
+import Ipe.Http as Http
 
 
 -- #33 §6.2 — the three Go-parity builders added on top of the M5b set:

@@ -1,17 +1,17 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Task as Task
-import Sky.Core.String as String
-import Sky.Core.Error exposing (Error)
-import Sky.Http.Server as Server
-import Sky.Http.Server exposing (Request, Response)
-import Sky.Http.Server.WebSocket as Ws
-import Std.Log as Log
+import Ipe.Prelude exposing (..)
+import Ipe.Task as Task
+import Ipe.String as String
+import Ipe.Error exposing (Error)
+import Ipe.Http.Server as Server
+import Ipe.Http.Server exposing (Request, Response)
+import Ipe.Http.Server.WebSocket as Ws
+import Ipe.Log as Log
 
 
 -- | WebSocket echo demo — the canonical pattern for v0.15.46
--- `Sky.Http.Server.WebSocket`.
+-- `Ipe.Http.Server.WebSocket`.
 --
 -- Architecture:
 --

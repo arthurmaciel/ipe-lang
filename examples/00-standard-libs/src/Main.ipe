@@ -6,24 +6,24 @@ module Main exposing (main, tests)
 -- helper. Grouped by module via Test.suite. `main` exits 0 iff
 -- every assertion passes.
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.String as String
-import Sky.Core.List as List
-import Sky.Core.Dict as Dict
-import Sky.Core.Maybe as Maybe
-import Sky.Core.Result as Result
-import Sky.Core.Math as Math
-import Sky.Core.Crypto as Crypto
-import Sky.Core.Task as Task
-import Sky.Core.Jwt as Jwt
-import Sky.Core.Encoding as Encoding
-import Sky.Core.Json.Encode as JsonEnc
-import Sky.Core.Json.Decode as JsonDec
-import Sky.Core.Error as Error exposing (Error)
-import Std.Decimal as Dec exposing (Decimal)
-import Std.Money as Money exposing (Money, Currency)
-import Std.Time as Stime
-import Sky.Test as Test exposing (Test)
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.List as List
+import Ipe.Dict as Dict
+import Ipe.Maybe as Maybe
+import Ipe.Result as Result
+import Ipe.Math as Math
+import Ipe.Crypto as Crypto
+import Ipe.Task as Task
+import Ipe.Jwt as Jwt
+import Ipe.Encoding as Encoding
+import Ipe.Json.Encode as JsonEnc
+import Ipe.Json.Decode as JsonDec
+import Ipe.Error as Error exposing (Error)
+import Ipe.Decimal as Dec exposing (Decimal)
+import Ipe.Money as Money exposing (Money, Currency)
+import Ipe.Time as Stime
+import Ipe.Test as Test exposing (Test)
 
 
 main = Test.runMain tests
@@ -565,11 +565,11 @@ jsonSuite =
         ]
 
 
--- ─── Std.Decimal ───────────────────────────────────────────────────
+-- ─── Ipe.Decimal ───────────────────────────────────────────────────
 
 decimalSuite : Test
 decimalSuite =
-    Test.suite "Std.Decimal"
+    Test.suite "Ipe.Decimal"
         [ Test.test "fromString accepts decimal literal" (\_ ->
             Test.ok (Dec.fromString "3.14"))
         , Test.test "fromString rejects junk" (\_ ->
@@ -627,11 +627,11 @@ decOrZero s =
     Result.withDefault Dec.zero (Dec.fromString s)
 
 
--- ─── Std.Money ─────────────────────────────────────────────────────
+-- ─── Ipe.Money ─────────────────────────────────────────────────────
 
 moneySuite : Test
 moneySuite =
-    Test.suite "Std.Money"
+    Test.suite "Ipe.Money"
         [ Test.test "fromMajor builds $100" (\_ ->
             let
                 m = Money.fromMajor Money.USD 100
@@ -688,11 +688,11 @@ moneySuite =
         ]
 
 
--- ─── Std.Time ──────────────────────────────────────────────────────
+-- ─── Ipe.Time ──────────────────────────────────────────────────────
 
 timeSuite : Test
 timeSuite =
-    Test.suite "Std.Time"
+    Test.suite "Ipe.Time"
         [ Test.test "isLeapYear 2024" (\_ ->
             Test.isTrue (Stime.isLeapYear 2024))
         , Test.test "isLeapYear 2023" (\_ ->

@@ -1,9 +1,9 @@
 module Page.Submit exposing (viewSubmit)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Html exposing (..)
-import Std.Html.Attributes exposing (..)
-import Std.Html.Events exposing (onClick, onInput, onSubmit, onChange)
+import Ipe.Prelude exposing (..)
+import Ipe.Html exposing (..)
+import Ipe.Html.Attributes exposing (..)
+import Ipe.Html.Events exposing (onClick, onInput, onSubmit, onChange)
 import State exposing (..)
 import Ui.Layout as Layout
 

@@ -1,14 +1,14 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.String as String
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.Log exposing (println)
 
 
 -- #182 — a VARIABLE (non-literal) tuple scrutinee with a STRING-LITERAL column.
--- This is the exact shape `Std.Ui.Transform.propsToCss` uses
+-- This is the exact shape `Ipe.Ui.Transform.propsToCss` uses
 -- (`case pair of ( "transform", v ) -> …`), the last blocker for
--- `Std.Ui.Transform` / `Std.Ui.Animation` / `26-ui-showcase`.
+-- `Ipe.Ui.Transform` / `Ipe.Ui.Animation` / `26-ui-showcase`.
 --
 -- Before #182 the lowerer fail-closed any coercing column (`PStr` / `PList` /
 -- `PCons`) on the by-value whole-tuple path to IPE-L0115. Now a `PStr` column

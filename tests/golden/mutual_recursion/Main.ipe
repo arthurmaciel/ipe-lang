@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- Mutually-recursive ADTs: each enum's payload field is the *other* enum, so the
 -- type-size cycle Even -> Odd -> Even is closed only through enum-payload edges.

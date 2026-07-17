@@ -179,8 +179,8 @@ fn annotation_rigid_plus_literal_still_fails() {
 /// IPE-T0001 from the monomorphic `Error -> String` scheme being unified
 /// against a rigid annotation var `a` in `equal : a -> a -> TestResult`.
 ///
-/// After the fix, the build advances past Sky.Test — if a different error fires
-/// (the next queue blocker), we verify it is NOT the Sky.Test:74 error.
+/// After the fix, the build advances past Ipe.Test — if a different error fires
+/// (the next queue blocker), we verify it is NOT the Ipe.Test:74 error.
 #[test]
 fn standard_libs_errortostring_blocker_gone() {
     let root = repo_root();
@@ -202,7 +202,7 @@ fn standard_libs_errortostring_blocker_gone() {
             let msg = format!("{diag:?}");
             assert!(
                 !msg.contains("Test.ipe") || !msg.contains("errorToString expected"),
-                "original Sky.Test:74 errorToString blocker must be gone; got: {msg}"
+                "original Ipe.Test:74 errorToString blocker must be gone; got: {msg}"
             );
             // There may be a subsequent blocker (e.g. Jwt type mismatch) — that is
             // acceptable; only the original errorToString error must not recur.
@@ -212,7 +212,7 @@ fn standard_libs_errortostring_blocker_gone() {
             let msg = format!("{other:?}");
             assert!(
                 !msg.contains("Test.ipe") || !msg.contains("errorToString expected"),
-                "original Sky.Test:74 errorToString blocker must be gone; got: {msg}"
+                "original Ipe.Test:74 errorToString blocker must be gone; got: {msg}"
             );
         }
     }

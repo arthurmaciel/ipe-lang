@@ -175,7 +175,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Meta {
     /// Lowercase hex SHA-256 of the `Main.ipe` the cache was captured from.
-    pub main_sky_sha256: String,
+    pub main_ipe_sha256: String,
     /// The Go `sky --version` string at capture time (provenance only).
     pub go_sky_version: String,
     /// Process exit code recorded alongside `expected_go.txt`.
@@ -206,12 +206,12 @@ impl Meta {
             });
         format!(
             "# Cached Go-oracle metadata. Regenerate with the refresh-oracle tool.\n\
-             main_sky_sha256 = {sha}\n\
+             main_ipe_sha256 = {sha}\n\
              go_sky_version = {version}\n\
              exit_code = {exit}\n\
              oracle_divergence = {divergence}\n\
              {reason_line}",
-            sha = self.main_sky_sha256,
+            sha = self.main_ipe_sha256,
             version = self.go_sky_version,
             exit = self.exit_code,
             divergence = self.oracle_divergence,
@@ -242,7 +242,7 @@ impl Meta {
             let key = key.trim();
             let value = value.trim();
             match key {
-                "main_sky_sha256" => sha = Some(value.to_owned()),
+                "main_ipe_sha256" => sha = Some(value.to_owned()),
                 "go_sky_version" => version = Some(value.to_owned()),
                 "exit_code" => {
                     exit_code = Some(
@@ -267,7 +267,7 @@ impl Meta {
             }
         }
 
-        let main_sky_sha256 = sha.ok_or("oracle.meta: missing main_sky_sha256")?;
+        let main_ipe_sha256 = sha.ok_or("oracle.meta: missing main_ipe_sha256")?;
         let go_sky_version = version.ok_or("oracle.meta: missing go_sky_version")?;
         let exit_code = exit_code.ok_or("oracle.meta: missing exit_code")?;
         let oracle_divergence = divergence.ok_or("oracle.meta: missing oracle_divergence")?;
@@ -277,7 +277,7 @@ impl Meta {
             );
         }
         Ok(Self {
-            main_sky_sha256,
+            main_ipe_sha256,
             go_sky_version,
             exit_code,
             oracle_divergence,
@@ -400,10 +400,10 @@ pub fn check_parity(
     })?;
     let meta = Meta::parse(&meta_text).map_err(|detail| ParityError::MalformedMeta { detail })?;
 
-    if meta.main_sky_sha256 != current {
+    if meta.main_ipe_sha256 != current {
         return Err(ParityError::Stale {
             golden: golden_name.to_owned(),
-            cached: meta.main_sky_sha256,
+            cached: meta.main_ipe_sha256,
             current,
         });
     }
@@ -709,7 +709,7 @@ mod tests {
     #[test]
     fn meta_round_trips_through_serialize_then_parse() {
         let meta = Meta {
-            main_sky_sha256: "abc123".to_owned(),
+            main_ipe_sha256: "abc123".to_owned(),
             go_sky_version: "sky dev".to_owned(),
             exit_code: 0,
             oracle_divergence: false,
@@ -725,7 +725,7 @@ mod tests {
         // must keep `divergence_reason` on ONE line or `parse` chokes on the
         // continuation lines.
         let meta = Meta {
-            main_sky_sha256: "abc".to_owned(),
+            main_ipe_sha256: "abc".to_owned(),
             go_sky_version: "sky dev".to_owned(),
             exit_code: 0,
             oracle_divergence: true,
@@ -750,7 +750,7 @@ mod tests {
     #[test]
     fn meta_divergence_requires_a_reason() {
         let text =
-            "main_sky_sha256 = x\ngo_sky_version = v\nexit_code = 0\noracle_divergence = true\n";
+            "main_ipe_sha256 = x\ngo_sky_version = v\nexit_code = 0\noracle_divergence = true\n";
         let parsed = Meta::parse(text);
         assert!(
             parsed.is_err(),
@@ -765,7 +765,7 @@ mod tests {
         write(&dir, "Main.ipe", src);
         write(&dir, "expected_go.txt", "1\n");
         let meta = Meta {
-            main_sky_sha256: sha256_hex(src.as_bytes()),
+            main_ipe_sha256: sha256_hex(src.as_bytes()),
             go_sky_version: "sky dev".to_owned(),
             exit_code: 0,
             oracle_divergence: false,
@@ -782,7 +782,7 @@ mod tests {
         let dir = fresh_golden("stale");
         // The cached hash is of the OLD source; Main.ipe now holds new source.
         let meta = Meta {
-            main_sky_sha256: sha256_hex(b"main = 1\n"),
+            main_ipe_sha256: sha256_hex(b"main = 1\n"),
             go_sky_version: "sky dev".to_owned(),
             exit_code: 0,
             oracle_divergence: false,
@@ -845,7 +845,7 @@ mod tests {
         write(&dir, "Main.ipe", src);
         write(&dir, "expected_go.txt", "UPPER\n");
         let meta = Meta {
-            main_sky_sha256: sha256_hex(src.as_bytes()),
+            main_ipe_sha256: sha256_hex(src.as_bytes()),
             go_sky_version: "sky dev".to_owned(),
             exit_code: 0,
             oracle_divergence: true,
@@ -907,7 +907,7 @@ mod tests {
         // Sky's behaviour differs here; expected holds skyc's recorded output.
         write(&dir, "expected_go.txt", "42\n");
         let meta = Meta {
-            main_sky_sha256: sha256_hex(src.as_bytes()),
+            main_ipe_sha256: sha256_hex(src.as_bytes()),
             go_sky_version: "sky dev".to_owned(),
             exit_code: 0,
             oracle_divergence: true,

@@ -12,17 +12,17 @@ module Main exposing (main)
 --                           generate via `head -c 64 /dev/urandom | base64`.
 --   IPE_COMPOSITE_DB      — sqlite path; default ./composite-server.db
 --   IPE_COMPOSITE_PORT    — server port; default 8000
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.List as List
-import Sky.Core.String as String
-import Sky.Core.Task as Task
-import Sky.Core.Time as Time
-import Sky.Core.Pure as Pure
-import Sky.Core.Error as Error exposing (Error)
-import Sky.Core.System as System
-import Std.Log exposing (println)
-import Std.Db as Db
-import Std.Cache as Cache
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Task as Task
+import Ipe.Time as Time
+import Ipe.Pure as Pure
+import Ipe.Error as Error exposing (Error)
+import Ipe.System as System
+import Ipe.Log exposing (println)
+import Ipe.Db as Db
+import Ipe.Cache as Cache
 import Migrations
 import Server as App
 import State exposing (Config)

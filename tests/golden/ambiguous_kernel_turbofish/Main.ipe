@@ -6,15 +6,15 @@ module Main exposing (main)
 -- (skyc-0 ⟹ cargo-0). Each line below is such an ambiguous shape; the printed
 -- output proves the runtime behaviour is still correct, not just that it builds.
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.List as List
-import Sky.Core.Dict as Dict
-import Sky.Core.Set as Set
-import Sky.Core.Task as Task
-import Sky.Core.String as String
-import Sky.Core.Error as Error
-import Std.Decimal as Dec
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
+import Ipe.Dict as Dict
+import Ipe.Set as Set
+import Ipe.Task as Task
+import Ipe.String as String
+import Ipe.Error as Error
+import Ipe.Decimal as Dec
+import Ipe.Log exposing (println)
 
 
 -- `List.head []` — element type free; result discarded to a Bool.

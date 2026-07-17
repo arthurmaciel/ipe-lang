@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 {-|
-24-tui-kitchen-sink — exercises every Std.Ui primitive Sky.Tui v1
+24-tui-kitchen-sink — exercises every Ipe.Ui primitive Ipe.Tui v1
 supports. Useful for visual verification of the renderer + as a
 reference for what does (and doesn't) render under TUI.
 
@@ -20,24 +20,24 @@ Keys: Tab/Shift-Tab to cycle, Enter to activate, type into inputs,
 arrow keys for cursor movement, Ctrl-C to quit.
 
 This is a TUI program but the SAME view function would render under
-Sky.Live too — typed Std.Ui primitives are the only thing the view
+Ipe.Live too — typed Ipe.Ui primitives are the only thing the view
 uses. Run under both to compare.
 -}
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.List as List
-import Sky.Core.String as String
-import Sky.Core.System as System
-import Sky.Core.Task as Task
-import Std.Tui as Tui
-import Std.Live as Live
-import Std.Cmd as Cmd
-import Std.Sub as Sub
-import Std.Ui as Ui
-import Std.Ui exposing (Element)
-import Std.Ui.Background as Background
-import Std.Ui.Border as Border
-import Std.Ui.Font as Font
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.System as System
+import Ipe.Task as Task
+import Ipe.Tui as Tui
+import Ipe.Live as Live
+import Ipe.Cmd as Cmd
+import Ipe.Sub as Sub
+import Ipe.Ui as Ui
+import Ipe.Ui exposing (Element)
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Font as Font
 
 
 
@@ -164,7 +164,7 @@ view model =
     viewBody model
 
 
-{- Sky.Live renders Std.Ui via `Ui.layout [] body`, which wraps the
+{- Ipe.Live renders Ipe.Ui via `Ui.layout [] body`, which wraps the
    element in the host HTML scaffolding (head / body / inline style
    block). Tui doesn't need this — it paints directly into cells.
    Same `viewBody` feeds both.
@@ -184,7 +184,7 @@ headerSection =
         , Border.color (Ui.rgb 100 130 180)
         ]
         [ Ui.el [ Font.color (Ui.rgb 142 200 168), Font.bold ]
-            (Ui.text "Sky.Tui Kitchen Sink — every Std.Ui primitive")
+            (Ui.text "Ipe.Tui Kitchen Sink — every Ipe.Ui primitive")
         , Ui.el [ Font.color (Ui.rgb 150 150 170) ]
             (Ui.text "Tab to cycle focus · type into inputs · Ctrl-C to quit")
         ]
@@ -305,7 +305,7 @@ bordersSection =
 borderBox : String -> String -> Element Msg
 borderBox label style =
     -- Border style ("solid" / "dashed" / "dotted") is passed as a
-    -- raw attr because Std.Ui exposes Border.solid/dashed/dotted as
+    -- raw attr because Ipe.Ui exposes Border.solid/dashed/dotted as
     -- separate attrs; using a string keeps this list-driven.
     Ui.el
         [ Ui.paddingXY 8 0
@@ -468,16 +468,16 @@ footerSection =
 {- Backend dispatch via argv — same Model / Msg / update / viewBody
    compiled against multiple TEA-shaped runtimes:
 
-       ./sky-out/app          Sky.Tui (default, full-screen terminal)
-       ./sky-out/app live     Sky.Live (HTTP at :8000, browser preview)
+       ./sky-out/app          Ipe.Tui (default, full-screen terminal)
+       ./sky-out/app live     Ipe.Live (HTTP at :8000, browser preview)
 
    The view function is shared — viewBody returns Element Msg.
    Tui consumes it directly; Live wraps with `Ui.layout []` via
    viewLive. Webview / GUI backends slot in here as further argv
    branches once those runtimes ship.
 
-   Sky.Cli is deliberately omitted — it's line-oriented and can't
-   meaningfully render a Std.Ui scene. Use Sky.Cli for line-driven
+   Ipe.Cli is deliberately omitted — it's line-oriented and can't
+   meaningfully render a Ipe.Ui scene. Use Ipe.Cli for line-driven
    programs (REPLs, scripts), not for UI showcases.
 -}
 argsList : List String

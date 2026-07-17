@@ -1,14 +1,14 @@
 module Main exposing (main)
 
-import Sky.Core.Json.Decode as Decode
-import Sky.Core.Json.Decode.Pipeline as Pipeline
-import Sky.Core.Json.Encode as Encode
-import Sky.Core.List as List
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Result as Result
-import Sky.Core.String as String
-import Sky.Core.Error as Error exposing (Error)
-import Std.Log exposing (println)
+import Ipe.Json.Decode as Decode
+import Ipe.Json.Decode.Pipeline as Pipeline
+import Ipe.Json.Encode as Encode
+import Ipe.List as List
+import Ipe.Prelude exposing (..)
+import Ipe.Result as Result
+import Ipe.String as String
+import Ipe.Error as Error exposing (Error)
+import Ipe.Log exposing (println)
 
 -- 5. Pipeline with optional fields
 type alias UserProfile =

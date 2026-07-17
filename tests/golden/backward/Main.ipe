@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- Backward pipe `<|`: right-associative at precedence 0.
 -- `<|` is looser than `+`, so `1 + 2` groups first.

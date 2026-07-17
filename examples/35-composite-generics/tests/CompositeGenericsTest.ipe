@@ -1,15 +1,15 @@
 module CompositeGenericsTest exposing (main, tests)
 
--- Sky.Test assertions over the composite's pipeline. Touches every
+-- Ipe.Test assertions over the composite's pipeline. Touches every
 -- module in src/ so a regression anywhere in the State / Decode /
 -- Compute / Report chain shows up here.
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.String as String
-import Sky.Core.List as List
-import Sky.Core.Dict as Dict
-import Sky.Core.Maybe as Maybe
-import Sky.Core.Result as Result
-import Sky.Test as Test exposing (Test)
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.List as List
+import Ipe.Dict as Dict
+import Ipe.Maybe as Maybe
+import Ipe.Result as Result
+import Ipe.Test as Test exposing (Test)
 import State exposing (Transaction, Bucket(..))
 import Decode
 import Compute

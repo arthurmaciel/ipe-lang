@@ -110,7 +110,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
             {
                 return Ok("ChunkEvent<IpeError>".to_owned());
             }
-            // `Std.Cache.Cache k v` is backed by the NON-generic runtime
+            // `Ipe.Cache.Cache k v` is backed by the NON-generic runtime
             // enum `IpeCacheHandle` — drop the phantom `k`/`v` args (they live
             // only on the kernel calls), else the render would emit an invalid
             // `IpeCacheHandle<T1, T2>` (E0107). `enum_name` returns the runtime
@@ -196,20 +196,20 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::StreamWriter => "StreamWriter".to_owned(),
         // HTTP request handle — re-exported from ipe_runtime::http.
         IrType::HttpRequest => "HttpRequest".to_owned(),
-        // Sky.Http.Server.WebSocket opaque handles.
+        // Ipe.Http.Server.WebSocket opaque handles.
         IrType::WebSocketServer => "WsHandle".to_owned(),
         IrType::WebSocketServerCfg => "WsServerCfg<IpeError>".to_owned(),
-        // Std.Cache config / stats records — re-exported (ungated) from
+        // Ipe.Cache config / stats records — re-exported (ungated) from
         // ipe_runtime::cache, so the bare name resolves via the crate glob use.
         IrType::CacheCfg => "CacheCfg".to_owned(),
         IrType::CacheStats => "CacheStats".to_owned(),
-        // Sky.Core.WebSocket connect-config record — re-exported (feature-gated
+        // Ipe.WebSocket connect-config record — re-exported (feature-gated
         // on `websocket_client`) from ipe_runtime::ws_client, bare via the glob.
         IrType::WebSocketClientCfg => "WsClientCfg".to_owned(),
-        // Std.Csv document record — re-exported (ungated) from ipe_runtime::csv,
+        // Ipe.Csv document record — re-exported (ungated) from ipe_runtime::csv,
         // so the bare name resolves via the crate glob use.
         IrType::CsvDoc => "CsvDoc".to_owned(),
-        // Std.Email records + provider ADT — re-exported from ipe_runtime::email
+        // Ipe.Email records + provider ADT — re-exported from ipe_runtime::email
         // (`pub use email::*` appended when the program uses `Email.send`), so
         // the bare names resolve via the crate glob use. `Attachment` maps to the
         // runtime `EmailAttachment` (the Sky alias name differs from the runtime
@@ -219,8 +219,8 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         IrType::EmailSesConfig => "SesConfig".to_owned(),
         IrType::EmailSmtpConfig => "SmtpConfig".to_owned(),
         IrType::EmailProvider => "EmailProvider".to_owned(),
-        // Std.Ui / Std.Html parametric types.  Use fully-qualified Rust paths
-        // (T2 soundness: `Attribute` exists in BOTH Std.Ui and Std.Html namespaces;
+        // Ipe.Ui / Ipe.Html parametric types.  Use fully-qualified Rust paths
+        // (T2 soundness: `Attribute` exists in BOTH Ipe.Ui and Ipe.Html namespaces;
         // qualified paths keep them unambiguous and prevent glob-import shadowing).
         IrType::Ui { ctor, msg } => {
             let m = render_type(ctx, msg, generics)?;
@@ -444,7 +444,7 @@ fn render_fn_once_chain(
 /// construction and pattern emitters balance that boxing. See
 /// [`crate::EmitCtx::is_cyclic_self_field`].
 pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
-    // A `Sky.Core.WebSocket` ADT bridged to a runtime enum
+    // A `Ipe.WebSocket` ADT bridged to a runtime enum
     // (`WebSocketMessage` → `WsClientMessage`, `CloseCode` → `WsCloseCode`) has
     // NO user-emitted decl — its definition lives in `ipe_runtime::ws_client`,
     // and emitting a second enum with the same name would trip E0428. The
@@ -559,7 +559,7 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
     // NON-serde type used AS a Live/Tui/Webview Model; this gate covers every OTHER
     // (non-Model) emitted type in a Live program.
     let self_serde = ctx.enum_is_serde(&def.home, def.name);
-    // When the program uses Std.Live, model types must implement serde traits
+    // When the program uses Ipe.Live, model types must implement serde traits
     // so the session store can serialise/deserialise them. The live runtime
     // requires `Model: serde::Serialize + serde::de::DeserializeOwned`.
     let serde_derives = if self_serde && ctx.uses_live {
@@ -690,7 +690,7 @@ pub fn emit_record_struct(ctx: &EmitCtx, rec: &RecordStruct) -> DResult<String> 
     //
     // seal: the serde derive is gated on `rec.is_serde` (the per-record serde
     // fixpoint), NOT `rec.is_derivable`. A CDPeq-but-not-serde record — e.g. a
-    // view-helper `{ title : String, body : Html Msg }` in a Std.Live program —
+    // view-helper `{ title : String, body : Html Msg }` in a Ipe.Live program —
     // keeps its `#[derive(Clone, Debug, PartialEq)]` but is NOT forced to
     // `serde::Serialize` / `Deserialize`, which would be an exit-0-then-cargo-fail
     // (E0277: `Html<Msg>: Serialize` unsatisfied). `is_serde ⇒ is_derivable`

@@ -1,11 +1,11 @@
 module Page.MetricDetail exposing (viewMetricDetail)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.List as List
-import Sky.Core.String as String
-import Std.Html exposing (..)
-import Std.Html.Attributes exposing (..)
-import Std.Html.Events exposing (onClick)
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Html exposing (..)
+import Ipe.Html.Attributes exposing (..)
+import Ipe.Html.Events exposing (onClick)
 import State exposing (..)
 import Lib.Database as Database
 import Lib.Metrics as Metrics

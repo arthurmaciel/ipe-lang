@@ -103,12 +103,12 @@ fn seal_module(slug: &str, main: &str, expected: &str) {
     );
 }
 
-// ── Sky.Core.Regex ─────────────────────────────────────────────────────
+// ── Ipe.Regex ─────────────────────────────────────────────────────
 
 const REGEX_MAIN: &str = "module Main exposing (main)\n\
-    import Sky.Core.Prelude exposing (..)\n\
-    import Std.Log exposing (println)\n\
-    import Sky.Core.Regex as Regex\n\n\
+    import Ipe.Prelude exposing (..)\n\
+    import Ipe.Log exposing (println)\n\
+    import Ipe.Regex as Regex\n\n\
     hit : String\n\
     hit = if Regex.match \"\\\\d+\" \"a1\" then \"MATCH\" else \"NOMATCH\"\n\n\
     miss : String\n\
@@ -137,12 +137,12 @@ fn regex_builds_and_runs() {
     seal_module("regex", REGEX_MAIN, "MATCH NOMATCH a#b# 42 1,2,3 a|b|c");
 }
 
-// ── Sky.Core.Path ──────────────────────────────────────────────────────
+// ── Ipe.Path ──────────────────────────────────────────────────────
 
 const PATH_MAIN: &str = "module Main exposing (main)\n\
-    import Sky.Core.Prelude exposing (..)\n\
-    import Std.Log exposing (println)\n\
-    import Sky.Core.Path as Path\n\n\
+    import Ipe.Prelude exposing (..)\n\
+    import Ipe.Log exposing (println)\n\
+    import Ipe.Path as Path\n\n\
     abs : String\n\
     abs = if Path.isAbsolute \"/a/b\" then \"ABS\" else \"REL\"\n\n\
     main = println (Path.base \"/a/b/c.txt\" ++ \" \" ++ Path.dir \"/a/b/c.txt\" ++ \" \" ++ Path.ext \"/a/b/c.txt\" ++ \" \" ++ abs)\n";
@@ -157,7 +157,7 @@ fn path_builds_and_runs() {
     seal_module("path", PATH_MAIN, "c.txt /a/b .txt ABS");
 }
 
-// ── Sky.Core.Pure — point-free Uuid kernel aliases ─────
+// ── Ipe.Pure — point-free Uuid kernel aliases ─────
 // The whole module failed to type-check because `uuidV4Kernel : Task Error
 // String` mis-annotated the `Uuid_v4` kernel (real scheme `() -> Task Error
 // String`). We only need it to RESOLVE + EMIT — a runtime UUID is nondeterministic
@@ -165,10 +165,10 @@ fn path_builds_and_runs() {
 // (exit 0) via a fixed printed marker.
 
 const PURE_MAIN: &str = "module Main exposing (main)\n\
-    import Sky.Core.Prelude exposing (..)\n\
-    import Sky.Core.Task as Task\n\
-    import Std.Log exposing (println)\n\
-    import Sky.Core.Pure as Pure\n\n\
+    import Ipe.Prelude exposing (..)\n\
+    import Ipe.Task as Task\n\
+    import Ipe.Log exposing (println)\n\
+    import Ipe.Pure as Pure\n\n\
     genId : Task Error String\n\
     genId = Pure.uuidV4 ()\n\n\
     main =\n\
@@ -187,13 +187,13 @@ fn pure_builds_and_runs() {
     seal_module("pure", PURE_MAIN, "PURE_OK");
 }
 
-// ── Std.Trace ──────────────────────────────────────────────────────────
+// ── Ipe.Trace ──────────────────────────────────────────────────────────
 
 const TRACE_MAIN: &str = "module Main exposing (main)\n\
-    import Sky.Core.Prelude exposing (..)\n\
-    import Sky.Core.Task as Task\n\
-    import Std.Log exposing (println)\n\
-    import Std.Trace as Trace\n\n\
+    import Ipe.Prelude exposing (..)\n\
+    import Ipe.Task as Task\n\
+    import Ipe.Log exposing (println)\n\
+    import Ipe.Trace as Trace\n\n\
     work : Task Error String\n\
     work = Trace.span \"unit\" (Task.succeed \"TRACE_OK\")\n\n\
     main =\n\
@@ -214,14 +214,14 @@ fn trace_builds_and_runs() {
     seal_module("trace", TRACE_MAIN, "TRACE_OK");
 }
 
-// ── Std.Compression ────────────────────────────────────────────────────
+// ── Ipe.Compression ────────────────────────────────────────────────────
 
 const COMPRESSION_MAIN: &str = "module Main exposing (main)\n\
-    import Sky.Core.Prelude exposing (..)\n\
-    import Sky.Core.Task as Task\n\
-    import Sky.Core.Bytes as Bytes\n\
-    import Std.Log exposing (println)\n\
-    import Std.Compression as Compression\n\n\
+    import Ipe.Prelude exposing (..)\n\
+    import Ipe.Task as Task\n\
+    import Ipe.Bytes as Bytes\n\
+    import Ipe.Log exposing (println)\n\
+    import Ipe.Compression as Compression\n\n\
     roundTrip : Task Error Bytes\n\
     roundTrip =\n\
     \x20   Compression.gzip (Bytes.fromString \"hello\") |> Task.andThen Compression.gunzip\n\n\
@@ -239,12 +239,12 @@ fn compression_builds_and_runs() {
     seal_module("compression", COMPRESSION_MAIN, "GZ:hello");
 }
 
-// ── Std.Csv ────────────────────────────────────────────────────────────
+// ── Ipe.Csv ────────────────────────────────────────────────────────────
 
 const CSV_MAIN: &str = "module Main exposing (main)\n\
-    import Sky.Core.Prelude exposing (..)\n\
-    import Std.Log exposing (println)\n\
-    import Std.Csv as Csv\n\n\
+    import Ipe.Prelude exposing (..)\n\
+    import Ipe.Log exposing (println)\n\
+    import Ipe.Csv as Csv\n\n\
     headerLine : String\n\
     headerLine =\n\
     \x20   case Csv.parse \"a,b\\n1,2\" of\n\
@@ -262,7 +262,7 @@ fn csv_builds_and_runs() {
     seal_module("csv", CSV_MAIN, "a|b");
 }
 
-// ── Std.Cache ──────────────────────────────────────────────────────────
+// ── Ipe.Cache ──────────────────────────────────────────────────────────
 // Exercises the full surface example 36-composite-server uses: `defaultCfg` +
 // `withMaxEntries`/`withTTL` builders → `new` (a `CacheCfg` record literal
 // consumed by `Cache_newRaw`), `put`, then `get` (a `Cache String String`
@@ -272,10 +272,10 @@ fn csv_builds_and_runs() {
 // runtime `cache_put`/`cache_get` require.
 
 const CACHE_MAIN: &str = "module Main exposing (main)\n\
-    import Sky.Core.Prelude exposing (..)\n\
-    import Sky.Core.Task as Task\n\
-    import Std.Log exposing (println)\n\
-    import Std.Cache as Cache\n\n\
+    import Ipe.Prelude exposing (..)\n\
+    import Ipe.Task as Task\n\
+    import Ipe.Log exposing (println)\n\
+    import Ipe.Cache as Cache\n\n\
     program : Task Error String\n\
     program =\n\
     \x20   let\n\
@@ -302,17 +302,17 @@ fn cache_builds_and_runs() {
     seal_module("cache", CACHE_MAIN, "CACHE:hit");
 }
 
-// ── Std.PubSub ─────────────────────────────────────────────────────────
+// ── Ipe.PubSub ─────────────────────────────────────────────────────────
 // PubSub.publish : String -> any -> Task Error Int.  No Live.app runs in this
 // probe so publish resolves to Err(Unavailable) — Task.onError swallows it and
 // the program prints the marker.  The test asserts skyc-0 ⇒ cargo-0 ⇒ exit-0.
 
 const PUBSUB_MAIN: &str = "module Main exposing (main)\n\
-    import Sky.Core.Prelude exposing (..)\n\
-    import Sky.Core.Task as Task\n\
-    import Sky.Core.Json.Encode as JsonEnc\n\
-    import Std.PubSub as PubSub\n\
-    import Std.Log exposing (println)\n\n\
+    import Ipe.Prelude exposing (..)\n\
+    import Ipe.Task as Task\n\
+    import Ipe.Json.Encode as JsonEnc\n\
+    import Ipe.PubSub as PubSub\n\
+    import Ipe.Log exposing (println)\n\n\
     main =\n\
     \x20   let\n\
     \x20       _ = PubSub.publish \"t\" (JsonEnc.string \"hi\")\n\
@@ -330,7 +330,7 @@ fn pubsub_builds_and_runs() {
     seal_module("pubsub", PUBSUB_MAIN, "PUBSUB_OK");
 }
 
-// ── Std.Config ─────────────────────────────────────────────────────────
+// ── Ipe.Config ─────────────────────────────────────────────────────────
 // Exercises the 16 `Config_*` kernels over the SHARED `Decoder` carrier: the
 // four primitives (string/int/float/bool), `field`/`at`/`list`/`nullable`,
 // `map`/`andThen`/`succeed`/`fail`, and all three format front-ends
@@ -339,13 +339,13 @@ fn pubsub_builds_and_runs() {
 // no competing enum emitted, and every kernel emits the shared JSON `decode_*` /
 // `config_decode_*` runtime fns (skyc-0 ⇒ cargo-0). Uses SINGLE-decoder
 // composition — the multi-parameter applicative `succeed (\a b -> …)` builder is
-// the same documented distinct surface `Sky.Core.Json.Decode` has (divergences
+// the same documented distinct surface `Ipe.Json.Decode` has (divergences
 // §A8), not a Config-specific gap.
 
 const CONFIG_MAIN: &str = "module Main exposing (main)\n\
-    import Sky.Core.Prelude exposing (..)\n\
-    import Std.Config as Config\n\
-    import Std.Log exposing (println)\n\n\
+    import Ipe.Prelude exposing (..)\n\
+    import Ipe.Config as Config\n\
+    import Ipe.Log exposing (println)\n\n\
     hostD : Config.Decoder String\n\
     hostD = Config.field \"host\" Config.string\n\n\
     portD : Config.Decoder Int\n\

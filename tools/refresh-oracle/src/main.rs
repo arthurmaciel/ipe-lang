@@ -218,7 +218,7 @@ fn divergence_from_skyc(
 /// Write `expected_go.txt` + `oracle.meta` for one golden.
 fn write_oracle(
     golden_dir: &Path,
-    main_sky_sha256: String,
+    main_ipe_sha256: String,
     go_sky_version: String,
     cap: &Capture,
 ) -> Result<bool, String> {
@@ -231,7 +231,7 @@ fn write_oracle(
         } => (stdout, *exit_code, true, Some(reason.clone())),
     };
     let meta = Meta {
-        main_sky_sha256,
+        main_ipe_sha256,
         go_sky_version,
         exit_code,
         oracle_divergence,

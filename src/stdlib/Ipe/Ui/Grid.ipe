@@ -1,0 +1,164 @@
+-- | Ipe.Ui.Grid — explicit CSS-grid track lists for `Ipe.Ui` (v0.15.57+).
+--
+-- Typed `Track` ADT (`fr / px / auto / minContent / maxContent /
+-- minmax / repeat / repeatAutoFit / repeatAutoFill`) + `columns`
+-- / `rows` / `tracks` attribute builders.  Use when `Ui.gridColumns
+-- N` (auto-fill) is too coarse — sidebar layouts (`[fr 1, px 200,
+-- fr 1]`), content-aware columns (`[auto, fr 1]`), responsive card
+-- grids (`[repeatAutoFit (minmax (px 240) (fr 1))]`).
+module Ipe.Ui.Grid exposing
+    ( Track
+    , fr
+    , px
+    , auto
+    , minContent
+    , maxContent
+    , minmax
+    , repeat
+    , repeatAutoFit
+    , repeatAutoFill
+    , trackToCss
+    , tracksToCss
+    , tracks
+    , columns
+    , rows
+    )
+
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Ui as Ui exposing (Attribute)
+
+-- A single grid track spec.  Composed into the CSS
+-- `grid-template-columns` / `grid-template-rows` value by
+-- `trackToCss`.
+type Track
+    = Fr Int
+    | TrackPx Int
+    | Auto
+    | MinContent
+    | MaxContent
+    | Minmax Track Track
+    | Repeat Int Track
+    | RepeatAutoFit Track
+    | RepeatAutoFill Track
+
+
+-- N flexible units (`<N>fr`).
+fr : Int -> Track
+fr n =
+    Fr n
+
+
+-- A fixed pixel-width track.
+px : Int -> Track
+px n =
+    TrackPx n
+
+
+-- An `auto` track — sized to the largest child along that axis.
+auto : Track
+auto =
+    Auto
+
+
+-- `min-content` — narrowest size the track's content can take.
+minContent : Track
+minContent =
+    MinContent
+
+
+-- `max-content` — widest size the content prefers.
+maxContent : Track
+maxContent =
+    MaxContent
+
+
+-- `minmax(low, high)` — the track grows between two bounds.
+minmax : Track -> Track -> Track
+minmax lo hi =
+    Minmax lo hi
+
+
+-- `repeat(<n>, <track>)` — repeat a track shape N times.
+repeat : Int -> Track -> Track
+repeat n t =
+    Repeat n t
+
+
+-- `repeat(auto-fit, <track>)` — fill as many tracks as fit, collapse empty.
+repeatAutoFit : Track -> Track
+repeatAutoFit t =
+    RepeatAutoFit t
+
+
+-- `repeat(auto-fill, <track>)` — fill as many tracks as fit, keep ghost slots.
+repeatAutoFill : Track -> Track
+repeatAutoFill t =
+    RepeatAutoFill t
+
+
+-- Lower a single Track to its CSS string fragment.
+trackToCss : Track -> String
+trackToCss t =
+    case t of
+
+        Fr n ->
+            String.fromInt n ++ "fr"
+
+        TrackPx n ->
+            String.fromInt n ++ "px"
+
+        Auto ->
+            "auto"
+
+        MinContent ->
+            "min-content"
+
+        MaxContent ->
+            "max-content"
+
+        Minmax lo hi ->
+            "minmax(" ++ trackToCss lo ++ ", " ++ trackToCss hi ++ ")"
+
+        Repeat n inner ->
+            "repeat(" ++ String.fromInt n ++ ", " ++ trackToCss inner ++ ")"
+
+        RepeatAutoFit inner ->
+            "repeat(auto-fit, " ++ trackToCss inner ++ ")"
+
+        RepeatAutoFill inner ->
+            "repeat(auto-fill, " ++ trackToCss inner ++ ")"
+
+
+-- Lower a track list to a space-joined CSS string.
+tracksToCss : List Track -> String
+tracksToCss ts =
+    case ts of
+
+        [] ->
+            ""
+
+        first :: rest ->
+            List.foldl
+                (\t acc -> acc ++ " " ++ trackToCss t)
+                (trackToCss first)
+                rest
+
+
+-- Set both columns + rows explicitly.  Pass `[]` for either axis to skip it.
+tracks : List Track -> List Track -> Attribute msg
+tracks cols rs =
+    Ui.gridTracksRaw (tracksToCss cols) (tracksToCss rs)
+
+
+-- Set only columns — convenience for the common case.
+columns : List Track -> Attribute msg
+columns cols =
+    Ui.gridTracksRaw (tracksToCss cols) ""
+
+
+-- Set only rows.
+rows : List Track -> Attribute msg
+rows rs =
+    Ui.gridTracksRaw "" (tracksToCss rs)

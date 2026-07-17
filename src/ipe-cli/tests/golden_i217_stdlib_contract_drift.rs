@@ -1,6 +1,6 @@
 //! Stdlib-contract-drift regression — three kernel-backed stdlib
-//! surfaces (`Jwt.withClaim`, `Std.Db.Migration`/`Db.migrate`,
-//! `Sky.Http.Server.Response`) whose compiler contracts had drifted from the
+//! surfaces (`Jwt.withClaim`, `Ipe.Db.Migration`/`Db.migrate`,
+//! `Ipe.Http.Server.Response`) whose compiler contracts had drifted from the
 //! reference `../sky/sky-stdlib` signatures, so `skyc` rejected a
 //! verbatim-ported reference program with `IPE-T0001` ("expected String, found
 //! Value" etc.).

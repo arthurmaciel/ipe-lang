@@ -67,10 +67,10 @@ const RUNTIME_MOD_RS_DB_APPEND: &str = "pub mod db;\npub use db::*;\npub mod tel
 /// emitted `main.rs` namespace via `pub use ipe_runtime::*`.
 const RUNTIME_MOD_RS_TEA_APPEND: &str = "pub mod tea;\npub use tea::*;\n";
 
-// ── Sky.Http.Server ──────────────────────────────────────────────────────
+// ── Ipe.Http.Server ──────────────────────────────────────────────────────
 
 /// Lines appended to `ipe_runtime/mod.rs` when the program uses
-/// Sky.Http.Server kernels.
+/// Ipe.Http.Server kernels.
 ///
 /// `server.rs` and `server_stream.rs` are gated by the `server` Cargo
 /// feature in the runtime source; `http_stream.rs` (the client-side
@@ -89,9 +89,9 @@ const RUNTIME_MOD_RS_SERVER_APPEND: &str = "pub mod server;\npub use server::*;\
 // conditionally appended here — a conditional `pub mod http_header;` would
 // duplicate the base declaration (E0428) for server/live programs.
 
-// ── Std.Auth ──────────────────────────────────────────────────────────
+// ── Ipe.Auth ──────────────────────────────────────────────────────────
 
-/// Lines appended to `ipe_runtime/mod.rs` when the program uses Std.Auth
+/// Lines appended to `ipe_runtime/mod.rs` when the program uses Ipe.Auth
 /// kernels (`Auth.hashPassword` / `verifyPassword` / `signToken` /
 /// `verifyToken` / `register` / `login` / `setRole` etc.).
 ///
@@ -101,10 +101,10 @@ const RUNTIME_MOD_RS_SERVER_APPEND: &str = "pub mod server;\npub use server::*;\
 /// features), so no manifest surgery is needed — only a `mod.rs` declaration.
 const RUNTIME_MOD_RS_AUTH_APPEND: &str = "pub mod auth;\npub use auth::*;\n";
 
-// ── Sky.Core.WebSocket — outbound WebSocket client ──────────────────────────
+// ── Ipe.WebSocket — outbound WebSocket client ──────────────────────────
 
 /// Lines appended to `ipe_runtime/mod.rs` when the program uses outbound
-/// `Sky.Core.WebSocket` client kernels.
+/// `Ipe.WebSocket` client kernels.
 ///
 /// `ws_client.rs` is gated by the `websocket_client` Cargo feature in the
 /// runtime source; this addition wires it into the module namespace so the
@@ -117,9 +117,9 @@ const RUNTIME_MOD_RS_AUTH_APPEND: &str = "pub mod auth;\npub use auth::*;\n";
 /// `sub_subscribe_ws_*` fns return) is force-appended alongside this in
 /// [`assemble_project_files`], mirroring the `uses_server` rule.
 const RUNTIME_MOD_RS_WEBSOCKET_APPEND: &str = "pub mod ws_client;\npub use ws_client::*;\n";
-// ── Std.Email ───────────────────────────────────────────────────────────
+// ── Ipe.Email ───────────────────────────────────────────────────────────
 
-/// Lines appended to `ipe_runtime/mod.rs` when the program uses the `Std.Email`
+/// Lines appended to `ipe_runtime/mod.rs` when the program uses the `Ipe.Email`
 /// `Email.send` kernel.
 ///
 /// `email.rs` is in the runtime source tree (vendored into every emitted crate)
@@ -131,10 +131,10 @@ const RUNTIME_MOD_RS_WEBSOCKET_APPEND: &str = "pub mod ws_client;\npub use ws_cl
 /// directly, so declaring the module + adding `lettre` is sufficient.
 const RUNTIME_MOD_RS_EMAIL_APPEND: &str = "pub mod email;\npub use email::*;\n";
 
-// ── Std.Ui / Std.Html ───────────────────────────────────────────────────
+// ── Ipe.Ui / Ipe.Html ───────────────────────────────────────────────────
 
-/// Lines appended to `ipe_runtime/mod.rs` when the program uses Std.Ui /
-/// Std.Html render kernels.
+/// Lines appended to `ipe_runtime/mod.rs` when the program uses Ipe.Ui /
+/// Ipe.Html render kernels.
 ///
 /// `html.rs` and `ui/mod.rs` are in the runtime source tree; this addition
 /// wires both into the module namespace. `html` is always paired with `ui`
@@ -150,17 +150,17 @@ const RUNTIME_MOD_RS_EMAIL_APPEND: &str = "pub mod email;\npub use email::*;\n";
 /// `live/style_inject.rs` (`strip_style_close`) all import `css_safety` from the
 /// `ipe_runtime` top level, so it MUST be declared before this UI append or
 /// those imports fail (E0432) — the caller preserves that ordering. Splitting
-/// css out lets a pure-`Std.Css` program (no render kernel ⇒ no `uses_ui`) still
+/// css out lets a pure-`Ipe.Css` program (no render kernel ⇒ no `uses_ui`) still
 /// get the css declarations via `uses_css` alone.
 const RUNTIME_MOD_RS_UI_APPEND: &str = "pub mod html;\npub use html::*;\npub mod ui;\n";
 
-/// Lines appended to `ipe_runtime/mod.rs` when the program uses the `Std.Css`
-/// leaf security kernels (`Sky.Core.CssSafety.safeValue` / `safePropName` /
-/// `safeSelector` / `stripStyleClose`) — OR any `Std.Ui` / `Std.Html`
+/// Lines appended to `ipe_runtime/mod.rs` when the program uses the `Ipe.Css`
+/// leaf security kernels (`Ipe.CssSafety.safeValue` / `safePropName` /
+/// `safeSelector` / `stripStyleClose`) — OR any `Ipe.Ui` / `Ipe.Html`
 /// render kernel (whose runtime modules import `css_safety` at the top level).
 ///
 /// `css_safety.rs` is a dependency-free, audited leaf; `css.rs` (the four
-/// `Std.Css` leaf kernels — `safe_value` / `safe_prop_name` / `safe_selector` /
+/// `Ipe.Css` leaf kernels — `safe_value` / `safe_prop_name` / `safe_selector` /
 /// `strip_style_close_kernel`) depends only on `css_safety`, and is glob-re-
 /// exported (`pub use css::*;`) so the emitted `pub use ipe_runtime::*;`
 /// surfaces those bare kernel names that `naming::kernel_name` emits. Both live
@@ -170,14 +170,14 @@ const RUNTIME_MOD_RS_UI_APPEND: &str = "pub mod html;\npub use html::*;\npub mod
 /// Pushed BEFORE [`RUNTIME_MOD_RS_UI_APPEND`] because `html.rs` and friends
 /// import `css_safety` — it must be declared first. Guarded on
 /// `uses_ui || uses_css` and appended AT MOST ONCE, so a program that uses both
-/// `Std.Css` and `Std.Ui` does not emit a duplicate `pub mod css_safety;`
+/// `Ipe.Css` and `Ipe.Ui` does not emit a duplicate `pub mod css_safety;`
 /// (`E0428`).
 const RUNTIME_MOD_RS_CSS_APPEND: &str = "pub mod css_safety;\npub mod css;\npub use css::*;\n";
 
-// ── Std.Tui / Sky.Tui ───────────────────────────────────────────────────────
+// ── Ipe.Tui / Ipe.Tui ───────────────────────────────────────────────────────
 
-/// Lines appended to `ipe_runtime/mod.rs` when the program uses Std.Tui /
-/// Sky.Tui app-entry kernels.
+/// Lines appended to `ipe_runtime/mod.rs` when the program uses Ipe.Tui /
+/// Ipe.Tui app-entry kernels.
 ///
 /// Both `tui/app.rs` and `tui/layout.rs` (and their dependencies `cell.rs`,
 /// `diff.rs`, `focus.rs`, `key.rs`) are gated by the `tui` Cargo feature in the
@@ -187,15 +187,15 @@ const RUNTIME_MOD_RS_CSS_APPEND: &str = "pub mod css_safety;\npub mod css;\npub 
 ///
 /// The `ui` module must also be loaded (tui/layout.rs imports `super::ui::Element`)
 /// — but `uses_ui` is set whenever `uses_tui` is set (a Tui app always references
-/// Std.Ui Element/attribute kernels), so `RUNTIME_MOD_RS_UI_APPEND` is already
+/// Ipe.Ui Element/attribute kernels), so `RUNTIME_MOD_RS_UI_APPEND` is already
 /// appended by the time this addition fires.
 const RUNTIME_MOD_RS_TUI_APPEND: &str = "#[cfg(feature = \"tui\")]\npub mod tui;\n\
      #[cfg(feature = \"tui\")]\npub use tui::{tui_app, tui_app_ui};\n";
 
-// ── Std.Webview / Sky.Webview ───────────────────────────────────────────────
+// ── Ipe.Webview / Ipe.Webview ───────────────────────────────────────────────
 
-/// Lines appended to `ipe_runtime/mod.rs` when the program uses Std.Webview /
-/// Sky.Webview app-entry kernels.
+/// Lines appended to `ipe_runtime/mod.rs` when the program uses Ipe.Webview /
+/// Ipe.Webview app-entry kernels.
 ///
 /// `webview.rs` is gated by the `webview` Cargo feature in the runtime source
 /// (wry + tao deps). This addition wires `webview::webview_app` and
@@ -210,10 +210,10 @@ const RUNTIME_MOD_RS_TUI_APPEND: &str = "#[cfg(feature = \"tui\")]\npub mod tui;
 const RUNTIME_MOD_RS_WEBVIEW_APPEND: &str = "#[cfg(feature = \"webview\")]\npub mod webview;\n\
      #[cfg(feature = \"webview\")]\npub use webview::{webview_app, WebviewWindowCfg};\n";
 
-// ── Std.Live / Sky.Live ─────────────────────────────────────────────────────
+// ── Ipe.Live / Ipe.Live ─────────────────────────────────────────────────────
 
-/// Lines appended to `ipe_runtime/mod.rs` when the program uses Std.Live /
-/// Sky.Live app-entry kernels.
+/// Lines appended to `ipe_runtime/mod.rs` when the program uses Ipe.Live /
+/// Ipe.Live app-entry kernels.
 ///
 /// `live/mod.rs` is gated by the `live` Cargo feature in the runtime source;
 /// this addition wires the `live` module (and its public re-exports `live_app`,
@@ -245,9 +245,9 @@ const RUNTIME_MOD_RS_LIVE_APPEND: &str = "#[cfg(feature = \"live\")]\npub mod li
 const TEA_TYPE_ALIASES: &str = "pub type IpeCmd<M> = ipe_runtime::tea::IpeCmd<M>;\n\
      pub type IpeSub<M> = ipe_runtime::tea::IpeSub<M>;\n";
 
-// ── Std.Auth — concrete wrappers emitted when uses_auth is true ────────
+// ── Ipe.Auth — concrete wrappers emitted when uses_auth is true ────────
 
-/// Concrete wrappers appended to `main.rs` when the program uses Std.Auth
+/// Concrete wrappers appended to `main.rs` when the program uses Ipe.Auth
 /// kernels.  Each wrapper specialises the generic `E` type parameter to
 /// `IpeError` so call sites in user function bodies compile without requiring
 /// a turbofish annotation.
@@ -548,7 +548,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         if ctx.uses_tea {
             out.push_str(TEA_TYPE_ALIASES);
         }
-        // Std.Auth kernels → concrete E = IpeError wrappers.
+        // Ipe.Auth kernels → concrete E = IpeError wrappers.
         if ctx.uses_auth {
             out.push_str(AUTH_WRAPPERS);
         }
@@ -569,7 +569,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         out.push_str(&epilogue()?);
 
         // ── G3: Webview main-thread entry switch ──────────────────────────────
-        // Sky.Webview's `tao` event loop requires the process's TRUE main
+        // Ipe.Webview's `tao` event loop requires the process's TRUE main
         // thread on every OS. The standard entry uses `block_on`; Webview MUST
         // use `block_on_current_thread`. (In the real split, `emit_spine`
         // performs this same switch on its own — the anchor lives in the
@@ -583,7 +583,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
                     where_: "ipe_backend_rust::project::emit_program::G3_block_on",
                     detail: format!(
                         "G3 webview entry-switch: anchor {BLOCK_ON_ANCHOR:?} not found in \
-                         emitted output — epilogue golden has drifted; Sky.Webview REQUIRES \
+                         emitted output — epilogue golden has drifted; Ipe.Webview REQUIRES \
                          block_on_current_thread (tao/Cocoa NSApplication mandates the \
                          process main thread on macOS; omitting the switch is a runtime crash)"
                     ),
@@ -682,7 +682,7 @@ fn assemble_project_files(
     } else {
         cargo_toml
     };
-    // Sky.Core.WebSocket client: promote the `websocket_client` feature +
+    // Ipe.WebSocket client: promote the `websocket_client` feature +
     // add tokio-tungstenite + tokio `"sync"`. Applied last; idempotent on the
     // tokio `"sync"` step so it composes with any prior server/live/tui surgery.
     let cargo_toml = if ctx.uses_websocket {
@@ -690,7 +690,7 @@ fn assemble_project_files(
     } else {
         cargo_toml
     };
-    // Std.Email: `email.rs` needs the `lettre` crate for the SMTP transport
+    // Ipe.Email: `email.rs` needs the `lettre` crate for the SMTP transport
     // (every other crate it uses — `base64` / `hmac` / `sha2` / `serde_json` /
     // `reqwest` / `url` — is already an unconditional base-manifest dep). Add
     // `lettre` only when the program uses `Email.send`.
@@ -722,25 +722,25 @@ fn assemble_project_files(
         if ctx.uses_server {
             mod_rs.push_str(RUNTIME_MOD_RS_SERVER_APPEND);
         }
-        // Sky.Core.WebSocket client — declare `ws_client` (its `ssrf` dep is
+        // Ipe.WebSocket client — declare `ws_client` (its `ssrf` dep is
         // already in the base, its `tea` dep forced above).
         if ctx.uses_websocket {
             mod_rs.push_str(RUNTIME_MOD_RS_WEBSOCKET_APPEND);
         }
-        // Std.Auth — append auth module when any Auth kernel is used.
+        // Ipe.Auth — append auth module when any Auth kernel is used.
         if ctx.uses_auth {
             mod_rs.push_str(RUNTIME_MOD_RS_AUTH_APPEND);
         }
-        // Std.Email — append email module when `Email.send` is used.
+        // Ipe.Email — append email module when `Email.send` is used.
         if ctx.uses_email {
             mod_rs.push_str(RUNTIME_MOD_RS_EMAIL_APPEND);
         }
         // `http_header` is part of the base `mod.rs` (the base `http_client`
         // module depends on it), so it needs no conditional append here — see
         // the note at the top of this file.
-        // Std.Css leaf security kernels — declared for any render-capable
+        // Ipe.Css leaf security kernels — declared for any render-capable
         // program (`uses_ui`, whose html/ui/live runtime modules import
-        // `css_safety`) OR a pure-`Std.Css` program (`uses_css`, no render
+        // `css_safety`) OR a pure-`Ipe.Css` program (`uses_css`, no render
         // kernel). Pushed BEFORE the UI append because `html.rs` /
         // `ui/render.rs` / `live/style_inject.rs` import `css_safety` at the
         // top level — it must be declared first. The single guard de-duplicates:
@@ -753,26 +753,26 @@ fn assemble_project_files(
         // `live/mod.rs` unconditionally does
         // `pub use crate::ipe_runtime::html::*` and `html.rs` imports
         // `css_safety`, so a `uses_live`-only program (e.g. PubSub-only, no
-        // Std.Ui kernels) still needs `css_safety` and `html` declared.
+        // Ipe.Ui kernels) still needs `css_safety` and `html` declared.
         if ctx.uses_ui || ctx.uses_css || ctx.uses_tui || ctx.uses_live || ctx.uses_webview {
             mod_rs.push_str(RUNTIME_MOD_RS_CSS_APPEND);
         }
-        // Std.Ui / Std.Html render kernels (+ Tui + Live transitive dep).
+        // Ipe.Ui / Ipe.Html render kernels (+ Tui + Live transitive dep).
         // `live/mod.rs` unconditionally re-exports `crate::ipe_runtime::html::*`;
         // `live/style_inject.rs` imports `super::html` — so `html` must be
-        // declared whenever live is enabled, even without explicit Std.Ui use.
+        // declared whenever live is enabled, even without explicit Ipe.Ui use.
         if ctx.uses_ui || ctx.uses_tui || ctx.uses_live || ctx.uses_webview {
             mod_rs.push_str(RUNTIME_MOD_RS_UI_APPEND);
         }
-        // Std.Live / Sky.Live app-entry kernels.
+        // Ipe.Live / Ipe.Live app-entry kernels.
         if ctx.uses_live || ctx.uses_webview {
             mod_rs.push_str(RUNTIME_MOD_RS_LIVE_APPEND);
         }
-        // Std.Tui / Sky.Tui app-entry kernels.
+        // Ipe.Tui / Ipe.Tui app-entry kernels.
         if ctx.uses_tui {
             mod_rs.push_str(RUNTIME_MOD_RS_TUI_APPEND);
         }
-        // Std.Webview / Sky.Webview app-entry kernel.
+        // Ipe.Webview / Ipe.Webview app-entry kernel.
         if ctx.uses_webview {
             mod_rs.push_str(RUNTIME_MOD_RS_WEBVIEW_APPEND);
         }
@@ -871,7 +871,7 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
                 where_: "ipe_backend_rust::project::emit_spine::G3_block_on",
                 detail: format!(
                     "G3 webview entry-switch: anchor {BLOCK_ON_ANCHOR:?} not found in \
-                     emitted spine — epilogue golden has drifted; Sky.Webview REQUIRES \
+                     emitted spine — epilogue golden has drifted; Ipe.Webview REQUIRES \
                      block_on_current_thread"
                 ),
             });
@@ -1650,7 +1650,7 @@ fn websocket_cargo_toml(base: &str) -> DResult<String> {
 /// Build the email-enabled `Cargo.toml` by appending the `lettre` dependency
 /// before `[profile.dev]`.
 ///
-/// `email.rs` (the vendored `Std.Email` runtime module) needs `lettre` for the
+/// `email.rs` (the vendored `Ipe.Email` runtime module) needs `lettre` for the
 /// SMTP transport; every other crate it uses (`base64` / `hmac` / `sha2` /
 /// `serde_json` / `reqwest` / `url`) is already an unconditional base-manifest
 /// dependency. No feature promotion is required — the emitted crate declares the

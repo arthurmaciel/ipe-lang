@@ -1,7 +1,7 @@
 module Main exposing (main)
 
-import Sky.Core.List as List
-import Sky.Core.Set as Set
+import Ipe.List as List
+import Ipe.Set as Set
 
 
 main =

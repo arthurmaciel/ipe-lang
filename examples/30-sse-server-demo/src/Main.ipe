@@ -1,17 +1,17 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Task as Task
-import Sky.Core.String as String
-import Sky.Core.Time as Time
-import Sky.Http.Server as Server
-import Sky.Http.Server exposing (Request, Response)
-import Sky.Http.Server.Stream as Stream
-import Sky.Core.Error exposing (Error)
+import Ipe.Prelude exposing (..)
+import Ipe.Task as Task
+import Ipe.String as String
+import Ipe.Time as Time
+import Ipe.Http.Server as Server
+import Ipe.Http.Server exposing (Request, Response)
+import Ipe.Http.Server.Stream as Stream
+import Ipe.Error exposing (Error)
 
 
 -- | A canonical Server-Sent Events endpoint demonstrating
--- `Sky.Http.Server.Stream`.  Streams a `tick` event every 200ms
+-- `Ipe.Http.Server.Stream`.  Streams a `tick` event every 200ms
 -- for five ticks, then a final `done` event, then closes.
 --
 -- Verify with `curl --no-buffer http://localhost:8000/events` —

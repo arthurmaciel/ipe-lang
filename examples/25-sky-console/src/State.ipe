@@ -1,9 +1,9 @@
 module State exposing (..)
 
--- Pure types + same-shape helpers. No Std.Ui imports here so the
+-- Pure types + same-shape helpers. No Ipe.Ui imports here so the
 -- type-checker stays well below the heap-exhaustion limit
 -- (CLAUDE.md Limitation #17).
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 
 -- ─── Tabs ────────────────────────────────────────────────────────
@@ -129,7 +129,7 @@ mockMetrics : List MetricRow
 mockMetrics =
     [ { name = "sky_requests_total",  value = "1287",   help = "Total HTTP requests served" }
     , { name = "sky_requests_5xx",    value = "16",     help = "Requests resulting in 5xx" }
-    , { name = "sky_sessions_active", value = "23",     help = "Active Sky.Live sessions" }
+    , { name = "sky_sessions_active", value = "23",     help = "Active Ipe.Live sessions" }
     , { name = "sky_uptime_seconds",  value = "142",    help = "Seconds since process start" }
     , { name = "sky_log_buffer_used", value = "432",    help = "Log ring entries in use" }
     , { name = "sky_trace_spans_used",value = "18",     help = "Trace ring spans in use" }

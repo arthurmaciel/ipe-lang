@@ -1,8 +1,8 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Task as Task
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Task as Task
+import Ipe.Log exposing (println)
 
 
 -- BACKLOG #186 regression — `toString` on a wildcard `any` param.

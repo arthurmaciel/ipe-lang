@@ -1,17 +1,17 @@
 module Main exposing (main)
 
-import Std.Html as Html
-import Std.Html.Events as Event
+import Ipe.Html as Html
+import Ipe.Html.Events as Event
 
 
--- #107 POSITIVE sentinel: `Std.Html.Events.onInput` produces a
--- `Std.Html.Attribute msg` that composes with a Std.Html element's attribute
+-- #107 POSITIVE sentinel: `Ipe.Html.Events.onInput` produces a
+-- `Ipe.Html.Attribute msg` that composes with a Ipe.Html element's attribute
 -- list. `onInput` receives a `String -> msg` closure — well-typed.
 --
 -- Pre-#107 this fixture rendered via `Ui.el`, relying on the (incorrect)
--- Event→Ui conflation that made `Std.Html.Events.*` produce a `Std.Ui`
--- attribute. #107 makes `Std.Html.Events` produce `Std.Html.Attribute`, so the
--- correct host is a Std.Html element. Std.Ui events stay covered by
+-- Event→Ui conflation that made `Ipe.Html.Events.*` produce a `Ipe.Ui`
+-- attribute. #107 makes `Ipe.Html.Events` produce `Ipe.Html.Attribute`, so the
+-- correct host is a Ipe.Html element. Ipe.Ui events stay covered by
 -- `stdui_onclick` (which uses `Ui.onClick`).
 --
 -- oracle_divergence = true: Go oracle does not expose Html.htmlRender.

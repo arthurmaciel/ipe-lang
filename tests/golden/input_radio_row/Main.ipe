@@ -1,8 +1,8 @@
 module Main exposing (main)
 
-import Std.Html as Html
-import Std.Ui as Ui
-import Std.Ui.Input as Input
+import Ipe.Html as Html
+import Ipe.Ui as Ui
+import Ipe.Ui.Input as Input
 
 
 -- i155 regression: Input.radio, Input.radioRow, and Input.option must

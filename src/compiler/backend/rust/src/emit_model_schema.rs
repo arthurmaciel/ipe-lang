@@ -1,4 +1,4 @@
-//! Structural fingerprint of a Sky.Live Model type (H24).
+//! Structural fingerprint of a Ipe.Live Model type (H24).
 //!
 //! `model_schema_tag` computes a SHA-256 hash of the Model type's structural
 //! shape, folded with a hand-maintained wire-format epoch constant. The

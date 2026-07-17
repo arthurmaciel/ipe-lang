@@ -1,7 +1,7 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 -- #90 T3 (5th attempt): `Maybe.map2` with an arity-3 callback — the
 -- runtime kernel applies exactly TWO arguments; the residual arrow on the

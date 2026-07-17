@@ -1,4 +1,4 @@
-main_sky_sha256 = 1b8bad050cc7460a84a9006b4a94794e67cd08eddacb9eba0323d1050a8c458b
+main_ipe_sha256 = 1b8bad050cc7460a84a9006b4a94794e67cd08eddacb9eba0323d1050a8c458b
 go_sky_version = sky dev
 exit_code = 0
 oracle_divergence = true

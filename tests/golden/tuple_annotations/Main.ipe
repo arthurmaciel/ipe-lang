@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 firstOf : (Int, Int) -> Int
 firstOf t = if t == (41, 7) then 41 else 0

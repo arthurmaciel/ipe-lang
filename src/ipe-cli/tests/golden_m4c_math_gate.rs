@@ -1,4 +1,4 @@
-//! `Sky.Core.Math` ordering-obligation gate.
+//! `Ipe.Math` ordering-obligation gate.
 //!
 //! `Math.min` / `Math.max` are `Comparable a => a -> a -> a` (Elm `Basics.min` /
 //! `Basics.max`): the shared type variable carries the ORDERING obligation, the

@@ -36,7 +36,7 @@ static KERNEL_NAME_PREFIXES: LazyLock<BTreeSet<&'static str>> = LazyLock::new(||
 /// name; otherwise `None`.
 ///
 /// A user `module Auth` value `hashPassword` folds to `auth_hash_password` —
-/// byte-identical to the `Std.Auth` kernel's runtime name. Once both the user
+/// byte-identical to the `Ipe.Auth` kernel's runtime name. Once both the user
 /// module's `pub use …::*` and `pub use ipe_runtime::*;` land at the crate root,
 /// that name is doubly-defined: the user body's own call to the kernel resolves
 /// to the user function (self-recursion), and the two definitions clash. The
@@ -398,7 +398,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // `math_max<T:PartialOrd>`. No new runtime symbol needed.
         // These arms are merged with their Math.* counterparts below.
         // ── end Basics numerics ──────────────────────────────────────
-        // ── Error kernels (Sky.Core.Error — real Error/ErrorKind ADT) ──
+        // ── Error kernels (Ipe.Error — real Error/ErrorKind ADT) ──
         // Each message constructor classifies its own `ErrorKind` at
         // construction (`ipe_runtime::error::IpeError`, not a shared
         // string-identity). `toString` reuses the existing `errorToString`
@@ -411,7 +411,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::ErrorDecode => "ipe_error_decode",
         KernelFn::ErrorConflict => "ipe_error_conflict",
         KernelFn::ErrorUnavailable => "ipe_error_unavailable",
-        // ── CssSafety (Sky.Core.CssSafety — Std.Css leaf kernels) ──────
+        // ── CssSafety (Ipe.CssSafety — Ipe.Css leaf kernels) ──────
         // The bare runtime fn names, re-exported at the `ipe_runtime` root via
         // `pub use css::*`. `safe_value`/`safe_prop_name`/`safe_selector` return
         // `IpeMaybe<String>`; `strip_style_close_kernel` returns `String`.
@@ -558,7 +558,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::JsonEncList => "json_enc_list",
         KernelFn::JsonEncObject => "json_enc_object",
         KernelFn::JsonEncEncode => "json_enc_encode",
-        // ── JsonDec kernels (shared by Std.Config over the same carrier) ─
+        // ── JsonDec kernels (shared by Ipe.Config over the same carrier) ─
         KernelFn::JsonDecString | KernelFn::ConfigString => "json_decode_string",
         KernelFn::JsonDecInt | KernelFn::ConfigInt => "json_decode_int",
         KernelFn::JsonDecFloat | KernelFn::ConfigFloat => "json_decode_float",
@@ -777,7 +777,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::DbDecRequired => "db_decode_required",
         KernelFn::DbDecOptional => "db_decode_optional",
         KernelFn::DbDecMoney => "db_decode_money",
-        // ── Std.Db.Sql — SqlFragment builder ───────────────────
+        // ── Ipe.Db.Sql — SqlFragment builder ───────────────────
         // `int`/`string`/`float`/`bool` share `sql_param`'s runtime symbol —
         // each is a Sky-level type narrowing of the same generic
         // `sql_param::<T: Into<SqlParam>>`, so no separate runtime fn exists.
@@ -800,39 +800,39 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::SqlIsNotNull => "sql_is_not_null",
         KernelFn::SqlInList => "sql_in_list",
         KernelFn::SqlLike => "sql_like",
-        // ── Sky.Core.Secret — opaque secret-string wrapper ─────
+        // ── Ipe.Secret — opaque secret-string wrapper ─────
         KernelFn::SecretFromString => "secret_from_string",
         KernelFn::SecretReveal => "secret_reveal",
         KernelFn::SecretRedacted => "secret_redacted",
-        // ── Sky.Core.Regex kernels (pure; ungated runtime re-export) ────
+        // ── Ipe.Regex kernels (pure; ungated runtime re-export) ────
         // Names MUST match `ipe_runtime::regex_kernel::*` exactly.
         KernelFn::RegexMatch => "regex_match",
         KernelFn::RegexFind => "regex_find",
         KernelFn::RegexFindAll => "regex_find_all",
         KernelFn::RegexReplace => "regex_replace",
         KernelFn::RegexSplit => "regex_split",
-        // ── Sky.Core.Path kernels (pure; ungated runtime re-export) ─────
+        // ── Ipe.Path kernels (pure; ungated runtime re-export) ─────
         // Names MUST match `ipe_runtime::path::*` exactly.
         KernelFn::PathBase => "path_base",
         KernelFn::PathDir => "path_dir",
         KernelFn::PathExt => "path_ext",
         KernelFn::PathIsAbsolute => "path_is_absolute",
-        // ── Std.Trace kernels (Task; runtime `ipe_runtime::trace::*`) ───
+        // ── Ipe.Trace kernels (Task; runtime `ipe_runtime::trace::*`) ───
         KernelFn::TraceSpan => "trace_span",
         KernelFn::TraceEvent => "trace_event",
         KernelFn::TraceAttr => "trace_attr",
-        // ── Std.Compression kernels (`ipe_runtime::compression::*`) ─────
+        // ── Ipe.Compression kernels (`ipe_runtime::compression::*`) ─────
         KernelFn::CompressionGzip => "compression_gzip",
         KernelFn::CompressionGunzip => "compression_gunzip",
         KernelFn::CompressionZstdCompress => "compression_zstd_compress",
         KernelFn::CompressionZstdDecompress => "compression_zstd_decompress",
-        // ── Std.Csv kernels (`ipe_runtime::csv::*`) ────────────────────
+        // ── Ipe.Csv kernels (`ipe_runtime::csv::*`) ────────────────────
         KernelFn::CsvParse => "csv_parse",
         KernelFn::CsvParseWithDelimiter => "csv_parse_with_delimiter",
         KernelFn::CsvEncode => "csv_encode",
         KernelFn::CsvEncodeWithDelimiter => "csv_encode_with_delimiter",
         KernelFn::CsvParseStreamFromFile => "csv_parse_stream_from_file",
-        // ── Std.Cache kernels (`ipe_runtime::cache::*`) ────────────────
+        // ── Ipe.Cache kernels (`ipe_runtime::cache::*`) ────────────────
         // Names MUST match the runtime fns exactly (`cache_new_raw`).
         KernelFn::CacheNewRaw => "cache_new_raw",
         KernelFn::CacheGet => "cache_get",
@@ -841,7 +841,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::CacheClear => "cache_clear",
         KernelFn::CacheSize => "cache_size",
         KernelFn::CacheStats => "cache_stats",
-        // ── Std.Config format/nullable/load kernels (Config-own fns) ────
+        // ── Ipe.Config format/nullable/load kernels (Config-own fns) ────
         // The 11 combinator/primitive `Config_*` kernels reuse the shared JSON
         // `decode_*` / `json_decode_*` fns (merged into the `JsonDec*` arms
         // above); only these five have Config-specific runtime fns.
@@ -850,7 +850,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::ConfigDecodeYaml => "config_decode_yaml",
         KernelFn::ConfigDecodeJson => "config_decode_json",
         KernelFn::ConfigLoadFromFile => "config_load_from_file",
-        // ── Std.Email ───────────────────────────────────────────────────
+        // ── Ipe.Email ───────────────────────────────────────────────────
         KernelFn::EmailSend => "email_send",
         // ── TEA Cmd / Sub / Time kernels (wired) ────────────────────────
         KernelFn::CmdNone => "cmd_none",
@@ -867,7 +867,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::SubSubscribeTopic => "sub_subscribe_topic",
         KernelFn::PubSubPublish => "pubsub_publish",
         KernelFn::PubSubPublishNoEcho => "pubsub_publish_no_echo",
-        // ── Sky.Http.Server kernels (wired) ─────────────────────────────────
+        // ── Ipe.Http.Server kernels (wired) ─────────────────────────────────
         KernelFn::ServerGet => "server_get",
         KernelFn::ServerPost => "server_post",
         KernelFn::ServerPut => "server_put",
@@ -897,7 +897,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::MiddlewareWithRateLimit => "middleware_with_rate_limit",
         KernelFn::MiddlewareWithCsrf => "middleware_with_csrf",
         KernelFn::RateLimitAllow => "rate_limit_allow",
-        // ── Std.Ui / Std.Html render kernels (fully wired) ──────────────
+        // ── Ipe.Ui / Ipe.Html render kernels (fully wired) ──────────────
         KernelFn::UiLayout => "ui_layout",
         KernelFn::UiLayoutWith => "ui_layout_with",
         // `Html.toString` is a distinct kernel sharing `HtmlRender`'s runtime fn.
@@ -905,17 +905,17 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::HtmlEscapeText => "html_escape_text_",
         KernelFn::HtmlEscapeAttr => "html_escape_attr_",
         KernelFn::HtmlAttrToString => "html_attr_to_string_",
-        // ── Std.Live app-entry kernels ──────────────────────────────────
+        // ── Ipe.Live app-entry kernels ──────────────────────────────────
         KernelFn::LiveApp => "live_app",
         KernelFn::LiveAppRouted => "live_app_routed",
         KernelFn::LiveRoute => "live_route",
         KernelFn::LiveRenderStatic => "live_render_static",
-        // ── Std.Tui app-entry kernels ───────────────────────────────────
+        // ── Ipe.Tui app-entry kernels ───────────────────────────────────
         KernelFn::TuiProgram => "tui_app",
         KernelFn::TuiApp => "tui_app_ui",
-        // ── Std.Webview app-entry kernel ────────────────────────────────
+        // ── Ipe.Webview app-entry kernel ────────────────────────────────
         KernelFn::WebviewApp => "webview_app",
-        // ── Std.Ui element builders ──────────────────────────────────────
+        // ── Ipe.Ui element builders ──────────────────────────────────────
         KernelFn::UiNone => "ui_none_",
         KernelFn::UiText => "ui_text_",
         KernelFn::UiHtml => "ui_html_",
@@ -936,7 +936,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::UiOnRight => "ui_on_right_",
         KernelFn::UiInFront => "ui_in_front_",
         KernelFn::UiBehind => "ui_behind_",
-        // ── Std.Ui attribute builders ────────────────────────────────────
+        // ── Ipe.Ui attribute builders ────────────────────────────────────
         KernelFn::UiSpacing => "ui_spacing_",
         KernelFn::UiPadding => "ui_padding_",
         KernelFn::UiPaddingXY => "ui_padding_xy_",
@@ -957,7 +957,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::UiScrollbarX => "ui_scrollbar_x_",
         KernelFn::UiScrollbarY => "ui_scrollbar_y_",
         KernelFn::UiGridColumns => "ui_grid_columns_",
-        // ── Std.Ui Length builders ───────────────────────────────────────
+        // ── Ipe.Ui Length builders ───────────────────────────────────────
         KernelFn::UiPx => "ui_px_",
         KernelFn::UiFill => "ui_fill_",
         KernelFn::UiContent => "ui_content_",
@@ -967,7 +967,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::UiVw => "ui_vw_",
         KernelFn::UiMinimum => "ui_minimum_",
         KernelFn::UiMaximum => "ui_maximum_",
-        // ── Std.Ui Color builders ────────────────────────────────────────
+        // ── Ipe.Ui Color builders ────────────────────────────────────────
         KernelFn::UiRgb => "ui_rgb_",
         KernelFn::UiRgba => "ui_rgba_",
         KernelFn::UiWhite => "ui_white_",
@@ -990,7 +990,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::FontFamily => "ui_font_family_",
         KernelFn::FontBold => "ui_font_bold_",
         KernelFn::FontItalic => "ui_font_italic_",
-        // ── extended Std.Ui / Font / Background / Border builders ──
+        // ── extended Ipe.Ui / Font / Background / Border builders ──
         KernelFn::UiSquare => "ui_square_",
         KernelFn::UiWidescreen => "ui_widescreen_",
         KernelFn::UiCinemascope => "ui_cinemascope_",
@@ -1055,7 +1055,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::FontHoverSize => "ui_font_hover_size_",
         KernelFn::HtmlAttrTabindex => "html_attr_tabindex_",
         KernelFn::HtmlAttrRows => "html_attr_rows_",
-        // ── Std.Ui.Region ──────────────────────────────────────────────
+        // ── Ipe.Ui.Region ──────────────────────────────────────────────
         KernelFn::RegionMainContent => "ui_region_main_content_",
         KernelFn::RegionNavigation => "ui_region_navigation_",
         KernelFn::RegionFooter => "ui_region_footer_",
@@ -1075,7 +1075,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::UiDescLiveAssertive => "ui_desc_live_assertive_",
         KernelFn::UiDescHeading => "ui_desc_heading_",
         KernelFn::UiDescLabel => "ui_desc_label_",
-        // ── Std.Ui.Input ───────────────────────────────────────────────
+        // ── Ipe.Ui.Input ───────────────────────────────────────────────
         KernelFn::InputLabelAbove => "input_label_above_",
         KernelFn::InputLabelBelow => "input_label_below_",
         KernelFn::InputLabelLeft => "input_label_left_",
@@ -1107,7 +1107,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::HtmlP => "html_p_",
         KernelFn::HtmlInput => "html_input_",
         KernelFn::HtmlImg => "html_img_",
-        // batch 2: Std.Html element builders — tag-as-data, all share the
+        // batch 2: Ipe.Html element builders — tag-as-data, all share the
         // generic `html_node_` sink (the wire tag is injected by `emit_ui_call`).
         // `Html.node` itself shares this bare helper name (same sink).
         // `Html.voidNode` shares it too — tag is a real runtime arg, empty
@@ -1182,7 +1182,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         | KernelFn::HtmlSource
         | KernelFn::HtmlTrack
         | KernelFn::HtmlWbr => "html_node_",
-        // Std.Html.Attributes builders. The full call (including the fixed
+        // Ipe.Html.Attributes builders. The full call (including the fixed
         // key literal) is produced by `emit_ui_call`; these names are the bare
         // runtime helpers, kept for the exhaustive match / any generic path.
         KernelFn::HtmlAttrClass
@@ -1221,7 +1221,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::UiOnBool => "ui_on_bool_",
         KernelFn::UiOnSubmit => "ui_on_submit_",
         KernelFn::UiOnFile => "ui_on_file_",
-        // Std.Html.Events builders — emitted via the dedicated
+        // Ipe.Html.Events builders — emitted via the dedicated
         // `emit_ui_call` arm (`html_event_shape().is_some()`), so this generic
         // name map is not consulted at emit time; the arms are here to keep the
         // match exhaustive and the name faithful to each runtime constructor.
@@ -1240,7 +1240,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // CliProgram is emitted via the dedicated emit_cli_call path;
         // kernel_name is kept for match exhaustiveness.
         KernelFn::CliProgram => "ipe_cli_program_",
-        // ── Std.Auth runtime function names (auth.rs) ──────────────────
+        // ── Ipe.Auth runtime function names (auth.rs) ──────────────────
         KernelFn::AuthHashPassword => "auth_hash_password",
         KernelFn::AuthHashPasswordCost => "auth_hash_password_cost",
         KernelFn::AuthVerifyPassword => "auth_verify_password",
@@ -1250,17 +1250,17 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::AuthRegister => "auth_register",
         KernelFn::AuthLogin => "auth_login",
         KernelFn::AuthSetRole => "auth_set_role",
-        // ── Sky.Http.Server.Stream runtime function names (server_stream.rs)
+        // ── Ipe.Http.Server.Stream runtime function names (server_stream.rs)
         KernelFn::StreamStream => "server_stream_stream",
         KernelFn::StreamEmit => "server_stream_emit",
         KernelFn::StreamFinish => "server_stream_finish",
         KernelFn::StreamWithContentType => "server_stream_with_content_type",
-        // ── Sky.Core.Http.Stream runtime function names (http_stream.rs) ─
+        // ── Ipe.Http.Stream runtime function names (http_stream.rs) ─
         KernelFn::HttpStreamOpen => "http_stream_open",
         KernelFn::HttpStreamForEachChunk => "http_stream_for_each_chunk",
         KernelFn::HttpStreamClose => "http_stream_close",
         KernelFn::HttpStreamChunks => "sub_subscribe_stream",
-        // ── Sky.Http.Server.WebSocket runtime function names (server.rs) ─
+        // ── Ipe.Http.Server.WebSocket runtime function names (server.rs) ─
         KernelFn::WsDefaultCfg => "ws_server_default_cfg",
         KernelFn::WsWithOnConnect => "ws_server_with_on_connect",
         KernelFn::WsWithOnMessage => "ws_server_with_on_message",
@@ -1273,7 +1273,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::WsSendBinaryToClient => "ws_server_send_binary_to_client",
         KernelFn::WsBroadcast => "ws_server_broadcast",
         KernelFn::WsCloseClient => "ws_server_close_client",
-        // ── Sky.Core.WebSocket outbound-client runtime fn names (ws_client.rs) ─
+        // ── Ipe.WebSocket outbound-client runtime fn names (ws_client.rs) ─
         KernelFn::WebSocketConnect => "web_socket_connect",
         KernelFn::WebSocketConnectWith => "web_socket_connect_with",
         KernelFn::WebSocketSend => "web_socket_send",
@@ -1284,16 +1284,16 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         // of the four typed `sub_subscribe_ws_*` fns; this name is the fallback
         // (the `message` kind) and is never emitted via the standard N-arg path.
         KernelFn::SubSubscribeWebSocket => "sub_subscribe_ws_message",
-        // ── Std.Ui.Lazy ────────────────────────────────────────────────
+        // ── Ipe.Ui.Lazy ────────────────────────────────────────────────
         KernelFn::LazyLazy => "lazy_lazy_",
         KernelFn::LazyLazy2 => "lazy_lazy2_",
         KernelFn::LazyLazy3 => "lazy_lazy3_",
         KernelFn::LazyLazy4 => "lazy_lazy4_",
         KernelFn::LazyLazy5 => "lazy_lazy5_",
-        // ── Std.Ui.Keyed ──────────────────────────────────────────────────────
+        // ── Ipe.Ui.Keyed ──────────────────────────────────────────────────────
         KernelFn::KeyedColumn => "keyed_column_",
         KernelFn::KeyedRow => "keyed_row_",
-        // ── Std.Decimal ───────────────────────────────────────────────────────
+        // ── Ipe.Decimal ───────────────────────────────────────────────────────
         KernelFn::DecZero => "decimal_zero",
         KernelFn::DecOne => "decimal_one",
         KernelFn::DecOneHundred => "decimal_one_hundred",
@@ -1396,7 +1396,7 @@ mod tests {
     #[test]
     fn user_module_named_after_kernel_namespace_is_disambiguated() {
         // A user `module Auth` value `hashPassword` folds to `auth_hash_password`,
-        // byte-identical to the `Std.Auth` kernel runtime name — self-recursion +
+        // byte-identical to the `Ipe.Auth` kernel runtime name — self-recursion +
         // duplicate-definition once both glob re-exports land at the crate root.
         // The `user_` prefix makes the user side provably disjoint from every
         // kernel while leaving the kernel name untouched.
@@ -1411,7 +1411,7 @@ mod tests {
         assert_ne!(
             module_value(&["Auth"], "hashPassword"),
             kernel_name(KernelFn::AuthHashPassword),
-            "user Auth.hashPassword must not collide with the Std.Auth kernel"
+            "user Auth.hashPassword must not collide with the Ipe.Auth kernel"
         );
         // Every function in a kernel-owned namespace is disambiguated uniformly,
         // even one with no kernel counterpart (`mintToken`), so the whole module

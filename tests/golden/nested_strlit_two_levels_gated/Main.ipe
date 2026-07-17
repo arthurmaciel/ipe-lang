@@ -1,7 +1,7 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 -- Adversarial-review sibling gap (Finding A) of the #158 C2 string-literal
 -- ctor-payload desugaring: a `PStr` sub-pattern nested TWO levels deep in a

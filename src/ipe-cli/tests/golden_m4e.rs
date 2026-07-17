@@ -1,6 +1,6 @@
-//! `Sky.Core.Bytes` parity gate — `Bytes` as a distinct `Vec<u8>` primitive.
+//! `Ipe.Bytes` parity gate — `Bytes` as a distinct `Vec<u8>` primitive.
 //!
-//! These golden tests exercise the `Sky.Core.Bytes` kernel family end-to-end:
+//! These golden tests exercise the `Ipe.Bytes` kernel family end-to-end:
 //!
 //! * `Bytes.length` / `Bytes.isEmpty` on `Bytes.empty` and a non-empty buffer
 //!   → `"0 5 1 0"` (`bytes_length`)

@@ -1,8 +1,8 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.List as List
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
+import Ipe.Log exposing (println)
 
 
 -- A MULTI-arm `case` on a LITERAL tuple whose columns are cons patterns plus a

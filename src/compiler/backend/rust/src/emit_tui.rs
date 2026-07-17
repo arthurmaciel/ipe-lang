@@ -1,9 +1,9 @@
-//! Emission for `Std.Tui` / `Sky.Tui` app-entry kernels.
+//! Emission for `Ipe.Tui` / `Ipe.Tui` app-entry kernels.
 //!
 //! Wires the two Tui kernels:
 //!
 //! * [`KernelFn::TuiApp`] — `Tui.app cfg` → `ipe_runtime::tui::tui_app_ui(…)`.
-//!   View returns `Element<Msg>` (the Std.Ui typed element tree, rendered to ANSI
+//!   View returns `Element<Msg>` (the Ipe.Ui typed element tree, rendered to ANSI
 //!   cells by the runtime).  5-field cfg (init / update / view / subscriptions /
 //!   onKey) with an open row tail for optional fields.
 //! * [`KernelFn::TuiProgram`] — `Tui.program cfg` → `ipe_runtime::tui::tui_app(…)`.
@@ -61,7 +61,7 @@ use crate::EmitCtx;
 use crate::emit_expr::{callee_name, emit_expr_at};
 use crate::emit_types::GenericScope;
 
-/// Dispatch a `Std.Tui` / `Sky.Tui` kernel call.
+/// Dispatch a `Ipe.Tui` / `Ipe.Tui` kernel call.
 ///
 /// Returns `Some(emitted)` for `TuiApp` and `TuiProgram`; `None` for any other
 /// variant (defensive — the caller already guards on `k.is_tui()`).

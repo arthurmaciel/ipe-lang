@@ -1,9 +1,9 @@
 module Lib.Schema exposing (initDb)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 import Lib.Db as Db
-import Sky.Core.Error as Error exposing (Error)
+import Ipe.Error as Error exposing (Error)
 
 
 -- Schema migrations are CREATE TABLE IF NOT EXISTS — idempotent and

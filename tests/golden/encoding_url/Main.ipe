@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-import Sky.Core.Encoding as Encoding
+import Ipe.Encoding as Encoding
 
 -- urlEncode "a b&c" = "a+b%26c" (Go QueryEscape: space→+).
 -- Decode is done from the known constant to avoid using `encoded` twice.

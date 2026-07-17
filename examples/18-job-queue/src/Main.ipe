@@ -1,21 +1,21 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.List as List
-import Sky.Core.String as String
-import Sky.Core.Maybe as Maybe
-import Sky.Core.Dict as Dict
-import Sky.Core.Task as Task
-import Sky.Core.Time as Time
-import Sky.Core.Random as Random
-import Sky.Core.Crypto as Crypto
-import Sky.Core.Error as Error exposing (Error)
-import Std.Db as Db
-import Std.Live as Live exposing (app, route)
-import Std.Html exposing (..)
-import Std.Html.Events exposing (onClick)
-import Std.Cmd as Cmd
-import Std.Sub as Sub
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Maybe as Maybe
+import Ipe.Dict as Dict
+import Ipe.Task as Task
+import Ipe.Time as Time
+import Ipe.Random as Random
+import Ipe.Crypto as Crypto
+import Ipe.Error as Error exposing (Error)
+import Ipe.Db as Db
+import Ipe.Live as Live exposing (app, route)
+import Ipe.Html exposing (..)
+import Ipe.Html.Events exposing (onClick)
+import Ipe.Cmd as Cmd
+import Ipe.Sub as Sub
 
 type Page
     = DashboardPage
@@ -387,7 +387,7 @@ view model =
         div
             []
             [ h1 [] [text "Job Queue Dashboard"]
-            , p [] [text "Async Cmd.perform with Sky.Live"]
+            , p [] [text "Async Cmd.perform with Ipe.Live"]
             , p
                   []
                   [text

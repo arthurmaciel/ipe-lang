@@ -17,12 +17,12 @@ module Main exposing (main)
 -- `FnOnceChain` shape the runtime uses (`Box<dyn FnOnce(..) -> _ + Send>`,
 -- Send-only, never `+ Sync`) — a decoder payload is owned/linear and never
 -- flows into an `Arc<dyn Fn + Send + Sync>` callback slot.
-import Sky.Core.Json.Decode as JsonDec exposing (Decoder)
-import Sky.Core.Json.Decode.Pipeline as Pipeline
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Result as Result
-import Sky.Core.String as String
-import Std.Log exposing (println)
+import Ipe.Json.Decode as JsonDec exposing (Decoder)
+import Ipe.Json.Decode.Pipeline as Pipeline
+import Ipe.Prelude exposing (..)
+import Ipe.Result as Result
+import Ipe.String as String
+import Ipe.Log exposing (println)
 
 
 type alias Transaction =

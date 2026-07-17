@@ -1,4 +1,4 @@
-//! Soundness regression for Limitation #8 — a large `Sky.Core.List` pipeline
+//! Soundness regression for Limitation #8 — a large `Ipe.List` pipeline
 //! runs in CONSTANT native stack, so a well-typed program cannot abort via a
 //! Rust stack overflow (guard-page `abort()` → SIGABRT, an unclassifiable
 //! process death) on a big list.

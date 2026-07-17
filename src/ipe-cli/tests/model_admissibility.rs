@@ -1,4 +1,4 @@
-//! The `Std.Live` / `Std.Tui` / `Std.Webview` app-entry
+//! The `Ipe.Live` / `Ipe.Tui` / `Ipe.Webview` app-entry
 //! Model-admissibility gate.
 //!
 //! `live_app` bounds its Model `serde::Serialize + serde::de::DeserializeOwned +
@@ -60,8 +60,8 @@ fn assert_accepted(test_name: &str, source: &str) -> Result<(), BoxError> {
 
 const LIVE_GOOD: &str = r"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 
 type Msg = Increment
 
@@ -94,8 +94,8 @@ main =
 
 const LIVE_CMD_MODEL: &str = r"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 
 type Msg = Tick
 
@@ -128,8 +128,8 @@ main =
 
 const LIVE_HTML_MODEL: &str = r#"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 
 type Msg = Tick
 
@@ -160,14 +160,14 @@ main =
         }
 "#;
 
-// A `Secret` Model field must be rejected for `Std.Live` — a
+// A `Secret` Model field must be rejected for `Ipe.Live` — a
 // `Secret` must NEVER round-trip through the session store. `Secret` is
 // NON-serde by design (`ir_type_is_serde(Secret) = false`), so this is the
 // SAME mechanism as `LIVE_CMD_MODEL` / `LIVE_HTML_MODEL` above, not a new gate.
 const LIVE_SECRET_MODEL: &str = r#"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 
 type Msg = Tick
 
@@ -200,8 +200,8 @@ main =
 
 const TUI_GOOD: &str = r"module Main exposing (main)
 
-import Std.Tui as Tui
-import Std.Ui as Ui
+import Ipe.Tui as Tui
+import Ipe.Ui as Ui
 
 type Msg = Increment | NoOp
 
@@ -242,8 +242,8 @@ main =
 
 const TUI_CMD_MODEL: &str = r"module Main exposing (main)
 
-import Std.Tui as Tui
-import Std.Ui as Ui
+import Ipe.Tui as Tui
+import Ipe.Ui as Ui
 
 type Msg = Increment | NoOp
 
@@ -293,7 +293,7 @@ fn live_model_with_cmd_field_is_rejected() -> Result<(), BoxError> {
 }
 
 /// The CDPeq-but-not-serde case: `Html` is `Clone`/`PartialEq` but not `serde`,
-/// so a `Sky.Live` Model storing it is rejected (unlike Tui/Webview).
+/// so a `Ipe.Live` Model storing it is rejected (unlike Tui/Webview).
 #[test]
 fn live_model_with_html_field_is_rejected() -> Result<(), BoxError> {
     assert_rejected_with("live_html", LIVE_HTML_MODEL, "IPE-L0120")
@@ -332,8 +332,8 @@ fn tui_model_with_cmd_field_is_rejected() -> Result<(), BoxError> {
 /// it with IPE-L0120.
 const LIVE_LAMBDA_VIEW_CMD_MODEL: &str = r"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 
 type Msg = Tick
 
@@ -366,8 +366,8 @@ main =
 /// ACCEPTED — proves the Lambda arm recovers the Model without false-rejecting.
 const LIVE_LAMBDA_VIEW_GOOD: &str = r"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 
 type Msg = Increment
 

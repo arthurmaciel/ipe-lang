@@ -1,11 +1,11 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Task as Task
-import Sky.Core.List as List
-import Std.Html as Html exposing (Html)
-import Std.Html.Attributes as Attr exposing (Attribute)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Task as Task
+import Ipe.List as List
+import Ipe.Html as Html exposing (Html)
+import Ipe.Html.Attributes as Attr exposing (Attribute)
+import Ipe.Log exposing (println)
 
 
 -- BACKLOG #190 regression — a generic-typed callback boxed as `+ 'static`.
@@ -18,7 +18,7 @@ import Std.Log exposing (println)
 -- `msg: 'static`; the emitted `linkNode`/`pairToAttr` functions carried only
 -- `<T1: Clone>`.
 --
--- This is EXACTLY the `Std.Live.Head.link` shape — `List.map pairToAttr attrs`
+-- This is EXACTLY the `Ipe.Live.Head.link` shape — `List.map pairToAttr attrs`
 -- boxes the `msg`-generic `pairToAttr` into a `+ 'static` trait object.
 --
 -- Fix (`BoundSet::STATIC` + `body_boxes_generic_callback` in `sky_lower`): a

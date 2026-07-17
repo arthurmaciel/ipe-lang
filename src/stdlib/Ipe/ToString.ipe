@@ -1,0 +1,34 @@
+-- | Ipe.ToString — naming-consistency surface (v0.15.48+).
+--
+-- Thin aliases to the canonical kernels in their home modules;
+-- the purpose is editor + `sky doc` discoverability so callers can
+-- write `ToString.fromInt n` instead of memorising the per-type
+-- kernel sub-namespace.
+--
+-- `fromTime` is OMITTED: it requires a `Time_timeString` Rust kernel
+-- that is not yet backed; tracked as a separate backlog item.
+--
+-- All top-level bindings are fully annotated (compiled-source
+-- discipline — annotation-driven generalisation; no whole-program
+-- let-gen).
+module Ipe.ToString exposing (fromInt, fromFloat, fromBool)
+
+
+fromInt : Int -> String
+fromInt n =
+    String.fromInt n
+
+
+fromFloat : Float -> String
+fromFloat x =
+    String.fromFloat x
+
+
+fromBool : Bool -> String
+fromBool b =
+    case b of
+        True ->
+            "True"
+
+        False ->
+            "False"

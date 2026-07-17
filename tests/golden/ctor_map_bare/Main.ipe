@@ -1,7 +1,7 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.List as List
-import Sky.Core.String as String
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
+import Ipe.String as String
 
 -- A1 (#147 seal). `Wrap : Int -> Box` (arity 1) is passed bare to
 -- `List.map` — the lowerer eta-expands it into a `|eta_0| Box::Wrap(eta_0)` closure.

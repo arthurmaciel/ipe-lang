@@ -1,8 +1,8 @@
 module Head exposing (headFor)
 
-import Sky.Core.Prelude exposing (..)
-import Std.Html exposing (Html)
-import Std.Live.Head as Head
+import Ipe.Prelude exposing (..)
+import Ipe.Html exposing (Html)
+import Ipe.Live.Head as Head
 import State exposing (..)
 
 
@@ -35,7 +35,7 @@ pageMeta model =
 
         HomePage ->
             { title = "Sky Bazaar — carefully made things"
-            , description = "A tiny demo storefront exercising Sky.Live, Std.Ui, and pub/sub."
+            , description = "A tiny demo storefront exercising Ipe.Live, Ipe.Ui, and pub/sub."
             , canonical = "https://shop.example/"
             }
 

@@ -7,8 +7,8 @@ module Main exposing (main)
 -- Passing the payload to `String.length : String -> Int` gives
 -- Dict String String ≠ String → IPE-T0001.
 
-import Sky.Core.Prelude exposing (..)
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
 
 type Msg
     = BroadcastMsg any

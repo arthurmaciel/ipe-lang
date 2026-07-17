@@ -2,7 +2,7 @@ module Main exposing (main)
 
 -- Regression for #179 — Attribute<msg> type-identity disambiguation.
 --
--- `import Std.Html.Attributes as Attr exposing (Attribute)` brings the bare
+-- `import Ipe.Html.Attributes as Attr exposing (Attribute)` brings the bare
 -- `Attribute` TYPE into unqualified scope. A polymorphic-msg function annotated
 -- `List (Attribute msg)` whose body produces `Attr.attribute …` (an
 -- `sky_runtime::html::Attribute`) MUST lower its return type to
@@ -13,10 +13,10 @@ module Main exposing (main)
 -- while the body produced `html::Attribute` → E0308 at cargo build (skyc still
 -- exited 0: a SEAL violation). Feeding the list into an SVG node (`Html.node`,
 -- which takes `List (html::Attribute)`) locks in the html home so a solver
--- mismatch (`expected Html.Attribute, found Std.Html.Attributes.Attribute`)
+-- mismatch (`expected Html.Attribute, found Ipe.Html.Attributes.Attribute`)
 -- would also surface if the recorded home diverged from the constrainer's.
 --
--- `Std.Ui.Chart.bar` additionally exercises the Chart module's own
+-- `Ipe.Ui.Chart.bar` additionally exercises the Chart module's own
 -- `svgRootAttrs : Cfg -> List (Attr.Attribute msg)` path (#185) — the QUALIFIED
 -- `Attr.Attribute` counterpart of the bare-exposed `pairToAttr` — which builds
 -- the same `<svg>` attribute list. Both must agree on `html::Attribute`.
@@ -29,13 +29,13 @@ module Main exposing (main)
 -- oracle_divergence = true: skyc's own correct output, not a Go oracle diff —
 -- this asserts the Attribute newtype identity through a runnable render.
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.List as List
-import Sky.Core.String as String
-import Std.Html as Html exposing (Html)
-import Std.Html.Attributes as Attr exposing (Attribute)
-import Std.Ui as Ui exposing (Element)
-import Std.Ui.Chart as Chart
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Html as Html exposing (Html)
+import Ipe.Html.Attributes as Attr exposing (Attribute)
+import Ipe.Ui as Ui exposing (Element)
+import Ipe.Ui.Chart as Chart
 
 
 type Msg
@@ -43,13 +43,13 @@ type Msg
 
 
 -- The #179 shape: polymorphic `msg`, bare exposed `Attribute`, html-producing
--- body. This is the exact signature of `Std.Live.Head.pairToAttr`.
+-- body. This is the exact signature of `Ipe.Live.Head.pairToAttr`.
 pairToAttr : (String, String) -> Attribute msg
 pairToAttr pair =
     Attr.attribute (fst pair) (snd pair)
 
 
--- An SVG-root attribute list, Chart-style — mirrors `Std.Ui.Chart.svgRootAttrs`.
+-- An SVG-root attribute list, Chart-style — mirrors `Ipe.Ui.Chart.svgRootAttrs`.
 svgRootAttrs : List (Attribute msg)
 svgRootAttrs =
     [ Attr.attribute "viewBox" "0 0 100 40"
@@ -74,7 +74,7 @@ svgNode =
         ]
 
 
--- A real Chart element locks in the Std.Ui.Chart svgRootAttrs path (#185).
+-- A real Chart element locks in the Ipe.Ui.Chart svgRootAttrs path (#185).
 chartElement : Element Msg
 chartElement =
     Chart.bar

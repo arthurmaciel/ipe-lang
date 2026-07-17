@@ -1,12 +1,12 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.List as List
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.List as List
+import Ipe.Log exposing (println)
 
 
 -- #174 — a multi-arm / refutable tuple `case` on a NON-literal (variable)
--- scrutinee. This is the `Sky.Test.summarise` shape (`case pair of ( _, Passed )
+-- scrutinee. This is the `Ipe.Test.summarise` shape (`case pair of ( _, Passed )
 -- -> … ; ( name, Failed _ ) -> …`). Before #174 only a LITERAL-tuple scrutinee
 -- could drive a tuple `match`, so a variable scrutinee fell fail-closed as
 -- IPE-L0115. It now lowers to a by-value whole `match pair { (_, Passed) => …,
@@ -17,7 +17,7 @@ type Outcome
     | Failed Int
 
 
--- Exact `Sky.Test.summarise` shape: a variable scrutinee, a wildcard column, and
+-- Exact `Ipe.Test.summarise` shape: a variable scrutinee, a wildcard column, and
 -- a refutable ctor column across two arms.
 countFailure : ( Int, Outcome ) -> Int
 countFailure pair =

@@ -13,8 +13,8 @@ module Main exposing (main)
 -- here `JsonDec.field "v" JsonDec.int` reads field "v" from the top-level
 -- object, exercising `custom` as distinct from `required`.
 
-import Sky.Core.Json.Decode as JsonDec
-import Sky.Core.Json.Decode.Pipeline as Pipe
+import Ipe.Json.Decode as JsonDec
+import Ipe.Json.Decode.Pipeline as Pipe
 
 
 mkPair : String -> (Int -> String)

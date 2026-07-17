@@ -49,8 +49,8 @@ fn unknown_kernel_alias_is_rejected_at_compile_time() {
     let wrote = write_project(
         &tmp,
         "module Main exposing (main)\n\
-         import Sky.Core.Prelude exposing (..)\n\
-         import Std.Log exposing (println)\n\n\
+         import Ipe.Prelude exposing (..)\n\
+         import Ipe.Log exposing (println)\n\n\
          bogus : String -> String\n\
          bogus =\n\
          \x20   Ffi.kernel \"NoSuchKernel_xyz\"\n\n\
@@ -108,8 +108,8 @@ fn malformed_kernel_alias_string_is_rejected() {
     let wrote = write_project(
         &tmp,
         "module Main exposing (main)\n\
-         import Sky.Core.Prelude exposing (..)\n\
-         import Std.Log exposing (println)\n\n\
+         import Ipe.Prelude exposing (..)\n\
+         import Ipe.Log exposing (println)\n\n\
          bogus : String -> String\n\
          bogus =\n\
          \x20   Ffi.kernel \"NoUnderscoreHere\"\n\n\
@@ -150,8 +150,8 @@ fn registered_kernel_alias_resolves_and_builds() {
     let wrote = write_project(
         &tmp,
         "module Main exposing (main)\n\
-         import Sky.Core.Prelude exposing (..)\n\
-         import Std.Log exposing (println)\n\n\
+         import Ipe.Prelude exposing (..)\n\
+         import Ipe.Log exposing (println)\n\n\
          shout : String -> String\n\
          shout =\n\
          \x20   Ffi.kernel \"String_toUpper\"\n\n\

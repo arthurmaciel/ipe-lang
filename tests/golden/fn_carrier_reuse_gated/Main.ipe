@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- #90 T4 residual gate: a fn-carrying, non-Clone `let`-binding used in TWO
 -- consuming (argument) positions has no sound rewrite (`Box<dyn Fn>` is not

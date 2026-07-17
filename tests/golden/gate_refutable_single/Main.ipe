@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- A SINGLE-arm tuple `case` whose first element is a constructor sub-pattern
 -- (`Wrap x`). The carrier type has exactly one constructor, so the arm is

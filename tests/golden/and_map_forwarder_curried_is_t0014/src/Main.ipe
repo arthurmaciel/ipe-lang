@@ -1,8 +1,8 @@
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 import Lib exposing (andMapAlias)
-import Std.Log exposing (println)
+import Ipe.Log exposing (println)
 
 -- #90 T3, "forwarder" path: `andMapAlias` (a GENERIC, ANNOTATED wrapper
 -- around `Result.andMap`) is instantiated at a CURRIED (arity >= 3) payload.

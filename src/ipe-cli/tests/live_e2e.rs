@@ -1,4 +1,4 @@
-//! Honest end-to-end tests for `Std.Live` / `Sky.Live` — `Live.app`, `Ui.layout`,
+//! Honest end-to-end tests for `Ipe.Live` / `Ipe.Live` — `Live.app`, `Ui.layout`,
 //! `Ui.column`, `Ui.el`, `Ui.onClick`, `Ui.text`, and `String.fromInt`.
 //!
 //! All tests are gated on `IPE_E2E=1`.  Without it they return early so the
@@ -6,7 +6,7 @@
 //!
 //! ## Architecture
 //!
-//! 1. A minimal Sky.Live counter program is written to a temp dir.
+//! 1. A minimal Ipe.Live counter program is written to a temp dir.
 //! 2. `ipe::build` compiles it (parse → canon → types → lower → emit Rust).
 //! 3. `oracle::build_rust_binary` runs `cargo build` on the emitted project —
 //!    the shared Cargo target (`~/.cargo/config.toml`) lets axum/tokio/serde
@@ -38,7 +38,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 // ── Sky program ───────────────────────────────────────────────────────────────
 
-/// A minimal Sky.Live counter app.
+/// A minimal Ipe.Live counter app.
 ///
 /// Kernels exercised:
 /// - `Live.app`     — constrain scheme + serde derives
@@ -55,8 +55,8 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// function is not a raw kernel — it is defined in sky-stdlib as a Sky function.
 const IPE_LIVE_COUNTER: &str = r#"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 
 type Msg = Increment | Decrement
 
@@ -98,7 +98,7 @@ main =
         }
 "#;
 
-/// Serde-derive gating seal: a `Std.Live` program with a NON-Model view-helper
+/// Serde-derive gating seal: a `Ipe.Live` program with a NON-Model view-helper
 /// record that holds an `Html` field (`Section = { title : String, body : Html
 /// Msg }`) and a plain-data Model.
 ///
@@ -113,8 +113,8 @@ main =
 /// tripped because the non-serde record is a view helper, not the Model.
 const IPE_LIVE_HTML_HELPER: &str = r#"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 
 type Msg = Increment | Decrement
 
@@ -158,7 +158,7 @@ main =
         }
 "#;
 
-/// Inline-lambda subscriptions seal — BUILD-ONLY: a routed `Std.Live` app whose
+/// Inline-lambda subscriptions seal — BUILD-ONLY: a routed `Ipe.Live` app whose
 /// `subscriptions` cfg field is an INLINE LAMBDA (`\_ -> Sub.none`) rather than
 /// a top-level `fn` reference must compile end-to-end.
 ///
@@ -183,8 +183,8 @@ main =
 /// Propagates any pipeline or Cargo build failure as a test error.
 const IPE_LIVE_LAMBDA_SUBS: &str = r#"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 
 type Msg = Increment | Decrement
 
@@ -223,7 +223,7 @@ main =
         }
 "#;
 
-/// A routed Sky.Live app: two pages, nullary page ctors, `routes`/`notFound`
+/// A routed Ipe.Live app: two pages, nullary page ctors, `routes`/`notFound`
 /// supplied. The Model carries a `page` field → `emit_live_app_inner` takes
 /// the T5 routed branch and emits `live_app_routed` instead of `live_app`.
 ///
@@ -236,8 +236,8 @@ main =
 /// This is the same structure as `examples/09-live-counter/src/Main.ipe`.
 const IPE_LIVE_ROUTED: &str = r#"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 
 type Page
     = CounterPage
@@ -364,7 +364,7 @@ fn spawn_and_wait_ready(
     port: u16,
 ) -> Result<ProcessGuard, BoxError> {
     let mut child = Command::new(exe)
-        // Sky.Live reads its port from IPE_LIVE_PORT (default 8000).
+        // Ipe.Live reads its port from IPE_LIVE_PORT (default 8000).
         .env("IPE_LIVE_PORT", port.to_string())
         // Disable the double-submit CSRF check so raw TcpStream GETs work.
         .env("IPE_CSRF", "off")
@@ -565,10 +565,10 @@ fn extract_hid_for_open_tag(html: &str, tag: &str) -> Option<String> {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-/// `GET /` on a Sky.Live counter app returns an HTML page containing the
+/// `GET /` on a Ipe.Live counter app returns an HTML page containing the
 /// initial counter value rendered as the text node `>0<`.
 ///
-/// This test proves the FULL Sky.Live pipeline end-to-end:
+/// This test proves the FULL Ipe.Live pipeline end-to-end:
 ///
 /// ```text
 /// Sky source
@@ -629,7 +629,7 @@ fn live_get_root_contains_initial_count() -> Result<(), BoxError> {
     Ok(())
 }
 
-/// Compile-only: the Sky.Live counter emits a Cargo project with the `"live"`
+/// Compile-only: the Ipe.Live counter emits a Cargo project with the `"live"`
 /// feature in the default feature list.
 ///
 /// This is a BUILD-ONLY test — it does not spawn the binary.  A successful
@@ -651,7 +651,7 @@ fn live_counter_build_only() -> Result<(), BoxError> {
     Ok(())
 }
 
-/// Serde-derive gating seal — BUILD-ONLY: a Std.Live program with a NON-Model
+/// Serde-derive gating seal — BUILD-ONLY: a Ipe.Live program with a NON-Model
 /// view-helper record holding an `Html` field must compile end-to-end.
 ///
 /// A successful `skyc` + `cargo build` IS the assertion. Gating serde on the
@@ -831,7 +831,7 @@ fn live_routed_app_build_only() -> Result<(), BoxError> {
     Ok(())
 }
 
-/// Pub/sub seal — BUILD-ONLY: a Sky.Live app that uses `Cmd.publish` and
+/// Pub/sub seal — BUILD-ONLY: a Ipe.Live app that uses `Cmd.publish` and
 /// `Sub.subscribeTopic` must compile end-to-end without a `CompilerBug`
 /// diagnostic.
 ///
@@ -853,8 +853,8 @@ fn live_routed_app_build_only() -> Result<(), BoxError> {
 /// Propagates any pipeline or Cargo build failure as a test error.
 const IPE_PUBSUB_LIVE: &str = r#"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 
 type Msg
     = BroadcastMsg (Dict String String)
@@ -941,8 +941,8 @@ fn live_pubsub_cmd_publish_and_sub_subscribe_topic_build_only() -> Result<(), Bo
 /// present; without it the emitted project would fail with E0425 (seal violation).
 const IPE_PUBSUB_RECORD_PAYLOAD: &str = r#"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 
 type alias CartItem =
     { count : Int
@@ -1031,8 +1031,8 @@ fn live_pubsub_publish_polymorphic_record_payload_build_only() -> Result<(), Box
 /// forwarding the box itself — see that arm's comment for the full mechanism.
 const IPE_ONSUBMIT_TYPED_RECORD: &str = r#"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 
 type alias Creds =
     { username : String
@@ -1205,7 +1205,7 @@ fn live_onsubmit_typed_record_dispatches_decoded_payload() -> Result<(), BoxErro
 }
 
 /// Bare-Msg onSubmit — the "ignore form data, always dispatch this fixed
-/// action" idiom: `Std.Html.Events.onSubmit Confirm` where `Confirm : Msg`
+/// action" idiom: `Ipe.Html.Events.onSubmit Confirm` where `Confirm : Msg`
 /// carries NO payload (a nullary constructor, not a decoder function). This
 /// is the exact shape `examples/12-skyvote`'s `Page/AuthPage.ipe` /
 /// `Page/Submit.ipe` / `Page/Detail.ipe` use throughout (`onSubmit
@@ -1226,10 +1226,10 @@ fn live_onsubmit_typed_record_dispatches_decoded_payload() -> Result<(), BoxErro
 /// (`ipe_backend_rust::emit_expr`'s `is_definitely_not_callable` gate).
 const IPE_ONSUBMIT_BARE_MSG: &str = r#"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Html exposing (..)
-import Std.Html.Attributes exposing (..)
-import Std.Html.Events exposing (onSubmit, onInput)
+import Ipe.Live as Live
+import Ipe.Html exposing (..)
+import Ipe.Html.Attributes exposing (..)
+import Ipe.Html.Events exposing (onSubmit, onInput)
 
 type Msg
     = UpdateName String
@@ -1430,10 +1430,10 @@ fn live_onsubmit_bare_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
 /// `onSubmit` payload is a RECORD literal, `Msg` is a record alias.
 const IPE_ONSUBMIT_RECORD_LITERAL: &str = r#"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Html exposing (..)
-import Std.Html.Attributes exposing (..)
-import Std.Html.Events exposing (onSubmit)
+import Ipe.Live as Live
+import Ipe.Html exposing (..)
+import Ipe.Html.Attributes exposing (..)
+import Ipe.Html.Events exposing (onSubmit)
 
 type alias Msg =
     { action : String }
@@ -1476,10 +1476,10 @@ main =
 /// `onSubmit` payload is a TUPLE literal, `Msg` is a tuple alias.
 const IPE_ONSUBMIT_TUPLE_LITERAL: &str = r#"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Html exposing (..)
-import Std.Html.Attributes exposing (..)
-import Std.Html.Events exposing (onSubmit)
+import Ipe.Live as Live
+import Ipe.Html exposing (..)
+import Ipe.Html.Attributes exposing (..)
+import Ipe.Html.Events exposing (onSubmit)
 
 type alias Msg =
     ( String, Int )
@@ -1526,10 +1526,10 @@ main =
 /// `onSubmit` payload is a LIST literal, `Msg` is a list alias.
 const IPE_ONSUBMIT_LIST_LITERAL: &str = r#"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Html exposing (..)
-import Std.Html.Attributes exposing (..)
-import Std.Html.Events exposing (onSubmit)
+import Ipe.Live as Live
+import Ipe.Html exposing (..)
+import Ipe.Html.Attributes exposing (..)
+import Ipe.Html.Events exposing (onSubmit)
 
 type alias Msg =
     List String
@@ -1653,10 +1653,10 @@ fn live_onsubmit_list_literal_build_only() -> Result<(), BoxError> {
 /// classifier would misroute to the decoder path.
 const IPE_ONSUBMIT_VAR_BOUND_MSG: &str = r#"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Html exposing (..)
-import Std.Html.Attributes exposing (..)
-import Std.Html.Events exposing (onSubmit, onInput)
+import Ipe.Live as Live
+import Ipe.Html exposing (..)
+import Ipe.Html.Attributes exposing (..)
+import Ipe.Html.Events exposing (onSubmit, onInput)
 
 type Msg
     = UpdateName String
@@ -1837,8 +1837,8 @@ fn live_onsubmit_var_bound_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
 /// let-bound closure to `Arc<dyn Fn + Send + Sync>` at its declaration.
 const IPE_ONSUBMIT_LET_BOUND_HANDLER: &str = r#"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 
 type alias Creds =
     { username : String
@@ -1904,8 +1904,8 @@ main =
 /// `flows_into_sync_kernel_call` must be alias-transparent to reach the root.
 const IPE_ONSUBMIT_LET_ALIAS_CHAIN: &str = r#"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 
 type alias Creds =
     { username : String
@@ -2010,8 +2010,8 @@ fn live_onsubmit_let_alias_chain_build_only() -> Result<(), BoxError> {
 /// `examples/12-skyvote`: form at `/auth/signup`, `notFound` = board).
 const IPE_ONSUBMIT_ROUTED_FORM: &str = r#"module Main exposing (main)
 
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 
 type Page
     = FormPage

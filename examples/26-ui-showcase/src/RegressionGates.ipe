@@ -1,6 +1,6 @@
 module RegressionGates exposing (cases)
 
--- Std.Ui regression-gate fixtures for the Cycle 5 renderer churn
+-- Ipe.Ui regression-gate fixtures for the Cycle 5 renderer churn
 -- (v0.15.37+ → v0.15.41 will add mediaQuery / pseudo-classes /
 -- transitions / aspectRatio). Each section here is owned by
 -- scripts/verify-ui-showcase.{sh,mjs} — keep the data-test-id
@@ -20,19 +20,19 @@ module RegressionGates exposing (cases)
 --      attributes once #377 ships.
 --   4. Aspect-ratio + grid — placeholders for #379 (aspectRatio +
 --      content-aware grid tracks).
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.String as String
-import Std.Html as Html
-import Std.Html.Attributes as Attr
-import Std.Ui as Ui exposing (Element)
-import Std.Ui.Background as Background
-import Std.Ui.Border as Border
-import Std.Ui.Font as Font
-import Std.Ui.Input as Input
-import Std.Ui.Transition as Transition
-import Std.Ui.Animation as Animation
-import Std.Ui.Transform as Transform
-import Std.Ui.Grid as Grid
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.Html as Html
+import Ipe.Html.Attributes as Attr
+import Ipe.Ui as Ui exposing (Element)
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Font as Font
+import Ipe.Ui.Input as Input
+import Ipe.Ui.Transition as Transition
+import Ipe.Ui.Animation as Animation
+import Ipe.Ui.Transform as Transform
+import Ipe.Ui.Grid as Grid
 
 
 -- Stable data-test-id helper; the runner selects by attribute.
@@ -275,7 +275,7 @@ focusableInput =
                       "padding:8px;border:2px solid #888;border-radius:6px;font-size:14px;outline:none;"
                   -- Plain HTML <input> so the visual baseline can
                   -- exercise browser-native :focus-visible without
-                  -- routing through Std.Ui.Input's wrapper. The
+                  -- routing through Ipe.Ui.Input's wrapper. The
                   -- typed Ui pseudo-classes path lives on
                   -- `hoverableButton`/`disabledButton` here.
                 ]
@@ -414,7 +414,7 @@ gridDemo =
         ]
 
 
--- Content-aware grid tracks (#379) — Std.Ui.Grid lets you spell
+-- Content-aware grid tracks (#379) — Ipe.Ui.Grid lets you spell
 -- out explicit track lists. Three variants here, each in its own
 -- row so the runner can assert per-row `grid-template-columns`.
 --

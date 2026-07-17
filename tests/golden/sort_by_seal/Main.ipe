@@ -3,7 +3,7 @@ module Main exposing (main)
 -- #119 seal — List.sortBy : (a -> comparable) -> List a -> List a
 -- Stable sort by a key projection. Preserves insertion order for equal keys.
 
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 type alias Person =
     { name : String, age : Int }

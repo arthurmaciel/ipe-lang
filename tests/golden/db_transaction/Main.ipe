@@ -1,6 +1,6 @@
 module Main exposing (main)
 
-import Sky.Core.Error as Error
+import Ipe.Error as Error
 
 -- M5b-db golden: withTransaction COMMIT path and ROLLBACK-on-error path.
 -- Uses a file-backed SQLite DB (/tmp/sky_txn_golden.db) so all pool connections

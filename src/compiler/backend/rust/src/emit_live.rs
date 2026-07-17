@@ -1,4 +1,4 @@
-//! Emission for `Std.Live` / `Sky.Live` app-entry kernels.
+//! Emission for `Ipe.Live` / `Ipe.Live` app-entry kernels.
 //!
 //! Wires three of the four Live kernels:
 //!
@@ -27,7 +27,7 @@ use crate::EmitCtx;
 use crate::emit_expr::emit_expr_at;
 use crate::emit_types::{GenericScope, render_type};
 
-/// Dispatch a `Std.Live` / `Sky.Live` kernel call.
+/// Dispatch a `Ipe.Live` / `Ipe.Live` kernel call.
 ///
 /// Returns `Some(emitted)` for all four Live kernels; `None` for any variant
 /// that is not a Live kernel (the caller routes to this function only for
@@ -645,7 +645,7 @@ const fn ir_type_display_name(ty: &IrType) -> &'static str {
         IrType::ServerCookie => "Cookie",
         IrType::StreamWriter => "StreamWriter",
         IrType::HttpRequest => "HttpRequest",
-        // Sky.Http.Server.WebSocket opaque handles.
+        // Ipe.Http.Server.WebSocket opaque handles.
         IrType::WebSocketServer => "WebSocketServer",
         IrType::WebSocketServerCfg => "WebSocketServerCfg",
         IrType::Ui { .. } => "Element",

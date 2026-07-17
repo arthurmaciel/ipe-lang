@@ -1,10 +1,10 @@
 module Chess.Move exposing (..)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Dict as Dict
-import Sky.Core.Maybe as Maybe
-import Sky.Core.List as List
-import Sky.Core.String as String
+import Ipe.Prelude exposing (..)
+import Ipe.Dict as Dict
+import Ipe.Maybe as Maybe
+import Ipe.List as List
+import Ipe.String as String
 import Chess.Piece exposing (..)
 import Chess.Board as Board
 import State exposing (Model)

@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- A higher-order function: a function-typed parameter, applied twice.
 applyTwice : (Int -> Int) -> Int -> Int

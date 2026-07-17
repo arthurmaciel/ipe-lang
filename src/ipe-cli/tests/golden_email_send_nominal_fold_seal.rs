@@ -1,9 +1,9 @@
-//! SEAL regression for "Std.Email family". A typed `EmailMessage`
+//! SEAL regression for "Ipe.Email family". A typed `EmailMessage`
 //! built via `Email.defaultMessage` + `with*` builders is fed directly to
 //! `Email.send`, and the `EmailProvider` ADT is constructed via its `Resend`
 //! ctor.
 //!
-//! Before the fold, `Std.Email` fail-closed at skyc time with IPE-N0028 (no
+//! Before the fold, `Ipe.Email` fail-closed at skyc time with IPE-N0028 (no
 //! registered `Email_send` kernel). Registering the kernel across every
 //! anti-drift site AND folding the `EmailMessage` / `Attachment` record shapes
 //! (plus the `EmailProvider` ADT) to their nominal runtime types
@@ -127,7 +127,7 @@ fn email_literals_emit_runtime_structs_and_provider_variant() {
 }
 
 /// The load-bearing SEAL proof: under `IPE_E2E=1`, actually `cargo build` the
-/// emitted crate. Without kernel backing `Std.Email` fail-closes at skyc time
+/// emitted crate. Without kernel backing `Ipe.Email` fail-closes at skyc time
 /// (IPE-N0028); with it, skyc-0 AND the emitted crate — with the vendored
 /// `email` module and the injected `lettre` dep — `cargo build`s exit 0.
 #[test]

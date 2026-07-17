@@ -9,8 +9,8 @@ module Main exposing (main)
 -- from a fresh thunk call.
 -- Expected: Alice|Bob
 
-import Sky.Core.Json.Decode as JsonDec
-import Sky.Core.Json.Decode.Pipeline as JsonDecP
+import Ipe.Json.Decode as JsonDec
+import Ipe.Json.Decode.Pipeline as JsonDecP
 
 
 buildPair : () -> ( JsonDec.Decoder String, JsonDec.Decoder Int )

@@ -14,8 +14,8 @@ module Main exposing (main)
 --   * The `routed_page_field` helper sees the `page` field in the Model and
 --     emits `live_app_routed` (not `live_app`).
 
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 
 type Page
     = CounterPage

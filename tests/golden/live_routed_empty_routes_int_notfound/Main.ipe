@@ -10,8 +10,8 @@ module Main exposing (main)
 -- Before Part B: skyc exited 0 (the empty-routes hole let var(2) = Int slip
 -- through), then cargo rejected the emitted `set_page` closure with E0308.
 
-import Std.Live as Live
-import Std.Ui as Ui
+import Ipe.Live as Live
+import Ipe.Ui as Ui
 
 type Page
     = CounterPage

@@ -1,9 +1,9 @@
 //! Seal — the home-aware enum guard in `ipe_lower::ir_type_from_ty` must
-//! win over the bare-name Std.Ui / Sky.Live opaque arms.
+//! win over the bare-name Ipe.Ui / Ipe.Live opaque arms.
 //!
 //! Matching the bare name `"Color"` (→ `IrType::UiPlain(UiPlain::Color)`)
 //! BEFORE the `enum_variants` guard would hijack a program-defined `type Color`
-//! that flows through the INFERRED lowering path to the opaque Std.Ui `Color`:
+//! that flows through the INFERRED lowering path to the opaque Ipe.Ui `Color`:
 //!
 //! * (i) a boxed `Fn(Color)` HOF argument emitted `Box<dyn
 //!   Fn(ipe_runtime::ui::element::Color) -> _>` → skyc-0 / cargo-101 (E0433).
@@ -13,12 +13,12 @@
 //!
 //! The `enum_variants.contains_key(&(home, name))` guard sits AHEAD of the
 //! nullary opaque arms (mirroring `ir_type_from_canon`), so a program union
-//! resolves to its OWN enum by `(home, name)` identity while the genuine Std.Ui
+//! resolves to its OWN enum by `(home, name)` identity while the genuine Ipe.Ui
 //! builtin (no union entry) still falls through to `UiPlain`.
 //!
 //! Both goldens ALSO assert the coexistence invariant: the emitted Rust carries
 //! the user enum `MainColor` AND the runtime `ipe_runtime::ui::element::Color`
-//! (proof iii — the real Std.Ui Color is unchanged).
+//! (proof iii — the real Ipe.Ui Color is unchanged).
 //!
 //! Gated on `IPE_E2E=1`. Run:
 //!
@@ -58,7 +58,7 @@ fn emitted_program_source(out: &Path) -> String {
 }
 
 /// Proof (i): a user `type Color` used via a HOF (lambda argument → inferred
-/// lowering path) resolves to `MainColor` and BUILDS + RUNS; the genuine Std.Ui
+/// lowering path) resolves to `MainColor` and BUILDS + RUNS; the genuine Ipe.Ui
 /// `Color` in the same module still lowers to `UiPlain::Color`.
 #[test]
 fn user_color_via_hof_resolves_to_own_enum() {
@@ -98,17 +98,17 @@ fn user_color_via_hof_resolves_to_own_enum() {
     assert!(
         program.contains("Fn(MainColor)"),
         "the inferred boxed HOF argument must take `MainColor`, not the opaque \
-         Std.Ui Color"
+         Ipe.Ui Color"
     );
     assert!(
         !program.contains("Fn(ipe_runtime::ui::element::Color)"),
         "the pre-#101 hijack (`Fn(ipe_runtime::ui::element::Color)`) must be gone"
     );
-    // The genuine Std.Ui Color path (Ui.rgb / Background.color) is unchanged —
+    // The genuine Ipe.Ui Color path (Ui.rgb / Background.color) is unchanged —
     // it flows through the runtime helpers (proof iii, coexistence).
     assert!(
         program.contains("ui_rgb_") && program.contains("ui_background_color_"),
-        "the genuine Std.Ui Color path must still emit the runtime UI helpers"
+        "the genuine Ipe.Ui Color path must still emit the runtime UI helpers"
     );
 
     // cargo build + run must succeed (pre-#101: cargo-101 / E0433).
@@ -123,7 +123,7 @@ fn user_color_via_hof_resolves_to_own_enum() {
         outcome
             .stdout
             .contains("background-color:rgba(0,128,255,1)"),
-        "genuine Std.Ui Color must still render its CSS; got:\n{}",
+        "genuine Ipe.Ui Color must still render its CSS; got:\n{}",
         outcome.stdout
     );
 }

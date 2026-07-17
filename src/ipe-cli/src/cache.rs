@@ -471,7 +471,7 @@ mod tests {
             vec!["Std".to_owned(), "Prelude".to_owned()],
             (
                 PathBuf::from("<embedded>"),
-                "module Std.Prelude exposing (x)\nx = 1\n".to_owned(),
+                "module Ipe.Prelude exposing (x)\nx = 1\n".to_owned(),
             ),
         );
         let injected = BTreeSet::from([vec!["Std".to_owned(), "Prelude".to_owned()]]);

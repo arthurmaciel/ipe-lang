@@ -1,17 +1,17 @@
 module Lib.Games exposing (..)
 
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Result as Result
-import Sky.Core.Maybe as Maybe
-import Sky.Core.List as List
-import Sky.Core.String as String
-import Sky.Core.Dict as Dict
-import Sky.Core.Crypto as Crypto
-import Sky.Core.Task as Task
-import Std.Db as Db
-import Std.Log exposing (println)
-import Sky.Core.System as System
-import Sky.Core.Error as Error exposing (Error(..), ErrorKind(..))
+import Ipe.Prelude exposing (..)
+import Ipe.Result as Result
+import Ipe.Maybe as Maybe
+import Ipe.List as List
+import Ipe.String as String
+import Ipe.Dict as Dict
+import Ipe.Crypto as Crypto
+import Ipe.Task as Task
+import Ipe.Db as Db
+import Ipe.Log exposing (println)
+import Ipe.System as System
+import Ipe.Error as Error exposing (Error(..), ErrorKind(..))
 
 
 -- Db.* now returns Task Error a per the effect-boundary doctrine, but

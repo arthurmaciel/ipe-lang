@@ -1,5 +1,5 @@
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 -- #90 Stage 1 residual gate, revert-incident Bug 2 regression:
 -- `Result.andMap`'s partial application is first bound to a `let`
