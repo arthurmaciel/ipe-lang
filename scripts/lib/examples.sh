@@ -118,7 +118,7 @@ is_live_network_cli() {
 
 # ── is_web_example <dir>: Ipe.Live OR Ipe.Http.Server (browser-drivable) ─────
 is_web_example() {
-  _shape_match "$1/src" 'Std\.Live|Live\.app|Server\.listen|Ipê\.Http\.Server'
+  _shape_match "$1/src" 'Ipe\.Live|Live\.app|Server\.listen|Ipe\.Http\.Server'
 }
 
 # ── example_shape <dir>: tui|webview|fyne|server|live|cli ────────────────────
@@ -129,11 +129,11 @@ _shape_match() { # $1=src dir  $2=regex
 }
 example_shape() {
   local s="$1/src"
-  if   _shape_match "$s" 'Std\.Tui|Tui\.app';               then echo tui
-  elif _shape_match "$s" 'Std\.Webview|Webview\.app';        then echo webview
+  if   _shape_match "$s" 'Ipe\.Tui|Tui\.app';               then echo tui
+  elif _shape_match "$s" 'Ipe\.Webview|Webview\.app';        then echo webview
   elif _shape_match "$s" 'Fyne';                             then echo fyne
-  elif _shape_match "$s" 'Std\.Live|Live\.app';              then echo live
-  elif _shape_match "$s" 'Server\.listen|Ipê\.Http\.Server'; then echo server
+  elif _shape_match "$s" 'Ipe\.Live|Live\.app';              then echo live
+  elif _shape_match "$s" 'Server\.listen|Ipe\.Http\.Server'; then echo server
   else echo cli; fi
 }
 
