@@ -18,7 +18,7 @@
 //! ## What is tested
 //!
 //! * `skyc build` compiles `tests/golden/attribute_home_disambiguation_179/
-//!   Main.sky` (canon → types → lower → Rust backend).
+//!   Main.ipe` (canon → types → lower → Rust backend).
 //! * The emitted Rust project `cargo build`s (the type-identity fix means the
 //!   `html::Attribute`-producing bodies now agree with their return-type
 //!   annotations) and the binary runs and exits 0.
@@ -54,7 +54,7 @@ fn build_run_attribute_home_179() -> support::RunOutcome {
         .join("tests")
         .join("golden")
         .join("attribute_home_disambiguation_179");
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_attribute_home_179_e2e");
     let _ = std::fs::remove_dir_all(&out);
 

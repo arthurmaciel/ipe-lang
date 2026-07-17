@@ -15,7 +15,7 @@ constrain → lower → emit). The original plan assumed builders like
 ## Decision
 
 Kernel-only module: register a `Ws` qualifier + 12 kernels (7 builders,
-`upgrade`, 4 send/broadcast/close ops), with no stdlib `.sky` port — mirroring
+`upgrade`, 4 send/broadcast/close ops), with no stdlib `.ipe` port — mirroring
 `Server`/`Stream`. Introduce two new opaque, monomorphic IR types (no phantom
 var): `IrType::WebSocketServer` (renders `WsHandle`, a Copy i64) and
 `IrType::WebSocketServerCfg` (renders `WsServerCfg<SkyError>`). Kernels take the
@@ -26,7 +26,7 @@ matching the HTTP response-writing family.
 
 Rejected alternatives:
 
-- **Pure-Sky routing** — would require embedded `Sky/Http/Server/WebSocket.sky`,
+- **Pure-Sky routing** — would require embedded `Sky/Http/Server/WebSocket.ipe`,
   `Ffi.kernel` resolution, and the `runtimeOpaqueTypes` machinery `skyc` replaced
   with dedicated `IrType` variants.
 - **Untyped `Int` handles** — typed handles leverage the compiler's

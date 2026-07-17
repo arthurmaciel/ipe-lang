@@ -128,9 +128,9 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::Pat
         format!("{test_name}: cannot create sky source dir: {e}").into()
     })?;
 
-    let entry = ipe_dir.join("Main.sky");
+    let entry = ipe_dir.join("Main.ipe");
     std::fs::write(&entry, ipe_source)
-        .map_err(|e| -> BoxError { format!("{test_name}: cannot write Main.sky: {e}").into() })?;
+        .map_err(|e| -> BoxError { format!("{test_name}: cannot write Main.ipe: {e}").into() })?;
 
     let out_dir = std::env::temp_dir().join(format!("webview_e2e_{test_name}_emitted"));
     let _ = std::fs::remove_dir_all(&out_dir);
@@ -307,8 +307,8 @@ fn let_bound_webview_window_is_sky_l0119_not_ice() {
     let dir = std::env::temp_dir().join("l0119_webview_window_sky");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create temp sky dir");
-    let entry = dir.join("Main.sky");
-    std::fs::write(&entry, IPE_WEBVIEW_LET_BOUND_WINDOW).expect("write Main.sky");
+    let entry = dir.join("Main.ipe");
+    std::fs::write(&entry, IPE_WEBVIEW_LET_BOUND_WINDOW).expect("write Main.ipe");
 
     let out = std::env::temp_dir().join("l0119_webview_window_out");
     let _ = std::fs::remove_dir_all(&out);

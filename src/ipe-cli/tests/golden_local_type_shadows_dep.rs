@@ -36,7 +36,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 
 fn try_build(name: &str) -> Result<(), String> {
     let root = repo_root();
-    let entry = golden_dir(&root, name).join("src").join("Main.sky");
+    let entry = golden_dir(&root, name).join("src").join("Main.ipe");
     if !entry.exists() {
         return Err(format!("fixture not found: {}", entry.display()));
     }

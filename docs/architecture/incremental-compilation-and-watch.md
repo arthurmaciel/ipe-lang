@@ -167,7 +167,7 @@ query-graph redesign.
 
 | Input | Shape | Durability | Notes |
 |---|---|---|---|
-| `source_text(FileId)` | `Arc<str>`, one per `.sky` file | low | Byte-equal re-save is a no-op at the boundary |
+| `source_text(FileId)` | `Arc<str>`, one per `.ipe` file | low | Byte-equal re-save is a no-op at the boundary |
 | `file_set()` | `Arc<BTreeSet<FileId>>` | low | In-scope source set from the scope walk |
 | `project_config()` | typed `ProjectConfig` (parsed `sky.toml`), **field-granular** | high | Editing `[log].level` must not invalidate codegen; editing `entry` must |
 | `codegen_flags()` | typed (`IPE_DCE`, `IPE_SOLVER_BUDGET`, budget factor, env-prefix) | high | Build-affecting env parsed to typed inputs — closes the hidden-env hole |
@@ -184,7 +184,7 @@ this backwards silently under-invalidates.
 **Toolchain-fingerprint observability (closing the rule's own loophole — GAP-2).**
 `toolchain_fingerprint()` is high-durability but its source — the active rustc /
 rustup state (`rustc -vV`, plus any `rust-toolchain.toml` / `rustup override`) —
-is **not a watched `.sky` file**, so a mid-session `rustup update` or directory
+is **not a watched `.ipe` file**, so a mid-session `rustup update` or directory
 override would leave every high-durability emit memo (and the FFI cache, H1)
 validated against the *old* fingerprint: a stale build that compiles. A
 high-durability input whose source cannot be cheaply watched must not silently
@@ -254,7 +254,7 @@ query*, so salsa tracks the `file_set()` read. This closes a whole family of
 stale-build bugs that a `parse`/`module_interface` DAG alone misses, because those
 queries key only on file *contents*, never on the *set* of files:
 
-- **Add** a `.sky` that satisfies a previously-`Unresolved` import → `resolve_imports`
+- **Add** a `.ipe` that satisfies a previously-`Unresolved` import → `resolve_imports`
   changes from `Unresolved` to a `ModuleId` → `canonicalize`/`typecheck` of the
   importer re-run (previously: importer stayed red-or-stale because no query it
   depended on observed the new file).
@@ -368,7 +368,7 @@ type-checked) and the last-good binary keeps serving.
 >   - the **emitted `mod` list** (the set of `.rs` files the manifest declares) —
 >     so a prune propagates to the crate root, not just to leaf `.rs` bodies;
 >   - the **app-crate `Cargo.toml`** content hash — so an `ipe add` dependency
->     change (which alters `[dependencies]` but need not touch any `.sky` body)
+>     change (which alters `[dependencies]` but need not touch any `.ipe` body)
 >     invalidates the cached crate rather than reusing a build against the old
 >     dependency set.
 >   In short: the persisted address is over the *whole intended project*
@@ -412,7 +412,7 @@ runtime's existing SSE reconnect.
 
 **Included:**
 - `sky.toml`
-- entry-point's directory, recursive `.sky` walk
+- entry-point's directory, recursive `.ipe` walk
 - `tests/` if present
 - `~/.cache/ipe/ffi/rust/*.ipei` **+ `kernel.json`** — *interface files only*, read-only
 
@@ -448,7 +448,7 @@ either never observed or handled as a normal red build (INV-3).
 
 ### Minimal-recompute path
 
-On a settled batch: for each changed `.sky`, `set_source_text` to the new content
+On a settled batch: for each changed `.ipe`, `set_source_text` to the new content
 (byte-equal changes are dropped at the input boundary — mtime-only touches don't
 propagate); `set_project_config` on a `sky.toml` change. Salsa's red-green walk +
 the `module_interface` firewall recompute only the dirtied subgraph — body-only
@@ -573,7 +573,7 @@ the watcher exits. Prefer event-driven monitoring over polling wait-loops.
 
 ### Security posture
 
-- Reads only allowlisted `.sky`/`.ipei`/`.toml`; **never executes** watched
+- Reads only allowlisted `.ipe`/`.ipei`/`.toml`; **never executes** watched
   files. The emitted project is built by cargo (no eval).
 - **No network-facing control port.** Any future hot-reload signalling channel
   (Q3) is loopback-only + token-authed, and **absent** (not merely disabled)

@@ -41,12 +41,12 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// Compile / build / run `tests/golden/stdui_onclick/Main.sky` and return
+/// Compile / build / run `tests/golden/stdui_onclick/Main.ipe` and return
 /// the golden directory together with the run outcome.  Gated on `IPE_E2E=1`.
 fn build_run_onclick() -> (PathBuf, support::RunOutcome) {
     let root = repo_root();
     let dir = root.join("tests").join("golden").join("stdui_onclick");
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_m7_stdui_onclick_e2e");
     let _ = std::fs::remove_dir_all(&out);
 

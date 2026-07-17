@@ -384,7 +384,7 @@ pub enum NameError {
         name: Box<str>,
         suggestions: Box<[Box<str>]>,
     },
-    /// The `module` declaration at the top of a `.sky` file does not match the
+    /// The `module` declaration at the top of a `.ipe` file does not match the
     /// path I derived from the file's location under `source_root`. [IPE-N0023]
     ModulePathMismatch {
         declared: Box<str>,

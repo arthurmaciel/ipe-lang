@@ -3,7 +3,7 @@
 //! (padding) and `rootAttrs` (spacing), confirming the cfg is NOT silently
 //! dropped (BLOCKER-2 fix).
 //!
-//! The golden compiles `tests/golden/stdui_layoutwith/Main.sky` through
+//! The golden compiles `tests/golden/stdui_layoutwith/Main.ipe` through
 //! `skyc`, builds the emitted Rust project with the shared cargo target, runs
 //! the binary, and checks its stdout against the cached oracle
 //! (`tests/golden/stdui_layoutwith/oracle.meta` + `expected_go.txt`).
@@ -42,7 +42,7 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// Compile / build / run `tests/golden/stdui_layoutwith/Main.sky` and
+/// Compile / build / run `tests/golden/stdui_layoutwith/Main.ipe` and
 /// return the golden directory together with the run outcome.
 /// Gated on `IPE_E2E=1`.
 fn build_run_layoutwith() -> (PathBuf, support::RunOutcome) {
@@ -51,7 +51,7 @@ fn build_run_layoutwith() -> (PathBuf, support::RunOutcome) {
         .join("tests")
         .join("golden")
         .join("stdui_layoutwith");
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_m7_stdui_layoutwith_e2e");
     let _ = std::fs::remove_dir_all(&out);
 

@@ -35,7 +35,7 @@ fn emit_fixture(out_name: &str) -> String {
         .join("tests")
         .join("golden")
         .join("copy_field_no_clone")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = std::env::temp_dir().join(out_name);
     let _ = std::fs::remove_dir_all(&out);
 

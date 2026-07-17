@@ -225,7 +225,7 @@ tier structure and the Lane A/Lane B split are sound.
    involve `Cmd.perform`. This re-orders the critical path: `simple` and
    00-standard-libs' first blocker clear for near-zero cost.
 2. **`Std.Live.Head` already landed** (commit `3904173`,
-   `crates/skyc/stdlib/Std/Live/Head.sky` + `stdlib.rs:220` verified). Remove
+   `crates/skyc/stdlib/Std/Live/Head.ipe` + `stdlib.rs:220` verified). Remove
    from Tier 2 (item 9), Lane B table, and Top-5 (item 5). Example 38's next
    blocker is `Std.Ui.Region` — which the parity snapshot (later the same day)
    already shows.
@@ -455,7 +455,7 @@ behavior, not just a gate hardening.
 ### C5 — Kernel backlog's `Task.perform` vs the "#116 entry-contract".
 
 **Decision:** `Task.perform` is a legacy alias of `Task.run`
-(`Task e a -> Result e a`, upstream `Task.sky:85-95`) — a synchronous
+(`Task e a -> Result e a`, upstream `Task.ipe:85-95`) — a synchronous
 Result-returning runner with **no** Cmd/dispatch semantics. Registering it as
 an alias of the existing `TaskRun` kernel touches no entry contract. The
 Cmd-side dispatch (`Cmd.perform : Task e a -> (Result e a -> msg) -> Cmd msg`)

@@ -768,7 +768,7 @@ fn set_attr<M>(attrs: &mut Vec<Attribute<M>>, key: &str, val: &str) {
 }
 
 // --- Std.Html kernel wrappers (`Ffi.callPure "htmlXxx"`) ---
-// These match the kernel names used in sky-stdlib Std.Html.sky — the Sky-side
+// These match the kernel names used in sky-stdlib Std.Html.ipe — the Sky-side
 // helpers (render, escapeHtml, escapeAttr, attrToString) route here on the Rust
 // backend. The codegen converts "htmlRender" → `html_render_()`, etc. Kept in
 // this standalone module (not under live/) so a non-Live Std.Html / Std.Ui app

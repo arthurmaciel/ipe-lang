@@ -30,7 +30,7 @@ fn region_all_members_skyc_and_cargo_zero() {
 
     let root = repo_root();
     let dir = root.join("tests").join("golden").join("region_seal");
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i117_region_seal_e2e");
     let _ = std::fs::remove_dir_all(&out);
 

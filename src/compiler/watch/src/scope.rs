@@ -19,7 +19,7 @@
 
 use std::path::{Path, PathBuf};
 
-/// The source-extension this project's `.sky` modules use. Kept as a single
+/// The source-extension this project's `.ipe` modules use. Kept as a single
 /// named constant so a future rename only touches one place.
 pub const SOURCE_EXTENSION: &str = "sky";
 
@@ -115,7 +115,7 @@ pub struct WatchScope {
     file_count: usize,
 }
 
-/// Bound on the number of `.sky` files a single watch session will track.
+/// Bound on the number of `.ipe` files a single watch session will track.
 ///
 /// A defence against a pathological tree (accidentally pointing `ipe watch`
 /// at a directory with millions of files, e.g. a vendored `node_modules`
@@ -134,7 +134,7 @@ pub enum ScopeError {
     /// The entry file's parent directory does not canonicalise, or resolves
     /// outside the project root (symlink escape).
     EntryDirEscapesRoot(PathBuf),
-    /// The discovered `.sky` file count exceeds [`MAX_WATCHED_FILES`].
+    /// The discovered `.ipe` file count exceeds [`MAX_WATCHED_FILES`].
     TooManyFiles { found: usize, max: usize },
     /// A filesystem error occurred while walking a watched directory.
     Io {
@@ -205,7 +205,7 @@ impl WatchScope {
             roots_to_watch.push(w);
         }
 
-        // Discover + count every `.sky` file under the watched roots now, so
+        // Discover + count every `.ipe` file under the watched roots now, so
         // a pathological tree is refused at startup rather than degrading
         // the watcher into an unbounded event source later.
         let mut file_count = 0usize;
@@ -243,7 +243,7 @@ impl WatchScope {
 
     /// Whether a raw filesystem-event path is IN scope: confinable to the
     /// root, not under an excluded directory, and (for files) either a
-    /// `.sky` source, `sky.toml`, or an `.ipei`/`kernel.json` FFI interface
+    /// `.ipe` source, `sky.toml`, or an `.ipei`/`kernel.json` FFI interface
     /// file (H13 — the cross-terminal `ipe add` observation seam).
     ///
     /// This is the drop-at-the-source filter (design doc: "drop excluded-dir
@@ -276,9 +276,9 @@ impl WatchScope {
 }
 
 /// Whether a (canonicalised, in-root, non-excluded) leaf path is one of the
-/// file kinds a confined watch actually reacts to: `.sky` sources,
+/// file kinds a confined watch actually reacts to: `.ipe` sources,
 /// `sky.toml`, or `tests/**` files (any extension — a fixture asset under
-/// `tests/` still belongs to the allowlist even without a `.sky` extension,
+/// `tests/` still belongs to the allowlist even without a `.ipe` extension,
 /// mirroring the reference project's "tests/ if present" scope).
 fn is_watchable_leaf(path: &Path) -> bool {
     if path.file_name().and_then(|n| n.to_str()) == Some("sky.toml") {
@@ -291,7 +291,7 @@ fn is_watchable_leaf(path: &Path) -> bool {
         .any(|c| c.as_os_str() == std::ffi::OsStr::new("tests"))
 }
 
-/// Recursively count `.sky` files under `dir`, accumulating into `count`.
+/// Recursively count `.ipe` files under `dir`, accumulating into `count`.
 /// Bails out (returning early, count left at its last valid value) the
 /// moment `count` exceeds [`MAX_WATCHED_FILES`] — the caller re-checks and
 /// converts that into a hard [`ScopeError::TooManyFiles`], so a pathological
@@ -374,7 +374,7 @@ mod tests {
         let root = tmp_dir("confine_symlink_root");
         let outside = tmp_dir("confine_symlink_target");
         fs::write(
-            outside.join("secret.sky"),
+            outside.join("secret.ipe"),
             "module Secret exposing (x)\nx = 1\n",
         )
         .unwrap();
@@ -394,7 +394,7 @@ mod tests {
         let src = root.join("src");
         fs::create_dir_all(&src).unwrap();
         fs::write(
-            src.join("Main.sky"),
+            src.join("Main.ipe"),
             "module Main exposing (main)\nmain = 1\n",
         )
         .unwrap();
@@ -403,10 +403,10 @@ mod tests {
         fs::write(target.join("build.rs"), "junk").unwrap();
 
         let scope = WatchScope::build(&root, &src).unwrap();
-        // Only Main.sky counted — target/debug/build.rs must be excluded.
+        // Only Main.ipe counted — target/debug/build.rs must be excluded.
         assert_eq!(scope.file_count(), 1);
         assert!(!scope.is_relevant(&target.join("build.rs")));
-        assert!(scope.is_relevant(&src.join("Main.sky")));
+        assert!(scope.is_relevant(&src.join("Main.ipe")));
     }
 
     #[test]
@@ -423,7 +423,7 @@ mod tests {
         let src = root.join("src");
         fs::create_dir_all(&src).unwrap();
         fs::write(
-            src.join("Main.sky"),
+            src.join("Main.ipe"),
             "module Main exposing (main)\nmain = 1\n",
         )
         .unwrap();
@@ -440,12 +440,12 @@ mod tests {
         let root = tmp_dir("scope_delete");
         let src = root.join("src");
         fs::create_dir_all(&src).unwrap();
-        let f = src.join("Gone.sky");
+        let f = src.join("Gone.ipe");
         fs::write(&f, "module Gone exposing (x)\nx = 1\n").unwrap();
         let scope = WatchScope::build(&root, &src).unwrap();
         fs::remove_file(&f).unwrap();
         // The path no longer exists on disk, yet it's still recognisably a
-        // `.sky` file under the (still-existing) src/ directory — must
+        // `.ipe` file under the (still-existing) src/ directory — must
         // still be judged relevant so a delete triggers a rebuild.
         assert!(scope.is_relevant(&f));
     }

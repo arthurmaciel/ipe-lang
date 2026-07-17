@@ -12,7 +12,7 @@
 //!
 //! ## What is tested
 //!
-//! * `skyc build` compiles `tests/golden/ui_mediaquery/Main.sky`
+//! * `skyc build` compiles `tests/golden/ui_mediaquery/Main.ipe`
 //!   (canon → types → lower → Rust backend) — i.e. `Ui.mediaQuery` is no
 //!   longer a `deliberately_unbacked_members` hole.
 //! * The emitted Rust project `cargo build`s and the binary runs and exits 0.
@@ -54,7 +54,7 @@ fn ui_mediaquery_compiles_builds_and_renders_markers() {
 
     let root = repo_root();
     let dir = root.join("tests").join("golden").join("ui_mediaquery");
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_ui_mediaquery_e2e");
     let _ = std::fs::remove_dir_all(&out);
 

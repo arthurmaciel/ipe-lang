@@ -39,7 +39,7 @@ fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
         .join("tests")
         .join("golden")
         .join(fixture)
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 
@@ -73,7 +73,7 @@ fn a1_noncl_var_task_and_then_compiles() {
         .join("tests")
         .join("golden")
         .join("noncl_var_hof")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i149_noncl_var_hof_e2e");
     let _ = std::fs::remove_dir_all(&out);
 

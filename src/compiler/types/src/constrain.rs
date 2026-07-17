@@ -2440,7 +2440,7 @@ impl<'a> Builder<'a> {
                     // `Sky.Http.Server.Response` is a record alias
                     // `{ status : Int, body : String, headers : Dict String
                     // String, contentType : String }` (reference
-                    // `Sky/Http/Server.sky:66`). Expand structurally — same
+                    // `Sky/Http/Server.ipe:66`). Expand structurally — same
                     // mechanism as `HttpResponse` above — so a handler can build
                     // it as a record literal and read fields off it.
                     let mk = |n: Symbol| Ty::Con {
@@ -2464,7 +2464,7 @@ impl<'a> Builder<'a> {
                 } else if args.is_empty() && self.interner.resolve(name) == Some("Migration") {
                     // `Std.Db.Migration` is a record alias
                     // `{ name : String, sql : String }` (reference
-                    // `Std/Db.sky:237`). Expand structurally so a program can
+                    // `Std/Db.ipe:237`). Expand structurally so a program can
                     // build migrations as record literals in a `List Migration`.
                     let mk = |n: Symbol| Ty::Con {
                         module: Vec::new(),
@@ -3572,7 +3572,7 @@ impl<'a> Builder<'a> {
             args: Vec::new(),
         };
         // `Std.Db.Migration` is a record alias `{ name : String, sql : String }`
-        // (reference `Std/Db.sky:237`). `Db.migrate` schemes over `List
+        // (reference `Std/Db.ipe:237`). `Db.migrate` schemes over `List
         // Migration`, and `Db.defaultMigration` returns one — so a program can
         // build migrations as record literals. The record folds to a synthesised
         // `Rec…` struct; the `DbMigrate` emit converts each to a `(name, sql)`
@@ -3617,7 +3617,7 @@ impl<'a> Builder<'a> {
         };
         // `Sky.Http.Server.Response` is a record alias `{ status : Int, body :
         // String, headers : Dict String String, contentType : String }`
-        // (reference `Sky/Http/Server.sky:66`), NOT an opaque nominal. Every
+        // (reference `Sky/Http/Server.ipe:66`), NOT an opaque nominal. Every
         // server kernel that produces/consumes a `Response` schemes over this
         // record so a handler-built record literal — and a field read off a
         // `Response` — unify with the kernel signatures. The record folds to the
@@ -4568,7 +4568,7 @@ impl<'a> Builder<'a> {
             ),
             K::DbWithTransaction => fun(db(), fun(fun(db(), task(var(0))), task(var(0)))),
             // `Db.migrate : Db -> List Migration -> Task Error (List String)`
-            // (reference `Std/Db.sky:300`). The record-shaped `Migration` API is
+            // (reference `Std/Db.ipe:300`). The record-shaped `Migration` API is
             // the surface; the `db_migrate_apply` runtime kernel still takes
             // `(name, sql)` pairs — the emitter converts at the call site.
             K::DbMigrate => fun(
@@ -4576,7 +4576,7 @@ impl<'a> Builder<'a> {
                 fun(list(migration()), task(list(string()))),
             ),
             // `Db.defaultMigration : String -> Migration` (reference
-            // `Std/Db.sky:246`) — a Migration named with an empty SQL body.
+            // `Std/Db.ipe:246`) — a Migration named with an empty SQL body.
             K::DbDefaultMigration => fun(string(), migration()),
 
             // ── Db.Decode ──
@@ -4723,7 +4723,7 @@ impl<'a> Builder<'a> {
             // shape is dictated by `html_event_shape`; the `Raw` (onSubmit) form
             // DECOUPLES the handler type (`var(1)`) from `msg` (`var(0)`) so a
             // form handler `LoginForm -> Msg` does not leak into the surrounding
-            // `Html msg` — exactly as the `.sky` `onSubmit : a -> Attribute msg`.
+            // `Html msg` — exactly as the `.ipe` `onSubmit : a -> Attribute msg`.
             K::HtmlOnClick
             | K::HtmlOnFocus
             | K::HtmlOnBlur
@@ -4976,7 +4976,7 @@ impl<'a> Builder<'a> {
             // ══ FIRST-SCHEMED families ══
             // These have NO legacy scheme (`kernel_ty` → `Ty::Var(u32::MAX)`
             // hole); they get their scheme here, authored from the runtime
-            // signature + `.sky` HM signature. No parity oracle exists, so
+            // signature + `.ipe` HM signature. No parity oracle exists, so
             // correctness is pinned by `first_schemed_were_holes` (each is a
             // genuine hole) plus skyc→cargo build fixtures. Every arrow-count
             // equals `decl().arity` — the invariant
@@ -5076,7 +5076,7 @@ impl<'a> Builder<'a> {
                 fun(int(), fun(claims_ty(), claims_ty()))
             }
             // `Jwt.withClaim : String -> JsonEnc.Value -> Claims -> Claims`
-            // Matches the reference `Sky/Core/Jwt.sky:79` — the value is any
+            // Matches the reference `Sky/Core/Jwt.ipe:79` — the value is any
             // encoded JSON node (`JsonEnc.string`/`.int`/`.object`/…), so an
             // `Int`/`Bool`/nested-object custom claim round-trips with the right
             // token bytes. Both `Value` and `Claims` are `serde_json::Value` at
@@ -7207,7 +7207,7 @@ mod registry_phase_c_tests {
     };
 
     /// Families that have NO legacy scheme (`kernel_ty` → `Ty::Var(u32::MAX)`)
-    /// and receive their scheme directly from their runtime + `.sky`
+    /// and receive their scheme directly from their runtime + `.ipe`
     /// signatures. No parity oracle exists; correctness is pinned by
     /// `first_schemed_were_holes` (the scheme closes a genuine hole) plus the
     /// skyc→cargo build fixtures. GROWS per family; never shrinks.
@@ -7408,7 +7408,7 @@ mod registry_phase_c_tests {
             // `concatMap`/`indexedMap`. Canon anchored every `List.x` to
             // `VarHome::Kernel`, but only 10 had a `KernelFn`+scheme — these nine
             // were holes (`kernel_ty` had no arm → `Ty::Var(u32::MAX)`) and
-            // emitted IPE-L0108 at lower. Now schemed from their runtime + `.sky`
+            // emitted IPE-L0108 at lower. Now schemed from their runtime + `.ipe`
             // signatures; confirmed holes by `first_schemed_were_holes`.
             K::ListAppend,
             K::ListConcat,

@@ -16,7 +16,7 @@ green between steps (each ends on a full §6 gate + example sweep):
   changes. Rewire Cargo + scripts to the new paths. Fully bisectable; no semantic
   change. Land first.
 - **Step B — rename** (`docs/rename/`): `sky_*`→`ipe_*`, `IPE-`→`IPE-`, `IPE_`→
-  `IPE_`, `.sky`→`.ipe`, etc. Golden regen.
+  `IPE_`, `.ipe`→`.ipe`, etc. Golden regen.
 - **Step C — namespace flatten** (`namespace-imports-and-packaging-spec.md`):
   merge the relocated `Sky/Core`+`Std` stdlib into `Ipe/`, rewrite imports.
 - **Step D — sanctioned fmt seal (#214), LAST.** The single `IPE_ALLOW_FMT=1

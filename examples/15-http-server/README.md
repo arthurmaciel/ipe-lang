@@ -5,7 +5,7 @@ Demonstrates Sky.Http.Server with routing, cookies, query parameters, and middle
 ## Build & Run
 
 ```bash
-sky build src/Main.sky
+sky build src/Main.ipe
 ./sky-out/app
 ```
 

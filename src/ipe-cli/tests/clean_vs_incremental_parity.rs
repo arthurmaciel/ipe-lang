@@ -46,7 +46,7 @@ fn prepared(user: &UserSources) -> (PreparedSources, BTreeSet<Vec<String>>) {
             (
                 p.clone(),
                 (
-                    PathBuf::from(format!("<parity>/{}.sky", p.join("/"))),
+                    PathBuf::from(format!("<parity>/{}.ipe", p.join("/"))),
                     text.clone(),
                 ),
             )
@@ -216,7 +216,7 @@ fn assert_parity(label: &str, warm: &CompileOutcome, cold: &CompileOutcome) {
 }
 
 /// Load a golden fixture directory into an in-memory source map (every
-/// `*.sky` under it, module paths derived from the relative file paths).
+/// `*.ipe` under it, module paths derived from the relative file paths).
 /// `None` when the directory holds no `Main` module.
 fn fixture_user_sources(dir: &Path) -> Option<UserSources> {
     let discovered = project::discover_modules(dir).ok()?;

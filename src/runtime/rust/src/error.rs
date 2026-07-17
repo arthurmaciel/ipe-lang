@@ -1,6 +1,6 @@
 //! Sky.Core.Error: the rich, typed `Error` ADT.
 //!
-//! Ported from the ancestor Go/Haskell design (`sky-stdlib/Sky/Core/Error.sky`
+//! Ported from the ancestor Go/Haskell design (`sky-stdlib/Sky/Core/Error.ipe`
 //! in the reference repo): `Error = Error ErrorKind ErrorInfo`, an 11-variant
 //! `ErrorKind` classification, message-carrying `ErrorInfo`, and the 5-variant
 //! `ErrorDetails` union (`FfiPanic`/`TypeMismatch`/`HttpStatus`/`JsonDecode`/

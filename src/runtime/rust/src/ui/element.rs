@@ -1,6 +1,6 @@
 //! Shared `Std.Ui` element tree — the general UI abstraction.
 //!
-//! These types mirror `sky-stdlib/Std/Ui.sky`'s ADTs **variant-for-variant and
+//! These types mirror `sky-stdlib/Std/Ui.ipe`'s ADTs **variant-for-variant and
 //! field-for-field**. They live in the runtime (not generated per-project) so
 //! that every backend — Sky.Live (→ HTML), Sky.Tui (→ ANSI cells), Sky.Webview
 //! (→ native webview) — renders the SAME structured `Element` tree to its own
@@ -13,7 +13,7 @@
 //! pure-Sky render chain (`renderElement` → `Html`) pattern-matches them.
 //!
 //! INVARIANT (load-bearing): the variant names + field order MUST stay identical
-//! to `Std.Ui.sky:39-190`. The opaque alias hides any drift from the Rust
+//! to `Std.Ui.ipe:39-190`. The opaque alias hides any drift from the Rust
 //! compiler, so a mismatch mis-renders at runtime rather than failing to build —
 //! the byte-identical-HTML regression on the Live backend is the safety net.
 
@@ -114,7 +114,7 @@ pub enum LayoutContext {
 }
 
 /// `Std.Ui.Attribute msg` — the typed layout/style/event attributes. Variant
-/// order matches `Std.Ui.sky:55-123` EXACTLY. `AttrEvent any` carries the
+/// order matches `Std.Ui.ipe:55-123` EXACTLY. `AttrEvent any` carries the
 /// `Std.Html.Attributes.Attribute` (the codegen's existing any-carrier mapping);
 /// `AttrNearby` is self-referential through `Element<M>`.
 #[derive(Clone, Debug, PartialEq)]
@@ -170,7 +170,7 @@ pub enum Attribute<M> {
 }
 
 /// `Std.Ui.Element msg` — the layout tree. Variant order matches
-/// `Std.Ui.sky:39-53`. `Raw any` carries a `Std.Html` node (the codegen's
+/// `Std.Ui.ipe:39-53`. `Raw any` carries a `Std.Html` node (the codegen's
 /// any-carrier mapping) so user code can drop native HTML into the tree.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Element<M> {

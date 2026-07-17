@@ -30,7 +30,7 @@ fn example_entry(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("tuple_self_edge")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 #[test]

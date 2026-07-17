@@ -261,7 +261,7 @@ fn build_pc<M>(ipe_id: &str, attrs: &[Attribute<M>]) -> String {
 }
 
 /// Wire-format pseudo-class tag → (selector, hover-gated). Keep in lock-step
-/// with `pseudoClassTag` in Std.Ui.sky / Go's `pseudoSelectorForTag`.
+/// with `pseudoClassTag` in Std.Ui.ipe / Go's `pseudoSelectorForTag`.
 fn pseudo_selector_for_tag(tag: &str) -> Option<(&'static str, bool)> {
     match tag {
         "h" => Some((":hover", true)),

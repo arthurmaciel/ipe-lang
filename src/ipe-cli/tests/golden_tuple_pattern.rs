@@ -12,7 +12,7 @@
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
 //! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the SAME
-//! `Main.sky` to stdout `46\n`, exit 0 — hand-verified in a temp dir. The
+//! `Main.ipe` to stdout `46\n`, exit 0 — hand-verified in a temp dir. The
 //! hand-computed `41 + 2 + 3 = 46` is the in-test oracle.
 use std::path::{Path, PathBuf};
 
@@ -24,7 +24,7 @@ fn example_entry(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("tuple_pattern")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 #[test]

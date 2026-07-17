@@ -36,7 +36,7 @@ fn entry_path(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("update_base_after_move")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 /// skyc-0 + emit assertion: the consuming `describe model` argument in the True

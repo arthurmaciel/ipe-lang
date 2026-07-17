@@ -33,7 +33,7 @@ fn entry_path(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("display_false_positive")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 /// skyc-0 ∧ the wildcard row generic carries `IpeRow` but NOT `Display` —

@@ -2,7 +2,7 @@
 //! mixing `Std.Ui` typed attributes (`Font.bold`, `Background.color`) with a
 //! `Std.Html` node (`Html.div` / `Html.text`) embedded via `Ui.html`.
 //!
-//! The golden compiles `tests/golden/stdui_dualattr/Main.sky` through
+//! The golden compiles `tests/golden/stdui_dualattr/Main.ipe` through
 //! `skyc`, builds the emitted Rust project with the shared cargo target, runs
 //! the binary, and checks its stdout against the cached oracle
 //! (`tests/golden/stdui_dualattr/oracle.meta` + `expected_go.txt`).
@@ -48,12 +48,12 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// Compile / build / run `tests/golden/stdui_dualattr/Main.sky` and return
+/// Compile / build / run `tests/golden/stdui_dualattr/Main.ipe` and return
 /// the golden directory together with the run outcome. Gated on `IPE_E2E=1`.
 fn build_run_dualattr() -> (PathBuf, support::RunOutcome) {
     let root = repo_root();
     let dir = root.join("tests").join("golden").join("stdui_dualattr");
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_m7_stdui_dualattr_e2e");
     let _ = std::fs::remove_dir_all(&out);
 

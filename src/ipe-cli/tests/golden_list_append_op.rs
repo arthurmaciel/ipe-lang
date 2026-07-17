@@ -31,7 +31,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 
 fn compile_golden(name: &str) -> PathBuf {
     let root = repo_root();
-    let entry = golden_dir(&root, name).join("Main.sky");
+    let entry = golden_dir(&root, name).join("Main.ipe");
     let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
     let runtime = skyc::resolve_runtime();
@@ -77,7 +77,7 @@ fn list_append_op_runs_with_parity() {
 #[test]
 fn append_on_int_is_rejected_at_typecheck() {
     let root = repo_root();
-    let entry = golden_dir(&root, "m_neg_append_on_int").join("Main.sky");
+    let entry = golden_dir(&root, "m_neg_append_on_int").join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_m_neg_append_on_int_e2e");
     let _ = std::fs::remove_dir_all(&out);
     let runtime = skyc::resolve_runtime();

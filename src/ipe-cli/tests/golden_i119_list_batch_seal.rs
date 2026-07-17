@@ -29,7 +29,7 @@ fn compile_golden(name: &str) -> PathBuf {
         .join("tests")
         .join("golden")
         .join(name)
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 

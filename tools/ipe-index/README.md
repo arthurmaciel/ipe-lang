@@ -38,7 +38,7 @@ results tell you which repo they came from:
 
 | Tag   | Repo      | What lives there |
 |-------|-----------|------------------|
-| `ipe:`| `.`       | Ipê Rust compiler (`crates/`), runtime (`runtime/`), tooling (`tools/`), Sky stdlib (`*.sky`) |
+| `ipe:`| `.`       | Ipê Rust compiler (`crates/`), runtime (`runtime/`), tooling (`tools/`), Sky stdlib (`*.ipe`) |
 | `sky:`| `../sky`  | Sky Haskell compiler (`src/Sky/`), Go backend+runtime (`runtime-go/`), Sky stdlib, the Rust ancestor (`runtime-rust/`) |
 
 So a result reads `ipe:crates/sky_lower/src/lower.rs:2518` or

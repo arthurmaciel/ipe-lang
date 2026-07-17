@@ -30,7 +30,7 @@ import Std.Log as Log
 --
 -- Run + verify:
 --
---   sky build src/Main.sky
+--   sky build src/Main.ipe
 --   ./sky-out/app &
 --   websocat -n1 ws://localhost:8033/ws <<<'hello'
 --   ⇒ echo: hello

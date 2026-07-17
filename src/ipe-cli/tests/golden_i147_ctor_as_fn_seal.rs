@@ -53,7 +53,7 @@ fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
         .join("tests")
         .join("golden")
         .join(fixture)
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 
@@ -95,7 +95,7 @@ fn a1_ctor_map_bare() {
         .join("tests")
         .join("golden")
         .join("ctor_map_bare")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i147_ctor_map_bare_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -142,7 +142,7 @@ fn a2_ctor_partial_multiarg_with_clone() {
         .join("tests")
         .join("golden")
         .join("ctor_partial")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i147_ctor_partial_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
@@ -189,7 +189,7 @@ fn a3_ctor_stored_in_record_field() {
         .join("tests")
         .join("golden")
         .join("ctor_field")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i147_ctor_field_e2e");
     let _ = std::fs::remove_dir_all(&out);
 

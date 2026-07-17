@@ -19,7 +19,7 @@ fn emits_byte_identical_main_rs_and_vendors_runtime() {
         .join("tests")
         .join("golden")
         .join("basics")
-        .join("Main.sky");
+        .join("Main.ipe");
     let golden = root.join("tests").join("golden").join("basics").join("main.rs");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m0_emit");
     let _ = std::fs::remove_dir_all(&out);
@@ -64,7 +64,7 @@ fn end_to_end_builds_and_prints_one() {
         .join("tests")
         .join("golden")
         .join("basics")
-        .join("Main.sky");
+        .join("Main.ipe");
     // Build OUTSIDE the workspace tree: an emitted project under the workspace's
     // own target/ dir is (correctly) rejected by cargo as a non-member package,
     // and the golden Cargo.toml carries no detaching `[workspace]` stanza.
@@ -87,14 +87,14 @@ fn end_to_end_builds_and_prints_one() {
 }
 
 /// A `CliError::Pipeline` must render as a coded, rustc/Elm-style report — not a
-/// `{:?}` debug dump. We feed `build` a deliberately ill-formed `.sky` source and
+/// `{:?}` debug dump. We feed `build` a deliberately ill-formed `.ipe` source and
 /// assert the displayed error carries an `error[IPE-…]` header and the
 /// `skyc explain` footer pointer.
 #[test]
 fn pipeline_error_renders_with_code_and_explain_pointer() {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("pipeline_err");
     let _ = std::fs::create_dir_all(&dir);
-    let entry = dir.join("Bad.sky");
+    let entry = dir.join("Bad.ipe");
     // Malformed: a top-level declaration with no right-hand side. This is
     // rejected at the parse stage boundary, the first pipeline stage.
     let wrote = std::fs::write(&entry, "module Main exposing (main)\n\nmain =\n");

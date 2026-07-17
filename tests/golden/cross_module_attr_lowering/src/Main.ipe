@@ -5,9 +5,9 @@ import Dep exposing (composed)
 
 
 -- `main`'s body is byte-sized so that (in Main's own byte-namespace) it
--- CONTAINS the failing Dep.sky span offset with a SMALLER lo_dist than
+-- CONTAINS the failing Dep.ipe span offset with a SMALLER lo_dist than
 -- Dep.composed's own (padded) body — the precise byte collision under which
--- the pre-fix-B heuristic mis-blames THIS module. Fix B attributes to Dep.sky.
+-- the pre-fix-B heuristic mis-blames THIS module. Fix B attributes to Dep.ipe.
 -- pad line to position the body inside the collision window
 -- pad line to position the body inside the collision window
 -- pad line to position the body inside the collision window

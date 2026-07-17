@@ -33,7 +33,7 @@ registry.
 > embedded by `crates/skyc/src/stdlib.rs` (17 `Sky.Core.*` modules: `Basics`,
 > `Maybe`, `Result`, `List`, `String`, `Char`, `Dict`, `Set`, `Bytes`,
 > `Crypto`, `Task`, `Io`, `Time`, `System`, `Random`, `File`, `Http`). The
-> larger `sky-out/.sky-stdlib/` tree is a reference-compiler artifact and is
+> larger `sky-out/.ipe-stdlib/` tree is a reference-compiler artifact and is
 > **not** what skyc ships. A name counts as reachable only when it both
 > resolves — via the embedded module's `exposing` list or the auto-prelude
 > `QUALIFIERS` table in `crates/sky_canon/src/env.rs` — **and** carries a

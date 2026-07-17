@@ -32,7 +32,7 @@ fn example_entry(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("record_self_edge")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 #[test]

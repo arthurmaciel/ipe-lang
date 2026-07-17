@@ -18,7 +18,7 @@ Keys:
   q      — quit (or Ctrl-C)
 
 Run:
-  sky run src/Main.sky
+  sky run src/Main.ipe
 
 (Requires a real TTY — pipe stdin will print a clear error.)
 -}

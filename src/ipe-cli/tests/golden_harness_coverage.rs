@@ -26,7 +26,7 @@
 //! (see [`support::assert_emitted_project_matches_golden_dir`]); every golden
 //! that byte-diffs does so against a `tests/golden/<name>/main.rs` that must
 //! exist on disk. A SEAL / run / exit-0 test references only fixture dirs that
-//! carry a `Main.sky` but NO `main.rs` — there is, by construction, nothing to
+//! carry a `Main.ipe` but NO `main.rs` — there is, by construction, nothing to
 //! byte-diff, so the dir-diff helper is inapplicable and the file is
 //! AUTO-EXEMPT. A future SEAL golden that ships no golden `main.rs` never
 //! re-trips this gate; a future byte-diffing golden that ships a golden

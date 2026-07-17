@@ -91,9 +91,9 @@ for lane in A B; do
   d="$TMPROOT/lane-$lane/examples/$EXAMPLE_NAME"
   mkdir -p "$d/src"
   # Never actually parsed (SKYC_BIN is faked below) — just needs to exist so
-  # examples-sweep.sh's `[ -f "$d/src/Main.sky" ]` gate and example_shape's
+  # examples-sweep.sh's `[ -f "$d/src/Main.ipe" ]` gate and example_shape's
   # regex scan (no Tui/Webview/Live/Server keywords here → shape=cli) pass.
-  cat >"$d/src/Main.sky" <<'EOF'
+  cat >"$d/src/Main.ipe" <<'EOF'
 module Main exposing (main)
 -- #35b concurrency-corruption probe fixture — never actually compiled by skyc
 -- (SKYC_BIN is faked out by the test harness).
@@ -113,7 +113,7 @@ cat >"$FAKE_SKYC" <<'FAKESKYC'
 set -euo pipefail
 # examples-sweep.sh invokes: fake-skyc build <target> --out <outdir>
 shift || true
-target="${1:-src/Main.sky}"; shift || true
+target="${1:-src/Main.ipe}"; shift || true
 outdir="sky-out/rust"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -142,7 +142,7 @@ chmod +x "$FAKE_SKYC"
 cat >"$FAKE_GO" <<'FAKEGO'
 #!/usr/bin/env bash
 set -euo pipefail
-# examples-sweep.sh invokes (cwd = example dir): fake-go build src/Main.sky
+# examples-sweep.sh invokes (cwd = example dir): fake-go build src/Main.ipe
 marker="${TEST_MARKER:-UNSET}"
 for i in $(seq 1 40); do
   printf 'GO-BUILD marker=%s pid=%s i=%02d\n' "$marker" "$$" "$i"

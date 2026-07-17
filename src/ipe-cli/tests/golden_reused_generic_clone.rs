@@ -49,7 +49,7 @@ fn golden_dir(root: &Path) -> PathBuf {
 }
 
 fn entry_path(root: &Path) -> PathBuf {
-    golden_dir(root).join("Main.sky")
+    golden_dir(root).join("Main.ipe")
 }
 
 /// skyc-0 + emitted-source assertion (unconditional, cheap — no `cargo`): the
@@ -147,6 +147,6 @@ fn i189_cargo_builds_and_runs() {
 
     // Cached-oracle parity: skyc's stdout must byte-match the golden's
     // refresh-oracle-generated `expected_go.txt` (staleness gate re-hashes
-    // Main.sky first; a hand-edited oracle.meta hard-fails here).
+    // Main.ipe first; a hand-edited oracle.meta hard-fails here).
     support::assert_go_parity("reused_generic_clone", &gdir, &outcome.stdout);
 }

@@ -1,6 +1,6 @@
 name = "websocket-echo"
 version = "0.1.0"
-entry = "src/Main.sky"
+entry = "src/Main.ipe"
 port = 8033
 
 [source]

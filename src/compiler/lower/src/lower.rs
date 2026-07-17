@@ -190,7 +190,7 @@ const HTTP_REQUEST_FIELD_TYPES: &[(&str, HttpFieldTy)] = &[
 /// The canonical `Sky.Http.Server.Response` record shape as `(field name,
 /// expected field TYPE)` pairs, alphabetically sorted by name: `body`,
 /// `contentType`, `headers`, `status`. Matches the reference
-/// `Sky/Http/Server.sky:66` record alias. A `Ty::Record` (or `canon::Type`)
+/// `Sky/Http/Server.ipe:66` record alias. A `Ty::Record` (or `canon::Type`)
 /// of this exact shape folds to [`IrType::ServerResponse`] so a handler-built
 /// record literal emits the runtime `ipe_runtime::ServerResponse` struct
 /// (which the server kernels produce/consume) rather than a backend-synthesised
@@ -7130,8 +7130,8 @@ impl<'a> Lowerer<'a> {
     /// diagnostic paired with the `home` (module byte-namespace path) of the def
     /// that produced it, so the driver attributes a lowering diagnostic to the
     /// correct SOURCE FILE rather than guessing from a bare byte span (the
-    /// misattribution class: a Server.sky lowering span numerically overlapping
-    /// a Main.sky def range was blamed on Main.sky). Mirrors
+    /// misattribution class: a Server.ipe lowering span numerically overlapping
+    /// a Main.ipe def range was blamed on Main.ipe). Mirrors
     /// [`ipe_types::infer_attributed`]'s `(Diagnostic, Vec<Symbol>)` contract
     /// exactly. A pre-/post-def error (union lowering, record collection, module
     /// assembly) carries an EMPTY home — the driver falls back to the byte-offset
@@ -8510,7 +8510,7 @@ impl<'a> Lowerer<'a> {
     /// missing from the binding's free-variable set), so no node `span` is
     /// threaded — those are [`bug`]s, not span-carrying feature gaps.
     /// The IR type of `Std.Db.Migration` — the record `{ name : String, sql :
-    /// String }` (reference `Std/Db.sky:237`). Both field names appear in every
+    /// String }` (reference `Std/Db.ipe:237`). Both field names appear in every
     /// program that annotates `Migration` (the record literals / `defaultMigration`
     /// call sites intern them), so a read-only interner lookup resolves them; a
     /// missing symbol is a compiler bug (the annotation implies the fields).
@@ -8787,7 +8787,7 @@ impl<'a> Lowerer<'a> {
                 // this opaque variant.
                 "HttpRequest" => Ok(IrType::HttpRequest),
                 // `Std.Db.Migration` — the record alias `{ name : String,
-                // sql : String }` (reference `Std/Db.sky:237`). Annotated
+                // sql : String }` (reference `Std/Db.ipe:237`). Annotated
                 // directly (`migrations : List Db.Migration`), so expand it to
                 // the synthesised record here — mirrors how the type-checker's
                 // `normalize_annotation_ty` expands the same name.
@@ -10513,7 +10513,7 @@ impl<'a> Lowerer<'a> {
             // A "number"-polymorphic Int literal (`canon::Expr_::Int`, per
             // `constrain_expr`'s `Expr_::Int(_) => self.super_var(TyBounds::add(), span)`)
             // whose SOLVED region type came out `Float` — e.g. `pct 100` where
-            // `pct : Float -> Length` (`Std/Css.sky`) — must render as an f64
+            // `pct : Float -> Length` (`Std/Css.ipe`) — must render as an f64
             // Rust literal (`100.0`), not the bare integer literal `100`. Rust's
             // own literal inference cannot bridge this: an unsuffixed integer
             // literal's type is always drawn from `{integer}` (never `{float}`),

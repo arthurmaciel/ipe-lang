@@ -227,7 +227,7 @@ feat/runtime-rust v0.17.2-1204 (`c818e081`).
 | `runtime/src/sky_runtime/ffi_polyfills.rs` + `runtime/tests/ffi_call_task_divergence.rs` | Vendored parity with the reference's runtime; the divergence test asserts dynamic `Ffi.callTask`/`callPure` panic with actionable messages and `Ffi.toAny` is identity (no erasure) |
 | `docs/architecture/kernel-registry-design.md` | Two-tier `KernelId = Stdlib(StdlibKernel) \| Ffi(FfiKernelId)` — closed enum for stdlib exhaustiveness (F1), opaque index for open FFI (R0.2). This is the M4 dependency the consumer side blocks on |
 | `sky-rust-backend:ffi-audit` skill | Already carried in-repo; wraps the inspector for the ~50-crate bindability audit |
-| Compiler `Ffi.kernel` handling | Stage-4 kernel aliasing works for stdlib (`crates/skyc/stdlib/Sky/Core/Dict.sky:42` etc.); no `sky add`-style consumer exists yet — that is #42 |
+| Compiler `Ffi.kernel` handling | Stage-4 kernel aliasing works for stdlib (`crates/skyc/stdlib/Sky/Core/Dict.ipe:42` etc.); no `sky add`-style consumer exists yet — that is #42 |
 
 ---
 

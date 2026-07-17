@@ -5,7 +5,7 @@ Demonstrates the Sky.Live component protocol -- nested components with independe
 ## Build & Run
 
 ```bash
-sky build src/Main.sky
+sky build src/Main.ipe
 ./sky-out/app
 ```
 

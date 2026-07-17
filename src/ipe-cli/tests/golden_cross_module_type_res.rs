@@ -1,6 +1,6 @@
 //! Regression gate: skyc must exit 0 on multi-module projects.
 //!
-//! Historical context: `Ui/Charts.sky` in example 17 originally used `(Html Msg)`
+//! Historical context: `Ui/Charts.ipe` in example 17 originally used `(Html Msg)`
 //! in annotations without `import State exposing (..)`.  The Rust compiler ICE'd
 //! with IPE-I0001 because `ir_type_from_canon` had a unique-match heuristic that
 //! searched `enum_variants` by name when `home = []` and no builtin matched.  The
@@ -47,7 +47,7 @@ fn assert_skyc_exit0(label: &str, entry_rel: &str) {
         return;
     };
     // Multi-module examples require sibling-discovery so imports like
-    // `import State exposing (..)` resolve to adjacent `.sky` files.
+    // `import State exposing (..)` resolve to adjacent `.ipe` files.
     let result = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         result.is_ok(),
@@ -56,11 +56,11 @@ fn assert_skyc_exit0(label: &str, entry_rel: &str) {
     );
 }
 
-/// Example 17 (skymon) — `Ui/Charts.sky` uses `(Html Msg)` in annotations
+/// Example 17 (skymon) — `Ui/Charts.ipe` uses `(Html Msg)` in annotations
 /// without `import State`.  Regression for IPE-I0001 in `ir_type_from_canon`.
 #[test]
 fn ex17_skymon_exits_zero() {
-    assert_skyc_exit0("ex17_skymon", "examples/17-skymon/src/Main.sky");
+    assert_skyc_exit0("ex17_skymon", "examples/17-skymon/src/Main.ipe");
 }
 
 /// Example 10 (live-component) — also triggered the constructor-as-callback
@@ -69,7 +69,7 @@ fn ex17_skymon_exits_zero() {
 fn ex10_live_component_exits_zero() {
     assert_skyc_exit0(
         "ex10_live_component",
-        "examples/10-live-component/src/Main.sky",
+        "examples/10-live-component/src/Main.ipe",
     );
 }
 
@@ -82,12 +82,12 @@ fn ex10_live_component_exits_zero() {
 ///    Sky API is `Font.family : String -> Attribute msg`.  The wrong `List
 ///    String` scheme leaked a phantom `String = List String` constraint into
 ///    the merged solve, which surfaced as a spurious IPE-T0001 at the `::` cons
-///    site in `State.sky:158` — a completely unrelated line.  Fixed by
+///    site in `State.ipe:158` — a completely unrelated line.  Fixed by
 ///    correcting the scheme to `fun(string(), attr(var(0)))` and changing the
 ///    runtime helper from `Vec<String>` to `String`.
 ///
 /// 2. **Wildcard-`any` return-type**: `view : Model -> any` in
-///    `Main.sky` would make the lowerer include `any` in the function's generic
+///    `Main.ipe` would make the lowerer include `any` in the function's generic
 ///    type parameters and emit `-> T1` as the return type, producing Rust
 ///    E0308 because the body returns `Html<StateMsg>`.  In `lower.rs`:
 ///    (a) `any` is filtered out of `type_params` so no `<T_any>` generic is
@@ -98,5 +98,5 @@ fn ex10_live_component_exits_zero() {
 ///    which filters `"any"` out before treating free vars as polymorphic.
 #[test]
 fn ex19_skyforum_exits_zero() {
-    assert_skyc_exit0("ex19_skyforum", "examples/19-skyforum/src/Main.sky");
+    assert_skyc_exit0("ex19_skyforum", "examples/19-skyforum/src/Main.ipe");
 }

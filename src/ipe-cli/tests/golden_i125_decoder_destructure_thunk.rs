@@ -47,7 +47,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 /// Cheap tier: skyc must accept the fixture (exit 0). Always runs.
 fn assert_skyc_ok(name: &str) -> PathBuf {
     let root = repo_root();
-    let entry = golden_dir(&root, name).join("Main.sky");
+    let entry = golden_dir(&root, name).join("Main.ipe");
     let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
     let runtime = skyc::resolve_runtime();

@@ -47,7 +47,7 @@ fn fixture_entry(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("tui_entry_case_taskrun")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 /// Build the fixture and return the emitted `src/main.rs` text. `None` when

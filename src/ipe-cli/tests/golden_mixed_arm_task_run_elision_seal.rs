@@ -42,7 +42,7 @@ fn fixture_entry(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("mixed_arm_task_run_elision")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 /// Build the fixture and return the emitted `src/main.rs` text. `None` when

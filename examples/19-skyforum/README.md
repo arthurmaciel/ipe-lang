@@ -5,7 +5,7 @@ A Reddit/HackerNews-style demo built with Sky.Live and Std.Ui. The view layer is
 ## Build & Run
 
 ```bash
-sky build src/Main.sky
+sky build src/Main.ipe
 ./sky-out/app
 ```
 

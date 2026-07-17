@@ -4,10 +4,10 @@
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
 //! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the SAME
-//! `Main.sky` to stdout `13\n`, exit 0 — verified by hand:
+//! `Main.ipe` to stdout `13\n`, exit 0 — verified by hand:
 //!
 //! ```text
-//! $ sky run tests/golden/binops/Main.sky   # Go backend
+//! $ sky run tests/golden/binops/Main.ipe   # Go backend
 //! 13
 //! ```
 //!
@@ -28,7 +28,7 @@ fn example_entry(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("binops")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 #[test]

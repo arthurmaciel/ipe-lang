@@ -21,7 +21,7 @@ IPE_RUNTIME_DIR	env-var	scripts/lib/env.sh + skyc/src/lib.rs + all E2E tests (BU
 IPE_E2E	env-var	build-harness gate flag (scripts + tests + memory)	IPE_E2E	1
 SKYC_BIN	env-var	scripts/lib/env.sh	IPE_BIN	1
 IPE_* (all remaining)	env-var	IPE_LIVE_STORE(_PATH), IPE_DB_URL, IPE_BUILD_CACHE(_DIR), IPE_CONSOLE_AUTH, IPE_ENV, IPE_TUI_QUIET, IPE_UI_LAZY_CAP, IPE_LIVE_PORT, IPE_SERVER_PORT, IPE_TEST, IPE_CORE_PURE, IPE_CORE_WEBSOCKET, ...	IPE_* (IPE_->IPE_ verbatim)	1
-.sky	source-ext	examples/**/*.sky, tests/golden/**/Main.sky, crates/skyc/stdlib/**/*.sky, compiler file-discovery, sky.toml `entry` (HIGH-IMPACT: regenerates every golden)	.ipe	1
+.ipe	source-ext	examples/**/*.ipe, tests/golden/**/Main.ipe, crates/skyc/stdlib/**/*.ipe, compiler file-discovery, sky.toml `entry` (HIGH-IMPACT: regenerates every golden)	.ipe	1
 sky.toml	manifest	project manifest filename + its parser in skyc	ipe.toml	1
 sky-out/	build-dir	emitted-project output dir (skyc + scripts + .gitignore)	ipe-out/	1
 .skycache	build-dir	build cache dir (skyc/src/cache.rs + .gitignore)	.ipecache	1

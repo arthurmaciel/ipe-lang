@@ -6,8 +6,8 @@ an instrumented THROWAWAY compiler build (`/tmp/ipe-instr`,
 
 ## TL;DR
 
-The reported location is FALSE. `src/Main.sky:73` (`\db ->` in `runMigrate`)
-is a misattribution artifact. The real reject is in **`src/Server.sky:45-46`**:
+The reported location is FALSE. `src/Main.ipe:73` (`\db ->` in `runMigrate`)
+is a misattribution artifact. The real reject is in **`src/Server.ipe:45-46`**:
 
 ```elm
 guarded h =
@@ -27,9 +27,9 @@ Two distinct defects compose:
 
 2. **Diagnostic misattribution** — lowering diagnostics carry only a
    file-local byte `Span`, no module home. `skyc`'s `source_for_span`
-   heuristic maps the Server.sky span onto whatever merged def numerically
+   heuristic maps the Server.ipe span onto whatever merged def numerically
    contains those bytes with the closest `lo` — in the pristine tree that is
-   `Main.sky`'s `runMigrate` → the phantom `Main.sky:73:2`.
+   `Main.ipe`'s `runMigrate` → the phantom `Main.ipe:73:2`.
 
 ## (a) What IPE-L0126 is + the reported construct
 
@@ -43,9 +43,9 @@ inner `move` closure would move it out of the outer environment on first call
 → the outer closure degrades to `FnOnce` → rustc E0525 at cargo time; the
 lowerer rejects instead (THE SEAL: fail closed at skyc time).
 
-The caret at `Main.sky:73:2` covers `(\db ->` — but byte-mapping proves the
-span belongs to Server.sky (see (c2)). `runMigrate` compiles clean when
-isolated with `State.sky` + `Migrations.sky`.
+The caret at `Main.ipe:73:2` covers `(\db ->` — but byte-mapping proves the
+span belongs to Server.ipe (see (c2)). `runMigrate` compiles clean when
+isolated with `State.ipe` + `Migrations.ipe`.
 
 ## (b) Minimal trigger
 
@@ -119,16 +119,16 @@ Lowering diagnostics carry a bare `Span` (file-local byte offsets,
 `sky_diagnostics/src/span.rs` — no file id). After `link::link` merges all
 modules, `source_for_span` guesses the owning file: among all defs whose
 `body_span` numerically contains the span, pick closest-`lo` (narrowest as
-tiebreak). The failing span is Server.sky bytes `{2036, 2118}` (`guarded h =
+tiebreak). The failing span is Server.ipe bytes `{2036, 2118}` (`guarded h =
 … wrap (rateLimit …)`, line 45). `Server.run`'s def starts ~1000 bytes before
-that offset, while Main.sky's `runMigrate` body *coincidentally* starts at
+that offset, while Main.ipe's `runMigrate` body *coincidentally* starts at
 byte ~1990 → `lo_dist` 46 beats ~1000 → the renderer blames
-`Main.sky:73:2`, which is exactly byte 2036 of Main.sky (`(\db ->`).
+`Main.ipe:73:2`, which is exactly byte 2036 of Main.ipe (`(\db ->`).
 Verified byte-for-byte on the pristine example.
 
-This is why bisection was treacherous: editing Main.sky moved the *blamed*
-location (`Main.sky:73:2` → `Main.sky:72:24` → `Routes/Health.sky:54:19`)
-while the single underlying error (Server.sky `wrap`) never changed.
+This is why bisection was treacherous: editing Main.ipe moved the *blamed*
+location (`Main.ipe:73:2` → `Main.ipe:72:24` → `Routes/Health.ipe:54:19`)
+while the single underlying error (Server.ipe `wrap`) never changed.
 Instrumented runs show exactly ONE L0126 fire in every layout.
 
 The typecheck path already solved this class: `sky_db::typecheck` /
@@ -141,7 +141,7 @@ though `Lowerer::current_home` knows the answer at every `unsupported()` site.
 - **Go backend** (the parity oracle): Go closures capture by reference,
   garbage-collected — no ownership/Clone dimension at all. Example 36 builds
   and runs (`../sky/examples/36-composite-server` exists as a reference
-  example; the Server.sky comments describe the middleware composition as a
+  example; the Server.ipe comments describe the middleware composition as a
   deliberately exercised shape).
 - **Reference Rust backend** (`../sky/src/Sky/Generate/Rust/Builder/`):
   - First-class Handler-shaped values render as **`Arc<dyn Fn>`**
@@ -247,7 +247,7 @@ Regression tests that should exist:
 (pristine example, module-isolated copy, 9-line minimal), instrumented at the
 exact emission site (`rewrite_captured_clones`, `sym=wrap`, `depth=1`,
 `lambda_span={2036,2118}`), and byte-verified for the misattribution
-(Server.sky:45 bytes ↔ Main.sky:73:2).
+(Server.ipe:45 bytes ↔ Main.ipe:73:2).
 
 Residuals (honest):
 - Post-fix pass of example 36 is NOT proven: at least two more latent members
@@ -255,9 +255,9 @@ Residuals (honest):
   `wrap`/`guarded` multi-use vs `reject_fn_value_reuse`), plus whatever hides
   behind the current fail-fast. Expect 36 to need one re-diagnosis round after
   clone-relay lands.
-- The `Routes/Health.sky:54:19` sighting was observed on an edited /tmp copy
+- The `Routes/Health.ipe:54:19` sighting was observed on an edited /tmp copy
   (different byte layout); on the pristine tree the single blamed location is
-  `Main.sky:73:2`. Same one underlying error in all layouts.
+  `Main.ipe:73:2`. Same one underlying error in all layouts.
 - Go-reference build of 36 was not re-run this session (reference example
   present; brief asserts it runs — consistent with the reference backend's
   explicit handling of this exact shape).

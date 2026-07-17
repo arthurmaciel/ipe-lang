@@ -89,7 +89,7 @@ fn compile(fixture: &str, tag: &str, out: &PathBuf) -> Option<Result<(), skyc::C
     let ipe_dir = std::env::temp_dir().join(format!("i180_{tag}_sky"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
     std::fs::create_dir_all(&ipe_dir).ok()?;
-    let entry = ipe_dir.join("Main.sky");
+    let entry = ipe_dir.join("Main.ipe");
     std::fs::write(&entry, fixture).ok()?;
     let _ = std::fs::remove_dir_all(out);
     let Ok(runtime) = skyc::resolve_runtime() else {

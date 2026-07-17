@@ -654,7 +654,7 @@ plus `ipe build --target wasm`:
 ```toml
 [wasm]
 mode      = "spa"              # spa (MVP) | hydrate (MVP+1) | off (default)
-entry     = "src/Client.sky"   # client entry; its reachability closure is the bundle
+entry     = "src/Client.ipe"   # client entry; its reachability closure is the bundle
 mount     = "#app"             # SPA mount node
 publicEnv = ["API_BASE_URL"]   # default-deny allowlist; rejects IPE_* / secret patterns
 optLevel  = "z"

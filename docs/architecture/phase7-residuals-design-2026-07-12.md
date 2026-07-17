@@ -28,7 +28,7 @@ Seven findings, all addressed in this revision:
    trade-off. See §1.3 and the new Stage-A test in TDD step 1A.3.
 3. **Accuracy — the "6 fixtures" blast-radius count was off by one.**
    Corrected to 5 throughout (§0, §1.4, §1.6, TDD step 1B.6); the sixth
-   `rg` hit is a comment in `tests/golden/tui_entry_case_taskrun/Main.sky`,
+   `rg` hit is a comment in `tests/golden/tui_entry_case_taskrun/Main.ipe`,
    not an actual `Live.app` call.
 4. **TDD/internal consistency — Stage B steps 1B.1-1B.3 claimed an
    unachievable "run full suite, no regression, commit" per step.**
@@ -85,7 +85,7 @@ here so each section below doesn't have to re-state them:
 - The doc's "140+-test golden-oracle SEAL" figure describes the WHOLE
   golden suite (433 fixtures under `tests/golden/`). A raw `rg -l
   "Live\.app\b|Live\.appRouted" tests/golden` returns 6 files, but one of
-  them — `tests/golden/tui_entry_case_taskrun/Main.sky` — matches only
+  them — `tests/golden/tui_entry_case_taskrun/Main.ipe` — matches only
   inside a `--` COMMENT describing an unrelated bug repro (`-- \`case
   List.head argsList of Just "live" -> Live.app {...} |> Task.run; _\``);
   that fixture never actually constructs a `Live.app` call. The TRUE blast

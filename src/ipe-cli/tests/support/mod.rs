@@ -66,7 +66,7 @@ pub fn golden_dir_of(golden: &Path) -> &Path {
 /// manifest drift the single-file assertion could not.
 ///
 /// **Scope is manifest-authoritative, not a blind recursive diff.** A golden
-/// dir carries OTHER, non-emitted fixture files (`Main.sky`, `expected_go.txt`,
+/// dir carries OTHER, non-emitted fixture files (`Main.ipe`, `expected_go.txt`,
 /// `oracle.meta`, and a partial `ipe_runtime/` reference tree) that the emitted
 /// project does not reproduce at those paths; the walk is scoped to exactly the
 /// golden's byte-diffable emitted artifacts (`main.rs` -> `<out>/src/main.rs`,
@@ -423,7 +423,7 @@ pub fn build_and_run_stack_limited(
 /// staleness gate enforced first.
 ///
 /// This is the read side of the cached-oracle infra: it NEVER runs the Go
-/// backend. It re-hashes `tests/golden/<name>/Main.sky` and, if the hash no
+/// backend. It re-hashes `tests/golden/<name>/Main.ipe` and, if the hash no
 /// longer matches `oracle.meta`, fails loudly with "run refresh-oracle" rather
 /// than diffing against a stale `expected_go.txt`. A missing oracle is likewise
 /// a hard failure — never a skip. When the golden is marked `oracle_divergence`

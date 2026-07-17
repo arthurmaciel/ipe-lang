@@ -113,7 +113,7 @@ from `IPE_AUTH_TOKEN_SECRET` (≥32 bytes).
 ```toml
 name = "<project>"
 version = "0.1.0"
-entry = "src/Main.sky"
+entry = "src/Main.ipe"
 
 [live]                          # Sky.Live apps only
 port = 8000
@@ -211,7 +211,7 @@ Sky.Live → `Cmd.perform task ResultMsg`, dispatch updates
 
 ## Standard library
 
-Source: `sky-stdlib/{Sky/Core,Std,Sky/Http}/*.sky`. `sky doc Module`
+Source: `sky-stdlib/{Sky/Core,Std,Sky/Http}/*.ipe`. `sky doc Module`
 surfaces every entry.
 
 Each stdlib binding is either pure Sky (a recursive/case-based impl) or an
@@ -645,10 +645,10 @@ view model =
    ignore `type=`/`value=` on non-inputs.
 
 3. **Std.Ui-heavy modules (~25+ polymorphic `Element Msg` helpers) MUST be
-   split across multiple modules.** A monolithic `Main.sky` can blow the HM
-   type-checker heap. Canonical split: `State.sky` (types, no Std.Ui
-   imports) / `Update.sky` / `View/Common.sky` / one View module per page /
-   `Main.sky` dispatcher.
+   split across multiple modules.** A monolithic `Main.ipe` can blow the HM
+   type-checker heap. Canonical split: `State.ipe` (types, no Std.Ui
+   imports) / `Update.ipe` / `View/Common.ipe` / one View module per page /
+   `Main.ipe` dispatcher.
 
 4. **`Input.*` size/layout attrs apply to the wrapper; form attrs stay on
    the inner control.** Every `Std.Ui.Input.*` call
@@ -908,12 +908,12 @@ Current compiler limitations to work around when writing code.
 
 ```bash
 sky init [name]                    # new project
-sky build src/Main.sky             # compile → sky-out/app
-sky run src/Main.sky               # build + run
-sky watch src/Main.sky             # file-watch rebuild + restart
-sky check src/Main.sky             # type-check + build
-sky fmt src/Main.sky               # opinionated formatter (run after editing .sky/.skyi)
-sky test tests/MyTest.sky          # Sky.Test runner
+sky build src/Main.ipe             # compile → sky-out/app
+sky run src/Main.ipe               # build + run
+sky watch src/Main.ipe             # file-watch rebuild + restart
+sky check src/Main.ipe             # type-check + build
+sky fmt src/Main.ipe               # opinionated formatter (run after editing .ipe/.skyi)
+sky test tests/MyTest.ipe          # Sky.Test runner
 sky db status                      # Std.Db migrations: applied / pending / drift
 sky db migrate                     # apply pending Std.Db migrations, then exit
 sky doc Module                     # terminal docs
@@ -935,9 +935,9 @@ sky --version
 binary in `sky-out/`. Always `cd` into the project/example dir first:
 
 ```bash
-cd examples/01-hello-world && sky build src/Main.sky
+cd examples/01-hello-world && sky build src/Main.ipe
 ```
 
 `sky check` ≡ `sky build` (both invoke the Rust build on the emitted code).
-Run `sky fmt` after editing `.sky`/`.skyi` files (the formatter is
+Run `sky fmt` after editing `.ipe`/`.skyi` files (the formatter is
 idempotent).

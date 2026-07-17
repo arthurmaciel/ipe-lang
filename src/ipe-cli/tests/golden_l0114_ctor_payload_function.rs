@@ -94,7 +94,7 @@ fn fixture_entry(root: &Path, name: &str) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join(name)
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 fn fixture_src_entry(root: &Path, name: &str) -> PathBuf {
@@ -102,10 +102,10 @@ fn fixture_src_entry(root: &Path, name: &str) -> PathBuf {
         .join("golden")
         .join(name)
         .join("src")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
-/// Build `name`'s `Main.sky` and return the diagnostic code if the pipeline
+/// Build `name`'s `Main.ipe` and return the diagnostic code if the pipeline
 /// rejected it, `None` if it was accepted (or failed for a non-pipeline
 /// reason, which the caller's assertion will catch).
 fn built_code(root: &Path, name: &str) -> (Result<(), CliError>, PathBuf) {
@@ -302,7 +302,7 @@ fn fn_extracted_called_twice_accepted() {
 
 // ── T3: the andMap curried-payload gate — every aliasing shape ─────────────
 
-/// Assert `name`'s `Main.sky` is rejected with one of the three CLEAN outcomes
+/// Assert `name`'s `Main.ipe` is rejected with one of the three CLEAN outcomes
 /// the two-tier design can produce — never silently accepted, never a
 /// cargo-fail.
 ///

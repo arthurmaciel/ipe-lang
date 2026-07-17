@@ -7,7 +7,7 @@ import Std.Log exposing (println)
 
 
 -- #217 contract-drift regression: `Std.Db.Migration` is a record alias
--- `{ name : String, sql : String }` (reference `Std/Db.sky:237`) and
+-- `{ name : String, sql : String }` (reference `Std/Db.ipe:237`) and
 -- `Db.migrate : Db -> List Migration -> Task Error (List String)`
 -- (reference `:300`) — NOT `List (String, String)`. Ported verbatim from
 -- the reference migration idiom: record literals in a `List Migration`,

@@ -6,7 +6,7 @@ Sky.Live monitoring dashboard with uptime monitors, custom metrics, alerting, an
 
 ```bash
 sky install
-sky build src/Main.sky
+sky build src/Main.ipe
 ./sky-out/app
 ```
 

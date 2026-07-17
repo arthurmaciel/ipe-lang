@@ -41,7 +41,7 @@ fn fixture_entry() -> PathBuf {
         .join("tests")
         .join("golden")
         .join("i_tuple_multiarm_case")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 /// Fast gate: a multi-arm LITERAL-tuple `case` builds cleanly — the IPE-L0115

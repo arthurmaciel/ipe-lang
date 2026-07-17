@@ -1,7 +1,7 @@
 //! Helper functions backing the Std.Ui kernel dispatch in the Rust code-gen.
 //!
 //! Each function corresponds to one `KernelFn` variant wired in `ipe_lower` +
-//! `ipe_backend_rust`. The signatures mirror `Std/Ui.sky` exactly so that the
+//! `ipe_backend_rust`. The signatures mirror `Std/Ui.ipe` exactly so that the
 //! emitter can call them without any wrapping or unwrapping.
 //!
 //! Naming convention: every public function carries a trailing underscore to
@@ -46,7 +46,7 @@ pub fn ui_el_<M: Clone>(attrs: Vec<Attribute<M>>, ch: Element<M>) -> Element<M> 
 /// `Ui.row : List (Attribute msg) -> List (Element msg) -> Element msg`
 ///
 /// Prepends the `__row` row-direction marker matching `rowMarker` in
-/// `Std/Ui.sky`.
+/// `Std/Ui.ipe`.
 pub fn ui_row_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M>>) -> Element<M> {
     let mut full = Vec::with_capacity(attrs.len() + 1);
     full.push(Attribute::AttrStyle("__row".to_owned(), "true".to_owned()));
@@ -57,7 +57,7 @@ pub fn ui_row_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M>>) ->
 /// `Ui.column : List (Attribute msg) -> List (Element msg) -> Element msg`
 ///
 /// Prepends the `__col` column-direction marker matching `colMarker` in
-/// `Std/Ui.sky`.
+/// `Std/Ui.ipe`.
 pub fn ui_column_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M>>) -> Element<M> {
     let mut full = Vec::with_capacity(attrs.len() + 1);
     full.push(Attribute::AttrStyle("__col".to_owned(), "true".to_owned()));
@@ -479,7 +479,7 @@ pub fn ui_font_italic_<M>() -> Attribute<M> {
 // ── Html element builders ─────────────────────────────────────────────────────
 // These mirror `Std.Html`'s pure-Sky constructors (`HText`, `HRaw`,
 // `HElement`) without the `Sky.Ffi` dependency that blocks compiling
-// `Std/Html.sky` from source in Sky-Rust.
+// `Std/Html.ipe` from source in Sky-Rust.
 
 /// `Html.text : String -> Html msg`
 pub fn html_text_node_<M>(s: String) -> Html<M> {
@@ -1095,7 +1095,7 @@ pub fn ui_desc_label_(s: String) -> Description {
 
 /// `Ui.paragraph : List (Attribute msg) -> List (Element msg) -> Element msg`
 ///
-/// Mirrors `paragraph` in `Std/Ui.sky`: a `<p>`-tagged node carrying
+/// Mirrors `paragraph` in `Std/Ui.ipe`: a `<p>`-tagged node carrying
 /// `DescParagraph` plus the `__paragraph` marker (matching `paragraphMarker`),
 /// so text children wrap as inline flow.
 pub fn ui_paragraph_<M: Clone>(
@@ -1113,7 +1113,7 @@ pub fn ui_paragraph_<M: Clone>(
 
 /// `Ui.textColumn : List (Attribute msg) -> List (Element msg) -> Element msg`
 ///
-/// Mirrors `textColumn` in `Std/Ui.sky`: a `<section>`-tagged block container
+/// Mirrors `textColumn` in `Std/Ui.ipe`: a `<section>`-tagged block container
 /// with the `__textcolumn` marker (matching `textColumnMarker`), keeping each
 /// paragraph child on its own line with normal text flow.
 pub fn ui_text_column_<M: Clone>(

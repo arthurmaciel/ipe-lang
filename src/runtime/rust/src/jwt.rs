@@ -4,7 +4,7 @@
 //!
 //! Encoding here reproduces, byte-for-byte, the token the Go backend's
 //! `Sky.Core.Jwt.encode` produces for the same key + claims. The Go module
-//! (sky-stdlib `Sky/Core/Jwt.sky`) builds the compact JWS in pure Sky on top of
+//! (sky-stdlib `Sky/Core/Jwt.ipe`) builds the compact JWS in pure Sky on top of
 //! `Json.Encode`, `Crypto`, and `Encoding`:
 //!
 //! * header  = `Json.Encode.encode 0 (object [("alg", …), ("typ", "JWT")])`
@@ -41,13 +41,13 @@ use serde_json::Value as JsonValue;
 use std::collections::HashSet;
 
 /// base64url, no padding (RFC 7515) — the encoding every JWS segment uses.
-/// Equivalent to Go's `standardToUrl(base64Encode(bytes))` in `Jwt.sky`.
+/// Equivalent to Go's `standardToUrl(base64Encode(bytes))` in `Jwt.ipe`.
 fn b64u(bytes: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
 /// Convert standard base64 (with padding) to base64url with no padding.
-/// Mirrors `Jwt.sky`'s `standardToUrl`: `+`→`-`, `/`→`_`, strip `=`.
+/// Mirrors `Jwt.ipe`'s `standardToUrl`: `+`→`-`, `/`→`_`, strip `=`.
 fn standard_to_url(b64: &str) -> String {
     b64.replace('+', "-").replace('/', "_").replace('=', "")
 }
@@ -389,7 +389,7 @@ pub fn ipe_jwt_audience(aud: String, claims: JsonValue) -> JsonValue {
 /// `Jwt.expiresAt : Int -> Claims -> Claims` — sets the `exp` claim (Unix
 /// seconds).  The Sky stdlib documents `expiresAt` as accepting Unix
 /// milliseconds but the JWT spec and the Go oracle use Unix SECONDS.  The
-/// Sky stdlib's `Jwt.sky` passes the value straight through as a JSON number,
+/// Sky stdlib's `Jwt.ipe` passes the value straight through as a JSON number,
 /// so we mirror that — the caller is responsible for providing the right unit.
 pub fn ipe_jwt_expires_at(exp: i64, claims: JsonValue) -> JsonValue {
     claims_set(claims, "exp", JsonValue::Number(serde_json::Number::from(exp)))
@@ -412,7 +412,7 @@ pub fn ipe_jwt_jwt_id(jti: String, claims: JsonValue) -> JsonValue {
 
 /// `Jwt.withClaim : String -> JsonEnc.Value -> Claims -> Claims` — inserts an
 /// arbitrary claim whose value is any encoded JSON node.  Matches the reference
-/// `Sky/Core/Jwt.sky:79`: the value is a `JsonEnc.Value` (itself a
+/// `Sky/Core/Jwt.ipe:79`: the value is a `JsonEnc.Value` (itself a
 /// `serde_json::Value` at runtime, exactly like `Claims`), so it is inserted
 /// directly — a string / int / bool / nested object all round-trip with the
 /// correct token bytes.
@@ -567,12 +567,12 @@ mod tests {
     }
 
     // RSA-2048 PKCS#8 test key pair (test-only; never used outside tests) — the
-    // same key embedded in tests/golden/jwt_rs256_roundtrip/Main.sky.
+    // same key embedded in tests/golden/jwt_rs256_roundtrip/Main.ipe.
     const RS256_PRIV_PEM: &str = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDKt5KX9AzdrNIl\nKj9WqLI1vI1E+s6ydOuFtJaX+3eyvByRf++qKeSca9WQhFWih6INNSPyHiI1w570\njeglmwcQe8WXyW15w/c3a/TkYJ6thqyFOBTColjuOv+nUkIyHkOFx4GTtTwjcIQ1\no+sgDy90NrIyjvZhKGxv/BoRsvmcPNcO95MC2lTZrhjIwPpTCDn/jD1DhNmRtcsv\ng0WmoXKGfFm+YYALT49Cs2hU2z8kQrlqo5q8Zzsxa3+wh4yF7W/O5aAoUBKtcYNS\nOvumvh7aBnuHZT45ZvYGCNdTPFX+4E27JWyAycp+4GqfvcbcfcDwjhpkphAhYozi\nZ9zgc+4FAgMBAAECggEAVoIbcXQpD2qCbXDHgdRQ5MS3prG/hoGFxtPHlkkujhxf\ntqnZnYzuLeCIzXjj0I3AFpHQarD4WWhHS8bJRE8RpzOioYFIkjeSJtkPs2wWGyhH\nNDy4A01j1RphYkak0B2BJDR89AtaBCeui/ONUeuZDSeQSSogM1scV3fGqjnt8oFz\nlhaOell+Z/csmbLW+YhJEpUuKmA/V4ehXKn6TvTWCvfYOupVauZeUcwAzMXCtWIx\n6CvEoe5We/0MafIeqwnUSeoAVXvmhx5QtTC2x3rYlSvr3RtGPFTH4wD+cBavFOW8\nzD1u6SC5mDQi0L5Z1tSdV8g8cF2sSyTf3peNXI2DKwKBgQDbfFt9Vg3gwBFJNSRk\nOhi59+KYisxFSEcOj9X+MdrCys8Zm/4XWtpU06rvuM3e8C1+ubK978BdLamZrnQO\n/w2XOzD3WNbX/eGSQci7BGFQBUBP98ABDWctjTHu7Ph3BZZqaj+b4ZWEBNsvrkkw\nfqNE3m5dx+JtbSAgThD1eq5elwKBgQDscQ5qZoXmlUChTpJzqvHm5eEiV+tOS/o8\noxaH2ygPqwAJkWtiFmXLIWUW+dx0hwYEocbKUkBx9HBS0yMDe2aJV5sZwo0fzUV2\nHCwxJ2cVB28bQ1mVETTuSE8Ok/Cb/zxHjlVx4NMDUEmf+KTaWQ2JXysI4yv4Vi2u\npkt0DIpHwwKBgQCABuYHEi8+Lkrm/QyhOhI6SBHxEOVedG6eW+BjSgllHo/3TDrG\nvMQmPuGyu4W6yTaAeSl+CV+X+o63ij9AkB4JXQmO/k8z5m+xtJW2ITPyTV3aR5XE\nB2Fr/LRnveqg4q1+nUNFViy0uXBxO6SNmRD7lxOhuHqngcP/lAnoZwtXOQKBgAuF\n7wfsezYjrASwiZ6thCCWr4Q2+LbWKRnvcNeqLKem09ejiLI9GTTvKbgW8VGUiwyK\nvd96Zr2nBhpjQ9+Vkge7h0mYG7yjCnGZKeYzX2i89gNEIweK0SOTzpaNSzqvE8cA\n/tUP+fi9Xvk26wHhOTGqu7QxLiFqQcuzOxYqzkp1AoGADuFoA0w4zwXsr/6sF1Vx\ne20UCYmRkiiE6CbgicFsMYhaD5w2F5Ss26Zb8f09oaAZw2xwDCNY7LX2OQSTgSuX\nzzBBQrEfmqxPLztxMa0e3qjSBMeo3m0m2Yoen67ie5b53snOT3t704JrE6kP6DxC\nkxJKRSX7IM4caBhDN+Khm2k=\n-----END PRIVATE KEY-----\n";
 
     /// SPKI public key matching `RS256_PRIV_PEM` — the RS256 decode path verifies
     /// with a public PEM (same key embedded in
-    /// tests/golden/jwt_rs256_roundtrip/Main.sky).
+    /// tests/golden/jwt_rs256_roundtrip/Main.ipe).
     const RS256_PUB_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyreSl/QM3azSJSo/Vqiy\nNbyNRPrOsnTrhbSWl/t3srwckX/vqinknGvVkIRVooeiDTUj8h4iNcOe9I3oJZsH\nEHvFl8ltecP3N2v05GCerYashTgUwqJY7jr/p1JCMh5DhceBk7U8I3CENaPrIA8v\ndDayMo72YShsb/waEbL5nDzXDveTAtpU2a4YyMD6Uwg5/4w9Q4TZkbXLL4NFpqFy\nhnxZvmGAC0+PQrNoVNs/JEK5aqOavGc7MWt/sIeMhe1vzuWgKFASrXGDUjr7pr4e\n2gZ7h2U+OWb2BgjXUzxV/uBNuyVsgMnKfuBqn73G3H3A8I4aZKYQIWKM4mfc4HPu\nBQIDAQAB\n-----END PUBLIC KEY-----\n";
 
     /// The genuine Go-backend token for the equivalent builder-API program

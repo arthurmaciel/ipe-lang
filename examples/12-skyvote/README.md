@@ -6,7 +6,7 @@ Full-featured voting and feedback application built with Sky.Live. Includes user
 
 ```bash
 sky install
-sky build src/Main.sky
+sky build src/Main.ipe
 ./sky-out/app
 ```
 

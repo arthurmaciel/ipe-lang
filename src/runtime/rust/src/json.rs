@@ -683,7 +683,7 @@ pub fn decode_map5<
 /// Sky's pipe form: `succeed Ctor |> andMap decA |> andMap decB` chains as
 /// `andMap decB (andMap decA (succeed Ctor))` — the VALUE decoder is the first
 /// arg, the FUNCTION decoder is the second.
-/// Matches Sky's `Std.Db.Decode.sky` line: `andMap : Decoder a -> Decoder (a -> b) -> Decoder b`.
+/// Matches Sky's `Std.Db.Decode.ipe` line: `andMap : Decoder a -> Decoder (a -> b) -> Decoder b`.
 pub fn decode_and_map<E: From<String> + 'static, A: 'static + Send, B: 'static + Send>(
     dec_val: Decoder<E, A>,
     dec_fn: Decoder<E, Box<dyn FnOnce(A) -> B + Send>>,

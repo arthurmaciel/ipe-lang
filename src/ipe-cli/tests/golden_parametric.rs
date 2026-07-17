@@ -17,7 +17,7 @@
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
 //! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the SAME
-//! `Main.sky` to stdout `42\n`, exit 0 — hand-verified in a temp dir, where the
+//! `Main.ipe` to stdout `42\n`, exit 0 — hand-verified in a temp dir, where the
 //! Go backend emits the matching monomorphisation
 //! `func identity[T1 any](x T1) T1` / `func const_[T1 any, T2 any](x T1, y T2) T1`
 //! / `func apply[T1 any, T2 any](f func(T1) T2, x T1) T2`, confirming the
@@ -36,7 +36,7 @@ fn example_entry(root: &Path) -> PathBuf {
     root.join("tests")
         .join("golden")
         .join("parametric")
-        .join("Main.sky")
+        .join("Main.ipe")
 }
 
 #[test]

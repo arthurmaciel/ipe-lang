@@ -18,8 +18,8 @@
 //!
 //!   1. **No-reflection guard.** The faithful Rust analogue of Go's dynamic
 //!      dispatch is reflection; that is the one thing this backend must not do.
-//!   2. **Zero `.sky` source emits `Ffi.callTask`.** Across the whole stdlib +
-//!      every example, `grep -rn 'Ffi\.callTask' --include='*.sky'` returns 0
+//!   2. **Zero `.ipe` source emits `Ffi.callTask`.** Across the whole stdlib +
+//!      every example, `grep -rn 'Ffi\.callTask' --include='*.ipe'` returns 0
 //!      hits outside generated `sky-out/`. The polyfill is statically dead for
 //!      every well-typed Sky program shipped today.
 //!   3. **Effectful kernels route via `Ffi.kernel`, never `Ffi.callTask`.** The

@@ -30,12 +30,12 @@ fn e2e_enabled() -> bool {
     std::env::var("IPE_E2E").is_ok()
 }
 
-/// Compile `tests/golden/<name>/Main.sky`, build the emitted Cargo project,
+/// Compile `tests/golden/<name>/Main.ipe`, build the emitted Cargo project,
 /// run it, and return the captured stdout. Fails the test on any build or
 /// runtime error — a broken golden cannot pass silently.
 fn compile_build_run(name: &str) -> support::RunOutcome {
     let root = repo_root();
-    let entry = golden_dir(&root, name).join("Main.sky");
+    let entry = golden_dir(&root, name).join("Main.ipe");
     let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
@@ -177,7 +177,7 @@ fn all_secret_goldens_compile() {
         "m_secret_log_redact",
         "m_secret_auth_roundtrip",
     ] {
-        let entry = golden_dir(&root, name).join("Main.sky");
+        let entry = golden_dir(&root, name).join("Main.ipe");
         let out = std::env::temp_dir().join(format!("skyc_{name}_compileonly"));
         let _ = std::fs::remove_dir_all(&out);
         let Ok(runtime) = skyc::resolve_runtime() else {

@@ -33,7 +33,7 @@ fn write_project(dir: &std::path::Path, main: &str) -> bool {
     if fs::create_dir_all(&src).is_err() {
         return false;
     }
-    fs::write(src.join("Main.sky"), main).is_ok()
+    fs::write(src.join("Main.ipe"), main).is_ok()
 }
 
 /// FAIL-CLOSED: `Ffi.kernel "NoSuchKernel_xyz"` names no registered kernel, so
@@ -58,7 +58,7 @@ fn unknown_kernel_alias_is_rejected_at_compile_time() {
     );
     assert!(wrote, "must write the fixture project to a temp dir");
 
-    let entry = tmp.join("src").join("Main.sky");
+    let entry = tmp.join("src").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m196_unknown_kernel_alias_out");
     let _ = fs::remove_dir_all(&out);
 
@@ -117,7 +117,7 @@ fn malformed_kernel_alias_string_is_rejected() {
     );
     assert!(wrote, "must write the fixture project to a temp dir");
 
-    let entry = tmp.join("src").join("Main.sky");
+    let entry = tmp.join("src").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m196_malformed_kernel_alias_out");
     let _ = fs::remove_dir_all(&out);
 
@@ -159,7 +159,7 @@ fn registered_kernel_alias_resolves_and_builds() {
     );
     assert!(wrote, "must write the fixture project to a temp dir");
 
-    let entry = tmp.join("src").join("Main.sky");
+    let entry = tmp.join("src").join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m196_registered_kernel_alias_out");
     let _ = fs::remove_dir_all(&out);
 

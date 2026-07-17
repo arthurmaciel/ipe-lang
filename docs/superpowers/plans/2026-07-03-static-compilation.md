@@ -441,7 +441,7 @@ CLI wiring so the CLI feeds a proven-total resolver.
 ```
 
 **Automated verification:** `cargo test -p skyc`.
-**Manual:** `skyc build src/Main.sky --static --allocator dlmalloc` on
+**Manual:** `skyc build src/Main.ipe --static --allocator dlmalloc` on
 `examples/01-hello-world`; confirm emitted `Cargo.toml` default list contains
 `alloc_dlmalloc` and no artifact is emitted on a refusal path.
 

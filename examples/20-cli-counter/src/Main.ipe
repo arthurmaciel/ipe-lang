@@ -7,7 +7,7 @@ Sky.Live, plus a CLI-specific `onLine : String -> Msg` that maps
 each stdin line to a Msg.
 
 Run:
-    sky run src/Main.sky
+    sky run src/Main.ipe
 
 Then type:
     +     increment

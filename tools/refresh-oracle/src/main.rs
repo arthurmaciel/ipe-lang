@@ -9,9 +9,9 @@
 //!
 //! For each golden under `tests/golden/<name>/` it:
 //!
-//! 1. hashes `Main.sky` (the staleness key the read side re-checks);
+//! 1. hashes `Main.ipe` (the staleness key the read side re-checks);
 //! 2. captures the Go `sky --version` string for provenance;
-//! 3. runs the **Go** reference compiler on a private copy of `Main.sky`
+//! 3. runs the **Go** reference compiler on a private copy of `Main.ipe`
 //!    (`sky build` → run the produced binary) so the captured bytes are ONLY the
 //!    program's stdout, never the compiler's progress chatter;
 //! 4. on Go SUCCESS: writes `expected_go.txt` = the Go binary's stdout and
@@ -102,7 +102,7 @@ fn go_version(oracle_bin: &str) -> String {
 fn run_go_oracle(oracle_bin: &str, main_sky: &Path, scratch: &Path) -> Result<RunResult, String> {
     std::fs::create_dir_all(scratch).map_err(|e| format!("cannot create scratch dir: {e}"))?;
     let dest = scratch.join(MAIN_SKY);
-    std::fs::copy(main_sky, &dest).map_err(|e| format!("cannot copy Main.sky: {e}"))?;
+    std::fs::copy(main_sky, &dest).map_err(|e| format!("cannot copy Main.ipe: {e}"))?;
 
     // The Go `sky` binary ALSO honours `IPE_RUNTIME_DIR` — but that variable is
     // ours, pointing at the *Rust* runtime so skyc can resolve it on the

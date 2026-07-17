@@ -152,5 +152,5 @@ pbkdf2 = "0.12"
 unwrap_used = "deny"
 expect_used = "deny"
 
-[package.metadata.sky]
+[package.metadata.ipe]
 runtime_version = "0.16.29"

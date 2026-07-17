@@ -1,6 +1,6 @@
 //! Encoding kernels for Sky.Core.Encoding — base64 / url-percent / hex
 //! All fns mirror the Go runtime's `stdlib_extra.go` Encoding kernel behaviour
-//! and the Sky-side signatures declared in `sky-stdlib/Sky/Core/Encoding.sky`.
+//! and the Sky-side signatures declared in `sky-stdlib/Sky/Core/Encoding.ipe`.
 
 use super::IpeResult;
 

@@ -213,7 +213,7 @@ then all its defs emit (F4). Auto-import deletes the import line, so:
   qualifiers** — a free by-product of canonicalisation, since access is always
   `Qualifier.member`. The used-module set is exactly the set of referenced
   qualifiers. Without this, auto-import either under-includes (`String.map`
-  referenced but `String.sky` never emitted → link failure) or, if naively
+  referenced but `String.ipe` never emitted → link failure) or, if naively
   "include all auto-imported", compiles all 18+ (soon 40+) modules every build (a
   real P4 regression). Enforce with a **hello-world compile-unit-count / binary-size
   regression test**: neither may grow when `qual_vars` grows.
@@ -344,7 +344,7 @@ Ordering rationale:
 
 Concrete order:
 
-1. **#59** — rename `Sky → ipê`/`Ipe`, extension `.sky → .ipe`, `IPE-N00xx → IPE-N00xx`,
+1. **#59** — rename `Sky → ipê`/`Ipe`, extension `.ipe → .ipe`, `IPE-N00xx → IPE-N00xx`,
    reserved segments flip `{Sky, Std} → {Ipe, Std}`, de-abbreviation. Old public
    names kept as deprecated aliases through the flatten window. Own commit, green
    against the sweep.

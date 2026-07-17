@@ -48,7 +48,7 @@
 #       Expected code: IPE-T0001.
 #
 #   Cat 8 — CROSS-MODULE USE AT AN INCOMPATIBLE INSTANTIATED TYPE
-#       (multi-module: writes src/Lib.sky): `Lib.inc "str"` against the
+#       (multi-module: writes src/Lib.ipe): `Lib.inc "str"` against the
 #       untyped Number-bounded `inc n = n + 1`. The imported scheme's bound
 #       must survive fresh instantiation.
 #       Expected code: IPE-T0001.
@@ -134,7 +134,7 @@ setup_project() {
     cat > "$dir/sky.toml" <<'EOF'
 name = "sky-fuzz-neg"
 version = "0.0.0"
-entry = "src/Main.sky"
+entry = "src/Main.ipe"
 EOF
 }
 
@@ -147,7 +147,7 @@ run_skyc_expect_reject() {
     : > "$log"
     local rc=0
     ( cd "$dir" && timeout "$BUILD_TIMEOUT" \
-      "$SKYC_BIN" build src/Main.sky --out sky-out/rust >"$log" 2>&1 ) || rc=$?
+      "$SKYC_BIN" build src/Main.ipe --out sky-out/rust >"$log" 2>&1 ) || rc=$?
     if [[ "$rc" -eq 0 ]]; then
         # FALSE ACCEPTANCE: skyc returned 0 on an ill-typed program.
         echo "FALSE-ACCEPTANCE"
@@ -178,7 +178,7 @@ run_skyc_expect_accept() {
     : > "$log"
     local rc=0
     ( cd "$dir" && timeout "$BUILD_TIMEOUT" \
-      "$SKYC_BIN" build src/Main.sky --out sky-out/rust >"$log" 2>&1 ) || rc=$?
+      "$SKYC_BIN" build src/Main.ipe --out sky-out/rust >"$log" 2>&1 ) || rc=$?
     [[ "$rc" -eq 0 ]]
 }
 
@@ -506,7 +506,7 @@ EOF
 # incompatible instantiated type (`Lib.inc "str"` where `inc n = n + 1`).
 # The boundary scheme promotion must instantiate the imported scheme fresh
 # AND still carry the Number bound — a String argument is an ordinary
-# IPE-T0001, never an acceptance. Writes a Lib.sky sibling (multi-module).
+# IPE-T0001, never an acceptance. Writes a Lib.ipe sibling (multi-module).
 mutant_cross_module_bad_inst() {
     local seed=$1 libdst=$2
     local n; n=$(( (seed % 90) + 1 ))
@@ -551,8 +551,8 @@ EOF
 
 CATALOGUE_SIZE=9
 
-# catalogue_fn idx seed srcdir — writes Main.sky to stdout; multi-module
-# entries (cat 8) additionally write "$srcdir/Lib.sky" as a side effect.
+# catalogue_fn idx seed srcdir — writes Main.ipe to stdout; multi-module
+# entries (cat 8) additionally write "$srcdir/Lib.ipe" as a side effect.
 catalogue_fn() {
     local idx=$1 seed=$2 srcdir=$3
     case $idx in
@@ -564,7 +564,7 @@ catalogue_fn() {
         5) mutant_ctor_arity        "$seed" ;;
         6) mutant_nonexhaustive_case "$seed" ;;
         7) mutant_same_module_2type "$seed" ;;
-        8) mutant_cross_module_bad_inst "$seed" "$srcdir/Lib.sky" ;;
+        8) mutant_cross_module_bad_inst "$seed" "$srcdir/Lib.ipe" ;;
     esac
 }
 
@@ -624,7 +624,7 @@ save_false_acceptance() {
     printf '  seed:   %s\n' "$seed"
     printf '  label:  %s\n' "$label"
     printf '  expect: %s\n' "$code"
-    printf '  src:    %s/src/Main.sky\n' "$dst"
+    printf '  src:    %s/src/Main.ipe\n' "$dst"
     printf '  log:    %s/build.log\n' "$dst"
     printf 'This is a real compiler soundness bug — please report it.\n'
     printf '=====================================\n\n'
@@ -662,7 +662,7 @@ run_base_sanity() {
         local label="${labels[$i]}"
         local bdir="$FUZZ_DIR/base-$name"
         setup_project "$bdir"
-        "base_$name" > "$bdir/src/Main.sky"
+        "base_$name" > "$bdir/src/Main.ipe"
         if run_skyc_expect_accept "$bdir"; then
             printf '  OK:   %s\n' "$label"
         else
@@ -701,7 +701,7 @@ run_cat_demo() {
         local code;  code=$(catalogue_code "$idx")
         local ddir="$FUZZ_DIR/demo-$idx"
         setup_project "$ddir"
-        catalogue_fn "$idx" "$demo_seed" "$ddir/src" > "$ddir/src/Main.sky"
+        catalogue_fn "$idx" "$demo_seed" "$ddir/src" > "$ddir/src/Main.ipe"
 
         printf '[cat %d] %-34s expect %s\n' "$idx" "$label" "$code"
 
@@ -709,11 +709,11 @@ run_cat_demo() {
         : > "$log"
         local rc=0
         ( cd "$ddir" && timeout "$BUILD_TIMEOUT" \
-          "$SKYC_BIN" build src/Main.sky --out sky-out/rust >"$log" 2>&1 ) || rc=$?
+          "$SKYC_BIN" build src/Main.ipe --out sky-out/rust >"$log" 2>&1 ) || rc=$?
 
         if [[ "$rc" -eq 0 ]]; then
             printf '  RESULT: FALSE ACCEPTANCE (skyc exit 0) — SOUNDNESS BUG!\n'
-            printf '  src: %s/src/Main.sky\n' "$ddir"
+            printf '  src: %s/src/Main.ipe\n' "$ddir"
             demo_ok=0
         elif [[ "$rc" -eq 124 ]]; then
             printf '  RESULT: TIMEOUT (skyc hung)\n'
@@ -765,13 +765,13 @@ run_iter() {
     local code;  code=$(catalogue_code "$idx")
 
     setup_project "$iterdir"
-    catalogue_fn "$idx" "$seed" "$iterdir/src" > "$iterdir/src/Main.sky"
+    catalogue_fn "$idx" "$seed" "$iterdir/src" > "$iterdir/src/Main.ipe"
 
     local log="$iterdir/build.log"
     : > "$log"
     local rc=0
     ( cd "$iterdir" && timeout "$BUILD_TIMEOUT" \
-      "$SKYC_BIN" build src/Main.sky --out sky-out/rust >"$log" 2>&1 ) || rc=$?
+      "$SKYC_BIN" build src/Main.ipe --out sky-out/rust >"$log" 2>&1 ) || rc=$?
 
     if [[ "$rc" -eq 0 ]]; then
         echo "FALSE-ACCEPTANCE label=$label expected=$code"

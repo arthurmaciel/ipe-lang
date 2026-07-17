@@ -48,7 +48,7 @@ fn list_filter_partial_app_compiles() {
         .join("tests")
         .join("golden")
         .join("list_filter_partial_app")
-        .join("Main.sky");
+        .join("Main.ipe");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i161_list_filter_partial_app_emit");
     let _ = std::fs::remove_dir_all(&out);
 

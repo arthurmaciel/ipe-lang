@@ -3,7 +3,7 @@ import Sky.Core.Prelude exposing (..)
 
 -- Negative regression: `amount (Money d _) = d` is a refutable param on a
 -- single-constructor union — must still be rejected as IPE-T0015.
--- Proves the fix to Std/Money.sky did not relax the irrefutability rule.
+-- Proves the fix to Std/Money.ipe did not relax the irrefutability rule.
 
 type Money = Money Int String
 

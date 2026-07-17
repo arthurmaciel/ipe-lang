@@ -45,7 +45,7 @@ fn lazy_emit_seal_skyc_cargo_and_run_zero() {
         .join("tests")
         .join("golden")
         .join("lazy_emit_seal");
-    let entry = dir.join("Main.sky");
+    let entry = dir.join("Main.ipe");
     let out = std::env::temp_dir().join("skyc_i146_lazy_emit_seal_e2e");
     let _ = std::fs::remove_dir_all(&out);
 

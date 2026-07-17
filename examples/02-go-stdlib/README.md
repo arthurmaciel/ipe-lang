@@ -6,7 +6,7 @@ Demonstrates using Go standard library packages from Sky, including `crypto/sha2
 
 ```bash
 sky install
-sky build src/Main.sky
+sky build src/Main.ipe
 ./sky-out/app
 ```
 

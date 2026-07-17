@@ -198,10 +198,10 @@ struct ResolvedProject {
     db_driver: ipe_backend_rust::DbDriver,
 }
 
-/// Resolve `entry` (a `.sky` file, a `sky.toml`, or a project directory)
+/// Resolve `entry` (a `.ipe` file, a `sky.toml`, or a project directory)
 /// into a fresh [`ResolvedProject`] by re-reading every relevant file from
 /// disk. Mirrors `run_build`'s dispatch: directory → `sky.toml` inside it;
-/// `.toml` → itself; `.sky` → walk up for a manifest, else sibling
+/// `.toml` → itself; `.ipe` → walk up for a manifest, else sibling
 /// discovery.
 ///
 /// # Errors
@@ -525,7 +525,7 @@ fn run_inner(
             // watch-internal `Other` kind — EXCEPT `Access(Close(Write))`,
             // which is deliberately let through (see below). This is
             // load-bearing, not an optimisation: the orchestrator's own
-            // `resolve_project_sources` OPENS every in-scope `.sky` file
+            // `resolve_project_sources` OPENS every in-scope `.ipe` file
             // (and reads the watched directory) on EVERY rebuild cycle.
             // Some backends (Linux inotify, by default) report that
             // open/read as an `Access(Open)`/`Access(Close(Read))` event —
@@ -533,7 +533,7 @@ fn run_inner(
             // queue another rebuild, read again to service it, and so on
             // forever (a self-triggering rebuild storm this was caught by,
             // not merely guarded against speculatively). `resolve_project_
-            // sources` only ever opens `.sky` files for READING, so it can
+            // sources` only ever opens `.ipe` files for READING, so it can
             // never itself produce the one Access variant this filter
             // exempts (`Close(Write)` — see below); the exemption cannot
             // reopen the self-trigger hole.

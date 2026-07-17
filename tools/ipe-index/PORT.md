@@ -19,7 +19,7 @@ can compare across them:
 
 | Tag  | Repo            | Roles indexed |
 |------|-----------------|---------------|
-| `ipe`| `.` (this repo) | `ipe-compiler-rs` (crates/), `ipe-runtime-rs` (runtime/), `ipe-tool-rs` (tools/), `ipe-stdlib-sky` (*.sky) |
+| `ipe`| `.` (this repo) | `ipe-compiler-rs` (crates/), `ipe-runtime-rs` (runtime/), `ipe-tool-rs` (tools/), `ipe-stdlib-sky` (*.ipe) |
 | `sky`| `../sky`        | `compiler-hs` (src/Sky/), `runtime-go` (runtime-go/), `runtime-rust` (ancestor), `stdlib-sky`, `console-ts`, `example`, `fixture` |
 
 ### Six languages

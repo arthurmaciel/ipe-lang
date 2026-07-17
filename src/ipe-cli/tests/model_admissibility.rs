@@ -20,7 +20,7 @@ fn compile(test_name: &str, source: &str) -> Result<Result<(), skyc::CliError>, 
     let ipe_dir = std::env::temp_dir().join(format!("model_adm_{test_name}_sky"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
     std::fs::create_dir_all(&ipe_dir)?;
-    let entry = ipe_dir.join("Main.sky");
+    let entry = ipe_dir.join("Main.ipe");
     std::fs::write(&entry, source)?;
 
     let out_dir = std::env::temp_dir().join(format!("model_adm_{test_name}_out"));
