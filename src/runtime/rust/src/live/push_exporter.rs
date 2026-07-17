@@ -27,7 +27,7 @@ const PARENT_ENV: &str = "IPE_PARENT_URL";
 const INTERVAL_ENV: &str = "IPE_OBSERVABILITY_PUSH_INTERVAL_MS";
 /// Bounded queue depth override.
 const BUFFER_ENV: &str = "IPE_OBSERVABILITY_BUFFER";
-/// Shared secret the parent's ingest gate checks (`X-Sky-Ingest-Token`).
+/// Shared secret the parent's ingest gate checks (`X-Ipê-Ingest-Token`).
 const TOKEN_ENV: &str = "IPE_INGEST_TOKEN";
 
 const DEFAULT_QUEUE_CAP: usize = 1024;

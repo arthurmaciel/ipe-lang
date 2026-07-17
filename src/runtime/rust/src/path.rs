@@ -12,10 +12,10 @@
 // filepath exactly. (Audit finding: correctness/parity.)
 //
 // Routing (Kernel.hs fallthrough — all map cleanly via toSnakeCase):
-//   ("Path", "base")       / ("Sky.Core.Path", "base")       -> "path_base"
-//   ("Path", "dir")        / ("Sky.Core.Path", "dir")        -> "path_dir"
-//   ("Path", "ext")        / ("Sky.Core.Path", "ext")        -> "path_ext"
-//   ("Path", "isAbsolute") / ("Sky.Core.Path", "isAbsolute") -> "path_is_absolute"
+//   ("Path", "base")       / ("Ipe.Path", "base")       -> "path_base"
+//   ("Path", "dir")        / ("Ipe.Path", "dir")        -> "path_dir"
+//   ("Path", "ext")        / ("Ipe.Path", "ext")        -> "path_ext"
+//   ("Path", "isAbsolute") / ("Ipe.Path", "isAbsolute") -> "path_is_absolute"
 
 const SEP: u8 = b'/';
 
@@ -92,7 +92,7 @@ fn clean(path: &str) -> String {
     String::from_utf8(out).unwrap_or_else(|_| ".".to_string())
 }
 
-/// `Sky.Core.Path.base : String -> String` — Go `filepath.Base` (Unix).
+/// `Ipe.Path.base : String -> String` — Go `filepath.Base` (Unix).
 /// "" → "."; all-slashes → "/"; else the final element with trailing slashes
 /// stripped.
 pub fn path_base(path: String) -> String {
@@ -119,7 +119,7 @@ pub fn path_base(path: String) -> String {
     stripped.get(i..).unwrap_or("").to_string()
 }
 
-/// `Sky.Core.Path.dir : String -> String` — Go `filepath.Dir` (Unix).
+/// `Ipe.Path.dir : String -> String` — Go `filepath.Dir` (Unix).
 /// All but the last element, then `Clean`ed: "" / "foo" → "."; "/" → "/";
 /// "/foo/bar" → "/foo"; "/foo/" → "/foo"; "a//b" → "a".
 pub fn path_dir(path: String) -> String {
@@ -133,7 +133,7 @@ pub fn path_dir(path: String) -> String {
     clean(path.get(..i).unwrap_or(""))
 }
 
-/// `Sky.Core.Path.ext : String -> String` — Go `filepath.Ext` (Unix).
+/// `Ipe.Path.ext : String -> String` — Go `filepath.Ext` (Unix).
 /// The suffix from the LAST `.` in the final path element (including the dot),
 /// or "" when the final element has no dot. `filepath.Ext(".bashrc")` → ".bashrc".
 pub fn path_ext(path: String) -> String {
@@ -150,7 +150,7 @@ pub fn path_ext(path: String) -> String {
     String::new()
 }
 
-/// `Sky.Core.Path.isAbsolute : String -> Bool` — Go `filepath.IsAbs` (Unix):
+/// `Ipe.Path.isAbsolute : String -> Bool` — Go `filepath.IsAbs` (Unix):
 /// an absolute path begins with `/`.
 pub fn path_is_absolute(path: String) -> bool {
     path.as_bytes().first() == Some(&SEP)

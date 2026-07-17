@@ -1,4 +1,4 @@
-//! Parametric-type-alias gate: `skyc` must emit `main.rs`
+//! Parametric-type-alias gate: `ipe` must emit `main.rs`
 //! byte-identical to the checked-in golden for a program that annotates a
 //! function with a **parametric** `type alias` (`type alias Pair a = ( a, a )`,
 //! used as `addPair : Pair Int -> Int`), and (behind `IPE_E2E=1`) the emitted

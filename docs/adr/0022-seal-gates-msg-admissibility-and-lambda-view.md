@@ -5,10 +5,10 @@ Date: 2026-07-11
 
 ## Context
 
-The exit-0 seal requires `skyc accept ⇒ cargo build`. ADR 0002/0007's move seal
-and the `#91` Model-admissibility gate close part of it, but a well-typed Sky
+The exit-0 seal requires `ipe accept ⇒ cargo build`. ADR 0002/0007's move seal
+and the `#91` Model-admissibility gate close part of it, but a well-typed Ipê
 program could still put a non-derivable value (Html, Cmd, Task, function) into
-its Model or Msg — `skyc` accepts, `cargo` fails on the missing trait bound. Two
+its Model or Msg — `ipe` accepts, `cargo` fails on the missing trait bound. Two
 gaps remained: the Msg slot had no admissibility gate (#94), and a lambda-bound
 `view`/`update` field bypassed the existing Model gate (#95), because gate
 recovery only handled named `FuncValue`s.
@@ -36,7 +36,7 @@ Html/Element/Color); recovering Msg from `view`'s return (Msg is nested inside
 
 ## Consequences
 
-- Both Model and Msg are provably admissible for their app shape before `skyc`
+- Both Model and Msg are provably admissible for their app shape before `ipe`
   exits-0; a lambda-bound `view`/`update` no longer bypasses the gate. The
   diagnostic is split by slot (`IPE_L0121` Msg, `IPE_L0120` Model).
 - **Invariant that must keep holding:** the Model/Msg derivability asymmetry

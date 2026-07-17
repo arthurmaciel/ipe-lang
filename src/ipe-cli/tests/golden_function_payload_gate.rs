@@ -9,11 +9,11 @@
 //! PartialEq)]` when a field is not derivable, and its hand-written
 //! `IpeStringify` impl renders the non-derivable field as `<fn>` instead of
 //! calling a derive. So this fixture now takes the BUILD-AND-RUN branch below —
-//! `skyc` accepts it, `cargo` builds it, and it runs, printing `2`
+//! `ipe` accepts it, `cargo` builds it, and it runs, printing `2`
 //! (`(\n -> n + 1) 1 == 2`).
 //!
 //! This pins the recurring soundness-floor class (the sibling of the M2C
-//! function-in-record gate): the driver must produce EITHER a clean Sky
+//! function-in-record gate): the driver must produce EITHER a clean Ipê
 //! diagnostic (IPE-L0114, for a shape #90 does NOT cover — a collection-of-
 //! functions payload, or a curried `andMap` chain) OR Rust that builds and runs
 //! with the semantically-correct output. It must NEVER accept the program and
@@ -25,7 +25,7 @@
 //! any is not a function`), captured in `oracle.meta` as a Go-failure
 //! divergence (`oracle_divergence = true`) by the `refresh-oracle` tool. So the
 //! Rust build-and-run outcome is a strict improvement over the Go reference,
-//! not a Sky-Rust behavior divergence.
+//! not a Ipê-Rust behavior divergence.
 
 use std::path::{Path, PathBuf};
 

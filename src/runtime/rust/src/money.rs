@@ -1,8 +1,8 @@
-//! Std.Money kernels — currency table + format / rate registry / allocate.
+//! Ipe.Money kernels — currency table + format / rate registry / allocate.
 //!
 //! Mirrors runtime-go/rt/money_kernel.go.
 //!
-//! The Sky-side `Money` ADT carries a typed `Currency` enum + a `Decimal`
+//! The Ipê-side `Money` ADT carries a typed `Currency` enum + a `Decimal`
 //! amount. At the Ffi boundary, the wrappers in `sky-stdlib/Std/Money.ipe`
 //! convert the Currency into its ISO 4217 code (a String) before calling
 //! these kernels — so every function below takes the code as a plain String.
@@ -247,7 +247,7 @@ pub fn money_has_rate(from: String, to: String) -> bool {
 }
 
 /// `clearRates : () -> Result Error ()` — test/admin only.
-/// Sky source calls `Ffi.callPure "Money_clearRates" []` — empty args list,
+/// Ipê source calls `Ffi.callPure "Money_clearRates" []` — empty args list,
 /// the peephole emits `money_clear_rates()` with no args. The runtime
 /// takes no params accordingly.
 pub fn money_clear_rates<E: From<String>>() -> IpeResult<E, ()> {

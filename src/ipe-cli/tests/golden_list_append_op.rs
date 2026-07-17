@@ -70,7 +70,7 @@ fn list_append_op_runs_with_parity() {
     assert_eq!(out.stdout.trim(), "4 3 hi, world");
 }
 
-/// (d) SEAL-PRESERVING negative gate: `++` on `Int` is rejected at skyc
+/// (d) SEAL-PRESERVING negative gate: `++` on `Int` is rejected at ipe
 /// type-check (the `Appendable` obligation's head-rejection — `Int` is neither
 /// `String` nor `List _`), NOT deferred to a cargo failure. A pure compile —
 /// no `IPE_E2E` needed.

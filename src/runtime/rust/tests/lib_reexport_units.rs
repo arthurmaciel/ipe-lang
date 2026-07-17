@@ -153,11 +153,11 @@ mod tests {
 // `tui_app_ui` / `tui_app` open the alternate screen (`TuiGuard::enter_mouse`)
 // and therefore require a real TTY — they cannot be invoked from a test.
 // These tests exercise the *render half* independently: they build an
-// `Element` tree using the same `ipe_runtime::ui::helpers` builders that skyc
+// `Element` tree using the same `ipe_runtime::ui::helpers` builders that ipe
 // emits, call `tui::layout::element_to_cells` (headless — no TTY), and assert
 // the resulting ANSI-cell frame string contains the expected content.
 //
-// This mirrors the Sky counter's `view { count = 0 }` call at initial state:
+// This mirrors the Ipê counter's `view { count = 0 }` call at initial state:
 //
 //   view model =
 //     Ui.column [] [ Ui.el [] (Ui.text (String.fromInt model.count)) ]
@@ -172,9 +172,9 @@ mod tui_headless {
     /// Render a `Ui.column [] [ Ui.el [] (Ui.text "0") ]` tree to a headless
     /// 80×24 ANSI cell frame and verify it contains the digit `"0"`.
     ///
-    /// This is the render half of the Tui golden.  The build half (skyc +
+    /// This is the render half of the Tui golden.  The build half (ipe +
     /// cargo build the full Tui counter program) lives in
-    /// `crates/skyc/tests/tui_e2e.rs::tui_counter_build_only`.
+    /// `crates/ipe/tests/tui_e2e.rs::tui_counter_build_only`.
     #[test]
     fn tui_headless_render_contains_count() {
         // Construct the element tree equivalent to:

@@ -131,7 +131,7 @@ topNav model =
               , Font.bold
               , Font.size 18
               ]
-              (Ui.text "Sky Bazaar")
+              (Ui.text "Ipê Bazaar")
         , navLink HomePage "Shop"
         , navLink AnalyticsPage "Analytics"
         , navLink CartPage "Cart"
@@ -157,7 +157,7 @@ footer =
                   "Ipe.Live composite test app · examples/37-composite-live-shop")
         , Ui.el
               [ Font.color muted, Font.size 12, Ui.alignRight ]
-              (Ui.text "© 2026 Sky Bazaar")
+              (Ui.text "© 2026 Ipê Bazaar")
         ]
 
 

@@ -1,5 +1,5 @@
 //! Recursive-ADT gate: a directly self-recursive enum whose
-//! payload fields are the enum itself. `skyc` must emit `main.rs` byte-identical
+//! payload fields are the enum itself. `ipe` must emit `main.rs` byte-identical
 //! to the checked-in golden, and (behind `IPE_E2E=1`) the emitted project must
 //! build and print `12`.
 //!

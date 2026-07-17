@@ -12,7 +12,7 @@
 //!
 //! Two locks:
 //!
-//! 1. `skyc` emits `main.rs` byte-identical to the checked-in golden — which
+//! 1. `ipe` emits `main.rs` byte-identical to the checked-in golden — which
 //!    records the exact desugaring: each non-var param takes a GLOBALLY-unique
 //!    synthetic binder (`arg_0` … `arg_9`, never a shadowed reuse), a record
 //!    param recovers its COMPLETE field set from the solved type

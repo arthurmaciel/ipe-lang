@@ -18,9 +18,9 @@
 //!
 //! ## Tests
 //!
-//! * SOLO: a param route alone → skyc-0; emitted builder applies the
+//! * SOLO: a param route alone → ipe-0; emitted builder applies the
 //!   `params.get(0)` conversion (compile-only, always runs).
-//! * MIXED: nullary + param routes in ONE list → skyc-0 (compile-only).
+//! * MIXED: nullary + param routes in ONE list → ipe-0 (compile-only).
 //! * WRONG-ADT: a param ctor from another ADT → IPE-T0001 (compile-only).
 //! * `IPE_E2E=1`: the solo project cargo-builds (ISOLATED `CARGO_TARGET_DIR`)
 //!   and, when run, a GET on `/u/42` renders `user:42` — the captured `:param`
@@ -58,7 +58,7 @@ fn compile_solo() -> Option<Result<(), CliError>> {
     Some(ipe::build(&entry, &out, &runtime))
 }
 
-/// Compile an inline source through the skyc pipeline (no cargo).
+/// Compile an inline source through the ipe pipeline (no cargo).
 fn compile_src(test_name: &str, source: &str) -> Option<Result<(), CliError>> {
     let ipe_dir = std::env::temp_dir().join(format!("param_routes_{test_name}_sky"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
@@ -129,7 +129,7 @@ main =
         }
 "#;
 
-/// SOLO param route → skyc-0, and the emitted builder closure applies the
+/// SOLO param route → ipe-0, and the emitted builder closure applies the
 /// type-directed `params.get(0)` conversion to the ctor (the `route_param_get`
 /// path). Compile-only — always runs.
 #[test]
@@ -140,7 +140,7 @@ fn param_route_solo_compiles_and_emits_param_conversion() {
     assert!(
         result.is_ok(),
         "#108 hole 3: a `:param` route with a payload-ctor builder must be \
-         skyc-0 (pre-fix: false IPE-T0001 `Page ≟ String -> Page`), got: {:?}",
+         ipe-0 (pre-fix: false IPE-T0001 `Page ≟ String -> Page`), got: {:?}",
         result.err(),
     );
     let main_rs = std::fs::read_to_string(solo_out().join("src").join("main.rs"))
@@ -156,7 +156,7 @@ fn param_route_solo_compiles_and_emits_param_conversion() {
     );
 }
 
-/// MIXED nullary + param routes in one list → skyc-0.
+/// MIXED nullary + param routes in one list → ipe-0.
 #[test]
 fn param_route_mixed_with_nullary_compiles() {
     let Some(result) = compile_src("mixed", MIXED_NULLARY_AND_PARAM) else {

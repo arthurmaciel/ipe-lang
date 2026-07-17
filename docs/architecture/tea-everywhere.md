@@ -17,7 +17,7 @@ existing entry point.
 - **Sound by construction.** `update` stays pure `(Model, Cmd)`; every
   effect is a `Cmd` / `Task Error a`; the headless loop terminates
   soundly with no busy-wait, no deadlock, and no runtime panic from
-  well-typed Sky.
+  well-typed Ipê.
 
 ## Grounding fact (why this is small)
 
@@ -58,12 +58,12 @@ ipê entry is view-less, and output is an ordinary `Cmd`.
 
 | Shape | TEA today? | TEA option | How |
 |---|---|---|---|
-| Sky.Live (web) | yes | unchanged | `Live.app { init, update, view, subscriptions, routes, … }` |
-| Sky.Tui (terminal) | yes | unchanged | `Tui.app cfg` |
-| Sky.Webview (desktop) | yes | unchanged | `Webview.app cfg` |
-| **Reactive / long-running CLI, daemon, worker** | no | **NEW — opt-in** | `Std.Worker.program { init, update, subscriptions } \|> Task.run` (headless, no view; output via `Cmd`) |
+| Ipe.Live (web) | yes | unchanged | `Live.app { init, update, view, subscriptions, routes, … }` |
+| Ipe.Tui (terminal) | yes | unchanged | `Tui.app cfg` |
+| Ipe.Webview (desktop) | yes | unchanged | `Webview.app cfg` |
+| **Reactive / long-running CLI, daemon, worker** | no | **NEW — opt-in** | `Ipe.Worker.program { init, update, subscriptions } \|> Task.run` (headless, no view; output via `Cmd`) |
 | One-shot CLI (`main = Task.run cmd`) | n/a | **declined** | keep the one-shot entry; a pure transform gains nothing from a loop |
-| Sky.Http.Server (routes + handlers) | no | **declined in the request path**; optional **sidecar** | `Handler = Request -> Task Error Response` stays; a `Std.Worker.program` may run *alongside* the server owning shared state, coordinated via pub/sub |
+| Ipe.Http.Server (routes + handlers) | no | **declined in the request path**; optional **sidecar** | `Handler = Request -> Task Error Response` stays; a `Ipe.Worker.program` may run *alongside* the server owning shared state, coordinated via pub/sub |
 
 One-sentence rule for the matrix: **reach for TEA when a long-lived Model
 evolves over a stream of events; keep one-shot / handlers when the
@@ -83,7 +83,7 @@ type alias WorkerCfg model msg =
     , subscriptions : model -> Sub msg
     }
 
-Std.Worker.program : WorkerCfg model msg -> Task Error ()
+Ipe.Worker.program : WorkerCfg model msg -> Task Error ()
 ```
 
 - **No `view` field.** Output is an effect — `Io.writeStdout` / `Log.*`
@@ -111,7 +111,7 @@ The compiler needs no new `main`-recognition rule. The default one-shot
 REPL / progress-line CLI (`read → process → print`, pipe-friendly, not
 Tui's raw-mode canvas) is a legitimate shape. It is **deferred**, not
 part of v1. If it ships it must be a *separate* entry whose view is
-**explicitly append-line** (never screen-repaint — that is Sky.Tui's
+**explicitly append-line** (never screen-repaint — that is Ipe.Tui's
 job) and whose stdin is an ordinary `Stdin.lines` Sub (never a `view`+
 `onLine` pair coupled in one cfg). A future "render only on change"
 variant additionally needs a `Model: PartialEq`-shaped bound and is out
@@ -173,8 +173,8 @@ is preserved, cross-source interleaving is nondeterministic (documented).
   drop-guard as every other source (see G1 above / the termination proof).
 
 **Rejected as ill-fitting:** raw keypresses / cursor / cell rendering
-(that is Sky.Tui's raw-mode reader — do not absorb it); DOM / SSE events
-(Sky.Live only); an HTTP request as a Sub (that is the Server handler
+(that is Ipe.Tui's raw-mode reader — do not absorb it); DOM / SSE events
+(Ipe.Live only); an HTTP request as a Sub (that is the Server handler
 lifecycle — see Q5). Boundary rule: a **Sub** is an ongoing event stream;
 a one-shot read ("read this whole file") is a **`Cmd.perform`**, not a
 Sub.
@@ -215,7 +215,7 @@ Sub.
   `SubManager` still counts as an active subscription**. Keying quiescence
   on the subscription-set size (`SubManager` cardinality) is therefore
   *unsound*: it leaves the loop blocked forever on `recv()` with zero live
-  producers — non-termination from well-typed Sky. `live_sources` is
+  producers — non-termination from well-typed Ipê. `live_sources` is
   instead a counter over source *tasks that can still enqueue*: it is
   incremented **before** a source task is spawned and decremented from a
   **drop-guard held inside that task** (the exact inc-before-spawn /
@@ -355,7 +355,7 @@ endpoints, session store, HTTP transport, cookies.
    checks, not new logic. `Worker.program` = `run_tea_loop { no stdin,
    no view, quiescence }`.
    **Tui non-regression (G5).** This refactor touches shipped-green
-   Sky.Tui, which is folded behind the same `run_tea_loop`. The
+   Ipe.Tui, which is folded behind the same `run_tea_loop`. The
    `quiescence` flag is **OFF / inert on the Tui path** (`Tui.app` =
    `run_tea_loop { …, quiescence = false }`): Tui's lifecycle is
    render-loop + explicit exit, and it must never auto-exit because the
@@ -373,7 +373,7 @@ endpoints, session store, HTTP transport, cookies.
 4. Source shims: `Stdin.lines` (typed `Eof` / `InvalidUtf8`; generalise
    the hardwired reader) and `Signal.on*` (process-global handler).
    **No** `File.watch` in v1; **no** new WS / stream code (free reuse).
-5. Thin Sky stdlib: `Std.Worker` (cfg wrapper → `Task Error ()`),
+5. Thin Ipê stdlib: `Ipe.Worker` (cfg wrapper → `Task Error ()`),
    `Cmd.quit`, `Sub.stdin` / `Sub.onSignal` — `Ffi.kernel` aliases.
 
 **Backend wiring.** Surfacing the entry needs one `KernelFn` row
@@ -407,15 +407,15 @@ is open.
 - **One-shot `main = Task.run cmd`:** unchanged; the correct model for
   "do X, exit." TEA is opt-in *only* for genuinely reactive / long-lived
   programs. Do not wrap trivial scripts in a loop.
-- **Sky.Http.Server — per request: NO.** A request is
+- **Ipe.Http.Server — per request: NO.** A request is
   `Request -> Task Error Response`; wrapping each request in its own
   init/update/subs/quiescence loop is a lifecycle category error and pure
   overhead. Routes + handlers stay.
-- **Sky.Http.Server — global shared state: YES, as an optional sidecar.**
-  A `Std.Worker.program` runs *alongside* `Server.listen`, owning the
+- **Ipe.Http.Server — global shared state: YES, as an optional sidecar.**
+  A `Ipe.Worker.program` runs *alongside* `Server.listen`, owning the
   shared Model (scheduler, cache warmer, metrics aggregator, rate-limit
   buckets, in-memory room). Handlers push Msgs to it via the existing
-  pub/sub broker (`Cmd.publish` / `Std.PubSub.publish` →
+  pub/sub broker (`Cmd.publish` / `Ipe.PubSub.publish` →
   `Sub.subscribeTopic`). TEA lives at the *state-owner* boundary, never
   in the request path.
 
@@ -439,14 +439,14 @@ is open.
   handler tasks) and should be cheap to `Clone` / share by `Arc` so a
   handler can hold its loaded snapshot across `.await` points without
   pinning the worker's next publish.
-- **Sky.Live / Tui / Webview:** already TEA; unchanged.
+- **Ipe.Live / Tui / Webview:** already TEA; unchanged.
 
 ## Q6 — Migration and opt-in ergonomics
 
 **Opt-in gesture — one import + one entry:**
 
 ```elm
-import Std.Worker as Worker
+import Ipe.Worker as Worker
 
 main =
     Worker.program
@@ -471,7 +471,7 @@ main =
   quiescence*. `Cmd.batch`, `Cmd.perform`, `Task.parallel`, `Sub.batch`,
   `Time.every`, `Sub.subscribeTopic`, WebSocket + Http.Stream Subs all
   carry over unchanged.
-- **Builder convention.** `Std.Worker` ships `defaultCfg` + `with*`
+- **Builder convention.** `Ipe.Worker` ships `defaultCfg` + `with*`
   builders per the stdlib typed-record convention, so future cfg fields
   (`onQuiesce`, exit-code policy) are additive.
 
@@ -479,10 +479,10 @@ main =
 
 | User wants… | Use | Entry point shape | Notes |
 |---|---|---|---|
-| Reactive / long-running CLI, daemon, cron worker, feed consumer | **Std.Worker** | `Worker.program { init, update, subscriptions } \|> Task.run` | Headless TEA (no view). Output via `Cmd` (`Io.writeStdout` / `Log.*`). Subs: timers / signals / pub-sub / stdin / WebSocket / Http.Stream / Cmd results. Terminates on `Cmd.quit code` or quiescence. Not for one-shot scripts or HTTP request handling. |
+| Reactive / long-running CLI, daemon, cron worker, feed consumer | **Ipe.Worker** | `Worker.program { init, update, subscriptions } \|> Task.run` | Headless TEA (no view). Output via `Cmd` (`Io.writeStdout` / `Log.*`). Subs: timers / signals / pub-sub / stdin / WebSocket / Http.Stream / Cmd results. Terminates on `Cmd.quit code` or quiescence. Not for one-shot scripts or HTTP request handling. |
 
 **Template / docs sync (non-negotiable, same commit).** `docs/stdlib.md`
-(new `Std.Worker`, `Cmd.quit`, `Sub.stdin` / `Sub.onSignal`);
+(new `Ipe.Worker`, `Cmd.quit`, `Sub.stdin` / `Sub.onSignal`);
 `docs/tooling/cli.md` (the reactive-CLI shape); `docs/sky-toml.md` if any
 `[worker]` keys are added; the "App shape matrix" + "Effect boundary" +
 "Active limitations" sections and their mirrors in `templates/CLAUDE.md`;

@@ -1,11 +1,11 @@
-//! Std.Decimal kernels. Mirrors the Go runtime's `decimal_kernel.go` (built
+//! Ipe.Decimal kernels. Mirrors the Go runtime's `decimal_kernel.go` (built
 //! on shopspring/decimal); we use `rust_decimal::Decimal` which has compatible
 //! precision (96-bit mantissa + scale).
 
 use super::IpeResult;
 use rust_decimal::{Decimal as RD, prelude::FromPrimitive};
 
-/// Opaque Sky `Decimal` — newtype around rust_decimal::Decimal.
+/// Opaque Ipê `Decimal` — newtype around rust_decimal::Decimal.
 #[derive(
     Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, serde::Serialize, serde::Deserialize,
 )]
@@ -20,7 +20,7 @@ use std::str::FromStr;
 pub fn decimal_from_string<E: From<String>>(s: String) -> IpeResult<E, Decimal> {
     match RD::from_str(&s) {
         Ok(d) => IpeResult::Ok(Decimal(d)),
-        Err(e) => IpeResult::Err(format!("Std.Decimal: parse: {}", e).into()),
+        Err(e) => IpeResult::Err(format!("Ipe.Decimal: parse: {}", e).into()),
     }
 }
 pub fn decimal_from_int(n: i64) -> Decimal {
@@ -29,13 +29,13 @@ pub fn decimal_from_int(n: i64) -> Decimal {
 pub fn decimal_from_float(f: f64) -> Decimal {
     Decimal(RD::from_f64(f).unwrap_or(RD::ZERO))
 }
-// Std.Decimal.fromMinor places minor  (e.g. fromMinor 2 12345 -> 123.45).
+// Ipe.Decimal.fromMinor places minor  (e.g. fromMinor 2 12345 -> 123.45).
 // Arg order is (places, minor): places is the scale, minor is the integer
 // value in minor units. Mantissa = minor, scale = places.
 pub fn decimal_from_minor(places: i64, minor: i64) -> Decimal {
     // rust_decimal's MAX_SCALE is 28; `RD::new` PANICS above it. Clamp the
-    // user-supplied scale and use the checked constructor so a well-typed Sky
-    // call (`Std.Decimal.fromMinor 30 1`) can never abort.
+    // user-supplied scale and use the checked constructor so a well-typed Ipê
+    // call (`Ipe.Decimal.fromMinor 30 1`) can never abort.
     // Clamp on i64 FIRST, then narrow: `as u32` on an i64 >= 2^32 truncates
     // (wraps) BEFORE any u32-domain `.min`, so a huge scale could alias to a
     // small wrong value. Clamping in i64 makes the narrowing monotonic.
@@ -146,11 +146,11 @@ pub fn decimal_mul(a: Decimal, b: Decimal) -> Decimal {
 }
 pub fn decimal_div<E: From<String>>(a: Decimal, b: Decimal) -> IpeResult<E, Decimal> {
     if b.0.is_zero() {
-        return IpeResult::Err("Std.Decimal: divide by zero".to_string().into());
+        return IpeResult::Err("Ipe.Decimal: divide by zero".to_string().into());
     }
     // checked_div, NOT the bare `/`: rust_decimal's `Div` panics ("Division
     // overflowed") on 96-bit mantissa overflow during scale-alignment — a panic
-    // reachable from a well-typed `Std.Decimal.div`. Post zero-guard, `None` is
+    // reachable from a well-typed `Ipe.Decimal.div`. Post zero-guard, `None` is
     // overflow → saturate to the signed extreme (sign = sign(a) XOR sign(b)),
     // matching decimal_add/sub/mul.
     let quotient = a.0.checked_div(b.0).unwrap_or_else(|| {
@@ -170,7 +170,7 @@ pub fn decimal_div<E: From<String>>(a: Decimal, b: Decimal) -> IpeResult<E, Deci
 }
 pub fn decimal_mod<E: From<String>>(a: Decimal, b: Decimal) -> IpeResult<E, Decimal> {
     if b.0.is_zero() {
-        return IpeResult::Err("Std.Decimal: mod by zero".to_string().into());
+        return IpeResult::Err("Ipe.Decimal: mod by zero".to_string().into());
     }
     // checked_rem, NOT the bare `%`: rust_decimal's `Rem` also panics on overflow.
     // Post zero-guard, `None` is overflow → 0 (a sound saturating remainder).
@@ -217,7 +217,7 @@ pub fn decimal_compare(a: Decimal, b: Decimal) -> i64 {
     }
 }
 
-// Std.Decimal completion (15 kernels)
+// Ipe.Decimal completion (15 kernels)
 
 // === Bool comparisons ===
 pub fn decimal_eq(a: Decimal, b: Decimal) -> bool {
@@ -293,7 +293,7 @@ fn decimal_div_raw(a: Decimal, b: Decimal) -> Decimal {
     }))
 }
 
-// === formatWith — Sky source: formatWith thousandsSep decimalSep places d ===
+// === formatWith — Ipê source: formatWith thousandsSep decimalSep places d ===
 // (group every 3 digits right-to-left)
 pub fn decimal_format_with(grp_sep: String, dec_sep: String, places: i64, d: Decimal) -> String {
     // Clamp to MAX_SCALE: digits past the decimal's max scale are zeros anyway,

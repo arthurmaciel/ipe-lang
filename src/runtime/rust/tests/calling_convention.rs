@@ -1,5 +1,5 @@
 //! Integration test: assert that no unintended curried helpers are added
-//! to the runtime. Under the tupled calling convention a multi-arg Sky function
+//! to the runtime. Under the tupled calling convention a multi-arg Ipê function
 //! lowers to ONE tupled Rust fn `f(a, b)`, never a curried `f(a)(b)`.
 //!
 //! The runtime has NO curried helpers — even the `Json.Decode.Pipeline`
@@ -8,9 +8,9 @@
 //! plain `Decoder<E, F>`, not an `impl Fn…`. So the expected set is empty.
 //!
 //! The one shape that still returns `impl Fn…` is a Handler producer (the
-//! `middleware_with_*` family): it takes all its Sky args tupled and returns a
+//! `middleware_with_*` family): it takes all its Ipê args tupled and returns a
 //! **Handler**, the runtime type `Fn(ServerRequest) -> IpeTask<E, Response>`.
-//! The returned closure takes a runtime `ServerRequest`, NOT a deferred Sky arg,
+//! The returned closure takes a runtime `ServerRequest`, NOT a deferred Ipê arg,
 //! so this is not currying — it's a function that returns a function-typed
 //! value. These are recognised structurally (return-Fn arg == `ServerRequest`)
 //! so new middleware don't need allowlisting.

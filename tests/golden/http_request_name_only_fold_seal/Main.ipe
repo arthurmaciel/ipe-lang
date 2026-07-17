@@ -13,7 +13,7 @@ import Ipe.Log exposing (println)
 -- sibling in `ir_type_from_canon`'s `canon::Type::Record` arm folded ANY
 -- record matching that 7-field NAME set to the opaque `IrType::HttpRequest`
 -- regardless of field TYPES -- and `sky_backend_rust::emit_expr::emit_record`
--- independently duplicated the same name-only mistake. `skyc` exited 0; the
+-- independently duplicated the same name-only mistake. `ipe` exited 0; the
 -- emitted `cargo build` failed with a wall of E0308 (Int values assigned into
 -- `sky_runtime::HttpRequest`'s typed String / Bool / List fields).
 sumFields : { body : Int, followRedirects : Int, headers : Int, maxRedirects : Int, method : Int, timeout : Int, url : Int } -> Int

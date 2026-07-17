@@ -18,18 +18,18 @@
 //!   check (mirrors reference `(/= "any") freeVars` filter).
 //! * `lower.rs` `ir_type_from_canon` — maps an `any` Var to
 //!   `IrType::Dict(Str, Str)` before the generic-var check.
-//! * `skyc/src/lib.rs` `source_for_span` — adds union ctor spans to the
+//! * `ipe/src/lib.rs` `source_for_span` — adds union ctor spans to the
 //!   attribution heuristic so ctor-based lower errors (IPE-L0114, etc.) render
 //!   against the owning dep file, not the entry file.
 //!
 //! ## Tests
 //!
-//! 1. `any_ctor_payload_skyc_and_cargo_zero` — build-only seal: `BroadcastMsg
-//!    any` compiles (skyc exit 0) and the emitted Rust builds (cargo exit 0).
+//! 1. `any_ctor_payload_ipe_and_cargo_zero` — build-only seal: `BroadcastMsg
+//!    any` compiles (ipe exit 0) and the emitted Rust builds (cargo exit 0).
 //!    Without the fix, IPE-L0102.
 //!
 //! 2. `any_ctor_payload_fail_closed` — using the `any` payload as a `String`
-//!    must surface `IPE-T0001` at skyc, never silently cargo-fail.
+//!    must surface `IPE-T0001` at ipe, never silently cargo-fail.
 //!
 //! 3. `ctor_span_attr_dep_module` — a function-bearing ctor in a dep module
 //!    must surface `IPE-L0114` attributed to `Dep.ipe`, not `Main.ipe`.
@@ -60,7 +60,7 @@ fn fixture_src_entry(root: &Path, name: &str) -> PathBuf {
         .join("Main.ipe")
 }
 
-/// Build-only seal: `BroadcastMsg any` — skyc exit 0 AND cargo build green.
+/// Build-only seal: `BroadcastMsg any` — ipe exit 0 AND cargo build green.
 /// Without the fix, IPE-L0102 (`Feature::Polymorphism` in `lower_enum` Gate 1).
 #[test]
 fn any_ctor_payload_skyc_and_cargo_zero() {
@@ -100,7 +100,7 @@ fn any_ctor_payload_skyc_and_cargo_zero() {
 }
 
 /// Fail-closed guard: using the `any`-ctor payload as a String must produce
-/// IPE-T0001 at skyc time, never silently cargo-fail.
+/// IPE-T0001 at ipe time, never silently cargo-fail.
 #[test]
 fn any_ctor_payload_fail_closed() {
     let root = repo_root();

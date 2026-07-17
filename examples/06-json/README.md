@@ -1,11 +1,11 @@
 # JSON, Result Combinators & Auto Record Constructors
 
-JSON encoding and decoding using `Sky.Core.Json.Encode` and `Sky.Core.Json.Decode` (combinator-style decoders, same API shape as Elm's `Json.Decode`). Also demonstrates `Sky.Core.Result` applicative combinators (`map2`/`map3`, `combine`, `traverse`) added in v0.7.25, and **auto-generated record constructors** from type aliases (v0.7.26+).
+JSON encoding and decoding using `Ipe.Json.Encode` and `Ipe.Json.Decode` (combinator-style decoders, same API shape as Elm's `Json.Decode`). Also demonstrates `Ipe.Result` applicative combinators (`map2`/`map3`, `combine`, `traverse`) added in v0.7.25, and **auto-generated record constructors** from type aliases (v0.7.26+).
 
 ## Build & Run
 
 ```bash
-sky build src/Main.ipe
+ipe build src/Main.ipe
 ./sky-out/app
 ```
 

@@ -30,10 +30,10 @@
 //!
 //! ```text
 //! # green suite (cargo-0 required):
-//! IPE_E2E=1 cargo test -p skyc --test golden_i147_ctor_as_fn_seal
+//! IPE_E2E=1 cargo test -p ipe --test golden_i147_ctor_as_fn_seal
 //!
 //! # positive-compile check only (fast):
-//! cargo test -p skyc --test golden_i147_ctor_as_fn_seal
+//! cargo test -p ipe --test golden_i147_ctor_as_fn_seal
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -63,7 +63,7 @@ fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for fixture {fixture}: {:?}",
+        "ipe build must succeed for fixture {fixture}: {:?}",
         built.err()
     );
 }
@@ -106,7 +106,7 @@ fn a1_ctor_map_bare() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for ctor_map_bare: {:?}",
+        "ipe build must succeed for ctor_map_bare: {:?}",
         built.err()
     );
 
@@ -153,7 +153,7 @@ fn a2_ctor_partial_multiarg_with_clone() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for ctor_partial: {:?}",
+        "ipe build must succeed for ctor_partial: {:?}",
         built.err()
     );
 
@@ -200,7 +200,7 @@ fn a3_ctor_stored_in_record_field() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for ctor_field: {:?}",
+        "ipe build must succeed for ctor_field: {:?}",
         built.err()
     );
 

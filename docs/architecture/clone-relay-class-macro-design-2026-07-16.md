@@ -22,7 +22,7 @@ open-ended). Each new binder kind silently ships without the discipline until
 a sweep finds the E0382/E0507.
 
 **This design was validated empirically before writing it** (probes against
-HEAD, `master-gate-target` skyc):
+HEAD, `master-gate-target` ipe):
 
 * **A 6th uncovered binder kind is a live SEAL breach today.** Destructure
   binders get NO ownership discipline at all:
@@ -31,7 +31,7 @@ HEAD, `master-gate-target` skyc):
   let (a, b) = pair in String.append a (String.append a b)
   ```
 
-  emits `string_append(a, string_append(a, b))` — skyc exit 0, cargo
+  emits `string_append(a, string_append(a, b))` — ipe exit 0, cargo
   E0382 `use of moved value: a`. (Probe: /tmp build of the emitted project.)
   This is exactly the failure mode the per-site architecture predicts.
 
@@ -86,7 +86,7 @@ implementation):
 
 Four facts generate the entire class:
 
-1. Every emitted Sky closure is a **re-callable** `Box<dyn Fn>` /
+1. Every emitted Ipê closure is a **re-callable** `Box<dyn Fn>` /
    `Arc<dyn Fn>` (Go-parity; never `FnOnce`).
 2. A Rust `move` closure takes every free variable **by value at
    construction**, regardless of how the body uses it.
@@ -300,7 +300,7 @@ consolidation, not required for the invariant.
 **2d. Mechanical enforcement.** A `#[cfg(any(test, debug_assertions))]`
 validator `assert_boundary_ownership(&func)` walks the final IR and checks
 the invariant, wired into the golden harness. A future regression then fails
-at skyc time (a loud internal check), never at the downstream cargo build —
+at ipe time (a loud internal check), never at the downstream cargo build —
 the SEAL's fail-closed direction.
 
 ### What stays deliberately lean (divergence preserved)

@@ -2,7 +2,7 @@
 //! `Ipe.Ui.Animation` module (26-ui-showcase blocker #175: IPE-N0004 unknown
 //! module `Animation`).
 //!
-//! `Ipe.Ui.Animation.attribute` is a pure-Sky wrapper over the native
+//! `Ipe.Ui.Animation.attribute` is a pure-Ipê wrapper over the native
 //! `Ui.animateRaw : String -> String -> String -> Bool -> Attribute msg` kernel
 //! (`KernelFn::UiAnimateRaw`), which constructs `AttrAnimation name shorthand
 //! keyframes respect`.  This test proves the whole seam:
@@ -12,7 +12,7 @@
 //!   * `Animation.attribute` type-checks against the `Spec` record;
 //!   * the emit lowers to `ui_animate_raw_(<name>, <shorthand>, <keyframes>,
 //!     <respect>)` — the four-arg native helper;
-//!   * (`IPE_E2E`) the emitted Cargo project builds — the seal: skyc exit-0 ⟹
+//!   * (`IPE_E2E`) the emitted Cargo project builds — the seal: ipe exit-0 ⟹
 //!     cargo exit-0 — and renders the CSS `animation:` shorthand.
 
 use std::path::PathBuf;
@@ -89,13 +89,13 @@ fn animation_module_resolves_and_emits_kernel() {
     let (emit, res) = build_animation_project("emit");
     assert!(
         res.is_ok(),
-        "skyc build with `import Ipe.Ui.Animation` must succeed \
+        "ipe build with `import Ipe.Ui.Animation` must succeed \
          (native animateRaw + compiled module): {:?}",
         res.err()
     );
 
     // The compiled `Ipe.Ui.Animation` module lowers to its OWN Rust file under
-    // `src/ipe_mods/` (per-Sky-module split), so scan the WHOLE emitted Sky-side
+    // `src/ipe_mods/` (per-Ipê-module split), so scan the WHOLE emitted Ipê-side
     // tree (main.rs + ipe_mods/*.rs) for the helper call.
     let emitted = support::read_all_emitted_src(&emit);
 

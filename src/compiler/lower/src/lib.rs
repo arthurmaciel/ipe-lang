@@ -36,7 +36,7 @@ use ipe_types::SolvedTypes;
 /// Lower a canonical module + its solved types into the typed IR.
 ///
 /// # Errors
-/// * Returns [`ipe_diagnostics::Diagnostic::Lower`] when the input is valid Sky
+/// * Returns [`ipe_diagnostics::Diagnostic::Lower`] when the input is valid Ipê
 ///   that the supported subset does not model yet (polymorphism, higher-order values,
 ///   non-`Task ()` results, extra kernels, non-constructor patterns, …),
 ///   carrying the offending node's span and its `IPE-L01##` feature.
@@ -136,8 +136,8 @@ pub fn lower(
     // `module.unions`. Mint them here through the owned `&mut Interner`.
     //
     // `SqlValue` / `SqlField` are Db Prelude built-ins following the same
-    // pattern: they appear in typed Sky code as if user-declared, but have no
-    // `type` declaration in any Sky source file — the compiler synthesises their
+    // pattern: they appear in typed Ipê code as if user-declared, but have no
+    // `type` declaration in any Ipê source file — the compiler synthesises their
     // `EnumDef`s at lowering time when a Db kernel call is detected.
     let builtins = lower::BuiltinCtors {
         maybe: interner.intern("Maybe").map_err(homeless)?,
@@ -967,11 +967,11 @@ mod tests {
     ///
     /// The checker gives every `any` occurrence a fresh flex UV per occurrence
     /// (`ipe_types::constrain`), so `f : any -> any -> Int` called `f "x" 3` is
-    /// well-typed and `skyc` accepts it. Pre-fix, BOTH params lowered to the
+    /// well-typed and `ipe` accepts it. Pre-fix, BOTH params lowered to the
     /// SAME `IrType::Generic(any_sym)` (the interned `"any"` Symbol is shared),
     /// so the backend emitted `fn main_f<T1>(a: T1, b: T1) -> i64` — a call
     /// passing a `String` and an `Int` at the two positions failed `cargo build`
-    /// with E0308 despite `skyc` having accepted the program
+    /// with E0308 despite `ipe` having accepted the program
     /// (exit-0-then-cargo-fail). Post-fix, `split_typed_sig` gives each
     /// occurrence its OWN fresh symbol from `any_param_binders`, and
     /// `type_params` includes both (unioned in alongside `free_vars`) — the

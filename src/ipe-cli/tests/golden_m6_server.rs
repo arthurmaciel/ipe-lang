@@ -9,9 +9,9 @@
 //! the emitter MUST insert `.clone()` on each call so the first call does not
 //! move the `ServerRequest` binding and prevent subsequent calls (E0382).
 //!
-//! This is a compile-only golden: we compile the fixture with `skyc`, read
+//! This is a compile-only golden: we compile the fixture with `ipe`, read
 //! the emitted `src/main.rs`, and assert each accessor call site contains
-//! `.clone()`.  We do NOT run the compiled binary (the program is a Sky HTTP
+//! `.clone()`.  We do NOT run the compiled binary (the program is a Ipê HTTP
 //! server that would block).
 //!
 //! Run:

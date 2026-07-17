@@ -31,10 +31,10 @@
 //!
 //! ```text
 //! # gate check always (no IPE_E2E needed):
-//! cargo test -p skyc --test golden_i151_nested_let_fn
+//! cargo test -p ipe --test golden_i151_nested_let_fn
 //!
-//! # full E2E (skyc build + cargo build + run):
-//! IPE_E2E=1 cargo test -p skyc --test golden_i151_nested_let_fn
+//! # full E2E (ipe build + cargo build + run):
+//! IPE_E2E=1 cargo test -p ipe --test golden_i151_nested_let_fn
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -50,7 +50,7 @@ fn repo_root() -> PathBuf {
 
 /// `applyInner n = List.map (\m -> process n m) [1,2,3]` — `process` is
 /// `NonClone` in callee position inside the inner lambda.  Without the fix, `IPE-L0126`.
-/// Post-fix: skyc build succeeds; cargo build + run produce "11, 12, 13".
+/// Post-fix: ipe build succeeds; cargo build + run produce "11, 12, 13".
 #[test]
 fn c01_nested_let_fn_callee_green() {
     let root = repo_root();
@@ -68,7 +68,7 @@ fn c01_nested_let_fn_callee_green() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for nested_let_fn_callee (was IPE-L0126 pre-fix): {:?}",
+        "ipe build must succeed for nested_let_fn_callee (was IPE-L0126 pre-fix): {:?}",
         built.err()
     );
 
@@ -107,7 +107,7 @@ fn c01_nested_let_fn_callee_green() {
 ///    maps to `IrType::Json` (a sound stand-in, since the kernel signature at the
 ///    call site unifies the concrete type).
 ///
-/// Post-fix: skyc build succeeds.
+/// Post-fix: ipe build succeeds.
 #[test]
 fn c02_poly_fn_on_error_green() {
     let root = repo_root();
@@ -125,7 +125,7 @@ fn c02_poly_fn_on_error_green() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for poly_task_on_error (was IPE-L0126 pre-fix): {:?}",
+        "ipe build must succeed for poly_task_on_error (was IPE-L0126 pre-fix): {:?}",
         built.err()
     );
 }

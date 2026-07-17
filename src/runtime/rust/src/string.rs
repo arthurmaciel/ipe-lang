@@ -1,4 +1,4 @@
-//! Sky.Core.String kernel — the single home for the String runtime surface.
+//! Ipe.String kernel — the single home for the String runtime surface.
 //!
 //! Argument order matches the Go runtime's typed kernels
 //! (runtime-go/rt/rt.go: String_replace / String_startsWith / etc.).
@@ -34,7 +34,7 @@ pub fn string_to_lower(s: String) -> String {
 pub fn string_trim(s: String) -> String {
     s.trim().to_string()
 }
-// Sky `contains : String -> String -> Bool  -- contains sub str` (str contains
+// Ipê `contains : String -> String -> Bool  -- contains sub str` (str contains
 // sub). Args arrive as (sub, str), so test the SECOND against the first.
 pub fn string_contains(sub: String, s: String) -> bool {
     s.contains(&sub)
@@ -98,14 +98,14 @@ pub fn string_slice(start: i64, end: i64, s: String) -> String {
         .map(|r| r.iter().collect())
         .unwrap_or_default()
 }
-/// `Sky.Core.String.left n s` — the first `n` characters (clamped; negative → "").
+/// `Ipe.String.left n s` — the first `n` characters (clamped; negative → "").
 pub fn string_left(n: i64, s: String) -> String {
     if n <= 0 {
         return String::new();
     }
     s.chars().take(n as usize).collect()
 }
-/// `Sky.Core.String.right n s` — the last `n` characters (clamped).
+/// `Ipe.String.right n s` — the last `n` characters (clamped).
 pub fn string_right(n: i64, s: String) -> String {
     if n <= 0 {
         return String::new();
@@ -263,7 +263,7 @@ pub fn string_split(sep: String, s: String) -> Vec<String> {
     }
     s.split(&sep).map(|x| x.to_string()).collect()
 }
-// Sky.Core.String.lines / .words — split on line breaks / runs of whitespace.
+// Ipe.String.lines / .words — split on line breaks / runs of whitespace.
 pub fn string_lines(s: String) -> Vec<String> {
     s.lines().map(|x| x.to_string()).collect()
 }
@@ -273,44 +273,44 @@ pub fn string_words(s: String) -> Vec<String> {
 
 // ── String kernels with Go-typed argument order ──
 
-/// Sky `replace : String -> String -> String -> String`.
+/// Ipê `replace : String -> String -> String -> String`.
 /// Replaces all occurrences of `old` with `new_` in `s`.
 pub fn string_replace(old: String, new_: String, s: String) -> String {
     s.replace(&old, &new_)
 }
 
-/// Sky `startsWith : String -> String -> Bool`. `prefix` first, `s` second.
+/// Ipê `startsWith : String -> String -> Bool`. `prefix` first, `s` second.
 pub fn string_starts_with(prefix: String, s: String) -> bool {
     s.starts_with(&prefix)
 }
 
-/// Sky `endsWith : String -> String -> Bool`. `suffix` first, `s` second.
+/// Ipê `endsWith : String -> String -> Bool`. `suffix` first, `s` second.
 pub fn string_ends_with(suffix: String, s: String) -> bool {
     s.ends_with(&suffix)
 }
 
 // ── Haystack-first companions (`*In`) ────────────────────────────────────────
-// Sky `containsIn : String -> String -> Bool  -- containsIn haystack needle`.
-// Args arrive in Sky order `(haystack, needle)`, so the runtime signature is
+// Ipê `containsIn : String -> String -> Bool  -- containsIn haystack needle`.
+// Args arrive in Ipê order `(haystack, needle)`, so the runtime signature is
 // haystack-first — the exact opposite operand order of `string_contains`.
 // Defined as a delegation so the single substring check stays in one place.
 pub fn string_contains_in(haystack: String, needle: String) -> bool {
     string_contains(needle, haystack)
 }
 
-/// Sky `startsWithIn : String -> String -> Bool  -- startsWithIn haystack prefix`.
+/// Ipê `startsWithIn : String -> String -> Bool  -- startsWithIn haystack prefix`.
 /// Haystack-first companion of `startsWith`.
 pub fn string_starts_with_in(haystack: String, prefix: String) -> bool {
     string_starts_with(prefix, haystack)
 }
 
-/// Sky `endsWithIn : String -> String -> Bool  -- endsWithIn haystack suffix`.
+/// Ipê `endsWithIn : String -> String -> Bool  -- endsWithIn haystack suffix`.
 /// Haystack-first companion of `endsWith`.
 pub fn string_ends_with_in(haystack: String, suffix: String) -> bool {
     string_ends_with(suffix, haystack)
 }
 
-/// Sky `repeat : Int -> String -> String`. Non-positive `n` returns "".
+/// Ipê `repeat : Int -> String -> String`. Non-positive `n` returns "".
 pub fn string_repeat(n: i64, s: String) -> String {
     if n <= 0 {
         return String::new();

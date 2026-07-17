@@ -33,7 +33,7 @@
 //! `current_poly_tvars` call sites (`ir_type_from_ty`, `ir_type_from_ty_ui_msg`,
 //! `ir_type_from_ty_json`) for consistency.
 //!
-//! Post-fix: skyc build succeeds; the emitted `main_with_error_reporting`
+//! Post-fix: ipe build succeeds; the emitted `main_with_error_reporting`
 //! is generic over `T1` throughout (no `JsonVal`); cargo build + run confirm
 //! BOTH the success path (untouched result) and Task.onError's fallback path
 //! (original error is replaced by the "ref <token>" wrapper) work correctly
@@ -41,10 +41,10 @@
 //!
 //! ```text
 //! # gate check always (no IPE_E2E needed):
-//! cargo test -p skyc --test golden_i164_poly_task_on_error_nested
+//! cargo test -p ipe --test golden_i164_poly_task_on_error_nested
 //!
-//! # full E2E (skyc build + cargo build + run):
-//! IPE_E2E=1 cargo test -p skyc --test golden_i164_poly_task_on_error_nested
+//! # full E2E (ipe build + cargo build + run):
+//! IPE_E2E=1 cargo test -p ipe --test golden_i164_poly_task_on_error_nested
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -73,7 +73,7 @@ fn poly_task_on_error_nested_green() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for poly_task_on_error_nested: {:?}",
+        "ipe build must succeed for poly_task_on_error_nested: {:?}",
         built.err()
     );
 
@@ -82,7 +82,7 @@ fn poly_task_on_error_nested_green() {
     // is exactly the SEAL-violating shape this closes — assert it here so a
     // future regression fails even when IPE_E2E is not set (CI-cheap gate).
     let main_rs = std::fs::read_to_string(out.join("src").join("main.rs"))
-        .expect("emitted main.rs must exist after a successful skyc build");
+        .expect("emitted main.rs must exist after a successful ipe build");
     assert!(
         main_rs.contains("fn main_with_error_reporting<T1"),
         "withErrorReporting must lower to a generic Rust fn over T1; got:\n{main_rs}"

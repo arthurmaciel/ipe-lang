@@ -3,7 +3,7 @@
 //! Before this task, a qualified `List.append` / `concat` / `take` / `drop` /
 //! `zip` / `cons` / `isEmpty` / `concatMap` call resolved (via the canon
 //! prelude-qualifier install) to `VarHome::Kernel` with NO `KernelFn` variant,
-//! no lower arm, and no constrain scheme — so `skyc` emitted
+//! no lower arm, and no constrain scheme — so `ipe` emitted
 //! `error[IPE-L0108]: kernel function not available yet` at the first such call.
 //! `List.indexedMap` was worse: absent from the qualifier member array, it
 //! failed even earlier at canon with `IPE-N0005` (no such member).
@@ -13,11 +13,11 @@
 //! `stdlib_scheme` entry — reusing the existing iterative runtime fns where they
 //! already existed (`list_drop`/`list_zip`/`list_concat_map`/`list_indexed_map`/
 //! `ipe_list_cons`) and adding four total, iterative ones (`list_append`/
-//! `list_concat`/`list_take`/`list_is_empty`). Kernel (not pure-Sky routing) is
+//! `list_concat`/`list_take`/`list_is_empty`). Kernel (not pure-Ipê routing) is
 //! the only exit-0-safe wiring: canon anchors `List.*` to `VarHome::Kernel`
-//! unconditionally, so the pure-Sky `Ipe.List` bodies are never on the
+//! unconditionally, so the pure-Ipê `Ipe.List` bodies are never on the
 //! resolution path, and the two HOFs (`concatMap`/`indexedMap`) would trip the
-//! `cannot infer T2` cross-module inference hole under pure-Sky anyway.
+//! `cannot infer T2` cross-module inference hole under pure-Ipê anyway.
 //!
 //! This golden exercises all nine in one program, hitting the Elm/Go edge
 //! semantics (negative/over-length `take`/`drop`, `zip` truncating to the

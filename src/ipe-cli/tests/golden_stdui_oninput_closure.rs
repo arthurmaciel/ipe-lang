@@ -22,7 +22,7 @@
 //!
 //! `oracle_divergence = true`: the Go reference compiler (`sky dev`) does not
 //! expose `Html.htmlRender` and exits 1 on this source.  `expected_go.txt` holds
-//! skyc's own correct output — the Rust-backend HTML with the input event wired.
+//! ipe's own correct output — the Rust-backend HTML with the input event wired.
 //!
 //! ## What is tested
 //!
@@ -74,7 +74,7 @@ fn build_run_oninput_closure() -> (PathBuf, support::RunOutcome) {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for stdui_oninput_closure: {:?}",
+        "ipe build must succeed for stdui_oninput_closure: {:?}",
         built.err()
     );
 

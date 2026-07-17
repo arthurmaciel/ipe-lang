@@ -1,4 +1,4 @@
-//! Parametric-polymorphism gate: `skyc` must emit `main.rs`
+//! Parametric-polymorphism gate: `ipe` must emit `main.rs`
 //! byte-identical to the checked-in golden for fully-parametric top-level
 //! functions (type variables used *structurally* — pure pass-through), and
 //! (behind `IPE_E2E=1`) the emitted project must build and print `42`.

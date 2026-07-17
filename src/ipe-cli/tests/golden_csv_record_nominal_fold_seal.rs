@@ -3,7 +3,7 @@
 //! shape `{ header : List String, rows : List (List String) }` fed directly to
 //! `Csv.encode` must not be emitted as a backend-synthesised `RecHeaderRows`
 //! struct while the `csv_encode` kernel takes `ipe_runtime::csv::CsvDoc`:
-//! that is `skyc` exit 0 then a `cargo build` E0308
+//! that is `ipe` exit 0 then a `cargo build` E0308
 //! (`expected CsvDoc, found RecHeaderRows`).
 //!
 //! So `ipe_lower::lower::ir_type_from_ty` / `ir_type_from_canon` fold a

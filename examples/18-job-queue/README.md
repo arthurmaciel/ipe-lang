@@ -6,7 +6,7 @@ Simulate a job queue composed of tasks with different timings.
 ## Build & Run
 
 ```bash
-sky build src/Main.ipe
+ipe build src/Main.ipe
 ./sky-out/app
 ```
 

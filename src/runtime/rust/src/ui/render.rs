@@ -1,12 +1,12 @@
-//! `Std.Ui` → `Html<M>` render kernel.
+//! `Ipe.Ui` → `Html<M>` render kernel.
 //!
-//! This module is the ONLY place that converts a `Std.Ui` `Element<M>` tree to
-//! `ipe_runtime::html::Html<M>`.  It is a runtime kernel (not compiled from Sky)
+//! This module is the ONLY place that converts a `Ipe.Ui` `Element<M>` tree to
+//! `ipe_runtime::html::Html<M>`.  It is a runtime kernel (not compiled from Ipê)
 //! because the render chain touches `any`-returning stdlib fields (`Raw any`,
-//! `AttrEvent any`) that cannot be typed soundly in Sky-over-Rust (spec §1.4).
+//! `AttrEvent any`) that cannot be typed soundly in Ipê-over-Rust (spec §1.4).
 //!
 //! Security note — this file is T1/T3/T5-critical (spec §6):
-//! - T1: never call `renderElement` from Sky; keep it here as a typed Rust fn.
+//! - T1: never call `renderElement` from Ipê; keep it here as a typed Rust fn.
 //! - T3: `AttrStyle`, `AttrBgImage`, `AttrAttribute` carry user-controlled strings
 //!   entering `style="…"` / HTML-attribute sinks.  The CSS URL sanitiser
 //!   (`sanitise_css_url`) gates `url(…)` payloads; HTML values pass through
@@ -14,7 +14,7 @@
 //! - T5: `AttrBorderWidthEach(t,r,b,l)` uses `saturating_add` throughout.
 //!
 //! ### Design rationale
-//! `Ui.layout` emits an outer 100 vh flex-column wrapper (matching Sky's Go
+//! `Ui.layout` emits an outer 100 vh flex-column wrapper (matching Ipê's Go
 //! runtime `runtime-go/rt/ui.go`) and the converted root element inside it.
 //! `Ui.layoutWith` additionally applies `wrapperAttrs` to the outer wrapper and
 //! `rootAttrs` to an intermediate flex root, mirroring `Ui.layoutWith`'s Go shape.
@@ -25,8 +25,8 @@ use super::element::{Attribute, Color, Description, Element, HAlign, Length, Loc
 
 // ── CSS boundary smart constructors ───────────────────────────────────────────
 // `SafeCssPropertyName` / `SafeCssValue` moved to the shared `css_safety` module
-// (design §Q5: one policy, one place). Imported above so the Std.Ui inline-style
-// path and the Std.Css / styleNode sinks share the identical encoder.
+// (design §Q5: one policy, one place). Imported above so the Ipe.Ui inline-style
+// path and the Ipe.Css / styleNode sinks share the identical encoder.
 
 /// Check whether a bare URL string (not yet wrapped in `url(…)`) carries a
 /// dangerous scheme.  Used for `AttrBgImage` / `AttrBgGradient` before the
@@ -173,7 +173,7 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                 decl!("color:{}", color_css(c));
             }
             Attribute::AttrFontFamily(f) => {
-                // Value-as-data gate (UI CSS-escaping hardening): a raw Sky
+                // Value-as-data gate (UI CSS-escaping hardening): a raw Ipê
                 // `String` reaching a CSS sink must pass the shared
                 // `SafeCssValue` breakout scan (`;{}@import`, script sinks) —
                 // drop on failure, same posture as `AttrStyle` /
@@ -223,7 +223,7 @@ pub(crate) fn build_style_string<M>(attrs: &[Attribute<M>]) -> String {
                     // Known, documented limitation: an inline base64 data
                     // URI (`url(data:image/png;base64,…)`) contains `;` and
                     // is dropped — Background.image takes a path/URL;
-                    // data-URI backgrounds are unsupported through Std.Ui
+                    // data-URI backgrounds are unsupported through Ipe.Ui
                     // (BG-2 quoting is the upgrade if ever needed).
                     let composed = format!("url({url})");
                     if let Some(v) = SafeCssValue::parse(&composed) {
@@ -348,7 +348,7 @@ fn collect_html_attrs<M: Clone>(attrs: &[Attribute<M>]) -> Vec<HtmlAttribute<M>>
     // build on it) are collected into ONE `data-sky-pc-rules` marker attr,
     // wire-format `"<tag>|<css>||<tag2>|<css2>"` — consumed by
     // `ipe_runtime::live::style_inject::build_pc` (called post-`assign_sky_ids`
-    // from the Sky.Live / Sky.Webview render pipelines), which expands it into
+    // from the Ipe.Live / Ipe.Webview render pipelines), which expands it into
     // a sky-id-scoped `<style>` block. Multiple entries with the SAME tag are
     // NOT merged (each keeps its own `tag|css` segment) — matches the `../sky`
     // reference's `injectPseudoClassStyles` wire contract.
@@ -433,7 +433,7 @@ fn render_nearby_overlays<M: Clone>(attrs: &[Attribute<M>]) -> Vec<Html<M>> {
 
 /// Pick the semantic HTML tag for a layout node based on its `Description`.
 /// `NoDescription` defaults to `div`.  `TaggedNode` overrides this with an
-/// explicit user-supplied tag (already validated by the Sky stdlib).
+/// explicit user-supplied tag (already validated by the Ipê stdlib).
 fn tag_for_description(desc: &Description) -> &'static str {
     match desc {
         Description::NoDescription => "div",
@@ -458,7 +458,7 @@ fn tag_for_description(desc: &Description) -> &'static str {
 
 // ── Element → Html (recursive) ───────────────────────────────────────────────
 
-/// Recursively convert a `Std.Ui` `Element<M>` to `Html<M>`.
+/// Recursively convert a `Ipe.Ui` `Element<M>` to `Html<M>`.
 ///
 /// Security: all attribute values flow through `build_style_string` (which
 /// calls `sanitise_css_value`) or `collect_html_attrs` (which passes values to
@@ -512,7 +512,7 @@ fn render_node_as<M: Clone>(tag: &str, attrs: &[Attribute<M>], kids: Vec<Element
 /// `Ui.layout : List (Attribute msg) -> Element msg -> Html msg`
 ///
 /// Wraps the element in a full-viewport flex-column page wrapper, then renders
-/// the root element with the given root attributes applied. Mirrors the Sky Go
+/// the root element with the given root attributes applied. Mirrors the Ipê Go
 /// runtime's `layout` output shape.
 pub fn ui_layout<M: Clone>(attrs: Vec<Attribute<M>>, elem: Element<M>) -> Html<M> {
     // Root element rendered with the caller's root attrs applied.
@@ -876,7 +876,7 @@ mod tests {
 
     #[test]
     fn ui_clip_x_y_render_single_axis_clip_not_hidden() {
-        // Go/Sky reference: clipX = AttrOverflow "clip" "visible" (NOT "hidden"),
+        // Go/Ipê reference: clipX = AttrOverflow "clip" "visible" (NOT "hidden"),
         // clipY = AttrOverflow "visible" "clip". Distinct from `Ui.clip` (which
         // uses "hidden" on both axes) — this is the exact semantics bug the
         // design doc's clip family warns about.
@@ -899,7 +899,7 @@ mod tests {
 
     #[test]
     fn ui_scrollbar_x_y_render_off_axis_hidden_not_visible() {
-        // Go/Sky reference: scrollbarX = AttrOverflow "auto" "hidden" (off-axis
+        // Go/Ipê reference: scrollbarX = AttrOverflow "auto" "hidden" (off-axis
         // hidden, NOT visible — a visible off-axis gets promoted to `auto` by
         // CSS, producing an unwanted second scrollbar).
         let attrs_x = vec![super::super::helpers::ui_scrollbar_x_::<TestMsg>()];

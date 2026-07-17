@@ -1,14 +1,14 @@
-//! `Sky.Core.Bytes` kernels — arbitrary byte buffer (`Vec<u8>`).
+//! `Ipe.Bytes` kernels — arbitrary byte buffer (`Vec<u8>`).
 //!
-//! Divergence from Sky: Sky defines `type alias Bytes = String` (Go's `string`
+//! Divergence from Ipê: Ipê defines `type alias Bytes = String` (Go's `string`
 //! is a byte sequence, making the alias cost-free). Rust's `String` is
 //! constrained to valid UTF-8; mapping `Bytes` to `String` would be unsound for
-//! non-UTF-8 binary payloads. Sky-Rust makes `Bytes` a distinct primitive
+//! non-UTF-8 binary payloads. Ipê-Rust makes `Bytes` a distinct primitive
 //! lowering to `Vec<u8>` — lossless for arbitrary binary, with explicit UTF-8
 //! conversion via `bytes_from_string` / `bytes_to_string`.
 //!
 //! All functions are total: no `unwrap` / `expect` / `panic` / raw indexing.
-//! Fallible operations return `IpeMaybe<T>` (Sky's `Maybe`).
+//! Fallible operations return `IpeMaybe<T>` (Ipê's `Maybe`).
 
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 
@@ -33,9 +33,9 @@ pub fn bytes_is_empty(b: Vec<u8>) -> bool {
     b.is_empty()
 }
 
-/// `Bytes.fromString : String -> Bytes` — UTF-8-encode a Sky string into bytes.
+/// `Bytes.fromString : String -> Bytes` — UTF-8-encode a Ipê string into bytes.
 ///
-/// Every Sky `String` is valid UTF-8 (the Sky type system enforces this), so
+/// Every Ipê `String` is valid UTF-8 (the Ipê type system enforces this), so
 /// this conversion is total and always succeeds.
 pub fn bytes_from_string(s: String) -> Vec<u8> {
     s.into_bytes()

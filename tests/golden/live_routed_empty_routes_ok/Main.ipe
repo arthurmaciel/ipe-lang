@@ -5,12 +5,12 @@ module Main exposing (main)
 -- `routes = []` emits a typed empty vec (`Vec::<Route<…>>::new()`).  The
 -- runtime `Route<Page>` struct has NO default type parameter, so the
 -- pre-round-4 `IrType::LiveRoute` rendering (a bare
--- `sky_runtime::live::route::Route`) made this skyc-0 program cargo-fail with
+-- `sky_runtime::live::route::Route`) made this ipe-0 program cargo-fail with
 -- E0107 ("missing generics for struct `route::Route`") — an
 -- exit-0-then-cargo-fail seal violation.  Post-fix `IrType::LiveRoute(page)`
 -- threads the page type through the lowerer and renders `Route<MainPage>`.
 --
--- skyc MUST exit 0 AND the emitted project MUST cargo-build.
+-- ipe MUST exit 0 AND the emitted project MUST cargo-build.
 
 import Ipe.Live as Live
 import Ipe.Ui as Ui

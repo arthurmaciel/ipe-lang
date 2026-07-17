@@ -43,7 +43,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-/// The `crates/skyc/tests` directory holding every `golden_*.rs`.
+/// The `crates/ipe/tests` directory holding every `golden_*.rs`.
 fn tests_dir() -> PathBuf {
     let joined = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
     std::fs::canonicalize(&joined).unwrap_or(joined)

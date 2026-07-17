@@ -26,7 +26,7 @@ same-module references (staying monomorphic in its home module); when the module
 finishes, residual plain-`Flex` variables — excluding `Super`-bounded and
 `Rigid`-contaminated ones — are quantified into a scheme, and cross-module
 references instantiate that scheme fresh via a union-find copy-walk, exactly as
-typed bindings already do. Sky is pure, so no value restriction applies (the
+typed bindings already do. Ipê is pure, so no value restriction applies (the
 reference agrees).
 
 Rejected alternatives:

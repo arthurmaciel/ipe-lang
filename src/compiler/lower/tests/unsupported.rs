@@ -1167,7 +1167,7 @@ fn nested_lambda_body_flattens_into_one_closure() -> DResult<()> {
     // multi-parameter closure so the emitted `Box<dyn Fn(i64, i64) -> i64>` body
     // matches the flattened return type `split_typed_sig` produces. (Without the
     // flatten the body would be a curried `Fn(i64) -> Fn(i64) -> i64`, which
-    // cargo rejects with no Sky diagnostic.) The innermost body is `0` — the
+    // cargo rejects with no Ipê diagnostic.) The innermost body is `0` — the
     // flatten depends only on the lambda chain + arrow type, not on the body.
     let mut i = Interner::new();
     let f_sym = i.intern("f")?;

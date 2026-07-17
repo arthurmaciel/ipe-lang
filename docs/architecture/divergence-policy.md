@@ -1,4 +1,4 @@
-# Divergence policy — when Sky-Rust output may differ from the Go reference
+# Divergence policy — when Ipê-Rust output may differ from the Go reference
 
 > Status: IMPLEMENTED (M4b; extended M4c). The oracle crate (`tools/oracle`) +
 > the `refresh-oracle` tool encode this policy. M4c added the tagged
@@ -7,14 +7,14 @@
 
 ## Default — byte parity with Go
 
-Sky-Rust's contract (PRINCIPLES.md §2 Correctness) is that for the same
-well-typed Sky program and the same input, the Rust output matches the Go
+Ipê-Rust's contract (PRINCIPLES.md §2 Correctness) is that for the same
+well-typed Ipê program and the same input, the Rust output matches the Go
 reference's observable behaviour, **ideally byte-for-byte**. The golden parity
 suite enforces this: each runnable golden caches the Go reference's clean
 program stdout (`expected_go.txt` + `oracle.meta`), and `oracle::check_parity`
-diffs skyc's output against it on every run — no live Go in the hot path.
+diffs ipe's output against it on every run — no live Go in the hot path.
 
-So the DEFAULT for every golden is: skyc must reproduce the Go bytes exactly.
+So the DEFAULT for every golden is: ipe must reproduce the Go bytes exactly.
 A mismatch is a hard failure.
 
 ## The three kinds of recorded divergence
@@ -28,27 +28,27 @@ distinguished by the leading TAG on the `divergence_reason`:
 
 The Go oracle panics, exits non-zero, or fails to build on a shape skyc handles
 correctly. The `refresh-oracle` tool detects the Go failure, falls back to
-skyc's own (correct) output, and records it with a reason such as
+ipe's own (correct) output, and records it with a reason such as
 `Go oracle failed: …`. This is the original "the Go oracle can fail to produce a
 reference on a shape" carve-out. No marker file is needed — the failure itself
 triggers the branch.
 
-### 2. `divergence:` kind (Sky's current behaviour differs; we follow a different target)
+### 2. `divergence:` kind (Ipê's current behaviour differs; we follow a different target)
 
 The Go oracle *succeeds* — it builds and runs — but Sky's current behaviour
-differs from what Sky-Rust implements. Because Go does not fail, the auto path
-(kind 1) never fires; the golden must opt in explicitly. Sky-Rust records its
+differs from what Ipê-Rust implements. Because Go does not fail, the auto path
+(kind 1) never fires; the golden must opt in explicitly. Ipê-Rust records its
 own output with a neutral rationale stating what differs and why (e.g.
 Elm-conformance, fuller Unicode).
 
 - Drop a `sanctioned.divergence` marker file whose reason begins with the
   `divergence: ` tag (e.g. `divergence: Math.min/max Elm-conformant polymorphic
-  comparable. Divergence from Sky, rationale: Elm-conformance`).
-- `refresh-oracle` short-circuits straight to skyc's output (it does **not**
+  comparable. Divergence from Ipê, rationale: Elm-conformance`).
+- `refresh-oracle` short-circuits straight to ipe's output (it does **not**
   require, or even run, the Go oracle for the expected value) and records it with
   `oracle_divergence = true` and `divergence_reason = divergence: <reason>`.
 
-### 3. `sanctioned:` divergence (Go SUCCEEDS, Sky-Rust is deliberately MORE correct)
+### 3. `sanctioned:` divergence (Go SUCCEEDS, Ipê-Rust is deliberately MORE correct)
 
 The Go oracle succeeds *correctly*, but Sky-Rust is intentionally more correct
 still, so the two outputs differ by design (e.g. full-Unicode case mapping).
@@ -57,7 +57,7 @@ This is a **deliberate, reviewed** choice — not a bug on either side.
 - Drop a `sanctioned.divergence` marker file; its contents are the human-readable
   reason. An untagged reason defaults to the `sanctioned: ` tag (so historical
   markers keep working); you may write `sanctioned: …` explicitly.
-- `refresh-oracle` short-circuits straight to skyc's output and records it with
+- `refresh-oracle` short-circuits straight to ipe's output and records it with
   `oracle_divergence = true` and `divergence_reason = sanctioned: <reason>`.
 
 In all three kinds the staleness gate (`sha256(Main.ipe)`) and `check_parity`
@@ -69,11 +69,11 @@ hard error: a marker divergence MUST state why.
 
 This keeps the rigour floor intact: a sanctioned divergence is loud, reviewed,
 and source-pinned — it can never silently mask a *real* parity bug, because the
-expected bytes are Sky-Rust's deliberate output, captured and committed.
+expected bytes are Ipê-Rust's deliberate output, captured and committed.
 
 ## The sanctioned divergences in M4b
 
-M4b ships the `Sky.Core.String` / `Sky.Core.Char` kernels. Char **predicates**
+M4b ships the `Ipe.String` / `Ipe.Char` kernels. Char **predicates**
 (`Char.isDigit` / `isLower` / `isUpper` / `isAlpha`) are NOT divergences — they
 match Go exactly (`unicode.IsDigit`/`Nd`, `IsLower`/`Ll`, `IsUpper`/`Lu`,
 `IsLetter`/`L*`); see FIX-3. The only sanctioned divergences are:
@@ -82,44 +82,44 @@ match Go exactly (`unicode.IsDigit`/`Nd`, `IsLower`/`Ll`, `IsUpper`/`Lu`,
    `String.toUpper` / `toLower` / `casefold` and `Char.toUpper` / `toLower`.
    Rust applies the full Unicode `SpecialCasing` rules (e.g. `ß → SS`,
    `İ → i̇`), where Go's `strings`/`unicode` simple per-rune mapping does not.
-   Sky-Rust is deliberately more correct here. Reason recorded:
+   Ipê-Rust is deliberately more correct here. Reason recorded:
    `sanctioned: full-Unicode default case mapping (Rust SpecialCasing — ß→SS, İ→i̇ — vs Go simple per-rune)`.
 
 2. **`String.toFloat` standard grammar** — a minor sanctioned-stricter
-   divergence: Sky-Rust accepts the standard float grammar and *rejects* Go's
+   divergence: Ipê-Rust accepts the standard float grammar and *rejects* Go's
    hex-float and underscore-separated literals. Stricter, not looser; recorded as
    sanctioned where it surfaces.
 
-## Recorded `divergence:` entries (Sky's current behaviour differs)
+## Recorded `divergence:` entries (Ipê's current behaviour differs)
 
 - **Math.min / Math.max — AsInt coercion vs Elm-conformant polymorphic compare
-  (Sky PR #136).** Sky's `Math.min`/`Math.max` currently route both arguments
+  (Ipê PR #136).** Ipê's `Math.min`/`Math.max` currently route both arguments
   through `AsInt` before the compare, coercing `Float` to `Int` (`Math.min 0.4
-  1.3 → 0`) and yielding a meaningless compare for `String`. Sky-Rust follows
+  1.3 → 0`) and yielding a meaningless compare for `String`. Ipê-Rust follows
   Elm's `Basics` polymorphic comparable (`min`/`max : a -> a -> a`) preserving
-  each argument's type + value. Divergence from Sky, rationale: Elm-conformance.
+  each argument's type + value. Divergence from Ipê, rationale: Elm-conformance.
   Recorded as `divergence: Math.min/max Elm-conformant polymorphic comparable
-  (Divergence from Sky, rationale: Elm-conformance)`. (`Math.abs` stays
+  (Divergence from Ipê, rationale: Elm-conformance)`. (`Math.abs` stays
   `Int -> Int` — the `AsInt` path is correct there and is not a divergence.)
 
-- **`Sky.Core.Bytes` — `Vec<u8>` vs Sky's `type alias Bytes = String` (M4e).**
-  Sky/Go defines `type alias Bytes = String`. Go's `string` is an arbitrary byte
+- **`Ipe.Bytes` — `Vec<u8>` vs Ipê's `type alias Bytes = String` (M4e).**
+  Ipê/Go defines `type alias Bytes = String`. Go's `string` is an arbitrary byte
   sequence (no UTF-8 constraint), so the alias is cost-free and correct in Go.
   Rust's `String` is UTF-8-constrained: mapping `Bytes → String` would silently
-  corrupt non-UTF-8 binary payloads (e.g. image/audio/crypto buffers). Sky-Rust
+  corrupt non-UTF-8 binary payloads (e.g. image/audio/crypto buffers). Ipê-Rust
   makes `Bytes` a DISTINCT primitive lowering to `Vec<u8>`, providing lossless
   handling of arbitrary binary data. String ↔ Bytes conversions are always
   explicit: `Bytes.fromString` UTF-8-encodes; `Bytes.toString` UTF-8-decodes
-  returning `Maybe String`. This differs from Sky's surface (where `Bytes` is
+  returning `Maybe String`. This differs from Ipê's surface (where `Bytes` is
   `String`, so no conversion is needed), hence `oracle_divergence = true` for all
-  `Sky.Core.Bytes` golden tests. Rationale: Rust type-system correctness — a
+  `Ipe.Bytes` golden tests. Rationale: Rust type-system correctness — a
   lossless byte buffer is strictly more correct than a transparent alias whose
   semantics only hold in Go. Recorded as `divergence: Bytes is Vec<u8> in
-  Sky-Rust; Sky/Go aliases Bytes = String — programs using Sky.Core.Bytes produce
+  Ipê-Rust; Ipê/Go aliases Bytes = String — programs using Ipe.Bytes produce
   different output under the Go oracle`.
 
 - **`Encoding.base64Encode` / `Encoding.hexEncode` over non-ASCII text — Latin-1
-  char-as-byte vs Go's UTF-8 string bytes (M4f).** Sky's `Encoding.*` operate on
+  char-as-byte vs Go's UTF-8 string bytes (M4f).** Ipê's `Encoding.*` operate on
   the `Bytes = String` surface. Go's `string` is an arbitrary UTF-8 byte
   sequence, so Go encodes the UTF-8 bytes of the source text (`hexEncode "café" →
   "636166c3a9"`). Rust's `String` is UTF-8-constrained, so the runtime models the
@@ -128,7 +128,7 @@ match Go exactly (`unicode.IsDigit`/`Nd`, `IsLower`/`Ll`, `IsUpper`/`Lu`,
   attachments with bytes ≥ 0x80, compression, WebSocket frames, the
   `base64(hexDecode(hmac))` JWT-signature path) must round-trip raw bytes
   losslessly through a Rust `String`. Hence `hexEncode "café" → "636166e9"` in
-  Sky-Rust. **ASCII input is byte-identical to Go** (every codepoint < 0x80 maps
+  Ipê-Rust. **ASCII input is byte-identical to Go** (every codepoint < 0x80 maps
   one byte either way); only codepoints ≥ 0x80 diverge. Recorded as `divergence:
   Encoding.base64Encode/hexEncode over non-ASCII text … Latin-1 char-as-byte …`
   (golden `m4f_encoding_nonascii_divergence`). Rationale: Rust String UTF-8
@@ -141,7 +141,7 @@ match Go exactly (`unicode.IsDigit`/`Nd`, `IsLower`/`Ll`, `IsUpper`/`Lu`,
   (Bytes.fromString s)`. Doing so today would corrupt the existing Latin-1 binary
   callers, so it is its own milestone, recorded here rather than left implicit.
 
-- **`Sky.Core.Jwt` API surface — flat kernels vs the Go builder API (M5b
+- **`Ipe.Jwt` API surface — flat kernels vs the Go builder API (M5b
   interim).** The Go backend exposes JWT through a builder API: `Jwt.encode
   (Jwt.hs256 secret) (Jwt.claims |> Jwt.subject … |> Jwt.expiresAt …)` and
   `Jwt.decode (Jwt.hs256 secret) now token`, with `Algorithm` / `Claims` types.
@@ -153,13 +153,13 @@ match Go exactly (`unicode.IsDigit`/`Nd`, `IsLower`/`Ll`, `IsUpper`/`Lu`,
   / `Crypto.rsaSha256Sign` for the signature), so for a fixed key + claims the
   emitted token equals the Go reference token byte-for-byte (proven by the
   captured-Go-token goldens `jwt_hs256_bytes` / `jwt_rs256_bytes` and the
-  byte-equality assertions in `crates/skyc/tests/golden_m5b_uuid_jwt.rs` +
+  byte-equality assertions in `crates/ipe/tests/golden_m5b_uuid_jwt.rs` +
   `runtime/src/sky_runtime/jwt.rs`). Only the CALL SURFACE differs, so a
   Go-targeted program using the builder API does not yet compile on the Rust
   backend, and the flat-kernel goldens cannot run the same `Main.ipe` on the Go
   oracle — hence `oracle_divergence = true` (`divergence:` reason) for every
-  `m5b_jwt_*` golden, with skyc's own output cached. Recorded as `divergence:
-  Sky.Core.Jwt flat encode/decode kernels are the Rust-backend M5b interim
+  `m5b_jwt_*` golden, with ipe's own output cached. Recorded as `divergence:
+  Ipe.Jwt flat encode/decode kernels are the Rust-backend M5b interim
   surface; the Go backend exposes the builder API`. **Tracked follow-up (not
   deferred silently):** add the Go-shaped builder API (`Jwt.encode` / `hs256` /
   `rs256` / `claims` / `decode` + `Algorithm` / `Claims`) on the Rust backend so
@@ -167,10 +167,10 @@ match Go exactly (`unicode.IsDigit`/`Nd`, `IsLower`/`Ll`, `IsUpper`/`Lu`,
   shared-`Main.ipe` Go-parity goldens — the byte layout is already identical, so
   this is a surface/API milestone, not a codec change.
 
-- **`Sky.Core.Uuid` — Rust evaluates the kernels where the Go reference differs
+- **`Ipe.Uuid` — Rust evaluates the kernels where the Go reference differs
   on these shapes (M5b).** Two recorded behavioural divergences, both with
-  Sky-Rust producing the semantically-correct result (`sanctioned:` reason,
-  skyc's output cached): (1) the bare arity-0 kernel value `Uuid.v4` / `Uuid.v7`
+  Ipê-Rust producing the semantically-correct result (`sanctioned:` reason,
+  ipe's output cached): (1) the bare arity-0 kernel value `Uuid.v4` / `Uuid.v7`
   evaluates to a fresh `String` call on the Rust backend (the documented
   bare-reference form), whereas the Go reference leaves the bare reference as a
   kernel function value (CLAUDE.md Limitation #7 — arity-0 kernel codegen), so
@@ -180,13 +180,13 @@ match Go exactly (`unicode.IsDigit`/`Nd`, `IsLower`/`Ll`, `IsUpper`/`Lu`,
   same canonical UUID on this shape (`uuid_parse`). Recorded as `sanctioned:`
   markers in each golden directory.
 
-## Recorded `sanctioned:` entries (Go succeeds, Sky-Rust is more correct)
+## Recorded `sanctioned:` entries (Go succeeds, Ipê-Rust is more correct)
 
-- **`Std.Money.allocate` over a NEGATIVE total — residue distributed vs Go's
+- **`Ipe.Money.allocate` over a NEGATIVE total — residue distributed vs Go's
   residue-dropping bug (M4g).** Go's `Money.allocate` clamps the residue at zero
   (`.max(0)`-equivalent), which silently DROPS the remaining minor units when the
   total is negative — the returned shares then no longer sum back to the input
-  amount. Sky-Rust distributes the residue toward zero by sign (`base - 1` for the
+  amount. Ipê-Rust distributes the residue toward zero by sign (`base - 1` for the
   first |remainder| slots when the residue is negative, `base + 1` when positive),
   so the shares sum to the exact input for negative totals as well as positive
   ones. This is a deliberate correctness improvement (a fair split MUST sum to the
@@ -194,15 +194,15 @@ match Go exactly (`unicode.IsDigit`/`Nd`, `IsLower`/`Ll`, `IsUpper`/`Lu`,
   `test_allocate_negative_total_shares_sum_to_input`). For positive totals the two
   implementations are byte-identical; only negative totals diverge. Recorded as
   `sanctioned: Money.allocate distributes the residue for negative totals; Go drops
-  it (shares no longer sum to the input) — Sky-Rust is deliberately more correct`.
+  it (shares no longer sum to the input) — Ipê-Rust is deliberately more correct`.
   Any future `Money.allocate` golden exercising a negative total carries a
   `sanctioned.divergence` marker with this reason so the golden-diff treats the
-  Sky-Rust output as expected rather than flagging a parity failure.
+  Ipê-Rust output as expected rather than flagging a parity failure.
 
 ## How to add a marker divergence (`divergence:` or `sanctioned:`)
 
-1. Decide the tag. `sanctioned:` — Sky-Rust is genuinely more correct
-   (PRINCIPLES §2). `divergence:` — Sky's current behaviour differs; Sky-Rust
+1. Decide the tag. `sanctioned:` — Ipê-Rust is genuinely more correct
+   (PRINCIPLES §2). `divergence:` — Ipê's current behaviour differs; Ipê-Rust
    follows a different target (e.g. Elm-conformance, fuller Unicode). State
    the difference and the rationale neutrally. If in doubt, fix the parity bug
    instead.
@@ -211,7 +211,7 @@ match Go exactly (`unicode.IsDigit`/`Nd`, `IsLower`/`Ll`, `IsUpper`/`Lu`,
    reason defaults to `sanctioned: `.
 3. Run `refresh-oracle <name>` (the runtime is resolved automatically from the
    in-repo `runtime/src/sky_runtime`; set `IPE_RUNTIME_DIR` to override). It
-   captures Sky-Rust's output as the expected and writes
+   captures Ipê-Rust's output as the expected and writes
    `oracle_divergence = true` + `divergence_reason = <tag> <reason>` — WITHOUT
    requiring Go to fail.
 4. Commit `Main.ipe`, `expected_go.txt`, `oracle.meta`, and

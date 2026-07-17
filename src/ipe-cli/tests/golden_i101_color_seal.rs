@@ -6,7 +6,7 @@
 //! that flows through the INFERRED lowering path to the opaque Ipe.Ui `Color`:
 //!
 //! * (i) a boxed `Fn(Color)` HOF argument emitted `Box<dyn
-//!   Fn(ipe_runtime::ui::element::Color) -> _>` → skyc-0 / cargo-101 (E0433).
+//!   Fn(ipe_runtime::ui::element::Color) -> _>` → ipe-0 / cargo-101 (E0433).
 //! * (ii) a record field literal `{ c = Cyan }` lowered the field via the
 //!   ty-path (→ `UiPlain::Color`) while the annotation lowered it via
 //!   `ir_type_from_canon` (→ `MainColor`) — the two disagreed → IPE-I0001.
@@ -23,7 +23,7 @@
 //! Gated on `IPE_E2E=1`. Run:
 //!
 //! ```text
-//! IPE_E2E=1 cargo test -p skyc --test golden_i101_color_seal
+//! IPE_E2E=1 cargo test -p ipe --test golden_i101_color_seal
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -76,11 +76,11 @@ fn user_color_via_hof_resolves_to_own_enum() {
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    // skyc must succeed (it always did — the hole was cargo-side).
+    // ipe must succeed (it always did — the hole was cargo-side).
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for user_color_hof: {:?}",
+        "ipe build must succeed for user_color_hof: {:?}",
         built.err()
     );
 
@@ -146,7 +146,7 @@ fn user_color_in_record_field_agrees_across_paths() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for user_color_record: {:?}",
+        "ipe build must succeed for user_color_record: {:?}",
         built.err()
     );
 

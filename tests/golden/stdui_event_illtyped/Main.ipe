@@ -6,7 +6,7 @@ import Ipe.Html.Events as Event
 
 -- #107 NEGATIVE sentinel (issue #45): `Ipe.Html.Events.onInput` expects
 -- `(String -> msg) -> Attribute msg`. Passing a `Bool -> msg` closure is a type
--- mismatch that skyc MUST reject with IPE-T0001 — never exit 0 and defer the
+-- mismatch that ipe MUST reject with IPE-T0001 — never exit 0 and defer the
 -- error to cargo.
 --
 -- Hosted on a Ipe.Html element (`Html.input`): post-#107 `Ipe.Html.Events`

@@ -1,7 +1,7 @@
 Status: Accepted
 Date: 2026-07-12
 
-# 0023. Sky.Http.Server.WebSocket is kernel-only with typed opaque handles and bounded fail-fast send
+# 0023. Ipe.Http.Server.WebSocket is kernel-only with typed opaque handles and bounded fail-fast send
 
 ## Context
 
@@ -9,8 +9,8 @@ The runtime WebSocket-server section shipped from upstream's runtime-rust with
 local hardening (origin glob gating, canonical headers, task-local upgrade
 smuggling). What was missing was the compiler wiring (canon → kernels →
 constrain → lower → emit). The original plan assumed builders like
-`defaultCfg`/`with*` would be compiled Sky stdlib source, but `skyc` embeds no
-`Sky.Http.*` stdlib modules, so every piece must be a kernel.
+`defaultCfg`/`with*` would be compiled Ipê stdlib source, but `ipe` embeds no
+`Ipe.Http.*` stdlib modules, so every piece must be a kernel.
 
 ## Decision
 
@@ -26,8 +26,8 @@ matching the HTTP response-writing family.
 
 Rejected alternatives:
 
-- **Pure-Sky routing** — would require embedded `Sky/Http/Server/WebSocket.ipe`,
-  `Ffi.kernel` resolution, and the `runtimeOpaqueTypes` machinery `skyc` replaced
+- **Pure-Ipê routing** — would require embedded `Ipê/Http/Server/WebSocket.ipe`,
+  `Ffi.kernel` resolution, and the `runtimeOpaqueTypes` machinery `ipe` replaced
   with dedicated `IrType` variants.
 - **Untyped `Int` handles** — typed handles leverage the compiler's
   exhaustiveness checks and prevent handle/integer confusion.

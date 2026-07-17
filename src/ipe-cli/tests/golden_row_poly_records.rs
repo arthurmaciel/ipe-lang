@@ -13,7 +13,7 @@
 //!
 //! No compiler code change accompanies this file: it is verification +
 //! hardening, matching the spec's proof-matrix rows P1 through P7 by direct
-//! `skyc build` / `cargo build` observation, not by assumption.
+//! `ipe build` / `cargo build` observation, not by assumption.
 //!
 //! | Fixture | Proof-matrix row(s) | Gate | Asserts |
 //! |---|---|---|---|
@@ -25,7 +25,7 @@
 //!
 //! Run the E2E accept-path bodies (real `cargo build` + run) with:
 //! ```text
-//! IPE_E2E=1 cargo test -p skyc --test golden_row_poly_records
+//! IPE_E2E=1 cargo test -p ipe --test golden_row_poly_records
 //! ```
 //! The three reject fixtures run unconditionally (compile-time only, no
 //! `cargo`, so no gate needed).
@@ -55,7 +55,7 @@ fn diag_code(err: &ipe::CliError) -> Option<ipe_diagnostics::Code> {
 // superset argument. Accept end-to-end.
 // ---------------------------------------------------------------------------
 
-/// skyc-0: the compiler must accept the unannotated `getName rec = rec.name`
+/// ipe-0: the compiler must accept the unannotated `getName rec = rec.name`
 /// called with a `{ name, age }` record and emit a CONCRETE getter whose
 /// parameter is the resolved superset struct (`RecAgeName`) — proving the
 /// A7 exact-sorted-field-set lookup resolves this subset-access shape
@@ -74,7 +74,7 @@ fn subset_access_skyc_accepts_and_resolves_superset_struct() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must accept row_poly_subset_access (P2, subset field \
+        "ipe build must accept row_poly_subset_access (P2, subset field \
          access over a superset record): {:?}",
         built.err()
     );
@@ -114,7 +114,7 @@ fn subset_access_cargo_builds_and_prints_ada() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for row_poly_subset_access: {:?}",
+        "ipe build must succeed for row_poly_subset_access: {:?}",
         built.err()
     );
 
@@ -137,7 +137,7 @@ fn subset_access_cargo_builds_and_prints_ada() {
 // over a superset scrutinee. Accept end-to-end.
 // ---------------------------------------------------------------------------
 
-/// skyc-0: the compiler must accept both a subset `case` pattern (P5) and a
+/// ipe-0: the compiler must accept both a subset `case` pattern (P5) and a
 /// subset lambda pattern through a HOF (P7) over a `{ name, age }`
 /// scrutinee, and the lowerer must complete each pattern to the superset
 /// struct with a `..` rest before the emitter resolves it — the exact
@@ -157,7 +157,7 @@ fn subset_pattern_skyc_accepts_and_completes_superset_pattern() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must accept row_poly_subset_pattern (P5 case pattern + \
+        "ipe build must accept row_poly_subset_pattern (P5 case pattern + \
          P7 lambda-through-HOF pattern, both subset over a superset \
          scrutinee): {:?}",
         built.err()
@@ -198,7 +198,7 @@ fn subset_pattern_cargo_builds_and_prints_iri_ada_bo() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for row_poly_subset_pattern: {:?}",
+        "ipe build must succeed for row_poly_subset_pattern: {:?}",
         built.err()
     );
 

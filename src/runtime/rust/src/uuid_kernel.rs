@@ -1,4 +1,4 @@
-//! Sky.Core.Uuid kernels — v4 / v7 / parse via the `uuid` crate.
+//! Ipe.Uuid kernels — v4 / v7 / parse via the `uuid` crate.
 //!
 //! Module is `uuid_kernel` (not `uuid`) to avoid clashing with the `uuid`
 //! crate; functions use the `::uuid::` extern path.
@@ -6,7 +6,7 @@
 //! # Entropy is an EFFECT, not a pure value
 //!
 //! `v4` / `v7` draw fresh entropy on every call, so they are typed on the
-//! effect tier — `Sky.Core.Uuid.{v4,v7} : () -> Task Error String`, called
+//! effect tier — `Ipe.Uuid.{v4,v7} : () -> Task Error String`, called
 //! `Uuid.v4 ()` exactly like `Time.now ()` / `Crypto.randomToken n`. This makes
 //! "entropy typed as a memoizable pure `String`" UNREPRESENTABLE: a pure
 //! `String` is eligible for CSE / memoization / reordering, so two `Uuid.v4`
@@ -22,7 +22,7 @@
 
 use super::*;
 
-/// Sky.Core.Uuid.v4 : () -> Task Error String
+/// Ipe.Uuid.v4 : () -> Task Error String
 ///
 /// The random draw happens inside the future body so every `.run()` yields a
 /// FRESH id — entropy is not memoizable. Bound is `E: From<String>` to match
@@ -32,7 +32,7 @@ pub fn uuid_v4<E: From<String> + Send + 'static>(_: ()) -> IpeTask<E, String> {
     Box::pin(async move { ok_res(::uuid::Uuid::new_v4().to_string()) })
 }
 
-/// Sky.Core.Uuid.v7 : () -> Task Error String  (time-ordered)
+/// Ipe.Uuid.v7 : () -> Task Error String  (time-ordered)
 ///
 /// SECURITY: a v7 UUID embeds a millisecond timestamp and is SORTABLE/guessable
 /// by design — it is NOT a secret. Use it for ordered ids, never as a bearer
@@ -44,7 +44,7 @@ pub fn uuid_v7<E: From<String> + Send + 'static>(_: ()) -> IpeTask<E, String> {
     Box::pin(async move { ok_res(::uuid::Uuid::now_v7().to_string()) })
 }
 
-/// Sky.Core.Uuid.parse : String -> Maybe String  (canonicalise or Nothing)
+/// Ipe.Uuid.parse : String -> Maybe String  (canonicalise or Nothing)
 ///
 /// PURE: no entropy, no effect — a real parser over an existing string. Kept off
 /// the Task tier deliberately (it is not the arity-0 entropy artifact).

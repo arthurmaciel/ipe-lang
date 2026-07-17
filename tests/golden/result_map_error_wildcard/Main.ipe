@@ -5,7 +5,7 @@ import Ipe.Prelude exposing (..)
 
 -- #183 SEAL positive: `Result.mapError`'s handler is a wildcard lambda
 -- `\_ -> …` over a genuinely-free error var `e`, and the call is UNPINNED (no
--- result-type annotation forces `e`). skyc must default the handler parameter
+-- result-type annotation forces `e`). ipe must default the handler parameter
 -- to the SAME concrete error type (`SkyError`) that the `Ok "concrete"` value
 -- side defaults `e` to — otherwise the emitted closure is `FnOnce(JsonVal)`
 -- against a `SkyResult<SkyError, _>` value and cargo fails E0277 (an exit-0-

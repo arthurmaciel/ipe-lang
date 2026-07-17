@@ -174,7 +174,7 @@ impl Interner {
 //
 // A [`Symbol`] is a raw `u32` index into ONE process's [`Interner`] — its
 // numeric value is meaningless (not merely "differently numbered") against
-// any other interner, including a fresh one in a later `skyc` invocation.
+// any other interner, including a fresh one in a later `ipe` invocation.
 // Persisting a `Symbol` to disk therefore requires a RELOCATION pass: write
 // its resolved STRING, and on load, re-intern that string into the
 // CURRENT process's interner (a fresh append) and use whatever numeric id

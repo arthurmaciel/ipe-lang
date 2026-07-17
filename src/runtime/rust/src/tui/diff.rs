@@ -1,4 +1,4 @@
-//! Sky.Tui — minimal grid diff.
+//! Ipe.Tui — minimal grid diff.
 //!
 //! Pure: compares the previously-flushed grid against the freshly-rendered one
 //! and returns only the cells that changed, as `(col, row, Cell)`. The TEA loop

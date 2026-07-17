@@ -59,7 +59,7 @@ fn ctor_task_arity_three_is_sky_t0016_not_ice() {
 }
 
 /// E3: a well-formed `Task Error Int` in a constructor payload is ACCEPTED —
-/// the front-end (skyc lowering + emitted-Rust `cargo build`) succeeds. Pins the
+/// the front-end (ipe lowering + emitted-Rust `cargo build`) succeeds. Pins the
 /// spec's decision to NOT add a new rejection here (symmetric with Item B).
 #[test]
 fn ctor_task_well_formed_builds() {

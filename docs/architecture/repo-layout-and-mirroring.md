@@ -36,10 +36,10 @@ Why this is correct, not a compromise:
      Enforced **end-to-end**: the program must compile + run the same, and reject
      the same ill-formed inputs (a should-reject corpus + the error-code system).
   2. **Go runtime/backend → Rust runtime/backend** (kernel + emission *behaviour*).
-     Enforced by **behavioural parity**: same Sky program, `sky`(Go) output vs
-     `skyc`(Rust) output (stdout/exit/HTTP), the example sweep, ported Sky.Test.
+     Enforced by **behavioural parity**: same Ipê program, `sky`(Go) output vs
+     `ipe`(Rust) output (stdout/exit/HTTP), the example sweep, ported Ipe.Test.
 - **Emission is snapshot-tested, not byte-diffed against Haskell.** A self-owned
-  insta-style snapshot of `skyc`'s output is a *regression guard* ("did my codegen
+  insta-style snapshot of `ipe`'s output is a *regression guard* ("did my codegen
   change, and did I mean to?"), not a correctness oracle. Codegen *quality* (worse
   Rust, same behaviour) is covered by perf-sweep + clippy/Miri on emitted code.
 - **v0.17 "fully-typed codegen" is landing soon** (upstream
@@ -84,7 +84,7 @@ sky-rust/                          # the monorepo
     sky_ir/                        # the single backend boundary
     sky_lower/
     sky_backend/                   # the Backend trait
-    skyc/                          # driver
+    ipe/                          # driver
   backends/
     rust/
       sky_backend_rust/            # the Rust emitter
@@ -97,7 +97,7 @@ sky-rust/                          # the monorepo
                                    #   -> runtime-go/        = runtime mirror reference
                                    #   (the fork's Haskell Rust backend is NOT here)
   tests/
-    snapshots/                     # self-owned insta snapshots of skyc's emission (regression guard)
+    snapshots/                     # self-owned insta snapshots of ipe's emission (regression guard)
     parity/                        # behavioural diffs: sky(Go) output vs skyc(Rust) over upstream examples
   docs/
     parity/
@@ -109,7 +109,7 @@ sky-rust/                          # the monorepo
 Notes:
 - `vendor/upstream-sky` is **read-only** to us; we never patch it, we bump its pin.
 - The runtime is at `runtime/` in-repo (§5 step 3 is done). The long-term plan
-  moves it into `backends/rust/runtime/` and **embeds** it into `skyc` (via
+  moves it into `backends/rust/runtime/` and **embeds** it into `ipe` (via
   `include_dir!`/`build.rs`). The sibling-path fallback in `resolve_runtime` is
   now a legacy override; the in-repo path is the default.
 - During the port, the pinned upstream's `sky` (Haskell+**Go**) is built/used in CI
@@ -127,7 +127,7 @@ snapshot-guarded for regressions, not pinned to any external bytes.
 Per upstream release:
 1. Bump `vendor/upstream-sky` pin to the new tag.
 2. Run the **behavioural diff**: compile + run each example with the pinned
-   `sky`(Go) AND `skyc`(Rust); compare stdout / exit / HTTP. Run the should-reject
+   `sky`(Go) AND `ipe`(Rust); compare stdout / exit / HTTP. Run the should-reject
    corpus: both must reject the same ill-formed inputs (our error-code message is
    ours; the *accept/reject decision* must match).
 3. Refresh `tests/snapshots/` only when WE intentionally change emission (insta
@@ -211,12 +211,12 @@ current error-code phases land.
 ## Parity-oracle caveat — the Go reference may differ from the target
 
 Behavioural parity vs the Go backend is the correctness oracle, but the oracle
-records Sky's *current* behaviour, which may differ from Sky-Rust's target on
+records Ipê's *current* behaviour, which may differ from Ipê-Rust's target on
 some shapes. When a parity mismatch occurs, triage it first: determine which
 side is correct, record the difference as a documented divergence
 (`divergence-policy.md`), and never silently accept a mismatch as a regression.
 
 Known instance: deeply nested constructor patterns (≥3 deep, e.g.
 `Som (Som (Som x))` discrimination) — the Go oracle exits non-zero on this
-shape; Sky-Rust compiles + runs correctly. This routes to the auto Go-failure
-divergence branch: skyc's output is recorded as the expected value.
+shape; Ipê-Rust compiles + runs correctly. This routes to the auto Go-failure
+divergence branch: ipe's output is recorded as the expected value.

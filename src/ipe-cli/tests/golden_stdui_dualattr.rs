@@ -3,7 +3,7 @@
 //! `Ipe.Html` node (`Html.div` / `Html.text`) embedded via `Ui.html`.
 //!
 //! The golden compiles `tests/golden/stdui_dualattr/Main.ipe` through
-//! `skyc`, builds the emitted Rust project with the shared cargo target, runs
+//! `ipe`, builds the emitted Rust project with the shared cargo target, runs
 //! the binary, and checks its stdout against the cached oracle
 //! (`tests/golden/stdui_dualattr/oracle.meta` + `expected_go.txt`).
 //! The test is gated on `IPE_E2E=1`; without it it returns early.
@@ -12,7 +12,7 @@
 //!
 //! This is a DIVERGENCE golden (`oracle_divergence = true`).  The Go reference
 //! compiler emits a different HTML skeleton.  `expected_go.txt` therefore holds
-//! skyc's OWN output — the Rust-backend correct rendering — rather than the Go
+//! ipe's OWN output — the Rust-backend correct rendering — rather than the Go
 //! oracle.  The divergence is documented in
 //! `tests/golden/stdui_dualattr/sanctioned.divergence`.
 //!
@@ -71,7 +71,7 @@ fn build_run_dualattr() -> (PathBuf, support::RunOutcome) {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for stdui_dualattr: {:?}",
+        "ipe build must succeed for stdui_dualattr: {:?}",
         built.err()
     );
 
@@ -81,7 +81,7 @@ fn build_run_dualattr() -> (PathBuf, support::RunOutcome) {
 
 /// Full E2E smoke test: dual-attribute Ipe.Ui + Ipe.Html bridge must compile,
 /// build, run, and produce the cached expected HTML.
-/// Divergence golden — the expected value is skyc's own correct output.
+/// Divergence golden — the expected value is ipe's own correct output.
 #[test]
 fn dualattr_stdui_attributes_and_html_node_bridge_render_correctly() {
     if std::env::var("IPE_E2E").is_err() {

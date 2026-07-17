@@ -2,7 +2,7 @@
   DRAFT — pre-1.0 groundwork. NOT the real README.
 
   This is a staging draft of the README section "How ipê relates to Elm and
-  Sky", assembled from the committed divergence ledgers
+  Ipê", assembled from the committed divergence ledgers
   (docs/divergences-from-elm.md, docs/divergences-from-sky.md) and their
   guardian synthesis (docs/divergences-review.md). It is intended to be lifted
   into the real README ONCE the compiler port is complete and the tracked
@@ -11,11 +11,11 @@
   in-progress item is stated as a shipped strength.
 
   Public-artifact voice rule (enforced throughout): state what differs and the
-  technical rationale. Never characterize Elm or Sky as buggy, wrong, outdated,
+  technical rationale. Never characterize Elm or Ipê as buggy, wrong, outdated,
   or limited. No "contribute upstream" notes.
 -->
 
-# How ipê relates to Elm and Sky
+# How ipê relates to Elm and Ipê
 
 > **Status: pre-1.0 draft.** This section is groundwork written while the
 > compiler is still being brought to full parity. Claims below are drawn from
@@ -29,7 +29,7 @@ ipê is an **Elm-family** functional language: it shares Elm's core syntax
 `{ r | f = v }` record update, `type` / `type alias`, `module … exposing (…)`),
 Elm's Hindley–Milner type discipline, and The Elm Architecture — `init` /
 `update` / `view` / `subscriptions` over `Model` / `Msg` / `Cmd` / `Sub`. It was
-ported from **Sky**, a compiler in the same family, and it keeps Go / behavioral
+ported from **Ipê**, a compiler in the same family, and it keeps Go / behavioral
 parity with that reference as its **default contract** — ideally byte-for-byte
 for the same well-typed program and input. What sets ipê apart from both is its
 target: instead of compiling to JavaScript for a browser sandbox, ipê compiles
@@ -88,18 +88,18 @@ internal detail out of user-facing errors.
 ### A server/native/desktop stdlib with no Elm-core counterpart
 
 Because the target is a real process, ipê ships a large native standard library
-that Elm's browser-sandbox core does not include — persistence (`Std.Db`,
-`Std.Csv`, `Std.Config`, `Std.Compression`), security (`Std.Auth`,
-`Sky.Core.Crypto`, `Sky.Core.Jwt`, `Sky.Core.Encoding`, `Sky.Core.Bytes`),
-money/precision (`Std.Decimal`, `Std.Money`), servers and sockets
-(`Sky.Http.Server`, WebSocket, SSE streaming), observability (`Std.Log`,
-`Std.Trace`, metrics, OTLP export), and runtime services (`Std.Cache`,
-`Std.Email`, `Std.Time`, `Sky.Core.File`/`Io`/`System`/`Process`). These are
+that Elm's browser-sandbox core does not include — persistence (`Ipe.Db`,
+`Ipe.Csv`, `Ipe.Config`, `Ipe.Compression`), security (`Ipe.Auth`,
+`Ipe.Crypto`, `Ipe.Jwt`, `Ipe.Encoding`, `Ipe.Bytes`),
+money/precision (`Ipe.Decimal`, `Ipe.Money`), servers and sockets
+(`Ipe.Http.Server`, WebSocket, SSE streaming), observability (`Ipe.Log`,
+`Ipe.Trace`, metrics, OTLP export), and runtime services (`Ipe.Cache`,
+`Ipe.Email`, `Ipe.Time`, `Ipe.File`/`Io`/`System`/`Process`). These are
 additions in surface area, each justified by the server/native target.
 
-**One pure `view`, three backends.** The same `Std.Ui` `view` renders to
-server-driven HTML with SSE patches (`Sky.Live`), ANSI terminal cells
-(`Sky.Tui`), and a native desktop window (`Sky.Webview`). `Std.Ui` is
+**One pure `view`, three backends.** The same `Ipe.Ui` `view` renders to
+server-driven HTML with SSE patches (`Ipe.Live`), ANSI terminal cells
+(`Ipe.Tui`), and a native desktop window (`Ipe.Webview`). `Ipe.Ui` is
 elm-ui-derived but renders inline-styled HTML on the server, and it adds a typed
 surface elm-ui does not cover — pseudo-classes, media queries with a typed
 `Breakpoint` ADT, CSS transitions and keyframe animations, and a CSS-grid track
@@ -142,7 +142,7 @@ not-yet-ported so the copy neither overclaims coverage nor characterizes Elm.]
 
 ---
 
-## Relationship to Sky
+## Relationship to Ipê
 
 ipê is a Rust port of Sky. Sky — the Haskell compiler and its Go and Rust
 backends — is the parity and capability reference ipê was ported from, and
@@ -229,7 +229,7 @@ emitting server HTML, which Elm's client model does not face.
 ### Substrate differences (stated neutrally, no claim)
 
 Some differences are simply consequences of emitting Rust rather than Go:
-`Std.Db` runs on `sqlx` rather than cgo/SQLite, and `Std.Ui` currently emits a
+`Ipe.Db` runs on `sqlx` rather than cgo/SQLite, and `Ipe.Ui` currently emits a
 compact inline-CSS HTML skeleton that differs byte-wise from the Go renderer
 while producing semantically-equivalent layouts. Byte-parity for HTML is a later
 goal. These are recorded as differences, not strengths.
@@ -247,10 +247,10 @@ will be resolved before or shortly after the port is declared complete:
   the bare `.field` accessor-as-function, and continuation-inside-a-type-body —
   currently handled fail-closed (no panic from well-typed code), converging via a
   shared desugar.
-- The **`Sky.Core.Jwt` builder API** — the codec emits token bytes identical to
+- The **`Ipe.Jwt` builder API** — the codec emits token bytes identical to
   Go today; the builder-style call surface (`Algorithm`/`Claims`) is the tracked
   follow-up.
-- **`Std.Ui` HTML byte-parity** — semantically correct now, byte-identical
+- **`Ipe.Ui` HTML byte-parity** — semantically correct now, byte-identical
   later.
 - A small number of **stdlib text-path and codegen items** are in progress and
   deliberately not described here; they are being fixed, not shipped. [DRAFT —

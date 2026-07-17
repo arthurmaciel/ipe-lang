@@ -1,5 +1,5 @@
 /*
- * Sky.Webview spike — Three.js animated scene
+ * Ipe.Webview spike — Three.js animated scene
  *
  * Renders a rotating torus knot + a small flock of orbiting cubes
  * against a starfield, with color cycling on the lighting. Updates
@@ -8,7 +8,7 @@
  *
  * This file is intentionally vanilla JS (no modules, no build step)
  * so vendored Three.js 0.158 (last UMD build) loads it directly.
- * When Sky.Webview ships, the same file works unchanged inside the
+ * When Ipe.Webview ships, the same file works unchanged inside the
  * native webview.
  */
 

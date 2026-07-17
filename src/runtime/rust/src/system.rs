@@ -5,13 +5,13 @@ use super::*;
 // can reallocate the C `environ` block while another thread READS it
 // (`std::env::var` walks `environ`), which is a data race / use-after-free by the
 // std + POSIX contract — not just a mutator↔mutator hazard. Both are reachable
-// from Sky purely through env-Task composition under `Task.parallel`
+// from Ipê purely through env-Task composition under `Task.parallel`
 // (`System.setenv`/`unsetenv`/`loadEnv` are mutators; `System.getenv*` are
 // readers). Serialise BOTH sides behind one process-global RwLock: mutators take
 // the write lock (exclusive), readers take the read lock (shared with each other,
 // excluded against any mutator). This closes the reader↔mutator race for every
-// Sky-originated access. (A non-Sky dependency reading `environ` without this lock
-// is outside our reach — but every Sky path is now serialised.)
+// Ipê-originated access. (A non-Ipê dependency reading `environ` without this lock
+// is outside our reach — but every Ipê path is now serialised.)
 static ENV_LOCK: std::sync::RwLock<()> = std::sync::RwLock::new(());
 
 /// Read an environment variable under the shared env read lock (excluded against
@@ -45,7 +45,7 @@ pub(crate) fn locked_set_var(key: &str, val: &str) {
     let _guard = ENV_LOCK.write().unwrap_or_else(|p| p.into_inner());
     // SAFETY: `set_var` is `unsafe` in Rust 2024 because a concurrent reader
     // walking `environ` can race the mutation. The exclusive `ENV_LOCK` write
-    // guard held here excludes every Sky-originated reader (all route through
+    // guard held here excludes every Ipê-originated reader (all route through
     // `read_env_var`/`read_env_var_os`, which take the shared read lock), so no
     // such reader can run during this write.
     unsafe { std::env::set_var(key, val) };
@@ -63,7 +63,7 @@ pub(crate) fn locked_set_var_if_absent(key: &str, val: &str) {
     let _guard = ENV_LOCK.write().unwrap_or_else(|p| p.into_inner());
     if std::env::var_os(key).is_none() {
         // SAFETY: held under the exclusive `ENV_LOCK` write guard, which excludes
-        // every Sky-originated reader (all take the shared read lock) — see
+        // every Ipê-originated reader (all take the shared read lock) — see
         // `locked_set_var`. The presence check and set share this one acquisition.
         unsafe { std::env::set_var(key, val) };
     }
@@ -77,7 +77,7 @@ pub(crate) fn locked_remove_var(key: &str) {
     }
     let _guard = ENV_LOCK.write().unwrap_or_else(|p| p.into_inner());
     // SAFETY: held under the exclusive `ENV_LOCK` write guard, which excludes
-    // every Sky-originated reader (all take the shared read lock) — see
+    // every Ipê-originated reader (all take the shared read lock) — see
     // `locked_set_var`.
     unsafe { std::env::remove_var(key) };
 }
@@ -98,7 +98,7 @@ pub fn system_args<E: Send + 'static>(_: ()) -> IpeTask<E, Vec<String>> {
 // above `pub mod system;` in `mod.rs`), while `tokio` is an `optional = true`
 // dependency, so `tokio` is not guaranteed present here. Same
 // `#[cfg(feature = "tokio")]` / fallback split `file.rs` uses for its own
-// `run_blocking` helper (real generated Sky projects always have `tokio` —
+// `run_blocking` helper (real generated Ipê projects always have `tokio` —
 // see `docs/adr/0014-kernel-robustness-blocking-offload-and-toctou.md`
 // §2.2 — so the fallback only matters for this crate's own narrow-feature
 // standalone builds).
@@ -130,15 +130,15 @@ fn process_run_sync(cmd: &str, args: &[String]) -> Result<std::process::Output, 
         .map_err(|e| format!("{}: {}", cmd, e))
 }
 
-/// `Sky.Core.Process.run : String -> List String -> Task Error String` — run a
+/// `Ipe.Process.run : String -> List String -> Task Error String` — run a
 /// subprocess, returning its combined stdout+stderr. Mirrors Go's `Process_run`
 /// (`exec.Command` + `CombinedOutput`): a non-zero exit or a spawn failure is
 /// `Err` carrying the captured output + the error; a clean exit is `Ok(output)`.
 /// Total — every failure maps to `Err`, never a panic.
 ///
-/// SECURITY: `Process.run` is an intentional Sky stdlib effect (Task-tier,
+/// SECURITY: `Process.run` is an intentional Ipê stdlib effect (Task-tier,
 /// parity with the Go backend) — no more permissive than Go's. Sandboxing
-/// untrusted Sky source (e.g. blocking the `Process.` module) is the calling
+/// untrusted Ipê source (e.g. blocking the `Process.` module) is the calling
 /// application's responsibility, exactly as on Go.
 ///
 /// The actual `Command::output()` wait is offloaded via `run_blocking`
@@ -189,7 +189,7 @@ pub fn process_run<E: Send + From<String> + 'static>(
 /// Process-exit cleanup hook. `std::process::exit` (what `System.exit` lowers to)
 /// bypasses Drop, so an RAII guard's destructor never runs on that path. A backend
 /// driver that puts the terminal/process into a state needing restoration (the
-/// Sky.Tui driver: raw mode + alternate screen + hidden cursor + mouse reporting)
+/// Ipe.Tui driver: raw mode + alternate screen + hidden cursor + mouse reporting)
 /// registers its idempotent teardown here; `system_exit` runs it BEFORE
 /// `process::exit`. Mirrors Go's `System_exit` → `tuiTeardown()` → `os.Exit`.
 /// A plain `fn()` keeps the boundary clean — `system` (always compiled) never
@@ -212,13 +212,13 @@ pub fn run_exit_hook() {
 
 pub fn system_exit(code: i64) -> ! {
     // Restore any driver-owned terminal/process state BEFORE exiting — Drop does
-    // NOT run on std::process::exit, so without this a Sky.Tui `System.exit` quit
+    // NOT run on std::process::exit, so without this a Ipe.Tui `System.exit` quit
     // would leave the TTY in raw mode + the alternate screen (needing `reset`).
     run_exit_hook();
     std::process::exit(code as i32)
 }
 
-/// `Sky.Core.System.getenv key : String -> Task Error String` — the env var as a
+/// `Ipe.System.getenv key : String -> Task Error String` — the env var as a
 /// Task, or `Err` when unset. Returning a `IpeTask` (not a bare `String`) is
 /// required for parity: `getenv` is Task-typed in the stdlib, so a bare `String`
 /// fails to type-check in any `Task.andThen`/`Task.run` position. Returning `Err`
@@ -239,7 +239,7 @@ pub fn system_getenv<E: Send + From<String> + 'static>(key: String) -> IpeTask<E
         }
     })
 }
-/// `Sky.Core.System.getenvOr key default` — the env var, or `default` when unset.
+/// `Ipe.System.getenvOr key default` — the env var, or `default` when unset.
 pub fn system_getenv_or(key: String, default: String) -> String {
     read_env_var(&key).unwrap_or(default)
 }
@@ -255,7 +255,7 @@ pub fn system_getenv_int<E: Send + From<String> + 'static>(key: String) -> IpeTa
             Ok(v) => v
                 .trim()
                 .parse::<i64>()
-                // Do NOT echo the env var VALUE into the Sky-propagated error
+                // Do NOT echo the env var VALUE into the Ipê-propagated error
                 // string: env vars are a primary secret store and this message
                 // flows out via Task Error → Error.toString → operator logs /
                 // user surface. Mirror system_getenv (key only).
@@ -339,7 +339,7 @@ pub fn system_getcwd<E: Send + From<String> + 'static>(unit: ()) -> IpeTask<E, S
 
 /// Blocking half of `system_load_env`: read + parse `.env` in the CWD and set
 /// each var. Never fails — a missing/unreadable `.env` is silently a no-op,
-/// matching the Sky-facing contract (`loadEnv` never returns `Err`).
+/// matching the Ipê-facing contract (`loadEnv` never returns `Err`).
 fn system_load_env_sync() {
     if let Ok(contents) = std::fs::read_to_string(".env") {
         for line in contents.lines() {
@@ -362,7 +362,7 @@ fn system_load_env_sync() {
 /// `System.loadEnv : () -> Task Error ()`. Parses a `.env` file in the CWD
 /// (KEY=VALUE per line, `#` comments, optional surrounding quotes) and sets
 /// each var WITHOUT overriding one already present in the process environment
-/// (process env wins, matching Sky's precedence). A missing `.env` is a no-op
+/// (process env wins, matching Ipê's precedence). A missing `.env` is a no-op
 /// success.
 ///
 /// `std::fs::read_to_string(".env")` is a blocking syscall, so it routes
@@ -402,7 +402,7 @@ mod exit_hook_tests {
         // No hook registered yet → run_exit_hook must be a safe no-op (the common
         // CLI / server / non-TUI case — System.exit must not require a hook).
         run_exit_hook();
-        // Register one and confirm it runs (the Sky.Tui driver registers its
+        // Register one and confirm it runs (the Ipe.Tui driver registers its
         // terminal-restore here so a System.exit quit doesn't bypass cleanup).
         register_exit_hook(bump);
         run_exit_hook();

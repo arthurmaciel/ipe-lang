@@ -1,14 +1,14 @@
 //! `Ipe.Dict` / `Ipe.Set` comparable-key gate.
 //!
-//! A `Set` element and a `Dict` key carry the Sky `comparable`-key obligation
+//! A `Set` element and a `Dict` key carry the Ipê `comparable`-key obligation
 //! (the kernel's element / key variable is minted as a super-typed variable, the
 //! same path `Math.min` / `Math.max` take for ordering). Three failure classes
-//! must be caught at `skyc` — never left to emit Rust `cargo` rejects:
+//! must be caught at `ipe` — never left to emit Rust `cargo` rejects:
 //!
 //! * **Non-comparable element / key, direct call** (a record, a user ADT): fails
 //!   closed at type-check as `IPE-T0001` (the eager-pin mismatch — the
 //!   super-typed element variable meets a structure that does not support
-//!   ordering). This is also stricter than Sky's runtime, which keys a Set /
+//!   ordering). This is also stricter than Ipê's runtime, which keys a Set /
 //!   Dict on a stringified value.
 //! * **Non-comparable element / key, via a generic function** (a record or ADT
 //!   passed to `singletonSet : a -> Set a` / `singletonDict : a -> v -> Dict a v`):
@@ -16,11 +16,11 @@
 //!   generic's binding-bound variable is instantiated at a non-comparable type,
 //!   the same path `Math.min` / `maxOf` take for ordering). Analogous to the
 //!   `math_min_rec_gate` / `math_min_fn_gate` pair.
-//! * **`Float` element / key** (`Set Float` / `Dict Float v`): `Float` IS Sky
+//! * **`Float` element / key** (`Set Float` / `Dict Float v`): `Float` IS Ipê
 //!   `comparable`, so the type checker accepts it; but Rust's `f64` is neither
 //!   `Ord` nor `Hash` / `Eq`, so `BTreeSet<f64>` / `HashMap<f64, _>` cannot
 //!   exist. Fails closed at lowering as `IPE-L0117` (a dedicated diagnostic).
-//!   Divergence from Sky, rationale: Rust backend capability.
+//!   Divergence from Ipê, rationale: Rust backend capability.
 //!
 //! Every fixture must stop the pipeline before codegen — no emitted crate.
 
@@ -93,7 +93,7 @@ fn dict_adt_key_is_sky_t0001() {
 
 // ── Float element / key → IPE-L0117 (Rust backend capability) ─────────────────
 
-/// `Set Float` type-checks (Sky `Float` is `comparable`) but has no sound Rust
+/// `Set Float` type-checks (Ipê `Float` is `comparable`) but has no sound Rust
 /// backing (`f64` is not `Ord`), so lowering rejects it.
 #[test]
 fn set_float_element_is_sky_l0117() {

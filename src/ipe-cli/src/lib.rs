@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! `skyc` — the command-line driver.
+//! `ipe` — the command-line driver.
 //!
 //! Wires the pipeline end to end: read a `.ipe` entry file, run it through
 //! [`ipe_parse`] → [`ipe_canon`] → [`ipe_types`] → [`ipe_lower`] → the
@@ -33,7 +33,7 @@ use ipe_intern::Interner;
 
 /// A driver-level error. Distinct from a compiler [`Diagnostic`]: it also covers
 /// filesystem failures and command-line misuse, neither of which is a property
-/// of the Sky program being compiled.
+/// of the Ipê program being compiled.
 #[derive(Debug)]
 pub enum CliError {
     /// Command-line misuse; carries a fixed usage hint.
@@ -57,7 +57,7 @@ pub enum CliError {
         src: String,
         diag: Diagnostic,
     },
-    /// The Sky runtime module tree could not be located.
+    /// The Ipê runtime module tree could not be located.
     RuntimeNotFound,
     /// `ipe explain <CODE>` was given a string that is not a taxonomy code.
     /// Carries the (trimmed) input and a deterministic did-you-mean list over
@@ -357,7 +357,7 @@ fn compile_modules_observed(
     let injected = project::inject_compiled_std_closure(&mut sources, &mut discovered);
 
     // The on-disk build cache. `epoch` folds in BOTH the running
-    // `skyc` binary's own content hash and the active `rustc`'s fingerprint
+    // `ipe` binary's own content hash and the active `rustc`'s fingerprint
     // (see `cache::derive_epoch`'s doc for why this makes
     // "refuse, don't guess" structural rather than a runtime check).
     let cache_key = cache::compute_project_key(&sources, &injected, entry_path, db_driver);
@@ -1037,7 +1037,7 @@ pub fn build_project(
     )
 }
 
-/// Locate the Sky runtime module tree (`src/runtime/rust/src/`).
+/// Locate the Ipê runtime module tree (`src/runtime/rust/src/`).
 ///
 /// Resolution order:
 /// 1. `$IPE_RUNTIME_DIR` — explicit override, allows pointing at any tree.
@@ -1229,7 +1229,7 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     // Split on "--": everything before is ipe flags; everything after is
     // forwarded to the emitted binary.
     let dash_dash = rest.iter().position(|a| a == "--");
-    let (skyc_args, bin_args) = dash_dash.map_or((rest, [].as_slice()), |pos| {
+    let (ipe_args, bin_args) = dash_dash.map_or((rest, [].as_slice()), |pos| {
         // `pos` is a valid index returned by `position`, and `pos + 1 <=
         // rest.len()` (a trailing `--` yields an empty tail), so both splits are
         // in-bounds — `split_at` proves it without an indexing panic path.
@@ -1237,7 +1237,7 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
         (before, after_incl.get(1..).unwrap_or(&[]))
     });
 
-    let mut it = skyc_args.iter();
+    let mut it = ipe_args.iter();
     let entry = it.next().ok_or(CliError::Usage(USAGE))?.clone();
     let mut out: Option<String> = None;
     let mut runtime: Option<String> = None;
@@ -1719,7 +1719,7 @@ fn read_yes_no() -> bool {
 /// Retries ONCE, recreating `target`'s parent directory, when the write or
 /// rename fails with `NotFound`. This closes a real race surfaced by the
 /// emit→cargo bridge (`reconcile_emitted_project`, this function's
-/// other caller besides `sky doctor --fix`): several `crates/skyc/tests/
+/// other caller besides `ipe doctor --fix`): several `crates/ipe/tests/
 /// golden_*` integration-test files share ONE `CARGO_TARGET_TMPDIR`-rooted
 /// output directory across sibling `#[test]` functions, and `cargo-nextest`
 /// runs each test as its own process — so one test's `remove_dir_all` +

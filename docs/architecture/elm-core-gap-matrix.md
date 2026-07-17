@@ -1,7 +1,7 @@
 # Elm `elm/core` Gap Matrix
 
 **Basis:** `elm/core` 1.0.5 — `package.elm-lang.org/packages/elm/core/1.0.5/docs.json`  
-**Updated:** 2026-07-05 against skyc HEAD `a2059fd`  
+**Updated:** 2026-07-05 against ipe HEAD `a2059fd`  
 **Companion:** `elm-core-coverage.md` — full narrative, audit findings, and design rationale  
 
 ---
@@ -30,7 +30,7 @@ Each module table has four columns:
 **Scope note.** `Platform.worker`/`sendToApp`/`sendToSelf` and `Process` are n/a or
 intentionally-absent because ipê programs use `Live.app`/`Tui.app`/`Cli`/`Webview.app`
 and `Task.parallel` replaces `Process.spawn`. `Debug` is n/a in production contexts —
-replaced by `Std.Log`. `Array` and `Bitwise` are absent by design (divergences §4.4 R5).
+replaced by `Ipe.Log`. `Array` and `Bitwise` are absent by design (divergences §4.4 R5).
 
 ---
 
@@ -105,13 +105,13 @@ current release cycle. All 18 functions are blocked by the missing type.
 | `max` | `comparable -> comparable -> comparable` | `renamed(Math.max)` | also `Basics.max` (pre-auto) |
 | `min` | `comparable -> comparable -> comparable` | `renamed(Math.min)` | also `Basics.min` |
 | `compare` | `comparable -> comparable -> Order` | `renamed(Basics.compare)` | returns a simplified form; `Order` type (`LT`/`EQ`/`GT`) absent — see §divergences ER/R5 |
-| `not` | `Bool -> Bool` | `same-name` | `Sky.Core.Basics.not` |
+| `not` | `Bool -> Bool` | `same-name` | `Ipe.Basics.not` |
 | `xor` | `Bool -> Bool -> Bool` | `MISSING` | boolean XOR absent |
 | `modBy` | `Int -> Int -> Int` | `renamed(Basics.modBy)` | registered in canon Basics but typed as `number -> number -> number`; `Math.mod` is `Float -> Float -> Float` — see coverage.md §divergences |
 | `remainderBy` | `Int -> Int -> Int` | `MISSING` | `Math.remainder` is `Float -> Float -> Float` only; no Int form |
 | `negate` | `number -> number` | `renamed(Basics.negate)` | registered in Basics and auto-prelude; also handles unary `-x` desugar |
 | `abs` | `number -> number` | `renamed(Math.abs)` | `Math.abs : Int -> Int` only — no `Float.abs`; semantic gap (Elm's is polymorphic) |
-| `clamp` | `number -> number -> number -> number` | `same-name` | `Sky.Core.Basics.clamp` Sky source |
+| `clamp` | `number -> number -> number -> number` | `same-name` | `Ipe.Basics.clamp` Ipê source |
 | `sqrt` | `Float -> Float` | `same-name` | `Math.sqrt`; also `Basics.sqrt` |
 | `logBase` | `Float -> Float -> Float` | `MISSING` | `Math.log`/`log2`/`log10` exist; no `logBase` combinator |
 | `e` | `Float` | `renamed(Math.e)` | |
@@ -130,8 +130,8 @@ current release cycle. All 18 functions are blocked by the missing type.
 | `fromPolar` | `(Float, Float) -> (Float, Float)` | `MISSING` | polar → rectangular |
 | `isNaN` | `Float -> Bool` | `renamed(Math.isNaN)` | added in #132 |
 | `isInfinite` | `Float -> Bool` | `MISSING` | `Math.inf` is a constant; no predicate |
-| `identity` | `a -> a` | `same-name` | `Sky.Core.Basics.identity` |
-| `always` | `a -> b -> a` | `same-name` | `Sky.Core.Basics.always` |
+| `identity` | `a -> a` | `same-name` | `Ipe.Basics.identity` |
+| `always` | `a -> b -> a` | `same-name` | `Ipe.Basics.always` |
 | `never` | `Never -> a` | `intentional(R5)` | `Never` type absent by design |
 
 **Summary (operators + functions):** 20 same-name · 14 renamed · 11 MISSING · 1 intentional  
@@ -165,7 +165,7 @@ semantics; the Go/Rust `unicode.ToLower` result is naturally a `String`).
 
 | elm member | elm type sig | status | notes |
 |---|---|---|---|
-| `Char.isUpper` | `Char -> Bool` | `same-name` | `Sky.Core.Char.isUpper` |
+| `Char.isUpper` | `Char -> Bool` | `same-name` | `Ipe.Char.isUpper` |
 | `Char.isLower` | `Char -> Bool` | `same-name` | |
 | `Char.isAlpha` | `Char -> Bool` | `same-name` | |
 | `Char.isAlphaNum` | `Char -> Bool` | `MISSING` | combine `isAlpha \|\| isDigit` |
@@ -176,8 +176,8 @@ semantics; the Go/Rust `unicode.ToLower` result is naturally a `String`).
 | `Char.toLower` | `Char -> Char` | `renamed(Char.toLower)` | same divergence |
 | `Char.toLocaleUpper` | `Char -> Char` | `MISSING` | locale-aware; low priority |
 | `Char.toLocaleLower` | `Char -> Char` | `MISSING` | locale-aware; low priority |
-| `Char.toCode` | `Char -> Int` | `same-name` | `Sky.Core.Char.toCode` |
-| `Char.fromCode` | `Int -> Char` | `same-name` | `Sky.Core.Char.fromCode` |
+| `Char.toCode` | `Char -> Int` | `same-name` | `Ipe.Char.toCode` |
+| `Char.fromCode` | `Int -> Char` | `same-name` | `Ipe.Char.fromCode` |
 
 **Summary:** 6 same-name · 2 renamed · 5 MISSING · 0 intentional
 
@@ -185,12 +185,12 @@ semantics; the Go/Rust `unicode.ToLower` result is naturally a `String`).
 
 ## Debug
 
-**Status: intentionally absent (R5).** Dev-only helpers replaced by `Std.Log`.
+**Status: intentionally absent (R5).** Dev-only helpers replaced by `Ipe.Log`.
 
 | elm member | elm type sig | status | notes |
 |---|---|---|---|
 | `Debug.toString` | `a -> String` | `intentional(R5)` | `String.fromInt`/`fromFloat` etc. are the typed split; `Basics.toString` is registered but unconstrained |
-| `Debug.log` | `String -> a -> a` | `intentional(R5)` | `Std.Log.*` is the production logger (Task-tier, not pass-through) |
+| `Debug.log` | `String -> a -> a` | `intentional(R5)` | `Ipe.Log.*` is the production logger (Task-tier, not pass-through) |
 | `Debug.todo` | `String -> a` | `intentional(R5)` | no todo/panic escape hatch in user code |
 
 **Summary:** 0 same-name · 0 renamed · 0 MISSING · 3 intentional
@@ -201,7 +201,7 @@ semantics; the Go/Rust `unicode.ToLower` result is naturally a `String`).
 
 | elm member | elm type sig | status | notes |
 |---|---|---|---|
-| `Dict.empty` | `Dict k v` | `same-name` | `Sky.Core.Dict.empty` |
+| `Dict.empty` | `Dict k v` | `same-name` | `Ipe.Dict.empty` |
 | `Dict.singleton` | `comparable -> v -> Dict comparable v` | `MISSING` | trivial: `Dict.insert k v Dict.empty` |
 | `Dict.insert` | `comparable -> v -> Dict comparable v -> Dict comparable v` | `same-name` | |
 | `Dict.update` | `comparable -> (Maybe v -> Maybe v) -> Dict comparable v -> Dict comparable v` | `MISSING` | ergonomic gap; no HOF-dict-update |
@@ -237,8 +237,8 @@ semantics; the Go/Rust `unicode.ToLower` result is naturally a `String`).
 | `(::)` | `a -> List a -> List a` | `same-name` | cons operator + `List.cons` |
 | `List.singleton` | `a -> List a` | `MISSING` | trivial: `[x]` literal works; helper improves pipelines |
 | `List.repeat` | `Int -> a -> List a` | `MISSING` | common initialisation pattern |
-| `List.range` | `Int -> Int -> List Int` | `same-name` | `Sky.Core.List.range` |
-| `List.map` | `(a -> b) -> List a -> List b` | `same-name` | Sky source; TCO-optimised |
+| `List.range` | `Int -> Int -> List Int` | `same-name` | `Ipe.List.range` |
+| `List.map` | `(a -> b) -> List a -> List b` | `same-name` | Ipê source; TCO-optimised |
 | `List.indexedMap` | `(Int -> a -> b) -> List a -> List b` | `same-name` | |
 | `List.foldl` | `(a -> b -> b) -> b -> List a -> b` | `same-name` | TCO |
 | `List.foldr` | `(a -> b -> b) -> b -> List a -> b` | `same-name` | O(N) stack |
@@ -283,7 +283,7 @@ as extras.
 
 | elm member | elm type sig | status | notes |
 |---|---|---|---|
-| `Maybe.withDefault` | `a -> Maybe a -> a` | `same-name` | `Sky.Core.Maybe.withDefault` |
+| `Maybe.withDefault` | `a -> Maybe a -> a` | `same-name` | `Ipe.Maybe.withDefault` |
 | `Maybe.map` | `(a -> b) -> Maybe a -> Maybe b` | `same-name` | |
 | `Maybe.map2` | `(a -> b -> value) -> Maybe a -> Maybe b -> Maybe value` | `same-name` | |
 | `Maybe.map3` | `(a -> b -> c -> value) -> Maybe a -> Maybe b -> Maybe c -> Maybe value` | `same-name` | |
@@ -312,8 +312,8 @@ programs are `Live.app`/`Tui.app`/`Cli`/`Webview.app`.
 
 | elm member | elm type sig | status | notes |
 |---|---|---|---|
-| `Cmd.none` | `Cmd msg` | `same-name` | `Std.Cmd.none` |
-| `Cmd.batch` | `List (Cmd msg) -> Cmd msg` | `same-name` | `Std.Cmd.batch` |
+| `Cmd.none` | `Cmd msg` | `same-name` | `Ipe.Cmd.none` |
+| `Cmd.batch` | `List (Cmd msg) -> Cmd msg` | `same-name` | `Ipe.Cmd.batch` |
 | `Cmd.map` | `(a -> msg) -> Cmd a -> Cmd msg` | `MISSING` | no functor-map over Cmd; `Cmd.perform` fills a different role |
 
 **Summary:** 2 same-name · 0 renamed · 1 MISSING
@@ -324,8 +324,8 @@ programs are `Live.app`/`Tui.app`/`Cli`/`Webview.app`.
 
 | elm member | elm type sig | status | notes |
 |---|---|---|---|
-| `Sub.none` | `Sub msg` | `same-name` | `Std.Sub.none` |
-| `Sub.batch` | `List (Sub msg) -> Sub msg` | `same-name` | `Std.Sub.batch` |
+| `Sub.none` | `Sub msg` | `same-name` | `Ipe.Sub.none` |
+| `Sub.batch` | `List (Sub msg) -> Sub msg` | `same-name` | `Ipe.Sub.batch` |
 | `Sub.map` | `(a -> msg) -> Sub a -> Sub msg` | `MISSING` | no functor-map over Sub |
 
 **Summary:** 2 same-name · 0 renamed · 1 MISSING
@@ -340,7 +340,7 @@ there is no lightweight-process handle type.
 | elm member | elm type sig | status | notes |
 |---|---|---|---|
 | `Process.spawn` | `Task x a -> Task y Id` | `intentional(E1)` | concurrency via `Task.parallel`; no `ProcessId` type |
-| `Process.sleep` | `Float -> Task x ()` | `renamed(Time.sleep)` | `Sky.Core.Time.sleep : Float -> Task Error ()` — same semantics, different module |
+| `Process.sleep` | `Float -> Task x ()` | `renamed(Time.sleep)` | `Ipe.Time.sleep : Float -> Task Error ()` — same semantics, different module |
 | `Process.kill` | `Id -> Task x ()` | `intentional(E1)` | no `ProcessId` / task cancellation |
 
 **Summary:** 0 same-name · 1 renamed · 0 MISSING · 2 intentional
@@ -351,7 +351,7 @@ there is no lightweight-process handle type.
 
 | elm member | elm type sig | status | notes |
 |---|---|---|---|
-| `Result.withDefault` | `a -> Result x a -> a` | `same-name` | `Sky.Core.Result.withDefault` |
+| `Result.withDefault` | `a -> Result x a -> a` | `same-name` | `Ipe.Result.withDefault` |
 | `Result.map` | `(a -> value) -> Result x a -> Result x value` | `same-name` | |
 | `Result.map2` | `(a -> b -> value) -> Result x a -> Result x b -> Result x value` | `same-name` | |
 | `Result.map3` | `(a -> b -> c -> value) -> Result x a -> Result x b -> Result x c -> Result x value` | `same-name` | |
@@ -373,7 +373,7 @@ there is no lightweight-process handle type.
 
 | elm member | elm type sig | status | notes |
 |---|---|---|---|
-| `Set.empty` | `Set a` | `same-name` | `Sky.Core.Set.empty` |
+| `Set.empty` | `Set a` | `same-name` | `Ipe.Set.empty` |
 | `Set.singleton` | `comparable -> Set comparable` | `MISSING` | |
 | `Set.insert` | `comparable -> Set comparable -> Set comparable` | `same-name` | |
 | `Set.remove` | `comparable -> Set comparable -> Set comparable` | `same-name` | |
@@ -467,7 +467,7 @@ signature. These are intentional design choices, not gaps.
 |---|---|---|---|
 | `Task.perform` | `(a -> msg) -> Task Never a -> Cmd msg` | `renamed(Cmd.perform)` | ipê: `Cmd.perform : Task Error a -> (Result Error a -> msg) -> Cmd msg` — different sig (E6) |
 | `Task.attempt` | `(Result x a -> msg) -> Task x a -> Cmd msg` | `MISSING` | no `Task.attempt`; `Cmd.perform` covers the common case |
-| `Task.andThen` | `(a -> Task x b) -> Task x a -> Task x b` | `same-name` | `Sky.Core.Task.andThen` |
+| `Task.andThen` | `(a -> Task x b) -> Task x a -> Task x b` | `same-name` | `Ipe.Task.andThen` |
 | `Task.succeed` | `a -> Task x a` | `same-name` | `Task.succeed : a -> Task Error a` |
 | `Task.fail` | `x -> Task x a` | `same-name` | `Task.fail : Error -> Task Error a` |
 | `Task.sequence` | `List (Task x a) -> Task x (List a)` | `same-name` | + `Task.parallel` as ipê extra |

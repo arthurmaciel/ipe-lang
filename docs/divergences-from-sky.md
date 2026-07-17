@@ -1,4 +1,4 @@
-# Divergences from Sky
+# Divergences from Ipê
 
 ## Framing
 
@@ -10,7 +10,7 @@ document is the durable ledger of the places where ipê nonetheless **differs**
 from that reference — some deliberate (recorded as sanctioned divergences with a
 neutral rationale), some emergent from the host-language change (Haskell→Rust)
 and the type system Rust brings. Every entry states only *what differs* and
-*why*. Where ipê matches Sky, that is not a divergence and is omitted. Where ipê
+*why*. Where ipê matches Ipê, that is not a divergence and is omitted. Where ipê
 follows a different, more principled target (e.g. Elm-conformance, a lossless
 byte model, a closed typed registry), the technical fact is stated neutrally —
 as a difference and its reason, never as a criticism of the reference.
@@ -34,28 +34,28 @@ divergence marker.
 
 ## 2. Behavioral divergences
 
-Tag key (from the divergence policy): **`divergence:`** = Sky's current behavior
+Tag key (from the divergence policy): **`divergence:`** = Ipê's current behavior
 differs and ipê follows a different target; **`sanctioned:`** = the reference
 succeeds correctly and ipê is deliberately more correct still; **Go-failure** =
 the reference cannot build/run the exact shape, so ipê's own output is the
 recorded reference.
 
-### B-Lazy — `Std.Ui.Lazy`: no memoisation in v1 (eager evaluation)
+### B-Lazy — `Ipe.Ui.Lazy`: no memoisation in v1 (eager evaluation)
 - **Differs:** `Lazy.lazy f a` / `lazy2` / `lazy3` / `lazy4` / `lazy5` evaluate
-  eagerly in ipê v1 — calling `f(a)` (etc.) directly without caching. Sky's Go
+  eagerly in ipê v1 — calling `f(a)` (etc.) directly without caching. Ipê's Go
   runtime memoises the subtree using an LRU keyed on the function pointer and
   shallow argument equality (`reflect.DeepEqual`); re-renders with identical
   arguments short-circuit the diff layer by reusing the last `Element` value.
 - **Go-oracle relationship:** Output is byte-identical for any *first* render.
   Repeated renders with the same arguments that would be short-circuited by the
   Go LRU *could* differ if `f` is impure (side-effecting view functions are not
-  a supported pattern in Sky; memoisation is purely a performance optimisation
-  in the reference). In practice, for well-typed Sky code the rendered HTML is
+  a supported pattern in Ipê; memoisation is purely a performance optimisation
+  in the reference). In practice, for well-typed Ipê code the rendered HTML is
   always the same value regardless of caching, so observable output is
   byte-identical.
 - **Rationale:** The TEA diff layer that would make a keyed memoisation cache
   reachable at render time does not exist in the ipê Rust backend yet. The
-  `Std.Ui.Lazy` *module and kernels* are registered so `import Std.Ui.Lazy as
+  `Ipe.Ui.Lazy` *module and kernels* are registered so `import Ipe.Ui.Lazy as
   Lazy` compiles and `Lazy.lazy viewItem item` lowers correctly; the caching
   optimisation is a v2 follow-on.
 - **Sanctioned:** `sanctioned:` (deliberate deferral; observable semantics
@@ -74,18 +74,18 @@ recorded reference.
 - **Sanctioned:** yes (`divergence:`). Goldens `m4c_math_{min,max}_{float,string}`.
 
 ### B2 — `Bytes` is a distinct `Vec<u8>` primitive
-- **Differs:** Sky defines `type alias Bytes = String`; Go's `string` is an
+- **Differs:** Ipê defines `type alias Bytes = String`; Go's `string` is an
   arbitrary byte sequence so the alias is cost-free there. ipê makes `Bytes` a
   distinct primitive lowering to `Vec<u8>`; `String ↔ Bytes` conversions are
   always explicit (`Bytes.fromString` UTF-8-encodes, `Bytes.toString` UTF-8-
   decodes → `Maybe String`).
-- **Go-oracle relationship:** programs using `Sky.Core.Bytes` produce different
+- **Go-oracle relationship:** programs using `Ipe.Bytes` produce different
   output under the Go oracle.
 - **Rationale:** Rust's `String` is UTF-8-constrained; a transparent alias would
   silently corrupt non-UTF-8 binary payloads. A lossless byte buffer makes the
   invalid state (non-UTF-8 in a `String`) unrepresentable.
 - **Sanctioned:** yes (`divergence:`). Goldens `m4e_bytes_*`.
-- **Downstream:** `Std.Compression` (`gzip`/`gunzip`/`zstdCompress`/
+- **Downstream:** `Ipe.Compression` (`gzip`/`gunzip`/`zstdCompress`/
   `zstdDecompress`) takes + returns `Bytes` rather than the Go surface's
   `String`, to line up with the Rust runtime `compression_*(Vec<u8>) ->
   SkyTask<_, Vec<u8>>`. Same B2 rationale (a compressed payload is arbitrary
@@ -104,15 +104,15 @@ recorded reference.
   the decoded bytes to be valid UTF-8 and return `Err` otherwise (previously a
   never-erroring lossy Latin-1 reinterpretation). This keeps
   `decode (encode s) == Ok s` for every `String s`; raw-byte round-tripping moved
-  to `Std.Bytes` (`Vec<u8>`). No reachable caller depended on the old behavior
+  to `Ipe.Bytes` (`Vec<u8>`). No reachable caller depended on the old behavior
   (the ASCII goldens round-trip identically; `jwt.rs` owns its own base64/hex).
 - **Deferred (#55b):** the runtime-internal binary pipelines (`compression.rs`,
   `email.rs`, `ws_client.rs`) still use the Latin-1 `sky_bytes`/`bytes_to_sky`
-  helpers because they have no Sky-facing module in the skyc port yet; #55b
+  helpers because they have no Ipê-facing module in the ipe port yet; #55b
   migrates them onto `Bytes`(`Vec<u8>`) and deletes the helpers. See
   `docs/architecture/encoding-bytes-migration.md`.
 
-### B4 — `Std.Money.allocate` over a negative total
+### B4 — `Ipe.Money.allocate` over a negative total
 - **Differs:** ipê distributes the residue toward zero by sign so the shares sum
   to the exact input for negative totals as well as positive. The reference
   clamps the residue at zero for negative totals, so its shares no longer sum
@@ -160,7 +160,7 @@ recorded reference.
 - **Rationale:** correctness. **Sanctioned:** yes (`sanctioned:`). Golden
   `uuid_parse`.
 
-### B9 — `Sky.Core.Jwt` flat + builder surfaces (✅ both shipped, corrected 2026-07-09)
+### B9 — `Ipe.Jwt` flat + builder surfaces (✅ both shipped, corrected 2026-07-09)
 - **No longer differs — closed.** ipê surfaces BOTH the four flat kernels
   (`encodeHs256`/`decodeHs256`/`encodeRs256`/`decodeRs256`, claims as a JSON
   string) AND the full builder API (`Jwt.encode`/`Jwt.hs256`/`Jwt.rs256`/
@@ -174,7 +174,7 @@ recorded reference.
 - **`withClaim` value type converged (#217).** The builder API originally
   authored `Jwt.withClaim : String -> String -> Claims -> Claims`, an
   UNSANCTIONED narrowing of the reference `withClaim : String -> JsonEnc.Value
-  -> Claims -> Claims` (`Sky/Core/Jwt.ipe:79`). This both rejected valid
+  -> Claims -> Claims` (`Ipê/Core/Jwt.ipe:79`). This both rejected valid
   reference programs (`Jwt.withClaim "email" (JsonEnc.string e)` → IPE-T0001)
   and lost expressiveness (an `Int`/`Bool`/nested-object claim was
   inexpressible, and even the string case stored the value as a JSON *string* —
@@ -187,8 +187,8 @@ recorded reference.
   additive over Go). Goldens `m5b_jwt_*`, `m_jwt_decode_now`,
   `jwt_withclaim_value`.
 
-### B10 — `Std.Db` emits Rust + `sqlx` (vs Go + SQLite/cgo)
-- **Differs:** the full `Std.Db` surface is shared, but Go emits Go+SQLite (cgo)
+### B10 — `Ipe.Db` emits Rust + `sqlx` (vs Go + SQLite/cgo)
+- **Differs:** the full `Ipe.Db` surface is shared, but Go emits Go+SQLite (cgo)
   binaries while ipê emits Rust+`sqlx`. The in-memory SQLite connection-pool
   behavior and row-type representation differ enough that one `Main.ipe` cannot
   run identically on both backends.
@@ -199,7 +199,7 @@ recorded reference.
   to prove injection-safe operation on the sole sanctioned raw-SQL path.
 - **Sanctioned:** yes (`sanctioned:`). Goldens `m5b_db_*`.
 
-### B11 — `Std.Ui` HTML skeleton
+### B11 — `Ipe.Ui` HTML skeleton
 - **Differs:** ipê emits compact inline CSS with no separate `<style>` reset
   block; the Go backend emits a different HTML skeleton (separate CSS reset tag,
   trailing spaces). Both render semantically-correct Flexbox layouts.
@@ -220,7 +220,7 @@ recorded reference.
   front-end, so ipê's output is recorded as the reference:
   - Recursive enum through a **tuple** payload — `type Chain = ChainEnd | ChainNode (Chain, Int)` (Go parse error; ipê boxes the cyclic edge so the Rust enum stays finite-sized). Golden `tuple_self_edge`.
   - Recursive enum through a **record** payload — `type RChain = REnd | RNode { rest : RChain, val : Int }` (Go parse error). Golden `record_self_edge`.
-  - `Std.Ui` with `Html.htmlRender` — not exposed by the Go oracle (`sky dev`), which exits 1; ipê compiles and runs. Goldens `stdui_onclick` / `stdui_oninput_closure`.
+  - `Ipe.Ui` with `Html.htmlRender` — not exposed by the Go oracle (`sky dev`), which exits 1; ipê compiles and runs. Goldens `stdui_onclick` / `stdui_oninput_closure`.
   - `Set` generic / member on shapes the Go oracle exits 1 on. Goldens `set_generic` / `set_member`.
   - Invalid-encoding decode input where the Go oracle exits 1; ipê returns `Err`. Golden `encoding_invalid`.
   - Partial application of a sibling **let-bound** function value (`wrap f x = f x + 1; guarded f = wrap (inc f)`) — Go emits `wrap(oneArg)` against the flattened 2-arity local and fails `go build` (`not enough arguments in call to wrap`); ipê eta-expands the residual and Arc-promotes the captured value. Golden `fn_capture_eta_promoted` (output `4`, hand-computed language semantics).
@@ -313,12 +313,12 @@ runtime (each either matches Go or is more correct):
 ### Note — Decimal rounding modes are parity, not a divergence
 `Decimal.round` uses banker's rounding (Go `RoundBank`) and
 `Decimal.toStringFixed`/`formatWith` use half-away-from-zero (Go `StringFixed`);
-both match Go exactly and are therefore *not* divergences from Sky. Recorded here
+both match Go exactly and are therefore *not* divergences from Ipê. Recorded here
 only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
 
 ### B18 — WS `sendBinary` (server + client) takes `Vec<u8>`, not `String`
-- **Differs:** Sky defines `type alias Bytes = String`, so the Go reference's
-  server `sendBinaryToClient` AND the client `Sky.Core.WebSocket.sendBinary`
+- **Differs:** Ipê defines `type alias Bytes = String`, so the Go reference's
+  server `sendBinaryToClient` AND the client `Ipe.WebSocket.sendBinary`
   both take a `String` (raw bytes in a Go string; cost-free alias). ipê's
   `Bytes` is a distinct `Vec<u8>` primitive (B2), so both `Ws.sendBinaryToClient`
   and `WebSocket.sendBinary` take `Bytes` (`Vec<u8>`) — no lossy UTF-8 hop. The
@@ -402,7 +402,7 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   Haskell→Rust codegen instead renders a function-typed field as a bare `fn`
   pointer (`TypeRenderer.hs`) — `Clone`/`Debug`/`PartialEq`-preserving, but
   restricted to NON-CAPTURING closures (documented there explicitly). ipê's
-  `Box<dyn Fn>` payload is strictly more general (Sky closures capture
+  `Box<dyn Fn>` payload is strictly more general (Ipê closures capture
   freely) at the cost of losing those three derives on the carrier — absorbed
   by the #87 derive-demotion fixpoint and the type checker's
   `ty_is_equatable`/serde/#91-Model use-site gates, so no unsound use reaches
@@ -424,7 +424,7 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   `map`/`map2..5`/`mapError` family through entirely — a user applicative
   `map2` over `Result.map`+`Result.andMap` cargo-failed even at a safe
   arity). Because the obligation is minted once per kernel REFERENCE (not
-  per call-node), it survives arbitrary Sky-level aliasing by construction —
+  per call-node), it survives arbitrary Ipê-level aliasing by construction —
   direct call, piped, `let`-bound, bare-value top-level re-export,
   higher-order argument, record-field extraction, and every forwarder
   nesting depth — with no AST-shape enumeration anywhere.
@@ -439,7 +439,7 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   used) stays wired as defense-in-depth but was never observed firing in
   this pass's fixture matrix (Tier 2 always catches the hazard first). See
   `docs/architecture/ctor-payload-andmap-arity-gate-design.md` for the full
-  design and `crates/skyc/tests/golden_l0114_ctor_payload_function.rs` for
+  design and `crates/ipe/tests/golden_l0114_ctor_payload_function.rs` for
   the aliasing-shape fixture matrix (direct call, `let`-bound, bare
   top-level re-export, higher-order argument, record-field extraction, and a
   cross-module ANNOTATED forwarder reused at two different arity-1-safe
@@ -448,10 +448,10 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   aliasing (`import Result as R`) is NOT constructible in ipê today —
   `Result`/`Maybe` are fixed compiler-kernel qualifiers
   (`crates/sky_canon/src/resolve.rs`), not backed by an importable
-  Sky-source module in this milestone, so there is no module to alias.
+  Ipê-source module in this milestone, so there is no module to alias.
 - **Diagnostic code depends on HOW the obligation is violated, mirroring the
   pre-existing `Math.min` gate's own documented split
-  (`crates/skyc/tests/golden_m4c_math_gate.rs`)**: a DIRECT `andMap` call
+  (`crates/ipe/tests/golden_m4c_math_gate.rs`)**: a DIRECT `andMap` call
   pins the obligated payload-result variable straight to a concrete `Fun`
   structure at the unifier's own head-pin check (the "eager pin" case),
   surfacing a plain `IPE-T0001` (`TypeMismatch`) — every aliasing shape in
@@ -459,7 +459,7 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   GENERIC FORWARDER around `andMap` instead lifts the obligation onto its
   own annotation skolem, re-verified per external call site, surfacing the
   friendlier `IPE-T0014` (`SuperTypeUnsatisfied`, "non-function callback
-  result (Maybe/Result higher-order kernel)"). Both are clean Sky
+  result (Maybe/Result higher-order kernel)"). Both are clean Ipê
   diagnostics; the pipeline never emits Rust that `cargo` rejects either
   way. One documented conservatism (5th attempt): when the obligated result
   escapes into ANOTHER binding's generic variable — an annotated forwarder
@@ -484,7 +484,7 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   `15`). ipê's `Box<dyn Fn>` kernel call computes the semantically correct
   value in every case. A minority of shapes (a genuinely non-capturing payload
   with no `andMap`/case-extraction involved) DO match — real parity there.
-- **Rationale:** Sky closures capture freely; a bare-`fn`-pointer restriction
+- **Rationale:** Ipê closures capture freely; a bare-`fn`-pointer restriction
   (upstream's choice) would silently forbid that. `Box<dyn Fn>` is the sound
   direction, and the machinery to keep it seal-safe (#87/#93/#91/type-checker
   equatable gate) already ships. See
@@ -577,7 +577,7 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
 - **Incident note (do not re-drop this caveat):** this fix first landed as
   commit `29bab0d` and was same-day reverted (`5e870b4`) after independent
   adversarial review found a real SEAL violation that the doc's own earlier
-  draft had missed: `skyc` exit-0, but the emitted Rust failed `cargo build`
+  draft had missed: `ipe` exit-0, but the emitted Rust failed `cargo build`
   with E0283 ("cannot infer type of the type parameter T1 ... cannot satisfy
   `_: Clone`") on a 3-module cross-module field-access getter
   (`getName r = r.name`). Root cause: `promote_untyped_boundaries`'s
@@ -592,7 +592,7 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   the Untyped arm as defense-in-depth, so a stale quantified var can never be
   declared as a Rust generic absent from the resolved `params`/`ret` again.
   Both re-verified against the EXACT failing shape via a real `cargo build`
-  + `cargo run` golden (`crates/skyc/tests/golden_class1_boundary_scheme_field_result.rs`,
+  + `cargo run` golden (`crates/ipe/tests/golden_class1_boundary_scheme_field_result.rs`,
   `IPE_E2E=1`), not just a `sky_types` unit test — the original attempt's
   full `sky_types` unit-test matrix (including the obligation-gated
   single-record-type-cross-module-use case) passed despite the bug, because
@@ -606,7 +606,7 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   LOWERING, not inference.** A cross-module untyped recursive function
   polymorphic in its LIST-ELEMENT type (`evenLen`/`oddLen`/`listLen : List a ->
   Bool`, fuzzer seed 31348 `mmrecpair`) was correctly generalized by
-  `sky_types` (`untyped_type_params` listed the element var), yet `skyc` FAILED
+  `sky_types` (`untyped_type_params` listed the element var), yet `ipe` FAILED
   with IPE-L0102 at the `[] ->` arm. Root cause was NOT the boundary scheme but
   a stale gate in `sky_lower::lower_case`: it rejected ANY list `case` binding a
   value (`_ :: rest`) whose element lowered to `IrType::Generic(_)`, on the now-
@@ -621,7 +621,7 @@ only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
   — removed. This turns a spurious under-acceptance into acceptance; the emitted
   Rust is a `Clone`-bounded generic monomorphized per use site. Re-verified via
   a real `cargo build` + `cargo run` golden
-  (`crates/skyc/tests/golden_i201_cross_module_poly_recursion.rs`, `IPE_E2E=1`,
+  (`crates/ipe/tests/golden_i201_cross_module_poly_recursion.rs`, `IPE_E2E=1`,
   prints `EO`) and the fuzzer (`scripts/fuzz-well-typed.sh --seed 31348`, now
   green).
 
@@ -683,7 +683,7 @@ never literal code.
 ### A2 — Typed IR checkpoint vs AST→string emitters
 ipê lowers `canon → typed sky_ir::Expr → Rust` (two stage). The reference walks
 `Can.Expr_` → Rust string in one pass
-(`src/Sky/Generate/Rust/Builder/ExprEmitter.hs`). *Rationale:* a malformed shape
+(`src/Ipê/Generate/Rust/Builder/ExprEmitter.hs`). *Rationale:* a malformed shape
 is unrepresentable in the typed IR rather than caught only at `rustc` —
 make-invalid-states-unrepresentable.
 
@@ -691,7 +691,7 @@ make-invalid-states-unrepresentable.
 ipê represents tail recursion as typed IR nodes (`Expr::TailRecur` /
 `Expr::TailLoop`, `sky_lower/src/lower.rs`) and emits a Rust `loop { … }`. The
 reference transports the jump as a stringly kernel-name sentinel
-(`tcoMarker = "__tco_jump__"`, `src/Sky/Build/TailCallOpt.hs:140`) and emits TCO
+(`tcoMarker = "__tco_jump__"`, `src/Ipê/Build/TailCallOpt.hs:140`) and emits TCO
 **Go-only** — its Rust backend has no TCO. ipê ports the reference's
 backend-agnostic `isTailRecursive` analysis but authors the Rust loop emission
 itself. *Rationale:* soundness — constant stack vs an uncatchable stack-overflow
@@ -702,9 +702,9 @@ ipê dispatches through a closed **424-variant** `KernelFn` enum with a typed
 `StdlibKernel` registry (`crates/sky_kernels`), indexed anti-drift from
 `StdlibKernel::ALL`; an unknown kernel fails **closed** with `IPE-L0108`. The
 reference dispatches `(mod,name)` via a string `case` and falls **open** to a
-`toSnakeCase` default (`src/Sky/Generate/Rust/Builder/Kernel.hs:801-802`).
+`toSnakeCase` default (`src/Ipê/Generate/Rust/Builder/Kernel.hs:801-802`).
 *Rationale:* security → correctness — a fail-open snake_case default is the exact
-"skyc exits 0 then the emitted code fails to build" class; the enum *is* the
+"ipe exits 0 then the emitted code fails to build" class; the enum *is* the
 registry.
 
 ### A5 — `render_type : IrType → DResult`, no `"String"` default
@@ -744,7 +744,7 @@ or a `succeed (partiallyApplied x)`) now renders as the Send-ONLY curry chain
 `decode_succeed`, `runtime/src/sky_runtime/json.rs`). The blanket `+ Sync` on a
 decoder payload was over-constrained — a `FnOnce` curry chain is `Send` but not
 `Sync`, and a decoder payload is owned/linear and never flows into an `Arc`
-slot — so it caused a skyc-0-then-cargo-fail (E0308 wrong-trait + E0277
+slot — so it caused a ipe-0-then-cargo-fail (E0308 wrong-trait + E0277
 `Sync`-unsatisfiable). This mirrors the reference's ownership split (owned/linear
 → Send-only) at the decoder-payload position rather than diverging from it.
 Regression: `golden_i195_json_decode_pipeline`; the `+ Sync` forwarding path is
@@ -757,7 +757,7 @@ mapper's PARAMETER — `JsonDec.map (\f -> f x) d`, `andThen (\f -> …) d`, and
 `map2`/`map3`/`map4` + `Db.Decode` equivalents — the parameter's inferred type is
 a bare `Ty::Fun`, so `lower_lambda` stamped it as `IrType::Fun`, which
 `render_type` emits as the shared `Box<dyn Fn + Send + Sync>`: wrong trait (`Fn`
-vs the producer's `FnOnce`) plus an unsatisfiable `+ Sync` → skyc-0-then-cargo-
+vs the producer's `FnOnce`) plus an unsatisfiable `+ Sync` → ipe-0-then-cargo-
 fail (E0308 / E0277), the same class as #195 one surface deeper. In every
 `map`/`mapN`/`andThen` combinator the mapper's parameters ARE, by construction,
 the decoded payload value(s), so `sky_lower::retype_decoder_payload_mapper`
@@ -766,7 +766,7 @@ the owned `IrType::FnOnceChain` at the combinator call site — matching the
 producer shape rather than diverging. Single-parameter only: a `FnOnceChain` is a
 nested curry chain the flat body application (`(f)(a, b)`) does not match, so a
 multi-parameter payload stays a distinct surface. Regression:
-`golden_i198_decoder_payload_mapper` (skyc-0 render assertion + cargo-0 E2E).
+`golden_i198_decoder_payload_mapper` (ipe-0 render assertion + cargo-0 E2E).
 
 ### A9 — Crate-version SSOT as a typed `const` table + drift test
 ipê holds crate name+version in a typed `const CrateSpec` table
@@ -774,7 +774,7 @@ ipê holds crate name+version in a typed `const CrateSpec` table
 function, with a co-located drift test asserting the SSOT ≡ `runtime/Cargo.toml`
 (all crates) **and** ≡ the golden base manifest. The reference holds the same SSOT
 as an embedded `crate-specs.toml` re-parsed at build
-(`src/Sky/Generate/Rust/Builder/crate-specs.toml` + `CrateSpecs.hs`) with a sync
+(`src/Ipê/Generate/Rust/Builder/crate-specs.toml` + `CrateSpecs.hs`) with a sync
 test. *Rationale:* compiler-checked structured data over a string re-parse; ipê's
 drift test additionally covers the golden base manifest.
 
@@ -795,7 +795,7 @@ cargo-culted back in.
 For a refutable function-arg pattern (`f (Just x) = …`) ipê refuses at lower
 (IPE-L0115/0116) and closes the gap via a front-end desugar to `case`. The
 reference synthesises a `let … else { panic! }` (a reachable `panic!`).
-*Rationale:* soundness — "no panic from well-typed Sky" outranks the completeness
+*Rationale:* soundness — "no panic from well-typed Ipê" outranks the completeness
 the reference gains. (Front-end desugar is the completeness close.)
 
 ### A13 — Fail-closed nested-constructor-payload patterns (ipê currently less complete)
@@ -806,11 +806,11 @@ and compiles it. *Rationale:* soundness over completeness for now; the
 completeness gap is a tracked front-end item. *Neutral: reference-ahead on
 completeness.*
 
-### A14 — Non-HOF `List` ops as iterative kernels vs pure-Sky recursion (efficiency-only, output-identical)
+### A14 — Non-HOF `List` ops as iterative kernels vs pure-Ipê recursion (efficiency-only, output-identical)
 ipê wires the non-HOF `List` combinators
 (`append`/`concat`/`take`/`drop`/`zip`/`cons`/`isEmpty`) as **iterative Rust
-kernels** (constant native stack), whereas the Go "Sky" backend classifies them
-as non-tail-recursive pure-Sky (O(N) call-stack). Output is byte-identical
+kernels** (constant native stack), whereas the Go "Ipê" backend classifies them
+as non-tail-recursive pure-Ipê (O(N) call-stack). Output is byte-identical
 across all Elm edges (negative/over-length `take`/`drop`, shorter-truncating
 `zip`, empty `concat`); ipê additionally has a strictly better stack profile (no
 200k+-element stack-depth risk). *Rationale:* `List.*` is anchored to
@@ -834,20 +834,20 @@ ipê's Rust runtime imposes **static trait bounds** on both type parameters:
 and `Msg: Clone + Send + Sync + Debug` (`runtime/src/sky_runtime/live/mod.rs`).
 A Model or Msg that carries a function, `Cmd`, `Sub`, `Task`, or `Decoder` does
 not satisfy these bounds, so the emitted Rust fails `cargo build`. Because
-`skyc` exit-0 MUST imply `cargo` exit-0 (the seal), the backend adds explicit
+`ipe` exit-0 MUST imply `cargo` exit-0 (the seal), the backend adds explicit
 admissibility gates:
 
 - **#91 (shipped):** `check_admissible_model` in `emit_model_gate.rs:62` — gates
-  Model at `skyc`, emits `IPE-L0120` on a non-serde/non-Clone leaf. Verified:
+  Model at `ipe`, emits `IPE-L0120` on a non-serde/non-Clone leaf. Verified:
   `code.rs:198-200`, `emit_model_gate.rs`.
 - **#94 ✅ shipped (landed, corrected 2026-07-09):** `check_admissible_msg` in
-  `emit_model_gate.rs:105` — gates Msg at `skyc` using `ir_type_is_derivable`
+  `emit_model_gate.rs:105` — gates Msg at `ipe` using `ir_type_is_derivable`
   for all three app shapes (NOT serde — Html is derivable and thus admissible
   as a Live Msg payload, unlike Live Model), called from `emit_live.rs:349` /
   `emit_tui.rs:182` / `emit_webview.rs:137`. Emits `IPE-L0125`
   (`InadmissibleAppMsg`) — NOT the originally-planned `IPE-L0121`, which was
   reassigned in the interim to the unrelated `JsonDec.succeed` curry-arity
-  gate. Regression: `crates/skyc/tests/msg_admissibility.rs` (7/7 green).
+  gate. Regression: `crates/ipe/tests/msg_admissibility.rs` (7/7 green).
   Originally designed in `docs/architecture/seal-gates-msg-lambda-view-design.md §2`.
 - **#95 ✅ shipped (landed, corrected 2026-07-09):** Lambda-aware
   `fn_param_ty(e, idx)` in `emit_model_gate.rs:46` — closes the fail-open gap
@@ -857,7 +857,7 @@ admissibility gates:
 
 *Rationale:* seal-forced divergence. The Go backend's dynamic path is correct for
 Go; the Rust backend's static bounds make the Go-dynamic path a `cargo`-fail.
-Gates at `skyc` convert the `cargo`-fail class into a clear user diagnostic.
+Gates at `ipe` convert the `cargo`-fail class into a clear user diagnostic.
 See `docs/architecture/seal-gates-msg-lambda-view-design.md §4`.
 
 ### A16 — App cfg must be an inline record literal (IPE-L0119)
@@ -878,7 +878,7 @@ cfg at runtime via reflection; ipê does not have that escape hatch.
 page) is a tracked future item — not a permanent limitation.
 
 ### A17 — `Float` rejected as `Set` element or `Dict` key (IPE-L0117)
-Sky's type system treats `Float` as a `comparable` value, so the Sky type checker
+Ipê's type system treats `Float` as a `comparable` value, so the Ipê type checker
 accepts `Set Float` / `Dict Float v` — the reference Go backend uses `interface{}`
 comparison and tolerates these at runtime. ipê backs `Set a` with
 `BTreeSet<a>` and `Dict k v` with `HashMap<k, v>`; Rust's `f64` implements
@@ -889,12 +889,12 @@ compile, so the case is rejected at lower with `IPE-L0117`.
 *Rationale:* Rust-substrate constraint, permanent. The NaN/ordering issue is a
 semantic property of IEEE 754 floating point that does not arise in Go's
 `interface{}`-keyed maps. The diagnostic is deliberate and named a divergence from
-Sky in its own explain page. *Verified:* `code.rs:192-194`,
+Ipê in its own explain page. *Verified:* `code.rs:192-194`,
 `explain/IPE-L0117.md`. Total-order `Float` set/dict (e.g. via an
 ordered-float wrapper) is a tracked future enhancement.
 
 ### A18 — `WsServerCfg` phantom `msg` type var dropped (D2)
-Sky's `Sky.Http.Server.WebSocket` stdlib source declares
+Ipê's `Ipe.Http.Server.WebSocket` stdlib source declares
 `WebSocketServerCfg msg` with a phantom `msg` type variable reserved for
 hypothetical future `Sub` integration (the phantom never reaches the runtime).
 ipê types the cfg as a **nullary** opaque constructor: `IrType::WebSocketServerCfg`
@@ -926,7 +926,7 @@ Go output (which has no Rust-edition analogue). The emitted project vendors the
 match the edition that source is written for: the runtime is edition 2024, and
 its `db.rs` uses the 2024-only `expr_2021` macro-fragment specifier — vendoring
 it into an edition-2021 project would be a parse error the moment a program uses
-Db kernels (a seal violation: `skyc` accepts, `cargo build` fails). Pinning the
+Db kernels (a seal violation: `ipe` accepts, `cargo build` fails). Pinning the
 emitted edition to 2024 keeps vendored-source acceptance and downstream
 `cargo build` structurally in agreement. *Rationale:* the seal — the emitted
 project and the runtime source it embeds must share one edition; there is no
@@ -934,7 +934,7 @@ Go-parity oracle for a Rust edition, so this is a Rust-only property with no
 reference behaviour to match. *Verified:* the four checked-in golden manifests
 `tests/golden/{basics,mm_diamond,mm_local_pkg,multi_mod_split_pilot}/Cargo.toml`
 (`edition = "2024"`), byte-compared against emitted output by
-`crates/skyc/tests/support/mod.rs`. *Sanctioned:* yes (`divergence:`).
+`crates/ipe/tests/support/mod.rs`. *Sanctioned:* yes (`divergence:`).
 
 ---
 
@@ -945,11 +945,11 @@ API-shape review):
 
 - **`Bytes` conversion API** — because `Bytes` is a distinct `Vec<u8>` primitive
   (B2), ipê exposes explicit `Bytes.fromString` / `Bytes.toString : Maybe String`
-  where Sky's `Bytes = String` alias needs none.
-- **`Sky.Core.Jwt` call surface** — flat kernels vs the Go builder API (B9); token
+  where Ipê's `Bytes = String` alias needs none.
+- **`Ipe.Jwt` call surface** — flat kernels vs the Go builder API (B9); token
   bytes identical, call surface differs until the builder API lands.
 - **`Cmd` / `Sub` constructors** — present on ipê, absent on the Go backend (B12).
-- **`Std.Db` substrate** — `sqlx`/Rust vs SQLite/cgo/Go (B10); identical Sky
+- **`Ipe.Db` substrate** — `sqlx`/Rust vs SQLite/cgo/Go (B10); identical Ipê
   surface.
 - **Front-end capability gaps (ipê not-yet, reference-ahead)** — neutral coverage
   differences, each a tracked front-end item, none a principle divergence:
@@ -965,7 +965,7 @@ API-shape review):
   `mapError : (Error -> Error) -> Task Error a -> Task Error a`,
   `onError : (Error -> Task Error a) -> Task Error a -> Task Error a`
   (`crates/sky_types/src/constrain.rs`, `K::TaskFail`/`K::TaskMapError`/
-  `K::TaskOnError`; `crates/skyc/stdlib/Sky/Core/Task.ipe:33`). Rationale: the
+  `K::TaskOnError`; `crates/ipe/stdlib/Ipê/Core/Task.ipe:33`). Rationale: the
   Rust runtime's task error channel is monomorphic end-to-end — every emitted
   wrapper is `SkyTask<A> = SkyTask<SkyError, A>` (`SkyError` is a real 11-kind
   enum since backlog #85/#160, not a type alias), and the project's own house
@@ -976,8 +976,8 @@ API-shape review):
   E0308 (`expected SkyError, found String`): a "compilation successful, then
   `cargo build` fails" class violation. `mapError`/`onError` were already
   pinned; `fail`'s pin closes the family. Regression:
-  `crates/skyc/tests/golden_m5b_db.rs::db_transaction`,
-  `crates/skyc/tests/golden_m5a_task.rs::{error_channel,
+  `crates/ipe/tests/golden_m5b_db.rs::db_transaction`,
+  `crates/ipe/tests/golden_m5a_task.rs::{error_channel,
   task_map_error_lambda}`, plus a negative `IPE-T0001` check-only test
   (`Task.fail "oops"` must be rejected). **Sanctioned:** yes — the polymorphic
   reading was unimplementable on this backend; it only ever produced
@@ -986,23 +986,23 @@ API-shape review):
 - **Numeric literals in `{{...}}` interpolation** — ipê's interpolation
   mini-parser (`resolve_simple_interp_ref`) recognises an integer/float literal
   argument, e.g. `{{String.fromInt 54}}` lowers to `String.fromInt 54` and
-  prints `54`. Sky's `resolveInterpolationRef`
-  (`Sky/Canonicalise/Expression.hs`) has no literal case: a digit-leading body
+  prints `54`. Ipê's `resolveInterpolationRef`
+  (`Ipê/Canonicalise/Expression.hs`) has no literal case: a digit-leading body
   becomes `Can.VarLocal "54"`, which surfaces downstream as a naming error (the
   interpolation grammar there is names-only). ipê's `constrain` treats an
   unresolved local as a violated invariant (IPE-I0001 ICE), so without this the
-  same program ICE'd rather than compiling. A Sky identifier can never start
+  same program ICE'd rather than compiling. A Ipê identifier can never start
   with a digit, so recognising the literal is unambiguous and strictly better
   (a well-typed program compiles instead of failing). **Sanctioned:** yes.
   Reference: `resolve.rs::resolve_simple_interp_ref`; regression
-  `crates/skyc/tests/interp_literal.rs` + golden `m_interp_int_literal`.
+  `crates/ipe/tests/interp_literal.rs` + golden `m_interp_int_literal`.
   Found by the no-panic fuzzer (`multilineinterp` template).
 
 ---
 
 ## 5. README-liftable summary table
 
-| Aspect | Sky (reference) | ipê | Why |
+| Aspect | Ipê (reference) | ipê | Why |
 |---|---|---|---|
 | Compiler host | Haskell, emits Go + Rust | Rust, emits Rust (`skyc`) | Single-language port |
 | IR | AST → string emitters | Typed `sky_ir::Expr` (two-stage) | Malformed shapes unrepresentable |
@@ -1017,13 +1017,13 @@ API-shape review):
 | `Money.allocate` (negative) | residue clamped at zero | residue distributed; shares sum to input | Fair split must sum to input |
 | `Uuid.parse` | `Nothing` on canonical UUID (this shape) | `Just` on canonical, `Nothing` on malformed | Correctness |
 | JWT | builder API | flat kernels (interim); **token bytes identical** | Interim surface; codec unchanged |
-| `Std.Db` | Go + SQLite (cgo) | Rust + `sqlx` | Backend substrate |
-| `Std.Ui` HTML | skeleton + `<style>` reset | compact inline CSS, no reset block | Separate renderer; byte-parity later |
+| `Ipe.Db` | Go + SQLite (cgo) | Rust + `sqlx` | Backend substrate |
+| `Ipe.Ui` HTML | skeleton + `<style>` reset | compact inline CSS, no reset block | Separate renderer; byte-parity later |
 | Runtime | shared fork baseline | strict superset (auth/jwt/SSRF/decimal/cache/env/telemetry hardening) | Security/correctness/soundness |
 | Float sci-notation | exp ≥ 21 (reference Rust) | exp ≥ 6 (Go `%v` parity) — **confirmed vs Go 1.26.2 (#52)** | ipê matches Go; the reference's Rust fork diverges |
 | Clone strategy (non-`Copy` bindings) | use-count ≥ 2 → clone ALL reads (including last) | true last-use: clone all-but-last owned reads, last moves; borrow reads exempt | Rust move semantics; N−1 clones vs N |
 | As-pattern alias in match arm | drops alias name → E0425 on use (latent bug) | binds whole by move, reconstructs inner from clone | Correctness; reference latent bug fixed |
-| Model admissibility | dynamic (Go reflects at runtime; no compile-time gate) | static `IPE-L0120` gate at `skyc` | Rust static trait bounds (seal) |
+| Model admissibility | dynamic (Go reflects at runtime; no compile-time gate) | static `IPE-L0120` gate at `ipe` | Rust static trait bounds (seal) |
 | Msg admissibility | dynamic (no compile-time gate) | static `IPE-L0121` gate (designed; pending impl) | Rust static trait bounds (seal) |
 | App cfg argument | any expression (let-bound variable OK) | must be an inline record literal (`IPE-L0119`) | Backend reads fields at lower time; no runtime reflection |
 | `Float` as `Set`/`Dict` key | accepted (Go `interface{}` comparison) | rejected `IPE-L0117` | `f64` lacks `Ord`/`Hash` in Rust |
@@ -1057,7 +1057,7 @@ API-shape review):
   Scheme Promotion,
   D1/D2/D3 under-acceptance), re-landed 2026-07-10 after a same-day revert;
   regression golden:
-  `crates/skyc/tests/golden_class1_boundary_scheme_field_result.rs`.
+  `crates/ipe/tests/golden_class1_boundary_scheme_field_result.rs`.
   Sanctioned/recorded goldens: 43 carry a marker (authoritative count:
   `find tests/golden -name sanctioned.divergence | wc -l` — the
   hand-maintained per-family sub-counts drifted twice in one day and are
@@ -1084,7 +1084,7 @@ API-shape review):
   behaviour; ipê matches Go byte-for-byte. No longer an open item.
 - ~~The reference `TypeRenderer.hs` `"String"` default and `ExprEmitter.hs`
   single-pass shape line-cites.~~ CONFIRMED against the reference tree at
-  `src/Sky/Generate/Rust/Builder/`:
+  `src/Ipê/Generate/Rust/Builder/`:
   - **A5 — `TypeRenderer.hs` `"String"` fallback:** the catch-all is
     `_ -> "String"` at `TypeRenderer.hs:345` (the closing arm of
     `typeToRustString`); a second `| otherwise -> "String"` sits at line 211.
@@ -1108,12 +1108,12 @@ API-shape review):
 
 - **"Nominal (home, name) identity types #100" — NOT VERIFIED AS SKY DIVERGENCE.**
   Session memory referenced this as a divergence, but in-repo search finds no
-  file or commit that records it as a Sky-specific divergence. The principled-
+  file or commit that records it as a Ipê-specific divergence. The principled-
   decisions-audit (#12) confirms ipê already keys on `(home, name)` canonical
   naming — following `elm/compiler` — and the audit verdict is REJECT (already
   better). Sky's own Haskell compiler also uses name-qualified lookup internally,
   so this appears to be a PORT (convergence with elm/compiler), not a divergence
-  from Sky. If a specific Sky-runtime divergence exists under this label, re-file
+  from Ipê. If a specific Ipê-runtime divergence exists under this label, re-file
   with a concrete file:line cite.
 
 - **Live.route non-String payload (#106) — PORT, not a divergence.**
@@ -1147,7 +1147,7 @@ API-shape review):
   (E0308/E0618) for every realistic shape.
 - **Rationale:** parse, don't validate — a `:param` segment is inherently a URL
   string; feeding it to a constructor payload without an explicit decode is a
-  type contract violation. Catching it at emit time gives the user a Sky error
+  type contract violation. Catching it at emit time gives the user a Ipê error
   instead of an opaque downstream `rustc` E0308 or a runtime coercion panic.
   The `unwrap_or_default` fallback on parse failure keeps the "never panic"
   spirit of the reference's `unwrap_or_default` for missing captures.
@@ -1158,7 +1158,7 @@ API-shape review):
 
 
 ### B-AnyCtorPayload — `any` ctor payload field → `Dict String String` (pub/sub wire carrier)
-- **Differs:** Sky's `any` wildcard as a union-constructor payload field (e.g.
+- **Differs:** Ipê's `any` wildcard as a union-constructor payload field (e.g.
   `| MessageReceived any`, `| CartTopicReceived any`) is carried at the Go
   runtime as a dynamic `interface{}` value — universally polymorphic, no static
   type constraint. The Rust backend cannot emit a `dyn Any` field (banned by the
@@ -1187,7 +1187,7 @@ API-shape review):
   `lower.rs::lower_enum` Gate 1, `lower.rs::ir_type_from_canon` Var arm.
   Regression: `golden_l0102_any_ctor_payload`.
 
-### B-AuthClaims — `Std.Auth.signToken`/`verifyToken` claims pinned to `Dict String String`
+### B-AuthClaims — `Ipe.Auth.signToken`/`verifyToken` claims pinned to `Dict String String`
 - **Differs:** Go's `Auth.signToken : String -> a -> Int -> Result Error String`
   / `verifyToken : String -> String -> Result Error a` type the claims argument
   and return as a fully polymorphic `a` — any Go value marshals through
@@ -1195,7 +1195,7 @@ API-shape review):
   (`HashMap<String, String>` in the emitted Rust).
 - **Go-oracle relationship:** Go succeeds for any claims shape (record, map,
   scalar); ipê accepts only a `Dict String String` claims argument (and returns
-  the same on verify). A well-typed Sky program passing a record literal or
+  the same on verify). A well-typed Ipê program passing a record literal or
   other non-Dict shape as claims is now REJECTED at type-check (IPE-T0001-class)
   instead of silently miscompiling — the AUD-06 seal fix this entry documents
   closed an exit-0-then-cargo-fail hole where `var(0)` unified with anything
@@ -1212,7 +1212,7 @@ API-shape review):
   `constrain.rs::K::AuthSignToken` / `K::AuthVerifyToken` kernel schemes.
 
 ### B-ErrorToString — `errorToString : Stringify a => a -> String` (bounded polymorphic vs. universal)
-- **Differs:** Sky's Go runtime implements `errorToString` as `fmt.Sprintf("%v", v)`,
+- **Differs:** Ipê's Go runtime implements `errorToString` as `fmt.Sprintf("%v", v)`,
   which accepts any value at runtime (universally polymorphic, no type-level bound).
   ipê types `errorToString` as `Stringify a => a -> String`, routing all
   stringification through the single `SkyStringify` trait chokepoint — the same
@@ -1231,7 +1231,7 @@ API-shape review):
 - **Converged:** The port's `Jwt.decode` previously diverged from the reference by
   dropping the `now : Int` parameter and delegating expiry validation to
   `jsonwebtoken`'s wall-clock `SystemTime::now()`. The reference
-  (`sky-stdlib/Sky/Core/Jwt.ipe`) declares `decode : Algorithm -> Int -> String ->
+  (`sky-stdlib/Ipê/Core/Jwt.ipe`) declares `decode : Algorithm -> Int -> String ->
   Result Error String`, where `now` is a caller-supplied Unix-epoch second and
   validation is deterministic. The port now matches this signature exactly.
 - **Go-oracle relationship:** Semantics are reference-exact: `now >= exp` → expired,
@@ -1253,7 +1253,7 @@ API-shape review):
 
 ### B-GridTracksRaw — `Ui.gridTracksRaw` native kernel vs reference sentinel `AttrStyle "__gridTracks"`
 - **Reference:** `../sky/sky-stdlib/Std/Ui/Grid.sky` implements `tracks`/`columns`/`rows`
-  as `AttrStyle "__gridTracks" (cols ++ "|" ++ rows)` — a pure-Sky sentinel consumed
+  as `AttrStyle "__gridTracks" (cols ++ "|" ++ rows)` — a pure-Ipê sentinel consumed
   by the reference renderer's `findGridTemplate` (Ui.ipe:2539) before raw-style emission.
 - **Port:** Uses a native `Ui.gridTracksRaw : String -> String -> Attribute msg` kernel
   (`KernelFn::UiGridTracksRaw`) that constructs a typed `Attribute::AttrGridTracks(cols, rows)`
@@ -1266,7 +1266,7 @@ API-shape review):
   `SafeCssValue`). Growing the sentinel allowlist would be the wrong fix.
 - **Sanctioned:** yes. Reference: `crates/sky_kernels/src/lib.rs::UiGridTracksRaw`,
   `runtime/src/sky_runtime/ui/element.rs::AttrGridTracks`,
-  `runtime/src/sky_runtime/ui/render.rs`. Regression: `crates/skyc/tests/golden_stdui_grid_seal.rs`.
+  `runtime/src/sky_runtime/ui/render.rs`. Regression: `crates/ipe/tests/golden_stdui_grid_seal.rs`.
 
 
 ### B-ErrorADT — real `Error ErrorKind ErrorInfo` (backlog #85/#160)
@@ -1279,7 +1279,7 @@ API-shape review):
   pattern-matchable ADT (closing the canon/lowerer ctor-scheme gap that was
   #160's blocker), backed by `sky_runtime::error::SkyError` (`SkyErrorKind`
   mirrors the reference's 11 kinds). `Error.toString`/`isRetryable`/
-  `withMessage` all work end-to-end (E2E-verified: `crates/skyc/tests/
+  `withMessage` all work end-to-end (E2E-verified: `crates/ipe/tests/
   golden_error_adt_roundtrip.rs`). **Backlog #85 follow-up (same session):**
   `ErrorInfo.details : Maybe ErrorDetails` + the 5-variant `ErrorDetails`
   union (`FfiPanic PanicInfo | TypeMismatch TypeInfo | HttpStatus Int |
@@ -1287,12 +1287,12 @@ API-shape review):
   `ErrorKind` (canon ctor registration, `IrType::ErrorDetails` leaf,
   `builtin_runtime_enum`, constrain ctor schemes for all 5 variants).
   `Error.withDetails : ErrorDetails -> Error -> Error` is the sanctioned way
-  to attach `ErrorDetails` to a live `Error` from Sky source. **SEAL fix
+  to attach `ErrorDetails` to a live `Error` from Ipê source. **SEAL fix
   2026-07-11** (`docs/architecture/
   error-record-literal-seal-fix-2026-07-11.md`): `PanicInfo` / `TypeInfo` /
   `ErrorInfo` are NOMINAL opaque builtin types (backed by the runtime's
   `SkyPanicInfo`/`SkyTypeInfo`/`SkyErrorInfo` structs), not anonymous
-  structural records. Raw record-literal construction is a LOUD `skyc`-time
+  structural records. Raw record-literal construction is a LOUD `ipe`-time
   IPE-T0001 rejection — before the fix it was silently accepted and the
   emitted project failed `cargo build` (E0308: the literal lowered to a
   project-local synthesized struct), an exit-0-then-cargo-fail that was
@@ -1306,9 +1306,9 @@ API-shape review):
   (`HttpStatus`/`JsonDecode`/`Custom` — the non-record-payload ones)
   round-tripping through `ErrorInfo.details`, plus exhaustive compile-time
   coverage of all 5 (`FfiPanic`/`TypeMismatch` as unreached `case` arms):
-  `crates/skyc/tests/golden_error_details_roundtrip.rs`; nominal-payload
-  coherence: `crates/skyc/tests/golden_error_nominal_payload.rs`; the
-  record-literal rejections: `crates/skyc/tests/
+  `crates/ipe/tests/golden_error_details_roundtrip.rs`; nominal-payload
+  coherence: `crates/ipe/tests/golden_error_nominal_payload.rs`; the
+  record-literal rejections: `crates/ipe/tests/
   error_record_literal_gates.rs`.
 - **Sanctioned:** yes (matches the reference design exactly; construction
   goes through the smart constructors + `withDetails`, and the former
@@ -1325,7 +1325,7 @@ API-shape review):
   String` to `pub use sky_runtime::error::SkyError` in the same change — the
   "69-golden flip" #85 had originally deferred this work for.
 
-### B-SqlFragment — `Std.Db.Sql` typed WHERE-fragment builder; `Db.unsafeFindWhere` removed (backlog #61)
+### B-SqlFragment — `Ipe.Db.Sql` typed WHERE-fragment builder; `Db.unsafeFindWhere` removed (backlog #61)
 - **Reference:** the Go backend's `Db.unsafeFindWhere : Db -> String -> String
   -> List String -> Task Error (List Row)` accepts a raw, hand-built WHERE
   clause string with `?`-parameterized args — the values are bind-safe, but
@@ -1333,7 +1333,7 @@ API-shape review):
   is caller-authored text with no typed guard against a mistaken
   string-interpolated fragment sneaking in alongside the intentional
   parameterization.
-- **ipê design:** a new opaque `SqlFragment` type (`Std.Db.Sql`, qualifier
+- **ipê design:** a new opaque `SqlFragment` type (`Ipe.Db.Sql`, qualifier
   `Sql`) whose ONLY constructors are typed combinators — `column`, `param`
   (plus the `int`/`string`/`float`/`bool` sugar), `eq`/`ne`/`gt`/`lt`/`gte`/
   `lte`, `and`/`or`/`not`, `isNull`/`isNotNull`, `inList`, `like`. Every
@@ -1341,7 +1341,7 @@ API-shape review):
   precedence bugs are unrepresentable and a `SqlFragment`'s `sql` text is
   always `?`-placeholder text with a matching `binds` list. `Db.findWhere` /
   `Db.deleteWhere` take `SqlFragment`, not `String` — a naive
-  string-concatenated WHERE clause is now a `skyc` compile-time `IPE-T0001`
+  string-concatenated WHERE clause is now a `ipe` compile-time `IPE-T0001`
   type mismatch, never a runtime value. `Db.unsafeFindWhere` (and its runtime
   `db_unsafe_find_where`) is REMOVED, not deprecated — the security-tier
   no-deferral rule (`CLAUDE.md` / `PRINCIPLES.md`) treats "keep the raw-SQL
@@ -1358,17 +1358,17 @@ API-shape review):
   combinators + `db_find_where`/`db_delete_where`), `crates/sky_kernels/src/
   lib.rs` (`SqlColumn..DbDeleteWhere` tail-appended kernels),
   `crates/sky_types/src/constrain.rs` (`stdlib_scheme` `FIRST_SCHEMED`
-  entries), `crates/skyc/tests/golden_m5b_db.rs` (`db_find_where` /
+  entries), `crates/ipe/tests/golden_m5b_db.rs` (`db_find_where` /
   `db_delete_where` / `db_sql_combinators`) + `golden_m5b_db_gates.rs`
   (`db_findwhere_string_is_t0001` — the negative "parse, don't validate"
   proof). Spec: `docs/architecture/class6-secret-sqlfragment-fix-spec-2026-07-09.md`.
 
-### B-Secret — `Sky.Core.Secret` opaque secret-string type; `Auth.signToken`/`verifyToken` re-typed (backlog #44)
-- **Reference:** the Go backend's `Std.Auth.signToken` / `verifyToken` take a
+### B-Secret — `Ipe.Secret` opaque secret-string type; `Auth.signToken`/`verifyToken` re-typed (backlog #44)
+- **Reference:** the Go backend's `Ipe.Auth.signToken` / `verifyToken` take a
   plain `String` signing key, and every other Go/Haskell surface handles API
   keys / passwords / tokens as bare `String` — no typed boundary stops one
   from landing in a log line, a `fmt.Sprintf("%v", …)`, or an error message.
-- **ipê design:** a new opaque `Secret` type (`Sky.Core.Secret`, 3 kernels:
+- **ipê design:** a new opaque `Secret` type (`Ipe.Secret`, 3 kernels:
   `fromString` — the seal; `reveal` — the single greppable un-parse;
   `redacted` — the explicit `"<redacted>"` accessor). `Auth.signToken` /
   `Auth.verifyToken`'s signing-key argument is re-typed `String -> Secret`
@@ -1382,7 +1382,7 @@ API-shape review):
   reach instead, so no `ty_is_equatable`/`has_show` denylist is needed at
   all. `Secret` has NO `Display`, NO `Hash`, NO `Ord`, NO `serde`: a bare
   `Basics.toString`/`Debug.toString` call and any `Dict`-key/`Set`-element/
-  ordering (`<`/`>`) use are Rust-or-Sky-level compile errors, never a
+  ordering (`<`/`>`) use are Rust-or-Ipê-level compile errors, never a
   runtime concern (Dict-key/ordering rejection needs zero new type-checker
   code — `Secret` is a bare `Ty::Con` outside the 4-5-scalar
   `comparable`/`Ord` allowlist already). The backing buffer is zeroized on
@@ -1393,7 +1393,7 @@ API-shape review):
   enforcement section); no Go counterpart type exists (`oracle_divergence =
   true` on every new golden). `Secret` is `Clone + PartialEq` (derivable) but
   deliberately NOT `serde` — this is ALSO the mechanism that makes a
-  `Std.Live` Model field of type `Secret` a compile-time `IPE-L0120`
+  `Ipe.Live` Model field of type `Secret` a compile-time `IPE-L0120`
   (never a session-store leak): `ir_type_is_serde(Secret) = false` gates the
   Live Model exactly like it gates `SqlFragment`. A record containing a
   `Secret` field stays fully `Clone`/`Debug`/`==` (the #45/#70
@@ -1405,14 +1405,14 @@ API-shape review):
   `crates/sky_types/src/constrain.rs` (`stdlib_scheme` `FIRST_SCHEMED`
   entries + the `AuthSignToken`/`AuthVerifyToken` re-typing),
   `crates/sky_backend_rust/src/project.rs` (`AUTH_WRAPPERS` reveals the
-  `Secret` at the Sky-facing boundary before delegating to the runtime's
+  `Secret` at the Ipê-facing boundary before delegating to the runtime's
   unchanged `String`-typed `auth_sign_token`/`auth_verify_token`),
-  `crates/skyc/tests/golden_secret.rs` (seal/reveal/redacted round trip,
+  `crates/ipe/tests/golden_secret.rs` (seal/reveal/redacted round trip,
   `==` match/mismatch/length-mismatch, record-containing-Secret,
   Log.infoWith redaction, Auth sign/verify round trip) +
-  `crates/skyc/tests/secret_gates.rs` (`secret_concat_is_rejected` — the
+  `crates/ipe/tests/secret_gates.rs` (`secret_concat_is_rejected` — the
   negative "parse, don't validate" proof) +
-  `crates/skyc/tests/model_admissibility.rs`
+  `crates/ipe/tests/model_admissibility.rs`
   (`live_model_with_secret_field_is_rejected`). Spec:
   `docs/architecture/class6-secret-sqlfragment-fix-spec-2026-07-09.md`.
   **Out of scope, explicitly deferred** (per the spec's own filed-follow-ups
@@ -1431,7 +1431,7 @@ API-shape review):
 
 - **Reference:** the Go backend's `DbDec_money` (`../sky/runtime-go/rt/
   db_decoder.go:202-244`) returns a full `Decoder Money`, constructing the
-  Sky `Money` ADT directly at the runtime layer (including resolving the
+  Ipê `Money` ADT directly at the runtime layer (including resolving the
   3-letter ISO code to a `Currency` ADT variant via a hand-rolled
   `sqlCodeToCurrency` switch) — Go's runtime is dynamically-typed
   (`any`-based `SkyADT`), so it can construct an arbitrary user ADT value at
@@ -1450,19 +1450,19 @@ API-shape review):
   API-shape difference, not a strictly-better-security/correctness class;
   Go's `Decoder Money` shape cannot be replicated without a
   `Currency`-construction codegen wrapper that reimplements Go's 50+-code
-  `sqlCodeToCurrency` table (or calls into a Sky-level
-  `Std.Money.parseCurrency`-equivalent) — filed as a separate follow-up, not
+  `sqlCodeToCurrency` table (or calls into a Ipê-level
+  `Ipe.Money.parseCurrency`-equivalent) — filed as a separate follow-up, not
   bundled into this mechanical kernel-registration fix. Before this fix,
   `db_decode_money` was fully implemented and unit-tested in the runtime
   (`test_db_decode_money_roundtrip`) but had NO `StdlibKernel` variant, NO
-  constrain scheme, and NO lower/emit arm — unreachable from Sky source
+  constrain scheme, and NO lower/emit arm — unreachable from Ipê source
   (`ipe-index parity --gaps` flagged `DbDec.money go=1 rust=0`). Reference:
   `crates/sky_canon/src/env.rs` (`Db.Decode` allowlist), `crates/sky_kernels/
   src/lib.rs` (`DbDecMoney` decl + `is_db()` classification),
   `crates/sky_types/src/constrain.rs` (`K::DbDecMoney` scheme +
   exhaustiveness list), `crates/sky_lower/src/lower.rs` (arity-1 dispatch +
   callee resolution), `crates/sky_backend_rust/src/{naming,emit_expr}.rs`,
-  `crates/sky_ir/src/pretty.rs`, `crates/skyc/tests/golden_m5b_db.rs`
+  `crates/sky_ir/src/pretty.rs`, `crates/ipe/tests/golden_m5b_db.rs`
   (`db_decode_money`). Spec:
   `docs/architecture/class7-sql-db-fix-spec-2026-07-09.md` §6.
 
@@ -1474,7 +1474,7 @@ API-shape review):
   point-free binding `f = Ffi.kernel "Module_function"` and rewrites `f`'s call
   sites to the kernel at LOWERING (`../sky/src/Sky/Build/Compile.hs`
   `collectKernelAliases` → `_lc_kernelAlias`), typing the alias against the
-  binding's own Sky annotation. An `Ffi.kernel` string that names no kernel is
+  binding's own Ipê annotation. An `Ffi.kernel` string that names no kernel is
   not structurally rejected at that boundary — Go's dynamically-typed runtime
   routes it to the `ffi_kernel_polyfill` (`Kernel.hs:780`), which can panic at
   run time.
@@ -1489,30 +1489,30 @@ API-shape review):
 - **Fail-closed (SEAL):** a pair the registry does NOT cover — or a malformed
   string with no usable `_` split — is rejected at compile time with
   `NameError::UnknownKernelAlias` (**IPE-N0028**), never emitted as a call to a
-  non-existent kernel that would type-check in `skyc` yet fail the downstream
+  non-existent kernel that would type-check in `ipe` yet fail the downstream
   `cargo build`. This is the "make invalid states unrepresentable" rule applied
-  to the kernel-alias path: `skyc` acceptance is a structural proof the kernel
-  exists. Regression: `crates/skyc/tests/golden_ffi_kernel_alias_seal.rs`
+  to the kernel-alias path: `ipe` acceptance is a structural proof the kernel
+  exists. Regression: `crates/ipe/tests/golden_ffi_kernel_alias_seal.rs`
   (unknown → IPE-N0028; malformed → IPE-N0028; registered `String_toUpper` →
-  skyc-0 AND cargo-0).
+  ipe-0 AND cargo-0).
 - **Layered fail-closed for arity/lowering gaps:** because ipê types the alias's
   *body* via the kernel's HM scheme (not a flexible var — a flexible var would be
   the exact exit-0-then-cargo-fail hole the SEAL forbids), an alias whose declared
   annotation arity differs from the kernel's scheme is rejected with **IPE-T0001**
   at type-check, and a kernel with no lowering arm is rejected with **IPE-L0108**
-  at lowering. Both are clean `skyc`-time rejections — no cargo-fail. Consequence:
+  at lowering. Both are clean `ipe`-time rejections — no cargo-fail. Consequence:
   some upstream compiled-source modules stay kernel-blocked on ipê until their
   Rust kernels (and, where the annotation diverges from the kernel scheme, the
   matching lowering) exist:
-  - **Registry-blocked (no `StdlibKernel` variant, IPE-N0028):** `Std.Trace`,
-    `Std.Cache`, `Std.Csv`, `Std.Email`, `Std.Compression`, `Std.Config`,
-    `Sky.Core.WebSocket` (incl. its `Sub_subscribeWebSocket`).
+  - **Registry-blocked (no `StdlibKernel` variant, IPE-N0028):** `Ipe.Trace`,
+    `Ipe.Cache`, `Ipe.Csv`, `Ipe.Email`, `Ipe.Compression`, `Ipe.Config`,
+    `Ipe.WebSocket` (incl. its `Sub_subscribeWebSocket`).
   - **Lowering-blocked (kernel in the registry but no lower/emit arm, IPE-L0108
-    / emit `CompilerBug`):** *(none — backlog #215 resolved `Std.PubSub`: it now
+    / emit `CompilerBug`):** *(none — backlog #215 resolved `Ipe.PubSub`: it now
     emits `pubsub_publish::<_, SkyError>(topic, payload)` with scheme
-    `String -> a -> Task Error Int`; skyc-0 AND cargo-0 guaranteed.  The payload
+    `String -> a -> Task Error Int`; ipe-0 AND cargo-0 guaranteed.  The payload
     `a` is a genuine monomorphized type var, never erased.)*
-  - **Arity-blocked (IPE-T0001):** `Sky.Core.Pure`'s internal `uuidV4Kernel` /
+  - **Arity-blocked (IPE-T0001):** `Ipe.Pure`'s internal `uuidV4Kernel` /
     `uuidV7Kernel` helpers annotate an arity-0 `Task Error String` value over the
     arity-1 `Uuid_v4`/`Uuid_v7` kernels (`() -> Task Error String`). Go's
     `func() any` runtime boundary absorbs the arity difference; Rust's
@@ -1527,21 +1527,21 @@ API-shape review):
   `ExportedKernelAlias`), `crates/sky_diagnostics/src/{code,diagnostic,render}.rs`
   + `explain/IPE-N0028.md`.
 
-### B-UiEventsFnArg — `Std.Ui.Events.onSubmit`/`onInput` take a handler function, not a bare Msg
+### B-UiEventsFnArg — `Ipe.Ui.Events.onSubmit`/`onInput` take a handler function, not a bare Msg
 
-- **Reference:** upstream `Std.Ui.Events` (`../sky/sky-stdlib/Std/Ui/Events.sky`)
+- **Reference:** upstream `Ipe.Ui.Events` (`../sky/sky-stdlib/Std/Ui/Events.sky`)
   re-exports `onSubmit : a -> Attribute b` and `onInput : msg -> Attribute msg`
-  — the arg is a bare value, matching upstream `Std.Ui`'s permissive event
+  — the arg is a bare value, matching upstream `Ipe.Ui`'s permissive event
   kernels.
 - **ipê design:** the Rust `Ui.onSubmit` kernel is `(a -> msg) -> Attribute msg`
   and `Ui.onInput` is `(String -> msg) -> Attribute msg` (function-arg handlers
   — `crates/sky_types/src/constrain.rs`, `K::UiOnSubmit`/`K::UiOnInput`). The
-  `Std.Ui.Events` re-exports mirror those kernel schemes
+  `Ipe.Ui.Events` re-exports mirror those kernel schemes
   (`onSubmit : (a -> msg) -> Ui.Attribute msg`,
   `onInput : (String -> msg) -> Ui.Attribute msg`); the upstream bare-value
   signatures would not type-check against the ipê kernel. `onClick` is unchanged
-  (`msg -> Attribute msg` on both). Resolves the module fully (skyc-0 AND
-  cargo-0). Reference: `crates/skyc/stdlib/Std/Ui/Events.ipe`.
+  (`msg -> Attribute msg` on both). Resolves the module fully (ipe-0 AND
+  cargo-0). Reference: `crates/ipe/stdlib/Std/Ui/Events.ipe`.
 - **Sanctioned:** yes, tagged `divergence` — an API-shape difference emergent
   from ipê's function-arg event-kernel schemes; the re-export must match the
   kernel it forwards to.
@@ -1576,7 +1576,7 @@ site-builder):
   violates the no-`unsafe` spirit); (4) baseline: fast watch-rebuild →
   restart → session-store persist → SSE reconnect. Open: `Model`-shape
   migration on type changes; interpreter eval path must stay sandboxed.
-- **`Std.Ui` as a backend-agnostic UI IR** — target chosen by a function call
+- **`Ipe.Ui` as a backend-agnostic UI IR** — target chosen by a function call
   (`Ui.toHtml : Element -> String`, `Ui.toAnsi : Element -> AnsiBuffer`),
   decoupling *what UI* from *how rendered*. Pure functions — excellent
   principle fit. **Security is load-bearing:** HTML *generation* must keep
@@ -1678,7 +1678,7 @@ widening the corpus. **Oracle policy per patch class:** output-neutral
 departures keep byte-equivalence against the Go oracle running the UNpatched
 source; output-changing departures record an `oracle_divergence + reason`
 (carried in the patch-file header) per the sanctioned-divergence policy.
-**Codemod synergy:** mechanical departures ship with a `skyc fix`
+**Codemod synergy:** mechanical departures ship with a `ipe fix`
 auto-migration; CI can generate the patches by running the migrator over
 pristine sources — the queue doubles as an end-to-end test of the user-facing
 migration tool.
@@ -1686,7 +1686,7 @@ migration tool.
 ### 6.10 `ipe lint` — source-level lint tool (design complete)
 
 The reference ships no lint subsystem — no lint pass, no lint CLI command, no
-per-site suppression (its `Sky/Lsp/Diag.hs` republishes compiler diagnostics
+per-site suppression (its `Ipê/Lsp/Diag.hs` republishes compiler diagnostics
 only). ipê adds `ipe lint`, an elm-review/clippy-class static-analysis tool
 over the compiler's own artifacts (parse AST + canon AST + `SolvedTypes` —
 never a second analyzer): visitor-schema rules in a new `sky_lint` crate,

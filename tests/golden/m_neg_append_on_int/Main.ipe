@@ -6,7 +6,7 @@ import Ipe.Log exposing (println)
 
 -- NEGATIVE: `++` on Int should fail with IPE-T0014 (Appendable obligation
 -- unsatisfied) — Int is neither String nor List _. This must be rejected at
--- skyc type-check, never reaching the backend.
+-- ipe type-check, never reaching the backend.
 v : Int
 v =
     1 ++ 2

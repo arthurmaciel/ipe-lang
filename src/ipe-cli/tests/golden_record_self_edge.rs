@@ -1,5 +1,5 @@
 //! Recursion-soundness gate: a self-edge routed through a RECORD
-//! payload. `skyc` must emit `main.rs` byte-identical to the checked-in golden,
+//! payload. `ipe` must emit `main.rs` byte-identical to the checked-in golden,
 //! and (behind `IPE_E2E=1`) the emitted project must build and print `5`.
 //!
 //! ```text
@@ -10,7 +10,7 @@
 //! field reaches `RChain` again — the type-size cycle `RChain -> RecRestVal ->
 //! RChain` is closed *through a record*. Boxing only a direct self-edge would
 //! emit `RNode(RecRestVal)` with `RecRestVal { rest: MainRChain, .. }` —
-//! mutually infinite-sized Rust types (E0072): `skyc` exits 0 and the crate then
+//! mutually infinite-sized Rust types (E0072): `ipe` exits 0 and the crate then
 //! fails `cargo build`. So the backend boxes the cyclic enum-payload edge
 //! (`RNode(Box<RecRestVal>)`), which breaks the cycle without
 //! touching the record struct, balanced by `Box::new` at construction and a

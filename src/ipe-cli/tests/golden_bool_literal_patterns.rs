@@ -1,6 +1,6 @@
 //! Boolean literal patterns: `case b of True -> … ; False -> …`.
 //! A `True` + `False` pair is a CLOSED, exhaustive cover of `Bool` (no wildcard
-//! required). `skyc` must emit `main.rs` byte-identical to the checked-in
+//! required). `ipe` must emit `main.rs` byte-identical to the checked-in
 //! golden, and (behind `IPE_E2E=1`) the emitted project must build and print
 //! `1`.
 //!

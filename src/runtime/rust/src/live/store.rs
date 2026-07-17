@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 /// Wire-format epoch for the Model schema tag (H24). Must equal the
 /// backend's `emit_model_schema::WIRE_EPOCH` — the epoch is folded into the
-/// compile-time `IPE_LIVE_MODEL_SCHEMA_TAG` each generated Sky.Live binary
+/// compile-time `IPE_LIVE_MODEL_SCHEMA_TAG` each generated Ipe.Live binary
 /// carries. Bumped ONLY when the tag framing / blob encoding itself changes
 /// shape (domain-separation convention), never for a Model change — the
 /// Model's own shape is covered by the structural half of the hash.

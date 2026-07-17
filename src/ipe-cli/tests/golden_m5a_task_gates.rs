@@ -64,7 +64,7 @@ fn task_bad_error_channel_is_sky_t0001() {
 /// fails" class violation. The scheme is pinned to `fun(error_ty(),
 /// task(var(0)))`, matching `mapError`/`onError` and the bundled
 /// `Ipe.Task.ipe:33` annotation (`fail : Error -> Task Error a`), so the
-/// mismatch is caught at `skyc` type-check time. This also pins the
+/// mismatch is caught at `ipe` type-check time. This also pins the
 /// divergence from upstream Sky's polymorphic `fail : e -> Task e a`
 /// (`docs/divergences-from-sky.md`, "`Task` error-channel scheme is
 /// monomorphic") — a future "restore Elm-parity polymorphism" change cannot

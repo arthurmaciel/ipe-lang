@@ -1,4 +1,4 @@
-name = "skychess"
+name = "ipehess"
 version = "0.1.0"
 entry = "src/Main.ipe"
 
@@ -8,11 +8,11 @@ root = "src"
 [live]
 port = 8000
 store = "sqlite"
-storePath = "skychess.db"
+storePath = "ipehess.db"
 
 [database]
 driver = "sqlite"
-path = "skychess.db"
+path = "ipehess.db"
 
 ["go.dependencies"]
 "crypto/sha256" = "latest"

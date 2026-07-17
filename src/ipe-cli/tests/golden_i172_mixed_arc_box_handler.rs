@@ -1,7 +1,7 @@
 //! A promoted Arc-root handler and a non-promoted
 //! function-value sibling unified at ONE Rust type position.
 //!
-//! Without the fix, `skyc build` exits 0, but the emitted Rust fails `cargo build` with
+//! Without the fix, `ipe build` exits 0, but the emitted Rust fails `cargo build` with
 //! E0308. A function-typed `let handler = \form -> …` flows into the
 //! `Ui.onSubmit` kernel (a `requires_sync_capture` consumer), so the lowerer
 //! promotes it to an `Expr::SharedLambda` — its reads render
@@ -9,7 +9,7 @@
 //! of an `if`/`case` whose SIBLING branch renders a function value at the
 //! DEFAULT `Box<dyn Fn(..) + Send + Sync>` carrier, the two branches must unify
 //! at one Rust type slot. `Arc` and `Box` are distinct types even with identical
-//! trait bounds → E0308 (SEAL break: skyc exit 0, cargo fail). Four sibling
+//! trait bounds → E0308 (SEAL break: ipe exit 0, cargo fail). Four sibling
 //! shapes exercise the whole class:
 //!
 //!   (1) inline-lambda sibling  (`else \form -> Noop`)                — base case
@@ -35,7 +35,7 @@
 //!
 //! Run:
 //! ```text
-//! IPE_E2E=1 cargo test -p skyc --test golden_i172_mixed_arc_box_handler
+//! IPE_E2E=1 cargo test -p ipe --test golden_i172_mixed_arc_box_handler
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -54,7 +54,7 @@ fn entry_path(root: &Path, fixture: &str) -> PathBuf {
         .join("Main.ipe")
 }
 
-/// skyc-0 ∧ carrier-unification: the compiler must accept the program AND emit
+/// ipe-0 ∧ carrier-unification: the compiler must accept the program AND emit
 /// the `Ui.onSubmit` argument's sibling branches through the identical `Arc`
 /// carrier — checked unconditionally (cheap, no `cargo`), independent of the
 /// `IPE_E2E` gate. This is the exact assertion the E0308/E0507 SEAL break cannot
@@ -81,7 +81,7 @@ fn assert_skyc_unifies_to_arc(fixture: &str) {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for {fixture}: {:?}",
+        "ipe build must succeed for {fixture}: {:?}",
         built.err()
     );
 
@@ -115,7 +115,7 @@ fn assert_skyc_unifies_to_arc(fixture: &str) {
 
 /// cargo-0 ∧ run-0: the emitted project actually compiles with `rustc` (no
 /// E0308/E0507) and renders the form. Gated on `IPE_E2E=1` — the only check that
-/// would have caught the original SEAL violation (E0308, `skyc build` clean).
+/// would have caught the original SEAL violation (E0308, `ipe build` clean).
 fn assert_cargo_builds_and_runs(fixture: &str) {
     if std::env::var("IPE_E2E").is_err() {
         return;
@@ -133,7 +133,7 @@ fn assert_cargo_builds_and_runs(fixture: &str) {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for {fixture}: {:?}",
+        "ipe build must succeed for {fixture}: {:?}",
         built.err()
     );
 

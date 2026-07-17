@@ -1,6 +1,6 @@
 //! Fixed Rust-target templates emitted verbatim for every program.
 //!
-//! The Sky → Rust codegen wraps the user's emitted types and functions in a
+//! The Ipê → Rust codegen wraps the user's emitted types and functions in a
 //! fixed prologue (header, imports, basic type aliases, runtime re-exports) and
 //! a fixed epilogue (`Ffi.kernel` polyfill, list helpers, FFI-placeholder
 //! banner, entry point). Those two fixed regions are produced here.

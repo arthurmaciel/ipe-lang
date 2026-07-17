@@ -10,7 +10,7 @@ in `docs/adr/`; this file plans, it does not restate them. Enforcement rules
 
 **Principle order** (strict tie-breaker): security > correctness > soundness >
 efficiency > completeness > readability. **Two fundamental rules**: parse don't
-validate; make invalid states unrepresentable. **The SEAL**: if `skyc` accepts
+validate; make invalid states unrepresentable. **The SEAL**: if `ipe` accepts
 a program, the emitted Rust must `cargo build`.
 
 ---
@@ -27,9 +27,9 @@ Go reference ✓**.
 `36-composite-server` (#221, `IPE-L0126`). Its diagnostic-misattribution half
 (Defect B) has landed; the substantive half (Fix A) is in flight — see below.
 
-**Stdlib: 4 deferred families (#210).** DONE — all four seal (skyc-0 ⇒ cargo-0).
-`Std.Cache`, `Std.PubSub`, `Std.Email` (EmailProvider runtime-enum bridge + 4
-record folds + `lettre`), `Sky.Core.WebSocket` (client subs), and `Std.Config`
+**Stdlib: 4 deferred families (#210).** DONE — all four seal (ipe-0 ⇒ cargo-0).
+`Ipe.Cache`, `Ipe.PubSub`, `Ipe.Email` (EmailProvider runtime-enum bridge + 4
+record folds + `lettre`), `Ipe.WebSocket` (client subs), and `Ipe.Config`
 (shared `Decoder` carrier) are wired via runtime-struct-alias + phantom-param +
 trait-bound codegen beyond plain kernel registration.
 
@@ -124,16 +124,16 @@ Alongside / feeding the push:
 
 | Item | Priority | Status | Backlog / spec |
 |---|---|---|---|
-| #35 Examples-sweep ported to skyc + run as the gate | High | ported; gates on #221 landing | — |
-| #110 Oracle full activation (HTML/tui/scenario normalizers, release-skyc rebuild, CI phase-2 flip, divergence corpus) | High | pending | — |
+| #35 Examples-sweep ported to ipe + run as the gate | High | ported; gates on #221 landing | — |
+| #110 Oracle full activation (HTML/tui/scenario normalizers, release-ipe rebuild, CI phase-2 flip, divergence corpus) | High | pending | — |
 | #37 CI (examples-sweep.yml + ci.yml) + push to `arthurmaciel/ipe-lang`; includes the upstream-example patch queue | High | pending | — |
-| Publish the honest README (relation-to-Elm-and-Sky framing) after re-running the divergences review | Medium | pending | `docs/README-draft-relation-to-elm-and-sky.md` |
+| Publish the honest README (relation-to-Elm-and-Ipê framing) after re-running the divergences review | Medium | pending | `docs/README-draft-relation-to-elm-and-sky.md` |
 
 ### Hardening follow-ups (correctness/efficiency debts, non-sweep-blocking)
 
 | Item | Priority | Status | Backlog |
 |---|---|---|---|
-| #210 Register the 4 deferred stdlib families needing emit-layer marshalling (`Std.Cache` residual, `Std.Email`, `Sky.Core.WebSocket`, `Std.Config`) | High | done 2026-07-16 | #210 |
+| #210 Register the 4 deferred stdlib families needing emit-layer marshalling (`Ipe.Cache` residual, `Ipe.Email`, `Ipe.WebSocket`, `Ipe.Config`) | High | done 2026-07-16 | #210 |
 | #169 `ws_client.rs` client-side WebSocket subs — relax over-strict bound in the same commit that first wires their `KernelFn` arm | Medium | pending (unreachable today) | #169 |
 | #170 onSubmit payload classifier — extend `is_definitely_not_callable` to record/tuple/list literal payloads | Low | pending | #170 |
 | #31 make-invalid-states-unrepresentable hardening remainder | Medium | pending | — |
@@ -162,7 +162,7 @@ the restructure.
 | Evaluate more principled compilation strategies from the reference Haskell backend + `elm/compiler`; adopt only where a principle strictly improves, else record the comparison | Medium | `docs/architecture/sky-upstream-learnings.md` |
 | Implement filed divergent features (deep-update sugar, or-patterns, pattern guards, record punning, hot-reload family, time-travel debugger, …) | Medium | `docs/divergences-from-sky.md#planned-future-divergences` |
 | #56b Row-var record annotation syntax `{ r \| f : T }` (needs per-record-shape callee monomorphisation) | Medium | `docs/adr/0018-row-poly-records-pinned-before-lowering.md` |
-| #207 Ipê-level source lint tool (elm-review / clippy shaped, over the typed AST) — DEPARTURE from Sky | Low | #207 |
+| #207 Ipê-level source lint tool (elm-review / clippy shaped, over the typed AST) — DEPARTURE from Ipê | Low | #207 |
 | #208 Refuse a wildcard `case` arm on a finite-variant ADT (force exhaustive arms) — DEPARTURE from Elm | Low | #208 |
 | #209 Co-located property verification (`verify` blocks: examples + compiler-checked laws) — EXTENSION, deferred pending validity review | Low | #209 (deferred) |
 
@@ -213,7 +213,7 @@ above is a product decision.
   type-checker; headline feature is TEA scaffolding (snippets, code actions,
   lints), every generated edit behind a `VerifiedEdit` re-check gate.
   `docs/architecture/ipe-lsp.md`.
-- **TEA everywhere** — opt-in headless `Std.Worker.program` shape for every
+- **TEA everywhere** — opt-in headless `Ipe.Worker.program` shape for every
   backend, modelled on Elm's `Platform.worker`; strictly additive (existing
   entries byte-unchanged), sound headless termination via source-task liveness.
   `docs/architecture/tea-everywhere.md`.

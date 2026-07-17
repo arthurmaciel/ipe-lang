@@ -9,7 +9,7 @@ import Ipe.Log exposing (println)
 -- symbols. `a` is a CloneOk `String` read TWICE by value in the body, so the
 -- first read must `.clone()` — otherwise the emitted
 -- `string_append(a, string_append(a, b))` moves `a` twice → cargo E0382
--- (use of moved value) after skyc exit 0. Destructure was the ONE binder kind
+-- (use of moved value) after ipe exit 0. Destructure was the ONE binder kind
 -- the per-binder-kind clone machinery never covered; routing it through the
 -- shared `apply_move_ownership` entry point closes the class.
 combine : ( String, String ) -> String

@@ -5,7 +5,7 @@
 //!
 //! **Why this matters.** `callee_name()` in `emit_expr.rs` calls `kernel_name(k)`
 //! and emits the returned string as a bare Rust identifier in generated code.  A
-//! wrong name compiles fine in the Sky backend (it's just a string) but produces
+//! wrong name compiles fine in the Ipê backend (it's just a string) but produces
 //! an `undefined` error when `cargo build` runs on the generated project.  This
 //! test makes that class of bug a compile-time-of-the-test-suite failure rather
 //! than a user-facing "cargo build failed" surprise.

@@ -123,7 +123,7 @@ fn single_ctor_union_def_param_is_sky_t0015() {
 }
 
 /// Positive regression: single-ctor union accessor via `case` compiles clean.
-/// Guards the seal: skyc exit-0 → emitted Rust cargo-builds without error.
+/// Guards the seal: ipe exit-0 → emitted Rust cargo-builds without error.
 #[test]
 fn single_ctor_case_accessor_compiles() {
     let root = repo_root();
@@ -146,7 +146,7 @@ fn single_ctor_case_accessor_compiles() {
 }
 
 /// Seal remeasure: building examples/00-standard-libs must NOT produce IPE-T0015
-/// on Std/Money or Sky/Test after the Std/Money.ipe accessor fix.
+/// on Std/Money or Ipê/Test after the Std/Money.ipe accessor fix.
 #[test]
 fn standard_libs_sky_t0015_money_blocker_gone() {
     let root = repo_root();

@@ -1,10 +1,10 @@
 module Main exposing (main)
 
--- Sky Console (Phase A — Ipe.Ui Ipe.Live mini-app).
+-- Ipê Console (Phase A — Ipe.Ui Ipe.Live mini-app).
 --
 -- Phase A: standalone Ipe.Live example that proves the Ipe.Ui UI
 -- works typed end-to-end with mocked data. Once green, the same
--- source moves to sky-stdlib/Sky/Internal/Console/ in Phase B and
+-- source moves to sky-stdlib/Ipê/Internal/Console/ in Phase B and
 -- the runtime auto-mounts it under /_sky/console.
 --
 -- No hand-written JS in this source — every interaction is

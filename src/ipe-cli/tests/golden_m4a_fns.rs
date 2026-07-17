@@ -8,7 +8,7 @@
 //! compiler, the higher-order ones
 //! (`map` / `filter` / `foldl` / `foldr`) stay kernel-anchored — they route to the
 //! generic runtime functions (`list_foldl`, …) rather than to monomorphised user
-//! Sky code, which the front end cannot yet produce for a cross-module
+//! Ipê code, which the front end cannot yet produce for a cross-module
 //! polymorphic HOF.
 //!
 //! Functions exercised across the goldens (every one verified Go≡Rust):

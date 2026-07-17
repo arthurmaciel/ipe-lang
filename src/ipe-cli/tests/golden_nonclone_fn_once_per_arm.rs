@@ -15,7 +15,7 @@
 //!
 //! Run:
 //! ```text
-//! cargo test -p skyc --test golden_i193_nonclone_fn_once_per_arm
+//! cargo test -p ipe --test golden_i193_nonclone_fn_once_per_arm
 //! ```
 
 use std::path::{Path, PathBuf};

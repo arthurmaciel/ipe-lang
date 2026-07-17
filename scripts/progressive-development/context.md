@@ -14,15 +14,15 @@ human meant a different subset, they will edit this file.)
 any of these, STOP and escalate. Do not land it. This outranks "make progress".
 
 ## 1. The seal (the core mandate)
-**No exit-0-then-cargo-fail.** If `skyc` accepts a program (exit 0), the emitted
-Rust MUST `cargo build`. Never emit codegen that type-checks in skyc but fails
+**No exit-0-then-cargo-fail.** If `ipe` accepts a program (exit 0), the emitted
+Rust MUST `cargo build`. Never emit codegen that type-checks in ipe but fails
 `cargo`. Closing that gap is the point of most mechanical items.
 
 ## 2. The six principles (PRINCIPLES.md)
 
 Read PRINCIPLES.md fully and also follow the practical rules below.
 
-1. **If it compiles, it works** — no runtime panic from well-typed Sky. Every panic class has a regression test.
+1. **If it compiles, it works** — no runtime panic from well-typed Ipê. Every panic class has a regression test.
 2. **Root-cause only** — never suppress a type error or warning; a defensive cover-up that hides a contract violation IS a violation.
 3. **Match the reference** — Go/Haskell (`../sky`) parity is the default. Diverge ONLY where strictly better (Rust/Unicode/modern) AND recorded in `docs/divergences-from-sky.md`. A hack is never a "divergence".
 4. **Production-grade + maintainable** — scales to Stripe-SDK-scale FFI; stays clean.
@@ -42,7 +42,7 @@ not an orchestrator. Abort if free disk < 15 GB.
 
 ## 4b. Command & output hygiene (enforced — these waste whole builds when broken)
 - **Tee high-cost output to a file, then re-read. NEVER tail-pipe one-shot.**
-  `cargo build`/`nextest`/`clippy`/`skyc build` etc.:
+  `cargo build`/`nextest`/`clippy`/`ipe build` etc.:
   `cmd > /tmp/<step>.log 2>&1` then `rg <pat> /tmp/<step>.log` as many times as
   needed. `cmd 2>&1 | tail` DISCARDS the output — a different slice means
   RE-RUNNING the multi-minute build.
@@ -88,7 +88,7 @@ including the ENTIRE `sky_runtime::live::*` surface (`style_inject`
 CSS-injection sink gates, SSE/session/dispatch) and the `spawn_blocking`
 regression modules. A default-only gate can show green while those are red
 (mirror of CI's `runtime-full-features` job). All four lines exit 0. For a
-sweep blocker, also rebuild the example with the fresh `skyc` and confirm the
+sweep blocker, also rebuild the example with the fresh `ipe` and confirm the
 original diagnostic is gone (note the new blocker). Green → commit. Red →
 `git reset --hard` + log the reason. The tree only advances.
 

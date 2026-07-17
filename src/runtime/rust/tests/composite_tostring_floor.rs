@@ -25,11 +25,11 @@
 //!
 //! ## Go `%v` reference table (the parity oracle — empirically captured)
 //!
-//! Sky values lower to Go as: record → anonymous struct sorted by `_fieldIndex`;
+//! Ipê values lower to Go as: record → anonymous struct sorted by `_fieldIndex`;
 //! ADT → a SINGLE flattened struct (`Tag int` + every variant's payload fields).
 //! `Debug_toString` deref's pointers, then `Sprintf("%v", v)`:
 //!
-//! | Sky shape                        | Go `%v` output | Notes                                                  |
+//! | Ipê shape                        | Go `%v` output | Notes                                                  |
 //! |----------------------------------|----------------|--------------------------------------------------------|
 //! | scalar Int `5`                   | `5`            | matched here                                           |
 //! | scalar Float `42.5`              | `42.5`         | matched here                                           |
@@ -50,7 +50,7 @@
 //! 1. **No runtime panic — clean compile-time error.** A composite (record/ADT)
 //!    has no `Display` impl, so `basics_to_string(record)` fails at COMPILE time
 //!    with `E0277` (trait bound not satisfied), never at runtime. That is MORE in
-//!    line with "no runtime errors from well-typed Sky code" than Go's runtime
+//!    line with "no runtime errors from well-typed Ipê code" than Go's runtime
 //!    reflection: Rust catches it before a binary exists.
 //!
 //! 2. **The ADT shape is unmatchable in Rust's type system.** Go's `{1 42}` /
@@ -126,7 +126,7 @@ fn debug_to_string_scalars_match_go_percent_v() {
 // decision is precisely that no composite path exists to test.
 //
 //   #[derive(Clone)]
-//   struct Point_R { x: i64, y: i64 }   // a lowered Sky record
+//   struct Point_R { x: i64, y: i64 }   // a lowered Ipê record
 //   let _ = basics_to_string(Point_R { x: 1, y: 2 });  // E0277: Point_R: !Display
 //   let _ = basics_to_string(vec![1i64, 2, 3]);        // E0277: Vec<i64>: !Display
 //

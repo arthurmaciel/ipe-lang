@@ -223,7 +223,7 @@ fn emit_webview_fn(
     emit_expr_at(ctx, e, indent, child, generics)
 }
 
-/// Find a record field by its Sky source name in an IR field list.
+/// Find a record field by its Ipê source name in an IR field list.
 ///
 /// Fail-closed: a missing required field surfaces a [`Diagnostic::CompilerBug`]
 /// rather than silently emitting wrong code (MAKE INVALID STATES UNREPRESENTABLE).

@@ -20,7 +20,7 @@
 
 ### Problem statement
 
-Sky's `Float` is `comparable`, so the type checker accepts `Set Float`
+Ipê's `Float` is `comparable`, so the type checker accepts `Set Float`
 and `Dict Float v` — but the Rust backend rejects both at lowering with
 IPE-L0117, because its backings have trait bounds `f64` cannot meet:
 
@@ -57,7 +57,7 @@ dependency — small, no-unsafe-by-default, widely audited; NOT currently
 in `Cargo.lock`, verified). It provides `Ord + Eq + Hash` with
 `NaN == NaN` and NaN ordered greatest — a total order, so `BTreeSet`
 and `HashMap` invariants hold for every input including NaN, -0.0/0.0
-(which compare equal, matching IEEE and Sky `==`), and infinities.
+(which compare equal, matching IEEE and Ipê `==`), and infinities.
 
 **A2 — Boundary discipline.** `OrderedFloat` never escapes the
 collection: emitted code wraps at construction/insert/lookup call sites
@@ -100,7 +100,7 @@ stringification — lossy, unsound representation and inherits Go's NaN
 dedup-by-string quirk; (3) hand-rolled `TotalF64` newtype — re-implements
 a solved problem, more unaudited `Ord`/`Hash` code we own; (4) IEEE-754
 `totalOrder` bit-pattern ordering — distinguishes -0.0 from 0.0 and NaN
-payloads, diverging from Sky `==` on keys.
+payloads, diverging from Ipê `==` on keys.
 
 ### Implementation plan (Part A)
 
@@ -149,7 +149,7 @@ naming to be reconciled with C.2's flat-namespace redesign; shapes
 below assume the current namespace):
 
 ```elm
--- Std.Locale (new module)
+-- Ipe.Locale (new module)
 type Locale                                  -- opaque
 fromTag : String -> Maybe Locale             -- BCP-47, parse don't validate
 toTag   : Locale -> String
@@ -213,7 +213,7 @@ Part A (`runtime/tests/` + `tests/golden/`):
   `Just v`), plus `dict_keys` order deterministic with NaN last.
 - `float_key_set_ops` (runtime unit): union/diff/intersect/member with
   NaN present; sorted iteration.
-- Goldens `d3_dict_float_keys` / `d3_set_float` (`IPE_E2E=1`): a Sky
+- Goldens `d3_dict_float_keys` / `d3_set_float` (`IPE_E2E=1`): a Ipê
   program exercising `Dict Float String` + `Set Float` end-to-end;
   non-NaN fixture byte-equivalent to the Go oracle; NaN fixture marked
   `oracle_divergence = true` with the A3 reason.
@@ -230,7 +230,7 @@ Part B:
   `casefoldIn tr` Turkic fold.
 - `locale_from_tag`: valid tags parse; garbage/empty → `Nothing`
   (parse-don't-validate pin).
-- Golden `d3_locale_case` (`IPE_E2E=1`): Sky-level round trip; no Go
+- Golden `d3_locale_case` (`IPE_E2E=1`): Ipê-level round trip; no Go
   oracle exists (new surface) → recorded as Ipê-only expected output
   per the Go-failure/new-surface convention.
 - Feature-gating pin: a golden NOT using locale kernels asserts the

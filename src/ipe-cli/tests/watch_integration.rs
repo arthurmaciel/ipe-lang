@@ -12,7 +12,7 @@
 //! process supervisor.
 //!
 //! ```text
-//! IPE_E2E=1 cargo nextest run -p skyc --test watch_integration
+//! IPE_E2E=1 cargo nextest run -p ipe --test watch_integration
 //! ```
 
 use std::io::{Read, Write};

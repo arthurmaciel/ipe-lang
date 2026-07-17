@@ -11,10 +11,10 @@
 //!
 //! * `Result.andThen` / `Result.mapError` reuse the container-first runtime
 //!   (`ipe_result_and_then(r, f)` / new `ipe_result_map_error(r, f)`); the
-//!   emitter reverses the Sky `(fn, result)` order via `kernel_swaps_first_two`
+//!   emitter reverses the Ipê `(fn, result)` order via `kernel_swaps_first_two`
 //!   (verified here — a wrong arg order would short-circuit the WRONG channel).
 //! * `String.{containsIn,startsWithIn,endsWithIn}` are haystack-first
-//!   companions; their new runtime wrappers take Sky order directly (NO swap).
+//!   companions; their new runtime wrappers take Ipê order directly (NO swap).
 //! * `Basics.clamp` carries the same `Comparable a` (Ord) obligation as
 //!   `Math.min`/`Math.max` — a bounded super-var tied across all three argument
 //!   positions AND the result, so a non-comparable argument fails closed.
@@ -25,7 +25,7 @@
 //! IPE-L0108 holes rather than risk a miscompile.
 //!
 //! Gated on `IPE_E2E=1`. Run:
-//! `IPE_E2E=1 cargo test -p skyc --test golden_core_stdlib`.
+//! `IPE_E2E=1 cargo test -p ipe --test golden_core_stdlib`.
 
 use std::path::{Path, PathBuf};
 

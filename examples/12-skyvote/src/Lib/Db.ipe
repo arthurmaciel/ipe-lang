@@ -49,7 +49,7 @@ query queryStr args =
     Task.run (Db.query dbConn queryStr args)
 
 
--- Missing columns in a row dict are a Sky-side schema mismatch, not a
+-- Missing columns in a row dict are a Ipê-side schema mismatch, not a
 -- runtime error worth bubbling. Empty string lets the view degrade
 -- predictably for display-only reads.
 --

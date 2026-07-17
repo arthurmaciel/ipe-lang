@@ -11,12 +11,12 @@ import State exposing (..)
 
 headFor : Model -> List (Html Msg)
 headFor _model =
-    [ Head.title "Sky Habits — single source, three backends"
+    [ Head.title "Ipê Habits — single source, three backends"
     , Head.meta
           "description"
           "Habit tracker rendered identically under Ipe.Live, Ipe.Tui, and Ipe.Webview from one view function."
     , Head.canonical "https://composite.example/habits"
-    , Head.metaProperty "og:title" "Sky Habits — single source, three backends"
+    , Head.metaProperty "og:title" "Ipê Habits — single source, three backends"
     , Head.metaProperty "og:type" "website"
     , Head.metaProperty "og:url" "https://composite.example/habits"
     , Head.themeColor "#3c6eb4"

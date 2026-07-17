@@ -15,7 +15,7 @@
 //! 3. Maps each file path to a module name by:
 //!    - Stripping the `src/` prefix and `.ipe` suffix.
 //!    - Splitting on the OS path separator to obtain segment strings.
-//!    - Rejecting any segment that is not a valid Sky module segment
+//!    - Rejecting any segment that is not a valid Ipê module segment
 //!      (`[A-Z][A-Za-z0-9_]*`).
 //! 4. The entry module is always `Main` (`src/Main.ipe`).
 //!
@@ -51,7 +51,7 @@ pub struct ProjectManifest {
     pub driver: ipe_backend_rust::DbDriver,
 }
 
-/// A discovered Sky source file with its resolved module path.
+/// A discovered Ipê source file with its resolved module path.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DiscoveredModule {
     /// Absolute path to the `.ipe` source file.
@@ -258,7 +258,7 @@ fn file_to_module(src_root: &Path, path: &Path) -> Option<DiscoveredModule> {
     })
 }
 
-/// A Sky module path segment must start with an ASCII uppercase letter and
+/// A Ipê module path segment must start with an ASCII uppercase letter and
 /// contain only ASCII alphanumerics and `_`.
 fn is_module_segment(s: &str) -> bool {
     let mut chars = s.chars();
@@ -388,7 +388,7 @@ pub fn inject_compiled_std_closure(
 // Import extraction from source text (pre-parse)
 // ---------------------------------------------------------------------------
 
-/// Extract the module paths named by `import` declarations from raw Sky source
+/// Extract the module paths named by `import` declarations from raw Ipê source
 /// text, without a full parse.
 ///
 /// This is a token-level scan (real lexer — its edge set is a

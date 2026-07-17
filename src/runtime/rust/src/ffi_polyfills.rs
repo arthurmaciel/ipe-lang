@@ -16,14 +16,14 @@ pub fn ffi_to_any_polyfill<T>(x: T) -> T {
 }
 
 /// Reached only when `Ffi.callPure` is invoked with a non-literal kernel
-/// name or non-literal args list (i.e. dynamic dispatch). Sky's static
+/// name or non-literal args list (i.e. dynamic dispatch). Ipê's static
 /// dispatch path is the peephole — refactor the call site to use a string
 /// literal + list literal, or use `Ffi.kernel "<Name>"` for value-level
 /// kernel selection.
 // IRREDUCIBLE: returns an unconstrained generic `T`, so no total value can be
-// synthesised. Statically dead for valid Sky (the peephole resolves the
+// synthesised. Statically dead for valid Ipê (the peephole resolves the
 // static-dispatch shape); this is the dynamic-dispatch-unsupported fallback.
-// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel, 2026-06-13) — statically dead for valid Sky (peephole resolves it); unconstrained generic T return has no total value [ledger #3]
+// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel, 2026-06-13) — statically dead for valid Ipê (peephole resolves it); unconstrained generic T return has no total value [ledger #3]
 #[allow(clippy::panic)]
 pub fn ffi_call_pure_polyfill<T, A>(name: String, _args: Vec<A>) -> T {
     panic!(
@@ -39,14 +39,14 @@ pub fn ffi_call_pure_polyfill<T, A>(name: String, _args: Vec<A>) -> T {
 /// a non-literal kernel name or non-literal args list (i.e. dynamic dispatch).
 /// Serving it faithfully would require Go's `%v`-string registry — the
 /// reflection/`any` surface this backend exists to refuse. The static-dispatch
-/// shape is the peephole; no well-typed Sky program reaches this fallback
+/// shape is the peephole; no well-typed Ipê program reaches this fallback
 /// (effectful kernels reach Rust via `Ffi.kernel` direct dispatch, never via
 /// `Ffi.callTask`).
 // IRREDUCIBLE: returns an unconstrained generic `T`, so no total value can be
-// synthesised. Statically dead for valid Sky (the peephole resolves the
+// synthesised. Statically dead for valid Ipê (the peephole resolves the
 // static-dispatch shape); this is the dynamic-dispatch-unsupported fallback —
 // the same boundary as ffi_call_pure_polyfill.
-// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel, 2026-06-13) — statically dead for valid Sky (peephole resolves it); unconstrained generic T return has no total value [ledger #3]
+// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel, 2026-06-13) — statically dead for valid Ipê (peephole resolves it); unconstrained generic T return has no total value [ledger #3]
 #[allow(clippy::panic)]
 pub fn ffi_call_task_polyfill<T, A>(name: String, _args: Vec<A>) -> T {
     panic!(

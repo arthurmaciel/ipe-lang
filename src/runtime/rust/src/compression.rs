@@ -1,7 +1,7 @@
-//! Std.Compression — gzip (flate2) + zstd kernels operating on raw byte buffers.
+//! Ipe.Compression — gzip (flate2) + zstd kernels operating on raw byte buffers.
 //!
 //! All entries are `Vec<u8> -> Task Error Vec<u8>`. Input and output are raw
-//! byte buffers (`Vec<u8>`) — Sky's `Bytes` primitive — so compressed payloads
+//! byte buffers (`Vec<u8>`) — Ipê's `Bytes` primitive — so compressed payloads
 //! (including non-UTF-8 binary) round-trip losslessly.
 //!
 //! # Reactor-starvation guard

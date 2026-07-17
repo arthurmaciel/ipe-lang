@@ -1,9 +1,9 @@
-# Sky.Core.Error — conciliated module design
+# Ipe.Error — conciliated module design
 
 > **⚠️ CORRECTION (impl-guardian gate, verified, 2026-07-03).** Steps 1–2's
-> PRIMARY approach — "Sky.Core.Error as a *compiled Sky source module*, helpers
-> stay pure Sky, no kernels" — is **INFEASIBLE at HEAD**: nothing calls
-> `skyc::stdlib::source` (embedded `.ipe` are parse-tested only; `build`/
+> PRIMARY approach — "Ipe.Error as a *compiled Ipê source module*, helpers
+> stay pure Ipê, no kernels" — is **INFEASIBLE at HEAD**: nothing calls
+> `ipe::stdlib::source` (embedded `.ipe` are parse-tested only; `build`/
 > `build_project` never inject stdlib source), and `golden_list_ops_wiring`
 > establishes that **kernel routing is the only exit-0-safe wiring** (a qualified
 > stdlib call lacking a `KernelFn`/lower-arm/scheme emits IPE-L0108). So the
@@ -14,7 +14,7 @@
 > compared goldens** (a scripted golden-regen gated on per-project cargo-build —
 > a MULTI-CONTEXT effort). Already DONE + safe in-tree: runtime generic,
 > **B8 redaction (approved)**, HM channel typing (`Task String a` already fails
-> at skyc), `errorToString` prelude kernel. **PARKED / non-blocking** — Error-as-
+> at ipe), `errorToString` prelude kernel. **PARKED / non-blocking** — Error-as-
 > String works today; land IPE-N0001 (#82) + #76 BATCH 0 first. See task for the
 > corrected step-by-step.
 >
@@ -35,7 +35,7 @@
   String | Custom String`; aliases `ErrorInfo { message : String, details :
   Maybe ErrorDetails }`, `PanicInfo { message, stack : List String }`,
   `TypeInfo { expected, actual }`. Smart constructors default `details =
-  Nothing` via `mkInfo`. Pure-Sky `toString`/`kindLabel`/`isRetryable`.
+  Nothing` via `mkInfo`. Pure-Ipê `toString`/`kindLabel`/`isRetryable`.
 - The Rust backend currently hardcodes the fallback preamble
   `const START: &str = "type SkyError = String;"` (`crates/sky_backend_rust/src/project.rs:193`).
 - Lowering collapses the error type to a String: `"String" | "Error" =>
@@ -53,10 +53,10 @@
 
 ## Chosen approach
 
-**Adopt the upstream mechanism, made unconditional.** `Sky.Core.Error` is a
-compiled Sky *source* module — its functions (`unexpected`, `io`, `network`,
+**Adopt the upstream mechanism, made unconditional.** `Ipe.Error` is a
+compiled Ipê *source* module — its functions (`unexpected`, `io`, `network`,
 `withMessage`, `withDetails`, `kindLabel`, `toString`, `isRetryable`, …) stay
-pure Sky and are exhaustiveness-checked by the compiler. Its *type* is emitted
+pure Ipê and are exhaustiveness-checked by the compiler. Its *type* is emitted
 through the ordinary user-ADT path as a normal Rust enum
 (`SkyCoreErrorError`), exactly as `../sky`'s `Emitter.hs` does — **not** as a
 bespoke runtime-owned primitive. The pervasive error channel becomes
@@ -64,29 +64,29 @@ bespoke runtime-owned primitive. The pervasive error channel becomes
 String-fallback else-branch is rejected). The runtime stays fully generic over
 `E: Send + From<String>` and never names `Error`; the single `impl From<String>`
 (→ `Unexpected`) is the confined, crate-private parse boundary for runtime/FFI
-string failures. Rust→Sky construction is the runtime boundary; Sky→Rust
-construction is the smart constructors; observation is the pure-Sky
+string failures. Rust→Ipê construction is the runtime boundary; Ipê→Rust
+construction is the smart constructors; observation is the pure-Ipê
 `Error.toString`. Because the emitted enum *is* the `E` in
-`SkyResult<E,A>`/`SkyTask<E,A>`, the Sky↔Rust round-trip is identity — no
+`SkyResult<E,A>`/`SkyTask<E,A>`, the Ipê↔Rust round-trip is identity — no
 marshalling, no encode/decode, nothing that can drift out of sync.
 
 ### Rationale in principle order
 
 1. **Security.** B8 redaction at the foreign-error seam is adopted verbatim:
    a reqwest/stripe/hyper `Debug` (which can echo bearer tokens, API keys,
-   internal URLs) is **never** placed in the Sky-visible message. It is logged
-   server-side under a correlation id (control bytes scrubbed) and Sky sees only
+   internal URLs) is **never** placed in the Ipê-visible message. It is logged
+   server-side under a correlation id (control bytes scrubbed) and Ipê sees only
    `external operation failed (ref <id>)`. `Error.toString` renders **only**
    `kindLabel ++ ": " ++ message` — it never folds `ErrorDetails::FfiPanic.stack`
    or `TypeInfo` into a user-facing string. This preserves the two-level error
    pattern (log detail, show ref id) at the runtime boundary.
 2. **Correctness.** Matching the proven upstream emission path (weeks of
    investment) is the surest route to golden byte-parity: `Error.toString`
-   semantics are literally the same Sky source. The unconditional alias removes
+   semantics are literally the same Ipê source. The unconditional alias removes
    the non-determinism where an incidental import decided whether `Task Error a`
    lowered to `SkyTask<String,_>` or the ADT.
 3. **Soundness.** Keeping the renderers/`isRetryable`/`kindLabel` in **pure
-   Sky** means the Sky compiler exhaustiveness-checks every match over the
+   Ipê** means the Ipê compiler exhaustiveness-checks every match over the
    closed `ErrorKind`; adding a 12th kind forces every site to update. The
    `Task Error a` channel is structurally `Error` (`is_error_ty`), so
    `Task String a` / `Result String a` (banned by §8) are unrepresentable at the
@@ -104,7 +104,7 @@ marshalling, no encode/decode, nothing that can drift out of sync.
 
 ## Final Rust Error representation
 
-Emitted through the ordinary user-type path (like any Sky ADT), **not** a
+Emitted through the ordinary user-type path (like any Ipê ADT), **not** a
 runtime-owned primitive. Names/variant order/field names mirror `Error.ipe`
 exactly so lowered ctor/pattern code type-checks with no shim.
 
@@ -174,23 +174,23 @@ invalid state unrepresentable while giving control-flow code (`isRetryable`) a
 machine-inspectable tag. Fields are `pub` because generated struct/enum literals
 need them — but unrepresentability here is **structural** (every field is itself
 a total type), not encapsulation-based, so opacity is not required and would
-cost the pure-Sky, compiler-checked renderers. `Clone/Debug/PartialEq` are the
+cost the pure-Ipê, compiler-checked renderers. `Clone/Debug/PartialEq` are the
 right minimum (Task combinators clone the error on some paths; `PartialEq`
-serves `Sky.Test` assertions like `Err (Error.unexpected "x")`); `serde` is
+serves `Ipe.Test` assertions like `Err (Error.unexpected "x")`); `serde` is
 added only where a boundary needs it.
 
 ### Round-trip (closed, total, by identity)
 
-- **Rust → Sky (construct):** a failing effect returns `SkyTask<SkyError, A>`;
+- **Rust → Ipê (construct):** a failing effect returns `SkyTask<SkyError, A>`;
   its `"msg".into()` uses `From<String>` → `Error(Unexpected, {message, Nothing})`.
   High-fidelity origins (`http → network`, `timeout → timeout`, `db → io`) call
   the typed smart constructors instead (non-blocking follow-up). Foreign errors
   route through the B8-redacting seam.
 - **Channel:** `Task Error a` carries the concrete `SkyError` end to end — no
   boxing, no coercion.
-- **Sky → Rust (construct):** `Task.fail (Error.unexpected "boom")` runs the
+- **Ipê → Rust (construct):** `Task.fail (Error.unexpected "boom")` runs the
   compiled-from-source `unexpected`, building the identical enum value.
-- **Sky (observe):** `Error.toString e` / `errorToString e` run the pure-Sky
+- **Ipê (observe):** `Error.toString e` / `errorToString e` run the pure-Ipê
   renderer over the same Rust value — total String, zero allocation beyond the
   message it already owns.
 
@@ -219,21 +219,21 @@ added only where a boundary needs it.
 
 ## Ordered, implementable build tasks
 
-1. **Canon registration (task #78).** Add `Sky.Core.Error` to
-   `crates/skyc/src/stdlib.rs`: an `ERROR = include_str!("../stdlib/Sky/Core/Error.ipe")`
+1. **Canon registration (task #78).** Add `Ipe.Error` to
+   `crates/ipe/src/stdlib.rs`: an `ERROR = include_str!("../stdlib/Ipê/Core/Error.ipe")`
    const + a `MODULES` entry (drop the byte-identical copy under
-   `crates/skyc/stdlib/Sky/Core/Error.ipe`). As a compiled source module its
+   `crates/ipe/stdlib/Ipê/Core/Error.ipe`). As a compiled source module its
    functions resolve as ordinary top-level bindings (`Callee::TopLevel`) — no
    N0004, no per-function QUALIFIERS wiring. Keep `Error`/`ErrorKind`/
    `ErrorDetails` in `RESERVED_BUILTIN_TYPES` (`crates/sky_canon/src/resolve.rs`)
-   but exempt the canonical declarer via a `{Maybe→Sky.Core.Maybe,
-   Result→…, Error→Sky.Core.Error}` owner table (reuse the exemption Maybe.ipe
+   but exempt the canonical declarer via a `{Maybe→Ipe.Maybe,
+   Result→…, Error→Ipe.Error}` owner table (reuse the exemption Maybe.ipe
    already relies on; make it explicit if currently implicit-by-compile-order).
-   Repoint the Prelude `errorToString` to resolve to `Sky.Core.Error.toString`.
-2. **Kernels.** **None for the helpers** — they are compiled Sky bodies (this is
-   the soundness win: the Sky compiler exhaustiveness-checks `kindLabel` /
+   Repoint the Prelude `errorToString` to resolve to `Ipe.Error.toString`.
+2. **Kernels.** **None for the helpers** — they are compiled Ipê bodies (this is
+   the soundness win: the Ipê compiler exhaustiveness-checks `kindLabel` /
    `isRetryable` / `toString`). The only wiring is the `errorToString` Prelude
-   alias from step 1. *(Fallback only if compiling the Sky bodies against the
+   alias from step 1. *(Fallback only if compiling the Ipê bodies against the
    emitted structs surfaces friction — e.g. record-update codegen: demote the
    ~17 helpers to `KernelClass::Pure` StdlibKernel variants backed by
    `sky_runtime::error::*`, each with matching `decl(qualifier="Error", …)`
@@ -273,7 +273,7 @@ added only where a boundary needs it.
    the lossy `From<String>` to the runtime/FFI seam. Implement B8 redaction in
    `sky_error_from_foreign`: log the foreign `Debug` server-side under a
    correlation id (control bytes scrubbed), surface only `external operation
-   failed (ref <id>)` to Sky. Switch high-value origins (`http_client → network`,
+   failed (ref <id>)` to Ipê. Switch high-value origins (`http_client → network`,
    `time timeout → timeout`, `db → io`) to typed smart constructors as a
    **non-blocking follow-up** (until then those are `Unexpected` via
    `From<String>` — correct, low-fidelity).
@@ -288,24 +288,24 @@ added only where a boundary needs it.
    type error. Gate landing behind the go-oracle equivalence harness (task #51) — if
    upstream Go's `toString` format differs, it is a one-line change with the kind
    already in hand. Finally build at least one Live + one Db + one Task example
-   end-to-end (`cargo build` of the emitted project), not just `skyc` exit-0.
+   end-to-end (`cargo build` of the emitted project), not just `ipe` exit-0.
 
 ## Rejected & why
 
 - **A1 — opaque `struct SkyError { kind, message }` (no `ErrorDetails`,
-  Sky-invisible, render in Rust).** Rejected on **completeness (5)** and
+  Ipê-invisible, render in Rust).** Rejected on **completeness (5)** and
   **soundness (3)**: it drops `isRetryable`/`kindLabel`/`ErrorDetails`
   (canon members would resolve to nothing) and forces rendering into Rust,
-  forfeiting the Sky compiler's exhaustiveness check over `ErrorKind`. It also
+  forfeiting the Ipê compiler's exhaustiveness check over `ErrorKind`. It also
   gratuitously diverges from the proven upstream shape (**correctness (2)**).
   Opacity buys encapsulation the closed-total-fields design already achieves
   structurally.
 - **A2 — runtime-owned opaque builtin + a kernel per function.** Rejected on
   **soundness (3)** and **readability (6)**: making `kindLabel`/`isRetryable`/
   `toString` Rust kernels duplicates the taxonomy in Rust and loses the
-  compiler-checked exhaustiveness that pure-Sky bodies give for free, at the
+  compiler-checked exhaustiveness that pure-Ipê bodies give for free, at the
   cost of ~16 hand-maintained kernel/scheme/arity arms (drift surface). Kept
-  only as the step-2 *fallback* if Sky-body codegen proves infeasible.
+  only as the step-2 *fallback* if Ipê-body codegen proves infeasible.
 - **A3's runtime-owned *type* (the Maybe/Result club).** A3's framing that
   Error.ipe is a compiled source module and the round-trip is by identity is
   **adopted**, but its choice to make the *type* runtime-owned is rejected in

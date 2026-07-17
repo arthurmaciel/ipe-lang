@@ -9,7 +9,7 @@ rule extends), `ipe-lsp.md` Q3(b)/(c) + G2 (the code-action counterweight),
 `crates/sky_diagnostics/explain/IPE-T0010.md` (whose teaching narrative this
 rule makes true — see §2), `docs/divergences-from-elm.md` (ledger entry).
 
-This is a **departure from Elm** (and from the Sky reference, which follows
+This is a **departure from Elm** (and from the Ipê reference, which follows
 Elm here): both accept `_ ->` as a catch-all over any type. ipê will refuse a
 catch-all arm when the scrutinee is a closed, finite-variant union — so adding
 a variant is a compile error at every match site, never a silent fall-through.
@@ -26,7 +26,7 @@ a variant is a compile error at every match site, never a silent fall-through.
 | Escape hatch | Yes — per-site `-- @allow(open-case) <reason>` directive (shared grammar/table with the lint tool). See §4 for the weighing. |
 | Recommendation | **Adopt-with-opt-out** (§5). |
 | Diagnostic | New **IPE-T0018** "catch-all hides constructors of a closed type", listing the absorbed constructors; progressive explain page; IPE-T0010's page corrected in the same change (§6). |
-| Ergonomic counterweight | LSP code action + `skyc fix` suggestion that **expands the catch-all into one arm per absorbed constructor with the catch-all's own body** — semantics-preserving, `MachineApplicable` (§7). |
+| Ergonomic counterweight | LSP code action + `ipe fix` suggestion that **expands the catch-all into one arm per absorbed constructor with the catch-all's own body** — semantics-preserving, `MachineApplicable` (§7). |
 
 ## 1. Why (the evolution-safety argument)
 
@@ -59,14 +59,14 @@ the strong default the language default, with an explicit, reasoned opt-out.
   sees the scrutinee's type. A `case x of _ -> e` with no constructor arm is
   invisible to it today.
 - **The explain page already teaches this rule.** `explain/IPE-T0010.md`
-  states "Sky has no catch-all `_` pattern, so you handle each constructor
+  states "Ipê has no catch-all `_` pattern, so you handle each constructor
   explicitly… when you later add a new constructor… every `case` over it will
   point you right at the gap." That is aspiration, not implementation: the
   compiler accepts `_` everywhere. This design closes the doc-vs-compiler gap
   in the direction the teaching narrative already committed to — scoped to
   closed unions, where the claim is actually desirable.
 - Corpus impact: 407 catch-all arms (`_ ->`) across `examples/` +
-  `crates/skyc/stdlib` (many over open types — `String` route dispatch, JSON
+  `crates/ipe/stdlib` (many over open types — `String` route dispatch, JSON
   field fallbacks — which remain legal). The migration burden is real and is
   costed in §8.
 
@@ -150,7 +150,7 @@ correctness bug; wrongly permitting a catch-all is only a missed lint.
 
 | Option | For | Against |
 |---|---|---|
-| **(a) No escape** (strict) | Maximum guarantee; simplest spec; matches the IPE-T0010 page's current absolutist phrasing | 50+-variant unions (`Std.Money`'s ISO-4217 currency enum is in our own stdlib) make full enumeration genuinely hostile: `case currency of USD -> "$" ; <49 more arms>`. Default-heavy domains (key dispatch, protocol opcodes as ADTs) become boilerplate farms. Ported Elm code breaks with no local remedy. Teams under deadline will encode the catch-all as `let v = scrut in` tricks — the rule loses and teaches circumvention. |
+| **(a) No escape** (strict) | Maximum guarantee; simplest spec; matches the IPE-T0010 page's current absolutist phrasing | 50+-variant unions (`Ipe.Money`'s ISO-4217 currency enum is in our own stdlib) make full enumeration genuinely hostile: `case currency of USD -> "$" ; <49 more arms>`. Default-heavy domains (key dispatch, protocol opcodes as ADTs) become boilerplate farms. Ported Elm code breaks with no local remedy. Teams under deadline will encode the catch-all as `let v = scrut in` tricks — the rule loses and teaches circumvention. |
 | **(b) Per-site opt-out** (directive) | Keeps the strong default; the exception is local, greppable, reasoned, and auditable (`unused-allow` fires when it rots); zero new syntax (reuses the lint directive grammar/table) | A suppressible error is weaker than an unsuppressible one; a team can blanket-`@allow` (mitigated by `forbidSuppression` config + review culture) |
 | **(c) Reject the feature** (keep Elm semantics + ship only the lint) | Zero migration; Elm parity | The guarantee only exists for teams running lint with the rule at deny — precisely the teams that least need it. The language's own stdlib and examples wouldn't uphold it. The IPE-T0010 explain page stays false. |
 | (d) Size threshold (enforce only for unions ≤ N variants) | Softens the big-enum pain automatically | A magic number in the language semantics; adding the N+1th variant *changes whether other code compiles* — a spooky action the author of the union can't see. Rejected outright. |
@@ -166,7 +166,7 @@ Reasoning, in PRINCIPLES order:
   unlike a hypothetical opt-out on IPE-T0010 itself (which stays
   unsuppressible, always).
 - **Completeness/ergonomics**: strict (a) is honest about its goal but fails
-  the `Std.Money` test inside our own stdlib; the directive keeps the strong
+  the `Ipe.Money` test inside our own stdlib; the directive keeps the strong
   default while giving the 50-variant `case` a one-line, reasoned exit that
   reviewers see. Or-patterns (§3.4) will further shrink the legitimate
   opt-out set over time.
@@ -199,7 +199,7 @@ Reasoning, in PRINCIPLES order:
   help: `Msg` is a closed type — handle each constructor so a future
         variant is caught here instead of silently falling through
   suggestion: replace `_` with one arm per absorbed constructor
-        (machine-applicable — `skyc fix` can do this)
+        (machine-applicable — `ipe fix` can do this)
   note: to keep this case deliberately open, write
         `-- @allow(open-case) <reason>` on the arm
   ```
@@ -219,7 +219,7 @@ Reasoning, in PRINCIPLES order:
   5. *Deep end*: what "closed" means (declaration-site constructor set), why
      `Int`/`String` arms still need `_`, top-level-column scoping and the
      nested-position lint, the IPE-T0011 relationship (absorbed = 0).
-- **IPE-T0010 page correction (same change)**: its "Sky has no catch-all `_`
+- **IPE-T0010 page correction (same change)**: its "Ipê has no catch-all `_`
   pattern" paragraph is today false and after this change *almost* true —
   rewrite to state the real rule (no catch-all over closed unions; `_`
   required/allowed over open domains) and cross-link IPE-T0018.
@@ -242,7 +242,7 @@ Reset     -> ( model, Cmd.none )
 
 - Semantics-preserving by construction (the same body runs for the same
   values), so the CLI `Suggestion` is `Applicability::MachineApplicable` —
-  `skyc fix` / `ipe lint --fix`-grade confidence.
+  `ipe fix` / `ipe lint --fix`-grade confidence.
 - Payload-carrying constructors get wildcard sub-patterns (`SetColor _ ->`) —
   top-level explicitness without forcing nested enumeration (§3.3).
 - A bare-variable catch-all (`other -> reportUnknown other`) expands via the
@@ -254,7 +254,7 @@ Reset     -> ( model, Cmd.none )
 **(2) "Add missing arms"** — on IPE-T0010 (no catch-all present).
 Inserts one arm per missing witness (the diagnostic already carries them) with
 placeholder bodies as LSP snippet tabstops — `HasPlaceholders`, never
-auto-applied by `skyc fix`, offered interactively in the editor. This is the
+auto-applied by `ipe fix`, offered interactively in the editor. This is the
 generator `ipe-lsp.md` Q3(b) already names ("Add missing arm(s)"); this spec
 pins its input to the witness list so the checker and the action cannot
 disagree about what is missing.
@@ -291,16 +291,16 @@ each green before the next:
   alias-of-var} × {absorbed 0 (→T0011), 1, many} × {allowed, not-allowed}
   × {Bool/List/Int scrutinee → no finding}; goldens for message rendering.
 - **Phase 4 — corpus migration (the honest cost).** Run the compiler over
-  `examples/` + `crates/skyc/stdlib` + `tests/golden/`; every IPE-T0018 is
+  `examples/` + `crates/ipe/stdlib` + `tests/golden/`; every IPE-T0018 is
   resolved by expansion (the machine-applicable fix), by a reasoned
-  `@allow(open-case)` (expected: `Std.Money` currency dispatch, decoder
+  `@allow(open-case)` (expected: `Ipe.Money` currency dispatch, decoder
   fallbacks), or — where a golden deliberately tests catch-all lowering — a
   golden updated to a legal shape. **The enforcement commit and the migration
   land together**; the sweep must be green in the same change (§0: no
   skipped examples, no weakened gate).
   *Gate:* full examples sweep + golden suite + `IPE_E2E=1` seal run.
 - **Phase 5 — LSP actions.** §7's three actions in `sky_lsp` (lands with the
-  LSP plan's Phase 3; the `skyc fix` CLI path ships in Phase 3 above, so the
+  LSP plan's Phase 3; the `ipe fix` CLI path ships in Phase 3 above, so the
   ergonomic counterweight exists from the first enforcing release even
   without an editor).
   *Gate:* G2 round-trip tests per action; fmt-idempotence assertion.

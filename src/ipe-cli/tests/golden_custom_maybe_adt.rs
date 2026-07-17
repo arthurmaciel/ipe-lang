@@ -1,4 +1,4 @@
-//! Algebraic-data-type gate: `skyc` must emit `main.rs`
+//! Algebraic-data-type gate: `ipe` must emit `main.rs`
 //! byte-identical to the checked-in golden for a generic payload-carrying ADT,
 //! and (behind `IPE_E2E=1`) the emitted project must build and print `42`.
 //!

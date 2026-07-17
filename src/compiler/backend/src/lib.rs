@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! The backend boundary for the Sky compiler. A backend consumes the
+//! The backend boundary for the Ipê compiler. A backend consumes the
 //! backend-agnostic typed [`ipe_ir::Program`] and produces an
 //! [`EmittedProject`] — an in-memory project tree ready to be written to disk.
 //!

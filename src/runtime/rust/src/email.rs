@@ -1,13 +1,13 @@
-//! Std.Email — provider-abstract email send (Resend / SendGrid / SES / SMTP).
+//! Ipe.Email — provider-abstract email send (Resend / SendGrid / SES / SMTP).
 //!
-//! Mirror of `runtime-go/rt/email_kernel.go`. The Sky records
+//! Mirror of `runtime-go/rt/email_kernel.go`. The Ipê records
 //! (`EmailMessage` / `Attachment` / `SesConfig` / `SmtpConfig`) and the
 //! `EmailProvider` ADT map to the runtime types below via the
 //! runtimeOpaqueTypes registry — so the generated `StdEmail*` are `pub use`
-//! aliases, Sky field access + record literals resolve onto these pub fields,
+//! aliases, Ipê field access + record literals resolve onto these pub fields,
 //! and `Resend "key"` / `Ses cfg` construct the enum variants directly.
 //!
-//! Field names match the Sky aliases verbatim (camelCase `textBody` /
+//! Field names match the Ipê aliases verbatim (camelCase `textBody` /
 //! `htmlBody` / `replyTo` / `mimeType` — hence the non_snake_case allow).
 //!
 //! Networking parity with Go: Resend + SendGrid + SES (v2, SigV4) over HTTPS.
@@ -26,7 +26,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// Sky.Email.EmailMessage — field names/types match the Sky record alias.
+/// Ipê.Email.EmailMessage — field names/types match the Ipê record alias.
 #[allow(non_snake_case)]
 #[derive(Clone, Debug)]
 pub struct EmailMessage {
@@ -41,8 +41,8 @@ pub struct EmailMessage {
     pub replyTo: String,
 }
 
-/// Sky.Email.Attachment — `content` carries the attachment body. The Sky
-/// `Attachment.content` field is typed `String` (the `Sky.Core.Bytes` alias is
+/// Ipê.Email.Attachment — `content` carries the attachment body. The Ipê
+/// `Attachment.content` field is typed `String` (the `Ipe.Bytes` alias is
 /// itself `String`), so the runtime field is `String` too — matching the type
 /// the emitted codegen constructs this struct with. The bytes are recovered via
 /// `content.as_bytes()` / `content.into_bytes()` at each provider boundary.
@@ -56,7 +56,7 @@ pub struct EmailAttachment {
     pub content: String,
 }
 
-/// Sky.Email.SesConfig.
+/// Ipê.Email.SesConfig.
 #[derive(Clone, Debug)]
 pub struct SesConfig {
     pub region: String,
@@ -64,7 +64,7 @@ pub struct SesConfig {
     pub secret: String,
 }
 
-/// Sky.Email.SmtpConfig.
+/// Ipê.Email.SmtpConfig.
 #[derive(Clone, Debug)]
 pub struct SmtpConfig {
     pub host: String,
@@ -73,7 +73,7 @@ pub struct SmtpConfig {
     pub pass: String,
 }
 
-/// Sky.Email.EmailProvider — the ADT; variant names match the Sky ctors.
+/// Ipê.Email.EmailProvider — the ADT; variant names match the Ipê ctors.
 #[derive(Clone, Debug)]
 pub enum EmailProvider {
     Resend(String),
@@ -512,7 +512,7 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
 
 // ──────────────────── SMTP (lettre) ────────────────────
 
-/// `Std.Email.send (Smtp cfg) msg` — SMTP transport via `lettre`, matching the Go
+/// `Ipe.Email.send (Smtp cfg) msg` — SMTP transport via `lettre`, matching the Go
 /// backend's `smtp.SendMail` posture: connect to host:port, **opportunistic
 /// STARTTLS** (upgrade to TLS when the server advertises it, plaintext otherwise
 /// — identical security posture to Go's stdlib), PLAIN auth when a user is
@@ -618,7 +618,7 @@ async fn send_smtp<E: From<String>>(cfg: &SmtpConfig, m: &EmailMessage) -> IpeRe
     } else {
         Tls::Opportunistic(tls)
     };
-    // Validate the port range before narrowing: `cfg.port` is an i64 from Sky, so
+    // Validate the port range before narrowing: `cfg.port` is an i64 from Ipê, so
     // a bare `as u16` truncates (65536 → 0, 70000 → 4464, -1 → 65535) and would
     // silently dial a wrong/garbage port. Surface a clear Err instead.
     let port = match u16::try_from(cfg.port) {

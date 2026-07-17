@@ -1,4 +1,4 @@
-//! Backend-internal file-id domain for per-Sky-module Rust emission.
+//! Backend-internal file-id domain for per-Ipê-module Rust emission.
 //!
 //! `mod_ident`/`resolve_mod_ident`/`assert_mod_idents_unique` form a
 //! fail-closed duplicate-`mod`-name gate. They have no production caller while
@@ -18,7 +18,7 @@ use crate::naming;
 
 /// Which Rust file a program's item (an [`ipe_ir::EnumDef`] or
 /// [`ipe_ir::Func`]) is declared in. `Spine` is the always-present entry
-/// file (`src/main.rs`); a `IpeModule` is one Sky module's OWN file
+/// file (`src/main.rs`); a `IpeModule` is one Ipê module's OWN file
 /// (`src/ipe_mods/<ident>.rs`), materialised only when 2+ distinct homes are
 /// present (the Spine-collapse invariant — see the design doc §3.3).
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -27,7 +27,7 @@ pub enum RustFileId {
     IpeModule(ModPath),
 }
 
-/// The Rust module identifier for Sky module path `home` — e.g.
+/// The Rust module identifier for Ipê module path `home` — e.g.
 /// `["Std", "Palette"]` → `ipe_mod_std_palette`, `["Lib"]` → `ipe_mod_lib`.
 ///
 /// Reuses the same base fold [`naming::module_prefix`] already applies for
@@ -113,7 +113,7 @@ pub fn assert_mod_idents_unique(ids: &[RustFileId], interner: &Interner) -> DRes
 /// `clean_vs_incremental_parity.rs`'s own top doc comment). Iterating
 /// `buckets` directly is fine for lookups / the totality proof, but
 /// is an UNSOUND final byte-emission order the moment two or more distinct
-/// real Sky-module `home`s are present in one program — caught by
+/// real Ipê-module `home`s are present in one program — caught by
 /// `parity_multimodule_adversarial_edits`'s `module-added` step.
 ///
 /// It is ALSO not what an existing multi-module golden expects:

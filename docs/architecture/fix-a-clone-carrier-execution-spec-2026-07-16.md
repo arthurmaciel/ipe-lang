@@ -19,7 +19,7 @@ a gated phase plan.
 
 ## 0. The one invariant
 
-> **Every value type a Sky closure can capture implements `Clone`.**
+> **Every value type a Ipê closure can capture implements `Clone`.**
 > Equivalently: acceptance of a well-typed capture never depends on its
 > syntactic position (callee vs argument, depth 0 vs depth ≥ 1).
 
@@ -144,8 +144,8 @@ Both were examined in the current tree. **Neither migrates to Arc.**
 - `IrType::Decoder(_)` renders as the runtime struct `Decoder<E, T>`
   (`runtime/src/sky_runtime/json.rs:21-24`), whose `run` field is
   `Box<dyn Fn(&JsonVal) -> SkyResult<E,T> + Send>`. This is a *named nominal
-  carrier*, not the anonymous first-class `Fun` carrier — a Sky `Decoder a`
-  value is not a Sky function value. The `Box<dyn Fn>` inside `run` is a
+  carrier*, not the anonymous first-class `Fun` carrier — a Ipê `Decoder a`
+  value is not a Ipê function value. The `Box<dyn Fn>` inside `run` is a
   runtime implementation detail invisible to `clone_class`, which sees
   `IrType::Decoder`, never the field.
 - **"`Decoder(Fun)` payload"** (a decoder whose decoded value is itself a
@@ -161,7 +161,7 @@ Both were examined in the current tree. **Neither migrates to Arc.**
   `Decoder` struct is *already* effectively shareable via clone of the struct
   where needed; the runtime owns that discipline. Forcing the `run` field to
   `Arc<dyn Fn>` would be a runtime-internal change with no bearing on the L0126
-  capture family (decoders are not captured as bare Sky function values). So
+  capture family (decoders are not captured as bare Ipê function values). So
   **`clone_class(Decoder) stays NonClone`** and `carrier_is_clone(Decoder) ==
   false`. (If a future sweep shows a decoder captured across a `Fn` boundary,
   that is a separate, currently-unobserved item — do not pre-solve it here.)
@@ -444,7 +444,7 @@ full byte-golden sweep is the FINAL gate. Tag `fix-a-pre` at HEAD for rollback.
 - Gate: `cargo check --workspace` + `nextest -p sky_lower`. (No emit yet; unit
   tests on `clone_class` should flip for `Fun`.)
 - **SEAL risk:** none yet — this only widens acceptance in the classifier; the
-  emitter still says Box, so a skyc-green program could now cargo-FAIL
+  emitter still says Box, so a ipe-green program could now cargo-FAIL
   (E0308 Arc-annotation-vs-Box-value). **Phase 1 and Phase 2 MUST land
   together in one commit** — do not commit Phase 1 alone.
 
@@ -456,7 +456,7 @@ full byte-golden sweep is the FINAL gate. Tag `fix-a-pre` at HEAD for rollback.
   through `carrier_is_clone`).
 - Gate: `cargo check --workspace` + `nextest -p sky_backend_rust` (byte
   goldens will FAIL here — that is expected pre-bless).
-- **SEAL risk point:** this is where skyc-green-but-cargo-red is caught. After
+- **SEAL risk point:** this is where ipe-green-but-cargo-red is caught. After
   bless (Phase 3), a scoped `IPE_E2E=1` build of a `Fun`-heavy golden proves
   the annotation and value agree. Do not proceed past Phase 3 with any golden
   that emits but does not cargo-build.
@@ -484,7 +484,7 @@ full byte-golden sweep is the FINAL gate. Tag `fix-a-pre` at HEAD for rollback.
 - FINAL gate: full byte-golden sweep (70+3), `IPE_E2E=1` on the `Fun`-heavy
   goldens, the ex-36 example row green, workspace `cargo check` + `clippy`
   (pedantic/nursery deny — the carrier flip must not introduce a lint).
-- **SEAL final check:** every golden that skyc-accepts must cargo-build. The
+- **SEAL final check:** every golden that ipe-accepts must cargo-build. The
   byte-golden harness's build step IS this check; do not declare done until
   it is green end-to-end.
 
@@ -548,7 +548,7 @@ All seven reject at the parser / irrefutability gate, strictly BEFORE lowering's
 present) — they byte-churn Box→Arc mechanically, no re-classification.
 
 **The negatives that DO flip are the `l0127_*` (fn-value-reuse gate),**
-asserted in `crates/skyc/tests/golden_l0114_ctor_payload_function.rs`:
+asserted in `crates/ipe/tests/golden_l0114_ctor_payload_function.rs`:
 
 | Test fn | Fixture | Reused type | Post-flip disposition |
 |---|---|---|---|
@@ -740,7 +740,7 @@ string. §3.4's "leave `emit_shared_lambda` in place for Phase 1" stands; note
 the two now emit type-equal (not byte-equal) strings, which is fine. Merging
 them is a follow-up (residual #3). Do NOT touch in this change.
 
-### A8. SEAL atomicity — the ONLY skyc-green-cargo-red window
+### A8. SEAL atomicity — the ONLY ipe-green-cargo-red window
 
 The classifier edit (`clone_class(Fun) = CloneOk` via `carrier_is_clone`) and
 the emitter edit (`render_type(Fun)` Box→Arc + `wants_arc_ctor` all-`Fun`) MUST
@@ -749,10 +749,10 @@ land in ONE commit. Between them lies a real SEAL breach:
 * Classifier-only: a reused `Fun` `let`-binding now gets `.clone()` inserted
   (`CloneVar`), but `render_type` still emits `Box<dyn Fn>` (not `Clone`) →
   emitted `arc.clone()` on a `Box` value → cargo E0599 `clone` (Box<dyn Fn> has
-  no Clone). skyc-green, cargo-red.
+  no Clone). ipe-green, cargo-red.
 * Emitter-only: `render_type` emits `Arc<dyn Fn>` but `wants_arc_ctor` still
   says `Box` for a general `Fun` → `let __sky_fn: Arc<dyn Fn> = Box::new(..)` →
-  cargo E0308. skyc-green, cargo-red.
+  cargo E0308. ipe-green, cargo-red.
 
 Confirmed there is NO OTHER emit site that renders the general `Fun` carrier
 type-string (audit: `emit_types.rs:320` is the sole `Box<dyn Fn(` **emission**;
@@ -778,7 +778,7 @@ SEAL risk map — no third window exists.
   want that) requiring runtime signature edits, for zero soundness gain (the
   chains are never captured across a re-callable `Fn` boundary — they have no
   reuse to admit). KEEP Box.
-* **Decoder stays a struct with a `Box<dyn Fn>` field (§2.2): CORRECT.** A Sky
+* **Decoder stays a struct with a `Box<dyn Fn>` field (§2.2): CORRECT.** A Ipê
   `Decoder a` is a nominal runtime carrier, not a first-class `Fun` value;
   `clone_class` sees `IrType::Decoder`, never the field. The `Decoder (A -> B)`
   payload rides in the `T` slot and flips to `Arc<dyn Fn>` automatically (T is a
@@ -838,7 +838,7 @@ argument is `impl Fn` (`list_map`, `list_filter`, `list_foldl`, `list_foldr`,
 the runtime) fails `cargo build` with E0277. Confirmed by ISOLATED clean builds
 (fresh per-golden target, no cache contamination) of the freshly-emitted
 `fns_map` and `fns_foldl`: both `error[E0277]` — `Arc<dyn Fn>` where the
-kernel wants `impl Fn`. This is a skyc-exit-0-then-cargo-fail across the entire
+kernel wants `impl Fn`. This is a ipe-exit-0-then-cargo-fail across the entire
 HOF surface — the exact class THE SEAL forbids. The universal-Arc flip is
 therefore rejected outright.
 
@@ -987,7 +987,7 @@ Implemented and verified in `sky_lower` (byte-neutral across all 67 goldens,
 
 This GREENS the DIRECT (non-eta-synthesized) #221 shape — the minimal
 `wrap`/`guarded` trigger where the capturing lambda exists verbatim in canon:
-`skyc` exit 0, emitted Rust cargo-builds, runs to the reference value. `wrap` is
+`ipe` exit 0, emitted Rust cargo-builds, runs to the reference value. `wrap` is
 Arc only where captured; `guarded` and the eta-lambdas stay `Box`. That is the
 leanest correct carrier, exactly the user directive.
 

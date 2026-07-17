@@ -47,8 +47,8 @@ Rejected alternatives:
   `Clone` or linearly used" (ADR 0002) for function payloads until the general
   clone-hoist pass (ADR 0007) subsumes it.
 - **This is a sanctioned divergence from upstream's `fn`-pointer approach**:
-  Sky's `Box<dyn Fn>` with captures is strictly more general and the right
-  trade-off for Sky semantics (recorded in `docs/divergences-from-sky.md`).
+  Ipê's `Box<dyn Fn>` with captures is strictly more general and the right
+  trade-off for Ipê semantics (recorded in `docs/divergences-from-sky.md`).
 - **Invariant that must keep holding:** the construction lift stays sound only
   while the three upstream guards (runtime bounded derives, `#87` demotion, and
   the type-checker/Model/serde gates) remain in place; weakening any of them

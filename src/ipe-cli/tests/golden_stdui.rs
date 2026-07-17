@@ -2,7 +2,7 @@
 //! `Ui.layout` / `Ui.column` / `Ui.el` / `Ui.text` / `Ui.spacing` /
 //! `Background.color` / `Font.bold` / `Html.htmlRender` end-to-end smoke test.
 //!
-//! The golden compiles `tests/golden/stdui/Main.ipe` through `skyc`, builds
+//! The golden compiles `tests/golden/stdui/Main.ipe` through `ipe`, builds
 //! the emitted Rust project with the shared cargo target, runs the binary, and
 //! checks its stdout against the cached oracle
 //! (`tests/golden/stdui/oracle.meta` + `expected_go.txt`).
@@ -12,7 +12,7 @@
 //!
 //! This is a DIVERGENCE golden (`oracle_divergence = true`).  The Go reference
 //! compiler emits a different HTML skeleton (separate `<style>` reset block,
-//! `min-height`, trailing spaces).  `expected_go.txt` therefore holds skyc's
+//! `min-height`, trailing spaces).  `expected_go.txt` therefore holds ipe's
 //! OWN output — the Rust-backend correct rendering — rather than the Go oracle.
 //! The divergence is documented in `tests/golden/stdui/sanctioned.divergence`.
 //!
@@ -66,7 +66,7 @@ fn build_run_m7() -> (PathBuf, support::RunOutcome) {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for stdui: {:?}",
+        "ipe build must succeed for stdui: {:?}",
         built.err()
     );
 

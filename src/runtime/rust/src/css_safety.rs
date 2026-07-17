@@ -1,9 +1,9 @@
 //! Shared CSS/style injection-safety encoders — one policy, one place.
 //!
 //! This module is the SINGLE home for the CSS boundary smart constructors and
-//! the `<style>`-body close-tag stripper. `Std.Ui`'s inline-style path
-//! (`ui/render.rs`), `Std.Html.styleNode`'s `<style>` body (`html.rs`), and
-//! `Std.Css`'s stylesheet renderers (`css.rs`) all import the identical
+//! the `<style>`-body close-tag stripper. `Ipe.Ui`'s inline-style path
+//! (`ui/render.rs`), `Ipe.Html.styleNode`'s `<style>` body (`html.rs`), and
+//! `Ipe.Css`'s stylesheet renderers (`css.rs`) all import the identical
 //! functions from here so no second, weaker encoder can drift into existence
 //! (design §Q5 "three producers, two shared encoders, zero new ones").
 //!

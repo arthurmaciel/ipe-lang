@@ -11,10 +11,10 @@
 //!
 //! ```text
 //! # compile-only check (fast, no IPE_E2E needed):
-//! cargo test -p skyc --test golden_error_adt_roundtrip
+//! cargo test -p ipe --test golden_error_adt_roundtrip
 //!
 //! # full E2E (run the emitted binary, assert stdout):
-//! IPE_E2E=1 cargo test -p skyc --test golden_error_adt_roundtrip
+//! IPE_E2E=1 cargo test -p ipe --test golden_error_adt_roundtrip
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -43,7 +43,7 @@ fn error_adt_roundtrip_compiles() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for error_adt_roundtrip: {:?}",
+        "ipe build must succeed for error_adt_roundtrip: {:?}",
         built.err()
     );
 }
@@ -68,7 +68,7 @@ fn error_adt_roundtrip_runs_and_prints_expected_output() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for error_adt_roundtrip: {:?}",
+        "ipe build must succeed for error_adt_roundtrip: {:?}",
         built.err()
     );
 

@@ -1,6 +1,6 @@
 //! Integration + security golden for compiled-source `Ipe.Css`.
 //!
-//! `Ipe.Css` is compiled pure Sky source (`crates/skyc/stdlib/Std/Css.ipe`); its
+//! `Ipe.Css` is compiled pure Ipê source (`crates/ipe/stdlib/Std/Css.ipe`); its
 //! only Rust surface is the four `Ipe.CssSafety` leaf security kernels
 //! (`safeValue` / `safePropName` / `safeSelector` / `stripStyleClose`). These
 //! lock:
@@ -48,9 +48,9 @@ fn css_source_builds_and_injects_leaf_kernels() {
     );
 
     // The compiled `Ipe.Css` module lowers to its OWN Rust file under
-    // `src/ipe_mods/` once the per-Sky-module split
+    // `src/ipe_mods/` once the per-Ipê-module split
     // fires — this program has two distinct homes (`Main` + `Ipe.Css`). Scan
-    // the WHOLE emitted Sky-side tree (main.rs + ipe_mods/*.rs) so both the
+    // the WHOLE emitted Ipê-side tree (main.rs + ipe_mods/*.rs) so both the
     // presence assertions (render fold + leaf security kernels) and the
     // negative retired-enum assertion hold wherever the split placed the code.
     let emitted = support::read_all_emitted_src(&out);
@@ -92,7 +92,7 @@ fn css_e2e_neutralises_injection() {
     let stdout = outcome.stdout;
     let low = stdout.to_ascii_lowercase();
 
-    // Functional: the benign rule renders (byte-parity with the pure-Sky fold).
+    // Functional: the benign rule renders (byte-parity with the pure-Ipê fold).
     assert!(
         stdout.contains(".x {") && stdout.contains("#ff6600") && stdout.contains("8px"),
         "benign stylesheet must render:\n{stdout}"

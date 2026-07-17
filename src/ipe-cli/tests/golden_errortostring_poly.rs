@@ -19,7 +19,7 @@
 //!
 //! Seal of the upstream 00-standard-libs blocker:
 //!   - Building examples/00-standard-libs emits no "errorToString expected"
-//!     error at Sky/Test.ipe:74.
+//!     error at Ipê/Test.ipe:74.
 //!
 //! E2E (cargo build + run) is behind `IPE_E2E=1`.
 
@@ -140,7 +140,7 @@ fn eqshow_e2e() {
 
 // ─── negative gates ───────────────────────────────────────────────────────────
 
-/// SEAL: `errorToString` on a function `Int -> Int` must fail at skyc
+/// SEAL: `errorToString` on a function `Int -> Int` must fail at ipe
 /// type-check (Stringify obligation rejects functions), not pass and defer
 /// the failure to cargo.
 #[test]
@@ -175,7 +175,7 @@ fn annotation_rigid_plus_literal_still_fails() {
 // ─── upstream blocker seal ────────────────────────────────────────────────────
 
 /// Regression: building examples/00-standard-libs must NOT produce the original
-/// "errorToString expected" mismatch at Sky/Test.ipe:74. The error was
+/// "errorToString expected" mismatch at Ipê/Test.ipe:74. The error was
 /// IPE-T0001 from the monomorphic `Error -> String` scheme being unified
 /// against a rigid annotation var `a` in `equal : a -> a -> TestResult`.
 ///

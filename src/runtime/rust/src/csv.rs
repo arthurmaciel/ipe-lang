@@ -1,10 +1,10 @@
-//! Std.Csv — CSV parse / encode via the `csv` crate.
+//! Ipe.Csv — CSV parse / encode via the `csv` crate.
 //!
-//! The Sky `Csv` record (`{ header : List String, rows : List (List String) }`)
+//! The Ipê `Csv` record (`{ header : List String, rows : List (List String) }`)
 //! is mapped to `CsvDoc` below via the runtimeOpaqueTypes registry, so the
 //! generated `StdCsvCsv` is a `pub use` alias of this struct. That lets the
 //! kernels return/take the record DIRECTLY (no kernel can name a generated
-//! per-project struct), and Sky field access (`doc.header`) + the synthesized
+//! per-project struct), and Ipê field access (`doc.header`) + the synthesized
 //! record constructor resolve straight onto these `pub` fields.
 
 use super::*;
@@ -43,8 +43,8 @@ where
     f()
 }
 
-/// Runtime representation of the Sky `Std.Csv.Csv` record. Field names + types
-/// must match the Sky alias exactly (List String -> Vec<String>, etc.).
+/// Runtime representation of the Ipê `Ipe.Csv.Csv` record. Field names + types
+/// must match the Ipê alias exactly (List String -> Vec<String>, etc.).
 #[derive(Clone, Debug, PartialEq)]
 pub struct CsvDoc {
     pub header: Vec<String>,
@@ -180,7 +180,7 @@ pub fn csv_encode(doc: CsvDoc) -> String {
 
 /// Csv.encodeWithDelimiter : String -> Csv -> String
 pub fn csv_encode_with_delimiter(delim: String, doc: CsvDoc) -> String {
-    // Sky's `encodeWithDelimiter` returns `String` (no Result), so on an
+    // Ipê's `encodeWithDelimiter` returns `String` (no Result), so on an
     // invalid delimiter we fall back to the standard comma rather than
     // silently taking a partial/wrong byte. This matches Go's behaviour
     // (the Go csv.Writer panics on a non-ASCII Comma — we degrade gracefully).

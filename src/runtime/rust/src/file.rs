@@ -5,7 +5,7 @@ use super::*;
 //
 // Every kernel in this module does a blocking `std::fs` syscall inside its
 // `Box::pin(async move { ... })` body. On a tokio worker thread (the shape
-// every generated Sky.Live/Sky.Http.Server/Sky.Cli/Sky.Tui app runs under),
+// every generated Ipe.Live/Ipe.Http.Server/Ipe.Cli/Ipe.Tui app runs under),
 // a blocking syscall stalls that worker for its full duration — reactor
 // starvation under concurrent load, or a real multi-second stall on a
 // slow/network filesystem. `run_blocking` offloads the closure to tokio's
@@ -18,11 +18,11 @@ use super::*;
 // The main CI clippy job (`cargo clippy --all-targets --workspace`) builds
 // with the crate's `default = []` features, i.e. `tokio` NOT enabled, so an
 // unconditional `tokio::task::spawn_blocking` reference here would break that
-// job. Every REAL generated Sky project always has `tokio` (`Task.run`/
+// job. Every REAL generated Ipê project always has `tokio` (`Task.run`/
 // `block_on` need it regardless of which kernels are used — see
 // `tests/golden/basics/Cargo.toml`), so the `#[cfg(not(feature = "tokio"))]`
 // fallback below only matters for the standalone `ipe-runtime-rust` crate's
-// own narrow-feature builds, never for a real Sky program. See
+// own narrow-feature builds, never for a real Ipê program. See
 // `docs/adr/0014-kernel-robustness-blocking-offload-and-toctou.md` §2.2.
 #[cfg(feature = "tokio")]
 async fn run_blocking<T, F>(f: F) -> Result<T, String>
@@ -45,7 +45,7 @@ where
     f()
 }
 
-/// `Sky.Core.File.readFile : String -> Task Error String`. Reads the whole file,
+/// `Ipe.File.readFile : String -> Task Error String`. Reads the whole file,
 /// but bounded by a hard ceiling so an attacker-controlled path pointing at an
 /// unbounded source (`/dev/zero`, a named pipe, a multi-GiB file) cannot OOM the
 /// process — `read_to_string` on `/dev/zero` never returns. The ceiling defaults
@@ -129,7 +129,7 @@ fn file_mkdir_all_sync(path: &str) -> Result<(), String> {
     std::fs::create_dir_all(path).map_err(|e| format!("{}", e))
 }
 
-/// `Sky.Core.File.mkdirAll : String -> Task Error ()` — create the directory
+/// `Ipe.File.mkdirAll : String -> Task Error ()` — create the directory
 /// and every missing parent (mkdir -p). Already-exists is `Ok` (matching
 /// `std::fs::create_dir_all`); a real I/O failure is `Err`.
 pub fn file_mkdir_all<E: Send + From<String> + 'static>(path: String) -> IpeTask<E, ()> {
@@ -160,7 +160,7 @@ fn file_read_file_limit_sync(path: &str, cap: u64) -> Result<String, String> {
     Ok(buf)
 }
 
-/// `Sky.Core.File.readFileLimit : String -> Int -> Task Error String`
+/// `Ipe.File.readFileLimit : String -> Int -> Task Error String`
 /// Read at most `limit` bytes. Returns `Err` when the file is larger than
 /// `limit` (to avoid OOM on unbounded inputs) or when the content is not
 /// valid UTF-8 (use `readFileBytes` for binary data in that case).
@@ -215,8 +215,8 @@ fn file_read_file_bytes_sync(path: &str) -> Result<Vec<i64>, String> {
     Ok(from_u8_slice(&buf))
 }
 
-/// `Sky.Core.File.readFileBytes : String -> Task Error (List Int)`
-/// Read the file as raw bytes, returned as `Vec<i64>` (Sky `List Int`,
+/// `Ipe.File.readFileBytes : String -> Task Error (List Int)`
+/// Read the file as raw bytes, returned as `Vec<i64>` (Ipê `List Int`,
 /// values 0..=255). Uses the same 10 MiB default cap as Go — a file over the
 /// cap is an `Err`, never a silent truncation (sibling fix to
 /// `readFileLimit`'s TOCTOU close, commit 706f026). For text content with
@@ -245,7 +245,7 @@ fn file_append_sync(path: &str, content: &str) -> Result<(), String> {
         .map_err(|e| format!("{}", e))
 }
 
-/// `Sky.Core.File.append : String -> String -> Task Error ()`
+/// `Ipe.File.append : String -> String -> Task Error ()`
 /// Append `content` to the end of the file at `path`, creating it if absent.
 /// Mirrors Go's `os.OpenFile(…, O_APPEND|O_CREATE|O_WRONLY, 0644)`.
 pub fn file_append<E: Send + From<String> + 'static>(
@@ -266,7 +266,7 @@ fn file_remove_sync(path: &str) -> Result<(), String> {
     std::fs::remove_file(path).map_err(|e| format!("{}", e))
 }
 
-/// `Sky.Core.File.remove : String -> Task Error ()`
+/// `Ipe.File.remove : String -> Task Error ()`
 /// Remove the file at `path`. Returns `Err` on any I/O failure (including
 /// "not found"). Mirrors Go's `os.Remove`.
 pub fn file_remove<E: Send + From<String> + 'static>(path: String) -> IpeTask<E, ()> {
@@ -294,7 +294,7 @@ fn file_read_dir_sync(path: &str) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
-/// `Sky.Core.File.readDir : String -> Task Error (List String)`
+/// `Ipe.File.readDir : String -> Task Error (List String)`
 /// Return the names (not full paths) of all entries in the directory at
 /// `path`, in filesystem order. Mirrors Go's `os.ReadDir` → `e.Name()`.
 pub fn file_read_dir<E: Send + From<String> + 'static>(path: String) -> IpeTask<E, Vec<String>> {
@@ -306,7 +306,7 @@ pub fn file_read_dir<E: Send + From<String> + 'static>(path: String) -> IpeTask<
     })
 }
 
-/// `Sky.Core.File.isDir : String -> Task Error Bool`
+/// `Ipe.File.isDir : String -> Task Error Bool`
 /// Returns `Ok(true)` when `path` exists and is a directory, `Ok(false)` when
 /// it exists and is not a directory, and `Ok(false)` (not `Err`) when the path
 /// does not exist — matching Go's shape (`os.Stat` error → `false`).
@@ -326,7 +326,7 @@ pub fn file_is_dir<E: Send + 'static>(path: String) -> IpeTask<E, bool> {
 
 // ─── Temp paths ────────────────────────────────────────────────────────────
 
-/// `Sky.Core.File.tempFile : String -> Task Error String`
+/// `Ipe.File.tempFile : String -> Task Error String`
 /// Create a uniquely-named empty file in the system temp directory, using
 /// `prefix` as the filename prefix. Returns the absolute path.
 /// The caller is responsible for removing the file when done.
@@ -343,7 +343,7 @@ pub fn file_temp_file<E: Send + From<String> + 'static>(prefix: String) -> IpeTa
     })
 }
 
-/// `Sky.Core.File.tempDir : String -> Task Error String`
+/// `Ipe.File.tempDir : String -> Task Error String`
 /// Create a uniquely-named directory in the system temp directory, using
 /// `prefix` as the directory name prefix. Returns the absolute path.
 /// The caller is responsible for removing the directory when done.
@@ -425,7 +425,7 @@ fn file_copy_sync(src: &str, dst: &str) -> Result<(), String> {
         .map_err(|e| format!("{}", e))
 }
 
-/// `Sky.Core.File.copy : String -> String -> Task Error ()`
+/// `Ipe.File.copy : String -> String -> Task Error ()`
 /// Copy the file at `src` to `dst`, creating or overwriting `dst`.
 /// Mirrors Go's `io.Copy(out, in)` pattern.
 pub fn file_copy<E: Send + From<String> + 'static>(src: String, dst: String) -> IpeTask<E, ()> {
@@ -441,7 +441,7 @@ fn file_rename_sync(src: &str, dst: &str) -> Result<(), String> {
     std::fs::rename(src, dst).map_err(|e| format!("{}", e))
 }
 
-/// `Sky.Core.File.rename : String -> String -> Task Error ()`
+/// `Ipe.File.rename : String -> String -> Task Error ()`
 /// Rename (move) the file or directory at `src` to `dst`.
 /// Mirrors Go's `os.Rename`.
 pub fn file_rename<E: Send + From<String> + 'static>(src: String, dst: String) -> IpeTask<E, ()> {

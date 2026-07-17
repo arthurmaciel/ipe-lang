@@ -7,16 +7,16 @@ pub type FormData = HashMap<String, String>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Html<M> {
-    /// Normal element node — matches Sky's `HElement tag attrs children`.
+    /// Normal element node — matches Ipê's `HElement tag attrs children`.
     HElement(String, Vec<Attribute<M>>, Vec<Html<M>>),
-    /// Text node (HTML-escaped on render) — matches Sky's `HText s`.
+    /// Text node (HTML-escaped on render) — matches Ipê's `HText s`.
     HText(String),
     /// Raw, un-escaped HTML — trusted pre-rendered content only; caller sanitises.
-    /// Matches Sky's `HRaw s`.
+    /// Matches Ipê's `HRaw s`.
     HRaw(String),
 }
 
-/// Variant names mirror the Sky stdlib `Std.Html.Attributes.Attribute` ADT
+/// Variant names mirror the Ipê stdlib `Ipe.Html.Attributes.Attribute` ADT
 /// (`Attr | BoolAttr | EventAttr (Event msg) | NoAttr`) so the Rust codegen's
 /// bridge (`StdHtmlAttributesAttribute<msg> = ipe_runtime::Attribute<msg>`)
 /// constructs the right variants by name.
@@ -29,15 +29,15 @@ pub enum Attribute<M> {
     NoAttr,
 }
 
-/// Variant names mirror the Sky stdlib `Std.Html.Attributes.Event` ADT
+/// Variant names mirror the Ipê stdlib `Ipe.Html.Attributes.Event` ADT
 /// (`OnMsg | OnString | OnBool | OnForm`). `OnString`/`OnBool` carry
 /// `Arc<dyn Fn(..) -> msg>` (not bare fn pointers) so the handler can be a
-/// CAPTURING closure — exactly as the Go backend allows. A faithful Sky.Live
+/// CAPTURING closure — exactly as the Go backend allows. A faithful Ipe.Live
 /// app's `onChange = \s -> toMsg (parse s default)` captures locals; a bare
 /// fn-pointer field rejected that. Bare ctors / non-capturing fns coerce into
 /// `Arc::new` fine; capturing closures box into the trait object.
 ///
-/// `Ui.onSubmit` / `Std.Html.Events.onSubmit` (the heterogeneous-payload
+/// `Ui.onSubmit` / `Ipe.Html.Events.onSubmit` (the heterogeneous-payload
 /// handler whose argument type is decoupled from `msg`) construct `OnForm`
 /// too — `ui_on_submit_` / `html_on_raw_` close over a
 /// `decode_form_or_warn::<T>` call for the CONCRETE record type `T`, recovered
@@ -84,7 +84,7 @@ impl<M> std::fmt::Debug for Attribute<M> {
 }
 
 // Structural equality only: (variant kind, event name). The message payload /
-// closure is deliberately ignored. Sky.Live's diff is structure-only — it just
+// closure is deliberately ignored. Ipe.Live's diff is structure-only — it just
 // decides whether a DOM node carries a listener of a given event name. The
 // actual handler lives server-side in the per-session handler_index, which is
 // REBUILT from the fresh view on every commit, so the diff never needs to
@@ -158,7 +158,7 @@ pub fn render_html<M>(node: &Html<M>) -> String {
 }
 
 /// Maximum Html nesting depth the renderer and the sky-id stamper descend.
-/// The Html tree is produced by the Sky `view` from Model, and Model commonly
+/// The Html tree is produced by the Ipê `view` from Model, and Model commonly
 /// holds attacker-influenced data (nested comments / replies / a worst-case
 /// string folded into a chain of wrapper elements). Recursing once per nesting
 /// level with no cap would overflow the thread stack and ABORT the whole
@@ -196,10 +196,10 @@ fn render_into_ctx<M>(
     match node {
         // SECURITY: verbatim (un-escaped) text is reachable ONLY here, with
         // raw_text=true, which is set ONLY when the parent tag is the literal
-        // "script"/"style" (see the child loop below). Std.Ui never produces a
+        // "script"/"style" (see the child loop below). Ipe.Ui never produces a
         // script/style ELEMENT — its styling flows through data-sky-* markers
-        // consumed server-side — so the "Std.Ui HTML-escapes everything" contract
-        // is NOT weakened. This path is the documented Std.Html raw escape hatch
+        // consumed server-side — so the "Ipe.Ui HTML-escapes everything" contract
+        // is NOT weakened. This path is the documented Ipe.Html raw escape hatch
         // (`node "script" [] [text code]`): the author owns sanitisation of any
         // interpolated value, exactly as on the Go backend (live.go:421-438,
         // which likewise does NOT strip `</script>` here — matching it keeps the
@@ -245,7 +245,7 @@ fn render_into_ctx<M>(
             // Multi-valued attribute merge — mirrors Go `HtmlToVNode`
             // (live.go ~L161-185). `class` is HTML's space-separated and
             // `style` HTML's semicolon-separated multi-valued attribute: an
-            // element carrying BOTH a Std.Ui-computed inline `style` (from
+            // element carrying BOTH a Ipe.Ui-computed inline `style` (from
             // padding/background/border attrs) AND a user
             // `Ui.htmlAttribute "style" "z-index: 5"` must emit ONE merged
             // `style="…computed…; z-index: 5"`, not two `style="…"`
@@ -253,7 +253,7 @@ fn render_into_ctx<M>(
             // declarations are silently dropped). The Rust attribute list
             // never went through Go's map accumulation, so we fold the merge
             // here at collection time. First-seen value keeps its position
-            // (Std.Ui composes the computed style first); later values append
+            // (Ipe.Ui composes the computed style first); later values append
             // so a user style declared last can override. Every other key is
             // last-wins (two `href`/`value` ⇒ override, matching Go's map set).
             for a in attrs {
@@ -411,16 +411,16 @@ fn render_into_ctx<M>(
                 None
             };
             if tag == "style" {
-                // SECURITY (F7): every `<style>` body — from `Std.Html.styleNode`,
+                // SECURITY (F7): every `<style>` body — from `Ipe.Html.styleNode`,
                 // a hand-built `Html.node "style" [] [Html.raw css]`, or a
-                // `Std.Css` stylesheet string — is close-tag-neutralised at THIS
+                // `Ipe.Css` stylesheet string — is close-tag-neutralised at THIS
                 // sink before it reaches the DOM. `styleNode` also pre-strips at
                 // construction (`html_style_node_`), so the body is gated twice
                 // (belt and braces). Rendered into a scratch buffer with
                 // raw_text=true (CSS is not HTML-decoded), then `strip_style_close`
                 // removes any `</style` breakout. Asymmetry with `<script>` is
                 // deliberate: `<style>` bodies are attacker-reachable via
-                // `Std.Css` values, whereas `<script>` is the documented,
+                // `Ipe.Css` values, whereas `<script>` is the documented,
                 // author-owned Go-parity raw escape hatch (see the HText comment
                 // above) and is NOT stripped.
                 let mut body = String::new();
@@ -485,7 +485,7 @@ fn escape_html(t: &str, escape_quote: bool) -> String {
 /// event name. Tag/attr/event names are NEVER escaped (an escaped `<` in a tag
 /// position is meaningless), so a name carrying a structural metacharacter is a
 /// direct injection: a tag `"div><script>…"` or an attr key `"x onmouseover=…"`
-/// would break out of the element. Sky `Html.node` / `Html.attribute` take the
+/// would break out of the element. Ipê `Html.node` / `Html.attribute` take the
 /// name as a `String`, so it can be attacker-derived. Accept only the characters
 /// that appear in real HTML names — letters, digits, and `-_:.` — and reject
 /// everything else (whitespace, `<>"'=/\``, control bytes, non-ASCII). An invalid
@@ -643,7 +643,7 @@ fn is_dangerous_url(name: &str, value: &str) -> bool {
 /// (an inert URL) before it is escaped + emitted; pass any other value through.
 /// Closes the `href="javascript:…"` / `src="data:text/html,…"` /
 /// `href="data:image/svg+xml,…"` XSS class at the render sink (so every producer
-/// — Std.Html, Std.Ui link/image — is covered).
+/// — Ipe.Html, Ipe.Ui link/image — is covered).
 fn sanitise_url_attr<'a>(name: &str, value: &'a str) -> &'a str {
     if is_url_attr(name) && is_dangerous_url(name, value) {
         ""
@@ -652,7 +652,7 @@ fn sanitise_url_attr<'a>(name: &str, value: &'a str) -> &'a str {
     }
 }
 
-/// Sanitise an attribute `(name, value)` pair destined for a Sky.Live SSE
+/// Sanitise an attribute `(name, value)` pair destined for a Ipe.Live SSE
 /// patch that the browser applies via `setAttribute`. Returns the safe pair to
 /// set, or `None` to DROP the attribute entirely.
 ///
@@ -767,19 +767,19 @@ fn set_attr<M>(attrs: &mut Vec<Attribute<M>>, key: &str, val: &str) {
     attrs.push(Attribute::Attr(key.to_string(), val.to_string()));
 }
 
-// --- Std.Html kernel wrappers (`Ffi.callPure "htmlXxx"`) ---
-// These match the kernel names used in sky-stdlib Std.Html.ipe — the Sky-side
+// --- Ipe.Html kernel wrappers (`Ffi.callPure "htmlXxx"`) ---
+// These match the kernel names used in sky-stdlib Ipe.Html.ipe — the Ipê-side
 // helpers (render, escapeHtml, escapeAttr, attrToString) route here on the Rust
 // backend. The codegen converts "htmlRender" → `html_render_()`, etc. Kept in
-// this standalone module (not under live/) so a non-Live Std.Html / Std.Ui app
-// renders via Html.toString without pulling the Sky.Live server machinery.
+// this standalone module (not under live/) so a non-Live Ipe.Html / Ipe.Ui app
+// renders via Html.toString without pulling the Ipe.Live server machinery.
 
 /// `Ffi.callPure "htmlRender"` — render an Html tree to an HTML string.
 pub fn html_render_<M>(node: Html<M>) -> String {
     render_html(&node)
 }
 
-// --- Std.Html.Attributes builder kernels (corpus-used direct-backing) ---
+// --- Ipe.Html.Attributes builder kernels (corpus-used direct-backing) ---
 //
 // Every builder produces the runtime `Attribute<M>` value the render sink
 // already knows how to neutralise. SECURITY (P1): the value string is escaped
@@ -790,7 +790,7 @@ pub fn html_render_<M>(node: Html<M>) -> String {
 // `attribute k v` / `boolAttribute k b` pass a runtime key, which the sink
 // gates through `SafeAttrName` (drops `on*`/`srcdoc`/charset-invalid names).
 
-/// `Std.Html.Attributes.{class,id,href,…}` and the generic
+/// `Ipe.Html.Attributes.{class,id,href,…}` and the generic
 /// `attribute k v` — a string-valued HTML attribute. The key is a literal for
 /// the fixed-key builders and a runtime string for `attribute`; both are gated
 /// at the render sink.
@@ -819,7 +819,7 @@ pub fn html_attr_tabindex_<M>(n: i64) -> Attribute<M> {
     Attribute::Attr("tabindex".to_owned(), n.to_string())
 }
 
-/// `Std.Html.Attributes.{checked,disabled,…}` and the generic
+/// `Ipe.Html.Attributes.{checked,disabled,…}` and the generic
 /// `boolAttribute k b` — a boolean HTML attribute (emitted bare when `true`,
 /// omitted when `false`, per the render sink's `BoolAttr` handling).
 #[must_use]
@@ -827,14 +827,14 @@ pub fn html_bool_named_attr_<M>(key: String, on: bool) -> Attribute<M> {
     Attribute::BoolAttr(key, on)
 }
 
-/// `Std.Html.Attributes.noAttr` — the identity attribute (renders nothing).
+/// `Ipe.Html.Attributes.noAttr` — the identity attribute (renders nothing).
 /// Makes "no attribute" a first-class value rather than an `Option`/sentinel.
 #[must_use]
 pub fn html_no_attr_<M>() -> Attribute<M> {
     Attribute::NoAttr
 }
 
-/// `Std.Html.Events.{onClick,onFocus,onBlur,onMouseOver,onMouseOut}` —
+/// `Ipe.Html.Events.{onClick,onFocus,onBlur,onMouseOver,onMouseOut}` —
 /// a zero-wire-arg event whose `Msg` dispatches as-is. The `name` is the fixed
 /// DOM event name supplied by the compile-time `html_event_wire_name` (never
 /// attacker data).
@@ -843,9 +843,9 @@ pub fn html_on_msg_<M>(name: String, msg: M) -> Attribute<M> {
     Attribute::EventAttr(Event::OnMsg(name, msg))
 }
 
-/// `Std.Html.Events.{onInput,onChange,onKeyDown,onKeyUp}` — a
+/// `Ipe.Html.Events.{onInput,onChange,onKeyDown,onKeyUp}` — a
 /// value-carrying event; the handler receives the input string. The compiler
-/// Arc-wraps the emitted Sky fn before this call.
+/// Arc-wraps the emitted Ipê fn before this call.
 #[must_use]
 pub fn html_on_string_<M>(
     name: String,
@@ -854,7 +854,7 @@ pub fn html_on_string_<M>(
     Attribute::EventAttr(Event::OnString(name, handler))
 }
 
-/// `Std.Html.Events.{onBool,onCheck}` — a checkbox-state event; the
+/// `Ipe.Html.Events.{onBool,onCheck}` — a checkbox-state event; the
 /// handler receives the checked bool.
 #[must_use]
 pub fn html_on_bool_<M>(
@@ -864,8 +864,8 @@ pub fn html_on_bool_<M>(
     Attribute::EventAttr(Event::OnBool(name, handler))
 }
 
-/// `Std.Html.Events.onSubmit` — a heterogeneous-payload event whose
-/// handler argument type `T` is DECOUPLED from `M` at the Sky type level (a
+/// `Ipe.Html.Events.onSubmit` — a heterogeneous-payload event whose
+/// handler argument type `T` is DECOUPLED from `M` at the Ipê type level (a
 /// form's `onSubmit DoSignIn` must not force `LoginForm` into the surrounding
 /// `Html msg`'s type). `T` stays a free HM variable in `constrain.rs`'s
 /// scheme; at CODEGEN time Rust's ordinary generic inference recovers the
@@ -884,7 +884,7 @@ pub fn html_on_bool_<M>(
 /// the VNode tree is shared across the live session's dispatch table, so the
 /// handler must be safely readable from any thread that services a request).
 /// It is NOT enough for the caller to hand a `'static` closure whose captures
-/// all happen to be `Sync`: if the emitted Sky closure is first boxed as a
+/// all happen to be `Sync`: if the emitted Ipê closure is first boxed as a
 /// trait object (`Box<dyn Fn(T) -> M + Send + 'static>` — the codegen's
 /// generic first-class-function-value rendering, which deliberately omits
 /// `+Sync` since most Fn-value consumers only need `Send`) and THAT box is
@@ -910,8 +910,8 @@ where
     ))
 }
 
-/// Non-`live` builds (Sky.Tui without the HTTP wire) have no `FormData`
-/// decode path. `Std.Html.Events.onSubmit` was already inert everywhere
+/// Non-`live` builds (Ipe.Tui without the HTTP wire) have no `FormData`
+/// decode path. `Ipe.Html.Events.onSubmit` was already inert everywhere
 /// before this fix (the `OnRaw` path never dispatched in ANY backend), so
 /// degrading to a structural no-op attribute here is not a regression for
 /// Tui — it was never functional there and Tui has no form-submit wire
@@ -921,7 +921,7 @@ pub fn html_on_raw_<M, T, F: Fn(T) -> M>(_name: String, _payload: F) -> Attribut
     Attribute::NoAttr
 }
 
-/// `Std.Html.Events.onSubmit` BARE-VALUE shape — dispatch a FIXED
+/// `Ipe.Html.Events.onSubmit` BARE-VALUE shape — dispatch a FIXED
 /// `msg`, ignoring the submitted `FormData` entirely. Complements
 /// `html_on_raw_` (the typed-record decode shape above): the "form fields
 /// are already synced into Model via `onInput`/`onChange`; submit just
@@ -935,7 +935,7 @@ pub fn html_on_raw_<M, T, F: Fn(T) -> M>(_name: String, _payload: F) -> Attribut
 /// swallowing the submit (`decode_form_or_warn` returns `None` — "dispatch no
 /// Msg" — on any decode error). Always fires.
 ///
-/// `M: Clone` is not a new requirement: every `Sky.Live` `Msg` type is
+/// `M: Clone` is not a new requirement: every `Ipe.Live` `Msg` type is
 /// already `Clone` by construction (`HandlerIndex<M: Clone>` — every wire
 /// event handler, including plain `onClick`'s `Event::OnMsg`, already clones
 /// the dispatched value).
@@ -974,8 +974,8 @@ pub fn html_attr_to_string_<M>(attr: Attribute<M>) -> String {
     // Gate the attribute KEY through `SafeAttrName` — the SAME single policy the
     // render_into sink uses (charset + no script-bearing names). The key is
     // emitted UNESCAPED, so a hostile key such as `x onload=alert(1)` or a live
-    // `onerror`/`srcdoc` (reachable via Std.Html.Attributes.attribute →
-    // Std.Html.attrToString) would inject markup or execute script that
+    // `onerror`/`srcdoc` (reachable via Ipe.Html.Attributes.attribute →
+    // Ipe.Html.attrToString) would inject markup or execute script that
     // value-escaping cannot stop. An unvetted name drops the whole attribute.
     // Event-marker names are not attribute names → keep `is_safe_html_name`.
     match attr {
@@ -996,7 +996,7 @@ pub fn html_attr_to_string_<M>(attr: Attribute<M>) -> String {
 }
 
 // ─── IpeStringify for the Html runtime types ────────────────────────────────
-// Same rationale as the Std.Ui impls in ui/element.rs: a codegen-emitted
+// Same rationale as the Ipe.Ui impls in ui/element.rs: a codegen-emitted
 // `ipe_show` recurses into every field, so an Html/Attribute/Event a generated
 // type can hold must impl the trait (else E0599). No Go `%v` analogue worth
 // matching; a stable type-tag placeholder is total and never recurses into `M`.
@@ -1091,7 +1091,7 @@ mod tests {
         assert!(SafeAttrName::parse("onload").is_none() && SafeAttrName::parse("srcdoc").is_none());
     }
 
-    // SECURITY: the sibling sink `Std.Html.attrToString` must drop the SAME
+    // SECURITY: the sibling sink `Ipe.Html.attrToString` must drop the SAME
     // script-bearing names as render_into — both route through SafeAttrName.
     #[test]
     fn attr_to_string_drops_event_handler_and_srcdoc() {
@@ -1112,7 +1112,7 @@ mod tests {
 
     #[test]
     fn style_attrs_merge_into_one_attribute() {
-        // Std.Ui composes a computed inline `style` from layout attrs
+        // Ipe.Ui composes a computed inline `style` from layout attrs
         // (padding/background/border) AND a user `Ui.htmlAttribute "style" V`
         // adds another. The renderer MUST merge both into ONE `style="…"` —
         // emitting two `style="…"` attrs makes the browser keep only the first,
@@ -1183,7 +1183,7 @@ mod tests {
     #[test]
     fn textarea_value_renders_as_content_not_attr() {
         // <textarea value="…"> renders EMPTY in browsers — the value must become
-        // the text content. Go parity (live.go renderVNode). Std.Ui.Input.multiline
+        // the text content. Go parity (live.go renderVNode). Ipe.Ui.Input.multiline
         // sets a `value` attr; the renderer must move it into the body.
         let t: Html<()> = Html::HElement(
             "textarea".into(),
@@ -1597,7 +1597,7 @@ mod tests {
     #[cfg(feature = "live")]
     fn html_on_submit_dispatches_via_onform() {
         // Mirror of dispatch.rs's ui_on_submit_dispatches_via_onform_not_onraw,
-        // exercising Std.Html.Events.onSubmit's backing fn directly.
+        // exercising Ipe.Html.Events.onSubmit's backing fn directly.
         #[derive(serde::Deserialize, Default, PartialEq, Debug)]
         #[serde(default)]
         struct Order {

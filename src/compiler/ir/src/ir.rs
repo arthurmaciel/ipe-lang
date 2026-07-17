@@ -153,7 +153,7 @@ pub struct Module {
     pub uses_email: bool,
 }
 
-/// A user-declared type. The IR models user types as enums (Sky's `type`
+/// A user-declared type. The IR models user types as enums (Ipê's `type`
 /// declarations): a variant may be nullary, or carry payload fields, and the
 /// enum may be generic.
 #[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
@@ -181,7 +181,7 @@ pub struct EnumDef {
     /// distinct Rust enums. Empty for backend-unit-test IR built by hand.
     pub home: ModPath,
     /// The type variables this enum quantifies, in declaration order. Each is a
-    /// Sky type-variable [`Symbol`] that appears as an [`IrType::Generic`] in a
+    /// Ipê type-variable [`Symbol`] that appears as an [`IrType::Generic`] in a
     /// variant's field types. A non-generic enum has an empty list.
     ///
     /// The order is load-bearing: the backend derives each parameter's Rust
@@ -216,19 +216,19 @@ pub struct Variant {
 /// variable the body *constrains* by applying an operation to it
 /// carries the matching bounds, so the emitted generic is `T1: <bounds>`.
 ///
-/// Each flag maps a Sky super-type capability to the Rust standard-library
+/// Each flag maps a Ipê super-type capability to the Rust standard-library
 /// trait that realises it, with no new runtime trait:
 ///
-/// * `add` / `sub` / `mul` realise Sky's **Number** super-type (`Int` or
-///   `Float`). They are split per arithmetic operator because Sky's
+/// * `add` / `sub` / `mul` realise Ipê's **Number** super-type (`Int` or
+///   `Float`). They are split per arithmetic operator because Ipê's
 ///   `Basics.add` / `sub` / `mul` already lower to Rust's `+` / `-` / `*`, and
 ///   each operator demands exactly its own `::core::ops` trait — a body that
 ///   only adds needs only `Add`, so the bound stays minimal rather than
 ///   over-constraining a caller.
-/// * `ord` realises Sky's **Comparable** super-type (`Int` / `Float` / `Char` /
+/// * `ord` realises Ipê's **Comparable** super-type (`Int` / `Float` / `Char` /
 ///   `String` / `Bool`) for the ordering comparisons `<` `>` `<=` `>=`, mapping
 ///   to Rust's `PartialOrd`.
-/// * `eq` realises Sky's **Equatable** super-type (every non-function type) for
+/// * `eq` realises Ipê's **Equatable** super-type (every non-function type) for
 ///   the equality comparisons `==` `/=`, mapping to Rust's `PartialEq`. Unlike
 ///   `ord` / the arithmetic traits it adds no `copy`: `PartialEq::eq` takes
 ///   `&self`, so an equated value is borrowed, never moved.
@@ -305,7 +305,7 @@ impl BoundSet {
     /// `Display` impl and fails at COMPILE time (E0277 at the caller's
     /// instantiation), never at runtime — the runtime's deliberate policy (see
     /// `src/runtime/rust/src/basics.rs:174-182`). NOT a new SEAL violation:
-    /// `skyc` already exit-0'd on composite-`toString` before this bound existed
+    /// `ipe` already exit-0'd on composite-`toString` before this bound existed
     /// (the monomorphic `basics_to_string` call already required `Display`); the
     /// bound only relocates that pre-existing cargo error from the callee body
     /// to the caller's instantiation, never introducing one where there was
@@ -320,7 +320,7 @@ impl BoundSet {
     /// object requires `tv: 'static`, so the emitted generic must carry it.
     /// Without it the enclosing generic is only `<T{n}: Clone>` and the box
     /// coercion fails E0310 ("the parameter type may not live long enough") —
-    /// well-typed to `skyc`, a `cargo build` break (a SEAL violation).
+    /// well-typed to `ipe`, a `cargo build` break (a SEAL violation).
     ///
     /// This is a LIFETIME bound, not a trait: it renders as the leading
     /// `'static` in the bound list (`T{n}: 'static + Clone`), where Rust
@@ -329,12 +329,12 @@ impl BoundSet {
     /// PARAM value binder — the type-param appears in the boxed callback's TYPE,
     /// not as the accessed value — so it has its own structural walk
     /// (`body_boxes_generic_callback` in `ipe_lower`). It lands on wildcard `any`
-    /// AND named tvars alike: every concrete Sky type the caller substitutes is
+    /// AND named tvars alike: every concrete Ipê type the caller substitutes is
     /// `'static` (emitted values never borrow), so `T: 'static` is satisfied by
     /// every real instantiation — no caller-side failure, matching the reference
     /// (Go boxes with no lifetime concern). NOT a new SEAL violation: it only
     /// relocates the pre-existing E0310 from the callee body to a bound that
-    /// makes acceptance-by-`skyc` prove the box coercion type-checks.
+    /// makes acceptance-by-`ipe` prove the box coercion type-checks.
     const STATIC: u16 = 1 << 13;
     /// The `Send` auto-trait bound: a generic type-param whose VALUE is moved
     /// into a runtime consumer that requires `Send` — a `Sub` message value
@@ -344,7 +344,7 @@ impl BoundSet {
     /// `'static` bound ([`Self::STATIC`]), the value here is a bare `msg`, not a
     /// callback — so it has its own kernel-on-param matcher. Always paired with
     /// `STATIC` (a moved value that must be `Send` for a spawned/boxed consumer
-    /// is also `'static`). Satisfied by every concrete Sky type (emitted values
+    /// is also `'static`). Satisfied by every concrete Ipê type (emitted values
     /// own their data and never borrow), so no caller-side failure.
     const SEND: u16 = 1 << 14;
 
@@ -413,7 +413,7 @@ impl BoundSet {
         Self(self.0 | Self::EQ)
     }
 
-    /// This set with the `IpeStringify` (Sky `toString` / `Log.*With`) bound.
+    /// This set with the `IpeStringify` (Ipê `toString` / `Log.*With`) bound.
     #[must_use]
     pub const fn with_show(self) -> Self {
         Self(self.0 | Self::SHOW)
@@ -567,7 +567,7 @@ pub struct Func {
     /// different source modules from colliding with Rust E0428.
     pub home: ModPath,
     /// The type variables this function quantifies, in quantification order,
-    /// each paired with its [`BoundSet`]. A type variable is a Sky
+    /// each paired with its [`BoundSet`]. A type variable is a Ipê
     /// type-variable [`Symbol`] that appears as an [`IrType::Generic`] in the
     /// parameters / return / body; its `BoundSet` records the Rust trait bounds
     /// the body's use of the variable demands. A monomorphic function has an
@@ -601,7 +601,7 @@ pub enum IrType {
     /// A Unicode scalar value `Char`. Renders as Rust's `char`.
     Char,
     Unit,
-    /// A task producing a value of type `A` (`Task Error A` in Sky). Renders as
+    /// A task producing a value of type `A` (`Task Error A` in Ipê). Renders as
     /// the project-level alias `IpeTask<A>` (which expands to
     /// `ipe_runtime::IpeTask<IpeError, A>`). Replaces the former `TaskUnit`
     /// leaf — `Task Error ()` is now `Task(Box::new(Unit))`.
@@ -629,7 +629,7 @@ pub enum IrType {
     /// checker / lowerer never need a synthetic `type Maybe a = …` declaration).
     Maybe(Box<Self>),
     /// The built-in `Result e a` type, carrying its error type then its success
-    /// type (Sky's `Result e a` argument order). Renders as the runtime's
+    /// type (Ipê's `Result e a` argument order). Renders as the runtime's
     /// `IpeResult<E, A>`.
     Result(Box<Self>, Box<Self>),
     /// The built-in `List a` type, carrying its element type. Renders as the
@@ -690,7 +690,7 @@ pub enum IrType {
     /// Invariant: `params` is non-empty (a chain of zero levels is just
     /// `ret` itself, never constructed as `FnOnceChain`).
     FnOnceChain(Vec<Self>, Box<Self>),
-    /// A generic type parameter — a Sky type variable used STRUCTURALLY
+    /// A generic type parameter — a Ipê type variable used STRUCTURALLY
     /// (pass-through, no operation applied to it) in a fully-parametric
     /// top-level function. The carried [`Symbol`] is the source type
     /// variable's name (e.g. interned `"a"`).
@@ -733,17 +733,17 @@ pub enum IrType {
     Set(Box<Self>),
     /// The built-in `Bytes` type — an arbitrary byte buffer.
     ///
-    /// Divergence from Sky: Sky defines `type alias Bytes = String` (Go's
+    /// Divergence from Ipê: Ipê defines `type alias Bytes = String` (Go's
     /// `string` is a byte sequence, making the alias cost-free). Rust's
     /// `String` is UTF-8 constrained; mapping `Bytes` to `String` would be
-    /// unsound for non-UTF-8 binary payloads. Sky-Rust makes `Bytes` a
+    /// unsound for non-UTF-8 binary payloads. Ipê-Rust makes `Bytes` a
     /// distinct primitive lowering to `Vec<u8>` — lossless for arbitrary
     /// binary, with explicit UTF-8 conversion via `Bytes.fromString` /
     /// `Bytes.toString`. Rationale: Rust type-system correctness.
     Bytes,
     /// The JSON value type — an opaque, dynamically-typed JSON node.
     ///
-    /// The Sky `Value` type alias (`Value = any`) creates an unresolved
+    /// The Ipê `Value` type alias (`Value = any`) creates an unresolved
     /// `Ty::Var` at use sites.  In a JSON-kernel context the concrete Rust
     /// type is always `serde_json::Value`, re-exported from the runtime as
     /// `JsonVal`.  The lowerer produces this variant when a `Ty::Var`
@@ -809,7 +809,7 @@ pub enum IrType {
     /// `HttpRequest` — opaque HTTP request descriptor used by `Ipe.Http`
     /// and `Ipe.Http.Stream`.  Renders as `HttpRequest`.
     ///
-    /// Corresponds to `ipe_runtime::http::HttpRequest`.  In Sky source, users
+    /// Corresponds to `ipe_runtime::http::HttpRequest`.  In Ipê source, users
     /// write `HttpRequest` literals as structural records; the lowerer detects
     /// the canonical 7-field set (`body`, `followRedirects`, `headers`,
     /// `maxRedirects`, `method`, `timeout`, `url`) and folds it to this opaque
@@ -885,7 +885,7 @@ pub enum IrType {
     /// via the `builtin_runtime_enum` path in the backend (no synthetic
     /// `EnumDef` is injected — the enum lives entirely in the runtime crate).
     ///
-    /// Sanctioned divergence from Sky/Go: Go's `Basics_compareT` returns an
+    /// Sanctioned divergence from Ipê/Go: Go's `Basics_compareT` returns an
     /// `int` (-1/0/1).  The Rust backend uses a typed enum for sound exhaustive
     /// pattern matching without a range-check.
     Order,
@@ -914,7 +914,7 @@ pub enum IrType {
     /// no synthetic `EnumDef`, no new emitter mechanism.
     ///
     /// `ErrorInfo` carries `{ message : String, details : Maybe ErrorDetails
-    /// }` — a plain closed record, not a leaf `IrType` (Sky records are
+    /// }` — a plain closed record, not a leaf `IrType` (Ipê records are
     /// structural).
     Error,
 
@@ -922,7 +922,7 @@ pub enum IrType {
     /// carried optionally on `ErrorInfo.details`.
     ///
     /// Renders as `ipe_runtime::error::IpeErrorDetails`. Constructor names
-    /// match Sky source verbatim (`FfiPanic` / `TypeMismatch` / `HttpStatus`
+    /// match Ipê source verbatim (`FfiPanic` / `TypeMismatch` / `HttpStatus`
     /// / `JsonDecode` / `Custom`) and emit via the SAME `builtin_runtime_enum`
     /// path [`IrType::Error`]/[`IrType::ErrorKind`] use — no synthetic
     /// `EnumDef`.
@@ -978,7 +978,7 @@ pub enum IrType {
     /// path (this is ALSO the WASM hydration-island containment predicate a
     /// future `HydrationState` field-type gate consults, per
     /// `docs/architecture/wasm-target.md` §Q6 — nothing to build yet, the
-    /// target does not exist). `Debug` and the Sky-facing `IpeStringify` (the
+    /// target does not exist). `Debug` and the Ipê-facing `IpeStringify` (the
     /// trait backing `toString` / interpolation / `Log.*With`) are BOTH
     /// hand-written on the runtime type to ALWAYS render a fixed
     /// `"<redacted>"` placeholder, never the wrapped value — see
@@ -1047,7 +1047,7 @@ pub enum IrType {
 
     /// `Ipe.Email`'s attachment record `{ filename : String, mimeType : String,
     /// content : String }`. Renders as `ipe_runtime::email::EmailAttachment`
-    /// (the runtime type name differs from the Sky alias `Attachment`; the
+    /// (the runtime type name differs from the Ipê alias `Attachment`; the
     /// `content` field carries bytes as the `Bytes`-alias `String`). Folded like
     /// [`IrType::EmailMessage`].
     EmailAttachment,
@@ -1066,9 +1066,9 @@ pub enum IrType {
     /// SendGrid String | Smtp SmtpConfig`). Renders as
     /// `ipe_runtime::email::EmailProvider`.
     ///
-    /// The Sky union's own [`EnumDef`] is SUPPRESSED in `ipe_lower` (same
+    /// The Ipê union's own [`EnumDef`] is SUPPRESSED in `ipe_lower` (same
     /// mechanism as `IpeCacheHandle`): the runtime enum IS the canonical
-    /// representation, and the Sky ctor names (`Resend`/`Ses`/`SendGrid`/`Smtp`)
+    /// representation, and the Ipê ctor names (`Resend`/`Ses`/`SendGrid`/`Smtp`)
     /// match the runtime variant names verbatim, so construction and pattern
     /// matching route directly onto the runtime enum. Mirrors the reference's
     /// `runtimeOpaqueTypes` `RPubUseAlias` for `EmailProvider`.
@@ -1135,7 +1135,7 @@ pub enum UiPlain {
 /// This is the authoritative soundness gate that keeps the *unconditional*
 /// derive off any type whose rendered Rust form lacks one of those traits, so a
 /// well-typed program that stores such a value in a record field or enum payload
-/// can never `skyc`-succeed and then `cargo`-fail on a missing `Clone` / `Debug`
+/// can never `ipe`-succeed and then `cargo`-fail on a missing `Clone` / `Debug`
 /// / `PartialEq` impl. The non-derivable leaves are:
 ///
 /// * [`IrType::Fun`] — a first-class function, rendered `Box<dyn Fn(..) -> R>`
@@ -1286,7 +1286,7 @@ pub fn ir_type_is_derivable(
 /// **Model**: the live runtime persists the Model to the session store, so
 /// `live_app` bounds it "Serialize + `DeserializeOwned` + Clone + `PartialEq`".
 /// Without this gate a well-typed program that stores a non-serialisable value
-/// in its Model `skyc`-succeeds and then `cargo`-fails on the missing `serde`
+/// in its Model `ipe`-succeeds and then `cargo`-fails on the missing `serde`
 /// bound (the seal hole this gate closes).
 ///
 /// The serde-OK leaf set is a **strict subset** of the derivable leaf set
@@ -1563,7 +1563,7 @@ pub const fn fun_value_arc_promotable(ty: &IrType) -> bool {
 #[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Expr {
     Int(i64),
-    /// A boolean literal `True` / `False` used as a VALUE. Sky's `Bool` is the
+    /// A boolean literal `True` / `False` used as a VALUE. Ipê's `Bool` is the
     /// closed two-constructor type whose constructors are Prelude-exposed; the
     /// backend renders this as the Rust `true` / `false` keyword constant. (A
     /// `Bool` PATTERN is the separate [`Pat::Bool`] leaf.)
@@ -1580,7 +1580,7 @@ pub enum Expr {
     Char(String),
     /// The unit value `()` — the sole inhabitant of [`IrType::Unit`].
     ///
-    /// Sky's `()` literal lowers here; the backend emits the Rust unit
+    /// Ipê's `()` literal lowers here; the backend emits the Rust unit
     /// expression `()`. Distinct from a zero-element [`Expr::Tuple`], which the
     /// tuple invariant forbids (arity ≥ 2): the empty product is this `Unit`.
     Unit,
@@ -1638,7 +1638,7 @@ pub enum Expr {
         body: Box<Self>,
     },
     /// A conditional `if cond then then_ else else_`. The `else` arm is
-    /// mandatory — every Sky `if` is an expression with both branches.
+    /// mandatory — every Ipê `if` is an expression with both branches.
     If {
         cond: Box<Self>,
         then_: Box<Self>,
@@ -1960,7 +1960,7 @@ impl CallPin {
 /// and `Ui.onSubmit decoder` are syntactically identical when `m`/`decoder`
 /// are both `Var`s — only the solver knows which is callable. Deciding it at
 /// emit time from the payload's `Expr` shape is unsound (`let m = DoSignUp in
-/// onSubmit m` would emit `(m)(_x)`, a cargo `E0618` after `skyc` exit 0).
+/// onSubmit m` would emit `(m)(_x)`, a cargo `E0618` after `ipe` exit 0).
 /// The lowerer resolves it from the handler's solved
 /// region type and records the verdict here so the backend never guesses.
 ///
@@ -1977,7 +1977,7 @@ pub enum OnFormKind {
     FixedValue,
 }
 
-/// Every stdlib kernel function known to the Sky compiler.
+/// Every stdlib kernel function known to the Ipê compiler.
 ///
 /// Re-export alias so `ipe_ir` call-sites (`Callee::Kernel(KernelFn)`,
 /// `k.is_db()`, `KernelFn::*` variant patterns) reach the enum through this
@@ -2552,7 +2552,7 @@ impl Match {
     /// pattern shape) can never invalidate it. This is the sound, sealed
     /// replacement for the former `pub fn from_parts_unchecked` escape hatch
     /// (AUD-09), which took a raw `Vec<Arm>` and could rebuild a `Match` with
-    /// an empty arm list (`match x {}` — rustc E0004, no Sky diagnostic) or a
+    /// an empty arm list (`match x {}` — rustc E0004, no Ipê diagnostic) or a
     /// reordered/dropped-arm list. `pub(crate)`-sealing was not viable
     /// instead, because every caller of the old function lived in a different
     /// crate (`ipe_lower`, `ipe_backend_rust`).

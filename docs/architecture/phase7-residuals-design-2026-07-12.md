@@ -60,7 +60,7 @@ Seven findings, all addressed in this revision:
 
 All three problems are read from the actual current code (`runtime/src/
 sky_runtime/live/store.rs`, `crates/sky_backend_rust/src/emit_live.rs`,
-`crates/sky_watch/src/process.rs`, `crates/skyc/src/watch.rs`), not from the
+`crates/sky_watch/src/process.rs`, `crates/ipe/src/watch.rs`), not from the
 2026-07-11 doc's summary alone — §1, §2, and §3 below each open with a
 "verified against code" note that either confirms or corrects that summary.
 
@@ -139,7 +139,7 @@ here so each section below doesn't have to re-state them:
   `live_app_routed(...)` — so by the time any new hashing code would run,
   `model_ty` is GUARANTEED to satisfy `Serialize + DeserializeOwned + Clone
   + PartialEq` already. Problem 1 never has to handle an inadmissible Model.
-- `crates/skyc/src/cache.rs:244-250`'s `compiler_revision_hash()` (whole
+- `crates/ipe/src/cache.rs:244-250`'s `compiler_revision_hash()` (whole
   `current_exe()` byte hash, used ONLY as the on-disk build-cache epoch) is
   a tempting but, per §1.2 below, WRONG reuse target for the schema tag —
   see the decisions ledger for why.
@@ -149,10 +149,10 @@ here so each section below doesn't have to re-state them:
 The design doc's compressed phrase is `ModelSchemaTag = H(compiler_revision,
 structural_hash(Model type))`. Read literally against `cache.rs`'s existing
 `compiler_revision_hash()` (whole-binary content hash), this would mean: any
-`cargo install` of `skyc` — including one that changes nothing about Model
+`cargo install` of `ipe` — including one that changes nothing about Model
 emission or the store's wire format, e.g. a diagnostic-message typo fix —
-invalidates **every persisted session of every deployed Sky.Live app**
-rebuilt with that `skyc`. H22's fail-soft path makes this SAFE (a rejected
+invalidates **every persisted session of every deployed Ipe.Live app**
+rebuilt with that `ipe`. H22's fail-soft path makes this SAFE (a rejected
 tag just falls through to a fresh `init`, never a panic or wrong data), but
 it defeats the actual point of a persistent store for production apps: a
 routine point-release redeploy would silently drop every logged-in user's
@@ -168,12 +168,12 @@ availability regression, not a soundness one) favours the narrower one.
 **Decision: `compiler_revision` in the schema tag is a hand-maintained wire-
 format epoch constant, not a binary content hash.** This mirrors the
 `KEY_TAG`/`EPOCH_TAG` domain-separation convention `cache.rs` already uses
-(`b"skyc-build-cache-key-v1"` — "bumped whenever the key's ingredient set
+(`b"ipe-build-cache-key-v1"` — "bumped whenever the key's ingredient set
 changes shape, never for a value change within the same shape"). Concretely:
 `pub const LIVE_MODEL_SCHEMA_WIRE_VERSION: &str =
 "sky-live-model-schema-v1";`, declared **once**, in `runtime/src/
 sky_runtime/live/store.rs` — a runtime-crate constant present in every
-compiled Sky.Live binary automatically via the vendored runtime, needing NO
+compiled Ipe.Live binary automatically via the vendored runtime, needing NO
 per-project backend emission at all. It is bumped only when the wire framing
 itself changes (the tag-header length, the encoding of the body) — an
 intentional, reviewed, rare edit, exactly like `KEY_TAG`. The Model's own
@@ -213,7 +213,7 @@ never as a hash silently computed over incomplete or defaulted input.
 /// nominal identity for every reachable user enum, and the same VARIANT
 /// NAME at each declared enum position, hash IDENTICALLY, independent of
 /// Symbol intern order, independent of which module was parsed first,
-/// independent of Sky-source field-literal order.
+/// independent of Ipê-source field-literal order.
 ///
 /// # Errors
 /// Propagates a [`Diagnostic::CompilerBug`] if `ctx.resolve_ident` fails
@@ -236,11 +236,11 @@ so the schema tag and the actual emitted struct field layout are always
 derived from the SAME source of truth (no second, potentially drifting,
 ordering convention).
 
-**Enums get nominal identity, records don't — matching Sky's own type
-system.** Sky records are structural (row-typed): a `{ x : Int, y : Int }`
+**Enums get nominal identity, records don't — matching Ipê's own type
+system.** Ipê records are structural (row-typed): a `{ x : Int, y : Int }`
 from module A unifies with one from module B — so `structural_hash` never
 folds a record's "name" in (records don't have one at the `IrType` level).
-Sky ADTs (`IrType::Enum { home, name, args }`) are nominal — `type Color =
+Ipê ADTs (`IrType::Enum { home, name, args }`) are nominal — `type Color =
 Red | Green` in module A is NOT the same type as an identically-shaped enum
 in module B, even with the same variant shapes, and the type checker
 already treats them as distinct. `structural_hash` folds in the resolved
@@ -260,7 +260,7 @@ missed a real, distinct hazard: bincode's default derive assigns each
 variant's on-wire discriminant by DECLARATION INDEX, so REORDERING two
 variants is wire-format-relevant even when neither variant's payload shape
 nor name changes — e.g. `type Status = Pending | Active | Done` (three
-zero-payload variants, a common Sky idiom) reordered to
+zero-payload variants, a common Ipê idiom) reordered to
 `Active | Pending | Done` flips what index 0 decodes to, silently
 corrupting every persisted row, while a shape-only hash (payload lists in
 declaration order, no name attached) hashes byte-identically before and
@@ -278,12 +278,12 @@ step 1A.3 for the regression test.
 
 **Records sort by name (order-independent); enums do NOT (order is
 wire-significant) — this is a deliberate, load-bearing asymmetry, not an
-inconsistency.** A Sky record's emitted Rust struct is ALREADY
-canonicalised to sorted-by-name field order regardless of Sky-source
+inconsistency.** A Ipê record's emitted Rust struct is ALREADY
+canonicalised to sorted-by-name field order regardless of Ipê-source
 declaration order (`RecordStruct.fields`, `lib.rs:118`) — so the actual
 wire order for a record is deterministic and source-order-independent,
-and sorting the hash's field order to match is correct. A Sky enum's
-emitted Rust enum, by contrast, preserves Sky-source DECLARATION order for
+and sorting the hash's field order to match is correct. A Ipê enum's
+emitted Rust enum, by contrast, preserves Ipê-source DECLARATION order for
 its variants (bincode's derive keys the discriminant on that order) — so
 the hash must walk `ctx.enum_variant_payloads`'s variants in that SAME
 un-sorted declaration order for the hash to track the real wire format,
@@ -317,7 +317,7 @@ one). Every variant gets one fixed `u8` domain tag (`Int=1, Float=2, Str=3,
 Bool=4, Char=5, Unit=6, Maybe=7, List=8, Result=9, Dict=10, Set=11,
 Tuple=12, Record=13, Enum=14, Fun=15, …` through the full ~30-variant list)
 hashed before the variant's own payload, using the SAME `update_len_prefixed`
-framing `cache.rs` already established (`crates/skyc/src/cache.rs:129-137`)
+framing `cache.rs` already established (`crates/ipe/src/cache.rs:129-137`)
 to rule out delimiter-collision between sibling fields. Non-serde-admissible
 variants (`Task`, `Cmd`, `Sub`, `Fun`, `Ui`, `Db`, …) still get an arm — they
 can never actually reach this function on a well-typed program (the #91/#94
@@ -338,7 +338,7 @@ THAT invariant, and a bound already proven adequate for the analogous
 
 **Hashing skeleton** (SHA-256, `sha2` — new dependency, `crates/
 sky_backend_rust/Cargo.toml` currently has none; add `sha2 = "0.10"`,
-matching the pin already used by `sky_watch`/`skyc`/`runtime`):
+matching the pin already used by `sky_watch`/`ipe`/`runtime`):
 
 ```rust
 const WIRE_EPOCH: &str = "sky-live-model-schema-v1"; // == store.rs's LIVE_MODEL_SCHEMA_WIRE_VERSION
@@ -423,7 +423,7 @@ change.
   bytes as a Rust byte-array literal, and emits one new top-level `const`
   in generated `main.rs`:
   ```rust
-  /// Sky.Live Model schema-compatibility tag (H24). Computed at compile time
+  /// Ipe.Live Model schema-compatibility tag (H24). Computed at compile time
   /// from the Model type's structural shape; the session store rejects a
   /// persisted blob whose tag does not match BEFORE deserializing it.
   const IPE_LIVE_MODEL_SCHEMA_TAG: [u8; 32] = [0x3a, 0x91, /* … 32 total */];
@@ -517,7 +517,7 @@ are already in place and unchanged) — Stage C touches only `store.rs`.
 
 1. **`compiler_revision` redefined as a hand-maintained wire-epoch constant,
    not `cache.rs`'s whole-binary content hash** — avoids over-invalidating
-   every deployed session on every unrelated `skyc` rebuild; matches the
+   every deployed session on every unrelated `ipe` rebuild; matches the
    existing `KEY_TAG`/`EPOCH_TAG` domain-separation convention already in
    this codebase (§1.2).
 2. **Field order canonicalised by resolved NAME, never by raw `Symbol`** —
@@ -526,7 +526,7 @@ are already in place and unchanged) — Stage C touches only `store.rs`.
    name-sorted convention `RecordStruct.fields` already establishes avoids
    a second, potentially-drifting canonicalisation (§1.3, §0).
 3. **Enums fold in nominal identity (home + name); records don't** —
-   mirrors Sky's own type system (records structural, ADTs nominal); closes
+   mirrors Ipê's own type system (records structural, ADTs nominal); closes
    a same-shape-different-meaning H24 gap a pure structural hash would miss
    (§1.3).
 4. **Variant NAMES ARE now hashed, at their declared position — reversed
@@ -832,14 +832,14 @@ with, not a special case of, this codebase's existing gating convention.
 
 ### 3.1 Verified current state
 
-- `crates/skyc/src/lib.rs:1`, `crates/skyc/src/main.rs:1`, and
+- `crates/ipe/src/lib.rs:1`, `crates/ipe/src/main.rs:1`, and
   `crates/sky_watch/src/lib.rs:1` are ALL `#![forbid(unsafe_code)]`. The
   workspace's ONE sanctioned `unsafe` block
   (`runtime/src/sky_runtime/live/console_proxy.rs:161`, `PR_SET_PDEATHSIG`)
   lives in the `runtime` crate, which is NOT under a blanket
   `forbid(unsafe_code)` (`runtime/src/lib.rs:20`'s own comment: it uses
   named-exception `deny` lints instead) — confirming `PRINCIPLES.md`'s
-  framing that this is the ONE exception, and it lives somewhere `skyc`/
+  framing that this is the ONE exception, and it lives somewhere `ipe`/
   `sky_watch` structurally cannot reach without opening a second one.
 - `stop_gracefully` (`crates/sky_watch/src/process.rs:353-370`) never
   actually sends SIGTERM today — it polls `try_wait()` until `grace`
@@ -847,7 +847,7 @@ with, not a special case of, this codebase's existing gating convention.
   Its own doc comment already explains why: a true SIGTERM needs a raw
   `kill(2)`, which would be a second `unsafe` site next to
   `console_proxy`'s sole sanctioned one.
-- `run_inner`'s main loop (`crates/skyc/src/watch.rs:650-848`) is a single
+- `run_inner`'s main loop (`crates/ipe/src/watch.rs:650-848`) is a single
   blocking `evt_rx.recv()` over `OrchestratorEvent` (`FsBatch` /
   `CompileDone` / `CargoDone` / `Shutdown`). The EXISTING `external_stop`
   wiring (`watch.rs:623-630`) is a template already proven in this exact
@@ -859,22 +859,22 @@ with, not a special case of, this codebase's existing gating convention.
   join the compile worker → join the coalesce thread → `Ok(())`).
 - **The actual gap**: `run()` (`watch.rs:495-497`, the CLI-facing entry
   with `external_stop = None`) installs NO signal handler of any kind
-  today. A bare OS `SIGTERM` delivered to the `skyc` PID with its DEFAULT
+  today. A bare OS `SIGTERM` delivered to the `ipe` PID with its DEFAULT
   disposition TERMINATES THE PROCESS IMMEDIATELY — this is a hard kernel
   kill, not a Rust panic/unwind, so it runs NONE of `run_inner`'s teardown
   code (no `drop(watcher)`, no `supervisor.shutdown()`, no reaping the
   supervised child). The supervised child — a literal `Child` handle held
-  by `skyc`, spawned via `apply_green` — is orphaned, re-parented to
+  by `ipe`, spawned via `apply_green` — is orphaned, re-parented to
   `init`/systemd, and keeps running (and keeps holding its port) forever.
   This is a DIFFERENT failure mode from Bug 3 (§14.9, already fixed): Bug 3
   was "the EMBEDDER forgot to call `stop()`" (closed by `WatchHandle`'s
-  `Drop`); this is "the OS never gave `skyc`'s own Rust code a CHANCE to
+  `Drop`); this is "the OS never gave `ipe`'s own Rust code a CHANCE to
   run ANY cleanup code at all," which no amount of `Drop`/`WatchHandle`
   logic can fix — the process is dead before any of it executes.
   Interactive Ctrl-C is a DIFFERENT, already-fine case: it delivers SIGINT
   to the whole foreground PROCESS GROUP (parent AND child both die
   independently, abruptly, but TOGETHER — no orphan). A supervisor sending
-  SIGTERM to only the `skyc` PID (systemd's default; most container
+  SIGTERM to only the `ipe` PID (systemd's default; most container
   orchestrators) has no such symmetry.
 
 ### 3.2 `#![forbid(unsafe_code)]` is per-crate — no exception, no wrapper crate needed
@@ -896,7 +896,7 @@ API**: `Signals::new([SIGTERM])` and its `.forever()` iterator are ordinary
 safe Rust from a CALLER's point of view. The `unsafe` `sigaction(2)` FFI
 call this needs happens inside `signal-hook`'s own internal registry
 (`signal-hook-registry`, a separate crate `signal-hook` itself depends on)
-— code `skyc`/`sky_watch` never write, never see, and are not
+— code `ipe`/`sky_watch` never write, never see, and are not
 `#![forbid(unsafe_code)]`-responsible for. Adding `signal-hook` as a
 dependency of `crates/sky_watch/Cargo.toml` is therefore fully compatible
 with `sky_watch`'s existing `#![forbid(unsafe_code)]` with ZERO exception,
@@ -909,7 +909,7 @@ this primitive knows nothing about `SkyDatabase`/`OrchestratorEvent`,
 matching §14.1's own two-crate split rationale: "a confined path allowlist,
 a debounce coalescer, a process supervisor" already live here as generic,
 independently-testable primitives; a generic "run this closure on SIGTERM"
-primitive belongs alongside them, not inside `skyc`'s salsa-aware
+primitive belongs alongside them, not inside `ipe`'s salsa-aware
 orchestrator):
 
 ```rust
@@ -961,7 +961,7 @@ workspace crate currently depends on it or on `ctrlc` — confirmed by
 `rg -n "signal-hook|ctrlc" Cargo.toml crates/*/Cargo.toml runtime/Cargo.toml`
 this session, zero hits).
 
-**Wiring, `crates/skyc/src/watch.rs::run_inner`** — inserted right after
+**Wiring, `crates/ipe/src/watch.rs::run_inner`** — inserted right after
 `evt_tx`/`evt_rx` are created (`watch.rs:612`) and BEFORE the existing
 `external_stop`-consuming block (`watch.rs:622-629`), so the new check can
 still read `external_stop` (`Option::is_none(&self)` only borrows) ahead of
@@ -999,7 +999,7 @@ the FULL, already-correct, already-tested teardown sequence (§3.1) —
 `drop(watcher)`, kill any in-flight `cargo build`, `supervisor.shutdown
 (...)` (which itself SIGKILLs the supervised child within its own bounded
 `graceful_stop` window), join both helper threads, return. A supervisor's
-SIGTERM to only the `skyc` PID now runs this SAME orderly path instead of a
+SIGTERM to only the `ipe` PID now runs this SAME orderly path instead of a
 hard kernel kill that skips it entirely.
 
 **Scope — gated to `run()`, NEVER installed for `spawn()` (reversed from
@@ -1030,7 +1030,7 @@ spec and §14.9 both point external callers — an IDE integration, an LSP
 host, the SkyDeploy control plane — at it), so installing a process-wide
 signal handler as a side effect of calling it is a real landmine for the
 FIRST genuine embedder, even though today's only caller
-(`crates/skyc/tests/watch_integration.rs:147`, a test) doesn't happen to
+(`crates/ipe/tests/watch_integration.rs:147`, a test) doesn't happen to
 hit it.
 
 The forwarder is therefore installed IFF `external_stop.is_none()` — i.e.
@@ -1039,7 +1039,7 @@ that distinguishes the two callers (`None` for `run()`, `Some(stop_rx)`
 for `spawn()`) — no new parameter or plumbing needed. This also loses
 nothing real: as the original reasoning correctly noted, an embedder
 running `ipe watch` as an in-process thread is not a target a
-`kill -TERM <skyc-pid>` command can reach independently of its OWN
+`kill -TERM <ipe-pid>` command can reach independently of its OWN
 process's signal, so `spawn()` genuinely has no USE for this forwarder.
 `spawn()` keeps relying exclusively on `WatchHandle::Drop` and its own
 `stop_tx` channel, exactly as it did before this spec.
@@ -1062,7 +1062,7 @@ process's signal, so `spawn()` genuinely has no USE for this forwarder.
    "generation-tagged events over a single unified channel"); the entire
    fix is "make one more thing able to send into a channel that already
    exists and is already correctly drained" (§3.3).
-4. **`sky_watch::signal`, not `skyc::watch`** — the listener knows nothing
+4. **`sky_watch::signal`, not `ipe::watch`** — the listener knows nothing
    about salsa/`SkyDatabase`; it belongs with the crate's other
    salsa-agnostic, independently-unit-testable primitives (`scope.rs`,
    `coalesce.rs`, `process.rs`), matching §14.1's own two-crate rationale
@@ -1112,9 +1112,9 @@ process's signal, so `spawn()` genuinely has no USE for this forwarder.
 |---|---|
 | `sigterm_forwarder_invokes_callback_on_sigterm` (unix-gated) | `install_sigterm_forwarder` fires its closure after the test process signals itself via `kill -TERM $$` |
 | `sigterm_forwarder_never_fires_without_a_signal` (unix-gated) | The closure is NOT invoked within a bounded poll window when no signal is sent (negative control) |
-| `watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_skyc_process` (`IPE_E2E=1`, unix-gated) | A real `ipe watch` subprocess, `kill -TERM <skyc-pid>` (the PID only, not its process group) — asserts BOTH the `skyc` process exits within a bounded wait AND the supervised child process is gone (`/proc/<pid>` check, same technique as the existing Bug-3 regression test) |
+| `watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_ipe_process` (`IPE_E2E=1`, unix-gated) | A real `ipe watch` subprocess, `kill -TERM <ipe-pid>` (the PID only, not its process group) — asserts BOTH the `ipe` process exits within a bounded wait AND the supervised child process is gone (`/proc/<pid>` check, same technique as the existing Bug-3 regression test) |
 | `spawn_never_installs_a_sigterm_forwarder` (unix-gated) — regression test for finding 6 | Call `sky_watch::spawn(opts)` in-process, then deliver SIGTERM to the TEST process's own PID (the host `spawn()` is running inside); assert the test process is STILL ALIVE after a bounded wait (no exit) and that `WatchHandle::stop()` remains the only way the spawned watch loop actually shuts down — proves `spawn()` never touches the embedding host's SIGTERM disposition |
-| `double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_sigkill` (`IPE_E2E=1`, unix-gated) — proof test for finding 7 | A real `ipe watch` subprocess with a supervised child that ignores SIGTERM itself (so `supervisor.shutdown`'s graceful window is guaranteed to elapse and its own bounded SIGKILL escalation is what actually reaps the child) — send SIGTERM once (starts the documented graceful teardown), then, partway through the teardown's bounded wait (after the forwarder thread has already consumed the first signal and returned), send a SECOND SIGTERM to the SAME `skyc` PID; assert the `skyc` process's total wall-clock time to exit is NOT measurably shorter than a single-SIGTERM run's (i.e. the second signal has no observable escalating effect — it is absorbed, not delivered as an additional kill). The test's own doc comment states the operational conclusion in plain language: "a stuck `ipe watch` needs SIGKILL — a second SIGTERM is not a documented or relied-upon escape hatch." |
+| `double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_sigkill` (`IPE_E2E=1`, unix-gated) — proof test for finding 7 | A real `ipe watch` subprocess with a supervised child that ignores SIGTERM itself (so `supervisor.shutdown`'s graceful window is guaranteed to elapse and its own bounded SIGKILL escalation is what actually reaps the child) — send SIGTERM once (starts the documented graceful teardown), then, partway through the teardown's bounded wait (after the forwarder thread has already consumed the first signal and returned), send a SECOND SIGTERM to the SAME `ipe` PID; assert the `ipe` process's total wall-clock time to exit is NOT measurably shorter than a single-SIGTERM run's (i.e. the second signal has no observable escalating effect — it is absorbed, not delivered as an additional kill). The test's own doc comment states the operational conclusion in plain language: "a stuck `ipe watch` needs SIGKILL — a second SIGTERM is not a documented or relied-upon escape hatch." |
 
 ## 4. Combined TDD step list
 
@@ -1426,16 +1426,16 @@ mod signal;` in `crates/sky_watch/src/lib.rs`. Commit — **mergeable on its
 own, independent of everything else in this document.**
 
 **3.2 — Wire into `run_inner`, gated on `external_stop.is_none()`.**
-Add `watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_skyc_
-process` to `crates/skyc/tests/watch_integration.rs` (`IPE_E2E=1`,
+Add `watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_ipe_
+process` to `crates/ipe/tests/watch_integration.rs` (`IPE_E2E=1`,
 unix-gated, mirroring the existing E2E test style and the Bug-3 regression
 test's `/proc/<pid>/environ`-based child-liveness check): start a real
 `ipe watch` subprocess (i.e. via `run()`, `external_stop = None`) against a
-`Sky.Http.Server` fixture, confirm the supervised child is serving, `kill
--TERM <skyc-subprocess-pid>` (the PID only — explicitly NOT the process
-group, to reproduce the systemd-style gap), assert BOTH the `skyc`
+`Ipe.Http.Server` fixture, confirm the supervised child is serving, `kill
+-TERM <ipe-subprocess-pid>` (the PID only — explicitly NOT the process
+group, to reproduce the systemd-style gap), assert BOTH the `ipe`
 subprocess exits within a bounded wait AND the supervised child's PID is
-no longer live. **Confirm it fails** pre-fix (the `skyc` subprocess dies
+no longer live. **Confirm it fails** pre-fix (the `ipe` subprocess dies
 immediately via default SIGTERM disposition, but the supervised child is
 still running — the test's second assertion fails). Add the forwarder
 call to `run_inner` per §3.3's REVISED design — `if external_stop.is_none()
@@ -1450,7 +1450,7 @@ interference. Commit.
 **3.3 — `spawn()` must never install the forwarder (regression test for
 finding 6).**
 Add `spawn_never_installs_a_sigterm_forwarder` (unix-gated, in
-`crates/skyc/src/watch.rs`'s own `#[cfg(test)] mod tests` or
+`crates/ipe/src/watch.rs`'s own `#[cfg(test)] mod tests` or
 `crates/sky_watch`'s integration tests — wherever `sky_watch::spawn` is
 already exercised): call `sky_watch::spawn(opts)` in-process against a
 throwaway fixture, then deliver SIGTERM to the TEST PROCESS's OWN pid
@@ -1477,7 +1477,7 @@ start a real `ipe watch` subprocess whose supervised child ignores SIGTERM
 full course), send SIGTERM once, then send a SECOND SIGTERM partway
 through the teardown's bounded wait (after the forwarder thread has
 already consumed the first signal and returned). Measure and assert the
-`skyc` process's total wall-clock exit time is NOT measurably shorter than
+`ipe` process's total wall-clock exit time is NOT measurably shorter than
 a comparable single-SIGTERM run — i.e. the second signal has no observable
 escalating effect. Document the REAL observed result in the test's own doc
 comment regardless of which way it comes out (the point of this test is to

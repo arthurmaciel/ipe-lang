@@ -8,14 +8,14 @@
 //!
 //! Each test:
 //!
-//! 1. Writes a Sky program to a fresh temp dir.
+//! 1. Writes a Ipê program to a fresh temp dir.
 //! 2. Compiles it through `ipe::build` (full pipeline: parse → canon → types →
 //!    lower → emit Rust).
 //! 3. Builds the emitted Cargo project with `oracle::build_rust_binary` — the
 //!    global `~/.cargo/config.toml` shared target is used so dependencies
 //!    (axum, tokio, tower-http, …) compile once and are reused.
 //! 4. Acquires an ephemeral port by binding `TcpListener::bind("127.0.0.1:0")`,
-//!    reading the assigned port, then dropping the listener so the Sky server
+//!    reading the assigned port, then dropping the listener so the Ipê server
 //!    can bind the same port moments later.
 //! 5. Spawns the compiled binary as a child process, passing
 //!    `IPE_SERVER_PORT=<port>` and `IPE_HTTP_BIND=127.0.0.1` so the server
@@ -43,9 +43,9 @@ use std::time::{Duration, Instant};
 /// Shared error type for E2E helpers.
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-// ── Sky programs ──────────────────────────────────────────────────────────────
+// ── Ipê programs ──────────────────────────────────────────────────────────────
 
-/// A minimal Sky HTTP server. Reads its port from `IPE_SERVER_PORT`.
+/// A minimal Ipê HTTP server. Reads its port from `IPE_SERVER_PORT`.
 ///
 /// Routes:
 /// * `GET /`             → body `hello server`
@@ -68,7 +68,7 @@ main =
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Compile a Sky program string, build the emitted Rust project, and return
+/// Compile a Ipê program string, build the emitted Rust project, and return
 /// the path to the compiled binary.
 ///
 /// # Errors
@@ -92,7 +92,7 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxEr
         .map_err(|e| -> BoxError { format!("{test_name}: runtime unavailable: {e}").into() })?;
 
     ipe::build(&entry, &out_dir, &runtime)
-        .map_err(|e| -> BoxError { format!("{test_name}: skyc build failed: {e}").into() })?;
+        .map_err(|e| -> BoxError { format!("{test_name}: ipe build failed: {e}").into() })?;
 
     let exe = oracle::build_rust_binary(test_name, &out_dir)
         .map_err(|e| -> BoxError { format!("{test_name}: cargo build failed: {e}").into() })?;
@@ -103,7 +103,7 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxEr
 /// Reserve an ephemeral loopback port by binding then immediately dropping a
 /// `TcpListener`.  The OS assigns port 0 → an unused port.
 ///
-/// There is a small TOCTOU window between the drop and the Sky server binding
+/// There is a small TOCTOU window between the drop and the Ipê server binding
 /// the same port; in practice the window is negligible on a loopback test.
 ///
 /// # Errors
@@ -116,7 +116,7 @@ fn pick_ephemeral_port() -> Result<u16, BoxError> {
         .local_addr()
         .map_err(|e| -> BoxError { format!("cannot read ephemeral port: {e}").into() })?
         .port();
-    // Drop `listener` here — releases the port for the Sky server.
+    // Drop `listener` here — releases the port for the Ipê server.
     Ok(port)
 }
 
@@ -135,7 +135,7 @@ impl Drop for ProcessGuard {
     }
 }
 
-/// Spawn the Sky server binary and wait until it signals readiness.
+/// Spawn the Ipê server binary and wait until it signals readiness.
 ///
 /// Readiness is detected by watching the child's stderr for the line
 /// `[sky.http.server] listening on`.  The `server_listen` runtime emits this
@@ -230,7 +230,7 @@ fn spawn_and_wait_ready_with_env(
     }
 }
 
-/// Sky server that echoes the POST body verbatim.
+/// Ipê server that echoes the POST body verbatim.
 ///
 /// Route: `POST /echo` → body `Server.body req`
 const IPE_POST_ECHO_PROGRAM: &str = r#"module Main exposing (main)
@@ -245,7 +245,7 @@ main =
         ]
 "#;
 
-/// Sky server that exercises all four request-introspection kernels in one
+/// Ipê server that exercises all four request-introspection kernels in one
 /// handler: method, path, header, queryParam, and param.
 ///
 /// Route: `POST /introspect/:tag?q=<val>` with header `X-Probe: <val>`
@@ -267,7 +267,7 @@ main =
         ]
 "#;
 
-/// Sky server that uses BOTH `Server.listen` and a `Db.open` call — the
+/// Ipê server that uses BOTH `Server.listen` and a `Db.open` call — the
 /// minimal program that sets both `uses_server` and `uses_db` in the lowerer,
 /// exercising the server+db manifest composition (GAP 1 fix).
 ///
@@ -290,7 +290,7 @@ main =
         (Db.open "sqlite" (System.getenvOr "DATABASE_URL" "sqlite::memory:"))
 "#;
 
-/// Sky server exercising `Middleware.withCsrf` end-to-end.  Mirrors
+/// Ipê server exercising `Middleware.withCsrf` end-to-end.  Mirrors
 /// `tests/golden/middleware_csrf/Main.ipe` but adds a `GET /action` route
 /// (also wrapped in `Middleware.withCsrf`) so a real HTTP client can mint the
 /// double-submit cookie via a safe-method request before probing the
@@ -489,7 +489,7 @@ fn http_post(
 /// `Server.get "/"` returns the expected body with a 200 status.
 ///
 /// Proves the full M6-server pipeline end-to-end:
-/// Sky source → skyc → emitted Rust (with `server` feature injected) →
+/// Ipê source → ipe → emitted Rust (with `server` feature injected) →
 /// `ipe_runtime::server::server_listen` + `server_get` + `server_text` →
 /// axum HTTP server → response received by the test.
 ///
@@ -551,7 +551,7 @@ fn server_get_param() -> Result<(), BoxError> {
 /// A POST handler CAN read the request body via `Server.body req`.  Without a
 /// `Server.body` kernel POST bodies would be unreadable — a completeness loss.
 ///
-/// Full pipeline: Sky source → skyc (new `ServerBody` kernel) →
+/// Full pipeline: Ipê source → ipe (new `ServerBody` kernel) →
 /// emitted `server_body(req)` Rust call → axum populates `req.body` from the
 /// request → handler echoes it.
 ///
@@ -636,7 +636,7 @@ fn server_and_db_compose() -> Result<(), BoxError> {
         return Ok(());
     }
 
-    // compile_and_build already does skyc + cargo build; success is the proof.
+    // compile_and_build already does ipe + cargo build; success is the proof.
     let _exe = compile_and_build("server_and_db_compose", IPE_SERVER_AND_DB_PROGRAM)?;
     Ok(())
 }
@@ -646,11 +646,11 @@ fn server_and_db_compose() -> Result<(), BoxError> {
 /// the `X-Csrf-Token` header.
 ///
 /// Covers the gap other tests leave: `golden_m6_middleware_csrf.rs`
-/// only proves `skyc`/`cargo build` succeed (compile-level), and
+/// only proves `ipe`/`cargo build` succeed (compile-level), and
 /// `server.rs`'s in-process unit tests call `middleware_with_csrf` directly
 /// as a bare Rust function — bypassing the full kernel-registry dispatch
 /// chain (canon → constrain → lower → naming → pretty → emit). This test proves
-/// the chain end to end: Sky source → `skyc` → emitted Rust → the actual served
+/// the chain end to end: Ipê source → `ipe` → emitted Rust → the actual served
 /// binary's real behavior over a real TCP connection.
 ///
 /// # Errors

@@ -1,9 +1,9 @@
-# Sky.Tui on the Windows example sweep — RUN-vs-SKIP design
+# Ipe.Tui on the Windows example sweep — RUN-vs-SKIP design
 
 Status: design-only. No code, no build. Cross-reference:
 `docs/architecture/ci-and-hosting.md` and the forthcoming
 `docs/architecture/windows-ci-support.md` (this document is the
-Sky.Tui-specific section of the Windows CI story; keep the two in
+Ipe.Tui-specific section of the Windows CI story; keep the two in
 sync when either changes).
 
 Guardian synthesis of a 3-reasoner design swarm + 3 cross-critique
@@ -15,7 +15,7 @@ against HEAD.
 
 ## 0. Verdict (one line)
 
-**Windows `windows-latest` Sky.Tui = `tui-build` RUN + `tui-render`
+**Windows `windows-latest` Ipe.Tui = `tui-build` RUN + `tui-render`
 RUN (headless `element_to_cells`) + `tui-loop` SKIP (loud, ConPTY
 unwired).** This strictly **exceeds** `../sky`, which SKIPs *all*
 tui on Windows. The render RUN is warranted by a proven-pure render
@@ -45,7 +45,7 @@ headless path (ConPTY / node-pty) is unwired — so
 tui shape.
 
 `../sky` had **one** tui test mechanism (pty), so when the pty was
-unavailable the whole capability skipped. Our Sky.Tui surface has
+unavailable the whole capability skipped. Our Ipe.Tui surface has
 **two tiers**, and only one of them needs a terminal:
 
 | Tier | Entry | Needs TTY / pty? |
@@ -182,7 +182,7 @@ distinct checks:
 ```
 windows-latest, shell: bash (Git Bash), IPE_HOST_OS=windows:
 
-  tui-build   RUN  — skyc emit (assert exit 0, no panic / no CompilerBug)
+  tui-build   RUN  — ipe emit (assert exit 0, no panic / no CompilerBug)
                      + `cargo build --features tui` (MSVC; crossterm + tokio link).
                      Failure = RED. Never downgraded to SKIP, even on a toolchain /
                      image build break (that is a real Windows regression with a loud

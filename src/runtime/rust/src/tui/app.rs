@@ -1,9 +1,9 @@
-//! Sky.Tui — the `tui_app` TEA loop.
+//! Ipe.Tui — the `tui_app` TEA loop.
 //!
 //! Mirrors `cli_program` (tea.rs) exactly — same `CliEvent` channel, `SubManager`
 //! (so `Sub.every` → Tick works) and `cli_run_cmd` (so `Cmd.perform` works) — but
 //! reads RAW key bytes (raw mode + `decode_key`) instead of stdin lines, and
-//! paints into the alternate screen. A Sky.Tui app quits by calling `System.exit`
+//! paints into the alternate screen. A Ipe.Tui app quits by calling `System.exit`
 //! from `update` (the `Quit` Msg) or by stdin EOF.
 //!
 //! No panic vectors: a `TuiGuard` restores the TTY (cooked mode, cursor, main
@@ -241,7 +241,7 @@ where
 
 /// Shared terminal TEA driver. `render_frame` turns the current model into the
 /// ANSI frame painted each tick — `tui_app` passes the user's `String` view
-/// straight through; `tui_app_ui` renders the `Std.Ui` Element tree via
+/// straight through; `tui_app_ui` renders the `Ipe.Ui` Element tree via
 /// `render_element`. Everything else (raw-key reader, `SubManager` ticks,
 /// `cli_run_cmd`, RAII teardown) is identical and lives here once.
 #[allow(clippy::type_complexity)]
@@ -374,9 +374,9 @@ where
 }
 
 /// `Tui.app` — terminal TEA driver for a `view : Model -> Element msg`. The
-/// `Std.Ui` Element is the SAME structured tree Sky.Live renders to HTML; here it
+/// `Ipe.Ui` Element is the SAME structured tree Ipe.Live renders to HTML; here it
 /// is laid out to ANSI cells by walking the typed attributes (`tui::layout`), and
-/// `Std.Ui.Input.*` widgets become focusables: Tab / Shift-Tab (and Up/Down on a
+/// `Ipe.Ui.Input.*` widgets become focusables: Tab / Shift-Tab (and Up/Down on a
 /// non-input focus) cycle focus; typing edits the focused text input (dispatching
 /// its `onInput`); Enter/Space activates a button or toggles a checkbox/radio;
 /// the view auto-scrolls to keep the focused element on screen. Ctrl-keys and any

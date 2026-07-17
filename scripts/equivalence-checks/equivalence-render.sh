@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# Go≡Rust RENDERED-OUTPUT equivalence for the heavy UI shapes — Sky.Live (HTML)
-# and Sky.Tui (terminal). The cornerstone examples-sweep proves cli/stdout +
+# Go≡Rust RENDERED-OUTPUT equivalence for the heavy UI shapes — Ipe.Live (HTML)
+# and Ipe.Tui (terminal). The cornerstone examples-sweep proves cli/stdout +
 # server/body equivalence; its `live` (scenario-boot) and `pty` (tui boot-both)
 # modes are deliberately WEAK and miss render regressions (a blank textarea, a
 # stacked grid). This runner closes that gap with a STRICT, normalised render

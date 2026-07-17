@@ -16,10 +16,10 @@ main =
             Time.now () |> Task.run |> Result.map Time.timeString
                 |> Result.withDefault "unknown"
         _ = println ("Current time: " ++ nowStr)
-        data = "Hello, Sky!"
+        data = "Hello, Ipê!"
         -- v0.10.0: Crypto.sha256 returns the hex digest directly
         -- (was: Sha256.sum256 + Hex.encodeToString chain).
-        _ = println ("SHA256 of 'Hello, Sky!': " ++ Crypto.sha256 data)
+        _ = println ("SHA256 of 'Hello, Ipê!': " ++ Crypto.sha256 data)
         _ = println "Sending HTTP request..."
         httpResult = Task.run (Http.get "https://httpbin.org/get")
         _ =

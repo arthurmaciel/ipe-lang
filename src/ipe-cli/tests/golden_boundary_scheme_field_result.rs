@@ -1,6 +1,6 @@
 //! Class-1 "Boundary Scheme Promotion" — regression for a SEAL violation.
 //!
-//! Without the fix, `skyc build` exits 0, but the emitted Rust fails
+//! Without the fix, `ipe build` exits 0, but the emitted Rust fails
 //! `cargo build` with:
 //!
 //! ```text
@@ -60,7 +60,7 @@
 //!
 //! Run:
 //! ```text
-//! IPE_E2E=1 cargo test -p skyc --test golden_class1_boundary_scheme_field_result
+//! IPE_E2E=1 cargo test -p ipe --test golden_class1_boundary_scheme_field_result
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -72,7 +72,7 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// skyc-0: the compiler must accept the 3-module program and emit a
+/// ipe-0: the compiler must accept the 3-module program and emit a
 /// concrete (non-generic) `lib1_get_name`. Checked unconditionally (cheap,
 /// no `cargo`), independent of the `IPE_E2E` gate below.
 #[test]
@@ -96,14 +96,14 @@ fn class1_field_result_skyc_accepts_and_emits_concrete_getter() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for boundary_scheme_field_result: {:?}",
+        "ipe build must succeed for boundary_scheme_field_result: {:?}",
         built.err()
     );
 
     // `Lib1`'s getter lowers to its OWN Rust file under `src/ipe_mods/` once
-    // the per-Sky-module split fires — this is a genuine
+    // the per-Ipê-module split fires — this is a genuine
     // 3-module program (`Lib1` + `Lib2` + `Main`). Scan the WHOLE emitted
-    // Sky-side tree (main.rs + ipe_mods/*.rs) so both the concrete-signature
+    // Ipê-side tree (main.rs + ipe_mods/*.rs) so both the concrete-signature
     // assertion and the no-spurious-generic assertion hold wherever the split
     // correctly placed `lib1_get_name`.
     let emitted = support::read_all_emitted_src(&out);
@@ -111,7 +111,7 @@ fn class1_field_result_skyc_accepts_and_emits_concrete_getter() {
     // The getter must lower to a CONCRETE signature, not
     // `pub fn lib1_get_name<T1: Clone>(r: RecAgeName) -> String {` — an
     // unused Rust generic that would make every call site fail E0283. Matched
-    // WITHOUT the visibility prefix: once the per-Sky-module split
+    // WITHOUT the visibility prefix: once the per-Ipê-module split
     // fires, `Lib1`'s getter lives in `src/ipe_mods/ipe_mod_lib1.rs`
     // as a `pub(crate) fn` (module items are crate-visible), no longer the
     // `pub fn` of the single-file layout — the visibility is orthogonal to the
@@ -155,7 +155,7 @@ fn class1_field_result_cargo_builds_and_runs() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for boundary_scheme_field_result: {:?}",
+        "ipe build must succeed for boundary_scheme_field_result: {:?}",
         built.err()
     );
 

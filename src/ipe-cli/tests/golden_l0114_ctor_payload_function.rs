@@ -20,7 +20,7 @@
 //!   CLOSED on a bare `Ty::Var` (an annotated double forwarder's skolem
 //!   otherwise escapes). Scoping it to `andMap` alone, or failing OPEN on a
 //!   variable, reopens those bypasses.
-//!   This is a TYPE-LEVEL check, so it survives arbitrary Sky-level
+//!   This is a TYPE-LEVEL check, so it survives arbitrary Ipê-level
 //!   aliasing by construction. It
 //!   surfaces as ONE of two diagnostics depending on HOW the obligated
 //!   variable is used, mirroring the existing `Math.min` gate's documented
@@ -33,7 +33,7 @@
 //!   the forwarder's own external call sites — surfacing the friendlier,
 //!   specifically-labelled `IPE-T0014` (`SuperTypeUnsatisfied`,
 //!   "non-function callback result (Maybe/Result higher-order kernel)").
-//!   Both are clean Sky diagnostics, never a cargo-fail;
+//!   Both are clean Ipê diagnostics, never a cargo-fail;
 //!   which one you see depends only on whether `andMap` was called directly
 //!   or through a forwarder, confirmed empirically below (not merely
 //!   predicted by the design doc, which anticipated IPE-T0014 as the sole
@@ -178,7 +178,7 @@ fn maybe_and_map_fn_payload_accepted() {
 
 /// Stage-1 RESIDUAL seal hole: a LET-BOUND constructor-wrapped closure
 /// (`let f = Ok (\x -> x + 1)`) later passed to a `Box<dyn Fn>`-expecting
-/// position would be a skyc-accept / cargo-reject E0308. The inline pipe form
+/// position would be a ipe-accept / cargo-reject E0308. The inline pipe form
 /// (`Ok (\x…) |> Result.andMap (Ok 2)`) works because the kernel call site
 /// supplies the `Box<dyn Fn>` coercion target; a bare `let` binding has none —
 /// `Ok` routes to the runtime `IpeResult` enum whose generic arg is inferred
@@ -315,7 +315,7 @@ fn fn_extracted_called_twice_accepted() {
 ///   before the deferred, nicely-labelled `SuperTypeUnsatisfied` pass ever
 ///   runs — EXACTLY the same "eager-pin sibling" behaviour already
 ///   documented for `Math.min`/`Math.max` called directly on two
-///   non-comparable values (`crates/skyc/tests/golden_m4c_math_gate.rs`:
+///   non-comparable values (`crates/ipe/tests/golden_m4c_math_gate.rs`:
 ///   "Calling `Math.min` directly on two non-comparable values is the
 ///   eager-pin sibling and surfaces IPE-T0001 instead"). This is the
 ///   EXPECTED code for every fixture in this matrix, verified against the

@@ -5,7 +5,7 @@
 //! `basics_to_string::<T>` that `cargo` would reject — the seal is preserved.
 //!
 //! Positive case is `IPE_E2E`-gated (build + run). The negative case is a pure
-//! skyc compile (no cargo), so it always runs.
+//! ipe compile (no cargo), so it always runs.
 
 use std::path::{Path, PathBuf};
 
@@ -52,7 +52,7 @@ fn tostring_scalars_run() {
 }
 
 /// `Log.infoWith : String -> List a -> Task Error ()` with Stringify attrs
-/// compiles (the obligation on the list element) — a pure skyc compile.
+/// compiles (the obligation on the list element) — a pure ipe compile.
 #[test]
 fn log_info_with_stringify_attrs_compiles() {
     let root = repo_root();
@@ -72,7 +72,7 @@ fn log_info_with_stringify_attrs_compiles() {
     );
 }
 
-/// SEAL-PRESERVING negative gate: `toString` on a FUNCTION is rejected at skyc
+/// SEAL-PRESERVING negative gate: `toString` on a FUNCTION is rejected at ipe
 /// type-check (the Stringify obligation's `Fun` head-rejection), NOT deferred to
 /// a cargo failure. A pure compile — no `IPE_E2E` needed.
 #[test]

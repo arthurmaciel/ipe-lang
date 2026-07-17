@@ -1,6 +1,6 @@
 //! Soundness coverage for `ipe_runtime_rust::core` — the coercion primitives that
 //! every generated FFI wrapper and kernel call routes through. The existential
-//! guarantee ("no runtime panic from well-typed Sky code") lives or dies here,
+//! guarantee ("no runtime panic from well-typed Ipê code") lives or dies here,
 //! so each test asserts BOTH the happy path AND that the failure path returns
 //! `IpeResult::Err` rather than panicking / wrapping / indexing out of bounds.
 

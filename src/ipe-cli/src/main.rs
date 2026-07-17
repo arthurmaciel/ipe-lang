@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! `skyc` binary entry point — a thin wrapper over the [`skyc`] driver library.
+//! `ipe` binary entry point — a thin wrapper over the [`ipe`] driver library.
 
 use std::process::ExitCode;
 

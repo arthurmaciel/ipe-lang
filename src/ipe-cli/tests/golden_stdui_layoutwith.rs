@@ -4,7 +4,7 @@
 //! dropped (BLOCKER-2 fix).
 //!
 //! The golden compiles `tests/golden/stdui_layoutwith/Main.ipe` through
-//! `skyc`, builds the emitted Rust project with the shared cargo target, runs
+//! `ipe`, builds the emitted Rust project with the shared cargo target, runs
 //! the binary, and checks its stdout against the cached oracle
 //! (`tests/golden/stdui_layoutwith/oracle.meta` + `expected_go.txt`).
 //! The test is gated on `IPE_E2E=1`; without it it returns early.
@@ -13,7 +13,7 @@
 //!
 //! This is a DIVERGENCE golden (`oracle_divergence = true`).  The Go reference
 //! compiler emits a different HTML skeleton.  `expected_go.txt` therefore holds
-//! skyc's OWN output — the Rust-backend correct rendering — rather than the Go
+//! ipe's OWN output — the Rust-backend correct rendering — rather than the Go
 //! oracle.  The divergence is documented in
 //! `tests/golden/stdui_layoutwith/sanctioned.divergence`.
 //!
@@ -66,7 +66,7 @@ fn build_run_layoutwith() -> (PathBuf, support::RunOutcome) {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for stdui_layoutwith: {:?}",
+        "ipe build must succeed for stdui_layoutwith: {:?}",
         built.err()
     );
 
@@ -76,7 +76,7 @@ fn build_run_layoutwith() -> (PathBuf, support::RunOutcome) {
 
 /// Full E2E smoke test: `Ui.layoutWith` with inline cfg literal must apply
 /// both `wrapperAttrs` and `rootAttrs` in the rendered HTML.
-/// Divergence golden — the expected value is skyc's own correct output.
+/// Divergence golden — the expected value is ipe's own correct output.
 #[test]
 fn layoutwith_inline_cfg_applies_wrapper_and_root_attrs() {
     if std::env::var("IPE_E2E").is_err() {

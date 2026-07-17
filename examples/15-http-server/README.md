@@ -1,11 +1,11 @@
 # HTTP Server
 
-Demonstrates Sky.Http.Server with routing, cookies, query parameters, and middleware.
+Demonstrates Ipe.Http.Server with routing, cookies, query parameters, and middleware.
 
 ## Build & Run
 
 ```bash
-sky build src/Main.ipe
+ipe build src/Main.ipe
 ./sky-out/app
 ```
 

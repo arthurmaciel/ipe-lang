@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/guards/disk-guard.sh — disk-space kill-switch for the Ipê (Sky->Rust) dev
+# scripts/guards/disk-guard.sh — disk-space kill-switch for the Ipê (Ipê->Rust) dev
 # sessions, sibling to mem-guard.sh.
 #
 # Background: this session runs several parallel `git worktree` build lanes,

@@ -1,7 +1,7 @@
 # examples/28-streaming-chat — incremental HTTP streaming demo
 
-Sky.Live app that streams a "completion" reply token-by-token via
-`Sky.Core.Http.Stream` — perceived latency drops 5-10× vs the
+Ipe.Live app that streams a "completion" reply token-by-token via
+`Ipe.Http.Stream` — perceived latency drops 5-10× vs the
 buffered `Http.get` shape (first byte ~100 ms vs full reply at the
 end of the upstream).
 
@@ -13,7 +13,7 @@ write-up.
 
 ```
                     POST text/plain                       chunks SSE
-  browser  ────────────────────────►  Sky.Live  ────────────────────►  browser
+  browser  ────────────────────────►  Ipe.Live  ────────────────────►  browser
    (form)                              (this app)                       (live view)
                                           │
                                           │ Http.Stream.open req
@@ -45,10 +45,10 @@ error.
 go run examples/28-streaming-chat/mock/main.go
 # (listens on :8765, sends 20 chunks @ 100 ms each per /stream POST)
 
-# Terminal 2 — Sky.Live app
+# Terminal 2 — Ipe.Live app
 cd examples/28-streaming-chat
-sky build src/Main.ipe
-sky run src/Main.ipe
+ipe build src/Main.ipe
+ipe run src/Main.ipe
 # (listens on :8000)
 
 # Browser

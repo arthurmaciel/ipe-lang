@@ -1,7 +1,7 @@
 //! Remote hub OTLP push — HubExporter.
 //!
 //! When `IPE_CONSOLE_HUB` is set, this background exporter batches logs + spans
-//! and pushes them as **OTLP/JSON** to a remote `sky console-serve` hub
+//! and pushes them as **OTLP/JSON** to a remote `ipe console-serve` hub
 //! (`POST <hub>/v1/logs`, `POST <hub>/v1/traces`, `Content-Type:
 //! application/json`), bearer-authenticated via `IPE_CONSOLE_HUB_TOKEN`. A
 //! batch that fails to push is kept in a bounded in-memory **spool** and retried

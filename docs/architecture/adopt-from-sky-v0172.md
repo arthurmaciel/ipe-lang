@@ -1,9 +1,9 @@
-# Adopt from Sky v0.17.2 (`feat/runtime-rust`) — synthesized roadmap
+# Adopt from Ipê v0.17.2 (`feat/runtime-rust`) — synthesized roadmap
 
 > **Status:** filed roadmap. Source: upstream `/home/arthur/Documentos/comp/sky`
 > at branch `feat/runtime-rust`, tag **v0.17.2** — a COMPLETE, working Rust
 > backend (Haskell that emits Rust) + Rust runtime that builds AND runs every
-> applicable Sky example (37 green / 0 red full Go-parity in their sweep).
+> applicable Ipê example (37 green / 0 red full Go-parity in their sweep).
 > This doc synthesizes six facet audits into ADOPT / ADAPT / SYNC / REJECT
 > verdicts, a runtime-sync plan, prioritized actions, and backlog changes.
 > Critiqued in STRICT principle order: (1) security (2) correctness
@@ -31,7 +31,7 @@ codebases are asymmetric across the two comparison axes:
 
 - **Axis B — BACKEND.** Theirs is **Haskell that emits Rust**
   (`../sky/src/Sky/Generate/Rust` + `Build/Rust`). Ours is a **native Rust
-  reimplementation** (`crates/sky_backend_rust` + the skyc pipeline
+  reimplementation** (`crates/sky_backend_rust` + the ipe pipeline
   `sky_canon`/`sky_types`/`sky_lower`). Here the **logic transfers but the code
   does not.** More importantly, our architecture differs *fundamentally*: the
   Go/Haskell backend postpones type resolution to **emit time** (untyped AST +
@@ -76,7 +76,7 @@ place where our fail-closed / parse-don't-validate posture already wins.
    `jwt.rs` needs `cfg(all(feature="json", feature="crypto"))`. Upstream's
    feature-gating here is *wrong* (system tokio-gated, jwt json-only). A
    verbatim sync would import those gating bugs.
-3. **The skyc emitter's expectations are a contract.** Our backend emits code
+3. **The ipe emitter's expectations are a contract.** Our backend emits code
    that calls specific runtime symbols with specific signatures (e.g. the
    `impl Fn(..) + Clone` HOF bounds on `list.rs`). A runtime file that changed
    a signature upstream would break our emitter silently — cargo-fail, not
@@ -91,7 +91,7 @@ place where our fail-closed / parse-don't-validate posture already wins.
 | **P1 — security** | `core.rs` | **PORT** `sky_error_from_foreign` + `log_foreign_error` + `scrub_log_controls` + `short_err_id` (upstream lines 31–94, `[B8 SECURITY]`). | Foreign-error `Debug` MUST NOT reach Sky — redact to `…(ref <id>)`. Gate FFI Phase 0 (#40) on this being in the emitted preamble. |
 | **P2 — refactor** | `http_header.rs` | **KEEP** ours (we already extracted `canonical_header_name`; upstream leaves it inline). Verify `live/` + `server.rs` both route through it. | No code change; confirm exports + call sites. |
 | **P2 — parity** | `list.rs` | **VERIFY SYNCED** — HOF signatures (`foldl`/`foldr`/`filter`/`any`/`all`/`concat_map`/`indexed_map`/`list_sort_by`/`list_sort_with`) carry `impl Fn(..) + Clone`. Finding reports byte-identical. | No change; signature contract is load-bearing for emitter. |
-| **P2 — parity** | `ui/element.rs`, `html.rs` | **KEEP ours** (byte-faithful + our defensive docs). Verify hand-impl `Debug`/`PartialEq` on `Attribute`/`Event` (closure-ignoring structural eq) survives; emitter must NOT `#[derive]` over them. | Custom `PartialEq` matches Sky.Live diff-only semantics; sound. |
+| **P2 — parity** | `ui/element.rs`, `html.rs` | **KEEP ours** (byte-faithful + our defensive docs). Verify hand-impl `Debug`/`PartialEq` on `Attribute`/`Event` (closure-ignoring structural eq) survives; emitter must NOT `#[derive]` over them. | Custom `PartialEq` matches Ipe.Live diff-only semantics; sound. |
 | **P3 — hold** | `auth.rs` | **DO NOT SYNC** the diverging arms — retain our negative-TTL rejection (137–143) + fail-closed id-decode (318–325). | Our version is *more sound*. Document as hardening delta in the audit trail so a future sync doesn't clobber it. |
 | **P3 — hold** | `basics.rs` (Error kernels), `crypto.rs` (constant-time) | **KEEP ours** — already v0.17.2-equivalent. | No change. |
 
@@ -112,21 +112,21 @@ codegen**, not runtime.
 | 3 | `css_safety.rs`/`css.rs` escape kernels (runtime-sync) | **SYNC** | Byte-identical audit vs upstream. **Security P1.** #47, #76-T2. |
 | 4 | `http_header.rs` extracted-shared policy (runtime-sync) | **SYNC** | Keep ours; verify call sites. |
 | 5 | Non-derivable record derives — upstream emits unconditional, cargo-fails (runtime-sync + SEAL) | **ADAPT** | Add `is_derivable`/`has_fn_field` gate; emit `#[derive]` only when proven derivable. **Closes #87.** |
-| 6 | Std.Ui/Html completeness via `PortStatus{Backed\|Deferred}` manifest (runtime-sync) | **SYNC** | Land **Batch 0** (`VarHome::Kernel(Backing,..)`) atomically, then T1–T5. **#76.** |
+| 6 | Ipe.Ui/Html completeness via `PortStatus{Backed\|Deferred}` manifest (runtime-sync) | **SYNC** | Land **Batch 0** (`VarHome::Kernel(Backing,..)`) atomically, then T1–T5. **#76.** |
 | 7 | `coerceCallArgsAt` identity-recovery gate — recover type identity after α-rename at emit time (SEAL) | **REJECT** | N/A to our architecture: we lower to typed IR; instantiation already concrete. No port. |
 | 8 | T9000-space α-rename T-var leak guard (SEAL) | **REJECT** | N/A: no separate α-rename step; IR type vars are `Symbol`-keyed in `GenericScope`. |
 | 9 | Record-field function-type derive gate (`hasFnField` → `#[derive(Clone)]` only + manual `impl Default`) (SEAL) | **ADOPT** | Implement `has_fn_field()` in `emit_types.rs::emit_record_struct`; reduce derives + emit `disconnected_fnN()` Default. **Closes #87 (the correctness bug).** |
 | 10 | Transitive `hasCallbackField` — struct holding an fn-field struct inherits the restriction (SEAL) | **ADAPT** | Thread an fn-field-struct registry through `EmitCtx`; cascade the Clone-only reduction. Follow-up if the sweep surfaces nested cases. |
 | 11 | `#[serde(skip)]` on fn-fields + `Default`-reconstruct on deserialize (SEAL) | **ADAPT** | Gate on `ctx.uses_live && has_fn_field`. Low priority; Live-model-with-callback pattern only. File follow-up. |
 | 12 | Error constructors are **kernels**, not source modules; `Error=String` so all 8 message ctors → one `sky_error_from_message` (Error) | **SYNC** | Already wired (#86 in flight). Verify lower/backend emit the kernel calls. |
-| 13 | FFI boundary `E: From<String>` + correlation-ID redaction; foreign `Debug` never reaches Sky (Error) | **ADOPT** | Port `sky_error_from_foreign` et al. into emitted preamble. **[B8 SECURITY]**, gates #40. |
+| 13 | FFI boundary `E: From<String>` + correlation-ID redaction; foreign `Debug` never reaches Ipê (Error) | **ADOPT** | Port `sky_error_from_foreign` et al. into emitted preamble. **[B8 SECURITY]**, gates #40. |
 | 14 | Nullary Error ctors → distinct hardcoded strings; `withMessage` = `fn(new,_)→new` (Error) | **SYNC** | Already have; no change. |
-| 15 | Source-module Error approach infeasible (circular dep); kernel-path breaks the cycle → #85 parked (Error) | **ADOPT** | **Close #85** with note: runtime stays String-backed kernel-dispatched; rich ADT lives in `Sky.Core.Error.ipe` but ctors lower to kernels. |
-| 16 | `runtimeOpaqueTypes` registry `{M}` bridge; `RPubUseAlias` vs `RAliasDefGen` (Ui/Html) | **SYNC** | Verify `emit_types.rs` has all 10+ Std.Ui entries + correct alias-kind split. |
+| 15 | Source-module Error approach infeasible (circular dep); kernel-path breaks the cycle → #85 parked (Error) | **ADOPT** | **Close #85** with note: runtime stays String-backed kernel-dispatched; rich ADT lives in `Ipe.Error.ipe` but ctors lower to kernels. |
+| 16 | `runtimeOpaqueTypes` registry `{M}` bridge; `RPubUseAlias` vs `RAliasDefGen` (Ui/Html) | **SYNC** | Verify `emit_types.rs` has all 10+ Ipe.Ui entries + correct alias-kind split. |
 | 17 | `synCtor` auto-ctors for non-opaque record aliases (Ui/Html) | **ADOPT** | Confirm IPE-N0001 (#82) covers it; else implement synCtor equivalent. **Validate our just-shipped IPE-N0001 vs theirs.** |
 | 18 | `SkyStringify` placeholder-string strategy on opaque containers, no `M` recursion (Ui/Html) | **SYNC** | Runtime done. Emitter must gate `#[derive(SkyStringify)]` off non-Clone fields → same **#87** gate. |
-| 19 | ~160 unbacked Std.Ui/Html members are pure-Sky builders + kernels, NOT runtime ADT gaps (Ui/Html) | **REJECT** (as runtime issue) | Reframe #76 as codegen/kernel wiring: audit `sky_canon` registry for `id=None` members; implement missing kernels. |
-| 20 | #84 `html_p_` wrong-tag is Std.Ui codegen tag-mapping, not runtime render (Ui/Html) | **REJECT** (as runtime issue) | Fix in the element-builder codegen; `render_into_ctx` is correct. |
+| 19 | ~160 unbacked Ipe.Ui/Html members are pure-Ipê builders + kernels, NOT runtime ADT gaps (Ui/Html) | **REJECT** (as runtime issue) | Reframe #76 as codegen/kernel wiring: audit `sky_canon` registry for `id=None` members; implement missing kernels. |
+| 20 | #84 `html_p_` wrong-tag is Ipe.Ui codegen tag-mapping, not runtime render (Ui/Html) | **REJECT** (as runtime issue) | Fix in the element-builder codegen; `render_into_ctx` is correct. |
 | 21 | Three-gate non-Clone Task capture (single-use move / all-discard Arc-wrap / residual thunk-closure) (HOF) | **ADOPT** | Port to `emit_expr.rs` lambda emission (replaces bare `Box::new(move ...)`). Soundness gate vs E0599. Ties to #87. |
 | 22 | `collectLambdaCapturedVars` precision — only walk captures INSIDE lambdas, don't Arc-wrap stored handlers (HOF) | **ADOPT** | Port precision; verify we don't over-Arc-wrap non-captured handlers in record fields. Lower priority. |
 | 23 | Record-literal resolution by field-name set during emission (HOF) | **SYNC** | Already identical (`record_name_for_literal`). #82 done. No change. |
@@ -179,7 +179,7 @@ codegen**, not runtime.
    lowerer isn't already solving this earlier; if it converts non-Clone Tasks
    to thunks at lower time, this reduces to a verification task.
 
-4. **Land Std.Ui/Html #76 Batch 0** — migrate `VarHome::Kernel(Option<...>)`
+4. **Land Ipe.Ui/Html #76 Batch 0** — migrate `VarHome::Kernel(Option<...>)`
    → `VarHome::Kernel(Backing, ..)` in `sky_canon/src/env.rs` as one atomic
    commit (tree won't build until every `id=None` becomes `Deferred`), making
    an unbacked member **unrepresentable** (PARSE, DON'T VALIDATE). Then wire
@@ -189,7 +189,7 @@ codegen**, not runtime.
 5. **Complete #86 + close #85.** Verify lower/backend emit kernel calls for
    `Error.unexpected`/`Error.toString`/etc. (canon + kernels already wired).
    Then **close #85** with the parked-by-design note: runtime stays
-   String-backed, kernel-dispatched; rich ADT lives in `Sky.Core.Error.ipe`
+   String-backed, kernel-dispatched; rich ADT lives in `Ipe.Error.ipe`
    source but constructors lower to kernels, never runtime constructors.
 
 6. **Wire #51 phase-2 EQUIVALENCE** once the Haskell `sky` binary is on PATH as
@@ -199,9 +199,9 @@ codegen**, not runtime.
 
 ### Backlog changes (does v0.17.2 change our plan?)
 
-- **#76 (Std.Ui/Html, ~160 unbacked members):** **Re-plan, do not re-scope.**
+- **#76 (Ipe.Ui/Html, ~160 unbacked members):** **Re-plan, do not re-scope.**
   v0.17.2 confirms our `PortStatus` manifest is a Pareto-optimal interim and
-  their pure-Sky compilation is the north star (reachable only once the
+  their pure-Ipê compilation is the north star (reachable only once the
   canonicaliser gains polymorphism). Runtime ADTs are already complete —
   reframe the task as kernel wiring + Batch 0 atomic migration. **Revise
   `docs/architecture/ui-html-completeness-design.md`** to state the
@@ -219,10 +219,10 @@ codegen**, not runtime.
   kernel emission remains.
 
 - **#80 (Test/Cli/Stream/ToString module ports):** **Unchanged.** v0.17.2 has
-  these working as pure-Sky-onto-kernels; no new mechanism needed. Proceed on
+  these working as pure-Ipê-onto-kernels; no new mechanism needed. Proceed on
   our existing plan.
 
-- **#87 (derive over non-derivable fields → skyc-0-cargo-fail):** **Re-plan
+- **#87 (derive over non-derivable fields → ipe-0-cargo-fail):** **Re-plan
   and elevate to top priority.** v0.17.2 gives us the exact fix (derive gate +
   IR `is_derivable`). This is a confirmed pre-existing seal hole. **Revise
   `docs/architecture/html-ui-live-scheme-table.md` and any seal doc** to make

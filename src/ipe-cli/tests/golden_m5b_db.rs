@@ -1,7 +1,7 @@
 //! `Ipe.Db` gate — `SqlValue`-parameterized `Db.exec` + `Db.query` on an
 //! in-memory `SQLite` database via `Db.withTransaction`.
 //!
-//! Every test compiles a Sky program through `skyc`, builds the emitted Rust
+//! Every test compiles a Ipê program through `ipe`, builds the emitted Rust
 //! project with the shared cargo target, runs the binary, and checks its stdout
 //! against the cached oracle (`tests/golden/db_exec/oracle.meta` +
 //! `expected_go.txt`). Tests are gated on `IPE_E2E=1`; without it they return
@@ -31,7 +31,7 @@
 //! The `db_exec` golden inserts `"apple"` and `"banana"` with `SqlString` /
 //! `SqlInt` params and reads them back ordered by name. The output
 //! `"apple:5\nbanana:3\n"` is the only correct answer; the Go backend would
-//! produce identical bytes given the same Sky source.
+//! produce identical bytes given the same Ipê source.
 //!
 //! ## Golden catalogue
 //!
@@ -71,7 +71,7 @@
 //!   match → `[]`). Output:
 //!   `"apple:fruit:5\nmissing\napple:fruit:5,banana:fruit:3\nempty"`.
 //!   Golden-E2E coverage for `DbFindOneByField`/`DbFindManyByField` through a
-//!   real `skyc build` + `cargo build` + run, not just direct runtime source
+//!   real `ipe build` + `cargo build` + run, not just direct runtime source
 //!   inspection.
 //! * `db_decode_money` — `Db.Decode.money "amount"` inside a
 //!   `Db.queryDecode` pipeline decodes the `"CODE AMOUNT"` TEXT column
@@ -149,7 +149,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 /// (two INSERTs) → `Db.query [] (SELECT ORDER BY name)` → `Db.getString` /
 /// `Db.getInt` → `println`. Output: `"apple:5\nbanana:3"`.
 ///
-/// Recorded sanctioned divergence (Go+cgo `SQLite` vs Rust+sqlx): the Sky source
+/// Recorded sanctioned divergence (Go+cgo `SQLite` vs Rust+sqlx): the Ipê source
 /// produces identical output on both backends, but the oracle-capture toolchain
 /// only runs ipê locally.
 #[test]
@@ -367,7 +367,7 @@ fn db_poly_params_e2e() {
 /// `"apple:fruit:5\nmissing\napple:fruit:5,banana:fruit:3\nempty"`.
 ///
 /// Golden-E2E coverage for `DbFindOneByField`/`DbFindManyByField` through a
-/// real `skyc build` + `cargo build` + run, not just direct runtime source
+/// real `ipe build` + `cargo build` + run, not just direct runtime source
 /// inspection + the internal exhaustiveness test.
 ///
 /// Sanctioned divergence: ipê emits Rust+sqlx; oracle is ipê's own output.

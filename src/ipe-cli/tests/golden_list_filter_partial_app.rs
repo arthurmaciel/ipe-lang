@@ -2,7 +2,7 @@
 //! predicate must compile AND run.
 //!
 //! Root cause: `ipe_backend_rust::emit_expr::emit_lambda` always lowers a
-//! Sky closure VALUE to `Box<dyn Fn(..) -> .. + Send + 'static>` regardless
+//! Ipê closure VALUE to `Box<dyn Fn(..) -> .. + Send + 'static>` regardless
 //! of what it captures. `Box<dyn Fn>` can never implement `Clone` (trait
 //! objects can't derive it), so any kernel whose Rust signature demanded
 //! `impl Fn(..) -> .. + Clone` on the callback rejected EVERY boxed closure
@@ -24,10 +24,10 @@
 //!
 //! ```text
 //! # compile-only check (fast, no IPE_E2E needed):
-//! cargo test -p skyc --test golden_i161_list_filter_partial_app
+//! cargo test -p ipe --test golden_i161_list_filter_partial_app
 //!
 //! # full E2E (build the emitted crate with cargo AND run it):
-//! IPE_E2E=1 cargo test -p skyc --test golden_i161_list_filter_partial_app
+//! IPE_E2E=1 cargo test -p ipe --test golden_i161_list_filter_partial_app
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -58,7 +58,7 @@ fn list_filter_partial_app_compiles() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for list_filter_partial_app: {:?}",
+        "ipe build must succeed for list_filter_partial_app: {:?}",
         built.err()
     );
 
@@ -80,7 +80,7 @@ fn list_filter_partial_app_compiles() {
     let built = ipe::build(&entry, &e2e_out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for list_filter_partial_app (E2E leg): {:?}",
+        "ipe build must succeed for list_filter_partial_app (E2E leg): {:?}",
         built.err()
     );
 

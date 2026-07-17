@@ -4,7 +4,7 @@
 //! the `telemetry` ring buffers, and a `/_sky/observability/ingest` POST that
 //! folds a sub-app's batched logs into the same rings.
 //!
-//! Unlike Go (which spawns the console as a child Sky.Live process and reverse-
+//! Unlike Go (which spawns the console as a child Ipe.Live process and reverse-
 //! proxies it), the Rust console is served in-process directly off the Live
 //! router — no extra process, same data. No panic vectors.
 
@@ -82,7 +82,7 @@ pub async fn api_errors() -> impl IntoResponse {
     )
 }
 
-/// `GET /_sky/console/api/traces` — recent completed `Std.Trace.span`s.
+/// `GET /_sky/console/api/traces` — recent completed `Ipe.Trace.span`s.
 pub async fn api_traces() -> impl IntoResponse {
     (StatusCode::OK, [json_ct()], telemetry::spans_json(200))
 }
@@ -259,7 +259,7 @@ pub fn gate_blocked(headers: &axum::http::HeaderMap) -> Option<axum::response::R
 /// them into the local rings. Malformed bodies are accepted as 204 (drop) rather
 /// than erroring — telemetry must never break the caller.
 ///
-/// Auth (Go parity): a shared secret in `X-Sky-Ingest-Token`, constant-time
+/// Auth (Go parity): a shared secret in `X-Ipê-Ingest-Token`, constant-time
 /// compared against `IPE_INGEST_TOKEN`. The Rust runtime does not yet spawn
 /// sub-apps (no auto-generated token to distribute), so the gate is enforced
 /// ONLY when an operator sets `IPE_INGEST_TOKEN` — unset leaves the endpoint open
@@ -367,7 +367,7 @@ fn is_cross_origin_ingest(headers: &axum::http::HeaderMap) -> bool {
     crate::http_header::origin_host_mismatch(origin, host)
 }
 
-/// `Some(401)` when `IPE_INGEST_TOKEN` is set and the `X-Sky-Ingest-Token` header
+/// `Some(401)` when `IPE_INGEST_TOKEN` is set and the `X-Ipê-Ingest-Token` header
 /// is absent or wrong (constant-time compare). Unset → open EXCEPT for a
 /// cross-origin browser POST (log-injection CSRF shape — see
 /// `is_cross_origin_ingest`), which is rejected even in dev.

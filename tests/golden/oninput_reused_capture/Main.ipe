@@ -12,7 +12,7 @@ import Ipe.Log exposing (println)
 --
 -- `item` (non-Copy record) is used in a `Ui.onInput` callback AND reused by a
 -- sibling button `onPress` in the same view.  Pre-fix (before the D5 emitter
--- reroute): `skyc` exits 0, but the emitted Rust fails `cargo build` with E0382
+-- reroute): `ipe` exits 0, but the emitted Rust fails `cargo build` with E0382
 -- ("use of moved value: `item`") because the synthesized
 -- `Arc::new(move |_x| …)` for `ui_on_input_` move-captures the free outer
 -- `item`, and the sibling `onPress` hits use-after-move.

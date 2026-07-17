@@ -1,5 +1,5 @@
 //! IPE-L0110 seal — partial + over-application of a first-class function
-//! VALUE. `skyc` must emit `main.rs` byte-identical to the checked-in golden,
+//! VALUE. `ipe` must emit `main.rs` byte-identical to the checked-in golden,
 //! and (behind `IPE_E2E=1`) the emitted project must build and print
 //! `6\n33\n103\n`, exit 0 — the same values the Go reference produces.
 //!

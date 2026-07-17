@@ -1,4 +1,4 @@
-//! Sky.Core.Error: the rich, typed `Error` ADT.
+//! Ipe.Error: the rich, typed `Error` ADT.
 //!
 //! Ported from the ancestor Go/Haskell design (`sky-stdlib/Sky/Core/Error.ipe`
 //! in the reference repo): `Error = Error ErrorKind ErrorInfo`, an 11-variant
@@ -9,7 +9,7 @@
 //! Kind-based classification (`isRetryable`, pattern matching, `toString`)
 //! and the `details` enrichment are both fully real and load-bearing today.
 //! `Error.withDetails` is the sanctioned way to attach `ErrorDetails` to a
-//! live `Error` value — raw Sky-source construction of `ErrorInfo`/
+//! live `Error` value — raw Ipê-source construction of `ErrorInfo`/
 //! `PanicInfo`/`TypeInfo` record literals is NOT supported (those are
 //! anonymous structural records at the type level, so a literal lowers to a
 //! project-local synthesized struct, not this module's concrete
@@ -29,7 +29,7 @@ use std::fmt;
 
 use crate::core::IpeMaybe;
 
-/// Sky's `ErrorKind` — 11 nullary variants. Repr(u8) for a compact, sound,
+/// Ipê's `ErrorKind` — 11 nullary variants. Repr(u8) for a compact, sound,
 /// exhaustively-matched runtime type (mirrors `IpeOrder`'s convention).
 /// Variant order matches canon's registration (`crates/ipe_canon/src/env.rs`,
 /// "E-12") — do not reorder without updating that table.
@@ -69,7 +69,7 @@ impl IpeErrorKind {
     }
 }
 
-/// Sky's `PanicInfo` — `FfiPanic`'s payload: `{ message : String, stack :
+/// Ipê's `PanicInfo` — `FfiPanic`'s payload: `{ message : String, stack :
 /// List String }`.
 #[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct IpePanicInfo {
@@ -77,7 +77,7 @@ pub struct IpePanicInfo {
     pub stack: Vec<String>,
 }
 
-/// Sky's `TypeInfo` — `TypeMismatch`'s payload: `{ expected : String, actual
+/// Ipê's `TypeInfo` — `TypeMismatch`'s payload: `{ expected : String, actual
 /// : String }`.
 #[derive(Clone, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct IpeTypeInfo {
@@ -85,8 +85,8 @@ pub struct IpeTypeInfo {
     pub actual: String,
 }
 
-/// Sky's `ErrorDetails` — the 5-variant enrichment union. Constructor names
-/// match Sky source verbatim
+/// Ipê's `ErrorDetails` — the 5-variant enrichment union. Constructor names
+/// match Ipê source verbatim
 /// (`ipe_backend_rust`'s `builtin_runtime_enum("ErrorDetails")` routes
 /// `FfiPanic` / `TypeMismatch` / `HttpStatus` / `JsonDecode` / `Custom`
 /// straight to these variants — no synthetic `EnumDef`).
@@ -99,7 +99,7 @@ pub enum IpeErrorDetails {
     Custom(String),
 }
 
-/// Sky's `ErrorInfo` — `{ message : String, details : Maybe ErrorDetails }`.
+/// Ipê's `ErrorInfo` — `{ message : String, details : Maybe ErrorDetails }`.
 ///
 /// No `#[derive(Eq)]`: `IpeMaybe<T>` (the `details` field's carrier) derives
 /// only `PartialEq`, not `Eq` (see `core.rs`'s `IpeMaybe` doc), so `Eq` here
@@ -111,7 +111,7 @@ pub struct IpeErrorInfo {
     pub details: IpeMaybe<IpeErrorDetails>,
 }
 
-/// Sky's `Error` — `Error ErrorKind ErrorInfo`, a single tuple-variant enum
+/// Ipê's `Error` — `Error ErrorKind ErrorInfo`, a single tuple-variant enum
 /// (constructor name == type name, matching `ipe_lower`'s registration) so
 /// the generic `builtin_runtime_enum` constructor/pattern path handles it
 /// exactly like `IpeMaybe::Just`/`IpeResult::Ok`.
@@ -160,7 +160,7 @@ impl IpeError {
     pub fn unexpected(message: String) -> Self {
         Self::with(IpeErrorKind::Unexpected, message)
     }
-    /// Nullary in the Sky surface — pre-built, fixed message.
+    /// Nullary in the Ipê surface — pre-built, fixed message.
     pub fn timeout() -> Self {
         Self::with(IpeErrorKind::Timeout, "operation timed out".to_owned())
     }
@@ -174,7 +174,7 @@ impl IpeError {
         )
     }
 
-    /// Sky `Error.withMessage : String -> Error -> Error` — replaces the
+    /// Ipê `Error.withMessage : String -> Error -> Error` — replaces the
     /// message, keeps the kind.
     #[must_use]
     pub fn with_message(self, message: String) -> Self {
@@ -182,14 +182,14 @@ impl IpeError {
         Self::with(kind, message)
     }
 
-    /// Sky `Error.toString : Error -> String` — `"<Kind>: <message>"`.
+    /// Ipê `Error.toString : Error -> String` — `"<Kind>: <message>"`.
     #[must_use]
     pub fn to_sky_string(&self) -> String {
         let Self::Error(kind, info) = self;
         format!("{}: {}", kind.label(), info.message)
     }
 
-    /// Sky `Error.isRetryable : Error -> Bool` — `True` only for the three
+    /// Ipê `Error.isRetryable : Error -> Bool` — `True` only for the three
     /// kinds a caller can reasonably back off and retry.
     #[must_use]
     pub fn is_retryable(&self) -> bool {
@@ -200,10 +200,10 @@ impl IpeError {
         )
     }
 
-    /// Sky `Error.withDetails : ErrorDetails -> Error -> Error` — keeps kind
+    /// Ipê `Error.withDetails : ErrorDetails -> Error -> Error` — keeps kind
     /// and message, sets `details = Just <details>`.
     /// This is the sanctioned way to attach `ErrorDetails` to a live `Error`
-    /// value from Sky source (see module doc for why raw record-literal
+    /// value from Ipê source (see module doc for why raw record-literal
     /// construction of `ErrorInfo`/`PanicInfo`/`TypeInfo` is not supported).
     #[must_use]
     pub fn with_details(self, details: IpeErrorDetails) -> Self {
@@ -224,7 +224,7 @@ impl fmt::Display for IpeError {
     }
 }
 
-// ── Sky.Core.Error kernels ────────────────────────────────
+// ── Ipe.Error kernels ────────────────────────────────
 // Each message constructor classifies its own `ErrorKind` at construction,
 // rather than sharing one string-identity runtime symbol across all eight.
 

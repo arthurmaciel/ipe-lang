@@ -13,7 +13,7 @@
 //! `ipe_main` keeps its declared `IpeResult<E, A>` return type while the
 //! `fn main` epilogue's `block_on(ipe_main())` unconditionally requires
 //! `IpeTask<A>` (E0308: expected `Pin<Box<dyn Future…>>`, found
-//! `IpeResult<…>`) — `skyc build` exit 0, `cargo build` fail.
+//! `IpeResult<…>`) — `ipe build` exit 0, `cargo build` fail.
 //!
 //! So `emit_func`'s `ipe_main_wrap` fallback (which fires for `func.ret ==
 //! Unit`) also covers `func.ret == Result(_, A)`

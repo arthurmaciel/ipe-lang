@@ -1,6 +1,6 @@
 //! A generic-typed callback boxed as `+ 'static`.
 //!
-//! Without the fix, `skyc build` exits 0, but the emitted Rust fails `cargo build` with
+//! Without the fix, `ipe build` exits 0, but the emitted Rust fails `cargo build` with
 //! E0310 ("the parameter type `T1` may not live long enough") at the
 //! `Box::new(pair_to_attr)` that a `List.map pairToAttr attrs` call emits. The
 //! mapper `pairToAttr` is generic over `msg` (its result is `Attribute msg`), so
@@ -17,12 +17,12 @@
 //! `body_boxes_generic_callback`): a generic that flows, inside the body, into a
 //! boxed `+ 'static` callback gains the `'static` lifetime bound, rendered by
 //! `render_bounds` as the leading `'static` in the bound list
-//! (`T1: 'static + Clone`). Every concrete Sky type is `'static`, so the bound is
+//! (`T1: 'static + Clone`). Every concrete Ipê type is `'static`, so the bound is
 //! satisfied by every real caller and never introduces a new failure.
 //!
 //! Run:
 //! ```text
-//! IPE_E2E=1 cargo test -p skyc --test golden_i190_static_bound
+//! IPE_E2E=1 cargo test -p ipe --test golden_i190_static_bound
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -41,7 +41,7 @@ fn entry_path(root: &Path) -> PathBuf {
         .join("Main.ipe")
 }
 
-/// skyc-0: the compiler must accept the program AND emit the `'static` lifetime
+/// ipe-0: the compiler must accept the program AND emit the `'static` lifetime
 /// bound on the generic that flows into the boxed `+ 'static` mapper callback —
 /// checked unconditionally (cheap, no `cargo`), independent of the `IPE_E2E`
 /// gate. This is the exact assertion that the E0310 SEAL break cannot recur.
@@ -60,7 +60,7 @@ fn i190_skyc_accepts_and_bounds_fn_static() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for static_bound: {:?}",
+        "ipe build must succeed for static_bound: {:?}",
         built.err()
     );
 
@@ -88,7 +88,7 @@ fn i190_skyc_accepts_and_bounds_fn_static() {
 
 /// cargo-0 ∧ run-0: the emitted project actually compiles with `rustc` and
 /// renders the `<link>`. Gated on `IPE_E2E=1` — the only check that would have
-/// caught the original SEAL violation (E0310, `skyc build` clean).
+/// caught the original SEAL violation (E0310, `ipe build` clean).
 #[test]
 fn i190_cargo_builds_and_runs() {
     if std::env::var("IPE_E2E").is_err() {
@@ -107,7 +107,7 @@ fn i190_cargo_builds_and_runs() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for static_bound: {:?}",
+        "ipe build must succeed for static_bound: {:?}",
         built.err()
     );
 

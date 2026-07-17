@@ -98,7 +98,7 @@ fn compile(fixture: &str, tag: &str, out: &PathBuf) -> Option<Result<(), ipe::Cl
     Some(ipe::build(&entry, out, &runtime))
 }
 
-/// `init : LiveReq -> …` reading `req.path` must be skyc-0 and emit
+/// `init : LiveReq -> …` reading `req.path` must be ipe-0 and emit
 /// `(req).path.clone()` against the runtime `LiveReq` struct — proving the
 /// `LiveReqFields` deferred field-access resolution + concrete lowering.
 #[test]
@@ -109,7 +109,7 @@ fn live_init_reads_req_path_field() {
     };
     assert!(
         result.is_ok(),
-        "#180: `init : LiveReq -> …` reading `req.path` must be skyc-0, got: {:?}",
+        "#180: `init : LiveReq -> …` reading `req.path` must be ipe-0, got: {:?}",
         result.err(),
     );
     let main_rs = std::fs::read_to_string(out.join("src").join("main.rs"))
@@ -126,7 +126,7 @@ fn live_init_reads_req_path_field() {
 }
 
 /// `init : {} -> …` must be rejected with a clear IPE-T0001 naming the expected
-/// `LiveReq` — the prescriptive scheme, fail-closed at skyc time.
+/// `LiveReq` — the prescriptive scheme, fail-closed at ipe time.
 #[test]
 fn live_init_unit_is_rejected() {
     let out = std::env::temp_dir().join("i180_init_unit_out");
@@ -145,7 +145,7 @@ fn live_init_unit_is_rejected() {
 }
 
 /// `IPE_E2E` tier: the `init : LiveReq` project must cargo-build (isolated
-/// target dir) — the SEAL check that skyc-0 implies cargo-0.
+/// target dir) — the SEAL check that ipe-0 implies cargo-0.
 #[test]
 fn live_init_reads_req_path_cargo_builds() {
     if std::env::var("IPE_E2E").is_err() {

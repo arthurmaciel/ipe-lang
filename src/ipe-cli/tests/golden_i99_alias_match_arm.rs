@@ -2,7 +2,7 @@
 //!
 //! GREEN side: `Just ((a, b) as w)` over `Maybe (String, String)` must not
 //! emit `Just(w @ (a, b))` in a by-value arm — a Rust partial move (E0382)
-//! the moment the arm body reads `w` after `a`/`b` (skyc exit 0, cargo
+//! the moment the arm body reads `w` after `a`/`b` (ipe exit 0, cargo
 //! exit 101: the exact exit-0-then-cargo-fail seal class). Instead it binds
 //! the whole payload once and re-derives the inner bindings from a clone
 //! (the same strategy, extended to by-value match arms).
@@ -28,7 +28,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
     root.join("tests").join("golden").join(name)
 }
 
-/// The alias-over-dispatch-free-tuple shape must be skyc-0 (the lowering-side
+/// The alias-over-dispatch-free-tuple shape must be ipe-0 (the lowering-side
 /// path accepts it) — cheap tier, always runs.
 #[test]
 fn i99_alias_tuple_match_arm_is_skyc_ok() {
@@ -42,7 +42,7 @@ fn i99_alias_tuple_match_arm_is_skyc_ok() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "#99: alias over a dispatch-free tuple in a match arm must be skyc-0: {:?}",
+        "#99: alias over a dispatch-free tuple in a match arm must be ipe-0: {:?}",
         built.err()
     );
 }
@@ -77,7 +77,7 @@ fn i99_alias_tuple_match_arm_builds_and_runs() {
 /// Self-edge case: an `as`-alias over a
 /// CYCLIC self-edge (recursive) ctor field is boxed in the emitted enum, so
 /// the clone-rebuild re-derivation must unbox the temp — otherwise both the
-/// alias binder and the inner binder stay `Box<Tree>` (skyc-0, cargo-E0308).
+/// alias binder and the inner binder stay `Box<Tree>` (ipe-0, cargo-E0308).
 #[test]
 fn i99_alias_over_self_edge_is_skyc_ok() {
     let root = repo_root();
@@ -90,7 +90,7 @@ fn i99_alias_over_self_edge_is_skyc_ok() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "#99: alias over a cyclic self-edge field must be skyc-0: {:?}",
+        "#99: alias over a cyclic self-edge field must be ipe-0: {:?}",
         built.err()
     );
 }
@@ -124,7 +124,7 @@ fn i99_alias_over_self_edge_builds_and_runs() {
 
 /// RED-side control: an alias over a dispatch-NEEDING inner (`Just x`) in a
 /// by-value ctor payload is a clean IPE-L0128 lowering rejection — never a
-/// skyc-accept-then-cargo-fail, and never silently over-broad (the GREEN
+/// ipe-accept-then-cargo-fail, and never silently over-broad (the GREEN
 /// fixture above proves the dispatch-free shape still passes).
 #[test]
 fn i99_alias_over_ctor_inner_is_sky_l0128() {

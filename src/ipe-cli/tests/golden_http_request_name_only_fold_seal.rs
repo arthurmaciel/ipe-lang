@@ -7,7 +7,7 @@
 //! NAMES exactly match the 7-field set `{body, followRedirects, headers,
 //! maxRedirects, method, timeout, url}` regardless of field TYPES silently
 //! miscompiles a completely unrelated user record that happens to share those 7
-//! field names (e.g. every field `Int`, nothing HTTP-related): `skyc` exits 0,
+//! field names (e.g. every field `Int`, nothing HTTP-related): `ipe` exits 0,
 //! but the emitted `cargo build` fails with a wall of E0308 errors (the
 //! struct's declared type disagreeing with the `HttpRequest` type the literal
 //! is emitted as).
@@ -112,7 +112,7 @@ fn name_only_shape_emits_a_synthesised_record_struct() {
         return;
     };
 
-    // The struct DEFINITION carries all 7 field names typed `i64` (Sky
+    // The struct DEFINITION carries all 7 field names typed `i64` (Ipê
     // `Int`), and the literal construction site initialises all 7 with the
     // fixture's `1..=7` integers — both are only true if `emit_record`
     // resolved a real synthesised struct instead of mislabelling the

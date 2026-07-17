@@ -1,13 +1,13 @@
-//! Sky.Http.Server runtime — axum/hyper under a Sky-native surface.
+//! Ipe.Http.Server runtime — axum/hyper under a Ipê-native surface.
 //!
-//! Handlers are Sky closures `Fn(Request) -> Task Error Response`. server_get
+//! Handlers are Ipê closures `Fn(Request) -> Task Error Response`. server_get
 //! ERASES the project-defined error type E into a non-generic ServerRoute
 //! (awaiting the task, mapping Err -> 500) so routes are uniform yet handlers
 //! stay Send+Sync+'static for axum. server_listen builds an axum Router and
 //! serves via tokio.
 //!
 //! `Request` and `Response` are OPAQUE `Ty::Con` types in the compiler IR
-//! (`ipe_ir::IrType::ServerRequest` / `ServerResponse`). Sky code cannot
+//! (`ipe_ir::IrType::ServerRequest` / `ServerResponse`). Ipê code cannot
 //! construct or mutate them directly — it reads a request via ACCESSOR KERNELS
 //! (`Server.body` / `Server.path` / `Server.method` / `Server.header` /
 //! `Server.queryParam` / `Server.getCookie` / `Server.param`) and builds a
@@ -15,8 +15,8 @@
 //! `Server.html` / `Server.withStatus` / `Server.withHeader` /
 //! `Server.redirect` / `Server.withCookie`). The `pub` fields on
 //! `ServerRequest` / `ServerResponse` below exist solely so the accessor
-//! functions in this file can read them — they are NOT part of the Sky API.
-//! `Route`/`Cookie` are opaque Sky ADTs mapped the same way.
+//! functions in this file can read them — they are NOT part of the Ipê API.
+//! `Route`/`Cookie` are opaque Ipê ADTs mapped the same way.
 
 use super::*;
 use std::collections::HashMap;
@@ -24,10 +24,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-/// Sky.Http.Server.Request — opaque parsed request handle.
+/// Ipe.Http.Server.Request — opaque parsed request handle.
 // camelCase field names are required because accessor kernels (server_body,
 // server_path, server_method, …) read these fields directly by name. These
-// fields are NOT part of the Sky API — Sky code always goes through a kernel.
+// fields are NOT part of the Ipê API — Ipê code always goes through a kernel.
 // `build_request` populates every field exactly once at the axum boundary.
 #[allow(non_snake_case)]
 #[derive(Clone, Debug)]
@@ -42,10 +42,10 @@ pub struct ServerRequest {
     pub remoteAddr: String,
 }
 
-/// Sky.Http.Server.Response — opaque response handle built by accessor kernels.
+/// Ipe.Http.Server.Response — opaque response handle built by accessor kernels.
 // camelCase field names are required because builder/emit kernels (server_text,
 // server_with_status, to_axum_response, …) write/read these fields directly.
-// These fields are NOT part of the Sky API — Sky code always uses builder kernels.
+// These fields are NOT part of the Ipê API — Ipê code always uses builder kernels.
 #[allow(non_snake_case)]
 #[derive(Clone, Debug)]
 pub struct ServerResponse {
@@ -63,23 +63,23 @@ pub struct ServerResponse {
     pub cookies: Vec<String>,
 }
 
-/// Sky.Http.Server.Cookie (opaque) — safe defaults applied at attach time.
+/// Ipe.Http.Server.Cookie (opaque) — safe defaults applied at attach time.
 #[derive(Clone, Debug)]
 pub struct ServerCookie {
     pub name: String,
     pub value: String,
 }
 
-/// A handler erased of its Sky error type `E`: it awaits the Sky task and maps
+/// A handler erased of its Ipê error type `E`: it awaits the Ipê task and maps
 /// the result to either the response (Ok) or a 500 marker (Err). Erasing E here
-/// keeps `ServerRoute` non-generic so it bridges to the non-generic Sky `Route`.
+/// keeps `ServerRoute` non-generic so it bridges to the non-generic Ipê `Route`.
 type ErasedHandler = Arc<
     dyn Fn(ServerRequest) -> Pin<Box<dyn Future<Output = Result<ServerResponse, String>> + Send>>
         + Send
         + Sync,
 >;
 
-/// The Sky `Handler` type (`Request -> Task Error Response`) reified as a
+/// The Ipê `Handler` type (`Request -> Task Error Response`) reified as a
 /// shareable, error-typed closure. The Rust codegen renders the `Handler` type
 /// alias (and any `Request -> Task Error Response` arrow — e.g. the `h :
 /// Handler` param of a middleware-wrapping closure `guarded h = …`) as exactly
@@ -140,7 +140,7 @@ enum RouteTarget {
     Static(String),
 }
 
-/// Sky.Http.Server.Route (opaque). Non-generic — see ErasedHandler.
+/// Ipe.Http.Server.Route (opaque). Non-generic — see ErasedHandler.
 #[derive(Clone)]
 pub struct ServerRoute {
     pub method: String,
@@ -226,7 +226,7 @@ where
 ///
 /// `spec` is "METHOD /path" (e.g. "POST /v1/generate"); an omitted method
 /// matches any verb. Mirrors Go's `Server_api`. The CSRF-exemption Go performs
-/// (`WithoutCsrf`) is a browser-session / double-submit concern from Sky.Live
+/// (`WithoutCsrf`) is a browser-session / double-submit concern from Ipe.Live
 /// with no analogue on the Rust HTTP server, so it has no effect here.
 pub fn server_api<E, H>(spec: String, h: H) -> ServerRoute
 where
@@ -281,7 +281,7 @@ pub fn server_with_header(k: String, v: String, mut r: ServerResponse) -> Server
     r.headers.insert(k, v);
     r
 }
-/// Sky `redirect : String -> Response` — a 302 to `location`. Matches the Sky
+/// Ipê `redirect : String -> Response` — a 302 to `location`. Matches the Ipê
 /// kernel's one-arg contract and Go's `Server_redirectT` (status is hardcoded,
 /// not a parameter; use `withStatus` to override).
 pub fn server_redirect(location: String) -> ServerResponse {
@@ -445,7 +445,7 @@ fn parse_cookies(header: &str, out: &mut HashMap<String, String>) {
     }
 }
 
-/// Build the Sky `ServerRequest` from the axum request. Returns `Err(status)`
+/// Build the Ipê `ServerRequest` from the axum request. Returns `Err(status)`
 /// when the request must be rejected before the handler runs — currently only
 /// `Err(413)` for an oversize body (Go parity: `http.MaxBytesReader` →
 /// `WriteHeader(413)`, rt.go:7738). The previous code collapsed an oversize
@@ -468,7 +468,7 @@ async fn build_request(
             }
             // Store under Go's canonical MIME casing (`content-type` ->
             // `Content-Type`), aligning with Go's request-header storage and the
-            // Sky.Live path, so `server_header` (which canonicalises its lookup
+            // Ipe.Live path, so `server_header` (which canonicalises its lookup
             // key) matches any caller casing.
             headers.insert(
                 crate::http_header::canonical_header(k.as_str()),
@@ -556,14 +556,14 @@ async fn build_request(
 
 fn to_axum_response(r: ServerResponse) -> axum::response::Response {
     use axum::response::IntoResponse;
-    // Sky.Http.Server.Stream: a streaming response carries a sentinel body the
+    // Ipe.Http.Server.Stream: a streaming response carries a sentinel body the
     // handler stashed via ServerStream.stream. Detect it + serve the chunked
     // body before the buffered path runs.
     if let Some(streamed) = serve_streaming_sentinel(&r) {
         return streamed;
     }
     // Clamp to the valid HTTP status range before the u16 cast so an out-of-range
-    // Sky integer (e.g. from a buggy handler returning status=99999) produces a
+    // Ipê integer (e.g. from a buggy handler returning status=99999) produces a
     // defined 500 rather than a wrapping or panicking cast.
     let status_u16 = r.status.clamp(100, 599) as u16;
     let status = axum::http::StatusCode::from_u16(status_u16)
@@ -620,7 +620,7 @@ fn to_axum_response(r: ServerResponse) -> axum::response::Response {
         r.contentType.clone()
     };
     // Prefix test matches Go's `strings.HasPrefix(ct, "text/html")` exactly:
-    // case-sensitive, no trimming — Sky's html builder always sets a lowercase
+    // case-sensitive, no trimming — Ipê's html builder always sets a lowercase
     // `text/html; charset=utf-8`, so this is the byte-parity comparison.
     let body = if effective_ct.starts_with("text/html") {
         let banner = crate::telemetry::dev_console_banner("");
@@ -711,7 +711,7 @@ pub fn server_listen<E: From<String> + Send + 'static>(
                 }
             }
         }
-        // Sky doctrine: a panicking handler returns 500, never crashes the
+        // Ipê doctrine: a panicking handler returns 500, never crashes the
         // process (mirrors the Go runtime's per-handler recover()). The custom
         // responder classifies + logs the panic SERVER-SIDE (errId) and returns a
         // 500 carrying ONLY the errId — never the panic message (no info leak).
@@ -750,7 +750,7 @@ pub fn server_listen<E: From<String> + Send + 'static>(
     })
 }
 
-// ─── Sky.Http.Server.WebSocket ────────────────────────────────────────────
+// ─── Ipe.Http.Server.WebSocket ────────────────────────────────────────────
 //
 // Bridged types (runtimeOpaqueTypes): WebSocketServer -> WsHandle (the opaque
 // per-peer handle the stdlib pattern-matches as `WebSocketServer raw`);
@@ -761,19 +761,19 @@ pub fn server_listen<E: From<String> + Send + 'static>(
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-/// Sky.Http.Server.WebSocket.WebSocketServer — opaque per-peer handle. The
-/// variant name matches the Sky constructor so `case sock of WebSocketServer
+/// Ipe.Http.Server.WebSocket.WebSocketServer — opaque per-peer handle. The
+/// variant name matches the Ipê constructor so `case sock of WebSocketServer
 /// raw` lowers onto it.
 #[derive(Clone, Copy, Debug)]
 pub enum WsHandle {
     WebSocketServer(i64),
 }
 
-/// Sky.Http.Server.WebSocket.WebSocketServerCfg — fn-pointer callbacks (cannot
+/// Ipe.Http.Server.WebSocket.WebSocketServerCfg — fn-pointer callbacks (cannot
 /// capture; capturing handlers need Arc<dyn Fn> erasure, a follow-up).
 ///
 /// Generic over the error type E because the project's concrete error
-/// (IpeCoreErrorError) is unnameable from the runtime crate. The Sky-side
+/// (IpeCoreErrorError) is unnameable from the runtime crate. The Ipê-side
 /// bridge pins `E = IpeError` (and drops the phantom `msg`) via a generic type
 /// alias — see aliasToRustTypeDef. fn pointers don't store E, so WsServerCfg<E>
 /// is Send/Copy-of-fields regardless of E.
@@ -885,13 +885,13 @@ async fn ws_loop<E: From<String> + Send + 'static>(
                         let _ = socket.send(Message::Close(None)).await;
                         break;
                     }
-                    // Convert binary frame bytes to String via UTF-8 (lossy): Sky's
+                    // Convert binary frame bytes to String via UTF-8 (lossy): Ipê's
                     // String invariant is valid UTF-8; non-UTF-8 binary replaces
                     // malformed sequences with U+FFFD rather than producing an
                     // ill-formed String. The server `onMessage` callback receives a
                     // uniform `String` for both text and binary frames; applications
                     // that need lossless binary round-trips should use a text+base64
-                    // encoding at the Sky level.
+                    // encoding at the Ipê level.
                     let s = String::from_utf8_lossy(&b).into_owned();
                     let _ = (cfg.onMessage)(WsHandle::WebSocketServer(id), s).await;
                 }
@@ -1158,7 +1158,7 @@ pub fn server_web_socket_close_client<E: From<String> + Send + 'static>(id: i64)
     })
 }
 
-// ─── Sky.Http.Server.WebSocket adapters ────────────────────────────
+// ─── Ipe.Http.Server.WebSocket adapters ────────────────────────────
 //
 // Kernel-callable entry points (D3: handle-taking wrappers + cfg builders).
 // The i64 family above is the registry API kept for upstream-sync; these
@@ -1282,7 +1282,7 @@ pub fn ws_server_send_to_client<E: From<String> + Send + 'static>(
     server_web_socket_send_to_client(id, msg)
 }
 
-/// `Ws.sendBinaryToClient` — send a binary frame.  `Bytes = Vec<u8>` (skyc
+/// `Ws.sendBinaryToClient` — send a binary frame.  `Bytes = Vec<u8>` (ipe
 /// divergence: upstream Sky uses `Bytes = String`; see divergences doc §D2).
 pub fn ws_server_send_binary_to_client<E: From<String> + Send + 'static>(
     h: WsHandle,
@@ -1420,7 +1420,7 @@ mod ws_adapter_tests {
     }
 }
 
-// ─── Sky.Http.Middleware + Sky.Http.RateLimit ─────────────────────────────
+// ─── Ipe.Http.Middleware + Ipe.Http.RateLimit ─────────────────────────────
 //
 // A Handler is `Fn(ServerRequest) -> IpeTask<E, ServerResponse>`. Each `with*`
 // wraps a handler and returns a new one; they chain generically (each output is
@@ -1741,7 +1741,7 @@ fn csrf_set_cookie_value(token: &str, request_is_https: bool) -> String {
 }
 
 /// Middleware.withCsrf : Handler -> Handler. Double-submit-cookie CSRF guard
-/// for `Sky.Http.Server` routes (Go/upstream-audit parity: `__Host-ipe_csrf`
+/// for `Ipe.Http.Server` routes (Go/upstream-audit parity: `__Host-ipe_csrf`
 /// cookie, safe methods set/refresh it, unsafe methods require cookie ==
 /// `X-Csrf-Token` header via constant-time compare, 403 on any
 /// mismatch/missing value).
@@ -1978,7 +1978,7 @@ mod tests {
 
     #[test]
     fn build_routes_and_response() {
-        // Validate the crux: a Sky-shaped handler closure boxes into a Route.
+        // Validate the crux: a Ipê-shaped handler closure boxes into a Route.
         let r: ServerRoute = server_get::<String, _>("/".to_string(), |_req: ServerRequest| {
             Box::pin(ready(ok_res::<String, _>(server_text("hi".to_string()))))
                 as IpeTask<String, ServerResponse>

@@ -10,7 +10,7 @@ Baseline PNGs for `scripts/verify-ui-showcase.{sh,mjs}`. Recorded at:
 
 ## Updating baselines
 
-Snapshots change legitimately when Sky's renderer, `Std.Ui`, or the
+Snapshots change legitimately when Ipê's renderer, `Ipe.Ui`, or the
 showcase source itself is modified. **Never** commit a blind update
 without a human eyeball check — the runner is the regression net for
 the Cycle 5 renderer churn.
@@ -19,7 +19,7 @@ the Cycle 5 renderer churn.
 # 1. Run the runner against your change. Look at the failing snapshots.
 TMPDIR=/tmp bash scripts/verify-ui-showcase.sh
 
-# 2. Open `.skycache/ui-showcase-diffs/*.current.png` in an image
+# 2. Open `.ipe-cache/ui-showcase-diffs/*.current.png` in an image
 #    viewer alongside `examples/26-ui-showcase/snapshots/*.png`.
 #    Confirm every pixel difference is intentional.
 

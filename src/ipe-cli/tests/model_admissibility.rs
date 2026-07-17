@@ -5,10 +5,10 @@
 //! Clone + PartialEq`; `tui_app` / `webview_app` bound it `Clone`. Before the
 //! gate, a Model storing a non-admissible value (`Cmd` / `Sub` / `Task` /
 //! `Decoder` / `Db` / a function — or, for Live only, `Html` / `Element` /
-//! `Color`) made `skyc` exit 0 and then `cargo build` fail on the missing trait
+//! `Color`) made `ipe` exit 0 and then `cargo build` fail on the missing trait
 //! bound. The gate converts that into a fail-closed `IPE-L0120` diagnostic.
 //!
-//! These tests are COMPILE-ONLY (they run the `skyc` pipeline + write the
+//! These tests are COMPILE-ONLY (they run the `ipe` pipeline + write the
 //! project, but never invoke `cargo`), so they are fast and NOT gated on
 //! `IPE_E2E`.
 
@@ -50,7 +50,7 @@ fn assert_rejected_with(
     }
 }
 
-/// Assert compilation succeeded (skyc-0).
+/// Assert compilation succeeded (ipe-0).
 fn assert_accepted(test_name: &str, source: &str) -> Result<(), BoxError> {
     match compile(test_name, source)? {
         Ok(()) => Ok(()),
@@ -328,7 +328,7 @@ fn tui_model_with_cmd_field_is_rejected() -> Result<(), BoxError> {
 // plain Model.
 
 /// Model has a `Cmd` field AND `view` is an inline lambda. A `FuncValue`-only
-/// gate would skip this (skyc-0 then cargo-fail); the Lambda-aware gate rejects
+/// gate would skip this (ipe-0 then cargo-fail); the Lambda-aware gate rejects
 /// it with IPE-L0120.
 const LIVE_LAMBDA_VIEW_CMD_MODEL: &str = r"module Main exposing (main)
 

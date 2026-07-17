@@ -1,5 +1,5 @@
 //! Routed `Live.app` with `routes = []` and a wrong `notFound` type must be
-//! rejected by skyc with IPE-T0001.
+//! rejected by ipe with IPE-T0001.
 //!
 //! ## Background
 //!
@@ -7,7 +7,7 @@
 //! force `var(2)` (the page type) to match.  But with an EMPTY `routes = []`
 //! list there is no constructor to witness `var(2)`, so `var(2)` would be
 //! pinned only by `notFound` — any type would satisfy it.  Then `notFound = 5`
-//! (Int) would type as skyc-Ok, and the emitted `set_page` closure (`__page:
+//! (Int) would type as ipe-Ok, and the emitted `set_page` closure (`__page:
 //! Page, __model: Model`) would be rejected by cargo with E0308.
 //!
 //! A post-solve `RoutedLiveCheck` closes the hole:
@@ -21,9 +21,9 @@
 //! * R2 (`wrong_ctor_notfound`): routed Model, `routes = []`,
 //!   `notFound = Increment` (Msg ctor, wrong ADT) → IPE-T0001.
 //! * Positive control: well-typed routed app (let-bound routes, correct notFound)
-//!   → skyc Ok (reuses the `live_let_bound_routes` fixture).
+//!   → ipe Ok (reuses the `live_let_bound_routes` fixture).
 //!
-//! All tests are pure skyc-pipeline checks (parse → canon → types → lower →
+//! All tests are pure ipe-pipeline checks (parse → canon → types → lower →
 //! emit). No cargo build or runtime binary required — they run without
 //! `IPE_E2E=1` and skip if the embedded runtime cannot be resolved.
 
@@ -161,7 +161,7 @@ main =
         }
 "#;
 
-/// Compile `source` through the skyc pipeline (no cargo). Returns `None` to
+/// Compile `source` through the ipe pipeline (no cargo). Returns `None` to
 /// skip when the embedded runtime cannot be resolved.
 fn compile_src(test_name: &str, source: &str) -> Option<Result<(), ipe::CliError>> {
     let ipe_dir = std::env::temp_dir().join(format!("live_routed_empty_{test_name}_sky"));
@@ -182,7 +182,7 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// Run the skyc pipeline on the named fixture and return the build result.
+/// Run the ipe pipeline on the named fixture and return the build result.
 /// Returns `None` (skip) when the embedded runtime cannot be resolved.
 fn run_skyc(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>> {
     let root = repo_root();
@@ -202,8 +202,8 @@ fn run_skyc(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>> {
 
 /// R1: Routed Model (`page : Page`), `routes = []`, `notFound = 5` (Int).
 ///
-/// Before Part B: skyc exited 0 (empty-routes hole), cargo rejected with E0308.
-/// After Part B: skyc rejects with IPE-T0001 at type-check time.
+/// Before Part B: ipe exited 0 (empty-routes hole), cargo rejected with E0308.
+/// After Part B: ipe rejects with IPE-T0001 at type-check time.
 #[test]
 fn routed_empty_routes_int_notfound_is_sky_t0001() {
     let Some(result) = run_skyc(
@@ -228,8 +228,8 @@ fn routed_empty_routes_int_notfound_is_sky_t0001() {
 /// R2: Routed Model (`page : Page`), `routes = []`,
 /// `notFound = Increment` (Msg constructor — wrong ADT).
 ///
-/// Before Part B: skyc exited 0, cargo rejected with E0631 / E0308.
-/// After Part B: skyc rejects with IPE-T0001 at type-check time.
+/// Before Part B: ipe exited 0, cargo rejected with E0631 / E0308.
+/// After Part B: ipe rejects with IPE-T0001 at type-check time.
 #[test]
 fn routed_empty_routes_wrong_ctor_notfound_is_sky_t0001() {
     let Some(result) = run_skyc(
@@ -340,7 +340,7 @@ fn mix_mixed_route_ctors_is_sky_t0001() {
 /// `page` field) and `notFound = Increment` (Msg) must compile cleanly.
 ///
 /// Part B's post-solve hook MUST NOT fire here: the Model has no `page` field,
-/// so the check is skipped and skyc exits Ok.
+/// so the check is skipped and ipe exits Ok.
 #[test]
 fn non_routed_live_app_compiles() {
     let Some(result) = compile_src("non_routed", NON_ROUTED_LIVE) else {
@@ -359,7 +359,7 @@ fn non_routed_live_app_compiles() {
 // empty-routes surface. `routes = []` emits a typed `Vec::<Route<…>>::new()`
 // turbofish, and the runtime `Route<Page>` struct has NO default type
 // parameter — so the pre-round-4 bare `Route` rendering made a WELL-TYPED
-// routed app (`notFound = CounterPage`, matching `page : Page`) skyc-0 and
+// routed app (`notFound = CounterPage`, matching `page : Page`) ipe-0 and
 // then cargo-fail with E0107 ("missing generics for struct `route::Route`").
 // Post-fix `IrType::LiveRoute(page)` renders `Route<MainPage>`.
 
@@ -368,7 +368,7 @@ fn empty_routes_ok_out() -> PathBuf {
     PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m7_live_routed_empty_routes_ok_emit")
 }
 
-/// Well-typed routed app with `routes = []` → skyc MUST exit 0, and the
+/// Well-typed routed app with `routes = []` → ipe MUST exit 0, and the
 /// emitted `main.rs` MUST render the page-parametrised `Route<MainPage>`
 /// (never a bare `Route`, which is the E0107 shape). Compile-only — always
 /// runs (no `IPE_E2E` gate).
@@ -388,7 +388,7 @@ fn routed_empty_routes_well_typed_compiles_and_renders_route_page() {
     let result = ipe::build(&entry, &out, &runtime);
     assert!(
         result.is_ok(),
-        "#108 hole 1: well-typed empty-routes routed app must be skyc-0, got: {:?}",
+        "#108 hole 1: well-typed empty-routes routed app must be ipe-0, got: {:?}",
         result.err(),
     );
 
@@ -446,7 +446,7 @@ fn routed_empty_routes_well_typed_cargo_builds() {
 /// kitchen-sink` and `examples/25-sky-console`).
 ///
 /// Before fix: skyc returned IPE-L0124 (gate was overly strict vs. Go oracle).
-/// After fix: skyc exits 0 and emits `live_app` (not `live_app_routed`).
+/// After fix: ipe exits 0 and emits `live_app` (not `live_app_routed`).
 #[test]
 fn non_routed_with_nonempty_routes_compiles() {
     let Some(result) = compile_src("non_routed_nonempty", NON_ROUTED_LIVE_WITH_NONEMPTY_ROUTES)

@@ -1,5 +1,5 @@
 //! Concrete payload-ADT gate: a non-generic enum whose
-//! constructors carry fields. `skyc` must emit `main.rs` byte-identical to the
+//! constructors carry fields. `ipe` must emit `main.rs` byte-identical to the
 //! checked-in golden, and (behind `IPE_E2E=1`) the emitted project must build
 //! and print `32`.
 //!

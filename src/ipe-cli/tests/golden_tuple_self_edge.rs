@@ -1,5 +1,5 @@
 //! Recursion-soundness gate: a self-edge routed through a TUPLE
-//! payload. `skyc` must emit `main.rs` byte-identical to the checked-in golden,
+//! payload. `ipe` must emit `main.rs` byte-identical to the checked-in golden,
 //! and (behind `IPE_E2E=1`) the emitted project must build and print `5`.
 //!
 //! ```text
@@ -9,7 +9,7 @@
 //! `ChainNode`'s payload is the tuple `(Chain, Int)`, which reaches `Chain`
 //! again — the type-size cycle is closed *through a tuple*, not as a bare
 //! self-field. Boxing only a direct self-edge would emit
-//! `ChainNode((MainChain, i64))` — an infinite-sized Rust enum (E0072): `skyc`
+//! `ChainNode((MainChain, i64))` — an infinite-sized Rust enum (E0072): `ipe`
 //! exits 0 and the crate then fails `cargo build`. So the backend boxes the
 //! cyclic enum-payload edge (the whole tuple, `ChainNode(Box<(MainChain, i64)>)`),
 //! balanced by `Box::new` at construction and a deref at pattern binding.

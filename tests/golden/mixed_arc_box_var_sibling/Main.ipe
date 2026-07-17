@@ -15,7 +15,7 @@ import Ipe.Log exposing (println)
 -- (`Arc`). `alt` is a SECOND `let`-bound lambda that does NOT flow into a
 -- sync-capture kernel, so it stays a plain `Box<dyn Fn + Send + Sync>` local.
 -- The `else` branch reads `alt` — a bare `Expr::Var` at the group's type slot.
--- `Arc` (then) vs `Box` (else) → cargo `E0308` AFTER `skyc` exit 0. Fix: the
+-- `Arc` (then) vs `Box` (else) → cargo `E0308` AFTER `ipe` exit 0. Fix: the
 -- `Var(alt)` leaf is eta-expanded to `SharedLambda` (`Arc::new(move |x| (alt
 -- .clone())(x))`), unifying with the promoted branch.
 

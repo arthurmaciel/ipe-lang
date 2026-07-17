@@ -7,7 +7,7 @@
 //! ## Positives (build → run → byte-diff against the cached oracle)
 //!
 //! Each single-file positive compiles `tests/golden/<name>/Main.ipe` through
-//! `skyc`, builds the emitted Rust project in the shared cargo target, runs it,
+//! `ipe`, builds the emitted Rust project in the shared cargo target, runs it,
 //! and checks stdout against the cached Go oracle (`oracle.meta` +
 //! `expected_go.txt`). All three carry `oracle_divergence = false` — the Go
 //! reference compiler produces byte-identical stdout, captured via
@@ -17,7 +17,7 @@
 //!   `-3` (truncation toward zero, Go + Elm parity; a floor-division backend
 //!   would give `-4`). Output: `"10 -3"`.
 //! * `intdiv_minint` — F6 regression: `i64::MIN // -1`. Raw Rust `/`
-//!   panics here unconditionally (signed-overflow hardware trap); Sky-Go
+//!   panics here unconditionally (signed-overflow hardware trap); Ipê-Go
 //!   returns `i64::MIN` (two's-complement wrap). `ipe_int_div` reproduces this
 //!   via `wrapping_div`. Output: `"-9223372036854775808"`, exit 0.
 //! * `let_fn` — a let-bound *function* (`inc n = n + 1`) applied inside the
@@ -52,7 +52,7 @@
 //! Run the E2E positives + the runtime negative with:
 //!
 //! ```text
-//! IPE_E2E=1 cargo test -p skyc --test golden_parser_gaps
+//! IPE_E2E=1 cargo test -p ipe --test golden_parser_gaps
 //! ```
 //!
 //! The compile-time negatives run unconditionally (no build/run, so no gate).
@@ -180,7 +180,7 @@ fn intdiv_by_zero_aborts_exit_101() {
 /// F6 regression — `i64::MIN // -1` must NOT panic.
 ///
 /// Raw Rust `/` on `i64` panics here unconditionally (signed-overflow hardware
-/// trap, present even with `overflow-checks = false`). Sky-Go `rt.IntDiv` uses
+/// trap, present even with `overflow-checks = false`). Ipê-Go `rt.IntDiv` uses
 /// two's-complement arithmetic and returns `i64::MIN`. The fix routes
 /// `BinOp::IntDiv` through `ipe_runtime::math::ipe_int_div(a, b)` which calls
 /// `a.wrapping_div(b)` for non-zero divisors, reproducing Go's result.

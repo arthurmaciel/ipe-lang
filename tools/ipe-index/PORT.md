@@ -9,7 +9,7 @@
 A two-repo, six-language, sqlite-backed code-relation index. Adapted from
 `../sky/tools/skydex` (tree-sitter walk/store/parity/query, ~1600 LOC) for the
 Ipê two-repo layout. Agents query it instead of `rg` for "where is X defined /
-who imports Y / which Sky kernels still need a Rust impl".
+who imports Y / which Ipê kernels still need a Rust impl".
 
 ### Two-repo, path-prefixed
 
@@ -28,13 +28,13 @@ can compare across them:
   Go (func/method + string-registered kernels), TypeScript/JS.
 - **line-scan defs+imports:** Haskell (`name ::` sigs + data/newtype/type/class +
   `import`), Bash (`name()` funcs + `source`/`.`).
-- **custom scan:** Sky (bindings, imports, `Ffi.kernel` decls).
+- **custom scan:** Ipê (bindings, imports, `Ffi.kernel` decls).
 
 ### Cross-repo kernel parity (the headline feature)
 
 `ipe-index parity --gaps` reconciles Sky-Go kernel impls (`../sky/runtime-go`)
 against Ipê-Rust kernel impls (`crates/`, `runtime/`) in one table, keyed by the
-Sky `Ffi.kernel` decl set + `Kernel.hs` routes. Classifies each kernel
+Ipê `Ffi.kernel` decl set + `Kernel.hs` routes. Classifies each kernel
 `go-only` (real Rust gap) / `rust-only` / `orphan-route` / `ok` — directly feeds
 the kernel-porting backlog. Every row carries `route=` (Haskell), `go=`, `rust=`
 source locations, tag-prefixed.
@@ -64,7 +64,7 @@ Hooks are local (`.git/hooks`, not committed). Re-install after a fresh clone.
 
 ## Phase gate
 
-Until Ipê goes green + FFI-complete: run BOTH `skydex` (Sky-Rust ancestor
+Until Ipê goes green + FFI-complete: run BOTH `skydex` (Ipê-Rust ancestor
 reference, used as-is) and `ipe-index`. After: drop `skydex`; `ipe-index` only,
 re-pointed at Sky Haskell+Go as the reference. See memory
 `sky-rust-is-ipe-ancestor-not-upstream`.

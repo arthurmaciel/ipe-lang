@@ -1,7 +1,7 @@
 //! Type emission: user enums and their `IpeStringify` impls, plus
 //! IR-type → Rust-type rendering.
 //!
-//! Ports the relevant arms of `Sky/Generate/Rust/Builder/TypeEmitter.hs`
+//! Ports the relevant arms of `Ipê/Generate/Rust/Builder/TypeEmitter.hs`
 //! (`unionToRustTypeDef`) and `Emitter.hs` (`typeDefToString` / the enum
 //! `skyStringifyEnumImpl`). The byte target is golden `main.rs` lines 31–43.
 
@@ -15,7 +15,7 @@ use crate::{EmitCtx, RecordStruct};
 /// The generic-type-parameter scope in effect while emitting one function's
 /// signature and body.
 ///
-/// Maps a Sky type-variable [`Symbol`] to its deterministic Rust generic name
+/// Maps a Ipê type-variable [`Symbol`] to its deterministic Rust generic name
 /// (`T1`, `T2`, …) by the variable's *position* in the function's quantification
 /// order — never by the symbol's spelling — so a function quantifying `[a, b]`
 /// renders `a` → `T1` and `b` → `T2` regardless of source naming. Empty for
@@ -99,7 +99,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
             //
             // `ChunkEvent` is generic over the error type (`E` = always
             // `IpeError` in practice) — we bake the concrete type arg in here
-            // rather than propagating it through the IrType layer (the Sky
+            // rather than propagating it through the IrType layer (the Ipê
             // user sees `ChunkEvent` as a non-generic type; the `E` channel is
             // invisible to user code).
             //
@@ -150,7 +150,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // `Set a` is the runtime's `BTreeSet<A>`.
         IrType::Set(a) => format!("BTreeSet<{}>", render_type(ctx, a, generics)?),
         // `Bytes` is an arbitrary byte buffer — `Vec<u8>`. Divergence from
-        // Sky: Sky aliases Bytes = String; Rust's String is UTF-8 constrained,
+        // Ipê: Ipê aliases Bytes = String; Rust's String is UTF-8 constrained,
         // so Bytes maps to Vec<u8> for lossless arbitrary binary.
         IrType::Bytes => "Vec<u8>".to_owned(),
         // `Json` is the opaque JSON value type, `serde_json::Value`, exposed
@@ -168,7 +168,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // `render_type` would render the `IrType::Fun` payload as the SHARED
         // callback form `Box<dyn Fn(a) -> b + Send + Sync>` — the wrong trait
         // (`Fn` vs `FnOnce`) AND an over-constrained `+ Sync` the curry chain does
-        // not satisfy → skyc-0-then-cargo-fail (E0308/E0277). A decoder payload
+        // not satisfy → ipe-0-then-cargo-fail (E0308/E0277). A decoder payload
         // never flows into an `Arc<dyn Fn + Send + Sync>` slot, so it is always the
         // Send-only owned shape. Render it as the `FnOnceChain` the runtime uses.
         IrType::Decoder(inner) => {
@@ -212,7 +212,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // Ipe.Email records + provider ADT — re-exported from ipe_runtime::email
         // (`pub use email::*` appended when the program uses `Email.send`), so
         // the bare names resolve via the crate glob use. `Attachment` maps to the
-        // runtime `EmailAttachment` (the Sky alias name differs from the runtime
+        // runtime `EmailAttachment` (the Ipê alias name differs from the runtime
         // struct name).
         IrType::EmailMessage => "EmailMessage".to_owned(),
         IrType::EmailAttachment => "EmailAttachment".to_owned(),
@@ -284,7 +284,7 @@ pub fn render_type(ctx: &EmitCtx, ty: &IrType, generics: GenericScope) -> DResul
         // so it MUST render as `Arc<…>` here (and box with `Arc::new` in
         // `wants_arc_ctor`, whose pattern is kept in lock-step). Omitting the
         // `[WebSocketServer, Error]` shape rendered it as the generic `Box<dyn Fn>`
-        // below and passed a `Box` into that `Arc` param → skyc-0-then-cargo-fail
+        // below and passed a `Box` into that `Arc` param → ipe-0-then-cargo-fail
         // E0308 for any `onError` callback.
         // This arm MUST appear before the generic `Fun` arm so it takes priority.
         IrType::Fun(params, ret)
@@ -462,7 +462,7 @@ pub fn emit_enum(ctx: &EmitCtx, def: &EnumDef) -> DResult<String> {
     let mut show_arms = Vec::with_capacity(def.variants.len());
     for variant in &def.variants {
         // The Rust variant ident is keyword-mangled; the `ipe_show` string keeps
-        // the original Sky name so a variant like `Type` still displays as
+        // the original Ipê name so a variant like `Type` still displays as
         // "Type", not "Type_". For non-keyword variants the two coincide, so the
         // golden stays byte-identical.
         let vn = ctx.emit_ident(variant.name)?;

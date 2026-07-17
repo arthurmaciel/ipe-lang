@@ -5,9 +5,9 @@ Date: 2026-07-11
 
 ## Context
 
-The Rust backend enforces a *seal*: `skyc` exit-0 MUST imply `cargo` exit-0 — a
-well-typed Sky program can never emit Rust that fails to compile. Two holes in
-that seal (#104, #99) both had the shape "`skyc` prints success but the emitted
+The Rust backend enforces a *seal*: `ipe` exit-0 MUST imply `cargo` exit-0 — a
+well-typed Ipê program can never emit Rust that fails to compile. Two holes in
+that seal (#104, #99) both had the shape "`ipe` prints success but the emitted
 Rust fails `cargo` with E0382 use-of-moved-value on a non-`Copy` payload":
 
 - **#104 (by-value arg then reuse).** The runtime value kernels take their
@@ -77,17 +77,17 @@ the parts from a clone (clone only when both the whole and the parts are live).
   reference (`ExprEmitter.hs` `varLocalRead`) clones a local read iff it is in
   `ecCloneVars`, the set of locals used ≥ 2 times — so a var used twice clones
   **both** reads, including the last. It is simple and total but over-clones.
-  skyc uses **true last-use** analysis: clone every owned read except the last,
+  ipe uses **true last-use** analysis: clone every owned read except the last,
   which moves (N−1 vs N clones), and additionally excludes borrow positions the
   reference's count does not. Rust move semantics let us move the last use; the
   coarser reference set does not exploit it. Strictly-better divergence, reason
   recorded per the sanctioned-divergence policy.
-* **#99 — the reference has a latent bug; skyc must be correct.** The reference
+* **#99 — the reference has a latent bug; ipe must be correct.** The reference
   (`ExprEmitter.hs:4206` `patternToMatchString`) **drops the alias name
   entirely** — it renders `((a,b) as w)` as just `(a, b)` and never binds `w`.
   A body that uses `w` fails Rust with E0425 "cannot find value `w`" (an
   *unbound*-name bug). The reference sidesteps E0382 by discarding the whole
-  binding, which is wrong whenever the whole is used. skyc **correctly binds the
+  binding, which is wrong whenever the whole is used. ipe **correctly binds the
   whole** via the clone-split. Do **not** port the reference's drop-the-alias
   behaviour. (The reference's `let-else` + irrefutability discipline in
   `patternToRustArg` *is* worth porting — it is exactly the refutable

@@ -58,7 +58,7 @@ fn emit(interner: &Interner, program: &Program) -> DResult<String> {
 
 /// A reserved Rust keyword used as a variant name and a param name must be
 /// mangled (`type` → `type_`) so the emitted Rust compiles — while the enum's
-/// `ipe_show` keeps the original Sky spelling.
+/// `ipe_show` keeps the original Ipê spelling.
 #[test]
 fn reserved_names_are_mangled_in_emitted_output() -> DResult<()> {
     let mut interner = Interner::new();
@@ -216,7 +216,7 @@ fn cross_module_type_name_collision_is_rejected() -> DResult<()> {
     let mut interner = Interner::new();
     let main_mod = interner.intern("Main")?;
     let other_mod = interner.intern("Other")?;
-    // Same Sky type name in both modules → the *same* interned Symbol.
+    // Same Ipê type name in both modules → the *same* interned Symbol.
     let msg = interner.intern("Msg")?;
     let inc = interner.intern("Increment")?;
 

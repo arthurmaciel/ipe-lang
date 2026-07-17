@@ -1,7 +1,7 @@
 # CLAUDE.md — Ipê language authoring reference
 
 > **Ipê** — an Elm-family, pure-functional language compiling to Rust;
-> compiler + stdlib modules are currently `Sky.*`-prefixed pending a final
+> compiler + stdlib modules are currently `Ipê.*`-prefixed pending a final
 > rename, so use those names verbatim in code. Self-contained authoring
 > reference: every import path, module, kernel, type, and function name below
 > is the exact identifier the current compiler accepts. Compiler/runtime
@@ -12,9 +12,9 @@
 
 ```elm
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
-import Sky.Core.Task as Task
-import Std.Log exposing (println)
+import Ipe.Prelude exposing (..)
+import Ipe.Task as Task
+import Ipe.Log exposing (println)
 
 type Msg = Increment | Decrement
 
@@ -50,7 +50,7 @@ ship Mustache/Handlebars/shell-script placeholders downstream without
 Ipê hijacking them. `\\` collapses to single literal backslash; other
 `\X` sequences preserved verbatim (regex `\d+`, paths `\test`, etc).
 
-### Prelude (autoloaded via `Sky.Core.Prelude exposing (..)`)
+### Prelude (autoloaded via `Ipe.Prelude exposing (..)`)
 
 `Result (Ok/Err)`, `Maybe (Just/Nothing)`, `identity`, `not`, `always`,
 `fst`, `snd`, `clamp`, `modBy`, `errorToString`.
@@ -62,13 +62,13 @@ decisions below. Production-grade code does not survive guesswork.
 
 ### The six decisions to confirm
 
-1. **App shape** — match the matrix. Sky.Live=web UI, Sky.Http.Server=headless
-   API, Sky.Cli=one-shot/cron, Sky.Tui=terminal UI, Sky.Webview=desktop.
+1. **App shape** — match the matrix. Ipe.Live=web UI, Ipe.Http.Server=headless
+   API, Ipe.Cli=one-shot/cron, Ipe.Tui=terminal UI, Ipe.Webview=desktop.
 2. **Persistence** — SQLite (single-file, embeds) / PostgreSQL / Firestore /
    Redis / none.
-3. **Auth** — none / `Std.Auth` (cookies+JWT, you own users) / OAuth
+3. **Auth** — none / `Ipe.Auth` (cookies+JWT, you own users) / OAuth
    (Google/GitHub) / external (Auth0/Clerk/Cognito).
-4. **Sky.Live session store** — memory (dev only) / sqlite / redis / postgres
+4. **Ipe.Live session store** — memory (dev only) / sqlite / redis / postgres
    / firestore. Required even when the user picks a different primary DB.
 5. **Deployment target** — local binary / Docker / Cloud Run / Kubernetes / VM.
 6. **Observability scope** — local logs only / per-app embedded console / OTel
@@ -80,25 +80,25 @@ Ask one focused question per ambiguity; don't guess heroically.
 
 | User wants…                              | Use                | Entry point shape                  | Notes |
 |------------------------------------------|--------------------|------------------------------------|-------|
-| Web app (forms, real-time, UI state)     | **Sky.Live**       | `Std.Live.app cfg`                 | HTTP-first; SSE patches; sessions + cookies + routing built in. |
-| HTTP / JSON API (no browser UI)          | **Sky.Http.Server**| `Server.listen 8000 [...]`         | Routes + middleware (CORS / rate-limit / logging / basic-auth). |
-| Multi-tenant SaaS / dashboard            | **Sky.Live + auth-app gate** | `Live.app { consoleAuth = … }` | Tenant scope enforced at SQL layer. |
-| Background job / cron worker             | **Sky.Cli**        | `main = Task.run scheduledWork`    | No UI loop; `Task.parallel` for fan-out. |
-| Terminal UI (TUI)                        | **Sky.Tui**        | `Std.Tui.app cfg`                  | Same view code as Sky.Live. |
-| One-shot CLI tool                        | **Sky.Cli**        | `main = Task.run cliCmd`           | Argparse via `System.args`. |
-| Desktop app                              | **Sky.Webview**    | `Std.Webview.app cfg`              | macOS today; Linux / Windows later. |
-| WebSocket-driven feed                    | **Sky.Http.Server.WebSocket** | `Server.upgrade req` | Bidirectional. |
-| Server-sent stream (LLM tokens, SSE)     | **Sky.Http.Server.Stream** | `Server.Stream.emit` | Mirror of `Sky.Core.Http.Stream`. |
+| Web app (forms, real-time, UI state)     | **Ipe.Live**       | `Ipe.Live.app cfg`                 | HTTP-first; SSE patches; sessions + cookies + routing built in. |
+| HTTP / JSON API (no browser UI)          | **Ipe.Http.Server**| `Server.listen 8000 [...]`         | Routes + middleware (CORS / rate-limit / logging / basic-auth). |
+| Multi-tenant SaaS / dashboard            | **Ipe.Live + auth-app gate** | `Live.app { consoleAuth = … }` | Tenant scope enforced at SQL layer. |
+| Background job / cron worker             | **Ipe.Cli**        | `main = Task.run scheduledWork`    | No UI loop; `Task.parallel` for fan-out. |
+| Terminal UI (TUI)                        | **Ipe.Tui**        | `Ipe.Tui.app cfg`                  | Same view code as Ipe.Live. |
+| One-shot CLI tool                        | **Ipe.Cli**        | `main = Task.run cliCmd`           | Argparse via `System.args`. |
+| Desktop app                              | **Ipe.Webview**    | `Ipe.Webview.app cfg`              | macOS today; Linux / Windows later. |
+| WebSocket-driven feed                    | **Ipe.Http.Server.WebSocket** | `Server.upgrade req` | Bidirectional. |
+| Server-sent stream (LLM tokens, SSE)     | **Ipe.Http.Server.Stream** | `Server.Stream.emit` | Mirror of `Ipe.Http.Stream`. |
 
 ### Pinned defaults (always apply unless the user overrules)
 
 | Concern              | Default                                                          |
 |----------------------|------------------------------------------------------------------|
-| View layer           | `Std.Ui` (typed no-CSS DSL).  `Std.Html` only for wrapping raw markup. |
-| Auth                 | `Std.Auth` — bcrypt + HS256 JWT cookies. Secrets are typed `String`. |
+| View layer           | `Ipe.Ui` (typed no-CSS DSL).  `Ipe.Html` only for wrapping raw markup. |
+| Auth                 | `Ipe.Auth` — bcrypt + HS256 JWT cookies. Secrets are typed `String`. |
 | Forms with passwords | `Ui.form [Ui.onSubmit DoSignIn]` with typed record arg.  Never per-keystroke `onInput` on password. |
-| DB                   | `Std.Db` + SQLite for prototypes; PostgreSQL for multi-instance deploys. |
-| Money / decimals     | `Std.Money` on `Std.Decimal`.  Never raw `Float` for currency. |
+| DB                   | `Ipe.Db` + SQLite for prototypes; PostgreSQL for multi-instance deploys. |
+| Money / decimals     | `Ipe.Money` on `Ipe.Decimal`.  Never raw `Float` for currency. |
 | Concurrency          | `Cmd.batch` / `Task.parallel`.  In-process pub/sub via `Cmd.publish` + `Sub.subscribeTopic`. |
 | Observability        | `Std.Log` structured logs; dev console auto-mounted at `/_sky/console`; `OTEL_EXPORTER_OTLP_ENDPOINT` for external collector. |
 | Errors               | `Result Error a` / `Task Error a`.  Never `String` as error type. |
@@ -115,7 +115,7 @@ name = "<project>"
 version = "0.1.0"
 entry = "src/Main.ipe"
 
-[live]                          # Sky.Live apps only
+[live]                          # Ipe.Live apps only
 port = 8000
 store = "sqlite"                # memory / sqlite / redis / postgres / firestore
 storePath = "sessions.db"
@@ -205,19 +205,19 @@ executes them.
 3. `Task.fail (Error.unexpected ("Operation failed (ref " ++ errId ++ ")"))` — user-facing message.
 
 Per app shape: CLI → `Task.run … |> Task.onError reportError`;
-Sky.Http.Server → `Task.onError` recovers to a 4xx/5xx Response;
-Sky.Live → `Cmd.perform task ResultMsg`, dispatch updates
+Ipe.Http.Server → `Task.onError` recovers to a 4xx/5xx Response;
+Ipe.Live → `Cmd.perform task ResultMsg`, dispatch updates
 `notification` / `historyError` in Model.
 
 ## Standard library
 
-Source: `sky-stdlib/{Sky/Core,Std,Sky/Http}/*.ipe`. `sky doc Module`
+Source: `sky-stdlib/{Ipê/Core,Std,Ipê/Http}/*.ipe`. `ipe doc Module`
 surfaces every entry.
 
-Each stdlib binding is either pure Sky (a recursive/case-based impl) or an
-`Ffi.kernel "Name"` alias — a Sky-source decl with an HM signature whose body is
+Each stdlib binding is either pure Ipê (a recursive/case-based impl) or an
+`Ffi.kernel "Name"` alias — a Ipê-source decl with an HM signature whose body is
 `Ffi.kernel "Mod_func"`; the compiler routes such call sites directly to the
-existing typed runtime kernel (no runtime overhead, `sky doc` still lists it).
+existing typed runtime kernel (no runtime overhead, `ipe doc` still lists it).
 You only touch `Ffi.kernel` when authoring/registering stdlib modules, not in
 normal app code.
 
@@ -225,62 +225,62 @@ normal app code.
 
 | Module | Path | Key functions |
 |---|---|---|
-| `Basics` | `Sky.Core.Basics` (autoloaded via `Sky.Core.Prelude`) | identity, always, not, toString, modBy, clamp, fst, snd, compare, negate, abs, sqrt, min, max |
-| `String` | `Sky.Core.String` | length, reverse, append, split, join, contains/containsIn, startsWith/startsWithIn, endsWith/endsWithIn (haystack-first In-suffixed), toInt, fromInt, toFloat, fromFloat, toUpper, toLower, trim/trimStart/trimEnd, replace, slice, dropLeft, dropRight (Elm-shaped rune-based), isEmpty, fromChar, toList, fromList, repeat, padLeft, padRight, casefold, equalFold, isEmail, isUrl, words, lines, concat |
-| `List` | `Sky.Core.List` | map, filter, foldl, foldr, length, head, tail, take, drop, append, concat, concatMap, reverse, member, any, all, range, zip, find, isEmpty, indexedMap, cons + reverseHelp/indexedMapHelp |
-| `Dict` | `Sky.Core.Dict` (kernel) | empty, insert, get, remove, member, keys, values, toList, fromList, map, foldl, union |
-| `Set` | `Sky.Core.Set` (kernel) | empty, insert, remove, member, union, diff, intersect, fromList, toList, size |
-| `Maybe` | `Sky.Core.Maybe` | withDefault, map, andThen, map2-5, andMap, combine, isJust, isNothing |
-| `Result` | `Sky.Core.Result` | withDefault, map, andThen, mapError, map2-5, andMap, combine |
-| `Math` | `Sky.Core.Math` | abs, min, max; sqrt, pow, cbrt, hypot; exp, exp2, log, log2, log10; floor, ceil, round, trunc; sin, cos, tan; asin, acos, atan, atan2; sinh, cosh, tanh, asinh, acosh, atanh; mod, remainder; pi, e, phi, sqrt2, inf, nan |
-| `Regex` | `Sky.Core.Regex` | match, find, findAll, replace, split |
-| `Char` | `Sky.Core.Char` | isAlpha, isDigit, isLower, isUpper, toUpper, toLower |
-| `Path` | `Sky.Core.Path` | base, dir, ext, isAbsolute |
-| `Crypto` | `Sky.Core.Crypto` | sha256, sha512, sha1, md5, hmacSha256, hmacSha512, rsaSha256Sign, rsaSha256Verify, constantTimeEqual (pure); aesGcmEncrypt/Decrypt, chacha20Encrypt/Decrypt, aesKeyFromPassword, chachaKeyFromPassword (Result Error String, symmetric encryption/AEAD); randomBytes, randomToken (Task, entropy) |
-| `Bytes` | `Sky.Core.Bytes` | empty, length, isEmpty, fromString/toString (UTF-8 lossy via Maybe), fromHex/toHex, fromBase64/toBase64, append, slice |
-| `Jwt` | `Sky.Core.Jwt` | encode, decode (HS256+RS256, sig+`exp`/`nbf` checked); `hs256`/`rs256` algos; `claims` builder — issuer/subject/audience/expiresAt/notBefore/issuedAt/jwtId/withClaim |
-| `Encoding` | `Sky.Core.Encoding` | base64Encode/Decode, urlEncode/Decode, hexEncode/Decode |
-| `JsonEnc` | `Sky.Core.Json.Encode` | string, int, float, bool, null, list (Elm-style `(a -> Value) -> List a -> Value`), object, encode |
-| `JsonDec` | `Sky.Core.Json.Decode` | string/int/float/bool, decodeString, field, at, index, list, map, andThen, succeed, fail, oneOf, map2-4 |
-| `JsonDecP` | `Sky.Core.Json.Decode.Pipeline` | required, optional, custom, requiredAt |
-| `Uuid` | `Sky.Core.Uuid` | v4, v7 (bare zero-arg, called w/o `()`), parse |
-| `Decimal` | `Std.Decimal` | Arbitrary-precision arith. Banker's round, percent helpers. |
-| `Money` | `Std.Money` | Currency-typed Money on Decimal + ISO 4217 enum (50+ codes+crypto). `allocate` (fair split), conversion rates. |
+| `Basics` | `Ipe.Basics` (autoloaded via `Ipe.Prelude`) | identity, always, not, toString, modBy, clamp, fst, snd, compare, negate, abs, sqrt, min, max |
+| `String` | `Ipe.String` | length, reverse, append, split, join, contains/containsIn, startsWith/startsWithIn, endsWith/endsWithIn (haystack-first In-suffixed), toInt, fromInt, toFloat, fromFloat, toUpper, toLower, trim/trimStart/trimEnd, replace, slice, dropLeft, dropRight (Elm-shaped rune-based), isEmpty, fromChar, toList, fromList, repeat, padLeft, padRight, casefold, equalFold, isEmail, isUrl, words, lines, concat |
+| `List` | `Ipe.List` | map, filter, foldl, foldr, length, head, tail, take, drop, append, concat, concatMap, reverse, member, any, all, range, zip, find, isEmpty, indexedMap, cons + reverseHelp/indexedMapHelp |
+| `Dict` | `Ipe.Dict` (kernel) | empty, insert, get, remove, member, keys, values, toList, fromList, map, foldl, union |
+| `Set` | `Ipe.Set` (kernel) | empty, insert, remove, member, union, diff, intersect, fromList, toList, size |
+| `Maybe` | `Ipe.Maybe` | withDefault, map, andThen, map2-5, andMap, combine, isJust, isNothing |
+| `Result` | `Ipe.Result` | withDefault, map, andThen, mapError, map2-5, andMap, combine |
+| `Math` | `Ipe.Math` | abs, min, max; sqrt, pow, cbrt, hypot; exp, exp2, log, log2, log10; floor, ceil, round, trunc; sin, cos, tan; asin, acos, atan, atan2; sinh, cosh, tanh, asinh, acosh, atanh; mod, remainder; pi, e, phi, sqrt2, inf, nan |
+| `Regex` | `Ipe.Regex` | match, find, findAll, replace, split |
+| `Char` | `Ipe.Char` | isAlpha, isDigit, isLower, isUpper, toUpper, toLower |
+| `Path` | `Ipe.Path` | base, dir, ext, isAbsolute |
+| `Crypto` | `Ipe.Crypto` | sha256, sha512, sha1, md5, hmacSha256, hmacSha512, rsaSha256Sign, rsaSha256Verify, constantTimeEqual (pure); aesGcmEncrypt/Decrypt, chacha20Encrypt/Decrypt, aesKeyFromPassword, chachaKeyFromPassword (Result Error String, symmetric encryption/AEAD); randomBytes, randomToken (Task, entropy) |
+| `Bytes` | `Ipe.Bytes` | empty, length, isEmpty, fromString/toString (UTF-8 lossy via Maybe), fromHex/toHex, fromBase64/toBase64, append, slice |
+| `Jwt` | `Ipe.Jwt` | encode, decode (HS256+RS256, sig+`exp`/`nbf` checked); `hs256`/`rs256` algos; `claims` builder — issuer/subject/audience/expiresAt/notBefore/issuedAt/jwtId/withClaim |
+| `Encoding` | `Ipe.Encoding` | base64Encode/Decode, urlEncode/Decode, hexEncode/Decode |
+| `JsonEnc` | `Ipe.Json.Encode` | string, int, float, bool, null, list (Elm-style `(a -> Value) -> List a -> Value`), object, encode |
+| `JsonDec` | `Ipe.Json.Decode` | string/int/float/bool, decodeString, field, at, index, list, map, andThen, succeed, fail, oneOf, map2-4 |
+| `JsonDecP` | `Ipe.Json.Decode.Pipeline` | required, optional, custom, requiredAt |
+| `Uuid` | `Ipe.Uuid` | v4, v7 (bare zero-arg, called w/o `()`), parse |
+| `Decimal` | `Ipe.Decimal` | Arbitrary-precision arith. Banker's round, percent helpers. |
+| `Money` | `Ipe.Money` | Currency-typed Money on Decimal + ISO 4217 enum (50+ codes+crypto). `allocate` (fair split), conversion rates. |
 
 ### Effects (`Task Error a`)
 
 | Module | Path | Key functions |
 |---|---|---|
-| `Task` | `Sky.Core.Task` | succeed, fail, map, andThen, perform, sequence, parallel, lazy, run, fromResult, andThenResult, mapError, onError; **retryWith** + `RetryPolicy e` + `ShouldRetry e` ADT (RetryAlways \| RetryWhen (e -> Bool)). Build via linearBackoff/exponentialBackoff/defaultRetryPolicy; decorate via withJitter/withMaxAttempts/withBaseMs/withKind/withRetryOn. |
-| `Cmd` | `Std.Cmd` | none, batch, perform, publish (echo-by-default pub/sub from update return), publishNoEcho (opt-out echo) |
-| `Sub` | `Std.Sub` | none, every, batch, subscribeTopic (pub/sub receive) |
-| `PubSub` | `Std.PubSub` | publish (Task-shaped, callable from raw `api` handlers/post-init/scheduled jobs; complements `Cmd.publish`), publishNoEcho (Task-shaped no-echo) |
-| `Time` | `Sky.Core.Time` | now, sleep, every, unixMillis, format/formatISO8601/formatRFC3339/formatHTTP, addMillis, diffMillis, timeString |
-| `Std.Time` | `Std.Time` | IANA zones, addMonths/Years (month-end CLAMPED), dayOfWeek (ISO Mon=1..Sun=7), weekOfYear (ISO 8601), startOfDay/Week/Month/Year, diffDays/Hours/Minutes/Seconds; `*Utc` infallible companions (`dayOfWeekUtc`/`startOfDayUtc`/`yearUtc`/etc — `Int -> Int`, plug "UTC" at call site). |
-| `Random` | `Sky.Core.Random` | int, float, range, choice, shuffle, weighted (entropy-backed); seed, seededInt, seededFloat, seededChoice (deterministic) |
-| `Http` | `Sky.Core.Http` | get, post, request (custom method/headers/body/timeout via `HttpRequest`), defaultRequest/withMethod/withHeader/withTimeout/withBody builders, parseQuery; typed `HttpResponse = { status : Int, body : String, headers : Dict String String }` |
-| `File` | `Sky.Core.File` | readFile, readFileLimit, readFileBytes, writeFile, append, exists, remove, mkdirAll, readDir, isDir, tempFile, tempDir, copy, rename |
-| `Io` | `Sky.Core.Io` | readLine, writeStdout, writeStderr |
-| `System` | `Sky.Core.System` | args, getArg, getenv, getenvOr (bare), getenvInt, getenvBool, setenv, unsetenv, cwd, loadEnv, exit |
-| `Process` | `Sky.Core.Process` | run (subprocess) |
-| `Db` | `Std.Db` | open, connect, close, exec, execRaw, query, insertRow, getById, updateById, deleteById, findOneByField, findManyByField, findByConditions, unsafeFindWhere, queryDecode, withTransaction, migrate (versioned forward-only schema migrations + `_sky_migrations` + checksum guard), getField, getString, getInt, getBool. **Typed param binding**: `SqlValue` ADT (`SqlString`/`SqlInt`/`SqlFloat`/`SqlBool`/`SqlBytes`/`SqlDecimal`/`SqlTime`/`SqlMoney`/`SqlNull SqlValue`) — mixed-type SQL params as homogeneous `List SqlValue` for `INSERT … VALUES (?, ?, ?)` mixing `String + Maybe Int + Bool`. 8 `fromMaybe*` helpers for nullable columns. `SqlField` (`SetField SqlValue`/`OmitField`) + `Db.updateFields conn table whereCols setFields` for PATCH w/ column-omit; `Db.insertFields conn table fields` = INSERT counterpart (`OmitField` cols drop from SQL so DB applies DEFAULT; all-omit → `INSERT … DEFAULT VALUES`); `Db.insertFieldsReturning conn table fields projection decoder` appends `RETURNING <projection>`, decodes via `Std.Db.Decode`. Money serialises lossless as `"ISO_CODE AMOUNT"` TEXT, paired w/ `Db.Decode.money`. `Maybe a` params bind directly (nil/unwrapped). `nullable : Decoder a -> Decoder (Maybe a)`. |
-| `Auth` | `Std.Auth` | register, login, setRole (Task) + hashPassword, hashPasswordCost, verifyPassword, passwordStrength, signToken, verifyToken (Result); signTokenWithClaims/verifyTokenWithAlgorithm — typed-builder aliases over `Sky.Core.Jwt` for fine-grained algorithm+claims control |
-| `Log` | `Std.Log` | println, debug, info, warn, error, debugWith, infoWith, warnWith, errorWith |
-| `Trace` | `Std.Trace` | span, event, attr — opt-in app-level tracing spans. Tier-1 spans (HTTP/session/Msg/DB/Auth/Http/File) automatic. |
-| `Server` | `Sky.Http.Server` | param, queryParam, header, getCookie, static (Layer 3 surface); higher-level `get/post/listen/text/json/html` are kernel-only |
+| `Task` | `Ipe.Task` | succeed, fail, map, andThen, perform, sequence, parallel, lazy, run, fromResult, andThenResult, mapError, onError; **retryWith** + `RetryPolicy e` + `ShouldRetry e` ADT (RetryAlways \| RetryWhen (e -> Bool)). Build via linearBackoff/exponentialBackoff/defaultRetryPolicy; decorate via withJitter/withMaxAttempts/withBaseMs/withKind/withRetryOn. |
+| `Cmd` | `Ipe.Cmd` | none, batch, perform, publish (echo-by-default pub/sub from update return), publishNoEcho (opt-out echo) |
+| `Sub` | `Ipe.Sub` | none, every, batch, subscribeTopic (pub/sub receive) |
+| `PubSub` | `Ipe.PubSub` | publish (Task-shaped, callable from raw `api` handlers/post-init/scheduled jobs; complements `Cmd.publish`), publishNoEcho (Task-shaped no-echo) |
+| `Time` | `Ipe.Time` | now, sleep, every, unixMillis, format/formatISO8601/formatRFC3339/formatHTTP, addMillis, diffMillis, timeString |
+| `Ipe.Time` | `Ipe.Time` | IANA zones, addMonths/Years (month-end CLAMPED), dayOfWeek (ISO Mon=1..Sun=7), weekOfYear (ISO 8601), startOfDay/Week/Month/Year, diffDays/Hours/Minutes/Seconds; `*Utc` infallible companions (`dayOfWeekUtc`/`startOfDayUtc`/`yearUtc`/etc — `Int -> Int`, plug "UTC" at call site). |
+| `Random` | `Ipe.Random` | int, float, range, choice, shuffle, weighted (entropy-backed); seed, seededInt, seededFloat, seededChoice (deterministic) |
+| `Http` | `Ipe.Http` | get, post, request (custom method/headers/body/timeout via `HttpRequest`), defaultRequest/withMethod/withHeader/withTimeout/withBody builders, parseQuery; typed `HttpResponse = { status : Int, body : String, headers : Dict String String }` |
+| `File` | `Ipe.File` | readFile, readFileLimit, readFileBytes, writeFile, append, exists, remove, mkdirAll, readDir, isDir, tempFile, tempDir, copy, rename |
+| `Io` | `Ipe.Io` | readLine, writeStdout, writeStderr |
+| `System` | `Ipe.System` | args, getArg, getenv, getenvOr (bare), getenvInt, getenvBool, setenv, unsetenv, cwd, loadEnv, exit |
+| `Process` | `Ipe.Process` | run (subprocess) |
+| `Db` | `Ipe.Db` | open, connect, close, exec, execRaw, query, insertRow, getById, updateById, deleteById, findOneByField, findManyByField, findByConditions, unsafeFindWhere, queryDecode, withTransaction, migrate (versioned forward-only schema migrations + `_sky_migrations` + checksum guard), getField, getString, getInt, getBool. **Typed param binding**: `SqlValue` ADT (`SqlString`/`SqlInt`/`SqlFloat`/`SqlBool`/`SqlBytes`/`SqlDecimal`/`SqlTime`/`SqlMoney`/`SqlNull SqlValue`) — mixed-type SQL params as homogeneous `List SqlValue` for `INSERT … VALUES (?, ?, ?)` mixing `String + Maybe Int + Bool`. 8 `fromMaybe*` helpers for nullable columns. `SqlField` (`SetField SqlValue`/`OmitField`) + `Db.updateFields conn table whereCols setFields` for PATCH w/ column-omit; `Db.insertFields conn table fields` = INSERT counterpart (`OmitField` cols drop from SQL so DB applies DEFAULT; all-omit → `INSERT … DEFAULT VALUES`); `Db.insertFieldsReturning conn table fields projection decoder` appends `RETURNING <projection>`, decodes via `Ipe.Db.Decode`. Money serialises lossless as `"ISO_CODE AMOUNT"` TEXT, paired w/ `Db.Decode.money`. `Maybe a` params bind directly (nil/unwrapped). `nullable : Decoder a -> Decoder (Maybe a)`. |
+| `Auth` | `Ipe.Auth` | register, login, setRole (Task) + hashPassword, hashPasswordCost, verifyPassword, passwordStrength, signToken, verifyToken (Result); signTokenWithClaims/verifyTokenWithAlgorithm — typed-builder aliases over `Ipe.Jwt` for fine-grained algorithm+claims control |
+| `Log` | `Ipe.Log` | println, debug, info, warn, error, debugWith, infoWith, warnWith, errorWith |
+| `Trace` | `Ipe.Trace` | span, event, attr — opt-in app-level tracing spans. Tier-1 spans (HTTP/session/Msg/DB/Auth/Http/File) automatic. |
+| `Server` | `Ipe.Http.Server` | param, queryParam, header, getCookie, static (Layer 3 surface); higher-level `get/post/listen/text/json/html` are kernel-only |
 | `Stream` | `Sky.Http.Server.Stream` | stream, emit, finish, withContentType — server-side streaming HTTP responses (SSE/LLM token forwarding/chunked downloads). Mirror of `Sky.Core.Http.Stream`. Sync bridge: `Sky.Core.Http.Stream.forEachChunk hdl body` drains an upstream stream from inside a plain Sky.Http.Server handler (relay shape). |
-| `Middleware` | `Sky.Http.Middleware` | withCors, withLogging, withBasicAuth, withRateLimit |
-| `Head` | `Std.Live.Head` | Per-page `<head>` injection — `title`/`meta`/`metaProperty` (OG)/`link`/`canonical`/`jsonLd`/`themeColor`/`rss`. Opt in via optional `head : Model -> List (Html msg)` field on `Live.app` cfg. |
-| `Console` | `Std.Live.Console` | `Identity` type alias (`{ subject, email, claims : Dict String String }`) for optional row-poly `consoleAuth : Request -> Task Error (Maybe Identity)` field on `Live.app` cfg. |
-| `RateLimit` | `Sky.Http.RateLimit` | allow |
-| `WebSocket` | `Sky.Core.WebSocket` (client) + `Sky.Http.Server.WebSocket` (server) | Bidirectional sockets. Client: `connect`/`connectWith`/`send`/`sendBinary`/`close`/`closeWithCode` (Task-tier) + `onOpen`/`onMessage`/`onClose`/`onError` (Sub-tier). Server: `upgrade` (returns from a Sky.Http.Server handler) + `sendToClient`/`sendBinaryToClient`/`broadcast`/`closeClient`. Server production gate: empty `originPatterns` returns 403 when `ENV=production`. |
-| `Cache` | `Std.Cache` | LRU+TTL in-memory cache, `Cache k v` parametric on key+value. `CacheCfg` w/ `defaultCfg` + `withMaxEntries`/`withTTL`/`withMaxBytes`. `new`/`get`/`put`/`remove`/`clear`/`size`/`stats`. |
-| `Email` | `Std.Email` | Resend/SES/SendGrid/SMTP under one `EmailProvider` ADT. `EmailMessage`+`Attachment` records w/ `defaultMessage { from, to, subject }` + `with*` builders (`withCc`/`withBcc`/`withTextBody`/`withHtmlBody`/`withAttachment`/`withReplyTo`). `Email.send provider msg : Task Error String`. |
-| `Compression` | `Std.Compression` | `gzip`/`gunzip` (RFC 1952) + `zstdCompress`/`zstdDecompress` (RFC 8478). Operates on `String` (Bytes alias). |
-| `Csv` | `Std.Csv` | `parse`/`parseWithDelimiter` (returns `Csv = { header, rows }`), `encode`/`encodeWithDelimiter` (RFC 4180 quoting), `parseStreamFromFile`. |
-| `Config` | `Std.Config` | Typed TOML/YAML/JSON decoders mirroring `Sky.Core.Json.Decode`'s shape — `string`/`int`/`float`/`bool`/`nullable`/`field`/`at`/`list`/`succeed`/`fail`/`map`/`andThen`. `decodeToml`/`decodeYaml`/`decodeJson` + `loadFromFile`. |
-| `ToString` | `Sky.Core.ToString` | `fromInt`/`fromFloat`/`fromBool`/`fromTime` route to canonical kernels — default to `ToString.fromInt n` over memorising per-type kernels. |
-| `Pure` | `Sky.Core.Pure` | Uniform `() -> Task Error a` companions for arity-0 stdlib bindings (`uuidV4`/`uuidV7`/`timeNow`/`timeUnixMillis`/`systemArgs`/`systemCwd`/`systemLoadEnv`/`ioReadLine`/`dbConnect`). |
+| `Middleware` | `Ipe.Http.Middleware` | withCors, withLogging, withBasicAuth, withRateLimit |
+| `Head` | `Ipe.Live.Head` | Per-page `<head>` injection — `title`/`meta`/`metaProperty` (OG)/`link`/`canonical`/`jsonLd`/`themeColor`/`rss`. Opt in via optional `head : Model -> List (Html msg)` field on `Live.app` cfg. |
+| `Console` | `Ipe.Live.Console` | `Identity` type alias (`{ subject, email, claims : Dict String String }`) for optional row-poly `consoleAuth : Request -> Task Error (Maybe Identity)` field on `Live.app` cfg. |
+| `RateLimit` | `Ipe.Http.RateLimit` | allow |
+| `WebSocket` | `Ipe.WebSocket` (client) + `Ipe.Http.Server.WebSocket` (server) | Bidirectional sockets. Client: `connect`/`connectWith`/`send`/`sendBinary`/`close`/`closeWithCode` (Task-tier) + `onOpen`/`onMessage`/`onClose`/`onError` (Sub-tier). Server: `upgrade` (returns from a Ipe.Http.Server handler) + `sendToClient`/`sendBinaryToClient`/`broadcast`/`closeClient`. Server production gate: empty `originPatterns` returns 403 when `ENV=production`. |
+| `Cache` | `Ipe.Cache` | LRU+TTL in-memory cache, `Cache k v` parametric on key+value. `CacheCfg` w/ `defaultCfg` + `withMaxEntries`/`withTTL`/`withMaxBytes`. `new`/`get`/`put`/`remove`/`clear`/`size`/`stats`. |
+| `Email` | `Ipe.Email` | Resend/SES/SendGrid/SMTP under one `EmailProvider` ADT. `EmailMessage`+`Attachment` records w/ `defaultMessage { from, to, subject }` + `with*` builders (`withCc`/`withBcc`/`withTextBody`/`withHtmlBody`/`withAttachment`/`withReplyTo`). `Email.send provider msg : Task Error String`. |
+| `Compression` | `Ipe.Compression` | `gzip`/`gunzip` (RFC 1952) + `zstdCompress`/`zstdDecompress` (RFC 8478). Operates on `String` (Bytes alias). |
+| `Csv` | `Ipe.Csv` | `parse`/`parseWithDelimiter` (returns `Csv = { header, rows }`), `encode`/`encodeWithDelimiter` (RFC 4180 quoting), `parseStreamFromFile`. |
+| `Config` | `Ipe.Config` | Typed TOML/YAML/JSON decoders mirroring `Ipe.Json.Decode`'s shape — `string`/`int`/`float`/`bool`/`nullable`/`field`/`at`/`list`/`succeed`/`fail`/`map`/`andThen`. `decodeToml`/`decodeYaml`/`decodeJson` + `loadFromFile`. |
+| `ToString` | `Ipe.ToString` | `fromInt`/`fromFloat`/`fromBool`/`fromTime` route to canonical kernels — default to `ToString.fromInt n` over memorising per-type kernels. |
+| `Pure` | `Ipe.Pure` | Uniform `() -> Task Error a` companions for arity-0 stdlib bindings (`uuidV4`/`uuidV7`/`timeNow`/`timeUnixMillis`/`systemArgs`/`systemCwd`/`systemLoadEnv`/`ioReadLine`/`dbConnect`). |
 
 ### Diverging
 
@@ -290,7 +290,7 @@ normal app code.
 `default*` ctor + `with*` builder per field — always compose via builders
 so future field additions don't break call sites.
 
-## Sky.Live + Sky.Http.Server
+## Ipe.Live + Ipe.Http.Server
 
 ### Live.app shape
 
@@ -321,7 +321,7 @@ an update", use `Cmd.publish` instead.
 | Field | Type | Source |
 |---|---|---|
 | `req.path` | `String` | URL path |
-| `req.query` | `String` | raw `?...` (parse via `Sky.Core.Http.parseQuery` if needed) |
+| `req.query` | `String` | raw `?...` (parse via `Ipe.Http.parseQuery` if needed) |
 | `req.params` | `Dict String String` | matched-route `:name` segments |
 | `req.method` | `String` | request method |
 | `req.headers` | `Dict String String` | request headers, canonical case |
@@ -346,7 +346,7 @@ splices the returned list into `<head>` after required `<meta charset>`/
 omitting the field type-check and build unchanged.
 
 ```elm
-import Std.Live.Head as Head
+import Ipe.Live.Head as Head
 
 main =
     Live.app
@@ -370,7 +370,7 @@ headFor model =
     ]
 ```
 
-`Std.Live.Head` helpers (all return `Html msg`):
+`Ipe.Live.Head` helpers (all return `Html msg`):
 
 | Helper | Emits |
 |---|---|
@@ -383,7 +383,7 @@ headFor model =
 | `themeColor : String -> Html msg` | `<meta name="theme-color" content="…">` |
 | `rss : String -> String -> Html msg` | `<link rel="alternate" type="application/rss+xml" …>` |
 
-Pair with `Std.Html.node "link" […] []` for cases the helpers don't cover.
+Pair with `Ipe.Html.node "link" […] []` for cases the helpers don't cover.
 
 **SSE patches scope to `<body>`** — head updates require a full reload.
 For UI swapping `<head>` on every Msg: drop the `head` field and emit
@@ -422,8 +422,8 @@ emit a sentinel `<div>` w/ `data-sky-path` on every render. The runtime
 pushes/replaces history when the value differs from `location.pathname`.
 
 ```elm
-import Std.Html as Html
-import Std.Html.Attributes as Attr
+import Ipe.Html as Html
+import Ipe.Html.Attributes as Attr
 
 urlSync : Model -> Element msg
 urlSync model =
@@ -453,7 +453,7 @@ CSP-incompatible — use `data-sky-path` for URL updates.
 
 **Auth gates around routes.** For public-vs-authenticated apps:
 
-- Let Sky.Live route the URL to a page as usual.
+- Let Ipe.Live route the URL to a page as usual.
 - In `pageBody`/view, outer-case on `model.session`: signed-out always
   renders the sign-in surface regardless of page.
 - Use a single `currentPath : Model -> String` (not per-page
@@ -570,7 +570,7 @@ focused/open `<select>` are skipped and reconciled on the next
 interaction. Author takeaway: leave password fields uncontrolled (no
 `value`, no `onInput`) and they survive re-renders.
 
-### Sky.Http.Server
+### Ipe.Http.Server
 
 ```elm
 main =
@@ -591,35 +591,35 @@ Secure, SameSite) | extractors: `param`, `queryParam`, `header`,
 `Handler` alias:
 
 ```elm
-import Sky.Http.Server exposing (Handler)
+import Ipe.Http.Server exposing (Handler)
 
 getUser : Handler
 getUser req = ...
 ```
 
 `Handler` is a transparent alias for `Request -> Task Error Response`,
-exported from `Sky.Http.Server`. Long-form `: Request -> Task Error
+exported from `Ipe.Http.Server`. Long-form `: Request -> Task Error
 Response` still works. The same pattern works for any function-typed alias:
 `view : Renderer Msg`, `decodeUser : Decoder User`, etc.
 
 ### Dev console
 
-Every Sky.Live/Sky.Http.Server app auto-mounts a `Std.Ui` dev console at
+Every Ipe.Live/Ipe.Http.Server app auto-mounts a `Ipe.Ui` dev console at
 `/_sky/console` in dev mode, alongside structured logging, a Prometheus
 `/_sky/metrics` endpoint, and distributed tracing. In production
 (`ENV`≠dev) the console + banner are removed and metrics require auth.
 
-## Std.Ui — typed no-CSS layout DSL
+## Ipe.Ui — typed no-CSS layout DSL
 
-Layered above `Std.Html`; renders to inline-styled HTML server-side. Pick
+Layered above `Ipe.Html`; renders to inline-styled HTML server-side. Pick
 `row`/`column`/`el` for layout, attach typed attrs from `Background`/
 `Border`/`Font`/`Region` sub-modules — never write CSS.
 
 ```elm
-import Std.Ui as Ui
-import Std.Ui.Background as Background
-import Std.Ui.Border as Border
-import Std.Ui.Font as Font
+import Ipe.Ui as Ui
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Font as Font
 
 view model =
     Ui.layout []
@@ -638,20 +638,20 @@ view model =
 
 1. **Forms with sensitive inputs use `Ui.form` + `onSubmit DoSignIn`, NOT
    `onInput` per keystroke on password fields.** See the password pattern
-   in the Sky.Live section.
+   in the Ipe.Live section.
 
 2. **Real `<input>` elements use `Ui.input`, NOT `Ui.el [htmlAttribute
    "type" "text"]`.** `Ui.el` builds a Node rendering as `<div>` — browsers
    ignore `type=`/`value=` on non-inputs.
 
-3. **Std.Ui-heavy modules (~25+ polymorphic `Element Msg` helpers) MUST be
+3. **Ipe.Ui-heavy modules (~25+ polymorphic `Element Msg` helpers) MUST be
    split across multiple modules.** A monolithic `Main.ipe` can blow the HM
-   type-checker heap. Canonical split: `State.ipe` (types, no Std.Ui
+   type-checker heap. Canonical split: `State.ipe` (types, no Ipe.Ui
    imports) / `Update.ipe` / `View/Common.ipe` / one View module per page /
    `Main.ipe` dispatcher.
 
 4. **`Input.*` size/layout attrs apply to the wrapper; form attrs stay on
-   the inner control.** Every `Std.Ui.Input.*` call
+   the inner control.** Every `Ipe.Ui.Input.*` call
    (text/multiline/email/username/search/currentPassword/newPassword/
    slider/checkbox/radio/radioRow) routes layout attrs
    (`Ui.width`/`Ui.height`/`Ui.padding`/`Ui.spacing`/`Ui.alignX`/
@@ -738,12 +738,12 @@ cascade, page background image).
   `DarkMode`, `LightMode`, `ReducedMotion`, `TouchDevice`, `Portrait`,
   `Landscape`, `Custom Int Int` (minPx maxPx; 0=unset). `Ui.mediaQuery
   query [attrs] child` = escape hatch for a raw CSS media-query string.
-  Sky.Tui ignores `<style>`; Sky.Webview honours media queries identically
-  to Sky.Live. Pick `Ui.breakpoint` when the transition needs no typed Msg;
-  pick `Std.Ui.Responsive` when it does.
-- **Transitions + animations** (`Std.Ui.Transition`/`Std.Ui.Animation`/
-  `Std.Ui.Transform`) — typed CSS transitions + keyframe animations on a
-  Sky.Ui element; the browser handles frame timing. Both are auto-wrapped
+  Ipe.Tui ignores `<style>`; Ipe.Webview honours media queries identically
+  to Ipe.Live. Pick `Ui.breakpoint` when the transition needs no typed Msg;
+  pick `Ipe.Ui.Responsive` when it does.
+- **Transitions + animations** (`Ipe.Ui.Transition`/`Ipe.Ui.Animation`/
+  `Ipe.Ui.Transform`) — typed CSS transitions + keyframe animations on a
+  Ipe.Ui element; the browser handles frame timing. Both are auto-wrapped
   in `@media (prefers-reduced-motion: no-preference)` by default; opt out
   via `Transition.attributeUnsafe`/`respectReducedMotion = False` only when
   motion is semantically required (spinner, progress). `Transition.attribute
@@ -757,9 +757,9 @@ cascade, page background image).
   helpers.
 - **Aspect ratio + grid tracks** (`Ui.aspectRatio`/`Ui.aspectRatioWH`/
   `Ui.square`/`Ui.widescreen`/`Ui.fullHd`/`Ui.cinemascope` +
-  `Std.Ui.Grid.tracks`/`Grid.columns`/`Grid.rows`). `Ui.aspectRatio 1.777`/
+  `Ipe.Ui.Grid.tracks`/`Grid.columns`/`Grid.rows`). `Ui.aspectRatio 1.777`/
   `Ui.aspectRatioWH 16 9` lock a width-to-height ratio (pair w/ `Ui.width
-  Ui.fill`). `Std.Ui.Grid` exposes a typed `Track` ADT (`fr`, `px`, `auto`,
+  Ui.fill`). `Ipe.Ui.Grid` exposes a typed `Track` ADT (`fr`, `px`, `auto`,
   `minContent`, `maxContent`, `minmax`, `repeat`, `repeatAutoFit`,
   `repeatAutoFill`). Lighter-weight `Ui.gridColumns N` stays for the
   common-case product-card grid.
@@ -769,7 +769,7 @@ cascade, page background image).
 | Square avatars, 16:9 video embeds | `Ui.square` / `Ui.widescreen` / `Ui.aspectRatioWH w h` |
 | Custom decimal ratio (e.g. 2.35:1 cinemascope) | `Ui.aspectRatio Float` |
 | Product-card grid (all tracks same min-width) | `Ui.gridColumns N` |
-| Sidebar layout / mixed track types | `Std.Ui.Grid.columns [ fr 1, px 200, fr 1 ]` |
+| Sidebar layout / mixed track types | `Ipe.Ui.Grid.columns [ fr 1, px 200, fr 1 ]` |
 | Responsive card grid (re-flow on resize) | `Grid.columns [ Grid.repeatAutoFit (Grid.minmax (Grid.px 240) (Grid.fr 1)) ]` |
 | Both axes set explicitly | `Grid.tracks cols rows` |
 
@@ -803,13 +803,13 @@ Ui.input
     ]
 ```
 
-The callback receives a data URL. Decode w/ `Std.Encoding.base64Decode` →
+The callback receives a data URL. Decode w/ `Ipe.Encoding.base64Decode` →
 upload via `Http.post`. Ensure `[live] maxBodyBytes` ≥ your `fileMaxSize`.
 
-## Sky.Tui
+## Ipe.Tui
 
-TEA backend rendering `Std.Ui` to ANSI cells. Same
-`init`/`update`/`view`/`subscriptions` shape as Sky.Live.
+TEA backend rendering `Ipe.Ui` to ANSI cells. Same
+`init`/`update`/`view`/`subscriptions` shape as Ipe.Live.
 
 ```elm
 type alias Cfg model msg =
@@ -828,22 +828,22 @@ main = Tui.app cfg |> Task.run
 
 **Logical-pixel canvas** — `canvasWidth × canvasHeight` defines the design
 surface; the runtime converts `Ui.padding 8`/`Ui.px N` to cells. Covers
-~95%+ of Std.Ui primitives; unsupported attrs (gradients, fine
+~95%+ of Ipe.Ui primitives; unsupported attrs (gradients, fine
 letter-spacing, image fills) emit a deduped warning (`IPE_TUI_QUIET=1`
 suppresses). Wide chars (CJK+emoji+ZWJ) supported.
 
-**Sky.Cli password mode** — `Cli.readPassword : () -> Task Error String`
+**Ipe.Cli password mode** — `Cli.readPassword : () -> Task Error String`
 reads stdin with echo disabled; the password never echoes and never lands
 in scrollback.
 
-## Sky.Webview (desktop)
+## Ipe.Webview (desktop)
 
 Cross-backend mirror of `Live.app`+`Tui.app` — same TEA shape, native
 desktop window via the system webview. No HTTP server, no SSE, no session
 store.
 
 ```elm
-import Std.Webview as Webview
+import Ipe.Webview as Webview
 
 main =
     Webview.app
@@ -851,18 +851,18 @@ main =
         , update = update
         , view = view                  -- view : Model -> Element msg
         , subscriptions = subscriptions
-        , window = { title = "Sky App", size = ( 800, 600 ) }
+        , window = { title = "Ipê App", size = ( 800, 600 ) }
         }
         |> Task.run
 ```
 
-The same `view` fn paints identically across Sky.Live (web), Sky.Tui
-(terminal), and Sky.Webview (desktop). `WindowCfg` is closed (`{ title :
+The same `view` fn paints identically across Ipe.Live (web), Ipe.Tui
+(terminal), and Ipe.Webview (desktop). `WindowCfg` is closed (`{ title :
 String, size : (Int, Int) }`) today; macOS is supported first.
 
-**Std.Ui convention** — the `view` fn MUST wrap its output in `Ui.layout []
+**Ipe.Ui convention** — the `view` fn MUST wrap its output in `Ui.layout []
 (...)` to convert `Element` → `Html` before rendering. A raw `Ui.column
-[...]` body produces a blank window (same convention as Sky.Live).
+[...]` body produces a blank window (same convention as Ipe.Live).
 
 ## Active limitations
 
@@ -878,7 +878,7 @@ Current compiler limitations to work around when writing code.
    keys. For let-bound intermediates — `let d = Dict.fromList […] in
    Dict.toList d` — routing falls back to the String-key path. Workaround:
    inline the chain, or pipe (`d |> Dict.toList`).
-6. **`sky check` does not fully model FFI interface satisfaction.** Opaque
+6. **`ipe check` does not fully model FFI interface satisfaction.** Opaque
    FFI types unify with each other; concrete-satisfies-interface checks
    fall through.
 7. **Zero-arg calls follow the binding's declared type.** Bare `Uuid.v4`
@@ -887,7 +887,7 @@ Current compiler limitations to work around when writing code.
    String` binding with `()` triggers a codegen bug for arity-0 kernels
    (`Uuid.v4 ()` mis-applies the unit); stick to the declared shape.
    Dict/Set/Maybe/Result stay bare for `empty`/`none` etc. For uniform
-   `() -> Task Error a` shape, import `Sky.Core.Pure as Pure` and call the
+   `() -> Task Error a` shape, import `Ipe.Pure as Pure` and call the
    additive companions — `Pure.uuidV4 ()`/`Pure.uuidV7 ()`/`Pure.timeNow
    ()`/`Pure.timeUnixMillis ()`/`Pure.systemArgs ()`/`Pure.systemCwd ()`/
    `Pure.systemLoadEnv ()`/`Pure.ioReadLine ()`/`Pure.dbConnect ()`.
@@ -907,37 +907,37 @@ Current compiler limitations to work around when writing code.
 ## Build & test CLI
 
 ```bash
-sky init [name]                    # new project
+ipe init [name]                    # new project
 sky build src/Main.ipe             # compile → sky-out/app
-sky run src/Main.ipe               # build + run
-sky watch src/Main.ipe             # file-watch rebuild + restart
-sky check src/Main.ipe             # type-check + build
-sky fmt src/Main.ipe               # opinionated formatter (run after editing .ipe/.skyi)
-sky test tests/MyTest.ipe          # Sky.Test runner
-sky db status                      # Std.Db migrations: applied / pending / drift
-sky db migrate                     # apply pending Std.Db migrations, then exit
-sky doc Module                     # terminal docs
-sky doc --serve [--port 8080]      # browsable HTTP doc server
-sky doc --tui                      # interactive terminal doc browser
-sky doc --list                     # list every documented module
-sky doctor [--fix] [--verbose]     # project / environment health checks
-sky console [--port 8025]          # standalone Std.Ui console (--tui for the Sky.Tui backend)
-sky add <package>                  # add an FFI binding
-sky remove <package>
-sky install                        # regen missing FFI + deps
-sky update                         # update deps
+ipe run src/Main.ipe               # build + run
+ipe watch src/Main.ipe             # file-watch rebuild + restart
+ipe check src/Main.ipe             # type-check + build
+ipe fmt src/Main.ipe               # opinionated formatter (run after editing .ipe/.skyi)
+ipe test tests/MyTest.ipe          # Ipe.Test runner
+ipe db status                      # Ipe.Db migrations: applied / pending / drift
+ipe db migrate                     # apply pending Ipe.Db migrations, then exit
+ipe doc Module                     # terminal docs
+ipe doc --serve [--port 8080]      # browsable HTTP doc server
+ipe doc --tui                      # interactive terminal doc browser
+ipe doc --list                     # list every documented module
+ipe doctor [--fix] [--verbose]     # project / environment health checks
+ipe console [--port 8025]          # standalone Ipe.Ui console (--tui for the Ipe.Tui backend)
+ipe add <package>                  # add an FFI binding
+ipe remove <package>
+ipe install                        # regen missing FFI + deps
+ipe update                         # update deps
 sky clean                          # remove sky-out/ dist/
-sky lsp                            # JSON-RPC LSP server (stdio)
+ipe lsp                            # JSON-RPC LSP server (stdio)
 sky --version
 ```
 
-**Never run `sky build` from the repo root** — it overwrites the compiler
+**Never run `ipe build` from the repo root** — it overwrites the compiler
 binary in `sky-out/`. Always `cd` into the project/example dir first:
 
 ```bash
-cd examples/01-hello-world && sky build src/Main.ipe
+cd examples/01-hello-world && ipe build src/Main.ipe
 ```
 
-`sky check` ≡ `sky build` (both invoke the Rust build on the emitted code).
-Run `sky fmt` after editing `.ipe`/`.skyi` files (the formatter is
+`ipe check` ≡ `ipe build` (both invoke the Rust build on the emitted code).
+Run `ipe fmt` after editing `.ipe`/`.skyi` files (the formatter is
 idempotent).

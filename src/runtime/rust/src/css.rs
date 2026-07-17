@@ -1,11 +1,11 @@
-//! `Std.Css` leaf security kernels.
+//! `Ipe.Css` leaf security kernels.
 //!
-//! `Std.Css` is compiled **pure Sky source** (`crates/skyc/stdlib/Std/Css.ipe`):
+//! `Ipe.Css` is compiled **pure Ipê source** (`crates/ipe/stdlib/Std/Css.ipe`):
 //! the ADTs (`CssProp` / `CssRule` / `Length` / `Color` / keyword enums), the
-//! typed builders, and the render fold all live in Sky.  The ONLY Rust surface
+//! typed builders, and the render fold all live in Ipê.  The ONLY Rust surface
 //! is the four *leaf* security kernels below — thin `pub` shims over the shared,
-//! audited `css_safety` policy.  The compiled `Std.Css` imports them via
-//! `Sky.Core.CssSafety` and funnels every free-string entry point through them
+//! audited `css_safety` policy.  The compiled `Ipe.Css` imports them via
+//! `Ipe.CssSafety` and funnels every free-string entry point through them
 //! at construction (PARSE, DON'T VALIDATE):
 //!
 //! * `safe_value`      — `Css.safeValue    : String -> Maybe String`
@@ -15,16 +15,16 @@
 //!   (the `<style>`-body breakout floor for raw fragments)
 //!
 //! Policy is single-sourced in `css_safety.rs` (unchanged, audited).  A value /
-//! name / selector that fails policy yields `None`, which the Sky side turns
+//! name / selector that fails policy yields `None`, which the Ipê side turns
 //! into the explicit `CssDropped` / `CssRuleDropped` state — never a silent
 //! partial emit.  There is no ADT ↔ runtime-enum reflection (Design-2 retired):
-//! the leaf kernels are primitive-typed, so nothing here can `skyc`-succeed and
+//! the leaf kernels are primitive-typed, so nothing here can `ipe`-succeed and
 //! then `cargo`-fail.
 
 use crate::core::IpeMaybe;
 use crate::css_safety::{SafeCssPropertyName, SafeCssSelector, SafeCssValue, strip_style_close};
 
-/// Lift a policy `Option<String>` into the Sky `Maybe String` runtime
+/// Lift a policy `Option<String>` into the Ipê `Maybe String` runtime
 /// representation (`IpeMaybe<String>`), matching every other `String -> Maybe
 /// String` kernel (e.g. `uuid_parse`). The backend schemes these three kernels
 /// as `String -> Maybe String`, so the emitted call site expects `IpeMaybe`, not
@@ -39,7 +39,7 @@ fn to_sky_maybe(opt: Option<String>) -> IpeMaybe<String> {
 
 /// `Css.safeValue : String -> Maybe String`.  Parse a CSS declaration value
 /// through the audited whole-string scan; `Just(clean)` iff it carries no
-/// breakout / script-sink byte, else `Nothing` (the Sky side drops the
+/// breakout / script-sink byte, else `Nothing` (the Ipê side drops the
 /// declaration).
 #[must_use]
 pub fn safe_value(v: String) -> IpeMaybe<String> {

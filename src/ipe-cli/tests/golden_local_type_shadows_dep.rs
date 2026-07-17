@@ -20,7 +20,7 @@
 //!
 //! Run:
 //! ```text
-//! cargo test -p skyc --test golden_m102_local_type_shadows_dep
+//! cargo test -p ipe --test golden_m102_local_type_shadows_dep
 //! ```
 
 use std::path::{Path, PathBuf};

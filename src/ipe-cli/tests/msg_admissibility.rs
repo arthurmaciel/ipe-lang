@@ -3,7 +3,7 @@
 //! `live_app` bounds its Msg `Clone + Send + Sync + Debug + 'static`;
 //! `tui_app` / `webview_app` bound it `Clone + Send + 'static`. Without the
 //! gate, a Msg storing a non-admissible value (`Cmd` / `Sub` / `Task` /
-//! `Decoder` / `Db` / a function) makes `skyc` exit 0 and then `cargo build`
+//! `Decoder` / `Db` / a function) makes `ipe` exit 0 and then `cargo build`
 //! fail on the missing trait bound. The gate converts that into a fail-closed
 //! `IPE-L0125` diagnostic.
 //!
@@ -12,7 +12,7 @@
 //! and is therefore admissible in a Msg, unlike in a `Ipe.Live` Model (where
 //! serde is required). This fixture is the critical acceptance case.
 //!
-//! These tests are COMPILE-ONLY (they run the `skyc` pipeline + write the
+//! These tests are COMPILE-ONLY (they run the `ipe` pipeline + write the
 //! project, but never invoke `cargo`), so they are fast and NOT gated on
 //! `IPE_E2E`.
 
@@ -53,7 +53,7 @@ fn assert_rejected_with(
     }
 }
 
-/// Assert compilation succeeded (skyc-0).
+/// Assert compilation succeeded (ipe-0).
 fn assert_accepted(test_name: &str, source: &str) -> Result<(), BoxError> {
     match compile(test_name, source)? {
         Ok(()) => Ok(()),
@@ -282,7 +282,7 @@ main =
 
 /// CRITICAL asymmetry fixture: `Ipe.Live` Msg carries `Html Msg`.
 /// `Html` derives Clone+Debug+PartialEq (derivable) but is NOT serde.
-/// The Msg gate uses derivable (not serde), so this MUST be ACCEPTED (skyc-0).
+/// The Msg gate uses derivable (not serde), so this MUST be ACCEPTED (ipe-0).
 /// If the gate incorrectly used serde, this would be rejected — breaking the
 /// invariant that Msg and Model use different admissibility predicates.
 const LIVE_HTML_MSG: &str = r"module Main exposing (main)

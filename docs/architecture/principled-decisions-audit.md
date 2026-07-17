@@ -85,8 +85,8 @@ the reference shape.
 - **Friendly errors-as-data** (#13). ipê errors are typed `Diagnostic` enums
   (the only free-form `String` is `CompilerBug.detail`), each mapped to a
   forge-proof stable code, rendered in a deterministic panic-free 4-band layout.
-  Beyond Elm, ipê ships `skyc explain <CODE>` pages and machine-applicable
-  `skyc fix` — neither exists in Elm.
+  Beyond Elm, ipê ships `ipe explain <CODE>` pages and machine-applicable
+  `ipe fix` — neither exists in Elm.
 
 - **Exhaustiveness with witnesses** (#14). `NonExhaustiveCase { missing }`
   (IPE-T0010) lists uncovered constructors, and the no-`_ ->`-catchall walker
@@ -146,7 +146,7 @@ the reference shape.
   `Cmd.perform`/`Task` equivalents install the classifier before shipping
   concurrent division paths, or a ÷0 on a spawned stack becomes a raw abort.
 
-- **Sky's kernel-registry regex-scrape** (#22). Sky's `Sky.Doc.KernelRegistry`
+- **Ipê's kernel-registry regex-scrape** (#22). Ipê's `Ipê.Doc.KernelRegistry`
   regex-scrapes `lookupKernelType` (a 317-arm match) at Template-Haskell
   compile time — a validate-don't-parse drift hazard. ipê's designed `KernelId`
   registry (one resolved handle → {signature, per-backend emission}) already
@@ -178,7 +178,7 @@ the reference shape.
 
 ### #1 · Port TailCallOpt — user tail-recursion → constant stack (ADOPT, high)
 
-**Source:** `src/Sky/Build/TailCallOpt.hs`.
+**Source:** `src/Ipê/Build/TailCallOpt.hs`.
 **Improves:** P3 Soundness (primary) + P4 Efficiency.
 
 Sky-Haskell has a dedicated pass rewriting tail-recursive functions into a
@@ -188,9 +188,9 @@ backend emits **no** loop/continue for self-recursion (verified: zero `loop {` /
 are safe only because they are native Rust kernels; any **user-authored**
 tail-recursive function (e.g. `loop n acc = if n==0 then acc else loop (n-1) (acc+1)`)
 lowers to a real recursive Rust `fn` call → deep input → stack-overflow SIGABRT.
-That abort is a **reachable, non-recoverable trap from well-typed Sky code** that
+That abort is a **reachable, non-recoverable trap from well-typed Ipê code** that
 the synchronous panic classifier cannot catch (guard-page abort, not a panic),
-**plus** a documented-behaviour divergence (Elm/Sky promise tail recursion =
+**plus** a documented-behaviour divergence (Elm/Ipê promise tail recursion =
 constant stack), **plus** an O(N)→O(1) stack regression. It is the single largest
 real principled gap between the two backends.
 
@@ -215,9 +215,9 @@ second renderer over already-structured data.
 
 ipê's `Diagnostic` is fully structured typed enums
 (`crates/sky_diagnostics/src/diagnostic.rs`) but only a single human-console
-renderer exists (`render.rs`); `skyc` (`crates/skyc/src/lib.rs run_build`) has no
+renderer exists (`render.rs`); `ipe` (`crates/ipe/src/lib.rs run_build`) has no
 `--report`/`--json` flag. Add a `render_json(&Diagnostic) -> serde_json::Value`
-alongside `render()` plus a `skyc build --report=json` flag emitting code,
+alongside `render()` plus a `ipe build --report=json` flag emitting code,
 severity, primary span (byte + line/col), secondary spans, help lines, and the
 explain-page pointer. Because the Diagnostic is already owned, zonked structured
 data (no interner needed at report time), this is purely additive and cannot
@@ -287,11 +287,11 @@ diagnostics-area "multiple diagnostics per phase" candidates.)*
 **Improves:** P5 Completeness + P6 Readability.
 
 Every ipê stage returns a single `Diagnostic` and fails fast at the first `?`
-(`skyc::build`/`build_project` → `CliError::Pipeline { diag }`; no accumulation).
+(`ipe::build`/`build_project` → `CliError::Pipeline { diag }`; no accumulation).
 Adopt the technique **only at layers where declarations are genuinely
 independent** — name-resolution and type-checking: constrain/solve each
 top-level definition against the shared env, collect a `Vec<Diagnostic>`, sort
-(port Sky's `sortDiagnostics`: by file, region, severity), and render all. Keep
+(port Ipê's `sortDiagnostics`: by file, region, severity), and render all. Keep
 the parser and the soundness / exit-0-then-cargo-fail gates **fail-fast** —
 partial parse trees are not safe to keep constraining. The load-bearing guard is
 **cascade suppression**: after the first error a poisoned value must not spawn
@@ -322,7 +322,7 @@ stance.
 **Improves:** parse-don't-validate + P1 Security.
 
 ipê's FFI consumer/generator is not yet ported (tasks #40-42, design-only).
-`FfiGen.hs` rejects Sky-type strings carrying Go-side residue and anything shaped
+`FfiGen.hs` rejects Ipê-type strings carrying Go-side residue and anything shaped
 like a function/channel/map/ellipsis, refusing to emit a broken wrapper — the
 correct boundary discipline for the security-critical `ipe add` path. When
 porting the consumer (task #42), reproduce rejection-at-boundary: an untrusted
@@ -396,7 +396,7 @@ sweep / diagnostics quality) and are cheap or already half-wired are flagged
   not a nicety. Pull before declaring the sweep green on recursion-heavy examples.
 - **#3 Type-mismatch path breadcrumb (medium).** Cheap — renderer already done,
   only the `unify.rs` breadcrumb threading is missing. High leverage for the
-  agent-driven workflow (fewer skyc round-trips per fix). Pull early.
+  agent-driven workflow (fewer ipe round-trips per fix). Pull early.
 - **#5 Reject tabs in layout whitespace (medium).** Small, closes a
   parse-correctness / make-invalid-states ambiguity that can make sweep
   determinism depend on tab width. Cheap to pull early.
@@ -423,7 +423,7 @@ sweep / diagnostics quality) and are cheap or already half-wired are flagged
 ### Rename / de-abbreviation pass
 
 - None. No adopted candidate is naming-related; none belong to the
-  Sky→ipê rename or source-name de-abbreviation pass.
+  Ipê→ipê rename or source-name de-abbreviation pass.
 
 ### Reject (no timing — inert, guard rails recorded in §2)
 

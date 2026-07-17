@@ -8,7 +8,7 @@
 //! * irrefutable `let` destructure binders — a tuple `(a, b)` and a record
 //!   `{ x, y }`.
 //!
-//! `skyc` must emit `main.rs` byte-identical to the checked-in golden, and
+//! `ipe` must emit `main.rs` byte-identical to the checked-in golden, and
 //! (behind `IPE_E2E=1`) the emitted project must build and print `83`.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at

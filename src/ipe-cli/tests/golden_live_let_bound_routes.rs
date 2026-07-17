@@ -16,9 +16,9 @@
 //!   let-bound reference, not only an inline literal.
 //! * `emit_live_app_inner` lowers `routes = routeTable` (an `Expr::Var` ref) correctly.
 //! * `routed_page_field` detects the `page` field and emits `live_app_routed`.
-//! * No ICE — the full skyc pipeline (parse → canon → types → lower → emit) exits Ok.
+//! * No ICE — the full ipe pipeline (parse → canon → types → lower → emit) exits Ok.
 //!
-//! This is a pure skyc-pipeline check (no cargo build / runtime binary required)
+//! This is a pure ipe-pipeline check (no cargo build / runtime binary required)
 //! and runs without `IPE_E2E=1`.
 
 use std::path::{Path, PathBuf};
@@ -28,7 +28,7 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// Run the skyc pipeline on `tests/golden/live_let_bound_routes/Main.ipe`.
+/// Run the ipe pipeline on `tests/golden/live_let_bound_routes/Main.ipe`.
 /// Returns `None` when the embedded runtime is unavailable (skip).
 fn run_skyc() -> Option<Result<(), ipe::CliError>> {
     let root = repo_root();
@@ -48,7 +48,7 @@ fn run_skyc() -> Option<Result<(), ipe::CliError>> {
 
 /// IPE-I0001 regression: a `Live.app` whose `routes` field references a
 /// top-level `routeTable` binding (type `List LiveRoute`) MUST compile
-/// through the full skyc pipeline without an ICE.
+/// through the full ipe pipeline without an ICE.
 ///
 /// Pre-regression: the emitter assumed all `routes` elements were inlined
 /// `Expr::Ctor` nodes and panicked (ICE) on a let-bound reference.
@@ -72,7 +72,7 @@ fn live_let_bound_routes_compiles_no_ice() {
 // `routeTable`'s top-level fn signature renders the binding's inferred type
 // `List (LiveRoute Page)`. Pre-round-4 `IrType::LiveRoute` rendered a bare
 // `ipe_runtime::live::route::Route` — but the runtime `Route<Page>` has NO
-// default type parameter, so THIS golden itself was skyc-0 then cargo-fail
+// default type parameter, so THIS golden itself was ipe-0 then cargo-fail
 // (E0107) at the `routeTable` signature. Post-fix the signature renders
 // `Vec<Route<MainPage>>`.
 

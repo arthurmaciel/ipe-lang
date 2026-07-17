@@ -3,7 +3,7 @@ module Main exposing (main)
 -- SEAL fix 2026-07-11 (docs/architecture/
 -- error-record-literal-seal-fix-2026-07-11.md): `PanicInfo` is a NOMINAL
 -- opaque type backed by the runtime's `SkyPanicInfo`. A bare record literal
--- must be REJECTED at `skyc` time (IPE-T0001) — before this fix it was
+-- must be REJECTED at `ipe` time (IPE-T0001) — before this fix it was
 -- accepted (exit 0) and the emitted project failed `cargo build` with
 -- E0308 `expected SkyPanicInfo, found RecMessageStack`.
 

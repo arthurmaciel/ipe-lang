@@ -3,7 +3,7 @@
 //!
 //! Three scenarios around the `run()`-only SIGTERM forwarder:
 //!
-//! 1. `IPE_E2E=1`: a PID-only `kill -TERM <skyc>` (the systemd-style shape —
+//! 1. `IPE_E2E=1`: a PID-only `kill -TERM <ipe>` (the systemd-style shape —
 //!    NOT the whole foreground process group Ctrl-C signals) runs the full
 //!    orderly teardown, so the supervised child is reaped, never orphaned.
 //! 2. Always-on negative control: `spawn()` (the embedder path) must NEVER
@@ -129,7 +129,7 @@ fn pid_is_alive(pid: u32) -> bool {
     std::path::Path::new(&format!("/proc/{pid}")).exists()
 }
 
-/// Spawn a REAL `skyc watch` subprocess (the `run()` path, `external_stop =
+/// Spawn a REAL `ipe watch` subprocess (the `run()` path, `external_stop =
 /// None` — the only caller the SIGTERM forwarder is installed for).
 #[cfg(target_os = "linux")]
 fn spawn_skyc_watch(
@@ -169,9 +169,9 @@ fn wait_for_exit(
     None
 }
 
-/// A supervisor's `kill -TERM <skyc-pid>` (PID only — explicitly NOT the
+/// A supervisor's `kill -TERM <ipe-pid>` (PID only — explicitly NOT the
 /// process group, reproducing the systemd-style gap) must run the full
-/// orderly teardown: the `skyc` process exits cleanly AND the supervised
+/// orderly teardown: the `ipe` process exits cleanly AND the supervised
 /// child is gone (killed and reaped), never an orphan holding the port.
 #[cfg(target_os = "linux")]
 #[test]
@@ -196,7 +196,7 @@ fn watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_skyc_process()
     let child_pid = find_pid_by_environ_kv("IPE_LIVE_PORT", &port.to_string())
         .ok_or("the supervised child must be discoverable via /proc once v1 is serving")?;
 
-    sigterm(skyc_proc.id())?;
+    sigterm(ipe_proc.id())?;
 
     let status = wait_for_exit(&mut skyc_proc, Duration::from_secs(30));
     let Some(status) = status else {
@@ -332,18 +332,18 @@ fn double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_sigkill() ->
     // First SIGTERM: starts the documented graceful teardown (bounded
     // `graceful_stop` wait — 3 s default — then SIGKILL to the child).
     let t0 = Instant::now();
-    sigterm(skyc_proc.id())?;
+    sigterm(ipe_proc.id())?;
 
     // Partway through the grace window — the forwarder thread has already
     // consumed the first signal and returned by now.
     std::thread::sleep(Duration::from_millis(800));
     assert!(
-        matches!(skyc_proc.try_wait(), Ok(None)),
+        matches!(ipe_proc.try_wait(), Ok(None)),
         "sanity: teardown must still be inside its bounded grace window"
     );
 
     // Second SIGTERM to the SAME PID.
-    sigterm(skyc_proc.id())?;
+    sigterm(ipe_proc.id())?;
 
     let status = wait_for_exit(&mut skyc_proc, Duration::from_secs(30));
     let elapsed = t0.elapsed();

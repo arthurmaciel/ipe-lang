@@ -416,7 +416,7 @@ fn io_bug(path: &Path, e: &std::io::Error) -> Diagnostic {
     }
 }
 
-/// Locate the Sky runtime module tree (`src/runtime/rust/src/ipe_runtime`), via
+/// Locate the Ipê runtime module tree (`src/runtime/rust/src/ipe_runtime`), via
 /// `IPE_RUNTIME_DIR` or an upward search from the current directory.
 fn resolve_runtime() -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("IPE_RUNTIME_DIR") {
