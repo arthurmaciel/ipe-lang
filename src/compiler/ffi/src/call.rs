@@ -243,6 +243,83 @@ impl Call {
         idxs
     }
 
+    /// Re-serialize to the wire JSON shape, omitting every default-valued
+    /// key exactly as the inspector does. The cached `kernel.json` carries
+    /// this re-serialization of the validated domain value, so a warm build
+    /// re-runs the identical decode gate on read (a hand-corrupted cache is
+    /// re-rejected).
+    #[must_use]
+    pub fn to_wire_json(&self) -> serde_json::Value {
+        let mut o = serde_json::Map::new();
+        let kind = match self.kind {
+            CallKind::Method => "method",
+            CallKind::Function => "function",
+        };
+        o.insert("kind".into(), kind.into());
+        o.insert("path".into(), serde_json::json!(self.path));
+        if !self.type_args.is_empty() {
+            let ts: Vec<serde_json::Value> = self
+                .type_args
+                .iter()
+                .map(InnerTypeRef::to_wire_json)
+                .collect();
+            o.insert("typeArgs".into(), ts.into());
+        }
+        if let Some(m) = &self.method {
+            o.insert("method".into(), m.clone().into());
+        }
+        if let Some(r) = self.receiver {
+            let by = match r.by {
+                ByKind::Ref => "ref",
+                ByKind::RefMut => "refmut",
+                ByKind::Value => "value",
+            };
+            o.insert(
+                "receiver".into(),
+                serde_json::json!({"arg": r.arg, "by": by}),
+            );
+        }
+        if !self.args.is_empty() {
+            o.insert("args".into(), serde_json::json!(self.args));
+        }
+        if !self.arg_types.is_empty() {
+            let ts: Vec<serde_json::Value> = self
+                .arg_types
+                .iter()
+                .map(ArgTypeRef::to_wire_json)
+                .collect();
+            o.insert("argTypes".into(), ts.into());
+        }
+        o.insert("ret".into(), self.ret.to_wire_json());
+        if !self.assoc_on_type {
+            o.insert("assocOnType".into(), false.into());
+        }
+        if !self.iter_adapters.is_empty() {
+            o.insert("iterAdapters".into(), serde_json::json!(self.iter_adapters));
+        }
+        if !self.borrow_as_ref_args.is_empty() {
+            o.insert(
+                "borrowAsRefArgs".into(),
+                serde_json::json!(self.borrow_as_ref_args),
+            );
+        }
+        if let Some((s, t)) = &self.trait_qualifier {
+            o.insert("traitQualifier".into(), serde_json::json!([s, t]));
+        }
+        if self.is_async {
+            o.insert("isAsync".into(), true.into());
+        }
+        if !self.method_turbofish.is_empty() {
+            let ts: Vec<serde_json::Value> = self
+                .method_turbofish
+                .iter()
+                .map(InnerTypeRef::to_wire_json)
+                .collect();
+            o.insert("methodTurbofish".into(), ts.into());
+        }
+        serde_json::Value::Object(o)
+    }
+
     /// The structural checks that make every render method total.
     fn validate(&self, n_params: usize) -> Result<(), CallDefect> {
         // (1) every param ref anywhere is < n_params.
@@ -869,6 +946,37 @@ mod tests {
         );
         // The wrapper param type is the carrier, not the foreign width.
         assert_eq!(c.render_arg_type_at(&[], 0), "i64");
+    }
+
+    #[test]
+    fn wire_round_trip_is_lossless_and_re_validates() {
+        for v in [
+            static_ctor(),
+            method_left(),
+            json!({
+                "kind": "method",
+                "path": ["::db", "Db"],
+                "method": "get_obj",
+                "receiver": {"arg": 0, "by": "refmut"},
+                "args": [1],
+                "argTypes": [
+                    {"ctor": "::db::Db"},
+                    {"closure": {"kind": "FnOnce", "byRef": true,
+                                  "argTypes": [{"serdeValue": true}], "ret": {"prim": "bool"}}}
+                ],
+                "ret": {"serdeValueRef": true},
+                "assocOnType": false,
+                "borrowAsRefArgs": [],
+                "traitQualifier": ["::db::Db", "::db::Repo"],
+                "isAsync": true,
+                "methodTurbofish": [{"serdeValue": true}]
+            }),
+        ] {
+            let first = decode(2, v).expect("decodes");
+            let rewired = first.to_wire_json();
+            let second = Call::decode(2, rewired.clone(), "test_fn").expect("re-decodes");
+            assert_eq!(first, second, "round-trip must be lossless: {rewired}");
+        }
     }
 
     // ── negative corpus: each structural check rejects, never defaults ──
