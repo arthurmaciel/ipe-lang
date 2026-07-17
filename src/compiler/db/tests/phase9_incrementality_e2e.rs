@@ -16,7 +16,7 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use ipe_backend_rust::DbDriver;
-use ipe_db::{BuildConfig, ModuleOrigin, SkyDatabase, SourceFile, SourceRoot};
+use ipe_db::{BuildConfig, ModuleOrigin, IpeDatabase, SourceFile, SourceRoot};
 
 /// A shared, poison-safe log of executed-query debug keys.
 #[derive(Clone, Default)]
@@ -47,10 +47,10 @@ impl EventLog {
     }
 }
 
-fn logged_db() -> (SkyDatabase, EventLog) {
+fn logged_db() -> (IpeDatabase, EventLog) {
     let log = EventLog::default();
     let sink = log.clone();
-    let db = SkyDatabase::with_event_callback(Box::new(move |event: salsa::Event| {
+    let db = IpeDatabase::with_event_callback(Box::new(move |event: salsa::Event| {
         if let salsa::EventKind::WillExecute { database_key } = event.kind {
             sink.push(format!("{database_key:?}"));
         }
@@ -58,7 +58,7 @@ fn logged_db() -> (SkyDatabase, EventLog) {
     (db, log)
 }
 
-fn file(db: &SkyDatabase, path: &[&str], text: &str) -> SourceFile {
+fn file(db: &IpeDatabase, path: &[&str], text: &str) -> SourceFile {
     SourceFile::new(
         db,
         path.iter().map(|s| (*s).to_owned()).collect(),
@@ -67,7 +67,7 @@ fn file(db: &SkyDatabase, path: &[&str], text: &str) -> SourceFile {
     )
 }
 
-fn root_of(db: &SkyDatabase, files: &[(&[&str], SourceFile)]) -> SourceRoot {
+fn root_of(db: &IpeDatabase, files: &[(&[&str], SourceFile)]) -> SourceRoot {
     SourceRoot::new(
         db,
         files
@@ -100,7 +100,7 @@ fn body_edit_reexecutes_only_the_edited_module_file() {
     assert!(
         warm.files
             .keys()
-            .any(|p| p.as_str().starts_with("src/sky_mods/")),
+            .any(|p| p.as_str().starts_with("src/ipe_mods/")),
         "the fixture must genuinely split into per-module files"
     );
 

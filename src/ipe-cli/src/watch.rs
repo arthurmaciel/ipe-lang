@@ -31,7 +31,7 @@
 //! 2. **coalesce thread** — [`ipe_watch::coalesce_loop`] turns that raw
 //!    stream into settled batches (the debounce half).
 //! 3. **compile worker thread** (spawned fresh per rebuild cycle) — holds a
-//!    CLONED [`ipe_db::SkyDatabase`] handle and runs [`compile_prepared`]
+//!    CLONED [`ipe_db::IpeDatabase`] handle and runs [`compile_prepared`]
 //!    inside [`salsa::Cancelled::catch`]. The orchestrator thread never runs
 //!    a salsa query itself; it only mutates inputs (which is what makes a
 //!    superseding edit cancel the in-flight worker — see the cancellation
@@ -44,7 +44,7 @@
 //!
 //! ## Cancellation, and why it needs no extra machinery
 //!
-//! Salsa's `#[salsa::input]` setters require `&mut SkyDatabase` (routed
+//! Salsa's `#[salsa::input]` setters require `&mut IpeDatabase` (routed
 //! through `zalsa_mut()`), which — per `salsa::Storage`'s own documented
 //! contract (verified against the pinned `salsa=0.27.2` source,
 //! `src/storage.rs`'s `cancel_others`) — sets a cancellation flag and BLOCKS
@@ -653,7 +653,7 @@ fn run_inner(
         });
     }
 
-    let mut db_main = ipe_db::SkyDatabase::new();
+    let mut db_main = ipe_db::IpeDatabase::new();
     let mut source_root: Option<ipe_db::SourceRoot> = None;
     let mut config: Option<ipe_db::BuildConfig> = None;
     let mut supervisor = ipe_watch::SupervisorState::fresh();

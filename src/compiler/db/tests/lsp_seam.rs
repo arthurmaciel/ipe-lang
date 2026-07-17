@@ -29,9 +29,9 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use ipe_db::{ImportResolution, ModuleOrigin, SkyDatabase, SourceFile, SourceRoot};
+use ipe_db::{ImportResolution, ModuleOrigin, IpeDatabase, SourceFile, SourceRoot};
 
-fn file(db: &SkyDatabase, path: &[&str], text: &str) -> SourceFile {
+fn file(db: &IpeDatabase, path: &[&str], text: &str) -> SourceFile {
     SourceFile::new(
         db,
         path.iter().map(|s| (*s).to_owned()).collect(),
@@ -40,7 +40,7 @@ fn file(db: &SkyDatabase, path: &[&str], text: &str) -> SourceFile {
     )
 }
 
-fn root_of(db: &SkyDatabase, files: &[(&[&str], SourceFile)]) -> SourceRoot {
+fn root_of(db: &IpeDatabase, files: &[(&[&str], SourceFile)]) -> SourceRoot {
     SourceRoot::new(
         db,
         files
@@ -61,20 +61,20 @@ const ENTRY_TYPE_ERROR: &str = "module Main exposing (main)\n\nimport A exposing
     main = \"not an int\"\n";
 
 // ---------------------------------------------------------------------------
-// (b) `SkyDatabase` is `Send` — a compile-time proof, not an inference from
+// (b) `IpeDatabase` is `Send` — a compile-time proof, not an inference from
 // the fact that the tests below happen to compile.
 // ---------------------------------------------------------------------------
 
 /// The LSP's request loop must be able to hand a database clone to a
-/// worker thread per demand (exactly [`ipe_db::SkyDatabase`]'s existing
+/// worker thread per demand (exactly [`ipe_db::IpeDatabase`]'s existing
 /// `Clone` + `ipe watch`'s orchestrator/worker split). This is a
 /// compile-time assertion, not a runtime one: if a future change to
-/// `SharedInterner` or the `salsa::Storage<SkyDatabase>` field ever made the
+/// `SharedInterner` or the `salsa::Storage<IpeDatabase>` field ever made the
 /// database `!Send`, this line fails to compile rather than the property
 /// silently regressing.
 const _: fn() = || {
     const fn assert_send<T: Send>() {}
-    assert_send::<SkyDatabase>();
+    assert_send::<IpeDatabase>();
 };
 
 // ---------------------------------------------------------------------------
@@ -92,7 +92,7 @@ fn lsp_shaped_buffer_edit_drives_diagnostics_and_navigation_in_memory() {
     // "Open buffer": the editor hands the compiler two modules' full text.
     // Note there is no `Path`, no `std::fs`, anywhere in this test — the
     // structural proof that this pattern never touches disk.
-    let mut db = SkyDatabase::new();
+    let mut db = IpeDatabase::new();
     let a = file(&db, &["A"], DEP_A);
     let entry = file(&db, &["Main"], ENTRY_OK);
     let root = root_of(&db, &[(&["A"], a), (&["Main"], entry)]);
@@ -171,7 +171,7 @@ fn lsp_diagnostics_query_is_cancelled_by_the_next_keystroke_and_converges_to_lat
     let (first_exec_tx, first_exec_rx) = mpsc::channel::<()>();
     let signalled = Arc::new(AtomicBool::new(false));
     let signalled_in_callback = Arc::clone(&signalled);
-    let mut db = SkyDatabase::with_event_callback(Box::new(move |event: salsa::Event| {
+    let mut db = IpeDatabase::with_event_callback(Box::new(move |event: salsa::Event| {
         if matches!(event.kind, salsa::EventKind::WillExecute { .. })
             && !signalled_in_callback.swap(true, Ordering::SeqCst)
         {

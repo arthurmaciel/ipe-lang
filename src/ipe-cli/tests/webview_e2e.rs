@@ -55,7 +55,7 @@
 /// scheme.  Using `Ty::Tuple([])` (empty tuple) is NOT equivalent — the two
 /// don't unify, surfacing as IPE-T0001.
 ///
-/// Note: G3 — the emitted `fn main` uses `block_on_current_thread(sky_main())`
+/// Note: G3 — the emitted `fn main` uses `block_on_current_thread(ipe_main())`
 /// (not `block_on`), enforced by the anchor-asserted switch in `project.rs`.
 /// This keeps the tao/Cocoa event loop on the true main thread (macOS + Linux
 /// both require it).
@@ -121,15 +121,15 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// `project::webview_cargo_toml`) so `oracle::build_rust_binary` — which runs
 /// a plain `cargo build` — picks up the `webview` feature without any extra
 /// `--features` flag.
-fn compile_and_build(test_name: &str, sky_source: &str) -> Result<std::path::PathBuf, BoxError> {
-    let sky_dir = std::env::temp_dir().join(format!("webview_e2e_{test_name}_sky"));
-    let _ = std::fs::remove_dir_all(&sky_dir);
-    std::fs::create_dir_all(&sky_dir).map_err(|e| -> BoxError {
+fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::PathBuf, BoxError> {
+    let ipe_dir = std::env::temp_dir().join(format!("webview_e2e_{test_name}_sky"));
+    let _ = std::fs::remove_dir_all(&ipe_dir);
+    std::fs::create_dir_all(&ipe_dir).map_err(|e| -> BoxError {
         format!("{test_name}: cannot create sky source dir: {e}").into()
     })?;
 
-    let entry = sky_dir.join("Main.sky");
-    std::fs::write(&entry, sky_source)
+    let entry = ipe_dir.join("Main.sky");
+    std::fs::write(&entry, ipe_source)
         .map_err(|e| -> BoxError { format!("{test_name}: cannot write Main.sky: {e}").into() })?;
 
     let out_dir = std::env::temp_dir().join(format!("webview_e2e_{test_name}_emitted"));
@@ -161,7 +161,7 @@ fn compile_and_build(test_name: &str, sky_source: &str) -> Result<std::path::Pat
 /// - manifest: `webview_cargo_toml` adds `"webview"` to default
 ///   features, wires `webview = ["dep:wry", "dep:tao"]`, appends `wry` + `tao`
 ///   optional deps, and the runtime `mod.rs` gets the `webview` module line.
-/// - G3: the emitted `fn main` uses `block_on_current_thread(sky_main())`
+/// - G3: the emitted `fn main` uses `block_on_current_thread(ipe_main())`
 ///   (anchor-asserted in `project::emit_program`; a zero-match aborts with
 ///   `CompilerBug` rather than silently shipping the wrong executor).
 #[test]

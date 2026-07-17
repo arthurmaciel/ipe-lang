@@ -30,7 +30,7 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use ipe_db::{BuildConfig, ModuleOrigin, SkyDatabase, SourceFile, SourceRoot};
+use ipe_db::{BuildConfig, ModuleOrigin, IpeDatabase, SourceFile, SourceRoot};
 
 const DEP_A: &str = "module A exposing (visible)\n\nvisible = 1\n";
 const ENTRY: &str =
@@ -41,7 +41,7 @@ fn compile_worker_is_cancelled_by_a_concurrent_input_edit() {
     let (first_exec_tx, first_exec_rx) = mpsc::channel::<()>();
     let signalled = Arc::new(AtomicBool::new(false));
     let signalled_in_callback = Arc::clone(&signalled);
-    let mut db = SkyDatabase::with_event_callback(Box::new(move |event: salsa::Event| {
+    let mut db = IpeDatabase::with_event_callback(Box::new(move |event: salsa::Event| {
         if matches!(event.kind, salsa::EventKind::WillExecute { .. })
             && !signalled_in_callback.swap(true, Ordering::SeqCst)
         {
@@ -113,7 +113,7 @@ fn compile_worker_is_cancelled_by_a_concurrent_input_edit() {
 /// unrelated fixture defect.
 #[test]
 fn the_same_fixture_compiles_cleanly_without_a_concurrent_edit() {
-    let db = SkyDatabase::new();
+    let db = IpeDatabase::new();
     let a_path = vec!["A".to_owned()];
     let main_path = vec!["Main".to_owned()];
     let a_file = SourceFile::new(&db, a_path.clone(), DEP_A.to_owned(), ModuleOrigin::User);

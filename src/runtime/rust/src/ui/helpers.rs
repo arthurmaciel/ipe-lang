@@ -9,7 +9,7 @@
 //! and to avoid shadowing the runtime's own `element` type names.
 
 use super::element::{Attribute, Color, Description, Element, HAlign, Length, Location, PseudoClass, VAlign};
-use crate::core::SkyMaybe;
+use crate::core::IpeMaybe;
 use crate::html::Html;
 
 /// Inline colour → CSS string.  Mirrors `render::color_css`; kept private so
@@ -94,20 +94,20 @@ pub fn ui_grid_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M>>) -
 /// semantically disabled.
 pub fn ui_button_<M: Clone>(
     attrs: Vec<Attribute<M>>,
-    on_press: SkyMaybe<M>,
+    on_press: IpeMaybe<M>,
     label: Element<M>,
 ) -> Element<M> {
     use crate::html::{Attribute as HtmlAttribute, Event};
     let mut full = Vec::with_capacity(attrs.len() + 2);
     match on_press {
-        SkyMaybe::Just(msg) => {
+        IpeMaybe::Just(msg) => {
             full.push(Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnMsg(
                 "click".into(),
                 msg,
             ))));
             full.push(Attribute::AttrPointer);
         }
-        SkyMaybe::Nothing => {
+        IpeMaybe::Nothing => {
             full.push(Attribute::AttrAttribute("disabled".into(), "true".into()));
         }
     }

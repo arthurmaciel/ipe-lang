@@ -52,12 +52,12 @@ fn fresh_dirs(tag: &str) -> Result<(PathBuf, PathBuf), BoxError> {
         std::process::id(),
         Instant::now().elapsed().as_nanos()
     ));
-    let sky_dir = base.join("sky");
+    let ipe_dir = base.join("sky");
     let out_dir = base.join("out");
     let _ = std::fs::remove_dir_all(&base);
-    std::fs::create_dir_all(&sky_dir)
-        .map_err(|e| -> BoxError { format!("mkdir {}: {e}", sky_dir.display()).into() })?;
-    Ok((sky_dir, out_dir))
+    std::fs::create_dir_all(&ipe_dir)
+        .map_err(|e| -> BoxError { format!("mkdir {}: {e}", ipe_dir.display()).into() })?;
+    Ok((ipe_dir, out_dir))
 }
 
 /// Poll `GET / HTTP/1.1` on `127.0.0.1:port` for up to `timeout`, returning
@@ -147,8 +147,8 @@ fn start_watch(
     Ok(skyc::watch::spawn(opts))
 }
 
-fn write_main(sky_dir: &Path, source: &str) -> Result<(), BoxError> {
-    std::fs::write(sky_dir.join("Main.sky"), source)
+fn write_main(ipe_dir: &Path, source: &str) -> Result<(), BoxError> {
+    std::fs::write(ipe_dir.join("Main.sky"), source)
         .map_err(|e| -> BoxError { format!("write Main.sky: {e}").into() })
 }
 
@@ -222,19 +222,19 @@ fn watch_rebuild_on_save_swaps_the_running_binary() -> Result<(), BoxError> {
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
-    let (sky_dir, out_dir) = fresh_dirs("rebuild_swap")?;
-    write_main(&sky_dir, &server_fixture("v1"))?;
+    let (ipe_dir, out_dir) = fresh_dirs("rebuild_swap")?;
+    write_main(&ipe_dir, &server_fixture("v1"))?;
 
     let sink = EventSink::default();
     let port = 19151;
-    let (join, handle) = start_watch(&sky_dir.join("Main.sky"), &out_dir, port, &sink)?;
+    let (join, handle) = start_watch(&ipe_dir.join("Main.sky"), &out_dir, port, &sink)?;
 
     assert!(
         wait_for_body(port, "v1", Duration::from_secs(120)),
         "initial cold build+spawn must serve v1 within budget"
     );
 
-    write_main(&sky_dir, &server_fixture("v2"))?;
+    write_main(&ipe_dir, &server_fixture("v2"))?;
     assert!(
         wait_for_body(port, "v2", Duration::from_secs(60)),
         "warm rebuild must swap the running binary to serve v2"
@@ -249,12 +249,12 @@ fn watch_keeps_last_good_binary_alive_on_a_syntax_error() -> Result<(), BoxError
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
-    let (sky_dir, out_dir) = fresh_dirs("last_good")?;
-    write_main(&sky_dir, &server_fixture("v1"))?;
+    let (ipe_dir, out_dir) = fresh_dirs("last_good")?;
+    write_main(&ipe_dir, &server_fixture("v1"))?;
 
     let sink = EventSink::default();
     let port = 19152;
-    let (join, handle) = start_watch(&sky_dir.join("Main.sky"), &out_dir, port, &sink)?;
+    let (join, handle) = start_watch(&ipe_dir.join("Main.sky"), &out_dir, port, &sink)?;
 
     assert!(
         wait_for_body(port, "v1", Duration::from_secs(120)),
@@ -265,7 +265,7 @@ fn watch_keeps_last_good_binary_alive_on_a_syntax_error() -> Result<(), BoxError
     // running process. Introduce the deliberate syntax error, then assert
     // the server is STILL serving v1 after a window comfortably longer
     // than a real rebuild would take.
-    write_main(&sky_dir, BROKEN_SOURCE)?;
+    write_main(&ipe_dir, BROKEN_SOURCE)?;
     std::thread::sleep(Duration::from_secs(3));
     assert!(
         http_get_body(port).is_some_and(|b| b.contains("v1")),
@@ -274,7 +274,7 @@ fn watch_keeps_last_good_binary_alive_on_a_syntax_error() -> Result<(), BoxError
 
     // Recovery: fixing the source must produce a fresh green build and
     // restart onto it.
-    write_main(&sky_dir, &server_fixture("v2"))?;
+    write_main(&ipe_dir, &server_fixture("v2"))?;
     assert!(
         wait_for_body(port, "v2", Duration::from_secs(60)),
         "watch must recover once the syntax error is fixed"
@@ -289,12 +289,12 @@ fn watch_coalesces_a_rapid_double_save_into_one_rebuild() -> Result<(), BoxError
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
-    let (sky_dir, out_dir) = fresh_dirs("coalesce")?;
-    write_main(&sky_dir, &server_fixture("v1"))?;
+    let (ipe_dir, out_dir) = fresh_dirs("coalesce")?;
+    write_main(&ipe_dir, &server_fixture("v1"))?;
 
     let sink = EventSink::default();
     let port = 19153;
-    let (join, handle) = start_watch(&sky_dir.join("Main.sky"), &out_dir, port, &sink)?;
+    let (join, handle) = start_watch(&ipe_dir.join("Main.sky"), &out_dir, port, &sink)?;
 
     assert!(
         wait_for_body(port, "v1", Duration::from_secs(120)),
@@ -306,9 +306,9 @@ fn watch_coalesces_a_rapid_double_save_into_one_rebuild() -> Result<(), BoxError
     // Two writes ~20ms apart — well inside the 120ms quiescence window
     // configured in `start_watch` — must coalesce into exactly ONE
     // rebuild cycle, and the LAST write (v3) must be what ships.
-    write_main(&sky_dir, &server_fixture("v2"))?;
+    write_main(&ipe_dir, &server_fixture("v2"))?;
     std::thread::sleep(Duration::from_millis(20));
-    write_main(&sky_dir, &server_fixture("v3"))?;
+    write_main(&ipe_dir, &server_fixture("v3"))?;
 
     assert!(
         wait_for_body(port, "v3", Duration::from_secs(60)),
@@ -342,12 +342,12 @@ fn dropping_a_watch_handle_without_stop_still_reaps_the_supervised_child() -> Re
         eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
-    let (sky_dir, out_dir) = fresh_dirs("drop_reaps_child")?;
-    write_main(&sky_dir, &server_fixture("v1"))?;
+    let (ipe_dir, out_dir) = fresh_dirs("drop_reaps_child")?;
+    write_main(&ipe_dir, &server_fixture("v1"))?;
 
     let sink = EventSink::default();
     let port = 19155;
-    let (join, handle) = start_watch(&sky_dir.join("Main.sky"), &out_dir, port, &sink)?;
+    let (join, handle) = start_watch(&ipe_dir.join("Main.sky"), &out_dir, port, &sink)?;
 
     assert!(
         wait_for_body(port, "v1", Duration::from_secs(120)),

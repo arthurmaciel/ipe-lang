@@ -164,10 +164,10 @@ main =
 /// Compile `source` through the skyc pipeline (no cargo). Returns `None` to
 /// skip when the embedded runtime cannot be resolved.
 fn compile_src(test_name: &str, source: &str) -> Option<Result<(), skyc::CliError>> {
-    let sky_dir = std::env::temp_dir().join(format!("live_routed_empty_{test_name}_sky"));
-    let _ = std::fs::remove_dir_all(&sky_dir);
-    std::fs::create_dir_all(&sky_dir).ok()?;
-    let entry = sky_dir.join("Main.sky");
+    let ipe_dir = std::env::temp_dir().join(format!("live_routed_empty_{test_name}_sky"));
+    let _ = std::fs::remove_dir_all(&ipe_dir);
+    std::fs::create_dir_all(&ipe_dir).ok()?;
+    let entry = ipe_dir.join("Main.sky");
     std::fs::write(&entry, source).ok()?;
     let out = std::env::temp_dir().join(format!("live_routed_empty_{test_name}_out"));
     let _ = std::fs::remove_dir_all(&out);

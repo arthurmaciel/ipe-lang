@@ -13,18 +13,18 @@ use super::json::{Decoder, JsonVal};
 use super::*;
 
 // Config.nullable : Decoder a -> Decoder (Maybe a)
-// Returns Sky's SkyMaybe (not Rust Option) so the decoded value matches the
+// Returns Sky's IpeMaybe (not Rust Option) so the decoded value matches the
 // `Maybe a` the Sky annotation lowers to.
 pub fn config_nullable<E: From<String> + 'static, T: 'static + Send>(
     decoder: Decoder<E, T>,
-) -> Decoder<E, SkyMaybe<T>> {
+) -> Decoder<E, IpeMaybe<T>> {
     let inner_fields = decoder.fields.clone();
     Decoder::new(
         Box::new(move |v| match v {
-            JsonVal::Null => SkyResult::Ok(SkyMaybe::Nothing),
+            JsonVal::Null => IpeResult::Ok(IpeMaybe::Nothing),
             _ => match (decoder.run)(v) {
-                SkyResult::Ok(t) => SkyResult::Ok(SkyMaybe::Just(t)),
-                SkyResult::Err(e) => SkyResult::Err(e),
+                IpeResult::Ok(t) => IpeResult::Ok(IpeMaybe::Just(t)),
+                IpeResult::Err(e) => IpeResult::Err(e),
             },
         }),
         inner_fields,
@@ -34,10 +34,10 @@ pub fn config_nullable<E: From<String> + 'static, T: 'static + Send>(
 fn run_decoder<E: From<String> + 'static, T>(
     parsed: Result<JsonVal, String>,
     decoder: Decoder<E, T>,
-) -> SkyResult<E, T> {
+) -> IpeResult<E, T> {
     match parsed {
         Ok(v) => (decoder.run)(&v),
-        Err(e) => SkyResult::Err(str_err(&e)),
+        Err(e) => IpeResult::Err(str_err(&e)),
     }
 }
 
@@ -45,7 +45,7 @@ fn run_decoder<E: From<String> + 'static, T>(
 pub fn config_decode_json<E: From<String> + 'static, T>(
     s: String,
     decoder: Decoder<E, T>,
-) -> SkyResult<E, T> {
+) -> IpeResult<E, T> {
     run_decoder(
         serde_json::from_str(&s).map_err(|e| format!("json parse: {}", e)),
         decoder,
@@ -56,7 +56,7 @@ pub fn config_decode_json<E: From<String> + 'static, T>(
 pub fn config_decode_toml<E: From<String> + 'static, T>(
     s: String,
     decoder: Decoder<E, T>,
-) -> SkyResult<E, T> {
+) -> IpeResult<E, T> {
     run_decoder(
         toml::from_str(&s).map_err(|e| format!("toml parse: {}", e)),
         decoder,
@@ -80,7 +80,7 @@ fn yaml_source_cap() -> usize {
 pub fn config_decode_yaml<E: From<String> + 'static, T>(
     s: String,
     decoder: Decoder<E, T>,
-) -> SkyResult<E, T> {
+) -> IpeResult<E, T> {
     // Defence-in-depth against YAML "billion laughs" / anchor-alias bombs:
     //   1. Bound the SOURCE size so a huge input can't be parsed at all (this is
     //      the cheap, behaviour-preserving guard the audit asks for).
@@ -89,7 +89,7 @@ pub fn config_decode_yaml<E: From<String> + 'static, T>(
     //      so a small-but-exponential input cannot expand without bound.
     let cap = yaml_source_cap();
     if s.len() > cap {
-        return SkyResult::Err(str_err(&format!(
+        return IpeResult::Err(str_err(&format!(
             "yaml parse: input is {} bytes, over the {} byte cap (IPE_YAML_MAX_BYTES)",
             s.len(),
             cap
@@ -179,7 +179,7 @@ fn config_read_capped(path: &str, cap: u64) -> Result<String, String> {
 pub fn config_load_from_file<E: From<String> + Send + 'static, T: Send + 'static>(
     path: String,
     decoder: Decoder<E, T>,
-) -> SkyTask<E, T> {
+) -> IpeTask<E, T> {
     Box::pin(async move {
         // Cap the file size before slurping it into memory so a Config.loadFromFile
         // on an attacker-influenced path can't force an unbounded in-memory copy
@@ -196,7 +196,7 @@ pub fn config_load_from_file<E: From<String> + Send + 'static, T: Send + 'static
         .await
         {
             Ok(c) => c,
-            Err(e) => return SkyResult::Err(str_err(&e)),
+            Err(e) => return IpeResult::Err(str_err(&e)),
         };
         let lower = path.to_ascii_lowercase();
         if lower.ends_with(".toml") {
@@ -231,41 +231,41 @@ mod load_from_file_tests {
     /// both paths must return the same decoded result).
     #[test]
     fn loads_and_decodes_json() {
-        let p = std::env::temp_dir().join(format!("sky_cfg_json_{}.json", std::process::id()));
+        let p = std::env::temp_dir().join(format!("ipe_cfg_json_{}.json", std::process::id()));
         std::fs::write(&p, r#"{"name": "sky"}"#).unwrap();
-        let res: SkyResult<String, String> = block(config_load_from_file(
+        let res: IpeResult<String, String> = block(config_load_from_file(
             p.to_string_lossy().into_owned(),
             name_decoder(),
         ));
         let _ = std::fs::remove_file(&p);
         match res {
-            SkyResult::Ok(s) => assert_eq!(s, "sky"),
-            SkyResult::Err(e) => panic!("unexpected Err: {e}"),
+            IpeResult::Ok(s) => assert_eq!(s, "sky"),
+            IpeResult::Err(e) => panic!("unexpected Err: {e}"),
         }
     }
 
     #[test]
     fn loads_and_decodes_toml() {
-        let p = std::env::temp_dir().join(format!("sky_cfg_toml_{}.toml", std::process::id()));
+        let p = std::env::temp_dir().join(format!("ipe_cfg_toml_{}.toml", std::process::id()));
         std::fs::write(&p, "name = \"sky\"\n").unwrap();
-        let res: SkyResult<String, String> = block(config_load_from_file(
+        let res: IpeResult<String, String> = block(config_load_from_file(
             p.to_string_lossy().into_owned(),
             name_decoder(),
         ));
         let _ = std::fs::remove_file(&p);
         match res {
-            SkyResult::Ok(s) => assert_eq!(s, "sky"),
-            SkyResult::Err(e) => panic!("unexpected Err: {e}"),
+            IpeResult::Ok(s) => assert_eq!(s, "sky"),
+            IpeResult::Err(e) => panic!("unexpected Err: {e}"),
         }
     }
 
     #[test]
     fn over_cap_file_errs() {
-        let p = std::env::temp_dir().join(format!("sky_cfg_over_cap_{}.json", std::process::id()));
+        let p = std::env::temp_dir().join(format!("ipe_cfg_over_cap_{}.json", std::process::id()));
         std::fs::write(&p, vec![b'a'; 8192]).unwrap();
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::set_var("IPE_CONFIG_MAX_BYTES", "1024") };
-        let res: SkyResult<String, String> = block(config_load_from_file(
+        let res: IpeResult<String, String> = block(config_load_from_file(
             p.to_string_lossy().into_owned(),
             name_decoder(),
         ));
@@ -273,18 +273,18 @@ mod load_from_file_tests {
         unsafe { std::env::remove_var("IPE_CONFIG_MAX_BYTES") };
         let _ = std::fs::remove_file(&p);
         assert!(
-            matches!(res, SkyResult::Err(_)),
+            matches!(res, IpeResult::Err(_)),
             "8 KiB config file under a 1 KiB cap must Err"
         );
     }
 
     #[test]
     fn missing_file_errs() {
-        let res: SkyResult<String, String> = block(config_load_from_file(
+        let res: IpeResult<String, String> = block(config_load_from_file(
             "/nonexistent/sky/config/path/does-not-exist.json".to_string(),
             name_decoder(),
         ));
-        assert!(matches!(res, SkyResult::Err(_)));
+        assert!(matches!(res, IpeResult::Err(_)));
     }
 }
 
@@ -312,7 +312,7 @@ mod load_from_file_spawn_blocking_tests {
             .build()
             .unwrap();
         let p = std::env::temp_dir().join(format!(
-            "sky_cfg_spawn_blocking_probe_{}.json",
+            "ipe_cfg_spawn_blocking_probe_{}.json",
             std::process::id()
         ));
         // A big JSON string value, large enough that the read takes
@@ -333,8 +333,8 @@ mod load_from_file_spawn_blocking_tests {
             });
             let decoder =
                 decode_field::<String, String>("name".to_string(), json_decode_string::<String>());
-            let load_fut: SkyTask<String, String> = config_load_from_file(path, decoder);
-            let _res: SkyResult<String, String> = load_fut.await;
+            let load_fut: IpeTask<String, String> = config_load_from_file(path, decoder);
+            let _res: IpeResult<String, String> = load_fut.await;
             ticker.abort();
             counter.load(Ordering::Relaxed)
         });

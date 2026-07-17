@@ -172,7 +172,7 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
     // `Sky.Core.Error`'s NOMINAL payload types (see
     // `docs/adr/0017-error-payload-nominal-identity.md`).
     // Opaque nominal Cons backed
-    // by `ipe_runtime::error::{SkyPanicInfo, SkyTypeInfo, SkyErrorInfo}`, so
+    // by `ipe_runtime::error::{IpePanicInfo, IpeTypeInfo, IpeErrorInfo}`, so
     // annotations such as `describePanic : PanicInfo -> String` must resolve.
     // Lowerer arms: `ir_type_from_canon` / `ir_type_from_ty`
     // `"PanicInfo" => IrType::PanicInfo` (etc.).
@@ -542,13 +542,13 @@ pub fn canonicalise_module_in_project(
     // the ONE legitimate definer of a `Std.…` / `Sky.…` home, so it is exempt —
     // but ONLY because the driver vouched for its provenance (unforgeable tag),
     // never because the text says `module Std.…`.
-    let sky_sym = interner.intern("Sky")?;
+    let ipe_sym = interner.intern("Sky")?;
     let std_sym = interner.intern("Std")?;
     if origin == ModuleOrigin::User
         && home
             .first()
             .copied()
-            .is_some_and(|s| s == sky_sym || s == std_sym)
+            .is_some_and(|s| s == ipe_sym || s == std_sym)
     {
         let name = path_to_dot_string(interner, &home);
         return Err(Diagnostic::Name {
@@ -592,7 +592,7 @@ pub fn canonicalise_module_in_project(
         if dep_path
             .first()
             .copied()
-            .is_some_and(|s| s == sky_sym || s == std_sym)
+            .is_some_and(|s| s == ipe_sym || s == std_sym)
             && !deps.contains_key(dep_path)
         {
             continue;
@@ -644,7 +644,7 @@ pub fn canonicalise_module_in_project(
         if dep_path
             .first()
             .copied()
-            .is_some_and(|s| s == sky_sym || s == std_sym)
+            .is_some_and(|s| s == ipe_sym || s == std_sym)
             && !deps.contains_key(dep_path)
         {
             continue;
@@ -802,7 +802,7 @@ fn register_stdlib_import_aliases(
     env: &mut Env,
     interner: &mut Interner,
 ) -> DResult<()> {
-    let sky_sym = interner.intern("Sky")?;
+    let ipe_sym = interner.intern("Sky")?;
     let std_sym = interner.intern("Std")?;
     for import in imports {
         let dep_path = &import.name.value;
@@ -810,7 +810,7 @@ fn register_stdlib_import_aliases(
         if !dep_path
             .first()
             .copied()
-            .is_some_and(|s| s == sky_sym || s == std_sym)
+            .is_some_and(|s| s == ipe_sym || s == std_sym)
         {
             continue;
         }
@@ -893,7 +893,7 @@ fn inject_stdlib_exposed_values(
     seen_values: &mut BTreeMap<Symbol, Span>,
     interner: &mut Interner,
 ) -> DResult<()> {
-    let sky_sym = interner.intern("Sky")?;
+    let ipe_sym = interner.intern("Sky")?;
     let std_sym = interner.intern("Std")?;
     for import in &m.imports {
         let dep_path = &import.name.value;
@@ -901,7 +901,7 @@ fn inject_stdlib_exposed_values(
         if !dep_path
             .first()
             .copied()
-            .is_some_and(|s| s == sky_sym || s == std_sym)
+            .is_some_and(|s| s == ipe_sym || s == std_sym)
         {
             continue;
         }
@@ -1174,7 +1174,7 @@ fn inject_stdlib_wildcard_values(
     env: &mut Env,
     interner: &mut Interner,
 ) -> DResult<()> {
-    let sky_sym = interner.intern("Sky")?;
+    let ipe_sym = interner.intern("Sky")?;
     let std_sym = interner.intern("Std")?;
     for import in &m.imports {
         let dep_path = &import.name.value;
@@ -1182,7 +1182,7 @@ fn inject_stdlib_wildcard_values(
         if !dep_path
             .first()
             .copied()
-            .is_some_and(|s| s == sky_sym || s == std_sym)
+            .is_some_and(|s| s == ipe_sym || s == std_sym)
         {
             continue;
         }
@@ -1561,22 +1561,22 @@ fn is_opaque_boxed_wrapper_canon(interner: &Interner, name: Symbol) -> bool {
 }
 
 /// Could this canonical field type NOT be a field of a
-/// `#[derive(Clone, Debug, PartialEq)]` + `impl SkyStringify` struct — i.e. is it
+/// `#[derive(Clone, Debug, PartialEq)]` + `impl IpeStringify` struct — i.e. is it
 /// non-derivable-as-a-struct-field?
 ///
 /// A synthesised record-alias constructor's body is a record literal, so the
 /// backend emits a `#[derive(Clone, Debug, PartialEq)]` struct (plus an
-/// `impl SkyStringify`) over the field types. A field whose type satisfies none
+/// `impl IpeStringify`) over the field types. A field whose type satisfies none
 /// of those obligations makes the emitted Rust fail to compile. Two disjoint
 /// shapes are non-derivable-as-a-struct-field:
 ///
 /// 1. A raw function (`Lambda`) — lowers to `Box<dyn Fn(...) + Send>`, which
-///    is `!Clone`, `!Debug`, `!PartialEq`, `!SkyStringify`.
+///    is `!Clone`, `!Debug`, `!PartialEq`, `!IpeStringify`.
 /// 2. An OPAQUE boxed-wrapper VALUE ([`is_opaque_boxed_wrapper_canon`] —
 ///    `Decoder` / `Task` / `Cmd` / `Sub`). Its runtime representation is a
-///    `Box<dyn Fn>` (`Decoder`), a boxed-thunk enum (`SkyCmd` / `SkySub`), or a
-///    `Pin<Box<dyn Future>>` (`SkyTask`) — none of which impl `Clone` / `Debug` /
-///    `PartialEq` / `SkyStringify` over their payload.
+///    `Box<dyn Fn>` (`Decoder`), a boxed-thunk enum (`IpeCmd` / `IpeSub`), or a
+///    `Pin<Box<dyn Future>>` (`IpeTask`) — none of which impl `Clone` / `Debug` /
+///    `PartialEq` / `IpeStringify` over their payload.
 ///
 /// # Why this predicate is NOT the lowerer's function-embedding one
 ///
@@ -1593,7 +1593,7 @@ fn is_opaque_boxed_wrapper_canon(interner: &Interner, name: Symbol) -> bool {
 /// struct-synthesis decision: an opaque wrapper in FIELD position is ITSELF the
 /// non-derivable value, regardless of its payload. `{ dec : Decoder Int }`,
 /// `{ cmd : Cmd Msg }` carry no raw function at all, yet the emitted
-/// `#[derive(…)]` struct over `Decoder` / `SkyCmd` does not build (skyc accepts
+/// `#[derive(…)]` struct over `Decoder` / `IpeCmd` does not build (skyc accepts
 /// it but cargo rejects it — an exit-0-then-cargo-fail seal hole). So here the
 /// opaque head SHORT-CIRCUITS to `true` (the flip): the wrapper is non-derivable
 /// as a struct field, so the alias must DECLINE synthesis and stay a plain type
@@ -1675,7 +1675,7 @@ fn synthesize_record_alias_ctors(
         // Data-record gate. DECLINE synthesis when ANY field type is
         // non-derivable-as-a-struct-field ([`field_type_nonderivable`]). The
         // synthesised constructor's body is a record literal that lowers to a
-        // `#[derive(Clone, Debug, PartialEq)]` + `impl SkyStringify` struct over
+        // `#[derive(Clone, Debug, PartialEq)]` + `impl IpeStringify` struct over
         // the field types; a field that satisfies none of those obligations makes
         // the emitted Rust fail to build. Two disjoint non-derivable shapes:
         //
@@ -1689,7 +1689,7 @@ fn synthesize_record_alias_ctors(
         //     shape would emit Rust that cargo then rejects.
         //   * an OPAQUE boxed-wrapper field (`{ dec : Decoder Int }`,
         //     `{ cmd : Cmd Msg }`, `Sub`, `Task`) — skyc accepts it but cargo
-        //     rejects (E0277 Clone/Debug, E0369 ==, E0599 SkyStringify), because
+        //     rejects (E0277 Clone/Debug, E0369 ==, E0599 IpeStringify), because
         //     the wrapper VALUE is itself non-derivable; nesting one under a
         //     carrier (`List (Decoder Int)`, `Maybe (Cmd Msg)`) is equally
         //     non-derivable (the predicate recurses).
@@ -3781,7 +3781,7 @@ mod alias_ctor_gate_tests {
     //! gate that decides whether a record `type alias` gets a synthesised
     //! auto-constructor (IPE-N0001). It returns `true` (DECLINE synthesis)
     //! when a field type could NOT be a field of a
-    //! `#[derive(Clone, Debug, PartialEq)]` + `impl SkyStringify` struct — a raw
+    //! `#[derive(Clone, Debug, PartialEq)]` + `impl IpeStringify` struct — a raw
     //! function at ANY depth inside a derive carrier (the round-1 seal fix) OR an
     //! OPAQUE boxed-wrapper (`Decoder` / `Task` / `Cmd` / `Sub`) in field
     //! position (the round-2 flip: the wrapper VALUE is itself non-derivable).
@@ -3866,7 +3866,7 @@ mod alias_ctor_gate_tests {
         // ROUND-2 FLIP. An opaque boxed-wrapper in FIELD position is ITSELF
         // non-derivable as a struct field — its runtime rep (`Box<dyn Fn>` /
         // boxed-thunk enum / `Pin<Box<dyn Future>>`) impls no
-        // `Clone`/`Debug`/`PartialEq`/`SkyStringify`. So the head SHORT-CIRCUITS
+        // `Clone`/`Debug`/`PartialEq`/`IpeStringify`. So the head SHORT-CIRCUITS
         // to `true`, DECLINING synthesis (round-1 asserted the opposite — the
         // seal hole: skyc-0 then cargo-101).
         let mut i = Interner::new();

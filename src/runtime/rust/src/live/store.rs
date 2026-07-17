@@ -176,7 +176,7 @@ fn now_secs() -> i64 {
 // ─── SQLite store — persistent model checkpoint + live mem-cache (Go sqliteStore)
 
 /// Persistent store: keeps a `mem_cache` of live handles (same-process, owns the
-/// driver) AND a `sky_sessions(sid, blob, last_seen)` table holding the
+/// driver) AND a `ipe_sessions(sid, blob, last_seen)` table holding the
 /// serde-JSON model checkpoint. `get` returns the live handle on a cache hit,
 /// else a `Cold` model decoded from the blob (the caller hydrates a fresh
 /// driver). Requires `Model: Serialize + DeserializeOwned` (the codegen derives
@@ -207,7 +207,7 @@ impl<Model, Msg> SqliteStore<Model, Msg> {
         // best-effort handling — the store degrades fail-soft (sessions
         // restart fresh), never crashes and never mis-decodes.
         sqlx::query(
-            "CREATE TABLE IF NOT EXISTS sky_sessions (\
+            "CREATE TABLE IF NOT EXISTS ipe_sessions (\
              sid TEXT PRIMARY KEY, blob TEXT NOT NULL, last_seen INTEGER NOT NULL, \
              schema_tag TEXT NOT NULL)",
         )
@@ -239,7 +239,7 @@ where
             })
         };
         if let Some(h) = cached {
-            let _ = sqlx::query("UPDATE sky_sessions SET last_seen = ? WHERE sid = ?")
+            let _ = sqlx::query("UPDATE ipe_sessions SET last_seen = ? WHERE sid = ?")
                 .bind(now_secs())
                 .bind(sid)
                 .execute(&self.pool)
@@ -252,14 +252,14 @@ where
         // mismatch, an old-format JSON row, or a corrupt body all take the
         // same fail-soft miss path. The legacy schema_tag COLUMN is still
         // written (NOT NULL) but no longer read.
-        let row: Option<(String,)> = sqlx::query_as("SELECT blob FROM sky_sessions WHERE sid = ?")
+        let row: Option<(String,)> = sqlx::query_as("SELECT blob FROM ipe_sessions WHERE sid = ?")
             .bind(sid)
             .fetch_optional(&self.pool)
             .await
             .ok()
             .flatten();
         let model: Model = decode_checkpoint(&self.schema_tag, &row?.0)?;
-        let _ = sqlx::query("UPDATE sky_sessions SET last_seen = ? WHERE sid = ?")
+        let _ = sqlx::query("UPDATE ipe_sessions SET last_seen = ? WHERE sid = ?")
             .bind(now_secs())
             .bind(sid)
             .execute(&self.pool)
@@ -278,7 +278,7 @@ where
             .insert(sid.to_string(), (handle, Instant::now()));
         if let Some(blob) = encode_checkpoint(&self.schema_tag, &model) {
             let _ = sqlx::query(
-                "INSERT INTO sky_sessions (sid, blob, last_seen, schema_tag) VALUES (?, ?, ?, ?) \
+                "INSERT INTO ipe_sessions (sid, blob, last_seen, schema_tag) VALUES (?, ?, ?, ?) \
                  ON CONFLICT(sid) DO UPDATE SET blob=excluded.blob, \
                  last_seen=excluded.last_seen, schema_tag=excluded.schema_tag",
             )
@@ -295,7 +295,7 @@ where
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .remove(sid);
-        let _ = sqlx::query("DELETE FROM sky_sessions WHERE sid = ?")
+        let _ = sqlx::query("DELETE FROM ipe_sessions WHERE sid = ?")
             .bind(sid)
             .execute(&self.pool)
             .await;
@@ -308,7 +308,7 @@ where
         // realistic TTLs this is byte-identical to the old expression.
         let cutoff =
             now_secs().saturating_sub(i64::try_from(self.ttl.as_secs()).unwrap_or(i64::MAX));
-        let _ = sqlx::query("DELETE FROM sky_sessions WHERE last_seen < ?")
+        let _ = sqlx::query("DELETE FROM ipe_sessions WHERE last_seen < ?")
             .bind(cutoff)
             .execute(&self.pool)
             .await;
@@ -336,7 +336,7 @@ where
 
 // ─── Postgres store — multi-instance deployments (Go postgresStore) ──────────
 
-/// Same shape as `SqliteStore` (mem-cache of live handles + a `sky_sessions`
+/// Same shape as `SqliteStore` (mem-cache of live handles + a `ipe_sessions`
 /// blob table + idle-TTL sweep) but over a `PgPool`, for horizontally-scaled
 /// deployments (Cloud Run / ECS / k8s) where a returning request can land on a
 /// different replica than the one that created the session. `connStr` is a
@@ -361,7 +361,7 @@ impl<Model, Msg> PostgresStore<Model, Msg> {
         // Pre-existing tables keep their old column set (IF NOT EXISTS) —
         // same fail-soft degradation as SqliteStore::new.
         sqlx::query(
-            "CREATE TABLE IF NOT EXISTS sky_sessions (\
+            "CREATE TABLE IF NOT EXISTS ipe_sessions (\
              sid TEXT PRIMARY KEY, blob TEXT NOT NULL, last_seen BIGINT NOT NULL, \
              schema_tag TEXT NOT NULL)",
         )
@@ -392,7 +392,7 @@ where
             })
         };
         if let Some(h) = cached {
-            let _ = sqlx::query("UPDATE sky_sessions SET last_seen = $1 WHERE sid = $2")
+            let _ = sqlx::query("UPDATE ipe_sessions SET last_seen = $1 WHERE sid = $2")
                 .bind(now_secs())
                 .bind(sid)
                 .execute(&self.pool)
@@ -401,14 +401,14 @@ where
         }
         // Self-contained framed blob — see SqliteStore::get. The legacy
         // schema_tag COLUMN is still written (NOT NULL) but no longer read.
-        let row: Option<(String,)> = sqlx::query_as("SELECT blob FROM sky_sessions WHERE sid = $1")
+        let row: Option<(String,)> = sqlx::query_as("SELECT blob FROM ipe_sessions WHERE sid = $1")
             .bind(sid)
             .fetch_optional(&self.pool)
             .await
             .ok()
             .flatten();
         let model: Model = decode_checkpoint(&self.schema_tag, &row?.0)?;
-        let _ = sqlx::query("UPDATE sky_sessions SET last_seen = $1 WHERE sid = $2")
+        let _ = sqlx::query("UPDATE ipe_sessions SET last_seen = $1 WHERE sid = $2")
             .bind(now_secs())
             .bind(sid)
             .execute(&self.pool)
@@ -427,7 +427,7 @@ where
             .insert(sid.to_string(), (handle, Instant::now()));
         if let Some(blob) = encode_checkpoint(&self.schema_tag, &model) {
             let _ = sqlx::query(
-                "INSERT INTO sky_sessions (sid, blob, last_seen, schema_tag) \
+                "INSERT INTO ipe_sessions (sid, blob, last_seen, schema_tag) \
                  VALUES ($1, $2, $3, $4) \
                  ON CONFLICT (sid) DO UPDATE SET blob = EXCLUDED.blob, \
                  last_seen = EXCLUDED.last_seen, schema_tag = EXCLUDED.schema_tag",
@@ -445,7 +445,7 @@ where
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .remove(sid);
-        let _ = sqlx::query("DELETE FROM sky_sessions WHERE sid = $1")
+        let _ = sqlx::query("DELETE FROM ipe_sessions WHERE sid = $1")
             .bind(sid)
             .execute(&self.pool)
             .await;
@@ -458,7 +458,7 @@ where
         // realistic TTLs this is byte-identical to the old expression.
         let cutoff =
             now_secs().saturating_sub(i64::try_from(self.ttl.as_secs()).unwrap_or(i64::MAX));
-        let _ = sqlx::query("DELETE FROM sky_sessions WHERE last_seen < $1")
+        let _ = sqlx::query("DELETE FROM ipe_sessions WHERE last_seen < $1")
             .bind(cutoff)
             .execute(&self.pool)
             .await;
@@ -1054,7 +1054,7 @@ mod tests {
             .unwrap();
         // Cross-replica cold row: valid framed blob, but no mem_cache entry.
         sqlx::query(
-            "INSERT INTO sky_sessions (sid, blob, last_seen, schema_tag) VALUES (?, ?, ?, ?)",
+            "INSERT INTO ipe_sessions (sid, blob, last_seen, schema_tag) VALUES (?, ?, ?, ?)",
         )
         .bind("cold_sid")
         .bind(encode_checkpoint(&TEST_TAG, &41_i32).unwrap())
@@ -1098,7 +1098,7 @@ mod tests {
                 .unwrap();
             s.set("s1", handle_i32(model)).await;
             // Read the raw column back and assert the format identity.
-            let row: (String,) = sqlx::query_as("SELECT blob FROM sky_sessions WHERE sid = 's1'")
+            let row: (String,) = sqlx::query_as("SELECT blob FROM ipe_sessions WHERE sid = 's1'")
                 .fetch_one(&s.pool)
                 .await
                 .unwrap();
@@ -1139,7 +1139,7 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO sky_sessions (sid, blob, last_seen, schema_tag) VALUES (?, ?, ?, ?)",
+            "INSERT INTO ipe_sessions (sid, blob, last_seen, schema_tag) VALUES (?, ?, ?, ?)",
         )
         .bind("old")
         .bind("42") // a pre-Stage-C serde-JSON body
@@ -1174,7 +1174,7 @@ mod tests {
             s.delete(&old_sid).await;
             s.set(&sid, handle_i32(7)).await;
             sqlx::query(
-                "INSERT INTO sky_sessions (sid, blob, last_seen, schema_tag) \
+                "INSERT INTO ipe_sessions (sid, blob, last_seen, schema_tag) \
                  VALUES ($1, $2, $3, $4)",
             )
             .bind(&old_sid)
@@ -1258,7 +1258,7 @@ mod tests {
         s.delete(&cold_sid).await;
         s.delete(&live_sid).await;
         sqlx::query(
-            "INSERT INTO sky_sessions (sid, blob, last_seen, schema_tag) \
+            "INSERT INTO ipe_sessions (sid, blob, last_seen, schema_tag) \
              VALUES ($1, $2, $3, $4)",
         )
         .bind(&cold_sid)

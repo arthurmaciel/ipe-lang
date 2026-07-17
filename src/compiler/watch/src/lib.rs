@@ -3,7 +3,7 @@
 //! power `ipe watch`.
 //!
 //! This crate is deliberately salsa-agnostic: it knows nothing about
-//! `ipe_db`, `SkyDatabase`, or the compile pipeline. It provides three
+//! `ipe_db`, `IpeDatabase`, or the compile pipeline. It provides three
 //! independently-testable primitives that `crates/skyc/src/watch.rs` (the
 //! salsa-aware orchestrator) wires together:
 //!

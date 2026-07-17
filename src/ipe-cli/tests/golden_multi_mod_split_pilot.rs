@@ -6,14 +6,14 @@
 //! produces real per-module output: the golden
 //! is the Spine-only `main.rs` (preamble + `SqlValue`/`SqlField` enums +
 //! DB-projection impls + kernel-wrapper prelude + `fn main()` + the
-//! `mod`/`pub(crate) use` barrel) PLUS one `sky_mods/<ident>.rs` per Sky module
-//! (`sky_mod_lib.rs`, `sky_mod_main.rs`). The home-qualified names
+//! `mod`/`pub(crate) use` barrel) PLUS one `ipe_mods/<ident>.rs` per Sky module
+//! (`ipe_mod_lib.rs`, `ipe_mod_main.rs`). The home-qualified names
 //! (`lib_label`/`main_summary`, `LibStatus`) follow §1.3; the split
 //! emission is the file split itself.
 //!
 //! Modelled on `golden_m0.rs`, using the shared directory-diff helper
 //! `support::assert_emitted_project_matches_golden_dir` for `main.rs` +
-//! `Cargo.toml`, extended by a fixture-local `sky_mods/*.rs` byte-diff for the
+//! `Cargo.toml`, extended by a fixture-local `ipe_mods/*.rs` byte-diff for the
 //! split's per-module files.
 
 use std::path::{Path, PathBuf};
@@ -40,24 +40,24 @@ fn runtime() -> PathBuf {
     skyc::resolve_runtime().expect("runtime must resolve for the pilot golden test")
 }
 
-/// Byte-diff every checked-in `sky_mods/<name>.rs` golden against its
-/// counterpart under `<out>/src/sky_mods/`. `emit_program` produces real
+/// Byte-diff every checked-in `ipe_mods/<name>.rs` golden against its
+/// counterpart under `<out>/src/ipe_mods/`. `emit_program` produces real
 /// per-module output, so the pilot golden carries
-/// one `sky_mods/*.rs` file per Sky module (`sky_mod_lib.rs`,
-/// `sky_mod_main.rs`) alongside the Spine-only `main.rs`. The shared
+/// one `ipe_mods/*.rs` file per Sky module (`ipe_mod_lib.rs`,
+/// `ipe_mod_main.rs`) alongside the Spine-only `main.rs`. The shared
 /// `assert_emitted_project_matches_golden_dir` helper only diffs `main.rs` +
 /// `Cargo.toml`; this fixture-local check extends that to the split's new
 /// per-module files, so the multi-file output is proven byte-for-byte, not
 /// merely that `main.rs` shrank. Under-emission (a golden module file with no
 /// emitted counterpart) and content drift both fail loudly.
 // The lone `panic!` guards a test-support invariant: the checked-in golden
-// `sky_mods/` dir must be readable, or the fixture itself is broken. Per-entry
+// `ipe_mods/` dir must be readable, or the fixture itself is broken. Per-entry
 // and per-file errors fold into `mismatches`/`assert!`; only the missing-dir
 // case aborts, which IS the correct failure-reporting mechanism here.
 #[allow(clippy::panic)]
 fn assert_module_files_match_golden(out: &Path, golden_dir: &Path) {
-    let golden_mods = golden_dir.join("sky_mods");
-    let emitted_mods = out.join("src").join("sky_mods");
+    let golden_mods = golden_dir.join("ipe_mods");
+    let emitted_mods = out.join("src").join("ipe_mods");
     let mut mismatches = Vec::new();
     let mut compared = 0usize;
 
@@ -68,7 +68,7 @@ fn assert_module_files_match_golden(out: &Path, golden_dir: &Path) {
         Ok(entries) => entries,
         Err(e) => {
             panic!(
-                "golden sky_mods dir unreadable at {}: {e}",
+                "golden ipe_mods dir unreadable at {}: {e}",
                 golden_mods.display()
             )
         }
@@ -78,7 +78,7 @@ fn assert_module_files_match_golden(out: &Path, golden_dir: &Path) {
         let entry = match entry {
             Ok(entry) => entry,
             Err(e) => {
-                mismatches.push(format!("sky_mods entry unreadable: {e}"));
+                mismatches.push(format!("ipe_mods entry unreadable: {e}"));
                 continue;
             }
         };
@@ -91,18 +91,18 @@ fn assert_module_files_match_golden(out: &Path, golden_dir: &Path) {
         ) {
             (Ok(want), Ok(got)) if want == got => compared += 1,
             (Ok(want), Ok(got)) => mismatches.push(format!(
-                "sky_mods/{}: emitted != golden ({} vs {} bytes)",
+                "ipe_mods/{}: emitted != golden ({} vs {} bytes)",
                 name.to_string_lossy(),
                 got.len(),
                 want.len(),
             )),
             (_, Err(e)) => mismatches.push(format!(
-                "sky_mods/{}: emitted missing or unreadable at {}: {e}",
+                "ipe_mods/{}: emitted missing or unreadable at {}: {e}",
                 name.to_string_lossy(),
                 got_path.display(),
             )),
             (Err(e), _) => mismatches.push(format!(
-                "sky_mods/{}: golden missing or unreadable at {}: {e}",
+                "ipe_mods/{}: golden missing or unreadable at {}: {e}",
                 name.to_string_lossy(),
                 want_path.display(),
             )),
@@ -110,12 +110,12 @@ fn assert_module_files_match_golden(out: &Path, golden_dir: &Path) {
     }
     assert!(
         mismatches.is_empty(),
-        "sky_mods golden mismatch:\n{}",
+        "ipe_mods golden mismatch:\n{}",
         mismatches.join("\n"),
     );
     assert!(
         compared >= 2,
-        "expected at least the two pilot module files (sky_mod_lib.rs, sky_mod_main.rs) to be \
+        "expected at least the two pilot module files (ipe_mod_lib.rs, ipe_mod_main.rs) to be \
          compared, only {compared} matched — the split may have silently stopped materialising"
     );
 }
@@ -138,7 +138,7 @@ fn emits_split_spine_and_per_module_files() {
     support::assert_emitted_project_matches_golden_dir(&out, &fixture);
 
     // …plus the per-Sky-module files the split emits under
-    // `src/sky_mods/`. `sky_mod_lib.rs`'s Db call site references
+    // `src/ipe_mods/`. `ipe_mod_lib.rs`'s Db call site references
     // `MainSqlValue`/`MainSqlField` variants resolving via `use crate::*;`
     // back to the Spine's declarations — the file-level proof of §2.2's fix.
     assert_module_files_match_golden(&out, &fixture);

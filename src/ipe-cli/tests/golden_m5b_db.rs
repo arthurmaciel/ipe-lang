@@ -183,7 +183,7 @@ fn db_crud() {
 
 // ── Db.withTransaction — COMMIT and ROLLBACK paths ───────────────────────────
 
-/// Two sequential transactions on a file-backed `/tmp/sky_txn_golden.db`:
+/// Two sequential transactions on a file-backed `/tmp/ipe_txn_golden.db`:
 ///
 /// * Transaction 1 INSERTs `"hello"` and returns `Ok ()` → committed.
 /// * Transaction 2 INSERTs `"world"` then calls `Task.fail` → rolled back.

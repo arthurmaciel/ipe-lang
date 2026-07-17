@@ -1,9 +1,9 @@
 #![allow(clippy::ptr_arg)]
 // Sky Runtime — Core types (always included)
 // Generic over E (error type).  Builder.hs emits `use ipe_runtime::*;`
-// and thin wrappers that instantiate E = SkyError.
+// and thin wrappers that instantiate E = IpeError.
 //
-// This module is the home for the core TYPES (SkyMaybe / SkyResult / SkyTask)
+// This module is the home for the core TYPES (IpeMaybe / IpeResult / IpeTask)
 // and their combinators, plus the byte-sequence FFI coercion. The String and
 // List kernels live in their named Sky-module homes — `string.rs` and
 // `list.rs` — re-exported through `mod.rs`'s glob so call sites are unaffected.
@@ -14,16 +14,16 @@ use std::pin::Pin;
 // ===========================================
 // Task type (generic over error type E)
 // ===========================================
-pub type SkyTask<E, A> = Pin<Box<dyn Future<Output = SkyResult<E, A>> + Send + 'static>>;
+pub type IpeTask<E, A> = Pin<Box<dyn Future<Output = IpeResult<E, A>> + Send + 'static>>;
 
-/// Construct Ok with generic error type.  Use `ok_res::<SkyError>` to
+/// Construct Ok with generic error type.  Use `ok_res::<IpeError>` to
 /// instantiate with the project's concrete error type.
-pub fn ok_res<E, A>(a: A) -> SkyResult<E, A> {
-    SkyResult::Ok(a)
+pub fn ok_res<E, A>(a: A) -> IpeResult<E, A> {
+    IpeResult::Ok(a)
 }
 
 /// Construct an error value from a string.  Requires `E: From<String>`.
-/// When E = SkyCoreErrorError, the generated code provides the impl.
+/// When E = IpeCoreErrorError, the generated code provides the impl.
 pub fn str_err<E: From<String>>(s: &str) -> E {
     s.to_string().into()
 }
@@ -33,7 +33,7 @@ pub fn str_err<E: From<String>>(s: &str) -> E {
 /// Used by the fallible(-async) FFI wrapper bodies to flatten a foreign
 /// `Result<T, E>` Err arm into a Sky-compatible error:
 ///
-///   `Ok(Err(e)) => SkyResult::Err(sky_error_from_foreign(e))`
+///   `Ok(Err(e)) => IpeResult::Err(ipe_error_from_foreign(e))`
 ///
 /// C5: `tokio::task::spawn(...).await` already catches panics via JoinError;
 /// this fn handles the non-panic `Err(e)` arm. Any `Debug`-able foreign error
@@ -49,9 +49,9 @@ pub fn str_err<E: From<String>>(s: &str) -> E {
 /// `external operation failed (ref <id>)`, never the secret-bearing detail).
 ///
 /// Same generic `E: From<String>` contract as `str_err` — the project provides
-/// `impl From<String> for SkyCoreErrorError` so both arms of the fallible match
-/// resolve to the same `SkyResult<E, A>`. Total — no unwrap/index/panic.
-pub fn sky_error_from_foreign<ForeignE: std::fmt::Debug, E: From<String>>(e: ForeignE) -> E {
+/// `impl From<String> for IpeCoreErrorError` so both arms of the fallible match
+/// resolve to the same `IpeResult<E, A>`. Total — no unwrap/index/panic.
+pub fn ipe_error_from_foreign<ForeignE: std::fmt::Debug, E: From<String>>(e: ForeignE) -> E {
     let err_id = short_err_id();
     log_foreign_error(&err_id, &format!("{e:?}"));
     format!("external operation failed (ref {err_id})").into()
@@ -107,7 +107,7 @@ pub fn set_env_default(key: &str, val: &str) {
 // ===========================================
 // Disconnected-store placeholders (closure-Model `Default`)
 // ===========================================
-// A Sky.Live Model with function-typed fields (`Arc<dyn Fn(..) -> SkyTask<..>>`,
+// A Sky.Live Model with function-typed fields (`Arc<dyn Fn(..) -> IpeTask<..>>`,
 // e.g. the console's `store`) can't be serialized, so the codegen serde-skips
 // those fields and reconstructs them via `Default` from these helpers. Each is a
 // closure of the right arity that yields a STRUCTURED `Task` error (never a
@@ -118,17 +118,17 @@ pub fn set_env_default(key: &str, val: &str) {
 const DISCONNECTED_MSG: &str = "disconnected store: a closure-Model session was restored — closure-Models require [live] store = memory";
 
 pub fn disconnected_fn0<T: Send + 'static, E: From<String> + Send + 'static>()
--> std::sync::Arc<dyn Fn() -> SkyTask<E, T> + Send + Sync> {
-    std::sync::Arc::new(|| -> SkyTask<E, T> {
-        Box::pin(std::future::ready(SkyResult::Err(str_err::<E>(
+-> std::sync::Arc<dyn Fn() -> IpeTask<E, T> + Send + Sync> {
+    std::sync::Arc::new(|| -> IpeTask<E, T> {
+        Box::pin(std::future::ready(IpeResult::Err(str_err::<E>(
             DISCONNECTED_MSG,
         ))))
     })
 }
 pub fn disconnected_fn1<A: 'static, T: Send + 'static, E: From<String> + Send + 'static>()
--> std::sync::Arc<dyn Fn(A) -> SkyTask<E, T> + Send + Sync> {
-    std::sync::Arc::new(|_a| -> SkyTask<E, T> {
-        Box::pin(std::future::ready(SkyResult::Err(str_err::<E>(
+-> std::sync::Arc<dyn Fn(A) -> IpeTask<E, T> + Send + Sync> {
+    std::sync::Arc::new(|_a| -> IpeTask<E, T> {
+        Box::pin(std::future::ready(IpeResult::Err(str_err::<E>(
             DISCONNECTED_MSG,
         ))))
     })
@@ -138,9 +138,9 @@ pub fn disconnected_fn2<
     A2: 'static,
     T: Send + 'static,
     E: From<String> + Send + 'static,
->() -> std::sync::Arc<dyn Fn(A1, A2) -> SkyTask<E, T> + Send + Sync> {
-    std::sync::Arc::new(|_a1, _a2| -> SkyTask<E, T> {
-        Box::pin(std::future::ready(SkyResult::Err(str_err::<E>(
+>() -> std::sync::Arc<dyn Fn(A1, A2) -> IpeTask<E, T> + Send + Sync> {
+    std::sync::Arc::new(|_a1, _a2| -> IpeTask<E, T> {
+        Box::pin(std::future::ready(IpeResult::Err(str_err::<E>(
             DISCONNECTED_MSG,
         ))))
     })
@@ -151,9 +151,9 @@ pub fn disconnected_fn3<
     A3: 'static,
     T: Send + 'static,
     E: From<String> + Send + 'static,
->() -> std::sync::Arc<dyn Fn(A1, A2, A3) -> SkyTask<E, T> + Send + Sync> {
-    std::sync::Arc::new(|_a1, _a2, _a3| -> SkyTask<E, T> {
-        Box::pin(std::future::ready(SkyResult::Err(str_err::<E>(
+>() -> std::sync::Arc<dyn Fn(A1, A2, A3) -> IpeTask<E, T> + Send + Sync> {
+    std::sync::Arc::new(|_a1, _a2, _a3| -> IpeTask<E, T> {
+        Box::pin(std::future::ready(IpeResult::Err(str_err::<E>(
             DISCONNECTED_MSG,
         ))))
     })
@@ -178,10 +178,10 @@ pub fn from_u8_slice(bs: &[u8]) -> Vec<i64> {
 /// Sky `List Int` -> `[u8; N]`. A length mismatch returns `Err` and never
 /// panics (honours "no runtime panic from well-typed Sky code"). Used for
 /// `[u8; N]` / `&[u8; N]` parameters; the generated wrapper instantiates
-/// `E = SkyError` and the concrete `N`.
-pub fn to_u8_array<E: From<String>, const N: usize>(xs: &[i64]) -> SkyResult<E, [u8; N]> {
+/// `E = IpeError` and the concrete `N`.
+pub fn to_u8_array<E: From<String>, const N: usize>(xs: &[i64]) -> IpeResult<E, [u8; N]> {
     if xs.len() != N {
-        return SkyResult::Err(format!("expected {} bytes, got {}", N, xs.len()).into());
+        return IpeResult::Err(format!("expected {} bytes, got {}", N, xs.len()).into());
     }
     let mut a = [0u8; N];
     // len == N checked above; zip is total (no indexing).
@@ -192,17 +192,17 @@ pub fn to_u8_array<E: From<String>, const N: usize>(xs: &[i64]) -> SkyResult<E, 
 }
 
 /// Sky `List T` (Rust `&[T]`) -> fixed-size `[T; N]` with length check.
-/// Mirrors `to_u8_array`'s never-panic discipline: returns `SkyResult::Err`
+/// Mirrors `to_u8_array`'s never-panic discipline: returns `IpeResult::Err`
 /// with a clear message on length mismatch. T: Clone is sufficient — the
 /// elements are cloned out into the array.
-pub fn to_array<E: From<String>, T: Clone, const N: usize>(xs: &[T]) -> SkyResult<E, [T; N]> {
+pub fn to_array<E: From<String>, T: Clone, const N: usize>(xs: &[T]) -> IpeResult<E, [T; N]> {
     if xs.len() != N {
-        return SkyResult::Err(format!("expected array of length {}, got {}", N, xs.len()).into());
+        return IpeResult::Err(format!("expected array of length {}, got {}", N, xs.len()).into());
     }
     let v: Vec<T> = xs.to_vec();
     match v.try_into() {
         Ok(a) => ok_res(a),
-        Err(_) => SkyResult::Err("array length conversion failed".to_string().into()),
+        Err(_) => IpeResult::Err("array length conversion failed".to_string().into()),
     }
 }
 
@@ -210,7 +210,7 @@ pub fn to_array<E: From<String>, T: Clone, const N: usize>(xs: &[T]) -> SkyResul
 // Maybe
 // ===========================================
 // The serde derive is UNCONDITIONAL but its impls are generic-BOUND (the macro
-// emits `impl<T: Serialize> … for SkyMaybe<T>`), so a `SkyMaybe<NonSerde>` is
+// emits `impl<T: Serialize> … for IpeMaybe<T>`), so a `IpeMaybe<NonSerde>` is
 // unaffected — yet a Sky.Live model carrying a `Maybe X` field (X serde-able)
 // serialises for the session store. Without this, any model with a `Maybe`/
 // `Result` field failed E0277. NOTE: `serde` is therefore a NON-OPTIONAL dep in
@@ -222,12 +222,12 @@ pub fn to_array<E: From<String>, T: Clone, const N: usize>(xs: &[T]) -> SkyResul
 // so the session store writes `{"Just":"x"}` / `"Nothing"` and the manual
 // `Deserialize` reads those back correctly.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
-pub enum SkyMaybe<T> {
+pub enum IpeMaybe<T> {
     Nothing,
     Just(T),
 }
 
-// Custom `Deserialize` for `SkyMaybe<T>`.
+// Custom `Deserialize` for `IpeMaybe<T>`.
 //
 // Accepted input shapes:
 //   - Externally-tagged map `{"Just": v}` → `Just(T::deserialize(v))`.
@@ -247,50 +247,50 @@ pub enum SkyMaybe<T> {
 // `Nothing`, not `Just("Nothing")`. This is the same trade-off as the tagged
 // derive and is acceptable — form fields named `note` with the literal value
 // "Nothing" are pathological; real user notes should not hit this.
-impl<'de, T: serde::de::Deserialize<'de>> serde::de::Deserialize<'de> for SkyMaybe<T> {
+impl<'de, T: serde::de::Deserialize<'de>> serde::de::Deserialize<'de> for IpeMaybe<T> {
     fn deserialize<D: serde::de::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        d.deserialize_any(SkyMaybeVisitor(std::marker::PhantomData))
+        d.deserialize_any(IpeMaybeVisitor(std::marker::PhantomData))
     }
 }
 
-struct SkyMaybeVisitor<T>(std::marker::PhantomData<T>);
+struct IpeMaybeVisitor<T>(std::marker::PhantomData<T>);
 
-impl<'de, T: serde::de::Deserialize<'de>> serde::de::Visitor<'de> for SkyMaybeVisitor<T> {
-    type Value = SkyMaybe<T>;
+impl<'de, T: serde::de::Deserialize<'de>> serde::de::Visitor<'de> for IpeMaybeVisitor<T> {
+    type Value = IpeMaybe<T>;
 
     fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("a SkyMaybe value: `{\"Just\": v}`, `\"Nothing\"`, or a bare value")
+        f.write_str("a IpeMaybe value: `{\"Just\": v}`, `\"Nothing\"`, or a bare value")
     }
 
     // --- bare unit / null → Nothing ---
-    fn visit_unit<E: serde::de::Error>(self) -> Result<SkyMaybe<T>, E> {
-        Ok(SkyMaybe::Nothing)
+    fn visit_unit<E: serde::de::Error>(self) -> Result<IpeMaybe<T>, E> {
+        Ok(IpeMaybe::Nothing)
     }
-    fn visit_none<E: serde::de::Error>(self) -> Result<SkyMaybe<T>, E> {
-        Ok(SkyMaybe::Nothing)
+    fn visit_none<E: serde::de::Error>(self) -> Result<IpeMaybe<T>, E> {
+        Ok(IpeMaybe::Nothing)
     }
-    fn visit_some<D: serde::de::Deserializer<'de>>(self, d: D) -> Result<SkyMaybe<T>, D::Error> {
-        T::deserialize(d).map(SkyMaybe::Just)
+    fn visit_some<D: serde::de::Deserializer<'de>>(self, d: D) -> Result<IpeMaybe<T>, D::Error> {
+        T::deserialize(d).map(IpeMaybe::Just)
     }
 
     // --- bare string → "Nothing" sentinel OR Just(T) ---
-    fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<SkyMaybe<T>, E> {
+    fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<IpeMaybe<T>, E> {
         if v == "Nothing" {
-            return Ok(SkyMaybe::Nothing);
+            return Ok(IpeMaybe::Nothing);
         }
         // Bare non-sentinel string: deserialize T from it.
-        T::deserialize(serde::de::value::StrDeserializer::new(v)).map(SkyMaybe::Just)
+        T::deserialize(serde::de::value::StrDeserializer::new(v)).map(IpeMaybe::Just)
     }
 
-    fn visit_string<E: serde::de::Error>(self, v: String) -> Result<SkyMaybe<T>, E> {
+    fn visit_string<E: serde::de::Error>(self, v: String) -> Result<IpeMaybe<T>, E> {
         if v == "Nothing" {
-            return Ok(SkyMaybe::Nothing);
+            return Ok(IpeMaybe::Nothing);
         }
-        T::deserialize(serde::de::value::StringDeserializer::new(v)).map(SkyMaybe::Just)
+        T::deserialize(serde::de::value::StringDeserializer::new(v)).map(IpeMaybe::Just)
     }
 
     // --- externally-tagged map `{"Just": v}` → Just(T) ---
-    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<SkyMaybe<T>, A::Error> {
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<IpeMaybe<T>, A::Error> {
         use serde::de::Error as _;
         let key: Option<String> = map.next_key()?;
         match key.as_deref() {
@@ -300,14 +300,14 @@ impl<'de, T: serde::de::Deserialize<'de>> serde::de::Visitor<'de> for SkyMaybeVi
                 while map.next_key::<serde::de::IgnoredAny>()?.is_some() {
                     let _: serde::de::IgnoredAny = map.next_value()?;
                 }
-                Ok(SkyMaybe::Just(val))
+                Ok(IpeMaybe::Just(val))
             }
             Some("Nothing") => {
                 // Unit variant as a map key (edge case from some serialisers).
                 while map.next_key::<serde::de::IgnoredAny>()?.is_some() {
                     let _: serde::de::IgnoredAny = map.next_value()?;
                 }
-                Ok(SkyMaybe::Nothing)
+                Ok(IpeMaybe::Nothing)
             }
             Some(other) => Err(A::Error::unknown_variant(other, &["Just", "Nothing"])),
             None => Err(A::Error::missing_field("Just")),
@@ -315,78 +315,78 @@ impl<'de, T: serde::de::Deserialize<'de>> serde::de::Visitor<'de> for SkyMaybeVi
     }
 
     // --- bare numerics / bool → Just(T) ---
-    fn visit_bool<E: serde::de::Error>(self, v: bool) -> Result<SkyMaybe<T>, E> {
-        T::deserialize(serde::de::value::BoolDeserializer::new(v)).map(SkyMaybe::Just)
+    fn visit_bool<E: serde::de::Error>(self, v: bool) -> Result<IpeMaybe<T>, E> {
+        T::deserialize(serde::de::value::BoolDeserializer::new(v)).map(IpeMaybe::Just)
     }
-    fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<SkyMaybe<T>, E> {
-        T::deserialize(serde::de::value::I64Deserializer::new(v)).map(SkyMaybe::Just)
+    fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<IpeMaybe<T>, E> {
+        T::deserialize(serde::de::value::I64Deserializer::new(v)).map(IpeMaybe::Just)
     }
-    fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<SkyMaybe<T>, E> {
-        T::deserialize(serde::de::value::U64Deserializer::new(v)).map(SkyMaybe::Just)
+    fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<IpeMaybe<T>, E> {
+        T::deserialize(serde::de::value::U64Deserializer::new(v)).map(IpeMaybe::Just)
     }
-    fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<SkyMaybe<T>, E> {
-        T::deserialize(serde::de::value::F64Deserializer::new(v)).map(SkyMaybe::Just)
+    fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<IpeMaybe<T>, E> {
+        T::deserialize(serde::de::value::F64Deserializer::new(v)).map(IpeMaybe::Just)
     }
 }
 
-impl<T> SkyMaybe<T> {
+impl<T> IpeMaybe<T> {
     pub fn with_default(self, def: T) -> T {
         match self {
-            SkyMaybe::Just(v) => v,
-            SkyMaybe::Nothing => def,
+            IpeMaybe::Just(v) => v,
+            IpeMaybe::Nothing => def,
         }
     }
     pub fn is_just(&self) -> bool {
-        matches!(self, SkyMaybe::Just(_))
+        matches!(self, IpeMaybe::Just(_))
     }
     pub fn is_nothing(&self) -> bool {
-        matches!(self, SkyMaybe::Nothing)
+        matches!(self, IpeMaybe::Nothing)
     }
 }
 
 // `Nothing` is the natural zero of an absent `Maybe`, mirroring Go's
 // `json.Unmarshal` decoding a missing nullable field to nil. This MANUAL impl
-// (the derive would demand `T: Default`, which a `SkyMaybe<NonDefault>` field
+// (the derive would demand `T: Default`, which a `IpeMaybe<NonDefault>` field
 // cannot satisfy) lets a form-target record carrying a `Maybe X` field qualify
 // for the lenient `#[serde(default)]` form-decode stamp without an E0277.
-// Deliberately NOT provided for `SkyResult`: an absent `Result` has no canonical
+// Deliberately NOT provided for `IpeResult`: an absent `Result` has no canonical
 // zero (`Ok` vs `Err` is undecidable), so a Result-typed form field keeps the
 // strict (non-Default) emission instead — see Emitter.hs `allFieldsDefaultable`.
 //
 // NOT `#[derive(Default)]` (clippy::derivable_impls): the derive stamps a
 // `T: Default` bound on EVERY type param, which would defeat the point — a
-// `SkyMaybe<NonDefault>` field must still have a default (its inner `T` is never
+// `IpeMaybe<NonDefault>` field must still have a default (its inner `T` is never
 // constructed in the `Nothing` zero). This MANUAL impl is unbounded in `T`.
 #[allow(clippy::derivable_impls)]
-impl<T> Default for SkyMaybe<T> {
+impl<T> Default for IpeMaybe<T> {
     fn default() -> Self {
-        SkyMaybe::Nothing
+        IpeMaybe::Nothing
     }
 }
 
-pub fn sky_maybe_map<T, U>(m: SkyMaybe<T>, f: impl FnOnce(T) -> U) -> SkyMaybe<U> {
+pub fn ipe_maybe_map<T, U>(m: IpeMaybe<T>, f: impl FnOnce(T) -> U) -> IpeMaybe<U> {
     match m {
-        SkyMaybe::Just(v) => SkyMaybe::Just(f(v)),
-        SkyMaybe::Nothing => SkyMaybe::Nothing,
+        IpeMaybe::Just(v) => IpeMaybe::Just(f(v)),
+        IpeMaybe::Nothing => IpeMaybe::Nothing,
     }
 }
 
-pub fn sky_maybe_and_then<T, U>(m: SkyMaybe<T>, f: impl FnOnce(T) -> SkyMaybe<U>) -> SkyMaybe<U> {
+pub fn ipe_maybe_and_then<T, U>(m: IpeMaybe<T>, f: impl FnOnce(T) -> IpeMaybe<U>) -> IpeMaybe<U> {
     match m {
-        SkyMaybe::Just(v) => f(v),
-        SkyMaybe::Nothing => SkyMaybe::Nothing,
+        IpeMaybe::Just(v) => f(v),
+        IpeMaybe::Nothing => IpeMaybe::Nothing,
     }
 }
 
-/// `SkyMaybe<T>` -> `Option<T>` for FFI parameter coercion: a Sky `Maybe X`
-/// argument reaches the wrapper as `SkyMaybe<X>` but the underlying crate fn
+/// `IpeMaybe<T>` -> `Option<T>` for FFI parameter coercion: a Sky `Maybe X`
+/// argument reaches the wrapper as `IpeMaybe<X>` but the underlying crate fn
 /// takes `Option<…>`. The generated wrapper calls this then adapts the inner
 /// value (`.as_deref()` for `Option<&str>`, `.map(|x| x as u16)` for narrowed
 /// numerics, identity otherwise). Total: `Just -> Some`, `Nothing -> None`.
-pub fn sky_maybe_to_option<T>(m: SkyMaybe<T>) -> Option<T> {
+pub fn ipe_maybe_to_option<T>(m: IpeMaybe<T>) -> Option<T> {
     match m {
-        SkyMaybe::Just(v) => Some(v),
-        SkyMaybe::Nothing => None,
+        IpeMaybe::Just(v) => Some(v),
+        IpeMaybe::Nothing => None,
     }
 }
 
@@ -394,71 +394,71 @@ pub fn sky_maybe_to_option<T>(m: SkyMaybe<T>) -> Option<T> {
 // Result (generic over error type E)
 // ===========================================
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub enum SkyResult<E, A> {
+pub enum IpeResult<E, A> {
     Ok(A),
     Err(E),
 }
 
-impl<E, A> SkyResult<E, A> {
+impl<E, A> IpeResult<E, A> {
     pub fn is_ok(&self) -> bool {
-        matches!(self, SkyResult::Ok(_))
+        matches!(self, IpeResult::Ok(_))
     }
     pub fn is_err(&self) -> bool {
-        matches!(self, SkyResult::Err(_))
+        matches!(self, IpeResult::Err(_))
     }
     pub fn with_default(self, def: A) -> A {
         match self {
-            SkyResult::Ok(v) => v,
-            SkyResult::Err(_) => def,
+            IpeResult::Ok(v) => v,
+            IpeResult::Err(_) => def,
         }
     }
 }
 
-pub fn sky_result_map<E, A, B>(r: SkyResult<E, A>, f: impl FnOnce(A) -> B) -> SkyResult<E, B> {
+pub fn ipe_result_map<E, A, B>(r: IpeResult<E, A>, f: impl FnOnce(A) -> B) -> IpeResult<E, B> {
     match r {
-        SkyResult::Ok(v) => SkyResult::Ok(f(v)),
-        SkyResult::Err(e) => SkyResult::Err(e),
+        IpeResult::Ok(v) => IpeResult::Ok(f(v)),
+        IpeResult::Err(e) => IpeResult::Err(e),
     }
 }
 
-pub fn sky_result_and_then<E, A, B>(
-    r: SkyResult<E, A>,
-    f: impl FnOnce(A) -> SkyResult<E, B>,
-) -> SkyResult<E, B> {
+pub fn ipe_result_and_then<E, A, B>(
+    r: IpeResult<E, A>,
+    f: impl FnOnce(A) -> IpeResult<E, B>,
+) -> IpeResult<E, B> {
     match r {
-        SkyResult::Ok(v) => f(v),
-        SkyResult::Err(e) => SkyResult::Err(e),
+        IpeResult::Ok(v) => f(v),
+        IpeResult::Err(e) => IpeResult::Err(e),
     }
 }
 
 /// `Result.mapError : (e -> f) -> Result e a -> Result f a`. Container-first in
-/// the runtime (matching `sky_result_map` / `sky_result_and_then`); the emitter
+/// the runtime (matching `ipe_result_map` / `ipe_result_and_then`); the emitter
 /// reverses the Sky `(fn, result)` order via `kernel_swaps_first_two`. Maps the
 /// `Err` channel and leaves the `Ok` value untouched — total, no panic path.
-pub fn sky_result_map_error<E, F, A>(
-    r: SkyResult<E, A>,
+pub fn ipe_result_map_error<E, F, A>(
+    r: IpeResult<E, A>,
     f: impl FnOnce(E) -> F,
-) -> SkyResult<F, A> {
+) -> IpeResult<F, A> {
     match r {
-        SkyResult::Ok(v) => SkyResult::Ok(v),
-        SkyResult::Err(e) => SkyResult::Err(f(e)),
+        IpeResult::Ok(v) => IpeResult::Ok(v),
+        IpeResult::Err(e) => IpeResult::Err(f(e)),
     }
 }
 
 // ===========================================
 // Maybe / Result default + traverse helpers
 // ===========================================
-pub fn result_with_default<E, A>(def: A, r: SkyResult<E, A>) -> A {
+pub fn result_with_default<E, A>(def: A, r: IpeResult<E, A>) -> A {
     match r {
-        SkyResult::Ok(v) => v,
-        SkyResult::Err(_) => def,
+        IpeResult::Ok(v) => v,
+        IpeResult::Err(_) => def,
     }
 }
 
-pub fn maybe_with_default<A>(def: A, m: SkyMaybe<A>) -> A {
+pub fn maybe_with_default<A>(def: A, m: IpeMaybe<A>) -> A {
     match m {
-        SkyMaybe::Just(v) => v,
-        SkyMaybe::Nothing => def,
+        IpeMaybe::Just(v) => v,
+        IpeMaybe::Nothing => def,
     }
 }
 
@@ -468,17 +468,17 @@ pub fn maybe_with_default<A>(def: A, m: SkyMaybe<A>) -> A {
 // MOVED into `f`, matching the Sky pure-Sky one-pass definition. Total: no
 // unwrap/index/panic (`Vec::push` grows, never indexes).
 pub fn result_traverse<T0, T1, E>(
-    f: impl Fn(T0) -> SkyResult<E, T1>,
+    f: impl Fn(T0) -> IpeResult<E, T1>,
     items: Vec<T0>,
-) -> SkyResult<E, Vec<T1>> {
+) -> IpeResult<E, Vec<T1>> {
     let mut out = Vec::with_capacity(items.len());
     for item in items {
         match f(item) {
-            SkyResult::Ok(v) => out.push(v),
-            SkyResult::Err(e) => return SkyResult::Err(e),
+            IpeResult::Ok(v) => out.push(v),
+            IpeResult::Err(e) => return IpeResult::Err(e),
         }
     }
-    SkyResult::Ok(out)
+    IpeResult::Ok(out)
 }
 
 // ===========================================
@@ -496,256 +496,256 @@ pub fn result_traverse<T0, T1, E>(
 /// First `Err` in (ra, rb) order wins — matches the nested-case `.sky` def.
 pub fn result_map2<E, A, B, V>(
     f: impl FnOnce(A, B) -> V,
-    ra: SkyResult<E, A>,
-    rb: SkyResult<E, B>,
-) -> SkyResult<E, V> {
+    ra: IpeResult<E, A>,
+    rb: IpeResult<E, B>,
+) -> IpeResult<E, V> {
     let a = match ra {
-        SkyResult::Ok(a) => a,
-        SkyResult::Err(e) => return SkyResult::Err(e),
+        IpeResult::Ok(a) => a,
+        IpeResult::Err(e) => return IpeResult::Err(e),
     };
     let b = match rb {
-        SkyResult::Ok(b) => b,
-        SkyResult::Err(e) => return SkyResult::Err(e),
+        IpeResult::Ok(b) => b,
+        IpeResult::Err(e) => return IpeResult::Err(e),
     };
-    SkyResult::Ok(f(a, b))
+    IpeResult::Ok(f(a, b))
 }
 
 /// `Result.map3 : (a -> b -> c -> v) -> Result e a -> Result e b -> Result e c
 /// -> Result e v`.
 pub fn result_map3<E, A, B, C, V>(
     f: impl FnOnce(A, B, C) -> V,
-    ra: SkyResult<E, A>,
-    rb: SkyResult<E, B>,
-    rc: SkyResult<E, C>,
-) -> SkyResult<E, V> {
+    ra: IpeResult<E, A>,
+    rb: IpeResult<E, B>,
+    rc: IpeResult<E, C>,
+) -> IpeResult<E, V> {
     let a = match ra {
-        SkyResult::Ok(a) => a,
-        SkyResult::Err(e) => return SkyResult::Err(e),
+        IpeResult::Ok(a) => a,
+        IpeResult::Err(e) => return IpeResult::Err(e),
     };
     let b = match rb {
-        SkyResult::Ok(b) => b,
-        SkyResult::Err(e) => return SkyResult::Err(e),
+        IpeResult::Ok(b) => b,
+        IpeResult::Err(e) => return IpeResult::Err(e),
     };
     let c = match rc {
-        SkyResult::Ok(c) => c,
-        SkyResult::Err(e) => return SkyResult::Err(e),
+        IpeResult::Ok(c) => c,
+        IpeResult::Err(e) => return IpeResult::Err(e),
     };
-    SkyResult::Ok(f(a, b, c))
+    IpeResult::Ok(f(a, b, c))
 }
 
 /// `Result.map4 : (a -> b -> c -> d -> v) -> Result e a -> .. -> Result e v`.
 pub fn result_map4<E, A, B, C, D, V>(
     f: impl FnOnce(A, B, C, D) -> V,
-    ra: SkyResult<E, A>,
-    rb: SkyResult<E, B>,
-    rc: SkyResult<E, C>,
-    rd: SkyResult<E, D>,
-) -> SkyResult<E, V> {
+    ra: IpeResult<E, A>,
+    rb: IpeResult<E, B>,
+    rc: IpeResult<E, C>,
+    rd: IpeResult<E, D>,
+) -> IpeResult<E, V> {
     let a = match ra {
-        SkyResult::Ok(a) => a,
-        SkyResult::Err(e) => return SkyResult::Err(e),
+        IpeResult::Ok(a) => a,
+        IpeResult::Err(e) => return IpeResult::Err(e),
     };
     let b = match rb {
-        SkyResult::Ok(b) => b,
-        SkyResult::Err(e) => return SkyResult::Err(e),
+        IpeResult::Ok(b) => b,
+        IpeResult::Err(e) => return IpeResult::Err(e),
     };
     let c = match rc {
-        SkyResult::Ok(c) => c,
-        SkyResult::Err(e) => return SkyResult::Err(e),
+        IpeResult::Ok(c) => c,
+        IpeResult::Err(e) => return IpeResult::Err(e),
     };
     let d = match rd {
-        SkyResult::Ok(d) => d,
-        SkyResult::Err(e) => return SkyResult::Err(e),
+        IpeResult::Ok(d) => d,
+        IpeResult::Err(e) => return IpeResult::Err(e),
     };
-    SkyResult::Ok(f(a, b, c, d))
+    IpeResult::Ok(f(a, b, c, d))
 }
 
 /// `Result.map5 : (a -> b -> c -> d -> e -> v) -> Result er a -> .. -> Result
 /// er v`. (`er` is the shared error channel; `e` is the fifth `Ok` value.)
 pub fn result_map5<Er, A, B, C, D, E, V>(
     f: impl FnOnce(A, B, C, D, E) -> V,
-    ra: SkyResult<Er, A>,
-    rb: SkyResult<Er, B>,
-    rc: SkyResult<Er, C>,
-    rd: SkyResult<Er, D>,
-    re: SkyResult<Er, E>,
-) -> SkyResult<Er, V> {
+    ra: IpeResult<Er, A>,
+    rb: IpeResult<Er, B>,
+    rc: IpeResult<Er, C>,
+    rd: IpeResult<Er, D>,
+    re: IpeResult<Er, E>,
+) -> IpeResult<Er, V> {
     let a = match ra {
-        SkyResult::Ok(a) => a,
-        SkyResult::Err(e) => return SkyResult::Err(e),
+        IpeResult::Ok(a) => a,
+        IpeResult::Err(e) => return IpeResult::Err(e),
     };
     let b = match rb {
-        SkyResult::Ok(b) => b,
-        SkyResult::Err(e) => return SkyResult::Err(e),
+        IpeResult::Ok(b) => b,
+        IpeResult::Err(e) => return IpeResult::Err(e),
     };
     let c = match rc {
-        SkyResult::Ok(c) => c,
-        SkyResult::Err(e) => return SkyResult::Err(e),
+        IpeResult::Ok(c) => c,
+        IpeResult::Err(e) => return IpeResult::Err(e),
     };
     let d = match rd {
-        SkyResult::Ok(d) => d,
-        SkyResult::Err(e) => return SkyResult::Err(e),
+        IpeResult::Ok(d) => d,
+        IpeResult::Err(e) => return IpeResult::Err(e),
     };
     let e_val = match re {
-        SkyResult::Ok(v) => v,
-        SkyResult::Err(e) => return SkyResult::Err(e),
+        IpeResult::Ok(v) => v,
+        IpeResult::Err(e) => return IpeResult::Err(e),
     };
-    SkyResult::Ok(f(a, b, c, d, e_val))
+    IpeResult::Ok(f(a, b, c, d, e_val))
 }
 
 /// `Result.andMap : Result e a -> Result e (a -> b) -> Result e b`. The `.sky`
 /// definition inspects the FUNCTION result first, so its `Err` wins over the
 /// value's `Err`. The function is applied only when BOTH are `Ok`.
 pub fn result_and_map<E, A, B, F: FnOnce(A) -> B>(
-    ra: SkyResult<E, A>,
-    rf: SkyResult<E, F>,
-) -> SkyResult<E, B> {
+    ra: IpeResult<E, A>,
+    rf: IpeResult<E, F>,
+) -> IpeResult<E, B> {
     match rf {
-        SkyResult::Ok(f) => match ra {
-            SkyResult::Ok(a) => SkyResult::Ok(f(a)),
-            SkyResult::Err(e) => SkyResult::Err(e),
+        IpeResult::Ok(f) => match ra {
+            IpeResult::Ok(a) => IpeResult::Ok(f(a)),
+            IpeResult::Err(e) => IpeResult::Err(e),
         },
-        SkyResult::Err(e) => SkyResult::Err(e),
+        IpeResult::Err(e) => IpeResult::Err(e),
     }
 }
 
 /// `Result.combine : List (Result e a) -> Result e (List a)`. Collects every
 /// `Ok`; the first `Err` in list order short-circuits.
-pub fn result_combine<E, A>(results: Vec<SkyResult<E, A>>) -> SkyResult<E, Vec<A>> {
+pub fn result_combine<E, A>(results: Vec<IpeResult<E, A>>) -> IpeResult<E, Vec<A>> {
     let mut out = Vec::with_capacity(results.len());
     for r in results {
         match r {
-            SkyResult::Ok(v) => out.push(v),
-            SkyResult::Err(e) => return SkyResult::Err(e),
+            IpeResult::Ok(v) => out.push(v),
+            IpeResult::Err(e) => return IpeResult::Err(e),
         }
     }
-    SkyResult::Ok(out)
+    IpeResult::Ok(out)
 }
 
 /// `Maybe.map2 : (a -> b -> v) -> Maybe a -> Maybe b -> Maybe v`.
 pub fn maybe_map2<A, B, V>(
     f: impl FnOnce(A, B) -> V,
-    ma: SkyMaybe<A>,
-    mb: SkyMaybe<B>,
-) -> SkyMaybe<V> {
+    ma: IpeMaybe<A>,
+    mb: IpeMaybe<B>,
+) -> IpeMaybe<V> {
     let a = match ma {
-        SkyMaybe::Just(a) => a,
-        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+        IpeMaybe::Just(a) => a,
+        IpeMaybe::Nothing => return IpeMaybe::Nothing,
     };
     let b = match mb {
-        SkyMaybe::Just(b) => b,
-        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+        IpeMaybe::Just(b) => b,
+        IpeMaybe::Nothing => return IpeMaybe::Nothing,
     };
-    SkyMaybe::Just(f(a, b))
+    IpeMaybe::Just(f(a, b))
 }
 
 /// `Maybe.map3 : (a -> b -> c -> v) -> Maybe a -> Maybe b -> Maybe c -> Maybe v`.
 pub fn maybe_map3<A, B, C, V>(
     f: impl FnOnce(A, B, C) -> V,
-    ma: SkyMaybe<A>,
-    mb: SkyMaybe<B>,
-    mc: SkyMaybe<C>,
-) -> SkyMaybe<V> {
+    ma: IpeMaybe<A>,
+    mb: IpeMaybe<B>,
+    mc: IpeMaybe<C>,
+) -> IpeMaybe<V> {
     let a = match ma {
-        SkyMaybe::Just(a) => a,
-        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+        IpeMaybe::Just(a) => a,
+        IpeMaybe::Nothing => return IpeMaybe::Nothing,
     };
     let b = match mb {
-        SkyMaybe::Just(b) => b,
-        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+        IpeMaybe::Just(b) => b,
+        IpeMaybe::Nothing => return IpeMaybe::Nothing,
     };
     let c = match mc {
-        SkyMaybe::Just(c) => c,
-        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+        IpeMaybe::Just(c) => c,
+        IpeMaybe::Nothing => return IpeMaybe::Nothing,
     };
-    SkyMaybe::Just(f(a, b, c))
+    IpeMaybe::Just(f(a, b, c))
 }
 
 /// `Maybe.map4 : (a -> b -> c -> d -> v) -> Maybe a -> .. -> Maybe v`.
 pub fn maybe_map4<A, B, C, D, V>(
     f: impl FnOnce(A, B, C, D) -> V,
-    ma: SkyMaybe<A>,
-    mb: SkyMaybe<B>,
-    mc: SkyMaybe<C>,
-    md: SkyMaybe<D>,
-) -> SkyMaybe<V> {
+    ma: IpeMaybe<A>,
+    mb: IpeMaybe<B>,
+    mc: IpeMaybe<C>,
+    md: IpeMaybe<D>,
+) -> IpeMaybe<V> {
     let a = match ma {
-        SkyMaybe::Just(a) => a,
-        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+        IpeMaybe::Just(a) => a,
+        IpeMaybe::Nothing => return IpeMaybe::Nothing,
     };
     let b = match mb {
-        SkyMaybe::Just(b) => b,
-        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+        IpeMaybe::Just(b) => b,
+        IpeMaybe::Nothing => return IpeMaybe::Nothing,
     };
     let c = match mc {
-        SkyMaybe::Just(c) => c,
-        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+        IpeMaybe::Just(c) => c,
+        IpeMaybe::Nothing => return IpeMaybe::Nothing,
     };
     let d = match md {
-        SkyMaybe::Just(d) => d,
-        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+        IpeMaybe::Just(d) => d,
+        IpeMaybe::Nothing => return IpeMaybe::Nothing,
     };
-    SkyMaybe::Just(f(a, b, c, d))
+    IpeMaybe::Just(f(a, b, c, d))
 }
 
 /// `Maybe.map5 : (a -> b -> c -> d -> e -> v) -> Maybe a -> .. -> Maybe v`.
 pub fn maybe_map5<A, B, C, D, E, V>(
     f: impl FnOnce(A, B, C, D, E) -> V,
-    ma: SkyMaybe<A>,
-    mb: SkyMaybe<B>,
-    mc: SkyMaybe<C>,
-    md: SkyMaybe<D>,
-    me: SkyMaybe<E>,
-) -> SkyMaybe<V> {
+    ma: IpeMaybe<A>,
+    mb: IpeMaybe<B>,
+    mc: IpeMaybe<C>,
+    md: IpeMaybe<D>,
+    me: IpeMaybe<E>,
+) -> IpeMaybe<V> {
     let a = match ma {
-        SkyMaybe::Just(a) => a,
-        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+        IpeMaybe::Just(a) => a,
+        IpeMaybe::Nothing => return IpeMaybe::Nothing,
     };
     let b = match mb {
-        SkyMaybe::Just(b) => b,
-        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+        IpeMaybe::Just(b) => b,
+        IpeMaybe::Nothing => return IpeMaybe::Nothing,
     };
     let c = match mc {
-        SkyMaybe::Just(c) => c,
-        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+        IpeMaybe::Just(c) => c,
+        IpeMaybe::Nothing => return IpeMaybe::Nothing,
     };
     let d = match md {
-        SkyMaybe::Just(d) => d,
-        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+        IpeMaybe::Just(d) => d,
+        IpeMaybe::Nothing => return IpeMaybe::Nothing,
     };
     let e = match me {
-        SkyMaybe::Just(e) => e,
-        SkyMaybe::Nothing => return SkyMaybe::Nothing,
+        IpeMaybe::Just(e) => e,
+        IpeMaybe::Nothing => return IpeMaybe::Nothing,
     };
-    SkyMaybe::Just(f(a, b, c, d, e))
+    IpeMaybe::Just(f(a, b, c, d, e))
 }
 
 /// `Maybe.andMap : Maybe a -> Maybe (a -> b) -> Maybe b`. Function-Maybe
 /// inspected first (matches the `.sky` definition).
 pub fn maybe_and_map<A, B, F: FnOnce(A) -> B>(
-    ma: SkyMaybe<A>,
-    mf: SkyMaybe<F>,
-) -> SkyMaybe<B> {
+    ma: IpeMaybe<A>,
+    mf: IpeMaybe<F>,
+) -> IpeMaybe<B> {
     match mf {
-        SkyMaybe::Just(f) => match ma {
-            SkyMaybe::Just(a) => SkyMaybe::Just(f(a)),
-            SkyMaybe::Nothing => SkyMaybe::Nothing,
+        IpeMaybe::Just(f) => match ma {
+            IpeMaybe::Just(a) => IpeMaybe::Just(f(a)),
+            IpeMaybe::Nothing => IpeMaybe::Nothing,
         },
-        SkyMaybe::Nothing => SkyMaybe::Nothing,
+        IpeMaybe::Nothing => IpeMaybe::Nothing,
     }
 }
 
 /// `Maybe.combine : List (Maybe a) -> Maybe (List a)`. Collects every `Just`;
 /// the first `Nothing` short-circuits.
-pub fn maybe_combine<A>(maybes: Vec<SkyMaybe<A>>) -> SkyMaybe<Vec<A>> {
+pub fn maybe_combine<A>(maybes: Vec<IpeMaybe<A>>) -> IpeMaybe<Vec<A>> {
     let mut out = Vec::with_capacity(maybes.len());
     for m in maybes {
         match m {
-            SkyMaybe::Just(v) => out.push(v),
-            SkyMaybe::Nothing => return SkyMaybe::Nothing,
+            IpeMaybe::Just(v) => out.push(v),
+            IpeMaybe::Nothing => return IpeMaybe::Nothing,
         }
     }
-    SkyMaybe::Just(out)
+    IpeMaybe::Just(out)
 }
 
 // ===========================================
@@ -856,10 +856,10 @@ pub fn panic_500_body(payload: &(dyn std::any::Any + Send)) -> String {
 ///
 ///   1. `tokio::task::spawn(...)` internally uses `catch_unwind` to turn a task
 ///      panic into a `JoinError`.  The async-FFI binding bodies use this to satisfy
-///      C5 (foreign `async fn` panics → `SkyResult::Err`).
+///      C5 (foreign `async fn` panics → `IpeResult::Err`).
 ///
 ///   2. `block_on`'s `std::thread::spawn(…).join()` catches a panicking entry
-///      future at the OS-thread boundary and maps it to `SkyResult::Err`.
+///      future at the OS-thread boundary and maps it to `IpeResult::Err`.
 ///
 /// By resuming the unwind, both mechanisms can absorb the panic after the hook
 /// has logged the classified error.  For a truly uncaught panic (nothing catches
@@ -881,91 +881,91 @@ mod tests {
     use super::*;
 
     // -----------------------------------------------------------------------
-    // SkyMaybe<T> Deserialize regressions — pinned in-tree for every T.
+    // IpeMaybe<T> Deserialize regressions — pinned in-tree for every T.
     // -----------------------------------------------------------------------
 
-    // --- SkyMaybe<i64> ---
+    // --- IpeMaybe<i64> ---
 
     #[test]
-    fn sky_maybe_i64_tagged_just() {
-        let v: SkyMaybe<i64> = serde_json::from_str(r#"{"Just":5}"#).unwrap();
-        assert_eq!(v, SkyMaybe::Just(5_i64));
+    fn ipe_maybe_i64_tagged_just() {
+        let v: IpeMaybe<i64> = serde_json::from_str(r#"{"Just":5}"#).unwrap();
+        assert_eq!(v, IpeMaybe::Just(5_i64));
     }
 
     #[test]
-    fn sky_maybe_i64_bare_int_becomes_just() {
-        let v: SkyMaybe<i64> = serde_json::from_str("5").unwrap();
-        assert_eq!(v, SkyMaybe::Just(5_i64));
+    fn ipe_maybe_i64_bare_int_becomes_just() {
+        let v: IpeMaybe<i64> = serde_json::from_str("5").unwrap();
+        assert_eq!(v, IpeMaybe::Just(5_i64));
     }
 
     #[test]
-    fn sky_maybe_i64_nothing_string() {
-        let v: SkyMaybe<i64> = serde_json::from_str(r#""Nothing""#).unwrap();
-        assert_eq!(v, SkyMaybe::Nothing);
+    fn ipe_maybe_i64_nothing_string() {
+        let v: IpeMaybe<i64> = serde_json::from_str(r#""Nothing""#).unwrap();
+        assert_eq!(v, IpeMaybe::Nothing);
     }
 
     #[test]
-    fn sky_maybe_i64_null_becomes_nothing() {
-        let v: SkyMaybe<i64> = serde_json::from_str("null").unwrap();
-        assert_eq!(v, SkyMaybe::Nothing);
+    fn ipe_maybe_i64_null_becomes_nothing() {
+        let v: IpeMaybe<i64> = serde_json::from_str("null").unwrap();
+        assert_eq!(v, IpeMaybe::Nothing);
     }
 
     #[test]
-    fn sky_maybe_i64_round_trip() {
-        let original = SkyMaybe::Just(42_i64);
+    fn ipe_maybe_i64_round_trip() {
+        let original = IpeMaybe::Just(42_i64);
         let json = serde_json::to_string(&original).unwrap();
-        let decoded: SkyMaybe<i64> = serde_json::from_str(&json).unwrap();
+        let decoded: IpeMaybe<i64> = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, original);
 
-        let nothing: SkyMaybe<i64> = SkyMaybe::Nothing;
+        let nothing: IpeMaybe<i64> = IpeMaybe::Nothing;
         let json2 = serde_json::to_string(&nothing).unwrap();
-        let decoded2: SkyMaybe<i64> = serde_json::from_str(&json2).unwrap();
+        let decoded2: IpeMaybe<i64> = serde_json::from_str(&json2).unwrap();
         assert_eq!(decoded2, nothing);
     }
 
-    // --- SkyMaybe<bool> ---
+    // --- IpeMaybe<bool> ---
 
     #[test]
-    fn sky_maybe_bool_bare_true_becomes_just() {
-        let v: SkyMaybe<bool> = serde_json::from_str("true").unwrap();
-        assert_eq!(v, SkyMaybe::Just(true));
+    fn ipe_maybe_bool_bare_true_becomes_just() {
+        let v: IpeMaybe<bool> = serde_json::from_str("true").unwrap();
+        assert_eq!(v, IpeMaybe::Just(true));
     }
 
     #[test]
-    fn sky_maybe_bool_tagged_just() {
-        let v: SkyMaybe<bool> = serde_json::from_str(r#"{"Just":false}"#).unwrap();
-        assert_eq!(v, SkyMaybe::Just(false));
+    fn ipe_maybe_bool_tagged_just() {
+        let v: IpeMaybe<bool> = serde_json::from_str(r#"{"Just":false}"#).unwrap();
+        assert_eq!(v, IpeMaybe::Just(false));
     }
 
     #[test]
-    fn sky_maybe_bool_null_becomes_nothing() {
-        let v: SkyMaybe<bool> = serde_json::from_str("null").unwrap();
-        assert_eq!(v, SkyMaybe::Nothing);
+    fn ipe_maybe_bool_null_becomes_nothing() {
+        let v: IpeMaybe<bool> = serde_json::from_str("null").unwrap();
+        assert_eq!(v, IpeMaybe::Nothing);
     }
 
-    // --- SkyMaybe<f64> ---
+    // --- IpeMaybe<f64> ---
 
     #[test]
-    fn sky_maybe_f64_bare_float_becomes_just() {
-        let v: SkyMaybe<f64> = serde_json::from_str("1.5").unwrap();
-        assert_eq!(v, SkyMaybe::Just(1.5_f64));
-    }
-
-    #[test]
-    fn sky_maybe_f64_tagged_just() {
-        let v: SkyMaybe<f64> = serde_json::from_str(r#"{"Just":2.5}"#).unwrap();
-        assert_eq!(v, SkyMaybe::Just(2.5_f64));
+    fn ipe_maybe_f64_bare_float_becomes_just() {
+        let v: IpeMaybe<f64> = serde_json::from_str("1.5").unwrap();
+        assert_eq!(v, IpeMaybe::Just(1.5_f64));
     }
 
     #[test]
-    fn sky_maybe_f64_round_trip() {
-        let original = SkyMaybe::Just(0.25_f64);
+    fn ipe_maybe_f64_tagged_just() {
+        let v: IpeMaybe<f64> = serde_json::from_str(r#"{"Just":2.5}"#).unwrap();
+        assert_eq!(v, IpeMaybe::Just(2.5_f64));
+    }
+
+    #[test]
+    fn ipe_maybe_f64_round_trip() {
+        let original = IpeMaybe::Just(0.25_f64);
         let json = serde_json::to_string(&original).unwrap();
-        let decoded: SkyMaybe<f64> = serde_json::from_str(&json).unwrap();
+        let decoded: IpeMaybe<f64> = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, original);
     }
 
-    // --- SkyMaybe<SmallStruct> ---
+    // --- IpeMaybe<SmallStruct> ---
     //
     // The guardian confirmed that a bare map `{...}` is REJECTED (Err), NOT
     // mis-decoded as Just(struct).  A bare object arrives via visit_map; the
@@ -979,17 +979,17 @@ mod tests {
     }
 
     #[test]
-    fn sky_maybe_struct_tagged_just() {
-        let v: SkyMaybe<SmallPoint> = serde_json::from_str(r#"{"Just":{"x":1,"y":2}}"#).unwrap();
-        assert_eq!(v, SkyMaybe::Just(SmallPoint { x: 1, y: 2 }));
+    fn ipe_maybe_struct_tagged_just() {
+        let v: IpeMaybe<SmallPoint> = serde_json::from_str(r#"{"Just":{"x":1,"y":2}}"#).unwrap();
+        assert_eq!(v, IpeMaybe::Just(SmallPoint { x: 1, y: 2 }));
     }
 
     #[test]
-    fn sky_maybe_struct_bare_map_is_rejected_not_mis_just() {
+    fn ipe_maybe_struct_bare_map_is_rejected_not_mis_just() {
         // A bare `{"x":1,"y":2}` must NOT decode as Just(SmallPoint{1,2}).
         // The visitor's map arm checks the first key: "x" is not "Just"/"Nothing"
         // → unknown_variant error.  Correct, safe behaviour confirmed by guardian.
-        let result: Result<SkyMaybe<SmallPoint>, _> = serde_json::from_str(r#"{"x":1,"y":2}"#);
+        let result: Result<IpeMaybe<SmallPoint>, _> = serde_json::from_str(r#"{"x":1,"y":2}"#);
         assert!(
             result.is_err(),
             "bare struct map must not silently decode as Just"
@@ -997,74 +997,74 @@ mod tests {
     }
 
     #[test]
-    fn sky_maybe_struct_null_becomes_nothing() {
-        let v: SkyMaybe<SmallPoint> = serde_json::from_str("null").unwrap();
-        assert_eq!(v, SkyMaybe::Nothing);
+    fn ipe_maybe_struct_null_becomes_nothing() {
+        let v: IpeMaybe<SmallPoint> = serde_json::from_str("null").unwrap();
+        assert_eq!(v, IpeMaybe::Nothing);
     }
 
     #[test]
-    fn sky_maybe_struct_round_trip() {
-        let original = SkyMaybe::Just(SmallPoint { x: 10, y: 20 });
+    fn ipe_maybe_struct_round_trip() {
+        let original = IpeMaybe::Just(SmallPoint { x: 10, y: 20 });
         let json = serde_json::to_string(&original).unwrap();
-        let decoded: SkyMaybe<SmallPoint> = serde_json::from_str(&json).unwrap();
+        let decoded: IpeMaybe<SmallPoint> = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, original);
     }
 
-    // --- SkyMaybe<Vec<i64>> ---
+    // --- IpeMaybe<Vec<i64>> ---
 
     #[test]
-    fn sky_maybe_vec_i64_tagged_just() {
-        let v: SkyMaybe<Vec<i64>> = serde_json::from_str(r#"{"Just":[1,2,3]}"#).unwrap();
-        assert_eq!(v, SkyMaybe::Just(vec![1_i64, 2, 3]));
+    fn ipe_maybe_vec_i64_tagged_just() {
+        let v: IpeMaybe<Vec<i64>> = serde_json::from_str(r#"{"Just":[1,2,3]}"#).unwrap();
+        assert_eq!(v, IpeMaybe::Just(vec![1_i64, 2, 3]));
     }
 
     #[test]
-    fn sky_maybe_vec_i64_null_becomes_nothing() {
-        let v: SkyMaybe<Vec<i64>> = serde_json::from_str("null").unwrap();
-        assert_eq!(v, SkyMaybe::Nothing);
+    fn ipe_maybe_vec_i64_null_becomes_nothing() {
+        let v: IpeMaybe<Vec<i64>> = serde_json::from_str("null").unwrap();
+        assert_eq!(v, IpeMaybe::Nothing);
     }
 
     #[test]
-    fn sky_maybe_vec_i64_round_trip() {
-        let original = SkyMaybe::Just(vec![10_i64, 20, 30]);
+    fn ipe_maybe_vec_i64_round_trip() {
+        let original = IpeMaybe::Just(vec![10_i64, 20, 30]);
         let json = serde_json::to_string(&original).unwrap();
-        let decoded: SkyMaybe<Vec<i64>> = serde_json::from_str(&json).unwrap();
+        let decoded: IpeMaybe<Vec<i64>> = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, original);
     }
 
-    // --- SkyMaybe<SkyMaybe<i64>> (nested) ---
+    // --- IpeMaybe<IpeMaybe<i64>> (nested) ---
 
     #[test]
-    fn sky_maybe_nested_just_just() {
+    fn ipe_maybe_nested_just_just() {
         // {"Just":{"Just":5}} → Just(Just(5))
-        let v: SkyMaybe<SkyMaybe<i64>> = serde_json::from_str(r#"{"Just":{"Just":5}}"#).unwrap();
-        assert_eq!(v, SkyMaybe::Just(SkyMaybe::Just(5_i64)));
+        let v: IpeMaybe<IpeMaybe<i64>> = serde_json::from_str(r#"{"Just":{"Just":5}}"#).unwrap();
+        assert_eq!(v, IpeMaybe::Just(IpeMaybe::Just(5_i64)));
     }
 
     #[test]
-    fn sky_maybe_nested_just_nothing() {
+    fn ipe_maybe_nested_just_nothing() {
         // {"Just":"Nothing"} → Just(Nothing)
-        let v: SkyMaybe<SkyMaybe<i64>> = serde_json::from_str(r#"{"Just":"Nothing"}"#).unwrap();
-        assert_eq!(v, SkyMaybe::Just(SkyMaybe::Nothing));
+        let v: IpeMaybe<IpeMaybe<i64>> = serde_json::from_str(r#"{"Just":"Nothing"}"#).unwrap();
+        assert_eq!(v, IpeMaybe::Just(IpeMaybe::Nothing));
     }
 
     #[test]
-    fn sky_maybe_nested_nothing() {
-        let v: SkyMaybe<SkyMaybe<i64>> = serde_json::from_str(r#""Nothing""#).unwrap();
-        assert_eq!(v, SkyMaybe::Nothing);
+    fn ipe_maybe_nested_nothing() {
+        let v: IpeMaybe<IpeMaybe<i64>> = serde_json::from_str(r#""Nothing""#).unwrap();
+        assert_eq!(v, IpeMaybe::Nothing);
     }
 
     #[test]
-    fn sky_maybe_nested_null_becomes_nothing() {
-        let v: SkyMaybe<SkyMaybe<i64>> = serde_json::from_str("null").unwrap();
-        assert_eq!(v, SkyMaybe::Nothing);
+    fn ipe_maybe_nested_null_becomes_nothing() {
+        let v: IpeMaybe<IpeMaybe<i64>> = serde_json::from_str("null").unwrap();
+        assert_eq!(v, IpeMaybe::Nothing);
     }
 
     #[test]
-    fn sky_maybe_nested_round_trip() {
-        let original: SkyMaybe<SkyMaybe<i64>> = SkyMaybe::Just(SkyMaybe::Just(99_i64));
+    fn ipe_maybe_nested_round_trip() {
+        let original: IpeMaybe<IpeMaybe<i64>> = IpeMaybe::Just(IpeMaybe::Just(99_i64));
         let json = serde_json::to_string(&original).unwrap();
-        let decoded: SkyMaybe<SkyMaybe<i64>> = serde_json::from_str(&json).unwrap();
+        let decoded: IpeMaybe<IpeMaybe<i64>> = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, original);
     }
 
@@ -1126,7 +1126,7 @@ mod tests {
         let e = SecretBearingError {
             bearer: "Bearer sk_live_SUPERSECRET_KEY",
         };
-        let msg: String = sky_error_from_foreign(e);
+        let msg: String = ipe_error_from_foreign(e);
         assert!(
             !msg.contains("SUPERSECRET") && !msg.contains("Bearer") && !msg.contains("bearer"),
             "the foreign Debug detail (with the bearer token) must NOT reach the Sky-visible \

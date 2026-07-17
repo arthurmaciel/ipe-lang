@@ -8,7 +8,7 @@
 //!   String` resolves and compiles);
 //! * a pattern-bound payload and a helper parameter naming (or inferring) the
 //!   same nominal type agree on ONE Rust type (`ipe_runtime::error::
-//!   SkyPanicInfo` etc.) — without the fix, this exact shape was an
+//!   IpePanicInfo` etc.) — without the fix, this exact shape was an
 //!   exit-0-then-cargo-fail (the helper's parameter lowered to a
 //!   project-local synthesized record struct);
 //! * field access on all six fixed fields resolves through `ipe_types`'

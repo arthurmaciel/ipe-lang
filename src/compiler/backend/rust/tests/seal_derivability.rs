@@ -5,14 +5,14 @@
 //! Before the seal, `emit_types` stamped that derive on every generated struct /
 //! enum, so a well-typed record like `{ dec : Decoder Int }` made `skyc` exit 0
 //! and then `cargo build` fail (E0277 `Clone` / E0369 `==` / E0599
-//! `SkyStringify`) — the highest-bar exit-0-then-cargo-fail breach. The gate is
+//! `IpeStringify`) — the highest-bar exit-0-then-cargo-fail breach. The gate is
 //! now a function of a computed derivability flag ([`ipe_ir::ir_type_is_derivable`]
 //! together with the backend fixpoint), so the derive can never appear on a
 //! non-derivable type by construction.
 //!
 //! These tests assert the emitted *text*. A non-derivable type carries no
 //! `#[derive(` attribute and renders its non-derivable fields as a `<fn>`
-//! placeholder in `SkyStringify`; a normal all-primitive record still carries
+//! placeholder in `IpeStringify`; a normal all-primitive record still carries
 //! the full derive and the autoref dispatch (byte-shape unchanged).
 
 use std::collections::BTreeMap;
@@ -149,7 +149,7 @@ fn decoder_field_record_has_no_derive() -> DResult<()> {
     assert_no_full_derive(&src, "struct", &name);
     assert!(
         src.contains("\"<fn>\""),
-        "non-derivable field renders `<fn>` placeholder in SkyStringify:\n{src}"
+        "non-derivable field renders `<fn>` placeholder in IpeStringify:\n{src}"
     );
     assert!(
         src.contains("(&ipe_runtime::stringify::Wrap(&self.n)).dispatch()"),
@@ -241,7 +241,7 @@ fn enum_with_function_payload_has_no_derive() -> DResult<()> {
     );
     assert!(
         src.contains("MainHolder::Wrap(_)"),
-        "function payload binds `_` in the SkyStringify arm:\n{src}"
+        "function payload binds `_` in the IpeStringify arm:\n{src}"
     );
     Ok(())
 }

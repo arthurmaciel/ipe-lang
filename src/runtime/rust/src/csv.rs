@@ -57,10 +57,10 @@ pub struct CsvDoc {
 /// takes only the first (possibly continuation) byte, producing a nonsense
 /// delimiter; the empty case silently falls back to `,`, which is wrong for
 /// callers that passed an explicit delimiter. Return `Err` for both cases.
-fn validated_delimiter<E: From<String>>(delim: &str) -> SkyResult<E, u8> {
+fn validated_delimiter<E: From<String>>(delim: &str) -> IpeResult<E, u8> {
     match delim.as_bytes() {
-        [b] if b.is_ascii() => SkyResult::Ok(*b),
-        _ => SkyResult::Err(
+        [b] if b.is_ascii() => IpeResult::Ok(*b),
+        _ => IpeResult::Err(
             format!(
                 "Csv: delimiter must be a single ASCII byte, got {:?}",
                 delim
@@ -70,7 +70,7 @@ fn validated_delimiter<E: From<String>>(delim: &str) -> SkyResult<E, u8> {
     }
 }
 
-fn parse_delim<E: From<String>>(text: &str, delim: u8) -> SkyResult<E, CsvDoc> {
+fn parse_delim<E: From<String>>(text: &str, delim: u8) -> IpeResult<E, CsvDoc> {
     let mut rdr = ::csv::ReaderBuilder::new()
         .delimiter(delim)
         .has_headers(true)
@@ -78,7 +78,7 @@ fn parse_delim<E: From<String>>(text: &str, delim: u8) -> SkyResult<E, CsvDoc> {
         .from_reader(text.as_bytes());
     let header: Vec<String> = match rdr.headers() {
         Ok(h) => h.iter().map(|s| s.to_string()).collect(),
-        Err(e) => return SkyResult::Err(format!("Csv.parse: {}", e).into()),
+        Err(e) => return IpeResult::Err(format!("Csv.parse: {}", e).into()),
     };
     // Row cap: a large/untrusted input would otherwise accumulate unbounded into
     // `rows`. Bound it (IPE_CSV_MAX_ROWS, default 10M) → Err rather than OOM.
@@ -93,7 +93,7 @@ fn parse_delim<E: From<String>>(text: &str, delim: u8) -> SkyResult<E, CsvDoc> {
         match rec {
             Ok(r) => {
                 if rows.len() >= max_rows {
-                    return SkyResult::Err(
+                    return IpeResult::Err(
                         format!(
                             "Csv.parse: exceeds row cap of {} (raise IPE_CSV_MAX_ROWS)",
                             max_rows
@@ -103,10 +103,10 @@ fn parse_delim<E: From<String>>(text: &str, delim: u8) -> SkyResult<E, CsvDoc> {
                 }
                 rows.push(r.iter().map(|s| s.to_string()).collect());
             }
-            Err(e) => return SkyResult::Err(format!("Csv.parse: {}", e).into()),
+            Err(e) => return IpeResult::Err(format!("Csv.parse: {}", e).into()),
         }
     }
-    SkyResult::Ok(CsvDoc { header, rows })
+    IpeResult::Ok(CsvDoc { header, rows })
 }
 
 /// Spreadsheet formula-injection guard (CWE-1236 / OWASP). A cell beginning with
@@ -157,7 +157,7 @@ fn encode_delim(doc: &CsvDoc, delim: u8) -> String {
 }
 
 /// Csv.parse : String -> Result Error Csv
-pub fn csv_parse<E: From<String>>(text: String) -> SkyResult<E, CsvDoc> {
+pub fn csv_parse<E: From<String>>(text: String) -> IpeResult<E, CsvDoc> {
     parse_delim(&text, b',')
 }
 
@@ -165,10 +165,10 @@ pub fn csv_parse<E: From<String>>(text: String) -> SkyResult<E, CsvDoc> {
 pub fn csv_parse_with_delimiter<E: From<String>>(
     delim: String,
     text: String,
-) -> SkyResult<E, CsvDoc> {
+) -> IpeResult<E, CsvDoc> {
     let byte = match validated_delimiter::<E>(&delim) {
-        SkyResult::Ok(b) => b,
-        SkyResult::Err(e) => return SkyResult::Err(e),
+        IpeResult::Ok(b) => b,
+        IpeResult::Err(e) => return IpeResult::Err(e),
     };
     parse_delim(&text, byte)
 }
@@ -185,8 +185,8 @@ pub fn csv_encode_with_delimiter(delim: String, doc: CsvDoc) -> String {
     // silently taking a partial/wrong byte. This matches Go's behaviour
     // (the Go csv.Writer panics on a non-ASCII Comma — we degrade gracefully).
     let byte = match validated_delimiter::<String>(&delim) {
-        SkyResult::Ok(b) => b,
-        SkyResult::Err(_) => b',',
+        IpeResult::Ok(b) => b,
+        IpeResult::Err(_) => b',',
     };
     encode_delim(&doc, byte)
 }
@@ -230,11 +230,11 @@ fn csv_parse_stream_from_file_sync(path: &str) -> Result<Vec<Vec<String>>, Strin
 /// the module-level doc comment on `run_blocking` above.
 pub fn csv_parse_stream_from_file<E: From<String> + Send + 'static>(
     path: String,
-) -> SkyTask<E, Vec<Vec<String>>> {
+) -> IpeTask<E, Vec<Vec<String>>> {
     Box::pin(async move {
         match run_blocking(move || csv_parse_stream_from_file_sync(&path)).await {
             Ok(v) => ok_res(v),
-            Err(e) => SkyResult::Err(format!("Csv.parseStreamFromFile: {}", e).into()),
+            Err(e) => IpeResult::Err(format!("Csv.parseStreamFromFile: {}", e).into()),
         }
     })
 }
@@ -263,9 +263,9 @@ mod tests {
 
     #[test]
     fn parse_then_encode_roundtrip() {
-        let doc: SkyResult<String, CsvDoc> = csv_parse("a,b\n1,2\n3,4".to_string());
+        let doc: IpeResult<String, CsvDoc> = csv_parse("a,b\n1,2\n3,4".to_string());
         let d = match doc {
-            SkyResult::Ok(d) => d,
+            IpeResult::Ok(d) => d,
             _ => panic!("parse failed"),
         };
         assert_eq!(d.header, vec!["a", "b"]);
@@ -296,13 +296,13 @@ mod tests {
     /// both paths must return the same rows).
     #[test]
     fn parse_stream_from_file_reads_all_rows() {
-        let p = std::env::temp_dir().join(format!("sky_csv_stream_{}.csv", std::process::id()));
+        let p = std::env::temp_dir().join(format!("ipe_csv_stream_{}.csv", std::process::id()));
         std::fs::write(&p, "a,b\n1,2\n3,4\n").unwrap();
-        let res: SkyResult<String, Vec<Vec<String>>> =
+        let res: IpeResult<String, Vec<Vec<String>>> =
             block(csv_parse_stream_from_file(p.to_string_lossy().into_owned()));
         let _ = std::fs::remove_file(&p);
         match res {
-            SkyResult::Ok(rows) => {
+            IpeResult::Ok(rows) => {
                 assert_eq!(
                     rows,
                     vec![
@@ -312,31 +312,31 @@ mod tests {
                     ]
                 );
             }
-            SkyResult::Err(e) => panic!("unexpected Err: {e}"),
+            IpeResult::Err(e) => panic!("unexpected Err: {e}"),
         }
     }
 
     #[test]
     fn parse_stream_from_file_missing_file_errs() {
-        let res: SkyResult<String, Vec<Vec<String>>> = block(csv_parse_stream_from_file(
+        let res: IpeResult<String, Vec<Vec<String>>> = block(csv_parse_stream_from_file(
             "/nonexistent/sky/csv/path/does-not-exist.csv".to_string(),
         ));
-        assert!(matches!(res, SkyResult::Err(_)));
+        assert!(matches!(res, IpeResult::Err(_)));
     }
 
     #[test]
     fn parse_stream_from_file_respects_row_cap() {
-        let p = std::env::temp_dir().join(format!("sky_csv_stream_cap_{}.csv", std::process::id()));
+        let p = std::env::temp_dir().join(format!("ipe_csv_stream_cap_{}.csv", std::process::id()));
         std::fs::write(&p, "a\n1\n2\n3\n4\n5\n").unwrap();
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::set_var("IPE_CSV_MAX_ROWS", "2") };
-        let res: SkyResult<String, Vec<Vec<String>>> =
+        let res: IpeResult<String, Vec<Vec<String>>> =
             block(csv_parse_stream_from_file(p.to_string_lossy().into_owned()));
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::remove_var("IPE_CSV_MAX_ROWS") };
         let _ = std::fs::remove_file(&p);
         assert!(
-            matches!(res, SkyResult::Err(_)),
+            matches!(res, IpeResult::Err(_)),
             "6-row file under a 2-row cap must Err"
         );
     }
@@ -367,7 +367,7 @@ mod stream_from_file_spawn_blocking_tests {
             .build()
             .unwrap();
         let p = std::env::temp_dir().join(format!(
-            "sky_csv_spawn_blocking_probe_{}.csv",
+            "ipe_csv_spawn_blocking_probe_{}.csv",
             std::process::id()
         ));
         // A large CSV file so the read + parse takes measurable wall time.
@@ -389,8 +389,8 @@ mod stream_from_file_spawn_blocking_tests {
                     tokio::task::yield_now().await;
                 }
             });
-            let parse_fut: SkyTask<String, Vec<Vec<String>>> = csv_parse_stream_from_file(path);
-            let _res: SkyResult<String, Vec<Vec<String>>> = parse_fut.await;
+            let parse_fut: IpeTask<String, Vec<Vec<String>>> = csv_parse_stream_from_file(path);
+            let _res: IpeResult<String, Vec<Vec<String>>> = parse_fut.await;
             ticker.abort();
             counter.load(Ordering::Relaxed)
         });

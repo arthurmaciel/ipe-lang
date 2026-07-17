@@ -11,7 +11,7 @@
 //!   or `Sub.every` call anchors the `msg` type parameter.
 //! * An **un-anchored** `Cmd.none` / `Sub.none` (free `msg` type variable)
 //!   surfaces IPE-L0102 rather than emitting Rust that `cargo build` rejects
-//!   with E0282 ("type annotations needed for `tea::SkyCmd<_>`").
+//!   with E0282 ("type annotations needed for `tea::IpeCmd<_>`").
 //!
 //! No TEA dispatch loop is exercised here — that lands in M6.  These are
 //! pure construct-and-discard tests whose sole output is `"ok\n"`.
@@ -84,7 +84,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 // ── Cmd.perform construct-only ────────────────────────────────────────────────
 
 /// `let _ = Cmd.perform (Task.succeed 1) (\_ -> 0) in println "ok"`.
-/// Constructs a `SkyCmd<i64>` thunk and discards it; confirms `cmd_perform`
+/// Constructs a `IpeCmd<i64>` thunk and discards it; confirms `cmd_perform`
 /// wiring through type-checker, lowerer, emitter, and runtime link.
 /// Output: `"ok"`.
 #[test]
@@ -146,7 +146,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code)
 /// no sibling to pin its `msg` type.  The HM solver leaves `msg` as a free
 /// type variable; skyc must exit 1 with IPE-L0102, never emit Rust that
 /// `cargo build` rejects with E0282 ("type annotations needed for
-/// `tea::SkyCmd<_>`").
+/// `tea::IpeCmd<_>`").
 #[test]
 fn undetermined_cmd_none_msg_is_sky_l0102() {
     assert_gate(

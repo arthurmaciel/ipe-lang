@@ -1,4 +1,4 @@
-// System helpers — some generic over E (when returning SkyTask).
+// System helpers — some generic over E (when returning IpeTask).
 use super::*;
 
 // `std::env::set_var`/`remove_var` are documented as NOT thread-safe: a mutator
@@ -82,7 +82,7 @@ pub(crate) fn locked_remove_var(key: &str) {
     unsafe { std::env::remove_var(key) };
 }
 
-pub fn system_args<E: Send + 'static>(_: ()) -> SkyTask<E, Vec<String>> {
+pub fn system_args<E: Send + 'static>(_: ()) -> IpeTask<E, Vec<String>> {
     Box::pin(async move { ok_res(std::env::args().skip(1).collect()) })
 }
 
@@ -147,7 +147,7 @@ fn process_run_sync(cmd: &str, args: &[String]) -> Result<std::process::Output, 
 pub fn process_run<E: Send + From<String> + 'static>(
     cmd: String,
     args: Vec<String>,
-) -> SkyTask<E, String> {
+) -> IpeTask<E, String> {
     Box::pin(async move {
         // `process_run_sync` already folds `cmd` into its `Err` string (spawn
         // failure), so the outer `Err` arm (a `run_blocking` `JoinError`,
@@ -179,10 +179,10 @@ pub fn process_run<E: Send + From<String> + 'static>(
                     } else {
                         text
                     };
-                    SkyResult::Err(str_err(&format!("{}: {}", snippet, out.status)))
+                    IpeResult::Err(str_err(&format!("{}: {}", snippet, out.status)))
                 }
             }
-            Err(e) => SkyResult::Err(str_err(&e)),
+            Err(e) => IpeResult::Err(str_err(&e)),
         }
     })
 }
@@ -219,7 +219,7 @@ pub fn system_exit(code: i64) -> ! {
 }
 
 /// `Sky.Core.System.getenv key : String -> Task Error String` — the env var as a
-/// Task, or `Err` when unset. Returning a `SkyTask` (not a bare `String`) is
+/// Task, or `Err` when unset. Returning a `IpeTask` (not a bare `String`) is
 /// required for parity: `getenv` is Task-typed in the stdlib, so a bare `String`
 /// fails to type-check in any `Task.andThen`/`Task.run` position. Returning `Err`
 /// on unset (rather than `Ok("")`) mirrors Go's `System_getenv` ErrNotFound
@@ -228,13 +228,13 @@ pub fn system_exit(code: i64) -> ! {
 /// can only build `From<String>`, so the kind is coarser than Go's typed
 /// NotFound (shared limitation with `system_cwd`). NOTE: `getenvOr` stays a bare
 /// `String` (the default plugs the missing case at the call site).
-pub fn system_getenv<E: Send + From<String> + 'static>(key: String) -> SkyTask<E, String> {
+pub fn system_getenv<E: Send + From<String> + 'static>(key: String) -> IpeTask<E, String> {
     Box::pin(async move {
         match read_env_var(&key) {
             Ok(v) => ok_res(v),
             Err(_) => {
                 let msg = format!("environment variable {:?} is not set", key);
-                SkyResult::Err(str_err(&msg))
+                IpeResult::Err(str_err(&msg))
             }
         }
     })
@@ -248,7 +248,7 @@ pub fn system_getenv_or(key: String, default: String) -> String {
 /// ErrNotFound); set-but-not-an-int → `Err` (Go's ErrFfi). The string-based error
 /// follows the generic-`E` convention (coarser than Go's typed kinds; shared with
 /// `getenv`/`cwd`).
-pub fn system_getenv_int<E: Send + From<String> + 'static>(key: String) -> SkyTask<E, i64> {
+pub fn system_getenv_int<E: Send + From<String> + 'static>(key: String) -> IpeTask<E, i64> {
     Box::pin(async move {
         let r: Result<i64, String> = match read_env_var(&key) {
             Err(_) => Err(format!("environment variable {:?} is not set", key)),
@@ -263,7 +263,7 @@ pub fn system_getenv_int<E: Send + From<String> + 'static>(key: String) -> SkyTa
         };
         match r {
             Ok(n) => ok_res(n),
-            Err(m) => SkyResult::Err(str_err(&m)),
+            Err(m) => IpeResult::Err(str_err(&m)),
         }
     })
 }
@@ -271,7 +271,7 @@ pub fn system_getenv_int<E: Send + From<String> + 'static>(key: String) -> SkyTa
 /// `System.getenvBool key : String -> Task Error Bool`. Matches Go's truthy/falsy
 /// table: `true/yes/1/on/y/t` → true; `false/no/0/off/n/f`/empty → false; unset →
 /// `Err` (NotFound); anything else → `Err` (not-a-bool).
-pub fn system_getenv_bool<E: Send + From<String> + 'static>(key: String) -> SkyTask<E, bool> {
+pub fn system_getenv_bool<E: Send + From<String> + 'static>(key: String) -> IpeTask<E, bool> {
     Box::pin(async move {
         let r: Result<bool, String> = match read_env_var(&key) {
             Err(_) => Err(format!("environment variable {:?} is not set", key)),
@@ -284,7 +284,7 @@ pub fn system_getenv_bool<E: Send + From<String> + 'static>(key: String) -> SkyT
         };
         match r {
             Ok(b) => ok_res(b),
-            Err(m) => SkyResult::Err(str_err(&m)),
+            Err(m) => IpeResult::Err(str_err(&m)),
         }
     })
 }
@@ -293,28 +293,28 @@ pub fn system_getenv_bool<E: Send + From<String> + 'static>(key: String) -> SkyT
 /// vector to match Go's `System_getArg` (`os.Args[n]` — index 0 is the program
 /// name, UNLIKE `System.args` which skips it); out-of-range / negative →
 /// `Ok Nothing`. Never `Err` (mirrors Go).
-pub fn system_get_arg<E: Send + 'static>(n: i64) -> SkyTask<E, SkyMaybe<String>> {
+pub fn system_get_arg<E: Send + 'static>(n: i64) -> IpeTask<E, IpeMaybe<String>> {
     Box::pin(async move {
         let out = if n < 0 {
-            SkyMaybe::Nothing
+            IpeMaybe::Nothing
         } else {
             match std::env::args().nth(n as usize) {
-                Some(a) => SkyMaybe::Just(a),
-                None => SkyMaybe::Nothing,
+                Some(a) => IpeMaybe::Just(a),
+                None => IpeMaybe::Nothing,
             }
         };
         ok_res(out)
     })
 }
 
-pub fn system_setenv<E: Send + 'static>(key: String, val: String) -> SkyTask<E, ()> {
+pub fn system_setenv<E: Send + 'static>(key: String, val: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         locked_set_var(&key, &val);
         ok_res(())
     })
 }
 
-pub fn system_unsetenv<E: Send + 'static>(key: String) -> SkyTask<E, ()> {
+pub fn system_unsetenv<E: Send + 'static>(key: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         locked_remove_var(&key);
         ok_res(())
@@ -322,18 +322,18 @@ pub fn system_unsetenv<E: Send + 'static>(key: String) -> SkyTask<E, ()> {
 }
 
 /// `System.cwd : () -> Task Error String`.
-pub fn system_cwd<E: Send + From<String> + 'static>(_: ()) -> SkyTask<E, String> {
+pub fn system_cwd<E: Send + From<String> + 'static>(_: ()) -> IpeTask<E, String> {
     Box::pin(async move {
         match std::env::current_dir() {
             Ok(p) => ok_res(p.to_string_lossy().into_owned()),
-            Err(e) => SkyResult::Err(str_err(&format!("{}", e))),
+            Err(e) => IpeResult::Err(str_err(&format!("{}", e))),
         }
     })
 }
 
 /// `System.getcwd : () -> Task Error String` — backward-compat alias for `cwd`.
 /// Go: `func System_getcwd(unit any) any { return System_cwd(unit) }`.
-pub fn system_getcwd<E: Send + From<String> + 'static>(unit: ()) -> SkyTask<E, String> {
+pub fn system_getcwd<E: Send + From<String> + 'static>(unit: ()) -> IpeTask<E, String> {
     system_cwd(unit)
 }
 
@@ -372,7 +372,7 @@ fn system_load_env_sync() {
 /// use. Real-world impact is low (`.env` is small and read once at startup),
 /// but on a slow/network filesystem an inline read would stall the tokio
 /// worker thread polling this future.
-pub fn system_load_env<E: Send + 'static>(_: ()) -> SkyTask<E, ()> {
+pub fn system_load_env<E: Send + 'static>(_: ()) -> IpeTask<E, ()> {
     Box::pin(async move {
         // `run_blocking`'s `Err` arm (the blocking task panicked) is folded
         // back into `Ok(())` here — `loadEnv` never surfaces an `Err` for a
@@ -430,30 +430,30 @@ mod process_run_tests {
     /// paths must return the same result).
     #[test]
     fn success_returns_combined_output() {
-        let res: SkyResult<String, String> = block(process_run::<String>(
+        let res: IpeResult<String, String> = block(process_run::<String>(
             "echo".to_string(),
             vec!["hello".to_string()],
         ));
         match res {
-            SkyResult::Ok(s) => assert!(s.contains("hello"), "unexpected output: {s:?}"),
-            SkyResult::Err(e) => panic!("unexpected Err: {e}"),
+            IpeResult::Ok(s) => assert!(s.contains("hello"), "unexpected output: {s:?}"),
+            IpeResult::Err(e) => panic!("unexpected Err: {e}"),
         }
     }
 
     #[test]
     fn nonexistent_binary_errs() {
-        let res: SkyResult<String, String> = block(process_run::<String>(
+        let res: IpeResult<String, String> = block(process_run::<String>(
             "sky-does-not-exist-binary-xyz".to_string(),
             vec![],
         ));
-        assert!(matches!(res, SkyResult::Err(_)));
+        assert!(matches!(res, IpeResult::Err(_)));
     }
 
     #[test]
     fn nonzero_exit_errs() {
-        let res: SkyResult<String, String> =
+        let res: IpeResult<String, String> =
             block(process_run::<String>("false".to_string(), vec![]));
-        assert!(matches!(res, SkyResult::Err(_)));
+        assert!(matches!(res, IpeResult::Err(_)));
     }
 }
 
@@ -492,9 +492,9 @@ mod process_run_spawn_blocking_tests {
                     tokio::task::yield_now().await;
                 }
             });
-            let run_fut: SkyTask<String, String> =
+            let run_fut: IpeTask<String, String> =
                 process_run("sleep".to_string(), vec!["1".to_string()]);
-            let _res: SkyResult<String, String> = run_fut.await;
+            let _res: IpeResult<String, String> = run_fut.await;
             ticker.abort();
             counter.load(Ordering::Relaxed)
         });
@@ -548,7 +548,7 @@ mod system_load_env_spawn_blocking_tests {
             .unwrap()
             .as_nanos();
         let dir = std::env::temp_dir().join(format!(
-            "sky_load_env_spawn_blocking_probe_{}_{}",
+            "ipe_load_env_spawn_blocking_probe_{}_{}",
             std::process::id(),
             nanos
         ));
@@ -576,8 +576,8 @@ mod system_load_env_spawn_blocking_tests {
                     tokio::task::yield_now().await;
                 }
             });
-            let load_fut: SkyTask<String, ()> = system_load_env(());
-            let _res: SkyResult<String, ()> = load_fut.await;
+            let load_fut: IpeTask<String, ()> = system_load_env(());
+            let _res: IpeResult<String, ()> = load_fut.await;
             ticker.abort();
             counter.load(Ordering::Relaxed)
         });

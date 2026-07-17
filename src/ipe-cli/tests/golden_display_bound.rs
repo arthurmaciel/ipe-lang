@@ -14,10 +14,10 @@
 //! `BoundSet::DISPLAY` flag, rendered by `render_bounds` as `std::fmt::Display`.
 //! The bound is decided STRUCTURALLY, at IR level, by the GENERAL kernel->bound
 //! map (`apply_kernel_type_param_bounds` / `body_calls_kernel_on_param`) that
-//! generalises the `Db.get*`->`SkyRow` machinery: it fires ONLY when the fn
+//! generalises the `Db.get*`->`IpeRow` machinery: it fires ONLY when the fn
 //! body contains an actual `Basics.toString` KERNEL application whose sole
 //! argument (arg 0) is a `Var`/`CloneVar` reference to the param. Unlike the
-//! wildcard-only `SkyRow`, `Display` applies to wildcard `any` AND named tvars
+//! wildcard-only `IpeRow`, `Display` applies to wildcard `any` AND named tvars
 //! alike — `toString` is legitimate on any polymorphic value, and `T: Display`
 //! is satisfiable by every scalar caller (Int/Float/Bool/String).
 //!

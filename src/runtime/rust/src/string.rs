@@ -3,7 +3,7 @@
 //! Argument order matches the Go runtime's typed kernels
 //! (runtime-go/rt/rt.go: String_replace / String_startsWith / etc.).
 
-use super::SkyMaybe;
+use super::IpeMaybe;
 
 // ── Core String kernels (relocated from core.rs so the String surface has one home) ──
 
@@ -47,10 +47,10 @@ pub fn string_contains(sub: String, s: String) -> bool {
 /// emitted code never reaches it; the golden oracle confirms `Nothing`.) This
 /// also matches Elm-family `String.toInt`, which does not trim. So no `.trim()`
 /// here — a leading/trailing space yields `Nothing`, exactly like the oracle.
-pub fn string_to_int(s: String) -> SkyMaybe<i64> {
+pub fn string_to_int(s: String) -> IpeMaybe<i64> {
     match s.parse::<i64>() {
-        Ok(v) => SkyMaybe::Just(v),
-        Err(_) => SkyMaybe::Nothing,
+        Ok(v) => IpeMaybe::Just(v),
+        Err(_) => IpeMaybe::Nothing,
     }
 }
 /// `String.toFloat : String -> Maybe Float`. Go parity (`String_toFloat`):
@@ -65,10 +65,10 @@ pub fn string_to_int(s: String) -> SkyMaybe<i64> {
 /// decimal / scientific grammar, rejecting Go's hex-float (`0x1p-2`) and
 /// underscore-digit-separator forms. This is a deliberate tightening — those
 /// forms never round-trip from `String.fromFloat` — so no golden is needed.
-pub fn string_to_float(s: String) -> SkyMaybe<f64> {
+pub fn string_to_float(s: String) -> IpeMaybe<f64> {
     match s.trim().parse::<f64>() {
-        Ok(v) => SkyMaybe::Just(v),
-        Err(_) => SkyMaybe::Nothing,
+        Ok(v) => IpeMaybe::Just(v),
+        Err(_) => IpeMaybe::Nothing,
     }
 }
 /// `String.fromChar : Char -> String`.
@@ -1032,45 +1032,45 @@ mod tests {
     // Surrounding whitespace ⇒ Nothing; only a clean numeric string parses.
     #[test]
     fn test_to_int_plain() {
-        assert!(matches!(string_to_int("42".into()), SkyMaybe::Just(42)));
+        assert!(matches!(string_to_int("42".into()), IpeMaybe::Just(42)));
     }
     #[test]
     fn test_to_int_negative() {
-        assert!(matches!(string_to_int("-5".into()), SkyMaybe::Just(-5)));
+        assert!(matches!(string_to_int("-5".into()), IpeMaybe::Just(-5)));
     }
     #[test]
     fn test_to_int_no_trim_leading() {
-        assert!(matches!(string_to_int(" 42".into()), SkyMaybe::Nothing));
+        assert!(matches!(string_to_int(" 42".into()), IpeMaybe::Nothing));
     }
     #[test]
     fn test_to_int_no_trim_trailing() {
-        assert!(matches!(string_to_int("42 ".into()), SkyMaybe::Nothing));
+        assert!(matches!(string_to_int("42 ".into()), IpeMaybe::Nothing));
     }
     #[test]
     fn test_to_int_no_trim_both() {
-        assert!(matches!(string_to_int(" 42 ".into()), SkyMaybe::Nothing));
+        assert!(matches!(string_to_int(" 42 ".into()), IpeMaybe::Nothing));
     }
     #[test]
     fn test_to_int_garbage() {
-        assert!(matches!(string_to_int("4x".into()), SkyMaybe::Nothing));
+        assert!(matches!(string_to_int("4x".into()), IpeMaybe::Nothing));
     }
 
     // string_to_float — Unicode-whitespace trim
     #[test]
     fn test_to_float_plain() {
-        assert!(matches!(string_to_float("1.5".into()), SkyMaybe::Just(v) if v == 1.5));
+        assert!(matches!(string_to_float("1.5".into()), IpeMaybe::Just(v) if v == 1.5));
     }
     #[test]
     fn test_to_float_trimmed() {
-        assert!(matches!(string_to_float("  1.5\n".into()), SkyMaybe::Just(v) if v == 1.5));
+        assert!(matches!(string_to_float("  1.5\n".into()), IpeMaybe::Just(v) if v == 1.5));
     }
     #[test]
     fn test_to_float_scientific() {
-        assert!(matches!(string_to_float(" 1e3 ".into()), SkyMaybe::Just(v) if v == 1000.0));
+        assert!(matches!(string_to_float(" 1e3 ".into()), IpeMaybe::Just(v) if v == 1000.0));
     }
     #[test]
     fn test_to_float_garbage() {
-        assert!(matches!(string_to_float("1.2.3".into()), SkyMaybe::Nothing));
+        assert!(matches!(string_to_float("1.2.3".into()), IpeMaybe::Nothing));
     }
 
     // round-trip toList / fromList

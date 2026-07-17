@@ -12,7 +12,7 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use ipe_db::{ModuleOrigin, SkyDatabase, SourceFile, SourceRoot};
+use ipe_db::{ModuleOrigin, IpeDatabase, SourceFile, SourceRoot};
 
 /// A shared, poison-safe log of executed-query debug keys.
 #[derive(Clone, Default)]
@@ -45,10 +45,10 @@ impl EventLog {
 }
 
 /// A database whose `WillExecute` events land in the returned log.
-fn logged_db() -> (SkyDatabase, EventLog) {
+fn logged_db() -> (IpeDatabase, EventLog) {
     let log = EventLog::default();
     let sink = log.clone();
-    let db = SkyDatabase::with_event_callback(Box::new(move |event: salsa::Event| {
+    let db = IpeDatabase::with_event_callback(Box::new(move |event: salsa::Event| {
         if let salsa::EventKind::WillExecute { database_key } = event.kind {
             sink.push(format!("{database_key:?}"));
         }
@@ -56,7 +56,7 @@ fn logged_db() -> (SkyDatabase, EventLog) {
     (db, log)
 }
 
-fn file(db: &SkyDatabase, path: &[&str], text: &str) -> SourceFile {
+fn file(db: &IpeDatabase, path: &[&str], text: &str) -> SourceFile {
     SourceFile::new(
         db,
         path.iter().map(|s| (*s).to_owned()).collect(),
@@ -65,7 +65,7 @@ fn file(db: &SkyDatabase, path: &[&str], text: &str) -> SourceFile {
     )
 }
 
-fn root_of(db: &SkyDatabase, files: &[(&[&str], SourceFile)]) -> SourceRoot {
+fn root_of(db: &IpeDatabase, files: &[(&[&str], SourceFile)]) -> SourceRoot {
     SourceRoot::new(
         db,
         files

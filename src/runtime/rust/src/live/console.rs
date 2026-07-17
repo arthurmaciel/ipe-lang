@@ -91,7 +91,7 @@ pub async fn api_traces() -> impl IntoResponse {
 /// dashboard renders (mirror of Go's parsed Prometheus summary).
 pub async fn api_metrics_summary() -> impl IntoResponse {
     let body = format!(
-        r#"{{"sky_live_requests_total":{},"sky_live_errors_total":{}}}"#,
+        r#"{{"ipe_live_requests_total":{},"ipe_live_errors_total":{}}}"#,
         telemetry::requests_total(),
         telemetry::errors_total()
     );

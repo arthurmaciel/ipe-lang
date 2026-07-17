@@ -2,18 +2,18 @@
 use super::*;
 use std::future::ready;
 
-pub fn block_on<E, A>(future: SkyTask<E, A>) -> SkyResult<E, A>
+pub fn block_on<E, A>(future: IpeTask<E, A>) -> IpeResult<E, A>
 where
     E: From<String> + Send + 'static,
     A: Send + 'static,
 {
     let rt = match tokio::runtime::Runtime::new() {
         Ok(r) => r,
-        Err(e) => return SkyResult::Err(format!("tokio runtime init failed: {}", e).into()),
+        Err(e) => return IpeResult::Err(format!("tokio runtime init failed: {}", e).into()),
     };
     match std::thread::spawn(move || rt.block_on(future)).join() {
         Ok(r) => r,
-        Err(_) => SkyResult::Err("async task panicked".to_string().into()),
+        Err(_) => IpeResult::Err("async task panicked".to_string().into()),
     }
 }
 
@@ -42,9 +42,9 @@ where
 // webview future would propagate (the synchronous-panic gate at the entry
 // boundary classifies it). That is acceptable for the webview shape: the
 // webview path itself is total (window/webview construction failure returns
-// `SkyResult::Err`), so a panic would be a genuine compiler/runtime bug, not a
+// `IpeResult::Err`), so a panic would be a genuine compiler/runtime bug, not a
 // well-typed-Sky-reachable abort.
-pub fn block_on_current_thread<E, A>(future: SkyTask<E, A>) -> SkyResult<E, A>
+pub fn block_on_current_thread<E, A>(future: IpeTask<E, A>) -> IpeResult<E, A>
 where
     E: From<String> + Send + 'static,
     A: Send + 'static,
@@ -54,19 +54,19 @@ where
         .build()
     {
         Ok(r) => r,
-        Err(e) => return SkyResult::Err(format!("tokio runtime init failed: {}", e).into()),
+        Err(e) => return IpeResult::Err(format!("tokio runtime init failed: {}", e).into()),
     };
     rt.block_on(future)
 }
 
-pub fn task_succeed<E: Send + 'static, A: Send + 'static>(a: A) -> SkyTask<E, A> {
+pub fn task_succeed<E: Send + 'static, A: Send + 'static>(a: A) -> IpeTask<E, A> {
     Box::pin(ready(ok_res::<E, A>(a)))
 }
 
 pub fn task_map<E, A, B>(
     f: impl FnOnce(A) -> B + Send + 'static,
-    task: SkyTask<E, A>,
-) -> SkyTask<E, B>
+    task: IpeTask<E, A>,
+) -> IpeTask<E, B>
 where
     E: Send + 'static,
     A: Send + 'static,
@@ -74,16 +74,16 @@ where
 {
     Box::pin(async move {
         match task.await {
-            SkyResult::Ok(a) => ok_res(f(a)),
-            SkyResult::Err(e) => SkyResult::Err(e),
+            IpeResult::Ok(a) => ok_res(f(a)),
+            IpeResult::Err(e) => IpeResult::Err(e),
         }
     })
 }
 
 pub fn task_and_then<E, A, B>(
-    task: SkyTask<E, A>,
-    f: impl FnOnce(A) -> SkyTask<E, B> + Send + 'static,
-) -> SkyTask<E, B>
+    task: IpeTask<E, A>,
+    f: impl FnOnce(A) -> IpeTask<E, B> + Send + 'static,
+) -> IpeTask<E, B>
 where
     E: Send + 'static,
     A: Send + 'static,
@@ -91,16 +91,16 @@ where
 {
     Box::pin(async move {
         match task.await {
-            SkyResult::Ok(a) => f(a).await,
-            SkyResult::Err(e) => SkyResult::Err(e),
+            IpeResult::Ok(a) => f(a).await,
+            IpeResult::Err(e) => IpeResult::Err(e),
         }
     })
 }
 
 pub fn task_map_error<E1, E2, A>(
     f: impl FnOnce(E1) -> E2 + Send + 'static,
-    task: SkyTask<E1, A>,
-) -> SkyTask<E2, A>
+    task: IpeTask<E1, A>,
+) -> IpeTask<E2, A>
 where
     E1: Send + 'static,
     E2: Send + 'static,
@@ -108,29 +108,29 @@ where
 {
     Box::pin(async move {
         match task.await {
-            SkyResult::Ok(a) => ok_res(a),
-            SkyResult::Err(e) => SkyResult::Err(f(e)),
+            IpeResult::Ok(a) => ok_res(a),
+            IpeResult::Err(e) => IpeResult::Err(f(e)),
         }
     })
 }
 
 /// `Task.lazy : (() -> Task e a) -> Task e a`.
-/// Sky closures of type `() -> Task e a` are lowered as `FnOnce(()) -> SkyTask`
+/// Sky closures of type `() -> Task e a` are lowered as `FnOnce(()) -> IpeTask`
 /// (unit-arg), so the wrapper must accept `(())` and pass it through.
 pub fn task_lazy<E: Send + 'static, A: Send + 'static>(
-    f: impl FnOnce(()) -> SkyTask<E, A> + Send + 'static,
-) -> SkyTask<E, A> {
+    f: impl FnOnce(()) -> IpeTask<E, A> + Send + 'static,
+) -> IpeTask<E, A> {
     Box::pin(async move { f(()).await })
 }
 
-pub fn task_from_result<E: Send + 'static, A: Send + 'static>(r: SkyResult<E, A>) -> SkyTask<E, A> {
+pub fn task_from_result<E: Send + 'static, A: Send + 'static>(r: IpeResult<E, A>) -> IpeTask<E, A> {
     Box::pin(ready(r))
 }
 
 pub fn task_and_then_result<E, A, B>(
-    f: impl FnOnce(A) -> SkyResult<E, B> + Send + 'static,
-    task: SkyTask<E, A>,
-) -> SkyTask<E, B>
+    f: impl FnOnce(A) -> IpeResult<E, B> + Send + 'static,
+    task: IpeTask<E, A>,
+) -> IpeTask<E, B>
 where
     E: Send + 'static,
     A: Send + 'static,
@@ -138,50 +138,50 @@ where
 {
     Box::pin(async move {
         match task.await {
-            SkyResult::Ok(a) => f(a),
-            SkyResult::Err(e) => SkyResult::Err(e),
+            IpeResult::Ok(a) => f(a),
+            IpeResult::Err(e) => IpeResult::Err(e),
         }
     })
 }
 
 pub fn task_on_error<E, A>(
-    f: impl FnOnce(E) -> SkyTask<E, A> + Send + 'static,
-    task: SkyTask<E, A>,
-) -> SkyTask<E, A>
+    f: impl FnOnce(E) -> IpeTask<E, A> + Send + 'static,
+    task: IpeTask<E, A>,
+) -> IpeTask<E, A>
 where
     E: Send + 'static,
     A: Send + 'static,
 {
     Box::pin(async move {
         match task.await {
-            SkyResult::Ok(a) => ok_res(a),
-            SkyResult::Err(e) => f(e).await,
+            IpeResult::Ok(a) => ok_res(a),
+            IpeResult::Err(e) => f(e).await,
         }
     })
 }
 
-pub fn task_fail<E: Send + 'static, A: Send + 'static>(e: E) -> SkyTask<E, A> {
-    Box::pin(ready(SkyResult::Err(e)))
+pub fn task_fail<E: Send + 'static, A: Send + 'static>(e: E) -> IpeTask<E, A> {
+    Box::pin(ready(IpeResult::Err(e)))
 }
 
-pub fn task_perform<E: Send + 'static, A: Send + 'static>(task: SkyTask<E, A>) -> SkyTask<E, ()> {
+pub fn task_perform<E: Send + 'static, A: Send + 'static>(task: IpeTask<E, A>) -> IpeTask<E, ()> {
     Box::pin(async move {
         match task.await {
-            SkyResult::Ok(_) => ok_res(()),
-            SkyResult::Err(e) => SkyResult::Err(e),
+            IpeResult::Ok(_) => ok_res(()),
+            IpeResult::Err(e) => IpeResult::Err(e),
         }
     })
 }
 
 pub fn task_sequence<E: Send + 'static, A: Send + 'static>(
-    tasks: Vec<SkyTask<E, A>>,
-) -> SkyTask<E, Vec<A>> {
+    tasks: Vec<IpeTask<E, A>>,
+) -> IpeTask<E, Vec<A>> {
     Box::pin(async move {
         let mut out = Vec::with_capacity(tasks.len());
         for t in tasks {
             match t.await {
-                SkyResult::Ok(a) => out.push(a),
-                SkyResult::Err(e) => return SkyResult::Err(e),
+                IpeResult::Ok(a) => out.push(a),
+                IpeResult::Err(e) => return IpeResult::Err(e),
             }
         }
         ok_res(out)
@@ -189,8 +189,8 @@ pub fn task_sequence<E: Send + 'static, A: Send + 'static>(
 }
 
 pub fn task_run<E: From<String> + Send + 'static, A: Send + 'static>(
-    task: SkyTask<E, A>,
-) -> SkyResult<E, A> {
+    task: IpeTask<E, A>,
+) -> IpeResult<E, A> {
     block_on(task)
 }
 
@@ -233,23 +233,23 @@ pub fn task_run<E: From<String> + Send + 'static, A: Send + 'static>(
 // abort, so the cancelled-handle case is unreachable on this path); it is
 // mapped to the same `Err` the previous implementation surfaced.
 pub fn task_parallel<E: From<String> + Send + 'static, A: Send + 'static>(
-    tasks: Vec<SkyTask<E, A>>,
-) -> SkyTask<E, Vec<A>> {
+    tasks: Vec<IpeTask<E, A>>,
+) -> IpeTask<E, Vec<A>> {
     Box::pin(async move {
         // Spawn every task up front so they run concurrently. `VecDeque` lets us
         // pop the front (input order) to await while the un-awaited tail stays
         // addressable for `abort()` on failure.
-        let mut handles: std::collections::VecDeque<tokio::task::JoinHandle<SkyResult<E, A>>> =
+        let mut handles: std::collections::VecDeque<tokio::task::JoinHandle<IpeResult<E, A>>> =
             tasks.into_iter().map(tokio::spawn).collect();
         let mut out = Vec::with_capacity(handles.len());
         while let Some(h) = handles.pop_front() {
             let result = match h.await {
                 Ok(r) => r,
-                Err(_join_err) => SkyResult::Err("parallel task panicked".to_string().into()),
+                Err(_join_err) => IpeResult::Err("parallel task panicked".to_string().into()),
             };
             match result {
-                SkyResult::Ok(a) => out.push(a),
-                SkyResult::Err(e) => {
+                IpeResult::Ok(a) => out.push(a),
+                IpeResult::Err(e) => {
                     // First failure (input order). Abort every survivor still in
                     // the queue (all ordered AFTER this task) so none of their
                     // side effects can fire once we have reported failure.
@@ -258,7 +258,7 @@ pub fn task_parallel<E: From<String> + Send + 'static, A: Send + 'static>(
                     for survivor in &handles {
                         survivor.abort();
                     }
-                    return SkyResult::Err(e);
+                    return IpeResult::Err(e);
                 }
             }
         }
@@ -270,14 +270,14 @@ pub fn task_parallel<E: From<String> + Send + 'static, A: Send + 'static>(
 //
 // A real retry loop, faithful to runtime-go/rt/task_retry.go. The two things
 // Rust could not give the old run-once stub — re-running the one-shot
-// `SkyTask` future, and reading the generated, runtime-unnameable `RetryPolicy`
+// `IpeTask` future, and reading the generated, runtime-unnameable `RetryPolicy`
 // / `ShouldRetry` ADT fields — are both supplied by CODEGEN now:
 //   * The policy is DESTRUCTURED at the call site into the primitive fields
 //     (`max_attempts` / `base_ms` / `jitter` / `kind`) plus a `should_retry`
 //     closure lowered from the `ShouldRetry e` ADT (`RetryAlways` → `|_| true`,
 //     `RetryWhen f` → `move |e| f(e.clone())`).
 //   * The task argument is wrapped in a re-runnable `make_task : impl Fn() ->
-//     SkyTask<E, A>` closure, so each attempt rebuilds a fresh future (the
+//     IpeTask<E, A>` closure, so each attempt rebuilds a fresh future (the
 //     side effects re-fire per attempt, exactly as Go re-invokes its thunk).
 //
 // Semantics (mirror Go's `Task_retryWith` loop):
@@ -299,8 +299,8 @@ pub fn task_retry_with<E, A>(
     jitter: bool,
     kind: i64,
     should_retry: impl Fn(&E) -> bool + Send + 'static,
-    make_task: impl Fn() -> SkyTask<E, A> + Send + 'static,
-) -> SkyTask<E, A>
+    make_task: impl Fn() -> IpeTask<E, A> + Send + 'static,
+) -> IpeTask<E, A>
 where
     E: Send + 'static,
     A: Send + 'static,
@@ -311,13 +311,13 @@ where
         let mut attempt: i64 = 1;
         loop {
             match make_task().await {
-                SkyResult::Ok(a) => return ok_res(a),
-                SkyResult::Err(e) => {
+                IpeResult::Ok(a) => return ok_res(a),
+                IpeResult::Err(e) => {
                     if attempt >= attempts {
-                        return SkyResult::Err(e);
+                        return IpeResult::Err(e);
                     }
                     if !should_retry(&e) {
-                        return SkyResult::Err(e);
+                        return IpeResult::Err(e);
                     }
                     let delay = retry_compute_delay(kind, base, attempt, jitter);
                     if delay > 0 {
@@ -438,7 +438,7 @@ mod retry_tests {
     fn transient_factory(
         counter: Arc<AtomicI64>,
         threshold: i64,
-    ) -> impl Fn() -> SkyTask<String, i64> + Send + Sync + 'static {
+    ) -> impl Fn() -> IpeTask<String, i64> + Send + Sync + 'static {
         move || {
             let counter = counter.clone();
             Box::pin(async move {
@@ -446,7 +446,7 @@ mod retry_tests {
                 if n >= threshold {
                     ok_res::<String, i64>(n)
                 } else {
-                    SkyResult::Err(format!("boom-{}", n))
+                    IpeResult::Err(format!("boom-{}", n))
                 }
             })
         }
@@ -465,8 +465,8 @@ mod retry_tests {
             transient_factory(counter.clone(), 3),
         );
         match block_on(task) {
-            SkyResult::Ok(n) => assert_eq!(n, 3),
-            SkyResult::Err(e) => panic!("expected Ok(3), got Err({})", e),
+            IpeResult::Ok(n) => assert_eq!(n, 3),
+            IpeResult::Err(e) => panic!("expected Ok(3), got Err({})", e),
         }
         assert_eq!(counter.load(Ordering::SeqCst), 3, "task ran 3 times");
     }
@@ -484,8 +484,8 @@ mod retry_tests {
             transient_factory(counter.clone(), 999),
         );
         match block_on(task) {
-            SkyResult::Ok(n) => panic!("expected Err, got Ok({})", n),
-            SkyResult::Err(e) => assert_eq!(e, "boom-4", "last attempt's err"),
+            IpeResult::Ok(n) => panic!("expected Err, got Ok({})", n),
+            IpeResult::Err(e) => assert_eq!(e, "boom-4", "last attempt's err"),
         }
         assert_eq!(counter.load(Ordering::SeqCst), 4, "ran exactly maxAttempts");
     }
@@ -503,8 +503,8 @@ mod retry_tests {
             transient_factory(counter.clone(), 999),
         );
         match block_on(task) {
-            SkyResult::Ok(n) => panic!("expected Err, got Ok({})", n),
-            SkyResult::Err(e) => assert_eq!(e, "boom-1", "first attempt's err"),
+            IpeResult::Ok(n) => panic!("expected Err, got Ok({})", n),
+            IpeResult::Err(e) => assert_eq!(e, "boom-1", "first attempt's err"),
         }
         assert_eq!(counter.load(Ordering::SeqCst), 1, "short-circuited after 1");
     }
@@ -523,9 +523,9 @@ mod retry_tests {
             transient_factory(counter.clone(), 999),
         );
         match block_on(task) {
-            SkyResult::Ok(n) => panic!("expected Err, got Ok({})", n),
+            IpeResult::Ok(n) => panic!("expected Err, got Ok({})", n),
             // attempt1 → boom-1 (retry), attempt2 → boom-2 (predicate false → stop).
-            SkyResult::Err(e) => assert_eq!(e, "boom-2"),
+            IpeResult::Err(e) => assert_eq!(e, "boom-2"),
         }
         assert_eq!(counter.load(Ordering::SeqCst), 2);
     }
@@ -543,8 +543,8 @@ mod retry_tests {
             transient_factory(counter.clone(), 999),
         );
         match block_on(task) {
-            SkyResult::Ok(n) => panic!("expected Err, got Ok({})", n),
-            SkyResult::Err(e) => assert_eq!(e, "boom-1"),
+            IpeResult::Ok(n) => panic!("expected Err, got Ok({})", n),
+            IpeResult::Err(e) => assert_eq!(e, "boom-1"),
         }
         assert_eq!(counter.load(Ordering::SeqCst), 1, "clamped to a single run");
     }
@@ -562,8 +562,8 @@ mod retry_tests {
             transient_factory(counter.clone(), 1),
         );
         match block_on(task) {
-            SkyResult::Ok(n) => assert_eq!(n, 1),
-            SkyResult::Err(e) => panic!("expected Ok(1), got Err({})", e),
+            IpeResult::Ok(n) => assert_eq!(n, 1),
+            IpeResult::Err(e) => panic!("expected Ok(1), got Err({})", e),
         }
         assert_eq!(counter.load(Ordering::SeqCst), 1, "ran once on success");
     }
@@ -593,11 +593,11 @@ mod parallel_abort_tests {
         counter: Arc<AtomicU64>,
         delay_ms: u64,
         value: i64,
-    ) -> SkyTask<String, i64> {
+    ) -> IpeTask<String, i64> {
         Box::pin(async move {
             sleep(Duration::from_millis(delay_ms)).await;
             counter.fetch_add(1, Ordering::SeqCst);
-            SkyResult::Ok(value)
+            IpeResult::Ok(value)
         })
     }
 
@@ -608,8 +608,8 @@ mod parallel_abort_tests {
         // Index 0 fails immediately; indices 1..=3 would each bump the counter
         // after 200 ms. Input-order await observes the index-0 failure first and
         // must abort the three survivors mid-sleep.
-        let tasks: Vec<SkyTask<String, i64>> = vec![
-            Box::pin(async { SkyResult::Err("boom".to_string()) }),
+        let tasks: Vec<IpeTask<String, i64>> = vec![
+            Box::pin(async { IpeResult::Err("boom".to_string()) }),
             side_effect_task(counter.clone(), 200, 1),
             side_effect_task(counter.clone(), 200, 2),
             side_effect_task(counter.clone(), 200, 3),
@@ -617,8 +617,8 @@ mod parallel_abort_tests {
 
         let result = task_parallel(tasks).await;
         match result {
-            SkyResult::Err(e) => assert_eq!(e, "boom"),
-            SkyResult::Ok(v) => panic!("expected Err(boom), got Ok({:?})", v),
+            IpeResult::Err(e) => assert_eq!(e, "boom"),
+            IpeResult::Ok(v) => panic!("expected Err(boom), got Ok({:?})", v),
         }
 
         // Wait comfortably past the siblings' 200 ms delay. If they had merely
@@ -638,7 +638,7 @@ mod parallel_abort_tests {
 
         // Completion order is the REVERSE of input order: task 0 sleeps longest,
         // task 3 finishes first. The result Vec must still be [0, 1, 2, 3].
-        let tasks: Vec<SkyTask<String, i64>> = vec![
+        let tasks: Vec<IpeTask<String, i64>> = vec![
             side_effect_task(counter.clone(), 120, 0),
             side_effect_task(counter.clone(), 90, 1),
             side_effect_task(counter.clone(), 60, 2),
@@ -646,8 +646,8 @@ mod parallel_abort_tests {
         ];
 
         match task_parallel(tasks).await {
-            SkyResult::Ok(v) => assert_eq!(v, vec![0, 1, 2, 3], "Ok results in input order"),
-            SkyResult::Err(e) => panic!("expected Ok, got Err({})", e),
+            IpeResult::Ok(v) => assert_eq!(v, vec![0, 1, 2, 3], "Ok results in input order"),
+            IpeResult::Err(e) => panic!("expected Ok, got Err({})", e),
         }
         assert_eq!(
             counter.load(Ordering::SeqCst),
@@ -663,22 +663,22 @@ mod parallel_abort_tests {
         // failure in INPUT order — which is index 1 here (index 0 is Ok). The
         // point: the winning error is deterministic w.r.t. input order.
         let counter = Arc::new(AtomicU64::new(0));
-        let tasks: Vec<SkyTask<String, i64>> = vec![
+        let tasks: Vec<IpeTask<String, i64>> = vec![
             side_effect_task(counter.clone(), 10, 0),
-            Box::pin(async { SkyResult::Err("first-in-order".to_string()) }),
+            Box::pin(async { IpeResult::Err("first-in-order".to_string()) }),
             side_effect_task(counter.clone(), 300, 2),
             Box::pin(async {
                 sleep(Duration::from_millis(5)).await;
-                SkyResult::Err("later-in-order".to_string())
+                IpeResult::Err("later-in-order".to_string())
             }),
         ];
 
         match task_parallel(tasks).await {
-            SkyResult::Err(e) => assert_eq!(
+            IpeResult::Err(e) => assert_eq!(
                 e, "first-in-order",
                 "winning error is the first failure in INPUT order"
             ),
-            SkyResult::Ok(v) => panic!("expected Err, got Ok({:?})", v),
+            IpeResult::Ok(v) => panic!("expected Err, got Ok({:?})", v),
         }
 
         // The index-2 survivor (300 ms) must have been aborted, not detached.

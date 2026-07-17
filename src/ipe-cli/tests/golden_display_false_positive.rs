@@ -2,8 +2,8 @@
 //! NOT over-bound.
 //!
 //! The `Display` obligation is decided per-param by the EXACT `toString`
-//! argument position (arg 0), mirroring the `SkyRow` per-row-arg precision.
-//! A wildcard `any` param used ONLY as a Db row (which correctly gains `SkyRow`)
+//! argument position (arg 0), mirroring the `IpeRow` per-row-arg precision.
+//! A wildcard `any` param used ONLY as a Db row (which correctly gains `IpeRow`)
 //! must NOT ALSO gain a spurious `Display` bound just because a SIBLING concrete
 //! `String` param is `toString`'d in the same body.
 //!
@@ -11,7 +11,7 @@
 //! (a `HashMap<String, String>`, which is NOT `Display`) would be an outright
 //! E0277 SEAL violation the moment a caller instantiates the function with the
 //! Dict payload — exactly the over-bounding risk a broadened kernel->bound map
-//! introduces. This probe asserts the wildcard row generic carries `SkyRow`
+//! introduces. This probe asserts the wildcard row generic carries `IpeRow`
 //! (its real obligation) but NO `Display`, and that the whole crate builds and
 //! runs end-to-end.
 //!
@@ -36,7 +36,7 @@ fn entry_path(root: &Path) -> PathBuf {
         .join("Main.sky")
 }
 
-/// skyc-0 ∧ the wildcard row generic carries `SkyRow` but NOT `Display` —
+/// skyc-0 ∧ the wildcard row generic carries `IpeRow` but NOT `Display` —
 /// checked unconditionally (cheap, no `cargo`).
 #[test]
 fn i186_false_positive_skyc_no_spurious_display() {
@@ -61,7 +61,7 @@ fn i186_false_positive_skyc_no_spurious_display() {
     let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
         .expect("emitted main.rs must exist");
 
-    // The `grab` fn's wildcard row generic gets `SkyRow` (its real obligation)
+    // The `grab` fn's wildcard row generic gets `IpeRow` (its real obligation)
     // and must NOT get `Display` (the sibling `String` is what is toString'd).
     let grab_sig = emitted.lines().find(|l| l.contains("pub fn main_grab"));
     assert!(
@@ -70,8 +70,8 @@ fn i186_false_positive_skyc_no_spurious_display() {
     );
     let grab_sig = grab_sig.unwrap_or_default();
     assert!(
-        grab_sig.contains("ipe_runtime::db::SkyRow"),
-        "the wildcard row generic must carry its real `SkyRow` obligation; got: {grab_sig}"
+        grab_sig.contains("ipe_runtime::db::IpeRow"),
+        "the wildcard row generic must carry its real `IpeRow` obligation; got: {grab_sig}"
     );
     assert!(
         !grab_sig.contains("std::fmt::Display"),

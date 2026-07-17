@@ -9,7 +9,7 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use salsa::Setter as _;
-use ipe_db::{SkyDatabase, SourceFile, imports, parse, set_text_if_changed};
+use ipe_db::{IpeDatabase, SourceFile, imports, parse, set_text_if_changed};
 
 const MOD_A: &str = "module A exposing (a)\n\na = 1\n";
 const MOD_B: &str = "module B exposing (b)\n\nb = 2\n";
@@ -46,10 +46,10 @@ impl EventLog {
 }
 
 /// A database whose `WillExecute` events land in the returned log.
-fn logged_db() -> (SkyDatabase, EventLog) {
+fn logged_db() -> (IpeDatabase, EventLog) {
     let log = EventLog::default();
     let sink = log.clone();
-    let db = SkyDatabase::with_event_callback(Box::new(move |event: salsa::Event| {
+    let db = IpeDatabase::with_event_callback(Box::new(move |event: salsa::Event| {
         if let salsa::EventKind::WillExecute { database_key } = event.kind {
             sink.push(format!("{database_key:?}"));
         }
@@ -57,7 +57,7 @@ fn logged_db() -> (SkyDatabase, EventLog) {
     (db, log)
 }
 
-fn file(db: &SkyDatabase, path: &[&str], text: &str) -> SourceFile {
+fn file(db: &IpeDatabase, path: &[&str], text: &str) -> SourceFile {
     SourceFile::new(
         db,
         path.iter().map(|s| (*s).to_owned()).collect(),
@@ -189,7 +189,7 @@ fn parse_error_is_a_value() {
 fn demand_order_determinism() {
     // Resolved module-name strings, or empty when the fixture fails to parse
     // (the final assert_eq against the expected names catches that case).
-    let resolve_names = |db: &SkyDatabase, f: SourceFile| -> Vec<String> {
+    let resolve_names = |db: &IpeDatabase, f: SourceFile| -> Vec<String> {
         let Ok(module) = parse(db, f) else {
             return Vec::new();
         };
@@ -203,14 +203,14 @@ fn demand_order_determinism() {
     };
 
     // Order 1: A then B.
-    let db1 = SkyDatabase::new();
+    let db1 = IpeDatabase::new();
     let a1 = file(&db1, &["A"], MOD_A);
     let b1 = file(&db1, &["B"], MOD_B);
     let first_order_a = resolve_names(&db1, a1);
     let first_order_b = resolve_names(&db1, b1);
 
     // Order 2: B then A.
-    let db2 = SkyDatabase::new();
+    let db2 = IpeDatabase::new();
     let a2 = file(&db2, &["A"], MOD_A);
     let b2 = file(&db2, &["B"], MOD_B);
     let second_order_b = resolve_names(&db2, b2);

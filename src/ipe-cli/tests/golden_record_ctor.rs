@@ -198,7 +198,7 @@ fn seal_fn_field_alias_builds_and_runs() {
 /// boxed-wrapper (`Decoder Int`) must synthesise NO constructor. Round-1's gate
 /// EXEMPTED the opaque head (it mirrored the lowerer's function-embedding
 /// payload-scan) and synthesised one, so the backend emitted a
-/// `#[derive(Clone, Debug, PartialEq)]` + `impl SkyStringify` struct over the
+/// `#[derive(Clone, Debug, PartialEq)]` + `impl IpeStringify` struct over the
 /// non-derivable `Decoder` value — skyc exit-0 then cargo-101 (the seal hole).
 /// This emit-only check (default suite) confirms skyc succeeds AND that no struct
 /// for the alias is emitted (no ctor). The companion `…_builds_and_runs`

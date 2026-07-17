@@ -19,12 +19,12 @@ pub type JsonVal = serde_json::Value;
 ///
 /// The struct is `Send`:  `Box<dyn Fn + Send>` is Send; `Vec<String>` is Send.
 pub struct Decoder<E, T> {
-    pub run: Box<dyn Fn(&JsonVal) -> SkyResult<E, T> + Send>,
+    pub run: Box<dyn Fn(&JsonVal) -> IpeResult<E, T> + Send>,
     pub fields: Vec<String>,
 }
 
 impl<E, T> Decoder<E, T> {
-    pub fn new(run: Box<dyn Fn(&JsonVal) -> SkyResult<E, T> + Send>, fields: Vec<String>) -> Self {
+    pub fn new(run: Box<dyn Fn(&JsonVal) -> IpeResult<E, T> + Send>, fields: Vec<String>) -> Self {
         Decoder { run, fields }
     }
 }
@@ -41,11 +41,11 @@ fn union_fields(base: &mut Vec<String>, extra: &[String]) {
     }
 }
 
-pub fn decode_ok<E, T>(t: T) -> SkyResult<E, T> {
-    SkyResult::Ok(t)
+pub fn decode_ok<E, T>(t: T) -> IpeResult<E, T> {
+    IpeResult::Ok(t)
 }
-pub fn decode_err_str<E: From<String>, T>(s: String) -> SkyResult<E, T> {
-    SkyResult::Err(str_err(&s))
+pub fn decode_err_str<E: From<String>, T>(s: String) -> IpeResult<E, T> {
+    IpeResult::Err(str_err(&s))
 }
 
 // --- Encode ---
@@ -496,11 +496,11 @@ pub fn decode_list<E: From<String> + 'static, T: 'static + Send>(
                 let d = decoder();
                 for item in arr {
                     match (d.run)(item) {
-                        SkyResult::Ok(t) => out.push(t),
+                        IpeResult::Ok(t) => out.push(t),
                         // Surface the REAL inner-element error rather than
                         // collapsing it to a generic "decode error" — keeps the
                         // diagnostic Go's `JsonDec.list` preserves.
-                        SkyResult::Err(e) => return SkyResult::Err(e),
+                        IpeResult::Err(e) => return IpeResult::Err(e),
                     }
                 }
                 decode_ok(out)
@@ -517,8 +517,8 @@ pub fn decode_map<E: From<String> + 'static, A: 'static + Send, B: 'static + Sen
     let inner_fields = decoder.fields.clone();
     Decoder::new(
         Box::new(move |v| match (decoder.run)(v) {
-            SkyResult::Ok(a) => decode_ok(f(a)),
-            SkyResult::Err(e) => SkyResult::Err(e),
+            IpeResult::Ok(a) => decode_ok(f(a)),
+            IpeResult::Err(e) => IpeResult::Err(e),
         }),
         inner_fields,
     )
@@ -541,12 +541,12 @@ pub fn decode_map2<
     Decoder::new(
         Box::new(move |v| {
             let a = match (da.run)(v) {
-                SkyResult::Ok(a) => a,
-                SkyResult::Err(e) => return SkyResult::Err(e),
+                IpeResult::Ok(a) => a,
+                IpeResult::Err(e) => return IpeResult::Err(e),
             };
             let b = match (db.run)(v) {
-                SkyResult::Ok(b) => b,
-                SkyResult::Err(e) => return SkyResult::Err(e),
+                IpeResult::Ok(b) => b,
+                IpeResult::Err(e) => return IpeResult::Err(e),
             };
             decode_ok(f(a, b))
         }),
@@ -571,16 +571,16 @@ pub fn decode_map3<
     Decoder::new(
         Box::new(move |v| {
             let a = match (da.run)(v) {
-                SkyResult::Ok(a) => a,
-                SkyResult::Err(e) => return SkyResult::Err(e),
+                IpeResult::Ok(a) => a,
+                IpeResult::Err(e) => return IpeResult::Err(e),
             };
             let b = match (db.run)(v) {
-                SkyResult::Ok(b) => b,
-                SkyResult::Err(e) => return SkyResult::Err(e),
+                IpeResult::Ok(b) => b,
+                IpeResult::Err(e) => return IpeResult::Err(e),
             };
             let c = match (dc.run)(v) {
-                SkyResult::Ok(c) => c,
-                SkyResult::Err(e) => return SkyResult::Err(e),
+                IpeResult::Ok(c) => c,
+                IpeResult::Err(e) => return IpeResult::Err(e),
             };
             decode_ok(f(a, b, c))
         }),
@@ -608,20 +608,20 @@ pub fn decode_map4<
     Decoder::new(
         Box::new(move |v| {
             let a = match (da.run)(v) {
-                SkyResult::Ok(a) => a,
-                SkyResult::Err(e) => return SkyResult::Err(e),
+                IpeResult::Ok(a) => a,
+                IpeResult::Err(e) => return IpeResult::Err(e),
             };
             let b = match (db.run)(v) {
-                SkyResult::Ok(b) => b,
-                SkyResult::Err(e) => return SkyResult::Err(e),
+                IpeResult::Ok(b) => b,
+                IpeResult::Err(e) => return IpeResult::Err(e),
             };
             let c = match (dc.run)(v) {
-                SkyResult::Ok(c) => c,
-                SkyResult::Err(e) => return SkyResult::Err(e),
+                IpeResult::Ok(c) => c,
+                IpeResult::Err(e) => return IpeResult::Err(e),
             };
             let d = match (dd.run)(v) {
-                SkyResult::Ok(d) => d,
-                SkyResult::Err(e) => return SkyResult::Err(e),
+                IpeResult::Ok(d) => d,
+                IpeResult::Err(e) => return IpeResult::Err(e),
             };
             decode_ok(f(a, b, c, d))
         }),
@@ -654,24 +654,24 @@ pub fn decode_map5<
     Decoder::new(
         Box::new(move |v| {
             let a = match (da.run)(v) {
-                SkyResult::Ok(a) => a,
-                SkyResult::Err(e) => return SkyResult::Err(e),
+                IpeResult::Ok(a) => a,
+                IpeResult::Err(e) => return IpeResult::Err(e),
             };
             let b = match (db.run)(v) {
-                SkyResult::Ok(b) => b,
-                SkyResult::Err(e) => return SkyResult::Err(e),
+                IpeResult::Ok(b) => b,
+                IpeResult::Err(e) => return IpeResult::Err(e),
             };
             let c = match (dc.run)(v) {
-                SkyResult::Ok(c) => c,
-                SkyResult::Err(e) => return SkyResult::Err(e),
+                IpeResult::Ok(c) => c,
+                IpeResult::Err(e) => return IpeResult::Err(e),
             };
             let d = match (dd.run)(v) {
-                SkyResult::Ok(d) => d,
-                SkyResult::Err(e) => return SkyResult::Err(e),
+                IpeResult::Ok(d) => d,
+                IpeResult::Err(e) => return IpeResult::Err(e),
             };
             let e = match (de.run)(v) {
-                SkyResult::Ok(e) => e,
-                SkyResult::Err(err) => return SkyResult::Err(err),
+                IpeResult::Ok(e) => e,
+                IpeResult::Err(err) => return IpeResult::Err(err),
             };
             decode_ok(f(a, b, c, d, e))
         }),
@@ -694,12 +694,12 @@ pub fn decode_and_map<E: From<String> + 'static, A: 'static + Send, B: 'static +
         Box::new(move |v| {
             // Evaluate the function decoder first (pipeline accumulator), then the value.
             let f = match (dec_fn.run)(v) {
-                SkyResult::Ok(f) => f,
-                SkyResult::Err(e) => return SkyResult::Err(e),
+                IpeResult::Ok(f) => f,
+                IpeResult::Err(e) => return IpeResult::Err(e),
             };
             let a = match (dec_val.run)(v) {
-                SkyResult::Ok(a) => a,
-                SkyResult::Err(e) => return SkyResult::Err(e),
+                IpeResult::Ok(a) => a,
+                IpeResult::Err(e) => return IpeResult::Err(e),
             };
             decode_ok(f(a))
         }),
@@ -713,8 +713,8 @@ pub fn decode_and_then<E: From<String> + 'static, A: 'static + Send, B: 'static 
     let inner_fields = decoder.fields.clone();
     Decoder::new(
         Box::new(move |val| match (decoder.run)(val) {
-            SkyResult::Ok(a) => (f(a).run)(val),
-            SkyResult::Err(e) => SkyResult::Err(e),
+            IpeResult::Ok(a) => (f(a).run)(val),
+            IpeResult::Err(e) => IpeResult::Err(e),
         }),
         inner_fields,
     )
@@ -753,7 +753,7 @@ pub fn decode_one_of<E: From<String> + 'static, T: 'static + Send>(
             // Try each branch; on total failure surface the LAST branch's real
             // error rather than a generic "oneOf: no match" (Go's `oneOf`
             // likewise reports the underlying failure).
-            let mut last_err: Option<SkyResult<E, T>> = None;
+            let mut last_err: Option<IpeResult<E, T>> = None;
             for d in &decoders {
                 let r = (d.run)(v);
                 if r.is_ok() {
@@ -769,7 +769,7 @@ pub fn decode_one_of<E: From<String> + 'static, T: 'static + Send>(
 pub fn decode_from_json_string<E: From<String> + 'static, T>(
     decoder: Decoder<E, T>,
     json: String,
-) -> SkyResult<E, T> {
+) -> IpeResult<E, T> {
     match serde_json::from_str(&json) {
         Ok(val) => (decoder.run)(&val),
         Err(e) => decode_err_str(format!("json parse: {}", e)),
@@ -792,7 +792,7 @@ pub fn decode_from_json_string<E: From<String> + 'static, T>(
 //     no shared state, no interior mutability, fully total.
 //   - `decode_pipeline_required` / `db_decode_required` etc. call `(nd.run)(v)` once
 //     per row, consuming the `FnOnce` exactly once — correct.
-//   - Total: no panic, no unwrap — only `SkyResult::Err` on decode failure.
+//   - Total: no panic, no unwrap — only `IpeResult::Err` on decode failure.
 //
 // Bounds: `F: Fn(A1,..) -> R + Clone + Send` — fn pointers are Copy ⊆ Clone;
 // non-capturing closures in Rust are Copy ⊆ Clone.
@@ -1331,14 +1331,14 @@ pub fn decode_pipeline_required<E: From<String> + 'static, T: 'static, F: 'stati
         Box::new(move |v| {
             let field_val = match v.get(&n) {
                 Some(f) => match (d.run)(f) {
-                    SkyResult::Ok(t) => t,
-                    SkyResult::Err(e) => return SkyResult::Err(e),
+                    IpeResult::Ok(t) => t,
+                    IpeResult::Err(e) => return IpeResult::Err(e),
                 },
                 None => return decode_err_str(format!("missing required: {}", n)),
             };
             match (nd.run)(v) {
-                SkyResult::Ok(f) => ok_res(f(field_val)),
-                SkyResult::Err(e) => SkyResult::Err(e),
+                IpeResult::Ok(f) => ok_res(f(field_val)),
+                IpeResult::Err(e) => IpeResult::Err(e),
             }
         }),
         fields,
@@ -1369,14 +1369,14 @@ pub fn decode_pipeline_optional<
             // / adversarial input (a validation bypass).
             let field_val = match v.get(&n) {
                 Some(val) if !val.is_null() => match (d.run)(val) {
-                    SkyResult::Ok(t) => t,
-                    SkyResult::Err(e) => return SkyResult::Err(e),
+                    IpeResult::Ok(t) => t,
+                    IpeResult::Err(e) => return IpeResult::Err(e),
                 },
                 _ => def.clone(),
             };
             match (nd.run)(v) {
-                SkyResult::Ok(f) => SkyResult::Ok(f(field_val)),
-                SkyResult::Err(e) => SkyResult::Err(e),
+                IpeResult::Ok(f) => IpeResult::Ok(f(field_val)),
+                IpeResult::Err(e) => IpeResult::Err(e),
             }
         }),
         fields,
@@ -1414,13 +1414,13 @@ pub fn decode_pipeline_required_at<E: From<String> + 'static, T: 'static, F: 'st
             }
             // Decode the target value.
             let field_val = match (d.run)(cur) {
-                SkyResult::Ok(t) => t,
-                SkyResult::Err(e) => return SkyResult::Err(e),
+                IpeResult::Ok(t) => t,
+                IpeResult::Err(e) => return IpeResult::Err(e),
             };
             // Apply the accumulator function from the pipeline.
             match (nd.run)(v) {
-                SkyResult::Ok(f) => ok_res(f(field_val)),
-                SkyResult::Err(e) => SkyResult::Err(e),
+                IpeResult::Ok(f) => ok_res(f(field_val)),
+                IpeResult::Err(e) => IpeResult::Err(e),
             }
         }),
         fields,
@@ -1441,12 +1441,12 @@ pub fn decode_pipeline_custom<E: From<String> + 'static, T: 'static, F: 'static>
     Decoder::new(
         Box::new(move |v| {
             let t = match (d.run)(v) {
-                SkyResult::Ok(t) => t,
-                SkyResult::Err(e) => return SkyResult::Err(e),
+                IpeResult::Ok(t) => t,
+                IpeResult::Err(e) => return IpeResult::Err(e),
             };
             match (nd.run)(v) {
-                SkyResult::Ok(f) => SkyResult::Ok(f(t)),
-                SkyResult::Err(e) => SkyResult::Err(e),
+                IpeResult::Ok(f) => IpeResult::Ok(f(t)),
+                IpeResult::Err(e) => IpeResult::Err(e),
             }
         }),
         fields,
@@ -1506,7 +1506,7 @@ mod optional_tests {
         let dec = build();
         let v: JsonVal = serde_json::json!({ "age": "not-an-int" });
         assert!(
-            matches!((dec.run)(&v), SkyResult::Err(_)),
+            matches!((dec.run)(&v), IpeResult::Err(_)),
             "present-but-wrong-type must yield Err"
         );
     }
@@ -1515,20 +1515,20 @@ mod optional_tests {
     fn optional_absent_uses_default() {
         let dec = build();
         let v: JsonVal = serde_json::json!({});
-        assert!(matches!((dec.run)(&v), SkyResult::Ok(-1)));
+        assert!(matches!((dec.run)(&v), IpeResult::Ok(-1)));
     }
 
     #[test]
     fn optional_null_uses_default() {
         let dec = build();
         let v: JsonVal = serde_json::json!({ "age": null });
-        assert!(matches!((dec.run)(&v), SkyResult::Ok(-1)));
+        assert!(matches!((dec.run)(&v), IpeResult::Ok(-1)));
     }
 
     #[test]
     fn optional_present_valid_decodes() {
         let dec = build();
         let v: JsonVal = serde_json::json!({ "age": 42 });
-        assert!(matches!((dec.run)(&v), SkyResult::Ok(42)));
+        assert!(matches!((dec.run)(&v), IpeResult::Ok(42)));
     }
 }

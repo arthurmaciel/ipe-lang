@@ -108,12 +108,12 @@ pub trait Db: salsa::Database {
 /// The concrete Sky compiler database.
 #[salsa::db]
 #[derive(Clone, Default)]
-pub struct SkyDatabase {
+pub struct IpeDatabase {
     storage: salsa::Storage<Self>,
     interner: SharedInterner,
 }
 
-impl SkyDatabase {
+impl IpeDatabase {
     /// A fresh (cold) database with a fresh interner.
     #[must_use]
     pub fn new() -> Self {
@@ -135,10 +135,10 @@ impl SkyDatabase {
 }
 
 #[salsa::db]
-impl salsa::Database for SkyDatabase {}
+impl salsa::Database for IpeDatabase {}
 
 #[salsa::db]
-impl Db for SkyDatabase {
+impl Db for IpeDatabase {
     fn interner(&self) -> &SharedInterner {
         &self.interner
     }
@@ -180,7 +180,7 @@ pub struct SourceRoot {
 /// Salsa dirties on every `set_*` regardless of value, so the
 /// byte-equal-re-save no-op lives here, at the boundary. Returns `true` when
 /// a set happened.
-pub fn set_text_if_changed(db: &mut SkyDatabase, file: SourceFile, new_text: &str) -> bool {
+pub fn set_text_if_changed(db: &mut IpeDatabase, file: SourceFile, new_text: &str) -> bool {
     if file.text(db) == new_text {
         return false;
     }
@@ -731,7 +731,7 @@ pub fn lower_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> LowerR
 /// keyed on it memoizes independently of every OTHER file.
 ///
 /// **Distinct from [`ipe_backend_rust`]'s own `RustFileId`.** That backend
-/// type is a plain, non-interned `enum { Spine, SkyModule(ModPath) }`
+/// type is a plain, non-interned `enum { Spine, IpeModule(ModPath) }`
 /// used internally for partitioning; it never reaches salsa. This one is the
 /// salsa domain: it carries ONLY a `home` (`Spine` is NOT a `RustFileId` —
 /// it is always present and never added/removed by a module add/delete, so it
@@ -856,7 +856,7 @@ pub type EmitTextResult = Result<Arc<String>, (Diagnostic, Vec<Symbol>)>;
 /// Depends only on [`lower_program`] (the IR) — the `home` set is a pure
 /// function of the lowered program's items, independent of the emit config.
 /// Wraps the thin backend helper [`ipe_backend_rust::rust_file_homes`]
-/// (`partition_items`' `SkyModule` bucket keys, `Spine` excluded).
+/// (`partition_items`' `IpeModule` bucket keys, `Spine` excluded).
 ///
 /// **Return shape — honest deviation from §4.2's `Arc<BTreeSet<RustFileId>>`.**
 /// A `#[salsa::interned]` key derives `Eq`/`Hash` but NOT `Ord`, so it cannot
@@ -915,7 +915,7 @@ pub fn emit_spine_file(
         .map_err(|d| (d, Vec::new()))
 }
 
-/// One `SkyModule` file's text (§4.2): that `home`'s `EnumDef`s + `Func`s only,
+/// One `IpeModule` file's text (§4.2): that `home`'s `EnumDef`s + `Func`s only,
 /// each `pub(crate)` behind a `use crate::*;` glob header.
 ///
 /// Depends on [`lower_program`], [`BuildConfig::db_driver`], AND the `file` key
@@ -957,7 +957,7 @@ pub fn emit_rust_file<'db>(
 /// [`assemble_split_manifest`](ipe_backend_rust::RustBackend::assemble_split_manifest)
 /// sees no change → the on-disk write skips, §4.3).
 ///
-/// **Spine-collapse routing (§3.3/§4.4).** With 0 or 1 distinct `SkyModule`
+/// **Spine-collapse routing (§3.3/§4.4).** With 0 or 1 distinct `IpeModule`
 /// home the project is a single `src/main.rs` — this query delegates straight
 /// to [`emit_project`], which is BYTE-IDENTICAL to the pre-split single-file
 /// output (there is no cross-module early-cut to gain in a single-module
@@ -976,7 +976,7 @@ pub fn emit_manifest(
 ) -> EmitResult {
     let homes = program_rust_file_ids(db, root, entry)?;
 
-    // Spine-collapse: 0 or 1 distinct SkyModule home → the byte-identical
+    // Spine-collapse: 0 or 1 distinct IpeModule home → the byte-identical
     // single-`main.rs` path. `emit_project` IS the collapse rendering.
     if homes.len() < 2 {
         return emit_project(db, root, entry, config);
@@ -1047,7 +1047,7 @@ fn raw_word_scan(src: &str) -> BTreeSet<String> {
 /// `SourceFile` inputs stay in the database (unreachable from any query once
 /// no resolution points at them).
 pub fn sync_source_root(
-    db: &mut SkyDatabase,
+    db: &mut IpeDatabase,
     root: SourceRoot,
     desired: &BTreeMap<Vec<String>, (String, ModuleOrigin)>,
 ) {

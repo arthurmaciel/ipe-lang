@@ -3,7 +3,7 @@
 //! The structural `body_calls_db_get_on_param` walk originally matched the
 //! wildcard param in row-argument position ONLY as a DIRECT `Var`/`CloneVar`.
 //! A decoder that let-binds a pure alias of the payload and reads fields off
-//! THAT alias therefore dropped the `+ SkyRow` bound:
+//! THAT alias therefore dropped the `+ IpeRow` bound:
 //!
 //! ```elm
 //! decodeRow payload =
@@ -12,7 +12,7 @@
 //! ```
 //!
 //! → `skyc build` exit 0, but the emitted `main_decode_row<T1: Clone>` (NO
-//! `SkyRow`) fails `cargo build` with E0277. The BASE commit's old body-TEXT
+//! `IpeRow`) fails `cargo build` with E0277. The BASE commit's old body-TEXT
 //! scan happened to bound it (the alias still renders as
 //! `db_get_string(_, &r)`), so the structural rewrite REGRESSED this case — a
 //! skyc-0-then-cargo-fail SEAL violation.
@@ -45,7 +45,7 @@ fn entry_path(root: &Path, fixture: &str) -> PathBuf {
         .join("Main.sky")
 }
 
-/// skyc-0 ∧ `+ SkyRow` lands on the decoder fn's wildcard-`any` generic even
+/// skyc-0 ∧ `+ IpeRow` lands on the decoder fn's wildcard-`any` generic even
 /// though the row arg is an ALIAS of the param — checked unconditionally
 /// (cheap, no `cargo`). The record STRUCT must stay unbounded.
 // The `expect` guards a test-support invariant: a build asserted successful
@@ -75,9 +75,9 @@ fn assert_skyc_bounds_fn_not_struct(fixture: &str) {
 
     // The alias in row position must NOT defeat the bound.
     assert!(
-        emitted.contains("pub fn main_decode_row<T1: Clone + ipe_runtime::db::SkyRow>"),
+        emitted.contains("pub fn main_decode_row<T1: Clone + ipe_runtime::db::IpeRow>"),
         "the aliased-row decoder's wildcard-`any` generic must still carry the \
-         `SkyRow` bound so its `db_get_string(_, &r)` body type-checks (#177 \
+         `IpeRow` bound so its `db_get_string(_, &r)` body type-checks (#177 \
          FIX-UP 2); got main.rs:\n{emitted}"
     );
 
@@ -87,8 +87,8 @@ fn assert_skyc_bounds_fn_not_struct(fixture: &str) {
         let trimmed = line.trim_start();
         if trimmed.starts_with("pub struct ") || trimmed.starts_with("struct ") {
             assert!(
-                !line.contains("SkyRow"),
-                "the record struct must NOT carry a `SkyRow` bound (#177); \
+                !line.contains("IpeRow"),
+                "the record struct must NOT carry a `IpeRow` bound (#177); \
                  offending line: {line}"
             );
         }

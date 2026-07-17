@@ -84,8 +84,8 @@ fn mm_diamond_emits_byte_identical_main_rs() {
 
     // Seal half: D's `base` function must appear exactly once (D compiled once,
     // shared by B and C). D is a genuine own-home module, so the per-Sky-module
-    // split places `d_base` in `src/sky_mods/sky_mod_d.rs`
-    // — scan the WHOLE emitted Sky-side tree (main.rs + sky_mods/*.rs) for the
+    // split places `d_base` in `src/ipe_mods/ipe_mod_d.rs`
+    // — scan the WHOLE emitted Sky-side tree (main.rs + ipe_mods/*.rs) for the
     // count, robust to that placement. The directory-diff helper above cannot
     // express a substring-count assertion, so this reads the source directly.
     let emitted = support::read_all_emitted_src(&out);

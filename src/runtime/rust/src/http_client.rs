@@ -215,7 +215,7 @@ pub(crate) fn ssrf_apply(
 
 async fn do_request<E: From<String> + Send + 'static>(
     req: HttpRequest,
-) -> SkyResult<E, HttpResponse> {
+) -> IpeResult<E, HttpResponse> {
     // This surface (Http.get/post/request) accepts only http/https — ws/wss is
     // the WebSocket client's surface. When the SSRF guard is on, enforce that
     // narrower scheme set here, then delegate the host-resolve + DNS-rebinding
@@ -227,7 +227,7 @@ async fn do_request<E: From<String> + Send + 'static>(
             Ok(u) => {
                 let scheme = u.scheme();
                 if scheme != "http" && scheme != "https" {
-                    return SkyResult::Err(
+                    return IpeResult::Err(
                         format!(
                             "http: blocked: scheme {:?} is not http/https (IPE_HTTP_DENY_PRIVATE)",
                             scheme
@@ -237,7 +237,7 @@ async fn do_request<E: From<String> + Send + 'static>(
                 }
             }
             Err(e) => {
-                return SkyResult::Err(
+                return IpeResult::Err(
                     format!(
                         "http: blocked: invalid URL {:?}: {} (IPE_HTTP_DENY_PRIVATE)",
                         redact_userinfo(&req.url),
@@ -252,7 +252,7 @@ async fn do_request<E: From<String> + Send + 'static>(
     let builder = reqwest::Client::builder();
     let mut builder = match ssrf_apply(builder, &req.url, req.followRedirects, req.maxRedirects) {
         Ok(b) => b,
-        Err(e) => return SkyResult::Err(e.into()),
+        Err(e) => return IpeResult::Err(e.into()),
     };
 
     // Always install a request deadline. A Sky-controllable `timeout <= 0`
@@ -267,12 +267,12 @@ async fn do_request<E: From<String> + Send + 'static>(
 
     let client = match builder.build() {
         Ok(c) => c,
-        Err(e) => return SkyResult::Err(format!("http: client build failed: {}", e).into()),
+        Err(e) => return IpeResult::Err(format!("http: client build failed: {}", e).into()),
     };
     let method = match reqwest::Method::from_bytes(req.method.to_uppercase().as_bytes()) {
         Ok(m) => m,
         Err(_) => {
-            return SkyResult::Err(format!("http: invalid method {:?}", req.method).into());
+            return IpeResult::Err(format!("http: invalid method {:?}", req.method).into());
         }
     };
     let mut rb = client.request(method, &req.url);
@@ -290,7 +290,7 @@ async fn do_request<E: From<String> + Send + 'static>(
         // logged server-side under a correlation id; Sky sees only the generic
         // `external operation failed (ref <id>)`. Mirrors http_stream.rs.
         Err(e) => {
-            return SkyResult::Err(sky_error_from_foreign(e));
+            return IpeResult::Err(ipe_error_from_foreign(e));
         }
     };
     let status = resp.status().as_u16() as i64;
@@ -311,8 +311,8 @@ async fn do_request<E: From<String> + Send + 'static>(
         }
     }
     let body = match read_body_capped::<E>(resp).await {
-        SkyResult::Ok(b) => b,
-        SkyResult::Err(e) => return SkyResult::Err(e),
+        IpeResult::Ok(b) => b,
+        IpeResult::Err(e) => return IpeResult::Err(e),
     };
     ok_res(HttpResponse {
         status,
@@ -347,13 +347,13 @@ fn http_body_cap() -> usize {
 /// (matches `Http.Stream`'s chunk decode; Go reads bytes→string too).
 async fn read_body_capped<E: From<String> + Send + 'static>(
     resp: reqwest::Response,
-) -> SkyResult<E, String> {
+) -> IpeResult<E, String> {
     use futures_util::StreamExt;
     let cap = http_body_cap();
     if let Some(len) = resp.content_length()
         && len as usize > cap
     {
-        return SkyResult::Err(
+        return IpeResult::Err(
                 format!(
                     "http: response body too large ({} > {} bytes; raise IPE_HTTP_MAX_BODY_BYTES or use Http.Stream)",
                     len, cap
@@ -369,10 +369,10 @@ async fn read_body_capped<E: From<String> + Send + 'static>(
             // [B8] Redact: a body-read transport error can also echo the URL /
             // resolved address. Log server-side under a correlation id, return
             // only the generic ref to Sky.
-            Err(e) => return SkyResult::Err(sky_error_from_foreign(e)),
+            Err(e) => return IpeResult::Err(ipe_error_from_foreign(e)),
         };
         if buf.len().saturating_add(bytes.len()) > cap {
-            return SkyResult::Err(
+            return IpeResult::Err(
                 format!(
                     "http: response body too large (> {} bytes; raise IPE_HTTP_MAX_BODY_BYTES or use Http.Stream)",
                     cap
@@ -382,11 +382,11 @@ async fn read_body_capped<E: From<String> + Send + 'static>(
         }
         buf.extend_from_slice(&bytes);
     }
-    SkyResult::Ok(String::from_utf8_lossy(&buf).into_owned())
+    IpeResult::Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 /// Http.get : String -> Task Error HttpResponse
-pub fn http_get<E: From<String> + Send + 'static>(url: String) -> SkyTask<E, HttpResponse> {
+pub fn http_get<E: From<String> + Send + 'static>(url: String) -> IpeTask<E, HttpResponse> {
     Box::pin(do_request(HttpRequest {
         method: "GET".to_string(),
         url,
@@ -402,7 +402,7 @@ pub fn http_get<E: From<String> + Send + 'static>(url: String) -> SkyTask<E, Htt
 pub fn http_post<E: From<String> + Send + 'static>(
     url: String,
     body: String,
-) -> SkyTask<E, HttpResponse> {
+) -> IpeTask<E, HttpResponse> {
     Box::pin(do_request(HttpRequest {
         method: "POST".to_string(),
         url,
@@ -417,7 +417,7 @@ pub fn http_post<E: From<String> + Send + 'static>(
 /// Http.request : HttpRequest -> Task Error HttpResponse
 pub fn http_request<E: From<String> + Send + 'static>(
     req: HttpRequest,
-) -> SkyTask<E, HttpResponse> {
+) -> IpeTask<E, HttpResponse> {
     Box::pin(do_request(req))
 }
 

@@ -12,7 +12,7 @@
 //! as kernels — `KernelFn` variant + `d(...)` decl + lower arm + fail-closed
 //! `stdlib_scheme` entry — reusing the existing iterative runtime fns where they
 //! already existed (`list_drop`/`list_zip`/`list_concat_map`/`list_indexed_map`/
-//! `sky_list_cons`) and adding four total, iterative ones (`list_append`/
+//! `ipe_list_cons`) and adding four total, iterative ones (`list_append`/
 //! `list_concat`/`list_take`/`list_is_empty`). Kernel (not pure-Sky routing) is
 //! the only exit-0-safe wiring: canon anchors `List.*` to `VarHome::Kernel`
 //! unconditionally, so the pure-Sky `Sky.Core.List` bodies are never on the

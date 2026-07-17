@@ -123,7 +123,7 @@ fn built_code(root: &Path, name: &str) -> (Result<(), CliError>, PathBuf) {
 
 /// `Ok f` holding a function must not trip IPE-L0114 unconditionally, which
 /// would make `Result.andMap` unusable. Construction is sound (derive-demotion +
-/// generic-bounded runtime `SkyResult` derives).
+/// generic-bounded runtime `IpeResult` derives).
 #[test]
 fn result_and_map_fn_payload_accepted() {
     let root = repo_root();
@@ -181,7 +181,7 @@ fn maybe_and_map_fn_payload_accepted() {
 /// position would be a skyc-accept / cargo-reject E0308. The inline pipe form
 /// (`Ok (\x…) |> Result.andMap (Ok 2)`) works because the kernel call site
 /// supplies the `Box<dyn Fn>` coercion target; a bare `let` binding has none —
-/// `Ok` routes to the runtime `SkyResult` enum whose generic arg is inferred
+/// `Ok` routes to the runtime `IpeResult` enum whose generic arg is inferred
 /// from the constructor arg, so `Box::new(closure)` would pin the CONCRETE
 /// closure type and the later use against `Box<dyn Fn>` fail to unsize-coerce
 /// across the `let` boundary. So the trait-object type is pinned at the lambda's
@@ -217,7 +217,7 @@ fn let_bound_fn_payload_accepted() {
 }
 
 /// Let-bound seal hole — Maybe variant, exercising the same lambda
-/// trait-object-pin through the runtime `SkyMaybe` enum
+/// trait-object-pin through the runtime `IpeMaybe` enum
 /// (`let f = Just (\x -> x * 2)`). Must build+run and print `42`.
 #[test]
 fn let_bound_maybe_fn_payload_accepted() {

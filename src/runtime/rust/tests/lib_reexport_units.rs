@@ -44,75 +44,75 @@ pub use ipe_runtime::*;
 mod tests {
     use ipe_runtime_rust::*;
 
-    // SkyResult tests
+    // IpeResult tests
     #[test]
     fn result_ok() {
-        let r: SkyResult<&str, i64> = SkyResult::Ok(42);
+        let r: IpeResult<&str, i64> = IpeResult::Ok(42);
         assert!(r.is_ok());
         assert_eq!(r.with_default(0), 42);
     }
 
     #[test]
     fn result_err() {
-        let r: SkyResult<&str, i64> = SkyResult::Err("error");
+        let r: IpeResult<&str, i64> = IpeResult::Err("error");
         assert!(r.is_err());
         assert_eq!(r.with_default(0), 0);
     }
 
     #[test]
     fn result_map_ok() {
-        let r: SkyResult<&str, i64> = SkyResult::Ok(5);
-        let mapped = sky_result_map(r, |x| x * 2);
+        let r: IpeResult<&str, i64> = IpeResult::Ok(5);
+        let mapped = ipe_result_map(r, |x| x * 2);
         assert_eq!(mapped.with_default(0), 10);
     }
 
     #[test]
     fn result_map_err() {
-        let r: SkyResult<&str, i64> = SkyResult::Err("error");
-        let mapped: SkyResult<&str, i64> = sky_result_map(r, |x| x * 2);
+        let r: IpeResult<&str, i64> = IpeResult::Err("error");
+        let mapped: IpeResult<&str, i64> = ipe_result_map(r, |x| x * 2);
         assert!(mapped.is_err());
     }
 
     #[test]
     fn result_and_then_ok() {
-        let r: SkyResult<&str, i64> = SkyResult::Ok(5);
-        let chained = sky_result_and_then(r, |x| SkyResult::Ok(x * 2));
+        let r: IpeResult<&str, i64> = IpeResult::Ok(5);
+        let chained = ipe_result_and_then(r, |x| IpeResult::Ok(x * 2));
         assert_eq!(chained.with_default(0), 10);
     }
 
     #[test]
     fn result_and_then_err() {
-        let r: SkyResult<&str, i64> = SkyResult::Err("e");
-        let chained = sky_result_and_then(r, |x: i64| SkyResult::Ok(x * 2));
+        let r: IpeResult<&str, i64> = IpeResult::Err("e");
+        let chained = ipe_result_and_then(r, |x: i64| IpeResult::Ok(x * 2));
         assert!(chained.is_err());
     }
 
-    // SkyMaybe tests
+    // IpeMaybe tests
     #[test]
     fn maybe_just() {
-        let m: SkyMaybe<i64> = SkyMaybe::Just(42);
+        let m: IpeMaybe<i64> = IpeMaybe::Just(42);
         assert!(m.is_just());
         assert_eq!(m.with_default(0), 42);
     }
 
     #[test]
     fn maybe_nothing() {
-        let m: SkyMaybe<i64> = SkyMaybe::Nothing;
+        let m: IpeMaybe<i64> = IpeMaybe::Nothing;
         assert!(m.is_nothing());
         assert_eq!(m.with_default(99), 99);
     }
 
     #[test]
     fn maybe_map_just() {
-        let m: SkyMaybe<i64> = SkyMaybe::Just(5);
-        let mapped = sky_maybe_map(m, |x| x * 2);
+        let m: IpeMaybe<i64> = IpeMaybe::Just(5);
+        let mapped = ipe_maybe_map(m, |x| x * 2);
         assert_eq!(mapped.with_default(0), 10);
     }
 
     #[test]
     fn maybe_and_then_just() {
-        let m: SkyMaybe<i64> = SkyMaybe::Just(5);
-        let chained = sky_maybe_and_then(m, |x| SkyMaybe::Just(x * 2));
+        let m: IpeMaybe<i64> = IpeMaybe::Just(5);
+        let chained = ipe_maybe_and_then(m, |x| IpeMaybe::Just(x * 2));
         assert_eq!(chained.with_default(0), 10);
     }
 
@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn list_cons_prepends() {
-        assert_eq!(sky_list_cons(0, vec![1, 2]), vec![0, 1, 2]);
+        assert_eq!(ipe_list_cons(0, vec![1, 2]), vec![0, 1, 2]);
     }
 
     // String tests — the live kernels (string.rs)
@@ -156,18 +156,18 @@ mod tests {
 
     #[test]
     fn string_to_int_ok() {
-        assert_eq!(string_to_int("42".into()), SkyMaybe::Just(42));
+        assert_eq!(string_to_int("42".into()), IpeMaybe::Just(42));
     }
 
     #[test]
     fn string_to_int_fail() {
-        assert_eq!(string_to_int("abc".into()), SkyMaybe::Nothing);
+        assert_eq!(string_to_int("abc".into()), IpeMaybe::Nothing);
     }
 
     // Result helpers
     #[test]
     fn result_with_default_ok() {
-        let r: SkyResult<&str, i64> = SkyResult::Ok(42);
+        let r: IpeResult<&str, i64> = IpeResult::Ok(42);
         assert_eq!(result_with_default(0, r), 42);
     }
 
@@ -175,7 +175,7 @@ mod tests {
     fn result_traverse_ok() {
         let items = vec![1, 2, 3];
         let r = result_traverse(
-            |x: i64| -> SkyResult<&str, i64> { SkyResult::Ok(x * 2) },
+            |x: i64| -> IpeResult<&str, i64> { IpeResult::Ok(x * 2) },
             items,
         );
         assert_eq!(r.with_default(vec![]), vec![2, 4, 6]);

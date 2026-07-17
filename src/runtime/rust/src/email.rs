@@ -99,16 +99,16 @@ fn email_endpoint(provider: &str, def: &str) -> String {
 pub fn email_send<E: From<String> + Send + 'static>(
     provider: EmailProvider,
     msg: EmailMessage,
-) -> SkyTask<E, String> {
+) -> IpeTask<E, String> {
     Box::pin(async move {
         if crate::system::read_env_var("IPE_EMAIL_DRY_RUN").as_deref() == Ok("1") {
-            return SkyResult::Ok(format!("dry-run-{}", email_gen_id()));
+            return IpeResult::Ok(format!("dry-run-{}", email_gen_id()));
         }
         if msg.from.is_empty() {
-            return SkyResult::Err("email.send: from required".to_string().into());
+            return IpeResult::Err("email.send: from required".to_string().into());
         }
         if msg.to.is_empty() {
-            return SkyResult::Err(
+            return IpeResult::Err(
                 "email.send: at least one recipient required"
                     .to_string()
                     .into(),
@@ -197,9 +197,9 @@ async fn read_email_body_capped<E: From<String>>(
 
 // ──────────────────── Resend ────────────────────
 
-async fn send_resend<E: From<String>>(api_key: &str, m: &EmailMessage) -> SkyResult<E, String> {
+async fn send_resend<E: From<String>>(api_key: &str, m: &EmailMessage) -> IpeResult<E, String> {
     if api_key.is_empty() {
-        return SkyResult::Err("email.send/Resend: empty API key".to_string().into());
+        return IpeResult::Err("email.send/Resend: empty API key".to_string().into());
     }
     let mut body = serde_json::Map::new();
     body.insert("from".into(), m.from.clone().into());
@@ -248,21 +248,21 @@ async fn send_resend<E: From<String>>(api_key: &str, m: &EmailMessage) -> SkyRes
     .await
     {
         Ok(v) => v,
-        Err(e) => return SkyResult::Err(e),
+        Err(e) => return IpeResult::Err(e),
     };
     let id = resp
         .get("id")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .unwrap_or_else(|| format!("resend-{}", email_gen_id()));
-    SkyResult::Ok(id)
+    IpeResult::Ok(id)
 }
 
 // ──────────────────── SendGrid ────────────────────
 
-async fn send_sendgrid<E: From<String>>(api_key: &str, m: &EmailMessage) -> SkyResult<E, String> {
+async fn send_sendgrid<E: From<String>>(api_key: &str, m: &EmailMessage) -> IpeResult<E, String> {
     if api_key.is_empty() {
-        return SkyResult::Err("email.send/SendGrid: empty API key".to_string().into());
+        return IpeResult::Err("email.send/SendGrid: empty API key".to_string().into());
     }
     let mut personalisation = serde_json::Map::new();
     personalisation.insert("to".into(), addr_objs(&m.to));
@@ -322,8 +322,8 @@ async fn send_sendgrid<E: From<String>>(api_key: &str, m: &EmailMessage) -> SkyR
     )
     .await
     {
-        Ok(_) => SkyResult::Ok(format!("sendgrid-{}", email_gen_id())),
-        Err(e) => SkyResult::Err(e),
+        Ok(_) => IpeResult::Ok(format!("sendgrid-{}", email_gen_id())),
+        Err(e) => IpeResult::Err(e),
     }
 }
 
@@ -338,9 +338,9 @@ fn json_obj_set(v: &mut serde_json::Value, key: &str, val: serde_json::Value) {
 
 // ──────────────────── SES v2 (SigV4) ────────────────────
 
-async fn send_ses<E: From<String>>(cfg: &SesConfig, m: &EmailMessage) -> SkyResult<E, String> {
+async fn send_ses<E: From<String>>(cfg: &SesConfig, m: &EmailMessage) -> IpeResult<E, String> {
     if cfg.region.is_empty() || cfg.key.is_empty() || cfg.secret.is_empty() {
-        return SkyResult::Err(
+        return IpeResult::Err(
             "email.send/Ses: region+key+secret required"
                 .to_string()
                 .into(),
@@ -351,7 +351,7 @@ async fn send_ses<E: From<String>>(cfg: &SesConfig, m: &EmailMessage) -> SkyResu
     // SILENTLY DROP attachments (data loss), fail loudly. Resend/SendGrid/SMTP
     // support attachments.
     if !m.attachments.is_empty() {
-        return SkyResult::Err(
+        return IpeResult::Err(
             "email.send/Ses: attachments require the raw-MIME path, not yet supported on SES \
              (use Resend / SendGrid / SMTP for attachments)"
                 .to_string()
@@ -368,7 +368,7 @@ async fn send_ses<E: From<String>>(cfg: &SesConfig, m: &EmailMessage) -> SkyResu
         .bytes()
         .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
     {
-        return SkyResult::Err(
+        return IpeResult::Err(
             "email.send/Ses: invalid region (must match [a-z0-9-])"
                 .to_string()
                 .into(),
@@ -407,8 +407,8 @@ async fn send_ses<E: From<String>>(cfg: &SesConfig, m: &EmailMessage) -> SkyResu
     let endpoint = email_endpoint("ses", &format!("https://{}/v2/email/outbound-emails", host));
     let header_refs: Vec<(&str, String)> = headers.iter().map(|(k, v)| (*k, v.clone())).collect();
     match email_post_json::<E>(&endpoint, &header_refs, payload).await {
-        Ok(_) => SkyResult::Ok(format!("ses-{}", email_gen_id())),
-        Err(e) => SkyResult::Err(e),
+        Ok(_) => IpeResult::Ok(format!("ses-{}", email_gen_id())),
+        Err(e) => IpeResult::Err(e),
     }
 }
 
@@ -521,7 +521,7 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
 /// the delivered message (from/to/cc/bcc/reply-to/subject/body/attachments) is
 /// equivalent. A local plaintext catcher (no STARTTLS advertised) is reachable
 /// via the opportunistic fallback, which is how this is verified.
-async fn send_smtp<E: From<String>>(cfg: &SmtpConfig, m: &EmailMessage) -> SkyResult<E, String> {
+async fn send_smtp<E: From<String>>(cfg: &SmtpConfig, m: &EmailMessage) -> IpeResult<E, String> {
     use lettre::message::header::ContentType;
     use lettre::message::{Attachment, Mailbox, MultiPart, SinglePart};
     use lettre::transport::smtp::authentication::Credentials;
@@ -529,7 +529,7 @@ async fn send_smtp<E: From<String>>(cfg: &SmtpConfig, m: &EmailMessage) -> SkyRe
     use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
     if cfg.host.is_empty() || cfg.port == 0 {
-        return SkyResult::Err("email.send/Smtp: host+port required".to_string().into());
+        return IpeResult::Err("email.send/Smtp: host+port required".to_string().into());
     }
 
     let parse_mbox = |s: &str| -> Result<Mailbox, String> {
@@ -540,30 +540,30 @@ async fn send_smtp<E: From<String>>(cfg: &SmtpConfig, m: &EmailMessage) -> SkyRe
     let mut builder = Message::builder();
     builder = match parse_mbox(&m.from) {
         Ok(mb) => builder.from(mb),
-        Err(e) => return SkyResult::Err(e.into()),
+        Err(e) => return IpeResult::Err(e.into()),
     };
     for to in &m.to {
         match parse_mbox(to) {
             Ok(mb) => builder = builder.to(mb),
-            Err(e) => return SkyResult::Err(e.into()),
+            Err(e) => return IpeResult::Err(e.into()),
         }
     }
     for cc in &m.cc {
         match parse_mbox(cc) {
             Ok(mb) => builder = builder.cc(mb),
-            Err(e) => return SkyResult::Err(e.into()),
+            Err(e) => return IpeResult::Err(e.into()),
         }
     }
     for bcc in &m.bcc {
         match parse_mbox(bcc) {
             Ok(mb) => builder = builder.bcc(mb),
-            Err(e) => return SkyResult::Err(e.into()),
+            Err(e) => return IpeResult::Err(e.into()),
         }
     }
     if !m.replyTo.is_empty() {
         match parse_mbox(&m.replyTo) {
             Ok(mb) => builder = builder.reply_to(mb),
-            Err(e) => return SkyResult::Err(e.into()),
+            Err(e) => return IpeResult::Err(e.into()),
         }
     }
     builder = builder.subject(m.subject.clone());
@@ -598,7 +598,7 @@ async fn send_smtp<E: From<String>>(cfg: &SmtpConfig, m: &EmailMessage) -> SkyRe
     };
     let email = match built {
         Ok(e) => e,
-        Err(e) => return SkyResult::Err(format!("email.send/Smtp: build: {}", e).into()),
+        Err(e) => return IpeResult::Err(format!("email.send/Smtp: build: {}", e).into()),
     };
 
     // Transport TLS policy. PLAIN auth must NEVER ride a cleartext channel: when
@@ -609,7 +609,7 @@ async fn send_smtp<E: From<String>>(cfg: &SmtpConfig, m: &EmailMessage) -> SkyRe
     // parity for an unauthenticated relay, nothing secret to leak).
     let tls = match TlsParameters::new(cfg.host.clone()) {
         Ok(t) => t,
-        Err(e) => return SkyResult::Err(format!("email.send/Smtp: tls: {}", e).into()),
+        Err(e) => return IpeResult::Err(format!("email.send/Smtp: tls: {}", e).into()),
     };
     let tls_policy = if cfg.port == 465 {
         Tls::Wrapper(tls)
@@ -624,7 +624,7 @@ async fn send_smtp<E: From<String>>(cfg: &SmtpConfig, m: &EmailMessage) -> SkyRe
     let port = match u16::try_from(cfg.port) {
         Ok(p) => p,
         Err(_) => {
-            return SkyResult::Err(
+            return IpeResult::Err(
                 "email.send/Smtp: port out of range (1-65535)"
                     .to_string()
                     .into(),
@@ -644,8 +644,8 @@ async fn send_smtp<E: From<String>>(cfg: &SmtpConfig, m: &EmailMessage) -> SkyRe
     let transport = tb.build();
 
     match transport.send(email).await {
-        Ok(_) => SkyResult::Ok(format!("smtp-{}", email_gen_id())),
-        Err(e) => SkyResult::Err(format!("email.send/Smtp: {}", e).into()),
+        Ok(_) => IpeResult::Ok(format!("smtp-{}", email_gen_id())),
+        Err(e) => IpeResult::Err(format!("email.send/Smtp: {}", e).into()),
     }
 }
 
@@ -682,11 +682,11 @@ mod tests {
             attachments: vec![],
             replyTo: String::new(),
         };
-        let r: SkyResult<String, String> =
+        let r: IpeResult<String, String> =
             email_send(EmailProvider::Resend("key".into()), msg).await;
         match r {
-            SkyResult::Ok(id) => assert!(id.starts_with("dry-run-")),
-            SkyResult::Err(e) => panic!("dry-run failed: {}", e),
+            IpeResult::Ok(id) => assert!(id.starts_with("dry-run-")),
+            IpeResult::Err(e) => panic!("dry-run failed: {}", e),
         }
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::remove_var("IPE_EMAIL_DRY_RUN") };

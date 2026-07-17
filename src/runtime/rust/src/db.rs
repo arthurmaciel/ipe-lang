@@ -19,7 +19,7 @@ pub type Db = DbPool;
 /// NAME (a schema identifier, not row data) — never the value. Non-database
 /// errors (pool acquisition, connect, decode, IO) carry no row values, so their
 /// `Display` is kept for diagnosability. Total — no unwrap/index/panic.
-fn sky_err<E: From<String> + Send>(e: &sqlx::Error) -> E {
+fn ipe_err<E: From<String> + Send>(e: &sqlx::Error) -> E {
     if let Some(dbe) = e.as_database_error() {
         let mut msg = String::from("db: database error");
         if let Some(code) = dbe.code() {
@@ -244,7 +244,7 @@ fn row_to_json(row: &DbRow) -> JsonVal {
 //
 // Each primitive wraps `decode_field` (reads a named column from the JsonVal
 // object produced by `row_to_json`) and adds domain-specific value parsing.
-// ALL are TOTAL: missing column, NULL, or parse failure → `SkyResult::Err` via
+// ALL are TOTAL: missing column, NULL, or parse failure → `IpeResult::Err` via
 // `decode_err_str`, NEVER `.unwrap()` / `.expect()` / `panic!`.
 //
 // The shared `Decoder<E,T>` type (json.rs:7) is reused here — DbDec decoders
@@ -465,10 +465,10 @@ pub fn db_decode_money<E: From<String> + 'static>(col: String) -> Decoder<E, (De
 ///   column binding): check the current value directly — `JsonVal::Null`
 ///   → `Ok(Nothing)`, else delegate.
 ///
-/// Totality: every path returns a `SkyResult`; no panic/unwrap.
+/// Totality: every path returns a `IpeResult`; no panic/unwrap.
 pub fn db_decode_nullable<E: From<String> + 'static, T: Send + 'static>(
     inner: Decoder<E, T>,
-) -> Decoder<E, SkyMaybe<T>> {
+) -> Decoder<E, IpeMaybe<T>> {
     let gate_fields = inner.fields.clone();
     // Clone for use in the Decoder::new second arg (moved into closure above).
     let fields_for_struct = gate_fields.clone();
@@ -477,13 +477,13 @@ pub fn db_decode_nullable<E: From<String> + 'static, T: Send + 'static>(
             if gate_fields.is_empty() {
                 // Leaf decoder with no named fields — gate on the current value itself.
                 if v == &JsonVal::Null {
-                    return decode_ok(SkyMaybe::Nothing);
+                    return decode_ok(IpeMaybe::Nothing);
                 }
             } else {
                 // Gate on every field the inner decoder reads.
                 for col in &gate_fields {
                     match v.get(col.as_str()) {
-                        None | Some(JsonVal::Null) => return decode_ok(SkyMaybe::Nothing),
+                        None | Some(JsonVal::Null) => return decode_ok(IpeMaybe::Nothing),
                         Some(_) => {}
                     }
                 }
@@ -491,8 +491,8 @@ pub fn db_decode_nullable<E: From<String> + 'static, T: Send + 'static>(
             // All gate fields are present + non-null (or no gate fields and value
             // is not Null): delegate to inner. Inner Err = structural mismatch.
             match (inner.run)(v) {
-                SkyResult::Ok(t) => decode_ok(SkyMaybe::Just(t)),
-                SkyResult::Err(e) => SkyResult::Err(e),
+                IpeResult::Ok(t) => decode_ok(IpeMaybe::Just(t)),
+                IpeResult::Err(e) => IpeResult::Err(e),
             }
         }),
         fields_for_struct,
@@ -505,7 +505,7 @@ pub fn db_decode_nullable<E: From<String> + 'static, T: Send + 'static>(
 ///
 /// Implemented APPLICATIVELY as `decode_and_map(decode_field(col, fieldDec), ctorDec)`.
 /// This avoids any FnOnce/Clone wall: `decode_field` reads the named column from the row
-/// and returns `SkyResult<E, A>`; `ctorDec` returns `SkyResult<E, Box<dyn FnOnce(A)->B>>`;
+/// and returns `IpeResult<E, A>`; `ctorDec` returns `IpeResult<E, Box<dyn FnOnce(A)->B>>`;
 /// `decode_and_map` calls the FnOnce once per decoder invocation, which is sound because
 /// the decoder is called once per row (not twice for the same row).
 ///
@@ -662,14 +662,14 @@ fn max_db_pools() -> usize {
 /// serialises every statement on the rollback-journal lock (the contention that a
 /// naive cache-only change regressed). The PRAGMAs are a no-op for other drivers
 /// (guarded by the url scheme).
-async fn build_pool<E: Send + From<String> + 'static>(url: &str) -> SkyResult<E, Db> {
+async fn build_pool<E: Send + From<String> + 'static>(url: &str) -> IpeResult<E, Db> {
     let pool: Db = match sqlx::pool::PoolOptions::new()
         .max_connections(max_pool_connections())
         .connect(url)
         .await
     {
         Ok(p) => p,
-        Err(e) => return SkyResult::Err(sky_err(&e)),
+        Err(e) => return IpeResult::Err(ipe_err(&e)),
     };
     if url.contains("sqlite") && url_is_cacheable(url) {
         let _ = sqlx::query("PRAGMA journal_mode=WAL;").execute(&pool).await;
@@ -684,7 +684,7 @@ async fn build_pool<E: Send + From<String> + 'static>(url: &str) -> SkyResult<E,
 /// pool is built with NO lock held (never block other tasks on connect I/O); a
 /// concurrent miss that built a redundant pool loses the `entry` race and its
 /// extra pool drops (closes) — steady state keeps exactly one pool per URL.
-async fn connect_cached<E: Send + From<String> + 'static>(url: String) -> SkyResult<E, Db> {
+async fn connect_cached<E: Send + From<String> + 'static>(url: String) -> IpeResult<E, Db> {
     if url_is_cacheable(&url) {
         let g = pool_cache().lock().unwrap_or_else(|e| e.into_inner());
         if let Some(p) = g.get(&url) {
@@ -692,7 +692,7 @@ async fn connect_cached<E: Send + From<String> + 'static>(url: String) -> SkyRes
         }
     }
     match build_pool::<E>(&url).await {
-        SkyResult::Ok(pool) => {
+        IpeResult::Ok(pool) => {
             if url_is_cacheable(&url) {
                 let mut g = pool_cache().lock().unwrap_or_else(|e| e.into_inner());
                 // Another task may have inserted during the lock-free build → reuse it.
@@ -709,11 +709,11 @@ async fn connect_cached<E: Send + From<String> + 'static>(url: String) -> SkyRes
                 ok_res(pool)
             }
         }
-        SkyResult::Err(e) => SkyResult::Err(e),
+        IpeResult::Err(e) => IpeResult::Err(e),
     }
 }
 
-pub fn db_connect<E: Send + From<String> + 'static>(_unit: ()) -> SkyTask<E, Db> {
+pub fn db_connect<E: Send + From<String> + 'static>(_unit: ()) -> IpeTask<E, Db> {
     Box::pin(connect_cached(ipe_db_url()))
 }
 
@@ -723,7 +723,7 @@ pub fn db_connect<E: Send + From<String> + 'static>(_unit: ()) -> SkyTask<E, Db>
 /// `sqlite://…?mode=rwc` URL (create-if-missing); other drivers pass `path`
 /// through as the connection string. (Was wrongly `(_unit: ())` → ignored both
 /// args → E0061 at every `Db.open "sqlite" "x.db"` call site.)
-pub fn db_open<E: Send + From<String> + 'static>(driver: String, path: String) -> SkyTask<E, Db> {
+pub fn db_open<E: Send + From<String> + 'static>(driver: String, path: String) -> IpeTask<E, Db> {
     let url = if driver == "sqlite" && !path.contains(':') {
         format!("sqlite://{}?mode=rwc", path)
     } else {
@@ -732,11 +732,11 @@ pub fn db_open<E: Send + From<String> + 'static>(driver: String, path: String) -
     Box::pin(connect_cached(url))
 }
 
-pub fn db_open_with_path<E: Send + From<String> + 'static>(path: String) -> SkyTask<E, Db> {
+pub fn db_open_with_path<E: Send + From<String> + 'static>(path: String) -> IpeTask<E, Db> {
     Box::pin(connect_cached(path))
 }
 
-pub fn db_exec_raw<E: Send + From<String> + 'static>(conn: Db, sql: String) -> SkyTask<E, i64> {
+pub fn db_exec_raw<E: Send + From<String> + 'static>(conn: Db, sql: String) -> IpeTask<E, i64> {
     Box::pin(async move {
         // `execRaw : Db -> String -> Task Error Int` — Int is the rows-affected
         // count (Go parity: res.RowsAffected()). `as i64` matches the existing
@@ -744,7 +744,7 @@ pub fn db_exec_raw<E: Send + From<String> + 'static>(conn: Db, sql: String) -> S
         // never realistically exceed i64::MAX).
         match exec_routed(&conn, sqlx::query(&sql)).await {
             Ok(res) => ok_res(res.rows_affected() as i64),
-            Err(e) => SkyResult::Err(sky_err(&e)),
+            Err(e) => IpeResult::Err(ipe_err(&e)),
         }
     })
 }
@@ -753,7 +753,7 @@ pub fn db_exec<E: Send + From<String> + 'static>(
     conn: Db,
     sql: String,
     params: Vec<String>,
-) -> SkyTask<E, i64> {
+) -> IpeTask<E, i64> {
     Box::pin(async move {
         // Same path as the structured kernels: `db_format_sql` adapts `?`
         // placeholders per backend, then bind positionally. sqlx owns the
@@ -766,7 +766,7 @@ pub fn db_exec<E: Send + From<String> + 'static>(
         }
         match exec_routed(&conn, q).await {
             Ok(res) => ok_res(res.rows_affected() as i64),
-            Err(e) => SkyResult::Err(sky_err(&e)),
+            Err(e) => IpeResult::Err(ipe_err(&e)),
         }
     })
 }
@@ -775,7 +775,7 @@ pub fn db_query<E: Send + From<String> + 'static>(
     conn: Db,
     sql: String,
     params: Vec<String>,
-) -> SkyTask<E, Vec<HashMap<String, String>>> {
+) -> IpeTask<E, Vec<HashMap<String, String>>> {
     Box::pin(async move {
         let final_sql = db_format_sql(sql);
         let mut q = sqlx::query(&final_sql);
@@ -784,7 +784,7 @@ pub fn db_query<E: Send + From<String> + 'static>(
         }
         match fetch_all_routed(&conn, q).await {
             Ok(rows) => ok_res(rows.iter().map(row_to_map).collect()),
-            Err(e) => SkyResult::Err(sky_err(&e)),
+            Err(e) => IpeResult::Err(ipe_err(&e)),
         }
     })
 }
@@ -809,7 +809,7 @@ pub fn db_exec_params<E: Send + From<String> + 'static>(
     conn: Db,
     sql: String,
     params: Vec<SqlParam>,
-) -> SkyTask<E, i64> {
+) -> IpeTask<E, i64> {
     Box::pin(async move {
         let final_sql = db_format_sql(sql);
         let mut q = sqlx::query(&final_sql);
@@ -819,7 +819,7 @@ pub fn db_exec_params<E: Send + From<String> + 'static>(
         // Rows-affected (Go parity), same as db_exec.
         match exec_routed(&conn, q).await {
             Ok(res) => ok_res(res.rows_affected() as i64),
-            Err(e) => SkyResult::Err(sky_err(&e)),
+            Err(e) => IpeResult::Err(ipe_err(&e)),
         }
     })
 }
@@ -828,7 +828,7 @@ pub fn db_query_params<E: Send + From<String> + 'static>(
     conn: Db,
     sql: String,
     params: Vec<SqlParam>,
-) -> SkyTask<E, Vec<HashMap<String, String>>> {
+) -> IpeTask<E, Vec<HashMap<String, String>>> {
     Box::pin(async move {
         let final_sql = db_format_sql(sql);
         let mut q = sqlx::query(&final_sql);
@@ -837,7 +837,7 @@ pub fn db_query_params<E: Send + From<String> + 'static>(
         }
         match fetch_all_routed(&conn, q).await {
             Ok(rows) => ok_res(rows.iter().map(row_to_map).collect()),
-            Err(e) => SkyResult::Err(sky_err(&e)),
+            Err(e) => IpeResult::Err(ipe_err(&e)),
         }
     })
 }
@@ -846,18 +846,18 @@ pub fn db_query_params<E: Send + From<String> + 'static>(
 ///
 /// Sky's `getString : String -> row -> String` is polymorphic in `row`; the
 /// row can be a query result (`Dict String String`), a pub/sub `Dict` payload,
-/// or the typed `LiveReq` an `init` handler receives. `SkyRow` is the seam that
+/// or the typed `LiveReq` an `init` handler receives. `IpeRow` is the seam that
 /// lets the Rust accessors stay generic and monomorphise per row type — no
 /// `dyn Any`, no panic (an absent field reads as `""`).
-pub trait SkyRow {
-    fn sky_get(&self, field: &str) -> String;
+pub trait IpeRow {
+    fn ipe_get(&self, field: &str) -> String;
 }
 
-// `SkyDict<String>` is a transparent alias for `HashMap<String, String>`, so this
+// `IpeDict<String>` is a transparent alias for `HashMap<String, String>`, so this
 // is the impl for every Dict-shaped row (query rows + pub/sub Dict payloads).
 // Named via the alias for intent; a genuine newtype is tracked as a future task.
-impl SkyRow for SkyDict<String> {
-    fn sky_get(&self, field: &str) -> String {
+impl IpeRow for IpeDict<String> {
+    fn ipe_get(&self, field: &str) -> String {
         self.get(field).cloned().unwrap_or_default()
     }
 }
@@ -872,8 +872,8 @@ impl SkyRow for SkyDict<String> {
 // by CI job `runtime-feature-combos` (.github/workflows/ci.yml), which builds
 // `--no-default-features --features db` (no live) under `-D warnings`.
 #[cfg(feature = "live")]
-impl SkyRow for super::LiveReq {
-    fn sky_get(&self, field: &str) -> String {
+impl IpeRow for super::LiveReq {
+    fn ipe_get(&self, field: &str) -> String {
         match field {
             "path" => self.path.clone(),
             "query" => self.query.clone(),
@@ -889,18 +889,18 @@ impl SkyRow for super::LiveReq {
     }
 }
 
-pub fn db_get_field<R: SkyRow>(field: String, row: &R) -> String {
-    row.sky_get(&field)
+pub fn db_get_field<R: IpeRow>(field: String, row: &R) -> String {
+    row.ipe_get(&field)
 }
 
-pub fn db_get_string<R: SkyRow>(field: String, row: &R) -> String {
-    row.sky_get(&field)
+pub fn db_get_string<R: IpeRow>(field: String, row: &R) -> String {
+    row.ipe_get(&field)
 }
 
-pub fn db_get_int<R: SkyRow>(field: String, row: &R) -> i64 {
+pub fn db_get_int<R: IpeRow>(field: String, row: &R) -> i64 {
     // Align with db_decode_int / Go: accept "42" or a decimal string like
     // "3.0" (truncate to 3) before defaulting to 0.
-    let s = row.sky_get(&field);
+    let s = row.ipe_get(&field);
     if let Ok(i) = s.parse::<i64>() {
         return i;
     }
@@ -963,7 +963,7 @@ fn migrate_checksum(sql: &str) -> String {
 pub fn db_migrate_apply<E: Send + From<String> + 'static>(
     db: Db,
     migrations: Vec<(String, String)>,
-) -> SkyTask<E, Vec<String>> {
+) -> IpeTask<E, Vec<String>> {
     Box::pin(async move {
         // CLI op mode (empty when unset → library Task-return path, unchanged).
         let op: String = crate::system::read_env_var("IPE_DB_OP")
@@ -978,12 +978,12 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
                     let _ = std::io::Write::flush(&mut std::io::stderr());
                     std::process::exit(1);
                 }
-                return SkyResult::Err($err);
+                return IpeResult::Err($err);
             }};
         }
 
         // 1. Ensure the ledger exists. `IF NOT EXISTS` → idempotent.
-        if let SkyResult::Err(e) = db_exec_raw::<E>(
+        if let IpeResult::Err(e) = db_exec_raw::<E>(
             db.clone(),
             "CREATE TABLE IF NOT EXISTS _sky_migrations (name TEXT PRIMARY KEY, \
              checksum TEXT NOT NULL, applied_at TEXT NOT NULL)"
@@ -1004,8 +1004,8 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
         )
         .await
         {
-            SkyResult::Ok(r) => r,
-            SkyResult::Err(e) => db_op_fail!("read _sky_migrations", e),
+            IpeResult::Ok(r) => r,
+            IpeResult::Err(e) => db_op_fail!("read _sky_migrations", e),
         };
         let mut applied: HashMap<String, (String, String)> = HashMap::new();
         for row in &rows {
@@ -1081,7 +1081,7 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
                         let _ = std::io::Write::flush(&mut std::io::stderr());
                         std::process::exit(1);
                     }
-                    return SkyResult::Err(
+                    return IpeResult::Err(
                         format!(
                             "db.migrate: migration '{name}' changed after it was \
                              applied — checksum mismatch"
@@ -1104,14 +1104,14 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
             // db_exec/db_exec_raw now return rows-affected (i64), so the tx body's
             // tail yields i64 — bind/turbofish accordingly; the count is unused
             // (migrate cares about success, not row counts).
-            let outcome: SkyResult<E, i64> = db_with_transaction::<E, i64>(db.clone(), move |c| {
+            let outcome: IpeResult<E, i64> = db_with_transaction::<E, i64>(db.clone(), move |c| {
                 let stmt = stmt.clone();
                 let rec_name = rec_name.clone();
                 let rec_sum = rec_sum.clone();
                 let applied_at = applied_at.clone();
                 Box::pin(async move {
-                    if let SkyResult::Err(e) = db_exec_raw::<E>(c.clone(), stmt).await {
-                        return SkyResult::Err(e);
+                    if let IpeResult::Err(e) = db_exec_raw::<E>(c.clone(), stmt).await {
+                        return IpeResult::Err(e);
                     }
                     // Ledger INSERT uses BOUND params — no interpolation.
                     db_exec::<E>(
@@ -1127,8 +1127,8 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
             .await;
 
             match outcome {
-                SkyResult::Ok(_) => out.push(name),
-                SkyResult::Err(e) => db_op_fail!(format!("apply migration '{name}'"), e),
+                IpeResult::Ok(_) => out.push(name),
+                IpeResult::Err(e) => db_op_fail!(format!("apply migration '{name}'"), e),
             }
         }
 
@@ -1142,7 +1142,7 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
             let _ = std::io::Write::flush(&mut std::io::stdout());
             std::process::exit(0);
         }
-        SkyResult::Ok(out)
+        IpeResult::Ok(out)
     })
 }
 
@@ -1151,7 +1151,7 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
 /// `close : Db -> Task Error ()` — sqlx::Pool drops on its own; this is
 /// a graceful explicit close (any in-flight queries finish, then the
 /// pool is closed).
-pub fn db_close<E: Send + From<String> + 'static>(db: Db) -> SkyTask<E, ()> {
+pub fn db_close<E: Send + From<String> + 'static>(db: Db) -> IpeTask<E, ()> {
     Box::pin(async move {
         db.close().await;
         ok_res(())
@@ -1160,9 +1160,9 @@ pub fn db_close<E: Send + From<String> + 'static>(db: Db) -> SkyTask<E, ()> {
 
 /// `getBool : String -> Dict String String -> Bool` — parses common
 /// truthy values (`"1"`, `"true"`, `"TRUE"`, `"t"`, `"T"`).
-pub fn db_get_bool<R: SkyRow>(field: String, row: &R) -> bool {
+pub fn db_get_bool<R: IpeRow>(field: String, row: &R) -> bool {
     matches!(
-        row.sky_get(&field).as_str(),
+        row.ipe_get(&field).as_str(),
         "1" | "true" | "TRUE" | "t" | "T"
     )
 }
@@ -1210,18 +1210,18 @@ pub fn db_insert_row<E: Send + From<String> + 'static>(
     conn: Db,
     table: String,
     row: HashMap<String, String>,
-) -> SkyTask<E, i64> {
+) -> IpeTask<E, i64> {
     Box::pin(async move {
         let qtable = match SqlIdent::parse(&table) {
             Some(t) => t,
             None => {
-                return SkyResult::Err(
+                return IpeResult::Err(
                     format!("db.insertRow: invalid table name {:?}", table).into(),
                 );
             }
         };
         if row.is_empty() {
-            return SkyResult::Err("db.insertRow: empty row".to_string().into());
+            return IpeResult::Err("db.insertRow: empty row".to_string().into());
         }
         let mut keys: Vec<&String> = row.keys().collect();
         keys.sort(); // deterministic column order
@@ -1231,7 +1231,7 @@ pub fn db_insert_row<E: Send + From<String> + 'static>(
             .collect::<Option<Vec<_>>>()
         {
             Some(v) => v,
-            None => return SkyResult::Err("db.insertRow: invalid column name".to_string().into()),
+            None => return IpeResult::Err("db.insertRow: invalid column name".to_string().into()),
         };
         let col_names: Vec<&str> = col_idents.iter().map(SqlIdent::as_str).collect();
         let placeholders = vec!["?"; col_names.len()].join(", ");
@@ -1256,9 +1256,9 @@ pub fn db_insert_row<E: Send + From<String> + 'static>(
             match fetch_one_routed(&conn, q).await {
                 Ok(r) => match extract_returning_id(&r) {
                     Ok(id) => ok_res(id),
-                    Err(msg) => SkyResult::Err(format!("db.insertRow: {msg}").into()),
+                    Err(msg) => IpeResult::Err(format!("db.insertRow: {msg}").into()),
                 },
-                Err(e) => SkyResult::Err(sky_err(&e)),
+                Err(e) => IpeResult::Err(ipe_err(&e)),
             }
         } else {
             let sql = db_format_sql(base);
@@ -1268,7 +1268,7 @@ pub fn db_insert_row<E: Send + From<String> + 'static>(
             }
             match exec_routed(&conn, q).await {
                 Ok(res) => ok_res(db_last_insert_id(&res)),
-                Err(e) => SkyResult::Err(sky_err(&e)),
+                Err(e) => IpeResult::Err(ipe_err(&e)),
             }
         }
     })
@@ -1279,12 +1279,12 @@ pub fn db_get_by_id<E: Send + From<String> + 'static>(
     conn: Db,
     table: String,
     id: String,
-) -> SkyTask<E, SkyMaybe<HashMap<String, String>>> {
+) -> IpeTask<E, IpeMaybe<HashMap<String, String>>> {
     Box::pin(async move {
         let qtable = match SqlIdent::parse(&table) {
             Some(t) => t,
             None => {
-                return SkyResult::Err(
+                return IpeResult::Err(
                     format!("db.getById: invalid table name {:?}", table).into(),
                 );
             }
@@ -1294,9 +1294,9 @@ pub fn db_get_by_id<E: Send + From<String> + 'static>(
             qtable.as_str()
         ));
         match fetch_optional_routed(&conn, sqlx::query(&sql).bind(id)).await {
-            Ok(Some(r)) => ok_res(SkyMaybe::Just(row_to_map(&r))),
-            Ok(None) => ok_res(SkyMaybe::Nothing),
-            Err(e) => SkyResult::Err(sky_err(&e)),
+            Ok(Some(r)) => ok_res(IpeMaybe::Just(row_to_map(&r))),
+            Ok(None) => ok_res(IpeMaybe::Nothing),
+            Err(e) => IpeResult::Err(ipe_err(&e)),
         }
     })
 }
@@ -1308,12 +1308,12 @@ pub fn db_update_by_id<E: Send + From<String> + 'static>(
     table: String,
     id: String,
     row: HashMap<String, String>,
-) -> SkyTask<E, i64> {
+) -> IpeTask<E, i64> {
     Box::pin(async move {
         let qtable = match SqlIdent::parse(&table) {
             Some(t) => t,
             None => {
-                return SkyResult::Err(
+                return IpeResult::Err(
                     format!("db.updateById: invalid table name {:?}", table).into(),
                 );
             }
@@ -1329,7 +1329,7 @@ pub fn db_update_by_id<E: Send + From<String> + 'static>(
             .collect::<Option<Vec<_>>>()
         {
             Some(v) => v,
-            None => return SkyResult::Err("db.updateById: invalid column name".to_string().into()),
+            None => return IpeResult::Err("db.updateById: invalid column name".to_string().into()),
         };
         let col_names: Vec<&str> = col_idents.iter().map(SqlIdent::as_str).collect();
         let sets: Vec<String> = col_names.iter().map(|c| format!("{} = ?", c)).collect();
@@ -1345,7 +1345,7 @@ pub fn db_update_by_id<E: Send + From<String> + 'static>(
         q = q.bind(id);
         match exec_routed(&conn, q).await {
             Ok(res) => ok_res(res.rows_affected() as i64),
-            Err(e) => SkyResult::Err(sky_err(&e)),
+            Err(e) => IpeResult::Err(ipe_err(&e)),
         }
     })
 }
@@ -1356,12 +1356,12 @@ pub fn db_delete_by_id<E: Send + From<String> + 'static>(
     conn: Db,
     table: String,
     id: String,
-) -> SkyTask<E, i64> {
+) -> IpeTask<E, i64> {
     Box::pin(async move {
         let qtable = match SqlIdent::parse(&table) {
             Some(t) => t,
             None => {
-                return SkyResult::Err(
+                return IpeResult::Err(
                     format!("db.deleteById: invalid table name {:?}", table).into(),
                 );
             }
@@ -1369,7 +1369,7 @@ pub fn db_delete_by_id<E: Send + From<String> + 'static>(
         let sql = db_format_sql(format!("DELETE FROM {} WHERE id = ?", qtable.as_str()));
         match exec_routed(&conn, sqlx::query(&sql).bind(id)).await {
             Ok(res) => ok_res(res.rows_affected() as i64),
-            Err(e) => SkyResult::Err(sky_err(&e)),
+            Err(e) => IpeResult::Err(ipe_err(&e)),
         }
     })
 }
@@ -1380,12 +1380,12 @@ pub fn db_find_one_by_field<E: Send + From<String> + 'static>(
     table: String,
     field: String,
     value: String,
-) -> SkyTask<E, SkyMaybe<HashMap<String, String>>> {
+) -> IpeTask<E, IpeMaybe<HashMap<String, String>>> {
     Box::pin(async move {
         let (qtable, qfield) = match (SqlIdent::parse(&table), SqlIdent::parse(&field)) {
             (Some(t), Some(f)) => (t, f),
             _ => {
-                return SkyResult::Err(
+                return IpeResult::Err(
                     format!(
                         "db.findOneByField: invalid identifier in {:?}.{:?}",
                         table, field
@@ -1400,9 +1400,9 @@ pub fn db_find_one_by_field<E: Send + From<String> + 'static>(
             qfield.as_str()
         ));
         match fetch_optional_routed(&conn, sqlx::query(&sql).bind(value)).await {
-            Ok(Some(r)) => ok_res(SkyMaybe::Just(row_to_map(&r))),
-            Ok(None) => ok_res(SkyMaybe::Nothing),
-            Err(e) => SkyResult::Err(sky_err(&e)),
+            Ok(Some(r)) => ok_res(IpeMaybe::Just(row_to_map(&r))),
+            Ok(None) => ok_res(IpeMaybe::Nothing),
+            Err(e) => IpeResult::Err(ipe_err(&e)),
         }
     })
 }
@@ -1413,12 +1413,12 @@ pub fn db_find_many_by_field<E: Send + From<String> + 'static>(
     table: String,
     field: String,
     value: String,
-) -> SkyTask<E, Vec<HashMap<String, String>>> {
+) -> IpeTask<E, Vec<HashMap<String, String>>> {
     Box::pin(async move {
         let (qtable, qfield) = match (SqlIdent::parse(&table), SqlIdent::parse(&field)) {
             (Some(t), Some(f)) => (t, f),
             _ => {
-                return SkyResult::Err(
+                return IpeResult::Err(
                     format!(
                         "db.findManyByField: invalid identifier in {:?}.{:?}",
                         table, field
@@ -1434,7 +1434,7 @@ pub fn db_find_many_by_field<E: Send + From<String> + 'static>(
         ));
         match fetch_all_routed(&conn, sqlx::query(&sql).bind(value)).await {
             Ok(rows) => ok_res(rows.iter().map(row_to_map).collect()),
-            Err(e) => SkyResult::Err(sky_err(&e)),
+            Err(e) => IpeResult::Err(ipe_err(&e)),
         }
     })
 }
@@ -1445,12 +1445,12 @@ pub fn db_find_by_conditions<E: Send + From<String> + 'static>(
     conn: Db,
     table: String,
     conditions: HashMap<String, String>,
-) -> SkyTask<E, Vec<HashMap<String, String>>> {
+) -> IpeTask<E, Vec<HashMap<String, String>>> {
     Box::pin(async move {
         let qtable = match SqlIdent::parse(&table) {
             Some(t) => t,
             None => {
-                return SkyResult::Err(
+                return IpeResult::Err(
                     format!("db.findByConditions: invalid table {:?}", table).into(),
                 );
             }
@@ -1464,7 +1464,7 @@ pub fn db_find_by_conditions<E: Send + From<String> + 'static>(
         {
             Some(v) => v,
             None => {
-                return SkyResult::Err(
+                return IpeResult::Err(
                     "db.findByConditions: invalid column name"
                         .to_string()
                         .into(),
@@ -1488,7 +1488,7 @@ pub fn db_find_by_conditions<E: Send + From<String> + 'static>(
         }
         match fetch_all_routed(&conn, q).await {
             Ok(rows) => ok_res(rows.iter().map(row_to_map).collect()),
-            Err(e) => SkyResult::Err(sky_err(&e)),
+            Err(e) => IpeResult::Err(ipe_err(&e)),
         }
     })
 }
@@ -1498,7 +1498,7 @@ pub fn db_find_by_conditions<E: Send + From<String> + 'static>(
 /// `JsonVal::Object` per row (via `row_to_json`) and runs the decoder against it.
 /// Fails fast on the first decode error.
 ///
-/// The `Decoder<E,A>` is `Box<dyn Fn(&JsonVal) -> SkyResult<E,A> + Send>`. Moving
+/// The `Decoder<E,A>` is `Box<dyn Fn(&JsonVal) -> IpeResult<E,A> + Send>`. Moving
 /// it into the async block is sound: it is `Send`, and calling `decoder(&jv)` is
 /// a shared-reference call (no move out of the box). No `Arc` needed.
 pub fn db_query_decode<E: Send + From<String> + 'static, A: Send + 'static>(
@@ -1506,7 +1506,7 @@ pub fn db_query_decode<E: Send + From<String> + 'static, A: Send + 'static>(
     sql: String,
     params: Vec<String>,
     decoder: Decoder<E, A>,
-) -> SkyTask<E, Vec<A>> {
+) -> IpeTask<E, Vec<A>> {
     Box::pin(async move {
         let final_sql = db_format_sql(sql);
         let mut q = sqlx::query(&final_sql);
@@ -1515,14 +1515,14 @@ pub fn db_query_decode<E: Send + From<String> + 'static, A: Send + 'static>(
         }
         let rows = match fetch_all_routed(&conn, q).await {
             Ok(r) => r,
-            Err(e) => return SkyResult::Err(sky_err(&e)),
+            Err(e) => return IpeResult::Err(ipe_err(&e)),
         };
         let mut out = Vec::with_capacity(rows.len());
         for row in &rows {
             let jv = row_to_json(row);
             match (decoder.run)(&jv) {
-                SkyResult::Ok(a) => out.push(a),
-                SkyResult::Err(e) => return SkyResult::Err(e),
+                IpeResult::Ok(a) => out.push(a),
+                IpeResult::Err(e) => return IpeResult::Err(e),
             }
         }
         ok_res(out)
@@ -1540,7 +1540,7 @@ pub fn db_query_decode_params<E: Send + From<String> + 'static, A: Send + 'stati
     sql: String,
     params: Vec<SqlParam>,
     decoder: Decoder<E, A>,
-) -> SkyTask<E, Vec<A>> {
+) -> IpeTask<E, Vec<A>> {
     Box::pin(async move {
         let final_sql = db_format_sql(sql);
         let mut q = sqlx::query(&final_sql);
@@ -1549,14 +1549,14 @@ pub fn db_query_decode_params<E: Send + From<String> + 'static, A: Send + 'stati
         }
         let rows = match fetch_all_routed(&conn, q).await {
             Ok(r) => r,
-            Err(e) => return SkyResult::Err(sky_err(&e)),
+            Err(e) => return IpeResult::Err(ipe_err(&e)),
         };
         let mut out = Vec::with_capacity(rows.len());
         for row in &rows {
             let jv = row_to_json(row);
             match (decoder.run)(&jv) {
-                SkyResult::Ok(a) => out.push(a),
-                SkyResult::Err(e) => return SkyResult::Err(e),
+                IpeResult::Ok(a) => out.push(a),
+                IpeResult::Err(e) => return IpeResult::Err(e),
             }
         }
         ok_res(out)
@@ -1574,12 +1574,12 @@ pub fn db_get_by_id_decode<E: Send + From<String> + 'static, A: Send + 'static>(
     table: String,
     id: i64,
     decoder: Decoder<E, A>,
-) -> SkyTask<E, SkyMaybe<A>> {
+) -> IpeTask<E, IpeMaybe<A>> {
     Box::pin(async move {
         let qtable = match SqlIdent::parse(&table) {
             Some(t) => t,
             None => {
-                return SkyResult::Err(
+                return IpeResult::Err(
                     format!("db.getByIdDecode: invalid table name {:?}", table).into(),
                 );
             }
@@ -1590,15 +1590,15 @@ pub fn db_get_by_id_decode<E: Send + From<String> + 'static, A: Send + 'static>(
             qtable.as_str()
         ));
         match fetch_optional_routed(&conn, sqlx::query(&sql).bind(id)).await {
-            Ok(None) => ok_res(SkyMaybe::Nothing),
+            Ok(None) => ok_res(IpeMaybe::Nothing),
             Ok(Some(row)) => {
                 let jv = row_to_json(&row);
                 match (decoder.run)(&jv) {
-                    SkyResult::Ok(a) => ok_res(SkyMaybe::Just(a)),
-                    SkyResult::Err(e) => SkyResult::Err(e),
+                    IpeResult::Ok(a) => ok_res(IpeMaybe::Just(a)),
+                    IpeResult::Err(e) => IpeResult::Err(e),
                 }
             }
-            Err(e) => SkyResult::Err(sky_err(&e)),
+            Err(e) => IpeResult::Err(ipe_err(&e)),
         }
     })
 }
@@ -1645,8 +1645,8 @@ pub fn db_get_by_id_decode<E: Send + From<String> + 'static, A: Send + 'static>(
 /// stack bookkeeping.
 pub fn db_with_transaction<E: Send + From<String> + 'static, A: Send + 'static>(
     conn: Db,
-    body: impl FnOnce(Db) -> SkyTask<E, A> + Send + 'static,
-) -> SkyTask<E, A> {
+    body: impl FnOnce(Db) -> IpeTask<E, A> + Send + 'static,
+) -> IpeTask<E, A> {
     Box::pin(async move {
         // Nested on the SAME pool: flatten onto the existing connection (no
         // second acquire, no nested BEGIN, no deadlock). A nested call on a
@@ -1661,7 +1661,7 @@ pub fn db_with_transaction<E: Send + From<String> + 'static, A: Send + 'static>(
         // body ops serialise on it.
         let tx = match conn.begin().await {
             Ok(t) => t,
-            Err(e) => return SkyResult::Err(sky_err(&e)),
+            Err(e) => return IpeResult::Err(ipe_err(&e)),
         };
         let tx_conn: TxnConn = std::sync::Arc::new(tokio::sync::Mutex::new(tx));
 
@@ -1688,7 +1688,7 @@ pub fn db_with_transaction<E: Send + From<String> + 'static, A: Send + 'static>(
             // is dropped here, rolling the txn back, and we report rather than
             // committing a transaction we don't solely own.
             Err(_) => {
-                return SkyResult::Err(
+                return IpeResult::Err(
                     "withTransaction: transaction still referenced at completion"
                         .to_string()
                         .into(),
@@ -1696,14 +1696,14 @@ pub fn db_with_transaction<E: Send + From<String> + 'static, A: Send + 'static>(
             }
         };
         match outcome {
-            SkyResult::Ok(a) => match tx.commit().await {
+            IpeResult::Ok(a) => match tx.commit().await {
                 Ok(()) => ok_res(a),
-                Err(e) => SkyResult::Err(sky_err(&e)),
+                Err(e) => IpeResult::Err(ipe_err(&e)),
             },
-            SkyResult::Err(e) => {
+            IpeResult::Err(e) => {
                 // Best-effort deterministic rollback; the body's Err is reported.
                 let _ = tx.rollback().await;
-                SkyResult::Err(e)
+                IpeResult::Err(e)
             }
         }
     })
@@ -1828,7 +1828,7 @@ pub fn valid_sql_ident(name: &str) -> bool {
 }
 
 /// Bind a `SqlParam` value onto a sqlx `Query` builder.
-/// Returns `SkyResult::Err` only when the DB pool is absent (no-db build).
+/// Returns `IpeResult::Err` only when the DB pool is absent (no-db build).
 /// Every variant is handled — this function is TOTAL.
 ///
 /// Driver-agnostic: typed on the `DbQuery<'q>` alias (the configured backend's
@@ -2069,15 +2069,15 @@ pub fn db_find_where<E: Send + From<String> + 'static>(
     conn: Db,
     table: String,
     frag: SqlFragment,
-) -> SkyTask<E, Vec<HashMap<String, String>>> {
+) -> IpeTask<E, Vec<HashMap<String, String>>> {
     Box::pin(async move {
         if let Some(reason) = frag.invalid {
-            return SkyResult::Err(format!("db.findWhere: {reason}").into());
+            return IpeResult::Err(format!("db.findWhere: {reason}").into());
         }
         let qtable = match SqlIdent::parse(&table) {
             Some(t) => t,
             None => {
-                return SkyResult::Err(format!("db.findWhere: invalid table {:?}", table).into());
+                return IpeResult::Err(format!("db.findWhere: invalid table {:?}", table).into());
             }
         };
         let sql = db_format_sql(format!(
@@ -2091,7 +2091,7 @@ pub fn db_find_where<E: Send + From<String> + 'static>(
         }
         match fetch_all_routed(&conn, q).await {
             Ok(rows) => ok_res(rows.iter().map(row_to_map).collect()),
-            Err(e) => SkyResult::Err(sky_err(&e)),
+            Err(e) => IpeResult::Err(ipe_err(&e)),
         }
     })
 }
@@ -2102,15 +2102,15 @@ pub fn db_delete_where<E: Send + From<String> + 'static>(
     conn: Db,
     table: String,
     frag: SqlFragment,
-) -> SkyTask<E, i64> {
+) -> IpeTask<E, i64> {
     Box::pin(async move {
         if let Some(reason) = frag.invalid {
-            return SkyResult::Err(format!("db.deleteWhere: {reason}").into());
+            return IpeResult::Err(format!("db.deleteWhere: {reason}").into());
         }
         let qtable = match SqlIdent::parse(&table) {
             Some(t) => t,
             None => {
-                return SkyResult::Err(format!("db.deleteWhere: invalid table {:?}", table).into());
+                return IpeResult::Err(format!("db.deleteWhere: invalid table {:?}", table).into());
             }
         };
         let sql = db_format_sql(format!(
@@ -2124,7 +2124,7 @@ pub fn db_delete_where<E: Send + From<String> + 'static>(
         }
         match exec_routed(&conn, q).await {
             Ok(res) => ok_res(res.rows_affected() as i64),
-            Err(e) => SkyResult::Err(sky_err(&e)),
+            Err(e) => IpeResult::Err(ipe_err(&e)),
         }
     })
 }
@@ -2136,7 +2136,7 @@ pub fn db_delete_where<E: Send + From<String> + 'static>(
 /// (column dropped from SQL; DB applies DEFAULT) and `Some(p)` = SetField(p).
 ///
 /// Returns `(sql_without_returning, args)` on success, or
-/// `SkyResult::Err` on invalid table/column name.  All-OmitField → returns
+/// `IpeResult::Err` on invalid table/column name.  All-OmitField → returns
 /// `"INSERT INTO t DEFAULT VALUES"` with an empty arg list (valid on SQLite ≥
 /// 3.35 and PostgreSQL).
 ///
@@ -2190,7 +2190,7 @@ fn build_insert_sql(
 ///
 /// Security: table + column names are identifier-validated `[A-Za-z0-9_.]`;
 /// values are bound positionally — never interpolated into SQL.
-/// Totality: every error path returns `SkyResult::Err`; no panic/unwrap. Never
+/// Totality: every error path returns `IpeResult::Err`; no panic/unwrap. Never
 /// fabricates `id = 0` on a non-integer primary key — surfaces a clear `Err`
 /// instead (mirrors [`db_insert_row`]'s fix for the same bug class).
 #[cfg(feature = "db")]
@@ -2198,11 +2198,11 @@ pub fn db_insert_fields<E: Send + From<String> + 'static>(
     conn: Db,
     table: String,
     fields: Vec<(String, Option<SqlParam>)>,
-) -> SkyTask<E, i64> {
+) -> IpeTask<E, i64> {
     Box::pin(async move {
         let (base_sql, args) = match build_insert_sql("db.insertFields", &table, fields) {
             Ok(v) => v,
-            Err(e) => return SkyResult::Err(e.into()),
+            Err(e) => return IpeResult::Err(e.into()),
         };
         if DB_USES_RETURNING_ID {
             // Same rationale as `db_insert_row`: Postgres has no
@@ -2218,9 +2218,9 @@ pub fn db_insert_fields<E: Send + From<String> + 'static>(
             match fetch_one_routed(&conn, q).await {
                 Ok(r) => match extract_returning_id(&r) {
                     Ok(id) => ok_res(id),
-                    Err(msg) => SkyResult::Err(format!("db.insertFields: {msg}").into()),
+                    Err(msg) => IpeResult::Err(format!("db.insertFields: {msg}").into()),
                 },
-                Err(e) => SkyResult::Err(sky_err(&e)),
+                Err(e) => IpeResult::Err(ipe_err(&e)),
             }
         } else {
             let sql = db_format_sql(base_sql);
@@ -2230,7 +2230,7 @@ pub fn db_insert_fields<E: Send + From<String> + 'static>(
             }
             match exec_routed(&conn, q).await {
                 Ok(res) => ok_res(db_last_insert_id(&res)),
-                Err(e) => SkyResult::Err(sky_err(&e)),
+                Err(e) => IpeResult::Err(ipe_err(&e)),
             }
         }
     })
@@ -2248,17 +2248,17 @@ pub fn db_insert_fields<E: Send + From<String> + 'static>(
 ///
 /// Security: table + column names are identifier-validated `[A-Za-z0-9_.]`;
 /// values are bound positionally — never interpolated into SQL.
-/// Totality: every error path returns `SkyResult::Err`; no panic/unwrap.
+/// Totality: every error path returns `IpeResult::Err`; no panic/unwrap.
 #[cfg(feature = "db")]
 pub fn db_update_fields<E: Send + From<String> + 'static>(
     conn: Db,
     table: String,
     where_cols: Vec<(String, SqlParam)>,
     set_fields: Vec<(String, Option<SqlParam>)>,
-) -> SkyTask<E, i64> {
+) -> IpeTask<E, i64> {
     Box::pin(async move {
         if !valid_sql_ident(&table) {
-            return SkyResult::Err(
+            return IpeResult::Err(
                 format!("db.updateFields: invalid table name {:?}", table).into(),
             );
         }
@@ -2267,7 +2267,7 @@ pub fn db_update_fields<E: Send + From<String> + 'static>(
         let mut args: Vec<SqlParam> = Vec::new();
         for (col, opt) in set_fields {
             if !valid_sql_ident(&col) {
-                return SkyResult::Err(
+                return IpeResult::Err(
                     format!("db.updateFields: invalid SET column name {:?}", col).into(),
                 );
             }
@@ -2285,7 +2285,7 @@ pub fn db_update_fields<E: Send + From<String> + 'static>(
         let mut where_clauses: Vec<String> = Vec::new();
         for (col, p) in where_cols {
             if !valid_sql_ident(&col) {
-                return SkyResult::Err(
+                return IpeResult::Err(
                     format!("db.updateFields: invalid WHERE column name {:?}", col).into(),
                 );
             }
@@ -2297,7 +2297,7 @@ pub fn db_update_fields<E: Send + From<String> + 'static>(
         // (a wrong-default footgun reachable when a request-derived WHERE list
         // comes back empty). Fail closed instead of mass-updating.
         if where_clauses.is_empty() {
-            return SkyResult::Err(
+            return IpeResult::Err(
                 "db.updateFields: refusing unscoped UPDATE (no WHERE); pass an explicit condition"
                     .to_string()
                     .into(),
@@ -2316,7 +2316,7 @@ pub fn db_update_fields<E: Send + From<String> + 'static>(
         }
         match exec_routed(&conn, q).await {
             Ok(res) => ok_res(res.rows_affected() as i64),
-            Err(e) => SkyResult::Err(sky_err(&e)),
+            Err(e) => IpeResult::Err(ipe_err(&e)),
         }
     })
 }
@@ -2339,7 +2339,7 @@ pub fn db_update_fields<E: Send + From<String> + 'static>(
 /// Security: table + column names validated; values bound positionally; only
 /// the RETURNING projection is caller-supplied (and it's not executed as DML,
 /// so the risk class is different — same as `queryDecode`'s SQL string trust model).
-/// Totality: every error path returns `SkyResult::Err`; no panic/unwrap.
+/// Totality: every error path returns `IpeResult::Err`; no panic/unwrap.
 #[cfg(feature = "db")]
 pub fn db_insert_fields_returning<E: Send + From<String> + 'static, A: Send + 'static>(
     conn: Db,
@@ -2347,10 +2347,10 @@ pub fn db_insert_fields_returning<E: Send + From<String> + 'static, A: Send + 's
     fields: Vec<(String, Option<SqlParam>)>,
     projection: String,
     decoder: Decoder<E, A>,
-) -> SkyTask<E, Vec<A>> {
+) -> IpeTask<E, Vec<A>> {
     Box::pin(async move {
         if projection.is_empty() {
-            return SkyResult::Err(
+            return IpeResult::Err(
                 "db.insertFieldsReturning: empty RETURNING projection"
                     .to_string()
                     .into(),
@@ -2358,7 +2358,7 @@ pub fn db_insert_fields_returning<E: Send + From<String> + 'static, A: Send + 's
         }
         let (base_sql, args) = match build_insert_sql("db.insertFieldsReturning", &table, fields) {
             Ok(v) => v,
-            Err(e) => return SkyResult::Err(e.into()),
+            Err(e) => return IpeResult::Err(e.into()),
         };
         // Validate the RETURNING projection — it is a caller-supplied String
         // interpolated into SQL. Allow "*" or a comma-separated list of valid
@@ -2366,7 +2366,7 @@ pub fn db_insert_fields_returning<E: Send + From<String> + 'static, A: Send + 's
         let proj = projection.trim();
         let proj_ok = proj == "*" || proj.split(',').all(|t| valid_sql_ident(t.trim()));
         if !proj_ok {
-            return SkyResult::Err(
+            return IpeResult::Err(
                 format!(
                     "db.insertFieldsReturning: invalid RETURNING projection {:?}",
                     projection
@@ -2381,14 +2381,14 @@ pub fn db_insert_fields_returning<E: Send + From<String> + 'static, A: Send + 's
         }
         let rows = match fetch_all_routed(&conn, q).await {
             Ok(r) => r,
-            Err(e) => return SkyResult::Err(sky_err(&e)),
+            Err(e) => return IpeResult::Err(ipe_err(&e)),
         };
         let mut out = Vec::with_capacity(rows.len());
         for row in &rows {
             let jv = row_to_json(row);
             match (decoder.run)(&jv) {
-                SkyResult::Ok(a) => out.push(a),
-                SkyResult::Err(e) => return SkyResult::Err(e),
+                IpeResult::Ok(a) => out.push(a),
+                IpeResult::Err(e) => return IpeResult::Err(e),
             }
         }
         ok_res(out)
@@ -2449,10 +2449,10 @@ mod tests {
         assert!(url_is_cacheable("file::memory:?cache=shared"));
     }
 
-    // the SkyRow accessor is total over a Dict-shaped row — present field
+    // the IpeRow accessor is total over a Dict-shaped row — present field
     // reads back, absent field is "" (never panics), int/bool parse + default.
     #[test]
-    fn sky_row_hashmap_total() {
+    fn ipe_row_hashmap_total() {
         let mut m: HashMap<String, String> = HashMap::new();
         m.insert("text".into(), "ping".into());
         m.insert("count".into(), "42".into());
@@ -2470,11 +2470,11 @@ mod tests {
     // other key; absent -> "" (total).
     #[cfg(feature = "live")]
     #[test]
-    fn sky_row_livereq_named_fields_and_dicts() {
+    fn ipe_row_livereq_named_fields_and_dicts() {
         let mut params: HashMap<String, String> = HashMap::new();
         params.insert("slug".into(), "general".into());
         let mut cookies: HashMap<String, String> = HashMap::new();
-        cookies.insert("sky_sid".into(), "abc".into());
+        cookies.insert("ipe_sid".into(), "abc".into());
         let req = crate::LiveReq {
             path: "/chat/general".into(),
             query: "x=1".into(),
@@ -2487,7 +2487,7 @@ mod tests {
         assert_eq!(db_get_string("method".into(), &req), "GET");
         assert_eq!(db_get_string("query".into(), &req), "x=1");
         assert_eq!(db_get_string("slug".into(), &req), "general"); // params
-        assert_eq!(db_get_string("sky_sid".into(), &req), "abc"); // cookies
+        assert_eq!(db_get_string("ipe_sid".into(), &req), "abc"); // cookies
         assert_eq!(db_get_string("nope".into(), &req), ""); // absent -> total ""
     }
 
@@ -2511,9 +2511,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sky_err_redacts_db_row_values() {
+    async fn ipe_err_redacts_db_row_values() {
         // A UNIQUE-constraint failure must NOT echo the offending row VALUE into
-        // the Sky-visible Error (PRINCIPLES #1 info-leak). `sky_err` builds a
+        // the Sky-visible Error (PRINCIPLES #1 info-leak). `ipe_err` builds a
         // structural message (SQLSTATE/driver code + constraint name) from the
         // structured error fields instead of the raw Display, which on
         // PostgreSQL/MySQL embeds `Key (email)=(victim@…) already exists`.
@@ -2529,21 +2529,21 @@ mod tests {
             .expect("create table");
         let secret = "victim-PII@example.com";
         let insert = format!("INSERT INTO secrets (email) VALUES ('{}')", secret);
-        let r1: SkyResult<String, i64> = db_exec(pool.clone(), insert.clone(), Vec::new()).await;
+        let r1: IpeResult<String, i64> = db_exec(pool.clone(), insert.clone(), Vec::new()).await;
         assert!(
-            matches!(r1, SkyResult::Ok(_)),
+            matches!(r1, IpeResult::Ok(_)),
             "first insert should succeed"
         );
-        let r2: SkyResult<String, i64> = db_exec(pool.clone(), insert, Vec::new()).await;
+        let r2: IpeResult<String, i64> = db_exec(pool.clone(), insert, Vec::new()).await;
         match r2 {
-            SkyResult::Err(e) => {
+            IpeResult::Err(e) => {
                 assert!(!e.contains(secret), "row value leaked into db error: {e}");
                 assert!(
                     e.starts_with("db: database error"),
                     "expected redacted structural form, got: {e}"
                 );
             }
-            SkyResult::Ok(_) => panic!("duplicate insert should violate the UNIQUE constraint"),
+            IpeResult::Ok(_) => panic!("duplicate insert should violate the UNIQUE constraint"),
         }
     }
 
@@ -2574,32 +2574,32 @@ mod tests {
         ];
 
         // First run applies both, in declaration order.
-        let r1: SkyResult<String, Vec<String>> = db_migrate_apply(db.clone(), base.clone()).await;
+        let r1: IpeResult<String, Vec<String>> = db_migrate_apply(db.clone(), base.clone()).await;
         match r1 {
-            SkyResult::Ok(v) => assert_eq!(
+            IpeResult::Ok(v) => assert_eq!(
                 v,
                 vec!["001_users".to_string(), "002_email_idx".to_string()]
             ),
-            SkyResult::Err(e) => panic!("first migrate: {e}"),
+            IpeResult::Err(e) => panic!("first migrate: {e}"),
         }
 
         // Second run is idempotent — both already applied → 0 applied.
-        let r2: SkyResult<String, Vec<String>> = db_migrate_apply(db.clone(), base.clone()).await;
+        let r2: IpeResult<String, Vec<String>> = db_migrate_apply(db.clone(), base.clone()).await;
         match r2 {
-            SkyResult::Ok(v) => assert!(v.is_empty(), "expected 0 applied on re-run, got {v:?}"),
-            SkyResult::Err(e) => panic!("idempotent re-run: {e}"),
+            IpeResult::Ok(v) => assert!(v.is_empty(), "expected 0 applied on re-run, got {v:?}"),
+            IpeResult::Err(e) => panic!("idempotent re-run: {e}"),
         }
 
         // Ledger recorded exactly the two migrations.
-        let ledger: SkyResult<String, Vec<HashMap<String, String>>> = db_query(
+        let ledger: IpeResult<String, Vec<HashMap<String, String>>> = db_query(
             db.clone(),
             "SELECT name, checksum FROM _sky_migrations ORDER BY name".to_string(),
             Vec::new(),
         )
         .await;
         match ledger {
-            SkyResult::Ok(rows) => assert_eq!(rows.len(), 2, "ledger rows: {rows:?}"),
-            SkyResult::Err(e) => panic!("read ledger: {e}"),
+            IpeResult::Ok(rows) => assert_eq!(rows.len(), 2, "ledger rows: {rows:?}"),
+            IpeResult::Err(e) => panic!("read ledger: {e}"),
         }
 
         // Drift: same name, edited SQL → checksum-mismatch error, nothing applied.
@@ -2607,13 +2607,13 @@ mod tests {
             "001_users".to_string(),
             "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, name TEXT)".to_string(),
         )];
-        let r3: SkyResult<String, Vec<String>> = db_migrate_apply(db.clone(), drift).await;
+        let r3: IpeResult<String, Vec<String>> = db_migrate_apply(db.clone(), drift).await;
         match r3 {
-            SkyResult::Err(e) => assert!(
+            IpeResult::Err(e) => assert!(
                 e.contains("checksum mismatch"),
                 "expected drift error, got: {e}"
             ),
-            SkyResult::Ok(v) => panic!("expected drift error, but applied {v:?}"),
+            IpeResult::Ok(v) => panic!("expected drift error, but applied {v:?}"),
         }
 
         // Adding a NEW migration after the applied ones resumes — only it applies.
@@ -2622,10 +2622,10 @@ mod tests {
             "003_posts".to_string(),
             "CREATE TABLE posts (id INTEGER PRIMARY KEY)".to_string(),
         ));
-        let r4: SkyResult<String, Vec<String>> = db_migrate_apply(db.clone(), extended).await;
+        let r4: IpeResult<String, Vec<String>> = db_migrate_apply(db.clone(), extended).await;
         match r4 {
-            SkyResult::Ok(v) => assert_eq!(v, vec!["003_posts".to_string()]),
-            SkyResult::Err(e) => panic!("resume migrate: {e}"),
+            IpeResult::Ok(v) => assert_eq!(v, vec!["003_posts".to_string()]),
+            IpeResult::Err(e) => panic!("resume migrate: {e}"),
         }
     }
 
@@ -2638,16 +2638,16 @@ mod tests {
         let db = fresh_db().await;
         // exec/execRaw now return rows-affected (i64). DDL rows-affected is
         // driver-defined → assert Ok(_); each INSERT affects exactly 1 row.
-        let mk: SkyResult<String, i64> = db_exec_raw(
+        let mk: IpeResult<String, i64> = db_exec_raw(
             db.clone(),
             "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT, qty INTEGER, \
              active INTEGER, price REAL)"
                 .to_string(),
         )
         .await;
-        assert!(matches!(mk, SkyResult::Ok(_)), "create: {mk:?}");
+        assert!(matches!(mk, IpeResult::Ok(_)), "create: {mk:?}");
 
-        let ins: SkyResult<String, i64> = db_exec_params(
+        let ins: IpeResult<String, i64> = db_exec_params(
             db.clone(),
             "INSERT INTO items (name, qty, active, price) VALUES (?, ?, ?, ?)".to_string(),
             vec![
@@ -2658,13 +2658,13 @@ mod tests {
             ],
         )
         .await;
-        assert!(matches!(ins, SkyResult::Ok(1)), "mixed insert: {ins:?}");
+        assert!(matches!(ins, IpeResult::Ok(1)), "mixed insert: {ins:?}");
 
         // A row with typed NULLs (SqlNull carries a type witness so the
         // NULL binds with the right driver type-OID — see SqlParam::Null's
         // doc comment). `name` is TEXT, `price` is REAL: witness each with
         // the matching leaf variant.
-        let ins2: SkyResult<String, i64> = db_exec_params(
+        let ins2: IpeResult<String, i64> = db_exec_params(
             db.clone(),
             "INSERT INTO items (name, qty, active, price) VALUES (?, ?, ?, ?)".to_string(),
             vec![
@@ -2675,10 +2675,10 @@ mod tests {
             ],
         )
         .await;
-        assert!(matches!(ins2, SkyResult::Ok(1)), "null insert: {ins2:?}");
+        assert!(matches!(ins2, IpeResult::Ok(1)), "null insert: {ins2:?}");
 
         // SELECT with an Int SqlValue param.
-        let rows: SkyResult<String, Vec<HashMap<String, String>>> = db_query_params(
+        let rows: IpeResult<String, Vec<HashMap<String, String>>> = db_query_params(
             db.clone(),
             "SELECT name, qty FROM items WHERE qty = ?".to_string(),
             vec![SqlParam::Int(7)],
@@ -2698,17 +2698,17 @@ mod tests {
         let mut row = HashMap::new();
         row.insert("title".to_string(), "buy milk".to_string());
         row.insert("done".to_string(), "0".to_string());
-        let id: SkyResult<String, i64> = db_insert_row(db.clone(), "todos".into(), row).await;
+        let id: IpeResult<String, i64> = db_insert_row(db.clone(), "todos".into(), row).await;
         let id = match id {
-            SkyResult::Ok(v) => v,
-            SkyResult::Err(e) => panic!("{}", e),
+            IpeResult::Ok(v) => v,
+            IpeResult::Err(e) => panic!("{}", e),
         };
         assert!(id > 0);
 
-        let fetched: SkyResult<String, SkyMaybe<HashMap<String, String>>> =
+        let fetched: IpeResult<String, IpeMaybe<HashMap<String, String>>> =
             db_get_by_id(db, "todos".into(), id.to_string()).await;
         match fetched {
-            SkyResult::Ok(SkyMaybe::Just(m)) => assert_eq!(m.get("title").unwrap(), "buy milk"),
+            IpeResult::Ok(IpeMaybe::Just(m)) => assert_eq!(m.get("title").unwrap(), "buy milk"),
             other => panic!("unexpected: {:?}", other),
         }
     }
@@ -2771,17 +2771,17 @@ mod tests {
         let db = fresh_db().await;
         let mut row = HashMap::new();
         row.insert("title".to_string(), "x".to_string());
-        let id: SkyResult<String, i64> = db_insert_row(db.clone(), "todos".into(), row).await;
+        let id: IpeResult<String, i64> = db_insert_row(db.clone(), "todos".into(), row).await;
         let id = match id {
-            SkyResult::Ok(v) => v,
+            IpeResult::Ok(v) => v,
             _ => panic!("insert"),
         };
 
         let mut updates = HashMap::new();
         updates.insert("title".to_string(), "y".to_string());
-        let affected: SkyResult<String, i64> =
+        let affected: IpeResult<String, i64> =
             db_update_by_id(db.clone(), "todos".into(), id.to_string(), updates).await;
-        assert!(matches!(affected, SkyResult::Ok(1)));
+        assert!(matches!(affected, IpeResult::Ok(1)));
     }
 
     #[tokio::test]
@@ -2789,14 +2789,14 @@ mod tests {
         let db = fresh_db().await;
         let mut row = HashMap::new();
         row.insert("title".to_string(), "z".to_string());
-        let id: SkyResult<String, i64> = db_insert_row(db.clone(), "todos".into(), row).await;
+        let id: IpeResult<String, i64> = db_insert_row(db.clone(), "todos".into(), row).await;
         let id = match id {
-            SkyResult::Ok(v) => v,
+            IpeResult::Ok(v) => v,
             _ => panic!("insert"),
         };
-        let affected: SkyResult<String, i64> =
+        let affected: IpeResult<String, i64> =
             db_delete_by_id(db, "todos".into(), id.to_string()).await;
-        assert!(matches!(affected, SkyResult::Ok(1)));
+        assert!(matches!(affected, IpeResult::Ok(1)));
     }
 
     #[tokio::test]
@@ -2804,10 +2804,10 @@ mod tests {
         let db = fresh_db().await;
         let mut row = HashMap::new();
         row.insert("title".to_string(), "find me".to_string());
-        let _: SkyResult<String, i64> = db_insert_row(db.clone(), "todos".into(), row).await;
-        let found: SkyResult<String, SkyMaybe<HashMap<String, String>>> =
+        let _: IpeResult<String, i64> = db_insert_row(db.clone(), "todos".into(), row).await;
+        let found: IpeResult<String, IpeMaybe<HashMap<String, String>>> =
             db_find_one_by_field(db, "todos".into(), "title".into(), "find me".into()).await;
-        assert!(matches!(found, SkyResult::Ok(SkyMaybe::Just(_))));
+        assert!(matches!(found, IpeResult::Ok(IpeMaybe::Just(_))));
     }
 
     #[tokio::test]
@@ -2817,22 +2817,22 @@ mod tests {
             let mut r = HashMap::new();
             r.insert("title".to_string(), t.to_string());
             r.insert("done".to_string(), "1".to_string());
-            let _: SkyResult<String, i64> = db_insert_row(db.clone(), "todos".into(), r).await;
+            let _: IpeResult<String, i64> = db_insert_row(db.clone(), "todos".into(), r).await;
         }
-        let many: SkyResult<String, Vec<HashMap<String, String>>> =
+        let many: IpeResult<String, Vec<HashMap<String, String>>> =
             db_find_many_by_field(db.clone(), "todos".into(), "done".into(), "1".into()).await;
         match many {
-            SkyResult::Ok(v) => assert_eq!(v.len(), 3),
+            IpeResult::Ok(v) => assert_eq!(v.len(), 3),
             _ => panic!("find many"),
         }
 
         let mut cond = HashMap::new();
         cond.insert("done".to_string(), "1".to_string());
         cond.insert("title".to_string(), "b".to_string());
-        let one: SkyResult<String, Vec<HashMap<String, String>>> =
+        let one: IpeResult<String, Vec<HashMap<String, String>>> =
             db_find_by_conditions(db, "todos".into(), cond).await;
         match one {
-            SkyResult::Ok(v) => assert_eq!(v.len(), 1),
+            IpeResult::Ok(v) => assert_eq!(v.len(), 1),
             _ => panic!("conds"),
         }
     }
@@ -2840,7 +2840,7 @@ mod tests {
     #[tokio::test]
     async fn test_with_transaction_commit() {
         let db = fresh_db().await;
-        let r: SkyResult<String, i64> = db_with_transaction(db.clone(), |c| {
+        let r: IpeResult<String, i64> = db_with_transaction(db.clone(), |c| {
             Box::pin(async move {
                 let mut row = HashMap::new();
                 row.insert("title".to_string(), "txn".to_string());
@@ -2848,12 +2848,12 @@ mod tests {
             })
         })
         .await;
-        assert!(matches!(r, SkyResult::Ok(_)));
+        assert!(matches!(r, IpeResult::Ok(_)));
         // The inserted row should be visible after commit:
-        let found: SkyResult<String, Vec<HashMap<String, String>>> =
+        let found: IpeResult<String, Vec<HashMap<String, String>>> =
             db_find_many_by_field(db, "todos".into(), "title".into(), "txn".into()).await;
         match found {
-            SkyResult::Ok(v) => assert_eq!(v.len(), 1),
+            IpeResult::Ok(v) => assert_eq!(v.len(), 1),
             _ => panic!("post-commit fetch"),
         }
     }
@@ -2864,20 +2864,20 @@ mod tests {
         // dedicated-connection routing, BEGIN / INSERT / ROLLBACK all run on the
         // same connection, so the row is gone after rollback (single-conn pool).
         let db = fresh_db().await;
-        let r: SkyResult<String, i64> = db_with_transaction(db.clone(), |c| {
+        let r: IpeResult<String, i64> = db_with_transaction(db.clone(), |c| {
             Box::pin(async move {
                 let mut row = HashMap::new();
                 row.insert("title".to_string(), "txn-err".to_string());
-                let _: SkyResult<String, i64> = db_insert_row(c, "todos".into(), row).await;
-                SkyResult::Err("boom".to_string())
+                let _: IpeResult<String, i64> = db_insert_row(c, "todos".into(), row).await;
+                IpeResult::Err("boom".to_string())
             })
         })
         .await;
-        assert!(matches!(r, SkyResult::Err(_)));
-        let found: SkyResult<String, Vec<HashMap<String, String>>> =
+        assert!(matches!(r, IpeResult::Err(_)));
+        let found: IpeResult<String, Vec<HashMap<String, String>>> =
             db_find_many_by_field(db, "todos".into(), "title".into(), "txn-err".into()).await;
         match found {
-            SkyResult::Ok(v) => assert_eq!(v.len(), 0, "rollback must undo the INSERT"),
+            IpeResult::Ok(v) => assert_eq!(v.len(), 0, "rollback must undo the INSERT"),
             _ => panic!("post-rollback fetch"),
         }
     }
@@ -2890,7 +2890,7 @@ mod tests {
         let mut path = std::env::temp_dir();
         // Unique per test run to avoid cross-test contamination.
         let unique = format!(
-            "sky_txn_test_{}_{}.db",
+            "ipe_txn_test_{}_{}.db",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -2933,15 +2933,15 @@ mod tests {
         let started2 = started.clone();
         let dbc = db.clone();
         let handle = tokio::spawn(async move {
-            let _: SkyResult<String, i64> = db_with_transaction(dbc, move |c| {
+            let _: IpeResult<String, i64> = db_with_transaction(dbc, move |c| {
                 let started2 = started2.clone();
                 Box::pin(async move {
                     let mut row = HashMap::new();
                     row.insert("title".to_string(), "cancelled".to_string());
-                    let _: SkyResult<String, i64> = db_insert_row(c, "todos".into(), row).await;
+                    let _: IpeResult<String, i64> = db_insert_row(c, "todos".into(), row).await;
                     started2.notify_one(); // INSERT is in the open txn — signal, then hang
                     std::future::pending::<()>().await; // dropped by abort below
-                    SkyResult::Ok(0)
+                    IpeResult::Ok(0)
                 })
             })
             .await;
@@ -2951,7 +2951,7 @@ mod tests {
         let _ = handle.await;
 
         // Reused connection must NOT be poisoned by an inherited open txn.
-        let r: SkyResult<String, i64> = db_with_transaction(db.clone(), |c| {
+        let r: IpeResult<String, i64> = db_with_transaction(db.clone(), |c| {
             Box::pin(async move {
                 let mut row = HashMap::new();
                 row.insert("title".to_string(), "after".to_string());
@@ -2960,7 +2960,7 @@ mod tests {
         })
         .await;
         assert!(
-            matches!(r, SkyResult::Ok(_)),
+            matches!(r, IpeResult::Ok(_)),
             "post-cancel txn must succeed on the reused connection: {:?}",
             r
         );
@@ -2974,8 +2974,8 @@ mod tests {
         )
         .await
         {
-            SkyResult::Ok(v) => v.len(),
-            SkyResult::Err(_) => usize::MAX,
+            IpeResult::Ok(v) => v.len(),
+            IpeResult::Err(_) => usize::MAX,
         };
         assert_eq!(
             cancelled_count, 0,
@@ -2989,19 +2989,19 @@ mod tests {
     async fn test_with_transaction_rollback_real_on_multiconn_pool() {
         let (db, path) = fresh_file_db(5).await;
 
-        let r: SkyResult<String, i64> = db_with_transaction(db.clone(), |c| {
+        let r: IpeResult<String, i64> = db_with_transaction(db.clone(), |c| {
             Box::pin(async move {
                 let mut row = HashMap::new();
                 row.insert("title".to_string(), "rollback-me".to_string());
-                let _: SkyResult<String, i64> = db_insert_row(c, "todos".into(), row).await;
-                SkyResult::Err("forced rollback".to_string())
+                let _: IpeResult<String, i64> = db_insert_row(c, "todos".into(), row).await;
+                IpeResult::Err("forced rollback".to_string())
             })
         })
         .await;
-        assert!(matches!(r, SkyResult::Err(_)), "body Err propagates");
+        assert!(matches!(r, IpeResult::Err(_)), "body Err propagates");
 
         // The row MUST be absent — rollback actually undid the write.
-        let found: SkyResult<String, Vec<HashMap<String, String>>> = db_find_many_by_field(
+        let found: IpeResult<String, Vec<HashMap<String, String>>> = db_find_many_by_field(
             db.clone(),
             "todos".into(),
             "title".into(),
@@ -3009,7 +3009,7 @@ mod tests {
         )
         .await;
         match found {
-            SkyResult::Ok(v) => assert_eq!(
+            IpeResult::Ok(v) => assert_eq!(
                 v.len(),
                 0,
                 "ROLLBACK did not undo the INSERT on a multi-connection pool — \
@@ -3027,7 +3027,7 @@ mod tests {
     async fn test_with_transaction_commit_real_on_multiconn_pool() {
         let (db, path) = fresh_file_db(5).await;
 
-        let r: SkyResult<String, i64> = db_with_transaction(db.clone(), |c| {
+        let r: IpeResult<String, i64> = db_with_transaction(db.clone(), |c| {
             Box::pin(async move {
                 let mut row = HashMap::new();
                 row.insert("title".to_string(), "commit-me".to_string());
@@ -3035,9 +3035,9 @@ mod tests {
             })
         })
         .await;
-        assert!(matches!(r, SkyResult::Ok(_)), "body Ok");
+        assert!(matches!(r, IpeResult::Ok(_)), "body Ok");
 
-        let found: SkyResult<String, Vec<HashMap<String, String>>> = db_find_many_by_field(
+        let found: IpeResult<String, Vec<HashMap<String, String>>> = db_find_many_by_field(
             db.clone(),
             "todos".into(),
             "title".into(),
@@ -3045,7 +3045,7 @@ mod tests {
         )
         .await;
         match found {
-            SkyResult::Ok(v) => assert_eq!(v.len(), 1, "COMMIT must persist the row"),
+            IpeResult::Ok(v) => assert_eq!(v.len(), 1, "COMMIT must persist the row"),
             other => panic!("post-commit fetch: {:?}", other),
         }
 
@@ -3061,12 +3061,12 @@ mod tests {
         let (db, path) = fresh_file_db(5).await;
         let db_for_inner = db.clone();
 
-        let r: SkyResult<String, i64> = db_with_transaction(db.clone(), move |c| {
+        let r: IpeResult<String, i64> = db_with_transaction(db.clone(), move |c| {
             let inner_db = db_for_inner.clone();
             Box::pin(async move {
                 let mut row = HashMap::new();
                 row.insert("title".to_string(), "outer".to_string());
-                let _: SkyResult<String, i64> = db_insert_row(c, "todos".into(), row).await;
+                let _: IpeResult<String, i64> = db_insert_row(c, "todos".into(), row).await;
                 // Nested call — must reuse the held connection (no deadlock).
                 db_with_transaction(inner_db, |c2| {
                     Box::pin(async move {
@@ -3079,19 +3079,19 @@ mod tests {
             })
         })
         .await;
-        assert!(matches!(r, SkyResult::Ok(_)), "nested commit Ok");
+        assert!(matches!(r, IpeResult::Ok(_)), "nested commit Ok");
 
         // Both rows committed (flattened into one transaction).
-        let outer: SkyResult<String, Vec<HashMap<String, String>>> =
+        let outer: IpeResult<String, Vec<HashMap<String, String>>> =
             db_find_many_by_field(db.clone(), "todos".into(), "title".into(), "outer".into()).await;
-        let inner: SkyResult<String, Vec<HashMap<String, String>>> =
+        let inner: IpeResult<String, Vec<HashMap<String, String>>> =
             db_find_many_by_field(db.clone(), "todos".into(), "title".into(), "inner".into()).await;
         assert!(
-            matches!(outer, SkyResult::Ok(ref v) if v.len() == 1),
+            matches!(outer, IpeResult::Ok(ref v) if v.len() == 1),
             "outer row present"
         );
         assert!(
-            matches!(inner, SkyResult::Ok(ref v) if v.len() == 1),
+            matches!(inner, IpeResult::Ok(ref v) if v.len() == 1),
             "inner row present"
         );
 
@@ -3113,12 +3113,12 @@ mod tests {
         let (db_b, path_b) = fresh_file_db(5).await;
         let db_b_for_inner = db_b.clone();
 
-        let r: SkyResult<String, i64> = db_with_transaction(db_a.clone(), move |c_a| {
+        let r: IpeResult<String, i64> = db_with_transaction(db_a.clone(), move |c_a| {
             let db_b_inner = db_b_for_inner.clone();
             Box::pin(async move {
                 let mut row_a = HashMap::new();
                 row_a.insert("title".to_string(), "in-a".to_string());
-                let _: SkyResult<String, i64> = db_insert_row(c_a, "todos".into(), row_a).await;
+                let _: IpeResult<String, i64> = db_insert_row(c_a, "todos".into(), row_a).await;
 
                 // Nested withTransaction on a DIFFERENT pool — must open its
                 // own transaction on db_b, not flatten onto db_a's.
@@ -3133,30 +3133,30 @@ mod tests {
             })
         })
         .await;
-        assert!(matches!(r, SkyResult::Ok(_)), "outer+nested commit Ok");
+        assert!(matches!(r, IpeResult::Ok(_)), "outer+nested commit Ok");
 
         // The dbB row must land in dbB, NOT dbA.
-        let a_has_b_row: SkyResult<String, Vec<HashMap<String, String>>> =
+        let a_has_b_row: IpeResult<String, Vec<HashMap<String, String>>> =
             db_find_many_by_field(db_a.clone(), "todos".into(), "title".into(), "in-b".into())
                 .await;
         assert!(
-            matches!(a_has_b_row, SkyResult::Ok(ref v) if v.is_empty()),
+            matches!(a_has_b_row, IpeResult::Ok(ref v) if v.is_empty()),
             "dbA must NOT contain dbB's row"
         );
 
-        let b_has_b_row: SkyResult<String, Vec<HashMap<String, String>>> =
+        let b_has_b_row: IpeResult<String, Vec<HashMap<String, String>>> =
             db_find_many_by_field(db_b.clone(), "todos".into(), "title".into(), "in-b".into())
                 .await;
         assert!(
-            matches!(b_has_b_row, SkyResult::Ok(ref v) if v.len() == 1),
+            matches!(b_has_b_row, IpeResult::Ok(ref v) if v.len() == 1),
             "dbB must contain its own row"
         );
 
-        let a_has_a_row: SkyResult<String, Vec<HashMap<String, String>>> =
+        let a_has_a_row: IpeResult<String, Vec<HashMap<String, String>>> =
             db_find_many_by_field(db_a.clone(), "todos".into(), "title".into(), "in-a".into())
                 .await;
         assert!(
-            matches!(a_has_a_row, SkyResult::Ok(ref v) if v.len() == 1),
+            matches!(a_has_a_row, IpeResult::Ok(ref v) if v.len() == 1),
             "dbA must contain its own row"
         );
 
@@ -3172,40 +3172,40 @@ mod tests {
         let (db_b, path_b) = fresh_file_db(5).await;
         let db_b_for_inner = db_b.clone();
 
-        let r: SkyResult<String, i64> = db_with_transaction(db_a.clone(), move |c_a| {
+        let r: IpeResult<String, i64> = db_with_transaction(db_a.clone(), move |c_a| {
             let db_b_inner = db_b_for_inner.clone();
             Box::pin(async move {
                 let mut row_a = HashMap::new();
                 row_a.insert("title".to_string(), "a-commits".to_string());
-                let _: SkyResult<String, i64> = db_insert_row(c_a, "todos".into(), row_a).await;
+                let _: IpeResult<String, i64> = db_insert_row(c_a, "todos".into(), row_a).await;
 
                 // Inner transaction on a DIFFERENT pool fails and rolls back —
                 // must NOT roll back the outer dbA transaction.
-                let inner: SkyResult<String, i64> = db_with_transaction(db_b_inner, |c_b| {
+                let inner: IpeResult<String, i64> = db_with_transaction(db_b_inner, |c_b| {
                     Box::pin(async move {
                         let mut row_b = HashMap::new();
                         row_b.insert("title".to_string(), "b-rolls-back".to_string());
-                        let _: SkyResult<String, i64> =
+                        let _: IpeResult<String, i64> =
                             db_insert_row(c_b, "todos".into(), row_b).await;
-                        SkyResult::<String, i64>::Err("inner fails deliberately".to_string())
+                        IpeResult::<String, i64>::Err("inner fails deliberately".to_string())
                     })
                 })
                 .await;
                 assert!(
-                    matches!(inner, SkyResult::Err(_)),
+                    matches!(inner, IpeResult::Err(_)),
                     "inner reports its own error"
                 );
 
-                SkyResult::Ok(0i64)
+                IpeResult::Ok(0i64)
             })
         })
         .await;
         assert!(
-            matches!(r, SkyResult::Ok(_)),
+            matches!(r, IpeResult::Ok(_)),
             "outer commit Ok despite inner rollback"
         );
 
-        let a_row: SkyResult<String, Vec<HashMap<String, String>>> = db_find_many_by_field(
+        let a_row: IpeResult<String, Vec<HashMap<String, String>>> = db_find_many_by_field(
             db_a.clone(),
             "todos".into(),
             "title".into(),
@@ -3213,11 +3213,11 @@ mod tests {
         )
         .await;
         assert!(
-            matches!(a_row, SkyResult::Ok(ref v) if v.len() == 1),
+            matches!(a_row, IpeResult::Ok(ref v) if v.len() == 1),
             "dbA row committed"
         );
 
-        let b_row: SkyResult<String, Vec<HashMap<String, String>>> = db_find_many_by_field(
+        let b_row: IpeResult<String, Vec<HashMap<String, String>>> = db_find_many_by_field(
             db_b.clone(),
             "todos".into(),
             "title".into(),
@@ -3225,7 +3225,7 @@ mod tests {
         )
         .await;
         assert!(
-            matches!(b_row, SkyResult::Ok(ref v) if v.is_empty()),
+            matches!(b_row, IpeResult::Ok(ref v) if v.is_empty()),
             "dbB row rolled back independently"
         );
 
@@ -3254,10 +3254,10 @@ mod tests {
         let db = fresh_db().await;
         let mut row = HashMap::new();
         row.insert("title".to_string(), "decoded".to_string());
-        let _: SkyResult<String, i64> = db_insert_row(db.clone(), "todos".into(), row).await;
+        let _: IpeResult<String, i64> = db_insert_row(db.clone(), "todos".into(), row).await;
         // Use the Decoder<E,A> API: db_decode_string reads the "title" column from
         // the NULL-preserving JsonVal::Object produced by row_to_json.
-        let decoded: SkyResult<String, Vec<String>> = db_query_decode(
+        let decoded: IpeResult<String, Vec<String>> = db_query_decode(
             db,
             "SELECT title FROM todos".into(),
             vec![],
@@ -3265,7 +3265,7 @@ mod tests {
         )
         .await;
         match decoded {
-            SkyResult::Ok(v) => assert_eq!(v, vec!["decoded".to_string()]),
+            IpeResult::Ok(v) => assert_eq!(v, vec!["decoded".to_string()]),
             _ => panic!("decode"),
         }
     }
@@ -3276,10 +3276,10 @@ mod tests {
         let mut row = HashMap::new();
         row.insert("title".to_string(), "item".to_string());
         row.insert("done".to_string(), "1".to_string());
-        let _: SkyResult<String, i64> = db_insert_row(db.clone(), "todos".into(), row).await;
+        let _: IpeResult<String, i64> = db_insert_row(db.clone(), "todos".into(), row).await;
 
         // Test db_decode_int decodes the "done" column correctly.
-        let decoded_int: SkyResult<String, Vec<i64>> = db_query_decode(
+        let decoded_int: IpeResult<String, Vec<i64>> = db_query_decode(
             db.clone(),
             "SELECT done FROM todos".into(),
             vec![],
@@ -3287,12 +3287,12 @@ mod tests {
         )
         .await;
         match decoded_int {
-            SkyResult::Ok(v) => assert_eq!(v, vec![1i64]),
+            IpeResult::Ok(v) => assert_eq!(v, vec![1i64]),
             _ => panic!("db_decode_int decode failed"),
         }
 
         // Test db_decode_bool.
-        let decoded_bool: SkyResult<String, Vec<bool>> = db_query_decode(
+        let decoded_bool: IpeResult<String, Vec<bool>> = db_query_decode(
             db.clone(),
             "SELECT done FROM todos".into(),
             vec![],
@@ -3300,7 +3300,7 @@ mod tests {
         )
         .await;
         match decoded_bool {
-            SkyResult::Ok(v) => assert_eq!(v, vec![true]),
+            IpeResult::Ok(v) => assert_eq!(v, vec![true]),
             _ => panic!("db_decode_bool decode failed"),
         }
     }
@@ -3333,7 +3333,7 @@ mod tests {
         // (1-arg form: inner.fields = ["label"] provides the NULL-gate column.)
 
         // Check NULL row → Nothing.
-        let r1: SkyResult<String, Vec<SkyMaybe<String>>> = db_query_decode(
+        let r1: IpeResult<String, Vec<IpeMaybe<String>>> = db_query_decode(
             pool.clone(),
             "SELECT label FROM items WHERE id = 1".into(),
             vec![],
@@ -3341,19 +3341,19 @@ mod tests {
         )
         .await;
         match r1 {
-            SkyResult::Ok(v) => {
+            IpeResult::Ok(v) => {
                 assert_eq!(v.len(), 1);
                 assert!(
-                    matches!(v[0], SkyMaybe::Nothing),
+                    matches!(v[0], IpeMaybe::Nothing),
                     "expected Nothing for NULL, got {:?}",
                     v[0]
                 );
             }
-            SkyResult::Err(e) => panic!("unexpected Err on NULL row: {}", e),
+            IpeResult::Err(e) => panic!("unexpected Err on NULL row: {}", e),
         }
 
         // Check non-NULL row → Just("hello").
-        let r2: SkyResult<String, Vec<SkyMaybe<String>>> = db_query_decode(
+        let r2: IpeResult<String, Vec<IpeMaybe<String>>> = db_query_decode(
             pool,
             "SELECT label FROM items WHERE id = 2".into(),
             vec![],
@@ -3361,15 +3361,15 @@ mod tests {
         )
         .await;
         match r2 {
-            SkyResult::Ok(v) => {
+            IpeResult::Ok(v) => {
                 assert_eq!(v.len(), 1);
                 assert!(
-                    matches!(&v[0], SkyMaybe::Just(s) if s == "hello"),
+                    matches!(&v[0], IpeMaybe::Just(s) if s == "hello"),
                     "expected Just(\"hello\"), got {:?}",
                     v[0]
                 );
             }
-            SkyResult::Err(e) => panic!("unexpected Err on non-null row: {}", e),
+            IpeResult::Err(e) => panic!("unexpected Err on non-null row: {}", e),
         }
     }
 
@@ -3378,13 +3378,13 @@ mod tests {
         let db = fresh_db().await;
         let mut row = HashMap::new();
         row.insert("title".to_string(), "find-me".to_string());
-        let id: SkyResult<String, i64> = db_insert_row(db.clone(), "todos".into(), row).await;
+        let id: IpeResult<String, i64> = db_insert_row(db.clone(), "todos".into(), row).await;
         let id = match id {
-            SkyResult::Ok(v) => v,
+            IpeResult::Ok(v) => v,
             _ => panic!("insert"),
         };
 
-        let found: SkyResult<String, SkyMaybe<String>> = db_get_by_id_decode(
+        let found: IpeResult<String, IpeMaybe<String>> = db_get_by_id_decode(
             db.clone(),
             "todos".into(),
             id,
@@ -3392,19 +3392,19 @@ mod tests {
         )
         .await;
         match found {
-            SkyResult::Ok(SkyMaybe::Just(s)) => assert_eq!(s, "find-me"),
+            IpeResult::Ok(IpeMaybe::Just(s)) => assert_eq!(s, "find-me"),
             other => panic!("unexpected: {:?}", other),
         }
 
         // Non-existent id → Nothing.
-        let not_found: SkyResult<String, SkyMaybe<String>> = db_get_by_id_decode(
+        let not_found: IpeResult<String, IpeMaybe<String>> = db_get_by_id_decode(
             db,
             "todos".into(),
             99999,
             db_decode_string("title".to_string()),
         )
         .await;
-        assert!(matches!(not_found, SkyResult::Ok(SkyMaybe::Nothing)));
+        assert!(matches!(not_found, IpeResult::Ok(IpeMaybe::Nothing)));
     }
 
     #[tokio::test]
@@ -3415,25 +3415,25 @@ mod tests {
         let val = serde_json::json!({ "price": "USD 12.34" });
         let result = (db_decode_money::<String>("price".to_string()).run)(&val);
         match result {
-            SkyResult::Ok((amount, code)) => {
+            IpeResult::Ok((amount, code)) => {
                 assert_eq!(code, "USD");
                 assert_eq!(amount.0, RD::from_str("12.34").unwrap());
             }
-            SkyResult::Err(e) => panic!("unexpected Err: {}", e),
+            IpeResult::Err(e) => panic!("unexpected Err: {}", e),
         }
 
         // NULL → Err.
         let val_null = serde_json::json!({ "price": null });
         assert!(matches!(
             (db_decode_money::<String>("price".to_string()).run)(&val_null),
-            SkyResult::Err(_)
+            IpeResult::Err(_)
         ));
 
         // Bad format → Err.
         let val_bad = serde_json::json!({ "price": "NODECIMAL" });
         assert!(matches!(
             (db_decode_money::<String>("price".to_string()).run)(&val_bad),
-            SkyResult::Err(_)
+            IpeResult::Err(_)
         ));
     }
 
@@ -3468,8 +3468,8 @@ mod tests {
     #[tokio::test]
     async fn test_close() {
         let db = fresh_db().await;
-        let r: SkyResult<String, ()> = db_close(db).await;
-        assert!(matches!(r, SkyResult::Ok(())));
+        let r: IpeResult<String, ()> = db_close(db).await;
+        assert!(matches!(r, IpeResult::Ok(())));
     }
 
     // ─── Std.Db.Sql — SqlFragment builder ────────────────────
@@ -3477,7 +3477,7 @@ mod tests {
     async fn insert_todo(db: &Db, title: &str) {
         let mut r = HashMap::new();
         r.insert("title".to_string(), title.to_string());
-        let _: SkyResult<String, i64> = db_insert_row(db.clone(), "todos".into(), r).await;
+        let _: IpeResult<String, i64> = db_insert_row(db.clone(), "todos".into(), r).await;
     }
 
     /// `Db.findWhere` with a single `Sql.eq` predicate finds exactly the
@@ -3493,14 +3493,14 @@ mod tests {
             sql_column("title".to_string()),
             sql_param("alpha".to_string()),
         );
-        let found: SkyResult<String, Vec<HashMap<String, String>>> =
+        let found: IpeResult<String, Vec<HashMap<String, String>>> =
             db_find_where(db, "todos".into(), frag).await;
         match found {
-            SkyResult::Ok(v) => {
+            IpeResult::Ok(v) => {
                 assert_eq!(v.len(), 1);
                 assert_eq!(v[0].get("title").map(String::as_str), Some("alpha"));
             }
-            SkyResult::Err(e) => panic!("expected Ok, got Err({e})"),
+            IpeResult::Err(e) => panic!("expected Ok, got Err({e})"),
         }
     }
 
@@ -3519,11 +3519,11 @@ mod tests {
             ),
             sql_gt(sql_column("id".to_string()), sql_param(1_i64)),
         );
-        let found: SkyResult<String, Vec<HashMap<String, String>>> =
+        let found: IpeResult<String, Vec<HashMap<String, String>>> =
             db_find_where(db, "todos".into(), frag).await;
         match found {
-            SkyResult::Ok(v) => assert_eq!(v.len(), 2),
-            SkyResult::Err(e) => panic!("expected Ok, got Err({e})"),
+            IpeResult::Ok(v) => assert_eq!(v.len(), 2),
+            IpeResult::Err(e) => panic!("expected Ok, got Err({e})"),
         }
     }
 
@@ -3538,18 +3538,18 @@ mod tests {
             sql_column("title".to_string()),
             sql_param("alpha".to_string()),
         );
-        let deleted: SkyResult<String, i64> =
+        let deleted: IpeResult<String, i64> =
             db_delete_where(db.clone(), "todos".into(), frag).await;
-        assert_eq!(deleted, SkyResult::Ok(1));
-        let remaining: SkyResult<String, Vec<HashMap<String, String>>> = db_find_where(
+        assert_eq!(deleted, IpeResult::Ok(1));
+        let remaining: IpeResult<String, Vec<HashMap<String, String>>> = db_find_where(
             db,
             "todos".into(),
             sql_is_not_null(sql_column("title".to_string())),
         )
         .await;
         match remaining {
-            SkyResult::Ok(v) => assert_eq!(v.len(), 1),
-            SkyResult::Err(e) => panic!("expected Ok, got Err({e})"),
+            IpeResult::Ok(v) => assert_eq!(v.len(), 1),
+            IpeResult::Err(e) => panic!("expected Ok, got Err({e})"),
         }
     }
 
@@ -3567,11 +3567,11 @@ mod tests {
                 SqlParam::Text("gamma".to_string()),
             ],
         );
-        let found: SkyResult<String, Vec<HashMap<String, String>>> =
+        let found: IpeResult<String, Vec<HashMap<String, String>>> =
             db_find_where(db, "todos".into(), frag).await;
         match found {
-            SkyResult::Ok(v) => assert_eq!(v.len(), 2),
-            SkyResult::Err(e) => panic!("expected Ok, got Err({e})"),
+            IpeResult::Ok(v) => assert_eq!(v.len(), 2),
+            IpeResult::Err(e) => panic!("expected Ok, got Err({e})"),
         }
     }
 
@@ -3583,11 +3583,11 @@ mod tests {
         let db = fresh_db().await;
         insert_todo(&db, "alpha").await;
         let frag = sql_in_list(sql_column("title".to_string()), Vec::new());
-        let found: SkyResult<String, Vec<HashMap<String, String>>> =
+        let found: IpeResult<String, Vec<HashMap<String, String>>> =
             db_find_where(db, "todos".into(), frag).await;
         match found {
-            SkyResult::Ok(v) => assert_eq!(v.len(), 0),
-            SkyResult::Err(e) => panic!("expected Ok, got Err({e})"),
+            IpeResult::Ok(v) => assert_eq!(v.len(), 0),
+            IpeResult::Err(e) => panic!("expected Ok, got Err({e})"),
         }
     }
 
@@ -3602,11 +3602,11 @@ mod tests {
             sql_column("todos.title".to_string()),
             sql_param("alpha".to_string()),
         );
-        let found: SkyResult<String, Vec<HashMap<String, String>>> =
+        let found: IpeResult<String, Vec<HashMap<String, String>>> =
             db_find_where(db, "todos".into(), frag).await;
         match found {
-            SkyResult::Ok(v) => assert_eq!(v.len(), 1),
-            SkyResult::Err(e) => panic!("expected Ok, got Err({e})"),
+            IpeResult::Ok(v) => assert_eq!(v.len(), 1),
+            IpeResult::Err(e) => panic!("expected Ok, got Err({e})"),
         }
     }
 
@@ -3622,10 +3622,10 @@ mod tests {
             sql_column("title; DROP TABLE todos".to_string()),
             sql_param("alpha".to_string()),
         );
-        let found: SkyResult<String, Vec<HashMap<String, String>>> =
+        let found: IpeResult<String, Vec<HashMap<String, String>>> =
             db_find_where(db, "todos".into(), frag).await;
         assert!(
-            matches!(found, SkyResult::Err(_)),
+            matches!(found, IpeResult::Err(_)),
             "poisoned column must surface as Task::Err, got {found:?}"
         );
     }
@@ -3670,22 +3670,22 @@ mod tests {
     #[tokio::test]
     async fn test_exec_and_query_with_params() {
         let db = fresh_db().await;
-        let ins: SkyResult<String, i64> = db_exec(
+        let ins: IpeResult<String, i64> = db_exec(
             db.clone(),
             "INSERT INTO todos (title, done) VALUES (?, ?)".into(),
             vec!["buy milk".to_string(), "0".to_string()],
         )
         .await;
-        assert!(matches!(ins, SkyResult::Ok(1))); // exec returns rows-affected
+        assert!(matches!(ins, IpeResult::Ok(1))); // exec returns rows-affected
 
-        let rows: SkyResult<String, Vec<HashMap<String, String>>> = db_query(
+        let rows: IpeResult<String, Vec<HashMap<String, String>>> = db_query(
             db,
             "SELECT title, done FROM todos WHERE title = ?".into(),
             vec!["buy milk".to_string()],
         )
         .await;
         match rows {
-            SkyResult::Ok(v) => {
+            IpeResult::Ok(v) => {
                 assert_eq!(v.len(), 1);
                 assert_eq!(v[0].get("title").unwrap(), "buy milk");
                 assert_eq!(v[0].get("done").unwrap(), "0");
@@ -3701,23 +3701,23 @@ mod tests {
     async fn test_query_param_with_quotes_and_metachars_roundtrips_safely() {
         let db = fresh_db().await;
         let nasty = "x'); DROP TABLE todos;-- O'Brien".to_string();
-        let ins: SkyResult<String, i64> = db_exec(
+        let ins: IpeResult<String, i64> = db_exec(
             db.clone(),
             "INSERT INTO todos (title, done) VALUES (?, ?)".into(),
             vec![nasty.clone(), "0".to_string()],
         )
         .await;
-        assert!(matches!(ins, SkyResult::Ok(1))); // exec returns rows-affected
+        assert!(matches!(ins, IpeResult::Ok(1))); // exec returns rows-affected
 
         // The value comes back byte-for-byte (proves it was bound, not splice-escaped-into-SQL).
-        let rows: SkyResult<String, Vec<HashMap<String, String>>> = db_query(
+        let rows: IpeResult<String, Vec<HashMap<String, String>>> = db_query(
             db.clone(),
             "SELECT title FROM todos WHERE title = ?".into(),
             vec![nasty.clone()],
         )
         .await;
         match rows {
-            SkyResult::Ok(v) => {
+            IpeResult::Ok(v) => {
                 assert_eq!(v.len(), 1);
                 assert_eq!(v[0].get("title").unwrap(), &nasty);
             }
@@ -3725,10 +3725,10 @@ mod tests {
         }
 
         // The table still exists with exactly the one row — the DROP never ran.
-        let all: SkyResult<String, Vec<HashMap<String, String>>> =
+        let all: IpeResult<String, Vec<HashMap<String, String>>> =
             db_query(db, "SELECT title FROM todos".into(), vec![]).await;
         match all {
-            SkyResult::Ok(v) => assert_eq!(v.len(), 1, "injection must not have dropped the table"),
+            IpeResult::Ok(v) => assert_eq!(v.len(), 1, "injection must not have dropped the table"),
             other => panic!("table gone or errored: {:?}", other),
         }
     }
@@ -3736,13 +3736,13 @@ mod tests {
     #[tokio::test]
     async fn update_fields_refuses_unscoped_update() {
         let db = fresh_db().await;
-        let mk: SkyResult<String, i64> = db_exec_raw(
+        let mk: IpeResult<String, i64> = db_exec_raw(
             db.clone(),
             "CREATE TABLE acct (id INTEGER PRIMARY KEY, bal INTEGER)".to_string(),
         )
         .await;
-        assert!(matches!(mk, SkyResult::Ok(_)), "create: {mk:?}");
-        let _: SkyResult<String, i64> = db_exec_raw(
+        assert!(matches!(mk, IpeResult::Ok(_)), "create: {mk:?}");
+        let _: IpeResult<String, i64> = db_exec_raw(
             db.clone(),
             "INSERT INTO acct (bal) VALUES (10), (20)".to_string(),
         )
@@ -3750,7 +3750,7 @@ mod tests {
 
         // Empty WHERE-column set MUST be refused (would otherwise mass-update
         // every row), NOT silently rewrite the whole table.
-        let r: SkyResult<String, i64> = db_update_fields(
+        let r: IpeResult<String, i64> = db_update_fields(
             db.clone(),
             "acct".to_string(),
             vec![], // no WHERE
@@ -3758,11 +3758,11 @@ mod tests {
         )
         .await;
         assert!(
-            matches!(r, SkyResult::Err(_)),
+            matches!(r, IpeResult::Err(_)),
             "empty WHERE must be refused, got {r:?}"
         );
         // No row should have been zeroed.
-        let zeroed: SkyResult<String, Vec<HashMap<String, String>>> = db_query_params(
+        let zeroed: IpeResult<String, Vec<HashMap<String, String>>> = db_query_params(
             db.clone(),
             "SELECT bal FROM acct WHERE bal = ?".to_string(),
             vec![SqlParam::Int(0)],
@@ -3774,7 +3774,7 @@ mod tests {
             "no row should have been mass-updated"
         );
         // A scoped update still works (affects exactly 1 row).
-        let ok: SkyResult<String, i64> = db_update_fields(
+        let ok: IpeResult<String, i64> = db_update_fields(
             db.clone(),
             "acct".to_string(),
             vec![("id".to_string(), SqlParam::Int(1))],
@@ -3782,7 +3782,7 @@ mod tests {
         )
         .await;
         assert!(
-            matches!(ok, SkyResult::Ok(1)),
+            matches!(ok, IpeResult::Ok(1)),
             "scoped update should affect 1 row: {ok:?}"
         );
     }
@@ -3823,7 +3823,7 @@ mod tests {
     #[tokio::test]
     async fn ipe_db_url_shared_connection_sees_same_data() {
         use crate::system::{locked_remove_var, locked_set_var};
-        let tmp = format!("/tmp/sky_aud07_shared_{}.db", std::process::id());
+        let tmp = format!("/tmp/ipe_aud07_shared_{}.db", std::process::id());
         let url = format!("sqlite://{}?mode=rwc", tmp);
         locked_set_var("DATABASE_URL", &url);
         let resolved = crate::config::ipe_db_url();
@@ -3832,12 +3832,12 @@ mod tests {
         let conn1 = connect_cached::<String>(resolved.clone()).await;
         let conn2 = connect_cached::<String>(resolved).await;
         let pool1 = match conn1 {
-            SkyResult::Ok(p) => p,
-            SkyResult::Err(e) => panic!("connect1 failed: {e}"),
+            IpeResult::Ok(p) => p,
+            IpeResult::Err(e) => panic!("connect1 failed: {e}"),
         };
         let pool2 = match conn2 {
-            SkyResult::Ok(p) => p,
-            SkyResult::Err(e) => panic!("connect2 failed: {e}"),
+            IpeResult::Ok(p) => p,
+            IpeResult::Err(e) => panic!("connect2 failed: {e}"),
         };
         sqlx::query("CREATE TABLE IF NOT EXISTS aud07_t (v INTEGER NOT NULL)")
             .execute(&pool1)

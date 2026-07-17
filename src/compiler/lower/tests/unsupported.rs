@@ -654,7 +654,7 @@ fn function_inside_opaque_boxed_wrapper_is_accepted() -> DResult<()> {
 fn function_inside_maybe_via_type_variable_is_accepted() -> DResult<()> {
     // #90 (IPE-L0114 narrowing, T1): a function reaching the type argument of
     // the built-in ENUM-LIKE `Maybe` is sound — `Just`/`Ok` construct the
-    // RUNTIME `SkyMaybe`/`SkyResult` enums, whose derives are generic-bounded,
+    // RUNTIME `IpeMaybe`/`IpeResult` enums, whose derives are generic-bounded,
     // so the type compiles regardless of the payload; use (`==`/stringify/
     // serde) is independently gated elsewhere. Same shape as
     // `function_inside_opaque_boxed_wrapper_is_accepted`, but for an
@@ -696,7 +696,7 @@ fn function_inside_maybe_via_type_variable_is_accepted() -> DResult<()> {
     assert!(
         res.is_ok(),
         "a function inside `Maybe` must lower cleanly (#90) — the runtime \
-         SkyMaybe's derives are generic-bounded: {:?}",
+         IpeMaybe's derives are generic-bounded: {:?}",
         res.err()
     );
     Ok(())
@@ -1394,7 +1394,7 @@ fn over_application_with_partial_surplus_eta_expands() -> DResult<()> {
     // over-applies (two args > one declared param) but the single surplus arg
     // does NOT saturate that three-argument closure — the result is itself a
     // partial application of the returned first-class value. The over path now
-    // eta-expands it (matching the reference's `SkyCall(f(1), 2)` residual):
+    // eta-expands it (matching the reference's `IpeCall(f(1), 2)` residual):
     // `\eta_0 \eta_1 -> (f(1))(2, eta_0, eta_1)` — capturing the direct call and
     // the surplus arg, taking the two still-missing params, rather than failing
     // closed with IPE-L0110. (`f 1 2 3 4` — surplus 3 == returned arity 3 —

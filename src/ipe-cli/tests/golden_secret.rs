@@ -123,7 +123,7 @@ fn record_containing_secret_stays_clone_debug_eq() {
 
 /// Logging a `Secret` directly (`Log.infoWith "boot" [ aSecret ]`) is safe BY
 /// CONSTRUCTION: the attr-list element's Stringify obligation routes through
-/// `Secret`'s hand-written `SkyStringify`, which ALWAYS redacts. The marker
+/// `Secret`'s hand-written `IpeStringify`, which ALWAYS redacts. The marker
 /// must NEVER appear anywhere in stdout.
 #[test]
 fn logging_a_secret_directly_never_leaks() {

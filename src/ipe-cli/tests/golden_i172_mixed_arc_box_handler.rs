@@ -83,9 +83,9 @@ fn assert_skyc_unifies_to_arc(fixture: &str) {
         built.err()
     );
 
-    // The user code lands in the per-module file under `sky_mods/`; the aggregate
+    // The user code lands in the per-module file under `ipe_mods/`; the aggregate
     // `main.rs` also `#[path]`-includes it, so read whichever exists.
-    let module = out.join("src").join("sky_mods").join("sky_mod_main.rs");
+    let module = out.join("src").join("ipe_mods").join("ipe_mod_main.rs");
     let aggregate = out.join("src").join("main.rs");
     let emitted = std::fs::read_to_string(&module)
         .or_else(|_| std::fs::read_to_string(&aggregate))

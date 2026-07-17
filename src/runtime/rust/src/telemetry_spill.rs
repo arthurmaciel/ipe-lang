@@ -248,7 +248,7 @@ pub fn offer_span(ts_ms: u64, name: &str, dur_us: u64, ok: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::core::SkyResult;
+    use super::super::core::IpeResult;
     use super::*;
     use sqlx::Row;
 
@@ -323,10 +323,10 @@ mod tests {
 
         // The reader (open_spill mode=rw) sees the same rows — the read↔write
         // contract end-to-end.
-        let n: SkyResult<String, Vec<String>> =
+        let n: IpeResult<String, Vec<String>> =
             super::super::live::hub::hub_list_services(path.clone()).await;
         assert!(
-            matches!(n, SkyResult::Ok(ref v) if v == &vec!["tsvc".to_string()]),
+            matches!(n, IpeResult::Ok(ref v) if v == &vec!["tsvc".to_string()]),
             "{n:?}"
         );
 

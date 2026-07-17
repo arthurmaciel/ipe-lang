@@ -186,8 +186,8 @@ struct Builtins {
     /// `docs/adr/0017-error-payload-nominal-identity.md`). The three payload
     /// record types are opaque nominal Cons (like the server `Request`), NOT
     /// structural records: a bare record literal must not unify with them —
-    /// the runtime backs them with concrete structs (`SkyPanicInfo` /
-    /// `SkyTypeInfo` / `SkyErrorInfo`), so a structural lowering
+    /// the runtime backs them with concrete structs (`IpePanicInfo` /
+    /// `IpeTypeInfo` / `IpeErrorInfo`), so a structural lowering
     /// (project-local synthesized struct) would fail `cargo build` after a
     /// clean `skyc` exit. Field ACCESS on them stays available through
     /// `resolve_deferred`'s builtin-record field tables.
@@ -290,7 +290,7 @@ struct Builtins {
     /// `"WebSocketServer"` — the opaque per-peer WebSocket handle (`WsHandle`).
     ws_server: Symbol,
     /// `"WebSocketServerCfg"` — the opaque WebSocket server configuration
-    /// (`WsServerCfg<SkyError>`).
+    /// (`WsServerCfg<IpeError>`).
     ws_server_cfg: Symbol,
     // ── Std.Ui / Std.Html parametric type constructor symbols ─────────────────
     /// `"Attribute"` — Std.Ui attribute type constructor `Attribute msg`.
@@ -427,7 +427,7 @@ struct Builtins {
     input_f_selected: Symbol,
     // ── Sky.Core.Http.Stream opaque StreamId type constructor ─────────────────
     /// `"StreamId"` — the opaque stream identifier type constructor from
-    /// `Sky.Core.Http.Stream`. Backed by `ipe_runtime::http_stream::SkyStreamId`.
+    /// `Sky.Core.Http.Stream`. Backed by `ipe_runtime::http_stream::IpeStreamId`.
     /// No synthetic `EnumDef` is injected; the backend handles it via a special
     /// case in `enum_name` that maps the symbol to the runtime struct.
     stream_id: Symbol,
@@ -832,7 +832,7 @@ impl Builtins {
         // doc). A bare record literal (`FfiPanic { message = …, stack = … }`)
         // now fails to unify with a clean skyc-time type mismatch instead of
         // lowering to a synthesized struct that fails `cargo build` against
-        // the runtime's `SkyPanicInfo`/`SkyTypeInfo`/`SkyErrorInfo`. Field
+        // the runtime's `IpePanicInfo`/`IpeTypeInfo`/`IpeErrorInfo`. Field
         // access on values of these types resolves through
         // `resolve_deferred`'s builtin-record field tables (the `Request`
         // recipe); construction from Sky source goes through the smart
@@ -2742,7 +2742,7 @@ impl<'a> Builder<'a> {
             }
             // ── end Basics numerics ────────────────────────────────────
             // `Basics.toString : a -> String`. The argument carries the
-            // STRINGIFY obligation (a bounded super-var → Rust `SkyStringify`):
+            // STRINGIFY obligation (a bounded super-var → Rust `IpeStringify`):
             // a scalar / record / ADT satisfies it, a bare function (or a value
             // nesting one) fails CLOSED at type-check rather than emitting an
             // unbounded `basics_to_string::<T>` that `cargo` rejects. Direct-build
@@ -3537,7 +3537,7 @@ impl<'a> Builder<'a> {
             args: Vec::new(),
         };
         let tuple2 = |a: Ty, b: Ty| Ty::Tuple(vec![a, b]);
-        // `task(a)` — `Task a` (the error channel is the implicit `SkyError`).
+        // `task(a)` — `Task a` (the error channel is the implicit `IpeError`).
         let task = |a: Ty| Ty::Con {
             module: Vec::new(),
             name: self.builtins.task,
@@ -3669,7 +3669,7 @@ impl<'a> Builder<'a> {
         };
         // `stream_id()` — the opaque `StreamId` handle from
         // `Sky.Core.Http.Stream`. Backed at runtime by
-        // `ipe_runtime::http_stream::SkyStreamId` (a newtype over `i64`).
+        // `ipe_runtime::http_stream::IpeStreamId` (a newtype over `i64`).
         // Used as the return type of `HttpStream.open` and the first argument
         // of `forEachChunk`, `close`, and `chunks`.
         let stream_id = || Ty::Con {
@@ -3685,7 +3685,7 @@ impl<'a> Builder<'a> {
             name: self.builtins.ws_server,
             args: Vec::new(),
         };
-        // `wscfg()` — the opaque `WsServerCfg<SkyError>` configuration type.
+        // `wscfg()` — the opaque `WsServerCfg<IpeError>` configuration type.
         // Built by `Ws.defaultCfg` and threaded through the builder chain.
         let wscfg = || Ty::Con {
             module: Vec::new(),
@@ -5031,7 +5031,7 @@ impl<'a> Builder<'a> {
 
             // ── Crypto (15) — AEAD (`aesGcm*`/`chacha20*`) now schemed: the
             //    registry `decl().arity` was corrected 3→2 to match the Rust
-            //    runtime (`sky_aes_gcm_encrypt(key, plaintext)` — a fresh random
+            //    runtime (`ipe_aes_gcm_encrypt(key, plaintext)` — a fresh random
             //    nonce is prepended internally, so no third arg). Both take
             //    `key -> plaintext/ciphertext -> Result Error String`. ──
             K::CryptoSha256 | K::CryptoSha512 | K::CryptoSha1 | K::CryptoMd5 => {
@@ -5054,7 +5054,7 @@ impl<'a> Builder<'a> {
 
             // ── Jwt (4) — `secret -> token/claims -> Result Error String`.
             //    Decode returns the decoded claims JSON as a String; encode
-            //    (`sky_jwt_encode_hs256(secret, claims_json)`) takes the secret/
+            //    (`ipe_jwt_encode_hs256(secret, claims_json)`) takes the secret/
             //    key and a claims-JSON String and returns the signed token — the
             //    registry `decl().arity` was corrected 3→2 to match. ──
             K::JwtDecodeHs256 | K::JwtDecodeRs256 | K::JwtEncodeHs256 | K::JwtEncodeRs256 => {
@@ -5774,7 +5774,7 @@ impl<'a> Builder<'a> {
             // ── Sky.Core.Error (15 — real Error/ErrorKind/ErrorDetails ADT) ──
             //    `Error` is `Error ErrorKind ErrorInfo` (`Error`'s own ctor scheme
             //    is registered in `ctor_schemes()`), backed at runtime by the real
-            //    `ipe_runtime::error::SkyError` enum (`IrType::Error`), not
+            //    `ipe_runtime::error::IpeError` enum (`IrType::Error`), not
             //    string-backed. The eight message constructors are `String ->
             //    Error` (each classifies its `ErrorKind` at construction);
             //    `timeout`/`notFound`/`permissionDenied` are nullary `Error`;
@@ -5806,7 +5806,7 @@ impl<'a> Builder<'a> {
             //    Sky side drops the declaration/rule via `CssDropped` /
             //    `CssRuleDropped`); `stripStyleClose` is the `String -> String`
             //    breakout floor. Runtime `safe_value` / `safe_prop_name` /
-            //    `safe_selector` return `SkyMaybe<String>` (mirrors `uuid_parse`);
+            //    `safe_selector` return `IpeMaybe<String>` (mirrors `uuid_parse`);
             //    `strip_style_close_kernel` returns `String`.
             K::CssSafetySafeValue | K::CssSafetySafePropName | K::CssSafetySafeSelector => {
                 fun(string(), maybe(string()))
@@ -5816,7 +5816,7 @@ impl<'a> Builder<'a> {
             // ── Sky.Core.Uuid (3) — ENTROPY IS AN EFFECT ──
             //    `v4`/`v7` draw fresh entropy per call, so they are typed on the
             //    effect tier `() -> Task Error String` (runtime `uuid_v4::<E>(_:
-            //    ())` / `uuid_v7::<E>(_: ())` return `SkyTask<E, String>`),
+            //    ())` / `uuid_v7::<E>(_: ())` return `IpeTask<E, String>`),
             //    called `Uuid.v4 ()` exactly like `Time.now ()`. This makes
             //    "entropy typed as a memoizable pure `String`" unrepresentable —
             //    a pure `String` is CSE/memoization-eligible, so two references
@@ -5892,7 +5892,7 @@ impl<'a> Builder<'a> {
             // `fromString` is the seal (construction boundary); `reveal` is the
             // single greppable un-parse; `redacted` is the explicit "<redacted>"
             // accessor (also what `toString`/interpolation gives automatically —
-            // see `ipe_runtime::secret`'s hand-written `SkyStringify` impl). No
+            // see `ipe_runtime::secret`'s hand-written `IpeStringify` impl). No
             // `ty_is_equatable`/`has_show` denylist needed: `Secret` is a bare
             // nullary `Ty::Con`, so `==`/`toString` stay permitted (safe by
             // construction — see the fix spec §1) while Dict-key/Set-elem/`<`/`>`
@@ -7229,7 +7229,7 @@ mod registry_phase_c_tests {
     /// - `PubSub.publish` / `PubSub.publishNoEcho`
     ///   (`String -> a -> Task Error Int`): the runtime `pubsub_publish` /
     ///   `pubsub_publish_no_echo` exist; the emit arm emits
-    ///   `pubsub_publish::<_, SkyError>(topic, payload)`. `KNOWN_UNBACKED` is
+    ///   `pubsub_publish::<_, IpeError>(topic, payload)`. `KNOWN_UNBACKED` is
     ///   empty.
     const FIRST_SCHEMED: &[StdlibKernel] = {
         use StdlibKernel as K;
@@ -7957,7 +7957,7 @@ mod registry_phase_c_tests {
             // ── Std.Email (1) ──────────────────────────────────────────
             K::EmailSend,
             // ── Std.PubSub (2) ─────────────────────────────────────
-            // Runtime exists, emit arm present (`pubsub_publish::<_, SkyError>`),
+            // Runtime exists, emit arm present (`pubsub_publish::<_, IpeError>`),
             // scheme `String -> a -> Task Error Int`.
             K::PubSubPublish,
             K::PubSubPublishNoEcho,

@@ -152,7 +152,7 @@ fn build_style_node<M>(
     style_attr: &str,
     build: &impl Fn(&str, &[Attribute<M>]) -> String,
 ) -> Option<Html<M>> {
-    let sky_id = match attr_get(attrs, "sky-id") {
+    let ipe_id = match attr_get(attrs, "sky-id") {
         Some(s) => s,
         None => {
             strip_markers(attrs, markers);
@@ -166,14 +166,14 @@ fn build_style_node<M>(
         strip_markers(attrs, markers);
         return None;
     }
-    let css = build(&sky_id, attrs); // reads markers BEFORE they're stripped
+    let css = build(&ipe_id, attrs); // reads markers BEFORE they're stripped
     strip_markers(attrs, markers);
     if css.is_empty() {
         return None;
     }
     Some(Html::HElement(
         "style".to_string(),
-        vec![Attribute::Attr(style_attr.to_string(), sky_id)],
+        vec![Attribute::Attr(style_attr.to_string(), ipe_id)],
         vec![Html::HRaw(css)],
     ))
 }
@@ -201,7 +201,7 @@ use super::super::css_safety::{
     strip_style_close,
 };
 
-fn build_mq<M>(sky_id: &str, attrs: &[Attribute<M>]) -> String {
+fn build_mq<M>(ipe_id: &str, attrs: &[Attribute<M>]) -> String {
     let query = attr_get(attrs, "data-sky-mq-q").unwrap_or_default();
     let rules = attr_get(attrs, "data-sky-mq-rules").unwrap_or_default();
     if query.is_empty() || rules.is_empty() {
@@ -219,16 +219,16 @@ fn build_mq<M>(sky_id: &str, attrs: &[Attribute<M>]) -> String {
         (Some(q), Some(r)) => (q.as_str().to_owned(), strip_style_close(r)),
         _ => return String::new(),
     };
-    let selector = format!("[sky-id=\"{sky_id}\"]");
+    let selector = format!("[sky-id=\"{ipe_id}\"]");
     format!("@media {safe_query} {{ {selector} {{ {safe_rules} }} }}")
 }
 
-fn build_pc<M>(sky_id: &str, attrs: &[Attribute<M>]) -> String {
+fn build_pc<M>(ipe_id: &str, attrs: &[Attribute<M>]) -> String {
     let encoded = attr_get(attrs, "data-sky-pc-rules").unwrap_or_default();
     if encoded.is_empty() {
         return String::new();
     }
-    let selector = format!("[sky-id=\"{sky_id}\"]");
+    let selector = format!("[sky-id=\"{ipe_id}\"]");
     let mut out = String::new();
     for entry in encoded.split("||") {
         let (tag, css) = match entry.split_once('|') {
@@ -273,7 +273,7 @@ fn pseudo_selector_for_tag(tag: &str) -> Option<(&'static str, bool)> {
     }
 }
 
-fn build_tr<M>(sky_id: &str, attrs: &[Attribute<M>]) -> String {
+fn build_tr<M>(ipe_id: &str, attrs: &[Attribute<M>]) -> String {
     let rules = attr_get(attrs, "data-sky-tr-rules").unwrap_or_default();
     if rules.is_empty() {
         return String::new();
@@ -289,7 +289,7 @@ fn build_tr<M>(sky_id: &str, attrs: &[Attribute<M>]) -> String {
         Some(v) => strip_style_close(v.as_str()),
         None => return String::new(),
     };
-    let selector = format!("[sky-id=\"{sky_id}\"]");
+    let selector = format!("[sky-id=\"{ipe_id}\"]");
     if respect {
         format!(
             "@media (prefers-reduced-motion: no-preference) {{ {selector} {{ transition: {safe_rules}; }} }}"
@@ -299,13 +299,13 @@ fn build_tr<M>(sky_id: &str, attrs: &[Attribute<M>]) -> String {
     }
 }
 
-fn build_anim<M>(sky_id: &str, attrs: &[Attribute<M>]) -> String {
+fn build_anim<M>(ipe_id: &str, attrs: &[Attribute<M>]) -> String {
     let encoded = attr_get(attrs, "data-sky-anim-rules").unwrap_or_default();
     if encoded.is_empty() {
         return String::new();
     }
-    let ident = sky_id_to_css_ident(sky_id);
-    let selector = format!("[sky-id=\"{sky_id}\"]");
+    let ident = ipe_id_to_css_ident(ipe_id);
+    let selector = format!("[sky-id=\"{ipe_id}\"]");
     let mut keyframes = String::new();
     let mut gated: Vec<String> = vec![];
     let mut ungated: Vec<String> = vec![];
@@ -370,7 +370,7 @@ fn build_anim<M>(sky_id: &str, attrs: &[Attribute<M>]) -> String {
 /// sky-id (`r.0.2#div`) → CSS-safe ident suffix (`r_0_2_div`) for @keyframes
 /// names. Structural separators map to `_`; anything else outside the CSS-ident
 /// charset is dropped (Go's `skyIDToCSSIdent`).
-fn sky_id_to_css_ident(s: &str) -> String {
+fn ipe_id_to_css_ident(s: &str) -> String {
     s.chars()
         .filter_map(|c| match c {
             'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '-' => Some(c),

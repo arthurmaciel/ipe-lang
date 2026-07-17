@@ -196,18 +196,18 @@ mod tests {
     }
 
     // A form-target record with a `Maybe`-typed optional field
-    // (`note : Maybe String` → `SkyMaybe<String>`) is idiomatic. The codegen
-    // `#[derive(Default)]` on this struct requires `SkyMaybe<T>: Default`, which
-    // `impl Default for SkyMaybe` (= `Nothing`) supplies, so a MISSING `note`
+    // (`note : Maybe String` → `IpeMaybe<String>`) is idiomatic. The codegen
+    // `#[derive(Default)]` on this struct requires `IpeMaybe<T>: Default`, which
+    // `impl Default for IpeMaybe` (= `Nothing`) supplies, so a MISSING `note`
     // decodes to `Nothing` (the missing-field leniency, Go's `json.Unmarshal`
     // nil parity).
     //
-    // NB on a PRESENT value: `SkyMaybe` derives serde's default (externally-
+    // NB on a PRESENT value: `IpeMaybe` derives serde's default (externally-
     // tagged) representation, so a bare urlencoded `note=hello` does NOT
-    // round-trip into `SkyMaybe::Just("hello")` — serde expects a `Just`/
+    // round-trip into `IpeMaybe::Just("hello")` — serde expects a `Just`/
     // `Nothing` tag. Surfacing a present optional form value into `Just` is a
     // separate serde-representation concern (it would need `#[serde(untagged)]`
-    // / a custom deserialize on `SkyMaybe`, which also touches the session-store
+    // / a custom deserialize on `IpeMaybe`, which also touches the session-store
     // serialization contract). We assert the in-scope behaviour: missing
     // → Nothing (no cargo-fail, Msg dispatches), present-bare → decode declines.
     #[derive(serde::Deserialize, Default, PartialEq, Debug)]
@@ -215,16 +215,16 @@ mod tests {
     struct CredsWithNote {
         email: String,
         password: String,
-        note: crate::core::SkyMaybe<String>,
+        note: crate::core::IpeMaybe<String>,
     }
 
     #[test]
     fn decode_form_maybe_field_missing_is_nothing() {
-        use crate::core::SkyMaybe;
+        use crate::core::IpeMaybe;
 
         // `note` absent → Nothing (Go decodes a missing nullable to nil), decode
         // SUCCEEDS, Msg dispatches. This relies on the struct's
-        // `#[derive(Default)]` (which needs `SkyMaybe<T>: Default`, else E0277).
+        // `#[derive(Default)]` (which needs `IpeMaybe<T>: Default`, else E0277).
         let mut without_note = FormData::new();
         without_note.insert("email".to_string(), "a@b.c".to_string());
         without_note.insert("password".to_string(), "pw".to_string());
@@ -234,18 +234,18 @@ mod tests {
             Some(CredsWithNote {
                 email: "a@b.c".into(),
                 password: "pw".into(),
-                note: SkyMaybe::Nothing,
+                note: IpeMaybe::Nothing,
             })
         );
     }
 
     #[test]
-    fn sky_maybe_default_is_nothing() {
+    fn ipe_maybe_default_is_nothing() {
         // Part A contract: the manual `Default` impl yields `Nothing`, and it is
-        // UNBOUNDED in `T` — a `SkyMaybe<NonDefault>` field still has a default.
+        // UNBOUNDED in `T` — a `IpeMaybe<NonDefault>` field still has a default.
         struct NonDefault;
-        assert!(crate::core::SkyMaybe::<String>::default().is_nothing());
-        let _unbounded: crate::core::SkyMaybe<NonDefault> = Default::default();
+        assert!(crate::core::IpeMaybe::<String>::default().is_nothing());
+        let _unbounded: crate::core::IpeMaybe<NonDefault> = Default::default();
     }
 
     // A form-target carrying a NON-Default field (here a `bool`-keyed ADT
@@ -295,17 +295,17 @@ mod tests {
     // `Just("hello")`, not decline the whole form. This complements the MISSING
     // case (absent field → Nothing) with the PRESENT case.
     //
-    // Root cause: `SkyMaybe` derives serde with the default externally-tagged repr
+    // Root cause: `IpeMaybe` derives serde with the default externally-tagged repr
     // (`{"Just":"hello"}` / `"Nothing"`); form data posts a bare string `"hello"`,
-    // which serde_urlencoded passes to `SkyMaybe::deserialize` as a bare string
+    // which serde_urlencoded passes to `IpeMaybe::deserialize` as a bare string
     // value — the tagged deserialiser rejects it, and `decode_form_or_warn` returns
-    // None, declining the whole form. Fix: a custom `Deserialize` for `SkyMaybe<T>`
+    // None, declining the whole form. Fix: a custom `Deserialize` for `IpeMaybe<T>`
     // that first tries `Option<T>` (bare value → Some(v) → Just(v); null/absent →
     // None → Nothing) and falls back to the tagged enum repr for session-store
     // round-trips (stored `{"Just":"x"}` / `"Nothing"` still deserialise correctly).
     #[test]
     fn decode_form_maybe_field_present_is_just() {
-        use crate::core::SkyMaybe;
+        use crate::core::IpeMaybe;
 
         // Present `note=hello` → Just("hello").
         let mut with_note = FormData::new();
@@ -318,7 +318,7 @@ mod tests {
             Some(CredsWithNote {
                 email: "a@b.c".into(),
                 password: "pw".into(),
-                note: SkyMaybe::Just("hello".to_string()),
+                note: IpeMaybe::Just("hello".to_string()),
             })
         );
 
@@ -332,31 +332,31 @@ mod tests {
             Some(CredsWithNote {
                 email: "a@b.c".into(),
                 password: "pw".into(),
-                note: SkyMaybe::Nothing,
+                note: IpeMaybe::Nothing,
             })
         );
     }
 
-    // Session-store round-trip: serialize SkyMaybe → JSON → deserialize must
-    // preserve the value. This guards the custom `SkyMaybe` Deserialize.
+    // Session-store round-trip: serialize IpeMaybe → JSON → deserialize must
+    // preserve the value. This guards the custom `IpeMaybe` Deserialize.
     #[test]
-    fn sky_maybe_session_store_round_trip() {
-        use crate::core::SkyMaybe;
+    fn ipe_maybe_session_store_round_trip() {
+        use crate::core::IpeMaybe;
 
-        let just_val: SkyMaybe<String> = SkyMaybe::Just("stored".to_string());
-        let nothing_val: SkyMaybe<String> = SkyMaybe::Nothing;
+        let just_val: IpeMaybe<String> = IpeMaybe::Just("stored".to_string());
+        let nothing_val: IpeMaybe<String> = IpeMaybe::Nothing;
 
         // Serialize (what the session store writes).
         let just_json = serde_json::to_string(&just_val).expect("serialize Just");
         let nothing_json = serde_json::to_string(&nothing_val).expect("serialize Nothing");
 
         // Deserialize (what the session store reads back).
-        let just_rt: SkyMaybe<String> =
+        let just_rt: IpeMaybe<String> =
             serde_json::from_str(&just_json).expect("deserialize Just round-trip");
-        let nothing_rt: SkyMaybe<String> =
+        let nothing_rt: IpeMaybe<String> =
             serde_json::from_str(&nothing_json).expect("deserialize Nothing round-trip");
 
-        assert_eq!(just_rt, SkyMaybe::Just("stored".to_string()));
-        assert_eq!(nothing_rt, SkyMaybe::Nothing);
+        assert_eq!(just_rt, IpeMaybe::Just("stored".to_string()));
+        assert_eq!(nothing_rt, IpeMaybe::Nothing);
     }
 }

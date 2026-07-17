@@ -4,7 +4,7 @@
 //! The shape — `wrap : a -> { value : a }` applied as `wrap (\n -> n + 1)` —
 //! instantiates the field `value : a` to `Int -> Int` at the use site. The
 //! synthesised struct `RecValue<T1>` derives `Clone`/`Debug`/`PartialEq` and
-//! impls `SkyStringify`; a `Box<dyn Fn>` field satisfies none of them, so the
+//! impls `IpeStringify`; a `Box<dyn Fn>` field satisfies none of them, so the
 //! emitted Rust does not build. The syntactic per-field gate
 //! (`reject_function_valued_field`) cannot see this — the field value at the call
 //! site is not syntactically a function — so a region-based gate in the lowerer

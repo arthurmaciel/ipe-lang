@@ -168,7 +168,7 @@ main =
 /// `Send + Sync`). An inline lambda emitted through the general `emit_expr_at`
 /// path as `Box<dyn Fn(..) -> R + Send + 'static>` — a trait object that
 /// carries `Send` but NOT `Sync` — would fail the slot's `Sync` bound: `skyc`
-/// exit 0 then `cargo build` E0277 (`dyn Fn(..) -> SkySub<Msg> + Send cannot be
+/// exit 0 then `cargo build` E0277 (`dyn Fn(..) -> IpeSub<Msg> + Send cannot be
 /// shared between threads safely`).
 ///
 /// So an inline-lambda live-cfg callback is emitted UNBOXED (`move |_| -> R
@@ -295,15 +295,15 @@ main =
 /// # Errors
 ///
 /// Returns an error on any pipeline or Cargo build failure.
-fn compile_and_build(test_name: &str, sky_source: &str) -> Result<PathBuf, BoxError> {
-    let sky_dir = std::env::temp_dir().join(format!("live_e2e_{test_name}_sky"));
-    let _ = std::fs::remove_dir_all(&sky_dir);
-    std::fs::create_dir_all(&sky_dir).map_err(|e| -> BoxError {
+fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxError> {
+    let ipe_dir = std::env::temp_dir().join(format!("live_e2e_{test_name}_sky"));
+    let _ = std::fs::remove_dir_all(&ipe_dir);
+    std::fs::create_dir_all(&ipe_dir).map_err(|e| -> BoxError {
         format!("{test_name}: cannot create sky source dir: {e}").into()
     })?;
 
-    let entry = sky_dir.join("Main.sky");
-    std::fs::write(&entry, sky_source)
+    let entry = ipe_dir.join("Main.sky");
+    std::fs::write(&entry, ipe_source)
         .map_err(|e| -> BoxError { format!("{test_name}: cannot write Main.sky: {e}").into() })?;
 
     let out_dir = std::env::temp_dir().join(format!("live_e2e_{test_name}_emitted"));
@@ -677,7 +677,7 @@ fn live_html_helper_record_build_only() -> Result<(), BoxError> {
 /// See `IPE_LIVE_LAMBDA_SUBS` for the full rationale — a lambda pinned to
 /// `Box<dyn Fn + Send>` (no `Sync`) instead of emitted unboxed into the generic
 /// `FSubs` slot makes this `skyc` exit 0 then `cargo build` E0277
-/// (`dyn Fn(..) -> SkySub<Msg> + Send cannot be shared between threads safely`).
+/// (`dyn Fn(..) -> IpeSub<Msg> + Send cannot be shared between threads safely`).
 ///
 /// # Errors
 ///
@@ -699,7 +699,7 @@ fn live_lambda_subscriptions_build_only() -> Result<(), BoxError> {
 ///
 /// ## Wire protocol exercised
 ///
-/// 1. `GET /` → axum sets `sky_sid=<sid>` in `Set-Cookie`.  The initial model
+/// 1. `GET /` → axum sets `ipe_sid=<sid>` in `Set-Cookie`.  The initial model
 ///    (`count = 0`) is rendered with `>0<`.
 /// 2. The rendered HTML carries `data-sky-hid="<sky-id>"` on every element
 ///    that has event handlers.  The `Ui.el [ Ui.onClick Increment ]` element
@@ -707,12 +707,12 @@ fn live_lambda_subscriptions_build_only() -> Result<(), BoxError> {
 ///    nearest `data-sky-hid`.
 /// 3. `POST /_sky/event` with body
 ///    `{"id":"<sky-id>","msg":"click","args":[],"sessionId":""}` and
-///    `Cookie: sky_sid=<sid>`.  The runtime authenticates via the COOKIE only;
+///    `Cookie: ipe_sid=<sid>`.  The runtime authenticates via the COOKIE only;
 ///    the body's `sessionId` is ignored per the security policy.
 /// 4. The event is enqueued via `try_send` and processed asynchronously by
 ///    `drive_session`.  A 200 ms sleep after the POST gives the driver time to
 ///    commit the model update.
-/// 5. A second `GET /` with `Cookie: sky_sid=<sid>` re-renders the live
+/// 5. A second `GET /` with `Cookie: ipe_sid=<sid>` re-renders the live
 ///    session (store hit → re-view with current model) → the body must contain
 ///    `>1<`.
 ///
@@ -737,9 +737,9 @@ fn live_onclick_increments_counter() -> Result<(), BoxError> {
     // ── Step 1: GET / — initial page, extract session cookie + sky-id ─────────
     let (raw_headers, body) = http_send(test_name, &addr, "GET", "/", &[], None)?;
 
-    let sid = extract_cookie(&raw_headers, "sky_sid").ok_or_else(|| -> BoxError {
+    let sid = extract_cookie(&raw_headers, "ipe_sid").ok_or_else(|| -> BoxError {
         format!(
-            "{test_name}: no sky_sid cookie in GET / response\n\
+            "{test_name}: no ipe_sid cookie in GET / response\n\
              --- raw headers ---\n{raw_headers}"
         )
         .into()
@@ -760,7 +760,7 @@ fn live_onclick_increments_counter() -> Result<(), BoxError> {
     // then defaults to "click").  `sessionId` is retained in the body for
     // wire-compat but ignored by the server; auth is via the Cookie header.
     let event_body = format!(r#"{{"id":"{hid}","msg":"click","args":[],"sessionId":""}}"#);
-    let cookie_header = format!("sky_sid={sid}");
+    let cookie_header = format!("ipe_sid={sid}");
     let (_, post_body) = http_send(
         test_name,
         &addr,
@@ -1141,9 +1141,9 @@ fn live_onsubmit_typed_record_dispatches_decoded_payload() -> Result<(), BoxErro
     // ── Step 1: GET / — initial page, extract session cookie + form hid ─────
     let (raw_headers, body) = http_send(test_name, &addr, "GET", "/", &[], None)?;
 
-    let sid = extract_cookie(&raw_headers, "sky_sid").ok_or_else(|| -> BoxError {
+    let sid = extract_cookie(&raw_headers, "ipe_sid").ok_or_else(|| -> BoxError {
         format!(
-            "{test_name}: no sky_sid cookie in GET / response\n\
+            "{test_name}: no ipe_sid cookie in GET / response\n\
              --- raw headers ---\n{raw_headers}"
         )
         .into()
@@ -1162,7 +1162,7 @@ fn live_onsubmit_typed_record_dispatches_decoded_payload() -> Result<(), BoxErro
     let event_body = format!(
         r#"{{"id":"{hid}","event":"submit","args":[{{"username":"alice","password":"s3cr3t"}}],"sessionId":""}}"#
     );
-    let cookie_header = format!("sky_sid={sid}");
+    let cookie_header = format!("ipe_sid={sid}");
     let (_, post_body) = http_send(
         test_name,
         &addr,
@@ -1345,9 +1345,9 @@ fn live_onsubmit_bare_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
     // ── Step 1: GET / — initial page, extract session cookie + form hid ─────
     let (raw_headers, body) = http_send(test_name, &addr, "GET", "/", &[], None)?;
 
-    let sid = extract_cookie(&raw_headers, "sky_sid").ok_or_else(|| -> BoxError {
+    let sid = extract_cookie(&raw_headers, "ipe_sid").ok_or_else(|| -> BoxError {
         format!(
-            "{test_name}: no sky_sid cookie in GET / response\n\
+            "{test_name}: no ipe_sid cookie in GET / response\n\
              --- raw headers ---\n{raw_headers}"
         )
         .into()
@@ -1365,7 +1365,7 @@ fn live_onsubmit_bare_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
     // ── Step 2: POST /_sky/event — submit with REAL (but ignored) form data ─
     let event_body =
         format!(r#"{{"id":"{hid}","event":"submit","args":[{{"name":"alice"}}],"sessionId":""}}"#);
-    let cookie_header = format!("sky_sid={sid}");
+    let cookie_header = format!("ipe_sid={sid}");
     let (_, post_body) = http_send(
         test_name,
         &addr,
@@ -1763,9 +1763,9 @@ fn live_onsubmit_var_bound_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
     // ── Step 1: GET / — initial page, extract session cookie + form hid ─────
     let (raw_headers, body) = http_send(test_name, &addr, "GET", "/", &[], None)?;
 
-    let sid = extract_cookie(&raw_headers, "sky_sid").ok_or_else(|| -> BoxError {
+    let sid = extract_cookie(&raw_headers, "ipe_sid").ok_or_else(|| -> BoxError {
         format!(
-            "{test_name}: no sky_sid cookie in GET / response\n\
+            "{test_name}: no ipe_sid cookie in GET / response\n\
              --- raw headers ---\n{raw_headers}"
         )
         .into()
@@ -1783,7 +1783,7 @@ fn live_onsubmit_var_bound_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
     // ── Step 2: POST /_sky/event — submit with REAL (but ignored) form data ─
     let event_body =
         format!(r#"{{"id":"{hid}","event":"submit","args":[{{"name":"alice"}}],"sessionId":""}}"#);
-    let cookie_header = format!("sky_sid={sid}");
+    let cookie_header = format!("ipe_sid={sid}");
     let (_, post_body) = http_send(
         test_name,
         &addr,
@@ -2112,8 +2112,8 @@ fn live_unrouted_get_does_not_wipe_form_handlers() -> Result<(), BoxError> {
 
     // ── Step 1: GET / — session cookie + the form page's handler id ────────
     let (raw_headers, body) = http_send(test_name, &addr, "GET", "/", &[], None)?;
-    let sid = extract_cookie(&raw_headers, "sky_sid").ok_or_else(|| -> BoxError {
-        format!("{test_name}: no sky_sid cookie in GET / response").into()
+    let sid = extract_cookie(&raw_headers, "ipe_sid").ok_or_else(|| -> BoxError {
+        format!("{test_name}: no ipe_sid cookie in GET / response").into()
     })?;
     let hid = extract_hid_for_open_tag(&body, "form").ok_or_else(|| -> BoxError {
         format!(
@@ -2123,7 +2123,7 @@ fn live_unrouted_get_does_not_wipe_form_handlers() -> Result<(), BoxError> {
         )
         .into()
     })?;
-    let cookie_header = format!("sky_sid={sid}");
+    let cookie_header = format!("ipe_sid={sid}");
 
     // ── Step 2: GET /favicon.ico with the session cookie ───────────────────
     // The browser-noise probe. Must 404 (Go parity) and must NOT re-route

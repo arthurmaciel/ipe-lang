@@ -30,7 +30,7 @@ use axum::response::{IntoResponse, Response};
 /// TLS anyway). Read AND write must agree, so both route through this.
 pub fn csrf_cookie_name() -> &'static str {
     if cookies_secure() {
-        "__Host-sky_csrf"
+        "__Host-ipe_csrf"
     } else {
         "__sky_csrf"
     }
@@ -100,7 +100,7 @@ pub fn token_is_well_formed(t: &str) -> bool {
 /// cookie has its own base-path-aware reader in `mod.rs`).
 ///
 /// Uses `split_once('=')` and compares the key exactly (after trim) so a cookie
-/// named `sky_csrf` never accidentally matches `__Host-sky_csrf` or vice-versa
+/// named `ipe_csrf` never accidentally matches `__Host-ipe_csrf` or vice-versa
 /// (the old `strip_prefix` shape would match any name that is a prefix of the
 /// cookie key).
 pub fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {

@@ -2637,7 +2637,7 @@ mod tests {
         // ROUND-2 SEAL FIX. An opaque boxed-wrapper in FIELD position
         // (`Decoder` / `Cmd` / `Sub` / `Task`) is ITSELF non-derivable as a
         // struct field — its runtime rep (`Box<dyn Fn>` / boxed-thunk enum /
-        // `Pin<Box<dyn Future>>`) impls no Clone/Debug/PartialEq/SkyStringify.
+        // `Pin<Box<dyn Future>>`) impls no Clone/Debug/PartialEq/IpeStringify.
         // Round-1 synthesised a ctor here, so the backend emitted a
         // `#[derive(…)]` struct over the wrapper and skyc-0 then cargo-101 (the
         // seal hole). The struct-derivability gate now DECLINES synthesis, so

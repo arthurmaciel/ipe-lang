@@ -37,12 +37,12 @@ use std::sync::{Mutex, OnceLock};
 /// `#[derive(Copy)]` so it can be passed by value to Task closures without
 /// cloning — matches the Sky source's usage as a plain record field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub struct SkyStreamId(pub i64);
+pub struct IpeStreamId(pub i64);
 
 /// `Sky.Core.Http.Stream.ChunkEvent` — one incremental event on a stream.
 /// Bridged (via `runtimeOpaqueTypes`) so the runtime can CONSTRUCT it to hand to
 /// the user's `toMsg : ChunkEvent -> msg` callback; user code only ever
-/// pattern-matches it. Generic over the Sky error type `E` (always `SkyError`
+/// pattern-matches it. Generic over the Sky error type `E` (always `IpeError`
 /// in practice — pinned at the call site) because `Errored` carries an `Error`.
 /// Variant names match the Sky constructors verbatim so codegen's match arms
 /// (`ChunkEvent::Chunk(s)` / `::Done` / `::Errored(e)`) resolve through the
@@ -50,7 +50,7 @@ pub struct SkyStreamId(pub i64);
 // Serde derives: a Live `Msg` may carry a `ChunkEvent` payload, and Live
 // messages round-trip through the session store (serde boundary). The derive
 // bounds require `E: Serialize/Deserialize`, which holds for both inhabitants
-// (`String` and `SkyError`).
+// (`String` and `IpeError`).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ChunkEvent<E> {
     Chunk(String),
@@ -95,14 +95,14 @@ fn next_stream_id() -> i64 {
 
 /// `Sky.Core.Http.Stream.open : HttpRequest -> Task Error StreamId`
 ///
-/// Returns a `SkyStreamId` handle wrapping the raw i64 registry key, matching
+/// Returns a `IpeStreamId` handle wrapping the raw i64 registry key, matching
 /// the upstream `Sky.Core.Http.Stream.open` declared return type.
 ///
 /// No whole-request timeout — streams may run for minutes (LLM completions);
 /// a 30s connect timeout bounds the header stage only.
 pub fn http_stream_open<E: From<String> + Send + 'static>(
     req: HttpRequest,
-) -> SkyTask<E, SkyStreamId> {
+) -> IpeTask<E, IpeStreamId> {
     Box::pin(async move {
         // SSRF guard (was MISSING here — this surface built its own client and
         // bypassed IPE_HTTP_DENY_PRIVATE entirely). Resolve+validate+pin + the
@@ -116,18 +116,18 @@ pub fn http_stream_open<E: From<String> + Send + 'static>(
             req.maxRedirects,
         ) {
             Ok(b) => b,
-            Err(msg) => return SkyResult::Err(msg.into()),
+            Err(msg) => return IpeResult::Err(msg.into()),
         };
         let client = match builder.build() {
             Ok(c) => c,
-            Err(e) => return SkyResult::Err(format!("http.stream.open: client: {}", e).into()),
+            Err(e) => return IpeResult::Err(format!("http.stream.open: client: {}", e).into()),
         };
         // An unparseable/invalid HTTP method must ERROR, not silently downgrade
         // to GET (which would issue a request the caller never asked for).
         let method = match reqwest::Method::from_bytes(req.method.to_uppercase().as_bytes()) {
             Ok(m) => m,
             Err(_) => {
-                return SkyResult::Err(
+                return IpeResult::Err(
                     format!("http.stream.open: invalid HTTP method: {}", req.method).into(),
                 );
             }
@@ -145,7 +145,7 @@ pub fn http_stream_open<E: From<String> + Send + 'static>(
             // target URL / request headers / bearer / API key. Route through the
             // correlation-id redaction helper: raw detail → server log under a ref
             // id; Sky sees only a fixed generic message.
-            Err(e) => return SkyResult::Err(sky_error_from_foreign(e)),
+            Err(e) => return IpeResult::Err(ipe_error_from_foreign(e)),
         };
         // HTTP error statuses (4xx/5xx) still surface as a stream — the body may
         // carry the error payload the caller wants to read. Mirrors Http.get
@@ -162,7 +162,7 @@ pub fn http_stream_open<E: From<String> + Send + 'static>(
             }
             map.insert(id, resp);
         }
-        SkyResult::Ok(SkyStreamId(id))
+        IpeResult::Ok(IpeStreamId(id))
     })
 }
 
@@ -181,10 +181,10 @@ pub fn http_stream_open<E: From<String> + Send + 'static>(
 /// Backpressure: `body` runs synchronously per chunk; if it blocks on a slow
 /// downstream (`Server.Stream.emit` to a bounded channel) the upstream read
 /// naturally throttles.
-pub fn http_stream_for_each_chunk<E, F>(sid: SkyStreamId, body: F) -> SkyTask<E, ()>
+pub fn http_stream_for_each_chunk<E, F>(sid: IpeStreamId, body: F) -> IpeTask<E, ()>
 where
     E: From<String> + Send + 'static,
-    F: Fn(String) -> SkyTask<E, ()> + Send + 'static,
+    F: Fn(String) -> IpeTask<E, ()> + Send + 'static,
 {
     let id = sid.0;
     Box::pin(async move {
@@ -196,7 +196,7 @@ where
             .remove(&id)
         {
             Some(r) => r,
-            None => return SkyResult::Ok(()),
+            None => return IpeResult::Ok(()),
         };
         let mut stream = resp.bytes_stream();
         loop {
@@ -204,13 +204,13 @@ where
                 Some(Ok(bytes)) => {
                     let chunk = String::from_utf8_lossy(&bytes).into_owned();
                     match body(chunk).await {
-                        SkyResult::Ok(()) => {}
-                        SkyResult::Err(e) => break SkyResult::Err(e),
+                        IpeResult::Ok(()) => {}
+                        IpeResult::Err(e) => break IpeResult::Err(e),
                     }
                 }
                 // [B8] redact the foreign reqwest read error (see open above).
-                Some(Err(e)) => break SkyResult::Err(sky_error_from_foreign(e)),
-                None => break SkyResult::Ok(()),
+                Some(Err(e)) => break IpeResult::Err(ipe_error_from_foreign(e)),
+                None => break IpeResult::Ok(()),
             }
         }
         // `stream` (and the response) drops here → connection released.
@@ -219,7 +219,7 @@ where
 
 /// `Sky.Core.Http.Stream.close : StreamId -> Task Error ()`
 /// Idempotent — closing an unknown / already-closed id is a no-op.
-pub fn http_stream_close<E: From<String> + Send + 'static>(sid: SkyStreamId) -> SkyTask<E, ()> {
+pub fn http_stream_close<E: From<String> + Send + 'static>(sid: IpeStreamId) -> IpeTask<E, ()> {
     let id = sid.0;
     Box::pin(async move {
         client_streams()
@@ -230,7 +230,7 @@ pub fn http_stream_close<E: From<String> + Send + 'static>(sid: SkyStreamId) -> 
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&id);
-        SkyResult::Ok(())
+        IpeResult::Ok(())
     })
 }
 
@@ -248,11 +248,11 @@ fn chunk_subscribed() -> &'static Mutex<HashSet<i64>> {
 
 /// Sky.Core.Http.Stream.chunks → `Sub_subscribeStream`.
 ///
-/// Returns a `SkySub::Source` that, on first subscribe for `id`, spawns a
+/// Returns a `IpeSub::Source` that, on first subscribe for `id`, spawns a
 /// detached task draining the parked response and dispatching a `ChunkEvent`
 /// Msg per chunk: `Chunk s` per UTF-8 byte chunk, `Done` on clean EOF,
 /// `Errored e` on a read fault. Subscribing to an unknown / already-drained id
-/// is a no-op (matches the stdlib contract). `E` is pinned to `SkyError` at the
+/// is a no-op (matches the stdlib contract). `E` is pinned to `IpeError` at the
 /// call site; `Errored` builds it via `From<String>`.
 /// `to_msg` is moved exclusively into the ONE detached `tokio::spawn` task
 /// below (never behind a shared `Arc`, never read from two threads at once) --
@@ -271,14 +271,14 @@ fn chunk_subscribed() -> &'static Mutex<HashSet<i64>> {
 /// runtime slots are genuinely `Arc<dyn Fn + Send + Sync>` shared across a live
 /// session's concurrently-serviced dispatch table -- a structurally different,
 /// stronger requirement this kernel never has.
-pub fn sub_subscribe_stream<E, M, F>(sid: SkyStreamId, to_msg: F) -> SkySub<M>
+pub fn sub_subscribe_stream<E, M, F>(sid: IpeStreamId, to_msg: F) -> IpeSub<M>
 where
     E: From<String> + Send + 'static,
     M: Send + 'static,
     F: Fn(ChunkEvent<E>) -> M + Send + 'static,
 {
     let id = sid.0;
-    SkySub::Source(Box::new(move |emit| {
+    IpeSub::Source(Box::new(move |emit| {
         if chunk_subscribed()
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -308,7 +308,7 @@ where
                         }
                         Some(Err(e)) => {
                             // [B8] redact the foreign reqwest read error (see open above).
-                            emit(to_msg(ChunkEvent::Errored(sky_error_from_foreign(e))));
+                            emit(to_msg(ChunkEvent::Errored(ipe_error_from_foreign(e))));
                             break;
                         }
                         None => {
@@ -345,9 +345,9 @@ mod tests {
             followRedirects: false,
             maxRedirects: 0,
         };
-        let r: SkyResult<String, SkyStreamId> = http_stream_open(req).await;
+        let r: IpeResult<String, IpeStreamId> = http_stream_open(req).await;
         assert!(
-            matches!(r, SkyResult::Err(_)),
+            matches!(r, IpeResult::Err(_)),
             "invalid method must error, not downgrade to GET"
         );
     }

@@ -156,7 +156,7 @@ fn log_emit(level: i32, level_name: &str, msg: &str) {
 /// `Log.println : String -> Task Error ()` — Go's `Log_println` is a bare
 /// `fmt.Println`: NO timestamp, NO level, straight to stdout. Still mirrored into
 /// the telemetry ring at info level so the console surfaces it.
-pub fn log_println<E: Send + 'static>(msg: String) -> SkyTask<E, ()> {
+pub fn log_println<E: Send + 'static>(msg: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         super::telemetry::record_log("info", &msg);
         write_stdout_line(&msg);
@@ -164,7 +164,7 @@ pub fn log_println<E: Send + 'static>(msg: String) -> SkyTask<E, ()> {
     })
 }
 
-pub fn log_info<E: Send + 'static>(msg: String) -> SkyTask<E, ()> {
+pub fn log_info<E: Send + 'static>(msg: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         log_emit(LOG_LEVEL_INFO, "info", &msg);
         ok_res(())
@@ -174,12 +174,12 @@ pub fn log_info<E: Send + 'static>(msg: String) -> SkyTask<E, ()> {
 // `Log.*With : String -> List a -> Task` is polymorphic in the attr element
 // (Sky callers pass a flat `List String` — `["errId", id]` — OR a key/value
 // `List (String, String)` — `[("errId", id), …]`). The attrs slot is generic
-// over its element type `A`, bounded by `SkyStringify` — the TOTAL Go-`%v`
+// over its element type `A`, bounded by `IpeStringify` — the TOTAL Go-`%v`
 // stringifier every Sky-representable type implements (String unquoted, tuples
 // as `{k v}`, generated records/ADTs via their codegen-emitted impl). A plain
 // `Display` bound is insufficient: tuples + generated types don't implement
 // `Display`, so it fails to compile (E0277) at any tuple/record call site.
-// `SkyStringify` is satisfiable at EVERY concrete element type codegen can emit,
+// `IpeStringify` is satisfiable at EVERY concrete element type codegen can emit,
 // so no codegen change is needed — the call site passes its concrete `Vec<A>`
 // and the bound always holds.
 //
@@ -192,22 +192,22 @@ pub fn log_info<E: Send + 'static>(msg: String) -> SkyTask<E, ()> {
 
 /// Flatten `(msg, attrs)` into one line, mirroring Go's `renderLogMsgWithAttrs`:
 /// `msg` followed by a space + the `%v` of each attr element, in order.
-fn render_with_attrs<A: SkyStringify>(msg: &str, attrs: &[A]) -> String {
+fn render_with_attrs<A: IpeStringify>(msg: &str, attrs: &[A]) -> String {
     if attrs.is_empty() {
         return msg.to_string();
     }
     let mut out = String::from(msg);
     for a in attrs {
         out.push(' ');
-        out.push_str(&a.sky_show());
+        out.push_str(&a.ipe_show());
     }
     out
 }
 
-pub fn log_info_with<E: Send + 'static, A: SkyStringify>(
+pub fn log_info_with<E: Send + 'static, A: IpeStringify>(
     msg: String,
     attrs: Vec<A>,
-) -> SkyTask<E, ()> {
+) -> IpeTask<E, ()> {
     // Render BEFORE constructing the future so the captured value is a `Send`
     // `String` (no `A: Send` bound needed); the line write still fires on `.await`.
     let line = render_with_attrs(&msg, &attrs);
@@ -217,10 +217,10 @@ pub fn log_info_with<E: Send + 'static, A: SkyStringify>(
     })
 }
 
-pub fn log_error_with<E: Send + 'static, A: SkyStringify>(
+pub fn log_error_with<E: Send + 'static, A: IpeStringify>(
     msg: String,
     attrs: Vec<A>,
-) -> SkyTask<E, ()> {
+) -> IpeTask<E, ()> {
     let line = render_with_attrs(&msg, &attrs);
     Box::pin(async move {
         log_emit(LOG_LEVEL_ERROR, "error", &line);
@@ -228,38 +228,38 @@ pub fn log_error_with<E: Send + 'static, A: SkyStringify>(
     })
 }
 
-pub fn log_debug<E: Send + 'static>(msg: String) -> SkyTask<E, ()> {
+pub fn log_debug<E: Send + 'static>(msg: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         log_emit(LOG_LEVEL_DEBUG, "debug", &msg);
         ok_res(())
     })
 }
-pub fn log_warn<E: Send + 'static>(msg: String) -> SkyTask<E, ()> {
+pub fn log_warn<E: Send + 'static>(msg: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         log_emit(LOG_LEVEL_WARN, "warn", &msg);
         ok_res(())
     })
 }
-pub fn log_error<E: Send + 'static>(msg: String) -> SkyTask<E, ()> {
+pub fn log_error<E: Send + 'static>(msg: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         log_emit(LOG_LEVEL_ERROR, "error", &msg);
         ok_res(())
     })
 }
-pub fn log_debug_with<E: Send + 'static, A: SkyStringify>(
+pub fn log_debug_with<E: Send + 'static, A: IpeStringify>(
     msg: String,
     attrs: Vec<A>,
-) -> SkyTask<E, ()> {
+) -> IpeTask<E, ()> {
     let line = render_with_attrs(&msg, &attrs);
     Box::pin(async move {
         log_emit(LOG_LEVEL_DEBUG, "debug", &line);
         ok_res(())
     })
 }
-pub fn log_warn_with<E: Send + 'static, A: SkyStringify>(
+pub fn log_warn_with<E: Send + 'static, A: IpeStringify>(
     msg: String,
     attrs: Vec<A>,
-) -> SkyTask<E, ()> {
+) -> IpeTask<E, ()> {
     let line = render_with_attrs(&msg, &attrs);
     Box::pin(async move {
         log_emit(LOG_LEVEL_WARN, "warn", &line);

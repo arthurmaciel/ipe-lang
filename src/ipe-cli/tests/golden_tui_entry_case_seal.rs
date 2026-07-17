@@ -9,7 +9,7 @@
 //!
 //! Defect 1: a string-literal ctor-payload sub-pattern (`Just "live"`)
 //! lowered straight to a bare `Pat::Str`, emitted as
-//! `SkyMaybe::Just("live")` — Rust rejects a `&str` literal pattern against
+//! `IpeMaybe::Just("live")` — Rust rejects a `&str` literal pattern against
 //! an owned `String` ctor field. Fixed by desugaring a direct `PStr` ctor-arg
 //! into a fresh `String` binder plus an arm guard (`binder == "live"`),
 //! mirroring the existingthe C2 nested-cons-in-ctor-payload desugaring.
@@ -18,8 +18,8 @@
 //! (`ipe_backend_rust::emit_expr`) only recognised a FLAT `main = task |>
 //! Task.run` body (`func.body` itself a `Call(TaskRun, [inner])`). A
 //! `case`-branched body where EVERY arm tail-calls `Task.run` left
-//! `sky_main` returning `SkyResult<E, A>` while the `fn main` epilogue's
-//! `block_on(sky_main())` requires `SkyTask<A>`. Fixed by recursing the
+//! `ipe_main` returning `IpeResult<E, A>` while the `fn main` epilogue's
+//! `block_on(ipe_main())` requires `IpeTask<A>`. Fixed by recursing the
 //! elision through `Match` / `If` / `Let` / `Destructure` tail positions —
 //! elision only fires when EVERY leaf in tail position is a `Task.run` /
 //! `Task.perform` call, so a partially-elided (mismatched-type) body can
@@ -70,8 +70,8 @@ fn built_main_rs(root: &Path, out: &Path) -> (Result<(), skyc::CliError>, Option
 }
 
 /// Defect 1 pin: the fixture must be ACCEPTED (skyc exit 0) and the emitted
-/// `SkyMaybe::Just` arm must bind a fresh variable guarded by `== "live"`,
-/// never re-emit the bare `&str` literal pattern `SkyMaybe::Just("live")`
+/// `IpeMaybe::Just` arm must bind a fresh variable guarded by `== "live"`,
+/// never re-emit the bare `&str` literal pattern `IpeMaybe::Just("live")`
 /// that `cargo` rejects against the owned `String` payload.
 #[test]
 fn nested_str_literal_ctor_payload_does_not_emit_bare_str_pattern() {
@@ -87,14 +87,14 @@ fn nested_str_literal_ctor_payload_does_not_emit_bare_str_pattern() {
     };
 
     assert!(
-        !main_rs.contains("SkyMaybe::Just(\"live\")"),
+        !main_rs.contains("IpeMaybe::Just(\"live\")"),
         "a bare `&str` literal pattern against an owned `String` ctor field \
          is a cargo-reject (E0308: expected String, found &str) — the nested \
          `PStr` ctor-arg must desugar to a fresh binder + guard.\n\
          --- match arm lines ---\n{}",
         main_rs
             .lines()
-            .filter(|l| l.contains("SkyMaybe::Just"))
+            .filter(|l| l.contains("IpeMaybe::Just"))
             .collect::<Vec<_>>()
             .join("\n")
     );
@@ -104,14 +104,14 @@ fn nested_str_literal_ctor_payload_does_not_emit_bare_str_pattern() {
          desugared string-literal ctor payload; got:\n{}",
         main_rs
             .lines()
-            .filter(|l| l.contains("SkyMaybe::Just") || l.contains("\"live\""))
+            .filter(|l| l.contains("IpeMaybe::Just") || l.contains("\"live\""))
             .collect::<Vec<_>>()
             .join("\n")
     );
 }
 
-/// Defect 2 pin: `sky_main` must return `SkyTask<…>` (the elided shape the
-/// `block_on(sky_main())` epilogue requires), never `SkyResult<…>` — even
+/// Defect 2 pin: `ipe_main` must return `IpeTask<…>` (the elided shape the
+/// `block_on(ipe_main())` epilogue requires), never `IpeResult<…>` — even
 /// though the body is a `case`, not a flat `task |> Task.run` call.
 #[test]
 fn case_branched_entry_point_elides_task_run_to_skytask() {
@@ -127,23 +127,23 @@ fn case_branched_entry_point_elides_task_run_to_skytask() {
     };
 
     assert!(
-        main_rs.contains("fn sky_main() -> SkyTask<"),
-        "sky_main must return SkyTask<…> even when its body is a `case` \
-         whose every arm tail-calls Task.run — the block_on(sky_main()) \
+        main_rs.contains("fn ipe_main() -> IpeTask<"),
+        "ipe_main must return IpeTask<…> even when its body is a `case` \
+         whose every arm tail-calls Task.run — the block_on(ipe_main()) \
          epilogue requires a Task, not a Result. Got signature region:\n{}",
         main_rs
             .lines()
-            .filter(|l| l.contains("sky_main") || l.contains("SkyTask") || l.contains("SkyResult"))
+            .filter(|l| l.contains("ipe_main") || l.contains("IpeTask") || l.contains("IpeResult"))
             .collect::<Vec<_>>()
             .join("\n")
     );
     assert!(
-        !main_rs.contains("fn sky_main() -> SkyResult<"),
-        "sky_main must not return SkyResult<…> — that is the un-elided shape \
-         that mismatches block_on's SkyTask<…> parameter.\n{}",
+        !main_rs.contains("fn ipe_main() -> IpeResult<"),
+        "ipe_main must not return IpeResult<…> — that is the un-elided shape \
+         that mismatches block_on's IpeTask<…> parameter.\n{}",
         main_rs
             .lines()
-            .filter(|l| l.contains("sky_main"))
+            .filter(|l| l.contains("ipe_main"))
             .collect::<Vec<_>>()
             .join("\n")
     );

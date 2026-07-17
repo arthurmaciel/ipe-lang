@@ -74,15 +74,15 @@ main =
 /// # Errors
 ///
 /// Returns an error on any pipeline or Cargo build failure.
-fn compile_and_build(test_name: &str, sky_source: &str) -> Result<PathBuf, BoxError> {
-    let sky_dir = std::env::temp_dir().join(format!("server_e2e_{test_name}_sky"));
-    let _ = std::fs::remove_dir_all(&sky_dir);
-    std::fs::create_dir_all(&sky_dir).map_err(|e| -> BoxError {
+fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxError> {
+    let ipe_dir = std::env::temp_dir().join(format!("server_e2e_{test_name}_sky"));
+    let _ = std::fs::remove_dir_all(&ipe_dir);
+    std::fs::create_dir_all(&ipe_dir).map_err(|e| -> BoxError {
         format!("{test_name}: cannot create sky source dir: {e}").into()
     })?;
 
-    let entry = sky_dir.join("Main.sky");
-    std::fs::write(&entry, sky_source)
+    let entry = ipe_dir.join("Main.sky");
+    std::fs::write(&entry, ipe_source)
         .map_err(|e| -> BoxError { format!("{test_name}: cannot write Main.sky: {e}").into() })?;
 
     let out_dir = std::env::temp_dir().join(format!("server_e2e_{test_name}_emitted"));
@@ -720,8 +720,8 @@ fn csrf_post_with_cookie_but_mismatched_header_rejected() -> Result<(), BoxError
         .ok_or_else(|| -> BoxError {
             format!("{test_name}: GET response missing a Set-Cookie header").into()
         })?;
-    let token = cookie_token_value(&set_cookie, "sky_csrf").ok_or_else(|| -> BoxError {
-        format!("{test_name}: cannot parse sky_csrf cookie value from {set_cookie:?}").into()
+    let token = cookie_token_value(&set_cookie, "ipe_csrf").ok_or_else(|| -> BoxError {
+        format!("{test_name}: cannot parse ipe_csrf cookie value from {set_cookie:?}").into()
     })?;
 
     // Cookie present, header value present but WRONG (well-formed 64-hex, so
@@ -729,7 +729,7 @@ fn csrf_post_with_cookie_but_mismatched_header_rejected() -> Result<(), BoxError
     // malformed-token branch).
     let wrong_token = "0".repeat(64);
     let post_mismatched = format!(
-        "POST /action HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: sky_csrf={token}\r\nX-Csrf-Token: {wrong_token}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        "POST /action HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: ipe_csrf={token}\r\nX-Csrf-Token: {wrong_token}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
     );
     let resp_mismatched = send_raw_request(test_name, &addr, &post_mismatched)?;
     assert_eq!(
@@ -740,7 +740,7 @@ fn csrf_post_with_cookie_but_mismatched_header_rejected() -> Result<(), BoxError
 
     // Cookie present, header entirely MISSING.
     let post_missing_header = format!(
-        "POST /action HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: sky_csrf={token}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        "POST /action HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: ipe_csrf={token}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
     );
     let resp_missing_header = send_raw_request(test_name, &addr, &post_missing_header)?;
     assert_eq!(
@@ -787,12 +787,12 @@ fn csrf_legit_post_with_matching_token_allowed() -> Result<(), BoxError> {
         .ok_or_else(|| -> BoxError {
             format!("{test_name}: GET response missing a Set-Cookie header").into()
         })?;
-    let token = cookie_token_value(&set_cookie, "sky_csrf").ok_or_else(|| -> BoxError {
-        format!("{test_name}: cannot parse sky_csrf cookie value from {set_cookie:?}").into()
+    let token = cookie_token_value(&set_cookie, "ipe_csrf").ok_or_else(|| -> BoxError {
+        format!("{test_name}: cannot parse ipe_csrf cookie value from {set_cookie:?}").into()
     })?;
 
     let post_req = format!(
-        "POST /action HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: sky_csrf={token}\r\nX-Csrf-Token: {token}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        "POST /action HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: ipe_csrf={token}\r\nX-Csrf-Token: {token}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
     );
     let post_resp = send_raw_request(test_name, &addr, &post_req)?;
     assert_eq!(
@@ -822,7 +822,7 @@ fn csrf_legit_post_with_matching_token_allowed() -> Result<(), BoxError> {
 /// the handler's `Task` resolves.
 ///
 /// Scenario (a): `IPE_TRUSTED_PROXY=1`, `ENV` unset (dev mode), GET carries
-/// `X-Forwarded-Proto: https` -> the minted `sky_csrf` cookie gets `Secure`
+/// `X-Forwarded-Proto: https` -> the minted `ipe_csrf` cookie gets `Secure`
 /// even though `ENV` never claims production. Proves the request-scoped
 /// signal alone (independent of `ENV`) can flip the gate on.
 ///

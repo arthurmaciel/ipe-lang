@@ -18,9 +18,9 @@ use ipe_runtime_rust::*;
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 fn d(s: &str) -> ipe_runtime_rust::decimal::Decimal {
-    match ipe_runtime_rust::decimal::decimal_from_string::<SkyError>(s.to_string()) {
-        SkyResult::Ok(v) => v,
-        SkyResult::Err(e) => panic!("bad decimal literal {s:?}: {e}"),
+    match ipe_runtime_rust::decimal::decimal_from_string::<IpeError>(s.to_string()) {
+        IpeResult::Ok(v) => v,
+        IpeResult::Err(e) => panic!("bad decimal literal {s:?}: {e}"),
     }
 }
 
@@ -32,9 +32,9 @@ fn div_ok(
     a: ipe_runtime_rust::decimal::Decimal,
     b: ipe_runtime_rust::decimal::Decimal,
 ) -> ipe_runtime_rust::decimal::Decimal {
-    match ipe_runtime_rust::decimal::decimal_div::<SkyError>(a, b) {
-        SkyResult::Ok(v) => v,
-        SkyResult::Err(e) => panic!("unexpected div error: {e}"),
+    match ipe_runtime_rust::decimal::decimal_div::<IpeError>(a, b) {
+        IpeResult::Ok(v) => v,
+        IpeResult::Err(e) => panic!("unexpected div error: {e}"),
     }
 }
 
@@ -141,13 +141,13 @@ fn div_precision_capped_to_16_dp_matches_go() {
 
 #[test]
 fn div_by_zero_is_err() {
-    let r = ipe_runtime_rust::decimal::decimal_div::<SkyError>(d("1"), d("0"));
+    let r = ipe_runtime_rust::decimal::decimal_div::<IpeError>(d("1"), d("0"));
     assert!(r.is_err(), "divide by zero must be Err, never panic");
 }
 
 #[test]
 fn mod_by_zero_is_err() {
-    let r = ipe_runtime_rust::decimal::decimal_mod::<SkyError>(d("1"), d("0"));
+    let r = ipe_runtime_rust::decimal::decimal_mod::<IpeError>(d("1"), d("0"));
     assert!(r.is_err(), "mod by zero must be Err, never panic");
 }
 

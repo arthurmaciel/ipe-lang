@@ -79,12 +79,12 @@ fn file_read_file_sync(path: &str, cap: u64) -> Result<String, String> {
     Ok(buf)
 }
 
-pub fn file_read_file<E: Send + From<String> + 'static>(path: String) -> SkyTask<E, String> {
+pub fn file_read_file<E: Send + From<String> + 'static>(path: String) -> IpeTask<E, String> {
     Box::pin(async move {
         let cap = file_read_ceiling();
         match run_blocking(move || file_read_file_sync(&path, cap)).await {
             Ok(s) => ok_res(s),
-            Err(e) => SkyResult::Err(str_err(&e)),
+            Err(e) => IpeResult::Err(str_err(&e)),
         }
     })
 }
@@ -96,22 +96,22 @@ fn file_write_file_sync(path: &str, content: &str) -> Result<(), String> {
 pub fn file_write_file<E: Send + From<String> + 'static>(
     path: String,
     content: String,
-) -> SkyTask<E, ()> {
+) -> IpeTask<E, ()> {
     Box::pin(async move {
         match run_blocking(move || file_write_file_sync(&path, &content)).await {
             Ok(()) => ok_res(()),
-            Err(e) => SkyResult::Err(str_err(&e)),
+            Err(e) => IpeResult::Err(str_err(&e)),
         }
     })
 }
 
-pub fn file_exists<E: Send + 'static>(path: String) -> SkyTask<E, bool> {
+pub fn file_exists<E: Send + 'static>(path: String) -> IpeTask<E, bool> {
     Box::pin(async move {
         // Infallible closure — `run_blocking`'s `Err` arm is unreachable here
         // (kept `Result`-shaped only to satisfy the shared helper's bound), so
         // a hypothetical `JoinError` (task panicked) falls back to `false`
         // rather than propagating — there is no `Err` channel on this
-        // kernel's existing `SkyTask<E, bool>` signature to propagate into.
+        // kernel's existing `IpeTask<E, bool>` signature to propagate into.
         let exists = run_blocking(move || Ok(std::path::Path::new(&path).exists()))
             .await
             .unwrap_or(false);
@@ -121,7 +121,7 @@ pub fn file_exists<E: Send + 'static>(path: String) -> SkyTask<E, bool> {
 
 /// Alias of `file_remove` (the `remove` contract). Kept as a public name for
 /// ABI stability; delegates so the two never drift.
-pub fn file_delete<E: Send + From<String> + 'static>(path: String) -> SkyTask<E, ()> {
+pub fn file_delete<E: Send + From<String> + 'static>(path: String) -> IpeTask<E, ()> {
     file_remove(path)
 }
 
@@ -132,11 +132,11 @@ fn file_mkdir_all_sync(path: &str) -> Result<(), String> {
 /// `Sky.Core.File.mkdirAll : String -> Task Error ()` — create the directory
 /// and every missing parent (mkdir -p). Already-exists is `Ok` (matching
 /// `std::fs::create_dir_all`); a real I/O failure is `Err`.
-pub fn file_mkdir_all<E: Send + From<String> + 'static>(path: String) -> SkyTask<E, ()> {
+pub fn file_mkdir_all<E: Send + From<String> + 'static>(path: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         match run_blocking(move || file_mkdir_all_sync(&path)).await {
             Ok(()) => ok_res(()),
-            Err(e) => SkyResult::Err(str_err(&e)),
+            Err(e) => IpeResult::Err(str_err(&e)),
         }
     })
 }
@@ -178,7 +178,7 @@ fn file_read_file_limit_sync(path: &str, cap: u64) -> Result<String, String> {
 pub fn file_read_file_limit<E: Send + From<String> + 'static>(
     path: String,
     limit: i64,
-) -> SkyTask<E, String> {
+) -> IpeTask<E, String> {
     let cap: u64 = if limit > 0 {
         limit as u64
     } else {
@@ -187,7 +187,7 @@ pub fn file_read_file_limit<E: Send + From<String> + 'static>(
     Box::pin(async move {
         match run_blocking(move || file_read_file_limit_sync(&path, cap)).await {
             Ok(s) => ok_res(s),
-            Err(e) => SkyResult::Err(str_err(&e)),
+            Err(e) => IpeResult::Err(str_err(&e)),
         }
     })
 }
@@ -223,11 +223,11 @@ fn file_read_file_bytes_sync(path: &str) -> Result<Vec<i64>, String> {
 /// guaranteed UTF-8, prefer `readFile` / `readFileLimit`.
 pub fn file_read_file_bytes<E: Send + From<String> + 'static>(
     path: String,
-) -> SkyTask<E, Vec<i64>> {
+) -> IpeTask<E, Vec<i64>> {
     Box::pin(async move {
         match run_blocking(move || file_read_file_bytes_sync(&path)).await {
             Ok(v) => ok_res(v),
-            Err(e) => SkyResult::Err(str_err(&e)),
+            Err(e) => IpeResult::Err(str_err(&e)),
         }
     })
 }
@@ -251,11 +251,11 @@ fn file_append_sync(path: &str, content: &str) -> Result<(), String> {
 pub fn file_append<E: Send + From<String> + 'static>(
     path: String,
     content: String,
-) -> SkyTask<E, ()> {
+) -> IpeTask<E, ()> {
     Box::pin(async move {
         match run_blocking(move || file_append_sync(&path, &content)).await {
             Ok(()) => ok_res(()),
-            Err(e) => SkyResult::Err(str_err(&e)),
+            Err(e) => IpeResult::Err(str_err(&e)),
         }
     })
 }
@@ -269,11 +269,11 @@ fn file_remove_sync(path: &str) -> Result<(), String> {
 /// `Sky.Core.File.remove : String -> Task Error ()`
 /// Remove the file at `path`. Returns `Err` on any I/O failure (including
 /// "not found"). Mirrors Go's `os.Remove`.
-pub fn file_remove<E: Send + From<String> + 'static>(path: String) -> SkyTask<E, ()> {
+pub fn file_remove<E: Send + From<String> + 'static>(path: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         match run_blocking(move || file_remove_sync(&path)).await {
             Ok(()) => ok_res(()),
-            Err(e) => SkyResult::Err(str_err(&e)),
+            Err(e) => IpeResult::Err(str_err(&e)),
         }
     })
 }
@@ -297,11 +297,11 @@ fn file_read_dir_sync(path: &str) -> Result<Vec<String>, String> {
 /// `Sky.Core.File.readDir : String -> Task Error (List String)`
 /// Return the names (not full paths) of all entries in the directory at
 /// `path`, in filesystem order. Mirrors Go's `os.ReadDir` → `e.Name()`.
-pub fn file_read_dir<E: Send + From<String> + 'static>(path: String) -> SkyTask<E, Vec<String>> {
+pub fn file_read_dir<E: Send + From<String> + 'static>(path: String) -> IpeTask<E, Vec<String>> {
     Box::pin(async move {
         match run_blocking(move || file_read_dir_sync(&path)).await {
             Ok(names) => ok_res(names),
-            Err(e) => SkyResult::Err(str_err(&e)),
+            Err(e) => IpeResult::Err(str_err(&e)),
         }
     })
 }
@@ -310,7 +310,7 @@ pub fn file_read_dir<E: Send + From<String> + 'static>(path: String) -> SkyTask<
 /// Returns `Ok(true)` when `path` exists and is a directory, `Ok(false)` when
 /// it exists and is not a directory, and `Ok(false)` (not `Err`) when the path
 /// does not exist — matching Go's shape (`os.Stat` error → `false`).
-pub fn file_is_dir<E: Send + 'static>(path: String) -> SkyTask<E, bool> {
+pub fn file_is_dir<E: Send + 'static>(path: String) -> IpeTask<E, bool> {
     Box::pin(async move {
         // Same infallible-closure shape as `file_exists` above.
         let is_dir = run_blocking(move || {
@@ -334,11 +334,11 @@ pub fn file_is_dir<E: Send + 'static>(path: String) -> SkyTask<E, bool> {
 /// Implementation: retry loop with a monotonic-time + process-ID suffix until
 /// exclusive creation succeeds (`O_CREAT|O_EXCL` semantics via
 /// `OpenOptions::create_new`). No `tempfile` crate needed (pure `std`).
-pub fn file_temp_file<E: Send + From<String> + 'static>(prefix: String) -> SkyTask<E, String> {
+pub fn file_temp_file<E: Send + From<String> + 'static>(prefix: String) -> IpeTask<E, String> {
     Box::pin(async move {
         match run_blocking(move || make_temp_path(&prefix, false)).await {
             Ok(p) => ok_res(p),
-            Err(e) => SkyResult::Err(str_err(&e)),
+            Err(e) => IpeResult::Err(str_err(&e)),
         }
     })
 }
@@ -347,11 +347,11 @@ pub fn file_temp_file<E: Send + From<String> + 'static>(prefix: String) -> SkyTa
 /// Create a uniquely-named directory in the system temp directory, using
 /// `prefix` as the directory name prefix. Returns the absolute path.
 /// The caller is responsible for removing the directory when done.
-pub fn file_temp_dir<E: Send + From<String> + 'static>(prefix: String) -> SkyTask<E, String> {
+pub fn file_temp_dir<E: Send + From<String> + 'static>(prefix: String) -> IpeTask<E, String> {
     Box::pin(async move {
         match run_blocking(move || make_temp_path(&prefix, true)).await {
             Ok(p) => ok_res(p),
-            Err(e) => SkyResult::Err(str_err(&e)),
+            Err(e) => IpeResult::Err(str_err(&e)),
         }
     })
 }
@@ -428,11 +428,11 @@ fn file_copy_sync(src: &str, dst: &str) -> Result<(), String> {
 /// `Sky.Core.File.copy : String -> String -> Task Error ()`
 /// Copy the file at `src` to `dst`, creating or overwriting `dst`.
 /// Mirrors Go's `io.Copy(out, in)` pattern.
-pub fn file_copy<E: Send + From<String> + 'static>(src: String, dst: String) -> SkyTask<E, ()> {
+pub fn file_copy<E: Send + From<String> + 'static>(src: String, dst: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         match run_blocking(move || file_copy_sync(&src, &dst)).await {
             Ok(()) => ok_res(()),
-            Err(e) => SkyResult::Err(str_err(&e)),
+            Err(e) => IpeResult::Err(str_err(&e)),
         }
     })
 }
@@ -444,11 +444,11 @@ fn file_rename_sync(src: &str, dst: &str) -> Result<(), String> {
 /// `Sky.Core.File.rename : String -> String -> Task Error ()`
 /// Rename (move) the file or directory at `src` to `dst`.
 /// Mirrors Go's `os.Rename`.
-pub fn file_rename<E: Send + From<String> + 'static>(src: String, dst: String) -> SkyTask<E, ()> {
+pub fn file_rename<E: Send + From<String> + 'static>(src: String, dst: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         match run_blocking(move || file_rename_sync(&src, &dst)).await {
             Ok(()) => ok_res(()),
-            Err(e) => SkyResult::Err(str_err(&e)),
+            Err(e) => IpeResult::Err(str_err(&e)),
         }
     })
 }
@@ -469,31 +469,31 @@ mod read_ceiling_tests {
     // ceiling instead of allocating it unbounded.
     #[test]
     fn read_file_rejects_over_ceiling() {
-        let p = std::env::temp_dir().join(format!("sky_rc_over_{}.txt", std::process::id()));
+        let p = std::env::temp_dir().join(format!("ipe_rc_over_{}.txt", std::process::id()));
         std::fs::write(&p, vec![b'x'; 8192]).unwrap();
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::set_var("IPE_FILE_READ_MAX", "1024") };
-        let res: SkyResult<String, String> =
+        let res: IpeResult<String, String> =
             block(file_read_file(p.to_string_lossy().into_owned()));
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
         unsafe { std::env::remove_var("IPE_FILE_READ_MAX") };
         let _ = std::fs::remove_file(&p);
         assert!(
-            matches!(res, SkyResult::Err(_)),
+            matches!(res, IpeResult::Err(_)),
             "8 KiB read under a 1 KiB ceiling must Err"
         );
     }
 
     #[test]
     fn read_file_under_ceiling_ok() {
-        let p = std::env::temp_dir().join(format!("sky_rc_ok_{}.txt", std::process::id()));
+        let p = std::env::temp_dir().join(format!("ipe_rc_ok_{}.txt", std::process::id()));
         std::fs::write(&p, b"hello").unwrap();
-        let res: SkyResult<String, String> =
+        let res: IpeResult<String, String> =
             block(file_read_file(p.to_string_lossy().into_owned()));
         let _ = std::fs::remove_file(&p);
         match res {
-            SkyResult::Ok(s) => assert_eq!(s, "hello"),
-            SkyResult::Err(e) => panic!("unexpected Err: {e}"),
+            IpeResult::Ok(s) => assert_eq!(s, "hello"),
+            IpeResult::Err(e) => panic!("unexpected Err: {e}"),
         }
     }
 }
@@ -512,14 +512,14 @@ mod read_file_limit_tests {
 
     #[test]
     fn under_limit_reads_full_content() {
-        let p = std::env::temp_dir().join(format!("sky_rfl_under_{}.txt", std::process::id()));
+        let p = std::env::temp_dir().join(format!("ipe_rfl_under_{}.txt", std::process::id()));
         std::fs::write(&p, b"hello world").unwrap();
-        let res: SkyResult<String, String> =
+        let res: IpeResult<String, String> =
             block(file_read_file_limit(p.to_string_lossy().into_owned(), 1024));
         let _ = std::fs::remove_file(&p);
         match res {
-            SkyResult::Ok(s) => assert_eq!(s, "hello world"),
-            SkyResult::Err(e) => panic!("unexpected Err: {e}"),
+            IpeResult::Ok(s) => assert_eq!(s, "hello world"),
+            IpeResult::Err(e) => panic!("unexpected Err: {e}"),
         }
     }
 
@@ -528,15 +528,15 @@ mod read_file_limit_tests {
     /// `>= cap`).
     #[test]
     fn exactly_at_limit_is_ok() {
-        let p = std::env::temp_dir().join(format!("sky_rfl_exact_{}.txt", std::process::id()));
+        let p = std::env::temp_dir().join(format!("ipe_rfl_exact_{}.txt", std::process::id()));
         let content = vec![b'a'; 16];
         std::fs::write(&p, &content).unwrap();
-        let res: SkyResult<String, String> =
+        let res: IpeResult<String, String> =
             block(file_read_file_limit(p.to_string_lossy().into_owned(), 16));
         let _ = std::fs::remove_file(&p);
         match res {
-            SkyResult::Ok(s) => assert_eq!(s.len(), 16),
-            SkyResult::Err(e) => panic!("exactly-at-limit must be Ok, got Err: {e}"),
+            IpeResult::Ok(s) => assert_eq!(s.len(), 16),
+            IpeResult::Err(e) => panic!("exactly-at-limit must be Ok, got Err: {e}"),
         }
     }
 
@@ -547,13 +547,13 @@ mod read_file_limit_tests {
     /// would otherwise hit.
     #[test]
     fn over_limit_by_one_byte_errs() {
-        let p = std::env::temp_dir().join(format!("sky_rfl_over_{}.txt", std::process::id()));
+        let p = std::env::temp_dir().join(format!("ipe_rfl_over_{}.txt", std::process::id()));
         std::fs::write(&p, vec![b'a'; 17]).unwrap();
-        let res: SkyResult<String, String> =
+        let res: IpeResult<String, String> =
             block(file_read_file_limit(p.to_string_lossy().into_owned(), 16));
         let _ = std::fs::remove_file(&p);
         assert!(
-            matches!(res, SkyResult::Err(_)),
+            matches!(res, IpeResult::Err(_)),
             "17 bytes under a 16-byte limit must Err, not silently truncate"
         );
     }
@@ -561,14 +561,14 @@ mod read_file_limit_tests {
     /// Non-positive limit falls back to the documented 10 MiB default.
     #[test]
     fn non_positive_limit_uses_default_cap() {
-        let p = std::env::temp_dir().join(format!("sky_rfl_default_{}.txt", std::process::id()));
+        let p = std::env::temp_dir().join(format!("ipe_rfl_default_{}.txt", std::process::id()));
         std::fs::write(&p, b"small").unwrap();
-        let res: SkyResult<String, String> =
+        let res: IpeResult<String, String> =
             block(file_read_file_limit(p.to_string_lossy().into_owned(), 0));
         let _ = std::fs::remove_file(&p);
         match res {
-            SkyResult::Ok(s) => assert_eq!(s, "small"),
-            SkyResult::Err(e) => panic!("unexpected Err: {e}"),
+            IpeResult::Ok(s) => assert_eq!(s, "small"),
+            IpeResult::Err(e) => panic!("unexpected Err: {e}"),
         }
     }
 }
@@ -593,14 +593,14 @@ mod read_file_bytes_tests {
 
     #[test]
     fn under_cap_reads_full_content() {
-        let p = std::env::temp_dir().join(format!("sky_rfb_under_{}.bin", std::process::id()));
+        let p = std::env::temp_dir().join(format!("ipe_rfb_under_{}.bin", std::process::id()));
         std::fs::write(&p, [1u8, 2, 3, 255, 0]).unwrap();
-        let res: SkyResult<String, Vec<i64>> =
+        let res: IpeResult<String, Vec<i64>> =
             block(file_read_file_bytes(p.to_string_lossy().into_owned()));
         let _ = std::fs::remove_file(&p);
         match res {
-            SkyResult::Ok(v) => assert_eq!(v, vec![1, 2, 3, 255, 0]),
-            SkyResult::Err(e) => panic!("unexpected Err: {e}"),
+            IpeResult::Ok(v) => assert_eq!(v, vec![1, 2, 3, 255, 0]),
+            IpeResult::Err(e) => panic!("unexpected Err: {e}"),
         }
     }
 
@@ -609,14 +609,14 @@ mod read_file_bytes_tests {
     /// not `>= cap`).
     #[test]
     fn exactly_at_cap_is_ok() {
-        let p = std::env::temp_dir().join(format!("sky_rfb_exact_{}.bin", std::process::id()));
+        let p = std::env::temp_dir().join(format!("ipe_rfb_exact_{}.bin", std::process::id()));
         std::fs::write(&p, vec![7u8; DEFAULT_CAP]).unwrap();
-        let res: SkyResult<String, Vec<i64>> =
+        let res: IpeResult<String, Vec<i64>> =
             block(file_read_file_bytes(p.to_string_lossy().into_owned()));
         let _ = std::fs::remove_file(&p);
         match res {
-            SkyResult::Ok(v) => assert_eq!(v.len(), DEFAULT_CAP),
-            SkyResult::Err(e) => panic!("exactly-at-cap must be Ok, got Err: {e}"),
+            IpeResult::Ok(v) => assert_eq!(v.len(), DEFAULT_CAP),
+            IpeResult::Err(e) => panic!("exactly-at-cap must be Ok, got Err: {e}"),
         }
     }
 
@@ -628,13 +628,13 @@ mod read_file_bytes_tests {
     /// (silently dropping the last byte) instead of erroring.
     #[test]
     fn over_cap_by_one_byte_errs() {
-        let p = std::env::temp_dir().join(format!("sky_rfb_over_{}.bin", std::process::id()));
+        let p = std::env::temp_dir().join(format!("ipe_rfb_over_{}.bin", std::process::id()));
         std::fs::write(&p, vec![7u8; DEFAULT_CAP + 1]).unwrap();
-        let res: SkyResult<String, Vec<i64>> =
+        let res: IpeResult<String, Vec<i64>> =
             block(file_read_file_bytes(p.to_string_lossy().into_owned()));
         let _ = std::fs::remove_file(&p);
         assert!(
-            matches!(res, SkyResult::Err(_)),
+            matches!(res, IpeResult::Err(_)),
             "a file one byte over the 10 MiB cap must Err, not silently truncate: {res:?}"
         );
     }
@@ -664,7 +664,7 @@ mod spawn_blocking_tests {
             .build()
             .unwrap();
         let p = std::env::temp_dir().join(format!(
-            "sky_spawn_blocking_probe_{}.txt",
+            "ipe_spawn_blocking_probe_{}.txt",
             std::process::id()
         ));
         // Large enough that the read takes measurable (not instant) wall time.
@@ -682,8 +682,8 @@ mod spawn_blocking_tests {
                     tokio::task::yield_now().await;
                 }
             });
-            let read_fut: SkyTask<String, String> = file_read_file(path);
-            let _res: SkyResult<String, String> = read_fut.await;
+            let read_fut: IpeTask<String, String> = file_read_file(path);
+            let _res: IpeResult<String, String> = read_fut.await;
             ticker.abort();
             counter.load(Ordering::Relaxed)
         });
@@ -710,7 +710,7 @@ mod spawn_blocking_tests {
             .build()
             .unwrap();
         let p = std::env::temp_dir().join(format!(
-            "sky_spawn_blocking_write_probe_{}.txt",
+            "ipe_spawn_blocking_write_probe_{}.txt",
             std::process::id()
         ));
         let path = p.to_string_lossy().into_owned();
@@ -725,8 +725,8 @@ mod spawn_blocking_tests {
                     tokio::task::yield_now().await;
                 }
             });
-            let write_fut: SkyTask<String, ()> = file_write_file(path, content);
-            let _res: SkyResult<String, ()> = write_fut.await;
+            let write_fut: IpeTask<String, ()> = file_write_file(path, content);
+            let _res: IpeResult<String, ()> = write_fut.await;
             ticker.abort();
             counter.load(Ordering::Relaxed)
         });

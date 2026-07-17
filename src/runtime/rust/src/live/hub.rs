@@ -26,7 +26,7 @@
 //! Ground truth (read-only): `runtime-go/rt/hub/store.go` (schema + queries) and
 //! `runtime-go/rt/hub/bridge.go` (row → console-record field derivation).
 
-use super::super::core::{SkyResult, SkyTask, ok_res, str_err};
+use super::super::core::{IpeResult, IpeTask, ok_res, str_err};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -309,7 +309,7 @@ async fn read_logs_value(
 /// the caller's current tenant scope directly (no explicit `service` to
 /// validate) — a tenant-scoped session cannot bypass the gate by calling the
 /// no-service variant instead of `Hub_readFilteredLogs`.
-pub fn hub_read_logs<E, A, F>(db_path: String, filter: F) -> SkyTask<E, A>
+pub fn hub_read_logs<E, A, F>(db_path: String, filter: F) -> IpeTask<E, A>
 where
     E: Send + From<String> + 'static,
     A: DeserializeOwned + Send + 'static,
@@ -327,7 +327,7 @@ where
 /// Enforces the tenant-prefix gate on the explicit `service` argument
 /// BEFORE building any SQL — a cross-tenant `service` is rejected with `Err`,
 /// never silently dropped.
-pub fn hub_read_filtered_logs<E, A, F>(db_path: String, service: String, filter: F) -> SkyTask<E, A>
+pub fn hub_read_filtered_logs<E, A, F>(db_path: String, service: String, filter: F) -> IpeTask<E, A>
 where
     E: Send + From<String> + 'static,
     A: DeserializeOwned + Send + 'static,
@@ -338,7 +338,7 @@ where
         let effective_svc = match reject_cross_tenant_svc(&service, &tenant) {
             Ok(s) => s,
             Err(()) => {
-                return SkyResult::Err(str_err(
+                return IpeResult::Err(str_err(
                     "hub.readFilteredLogs: service outside tenant scope",
                 ));
             }
@@ -354,7 +354,7 @@ where
 /// object — but since the kernel OWNS the Value shape it always matches, so the
 /// `Err` arm is unreachable in practice; it still returns `Ok` of the
 /// empty-array decode rather than surfacing an error (total, no panic).
-fn decode_rows<E, A>(arr: Value) -> SkyResult<E, A>
+fn decode_rows<E, A>(arr: Value) -> IpeResult<E, A>
 where
     E: From<String>,
     A: DeserializeOwned,
@@ -368,7 +368,7 @@ where
             // (the value system models it; never a panic).
             match serde_json::from_value::<A>(Value::Array(vec![])) {
                 Ok(a) => ok_res(a),
-                Err(_) => SkyResult::Err(str_err(&format!("hub.decode: {e}"))),
+                Err(_) => IpeResult::Err(str_err(&format!("hub.decode: {e}"))),
             }
         }
     }
@@ -536,7 +536,7 @@ async fn read_errors_value(db_path: &str, service: &str, tenant_prefix: &str) ->
 
 /// `Hub_readMetrics : String -> Task Error (List MetricRow)`. Reads the
 /// caller's current tenant scope directly — see [`hub_read_logs`]'s doc.
-pub fn hub_read_metrics<E, A>(db_path: String) -> SkyTask<E, A>
+pub fn hub_read_metrics<E, A>(db_path: String) -> IpeTask<E, A>
 where
     E: Send + From<String> + 'static,
     A: DeserializeOwned + Send + 'static,
@@ -550,7 +550,7 @@ where
 /// `Hub_readFilteredMetrics : String -> String -> Task Error (List MetricRow)`.
 /// Enforces the tenant-prefix gate on `service` before building any SQL — see
 /// [`hub_read_filtered_logs`]'s doc.
-pub fn hub_read_filtered_metrics<E, A>(db_path: String, service: String) -> SkyTask<E, A>
+pub fn hub_read_filtered_metrics<E, A>(db_path: String, service: String) -> IpeTask<E, A>
 where
     E: Send + From<String> + 'static,
     A: DeserializeOwned + Send + 'static,
@@ -560,7 +560,7 @@ where
         let effective_svc = match reject_cross_tenant_svc(&service, &tenant) {
             Ok(s) => s,
             Err(()) => {
-                return SkyResult::Err(str_err(
+                return IpeResult::Err(str_err(
                     "hub.readFilteredMetrics: service outside tenant scope",
                 ));
             }
@@ -571,7 +571,7 @@ where
 
 /// `Hub_readTraces : String -> Task Error (List TraceRow)`. Reads the
 /// caller's current tenant scope directly — see [`hub_read_logs`]'s doc.
-pub fn hub_read_traces<E, A>(db_path: String) -> SkyTask<E, A>
+pub fn hub_read_traces<E, A>(db_path: String) -> IpeTask<E, A>
 where
     E: Send + From<String> + 'static,
     A: DeserializeOwned + Send + 'static,
@@ -585,7 +585,7 @@ where
 /// `Hub_readFilteredTraces : String -> String -> Task Error (List TraceRow)`.
 /// Enforces the tenant-prefix gate on `service` before building any SQL — see
 /// [`hub_read_filtered_logs`]'s doc.
-pub fn hub_read_filtered_traces<E, A>(db_path: String, service: String) -> SkyTask<E, A>
+pub fn hub_read_filtered_traces<E, A>(db_path: String, service: String) -> IpeTask<E, A>
 where
     E: Send + From<String> + 'static,
     A: DeserializeOwned + Send + 'static,
@@ -595,7 +595,7 @@ where
         let effective_svc = match reject_cross_tenant_svc(&service, &tenant) {
             Ok(s) => s,
             Err(()) => {
-                return SkyResult::Err(str_err(
+                return IpeResult::Err(str_err(
                     "hub.readFilteredTraces: service outside tenant scope",
                 ));
             }
@@ -606,7 +606,7 @@ where
 
 /// `Hub_readErrors : String -> Task Error (List ErrorRow)`. Reads the
 /// caller's current tenant scope directly — see [`hub_read_logs`]'s doc.
-pub fn hub_read_errors<E, A>(db_path: String) -> SkyTask<E, A>
+pub fn hub_read_errors<E, A>(db_path: String) -> IpeTask<E, A>
 where
     E: Send + From<String> + 'static,
     A: DeserializeOwned + Send + 'static,
@@ -620,7 +620,7 @@ where
 /// `Hub_readFilteredErrors : String -> String -> Task Error (List ErrorRow)`.
 /// Enforces the tenant-prefix gate on `service` before building any SQL — see
 /// [`hub_read_filtered_logs`]'s doc.
-pub fn hub_read_filtered_errors<E, A>(db_path: String, service: String) -> SkyTask<E, A>
+pub fn hub_read_filtered_errors<E, A>(db_path: String, service: String) -> IpeTask<E, A>
 where
     E: Send + From<String> + 'static,
     A: DeserializeOwned + Send + 'static,
@@ -630,7 +630,7 @@ where
         let effective_svc = match reject_cross_tenant_svc(&service, &tenant) {
             Ok(s) => s,
             Err(()) => {
-                return SkyResult::Err(str_err(
+                return IpeResult::Err(str_err(
                     "hub.readFilteredErrors: service outside tenant scope",
                 ));
             }
@@ -677,7 +677,7 @@ async fn count_table(pool: &SqlitePool, table: TelemetryTable) -> i64 {
 
 /// `Hub_readOverview : String -> Task Error Overview`. Go `Hub_readOverview`:
 /// a default Overview with the live row counts spliced in.
-pub fn hub_read_overview<E, A>(db_path: String) -> SkyTask<E, A>
+pub fn hub_read_overview<E, A>(db_path: String) -> IpeTask<E, A>
 where
     E: Send + From<String> + 'static,
     A: DeserializeOwned + Send + 'static,
@@ -709,7 +709,7 @@ where
 /// `Hub_currentIdentity : String -> Task Error Identity`. The spill-only console
 /// has no session identity (that's A-territory / live-session plumbing), so
 /// return the empty identity — a graceful default, never an error.
-pub fn hub_current_identity<E, A>(_db_path: String) -> SkyTask<E, A>
+pub fn hub_current_identity<E, A>(_db_path: String) -> IpeTask<E, A>
 where
     E: Send + From<String> + 'static,
     A: DeserializeOwned + Send + 'static,
@@ -882,7 +882,7 @@ async fn aggregate_service_stat(pool: &SqlitePool, svc: &str) -> Value {
 }
 
 /// `Hub_readServiceStats : String -> Task Error (List ServiceStat)`.
-pub fn hub_read_service_stats<E, A>(db_path: String) -> SkyTask<E, A>
+pub fn hub_read_service_stats<E, A>(db_path: String) -> IpeTask<E, A>
 where
     E: Send + From<String> + 'static,
     A: DeserializeOwned + Send + 'static,
@@ -922,7 +922,7 @@ where
 
 /// Deserialize a single built object `Value` into the project record `A`. A
 /// decode miss surfaces a typed `Err` (the value system models it; no panic).
-fn decode_one<E, A>(obj: Value) -> SkyResult<E, A>
+fn decode_one<E, A>(obj: Value) -> IpeResult<E, A>
 where
     E: From<String>,
     A: DeserializeOwned,
@@ -931,7 +931,7 @@ where
         Ok(a) => ok_res(a),
         Err(e) => {
             eprintln!("[sky.hub] decode_one: {e}");
-            SkyResult::Err(str_err(&format!("hub.decode: {e}")))
+            IpeResult::Err(str_err(&format!("hub.decode: {e}")))
         }
     }
 }
@@ -989,7 +989,7 @@ async fn open_spill(db_path: &str) -> Option<SqlitePool> {
 /// `hub/store.go:676` (`Services`).
 pub fn hub_list_services<E: Send + From<String> + 'static>(
     db_path: String,
-) -> SkyTask<E, Vec<String>> {
+) -> IpeTask<E, Vec<String>> {
     Box::pin(async move {
         let Some(pool) = open_spill(&db_path).await else {
             return ok_res(Vec::new());
@@ -1072,28 +1072,28 @@ mod tests {
             .await
             .unwrap();
         }
-        let res: SkyResult<String, Vec<String>> = hub_list_services(path.clone()).await;
+        let res: IpeResult<String, Vec<String>> = hub_list_services(path.clone()).await;
         match res {
-            SkyResult::Ok(v) => assert_eq!(v, vec!["a".to_string(), "b".to_string()]),
-            SkyResult::Err(_) => panic!("expected Ok"),
+            IpeResult::Ok(v) => assert_eq!(v, vec!["a".to_string(), "b".to_string()]),
+            IpeResult::Err(_) => panic!("expected Ok"),
         }
         let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
     async fn missing_db_is_empty_not_error() {
-        let res: SkyResult<String, Vec<String>> =
+        let res: IpeResult<String, Vec<String>> =
             hub_list_services("/nonexistent/path/to.db".to_string()).await;
         match res {
-            SkyResult::Ok(v) => assert!(v.is_empty()),
-            SkyResult::Err(_) => panic!("missing DB must degrade to empty, not error"),
+            IpeResult::Ok(v) => assert!(v.is_empty()),
+            IpeResult::Err(_) => panic!("missing DB must degrade to empty, not error"),
         }
     }
 
     #[tokio::test]
     async fn empty_path_is_empty() {
-        let res: SkyResult<String, Vec<String>> = hub_list_services(String::new()).await;
-        assert!(matches!(res, SkyResult::Ok(v) if v.is_empty()));
+        let res: IpeResult<String, Vec<String>> = hub_list_services(String::new()).await;
+        assert!(matches!(res, IpeResult::Ok(v) if v.is_empty()));
     }
 
     #[derive(serde::Serialize)]
@@ -1151,29 +1151,29 @@ mod tests {
             showError: true,
             ..TestFilter::none()
         };
-        let res: SkyResult<String, Vec<Value>> = hub_read_logs(path.clone(), f).await;
+        let res: IpeResult<String, Vec<Value>> = hub_read_logs(path.clone(), f).await;
         match res {
-            SkyResult::Ok(rows) => {
+            IpeResult::Ok(rows) => {
                 assert_eq!(rows.len(), 1);
                 assert_eq!(rows[0]["message"], "boom");
                 assert_eq!(rows[0]["reqId"], "r2");
                 assert_eq!(rows[0]["route"], "/b");
                 assert_eq!(rows[0]["subapp"], "svc");
             }
-            SkyResult::Err(_) => panic!("expected Ok"),
+            IpeResult::Err(_) => panic!("expected Ok"),
         }
         // Free-text query "hello" → only the info row (no level filter).
         let f2 = TestFilter {
             query: "hello".to_string(),
             ..TestFilter::none()
         };
-        let res2: SkyResult<String, Vec<Value>> = hub_read_logs(path.clone(), f2).await;
+        let res2: IpeResult<String, Vec<Value>> = hub_read_logs(path.clone(), f2).await;
         match res2 {
-            SkyResult::Ok(rows) => {
+            IpeResult::Ok(rows) => {
                 assert_eq!(rows.len(), 1);
                 assert_eq!(rows[0]["sessionId"], "s1");
             }
-            SkyResult::Err(_) => panic!("expected Ok"),
+            IpeResult::Err(_) => panic!("expected Ok"),
         }
         let _ = std::fs::remove_file(&path);
     }
@@ -1196,14 +1196,14 @@ mod tests {
             .await
             .unwrap();
         }
-        let res: SkyResult<String, Vec<Value>> =
+        let res: IpeResult<String, Vec<Value>> =
             hub_read_filtered_logs(path.clone(), "alpha".to_string(), TestFilter::none()).await;
         match res {
-            SkyResult::Ok(rows) => {
+            IpeResult::Ok(rows) => {
                 assert_eq!(rows.len(), 1);
                 assert_eq!(rows[0]["subapp"], "alpha");
             }
-            SkyResult::Err(_) => panic!("expected Ok"),
+            IpeResult::Err(_) => panic!("expected Ok"),
         }
         let _ = std::fs::remove_file(&path);
     }
@@ -1234,16 +1234,16 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let res: SkyResult<String, Vec<Value>> = hub_read_metrics(path.clone()).await;
+        let res: IpeResult<String, Vec<Value>> = hub_read_metrics(path.clone()).await;
         match res {
-            SkyResult::Ok(rows) => {
+            IpeResult::Ok(rows) => {
                 assert_eq!(rows.len(), 1);
                 assert_eq!(rows[0]["name"], "reqs");
                 assert_eq!(rows[0]["typ"], "counter");
                 assert_eq!(rows[0]["value"], 5.0);
                 assert_eq!(rows[0]["labels"], "app=web, zone=eu"); // sorted keys
             }
-            SkyResult::Err(_) => panic!("expected Ok"),
+            IpeResult::Err(_) => panic!("expected Ok"),
         }
         let _ = std::fs::remove_file(&path);
     }
@@ -1266,16 +1266,16 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let res: SkyResult<String, Vec<Value>> = hub_read_traces(path.clone()).await;
+        let res: IpeResult<String, Vec<Value>> = hub_read_traces(path.clone()).await;
         match res {
-            SkyResult::Ok(rows) => {
+            IpeResult::Ok(rows) => {
                 assert_eq!(rows.len(), 1);
                 assert_eq!(rows[0]["traceId"], "t1");
                 assert_eq!(rows[0]["kind"], "svc");
                 assert_eq!(rows[0]["durationMs"], 100.0);
                 assert_eq!(rows[0]["status"], "ok");
             }
-            SkyResult::Err(_) => panic!("expected Ok"),
+            IpeResult::Err(_) => panic!("expected Ok"),
         }
         let _ = std::fs::remove_file(&path);
     }
@@ -1298,9 +1298,9 @@ mod tests {
             .await
             .unwrap();
         }
-        let res: SkyResult<String, Vec<Value>> = hub_read_errors(path.clone()).await;
+        let res: IpeResult<String, Vec<Value>> = hub_read_errors(path.clone()).await;
         match res {
-            SkyResult::Ok(rows) => {
+            IpeResult::Ok(rows) => {
                 assert_eq!(rows.len(), 2);
                 // descending by count → "boom" (2) first.
                 assert_eq!(rows[0]["message"], "boom");
@@ -1308,7 +1308,7 @@ mod tests {
                 assert_eq!(rows[1]["message"], "split");
                 assert_eq!(rows[1]["count"], 1);
             }
-            SkyResult::Err(_) => panic!("expected Ok"),
+            IpeResult::Err(_) => panic!("expected Ok"),
         }
         let _ = std::fs::remove_file(&path);
     }
@@ -1359,29 +1359,29 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        let res: SkyResult<String, Value> = hub_read_overview(path.clone()).await;
+        let res: IpeResult<String, Value> = hub_read_overview(path.clone()).await;
         match res {
-            SkyResult::Ok(ov) => {
+            IpeResult::Ok(ov) => {
                 assert_eq!(ov["skyVersion"], "hub");
                 assert_eq!(ov["bufferLogUsed"], 1);
                 assert_eq!(ov["bufferTraceUsed"], 2);
                 assert_eq!(ov["requestsTotal"], 3); // 1 log + 0 metric + 2 span
             }
-            SkyResult::Err(_) => panic!("expected Ok"),
+            IpeResult::Err(_) => panic!("expected Ok"),
         }
         let _ = std::fs::remove_file(&path);
     }
 
     #[tokio::test]
     async fn identity_is_empty() {
-        let res: SkyResult<String, Value> = hub_current_identity("anything".to_string()).await;
+        let res: IpeResult<String, Value> = hub_current_identity("anything".to_string()).await;
         match res {
-            SkyResult::Ok(id) => {
+            IpeResult::Ok(id) => {
                 assert_eq!(id["subject"], "");
                 assert_eq!(id["email"], "");
                 assert!(id["claims"].is_object());
             }
-            SkyResult::Err(_) => panic!("expected Ok"),
+            IpeResult::Err(_) => panic!("expected Ok"),
         }
     }
 
@@ -1406,9 +1406,9 @@ mod tests {
             .await
             .unwrap();
         }
-        let res: SkyResult<String, Vec<Value>> = hub_read_service_stats(path.clone()).await;
+        let res: IpeResult<String, Vec<Value>> = hub_read_service_stats(path.clone()).await;
         match res {
-            SkyResult::Ok(rows) => {
+            IpeResult::Ok(rows) => {
                 assert_eq!(rows.len(), 1);
                 assert_eq!(rows[0]["name"], "svc");
                 assert_eq!(rows[0]["status"], "err"); // 50% error rate
@@ -1416,7 +1416,7 @@ mod tests {
                 assert_eq!(rows[0]["p95Ms"], 10.0);
                 assert!(rows[0]["sparkRps"].as_array().unwrap().len() == STATS_BUCKET_COUNT);
             }
-            SkyResult::Err(_) => panic!("expected Ok"),
+            IpeResult::Err(_) => panic!("expected Ok"),
         }
         let _ = std::fs::remove_file(&path);
     }
@@ -1471,13 +1471,13 @@ mod tests {
             .await
             .unwrap();
         }
-        let res: SkyResult<String, Vec<Value>> = with_tenant_prefix(
+        let res: IpeResult<String, Vec<Value>> = with_tenant_prefix(
             "customer-42-".to_string(),
             hub_read_filtered_logs(path.clone(), String::new(), TestFilter::none()),
         )
         .await;
         match res {
-            SkyResult::Ok(rows) => {
+            IpeResult::Ok(rows) => {
                 assert_eq!(
                     rows.len(),
                     1,
@@ -1485,7 +1485,7 @@ mod tests {
                 );
                 assert_eq!(rows[0]["subapp"], "customer-42-billing");
             }
-            SkyResult::Err(_) => panic!("expected Ok"),
+            IpeResult::Err(_) => panic!("expected Ok"),
         }
         let _ = std::fs::remove_file(&path);
     }
@@ -1511,13 +1511,13 @@ mod tests {
             .await
             .unwrap();
         }
-        let res: SkyResult<String, Vec<Value>> = with_tenant_prefix(
+        let res: IpeResult<String, Vec<Value>> = with_tenant_prefix(
             "customer-42-".to_string(),
             hub_read_logs(path.clone(), TestFilter::none()),
         )
         .await;
         match res {
-            SkyResult::Ok(rows) => {
+            IpeResult::Ok(rows) => {
                 assert_eq!(
                     rows.len(),
                     1,
@@ -1525,7 +1525,7 @@ mod tests {
                 );
                 assert_eq!(rows[0]["subapp"], "customer-42-billing");
             }
-            SkyResult::Err(_) => panic!("expected Ok"),
+            IpeResult::Err(_) => panic!("expected Ok"),
         }
         let _ = std::fs::remove_file(&path);
     }
@@ -1548,7 +1548,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let res: SkyResult<String, Vec<Value>> = with_tenant_prefix(
+        let res: IpeResult<String, Vec<Value>> = with_tenant_prefix(
             "customer-42-".to_string(),
             hub_read_filtered_logs(
                 path.clone(),
@@ -1558,7 +1558,7 @@ mod tests {
         )
         .await;
         assert!(
-            matches!(res, SkyResult::Err(_)),
+            matches!(res, IpeResult::Err(_)),
             "cross-tenant service must be rejected: {res:?}"
         );
         let _ = std::fs::remove_file(&path);
@@ -1603,26 +1603,26 @@ mod tests {
             .unwrap();
         }
 
-        let metrics: SkyResult<String, Vec<Value>> = with_tenant_prefix(
+        let metrics: IpeResult<String, Vec<Value>> = with_tenant_prefix(
             "customer-42-".to_string(),
             hub_read_filtered_metrics(path.clone(), String::new()),
         )
         .await;
-        assert!(matches!(&metrics, SkyResult::Ok(rows) if rows.len() == 1));
+        assert!(matches!(&metrics, IpeResult::Ok(rows) if rows.len() == 1));
 
-        let traces: SkyResult<String, Vec<Value>> = with_tenant_prefix(
+        let traces: IpeResult<String, Vec<Value>> = with_tenant_prefix(
             "customer-42-".to_string(),
             hub_read_filtered_traces(path.clone(), String::new()),
         )
         .await;
-        assert!(matches!(&traces, SkyResult::Ok(rows) if rows.len() == 1));
+        assert!(matches!(&traces, IpeResult::Ok(rows) if rows.len() == 1));
 
-        let errors: SkyResult<String, Vec<Value>> = with_tenant_prefix(
+        let errors: IpeResult<String, Vec<Value>> = with_tenant_prefix(
             "customer-42-".to_string(),
             hub_read_filtered_errors(path.clone(), String::new()),
         )
         .await;
-        assert!(matches!(&errors, SkyResult::Ok(rows) if rows.len() == 1));
+        assert!(matches!(&errors, IpeResult::Ok(rows) if rows.len() == 1));
 
         let _ = std::fs::remove_file(&path);
     }
