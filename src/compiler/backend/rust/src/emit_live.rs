@@ -371,6 +371,21 @@ fn emit_live_app_inner(
     let view_s = emit_live_fn(ctx, view_e, indent, child, generics)?;
     let subs_s = emit_live_fn(ctx, subs_e, indent, child, generics)?;
 
+    // Browser target: the same cfg drives the client sink. No session store
+    // (the model lives in the tab), so no store args and no schema tag. The
+    // routed shape needs the client-side router — fail closed until it lands.
+    if ctx.target == ipe_ir::Target::WasmClient {
+        if routed_page_field(ctx, view_e).is_some() {
+            return Err(Diagnostic::Lower {
+                span: Span::DUMMY,
+                msg: LowerError::Unsupported(ipe_diagnostics::Feature::WasmRoutedApp),
+            });
+        }
+        return Ok(Some(format!(
+            "ipe_runtime::wasm::wasm_app({init_s}, {update_s}, {view_s}, {subs_s})"
+        )));
+    }
+
     // T5 emit branch — parity with ExprEmitter.hs:1670.
     //
     // Recover the Model from `view : Model -> Html Msg`'s first parameter.
@@ -743,7 +758,13 @@ mod schema_tag_tests {
                 uses_ffi: false,
             }],
         };
-        let ctx = EmitCtx::build(&interner, &program, DbDriver::Sqlite, None)?;
+        let ctx = EmitCtx::build(
+            &interner,
+            &program,
+            DbDriver::Sqlite,
+            None,
+            ipe_ir::Target::Native,
+        )?;
 
         // Model = { count : Int } (no `page` field → the single-page branch).
         let model = IrType::Record(BTreeMap::from([(count, IrType::Int)]));

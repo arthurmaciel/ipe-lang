@@ -13,6 +13,7 @@ pub mod ast;
 mod env;
 pub mod link;
 mod resolve;
+pub mod target_gate;
 
 use std::collections::{BTreeMap, BTreeSet};
 

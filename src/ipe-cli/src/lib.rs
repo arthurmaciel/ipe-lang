@@ -127,6 +127,10 @@ pub struct BuildOptions {
     /// allocator feature, add the generated `.cargo/config.toml`). `None` —
     /// normal dynamic build; also removes a stale generated static config.
     pub static_plan: Option<ipe_backend_rust::static_build::StaticPlan>,
+    /// The compilation target (`Native` default; `WasmClient` under
+    /// `ipe build --target wasm`) — threaded into kernel resolution (the
+    /// Layer-1 wasm gate), the emitted manifest, and both cache keys.
+    pub target: ipe_ir::Target,
 }
 
 /// Build `entry` into a Rust Cargo project under `out_dir`, vendoring the
@@ -445,7 +449,8 @@ fn compile_modules_observed(
     // `ipe` binary's own content hash and the active `rustc`'s fingerprint
     // (see `cache::derive_epoch`'s doc for why this makes
     // "refuse, don't guess" structural rather than a runtime check).
-    let cache_key = cache::compute_project_key(&sources, &injected, entry_path, db_driver);
+    let cache_key =
+        cache::compute_project_key(&sources, &injected, entry_path, db_driver, options.target);
     let epoch = cache_dir.and_then(|_| cache::derive_epoch());
     if let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref())
         && let Some(emitted) = cache::try_load(root, epoch, &cache_key)
@@ -465,7 +470,7 @@ fn compile_modules_observed(
     // (`compute_ir_key`'s own doc explains why), so this tier can still hit
     // when the `EmittedProject` tier just missed on a `db_driver`-only edit.
     if let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref()) {
-        let ir_key = cache::compute_ir_key(&sources, &injected, entry_path);
+        let ir_key = cache::compute_ir_key(&sources, &injected, entry_path, options.target);
         let fresh_interner: std::sync::Arc<std::sync::Mutex<ipe_intern::Interner>> =
             std::sync::Arc::new(std::sync::Mutex::new(ipe_intern::Interner::new()));
         if let Some(program) = cache::try_load_ir(root, epoch, &ir_key, &fresh_interner) {
@@ -476,6 +481,7 @@ fn compile_modules_observed(
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 ipe_backend_rust::RustBackend::new(&guard)
                     .with_db_driver(db_driver)
+                    .with_target(options.target)
                     .emit(&program)
             };
             if let Ok(emitted) = emit_result {
@@ -517,7 +523,7 @@ fn compile_modules_observed(
     // fresh `BuildConfig` per one-shot invocation is fine here — unlike the
     // clean-vs-incremental parity gate's warm sequence, this driver never
     // re-demands `emit_project` against a second config instance.
-    let config = ipe_db::BuildConfig::new(&db, db_driver, ffi_emit);
+    let config = ipe_db::BuildConfig::new(&db, db_driver, ffi_emit, options.target);
 
     let emitted = match compile_prepared(&db, source_root, &sources, entry_path, blame_path, config)
     {
@@ -538,7 +544,7 @@ fn compile_modules_observed(
         if let Some(entry_file) = source_root.files(&db).get(entry_path).copied()
             && let Ok(program) = ipe_db::lower_program(&db, source_root, entry_file)
         {
-            let ir_key = cache::compute_ir_key(&sources, &injected, entry_path);
+            let ir_key = cache::compute_ir_key(&sources, &injected, entry_path, options.target);
             cache::store_ir(
                 root,
                 epoch,
@@ -790,6 +796,24 @@ pub fn compile_prepared(
             .cloned()
             .unwrap_or_else(|| (entry_src_path.clone(), entry_src.clone()))
     };
+
+    // Layer-1 wasm security gate (IPE-N0029): under `--target wasm`, every
+    // kernel named anywhere in the linked program must be on the WasmClient
+    // allowlist. Runs on the LINKED module (everything linked is emitted, so
+    // a denied kernel anywhere would otherwise become a cargo failure — THE
+    // SEAL — or a secret consumer in a public bundle). Blame via the same
+    // span→file heuristic the type errors use.
+    if config.target(db) == ipe_ir::Target::WasmClient {
+        let gate_result = {
+            let interner = shared_interner.lock();
+            ipe_canon::target_gate::check_wasm_client(linked, &interner)
+        };
+        gate_result.map_err(|diag| {
+            let span = diag_span(&diag);
+            let (file, src) = source_for_span(span);
+            CliError::Pipeline { file, src, diag }
+        })?;
+    }
 
     // Use the attributed variant so cross-module type errors are attributed to
     // the correct source file via the `home` carried on the failing constraint,
@@ -1254,7 +1278,7 @@ pub fn resolve_runtime() -> Result<PathBuf, CliError> {
 /// The top-level usage hint, listing every subcommand and flag.
 const USAGE: &str = "usage:\n  \
      ipe build <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]\n  \
-     \x20         [--static] [--target <triple>] [--allocator <auto|system|dlmalloc|talc|mimalloc>]\n  \
+     \x20         [--static] [--target <triple|wasm>] [--allocator <auto|system|dlmalloc|talc|mimalloc>]\n  \
      \x20         [--allow-slow-allocator]\n  \
      ipe run   <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [-- <args>...]\n  \
      ipe watch <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [--port <n>]\n  \
@@ -1349,9 +1373,17 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
             _ => return Err(CliError::Usage(USAGE)),
         }
     }
+    // `--target wasm` selects the browser target (a compilation axis), not a
+    // static-link triple; it never enters the static-request resolution.
+    let wasm_target = matches!(target.as_deref(), Some("wasm"));
+    if wasm_target && (static_flag || allocator.is_some()) {
+        return Err(CliError::Usage(
+            "--static / --allocator are native-target flags; they do not compose with --target wasm",
+        ));
+    }
     let cli_layer = build_plan::StaticRequestLayer {
         static_build: static_flag.then_some(true),
-        target,
+        target: if wasm_target { None } else { target },
         allocator,
         allow_slow_allocator: allow_slow_allocator.then_some(true),
     };
@@ -1423,7 +1455,14 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
             );
         }
     }
-    let options = BuildOptions { static_plan };
+    let options = BuildOptions {
+        static_plan,
+        target: if wasm_target {
+            ipe_ir::Target::WasmClient
+        } else {
+            ipe_ir::Target::Native
+        },
+    };
 
     // No sky.toml found: compile entry + all sibling .ipe files in the same
     // directory. Byte-identical to `build` when the directory holds only the
@@ -1431,7 +1470,25 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
     manifest.map_or_else(
         || build_with_sibling_discovery_with_options(&entry_path, &out_dir, &runtime_dir, options),
         |m| build_project_with_options(&m, &out_dir, &runtime_dir, options),
-    )
+    )?;
+
+    if wasm_target {
+        print_wasm_next_steps(&out_dir);
+    }
+    Ok(())
+}
+
+/// The post-emit guidance for a `--target wasm` build: the bundle steps the
+/// driver does not yet run itself (cargo → wasm-bindgen CLI → static serve).
+fn print_wasm_next_steps(out_dir: &Path) {
+    eprintln!(
+        "emitted browser-WASM project at {out}\n\
+         next: cd {out} && cargo build --target wasm32-unknown-unknown --release \\\n\
+         \x20     && wasm-bindgen target/wasm32-unknown-unknown/release/sky_app.wasm \\\n\
+         \x20        --target web --no-typescript --out-dir www/pkg\n\
+         then serve {out}/www/ over HTTP.",
+        out = out_dir.display()
+    );
 }
 
 /// `ipe run <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [-- <args>...]`

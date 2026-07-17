@@ -182,7 +182,7 @@ fn file_id_for<'db>(
 fn emit_spine_file_memoized_coarse_floor() {
     let (mut db, log) = logged_db();
     let (root, _lib, main) = two_module_root(&db);
-    let config = BuildConfig::new(&db, DbDriver::Sqlite, None);
+    let config = BuildConfig::new(&db, DbDriver::Sqlite, None, ipe_ir::Target::Native);
 
     let spine = ipe_db::emit_spine_file(&db, root, main, config).expect("spine must render");
     assert!(!spine.is_empty(), "spine text must be non-empty");
@@ -231,7 +231,7 @@ fn emit_spine_file_memoized_coarse_floor() {
 fn emit_rust_file_memoized_per_file() {
     let (mut db, _log) = logged_db();
     let (root, lib, main) = two_module_root(&db);
-    let config = BuildConfig::new(&db, DbDriver::Sqlite, None);
+    let config = BuildConfig::new(&db, DbDriver::Sqlite, None, ipe_ir::Target::Native);
 
     // Interned ids carry `db`'s borrow, so they cannot be held across a
     // `&mut db` edit — but interning is stable (same `home` -> same id across
@@ -331,7 +331,7 @@ fn emit_manifest_matches_emit_project_for_single_module() {
         "module Main exposing (answer)\n\nanswer : Int\nanswer = 42\n",
     );
     let root = root_of(&db, &[(&["Main"], main)]);
-    let config = BuildConfig::new(&db, DbDriver::Sqlite, None);
+    let config = BuildConfig::new(&db, DbDriver::Sqlite, None, ipe_ir::Target::Native);
 
     let via_project =
         ipe_db::emit_project(&db, root, main, config).expect("emit_project must succeed");
@@ -360,7 +360,7 @@ fn emit_manifest_matches_emit_project_for_single_module() {
 fn emit_manifest_matches_emit_project_for_two_modules() {
     let (db, _log) = logged_db();
     let (root, _lib, main) = two_module_root(&db);
-    let config = BuildConfig::new(&db, DbDriver::Sqlite, None);
+    let config = BuildConfig::new(&db, DbDriver::Sqlite, None, ipe_ir::Target::Native);
 
     // Precondition: this program genuinely splits (2 distinct homes), so
     // `emit_manifest` takes the assemble_split_manifest path, not the collapse.
