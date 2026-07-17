@@ -387,6 +387,7 @@ fn make_temp_path(prefix: &str, is_dir: bool) -> Result<String, String> {
             // Owner-only (0700) on Unix — a temp dir created with the default
             // umask can be world-readable/traversable, exposing whatever the
             // caller writes into it (Go uses 0700 for MkdirTemp).
+            #[cfg_attr(not(unix), allow(unused_mut))] // mutated only under cfg(unix)
             let mut builder = std::fs::DirBuilder::new();
             #[cfg(unix)]
             {

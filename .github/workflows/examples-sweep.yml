@@ -129,7 +129,7 @@ jobs:
       # Pre-warm the runtime dep tree so the first example's cargo build reuses
       # compiled deps instead of cold-compiling the world and blowing the ceiling.
       - name: Pre-warm runtime deps
-        run: cargo build -p sky-runtime-rust || cargo build --workspace || true
+        run: cargo build -p ipe-runtime-rust || cargo build --workspace || true
 
       - name: Run examples sweep (BUILD + RUN, no EQUIVALENCE)
         shell: bash

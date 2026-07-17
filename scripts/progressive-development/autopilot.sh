@@ -678,7 +678,7 @@ lane_gate() {
     fi
     # scope the cheap gate to the crates this change touched (+ always check ipe).
     touched="$(git -C "$GATE_WT" diff --name-only "$gpre..HEAD" 2>/dev/null)"
-    pflags="$(printf '%s\n' "$touched" | sed -nE 's#^crates/([^/]+)/.*#-p \1#p; s#^runtime/.*#-p sky-runtime-rust#p; s#^tools/([^/]+)/.*#-p \1#p' | sort -u | tr '\n' ' ')"
+    pflags="$(printf '%s\n' "$touched" | sed -nE 's#^crates/([^/]+)/.*#-p \1#p; s#^runtime/.*#-p ipe-runtime-rust#p; s#^tools/([^/]+)/.*#-p \1#p' | sort -u | tr '\n' ' ')"
     [ -z "$pflags" ] && pflags="-p ipe"
     if ( cd "$GATE_WT"; touch src/ipe-cli/tests/*.rs 2>/dev/null; \
          RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 1200 cargo +nightly check -p ipe >/tmp/autopilot-gate.log 2>&1 \
@@ -707,7 +707,7 @@ full_gate() {
     if git -C "$GATE_WT" diff --name-only "$LAST_FULL_GREEN..HEAD" 2>/dev/null | rg -q '^runtime/'; then IPE_SHARE=""; else IPE_SHARE="$IPE_CACHE/oracle-target"; fi
     ( cd "$GATE_WT"; touch runtime/tests/*.rs src/ipe-cli/tests/*.rs 2>/dev/null; \
       RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" IPE_ORACLE_SHARED_TARGET="$IPE_SHARE" timeout 3000 cargo +nightly nextest run --workspace >/tmp/autopilot-gate.log 2>&1 \
-      && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" IPE_ORACLE_SHARED_TARGET="$IPE_SHARE" timeout 1800 cargo +nightly nextest run -p sky-runtime-rust --features full >>/tmp/autopilot-gate.log 2>&1 \
+      && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" IPE_ORACLE_SHARED_TARGET="$IPE_SHARE" timeout 1800 cargo +nightly nextest run -p ipe-runtime-rust --features full >>/tmp/autopilot-gate.log 2>&1 \
       && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 600 cargo +nightly test --workspace --doc >>/tmp/autopilot-gate.log 2>&1 \
       && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 1200 cargo +nightly clippy --workspace --no-deps --jobs 4 -- -D warnings >>/tmp/autopilot-gate.log 2>&1 ) \
       && ( cd "$GATE_WT"; "$FUZZ" --iters "$FUZZ_ITERS" --quiet >>/tmp/autopilot-gate.log 2>&1 )
