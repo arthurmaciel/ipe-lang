@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -31,7 +31,6 @@ type Value = JsonVal;
 // ===========================================
 // USER TYPES
 // ===========================================
-
 
 pub use ipe_runtime::error::IpeError;
 pub fn str_err(s: &str) -> IpeError {
@@ -243,7 +242,16 @@ pub fn main_max_of<T1: PartialOrd + Copy + Clone>(p: T1, q: T1) -> T1 {
     (if (p.clone() > q.clone()) { p } else { q })
 }
 pub fn ipe_main() -> IpeTask<()> {
-    ({ let bigInt = main_max_of(3, 7); ({ let bigChar = main_max_of('a', 'z'); ({ let bonus = (if (bigChar > 'y') { bigInt } else { 0 }); log_println(string_from_int(bonus)) }) }) })
+    ({
+        let bigInt = main_max_of(3, 7);
+        ({
+            let bigChar = main_max_of('a', 'z');
+            ({
+                let bonus = (if (bigChar > 'y') { bigInt } else { 0 });
+                log_println(string_from_int(bonus))
+            })
+        })
+    })
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

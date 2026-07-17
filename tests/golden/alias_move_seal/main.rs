@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -31,7 +31,6 @@ type Value = JsonVal;
 // ===========================================
 // USER TYPES
 // ===========================================
-
 
 pub use ipe_runtime::error::IpeError;
 pub fn str_err(s: &str) -> IpeError {
@@ -240,19 +239,58 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 }
 
 pub fn main_param_pos(arg_0: (String, String)) -> String {
-    ({ let whole = arg_0; let (a, b) = whole.clone(); ({ let (x, y) = whole; string_append(string_append(a, b), string_append(x, y)) }) })
+    ({
+        let whole = arg_0;
+        let (a, b) = whole.clone();
+        ({
+            let (x, y) = whole;
+            string_append(string_append(a, b), string_append(x, y))
+        })
+    })
 }
 pub fn main_case_pos(p: (String, String)) -> String {
-    ({ let whole = p; let (a, b) = whole.clone(); ({ let (x, y) = whole; string_append(string_append(a, b), string_append(x, y)) }) })
+    ({
+        let whole = p;
+        let (a, b) = whole.clone();
+        ({
+            let (x, y) = whole;
+            string_append(string_append(a, b), string_append(x, y))
+        })
+    })
 }
 pub fn main_let_pos(pair: (String, String)) -> String {
-    ({ let whole = pair; let (a, b) = whole.clone(); ({ let (x, y) = whole; string_append(string_append(a, b), string_append(x, y)) }) })
+    ({
+        let whole = pair;
+        let (a, b) = whole.clone();
+        ({
+            let (x, y) = whole;
+            string_append(string_append(a, b), string_append(x, y))
+        })
+    })
 }
 pub fn main_nested_pos(arg_1: (String, (String, String))) -> String {
-    ({ let (__sky_bind_0, __sky_bind_1) = arg_1; let h = __sky_bind_0; let inner = __sky_bind_1; let (c, d) = inner.clone(); ({ let (e, f) = inner; string_append(string_append(h, c), string_append(d, string_append(e, f))) }) })
+    ({
+        let (__sky_bind_0, __sky_bind_1) = arg_1;
+        let h = __sky_bind_0;
+        let inner = __sky_bind_1;
+        let (c, d) = inner.clone();
+        ({
+            let (e, f) = inner;
+            string_append(string_append(h, c), string_append(d, string_append(e, f)))
+        })
+    })
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_append(string_append(string_append(main_param_pos(("p".to_string(), "q".to_string())), main_case_pos(("r".to_string(), "s".to_string()))), main_let_pos(("t".to_string(), "u".to_string()))), main_nested_pos(("h".to_string(), ("c".to_string(), "d".to_string())))))
+    log_println(string_append(
+        string_append(
+            string_append(
+                main_param_pos(("p".to_string(), "q".to_string())),
+                main_case_pos(("r".to_string(), "s".to_string())),
+            ),
+            main_let_pos(("t".to_string(), "u".to_string())),
+        ),
+        main_nested_pos(("h".to_string(), ("c".to_string(), "d".to_string()))),
+    ))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

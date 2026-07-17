@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -31,7 +31,6 @@ type Value = JsonVal;
 // ===========================================
 // USER TYPES
 // ===========================================
-
 
 pub use ipe_runtime::error::IpeError;
 pub fn str_err(s: &str) -> IpeError {
@@ -240,16 +239,27 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 }
 
 pub fn main_fst<T1: Clone, T2: Clone>(arg_0: (T1, T2)) -> T1 {
-    ({ let (a, b) = arg_0; a })
+    ({
+        let (a, b) = arg_0;
+        a
+    })
 }
 pub fn main_snd<T1: Clone, T2: Clone>(arg_1: (T1, T2)) -> T2 {
-    ({ let (a, b) = arg_1; b })
+    ({
+        let (a, b) = arg_1;
+        b
+    })
 }
 pub fn main_pair_sum() -> i64 {
-    ({ let (a, b) = (1, 2); (a + b) })
+    ({
+        let (a, b) = (1, 2);
+        (a + b)
+    })
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(((main_fst((41, 99)) + main_snd((7, 2))) + main_pair_sum())))
+    log_println(string_from_int(
+        ((main_fst((41, 99)) + main_snd((7, 2))) + main_pair_sum()),
+    ))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

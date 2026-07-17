@@ -15,6 +15,8 @@
 //! ```
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
+use std::process::{Command, Stdio};
 
 use ipe_backend::{EmittedProject, RelPath};
 use ipe_diagnostics::{DResult, Diagnostic};
@@ -27,6 +29,114 @@ use crate::emit_types::{emit_enum, emit_record_struct};
 use crate::preamble::{epilogue, preamble};
 use crate::rust_file;
 use crate::rust_file::{Partitioned, RustFileId, partition_items};
+
+/// The Rust edition every emitted crate targets; passed to `rustfmt` so a piped
+/// format matches what `cargo fmt` produces when it reads the emitted
+/// `Cargo.toml`'s `edition = "2024"`.
+const EMITTED_EDITION: &str = "2024";
+
+/// Format every generated Rust source file in `files` in place, so the emitted
+/// crate is `cargo fmt --check`-clean. Only `src/**.rs` files the backend itself
+/// generated (`main.rs`, `ipe_mods/*.rs`, `ipe_runtime/mod.rs`, `config.rs`,
+/// `ffi.rs`) are formatted; the vendored runtime source (copied verbatim from
+/// the already-clean runtime tree) and non-Rust files (`Cargo.toml`, the wasm
+/// `www/` shell) are left untouched.
+///
+/// The backend concatenates fixed templates with genuinely-emitted expressions,
+/// which drift from `rustfmt`'s canonical form (line-length wrapping, `mod`/`use`
+/// ordering, blank-line collapsing) — matching those rules by construction would
+/// amount to reimplementing `rustfmt`, so the canonical formatter is the source
+/// of truth. Runs `rustfmt` over each file's bytes on stdin (no path argument, so
+/// it cannot recurse into `mod` files) with the emitted crate's edition and style
+/// edition, making the piped result byte-identical to `cargo fmt`.
+///
+/// Opting out (`IPE_RUST_FMT=0`) skips the pass entirely, for latency-sensitive
+/// callers that do not need canonical output — the `ipe watch` hot loop, whose
+/// only contract is that the emitted crate compiles and runs, not that it is
+/// `rustfmt`-clean. The golden byte-comparison and the example sweep leave the
+/// variable unset, so they always format.
+///
+/// # Errors
+///
+/// Returns a [`Diagnostic`] if `rustfmt` cannot be spawned (absent toolchain
+/// component), exits non-zero, or produces non-UTF-8 output. Formatting fails
+/// closed rather than shipping unformatted output: the emitted crate would then
+/// fail `cargo fmt --check`, and the byte-compared goldens would drift silently.
+fn format_generated_rust_files(files: &mut BTreeMap<RelPath, String>) -> DResult<()> {
+    if rust_fmt_disabled() {
+        return Ok(());
+    }
+    for (path, text) in files.iter_mut() {
+        if !is_generated_rust_path(path.as_str()) {
+            continue;
+        }
+        *text = run_rustfmt(text)?;
+    }
+    Ok(())
+}
+
+/// Whether the post-emit `rustfmt` pass is disabled via `IPE_RUST_FMT=0`. Any
+/// other value (or unset) leaves it enabled, so the fmt-clean invariant the
+/// goldens and sweep depend on holds by default.
+fn rust_fmt_disabled() -> bool {
+    std::env::var("IPE_RUST_FMT").is_ok_and(|v| v == "0")
+}
+
+/// A generated Rust source path the backend authored and must format: any `.rs`
+/// file under `src/`. The vendored `ipe_runtime` source files are copied over the
+/// top on disk by the driver and are already clean; the two the backend
+/// GENERATES (`mod.rs`, `config.rs`) are the only `ipe_runtime` entries in
+/// `files`.
+fn is_generated_rust_path(rel: &str) -> bool {
+    rel.starts_with("src/")
+        && std::path::Path::new(rel)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"))
+}
+
+/// Pipe `source` through `rustfmt` on stdin and return the formatted bytes.
+fn run_rustfmt(source: &str) -> DResult<String> {
+    let fmt_bug = |detail: String| Diagnostic::CompilerBug {
+        where_: "ipe_backend_rust::project::run_rustfmt",
+        detail,
+    };
+
+    let mut child = Command::new("rustfmt")
+        .arg("--edition")
+        .arg(EMITTED_EDITION)
+        .arg("--style-edition")
+        .arg(EMITTED_EDITION)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            fmt_bug(format!(
+                "cannot spawn `rustfmt` (a pinned-toolchain component): {e}"
+            ))
+        })?;
+
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| fmt_bug("rustfmt child stdin was not piped".to_owned()))?
+        .write_all(source.as_bytes())
+        .map_err(|e| fmt_bug(format!("cannot write source to rustfmt stdin: {e}")))?;
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| fmt_bug(format!("cannot read rustfmt output: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(fmt_bug(format!(
+            "rustfmt exited {:?}: {}",
+            output.status.code(),
+            stderr.trim()
+        )));
+    }
+    String::from_utf8(output.stdout)
+        .map_err(|e| fmt_bug(format!("rustfmt produced non-UTF-8 output: {e}")))
+}
 
 /// The golden program, embedded at compile time. The fixed runtime-bindings
 /// block (kernel wrappers, golden lines 45–127) is an exact substring of it.
@@ -921,6 +1031,7 @@ fn assemble_project_files(
             RelPath::new("www/boot.js")?,
             "import init from \"./pkg/sky_app.js\";\ninit();\n".to_owned(),
         );
+        format_generated_rust_files(&mut files)?;
         return Ok(EmittedProject {
             files,
             cargo_toml: WASM_CARGO_TOML.to_owned(),
@@ -1136,6 +1247,7 @@ fn assemble_project_files(
             })?;
         main.push_str("\nmod ffi;\n");
     }
+    format_generated_rust_files(&mut files)?;
     Ok(EmittedProject { files, cargo_toml })
 }
 
