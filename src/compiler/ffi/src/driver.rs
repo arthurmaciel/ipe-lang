@@ -688,9 +688,14 @@ pub fn cargo_dep_lines(pkg: &PkgInfo) -> Result<Vec<String>, Diagnostic> {
         if dep.version.is_empty() {
             return Err(missing_version(&dep.name));
         }
-        // The primary crate (the lib ident matching the package) carries the
-        // effective feature set rustdoc succeeded with.
-        let features = if dep.ident.as_str() == pkg.name() {
+        // The primary crate carries the effective feature set rustdoc
+        // succeeded with. Matched on the REGISTRY package NAME, not the lib
+        // ident: a crate whose lib renames its target (`async-stripe` → lib
+        // `stripe`) has `dep.ident = "stripe"` but `dep.name = "async-stripe"
+        // = pkg.name()`, and the `Cargo.toml` key is the package name — so
+        // matching on ident would drop the feature set and ship a manifest
+        // missing a mandatory runtime feature (a cargo build-script failure).
+        let features = if dep.name == pkg.name() {
             pkg.features()
         } else {
             &[]

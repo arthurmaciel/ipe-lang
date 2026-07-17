@@ -354,11 +354,35 @@ pub struct TransitiveDep {
     pub version: String,
 }
 
+/// A validated cargo PACKAGE name: `[A-Za-z0-9_-]+`. Distinct from
+/// [`RustIdent`] — a package name legitimately carries dashes
+/// (`async-stripe`); its LIB identifier is the underscored form.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageName(String);
+
+impl PackageName {
+    fn parse(s: &str) -> Result<Self, crate::diag::WireDefect> {
+        let legal = !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            && s.chars().next().is_some_and(|c| c.is_ascii_alphabetic());
+        if legal {
+            Ok(Self(s.to_owned()))
+        } else {
+            Err(crate::diag::WireDefect::InvalidIdent { got: s.to_owned() })
+        }
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A fully-validated package inspection result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PkgInfo {
     pkg_path: String,
-    name: RustIdent,
+    name: PackageName,
     version: String,
     fns: Vec<FnInfo>,
     modules: Vec<String>,
@@ -617,7 +641,7 @@ impl TryFrom<WirePkgInfo> for PkgInfo {
     type Error = Diagnostic;
 
     fn try_from(w: WirePkgInfo) -> Result<Self, Diagnostic> {
-        let name = RustIdent::parse(&w.name).map_err(|defect| Diagnostic::WireMalformed {
+        let name = PackageName::parse(&w.name).map_err(|defect| Diagnostic::WireMalformed {
             context: format!("crate `{}`", w.name),
             defect,
         })?;
