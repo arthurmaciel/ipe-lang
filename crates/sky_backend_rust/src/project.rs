@@ -30,12 +30,12 @@ use crate::rust_file::{Partitioned, RustFileId, partition_items};
 
 /// The golden program, embedded at compile time. The fixed runtime-bindings
 /// block (kernel wrappers, golden lines 45–127) is an exact substring of it.
-const GOLDEN: &str = include_str!("../../../tests/golden/m0/main.rs");
+const GOLDEN: &str = include_str!("../../../tests/golden/basics/main.rs");
 
 /// The project `Cargo.toml`, embedded verbatim from the golden. The backend
 /// emits the same manifest for every program (dependency set is fixed by the
 /// runtime).
-const CARGO_TOML: &str = include_str!("../../../tests/golden/m0/Cargo.toml");
+const CARGO_TOML: &str = include_str!("../../../tests/golden/basics/Cargo.toml");
 
 /// The generated `sky_runtime/mod.rs` — the curated set of runtime modules whose
 /// dependencies are satisfied by [`CARGO_TOML`]. The vendored runtime source
@@ -43,10 +43,10 @@ const CARGO_TOML: &str = include_str!("../../../tests/golden/m0/Cargo.toml");
 /// pull crates outside the base manifest); the driver overwrites it with this
 /// trimmed version. The backend emits a fixed base module set, then appends the
 /// modules a program's kernels require.
-const RUNTIME_MOD_RS: &str = include_str!("../../../tests/golden/m0/sky_runtime/mod.rs");
+const RUNTIME_MOD_RS: &str = include_str!("../../../tests/golden/basics/sky_runtime/mod.rs");
 
 /// The generated `sky_runtime/config.rs` (DB/config bindings — empty by default).
-const RUNTIME_CONFIG_RS: &str = include_str!("../../../tests/golden/m0/sky_runtime/config.rs");
+const RUNTIME_CONFIG_RS: &str = include_str!("../../../tests/golden/basics/sky_runtime/config.rs");
 
 // ── db-enabled manifest fragments ──────────────────────────────────
 
@@ -84,7 +84,7 @@ const RUNTIME_MOD_RS_SERVER_APPEND: &str = "pub mod server;\npub use server::*;\
 // ── Shared transitive dep: http_header ──────────────────────────────────────
 //
 // `http_header.rs` (a dependency-free leaf exposing `canonical_header`) is part
-// of the base `mod.rs` (`tests/golden/m0/sky_runtime/mod.rs`), because the
+// of the base `mod.rs` (`tests/golden/basics/sky_runtime/mod.rs`), because the
 // outbound `http_client.rs` response path always calls it. It must NOT be
 // conditionally appended here — a conditional `pub mod http_header;` would
 // duplicate the base declaration (E0428) for server/live programs.

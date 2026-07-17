@@ -7,29 +7,29 @@
 //!   decoders on bare JSON values.  `JsonDec.int` mirrors Go's lenient `int(f)`
 //!   truncation, so `"3.0"`/`"3.5"`/`"1e2"` decode to `3`/`3`/`100` rather than
 //!   rejecting the non-integral / exponent forms.
-//!   (`m4h_json_dec_primitives`)
+//!   (`json_dec_primitives`)
 //!
 //! * `JsonDec.list JsonDec.int` on `"[1,2,3]"` — the list combinator wraps its
 //!   element decoder in a factory so it can be reused per element.
-//!   (`m4h_json_dec_list`)
+//!   (`json_dec_list`)
 //!
 //! * `JsonDec.field`, `JsonDec.at`, `JsonDec.index` — structural access into
 //!   JSON objects and arrays.
-//!   (`m4h_json_dec_field_at_index`)
+//!   (`json_dec_field_at_index`)
 //!
 //! * `JsonDec.int` on a string value — verifies that a type mismatch produces
 //!   `Err _`, not a panic.
-//!   (`m4h_json_dec_fail`)
+//!   (`json_dec_fail`)
 //!
 //! * `JsonDec.oneOf [map fromInt int, string]` — tries decoders in order;
 //!   first success wins.
-//!   (`m4h_json_dec_one_of`)
+//!   (`json_dec_one_of`)
 //!
 //! * `JsonDec.succeed makePerson |> JsonDecP.required "name" string |>
 //!   JsonDecP.required "age" int |> JsonDecP.optional "nickname" string "unknown"` —
 //!   pipeline-style record decoder; the optional field supplies a default when
 //!   absent.
-//!   (`m4h_json_dec_pipeline`)
+//!   (`json_dec_pipeline`)
 //!
 //! Every test is gated on `SKY_E2E=1`; without it the test returns early.  Run:
 //!
@@ -81,7 +81,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 /// truncation); `JsonDec.string "\"hello\""` → "hello".  Output: `"3 3 100 hello"`.
 #[test]
 fn json_dec_primitives() {
-    assert_runs_and_matches_oracle("m4h_json_dec_primitives");
+    assert_runs_and_matches_oracle("json_dec_primitives");
 }
 
 // ── list combinator ──────────────────────────────────────────────────────────
@@ -90,7 +90,7 @@ fn json_dec_primitives() {
 /// Output: `"3"`.
 #[test]
 fn json_dec_list() {
-    assert_runs_and_matches_oracle("m4h_json_dec_list");
+    assert_runs_and_matches_oracle("json_dec_list");
 }
 
 // ── structural access ────────────────────────────────────────────────────────
@@ -99,7 +99,7 @@ fn json_dec_list() {
 /// Output: `"Alice 99 y"`.
 #[test]
 fn json_dec_field_at_index() {
-    assert_runs_and_matches_oracle("m4h_json_dec_field_at_index");
+    assert_runs_and_matches_oracle("json_dec_field_at_index");
 }
 
 // ── failing decode ───────────────────────────────────────────────────────────
@@ -107,7 +107,7 @@ fn json_dec_field_at_index() {
 /// `JsonDec.int "\"not an int\""` → `Err _`.  Output: `"got error"`.
 #[test]
 fn json_dec_fail() {
-    assert_runs_and_matches_oracle("m4h_json_dec_fail");
+    assert_runs_and_matches_oracle("json_dec_fail");
 }
 
 // ── oneOf ────────────────────────────────────────────────────────────────────
@@ -116,7 +116,7 @@ fn json_dec_fail() {
 /// Output: `"42 hello"`.
 #[test]
 fn json_dec_one_of() {
-    assert_runs_and_matches_oracle("m4h_json_dec_one_of");
+    assert_runs_and_matches_oracle("json_dec_one_of");
 }
 
 // ── pipeline ─────────────────────────────────────────────────────────────────
@@ -131,7 +131,7 @@ fn json_dec_one_of() {
 /// ```
 #[test]
 fn json_dec_pipeline() {
-    assert_runs_and_matches_oracle("m4h_json_dec_pipeline");
+    assert_runs_and_matches_oracle("json_dec_pipeline");
 }
 
 // ── Fix A: lambda curry ───────────────────────────────────────────────────────
@@ -142,14 +142,14 @@ fn json_dec_pipeline() {
 /// Output: `"Alice|30"`.
 #[test]
 fn json_dec_pipeline_lambda() {
-    assert_runs_and_matches_oracle("m4h_json_dec_pipeline_lambda");
+    assert_runs_and_matches_oracle("json_dec_pipeline_lambda");
 }
 
 /// `succeed (\name -> name ++ "!")` — 1-arg lambda; emits `curry1(move |name| ...)`.
 /// Output: `"Alice!"`.
 #[test]
 fn json_dec_pipeline_lambda1() {
-    assert_runs_and_matches_oracle("m4h_json_dec_pipeline_lambda1");
+    assert_runs_and_matches_oracle("json_dec_pipeline_lambda1");
 }
 
 // ── Fix A: plain-value factory-wrap ──────────────────────────────────────────
@@ -159,7 +159,7 @@ fn json_dec_pipeline_lambda1() {
 /// Output: `"42"`.
 #[test]
 fn json_dec_succeed_value() {
-    assert_runs_and_matches_oracle("m4h_json_dec_succeed_value");
+    assert_runs_and_matches_oracle("json_dec_succeed_value");
 }
 
 // ── Fix C: thunk-rewrite for let-bound decoder reuse ─────────────────────────
@@ -174,14 +174,14 @@ fn json_dec_succeed_value() {
 /// ```
 #[test]
 fn json_dec_pipeline_reuse() {
-    assert_runs_and_matches_oracle("m4h_json_dec_pipeline_reuse");
+    assert_runs_and_matches_oracle("json_dec_pipeline_reuse");
 }
 
 /// `let d = JsonDec.int` reused inside `JsonDec.list d` — Fix C × list factory.
 /// Output: `"2"`.
 #[test]
 fn json_dec_list_letbound() {
-    assert_runs_and_matches_oracle("m4h_json_dec_list_letbound");
+    assert_runs_and_matches_oracle("json_dec_list_letbound");
 }
 
 // ── R9: named-function FuncValue control ─────────────────────────────────────
@@ -192,5 +192,5 @@ fn json_dec_list_letbound() {
 /// Output: `"skydev 0"`.
 #[test]
 fn json_dec_pipeline_record() {
-    assert_runs_and_matches_oracle("m4h_json_dec_pipeline_record");
+    assert_runs_and_matches_oracle("json_dec_pipeline_record");
 }

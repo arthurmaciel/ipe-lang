@@ -50,7 +50,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code)
 #[test]
 fn task_bad_error_channel_is_sky_t0001() {
     assert_gate(
-        "m5a_gate_task_bad_error",
+        "gate_task_bad_error",
         "m5a_gate_task_bad_error_emit",
         sky_diagnostics::SKY_T0001,
     );
@@ -72,7 +72,7 @@ fn task_bad_error_channel_is_sky_t0001() {
 #[test]
 fn task_fail_string_literal_is_sky_t0001() {
     assert_gate(
-        "m5a_gate_task_fail_string",
+        "gate_task_fail_string",
         "m5a_gate_task_fail_string_emit",
         sky_diagnostics::SKY_T0001,
     );
@@ -85,7 +85,7 @@ fn task_fail_string_literal_is_sky_t0001() {
 #[test]
 fn cmd_annotation_wrong_arity_is_sky_t0016_not_ice() {
     assert_gate(
-        "m5a_gate_cmd_arity",
+        "gate_cmd_arity",
         "m5a_gate_cmd_arity_emit",
         sky_diagnostics::SKY_T0016,
     );
@@ -97,7 +97,7 @@ fn cmd_annotation_wrong_arity_is_sky_t0016_not_ice() {
 #[test]
 fn sub_ctor_payload_wrong_arity_is_sky_t0016_not_ice() {
     assert_gate(
-        "m5a_gate_sub_ctor_arity",
+        "gate_sub_ctor_arity",
         "m5a_gate_sub_ctor_arity_emit",
         sky_diagnostics::SKY_T0016,
     );
@@ -112,7 +112,7 @@ fn sub_ctor_payload_wrong_arity_is_sky_t0016_not_ice() {
 #[test]
 fn task_annotation_arity_three_is_sky_t0016_not_ice() {
     assert_gate(
-        "m5a_gate_task_arity_three",
+        "gate_task_arity_three",
         "m5a_gate_task_arity_three_emit",
         sky_diagnostics::SKY_T0016,
     );

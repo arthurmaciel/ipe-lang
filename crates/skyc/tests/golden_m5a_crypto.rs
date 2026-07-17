@@ -8,30 +8,30 @@
 //!
 //! ## Golden catalogue
 //!
-//! * `m5a_crypto_sha_hash` — `sha256` / `sha512` / `sha1` / `md5` of `"abc"`;
+//! * `crypto_sha_hash` — `sha256` / `sha512` / `sha1` / `md5` of `"abc"`;
 //!   known standard test vectors; byte-parity with Go.
 //!
-//! * `m5a_crypto_hmac` — `hmacSha256` / `hmacSha512` with RFC 4231 case-1 key
+//! * `crypto_hmac` — `hmacSha256` / `hmacSha512` with RFC 4231 case-1 key
 //!   (`0x0b × 20`) and message `"Hi There"`; known test vectors; byte-parity.
 //!
-//! * `m5a_crypto_constant_time` — `constantTimeEqual "abc" "abc"` → `true`;
+//! * `crypto_constant_time` — `constantTimeEqual "abc" "abc"` → `true`;
 //!   `constantTimeEqual "abc" "abd"` → `false`.
 //!
-//! * `m5a_crypto_aes_roundtrip` — `aesGcmEncrypt` then `aesGcmDecrypt` recovers
+//! * `crypto_aes_roundtrip` — `aesGcmEncrypt` then `aesGcmDecrypt` recovers
 //!   the plaintext.  Nonce is random so ciphertext differs per run; only `"ok"`
 //!   is checked.
 //!
-//! * `m5a_crypto_chacha_roundtrip` — `chacha20Encrypt` then `chacha20Decrypt`
+//! * `crypto_chacha_roundtrip` — `chacha20Encrypt` then `chacha20Decrypt`
 //!   recovers the plaintext.  Same round-trip shape as AES.
 //!
-//! * `m5a_crypto_keyfrompassword` — `aesKeyFromPassword` is deterministic:
+//! * `crypto_keyfrompassword` — `aesKeyFromPassword` is deterministic:
 //!   derive the key twice; encrypt with the first, decrypt with the second;
 //!   both keys must agree.
 //!
-//! * `m5a_crypto_random_bytes` — `Crypto.randomBytes 16` compiles and the
+//! * `crypto_random_bytes` — `Crypto.randomBytes 16` compiles and the
 //!   program exits cleanly (`"ok"`).
 //!
-//! * `m5a_crypto_random_token` — `Crypto.randomToken 8` compiles and the
+//! * `crypto_random_token` — `Crypto.randomToken 8` compiles and the
 //!   program exits cleanly (`"ok"`).
 //!
 //! Run:
@@ -85,7 +85,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 /// byte-for-byte identical to what Go's `crypto/sha256` etc. produce.
 #[test]
 fn crypto_sha_hash() {
-    assert_runs_and_matches_oracle("m5a_crypto_sha_hash");
+    assert_runs_and_matches_oracle("crypto_sha_hash");
 }
 
 // ── HMAC-SHA256 / HMAC-SHA512 ────────────────────────────────────────────────
@@ -95,7 +95,7 @@ fn crypto_sha_hash() {
 /// MAC values; byte-parity with Go.
 #[test]
 fn crypto_hmac() {
-    assert_runs_and_matches_oracle("m5a_crypto_hmac");
+    assert_runs_and_matches_oracle("crypto_hmac");
 }
 
 // ── constantTimeEqual ────────────────────────────────────────────────────────
@@ -105,7 +105,7 @@ fn crypto_hmac() {
 /// Output: `"true false"`.
 #[test]
 fn crypto_constant_time() {
-    assert_runs_and_matches_oracle("m5a_crypto_constant_time");
+    assert_runs_and_matches_oracle("crypto_constant_time");
 }
 
 // ── AES-GCM round-trip ───────────────────────────────────────────────────────
@@ -115,7 +115,7 @@ fn crypto_constant_time() {
 /// ciphertext differs each run; only `"ok"` is asserted.
 #[test]
 fn crypto_aes_roundtrip() {
-    assert_runs_and_matches_oracle("m5a_crypto_aes_roundtrip");
+    assert_runs_and_matches_oracle("crypto_aes_roundtrip");
 }
 
 // ── ChaCha20-Poly1305 round-trip ─────────────────────────────────────────────
@@ -125,7 +125,7 @@ fn crypto_aes_roundtrip() {
 /// `"ok"` is asserted.
 #[test]
 fn crypto_chacha_roundtrip() {
-    assert_runs_and_matches_oracle("m5a_crypto_chacha_roundtrip");
+    assert_runs_and_matches_oracle("crypto_chacha_roundtrip");
 }
 
 // ── Key-from-password determinism ────────────────────────────────────────────
@@ -136,7 +136,7 @@ fn crypto_chacha_roundtrip() {
 /// succeeds and `"ok"` is printed.
 #[test]
 fn crypto_keyfrompassword() {
-    assert_runs_and_matches_oracle("m5a_crypto_keyfrompassword");
+    assert_runs_and_matches_oracle("crypto_keyfrompassword");
 }
 
 // ── randomBytes ──────────────────────────────────────────────────────────────
@@ -145,7 +145,7 @@ fn crypto_keyfrompassword() {
 /// is discarded; `"ok"` is printed.
 #[test]
 fn crypto_random_bytes() {
-    assert_runs_and_matches_oracle("m5a_crypto_random_bytes");
+    assert_runs_and_matches_oracle("crypto_random_bytes");
 }
 
 // ── randomToken ──────────────────────────────────────────────────────────────
@@ -154,5 +154,5 @@ fn crypto_random_bytes() {
 /// is discarded; `"ok"` is printed.
 #[test]
 fn crypto_random_token() {
-    assert_runs_and_matches_oracle("m5a_crypto_random_token");
+    assert_runs_and_matches_oracle("crypto_random_token");
 }

@@ -3,7 +3,7 @@
 //!
 //! Every test compiles a Sky program through `skyc`, builds the emitted Rust
 //! project with the shared cargo target, runs the binary, and checks its stdout
-//! against the cached oracle (`tests/golden/m5b_db_exec/oracle.meta` +
+//! against the cached oracle (`tests/golden/db_exec/oracle.meta` +
 //! `expected_go.txt`). Tests are gated on `SKY_E2E=1`; without it they return
 //! early.
 //!
@@ -28,41 +28,41 @@
 //!
 //! ## Byte-parity with Go IS proven — separately
 //!
-//! The `m5b_db_exec` golden inserts `"apple"` and `"banana"` with `SqlString` /
+//! The `db_exec` golden inserts `"apple"` and `"banana"` with `SqlString` /
 //! `SqlInt` params and reads them back ordered by name. The output
 //! `"apple:5\nbanana:3\n"` is the only correct answer; the Go backend would
 //! produce identical bytes given the same Sky source.
 //!
 //! ## Golden catalogue
 //!
-//! * `m5b_db_exec` — `Db.open` → `Db.withTransaction` → `Db.execRaw` (DDL) →
+//! * `db_exec` — `Db.open` → `Db.withTransaction` → `Db.execRaw` (DDL) →
 //!   `Db.exec` with `[SqlString, SqlInt]` params (two INSERTs) → `Db.query`
 //!   with empty params (SELECT ORDER BY name) → `Db.getString` / `Db.getInt`
 //!   field access → `println`. Output: `"apple:5\nbanana:3"`.
-//! * `m5b_db_find_by_conditions` — `Db.exec` two INSERTs →
+//! * `db_find_by_conditions` — `Db.exec` two INSERTs →
 //!   `Db.findByConditions conn "items" (Dict.fromList [("name","apple")])` →
 //!   single-row result → `Db.getString` / `Db.getInt` → `println`.
 //!   Output: `"apple:5"`. Proves `Dict String String` arg type + emit arm.
-//! * `m5b_db_find_where` — `Db.exec` two INSERTs →
+//! * `db_find_where` — `Db.exec` two INSERTs →
 //!   `Db.findWhere conn "products" (Sql.gt (Sql.column "qty") (Sql.int 9))` →
 //!   single-row result → `println`. Output: `"widget:10"`.
 //!   The `SqlFragment`-typed counterpart to a raw `Db.unsafeFindWhere` —
 //!   the WHERE clause can only be built through the `Sql.*` combinators, never
 //!   a hand-built string.
-//! * `m5b_db_delete_where` — `Db.exec` three INSERTs →
+//! * `db_delete_where` — `Db.exec` three INSERTs →
 //!   `Db.deleteWhere conn "products" (Sql.eq (Sql.column "name") (Sql.string "gadget"))`
 //!   → row-count + a follow-up `Db.query` confirming only the matched row was
 //!   removed → `println`. Output: `"1:sprocket,widget"`.
-//! * `m5b_db_sql_combinators` — exercises every `Sql.*` combinator at least
+//! * `db_sql_combinators` — exercises every `Sql.*` combinator at least
 //!   once (column, param via int/string/float/bool, eq, ne, gt, lt, gte, lte,
 //!   and, or, not, isNull, isNotNull, like, inList non-empty AND the
 //!   empty-list `(1 = 0)` shortcut) via three `Db.findWhere` calls.
 //!   Output: `"widget|0|gadget"`.
-//! * `m5b_db_gate_findwhere_string` (negative, `golden_m5b_db_gates.rs`) —
+//! * `db_gate_findwhere_string` (negative, `golden_m5b_db_gates.rs`) —
 //!   `Db.findWhere conn "products" ("qty > " ++ "9")` is a compile-time
 //!   `SKY-T0001` (`String` vs `SqlFragment`) — the "parse, don't validate"
 //!   property this surface establishes.
-//! * `m5b_db_find_by_field` — `Db.exec` three INSERTs (two `category = "fruit"`,
+//! * `db_find_by_field` — `Db.exec` three INSERTs (two `category = "fruit"`,
 //!   one `category = "veggie"`) → `Db.findOneByField conn "items" "name" "apple"`
 //!   (match → `Just` row) → `Db.findOneByField conn "items" "name" "durian"`
 //!   (no match → `Nothing`) → `Db.findManyByField conn "items" "category"
@@ -73,7 +73,7 @@
 //!   Golden-E2E coverage for `DbFindOneByField`/`DbFindManyByField` through a
 //!   real `skyc build` + `cargo build` + run, not just direct runtime source
 //!   inspection.
-//! * `m5b_db_decode_money` — `Db.Decode.money "amount"` inside a
+//! * `db_decode_money` — `Db.Decode.money "amount"` inside a
 //!   `Db.queryDecode` pipeline decodes the `"CODE AMOUNT"` TEXT column
 //!   `SqlMoney` writes on INSERT back into `(Decimal, String)`, and a
 //!   malformed value (no space separator) is a total `Task Err`, never a
@@ -154,7 +154,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 /// only runs ipê locally.
 #[test]
 fn db_exec() {
-    assert_runs_and_matches_oracle("m5b_db_exec");
+    assert_runs_and_matches_oracle("db_exec");
 }
 
 // ── Db.queryDecode with typed Decoder ────────────────────────────────────────
@@ -166,7 +166,7 @@ fn db_exec() {
 /// Sanctioned divergence: ipê emits Rust+sqlx; oracle is ipê's own output.
 #[test]
 fn db_query_decode() {
-    assert_runs_and_matches_oracle("m5b_db_query_decode");
+    assert_runs_and_matches_oracle("db_query_decode");
 }
 
 // ── Db CRUD roundtrip ────────────────────────────────────────────────────────
@@ -178,7 +178,7 @@ fn db_query_decode() {
 /// Sanctioned divergence: ipê emits Rust+sqlx; oracle is ipê's own output.
 #[test]
 fn db_crud() {
-    assert_runs_and_matches_oracle("m5b_db_crud");
+    assert_runs_and_matches_oracle("db_crud");
 }
 
 // ── Db.withTransaction — COMMIT and ROLLBACK paths ───────────────────────────
@@ -194,7 +194,7 @@ fn db_crud() {
 /// Sanctioned divergence: ipê emits Rust+sqlx; oracle is ipê's own output.
 #[test]
 fn db_transaction() {
-    assert_runs_and_matches_oracle("m5b_db_transaction");
+    assert_runs_and_matches_oracle("db_transaction");
 }
 
 // ── Db.migrate — versioned forward-only migrations + idempotence ─────────────
@@ -206,7 +206,7 @@ fn db_transaction() {
 /// Sanctioned divergence: ipê emits Rust+sqlx; oracle is ipê's own output.
 #[test]
 fn db_migrate() {
-    assert_runs_and_matches_oracle("m5b_db_migrate");
+    assert_runs_and_matches_oracle("db_migrate");
 }
 
 // ── Db.insertFields / updateFields with OmitField ────────────────────────────
@@ -219,7 +219,7 @@ fn db_migrate() {
 /// Sanctioned divergence: ipê emits Rust+sqlx; oracle is ipê's own output.
 #[test]
 fn db_fields() {
-    assert_runs_and_matches_oracle("m5b_db_fields");
+    assert_runs_and_matches_oracle("db_fields");
 }
 
 // ── Db.Decode.nullable ───────────────────────────────────────────────────────
@@ -232,7 +232,7 @@ fn db_fields() {
 /// Sanctioned divergence: ipê emits Rust+sqlx; oracle is ipê's own output.
 #[test]
 fn db_nullable() {
-    assert_runs_and_matches_oracle("m5b_db_nullable");
+    assert_runs_and_matches_oracle("db_nullable");
 }
 
 // ── Db.findByConditions ───────────────────────────────────────────────────────
@@ -247,7 +247,7 @@ fn db_nullable() {
 /// Sanctioned divergence: ipê emits Rust+sqlx; oracle is ipê's own output.
 #[test]
 fn db_find_by_conditions() {
-    assert_runs_and_matches_oracle("m5b_db_find_by_conditions");
+    assert_runs_and_matches_oracle("db_find_by_conditions");
 }
 
 // ── Db.findWhere / Db.deleteWhere / Std.Db.Sql combinators ──────
@@ -266,7 +266,7 @@ fn db_find_by_conditions() {
 /// counterpart; oracle is ipê's own output.
 #[test]
 fn db_find_where() {
-    assert_runs_and_matches_oracle("m5b_db_find_where");
+    assert_runs_and_matches_oracle("db_find_where");
 }
 
 /// `Db.exec` INSERTs three rows → `Db.deleteWhere conn "products" (Sql.eq
@@ -278,7 +278,7 @@ fn db_find_where() {
 /// counterpart; oracle is ipê's own output.
 #[test]
 fn db_delete_where() {
-    assert_runs_and_matches_oracle("m5b_db_delete_where");
+    assert_runs_and_matches_oracle("db_delete_where");
 }
 
 /// Exercises every `Std.Db.Sql` combinator at least once (column, param via
@@ -290,7 +290,7 @@ fn db_delete_where() {
 /// counterpart; oracle is ipê's own output.
 #[test]
 fn db_sql_combinators() {
-    assert_runs_and_matches_oracle("m5b_db_sql_combinators");
+    assert_runs_and_matches_oracle("db_sql_combinators");
 }
 
 // ── SqlDecimal + SqlMoney ctors ───────────────────────────────────────────────
@@ -306,7 +306,7 @@ fn db_sql_combinators() {
 /// Sanctioned divergence: ipê emits Rust+sqlx; oracle is ipê's own output.
 #[test]
 fn db_sql_decimal_money() {
-    assert_runs_and_matches_oracle("m5b_db_sql_decimal_money");
+    assert_runs_and_matches_oracle("db_sql_decimal_money");
 }
 
 // ── Polymorphic params — T0001 regression ────────────────────────────────────
@@ -329,9 +329,9 @@ fn db_sql_decimal_money() {
 #[test]
 fn db_poly_params_compiles() {
     let root = repo_root();
-    let dir = golden_dir(&root, "m5b_db_poly_params");
+    let dir = golden_dir(&root, "db_poly_params");
     let entry = dir.join("Main.sky");
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m5b_db_poly_params");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("db_poly_params");
     let _ = std::fs::remove_dir_all(&out);
 
     let runtime = skyc::resolve_runtime();
@@ -353,7 +353,7 @@ fn db_poly_params_compiles() {
 /// Gated on `SKY_E2E=1`.
 #[test]
 fn db_poly_params_e2e() {
-    assert_runs_and_matches_oracle("m5b_db_poly_params");
+    assert_runs_and_matches_oracle("db_poly_params");
 }
 
 // ── Db.findOneByField / Db.findManyByField ────────────────────────────────────
@@ -373,7 +373,7 @@ fn db_poly_params_e2e() {
 /// Sanctioned divergence: ipê emits Rust+sqlx; oracle is ipê's own output.
 #[test]
 fn db_find_by_field() {
-    assert_runs_and_matches_oracle("m5b_db_find_by_field");
+    assert_runs_and_matches_oracle("db_find_by_field");
 }
 
 // ── Db.Decode.money kernel registration ────────────────────
@@ -395,5 +395,5 @@ fn db_find_by_field() {
 /// `docs/divergences-from-sky.md` (`B-DbDecMoney`).
 #[test]
 fn db_decode_money() {
-    assert_runs_and_matches_oracle("m5b_db_decode_money");
+    assert_runs_and_matches_oracle("db_decode_money");
 }

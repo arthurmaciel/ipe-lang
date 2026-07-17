@@ -62,7 +62,7 @@ const SUGGESTION_MAX_DISTANCE: usize = 2;
 ///     crucially, a compiled-source `Std.Css` type (`Color` / `Length` / …) —
 ///     declare them; the home-aware guard keeps the genuine Std.Ui
 ///     builtin resolving to `UiPlain`. Multiple shipped `.sky` fixtures
-///     (`m4d_dict_adt_gate`, `m4d_set_adt_fn_gate`, `mm_local_pkg`, …) already
+///     (`dict_adt_gate`, `set_adt_fn_gate`, `mm_local_pkg`, …) already
 ///     declare `type Color` as a benign sample ADT and now lower correctly.
 const RESERVED_BUILTIN_TYPES: &[&str] = &[
     "Int",

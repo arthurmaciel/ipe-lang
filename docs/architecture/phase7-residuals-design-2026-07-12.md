@@ -89,10 +89,10 @@ here so each section below doesn't have to re-state them:
   inside a `--` COMMENT describing an unrelated bug repro (`-- \`case
   List.head argsList of Just "live" -> Live.app {...} |> Task.run; _\``);
   that fixture never actually constructs a `Live.app` call. The TRUE blast
-  radius is **5** fixtures: `m7_live_let_bound_routes`,
-  `m7_live_routed_empty_routes_wrong_ctor_notfound`, `m7_live_param_routes`,
-  `m7_live_routed_empty_routes_int_notfound`, and
-  `m7_live_routed_empty_routes_ok`. Problem 1's re-baseline blast radius is
+  radius is **5** fixtures: `live_let_bound_routes`,
+  `live_routed_empty_routes_wrong_ctor_notfound`, `live_param_routes`,
+  `live_routed_empty_routes_int_notfound`, and
+  `live_routed_empty_routes_ok`. Problem 1's re-baseline blast radius is
   5 fixtures, not 140+ (corrected from an earlier drafting pass's off-by-one
   — see the revision log at the top of this document).
 - `IrType::Record` is `BTreeMap<Symbol, IrType>` (`crates/sky_ir/src/
@@ -1296,10 +1296,10 @@ Commit.
 
 **1B.6 — Golden re-baseline.**
 Run the golden harness across the 5 `Live.app`/`Live.appRouted` fixtures
-under `tests/golden/` (§0 — `m7_live_let_bound_routes`,
-`m7_live_routed_empty_routes_wrong_ctor_notfound`, `m7_live_param_routes`,
-`m7_live_routed_empty_routes_int_notfound`,
-`m7_live_routed_empty_routes_ok`; `tui_entry_case_taskrun` is excluded —
+under `tests/golden/` (§0 — `live_let_bound_routes`,
+`live_routed_empty_routes_wrong_ctor_notfound`, `live_param_routes`,
+`live_routed_empty_routes_int_notfound`,
+`live_routed_empty_routes_ok`; `tui_entry_case_taskrun` is excluded —
 its only match is inside a comment). Confirm exactly those 5 now differ
 (new const line + new call argument) and the harness's accept/bless step
 is used to record the new expected output for those 5 only. Re-run the

@@ -131,9 +131,9 @@ fn every_byte_diffing_golden_test_calls_the_shared_helper() {
     // vanished, the structural exemption would silently exempt EVERYTHING. Fail
     // loudly rather than pass vacuously.
     assert!(
-        golden_root.join("m1_records").join("main.rs").is_file(),
+        golden_root.join("records").join("main.rs").is_file(),
         "golden fixture tree not found at {} (expected at least \
-         m1_records/main.rs) — the structural exemption cannot be trusted \
+         records/main.rs) — the structural exemption cannot be trusted \
          without it",
         golden_root.display()
     );

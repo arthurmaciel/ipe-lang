@@ -6,7 +6,7 @@
 //! banner, entry point). Those two fixed regions are produced here.
 //!
 //! The byte source of truth is the golden program at
-//! `tests/golden/m0/main.rs`. Rather than hand-retype the bytes (and risk a
+//! `tests/golden/basics/main.rs`. Rather than hand-retype the bytes (and risk a
 //! silent drift from the golden), the templates are sliced out of the embedded
 //! golden at well-defined textual anchors. The crate's tests assert byte
 //! equality against an independent, line-number-based reconstruction of the
@@ -21,7 +21,7 @@ use sky_diagnostics::{DResult, Diagnostic};
 
 /// The golden program, embedded at compile time. The fixed preamble and
 /// epilogue are exact substrings of this file.
-const GOLDEN: &str = include_str!("../../../tests/golden/m0/main.rs");
+const GOLDEN: &str = include_str!("../../../tests/golden/basics/main.rs");
 
 /// The `Diagnostic::CompilerBug` raised when a golden anchor is absent — a
 /// drifted-golden invariant violation, surfaced (SKY-I0203) instead of a silent
@@ -93,7 +93,7 @@ mod tests {
 
     /// Independent copy of the golden, reconstructed by 1-indexed line ranges so
     /// the assertions don't merely echo the implementation's anchor logic.
-    const GOLDEN: &str = include_str!("../../../tests/golden/m0/main.rs");
+    const GOLDEN: &str = include_str!("../../../tests/golden/basics/main.rs");
 
     #[test]
     fn preamble_matches_golden_lines_1_to_30() -> DResult<()> {

@@ -20,7 +20,7 @@ use super::*;
 // unconditional `tokio::task::spawn_blocking` reference here would break that
 // job. Every REAL generated Sky project always has `tokio` (`Task.run`/
 // `block_on` need it regardless of which kernels are used — see
-// `tests/golden/m0/Cargo.toml`), so the `#[cfg(not(feature = "tokio"))]`
+// `tests/golden/basics/Cargo.toml`), so the `#[cfg(not(feature = "tokio"))]`
 // fallback below only matters for the standalone `sky-runtime-rust` crate's
 // own narrow-feature builds, never for a real Sky program. See
 // `docs/adr/0014-kernel-robustness-blocking-offload-and-toctou.md` §2.2.

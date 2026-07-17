@@ -26,13 +26,13 @@
 //!
 //! ## Golden catalogue
 //!
-//! * `m5c_perform_ctor` — `Cmd.perform (Task.succeed 1) (\_ -> 0)` discarded;
+//! * `perform_ctor` — `Cmd.perform (Task.succeed 1) (\_ -> 0)` discarded;
 //!   proves type+emit+link for `cmd_perform`.
-//! * `m5c_cmd_ctors` — `Cmd.batch [Cmd.perform …, Cmd.none]` discarded; proves
+//! * `cmd_ctors` — `Cmd.batch [Cmd.perform …, Cmd.none]` discarded; proves
 //!   `cmd_none` infers `msg` from a sibling in the batch.
-//! * `m5c_sub_ctors` — `Sub.every 1000 0` and `Sub.batch [Sub.none, Sub.every
+//! * `sub_ctors` — `Sub.every 1000 0` and `Sub.batch [Sub.none, Sub.every
 //!   500 1]` discarded; proves `sub_none` infers `msg` from a sibling.
-//! * `m5c_gate_undetermined_msg` — `let _ = Cmd.none in println "ok"` must
+//! * `gate_undetermined_msg` — `let _ = Cmd.none in println "ok"` must
 //!   surface SKY-L0102 (free `msg` type variable), never emit cargo-failing Rust.
 //!
 //! Run:
@@ -89,7 +89,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 /// Output: `"ok"`.
 #[test]
 fn perform_ctor() {
-    assert_runs_and_matches_oracle("m5c_perform_ctor");
+    assert_runs_and_matches_oracle("perform_ctor");
 }
 
 // ── Cmd.none / Cmd.batch construct-only ──────────────────────────────────────
@@ -99,7 +99,7 @@ fn perform_ctor() {
 /// Output: `"ok"`.
 #[test]
 fn cmd_ctors() {
-    assert_runs_and_matches_oracle("m5c_cmd_ctors");
+    assert_runs_and_matches_oracle("cmd_ctors");
 }
 
 // ── Sub.none / Sub.batch / Sub.every construct-only ──────────────────────────
@@ -109,7 +109,7 @@ fn cmd_ctors() {
 /// Output: `"ok"`.
 #[test]
 fn sub_ctors() {
-    assert_runs_and_matches_oracle("m5c_sub_ctors");
+    assert_runs_and_matches_oracle("sub_ctors");
 }
 
 // ── Under-determined-msg gate ─────────────────────────────────────────────────
@@ -150,7 +150,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code)
 #[test]
 fn undetermined_cmd_none_msg_is_sky_l0102() {
     assert_gate(
-        "m5c_gate_undetermined_msg",
+        "gate_undetermined_msg",
         "m5c_gate_undetermined_msg_emit",
         sky_diagnostics::SKY_L0102,
     );

@@ -84,16 +84,16 @@ fn assert_e2e_output(name: &str) {
 /// twice — `lower_let`'s destructure catch-all (§2.6, tuple binder).
 #[test]
 fn i125_decoder_tuple_destructure_reuse_compiles_and_runs() {
-    let _ = assert_skyc_ok("i125_decoder_tuple_destructure");
-    assert_e2e_output("i125_decoder_tuple_destructure");
+    let _ = assert_skyc_ok("decoder_tuple_destructure");
+    assert_e2e_output("decoder_tuple_destructure");
 }
 
 /// `let { nameDecoder } = buildDecoders ()` with `nameDecoder` reused twice
 /// — `lower_let`'s destructure catch-all (§2.6, record-field binder).
 #[test]
 fn i125_decoder_record_destructure_reuse_compiles_and_runs() {
-    let _ = assert_skyc_ok("i125_decoder_record_destructure");
-    assert_e2e_output("i125_decoder_record_destructure");
+    let _ = assert_skyc_ok("decoder_record_destructure");
+    assert_e2e_output("decoder_record_destructure");
 }
 
 /// `case buildPair () of (nameDecoder, ageDecoder) -> …` with `nameDecoder`
@@ -101,22 +101,22 @@ fn i125_decoder_record_destructure_reuse_compiles_and_runs() {
 /// destructure wiring, not just `lower_let`'s.
 #[test]
 fn i125_decoder_case_destructure_reuse_compiles_and_runs() {
-    let _ = assert_skyc_ok("i125_decoder_case_destructure");
-    assert_e2e_output("i125_decoder_case_destructure");
+    let _ = assert_skyc_ok("decoder_case_destructure");
+    assert_e2e_output("decoder_case_destructure");
 }
 
 /// Non-regression guard (§2.8, cheap tier): a destructure binding NO
 /// Decoder-typed component must fall through UNCHANGED to the plain
-/// `Expr::Destructure` path. Reuses the existing `m3b2_let_destructure`
+/// `Expr::Destructure` path. Reuses the existing `let_destructure`
 /// golden's `main.rs` byte-snapshot (`let (a, b) = (40, 2)` + a record
 /// binder), asserting the emitted Rust is byte-identical to the checked-in
 /// snapshot AND carries no thunk binder — proving the Decoder-free fast path
 /// is untouched, not merely still-running.
 #[test]
 fn i125_non_decoder_destructure_fast_path_byte_identical() {
-    let out = assert_skyc_ok("m3b2_let_destructure");
+    let out = assert_skyc_ok("let_destructure");
     let root = repo_root();
-    let golden_dir = golden_dir(&root, "m3b2_let_destructure");
+    let golden_dir = golden_dir(&root, "let_destructure");
     // Seal half: the emitted source must carry no thunk binder. Read the emitted
     // `main.rs` directly for this `!contains` check — the directory-diff helper
     // below cannot express a substring assertion.

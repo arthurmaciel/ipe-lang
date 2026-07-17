@@ -48,8 +48,8 @@ naive reading of the spec.
    new allocator surgery MUST follow this pattern verbatim (never a silent no-op).
 
 3. **The golden base manifest already carries the OLD mimalloc default.**
-   `tests/golden/m0/Cargo.toml`: `static_alloc = ["mimalloc"]` +
-   `mimalloc = { version = "0.1", optional = true }`. `tests/golden/m0/main.rs:4-6`:
+   `tests/golden/basics/Cargo.toml`: `static_alloc = ["mimalloc"]` +
+   `mimalloc = { version = "0.1", optional = true }`. `tests/golden/basics/main.rs:4-6`:
    ```rust
    #[cfg(feature = "static_alloc")]
    #[global_allocator]
@@ -59,7 +59,7 @@ naive reading of the spec.
    rebaselined by this plan.
 
 4. **The TLS static blocker is ALREADY closed — this plan GUARDS it, it does not
-   migrate it.** `runtime/Cargo.toml` and `tests/golden/m0/Cargo.toml`:
+   migrate it.** `runtime/Cargo.toml` and `tests/golden/basics/Cargo.toml`:
    `reqwest = { … default-features = false, features = ["rustls-tls", "gzip",
    "stream"] }`; `lettre = { … "tokio1-rustls-tls" }`; sqlx surgery uses
    `runtime-tokio-rustls`. No `openssl` / `native-tls` anywhere. So Task 7 adds a
@@ -213,10 +213,10 @@ golden in lockstep.
 ## Task 2 — Emitted `Cargo.toml`: the mutually-exclusive `alloc_*` feature family
 
 **Files:** `crates/sky_backend_rust/src/project.rs` (new `alloc_cargo_toml`),
-`tests/golden/m0/Cargo.toml`.
+`tests/golden/basics/Cargo.toml`.
 
 **Steps:**
-1. In `tests/golden/m0/Cargo.toml`, **delete** `static_alloc = ["mimalloc"]` and
+1. In `tests/golden/basics/Cargo.toml`, **delete** `static_alloc = ["mimalloc"]` and
    the bare `mimalloc = { version = "0.1", optional = true }` line. Replace the
    `[features]` tail with:
    ```toml
@@ -273,11 +273,11 @@ golden in lockstep.
 
 ## Task 3 — `#[global_allocator]` emission (cfg-gated arms + talc soundness floor)
 
-**Files:** `tests/golden/m0/main.rs`, `crates/sky_backend_rust/src/preamble.rs`
+**Files:** `tests/golden/basics/main.rs`, `crates/sky_backend_rust/src/preamble.rs`
 (or wherever the top-of-file header is sliced), plus an emit-time test.
 
 **Steps:**
-1. In `tests/golden/m0/main.rs`, replace lines 4-6 (the single mimalloc item) with
+1. In `tests/golden/basics/main.rs`, replace lines 4-6 (the single mimalloc item) with
    the **deterministic three-arm block** — all arms always emitted, the *feature*
    decides which compiles:
    ```rust
@@ -691,7 +691,7 @@ parallel with the 4→5 branch.
 ## Open decisions (surface to the user before starting)
 
 - **D1 — Golden rebaseline authority.** Tasks 2/3 regenerate
-  `tests/golden/m0/{Cargo.toml,main.rs}` and rebaseline the oracle byte-diff. Who
+  `tests/golden/basics/{Cargo.toml,main.rs}` and rebaseline the oracle byte-diff. Who
   signs off?
 - **CWD config discovery (elevated from a footnote to a blocker).** Confirm the
   runner is changed to invoke cargo with **CWD = the emitted crate dir**; otherwise

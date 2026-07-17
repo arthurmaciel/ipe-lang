@@ -8,7 +8,7 @@
 //!
 //! Two programs exercise the surface:
 //!
-//! * `m4a_cons_sum` (positive) — `sum xs = case xs of [] -> 0 ; x :: rest ->
+//! * `cons_sum` (positive) — `sum xs = case xs of [] -> 0 ; x :: rest ->
 //!   x + sum rest` over `[1, 2, 3]`, printing `6`. The `case` lowers to a native
 //!   Rust slice match over the runtime's `Vec<T>` list repr (`match (xs).as_slice()
 //!   { [] => …, [x, rest @ ..] => … }`); the head element is rebound owned via
@@ -18,7 +18,7 @@
 //!   and print the value the Go reference produces — captured in `expected_go.txt`
 //!   / `oracle.meta` via the cached-oracle infra (no live Go in this gate).
 //!
-//! * `m4a_gate_list_nonexhaustive` (negative) — `case xs of x :: rest -> x`
+//! * `gate_list_nonexhaustive` (negative) — `case xs of x :: rest -> x`
 //!   omits the `[]` arm. `List` is the closed `Nil | Cons` type, so the missing
 //!   empty-list case is non-exhaustive: the usefulness check reports SKY-T0010
 //!   (the soundness floor — a non-exhaustive list `case` MUST be caught before
@@ -111,15 +111,15 @@ fn assert_gate(fixture: &str, expected: sky_diagnostics::Code) {
 
 #[test]
 fn cons_sum_emits_byte_identical_main_rs() {
-    assert_byte_identical("m4a_cons_sum");
+    assert_byte_identical("cons_sum");
 }
 
 #[test]
 fn cons_sum_builds_and_prints_six() {
-    assert_runs_and_matches_oracle("m4a_cons_sum");
+    assert_runs_and_matches_oracle("cons_sum");
 }
 
 #[test]
 fn non_exhaustive_list_case_is_sky_t0010() {
-    assert_gate("m4a_gate_list_nonexhaustive", sky_diagnostics::SKY_T0010);
+    assert_gate("gate_list_nonexhaustive", sky_diagnostics::SKY_T0010);
 }

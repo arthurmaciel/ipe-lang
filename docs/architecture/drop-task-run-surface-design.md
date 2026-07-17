@@ -49,8 +49,8 @@ Current inventory in the Rust port (all confirmed 2026-07-10):
 Corpus pressure: 95 occurrences across 35 files in `../sky/examples/`
 (top: `17-skymon` 18, `38-composite-ui-multibackend` 6, `16-skychess` 6,
 `00-standard-libs` 6); 7 occurrences in the port's own
-`tests/golden/` corpus (`i148_http_stream_id` 4,
-`l0102_wildcard_lambda_pany` 2, `i151_poly_task_on_error` 1). This is
+`tests/golden/` corpus (`http_stream_id` 4,
+`wildcard_lambda_pany` 2, `poly_task_on_error` 1). This is
 why #128 is "the first consumer of the CI example-patch-queue"
 (`docs/divergences-from-sky.md` §6.9, accepted 2026-07-05).
 
@@ -165,8 +165,8 @@ Order of operations (after #116 is landed and green):
    friction is the checklist: rustc will list every arm.
 4. `skyc fix` codemod (mechanical rewrites per D4) + its tests.
 5. Regenerate the port's own 7 golden usages via the codemod
-   (`tests/golden/i148_http_stream_id`, `i151_poly_task_on_error`,
-   `l0102_wildcard_lambda_pany`) — these become the first migrator
+   (`tests/golden/http_stream_id`, `poly_task_on_error`,
+   `wildcard_lambda_pany`) — these become the first migrator
    fixtures.
 6. Generate the upstream-example patch queue entries
    (`tests/example-patches/…`) by running the codemod over the 35

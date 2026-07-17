@@ -57,7 +57,7 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code)
 #[test]
 fn ctor_pattern_arity_is_sky_t0013() {
     assert_gate(
-        "m3a_gate_arity",
+        "gate_arity",
         "m3a_gate_arity_emit",
         sky_diagnostics::SKY_T0013,
     );

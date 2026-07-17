@@ -21,7 +21,7 @@
 //! * R2 (`wrong_ctor_notfound`): routed Model, `routes = []`,
 //!   `notFound = Increment` (Msg ctor, wrong ADT) → SKY-T0001.
 //! * Positive control: well-typed routed app (let-bound routes, correct notFound)
-//!   → skyc Ok (reuses the `m7_live_let_bound_routes` fixture).
+//!   → skyc Ok (reuses the `live_let_bound_routes` fixture).
 //!
 //! All tests are pure skyc-pipeline checks (parse → canon → types → lower →
 //! emit). No cargo build or runtime binary required — they run without
@@ -207,7 +207,7 @@ fn run_skyc(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>> {
 #[test]
 fn routed_empty_routes_int_notfound_is_sky_t0001() {
     let Some(result) = run_skyc(
-        "m7_live_routed_empty_routes_int_notfound",
+        "live_routed_empty_routes_int_notfound",
         "m7_live_routed_empty_routes_int_notfound_emit",
     ) else {
         return;
@@ -233,7 +233,7 @@ fn routed_empty_routes_int_notfound_is_sky_t0001() {
 #[test]
 fn routed_empty_routes_wrong_ctor_notfound_is_sky_t0001() {
     let Some(result) = run_skyc(
-        "m7_live_routed_empty_routes_wrong_ctor_notfound",
+        "live_routed_empty_routes_wrong_ctor_notfound",
         "m7_live_routed_empty_routes_wrong_ctor_notfound_emit",
     ) else {
         return;
@@ -254,12 +254,12 @@ fn routed_empty_routes_wrong_ctor_notfound_is_sky_t0001() {
 /// Positive control: well-typed routed app (let-bound routeTable, correct
 /// `notFound = CounterPage` which matches `page : Page`) must compile.
 ///
-/// Reuses the `m7_live_let_bound_routes` fixture (the SKY-I0001 regression).
+/// Reuses the `live_let_bound_routes` fixture (the SKY-I0001 regression).
 /// Confirms the Part B hook does NOT trigger on a correctly-typed routed app.
 #[test]
 fn routed_correct_app_compiles() {
     let Some(result) = run_skyc(
-        "m7_live_let_bound_routes",
+        "live_let_bound_routes",
         "m7_live_let_bound_routes_partb_control",
     ) else {
         return;
@@ -378,7 +378,7 @@ fn routed_empty_routes_well_typed_compiles_and_renders_route_page() {
     let entry = root
         .join("tests")
         .join("golden")
-        .join("m7_live_routed_empty_routes_ok")
+        .join("live_routed_empty_routes_ok")
         .join("Main.sky");
     let out = empty_routes_ok_out();
     let _ = std::fs::remove_dir_all(&out);

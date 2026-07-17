@@ -6,38 +6,38 @@
 //! * `Encoding.base64Encode` / `Encoding.base64Decode` roundtrip using Go
 //!   `base64.StdEncoding` (standard alphabet with `=` padding, NOT URL-safe):
 //!   `"hello"` → `"aGVsbG8="` → `"hello"` → `"aGVsbG8= hello"`.
-//!   (`m4f_encoding_base64`)
+//!   (`encoding_base64`)
 //!
 //! * `Encoding.urlEncode` / `Encoding.urlDecode` roundtrip using Go
 //!   `url.QueryEscape` semantics (space → `+`, `&` → `%26`):
 //!   `"a b&c"` → `"a+b%26c"` → `"a b&c"` → `"a+b%26c a b&c"`.
-//!   (`m4f_encoding_url`)
+//!   (`encoding_url`)
 //!
 //! * `Encoding.urlEncode` over the ASCII unreserved set: Go `url.QueryEscape`
 //!   leaves `A-Za-z0-9` plus the four marks `-` `_` `.` `~` verbatim while
 //!   escaping `+` → `%2B` and `@` → `%40`. Pins parity over both shapes.
-//!   (`m4f_encoding_url_unreserved`)
+//!   (`encoding_url_unreserved`)
 //!
 //! * `Encoding.hexEncode` / `Encoding.hexDecode` roundtrip — Go
 //!   `hex.EncodeToString` emits lowercase hex:
 //!   `"Hi!"` → `"486921"` → `"Hi!"` → `"486921 Hi!"`.
-//!   (`m4f_encoding_hex`)
+//!   (`encoding_hex`)
 //!
 //! * `Encoding.base64Decode` of an invalid input → `Err _` branch taken →
-//!   `"invalid"` (`m4f_encoding_invalid`).
+//!   `"invalid"` (`encoding_invalid`).
 //!
 //! * `Encoding.base64Encode` / `hexEncode` over non-ASCII text → Go-parity
-//!   UTF-8 bytes (`m4f_encoding_nonascii`).
+//!   UTF-8 bytes (`encoding_nonascii`).
 //!
 //! ## Oracle-divergence flags (per golden)
 //!
-//! The ENCODE roundtrips (`m4f_encoding_base64`, `m4f_encoding_url`,
-//! `m4f_encoding_url_unreserved`, `m4f_encoding_hex`, `m4f_encoding_nonascii`)
+//! The ENCODE roundtrips (`encoding_base64`, `encoding_url`,
+//! `encoding_url_unreserved`, `encoding_hex`, `encoding_nonascii`)
 //! carry `oracle_divergence = false`: the `Encoding.*` text codecs encode a
 //! String's UTF-8 bytes, byte-identical to the Go reference for BOTH ASCII and
 //! non-ASCII (no Latin-1 truncation).
 //!
-//! `m4f_encoding_invalid` carries `oracle_divergence = true` (Go-failure kind):
+//! `encoding_invalid` carries `oracle_divergence = true` (Go-failure kind):
 //! the Go backend PANICS with `CoerceFailure` (`rt.ResultCoerce` →
 //! `coerceInner`) when narrowing the `Result` of a decode kernel inside a
 //! top-level `case … of Ok _ … Err _ …`, so it cannot produce a reference for
@@ -45,7 +45,7 @@
 //! caches. This is an UPSTREAM (Go-backend) bug, not a Sky-Rust one. TRACKED:
 //! re-verify this golden against the live Go oracle once the upstream
 //! CoerceFailure-on-decode-Result narrowing is fixed (`refresh-oracle
-//! m4f_encoding_invalid`) — if Go then succeeds, the flag should flip back to
+//! encoding_invalid`) — if Go then succeeds, the flag should flip back to
 //! `false`. The base64/url/hex DECODE oracles decode from a let-bound `case`
 //! whose `Err _` arm yields a String literal (a different routing shape that Go
 //! handles), so they stay parity-clean — re-verified against the live Go oracle.
@@ -100,7 +100,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 /// "aGVsbG8="` → `Ok "hello"`.  Output: `"aGVsbG8= hello"`.
 #[test]
 fn encoding_base64_roundtrip() {
-    assert_runs_and_matches_oracle("m4f_encoding_base64");
+    assert_runs_and_matches_oracle("encoding_base64");
 }
 
 // ── urlEncode + urlDecode ────────────────────────────────────────────────────
@@ -109,7 +109,7 @@ fn encoding_base64_roundtrip() {
 /// `Encoding.urlDecode "a+b%26c"` → `Ok "a b&c"`.  Output: `"a+b%26c a b&c"`.
 #[test]
 fn encoding_url_roundtrip() {
-    assert_runs_and_matches_oracle("m4f_encoding_url");
+    assert_runs_and_matches_oracle("encoding_url");
 }
 
 /// `Encoding.urlEncode "a-b_c.d~e"` → `"a-b_c.d~e"` (unreserved set verbatim);
@@ -117,7 +117,7 @@ fn encoding_url_roundtrip() {
 /// (`+` → `%2B`, `@` → `%40`).  Locks the Go `QueryEscape` unreserved set.
 #[test]
 fn encoding_url_unreserved() {
-    assert_runs_and_matches_oracle("m4f_encoding_url_unreserved");
+    assert_runs_and_matches_oracle("encoding_url_unreserved");
 }
 
 // ── hexEncode + hexDecode ────────────────────────────────────────────────────
@@ -126,7 +126,7 @@ fn encoding_url_unreserved() {
 /// `Encoding.hexDecode "486921"` → `Ok "Hi!"`.  Output: `"486921 Hi!"`.
 #[test]
 fn encoding_hex_roundtrip() {
-    assert_runs_and_matches_oracle("m4f_encoding_hex");
+    assert_runs_and_matches_oracle("encoding_hex");
 }
 
 // ── non-ASCII byte-model divergence ──────────────────────────────────────────
@@ -137,7 +137,7 @@ fn encoding_hex_roundtrip() {
 /// the Sky-Rust output (`café Y2Fm6Q== 636166e9`); see divergence-policy.md.
 #[test]
 fn encoding_nonascii() {
-    assert_runs_and_matches_oracle("m4f_encoding_nonascii");
+    assert_runs_and_matches_oracle("encoding_nonascii");
 }
 
 // ── base64Decode of invalid input ────────────────────────────────────────────
@@ -145,5 +145,5 @@ fn encoding_nonascii() {
 /// `Encoding.base64Decode "not-valid-base64!!"` → `Err _`.  Output: `"invalid"`.
 #[test]
 fn encoding_base64_invalid() {
-    assert_runs_and_matches_oracle("m4f_encoding_invalid");
+    assert_runs_and_matches_oracle("encoding_invalid");
 }

@@ -34,7 +34,7 @@ fn emit_fixture(out_name: &str) -> String {
     let entry = root
         .join("tests")
         .join("golden")
-        .join("i142_copy_field_no_clone")
+        .join("copy_field_no_clone")
         .join("Main.sky");
     let out = std::env::temp_dir().join(out_name);
     let _ = std::fs::remove_dir_all(&out);
@@ -48,7 +48,7 @@ fn emit_fixture(out_name: &str) -> String {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for i142_copy_field_no_clone: {:?}",
+        "skyc build must succeed for copy_field_no_clone: {:?}",
         built.err()
     );
 
@@ -118,7 +118,7 @@ fn copy_field_no_clone_compiles_and_runs() {
     let _ = emit_fixture("skyc_i142_copy_field_no_clone_e2e");
     let out = std::env::temp_dir().join("skyc_i142_copy_field_no_clone_e2e");
 
-    let outcome = support::build_and_run_emitted("i142_copy_field_no_clone", &out);
+    let outcome = support::build_and_run_emitted("copy_field_no_clone", &out);
     assert_eq!(
         outcome.exit_code,
         Some(0),

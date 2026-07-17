@@ -20,13 +20,13 @@
 //!
 //! The four mandated programs and their values:
 //!
-//! * `m4a_fns_foldl` — `List.foldl (\acc x -> acc + x) 0 [1,2,3,4]` → `10`. A
+//! * `fns_foldl` — `List.foldl (\acc x -> acc + x) 0 [1,2,3,4]` → `10`. A
 //!   lambda flows into the runtime HOF as a boxed closure (`Box<…>` satisfies the
 //!   `impl Fn + Clone` runtime bound when its captures are `Clone`).
-//! * `m4a_fns_filter_length` — `List.length (List.filter (\x -> x > 2) [1,2,3,4])`
+//! * `fns_filter_length` — `List.length (List.filter (\x -> x > 2) [1,2,3,4])`
 //!   → `2`.
-//! * `m4a_fns_maybe_default` — `Maybe.withDefault 0 (Just 5)` → `5`.
-//! * `m4a_fns_result_map` — `Result.withDefault 0 (Result.map (\x -> x + 1) (Ok 2))`
+//! * `fns_maybe_default` — `Maybe.withDefault 0 (Just 5)` → `5`.
+//! * `fns_result_map` — `Result.withDefault 0 (Result.map (\x -> x + 1) (Ok 2))`
 //!   → `3`. `Ok 2`'s `Result e a` error type is unconstrained, so the lowerer
 //!   pins it to the project `SkyError` via the runtime's `ok_res` (avoiding
 //!   rustc's E0282 ambiguity); `Result.map`'s runtime takes the container first,
@@ -107,92 +107,92 @@ fn assert_runs_and_matches_oracle(name: &str) {
 
 #[test]
 fn foldl_emits_byte_identical_main_rs() {
-    assert_byte_identical("m4a_fns_foldl");
+    assert_byte_identical("fns_foldl");
 }
 
 #[test]
 fn filter_length_emits_byte_identical_main_rs() {
-    assert_byte_identical("m4a_fns_filter_length");
+    assert_byte_identical("fns_filter_length");
 }
 
 #[test]
 fn maybe_default_emits_byte_identical_main_rs() {
-    assert_byte_identical("m4a_fns_maybe_default");
+    assert_byte_identical("fns_maybe_default");
 }
 
 #[test]
 fn result_map_emits_byte_identical_main_rs() {
-    assert_byte_identical("m4a_fns_result_map");
+    assert_byte_identical("fns_result_map");
 }
 
 #[test]
 fn list_map_emits_byte_identical_main_rs() {
-    assert_byte_identical("m4a_fns_map");
+    assert_byte_identical("fns_map");
 }
 
 #[test]
 fn foldr_emits_byte_identical_main_rs() {
-    assert_byte_identical("m4a_fns_foldr");
+    assert_byte_identical("fns_foldr");
 }
 
 #[test]
 fn list_ops_emits_byte_identical_main_rs() {
-    assert_byte_identical("m4a_fns_list_ops");
+    assert_byte_identical("fns_list_ops");
 }
 
 #[test]
 fn head_tail_reverse_emits_byte_identical_main_rs() {
-    assert_byte_identical("m4a_fns_head_tail_reverse");
+    assert_byte_identical("fns_head_tail_reverse");
 }
 
 #[test]
 fn maybe_chain_emits_byte_identical_main_rs() {
-    assert_byte_identical("m4a_fns_maybe_chain");
+    assert_byte_identical("fns_maybe_chain");
 }
 
 // ── Build + run + Go-oracle parity (SKY_E2E=1) ───────────────────────────────
 
 #[test]
 fn foldl_builds_and_prints_ten() {
-    assert_runs_and_matches_oracle("m4a_fns_foldl");
+    assert_runs_and_matches_oracle("fns_foldl");
 }
 
 #[test]
 fn filter_length_builds_and_prints_two() {
-    assert_runs_and_matches_oracle("m4a_fns_filter_length");
+    assert_runs_and_matches_oracle("fns_filter_length");
 }
 
 #[test]
 fn maybe_default_builds_and_prints_five() {
-    assert_runs_and_matches_oracle("m4a_fns_maybe_default");
+    assert_runs_and_matches_oracle("fns_maybe_default");
 }
 
 #[test]
 fn result_map_builds_and_prints_three() {
-    assert_runs_and_matches_oracle("m4a_fns_result_map");
+    assert_runs_and_matches_oracle("fns_result_map");
 }
 
 #[test]
 fn list_map_builds_and_prints_twelve() {
-    assert_runs_and_matches_oracle("m4a_fns_map");
+    assert_runs_and_matches_oracle("fns_map");
 }
 
 #[test]
 fn foldr_builds_and_prints_two() {
-    assert_runs_and_matches_oracle("m4a_fns_foldr");
+    assert_runs_and_matches_oracle("fns_foldr");
 }
 
 #[test]
 fn list_ops_builds_and_prints_two() {
-    assert_runs_and_matches_oracle("m4a_fns_list_ops");
+    assert_runs_and_matches_oracle("fns_list_ops");
 }
 
 #[test]
 fn head_tail_reverse_builds_and_prints_three() {
-    assert_runs_and_matches_oracle("m4a_fns_head_tail_reverse");
+    assert_runs_and_matches_oracle("fns_head_tail_reverse");
 }
 
 #[test]
 fn maybe_chain_builds_and_prints_fifty_one() {
-    assert_runs_and_matches_oracle("m4a_fns_maybe_chain");
+    assert_runs_and_matches_oracle("fns_maybe_chain");
 }

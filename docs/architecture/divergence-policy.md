@@ -152,7 +152,7 @@ match Go exactly (`unicode.IsDigit`/`Nd`, `IsLower`/`Ll`, `IsUpper`/`Lu`,
   Go module uses (`Json.Encode.encode 0` for header + payload, `Crypto.hmacSha256`
   / `Crypto.rsaSha256Sign` for the signature), so for a fixed key + claims the
   emitted token equals the Go reference token byte-for-byte (proven by the
-  captured-Go-token goldens `m5b_jwt_hs256_bytes` / `m5b_jwt_rs256_bytes` and the
+  captured-Go-token goldens `jwt_hs256_bytes` / `jwt_rs256_bytes` and the
   byte-equality assertions in `crates/skyc/tests/golden_m5b_uuid_jwt.rs` +
   `runtime/src/sky_runtime/jwt.rs`). Only the CALL SURFACE differs, so a
   Go-targeted program using the builder API does not yet compile on the Rust
@@ -174,10 +174,10 @@ match Go exactly (`unicode.IsDigit`/`Nd`, `IsLower`/`Ll`, `IsUpper`/`Lu`,
   evaluates to a fresh `String` call on the Rust backend (the documented
   bare-reference form), whereas the Go reference leaves the bare reference as a
   kernel function value (CLAUDE.md Limitation #7 — arity-0 kernel codegen), so
-  `m5b_uuid_format`'s length/version-nibble checks differ on Go; (2) the Rust
+  `uuid_format`'s length/version-nibble checks differ on Go; (2) the Rust
   backend's `Uuid.parse` accepts a canonical hyphenated UUID (`Just`) and rejects
   malformed input (`Nothing`), whereas the Go reference returns `Nothing` for the
-  same canonical UUID on this shape (`m5b_uuid_parse`). Recorded as `sanctioned:`
+  same canonical UUID on this shape (`uuid_parse`). Recorded as `sanctioned:`
   markers in each golden directory.
 
 ## Recorded `sanctioned:` entries (Go succeeds, Sky-Rust is more correct)

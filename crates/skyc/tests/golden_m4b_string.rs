@@ -66,7 +66,7 @@ fn assert_runs_and_matches_oracle(name: &str) {
 /// `String.toUpper "hi"` → `"HI"`.
 #[test]
 fn string_to_upper_hi() {
-    assert_runs_and_matches_oracle("m4b_string_to_upper");
+    assert_runs_and_matches_oracle("string_to_upper");
 }
 
 // ── length — rune count ───────────────────────────────────────────────────────
@@ -74,7 +74,7 @@ fn string_to_upper_hi() {
 /// `String.length "héllo"` → `5` (five Unicode scalar values, not 6 bytes).
 #[test]
 fn string_length_unicode_rune_count() {
-    assert_runs_and_matches_oracle("m4b_string_length");
+    assert_runs_and_matches_oracle("string_length");
 }
 
 // ── slice — rune-indexed ──────────────────────────────────────────────────────
@@ -82,7 +82,7 @@ fn string_length_unicode_rune_count() {
 /// `String.slice 1 3 "hello"` → `"el"`.
 #[test]
 fn string_slice_hello() {
-    assert_runs_and_matches_oracle("m4b_string_slice");
+    assert_runs_and_matches_oracle("string_slice");
 }
 
 // ── split + List.length ───────────────────────────────────────────────────────
@@ -90,7 +90,7 @@ fn string_slice_hello() {
 /// `String.split "," "a,b,c" |> List.length` → `3`.
 #[test]
 fn string_split_three_segments() {
-    assert_runs_and_matches_oracle("m4b_string_split_len");
+    assert_runs_and_matches_oracle("string_split_len");
 }
 
 // ── join ──────────────────────────────────────────────────────────────────────
@@ -98,7 +98,7 @@ fn string_split_three_segments() {
 /// `String.join "-" ["a","b"]` → `"a-b"`.
 #[test]
 fn string_join_with_separator() {
-    assert_runs_and_matches_oracle("m4b_string_join");
+    assert_runs_and_matches_oracle("string_join");
 }
 
 // ── dropLeft — rune-based ─────────────────────────────────────────────────────
@@ -106,7 +106,7 @@ fn string_join_with_separator() {
 /// `String.dropLeft 2 "héllo"` → `"llo"` (drops 'h' and 'é', one rune each).
 #[test]
 fn string_drop_left_unicode_rune_based() {
-    assert_runs_and_matches_oracle("m4b_string_drop_left");
+    assert_runs_and_matches_oracle("string_drop_left");
 }
 
 // ── Char.toUpper ──────────────────────────────────────────────────────────────
@@ -114,7 +114,7 @@ fn string_drop_left_unicode_rune_based() {
 /// `Char.toUpper 'a'` → `"A"`. Returns a single-rune String (Go kernel shape).
 #[test]
 fn char_to_upper_ascii() {
-    assert_runs_and_matches_oracle("m4b_char_to_upper");
+    assert_runs_and_matches_oracle("char_to_upper");
 }
 
 // ── Char.isDigit ──────────────────────────────────────────────────────────────
@@ -122,7 +122,7 @@ fn char_to_upper_ascii() {
 /// `Char.isDigit '5'` → `True` (printed via `if` to avoid Bool→String conv).
 #[test]
 fn char_is_digit_ascii_five() {
-    assert_runs_and_matches_oracle("m4b_char_is_digit");
+    assert_runs_and_matches_oracle("char_is_digit");
 }
 
 // ── Char.isAlpha ──────────────────────────────────────────────────────────────
@@ -130,7 +130,7 @@ fn char_is_digit_ascii_five() {
 /// `Char.isAlpha 'x'` → `True`.
 #[test]
 fn char_is_alpha_ascii_x() {
-    assert_runs_and_matches_oracle("m4b_char_is_alpha");
+    assert_runs_and_matches_oracle("char_is_alpha");
 }
 
 // ── Predicate Go-parity edges (exact General_Category, not Rust's broader std) ──
@@ -139,7 +139,7 @@ fn char_is_alpha_ascii_x() {
 /// Go's `unicode.IsDigit` rejects it (Rust's `char::is_numeric` would accept).
 #[test]
 fn char_is_digit_superscript_two_is_false() {
-    assert_runs_and_matches_oracle("m4b_char_is_digit_superscript");
+    assert_runs_and_matches_oracle("char_is_digit_superscript");
 }
 
 /// `Char.isLower 'ª'` → `False`. U+00AA FEMININE ORDINAL INDICATOR is category
@@ -147,7 +147,7 @@ fn char_is_digit_superscript_two_is_false() {
 /// (Rust's `char::is_lowercase` would accept via `Other_Lowercase`).
 #[test]
 fn char_is_lower_feminine_ordinal_is_false() {
-    assert_runs_and_matches_oracle("m4b_char_is_lower_ordinal");
+    assert_runs_and_matches_oracle("char_is_lower_ordinal");
 }
 
 // ── String.split "" — rune split, no boundary sentinels (Go strings.Split) ─────
@@ -156,14 +156,14 @@ fn char_is_lower_feminine_ordinal_is_false() {
 /// leading/trailing "" entries that Rust's `str::split("")` would emit).
 #[test]
 fn string_split_empty_sep_ascii_three_runes() {
-    assert_runs_and_matches_oracle("m4b_string_split_empty_ascii");
+    assert_runs_and_matches_oracle("string_split_empty_ascii");
 }
 
 /// `String.split "" "héllo" |> List.length` → `5` (rune-based, so the 2-byte
 /// 'é' counts as ONE segment).
 #[test]
 fn string_split_empty_sep_unicode_five_runes() {
-    assert_runs_and_matches_oracle("m4b_string_split_empty_unicode");
+    assert_runs_and_matches_oracle("string_split_empty_unicode");
 }
 
 // ── String.toInt — NO trim (Go's observable `String_toInt`, Elm semantics) ─────
@@ -173,14 +173,14 @@ fn string_split_empty_sep_unicode_five_runes() {
 /// parse — matching Elm. The golden oracle pins `Nothing`.
 #[test]
 fn string_to_int_surrounding_space_is_nothing() {
-    assert_runs_and_matches_oracle("m4b_string_to_int_trim");
+    assert_runs_and_matches_oracle("string_to_int_trim");
 }
 
 /// `String.toInt "1 "` → `Nothing` — a single trailing space is enough to fail
 /// the parse (no trim).
 #[test]
 fn string_to_int_trailing_space_is_nothing() {
-    assert_runs_and_matches_oracle("m4b_string_to_int_trailing");
+    assert_runs_and_matches_oracle("string_to_int_trailing");
 }
 
 // ── String.toFloat — DOES trim (Go's `String_toFloat` = ParseFloat(TrimSpace)) ─
@@ -189,5 +189,5 @@ fn string_to_int_trailing_space_is_nothing() {
 /// float path trims surrounding whitespace; the golden oracle pins `1.5`.
 #[test]
 fn string_to_float_surrounding_space_is_just() {
-    assert_runs_and_matches_oracle("m4b_string_to_float_trim");
+    assert_runs_and_matches_oracle("string_to_float_trim");
 }

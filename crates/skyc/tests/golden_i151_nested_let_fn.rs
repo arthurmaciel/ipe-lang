@@ -57,9 +57,9 @@ fn c01_nested_let_fn_callee_green() {
     let entry = root
         .join("tests")
         .join("golden")
-        .join("i151_nested_let_fn_callee")
+        .join("nested_let_fn_callee")
         .join("Main.sky");
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i151_nested_let_fn_callee");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("nested_let_fn_callee");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = skyc::resolve_runtime() else {
@@ -68,14 +68,14 @@ fn c01_nested_let_fn_callee_green() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for i151_nested_let_fn_callee (was SKY-L0126 pre-fix): {:?}",
+        "skyc build must succeed for nested_let_fn_callee (was SKY-L0126 pre-fix): {:?}",
         built.err()
     );
 
     if std::env::var("SKY_E2E").is_err() {
         return;
     }
-    let outcome = support::build_and_run_emitted("i151_nested_let_fn_callee", &out);
+    let outcome = support::build_and_run_emitted("nested_let_fn_callee", &out);
     assert_eq!(
         outcome.exit_code,
         Some(0),
@@ -114,9 +114,9 @@ fn c02_poly_fn_on_error_green() {
     let entry = root
         .join("tests")
         .join("golden")
-        .join("i151_poly_task_on_error")
+        .join("poly_task_on_error")
         .join("Main.sky");
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i151_poly_task_on_error");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("poly_task_on_error");
     let _ = std::fs::remove_dir_all(&out);
 
     let Ok(runtime) = skyc::resolve_runtime() else {
@@ -125,7 +125,7 @@ fn c02_poly_fn_on_error_green() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for i151_poly_task_on_error (was SKY-L0126 pre-fix): {:?}",
+        "skyc build must succeed for poly_task_on_error (was SKY-L0126 pre-fix): {:?}",
         built.err()
     );
 }

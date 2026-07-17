@@ -19,10 +19,10 @@
 //!     violation without obscuring the root cause.
 //!
 //! Tests:
-//!   1. `i138_empty_home_bridge` — `Token` used in annotation, defined in both
+//!   1. `empty_home_bridge` — `Token` used in annotation, defined in both
 //!      `ModA` and `ModB` but not imported as a type → SKY-N0002.
-//!   2. `i138_optbridge` — same shape, different payload types → SKY-N0002.
-//!   3. `i138_kernel_implicit_positive` — `Request` used without explicit import;
+//!   2. `optbridge` — same shape, different payload types → SKY-N0002.
+//!   3. `kernel_implicit_positive` — `Request` used without explicit import;
 //!      it is in `RESERVED_BUILTIN_TYPES`, so the fix must NOT reject it → exit 0.
 //!
 //! Run:
@@ -72,8 +72,8 @@ fn try_build(name: &str) -> Result<(), String> {
 /// SKY-N0002, not an ICE.
 #[test]
 fn i138_empty_home_bridge_fails_n0002() {
-    let err = try_build("i138_empty_home_bridge")
-        .expect_err("i138_empty_home_bridge must fail (Token is not in scope)");
+    let err = try_build("empty_home_bridge")
+        .expect_err("empty_home_bridge must fail (Token is not in scope)");
     assert!(err.contains("SKY-N0002"), "expected SKY-N0002, got:\n{err}");
     assert!(
         !err.contains("SKY-I0001"),
@@ -86,7 +86,7 @@ fn i138_empty_home_bridge_fails_n0002() {
 #[test]
 fn i138_optbridge_fails_n0002() {
     let err =
-        try_build("i138_optbridge").expect_err("i138_optbridge must fail (Token is not in scope)");
+        try_build("optbridge").expect_err("optbridge must fail (Token is not in scope)");
     assert!(err.contains("SKY-N0002"), "expected SKY-N0002, got:\n{err}");
     assert!(
         !err.contains("SKY-I0001"),
@@ -103,8 +103,8 @@ fn i138_optbridge_fails_n0002() {
 /// `Sky.Http.Server`.  The `TypeNotFound` gate must NOT reject it.
 #[test]
 fn i138_kernel_implicit_positive_exits_zero() {
-    try_build("i138_kernel_implicit_positive")
-        .expect("i138_kernel_implicit_positive must compile (Request is a kernel builtin)");
+    try_build("kernel_implicit_positive")
+        .expect("kernel_implicit_positive must compile (Request is a kernel builtin)");
 }
 
 /// `Value` is a kernel-implicit Prelude type that was missing from all
@@ -115,7 +115,7 @@ fn i138_kernel_implicit_positive_exits_zero() {
 /// after the `enum_variants` guard.
 #[test]
 fn i138_kernel_implicit_value_exits_zero() {
-    try_build("i138_kernel_implicit_value").expect(
-        "i138_kernel_implicit_value must compile (Value is a kernel-implicit Prelude type)",
+    try_build("kernel_implicit_value").expect(
+        "kernel_implicit_value must compile (Value is a kernel-implicit Prelude type)",
     );
 }

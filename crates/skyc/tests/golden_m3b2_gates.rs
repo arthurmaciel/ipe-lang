@@ -70,7 +70,7 @@ fn record_pattern_in_ctor_payload_accepted() {
     let entry = root
         .join("tests")
         .join("golden")
-        .join("m3b2_gate_record_payload")
+        .join("gate_record_payload")
         .join("Main.sky");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m3b2_gate_record_payload_emit");
     let _ = std::fs::remove_dir_all(&out);
@@ -89,7 +89,7 @@ fn record_pattern_in_ctor_payload_accepted() {
 #[test]
 fn non_exhaustive_nested_case_is_sky_t0010() {
     assert_gate(
-        "m3b2_gate_nonexhaustive",
+        "gate_nonexhaustive_nested",
         "m3b2_gate_nonexhaustive_emit",
         sky_diagnostics::SKY_T0010,
     );
@@ -105,7 +105,7 @@ fn redundant_nested_arm_is_sky_t0011_warning_build_succeeds() {
     let entry = root
         .join("tests")
         .join("golden")
-        .join("m3b2_gate_redundant_nested")
+        .join("gate_redundant_nested")
         .join("Main.sky");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m3b2_gate_redundant_nested_emit");
     let _ = std::fs::remove_dir_all(&out);
@@ -124,7 +124,7 @@ fn redundant_nested_arm_is_sky_t0011_warning_build_succeeds() {
 #[test]
 fn single_arm_refutable_tuple_case_is_sky_l0115() {
     assert_gate(
-        "m3b2_gate_refutable_single",
+        "gate_refutable_single",
         "m3b2_gate_refutable_single_emit",
         sky_diagnostics::SKY_L0115,
     );
@@ -133,7 +133,7 @@ fn single_arm_refutable_tuple_case_is_sky_l0115() {
 #[test]
 fn refutable_let_destructure_is_sky_t0015() {
     assert_gate(
-        "m3b2_gate_refutable_let",
+        "gate_refutable_let",
         "m3b2_gate_refutable_let_emit",
         sky_diagnostics::SKY_T0015,
     );

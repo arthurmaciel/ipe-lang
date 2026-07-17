@@ -9,15 +9,15 @@
 //!
 //! Four witnesses, one per fixture, each named `aud04_*`:
 //!
-//! - `aud04_string_literal`: `TaskSeq` clone-capture must not touch a string
+//! - `string_literal`: `TaskSeq` clone-capture must not touch a string
 //!   literal that shares a word with the captured variable.
-//! - `aud04_record_field_collision`: `TaskSeq` clone-capture must not touch
+//! - `record_field_collision`: `TaskSeq` clone-capture must not touch
 //!   a record literal's field name that shares text with the captured
 //!   variable.
-//! - `aud04_taskseq_list`: multi-use Task-list `let`-inlining (two
+//! - `taskseq_list`: multi-use Task-list `let`-inlining (two
 //!   plain-argument uses, not closure captures) must not touch a nearby
 //!   string literal.
-//! - `aud04_taskseqsync_move`: `Expr::TaskSeqSync`
+//! - `taskseqsync_move`: `Expr::TaskSeqSync`
 //!   needs the same clone-capture rewrite `Expr::TaskSeq` gets, or a
 //!   trailing use of the effect's own argument is a use-after-move (E0382).
 //!
@@ -108,9 +108,9 @@ fn assert_e2e_output(fixture: &str, expect_contains: &str) {
 /// must render unmolested.
 #[test]
 fn aud04_string_literal_not_corrupted() {
-    assert_skyc_ok("aud04_string_literal", "aud04_string_literal_emit");
-    assert_e2e_output("aud04_string_literal", "the count is");
-    assert_e2e_output("aud04_string_literal", "3");
+    assert_skyc_ok("string_literal", "aud04_string_literal_emit");
+    assert_e2e_output("string_literal", "the count is");
+    assert_e2e_output("string_literal", "3");
 }
 
 /// Witness 2 — a record literal's field NAME sharing text with a
@@ -119,21 +119,21 @@ fn aud04_string_literal_not_corrupted() {
 #[test]
 fn aud04_record_field_collision_compiles_and_runs() {
     assert_skyc_ok(
-        "aud04_record_field_collision",
+        "record_field_collision",
         "aud04_record_field_collision_emit",
     );
     // The final `println (String.fromInt count)` must still print "3" —
     // proves the outer `count` binding survived the record-literal-adjacent
     // effect unmolested.
-    assert_e2e_output("aud04_record_field_collision", "3");
+    assert_e2e_output("record_field_collision", "3");
 }
 
 /// Witness 3 — multi-use Task-list `let`-inlining must not touch a nearby
 /// string literal that shares the bound name as a word.
 #[test]
 fn aud04_taskseq_list_inlining_not_corrupted() {
-    assert_skyc_ok("aud04_taskseq_list", "aud04_taskseq_list_emit");
-    assert_e2e_output("aud04_taskseq_list", "4");
+    assert_skyc_ok("taskseq_list", "aud04_taskseq_list_emit");
+    assert_e2e_output("taskseq_list", "4");
 }
 
 /// Witness 4 — `TaskSeqSync` needs the same clone-capture rewrite as
@@ -141,6 +141,6 @@ fn aud04_taskseq_list_inlining_not_corrupted() {
 /// out from under the trailing read (E0382 use-after-move at `cargo build`).
 #[test]
 fn aud04_taskseqsync_move_compiles_and_runs() {
-    assert_skyc_ok("aud04_taskseqsync_move", "aud04_taskseqsync_move_emit");
-    assert_e2e_output("aud04_taskseqsync_move", "hello-msg");
+    assert_skyc_ok("taskseqsync_move", "aud04_taskseqsync_move_emit");
+    assert_e2e_output("taskseqsync_move", "hello-msg");
 }

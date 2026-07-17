@@ -41,11 +41,11 @@ fn assert_builds(fixture: &str) {
 /// `Red -> …; other as w -> …; Blue -> …` — named-alias catch-all head.
 #[test]
 fn named_alias_catchall_truncates_and_builds() {
-    assert_builds("i136_alias_catchall");
+    assert_builds("alias_catchall");
 }
 
 /// `Red -> …; _ as w -> …; Blue -> …` — wildcard-alias catch-all head.
 #[test]
 fn underscore_alias_catchall_truncates_and_builds() {
-    assert_builds("i136_underscore_alias");
+    assert_builds("underscore_alias");
 }

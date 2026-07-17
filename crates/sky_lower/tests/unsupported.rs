@@ -604,7 +604,7 @@ fn function_inside_opaque_boxed_wrapper_is_accepted() -> DResult<()> {
     // function `T` compiles and runs (`decode_succeed(curryN(f))`). The
     // region-based gate MUST NOT reject it the way it rejects a user-enum payload
     // (`Opt (Int -> Int)`, SKY-L0114) or a record field (`{ v : Int -> Int }`,
-    // SKY-L0107). Regression for the m4h_json_dec_pipeline CtorPayloadFunction
+    // SKY-L0107). Regression for the json_dec_pipeline CtorPayloadFunction
     // false positive.
     let mut i = Interner::new();
     let boxed = i.intern("boxed")?;
