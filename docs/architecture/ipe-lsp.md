@@ -10,10 +10,10 @@ Related specs: `incremental-compilation-and-watch.md` (the salsa query layer thi
 server consumes), `roadmap.md` §C.2 (flat namespace + auto-import), the reference
 Haskell server at `../sky/src/Sky/Lsp/{Server,Index,Diag}.hs`.
 
-Naming note: new crates below are named with the current `sky_*` prefix to match
-the existing crate DAG. They rename to `ipe_*` alongside roadmap C.1 (the
-`sky`→`ipe` project rename); this spec targets the current names to avoid a
-premature naming split.
+Naming note: the `sky`→`ipe` project rename has landed — compiler crates are
+`ipe_*` under `src/compiler/`, the driver crate `ipe` is `src/ipe-cli`, and
+the LSP crates are `ipe_lsp_*` under `src/lsp/`. Crate names in this spec
+reflect that layout.
 
 ---
 
@@ -21,7 +21,7 @@ premature naming split.
 
 The LSP is **not an analyzer**. It is a second *consumer* of the one salsa query
 graph — exactly like `ipe watch` — sitting on top of the existing compiler crate
-DAG (`sky_parse → sky_canon → sky_types → sky_lower → sky_ir`). It never
+DAG (`ipe_parse → ipe_canon → ipe_types → ipe_lower → ipe_ir`). It never
 re-implements parsing, name resolution, or type inference; every diagnostic,
 hover type, completion type, rename identity, and — critically — every
 scaffolding insert is produced or verified by the *same* checker `ipe` runs. A
@@ -101,19 +101,19 @@ the (large, longer-horizon) salsa effort.
 ### Crate topology
 
 ```
-sky_parse ─┐
-sky_canon ─┤
-sky_types ─┼─ (existing compiler DAG) ── sky_query   ◄── shared salsa query layer
-sky_lower ─┤                              ▲      ▲
-sky_ir   ──┘                              │      │
+ipe_parse ─┐
+ipe_canon ─┤
+ipe_types ─┼─ (existing compiler DAG) ── ipe_db   ◄── shared salsa query layer
+ipe_lower ─┤                              ▲      ▲
+ipe_ir   ──┘                              │      │
                             ┌─────────────┘      └──────────────┐
-                       ipe watch                             sky_lsp  (NEW binary: `ipe lsp`)
-                       (other consumer)                      ├── sky_lsp_server   — main loop, JSON-RPC, VFS, cancellation, offset mapping
-                                                             ├── sky_lsp_features — hover/def/refs/completion/semtok/symbols/rename/format handlers
-                                                             └── sky_lsp_tea      — TEA snippet catalog + code-action generators + lint→quickfix
+                       ipe watch                             ipe_lsp  (NEW binary: `ipe lsp`)
+                       (other consumer)                      ├── ipe_lsp_server   — main loop, JSON-RPC, VFS, cancellation, offset mapping
+                                                             ├── ipe_lsp_features — hover/def/refs/completion/semtok/symbols/rename/format handlers
+                                                             └── ipe_lsp_tea      — TEA snippet catalog + code-action generators + lint→quickfix
 ```
 
-- **`sky_query`** — the salsa database crate mandated by
+- **`ipe_db`** — the salsa database crate mandated by
   `incremental-compilation-and-watch.md`. It is **shared**, not LSP-private: that
   document names the LSP the *primary* salsa consumer and states the query layer
   feeds both the LSP and `ipe watch`. Inputs (`source_text(FileId)`,
@@ -124,13 +124,13 @@ sky_ir   ──┘                              │      │
   are exactly as locked there. The LSP consumes the front half (parse →
   typecheck); it stops at `lower`/`program_metadata` for whole-program lints and
   **never drives emit/cargo**.
-- **`sky_lsp_features`** handlers are **pure functions from `(analysis snapshot,
+- **`ipe_lsp_features`** handlers are **pure functions from `(analysis snapshot,
   position) → LSP payload`**. Zero parsing/typing/resolution logic. This is what
   makes "the LSP cannot disagree with `ipe`" structurally true: it has nothing
   to disagree *with*.
-- **Capability rule (INV-1 discipline).** `sky_query` and the feature handlers
+- **Capability rule (INV-1 discipline).** `ipe_db` and the feature handlers
   hold no `std::fs`/`std::env`/`std::io` capability on the query path.
-  Filesystem/stdio access lives only in `sky_lsp_server`. A query that reads the
+  Filesystem/stdio access lives only in `ipe_lsp_server`. A query that reads the
   world is a compile-time-visible design error, not a latent staleness bug.
 
 ### The analysis trait (the backend-swap seam)
@@ -154,7 +154,7 @@ trait ProgramView {
   a coarse cache keyed by content hash. Correct and simple. Critically, it uses
   the *identical* parser/canonicaliser/type-checker — so **v0 cannot diverge from
   `ipe` either**; it is only slower.
-- **v1 backend (`SalsaView`):** the same trait over `sky_query`. Red-green gives
+- **v1 backend (`SalsaView`):** the same trait over `ipe_db`. Red-green gives
   keystroke-frequency incrementality; the `module_interface` firewall means a
   body edit re-checks only the edited module. **No handler changes** — the trait
   signatures are stable from day one.
@@ -486,12 +486,12 @@ crash-prone or build-breaking feature is worse than a missing one.
 
 ### G1 — One type-checker (forecloses the divergent-analyzer hazard)
 
-Structural, not disciplinary. `sky_lsp_features` depends on the compiler crates
+Structural, not disciplinary. `ipe_lsp_features` depends on the compiler crates
 and reads `parse`/`resolve`/`typecheck`/`module_interface` via the trait; it has
 **no `parse`/`resolve`/`infer` of its own**. Diagnostics published to the editor
 are the compiler's `Diagnostic` values verbatim. Because there is nothing else to
 consult, the LSP cannot produce a diagnostic `ipe` would not, or miss one it
-would. Enforcement: a reviewer greps `sky_lsp_features` for a solver/parser call
+would. Enforcement: a reviewer greps `ipe_lsp_features` for a solver/parser call
 — finding one is the bug. The tempting shortcut — a fast approximate IDE parser
 that "usually agrees" — is rejected outright; salsa incrementality *is* the
 responsiveness mechanism, so there is no motive for a lying-but-fast shadow.
@@ -506,7 +506,7 @@ compiler diagnostic. Even the stylistic lint's quick-fix passes the G2 gate.
 
 Two provenance channels, not one:
 
-1. **Compiler-sourced fixes** (from `sky_diagnostics`'s existing
+1. **Compiler-sourced fixes** (from `ipe_diagnostics`'s existing
    `Suggestion { span, replacement, applicability }` on `HelpLine::Suggest`)
    inherit the compiler's `Applicability` confidence model. `MachineApplicable` →
    offered as a preferred quick-fix; `HasPlaceholders` → rendered as a
@@ -582,7 +582,7 @@ and it passes the G2 gate before applying.
 Three layers:
 
 1. **Resilient parser — an external precondition, not an assumed property.** This
-   layer *wants* `sky_parse` to produce a best-effort green tree with typed error
+   layer *wants* `ipe_parse` to produce a best-effort green tree with typed error
    nodes plus a diagnostic list for half-typed input, and to **never**
    `panic!`/`unwrap` — a partial parse as a first-class value, not an exception.
    But note the reference Haskell parser is **not** resilient in this sense: it
@@ -594,7 +594,7 @@ Three layers:
    on resilience is the **quality** of partial results: recoverable scope names in
    completion, hover over a syntactically-broken neighbour, symbols for the part
    that parsed. Therefore resilience is stated here as an **explicit precondition
-   the Rust `sky_parse` MUST satisfy** (best-effort green tree + typed error nodes,
+   the Rust `ipe_parse` MUST satisfy** (best-effort green tree + typed error nodes,
    never `panic!`/`unwrap`), backed by a **fuzz gate** (random/truncated/mutated
    buffers → no panic, bounded time, non-empty tree) — a contract the parser crate
    owes the LSP, not a property the LSP assumes it already has.
@@ -615,7 +615,7 @@ new AST nodes from semantic tokens / references. In Rust the walkers
 (`sem_tokens`, `collect_references`, `expr_idents`, `expr_all_refs`,
 `refs_in_expr`, `collect_sem_tokens`) `match` on the AST/IR enums with **no
 wildcard arm**. Adding a new AST variant produces a non-exhaustive-match *compile
-error* in `sky_lsp_features` until every walker gets its arm — the type system
+error* in `ipe_lsp_features` until every walker gets its arm — the type system
 enforces the CLAUDE.md "new AST node requires explicit walker arms" rule, strictly
 stronger than the grep-audited `_ -> []` convention. Belt-and-braces:
 `#![deny(clippy::wildcard_enum_match_arm)]` on the walker modules, a CI grep for
@@ -657,17 +657,16 @@ edits never splice unescaped source-derived strings.
   single-writer + snapshot-reader loop is built explicitly from day one (not
   leaning on per-request async tasks). Kept open only as a recorded fallback; no
   action unless `lsp-server` proves unworkable.
-- **OPEN-4 — Crate/name timing.** New crates use `sky_*` today; they rename to
-  `ipe_*` with roadmap C.1. If the LSP ships before C.1, it targets `sky`-era
-  runtime names (`sky.toml`, `.ipe-cache`, `/_sky/`) and eats the C.1 rename churn
-  with the rest of the codebase. To confirm the LSP is not pulled ahead of C.1 in
-  a way that creates a lasting naming split.
+- **OPEN-4 — Crate/name timing. RESOLVED:** the `sky`→`ipe` rename landed
+  before the LSP crates were created; they are `ipe_lsp_*` from their first
+  commit. Residual `sky`-era runtime names the LSP still touches (`sky.toml`)
+  follow the codebase-wide rename schedule.
 
 ---
 
 ## Build order (phased)
 
-- **Phase 0 — spine (v0 backend).** `sky_lsp` crates; `lsp-server` main loop;
+- **Phase 0 — spine (v0 backend).** `ipe_lsp` crates; `lsp-server` main loop;
   `initialize` capability negotiation; `ropey` VFS + incremental sync + the
   property-tested UTF-16↔byte mapper (built and tested first — everything depends
   on it); resilient-parse reliance + per-handler `catch_unwind` + latency budget;
@@ -676,7 +675,7 @@ edits never splice unescaped source-derived strings.
 - **Phase 1 — the alive editor (P1).** Hover, go-to-def, document symbols,
   formatting, basic completion, semantic tokens (exhaustive walkers, G4). Entirely
   off existing compiler outputs; genuinely useful before salsa exists.
-- **Phase 2 — salsa cut-in.** Implement `ProgramView` on `sky_query`; swap the
+- **Phase 2 — salsa cut-in.** Implement `ProgramView` on `ipe_db`; swap the
   backend with **no handler changes**. Enable find-references + the workspace
   symbol index + full type-directed completion (the O(whole-program) features).
 - **Phase 3 — the headline.** TEA snippet catalog (golden-tested), then the
@@ -692,7 +691,7 @@ useful v0 on the batch backend behind a stable trait (Phases 0–1), then is mad
 incrementally fast by substituting the salsa backend (Phase 2) — a backend swap,
 not a rewrite, because the trait signatures were stable from day one. This is the
 same "backend swap not rewrite" property the incremental spec buys at the
-`sky_ir` cut-point, applied to the IDE query layer. Features are gated by
+`ipe_ir` cut-point, applied to the IDE query layer. Features are gated by
 verification-cost class, not by "compiles against the trait": the speculatively-
 verified transforms (Q3 code actions, Q4 auto-import) are *enabled* when salsa
 delivers sub-100 ms verification.

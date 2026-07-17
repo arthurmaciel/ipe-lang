@@ -17,8 +17,12 @@ expand/add-arms/keep-open code actions),
 `salsa-incremental-compilation-2026-07-11.md` (the query layer, esp. §15's
 LSP seam) and `incremental-compilation-and-watch.md` (INV-1..5, H-ledger).
 
-Naming: new crates use the current `sky_*` prefix and rename to `ipe_*`
-with roadmap C.1; the subcommand is spelled `ipe lsp` (today `ipe lsp`).
+Layout (post-rename): compiler crates live at `src/compiler/<name>` as
+`ipe_<name>` (`ipe_db` = `src/compiler/db`, `ipe_diagnostics` =
+`src/compiler/diagnostics`, …); the driver crate `ipe` lives at
+`src/ipe-cli`. The LSP crates live at `src/lsp/{server,features,edits}` as
+`ipe_lsp_server` / `ipe_lsp_features` / `ipe_lsp_edits`; the subcommand is
+`ipe lsp`.
 
 ---
 
@@ -28,7 +32,7 @@ The LSP is the language's soundness story made visible at every keystroke:
 
 1. **One analyzer, literally.** The server owns no parser, no resolver, no
    solver, no formatter. Every diagnostic, hover type, completion candidate,
-   rename edit, and folding range is computed by the *same* `sky_db` salsa
+   rename edit, and folding range is computed by the *same* `ipe_db` salsa
    queries `ipe build` and `ipe watch` run. Disagreement with the compiler
    is not "unlikely" — it has no code path.
 2. **A build-breaking edit is unrepresentable.** Every synthesized
@@ -64,7 +68,7 @@ gated by soundness** (a capability we cannot make sound is not advertised
 
 ## 2. Substrate survey — what exists today (facts, verified against code)
 
-**The salsa layer is landed and gate-proven.** `crates/sky_db` ships, on
+**The salsa layer is landed and gate-proven.** `src/compiler/db` ships, on
 the production `ipe` path:
 
 | Tier | Queries (all tracked, memoized, errors-as-values) |
@@ -76,11 +80,11 @@ the production `ipe` path:
 
 Load-bearing properties the LSP builds on, each already proven by test:
 
-- **Editor-buffer inputs work with zero `sky_db` changes** — `SourceFile`
-  holds `text: String`, not a path; `crates/sky_db/tests/lsp_seam.rs`
+- **Editor-buffer inputs work with zero `ipe_db` changes** — `SourceFile`
+  holds `text: String`, not a path; `src/compiler/db/tests/lsp_seam.rs`
   drives diagnostics + navigation from in-memory buffers with no
   filesystem anywhere in the test.
-- **`SkyDatabase` is `Send`** (compile-time-asserted in `lsp_seam.rs`) and
+- **`IpeDatabase` is `Send`** (compile-time-asserted in `lsp_seam.rs`) and
   is already cloned into worker threads by `ipe watch` — the
   single-writer + snapshot-reader loop pattern is proven.
 - **Cancellation is a database property, not a driver hack** — a direct
@@ -88,23 +92,23 @@ Load-bearing properties the LSP builds on, each already proven by test:
   `Cancelled::{Local,PendingWrite}` when the main thread sets an input,
   and a fresh demand converges to the edited state (`lsp_seam.rs`).
 - **Warm == cold** — the clean-vs-incremental parity gate
-  (`crates/ipe/tests/clean_vs_incremental_parity.rs`) byte-diffs
+  (`src/ipe-cli/tests/clean_vs_incremental_parity.rs`) byte-diffs
   warm-database rebuilds against cold builds across the golden corpus,
   including adversarial edit sequences.
 - **`typecheck` is whole-program-coarse.** It is keyed `(root, entry)` and
   depends on `linked_program`; any semantic edit re-executes the whole
   solve (memoized only across byte-equal/no-op revisions). Per-module
-  `typecheck(ModuleId)` is a recorded `sky_types` redesign
+  `typecheck(ModuleId)` is a recorded `ipe_types` redesign
   (salsa doc §9.4) that this plan treats as a **latency unlock, not a
   correctness dependency** — handlers consume the query by name, so the
   granularity refinement lands later with zero handler changes.
 
-**Diagnostics infrastructure.** `sky_diagnostics` has stable `IPE-*`
+**Diagnostics infrastructure.** `ipe_diagnostics` has stable `IPE-*`
 codes; `explain_page(Code)`/`title(Code)` with a drift test that every
 code has a conforming page; `HelpLine::Suggest(Suggestion { span,
 replacement, applicability })` with `Applicability
 { MachineApplicable | HasPlaceholders | MaybeIncorrect }`; `ipe fix`
-already applies suggestions. `sky_types::infer_attributed` returns
+already applies suggestions. `ipe_types::infer_attributed` returns
 `(Diagnostic, home)` and `SolvedTypes` exposes `env` (type per binding),
 `regions` (type per sub-expression span, home-keyed), `bounds` — hover's
 data source exists today; the driver's `home_to_source` map is the exact
@@ -124,7 +128,7 @@ data source exists today; the driver's `home_to_source` map is the exact
 - **No `expected_type_at` sidecar.** `SolvedTypes.regions` gives inferred
   types; the *expected* type pushed down onto an incomplete hole is
   net-new solver work (the type-directed-completion foundation).
-- **No lint crate yet** — `sky_lint` is a companion design; the LSP wires
+- **No lint crate yet** — `ipe_lint` is a companion design; the LSP wires
   it when it lands (its findings are `Diagnostic`s, so no new LSP
   machinery).
 
@@ -144,49 +148,49 @@ verification gate on edits. §10 states where we match and where we exceed.
 
 ```
                         ┌──────────────────────────────────────────────┐
- sky_parse ─┐           │ sky_lsp_server  (NEW)                        │
- sky_canon ─┤           │  main loop (lsp-server, sync, single writer) │
- sky_types ─┼─ sky_db ◄─┤  VFS (ropey) + position mapper + watched     │
- sky_lower ─┤  (salsa)  │  files; capability negotiation; scheduling;  │
- sky_ir   ──┘   ▲       │  catch_unwind + latency budget + Cancelled   │
+ ipe_parse ─┐           │ ipe_lsp_server  (NEW)                        │
+ ipe_canon ─┤           │  main loop (lsp-server, sync, single writer) │
+ ipe_types ─┼─ ipe_db ◄─┤  VFS (ropey) + position mapper + watched     │
+ ipe_lower ─┤  (salsa)  │  files; capability negotiation; scheduling;  │
+ ipe_ir   ──┘   ▲       │  catch_unwind + latency budget + Cancelled   │
                 │       └──────────────┬───────────────────────────────┘
             ipe watch                  │ snapshot() reads on worker pool
         (sibling consumer)   ┌─────────┴──────────┐
-                             │ sky_lsp_features   │  pure handlers:
+                             │ ipe_lsp_features   │  pure handlers:
                              │ (NEW)              │  (snapshot, pos) → payload
                              └─────────┬──────────┘
                              ┌─────────┴──────────┐
-                             │ sky_lsp_edits (NEW)│  VerifiedEdit gate, code
+                             │ ipe_lsp_edits (NEW)│  VerifiedEdit gate, code
                              │                    │  actions, rename, auto-
                              └────────────────────┘  import, TEA scaffolds
 ```
 
 - **Framework: `lsp-server` + `lsp-types` (pinned).** Synchronous
-  single-writer main loop owns the one `SkyDatabase`; reads dispatch to a
+  single-writer main loop owns the one `IpeDatabase`; reads dispatch to a
   small worker pool over cloned handles. Locked in `ipe-lsp.md` OPEN-3;
   salsa's synchronous `Cancelled`-on-write cancellation composes with a
   sync loop (the reason rust-analyzer declined `tower-lsp`).
-- **`sky_lsp_features` handlers are pure functions** from
+- **`ipe_lsp_features` handlers are pure functions** from
   `(analysis snapshot, position) → LSP payload` with no
   `std::fs`/`std::env`/`std::io` capability (INV-1) and no
   parse/resolve/infer logic of their own (G1). Enforcement: dependency
   review + the CI grep for solver/parser calls.
-- **`sky_lsp_edits`** owns the `VerifiedEdit` type and every
+- **`ipe_lsp_edits`** owns the `VerifiedEdit` type and every
   `WorkspaceEdit` producer. It is the only crate that can construct a
   surfaced edit, and it can only do so through the gate.
 
-### 3.2 Decision — build directly on `sky_db`; retire the `BatchView` backend
+### 3.2 Decision — build directly on `ipe_db`; retire the `BatchView` backend
 
 `ipe-lsp.md` Q1 and the earlier plan mandate a pre-salsa `BatchView`
 backend behind a `ProgramView` trait because the LSP was designed before
 the query layer existed and must not block on it. That precondition is
-gone: `sky_db` is on the production path, parity-gate-proven, with the LSP
+gone: `ipe_db` is on the production path, parity-gate-proven, with the LSP
 access pattern (buffer inputs, `Send` database, cancellation on any
 demand) already integration-tested. A batch backend today would be a
 second driver to keep in lockstep — pure maintenance surface with no
 consumer.
 
-**Locked here:** the LSP's one production backend is `sky_db`. The
+**Locked here:** the LSP's one production backend is `ipe_db`. The
 `ProgramView` trait **survives with a narrower job**: it remains the seam
 handlers are written against, for (a) testability (the feature-test
 harness constructs a view from fixture maps), (b) the future per-module
@@ -241,8 +245,8 @@ only mode** — an unsound action is never shown, at any phase.
 - **Parser resilience is a stated precondition, not an assumption**
   (`ipe-lsp.md` G3 layer 1): the no-crash guarantee holds unconditionally
   via layers 2–3; the *quality* of partial results (hover next to a syntax
-  error, completion in a broken buffer) tracks `sky_parse`'s
-  error-recovery quality. A fuzz gate on `sky_parse` (no panic, bounded
+  error, completion in a broken buffer) tracks `ipe_parse`'s
+  error-recovery quality. A fuzz gate on `ipe_parse` (no panic, bounded
   time, best-effort tree) is part of Phase 0; deeper recovery
   (typed error nodes) is an incremental follow-up that improves results
   without changing any handler contract.
@@ -278,8 +282,8 @@ it; bold = we exceed the reference on that row.
 | 19 | **Document links** (`import Foo.Bar` → file) | `resolve_imports` | resolved edges only | 1 | — |
 | 20 | **Call hierarchy** (prepare/incoming/outgoing) | `collect_references` + the call edges `program_metadata` already walks | exhaustive IR walkers exist | 4 | — |
 | 21 | Code actions (+resolve): compiler-fix surfacing | `Suggestion`/`Applicability` on diagnostics | compiler's own confidence model; `MachineApplicable` → preferred fix | 2 | R (2 fixes) |
-| 22 | **Code actions: IPE-T0018 family** — expand catch-all (MachineApplicable), add missing arms from witnesses (HasPlaceholders), keep-open directive | witness machinery from `sky_types::exhaust` (companion design §7) | message and fix share one witness list — cannot disagree | 4 | — |
-| 23 | **Code actions: lint quick-fixes + @allow suppression action** | `sky_lint` findings (Diagnostic::Lint) when it lands | lint = third consumer of compiler artifacts; fixes gated | 4 | — |
+| 22 | **Code actions: IPE-T0018 family** — expand catch-all (MachineApplicable), add missing arms from witnesses (HasPlaceholders), keep-open directive | witness machinery from `ipe_types::exhaust` (companion design §7) | message and fix share one witness list — cannot disagree | 4 | — |
+| 23 | **Code actions: lint quick-fixes + @allow suppression action** | `ipe_lint` findings (Diagnostic::Lint) when it lands | lint = third consumer of compiler artifacts; fixes gated | 4 | — |
 | 24 | **TEA scaffolding**: snippet catalog + program-reading actions (add Msg variant + arm; add subscription; scaffold app; convert to worker) | `canonicalize`/`typecheck` + structured AST insertion | every action through the `VerifiedEdit` gate; snippets golden-tested at their honest bar (L-M) | 5 | — |
 | 25 | **Rename** (prepareRename + project-wide) | `collect_references` + `VerifiedEdit` over full blast radius | refuses kernel/FFI/reserved targets; post-edit program typechecks or no edit exists | 4 | R (ungated) |
 | 26 | **Auto-import** (completion `additionalTextEdits` + unresolved-name quick-fix) | canonicaliser export index (a query) | ambiguity → disambiguation list, never a silent pick (L-E); gated | 5 | — |
@@ -302,16 +306,16 @@ same intent; a heuristic same-name live edit can silently capture).
 Inherited from `ipe-lsp.md` G1–G5 verbatim; this section states only what
 each means mechanically in this plan.
 
-**G1 — one type-checker, structurally.** `sky_lsp_features` depends on
-`sky_db` + `sky_diagnostics` + the AST/type crates *for types only*; it
+**G1 — one type-checker, structurally.** `ipe_lsp_features` depends on
+`ipe_db` + `ipe_diagnostics` + the AST/type crates *for types only*; it
 contains no call into `parse_module`/`canonicalise_*`/`infer*`. CI check:
 a grep test over the crate for solver/parser entry points (mirrors the
-INV-1 grep in `sky_db`). Diagnostics published to the editor are the
+INV-1 grep in `ipe_db`). Diagnostics published to the editor are the
 compiler's `Diagnostic` values verbatim — code, severity, span, help
 lines, suggestion — plus the `codeDescription` link derived from
 `explain_page`.
 
-**G2 — `VerifiedEdit`.** In `sky_lsp_edits`:
+**G2 — `VerifiedEdit`.** In `ipe_lsp_edits`:
 
 ```rust
 /// A WorkspaceEdit that is proven not to break the build. The ONLY
@@ -352,7 +356,7 @@ new AST variant is a compile error in every walker until it gets an arm.
 server executes no project code (parse/canon/type are pure; FFI enters
 only as a reserved input on the `ipe add` path — an LSP-time cache miss
 hard-refuses); structured edits are built from typed AST insertion, never
-string concatenation of program-derived data; `sky_lsp_server` is the
+string concatenation of program-derived data; `ipe_lsp_server` is the
 only crate holding I/O capability.
 
 **The never-stale guard (CI-required).** A scripted edit sequence against
@@ -385,7 +389,7 @@ read the same query.
 `docs/superpowers/plans/2026-07-03-lsp.md` (queries A/B/C:
 `expected_type_at`, `scope_at`, `unifiable_candidates`) and is not
 restated; the three load-bearing points: (1) the `ExpectedTypes` sidecar
-is net-new `sky_types` work and must be **additive** — a property test
+is net-new `ipe_types` work and must be **additive** — a property test
 asserts recording it leaves `SolvedTypes` and every diagnostic unchanged;
 (2) speculative unification runs on a scratch arena that is never written
 back — an isolation property test snapshots `regions` before/after; (3)
@@ -401,7 +405,7 @@ out the "complete server" feel. Triple-quoted strings fold as one region;
 (token → pattern/expr → arm → `case` → def → module).
 
 **Call hierarchy (row 20).** Outgoing edges = the call/func-value walk
-`program_metadata` already implements over `sky_ir` (exhaustive over all
+`program_metadata` already implements over `ipe_ir` (exhaustive over all
 `Expr`/`Pat` variants); incoming = the same edge set inverted. Surfaced at
 def granularity. This makes the reachability analysis the compiler already
 computes visible in the editor — a small feature with outsized "the
@@ -442,7 +446,7 @@ delivery at any latency). The latency story today:
 | Operation | Cost today | Why | Unlock |
 |---|---|---|---|
 | Parse/canon per keystroke-settle | per-module, firewalled | `canonicalize` + `module_interface` backdating | already good |
-| Diagnostics after a body edit | whole-program re-solve (memoized across no-ops) | `typecheck(root, entry)` is coarse | per-module `typecheck` (salsa doc §9.4) — a `sky_types` redesign, tracked separately; zero LSP handler changes when it lands |
+| Diagnostics after a body edit | whole-program re-solve (memoized across no-ops) | `typecheck(root, entry)` is coarse | per-module `typecheck` (salsa doc §9.4) — a `ipe_types` redesign, tracked separately; zero LSP handler changes when it lands |
 | Hover/inlay/sighelp warm | sub-ms | memo read of `typecheck.regions` | — |
 | Completion (typed) | first: one scratch-unify pass over K candidates; then memo | pure query per (module, revision) | — |
 | VerifiedEdit gate | one overlay re-check of the blast radius | firewall collapses body-only edits to 1 module | same per-module unlock shrinks the interface-moving case |
@@ -471,7 +475,7 @@ golden/inline expectations.
 
 ### Phase 0 — spine (ships diagnostics)
 
-Crates `sky_lsp_server` + `sky_lsp_features`; `lsp-server`/`lsp-types`
+Crates `ipe_lsp_server` + `ipe_lsp_features`; `lsp-server`/`lsp-types`
 pinned; `ipe lsp` dispatch arm in `ipe`.
 
 1. Position mapper FIRST — property-tested UTF-16↔byte (+utf-8
@@ -482,7 +486,7 @@ pinned; `ipe lsp` dispatch arm in `ipe`.
    `Cancelled`→`ContentModified` + latency budget; lifecycle +
    capability negotiation.
 4. **Push diagnostics**: home-attributed, exact ranges, `codeDescription`
-   explain links, debounced; `sky_parse` fuzz gate stood up.
+   explain links, debounced; `ipe_parse` fuzz gate stood up.
 5. The feature-test harness.
 
 *Gate:* lifecycle + offset property tests + resilience/fuzz tests +
@@ -514,7 +518,7 @@ CI-required from this phase on.
 
 ### Phase 3 — type-directed completion (the DX headline)
 
-`sky_types` work first: the `ExpectedTypes` sidecar (additivity
+`ipe_types` work first: the `ExpectedTypes` sidecar (additivity
 property-tested) → `expected_type_at`; then `unifiable_candidates` with
 scratch-arena isolation (property-tested); ranked completion handler
 (`sortText` total order, arity-aware snippets, teacher-snippet docs).
@@ -524,11 +528,11 @@ property; ranked-list golden; fallback-to-scope-only when unconstrained.
 
 ### Phase 4 — verified edits I: the gate, rename, T0018/lint actions
 
-`sky_lsp_edits`: the `VerifiedEdit` type + blast-radius closure
+`ipe_lsp_edits`: the `VerifiedEdit` type + blast-radius closure
 (built and tested before any producer); rename + prepareRename; call
 hierarchy; the IPE-T0018 action family (expand catch-all / add missing
 arms / keep-open) as the exhaustiveness design lands; lint quick-fix
-surfacing when `sky_lint` lands (both degrade gracefully to "not yet
+surfacing when `ipe_lint` lands (both degrade gracefully to "not yet
 offered" if their compiler-side dependency hasn't merged — the surfacing
 code is additive).
 
@@ -561,8 +565,8 @@ broken buffer → no edits; gate-with-fmt round-trip tests.
 
 **Sequencing note.** Phases 0–2 are strictly ordered; 3 and 4 are
 independent of each other after 2; 5 needs 4's gate; 6 floats on the
-formatter port. The C.1 `sky_*`→`ipe_*` rename is absorbed mechanically
-whenever it happens (OPEN-4).
+formatter port. The `sky_*`→`ipe_*` rename has landed; the crates are
+`ipe_*` from their first commit (OPEN-4 resolved).
 
 ---
 
@@ -575,7 +579,7 @@ whenever it happens (OPEN-4).
   walker arm is a diff, not a mystery.
 - **Property tests**: offset round-trip; expected-types additivity;
   scratch-arena isolation; fmt preservation (Phase 6).
-- **Fuzz gates**: `sky_parse` (no panic/bounded time on mutated buffers);
+- **Fuzz gates**: `ipe_parse` (no panic/bounded time on mutated buffers);
   handler-level (random buffers through every feature).
 - **Never-stale guard**: warm-vs-fresh-database payload equality across
   adversarial edit scripts; CI-required from Phase 2.
@@ -626,7 +630,7 @@ implies "it compiles" — proven by types, gates, and CI, not by intent.*
 | F-2 | `implementation`, `typeHierarchy`, `linkedEditingRange` | no sound semantic mapping (HM, no interfaces; heuristic linked-edit can capture) | not advertised (refuse, don't fake); revisit if the language grows the concepts |
 | F-3 | Type-directed completion | `ExpectedTypes` sidecar is net-new solver work inside `constrain.rs`/`solve.rs` | ships only with the additivity property green (recording it changes nothing else) and the arena-isolation property green |
 | F-4 | Any code lens that runs project code ("run main", "run test") | violates G5 (the server executes no project code); even client-executed commands normalize a run-from-editor path we haven't threat-modeled | v1 ships at most the display-only reference-count lens, default off; run lenses need their own security design first |
-| F-5 | Partial-buffer result *quality* | `sky_parse` error recovery is best-effort today | no-crash holds unconditionally (G3 layers 2–3); recovery-quality improvements are additive and tracked on the parser, not the LSP |
+| F-5 | Partial-buffer result *quality* | `ipe_parse` error recovery is best-effort today | no-crash holds unconditionally (G3 layers 2–3); recovery-quality improvements are additive and tracked on the parser, not the LSP |
 | F-6 | Settled-edit diagnostics latency on large projects | `typecheck` is whole-program-coarse | correct today, honest in docs; per-module `typecheck` (salsa doc §9.4) is the tracked unlock — zero handler changes when it lands |
 | F-7 | Lint + IPE-T0018 surfacing | companion designs not yet implemented | LSP surfacing code is additive; rows 22–23 activate when their compiler-side dependencies merge |
 
@@ -636,13 +640,13 @@ implies "it compiles" — proven by types, gates, and CI, not by intent.*
 
 Locked by this plan (with rationale):
 
-1. **Single production backend on `sky_db`; `BatchView` retired** (§3.2).
+1. **Single production backend on `ipe_db`; `BatchView` retired** (§3.2).
    The pre-salsa fallback's precondition no longer exists; a second
    driver is drift surface. `ProgramView` survives as the handler seam.
 2. **Verify-on-offer everywhere** — the v0 verify-on-apply compromise
    (`ipe-lsp.md` OPEN-2) dissolves with the batch backend.
-3. **Three crates** (`sky_lsp_server` / `sky_lsp_features` /
-   `sky_lsp_edits`); the edits crate is the only `WorkspaceEdit`
+3. **Three crates** (`ipe_lsp_server` / `ipe_lsp_features` /
+   `ipe_lsp_edits`); the edits crate is the only `WorkspaceEdit`
    producer and only through the gate.
 4. **Position-encoding negotiation** with utf-8 preference, utf-16
    mandatory.
