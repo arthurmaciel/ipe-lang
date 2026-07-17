@@ -1,4 +1,4 @@
-//! Milestone-2d-1 Number-bound parity gate: a generic function whose body adds
+//! Number-bound parity gate: a generic function whose body adds
 //! its argument to itself (`double x = x + x`) generalises to a Rust generic
 //! bounded by the `Add` operator trait plus `Copy`, not the rigid-skolem
 //! rejection a structurally-parametric variable would get.

@@ -1,12 +1,12 @@
-//! Phase-1a sentinel: genuine bottom-up M-propagation for Std.Ui event subtrees.
+//! Sentinel: genuine bottom-up M-propagation for Std.Ui event subtrees.
 //!
-//! This golden closes issue #43: a non-view function (`staticHtml : String`)
+//! This golden covers: a non-view function (`staticHtml : String`)
 //! that renders an event-bearing subtree (`el [onClick Bump] (text "x")`) must
 //! compile, build, and run without a cargo E0308.
 //!
-//! Pre-fix the `UiLayout` arm emitted `ui_layout::<()>(…)` (the old
-//! `enclosing_ui_msg().unwrap_or("()")` fallback) while the event kernel emitted
-//! `Attribute<MainMsg>` — producing a type mismatch.  Post-fix, M is inferred
+//! A `UiLayout` arm emitting `ui_layout::<()>(…)` (an
+//! `enclosing_ui_msg().unwrap_or("()")` fallback) while the event kernel emits
+//! `Attribute<MainMsg>` produces a type mismatch. Instead, M is inferred
 //! bottom-up from the event's concrete `Attribute<MainMsg>` with no turbofish.
 //!
 //! ## Oracle provenance
@@ -21,7 +21,7 @@
 //!   (`SolvedTypes.regions`), producing `IrType::Ui { AttrEvent, msg: MainMsg }`.
 //! * `KernelFn::UiOnClick` lowers and emits `ui_on_click_(MainMsg::Bump)` →
 //!   `element::Attribute::AttrEvent(EventAttr(OnMsg("click", Bump)))`.
-//! * `UiLayout` no longer emits a turbofish; Rust infers `M = MainMsg`
+//! * `UiLayout` emits no turbofish; Rust infers `M = MainMsg`
 //!   bottom-up from the concrete `Attribute<MainMsg>` element.
 //! * The rendered HTML contains `data-sky-on="click"` and the text node `x`.
 //! * The binary exits 0.
@@ -72,7 +72,7 @@ fn build_run_onclick() -> (PathBuf, support::RunOutcome) {
     (dir, outcome)
 }
 
-/// Phase-1a sentinel: `onClick` event in a non-view function must compile, build,
+/// Sentinel: `onClick` event in a non-view function must compile, build,
 /// run, and produce HTML with the event attribute wired.  M is inferred
 /// bottom-up from the event payload — no turbofish fallback to `()`.
 #[test]

@@ -1,22 +1,18 @@
-//! Regression for the BACKLOG Critical row "Name-only HttpRequest-shape
-//! false-positive fold" — `sky_lower::lower::ir_type_from_ty`'s `Ty::Record`
-//! arm (and its sibling in `ir_type_from_canon`'s `canon::Type::Record` arm,
-//! and `sky_backend_rust::emit_expr::emit_record`'s independent
-//! `HTTP_REQUEST_FIELDS` special case) used to decide "is this record an
-//! `HttpRequest`?" purely by checking whether its field NAMES exactly
-//! matched the 7-field set `{body, followRedirects, headers, maxRedirects,
-//! method, timeout, url}` — regardless of field TYPES. A completely
-//! unrelated user record that happened to share those 7 field names (e.g.
-//! every field `Int`, nothing HTTP-related) got silently miscompiled: `skyc`
-//! exited 0, but the emitted `cargo build` failed with a wall of E0308
-//! errors (the struct's declared type disagreeing with the `HttpRequest`
-//! type the literal was emitted as).
+//! Regression for the "Name-only HttpRequest-shape false-positive fold" —
+//! deciding "is this record an `HttpRequest`?" purely by field NAMES (in
+//! `sky_lower::lower::ir_type_from_ty`'s `Ty::Record` arm, its sibling in
+//! `ir_type_from_canon`'s `canon::Type::Record` arm, and
+//! `sky_backend_rust::emit_expr::emit_record`'s independent
+//! `HTTP_REQUEST_FIELDS` special case) is unsound: checking whether the field
+//! NAMES exactly match the 7-field set `{body, followRedirects, headers,
+//! maxRedirects, method, timeout, url}` regardless of field TYPES silently
+//! miscompiles a completely unrelated user record that happens to share those 7
+//! field names (e.g. every field `Int`, nothing HTTP-related): `skyc` exits 0,
+//! but the emitted `cargo build` fails with a wall of E0308 errors (the
+//! struct's declared type disagreeing with the `HttpRequest` type the literal
+//! is emitted as).
 //!
-//! Traced via `git log -S` to `4dde12f` (2026-07-04) — pre-existing, not
-//! introduced by the HTTP-builder work landed this week. Found by an
-//! independent adversarial review (agent `ac33a00`).
-//!
-//! Fix: both `sky_lower::lower::ir_type_from_ty` / `ir_type_from_canon` now
+//! So both `sky_lower::lower::ir_type_from_ty` / `ir_type_from_canon`
 //! check field TYPES in addition to field NAMES (`is_http_request_shape` /
 //! `is_http_request_canon_shape`, `HTTP_REQUEST_FIELD_TYPES`) before folding
 //! to the opaque `IrType::HttpRequest`. `sky_backend_rust::emit_expr`'s
@@ -135,9 +131,9 @@ fn name_only_shape_emits_a_synthesised_record_struct() {
 }
 
 /// The load-bearing SEAL proof: under `SKY_E2E=1`, actually `cargo build`
-/// the emitted crate and run it. Pre-fix this would fail `cargo build` with
+/// the emitted crate and run it. A name-only fold would fail `cargo build` with
 /// E0308 (Int values assigned into `HttpRequest`'s String/Bool/List fields);
-/// post-fix it builds and prints `28` (`1+2+3+4+5+6+7`).
+/// the type-aware fold builds and prints `28` (`1+2+3+4+5+6+7`).
 #[test]
 fn http_request_name_only_fold_seal_builds_and_runs() {
     let root = repo_root();

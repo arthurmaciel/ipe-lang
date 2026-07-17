@@ -1,4 +1,4 @@
-//! #219 regression — `Sky.Test.runMain` must print the pass/fail SUMMARY line
+//! Regression — `Sky.Test.runMain` must print the pass/fail SUMMARY line
 //! to stdout, matching the Go reference.
 //!
 //! The Go/Haskell reference `Sky.Test.summarise` prints exactly one line,

@@ -1,15 +1,14 @@
-//! SEAL fix 2026-07-11 (`docs/architecture/
-//! docs/adr/0017-error-payload-nominal-identity.md`) — positive golden for the
-//! NOMINAL `PanicInfo` / `TypeInfo` / `ErrorInfo` payload types.
+//! SEAL fix (`docs/adr/0017-error-payload-nominal-identity.md`) — positive
+//! golden for the NOMINAL `PanicInfo` / `TypeInfo` / `ErrorInfo` payload types.
 //!
-//! Pins the coherence half of the fix (the negative half lives in
+//! Pins the coherence half (the negative half lives in
 //! `crates/skyc/tests/error_record_literal_gates.rs`):
 //!
 //! * the three names are annotatable builtins (`describePanic : PanicInfo ->
 //!   String` resolves and compiles);
 //! * a pattern-bound payload and a helper parameter naming (or inferring) the
 //!   same nominal type agree on ONE Rust type (`sky_runtime::error::
-//!   SkyPanicInfo` etc.) — pre-fix, this exact shape was an
+//!   SkyPanicInfo` etc.) — without the fix, this exact shape was an
 //!   exit-0-then-cargo-fail (the helper's parameter lowered to a
 //!   project-local synthesized record struct);
 //! * field access on all six fixed fields resolves through `sky_types`'

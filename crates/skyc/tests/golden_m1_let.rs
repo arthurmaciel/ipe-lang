@@ -1,4 +1,4 @@
-//! Milestone-1 `let … in` gate: `skyc` must emit `main.rs` byte-identical to the
+//! `let … in` gate: `skyc` must emit `main.rs` byte-identical to the
 //! checked-in golden for single- and multi-binding `let`s, and (behind
 //! `SKY_E2E=1`) the emitted project must build and print `22`.
 //!

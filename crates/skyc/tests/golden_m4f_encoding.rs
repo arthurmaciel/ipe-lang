@@ -1,4 +1,4 @@
-//! M4f `Sky.Core.Encoding` parity gate — base64 / URL / hex encode-decode
+//! `Sky.Core.Encoding` parity gate — base64 / URL / hex encode-decode
 //! kernels with byte-for-byte Go parity.
 //!
 //! These golden tests exercise the `Sky.Core.Encoding` kernel family end-to-end:
@@ -35,7 +35,7 @@
 //! `m4f_encoding_url_unreserved`, `m4f_encoding_hex`, `m4f_encoding_nonascii`)
 //! carry `oracle_divergence = false`: the `Encoding.*` text codecs encode a
 //! String's UTF-8 bytes, byte-identical to the Go reference for BOTH ASCII and
-//! non-ASCII (task #55a closed the old Latin-1 truncation hole).
+//! non-ASCII (no Latin-1 truncation).
 //!
 //! `m4f_encoding_invalid` carries `oracle_divergence = true` (Go-failure kind):
 //! the Go backend PANICS with `CoerceFailure` (`rt.ResultCoerce` →

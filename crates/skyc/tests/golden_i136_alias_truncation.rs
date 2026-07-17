@@ -1,4 +1,4 @@
-//! #136 seal regression — the post-catch-all arm truncation in `lower_case`
+//! Seal regression — the post-catch-all arm truncation in `lower_case`
 //! must key off the CANONICAL `is_irrefutable` predicate, not a hand-rolled
 //! `PAnything | PVar` match.
 //!

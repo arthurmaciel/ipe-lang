@@ -1,4 +1,4 @@
-//! SKY-L0105 refutable parameter patterns (#96) — the negative surface. A
+//! SKY-L0105 refutable parameter patterns — the negative surface. A
 //! parameter (or `let` binder) is a BINDING position: it must match every value
 //! of its type. A refutable param must therefore be a clean, span-carrying
 //! compile-time error — never a runtime match failure (upstream Sky's

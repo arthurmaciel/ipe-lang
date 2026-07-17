@@ -1,15 +1,15 @@
-//! #138 regression gate — total type-name resolution.
+//! Regression gate — total type-name resolution.
 //!
-//! `sky_canon::canonicalise_type` used to call `unwrap_or_default()` for any
-//! unqualified type name absent from `type_home_map`, giving it `home = []`.
+//! Calling `unwrap_or_default()` in `sky_canon::canonicalise_type` for any
+//! unqualified type name absent from `type_home_map` would give it `home = []`.
 //! Genuine builtins (in `RESERVED_BUILTIN_TYPES` / `EXTRA_BUILTIN_TYPE_NAMES`)
 //! legitimately carry that empty-home sentinel; the lowerer resolves them by
 //! explicit name arm.  Unknown names (user ADTs referenced without importing
-//! their module) also got `home = []`, so they fell through to the lowerer's
-//! unique-match heuristic, which ICE'd with SKY-I0001 when zero or multiple
-//! matches existed.
+//! their module) would also get `home = []`, falling through to the lowerer's
+//! unique-match heuristic, which ICEs with SKY-I0001 when zero or multiple
+//! matches exist.
 //!
-//! The fix makes resolution TOTAL:
+//! Resolution is instead TOTAL:
 //!   • Unknown unqualified upper-case names → SKY-N0002 (`TypeNotFound`) at
 //!     canon time, with a did-you-mean suggestion list.
 //!   • Known builtins → empty-home sentinel as before.
@@ -107,9 +107,9 @@ fn i138_kernel_implicit_positive_exits_zero() {
         .expect("i138_kernel_implicit_positive must compile (Request is a kernel builtin)");
 }
 
-/// `Value` is a kernel-implicit Prelude type (#576) that was missing from all
+/// `Value` is a kernel-implicit Prelude type that was missing from all
 /// three builtin allowlists (`RESERVED_BUILTIN_TYPES`, `EXTRA_BUILTIN_TYPE_NAMES`,
-/// `KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES` — newly added by #138 fix).
+/// `KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES` — newly added by the fix).
 /// After the fix it must receive the empty-home sentinel and compile clean.
 /// The lowerer handles `Value` via an explicit arm (`IrType::Json`) placed
 /// after the `enum_variants` guard.

@@ -1,4 +1,4 @@
-//! Milestone-2d-1 Equatable-bound parity gate: a generic function whose body
+//! Equatable-bound parity gate: a generic function whose body
 //! compares its arguments with `==` / `/=` (`eq2 p q = p == q`) generalises to a
 //! Rust generic bounded by `PartialEq` — and, unlike the Number / Comparable
 //! paths, carries NO `Copy`, because `PartialEq::eq` borrows its operands.

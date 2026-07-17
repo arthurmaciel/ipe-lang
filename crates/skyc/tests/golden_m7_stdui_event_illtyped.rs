@@ -1,15 +1,14 @@
 //! `Std.Html.Events.onInput` handler-payload gate: a Bool handler must be
 //! REJECTED BY skyc with SKY-T0001 — never exit 0 and defer to cargo.
 //!
-//! ## #107 context
+//! ## Context
 //!
-//! `Std.Html.Events.*` now resolves to the dedicated `Html*` event kernels,
+//! `Std.Html.Events.*` resolves to the dedicated `Html*` event kernels,
 //! which produce a `Std.Html.Attribute msg` (`html_attr`) — the same nominal
-//! type Std.Html attribute + element builders use. (Before #107 they aliased to
-//! the `Ui*` event kernels, producing a `Std.Ui.Attribute`; both fixtures then
-//! rendered via `Ui.el`, relying on that conflation.) Post-#107 the fixtures
-//! host the event on a Std.Html element (`Html.input`) where an Html attribute
-//! belongs. The payload-shape check (`(String -> msg)` argument) is unchanged.
+//! type Std.Html attribute + element builders use. The fixtures host the event
+//! on a Std.Html element (`Html.input`) where an Html attribute belongs. The
+//! payload-shape check (`(String -> msg)` argument) is the same across event
+//! surfaces.
 //!
 //! ## What is tested
 //!
@@ -52,10 +51,10 @@ fn run_skyc(fixture: &str, out_suffix: &str) -> Option<Result<(), CliError>> {
     Some(skyc::build(&entry, &out, &runtime))
 }
 
-/// Phase-1a round-2 NEGATIVE gate: `Event.onInput` with a `Bool -> msg`
+/// NEGATIVE gate: `Event.onInput` with a `Bool -> msg`
 /// handler must be rejected by skyc with SKY-T0001.
 ///
-/// Pre-fix: `constrain.rs` fell to `Ty::Var(u32::MAX)` for the `"Event"`
+/// Without the fix, `constrain.rs` fell to `Ty::Var(u32::MAX)` for the `"Event"`
 /// qualifier → skyc exited 0 → cargo emitted E0308.
 /// Post-fix: `Some("Ui" | "Event")` arm unifies `Bool -> msg` with the
 /// expected `String -> msg` → SKY-T0001 at the type-checking stage.
@@ -76,7 +75,7 @@ fn event_oninput_illtyped_bool_handler_is_sky_t0001() {
     );
 }
 
-/// Phase-1a round-2 POSITIVE sentinel: `Event.onInput` with a correct
+/// POSITIVE sentinel: `Event.onInput` with a correct
 /// `String -> msg` handler must compile (skyc build returns `Ok`).
 ///
 /// This confirms the widened qualifier arm in `constrain.rs` does not

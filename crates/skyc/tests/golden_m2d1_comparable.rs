@@ -1,4 +1,4 @@
-//! Milestone-2d-1 Comparable-bound parity gate: a generic function whose body
+//! Comparable-bound parity gate: a generic function whose body
 //! orders its arguments (`maxOf p q = if p > q then p else q`) generalises to a
 //! Rust generic bounded by `PartialOrd` plus `Copy`.
 //!

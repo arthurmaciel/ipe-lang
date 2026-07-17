@@ -1,4 +1,4 @@
-//! M5b `Sky.Core.Uuid` + `Sky.Core.Jwt` gate —
+//! `Sky.Core.Uuid` + `Sky.Core.Jwt` gate —
 //! UUID generation/parsing and JWT HS256/RS256 encode/decode.
 //!
 //! Every test compiles a Sky program through `skyc`, builds the emitted Rust
@@ -21,7 +21,7 @@
 //!   skyc's own output, NOT a Go run of the same source.
 //!
 //! * **UUID (`m5b_uuid_*`) — soundness divergence.** `Uuid.v4` / `Uuid.v7` are
-//!   typed on the EFFECT tier (`() -> Task Error String`, task #54) because
+//!   typed on the EFFECT tier (`() -> Task Error String`) because
 //!   entropy is not a memoizable pure value; the Go reference still types them as
 //!   bare `Uuid.v4 : String` (Limitation #7), so these Task-sequenced programs
 //!   are not co-typable with the Go backend and cannot be Go-oracled. The cached
@@ -164,7 +164,7 @@ fn uuid_format() {
 
 // ── UUID distinctness (entropy-is-an-effect soundness proof) ─────────────────
 
-/// SOUNDNESS regression (task #54): two `Uuid.v4 ()` calls in one program yield
+/// SOUNDNESS regression: two `Uuid.v4 ()` calls in one program yield
 /// DIFFERENT ids. `Uuid.v4 : () -> Task Error String`, so the two references are
 /// distinct effect evaluations — NOT a memoizable pure `String` the optimizer
 /// could CSE into one shared value (which would print `"fail-same"`).  Output:

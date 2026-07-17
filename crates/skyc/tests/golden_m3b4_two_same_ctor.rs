@@ -1,4 +1,4 @@
-//! Milestone-3b-4 two arms for the same top constructor, discriminated by a
+//! Two arms for the same top constructor, discriminated by a
 //! nested LITERAL sub-pattern (`Wrap 0` vs `Wrap n`), end to end.
 //!
 //! This is the literal-payload sibling of `golden_m3b4_nested`: the same top

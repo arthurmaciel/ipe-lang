@@ -1,12 +1,12 @@
-//! #193 regression — asymmetric-arm clone-hoist for `CloneOk` bindings with
+//! Regression — asymmetric-arm clone-hoist for `CloneOk` bindings with
 //! post-match tail uses (T≥1), per-arm snapshot/restore (v3).
 //!
-//! **The bug (pre-fix):** `count_var_uses` summed arm bodies for `Match`/`If`,
-//! seeding the shared `remaining` counter too high.  `rewrite_multiuse_clones`
-//! then threaded that single counter across arms sequentially, so arm A's
-//! genuine last use was spuriously cloned (remaining from 4→3 → emits
-//! `CloneVar` when `remaining > 1`) and arm B's first use was mis-marked bare
-//! (remaining 3→2→1→0, second `Var` hit the early-out → E0382).
+//! **The bug:** summing arm bodies in `count_var_uses` for `Match`/`If` would
+//! seed the shared `remaining` counter too high.  `rewrite_multiuse_clones`
+//! then threads that single counter across arms sequentially, so arm A's
+//! genuine last use is spuriously cloned (remaining from 4→3 → emits
+//! `CloneVar` when `remaining > 1`) and arm B's first use is mis-marked bare
+//! (remaining 3→2→1→0, second `Var` hits the early-out → E0382).
 //!
 //! **The fix:**
 //! 1. `count_var_uses` Match/If arms: SUM→MAX (seed = scrutinee + max arm).

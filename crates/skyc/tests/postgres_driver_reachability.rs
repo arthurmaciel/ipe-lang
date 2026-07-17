@@ -113,10 +113,10 @@ fn postgres_driver_selects_postgres_config_template() {
 /// `cargo build` (isolated target dir) — proves the seal (skyc exit 0
 /// implies cargo build exit 0) for the whole Postgres codegen path, not just
 /// the config.rs/Cargo.toml source-text assertions above. This is the check
-/// that would have caught the 2026-07-10 SEAL violation (an exclusive
-/// sqlite-vs-postgres sqlx feature selection compiled fine as SOURCE TEXT
-/// but failed `cargo build` because always-emitted runtime modules unrelated
-/// to the `[database]` driver hardcode `SqlitePool`) — source-text greps
+/// that catches a SEAL violation where an exclusive
+/// sqlite-vs-postgres sqlx feature selection compiles fine as SOURCE TEXT
+/// but fails `cargo build` because always-emitted runtime modules unrelated
+/// to the `[database]` driver hardcode `SqlitePool` — source-text greps
 /// alone cannot catch a missing Cargo feature dependency.
 #[test]
 fn postgres_driver_project_cargo_builds() {

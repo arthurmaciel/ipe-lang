@@ -1,4 +1,4 @@
-//! #217 stdlib-contract-drift regression — three kernel-backed stdlib
+//! Stdlib-contract-drift regression — three kernel-backed stdlib
 //! surfaces (`Jwt.withClaim`, `Std.Db.Migration`/`Db.migrate`,
 //! `Sky.Http.Server.Response`) whose compiler contracts had drifted from the
 //! reference `../sky/sky-stdlib` signatures, so `skyc` rejected a

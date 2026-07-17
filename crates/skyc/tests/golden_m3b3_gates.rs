@@ -1,4 +1,4 @@
-//! Milestone-3b-3 exhaustiveness / redundancy gates for literal-pattern `case`s.
+//! Exhaustiveness / redundancy gates for literal-pattern `case`s.
 //!
 //! * Int / Char / String are OPEN types: literal arms with no wildcard / variable
 //!   catch-all do not cover every value, so the `case` is non-exhaustive →
@@ -55,9 +55,8 @@ fn non_exhaustive_int_case_is_sky_t0010() {
     );
 }
 
-/// `SKY-T0011` is a WARNING since batch-xm (Go-reference parity — see the
-/// matching note in `golden_m3b2_gates`; severity policy under review as
-/// task #136). The build must SUCCEED.
+/// `SKY-T0011` is a WARNING (Go-reference parity — see the
+/// matching note in `golden_m3b2_gates`). The build must SUCCEED.
 #[test]
 fn redundant_branch_after_catch_all_is_sky_t0011_warning_build_succeeds() {
     let root = repo_root();

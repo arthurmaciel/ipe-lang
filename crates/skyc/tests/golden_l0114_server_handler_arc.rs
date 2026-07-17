@@ -1,18 +1,18 @@
 //! Regression guard for the `wants_arc_ctor` structural-dispatch fix.
 //!
-//! ## The bug this pins (2026-07-11 review finding)
+//! ## The bug this pins
 //!
-//! `emit_lambda` originally chose the smart-pointer constructor by testing the
-//! RENDERED type string with `typed.starts_with("Arc<")`. `render_type` emits a
+//! Choosing the smart-pointer constructor by testing the RENDERED type string
+//! with `typed.starts_with("Arc<")` is unsound: `render_type` emits a
 //! `ServerHandler<E>` slot as the type-ALIAS name `"ServerHandler<SkyError>"`,
-//! NOT the expanded `"Arc<dyn Fn…>"` — so the string test misclassified every
+//! NOT the expanded `"Arc<dyn Fn…>"` — so the string test misclassifies every
 //! inline `Server.post path (\req -> …)` handler lambda as `Box`, emitting
 //! `Box::new(move |req: ServerRequest| …)` into an `Arc<dyn Fn>` field. `skyc`
-//! still exited 0, but the emitted crate failed `cargo build` with E0308
+//! still exits 0, but the emitted crate fails `cargo build` with E0308
 //! (`expected Arc…, found Box…`) — a break of THE SEAL (skyc exit-0 must imply
-//! the emitted Rust cargo-builds). The fix routes both `emit_lambda` and
-//! `emit_func_value` through the shared structural `wants_arc_ctor` helper that
-//! matches on the `IrType` shape, never the rendered string.
+//! the emitted Rust cargo-builds). So both `emit_lambda` and
+//! `emit_func_value` route through the shared structural `wants_arc_ctor` helper
+//! that matches on the `IrType` shape, never the rendered string.
 //!
 //! ## Why this test is NOT `SKY_E2E`-gated
 //!

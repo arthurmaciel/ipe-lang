@@ -1,4 +1,4 @@
-//! #86 `Sky.Core.Error` module qualifier — minimal `Error = String` slice.
+//! `Sky.Core.Error` module qualifier — minimal `Error = String` slice.
 //!
 //! Gated on `SKY_E2E=1`; without it the test returns early so the default
 //! `cargo test` stays fast.
@@ -12,7 +12,7 @@
 //!   `e : Error` handler parameter, and `Error.toString : Error -> String`. With
 //!   `SkyError = String` the message round-trips verbatim, so stdout is `boom`.
 //!   Marked `oracle_divergence` because upstream Go renders the kind prefix
-//!   (`Unexpected: boom`) via the rich `ErrorKind` ADT deferred to #85.
+//!   (`Unexpected: boom`) via the rich `ErrorKind` ADT deferred elsewhere.
 //!
 //! Run:
 //!

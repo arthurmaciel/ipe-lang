@@ -1,4 +1,4 @@
-//! M5c TEA construct-only gate — `Cmd` / `Sub` construction wiring.
+//! TEA construct-only gate — `Cmd` / `Sub` construction wiring.
 //!
 //! These tests compile Sky programs that construct `Cmd` and `Sub` values and
 //! immediately discard them, then print `"ok"`.  This confirms that:

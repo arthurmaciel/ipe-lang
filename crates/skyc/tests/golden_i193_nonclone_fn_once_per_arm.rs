@@ -1,8 +1,8 @@
-//! #193 D3 seal: `count_fn_value_uses` Match arms must stay SUM (not MAX).
+//! D3 seal: `count_fn_value_uses` Match arms must stay SUM (not MAX).
 //!
 //! A pure fn-typed param passed as an argument (consuming position) in each of
-//! two case arms sums to 2 total consuming uses. RE-CLASSIFIED by the #221
-//! fn-value `Arc`-carrier promotion: the SUM (2 > 1) now drives the param's
+//! two case arms sums to 2 total consuming uses. Under the fn-value
+//! `Arc`-carrier promotion, the SUM (2 > 1) drives the param's
 //! promotion to the `Clone` `Arc<dyn Fn>` carrier — the program compiles and
 //! runs (`applyEither True (+1)` = `43`) instead of fail-closing SKY-L0127.
 //!

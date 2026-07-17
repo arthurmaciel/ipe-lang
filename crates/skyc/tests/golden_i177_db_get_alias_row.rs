@@ -1,4 +1,4 @@
-//! BACKLOG #177 FIX-UP 2 regression — INDIRECTED (aliased) row argument.
+//! INDIRECTED (aliased) row argument.
 //!
 //! The structural `body_calls_db_get_on_param` walk originally matched the
 //! wildcard param in row-argument position ONLY as a DIRECT `Var`/`CloneVar`.
@@ -17,7 +17,7 @@
 //! `db_get_string(_, &r)`), so the structural rewrite REGRESSED this case — a
 //! skyc-0-then-cargo-fail SEAL violation.
 //!
-//! The fix makes the walk alias-transparent (mirroring #168's alias-chain
+//! The fix makes the walk alias-transparent (mirroring the alias-chain
 //! resolution in `flows_into_sync_kernel_call`): a value-preserving
 //! `let r = payload` tracks `r` as an additional alias of the wildcard row for
 //! the rest of the `let` body, so `Db.getString _ r` obliges the bound exactly

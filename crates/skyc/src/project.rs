@@ -2,7 +2,7 @@
 //! topological sort.
 //!
 //! The `sky.toml` format is a minimal subset: only `[project]` and `name` / the
-//! source root (`src/`) are significant for M7. No external TOML crate is used —
+//! source root (`src/`) are significant. No external TOML crate is used —
 //! the relevant structure is simple enough for a line-by-line parser.
 //!
 //! # Discovery
@@ -312,7 +312,7 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// Compiled-source stdlib injection (#98)
+// Compiled-source stdlib injection
 // ---------------------------------------------------------------------------
 
 /// Transitively inject every compiled-source stdlib module the graph imports.
@@ -445,7 +445,7 @@ mod tests {
         toml_path
     }
 
-    /// #61-adjacent regression (Class 7 §3): no `[database]` section at all →
+    /// No `[database]` section at all →
     /// the manifest defaults to `DbDriver::Sqlite`, matching the documented
     /// `sky.toml` schema default.
     #[test]

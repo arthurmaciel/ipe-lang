@@ -1,7 +1,7 @@
-//! M4b Sky.Core.String parity gate: String and Char kernel functions compile
+//! Sky.Core.String parity gate: String and Char kernel functions compile
 //! and run with Go parity (rune-correct, byte-for-byte output match).
 //!
-//! M4b surfaces the full `Sky.Core.String` and `Sky.Core.Char` kernel sets,
+//! Surfaces the full `Sky.Core.String` and `Sky.Core.Char` kernel sets,
 //! mirroring the Go runtime's `String_*` / `Char_*` helpers. Key semantic
 //! invariants verified here:
 //!

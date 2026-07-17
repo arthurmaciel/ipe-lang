@@ -1,4 +1,4 @@
-//! M7 `Ui.layoutWith` Phase-0 gate —
+//! `Ui.layoutWith` gate —
 //! `Ui.layoutWith` with inline cfg literal must apply both `wrapperAttrs`
 //! (padding) and `rootAttrs` (spacing), confirming the cfg is NOT silently
 //! dropped (BLOCKER-2 fix).

@@ -1,12 +1,13 @@
-//! #182 — a VARIABLE (non-literal) tuple `case` with a STRING-LITERAL column.
+//! A VARIABLE (non-literal) tuple `case` with a STRING-LITERAL column.
 //!
 //! `Std.Ui.Transform.propsToCss` matches `case pair of ( "transform", v ) -> …`
-//! (a variable scrutinee, a string-literal column) — the last blocker for
-//! `Std.Ui.Transform` / `Std.Ui.Animation` / `26-ui-showcase`. #174 admitted a
-//! variable tuple scrutinee but fail-closed any string-literal column to
-//! SKY-L0115 (no per-column `.as_str()` coercion machinery on the by-value path).
+//! (a variable scrutinee, a string-literal column) — used by
+//! `Std.Ui.Transform` / `Std.Ui.Animation` / `26-ui-showcase`. Admitting a
+//! variable tuple scrutinee while fail-closing any string-literal column to
+//! SKY-L0115 (no per-column `.as_str()` coercion on the by-value path) would
+//! reject this shape.
 //!
-//! #182 lowers it via the reference's guard mechanism: each `PStr` column
+//! It lowers via the reference's guard mechanism: each `PStr` column
 //! becomes a fresh binder plus an `if __sgN.as_str() == "lit"` match guard, so it
 //! emits `match pair { (__sg0, v) if __sg0.as_str() == "transform" => …, … }` — a
 //! by-value binder + guard, sound for a variable scrutinee. A list / cons column

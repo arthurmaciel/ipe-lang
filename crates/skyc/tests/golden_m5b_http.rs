@@ -1,4 +1,4 @@
-//! M5b `Sky.Core.Http` gate —
+//! `Sky.Core.Http` gate —
 //! `Http.parseQuery` (pure), `defaultRequest` + `with*` builder chain (pure),
 //! and `HttpResponse` record literal / field access (pure struct path).
 //!
@@ -134,14 +134,14 @@ fn http_response_fields() {
 /// matching that exact 7-field shape into the opaque `IrType::HttpRequest`
 /// (so `Http.request` / `HttpStream.open` call sites see the runtime type),
 /// regardless of what the value's OTHER consumers do. But
-/// `emit_http_builder_call`'s `HttpDefaultRequest` arm used to look up a
+/// `emit_http_builder_call`'s `HttpDefaultRequest` arm must NOT look up a
 /// backend-SYNTHESISED struct via `record_struct_by_key` to build the struct
-/// literal — a struct that is only registered when some signature
+/// literal — such a struct is only registered when some signature
 /// independently carries the same fieldset as a plain (non-opaque) record
 /// (e.g. `m5b_http_builders`'s explicitly-annotated `printReq` parameter).
-/// With no such signature anywhere in the program, no struct was ever
-/// registered and the lookup raised SKY-I0001, even though the value's
-/// runtime type was correctly known throughout. The fix emits
+/// With no such signature anywhere in the program, no struct is
+/// registered and the lookup raises SKY-I0001, even though the value's
+/// runtime type is correctly known throughout. So the arm emits
 /// `sky_runtime::HttpRequest { ... }` directly — the fixed, canonical name —
 /// instead of resolving a name through the record-shape registry.
 ///

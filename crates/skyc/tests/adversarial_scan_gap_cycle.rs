@@ -1,4 +1,4 @@
-//! Independent adversarial-review probe: the Phase-2 code comments claim
+//! Adversarial probe against the claim that
 //! "the driver's topological sort rejects cycles (SKY-N0021) before any
 //! `canonicalize` demand, so the production path never recurses into a
 //! cycle". That claim rests on `extract_imports_from_source` (a pre-parse

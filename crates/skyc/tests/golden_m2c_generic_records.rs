@@ -1,4 +1,4 @@
-//! Milestone-2C generic-records gate: `skyc` must emit `main.rs` byte-identical
+//! Generic-records gate: `skyc` must emit `main.rs` byte-identical
 //! to the checked-in golden for a program that constructs and reads a record
 //! whose field type is a **type variable** — `wrap : a -> { value : a }` /
 //! `unwrap : { value : a } -> a` — and (behind `SKY_E2E=1`) the emitted project
@@ -7,7 +7,7 @@
 //! A `{ value : a }` record synthesises a GENERIC Rust struct
 //! (`struct RecValue<T1> { value: T1 }`); `wrap` renders at its own generic
 //! (`RecValue<T1>`) and the `wrap 42` use site instantiates it at `i64`. This is
-//! the M2c core feature exercised end to end through the real driver (parser →
+//! the generic-records feature exercised end to end through the real driver (parser →
 //! canonicaliser → solver → lowerer → Rust backend), not just the hand-built IR
 //! unit tests in `sky_backend_rust`.
 //!

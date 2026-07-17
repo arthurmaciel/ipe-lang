@@ -1,4 +1,4 @@
-//! M5b `Std.Db` gate — `SqlValue`-parameterized `Db.exec` + `Db.query` on an
+//! `Std.Db` gate — `SqlValue`-parameterized `Db.exec` + `Db.query` on an
 //! in-memory `SQLite` database via `Db.withTransaction`.
 //!
 //! Every test compiles a Sky program through `skyc`, builds the emitted Rust
@@ -46,9 +46,9 @@
 //! * `m5b_db_find_where` — `Db.exec` two INSERTs →
 //!   `Db.findWhere conn "products" (Sql.gt (Sql.column "qty") (Sql.int 9))` →
 //!   single-row result → `println`. Output: `"widget:10"`.
-//!   The `SqlFragment`-typed replacement for the removed `Db.unsafeFindWhere`
-//!   (backlog #61) — the WHERE clause can only be built through the `Sql.*`
-//!   combinators, never a hand-built string.
+//!   The `SqlFragment`-typed counterpart to a raw `Db.unsafeFindWhere` —
+//!   the WHERE clause can only be built through the `Sql.*` combinators, never
+//!   a hand-built string.
 //! * `m5b_db_delete_where` — `Db.exec` three INSERTs →
 //!   `Db.deleteWhere conn "products" (Sql.eq (Sql.column "name") (Sql.string "gadget"))`
 //!   → row-count + a follow-up `Db.query` confirming only the matched row was
@@ -61,7 +61,7 @@
 //! * `m5b_db_gate_findwhere_string` (negative, `golden_m5b_db_gates.rs`) —
 //!   `Db.findWhere conn "products" ("qty > " ++ "9")` is a compile-time
 //!   `SKY-T0001` (`String` vs `SqlFragment`) — the "parse, don't validate"
-//!   property backlog #61 exists to establish.
+//!   property this surface establishes.
 //! * `m5b_db_find_by_field` — `Db.exec` three INSERTs (two `category = "fruit"`,
 //!   one `category = "veggie"`) → `Db.findOneByField conn "items" "name" "apple"`
 //!   (match → `Just` row) → `Db.findOneByField conn "items" "name" "durian"`
@@ -70,20 +70,19 @@
 //!   `ORDER BY`) → `Db.findManyByField conn "items" "category" "mineral"` (no
 //!   match → `[]`). Output:
 //!   `"apple:fruit:5\nmissing\napple:fruit:5,banana:fruit:3\nempty"`.
-//!   Closes the golden-E2E-coverage gap for `DbFindOneByField`/
-//!   `DbFindManyByField` (arity fixed by #70) — previously verified only via
-//!   direct runtime source inspection, never a real `skyc build` + `cargo
-//!   build` + run.
-//! * `m5b_db_decode_money` — backlog #34: `Db.Decode.money "amount"` inside a
+//!   Golden-E2E coverage for `DbFindOneByField`/`DbFindManyByField` through a
+//!   real `skyc build` + `cargo build` + run, not just direct runtime source
+//!   inspection.
+//! * `m5b_db_decode_money` — `Db.Decode.money "amount"` inside a
 //!   `Db.queryDecode` pipeline decodes the `"CODE AMOUNT"` TEXT column
 //!   `SqlMoney` writes on INSERT back into `(Decimal, String)`, and a
 //!   malformed value (no space separator) is a total `Task Err`, never a
 //!   panic, caught via `Task.onError`. Output: `"USD 12.34\nmalformed:caught"`.
-//!   Proves the kernel-registration recipe closed the gap end-to-end (canon
+//!   Proves the kernel-registration recipe works end-to-end (canon
 //!   allowlist, `StdlibKernel` decl, constrain scheme, lower dispatch, emit,
-//!   pretty-print) — before this fix `Db.Decode.money` was rejected at
-//!   canonicalisation as an unknown qualified name even though the runtime
-//!   function was already implemented and unit-tested.
+//!   pretty-print); without registration `Db.Decode.money` is rejected at
+//!   canonicalisation as an unknown qualified name even when the runtime
+//!   function is implemented and unit-tested.
 //!
 //! Run:
 //!
@@ -251,7 +250,7 @@ fn db_find_by_conditions() {
     assert_runs_and_matches_oracle("m5b_db_find_by_conditions");
 }
 
-// ── Db.findWhere / Db.deleteWhere / Std.Db.Sql combinators (backlog #61) ──────
+// ── Db.findWhere / Db.deleteWhere / Std.Db.Sql combinators ──────
 
 /// `Db.exec` INSERTs `"widget:10"` and `"gadget:7"` rows →
 /// `Db.findWhere conn "products" (Sql.gt (Sql.column "qty") (Sql.int 9))` →
@@ -318,8 +317,8 @@ fn db_sql_decimal_money() {
 ///
 /// The fixture exercises three call shapes in one `Db.withTransaction`:
 ///
-/// * `Db.exec … [1]`                     — `List Int`   (regression for #18-job-queue)
-/// * `Db.exec … ["hello"]`               — `List String` (regression for #17-skymon)
+/// * `Db.exec … [1]`                     — `List Int`   (as in the job-queue example)
+/// * `Db.exec … ["hello"]`               — `List String` (as in the skymon example)
 /// * `Db.exec … [SqlNull …, SqlInt 42, SqlBool True]` — mixed `List SqlValue`
 ///
 /// Compile-only assertion: `skyc::build` must succeed (no `SKY-T0001`).
@@ -367,11 +366,9 @@ fn db_poly_params_e2e() {
 /// `println`. Output:
 /// `"apple:fruit:5\nmissing\napple:fruit:5,banana:fruit:3\nempty"`.
 ///
-/// Closes the golden-E2E-coverage gap for `DbFindOneByField`/
-/// `DbFindManyByField` noted in the backlog (arity fixed by #70, but the
-/// kernels themselves were previously verified only via direct runtime
-/// source inspection + the internal exhaustiveness test, never a real
-/// `skyc build` + `cargo build` + run).
+/// Golden-E2E coverage for `DbFindOneByField`/`DbFindManyByField` through a
+/// real `skyc build` + `cargo build` + run, not just direct runtime source
+/// inspection + the internal exhaustiveness test.
 ///
 /// Sanctioned divergence: ipê emits Rust+sqlx; oracle is ipê's own output.
 #[test]
@@ -379,14 +376,14 @@ fn db_find_by_field() {
     assert_runs_and_matches_oracle("m5b_db_find_by_field");
 }
 
-// ── Db.Decode.money — backlog #34 kernel-registration fix ────────────────────
+// ── Db.Decode.money kernel registration ────────────────────
 
 /// `Db.Decode.money "amount"` decodes a `"CODE AMOUNT"` TEXT column
 /// (`SqlMoney`'s lossless serialisation) back into `(Decimal, String)`, and a
 /// malformed value is a total `Task Err` — never a panic — caught via
 /// `Task.onError`. Output: `"USD 12.34\nmalformed:caught"`.
 ///
-/// Proves the #34 kernel-registration recipe closed the gap end-to-end: canon
+/// Proves the kernel-registration recipe works end-to-end: canon
 /// `Db.Decode` allowlist, `StdlibKernel::DbDecMoney` decl, constrain.rs
 /// scheme, `sky_lower` arity-1 dispatch, `sky_backend_rust` standard-path
 /// emit, `sky_ir` pretty-print.

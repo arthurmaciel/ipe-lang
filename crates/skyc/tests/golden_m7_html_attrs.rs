@@ -1,4 +1,4 @@
-//! #76 — Std.Html.Attributes family end-to-end golden.
+//! Std.Html.Attributes family end-to-end golden.
 //!
 //! Compiles `tests/golden/m7_html_attrs/Main.sky` through `skyc`, builds the
 //! emitted Rust project with the shared cargo target, runs the binary, and

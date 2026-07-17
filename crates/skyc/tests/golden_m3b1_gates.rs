@@ -1,10 +1,8 @@
-//! Milestone-3b-1 tuple-pattern shapes: originally FAIL-CLOSED gates (each shape
-//! the lowerer could not yet model had to surface a clean, span-carrying
-//! SKY-L0115 — never a panic, an internal compiler bug, or silent refutable
-//! cargo-failing Rust). Both shapes are now MODELLED end-to-end by the
+//! Tuple-pattern shapes. Both shapes are MODELLED end-to-end by the
 //! tuple-pattern lowering plus the `sky_types::exhaust` exhaustiveness/redundancy
-//! engine, so the placeholder gate is retired and these tests now pin the
-//! verified-correct behaviour instead:
+//! engine (a shape the lowerer cannot model surfaces a clean, span-carrying
+//! SKY-L0115 — never a panic, an internal compiler bug, or silent refutable
+//! cargo-failing Rust). These tests pin the verified-correct behaviour:
 //!
 //! * a `case` on a tuple with MORE THAN ONE arm whose first arm is irrefutable
 //!   (`(a, b) -> …` then `(c, d) -> …`): the redundancy checker recognises the

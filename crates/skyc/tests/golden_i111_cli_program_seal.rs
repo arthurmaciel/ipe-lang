@@ -1,4 +1,4 @@
-//! #111 seal — `Cli.program` app-entry kernel, end to end.
+//! Seal — `Cli.program` app-entry kernel, end to end.
 //!
 //! Regression for the L0107-exemption gap found at reconcile time: the
 //! `Cli.program` cfg record carries five function-typed fields
@@ -6,7 +6,7 @@
 //! in the app-entry cfg intercept (`lower.rs`) EVERY real call tripped
 //! `SKY-L0107: function value in a record field` and the `emit_cli` path was
 //! unreachable dead code.  This test pins the full pipeline:
-//! constrain scheme (closed 5-field cfg, #108 `RowTail::Closed`) → lower
+//! constrain scheme (closed 5-field cfg, `RowTail::Closed`) → lower
 //! app-entry intercept → `emit_cli_call` → `sky_runtime::cli_program`.
 //!
 //! Asserts skyc-0 ∧ cargo-0 ∧ run-0.  The runtime prints `view model` once at
@@ -47,7 +47,7 @@ fn cli_program_skyc_cargo_and_run_zero() {
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    // skyc-0: compiler must succeed (pre-fix this failed with SKY-L0107).
+    // skyc-0: compiler must succeed (this shape can fail with SKY-L0107).
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),

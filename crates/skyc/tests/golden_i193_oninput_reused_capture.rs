@@ -1,17 +1,17 @@
-//! #193 D5 regression — `Ui.onInput`/`Ui.onChange` inline-wrap emitter sites.
+//! D5 regression — `Ui.onInput`/`Ui.onChange` inline-wrap emitter sites.
 //!
 //! A non-Copy record captured into a `Ui.onInput` callback AND reused by a
 //! sibling `onPress` button in the same view.
 //!
-//! **Pre-fix:** `skyc` exits 0, but the emitted Rust fails `cargo build` with
+//! **Without the fix, ** `skyc` exits 0, but the emitted Rust fails `cargo build` with
 //! E0382 ("use of moved value").  The lowerer's multi-use-clone rewrite wraps
 //! the `onInput` Lambda in `let item = item.clone(); Lambda { … }`, but the
 //! inline-wrap emitter (`KernelFn::UiOnInput`) then places the whole block
 //! inside `Arc::new(move |_x| …)`.  The outer `move` still move-captures the
 //! free outer `item`, so the sibling `onPress` hits use-after-move.
 //!
-//! This is the same bug shape as #191 (`onChange` FIELD path), which was fixed
-//! by `emit_arc_callback_field`.  That fix covered only the `on_change` FIELD
+//! This is the same bug shape as the `onChange` FIELD path handled by
+//! `emit_arc_callback_field`.  That path covers only the `on_change` FIELD
 //! path (via `input_checkbox_`/`Input.*` call arguments), NOT the two inline
 //! `Arc::new(move …)` wraps synthesized by the `UiOnInput`/`UiOnChange` kernel
 //! arms in `emit_expr.rs`.
@@ -77,15 +77,15 @@ fn i193_oninput_skyc_accepts_and_hoists_capture_clone() {
 
     // The capture-clone `let` must be HOISTED outside the `ui_on_input_` Arc
     // closure — `let item = item.clone(); ::std::sync::Arc::new(…)`.
-    // This is the #193/#191 parity: same hoist that #191 established for the
-    // onChange FIELD path, now applied to the UiOnInput inline-wrap path.
+    // The same hoist the onChange FIELD path uses, applied to the UiOnInput
+    // inline-wrap path.
     assert!(
         emitted.contains("let item = item.clone(); ::std::sync::Arc::new"),
         "capture-clone must be hoisted OUTSIDE the Arc `move` closure (#193 D5); \
          got main.rs:\n{emitted}"
     );
 
-    // Guard against the pre-fix shape: the clone must NOT sit inside the Arc's
+    // Guard against the unfixed shape: the clone must NOT sit inside the Arc's
     // `move |_x|` body, which would re-move the free outer `item`.
     assert!(
         !emitted.contains("Arc::new(move |_x| (({ let item = item.clone();"),

@@ -9,15 +9,14 @@
 //! `elide_task_run_tail` correctly DECLINES to elide this shape (a partial
 //! elision would leave some arms `Task`-shaped and others `Result`-shaped,
 //! which cannot render as one Rust `match` of a single type — genuinely
-//! all-or-nothing) — but pre-fix nothing else made the crate compile:
-//! `sky_main` kept its declared `SkyResult<E, A>` return type while the
+//! all-or-nothing) — and otherwise nothing makes the crate compile:
+//! `sky_main` keeps its declared `SkyResult<E, A>` return type while the
 //! `fn main` epilogue's `block_on(sky_main())` unconditionally requires
 //! `SkyTask<A>` (E0308: expected `Pin<Box<dyn Future…>>`, found
-//! `SkyResult<…>`) — `skyc build` exit 0, `cargo build` fail, the identical
-//! failure mode as the original bug.
+//! `SkyResult<…>`) — `skyc build` exit 0, `cargo build` fail.
 //!
-//! Fixed by widening `emit_func`'s `sky_main_wrap` fallback (previously only
-//! fired for `func.ret == Unit`) to also cover `func.ret == Result(_, A)`
+//! So `emit_func`'s `sky_main_wrap` fallback (which fires for `func.ret ==
+//! Unit`) also covers `func.ret == Result(_, A)`
 //! with elision declined: the body already evaluates synchronously to one
 //! uniform `Result e a` (`Task.run` blocks in place; the non-Task arm is a
 //! bare `Result` value), so it wraps in `task_from_result({ <original body>

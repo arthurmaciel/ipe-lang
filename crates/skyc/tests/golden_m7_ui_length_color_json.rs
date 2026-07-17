@@ -1,11 +1,10 @@
-//! Registry Phase-D (#69) end-to-end gate for the newly-schemed
-//! type-constructor kernel families: Std.Ui `Length`, Std.Ui `Color`, and the
-//! `Sky.Core.Json.Encode` `Value` encoders.
+//! End-to-end gate for the type-constructor kernel families: Std.Ui `Length`,
+//! Std.Ui `Color`, and the `Sky.Core.Json.Encode` `Value` encoders.
 //!
-//! Before #69 these kernels were `Ty::Var(u32::MAX)` scheme holes in
-//! `sky_types::constrain`. #69 gives them their first `stdlib_scheme` entry —
+//! Without a `stdlib_scheme` entry these kernels would be `Ty::Var(u32::MAX)`
+//! scheme holes in `sky_types::constrain`. Their schemes make
 //! `Length` / `Color` lower to `IrType::UiPlain(_)` and the JSON `Value` type to
-//! `IrType::Json` — so the whole `type -> lower -> emit -> run` path is now
+//! `IrType::Json` — so the whole `type -> lower -> emit -> run` path is
 //! typed. This golden proves the pipeline end-to-end:
 //!
 //! * `Ui.px 120` (a `Length`) fed to `Ui.width`   → `width:120px`

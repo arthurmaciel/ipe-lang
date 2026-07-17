@@ -1,11 +1,11 @@
-//! Negative gates for the SEAL fix 2026-07-11 (`docs/architecture/
-//! docs/adr/0017-error-payload-nominal-identity.md`): a bare record literal must
-//! NOT construct the nominal error-payload types `PanicInfo` / `TypeInfo` /
-//! `ErrorInfo`. Each fixture used to be an exit-0-then-cargo-fail (well-typed
-//! per the old structural registration, but the emitted Rust passed a
+//! Negative gates for the SEAL fix
+//! (`docs/adr/0017-error-payload-nominal-identity.md`): a bare record literal
+//! must NOT construct the nominal error-payload types `PanicInfo` / `TypeInfo` /
+//! `ErrorInfo`. Under structural registration each fixture would be an
+//! exit-0-then-cargo-fail (well-typed in skyc, but the emitted Rust passes a
 //! project-local synthesized record struct where the runtime's concrete
-//! `SkyPanicInfo`/`SkyTypeInfo`/`SkyErrorInfo` was required — E0308). They
-//! are now ordinary SKY-T0001 type mismatches at `skyc` time.
+//! `SkyPanicInfo`/`SkyTypeInfo`/`SkyErrorInfo` is required — E0308). They
+//! are ordinary SKY-T0001 type mismatches at `skyc` time.
 //!
 //! Companion positive golden: `crates/skyc/tests/
 //! golden_error_nominal_payload.rs` (field access + nominal-annotated helpers

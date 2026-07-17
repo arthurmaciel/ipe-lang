@@ -1,8 +1,8 @@
-//! BACKLOG #177 FALSE-POSITIVE regression — the structural IR-level detection.
+//! FALSE-POSITIVE guard — the structural IR-level detection.
 //!
-//! The first #177 fix decided the `+ SkyRow` bound on a wildcard-`any` param by
-//! a TEXT scan of the emitted Rust body (`rendered_body.contains("db_get_")`).
-//! An adversarial review found that scan false-positives on text that is NOT a
+//! Deciding the `+ SkyRow` bound on a wildcard-`any` param by
+//! a TEXT scan of the emitted Rust body (`rendered_body.contains("db_get_")`)
+//! false-positives on text that is NOT a
 //! runtime row accessor, appending `+ SkyRow` — a reference to the
 //! `#[cfg(feature = "db")]` trait `sky_runtime::db::SkyRow` — to a crate that
 //! never imports `Std.Db`. Result: `skyc` exit 0, then `cargo` fails with

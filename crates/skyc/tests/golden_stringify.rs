@@ -1,4 +1,4 @@
-//! #77 — the STRINGIFY obligation (`Basics.toString : a -> String`, the shared
+//! The STRINGIFY obligation (`Basics.toString : a -> String`, the shared
 //! lever for the whole Stringify-bounded family). The argument carries a bounded
 //! super-var → Rust `SkyStringify`. A scalar / record / ADT satisfies it; a bare
 //! function is rejected AT TYPE-CHECK (fail-closed), never emitting an unbounded
@@ -52,7 +52,7 @@ fn tostring_scalars_run() {
 }
 
 /// `Log.infoWith : String -> List a -> Task Error ()` with Stringify attrs
-/// compiles (the #77 obligation on the list element) — a pure skyc compile.
+/// compiles (the obligation on the list element) — a pure skyc compile.
 #[test]
 fn log_info_with_stringify_attrs_compiles() {
     let root = repo_root();

@@ -1,11 +1,11 @@
-//! Milestone-2 tuple-type-annotation gate: `skyc` must emit `main.rs`
+//! Tuple-type-annotation gate: `skyc` must emit `main.rs`
 //! byte-identical to the checked-in golden for a program whose top-level
 //! bindings carry **tuple-type annotations** (`firstOf : (Int, Int) -> Int`),
 //! and (behind `SKY_E2E=1`) the emitted project must build and print `48`.
 //!
-//! This is the parity artefact for the M2B tuple-annotation feature: before it,
-//! a `(T1, T2)` in a type annotation failed at parse with SKY-P0050 ("unclosed
-//! delimiter"). The annotation now parses to `TypeAnnotation::TTuple`,
+//! Parity artefact for the tuple-annotation feature. Without it,
+//! a `(T1, T2)` in a type annotation fails at parse with SKY-P0050 ("unclosed
+//! delimiter"). The annotation parses to `TypeAnnotation::TTuple`,
 //! canonicalises to `canon::Type::Tuple`, flows through the solver's existing
 //! `Ty::Tuple` structure, and lowers to `IrType::Tuple` — so a tuple-typed
 //! parameter emits as a Rust `(i64, i64)` slot. This is what unblocks the

@@ -1,4 +1,4 @@
-//! #33 §6.2 — Go-parity `Http` builders: `withUrl` / `withFollowRedirects` /
+//! Go-parity `Http` builders: `withUrl` / `withFollowRedirects` /
 //! `withMaxRedirects`.
 //!
 //! The Go reference's `Sky.Core.Http` exposes these three on top of the M5b

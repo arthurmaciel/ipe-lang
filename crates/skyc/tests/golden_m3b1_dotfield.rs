@@ -1,4 +1,4 @@
-//! Milestone-3b-1 parenthesised field-access gate (closes #6): `(expr).field`.
+//! Parenthesised field-access gate: `(expr).field`.
 //! Field access on a *non-identifier* atom — a parenthesised expression — must
 //! parse as a postfix `.field` access, matching the Go reference. `skyc` must
 //! emit `main.rs` byte-identical to the checked-in golden, and (behind
@@ -11,8 +11,8 @@
 //! ```
 //!
 //! `(wrap 41).value` covers field access on a *call* result; `(r).value` covers
-//! field access on a parenthesised local variable. The pre-fix parser rejected
-//! both with SKY-P0011 (`stray '.'`).
+//! field access on a parenthesised local variable — shapes a parser without
+//! parenthesised-postfix support rejects with SKY-P0011 (`stray '.'`).
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
 //! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the SAME

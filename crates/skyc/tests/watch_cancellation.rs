@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
-//! Task 25 proof: a concurrent input edit cancels an in-flight
+//! Cancellation proof: a concurrent input edit cancels an in-flight
 //! `compile_prepared` demand via salsa's OWN cancellation mechanism — the
 //! exact pattern `crates/skyc/src/watch.rs`'s orchestrator relies on (see
-//! that module's doc comment "Task 25 — cancellation, and why it needs no
+//! that module's doc comment "Cancellation, and why it needs no
 //! extra machinery").
 //!
 //! Deterministic, no wall-clock race: warm salsa recompute on a tiny

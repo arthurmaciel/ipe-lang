@@ -1,4 +1,4 @@
-//! #161 seal — `List.filter` / `List.any` with a partial-application
+//! Seal — `List.filter` / `List.any` with a partial-application
 //! predicate must compile AND run.
 //!
 //! Root cause: `sky_backend_rust::emit_expr::emit_lambda` always lowers a

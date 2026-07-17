@@ -1,13 +1,13 @@
-//! #142/AUD-09 — type-directed `Copy` elision on record-field access.
+//! AUD-09 — type-directed `Copy` elision on record-field access.
 //!
-//! #139 made `Expr::Access` emit an UNCONDITIONAL `.clone()`, justified by a
-//! doc comment claiming rustc elides redundant clones. rustc does NOT elide a
-//! `.clone()` on a heap type — every heap-field read was an O(field-size) deep
-//! copy, compounding to O(n²) in per-element render loops (the audit's
+//! Emitting an UNCONDITIONAL `.clone()` on `Expr::Access` (on the belief that
+//! rustc elides redundant clones) is wrong: rustc does NOT elide a
+//! `.clone()` on a heap type — every heap-field read is an O(field-size) deep
+//! copy, compounding to O(n²) in per-element render loops (the
 //! "list-of-records renders" case). Even for `Copy` scalars the `.clone()`
-//! call was pure noise.
+//! call is pure noise.
 //!
-//! Fix (`docs/adr/0011-emitter-clone-borrow-discipline.md` §3): `Expr::Access`
+//! Instead (`docs/adr/0011-emitter-clone-borrow-discipline.md` §3): `Expr::Access`
 //! carries the field's solved type (`field_ty`); the emitter reads
 //! definitely-`Copy` fields BARE and keeps `.clone()` for everything else
 //! (heap-backed, generics, composites). The heap half of the audit's fix

@@ -1,4 +1,4 @@
-//! #119 seal — `List.filterMap` and `List.sortBy` kernel wiring.
+//! Seal — `List.filterMap` and `List.sortBy` kernel wiring.
 //!
 //! `filterMap : (a -> Maybe b) -> List a -> List b` — applies a function that
 //! returns `Maybe b` to every element, keeps only the `Just` results, and
@@ -8,8 +8,8 @@
 //! projection. Backed by `list_sort_by` (decorate-sort-undecorate, NaN-safe,
 //! stable via `Vec::sort_by`).
 //!
-//! Both were holes before #119 — `StdlibKernel` had no variant, so any call
-//! emitted `error[SKY-L0108]: kernel function not available yet`.
+//! Without a `StdlibKernel` variant for each, any call
+//! emits `error[SKY-L0108]: kernel function not available yet`.
 //!
 //! Gated on `SKY_E2E=1`. Run:
 //! `SKY_E2E=1 cargo test -p skyc --test golden_i119_list_batch_seal`

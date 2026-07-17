@@ -1,7 +1,7 @@
-//! BACKLOG #172 regression — a promoted Arc-root handler and a non-promoted
+//! A promoted Arc-root handler and a non-promoted
 //! function-value sibling unified at ONE Rust type position.
 //!
-//! Pre-fix: `skyc build` exits 0, but the emitted Rust fails `cargo build` with
+//! Without the fix, `skyc build` exits 0, but the emitted Rust fails `cargo build` with
 //! E0308. A function-typed `let handler = \form -> …` flows into the
 //! `Ui.onSubmit` kernel (a `requires_sync_capture` consumer), so the lowerer
 //! promotes it to an `Expr::SharedLambda` — its reads render
@@ -99,7 +99,7 @@ fn assert_skyc_unifies_to_arc(fixture: &str) {
         "the sibling branch must be coerced to the `Arc` carrier via \
          `::std::sync::Arc::new` (#172); got:\n{emitted}"
     );
-    // Guard against the pre-fix shape: no bare `Box::new` may sit at the
+    // Guard against the unfixed shape: no bare `Box::new` may sit at the
     // `onSubmit` unification slot. The eta-expanded FuncValue body legitimately
     // still contains `Box::new(main_sign_in)` INSIDE the Arc wrapper, so we
     // cannot forbid `Box::new` outright — instead assert the promoted handler

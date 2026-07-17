@@ -1,4 +1,4 @@
-//! #180 — the prescriptive TEA `init` signature.
+//! The prescriptive TEA `init` signature.
 //!
 //! ## Background
 //!
@@ -29,7 +29,7 @@
 use std::path::PathBuf;
 
 /// A `Live.app` whose `init : LiveReq -> …` READS `req.path` into the Model.
-/// Non-routed for brevity; plain-data Model so the #91/#95 admissibility gate
+/// Non-routed for brevity; plain-data Model so the the admissibility gate
 /// passes, isolating the init-field + field-access behaviour.
 const LIVE_INIT_READS_REQ_PATH: &str = r#"module Main exposing (main)
 import Std.Live as Live

@@ -1,4 +1,4 @@
-//! Milestone-3b-3 soundness floor for malformed character literals.
+//! Soundness floor for malformed character literals.
 //!
 //! An unrecognised escape inside a char literal (e.g. `'\q'`) resolves to
 //! backslash + char — two scalar values — which violates the single-character

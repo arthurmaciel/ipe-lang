@@ -1,4 +1,4 @@
-//! Milestone-3a recursion-soundness gate: MUTUALLY-recursive ADTs whose size
+//! Recursion-soundness gate: MUTUALLY-recursive ADTs whose size
 //! cycle is closed only through enum-payload edges (`Even -> Odd -> Even`).
 //! `skyc` must emit `main.rs` byte-identical to the checked-in golden, and
 //! (behind `SKY_E2E=1`) the emitted project must build and print `5`.
@@ -9,10 +9,10 @@
 //! ```
 //!
 //! Neither enum is *directly* self-recursive — `Even` carries an `Odd` and
-//! `Odd` carries an `Even` — so the pre-fix backend (which boxed only a direct
-//! self-edge) emitted two enums that are each infinite-sized in Rust (E0072):
-//! `skyc` exited 0 and the emitted crate then failed `cargo build`. The fix
-//! boxes at least one enum-payload edge of every type-size cycle, so each enum
+//! `Odd` carries an `Even` — so boxing only a direct self-edge would emit two
+//! enums that are each infinite-sized in Rust (E0072): `skyc` exits 0 and the
+//! emitted crate then fails `cargo build`. So the backend boxes at least one
+//! enum-payload edge of every type-size cycle, so each enum
 //! stays finite-sized, balanced by `Box::new` at construction and a deref at
 //! pattern binding.
 //!
@@ -68,7 +68,7 @@ fn emits_byte_identical_main_rs() {
 /// mutually-recursive ADT program prints `5` — the value the Go backend
 /// produces. Gated on `SKY_E2E=1` so the default `cargo test` stays fast. This
 /// is the soundness-floor regression for an indirect (mutual) recursion cycle:
-/// before the fix the crate did not build at all.
+/// without boxing a cycle edge the crate does not build at all.
 #[test]
 fn end_to_end_builds_and_prints_five() {
     if std::env::var("SKY_E2E").is_err() {

@@ -33,10 +33,10 @@
 //! SKY_E2E=1 cargo test webview_e2e
 //! ```
 
-/// A minimal Sky.Webview counter app exercising the Phase-1d wiring.
+/// A minimal Sky.Webview counter app exercising the `Webview.app` wiring.
 ///
 /// Kernels exercised:
-/// - `Webview.app`   — Phase-1d: constrain scheme + 5-field cfg with nested
+/// - `Webview.app`   — constrain scheme + 5-field cfg with nested
 ///   `window = { title, size }` (G4 gate)
 /// - `Ui.layout`     — wraps Element → Html (view must return Html Msg)
 /// - `Ui.column`     — vertical layout container
@@ -152,13 +152,13 @@ fn compile_and_build(test_name: &str, sky_source: &str) -> Result<std::path::Pat
 /// features), and the binary exists.
 ///
 /// Assertions:
-/// - Phase-1d constrain: `Webview.app` correctly types the 5-field cfg
+/// - constrain: `Webview.app` correctly types the 5-field cfg
 ///   (`init/update/view/subscriptions/window` with nested `{ title, size }`).
-/// - Phase-1d lower: the cfg record literal bypasses SKY-L0107 (same exemption
+/// - lower: the cfg record literal bypasses SKY-L0107 (same exemption
 ///   as `Live.app` and `Tui.app`).
-/// - Phase-1d emit: `emit_webview_call` → `emit_webview_app_inner` (G4 gate:
+/// - emit: `emit_webview_call` → `emit_webview_app_inner` (G4 gate:
 ///   `window` is inline record, `size` is inline 2-tuple) → `webview_app(…)`.
-/// - Phase-1d manifest: `webview_cargo_toml` adds `"webview"` to default
+/// - manifest: `webview_cargo_toml` adds `"webview"` to default
 ///   features, wires `webview = ["dep:wry", "dep:tao"]`, appends `wry` + `tao`
 ///   optional deps, and the runtime `mod.rs` gets the `webview` module line.
 /// - G3: the emitted `fn main` uses `block_on_current_thread(sky_main())`
@@ -243,9 +243,9 @@ fn webview_counter_tier_b() -> Result<(), BoxError> {
 }
 
 /// The same counter, but with `window` let-bound instead of an inline record
-/// literal. Pre-fix, the let-bound `window` reaches emit and fires the G4
-/// `Expr::Record` guard as a spanless `CompilerBug` (`SKY-I0001`). Post-fix, the
-/// lower gate rejects it with `SKY-L0119` at the offending span.
+/// literal. Without the fix, the let-bound `window` reaches emit and fires the G4
+/// `Expr::Record` guard as a spanless `CompilerBug` (`SKY-I0001`); the
+/// lower gate instead rejects it with `SKY-L0119` at the offending span.
 const SKY_WEBVIEW_LET_BOUND_WINDOW: &str = r#"module Main exposing (main)
 
 import Std.Webview as Webview
@@ -297,7 +297,7 @@ main =
 "#;
 
 /// End-to-end guard: a let-bound `window` on `Webview.app` must produce a clean
-/// user-facing `SKY-L0119` diagnostic during lowering — NOT the pre-fix
+/// user-facing `SKY-L0119` diagnostic during lowering — NOT an
 /// internal-compiler-error (`SKY-I0001`) from the emit-stage G4 `Expr::Record`
 /// guard. Compile-only (`skyc::build`) — no `cargo build`, so it runs fast and
 /// needs no wry/tao toolchain, and it exercises the whole parse → canon → types

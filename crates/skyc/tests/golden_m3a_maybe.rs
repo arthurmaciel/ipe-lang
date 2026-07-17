@@ -1,9 +1,9 @@
-//! Milestone-3a algebraic-data-type gate: `skyc` must emit `main.rs`
+//! Algebraic-data-type gate: `skyc` must emit `main.rs`
 //! byte-identical to the checked-in golden for a generic payload-carrying ADT,
 //! and (behind `SKY_E2E=1`) the emitted project must build and print `42`.
 //!
-//! The program declares `type Opt a = Som a | Non` and exercises the M3a core:
-//! a payload constructor `Som a`, a nullary constructor `Non`, construction
+//! The program declares `type Opt a = Som a | Non` and exercises the
+//! ADT core: a payload constructor `Som a`, a nullary constructor `Non`, construction
 //! `Som 41`, and a constructor pattern binding the payload to a variable
 //! (`Som x -> x + 1`).
 //!

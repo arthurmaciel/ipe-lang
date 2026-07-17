@@ -1,10 +1,9 @@
-//! #94 seal regression: the `Std.Live` / `Std.Tui` / `Std.Webview` app-entry
-//! Msg-admissibility gate.
+//! The `Std.Live` / `Std.Tui` / `Std.Webview` app-entry Msg-admissibility gate.
 //!
 //! `live_app` bounds its Msg `Clone + Send + Sync + Debug + 'static`;
-//! `tui_app` / `webview_app` bound it `Clone + Send + 'static`. Before the
+//! `tui_app` / `webview_app` bound it `Clone + Send + 'static`. Without the
 //! gate, a Msg storing a non-admissible value (`Cmd` / `Sub` / `Task` /
-//! `Decoder` / `Db` / a function) made `skyc` exit 0 and then `cargo build`
+//! `Decoder` / `Db` / a function) makes `skyc` exit 0 and then `cargo build`
 //! fail on the missing trait bound. The gate converts that into a fail-closed
 //! `SKY-L0125` diagnostic.
 //!
@@ -103,12 +102,10 @@ main =
         }
 ";
 
-/// `Sky.Live` app: Msg variant carries a function. Before #90, this was
-/// rejected by the (now-deleted) declaration-site Gate 2 (`ir_contains_fun` in
-/// `lower_enum`, `SKY-L0114`), which fired before the #94 Msg gate ever ran.
-/// #90 lifted that gate (a declared function-typed payload is sound on its
-/// own — #87's derive-demotion keeps the emitted enum's derives correct), so
-/// this now correctly falls through to the MORE PRECISE #94 Msg-admissibility
+/// `Sky.Live` app: Msg variant carries a function. A declared function-typed
+/// payload is sound on its own (derive-demotion keeps the emitted enum's
+/// derives correct), so it is NOT rejected at the declaration site
+/// (`SKY-L0114`); it falls through to the MORE PRECISE Msg-admissibility
 /// gate: `Msg` fails the runtime's `Clone + Send + Sync + Debug + 'static`
 /// bound because of the embedded function, `SKY-L0125`.
 const LIVE_FN_MSG: &str = r"module Main exposing (main)
@@ -150,7 +147,7 @@ main =
 ";
 
 /// `Sky.Live` app: `update` is an inline lambda; Msg carries a `Cmd`.
-/// Exercises the `fn_param_ty` Lambda recovery path for Msg (#94).
+/// Exercises the `fn_param_ty` Lambda recovery path for Msg.
 const LIVE_LAMBDA_UPDATE_CMD_MSG: &str = r"module Main exposing (main)
 
 import Std.Live as Live
@@ -235,8 +232,8 @@ main =
         }
 ";
 
-/// `Sky.Tui` app: Msg variant carries a function. Same #90 story as
-/// `LIVE_FN_MSG` — now falls through to the #94 Msg gate, `SKY-L0125`.
+/// `Sky.Tui` app: Msg variant carries a function. Same shape as
+/// `LIVE_FN_MSG` — falls through to the Msg gate, `SKY-L0125`.
 const TUI_FN_MSG: &str = r"module Main exposing (main)
 
 import Std.Tui as Tui
@@ -377,8 +374,9 @@ fn live_msg_with_cmd_is_rejected() -> Result<(), BoxError> {
 
 #[test]
 fn live_msg_with_fn_is_rejected() -> Result<(), BoxError> {
-    // #90 lifted the declaration-site Gate 2 (L0114); the #94 Msg gate (L0125)
-    // now correctly catches the non-admissible function-embedding Msg.
+    // The declaration-site gate (L0114) does not fire on a declared
+    // function-typed payload; the Msg gate (L0125) catches the non-admissible
+    // function-embedding Msg.
     assert_rejected_with("live_fn_msg", LIVE_FN_MSG, "SKY-L0125")
 }
 
@@ -398,8 +396,9 @@ fn tui_msg_with_cmd_is_rejected() -> Result<(), BoxError> {
 
 #[test]
 fn tui_msg_with_fn_is_rejected() -> Result<(), BoxError> {
-    // #90 lifted the declaration-site Gate 2 (L0114); the #94 Msg gate (L0125)
-    // now correctly catches the non-admissible function-embedding Msg.
+    // The declaration-site gate (L0114) does not fire on a declared
+    // function-typed payload; the Msg gate (L0125) catches the non-admissible
+    // function-embedding Msg.
     assert_rejected_with("tui_fn_msg", TUI_FN_MSG, "SKY-L0125")
 }
 

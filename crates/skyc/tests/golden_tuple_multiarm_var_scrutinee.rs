@@ -1,8 +1,8 @@
-//! #174 — multi-arm / refutable tuple `case` on a NON-literal scrutinee.
+//! Multi-arm / refutable tuple `case` on a NON-literal scrutinee.
 //!
 //! `Sky.Test.summarise` matches `case pair of ( _, Passed ) -> … ; ( name,
 //! Failed _ ) -> …`. The scrutinee `pair` is a VARIABLE, not a literal tuple, so
-//! the pre-#174 tuple-match path (which needs the element expressions to apply
+//! the pre-tuple-match path (which needs the element expressions to apply
 //! per-column slice / `&str` coercions) did not apply and the arm fell
 //! fail-closed as SKY-L0115. It now lowers to a by-value whole `match pair { (_,
 //! Passed) => …, (name, Failed(_)) => … }` — no coercion, the tuple matches by
@@ -13,7 +13,7 @@
 //!
 //! Gate check (fast, always): `skyc build` succeeds — no SKY-L0115.
 //! Green check (`SKY_E2E=1`): the emitted Rust cargo-builds AND runs, proving the
-//! seal (skyc-0 ⟹ cargo-0) for the by-value whole tuple-match codegen.
+//! Seal (skyc-0 ⟹ cargo-0) for the by-value whole tuple-match codegen.
 //!
 //! ```text
 //! SKY_E2E=1 cargo test -p skyc --test golden_tuple_multiarm_var_scrutinee

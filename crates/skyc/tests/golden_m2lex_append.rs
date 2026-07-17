@@ -1,4 +1,4 @@
-//! M2-lex `++` string-concat parity gate: the append operator `++` lexes to a
+//! `++` string-concat parity gate: the append operator `++` lexes to a
 //! single [`sky_parse`] token (never two `+`), parses as a binary operator at the
 //! reference precedence (level 5, right-associative — see
 //! `/home/arthur/Documentos/comp/sky/src/Sky/Parse/Symbol.hs`), canonicalises to

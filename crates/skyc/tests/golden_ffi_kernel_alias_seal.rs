@@ -1,4 +1,4 @@
-//! #196 regression — the Stage-4 `Ffi.kernel "Module_function"` alias mechanism
+//! Regression — the Stage-4 `Ffi.kernel "Module_function"` alias mechanism
 //! and its FAIL-CLOSED gate (THE SEAL).
 //!
 //! A standard-library / user binding of the shape `f = Ffi.kernel "K_n"` routes

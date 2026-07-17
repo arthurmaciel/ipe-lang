@@ -1,8 +1,8 @@
-//! Backlog #85/#160 — the real `Error ErrorKind ErrorInfo` ADT (ported from
+//! Backlog the — the real `Error ErrorKind ErrorInfo` ADT (ported from
 //! the ancestor Go/Haskell design's `sky-stdlib/Sky/Core/Error.sky`).
 //!
 //! Proves the whole pipeline end-to-end: construction (`Error.io`,
-//! `Error.timeout`), the ctor-scheme fix that closes #160 (pattern matching
+//! `Error.timeout`), the ctor-scheme fix (pattern matching
 //! `case e of Error kind info -> ...` and `case kind of Io -> ... `),
 //! `Error.toString` (kind-classified `"<Kind>: <message>"` rendering, not the
 //! prior string-identity slice's verbatim echo), `Error.isRetryable`

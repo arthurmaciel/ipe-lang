@@ -1,8 +1,8 @@
-//! BACKLOG #186 FALSE-POSITIVE regression — the general kernel->bound map must
+//! FALSE-POSITIVE guard — the general kernel->bound map must
 //! NOT over-bound.
 //!
-//! The `Display` obligation (#186) is decided per-param by the EXACT `toString`
-//! argument position (arg 0), mirroring #177's `SkyRow` per-row-arg precision.
+//! The `Display` obligation is decided per-param by the EXACT `toString`
+//! argument position (arg 0), mirroring the `SkyRow` per-row-arg precision.
 //! A wildcard `any` param used ONLY as a Db row (which correctly gains `SkyRow`)
 //! must NOT ALSO gain a spurious `Display` bound just because a SIBLING concrete
 //! `String` param is `toString`'d in the same body.

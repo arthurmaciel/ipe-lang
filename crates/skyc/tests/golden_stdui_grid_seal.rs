@@ -81,7 +81,7 @@ fn grid_module_resolves_and_emits_kernel() {
     );
 
     // The compiled `Std.Ui.Grid` module lowers to its OWN Rust file under
-    // `src/sky_mods/` once the per-Sky-module split (Phase 5 Milestone C)
+    // `src/sky_mods/` once the per-Sky-module split
     // fires — this program has two distinct homes (`Main` + `Std.Ui.Grid`).
     // Scan the WHOLE emitted Sky-side tree (main.rs + sky_mods/*.rs) so the
     // assertion holds wherever the split correctly placed the helper calls.

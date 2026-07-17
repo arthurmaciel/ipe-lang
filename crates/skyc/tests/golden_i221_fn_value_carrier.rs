@@ -1,10 +1,10 @@
-//! #221 fn-value `Arc`-carrier promotion — the three previously-rejected (or
-//! silently cargo-broken) shapes the position-typed carrier model dissolves.
+//! Fn-value `Arc`-carrier promotion — three shapes the position-typed carrier
+//! model dissolves (otherwise rejected, or silently cargo-broken).
 //! Each fixture must emit `main.rs` byte-identical to its checked-in golden,
 //! and (behind `SKY_E2E=1`) the emitted project must build and print the Go
 //! reference's value, exit 0.
 //!
-//! | Fixture | Shape | Was |
+//! | Fixture | Shape | Without promotion |
 //! |---|---|---|
 //! | `i221_fn_capture_eta_promoted` | sibling let-bound fn value captured by an ETA-SYNTHESIZED residual closure (`guarded f = wrap (inc f)`) | SKY-L0126 |
 //! | `i221_fn_value_reuse_promoted` | pure fn-typed `let` consumed > 1× (direct arg moves + two partial-application eta captures) | SKY-L0127 |

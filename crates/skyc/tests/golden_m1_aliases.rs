@@ -1,4 +1,4 @@
-//! Milestone-1 type-alias gate: `skyc` must emit `main.rs` byte-identical to the
+//! Type-alias gate: `skyc` must emit `main.rs` byte-identical to the
 //! checked-in golden for a program that annotates a function with a
 //! non-parametric `type alias`, and (behind `SKY_E2E=1`) the emitted project
 //! must build and print `42`.

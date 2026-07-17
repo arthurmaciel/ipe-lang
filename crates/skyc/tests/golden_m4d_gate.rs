@@ -1,4 +1,4 @@
-//! M4d `Sky.Core.Dict` / `Sky.Core.Set` comparable-key gate.
+//! `Sky.Core.Dict` / `Sky.Core.Set` comparable-key gate.
 //!
 //! A `Set` element and a `Dict` key carry the Sky `comparable`-key obligation
 //! (the kernel's element / key variable is minted as a super-typed variable, the

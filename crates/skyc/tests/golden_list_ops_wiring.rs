@@ -1,4 +1,4 @@
-//! #68 — the non-HOF `Sky.Core.List` combinators are CALLABLE from user code.
+//! The non-HOF `Sky.Core.List` combinators are CALLABLE from user code.
 //!
 //! Before this task, a qualified `List.append` / `concat` / `take` / `drop` /
 //! `zip` / `cons` / `isEmpty` / `concatMap` call resolved (via the canon
@@ -81,9 +81,9 @@ fn list_ops_wiring_runs_with_parity() {
     );
 }
 
-/// #72 — the List HOFs `any` / `all` / `find` are callable (same SKY-L0108 class
-/// as #68). Before wiring, `List.any`/`all` were canon members with no
-/// `KernelFn` (id=None → SKY-L0108 post-seal), and `find` was absent from the
+/// The List HOFs `any` / `all` / `find` are callable (same SKY-L0108 class).
+/// Without wiring, `List.any`/`all` would be canon members with no
+/// `KernelFn` (id=None → SKY-L0108), and `find` absent from the
 /// member array. `list_find` is new; `list_any`/`list_all` pre-existed.
 #[test]
 fn list_hof_any_all_find_runs() {
@@ -102,10 +102,10 @@ fn list_hof_any_all_find_runs() {
     assert_eq!(out.stdout.trim(), "TT 3 -1");
 }
 
-/// #76 slice — the core `Basics`/Prelude fns `not`/`identity`/`always`/`fst`/
-/// `snd`/`modBy` are callable. Before wiring they were canon members with no
-/// `KernelFn` (id=None → SKY-L0108 post-seal) — a program could not even use
-/// `not`. Runtime fns pre-existed except `basics_not` (new).
+/// The core `Basics`/Prelude fns `not`/`identity`/`always`/`fst`/
+/// `snd`/`modBy` are callable. Without wiring they would be canon members with no
+/// `KernelFn` (id=None → SKY-L0108), leaving a program unable to use
+/// `not`. All runtime fns exist, `basics_not` included.
 #[test]
 fn basics_core_prelude_runs() {
     if !e2e_enabled() {

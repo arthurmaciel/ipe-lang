@@ -1,4 +1,4 @@
-//! Milestone-82 gate: a record `type alias` introduces a value-level
+//! Gate: a record `type alias` introduces a value-level
 //! auto-constructor (SKY-N0001 fix). The `skyc` pipeline must emit a project
 //! that builds and RUNS with the constructor binding fields **positionally in
 //! declared order** — including the decisive same-typed order oracle, partial
@@ -115,7 +115,7 @@ fn record_ctor_and_literal_share_one_struct() {
     );
 }
 
-/// SEAL REGRESSION (#82). A record `type alias` whose field embeds a function
+/// SEAL REGRESSION. A record `type alias` whose field embeds a function
 /// NESTED inside a derive carrier (`List (Int -> Bool)`) must synthesise NO
 /// constructor: the earlier head-only gate saw `Con "List"` (not `Lambda`) and
 /// synthesised one, so the backend emitted a `#[derive(Clone, Debug, PartialEq)]`
@@ -162,7 +162,7 @@ fn seal_fn_field_alias_emits_no_struct() {
     );
 }
 
-/// SEAL PROOF (#82, `SKY_E2E`). The emitted project for the function-embedding
+/// SEAL PROOF (`SKY_E2E`). The emitted project for the function-embedding
 /// record alias must actually cargo-BUILD and run clean — skyc exit-0 AND cargo
 /// exit-0. This is the exact class that regressed: skyc-success without a matching
 /// cargo-success is the seal violation.
@@ -194,7 +194,7 @@ fn seal_fn_field_alias_builds_and_runs() {
     assert_eq!(outcome.exit_code, Some(0), "clean exit (seal holds)");
 }
 
-/// ROUND-2 SEAL REGRESSION (#82). A record `type alias` whose field is an OPAQUE
+/// ROUND-2 SEAL REGRESSION. A record `type alias` whose field is an OPAQUE
 /// boxed-wrapper (`Decoder Int`) must synthesise NO constructor. Round-1's gate
 /// EXEMPTED the opaque head (it mirrored the lowerer's function-embedding
 /// payload-scan) and synthesised one, so the backend emitted a
@@ -243,7 +243,7 @@ fn seal_opaque_field_alias_emits_no_struct() {
     );
 }
 
-/// ROUND-2 SEAL PROOF (#82, `SKY_E2E`). The emitted project for the
+/// ROUND-2 SEAL PROOF (`SKY_E2E`). The emitted project for the
 /// opaque-wrapper-field record alias must actually cargo-BUILD and run clean —
 /// skyc exit-0 AND cargo exit-0. Round-1 regressed exactly here: skyc-success
 /// without a matching cargo-success (E0277/E0369/E0599 over `Decoder`).
@@ -275,7 +275,7 @@ fn seal_opaque_field_alias_builds_and_runs() {
     assert_eq!(outcome.exit_code, Some(0), "clean exit (seal holds)");
 }
 
-/// ROUND-2 SEAL FAIL-CLOSED (#82). The same opaque-wrapper-field alias, but the
+/// ROUND-2 SEAL FAIL-CLOSED. The same opaque-wrapper-field alias, but the
 /// alias name is USED as a value constructor (`D Decode.int`). Because synthesis
 /// declined, no top-level value `D` exists, so this must fail CLOSED at skyc with
 /// SKY-N0001 — NEVER skyc-0-then-cargo-fail. `skyc::build` must return `Err` and

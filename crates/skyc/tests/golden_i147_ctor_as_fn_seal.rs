@@ -1,9 +1,9 @@
-//! #147 seal — constructors as first-class function values.
+//! Seal — constructors as first-class function values.
 //!
-//! A constructor of arity N in a value / partial-application position used to
+//! A constructor of arity N in a value / partial-application position must not
 //! emit `Err(unsupported(…, Feature::CtorAsFunction))` (SKY-L0113).  The
-//! lowerer now routes such sites into `eta_expand_partial_ctor`, producing an
-//! eta-wrapped closure that captures the supplied args (with T4/#130 capture-
+//! lowerer routes such sites into `eta_expand_partial_ctor`, producing an
+//! eta-wrapped closure that captures the supplied args (with T4 capture-
 //! clone discipline) and takes the remaining ones as lambda parameters:
 //!
 //! ```text
@@ -71,7 +71,7 @@ fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
 // ── m3a_gate_partial positive-compile (formerly SKY-L0113 gate) ──────────────
 
 /// The `m3a_gate_partial` fixture (`Node x 1` — arity-3 ctor with 2 supplied
-/// args) used to surface SKY-L0113.  Since #147 it must COMPILE SUCCESSFULLY.
+/// args) must COMPILE SUCCESSFULLY (not surface SKY-L0113).
 #[test]
 fn m3a_gate_partial_now_compiles() {
     assert_skyc_ok("m3a_gate_partial", "i147_m3a_gate_partial_positive");
@@ -126,7 +126,7 @@ fn a1_ctor_map_bare() {
 // ── A2 — partial multi-arg ctor + T4 String capture ──────────────────────────
 
 /// `Tagged "item"` (arity-2 ctor with 1 arg supplied) mapped over `[10, 20, 30]`.
-/// The captured `"item" : String` is `CloneOk` — T4/#130 rewrites it to
+/// The captured `"item" : String` is `CloneOk` — T4 rewrites it to
 /// `.clone()` so the closure is `Fn` and survives multiple calls.
 /// Expected output: `"item:10, item:20, item:30"`.
 #[test]
