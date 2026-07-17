@@ -1,4 +1,4 @@
-//! Record synthesis tests for the M1 Rust backend (task B3-CORE).
+//! Record synthesis tests for the Rust backend.
 //!
 //! These exercise the synthesised-struct pipeline that turns closed record
 //! shapes into named Rust structs:
@@ -319,7 +319,7 @@ fn literal_with_unknown_shape_fails_fast() -> DResult<()> {
 #[test]
 fn conflicting_field_set_types_fail_fast() -> DResult<()> {
     // Two record types share the field set `{ x }` but differ in field type
-    // (`Int` vs `Bool`). M1 closed records assume one type per field set; this
+    // (`Int` vs `Bool`). Closed records assume one type per field set; this
     // is an upstream-contract violation surfaced as a `CompilerBug`.
     let mut interner = Interner::new();
     let main_mod = interner.intern("Main")?;

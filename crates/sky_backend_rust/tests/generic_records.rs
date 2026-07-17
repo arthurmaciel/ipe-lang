@@ -1,6 +1,6 @@
-//! Generic-aware record-struct synthesis for the Rust backend (M2c core).
+//! Generic-aware record-struct synthesis for the Rust backend.
 //!
-//! Extends the b3 closed-record pipeline so a record shape whose field types are
+//! Extends the closed-record pipeline so a record shape whose field types are
 //! type variables ([`IrType::Generic`]) synthesises a GENERIC Rust struct:
 //!
 //! * `{ value : a }` → `pub struct RecValue<T1> { value: T1 }` with a generic
@@ -9,7 +9,7 @@
 //!   struct instantiated at the function's own generic (`RecValue<T1>`),
 //! * a same-field-set concrete record (`{ value : Int }`) deduplicates onto the
 //!   ONE generic struct and renders `RecValue<i64>` at the use site,
-//! * monomorphic records stay byte-identical to b3 (no `<..>` clause).
+//! * monomorphic records emit no `<..>` clause.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
 //! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the
@@ -316,7 +316,7 @@ fn two_type_parameter_record() -> DResult<()> {
 #[test]
 fn monomorphic_record_stays_byte_identical() -> DResult<()> {
     // A field set with NO generic occurrence anywhere emits the monomorphic
-    // struct, byte-identical to b3 (no `<..>` clause, concrete field type).
+    // struct (no `<..>` clause, concrete field type).
     let mut interner = Interner::new();
     let main_mod = interner.intern("Main")?;
     let value = interner.intern("value")?;

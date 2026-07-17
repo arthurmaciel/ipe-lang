@@ -1,4 +1,4 @@
-//! Emission for `Std.Webview` / `Sky.Webview` app-entry kernel (Phase-1d).
+//! Emission for `Std.Webview` / `Sky.Webview` app-entry kernel.
 //!
 //! Wires one Webview kernel:
 //!

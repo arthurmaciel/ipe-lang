@@ -1,4 +1,4 @@
-//! Literal-, alias- and wildcard-pattern rendering tests for the M3b-3 Rust
+//! Literal-, alias- and wildcard-pattern rendering tests for the Rust
 //! backend.
 //!
 //! These exercise the [`Pat`] additions the backend learned to render as flat
@@ -6,7 +6,7 @@
 //!
 //! * the LITERAL leaves [`Pat::Int`] / [`Pat::Bool`] / [`Pat::Char`] —
 //!   rendered as the in-pattern Rust literals `0` / `true` / `'a'`, and
-//!   [`Pat::Str`] — since #182 rendered NOT in-pattern (Rust cannot match an
+//!   [`Pat::Str`] — rendered NOT in-pattern (Rust cannot match an
 //!   owned `String` against a `"..."` literal) but as a fresh binder plus an
 //!   `if __sgN.as_str() == "lit"` match guard,
 //! * the ALIAS / `as` binder [`Pat::Alias`] — rendered as the Rust binding-with-
@@ -19,7 +19,7 @@
 //! They are render-only assertions: a single literal sub-pattern is not an
 //! exhaustive cover of its scrutinee axis in Rust, so these programs are not
 //! built — the literal's flat-arm SPELLING is what CORE pins. Exhaustiveness +
-//! E2E for literals arrive with the M3b-3 lowering / types tasks.
+//! E2E for literals are covered by the lowering / types tests.
 //!
 //! The alias case IS exhaustive (a binder matches anything), so its emitted
 //! crate builds and runs: `end_to_end_alias_binds_whole_value` (gated on
@@ -61,7 +61,7 @@ fn emit(interner: &Interner, prog: &Program) -> DResult<String> {
 
 /// Build a one-function program whose single case arm matches `payload` as the
 /// sole sub-pattern of an `A`-variant constructor (`type Tag = A Int | B`), so
-/// the sub-pattern flows through `render_pat`. The `B` arm completes the M3a
+/// the sub-pattern flows through `render_pat`. The `B` arm completes the
 /// constructor cover. Returns `(program, the A variant symbol)`.
 #[allow(clippy::too_many_lines)] // thorough constructor-cover fixture builder
 fn tag_program(interner: &mut Interner, payload: Pat) -> DResult<Program> {
@@ -233,7 +233,7 @@ fn str_literal_subpattern_renders_and_escapes() -> DResult<()> {
     let mut i = Interner::new();
     let prog = tag_program(&mut i, Pat::Str("hi\"\n".to_owned()))?;
     let src = emit(&i, &prog)?;
-    // Since #182, a `Pat::Str` leaf does NOT render as an in-pattern string
+    // A `Pat::Str` leaf does NOT render as an in-pattern string
     // literal (`MainTag::A("hi") =>`) — Rust cannot pattern-match an owned
     // `String` payload against a `"..."` literal. It renders as a fresh binder
     // plus an `if __sgN.as_str() == "lit"` match guard, which IS valid Rust and
@@ -359,10 +359,10 @@ fn alias_subpattern_renders_binding_with_subpattern() -> DResult<()> {
     let mut i = Interner::new();
     let (prog, _x, _y) = alias_program(&mut i)?;
     let src = emit(&i, &prog)?;
-    // in a by-VALUE ctor-payload position the alias no longer renders
+    // in a by-VALUE ctor-payload position the alias does NOT render
     // as `y @ x` (that spelling double-moves a non-`Copy` payload — sound
-    // only under a by-ref binding mode). It now binds a fresh temp and
-    // re-derives both binders in the arm prelude via the #96 clone-rebuild
+    // only under a by-ref binding mode). It binds a fresh temp and
+    // re-derives both binders in the arm prelude via the clone-rebuild
     // strategy: `MkWrap(__sky_arm_alias_0) => { let y = __sky_arm_alias_0;
     // let x = y.clone(); … }`.
     assert!(

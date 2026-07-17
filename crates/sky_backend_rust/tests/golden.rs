@@ -1,9 +1,9 @@
-//! End-to-end byte-equality gate for the M0 Rust backend.
+//! End-to-end byte-equality gate for the Rust backend.
 //!
-//! Builds the canonical M0 IR `Program` by hand (the same program the full
+//! Builds the canonical golden IR `Program` by hand (the same program the full
 //! pipeline lowers `tests/golden/m0/Main.sky` into) and asserts that
 //! [`RustBackend::emit`] reproduces the golden `main.rs` and `Cargo.toml`
-//! byte-for-byte. The golden is the correctness contract for M0.
+//! byte-for-byte. The golden is the correctness contract.
 
 use sky_backend::Backend;
 use sky_backend_rust::RustBackend;
@@ -17,7 +17,7 @@ use sky_ir::{
 const GOLDEN_MAIN: &str = include_str!("../../../tests/golden/m0/main.rs");
 const GOLDEN_CARGO: &str = include_str!("../../../tests/golden/m0/Cargo.toml");
 
-/// Build the M0 program:
+/// Build the golden program:
 /// ```sky
 /// type Msg = Increment | Decrement
 /// update msg count =

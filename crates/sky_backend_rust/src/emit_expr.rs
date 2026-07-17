@@ -1,6 +1,6 @@
-//! Expression and function emission (M0 subset).
+//! Expression and function emission.
 //!
-//! Ports the M0-relevant arms of `Sky/Generate/Rust/Builder/ExprEmitter.hs` and
+//! Ports the relevant arms of `Sky/Generate/Rust/Builder/ExprEmitter.hs` and
 //! the function-item shape from `ModuleEmitter.hs`. The byte target is golden
 //! `main.rs` lines 129–137 (`main_update` / `sky_main`).
 
@@ -79,7 +79,7 @@ fn expr_value_is_non_clone(expr: &Expr) -> bool {
 /// `#[derive(Clone, Copy)]` i64 id wrappers (`server_stream.rs` / websocket
 /// server), matching `clone_class`'s own `CopyLeaf` arm for them.
 ///
-/// Used by the `Expr::Access` emission arm for #142/AUD-09's type-directed
+/// Used by the `Expr::Access` emission arm for AUD-09's type-directed
 /// Copy elision — see
 /// `docs/adr/0011-emitter-clone-borrow-discipline.md` §3.
 const fn ir_type_is_definitely_copy(ty: &IrType) -> bool {
@@ -339,7 +339,7 @@ fn clone_free_target(expr: Expr, target: Symbol) -> Expr {
                 } else {
                     clone_free_target(body, target)
                 };
-                // Preserve the #158 C2 guard, rewriting it too when the arm
+                // Preserve the list-length guard, rewriting it too when the arm
                 // pattern does not bind `target`.
                 let new_guard = guard.map(|g| {
                     if binds {
@@ -870,7 +870,7 @@ fn ir_type_contains_task(ty: &IrType) -> bool {
 
 /// The Rust spelling of a binary operator for use in infix emission.
 ///
-/// Every Sky M1-core arithmetic/comparison/boolean operator maps to the
+/// Every Sky core arithmetic/comparison/boolean operator maps to the
 /// identically-spelled Rust operator except `/=` (Sky inequality → Rust `!=`).
 ///
 /// `IntDiv` and `Append` are listed here only to keep the match exhaustive
@@ -1122,7 +1122,7 @@ fn emit_http_call(
 /// * **`HttpWithMethod m req`**, **`HttpWithTimeout t req`**,
 ///   **`HttpWithBody b req`**, **`HttpWithUrl u req`**,
 ///   **`HttpWithFollowRedirects f req`**, **`HttpWithMaxRedirects n req`**
-///   (last three: Go parity, #33 §6.2) — each emits a clone-and-reassign
+///   (last three: Go parity) — each emits a clone-and-reassign
 ///   block
 ///   (`{ let mut __sky_rec = (req).clone(); __sky_rec.field = val; __sky_rec }`)
 ///   matching the `emit_update` pattern so the source record is moved once.
@@ -1165,15 +1165,16 @@ fn emit_http_builder_call(
     // headers, maxRedirects, method, timeout, url} field set into
     // (`sky_lower::lower::ir_type_from_ty`'s HTTP_REQUEST_FIELDS special
     // case) — it is ALWAYS backed by `sky_runtime::HttpRequest`, never a
-    // backend-synthesised `record_by_fieldset` struct. Looking that struct up
-    // here used to be REQUIRED for `HttpDefaultRequest`'s literal, but the
-    // struct only exists by accident (when some OTHER signature in the
-    // program happens to also carry the same 7-field shape as a plain,
-    // non-opaque record — e.g. an explicitly-annotated function parameter).
-    // A program whose only `HttpRequest` consumer reads a field or calls
-    // `Http.request`/`HttpStream.open` — never spelling the fieldset out in
-    // an annotation — synthesised no such struct and hit SKY-I0001. Emitting
-    // the fixed runtime type name directly removes the dependency entirely.
+    // backend-synthesised `record_by_fieldset` struct. So `HttpDefaultRequest`
+    // emits the fixed runtime type name directly rather than looking up a
+    // synthesised struct: that struct only exists incidentally (when some OTHER
+    // signature in the program happens to also carry the same 7-field shape as
+    // a plain, non-opaque record — e.g. an explicitly-annotated function
+    // parameter). A program whose only `HttpRequest` consumer reads a field or
+    // calls `Http.request`/`HttpStream.open` — never spelling the fieldset out
+    // in an annotation — synthesises no such struct, and a lookup would hit
+    // SKY-I0001. Emitting the fixed runtime type name removes the dependency
+    // entirely.
     match k {
         KernelFn::HttpDefaultRequest => {
             // defaultRequest : String -> HttpRequest  — inline struct literal
@@ -1240,7 +1241,7 @@ fn emit_http_builder_call(
             )))
         }
         KernelFn::HttpWithUrl => {
-            // withUrl : String -> HttpRequest -> HttpRequest (#33 §6.2)
+            // withUrl : String -> HttpRequest -> HttpRequest
             let u = args.first().ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "sky_backend_rust::emit_http_builder_call",
                 detail: "HttpWithUrl expects 2 arguments (url, req)".to_owned(),
@@ -1257,7 +1258,7 @@ fn emit_http_builder_call(
             )))
         }
         KernelFn::HttpWithFollowRedirects => {
-            // withFollowRedirects : Bool -> HttpRequest -> HttpRequest (#33 §6.2)
+            // withFollowRedirects : Bool -> HttpRequest -> HttpRequest
             let f = args.first().ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "sky_backend_rust::emit_http_builder_call",
                 detail: "HttpWithFollowRedirects expects 2 arguments (flag, req)".to_owned(),
@@ -1274,7 +1275,7 @@ fn emit_http_builder_call(
             )))
         }
         KernelFn::HttpWithMaxRedirects => {
-            // withMaxRedirects : Int -> HttpRequest -> HttpRequest (#33 §6.2)
+            // withMaxRedirects : Int -> HttpRequest -> HttpRequest
             let n = args.first().ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "sky_backend_rust::emit_http_builder_call",
                 detail: "HttpWithMaxRedirects expects 2 arguments (n, req)".to_owned(),
@@ -1621,7 +1622,7 @@ fn emit_db_call(
         // Empty-list fast path: `Vec::new()` has no elements, so Rust cannot
         // infer which `Into<SqlParam>` impl to use — the turbofish form names
         // the element type explicitly and skips the map/collect entirely.
-        // Kept as defence-in-depth (#165's type-checker defaulting normally
+        // Kept as defence-in-depth (the type-checker's defaulting normally
         // gives an empty Sky `[]` literal a concrete `SqlValue` element type
         // before it ever reaches this closure — see the `sql_param` arm of
         // the numeric-defaulting loop in `sky_types::lib` — but a bare
@@ -2037,9 +2038,9 @@ fn emit_db_call(
 ///
 /// Returns `Err(CompilerBug)` for any `k.is_tea()` variant that is:
 ///
-/// * **M6-reserved** (`CmdPublish`, `CmdPublishNoEcho`, `SubSubscribeTopic`) —
-///   guard fires if a program somehow reaches one (e.g. if `lower_callee`
-///   mis-routes it); not user-reachable from M5c input.
+/// * **reserved, not emittable here** (`CmdPublish`, `CmdPublishNoEcho`,
+///   `SubSubscribeTopic`) — guard fires if a program somehow reaches one (e.g.
+///   if `lower_callee` mis-routes it); not user-reachable.
 ///
 /// Returns `Ok(None)` for non-TEA callees so the standard path handles them.
 #[allow(clippy::match_same_arms)]
@@ -2113,20 +2114,18 @@ fn emit_tea_call(
         // Uses the same generic N-arg emit path as SubSubscribeTopic.
         // The runtime symbol `sub_subscribe_stream` is defined in http_stream.rs.
         //
-        // this used to E0277 (`Box<dyn Fn(..) -> .. + Send>` passed as
-        // an `F: .. + Send + Sync` bound) because the runtime signature
-        // over-declared `+Sync`. Fixed at the RUNTIME side (relaxed the bound
-        // to Send-only, matching `sub_subscribe_topic`'s already-correct
-        // pattern — see `sub_subscribe_stream`'s doc comment in
-        // `http_stream.rs`), not here: `to_msg` is moved exclusively into one
-        // detached `tokio::spawn` task, never shared behind an `Arc`, so
-        // `Sync` was never structurally required and the emit-site box
-        // pass-through this arm already does is correct as-is. Contrast with
-        // the sibling `KernelFn::StreamStream` (`emit_server_call`), which
-        // DOES need the #162 re-wrap-in-a-fresh-closure technique because its
-        // runtime consumer genuinely stores the handler behind a shared `Arc`.
+        // This arm passes the boxed handler through unchanged (`Ok(None)`).
+        // `to_msg` is moved exclusively into one detached `tokio::spawn` task,
+        // never shared behind an `Arc`, so `Sync` is not structurally required;
+        // the runtime signature bounds the handler `Send`-only (matching
+        // `sub_subscribe_topic` — see `sub_subscribe_stream`'s doc comment in
+        // `http_stream.rs`), so a plain `Box<dyn Fn(..) + Send>` satisfies it
+        // with no re-wrap (avoiding E0277). Contrast with the sibling
+        // `KernelFn::StreamStream` (`emit_server_call`), which DOES need the
+        // re-wrap-in-a-fresh-closure technique because its runtime consumer
+        // genuinely stores the handler behind a shared `Arc`.
         KernelFn::HttpStreamChunks => Ok(None),
-        // ── M5e wired: Cmd.publish / Cmd.publishNoEcho ───────────────────────────
+        // ── Cmd.publish / Cmd.publishNoEcho ──────────────────────────────────────
         // `Cmd.publish : String -> Dict String String -> Cmd msg`
         // `Cmd.publishNoEcho : String -> Dict String String -> Cmd msg`
         // Both map to the standard N-arg emit path (runtime live/pubsub.rs).
@@ -2314,8 +2313,7 @@ fn emit_server_call(
 
         // `Sky.Http.Server.Stream.stream : String -> (StreamWriter -> Task Error ()) -> Task Error Response`
         //
-        // #166 (sibling of the `Http.Stream.chunks` fix, found during that
-        // fix's blast-radius review): `server_stream_stream`'s bound is
+        // `server_stream_stream`'s bound is
         // `H: Fn(StreamWriter) -> SkyTask<E, ()> + Send + Sync + 'static`,
         // and unlike `sub_subscribe_stream` (relaxed to Send-only — see that
         // fn's doc comment in `http_stream.rs`), THIS `+Sync` bound is
@@ -2335,7 +2333,7 @@ fn emit_server_call(
         // 'static>` value straight through as `H` — a trait object's
         // auto-trait set is exactly its bound list, so that box can never
         // satisfy `+Sync` regardless of what the boxed closure captures.
-        // Fix: apply the SAME re-wrap technique #162 used for
+        // Fix: apply the SAME re-wrap technique used for
         // `html_on_raw_`/`ui_on_submit_` — re-embed the box construction as
         // SOURCE inside a freshly-declared closure built anew at the call
         // site, so the wrapper's own Send+Sync-ness depends only on the Sky
@@ -2460,7 +2458,7 @@ fn lookup_field<'f>(
 /// `Msg`-constructor eta-expands to a plain lambda, and both [`emit_lambda`] and
 /// [`emit_func_value`] pin `Box::new(..)` for every non-Server/WS `Fun` shape
 /// (see [`wants_arc_ctor`]). Passing that `Box<dyn Fn(_) -> _ + Send>` into the
-/// `Arc<.. + Send + Sync>` parameter is an E0308 (the seal break #178 surfaces).
+/// `Arc<.. + Send + Sync>` parameter is an E0308 — a SEAL break.
 ///
 /// Rather than special-casing every callback-carrying shape at the box site,
 /// this mirrors the existing `ui_on_input_` / `ui_on_change_` arms (this same
@@ -2546,14 +2544,12 @@ fn emit_arc_callback_field(
 
 /// Handle `Std.Ui` / `Std.Html` kernel calls.
 ///
-/// Phase 0 scope:
-/// * The SIX render kernels (`UiLayout`, `UiLayoutWith`, `HtmlRender`,
-///   `HtmlEscapeText`, `HtmlEscapeAttr`, `HtmlAttrToString`) are **fully
-///   wired** here — they emit calls to `sky_runtime::ui::render::*` and
-///   `sky_runtime::html::*`.
-/// * The app-entry stubs (`LiveApp`, `LiveAppRouted`, `LiveRoute`,
-///   `LiveRenderStatic`, `TuiProgram`, `TuiApp`, `WebviewApp`) return a
-///   `CompilerBug` error.  Phase 1 will wire their bodies.
+/// The render kernels (`UiLayout`, `UiLayoutWith`, `HtmlRender`,
+/// `HtmlEscapeText`, `HtmlEscapeAttr`, `HtmlAttrToString`) emit calls to
+/// `sky_runtime::ui::render::*` and `sky_runtime::html::*` here. The app-entry
+/// kernels (`LiveApp`, `LiveAppRouted`, `LiveRoute`, `LiveRenderStatic`,
+/// `TuiProgram`, `TuiApp`, `WebviewApp`) delegate to their respective
+/// `emit_live` / `emit_tui` emitters.
 ///
 /// Returns `None` for any kernel that is not a Ui / Live / Tui / Webview
 /// variant, letting the standard call path handle it.
@@ -2572,12 +2568,12 @@ fn emit_ui_call(
     let Callee::Kernel(k) = callee else {
         return Ok(None);
     };
-    // Only handle M7 kernels.
+    // Only handle Ui / Live / Tui / Webview / Cli kernels.
     if !k.is_ui() && !k.is_live() && !k.is_tui() && !k.is_webview() && !k.is_cli() {
         return Ok(None);
     }
     match k {
-        // ── Std.Ui / Std.Html render kernels (Phase 0 — fully wired) ─────────
+        // ── Std.Ui / Std.Html render kernels ─────────────────────────────────
 
         // `Ui.layout : List (Attribute msg) -> Element msg -> Html msg`
         //
@@ -2591,7 +2587,7 @@ fn emit_ui_call(
             };
             let attrs_s = emit_expr_at(ctx, attrs_e, indent, child, generics)?;
             let elem_s = emit_expr_at(ctx, elem_e, indent, child, generics)?;
-            // Phase-1a: M is now inferred bottom-up from the concrete element /
+            // M is inferred bottom-up from the concrete element /
             // attrs types that the region-type–sourced emit propagates.  No
             // turbofish required; Rust unifies M from the element argument or from
             // the enclosing function's return type annotation — both supply a
@@ -2612,10 +2608,10 @@ fn emit_ui_call(
         // We delegate at the emit site instead: extract `wrapperAttrs` and
         // `rootAttrs` directly from the IR record literal and pass them as
         // `Vec<Attribute<M>>` to `ui_layout_with_vecs`, bypassing the unsynthesised
-        // record struct that would trigger SKY-I0001 if materialised (T3 trap).
+        // record struct that would trigger SKY-I0001 if materialised.
         //
         // Non-literal cfg (e.g. `let cfg = { … } in Ui.layoutWith cfg elem`) is
-        // rejected fail-closed with `CompilerBug`; it is Phase-1 deferred work.
+        // rejected fail-closed with `CompilerBug` (unsupported).
         KernelFn::UiLayoutWith => {
             let [cfg_e, elem_e] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -2652,7 +2648,7 @@ fn emit_ui_call(
             let wrapper_s = emit_expr_at(ctx, wrapper_e, indent, child, generics)?;
             let root_s = emit_expr_at(ctx, root_e, indent, child, generics)?;
             let elem_s = emit_expr_at(ctx, elem_e, indent, child, generics)?;
-            // Phase-1a: same bottom-up M inference as UiLayout — no turbofish.
+            // Same bottom-up M inference as UiLayout — no turbofish.
             Ok(Some(format!(
                 "sky_runtime::ui::render::ui_layout_with_vecs({wrapper_s}, {root_s}, {elem_s})"
             )))
@@ -3883,7 +3879,7 @@ fn emit_ui_call(
         }
 
         // `Ui.breakpoint : String -> List (Attribute msg) -> Element msg -> Element msg`
-        // Phase-0: eager passthrough — breakpoint CSS media queries are not yet
+        // Eager passthrough — breakpoint CSS media queries are not yet
         // applied in the Rust runtime.  The element is returned unchanged.
         KernelFn::UiBreakpoint => {
             let [q_e, a_e, el_e] = args else {
@@ -5073,7 +5069,7 @@ fn emit_ui_call(
             )))
         }
 
-        // ── Phase-1a: Event-attribute builders ───────────────────────────────────
+        // ── Event-attribute builders ─────────────────────────────────────────────
         //
         // Plain-message events (onClick/onFocus/onBlur/onMouseOver/onMouseOut):
         //   Ui.onClick : msg -> Attribute msg
@@ -5156,16 +5152,16 @@ fn emit_ui_call(
             )))
         }
 
-        // `Ui.onInput : (String -> msg) -> Attribute msg`  (T6: Arc-wrap the fn)
+        // `Ui.onInput : (String -> msg) -> Attribute msg`  (Arc-wrap the fn)
         //
         // D5: route through `emit_arc_callback_field` so any lowerer-hoisted
         // capture-clone `let`s (pre-clone `Let { value: CloneVar }` wrapping the
         // Lambda) are peeled OUTSIDE the synthesized `Arc::new(move |_x| …)`.
         // Without this, the outer `move` still move-captures the free outer binding
-        // and a sibling use hits E0382 — the exact #191 bug shape applied to the
-        // inline-wrap sites (the #191 fix covered only the on_change FIELD path).
+        // and a sibling use hits E0382 — the same move-capture bug shape the
+        // on_change FIELD path guards against, applied to the inline-wrap sites.
         // When there are no leading pure-alias `let`s, `emit_arc_callback_field`
-        // produces output byte-identical to the previous `arc_callback_wrap` call.
+        // produces output byte-identical to a plain `arc_callback_wrap` call.
         KernelFn::UiOnInput => {
             let [f_e] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -5180,7 +5176,7 @@ fn emit_ui_call(
             )))
         }
 
-        // `Ui.onChange : (String -> msg) -> Attribute msg`  (T6: Arc-wrap)
+        // `Ui.onChange : (String -> msg) -> Attribute msg`  (Arc-wrap)
         // D5: same peel-hoist as UiOnInput above.
         KernelFn::UiOnChange => {
             let [f_e] = args else {
@@ -5195,7 +5191,7 @@ fn emit_ui_call(
             )))
         }
 
-        // `Ui.onKeyDown : (String -> msg) -> Attribute msg`  (T6: Arc-wrap)
+        // `Ui.onKeyDown : (String -> msg) -> Attribute msg`  (Arc-wrap)
         KernelFn::UiOnKeyDown => {
             let [f_e] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -5209,7 +5205,7 @@ fn emit_ui_call(
             )))
         }
 
-        // `Ui.onKeyUp : (String -> msg) -> Attribute msg`  (T6: Arc-wrap)
+        // `Ui.onKeyUp : (String -> msg) -> Attribute msg`  (Arc-wrap)
         KernelFn::UiOnKeyUp => {
             let [f_e] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -5223,7 +5219,7 @@ fn emit_ui_call(
             )))
         }
 
-        // `Ui.onFile : (String -> msg) -> Attribute msg`  (T6: Arc-wrap; #76)
+        // `Ui.onFile : (String -> msg) -> Attribute msg`  (Arc-wrap)
         KernelFn::UiOnFile => {
             let [f_e] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -5237,7 +5233,7 @@ fn emit_ui_call(
             )))
         }
 
-        // `Event.onBool : (Bool -> msg) -> Attribute msg`  (T6: Arc-wrap, bool arg)
+        // `Event.onBool : (Bool -> msg) -> Attribute msg`  (Arc-wrap, bool arg)
         KernelFn::UiOnBool => {
             let [f_e] = args else {
                 return Err(Diagnostic::CompilerBug {
@@ -5254,8 +5250,8 @@ fn emit_ui_call(
         // `Ui.onSubmit : (a -> msg) -> Attribute msg`
         // `ui_on_submit_` builds `Event::OnForm` with the concrete argument
         // type recovered by Rust generic inference on the emitted handler
-        // closure `f_s` — no emit-site code change was needed for #109/#156,
-        // only the runtime function's signature (never `Arc<dyn Any>`).
+        // closure `f_s` — this emit site is generic over that type, and the
+        // runtime function's signature carries it (never `Arc<dyn Any>`).
         //
         // `ui_on_submit_`'s generic bound is `F: Fn(T) -> M + Send +
         // Sync + 'static`, but `f_s` here is a `Box<dyn Fn(T) -> M + Send +
@@ -5292,7 +5288,7 @@ fn emit_ui_call(
                 });
             };
             let f_s = emit_expr_at(ctx, f_e, indent, child, generics)?;
-            // Type-directed dispatch (#228). The lowerer classified the handler
+            // Type-directed dispatch. The lowerer classified the handler
             // by its SOLVED type; a non-arrow value routes to the fixed-dispatch
             // runtime helper (no `(m)(_x)` call against a non-callable value —
             // the reported cargo `E0618` after `skyc` exit 0). An arrow handler
@@ -5412,7 +5408,7 @@ fn emit_ui_call(
                 // the handler's SOLVED type and recorded the verdict on the
                 // `Call` (`on_form`), so acceptance never depends on the
                 // payload's syntactic shape — a `Var` bound to a bare `Msg`
-                // (#228) and a `Var` bound to a decoder fn read identically
+                // and a `Var` bound to a decoder fn read identically
                 // here, but the solver told them apart upstream.
                 //
                 // FixedValue → dispatch the value directly via
@@ -5515,7 +5511,7 @@ fn emit_ui_call(
         // `noAttr : Attribute msg` — nullary identity attribute.
         KernelFn::HtmlNoAttr => Ok(Some("sky_runtime::html::html_no_attr_()".to_owned())),
 
-        // ── Live app-entry kernels (Phase 1b — fully wired) ───────────────────
+        // ── Live app-entry kernels ────────────────────────────────────────────
         // Delegate to `emit_live::emit_live_call`; it returns `Some(s)` for the
         // four Live variants and `None` for anything else (the `_ => None` arm).
         // A `None` here is an internal error (the `is_live()` guard above already
@@ -5532,7 +5528,7 @@ fn emit_ui_call(
             Ok(Some(s))
         }
 
-        // ── Tui app-entry kernels (Phase-1c — fully wired) ───────────────────
+        // ── Tui app-entry kernels ────────────────────────────────────────────
         // Delegate to `emit_tui::emit_tui_call`; it returns `Some(s)` for the
         // two Tui variants and `None` for anything else.  A `None` here is an
         // internal error (the `k.is_tui()` guard already filtered), so promote
@@ -5546,7 +5542,7 @@ fn emit_ui_call(
             Ok(Some(s))
         }
 
-        // ── Webview app-entry kernel (Phase-1d — fully wired) ─────────────────
+        // ── Webview app-entry kernel ─────────────────────────────────────────
         // Delegate to `emit_webview::emit_webview_call`; it returns `Some(s)` for
         // the WebviewApp variant and `None` for anything else. A `None` here is an
         // internal error (the `k.is_webview()` guard above already filtered), so
@@ -5563,7 +5559,7 @@ fn emit_ui_call(
             Ok(Some(s))
         }
 
-        // ── Cli app-entry kernel (#111 — fully wired) ────────────────────────
+        // ── Cli app-entry kernel ─────────────────────────────────────────────
         // Delegate to `emit_cli::emit_cli_call`; it returns `Some(s)` for
         // the CliProgram variant and `None` for anything else. A `None` here is an
         // internal error (the `k.is_cli()` guard above already filtered), so
@@ -5705,7 +5701,7 @@ fn emit_ui_call(
 
 /// Emit an expression. `indent` is the indentation level (in 4-space units) of
 /// the line the expression *starts* on; it is consumed only by the multi-line
-/// `match` form. All other M0 expressions render inline (no leading whitespace,
+/// `match` form. All other expressions render inline (no leading whitespace,
 /// no embedded newlines), so the caller positions them.
 ///
 /// A binary operation is always parenthesised (`(count + 1)`) — matching the
@@ -6068,7 +6064,7 @@ pub fn emit_expr_at(
             // solver left this call's result type parameter genuinely
             // unconstrained (a discarded / empty / phantom position). Empty for
             // every other call — `CallPin::None::turbofish()` is `""` — so an
-            // unpinned call stays byte-identical to the pre-#181 emission. The
+            // unpinned call emits no turbofish suffix. The
             // suffix goes between the kernel name and its `(` argument list:
             // `dict_empty::<String, i64>(…)`.
             let pin_turbofish = pin.turbofish();
@@ -6121,14 +6117,14 @@ pub fn emit_expr_at(
         }
         Expr::ListIndexClone { list, index } => {
             // Clone the element at a constant index — the arm guard already
-            // proved `list.len() > index` (#158 C2), so the Rust index is in
+            // proved `list.len() > index`, so the Rust index is in
             // bounds by construction. `.clone()` keeps the list intact for the
             // sibling tail binder.
             let l = emit_expr_at(ctx, list, indent, child, generics)?;
             Ok(format!("({l})[{index}].clone()"))
         }
         Expr::ListLenCheck { list, len, exact } => {
-            // Borrowing list-length guard (#158 C2). `.len()` never moves the
+            // Borrowing list-length guard. `.len()` never moves the
             // bound `Vec`, so this is legal in an arm-guard position.
             let l = emit_expr_at(ctx, list, indent, child, generics)?;
             let op = if *exact { "==" } else { ">=" };
@@ -6148,7 +6144,7 @@ pub fn emit_expr_at(
             // record literal in record position (`{ ... }.field`) is never
             // misparsed; the field ident is keyword-mangled to match the struct.
             //
-            // Type-directed Copy elision (#142/AUD-09 — see
+            // Type-directed Copy elision (AUD-09 — see
             // `docs/adr/0011-emitter-clone-borrow-discipline.md`
             // §3): Sky is a purely-functional language with value semantics,
             // so every field read is logically a copy.  A field whose solved
@@ -6318,7 +6314,7 @@ fn emit_list(
 }
 
 /// Emit a constructor application. A nullary constructor renders as the bare
-/// path `EnumName::Variant` (byte-identical to M0); a payload constructor renders
+/// path `EnumName::Variant`; a payload constructor renders
 /// `EnumName::Variant(arg0, arg1, …)`. A payload position on a type-size cycle
 /// back to its own enum is wrapped in `Box::new(…)` to balance the boxed enum
 /// field (see [`crate::EmitCtx::is_cyclic_self_field`]). Kept out of the
@@ -6385,8 +6381,8 @@ fn emit_ctor(
     Ok(format!("{path}({})", parts.join(", ")))
 }
 
-/// Emit a `match`. An arm head is a constructor pattern (M3a/M3b-2, exhaustive
-/// over the enum's variants) or — for the M3b-3 flat refutable match — a literal
+/// Emit a `match`. An arm head is a constructor pattern (exhaustive
+/// over the enum's variants) or — for a flat refutable match — a literal
 /// (`0` / `'a'` / `"hi"` / `true` / `false`), a wildcard / variable binder, or
 /// an alias. A cyclic self-edge constructor payload field is boxed in the enum,
 /// so a variable bound to such a field is unboxed (`let x = *x;`) at the top of
@@ -6420,11 +6416,11 @@ fn emit_match(
         } else {
             format!("{{ {prelude}{body} }}")
         };
-        // A guard (#158 C2 arm guard and/or the #182 synthesized `as_str()`
+        // A guard (a list-length arm guard and/or the synthesized `as_str()`
         // string-column guard) renders as a native Rust `if <guard>` on the arm —
         // `false` falls through to the next arm, matching the `case`'s refutable
-        // semantics. When both are present they are ANDed. No guard keeps the
-        // pre-existing `{pat} => …` shape byte-identical.
+        // semantics. When both are present they are ANDed. A guardless arm keeps
+        // the plain `{pat} => …` shape.
         let ir_guard = match &arm.guard {
             Some(g) => Some(emit_expr_at(ctx, g, indent + 1, child, generics)?),
             None => None,
@@ -6575,11 +6571,11 @@ fn emit_match_scrutinee(
 /// variable / alias / slice — goes through `render_pat` (total over the whole
 /// set), with a `String`/slice binder rebind prelude in string/list mode. Shared
 /// by the value-context and tail-context match emitters.
-/// AND together the two guard sources on a match arm: the #182 synthesized
-/// string-column `as_str()` guard and the arm's own IR guard (#158 C2). Either,
+/// AND together the two guard sources on a match arm: the synthesized
+/// string-column `as_str()` guard and the arm's own IR guard. Either,
 /// both, or neither may be present; both present are joined `synth && ir` (the
 /// synthesized `as_str()` checks come from the pattern, so they read first).
-/// `None` when neither is present, keeping the arm's `=> …` shape byte-identical.
+/// `None` when neither is present, leaving the arm's `=> …` shape guardless.
 fn combine_guards(synth: Option<String>, ir: Option<String>) -> Option<String> {
     match (synth, ir) {
         (Some(s), Some(i)) => Some(format!("{s} && {i}")),
@@ -6590,10 +6586,10 @@ fn combine_guards(synth: Option<String>, ir: Option<String>) -> Option<String> {
 }
 
 /// Render one arm head to its Rust pattern, any leading prelude, and any
-/// synthesized match guard (#182 — the `__sgN.as_str() == "lit"` check for a
+/// synthesized match guard (the `__sgN.as_str() == "lit"` check for a
 /// by-value string-literal column, joined with `&&` when several columns carry
-/// one). `None` when no guard is synthesized (every pre-#182 shape), so the
-/// caller's `if <guard>` clause stays absent and emission is byte-identical.
+/// one). `None` when no guard is synthesized, so the
+/// caller's `if <guard>` clause stays absent.
 fn emit_arm_head(
     ctx: &EmitCtx,
     pat: &Pat,
@@ -6636,7 +6632,7 @@ fn emit_whole_arm_head(
     } else if str_mode || list_mode {
         // STR/LIST mode: the scrutinee IS a reference (`.as_str()` /
         // `.as_slice()`), so `render_pat`'s `name @ inner` is a borrow and
-        // sound for any inner shape (#99 §1.1) — unchanged. A top-level `Pat::Str`
+        // sound for any inner shape. A top-level `Pat::Str`
         // matches the `&str`-wrapped scrutinee directly (a literal pattern), so no
         // guard is synthesized here.
         let prelude = if str_mode {
@@ -6647,9 +6643,9 @@ fn emit_whole_arm_head(
         Ok((render_pat(ctx, pat)?, prelude, Vec::new()))
     } else {
         // WHOLE mode, by value: a top-level dispatch-free alias head
-        // (`(a, b) as w ->`) takes the #99 alias-safe clone-rebuild path; a
+        // (`(a, b) as w ->`) takes the alias-safe clone-rebuild path; a
         // by-value string-literal column (`( "transform", v )` on a variable
-        // tuple scrutinee, #182) accumulates its `as_str()` guard here.
+        // tuple scrutinee) accumulates its `as_str()` guard here.
         let mut alias_counter: usize = 0;
         let mut prelude = String::new();
         let mut guards = Vec::new();
@@ -6719,7 +6715,7 @@ fn emit_ctor_arm_pat(
         // builtin `Maybe`/`Result` payload matched by value. Route through
         // the alias-safe renderer; alias-free payloads are byte-identical. A
         // by-value string-literal payload (`Just "x"` on a `Maybe String`
-        // scrutinee, #182) accumulates its `as_str()` guard in `guards`.
+        // scrutinee) accumulates its `as_str()` guard in `guards`.
         let mut alias_counter: usize = 0;
         let mut alias_prelude = String::new();
         let mut guards = Vec::new();
@@ -6771,9 +6767,9 @@ fn emit_ctor_arm_pat(
         // field is boxed in the enum (`Box<Self>`), so the clone-rebuild
         // path must re-derive its binders from the UNBOXED temp — otherwise
         // both the alias binder and the inner bindings stay `Box<T>` where
-        // `T` is required (skyc-0, cargo-E0308: found by the #99 review).
-        // Bind the field to a fresh raw temp, then re-derive the whole alias
-        // shape via the #96 machinery against `*temp`.
+        // `T` is required (skyc-0-then-cargo-E0308). Bind the field to a fresh
+        // raw temp, then re-derive the whole alias shape via the
+        // `emit_binding_stmts` machinery against `*temp`.
         if self_edge && pat_contains_alias_in_arm(sub) {
             let temp = format!("__sky_selfedge_alias_{alias_counter}");
             alias_counter += 1;
@@ -6977,7 +6973,7 @@ fn rebind_to_vec(ctx: &EmitCtx, sym: Symbol, out: &mut String) -> DResult<()> {
 }
 
 /// Render a pattern to its Rust spelling. Total and recursive over the entire
-/// M3a/M3b-1/M3b-2/M3b-3 pattern set:
+/// pattern set:
 ///
 /// * a variable binder (the keyword-mangled name),
 /// * a wildcard (`_`),
@@ -7019,7 +7015,7 @@ fn render_pat(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
         // This spelling is correct ONLY in a by-REF / refutable MATCH-ARM
         // position, where default binding modes make the sub-bindings borrows
         // so no move occurs. A by-VALUE irrefutable binding (`Expr::Destructure`
-        // — the desugaring of a `let`, a single-arm product `case`, and a #96
+        // — the desugaring of a `let`, a single-arm product `case`, and a
         // function/lambda parameter pattern) must NOT reach this arm: `name @
         // inner` would move BOTH the whole (`name`) and each sub-binding, which
         // is a partial move (E0382) for any non-`Copy` payload. Those sites go
@@ -7140,8 +7136,8 @@ fn pat_contains_alias_in_arm(pat: &Pat) -> bool {
 /// BY-VALUE-matched position (a tuple element, a ctor / record payload, or an
 /// alias inner)? On the whole-scrutinee by-value path a `Pat::Str` is a `&str`
 /// pattern against an owned `String` field (E0308); the emitter instead binds
-/// the field and checks equality in a match guard (#182,
-/// `render_arm_pat_alias_safe`'s `guards` accumulator — mirrors the reference's
+/// the field and checks equality in a match guard
+/// (`render_arm_pat_alias_safe`'s `guards` accumulator — mirrors the reference's
 /// `renderPatGuarded`). This detects when that guard path is needed so the
 /// alias-free / str-free fast path stays byte-identical for every other arm.
 ///
@@ -7168,8 +7164,8 @@ fn pat_contains_str_in_arm(pat: &Pat) -> bool {
 
 /// Render a BY-VALUE (whole-scrutinee, non-str, non-list) match-arm
 /// sub-pattern, routing any [`Pat::Alias`] through the SAME "bind the whole,
-/// destructure the inner shape from a CLONE" strategy #96's
-/// [`emit_binding_stmts`] already proved sound for irrefutable Destructure
+/// destructure the inner shape from a CLONE" strategy
+/// [`emit_binding_stmts`] already proves sound for irrefutable Destructure
 /// positions — because in THIS context the scrutinee is matched BY VALUE
 /// (never `&str`/`&[T]`), so `render_pat`'s `name @ inner` spelling (sound
 /// only under a by-REF default binding mode) would double-move `name` and
@@ -7225,7 +7221,7 @@ fn render_arm_pat_alias_safe(
             }
             let temp = format!("__sky_arm_alias_{}", *counter);
             *counter += 1;
-            // `emit_binding_stmts` (the #96 machinery) already handles
+            // `emit_binding_stmts` already handles
             // `Pat::Alias` exactly this way: `let <name> = <src>; let
             // <inner-pattern> = <name>.clone();` — reuse it verbatim, passing
             // the WHOLE alias node and the fresh temp as `src`.
@@ -7294,16 +7290,16 @@ fn render_arm_pat_alias_safe(
             }
         }
         // A `Slice` carrying a nested alias reaches LIST mode, which matches
-        // by reference and is unaffected by #99 — this by-VALUE renderer is
-        // never invoked from that path, so reaching here is an internal
-        // invariant violation, not a real user program.
+        // by reference and so needs no by-value alias-safety handling — this
+        // by-VALUE renderer is never invoked from that path, so reaching here
+        // is an internal invariant violation, not a real user program.
         Pat::Slice { .. } => Err(Diagnostic::CompilerBug {
             where_: "sky_backend_rust::render_arm_pat_alias_safe",
             detail: "Pat::Slice reached the by-value alias-safe renderer; list-mode \
                      arms must route through render_pat directly"
                 .to_owned(),
         }),
-        // `Pat::Str` is intercepted above (binder + guard, #182); the remaining
+        // `Pat::Str` is intercepted above (binder + guard); the remaining
         // leaves render directly.
         Pat::Var(_) | Pat::Wildcard | Pat::Int(_) | Pat::Bool(_) | Pat::Char(_) => {
             render_pat(ctx, pat)
@@ -7314,26 +7310,26 @@ fn render_arm_pat_alias_safe(
 /// Emit the Rust `let` statement sequence for an irrefutable destructuring
 /// binding `<binder> = <value>` (WITHOUT the trailing body). Shared by both
 /// `Expr::Destructure` emit sites (value-context and tail-context), which is the
-/// desugaring of a `let` destructure, a single-arm product `case`, and a #96
+/// desugaring of a `let` destructure, a single-arm product `case`, and a
 /// function / lambda parameter pattern.
 ///
-/// The seal fix lives here: in a by-VALUE binding position an `as`-alias must
-/// NOT render as `name @ inner`. That binds BOTH the whole (`name`) and the
-/// sub-bindings by move, a partial move (`E0382`) for any non-`Copy` payload
-/// (`\((a, b) as whole) -> …` over `(String, String)` was `skyc`-0 then
-/// `cargo`-101). Instead the whole is bound first and the inner shape is
-/// destructured from a CLONE:
+/// The SEAL-upholding logic lives here: in a by-VALUE binding position an
+/// `as`-alias must NOT render as `name @ inner`. That binds BOTH the whole
+/// (`name`) and the sub-bindings by move, a partial move (`E0382`) for any
+/// non-`Copy` payload (`\((a, b) as whole) -> …` over `(String, String)` is
+/// otherwise `skyc`-0 then `cargo`-101). Instead the whole is bound first and
+/// the inner shape is destructured from a CLONE:
 ///
 /// ```ignore
 /// let whole = <value>;
 /// let (a, b) = whole.clone();
 /// ```
 ///
-/// A destructure-position value is `Clone` — the #87/#93 derive-seal already
-/// rejected any non-`Clone` payload upstream — so the clone always resolves.
+/// A destructure-position value is `Clone` — the derive-seal already
+/// rejects any non-`Clone` payload upstream — so the clone always resolves.
 /// When the binder carries NO alias the fast path emits the single flat
-/// `let <pat> = <value>;`, byte-identical to the pre-fix emission and clone-
-/// free. Aliases nested inside tuples (`let (x, (a, b) as inner) = …`) are
+/// `let <pat> = <value>;`, a plain clone-free binding. Aliases nested inside
+/// tuples (`let (x, (a, b) as inner) = …`) are
 /// handled at any depth: each tuple element binds to a fresh, uniquely-numbered
 /// temporary, so a nested alias clones from its OWN temp and never shares a move
 /// with a sibling binder.
@@ -7352,7 +7348,7 @@ fn push_binding_stmts(
     out: &mut Vec<String>,
 ) -> DResult<()> {
     // Fast path: an alias-free binder binds every name via a single flat,
-    // move-only `let <pat> = <src>;` — no clone, byte-identical to pre-fix.
+    // move-only `let <pat> = <src>;` — no clone.
     if !pat_contains_alias(pat) {
         let rendered = render_pat(ctx, pat)?;
         out.push(format!("let {rendered} = {src};"));
@@ -7574,10 +7570,9 @@ fn emit_record(
         // `IrType::HttpRequest` before it ever reaches the struct registry).
         // This ordering closes the false-positive class where an unrelated
         // record sharing the 7 canonical field NAMES with unrelated field
-        // TYPES (e.g. all-`Int`) used to be mislabelled `HttpRequest` here
+        // TYPES (e.g. all-`Int`) would be mislabelled `HttpRequest` here
         // even after `sky_lower` had already registered a correctly-typed
-        // struct for it — the exact two-path divergence this shortcut used
-        // to reintroduce.
+        // struct for it — a two-path divergence the registry check avoids.
         if ctx.has_record_struct_for(&key) {
             ctx.record_name_for_literal(&key)?.to_owned()
         } else {
@@ -7750,9 +7745,8 @@ fn emit_expr_tail(
                     format!("{}{prelude}\n{body}", indent_of(indent + 2))
                 };
                 // Same `if <guard>` fall-through as the value-context emitter: the
-                // C2 arm guard and the #182 synthesized `as_str()` string-
-                // column guard are ANDed; `None` keeps the pre-existing shape
-                // byte-identical.
+                // list-length arm guard and the synthesized `as_str()` string-
+                // column guard are ANDed; `None` leaves the arm guardless.
                 let ir_guard = match &arm.guard {
                     Some(g) => Some(emit_expr_at(ctx, g, indent + 1, child, generics)?),
                     None => None,
@@ -8020,7 +8014,7 @@ pub fn emit_lambda_unboxed(
 /// concrete closure type and a LATER use against `Box<dyn Fn>` fails as E0308.
 /// Pinning the trait object HERE — the same technique [`emit_func_value`] uses
 /// for a named function value — makes every lambda's static type the boxed
-/// trait object regardless of where it flows, closing the #90 SKY-L0114
+/// trait object regardless of where it flows, closing the SKY-L0114
 /// `let f = Ok (\x -> …)` seal hole with no lowering / type-check change.
 ///
 /// The pointer constructor matches the rendered type: a lambda filling one of
@@ -8064,8 +8058,8 @@ fn emit_lambda(
 }
 
 /// Emit a `let`-bound closure literal that [`sky_lower`]'s capture analysis
-/// (`needs_shared_capture`, #164 E0507 fix) proved is captured-by-move into
-/// 2+ nested/sibling closures, and therefore must be reference-counted
+/// (`needs_shared_capture`, which prevents E0507) proved is captured-by-move
+/// into 2+ nested/sibling closures, and therefore must be reference-counted
 /// (`Arc`) rather than uniquely owned (`Box`) so the corresponding
 /// `Expr::CloneVar` reads at every extra capture site (`Arc::clone`, a cheap
 /// pointer bump) actually compile.
@@ -8106,8 +8100,8 @@ fn emit_shared_lambda(
 
 /// Render one type parameter's trailing bound clause for the generic list:
 /// `: ::core::ops::Add<Output = T{n}> + Copy` and the like, or the empty string
-/// for an unbounded variable (so an M2a structurally-parametric function emits a
-/// bare `T{n}`, byte-identical to the pre-M2d golden).
+/// for an unbounded variable (so a structurally-parametric function emits a
+/// bare `T{n}` with no bound clause).
 ///
 /// `n` is the variable's 1-based position, which is also its own Rust name
 /// `T{n}` — the arithmetic `::core::ops` traits take `Output = T{n}` so the
@@ -8347,7 +8341,7 @@ fn sky_main_wrap_decision(
 ///
 /// Shape: `pub fn <name>[<generics>](<params>) -> <ret> {\n    <body>\n}\n`. A
 /// monomorphic function (empty `type_params`) emits no generic clause, so its
-/// output is byte-identical to the M0 / M1 golden `main_update` / `sky_main`. A
+/// output is byte-identical to the golden `main_update` / `sky_main`. A
 /// fully-parametric function quantifying `[a, b]` emits `pub fn name<T1, T2>(..)`
 /// and renders every [`IrType::Generic`] in its signature / body through the
 /// matching scope. A variable carrying a [`BoundSet`] gains its
@@ -8426,9 +8420,9 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
     }
     let ret = render_type(ctx, ret_ty, generics)?;
 
-    // Phase-1a: M is inferred bottom-up from concrete element/attrs types
-    // propagated by the region-type–sourced lowerer.  The old ui_msg_string /
-    // with_ui_msg mechanism is removed; `generics` is used directly.
+    // M is inferred bottom-up from concrete element/attrs types
+    // propagated by the region-type–sourced lowerer; `generics` is used
+    // directly.
     // TCO: a `TailLoop` body emits `let mut`-shadowed params + a
     // `loop { … }` whose interior ends only in `return`/`continue`. Mutability is
     // introduced ONLY by the local `let mut p = p;` shadow, so the public `fn`
@@ -8497,7 +8491,7 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
 /// over-constrain callers of pure record-constructors (e.g. `wrap : a -> {
 /// value : a }` must accept any `Clone` type, not only `Send + 'static` ones).
 ///
-/// The #177 `SkyRow` bound (for a wildcard `any` param that flows into a
+/// The `SkyRow` bound (for a wildcard `any` param that flows into a
 /// `Db.get*` accessor) is already recorded in the relevant param's [`BoundSet`]
 /// by the lowerer's structural IR walk (`sky_lower`'s `apply_db_row_bounds` /
 /// `body_calls_db_get_on_param`), so this function simply renders whatever

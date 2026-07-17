@@ -1,4 +1,4 @@
-//! Fixed Rust-target templates emitted verbatim for every M0 program.
+//! Fixed Rust-target templates emitted verbatim for every program.
 //!
 //! The Sky → Rust codegen wraps the user's emitted types and functions in a
 //! fixed prologue (header, imports, basic type aliases, runtime re-exports) and
@@ -12,14 +12,14 @@
 //! equality against an independent, line-number-based reconstruction of the
 //! same golden, so any anchor mistake is caught.
 //!
-//! A missing anchor is no longer a silent empty fallback: a future golden edit
+//! A missing anchor is not a silent empty fallback: a golden edit
 //! that drops the USER TYPES banner or the `Ffi.kernel` polyfill comment fails
 //! loudly with [`Diagnostic::CompilerBug`] (SKY-I0203) rather than emitting a
 //! truncated project.
 
 use sky_diagnostics::{DResult, Diagnostic};
 
-/// The golden M0 program, embedded at compile time. The fixed preamble and
+/// The golden program, embedded at compile time. The fixed preamble and
 /// epilogue are exact substrings of this file.
 const GOLDEN: &str = include_str!("../../../tests/golden/m0/main.rs");
 
@@ -107,8 +107,6 @@ mod tests {
     #[test]
     fn epilogue_matches_golden_lines_139_to_end() -> DResult<()> {
         // Lines 261..=end: the `Ffi.kernel` polyfill through `fn main`.
-        // NOTE: line number updated from 139 → 257 after M5a shim additions,
-        //       then to 261 after M5b Http kernel wrapper additions.
         let expected: String = GOLDEN.split_inclusive('\n').skip(260).collect();
         assert_eq!(epilogue()?, expected);
         Ok(())

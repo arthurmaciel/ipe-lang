@@ -1,4 +1,4 @@
-//! Emission for `Std.Tui` / `Sky.Tui` app-entry kernels (Phase-1c).
+//! Emission for `Std.Tui` / `Sky.Tui` app-entry kernels.
 //!
 //! Wires the two Tui kernels:
 //!
@@ -269,7 +269,7 @@ fn emit_tui_on_key(
     }
     // Residual (local var / other fn-typed exprs): plain emission; `cargo`
     // validates compatibility. Reaching here with a record-typed handler value
-    // is only possible via a let-bound binding (see the #48 let-bound-cfg gate
+    // is only possible via a let-bound binding (see the let-bound-cfg gate
     // family).
     emit_tui_fn(ctx, e, indent, child, generics)
 }
