@@ -31,7 +31,7 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// Assert that `skyc::build(fixture)` SUCCEEDS (exit-0 from the lowerer).
+/// Assert that `ipe::build(fixture)` SUCCEEDS (exit-0 from the lowerer).
 /// Runs without `IPE_E2E` so the compile check is always fast.
 fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
     let root = repo_root();
@@ -43,10 +43,10 @@ fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return; // runtime unavailable — skip silently
     };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for fixture {fixture}: {:?}",
@@ -77,11 +77,11 @@ fn a1_noncl_var_task_and_then_compiles() {
     let out = std::env::temp_dir().join("skyc_i149_noncl_var_hof_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for noncl_var_hof: {:?}",

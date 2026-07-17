@@ -38,10 +38,10 @@ fn error_details_roundtrip_compiles() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("error_details_roundtrip_out");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return; // runtime unavailable — skip silently
     };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for error_details_roundtrip: {:?}",
@@ -63,10 +63,10 @@ fn error_details_roundtrip_runs_and_prints_expected_output() {
     let out = std::env::temp_dir().join("skyc_error_details_roundtrip_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for error_details_roundtrip: {:?}",

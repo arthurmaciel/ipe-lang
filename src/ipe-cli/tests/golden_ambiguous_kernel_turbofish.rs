@@ -48,8 +48,8 @@ fn ambiguous_kernel_turbofish_compiles() {
     let entry = golden_entry(FIXTURE);
     let out = std::env::temp_dir().join("skyc_i181_ambiguous_kernel");
     let _ = std::fs::remove_dir_all(&out);
-    let runtime = skyc::resolve_runtime().expect("runtime must resolve");
-    let built = skyc::build(&entry, &out, &runtime);
+    let runtime = ipe::resolve_runtime().expect("runtime must resolve");
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc must compile the ambiguous-kernel shapes, got: {:?}",
@@ -69,8 +69,8 @@ fn ambiguous_kernel_turbofish_builds_and_runs() {
     let entry = golden_entry(FIXTURE);
     let out = std::env::temp_dir().join("skyc_i181_ambiguous_kernel_e2e");
     let _ = std::fs::remove_dir_all(&out);
-    let runtime = skyc::resolve_runtime().expect("runtime must resolve");
-    skyc::build(&entry, &out, &runtime).expect("build must succeed");
+    let runtime = ipe::resolve_runtime().expect("runtime must resolve");
+    ipe::build(&entry, &out, &runtime).expect("build must succeed");
     let outcome = support::build_and_run_emitted("i181_ambiguous_kernel", &out);
     assert_eq!(
         outcome.exit_code,

@@ -50,7 +50,7 @@ pub enum CliError {
     },
     /// The compiler rejected the program. Carries the entry path and full
     /// source text alongside the diagnostic so [`fmt::Display`] can render a
-    /// rustc/Elm-style report (caret snippet + help + `skyc explain` pointer)
+    /// rustc/Elm-style report (caret snippet + help + `ipe explain` pointer)
     /// rather than a debug dump.
     Pipeline {
         file: PathBuf,
@@ -59,7 +59,7 @@ pub enum CliError {
     },
     /// The Sky runtime module tree could not be located.
     RuntimeNotFound,
-    /// `skyc explain <CODE>` was given a string that is not a taxonomy code.
+    /// `ipe explain <CODE>` was given a string that is not a taxonomy code.
     /// Carries the (trimmed) input and a deterministic did-you-mean list over
     /// the known codes, ranked by `(Levenshtein, code)`.
     UnknownCode {
@@ -160,7 +160,7 @@ pub fn build(entry: &Path, out_dir: &Path, runtime_dir: &Path) -> Result<(), Cli
 /// When no `sky.toml` is present, the entry file's parent directory is used
 /// as the source root. Every `*.ipe` file found there is loaded and compiled
 /// together — fixing IPE-N0020 for multi-file projects built via the
-/// file-path shorthand (`skyc build src/Main.ipe`).
+/// file-path shorthand (`ipe build src/Main.ipe`).
 ///
 /// This is the faithful port of Haskell's `Graph.discoverModulesMulti
 /// (sourceRoot : ...) entryPath` call in `Sky.Build.Compile.hs`: it probes
@@ -1084,11 +1084,11 @@ pub fn resolve_runtime() -> Result<PathBuf, CliError> {
 
 /// The top-level usage hint, listing every subcommand and flag.
 const USAGE: &str = "usage:\n  \
-     skyc build <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]\n  \
-     skyc run   <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [-- <args>...]\n  \
-     skyc watch <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [--port <n>]\n  \
-     skyc explain [<CODE>]\n  \
-     skyc fix <entry.ipe> [--yes]";
+     ipe build <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]\n  \
+     ipe run   <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [-- <args>...]\n  \
+     ipe watch <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [--port <n>]\n  \
+     ipe explain [<CODE>]\n  \
+     ipe fix <entry.ipe> [--yes]";
 
 /// Parse `argv` (excluding the program name) and run the requested command.
 ///
@@ -1105,7 +1105,7 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
     }
 }
 
-/// `skyc watch <entry> [--out <dir>] [--runtime <dir>] [--port <n>]`
+/// `ipe watch <entry> [--out <dir>] [--runtime <dir>] [--port <n>]`
 /// (`crate::watch`). Never returns
 /// `Err` for a build failure (INV-3: a red build is logged, not fatal);
 /// only misuse / setup failures propagate.
@@ -1140,7 +1140,7 @@ fn run_watch(rest: &[String]) -> Result<(), CliError> {
     watch::run(&opts)
 }
 
-/// `skyc build <entry.ipe> [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]`.
+/// `ipe build <entry.ipe> [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]`.
 fn run_build(rest: &[String]) -> Result<(), CliError> {
     let mut it = rest.iter();
     let entry = it.next().ok_or(CliError::Usage(USAGE))?.clone();
@@ -1214,19 +1214,19 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
     )
 }
 
-/// `skyc run <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [-- <args>...]`
+/// `ipe run <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [-- <args>...]`
 ///
 /// One-shot build + run: compiles the entry to `out_dir` (same routing as
 /// [`run_build`]), then invokes `cargo build` on the emitted project and
 /// execs the resulting `sky-app` binary, forwarding any arguments supplied
 /// after `--` and propagating the binary's exit code.
 ///
-/// Build failures (skyc compile step or cargo build step) surface as
+/// Build failures (ipe compile step or cargo build step) surface as
 /// [`CliError`] and print to stderr via the normal error path. The binary
 /// exec step replaces the current process (Unix) or propagates the child's
-/// exit code (all platforms) so the caller sees it as `skyc run`'s own exit.
+/// exit code (all platforms) so the caller sees it as `ipe run`'s own exit.
 fn run_run(rest: &[String]) -> Result<(), CliError> {
-    // Split on "--": everything before is skyc flags; everything after is
+    // Split on "--": everything before is ipe flags; everything after is
     // forwarded to the emitted binary.
     let dash_dash = rest.iter().position(|a| a == "--");
     let (skyc_args, bin_args) = dash_dash.map_or((rest, [].as_slice()), |pos| {
@@ -1256,7 +1256,7 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
         None => resolve_runtime()?,
     };
 
-    // --- Step 1: skyc compile → emit the Rust project ---
+    // --- Step 1: ipe compile → emit the Rust project ---
     let manifest = if entry_path.is_dir() {
         let candidate = entry_path.join("sky.toml");
         if candidate.is_file() {
@@ -1336,7 +1336,7 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     }
 }
 
-/// `skyc explain [<CODE>]`. No argument prints the one-line index of every code
+/// `ipe explain [<CODE>]`. No argument prints the one-line index of every code
 /// and its title; an argument prints that code's embedded explain page.
 fn run_explain(rest: &[String]) -> Result<(), CliError> {
     match rest.first() {
@@ -1352,7 +1352,7 @@ fn run_explain(rest: &[String]) -> Result<(), CliError> {
     }
 }
 
-/// `skyc fix <entry.ipe> [--yes]`. Default is interactive per-edit confirmation;
+/// `ipe fix <entry.ipe> [--yes]`. Default is interactive per-edit confirmation;
 /// `--yes` is durable authorization to apply every machine-applicable edit.
 fn run_fix(rest: &[String]) -> Result<(), CliError> {
     let mut it = rest.iter();
@@ -2005,7 +2005,7 @@ mod tests {
 
         let out = dir.join("out");
         let built = build(&entry, &out, &runtime);
-        assert!(built.is_ok(), "skyc build must succeed: {built:?}");
+        assert!(built.is_ok(), "ipe build must succeed: {built:?}");
 
         let status = std::process::Command::new("cargo")
             .arg("build")
@@ -2470,7 +2470,7 @@ main =
             return; // No in-repo runtime tree in this environment — see other tests' pattern.
         };
 
-        let tmp = std::env::temp_dir().join(format!("skyc-cache-e2e-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("ipe-cache-e2e-{}", std::process::id()));
         let cache_dir = tmp.join("cache");
         let out_a = tmp.join("out-a");
         let out_b = tmp.join("out-b");
@@ -2770,7 +2770,7 @@ main =
         let Ok(runtime) = resolve_runtime() else {
             return;
         };
-        let tmp = std::env::temp_dir().join(format!("skyc-cache-disabled-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("ipe-cache-disabled-{}", std::process::id()));
         let out_dir = tmp.join("out");
         let _ = fs::remove_dir_all(&tmp);
 
@@ -2805,7 +2805,7 @@ main =
             "a disabled cache is always reported as a miss"
         );
         assert!(
-            !tmp.join(".skyc-cache").exists(),
+            !tmp.join(".ipe-cache").exists(),
             "no cache directory should be created when caching is disabled"
         );
 

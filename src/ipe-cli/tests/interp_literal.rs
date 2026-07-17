@@ -44,8 +44,8 @@ fn interp_int_literal_compiles() {
     let entry = golden_entry("m_interp_int_literal");
     let out = std::env::temp_dir().join("skyc_m_interp_int_literal");
     let _ = std::fs::remove_dir_all(&out);
-    let runtime = skyc::resolve_runtime().expect("runtime must resolve");
-    let built = skyc::build(&entry, &out, &runtime);
+    let runtime = ipe::resolve_runtime().expect("runtime must resolve");
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc must compile a numeric-literal interpolation arg without an ICE, got: {:?}",
@@ -62,8 +62,8 @@ fn interp_int_literal_runs() {
     let entry = golden_entry("m_interp_int_literal");
     let out = std::env::temp_dir().join("skyc_m_interp_int_literal_e2e");
     let _ = std::fs::remove_dir_all(&out);
-    let runtime = skyc::resolve_runtime().expect("runtime must resolve");
-    skyc::build(&entry, &out, &runtime).expect("build must succeed");
+    let runtime = ipe::resolve_runtime().expect("runtime must resolve");
+    ipe::build(&entry, &out, &runtime).expect("build must succeed");
     let outcome = support::build_and_run_emitted("m_interp_int_literal", &out);
     assert_eq!(outcome.exit_code, Some(0), "clean exit expected");
     assert_eq!(outcome.stdout.trim(), "item=o count=54 total=51");

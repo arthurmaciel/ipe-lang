@@ -15,7 +15,7 @@
 //! ## Architecture
 //!
 //! 1. A minimal Sky.Tui counter program is written to a temp dir.
-//! 2. `skyc::build` compiles it (parse → canon → types → lower → emit Rust).
+//! 2. `ipe::build` compiles it (parse → canon → types → lower → emit Rust).
 //! 3. `oracle::build_rust_binary` runs `cargo build` on the emitted project —
 //!    the shared Cargo target lets crossterm/tokio compile once and be reused.
 //!
@@ -176,10 +176,10 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::Pat
     let out_dir = std::env::temp_dir().join(format!("tui_e2e_{test_name}_emitted"));
     let _ = std::fs::remove_dir_all(&out_dir);
 
-    let runtime = skyc::resolve_runtime()
+    let runtime = ipe::resolve_runtime()
         .map_err(|e| -> BoxError { format!("{test_name}: runtime unavailable: {e}").into() })?;
 
-    skyc::build(&entry, &out_dir, &runtime)
+    ipe::build(&entry, &out_dir, &runtime)
         .map_err(|e| -> BoxError { format!("{test_name}: skyc build failed: {e}").into() })?;
 
     let exe = oracle::build_rust_binary(test_name, &out_dir)
@@ -210,7 +210,7 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::Pat
 /// is always live in CI.
 #[test]
 fn tui_onkey_record_typechecks() {
-    // ── helper: write Sky source to a temp file, run skyc::build, check ok ──
+    // ── helper: write Sky source to a temp file, run ipe::build, check ok ──
     fn compile_ok(label: &str, source: &str) -> String {
         let ipe_dir = std::env::temp_dir().join(format!("tui_onkey_{label}_sky"));
         let _ = std::fs::remove_dir_all(&ipe_dir);
@@ -227,12 +227,12 @@ fn tui_onkey_record_typechecks() {
         let out_dir = std::env::temp_dir().join(format!("tui_onkey_{label}_emitted"));
         let _ = std::fs::remove_dir_all(&out_dir);
 
-        let Ok(runtime) = skyc::resolve_runtime() else {
+        let Ok(runtime) = ipe::resolve_runtime() else {
             // Runtime unavailable — skip silently, matching the other goldens.
             return String::new();
         };
 
-        let built = skyc::build(&entry, &out_dir, &runtime);
+        let built = ipe::build(&entry, &out_dir, &runtime);
         assert!(
             built.is_ok(),
             "{label}: skyc build failed (T0001 regression?): {:?}",

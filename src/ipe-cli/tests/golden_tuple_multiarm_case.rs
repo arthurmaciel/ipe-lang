@@ -51,10 +51,10 @@ fn multi_arm_tuple_case_builds() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("tuple_multiarm_gate");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return; // runtime unavailable — skip silently rather than fail
     };
-    let built = skyc::build(&fixture_entry(), &out, &runtime);
+    let built = ipe::build(&fixture_entry(), &out, &runtime);
     assert!(
         built.is_ok(),
         "multi-arm tuple `case` must build (IPE-L0115 close); got {:?}",
@@ -73,11 +73,11 @@ fn multi_arm_tuple_case_cargo_builds_and_runs() {
     let out = std::env::temp_dir().join("skyc_tuple_multiarm_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = skyc::build(&fixture_entry(), &out, &runtime);
+    let built = ipe::build(&fixture_entry(), &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for i_tuple_multiarm_case: {:?}",

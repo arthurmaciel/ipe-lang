@@ -33,12 +33,12 @@ fn redirect_builders_compile_and_run() {
     let out = std::env::temp_dir().join("skyc_m5b_http_builders_redirects_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve: {:?}", runtime.err());
     let Ok(runtime) = runtime else { return };
 
     // skyc-0: the three builders must resolve through the kernel path.
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for http_builders_redirects: {:?}",

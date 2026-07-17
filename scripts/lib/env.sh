@@ -3,13 +3,13 @@
 # env. SOURCE this (never execute it): `source "$(dirname "$0")/lib/env.sh"`.
 #
 # PORTED from ../sky/runtime-rust/scripts/lib/env.sh and ADAPTED for this repo:
-# the compiler here is `skyc` (a Rust cargo workspace), NOT the Haskell `sky`.
+# the compiler here is `ipe` (a Rust cargo workspace), NOT the Haskell `sky`.
 # There is no GHC/cabal, no `sky-out/sky`; the binary is built by cargo and lives
-# in the (possibly global) cargo target dir. This file defines REPO + SKYC_BIN and
+# in the (possibly global) cargo target dir. This file defines REPO + IPE_BIN and
 # does NOT cd (callers `cd "$REPO"` themselves so the failure path stays theirs).
 #
 # It is idempotent: safe to source even when the caller has already cd'd into the
-# repo or pre-set CARGO_TARGET_DIR / RUSTC_WRAPPER / SKYC_BIN (all `${VAR:-…}`).
+# repo or pre-set CARGO_TARGET_DIR / RUSTC_WRAPPER / IPE_BIN (all `${VAR:-…}`).
 
 # ── PATH: prepend the canonical dev dirs, PRESERVE the inherited PATH ────────
 # cargo (and go, kept for the PHASED Go≡Rust equivalence step) resolve from their
@@ -24,7 +24,7 @@ export PATH="$HOME/.cargo/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:$PA
 # ONCE and persists across each example's `rm -rf sky-out`. This repo's global
 # ~/.cargo/config.toml already pins `target-dir = ~/.cache/sky-rust-target`, so
 # this default AGREES with where a bare `cargo build` of the workspace lands
-# skyc — the same dir the sweep's per-example `cargo build` reuses. Override
+# ipe — the same dir the sweep's per-example `cargo build` reuses. Override
 # CARGO_TARGET_DIR to relocate; we honour a pre-existing value.
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$HOME/.cache/ipe/ipe-target}"
 mkdir -p "$CARGO_TARGET_DIR" || {
@@ -63,29 +63,29 @@ if [ -z "$REPO" ]; then
 fi
 export REPO
 
-# ── SKYC_BIN detection ───────────────────────────────────────────────────────
-# The compiler binary is produced by `cargo build [--release] -p skyc`. Because
+# ── IPE_BIN detection ───────────────────────────────────────────────────────
+# The compiler binary is produced by `cargo build [--release] -p ipe`. Because
 # this repo's ~/.cargo/config.toml pins a GLOBAL target-dir, the binary lands in
-# $CARGO_TARGET_DIR/{release,debug}/skyc — NOT $REPO/target — so probe the shared
+# $CARGO_TARGET_DIR/{release,debug}/ipe — NOT $REPO/target — so probe the shared
 # target FIRST, then the in-repo target/ (the layout on a checkout WITHOUT a
 # global target-dir), then PATH. Release is preferred over debug (faster sweep).
-# SKYC_BIN honoured verbatim if the caller pre-set it.
-if [ -z "${SKYC_BIN:-}" ]; then
+# IPE_BIN honoured verbatim if the caller pre-set it.
+if [ -z "${IPE_BIN:-}" ]; then
   for _cand in \
-    "$CARGO_TARGET_DIR/release/skyc" \
-    "$CARGO_TARGET_DIR/debug/skyc" \
-    "$REPO/target/release/skyc" \
-    "$REPO/target/debug/skyc"; do
-    if [ -x "$_cand" ]; then SKYC_BIN="$_cand"; break; fi
+    "$CARGO_TARGET_DIR/release/ipe" \
+    "$CARGO_TARGET_DIR/debug/ipe" \
+    "$REPO/target/release/ipe" \
+    "$REPO/target/debug/ipe"; do
+    if [ -x "$_cand" ]; then IPE_BIN="$_cand"; break; fi
   done
-  # Last resort: a skyc on PATH.
-  [ -z "${SKYC_BIN:-}" ] && command -v skyc >/dev/null 2>&1 && SKYC_BIN="$(command -v skyc)"
+  # Last resort: a ipe on PATH.
+  [ -z "${IPE_BIN:-}" ] && command -v ipe >/dev/null 2>&1 && IPE_BIN="$(command -v ipe)"
   unset _cand
 fi
-export SKYC_BIN="${SKYC_BIN:-$CARGO_TARGET_DIR/release/skyc}"
+export IPE_BIN="${IPE_BIN:-$CARGO_TARGET_DIR/release/ipe}"
 
-# ── Vendored runtime dir (skyc --runtime) ────────────────────────────────────
-# skyc's build vendors the runtime module tree into each emitted crate. Left
+# ── Vendored runtime dir (ipe --runtime) ────────────────────────────────────
+# ipe's build vendors the runtime module tree into each emitted crate. Left
 # UNSET it auto-resolves by walking up to `$REPO/src/runtime/rust/src/sky_runtime`
 # (resolve_runtime() in src/ipe-cli/src/lib.rs). We export the explicit path so
 # the sweep is independent of the invocation CWD; callers may override.

@@ -38,7 +38,7 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// Build `fixture` and assert `skyc::build` succeeds (a fast, always-on
+/// Build `fixture` and assert `ipe::build` succeeds (a fast, always-on
 /// compile check that alone covers the "invalid Rust" seal-breach witnesses
 /// — the string-literal and record-field-collision cases — which otherwise
 /// fail at `cargo build`).
@@ -52,10 +52,10 @@ fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return; // runtime unavailable — skip silently
     };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for fixture {fixture}: {:?}",
@@ -80,10 +80,10 @@ fn assert_e2e_output(fixture: &str, expect_contains: &str) {
     let out = std::env::temp_dir().join(format!("skyc_{fixture}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for {fixture}: {:?}",

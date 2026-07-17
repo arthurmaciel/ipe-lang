@@ -26,7 +26,7 @@
 //!   nested `{- {- -} -}` comment; both are skipped and the program prints.
 //!   Output: `"ok"`.
 //!
-//! The multi-module positive uses `skyc::build_project` (a `sky.toml` workspace
+//! The multi-module positive uses `ipe::build_project` (a `sky.toml` workspace
 //! with a `Lib` module) then runs the emitted binary:
 //!
 //! * `mm_qualtype` — `Lib` exposes `type Box a = Box a`; `Main` annotates a
@@ -75,7 +75,7 @@ fn golden_dir(name: &str) -> PathBuf {
 // broken toolchain environment should fail loudly here, not silently skip.
 #[allow(clippy::expect_used)]
 fn runtime() -> PathBuf {
-    skyc::resolve_runtime().expect("runtime must resolve for golden_parser_gaps tests")
+    ipe::resolve_runtime().expect("runtime must resolve for golden_parser_gaps tests")
 }
 
 // ---------------------------------------------------------------------------
@@ -91,7 +91,7 @@ fn assert_single_oracle(name: &str) {
     let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
-    let built = skyc::build(&entry, &out, &runtime());
+    let built = ipe::build(&entry, &out, &runtime());
     assert!(built.is_ok(), "build failed for {name}: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted(name, &out);
@@ -128,7 +128,7 @@ fn qualtype_project_builds_and_prints_42() {
     let out = std::env::temp_dir().join(format!("skyc_{name}_e2e"));
     let _ = std::fs::remove_dir_all(&out);
 
-    let built = skyc::build_project(&dir.join("sky.toml"), &out, &runtime());
+    let built = ipe::build_project(&dir.join("sky.toml"), &out, &runtime());
     assert!(
         built.is_ok(),
         "build_project failed for {name}: {:?}",
@@ -162,7 +162,7 @@ fn intdiv_by_zero_aborts_exit_101() {
 
     // Codegen succeeds — the failure is a *runtime* classification, not a
     // compile error.
-    let built = skyc::build(&entry, &out, &runtime());
+    let built = ipe::build(&entry, &out, &runtime());
     assert!(built.is_ok(), "build failed for {name}: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted(name, &out);
@@ -193,9 +193,9 @@ fn intdiv_minint_by_neg1_does_not_panic() {
 // Compile-time negatives: exact IPE-* diagnostic codes (always run).
 // ---------------------------------------------------------------------------
 
-fn diag_code(err: &skyc::CliError) -> Option<ipe_diagnostics::Code> {
+fn diag_code(err: &ipe::CliError) -> Option<ipe_diagnostics::Code> {
     match err {
-        skyc::CliError::Pipeline { diag, .. } => Some(diag.code()),
+        ipe::CliError::Pipeline { diag, .. } => Some(diag.code()),
         _ => None,
     }
 }
@@ -207,7 +207,7 @@ fn unterminated_blockcomment_is_sky_p0017() {
     let out = std::env::temp_dir().join(format!("skyc_{name}"));
     let _ = std::fs::remove_dir_all(&out);
 
-    let res = skyc::build(&entry, &out, &runtime());
+    let res = ipe::build(&entry, &out, &runtime());
     assert!(res.is_err(), "{name} must fail to compile");
     let Err(err) = res else { return };
     assert_eq!(
@@ -224,7 +224,7 @@ fn unknown_module_in_annotation_is_sky_n0004() {
     let out = std::env::temp_dir().join(format!("skyc_{name}"));
     let _ = std::fs::remove_dir_all(&out);
 
-    let res = skyc::build_project(&dir.join("sky.toml"), &out, &runtime());
+    let res = ipe::build_project(&dir.join("sky.toml"), &out, &runtime());
     assert!(res.is_err(), "{name} must fail to compile");
     let Err(err) = res else { return };
     assert_eq!(

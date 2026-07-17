@@ -1958,7 +1958,7 @@ mod tests {
     /// Canonicalise + link N modules, given in dependency-first topo order
     /// (each entry's own `import`s must reference only EARLIER entries),
     /// mirroring what the real multi-file build driver does
-    /// (`skyc::project` discovers + topo-orders files, `ipe_canon::link`
+    /// (`ipe::project` discovers + topo-orders files, `ipe_canon::link`
     /// merges them into one program). Each entry is `(dotted module path,
     /// source)`. Returns `None` on any parse / canonicalise / link failure —
     /// per this file's existing convention, a `None` here means "test can't

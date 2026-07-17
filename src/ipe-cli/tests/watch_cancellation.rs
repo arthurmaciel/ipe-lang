@@ -18,7 +18,7 @@
 //!
 //! This is intentionally independent of `crate::watch`'s orchestrator
 //! scaffolding — it exercises `ipe_db`'s cancellation contract directly
-//! against `skyc::compile_prepared` (the exact function the orchestrator's
+//! against `ipe::compile_prepared` (the exact function the orchestrator's
 //! compile worker calls), so a failure here points at the MECHANISM, not at
 //! `watch.rs`'s wiring around it.
 
@@ -70,7 +70,7 @@ fn compile_worker_is_cancelled_by_a_concurrent_input_edit() {
     let entry_for_worker = main_path;
     let worker = thread::spawn(move || {
         salsa::Cancelled::catch(AssertUnwindSafe(|| {
-            skyc::compile_prepared(
+            ipe::compile_prepared(
                 &db_worker,
                 root,
                 &sources,
@@ -132,6 +132,6 @@ fn the_same_fixture_compiles_cleanly_without_a_concurrent_edit() {
     );
 
     let result =
-        skyc::compile_prepared(&db, root, &sources, &main_path, Path::new("<test>"), config);
+        ipe::compile_prepared(&db, root, &sources, &main_path, Path::new("<test>"), config);
     assert!(result.is_ok(), "fixture must compile cleanly on its own");
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/guards/mem-guard.sh — memory kill-switch for the Ipê (Sky→Rust) dev sessions.
 #
-# Background: a runaway `cargo`/`rustc`/linker (or `skyc`, or a wedged agent
+# Background: a runaway `cargo`/`rustc`/linker (or `ipe`, or a wedged agent
 # session) can pin the machine to swap and force a hard reboot. This watchdog
 # polls memory every few seconds and SIGKILLs the heaviest watched process
 # before that happens. Linux port of ../sky/scripts/guards/mem-guard.sh: free memory
@@ -23,7 +23,7 @@
 #
 # Watched process names (basename of comm; Linux comm truncates at 15 chars):
 #   Always-kill at PROC_MB:  cargo, rustc, cc1, cc1plus, cc, collect2, ld,
-#                            ld.lld, lld, lld-link, skyc, sky-ffi-inspect,
+#                            ld.lld, lld, lld-link, ipe, sky-ffi-inspect,
 #                            rust-analyzer
 #   Last-resort at PANIC_MB: claude, node, ghostty (the host of *this* session —
 #                            only killed when they themselves are the runaway,
@@ -41,7 +41,7 @@ LOG="${MEM_GUARD_LOG:-/tmp/mem-guard.log}"
 DRY="${MEM_GUARD_DRY:-}"
 
 # basename(comm) regexes
-ALWAYS_KILL_RE='^(cargo|rustc|cc1|cc1plus|cc|collect2|ld|ld\.lld|lld|lld-link|skyc|sky-ffi-inspect|rust-analyzer)$'
+ALWAYS_KILL_RE='^(cargo|rustc|cc1|cc1plus|cc|collect2|ld|ld\.lld|lld|lld-link|ipe|sky-ffi-inspect|rust-analyzer)$'
 PANIC_KILL_RE='^(claude|node|ghostty)$'
 
 log() {

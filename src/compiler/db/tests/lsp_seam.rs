@@ -150,14 +150,14 @@ fn lsp_shaped_buffer_edit_drives_diagnostics_and_navigation_in_memory() {
 
 // ---------------------------------------------------------------------------
 // (c) Cancellation on the next keystroke, using the LSP's own diagnostics
-// query directly (not `skyc::compile_prepared`) — proving the cancellation
+// query directly (not `ipe::compile_prepared`) — proving the cancellation
 // mechanism already wired for `ipe watch` is genuinely query-agnostic.
 // ---------------------------------------------------------------------------
 
 /// Mirrors `crates/skyc/tests/watch_cancellation.rs`'s
 /// `compile_worker_is_cancelled_by_a_concurrent_input_edit`, but against
 /// [`ipe_db::typecheck`] directly (the LSP's own diagnostics demand) rather
-/// than `skyc::compile_prepared` — proving the cancellation mechanism is a
+/// than `ipe::compile_prepared` — proving the cancellation mechanism is a
 /// property of the DATABASE, not of `ipe watch`'s particular call chain, so
 /// the LSP inherits it for free.
 ///

@@ -5,10 +5,10 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match skyc::run_cli(&args) {
+    match ipe::run_cli(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("skyc: {err}");
+            eprintln!("ipe: {err}");
             ExitCode::FAILURE
         }
     }

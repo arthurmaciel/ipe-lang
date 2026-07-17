@@ -57,12 +57,12 @@ fn i201_skyc_accepts_and_emits_clone_bounded_generic() {
         .join("i201_cross_module_poly_recursion_skyc_out");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         eprintln!("SKIP cross_module_poly_recursion: runtime not available");
         return;
     };
 
-    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for cross_module_poly_recursion (no IPE-L0102): {:?}",
@@ -98,11 +98,11 @@ fn i201_cargo_builds_and_runs() {
     let out = std::env::temp_dir().join("skyc_i201_cross_module_poly_recursion_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for cross_module_poly_recursion: {:?}",

@@ -3,13 +3,13 @@
 #
 # #35 (commit 6d93e85) fixed a race where two examples-sweep.sh invocations
 # sharing the SAME $CARGO_TARGET_DIR could corrupt each other's RUN/EQUIVALENCE
-# results because skyc emits a fixed `sky-app` binary name into that shared
+# results because ipe emits a fixed `sky-app` binary name into that shared
 # dir. The fix: flock a per-CARGO_TARGET_DIR lock file around the
 # build->resolve->run->equivalence critical section, plus PID-suffix the sweep-wide
 # rows/table report files.
 #
 # #35b is the residual gap ONE LAYER DOWN, found by independent review: every
-# PER-EXAMPLE diagnostic file ($HIST/$n.skyc.log, $n.cargo.log,
+# PER-EXAMPLE diagnostic file ($HIST/$n.ipe.log, $n.cargo.log,
 # $n.go.build.log, $n.rust.run.log, $n.go.run.log, $n.diff.txt, $n.equivalence,
 # $n.run.log) was still keyed ONLY by bare example name. Two invocations
 # pointed at DIFFERENT CARGO_TARGET_DIRs (so #35's flock never contends
@@ -27,7 +27,7 @@
 # CONCURRENTLY, against the SAME EXAMPLE NAME, sharing the SAME $HIST (via a
 # shared fake $HOME) but pointed at DIFFERENT $CARGO_TARGET_DIRs (so #35's
 # flock is deliberately NOT in play — this isolates #35b's own protection).
-# Each invocation drives a fake `skyc`/Go-reference toolchain (avoids needing
+# Each invocation drives a fake `ipe`/Go-reference toolchain (avoids needing
 # a real Sky program + Haskell `sky` — this is shell-script-only infra) that
 # tags every line of build/run output with a per-invocation MARKER and
 # sleeps between lines to maximise any real overlapping-write window. A REAL
@@ -90,13 +90,13 @@ trap cleanup EXIT
 for lane in A B; do
   d="$TMPROOT/lane-$lane/examples/$EXAMPLE_NAME"
   mkdir -p "$d/src"
-  # Never actually parsed (SKYC_BIN is faked below) — just needs to exist so
+  # Never actually parsed (IPE_BIN is faked below) — just needs to exist so
   # examples-sweep.sh's `[ -f "$d/src/Main.ipe" ]` gate and example_shape's
   # regex scan (no Tui/Webview/Live/Server keywords here → shape=cli) pass.
   cat >"$d/src/Main.ipe" <<'EOF'
 module Main exposing (main)
--- #35b concurrency-corruption probe fixture — never actually compiled by skyc
--- (SKYC_BIN is faked out by the test harness).
+-- #35b concurrency-corruption probe fixture — never actually compiled by ipe
+-- (IPE_BIN is faked out by the test harness).
 main = ()
 EOF
 done
@@ -105,13 +105,13 @@ done
 # widen the window for any genuine concurrent-write interleaving. A REAL,
 # zero-dependency `cargo build` still runs for the Rust half.
 mkdir -p "$TMPROOT/bin"
-FAKE_SKYC="$TMPROOT/bin/fake-skyc"
+FAKE_IPE="$TMPROOT/bin/fake-ipe"
 FAKE_GO="$TMPROOT/bin/fake-go"
 
-cat >"$FAKE_SKYC" <<'FAKESKYC'
+cat >"$FAKE_IPE" <<'FAKEIPE'
 #!/usr/bin/env bash
 set -euo pipefail
-# examples-sweep.sh invokes: fake-skyc build <target> --out <outdir>
+# examples-sweep.sh invokes: fake-ipe build <target> --out <outdir>
 shift || true
 target="${1:-src/Main.ipe}"; shift || true
 outdir="sky-out/rust"
@@ -123,7 +123,7 @@ while [ $# -gt 0 ]; do
 done
 marker="${TEST_MARKER:-UNSET}"
 for i in $(seq 1 40); do
-  printf 'SKYC-BUILD marker=%s pid=%s i=%02d target=%s\n' "$marker" "$$" "$i" "$target"
+  printf 'IPE-BUILD marker=%s pid=%s i=%02d target=%s\n' "$marker" "$$" "$i" "$target"
   sleep 0.02
 done
 mkdir -p "$outdir/src"
@@ -136,8 +136,8 @@ EOF
 cat >"$outdir/src/main.rs" <<EOF
 fn main() { println!("RUN marker=$marker"); }
 EOF
-FAKESKYC
-chmod +x "$FAKE_SKYC"
+FAKEIPE
+chmod +x "$FAKE_IPE"
 
 cat >"$FAKE_GO" <<'FAKEGO'
 #!/usr/bin/env bash
@@ -170,7 +170,7 @@ run_lane() {
   CARGO_HOME="$ORIG_HOME/.cargo" \
   RUSTUP_HOME="$ORIG_HOME/.rustup" \
   CARGO_TARGET_DIR="$target" \
-  SKYC_BIN="$FAKE_SKYC" \
+  IPE_BIN="$FAKE_IPE" \
   IPE_GO_BIN="$FAKE_GO" \
   RUST_EXAMPLES="$dir" \
   TEST_MARKER="$lane" \
@@ -227,8 +227,8 @@ must_contain_only_own_marker() {
 verify_lane() {
   local lane="$1" other="$2" pid="$3" other_dir_tag="$4"
 
-  local skycA cargoA gobuildA runA rustrunA gorun1 gorun2 difftxt
-  skycA="$(find_one "$HIST/$EXAMPLE_NAME.*-$pid.skyc.log")" || return 0
+  local ipeA cargoA gobuildA runA rustrunA gorun1 gorun2 difftxt
+  ipeA="$(find_one "$HIST/$EXAMPLE_NAME.*-$pid.ipe.log")" || return 0
   cargoA="$(find_one "$HIST/$EXAMPLE_NAME.*-$pid.cargo.log")" || return 0
   gobuildA="$(find_one "$HIST/$EXAMPLE_NAME.*-$pid.go.build.log")" || return 0
   runA="$(find_one "$HIST/$EXAMPLE_NAME.*-$pid.run.log")" || return 0
@@ -237,9 +237,9 @@ verify_lane() {
   gorun2="$(find_one "$HIST/$EXAMPLE_NAME.*-$pid.go.run.log.2")" || return 0
   difftxt="$(find_one "$HIST/$EXAMPLE_NAME.*-$pid.diff.txt")" || return 0
 
-  info "lane $lane ($pid): skyc=$(basename "$skycA") cargo=$(basename "$cargoA") go.build=$(basename "$gobuildA")"
+  info "lane $lane ($pid): ipe=$(basename "$ipeA") cargo=$(basename "$cargoA") go.build=$(basename "$gobuildA")"
 
-  must_contain_only_own_marker "$skycA" "$lane" "$other"
+  must_contain_only_own_marker "$ipeA" "$lane" "$other"
   must_contain_only_own_marker "$gobuildA" "$lane" "$other"
   must_contain_only_own_marker "$runA" "$lane" "$other"
   must_contain_only_own_marker "$rustrunA" "$lane" "$other"

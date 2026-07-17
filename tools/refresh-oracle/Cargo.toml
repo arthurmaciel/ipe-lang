@@ -10,7 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 oracle = { path = "../oracle" }
-skyc = { path = "../../src/ipe-cli" }
+ipe = { path = "../../src/ipe-cli" }
 
 [lints]
 workspace = true

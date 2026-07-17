@@ -11,7 +11,7 @@
 //! databases; this gate proves whether the numbering ever leaks into
 //! emitted bytes).
 //!
-//! Both sides drive [`skyc::compile_prepared`] — THE production pipeline —
+//! Both sides drive [`ipe::compile_prepared`] — THE production pipeline —
 //! so the gate can never pass against a divergent copy of the compiler.
 //!
 //! Coverage:
@@ -25,7 +25,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use skyc::project;
+use ipe::project;
 
 type UserSources = BTreeMap<Vec<String>, String>;
 type PreparedSources = BTreeMap<Vec<String>, (PathBuf, String)>;
@@ -76,9 +76,9 @@ type CompileOutcome = Result<ipe_backend::EmittedProject, String>;
 fn cold_compile(user: &UserSources) -> CompileOutcome {
     let (sources, injected) = prepared(user);
     let db = ipe_db::IpeDatabase::new();
-    let root = skyc::create_source_root(&db, &sources, &injected);
+    let root = ipe::create_source_root(&db, &sources, &injected);
     let config = ipe_db::BuildConfig::new(&db, ipe_backend_rust::DbDriver::Sqlite);
-    skyc::compile_prepared(
+    ipe::compile_prepared(
         &db,
         root,
         &sources,
@@ -128,14 +128,14 @@ impl WarmSession {
             ipe_db::sync_source_root(&mut self.db, root, &desired);
             root
         } else {
-            let root = skyc::create_source_root(&self.db, &sources, &injected);
+            let root = ipe::create_source_root(&self.db, &sources, &injected);
             self.root = Some(root);
             root
         };
         let config = *self.config.get_or_insert_with(|| {
             ipe_db::BuildConfig::new(&self.db, ipe_backend_rust::DbDriver::Sqlite)
         });
-        skyc::compile_prepared(
+        ipe::compile_prepared(
             &self.db,
             root,
             &sources,

@@ -47,10 +47,10 @@ fn str_column_var_scrutinee_builds() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("tuple_str_col_var_scrut_gate");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return; // runtime unavailable — skip silently rather than fail
     };
-    let built = skyc::build(&fixture_entry(), &out, &runtime);
+    let built = ipe::build(&fixture_entry(), &out, &runtime);
     assert!(
         built.is_ok(),
         "variable-scrutinee string-column tuple `case` must build (#182); got {:?}",
@@ -70,11 +70,11 @@ fn str_column_var_scrutinee_cargo_builds_and_runs() {
     let out = std::env::temp_dir().join("skyc_tuple_str_col_var_scrut_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
 
-    let built = skyc::build(&fixture_entry(), &out, &runtime);
+    let built = ipe::build(&fixture_entry(), &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for tuple_str_column_var_scrutinee: {:?}",

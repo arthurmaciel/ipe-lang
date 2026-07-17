@@ -52,13 +52,13 @@ fn fixture_entry(root: &Path) -> PathBuf {
 /// the runtime resolver is unavailable in this environment (mirrors the
 /// resolve-skip convention every other golden test in this suite uses) or
 /// when the build itself fails (the caller's `assert!` reports the diag).
-fn built_main_rs(root: &Path, out: &Path) -> (Result<(), skyc::CliError>, Option<String>) {
+fn built_main_rs(root: &Path, out: &Path) -> (Result<(), ipe::CliError>, Option<String>) {
     let entry = fixture_entry(root);
     let _ = std::fs::remove_dir_all(out);
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return (Ok(()), None);
     };
-    let built = skyc::build(&entry, out, &runtime);
+    let built = ipe::build(&entry, out, &runtime);
     let main_rs = if built.is_ok() {
         std::fs::read_to_string(out.join("src").join("main.rs")).ok()
     } else {
@@ -138,12 +138,12 @@ fn name_only_shape_emits_a_synthesised_record_struct() {
 fn http_request_name_only_fold_seal_builds_and_runs() {
     let root = repo_root();
     let out = std::env::temp_dir().join("skyc_http_request_name_only_fold_seal_e2e");
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
     let entry = fixture_entry(&root);
     let _ = std::fs::remove_dir_all(&out);
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "http_request_name_only_fold_seal: must be accepted, got: {built:?}"

@@ -30,7 +30,7 @@ fn repo_root() -> PathBuf {
 
 /// Run the skyc pipeline on `tests/golden/live_let_bound_routes/Main.ipe`.
 /// Returns `None` when the embedded runtime is unavailable (skip).
-fn run_skyc() -> Option<Result<(), skyc::CliError>> {
+fn run_skyc() -> Option<Result<(), ipe::CliError>> {
     let root = repo_root();
     let entry = root
         .join("tests")
@@ -40,10 +40,10 @@ fn run_skyc() -> Option<Result<(), skyc::CliError>> {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m7_live_let_bound_routes_emit");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return None;
     };
-    Some(skyc::build(&entry, &out, &runtime))
+    Some(ipe::build(&entry, &out, &runtime))
 }
 
 /// IPE-I0001 regression: a `Live.app` whose `routes` field references a

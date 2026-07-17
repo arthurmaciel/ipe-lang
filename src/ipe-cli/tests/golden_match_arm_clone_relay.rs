@@ -42,12 +42,12 @@ fn i222_match_arm_skyc_accepts_and_relays() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("i222_match_arm_skyc_out");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         eprintln!("SKIP match_arm_clone_relay: runtime not available");
         return;
     };
 
-    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for match_arm_clone_relay: {:?}",
@@ -79,11 +79,11 @@ fn i222_match_arm_cargo_builds_and_runs() {
     let out = std::env::temp_dir().join("skyc_i222_match_arm_clone_relay_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
 
-    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(built.is_ok(), "skyc build must succeed: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted("match_arm_clone_relay", &out);

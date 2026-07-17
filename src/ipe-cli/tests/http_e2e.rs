@@ -9,7 +9,7 @@
 //! Each test:
 //!
 //! 1. Writes a Sky program to a fresh temp dir.
-//! 2. Compiles it through `skyc::build` (full pipeline: parse → canon → types →
+//! 2. Compiles it through `ipe::build` (full pipeline: parse → canon → types →
 //!    lower → emit Rust).
 //! 3. Builds the emitted Cargo project with the shared target via
 //!    `oracle::build_rust_binary` — build-only, returns the binary path so the
@@ -70,10 +70,10 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxEr
     let out_dir = std::env::temp_dir().join(format!("http_e2e_{test_name}_emitted"));
     let _ = std::fs::remove_dir_all(&out_dir);
 
-    let runtime = skyc::resolve_runtime()
+    let runtime = ipe::resolve_runtime()
         .map_err(|e| -> BoxError { format!("{test_name}: runtime unavailable: {e}").into() })?;
 
-    skyc::build(&entry, &out_dir, &runtime)
+    ipe::build(&entry, &out_dir, &runtime)
         .map_err(|e| -> BoxError { format!("{test_name}: skyc build failed: {e}").into() })?;
 
     let exe = oracle::build_rust_binary(test_name, &out_dir)

@@ -55,7 +55,7 @@ fn compile_module_probe(slug: &str, main: &str) -> Option<PathBuf> {
     // counter makes every probe dir distinct. Declared at scope top (before any
     // statement) to satisfy clippy::items_after_statements.
     static PROBE_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return None; // runtime unavailable in this environment — caller skips
     };
     let uid = PROBE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -69,7 +69,7 @@ fn compile_module_probe(slug: &str, main: &str) -> Option<PathBuf> {
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("stdlib_seal_{slug}_{uid}_out"));
     let _ = fs::remove_dir_all(&out);
 
-    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     if let Err(e) = built {
         assert!(
             false_marker(),

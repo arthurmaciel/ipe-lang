@@ -63,13 +63,13 @@ fn concat_emitted_rs(dir: &Path, out: &mut String) {
 /// when the runtime resolver is unavailable in this environment (mirrors the
 /// resolve-skip convention every other golden test in this suite uses) or when
 /// the build itself fails (the caller's `assert!` reports the diag).
-fn built_app_rs(root: &Path, out: &Path) -> (Result<(), skyc::CliError>, Option<String>) {
+fn built_app_rs(root: &Path, out: &Path) -> (Result<(), ipe::CliError>, Option<String>) {
     let entry = fixture_entry(root);
     let _ = std::fs::remove_dir_all(out);
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return (Ok(()), None);
     };
-    let built = skyc::build(&entry, out, &runtime);
+    let built = ipe::build(&entry, out, &runtime);
     let emitted = if built.is_ok() {
         // Scan the emitted APP modules only (`src/ipe_mods/` + `src/main.rs`),
         // not the vendored `src/ipe_runtime/` — the runtime's own `email.rs`
@@ -134,12 +134,12 @@ fn email_literals_emit_runtime_structs_and_provider_variant() {
 fn email_send_nominal_fold_seal_builds() {
     let root = repo_root();
     let out = std::env::temp_dir().join("skyc_email_send_nominal_fold_seal_e2e");
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
     let entry = fixture_entry(&root);
     let _ = std::fs::remove_dir_all(&out);
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "email_send_nominal_fold_seal: must be accepted (skyc-0), got: {built:?}"

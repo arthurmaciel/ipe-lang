@@ -26,7 +26,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use skyc::project;
+use ipe::project;
 
 type UserSources = BTreeMap<Vec<String>, String>;
 type PreparedSources = BTreeMap<Vec<String>, (PathBuf, String)>;
@@ -66,9 +66,9 @@ type CompileOutcome = Result<ipe_backend::EmittedProject, String>;
 fn cold_compile(user: &UserSources) -> CompileOutcome {
     let (sources, injected) = prepared(user);
     let db = ipe_db::IpeDatabase::new();
-    let root = skyc::create_source_root(&db, &sources, &injected);
+    let root = ipe::create_source_root(&db, &sources, &injected);
     let config = ipe_db::BuildConfig::new(&db, ipe_backend_rust::DbDriver::Sqlite);
-    skyc::compile_prepared(
+    ipe::compile_prepared(
         &db,
         root,
         &sources,
@@ -115,7 +115,7 @@ impl WarmSession {
         match self.root {
             Some(root) => ipe_db::sync_source_root(&mut self.db, root, &desired),
             None => {
-                let root = skyc::create_source_root(&self.db, &sources, &injected);
+                let root = ipe::create_source_root(&self.db, &sources, &injected);
                 self.root = Some(root);
             }
         }
@@ -133,7 +133,7 @@ impl WarmSession {
         let config = self
             .config
             .expect("config must exist before demand() (set by sync_only via compile())");
-        skyc::compile_prepared(
+        ipe::compile_prepared(
             &self.db,
             root,
             &sources,

@@ -45,7 +45,7 @@ fn repo_root() -> PathBuf {
     std::fs::canonicalize(&joined).unwrap_or(joined)
 }
 
-/// Assert that `skyc::build(fixture)` SUCCEEDS (exit-0 from the lowerer).
+/// Assert that `ipe::build(fixture)` SUCCEEDS (exit-0 from the lowerer).
 /// Runs without `IPE_E2E` so this check is always fast.
 fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
     let root = repo_root();
@@ -57,10 +57,10 @@ fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(out_suffix);
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return; // runtime unavailable — skip silently
     };
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for fixture {fixture}: {:?}",
@@ -99,11 +99,11 @@ fn a1_ctor_map_bare() {
     let out = std::env::temp_dir().join("skyc_i147_ctor_map_bare_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for ctor_map_bare: {:?}",
@@ -146,11 +146,11 @@ fn a2_ctor_partial_multiarg_with_clone() {
     let out = std::env::temp_dir().join("skyc_i147_ctor_partial_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for ctor_partial: {:?}",
@@ -193,11 +193,11 @@ fn a3_ctor_stored_in_record_field() {
     let out = std::env::temp_dir().join("skyc_i147_ctor_field_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for ctor_field: {:?}",

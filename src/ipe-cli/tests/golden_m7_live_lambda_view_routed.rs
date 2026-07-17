@@ -56,7 +56,7 @@ fn out_dir() -> PathBuf {
 }
 
 /// Compile the fixture; `None` (skip) when the runtime cannot be resolved.
-fn compile() -> Option<Result<(), skyc::CliError>> {
+fn compile() -> Option<Result<(), ipe::CliError>> {
     let ipe_dir = std::env::temp_dir().join("m7_live_lambda_view_routed_sky");
     let _ = std::fs::remove_dir_all(&ipe_dir);
     std::fs::create_dir_all(&ipe_dir).ok()?;
@@ -64,10 +64,10 @@ fn compile() -> Option<Result<(), skyc::CliError>> {
     std::fs::write(&entry, LIVE_LAMBDA_VIEW_ROUTED).ok()?;
     let out = out_dir();
     let _ = std::fs::remove_dir_all(&out);
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return None;
     };
-    Some(skyc::build(&entry, &out, &runtime))
+    Some(ipe::build(&entry, &out, &runtime))
 }
 
 /// The lambda-view routed app must be skyc-0 AND emit `live_app_routed` with

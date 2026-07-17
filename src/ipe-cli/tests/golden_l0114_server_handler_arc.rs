@@ -53,14 +53,14 @@ fn server_handler_lambda_boxes_with_arc_not_box() {
     let out = std::env::temp_dir().join("skyc_l0114_server_handler_arc");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         // In an environment where the runtime dir can't be resolved the emit
         // step can't run; skip rather than false-fail (mirrors the byte
         // goldens' resolve dependency).
         return;
     };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for the server-handler fixture: {:?}",
@@ -110,11 +110,11 @@ fn ws_on_error_callback_boxes_with_arc_not_box() {
     let out = std::env::temp_dir().join("skyc_l0114_ws_onerror_arc");
     let _ = std::fs::remove_dir_all(&out);
 
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
 
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for the WS onError fixture: {:?}",

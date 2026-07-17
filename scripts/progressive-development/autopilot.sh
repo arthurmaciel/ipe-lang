@@ -30,7 +30,7 @@
 #     LLM is for); the SCRIPT runs the build/test/SEAL and branches on `$?` (the
 #     part that must not be delegated). The gate below (`&&`-chained nextest +
 #     --features full + doctest + clippy + fuzz, revert-on-fail) is that oracle.
-#   * THE SEAL is the gate oracle: skyc-exit-0 MUST imply the emitted crate
+#   * THE SEAL is the gate oracle: ipe-exit-0 MUST imply the emitted crate
 #     cargo-builds. A "fix" that only an agent's report closes but not for real
 #     fails the gate (nextest + fuzz), is reverted, and re-queued PENDING — the
 #     loop self-corrects, deterministically, off the ledger not a re-sweep.
@@ -95,10 +95,10 @@ GATE_TARGET_MAX_GB="${PROGDEV_GATE_TARGET_MAX_GB:-30}"   # gate-target hard size
 # The loop's ENTIRE cargo-target footprint — everything else under ~/.cache is
 # reclaimable. Bounds disk to these two + the shared dev target.
 #
-# TARGET-DIR RULE (2026-07-14, empirically proven — /tmp/skyc-share-exp):
+# TARGET-DIR RULE (2026-07-14, empirically proven — /tmp/ipe-share-exp):
 #   Two build PHASES with opposite sharing rules, and conflating them is the
 #   dominant wasted compute in the loop:
-#   1. COMPILER-crate build (sky_lower/sky_backend/skyc — SOURCE DIFFERS per lane):
+#   1. COMPILER-crate build (sky_lower/sky_backend/ipe — SOURCE DIFFERS per lane):
 #      MUST use an ISOLATED CARGO_TARGET_DIR (LANE_TARGET_BASE / GATE_TARGET). Two
 #      lanes building different source of the SAME crate to one target = the
 #      Task-13 stale-link clobber (the lock serializes the builds but the last
@@ -198,7 +198,7 @@ for arg in "$@"; do case "$arg" in
 esac; done
 
 # mem-guard.sh (memory kill-switch) is REQUIRED, so autopilot DISPATCHES it when
-# it isn't already up — rather than aborting on the caller. A runaway skyc /
+# it isn't already up — rather than aborting on the caller. A runaway ipe /
 # cargo / rustc can pressure the host into an OOM; mem-guard is the backstop.
 # It's a host-protection daemon (other tooling relies on it too), so we start it
 # and LEAVE it running on exit — unlike watch.sh, which is autopilot-scoped.
@@ -216,7 +216,7 @@ ensure_mem_guard() {
 
 # Agent dispatch. EVERY autopilot agent (design/impl/audit/review) is
 # handed the operating contract via --append-system-prompt-file, so all of them
-# obey the 6 principles + 2 rules + the seal (skyc exit-0 ⟹ cargo exit-0) — the
+# obey the 6 principles + 2 rules + the seal (ipe exit-0 ⟹ cargo exit-0) — the
 # contract is not optional for any tier.
 agent() { # <model> <prompt> ; prints output
     local model="$1" prompt="$2"
@@ -226,7 +226,7 @@ agent() { # <model> <prompt> ; prints output
     # PATH shim instead (git grep still works — it doesn't exec the grep binary).
     PATH="$SHIMDIR:$PATH" claude --model "$model" --safe-mode --permission-mode auto \
         --append-system-prompt-file "$CONTEXT" "${stream[@]}" \
-        --allowedTools 'Bash(cargo *)' 'Bash(git *)' 'Bash(skyc *)' 'Bash(rg *)' 'Bash(skydex *)' 'Bash(ipe-index *)' \
+        --allowedTools 'Bash(cargo *)' 'Bash(git *)' 'Bash(ipe *)' 'Bash(rg *)' 'Bash(skydex *)' 'Bash(ipe-index *)' \
                        'Bash(cat *)' 'Bash(ls *)' 'Bash(sed *)' 'Bash(diff *)' \
                        'Bash(touch *)' 'Bash(mkdir *)' Edit Write Read Grep Glob \
         -p "$prompt" 2>&1
@@ -636,7 +636,7 @@ lane_author() {
     # IMPL — in the lane worktree, own cargo target
     phase impl opus
     ( cd "$gwt"; CARGO_TARGET_DIR="$tgt" \
-      agent "$AUTHOR_MODEL" "You are the IMPLEMENTER. READ the DESIGN plan at $dfile FIRST, then follow it EXACTLY — do NOT redesign or deviate from it. Obey the operating contract (6 principles + 2 rules + the seal). Item: $gdesc .$(resume_hint "$gdesc") Boundary: the Rust-port crates + runtime; ../sky is READ-ONLY. Implement the fix + the regression test the design names. SELF-CHECK (do NOT run the full workspace test suite — the integration gate runs that once): (1) 'cargo clippy --workspace --all-targets -- -D warnings' is clean; (2) 'cargo build -p skyc', then rebuild the failing example and confirm its ORIGINAL diagnostic is GONE; (3) if your fix LEGITIMATELY changes the emitted Rust for an EXISTING golden (a tests/golden/** byte-identical assertion now fails BECAUSE your codegen change is correct — not a regression), REGENERATE that golden's oracle with 'cargo run -p refresh-oracle -- <golden_name>' and include the refreshed files in the commit — NEVER hand-edit oracle.meta / expected_go.txt, and refresh ONLY the goldens your change explains (never blanket-refresh; a stale un-refreshed golden red-gates, a wrongly-refreshed one hides a regression the reviewer will REJECT). Iterate until all pass (cap ~3 tries). Then 'git add -A && git commit'. Final line: 'IMPL: DONE' or 'IMPL: STUCK <why>'." ) >"$glog" 2>&1
+      agent "$AUTHOR_MODEL" "You are the IMPLEMENTER. READ the DESIGN plan at $dfile FIRST, then follow it EXACTLY — do NOT redesign or deviate from it. Obey the operating contract (6 principles + 2 rules + the seal). Item: $gdesc .$(resume_hint "$gdesc") Boundary: the Rust-port crates + runtime; ../sky is READ-ONLY. Implement the fix + the regression test the design names. SELF-CHECK (do NOT run the full workspace test suite — the integration gate runs that once): (1) 'cargo clippy --workspace --all-targets -- -D warnings' is clean; (2) 'cargo build -p ipe', then rebuild the failing example and confirm its ORIGINAL diagnostic is GONE; (3) if your fix LEGITIMATELY changes the emitted Rust for an EXISTING golden (a tests/golden/** byte-identical assertion now fails BECAUSE your codegen change is correct — not a regression), REGENERATE that golden's oracle with 'cargo run -p refresh-oracle -- <golden_name>' and include the refreshed files in the commit — NEVER hand-edit oracle.meta / expected_go.txt, and refresh ONLY the goldens your change explains (never blanket-refresh; a stale un-refreshed golden red-gates, a wrongly-refreshed one hides a regression the reviewer will REJECT). Iterate until all pass (cap ~3 tries). Then 'git add -A && git commit'. Final line: 'IMPL: DONE' or 'IMPL: STUCK <why>'." ) >"$glog" 2>&1
     ahead="$(git rev-list --count "$BASE..$gbr" 2>/dev/null || echo 0)"
     if [ "$ahead" -eq 0 ]; then
         printf 'NOCOMMIT impl no-commit. notes: %s\n' "$(tail -10 "$glog" 2>/dev/null | tr '\n' ' ' | cut -c1-300)" > "$res"; return 0
@@ -645,7 +645,7 @@ lane_author() {
     # REVIEW — adversarial, in the lane worktree, own cargo target
     phase review opus
     review="$( ( cd "$gwt"; CARGO_TARGET_DIR="$tgt" \
-      agent "$REVIEW_MODEL" "You are an ADVERSARIAL reviewer of a $class change on branch $gbr (diff: git diff $BASE..$gbr). REFUTE it — $(reviewer_angle "$class"). Read the diff + the added tests, THEN VERIFY WITH YOUR OWN HANDS: build skyc from THIS branch and cargo-build your OWN probe programs — confirm skyc-exit-0 ⇒ cargo-exit-0 (THE SEAL) yourself. The impl's self-report is NOT evidence (a fix can report green while a buried guard disabled it, or while it emits skyc-0-then-cargo-fail on a shape the impl never tested). Cache-hits on unchanged code are fine — recompiling identical source is zero-signal; integrity comes from RUNNING the committed source + your probes. If the diff REFRESHES any golden (tests/golden/**, oracle.meta / expected_go.txt), that refresh is AUTHORISED only when it contains ONLY the emit deltas THIS codegen change explains — inspect the refreshed bytes yourself and REJECT if a golden refresh hides an unrelated change, silences a real regression, or looks blanket-regenerated. If you find ANY unsoundness / behaviour change vs the ../sky reference / disguised hack / skyc-0-then-cargo-fail / illegitimate golden refresh, print 'REVIEW: REJECT <why + the exact repro>'. Only if you cannot break it after genuine effort, print 'REVIEW: ACCEPT'. Default to REJECT when uncertain." ) | tee "$rlog")"
+      agent "$REVIEW_MODEL" "You are an ADVERSARIAL reviewer of a $class change on branch $gbr (diff: git diff $BASE..$gbr). REFUTE it — $(reviewer_angle "$class"). Read the diff + the added tests, THEN VERIFY WITH YOUR OWN HANDS: build ipe from THIS branch and cargo-build your OWN probe programs — confirm ipe-exit-0 ⇒ cargo-exit-0 (THE SEAL) yourself. The impl's self-report is NOT evidence (a fix can report green while a buried guard disabled it, or while it emits ipe-0-then-cargo-fail on a shape the impl never tested). Cache-hits on unchanged code are fine — recompiling identical source is zero-signal; integrity comes from RUNNING the committed source + your probes. If the diff REFRESHES any golden (tests/golden/**, oracle.meta / expected_go.txt), that refresh is AUTHORISED only when it contains ONLY the emit deltas THIS codegen change explains — inspect the refreshed bytes yourself and REJECT if a golden refresh hides an unrelated change, silences a real regression, or looks blanket-regenerated. If you find ANY unsoundness / behaviour change vs the ../sky reference / disguised hack / ipe-0-then-cargo-fail / illegitimate golden refresh, print 'REVIEW: REJECT <why + the exact repro>'. Only if you cannot break it after genuine effort, print 'REVIEW: ACCEPT'. Default to REJECT when uncertain." ) | tee "$rlog")"
     if ! printf '%s' "$review" | rg -q 'REVIEW: ACCEPT'; then
         printf 'REJECT review REJECT: %s\n' "$(reason_of "$review")" > "$res"; return 0
     fi
@@ -657,7 +657,7 @@ lane_author() {
 # or revert. A merge CONFLICT (this lane was cut from the pre-cycle base and an
 # earlier lane advanced HEAD into the same files) → abort + requeue, no attempt burned.
 # lane_gate <i> — per-lane CHEAP gate (fast): merge the lane into integration, then
-# build skyc + run ONLY the touched crates' tests + clippy. A cheap-green item lands
+# build ipe + run ONLY the touched crates' tests + clippy. A cheap-green item lands
 # on integration but stays CLAIMED and is added to $BATCH — the authoritative full
 # workspace gate (+ E2E + fuzz) runs every $FULL_GATE_EVERY cycles via certify_batch(),
 # which is the ONLY thing that closes items and advances master. So master never sees
@@ -676,17 +676,17 @@ lane_gate() {
         log "lane [$class] · merge race with a landed lane — requeued (no penalty): $gdesc"
         bk unclaim "$gid"; return 0
     fi
-    # scope the cheap gate to the crates this change touched (+ always check skyc).
+    # scope the cheap gate to the crates this change touched (+ always check ipe).
     touched="$(git -C "$GATE_WT" diff --name-only "$gpre..HEAD" 2>/dev/null)"
     pflags="$(printf '%s\n' "$touched" | sed -nE 's#^crates/([^/]+)/.*#-p \1#p; s#^runtime/.*#-p sky-runtime-rust#p; s#^tools/([^/]+)/.*#-p \1#p' | sort -u | tr '\n' ' ')"
-    [ -z "$pflags" ] && pflags="-p skyc"
+    [ -z "$pflags" ] && pflags="-p ipe"
     if ( cd "$GATE_WT"; touch src/ipe-cli/tests/*.rs 2>/dev/null; \
-         RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 1200 cargo +nightly check -p skyc >/tmp/autopilot-gate.log 2>&1 \
+         RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 1200 cargo +nightly check -p ipe >/tmp/autopilot-gate.log 2>&1 \
          && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 1500 cargo +nightly nextest run $pflags >>/tmp/autopilot-gate.log 2>&1 \
          && RUSTFLAGS="$GRF" CARGO_TARGET_DIR="$GATE_TARGET" timeout 900 cargo +nightly clippy $pflags --no-deps -- -D warnings >>/tmp/autopilot-gate.log 2>&1 ); then
         # NB: no --all-targets — the authoritative full gate (full_gate) lints
         # lib+bins only (clippy --workspace, no --all-targets), so a stricter cheap
-        # gate would false-RED skyc-touching lanes on pre-existing test-file lint
+        # gate would false-RED ipe-touching lanes on pre-existing test-file lint
         # debt the full gate never checks (this false-escalated #194/#197). Adopting
         # --all-targets in BOTH gates after the test-lint sweep is #203 (DEVELOPMENT §3b).
         log "lane [$class] · landed on integration (cheap-green; pending full-gate cert)"; mark LANDED "$class" "$gdesc"

@@ -41,7 +41,7 @@ fn write_project(dir: &std::path::Path, main: &str) -> bool {
 /// never accept-then-cargo-fail.
 #[test]
 fn unknown_kernel_alias_is_rejected_at_compile_time() {
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return; // runtime unavailable in this environment — skip silently
     };
 
@@ -62,7 +62,7 @@ fn unknown_kernel_alias_is_rejected_at_compile_time() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m196_unknown_kernel_alias_out");
     let _ = fs::remove_dir_all(&out);
 
-    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     let Err(err) = built else {
         assert!(
             false_marker(),
@@ -71,7 +71,7 @@ fn unknown_kernel_alias_is_rejected_at_compile_time() {
         );
         return;
     };
-    let skyc::CliError::Pipeline { diag, .. } = &err else {
+    let ipe::CliError::Pipeline { diag, .. } = &err else {
         assert!(false_marker(), "expected a Pipeline diagnostic, got: {err}");
         return;
     };
@@ -100,7 +100,7 @@ fn unknown_kernel_alias_is_rejected_at_compile_time() {
 /// no `(module, function)` pair, so it fails closed the same way.
 #[test]
 fn malformed_kernel_alias_string_is_rejected() {
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
 
@@ -121,11 +121,11 @@ fn malformed_kernel_alias_string_is_rejected() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m196_malformed_kernel_alias_out");
     let _ = fs::remove_dir_all(&out);
 
-    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         matches!(
             built,
-            Err(skyc::CliError::Pipeline {
+            Err(ipe::CliError::Pipeline {
                 diag: ipe_diagnostics::Diagnostic::Name {
                     msg: ipe_diagnostics::NameError::UnknownKernelAlias { .. },
                     ..
@@ -142,7 +142,7 @@ fn malformed_kernel_alias_string_is_rejected() {
 /// emitted Rust `cargo build`s — skyc exit 0 AND cargo exit 0.
 #[test]
 fn registered_kernel_alias_resolves_and_builds() {
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return;
     };
 
@@ -163,7 +163,7 @@ fn registered_kernel_alias_resolves_and_builds() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("m196_registered_kernel_alias_out");
     let _ = fs::remove_dir_all(&out);
 
-    let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
+    let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "an alias to the registered `String_toUpper` kernel must resolve: {:?}",

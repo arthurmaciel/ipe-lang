@@ -4,7 +4,7 @@
 # Ported from ../sky/scripts/fuzz-well-typed.sh (Haskell backend, Go target).
 # KEY ADAPTATIONS — Rust/Ipê backend:
 #
-#   BUILD: skyc build src/Main.ipe --out sky-out/rust
+#   BUILD: ipe build src/Main.ipe --out sky-out/rust
 #          cargo build --manifest-path sky-out/rust/Cargo.toml
 #          (binary: $CARGO_TARGET_DIR/debug/sky-app)
 #
@@ -25,7 +25,7 @@
 #   DivisionByZero classifier, exits 101. Demonstrated in --tp-demo mode.
 #
 # Property:
-#   A random WELL-TYPED Sky program MUST (a) build successfully with skyc+cargo
+#   A random WELL-TYPED Sky program MUST (a) build successfully with ipe+cargo
 #   (it is well-typed by construction; a build failure IS a soundness bug) AND
 #   (b) run without panicking and exit 0.  Any deviation is a soundness violation.
 #
@@ -38,7 +38,7 @@
 #                        composite: alternating (default)
 #   --keep             Keep tempdir on success (default: cleanup on success)
 #   --quiet            Suppress per-iter progress; print summary only
-#   --build-timeout N  skyc+cargo build timeout in seconds (default 300)
+#   --build-timeout N  ipe+cargo build timeout in seconds (default 300)
 #   --run-timeout N    binary run timeout in seconds (default 15)
 #   --tp-demo          Run the true-positive demo then exit (verifies detector)
 #   IPE_FUZZ_FULL=1    Shorthand for --iters 10000 (CI full-gate override)
@@ -51,7 +51,7 @@
 
 set -uo pipefail
 
-# ── Source the shared env (REPO, SKYC_BIN, CARGO_TARGET_DIR, IPE_RUNTIME_DIR) ──
+# ── Source the shared env (REPO, IPE_BIN, CARGO_TARGET_DIR, IPE_RUNTIME_DIR) ──
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/env.sh"
 
@@ -62,7 +62,7 @@ SEED=""
 MODE="composite"
 KEEP=0
 QUIET=0
-BUILD_TIMEOUT=300   # skyc + cargo combined; cargo alone can take ~5 min cold
+BUILD_TIMEOUT=300   # ipe + cargo combined; cargo alone can take ~5 min cold
 RUN_TIMEOUT=15
 TP_DEMO=0
 
@@ -85,9 +85,9 @@ done
 [[ -z "$SEED" ]] && SEED=$RANDOM
 
 # ── Preflight checks ─────────────────────────────────────────────────────────
-if [[ ! -x "$SKYC_BIN" ]]; then
-    echo "ERROR: skyc binary not found at '$SKYC_BIN'" >&2
-    echo "  Build: cargo build -p skyc  (or set SKYC_BIN=...)" >&2
+if [[ ! -x "$IPE_BIN" ]]; then
+    echo "ERROR: ipe binary not found at '$IPE_BIN'" >&2
+    echo "  Build: cargo build -p ipe  (or set IPE_BIN=...)" >&2
     exit 2
 fi
 
@@ -669,7 +669,7 @@ EOF
 # Total templates: 23 (6 original + 13 single-file + 4 multi-module).
 # kind = seed-derived mod 23. Kinds 19-22 write a Lib.ipe sibling (the
 # multi-file infrastructure lives inside render_template: dst is always
-# src/Main.ipe, so Lib.ipe lands next to it and skyc's module resolution
+# src/Main.ipe, so Lib.ipe lands next to it and ipe's module resolution
 # picks it up from the same src/ directory).
 render_template() {
     local seed=$1 dst=$2
@@ -811,16 +811,16 @@ run_iter() {
     local runlog="$iterdir/run.log"
     : >"$buildlog" >"$runlog"
 
-    # ── Step 1: skyc build → emitted Rust project ──────────────────────────
-    local skyc_rc=0
+    # ── Step 1: ipe build → emitted Rust project ──────────────────────────
+    local ipe_rc=0
     if ! ( cd "$iterdir" && timeout "$BUILD_TIMEOUT" \
-           "$SKYC_BIN" build src/Main.ipe --out sky-out/rust >"$buildlog" 2>&1 ); then
-        skyc_rc=$?
-        echo "SKYC-BUILD-FAILED rc=$skyc_rc kind=$kind"
+           "$IPE_BIN" build src/Main.ipe --out sky-out/rust >"$buildlog" 2>&1 ); then
+        ipe_rc=$?
+        echo "IPE-BUILD-FAILED rc=$ipe_rc kind=$kind"
         return 1
     fi
     if [[ ! -f "$iterdir/sky-out/rust/Cargo.toml" ]]; then
-        echo "SKYC-BUILD-FAILED no-cargo-toml kind=$kind"
+        echo "IPE-BUILD-FAILED no-cargo-toml kind=$kind"
         return 1
     fi
 
@@ -922,9 +922,9 @@ EOF
     local runlog="$tp_dir/run.log"
     : >"$buildlog" >"$runlog"
 
-    echo "[1/3] skyc build..."
+    echo "[1/3] ipe build..."
     if ! ( cd "$tp_dir" && timeout "$BUILD_TIMEOUT" \
-           "$SKYC_BIN" build src/Main.ipe --out sky-out/rust >"$buildlog" 2>&1 ); then
+           "$IPE_BIN" build src/Main.ipe --out sky-out/rust >"$buildlog" 2>&1 ); then
         echo "RESULT: FAIL — program did not build (compiler bug)"
         echo "  Build log: $(cat "$buildlog")"
         rm -rf "$tp_dir"; return 1
@@ -1015,7 +1015,7 @@ fi
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
 echo "sky-fuzz: mode=$MODE iters=$ITERS start_seed=$SEED"
-echo "sky-fuzz: skyc=$SKYC_BIN"
+echo "sky-fuzz: ipe=$IPE_BIN"
 echo "sky-fuzz: cargo_target=$CARGO_TARGET_DIR"
 echo "sky-fuzz: tempdir=$FUZZ_DIR"
 echo "sky-fuzz: failures_dir=$FAILURES_DIR"

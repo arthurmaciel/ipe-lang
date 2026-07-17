@@ -85,17 +85,17 @@ fn ok_out_dir() -> PathBuf {
 
 /// Compile a fixture into its own out dir; `None` (skip) when the runtime
 /// cannot be resolved.
-fn compile(fixture: &str, tag: &str, out: &PathBuf) -> Option<Result<(), skyc::CliError>> {
+fn compile(fixture: &str, tag: &str, out: &PathBuf) -> Option<Result<(), ipe::CliError>> {
     let ipe_dir = std::env::temp_dir().join(format!("i180_{tag}_sky"));
     let _ = std::fs::remove_dir_all(&ipe_dir);
     std::fs::create_dir_all(&ipe_dir).ok()?;
     let entry = ipe_dir.join("Main.ipe");
     std::fs::write(&entry, fixture).ok()?;
     let _ = std::fs::remove_dir_all(out);
-    let Ok(runtime) = skyc::resolve_runtime() else {
+    let Ok(runtime) = ipe::resolve_runtime() else {
         return None;
     };
-    Some(skyc::build(&entry, out, &runtime))
+    Some(ipe::build(&entry, out, &runtime))
 }
 
 /// `init : LiveReq -> …` reading `req.path` must be skyc-0 and emit

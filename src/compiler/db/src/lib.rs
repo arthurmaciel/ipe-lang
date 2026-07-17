@@ -81,7 +81,7 @@ impl SharedInterner {
     /// The underlying `Arc<Mutex<Interner>>` handle.
     ///
     /// Exists alongside [`Self::lock`] for callers that need the Arc ITSELF
-    /// rather than a guard — specifically `skyc::cache`'s on-disk lowered-IR
+    /// rather than a guard — specifically `ipe::cache`'s on-disk lowered-IR
     /// tier, which installs this database's interner as
     /// the ambient `serde` context for `ipe_intern::Symbol`
     /// (`ipe_intern::SerdeInternerGuard::install`) around a
@@ -427,7 +427,7 @@ enum Color {
 /// imports.
 ///
 /// This is the SINGLE topo-sort algorithm: the driver's
-/// `skyc::project::topological_order` delegates here (mapping its
+/// `ipe::project::topological_order` delegates here (mapping its
 /// `DiscoveredModule`s to paths and back), and the memoized [`topo_order`]
 /// query calls it directly — one code path, so the two orders can never
 /// drift.

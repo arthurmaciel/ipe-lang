@@ -148,10 +148,10 @@ fn run_go_oracle(oracle_bin: &str, main_sky: &Path, scratch: &Path) -> Result<Ru
 /// Build the golden with skyc and run it, returning its stdout + exit code.
 /// Used only on the Go-divergence branch, to source the correct expected value.
 fn run_skyc(name: &str, main_sky: &Path, scratch: &Path) -> Result<RunResult, String> {
-    let runtime = skyc::resolve_runtime().map_err(|e| format!("runtime resolve failed: {e:?}"))?;
+    let runtime = ipe::resolve_runtime().map_err(|e| format!("runtime resolve failed: {e:?}"))?;
     let emitted = scratch.join("skyc-emit");
     let _ = std::fs::remove_dir_all(&emitted);
-    skyc::build(main_sky, &emitted, &runtime).map_err(|e| format!("skyc build failed: {e:?}"))?;
+    ipe::build(main_sky, &emitted, &runtime).map_err(|e| format!("skyc build failed: {e:?}"))?;
     build_and_run_rust(name, &emitted)
 }
 

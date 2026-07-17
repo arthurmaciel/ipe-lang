@@ -35,12 +35,12 @@ fn ui_input_and_describe_skyc_and_cargo_zero() {
     let out = std::env::temp_dir().join("skyc_m7_stdui_input_e2e");
     let _ = std::fs::remove_dir_all(&out);
 
-    let runtime = skyc::resolve_runtime();
+    let runtime = ipe::resolve_runtime();
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
     // skyc-0: compiler must succeed.
-    let built = skyc::build(&entry, &out, &runtime);
+    let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
         "skyc build must succeed for stdui_input: {:?}",
