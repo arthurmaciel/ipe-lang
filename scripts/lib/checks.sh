@@ -17,7 +17,7 @@
 # idempotent and side-effect-light at source time (exports + a browser-stack probe).
 
 # ── Shared exercise env ─────────────────────────────────────────────────────
-# Server/live examples that use Std.Auth refuse to boot without a >=32-byte
+# Server/live examples that use Ipe.Auth refuse to boot without a >=32-byte
 # secret (CORRECT production behaviour). Provide a test secret so those apps boot;
 # honoured only if the caller hasn't set their own.
 export IPE_AUTH_TOKEN_SECRET="${IPE_AUTH_TOKEN_SECRET:-sky-run-sweep-test-secret-0123456789-abcdef}"
@@ -279,7 +279,7 @@ _boot_server_at() {
 }
 
 # ── _norm_body_for_equiv <body> <logfile>: normalize HTML before body-compare ──
-# Sky.Live pages carry id="sky-root"; the normaliser collapses the known
+# Ipe.Live pages carry id="sky-root"; the normaliser collapses the known
 # implementation-freedom surface (sky-id format, attr order, event encoding,
 # style delivery child vs data-* attributes) so the diff shows only
 # behaviourally-meaningful divergences. For non-HTML responses (JSON, plain

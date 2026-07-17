@@ -1,4 +1,4 @@
-# Compiled-source stdlib modules (Std.Css, Sky.Core.Error, …)
+# Compiled-source stdlib modules (Ipe.Css, Ipe.Error, …)
 
 Status: accepted design. Reconciles three independent fresh designs with the
 upstream Sky v0.17.2 mechanism, under the strict principle order
@@ -6,8 +6,8 @@ upstream Sky v0.17.2 mechanism, under the strict principle order
 completeness · (6) readability** and the two verbatim rules **PARSE, DON'T
 VALIDATE** and **MAKE INVALID STATES UNREPRESENTABLE**.
 
-This is the enabler for port tasks #98 (pure-Sky-source stdlib north star), #47
-(`Std.Css`), and #85 (rich `Sky.Core.Error` ADT).
+This is the enabler for port tasks #98 (pure-Ipê-source stdlib north star), #47
+(`Ipe.Css`), and #85 (rich `Ipe.Error` ADT).
 
 ---
 
@@ -29,28 +29,28 @@ mechanisms that make it unrepresentable to violate:
    canonicalisation, before inference can produce a surprising deep-stdlib
    unification failure.
 3. **Security-kernel scheme exhaustiveness** (§4) — every leaf security kernel
-   the pure-Sky Css calls is schemed in `sky_kernels`, so a reference cannot
+   the pure-Ipê Css calls is schemed in `sky_kernels`, so a reference cannot
    pass canon and then fail at `cargo`.
 
 ---
 
 ## 1. Current state (verified against HEAD)
 
-- `crates/skyc/src/stdlib.rs` embeds `sky-stdlib/**` via `include_str!` into
+- `crates/ipe/src/stdlib.rs` embeds `sky-stdlib/**` via `include_str!` into
   `MODULES: &[StdModule]`. The `every_embedded_module_parses` test proves each
   embedded module parses with the real front end — but **nothing is compiled
-  from source today**. The embedded `Sky.Core.*` files are a *parse-test
+  from source today**. The embedded `Ipe.*` files are a *parse-test
   fixture / shadow copy*; the real implementations are Rust kernels resolved by
   qualifier. `List.map` works because its ctors are prelude builtins and every
   combinator is a kernel.
 - `crates/sky_canon/src/resolve.rs` (~line 244) short-circuits **every**
-  import whose first path segment is `Sky` or `Std`:
+  import whose first path segment is `Ipê` or `Std`:
   ```rust
   if dep_path.first().copied().is_some_and(|s| s == sky_sym || s == std_sym) {
       continue;   // qualifiers pre-installed by Env::initial
   }
   ```
-  So a `.ipe` source under the `Std.`/`Sky.` namespace can never be injected —
+  So a `.ipe` source under the `Ipe.`/`Ipê.` namespace can never be injected —
   this is the exact line that must be relaxed.
 - The port already ships a **Design-2 half-build** of CSS:
   `runtime/src/sky_runtime/css.rs` defines runtime `CssProp`/`CssRule`
@@ -60,7 +60,7 @@ mechanisms that make it unrepresentable to violate:
   per-declaration gating: rejects `@import`, `expression(...)`,
   `url(javascript:…)`, comment digraphs, tag-breakout) plus a
   fixpoint + case-insensitive `strip_style_close`.
-- No `crates/skyc/stdlib/Std/Css.ipe` exists yet. `Css`/`Error` are **not** in
+- No `crates/ipe/stdlib/Std/Css.ipe` exists yet. `Css`/`Error` are **not** in
   `env.rs`'s `STDLIB_MODULE_QUALIFIERS`.
 
 The upstream Sky v0.17.2 mechanism (for reference): TH-embed `sky-stdlib/`,
@@ -69,12 +69,12 @@ the **last** discovery root, and resolve imports by *file presence* — present 
 source module, absent ⇒ kernel. Type-checking is per-module (topo order, a
 two-pass fixpoint solve), **annotation-driven** generalisation — **not**
 whole-program let-generalisation. `Std/Css.ipe` upstream is 1510 lines of 100%
-pure Sky, zero `Ffi.kernel`.
+pure Ipê, zero `Ffi.kernel`.
 
 Two upstream choices we deliberately **do not** copy: (a) stdlib root placed
 *last* so a stray user `Std/Auth.ipe` silently shadows the audited
 implementation — a supply-chain hazard we reject (§2); (b) the general
-`Std.Html` `<style>` render path emits raw bodies verbatim with **no** breakout
+`Ipe.Html` `<style>` render path emits raw bodies verbatim with **no** breakout
 floor — a real gap we close at the render sink (§4).
 
 ---
@@ -89,8 +89,8 @@ from `env.rs`'s `STDLIB_MODULE_QUALIFIERS` (kernel qualifiers):
 ```rust
 pub struct CompiledStdModule { pub dotted: &'static str, pub source: &'static str }
 pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
-    CompiledStdModule { dotted: "Std.Css",        source: include_str!("../stdlib/Std/Css.ipe") },
-    CompiledStdModule { dotted: "Sky.Core.Error", source: include_str!("../stdlib/Sky/Core/Error.ipe") },
+    CompiledStdModule { dotted: "Ipe.Css",        source: include_str!("../stdlib/Std/Css.ipe") },
+    CompiledStdModule { dotted: "Ipe.Error", source: include_str!("../stdlib/Ipê/Core/Error.ipe") },
 ];
 pub fn compiled_std_source(path: &[Symbol], interner: &Interner) -> Option<&'static str> { … }
 pub fn is_compiled_source(path: &[Symbol], interner: &Interner) -> bool { … }
@@ -108,7 +108,7 @@ to parse with the same front end.
 
 We do **not** blindly add all embedded stdlib as roots (upstream's approach);
 we inject **only what is transitively imported**, so an unused-Css build pays
-nothing. In `crates/skyc/src/project.rs`:
+nothing. In `crates/ipe/src/project.rs`:
 
 ```rust
 pub fn inject_compiled_std_closure(
@@ -125,7 +125,7 @@ pub fn inject_compiled_std_closure(
     //        into `sources` AND push DiscoveredModule { path, module_path: P }.
     // 3. Scan the embedded source's OWN imports; enqueue any that are
     //    themselves compiled-Std (Std->Std to fixpoint). Kernel imports inside
-    //    the embedded source (Sky.Core.String, Std.Db) are NOT enqueued — they
+    //    the embedded source (Ipe.String, Ipe.Db) are NOT enqueued — they
     //    stay kernel-resolved by qualifier.
 }
 ```
@@ -135,15 +135,15 @@ The injected nodes now sit in `discovered` + `sources`
 
 ### 2.3 Graph wiring
 
-In `crates/skyc/src/lib.rs` `build_project`, call
+In `crates/ipe/src/lib.rs` `build_project`, call
 `inject_compiled_std_closure` **immediately after** the user-source read loop
 fills `sources`, and **before** `project::topological_order`. Because
 `topological_order` builds its `module_set`/`module_map` from `discovered` and
 `imports_of` reads `sources`, the injected Std nodes are first-class: a user
-edge `Main -> Std.Css` becomes a real graph edge; the three-colour DFS orders
-`Std.Css` **dep-first** (edge direction is user→Std, so Std is finalised first)
+edge `Main -> Ipe.Css` becomes a real graph edge; the three-colour DFS orders
+`Ipe.Css` **dep-first** (edge direction is user→Std, so Std is finalised first)
 and detects Std↔user cycles for free. The dep-first canonicalise loop inserts
-`Std.Css`'s `ModuleExports` under key `[Std, Css]` in `dep_exports` **before**
+`Ipe.Css`'s `ModuleExports` under key `[Std, Css]` in `dep_exports` **before**
 any importer is processed. `link()` concatenates all canon modules; the
 module-prefixed names (`Std_Css_*`, keyed by `union.home`) cannot collide with
 user defs. `infer`/`lower`/`emit` treat them as ordinary code. Nothing bespoke
@@ -151,7 +151,7 @@ downstream.
 
 ### 2.4 The resolve.rs:244 relaxation (fail-closed)
 
-Change the unconditional `Sky.`/`Std.` continue to gate on **presence in
+Change the unconditional `Ipê.`/`Ipe.` continue to gate on **presence in
 `deps`**:
 
 ```rust
@@ -164,9 +164,9 @@ if dep_path.first().copied().is_some_and(|s| s == sky_sym || s == std_sym)
 // Std module resolves exactly like a user dep.
 ```
 
-- A **kernel** module (`Std.Log`, `Sky.Core.Prelude`) is absent from `deps`
+- A **kernel** module (`Ipe.Log`, `Ipe.Prelude`) is absent from `deps`
   (never injected) ⇒ still `continue`s (qualifier path untouched).
-- A **compiled-source** module (`Std.Css`) *is* in `deps` (injected as a
+- A **compiled-source** module (`Ipe.Css`) *is* in `deps` (injected as a
   synthetic dep) ⇒ falls through to the existing `deps.get` +
   `inject_dep_exports`, which already registers `qual_vars[Css][name] =
   TopLevel([Std,Css])` for qualified access (`Css.px`) **and** the unqualified
@@ -178,8 +178,8 @@ if dep_path.first().copied().is_some_and(|s| s == sky_sym || s == std_sym)
 **Fail-closed refinement (upstream tightening).** Upstream's "no source ⇒
 silently assume kernel" is fail-*open*: a typo resolves to a phantom kernel that
 only errors at `cargo`. The port keeps the existing behaviour that an unresolved
-non-`Sky`/`Std` import is `IPE-N0020 ModuleNotFound` (with did-you-mean), and
-additionally: an unresolved `Sky.`/`Std.` import that is **neither** injected as
+non-`Ipê`/`Std` import is `IPE-N0020 ModuleNotFound` (with did-you-mean), and
+additionally: an unresolved `Ipê.`/`Ipe.` import that is **neither** injected as
 source **nor** a member of the closed kernel qualifier registry must surface a
 clean `IPE-N` diagnostic rather than a phantom kernel. Import resolution is
 therefore total: source **XOR** registered kernel **XOR** clean error.
@@ -189,10 +189,10 @@ therefore total: source **XOR** registered kernel **XOR** clean error.
 Two canonicaliser gates would reject a legitimate compiled-source module:
 
 - **`IPE-N0025 ReservedNamespace`** (`resolve.rs:198`) rejects any module whose
-  *own* home path starts with `Sky`/`Std`. `Std.Css` declares `module Std.Css`
+  *own* home path starts with `Ipê`/`Std`. `Ipe.Css` declares `module Ipe.Css`
   → would be rejected.
 - **`reject_reserved_builtin_type` / `RESERVED_BUILTIN_TYPES`**
-  (`resolve.rs:56,96`) rejects a user `type` shadowing a builtin. `Std.Css` is
+  (`resolve.rs:56,96`) rejects a user `type` shadowing a builtin. `Ipe.Css` is
   the canonical definer of `type Length` (and `type Color`, the #75 hole) → its
   own ADTs would be rejected.
 
@@ -202,11 +202,11 @@ exempt `Origin::EmbeddedStdlib` from the reserved-name gates **only for the
 names it owns**. The trust tag is a value the *build driver* constructs — set to
 `EmbeddedStdlib` **only** when the source came from `stdlib.rs`'s embed table,
 **never** derivable from module text. So a hostile user file literally named
-`Std.Css` (or `Std.Auth`) stays `EmbeddedStdlib`-untagged and is still rejected
+`Ipe.Css` (or `Ipe.Auth`) stays `EmbeddedStdlib`-untagged and is still rejected
 by N0025. This is the security answer to upstream's "user shadows stdlib"
-hazard: **bundled stdlib is authoritative; a user file in the `Std.`/`Sky.`
+hazard: **bundled stdlib is authoritative; a user file in the `Ipe.`/`Ipê.`
 namespace is a hard error, not a silent win.** Keep the exemption *tight* — only
-members of `COMPILED_STD_MODULES`, never any `Std`/`Sky` self-name in general.
+members of `COMPILED_STD_MODULES`, never any `Std`/`Ipê` self-name in general.
 
 Threading `ModuleOrigin` changes `canonicalise_module`'s signature (ripples to
 `build`, `build_project`, tests, LSP). Mitigate with a thin wrapper defaulting to
@@ -215,7 +215,7 @@ Threading `ModuleOrigin` changes `canonicalise_module`'s signature (ripples to
 ### 2.6 The single-file `build()` hole
 
 `build()` (`lib.rs:182`) compiles one entry with no module graph, so a
-single-file program importing `Std.Css` cannot inject and would 404. Extract the
+single-file program importing `Ipe.Css` cannot inject and would 404. Extract the
 graph core (`sources` map → closure → topo → dep-first canon → link) into one
 `compile_modules(sources, entry, interner)` helper that **both** `build` and
 `build_project` call; `build` seeds it with a single synthetic entry then runs
@@ -240,9 +240,9 @@ generalisation (`generaliseToAnnotation`), *not* whole-program let-gen. The only
 thing not yet supported is generalising an **un-annotated** top-level used at two
 distinct concrete types in one program (rank-based generalisation).
 
-`Std.Css` is fully annotated and largely **monomorphic** (`CssRule -> String`,
+`Ipe.Css` is fully annotated and largely **monomorphic** (`CssRule -> String`,
 `px : Int -> Length`, `rule : String -> List CssProp -> CssRule`); its 19 ADTs
-are concrete. `Sky.Core.Error` likewise. So both compile under today's inference
+are concrete. `Ipe.Error` likewise. So both compile under today's inference
 with **zero solver changes**.
 
 **Soundness note.** The absence of rank-based generalisation is a *completeness*
@@ -259,14 +259,14 @@ converts the fully-annotated precondition from an *assumption* into a
 *machine-checked contract* at the exact boundary, turning a would-be confusing
 deep-stdlib unification error into an explicit build-time invariant. Rank-based
 generalisation stays a documented later item that only unlocks *un-annotated
-polymorphic stdlib helpers* — needed one day for a broader pure-Sky stdlib, not
+polymorphic stdlib helpers* — needed one day for a broader pure-Ipê stdlib, not
 on the Css/Error critical path.
 
 ---
 
 ## 4. CSS security recommendation
 
-**RECOMMENDATION: Design-1 (pure-Sky `Std.Css`) + primitive-typed `css_safety`
+**RECOMMENDATION: Design-1 (pure-Ipê `Ipe.Css`) + primitive-typed `css_safety`
 leaf kernels gating ALL three free-string entry points at construction
 (drop-on-fail) + an unconditional `strip_style_close` breakout floor at every
 `<style>` render sink.** This is a refined middle path — stronger than the
@@ -281,8 +281,8 @@ keep Design-2's ADT↔enum reflection.
      serialization sink**: `strip_style_close` (fixpoint + case-insensitive,
      catching `</StYlE` and the `</sty</stylele` re-seam a single pass misses)
      on **every** `<style>` raw-body child, and `escape_attr` on inline
-     `style="…"`. Upstream wires this floor only into a handful of Std.Ui
-     feature injectors and leaves the general `Std.Html` `<style>` render path
+     `style="…"`. Upstream wires this floor only into a handful of Ipe.Ui
+     feature injectors and leaves the general `Ipe.Html` `<style>` render path
      **verbatim** — a real breakout gap. We close it at the **one**
      `renderVNode` raw-body arm so every delivery path (Html.render, Live, Tui,
      Webview) inherits it. **One floor, not six.**
@@ -299,7 +299,7 @@ keep Design-2's ADT↔enum reflection.
      `Css.property` is **insufficient**. All three entry points must gate.
 
 2. **Correctness (#2):** byte-shape parity with the current `css.rs` render fold
-   is achievable — the pure-Sky fold mirrors `render_prop`/`render_rule`.
+   is achievable — the pure-Ipê fold mirrors `render_prop`/`render_rule`.
 
 3. **Soundness (#3):** the leaf kernels are **primitive-typed** (`String ->
    Maybe String`, `String -> String`) — trivially schemable, **no compiled-ADT
@@ -309,17 +309,17 @@ keep Design-2's ADT↔enum reflection.
 4. **Efficiency (#4):** scan-once-at-construction + one final strip pass; no
    Design-2 double-scan-at-sink.
 
-5. **Completeness (#5):** the full Css surface is expressible in pure Sky; the
+5. **Completeness (#5):** the full Css surface is expressible in pure Ipê; the
    escape hatch is gated; the typed builders (`px`/`rem`/`hex`/`rgb`/`color`)
    are total and structurally cannot carry injection.
 
 6. **Readability (#6):** `css.rs` shrinks from reflection enums + builder/sink
    kernels to ~four primitive shims; policy stays single-sourced in
-   `css_safety.rs`; render logic reads as ordinary Sky.
+   `css_safety.rs`; render logic reads as ordinary Ipê.
 
 ### 4.2 Shape
 
-- `Std/Css.ipe` is pure Sky: ADTs `CssProp` (incl. a `CssDropped` variant),
+- `Std/Css.ipe` is pure Ipê: ADTs `CssProp` (incl. a `CssDropped` variant),
   `CssRule` (`CssRule | CssMedia | CssKeyframes | CssRaw`), `Length`, `Color`,
   and the bounded keyword enums, each with a narrow `*Raw` escape hatch.
 - **`CssProp` is exported as an OPAQUE type** (export the type, not the ctor —
@@ -341,7 +341,7 @@ keep Design-2's ADT↔enum reflection.
   ```
   `property k v` case-matches `(safePropName k, safeValue v)`: `Just/Just`
   builds `CssProp k2 v2`, anything else builds `CssDropped` (never a silent
-  partial emit). `stylesheet`/`styles` fold in pure Sky and finish through
+  partial emit). `stylesheet`/`styles` fold in pure Ipê and finish through
   `stripStyleClose` as defence-in-depth.
 
 **PARSE, DON'T VALIDATE:** `safeValue`/`safePropName`/`safeSelector` parse the
@@ -363,29 +363,29 @@ schemes.
 
 ## 5. Classification rule — compiled-source vs kernel
 
-> **Discriminator = transparency.** A `VarHome::Kernel` value is opaque: Sky
+> **Discriminator = transparency.** A `VarHome::Kernel` value is opaque: Ipê
 > cannot `case … of` it.
 >
 > - A module **MUST be compiled-source** iff any exported function
 >   pattern-matches a data type the module itself defines.
 > - A module **MAY stay a kernel** only if it is a pure boundary:
 >   (a) an effect sink/source (`File`, `Http`, `Time`, `Random`, `System`,
->   `Io`, `Db`, `Task`), (b) an opaque primitive the Sky side never destructures
+>   `Io`, `Db`, `Task`), (b) an opaque primitive the Ipê side never destructures
 >   (`Dict`, `Set`, `Bytes`, `Crypto`), or (c) a security choke-point that must
 >   be single-sourced in Rust (`css_safety` validators, HTML escapers).
-> - When **both** hold, **SPLIT**: pure-Sky ADT + logic as compiled-source, plus
+> - When **both** hold, **SPLIT**: pure-Ipê ADT + logic as compiled-source, plus
 >   a **minimal leaf-kernel** boundary-sink surface.
 
 Applied:
 
 | Module | Verdict | Why |
 |---|---|---|
-| `Std.Css` | compiled-source **+** leaf security kernels | Defines + matches `CssProp`/`CssRule`/`Length`/`Color`; but the three free-string entries are a security choke-point → split. |
-| `Sky.Core.Error` (#85) | compiled-source | Rich `Error` ADT that its own combinators case-match; replaces the `Error = String` minimal registration (#86) with no kernel-path golden flip. |
+| `Ipe.Css` | compiled-source **+** leaf security kernels | Defines + matches `CssProp`/`CssRule`/`Length`/`Color`; but the three free-string entries are a security choke-point → split. |
+| `Ipe.Error` (#85) | compiled-source | Rich `Error` ADT that its own combinators case-match; replaces the `Error = String` minimal registration (#86) with no kernel-path golden flip. |
 | `Maybe` / `Result` / `List` | compiled-source (canonical) | Combinators case-match their own ctors. Kernel-shadowed today; migrate opportunistically. |
-| `Dict` / `Set` / `Bytes` / `Crypto` | kernel | Opaque primitives, never destructured in Sky. |
+| `Dict` / `Set` / `Bytes` / `Crypto` | kernel | Opaque primitives, never destructured in Ipê. |
 | `File`/`Http`/`Time`/`Db`/`Task`/`System`/`Io`/`Random` | kernel | Effect boundaries. |
-| `Std.Ui` / `Std.Html` | split (later) | Huge own ADTs (→ source) but carry render/escape kernels (→ leaf). |
+| `Ipe.Ui` / `Ipe.Html` | split (later) | Huge own ADTs (→ source) but carry render/escape kernels (→ leaf). |
 
 ---
 
@@ -393,11 +393,11 @@ Applied:
 
 The spike validates every seam — injection, resolve relaxation, both gate
 exemptions, the annotation gate, and Std-homed-union ctor lowering — on a
-~15-line surface, **before** authoring the 1500-line `Std.Css`.
+~15-line surface, **before** authoring the 1500-line `Ipe.Css`.
 
 1. **SPIKE — tiny compiled-source module with its own ADT.**
-   - `crates/skyc/stdlib/Std/Palette.ipe` (~15 lines, fully annotated):
-     `module Std.Palette exposing (Shade(..), toHex)` /
+   - `crates/ipe/stdlib/Std/Palette.ipe` (~15 lines, fully annotated):
+     `module Ipe.Palette exposing (Shade(..), toHex)` /
      `type Shade = Dark | Light` / `toHex : Shade -> String` case-matching
      `Shade`. Exercises the exact hard part impossible for a kernel: a
      Std-source module **defining and matching its own ctor**. Chosen to avoid
@@ -414,16 +414,16 @@ exemptions, the annotation gate, and Std-homed-union ctor lowering — on a
      thread `ModuleOrigin`; exempt `EmbeddedStdlib` from N0025; add the
      fail-closed unannotated-top-level gate.
    - `examples/spike-std-source/` (`sky.toml` + `src/Main.ipe` doing
-     `import Std.Palette exposing (Shade(..), toHex)` and `toHex Dark`).
-   - **GREEN gate:** `skyc build` exit-0 (no `IPE-N0020`/`N0025`), emits, then
+     `import Ipe.Palette exposing (Shade(..), toHex)` and `toHex Dark`).
+   - **GREEN gate:** `ipe build` exit-0 (no `IPE-N0020`/`N0025`), emits, then
      the emitted Cargo project `cargo build`s and **runs to the expected value**
      under `IPE_E2E=1`. Add this as an integration test.
 
 2. **Fail-closed resolution + N0025 tightening.** Confirm: an unresolved
-   `Std.*`/`Sky.*` import that is neither injected nor a registered kernel
-   qualifier is a clean `IPE-N`; a user file literally named `Std.Foo` is
+   `Ipe.*`/`Ipê.*` import that is neither injected nor a registered kernel
+   qualifier is a clean `IPE-N`; a user file literally named `Ipe.Foo` is
    rejected by N0025 (`ModuleOrigin::User`). Regression-test a **mixed** import
-   set (kernel `Sky.Core.Prelude` + source `Std.Palette` in one module) so the
+   set (kernel `Ipe.Prelude` + source `Ipe.Palette` in one module) so the
    `:244` conjunct keeps kernels on the `continue` path.
 
 3. **Std↔Std closure test.** A source module importing a second source module
@@ -432,7 +432,7 @@ exemptions, the annotation gate, and Std-homed-union ctor lowering — on a
 
 4. **Author `Std/Css.ipe`** — 19 ADTs (`CssProp` incl. `CssDropped`, `CssRule`
    + variants, `Length`, `Color`, keyword enums), typed builders
-   (`px`/`rem`/`hex`/`rgb`/`color`, pure Sky), render fold (pure Sky), and the
+   (`px`/`rem`/`hex`/`rgb`/`color`, pure Ipê), render fold (pure Ipê), and the
    gated `property`/`rule`/`media`/`raw` entries. `CssProp` exported opaque
    (type without ctor).
 
@@ -440,16 +440,16 @@ exemptions, the annotation gate, and Std-homed-union ctor lowering — on a
    over unchanged `css_safety.rs` policy; retire the reflection enums + old
    builder/sink kernels; register the four leaf kernels in `sky_kernels`. Add
    the breakout-floor test: `styleNode [] attackerCss` rendered via
-   `Std.Html.render` strips `</style>` at the render sink. Add the opaque-ctor
+   `Ipe.Html.render` strips `</style>` at the render sink. Add the opaque-ctor
    test: `CssProp` is exposed **without** its ctor, and a raw string via
    `Css.property` is sanitized/dropped.
 
-6. **Register `Std.Css`** in `COMPILED_STD_MODULES` (**not**
-   `STDLIB_MODULE_QUALIFIERS`); an example importing `Std.Css` builds and
+6. **Register `Ipe.Css`** in `COMPILED_STD_MODULES` (**not**
+   `STDLIB_MODULE_QUALIFIERS`); an example importing `Ipe.Css` builds and
    `cargo`-compiles (doubles as the ordering regression: closure runs before
    topo).
 
-7. **Unpark `Sky.Core.Error` (#85)** via the identical mechanism — a separate
+7. **Unpark `Ipe.Error` (#85)** via the identical mechanism — a separate
    atomic commit to isolate the ~69-golden churn from the Css work.
 
 8. **File** whole-program rank-based let-generalisation as an incremental
@@ -463,20 +463,20 @@ exemptions, the annotation gate, and Std-homed-union ctor lowering — on a
   silent-kernel fallthrough.** Rejected on **security #1**. A stray
   `Std/Auth.ipe` silently overriding the audited bcrypt+JWT implementation is a
   supply-chain hazard; a typo silently resolving to a phantom kernel is
-  fail-open. We keep bundled stdlib authoritative (user `Std.`/`Sky.` = hard
+  fail-open. We keep bundled stdlib authoritative (user `Ipe.`/`Ipê.` = hard
   error) and make resolution fail-closed (source XOR registered kernel XOR clean
   error).
 
 - **Design-2 (keep `css.rs` `CssProp`/`CssRule` reflection enums + a
   `css_stylesheet_` sink kernel that reconstructs the Rust enum from a lowered
-  Sky ADT).** Security-*equivalent* to the chosen path but rejected on
+  Ipê ADT).** Security-*equivalent* to the chosen path but rejected on
   **completeness #5 + soundness #3 + readability #6**: it reintroduces exactly
-  the compiled-ADT ↔ runtime-enum reflection the pure-Sky north star exists to
+  the compiled-ADT ↔ runtime-enum reflection the pure-Ipê north star exists to
   delete — fragile (every ADT edit must mirror `css.rs` or silently drift) and a
   large kernel surface. The primitive-kernel middle path gets Design-2's
   security with none of the reflection.
 
-- **Pure Design-1 (pure-Sky Css, breakout-floor only, no per-declaration
+- **Pure Design-1 (pure-Ipê Css, breakout-floor only, no per-declaration
   gate).** Rejected on **security #1**: it silently drops the `@import` /
   `url(javascript:)` / `expression()` protection the port already owns. The
   floor catches breakout, not in-declaration exfil sinks (`background:
@@ -496,6 +496,6 @@ exemptions, the annotation gate, and Std-homed-union ctor lowering — on a
   generalisation is a later incremental item, never a soundness/security gate.
 
 - **Bespoke "add all embedded stdlib as roots" (upstream-style).** Rejected on
-  **efficiency #4** vs the transitive closure: injecting + parsing `Std.Css` on
+  **efficiency #4** vs the transitive closure: injecting + parsing `Ipe.Css` on
   every build even when unused. The closure short-circuits when no import
   matches, so unused-Std builds pay nothing.

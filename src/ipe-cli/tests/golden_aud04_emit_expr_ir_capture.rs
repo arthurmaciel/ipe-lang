@@ -23,10 +23,10 @@
 //!
 //! ```text
 //! # compile-only check (fast, no IPE_E2E needed):
-//! cargo test -p skyc --test golden_aud04_emit_expr_ir_capture
+//! cargo test -p ipe --test golden_aud04_emit_expr_ir_capture
 //!
 //! # full E2E (run each emitted binary, assert stdout):
-//! IPE_E2E=1 cargo test -p skyc --test golden_aud04_emit_expr_ir_capture
+//! IPE_E2E=1 cargo test -p ipe --test golden_aud04_emit_expr_ir_capture
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -58,7 +58,7 @@ fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for fixture {fixture}: {:?}",
+        "ipe build must succeed for fixture {fixture}: {:?}",
         built.err()
     );
 }
@@ -86,7 +86,7 @@ fn assert_e2e_output(fixture: &str, expect_contains: &str) {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for {fixture}: {:?}",
+        "ipe build must succeed for {fixture}: {:?}",
         built.err()
     );
 

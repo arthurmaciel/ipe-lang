@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 pub type Db = DbPool;
 
-/// Build a Sky-visible `Error` from a sqlx error WITHOUT leaking row/column
+/// Build a Ipê-visible `Error` from a sqlx error WITHOUT leaking row/column
 /// VALUES. The `Display` of a driver error (PostgreSQL/MySQL especially) embeds
 /// the offending value in a constraint-violation message — e.g.
 /// `... Key (email)=(victim@example.com) already exists` — so funnelling the raw
@@ -390,7 +390,7 @@ pub fn db_decode_bool<E: From<String> + 'static>(col: String) -> Decoder<E, bool
 ///
 /// ### Type representation
 ///
-/// The Sky `Money` ADT is `type Money = Money Decimal Currency` — a generated
+/// The Ipê `Money` ADT is `type Money = Money Decimal Currency` — a generated
 /// user-space type (`StdMoneyMoney::Money(StdDecimalDecimal, StdMoneyCurrency)`)
 /// that differs per project. The Rust runtime has no single `Money` type to
 /// return from a generic `Decoder<E, T>`.  The return type is therefore
@@ -448,7 +448,7 @@ pub fn db_decode_money<E: From<String> + 'static>(col: String) -> Decoder<E, (De
     )
 }
 
-/// `DbDec.nullable inner` — ONE-arg form matching Sky's
+/// `DbDec.nullable inner` — ONE-arg form matching Ipê's
 /// `nullable : Decoder a -> Decoder (Maybe a)`.
 ///
 /// Uses `inner.fields` (the `Decoder` struct's `{run, fields}` metadata) to
@@ -501,7 +501,7 @@ pub fn db_decode_nullable<E: From<String> + 'static, T: Send + 'static>(
 
 /// `DbDec.required col fieldDec ctorDec` — pipeline step for a required column.
 ///
-/// Sky signature: `required : String -> Decoder a -> Decoder (a -> b) -> Decoder b`
+/// Ipê signature: `required : String -> Decoder a -> Decoder (a -> b) -> Decoder b`
 ///
 /// Implemented APPLICATIVELY as `decode_and_map(decode_field(col, fieldDec), ctorDec)`.
 /// This avoids any FnOnce/Clone wall: `decode_field` reads the named column from the row
@@ -509,7 +509,7 @@ pub fn db_decode_nullable<E: From<String> + 'static, T: Send + 'static>(
 /// `decode_and_map` calls the FnOnce once per decoder invocation, which is sound because
 /// the decoder is called once per row (not twice for the same row).
 ///
-/// The `col` parameter is accepted for API parity with Sky's signature but is
+/// The `col` parameter is accepted for API parity with Ipê's signature but is
 /// documentation-only here — `fieldDec` already names its column via `decode_field`.
 ///
 /// Totality: missing column or decode error → Err propagated; no panic/unwrap.
@@ -524,7 +524,7 @@ pub fn db_decode_required<E: From<String> + 'static, A: 'static + Send, B: 'stat
 
 /// `DbDec.optional col fieldDec fallback ctorDec` — pipeline step for an optional column.
 ///
-/// Sky signature: `optional : String -> Decoder a -> a -> Decoder (a -> b) -> Decoder b`
+/// Ipê signature: `optional : String -> Decoder a -> a -> Decoder (a -> b) -> Decoder b`
 ///
 /// Like `required` but a missing or NULL column yields `fallback` instead of failing.
 /// Implemented applicatively: wrap `fieldDec` so that:
@@ -564,7 +564,7 @@ pub fn db_decode_optional<
 // ─── Connection-lifecycle hardening ───────────────────────────────────────────
 //
 // `Db` (sqlx `Pool`) is an `Arc`-backed handle DESIGNED to be cloned and shared
-// process-wide. The Sky compiler lowers an idiomatic top-level
+// process-wide. The Ipê compiler lowers an idiomatic top-level
 // `dbConn = Task.run (Db.connect ())` binding as a per-call function, so a user
 // who references it per request/session re-enters `db_connect` on every request.
 // sqlx's `Pool::connect` is EAGER (real I/O per call), so without a cache that
@@ -572,7 +572,7 @@ pub fn db_decode_optional<
 // through the server's `max_connections` cap — a resource-exhaustion / DoS vector
 // driven purely by unpredictable user code. The runtime MUST absorb that
 // (runtime-rust/CLAUDE.md: consistent, secure, sound, efficient under any
-// well-typed Sky program). So `Db.connect <url>` resolves to ONE bounded,
+// well-typed Ipê program). So `Db.connect <url>` resolves to ONE bounded,
 // shared pool per URL — independent of how often the user calls it.
 
 /// Process-global pool registry keyed by connection URL.
@@ -842,9 +842,9 @@ pub fn db_query_params<E: Send + From<String> + 'static>(
     })
 }
 
-/// A value a Sky `Db.get*` accessor can read string-keyed fields from.
+/// A value a Ipê `Db.get*` accessor can read string-keyed fields from.
 ///
-/// Sky's `getString : String -> row -> String` is polymorphic in `row`; the
+/// Ipê's `getString : String -> row -> String` is polymorphic in `row`; the
 /// row can be a query result (`Dict String String`), a pub/sub `Dict` payload,
 /// or the typed `LiveReq` an `init` handler receives. `IpeRow` is the seam that
 /// lets the Rust accessors stay generic and monomorphise per row type — no
@@ -866,7 +866,7 @@ impl IpeRow for IpeDict<String> {
 // the named field; `params`/`headers`/`cookies` are searched for any other key.
 //
 // INVARIANT: `db` must build WITHOUT `live` — a DB-only server / CLI app does not
-// pull in Sky.Live. `super::LiveReq` is a `live`-only type, so this impl (the ONLY
+// pull in Ipe.Live. `super::LiveReq` is a `live`-only type, so this impl (the ONLY
 // `live` dependency in this module) stays behind `#[cfg(feature = "live")]`. Do not
 // reference `live`-only items from `db`-gated code without the same gate. Enforced
 // by CI job `runtime-feature-combos` (.github/workflows/ci.yml), which builds
@@ -949,7 +949,7 @@ fn migrate_checksum(sql: &str) -> String {
 /// there is no partial-corruption window.
 ///
 /// DB-ops mode (parity with Go's `Db_migrateApply`): when the `IPE_DB_OP` env var
-/// is set — the CLI `sky db status` / `sky db migrate --backend rust` sets it — the
+/// is set — the CLI `ipe db status` / `ipe db migrate --backend rust` sets it — the
 /// task PRINTS a human report and `process::exit`s instead of returning, so the
 /// surrounding app never starts serving:
 ///
@@ -958,7 +958,7 @@ fn migrate_checksum(sql: &str) -> String {
 /// - unset: normal Task behaviour (apply, return Ok/Err) — UNCHANGED
 ///
 /// `process::exit` is reachable ONLY under the CLI-set env op (never from a normal
-/// well-typed Sky `Db.migrate` call), and it is a deliberate CLI termination, not a
+/// well-typed Ipê `Db.migrate` call), and it is a deliberate CLI termination, not a
 /// panic — the no-runtime-panic thesis is about faults, not intentional exits.
 pub fn db_migrate_apply<E: Send + From<String> + 'static>(
     db: Db,
@@ -1146,7 +1146,7 @@ pub fn db_migrate_apply<E: Send + From<String> + 'static>(
     })
 }
 
-// ─── Additional Std.Db kernels ────────────────────────────────────────
+// ─── Additional Ipe.Db kernels ────────────────────────────────────────
 
 /// `close : Db -> Task Error ()` — sqlx::Pool drops on its own; this is
 /// a graceful explicit close (any in-flight queries finish, then the
@@ -1711,7 +1711,7 @@ pub fn db_with_transaction<E: Send + From<String> + 'static, A: Send + 'static>(
 
 // ─── SqlParam — runtime-nameable parameter type for db_insert_fields etc. ─────
 //
-// Sky's `SqlField` and `SqlValue` ADTs are per-project GENERATED Rust enums
+// Ipê's `SqlField` and `SqlValue` ADTs are per-project GENERATED Rust enums
 // (`StdDbSqlField`, `StdDbSqlValue`).  The runtime can't name or destructure
 // them, but it CAN define `SqlParam` — a parallel enum whose variants match
 // SqlValue 1:1.  The codegen emits a conversion at each `insertFields` /
@@ -1739,7 +1739,7 @@ pub fn db_with_transaction<E: Send + From<String> + 'static, A: Send + 'static>(
 // All VALUES are positional-bound (`?`), never interpolated.
 // Totality: no unwrap/panic anywhere in this module section.
 
-/// A runtime-nameable SQL parameter value, matching the Sky `SqlValue` ADT.
+/// A runtime-nameable SQL parameter value, matching the Ipê `SqlValue` ADT.
 /// See the module-level comment above for the generated-ADT conversion rules.
 ///
 /// `PartialEq` precondition (`SqlFragment` design note): every
@@ -1775,7 +1775,7 @@ pub enum SqlParam {
     Null(Box<SqlParam>),
 }
 
-// ── `From<T> for SqlParam` — primitive Sky types ────────────────────────────
+// ── `From<T> for SqlParam` — primitive Ipê types ────────────────────────────
 //
 // These impls let the emitter use `ipe_runtime::db::SqlParam::from` as a
 // uniform projection function for the polymorphic `exec`/`query` params list
@@ -1788,28 +1788,28 @@ pub enum SqlParam {
 // runtime; here the conversion is statically resolved by the Rust type system.
 
 impl From<String> for SqlParam {
-    /// Bind a Sky `String` parameter as SQL TEXT.
+    /// Bind a Ipê `String` parameter as SQL TEXT.
     fn from(s: String) -> Self {
         SqlParam::Text(s)
     }
 }
 
 impl From<i64> for SqlParam {
-    /// Bind a Sky `Int` parameter as SQL INTEGER.
+    /// Bind a Ipê `Int` parameter as SQL INTEGER.
     fn from(i: i64) -> Self {
         SqlParam::Int(i)
     }
 }
 
 impl From<f64> for SqlParam {
-    /// Bind a Sky `Float` parameter as SQL REAL.
+    /// Bind a Ipê `Float` parameter as SQL REAL.
     fn from(f: f64) -> Self {
         SqlParam::Float(f)
     }
 }
 
 impl From<bool> for SqlParam {
-    /// Bind a Sky `Bool` parameter as SQL INTEGER (0 / 1), matching SQLite
+    /// Bind a Ipê `Bool` parameter as SQL INTEGER (0 / 1), matching SQLite
     /// convention.
     fn from(b: bool) -> Self {
         SqlParam::Bool(b)
@@ -1862,12 +1862,12 @@ fn bind_sql_param<'q>(q: DbQuery<'q>, p: SqlParam) -> DbQuery<'q> {
     }
 }
 
-// ─── Std.Db.Sql — SqlFragment builder ────────────────────────
+// ─── Ipe.Db.Sql — SqlFragment builder ────────────────────────
 //
 // Closes the SQL-injection surface the removed `unsafeFindWhere` left open.
 // The ONLY way to obtain a `SqlFragment` is through the combinators below —
 // there is no public constructor that accepts an arbitrary `String` as SQL
-// text — so a naive string-concatenated WHERE clause is a `skyc` TYPE ERROR
+// text — so a naive string-concatenated WHERE clause is a `ipe` TYPE ERROR
 // (`String` where `SqlFragment` is expected) at `Db.findWhere` /
 // `Db.deleteWhere`, never a runtime injection risk.
 //
@@ -1881,7 +1881,7 @@ fn bind_sql_param<'q>(q: DbQuery<'q>, p: SqlParam) -> DbQuery<'q> {
 // combinator propagates the first poison it sees; the two consumers surface
 // it as a `Task::Err` rather than emitting malformed SQL.
 
-/// `Std.Db.Sql`'s opaque, parameterized WHERE-fragment value.
+/// `Ipe.Db.Sql`'s opaque, parameterized WHERE-fragment value.
 ///
 /// The derived `PartialEq` precondition is verified above: every `SqlParam`
 /// field type is `PartialEq`, so this derive is total and structural,
@@ -1917,10 +1917,10 @@ impl std::fmt::Debug for SqlFragment {
 /// identifier poisons the fragment instead of panicking or interpolating
 /// unchecked text.
 ///
-/// Takes an owned `String` (not `&str`) to match every other Sky-`String`-
+/// Takes an owned `String` (not `&str`) to match every other Ipê-`String`-
 /// typed kernel parameter in this module — the generic call-emission path
 /// (`ipe_backend_rust::emit_expr`'s standard-path fallback) always produces an
-/// owned `String` for a Sky `String` argument, never a borrow.
+/// owned `String` for a Ipê `String` argument, never a borrow.
 pub fn sql_column(name: String) -> SqlFragment {
     if valid_sql_ident(&name) {
         SqlFragment {
@@ -1939,7 +1939,7 @@ pub fn sql_column(name: String) -> SqlFragment {
 
 /// `Sql.param : SqlValue -> SqlFragment` — binds `v` as a single `?`
 /// placeholder. Also the shared runtime symbol for `Sql.int` / `Sql.string` /
-/// `Sql.float` / `Sql.bool`: each is a Sky-level type narrowing of this same
+/// `Sql.float` / `Sql.bool`: each is a Ipê-level type narrowing of this same
 /// generic entry point (`i64` / `String` / `f64` / `bool` all already have a
 /// `From<T> for SqlParam` impl above), so no separate per-type runtime
 /// function exists — see the kernel decl doc in `ipe_kernels`.
@@ -2334,7 +2334,7 @@ pub fn db_update_fields<E: Send + From<String> + 'static>(
 /// empty projection.
 ///
 /// Requires SQLite ≥ 3.35 (Mar 2021) or PostgreSQL — same requirement as
-/// other RETURNING uses already in Std.Db.
+/// other RETURNING uses already in Ipe.Db.
 ///
 /// Security: table + column names validated; values bound positionally; only
 /// the RETURNING projection is caller-supplied (and it's not executed as DML,
@@ -2513,7 +2513,7 @@ mod tests {
     #[tokio::test]
     async fn ipe_err_redacts_db_row_values() {
         // A UNIQUE-constraint failure must NOT echo the offending row VALUE into
-        // the Sky-visible Error (PRINCIPLES #1 info-leak). `ipe_err` builds a
+        // the Ipê-visible Error (PRINCIPLES #1 info-leak). `ipe_err` builds a
         // structural message (SQLSTATE/driver code + constraint name) from the
         // structured error fields instead of the raw Display, which on
         // PostgreSQL/MySQL embeds `Key (email)=(victim@…) already exists`.
@@ -3472,7 +3472,7 @@ mod tests {
         assert!(matches!(r, IpeResult::Ok(())));
     }
 
-    // ─── Std.Db.Sql — SqlFragment builder ────────────────────
+    // ─── Ipe.Db.Sql — SqlFragment builder ────────────────────
 
     async fn insert_todo(db: &Db, title: &str) {
         let mut r = HashMap::new();

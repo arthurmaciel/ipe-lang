@@ -1,12 +1,12 @@
-//! `IpeStringify` — the total Sky value stringifier.
+//! `IpeStringify` — the total Ipê value stringifier.
 //!
-//! Backs `Basics.errorToString` (and `Sky.Test.debugShow`, which is just
+//! Backs `Basics.errorToString` (and `Ipe.Test.debugShow`, which is just
 //! `errorToString v`). Go's `Basics_errorToString` returns a `String`
 //! verbatim, an `error`'s `.Error()` message, and `fmt.Sprintf("%v", v)`
 //! for everything else. The Rust backend mirrors `%v` EXACTLY but TOTALLY:
 //! every type reachable from a generic `errorToString` call implements this
 //! trait (runtime primitives below; every codegen-emitted record/ADT gets a
-//! `IpeStringify` impl from `src/Sky/Generate/Rust/Builder/Emitter.hs`).
+//! `IpeStringify` impl from `src/Ipê/Generate/Rust/Builder/Emitter.hs`).
 //!
 //! Why a trait, not `Debug`: `Debug` QUOTES a `String` (`"hi"`), diverging
 //! from Go's unquoted `hi`. A `Display` re-bind is not total (no codegen type
@@ -21,14 +21,14 @@
 //! - `42` / `true` / `42.5`    -> Display
 //! - `[]int{1,2,3}`            -> `[1 2 3]`   (space-separated, NOT comma)
 //! - `[][]int{{1,2},{3,4}}`    -> `[[1 2] [3 4]]`
-//! - `T2{1,"a"}` (Sky tuple)   -> `{1 a}`     (space-separated, no field names)
-//! - `R{1,"x"}` (Sky record)   -> `{1 x}`     (fields in _fieldIndex order)
+//! - `T2{1,"a"}` (Ipê tuple)   -> `{1 a}`     (space-separated, no field names)
+//! - `R{1,"x"}` (Ipê record)   -> `{1 x}`     (fields in _fieldIndex order)
 //! - `map[string]int{...}`     -> `map[a:1 b:2]` (keys SORTED, space-separated)
 
 use crate::core::{IpeMaybe, IpeResult};
 use std::collections::HashMap;
 
-/// Total Sky stringifier. One method, infallible, never panics.
+/// Total Ipê stringifier. One method, infallible, never panics.
 pub trait IpeStringify {
     /// Render `self` byte-identically to Go's `Basics_errorToString` / `%v`.
     fn ipe_show(&self) -> String;
@@ -169,7 +169,7 @@ impl IpeStringify for bool {
 }
 
 impl IpeStringify for () {
-    // Sky `()` is Go's empty struct; `%v` renders `{}`. Rare in errorToString,
+    // Ipê `()` is Go's empty struct; `%v` renders `{}`. Rare in errorToString,
     // kept total for completeness.
     fn ipe_show(&self) -> String {
         "{}".to_string()
@@ -222,7 +222,7 @@ impl<K: IpeStringify + Ord, V: IpeStringify> IpeStringify for HashMap<K, V> {
     }
 }
 
-// ─── Tuples (Sky tuples render like Go's T2/T3 structs: `{a b ...}`) ─────────
+// ─── Tuples (Ipê tuples render like Go's T2/T3 structs: `{a b ...}`) ─────────
 
 impl<A: IpeStringify, B: IpeStringify> IpeStringify for (A, B) {
     fn ipe_show(&self) -> String {
@@ -259,10 +259,10 @@ where
     }
 }
 
-// ─── Sky core ADTs ───────────────────────────────────────────────────────────
+// ─── Ipê core ADTs ───────────────────────────────────────────────────────────
 
 impl<T: IpeStringify> IpeStringify for IpeMaybe<T> {
-    // Go renders a Sky `Maybe` (a flattened-struct ADT) with a leaked layout
+    // Go renders a Ipê `Maybe` (a flattened-struct ADT) with a leaked layout
     // (`{tag payload}` + zero-init inactive fields) that a Rust enum cannot
     // reproduce. Best-effort, total, and human-useful: `Just <v>` / `Nothing`.
     // Documented residual: NOT byte-identical to Go's ADT `%v` (see module doc).

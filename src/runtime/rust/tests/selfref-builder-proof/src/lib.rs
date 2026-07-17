@@ -4,12 +4,12 @@
 //! `runtime-rust/docs/superpowers/specs/2026-06-27-rust-ffi-wall6-selfref-builder-design.md`).
 //!
 //! This file is the concrete, MIRI-checked proof that the *mechanism* which would
-//! bind a self-borrowing builder chain as an owned `'static` Sky value is SOUND
+//! bind a self-borrowing builder chain as an owned `'static` Ipê value is SOUND
 //! for a COVARIANT builder. It is **deliberately NOT wired into codegen**: the
 //! guardian ruled auto-emission REJECT-FOR-NOW because the soundness precondition
 //! (the foreign builder `B<'a>` must be COVARIANT in `'a`) is UNVERIFIABLE at
 //! codegen — a covariance compile-probe failure would break the
-//! `sky build ⇒ cargo build` floor, and the inspector runs rustdoc without
+//! `ipe build ⇒ cargo build` floor, and the inspector runs rustdoc without
 //! `--document-private-items` so it cannot compute variance itself. The owned
 //! params-struct path (fixture 104) is the SHIPPED, zero-unsafe circumvention;
 //! this proof keeps the harder mechanism honest + picked-up-able for the day

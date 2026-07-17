@@ -1,12 +1,12 @@
 #![forbid(unsafe_code)]
-//! The Rust backend for the Sky compiler.
+//! The Rust backend for the Ipê compiler.
 //!
 //! Consumes the backend-agnostic typed [`ipe_ir::Program`] and emits a Rust
 //! Cargo project. The crate is split into the fixed templates emitted for every
 //! program ([`preamble`] / [`epilogue`] / the kernel-wrapper prelude in
 //! [`project`]) and the genuinely type-directed emission of the user's types
 //! ([`emit_types`]) and functions ([`emit_expr`]). [`naming`] holds the
-//! Sky → Rust identifier rules.
+//! Ipê → Rust identifier rules.
 //!
 //! The single correctness gate is byte-equality against the golden program
 //! (`tests/golden/basics/main.rs`).
@@ -41,12 +41,12 @@ pub use preamble::{epilogue, preamble};
 /// Which SQL database driver the emitted project targets.
 ///
 /// Selected by `sky.toml`'s `[database] driver` key
-/// (`crates/skyc/src/project.rs::DbDriver`, converted at the `skyc` →
+/// (`crates/ipe/src/project.rs::DbDriver`, converted at the `ipe` →
 /// `ipe_backend_rust` boundary via [`RustBackend::with_db_driver`]) — drives
 /// the `ipe_runtime/config.rs` template and `Cargo.toml` sqlx feature
 /// [`crate::project::emit_program`] selects. `Sqlite` is the default: a
 /// program with no `[database]` section, or one built via the single-file
-/// `skyc build` path (no manifest at all), emits byte-identical output to
+/// `ipe build` path (no manifest at all), emits byte-identical output to
 /// pre-driver-selection backends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum DbDriver {
@@ -144,13 +144,13 @@ impl<'a> RustBackend<'a> {
     }
 }
 
-/// The DISTINCT Sky-module `home`s the backend would emit an OWN Rust file for.
+/// The DISTINCT Ipê-module `home`s the backend would emit an OWN Rust file for.
 ///
 /// Every [`rust_file::RustFileId::IpeModule`] bucket [`rust_file::
 /// partition_items`] produces, `Spine` excluded (`Spine` is not a per-module
 /// home — it is the always-present entry file). This is the `home`-set
 /// quantifier `ipe_db::program_rust_file_ids` wraps in a
-/// tracked query (spec §4.2): a Sky-module add/delete changes this set, making
+/// tracked query (spec §4.2): a Ipê-module add/delete changes this set, making
 /// "which files exist" a first-class, salsa-observable value.
 ///
 /// Order-agnostic by construction (`BTreeSet`) — callers that need the
@@ -184,7 +184,7 @@ impl Backend for RustBackend<'_> {
 /// declaration order — the value shape of [`EmitCtx::enum_variants`].
 type VariantList = Vec<(Symbol, Vec<IrType>)>;
 
-/// A canonical record field list: `(Sky field name, field type)` pairs sorted by
+/// A canonical record field list: `(Ipê field name, field type)` pairs sorted by
 /// field name. The order is the struct's declaration / `IpeStringify` read order.
 type RecordFields = Vec<(String, IrType)>;
 
@@ -204,7 +204,7 @@ type CanonicalShape = (RecordFields, Vec<Symbol>);
 pub(crate) struct RecordStruct {
     /// The deduplicated, collision-free Rust struct name (e.g. `RecXY`).
     pub name: String,
-    /// The fields as `(Sky field name, field type)`, sorted by field name. The
+    /// The fields as `(Ipê field name, field type)`, sorted by field name. The
     /// Rust field identifier is the keyword-mangled field name.
     ///
     /// For a GENERIC record shape, a field's type may be an
@@ -242,7 +242,7 @@ pub(crate) struct RecordStruct {
     pub is_serde: bool,
 }
 
-/// Shared emission context: the interner plus the precomputed Sky → Rust name
+/// Shared emission context: the interner plus the precomputed Ipê → Rust name
 /// maps so each emit site is a `O(log n)` lookup rather than recomputing the
 /// naming rules. Built once per [`RustBackend::emit`].
 #[allow(clippy::struct_excessive_bools)]
@@ -259,7 +259,7 @@ pub(crate) struct EmitCtx<'a> {
     /// * emits a db-enabled `ipe_runtime/config.rs` (full DbPool/DbRow/…
     ///   aliases gated on `#[cfg(feature = "db")]`);
     /// * appends `into_sql_param` / `into_field_param` impl blocks after the
-    ///   user type declarations, so the Db call sites can project Sky ADT
+    ///   user type declarations, so the Db call sites can project Ipê ADT
     ///   values to the runtime's `SqlParam`.
     pub(crate) uses_db: bool,
     /// Which SQL driver the emitted `Cargo.toml` / `ipe_runtime/config.rs`
@@ -430,7 +430,7 @@ impl<'a> EmitCtx<'a> {
                 // handler's `WebSocketMessage -> msg` param, a `Text s` / `Normal`
                 // constructor, a `case … of Text t ->` pattern — resolve to the
                 // runtime enum, whose variant names + field types match 1:1. The
-                // Sky enum DECL is suppressed in `emit_enum` (a bridged type has no
+                // Ipê enum DECL is suppressed in `emit_enum` (a bridged type has no
                 // user-emitted body). Same intent as the reference `Types.hs` map.
                 let def_name = resolve_sym(interner, def.name)?;
                 let rust_name = match websocket_bridge_rust_name(&home_segs, def_name) {
@@ -861,7 +861,7 @@ impl<'a> EmitCtx<'a> {
     /// least one edge of every cycle, which is what keeps the emitted crate
     /// finite-sized and matches the Go reference's recursive-payload boxing.
     ///
-    /// Every *constructible* recursive Sky type routes through an enum (the enum
+    /// Every *constructible* recursive Ipê type routes through an enum (the enum
     /// supplies the nullary base case), so boxing the cyclic enum-payload edge
     /// breaks every reachable cycle; a hypothetical pure record/tuple alias
     /// cycle (no enum on it) is rejected upstream before it can reach the
@@ -1131,7 +1131,7 @@ impl<'a> EmitCtx<'a> {
     }
 
     /// `true` when `(home, ty)` is a `Ipe.WebSocket` ADT bridged to a
-    /// runtime enum (`WebSocketMessage` / `CloseCode`) — its Sky decl is
+    /// runtime enum (`WebSocketMessage` / `CloseCode`) — its Ipê decl is
     /// suppressed because the runtime already defines the type. See
     /// [`websocket_bridge_rust_name`].
     pub(crate) fn is_websocket_bridged_enum(&self, home: &ModPath, ty: Symbol) -> DResult<bool> {
@@ -1148,11 +1148,11 @@ impl<'a> EmitCtx<'a> {
     /// user-declared enum. `Maybe` / `Result` are not user `type` declarations —
     /// their constructors (`Just` / `Nothing` / `Ok` / `Err`) are Prelude
     /// built-ins backed by the runtime's `IpeMaybe` / `IpeResult`, whose variant
-    /// names match Sky's verbatim. A `Some` result steers constructor and pattern
+    /// names match Ipê's verbatim. A `Some` result steers constructor and pattern
     /// emission to the runtime type (no user-enum field-boxing lookup applies, as
     /// neither is self-recursive).
     fn builtin_runtime_enum(&self, home: &ModPath, ty: Symbol) -> Option<&'static str> {
-        // A declared user enum always wins: real Sky cannot name a `type` `Maybe`
+        // A declared user enum always wins: real Ipê cannot name a `type` `Maybe`
         // or `Result` (canonicalisation rejects shadowing a built-in), so a
         // program-level enum carrying that symbol is a distinct, user-owned type
         // and must route to its own emitted enum, not the runtime shortcut.
@@ -1168,7 +1168,7 @@ impl<'a> EmitCtx<'a> {
             Some("Order") => Some("IpeOrder"),
             // `ChunkEvent` — the builtin `Ipe.Http.Stream` chunk event enum
             // backed by `ipe_runtime::http_stream::ChunkEvent<IpeError>`.
-            // Constructor names match Sky's verbatim: `Chunk` / `Done` / `Errored`.
+            // Constructor names match Ipê's verbatim: `Chunk` / `Done` / `Errored`.
             // NOTE: This returns the bare name "ChunkEvent" (without generic args)
             // so that pattern paths emit `ChunkEvent::Chunk(...)`, not
             // `ChunkEvent<IpeError>::Chunk(...)` (invalid Rust syntax).
@@ -1186,7 +1186,7 @@ impl<'a> EmitCtx<'a> {
             // `::Network` / etc.
             Some("ErrorKind") => Some("IpeErrorKind"),
             // `ErrorDetails` is backed by `IpeErrorDetails`. Constructor names
-            // match Sky source verbatim:
+            // match Ipê source verbatim:
             // `FfiPanic` / `TypeMismatch` / `HttpStatus` / `JsonDecode` /
             // `Custom`.
             Some("ErrorDetails") => Some("IpeErrorDetails"),
@@ -1199,7 +1199,7 @@ impl<'a> EmitCtx<'a> {
             Some("Cache") => Some("IpeCacheHandle"),
             // `Ipe.Email.EmailProvider` is backed by the runtime enum
             // `ipe_runtime::email::EmailProvider` (variant names `Resend`/`Ses`/
-            // `SendGrid`/`Smtp` match the Sky ctors verbatim). Its `EnumDef` is
+            // `SendGrid`/`Smtp` match the Ipê ctors verbatim). Its `EnumDef` is
             // suppressed in `ipe_lower` (no `enum_names` entry, so the guard
             // above lets this fire), so `Resend "k"` / `Ses cfg` construct the
             // runtime variants and `case p of Resend k -> …` matches them. In
@@ -2139,10 +2139,10 @@ fn resolve_sym(interner: &Interner, sym: Symbol) -> DResult<&str> {
 /// constructors, but the `sub_subscribe_ws_{message,close}` runtime fns
 /// take/produce `ipe_runtime::ws_client::{WsClientMessage, WsCloseCode}` — whose
 /// variant names (`Text`/`Binary`, `Normal`/`GoingAway`/`UnsupportedData`/
-/// `InternalError`/`Custom`) and field types match the Sky ADTs 1:1. Emitting
+/// `InternalError`/`Custom`) and field types match the Ipê ADTs 1:1. Emitting
 /// the enum name AS the runtime type makes every constructor / pattern / typed
 /// param resolve to the runtime enum (so the user's `toMsg` closure has the
-/// exact `Fn(WsClientMessage) -> M` shape the runtime fn requires), and the Sky
+/// exact `Fn(WsClientMessage) -> M` shape the runtime fn requires), and the Ipê
 /// enum's own decl is suppressed in [`crate::emit_types::emit_enum`]. Keyed on
 /// the type's HOME module so a user's unrelated `type CloseCode` never folds.
 pub(crate) fn websocket_bridge_rust_name(home_segs: &[&str], name: &str) -> Option<&'static str> {

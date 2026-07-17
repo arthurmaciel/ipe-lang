@@ -7,7 +7,7 @@ Date: 2026-07-09
 
 The kernel registry carried several classes of hand-maintained redundancy with
 no machine-enforced consistency, each an exit-0-then-cargo-fail hole (a
-well-typed program that `skyc` accepts but the emitted Rust fails to compile):
+well-typed program that `ipe` accepts but the emitted Rust fails to compile):
 
 - Canon's `qual_vars` could carry an unresolved kernel name
   (`VarHome::Kernel(None, …)`) when every non-excluded qualifier should map to a

@@ -1,6 +1,6 @@
 //! Hub read-side kernels — the bundled console's data plane on Rust.
 //!
-//! The console (`sky-bundled/console`) is itself a `Sky.Live` app; its
+//! The console (`sky-bundled/console`) is itself a `Ipe.Live` app; its
 //! `HubStore.ipe` declares twelve `Ffi.kernel "Hub_read*"` bindings that the
 //! Rust codegen lowers to the `hub_*` functions in this module. Each reads the
 //! SQLite telemetry **spill** (`IPE_CONSOLE_HUB_DB` / the `dbPath` arg, written
@@ -937,7 +937,7 @@ where
 }
 
 /// Replace ASCII control characters (notably CR/LF) with spaces so a
-/// Sky-controlled value interpolated into a diagnostic line can't forge
+/// Ipê-controlled value interpolated into a diagnostic line can't forge
 /// additional log entries (log injection). Total — never panics.
 fn sanitize_log(s: &str) -> String {
     s.chars()
@@ -972,7 +972,7 @@ async fn open_spill(db_path: &str) -> Option<SqlitePool> {
     match SqlitePool::connect_with(opts).await {
         Ok(pool) => Some(pool),
         Err(e) => {
-            // `db_path` is Sky-controlled (and the error may echo it); strip
+            // `db_path` is Ipê-controlled (and the error may echo it); strip
             // control chars so neither can forge extra log lines.
             eprintln!(
                 "[sky.hub] open_spill {}: {}",

@@ -2,13 +2,13 @@
 //! `Ui.el`, `Ui.text`, and `String.fromInt`.
 //!
 //! Non-E2E tests (no `IPE_E2E` required):
-//! - `tui_onkey_record_typechecks` — skyc-level regression for the `onKey :
+//! - `tui_onkey_record_typechecks` — ipe-level regression for the `onKey :
 //!   KeyEvent -> Msg` record scheme fix (T0001); verifies both `Tui.app` and
 //!   `Tui.program` accept a single-argument record-typed key handler and that
 //!   the emitter generates the bridging wrapper closure.
 //!
 //! E2E tests (gated on `IPE_E2E=1`):
-//! - `tui_counter_build_only` — full skyc + cargo build with `Tui.app` and
+//! - `tui_counter_build_only` — full ipe + cargo build with `Tui.app` and
 //!   a `KeyEvent -> Msg` handler (a `String -> String -> Msg` curried shape is
 //!   not valid under the scheme).
 //!
@@ -107,7 +107,7 @@ main =
 
 /// Minimal `Tui.program` source exercising `onKey : KeyEvent -> Msg` (record
 /// handler) and `view : Model -> String` (the Tui.program–specific view shape).
-// Note: `r#"..."#` is needed because the Sky source contains `""` (an empty
+// Note: `r#"..."#` is needed because the Ipê source contains `""` (an empty
 // string literal) which would terminate a plain `r"..."` raw string early.
 //
 // Unlike `IPE_TUI_COUNTER`, this program does NOT pipe through `Task.run`
@@ -160,7 +160,7 @@ main =
 /// Shared error type for E2E helpers.
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-/// Compile a Sky program string, build the emitted Rust project, and return
+/// Compile a Ipê program string, build the emitted Rust project, and return
 /// the path to the compiled binary.
 fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::PathBuf, BoxError> {
     let ipe_dir = std::env::temp_dir().join(format!("tui_e2e_{test_name}_sky"));
@@ -180,7 +180,7 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::Pat
         .map_err(|e| -> BoxError { format!("{test_name}: runtime unavailable: {e}").into() })?;
 
     ipe::build(&entry, &out_dir, &runtime)
-        .map_err(|e| -> BoxError { format!("{test_name}: skyc build failed: {e}").into() })?;
+        .map_err(|e| -> BoxError { format!("{test_name}: ipe build failed: {e}").into() })?;
 
     let exe = oracle::build_rust_binary(test_name, &out_dir)
         .map_err(|e| -> BoxError { format!("{test_name}: cargo build failed: {e}").into() })?;
@@ -206,11 +206,11 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::Pat
 /// |kind: String, value: String| Main_on_key(RecKindValue { kind, value })
 /// ```
 ///
-/// This test runs WITHOUT `IPE_E2E` (skyc-level only — no cargo build), so it
+/// This test runs WITHOUT `IPE_E2E` (ipe-level only — no cargo build), so it
 /// is always live in CI.
 #[test]
 fn tui_onkey_record_typechecks() {
-    // ── helper: write Sky source to a temp file, run ipe::build, check ok ──
+    // ── helper: write Ipê source to a temp file, run ipe::build, check ok ──
     fn compile_ok(label: &str, source: &str) -> String {
         let ipe_dir = std::env::temp_dir().join(format!("tui_onkey_{label}_sky"));
         let _ = std::fs::remove_dir_all(&ipe_dir);
@@ -235,7 +235,7 @@ fn tui_onkey_record_typechecks() {
         let built = ipe::build(&entry, &out_dir, &runtime);
         assert!(
             built.is_ok(),
-            "{label}: skyc build failed (T0001 regression?): {:?}",
+            "{label}: ipe build failed (T0001 regression?): {:?}",
             built.err()
         );
 
@@ -302,7 +302,7 @@ fn tui_counter_build_only() -> Result<(), BoxError> {
         return Ok(());
     }
 
-    // compile_and_build already does skyc + cargo build; success is the proof.
+    // compile_and_build already does ipe + cargo build; success is the proof.
     let _exe = compile_and_build("tui_build_only", IPE_TUI_COUNTER)?;
     Ok(())
 }

@@ -9,7 +9,7 @@ module Main exposing (main)
 -- requires the emitter to insert `.clone()` on each call so the first call
 -- does not move the binding and prevent subsequent calls (E0382).
 --
--- This is a compile-only golden: the Sky program is syntactically and
+-- This is a compile-only golden: the Ipê program is syntactically and
 -- type-correctly a Ipe.Http.Server app and is used purely to pin that the
 -- emitted Rust code contains `server_body(req.clone())` etc.
 

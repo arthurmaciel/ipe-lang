@@ -11,7 +11,7 @@
 //! Gated on `IPE_E2E=1`. Run:
 //!
 //! ```text
-//! IPE_E2E=1 cargo test -p skyc --test golden_m7_stdui_input
+//! IPE_E2E=1 cargo test -p ipe --test golden_m7_stdui_input
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -39,11 +39,11 @@ fn ui_input_and_describe_skyc_and_cargo_zero() {
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    // skyc-0: compiler must succeed.
+    // ipe-0: compiler must succeed.
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for stdui_input: {:?}",
+        "ipe build must succeed for stdui_input: {:?}",
         built.err()
     );
 

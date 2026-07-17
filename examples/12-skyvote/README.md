@@ -1,12 +1,12 @@
 # SkyVote
 
-Full-featured voting and feedback application built with Sky.Live. Includes user authentication, real-time updates via SSE, and SQLite persistence.
+Full-featured voting and feedback application built with Ipe.Live. Includes user authentication, real-time updates via SSE, and SQLite persistence.
 
 ## Build & Run
 
 ```bash
-sky install
-sky build src/Main.ipe
+ipe install
+ipe build src/Main.ipe
 ./sky-out/app
 ```
 

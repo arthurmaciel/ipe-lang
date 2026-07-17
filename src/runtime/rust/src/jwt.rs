@@ -1,10 +1,10 @@
-//! JWT kernels for Sky.Core.Jwt — HS256 / RS256 encode + decode.
+//! JWT kernels for Ipe.Jwt — HS256 / RS256 encode + decode.
 //!
 //! ## Token byte-layout parity with the Go backend
 //!
 //! Encoding here reproduces, byte-for-byte, the token the Go backend's
-//! `Sky.Core.Jwt.encode` produces for the same key + claims. The Go module
-//! (sky-stdlib `Sky/Core/Jwt.ipe`) builds the compact JWS in pure Sky on top of
+//! `Ipe.Jwt.encode` produces for the same key + claims. The Go module
+//! (sky-stdlib `Ipê/Core/Jwt.ipe`) builds the compact JWS in pure Ipê on top of
 //! `Json.Encode`, `Crypto`, and `Encoding`:
 //!
 //! * header  = `Json.Encode.encode 0 (object [("alg", …), ("typ", "JWT")])`
@@ -19,7 +19,7 @@
 //! claims serialization differ from Go and would yield a different signature.
 //! See `tests/golden/jwt_hs256_bytes` / `jwt_rs256_bytes` for the
 //! captured-Go-token byte-equality goldens, and
-//! `crates/skyc/tests/golden_m5b_uuid_jwt.rs` for the byte-parity assertions.
+//! `crates/ipe/tests/golden_m5b_uuid_jwt.rs` for the byte-parity assertions.
 //!
 //! ## API-surface divergence from the Go backend
 //!
@@ -31,7 +31,7 @@
 //! token BYTES are identical; the call surface is not, so a Go-targeted program
 //! using the builder API does not yet compile on the Rust backend. This is a
 //! recorded interim limitation — see `docs/architecture/divergence-policy.md`
-//! ("Sky.Core.Jwt API surface").
+//! ("Ipe.Jwt API surface").
 
 use super::IpeResult;
 
@@ -99,7 +99,7 @@ pub(crate) fn exp_is_zero(token: &str) -> bool {
     matches!(value.get("exp").and_then(JsonValue::as_u64), Some(0))
 }
 
-/// Sky `Jwt_encodeHs256 : String -> String -> Result Error String`
+/// Ipê `Jwt_encodeHs256 : String -> String -> Result Error String`
 ///
 /// Byte-identical to the Go backend's `Jwt.encode (Jwt.hs256 secret) claims`.
 pub fn jwt_encode_hs256<E: From<String>>(
@@ -110,8 +110,8 @@ pub fn jwt_encode_hs256<E: From<String>>(
     // floor for HS256 and yields a low-entropy / forgeable signing secret —
     // a 1-byte key mints a token anyone can re-sign. Reject it rather than emit
     // a weakly-keyed token. This mirrors the 32-byte floor auth.rs enforces and
-    // Std.Auth applies upstream, closing the gap for a direct misconfigured
-    // Jwt.* caller that bypasses Std.Auth.
+    // Ipe.Auth applies upstream, closing the gap for a direct misconfigured
+    // Jwt.* caller that bypasses Ipe.Auth.
     if secret.len() < 32 {
         return IpeResult::Err(
             "jwt-encode: HS256 secret must be at least 32 bytes (RFC 7518 §3.2)"
@@ -143,11 +143,11 @@ pub fn jwt_encode_hs256<E: From<String>>(
     IpeResult::Ok(format!("{}.{}", signing_input, sig))
 }
 
-/// Sky `Jwt_decodeHs256 : String -> String -> Result Error String`
+/// Ipê `Jwt_decodeHs256 : String -> String -> Result Error String`
 pub fn jwt_decode_hs256<E: From<String>>(secret: String, token: String) -> IpeResult<E, String> {
     // Reject verification under a sub-32-byte HMAC key — see jwt_encode_hs256.
     // A token "verified" with a low-entropy key carries no real authenticity
-    // guarantee; mirror the 32-byte floor in auth.rs / Std.Auth (RFC 7518 §3.2).
+    // guarantee; mirror the 32-byte floor in auth.rs / Ipe.Auth (RFC 7518 §3.2).
     if secret.len() < 32 {
         return IpeResult::Err(
             "jwt-decode: HS256 secret must be at least 32 bytes (RFC 7518 §3.2)"
@@ -202,7 +202,7 @@ pub fn jwt_decode_hs256<E: From<String>>(secret: String, token: String) -> IpeRe
     }
 }
 
-/// Sky `Jwt_encodeRs256 : String -> String -> Result Error String`
+/// Ipê `Jwt_encodeRs256 : String -> String -> Result Error String`
 ///
 /// Byte-identical to the Go backend's `Jwt.encode (Jwt.rs256 privKeyPem) claims`.
 pub fn jwt_encode_rs256<E: From<String>>(
@@ -235,7 +235,7 @@ pub fn jwt_encode_rs256<E: From<String>>(
     IpeResult::Ok(format!("{}.{}", signing_input, sig))
 }
 
-/// Sky `Jwt_decodeRs256 : String -> String -> Result Error String`
+/// Ipê `Jwt_decodeRs256 : String -> String -> Result Error String`
 pub fn jwt_decode_rs256<E: From<String>>(key_pem: String, token: String) -> IpeResult<E, String> {
     // Guard the u64 underflow that reject_tokens_expiring_in_less_than = 1
     // (set below) would hit on an `exp` of 0. See `exp_is_zero` — exp 0 is
@@ -399,9 +399,9 @@ pub fn ipe_jwt_audience(aud: String, claims: JsonValue) -> JsonValue {
 }
 
 /// `Jwt.expiresAt : Int -> Claims -> Claims` — sets the `exp` claim (Unix
-/// seconds).  The Sky stdlib documents `expiresAt` as accepting Unix
+/// seconds).  The Ipê stdlib documents `expiresAt` as accepting Unix
 /// milliseconds but the JWT spec and the Go oracle use Unix SECONDS.  The
-/// Sky stdlib's `Jwt.ipe` passes the value straight through as a JSON number,
+/// Ipê stdlib's `Jwt.ipe` passes the value straight through as a JSON number,
 /// so we mirror that — the caller is responsible for providing the right unit.
 pub fn ipe_jwt_expires_at(exp: i64, claims: JsonValue) -> JsonValue {
     claims_set(
@@ -436,7 +436,7 @@ pub fn ipe_jwt_jwt_id(jti: String, claims: JsonValue) -> JsonValue {
 
 /// `Jwt.withClaim : String -> JsonEnc.Value -> Claims -> Claims` — inserts an
 /// arbitrary claim whose value is any encoded JSON node.  Matches the reference
-/// `Sky/Core/Jwt.ipe:79`: the value is a `JsonEnc.Value` (itself a
+/// `Ipê/Core/Jwt.ipe:79`: the value is a `JsonEnc.Value` (itself a
 /// `serde_json::Value` at runtime, exactly like `Claims`), so it is inserted
 /// directly — a string / int / bool / nested object all round-trip with the
 /// correct token bytes.
@@ -473,7 +473,7 @@ pub fn ipe_jwt_encode(
 /// `Jwt.decode : Algorithm -> Int -> String -> Result Error String`
 ///
 /// Verifies the JWT signature and applies caller-supplied `now` (Unix seconds)
-/// for exp/nbf validation, matching the reference `Sky.Core.Jwt.decode` contract:
+/// for exp/nbf validation, matching the reference `Ipe.Jwt.decode` contract:
 ///   pastClaim:   now >= exp  → Err "Jwt.decode: token has expired"
 ///   futureClaim: now <  nbf  → Err "Jwt.decode: token is not yet valid"
 ///   absent claim              → accept (optional)

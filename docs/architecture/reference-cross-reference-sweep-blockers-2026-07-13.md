@@ -13,9 +13,9 @@ cited file:line first.
 
 ## #180 — Live.app `init : {}` vs required `LiveReq` — REFERENCE SOLVES (MIRROR)
 Reference supports BOTH `{}`-init and `LiveReq`-init via three mechanisms:
-1. **Free type var for init's arg.** `src/Sky/Type/Constrain/Expression.hs:2674-2680`
+1. **Free type var for init's arg.** `src/Ipê/Type/Constrain/Expression.hs:2674-2680`
    — `init : req -> (Model, Cmd Msg)`, `req` a free `TVar` (not pinned). `{}`-init unifies.
-2. **Body-reads-req detection.** `src/Sky/Generate/Rust/Builder/Walker.hs:350-374`
+2. **Body-reads-req detection.** `src/Ipê/Generate/Rust/Builder/Walker.hs:350-374`
    `collectLiveReqInitFns` collects only inits that actually read `req.*`; only those pin to `LiveReq`.
 3. **Discard wrapper for non-readers.** `ExprEmitter.hs:1686-1696`:
    `{ let __sky_init = init; move |_r: sky_runtime::LiveReq| __sky_init(()) }`.
@@ -42,8 +42,8 @@ Reference renders `Maybe a`→`SkyMaybe<T>` (`TypeRenderer.hs:157`), `Nothing`�
 **FIX: MIRROR no-coercion policy; fix region-type SEEDING.** Chase why the record field's region resolves to the inner type instead of `Maybe String`. Do NOT hand-insert coercions.
 
 ## #179 — E0308 polymorphic `Vec<Attribute<T1>>` — REFERENCE SOLVES (MIRROR)
-`Attribute` registered as generic runtime-opaque alias with a `{M}` marker preserving Sky args:
-- `Types.hs:269-271`: `("Std.Ui","Attribute") -> "sky_runtime::ui::Attribute<{M}>"`.
+`Attribute` registered as generic runtime-opaque alias with a `{M}` marker preserving Ipê args:
+- `Types.hs:269-271`: `("Ipe.Ui","Attribute") -> "sky_runtime::ui::Attribute<{M}>"`.
 - `TypeRenderer.hs:109-131` `collectRenderedTVars` collects the free `msg`; `253-271` renders `Attribute<Msg>` when args present. Returned `vec![...]` needs NO ascription — Rust unifies from the signature.
 **FIX: MIRROR.** Ensure Ipê's runtime-opaque registration for `Attribute` carries the `{M}` marker (else arg dropped → bare `Vec<Attribute>`); ensure `collectRenderedTVars` runs so `msg` lands in the fn's generic params.
 
@@ -58,5 +58,5 @@ Reference UNIFORMLY Arc-wraps closures; emits each branch independently against 
 ## Validation notes for already-fixed/in-review
 
 - **#174 (tuple `case`):** reference emits native `match` (`ExprEmitter.hs:2443-2477`); refutable arg patterns use synthetic param + `let <pat> = __pN else { panic!() }`, dropping `else` for irrefutable (avoids `irrefutable_let_patterns`) — `Pattern.hs:113-140`. Confirm ours emits `match` + gates let-else `else` on refutability.
-- **#175 (Std.Ui.Animation):** reference HAS `../sky/sky-stdlib/Std/Ui/Animation.sky` (Iterations/FillMode/Spec + `with*` + `attribute : Spec -> Attribute msg`). It uses `Ui.animateRaw : String->String->String->Bool->Attribute msg` (`Std/Ui.sky:1433-1435`) constructing `AttrAnimation`. **RECONCILE:** our #175 added a `UiAnimateRaw` kernel — confirm it matches the reference's `animateRaw` shape (same 4-arg sig → aligned) rather than a divergent dedicated `animate` kernel.
+- **#175 (Ipe.Ui.Animation):** reference HAS `../sky/sky-stdlib/Std/Ui/Animation.sky` (Iterations/FillMode/Spec + `with*` + `attribute : Spec -> Attribute msg`). It uses `Ui.animateRaw : String->String->String->Bool->Attribute msg` (`Std/Ui.sky:1433-1435`) constructing `AttrAnimation`. **RECONCILE:** our #175 added a `UiAnimateRaw` kernel — confirm it matches the reference's `animateRaw` shape (same 4-arg sig → aligned) rather than a divergent dedicated `animate` kernel.
 - **#176 (callback Send+Sync):** reference emits `Arc<dyn Fn(..)->M + Send + Sync>` (`html.rs:45-53`, `tea.rs:31-32` `SubSpawn: Arc<dyn Fn(M)+Send+Sync>`), NOT unboxed/monomorphized. **NOTE:** our #176 used unboxed monomorphization — valid IF our runtime slot is a generic `F: Fn+Send+Sync` param (it is, per the fix), but the reference stores Arc<dyn> in a field. Different runtime shape → both can be correct; the #176 review confirms ours builds+runs against our runtime signature.

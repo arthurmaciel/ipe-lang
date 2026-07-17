@@ -10,7 +10,7 @@ Provides the **M4 kernel registry** the FFI consumer port blocks on
 ## Executive summary (12 lines)
 
 1. Today kernel identity is an unparsed `(qualifier, name)` string pair re-matched at **three divergent sites** (canon `env.rs`, types `constrain.rs`, lower `lower.rs`) plus four more (naming, `is_*` predicates, `native_ir_type`, the zero-arity classifier) — **seven hand-tables that silently drift**.
-2. The types table fails **open**: `constrain.rs:4069 _ => Ty::Var(u32::MAX)` gives any un-schemed kernel a single flexible variable, so `skyc` never checks its args → **exit-0-then-cargo-fail**, ~231 holes across 14 families.
+2. The types table fails **open**: `constrain.rs:4069 _ => Ty::Var(u32::MAX)` gives any un-schemed kernel a single flexible variable, so `ipe` never checks its args → **exit-0-then-cargo-fail**, ~231 holes across 14 families.
 3. Fix: resolve `(qualifier, name) → KernelId` **once at canonicalisation** (parse, don't validate); every downstream stage holds a typed `KernelId` and never re-matches a string.
 4. `KernelId = Stdlib(StdlibKernel) | Ffi(FfiKernelId)` — a two-tier sum: a **closed** enum for stdlib (compile-time exhaustive) and an **opaque index** for FFI (open, data-driven — R0.2).
 5. The registry lives in a **new leaf crate `sky_kernels`** (deps `sky_intern` + `sky_diagnostics` only), consulted by canon / types / lower / backend with no dependency cycle.
@@ -201,7 +201,7 @@ Coexistence properties (all per D5 / R0.2):
 
 **Phase B — parse-once boundary (closes F2).** `VarHome::Kernel(KernelId)`; relocate the `(qual,name) → StdlibKernel` table from `lower.rs` into `decl()` / `stdlib_index`, consumed by canon; `lower_callee` unwraps the canon id. Behaviour identical (same table, relocated). **F2 closed here, independent of schemes.** Green.
 
-**Phase C — invert the fallback (closes F1's silent-open class + F3's asymmetry).** Stand up the dual-lookup: `stdlib_scheme(id)` serves migrated families from the new exhaustive match and delegates un-migrated ones to legacy `kernel_ty`. **Change the legacy tail `_ => Ty::Var(u32::MAX)` to a fail-closed diagnostic whose shape matches lower's IPE-L0108** (an *unimplemented-kernel* gap — **not** a `CompilerBug`; a holed kernel used by valid Sky code is a missing scheme, not a compiler invariant break). The crate still compiles (the wildcard still exists), but its failure flips from silent-open (exit-0-then-cargo-fail) to loud-closed at type-check. **No new exit-0 hole can appear, and all ~231 existing holes surface at once as fail-closed `skyc` diagnostics** — and because `sky_types` now fails the *same way* lower already does, **F3's lower-closed/types-open asymmetry is closed here, two phases before the wildcard is deleted.** A burndown test enumerates `StdlibKernel::ALL`, calls `stdlib_scheme`, counts legacy-tail hits, and **asserts the count only decreases**.
+**Phase C — invert the fallback (closes F1's silent-open class + F3's asymmetry).** Stand up the dual-lookup: `stdlib_scheme(id)` serves migrated families from the new exhaustive match and delegates un-migrated ones to legacy `kernel_ty`. **Change the legacy tail `_ => Ty::Var(u32::MAX)` to a fail-closed diagnostic whose shape matches lower's IPE-L0108** (an *unimplemented-kernel* gap — **not** a `CompilerBug`; a holed kernel used by valid Ipê code is a missing scheme, not a compiler invariant break). The crate still compiles (the wildcard still exists), but its failure flips from silent-open (exit-0-then-cargo-fail) to loud-closed at type-check. **No new exit-0 hole can appear, and all ~231 existing holes surface at once as fail-closed `ipe` diagnostics** — and because `sky_types` now fails the *same way* lower already does, **F3's lower-closed/types-open asymmetry is closed here, two phases before the wildcard is deleted.** A burndown test enumerates `StdlibKernel::ALL`, calls `stdlib_scheme`, counts legacy-tail hits, and **asserts the count only decreases**.
 
 > Rationale (security > correctness > completeness): the ~231 holes never produced a passing example — they were already red (cargo failure). Fail-closing only moves the failure earlier and louder, which the no-deferral rule *wants*. This is why Phase C precedes any family fill.
 
@@ -255,7 +255,7 @@ And it **is** the M4 registry the FFI consumer port blocks on: `KernelEntry` / `
    The spec assumes `EnumIter` (one derive, no new dep beyond `strum`). A `macro_rules!` single-row-list emitting the enum + `decl()` together would make "variant without decl" physically un-writable in one edit, but cannot host the scheme match (needs `Ty`). Low-stakes; either satisfies the single-source guarantee. Decide at Phase A based on whether `strum` is already a workspace dep.
 
 3. **Retention of `(Symbol, Symbol)` on the canon node.**
-   Consumed for resolution; the spec drops it from the semantic path. Whether to retain it as a diagnostics/`sky doc` breadcrumb (nice errors, `sky doc` origin display) or reconstruct from `decl()` on demand is an ergonomics call for Phase B — no soundness impact either way.
+   Consumed for resolution; the spec drops it from the semantic path. Whether to retain it as a diagnostics/`ipe doc` breadcrumb (nice errors, `ipe doc` origin display) or reconstruct from `decl()` on demand is an ergonomics call for Phase B — no soundness impact either way.
 
 ---
 

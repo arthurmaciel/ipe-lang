@@ -9,7 +9,7 @@ import Ipe.Log exposing (println)
 main =
     let
         pipeline =
-            Task.succeed "Sky"
+            Task.succeed "Ipê"
                 |> Task.andThen
                        (\name -> Task.succeed ("Hello, " ++ name ++ "!"))
                 |> Task.andThen

@@ -65,11 +65,11 @@ impl LastGoodBinary {
     }
 }
 
-/// Minimal, dependency-free SHA-256 is overkill here — `skyc`'s own build
+/// Minimal, dependency-free SHA-256 is overkill here — `ipe`'s own build
 /// cache already pulls in `sha2` for exactly this purpose at the crate
 /// level, but `ipe_watch` is deliberately dependency-light (Task 21's own
 /// "confined watcher" doesn't need a crypto crate) so this module borrows
-/// nothing from `skyc`. A FNV-1a-based 256-bit-widened digest would be
+/// nothing from `ipe`. A FNV-1a-based 256-bit-widened digest would be
 /// cheaper, but content-hash COLLISION here only degrades to a missed
 /// "byte-identical, skip the restart" fast path, never a soundness hole
 /// (the hash is compared for equality only, never trusted as an integrity

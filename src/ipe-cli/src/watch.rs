@@ -3,7 +3,7 @@
 //! The salsa-aware orchestrator that wires [`ipe_watch`]'s salsa-agnostic
 //! primitives (confined watcher, debounce, process supervisor) to THIS
 //! crate's warm compile pipeline. This is the first real CONSUMER of
-//! incremental compilation's speed benefit — a naive "re-run `skyc build`
+//! incremental compilation's speed benefit — a naive "re-run `ipe build`
 //! from scratch on every save" watch mode would defeat the entire point of
 //! the salsa port.
 //!
@@ -186,7 +186,7 @@ fn emit(opts: &WatchOptions, event: WatchEvent) {
 /// batch and feed the result through a WARM, reused database via
 /// `ipe_db::sync_source_root` rather than constructing a fresh one per
 /// build. Deliberately mirrors `run_build`'s own manifest-resolution
-/// dispatch (`crates/skyc/src/lib.rs`) without touching that code — the
+/// dispatch (`crates/ipe/src/lib.rs`) without touching that code — the
 /// one-shot entry points stay exactly as tested by the golden suite; this
 /// is an independent, read-only duplicate of the RESOLUTION step only (no
 /// compiler stage runs here).
@@ -617,7 +617,7 @@ fn run_inner(
         });
     }
     // SIGTERM → orderly shutdown, for the CLI `run()` path ONLY (`external_stop`
-    // is `None` exactly there). A supervisor's `kill -TERM <skyc-pid>` (systemd's
+    // is `None` exactly there). A supervisor's `kill -TERM <ipe-pid>` (systemd's
     // default, PID-only — not the foreground process group Ctrl-C signals) would
     // otherwise hard-kill this process before ANY teardown code runs, orphaning
     // the supervised child on its port forever. The forwarder is a third instance
@@ -907,7 +907,7 @@ fn run_inner(
 /// compiler-controlled text, not user input, so a substring check is sound
 /// here (unlike parsing arbitrary user text). Ipe.Live apps get the
 /// precise `/_sky/readyz` probe; every other shape (Ipe.Http.Server has no
-/// readiness endpoint yet, and its listen port is a Sky-source-level
+/// readiness endpoint yet, and its listen port is a Ipê-source-level
 /// argument this driver cannot statically know) falls back to
 /// `AliveGrace` — matching the design doc's own readiness bifurcation
 /// ("`/_sky/readyz` for Ipe.Live; alive + optional health for CLI").

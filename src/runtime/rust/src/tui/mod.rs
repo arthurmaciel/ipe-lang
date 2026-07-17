@@ -1,7 +1,7 @@
-//! Sky.Tui — terminal (ANSI cell) backend for the Rust target.
+//! Ipe.Tui — terminal (ANSI cell) backend for the Rust target.
 //!
-//! TEA-shaped (`Std.Tui.app cfg`): the same `view : Model -> Element msg` that
-//! Sky.Live / Sky.Webview render, lowered to ANSI cells. See
+//! TEA-shaped (`Ipe.Tui.app cfg`): the same `view : Model -> Element msg` that
+//! Ipe.Live / Ipe.Webview render, lowered to ANSI cells. See
 //! `docs/superpowers/specs/2026-06-12-s4-sky-tui-design.md`.
 
 pub mod app;

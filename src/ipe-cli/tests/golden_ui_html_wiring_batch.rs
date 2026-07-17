@@ -19,7 +19,7 @@
 //!
 //! ## What is tested
 //!
-//! * `skyc build` compiles `tests/golden/ui_html_wiring_batch/Main.ipe`
+//! * `ipe build` compiles `tests/golden/ui_html_wiring_batch/Main.ipe`
 //!   (canon → types → lower → Rust backend) for all 19 exercised kernels.
 //! * The emitted Rust project `cargo build`s and the binary runs and exits 0.
 //! * `Html.doctype` + `Html.htmlNode` + `Html.headNode` + `Html.titleNode` +
@@ -77,7 +77,7 @@ fn build_run_ui_html_wiring_batch() -> (PathBuf, support::RunOutcome) {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for ui_html_wiring_batch: {:?}",
+        "ipe build must succeed for ui_html_wiring_batch: {:?}",
         built.err()
     );
 

@@ -1,8 +1,8 @@
-//! Canonical HTTP header-name casing, shared by Sky.Live and Sky.Http.Server.
+//! Canonical HTTP header-name casing, shared by Ipe.Live and Ipe.Http.Server.
 //!
 //! Go stores request header names in canonical MIME case
 //! (`textproto.CanonicalMIMEHeaderKey`: `content-type` -> `Content-Type`,
-//! `x-sky-live` -> `X-Sky-Live`) and `r.Header.Get` canonicalises the lookup
+//! `x-sky-live` -> `X-Ipê-Live`) and `r.Header.Get` canonicalises the lookup
 //! key, so a handler asking for either `"content-type"` or `"Content-Type"`
 //! resolves. hyper/axum expose request header names lower-cased, so the Rust
 //! runtime must re-derive the canonical form at the request boundary and use it
@@ -24,7 +24,7 @@
 /// cannot reach the request boundary — hyper/axum reject invalid header names
 /// on parse — and for `Server.header` lookups the observable result (Just /
 /// Nothing) is identical to Go regardless, because the canonical form is never
-/// surfaced to Sky, only used to key an already-canonical map.
+/// surfaced to Ipê, only used to key an already-canonical map.
 pub(crate) fn canonical_header(k: &str) -> String {
     k.split('-')
         .map(|w| {

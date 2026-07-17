@@ -16,7 +16,7 @@
 //!   is the SAME canonicalisation the emitted `RecordStruct` field layout
 //!   already uses, so the tag and the actual wire order share one source of
 //!   truth.
-//! * Enums fold in their NOMINAL identity (home module + type name) — Sky
+//! * Enums fold in their NOMINAL identity (home module + type name) — Ipê
 //!   ADTs are nominal, and a same-shaped but differently-named enum decodes
 //!   with the wrong semantic meaning attached.
 //! * Enum VARIANTS hash in DECLARATION order (never sorted), each with its
@@ -76,7 +76,7 @@ const FUEL: u32 = 64;
 
 /// Hash `bytes` with an explicit little-endian length prefix so two distinct
 /// inputs can never concatenate into the same byte stream (the classic
-/// delimiter-collision hazard) — the same framing `skyc`'s build-cache key
+/// delimiter-collision hazard) — the same framing `ipe`'s build-cache key
 /// already established.
 fn update_len_prefixed(h: &mut Sha256, bytes: &[u8]) {
     let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
@@ -326,7 +326,7 @@ fn hash_enum(
     h: &mut Sha256,
     fuel: u32,
 ) -> DResult<()> {
-    // Nominal identity: Sky ADTs are nominal, so the type name AND its home
+    // Nominal identity: Ipê ADTs are nominal, so the type name AND its home
     // module path fold in — a same-shaped enum from another module is a
     // DIFFERENT wire format.
     update_str(h, ctx.resolve_ident(name)?);
@@ -483,7 +483,7 @@ mod tests {
     }
 
     /// Two structurally-identical but differently-NAMED enums must hash
-    /// DIFFERENTLY — Sky ADTs are nominal, and a same-shaped enum from a
+    /// DIFFERENTLY — Ipê ADTs are nominal, and a same-shaped enum from a
     /// different module decodes with the wrong semantic meaning attached
     /// (the "restore passes the gate with nonsense" H24 hazard).
     #[test]

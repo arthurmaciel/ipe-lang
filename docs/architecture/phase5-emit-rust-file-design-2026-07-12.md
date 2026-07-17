@@ -6,7 +6,7 @@
 > forced"), which this doc does NOT reopen or re-litigate — it is the
 > authoritative statement of *why* the gap exists. This doc answers the
 > question §10.2 left open: **what is the concrete, buildable design that
-> closes it**, staged so THE SEAL (`skyc` exit-0 ⇒ `cargo build` succeeds)
+> closes it**, staged so THE SEAL (`ipe` exit-0 ⇒ `cargo build` succeeds)
 > never has a half-split intermediate state, and the 155-file golden-oracle
 > suite is migrated rather than broken.
 >
@@ -29,7 +29,7 @@ before editing (not taken on the review's word alone):
    revised §2.2, the revised Task 4 (partition function), the revised
    Task 5 (route `emit_program`, now with an explicit ordering-
    preservation rule for the DB-using goldens), and Task 11's pilot
-   fixture, now extended to exercise `Std.Db` alongside the multi-module
+   fixture, now extended to exercise `Ipe.Db` alongside the multi-module
    split.
 2. **`RecordStruct` names were never cross-checked against
    `enum_names`/`func_names`**, a pre-existing gap whose failure mode the
@@ -66,8 +66,8 @@ numbering scheme and are deliberately left untouched.
 and `sky_lower::lower`. This section re-verifies that survey against the
 current `HEAD` (`crates/sky_backend_rust/src/{project,lib}.rs`,
 `crates/sky_ir/src/ir.rs`, `crates/sky_backend/src/lib.rs`,
-`crates/sky_db/src/lib.rs`, `crates/skyc/src/lib.rs`,
-`crates/skyc/tests/golden_*.rs`) and records **three findings that
+`crates/sky_db/src/lib.rs`, `crates/ipe/src/lib.rs`,
+`crates/ipe/tests/golden_*.rs`) and records **three findings that
 materially change the shape of the fix**, plus two that confirm §10.2
 verbatim. Nothing has drifted since 2026-07-11; these are refinements, not
 corrections.
@@ -128,12 +128,12 @@ folding is **not claimed to be injective** — the code says so explicitly:
 Both the func-name and enum-name builders already run
 `func_names.values().any(|n| n == &rust_name)` /
 `enum_names.values().any(...)` and fail closed with
-`Diagnostic::Name::DuplicateValue` (a `skyc`-time, not `cargo`-time, error)
+`Diagnostic::Name::DuplicateValue` (a `ipe`-time, not `cargo`-time, error)
 the moment two *distinct* items would mangle to the same Rust identifier.
 
 **Consequence:** the pre-existing single-file backend ALREADY depends on
 global name uniqueness — a flat Rust namespace requires it — and ALREADY
-enforces it at `skyc` time with a fail-closed gate. §10.2's sub-problem (a)
+enforces it at `ipe` time with a fail-closed gate. §10.2's sub-problem (a)
 ("reintroduces a whole visibility design") is therefore not "design
 `pub`/`use` per item from scratch" — it is "decide which file each
 already-globally-unique-named item is DECLARED in, and make it visible to
@@ -150,9 +150,9 @@ glob error (two conflicting glob-imported items sharing one name).
 first-occurrence-order map (`record_by_fieldset`,
 `crates/sky_backend_rust/src/lib.rs:521-565`) keyed purely by the
 canonicalised field-name set — `naming::record_struct_name(&key)` derives
-the Rust name from the SHAPE, not from any originating Sky module. §10.2's
+the Rust name from the SHAPE, not from any originating Ipê module. §10.2's
 sub-problem (b) is real, not speculative: a synthesised record struct has no
-single natural "owning" Sky module by construction, because the whole point
+single natural "owning" Ipê module by construction, because the whole point
 of the table is cross-module deduplication. §2.2 resolves this with an
 explicit, principle-ranked decision.
 
@@ -163,7 +163,7 @@ lib.rs:142-147`) already holds 3 entries today (`src/main.rs`,
 `src/sky_runtime/mod.rs`, `src/sky_runtime/config.rs`) and Phase 5 §10.3 /
 §10.5 already recorded, and Task 16's own decisions ledger confirms, that
 `build_emit_manifest` / `reconcile_emitted_project` / `prune_orphaned_files`
-(`crates/skyc/src/lib.rs:826-935`) are already generic over the file count —
+(`crates/ipe/src/lib.rs:826-935`) are already generic over the file count —
 "Task 16 needed zero backend changes... the manifest shape is agnostic to
 how many files it contains" (§10.5 item 4). Re-verified against current
 `HEAD`: still true, no code has changed there. **Consequence: this spec's
@@ -173,12 +173,12 @@ appropriate; the write/reconcile/prune machinery needs no design work.
 
 ### 1.6 CONFIRMED — the golden-oracle SEAL is a real, simultaneous, 155-test blocker
 
-`ls crates/skyc/tests | grep -c '^golden'` returns **155** (the doc's "140+"
+`ls crates/ipe/tests | grep -c '^golden'` returns **155** (the doc's "140+"
 estimate is accurate, slightly conservative). Every one of them duplicates
 its own `repo_root()`/`ldir()` helper and does a direct
 `assert_eq!(read_to_string(out.join("src").join("main.rs")),
 read_to_string(golden.join("main.rs")))` (representative:
-`crates/skyc/tests/golden_m0.rs:34-41`). A SECOND, independent oracle exists
+`crates/ipe/tests/golden_m0.rs:34-41`). A SECOND, independent oracle exists
 at the crate level: `crates/sky_backend_rust/tests/golden.rs` builds a
 `Program` by hand and asserts `RustBackend::emit` reproduces
 `GOLDEN_MAIN`/`GOLDEN_CARGO` byte-for-byte. **Both harnesses hard-code the
@@ -208,7 +208,7 @@ exactly as the existing anchor-assertion code in `project.rs` already does
 ### 2.1 (a) The mod/visibility scheme — "Spine" + per-module files + a flat glob barrel
 
 **Decision.** Introduce a two-tier file taxonomy instead of the naive "N
-Sky modules → N Rust files, symmetrically":
+Ipê modules → N Rust files, symmetrically":
 
 - **`Spine`** — exactly one file, `src/main.rs`. Holds everything that is
   program-wide rather than module-owned: the preamble, the fixed
@@ -255,7 +255,7 @@ exactly which items module B's functions reference and importing only
 those) would be strictly more Rust-idiomatic but is unjustified extra
 complexity here: it is a NEW analysis pass with its OWN soundness
 obligation (miss one reference → `E0433` unresolved-name → SEAL violation
-at `cargo` time, not `skyc` time), buying nothing the glob barrel doesn't
+at `cargo` time, not `ipe` time), buying nothing the glob barrel doesn't
 already buy for free, given names are already unique. Under
 efficiency-vs-soundness (efficiency ranks below soundness), the simpler,
 already-proven-sound mechanism wins.
@@ -299,7 +299,7 @@ with an empty `home`. Left unpatched, that generic fallback would route
 entry-point module happens to own once 2+ distinct `home`s exist — a
 `SkyModule` file, not `Spine` — silently contradicting this section's own
 decision text. The fixture that would have caught this (Task 10, now
-Task 11) had no `Std.Db` usage, so the interaction shipped unverified.
+Task 11) had no `Ipe.Db` usage, so the interaction shipped unverified.
 
 **Fix (option (a) — force `Spine`-routing inside `partition_items`,
 chosen over option (b) — leave the fallback and document + test it).**
@@ -337,7 +337,7 @@ construction rather than true by convention + a regression test — the
 directly. Correctness/soundness rank above the completeness/efficiency
 argument for option (b) (skip the `partition_items` change, just test it),
 so (a) wins. Task 11's pilot fixture is ALSO extended to exercise
-`Std.Db` alongside the multi-module split (not merely documented as sound)
+`Ipe.Db` alongside the multi-module split (not merely documented as sound)
 — belt-and-braces, since even a structurally-guaranteed placement benefits
 from one concrete build-and-run proof before Milestone C is considered
 proven, matching this project's own TDD discipline throughout §5.
@@ -377,7 +377,7 @@ at Stripe-SDK scale (76k symbols) — not attempted here.
 
 **Decision.** The kernel-wrapper prelude, TEA/Auth alias blocks, epilogue
 (Ffi-kernel polyfill, list helpers), and `fn main()` are ALREADY
-program-wide, never per-Sky-module, content. Under the `Spine`/`SkyModule`
+program-wide, never per-Ipê-module, content. Under the `Spine`/`SkyModule`
 split (§2.1) they simply... stay exactly where they are, in `main.rs` —
 `Spine` IS `main.rs`, and it is the "spine" precisely because it is what
 survives once the module-owned `types`/`funcs` loops are extracted. There
@@ -416,7 +416,7 @@ landing that harness change FIRST as its own safe, additive step."
 hand-rolled ones):
 
 ```rust
-/// crates/skyc/tests/support/mod.rs (extended)
+/// crates/ipe/tests/support/mod.rs (extended)
 
 /// Assert every file `emitted` claims (`files` + the root `Cargo.toml`)
 /// matches its counterpart under `golden_dir` byte-for-byte, AND that
@@ -487,8 +487,8 @@ uses — Phase 3 §8.4 decision 1):**
    file's now-redundant local `ldir`/`repo_root` duplicate in favour of
    `support::repo_root`). Land in batches (e.g. 20-30 files per commit) so
    review stays tractable and any one batch's regression is easy to bisect.
-5. Add a COVERAGE gate: a new test (`crates/skyc/tests/golden_harness_
-   coverage.rs`) that greps `crates/skyc/tests/golden_*.rs` for the
+5. Add a COVERAGE gate: a new test (`crates/ipe/tests/golden_harness_
+   coverage.rs`) that greps `crates/ipe/tests/golden_*.rs` for the
    retired ad hoc pattern (`out.join("src").join("main.rs")` compared via
    `assert_eq!` outside `support::`) and fails if any instance remains —
    makes "migration complete" a machine-checked property, not a claim.
@@ -533,13 +533,13 @@ changes. Pure test-infrastructure risk.
 > new pilot). **That premise was FALSE and is corrected in place below.**
 > Executing Task 13 (the machine-checked blast-radius gate) revealed that
 > **6 tests across 5 golden binaries are genuinely multi-home** and the
-> per-Sky-module split CORRECTLY fires for them — the actual blast radius is
+> per-Ipê-module split CORRECTLY fires for them — the actual blast radius is
 > ~6 goldens, not zero. Two classes were missed by the original survey: (a)
 > genuine USER multi-module fixtures (`mm_diamond` = B/C/D/Main, `mm_local_pkg`
 > = Lib/Main, `boundary_scheme_field_result` = Lib1/Lib2/Main), each
 > carrying 2+ distinct user `home`s; and (b) programs importing a Layer-3
-> **stdlib** module compiled to Sky source (`Std.Css`, `Std.Ui.Grid`,
-> `Std.Ui.Transition`) — the stdlib module carries its OWN `home` distinct
+> **stdlib** module compiled to Ipê source (`Ipe.Css`, `Ipe.Ui.Grid`,
+> `Ipe.Ui.Transition`) — the stdlib module carries its OWN `home` distinct
 > from `Main`, so `partition_items` sees 2 distinct `SkyModule` homes and the
 > split fires. **The decision on discovering this was to ACCEPT the wider-
 > but-correct blast radius, NOT to narrow the split trigger** (e.g. by
@@ -569,15 +569,15 @@ write each to its own `RelPath` and add the barrel lines to `Spine`."
 
 **The trigger condition counts `SkyModule` buckets only, never `Spine`.**
 `partition_items` (Task 4) ALWAYS produces a `Spine` bucket for any program
-that uses `Std.Db` — that is where `SqlValue`/`SqlField` now route
-unconditionally (§2.2's fix). A DB-using single-Sky-module golden therefore
+that uses `Ipe.Db` — that is where `SqlValue`/`SqlField` now route
+unconditionally (§2.2's fix). A DB-using single-Ipê-module golden therefore
 has exactly one `SkyModule` bucket (collapse fires, unchanged single-file
 output) alongside a non-empty `Spine` bucket (which was ALREADY part of
 `Spine`'s content today, per §2.2) — the presence of `Spine`-bucket content
 does not, by itself, materialise a second file. Only 2+ distinct
 `SkyModule` `home`s trigger the real split. See Task 5 for the exact
 ordering rule that keeps this collapse byte-identical for the existing
-`Std.Db` goldens (`golden_m5b_db`, `golden_m5b_db_gates`, and friends).
+`Ipe.Db` goldens (`golden_m5b_db`, `golden_m5b_db_gates`, and friends).
 
 This invariant is what keeps Milestone C's blast radius small — but **small
 is not zero** (corrected premise, verified by executing Task 13's
@@ -592,9 +592,9 @@ binaries are genuinely multi-home and legitimately split**, each regenerated
 | `golden_mm::mm_diamond_emits_byte_identical_main_rs` | B, C, D, Main | user multi-module (dir-diff) | regenerated golden DIR: Spine-only `main.rs` + barrel + `sky_mods/sky_mod_{b,c,d,main}.rs` |
 | `golden_mm::mm_local_pkg_emits_byte_identical_main_rs` | Lib, Main | user multi-module (dir-diff) | regenerated golden DIR: Spine-only `main.rs` + barrel + `sky_mods/sky_mod_{lib,main}.rs` |
 | `golden_class1_boundary_scheme_field_result` | Lib1, Lib2, Main | user multi-module (substring) | assertion widened to scan whole emitted `src/` tree; visibility prefix dropped (`pub(crate) fn`) |
-| `golden_css_source` | Main, Std.Css | stdlib-source import (substring) | assertion widened to scan whole emitted `src/` tree |
-| `golden_stdui_grid_seal` | Main, Std.Ui.Grid | stdlib-source import (substring) | assertion widened to scan whole emitted `src/` tree |
-| `golden_stdui_transition_seal` | Main, Std.Ui.Transition | stdlib-source import (substring) | assertion widened to scan whole emitted `src/` tree |
+| `golden_css_source` | Main, Ipe.Css | stdlib-source import (substring) | assertion widened to scan whole emitted `src/` tree |
+| `golden_stdui_grid_seal` | Main, Ipe.Ui.Grid | stdlib-source import (substring) | assertion widened to scan whole emitted `src/` tree |
+| `golden_stdui_transition_seal` | Main, Ipe.Ui.Transition | stdlib-source import (substring) | assertion widened to scan whole emitted `src/` tree |
 
 (That is 6 tests / 5 binaries — `golden_mm` carries two of the affected
 tests.) The pilot fixture (§5 Tasks 8/11/12) additionally exercises the
@@ -604,7 +604,7 @@ in Task 13 by building each of those emitted projects under `IPE_E2E` and
 confirming the relocated leaf kernels still resolve via `use crate::*;`.
 
 The `>= 2` split trigger was deliberately NOT narrowed to exclude stdlib
-homes: a Layer-3 stdlib module compiled to Sky source is a real, own-home
+homes: a Layer-3 stdlib module compiled to Ipê source is a real, own-home
 compilation unit, and giving it its own `sky_mods/<mod>.rs` file is exactly
 the per-module granularity Milestone D's salsa incrementality is built on.
 Collapsing stdlib homes into `Main` would be a papering-over workaround that
@@ -612,7 +612,7 @@ throws away that granularity for the sole benefit of a smaller golden diff —
 rejected under the no-deferral / root-cause principle.
 
 **Note on `golden_cross_module_type_res.rs`.** This existing test (multi-
-`.ipe`-file examples 16/17) asserts `skyc::build` exits 0 — it does NOT
+`.ipe`-file examples 16/17) asserts `ipe::build` exits 0 — it does NOT
 byte-compare `main.rs`. It is UNAFFECTED by this spec either way (it never
 touches the golden-dir byte-comparison harness), but it IS a genuine
 existing multi-module program at the SOURCE level. Worth a follow-up note
@@ -629,7 +629,7 @@ as an optional strengthening, not required for THE SEAL.
 this is not merely a staging convenience.** `EmittedProject.files:
 BTreeMap<RelPath, String>` (§1.5) was ALREADY file-count-agnostic before
 this spec, and `build_emit_manifest` / `reconcile_emitted_project` /
-`prune_orphaned_files` (`crates/skyc/src/lib.rs:826-935`) ALREADY do
+`prune_orphaned_files` (`crates/ipe/src/lib.rs:826-935`) ALREADY do
 per-file content-gated writes (`write_if_changed`) and orphan-pruning for
 however many files a manifest declares — that machinery needed zero
 changes for Task 16 and needs zero changes here. So the moment Milestone C
@@ -641,7 +641,7 @@ untouched (content-identical, `write_if_changed` skips the write), so
 `cargo build`'s own dependency-graph incrementality already does the right
 thing per compilation unit. Milestone D's job is narrower and more
 specific than "the payoff": it makes the COMPILER's OWN re-derivation of
-each file's content salsa-tracked and memoized (so `skyc` itself, not just
+each file's content salsa-tracked and memoized (so `ipe` itself, not just
 the downstream `cargo build`, skips re-rendering an unaffected module's
 text) — a real, additional win, but layered on top of a floor that is
 already sound and already delivers most of the user-visible benefit
@@ -679,14 +679,14 @@ discipline §10.2 itself modelled for this session.
 ```rust
 /// crates/sky_db/src/lib.rs (new)
 
-/// One Rust source file the backend emits for a Sky module's OWN
+/// One Rust source file the backend emits for a Ipê module's OWN
 /// declarations (`Spine` — the fixed-anchor + entry file — is NOT a
 /// `RustFileId`; it is produced by the separate `emit_spine_file` query,
 /// §4.2, because it is always-present and never added/removed by a
 /// module add/delete the way a `SkyModule` file is).
 #[salsa::interned]
 pub struct RustFileId {
-    /// The Sky module's defining path — `sky_ir::Func::home` /
+    /// The Ipê module's defining path — `sky_ir::Func::home` /
     /// `EnumDef::home`'s value, never empty on the real driver path (only
     /// backend unit-test IR built by hand skips it, and that path never
     /// reaches salsa).
@@ -702,7 +702,7 @@ field with no new trait work.
 
 | Query | Depends on | Returns | Role |
 |---|---|---|---|
-| `program_rust_file_ids(root, entry)` | `lower_program(root, entry)` | `Arc<BTreeSet<RustFileId>>` | The `home`-set quantifier — mirrors `program_metadata`'s `program_modules()` role in the ORIGINAL design doc: makes the "which files exist" question a first-class, salsa-tracked value so an add/delete of a Sky module (which changes the `home` set) is a visible dependency edge, not an implicit side effect of `lower_program` re-running. |
+| `program_rust_file_ids(root, entry)` | `lower_program(root, entry)` | `Arc<BTreeSet<RustFileId>>` | The `home`-set quantifier — mirrors `program_metadata`'s `program_modules()` role in the ORIGINAL design doc: makes the "which files exist" question a first-class, salsa-tracked value so an add/delete of a Ipê module (which changes the `home` set) is a visible dependency edge, not an implicit side effect of `lower_program` re-running. |
 | `emit_spine_file(root, entry, config)` | `lower_program(root, entry)`, `config.db_driver(db)` | `EmitResult` (reuses the existing `Result<Arc<...>, Diagnostic>` shape, `Arc<String>`) | `Spine`'s text — preamble, kernel-wrapper prelude, record structs, DB-projection impls, TEA/Auth aliases, epilogue, `fn main()`, and the `mod`/`pub(crate) use` barrel lines for every id in `program_rust_file_ids`. |
 | `emit_rust_file(root, entry, config, file: RustFileId)` | `lower_program(root, entry)`, `config.db_driver(db)`, `file` | `EmitResult` | One `SkyModule` file's text — that `home`'s `EnumDef`s + `Func`s only. |
 | `emit_manifest(root, entry, config)` | `emit_spine_file(...)`, `emit_rust_file(f)` for every `f` in `program_rust_file_ids(...)`, plus the existing runtime-shim/`Cargo.toml` construction `emit_project` already does | `Result<Arc<sky_backend::EmittedProject>, Diagnostic>` | The complete intended project — the top-level driver demand, replacing `emit_project` as `compile_prepared`'s call site (§4.4). |
@@ -751,10 +751,10 @@ today, standing on Phase 4's coarse floor exactly as-is.
 
 ### 4.4 Wiring `compile_prepared` and the Task-16 bridge
 
-`compile_prepared` (`crates/skyc/src/lib.rs:516`) currently demands
+`compile_prepared` (`crates/ipe/src/lib.rs:516`) currently demands
 `sky_db::emit_project(root, entry, config)` (a single `EmitResult`) and
 passes its `EmittedProject` to `write_emitted_project`
-(`crates/skyc/src/lib.rs:790`). Milestone D changes this call to demand
+(`crates/ipe/src/lib.rs:790`). Milestone D changes this call to demand
 `sky_db::emit_manifest(root, entry, config)` instead — same `EmitResult`
 return SHAPE (`Result<Arc<EmittedProject>, Diagnostic>`), so
 `write_emitted_project` / `build_emit_manifest` / `reconcile_emitted_
@@ -790,7 +790,7 @@ CONTRACT, not necessarily the literal final tokens).
 
 ```rust
 //! `crates/sky_backend_rust/src/rust_file.rs`
-//! Backend-internal file-id domain for per-Sky-module Rust emission
+//! Backend-internal file-id domain for per-Ipê-module Rust emission
 //! (Phase-5 continuation — see `docs/architecture/
 //! phase5-emit-rust-file-design-2026-07-12.md` §2.1). NOT yet a salsa
 //! type — that is Milestone D (§4.1).
@@ -799,7 +799,7 @@ use sky_ir::ModPath;
 
 /// Which Rust file a program's item (an `EnumDef` or `Func`) is declared
 /// in. `Spine` is the always-present entry file (`src/main.rs`); a
-/// `SkyModule` is one Sky module's OWN file (`src/sky_mods/<ident>.rs`),
+/// `SkyModule` is one Ipê module's OWN file (`src/sky_mods/<ident>.rs`),
 /// materialised only when 2+ distinct homes are present (the Spine-
 /// collapse invariant — see the design doc §3.3).
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -920,7 +920,7 @@ name-resolution precedence (local definition wins over a glob `use`) means
 the record struct's local declaration SILENTLY SHADOWS the glob-reexported
 enum, surfacing only as a confusing type mismatch at some unrelated third
 file's use site, or not at all if nothing else references the shadowed
-enum. This undermines §2.1's "already enforced at `skyc` time, so the flat
+enum. This undermines §2.1's "already enforced at `ipe` time, so the flat
 glob barrel is sound" argument, so this task lands BEFORE Task 4
 (partition function) and Milestone A is considered to begin — the flat
 namespace must actually BE sound before anything is built on top of it.
@@ -959,7 +959,7 @@ therefore real `mod` declarations, exist.
 **Steps:**
 
 1. Write the failing test first — a REAL, constructible collision, not a
-   hedged placeholder: hand-build a `Program` with one module whose Sky
+   hedged placeholder: hand-build a `Program` with one module whose Ipê
    module path is `["Rec"]`, declaring a user enum `type XY = A | B` (so
    `EnumDef { home: ModPath(["Rec"]), name: "XY", .. }`). `naming::enum_name`
    folds `(home, name)` via `to_camel_case(format!("{}_{}", module_prefix(
@@ -979,17 +979,17 @@ therefore real `mod` declarations, exist.
    call site into `emit_program` right after `EmitCtx::build`.
 
 4. Run; green. Also re-run the FULL existing golden suite
-   (`cargo test -p sky_backend_rust golden`, `cargo test -p skyc --test
+   (`cargo test -p sky_backend_rust golden`, `cargo test -p ipe --test
    golden_m0`) to confirm zero behavioural change for every program that
    does NOT hit this collision — the new check is purely additive for the
    common case.
 
 **Verify.** `cargo test -p sky_backend_rust record_struct_namespace::` (or
 wherever the test lands) green; `cargo test -p sky_backend_rust golden`
-and `cargo test -p skyc --test golden_m0` unaffected; `cargo clippy -p
+and `cargo test -p ipe --test golden_m0` unaffected; `cargo clippy -p
 sky_backend_rust` clean.
 **Done when.** A record struct can never silently shadow an enum, func, or
-(once Task 12 wires the real set through) a Sky-module file — the flat
+(once Task 12 wires the real set through) a Ipê-module file — the flat
 namespace §2.1 depends on is enforced across EVERY category that shares a
 Rust namespace, not just within each category independently.
 
@@ -1066,7 +1066,7 @@ assertion passes for the 2-module fixture, the existing `build_m0`
 single-module fixture (reused, imported from the golden test's helper —
 extract `build_m0` into a `pub(crate)` test-support function if it is not
 already reachable across test binaries), AND a `build_m0`-derived fixture
-with `Std.Db` usage (`SqlValue`/`SqlField` present) proving the Spine
+with `Ipe.Db` usage (`SqlValue`/`SqlField` present) proving the Spine
 special case.
 **Done when.** `partition_items` is proven total (no item lost or
 duplicated) against at least one multi-module and one single-module
@@ -1081,15 +1081,15 @@ regardless of how many `SkyModule` homes are present.
 
 1. Failing test: none new — this step's SUCCESS CRITERION is that ALL
    EXISTING golden tests stay green. Run the baseline first to record the
-   starting state, INCLUDING the `Std.Db` goldens (the ones this task's
+   starting state, INCLUDING the `Ipe.Db` goldens (the ones this task's
    ordering rule below exists to protect):
 
 ```bash
 cargo test -p sky_backend_rust golden
-cargo test -p skyc --test golden_m0
-cargo test -p skyc --test golden_m5b_db
-cargo test -p skyc --test golden_m5b_db_gates
-cargo test -p skyc --test golden_db_wrapper_empty_params_165
+cargo test -p ipe --test golden_m0
+cargo test -p ipe --test golden_m5b_db
+cargo test -p ipe --test golden_m5b_db_gates
+cargo test -p ipe --test golden_db_wrapper_empty_params_165
 ```
 
 2. Refactor `emit_program`'s type/func emission loops
@@ -1102,7 +1102,7 @@ cargo test -p skyc --test golden_db_wrapper_empty_params_165
    current `program.modules` walk for every existing (single-module)
    fixture.
 
-   **Ordering rule (load-bearing for the `Std.Db` goldens).** Do NOT
+   **Ordering rule (load-bearing for the `Ipe.Db` goldens).** Do NOT
    iterate the returned `BTreeMap<RustFileId, _>` in its raw derived-`Ord`
    order for the types pass — `RustFileId::Spine < RustFileId::SkyModule(_)`
    under the enum's declaration order, so a blind full-map iteration would
@@ -1128,11 +1128,11 @@ CONTENT diverges from the current per-module walk — fix `partition_items`
 or the ordering rule above, not the goldens.
 **Done when.** `emit_program` is internally refactored to route through
 `partition_items` with proven zero behavioural change, INCLUDING for every
-existing `Std.Db`-using golden.
+existing `Ipe.Db`-using golden.
 
 ### Task 6 — the directory-diff golden harness helper (additive)
 
-**Files:** edit `crates/skyc/tests/support/mod.rs`.
+**Files:** edit `crates/ipe/tests/support/mod.rs`.
 
 **Steps:**
 
@@ -1141,16 +1141,16 @@ existing `Std.Db`-using golden.
    modules are not directly `#[test]`-annotated); its correctness is
    proven by Task 7.
 
-2. `cargo build --tests -p skyc` — confirm it compiles (unused-function
+2. `cargo build --tests -p ipe` — confirm it compiles (unused-function
    warning is expected and fine at this point; do not silence it with
    `#[allow(dead_code)]`, since Task 7 removes the warning by using it).
 
-**Verify.** `cargo build --tests -p skyc` succeeds.
+**Verify.** `cargo build --tests -p ipe` succeeds.
 **Done when.** The helper exists, typed, unused.
 
 ### Task 7 — adopt the helper in `golden_m0.rs`, side by side then exclusively
 
-**Files:** edit `crates/skyc/tests/golden_m0.rs`.
+**Files:** edit `crates/ipe/tests/golden_m0.rs`.
 
 **Steps:**
 
@@ -1167,26 +1167,26 @@ support::assert_emitted_project_matches_golden_dir(
    (Exact construction depends on whether `emitted` is already available
    as an in-memory `EmittedProject` at this point in the test, or only as
    written-to-disk output — prefer calling the helper against the
-   IN-MEMORY value if `skyc::build`'s API exposes it, else adapt the
+   IN-MEMORY value if `ipe::build`'s API exposes it, else adapt the
    helper to accept a `&Path` for the emitted `out/src` tree too; either
    is a sound instantiation of the same contract.)
 
-2. Run: `cargo test -p skyc --test golden_m0` — both the old `assert_eq!`
+2. Run: `cargo test -p ipe --test golden_m0` — both the old `assert_eq!`
    and the new helper assert on the SAME data; confirm both pass.
 
 3. Delete the OLD hand-rolled `assert_eq!` block, keeping only the new
    helper call.
 
-4. Re-run: `cargo test -p skyc --test golden_m0` — still green.
+4. Re-run: `cargo test -p ipe --test golden_m0` — still green.
 
-**Verify.** `cargo test -p skyc --test golden_m0` green after step 4.
+**Verify.** `cargo test -p ipe --test golden_m0` green after step 4.
 **Done when.** `golden_m0.rs` uses ONLY the shared directory-diff helper,
 proven equivalent in discriminating power to the assertion it replaced.
 
 ### Task 8 — migrate the remaining golden tests (split into per-batch sub-tasks — independent-review finding)
 
 **Scope, precisely (re-verified against `HEAD`, not the doc's earlier
-"154" estimate).** `ls crates/skyc/tests/golden_*.rs` is 155 files. 13 of
+"154" estimate).** `ls crates/ipe/tests/golden_*.rs` is 155 files. 13 of
 them were checked by hand and confirmed to contain NO `assert_eq!` at
 all — they are exit-0-only or `.contains(...)` substring-pattern tests
 that never did a byte-diff against a golden `main.rs`, so the migration
@@ -1210,7 +1210,7 @@ not the "well under an hour" granularity the rest of this plan uses. Split
 accordingly, each sub-task ending in its own commit so a session-budget
 interruption has an unambiguous stopping point.
 
-**Files:** every `crates/skyc/tests/golden_*.rs` NOT in the 13-file
+**Files:** every `crates/ipe/tests/golden_*.rs` NOT in the 13-file
 allowlist above and not `golden_m0.rs`.
 
 #### Task 8a — hand-migrate one more file, then write the migration script
@@ -1219,7 +1219,7 @@ allowlist above and not `golden_m0.rs`.
    Task-7 transformation manually, to confirm the pattern generalises
    beyond M0 (M0 is special — the FIRST golden, worth double-checking
    manually before scripting).
-2. Run: `cargo test -p skyc --test golden_m1_tuples` — green.
+2. Run: `cargo test -p ipe --test golden_m1_tuples` — green.
 3. Write a small migration script (`scripts/migrate-golden-harness.sh` or
    inline `sed`/`ripgrep` invocation, not committed as permanent tooling
    unless the project wants it kept) that finds the common
@@ -1228,7 +1228,7 @@ allowlist above and not `golden_m0.rs`.
    `ldir`/`repo_root` duplicate in favour of `support::repo_root`.
 4. Commit (hand migration + script, 1 file done, 140 remaining).
 
-**Verify.** `cargo test -p skyc --test golden_m1_tuples` green.
+**Verify.** `cargo test -p ipe --test golden_m1_tuples` green.
 **Done when.** The script exists and is proven correct on one real file.
 
 #### Task 8b through 8g — six scripted batches, ~23-24 files each
@@ -1240,7 +1240,7 @@ membership is an implementation-time choice, not fixed by this spec):
 1. Apply the Task 8a script to the batch. Run:
 
 ```bash
-cargo test -p skyc --test 'golden_*' 2>&1 | tee /tmp/golden_batch_N.log
+cargo test -p ipe --test 'golden_*' 2>&1 | tee /tmp/golden_batch_N.log
 ```
 
 2. Fix any file the script mis-transformed (some goldens have nonstandard
@@ -1248,11 +1248,11 @@ cargo test -p skyc --test 'golden_*' 2>&1 | tee /tmp/golden_batch_N.log
    path built differently).
 3. Re-run until green; commit the batch.
 
-**Verify (per batch).** `cargo test -p skyc --test 'golden_*'` green after
+**Verify (per batch).** `cargo test -p ipe --test 'golden_*'` green after
 that batch's commit, zero golden-file changes (Milestone B never touches
 the split, only the test HARNESS).
 **Done when (8g, the final batch).** All 141 byte-comparison
-`golden_*.rs` files use the shared helper; `cargo test -p skyc --test
+`golden_*.rs` files use the shared helper; `cargo test -p ipe --test
 'golden_*'` fully green.
 
 ### Task 9 — the coverage gate (machine-checks migration completeness — rewritten, independent-review finding)
@@ -1272,7 +1272,7 @@ the helper now fails this gate by construction — a deliberate choice
 requires either using the helper or adding the file to the (small,
 reviewed) allowlist, never a silent third option.
 
-**Files:** create `crates/skyc/tests/golden_harness_coverage.rs`.
+**Files:** create `crates/ipe/tests/golden_harness_coverage.rs`.
 
 **Steps:**
 
@@ -1355,7 +1355,7 @@ fn every_non_allowlisted_golden_test_calls_the_shared_helper() {
 
 3. Run it against the post-Task-8g (fully migrated) state — green.
 
-**Verify.** `cargo test -p skyc --test golden_harness_coverage` green;
+**Verify.** `cargo test -p ipe --test golden_harness_coverage` green;
 manually confirmed to fail correctly against an un-migrated fixture.
 **Done when.** Migration completeness is a CI-enforced, POSITIVE,
 structural invariant, not a one-time claim and not a negative grep a
@@ -1377,7 +1377,7 @@ syntactically-different stale pattern could dodge.
      `Func`/`EnumDef` declarations;
    - `emit_module_file(program, &home_a)`'s output contains ONLY home A's
      items, `pub(crate)`-prefixed, and opens with `use crate::*;`;
-   - for a `Std.Db`-using fixture, `emit_spine`'s output ALSO contains the
+   - for a `Ipe.Db`-using fixture, `emit_spine`'s output ALSO contains the
      `SqlValue`/`SqlField` enum declarations (§2.2's fix, Task 4), in that
      relative order, positioned before the record structs — NOT in either
      module's `emit_module_file` output.
@@ -1403,20 +1403,20 @@ testable, and are provably not yet wired into any golden-affecting path
 (Task 5's tests are unaffected — re-run them to confirm: `cargo test -p
 sky_backend_rust golden`).
 
-### Task 11 — a NEW multi-module + `Std.Db` pilot fixture, at TODAY's (pre-split) single-file shape
+### Task 11 — a NEW multi-module + `Ipe.Db` pilot fixture, at TODAY's (pre-split) single-file shape
 
 **Files:** create `tests/golden/multi_mod_split_pilot/Main.ipe`; create
 `tests/golden/multi_mod_split_pilot/Lib.ipe`; create
 `tests/golden/multi_mod_split_pilot/main.rs` (golden, single-file shape);
 create `tests/golden/multi_mod_split_pilot/Cargo.toml`; create
-`crates/skyc/tests/golden_multi_mod_split_pilot.rs`.
+`crates/ipe/tests/golden_multi_mod_split_pilot.rs`.
 
 **Steps:**
 
-1. Write minimal two-module Sky source: `Lib.ipe` declares one small
-   function, one small enum, AND one `Std.Db` call (e.g. `Db.query`/
+1. Write minimal two-module Ipê source: `Lib.ipe` declares one small
+   function, one small enum, AND one `Ipe.Db` call (e.g. `Db.query`/
    `Db.exec` against a trivial table) so `uses_db` is true; `Main.ipe`
-   imports and uses both, plus defines `main`. The `Std.Db` call is
+   imports and uses both, plus defines `main`. The `Ipe.Db` call is
    deliberate, not incidental — it makes this the ONE fixture that
    exercises the multi-module split AND the `SqlValue`/`SqlField`
    Spine-routing fix (§2.2) TOGETHER, closing the gap the independent
@@ -1427,7 +1427,7 @@ create `tests/golden/multi_mod_split_pilot/Cargo.toml`; create
    structure but using `support::assert_emitted_project_matches_golden_dir`
    from the start (this fixture is NEW, never used the retired pattern).
 
-3. Run `skyc::build` by hand (or via a throwaway `cargo run --bin skyc --
+3. Run `ipe::build` by hand (or via a throwaway `cargo run --bin ipe --
    build ...` invocation) against the two-module source, capture its
    CURRENT (pre-split, Milestone C not yet landed) single-file `main.rs`
    output — including the `db`-enabled manifest fragments
@@ -1436,12 +1436,12 @@ create `tests/golden/multi_mod_split_pilot/Cargo.toml`; create
    baseline HONESTLY, at whatever the compiler produces TODAY
    (home-qualified names like `lib_helper`/`main_helper` already present,
    per §1.3 — this is not new emission behaviour, just a new fixture
-   exercising existing multi-module + `Std.Db` naming).
+   exercising existing multi-module + `Ipe.Db` naming).
 
 4. Run the new test; green.
 
-**Verify.** `cargo test -p skyc --test golden_multi_mod_split_pilot` green.
-**Done when.** A deliberately-multi-module, `Std.Db`-using fixture exists
+**Verify.** `cargo test -p ipe --test golden_multi_mod_split_pilot` green.
+**Done when.** A deliberately-multi-module, `Ipe.Db`-using fixture exists
 with a byte-verified TODAY baseline, ready to be the ONE fixture Task 12
 flips to the real split.
 
@@ -1508,15 +1508,15 @@ epilogue, and `fn main()`) and
 6. Gated by `IPE_E2E=1`: run the pilot fixture's end-to-end
    build-and-run test (modelled on `golden_m0.rs`'s
    `end_to_end_builds_and_prints_one`) — confirms THE SEAL: the newly
-   multi-file, `Std.Db`-using emitted project actually `cargo build`s and
+   multi-file, `Ipe.Db`-using emitted project actually `cargo build`s and
    runs correctly, not just that its TEXT matches a golden.
 
-**Verify.** `cargo test -p skyc --test golden_multi_mod_split_pilot` green;
-`IPE_E2E=1 cargo test -p skyc --test golden_multi_mod_split_pilot
+**Verify.** `cargo test -p ipe --test golden_multi_mod_split_pilot` green;
+`IPE_E2E=1 cargo test -p ipe --test golden_multi_mod_split_pilot
 end_to_end` green.
-**Done when.** The real per-Sky-module split exists, is proven correct
+**Done when.** The real per-Ipê-module split exists, is proven correct
 against ONE pilot fixture at both the byte level and the `cargo build`
-level, INCLUDING the multi-module + `Std.Db` interaction §2.2's fix exists
+level, INCLUDING the multi-module + `Ipe.Db` interaction §2.2's fix exists
 to make sound.
 
 ### Task 13 — measure the ACTUAL blast radius; regenerate + SEAL-verify every genuinely-multi-home golden
@@ -1537,8 +1537,8 @@ to make sound.
 
 **Files:** `tests/golden/mm_diamond/` (regenerate: Spine-only `main.rs` +
 `sky_mods/*.rs`), `tests/golden/mm_local_pkg/` (same), plus test-body edits to
-`crates/skyc/tests/{golden_mm,golden_css_source,golden_class1_boundary_scheme_field_result,golden_stdui_grid_seal,golden_stdui_transition_seal}.rs`
-and the shared `crates/skyc/tests/support/mod.rs` helper.
+`crates/ipe/tests/{golden_mm,golden_css_source,golden_class1_boundary_scheme_field_result,golden_stdui_grid_seal,golden_stdui_transition_seal}.rs`
+and the shared `crates/ipe/tests/support/mod.rs` helper.
 
 **Steps:**
 
@@ -1546,7 +1546,7 @@ and the shared `crates/skyc/tests/support/mod.rs` helper.
 
 ```bash
 cargo test -p sky_backend_rust golden
-cargo test -p skyc --test 'golden_*' --no-fail-fast
+cargo test -p ipe --test 'golden_*' --no-fail-fast
 ```
 
 2. Enumerate every red test. Partition each into single-home (a real bug —
@@ -1661,7 +1661,7 @@ every prior phase's memoization + coarseness-regression-proof pair.
 
 ### Task 16 — `emit_manifest`, wired to replace `emit_project` at the `compile_prepared` call site
 
-**Files:** edit `crates/sky_db/src/lib.rs`; edit `crates/skyc/src/lib.rs`.
+**Files:** edit `crates/sky_db/src/lib.rs`; edit `crates/ipe/src/lib.rs`.
 
 **Steps:**
 
@@ -1681,13 +1681,13 @@ every prior phase's memoization + coarseness-regression-proof pair.
 
 4. Run; green.
 
-5. Change `compile_prepared` (`crates/skyc/src/lib.rs:516`) to demand
+5. Change `compile_prepared` (`crates/ipe/src/lib.rs:516`) to demand
    `sky_db::emit_manifest` instead of `sky_db::emit_project`.
 
-6. Re-run the FULL existing test suite (`cargo test -p skyc`,
+6. Re-run the FULL existing test suite (`cargo test -p ipe`,
    `cargo test -p sky_db`) — must stay fully green, including the
    Task-18 clean-vs-incremental parity gate
-   (`crates/skyc/tests/clean_vs_incremental_parity.rs`) and the
+   (`crates/ipe/tests/clean_vs_incremental_parity.rs`) and the
    adversarial probe (`adversarial_review_parity_probe.rs`).
 
 **Verify.** Full `cargo test` workspace run green; `git diff --stat
@@ -1758,8 +1758,8 @@ salsa event-stream assertion, not inferred from the query graph's shape.
    imports) and need zero changes, but ~6 tests / 5 binaries are genuinely
    multi-home and legitimately split (Task 13's corrected finding — §3.3's
    blast-radius table). Those were regenerated + SEAL-verified, NOT narrowed
-   away; the pilot (a `Std.Db` user-module case) plus the stdlib-source
-   splits (`Std.Css`/`Std.Ui.Grid`/`Std.Ui.Transition`) together exercise the
+   away; the pilot (a `Ipe.Db` user-module case) plus the stdlib-source
+   splits (`Ipe.Css`/`Ipe.Ui.Grid`/`Ipe.Ui.Transition`) together exercise the
    real split.
 5. **The golden-harness migration is staged as its own additive,
    independently-provable step (Milestone B) BEFORE any real split
@@ -1790,7 +1790,7 @@ salsa event-stream assertion, not inferred from the query graph's shape.
    3 above already rejects for record structs; a `partition_items` special
    case (Task 4) costs little and makes the property true by construction.
    The pilot fixture (Task 11) is additionally extended to exercise
-   `Std.Db`, so the interaction is proven, not merely argued sound.
+   `Ipe.Db`, so the interaction is proven, not merely argued sound.
 10. **`RecordStruct` names are folded into the SAME shared uniqueness
     registry `enum_names`/`func_names`/`mod_ident`s already use, fail-closed
     on any cross-category collision** — independent-review finding 2, new
@@ -1812,13 +1812,13 @@ salsa event-stream assertion, not inferred from the query graph's shape.
 | `sky_backend_rust::record_struct_namespace::*` (Task 3) | A synthesised record struct can never silently shadow an enum/func/mod-ident Rust name — fails closed with `Diagnostic::Name::DuplicateValue` on a REAL constructed collision (`module ["Rec"] { type XY }` vs. record fields `{x, y}`, both folding to `"RecXY"`) |
 | `sky_backend_rust::rust_file::partition::*` (Task 4) | `partition_items` is total: no item lost or duplicated, across a multi-module and a single-module fixture; `SqlValue`/`SqlField` route to `Spine` regardless of the `home` set's shape |
 | `sky_backend_rust::rust_file::mod_ident_is_stable_and_distinct_for_distinct_homes` / `duplicate_mod_idents_fail_closed` (Task 2) | The new mod-name namespace is deterministic and fails closed (typed diagnostic, never a panic) on collision |
-| `sky_backend_rust::golden::*` (re-run, Task 5) | Routing `emit_program` through `partition_items` changes zero emitted bytes for every existing single-module golden, INCLUDING the `Std.Db` goldens (`golden_m5b_db`, `golden_m5b_db_gates`, `golden_db_wrapper_empty_params_165`) the Task-5 ordering rule protects |
-| `skyc::golden_m0::emits_byte_identical_main_rs_and_vendors_runtime` (Task 7) | The new directory-diff helper has identical discriminating power to the retired single-file `assert_eq!` |
-| `skyc::golden_harness_coverage::every_non_allowlisted_golden_test_calls_the_shared_helper` (Task 9) | Migration completeness is a machine-checked POSITIVE structural proof (every non-allowlisted golden calls the shared helper), not a negative grep a syntactically-different stale pattern could dodge, and not a one-time claim |
-| `skyc::golden_multi_mod_split_pilot::*` (Tasks 11-12) | The real split's byte-level output, the multi-module + `Std.Db` `SqlValue`/`SqlField`-routing interaction (§2.2's fix, previously unverified per independent review), AND (`IPE_E2E`-gated) `cargo build` success on the FIRST genuinely-split fixture |
+| `sky_backend_rust::golden::*` (re-run, Task 5) | Routing `emit_program` through `partition_items` changes zero emitted bytes for every existing single-module golden, INCLUDING the `Ipe.Db` goldens (`golden_m5b_db`, `golden_m5b_db_gates`, `golden_db_wrapper_empty_params_165`) the Task-5 ordering rule protects |
+| `ipe::golden_m0::emits_byte_identical_main_rs_and_vendors_runtime` (Task 7) | The new directory-diff helper has identical discriminating power to the retired single-file `assert_eq!` |
+| `ipe::golden_harness_coverage::every_non_allowlisted_golden_test_calls_the_shared_helper` (Task 9) | Migration completeness is a machine-checked POSITIVE structural proof (every non-allowlisted golden calls the shared helper), not a negative grep a syntactically-different stale pattern could dodge, and not a one-time claim |
+| `ipe::golden_multi_mod_split_pilot::*` (Tasks 11-12) | The real split's byte-level output, the multi-module + `Ipe.Db` `SqlValue`/`SqlField`-routing interaction (§2.2's fix, previously unverified per independent review), AND (`IPE_E2E`-gated) `cargo build` success on the FIRST genuinely-split fixture |
 | Full golden suite re-run, `git diff --stat tests/golden/` (Task 13) | Measured blast radius: the vast majority of the 155 goldens need no file changes, but ~6 tests / 5 binaries are genuinely multi-home (§3.3 table) and legitimately split — each regenerated to its correct multi-file shape and SEAL-verified (`cargo build` + run of the split project), not narrowed away. The ORIGINAL "zero blast radius / 154 of 155" claim was a false premise, corrected here in place. |
-| `skyc::{golden_mm,golden_class1_boundary_scheme_field_result,golden_css_source,golden_stdui_grid_seal,golden_stdui_transition_seal}` (Task 13, corrected) | Each genuinely-multi-home golden's post-split output: dir-diff goldens (`mm_diamond`/`mm_local_pkg`) byte-lock Spine-only `main.rs` + barrel + every `sky_mods/*.rs` (symmetric compare); substring goldens scan the whole emitted `src/` tree via `support::read_all_emitted_src`; the css/grid/transition splits `cargo build` under `IPE_E2E` (the stdlib-home SEAL the pilot did not cover) |
+| `ipe::{golden_mm,golden_class1_boundary_scheme_field_result,golden_css_source,golden_stdui_grid_seal,golden_stdui_transition_seal}` (Task 13, corrected) | Each genuinely-multi-home golden's post-split output: dir-diff goldens (`mm_diamond`/`mm_local_pkg`) byte-lock Spine-only `main.rs` + barrel + every `sky_mods/*.rs` (symmetric compare); substring goldens scan the whole emitted `src/` tree via `support::read_all_emitted_src`; the css/grid/transition splits `cargo build` under `IPE_E2E` (the stdlib-home SEAL the pilot did not cover) |
 | `sky_db::phase9_emit_rust_file::emit_spine_file_memoized_coarse_floor` / `emit_rust_file_memoized_per_file` / `program_rust_file_ids_tracks_module_add_delete` (Task 15) | Real salsa memoization + the module-add/delete visibility edge, matching every prior phase's proof-test rigor |
 | `sky_db::phase9_emit_rust_file::emit_manifest_matches_emit_project_for_single_module` (Task 16) | The Spine-collapse invariant holds at the SALSA layer, not just the backend layer |
-| `skyc::clean_vs_incremental_parity` + `adversarial_review_parity_probe` (re-run, Task 16) | THE SEAL and the parity gate hold after `compile_prepared` switches to `emit_manifest` |
+| `ipe::clean_vs_incremental_parity` + `adversarial_review_parity_probe` (re-run, Task 16) | THE SEAL and the parity gate hold after `compile_prepared` switches to `emit_manifest` |
 | `sky_db::phase9_incrementality_e2e::*` (Task 17) | The actual, end-to-end "body edit to one module → only that module's compiled-unit-relevant output changes" property, proven via salsa's own `WillExecute` event stream — the mission proof this whole spec exists to deliver |

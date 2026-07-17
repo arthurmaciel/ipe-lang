@@ -1,11 +1,11 @@
 # Hello World
 
-The simplest Sky programme -- prints a greeting to stdout.
+The simplest Ipê programme -- prints a greeting to stdout.
 
 ## Build & Run
 
 ```bash
-sky build src/Main.ipe
+ipe build src/Main.ipe
 ./sky-out/app
 ```
 

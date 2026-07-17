@@ -1,6 +1,6 @@
 //! Nested-lambda flattening: a one-parameter binding whose body is
 //! a curried lambda chain (`f a = \b -> \c -> a + b + c`) declared with a
-//! multi-arrow type (`Int -> Int -> Int -> Int`). `skyc` must emit `main.rs`
+//! multi-arrow type (`Int -> Int -> Int -> Int`). `ipe` must emit `main.rs`
 //! byte-identical to the checked-in golden, and (behind `IPE_E2E=1`) the emitted
 //! project must build and print `6`.
 //!
@@ -8,7 +8,7 @@
 //! closure so the emitted `Box<dyn Fn(i64, i64) -> i64>` body matches the
 //! flattened return type — without the flatten the body would be a curried
 //! `Box<dyn Fn(i64) -> Box<dyn Fn(i64) -> i64>>` that cargo rejects with no
-//! Sky-level diagnostic. The program exercises BOTH application reshapes against
+//! Ipê-level diagnostic. The program exercises BOTH application reshapes against
 //! the flattened closure:
 //!
 //! * exact-then-Apply — `let h = f 1 in h 2 3`: `f 1` saturates the declared

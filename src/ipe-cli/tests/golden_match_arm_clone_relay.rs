@@ -4,17 +4,17 @@
 //! through TWO nested `move`-closure boundaries. Nesting the match-arm binder
 //! site's type resolution inside an `if n > 1` guard would leave the arm var's
 //! type unresolved at `n == 1`, so the per-boundary relay never runs → the
-//! outer closure move-captures `name` out of the enclosing `Fn` env → skyc-0
+//! outer closure move-captures `name` out of the enclosing `Fn` env → ipe-0
 //! but cargo-101 (E0507). So type resolution is hoisted out of the guard and
 //! the arm var routes through the shared `apply_move_ownership` entry point,
 //! whose `rewrite_multiuse_clones` installs the relay at n == 1.
 //!
-//! THE SEAL: skyc-0 ⇒ cargo-0.
+//! THE SEAL: ipe-0 ⇒ cargo-0.
 //!
 //! Run:
 //! ```text
-//! cargo test -p skyc --test golden_i222_match_arm_clone_relay
-//! IPE_E2E=1 cargo test -p skyc --test golden_i222_match_arm_clone_relay
+//! cargo test -p ipe --test golden_i222_match_arm_clone_relay
+//! IPE_E2E=1 cargo test -p ipe --test golden_i222_match_arm_clone_relay
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -33,7 +33,7 @@ fn entry_path(root: &Path) -> PathBuf {
         .join("Main.ipe")
 }
 
-/// skyc-0: the compiler accepts the program AND relays `name` across the
+/// ipe-0: the compiler accepts the program AND relays `name` across the
 /// intermediate boundary with a pre-clone shadow.
 #[test]
 fn i222_match_arm_skyc_accepts_and_relays() {
@@ -50,7 +50,7 @@ fn i222_match_arm_skyc_accepts_and_relays() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for match_arm_clone_relay: {:?}",
+        "ipe build must succeed for match_arm_clone_relay: {:?}",
         built.err()
     );
 
@@ -84,7 +84,7 @@ fn i222_match_arm_cargo_builds_and_runs() {
     };
 
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
-    assert!(built.is_ok(), "skyc build must succeed: {:?}", built.err());
+    assert!(built.is_ok(), "ipe build must succeed: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted("match_arm_clone_relay", &out);
     assert_eq!(

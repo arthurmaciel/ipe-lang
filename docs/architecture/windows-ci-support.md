@@ -45,8 +45,8 @@ Supersedes: the Windows-deferral note in `docs/architecture/examples-sweep-port.
     built-but-unlocatable binary is a counted RED (`binmiss`), never a SKIP; the
     macOS-only server SKIP stays `IPE_HOST_OS=macos`-gated so Windows cannot borrow it to
     mask a real `noserve`.
-12. First-run expectation: most rows RED on all three hosts (skyc implements only
-    `Sky.Core.*`). Windows adds no new red class — it re-runs the same examples on a third
+12. First-run expectation: most rows RED on all three hosts (ipe implements only
+    `Ipe.*`). Windows adds no new red class — it re-runs the same examples on a third
     target; the informational table honestly surfaces the pre-parity state.
 
 ## Webview-on-Windows verdict
@@ -71,7 +71,7 @@ still reaped; verdict = no PANIC string in 8 s). Two conditions gate the claim:
 - OPEN (D4): the emitted `sky-out/rust/Cargo.toml` must actually enable `--features
   webview`. The runtime gates webview behind `webview = ["wry","tao","live"]`, EXCLUDED
   from `full` (`runtime/Cargo.toml:98,119`), and a stub compiles for `!webview`
-  (`webview_stub.go` analogue). If skyc does not emit the feature, the Windows webview RUN
+  (`webview_stub.go` analogue). If ipe does not emit the feature, the Windows webview RUN
   exercises the stub (exits 0, passes the no-panic gate) — a fake green. This must be
   verified before the webview row is trusted; until verified, treat a webview "pass" on
   Windows as UNPROVEN, not green. The webview RUN is UNPROVEN until a real (non-stub,
@@ -97,7 +97,7 @@ still reaped; verdict = no PANIC string in 8 s). Two conditions gate the claim:
   criterion ("one independent all-green Windows BUILD+RUN sweep"), not open-ended —
   otherwise it decays into permanently-unenforced Windows (a silent-skip of gating,
   violating the no-deferral principle).
-- D-C (webview feature emission). See the webview verdict / D4 — whether skyc emits
+- D-C (webview feature emission). See the webview verdict / D4 — whether ipe emits
   `--features webview` for a Webview example on `x86_64-pc-windows-msvc`, and whether that
   crate links WebView2. Verification-required before trusting the webview row.
 - D-D (headless Tui RUN, filed follow-up). A `IPE_TUI_HEADLESS` one-shot render mode
@@ -133,7 +133,7 @@ runs-on: ${{ matrix.os }}
 continue-on-error: ${{ matrix.experimental }}
 ```
 
-The whole job is `continue-on-error: true` today because skyc is pre-parity; the flag
+The whole job is `continue-on-error: true` today because ipe is pre-parity; the flag
 preserves that and makes the eventual per-host flip representable.
 
 ### Toolchain
@@ -169,7 +169,7 @@ backslashes choking bash builtins; (g) `pkill`/`script`/`xvfb-run` absent.
 | # | Sev | Breakage (cited) | Fix |
 |---|---|---|---|
 | B1 | CRITICAL (fail-loud) | CRLF-corrupted scripts. autocrlf checkout rewrites `scripts/*.sh` to CRLF → bash: `$'\r': command not found`, or a script that half-runs then dies mid-sweep. No `.gitattributes` exists (verified absent). | Commit `.gitattributes` pinning LF (B7). Belt: `git config --global core.autocrlf false` in a Windows-only step BEFORE checkout. `.gitattributes` is authoritative; the config line is the ordering/contributor-config floor. |
-| B2 | HIGH (silent mis-run) | `.exe` resolution miss. On Windows EVERY explicit no-extension probe misses (`sky-app` vs `sky-app.exe`): `resolve_bin` (`checks.sh:115`) probes `sky-app`; the `SKYC_BIN` loop (`env.sh:73-85`) probes `skyc`. cargo-msvc emits `sky-app.exe` / `skyc.exe`. Every explicit candidate misses → both fall through to a `find … | xargs ls -t | head -1` freshest-file heuristic in the SHARED target dir → an `ls -t` race can pick a stray/other-example executable → WRONG binary run = silent false-green. | In BOTH sites, the OS-gated `.exe` candidates MUST precede the `find` fallback: `ext=""; [ "${IPE_HOST_OS:-}" = windows ] && ext=".exe"`; probe `…/sky-app$ext` (`resolve_bin`, `checks.sh:115`) and `…/skyc$ext` (the `SKYC_BIN` loop, `env.sh:73-85`) FIRST, reaching `find` only after every explicit candidate misses. A built-but-unlocatable binary must then surface as a counted RED `binmiss`, never a SKIP and never the freshest-file guess. |
+| B2 | HIGH (silent mis-run) | `.exe` resolution miss. On Windows EVERY explicit no-extension probe misses (`sky-app` vs `sky-app.exe`): `resolve_bin` (`checks.sh:115`) probes `sky-app`; the `SKYC_BIN` loop (`env.sh:73-85`) probes `ipe`. cargo-msvc emits `sky-app.exe` / `ipe.exe`. Every explicit candidate misses → both fall through to a `find … | xargs ls -t | head -1` freshest-file heuristic in the SHARED target dir → an `ls -t` race can pick a stray/other-example executable → WRONG binary run = silent false-green. | In BOTH sites, the OS-gated `.exe` candidates MUST precede the `find` fallback: `ext=""; [ "${IPE_HOST_OS:-}" = windows ] && ext=".exe"`; probe `…/sky-app$ext` (`resolve_bin`, `checks.sh:115`) and `…/ipe$ext` (the `SKYC_BIN` loop, `env.sh:73-85`) FIRST, reaching `find` only after every explicit candidate misses. A built-but-unlocatable binary must then surface as a counted RED `binmiss`, never a SKIP and never the freshest-file guess. |
 | B3 | HIGH (spurious-RED cascade) | `.exe` handle-lock. Single shared `CARGO_TARGET_DIR` holds one `sky-app.exe`; a webview/server RUN leaving the process (or WebView2 children) alive holds the handle → next `cargo build` fails `Access is denied (os error 5)` at file-remove. `reap()` (`checks.sh:76`) is a `command -v pkill`-guarded no-op on Windows AND runs only BETWEEN examples — wrong locus. GNU `timeout` does not tree-kill a native GUI process. THIS IS THE GAP THE PORT DROPPED. | Port `_win_reap_app` into `examples-sweep.sh` `build_rust`: `taskkill //F //T //IM sky-app.exe`, `msedgewebview2.exe`, `winpty.exe`, `winpty-agent.exe`. (`../sky`'s proven list is `sky-app.exe`/`winpty.exe`/`winpty-agent.exe`; `msedgewebview2.exe //IM` is a deliberate superset — sound because WebView2 children can reparent outside the tree, but UNPROVEN until a real webview build runs, see the webview verdict.) Call PRE-build; add an os-error-5 retry arm (`grep -qiE 'Access is denied \(os error 5\)|failed to remove file' … && _win_reap_app && sleep 3 && continue`). NOTE: the alternation `|` is UNESCAPED — under `grep -E` (ERE) `\|` is a LITERAL pipe, matches neither real message, and the retry never fires; port `../sky` `examples-sweep.sh:147` verbatim. `//T` (tree-kill) is load-bearing for WebView2 children. Requires MSYS conversion ON (D-A). |
 | B4 | MED (fail-closed) | `python3` name. `free_port` (`checks.sh:72`) and preflight (`examples-sweep.sh:77`) call `python3`; Windows exposes `python`. → preflight `exit 2` aborts the whole sweep. Loud but wrong. | Resolve once in `env.sh`: `export IPE_PYTHON="${IPE_PYTHON:-$(command -v python3 || command -v python)}"`; replace bare `python3` at both sites with `"$IPE_PYTHON"`. Belt: `actions/setup-python@v5` guarantees a `python`. Fail-closed preserved (empty `IPE_PYTHON` → exit 2). |
 | B5 | MED (bash-builtin break) | `CARGO_TARGET_DIR` backslashes. The yml sets it to `${{ github.workspace }}/.cache/…` → `D:\a\…` under bash; native `cargo.exe` tolerates mixed separators but `mkdir -p` (`env.sh:30`) and `[ -x … ]` builtins choke, and B2's `.exe` probe strings become malformed. | Normalize once at the top of `env.sh` when `IPE_HOST_OS=windows`: `CARGO_TARGET_DIR="$(cygpath -u "$CARGO_TARGET_DIR")"` (or set a forward-slash value in the Windows job env). |
@@ -199,7 +199,7 @@ Timeouts need no portable-guard rewrite (B6). Fractional `sleep`, `df -Pk`, `seq
 | CLI | RUN (+ stdout-equiv when EQUIV on) | Pure console; `exercise_cli` under MSYS `timeout` after B2. Rust `println!` emits `\n` — stdout CRLF-clean at source. Mirror `../sky` cli-stdout-equiv. |
 | server | RUN (+ body-equiv when EQUIV on) | tokio/axum/sqlx Windows-portable; rustls (pure-Rust TLS) avoids the OpenSSL cross-compile hazard; loopback + curl portable. The macOS-only SKIP (`checks.sh:184`) is `IPE_HOST_OS=macos`-gated, so Windows genuinely connects and must produce a real `ok`/`noserve` — never a borrowed SKIP. Mirror `../sky` server-body-equiv-RUN. |
 | live | RUN as boot-check; browser round-trip SKIP | axum boots identically; no `--with-deps`/chromium on Windows → `WEB_OK=0` → `exercise_live` degrades to `exercise_server` (`checks.sh:194-199`). Honest SKIP of the browser layer, real RUN of the serve layer. Mirror `../sky` live-browser-deps-skip. |
-| Tui | SKIP in the sweep; real coverage via unit lane | The built `Tui.app` binary enters crossterm raw-mode/alt-screen → needs a real console/pty. Git-Bash CI has no ConPTY/node-pty bridge (`winpty` needs an interactive console it lacks); Sky.Tui REFUSES a non-TTY. `checks.sh:214-217` already SKIPs (green-neutral, printed reason). Do NOT fake a pass. |
+| Tui | SKIP in the sweep; real coverage via unit lane | The built `Tui.app` binary enters crossterm raw-mode/alt-screen → needs a real console/pty. Git-Bash CI has no ConPTY/node-pty bridge (`winpty` needs an interactive console it lacks); Ipe.Tui REFUSES a non-TTY. `checks.sh:214-217` already SKIPs (green-neutral, printed reason). Do NOT fake a pass. |
 | webview | RUN, no xvfb, no-panic gate — UNPROVEN until a real webview build is seen | WebView2 preinstalled + interactive desktop → real window, no X server. `checks.sh:241-242` arm present. Subject to D-C (feature emission) and B3 (reap — whose `msedgewebview2.exe //IM` entry is a deliberate superset of `../sky`'s kill list, sound but UNPROVEN, under the same gate). The one shape where Windows beats headless Linux — once a non-stub `--features webview` build is observed on Windows. |
 | fyne | SKIP (Go-FFI shape) | Never enters the Rust set (`examples-sweep.sh:264-266`; `examples-sweep-port.md`). OS-independent. |
 
@@ -235,7 +235,7 @@ on in phase-2 cannot introduce a spurious-DIFFER.
 
 Root fact: Rust `println!`/`print!` and Go `fmt.Print*` both emit `\n` (no text-mode
 translation on stdout) on Windows; HTTP bodies cross the socket byte-identically both
-backends; Sky.Live templates are LF string constants in the runtime `.rs` sources. So the
+backends; Ipe.Live templates are LF string constants in the runtime `.rs` sources. So the
 program output is CRLF-clean on both sides — a CRLF delta is provably a VCS/text-mode
 artifact, and normalizing it RESTORES the true comparison (a correctness requirement, not
 a masking hack). It is the parse-don't-validate move applied to the diff input:
@@ -315,16 +315,16 @@ flag or a calendar timebox.
 Green-neutral SKIPs do NOT block the gate: per the verdict logic
 (`examples-sweep.sh:375-377`), a `skip` row is neither RED nor counted GREEN, and `n/a`
 EQUIVALENCE doesn't fail. So Windows tui-SKIP and live-browser-SKIP will not spuriously fail the
-gate once it flips — Windows fails only on a genuine `skyc-fail`/`cargo-fail`/`panic`/
+gate once it flips — Windows fails only on a genuine `ipe-fail`/`cargo-fail`/`panic`/
 `noserve`/`DIFFER`.
 
 Flip-trigger is a filed gate (D-B), not open-ended: informational-forever would itself be
 an unenforced-gating silent-skip.
 
-Honest first-run: most rows RED on all three hosts (skyc implements only `Sky.Core.*`;
-`Std.*`/server/live/tui/webview → skyc-fail or cargo-fail everywhere). Windows adds no new
+Honest first-run: most rows RED on all three hosts (ipe implements only `Ipe.*`;
+`Ipe.*`/server/live/tui/webview → ipe-fail or cargo-fail everywhere). Windows adds no new
 red CLASS — it re-runs the same examples on a third target. What shows green early on
-Windows: `Sky.Core.*`-only cli/server build+run and (subject to D-C) webview boot. Every
+Windows: `Ipe.*`-only cli/server build+run and (subject to D-C) webview boot. Every
 Windows-specific defect the first run surfaces (e.g. a runtime `cfg(unix)`-only call
 reached unconditionally on the server path) is filed and fixed — that surfacing is the
 value of adding Windows now.
@@ -363,7 +363,7 @@ value of adding Windows now.
 | Wrong-binary-run (freshest-file race) | Explicit OS-gated `.exe` probes AHEAD of the `find` fallback in BOTH `resolve_bin` (`checks.sh:115`) and the `SKYC_BIN` loop (`env.sh:73-85`); a miss is a counted RED `binmiss`, never the `ls -t` guess and never a SKIP. |
 | no-xvfb confusion | Windows never installs/requires xvfb; webview boots the real desktop + preinstalled WebView2; the xvfb step stays `IPE_HOST_OS=linux`-gated. |
 | Faked tui pass | Sweep tui SKIPs honestly; real coverage in the `cargo test` windows-latest lane; RUN-column flip gated behind the filed `IPE_TUI_HEADLESS` runtime change. |
-| Webview stub fake-green | D-C: verify skyc emits `--features webview` and the crate links WebView2 before trusting the webview row. |
+| Webview stub fake-green | D-C: verify ipe emits `--features webview` and the crate links WebView2 before trusting the webview row. |
 | Supply-chain | Vendored examples + pinned crates only; no `ipe add`, no `playwright --with-deps`, no Go/Haskell reference; WebView2 preinstalled; ripgrep preinstalled-preferred (unpinned `choco` fallback only on image regression). |
 | `+crt-static` mis-application | Excluded — dynamic MSVC CRT only; static-CRT is `ipe build --static`'s `StaticWindows` plan. |
 
@@ -404,4 +404,4 @@ Repo:
 Filed follow-ups (no-deferral, tracked — not in this job):
 16. `IPE_TUI_HEADLESS` runtime one-shot render mode (D-D).
 17. `cargo test` unit-matrix `windows-latest` entry for `element_to_cells` coverage.
-18. D-C verification: skyc emits `--features webview` on windows-msvc + WebView2 link.
+18. D-C verification: ipe emits `--features webview` on windows-msvc + WebView2 link.

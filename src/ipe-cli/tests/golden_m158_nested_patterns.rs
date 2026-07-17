@@ -13,7 +13,7 @@
 //!   inline, so the arg lowers to a fresh `Vec` binder PLUS an arm-level length
 //!   GUARD (`Arm::guard`, new `Expr::ListLenCheck`) PLUS a body prelude that
 //!   recovers the named head elements by index (`Expr::ListIndexClone`) and the
-//!   tail by `List.drop`. The guard makes the arm refutable exactly as Sky's
+//!   tail by `List.drop`. The guard makes the arm refutable exactly as Ipê's
 //!   semantics require: `Just []` FALLS THROUGH to the fallback, never panics.
 //!
 //! Residual scope, kept fail-closed with a clean diagnostic (documented in
@@ -143,7 +143,7 @@ fn nested_cons_generic_elem_accepted() {
 
 // ── Residual scope: guard-non-exhaustive stays fail-closed ───────────────────
 
-/// A nested-cons arm set that is Sky-exhaustive (`Just (h::t)` + `Just []` +
+/// A nested-cons arm set that is Ipê-exhaustive (`Just (h::t)` + `Just []` +
 /// `Nothing`) but has NO trailing wildcard is guard-non-exhaustive to rustc, so
 /// it stays IPE-L0116 rather than an accept-then-cargo-fail.
 #[test]

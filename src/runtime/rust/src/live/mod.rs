@@ -1,4 +1,4 @@
-//! Sky.Live on the Rust backend — HTTP-first render + SSE patch loop.
+//! Ipe.Live on the Rust backend — HTTP-first render + SSE patch loop.
 //! Generic over the app's (Model, Msg); no `any`, static dispatch only.
 pub mod diff;
 pub use diff::*;
@@ -56,7 +56,7 @@ use super::*;
 ///
 /// LOAD-BEARING CONTRACT — `client.js` `__skyProbeSessionLost` only triggers
 /// `window.location.reload()` (the SSE-reconnect recovery path) when a probe
-/// POST gets a 404 + `X-Sky-Live: 1` AND the body CONTAINS the substring
+/// POST gets a 404 + `X-Ipê-Live: 1` AND the body CONTAINS the substring
 /// `"session not found"` (client.js l1481/l1530/l1536). Go's backend returns
 /// the same string; diverging it (the old `"no session"` body) silently broke
 /// recovery after a server restart — the browser shows "Reconnecting…" forever.
@@ -65,7 +65,7 @@ const SESSION_LOST_BODY: &str = "session not found";
 
 // ─── Client assets ────────────────────────────────────────────────────────────
 
-/// The browser-side Sky.Live client, extracted verbatim from Go's
+/// The browser-side Ipe.Live client, extracted verbatim from Go's
 /// `liveJSWithCfgAndCsrfWithBase` template (runtime-go/rt/live.go:5853-7490).
 /// The 12 header `%`-verb lines are replaced with static literals;
 /// the two `%%` CSS escapes are un-escaped to `%`.
@@ -104,7 +104,7 @@ pub fn client_js_path() -> String {
     format!("/_sky/client.{}.js", hex16)
 }
 
-/// Minimal CSS reset injected into every Sky.Live page.
+/// Minimal CSS reset injected into every Ipe.Live page.
 /// Ported verbatim from Go's `liveBaseCSS` (runtime-go/rt/live.go:3847-3858).
 const BASE_CSS: &str = concat!(
     "*,*::before,*::after{box-sizing:border-box}",
@@ -240,7 +240,7 @@ pub fn render_page_full(sid: &str, base: &str, body: &str, csrf_token: &str) -> 
 
 /// Floating "🔍 Console" link injected into every dev-mode page. The
 /// implementation lives in the always-compiled `telemetry` module so the
-/// Sky.Http.Server path (`server.rs`) shares the identical byte-exact banner;
+/// Ipe.Http.Server path (`server.rs`) shares the identical byte-exact banner;
 /// this is a thin re-export for the Live page renderer.
 fn dev_console_banner(base: &str) -> String {
     crate::telemetry::dev_console_banner(base)
@@ -662,7 +662,7 @@ async fn drive_session<Model, Msg, FUpdate, FView, FSubs>(
 /// (no uuid crate / uuid_kernel module dependency, since the generated
 /// A fresh session id: **128 bits from the OS CSPRNG**, hex-encoded.
 ///
-/// SECURITY: the sid is the SOLE bearer credential for a Sky.Live session
+/// SECURITY: the sid is the SOLE bearer credential for a Ipe.Live session
 /// (`sid_from_cookie` + `store.get` authorise every event off it). It MUST be
 /// unpredictable. The prior scheme — `clock_nanos XOR counter` through
 /// splitmix64 — was an invertible bijection over low-entropy, partly-known
@@ -1082,7 +1082,7 @@ where
 
     // Print to stdout (Go uses `fmt.Println`, which is stdout). The leading
     // newline keeps the `^C` echo on its own line, matching Go.
-    println!("\nSky.Live shutting down…");
+    println!("\nIpe.Live shutting down…");
 
     // Flip readyz → draining so orchestrators stop routing new traffic while
     // in-flight requests finish (Go: `SetReady(false)`).
@@ -1130,7 +1130,7 @@ where
     // `<-sigCh; os.Exit(130)`). Spawned (not awaited).
     tokio::spawn(async {
         wait_for_term_or_int().await;
-        eprintln!("Sky.Live: forcing exit (second signal)");
+        eprintln!("Ipe.Live: forcing exit (second signal)");
         console_proxy::shutdown_console();
         flush_exporters().await;
         std::process::exit(130); // 128 + SIGINT(2)
@@ -1168,7 +1168,7 @@ async fn wait_for_term_or_int() {
     }
 }
 
-/// `Std.Live.app { init, update, view, subscriptions }` — serve via axum.
+/// `Ipe.Live.app { init, update, view, subscriptions }` — serve via axum.
 ///
 /// HTTP-first: a GET renders the full page with the embedded client, opens a
 /// per-session TEA loop, and serves an SSE patch channel + a POST event
@@ -1222,7 +1222,7 @@ where
     })
 }
 
-/// `Std.Live.app { …, routes, notFound }` with URL routing — serve via axum.
+/// `Ipe.Live.app { …, routes, notFound }` with URL routing — serve via axum.
 ///
 /// Identical to `live_app` except a `route_resolver` is built from the route
 /// table + page-setter: on each GET it matches the path to a `Page` value
@@ -1423,7 +1423,7 @@ where
             // CSRF double-submit token: reuse the browser's existing well-formed
             // `__sky_csrf` cookie (so a reload keeps the same token), else mint a
             // fresh one. page_response sets the cookie + injects the value into
-            // the page JS; the client echoes it back in the X-Sky-Csrf header.
+            // the page JS; the client echoes it back in the X-Ipê-Csrf header.
             let csrf_tok = csrf::cookie_value(&headers, csrf::csrf_cookie_name())
                 .filter(|t| csrf::token_is_well_formed(t))
                 .unwrap_or_else(csrf::gen_token);
@@ -1584,7 +1584,7 @@ where
             };
             let entry = match entry {
                 Some(e) => e,
-                // X-Sky-Live: 1 lets the client distinguish a genuine session-lost
+                // X-Ipê-Live: 1 lets the client distinguish a genuine session-lost
                 // 404 (reload to recover) from a wedged proxy (client.js probes for
                 // exactly this header — l1481/l1530).
                 None => {
@@ -1630,7 +1630,7 @@ where
 
             // Reconnect-resync (Go parity: handleSSE full-body frame, live.go:5498).
             // A session restored from the store on a cold hit — or any process
-            // restart / `sky watch` rebuild / redeploy paired with a persistent
+            // restart / `ipe watch` rebuild / redeploy paired with a persistent
             // store — has no live subscriptions from the previous process, so
             // nothing pushes until the next user Msg. Render the current view once
             // and ship it as a full-body `event: patch` frame; the client consumes
@@ -1748,7 +1748,7 @@ where
             };
             let entry = match entry {
                 Some(e) => e,
-                // X-Sky-Live: 1 lets the client distinguish a genuine session-lost
+                // X-Ipê-Live: 1 lets the client distinguish a genuine session-lost
                 // 404 (reload to recover) from a wedged proxy (client.js probes for
                 // exactly this header — l1481/l1530).
                 None => {
@@ -1818,7 +1818,7 @@ where
                 }
             }
             // Real patches flow over SSE from the driver; ack with an empty list.
-            // X-Sky-Live: 1 marks this as a genuine Sky.Live response (the client
+            // X-Ipê-Live: 1 marks this as a genuine Ipe.Live response (the client
             // treats a 200 WITHOUT it as a wedged-proxy signal).
             (
                 StatusCode::OK,
@@ -1922,14 +1922,14 @@ where
             );
 
         router = if use_console_proxy {
-            // Real bundled Sky.Live console, spawned as a child + proxied. The
+            // Real bundled Ipe.Live console, spawned as a child + proxied. The
             // child process logs its OWN `session store: …` line + a
             // `reverse-proxy ready` line (console_proxy), so the parent does not
             // duplicate the inline-mount log here.
             console_proxy::proxy_routes(router)
         } else {
             // In-process console (plain-HTML shell + JSON APIs). Go mounts the
-            // console as an in-process Sky.Live sub-app that inits its OWN session
+            // console as an in-process Ipe.Live sub-app that inits its OWN session
             // store, so Go logs the memory-store line TWICE (root + console) and
             // then the inline-mount line (console.go:328). The Rust in-process
             // console has no separate store, so we emit the matching SECOND store
@@ -1939,7 +1939,7 @@ where
             if console_proxy::gate_allows() {
                 eprintln!("{}", store::memory_store_log_line(live_ttl()));
                 eprintln!(
-                    "[sky.console] inline console mounted as Sky.Live sub-app at /_sky/console mode={}",
+                    "[sky.console] inline console mounted as Ipe.Live sub-app at /_sky/console mode={}",
                     console::console_auth_mode_label()
                 );
             }
@@ -1983,8 +1983,8 @@ where
             .layer(axum::middleware::from_fn(csrf::csrf_middleware))
             // Per-request panic recovery (Go parity — its handlers run under a
             // defer/recover that returns 500 instead of crashing the worker;
-            // rt.go:3463 etc.). Symmetric with Sky.Http.Server (server.rs). The
-            // Rust thesis is that well-typed Sky can't panic, so this is the
+            // rt.go:3463 etc.). Symmetric with Ipe.Http.Server (server.rs). The
+            // Rust thesis is that well-typed Ipê can't panic, so this is the
             // defense-in-depth FLOOR, not the foundation: a handler / csrf-mw
             // panic becomes a 500 instead of an unwound tokio task that drops the
             // connection with no response. Placed INNER of `track` (and OUTER of
@@ -1996,7 +1996,7 @@ where
             // post-`next.run` metering. The custom responder classifies + logs the
             // panic SERVER-SIDE (errId, via core::panic_500_body) and returns a 500
             // carrying ONLY the errId — never the panic message (no info leak).
-            // Symmetric with Sky.Http.Server (the body shape is shared in `core`;
+            // Symmetric with Ipe.Http.Server (the body shape is shared in `core`;
             // the Live router can't reference `server.rs` — a Live-only generated
             // project doesn't include it).
             .layer(tower_http::catch_panic::CatchPanicLayer::custom(
@@ -2026,9 +2026,9 @@ where
         };
         // Bind-address line (stderr, Rust-specific — carries the 0.0.0.0 bind).
         eprintln!("[sky.live] listening on http://{addr}");
-        // Go-parity user-facing line (stdout, `fmt.Printf("Sky.Live listening on
+        // Go-parity user-facing line (stdout, `fmt.Printf("Ipe.Live listening on
         // :%d\n", port)` — live.go:3546).
-        println!("Sky.Live listening on :{port}");
+        println!("Ipe.Live listening on :{port}");
         // Graceful shutdown (Go parity — live.go:3503): trap SIGINT/SIGTERM,
         // print the shutdown line, drain in-flight requests, and return cleanly so
         // the IpeTask resolves Ok → the generated entry exits 0 (NOT 130). A
@@ -2060,10 +2060,10 @@ fn sid_from_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
     None
 }
 
-// The Std.Html `Ffi.callPure "htmlXxx"` kernel wrappers (html_render_,
+// The Ipe.Html `Ffi.callPure "htmlXxx"` kernel wrappers (html_render_,
 // html_escape_text_, html_escape_attr_, html_attr_to_string_) now live in the
 // standalone top-level `ipe_runtime::html` module (re-exported here via
-// `use super::*`), so a non-Live Std.Html / Std.Ui render doesn't pull this
+// `use super::*`), so a non-Live Ipe.Html / Ipe.Ui render doesn't pull this
 // server module in.
 
 #[cfg(test)]

@@ -36,7 +36,7 @@ use std::time::{Duration, Instant};
 /// Shared error type for E2E helpers.
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-// ── Sky program ───────────────────────────────────────────────────────────────
+// ── Ipê program ───────────────────────────────────────────────────────────────
 
 /// A minimal Ipe.Live counter app.
 ///
@@ -52,7 +52,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 ///
 /// The rendered initial page will contain the text `>0<` (the counter starts at
 /// zero, rendered inside a text element).  No `Ui.button` is used because that
-/// function is not a raw kernel — it is defined in sky-stdlib as a Sky function.
+/// function is not a raw kernel — it is defined in sky-stdlib as a Ipê function.
 const IPE_LIVE_COUNTER: &str = r#"module Main exposing (main)
 
 import Ipe.Live as Live
@@ -106,7 +106,7 @@ main =
 /// NOT serde-supporting. The emitter gates the serde derive on the per-record
 /// serde flag, not the `CDPeq` flag — gating it on `CDPeq` would force
 /// `#[derive(..., serde::Serialize, serde::Deserialize)]` onto `Section` under
-/// `uses_live` → `skyc` exit 0 then `cargo build` E0277 (`Html<MainMsg>:
+/// `uses_live` → `ipe` exit 0 then `cargo build` E0277 (`Html<MainMsg>:
 /// Serialize` unsatisfied). So `Section` keeps its `CDPeq` derive WITHOUT serde
 /// and the project is cargo-buildable. The Model (`{ count : Int }`)
 /// is plain data and still gets serde. The Model-admissibility gate is NOT
@@ -167,7 +167,7 @@ main =
 /// top-level `subscriptions` reference emits as a bare `fn` item (implicitly
 /// `Send + Sync`). An inline lambda emitted through the general `emit_expr_at`
 /// path as `Box<dyn Fn(..) -> R + Send + 'static>` — a trait object that
-/// carries `Send` but NOT `Sync` — would fail the slot's `Sync` bound: `skyc`
+/// carries `Send` but NOT `Sync` — would fail the slot's `Sync` bound: `ipe`
 /// exit 0 then `cargo build` E0277 (`dyn Fn(..) -> IpeSub<Msg> + Send cannot be
 /// shared between threads safely`).
 ///
@@ -176,7 +176,7 @@ main =
 /// type whose auto-derived `Send + Sync` satisfies the bound — the same shape
 /// the sibling `set_page` and `Route::new` builder closures use.
 ///
-/// A successful `skyc` + `cargo build` IS the assertion.
+/// A successful `ipe` + `cargo build` IS the assertion.
 ///
 /// # Errors
 ///
@@ -289,7 +289,7 @@ main =
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Compile a Sky program string, build the emitted Rust project, and return
+/// Compile a Ipê program string, build the emitted Rust project, and return
 /// the path to the compiled binary.
 ///
 /// # Errors
@@ -313,7 +313,7 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxEr
         .map_err(|e| -> BoxError { format!("{test_name}: runtime unavailable: {e}").into() })?;
 
     ipe::build(&entry, &out_dir, &runtime)
-        .map_err(|e| -> BoxError { format!("{test_name}: skyc build failed: {e}").into() })?;
+        .map_err(|e| -> BoxError { format!("{test_name}: ipe build failed: {e}").into() })?;
 
     let exe = oracle::build_rust_binary(test_name, &out_dir)
         .map_err(|e| -> BoxError { format!("{test_name}: cargo build failed: {e}").into() })?;
@@ -324,7 +324,7 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<PathBuf, BoxEr
 /// Reserve an ephemeral loopback port by binding then immediately dropping a
 /// `TcpListener`.  The OS assigns port 0 → an unused port.
 ///
-/// There is a small TOCTOU window between the drop and the Sky server binding
+/// There is a small TOCTOU window between the drop and the Ipê server binding
 /// the same port; in practice the window is negligible on a loopback test.
 ///
 /// # Errors
@@ -337,7 +337,7 @@ fn pick_ephemeral_port() -> Result<u16, BoxError> {
         .local_addr()
         .map_err(|e| -> BoxError { format!("cannot read ephemeral port: {e}").into() })?
         .port();
-    // Drop `listener` here — releases the port for the Sky Live server.
+    // Drop `listener` here — releases the port for the Ipê Live server.
     Ok(port)
 }
 
@@ -351,7 +351,7 @@ impl Drop for ProcessGuard {
     }
 }
 
-/// Spawn the Sky Live binary and wait until it signals readiness via
+/// Spawn the Ipê Live binary and wait until it signals readiness via
 /// `[sky.live] listening on` on stderr.
 ///
 /// # Errors
@@ -571,8 +571,8 @@ fn extract_hid_for_open_tag(html: &str, tag: &str) -> Option<String> {
 /// This test proves the FULL Ipe.Live pipeline end-to-end:
 ///
 /// ```text
-/// Sky source
-///   → skyc (parse → canon → types → lower → emit Rust with "live" feature)
+/// Ipê source
+///   → ipe (parse → canon → types → lower → emit Rust with "live" feature)
 ///   → cargo build
 ///   → ipe_runtime::live::live_app(init, update, view, subs, …)
 ///   → init(LiveReq) → (Model{count:0}, Cmd::None)
@@ -646,7 +646,7 @@ fn live_counter_build_only() -> Result<(), BoxError> {
         return Ok(());
     }
 
-    // compile_and_build already does skyc + cargo build; success is the proof.
+    // compile_and_build already does ipe + cargo build; success is the proof.
     let _exe = compile_and_build("live_build_only", IPE_LIVE_COUNTER)?;
     Ok(())
 }
@@ -654,8 +654,8 @@ fn live_counter_build_only() -> Result<(), BoxError> {
 /// Serde-derive gating seal — BUILD-ONLY: a Ipe.Live program with a NON-Model
 /// view-helper record holding an `Html` field must compile end-to-end.
 ///
-/// A successful `skyc` + `cargo build` IS the assertion. Gating serde on the
-/// record's `CDPeq` flag would make this `skyc` exit 0 then `cargo build` E0277
+/// A successful `ipe` + `cargo build` IS the assertion. Gating serde on the
+/// record's `CDPeq` flag would make this `ipe` exit 0 then `cargo build` E0277
 /// (`Html<MainMsg>: Serialize` unsatisfied on the `Section` struct's forced
 /// serde derive). See `IPE_LIVE_HTML_HELPER` for the full rationale.
 ///
@@ -676,7 +676,7 @@ fn live_html_helper_record_build_only() -> Result<(), BoxError> {
 /// `subscriptions` cfg field on a routed `Live.app` must compile end-to-end.
 /// See `IPE_LIVE_LAMBDA_SUBS` for the full rationale — a lambda pinned to
 /// `Box<dyn Fn + Send>` (no `Sync`) instead of emitted unboxed into the generic
-/// `FSubs` slot makes this `skyc` exit 0 then `cargo build` E0277
+/// `FSubs` slot makes this `ipe` exit 0 then `cargo build` E0277
 /// (`dyn Fn(..) -> IpeSub<Msg> + Send cannot be shared between threads safely`).
 ///
 /// # Errors
@@ -814,7 +814,7 @@ fn live_onclick_increments_counter() -> Result<(), BoxError> {
 /// - T5: `routed_page_field` detects the `page` field in the Model and the
 ///   emitter branches to `live_app_routed` with a generated `set_page` closure.
 ///
-/// A successful `skyc` + `cargo build` is the assertion.  If T5 emits
+/// A successful `ipe` + `cargo build` is the assertion.  If T5 emits
 /// `live_app` instead of `live_app_routed`, or emits a malformed `set_page`
 /// closure, `cargo build` surfaces the type mismatch.
 ///
@@ -840,7 +840,7 @@ fn live_routed_app_build_only() -> Result<(), BoxError> {
 /// - `Sub.subscribeTopic : String -> (Dict String String -> msg) -> Sub msg`
 ///   (exercised here as the natural pair to `Cmd.publish`)
 ///
-/// A successful `skyc` + `cargo build` is the assertion.  Without pub/sub
+/// A successful `ipe` + `cargo build` is the assertion.  Without pub/sub
 /// wiring the compiler would emit a `CompilerBug` diagnostic on `Cmd.publish`
 /// or `Cmd.publishNoEcho` — exit-0 structurally impossible.
 ///
@@ -929,7 +929,7 @@ fn live_pubsub_cmd_publish_and_sub_subscribe_topic_build_only() -> Result<(), Bo
 }
 
 /// Regression: `Cmd.publish` / `Cmd.publishNoEcho` must accept a record payload
-/// (or any Sky value), not only `Dict String String`.
+/// (or any Ipê value), not only `Dict String String`.
 ///
 /// The constrain scheme is `String -> any -> Cmd msg` (var(1) for payload),
 /// matching the reference runtime which is generic in T. A narrower `String ->
@@ -1025,7 +1025,7 @@ fn live_pubsub_publish_polymorphic_record_payload_build_only() -> Result<(), Box
 /// straight through as `ui_on_submit_`'s generic `F: Fn(T) -> M + Send + Sync +
 /// 'static` would be unsatisfiable: a trait object's auto-trait set is exactly
 /// its bound list, so that box can never satisfy `+ Sync` regardless of what it
-/// captures — a skyc-accept/cargo-reject SEAL violation. The emit re-wraps the
+/// captures — a ipe-accept/cargo-reject SEAL violation. The emit re-wraps the
 /// boxed value in a freshly-declared closure at the `KernelFn::UiOnSubmit` /
 /// `HtmlEventShape::Raw` emit sites (`ipe_backend_rust::emit_expr`) instead of
 /// forwarding the box itself — see that arm's comment for the full mechanism.
@@ -1085,8 +1085,8 @@ main =
 "#;
 
 /// Typed-record onSubmit seal — BUILD-ONLY: the typed-record `Ui.onSubmit` form
-/// must compile end-to-end. A successful `skyc` + `cargo build` IS the assertion
-/// — forwarding the bare box makes this `skyc` exit 0 then `cargo build` E0277
+/// must compile end-to-end. A successful `ipe` + `cargo build` IS the assertion
+/// — forwarding the bare box makes this `ipe` exit 0 then `cargo build` E0277
 /// (`dyn Fn(Creds) -> MainMsg + Send` cannot be shared between threads safely).
 ///
 /// # Errors
@@ -1213,7 +1213,7 @@ fn live_onsubmit_typed_record_dispatches_decoded_payload() -> Result<(), BoxErro
 /// are already synced into `Model` via `onInput`/`onChange`; `onSubmit`
 /// just triggers the action, ignoring the posted `FormData` entirely.
 ///
-/// `skyc build` exits 0 here (`HtmlOnSubmit`'s Sky-level scheme
+/// `ipe build` exits 0 here (`HtmlOnSubmit`'s Ipê-level scheme
 /// deliberately leaves the argument type unconstrained — decoupled from
 /// `msg`, see `constrain.rs`'s `HtmlEventShape::Raw` arm — so a Msg-typed
 /// value type-checks fine there). Emitting the argument unconditionally as a
@@ -1286,8 +1286,8 @@ main =
 "#;
 
 /// Bare-Msg onSubmit seal — BUILD-ONLY: the bare-Msg `onSubmit` form must
-/// compile end-to-end. A successful `skyc` + `cargo build` IS the assertion —
-/// treating the bare Msg as callable makes this `skyc` exit 0 then `cargo
+/// compile end-to-end. A successful `ipe` + `cargo build` IS the assertion —
+/// treating the bare Msg as callable makes this `ipe` exit 0 then `cargo
 /// build` E0618.
 ///
 /// # Errors
@@ -1417,14 +1417,14 @@ fn live_onsubmit_bare_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
 //
 // `HtmlOnSubmit`'s payload type is `var(1)` in `constrain.rs`'s
 // `HtmlEventShape::Raw` arm — decoupled from `msg`, hence UNCONSTRAINED — so
-// these shapes type-check in skyc; the well-typed, SEAL-relevant program is one
+// these shapes type-check in ipe; the well-typed, SEAL-relevant program is one
 // whose `Msg` type IS that record / tuple / list (`type alias Msg = { … }`
 // etc), where the literal is a genuine `Msg` value. Wrapping the value in
-// `(payload_s)(_x)` would make each such program `skyc` exit 0 then `cargo
+// `(payload_s)(_x)` would make each such program `ipe` exit 0 then `cargo
 // build` E0618 ("expected function, found …"). `is_definitely_not_callable`
 // covers the three compound literal variants (`Expr::Record` / `Expr::Tuple` /
 // `Expr::List`), routing them to `html_on_raw_fixed_` (fixed dispatch, no
-// decode) — sealing the class. A successful `skyc` + `cargo build` IS the
+// decode) — sealing the class. A successful `ipe` + `cargo build` IS the
 // assertion.
 
 /// `onSubmit` payload is a RECORD literal, `Msg` is a record alias.
@@ -1570,8 +1570,8 @@ main =
 "#;
 
 /// Compound-literal onSubmit seal — BUILD-ONLY: a RECORD-literal `onSubmit`
-/// payload must compile end-to-end. A successful `skyc` + `cargo build` IS the
-/// assertion — the wrap-and-call path makes this `skyc` exit 0 then `cargo
+/// payload must compile end-to-end. A successful `ipe` + `cargo build` IS the
+/// assertion — the wrap-and-call path makes this `ipe` exit 0 then `cargo
 /// build` E0618.
 ///
 /// # Errors
@@ -1637,7 +1637,7 @@ fn live_onsubmit_list_literal_build_only() -> Result<(), BoxError> {
 // `Expr::Var`, which is NOT in such a classifier's fixed set, so it would be
 // wrapped as a decoder: `html_on_raw_("submit", move |_x| (m)(_x))`.
 // `m` is `MainMsg::DoSignUp`, a non-callable enum value → `(m)(_x)` is cargo
-// `E0618` ("expected function") AFTER `skyc` exit 0 — a SEAL violation.
+// `E0618` ("expected function") AFTER `ipe` exit 0 — a SEAL violation.
 //
 // Classification is TYPE-DIRECTED instead (mirroring `../sky`'s
 // `formTargetRustType`): the lowerer reads the handler's SOLVED type and
@@ -1645,7 +1645,7 @@ fn live_onsubmit_list_literal_build_only() -> Result<(), BoxError> {
 // (this shape) routes to `html_on_raw_fixed_` regardless of its syntax; an
 // arrow handler keeps the decode path. Acceptance does not depend on the
 // payload's `Expr` shape, so a `Var`/`Apply`/`Access`-bound bare `Msg` seals
-// identically to a bare-`Ctor` one. A successful `skyc` + `cargo build` IS the
+// identically to a bare-`Ctor` one. A successful `ipe` + `cargo build` IS the
 // assertion; the E2E companion proves the fixed value is actually dispatched.
 
 /// `onSubmit m` where `m : Msg` is a `let`-bound bare (non-function)
@@ -1718,8 +1718,8 @@ main =
 
 /// Var-bound bare-Msg onSubmit seal — BUILD-ONLY: the `Var`-bound bare-Msg
 /// `onSubmit` form must compile end-to-end. A syntactic classifier would make
-/// this `skyc` exit 0 then `cargo build` E0618 (`(m)(_x)` on a non-callable
-/// value). A successful `skyc` + `cargo build` IS the assertion.
+/// this `ipe` exit 0 then `cargo build` E0618 (`(m)(_x)` on a non-callable
+/// value). A successful `ipe` + `cargo build` IS the assertion.
 ///
 /// # Errors
 ///
@@ -1831,7 +1831,7 @@ fn live_onsubmit_var_bound_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
 /// `let handler = \c -> DoSignIn c in ... Ui.onSubmit handler ...`. A `handler`
 /// declared `Box<dyn Fn(Creds) -> MainMsg + Send + 'static>` (never `+ Sync`)
 /// captured by move into the `ui_on_submit_(move |_x| (handler)(_x))` wrapper
-/// would make this `skyc` exit 0 then `cargo build` E0277 (`dyn Fn(..) ->
+/// would make this `ipe` exit 0 then `cargo build` E0277 (`dyn Fn(..) ->
 /// MainMsg + Send` cannot be shared between threads safely). So
 /// `ipe_lower::lower_let_pvar` + `flows_into_sync_kernel_call` promote the
 /// let-bound closure to `Arc<dyn Fn + Send + Sync>` at its declaration.
@@ -1962,8 +1962,8 @@ main =
 "#;
 
 /// Let-bound closure onSubmit seal — BUILD-ONLY: a single-hop `let`-bound
-/// `Ui.onSubmit` handler must compile end-to-end. A successful `skyc` + `cargo
-/// build` IS the assertion — a non-`Sync` boxed handler makes this `skyc` exit 0
+/// `Ui.onSubmit` handler must compile end-to-end. A successful `ipe` + `cargo
+/// build` IS the assertion — a non-`Sync` boxed handler makes this `ipe` exit 0
 /// then `cargo build` E0277.
 ///
 /// # Errors

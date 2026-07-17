@@ -27,7 +27,7 @@ had no tenant isolation anywhere.
   blowup). The driver is frozen per binary; there is no runtime negotiation.
 
 - **Typed `SqlNull` carries a type witness.** The runtime `SqlParam::SqlNull`
-  was a bare unit, discarding the Sky-side `SqlNull SqlValue` witness. Add
+  was a bare unit, discarding the Ipê-side `SqlNull SqlValue` witness. Add
   `Null(Box<SqlParam>)` carrying a witness — not for a value (NULL has none) but
   for its variant tag, which selects the typed `Option::<T>::None` to bind so
   Postgres's per-parameter type OID matches the target column. Rejected: leaving

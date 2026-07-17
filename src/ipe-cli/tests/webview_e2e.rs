@@ -14,7 +14,7 @@
 //!
 //! ## Test tiers
 //!
-//! * **Tier-A** (`webview_counter_build_only`): skyc compile + `cargo build
+//! * **Tier-A** (`webview_counter_build_only`): ipe compile + `cargo build
 //!   --features webview` links cleanly.  The `webview` feature is promoted to
 //!   the default feature list by `project::webview_cargo_toml`, so a plain
 //!   `cargo build` already uses it — no extra flag needed.  This is the
@@ -114,7 +114,7 @@ main =
 /// Shared error type for E2E helpers.
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-/// Compile a Sky program string, build the emitted Rust project, and return
+/// Compile a Ipê program string, build the emitted Rust project, and return
 /// the path to the compiled binary.
 ///
 /// The emitted project has `webview` in its default feature list (set by
@@ -139,7 +139,7 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::Pat
         .map_err(|e| -> BoxError { format!("{test_name}: runtime unavailable: {e}").into() })?;
 
     ipe::build(&entry, &out_dir, &runtime)
-        .map_err(|e| -> BoxError { format!("{test_name}: skyc build failed: {e}").into() })?;
+        .map_err(|e| -> BoxError { format!("{test_name}: ipe build failed: {e}").into() })?;
 
     let exe = oracle::build_rust_binary(test_name, &out_dir)
         .map_err(|e| -> BoxError { format!("{test_name}: cargo build failed: {e}").into() })?;
@@ -147,7 +147,7 @@ fn compile_and_build(test_name: &str, ipe_source: &str) -> Result<std::path::Pat
     Ok(std::path::PathBuf::from(exe))
 }
 
-/// Tier-A: skyc compiles the Ipe.Webview counter, the emitted Rust project
+/// Tier-A: ipe compiles the Ipe.Webview counter, the emitted Rust project
 /// links (with the `webview` + `wry` + `tao` deps from the promoted default
 /// features), and the binary exists.
 ///
@@ -170,7 +170,7 @@ fn webview_counter_build_only() -> Result<(), BoxError> {
         return Ok(());
     }
 
-    // compile_and_build does skyc + cargo build; a clean binary path is the proof.
+    // compile_and_build does ipe + cargo build; a clean binary path is the proof.
     let _exe = compile_and_build("webview_build_only", IPE_WEBVIEW_COUNTER)?;
     Ok(())
 }

@@ -6,7 +6,7 @@
 //! literal `0` and the second binding the rest. `Empty` covers the nullary
 //! constructor. Each arm lowers to its own Rust `match` arm in source order.
 //!
-//! `skyc` must emit `main.rs` byte-identical to the checked-in golden, and
+//! `ipe` must emit `main.rs` byte-identical to the checked-in golden, and
 //! (behind `IPE_E2E=1`) the emitted project must build and print `114`.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at

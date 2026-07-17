@@ -1,4 +1,4 @@
-# Std.Ui / Std.Html Completeness — Reconciled Design (#76)
+# Ipe.Ui / Ipe.Html Completeness — Reconciled Design (#76)
 
 > **Guardian synthesis.** Reconciles three independent fresh designs (A1
 > completeness+taxonomy, A2 invalid-states-at-registration, A3 soundness+prune)
@@ -89,7 +89,7 @@ set, and typed `OnMsg`/`OnInput`/`OnForm` handler variants.
    A member absent from it is absent from canon (honest use-site unknown-member
    error); a member present as `Backed` is provably backed; a member present as
    `Deferred(reason)` produces a **use-site diagnostic naming the port status**
-   ("`Ui.mediaQuery` is part of the Std.Ui surface but not yet ported: needs
+   ("`Ui.mediaQuery` is part of the Ipe.Ui surface but not yet ported: needs
    CSS-emission runtime"). Nothing can sit in `id = None` limbo. A
    total-partition test + a pinned `DEFERRED_COUNT` make the *counted* residual
    explicit; a member that is neither backed nor deferred cannot exist.
@@ -98,14 +98,14 @@ set, and typed `OnMsg`/`OnInput`/`OnForm` handler variants.
 
 ### The `../sky` pure-Sky north-star (grafted as direction, not as the #76 fix)
 
-Upstream's *actual* completeness mechanism is that `Std.Ui`/`Std.Html` are
-**100% pure Sky** compiled through ordinary lowering, backing only ~4-5
+Upstream's *actual* completeness mechanism is that `Ipe.Ui`/`Ipe.Html` are
+**100% pure Ipê** compiled through ordinary lowering, backing only ~4-5
 render/escape kernels + an opaque-ADT type bridge; the ~160 members need *no*
 per-member id. That is genuinely superior on P4/P5/P6 and is the recorded
 **north-star**: as the Rust canon/type/lower gain the ability to ingest the full
 `sky-stdlib/Std/{Ui,Html}.ipe` ADT surface (List, records, closures-in-ADT-
 fields — largely post-M0), each `Backed` batch below can be *retired to pure
-Sky*, thinning the manifest. It is **rejected as the immediate #76 deliverable**
+Ipê*, thinning the manifest. It is **rejected as the immediate #76 deliverable**
 (see §6) because the port is kernel-backed today and cannot yet compile that
 source. Critically, the invariant is identical in both worlds: upstream reaches
 completeness via **exhaustiveness over a closed ADT** (`collectStyle`'s total
@@ -138,7 +138,7 @@ moves N members `Deferred → Backed`.
 
 ## 4. Ordered build tasks
 
-Each batch lands fully green (`skyc build` + `cargo test -p sky_canon -p
+Each batch lands fully green (`ipe build` + `cargo test -p sky_canon -p
 sky_types` + the affected example) before the next. **The registry status gate
 is Batch 0 and is a hard prerequisite** — it is the step that makes the invalid
 state unrepresentable.
@@ -183,10 +183,10 @@ state unrepresentable.
    `DEFERRED_COUNT`.
 
 4. **BATCH T2 — tag-as-data (correctness-critical, first behaviour change).**
-   Add two generic kernels `HtmlContainerNode` (Sky-arity 2) + `HtmlVoidNode`
-   (Sky-arity 1), wired once through the 8 files; runtime gains
+   Add two generic kernels `HtmlContainerNode` (Ipê-arity 2) + `HtmlVoidNode`
+   (Ipê-arity 1), wired once through the 8 files; runtime gains
    `html_void_node_(tag, attrs)` beside the existing `html_node_(tag, attrs,
-   kids)`. Lower injects the tag literal as arg0 at lower time (Sky-visible
+   kids)`. Lower injects the tag literal as arg0 at lower time (Ipê-visible
    arity stays 2/1 for the checker; runtime fn is 3/2 — internal injection,
    exactly like the existing baked-tag `html_div_`). **Delete** the
    `h1|table|… → html_p_` fold and the per-tag `html_div_/html_span_/html_p_`
@@ -283,19 +283,19 @@ docs/divergences-from-sky.md             (layout-sentinel divergence; numeric-en
 
 **From `../sky` (B) — grafts vs rejects:**
 
-- **Pure-Sky-source stdlib as the *immediate* #76 fix (B ADOPT)** — **rejected
+- **Pure-Ipê-source stdlib as the *immediate* #76 fix (B ADOPT)** — **rejected
   as the immediate deliverable, adopted as north-star.** Weighed critically: it
   is genuinely superior on P4/P5/P6 (0 per-member wiring, HM-checked like user
   code) and is what upstream actually does. But the Rust port is kernel-backed
   *today*; compiling the full `Std/{Ui,Html}.ipe` ADT surface needs canon/type/
   lower to ingest List, records, and closures-in-ADT-fields (largely post-M0).
   Shipping it now would block #76 on a multi-milestone dependency. The chosen
-  kernel-backed manifest is the **bridge that thins toward pure Sky**: each
+  kernel-backed manifest is the **bridge that thins toward pure Ipê**: each
   `Backed` batch can later be retired to source, and the closed-`Backing`
   totality gate is the exact analogue of upstream's closed-ADT `collectStyle`
   exhaustiveness — so nothing built here is thrown away. (The prior synthesis's
   L26 "route each Attribute → a per-attr kernel call" mischaracterises upstream,
-  which does CSS emission in *pure-Sky total case-of*; our per-group runtime
+  which does CSS emission in *pure-Ipê total case-of*; our per-group runtime
   helper is the kernel-side equivalent, not per-attr.)
 - **~5-kernel render/escape boundary + `SafeAttrName` newtype (B ADOPT)** —
   **grafted** (P1). One hand-audited escaper/serializer whose sole constructor
@@ -318,7 +318,7 @@ docs/divergences-from-sky.md             (layout-sentinel divergence; numeric-en
 - **Silent `toSnakeCase(mod++"_"++name)` FFI-name fallthrough + dynamic
   `callPure` runtime-panic polyfill as the render path (B REJECT)** —
   **rejected** (P2, our exit-0-then-cargo-fail class, #45/#70). Render-kernel
-  names go in an exhaustive closed-enum match; a typo is a `skyc` diagnostic,
+  names go in an exhaustive closed-enum match; a typo is a `ipe` diagnostic,
   not a deferred cargo failure. The runtime polyfill stays only for the
   genuinely-dynamic FFI boundary.
 - **Stringly-typed `__row`/`__grid`/`__gridTracks` layout sentinels +

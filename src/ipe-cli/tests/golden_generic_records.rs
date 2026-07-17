@@ -1,4 +1,4 @@
-//! Generic-records gate: `skyc` must emit `main.rs` byte-identical
+//! Generic-records gate: `ipe` must emit `main.rs` byte-identical
 //! to the checked-in golden for a program that constructs and reads a record
 //! whose field type is a **type variable** — `wrap : a -> { value : a }` /
 //! `unwrap : { value : a } -> a` — and (behind `IPE_E2E=1`) the emitted project

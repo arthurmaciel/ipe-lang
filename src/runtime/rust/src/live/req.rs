@@ -1,4 +1,4 @@
-//! `LiveReq` — the typed request context passed to a Sky.Live `init`.
+//! `LiveReq` — the typed request context passed to a Ipe.Live `init`.
 //!
 //! Mirrors the modern Go `req` record: `req.path` / `req.query` /
 //! `req.method` are strings; `req.params` / `req.headers` / `req.cookies` are

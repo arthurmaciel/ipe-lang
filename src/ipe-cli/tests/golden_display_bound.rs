@@ -1,6 +1,6 @@
 //! `toString` on a wildcard `any` param.
 //!
-//! Without the fix, `skyc build` exits 0, but the emitted Rust fails `cargo build`
+//! Without the fix, `ipe build` exits 0, but the emitted Rust fails `cargo build`
 //! with E0277 (`the trait bound T1: std::fmt::Display is not satisfied`) at the
 //! `basics_to_string(x)` call inside a function whose only generic is the
 //! wildcard `any` PARAM (`render : any -> String; render x = toString x`).
@@ -23,7 +23,7 @@
 //!
 //! Run:
 //! ```text
-//! IPE_E2E=1 cargo test -p skyc --test golden_i186_display_bound
+//! IPE_E2E=1 cargo test -p ipe --test golden_i186_display_bound
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -42,7 +42,7 @@ fn entry_path(root: &Path) -> PathBuf {
         .join("Main.ipe")
 }
 
-/// skyc-0: the compiler must accept the program AND emit `+ std::fmt::Display`
+/// ipe-0: the compiler must accept the program AND emit `+ std::fmt::Display`
 /// on the wildcard-`any` renderer function's own generic — checked
 /// unconditionally (cheap, no `cargo`), independent of the `IPE_E2E` gate.
 #[test]
@@ -60,7 +60,7 @@ fn i186_skyc_accepts_and_bounds_fn_display() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for display_bound: {:?}",
+        "ipe build must succeed for display_bound: {:?}",
         built.err()
     );
 
@@ -83,7 +83,7 @@ fn i186_skyc_accepts_and_bounds_fn_display() {
 
 /// cargo-0 ∧ run-0: the emitted project actually compiles with `rustc` and
 /// prints the rendered value. Gated on `IPE_E2E=1` — the only check that would
-/// have caught the original SEAL violation (E0277, `skyc build` clean).
+/// have caught the original SEAL violation (E0277, `ipe build` clean).
 #[test]
 fn i186_cargo_builds_and_runs() {
     if std::env::var("IPE_E2E").is_err() {
@@ -102,7 +102,7 @@ fn i186_cargo_builds_and_runs() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for display_bound: {:?}",
+        "ipe build must succeed for display_bound: {:?}",
         built.err()
     );
 

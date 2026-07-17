@@ -4,7 +4,7 @@
 //! * `let (a, b) = (40, 2) in a + b`  → 42  (tuple binder → native Rust `let (a, b)`)
 //! * `let { x } = { x = 42 } in x`    → 42  (record binder → `let RecX { x, .. }`)
 //!
-//! `skyc` must emit `main.rs` byte-identical to the checked-in golden, and
+//! `ipe` must emit `main.rs` byte-identical to the checked-in golden, and
 //! (behind `IPE_E2E=1`) the emitted project must build and print `84`.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at

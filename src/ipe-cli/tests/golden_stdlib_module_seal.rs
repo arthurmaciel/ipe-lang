@@ -7,19 +7,19 @@
 //! are point-free `Ffi.kernel "Mod_fn"` aliases. Registering each family's
 //! kernels (variant + `decl` + type-scheme + arity + naming + pretty) closes the
 //! resolution hole; the runtime fns already exist and are re-exported into the
-//! emitted crate unconditionally, so skyc-0 implies cargo-0 (THE SEAL).
+//! emitted crate unconditionally, so ipe-0 implies cargo-0 (THE SEAL).
 //!
 //! Two invariants, one per module:
 //!
 //! * **Resolution + emit** (always): `import <Module>` and a member call resolve
-//!   and the frontend emits clean Rust (skyc exit 0). A resolution regression
+//!   and the frontend emits clean Rust (ipe exit 0). A resolution regression
 //!   (IPE-N0028 / N0026 / T0001) fails HERE — never a silent skip.
 //! * **Seal** (`IPE_E2E`): the emitted crate `cargo build`s AND runs cleanly.
-//!   skyc exit 0 AND cargo exit 0 — no exit-0-then-cargo-fail.
+//!   ipe exit 0 AND cargo exit 0 — no exit-0-then-cargo-fail.
 //!
 //! ```text
-//! cargo test -p skyc --test golden_stdlib_module_seal
-//! IPE_E2E=1 cargo test -p skyc --test golden_stdlib_module_seal
+//! cargo test -p ipe --test golden_stdlib_module_seal
+//! IPE_E2E=1 cargo test -p ipe --test golden_stdlib_module_seal
 //! ```
 
 use std::fs;
@@ -45,8 +45,8 @@ fn e2e_enabled() -> bool {
     std::env::var("IPE_E2E").is_ok()
 }
 
-/// Compile `main` (a full `Main.ipe` program) through the skyc frontend into an
-/// emitted Rust project rooted at a per-`slug` temp dir. Asserts skyc exit 0 —
+/// Compile `main` (a full `Main.ipe` program) through the ipe frontend into an
+/// emitted Rust project rooted at a per-`slug` temp dir. Asserts ipe exit 0 —
 /// a resolution/seal regression fails loudly. Returns the emitted-project dir.
 fn compile_module_probe(slug: &str, main: &str) -> Option<PathBuf> {
     // Unique dir PER CALL: the `_resolves_and_emits` and `_builds_and_runs` tests for
@@ -80,7 +80,7 @@ fn compile_module_probe(slug: &str, main: &str) -> Option<PathBuf> {
     Some(out)
 }
 
-/// Full end-to-end seal for one module: skyc emits, then the emitted crate
+/// Full end-to-end seal for one module: ipe emits, then the emitted crate
 /// `cargo build`s + runs, and stdout matches `expected`.
 fn seal_module(slug: &str, main: &str, expected: &str) {
     if !e2e_enabled() {
@@ -305,7 +305,7 @@ fn cache_builds_and_runs() {
 // ── Ipe.PubSub ─────────────────────────────────────────────────────────
 // PubSub.publish : String -> any -> Task Error Int.  No Live.app runs in this
 // probe so publish resolves to Err(Unavailable) — Task.onError swallows it and
-// the program prints the marker.  The test asserts skyc-0 ⇒ cargo-0 ⇒ exit-0.
+// the program prints the marker.  The test asserts ipe-0 ⇒ cargo-0 ⇒ exit-0.
 
 const PUBSUB_MAIN: &str = "module Main exposing (main)\n\
     import Ipe.Prelude exposing (..)\n\
@@ -337,7 +337,7 @@ fn pubsub_builds_and_runs() {
 // (`decodeToml`/`decodeYaml`/`decodeJson`). Proves two properties together:
 // the `type Decoder a` re-declaration resolves (IPE-N0026 carrier exemption) with
 // no competing enum emitted, and every kernel emits the shared JSON `decode_*` /
-// `config_decode_*` runtime fns (skyc-0 ⇒ cargo-0). Uses SINGLE-decoder
+// `config_decode_*` runtime fns (ipe-0 ⇒ cargo-0). Uses SINGLE-decoder
 // composition — the multi-parameter applicative `succeed (\a b -> …)` builder is
 // the same documented distinct surface `Ipe.Json.Decode` has (divergences
 // §A8), not a Config-specific gap.

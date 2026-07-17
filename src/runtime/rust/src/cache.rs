@@ -1,21 +1,21 @@
-//! Std.Cache — a bounded LRU cache with optional TTL + running stats.
+//! Ipe.Cache — a bounded LRU cache with optional TTL + running stats.
 //!
 //! Handle-based: `cache_new_raw` returns an `i64` handle wrapped in the opaque
-//! `IpeCacheHandle` (the Sky `Cache k v` lowers to this non-generic enum — the
+//! `IpeCacheHandle` (the Ipê `Cache k v` lowers to this non-generic enum — the
 //! handle carries no type args; `k`/`v` live only on the kernel calls). The
 //! other kernels take the unwrapped `i64`.
 //!
 //! Each handle holds a `K`-typed `Vec<CacheEntry<K>>` whose entries carry a
 //! value-erased `Box<dyn Any + Send>`, downcast to `V` only on `get` (where the
-//! Sky `getRaw : … -> Task Error (Maybe v)` return makes `V` available). Keys
+//! Ipê `getRaw : … -> Task Error (Maybe v)` return makes `V` available). Keys
 //! are matched by `PartialEq` (already in the codegen's standard generic bounds)
 //! via a linear scan — no `Eq`/`Hash` needed, so the generic stdlib wrappers
 //! type-check without any bound-threading. O(n) per op, fine for the small caches
-//! Sky uses; a future codegen `Eq+Hash` bound would allow an O(1) `HashMap`.
+//! Ipê uses; a future codegen `Eq+Hash` bound would allow an O(1) `HashMap`.
 //!
 //! Both the `Vec<CacheEntry<K>>` downcast (by `K`) and the value downcast (by
 //! `V`) are **correct by construction** — every op on a handle uses the same
-//! `(K, V)`, enforced by Sky's opaque `Cache k v` — so neither can fail; a
+//! `(K, V)`, enforced by Ipê's opaque `Cache k v` — so neither can fail; a
 //! mismatch / missing handle degrades to a miss / no-op, never a panic. The same
 //! sanctioned-seam discipline as the pub/sub broker; strictly safer than Go's reflect
 //! cache (the cast cannot fail). See the README `dyn Any` register.
@@ -25,15 +25,15 @@ use std::any::Any;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-/// The opaque Sky `Cache k v` — a non-generic handle wrapper. The variant name
-/// `Cache` matches the Sky constructor so the codegen lowers `Cache.Cache raw`
+/// The opaque Ipê `Cache k v` — a non-generic handle wrapper. The variant name
+/// `Cache` matches the Ipê constructor so the codegen lowers `Cache.Cache raw`
 /// to `IpeCacheHandle::Cache(raw)` and `case c of Cache raw -> …` to a match.
 #[derive(Clone, Debug, PartialEq)]
 pub enum IpeCacheHandle {
     Cache(i64),
 }
 
-/// Mirrors Sky's `CacheCfg` record (field names match → the codegen folds the
+/// Mirrors Ipê's `CacheCfg` record (field names match → the codegen folds the
 /// `{ maxEntries, ttlMs, maxBytes }` record shape to this struct, so a
 /// `Cache.defaultCfg` literal constructs it directly — `IrType::CacheCfg`).
 /// `Debug + PartialEq` so the emitted-side nominal type is fully derivable
@@ -46,7 +46,7 @@ pub struct CacheCfg {
     pub maxBytes: i64,
 }
 
-/// Mirrors Sky's `stats` return record `{ hits, misses, evictions }`
+/// Mirrors Ipê's `stats` return record `{ hits, misses, evictions }`
 /// (`IrType::CacheStats`). `Debug + PartialEq` for the same fully-derivable
 /// reason as `CacheCfg`.
 #[allow(non_snake_case)]
@@ -150,7 +150,7 @@ where
             let max = slot.cfg.maxEntries;
             let ttl = slot.cfg.ttlMs;
             let expires_at = if ttl > 0 {
-                // Saturate instead of panicking: a Sky caller passing a near-i64::MAX ttl
+                // Saturate instead of panicking: a Ipê caller passing a near-i64::MAX ttl
                 // (e.g. `withTTL Int.maxInt`) must not cause "overflow when adding duration
                 // to instant". ttl > 0 is already guarded above, so the cast is lossless.
                 Some(

@@ -12,7 +12,7 @@ module Main exposing (main)
 --   2. `Task.fail e |> Task.andThen (\_ -> Task.succeed "unreachable")`
 --   3. A named helper that takes the discarded argument explicitly
 --
--- Expected: skyc-0 AND cargo-0 on the emitted project; output contains
+-- Expected: ipe-0 AND cargo-0 on the emitted project; output contains
 -- "ok: done" and "err: intentional".
 
 import Ipe.Prelude exposing (..)

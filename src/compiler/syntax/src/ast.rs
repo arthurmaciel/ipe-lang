@@ -1,7 +1,7 @@
 //! Source AST — the raw parse tree before name resolution.
 //!
 //! This is the Rust port of the supported subset of the Haskell compiler's
-//! `Sky.AST.Source` (which is itself a derivative work of elm/compiler's
+//! `Ipê.AST.Source` (which is itself a derivative work of elm/compiler's
 //! `AST.Source`, BSD-3-Clause). Only the nodes the supported grammar
 //! exercises are modelled; unsupported source grammar (FFI imports, infix
 //! decls) is deliberately omitted until needed.
@@ -209,7 +209,7 @@ pub enum Expr_ {
     /// chain (`p.x.y` -> `Access (Access p x) y`). Mirrors `Src.Access`.
     Access(Box<Expr>, Located<Symbol>),
     /// A record update `{ base | field = expr, ... }`. The `base` is a located
-    /// lowercase variable naming the record to copy (Sky restricts the update
+    /// lowercase variable naming the record to copy (Ipê restricts the update
     /// base to a bare variable, as Elm does); the field list carries each
     /// updated `(name, value)` pair in source order. Mirrors the Haskell
     /// compiler's `Src.Update (Located String) [(Located String, Expr)]`,

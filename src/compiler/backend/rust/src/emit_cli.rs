@@ -106,7 +106,7 @@ fn emit_cli_inner(
 
     // seal: gate the Model against `cli_program`'s `Clone` bound. A
     // non-clonable (non-derivable) Model — a field of type `Cmd`/`Sub`/`Task`/
-    // `Decoder`/`Db`/function — would otherwise `skyc`-succeed then
+    // `Decoder`/`Db`/function — would otherwise `ipe`-succeed then
     // `cargo`-fail; the gate makes it a fail-closed `IPE-L0120` error.
     if let Some(model_ty) = crate::emit_model_gate::model_ty_of_view(view_e) {
         crate::emit_model_gate::check_admissible_model(
@@ -157,7 +157,7 @@ fn emit_cli_fn(
     emit_expr_at(ctx, e, indent, child, generics)
 }
 
-/// Find a record field by its Sky source name in an IR field list.
+/// Find a record field by its Ipê source name in an IR field list.
 ///
 /// Fail-closed: a missing required field surfaces a [`Diagnostic::CompilerBug`]
 /// rather than silently emitting wrong code (MAKE INVALID STATES UNREPRESENTABLE).

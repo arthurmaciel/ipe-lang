@@ -1,6 +1,6 @@
 module Main exposing (main, tests)
 
--- | Comprehensive smoke-test of the Sky standard library.
+-- | Comprehensive smoke-test of the Ipê standard library.
 --
 -- One assertion per call site so a failure pinpoints the broken
 -- helper. Grouped by module via Test.suite. `main` exits 0 iff

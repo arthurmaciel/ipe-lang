@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 -- #111 reconciler fixture: Cli.program is FULLY WIRED.
--- Expected: skyc-0 AND cargo-0 on the emitted project.
+-- Expected: ipe-0 AND cargo-0 on the emitted project.
 
 import Ipe.Cli as Cli
 

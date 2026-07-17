@@ -3,7 +3,7 @@
 // `live`-shape examples (scripts/lib/checks.sh's exercise_live / examples-sweep.sh's
 // equivalence_for "scenario" branch). Boots an ALREADY-BUILT binary, drives a real
 // headless Chromium against it via the scenario in verify-scenarios.mjs, and
-// exits 0/1 — the SAME driver runs against both the skyc-emitted Rust binary
+// exits 0/1 — the SAME driver runs against both the ipe-emitted Rust binary
 // AND the Go-oracle reference binary (see checks.sh's two exercise_live calls
 // in examples-sweep.sh's "scenario" equivalence branch), so a real browser round-trip
 // is the equivalence signal instead of the boot-floor fallback (both processes
@@ -230,7 +230,7 @@ async function main() {
             outcome = 'FAIL';
             detail = 'rendered HTML has <button>/<form> but ZERO sky-event '
                 + 'attributes — events stripped at render time (probable '
-                + 'Std.Ui → []any coercion regression)';
+                + 'Ipe.Ui → []any coercion regression)';
         }
 
         // Console-error filter — treat 404s on common static-asset paths

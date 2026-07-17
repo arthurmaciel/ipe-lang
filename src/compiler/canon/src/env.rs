@@ -61,7 +61,7 @@ pub const STDLIB_MODULE_QUALIFIERS: &[(&[&str], &str)] = &[
     (&["Ipe", "Secret"], "Secret"),
     // `Ipe.CssSafety` — the four Ipe.Css leaf security kernels. This
     // is a KERNEL qualifier (imported by the compiled-source `Ipe.Css`); `Ipe.Css`
-    // itself stays OUT of this table (it is compiled source, registered in skyc's
+    // itself stays OUT of this table (it is compiled source, registered in ipe's
     // `COMPILED_STD_MODULES`), so the `compiled_vs_kernel_qualifier_disjoint`
     // invariant holds.
     (&["Ipe", "CssSafety"], "CssSafety"),
@@ -215,7 +215,7 @@ pub struct Env {
 }
 
 impl Env {
-    /// Build the base environment with Sky's built-in variables and the
+    /// Build the base environment with Ipê's built-in variables and the
     /// auto-qualified prelude kernel modules. The `home` module's top-level
     /// names and unions are registered separately by the caller.
     ///
@@ -520,7 +520,7 @@ impl Env {
                     "slice",
                     "padLeft",
                     "padRight",
-                    // ── Haystack-first pure-Sky aliases (compile from source) ──
+                    // ── Haystack-first pure-Ipê aliases (compile from source) ──
                     "containsIn",
                     "startsWithIn",
                     "endsWithIn",
@@ -947,8 +947,8 @@ impl Env {
             // HttpResponse); `parseQuery` is a pure kernel (String -> Dict
             // String String); the `with*` builders + `defaultRequest` are ALSO
             // pure kernels (HttpRequest record-update emission in the backend) —
-            // cross-module pure-Sky stdlib calls are not resolved by skyc, so the
-            // builders cannot live as pure Sky in Http.ipe. Every name below is
+            // cross-module pure-Ipê stdlib calls are not resolved by ipe, so the
+            // builders cannot live as pure Ipê in Http.ipe. Every name below is
             // registered so `Http.foo` resolves during name-resolution and lands
             // as `Callee::Kernel` (see lower.rs ("Http", _) arms + constrain.rs
             // kernel_ty Http entries that give each its record type).
@@ -1588,7 +1588,7 @@ impl Env {
         ];
 
         // ── Per-qualifier function name aliases ───────────────────────────────
-        // Maps a Sky-source alias name (e.g. `htmlRender`) to its canonical
+        // Maps a Ipê-source alias name (e.g. `htmlRender`) to its canonical
         // kernel function name (e.g. `render`) within a qualifier module, so
         // `Html.htmlRender` and `Ipe.Html.htmlRender` both produce
         // `VarKernel { module: html_sym, name: render_sym }` — which lower.rs
@@ -1607,7 +1607,7 @@ impl Env {
             ("Html", "htmlAttrToString", "attrToString"),
         ];
 
-        // ── Qualifier module aliases (Ipe.X / Sky.X → short canonical) ────────
+        // ── Qualifier module aliases (Ipe.X / Ipê.X → short canonical) ────────
         // Clones every entry from the canonical qualifier's member map into the
         // alias qualifier key. Because each entry already holds
         // `VarHome::Kernel(canonical_sym, fn_sym)` (NOT the alias key's symbol),

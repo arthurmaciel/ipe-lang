@@ -110,7 +110,7 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         IrType::Db => "Db".to_owned(),
         IrType::Cmd(inner) => format!("Cmd {}", ir_type_name(interner, inner)),
         IrType::Sub(inner) => format!("Sub {}", ir_type_name(interner, inner)),
-        // Opaque server types — source-facing names match Sky stdlib.
+        // Opaque server types — source-facing names match Ipê stdlib.
         IrType::ServerRequest => "Request".to_owned(),
         IrType::ServerResponse => "Response".to_owned(),
         IrType::ServerRoute => "Route".to_owned(),
@@ -216,7 +216,7 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
         IrType::WebSocketClientCfg => "WebSocketCfg".to_owned(),
         // Ipe.Csv document record.
         IrType::CsvDoc => "Csv".to_owned(),
-        // Ipe.Email records + provider ADT (surface names as the Sky author sees).
+        // Ipe.Email records + provider ADT (surface names as the Ipê author sees).
         IrType::EmailMessage => "EmailMessage".to_owned(),
         IrType::EmailAttachment => "Attachment".to_owned(),
         IrType::EmailSesConfig => "SesConfig".to_owned(),
@@ -225,7 +225,7 @@ fn ir_type_name(interner: &Interner, ty: &IrType) -> String {
     }
 }
 
-/// Render a binary operator's surface (Sky source) token.
+/// Render a binary operator's surface (Ipê source) token.
 const fn binop_token(op: BinOp) -> &'static str {
     match op {
         BinOp::Add => "+",

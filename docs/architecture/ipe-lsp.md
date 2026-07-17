@@ -24,8 +24,8 @@ graph — exactly like `ipe watch` — sitting on top of the existing compiler c
 DAG (`sky_parse → sky_canon → sky_types → sky_lower → sky_ir`). It never
 re-implements parsing, name resolution, or type inference; every diagnostic,
 hover type, completion type, rename identity, and — critically — every
-scaffolding insert is produced or verified by the *same* checker `skyc` runs. A
-divergent second analyzer that could disagree with `skyc` is the cardinal defect
+scaffolding insert is produced or verified by the *same* checker `ipe` runs. A
+divergent second analyzer that could disagree with `ipe` is the cardinal defect
 and is foreclosed structurally.
 
 - **Framework:** `lsp-server` (rust-analyzer's synchronous crate) + a
@@ -126,7 +126,7 @@ sky_ir   ──┘                              │      │
   **never drives emit/cargo**.
 - **`sky_lsp_features`** handlers are **pure functions from `(analysis snapshot,
   position) → LSP payload`**. Zero parsing/typing/resolution logic. This is what
-  makes "the LSP cannot disagree with `skyc`" structurally true: it has nothing
+  makes "the LSP cannot disagree with `ipe`" structurally true: it has nothing
   to disagree *with*.
 - **Capability rule (INV-1 discipline).** `sky_query` and the feature handlers
   hold no `std::fs`/`std::env`/`std::io` capability on the query path.
@@ -153,7 +153,7 @@ trait ProgramView {
   batch, debounced, on whole-file settle; memoizes the last result per module in
   a coarse cache keyed by content hash. Correct and simple. Critically, it uses
   the *identical* parser/canonicaliser/type-checker — so **v0 cannot diverge from
-  `skyc` either**; it is only slower.
+  `ipe` either**; it is only slower.
 - **v1 backend (`SalsaView`):** the same trait over `sky_query`. Red-green gives
   keystroke-frequency incrementality; the `module_interface` firewall means a
   body edit re-checks only the edited module. **No handler changes** — the trait
@@ -201,7 +201,7 @@ trait ProgramView {
 
 **Decision.** Prioritise by value-per-unit-soundness-risk and by
 verification-cost class, not by protocol completeness. *Rationale:* a capability
-that could disagree with `skyc` or crash on partial input is gated before any
+that could disagree with `ipe` or crash on partial input is gated before any
 ergonomic feature; a capability whose interactive latency is structurally bad on
 the v0 backend is built early but *enabled* on salsa.
 
@@ -294,7 +294,7 @@ free names*:
 | `tea-app` | full `Live.app` skeleton — `type Msg`, `Model` alias, `init`, `update` (with `case msg of` scaffold), `view`, `subscriptions`, and `Live.app { … }` wiring |
 | `tea-tui` | as `tea-app` but `main = Tui.app cfg \| Task.run` |
 | `tea-webview` | as `tea-app` but `main = Webview.app cfg \| Task.run`, `window` cfg |
-| `tea-worker` | `main = Task.run scheduledWork` Sky.Cli worker shape |
+| `tea-worker` | `main = Task.run scheduledWork` Ipe.Cli worker shape |
 | `msg` | `type Msg = ${1:Variant}` |
 | `update-arm` | `${1:Variant} -> ( model, Cmd.none )` |
 | `sub` | `subscriptions model = Sub.none` / `Sub.batch [ … ]` |
@@ -346,7 +346,7 @@ buffer. Each is speculatively verified before it is surfaced/applied (Q5).
 Inserts a coherent `Live.app` / `Tui.app` / `Webview.app` skeleton (offered as
 separate action titles per app shape from the matrix). Because it reads the
 module, it seeds `Model`/`Msg` from existing decls rather than duplicating them.
-For the Std.Ui-heavy case the CLAUDE.md guidance to split State/Update/View
+For the Ipe.Ui-heavy case the CLAUDE.md guidance to split State/Update/View
 applies: the action offers a *single-module* skeleton by default and a
 *multi-module split* variant for larger apps.
 
@@ -378,7 +378,7 @@ tooling level.
 
 **Add a subscription** — extends/creates `subscriptions`, wiring a
 `Sub.subscribeTopic`/`Sub.every` (and, if needed, the receiving Msg variant +
-update arm), adding the `Std.Sub` import if absent.
+update arm), adding the `Ipe.Sub` import if absent.
 
 ```elm
 -- before:
@@ -402,7 +402,7 @@ main =
             |> Task.andThen process
             |> Task.andThen (File.writeFile "out.txt"))
 
--- after (Sky.Cli TEA worker):
+-- after (Ipe.Cli TEA worker):
 type Msg = Loaded (Result Error String) | Wrote (Result Error ())
 init _ = ( {}, Cmd.perform (File.readFile "in.txt") Loaded )
 update msg model =
@@ -427,7 +427,7 @@ not a divergent LSP-only linter.
 
 The first two are the compiler's diagnostics wearing a quick-fix — no new
 analysis. Only the third is LSP-originated; it is a *stylistic, build-irrelevant*
-Hint that makes no semantic claim `skyc` adjudicates, individually toggleable,
+Hint that makes no semantic claim `ipe` adjudicates, individually toggleable,
 and clearly quarantined (Q5-G1). Even this stylistic lint's quick-fix synthesizes
 an edit, so its fix still passes the speculative-verify gate before it is offered
 — an LSP-originated judgment can never introduce a build-breaking fix.
@@ -449,14 +449,14 @@ C.2 flat-namespace redesign.
 1. **Completion + lazy resolve.** `completions_at` offers in-scope *and*
    not-yet-imported symbols drawn from the canonicaliser's export index. The
    import edit is attached lazily via `completionItem/resolve`: on selection the
-   resolved item carries `additionalTextEdits` inserting `import Std.Money
+   resolved item carries `additionalTextEdits` inserting `import Ipe.Money
    exposing (allocate)` (or extending an existing `exposing (…)` list, or
    adopting an existing alias) at the correct sorted position, deduped, run
    through the `Format` crate so it is fmt-clean and idempotent with format-on-
    save. Not-yet-imported items sort below in-scope names.
 2. **Quick-fix on the unresolved-name diagnostic.** The canonicaliser already
    emits an unresolved-name / did-you-mean diagnostic (CLAUDE.md §3.1). The LSP
-   attaches "Import `X` from `Std.Y`" quick-fixes — one per candidate module,
+   attaches "Import `X` from `Ipe.Y`" quick-fixes — one per candidate module,
    using the same shared import-insertion helper as the completion path.
 
 Both paths run the resulting edit through the speculative-verify gate (Q5), so an
@@ -490,7 +490,7 @@ Structural, not disciplinary. `sky_lsp_features` depends on the compiler crates
 and reads `parse`/`resolve`/`typecheck`/`module_interface` via the trait; it has
 **no `parse`/`resolve`/`infer` of its own**. Diagnostics published to the editor
 are the compiler's `Diagnostic` values verbatim. Because there is nothing else to
-consult, the LSP cannot produce a diagnostic `skyc` would not, or miss one it
+consult, the LSP cannot produce a diagnostic `ipe` would not, or miss one it
 would. Enforcement: a reviewer greps `sky_lsp_features` for a solver/parser call
 — finding one is the bug. The tempting shortcut — a fast approximate IDE parser
 that "usually agrees" — is rejected outright; salsa incrementality *is* the
@@ -659,7 +659,7 @@ edits never splice unescaped source-derived strings.
   action unless `lsp-server` proves unworkable.
 - **OPEN-4 — Crate/name timing.** New crates use `sky_*` today; they rename to
   `ipe_*` with roadmap C.1. If the LSP ships before C.1, it targets `sky`-era
-  runtime names (`sky.toml`, `.skycache`, `/_sky/`) and eats the C.1 rename churn
+  runtime names (`sky.toml`, `.ipe-cache`, `/_sky/`) and eats the C.1 rename churn
   with the rest of the codebase. To confirm the LSP is not pulled ahead of C.1 in
   a way that creates a lasting naming split.
 
@@ -703,7 +703,7 @@ delivers sub-100 ms verification.
 
 | # | Hazard | Class | Foreclosure |
 |---|---|---|---|
-| L-A | Fast approximate 2nd analyzer disagrees with `skyc` | divergent analyzer | Salsa incrementality *is* responsiveness → no motive; features read only compiler queries; grep for a solver call = bug |
+| L-A | Fast approximate 2nd analyzer disagrees with `ipe` | divergent analyzer | Salsa incrementality *is* responsiveness → no motive; features read only compiler queries; grep for a solver call = bug |
 | L-B | Scaffold/quick-fix/auto-import/rename doesn't type-check | non-type-checking edit | `VerifiedEdit` type: `WorkspaceEdit` derivable only from an `Ok` that passed the full round-trip; compiler-sourced fixes gated by `Applicability` |
 | L-C | Server panics on half-typed buffer | crash-on-partial | Resilient total parser + total query paths + handler `catch_unwind`; `Cancelled` distinguished from panic; fuzz-tested |
 | L-D | LSP keeps a private symbol/type index that drifts | divergent analyzer | The "index" IS derived salsa queries (`resolve_imports`, `module_interface`, export index), never a hand-maintained store |
@@ -714,6 +714,6 @@ delivers sub-100 ms verification.
 | L-I | UTF-16 (LSP) vs byte (compiler) offset mismatch | correctness | Single centralized `ropey`-backed offset conversion; property-tested |
 | L-J | New AST variant silently skipped by a walker | coverage gap | Exhaustive `match`, no wildcard → new variant is a compile error until an arm exists; `deny(wildcard_enum_match_arm)` + CI grep + golden snapshot |
 | L-K | Formatting via a 2nd formatter drifts from `ipe fmt` | divergence | Delegate to the `Format` crate; assert idempotence (2nd pass byte-identical) |
-| L-L | v0 (pre-salsa) diverges from `skyc` | divergent analyzer | v0 calls the *same* front-end crates non-incrementally → slower, never different; same `ProgramView` trait |
+| L-L | v0 (pre-salsa) diverges from `ipe` | divergent analyzer | v0 calls the *same* front-end crates non-incrementally → slower, never different; same `ProgramView` trait |
 | L-M | Over-trusted snippet tabstop-linking taken as an exhaustiveness guarantee | non-type-checking edit | Snippets guarantee only skeleton parse/fmt-cleanliness; the variant↔arm invariant lives in code action (b) + the exhaustiveness lint (c) |
 | L-N | LSP executes project code / touches FFI introspection off the `ipe add` path | security | Parse/canon/type are pure; FFI enters only as a reserved salsa input; cache miss hard-refuses, never regenerates |

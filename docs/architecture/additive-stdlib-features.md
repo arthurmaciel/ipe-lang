@@ -22,10 +22,10 @@ Every proposal below is written to fit the mechanisms that already exist in the
 tree, so nothing needs a new subsystem:
 
 - **Two ways to ship a binding.**
-  1. **Pure Sky source** — a `.ipe` module embedded via `include_str!` in
-     `crates/skyc/src/stdlib.rs` (the 17 `Sky.Core.*` modules today), with an
-     `exposing (…)` list. Bodies are recursive/`case`-based Sky, or
-     `Ffi.kernel "Name"` aliases whose HM signature is written in Sky and whose
+  1. **Pure Ipê source** — a `.ipe` module embedded via `include_str!` in
+     `crates/ipe/src/stdlib.rs` (the 17 `Ipe.*` modules today), with an
+     `exposing (…)` list. Bodies are recursive/`case`-based Ipê, or
+     `Ffi.kernel "Name"` aliases whose HM signature is written in Ipê and whose
      call sites route to a kernel.
   2. **Kernel** — a variant of the closed `StdlibKernel` enum
      (`crates/sky_kernels/src/lib.rs`). Each variant's `decl()` returns
@@ -45,25 +45,25 @@ tree, so nothing needs a new subsystem:
   - `StdlibKernel::ALL` has a canon-equality tripwire (`canon_equals_registry`)
     and a `stdlib_scheme_matches_legacy` parity tripwire — a new kernel must be
     wired in *both* tables or the build fails. This is the mechanism that keeps
-    "skyc exits 0, cargo fails" from happening.
+    "ipe exits 0, cargo fails" from happening.
   - `decl().arity` must equal the arrow count of `stdlib_scheme`. Arity-0
     kernels currently miscompile (Active limitation #7) — **every design below
     avoids nullary kernels** and takes an explicit first argument.
-  - `SkyError = String` at the runtime level (`Sky/Core/Task.ipe` header):
+  - `SkyError = String` at the runtime level (`Ipê/Core/Task.ipe` header):
     the typed `Error` is a stringly value under the hood today. The sub-domain
     error taxonomy (§7) is designed around that constraint.
 - **Existing parse-don't-validate exemplars to reuse, not reinvent.**
   - `SqlIdent` (`db.rs:1100`) — a validated `[A-Za-z0-9_]` identifier newtype;
     an unvalidated name is unrepresentable past the boundary. §6 extends this
     from *identifiers* to *whole query fragments*.
-  - `SqlValue` / `SqlField` ADTs (`Std.Db`) — already make typed NULL and
+  - `SqlValue` / `SqlField` ADTs (`Ipe.Db`) — already make typed NULL and
     column-omit unrepresentable-as-a-string. §6 composes with them.
   - `char_kernel.rs` already depends (non-optionally) on
     `unicode-general-category`; the runtime already carries `unicode-width`
     (behind the `tui` feature). The Unicode proposals (§1, §2) name their new
     crate precisely rather than assuming one is already vendored.
 
-Each section states: **surface · lives where (kernel vs Sky) · runtime backing
+Each section states: **surface · lives where (kernel vs Ipê) · runtime backing
 · registry/scheme fit · security/soundness · effort · roadmap slot · open
 decisions.**
 
@@ -83,8 +83,8 @@ rare one, and (c) couple `String` semantics to a UAX-29 table version. So this
 is an **additive, explicitly-named surface** — the default stays rune-based;
 the README says "rune-correct," and points to `graphemes` for cluster work.
 
-**Surface (new pure-Sky module `Sky.Core.String.Grapheme`, or a namespaced
-extension of `Sky.Core.String`):**
+**Surface (new pure-Ipê module `Ipe.String.Grapheme`, or a namespaced
+extension of `Ipe.String`):**
 
 | Function | Signature | Meaning |
 |---|---|---|
@@ -125,8 +125,8 @@ golden diff, not silently shipped.
 **Effort.** Small (~4 kernels + 1 dep + goldens). **Roadmap slot: post-DONE**
 (additive; does not block parity).
 
-**Open decision.** Submodule `Sky.Core.String.Grapheme` vs `grapheme*`-prefixed
-entries directly on `Sky.Core.String`. Prefix is fewer moving parts; submodule
+**Open decision.** Submodule `Ipe.String.Grapheme` vs `grapheme*`-prefixed
+entries directly on `Ipe.String`. Prefix is fewer moving parts; submodule
 reads cleaner. Lean prefix (matches the existing flat `String` surface).
 
 ---
@@ -156,21 +156,21 @@ are the whole domain, and an illegal mode cannot be constructed. Optional
 convenience aliases `normalizeNfc : String -> String` etc. keep the common case
 one call.
 
-**Lives where.** The `NormalForm` type + aliases in pure Sky
-(`Sky.Core.String` or a `Sky.Core.Unicode` module); `normalize` as a kernel
+**Lives where.** The `NormalForm` type + aliases in pure Ipê
+(`Ipe.String` or a `Ipe.Unicode` module); `normalize` as a kernel
 taking `(NormalForm, String)` — arity 2, explicit args.
 
 **Runtime backing.** New dep **`unicode-normalization`** (`.nfc()`/`.nfd()`/
 `.nfkc()`/`.nfkd()` iterators). Same default-off feature-gate treatment as §1.
 Kernel matches on the `NormalForm` discriminant → picks the iterator.
 
-**Registry/scheme fit.** `NormalForm` is a user-style ADT emitted like any Sky
+**Registry/scheme fit.** `NormalForm` is a user-style ADT emitted like any Ipê
 enum (the discriminant reaches the kernel as the runtime enum repr). `normalize`
 schemes as `fun(normalform(), fun(string(), string()))`. `NormalForm` needs the
-same treatment as any Sky-declared ADT the kernel pattern-matches on — either
-declared in Sky source (preferred; then it is an ordinary type the kernel reads
-by tag) or, if kept opaque, one interned builtin. Prefer Sky-source declaration
-so exhaustiveness + `sky doc` come for free.
+same treatment as any Ipê-declared ADT the kernel pattern-matches on — either
+declared in Ipê source (preferred; then it is an ordinary type the kernel reads
+by tag) or, if kept opaque, one interned builtin. Prefer Ipê-source declaration
+so exhaustiveness + `ipe doc` come for free.
 
 **Security / soundness.** Total (normalization never fails). NFKC/NFKD are
 **compatibility** decompositions — lossy (`①`→`1`, ligatures split); document
@@ -229,7 +229,7 @@ explicit arg — no nullary except `empty`, which is the one arity-0 case). **`e
 handling:** because arity-0 kernels miscompile (#7), model `empty` the way
 `Dict.empty`/`Set.empty` already work (their non-function type lets them stay
 bare — verify `Array a` resolves the same way; if not, ship `Array.empty` via
-the same mechanism `Dict.empty` uses, or as a Sky-source `empty = fromList []`).
+the same mechanism `Dict.empty` uses, or as a Ipê-source `empty = fromList []`).
 
 **Runtime backing (OPEN — see below).** Candidates:
 - **`im::Vector`** (RRB-tree persistent vector) — O(log n) get/set/push/split,
@@ -330,7 +330,7 @@ pure, closes the module for grep-parity with Elm.
 | `mapSecond` | `(b -> y) -> (a, b) -> (a, y)` |
 | `mapBoth` | `(a -> x) -> (b -> y) -> (a, b) -> (x, y)` |
 
-**Lives where.** **Pure Sky source** — no kernel needed. All six are one-liners
+**Lives where.** **Pure Ipê source** — no kernel needed. All six are one-liners
 over tuple patterns:
 
 ```elm
@@ -347,7 +347,7 @@ for Elm-portability, `Basics.fst`/`snd` for the ipê prelude, matching the
 `ToString.*` discoverability pattern R2). Uses `Ty::Tuple` (already in
 `stdlib_scheme` via `tuple2`).
 
-**Registry/scheme fit.** None — pure Sky, embedded in `stdlib.rs` `include_str!`
+**Registry/scheme fit.** None — pure Ipê, embedded in `stdlib.rs` `include_str!`
 like `Basics.ipe`. Zero kernel-registry churn. Relies only on the existing
 tuple-pattern support.
 
@@ -355,7 +355,7 @@ tuple-pattern support.
 guard.
 
 **Effort.** Trivial (one ~10-line `.ipe` file). **Roadmap slot: post-DONE**
-(bundle with the `List.sort`/`filterMap` pure-Sky gap-fill pass).
+(bundle with the `List.sort`/`filterMap` pure-Ipê gap-fill pass).
 
 **Open decision.** None. (Only: 2-tuple-only, matching Elm — no 3-tuple
 helpers; ipê tuples beyond 2 are rare.)
@@ -364,7 +364,7 @@ helpers; ipê tuples beyond 2 are rare.)
 
 ## 6. `SqlFragment` — parameterized-query newtype (HIGHEST security value)
 
-**Why (security-first).** `Std.Db` today has two typed, injection-safe write
+**Why (security-first).** `Ipe.Db` today has two typed, injection-safe write
 paths (`SqlValue` params, `updateFields`/`insertFields` with identifier
 validation via `SqlIdent`), **and** a raw escape hatch:
 
@@ -474,7 +474,7 @@ Sequence it after the `SqlValue`/`updateFields` work it builds on.
 ## 7. Sub-domain error taxonomy — richer typed `Error`
 
 **Why.** ER1 mandates typed `Error` over stringly errors — but the current
-`Error` is effectively opaque (`SkyError = String` at runtime; the Sky surface
+`Error` is effectively opaque (`SkyError = String` at runtime; the Ipê surface
 has `Error.unexpected`, a classifier, `Error.toString`). Callers can't
 `case`-match *why* something failed (parse vs decode vs DB vs HTTP vs auth), so
 recovery logic re-inspects strings — the exact anti-pattern parse-don't-validate
@@ -521,16 +521,16 @@ interim that avoids widening the runtime error repr before it's ready). Legacy
 non-regression rule and every existing call site are untouched; callers *opt in*
 to `case kind e of …`.
 
-**Lives where.** `ErrorKind` ADT + constructors in pure Sky (`Sky.Core.Error`,
+**Lives where.** `ErrorKind` ADT + constructors in pure Ipê (`Ipe.Error`,
 newly surfaced); `kind`/`withKind`/`message` as kernels if the runtime repr is
-involved, or pure Sky if the tagged-string interim is used. Prefer pure-Sky
+involved, or pure Ipê if the tagged-string interim is used. Prefer pure-Ipê
 tagged-string interim first (zero runtime-repr change), migrate to a structured
 `Error` runtime value when `SkyError` widens.
 
-**Registry/scheme fit.** `ErrorKind` is an ordinary Sky ADT. `kind :
+**Registry/scheme fit.** `ErrorKind` is an ordinary Ipê ADT. `kind :
 fun(error(), errorkind())`; `httpError : fun(int(), fun(string(), error()))`.
 Reuses `builtins.error`; adds `builtins.errorkind` only if `ErrorKind` is
-opaque (prefer Sky-declared → no new builtin).
+opaque (prefer Ipê-declared → no new builtin).
 
 **Security / soundness.** Closed ADT = exhaustive `case` (no `_ -> …` needed
 per project walker rules). **The security win:** an operator can branch
@@ -605,15 +605,15 @@ DONE.
 
 ## 9. Summary table
 
-| # | Feature | Kernel vs Sky | New dep | New builtin type | Effort | Slot | Security-relevant |
+| # | Feature | Kernel vs Ipê | New dep | New builtin type | Effort | Slot | Security-relevant |
 |---|---|---|---|---|---|---|---|
 | 1 | `String.graphemes` | Kernel | `unicode-segmentation` | no | S | post-DONE | indirect (no panic) |
-| 2 | `String.normalize` | Kernel + `NormalForm` ADT | `unicode-normalization` | no (Sky ADT) | S | post-DONE | scoped (canonical eq, not anti-spoof) |
+| 2 | `String.normalize` | Kernel + `NormalForm` ADT | `unicode-normalization` | no (Ipê ADT) | S | post-DONE | scoped (canonical eq, not anti-spoof) |
 | 3 | `Array` | Kernel + opaque type | `rpds`/`im` (OPEN) | `Array` | M | post-DONE | `get→Maybe` (no index panic) |
 | 4 | `Bitwise` | Kernel | none | no | S | post-DONE | shift-UB guard mandatory |
-| 5 | `Tuple` | **pure Sky** | none | no | Trivial | post-DONE | no |
+| 5 | `Tuple` | **pure Ipê** | none | no | Trivial | post-DONE | no |
 | 6 | **`SqlFragment`** | Kernel + opaque type | none | `SqlFragment` | M | **PRE-PUSH** | **YES — closes SQL-injection hole** |
-| 7 | Error taxonomy | Sky ADT (+maybe kernels) | none | maybe `ErrorKind` | S–M | post-DONE | YES — typed authz/failure branching |
+| 7 | Error taxonomy | Ipê ADT (+maybe kernels) | none | maybe `ErrorKind` | S–M | post-DONE | YES — typed authz/failure branching |
 | 8 | Decimal 16-dp pin | runtime pin + ledger | none | no | Trivial | near-term | no (parity) |
 
 ---
@@ -623,7 +623,7 @@ DONE.
 - **Every design avoids nullary kernels** (Active limitation #7). `Array.empty`
   is the only arity-0 case; model it on `Dict.empty`/`Set.empty` (non-function
   types stay bare) — verify that path resolves for a parametric `Array a` before
-  committing, else route through a Sky-source `empty = fromList []`.
+  committing, else route through a Ipê-source `empty = fromList []`.
 - **Every new kernel wires into three places or the build fails:** the
   `StdlibKernel` enum + `decl()` arm, `StdlibKernel::ALL`, and `stdlib_scheme`
   — the `canon_equals_registry` and `stdlib_scheme_matches_legacy` tripwires

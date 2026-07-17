@@ -1,7 +1,7 @@
 //! A non-Copy binding captured into an Input `Arc`
 //! callback AND reused by a sibling.
 //!
-//! Without the fix, `skyc build` exits 0, but the emitted Rust fails `cargo build` with
+//! Without the fix, `ipe build` exits 0, but the emitted Rust fails `cargo build` with
 //! E0382 ("use of moved value: `habit`"). The lowerer pre-clones the checkbox
 //! `onChange` callback's captured `habit`
 //! (`let habit = habit.clone(); Lambda { … }`), but `arc_callback_wrap` then
@@ -18,7 +18,7 @@
 //!
 //! Run:
 //! ```text
-//! IPE_E2E=1 cargo test -p skyc --test golden_i191_input_arc_capture
+//! IPE_E2E=1 cargo test -p ipe --test golden_i191_input_arc_capture
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -37,7 +37,7 @@ fn entry_path(root: &Path) -> PathBuf {
         .join("Main.ipe")
 }
 
-/// skyc-0: the compiler must accept the program AND emit the capture-clone `let`
+/// ipe-0: the compiler must accept the program AND emit the capture-clone `let`
 /// OUTSIDE the `Arc`'s `move` closure — checked unconditionally (cheap, no
 /// `cargo`), independent of the `IPE_E2E` gate. This is the exact assertion that
 /// the E0382 SEAL break cannot recur: the pre-clone must sit before `Arc::new`,
@@ -57,7 +57,7 @@ fn i191_skyc_accepts_and_hoists_capture_clone() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for input_arc_capture: {:?}",
+        "ipe build must succeed for input_arc_capture: {:?}",
         built.err()
     );
 
@@ -83,7 +83,7 @@ fn i191_skyc_accepts_and_hoists_capture_clone() {
 
 /// cargo-0 ∧ run-0: the emitted project actually compiles with `rustc` (no
 /// E0382) and renders the row. Gated on `IPE_E2E=1` — the only check that would
-/// have caught the original SEAL violation (E0382, `skyc build` clean).
+/// have caught the original SEAL violation (E0382, `ipe build` clean).
 #[test]
 fn i191_cargo_builds_and_runs() {
     if std::env::var("IPE_E2E").is_err() {
@@ -102,7 +102,7 @@ fn i191_cargo_builds_and_runs() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for input_arc_capture: {:?}",
+        "ipe build must succeed for input_arc_capture: {:?}",
         built.err()
     );
 

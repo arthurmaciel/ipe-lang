@@ -3,13 +3,13 @@
 //! Thunk-wrapping only `PVar` Decoder bindings leaves every other
 //! binding-pattern shape (`PTuple`, `PRecord`, `PAlias` over either) falling
 //! through to a plain `Expr::Destructure` with NO Decoder-awareness, so a
-//! reused Decoder-typed component double-moves at `cargo build` (skyc exit
+//! reused Decoder-typed component double-moves at `cargo build` (ipe exit
 //! 0, cargo exit 101 — the exit-0-then-cargo-fail seal class). So (spec §2.2)
 //! the WHOLE destructure value is wrapped in a zero-arg thunk and
 //! every free read of every bound name rewritten to a fresh, masked
 //! re-destructure of a thunk call: `{ let (d1, _) = (destr_thunk_N)(); d1 }`.
 //!
-//! Without the thunk, all three fixtures are skyc-0 and cargo-101 with EXACTLY
+//! Without the thunk, all three fixtures are ipe-0 and cargo-101 with EXACTLY
 //! this rustc error:
 //!
 //! ```text
@@ -29,7 +29,7 @@
 //!
 //! Spec: `docs/adr/0011-emitter-clone-borrow-discipline.md` §2.
 //!
-//! Run: `IPE_E2E=1 cargo test -p skyc --test golden_i125_decoder_destructure_thunk`
+//! Run: `IPE_E2E=1 cargo test -p ipe --test golden_i125_decoder_destructure_thunk`
 
 use std::path::{Path, PathBuf};
 
@@ -44,7 +44,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
     root.join("tests").join("golden").join(name)
 }
 
-/// Cheap tier: skyc must accept the fixture (exit 0). Always runs.
+/// Cheap tier: ipe must accept the fixture (exit 0). Always runs.
 fn assert_skyc_ok(name: &str) -> PathBuf {
     let root = repo_root();
     let entry = golden_dir(&root, name).join("Main.ipe");
@@ -56,7 +56,7 @@ fn assert_skyc_ok(name: &str) -> PathBuf {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "#125: {name} must be skyc-0: {:?}",
+        "#125: {name} must be ipe-0: {:?}",
         built.err()
     );
     out

@@ -13,7 +13,7 @@ import Ipe.Log exposing (println)
 -- pure alias of `r`, itself a pure alias of the wildcard `payload`. The
 -- alias-transparent walk resolves the chain by induction — the `r`-tracked
 -- walk sees `let r2 = r` as an alias of `r` and recurses again — so the
--- `+ SkyRow` bound still lands. skyc-0 -> cargo-0.
+-- `+ SkyRow` bound still lands. ipe-0 -> cargo-0.
 
 
 type alias Row =

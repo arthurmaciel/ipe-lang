@@ -8,7 +8,7 @@ import Ipe.Log exposing (println)
 -- over a CYCLIC self-edge (recursive) constructor field is boxed
 -- (`Box<Self>`) in the emitted enum. The clone-rebuild path must re-derive
 -- the alias binder AND inner binder from the UNBOXED temp — pre-fix both
--- stayed `Box<Tree>` (skyc-0, cargo-E0308). Here the arm reads BOTH `child`
+-- stayed `Box<Tree>` (ipe-0, cargo-E0308). Here the arm reads BOTH `child`
 -- (the recursed value) and `w` (the whole aliased subtree).
 type Tree
     = Leaf String

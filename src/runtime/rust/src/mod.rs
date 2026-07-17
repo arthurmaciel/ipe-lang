@@ -34,7 +34,7 @@ pub mod random;
 // `locked_set_var_if_absent` / `locked_remove_var` accessors that EVERY module
 // (always-compiled telemetry/core/file/csv/… included) must route process-env
 // access through for the reader↔mutator serialisation to hold by construction.
-// Its Sky-facing helpers return `IpeTask`/`IpeResult` (defined in `core`, no
+// Its Ipê-facing helpers return `IpeTask`/`IpeResult` (defined in `core`, no
 // tokio dependency) and otherwise use only std, so it compiles without tokio.
 pub mod system;
 #[cfg(feature = "tokio")]
@@ -78,8 +78,8 @@ pub use trace::*;
 pub mod encoding;
 pub use encoding::*;
 
-// `Sky.Core.Bytes` — distinct `Vec<u8>` byte buffer.
-// Divergence from Sky: Sky aliases Bytes = String; Rust maps Bytes to Vec<u8>.
+// `Ipe.Bytes` — distinct `Vec<u8>` byte buffer.
+// Divergence from Ipê: Ipê aliases Bytes = String; Rust maps Bytes to Vec<u8>.
 pub mod bytes;
 pub use bytes::*;
 
@@ -124,14 +124,14 @@ pub use tui::{tui_app, tui_app_ui};
 pub mod uuid_kernel;
 pub use uuid_kernel::*;
 
-// `Sky.Core.Secret` — opaque secret-string wrapper. Always
+// `Ipe.Secret` — opaque secret-string wrapper. Always
 // compiled (no cfg gate): a plain newtype over `String` with only `subtle` /
 // `zeroize` as deps (both non-optional base deps), so every feature subset
 // gets the type.
 pub mod secret;
 pub use secret::*;
 
-// Canonical HTTP header-name casing, shared by Sky.Live, Sky.Http.Server AND
+// Canonical HTTP header-name casing, shared by Ipe.Live, Ipe.Http.Server AND
 // the outbound `http_client` response path (`http_client` does NOT
 // imply `server`, so `server`-only gating would break an `http_client`-only
 // build). Gated on the union of its consumers; a default-features build
@@ -179,41 +179,41 @@ pub mod ws_client;
 #[cfg(feature = "websocket_client")]
 pub use ws_client::*;
 
-// Std.Html / Std.Ui render surface — the Html/Attribute/Event ADTs + renderer +
+// Ipe.Html / Ipe.Ui render surface — the Html/Attribute/Event ADTs + renderer +
 // htmlXxx kernel wrappers. Pure (std only), so always available; a non-Live
-// Std.Ui app renders via Html.toString without the `live` server module. The
+// Ipe.Ui app renders via Html.toString without the `live` server module. The
 // live module re-exports from here.
 pub mod html;
 pub use html::*;
 
 // Shared CSS/style injection-safety encoders (SafeCssValue / SafeCssPropertyName
 // / SafeCssSelector / strip_style_close). One policy, one place — imported by the
-// Std.Ui inline-style path (`ui/render.rs`), the `<style>` sink (`html.rs`),
-// and the Std.Css renderers (`css.rs`). See design §Q5.
+// Ipe.Ui inline-style path (`ui/render.rs`), the `<style>` sink (`html.rs`),
+// and the Ipe.Css renderers (`css.rs`). See design §Q5.
 pub mod css_safety;
 
-// Std.Css leaf security kernels (safe_value / safe_prop_name / safe_selector /
+// Ipe.Css leaf security kernels (safe_value / safe_prop_name / safe_selector /
 // strip_style_close_kernel) — the four primitive shims the compiled-source
-// `Std.Css` funnels every free-string entry through. Re-exported at the
+// `Ipe.Css` funnels every free-string entry through. Re-exported at the
 // crate root so the emitted `pub use ipe_runtime::*` resolves the bare kernel
 // names that `naming::kernel_name` emits. Typed length/colour constructors +
-// the render fold stay pure Sky in `Std/Css.ipe`.
+// the render fold stay pure Ipê in `Std/Css.ipe`.
 pub mod css;
 pub use css::*;
 
 // In-process telemetry sink (log/error rings + request counters) — always
-// compiled so `Std.Log.*` can feed it; the Sky.Live `console` module serves it.
+// compiled so `Ipe.Log.*` can feed it; the Ipe.Live `console` module serves it.
 pub mod telemetry;
 
-// Std.Ui shared element tree — the general UI abstraction (Element/Attribute/
+// Ipe.Ui shared element tree — the general UI abstraction (Element/Attribute/
 // Length/Color/...). Backends (Live/Tui/Webview) each render it to their target.
 // Referenced by qualified path (`ipe_runtime::ui::*`) from generated code; NOT
 // glob-re-exported (its `Attribute` would collide with html's).
 pub mod ui;
 
-// Sky.Webview — native desktop window backend (a TEA app, so gated on the async
+// Ipe.Webview — native desktop window backend (a TEA app, so gated on the async
 // runtime like `tea`). The cross-platform floor (a stub returning a graceful Err)
-// keeps `import Std.Webview` linking everywhere; the real wry/tao window backend
+// keeps `import Ipe.Webview` linking everywhere; the real wry/tao window backend
 // needs the system webview dev libs (staged behind the webview design doc).
 // Mirrors Go's webview_stub.go.
 #[cfg(feature = "tokio")]

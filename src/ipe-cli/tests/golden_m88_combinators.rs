@@ -1,11 +1,11 @@
 //! `Result` / `Maybe` applicative-combinator parity gate — the `mapN` /
 //! `andMap` / `combine` / `traverse` family wired as kernels.
 //!
-//! Exercises, end-to-end (skyc → emitted Cargo project → build → run):
+//! Exercises, end-to-end (ipe → emitted Cargo project → build → run):
 //!
 //! * `Result.map3` over three `Ok`s → `Ok 6`, and short-circuit on the first
 //!   `Err` (the middle argument) → the `Err` arm.  The N-ary builder
-//!   (`combine3`) is a MULTI-ARG function value — a Sky arity-N function lowers
+//!   (`combine3`) is a MULTI-ARG function value — a Ipê arity-N function lowers
 //!   to `impl Fn(A, .., N) -> V`, boxed at the call site, satisfying the
 //!   runtime's `impl FnOnce(A, .., N) -> V`.
 //! * `Result.map4` / `Result.map5` (max arity) — sum + short-circuit.
@@ -14,7 +14,7 @@
 //! * `Result.traverse` — one-pass map + collect; first `Err` short-circuits.
 //! * `Maybe.map3` + `Maybe.combine` — the `Nothing`-short-circuit mirror.
 //!
-//! Output (skyc, verified correct by construction — every value is a
+//! Output (ipe, verified correct by construction — every value is a
 //! hand-computable pure fold):
 //!
 //! ```text
@@ -40,7 +40,7 @@
 //! `Error.*` constructors as a prelude kernel qualifier) AND
 //! `Result.traverse` is not in the Go reference's `sky-stdlib/Sky/Core/Result.ipe`
 //! `exposing` list.  Both are pre-existing, sanctioned divergences; the cached
-//! expected output is skyc's own, per `docs/architecture/divergence-policy.md`.
+//! expected output is ipe's own, per `docs/architecture/divergence-policy.md`.
 //! The load-bearing guarantee this gate enforces is the SEAL: well-typed use of
 //! these kernels emits cargo-buildable Rust that runs with the correct
 //! short-circuit semantics — NOT Go byte-parity.
@@ -48,7 +48,7 @@
 //! Gated on `IPE_E2E=1`; without it the test returns early.  Run:
 //!
 //! ```text
-//! IPE_E2E=1 cargo test -p skyc --test golden_m88_combinators
+//! IPE_E2E=1 cargo test -p ipe --test golden_m88_combinators
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -102,9 +102,9 @@ fn result_maybe_combinators() {
 /// `IrType::Json` while the `Ok "concrete"` value side defaults the same
 /// free `e` to `IrType::Error` (`IpeError`) would leave the emitted
 /// `FnOnce(JsonVal)` closure unable to unify with the `IpeResult<IpeError, _>`
-/// value, so cargo rejects it with E0277 despite skyc exit-0. The handler
+/// value, so cargo rejects it with E0277 despite ipe exit-0. The handler
 /// binder retypes to `IpeError`; this gate proves the whole pipeline
-/// (skyc → cargo build → run) succeeds and prints `concrete`.
+/// (ipe → cargo build → run) succeeds and prints `concrete`.
 #[test]
 fn result_map_error_wildcard_handler() {
     assert_runs_and_matches_oracle("result_map_error_wildcard");

@@ -1,16 +1,16 @@
 # examples/34-multi-tier-console
 
-> Sky Console telemetry-flow showcase. Demonstrates how the embedded
+> Ipê Console telemetry-flow showcase. Demonstrates how the embedded
 > console aggregates signals across multiple logical namespaces in a
-> single Sky binary, with namespace labels driving the UI filter
+> single Ipê binary, with namespace labels driving the UI filter
 > chips. v0.16.1 PR10-I.
 
 ## What this demonstrates
 
-The headline value of Sky Console is *"one pane of glass for every
+The headline value of Ipê Console is *"one pane of glass for every
 signal your app generates"*. This example exercises that claim:
 
-- A host Sky.Live app at `/`
+- A host Ipe.Live app at `/`
 - Three logical sub-tiers — `billing`, `jobs`, `auth` — each routed
   under its own prefix (`/billing`, `/jobs`, `/auth`)
 - Each tier emits its own logs / metrics with a `service.namespace`
@@ -18,7 +18,7 @@ signal your app generates"*. This example exercises that claim:
 - The inline console at `/_sky/console` shows the aggregated stream
   AND a namespace selector
 
-The four telemetry topologies covered by Sky Console are documented
+The four telemetry topologies covered by Ipê Console are documented
 in [`docs/v0.16.x-console/TELEMETRY_FLOW.md`](../../docs/v0.16.x-console/TELEMETRY_FLOW.md).
 This example focuses on **Topology 2** — a single process containing
 multiple logical sub-apps. (Topology 1 is just any single-page Live
@@ -29,8 +29,8 @@ distributed hub.)
 
 ```bash
 cd examples/34-multi-tier-console
-rm -rf sky-out .skycache .skydeps   # clean slate
-sky build src/Main.ipe
+rm -rf sky-out .ipe-cache .skydeps   # clean slate
+ipe build src/Main.ipe
 IPE_LIVE_PORT=8034 \
 IPE_CONSOLE_AUTH=token \
 IPE_CONSOLE_TOKEN=local-dev-token \
@@ -84,8 +84,8 @@ the per-tier signals.
 ## Why one-binary instead of `MountLiveSubAppInProcess`
 
 The current example uses **explicit namespace tags** on per-page logs
-because Sky stdlib doesn't yet expose `MountLiveSubAppInProcess` as
-a first-class `Std.Live` surface — it's a Go-level runtime primitive
+because Ipê stdlib doesn't yet expose `MountLiveSubAppInProcess` as
+a first-class `Ipe.Live` surface — it's a Go-level runtime primitive
 (`runtime-go/rt/subapp_inprocess.go`) that ships in v0.16.1 PR10-C.
 
 The user-visible aggregation experience is **identical** whether you:
@@ -93,7 +93,7 @@ The user-visible aggregation experience is **identical** whether you:
 1. Compose multiple logical tiers as pages in one Live.app cfg
    (this example's shape), or
 2. Mount each tier as its own `MountLiveSubAppInProcess` sub-app
-   (the v0.16.2+ shape, once the Sky surface lands)
+   (the v0.16.2+ shape, once the Ipê surface lands)
 
 In both shapes, signals from every tier write to
 `telemetry.Default()`. The console's UI is unchanged. The
@@ -101,7 +101,7 @@ In both shapes, signals from every tier write to
 isolation (separate session stores, separate broker, separate sky-id
 namespace), but the OBSERVABILITY behaviour is the same.
 
-When the Sky-side `Std.Live.mountSubApp` lands, this example's
+When the Ipê-side `Ipe.Live.mountSubApp` lands, this example's
 README will be updated to show both shapes side-by-side.
 
 ## Tests / verification

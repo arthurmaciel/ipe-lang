@@ -84,7 +84,7 @@ pub fn rust_crate_f<E: From<String> + Send + 'static>(
   re-borrowed at the call site); serde prelude spliced INSIDE the async block
   for generic instances (`FfiInstance.hs:820-825`); infallible-async two-arm
   variant (`Ok(v)/Err(join)`) selected by the `Result<` return-prefix test;
-  Sky type is always `Task Error a` (the panic/cancel arm needs the Error
+  Ipê type is always `Task Error a` (the panic/cancel arm needs the Error
   slot — never `Task Never`).
 - **Δ1 — AbortOnDrop guard (adopt fresh; fills a reference gap).** The
   reference's inner spawned task detaches if the outer SkyTask is dropped
@@ -102,12 +102,12 @@ pub fn rust_crate_f<E: From<String> + Send + 'static>(
 ### 1.2 Multi-await chains — decomposition, not synthesis (both arms agree)
 
 Never synthesize a chain wrapper. Each chain step is one binding in a
-primitive shape; Sky's `|>` IS the fluent chain and `Task.andThen` IS the
+primitive shape; Ipê's `|>` IS the fluent chain and `Task.andThen` IS the
 multi-await. This is simultaneously the fresh arm's first-principles ruling
 and the reference's shipped practice (per-method bindings + owned threading;
 `self_returning` setters). Properties: linear binding count (N setters + M
 terminals, never 2^N), first-class intermediates (`Task.retryWith` re-runs the
-Sky-side chain — the re-runnable-thunk contract holds because the chain is Sky
+Ipê-side chain — the re-runnable-thunk contract holds because the chain is Ipê
 code, not a frozen future), and per-step DCE.
 
 ### 1.3 Error mapping (port — already implemented in our runtime)
@@ -115,7 +115,7 @@ code, not a frozen future), and per-step DCE.
 One universal rule: every foreign `Err(e)` AND every `JoinError` routes
 through `sky_error_from_foreign` (`runtime/src/sky_runtime/core.rs:54` —
 verified present): raw `Debug` logged server-side under a fresh correlation
-id (B8 — SDK errors echo URLs/bearer tokens/API keys in their `Debug`), Sky
+id (B8 — SDK errors echo URLs/bearer tokens/API keys in their `Debug`), Ipê
 receives `Error.unexpected "external operation failed (ref <id>)"`. Typed
 `Error` always (repo non-regression rule: no `Result String` / `Task String`).
 The shims' verbatim-`Display` embedding is the LESS safe fossil pattern; do
@@ -135,7 +135,7 @@ fresh arm's four-shape framing maps 1:1 onto it and is adopted as the
 DOCUMENTATION taxonomy (it names what the matrix emits); the emitter itself
 ports the reference's matrix — no fifth shape, no chain shape.
 
-| Shape | Foreign form | Sky form | Reference mechanism |
+| Shape | Foreign form | Ipê form | Reference mechanism |
 |---|---|---|---|
 | **P** pure/sync | `fn f(x) -> Y`; by-value setter `fn s(self, v) -> Self`; `&mut self` setter | `f : X' -> Y'`; owned threading | `effect=pure`, `self_returning` rebuild wrapper |
 | **F** sync fallible | `fn f(x) -> Result<Y,E>` | `f : X' -> Result Error Y'` | `effect=fallible` (upgrade: Err arm through `sky_error_from_foreign`, not `format!("{:?}")` — the reference's sync arm still embeds Debug text; recorded strictly-better divergence, same B8 rationale) |
@@ -164,7 +164,7 @@ the *generator side consuming these verdicts*, not the analysis.
   async-trait sugar; without de-async there is nothing to bind. A `?Send`
   shape returns `None` → drop `async-future-not-send`.
 - **Tri-gate Send, `Clone ≠ Send`** (the shipped #44 divergence-from-its-own-
-  design): C1 output gate (Ok-type provably Send — TIGHTER than Sky-coercible,
+  design): C1 output gate (Ok-type provably Send — TIGHTER than Ipê-coercible,
   which admits `Clone + !Send`); C1b every `async move`-captured param; C1c
   the by-move-captured receiver (`recv_provably_async_send`: explicit
   `impl Send` ∪ all-fields-Send ∪ Send-supertrait; #87 conditional structural
@@ -241,12 +241,12 @@ no such hazard). The concrete mechanism is decided as:
 ## 5. Handle rules (adjudication a — the affine handle is NOT v1)
 
 - **Opaque nominal handles** (both arms): a foreign type reachable in an
-  admitted signature is a Sky nominal opaque (`Rust.Stripe.Client`), unifying
+  admitted signature is a Ipê nominal opaque (`Rust.Stripe.Client`), unifying
   nominally, structure unexposed — the `runtimeOpaqueTypes` precedent.
 - **v1 representation = reference parity: Clone-gated.** Verified: the
   reference's opaque admission requires Clone (`is_clone_opaque_name`;
   "`&T` for non-Clone T STAY DROPPED"). Call sites `.clone()` the handle per
-  use; Sky-side aliasing is sound because every use owns its copy. The
+  use; Ipê-side aliasing is sound because every use owns its copy. The
   acceptance targets pass this gate — stripe rc.6 `Create*` params structs
   and `FirestoreDb` are Clone (fixtures 93/95/96/104 prove it); SDK clients
   are Arc-backed-Clone by convention.
@@ -261,7 +261,7 @@ no such hazard). The concrete mechanism is decided as:
     guarantee for a runtime error, and NO acceptance-path crate needs it.
     Over-drop is sound; the spec is banked in `async-ffi-bridge-fresh.md`
     §6.3 and re-opens on demonstrated need with a guardian gate.
-- **Model/session storage:** handles are ordinary Sky values (Clone + Send +
+- **Model/session storage:** handles are ordinary Ipê values (Clone + Send +
   'static); session-store persistence follows the existing
   `disconnected_*` reconstruction pattern (serde-skip + structured error;
   memory-store-only gate).
@@ -395,8 +395,8 @@ Steps (each independently verifiable; no builds implied by this doc):
 3. Teach the generator (P2 emitters) to emit them from the crate's real
    kernel.json; byte-diff against the hand-written pair AND against the
    reference's cached firestore artifacts (Δ1/Δ2 in the diff filter).
-4. Wire one Sky program through canon/lower/backend. Gate:
-   `fetchProduct`-shaped Sky code builds + runs.
+4. Wire one Ipê program through canon/lower/backend. Gate:
+   `fetchProduct`-shaped Ipê code builds + runs.
 5. Scale out: P3 generics → P6 stripe E2E → P7 skyshop.
 
 ---

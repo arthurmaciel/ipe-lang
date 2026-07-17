@@ -1,9 +1,9 @@
-//! Sky.Core.Dict kernels backed by `std::collections::HashMap<K, V>`.
+//! Ipe.Dict kernels backed by `std::collections::HashMap<K, V>`.
 //!
 //! Generic over the KEY type so a `Dict Int v` (chess board keyed by square
 //! index, histogram counts, …) maps to `HashMap<i64, V>` and a `Dict String v`
 //! to `HashMap<String, V>`. Keys are `Ord` for the deterministic sorted
-//! iteration Sky guarantees; `Hash + Eq` for the map ops. Codegen emits the
+//! iteration Ipê guarantees; `Hash + Eq` for the map ops. Codegen emits the
 //! key type from the `Dict k v` annotation (TypeRenderer renders `HashMap<k,v>`;
 //! empty-dict turbofish pins both K and V from the expected type). The
 //! `IpeDict<T>` alias stays for the String-keyed runtime structs (db rows).
@@ -36,7 +36,7 @@ pub fn dict_get<K: Hash + Eq, V: Clone>(k: K, d: HashMap<K, V>) -> IpeMaybe<V> {
 }
 
 /// `Dict.keys : Dict k v -> List k`. Returns keys in sorted order so
-/// iteration is deterministic (matches Sky's _fieldIndex emission contract).
+/// iteration is deterministic (matches Ipê's _fieldIndex emission contract).
 pub fn dict_keys<K: Ord, V>(d: HashMap<K, V>) -> Vec<K> {
     let mut keys: Vec<K> = d.into_keys().collect();
     keys.sort();
@@ -44,7 +44,7 @@ pub fn dict_keys<K: Ord, V>(d: HashMap<K, V>) -> Vec<K> {
 }
 
 /// `Dict.values : Dict k v -> List v`. Key-sorted for determinism, matching
-/// `dict_keys` (Sky Dicts iterate in sorted-key order).
+/// `dict_keys` (Ipê Dicts iterate in sorted-key order).
 pub fn dict_values<K: Ord, V: Clone>(d: HashMap<K, V>) -> Vec<V> {
     let mut pairs: Vec<(K, V)> = d.into_iter().collect();
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
@@ -52,7 +52,7 @@ pub fn dict_values<K: Ord, V: Clone>(d: HashMap<K, V>) -> Vec<V> {
 }
 
 /// `Dict.toList : Dict k v -> List (k, v)`. Key-sorted for determinism,
-/// matching `dict_keys` / `dict_values` (Sky Dicts iterate in sorted-key order).
+/// matching `dict_keys` / `dict_values` (Ipê Dicts iterate in sorted-key order).
 pub fn dict_to_list<K: Ord, V: Clone>(d: HashMap<K, V>) -> Vec<(K, V)> {
     let mut pairs: Vec<(K, V)> = d.into_iter().collect();
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
@@ -121,7 +121,7 @@ where
 }
 
 /// `Dict.foldl : (k -> v -> a -> a) -> a -> Dict k v -> a`.
-/// Accumulates over every entry in **sorted-key order** (matches Sky's
+/// Accumulates over every entry in **sorted-key order** (matches Ipê's
 /// `_fieldIndex`/sorted-key iteration contract; Go's `Dict_foldl` iterates
 /// map-order but the sorted-key guarantee is a Rust-backend strengthening that
 /// matches `dict_keys` / `dict_values` / `dict_to_list` / `dict_map` here).

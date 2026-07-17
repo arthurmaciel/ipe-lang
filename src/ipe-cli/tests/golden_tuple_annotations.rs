@@ -1,4 +1,4 @@
-//! Tuple-type-annotation gate: `skyc` must emit `main.rs`
+//! Tuple-type-annotation gate: `ipe` must emit `main.rs`
 //! byte-identical to the checked-in golden for a program whose top-level
 //! bindings carry **tuple-type annotations** (`firstOf : (Int, Int) -> Int`),
 //! and (behind `IPE_E2E=1`) the emitted project must build and print `48`.

@@ -1,4 +1,4 @@
-// Time kernel — basic helpers (tokio-gated) + Std.Time advanced (always available).
+// Time kernel — basic helpers (tokio-gated) + Ipe.Time advanced (always available).
 use super::*;
 
 #[cfg(feature = "tokio")]
@@ -40,7 +40,7 @@ pub fn time_time_string(ms: i64) -> String {
 
 /// `Time.addMillis : Int -> Int -> Int` — pure integer addition.
 /// Go: `return AsInt(ms) + AsInt(delta)`. Args order: delta first, ms second
-/// (matches the Sky sig `addMillis : Int -> Int -> Int`, called
+/// (matches the Ipê sig `addMillis : Int -> Int -> Int`, called
 /// `Time.addMillis delta ms`).
 pub fn time_add_millis(delta: i64, ms: i64) -> i64 {
     ms.saturating_add(delta)
@@ -115,14 +115,14 @@ pub fn time_format_rfc3339(ms: i64) -> String {
     }
 }
 
-/// === Std.Time advanced — IANA zones + calendar math ===
+/// === Ipe.Time advanced — IANA zones + calendar math ===
 use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Timelike, Utc, Weekday};
 use chrono_tz::Tz;
 
 fn parse_zone<E: From<String>>(z: &str) -> IpeResult<E, Tz> {
     match z.parse::<Tz>() {
         Ok(t) => IpeResult::Ok(t),
-        Err(_) => IpeResult::Err(format!("Std.Time: unknown zone: {}", z).into()),
+        Err(_) => IpeResult::Err(format!("Ipe.Time: unknown zone: {}", z).into()),
     }
 }
 
@@ -133,7 +133,7 @@ fn millis_to_zoned<E: From<String>>(zone: &str, ms: i64) -> IpeResult<E, DateTim
     };
     match Utc.timestamp_millis_opt(ms).single() {
         Some(utc) => IpeResult::Ok(utc.with_timezone(&tz)),
-        None => IpeResult::Err(format!("Std.Time: epoch ms out of range: {}", ms).into()),
+        None => IpeResult::Err(format!("Ipe.Time: epoch ms out of range: {}", ms).into()),
     }
 }
 
@@ -168,7 +168,7 @@ pub fn time_add_months(months: i64, ms: i64) -> i64 {
         None => return ms,
     };
     let y = utc.year() as i64;
-    // `months` is caller-controlled (Sky `Std.Time.addMonths`): saturating_add
+    // `months` is caller-controlled (Ipê `Ipe.Time.addMonths`): saturating_add
     // avoids the i64 overflow (debug panic / release silent-wrap) on an extreme
     // value. A saturated `m` makes `new_y as i32` truncate → from_ymd_opt below
     // returns None → the function returns `ms` unchanged (total, no panic).
@@ -313,11 +313,11 @@ fn local_midnight_in_zone<E: From<String>>(
     let date = target_date(dt);
     let local = match date.and_hms_milli_opt(h, mi, se, mi_lli) {
         Some(l) => l,
-        None => return IpeResult::Err("Std.Time: invalid date components".to_string().into()),
+        None => return IpeResult::Err("Ipe.Time: invalid date components".to_string().into()),
     };
     match dt.timezone().from_local_datetime(&local).single() {
         Some(z) => IpeResult::Ok(z.timestamp_millis()),
-        None => IpeResult::Err("Std.Time: ambiguous local time".to_string().into()),
+        None => IpeResult::Err("Ipe.Time: ambiguous local time".to_string().into()),
     }
 }
 
@@ -372,7 +372,7 @@ pub fn time_format_in_zone<E: From<String>>(
         IpeResult::Err(e) => return IpeResult::Err(e),
     };
     // Non-panicking render: same risk as time_format — stray `%` in a
-    // Sky-supplied pattern causes DelayedFormat::fmt to return Err, which
+    // Ipê-supplied pattern causes DelayedFormat::fmt to return Err, which
     // to_string() turns into a panic. Use write! and fall back to "".
     let mut out = String::new();
     match std::fmt::write(&mut out, format_args!("{}", dt.format(&pattern))) {
@@ -381,7 +381,7 @@ pub fn time_format_in_zone<E: From<String>>(
     }
 }
 
-/// `Sky.Core.Time.formatISO8601 ms` — the UTC instant as an RFC3339 / ISO-8601
+/// `Ipe.Time.formatISO8601 ms` — the UTC instant as an RFC3339 / ISO-8601
 /// string (Go parity: `t.UTC().Format(time.RFC3339)`). Infallible (`""` only on
 /// an out-of-range timestamp).
 pub fn time_format_iso8601(ms: i64) -> String {
@@ -409,7 +409,7 @@ pub fn time_diff_days(later_ms: i64, earlier_ms: i64) -> i64 {
     later_ms.saturating_sub(earlier_ms) / 86_400_000
 }
 
-/// Sky source: `fromParts zone y m d h mins s -> Result Error Int`.
+/// Ipê source: `fromParts zone y m d h mins s -> Result Error Int`.
 /// Computes the UTC epoch-ms for the given local date/time in the given IANA
 /// zone. Invalid parts return Err. Unknown timezone returns Err.
 pub fn time_from_parts<E: From<String>>(

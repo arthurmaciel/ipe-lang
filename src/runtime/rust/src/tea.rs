@@ -1,4 +1,4 @@
-//! Sky TEA runtime core — Cmd/Sub + the Sky.Cli line-oriented loop.
+//! Ipê TEA runtime core — Cmd/Sub + the Ipe.Cli line-oriented loop.
 //!
 //! Cmd/Sub are generic over the message type M (NOT `any`): the intermediate
 //! value `a` in `Cmd.perform` is erased inside a boxed M-producing future, but M
@@ -11,7 +11,7 @@ use super::*;
 use std::future::Future;
 use std::pin::Pin;
 
-/// Sky `Cmd msg`. Perform carries a boxed thunk producing the message (the
+/// Ipê `Cmd msg`. Perform carries a boxed thunk producing the message (the
 /// task's success/error type is erased inside; M is concrete).
 pub enum IpeCmd<M> {
     None,
@@ -31,7 +31,7 @@ pub enum IpeCmd<M> {
 pub type SubSpawn<M> =
     Box<dyn FnOnce(std::sync::Arc<dyn Fn(M) + Send + Sync>) -> tokio::task::JoinHandle<()> + Send>;
 
-/// Sky `Sub msg`.
+/// Ipê `Sub msg`.
 pub enum IpeSub<M> {
     None,
     Batch(Vec<IpeSub<M>>),
@@ -84,7 +84,7 @@ pub fn time_every<M>(ms: i64, msg: M) -> IpeSub<M> {
     sub_every(ms, msg)
 }
 
-// `Sky.Core.Http.Stream.chunks` → `Sub_subscribeStream` lives in `http_stream.rs`
+// `Ipe.Http.Stream.chunks` → `Sub_subscribeStream` lives in `http_stream.rs`
 // now (alongside the stream registry it drains + the bridged `ChunkEvent` enum).
 // It returns a `IpeSub::Source` driven by this module's SubManager.
 
@@ -200,7 +200,7 @@ pub(crate) fn cli_run_cmd<M: Send + 'static>(
     }
 }
 
-// ─── Sky.Cli — line-oriented TEA loop ──────────────────────────────────────
+// ─── Ipe.Cli — line-oriented TEA loop ──────────────────────────────────────
 
 /// Cli.program { init, update, view, subscriptions, onLine } : Task Error ().
 ///

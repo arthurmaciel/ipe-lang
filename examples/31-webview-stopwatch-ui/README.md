@@ -1,13 +1,13 @@
 # 31-webview-stopwatch-ui
 
-Desktop stopwatch via **Sky.Webview** — the cross-backend mirror
-of Sky.Live (web) and Sky.Tui (terminal).
+Desktop stopwatch via **Ipe.Webview** — the cross-backend mirror
+of Ipe.Live (web) and Ipe.Tui (terminal).
 
 This example pairs with two siblings:
 
 | Example | Backend | `main` |
 |---|---|---|
-| `22-tui-stopwatch-ui` | Terminal (Std.Ui → ANSI cells) | `Tui.app` |
+| `22-tui-stopwatch-ui` | Terminal (Ipe.Ui → ANSI cells) | `Tui.app` |
 | `31-webview-stopwatch-ui` | **Native desktop window** | `Webview.app` |
 
 The Model, `update`, `subscriptions`, and `view` functions are
@@ -18,7 +18,7 @@ the "write once, render anywhere" cross-backend story.
 
 ```bash
 cd examples/31-webview-stopwatch-ui
-sky build src/Main.ipe
+ipe build src/Main.ipe
 ./sky-out/app
 ```
 
@@ -28,7 +28,7 @@ to exit cleanly.
 
 ## Platform notes (v0.1)
 
-Sky.Webview v0.1 is **macOS only** — the runtime compiles on
+Ipe.Webview v0.1 is **macOS only** — the runtime compiles on
 Windows + Linux but smoke validation lands in v0.2.
 
 | OS | v0.1 status | v0.2 plan |
@@ -46,10 +46,10 @@ evergreen distributable). On Linux you'll need
 
 - `Webview.app cfg` — TEA entry mirroring `Live.app` / `Tui.app`.
 - Minimal `WindowCfg = { title : String, size : (Int, Int) }`.
-- Reuses Sky.Live's HTML renderer + VNode diff (`HtmlToVNode`,
+- Reuses Ipe.Live's HTML renderer + VNode diff (`HtmlToVNode`,
   `assignSkyIDs`, `renderVNode`, `diffTrees`) so the same `view`
   function paints identically.
-- `Cmd.perform` / `Sub.every` work as in Sky.Live and Sky.Tui.
+- `Cmd.perform` / `Sub.every` work as in Ipe.Live and Ipe.Tui.
 - XSS hardening parity — focus-preserving DOM replacer,
   `__skyReviveScripts` for late-injected `<script>` tags.
 - No HTTP server, no SSE, no session store. The bridge is
@@ -60,11 +60,11 @@ evergreen distributable). On Linux you'll need
 - `alwaysOnTop` / `transparent` / `decorated` window flags
 - Tray icons + global hotkeys
 - Native file / folder pickers
-- `Std.Voice` intents
+- `Ipe.Voice` intents
 - Windows + Linux smoke validation
 
 The closed-record `WindowCfg` type means a missing field surfaces
-as a clean Sky TYPE ERROR at compile time instead of a runtime
+as a clean Ipê TYPE ERROR at compile time instead of a runtime
 panic. When v0.2 adds optional fields the record will open and
 they'll absorb cleanly without breaking v0.1 callers.
 
@@ -72,12 +72,12 @@ they'll absorb cleanly without breaking v0.1 callers.
 
 29 is a **spike** — proves WebGL2 + Three.js + 60 fps animation
 run end-to-end inside `webview_go` on every target OS. It uses
-Sky.Http.Server (HTTP) + a hand-written Go shim (no Sky.Webview
+Ipe.Http.Server (HTTP) + a hand-written Go shim (no Ipe.Webview
 binding existed yet).
 
-30 is the **MVP** — `Webview.app cfg` is now a first-class Sky
+30 is the **MVP** — `Webview.app cfg` is now a first-class Ipê
 backend; the spike's "two terminals, two binaries" choreography
-is replaced by a single `sky build` that produces a self-contained
+is replaced by a single `ipe build` that produces a self-contained
 desktop binary.
 
 After v0.2 (Windows + Linux smoke + tray icons + always-on-top),

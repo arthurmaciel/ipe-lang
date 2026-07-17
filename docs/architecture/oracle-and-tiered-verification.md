@@ -2,7 +2,7 @@
 
 > **Purpose.** Replace "fresh-design + Opus-adversarial-review every slice" with
 > "**faithful port** of `../sky`'s proven logic + **oracle-diff** verification".
-> The oracle turns *"does skyc's emitted+run output behave like the reference?"*
+> The oracle turns *"does ipe's emitted+run output behave like the reference?"*
 > into an automatic byte-diff, so a **faithful-port slice needs no Opus review** —
 > only the surfaces the oracle **cannot** cover (deliberate divergences, security
 > seal, no-reference shapes) still get the guardian.
@@ -17,7 +17,7 @@
 
 ## 1. Reference-availability verdict (measured on this host, 2026-07-04)
 
-The oracle needs a **reference** to diff skyc against. There are two candidate
+The oracle needs a **reference** to diff ipe against. There are two candidate
 references and two oracle mechanisms. What is actually producible **on this
 machine**:
 
@@ -40,16 +40,16 @@ The EQUIVALENCE machinery was **fully ported but dormant** (`IPE_SWEEP_NO_EQUIV=
 default). Turning it on surfaced exactly **one** activation bug, now fixed:
 
 - `scripts/lib/env.sh` exports `IPE_RUNTIME_DIR=$REPO/runtime/src/sky_runtime` so
-  **skyc**'s `--runtime` auto-resolve is CWD-independent. That variable is a
-  **skyc-only** knob.
+  **ipe**'s `--runtime` auto-resolve is CWD-independent. That variable is a
+  **ipe-only** knob.
 - The Haskell `sky` (Go reference) **also honours `IPE_RUNTIME_DIR`** — and with
-  it pointing at the repo's **Rust** runtime tree, `sky build` vendored the wrong
+  it pointing at the repo's **Rust** runtime tree, `ipe build` vendored the wrong
   runtime as its Go `rt/` package, so every `go build` died with
   `undefined: rt.SetPortDefault` / `rt.SkyADT` / `rt.RegisterAdtTag` … — reported
   by the sweep as the **AMBER `go-ref-broken`** cell (a false one).
 - **Fix (in `build_go()`, `scripts/equivalence-checks/examples-sweep.sh`):** run the Go reference
   with the var scoped-unset — `env -u IPE_RUNTIME_DIR … "$go_bin" build …`. `sky`
-  has its own TH-embedded Go runtime; the skyc knob must not leak to it.
+  has its own TH-embedded Go runtime; the ipe knob must not leak to it.
 
 This was a **scripts** fix — no compiler/runtime/crate change. After it,
 `01-hello-world` moved `go-ref-broken → equivalence-stdout` (§3).
@@ -65,7 +65,7 @@ and the EQUIVALENCE cell is the oracle. The **mode** is *derived* from the examp
 shape (`equivalence_mode` in `lib/examples.sh`), overridable in
 `scripts/equivalence-checks/equivalence-classification.tsv`:
 
-| Shape | EQUIVALENCE mode | Oracle comparison (skyc-Rust **vs** Go reference) | Rigour today |
+| Shape | EQUIVALENCE mode | Oracle comparison (ipe-Rust **vs** Go reference) | Rigour today |
 |---|---|---|---|
 | cli | `stdout` | run both binaries, `norm()` (blank-line strip) each stdout, **byte-diff**. A 2-probe **determinism auto-gate** on the Go side downgrades a nondeterministic program to `n/a` rather than false-DIFFER. | **Real byte-diff oracle.** |
 | server | `body` | boot both on isolated ports+cwds; for each comparable `Server.get` GET route, byte-compare bodies (per-route determinism + slow/streaming skips). | Real body-diff, **raw** (see §4 — HTML normalizer not yet wired). |
@@ -76,7 +76,7 @@ shape (`equivalence_mode` in `lib/examples.sh`), overridable in
 **Verdicts:** GREEN = BUILD ok ∧ RUN ok ∧ EQUIVALENCE ∈ {`equivalence-*`, `n/a`, `—`, amber
 `go-ref-broken`}. RED = any `*-fail` / `panic` / `hang` / `noserve` / `notty` /
 **`DIFFER`**. `go-ref-broken` is **AMBER** (the *reference* failed to build/serve —
-not a skyc defect; it auto-flips back to `equivalence-*` the moment the reference is
+not a ipe defect; it auto-flips back to `equivalence-*` the moment the reference is
 fixed, no manual edit).
 
 ### 2.1 What I built / wired
@@ -105,33 +105,33 @@ EXAMPLE                      BUILD      RUN       EQUIVALENCE            NOTE
 === VERDICT: PASS ===
 ```
 
-`equivalence-stdout` = skyc's emitted-Rust stdout **byte-matched** the Go reference
+`equivalence-stdout` = ipe's emitted-Rust stdout **byte-matched** the Go reference
 binary's stdout for `01-hello-world`. Before the §1.1 fix the same run reported a
-false `go-ref-broken`. Provenance: `sky v0.16.29` (Go ref) · `go1.26.2` · `skyc`
+false `go-ref-broken`. Provenance: `sky v0.16.29` (Go ref) · `go1.26.2` · `ipe`
 debug build 2026-07-04.
 
 A broader 4-example CLI sample shows the **honest pre-parity shape** — the oracle
-is real where the Rust build succeeds; the RED rows are **skyc build-lane
+is real where the Rust build succeeds; the RED rows are **ipe build-lane
 failures, not oracle failures**:
 
 ```
 01-hello-world               ok         ok        equivalence-stdout
-20-cli-counter               skyc-fail  —         —            rust build failed
-06-json                      skyc-fail  —         —            rust build failed
-14-task-demo                 skyc-fail  —         —            rust build failed
-  summary: 1 green · 3 red (all skyc-fail) · equivalence-mode: stdout=1
+20-cli-counter               ipe-fail  —         —            rust build failed
+06-json                      ipe-fail  —         —            rust build failed
+14-task-demo                 ipe-fail  —         —            rust build failed
+  summary: 1 green · 3 red (all ipe-fail) · equivalence-mode: stdout=1
 ```
 
 This matches `go-oracle-fixture-corpus-plan.md` §5: the corpus is a **burndown**
 target, not a today-pass gate. Each example flips to `equivalence-stdout` (or a real
-`DIFFER` to investigate) as its owning skyc phase lands. A `skyc-fail` / `DIFFER`
+`DIFFER` to investigate) as its owning ipe phase lands. A `ipe-fail` / `DIFFER`
 is Rust-side work; an `equivalence-*` is an Opus-retired faithful-port slice (§6).
 
-> **Note on skyc binary choice:** `env.sh` prefers `$CARGO_TARGET_DIR/release/skyc`
-> over `debug`. The stale **release** skyc (older) `cargo-fail`s with a workspace
+> **Note on ipe binary choice:** `env.sh` prefers `$CARGO_TARGET_DIR/release/ipe`
+> over `debug`. The stale **release** ipe (older) `cargo-fail`s with a workspace
 > nesting error (`current package believes it's in a workspace`); the fresh
-> **debug** skyc builds clean. Rebuild the release skyc (`cargo build --release -p
-> skyc`) or pass `SKYC_BIN=…/debug/skyc` so the sweep uses a current compiler.
+> **debug** ipe builds clean. Rebuild the release ipe (`cargo build --release -p
+> ipe`) or pass `SKYC_BIN=…/debug/ipe` so the sweep uses a current compiler.
 > This is a Rust build-lane item, not an oracle item.
 
 ---
@@ -229,7 +229,7 @@ A surface needs the guardian when **any** hold:
 ## 7. How to run the oracle
 
 **Prerequisites (all present on this host):** `sky` (Go reference) on PATH,
-`go`, `curl`, `python3`, `rg`, a current `skyc`.
+`go`, `curl`, `python3`, `rg`, a current `ipe`.
 
 ```bash
 # Full corpus, live Go oracle ON (drop IPE_SWEEP_NO_EQUIV to enable EQUIVALENCE):
@@ -239,7 +239,7 @@ IPE_GO_BIN=sky bash scripts/equivalence-checks/examples-sweep.sh
 # Single example / subset (paths or basenames):
 IPE_GO_BIN=sky RUST_EXAMPLES="01-hello-world 20-cli-counter" bash scripts/equivalence-checks/examples-sweep.sh
 
-# Force the fresh compiler if the release skyc is stale (see §3 note):
+# Force the fresh compiler if the release ipe is stale (see §3 note):
 SKYC_BIN=~/.cache/sky-rust-target/debug/skyc IPE_GO_BIN=sky bash scripts/equivalence-checks/examples-sweep.sh
 
 # Phase-1 (no oracle, BUILD+RUN only) — the CI default today:
@@ -247,7 +247,7 @@ IPE_SWEEP_NO_EQUIV=1 bash scripts/equivalence-checks/examples-sweep.sh
 ```
 
 Output: an aligned table + `~/.cache/sky/examples-sweep/sweep-<stamp>.table`;
-per-example logs (`<n>.<stamp>.skyc.log`, `<n>.<stamp>.cargo.log`,
+per-example logs (`<n>.<stamp>.ipe.log`, `<n>.<stamp>.cargo.log`,
 `<n>.<stamp>.go.build.log`, `<n>.<stamp>.diff.txt`, …) under the same dir,
 STAMP-suffixed (#35b) so two invocations sharing this cache dir never
 interleave-corrupt each other's diagnostic files for the same example. Exit
@@ -269,8 +269,8 @@ Ordered by leverage:
 3. **Install the browser stack** (`npm i playwright` + the `web-verify.mjs` /
    `verify-scenarios.mjs` drivers) so `scenario` mode does real round-trips
    instead of boot-both.
-4. **Rebuild the release `skyc`** so `env.sh`'s release-first probe picks a
-   current compiler (the stale release skyc `cargo-fail`s on the workspace-nesting
+4. **Rebuild the release `ipe`** so `env.sh`'s release-first probe picks a
+   current compiler (the stale release ipe `cargo-fail`s on the workspace-nesting
    error). Build-lane item.
 5. **Flip CI to phase-2**: uncomment the `examples-sweep-equivalence` job stub in
    `.github/workflows/examples-sweep.yml`, set `IPE_GO_BIN`, drop
@@ -281,7 +281,7 @@ Ordered by leverage:
 6. **Author the 65-fixture unit corpus** (`go-oracle-fixture-corpus-plan.md`) so
    the silent-divergence kernel classes (Dict/Set order, Money rounding, i64 wrap,
    json HTML-escape, float threshold) get a Tier-A oracle each — these are the
-   dangerous *pass-skyc-mismatch-Go-silently* classes.
+   dangerous *pass-ipe-mismatch-Go-silently* classes.
 
 Until 1–3 land, the honest tiering is: **`stdout` examples + Tier-A goldens are
 oracle-verified (Opus-retired); everything else stays Opus.** That already retires

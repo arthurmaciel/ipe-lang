@@ -1,6 +1,6 @@
 //! Character literal patterns: `case c of 'a' -> … ; 'b' -> … ;
 //! _ -> …`. Char is an OPEN type, so a wildcard catch-all completes the cover.
-//! `skyc` must emit `main.rs` byte-identical to the checked-in golden, and
+//! `ipe` must emit `main.rs` byte-identical to the checked-in golden, and
 //! (behind `IPE_E2E=1`) the emitted project must build and print `2`.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at

@@ -4,7 +4,7 @@ module Main exposing (main)
 21-tui-stopwatch — full-screen TUI stopwatch using Ipe.Tui.
 
 The same paradigm the original 11-fyne-stopwatch was built around
-(ticking timer + start/stop/reset buttons), expressed in pure Sky
+(ticking timer + start/stop/reset buttons), expressed in pure Ipê
 under the TEA shape:
 
   - Model holds running/elapsed
@@ -134,7 +134,7 @@ view model =
     in
         "\r\n"
             ++ "  ╭───────────────────────────────╮\r\n"
-            ++ "  │       Sky TUI Stopwatch       │\r\n"
+            ++ "  │       Ipê TUI Stopwatch       │\r\n"
             ++ "  ╰───────────────────────────────╯\r\n"
             ++ "\r\n"
             ++ "        " ++ time ++ "\r\n"

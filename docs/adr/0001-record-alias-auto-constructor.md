@@ -12,7 +12,7 @@ in *declared* field order). Before this decision the alias was registered only
 in the *type* namespace, so a value use — the dominant sweep shape
 `Decode.succeed UserProfile |> required "username" string |> …` — failed name
 resolution with IPE-N0001 ("cannot find this value in scope"). This blocked the
-Live / Http / Db examples in the skyc sweep.
+Live / Http / Db examples in the ipe sweep.
 
 The decision was guardian-reviewed against the strict principle order
 **security > correctness > soundness > efficiency > completeness > readability**
@@ -239,7 +239,7 @@ re-derived at a second site. The following alternatives were considered and
   normal `Expr::Record` through the existing typed emitter, no bespoke string.
 * **Silent skip on name collision** (existingNames guard, ModuleEmitter.hs:111).
   **Rejected** — a hard `DuplicateValue` canon diagnostic instead (see above).
-* **Hardcoded `markerCfgAliases = {("Std.Webview","AppCfg")}` special-case**
-  (ModuleEmitter.hs:82-86). **Rejected** — a Sky-runtime quirk; if a
+* **Hardcoded `markerCfgAliases = {("Ipe.Webview","AppCfg")}` special-case**
+  (ModuleEmitter.hs:82-86). **Rejected** — a Ipê-runtime quirk; if a
   runtime-owned/zero-field cfg needs suppression, data-drive it from the
   kernel/runtime registry, never a literal module+name tuple.

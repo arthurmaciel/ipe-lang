@@ -1,4 +1,4 @@
-//! Sky.Http.Server.Stream — server-side streaming HTTP responses (chunked / SSE).
+//! Ipe.Http.Server.Stream — server-side streaming HTTP responses (chunked / SSE).
 //!
 //! Mirror of `runtime-go/rt/server_stream.go`. Where http_stream.rs reads an
 //! upstream body chunk-by-chunk, this writes a response body chunk-by-chunk to
@@ -33,14 +33,14 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-/// Sky.Http.Server.Stream.StreamWriter — opaque writer handle. The variant name
-/// matches the Sky constructor so `case w of StreamWriter raw` lowers onto it.
+/// Ipe.Http.Server.Stream.StreamWriter — opaque writer handle. The variant name
+/// matches the Ipê constructor so `case w of StreamWriter raw` lowers onto it.
 #[derive(Clone, Copy, Debug)]
 pub enum StreamWriter {
     StreamWriter(i64),
 }
 
-/// Handler with its Sky error type E erased: the effect IS the emits, the
+/// Handler with its Ipê error type E erased: the effect IS the emits, the
 /// IpeResult is discarded (parity with the Go dispatcher's `_ = task.await`).
 type ErasedStreamHandler =
     Arc<dyn Fn(StreamWriter) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
@@ -87,10 +87,10 @@ fn sentinel_nonce() -> &'static str {
 // `send().await` blocks when full → backpressure to the producer/relay.
 const STREAM_CHAN_BUFFER: usize = 16;
 
-/// Sky.Http.Server.Stream.stream
+/// Ipe.Http.Server.Stream.stream
 ///   : String -> (StreamWriter -> Task Error ()) -> Task Error Response
 ///
-/// The Sky codegen (Rust backend) lowers the handler argument as `StreamWriter`
+/// The Ipê codegen (Rust backend) lowers the handler argument as `StreamWriter`
 /// because the HM type scheme uses the `StreamWriter` opaque type for
 /// `Stream.emit` / `Stream.finish` / `Stream.withContentType`.  The user
 /// closure receives a `StreamWriter` and passes it directly to those kernels.
@@ -128,7 +128,7 @@ where
     })
 }
 
-/// Sky.Http.Server.Stream.emit : String -> StreamWriter -> Task Error ()
+/// Ipe.Http.Server.Stream.emit : String -> StreamWriter -> Task Error ()
 /// Sends the chunk + flushes (the channel feeds an unbuffered axum body).
 /// emit-after-finish is a no-op.
 pub fn server_stream_emit<E: From<String> + Send + 'static>(
@@ -156,7 +156,7 @@ pub fn server_stream_emit<E: From<String> + Send + 'static>(
     })
 }
 
-/// Sky.Http.Server.Stream.finish : StreamWriter -> Task Error ()
+/// Ipe.Http.Server.Stream.finish : StreamWriter -> Task Error ()
 /// Idempotent — drops the sender (ends the body stream). Implicit at handler
 /// return; explicit when the handler wants to release the connection early.
 pub fn server_stream_finish<E: From<String> + Send + 'static>(
@@ -172,7 +172,7 @@ pub fn server_stream_finish<E: From<String> + Send + 'static>(
     })
 }
 
-/// Sky.Http.Server.Stream.withContentType : String -> StreamWriter -> Task Error ()
+/// Ipe.Http.Server.Stream.withContentType : String -> StreamWriter -> Task Error ()
 /// Best-effort: the head is already committed by the time the handler runs in
 /// this model (axum sends headers when the streaming Response is returned), so
 /// this is a no-op. Set the Content-Type via the `stream` argument instead.
@@ -229,20 +229,20 @@ pub fn serve_streaming_sentinel(r: &ServerResponse) -> Option<axum::response::Re
     });
 
     // Clamp to the valid HTTP range before the u16 cast (parity with server.rs's
-    // buffered path) so an out-of-range Sky status can't wrap/panic the cast.
+    // buffered path) so an out-of-range Ipê status can't wrap/panic the cast.
     let status = axum::http::StatusCode::from_u16(r.status.clamp(100, 599) as u16)
         .unwrap_or(axum::http::StatusCode::OK);
     let mut builder = axum::http::Response::builder().status(status);
     if !r.contentType.is_empty() {
         builder = builder.header("content-type", r.contentType.clone());
     }
-    // Disable proxy buffering for SSE — same hint the Sky.Live SSE path sends.
+    // Disable proxy buffering for SSE — same hint the Ipe.Live SSE path sends.
     builder = builder.header("x-accel-buffering", "no");
     builder = builder.header("cache-control", "no-cache");
     for (k, v) in &r.headers {
         builder = builder.header(k.as_str(), v.as_str());
     }
-    // On builder failure — an invalid Sky-supplied content-type / header name or
+    // On builder failure — an invalid Ipê-supplied content-type / header name or
     // value makes `body()` return Err — DO NOT fall through to `None`: the
     // caller's None-fallback serves the raw `__sky_stream:<nonce>:<token>`
     // sentinel verbatim to the client (leaking the per-process nonce + emitting

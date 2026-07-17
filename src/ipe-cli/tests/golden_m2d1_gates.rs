@@ -1,12 +1,12 @@
 //! Super-type soundness gate.
 //!
-//! A generic function whose body constrains a type variable to a Sky super-type
+//! A generic function whose body constrains a type variable to a Ipê super-type
 //! (`Number` via `+ - *`, `Comparable` via `< > <= >=`) generalises to a Rust
 //! generic carrying the matching trait bound. Using such a function at a type
 //! that does not satisfy the bound — here `double` (which needs `Number`)
 //! instantiated at `Bool` — must be rejected at type-checking time (IPE-T0014),
 //! never left to fail when `cargo` compiles the emitted Rust. This is the
-//! soundness floor for bounded generics: skyc accepting a program it cannot
+//! soundness floor for bounded generics: ipe accepting a program it cannot
 //! lower to compiling Rust is forbidden.
 //!
 //! For the `Number` case the Go reference rejects the same program too (its
@@ -17,7 +17,7 @@
 //! Go backend lowers generic equality to a runtime reflect-based `rt.Eq`, which
 //! quietly accepts a function argument (returning `false`). The Rust backend
 //! instead lowers `==` to the static `PartialEq` operator, which Rust never
-//! derives for a function — so emitting it would fail `cargo`. skyc therefore
+//! derives for a function — so emitting it would fail `cargo`. ipe therefore
 //! rejects equality instantiated at a function type here (IPE-T0014) rather than
 //! reproduce a comparison that has no sound Rust meaning.
 

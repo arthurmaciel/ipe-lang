@@ -6,7 +6,7 @@
 //! When the `onChange` field is a BARE `Msg`-constructor it eta-expands to a
 //! plain lambda that the emitter boxes with `Box::new` (the non-Server/WS `Fun`
 //! default in `emit_lambda` / `wants_arc_ctor`) — a `Box<dyn Fn(_) -> _ + Send>`
-//! that does NOT fill the `Arc<.. + Send + Sync>` parameter slot. skyc accepted
+//! that does NOT fill the `Arc<.. + Send + Sync>` parameter slot. ipe accepted
 //! the program (exit 0) but the emitted Rust failed `cargo build` with E0308 —
 //! a seal break (the `examples/37-composite-live-shop` blocker).
 //!
@@ -17,7 +17,7 @@
 //! expression lowered.
 //!
 //! The two non-E2E goldens for these kernels (`golden_i148_input_slider`,
-//! `golden_i155_input_radio_row`) only check skyc lowering — they never run
+//! `golden_i155_input_radio_row`) only check ipe lowering — they never run
 //! `cargo build`, so they could not catch this cargo-time E0308. This one DOES
 //! cargo-build and run the emitted binary, which is the only test shape that
 //! can lock the seal for the Input-callback path.
@@ -70,7 +70,7 @@ fn build_run_input_callback() -> support::RunOutcome {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for input_callback_maybe_field: {:?}",
+        "ipe build must succeed for input_callback_maybe_field: {:?}",
         built.err()
     );
 

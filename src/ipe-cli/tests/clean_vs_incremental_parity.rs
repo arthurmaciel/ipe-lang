@@ -72,7 +72,7 @@ fn entry_path() -> Vec<String> {
 type CompileOutcome = Result<ipe_backend::EmittedProject, String>;
 
 /// The cold side: a fresh database built from the final source state — the
-/// exact shape `compile_modules` produces on a one-shot `skyc build`.
+/// exact shape `compile_modules` produces on a one-shot `ipe build`.
 fn cold_compile(user: &UserSources) -> CompileOutcome {
     let (sources, injected) = prepared(user);
     let db = ipe_db::IpeDatabase::new();

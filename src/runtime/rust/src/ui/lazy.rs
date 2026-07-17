@@ -1,6 +1,6 @@
-//! `Std.Ui.Lazy` kernel helpers — deferred subtree evaluation.
+//! `Ipe.Ui.Lazy` kernel helpers — deferred subtree evaluation.
 //!
-//! **ipê v1 semantics: EAGER.** Sky's Go runtime memoises the subtree using an
+//! **ipê v1 semantics: EAGER.** Ipê's Go runtime memoises the subtree using an
 //! LRU keyed on the function pointer and argument equality; ipê does not yet
 //! have a TEA-integrated memoisation layer. In v1 these functions evaluate
 //! immediately, which is semantically equivalent (same output, just no caching

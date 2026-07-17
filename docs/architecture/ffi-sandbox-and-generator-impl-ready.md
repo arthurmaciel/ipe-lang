@@ -13,7 +13,7 @@
 > completeness > readability.
 >
 > **Public-artifact rule.** The Haskell generator in `../sky`
-> (`src/Sky/Build/Rust/{Ffi,FfiCall,FfiInstance,NumCoerce}.hs`) is the
+> (`src/Ipê/Build/Rust/{Ffi,FfiCall,FfiInstance,NumCoerce}.hs`) is the
 > **capability oracle** — it defines *what* can be bound shim-free. It is **not**
 > the security oracle: it runs the inspector unsandboxed via `sh -c` and quotes
 > args with `quoteShell` only. Everywhere below, ipê is **stricter by design**;
@@ -368,7 +368,7 @@ both entry points construct through it.
 outside `num_coerce`** — this is the "one saturating helper" invariant
 (`NumCoerce.hs:8-11`). Port verbatim (all total, panic-free, clippy-clean):
 
-**PARAM (Sky carrier → foreign width), `num_saturate(raw, e)`** — `e` must be a
+**PARAM (Ipê carrier → foreign width), `num_saturate(raw, e)`** — `e` must be a
 side-effect-free bound local (`isize` arm evaluates twice):
 
 | target | emitted Rust | note |
@@ -383,7 +383,7 @@ side-effect-free bound local (`isize` arm evaluates twice):
 | `usize` | `usize::try_from((e).max(0)).unwrap_or(usize::MAX)` | **32-bit-correct** |
 | `isize` | `isize::try_from(e).unwrap_or_else(|_| if (e) < 0 { isize::MIN } else { isize::MAX })` | **32-bit-correct** |
 
-**RETURN (foreign width → Sky carrier), `num_widen_scalar(raw)`:**
+**RETURN (foreign width → Ipê carrier), `num_widen_scalar(raw)`:**
 
 | source | carrier | coerce |
 |---|---|---|

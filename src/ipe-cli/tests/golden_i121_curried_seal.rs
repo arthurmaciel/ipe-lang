@@ -23,10 +23,10 @@
 //!
 //! ```text
 //! # green suite (cargo-0 required):
-//! IPE_E2E=1 cargo test -p skyc --test golden_i121_curried_seal
+//! IPE_E2E=1 cargo test -p ipe --test golden_i121_curried_seal
 //!
 //! # gate checks only (no cargo, fast):
-//! cargo test -p skyc --test golden_i121_curried_seal
+//! cargo test -p ipe --test golden_i121_curried_seal
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -115,7 +115,7 @@ fn f1_firstclass_curried_and_shadow() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for firstclass_curried: {:?}",
+        "ipe build must succeed for firstclass_curried: {:?}",
         built.err()
     );
 
@@ -175,7 +175,7 @@ fn f2_firstclass_arity0() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for firstclass_arity0: {:?}",
+        "ipe build must succeed for firstclass_arity0: {:?}",
         built.err()
     );
 
@@ -216,7 +216,7 @@ fn f3_partial_noncopy() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for partial_noncopy: {:?}",
+        "ipe build must succeed for partial_noncopy: {:?}",
         built.err()
     );
 
@@ -267,7 +267,7 @@ fn f4_lambda_capture_noncopy_and_f11_shadow() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for lambda_capture_noncopy: {:?}",
+        "ipe build must succeed for lambda_capture_noncopy: {:?}",
         built.err()
     );
 
@@ -311,7 +311,7 @@ fn f5_capture_fn_called_control() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for capture_fn_called (control): {:?}",
+        "ipe build must succeed for capture_fn_called (control): {:?}",
         built.err()
     );
 
@@ -400,7 +400,7 @@ fn f7_succeed_curried() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for succeed_curried: {:?}",
+        "ipe build must succeed for succeed_curried: {:?}",
         built.err()
     );
 
@@ -445,7 +445,7 @@ fn f8_curried_three_arrows() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for curried_three_arrows: {:?}",
+        "ipe build must succeed for curried_three_arrows: {:?}",
         built.err()
     );
 
@@ -494,7 +494,7 @@ fn f9_decoder_thunk_capture() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for decoder_thunk_capture: {:?}",
+        "ipe build must succeed for decoder_thunk_capture: {:?}",
         built.err()
     );
 
@@ -544,7 +544,7 @@ fn f10_generic_curried_gate_l0126() {
 /// the independent-review-found gap: `is_pipeline_next_decoder_kernel`
 /// (`crates/ipe_lower/src/lower.rs`) listed only five of the six
 /// `Decoder<E, Box<dyn FnOnce(_) -> _>>`-shaped kernels, omitting
-/// `KernelFn::JsonDecPCustom`.  Without the fix, `skyc build` exits 0 but the emitted
+/// `KernelFn::JsonDecPCustom`.  Without the fix, `ipe build` exits 0 but the emitted
 /// `decode_pipeline_custom` call site fails `cargo build` with 2×E0308
 /// (`expected trait 'Fn', found trait 'FnOnce'`).
 #[test]
@@ -569,7 +569,7 @@ fn f11_pipeline_custom_curried() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for pipeline_custom_curried: {:?}",
+        "ipe build must succeed for pipeline_custom_curried: {:?}",
         built.err()
     );
 

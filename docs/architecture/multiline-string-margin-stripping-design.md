@@ -35,7 +35,7 @@ choose between ugly source (dedent the string body to column 1) and
 polluted values. Kotlin (`trimMargin`/`trimIndent`), Java (JEP 378 text
 blocks), Scala, and YAML all solved this; Elm has no multiline-string
 indentation handling (it also barely has multiline strings), and the
-reference Sky preserves the body verbatim — so this is a deliberate,
+reference Ipê preserves the body verbatim — so this is a deliberate,
 output-changing Ipê departure.
 
 ### Current behaviour (both compilers, confirmed 2026-07-10)
@@ -153,7 +153,7 @@ the canonicaliser.
    the immediate leading newline per rule 2. Interpolation segments
    never participate (a `{{` cannot be leading whitespace); an interp
    spanning a newline resumes literal-stripping state after it closes.
-4. **Formatter:** verify `sky fmt` treats the body as opaque (it must
+4. **Formatter:** verify `ipe fmt` treats the body as opaque (it must
    not re-indent string bodies — if it ever aligns them, the value
    would change; add the idempotence + no-reindent test).
 5. **Divergence bookkeeping (same commit):** promote the §6.9 planned
@@ -198,7 +198,7 @@ canonicaliser test module) — one per normative property:
 - `m133_escapes_unchanged` — `\{{` and `\\` behave exactly as before
   around stripped margins.
 - `m133_empty_and_singleline` — `""""""`, `"""x"""` unchanged.
-- Formatter: `sky fmt` twice byte-identical on a fixture containing an
+- Formatter: `ipe fmt` twice byte-identical on a fixture containing an
   indented multiline string; body not re-indented.
 
 Golden/E2E (`IPE_E2E=1`):

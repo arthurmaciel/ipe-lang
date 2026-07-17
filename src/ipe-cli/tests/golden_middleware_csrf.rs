@@ -2,7 +2,7 @@
 //!
 //! Pins that a `Ipe.Http.Server` route wrapped in `Middleware.withCsrf` emits
 //! `middleware_with_csrf(...)` and that the emitted crate `cargo build`s (the
-//! Seal: `skyc` exit 0 implies `cargo build` exit 0).
+//! Seal: `ipe` exit 0 implies `cargo build` exit 0).
 //!
 //! Compile-only assertions always run; the cargo build is `IPE_E2E=1`-gated
 //! with an ISOLATED `CARGO_TARGET_DIR` (a shared dir's fingerprint reuse can
@@ -34,7 +34,7 @@ fn compile() -> Option<Result<(), ipe::CliError>> {
     Some(ipe::build(&entry, &out, &runtime))
 }
 
-/// A `Server.post` route wrapped in `Middleware.withCsrf` must be skyc-0 and
+/// A `Server.post` route wrapped in `Middleware.withCsrf` must be ipe-0 and
 /// emit `middleware_with_csrf(...)` wrapping the handler.
 #[test]
 fn middleware_with_csrf_emits_wrapped_handler() {
@@ -43,7 +43,7 @@ fn middleware_with_csrf_emits_wrapped_handler() {
     };
     assert!(
         result.is_ok(),
-        "#63: Middleware.withCsrf-wrapped route must be skyc-0, got: {:?}",
+        "#63: Middleware.withCsrf-wrapped route must be ipe-0, got: {:?}",
         result.err(),
     );
     let main_rs = std::fs::read_to_string(out_dir().join("src").join("main.rs"))
@@ -55,7 +55,7 @@ fn middleware_with_csrf_emits_wrapped_handler() {
 }
 
 /// `IPE_E2E` tier: the emitted project must cargo-build (isolated target dir)
-/// — proves the seal (skyc exit 0 implies cargo build exit 0) for the new
+/// — proves the seal (ipe exit 0 implies cargo build exit 0) for the new
 /// `ServerResponse.cookies` field and the `middleware_with_csrf` kernel.
 #[test]
 fn middleware_with_csrf_cargo_builds() {

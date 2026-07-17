@@ -42,7 +42,7 @@ Principle order throughout: **security > correctness > soundness > efficiency >
 completeness > readability.**
 
 Path conventions in citations: `sky/` = Haskell generator
-(`/home/arthur/Documentos/comp/sky/src/Sky/Build/`); `insp` = vendored inspector
+(`/home/arthur/Documentos/comp/sky/src/Ipê/Build/`); `insp` = vendored inspector
 (`/home/arthur/Documentos/comp/sky-rust/tools/sky-ffi-inspect-rs/src/main.rs`);
 target seams = `/home/arthur/Documentos/comp/sky-rust/crates/`.
 
@@ -217,10 +217,10 @@ from different `.ipei` files unify. The mapper trusts the inspector's per-param
 `FfiGen.hs:94-98`); it does not re-derive it.
 
 **`NumCoerce` placement.** `num_coerce.rs` is the DAG leaf (no deps). One
-saturating helper pair: `num_saturate` (param, Sky width → foreign, clamps —
+saturating helper pair: `num_saturate` (param, Ipê width → foreign, clamps —
 `u64` from `i64` is `.max(0) as u64`; `usize`/`isize` route through `try_from`
 so they are 32-bit-correct by construction, which a bare `as` and all-64-bit CI
-would never catch) and `num_widen_scalar` (return, foreign → Sky carrier —
+would never catch) and `num_widen_scalar` (return, foreign → Ipê carrier —
 `u64::MAX` avoids the `as i64` sign-flip via `.min(i64::MAX as u64)`). **Every**
 scalar cast in `emit` and `instance` delegates here; a grep-fence test asserts
 no bare `as i64`/`as u64` outside `num_coerce`.
@@ -451,7 +451,7 @@ so `[sky-ffi]` feature-downgrade lines stay visible.
 **Cache.** `.ipe/cache/ffi/rust/<crate>.{ipei, kernel.json, _bindings.rs,
 coverage.md}` (`coverage.md` reports what was over-dropped — the keystone made
 visible). **Never regenerated on a warm cache** — only an explicit `add`/
-`install` regenerates (mirrors the sky watch-cache rule). Cache key includes the
+`install` regenerates (mirrors the ipe watch-cache rule). Cache key includes the
 inspector's **nightly toolchain channel** so a pin bump re-inspects.
 
 **Rationale.** Argv-exec + phase separation + per-`add` trust make `ipe add` the

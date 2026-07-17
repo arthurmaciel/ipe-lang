@@ -18,14 +18,14 @@
 //! test covers).
 //!
 //! ```text
-//! cargo test -p skyc --test golden_aud08_function_name_collision
+//! cargo test -p ipe --test golden_aud08_function_name_collision
 //! ```
 
 use std::fs;
 use std::path::PathBuf;
 
 /// A runtime `false` the optimiser cannot fold — mirrors
-/// `crates/skyc/src/lib.rs`'s own test helper and the AUD-14 regression's.
+/// `crates/ipe/src/lib.rs`'s own test helper and the AUD-14 regression's.
 const fn false_marker() -> bool {
     std::hint::black_box(false)
 }

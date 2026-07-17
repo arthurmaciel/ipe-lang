@@ -1,4 +1,4 @@
-//! Go≡Rust parity fixtures for Std.Decimal.
+//! Go≡Rust parity fixtures for Ipe.Decimal.
 //!
 //! Every assertion below was verified against the Go oracle
 //! (`runtime-go/rt/decimal_kernel_test.go` + manual `go test` runs with the
@@ -129,7 +129,7 @@ fn div_exact_fraction() {
 
 #[test]
 fn div_precision_capped_to_16_dp_matches_go() {
-    // Go shopspring `Div` = `DivRound(…, 16)` (half-away-from-zero). Sky-Rust
+    // Go shopspring `Div` = `DivRound(…, 16)` (half-away-from-zero). Ipê-Rust
     // caps `decimal_div` to 16 dp with MidpointAwayFromZero, so non-terminating
     // quotients match the Go reference exactly.
     // 1/3 = 0.3333… → 17th digit 3 rounds down → sixteen 3s.

@@ -1,6 +1,6 @@
 //! Expression and function emission.
 //!
-//! Ports the relevant arms of `Sky/Generate/Rust/Builder/ExprEmitter.hs` and
+//! Ports the relevant arms of `Ipê/Generate/Rust/Builder/ExprEmitter.hs` and
 //! the function-item shape from `ModuleEmitter.hs`. The byte target is golden
 //! `main.rs` lines 129–137 (`main_update` / `ipe_main`).
 
@@ -37,7 +37,7 @@ fn indent_of(level: usize) -> String {
 ///
 /// The primary case is `Vec<IpeTask<A>>`: a list whose element type is or
 /// contains a task.  `IpeTask<A>` is a `Pin<Box<dyn Future …>>` — it has no
-/// `Clone` impl because polling a future to completion consumes it.  Sky's
+/// `Clone` impl because polling a future to completion consumes it.  Ipê's
 /// pure semantics guarantee re-evaluation is always correct, so the emitter
 /// can safely inline the value expression at every use site.
 ///
@@ -870,8 +870,8 @@ fn ir_type_contains_task(ty: &IrType) -> bool {
 
 /// The Rust spelling of a binary operator for use in infix emission.
 ///
-/// Every Sky core arithmetic/comparison/boolean operator maps to the
-/// identically-spelled Rust operator except `/=` (Sky inequality → Rust `!=`).
+/// Every Ipê core arithmetic/comparison/boolean operator maps to the
+/// identically-spelled Rust operator except `/=` (Ipê inequality → Rust `!=`).
 ///
 /// `IntDiv` and `Append` are listed here only to keep the match exhaustive
 /// (a compiler requirement when a new `BinOp` variant is added); they MUST
@@ -946,9 +946,9 @@ pub fn callee_name(ctx: &EmitCtx, callee: &Callee) -> DResult<String> {
 }
 
 /// Whether a kernel's runtime function takes its two arguments in the OPPOSITE
-/// order to the Sky call. The `Maybe` / `Result` mapping combinators are
+/// order to the Ipê call. The `Maybe` / `Result` mapping combinators are
 /// container-first in the runtime (`ipe_maybe_map(m, f)`) but function-first in
-/// Sky (`Maybe.map f m`); every other wired kernel matches the Sky order. Used by
+/// Ipê (`Maybe.map f m`); every other wired kernel matches the Ipê order. Used by
 /// the [`Expr::Call`] emitter to reverse the rendered argument list.
 const fn kernel_swaps_first_two(k: ipe_ir::KernelFn) -> bool {
     matches!(
@@ -956,17 +956,17 @@ const fn kernel_swaps_first_two(k: ipe_ir::KernelFn) -> bool {
         KernelFn::MaybeMap
             | KernelFn::MaybeAndThen
             | KernelFn::ResultMap
-            // `Result.andThen f r` / `Result.mapError f r` — Sky passes the
+            // `Result.andThen f r` / `Result.mapError f r` — Ipê passes the
             // fn first; the runtime `ipe_result_and_then(r, f)` /
             // `ipe_result_map_error(r, f)` take the container first.
             | KernelFn::ResultAndThen
             | KernelFn::ResultMapError
-            // `JsonDec.andThen f decoder` — Sky passes fn first; Rust runtime
+            // `JsonDec.andThen f decoder` — Ipê passes fn first; Rust runtime
             // `decode_and_then(decoder, f)` expects decoder first. `Config.andThen`
             // shares `decode_and_then`, so it needs the same reorder.
             | KernelFn::JsonDecAndThen
             | KernelFn::ConfigAndThen
-            // `Task.andThen f task` — Sky passes continuation first; Rust runtime
+            // `Task.andThen f task` — Ipê passes continuation first; Rust runtime
             // `task_and_then(task, f)` expects effect first so Rust evaluates the
             // effect expression BEFORE the continuation closure captures shared Db
             // pool values, preventing E0507 / E0382 move conflicts at connect-use
@@ -980,7 +980,7 @@ const fn kernel_swaps_first_two(k: ipe_ir::KernelFn) -> bool {
 /// Returns `Some(emitted)` for the three network-effect kernels
 /// (`HttpGet` / `HttpPost` / `HttpRequest`), which need a `task_map`
 /// closure that converts `ipe_runtime::HttpResponse` into the synthesised
-/// Sky record struct for `{body, headers, status}`.
+/// Ipê record struct for `{body, headers, status}`.
 ///
 /// `HttpParseQuery` returns `HashMap<String,String>` which is exactly
 /// `Dict String String` — the standard `Expr::Call` emitter is correct
@@ -1091,7 +1091,7 @@ fn emit_http_call(
             // field exactly once into `ipe_runtime::HttpRequest`. The runtime
             // struct uses `#[allow(non_snake_case)]` camelCase field names
             // verbatim — `followRedirects`, `maxRedirects` — so they must match
-            // here exactly. The Sky names emit via `emit_ident` as-is (none are
+            // here exactly. The Ipê names emit via `emit_ident` as-is (none are
             // Rust keywords); the runtime names are string literals.
             Ok(Some(format!(
                 "({{ let __req = {req_s}; task_map(Box::new({conv}), \
@@ -1325,13 +1325,13 @@ fn emit_http_builder_call(
 /// Handle Db kernel calls that require `SqlValue` / `SqlField` boundary
 /// projection.
 ///
-/// The Sky surface for parameterised Db calls (`Db.exec`, `Db.query`,
+/// The Ipê surface for parameterised Db calls (`Db.exec`, `Db.query`,
 /// `Db.queryDecode`, `Db.insertFields`, `Db.updateFields`,
 /// `Db.insertFieldsReturning`) passes a `List SqlValue` or
-/// `List (String, SqlField)` as a plain Sky argument. The runtime's typed-param
+/// `List (String, SqlField)` as a plain Ipê argument. The runtime's typed-param
 /// functions (`db_exec_params`, `db_query_params`, …) expect `Vec<SqlParam>` /
 /// `Vec<(String, Option<SqlParam>)>`. The projection is emitted INLINE at the
-/// call site — the Sky list is converted with a short `.into_iter().map(…)`
+/// call site — the Ipê list is converted with a short `.into_iter().map(…)`
 /// chain so the compiler never needs separate IR types for the two.
 ///
 /// Kernels that accept only `Db` / `String` / `Int` / plain Dict arguments (no
@@ -1606,7 +1606,7 @@ fn emit_db_call(
     //     std's blanket `impl<T, U: From<T>> Into<U> for T` makes `.into()`
     //     resolve identically to the old `SqlParam::from(x)` call for every
     //     one of them — no behaviour change for a concrete element type.
-    //   • A still-generic `T{n}` (a Sky wrapper function forwarding its own
+    //   • A still-generic `T{n}` (a Ipê wrapper function forwarding its own
     //     `List a` parameter into `Db.exec` / `Db.query` / `Db.queryDecode`,
     //     e.g. `Database.exec label sql args` in `examples/17-skymon`) can
     //     only be bounded via the STANDARD `<T{n}: Trait>` generic-parameter
@@ -1623,11 +1623,11 @@ fn emit_db_call(
         // infer which `Into<SqlParam>` impl to use — the turbofish form names
         // the element type explicitly and skips the map/collect entirely.
         // Kept as defence-in-depth (the type-checker's defaulting normally
-        // gives an empty Sky `[]` literal a concrete `SqlValue` element type
+        // gives an empty Ipê `[]` literal a concrete `SqlValue` element type
         // before it ever reaches this closure — see the `sql_param` arm of
         // the numeric-defaulting loop in `ipe_types::lib` — but a bare
         // `Vec::new()` remains a possible input from any other empty-list
-        // source, e.g. a Sky-level `List.filter (always False) xs`).
+        // source, e.g. a Ipê-level `List.filter (always False) xs`).
         if s == "Vec::new()" {
             return "Vec::<ipe_runtime::db::SqlParam>::new()".to_string();
         }
@@ -1803,7 +1803,7 @@ fn emit_db_call(
         // (reference `Std/Db.ipe:237`), lowered to the synthesised struct with
         // those two fields. The runtime `db_migrate_apply` takes `Vec<(String,
         // String)>`, so map each record to a `(name, sql)` tuple — the exact
-        // shape the reference's pure-Sky `migrate` produces via `List.map (\m ->
+        // shape the reference's pure-Ipê `migrate` produces via `List.map (\m ->
         // (m.name, m.sql))`.
         KernelFn::DbMigrate => {
             let conn_e = arg!(0, "conn")?;
@@ -2220,7 +2220,7 @@ fn emit_tea_call(
 /// its enclosing non-`Copy` locals (the `header`/`body` `String`s of a
 /// Csv-stream handler); the re-embedded box steals them from the `move |_x|`
 /// wrapper's env on the first call, so the wrapper degrades to `FnOnce` and
-/// `server_stream_stream`'s `Fn` bound rejects it (`E0507` after `skyc` exit
+/// `server_stream_stream`'s `Fn` bound rejects it (`E0507` after `ipe` exit
 /// 0 — a SEAL break). The lowerer's capture-clone rewrite only reaches INTO
 /// the handler body; this synthesized wrapper is emit-only, invisible to it.
 ///
@@ -2336,7 +2336,7 @@ fn emit_server_call(
         // Fix: apply the SAME re-wrap technique used for
         // `html_on_raw_`/`ui_on_submit_` — re-embed the box construction as
         // SOURCE inside a freshly-declared closure built anew at the call
-        // site, so the wrapper's own Send+Sync-ness depends only on the Sky
+        // site, so the wrapper's own Send+Sync-ness depends only on the Ipê
         // closure's legitimate `move` captures, never the erased trait-object
         // type.
         KernelFn::StreamStream => {
@@ -2412,7 +2412,7 @@ fn emit_server_call(
     }
 }
 
-/// Find a record field by its Sky source name in an IR field list.
+/// Find a record field by its Ipê source name in an IR field list.
 ///
 /// Searches `fields` linearly for the entry whose interned symbol resolves to
 /// `name`.  Returns a reference to the field's value expression on success.
@@ -2465,7 +2465,7 @@ fn lookup_field<'f>(
 /// file): eta-wrap the emitted callback in a fresh `Arc`-owned closure
 /// `::std::sync::Arc::new(move |_x| (f)(_x))`. Rust infers `_x`, so ONE wrap
 /// serves every arity-1 callback regardless of arg type (`String` or `bool`) or
-/// return type (`Msg` or `Element<Msg>`). The wrap is sound: an emitted Sky
+/// return type (`Msg` or `Element<Msg>`). The wrap is sound: an emitted Ipê
 /// callback is always `'static` (it captures no borrow-lifetime context), so the
 /// `move` capture yields a `Send + Sync` `Arc`. This is the reference's uniform
 /// Arc-callback policy applied at the call-argument boundary.
@@ -2502,7 +2502,7 @@ fn arc_callback_wrap(f_s: &str) -> String {
 ///
 /// Only a `let` whose value is a bare `Var`/`CloneVar` is peeled — a pure
 /// alias/clone of an outer symbol whose hoist out of the `move` closure is
-/// always semantics-preserving (Sky values are immutable). A `let` binding a
+/// always semantics-preserving (Ipê values are immutable). A `let` binding a
 /// COMPUTED value stays inside, untouched, so no re-ordering of effects or
 /// widening of a capture's scope can occur. When there are no such leading
 /// `let`s the output is byte-identical to the previous
@@ -5076,11 +5076,11 @@ fn emit_ui_call(
         //   emit: ipe_runtime::ui::helpers::ui_on_click_(msg_expr)
         //
         // String-carrying events (onInput/onChange/onKeyDown/onKeyUp) — T6 trap:
-        //   The Sky fn arg is an emitted Rust fn-value (closure or fn-ptr).
+        //   The Ipê fn arg is an emitted Rust fn-value (closure or fn-ptr).
         //   The runtime requires `Arc<dyn Fn(String)->M+Send+Sync>`.
         //   We emit: ui_on_input_(std::sync::Arc::new(move |_x| (f)(_x)))
         //   This is sound: the Arc captures `f` by move; `f` is always 'static
-        //   since emitted Sky fns carry no borrow-lifetime context.
+        //   since emitted Ipê fns carry no borrow-lifetime context.
 
         // `Ui.onClick / Event.onClick : msg -> Attribute msg`
         KernelFn::UiOnClick => {
@@ -5264,7 +5264,7 @@ fn emit_ui_call(
         // arms above do: `f_s`'s box-construction is re-embedded as SOURCE
         // inside the wrapper's body, so it is built anew on every call
         // rather than captured — the wrapper's own Send+Sync-ness then
-        // depends only on the Sky closure's legitimate `move` captures
+        // depends only on the Ipê closure's legitimate `move` captures
         // (Send+'static by construction), not on the erased trait-object
         // type.
         //
@@ -5291,7 +5291,7 @@ fn emit_ui_call(
             // Type-directed dispatch. The lowerer classified the handler
             // by its SOLVED type; a non-arrow value routes to the fixed-dispatch
             // runtime helper (no `(m)(_x)` call against a non-callable value —
-            // the reported cargo `E0618` after `skyc` exit 0). An arrow handler
+            // the reported cargo `E0618` after `ipe` exit 0). An arrow handler
             // keeps the decode-and-map path. `NotForm` is unreachable for the
             // onSubmit kernel and fails closed rather than guessing.
             let call = match on_form {
@@ -5317,7 +5317,7 @@ fn emit_ui_call(
         // runtime constructor. The fixed wire event name (`"click"`, `"input"`,
         // …) is a compile-time constant from `html_event_wire_name`; the payload
         // shape (Msg / String / Bool / Raw) comes from `html_event_shape`. The
-        // `String`/`Bool` forms Arc-wrap the emitted Sky fn (`f` is a 'static
+        // `String`/`Bool` forms Arc-wrap the emitted Ipê fn (`f` is a 'static
         // closure); the `Raw` (onSubmit) form (`html_on_raw_`) builds
         // `Event::OnForm` with the concrete payload type recovered by Rust
         // generic inference on the emitted closure — never a type-erased
@@ -5367,12 +5367,12 @@ fn emit_ui_call(
                 // call, inside the wrapping closure's body, so it is never
                 // part of the wrapping closure's captured environment and
                 // the wrapping closure's own Send+Sync-ness depends only on
-                // whatever the Sky closure itself legitimately captures
+                // whatever the Ipê closure itself legitimately captures
                 // (`move` locals, all Send+'static by construction). Apply
                 // the same technique here so `F` is this freshly-Sync outer
                 // closure, not the non-Sync boxed trait object.
                 //
-                // `onSubmit`'s Sky-level scheme (`constrain.rs`'s
+                // `onSubmit`'s Ipê-level scheme (`constrain.rs`'s
                 // `HtmlEventShape::Raw` arm) deliberately leaves the argument
                 // type UNCONSTRAINED (decoupled from `msg`) so the typed-
                 // record decode idiom above works. That also legitimately
@@ -5384,7 +5384,7 @@ fn emit_ui_call(
                 // pages). `payload_s` there renders as the bare enum value
                 // itself (e.g. `MainMsg::DoSignUp`), which is NOT callable —
                 // `(payload_s)(_x)` is E0618 ("expected function, found
-                // MainMsg"), a skyc-exit-0-then-cargo-fail SEAL violation.
+                // MainMsg"), a ipe-exit-0-then-cargo-fail SEAL violation.
                 // `lower_expr`'s `VarCtor` arm already proves the shape: a
                 // NULLARY constructor reference lowers straight to
                 // `Expr::Ctor { args: [] }` (a saturated value), while a
@@ -5413,7 +5413,7 @@ fn emit_ui_call(
                 //
                 // FixedValue → dispatch the value directly via
                 // `html_on_raw_fixed_` (no `(payload_s)(_x)` call against a
-                // non-callable value — the reported cargo `E0618` after `skyc`
+                // non-callable value — the reported cargo `E0618` after `ipe`
                 // exit 0). Decoder → the wrap-and-call path: `payload_s` (a
                 // `Box<dyn Fn(T) -> M + Send + 'static>` trait object) is
                 // re-embedded as SOURCE inside a freshly-declared wrapper
@@ -5605,7 +5605,7 @@ fn emit_ui_call(
         }
 
         // ── Ipe.Ui.Lazy — deferred subtree helpers ───────────────────────────
-        // Each variant carries (f, a..e) — f is a function-valued Sky expr;
+        // Each variant carries (f, a..e) — f is a function-valued Ipê expr;
         // we eta-wrap it so any callable shape (fn item, Box<dyn Fn>, closure)
         // is accepted by the `impl Fn` bound without Arc overhead.
         // Arg order MUST match the runtime signature; a swap is a silent bug.
@@ -5862,7 +5862,7 @@ pub fn emit_expr_at(
         // value keeps its decimal point (`3.0`) so Rust never types it as an
         // integer; see [`float_literal`].
         Expr::Float(f) => Ok(float_literal(*f)),
-        // A string literal renders as an owned `String` (Sky `String` is Rust
+        // A string literal renders as an owned `String` (Ipê `String` is Rust
         // `String`, never `&str`). The `{:?}` Debug form produces a valid Rust
         // string literal with deterministic escaping.
         Expr::Str(s) => Ok(format!("{s:?}.to_string()")),
@@ -5902,7 +5902,7 @@ pub fn emit_expr_at(
                 // `//` (integer division). Raw Rust `/` on `i64` panics on
                 // `b == 0` AND on `i64::MIN / -1`; `//` is itself a Rust line
                 // comment, so raw infix emit is doubly unsound. Route through
-                // the total helper that matches Sky-Go `rt.IntDiv` semantics:
+                // the total helper that matches Ipê-Go `rt.IntDiv` semantics:
                 // b==0 → panic("attempt to divide by zero") (abort, exit 101);
                 // i64::MIN / -1 → i64::MIN (wrapping, no abort).
                 BinOp::IntDiv => Ok(format!("ipe_runtime::math::ipe_int_div({l}, {r})")),
@@ -5928,7 +5928,7 @@ pub fn emit_expr_at(
             //
             // `Vec<IpeTask<A>>` (a list of tasks) is non-Clone: using the binding
             // more than once causes E0382 "use of moved value" because the first
-            // call moves the Vec.  Sky has pure/immutable semantics so re-
+            // call moves the Vec.  Ipê has pure/immutable semantics so re-
             // evaluating the value at each use site is always correct — inline it
             // when the value is a task-containing list AND the body uses the name
             // more than once.  Plain Clone/Copy bindings (Int, Bool, records, …)
@@ -6044,7 +6044,7 @@ pub fn emit_expr_at(
                     return Ok(result);
                 }
                 // Dict.get borrows semantics: the runtime takes the HashMap by
-                // value, but Sky dicts are persistent — the same dict binding may
+                // value, but Ipê dicts are persistent — the same dict binding may
                 // be passed to multiple Dict.get calls in one let-chain (e.g.
                 // `let a = Dict.get "a" d; let b = Dict.get "b" d`).  Cloning the
                 // dict arg before each call keeps the original binding alive and
@@ -6087,8 +6087,8 @@ pub fn emit_expr_at(
                 parts.push(emit_expr_at(ctx, arg, indent, child, generics)?);
             }
             // A handful of Maybe/Result kernels take the container BEFORE the
-            // function in the runtime (`ipe_maybe_map(m, f)`) whereas Sky passes
-            // the function first (`Maybe.map f m`). The lowerer keeps the Sky
+            // function in the runtime (`ipe_maybe_map(m, f)`) whereas Ipê passes
+            // the function first (`Maybe.map f m`). The lowerer keeps the Ipê
             // order; re-point the two arguments here so the runtime call is
             // well-formed.
             if matches!(callee, Callee::Kernel(k) if kernel_swaps_first_two(*k)) {
@@ -6144,7 +6144,7 @@ pub fn emit_expr_at(
             //
             // Type-directed Copy elision (AUD-09 — see
             // `docs/adr/0011-emitter-clone-borrow-discipline.md`
-            // §3): Sky is a purely-functional language with value semantics,
+            // §3): Ipê is a purely-functional language with value semantics,
             // so every field read is logically a copy.  A field whose solved
             // type is UNCONDITIONALLY `Copy` in the emitted Rust (Int / Float
             // / Bool / Char / Unit / Order / Decimal / ErrorKind / the Copy
@@ -6390,7 +6390,7 @@ fn emit_ctor(
 /// `String` scrutinees match against `scrut.as_str()` because Rust string
 /// literal patterns are `&str`; any top-level binder in such an arm is rebound
 /// to an owned `String` (`let name = name.to_string();`) so the arm body sees
-/// the Sky `String` type, keeping the lowering sound. Kept out of the
+/// the Ipê `String` type, keeping the lowering sound. Kept out of the
 /// `emit_expr_at` match (`#[inline(never)]`) for the same frame-size reason as
 /// the neighbouring helpers.
 #[inline(never)]
@@ -6765,7 +6765,7 @@ fn emit_ctor_arm_pat(
         // field is boxed in the enum (`Box<Self>`), so the clone-rebuild
         // path must re-derive its binders from the UNBOXED temp — otherwise
         // both the alias binder and the inner bindings stay `Box<T>` where
-        // `T` is required (skyc-0-then-cargo-E0308). Bind the field to a fresh
+        // `T` is required (ipe-0-then-cargo-E0308). Bind the field to a fresh
         // raw temp, then re-derive the whole alias shape via the
         // `emit_binding_stmts` machinery against `*temp`.
         if self_edge && pat_contains_alias_in_arm(sub) {
@@ -6806,7 +6806,7 @@ fn emit_ctor_arm_pat(
 
 /// Build the `let name = name.to_string();` prelude that rebinds every top-level
 /// binder a string-match arm introduces from `&str` to an owned `String`, so the
-/// arm body sees the Sky `String` type. A variable binds itself; an alias binds
+/// arm body sees the Ipê `String` type. A variable binds itself; an alias binds
 /// its name and recurses into its inner pattern; a wildcard / literal binds
 /// nothing.
 fn str_binder_rebinds(ctx: &EmitCtx, pat: &Pat) -> DResult<String> {
@@ -6853,7 +6853,7 @@ fn collect_str_rebinds(ctx: &EmitCtx, pat: &Pat, out: &mut String) -> DResult<()
 /// In LIST mode the scrutinee is matched as a slice (`(v).as_slice()`), so every
 /// binder a list arm introduces is a borrow: an ELEMENT binder is `&T` and a
 /// REST / whole-list binder is `&[T]`. This builds the `let … = …;` prelude that
-/// rebinds each to the owned Sky value the arm body expects — an element via
+/// rebinds each to the owned Ipê value the arm body expects — an element via
 /// `.clone()` (so the body sees `T`), a rest / whole list via `.to_vec()` (so the
 /// body sees `Vec<T>`). Cloning is the sound owned destructure of a shared slice;
 /// the lowerer gates a list `case` binding a still-generic (non-`Clone`) element
@@ -7315,7 +7315,7 @@ fn render_arm_pat_alias_safe(
 /// `as`-alias must NOT render as `name @ inner`. That binds BOTH the whole
 /// (`name`) and the sub-bindings by move, a partial move (`E0382`) for any
 /// non-`Copy` payload (`\((a, b) as whole) -> …` over `(String, String)` is
-/// otherwise `skyc`-0 then `cargo`-101). Instead the whole is bound first and
+/// otherwise `ipe`-0 then `cargo`-101). Instead the whole is bound first and
 /// the inner shape is destructured from a CLONE:
 ///
 /// ```ignore
@@ -7506,7 +7506,7 @@ const WEBSOCKET_CFG_FIELDS: &[&str] = &["headers", "pingInterval", "timeout", "u
 /// lowerer folded the shape to `IrType::ServerResponse`) constructs the runtime
 /// `ipe_runtime::server::ServerResponse` struct. That struct carries one EXTRA
 /// runtime-only field, `cookies: Vec<String>` (multi-`Set-Cookie` support),
-/// which the Sky record alias does not expose — so the literal must default it
+/// which the Ipê record alias does not expose — so the literal must default it
 /// to `Vec::new()`. Kept in sync with `ipe_lower::lower::SERVER_RESPONSE_FIELD_TYPES`.
 const SERVER_RESPONSE_FIELDS: &[&str] = &["body", "contentType", "headers", "status"];
 
@@ -7555,7 +7555,7 @@ fn emit_record(
         key.push(ctx.resolve_ident(*sym)?.to_owned());
     }
     // `true` when the shape folds to the runtime `ServerResponse` struct, which
-    // carries an extra `cookies: Vec<String>` field the Sky record alias omits.
+    // carries an extra `cookies: Vec<String>` field the Ipê record alias omits.
     let mut is_server_response = false;
     let struct_name: String = {
         // Prefer an actual synthesised struct when one is registered for
@@ -7619,7 +7619,7 @@ fn emit_record(
             // `defaultMessage`/`defaultAttachment`/… built literal has no
             // registered struct (folded to the matching `IrType::Email*`), so it
             // constructs the runtime struct (re-exported bare via `pub use
-            // email::*`). The Sky `Attachment` alias maps to `EmailAttachment`.
+            // email::*`). The Ipê `Attachment` alias maps to `EmailAttachment`.
             let name_set_is = |expected: &[&str]| {
                 sorted.len() == expected.len()
                     && sorted
@@ -7657,7 +7657,7 @@ fn emit_record(
         parts.push(format!("{field_ident}: {rendered}"));
     }
     if is_server_response {
-        // The runtime struct's multi-`Set-Cookie` field is not part of the Sky
+        // The runtime struct's multi-`Set-Cookie` field is not part of the Ipê
         // record alias; default it so the struct literal is complete.
         parts.push("cookies: Vec::new()".to_owned());
     }
@@ -8119,7 +8119,7 @@ fn render_bounds(bounds: BoundSet, n: usize) -> String {
         // mentions that type-param requires `tv: 'static` for the trait-object
         // coercion. A LIFETIME bound — Rust requires it to PRECEDE every trait
         // bound in the list (`T{n}: 'static + Clone`), so it is pushed FIRST.
-        // Satisfied by every concrete Sky type (emitted values never borrow),
+        // Satisfied by every concrete Ipê type (emitted values never borrow),
         // so no caller-side failure — see `BoundSet::STATIC`.
         traits.push("'static".to_owned());
     }
@@ -8128,7 +8128,7 @@ fn render_bounds(bounds: BoundSet, n: usize) -> String {
         // closure (`Box<dyn FnOnce(..) + Send>`) — e.g. `WebSocket.onOpen`'s
         // `msg` into `sub_subscribe_ws_open<M: Send + 'static>`. Pushed after the
         // `'static` lifetime bound (a lifetime must precede trait bounds).
-        // Satisfied by every concrete Sky type (owned, never borrows).
+        // Satisfied by every concrete Ipê type (owned, never borrows).
         traits.push("Send".to_owned());
     }
     if bounds.has_add() {
@@ -8147,7 +8147,7 @@ fn render_bounds(bounds: BoundSet, n: usize) -> String {
         traits.push("PartialEq".to_owned());
     }
     if bounds.has_show() {
-        // Sky `toString` / `Log.*With`: the value must render. Fully qualified —
+        // Ipê `toString` / `Log.*With`: the value must render. Fully qualified —
         // the trait is not in the Rust prelude. Every emitted record/ADT + every
         // scalar has a `IpeStringify` impl.
         traits.push("crate::ipe_runtime::stringify::IpeStringify".to_owned());
@@ -8296,7 +8296,7 @@ fn elide_task_run_tail(expr: &Expr) -> Option<Expr> {
 /// synchronously either way (a bare `task_run()` call blocks in place); the
 /// wrap only reshapes the return type so `block_on` type-checks:
 ///
-/// * `func.ret == Unit` — Sky CLI programs that use synchronous `task_run()`
+/// * `func.ret == Unit` — Ipê CLI programs that use synchronous `task_run()`
 ///   calls (instead of building a top-level Task pipeline). The caller wraps:
 ///   `let _r = { <original body> }; task_succeed(())` — `ipe_main` returns
 ///   `IpeTask<()>`, discarding the body's (unit) value. Signalled by the
@@ -8479,7 +8479,7 @@ pub fn emit_func(ctx: &EmitCtx, func: &Func) -> DResult<String> {
 /// quantified variable in declaration order, the position fixing its `T{i+1}`
 /// name. Empty string for a monomorphic function.
 ///
-/// `Clone` is always included: Sky has value semantics so every type must be
+/// `Clone` is always included: Ipê has value semantics so every type must be
 /// cloneable (field reads emit `.clone()` to prevent partial-move errors). For
 /// `Copy` types (`i64`, `bool`, …) the bound is trivially satisfied.
 ///

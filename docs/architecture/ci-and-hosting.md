@@ -57,7 +57,7 @@ Woodpecker agent, no systemd service, no "if the dev box is off, CI queues."
    recorded as an `oracle_divergence`, never cached as "correct" (the Go oracle
    can panic / fail to produce a reference on a shape — see
    `repo-layout-and-mirroring.md`).
-5. **E2E needs the Sky runtime.** Until the repo reorg vendors it
+5. **E2E needs the Ipê runtime.** Until the repo reorg vendors it
    (`vendor/upstream-sky`, see `repo-layout-and-mirroring.md`), the `e2e` shards
    **self-skip** (`::notice::`) and CI stays green; they auto-activate once the
    runtime is vendored as a submodule (`actions/checkout … submodules: recursive`).

@@ -12,7 +12,7 @@
 //!   `(Non, b)`): lowered to a real exhaustive Rust match over the constructor —
 //!   `match pair { (MainOpt::Som(x), b) => …, (MainOpt::Non, b) => … }`.
 //!
-//! Each is driven through the full `skyc` pipeline; the build MUST SUCCEED (no
+//! Each is driven through the full `ipe` pipeline; the build MUST SUCCEED (no
 //! IPE-L0115, no other diagnostic) and — behind `IPE_E2E=1` — the emitted crate
 //! MUST build with cargo and print the reference value `3`. The anti-goal the
 //! original gate guarded against (silent, cargo-FAILING refutable Rust) is

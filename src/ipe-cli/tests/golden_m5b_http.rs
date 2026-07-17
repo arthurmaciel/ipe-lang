@@ -2,7 +2,7 @@
 //! `Http.parseQuery` (pure), `defaultRequest` + `with*` builder chain (pure),
 //! and `HttpResponse` record literal / field access (pure struct path).
 //!
-//! Every test compiles a Sky program through `skyc`, builds the emitted Rust
+//! Every test compiles a Ipê program through `ipe`, builds the emitted Rust
 //! project with the shared cargo target, runs the binary, and checks its stdout
 //! against the cached oracle (`tests/golden/m5b_http_*/oracle.meta` +
 //! `expected_go.txt`). All tests are gated on `IPE_E2E=1`; without it they
@@ -51,7 +51,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
     root.join("tests").join("golden").join(name)
 }
 
-/// Compile `tests/golden/<name>/Main.ipe` through skyc, build the emitted Rust
+/// Compile `tests/golden/<name>/Main.ipe` through ipe, build the emitted Rust
 /// project with the shared cargo target, run the binary, and return the golden
 /// directory plus the run outcome. Gated on `IPE_E2E=1`.
 fn build_run(name: &str) -> (PathBuf, support::RunOutcome) {
@@ -167,7 +167,7 @@ fn http_default_request_emits_without_signature_consumer() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for a HttpRequest built via \
+        "ipe build must succeed for a HttpRequest built via \
          Http.defaultRequest whose only consumer is a field read (no \
          Http.request call, no signature spelling out the fieldset); \
          got: {:?}",

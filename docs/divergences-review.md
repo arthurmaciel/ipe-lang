@@ -10,7 +10,7 @@
 > efficiency > completeness > readability. Two governing rules: *parse, don't
 > validate*; *make invalid states unrepresentable*.
 >
-> **Public-artifact rule (enforced in every line below):** neither Elm nor Sky
+> **Public-artifact rule (enforced in every line below):** neither Elm nor Ipê
 > is characterized as buggy, wrong, or limited. Every departure is stated as
 > *what differs* plus *the technical rationale*. Where ipê matches Go or Elm
 > more closely than the upstream reference does, the framing is "ipê follows
@@ -48,19 +48,19 @@ diverged, the row records it and gives the reconciled call.
 | P1 | FEATURE | Typed Go/Rust native/server/desktop/WASM target — the root fact. | Lead (headline) |
 | P2 | FEATURE | Server-driven TEA over SSE; state + secrets stay server-side. | Lead |
 | P3 | FEATURE | One pure `view`, three backends (web/TUI/desktop). | Lead |
-| U1 | NEUTRAL→FEATURE | Server-rendered `Std.Ui`; the sellable angle is "no client build." | Support |
+| U1 | NEUTRAL→FEATURE | Server-rendered `Ipe.Ui`; the sellable angle is "no client build." | Support |
 | U2 | FEATURE | Typed pseudo/media/animation/grid surface elm-ui lacks, keeping "never write CSS." | Support |
 | U3 | NEUTRAL | Asymmetric `Ui.fill` lowering — a Flexbox §9.8 indefinite-height fix. | Omit (footnote) |
 | U4 | FEATURE | No `data-sky-eval`/eval sink, HTML-escape-everything, CSP-strict. | Lead (security) |
 | R1 | NEUTRAL | Haystack-first `*In` companions; both forms ship. | Omit |
 | R2 | NEUTRAL | `ToString.*` discoverability namespace. | Omit |
-| R3 | INTERIM `[with arity-0 fix]` | `Sky.Core.Pure` arity-0 companions — an admitted workaround for Limitation #7. Couples to B7. | Converging |
+| R3 | INTERIM `[with arity-0 fix]` | `Ipe.Pure` arity-0 companions — an admitted workaround for Limitation #7. Couples to B7. | Converging |
 | R4 | FEATURE | Task error slot fixed to `Error` (no `Never`-task) — mandate at the type level. Caveat: loses Elm's `Task Never a` infallible expressiveness. | Support |
 | R5 | NEUTRAL (mostly) | Browser/ports/`Debug`/`Tuple` omission is sound; **`Array`/`Bitwise` absence is a capability gap, not a clean omission** — see §6. | Support w/ caveat |
 | STR1 | FEATURE | Code-point String semantics; no UTF-16 surrogate splitting. Caveat: code points ≠ graphemes — say "rune-correct," not "grapheme-correct." | Lead (w/ caveat) |
 | STR2 | NEUTRAL→FEATURE | Extra typed String surface (casefold/isEmail/words/lines). | Support |
 
-### Sky ledger — behavioral
+### Ipê ledger — behavioral
 
 | id | Verdict | One-line rationale | README treatment |
 |---|---|---|---|
@@ -73,21 +73,21 @@ diverged, the row records it and gives the reconciled call.
 | **B7** | **RECONSIDER / INTERIM** `[with arity-0 fix]` | Bare `Uuid.v4 : String` evaluates — but typing entropy as the **pure** tier contradicts E2 (entropy lives in `Task`). **Disagreement:** R1 filed it INTERIM-as-feature; R2/R3 flag it as a soundness inconsistency. **Reconciled:** present once, consistently, as interim — never as a strength. See §5. | Converging (not a strength) |
 | B8 | FEATURE (verify) | `Uuid.parse` `Just` on a canonical UUID. **R3 caveat:** confirm this is genuine parse semantics, not the same arity-0 codegen artifact as B7. See §5. | Support (pending verify) |
 | B9 | INTERIM `[pre-push]` | Jwt flat-kernel; builder-API programs don't compile yet, though token bytes are byte-identical to Go. | Converging |
-| B10 | NEUTRAL | `Std.Db` on sqlx vs cgo/SQLite — substrate. | Omit |
-| B11 | INTERIM `[post-DONE, low]` | `Std.Ui` HTML skeleton; semantically correct now, byte-parity later. | Converging |
+| B10 | NEUTRAL | `Ipe.Db` on sqlx vs cgo/SQLite — substrate. | Omit |
+| B11 | INTERIM `[post-DONE, low]` | `Ipe.Ui` HTML skeleton; semantically correct now, byte-parity later. | Converging |
 | B12 | NEUTRAL | `Cmd`/`Sub` construct-only; the reference has no equivalent surface. | Omit |
 | B13 | FEATURE | Recursive enums through tuple/record boxing + Set shapes the reference can't build — ipê handles strictly more. | Support |
 | B14 | FEATURE | Runtime-fork hardening: auth fail-close, JWT `now==exp` reject (RFC-correct), SSRF-deny-default, saturating counters, env lock, telemetry CRLF/control scrub. | **Lead (flagship security)** |
 | B15 | FEATURE | Float sci-notation exp≥6 = Go `%v` parity (confirmed vs Go 1.26.2). Package as "ipê matches Go byte-for-byte; the reference's fork differs." | Support (trust signal) |
 
-### Sky ledger — architectural
+### Ipê ledger — architectural
 
 | id | Verdict | One-line rationale | README treatment |
 |---|---|---|---|
 | A1 | NEUTRAL | Rust-all-the-way single-language port structure. | Omit |
 | A2 | FEATURE | Typed IR checkpoint — malformed shapes unrepresentable vs AST→string. | Lead |
 | A3 | FEATURE | Typed `TailRecur`/`TailLoop` → Rust `loop`; constant stack where the reference's Rust backend has no TCO. Soundness win. | Lead |
-| A4 | FEATURE | Closed 424-variant `KernelFn`, fail-closed `IPE-L0108` vs a fail-open snake_case path; kills the "skyc exits 0, cargo fails" class. | Lead (security) |
+| A4 | FEATURE | Closed 424-variant `KernelFn`, fail-closed `IPE-L0108` vs a fail-open snake_case path; kills the "ipe exits 0, cargo fails" class. | Lead (security) |
 | A5 | FEATURE | `render_type → DResult`, no `"String"` default — total by construction. | Support |
 | A6 | NEUTRAL→FEATURE | First-class opaque `IrType` variants vs `{M}`-placeholder strings. | Support |
 | A7 | FEATURE (**watch**) | Exact-key record resolution, fail-loud > superset-widen + `"String"`. **All three reasoners: watch-item** — could reject a valid row-polymorphic subset/superset program the reference accepts. See §5. | Support (pending sweep gate) |
@@ -134,12 +134,12 @@ they are filed and sequenced, not hidden.
 | Item | What differs today | Target milestone |
 |---|---|---|
 | B3 — `Encoding.*` text path | Latin-1 char-as-byte over `String`; differs from Go for code points ≥ 0x80. | **Pre-push.** `Encoding.* → Bytes` primitive migration (unblocked — B2 exists). See §5. |
-| B7 + R3 — arity-0 entropy/kernel | Bare `Uuid.v4 : String`; entropy typed pure; `Sky.Core.Pure` workaround. | **Pre-push.** Arity-0 kernel codegen fix (Limitation #7) — one fix closes R3 + B7 (+ possibly B8). See §5. |
+| B7 + R3 — arity-0 entropy/kernel | Bare `Uuid.v4 : String`; entropy typed pure; `Ipe.Pure` workaround. | **Pre-push.** Arity-0 kernel codegen fix (Limitation #7) — one fix closes R3 + B7 (+ possibly B8). See §5. |
 | B9 — Jwt builder API | Flat kernels; builder-API programs don't compile (token bytes already identical to Go). | Pre-push. `Algorithm`/`Claims` ADT + record-alias emit. |
 | A13 + §4 — nested-ctor / refutable-arg / `.field` accessor | Rejected fail-closed; blocks idiomatic Elm patterns. | **Pre-push.** Shared front-end desugar workstream (closes A12 + A13 + accessor + S4). |
 | S4 — continuation-in-type-body | Parser rejects continuation inside the type body; extract a `type alias`. | Pre-push (folds into the front-end workstream). |
 | A8 — callback lowering | Uniform `Box<dyn Fn>`; reference-ahead 3-way split. | Post-DONE — when the derive/Clone callback subsystem lands. |
-| B11 — `Std.Ui` byte-parity | HTML skeleton differs byte-wise (semantically correct). | Post-DONE, low priority. |
+| B11 — `Ipe.Ui` byte-parity | HTML skeleton differs byte-wise (semantically correct). | Post-DONE, low priority. |
 
 ---
 
@@ -211,7 +211,7 @@ verify/fix action — candidates to file as tasks.
   reordering) — such passes could dedupe or reorder UUID generation.
 - **Root cause.** This is a symptom of the arity-0 kernel codegen limitation
   (#7), surfaced across two ledgers with **opposite valence**: the Elm ledger
-  (R3) calls it an honest workaround; the Sky ledger (B7) frames the same
+  (R3) calls it an honest workaround; the Ipê ledger (B7) frames the same
   limitation as ipê being "more useful." **Reconciled call:** present it once,
   consistently, as an interim codegen limitation converging — never as a
   strength.
@@ -252,7 +252,7 @@ are not yet filed. Reasoners converged on the first four.
 
 1. **Grapheme-cluster String surface** (additive `String.graphemes` /
    segmented length/truncation). STR1 is rune-correct but still splits ZWJ
-   emoji and combining sequences; `Sky.Tui` already vendors `uniseg`, so the
+   emoji and combining sequences; `Ipe.Tui` already vendors `uniseg`, so the
    machinery exists. File additive — do **not** change `length`. *Post-DONE.*
 2. **Unicode normalization (NFC/NFD)** for `String` equality / `equalFold` /
    `isEmail`. ipê is full-Unicode on casing but code-point-literal on equality
@@ -282,7 +282,7 @@ are not yet filed. Reasoners converged on the first four.
 
 ---
 
-## 7. README narrative outline — "How ipê relates to Elm and Sky"
+## 7. README narrative outline — "How ipê relates to Elm and Ipê"
 
 Suggested shape for the public section. Neutral voice throughout.
 

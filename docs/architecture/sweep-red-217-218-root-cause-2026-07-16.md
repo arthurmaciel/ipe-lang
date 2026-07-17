@@ -15,7 +15,7 @@ Rust backend + Go runtime) per DEVELOPMENT.md §0a.
 ```
 
 ```
-skyc: error[IPE-T0001]: type mismatch
+ipe: error[IPE-T0001]: type mismatch
   --> src/Auth.ipe:47:42
    |
 47 |                 |> Jwt.withClaim "email" (JsonEnc.string payload.email)
@@ -36,13 +36,13 @@ enforces is wrong**. Bisection of a `/tmp` copy (patch each blocker, re-run)
 shows the example trips **three distinct stdlib symbols whose contracts diverge
 from the reference `../sky/sky-stdlib`**, all one generative class:
 *kernel-backed stdlib surface authored in the scheme table instead of ported
-from the reference module's Sky-source signature.*
+from the reference module's Ipê-source signature.*
 
 | # | Symbol | Ours (drifted) | Reference (`../sky/sky-stdlib`) | Sites in example |
 |---|---|---|---|---|
 | 1 | `Jwt.withClaim` | `String -> String -> Claims -> Claims` — `crates/sky_types/src/constrain.rs:4878` (scheme), `crates/sky_kernels/src/lib.rs:470,1853` (decl), `runtime/src/sky_runtime/jwt.rs:416` (`sky_jwt_with_claim(key: String, value: String, …)`) | `withClaim : String -> JsonEnc.Value -> Claims -> Claims` — `Sky/Core/Jwt.ipe:79` (pure Sky, NO kernel upstream; every typed helper `issuer`/`expiresAt`/… is built ON it via `JsonEnc.string`/`JsonEnc.int`) | `src/Auth.ipe:47` |
-| 2 | `Sky.Http.Server.Response` | opaque nominal — `constrain.rs:267,590` (`server_response`, "the opaque server response type") | `type alias Response = { status : Int, body : String, headers : Dict String String, contentType : String }` — `Sky/Http/Server.ipe:66` (record alias; the example's comment at `Routes/Todos.ipe:226-229` documents that upstream *deliberately* builds it as a record literal) | `src/Server.ipe:128`, `src/Routes/Todos.ipe:232`, `src/Routes/Health.ipe:154` |
-| 3 | `Std.Db.Migration` + `Db.migrate` | `Migration` alias not registered at all; `Db.migrate : Db -> List (String, String) -> Task (List String)` — `constrain.rs:4376-4379` (`K::DbMigrate`) | `type alias Migration = { name : String, sql : String }` + `defaultMigration` — `Std/Db.ipe:237,246`; `migrate` takes `List Migration` | `src/Migrations.ipe` (4 bindings + `Main.ipe` call) |
+| 2 | `Ipe.Http.Server.Response` | opaque nominal — `constrain.rs:267,590` (`server_response`, "the opaque server response type") | `type alias Response = { status : Int, body : String, headers : Dict String String, contentType : String }` — `Sky/Http/Server.ipe:66` (record alias; the example's comment at `Routes/Todos.ipe:226-229` documents that upstream *deliberately* builds it as a record literal) | `src/Server.ipe:128`, `src/Routes/Todos.ipe:232`, `src/Routes/Health.ipe:154` |
+| 3 | `Ipe.Db.Migration` + `Db.migrate` | `Migration` alias not registered at all; `Db.migrate : Db -> List (String, String) -> Task (List String)` — `constrain.rs:4376-4379` (`K::DbMigrate`) | `type alias Migration = { name : String, sql : String }` + `defaultMigration` — `Std/Db.ipe:237,246`; `migrate` takes `List Migration` | `src/Migrations.ipe` (4 bindings + `Main.ipe` call) |
 
 Generative reason: the D-00/#152 Jwt builder (and the Server/Db type surfaces)
 were **authored, not ported** — the value-arg type was guessed as `String`, and
@@ -98,7 +98,7 @@ backlog item; 36-composite-server needs BOTH fixed to go green.
    of the same class; without the gate a third is guaranteed.
 
 **Invariant established:** for every surface shared with the reference, *the
-reference Sky-source signature IS the contract* — a scheme that drifts fails a
+reference Ipê-source signature IS the contract* — a scheme that drifts fails a
 gate at compiler-test time, not a user program at type-check time. Record
 aliases stay structural records (make-invalid-states-unrepresentable: an opaque
 nominal for a documented record alias makes valid programs unrepresentable).
@@ -134,7 +134,7 @@ class). Residual IPE-L0126 is reported, not root-caused (separate item).
 
 ---
 
-## #218 — 18-job-queue: SEAL breach (skyc exit-0, cargo E0507) — VERDICT: `wrap_shared_lambda_if_needed` breaks the clone relay at intermediate closure boundaries
+## #218 — 18-job-queue: SEAL breach (ipe exit-0, cargo E0507) — VERDICT: `wrap_shared_lambda_if_needed` breaks the clone relay at intermediate closure boundaries
 
 ### (a) Repro
 
@@ -155,7 +155,7 @@ Source: `examples/18-job-queue/src/Main.ipe:148-166` (`saveSnapshot`:
 `insertRow db ts = Db.exec …` / `writeAll db = … |> Task.andThen (\_ -> Time.now ())
 |> Task.andThen (\ts -> insertRow db ts)`) and the mirror `loadHistory:172-184`.
 
-### (b) Minimal trigger (18 lines, reproduced: skyc=0, cargo=101 E0507 on `insertRow`)
+### (b) Minimal trigger (18 lines, reproduced: ipe=0, cargo=101 E0507 on `insertRow`)
 
 ```elm
 save : Int -> Task Error Int
@@ -244,8 +244,8 @@ by construction:
   unconditionally (over-cloning; ADR-0002 records our leaner last-use
   divergence as sanctioned). Our #164 pass adopted the lean discipline but
   dropped the relay at boundaries that don't read the symbol directly.
-- Upstream `Jwt` (for #217) has no kernels at all: `withClaim` is pure Sky
-  (`skydex locate withClaim` → `sky-stdlib/Sky/Core/Jwt.ipe` binding only);
+- Upstream `Jwt` (for #217) has no kernels at all: `withClaim` is pure Ipê
+  (`skydex locate withClaim` → `sky-stdlib/Ipê/Core/Jwt.ipe` binding only);
   the ordinary HM checker types it from source — nothing to drift.
 
 ### (d) Structural fix + invariant
@@ -299,7 +299,7 @@ source-level intermediate closure).
 - New golden (i193 family, e.g. `golden_i193_clone_relay_intermediate_eta`):
   the 18-line trigger verbatim — let-bound fn read at depth ≥ 2 through a
   pipeline-synthesized eta closure with a non-Copy enclosing param — byte
-  golden + `IPE_E2E=1` (THE SEAL: skyc-0 ⇒ cargo-0).
+  golden + `IPE_E2E=1` (THE SEAL: ipe-0 ⇒ cargo-0).
 - A sibling variant with a SOURCE-level intermediate lambda (not
   eta-synthesized) that doesn't directly reference the symbol, pinning the
   class not the instance.

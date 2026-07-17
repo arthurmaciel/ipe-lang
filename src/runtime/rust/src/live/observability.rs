@@ -1,4 +1,4 @@
-//! Sky.Live observability endpoints — the operator surface mounted on every
+//! Ipe.Live observability endpoints — the operator surface mounted on every
 //! Live app, mirroring Go's `runtime-go/rt/observability.go`:
 //!
 //! - `GET /_sky/healthz`  — liveness probe, always `{"status":"ok"}`.
@@ -11,7 +11,7 @@
 //! handler returns a static or counter-derived body; nothing can fail.
 //!
 //! Out of scope here (staged for the console mini-app port): `/_sky/console/*`
-//! (the Std.Ui dashboard), `/_sky/observability/ingest` (sub-app federation), and
+//! (the Ipe.Ui dashboard), `/_sky/observability/ingest` (sub-app federation), and
 //! the in-RAM log/span ring buffers the console renders.
 
 use axum::http::{StatusCode, header};
@@ -81,7 +81,7 @@ pub async fn metrics() -> impl IntoResponse {
 /// axum middleware: per-request observability (Go parity — its access-log +
 /// OTel-span middleware wraps the whole mux). Counts every request, and for
 /// user-facing requests auto-records a span + an access log so the console has
-/// data without the app calling `Std.Trace`/`Std.Log` itself.
+/// data without the app calling `Ipe.Trace`/`Ipe.Log` itself.
 pub async fn track(
     req: axum::extract::Request,
     next: axum::middleware::Next,
@@ -98,7 +98,7 @@ pub async fn track(
     let start = std::time::Instant::now();
     let resp = next.run(req).await;
     let status = resp.status().as_u16();
-    // Feed the Sky Console telemetry (request count + 5xx error count).
+    // Feed the Ipê Console telemetry (request count + 5xx error count).
     super::super::telemetry::record_request(status);
     // Auto request span + access log — but NOT for the internal observability
     // surface (SSE long-poll → multi-minute span; console proxy / metrics /
@@ -179,7 +179,7 @@ fn normalize_method(method: &str) -> &'static str {
 }
 
 /// Cap the request path to a sane length and strip control characters before it
-/// is recorded into the telemetry rings / federation push. Mirrors the Sky.Tui
+/// is recorded into the telemetry rings / federation push. Mirrors the Ipe.Tui
 /// `sanitiseRune` discipline — the path is user-supplied and otherwise
 /// unbounded, a low-grade log-injection / memory-amplification vector.
 fn sanitise_path(path: &str) -> String {
@@ -307,7 +307,7 @@ mod tests {
     // Regression: a panicking handler must become a 500 (not an unwound, dropped
     // connection) AND still be counted by `track` as status 500 — the Go-parity
     // contract for the new `CatchPanicLayer` placed INNER of `track` in the
-    // Sky.Live router. Well-typed Sky can't panic (the no-panic thesis), so this
+    // Ipe.Live router. Well-typed Ipê can't panic (the no-panic thesis), so this
     // defense-in-depth floor can only be exercised from a test handler that
     // deliberately panics. NOTE: `.unwrap()`/`.expect()` are denied on ALL
     // targets (incl. tests); `panic!` and `match Infallible {}` are the allowed
@@ -332,7 +332,7 @@ mod tests {
             panic!("token=SECRET123 internal /etc/secret leaked")
         }
 
-        // Mirror the real Sky.Live nesting: track( catch_panic( handler ) ) with
+        // Mirror the real Ipe.Live nesting: track( catch_panic( handler ) ) with
         // the REAL shared responder. csrf is omitted — it only acts on mutating
         // methods, so a GET panic exercises the catch_panic→500 path + track's
         // post-`next.run` metering identically.

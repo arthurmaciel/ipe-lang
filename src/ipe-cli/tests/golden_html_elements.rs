@@ -1,6 +1,6 @@
 //! Batch 2 — Ipe.Html ELEMENT family end-to-end golden.
 //!
-//! Compiles `tests/golden/html_elements/Main.ipe` through `skyc`, builds the
+//! Compiles `tests/golden/html_elements/Main.ipe` through `ipe`, builds the
 //! emitted Rust project with the shared cargo target, runs the binary, and
 //! asserts on the rendered HTML. Gated on `IPE_E2E=1`.
 //!
@@ -44,7 +44,7 @@ fn html_element_family_renders_correct_tags() {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for html_elements: {:?}",
+        "ipe build must succeed for html_elements: {:?}",
         built.err()
     );
 

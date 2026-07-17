@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Backend-agnostic typed intermediate representation for the Sky compiler.
+//! Backend-agnostic typed intermediate representation for the Ipê compiler.
 //! This is the single boundary every backend consumes: the frontend lowers
 //! into [`Program`], backends read it and emit code. No frontend type leaks
 //! across this line.

@@ -2,13 +2,13 @@
 
 > **Status: Accepted (design) — not implemented.** Precondition: sweep is a real
 > 36/36 (green tree) AND no agent/autopilot is mid-run. Becomes an ADR once
-> landed. Pairs with `docs/rename/` (Sky→Ipê) and
+> landed. Pairs with `docs/rename/` (Ipê→Ipê) and
 > `namespace-imports-and-packaging-spec.md` (Ipe. namespace) — this is **Step A**
 > of that combined endgame.
 
 ## Why one campaign, three steps
 
-The layout move, the Sky→Ipê rename, and the `Sky.Core`+`Std`→`Ipe.` flatten
+The layout move, the Ipê→Ipê rename, and the `Ipê.Core`+`Std`→`Ipe.` flatten
 all rewrite the same files. Run as ONE campaign, sequenced so the tree stays
 green between steps (each ends on a full §6 gate + example sweep):
 
@@ -18,7 +18,7 @@ green between steps (each ends on a full §6 gate + example sweep):
 - **Step B — rename** (`docs/rename/`): `sky_*`→`ipe_*`, `IPE-`→`IPE-`, `IPE_`→
   `IPE_`, `.ipe`→`.ipe`, etc. Golden regen.
 - **Step C — namespace flatten** (`namespace-imports-and-packaging-spec.md`):
-  merge the relocated `Sky/Core`+`Std` stdlib into `Ipe/`, rewrite imports.
+  merge the relocated `Ipê/Core`+`Std` stdlib into `Ipe/`, rewrite imports.
 - **Step D — sanctioned fmt seal (#214), LAST.** The single `IPE_ALLOW_FMT=1
   cargo fmt --all` pass, its own commit, immediately before the end-of-campaign
   full gate + CI. Runs LAST because B (rename) and C (flatten) churn `.rs`
@@ -30,7 +30,7 @@ green between steps (each ends on a full §6 gate + example sweep):
   so the CI fmt gate can be switched on.
 
 Rationale: A is safe pure-motion; doing renames/flatten before the move would
-churn paths twice. Keeping `Sky/Core`+`Std` subdirs intact through Step A means
+churn paths twice. Keeping `Ipê/Core`+`Std` subdirs intact through Step A means
 no import touches until Step C. Fmt (D) is last so it seals the settled tree once
 rather than being re-churned by B/C.
 
@@ -38,12 +38,12 @@ rather than being re-churned by B/C.
 
 ```
 src/
-  ipe-cli/        <- crates/skyc/{Cargo.toml, src, tests}   (the CLI/driver; binary `ipe`)
-  compiler/       <- crates/* EXCEPT skyc  (sky_parse, sky_canon, sky_syntax, sky_types,
+  ipe-cli/        <- crates/ipe/{Cargo.toml, src, tests}   (the CLI/driver; binary `ipe`)
+  compiler/       <- crates/* EXCEPT ipe  (sky_parse, sky_canon, sky_syntax, sky_types,
                      sky_lower, sky_ir, sky_backend, sky_backend_rust, sky_kernels,
                      sky_diagnostics, sky_db, sky_intern, sky_watch)
   runtime/rust/   <- runtime/*
-  stdlib/         <- crates/skyc/stdlib/*  (KEEP Sky/Core + Std subdirs in Step A;
+  stdlib/         <- crates/ipe/stdlib/*  (KEEP Ipê/Core + Std subdirs in Step A;
                      Step C merges them into stdlib/Ipe/)
 ```
 `crates/` and `runtime/` are removed after their contents move.
@@ -54,10 +54,10 @@ src/
 - **`src/runtime/rust/`** — the `/rust/` level is intentional: other backends +
   runtimes are planned (e.g. wasm), so `src/runtime/<target>/` is the shape.
 
-## `crates/skyc/tests/` — moves with `src/ipe-cli/`
+## `crates/ipe/tests/` — moves with `src/ipe-cli/`
 
-skyc's tests (golden_*, server_e2e, watch_*, tui/webview_e2e, msg_admissibility,
-stdlib-seal…) drive the `skyc` binary end-to-end → they are the app's integration
+ipe's tests (golden_*, server_e2e, watch_*, tui/webview_e2e, msg_admissibility,
+stdlib-seal…) drive the `ipe` binary end-to-end → they are the app's integration
 tests → move wholesale to `src/ipe-cli/tests/`. After the move, reassess whether any
 pure compiler-unit test belongs under `src/compiler/<crate>/tests/` instead.
 
@@ -70,12 +70,12 @@ pure compiler-unit test belongs under `src/compiler/<crate>/tests/` instead.
    `src/compiler/`; app depends on `../compiler/<crate>` and `../runtime/rust`;
    runtime dep path updated).
 3. **Package names unchanged in Step A** (still `sky_*`, `sky-runtime-rust`,
-   `skyc`) — renames are Step B. Only *paths* move here.
-4. **Stdlib embed path** — skyc locates its stdlib (currently
-   `crates/skyc/stdlib`); update the resolver to `src/stdlib` (const/env in
+   `ipe`) — renames are Step B. Only *paths* move here.
+4. **Stdlib embed path** — ipe locates its stdlib (currently
+   `crates/ipe/stdlib`); update the resolver to `src/stdlib` (const/env in
    `src/ipe-cli/src/…`; check `stdlib.rs`).
 5. **`IPE_RUNTIME_DIR`** — default resolution + `scripts/lib/env.sh` +
-   `skyc-runtime-dir` memory move from `runtime/src/sky_runtime` to
+   `ipe-runtime-dir` memory move from `runtime/src/sky_runtime` to
    `src/runtime/rust/src/sky_runtime`.
 
 ## Scripts + CI rewire (Step A)
@@ -98,7 +98,7 @@ Dict, File, Http, Io, List, Math, Maybe, Path, Pure, Random, Regex, Result, Set,
 String, System, Task, Time, ToString, WebSocket} and Std's 12 {Cache,
 Compression, Config, Css, Csv, Email, Live, Money, Palette, PubSub, Trace, Ui}
 are disjoint → merging into `Ipe/` yields no name clash. Nested modules
-(`Core.Http` vs `Http.Server`; `Std.Live.*`, `Std.Ui.*`) nest, not clash. Step C
+(`Core.Http` vs `Http.Server`; `Ipe.Live.*`, `Ipe.Ui.*`) nest, not clash. Step C
 owns the import rewrite + the `Ipe.` prefix decisions from the namespace spec.
 
 ## Verification — tiered per-step gate (NOT the full §6 gate ×3)
@@ -106,15 +106,15 @@ owns the import rewrite + the `Ipe.` prefix decisions from the namespace spec.
 `git mv` preserves history. `cargo check` + `clippy` alone are NOT sufficient
 between steps: they prove the COMPILER compiles, not that it RESOLVES
 paths/stdlib/runtime and EMITS working code — exactly what these steps threaten,
-and those failures are invisible to `check` (which also links no `skyc` binary to
+and those failures are invisible to `check` (which also links no `ipe` binary to
 run the sweep). Match the gate to what each step can break:
 
 - **Fast pre-filter (every step):** `cargo build --workspace` (produces the
-  `skyc`/`ipe` binary) + `cargo clippy --workspace`. Seconds; catches
+  `ipe`/`ipe` binary) + `cargo clippy --workspace`. Seconds; catches
   compile/lint breaks before the expensive run.
 - **Load-bearing (every step):** `cargo nextest run --workspace` (golden + E2E +
-  skyc-resolution tests — the layer a move/rename/flatten actually breaks) + the
-  **example sweep** (the ultimate skyc-driven check). Steps B + C regenerate
+  ipe-resolution tests — the layer a move/rename/flatten actually breaks) + the
+  **example sweep** (the ultimate ipe-driven check). Steps B + C regenerate
   goldens via `refresh-oracle` first.
 - **Deferrable to the END:** `cargo test --doc --workspace` + `cargo nextest run
   -p <runtime> --features full` + `clippy --workspace --all-targets -D warnings`

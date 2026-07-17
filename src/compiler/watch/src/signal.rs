@@ -30,7 +30,7 @@ use std::thread::JoinHandle;
 /// is gone, so a second SIGTERM is silently absorbed from that point on, not
 /// delivered as a kernel kill. The documented, tested escape hatch for a
 /// hung teardown is therefore SIGKILL, never a second SIGTERM (see the
-/// double-SIGTERM proof test in `crates/skyc/tests/watch_sigterm.rs`).
+/// double-SIGTERM proof test in `crates/ipe/tests/watch_sigterm.rs`).
 ///
 /// # Errors
 /// If the OS refuses to register the handler (e.g. an already-exhausted

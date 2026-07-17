@@ -1,6 +1,6 @@
 //! Alias / `as` patterns: `case n of 0 -> … ; (m as k) -> …`.
 //! An `as` binds the whole matched value (`k`) alongside its inner pattern's
-//! binder (`m`), and a trailing variable is an irrefutable catch-all. `skyc`
+//! binder (`m`), and a trailing variable is an irrefutable catch-all. `ipe`
 //! must emit `main.rs` byte-identical to the checked-in golden, and (behind
 //! `IPE_E2E=1`) the emitted project must build and print `14`.
 //!

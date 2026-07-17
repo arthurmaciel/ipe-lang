@@ -1,4 +1,4 @@
-//! Integration tests for `skyc run` — gated on `IPE_E2E=1` so the default
+//! Integration tests for `ipe run` — gated on `IPE_E2E=1` so the default
 //! `cargo nextest` stays fast and offline (no cargo invocation required).
 //!
 //! The non-E2E tests still exercise the CLI parsing surface (usage errors) and
@@ -24,7 +24,7 @@ fn false_marker() -> bool {
 // CLI-parsing tests (unconditional — no network, no build)
 // ---------------------------------------------------------------------------
 
-/// `skyc run` (no arguments) must return a usage error, not panic.
+/// `ipe run` (no arguments) must return a usage error, not panic.
 #[test]
 fn run_no_args_returns_usage_error() {
     let args: Vec<String> = vec!["run".to_owned()];
@@ -35,7 +35,7 @@ fn run_no_args_returns_usage_error() {
     );
 }
 
-/// `skyc run <entry> --bogus` (unrecognised flag after the entry) must return
+/// `ipe run <entry> --bogus` (unrecognised flag after the entry) must return
 /// a usage error, not panic.  Note: `run_run` treats the FIRST positional arg
 /// as the entry path unconditionally, so `--bogus-flag` in the flag position
 /// (after the entry) is what triggers the Usage arm.
@@ -57,8 +57,8 @@ fn run_unknown_flag_returns_usage_error() {
 // E2E test — only active when IPE_E2E=1 (requires cargo + runtime)
 // ---------------------------------------------------------------------------
 
-/// `skyc run <entry.ipe>` must:
-///   1. Compile the Sky program (exit 0 from skyc pipeline).
+/// `ipe run <entry.ipe>` must:
+///   1. Compile the Ipê program (exit 0 from ipe pipeline).
 ///   2. Invoke `cargo build` on the emitted project (SEAL check).
 ///   3. Exec the resulting binary; its stdout must equal `"hello from run\n"`.
 ///
@@ -100,7 +100,7 @@ fn run_subcommand_builds_and_executes_hello_program() {
     // child process to check stdout.  This exercises the same code paths as
     // run_run without sacrificing the test runner.
     let built = ipe::build(&entry, &out_dir, &runtime_dir);
-    assert!(built.is_ok(), "skyc build step must succeed: {built:?}");
+    assert!(built.is_ok(), "ipe build step must succeed: {built:?}");
 
     let cargo_status = std::process::Command::new("cargo")
         .arg("build")

@@ -17,7 +17,7 @@
 //! * an emission-level regression (no `IPE_E2E`) asserting the Copy/non-Copy
 //!   split in the generated Rust text, and
 //! * an E2E build+run proving correctness is unaffected
-//!   (`IPE_E2E=1 cargo test -p skyc --test golden_i142_access_copy_elision`).
+//!   (`IPE_E2E=1 cargo test -p ipe --test golden_i142_access_copy_elision`).
 
 use std::path::{Path, PathBuf};
 
@@ -48,7 +48,7 @@ fn emit_fixture(out_name: &str) -> String {
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for copy_field_no_clone: {:?}",
+        "ipe build must succeed for copy_field_no_clone: {:?}",
         built.err()
     );
 

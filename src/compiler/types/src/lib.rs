@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 //! `ipe_types` — Hindley-Milner type inference for the supported subset of
-//! Sky.
+//! Ipê.
 //!
 //! Entry point: [`infer`]. It consumes a name-resolved [`ipe_canon::ast::Module`]
 //! and produces a [`SolvedTypes`] carrying (a) the inferred type of every
@@ -297,7 +297,7 @@ fn infer_with_budget_attributed(
     // convention would resolve it to `IrType::Json` (`serde_json::Value`,
     // which has no `Into<SqlParam>` impl) and the emitted `Vec::new()` call
     // argument would carry zero type evidence — trading today's E0283 for an
-    // equally unresolvable `cargo` failure. Defaulting to Sky's own `SqlValue`
+    // equally unresolvable `cargo` failure. Defaulting to Ipê's own `SqlValue`
     // ADT instead keeps the call sound end-to-end: `SqlValue` already has a
     // generated `Into<SqlParam>` impl (`ipe_backend_rust::project`), so an
     // empty params list becomes a concretely-typed empty `Vec<SqlValue>`.
@@ -587,7 +587,7 @@ fn emitted_bound_satisfied(interner: &Interner, bounds: TyBounds, ty: &Ty) -> bo
     // design for ALL bounds at once — see
     // `docs/adr/0016-andmap-arity-gate-type-obligation.md` §6.
     let not_curried_ok = !matches!(ty, Ty::Fun(_, _) | Ty::Var(_));
-    // SQL-bind-parameter obligation: satisfied by exactly the Sky
+    // SQL-bind-parameter obligation: satisfied by exactly the Ipê
     // types the runtime has a `From<T> for SqlParam` impl for — the bare
     // scalars `ipe_runtime::db` binds directly, plus the `SqlValue` ADT
     // itself (whose generated `From` impl covers the typed-mixed-param
@@ -631,8 +631,8 @@ pub(crate) fn concrete_super_ok(interner: &Interner, bounds: TyBounds, ty: &Ty) 
     // type: the runtime's `From<T> for SqlParam` set — `String` / `Int` /
     // `Float` / `Bool`, plus the `SqlValue` ADT itself.
     let sql_param_ok = matches!(prim, Some("Int" | "Float" | "String" | "Bool" | "SqlValue"));
-    // A `Set` element / `Dict` key pinned directly to a concrete type: the Sky
-    // `comparable` scalar set, exactly as ordering. `Float` satisfies the Sky
+    // A `Set` element / `Dict` key pinned directly to a concrete type: the Ipê
+    // `comparable` scalar set, exactly as ordering. `Float` satisfies the Ipê
     // typing here; the Rust-backend `f64`-as-key reality is gated at lowering.
     (!bounds.has_number() || number_ok)
         && (!bounds.has_ord() || ord_ok)
@@ -679,7 +679,7 @@ fn super_unsatisfied(interner: &Interner, bounds: TyBounds, ty: &Ty, span: Span)
     if bounds.has_number() {
         classes.push("Number");
     }
-    // A `Set` element / `Dict` key obligation is a Sky `Comparable` (the same
+    // A `Set` element / `Dict` key obligation is a Ipê `Comparable` (the same
     // class the ordering operators impose); name it once even when both an
     // ordering use and a Set/Dict use constrained the variable.
     if bounds.has_ord() || bounds.has_comparable_key() {
@@ -695,7 +695,7 @@ fn super_unsatisfied(interner: &Interner, bounds: TyBounds, ty: &Ty, span: Span)
         classes.push("Appendable");
     }
     // The higher-order-kernel callback-result obligation. Named
-    // distinctly from the other classes (it is not a Sky super-type a user
+    // distinctly from the other classes (it is not a Ipê super-type a user
     // annotates against — it is an internal arity restriction on the
     // callback-result slot of `Maybe`/`Result`'s `map`/`map2..5`/`mapError`/
     // `andMap` kernels): the callback's final result must not itself be a
@@ -793,7 +793,7 @@ fn super_unsatisfied(interner: &Interner, bounds: TyBounds, ty: &Ty, span: Span)
 /// field types. The emit side needs no synthesised record: a field access
 /// lowers to `(req).<field>.clone()` (see `emit_expr` `Access`), which reads the
 /// `runtime::ServerRequest` struct directly — every field name + type here
-/// matches that struct (`String` scalars; `HashMap<String, String>` = Sky
+/// matches that struct (`String` scalars; `HashMap<String, String>` = Ipê
 /// `Dict String String` for the four map fields).
 struct RequestFields {
     /// The `"Request"` type-constructor symbol (opaque server request Con).
@@ -2028,7 +2028,7 @@ mod tests {
 
     /// Test matrix item 3: an untyped VALUE binding (no parameters) also
     /// generalizes cross-module — no value restriction (the reference
-    /// compiler has none; Sky is pure, so it's sound).
+    /// compiler has none; Ipê is pure, so it's sound).
     #[test]
     fn untyped_value_binding_generalizes_across_cross_module_uses() {
         let lib = ("Lib1", "module Lib1 exposing (empty)\n\nempty =\n    []\n");
@@ -3676,7 +3676,7 @@ mod tests {
 
     /// Regression for AUD-06 (seal): `Auth.signToken` claims pinned to
     /// `Dict String String`, not flexible `var(0)`. `var(0)` unified with
-    /// anything (a record literal included), so skyc accepted a program the
+    /// anything (a record literal included), so ipe accepted a program the
     /// generated project's `HashMap<String,String>`-pinned wrapper could not
     /// build (exit-0-then-cargo-fail). A `Dict.fromList [...]` literal claims
     /// argument must still type-check clean; a record literal must now be
@@ -3925,7 +3925,7 @@ mod tests {
     /// Soundness guard preserved through the numeric-literal change: a numeric
     /// literal added to a fully-parametric annotation skolem is still rejected.
     /// `f : a -> a; f x = x + 1` forces the annotated-generic `a` to a concrete
-    /// number, which Elm/Sky reject.  The literal (`Super { Number, rigid:false }`)
+    /// number, which Elm/Ipê reject.  The literal (`Super { Number, rigid:false }`)
     /// meeting the annotation skolem (`Super { .., rigid:true }`) is a mismatch.
     #[test]
     fn literal_added_to_parametric_skolem_is_rejected() {

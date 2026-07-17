@@ -15,7 +15,7 @@ import Ipe.Log exposing (println)
 -- This is a canary: it MUST keep failing with IPE-P0001 until someone lands
 -- the full chain (parser + canon + constrain + per-shape backend
 -- monomorphisation) described in the spec's gap section. If this test
--- starts failing because skyc now PARSES the annotation, re-read that
+-- starts failing because ipe now PARSES the annotation, re-read that
 -- section before changing the expected code — accepting the syntax without
 -- the backend monomorphisation step is a SEAL violation (the A7 exact-key
 -- struct lookup would miss on a row-var-typed record).

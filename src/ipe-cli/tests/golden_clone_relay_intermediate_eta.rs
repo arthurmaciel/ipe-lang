@@ -19,16 +19,16 @@
 //! intermediate closure's body, so the intermediate's post-recursion check sees
 //! it and wraps too. The pre-clone relays outward through every boundary.
 //!
-//! THE SEAL: skyc-0 => cargo-0. Without the fix this program is skyc-0 but
+//! THE SEAL: ipe-0 => cargo-0. Without the fix this program is ipe-0 but
 //! cargo-101 (E0507 on `insertRow`), the 18-job-queue failure shape.
 //!
 //! Run:
 //! ```text
 //! # fast (no cargo):
-//! cargo test -p skyc --test golden_i218_clone_relay_intermediate_eta
+//! cargo test -p ipe --test golden_i218_clone_relay_intermediate_eta
 //!
 //! # full E2E (THE SEAL):
-//! IPE_E2E=1 cargo test -p skyc --test golden_i218_clone_relay_intermediate_eta
+//! IPE_E2E=1 cargo test -p ipe --test golden_i218_clone_relay_intermediate_eta
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -47,7 +47,7 @@ fn entry_path(root: &Path) -> PathBuf {
         .join("Main.ipe")
 }
 
-/// skyc-0: the compiler must accept the intermediate-boundary clone-relay
+/// ipe-0: the compiler must accept the intermediate-boundary clone-relay
 /// program, and emit a pre-clone for the shared-capture `insertRow` binding.
 #[test]
 fn i218_clone_relay_skyc_accepts() {
@@ -65,7 +65,7 @@ fn i218_clone_relay_skyc_accepts() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for clone_relay_intermediate_eta: {:?}",
+        "ipe build must succeed for clone_relay_intermediate_eta: {:?}",
         built.err()
     );
 
@@ -98,7 +98,7 @@ fn i218_clone_relay_cargo_builds_and_runs() {
     let Ok(runtime) = runtime else { return };
 
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
-    assert!(built.is_ok(), "skyc build must succeed: {:?}", built.err());
+    assert!(built.is_ok(), "ipe build must succeed: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted("clone_relay_intermediate_eta", &out);
     assert_eq!(

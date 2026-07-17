@@ -182,7 +182,7 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
 ];
 
 /// Kernel-implicit Prelude type names that are globally in scope in
-/// every Sky program but are NOT declared by any compiled `.ipe` source file —
+/// every Ipê program but are NOT declared by any compiled `.ipe` source file —
 /// they are resolved by the runtime as opaque handles.
 ///
 /// Without these entries, bare annotations
@@ -202,7 +202,7 @@ const KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES: &[&str] = &[
     // Needed so `viewFoo : Model -> Html Msg` annotations typecheck without
     // `import Ipe.Html exposing (Html)`.
     "Html",
-    // Opaque JSON value type (`Value = any` in Sky). The lowerer handles this
+    // Opaque JSON value type (`Value = any` in Ipê). The lowerer handles this
     // via an explicit arm placed after the `enum_variants` guard — so a user
     // `type Value` still wins, but a bare annotation compiles.
     "Value",
@@ -315,7 +315,7 @@ fn reject_reserved_builtin_type(
 /// This is the *unforgeable* answer to upstream's "a user file named `Ipe.Auth`
 /// silently shadows the audited stdlib" supply-chain hazard. The tag is a value
 /// the build **driver** constructs — set to [`Self::EmbeddedStdlib`] *only* for a
-/// module whose source came from `skyc`'s compile-time embed table, and never
+/// module whose source came from `ipe`'s compile-time embed table, and never
 /// derivable from module text. A hostile user file literally named `Ipe.Palette`
 /// is discovered as ordinary user source, tagged [`Self::User`], and stays
 /// rejected by the reserved-namespace gate (IPE-N0025).
@@ -327,7 +327,7 @@ pub enum ModuleOrigin {
     /// Ordinary user-authored source. Subject to every reserved-namespace and
     /// reserved-builtin-type gate.
     User,
-    /// A compiled-source stdlib module injected from `skyc`'s embed table. Exempt
+    /// A compiled-source stdlib module injected from `ipe`'s embed table. Exempt
     /// from IPE-N0025 (it legitimately declares `module Ipe.…`) and required to
     /// be fully annotated (fail-closed gate below).
     EmbeddedStdlib,
@@ -406,7 +406,7 @@ struct TypeCtx<'a> {
 pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::Module> {
     let home = m.name.value.clone();
     let mut env = Env::initial(home, interner)?;
-    // Register `import Sky.… as Alias` / `import Ipe.… as Alias` qualifiers.
+    // Register `import Ipê.… as Alias` / `import Ipe.… as Alias` qualifiers.
     // The single-module path does no dep injection, but stdlib qualifier
     // aliases must still resolve (`import Ipe.Json.Encode as Encode` →
     // `Encode.string`), so run the same registration the multi-module path uses.
@@ -445,7 +445,7 @@ pub fn canonicalise(m: &src::Module, interner: &mut Interner) -> DResult<canon::
 /// # Errors
 /// [`NameError::ModulePathMismatch`] — declared module name does not match
 /// `expected_path`.
-/// [`NameError::ReservedNamespace`] — first path segment is `Sky` or `Std`.
+/// [`NameError::ReservedNamespace`] — first path segment is `Ipê` or `Std`.
 /// [`NameError::ModuleNotFound`] — an `import` names a module absent from
 /// `deps`.
 /// [`NameError::NameNotExposed`] — an unqualified `exposing (name)` imports a
@@ -559,7 +559,7 @@ pub fn canonicalise_module_in_project(
     }
 
     let mut env = Env::initial(home.clone(), interner)?;
-    // Register user import aliases for stdlib (`Sky.*` / `Ipe.*`) modules BEFORE
+    // Register user import aliases for stdlib (`Ipê.*` / `Ipe.*`) modules BEFORE
     // the dep-injection loop below. The loop bare-`continue`s for stdlib imports
     // (they need no dep injection), so alias registration is a separate,
     // self-contained pass keyed off the same authoritative path table.
@@ -581,7 +581,7 @@ pub fn canonicalise_module_in_project(
         let dep_path = &import.name.value;
         // IPE-kernel vs compiled-source discrimination (fail-closed).
         //
-        // A `Sky.*` / `Ipe.*` import is EITHER a kernel module whose qualifiers
+        // A `Ipê.*` / `Ipe.*` import is EITHER a kernel module whose qualifiers
         // are pre-installed by `Env::initial` (absent from the user `deps` map —
         // a `deps.get` on it would spuriously IPE-N0020 every importer of
         // `Ipe.Prelude`) OR a compiled-source stdlib module the build driver
@@ -771,7 +771,7 @@ pub fn canonicalise_module_in_project(
     Ok((canon_mod, exports))
 }
 
-/// Register user import aliases for stdlib (`Sky.*` / `Ipe.*`) modules.
+/// Register user import aliases for stdlib (`Ipê.*` / `Ipe.*`) modules.
 ///
 /// For every stdlib import, resolve its full path to the canonical qualifier
 /// (via [`Env::canonical_stdlib_qualifier`]) and register the user's *effective*
@@ -832,7 +832,7 @@ fn register_stdlib_import_aliases(
 }
 
 /// Bring the stdlib VALUE members named in an explicit
-/// `import Sky.*/Ipe.* exposing (n1, n2, …)` list into UNQUALIFIED scope.
+/// `import Ipê.*/Ipe.* exposing (n1, n2, …)` list into UNQUALIFIED scope.
 ///
 /// `import M exposing (member)` for a stdlib module registers value members
 /// into unqualified scope. Stdlib imports are skipped by the dep-injection loop
@@ -889,7 +889,7 @@ fn inject_stdlib_exposed_values(
     let ipe_sym = interner.intern("Ipe")?;
     for import in &m.imports {
         let dep_path = &import.name.value;
-        // Only `Sky.*` / `Ipe.*` imports name compiler stdlib modules.
+        // Only `Ipê.*` / `Ipe.*` imports name compiler stdlib modules.
         if !dep_path.first().copied().is_some_and(|s| s == ipe_sym) {
             continue;
         }
@@ -1123,7 +1123,7 @@ fn fold_html_stdlib_qualifier_homes(
 }
 
 /// Flood EVERY value member of a stdlib module named in
-/// `import Sky.*/Ipe.* exposing (..)` into the LOW-PRIORITY wildcard tier
+/// `import Ipê.*/Ipe.* exposing (..)` into the LOW-PRIORITY wildcard tier
 /// ([`Env::wildcard_vars`]) so bare `div` / `text` / … resolve unqualified.
 ///
 /// This is the open-import counterpart of [`inject_stdlib_exposed_values`]. The
@@ -1165,7 +1165,7 @@ fn inject_stdlib_wildcard_values(
     let ipe_sym = interner.intern("Ipe")?;
     for import in &m.imports {
         let dep_path = &import.name.value;
-        // Only `Sky.*` / `Ipe.*` imports name compiler stdlib modules.
+        // Only `Ipê.*` / `Ipe.*` imports name compiler stdlib modules.
         if !dep_path.first().copied().is_some_and(|s| s == ipe_sym) {
             continue;
         }
@@ -1408,7 +1408,7 @@ fn canonicalise_with_env(
         seen_values.insert(name.value, name.span);
         env.vars.insert(name.value, VarHome::TopLevel(home.clone()));
     }
-    // Bring stdlib VALUE members named in an explicit `import Sky.*/Ipe.* exposing
+    // Bring stdlib VALUE members named in an explicit `import Ipê.*/Ipe.* exposing
     // (name, …)` list into UNQUALIFIED scope. Runs after the synth-ctor
     // seeding and before the local-value pre-pass so an exposed name and a local
     // of the same name collide as `DuplicateValue` (mirrors the ctor-collision
@@ -1423,7 +1423,7 @@ fn canonicalise_with_env(
     // `type_home_map` first) sees the recorded home rather than the empty-home
     // sentinel that always mis-selects `UiAttribute`.
     inject_stdlib_exposed_type_homes(m, type_home_map, interner)?;
-    // Flood every member of an `import Sky.*/Ipe.* exposing (..)` stdlib
+    // Flood every member of an `import Ipê.*/Ipe.* exposing (..)` stdlib
     // module into the LOW-PRIORITY wildcard tier. Deliberately does NOT touch
     // `seen_values` — a local / explicit-exposed / synth-ctor / prelude name of
     // the same spelling silently shadows a wildcard member (see the fn doc);
@@ -1581,7 +1581,7 @@ fn is_opaque_boxed_wrapper_canon(interner: &Interner, name: Symbol) -> bool {
 /// struct-synthesis decision: an opaque wrapper in FIELD position is ITSELF the
 /// non-derivable value, regardless of its payload. `{ dec : Decoder Int }`,
 /// `{ cmd : Cmd Msg }` carry no raw function at all, yet the emitted
-/// `#[derive(…)]` struct over `Decoder` / `IpeCmd` does not build (skyc accepts
+/// `#[derive(…)]` struct over `Decoder` / `IpeCmd` does not build (ipe accepts
 /// it but cargo rejects it — an exit-0-then-cargo-fail seal hole). So here the
 /// opaque head SHORT-CIRCUITS to `true` (the flip): the wrapper is non-derivable
 /// as a struct field, so the alias must DECLINE synthesis and stay a plain type
@@ -1672,7 +1672,7 @@ fn synthesize_record_alias_ctors(
         //     un-DCE'd) ctor body at IPE-L0107; a head-only gate over the nested
         //     shape would emit Rust that cargo then rejects.
         //   * an OPAQUE boxed-wrapper field (`{ dec : Decoder Int }`,
-        //     `{ cmd : Cmd Msg }`, `Sub`, `Task`) — skyc accepts it but cargo
+        //     `{ cmd : Cmd Msg }`, `Sub`, `Task`) — ipe accepts it but cargo
         //     rejects (E0277 Clone/Debug, E0369 ==, E0599 IpeStringify), because
         //     the wrapper VALUE is itself non-derivable; nesting one under a
         //     carrier (`List (Decoder Int)`, `Maybe (Cmd Msg)`) is equally
@@ -3315,7 +3315,7 @@ pub struct KernelAlias {
 /// * `Ok(Some(alias))` — a kernel alias whose target is a registered kernel.
 /// * `Err(IPE-N0028)` — the binding IS a kernel alias but its string names no
 ///   registered kernel. This is the FAIL-CLOSED gate demanded by THE SEAL:
-///   accepting it would let `skyc` emit a call to a non-existent kernel that
+///   accepting it would let `ipe` emit a call to a non-existent kernel that
 ///   type-checks here yet fails the downstream `cargo build`. A kernel the
 ///   resolver would recognise but the registry does not cover is a
 ///   representable-but-illegal state, rejected at compile time.
@@ -3433,7 +3433,7 @@ fn suggestions(
 
 /// Iterative Levenshtein edit distance over Unicode scalar values, computed
 /// with two rolling rows and no indexing (the `indexing_slicing` lint is
-/// denied workspace-wide). Sky identifiers are short ASCII names, so the
+/// denied workspace-wide). Ipê identifiers are short ASCII names, so the
 /// O(n·m) cost is negligible. Mirrors the Haskell reference's `levenshtein`.
 fn levenshtein(a: &str, b: &str) -> usize {
     let b_chars: Vec<char> = b.chars().collect();
@@ -3629,7 +3629,7 @@ fn resolve_simple_interp_ref(
     interner: &mut Interner,
 ) -> DResult<canon::Expr> {
     // Numeric literal. A body that begins with an ASCII digit can never be an
-    // identifier (Sky identifiers never start with a digit), so it is an
+    // identifier (Ipê identifiers never start with a digit), so it is an
     // integer or float literal — NOT a local reference. Emitting `VarLocal`
     // here (the fall-through below) would leak an unbound name past
     // canonicalisation and fire the IPE-I0001 "unbound local `<n>`" ICE in
@@ -3861,7 +3861,7 @@ mod alias_ctor_gate_tests {
         // boxed-thunk enum / `Pin<Box<dyn Future>>`) impls no
         // `Clone`/`Debug`/`PartialEq`/`IpeStringify`. So the head SHORT-CIRCUITS
         // to `true`, DECLINING synthesis (round-1 asserted the opposite — the
-        // seal hole: skyc-0 then cargo-101).
+        // seal hole: ipe-0 then cargo-101).
         let mut i = Interner::new();
 
         // `Decoder Int` — opaque head, no raw arrow anywhere, yet non-derivable.

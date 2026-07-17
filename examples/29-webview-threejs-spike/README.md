@@ -1,17 +1,17 @@
 # 29-webview-threejs-spike
 
 Spike validating that **Three.js + WebGL2 + animation** work
-end-to-end inside a native Sky.Webview desktop window — driven
-entirely by the Sky compiler, no hand-rolled glue.
+end-to-end inside a native Ipe.Webview desktop window — driven
+entirely by the Ipê compiler, no hand-rolled glue.
 
-This example used to be a two-process spike: a Sky.Http.Server on
+This example used to be a two-process spike: a Ipe.Http.Server on
 one side + a hand-rolled `webview_go` shim on the other. After
-bug #370 landed (Sky.Webview now spawns a 127.0.0.1 loopback http
+bug #370 landed (Ipe.Webview now spawns a 127.0.0.1 loopback http
 server when `sky.toml`'s `[live].static` is set), the whole
-two-process dance collapses into a single Sky source file.
+two-process dance collapses into a single Ipê source file.
 
-> **What this proves**: the same Sky source you'd write for a
-> Sky.Live page works for a desktop Sky.Webview app — relative
+> **What this proves**: the same Ipê source you'd write for a
+> Ipe.Live page works for a desktop Ipe.Webview app — relative
 > paths (`/static/three.min.js`) resolve correctly because the
 > webview is pointed at a real `http://127.0.0.1:<free>` origin
 > instead of `about:blank`.
@@ -33,7 +33,7 @@ two-process dance collapses into a single Sky source file.
 
 ```bash
 cd examples/29-webview-threejs-spike
-sky run src/Main.ipe
+ipe run src/Main.ipe
 ```
 
 A native window opens, the Three.js scene paints, the FPS counter
@@ -68,7 +68,7 @@ static/style.css         ← HUD + canvas chrome
 ```
 
 That's the entire footprint. Compare to the pre-bug-#370 version,
-which carried an extra `webview_shim/` Go module + a Sky.Http.Server
+which carried an extra `webview_shim/` Go module + a Ipe.Http.Server
 in `Main.ipe` to hand-roll three `Server.get` handlers per static
 file — gone.
 
@@ -82,7 +82,7 @@ still exposes a global `THREE` — perfect for a zero-build spike.
 
 When `sky.toml` declares `[live].static = "static"`, the Sky
 compiler emits a `SetSkyDefault("LIVE_STATIC_DIR", "static")`
-into the program's `init()`. At runtime, `Sky.Webview` checks
+into the program's `init()`. At runtime, `Ipe.Webview` checks
 that env var:
 
 - **Set** (this example): spawns `http.Server` on `127.0.0.1:0`
@@ -92,7 +92,7 @@ that env var:
   relative paths resolve.
 - **Unset** (examples/31-webview-stopwatch-ui): falls through to
   `w.SetHtml(webviewPageWrap(body))` — the original path, no
-  loopback server, no regression for pure Std.Ui apps.
+  loopback server, no regression for pure Ipe.Ui apps.
 
 The loopback binds to `127.0.0.1` only — **never** `0.0.0.0`. A
 desktop app's local server must not be reachable from the LAN.

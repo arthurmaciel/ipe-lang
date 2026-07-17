@@ -14,7 +14,7 @@
    `__Host-sky_csrf` cookie (falls back to plain `__sky_csrf` over HTTP dev,
    since `__Host-` mandates Secure), `SameSite=Strict` (or `None; Secure`
    under iframe/frame-ancestors), 32-byte CSPRNG token, **constant-time
-   compare via `subtle::ConstantTimeEq`** (`:211-214`), header `X-Sky-Csrf`
+   compare via `subtle::ConstantTimeEq`** (`:211-214`), header `X-Ipê-Csrf`
    checked only on POST/PUT/DELETE/PATCH, exempt-path list for SSE/
    observability/console, optional `IPE_LIVE_CSRF_ORIGIN_CHECK=on`.
    **Caveat:** `../sky/runtime-rust/docs/CODE-REVIEW.md:986` (2026-06-18)
@@ -84,7 +84,7 @@
   equivalent exists to compare against.
 - #44 (opaque `Secret` type) — zero wrapper types in OLD repo either; every
   secret is a bare `String`. Fresh design item on both sides.
-- #105 (Std.Css hardening) — no `css.rs` / `Std.Css` file exists in OLD repo
+- #105 (Ipe.Css hardening) — no `css.rs` / `Ipe.Css` file exists in OLD repo
   at all. Greenfield both sides.
 - #32 (Task arity-3 ICE), #122 (Cli.program separator bug), #53 (typed-token
   emit backend) — structurally different surfaces in OLD repo (Haskell-driven
@@ -101,7 +101,7 @@ are direct blueprints for still-open items in this campaign:
 
 1. **AUD-08 (name-collision guard) has a ready blueprint.** The Haskell
    backend hit the identical non-injective-snake-case collision
-   (`Std.Ui.borderRounded` and `Std.Ui.Border.rounded` both mangle to
+   (`Ipe.Ui.borderRounded` and `Ipe.Ui.Border.rounded` both mangle to
    `std_ui_border_rounded`) and fixed it with a precomputed
    `(modPrefix,name) → renamed` map built once per program, consulted at
    BOTH def-site and call-site (`Naming.hs:14-33`, `rustFnName`). Write
@@ -125,7 +125,7 @@ are direct blueprints for still-open items in this campaign:
    FFI wrapper generator with a typed `Call` ADT + `FromJSON`-validated
    parse, specifically because the string-hole gate ("is every hole
    filled?") could still let a hole go unfilled or a type-param land where a
-   value-arg belonged — silently, with no Sky diagnostic, straight to a
+   value-arg belonged — silently, with no Ipê diagnostic, straight to a
    cargo-fail. Confirms #53 is worth doing, not just a style preference.
 4. **Two "silent effect loss" bugs were both closed by replacing a
    usage-heuristic gate with a real-type check** — worth applying as a

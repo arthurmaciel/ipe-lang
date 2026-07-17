@@ -9,8 +9,8 @@
 Grounding. The whole sweep exists to serve two fundamental rules and the
 correctness principle:
 
-- **Rule 1 — "if it compiles, it works."** A well-typed Sky program must never
-  skyc-succeed and then cargo-fail, panic, or hang. The sweep's BUILD+RUN
+- **Rule 1 — "if it compiles, it works."** A well-typed Ipê program must never
+  ipe-succeed and then cargo-fail, panic, or hang. The sweep's BUILD+RUN
   columns make any *exit-0-then-cargo-fail* loud. That silent shape is the
   single worst outcome and the sweep's primary quarry.
 - **Rule 2 — Go-parity is the default** (PRINCIPLES §2 Correctness). For the
@@ -33,7 +33,7 @@ columns, and one VERDICT:
 
 | Column | Values | Meaning |
 |---|---|---|
-| BUILD | `ok` / `skyc-fail` / `cargo-fail` | `skyc build` then `cargo build` of the emitted crate |
+| BUILD | `ok` / `ipe-fail` / `cargo-fail` | `ipe build` then `cargo build` of the emitted crate |
 | RUN | `ok` / `panic` / `hang` / `noserve` / `notty` / `skip` | headless drive per shape |
 | EQUIVALENCE | `equivalence-*` / `n/a` / `DIFFER` / `go-ref-broken` | Go≡Rust comparison (PHASED OFF now) |
 
@@ -63,10 +63,10 @@ columns, and one VERDICT:
    (`main_sky_sha256` + `go_sky_version` + `exit_code` + `oracle_divergence`
    [+ `divergence_reason`]). The `oracle` crate (`tools/oracle/src/lib.rs`)
    read path `check_parity` **NEVER invokes Go**: it re-hashes `Main.ipe`, hard-
-   fails on a stale hash, and diffs skyc's stdout against the cached bytes.
+   fails on a stale hash, and diffs ipe's stdout against the cached bytes.
    `tools/refresh-oracle` (re)captures the cache by running the **real Go `sky`**
    (`IPE_GO_ORACLE`, default `../sky/sky-out/sky`) **once, locally** — Go
-   success → cache Go bytes; Go failure / non-zero → cache skyc bytes with
+   success → cache Go bytes; Go failure / non-zero → cache ipe bytes with
    `oracle_divergence=true`. Rigour invariants (match / stale / missing /
    divergence) are unit-pinned. **This is already option (a), battle-tested —
    but at golden granularity, not example granularity.**
@@ -93,7 +93,7 @@ ubuntu + macOS, non-gating.
 
 **What it proves (Rule 1):**
 
-- Every green BUILD row = skyc emitted a crate that *actually cargo-builds* —
+- Every green BUILD row = ipe emitted a crate that *actually cargo-builds* —
   no exit-0-then-cargo-fail on that example.
 - Every green RUN row = the binary boots / serves / drives its shape headless
   without panic/hang.
@@ -101,20 +101,20 @@ ubuntu + macOS, non-gating.
   `#![allow(unused, non_snake_case)]`) catches codegen defects even on a
   building crate.
 
-**Which rows are RED today (expected, honest):** skyc currently implements only
-`Sky.Core.*`. Every example reaching for `Std.Ui` / `Std.Html` / `Std.Css` /
-`Std.Live` / `Std.Db` / server / tui / webview runtimes will `skyc-fail` (unbound
+**Which rows are RED today (expected, honest):** ipe currently implements only
+`Ipe.*`. Every example reaching for `Ipe.Ui` / `Ipe.Html` / `Ipe.Css` /
+`Ipe.Live` / `Ipe.Db` / server / tui / webview runtimes will `ipe-fail` (unbound
 name at canon) or `cargo-fail` (emitted crate references an unbuilt kernel) until
 the compiler reaches breadth. Concretely, expect RED across the Live/UI/TUI/
 webview cluster (`09,10,12,16,17,19,22,24,25,26,27,28,29,31,34,37,38`, and the
-server/live rows) and green only on the thin `Sky.Core`-only clis
+server/live rows) and green only on the thin `Ipê.Core`-only clis
 (`01`, `14`, `20`, `simple`, and `00` build-wise). `26-ui-showcase` is a known
 `skyc-fail` (no `sky.toml`, local `RegressionGates` import unresolved single-file).
 
 **This is not a gate.** `continue-on-error: true` keeps the workflow green while
 the table is red — the RED set *is* the compiler to-do list, regenerated every
 push, and cross-referenced against the exit-0 registry pass and the
-Std.Html/Css breadth work (#46/#47). **Flip `continue-on-error → false` only
+Ipe.Html/Css breadth work (#46/#47). **Flip `continue-on-error → false` only
 after the first all-green BUILD+RUN sweep** (see DONE gate).
 
 ---
@@ -126,7 +126,7 @@ GitHub CI**, and we do not want to build it there. Three options:
 
 | Option | Mechanism | Go/Haskell in CI? | Verdict |
 |---|---|---|---|
-| **(a) Vendored cached reference** | commit `expected_go.txt` per example, generated once locally via the real Sky-Go / an example-level `refresh-oracle`; sweep EQUIVALENCE diffs Rust output against it | **No** | **Recommended (gating path)** |
+| **(a) Vendored cached reference** | commit `expected_go.txt` per example, generated once locally via the real Ipê-Go / an example-level `refresh-oracle`; sweep EQUIVALENCE diffs Rust output against it | **No** | **Recommended (gating path)** |
 | (b) Live Go reference in CI | a dedicated job builds GHC/cabal `sky` + Go toolchain, generates references live, drops `IPE_SWEEP_NO_EQUIV` | Yes (heavy) | Rejected as the gate; kept as an audit |
 | (c) Hybrid | (a) gates every PR; a nightly non-gating (b) job **re-refreshes/audits** the cache against a live Go build to catch drift | Nightly only | **Recommended overall** |
 
@@ -201,7 +201,7 @@ builds are fine, the full measurement is CI's job.
 
 | Row state | Classification | Route |
 |---|---|---|
-| `skyc-fail` | compiler breadth gap (unbound `Std.*` at canon, unimplemented kernel) | exit-0 registry pass + `/implement-parity-gap`; Std.Html/Css breadth #46/#47 |
+| `ipe-fail` | compiler breadth gap (unbound `Ipe.*` at canon, unimplemented kernel) | exit-0 registry pass + `/implement-parity-gap`; Ipe.Html/Css breadth #46/#47 |
 | `cargo-fail` | **codegen defect** — emitted Rust ill-typed / references an unbuilt kernel. Higher severity: this is the Rule-1 *exit-0-then-cargo-fail* class (soundness) | same pipeline, prioritized; guardian review of the emission |
 | RUN `panic`/`hang` | runtime defect (reachable panic from well-typed code, non-termination) | file + fix; add regression |
 | RUN `noserve`/`notty` | server didn't bind / no TTY — env or runtime defect | fix (or confirm harness-env, not a Rust defect) |
@@ -259,7 +259,7 @@ Staged gating:
    `continue-on-error: true` until full parity, then flip once. *Decision:
    staged vs single flip.*
 
-3. **Oracle-refresh policy + Go pin.** Which Sky-Go version/commit is the
+3. **Oracle-refresh policy + Go pin.** Which Ipê-Go version/commit is the
    authoritative reference (pinned in `oracle.meta go_sky_version`), who runs
    the example refresh and on what trigger (example source change / Go pin bump),
    and the staleness-key granularity (recommend: sha256 over the full example

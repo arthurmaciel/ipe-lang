@@ -239,7 +239,7 @@ renderText : Report -> String
 renderText r =
     let
         divider = String.repeat 60 "-"
-        header = "Sky Composite Generics — Transaction Report"
+        header = "Ipê Composite Generics — Transaction Report"
         meta =
             "Rows: " ++ ToString.fromInt r.rowCount ++ "  Accounts: "
                 ++ ToString.fromInt r.uniqueAccounts

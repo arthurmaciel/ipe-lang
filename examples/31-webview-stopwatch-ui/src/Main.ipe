@@ -75,7 +75,7 @@ view model =
             [Ui.padding 32, Ui.spacing 16]
             [ Ui.el
                   [ Font.color (Ui.rgb 142 200 168), Font.size 24 ]
-                  (Ui.text "Sky Webview Stopwatch")
+                  (Ui.text "Ipê Webview Stopwatch")
             , Ui.el
                   [ Font.size 48, Font.color (Ui.rgb 240 240 240) ]
                   (Ui.text (formatElapsed model.elapsedMs))
@@ -153,6 +153,6 @@ main =
         , update = update
         , view = view
         , subscriptions = subscriptions
-        , window = { title = "Sky Webview Stopwatch", size = ( 800, 500 ) }
+        , window = { title = "Ipê Webview Stopwatch", size = ( 800, 500 ) }
         }
         |> Task.run

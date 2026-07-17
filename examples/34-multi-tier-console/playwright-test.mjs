@@ -3,8 +3,8 @@
 //
 // Verifies:
 //   1. All four tier pages render with HTTP 200 + expected body markers.
-//   2. Clicking nav buttons updates the active tier (Sky.Live click → SSE patch).
-//   3. Emitting tier-specific log buttons increments the in-Sky counter.
+//   2. Clicking nav buttons updates the active tier (Ipe.Live click → SSE patch).
+//   3. Emitting tier-specific log buttons increments the in-Ipê counter.
 //   4. The /_sky/console aggregation page is reachable post-login.
 //   5. Telemetry from each tier (host nav, billing charge, jobs enqueue,
 //      auth signin) appears in the console's metrics surface — we

@@ -21,7 +21,7 @@
 //!   2. **Zero `.ipe` source emits `Ffi.callTask`.** Across the whole stdlib +
 //!      every example, `grep -rn 'Ffi\.callTask' --include='*.ipe'` returns 0
 //!      hits outside generated `sky-out/`. The polyfill is statically dead for
-//!      every well-typed Sky program shipped today.
+//!      every well-typed Ipê program shipped today.
 //!   3. **Effectful kernels route via `Ffi.kernel`, never `Ffi.callTask`.** The
 //!      stdlib's effectful kernels (`Http.*`, `Task.*`, `Db.*`, `Time.now`, …)
 //!      are `Ffi.kernel "Name"` aliases resolved by the Stage-4 call-site

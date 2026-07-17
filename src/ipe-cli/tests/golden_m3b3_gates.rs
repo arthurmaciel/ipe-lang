@@ -2,12 +2,12 @@
 //!
 //! * Int / Char / String are OPEN types: literal arms with no wildcard / variable
 //!   catch-all do not cover every value, so the `case` is non-exhaustive →
-//!   IPE-T0010 (the soundness floor — a non-exhaustive Sky `case` MUST be caught
+//!   IPE-T0010 (the soundness floor — a non-exhaustive Ipê `case` MUST be caught
 //!   before emit, never deferred to a rustc E0004 / `unreachable!()` fallback).
 //! * A literal arm AFTER a wildcard catch-all matches no value left open → the
 //!   redundant-branch warning IPE-T0011.
 //!
-//! Each is driven through the full `skyc` pipeline and asserted to produce its
+//! Each is driven through the full `ipe` pipeline and asserted to produce its
 //! exact code. The Go reference accepts a redundant branch silently; the Rust
 //! backend is deliberately stricter (it reports IPE-T0011) — a documented,
 //! never-silently-wrong divergence.

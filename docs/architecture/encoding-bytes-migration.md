@@ -5,9 +5,9 @@ Verified against HEAD 2026-07-03 (encoding.rs, jwt.rs, email.rs, compression.rs,
 ws_client.rs, server.rs, crates/sky_types/src/constrain.rs).
 
 > **SCOPE CORRECTION (2026-07-03, gap-1 enumeration before impl).** The panel
-> reasoned partly against the UPSTREAM `sky-stdlib/` tree. In the skyc PORT
-> (`crates/skyc/stdlib/`) there is **no `Compression.ipe`, `Email.ipe`, or
-> `WebSocket.ipe`** — those modules are NOT ported yet, so they have no Sky-facing
+> reasoned partly against the UPSTREAM `sky-stdlib/` tree. In the ipe PORT
+> (`crates/ipe/stdlib/`) there is **no `Compression.ipe`, `Email.ipe`, or
+> `WebSocket.ipe`** — those modules are NOT ported yet, so they have no Ipê-facing
 > binary surface to re-type. The swarm's "atomic step-3" (re-type
 > Compression/Email/WebSocket binary payloads `String→Bytes`) is therefore MOOT
 > in this tree, and `sky_bytes`/`bytes_to_sky` CANNOT be deleted — the
@@ -18,7 +18,7 @@ ws_client.rs, server.rs, crates/sky_types/src/constrain.rs).
 > - **#55a (lands now — reachable surface, exit-0 critical path):** (1) fix the
 >   ENCODE truncation — `base64_encode` + `encoding_hex_encode` use `s.as_bytes()`
 >   (UTF-8, Go parity) instead of `sky_bytes` (`url_encode` already UTF-8 via
->   `utf8_percent_encode`); this also fixes the one Sky-adjacent security caller,
+>   `utf8_percent_encode`); this also fixes the one Ipê-adjacent security caller,
 >   `server.rs:1210` HTTP Basic-auth. (2) SCHEME the 6 Encoding kernels in
 >   `constrain.rs` (String→String encoders; String→Result Error String decoders),
 >   moving Encoding off the `Ty::Var(u32::MAX)` fallback → advances the exit-0
@@ -28,12 +28,12 @@ ws_client.rs, server.rs, crates/sky_types/src/constrain.rs).
 >   truncation fails pre-fix. Decoder Latin-1→fallible (Shape A D5) is OPTIONAL in
 >   55a — keep current behavior if the golden set stays green; the type (`Result
 >   Error String`) is unchanged either way, so scheming is orthogonal.
-> - **#55b (deferred until Compression/Email/WebSocket are ported as Sky modules):**
+> - **#55b (deferred until Compression/Email/WebSocket are ported as Ipê modules):**
 >   delete `sky_bytes`/`bytes_to_sky`, migrate the byte pipelines to the real
 >   `Bytes`(`Vec<u8>`) newtype, make decoders fallible, add the security
 >   non-collision + decode-back-compat goldens. Tracked as a follow-up; NOT a
 >   workaround — the reachable truncation IS closed by 55a; 55b only migrates
->   currently-unreachable runtime-internal plumbing once its Sky surfaces exist.
+>   currently-unreachable runtime-internal plumbing once its Ipê surfaces exist.
 >
 > Everything below is the full Shape-A design; read it as the 55a+55b union.
 
@@ -71,14 +71,14 @@ for the correct model; `base64`/`hex` are the outliers being aligned.
 
 - **D2 — Shape B (keep Latin-1, `sky_bytes` fail-closed on > 0xFF) is
   ELIMINATED as the primary plan.** *Rationale: it neither converges to Go nor
-  removes the divergence, breaks the `String -> String` Sky sig, and — fatally
+  removes the divergence, breaks the `String -> String` Ipê sig, and — fatally
   — guards only > 0xFF while the corrupting range is 0x80–0xFF where Latin-1 and
   UTF-8 BOTH succeed and DISAGREE (e.g. `gzip("café")` → Latin-1 `…66 E9` vs Go
   UTF-8 `…66 C3 A9`, silent, no error fires). Admissible ONLY as an explicitly
   worse fallback — see §7.*
 
-- **D3 — Shape C collapses into A.** *Rationale: Sky has no overloading/HKT
-  (Limitation #1); the "Bytes-taking overload" IS the existing `Std.Bytes`
+- **D3 — Shape C collapses into A.** *Rationale: Ipê has no overloading/HKT
+  (Limitation #1); the "Bytes-taking overload" IS the existing `Ipe.Bytes`
   module. No new overloaded Encoding kernels.*
 
 - **D4 — `Encoding.*Encode` take UTF-8 text via `s.as_bytes()`.** *Rationale:
@@ -144,11 +144,11 @@ TEXT = wants Go UTF-8 bytes-of-string. BYTE = wants raw bytes (moves to `Bytes`)
 | WS binary in (server) | server.rs:827 | **BYTE** | Sub-event payload = `Bytes` | Latin-1 misread; `base64Encode` on frame composes-corrupts |
 | WS binary out (client) | ws_client.rs:479 | **BYTE** | `Bytes` slice | same as server-out |
 | WS binary in (client) | ws_client.rs:372 | **BYTE** | Message payload = `Bytes` | same as server-in |
-| User `Encoding.*Encode` on text | user Sky | **TEXT** (primary class served) | UTF-8 / Go-parity | `café → Y2Fmw6k=`: a parity FIX, acceptable behavior change |
-| User `base64(hexDecode hmac)` | user Sky | **BYTE** | route to `Bytes.fromHex` + `Bytes.toBase64` | `Encoding.hexDecode` now `Err` on non-UTF-8 → typed redirect, never silent gibberish |
+| User `Encoding.*Encode` on text | user Ipê | **TEXT** (primary class served) | UTF-8 / Go-parity | `café → Y2Fmw6k=`: a parity FIX, acceptable behavior change |
+| User `base64(hexDecode hmac)` | user Ipê | **BYTE** | route to `Bytes.fromHex` + `Bytes.toBase64` | `Encoding.hexDecode` now `Err` on non-UTF-8 → typed redirect, never silent gibberish |
 
 WS binary payload MUST be `Bytes` end-to-end (in + out); the inbound Sub-event
-payload type in the Sky `WebSocket` surface changes `String → Bytes`, else a
+payload type in the Ipê `WebSocket` surface changes `String → Bytes`, else a
 user calling `base64Encode` on a received frame composes-corrupts.
 
 ---
@@ -258,8 +258,8 @@ any byte-producer still returns/consumes a Latin-1 `String`.
    Latin-1 + stale-JWT comments. (§3)
 2. Non-jwt decoder-caller audit grep (§3.6); migrate any binary reliance to
    `Bytes.from*`.
-3. Re-type the Sky surfaces: `Std.Compression`, `Std.Email` (`Attachment.content`),
-   `Sky.Core.WebSocket` binary in/out → `Bytes`; update their constrain schemes
+3. Re-type the Ipê surfaces: `Ipe.Compression`, `Ipe.Email` (`Attachment.content`),
+   `Ipe.WebSocket` binary in/out → `Bytes`; update their constrain schemes
    + lowering.
 4. Flip/refresh goldens (§5.6, §5.7); add new goldens (§5.1-5.5); regenerate
    oracle shas.
@@ -283,13 +283,13 @@ principles order, delay beats corruption.
   divergence). Removed with golden #6.
 - **NEW (strictly safer):** `Encoding.{base64,hex}Decode` validate UTF-8 and
   return `Err` on non-text payloads; byte-exact decode routes through
-  `Std.Bytes.from{Base64,Hex}` (`Vec<u8>`). Rationale: Rust `String` UTF-8
+  `Ipe.Bytes.from{Base64,Hex}` (`Vec<u8>`). Rationale: Rust `String` UTF-8
   invariant + parse-don't-validate (refuse to fabricate text from bytes). Go
   returns raw bytes in a string; Rust routes to the typed `Bytes` API.
   `url_decode` already behaves this way — this only aligns base64/hex. ASCII /
   all-text output is byte-identical to Go. Record in
   `docs/divergences-from-{sky,go}.md`.
-- **REINFORCED (pre-existing, M4e):** `Std.Bytes = Vec<u8>` (Go: `Bytes =
+- **REINFORCED (pre-existing, M4e):** `Ipe.Bytes = Vec<u8>` (Go: `Bytes =
   String`) is now the sole home of byte-exact encoding; the byte-pipeline
   surface change (`String → Bytes`) falls under this already-recorded
   divergence — the bytes themselves REGAIN Go parity.
@@ -318,8 +318,8 @@ principles order, delay beats corruption.
   as the soundness fix (D10); Phase-E deferred to PubSub (D11).
 
 Files touched: `runtime/src/sky_runtime/{encoding,bytes,jwt,compression,email,
-ws_client,server}.rs`; Sky surfaces `Std/{Compression,Email}`,
-`Sky/Core/WebSocket` (+ constrain schemes/lowering); `crates/sky_types/src/
+ws_client,server}.rs`; Ipê surfaces `Std/{Compression,Email}`,
+`Ipê/Core/WebSocket` (+ constrain schemes/lowering); `crates/sky_types/src/
 constrain.rs` (FIRST_SCHEMED :5663, stdlib_scheme arms, exclusion notes
 :2920/:5660, Phase-E :1503 left in place); `tests/golden/m4f_encoding_*`,
 `jwt_hs256_bytes`.

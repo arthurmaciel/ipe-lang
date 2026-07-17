@@ -16,14 +16,14 @@
 //! `String` arguments are the key's `kind` and `value` as extracted from the
 //! [`ipe_runtime::tui::TuiKey`] struct.
 //!
-//! Sky user code writes `onKey : KeyEvent -> Msg` where `KeyEvent` is typically a
+//! Ipê user code writes `onKey : KeyEvent -> Msg` where `KeyEvent` is typically a
 //! record alias `{ kind : String, value : String }`.  Because `FOnKey` takes two
 //! bare `String`s — not a record — the emitter generates a wrapper closure when
 //! `on_key_e` is a named function whose first parameter is a CLOSED record of all-
 //! `String` fields with `kind` and `value` present:
 //!
 //! ```text
-//! // Sky source:  onKey : { kind : String, value : String } -> Msg
+//! // Ipê source:  onKey : { kind : String, value : String } -> Msg
 //! // Emitted:
 //! |kind: String, value: String| Main_on_key(RecKindValue { kind, value })
 //! ```
@@ -165,7 +165,7 @@ fn emit_tui_inner(
 
     // seal: gate the Model against `tui_app`'s `Clone` bound. A non-clonable
     // (non-derivable) Model — a field of type `Cmd`/`Sub`/`Task`/`Decoder`/`Db`/
-    // function — would otherwise `skyc`-succeed then `cargo`-fail; the gate makes
+    // function — would otherwise `ipe`-succeed then `cargo`-fail; the gate makes
     // it a fail-closed `IPE-L0120` error. (Tui needs only `Clone`, not serde, so
     // an `Html`/`Color` field is admissible here.)
     if let Some(model_ty) = crate::emit_model_gate::model_ty_of_view(view_e) {
@@ -365,7 +365,7 @@ fn emit_tui_fn(
     emit_expr_at(ctx, e, indent, child, generics)
 }
 
-/// Find a record field by its Sky source name in an IR field list.
+/// Find a record field by its Ipê source name in an IR field list.
 ///
 /// Fail-closed: a missing required field surfaces a [`Diagnostic::CompilerBug`]
 /// rather than silently emitting wrong code (MAKE INVALID STATES UNREPRESENTABLE).

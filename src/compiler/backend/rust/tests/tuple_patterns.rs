@@ -6,7 +6,7 @@
 //!   variant carrying a tuple field (`type Wrap = MkWrap (Int, Int)`), matched
 //!   with `MkWrap (a, b) -> a`, emits the Rust arm `Main::MkWrap((a, b)) => a`,
 //!   and the construction `MkWrap (3, 4)` emits `Main::MkWrap((3, 4))`,
-//! * the UNIT VALUE [`Expr::Unit`] — Sky's `()` literal — emits the Rust unit
+//! * the UNIT VALUE [`Expr::Unit`] — Ipê's `()` literal — emits the Rust unit
 //!   expression `()`, and [`IrType::Unit`] renders as `()`.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at

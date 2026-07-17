@@ -276,7 +276,7 @@ fn emit_live_route(
         });
     };
 
-    // `Route::new` takes `pattern: &str`.  Sky string literals emit as
+    // `Route::new` takes `pattern: &str`.  Ipê string literals emit as
     // `"…".to_string()` (an owned `String`); prepend `&` so the `&String`
     // deref-coerces to `&str` at the call site.  Variable references also
     // type as `String`, so `&var` is equally correct.
@@ -293,7 +293,7 @@ fn emit_live_route(
 /// its first parameter type to `LiveReq`, so the emitted Rust function already
 /// has signature `fn(_req: LiveReq) -> (Model, IpeCmd<Msg>)`.
 ///
-/// `update` is `Fn(Msg, Model) -> (Model, IpeCmd<Msg>)` — multi-param Sky
+/// `update` is `Fn(Msg, Model) -> (Model, IpeCmd<Msg>)` — multi-param Ipê
 /// functions are lowered as uncurried Rust fns, matching the runtime bound.
 ///
 /// Store kind and path are read from process env at call time (never compiled in)
@@ -327,7 +327,7 @@ fn emit_live_app_inner(
     // seal: gate the Model type against `live_app`'s serde+Clone+PartialEq
     // bound BEFORE emitting. A non-serialisable Model (e.g. a field of type
     // `Cmd`/`Sub`/`Task`/`Decoder`/`Db`/function, or `Html`/`Element`/`Color`)
-    // would otherwise `skyc`-succeed and then `cargo`-fail on the missing trait.
+    // would otherwise `ipe`-succeed and then `cargo`-fail on the missing trait.
     // The gate converts that into a fail-closed `IPE-L0120` diagnostic.
     if let Some(model_ty) = crate::emit_model_gate::model_ty_of_view(view_e) {
         crate::emit_model_gate::check_admissible_model(
@@ -502,7 +502,7 @@ fn builder_fn_params(e: &Expr) -> Option<Vec<&IrType>> {
 ///   so a routed lambda `view` is not misrouted to the non-routed `live_app`,
 ///   which would discard `routes`/`notFound`),
 /// - the Model is an `IrType::Record`, and
-/// - one of its fields resolves to the Sky identifier `"page"`.
+/// - one of its fields resolves to the Ipê identifier `"page"`.
 ///
 /// Returns `None` for single-page apps or when the Model type cannot be
 /// structurally recovered (treated as "unrouted" — never false-blocks a
@@ -578,7 +578,7 @@ fn emit_live_fn(
     }
 }
 
-/// Find a record field by its Sky source name in an IR field list.
+/// Find a record field by its Ipê source name in an IR field list.
 ///
 /// Returns the field's value expression.  Fail-closed: a missing required field
 /// surfaces a [`Diagnostic::CompilerBug`] rather than silently emitting wrong

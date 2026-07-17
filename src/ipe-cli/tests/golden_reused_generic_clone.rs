@@ -1,6 +1,6 @@
 //! A reused-by-value generic param clone gap (SEAL).
 //!
-//! Without the fix, `skyc build` exits 0, but the emitted Rust fails `cargo build` with
+//! Without the fix, `ipe build` exits 0, but the emitted Rust fails `cargo build` with
 //! E0382 (`use of moved value: x`) in the body of a function whose only generic
 //! is used MORE THAN ONCE in a by-value consuming position:
 //! `dup x = toString x ++ toString x` emits `basics_to_string(x)` TWICE with no
@@ -26,11 +26,11 @@
 //! Run:
 //! ```text
 //! # fast (no cargo):
-//! cargo test -p skyc --test golden_i189_reused_generic_clone
+//! cargo test -p ipe --test golden_i189_reused_generic_clone
 //!
 //! # full E2E (real `cargo build` of the emitted project — the only check that
-//! # would have caught the original SEAL: skyc-0 then E0382):
-//! IPE_E2E=1 cargo test -p skyc --test golden_i189_reused_generic_clone
+//! # would have caught the original SEAL: ipe-0 then E0382):
+//! IPE_E2E=1 cargo test -p ipe --test golden_i189_reused_generic_clone
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -52,7 +52,7 @@ fn entry_path(root: &Path) -> PathBuf {
     golden_dir(root).join("Main.ipe")
 }
 
-/// skyc-0 + emitted-source assertion (unconditional, cheap — no `cargo`): the
+/// ipe-0 + emitted-source assertion (unconditional, cheap — no `cargo`): the
 /// compiler must accept the program AND emit the reused generic param with a
 /// `Clone` bound plus a `.clone()` on the non-final use. This directly asserts
 /// the E0382 trigger is gone, independent of the `IPE_E2E` gate.
@@ -71,7 +71,7 @@ fn i189_skyc_accepts_and_clones_reused_generic() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for reused_generic_clone: {:?}",
+        "ipe build must succeed for reused_generic_clone: {:?}",
         built.err()
     );
 
@@ -104,7 +104,7 @@ fn i189_skyc_accepts_and_clones_reused_generic() {
 /// cargo-0 ∧ run-0 ∧ Go-parity: the emitted project actually compiles with
 /// `rustc` (no E0382), prints the two instantiations, and its stdout matches the
 /// cached Go oracle. Gated on `IPE_E2E=1` — a real `cargo build`, the only check
-/// that would have caught the original SEAL violation (E0382, `skyc build`
+/// that would have caught the original SEAL violation (E0382, `ipe build`
 /// clean).
 #[test]
 fn i189_cargo_builds_and_runs() {
@@ -125,7 +125,7 @@ fn i189_cargo_builds_and_runs() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for reused_generic_clone: {:?}",
+        "ipe build must succeed for reused_generic_clone: {:?}",
         built.err()
     );
 
@@ -145,7 +145,7 @@ fn i189_cargo_builds_and_runs() {
         outcome.stdout
     );
 
-    // Cached-oracle parity: skyc's stdout must byte-match the golden's
+    // Cached-oracle parity: ipe's stdout must byte-match the golden's
     // refresh-oracle-generated `expected_go.txt` (staleness gate re-hashes
     // Main.ipe first; a hand-edited oracle.meta hard-fails here).
     support::assert_go_parity("reused_generic_clone", &gdir, &outcome.stdout);

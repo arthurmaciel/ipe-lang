@@ -3,9 +3,9 @@
 ## DECIDED SHAPE (user, 2026-07-03) — supersedes Q1/Q2 exploration below
 
 The namespace is **`Ipe.<module>`, single-rooted and reserved**, not bare-flat:
-- Unify `Sky.Core.*` + `Std.*` → one `Ipe.*` root, dropping both the `.Core`
-  sub-tier and the `Std` tier: `Sky.Core.String`→`Ipe.String`, `Std.Db`→`Ipe.Db`,
-  `Std.Ui`→`Ipe.Ui`. Deeper structure is kept (`Ipe.Ui.Background`,
+- Unify `Ipe.*` + `Ipe.*` → one `Ipe.*` root, dropping both the `.Core`
+  sub-tier and the `Std` tier: `Ipe.String`→`Ipe.String`, `Ipe.Db`→`Ipe.Db`,
+  `Ipe.Ui`→`Ipe.Ui`. Deeper structure is kept (`Ipe.Ui.Background`,
   `Ipe.Http.Server`).
 - **Reserve the `Ipe.` prefix**: a user `module Ipe.Foo` (or `import X as Ipe...`)
   is a hard compile error (parse-don't-validate). Stdlib owns the prefix and can
@@ -30,7 +30,7 @@ mostly moot under qualified access — keep only the reserved-root rejection.
 Status: DESIGN (locked Q1–Q6, open decisions listed). No code, no build.
 Author: guardian design-swarm synthesis + user decided-shape (2026-07-03).
 Supersedes the panel drafts.
-Coupled to: rename #59 (Sky → ipê), memory `post-completion-rename-and-namespace`,
+Coupled to: rename #59 (Ipê → ipê), memory `post-completion-rename-and-namespace`,
 audit `docs/architecture/principled-decisions-audit.md` #11 (DCE).
 
 Principle order governing every ruling below:
@@ -43,7 +43,7 @@ name is a loud compile error, never a silent pick.**
 
 ## Executive summary
 
-Replace the two-tier `Ipe.Core.* / Std.*` import surface with a single **flat,
+Replace the two-tier `Ipe.Core.* / Ipe.*` import surface with a single **flat,
 auto-imported namespace of module qualifiers**. You write `String.map`,
 `List.map`, `Db.query` with **no import line**; the module prefix stays as the
 mandatory disambiguator. This is *not* a fully-unqualified surface — bare `map`
@@ -58,9 +58,9 @@ The real work is two hardening items, both code-confirmed this session:
    (`env.rs:1036` / `:1063`) is last-writer-wins on a colliding qualifier key.
    The flatten *widens* this table, so it must become a checked, erroring insert
    driven from one `STDLIB_MANIFEST`.
-2. **Reseed reachability off referenced qualifiers, not import decls.** Sky-level
+2. **Reseed reachability off referenced qualifiers, not import decls.** Ipê-level
    DCE is absent today (audit #11: emit-all + LLVM strip). Auto-import deletes the
-   import edge that gates module inclusion (`crates/skyc/src/project.rs:285`), so
+   import edge that gates module inclusion (`crates/ipe/src/project.rs:285`), so
    inclusion must be re-rooted on the set of referenced qualifiers — otherwise the
    build either link-fails or compiles the whole stdlib every time.
 
@@ -85,19 +85,19 @@ commits. Rename #59 lands **first**; flatten lands **second**.
   collapsed.
 - **F3. Silent qualifier merge is live.** `env.rs:1036` / `:1063` use
   `.extend(...)` on a shared qualifier key — last-writer-wins, no error.
-- **F4. Sky-level DCE is absent.** Audit #11: ipê emits all defs
+- **F4. Ipê-level DCE is absent.** Audit #11: ipê emits all defs
   (`for func in &module.funcs`) and relies on rustc/LLVM link-strip. Class "P4
   efficiency (build speed) only", priority low. Embedded stdlib
-  (`crates/skyc/src/stdlib.rs`, fixed 18-module `include_str!` set) is pulled into
+  (`crates/ipe/src/stdlib.rs`, fixed 18-module `include_str!` set) is pulled into
   the compile graph by import/reference resolution, then all its defs emit.
 - **F5. Kernel-backed defs emit no Rust body.** `Ffi.kernel "String_fromInt"` →
   runtime dispatch. Auto-importing kernel modules costs zero emitted source; only
   the runtime crate carries them, and LLVM strips the unused.
-- **F6. `Sky`/`Std` are reserved first path segments** (IPE-N0025,
+- **F6. `Ipê`/`Std` are reserved first path segments** (IPE-N0025,
   `crates/sky_canon/src/resolve.rs:108`). `AmbiguousImport` (IPE-N0024,
   `resolve.rs`) already errors when two deps expose the same unqualified name.
-- **F7. `Std.*` is not yet ported to the Rust fork.** Only 18 `Ipe.Core.*` modules
-  ship. `Std.Db/Auth/Ui/Time` describe the Go/Haskell reference. This makes the
+- **F7. `Ipe.*` is not yet ported to the Rust fork.** Only 18 `Ipe.Core.*` modules
+  ship. `Ipe.Db/Auth/Ui/Time` describe the Go/Haskell reference. This makes the
   `Time` collision (Q2) *latent*, not present — it must surface loudly at port
   time.
 
@@ -111,10 +111,10 @@ commits. Rename #59 lands **first**; flatten lands **second**.
   (`String`, `List`, `Dict`, `Set`, `Math`, `Db`, `Auth`, `Ui`, `Json.Encode`,
   `Json.Decode`, …) — no `import` line.
 - Member access stays **qualified**: `String.map`, `List.foldl`, `Db.query`.
-- Flattening rule: **strip exactly the tier-root prefix (`Ipe.Core.` / `Std.`),
+- Flattening rule: **strip exactly the tier-root prefix (`Ipe.Core.` / `Ipe.`),
   preserve the remaining qualifier path.** `Ipe.Core.String → String`;
   `Ipe.Core.Json.Encode → Json.Encode` (multi-segment leaf preserved — collapsing
-  to bare `Json` would collide Encode/Decode); `Std.Ui.Background → Ui.Background`.
+  to bare `Json` would collide Encode/Decode); `Ipe.Ui.Background → Ui.Background`.
 - The **unqualified surface stays the existing curated, CLOSED Prelude**:
   `identity`, `always`, `not`, `toString`, `fst`, `snd`, `clamp`, `modBy`,
   `errorToString`, `println`, plus ctors `Just/Nothing/Ok/Err/True/False` and the
@@ -159,15 +159,15 @@ Four layers, each making an ambiguity class unrepresentable or loud:
    highest-priority hardening — the flatten widens exactly this table, and the
    silent merge already exists.**
 
-   The one genuine latent instance: `Ipe.Core.Time` (kernel) + a future `Std.Time`
+   The one genuine latent instance: `Ipe.Core.Time` (kernel) + a future `Ipe.Time`
    (IANA zones) both strip to `Time` (F7). The checked insert refuses to build when
-   `Std.Time` ports, forcing a stdlib-author merge/rename decision at that moment
+   `Ipe.Time` ports, forcing a stdlib-author merge/rename decision at that moment
    rather than a silent last-writer-wins. Audit `Http` for the same overlap.
 
 3. **User qualifier vs stdlib qualifier — hard error `IPE-N0026`.** `module Db
    exposing (..)` or `import MyLib as String` where the name equals an
    auto-imported stdlib qualifier → `NameError::QualifierShadowsStdlib` with a
-   did-you-mean. This **generalises the existing N0025 `Sky`/`Std` reservation**
+   did-you-mean. This **generalises the existing N0025 `Ipê`/`Std` reservation**
    from 2 roots to the ~40 leaf qualifiers. Rationale for hard-error over
    warn-shadow: the stdlib qualifier is auto-imported *implicitly* — the user never
    opted into the collision, yet a warned shadow silently repoints *every* `Db.foo`
@@ -220,16 +220,16 @@ then all its defs emit (F4). Auto-import deletes the import line, so:
 
 - **Def-level DCE, audit #11 (staged, NOT blocking).** Pruning unreferenced defs
   *within* a referenced module (typed `Ref` / `FfiRef` / `CtorRef` reachability)
-  trims how many defs cargo compiles. It becomes load-bearing only as pure-Sky
-  module def-counts grow — strong-recommend before a large pure-Sky module (`Std.Ui`
-  / `Std.Db`) lands. The size-regression gate self-enforces this: the moment
+  trims how many defs cargo compiles. It becomes load-bearing only as pure-Ipê
+  module def-counts grow — strong-recommend before a large pure-Ipê module (`Ipe.Ui`
+  / `Ipe.Db`) lands. The size-regression gate self-enforces this: the moment
   auto-import bloats hello-world by one unused def, the gate goes red and #11
   becomes mandatory. No human "is it time yet" judgment.
 
 **Soundness rule (both DCE layers).** **Keep all constructors of any referenced
 type** — do not prune sister ctors. Sisters are tiny; pruning risks
 exhaustiveness / `toString` / reflection paths. Do not port Haskell's ctor-closure
-fixup. Top-level Sky bindings are pure (effects are Tasks forced only at the entry
+fixup. Top-level Ipê bindings are pure (effects are Tasks forced only at the entry
 boundary), so a pruned unreferenced def has no observable effect — DCE is observably
 sound. `let _ = TaskExpr` auto-force lives inside a reachable body, never a top-level
 def, so DCE never touches it.
@@ -255,15 +255,15 @@ make-invalid-states violation — for zero external benefit.
 Sequence (each landing independently green; satisfies the green-everywhere gate and
 keeps regressions bisectable):
 
-1. **Flatten-additive.** Auto-import lands; old `Ipe.Core.*` / `Std.*` paths still
+1. **Flatten-additive.** Auto-import lands; old `Ipe.Core.*` / `Ipe.*` paths still
    resolve for this one window. **Differential resolution test**: for every example,
    the resolved `(qualifier, member)` set is byte-identical before/after
    auto-import — proves auto-import is purely additive and re-points nothing.
 2. **Codemod.** Mechanically delete now-redundant stdlib imports and rewrite any
-   fully-pathed `Ipe.Core.Foo.bar` / `Std.Foo.bar → Foo.bar` (strip tier root,
+   fully-pathed `Ipe.Core.Foo.bar` / `Ipe.Foo.bar → Foo.bar` (strip tier root,
    preserve multi-segment leaves per Q1). Delete-lines refactor, `ipe fmt`-idempotent.
 3. **Terminal hard cut.** Remove the long-form aliases → single resolution path.
-   `import Ipe.Core.X` / `import Std.X` become errors. **This closes before the
+   `import Ipe.Core.X` / `import Ipe.X` become errors. **This closes before the
    public push** — shipping a public language day-one with two ways to path the
    stdlib plus a pending deprecation is a self-inflicted make-invalid-states
    violation.
@@ -326,7 +326,7 @@ principle, so de-abbreviation must never touch a name that changes emitted outpu
 
 **Decision: rename #59 (+ de-abbreviation) FIRST, flatten SECOND. Two separate,
 independently-green, bisectable passes. One qualifier registry, not two. Upstream-
-Sky provenance preserved throughout.**
+Ipê provenance preserved throughout.**
 
 Ordering rationale:
 
@@ -337,15 +337,15 @@ Ordering rationale:
    resolution bug hides under thousands of path-rename lines.
 2. **The flatten's tables are authored once in final vocabulary.** The single-segment
    qualifier registry, the reserved-qualifier list, and the de-abbreviated spellings
-   (which ride #59) are computed from *final* `Ipe.Core.*` / `Std.*` names.
-   Flatten-first would build them around `Sky.*` and rewrite them again.
+   (which ride #59) are computed from *final* `Ipe.Core.*` / `Ipe.*` names.
+   Flatten-first would build them around `Ipê.*` and rewrite them again.
 3. **De-abbreviation is part of the #59 pass** (Q5), so the flatten consumes
    already-final identifier names.
 
 Concrete order:
 
-1. **#59** — rename `Sky → ipê`/`Ipe`, extension `.ipe → .ipe`, `IPE-N00xx → IPE-N00xx`,
-   reserved segments flip `{Sky, Std} → {Ipe, Std}`, de-abbreviation. Old public
+1. **#59** — rename `Ipê → ipê`/`Ipe`, extension `.ipe → .ipe`, `IPE-N00xx → IPE-N00xx`,
+   reserved segments flip `{Ipê, Std} → {Ipe, Std}`, de-abbreviation. Old public
    names kept as deprecated aliases through the flatten window. Own commit, green
    against the sweep.
 2. **Flatten** — build the `STDLIB_MANIFEST`; auto-install short qualifiers
@@ -361,12 +361,12 @@ strings are one source of truth feeding both the rename and the flatten. Do not 
 a second registry for flat mode — that reintroduces the two-source drift the tripwire
 tests exist to prevent.
 
-**Upstream-Sky reference preservation (public-artifact rule).** The flatten touches
-*code* only — the live reserved namespace drops `Sky` and the qualifier registry
+**Upstream-Ipê reference preservation (public-artifact rule).** The flatten touches
+*code* only — the live reserved namespace drops `Ipê` and the qualifier registry
 holds no `Sky` entry. It does **not** rename the curated upstream-Sky provenance:
 the single README credit line, the `docs/divergences-from-sky.md` references, the
 `../sky` paths, and the embedded-source provenance comments in
-`crates/skyc/src/stdlib.rs` are on the naive-sed exclusion list and are preserved
+`crates/ipe/src/stdlib.rs` are on the naive-sed exclusion list and are preserved
 verbatim. No disparagement of the upstream project appears in code or docs.
 
 ---
@@ -410,12 +410,12 @@ verbatim. No disparagement of the upstream project appears in code or docs.
 
 ## OPEN DECISIONS (unresolved forks)
 
-1. **`Time` collision resolution (stdlib-author call, deferred to `Std.Time` port).**
-   When `Std.Time` lands, the tripwire fires. Resolve by either folding the
+1. **`Time` collision resolution (stdlib-author call, deferred to `Ipe.Time` port).**
+   When `Ipe.Time` lands, the tripwire fires. Resolve by either folding the
    `Ipe.Core.Time` kernel entries into a single richer `Time`, or renaming the
    kernel-level module (candidate `Clock`). Audit `Http` for the same overlap.
    Mechanically forced, semantically open. (Same class: any future `Ipe.Core.X` vs
-   `Std.X` leaf-name overlap.)
+   `Ipe.X` leaf-name overlap.)
 
 2. **User-vs-stdlib qualifier: hard-error vs warn-shadow — LOCKED to hard-error,
    minority dissent noted.** Two of three reconciled panelists and the fail-closed
@@ -427,7 +427,7 @@ verbatim. No disparagement of the upstream project appears in code or docs.
    A leaf-level `import Db` for an already-auto-imported qualifier could resolve as a
    harmless no-op (lets the codemod leave leaf imports untouched) or be an error (one
    resolution path, cleanest make-invalid-states). Leaning error for the long
-   `Ipe.Core.*`/`Std.*` forms (never a no-op); the single-leaf no-op is a genuine
+   `Ipe.Core.*`/`Ipe.*` forms (never a no-op); the single-leaf no-op is a genuine
    micro-decision. Note: `import Db as X` and `exposing (...)` are always valid
    regardless.
 

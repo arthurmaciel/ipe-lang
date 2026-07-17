@@ -5,26 +5,26 @@
 //! verbatim-ported reference program with `IPE-T0001` ("expected String, found
 //! Value" etc.).
 //!
-//! The reference Sky-source signature IS the contract:
+//! The reference Ipê-source signature IS the contract:
 //!
 //! * `withClaim : String -> JsonEnc.Value -> Claims -> Claims`
-//!   (`Sky/Core/Jwt.ipe:79`) — ours had drifted to `String -> String -> …`.
+//!   (`Ipê/Core/Jwt.ipe:79`) — ours had drifted to `String -> String -> …`.
 //! * `type alias Migration = { name : String, sql : String }` +
 //!   `migrate : Db -> List Migration -> Task Error (List String)`
 //!   (`Std/Db.ipe:237,300`) — ours had no `Migration` and `migrate` took
 //!   `List (String, String)`.
 //! * `type alias Response = { status : Int, body : String, headers : Dict
-//!   String String, contentType : String }` (`Sky/Http/Server.ipe:66`) — ours
+//!   String String, contentType : String }` (`Ipê/Http/Server.ipe:66`) — ours
 //!   had registered it as an opaque nominal, so a record literal was rejected.
 //!
 //! Each test compiles a fixture that uses the surface as the reference does.
-//! The cheap tier asserts `skyc` ACCEPTS the program (no IPE-T0001). The
+//! The cheap tier asserts `ipe` ACCEPTS the program (no IPE-T0001). The
 //! `IPE_E2E=1` tier is THE SEAL: the emitted Rust must `cargo build` and run.
 //!
 //! Run:
 //! ```text
-//! cargo test -p skyc --test golden_i217_stdlib_contract_drift
-//! IPE_E2E=1 cargo test -p skyc --test golden_i217_stdlib_contract_drift
+//! cargo test -p ipe --test golden_i217_stdlib_contract_drift
+//! IPE_E2E=1 cargo test -p ipe --test golden_i217_stdlib_contract_drift
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -43,7 +43,7 @@ fn entry_path(root: &Path, name: &str) -> PathBuf {
         .join("Main.ipe")
 }
 
-/// Compile a fixture and assert `skyc` accepts it (the contract now matches the
+/// Compile a fixture and assert `ipe` accepts it (the contract now matches the
 /// reference). Returns the emitted output dir for an optional E2E follow-up.
 fn assert_skyc_accepts(name: &str) -> Option<PathBuf> {
     let root = repo_root();
@@ -59,7 +59,7 @@ fn assert_skyc_accepts(name: &str) -> Option<PathBuf> {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for {name} (contract converged to reference): {:?}",
+        "ipe build must succeed for {name} (contract converged to reference): {:?}",
         built.err()
     );
     Some(out)
@@ -80,12 +80,12 @@ fn e2e_build_and_run(name: &str, expect_stdout_contains: &str) {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for {name}: {:?}",
+        "ipe build must succeed for {name}: {:?}",
         built.err()
     );
 
     // The emitted binary is run by the oracle with the TEST process's cwd
-    // (`crates/skyc`), and `Db.connect ()` writes the default `sky.db` there.
+    // (`crates/ipe`), and `Db.connect ()` writes the default `sky.db` there.
     // A `sky.db` left by a PRIOR run (or a fixture edit that changed a
     // migration's SQL) would trip the checksum guard on the next run — a
     // spurious runtime failure unrelated to the contract under test. Clear the

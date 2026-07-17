@@ -9,7 +9,7 @@ only sequences the wiring and pins each step to a failing test.
 
 Produce fully-static, portable single-binary artifacts for ipê:
 
-1. A user asks for a static build via `skyc build --static [--target <triple>]
+1. A user asks for a static build via `ipe build --static [--target <triple>]
    [--allocator <choice>]` **or** a `[rust]` section in `sky.toml`.
 2. The emitted cargo crate gets a **`dlmalloc` default** global allocator (pure
    Rust) behind the static build, `talc` and `mimalloc` as explicit opt-ins, and
@@ -29,8 +29,8 @@ The following are established facts about the repo *as it stands today*. The
 executor must not re-derive them; they change the shape of several tasks versus a
 naive reading of the spec.
 
-1. **`skyc build` is emit-only. It does NOT invoke `cargo build`.**
-   `crates/skyc/src/lib.rs` `build()` (L182) and `build_project()` (L246) write
+1. **`ipe build` is emit-only. It does NOT invoke `cargo build`.**
+   `crates/ipe/src/lib.rs` `build()` (L182) and `build_project()` (L246) write
    the cargo project to `sky-out/rust/` and stop. The real `cargo build` runs
    **externally**: `scripts/equivalence-checks/examples-sweep.sh:132` does
    `cd "$d" && cargo build --manifest-path sky-out/rust/Cargo.toml`; the only
@@ -39,7 +39,7 @@ naive reading of the spec.
    (sweep + CI), while the *static configuration* must be baked into the emitted
    crate (`.cargo/config.toml` + `Cargo.toml` features) so a standalone `cargo
    build --target …` is correct by construction. The spec's phrase "the build
-   runner" maps to the sweep/CI, not to a cargo-spawning path inside skyc today.
+   runner" maps to the sweep/CI, not to a cargo-spawning path inside ipe today.
 
 2. **Manifest surgery is anchored `replacen` with fail-loud `CompilerBug`.**
    `crates/sky_backend_rust/src/project.rs` holds `db_cargo_toml` /
@@ -85,7 +85,7 @@ naive reading of the spec.
    real hazard is CWD-based config discovery (see Task 6, the riskiest task).
 
 7. **Rename #59 (`sky_*` → `ipe_*`) may land first.** Plan `2026-07-03-rename-sky-
-   to-ipe.md` exists. This plan writes **current** names (`crates/skyc`,
+   to-ipe.md` exists. This plan writes **current** names (`crates/ipe`,
    `crates/sky_backend_rust`, `sky_runtime`, `sky-out/rust`, `skyc build`). If the
    rename precedes execution, mechanically substitute `ipe_*`/`ipe build`/`ipe-out`
    before starting — the task structure is unaffected.
@@ -93,7 +93,7 @@ naive reading of the spec.
 Data flow after this change:
 
 ```
-skyc build --static --target … --allocator …   ┐
+ipe build --static --target … --allocator …   ┐
 sky.toml [rust] static/target/allocator/ack     ├─▶ build_plan::resolve()
 env IPE_STATIC / IPE_TARGET / IPE_ALLOC         ┘        │ Result<BuildPlan, Refusal>
                                                          ▼ (parse, don't validate)
@@ -122,13 +122,13 @@ env IPE_STATIC / IPE_TARGET / IPE_ALLOC         ┘        │ Result<BuildPlan,
   `skyc` (CLI arg parse, `sky.toml` parse, new `build_plan` module).
 - Diagnostics: `sky_diagnostics::{DResult, Diagnostic}` —
   `Diagnostic::CompilerBug { where_, detail }` for anchor-miss / invariant breach.
-- CLI errors: `skyc::CliError` (`Usage(&str)`, `Io`, `Pipeline`, plus new
+- CLI errors: `ipe::CliError` (`Usage(&str)`, `Io`, `Pipeline`, plus new
   `StaticRefusal` variant carrying a `Refusal`).
 - New allocator crates (versions pinned in `crate_specs.rs` SSOT):
   `dlmalloc = { version = "0.2", features = ["global"] }`,
   `talc = "4"`, `spin = "0.9"` (talc lock backing), `mimalloc = { version =
   "0.1", default-features = false }`.
-- Test runners: `cargo test -p sky_backend_rust`, `cargo test -p skyc`; e2e gated
+- Test runners: `cargo test -p sky_backend_rust`, `cargo test -p ipe`; e2e gated
   on `IPE_E2E=1` and a new `IPE_E2E_STATIC=1`.
 
 ## Global Constraints
@@ -160,9 +160,9 @@ Every tie-break in this plan resolves upward. Concretely for this surface:
 
 ### Non-regression invariants (must still hold at the end)
 
-- Every existing `cargo test -p sky_backend_rust` / `-p skyc` passes; the
+- Every existing `cargo test -p sky_backend_rust` / `-p ipe` passes; the
   `crate_specs_match_manifests` drift test stays green (extended, not weakened).
-- A **default** `skyc build` (no `--static`) emits a manifest with **no allocator
+- A **default** `ipe build` (no `--static`) emits a manifest with **no allocator
   feature** and a `main.rs` with **no `#[global_allocator]` item** (system
   allocator) — byte-checked against the rebaselined golden.
 - No new `unsafe`, no `unwrap`/`expect`/`panic!`/raw indexing in shipping code.
@@ -337,7 +337,7 @@ the Task 8/9 e2e, not in unit tests.
 
 ## Task 4 — Typed `BuildPlan` + `Refusal` + closed `Allocator` enum (parse, don't validate)
 
-**Files:** new `crates/skyc/src/build_plan.rs`; `crates/skyc/src/lib.rs` (`mod
+**Files:** new `crates/ipe/src/build_plan.rs`; `crates/ipe/src/lib.rs` (`mod
 build_plan;`, new `CliError::StaticRefusal`).
 
 **Steps:**
@@ -398,7 +398,7 @@ build_plan;`, new `CliError::StaticRefusal`).
 #[test] fn auto_glibc_picks_system() { /* Ok(DynamicGlibc{alloc:System}) */ }
 ```
 
-**Automated verification:** `cargo test -p skyc build_plan`.
+**Automated verification:** `cargo test -p ipe build_plan`.
 **Manual:** none. This is the plan's parse-don't-validate core; land it before any
 CLI wiring so the CLI feeds a proven-total resolver.
 
@@ -406,8 +406,8 @@ CLI wiring so the CLI feeds a proven-total resolver.
 
 ## Task 5 — CLI flags + `sky.toml [rust]` + precedence wiring
 
-**Files:** `crates/skyc/src/lib.rs` (`run_build`, `USAGE`),
-`crates/skyc/src/project.rs` (`parse_manifest`).
+**Files:** `crates/ipe/src/lib.rs` (`run_build`, `USAGE`),
+`crates/ipe/src/project.rs` (`parse_manifest`).
 
 **Steps:**
 1. Extend `run_build`'s arg loop (currently `--out/--runtime/--emit-ir/--fix`) with
@@ -440,8 +440,8 @@ CLI wiring so the CLI feeds a proven-total resolver.
 #[test] fn unknown_cli_flag_still_usage_error() { /* no silent accept */ }
 ```
 
-**Automated verification:** `cargo test -p skyc`.
-**Manual:** `skyc build src/Main.ipe --static --allocator dlmalloc` on
+**Automated verification:** `cargo test -p ipe`.
+**Manual:** `ipe build src/Main.ipe --static --allocator dlmalloc` on
 `examples/01-hello-world`; confirm emitted `Cargo.toml` default list contains
 `alloc_dlmalloc` and no artifact is emitted on a refusal path.
 
@@ -450,7 +450,7 @@ CLI wiring so the CLI feeds a proven-total resolver.
 ## Task 6 — Emit `.cargo/config.toml` into the emitted crate (RISKIEST — CWD discovery trap)
 
 **Files:** `crates/sky_backend_rust/src/project.rs` (return the config in
-`EmittedProject`), `crates/skyc/src/lib.rs` (write it under `out_dir/.cargo/`),
+`EmittedProject`), `crates/ipe/src/lib.rs` (write it under `out_dir/.cargo/`),
 `scripts/equivalence-checks/examples-sweep.sh` + CI (invocation CWD fix).
 
 **Why riskiest:** **cargo discovers `.cargo/config.toml` relative to the process
@@ -503,7 +503,7 @@ a `--build-only` sweep would pass and a naive reviewer would miss.
     assert!(cfg.contains("linker=x86_64-linux-musl-gcc"));
     assert!(!cfg.contains("link-self-contained=yes"));
 }
-#[test] fn config_written_into_crate_dir_not_workspace_root() { /* skyc writes out_dir/.cargo/config.toml */ }
+#[test] fn config_written_into_crate_dir_not_workspace_root() { /* ipe writes out_dir/.cargo/config.toml */ }
 ```
 Plus a shell assertion in the sweep that `cargo` is invoked with CWD = crate dir.
 
@@ -564,7 +564,7 @@ fallback exists) skips validation — a silent security regression.
 
 ## Task 8 — Toolchain preflight + external build-runner target wiring
 
-**Files:** `crates/skyc/src/build_plan.rs` (preflight helper), `scripts/examples-
+**Files:** `crates/ipe/src/build_plan.rs` (preflight helper), `scripts/examples-
 sweep.sh` (`--static` variant), `scripts/lib/checks.sh`.
 
 **Steps:**
@@ -575,13 +575,13 @@ sweep.sh` (`--static` variant), `scripts/lib/checks.sh`.
    cross-linker is on PATH and error with an install hint. When `rustup` itself is
    absent, **fail-soft** (let cargo error) — refusing there is hostile to non-rustup
    toolchains.
-2. Add a `--static` mode to `scripts/equivalence-checks/examples-sweep.sh`: emit with `skyc build …
+2. Add a `--static` mode to `scripts/equivalence-checks/examples-sweep.sh`: emit with `ipe build …
    --static --target x86_64-unknown-linux-musl`, then `cd <crate> && cargo build
    --target … --features alloc_dlmalloc --locked` (CWD fix from Task 6). Keep the
    existing dynamic sweep intact (static is an *added* variant, not a replacement).
-3. Since **skyc remains emit-only** (Architecture note 1), the target-triple
+3. Since **ipe remains emit-only** (Architecture note 1), the target-triple
    `cargo build` invocation lives in the sweep/CI. Decide (Open Decision) whether
-   skyc gains an opt-in `--run-cargo` step; default is NO (preserve the emit/build
+   ipe gains an opt-in `--run-cargo` step; default is NO (preserve the emit/build
    separation the repo already relies on).
 
 **Test-first:**
@@ -593,7 +593,7 @@ sweep.sh` (`--static` variant), `scripts/lib/checks.sh`.
 #[test] fn missing_rustup_is_fail_soft_not_refusal() { /* Ok(()) when rustup absent */ }
 ```
 
-**Automated verification:** `cargo test -p skyc`; `bash scripts/equivalence-checks/examples-sweep.sh
+**Automated verification:** `cargo test -p ipe`; `bash scripts/equivalence-checks/examples-sweep.sh
 --static --dry-run`.
 **Manual:** `rustup target add x86_64-unknown-linux-musl` once on the dev host.
 
@@ -601,7 +601,7 @@ sweep.sh` (`--static` variant), `scripts/lib/checks.sh`.
 
 ## Task 9 — Golden / e2e: hello-world + representative server build static, run, and prove it
 
-**Files:** `crates/skyc/src/lib.rs` (new `IPE_E2E_STATIC`-gated test alongside the
+**Files:** `crates/ipe/src/lib.rs` (new `IPE_E2E_STATIC`-gated test alongside the
 existing `IPE_E2E` one at L1084-1138).
 
 **Steps:**
@@ -613,7 +613,7 @@ existing `IPE_E2E` one at L1084-1138).
    - `file <bin>` output contains `"statically linked"`;
    - `ldd <bin>` prints `"not a dynamic executable"` (exit non-zero is fine — grep
      the message).
-3. Add a **representative concurrent app** (a `Sky.Http.Server` example) as a second
+3. Add a **representative concurrent app** (a `Ipe.Http.Server` example) as a second
    static case — this is the shape where the allocator matters and where a dynamic-
    NSS/getaddrinfo footgun would surface. Assert it starts and serves one request.
 4. Gate all of this on `IPE_E2E_STATIC=1` so default `cargo test` stays fast and
@@ -622,7 +622,7 @@ existing `IPE_E2E` one at L1084-1138).
 **Test-first:** the test itself is the artifact; it is RED until Tasks 2/3/6 land
 (no `alloc_dlmalloc` feature / no crt-static config).
 
-**Automated verification:** `IPE_E2E_STATIC=1 cargo test -p skyc static_e2e`.
+**Automated verification:** `IPE_E2E_STATIC=1 cargo test -p ipe static_e2e`.
 **Manual:** run the produced binary inside `docker run --rm -v …:/b scratch /b`
 (no libc present) — it must run, proving zero runtime deps.
 
@@ -637,7 +637,7 @@ existing `IPE_E2E` one at L1084-1138).
 |---|---|---|---|
 | `linux-static-x64` | `x86_64-unknown-linux-musl` | dlmalloc | `file`="statically linked"; `ldd`="not a dynamic executable"; **run in a `scratch` container** |
 | `linux-static-mimalloc` | same | mimalloc | keep the C/cross-linker path green |
-| `macos-refusal` | `*-apple-darwin` | — | **negative test**: assert `skyc build --static` is *refused* (`MacStaticUnsupported`); dynamic build runs |
+| `macos-refusal` | `*-apple-darwin` | — | **negative test**: assert `ipe build --static` is *refused* (`MacStaticUnsupported`); dynamic build runs |
 | `supply-chain` | all | — | `cargo audit` + `cargo deny` over the emitted `Cargo.lock`; commit the lock; emit an SBOM (cargo metadata + allocator + versions + build commit) |
 
 - CI **builds AND runs** (a `--build-only` sweep misses "static binary segfaults on
@@ -710,6 +710,6 @@ parallel with the 4→5 branch.
 - **D3 — measure-before-finalize ownership.** Who runs the §4.5 bench, on which
   fixture, and what bar defines "clears the cliff" (fills divergence `<X>`)?
 - **D6 — `aarch64-unknown-linux-musl` timing.** First milestone or follow-up?
-- **skyc emit-only vs `--run-cargo`.** Keep skyc emit-only (default) or add an
-  opt-in cargo-invocation step so `skyc build --static` is one command end-to-end?
+- **ipe emit-only vs `--run-cargo`.** Keep ipe emit-only (default) or add an
+  opt-in cargo-invocation step so `ipe build --static` is one command end-to-end?
 ```

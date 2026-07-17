@@ -8,10 +8,10 @@
 //! `ipe_db` already ships is directly reusable, unmodified, by an LSP-shaped
 //! request loop: in-memory buffer inputs (no disk read), `Send`-safe
 //! cross-thread reuse (one worker thread per demand, exactly `ipe watch`'s
-//! orchestrator/worker split — see `crates/skyc/src/watch.rs`'s own doc
+//! orchestrator/worker split — see `crates/ipe/src/watch.rs`'s own doc
 //! comment), and salsa's own cancellation firing on a `typecheck` demand
 //! exactly as it already does on `ipe watch`'s `compile_prepared`
-//! (`crates/skyc/tests/watch_cancellation.rs`).
+//! (`crates/ipe/tests/watch_cancellation.rs`).
 //!
 //! Nothing in `ipe_db` needs to change for this: [`ipe_db::SourceFile`] /
 //! [`ipe_db::SourceRoot`] are plain salsa inputs the driver already sets
@@ -154,7 +154,7 @@ fn lsp_shaped_buffer_edit_drives_diagnostics_and_navigation_in_memory() {
 // mechanism already wired for `ipe watch` is genuinely query-agnostic.
 // ---------------------------------------------------------------------------
 
-/// Mirrors `crates/skyc/tests/watch_cancellation.rs`'s
+/// Mirrors `crates/ipe/tests/watch_cancellation.rs`'s
 /// `compile_worker_is_cancelled_by_a_concurrent_input_edit`, but against
 /// [`ipe_db::typecheck`] directly (the LSP's own diagnostics demand) rather
 /// than `ipe::compile_prepared` — proving the cancellation mechanism is a
@@ -186,7 +186,7 @@ fn lsp_diagnostics_query_is_cancelled_by_the_next_keystroke_and_converges_to_lat
     // The LSP demands diagnostics for the open buffer on a background
     // worker thread — never on the request-loop thread itself — holding a
     // CLONED database handle, exactly `ipe watch`'s orchestrator/worker
-    // split (see the doc comment in `crates/skyc/src/watch.rs`).
+    // split (see the doc comment in `crates/ipe/src/watch.rs`).
     let db_worker = db.clone();
     let worker = thread::spawn(move || {
         salsa::Cancelled::catch(AssertUnwindSafe(|| {

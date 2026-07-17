@@ -1,4 +1,4 @@
-//! Helper functions backing the Std.Ui kernel dispatch in the Rust code-gen.
+//! Helper functions backing the Ipe.Ui kernel dispatch in the Rust code-gen.
 //!
 //! Each function corresponds to one `KernelFn` variant wired in `ipe_lower` +
 //! `ipe_backend_rust`. The signatures mirror `Std/Ui.ipe` exactly so that the
@@ -277,7 +277,7 @@ pub fn ui_content_() -> Length {
     Length::Content
 }
 
-/// `Ui.shrink : Length`  (alias for `Ui.content` in Sky)
+/// `Ui.shrink : Length`  (alias for `Ui.content` in Ipê)
 pub fn ui_shrink_() -> Length {
     Length::Content
 }
@@ -395,7 +395,7 @@ pub fn ui_border_width_each_<M>(top: i64, right: i64, bottom: i64, left: i64) ->
 
 /// `Border.shadow : { offsetX : Int, offsetY : Int, blur : Int, spread : Int, color : Color } -> Attribute msg`
 ///
-/// Mirrors the reference (`Std.Ui.Border.shadow` → `borderShadow`) which renders
+/// Mirrors the reference (`Ipe.Ui.Border.shadow` → `borderShadow`) which renders
 /// the CSS `box-shadow: <ox>px <oy>px <blur>px <spread>px <colour>;` shape. Uses
 /// the dedicated `AttrBorderShadow` runtime variant (rendered in `render.rs`) so
 /// the colour flows through the same `color_css` boundary as `Border.color`.
@@ -469,9 +469,9 @@ pub fn ui_font_italic_<M>() -> Attribute<M> {
 }
 
 // ── Html element builders ─────────────────────────────────────────────────────
-// These mirror `Std.Html`'s pure-Sky constructors (`HText`, `HRaw`,
-// `HElement`) without the `Sky.Ffi` dependency that blocks compiling
-// `Std/Html.ipe` from source in Sky-Rust.
+// These mirror `Ipe.Html`'s pure-Ipê constructors (`HText`, `HRaw`,
+// `HElement`) without the `Ipê.Ffi` dependency that blocks compiling
+// `Std/Html.ipe` from source in Ipê-Rust.
 
 /// `Html.text : String -> Html msg`
 pub fn html_text_node_<M>(s: String) -> Html<M> {
@@ -490,7 +490,7 @@ pub fn html_raw_node_<M>(s: String) -> Html<M> {
 /// VALIDATE): the CSS body is close-tag-neutralised
 /// exactly once, HERE, so the `HRaw` it produces is already safe. The `<style>`
 /// render sink (`html::render_into_ctx`) strips again — defence in depth — so a
-/// `</style><script>` breakout in a `Std.Css` value cannot reach the DOM.
+/// `</style><script>` breakout in a `Ipe.Css` value cannot reach the DOM.
 pub fn html_style_node_<M>(attrs: Vec<crate::html::Attribute<M>>, css: String) -> Html<M> {
     Html::HElement(
         "style".to_owned(),
@@ -571,7 +571,7 @@ pub fn html_img_<M>(attrs: Vec<crate::html::Attribute<M>>) -> Html<M> {
 //
 // The two `Attribute` types are:
 //   • `html::Attribute<M>` — raw HTML attribute (event, class, data-*, …)
-//   • `element::Attribute<M>` — typed Std.Ui attribute; `AttrEvent` carries
+//   • `element::Attribute<M>` — typed Ipe.Ui attribute; `AttrEvent` carries
 //     an `html::Attribute` for event dispatch.
 //
 // Plain-message events (`OnMsg`) take the typed message value directly.
@@ -616,7 +616,7 @@ pub fn ui_on_mouse_out_<M>(msg: M) -> Attribute<M> {
 ///
 /// The callback is Arc-wrapped so the runtime can dispatch it from a
 /// send-safe context.  Callers emit `std::sync::Arc::new(move |_x| (f)(_x))`
-/// where `f` is the emitted Sky function expression (T6 trap).
+/// where `f` is the emitted Ipê function expression (T6 trap).
 pub fn ui_on_input_<M>(f: std::sync::Arc<dyn Fn(String) -> M + Send + Sync>) -> Attribute<M> {
     Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnString("input".into(), f)))
 }
@@ -645,7 +645,7 @@ pub fn ui_on_key_up_<M>(f: std::sync::Arc<dyn Fn(String) -> M + Send + Sync>) ->
 /// `Event.onBool : (Bool -> msg) -> Attribute msg`
 ///
 /// Wires a boolean-carrying event (typically `change` on a checkbox) so that
-/// the Sky callback receives the DOM `checked` value as a Rust `bool`.
+/// the Ipê callback receives the DOM `checked` value as a Rust `bool`.
 /// The `f` argument is arc-wrapped at the call site by the emitter (T6 trap).
 pub fn ui_on_bool_<M>(f: std::sync::Arc<dyn Fn(bool) -> M + Send + Sync>) -> Attribute<M> {
     Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnBool("change".into(), f)))
@@ -654,7 +654,7 @@ pub fn ui_on_bool_<M>(f: std::sync::Arc<dyn Fn(bool) -> M + Send + Sync>) -> Att
 /// `Ui.onFile : (String -> msg) -> Attribute msg` — wire event name
 /// `"sky-file"`. The browser-side driver reads the chosen file,
 /// base64-encodes it as a data URL, and dispatches the URL string to the
-/// handler (mirrors `Std.Html.Events.onFile`'s `EventAttr (OnString
+/// handler (mirrors `Ipe.Html.Events.onFile`'s `EventAttr (OnString
 /// "sky-file" handler)` on the `../sky` reference).
 pub fn ui_on_file_<M>(f: std::sync::Arc<dyn Fn(String) -> M + Send + Sync>) -> Attribute<M> {
     Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnString(
@@ -663,7 +663,7 @@ pub fn ui_on_file_<M>(f: std::sync::Arc<dyn Fn(String) -> M + Send + Sync>) -> A
     )))
 }
 
-// ── Tier 1: extended Std.Ui / Font / Background / Border builders ────────
+// ── Tier 1: extended Ipe.Ui / Font / Background / Border builders ────────
 
 // Ui namespace — aspect-ratio
 
@@ -693,7 +693,7 @@ pub fn ui_style_<M>(property: String, value: String) -> Attribute<M> {
 }
 
 /// `Ui.transitionRaw : String -> Bool -> Attribute msg` — the CSS `transition`
-/// shorthand (built by `Std.Ui.Transition.buildShorthand`) plus a
+/// shorthand (built by `Ipe.Ui.Transition.buildShorthand`) plus a
 /// respect-`prefers-reduced-motion` flag. `respect = True` (via
 /// `Transition.attribute`) auto-gates the rule behind
 /// `@media (prefers-reduced-motion: no-preference)` in the live style-injection
@@ -710,9 +710,9 @@ pub fn ui_grid_tracks_raw_<M>(cols: String, rows: String) -> Attribute<M> {
 
 /// `Ui.animateRaw : String -> String -> String -> Bool -> Attribute msg` — the
 /// keyframe-animation `name`, the animation shorthand TAIL (built by
-/// `Std.Ui.Animation.buildShorthandTail`: `<dur>ms <easing> <delay>ms <iter>
+/// `Ipe.Ui.Animation.buildShorthandTail`: `<dur>ms <easing> <delay>ms <iter>
 /// <fill>`, without the leading name token), the `@keyframes` BODY (built by
-/// `Std.Ui.Animation.buildKeyframesBody`), and a respect-`prefers-reduced-motion`
+/// `Ipe.Ui.Animation.buildKeyframesBody`), and a respect-`prefers-reduced-motion`
 /// flag. Mirrors `ui_transition_raw_`. The live style-injection pass
 /// (`live::style_inject::build_anim`) auto-suffixes `name` with the element's
 /// sky-id (so two `"fadeIn"`s with different keyframes don't collide), gates the
@@ -965,7 +965,7 @@ pub fn ui_font_hover_size_<M>(n: i64) -> Attribute<M> {
     Attribute::AttrPseudoRule(PseudoClass::Hover, format!("font-size:{n}px"))
 }
 
-// ── Std.Ui.Region ────────────────────────────────────────────────────
+// ── Ipe.Ui.Region ────────────────────────────────────────────────────
 
 /// `Region.mainContent : Attribute msg`
 pub fn ui_region_main_content_<M>() -> Attribute<M> {
@@ -1117,7 +1117,7 @@ pub fn ui_form_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M>>) -
 /// Builds `Event::OnForm` directly: the handler `f`'s argument type `T` is
 /// recovered by ordinary Rust generic inference from `f`'s own monomorphized
 /// signature at the codegen call site (never type-erased at runtime). The
-/// Sky.Live dispatch layer (`HandlerIndex::resolve_form`) decodes the wire
+/// Ipe.Live dispatch layer (`HandlerIndex::resolve_form`) decodes the wire
 /// `FormData` into `T` via a re-encoded x-www-form-urlencoded round trip
 /// (`live::form::decode_form_or_warn` — type-directed per-field coercion, NOT
 /// a JSON path), matching the Go backend's `json.Unmarshal` semantics at the
@@ -1126,7 +1126,7 @@ pub fn ui_form_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M>>) -
 /// narrower requirement than an `A: Any` bound.
 ///
 /// `Send + Sync` is NOT automatically satisfied merely because the
-/// underlying Sky closure only captures `'static` enum constructors / owned
+/// underlying Ipê closure only captures `'static` enum constructors / owned
 /// data — if the codegen's generic first-class-function-value rendering has
 /// already boxed the closure as `Box<dyn Fn(T) -> M + Send + 'static>`
 /// (deliberately `+Send`-only; most `Fn`-value consumers need no more) and
@@ -1150,7 +1150,7 @@ where
     )))
 }
 
-/// Non-`live` builds (Sky.Tui without the HTTP form wire): `Ui.onSubmit` was
+/// Non-`live` builds (Ipe.Tui without the HTTP form wire): `Ui.onSubmit` was
 /// already inert everywhere before this fix, so this degrades to a
 /// structural no-op — not a regression, Tui has no form-submit wire concept.
 #[cfg(not(feature = "live"))]
@@ -1159,7 +1159,7 @@ pub fn ui_on_submit_<M, T, F: Fn(T) -> M>(_f: F) -> Attribute<M> {
 }
 
 /// `Ui.onSubmit` BARE-VALUE shape — dispatch a FIXED `msg`, ignoring the
-/// submitted `FormData`. The `Std.Ui` mirror of
+/// submitted `FormData`. The `Ipe.Ui` mirror of
 /// [`crate::html::html_on_raw_fixed_`]: the "form fields are
 /// already synced into Model via `onInput`/`onChange`; submit just triggers a
 /// fixed action" idiom (`Ui.onSubmit DoSignUp` where `DoSignUp : Msg`, or a
@@ -1171,7 +1171,7 @@ pub fn ui_on_submit_<M, T, F: Fn(T) -> M>(_f: F) -> Attribute<M> {
 /// Deliberately does NOT route through `decode_form_or_warn` — there is no
 /// payload type to decode into, and a spurious decode failure on a real form's
 /// fields would silently swallow the submit. Always fires. `M: Clone` is not a
-/// new requirement — every Sky.Live `Msg` is already `Clone` by construction.
+/// new requirement — every Ipe.Live `Msg` is already `Clone` by construction.
 #[cfg(feature = "live")]
 pub fn ui_on_submit_fixed_<M: Clone + Send + Sync + 'static>(msg: M) -> Attribute<M> {
     Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnForm(
@@ -1322,12 +1322,12 @@ pub fn ui_on_pseudo_<M: Clone>(pc: PseudoClass, attrs: Vec<Attribute<M>>) -> Att
 
 /// `Ui.mediaQuery : String -> List (Attribute msg) -> Element msg -> Element msg`
 ///
-/// Raw-CSS-media-query escape hatch (mirrors `../sky` `Std.Ui.sky`'s
+/// Raw-CSS-media-query escape hatch (mirrors `../sky` `Ipe.Ui.sky`'s
 /// `mediaQuery`): wraps `child` in a `<div>` carrying the
 /// `data-sky-mq-q` (the query) + `data-sky-mq-rules` (the attrs folded
 /// through the SAME `render::build_style_string` collector as the inline
 /// `style=""` path and `Ui.onPseudo`, so every value-as-data attr inherits
-/// the `SafeCssValue` gate) marker pair.  The Sky.Live / Sky.Webview render
+/// the `SafeCssValue` gate) marker pair.  The Ipe.Live / Ipe.Webview render
 /// pipelines consume the markers post-`assign_sky_ids` via
 /// `live::style_inject::apply_style_injections` (`build_mq`), emitting a
 /// sky-id-scoped `<style data-sky-mq="<sid>">@media <q> {

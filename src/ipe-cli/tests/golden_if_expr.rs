@@ -1,4 +1,4 @@
-//! `if … then … else` gate: `skyc` must emit `main.rs`
+//! `if … then … else` gate: `ipe` must emit `main.rs`
 //! byte-identical to the checked-in golden for inline, multi-way (`else if`),
 //! and nested `if`s, and (behind `IPE_E2E=1`) the emitted project must build
 //! and print `10`.

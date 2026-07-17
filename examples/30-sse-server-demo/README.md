@@ -1,8 +1,8 @@
-# SSE server demo (Sky.Http.Server.Stream)
+# SSE server demo (Ipe.Http.Server.Stream)
 
-A minimal Sky.Http.Server app demonstrating server-side streaming
-HTTP responses via `Sky.Http.Server.Stream` (the mirror image of
-`Sky.Core.Http.Stream`, which handles client-side incremental
+A minimal Ipe.Http.Server app demonstrating server-side streaming
+HTTP responses via `Ipe.Http.Server.Stream` (the mirror image of
+`Ipe.Http.Stream`, which handles client-side incremental
 reads).
 
 ## What this exercises
@@ -21,7 +21,7 @@ reads).
 
 ```
 cd examples/30-sse-server-demo
-sky run src/Main.ipe
+ipe run src/Main.ipe
 ```
 
 Then in another terminal:

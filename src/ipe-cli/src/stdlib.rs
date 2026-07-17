@@ -1,6 +1,6 @@
-//! The embedded Sky standard-library source (`Ipe.*`).
+//! The embedded Ipê standard-library source (`Ipe.*`).
 //!
-//! `skyc` is self-contained: the foundational `Ipe` modules are compiled
+//! `ipe` is self-contained: the foundational `Ipe` modules are compiled
 //! into the binary as their original Sky source (a port of the Haskell
 //! compiler's Template-Haskell embedding of `sky-stdlib/`). The checked-in copies
 //! under `crates/skyc/stdlib/Sky/Core/` are byte-identical to the upstream
@@ -9,15 +9,15 @@
 //!
 //! `Ipe.Prelude` resolves to `Basics` (the Prelude re-exports the
 //! non-numeric basics, exactly as the reference compiler maps it). The source
-//! is ordinary Sky: the same parser that reads user code reads it (the
+//! is ordinary Ipê: the same parser that reads user code reads it (the
 //! `parses` test proves it), so it is the substrate the import resolver
 //! compiles.
 
-/// One embedded standard-library module: its dotted name and its Sky source.
+/// One embedded standard-library module: its dotted name and its Ipê source.
 pub struct StdModule {
     /// The dotted module name as written in an `import`, e.g. `Ipe.Maybe`.
     pub name: &'static str,
-    /// The module's Sky source, embedded at compile time.
+    /// The module's Ipê source, embedded at compile time.
     pub source: &'static str,
 }
 
@@ -39,7 +39,7 @@ const DICT: &str = include_str!("../../stdlib/Ipe/Dict.ipe");
 const SET: &str = include_str!("../../stdlib/Ipe/Set.ipe");
 /// `Ipe.Bytes` — arbitrary byte buffer, distinct from `String`.
 ///
-/// Divergence from Sky: Sky defines `type alias Bytes = String`; Sky-Rust
+/// Divergence from Ipê: Ipê defines `type alias Bytes = String`; Ipê-Rust
 /// makes `Bytes` a distinct primitive lowering to `Vec<u8>` (lossless for
 /// non-UTF-8 binary). See `docs/architecture/divergence-policy.md`.
 const BYTES: &str = include_str!("../../stdlib/Ipe/Bytes.ipe");
@@ -154,7 +154,7 @@ pub const MODULES: &[StdModule] = &[
     },
 ];
 
-/// The embedded Sky source for a dotted `Ipe` module name, or `None` when
+/// The embedded Ipê source for a dotted `Ipe` module name, or `None` when
 /// the name is not one of the embedded modules.
 ///
 /// `Ipe.Prelude` resolves to the `Basics` source (the Prelude is an alias
@@ -178,7 +178,7 @@ pub fn source(module_name: &str) -> Option<&'static str> {
 // `MODULES` above is a PARSE-TEST fixture: those `Ipe.*` files are shadow
 // copies whose real implementations are Rust kernels resolved by qualifier.
 // `COMPILED_STD_MODULES` is the opposite: modules that are ACTUALLY compiled
-// from Sky source through the ordinary parse → canon → infer → lower → emit
+// from Ipê source through the ordinary parse → canon → infer → lower → emit
 // pipeline (a Std-source module that defines AND pattern-matches its own data
 // type — the exact thing a kernel cannot express).
 //
@@ -188,11 +188,11 @@ pub fn source(module_name: &str) -> Option<&'static str> {
 // qualifier AND injected as a source dep, giving ambiguous resolution.
 
 /// One compiled-from-source standard-library module: its dotted name and its
-/// embedded Sky source.
+/// embedded Ipê source.
 pub struct CompiledStdModule {
     /// The dotted module name as written in an `import`, e.g. `Ipe.Palette`.
     pub dotted: &'static str,
-    /// The module's Sky source, embedded at compile time.
+    /// The module's Ipê source, embedded at compile time.
     pub source: &'static str,
 }
 
@@ -200,7 +200,7 @@ pub struct CompiledStdModule {
 /// and pattern-matches its own constructors in `toHex`.
 const PALETTE: &str = include_str!("../../stdlib/Ipe/Palette.ipe");
 
-/// `Ipe.Css` — the typed stylesheet DSL, compiled pure Sky source: it
+/// `Ipe.Css` — the typed stylesheet DSL, compiled pure Ipê source: it
 /// defines AND pattern-matches its own `CssProp` / `CssRule` / `Length` /
 /// `Color` / keyword-enum ADTs and folds them to a CSS string.  Its only Rust
 /// surface is the four leaf security kernels under the `Ipe.CssSafety`
@@ -209,7 +209,7 @@ const CSS: &str = include_str!("../../stdlib/Ipe/Css.ipe");
 
 /// `Ipe.ToString` — naming-consistency surface.
 ///
-/// Thin pure-Sky aliases to canonical kernels in their home modules so callers
+/// Thin pure-Ipê aliases to canonical kernels in their home modules so callers
 /// can write `ToString.fromInt n` without memorising the per-type kernel
 /// sub-namespace.  `fromTime` is OMITTED pending the `Time_timeString` Rust
 /// kernel.  Disjoint from `STDLIB_MODULE_QUALIFIERS` (no `"ToString"` entry
@@ -218,7 +218,7 @@ const TOSTRING_CORE: &str = include_str!("../../stdlib/Ipe/ToString.ipe");
 
 /// `Ipe.Test` — lightweight in-process test framework.
 ///
-/// Compiled pure-Sky source that defines the `Test` / `TestResult` ADTs and
+/// Compiled pure-Ipê source that defines the `Test` / `TestResult` ADTs and
 /// all assertion helpers.  `expectErrorKind` / `kindName` are OMITTED pending
 /// the `Ipe.Error` compiled-source migration; `summarise` is pure (no IO).
 /// Disjoint from `STDLIB_MODULE_QUALIFIERS` (no `"Test"` entry exists there).
@@ -237,13 +237,13 @@ const STD_LIVE_HEAD: &str = include_str!("../../stdlib/Ipe/Live/Head.ipe");
 
 /// `Ipe.Ui.Responsive` — device-class helpers for responsive layout branching.
 ///
-/// Pure Sky source; no kernel calls.  Ported verbatim from
+/// Pure Ipê source; no kernel calls.  Ported verbatim from
 /// `../sky/sky-stdlib/Std/Ui/Responsive.sky`.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 /// Unblocks `37-composite-live-shop` (N0004: Ipe.Ui.Responsive).
 const STD_UI_RESPONSIVE: &str = include_str!("../../stdlib/Ipe/Ui/Responsive.ipe");
 
-/// `Ipe.Ui.Chart` — pure-Sky charting helpers (line, area, bar, sparkline, heatmap).
+/// `Ipe.Ui.Chart` — pure-Ipê charting helpers (line, area, bar, sparkline, heatmap).
 ///
 /// Depends on `Ui.colorCss` (kernel `UiColorCss`) to convert `Color` values to
 /// CSS strings inside SVG attributes.  Ported verbatim from
@@ -254,7 +254,7 @@ const STD_UI_CHART: &str = include_str!("../../stdlib/Ipe/Ui/Chart.ipe");
 
 /// `Ipe.Ui.Grid` — typed CSS-grid track ADT + `columns`/`rows`/`tracks` builders.
 ///
-/// Pure-Sky; uses the native `Ui.gridTracksRaw` kernel (`KernelFn::UiGridTracksRaw`)
+/// Pure-Ipê; uses the native `Ui.gridTracksRaw` kernel (`KernelFn::UiGridTracksRaw`)
 /// that constructs `AttrGridTracks(cols, rows)`, rendered as `grid-template-columns`/
 /// `grid-template-rows` by the web renderer and parsed by `tui/layout.rs`.
 /// Ported from `../sky/sky-stdlib/Std/Ui/Grid.sky`; divergence recorded in
@@ -266,7 +266,7 @@ const STD_UI_GRID: &str = include_str!("../../stdlib/Ipe/Ui/Grid.ipe");
 /// `Ipe.Ui.Transition` — typed CSS transition `Step`/`Easing` ADTs +
 /// `attribute`/`attributeUnsafe` builders.
 ///
-/// Pure-Sky; the `transitionRaw` primitive is a native `Ipe.Ui` kernel
+/// Pure-Ipê; the `transitionRaw` primitive is a native `Ipe.Ui` kernel
 /// (`KernelFn::UiTransitionRaw`) that constructs `AttrTransition shorthand
 /// respect`, rendered by `src/runtime/rust/src/ui/render.rs`.  Ported from
 /// `../sky/sky-stdlib/Std/Ui/Transition.sky`; the reference's
@@ -277,7 +277,7 @@ const STD_UI_GRID: &str = include_str!("../../stdlib/Ipe/Ui/Grid.ipe");
 const STD_UI_TRANSITION: &str = include_str!("../../stdlib/Ipe/Ui/Transition.ipe");
 
 /// `Ipe.Ui.Transform` — typed CSS transform / opacity helpers for `Ui.animate`
-/// keyframes. Pure Sky; uses only `Ipe.*` internals — no
+/// keyframes. Pure Ipê; uses only `Ipe.*` internals — no
 /// native primitive needed. Not in `STDLIB_MODULE_QUALIFIERS` so disjointness
 /// invariant holds. Unblocks `26-ui-showcase` (IPE-N0004: Ipe.Ui.Transform).
 const STD_UI_TRANSFORM: &str = include_str!("../../stdlib/Ipe/Ui/Transform.ipe");
@@ -285,7 +285,7 @@ const STD_UI_TRANSFORM: &str = include_str!("../../stdlib/Ipe/Ui/Transform.ipe")
 /// `Ipe.Ui.Animation` — typed CSS keyframe-animation `Iterations`/`FillMode`
 /// ADTs + `Spec` record + `attribute`/`defaultSpec`/`with*` builders.
 ///
-/// Pure-Sky; the `animateRaw` primitive is a native `Ipe.Ui` kernel
+/// Pure-Ipê; the `animateRaw` primitive is a native `Ipe.Ui` kernel
 /// (`KernelFn::UiAnimateRaw`, `String -> String -> String -> Bool -> Attribute`)
 /// that constructs `AttrAnimation name shorthand keyframes respect`, rendered
 /// by `src/runtime/rust/src/ui/render.rs` (inline `animation:` property) and
@@ -301,7 +301,7 @@ const STD_UI_ANIMATION: &str = include_str!("../../stdlib/Ipe/Ui/Animation.ipe")
 
 /// `Ipe.Money` — currency-typed Money on `Ipe.Decimal` + ISO 4217 enum.
 ///
-/// Compiled pure-Sky source: defines the `Money` / `Currency` ADTs and
+/// Compiled pure-Ipê source: defines the `Money` / `Currency` ADTs and
 /// pattern-matches their own constructors.  All `Ffi.callPure` calls from
 /// the upstream Haskell stdlib have been replaced with pure Sky
 /// case-expressions / recursions.  The FX rate registry is stubbed.
@@ -326,7 +326,7 @@ const IPE_CORE_PURE: &str = include_str!("../../stdlib/Ipe/Pure.ipe");
 ///
 /// Defines 3 ADTs (`WebSocket`, `WebSocketMessage`, `CloseCode`) and routes its
 /// I/O through `Ffi.kernel "WebSocket_*"` / `"Sub_subscribeWebSocket"` aliases.
-/// RESOLVES (skyc-0 AND cargo-0): the six Task-tier `WebSocket_*` kernels plus
+/// RESOLVES (ipe-0 AND cargo-0): the six Task-tier `WebSocket_*` kernels plus
 /// `Sub_subscribeWebSocket` are registered (`ipe_runtime::ws_client::*`). The
 /// Sub-tier kernel is `any`-typed; the backend peephole splits it on the literal
 /// `kind` into the four typed `sub_subscribe_ws_*` runtime fns. `connectWith`'s
@@ -339,7 +339,7 @@ const IPE_CORE_WEBSOCKET: &str = include_str!("../../stdlib/Ipe/WebSocket.ipe");
 
 /// `Ipe.Cache` — in-memory LRU + TTL cache (compiled source).
 ///
-/// Defines `type Cache k v = Cache Int` ADT.  RESOLVES (skyc-0 AND
+/// Defines `type Cache k v = Cache Int` ADT.  RESOLVES (ipe-0 AND
 /// cargo-0): the seven `Cache_*` kernels are registered
 /// (`ipe_runtime::cache::*`; a faithful port of the reference's Go+Rust cache
 /// kernels).  The opaque `Cache k v` is backed by the non-generic runtime
@@ -361,7 +361,7 @@ const STD_COMPRESSION: &str = include_str!("../../stdlib/Ipe/Compression.ipe");
 ///
 /// Defines `type Decoder a` — the SHARED opaque decoder carrier
 /// (`IrType::Decoder`, runtime `ipe_runtime::json::Decoder<E, T>`), the same one
-/// `Ipe.Json.Decode` names as a bare reserved builtin. RESOLVES (skyc-0
+/// `Ipe.Json.Decode` names as a bare reserved builtin. RESOLVES (ipe-0
 /// AND cargo-0): (a) `Ipe.Config`'s `Decoder` re-declaration is exempted
 /// from IPE-N0026 via `ipe_canon`'s `STDLIB_DEFINABLE_CARRIER_TYPES` (trusted
 /// `EmbeddedStdlib` origin only — user shadowing stays rejected); the ABOVE-guard
@@ -376,7 +376,7 @@ const STD_CONFIG: &str = include_str!("../../stdlib/Ipe/Config.ipe");
 
 /// `Ipe.Csv` — CSV encode + decode (compiled source).
 ///
-/// Defines `type alias Csv` + pure Sky builders.  KERNEL-BLOCKED: no
+/// Defines `type alias Csv` + pure Ipê builders.  KERNEL-BLOCKED: no
 /// `Csv_*` kernel variants exist — member use fails closed with IPE-N0028.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_CSV: &str = include_str!("../../stdlib/Ipe/Csv.ipe");
@@ -391,16 +391,16 @@ const STD_EMAIL: &str = include_str!("../../stdlib/Ipe/Email.ipe");
 
 /// `Ipe.Live.Console` — typed console identity + builder helpers (compiled source).
 ///
-/// Pure Sky; no Ffi.kernel calls.
+/// Pure Ipê; no Ffi.kernel calls.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_LIVE_CONSOLE: &str = include_str!("../../stdlib/Ipe/Live/Console.ipe");
 
 /// `Ipe.PubSub` — Task-shaped publish, callable from any context (compiled source).
 ///
 /// Routes through `Ffi.kernel "PubSub_publish"` / `"PubSub_publishNoEcho"`.
-/// RESOLVES (skyc-0 AND cargo-0): `PubSubPublish`/`PubSubPublishNoEcho` have a
+/// RESOLVES (ipe-0 AND cargo-0): `PubSubPublish`/`PubSubPublishNoEcho` have a
 /// type scheme (`String -> a -> Task Error Int`) and a dedicated emit arm
-/// (`pubsub_publish::<_, IpeError>(topic, payload)`).  A member use exits skyc-0
+/// (`pubsub_publish::<_, IpeError>(topic, payload)`).  A member use exits ipe-0
 /// AND cargo-0.  The payload `a` is a genuine monomorphized type var (concrete-
 /// over-generic), never erased.  See `docs/divergences-from-sky.md`
 /// §B-FfiKernelAliasSealed for the closed completeness gap.
@@ -414,9 +414,9 @@ const STD_PUBSUB: &str = include_str!("../../stdlib/Ipe/PubSub.ipe");
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_TRACE: &str = include_str!("../../stdlib/Ipe/Trace.ipe");
 
-/// `Ipe.Ui.Events` — pure Sky re-exports of `Ipe.Ui` event helpers (compiled source).
+/// `Ipe.Ui.Events` — pure Ipê re-exports of `Ipe.Ui` event helpers (compiled source).
 ///
-/// Pure Sky; no Ffi.kernel calls.  RESOLVES (skyc-0 AND cargo-0): the
+/// Pure Ipê; no Ffi.kernel calls.  RESOLVES (ipe-0 AND cargo-0): the
 /// `onSubmit`/`onInput` re-exports are typed to the Rust kernels'
 /// function-arg schemes (`(a -> msg) -> Attribute msg` /
 /// `(String -> msg) -> Attribute msg`) — see `docs/divergences-from-sky.md`
@@ -535,7 +535,7 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     },
 ];
 
-/// The embedded Sky source for a compiled-source stdlib module named by its path
+/// The embedded Ipê source for a compiled-source stdlib module named by its path
 /// SEGMENTS (e.g. `["Std", "Palette"]`), or `None` when the segments name no
 /// compiled-source module.
 ///

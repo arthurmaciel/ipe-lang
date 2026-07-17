@@ -1,7 +1,7 @@
 //! Pre-built console child + reverse-proxy.
 //!
 //! Replaces the in-process `console.rs` plain-HTML shell with the **real bundled
-//! Sky.Live console**, spawned as a child process and reverse-proxied at
+//! Ipe.Live console**, spawned as a child process and reverse-proxied at
 //! `/_sky/console/*`. The console binary is **pre-built at the user's `sky build`
 //! time** into a shared cache — at runtime this module only `exec`s it,
 //! never builds. See `runtime-rust/README.md` §"Rust vs Go — divergent strategies"
@@ -57,7 +57,7 @@ pub fn console_bin_path() -> Option<std::path::PathBuf> {
         return if pb.is_file() { Some(pb) } else { None };
     }
     // Key on the SKY compiler version (same source as `/_sky/buildinfo`), NOT
-    // the generated crate's CARGO_PKG_VERSION (always "0.1.0"). The sky build
+    // the generated crate's CARGO_PKG_VERSION (always "0.1.0"). The ipe build
     // sets IPE_VERSION when compiling this app, and Sky.Build.Rust.Console
     // caches the console binary under the SAME version — so both agree on the
     // `~/.cache/sky/rust-console/<ver>/sky-console` path.
@@ -471,7 +471,7 @@ pub async fn ensure_console_proxy() -> bool {
     // Bound the upstream hop so a wedged child can't accumulate in-flight
     // requests without limit. `connect_timeout` caps the TCP handshake; a
     // `read_timeout` (per-read inactivity, NOT a total `.timeout`) caps a child
-    // that accepts the connection then stalls — set well above the Sky.Live SSE
+    // that accepts the connection then stalls — set well above the Ipe.Live SSE
     // heartbeat (~15 s) + TTL (~35 s) so long-lived `/_sky/sse` streams are not
     // severed. `.build()` only fails on a TLS-backend init error (we use none
     // for loopback http); fall back to the default client rather than panic.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/guards/mem-guard.sh — memory kill-switch for the Ipê (Sky→Rust) dev sessions.
+# scripts/guards/mem-guard.sh — memory kill-switch for the Ipê (Ipê→Rust) dev sessions.
 #
 # Background: a runaway `cargo`/`rustc`/linker (or `ipe`, or a wedged agent
 # session) can pin the machine to swap and force a hard reboot. This watchdog

@@ -12,10 +12,10 @@ other governance docs — `CLAUDE.md` (Ipê language authoring reference),
    errors, no auth/CSRF bypass, no timing oracle on a secret comparison, no
    unbounded resource a remote party can exhaust. On untrusted input the safe
    outcome is the only reachable outcome.
-2. **Correctness** — same well-typed Sky program + same input ⇒ the Rust output
+2. **Correctness** — same well-typed Ipê program + same input ⇒ the Rust output
    matches the Go reference's observable behaviour (ideally byte-for-byte).
    Deliberate divergence is documented, never silent.
-3. **Soundness** — a well-typed Sky program can never trigger a runtime failure
+3. **Soundness** — a well-typed Ipê program can never trigger a runtime failure
    in the generated Rust: no panic, no `.unwrap()`/`.expect()` blowup, no
    out-of-bounds index, no integer-overflow abort, no unchecked downcast, no
    UB. Correctness is "the result is right"; soundness is the stronger
@@ -66,13 +66,13 @@ code that doesn't create the conflict.
 
 ## THE SEAL — no exit-0-then-cargo-fail
 
-**If `skyc` accepts a program (exit 0), the emitted Rust MUST `cargo build`.
-Never emit codegen that type-checks in skyc but fails cargo.** This is
+**If `ipe` accepts a program (exit 0), the emitted Rust MUST `cargo build`.
+Never emit codegen that type-checks in ipe but fails cargo.** This is
 make-invalid-states-unrepresentable applied to the pipeline itself: an
 unschemed-but-resolved kernel, an arity table drifted from its callee table, a
 generic where a concrete was required — each is a representable-but-illegal
 pipeline state whose symptom is exit-0-then-cargo-fail. Every new acceptance
-path (kernel, scheme, lowering arm, emitter case) fails closed at skyc time,
+path (kernel, scheme, lowering arm, emitter case) fails closed at ipe time,
 never open at cargo time.
 
 ## §0 No shortcuts — root cause or honest blocker
@@ -151,9 +151,9 @@ hack is never a "divergence".
 
 Master only ever advances to a full-gate-certified sha.
 
-- **Cheap gate — per landed lane (~minutes):** `cargo check -p skyc` + scoped
+- **Cheap gate — per landed lane (~minutes):** `cargo check -p ipe` + scoped
   `nextest` on the touched crates + scoped clippy `-D warnings`; for a
-  sweep/example blocker, build the fresh `skyc` (`cargo build -p skyc` — a build,
+  sweep/example blocker, build the fresh `ipe` (`cargo build -p ipe` — a build,
   not a check, since the SEAL step needs the binary) and rebuild that example to
   confirm the original diagnostic is gone (THE SEAL on the specific example).
   A cheap-green lane lands but stays uncertified.

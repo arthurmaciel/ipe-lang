@@ -1,13 +1,13 @@
-//! `Sky.Core.Secret` — an opaque wrapper for sensitive strings (API keys,
+//! `Ipe.Secret` — an opaque wrapper for sensitive strings (API keys,
 //! passwords, tokens) that CANNOT be accidentally leaked via `Debug`,
 //! stringification, logging, or serialization.
 //!
-//! Mirrors `Std.Db.Sql`'s `SqlFragment` "opaque newtype with typed
+//! Mirrors `Ipe.Db.Sql`'s `SqlFragment` "opaque newtype with typed
 //! constructors" convention (`db.rs`'s `SqlFragment` doc block):
 //! the ONLY way to obtain a `Secret` is through [`secret_from_string`] (the
 //! seal), and the ONLY way to get the plaintext back out is through
 //! [`secret_reveal`] (the single greppable un-parse). Every other path —
-//! `Debug`, the Sky-level `IpeStringify` (backing `toString` / interpolation /
+//! `Debug`, the Ipê-level `IpeStringify` (backing `toString` / interpolation /
 //! `Log.*With`), equality — is **safe by construction**: each has a
 //! hand-written impl on `Secret` itself, so there is no OTHER impl a caller
 //! could accidentally reach that would expose the plaintext.
@@ -20,7 +20,7 @@
 //! * `PartialEq` — hand-written, CONSTANT-TIME (`subtle::ConstantTimeEq`).
 //!   This is the ONLY equality impl that exists on `Secret`, so `==` is safe
 //!   by construction: there is no faster/leakier impl a caller could reach
-//!   instead. Sky's `Dict`-key / `Set`-element / ordering (`<`/`>`) bounds are
+//!   instead. Ipê's `Dict`-key / `Set`-element / ordering (`<`/`>`) bounds are
 //!   ALREADY rejected with zero new type-checker code — `Secret` is a bare
 //!   `Ty::Con` outside the 4-5-scalar `comparable`/`Ord` allowlist in
 //!   `ipe_types::concrete_super_ok` / `emitted_bound_satisfied`.
@@ -39,7 +39,7 @@
 //!   `HashMap`/`BTreeMap` key use, and any serde round-trip, are Rust type
 //!   errors at codegen time — a fail-CLOSED outcome, never a silent leak.
 //!   NOT serde ALSO means `Secret` is unconditionally Model-inadmissible for
-//!   `Std.Live` (`ir_type_is_serde` gates the Live Model — see
+//!   `Ipe.Live` (`ir_type_is_serde` gates the Live Model — see
 //!   `ipe_ir::ir_type_is_serde` — so a `Live` app storing a `Secret` in its
 //!   Model is a compile-time `IPE-L0120`, never a session-store leak).
 //! * `Drop` — zeroizes the backing buffer (`zeroize::Zeroize`) so the
@@ -47,7 +47,7 @@
 //!   out of scope. Ships now, not deferred (security-tier hardening is
 //!   pre-push per `PRINCIPLES.md`).
 //!
-//! Payload stays `String` in v1 — every current consumer (`Std.Auth`, env
+//! Payload stays `String` in v1 — every current consumer (`Ipe.Auth`, env
 //! vars) is string-shaped. A `Bytes`-payload variant is an additive,
 //! filed-not-built follow-up.
 //!
@@ -73,7 +73,7 @@ use super::stringify::IpeStringify;
 /// accidentally splice the secret back in.
 const REDACTED: &str = "<redacted>";
 
-/// `Sky.Core.Secret`'s opaque, sealed newtype. See the module doc for the
+/// `Ipe.Secret`'s opaque, sealed newtype. See the module doc for the
 /// full design rationale.
 ///
 /// Deliberately NOT `#[derive(Debug)]` — the derive would print the wrapped
@@ -108,7 +108,7 @@ impl std::fmt::Debug for Secret {
 }
 
 impl IpeStringify for Secret {
-    /// Backs Sky's `toString` / string interpolation / `Log.*With` attr
+    /// Backs Ipê's `toString` / string interpolation / `Log.*With` attr
     /// stringification. ALWAYS the fixed placeholder — a caller that logs a
     /// `Secret` directly (forgetting to call `Secret.redacted` first) gets
     /// the safe redacted output automatically rather than a compile error
@@ -128,7 +128,7 @@ impl Drop for Secret {
 }
 
 /// `Secret.fromString : String -> Secret` — THE seal. The only public
-/// constructor: every `Secret` value in a Sky program traces back to exactly
+/// constructor: every `Secret` value in a Ipê program traces back to exactly
 /// one of these calls, so a security reviewer can `grep` this one symbol to
 /// audit every place a plaintext string becomes a typed secret.
 #[must_use]
@@ -212,11 +212,11 @@ mod tests {
 
     // ── (b) every plausible accidental-stringification path is redacted ────
     //
-    // `{:?}` (Debug), `.ipe_show()` (the trait backing Sky's `toString` /
+    // `{:?}` (Debug), `.ipe_show()` (the trait backing Ipê's `toString` /
     // string interpolation / `Log.*With`), and `Secret.redacted` are the
     // THREE paths that exist on `Secret` and all three are tested here to
     // never expose the payload. The other two plausible leak paths —
-    // `{}` (`Display`) and string concatenation (`+` / Sky's `++`, which
+    // `{}` (`Display`) and string concatenation (`+` / Ipê's `++`, which
     // requires `String` or `List`) — are not merely "redacted", they are
     // ABSENT: `Secret` implements neither `std::fmt::Display` nor
     // `std::ops::Add`, so `format!("{}", secret)` / `secret + "x"` are Rust
@@ -224,9 +224,9 @@ mod tests {
     // construction (the impls below are the exhaustive list of traits
     // `Secret` implements) rather than by a `trybuild`-style negative
     // compile test — see the module doc's "NO `Display`" bullet. The
-    // language-level (Sky, not Rust) mirror of this fact is
-    // `crates/skyc/tests/secret_gates.rs`'s `secret_concat_is_rejected`
-    // golden, which proves `mySecret ++ "x"` is a `skyc` type error, not a
+    // language-level (Ipê, not Rust) mirror of this fact is
+    // `crates/ipe/tests/secret_gates.rs`'s `secret_concat_is_rejected`
+    // golden, which proves `mySecret ++ "x"` is a `ipe` type error, not a
     // runtime concern.
 
     const PAYLOAD: &str = "sk_live_super_secret_value_12345";
@@ -250,7 +250,7 @@ mod tests {
     /// A `Vec<Secret>` (the shape `Log.*With`'s attr list lowers to) renders
     /// every element through [`IpeStringify`]'s blanket `Vec<T>` impl
     /// (`stringify.rs`) — proves the redaction survives the SAME container
-    /// path real Sky code takes when logging a list containing a secret.
+    /// path real Ipê code takes when logging a list containing a secret.
     #[test]
     fn secret_inside_a_vec_stringifies_redacted() {
         let v = vec![secret_from_string(PAYLOAD.to_owned())];

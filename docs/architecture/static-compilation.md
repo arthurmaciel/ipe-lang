@@ -5,7 +5,7 @@ Status: design (spec-only). No code, no build wired yet.
 This document specifies fully-static, portable single-binary artifacts for
 ipê, and the allocator chosen to avoid the static-libc malloc cliff without
 reflexively taking a C dependency. ipê emits a self-contained Rust cargo
-crate (`crates/sky_backend_rust` + the `crates/skyc/src/lib.rs` build path)
+crate (`crates/sky_backend_rust` + the `crates/ipe/src/lib.rs` build path)
 and then cargo-builds it; static compilation is a build-config concern layered
 over that emitted crate.
 
@@ -88,7 +88,7 @@ opt-in for the operator who has *measured* a concurrent-allocation bottleneck.
 ### The cliff is musl-malloc-specific, not a cost of avoiding C
 
 `../sky`'s measured allocator 2×2 (`runtime-rust/docs/TECHNICAL-DETAILS.md`,
-`Sky.Http.Server`, `ab -c50`, allocation-heavy):
+`Ipe.Http.Server`, `ab -c50`, allocation-heavy):
 
 | Variant | Throughput | RSS |
 |---|--:|--:|
@@ -114,7 +114,7 @@ free-lists. Consequences:
 - **Single-threaded / one-shot** (CLI, cron, TUI, batch — the majority of
   artifacts by count): dlmalloc and talc are ~glibc-class (≈0.9–1.1× A).
   mimalloc's advantage nearly vanishes.
-- **Concurrent churn** (Sky.Live / Sky.Http.Server, `-c50` — where the allocator
+- **Concurrent churn** (Ipe.Live / Ipe.Http.Server, `-c50` — where the allocator
   matters): a pure-Rust global-lock allocator is still dramatically faster than
   musl malloc (~4–6× above the cliff, ≈0.6–0.9× A) but trails mimalloc's 1.48×
   static-musl by roughly 1.5–3× under high-core contention.
@@ -287,7 +287,7 @@ enum Refusal {
     MacStaticUnsupported { cross_hint },
     WebviewStatic,
     MuslMallocCliff,                 // system + musl without --allow-slow-allocator
-    TalcMultiThreadedApp,            // talc on a Sky.Live / Sky.Http.Server (tokio) shape
+    TalcMultiThreadedApp,            // talc on a Ipe.Live / Ipe.Http.Server (tokio) shape
     TargetNotInstalled { rustup_cmd },
     UnknownAllocator,
 }
@@ -309,8 +309,8 @@ a `StaticWindows` with the flag flipped off.
 **`Talc` on a multi-threaded app shape → `Refusal::TalcMultiThreadedApp`.** talc's
 single spinlock collapses under the contention a tokio server generates (🔴 in the
 §1 trade study), so `--allocator talc` is refused at plan construction for the
-Sky.Live / Sky.Http.Server shapes and permitted only for single-threaded
-CLI / Sky.Cli / TUI / batch artifacts. This is an *appropriateness / efficiency*
+Ipe.Live / Ipe.Http.Server shapes and permitted only for single-threaded
+CLI / Ipe.Cli / TUI / batch artifacts. This is an *appropriateness / efficiency*
 gate; it is layered on top of — not a substitute for — the unconditional
 `spin::Mutex` soundness floor in §3.5. UB-freedom rests on the emitted lock, not
 on this refusal firing; the refusal exists so the pathological-perf combination is
@@ -378,7 +378,7 @@ For `system`, the emitter omits the item entirely rather than emitting a no-op.
 is *only* sound in a provably single-threaded program; installed as a
 `#[global_allocator]` in any binary that can spawn a thread it is a data race in
 the allocator, i.e. undefined behaviour. Since `--allocator talc` is selectable
-and the *same emitter* serves multi-threaded Sky.Live / Sky.Http.Server (tokio)
+and the *same emitter* serves multi-threaded Ipe.Live / Ipe.Http.Server (tokio)
 shapes, the talc arm is emitted with a real `spin::Mutex` lock unconditionally —
 the pure-Rust `Sync` lock adds no C dependency and keeps the security property
 intact. This is defence-in-depth *below* the app-shape refusal (§3.7): even a
@@ -429,7 +429,7 @@ Decision D2.
 
 ### 3.7 App-shape refusals
 
-- **Sky.Webview** apps link the system WebKit / WebView2 and cannot be static →
+- **Ipe.Webview** apps link the system WebKit / WebView2 and cannot be static →
   `Refusal::WebviewStatic` at plan construction (adopted from `../sky` verbatim).
 - Any app shape that `dlopen`s at runtime, or the console reverse-proxy shape that
   spawns a child binary, is reviewed against the same rule; refuse at parse time
@@ -513,7 +513,7 @@ entry point.
 
 No dlmalloc/talc numbers exist on the ipê runtime — every perf figure in §1 is a
 prediction. Before hard-committing, benchmark `{musl-malloc, dlmalloc, mimalloc}`
-(single- and multi-thread microbench + a Sky.Live/Http concurrent-request bench)
+(single- and multi-thread microbench + a Ipe.Live/Http concurrent-request bench)
 on the actual runtime.
 
 Purpose of the gate — and its explicit limit: it (a) confirms dlmalloc clears the
@@ -549,7 +549,7 @@ of running the gate is an open item — see Open Decision D3.
 | musl as the sole Linux static target | correctness / soundness (glibc-static is a name-resolution footgun) |
 | the `--static` / `--target <triple>` / `--allocator <choice>` CLI shape | — |
 | parsed build-plan (sum type) before cargo | soundness — invalid combos unrepresentable |
-| Sky.Webview-under-static refusal | correctness — links system WebKit/WebView2 |
+| Ipe.Webview-under-static refusal | correctness — links system WebKit/WebView2 |
 | cross-linker presence check + actionable remediation | usability, no silent link failure |
 | `+crt-static` for Windows / gnu | correctness |
 | fail-soft when `rustup` is absent | pragmatism |
@@ -577,10 +577,10 @@ warn-paths into refusals/acknowledgment-gates.
 
 Static remains **opt-in everywhere** until the CVE-rebuild automation (§6) is in
 CI. Once automated, static is the *recommended* default for single-binary CLI /
-Sky.Cli tools (a self-contained binary is the whole point) and for
-Docker/Cloud-Run Sky.Live deployments (small scratch images). Long-running servers
+Ipe.Cli tools (a self-contained binary is the whole point) and for
+Docker/Cloud-Run Ipe.Live deployments (small scratch images). Long-running servers
 carry a higher CVE-rebuild exposure, so the recommendation there is gated on the
-audit/SBOM automation being green. Sky.Webview is never static (refused).
+audit/SBOM automation being green. Ipe.Webview is never static (refused).
 
 ### Divergence recording
 
@@ -685,5 +685,5 @@ absent — a second-order security win reinforcing the default.
   milestone alongside x86_64, or defer to a follow-up?
 - **D7 — Static as a recommended default.** Once the CVE-rebuild automation (§6) is
   green in CI, which app shapes flip from opt-in to recommended-default (CLI tools
-  and Docker/Cloud-Run Sky.Live are the candidates; long-running servers carry
+  and Docker/Cloud-Run Ipe.Live are the candidates; long-running servers carry
   higher CVE exposure)?

@@ -1,7 +1,7 @@
 # Spec: #183 — `Result.mapError` wildcard-handler param lowers as `JsonVal` instead of `SkyError` (exit-0-then-cargo-fail E0277)
 
 Status: investigation complete, root-caused, fix verified end-to-end with a
-temporary probe (skyc-0 ⇒ cargo-0 ⇒ prints `concrete`). This spec is the
+temporary probe (ipe-0 ⇒ cargo-0 ⇒ prints `concrete`). This spec is the
 one-shot implementation brief for a Sonnet agent. **Do NOT re-derive — the
 mechanism, the exact edit, the two prior-attempt failure modes, and the
 regression-test wiring are all confirmed below.**
@@ -10,11 +10,11 @@ regression-test wiring are all confirmed below.**
 
 ```elm
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 main = println (Result.withDefault "def" (Result.mapError (\_ -> Error.invalidInput "x") (Ok "concrete")))
 ```
 
-`skyc build` exits 0. The emitted `main.rs` (line ~239) is:
+`ipe build` exits 0. The emitted `main.rs` (line ~239) is:
 
 ```rust
 sky_result_map_error(
@@ -40,7 +40,7 @@ renders), not the backend or runtime.
 
 1. `Result.mapError`'s stdlib scheme is `mapError : (e -> f) -> Result e a ->
    Result f a` — `e` stays genuinely polymorphic (the def is unannotated:
-   `crates/skyc/stdlib/Sky/Core/Result.ipe:42`, `mapError fn r = case r of Ok
+   `crates/ipe/stdlib/Ipê/Core/Result.ipe:42`, `mapError fn r = case r of Ok
    x -> Ok x; Err e -> Err (fn e)`).
 
 2. The handler is a wildcard lambda `\_ -> …`. In `Lowerer::lower_lambda`
@@ -120,7 +120,7 @@ breakers, in priority order, are:
 1. **Hand-written `oracle.meta` sha256 drift.** Attempt #2 hand-authored
    `tests/golden/result_map_error_wildcard/oracle.meta` with a literal
    `main_sky_sha256 = …`. `assert_go_parity` → `oracle::check_parity`
-   (`crates/skyc/tests/support/mod.rs:405-421`) **re-hashes `Main.ipe` and
+   (`crates/ipe/tests/support/mod.rs:405-421`) **re-hashes `Main.ipe` and
    hard-fails loudly** ("run refresh-oracle") if the recorded hash does not
    match the fixture byte-for-byte. Any whitespace/comment difference between
    the committed `Main.ipe` and the hashed content breaks the gate even
@@ -129,7 +129,7 @@ breakers, in priority order, are:
 
 2. **Full-workspace `cargo test` gate flake (OOM / disk / timeout).** Per the
    project's known "Rust lane OOM + cargo-test compile scope" learning, a
-   `-p skyc` test run compiles ~155 test binaries; on a memory- or
+   `-p ipe` test run compiles ~155 test binaries; on a memory- or
    disk-constrained lane the gate can be killed mid-run and surface as a
    non-specific failure with a truncated tail — exactly what the resume
    shows. The autopilot gate should run the fix's targeted golden under
@@ -239,12 +239,12 @@ not affect the `Less`/`Greater` arms.
 ```elm
 module Main exposing (main)
 
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 
 
 -- #183 SEAL positive: `Result.mapError`'s handler is a wildcard lambda
 -- `\_ -> …` over a genuinely-free error var `e`, and the call is UNPINNED (no
--- result-type annotation forces `e`). skyc must default the handler parameter
+-- result-type annotation forces `e`). ipe must default the handler parameter
 -- to the SAME concrete error type (`SkyError`) that the `Ok "concrete"` value
 -- side defaults `e` to — otherwise the emitted closure is `FnOnce(JsonVal)`
 -- against a `SkyResult<SkyError, _>` value and cargo fails E0277 (an exit-0-
@@ -259,7 +259,7 @@ main =
 The Go oracle rejects this shape (`Error.invalidInput` is a NAMING ERROR
 [E1001] in the Go frontend — `Error.*` is an Ipê-only prelude kernel
 qualifier, a pre-existing sanctioned divergence, #86), so the fixture is an
-`oracle_divergence = true` fixture whose `expected_go.txt` is skyc's own
+`oracle_divergence = true` fixture whose `expected_go.txt` is ipe's own
 SEAL-correct output (`concrete`). **Do not hand-author `oracle.meta`** — the
 `main_sky_sha256` field is re-verified by `assert_go_parity` and a stale hash
 is the most likely cause of the two prior gate failures. Instead run the
@@ -273,12 +273,12 @@ CARGO_TARGET_DIR=/tmp/i183-target cargo run -p refresh-oracle -- result_map_erro
 
 If the tool refuses because Go isn't available/errors on this shape, it marks
 `oracle_divergence = true` with the E1001 reason automatically and records
-skyc's output — that is the intended state for this fixture. Verify
+ipe's output — that is the intended state for this fixture. Verify
 `tests/golden/result_map_error_wildcard/expected_go.txt` contains exactly
 `concrete\n` and `oracle.meta` carries a `main_sky_sha256` matching the
 committed `Main.ipe`.
 
-### Test registration: `crates/skyc/tests/golden_m88_combinators.rs`
+### Test registration: `crates/ipe/tests/golden_m88_combinators.rs`
 
 Append:
 
@@ -289,9 +289,9 @@ Append:
 /// `IrType::Json` while the `Ok "concrete"` value side defaulted the same
 /// free `e` to `IrType::Error` (`SkyError`); the emitted `FnOnce(JsonVal)`
 /// closure then failed to unify with the `SkyResult<SkyError, _>` value and
-/// cargo rejected it with E0277 despite skyc exit-0. The fix retypes the
+/// cargo rejected it with E0277 despite ipe exit-0. The fix retypes the
 /// handler binder to `SkyError`; this gate proves the whole pipeline
-/// (skyc → cargo build → run) now succeeds and prints `concrete`.
+/// (ipe → cargo build → run) now succeeds and prints `concrete`.
 #[test]
 fn result_map_error_wildcard_handler() {
     assert_runs_and_matches_oracle("result_map_error_wildcard");
@@ -311,31 +311,31 @@ touch the default workspace target.
 export TGT=/tmp/i183-target
 export RT="$(pwd)/runtime/src/sky_runtime"
 
-# 1. Build skyc with the fix.
-CARGO_TARGET_DIR=$TGT timeout 900 cargo build -p skyc --bin skyc 2>&1 | tee /tmp/i183-build.log
+# 1. Build ipe with the fix.
+CARGO_TARGET_DIR=$TGT timeout 900 cargo build -p ipe --bin ipe 2>&1 | tee /tmp/i183-build.log
 # expect: Finished, exit 0
 
-# 2. Emit + cargo-build + run the repro (proves skyc-0 ⇒ cargo-0 ⇒ prints concrete).
+# 2. Emit + cargo-build + run the repro (proves ipe-0 ⇒ cargo-0 ⇒ prints concrete).
 mkdir -p /tmp/i183-repro/src
 cat > /tmp/i183-repro/src/Main.ipe <<'SKY'
 module Main exposing (main)
-import Sky.Core.Prelude exposing (..)
+import Ipe.Prelude exposing (..)
 main = println (Result.withDefault "def" (Result.mapError (\_ -> Error.invalidInput "x") (Ok "concrete")))
 SKY
 printf 'name = "i183repro"\nversion = "0.1.0"\nentry = "src/Main.ipe"\n' > /tmp/i183-repro/sky.toml
 rm -rf /tmp/i183-out
-IPE_RUNTIME_DIR="$RT" $TGT/debug/skyc build /tmp/i183-repro/src/Main.ipe --out /tmp/i183-out --runtime "$RT" 2>&1 | tee /tmp/i183-emit.log
-# skyc exit 0
+IPE_RUNTIME_DIR="$RT" $TGT/debug/ipe build /tmp/i183-repro/src/Main.ipe --out /tmp/i183-out --runtime "$RT" 2>&1 | tee /tmp/i183-emit.log
+# ipe exit 0
 ( cd /tmp/i183-out && CARGO_TARGET_DIR=$TGT timeout 400 cargo build 2>&1 | tee /tmp/i183-cargo.log )
 # expect: Finished, NO error[E0277]
 $TGT/debug/sky-app        # prints: concrete
 
 # 3. Golden E2E for the fixture (proves the recorded gate passes).
-CARGO_TARGET_DIR=$TGT IPE_E2E=1 timeout 600 cargo test -p skyc --test golden_m88_combinators result_map_error_wildcard_handler 2>&1 | tee /tmp/i183-golden.log
+CARGO_TARGET_DIR=$TGT IPE_E2E=1 timeout 600 cargo test -p ipe --test golden_m88_combinators result_map_error_wildcard_handler 2>&1 | tee /tmp/i183-golden.log
 # expect: 1 passed
 
 # 4. Non-regression on the neighbouring mapError goldens.
-CARGO_TARGET_DIR=$TGT timeout 600 cargo test -p skyc --test golden_l0114_ctor_payload_function --test golden_i181_ambiguous_kernel_turbofish 2>&1 | tee /tmp/i183-neighbours.log
+CARGO_TARGET_DIR=$TGT timeout 600 cargo test -p ipe --test golden_l0114_ctor_payload_function --test golden_i181_ambiguous_kernel_turbofish 2>&1 | tee /tmp/i183-neighbours.log
 # expect: all passed (map_error_arity1_accepted, map_error_curried_stays_gated included)
 ```
 
@@ -352,7 +352,7 @@ failures.
 | `crates/sky_lower/src/lower.rs` | Add `retype_result_map_error_handler` helper (before `lower_call_uniform`); call it in the `Ordering::Equal` kernel-call arm. |
 | `tests/golden/result_map_error_wildcard/Main.ipe` | New fixture (above). |
 | `tests/golden/result_map_error_wildcard/{expected_go.txt,oracle.meta}` | Generated by `refresh-oracle`, NOT hand-written. |
-| `crates/skyc/tests/golden_m88_combinators.rs` | Register `result_map_error_wildcard_handler`. |
+| `crates/ipe/tests/golden_m88_combinators.rs` | Register `result_map_error_wildcard_handler`. |
 
 No backend (`sky_backend_rust`) or runtime change is needed — the runtime
 `sky_result_map_error<E,F,A>` (`runtime/src/sky_runtime/core.rs:438`) is

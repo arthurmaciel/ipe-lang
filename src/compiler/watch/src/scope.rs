@@ -35,7 +35,7 @@ const EXCLUDED_DIR_NAMES: &[&str] = &[
     // (`.ipe/lowered/`, `.ipe/source.hash`) and its build-cache sibling.
     ".ipe",
     ".ipe-cache",
-    // Generated build output directories a `skyc build`/`ipe watch` produces.
+    // Generated build output directories a `ipe build`/`ipe watch` produces.
     "sky-out",
 ];
 

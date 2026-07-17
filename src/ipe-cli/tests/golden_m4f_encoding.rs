@@ -41,8 +41,8 @@
 //! the Go backend PANICS with `CoerceFailure` (`rt.ResultCoerce` →
 //! `coerceInner`) when narrowing the `Result` of a decode kernel inside a
 //! top-level `case … of Ok _ … Err _ …`, so it cannot produce a reference for
-//! this shape. skyc handles it correctly (`"invalid"`), which `refresh-oracle`
-//! caches. This is an UPSTREAM (Go-backend) bug, not a Sky-Rust one. TRACKED:
+//! this shape. ipe handles it correctly (`"invalid"`), which `refresh-oracle`
+//! caches. This is an UPSTREAM (Go-backend) bug, not a Ipê-Rust one. TRACKED:
 //! re-verify this golden against the live Go oracle once the upstream
 //! CoerceFailure-on-decode-Result narrowing is fixed (`refresh-oracle
 //! encoding_invalid`) — if Go then succeeds, the flag should flip back to
@@ -134,7 +134,7 @@ fn encoding_hex_roundtrip() {
 /// `Encoding.base64Encode "café"` / `hexEncode "café"` over non-ASCII text.
 /// Recorded `divergence:` — the Rust runtime's Latin-1 char-as-byte model
 /// differs from Go's UTF-8 string bytes for codepoints ≥ 0x80.  Expected holds
-/// the Sky-Rust output (`café Y2Fm6Q== 636166e9`); see divergence-policy.md.
+/// the Ipê-Rust output (`café Y2Fm6Q== 636166e9`); see divergence-policy.md.
 #[test]
 fn encoding_nonascii() {
     assert_runs_and_matches_oracle("encoding_nonascii");

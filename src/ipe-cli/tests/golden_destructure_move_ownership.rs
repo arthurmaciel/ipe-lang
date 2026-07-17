@@ -3,17 +3,17 @@
 //! A `let (a, b) = pair` destructure binder whose CloneOk component `a` is read
 //! TWICE by value in the body. Without the fix, destructure was the ONE binder kind
 //! that never invoked the count/clone/relay machinery, so the emitted
-//! `string_append(a, string_append(a, b))` moved `a` twice → skyc-0 but
+//! `string_append(a, string_append(a, b))` moved `a` twice → ipe-0 but
 //! cargo-101 (E0382 use of moved value). The fix routes every destructure
 //! component through the shared `apply_move_ownership` entry point, cloning the
 //! non-last consuming read.
 //!
-//! THE SEAL: skyc-0 ⇒ cargo-0.
+//! THE SEAL: ipe-0 ⇒ cargo-0.
 //!
 //! Run:
 //! ```text
-//! cargo test -p skyc --test golden_i224_destructure_move_ownership
-//! IPE_E2E=1 cargo test -p skyc --test golden_i224_destructure_move_ownership
+//! cargo test -p ipe --test golden_i224_destructure_move_ownership
+//! IPE_E2E=1 cargo test -p ipe --test golden_i224_destructure_move_ownership
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -32,7 +32,7 @@ fn entry_path(root: &Path) -> PathBuf {
         .join("Main.ipe")
 }
 
-/// skyc-0: the compiler accepts the program AND the reused destructure component
+/// ipe-0: the compiler accepts the program AND the reused destructure component
 /// `a` is cloned on its non-last consuming read.
 #[test]
 fn i224_destructure_skyc_accepts_and_clones_reused_component() {
@@ -49,7 +49,7 @@ fn i224_destructure_skyc_accepts_and_clones_reused_component() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for destructure_move_ownership: {:?}",
+        "ipe build must succeed for destructure_move_ownership: {:?}",
         built.err()
     );
 
@@ -83,7 +83,7 @@ fn i224_destructure_cargo_builds_and_runs() {
     };
 
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
-    assert!(built.is_ok(), "skyc build must succeed: {:?}", built.err());
+    assert!(built.is_ok(), "ipe build must succeed: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted("destructure_move_ownership", &out);
     assert_eq!(

@@ -3,8 +3,8 @@ use super::*;
 
 // `Crypto.randomBytes : Int -> Task Error String`. Go returns the entropy as a
 // LOWERCASE HEX string (rt.go ~l6543: `hex.EncodeToString(b)`), NOT a byte list —
-// the Sky signature is `String`, so the Rust side must return a hex `String` too.
-// (A prior `Vec<i64>` return diverged from both the Sky type and Go: a Sky call
+// the Ipê signature is `String`, so the Rust side must return a hex `String` too.
+// (A prior `Vec<i64>` return diverged from both the Ipê type and Go: a Ipê call
 // site treating the result as a String/Bytes mismatched at codegen.)
 pub fn crypto_random_bytes<E: From<String> + Send + 'static>(n: i64) -> IpeTask<E, String> {
     use aes_gcm::aead::{OsRng, rand_core::RngCore};
@@ -76,7 +76,7 @@ pub fn crypto_sha256(s: String) -> String {
         .join("")
 }
 
-/// Sky `sha512 : String -> String` — hex-encoded SHA-512 digest.
+/// Ipê `sha512 : String -> String` — hex-encoded SHA-512 digest.
 pub fn crypto_sha512(s: String) -> String {
     use sha2::{Digest, Sha512};
     let mut h = Sha512::new();
@@ -92,7 +92,7 @@ pub fn crypto_sha512(s: String) -> String {
 /// HMAC + bcrypt/PBKDF2 elsewhere in this module. Removing them would break Go
 /// parity; the hardening is this contract note. (Audit finding: low/weak-crypto.)
 ///
-/// Sky `sha1 : String -> String` — hex-encoded SHA-1 digest.
+/// Ipê `sha1 : String -> String` — hex-encoded SHA-1 digest.
 pub fn crypto_sha1(s: String) -> String {
     use sha1::{Digest, Sha1};
     let mut h = Sha1::new();
@@ -100,7 +100,7 @@ pub fn crypto_sha1(s: String) -> String {
     h.finalize().iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-/// Sky `md5 : String -> String` — hex-encoded MD5 digest.
+/// Ipê `md5 : String -> String` — hex-encoded MD5 digest.
 pub fn crypto_md5(s: String) -> String {
     use md5::{Digest, Md5};
     let mut h = Md5::new();
@@ -108,13 +108,13 @@ pub fn crypto_md5(s: String) -> String {
     h.finalize().iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-/// Sky `hmacSha256 : String -> String -> String` (key, message → hex tag).
+/// Ipê `hmacSha256 : String -> String -> String` (key, message → hex tag).
 pub fn crypto_hmac_sha256(key: String, msg: String) -> String {
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
     type HmacSha256 = Hmac<Sha256>;
     // INFALLIBLE: HMAC accepts any key length (new_from_slice never returns Err);
-    // the kernel is a pure `String -> String -> String` Sky surface with no Result
+    // the kernel is a pure `String -> String -> String` Ipê surface with no Result
     // channel, and a fallback MAC would be a silently-wrong hash (a security defect).
     // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel, 2026-06-13) — infallible HMAC ctor; pure kernel has no Result channel; a fallback MAC is a security defect [ledger #1]
     #[allow(clippy::expect_used)]
@@ -128,13 +128,13 @@ pub fn crypto_hmac_sha256(key: String, msg: String) -> String {
         .collect()
 }
 
-/// Sky `hmacSha512 : String -> String -> String`.
+/// Ipê `hmacSha512 : String -> String -> String`.
 pub fn crypto_hmac_sha512(key: String, msg: String) -> String {
     use hmac::{Hmac, Mac};
     use sha2::Sha512;
     type HmacSha512 = Hmac<Sha512>;
     // INFALLIBLE: HMAC accepts any key length (new_from_slice never returns Err);
-    // the kernel is a pure `String -> String -> String` Sky surface with no Result
+    // the kernel is a pure `String -> String -> String` Ipê surface with no Result
     // channel, and a fallback MAC would be a silently-wrong hash (a security defect).
     // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel, 2026-06-13) — infallible HMAC ctor; pure kernel has no Result channel; a fallback MAC is a security defect [ledger #1]
     #[allow(clippy::expect_used)]
@@ -148,7 +148,7 @@ pub fn crypto_hmac_sha512(key: String, msg: String) -> String {
         .collect()
 }
 
-/// Sky `rsaSha256Sign : String -> String -> Result Error String`
+/// Ipê `rsaSha256Sign : String -> String -> Result Error String`
 /// Sign `msg` with the PKCS#1 v1.5 SHA-256 RSA scheme using `key_pem`.
 /// Accepts PKCS#1 (`-----BEGIN RSA PRIVATE KEY-----`) and PKCS#8
 /// (`-----BEGIN PRIVATE KEY-----`) PEM private keys — mirrors Go oracle
@@ -184,7 +184,7 @@ pub fn crypto_rsa_sha256_sign<E: From<String>>(
     };
     let signing_key = SigningKey::<Sha256>::new(priv_key);
     // try_sign (not sign): `Signer::sign` PANICS on an internal signing failure
-    // (e.g. a key too small for the digest) — a Sky-reachable abort inside a
+    // (e.g. a key too small for the digest) — a Ipê-reachable abort inside a
     // Result-returning crypto fn. Route the failure to Err instead.
     let signature = match signing_key.try_sign(msg.as_bytes()) {
         Ok(s) => s,
@@ -196,7 +196,7 @@ pub fn crypto_rsa_sha256_sign<E: From<String>>(
     IpeResult::Ok(STANDARD.encode(signature.to_bytes()))
 }
 
-/// Sky `rsaSha256Verify : String -> String -> String -> Bool`
+/// Ipê `rsaSha256Verify : String -> String -> String -> Bool`
 /// (pemPublicKey, msg, base64Signature). Returns `false` on any failure — never panics.
 /// Accepts SPKI/PKIX public keys (`-----BEGIN PUBLIC KEY-----`, the common openssl form)
 /// and PKCS#1 public keys (`-----BEGIN RSA PUBLIC KEY-----`) — mirrors Go oracle
@@ -236,7 +236,7 @@ pub fn crypto_rsa_sha256_verify(key_pem: String, msg: String, sig_b64: String) -
     verifying_key.verify(msg.as_bytes(), &signature).is_ok()
 }
 
-/// Sky `constantTimeEqual : String -> String -> Bool` — timing-safe byte compare.
+/// Ipê `constantTimeEqual : String -> String -> Bool` — timing-safe byte compare.
 pub fn crypto_constant_time_equal(a: String, b: String) -> bool {
     use subtle::ConstantTimeEq;
     let ab = a.as_bytes();
@@ -352,7 +352,7 @@ pub fn crypto_aes_gcm_decrypt<E: From<String>>(
         Err(e) => return IpeResult::Err(format!("Crypto.aesGcmDecrypt: {}", e).into()),
     };
     match cipher.decrypt(Nonce::from_slice(nonce_bytes), ct) {
-        // A Sky String is UTF-8 by construction. Go's oracle returns string(pt)
+        // A Ipê String is UTF-8 by construction. Go's oracle returns string(pt)
         // (Go strings are arbitrary bytes), but lossy-replacing invalid UTF-8 here
         // would silently corrupt the plaintext. Reject non-UTF-8 plaintext with a
         // structured Err instead — total, and surfaces the mismatch at the boundary.
@@ -429,7 +429,7 @@ pub fn crypto_chacha20_decrypt<E: From<String>>(
         Err(e) => return IpeResult::Err(format!("Crypto.chacha20Decrypt: {}", e).into()),
     };
     match cipher.decrypt(Nonce::from_slice(nonce_bytes), ct) {
-        // A Sky String is UTF-8 by construction (see aesGcmDecrypt note). Reject
+        // A Ipê String is UTF-8 by construction (see aesGcmDecrypt note). Reject
         // non-UTF-8 plaintext with a structured Err rather than lossy-corrupting it.
         Ok(pt) => match String::from_utf8(pt) {
             Ok(s) => IpeResult::Ok(s),
@@ -462,12 +462,12 @@ pub fn crypto_chacha_key_from_password(password: String, salt: String) -> String
     crypto_aes_key_from_password(password, salt)
 }
 
-// ── Concrete (non-generic) wrappers for generated Sky code ─────────────
+// ── Concrete (non-generic) wrappers for generated Ipê code ─────────────
 //
 // The generic `crypto_aes_gcm_encrypt<E>`, `crypto_aes_gcm_decrypt<E>`,
 // `crypto_chacha20_encrypt<E>`, `crypto_chacha20_decrypt<E>`,
 // `crypto_rsa_sha256_sign<E>` above use a flexible `E: From<String>` bound so
-// the error type can be inferred from context. Generated Sky code sets
+// the error type can be inferred from context. Generated Ipê code sets
 // `IpeError = ipe_runtime::error::IpeError`, but Rust's
 // type inference cannot pin `E` when the error arm is discarded (e.g.
 // `Err _ ->` in a case expression). These concrete aliases pin `E = IpeError`
@@ -574,7 +574,7 @@ y7anow7/QOtvB1/UdyrxegB+sHZoBWA9+SsMl2zn
 -----END RSA PRIVATE KEY-----";
 
     // SPKI/PKIX public key derived from RSA_PRIV_PEM (`openssl rsa -pubout`).
-    // Sky's rsaSha256Verify takes a PUBLIC key — this is the correct pairing.
+    // Ipê's rsaSha256Verify takes a PUBLIC key — this is the correct pairing.
     const RSA_PUB_PEM: &str = "-----BEGIN PUBLIC KEY-----
 MFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBAK1QGnsdSyVv+JT4WDnGIIr3QA75yZTi
 TsgxkiXH9sjXrPHT1hXn2tKCv9MkR8MD1Ndh6jo7inBZUK0YG7H6Jx0CAwEAAQ==

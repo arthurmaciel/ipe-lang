@@ -1,4 +1,4 @@
-//! Recursive-descent parser for the supported subset of Sky.
+//! Recursive-descent parser for the supported subset of Ipê.
 //!
 //! Port of `Sky.Parse.{Module,Declaration,Type,Pattern,Expression}` narrowed to
 //! the supported grammar: a module header, imports, `type` unions, top-level value
@@ -1190,7 +1190,7 @@ impl<'a> Parser<'a> {
     ///
     /// * **Adjacent non-literal atom** (`-x`, `-(e)`, `-f x`) — desugared at
     ///   parse time to `Call(VarLocal("negate"), [e])`, matching the canonical
-    ///   Elm / Sky desugar path.  This closes the IPE-P0001 that 37-composite-
+    ///   Elm / Ipê desugar path.  This closes the IPE-P0001 that 37-composite-
     ///   live-shop hit on `if cents < 0 then -cents else cents` (State.ipe:156).
     ///
     /// * **Non-adjacent** (`- 5`, `- x`) — the Haskell parser's `exprAtom_`
@@ -1438,7 +1438,7 @@ impl<'a> Parser<'a> {
     ///   separated list of `name = value` fields.
     /// * `{ base | field = value, ... }` — a record **update** (a `|` after the
     ///   first name): a copy of the record variable `base` with the listed
-    ///   fields replaced. The base is a bare lowercase variable, matching Sky's
+    ///   fields replaced. The base is a bare lowercase variable, matching Ipê's
     ///   (and Elm's) grammar.
     ///
     /// `opener` is the `{`'s span; `depth` bounds the field-value recursion.

@@ -7,7 +7,7 @@
 //! field via `emit_model_gate::model_ty_of_view`. If that helper matched
 //! ONLY `Expr::FuncValue`, a lambda `view` would return `None` and the emitter
 //! silently choose the single-page `live_app` — `routes` and `notFound`
-//! DISCARDED with no diagnostic (skyc-0, cargo-0, wrong runtime behaviour: a
+//! DISCARDED with no diagnostic (ipe-0, cargo-0, wrong runtime behaviour: a
 //! silent wrong-accept, worse than a cargo failure). Meanwhile the type tier's
 //! `RoutedLiveCheck` reads the SOLVER's Model and classifies the
 //! same app as routed — the two tiers would disagree exactly on the lambda-view
@@ -70,7 +70,7 @@ fn compile() -> Option<Result<(), ipe::CliError>> {
     Some(ipe::build(&entry, &out, &runtime))
 }
 
-/// The lambda-view routed app must be skyc-0 AND emit `live_app_routed` with
+/// The lambda-view routed app must be ipe-0 AND emit `live_app_routed` with
 /// its routes wired — never silently emit the non-routed `live_app` and drop
 /// `routes`/`notFound`.
 #[test]
@@ -80,7 +80,7 @@ fn lambda_view_routed_app_emits_live_app_routed() {
     };
     assert!(
         result.is_ok(),
-        "#108 hole 2: lambda-view routed app must be skyc-0, got: {:?}",
+        "#108 hole 2: lambda-view routed app must be ipe-0, got: {:?}",
         result.err(),
     );
     let main_rs = std::fs::read_to_string(out_dir().join("src").join("main.rs"))

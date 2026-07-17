@@ -2,7 +2,7 @@
 //!
 //! Every [`crate::Diagnostic`] maps to exactly one [`Code`] via
 //! [`crate::Diagnostic::code`]. Codes are the machine-greppable, user-facing
-//! handle a reader passes to `skyc explain <CODE>`; they never change once
+//! handle a reader passes to `ipe explain <CODE>`; they never change once
 //! shipped. The taxonomy is authoritative here (this file + the explain
 //! pages under `crates/ipe_diagnostics/explain/`); the original design spec
 //! is preserved in git history.
@@ -225,7 +225,7 @@ pub const IPE_L0124: Code = Code("IPE-L0124");
 ///
 /// The Msg type's Rust rendering would not satisfy the runtime's
 /// `Clone + Send + Sync + Debug + 'static` bound — converts a
-/// would-be `cargo` trait-bound failure into a fail-closed `skyc` error.
+/// would-be `cargo` trait-bound failure into a fail-closed `ipe` error.
 pub const IPE_L0125: Code = Code("IPE-L0125");
 /// a non-Clone, non-callee-position capture inside a closure
 pub const IPE_L0126: Code = Code("IPE-L0126");
@@ -370,7 +370,7 @@ pub fn title(c: Code) -> &'static str {
     }
 }
 
-/// The embedded `skyc explain` page for a code.
+/// The embedded `ipe explain` page for a code.
 ///
 /// Each page is `include_str!`d from `explain/<CODE>.md` at compile time, so a
 /// missing or renamed page is a build error — the registry cannot drift from
@@ -478,9 +478,9 @@ pub fn explain_page(c: Code) -> Option<&'static str> {
     }
 }
 
-/// Every taxonomy code, authoritative for `skyc explain` and drift detection.
+/// Every taxonomy code, authoritative for `ipe explain` and drift detection.
 ///
-/// This is the single source of truth. `skyc` iterates this slice to resolve
+/// This is the single source of truth. `ipe` iterates this slice to resolve
 /// `explain <CODE>` — no hand-mirror needed.
 pub const ALL_CODES: &[Code] = &[
     IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013, IPE_P0014,

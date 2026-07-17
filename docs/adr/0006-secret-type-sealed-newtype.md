@@ -36,7 +36,7 @@ previously returned `true` for any zero-arg `Ty::Con` (empty args ⇒ vacuously
 ever derived `PartialEq`, *silently permit a variable-time compare*. Both violate
 the security principle. The gate makes `ty_is_equatable(&Secret) == false`, so an
 equality obligation on a `Secret` fails closed with IPE-T0014 at type-check
-time. This makes "a secret compared with `==`" **unrepresentable at the Sky
+time. This makes "a secret compared with `==`" **unrepresentable at the Ipê
 level** — the developer must reach for the constant-time kernel.
 
 ## Consequences

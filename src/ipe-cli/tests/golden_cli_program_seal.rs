@@ -9,14 +9,14 @@
 //! constrain scheme (closed 5-field cfg, `RowTail::Closed`) → lower
 //! app-entry intercept → `emit_cli_call` → `ipe_runtime::cli_program`.
 //!
-//! Asserts skyc-0 ∧ cargo-0 ∧ run-0.  The runtime prints `view model` once at
+//! Asserts ipe-0 ∧ cargo-0 ∧ run-0.  The runtime prints `view model` once at
 //! start; the harness runs the binary with stdin at EOF (`Command::output`
 //! nulls stdin), so the program renders the initial state and exits 0.
 //!
 //! Gated on `IPE_E2E=1`. Run:
 //!
 //! ```text
-//! IPE_E2E=1 cargo test -p skyc --test golden_i111_cli_program_seal
+//! IPE_E2E=1 cargo test -p ipe --test golden_i111_cli_program_seal
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -44,11 +44,11 @@ fn cli_program_skyc_cargo_and_run_zero() {
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    // skyc-0: compiler must succeed (this shape can fail with IPE-L0107).
+    // ipe-0: compiler must succeed (this shape can fail with IPE-L0107).
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for cli_program_seal: {:?}",
+        "ipe build must succeed for cli_program_seal: {:?}",
         built.err()
     );
 

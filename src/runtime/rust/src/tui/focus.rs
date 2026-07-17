@@ -1,4 +1,4 @@
-//! Sky.Tui input / focus state — the runtime-managed editor model.
+//! Ipe.Tui input / focus state — the runtime-managed editor model.
 //!
 //! Port of Go's `tui_ui.go` inputRegistry / focusable / tuiEditInput. The Rust
 //! version is cleaner than Go's reflection-based `eventPair` extraction: events

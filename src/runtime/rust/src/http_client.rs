@@ -1,9 +1,9 @@
-//! Sky.Core.Http — outbound HTTP client (reqwest under a Sky-native surface).
+//! Ipe.Http — outbound HTTP client (reqwest under a Ipê-native surface).
 //!
-//! HttpResponse/HttpRequest map to the Sky record aliases via runtimeOpaqueTypes
+//! HttpResponse/HttpRequest map to the Ipê record aliases via runtimeOpaqueTypes
 //! (like Csv's CsvDoc), so `resp.status` / `.body` / `.headers` resolve onto
-//! these pub fields and the Sky-built `defaultRequest` record constructs this
-//! struct directly. Field names match the Sky records verbatim (camelCase
+//! these pub fields and the Ipê-built `defaultRequest` record constructs this
+//! struct directly. Field names match the Ipê records verbatim (camelCase
 //! `followRedirects` / `maxRedirects` — hence the non_snake_case allow).
 //!
 //! ## SSRF protection (default-ON in production)
@@ -48,7 +48,7 @@ use std::collections::HashMap;
 // coupled `ssrf_apply` + the request executor below import the three they use.
 use crate::ssrf::{resolve_first_non_private_addr, ssrf_check_url, ssrf_deny_private_enabled};
 
-/// Sky.Core.Http.HttpResponse — field names/types match the Sky record alias.
+/// Ipe.Http.HttpResponse — field names/types match the Ipê record alias.
 #[derive(Clone, Debug)]
 pub struct HttpResponse {
     pub status: i64,
@@ -56,7 +56,7 @@ pub struct HttpResponse {
     pub headers: HashMap<String, String>,
 }
 
-/// Sky.Core.Http.HttpRequest — built in Sky (defaultRequest + with* updates),
+/// Ipe.Http.HttpRequest — built in Ipê (defaultRequest + with* updates),
 /// so every field is pub for external struct-literal construction.
 #[allow(non_snake_case)]
 #[derive(Clone, Debug)]
@@ -253,7 +253,7 @@ async fn do_request<E: From<String> + Send + 'static>(
         Err(e) => return IpeResult::Err(e.into()),
     };
 
-    // Always install a request deadline. A Sky-controllable `timeout <= 0`
+    // Always install a request deadline. A Ipê-controllable `timeout <= 0`
     // would otherwise leave the request with no deadline (slowloris / hung-
     // connection vector), so floor it to 30 s instead of disabling it.
     let timeout_ms = if req.timeout > 0 {
@@ -285,7 +285,7 @@ async fn do_request<E: From<String> + Send + 'static>(
         // [B8] Route the transport error through the redacting constructor: a
         // reqwest/hyper error Display can echo `req.url` (which may carry userinfo
         // / a query-string API key) and the resolved address. The raw detail is
-        // logged server-side under a correlation id; Sky sees only the generic
+        // logged server-side under a correlation id; Ipê sees only the generic
         // `external operation failed (ref <id>)`. Mirrors http_stream.rs.
         Err(e) => {
             return IpeResult::Err(ipe_error_from_foreign(e));
@@ -297,7 +297,7 @@ async fn do_request<E: From<String> + Send + 'static>(
         if let Ok(s) = v.to_str() {
             // MIME-case parity: reqwest's `HeaderName::as_str()`
             // ALWAYS returns lower-case, but the Go reference stores response
-            // headers canonicalised (`net/http.Header` always is) — a Sky
+            // headers canonicalised (`net/http.Header` always is) — a Ipê
             // program's `Dict.get "Content-Type" resp.headers` must find the
             // key. Route through the SAME `canonical_header` the Server
             // inbound path uses (its Go-parity table is pinned by
@@ -323,7 +323,7 @@ async fn do_request<E: From<String> + Send + 'static>(
 /// 100 MiB. `Http.*` returns the body as a single `String`, so an unbounded
 /// read of an attacker- or upstream-controlled response is a memory-exhaustion
 /// (OOM) vector. Override via `IPE_HTTP_MAX_BODY_BYTES` (streaming consumers that
-/// need unbounded bodies use `Sky.Core.Http.Stream` instead).
+/// need unbounded bodies use `Ipe.Http.Stream` instead).
 const HTTP_BODY_CAP_DEFAULT: usize = 100 * 1024 * 1024;
 
 fn http_body_cap() -> usize {
@@ -366,7 +366,7 @@ async fn read_body_capped<E: From<String> + Send + 'static>(
             Ok(b) => b,
             // [B8] Redact: a body-read transport error can also echo the URL /
             // resolved address. Log server-side under a correlation id, return
-            // only the generic ref to Sky.
+            // only the generic ref to Ipê.
             Err(e) => return IpeResult::Err(ipe_error_from_foreign(e)),
         };
         if buf.len().saturating_add(bytes.len()) > cap {

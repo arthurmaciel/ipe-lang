@@ -1,7 +1,7 @@
 // Random kernel stubs — generic over E.
 //
 // SECURITY INVARIANT — this module is a NON-CRYPTOGRAPHIC PRNG (a 64-bit LCG
-// seeded from the wall clock), implementing Sky's `Random.*` surface with the
+// seeded from the wall clock), implementing Ipê's `Random.*` surface with the
 // SAME contract as the Go backend's `math/rand`. Its output is fully predictable
 // and MUST NEVER back a secret, token, session id, nonce, salt, or any value an
 // attacker must not guess. Every security-bearing draw in this runtime already

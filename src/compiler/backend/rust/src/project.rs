@@ -253,14 +253,14 @@ const TEA_TYPE_ALIASES: &str = "pub type IpeCmd<M> = ipe_runtime::tea::IpeCmd<M>
 /// `IpeError` so call sites in user function bodies compile without requiring
 /// a turbofish annotation.
 ///
-/// `auth_sign_token` / `auth_verify_token` take a Sky-typed
+/// `auth_sign_token` / `auth_verify_token` take a Ipê-typed
 /// `ipe_runtime::secret::Secret` (not `String`) at this boundary — "secrets
 /// are typed, never `fmt`-stringified" (`PRINCIPLES.md`). The wrapper reveals
 /// it via `ipe_runtime::secret::secret_reveal` immediately before delegating
 /// to the runtime's `String`-typed `ipe_runtime::auth::{auth_sign_token,
 /// auth_verify_token}` — the runtime crate's own low-level signature is left
 /// unchanged (it has no dependency on `secret.rs`); the typed boundary lives
-/// entirely at this Sky-facing wrapper, matching the fix spec's design.
+/// entirely at this Ipê-facing wrapper, matching the fix spec's design.
 ///
 /// `auth_register`, `auth_login`, and `auth_set_role` are gated on
 /// `#[cfg(feature = "db")]` in the runtime source, so the three wrappers
@@ -438,7 +438,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
     let mut rust_sources: Vec<(RelPath, String)> = Vec::new();
 
     if module_homes.len() >= 2 {
-        // ── The real per-Sky-module split (§2.1/§3.3) ────────────────────────
+        // ── The real per-Ipê-module split (§2.1/§3.3) ────────────────────────
         // `main.rs` = the Spine tier (preamble, SqlValue/SqlField enums,
         // record structs, DB-projection impls, kernel-wrapper prelude, epilogue,
         // `fn main()`) + the flat glob barrel that re-exports every module's
@@ -534,7 +534,7 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
 
         // boundary-projection impl blocks.  When the program uses Db
         // kernels, the lowerer injected synthetic `SqlValue` / `SqlField`
-        // enums.  The Db call sites need to project Sky ADT values to the
+        // enums.  The Db call sites need to project Ipê ADT values to the
         // runtime's concrete `SqlParam` / `Option<SqlParam>`.
         if ctx.uses_db {
             out.push_str(&emit_db_projection_impls(ctx)?);
@@ -621,7 +621,7 @@ fn assemble_project_files(
     rust_sources: Vec<(RelPath, String)>,
 ) -> DResult<EmittedProject> {
     // ── Manifest + runtime module files ──────────────────────────────────────
-    // The driver (skyc) first copies the full runtime source tree into
+    // The driver (ipe) first copies the full runtime source tree into
     // `<out>/src/ipe_runtime/`, then writes the emitted files over the top.
     // So we only need to emit the files that differ from the raw source tree:
     //
@@ -797,7 +797,7 @@ fn assemble_project_files(
 }
 
 /// Render the `Spine` tier's text for `program` — everything that is
-/// program-wide rather than Sky-module-owned (design doc §2.1/§2.3):
+/// program-wide rather than Ipê-module-owned (design doc §2.1/§2.3):
 /// the preamble banner, the `Spine` bucket's `EnumDef`s (the synthetic
 /// `SqlValue`/`SqlField` Db built-ins — §2.2), the synthesised record
 /// structs, the DB boundary-projection impls, the fixed kernel-wrapper
@@ -883,7 +883,7 @@ pub fn emit_spine(ctx: &EmitCtx, program: &Program) -> DResult<String> {
     Ok(out)
 }
 
-/// Render the `IpeModule(home)` file's text for one Sky module's OWN
+/// Render the `IpeModule(home)` file's text for one Ipê module's OWN
 /// declarations (design doc §2.1): ONLY that `home`'s `EnumDef`s + `Func`s,
 /// each `pub(crate)`-visible (not the bare `pub` the single-file layout uses,
 /// since these now live inside a `mod` block), opening with the flat-barrel
@@ -925,7 +925,7 @@ pub fn emit_module_file(ctx: &EmitCtx, program: &Program, home: &RustFileId) -> 
 /// Assemble the full split [`EmittedProject`] from ALREADY-RENDERED per-file
 /// texts (design doc §4.4 — the `emit_manifest` assembly seam).
 ///
-/// `spine_text` is [`emit_spine`]'s output; `module_texts` maps each Sky-module
+/// `spine_text` is [`emit_spine`]'s output; `module_texts` maps each Ipê-module
 /// `home` to its [`emit_module_file`] output. This function performs ONLY the
 /// file-count-dependent assembly the single-file [`emit_program`] path also
 /// does in its `>= 2` branch — computing the deterministic first-encounter
@@ -1075,7 +1075,7 @@ fn pub_crate_item(rendered: &str) -> String {
 ///    (independent of the app's `[database]` driver choice), so an
 ///    exclusive sqlite-vs-postgres feature selection made every Postgres
 ///    build fail `cargo build` downstream of `db_cargo_toml` even though
-///    `skyc` itself exited 0 — an exit-0-then-cargo-fail SEAL violation.
+///    `ipe` itself exited 0 — an exit-0-then-cargo-fail SEAL violation.
 ///    Additive, not exclusive, is the only sound selection here.
 ///
 /// String surgery rather than a second static file: the manifest content is
@@ -1689,7 +1689,7 @@ fn email_cargo_toml(base: &str) -> DResult<String> {
 /// Emit the `into_sql_param` impl for `SqlValue` and `into_field_param` impl
 /// for `SqlField`.
 ///
-/// These are fixed-shape impls — the variant names are always the same Sky
+/// These are fixed-shape impls — the variant names are always the same Ipê
 /// names (`SqlString`, `SqlInt`, …) and the mapping to `ipe_runtime::db::SqlParam`
 /// variants is 1-to-1.  Only the enum's Rust *type name* (e.g. `MainSqlValue`)
 /// varies per program (depends on the module name prefix).
@@ -1889,7 +1889,7 @@ mod tests {
     /// Root cause: `live/store.rs`'s `PostgresStore` references `sqlx::PgPool`
     /// gated on `#[cfg(feature = "db")]`.  The runtime's own `Cargo.toml` has
     /// `["runtime-tokio-rustls", "sqlite", "postgres"]`; the emitted project must
-    /// match.  Without this, a Db+Live program passes `skyc` then fails `cargo
+    /// match.  Without this, a Db+Live program passes `ipe` then fails `cargo
     /// build` with E0433 (`use of undeclared crate or module sqlx` in
     /// `PgPool::connect`).
     ///

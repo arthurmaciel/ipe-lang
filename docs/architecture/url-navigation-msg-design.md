@@ -39,7 +39,7 @@ it changes. Elm solved this shape in `Browser.application`: **every** URL
 change becomes a Msg (`onUrlChange : Url -> msg`), and the model's page
 field is ordinary state the app updates itself.
 
-The reference already grew the same capability: Sky v0.16.7+ has an
+The reference already grew the same capability: Ipê v0.16.7+ has an
 optional `onNavigate : Page -> Msg` cfg field
 (`../sky/runtime-go/rt/live.go:2727-2740`, dispatch sites at 2949, 3073,
 3099) — when set, the framework dispatches the Msg through `update`
@@ -183,7 +183,7 @@ being landed (#108, done). Post-completion phase as filed.
 
 ## Test plan
 
-Unit/golden (`crates/skyc/tests/`, fixtures under `tests/golden/`):
+Unit/golden (`crates/ipe/tests/`, fixtures under `tests/golden/`):
 - `i155_on_navigate_dispatch` — routed app with `onNavigate = NavTo`;
   `update (NavTo p)` sets `page` and appends to a log list rendered in
   the view. E2E (`IPE_E2E=1`): drive a route change, assert the log

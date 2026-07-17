@@ -1,4 +1,4 @@
-//! Dict determinism + negative coverage. Sky guarantees **sorted-key iteration**
+//! Dict determinism + negative coverage. Ipê guarantees **sorted-key iteration**
 //! for `Dict.keys` / `values` / `toList` (the `_fieldIndex` emission contract),
 //! so these must return key-sorted output regardless of insertion order. Also
 //! asserts the absent-key / idempotent-remove behaviours that must NOT panic.

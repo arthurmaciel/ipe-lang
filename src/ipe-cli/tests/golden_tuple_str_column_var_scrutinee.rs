@@ -13,13 +13,13 @@
 //! by-value binder + guard, sound for a variable scrutinee. A list / cons column
 //! still requires the literal-tuple coerced-column path and stays fail-closed.
 //!
-//! Gate check (fast, always): `skyc build` succeeds — no IPE-L0115.
+//! Gate check (fast, always): `ipe build` succeeds — no IPE-L0115.
 //! Green check (`IPE_E2E=1`): the emitted Rust cargo-builds AND runs, the right
-//! arm firing for every input — proving the seal (skyc-0 ⟹ cargo-0) AND runtime
+//! arm firing for every input — proving the seal (ipe-0 ⟹ cargo-0) AND runtime
 //! correctness (a mis-coerced guard firing the wrong arm is the worst outcome).
 //!
 //! ```text
-//! IPE_E2E=1 cargo test -p skyc --test golden_tuple_str_column_var_scrutinee
+//! IPE_E2E=1 cargo test -p ipe --test golden_tuple_str_column_var_scrutinee
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -77,7 +77,7 @@ fn str_column_var_scrutinee_cargo_builds_and_runs() {
     let built = ipe::build(&fixture_entry(), &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for tuple_str_column_var_scrutinee: {:?}",
+        "ipe build must succeed for tuple_str_column_var_scrutinee: {:?}",
         built.err()
     );
 

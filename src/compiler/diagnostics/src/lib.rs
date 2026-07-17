@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! Shared diagnostic vocabulary for the Sky compiler: source spans, the
+//! Shared diagnostic vocabulary for the Ipê compiler: source spans, the
 //! `Located<T>` carrier, and the typed `Diagnostic` enum. Every stage speaks
 //! these types — there are no `String` errors across stage boundaries.
 

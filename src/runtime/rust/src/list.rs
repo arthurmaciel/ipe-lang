@@ -1,14 +1,14 @@
-//! Sky.Core.List kernel — the single home for the List runtime surface.
+//! Ipe.List kernel — the single home for the List runtime surface.
 
 use super::IpeMaybe;
 
-/// `Sky.Core.List.length` — element count (kernel-routed call sites; the pure-Sky
+/// `Ipe.List.length` — element count (kernel-routed call sites; the pure-Ipê
 /// `ipe_core_list_length` is the recursive stdlib form).
 pub fn list_length<T>(xs: Vec<T>) -> i64 {
     xs.len() as i64
 }
 
-/// `Sky.Core.List.head : List a -> Maybe a` — the first element, or `Nothing`
+/// `Ipe.List.head : List a -> Maybe a` — the first element, or `Nothing`
 /// on the empty list. Total (no indexing panic).
 pub fn list_head<T>(xs: Vec<T>) -> IpeMaybe<T> {
     match xs.into_iter().next() {
@@ -17,9 +17,9 @@ pub fn list_head<T>(xs: Vec<T>) -> IpeMaybe<T> {
     }
 }
 
-/// `Sky.Core.List.tail : List a -> Maybe (List a)` — everything after the first
+/// `Ipe.List.tail : List a -> Maybe (List a)` — everything after the first
 /// element, or `Nothing` on the empty list. Total (no indexing panic); mirrors
-/// the pure-Sky `tail` (`[] -> Nothing`, `(_ :: rest) -> Just rest`).
+/// the pure-Ipê `tail` (`[] -> Nothing`, `(_ :: rest) -> Just rest`).
 pub fn list_tail<T>(xs: Vec<T>) -> IpeMaybe<Vec<T>> {
     if xs.is_empty() {
         IpeMaybe::Nothing
@@ -29,7 +29,7 @@ pub fn list_tail<T>(xs: Vec<T>) -> IpeMaybe<Vec<T>> {
     }
 }
 
-/// `Sky.Core.List.reverse : List a -> List a` — the elements in reverse order.
+/// `Ipe.List.reverse : List a -> List a` — the elements in reverse order.
 /// Total; no `T: Clone` bound (the elements only MOVE).
 pub fn list_reverse<T>(xs: Vec<T>) -> Vec<T> {
     let mut xs = xs;
@@ -37,7 +37,7 @@ pub fn list_reverse<T>(xs: Vec<T>) -> Vec<T> {
     xs
 }
 
-/// `Sky.Core.List.drop : Int -> List a -> List a` — drops the first `n`
+/// `Ipe.List.drop : Int -> List a -> List a` — drops the first `n`
 /// elements. `n <= 0` keeps the whole list; `n >= len` yields `[]`. Total.
 pub fn list_drop<T>(n: i64, xs: Vec<T>) -> Vec<T> {
     if n <= 0 {
@@ -47,7 +47,7 @@ pub fn list_drop<T>(n: i64, xs: Vec<T>) -> Vec<T> {
     }
 }
 
-/// `Sky.Core.List.append : List a -> List a -> List a` — the two lists
+/// `Ipe.List.append : List a -> List a -> List a` — the two lists
 /// concatenated. Iterative (`extend`, constant native stack); no `T: Clone`
 /// bound (both inputs are consumed and MOVE).
 pub fn list_append<T>(xs: Vec<T>, ys: Vec<T>) -> Vec<T> {
@@ -56,13 +56,13 @@ pub fn list_append<T>(xs: Vec<T>, ys: Vec<T>) -> Vec<T> {
     xs
 }
 
-/// `Sky.Core.List.concat : List (List a) -> List a` — flatten one level.
+/// `Ipe.List.concat : List (List a) -> List a` — flatten one level.
 /// Iterative (`flatten`, constant native stack); consumes the input.
 pub fn list_concat<T>(xss: Vec<Vec<T>>) -> Vec<T> {
     xss.into_iter().flatten().collect()
 }
 
-/// `Sky.Core.List.take : Int -> List a -> List a` — the first `n` elements.
+/// `Ipe.List.take : Int -> List a -> List a` — the first `n` elements.
 /// Elm semantics: `n <= 0` yields `[]`; `n >= len` yields the whole list.
 /// `n.max(0)` is non-negative, so the `as usize` cast is total on 64-bit
 /// targets (an `i64` in `0..=i64::MAX` fits `usize`); `truncate(k)` with
@@ -73,12 +73,12 @@ pub fn list_take<T>(n: i64, xs: Vec<T>) -> Vec<T> {
     xs
 }
 
-/// `Sky.Core.List.isEmpty : List a -> Bool`. Total.
+/// `Ipe.List.isEmpty : List a -> Bool`. Total.
 pub fn list_is_empty<T>(xs: Vec<T>) -> bool {
     xs.is_empty()
 }
 
-/// Sky `filterMap : (a -> Maybe b) -> List a -> List b`.
+/// Ipê `filterMap : (a -> Maybe b) -> List a -> List b`.
 /// Applies `f` to each element; keeps only `Just` results.
 pub fn list_filter_map<A, B>(f: impl Fn(A) -> IpeMaybe<B>, xs: Vec<A>) -> Vec<B> {
     xs.into_iter()
@@ -91,7 +91,7 @@ pub fn list_filter_map<A, B>(f: impl Fn(A) -> IpeMaybe<B>, xs: Vec<A>) -> Vec<B>
 
 // ── Core List kernels (relocated from core.rs so the List surface has one home) ──
 
-/// Sky `::` cons — emitted by codegen for the cons operator.
+/// Ipê `::` cons — emitted by codegen for the cons operator.
 // No `T: Clone` bound — `once(x).chain(xs)` only MOVES, so cons works for
 // move-only element types too (e.g. `Cmd.batch [IpeCmd, …]`; IpeCmd isn't Clone).
 pub fn ipe_list_cons<T>(x: T, xs: Vec<T>) -> Vec<T> {
@@ -127,7 +127,7 @@ pub fn list_foldr<T0, T1>(f: impl Fn(T0, T1) -> T1, init: T1, list: Vec<T0>) -> 
     }
     acc
 }
-// Sky `List.range` is INCLUSIVE: range 1 3 = [1, 2, 3].
+// Ipê `List.range` is INCLUSIVE: range 1 3 = [1, 2, 3].
 pub fn list_range(lo: i64, hi: i64) -> Vec<i64> {
     if hi < lo {
         return Vec::new();
@@ -136,7 +136,7 @@ pub fn list_range(lo: i64, hi: i64) -> Vec<i64> {
     // 0..i64::MAX) would OOM. Cap at 10M elements (any real list is far smaller).
     // Over the cap, emit the first 10M (a correct PREFIX) plus a structured warn,
     // never a silently-wrong empty list — `[]` for `List.range 1 20000000` is a
-    // wrong result for input Sky's types accept, far more surprising than a
+    // wrong result for input Ipê's types accept, far more surprising than a
     // truncated-with-warning span.
     const CAP: usize = 10_000_000;
     let n = (hi as i128) - (lo as i128) + 1;
@@ -177,7 +177,7 @@ pub fn list_all<T0>(f: impl Fn(T0) -> bool, list: Vec<T0>) -> bool {
     list.into_iter().all(f)
 }
 
-/// `Sky.Core.List.find : (a -> Bool) -> List a -> Maybe a` — the first element
+/// `Ipe.List.find : (a -> Bool) -> List a -> Maybe a` — the first element
 /// satisfying the predicate, or `Nothing`. The predicate is by-value
 /// `Fn(T0) -> bool` (the shape codegen emits — same as `list_filter`), so the
 /// element is cloned before testing and the original returned on a hit.
@@ -205,7 +205,7 @@ pub fn list_find<T0: Clone>(f: impl Fn(T0) -> bool, list: Vec<T0>) -> IpeMaybe<T
 /// `Equal`. NOTE: with MORE THAN ONE NaN present this is NOT transitive (NaN≈1.0
 /// and NaN≈2.0 yet 1.0<2.0), and since Rust 1.81 `slice::sort_by` PANICS on a
 /// comparator that violates a strict weak ordering. NaN IS reachable at runtime
-/// (`0.0 / 0.0`, `sqrt(-1)`, an FFI float) even though no Sky literal spells it —
+/// (`0.0 / 0.0`, `sqrt(-1)`, an FFI float) even though no Ipê literal spells it —
 /// so the callers below wrap the sort in `catch_unwind` to stay total.
 fn cmp_total<T: PartialOrd>(a: &T, b: &T) -> std::cmp::Ordering {
     a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
@@ -224,7 +224,7 @@ fn sort_by_total<T, F: Fn(&T, &T) -> std::cmp::Ordering>(result: &mut [T], cmp: 
     }
 }
 
-/// `Sky.Core.List.sort : List comparable -> List comparable` — stable ascending
+/// `Ipe.List.sort : List comparable -> List comparable` — stable ascending
 /// sort by the element's natural order. Total (no panic on NaN).
 pub fn list_sort<T: PartialOrd>(list: Vec<T>) -> Vec<T> {
     let mut result = list;
@@ -232,10 +232,10 @@ pub fn list_sort<T: PartialOrd>(list: Vec<T>) -> Vec<T> {
     result
 }
 
-/// `Sky.Core.List.sortBy : (a -> comparable) -> List a -> List a` — stable sort by
+/// `Ipe.List.sortBy : (a -> comparable) -> List a -> List a` — stable sort by
 /// the `keyFn elem` projection. Decorate-sort-undecorate: `keyFn` is applied
 /// exactly once per element (no repeated key recomputation during comparison).
-/// `A: Clone` because the Sky closure ABI takes its element by value — same bound
+/// `A: Clone` because the Ipê closure ABI takes its element by value — same bound
 /// `list_filter` already carries for its predicate.
 pub fn list_sort_by<A: Clone, B: PartialOrd>(key_fn: impl Fn(A) -> B, list: Vec<A>) -> Vec<A> {
     // Decorate: compute each key once, pairing it with its element. The key fn
@@ -249,19 +249,19 @@ pub fn list_sort_by<A: Clone, B: PartialOrd>(key_fn: impl Fn(A) -> B, list: Vec<
     decorated.into_iter().map(|(_, x)| x).collect()
 }
 
-/// `Sky.Core.List.sortWith : (a -> a -> Int) -> List a -> List a` — stable sort by
-/// a user comparator returning a Sky `Int` (negative → first arg orders before the
+/// `Ipe.List.sortWith : (a -> a -> Int) -> List a -> List a` — stable sort by
+/// a user comparator returning a Ipê `Int` (negative → first arg orders before the
 /// second, zero → equal, positive → after; matching `Basics.compare`'s -1/0/+1).
-/// The comparator takes its two elements by value (the Sky closure ABI), so `a`
+/// The comparator takes its two elements by value (the Ipê closure ABI), so `a`
 /// must be `Clone`. The `Int` → `Ordering` map is total — every `i64` lands in
 /// exactly one of Less / Equal / Greater.
 pub fn list_sort_with<A: Clone>(cmp: impl Fn(A, A) -> i64, list: Vec<A>) -> Vec<A> {
     let mut result = list;
-    // Soundness (no-panic thesis): the comparator is arbitrary user Sky code.
+    // Soundness (no-panic thesis): the comparator is arbitrary user Ipê code.
     // Since Rust 1.81 the standard sort PANICS when a comparator violates a
     // strict weak ordering (e.g. `cmp a b` and `cmp b a` both return a positive
-    // Int). A well-typed Sky `List.sortWith` could supply exactly that, so the
-    // bare `sort_by` is a Sky-reachable panic. Catch the unwind and return the
+    // Int). A well-typed Ipê `List.sortWith` could supply exactly that, so the
+    // bare `sort_by` is a Ipê-reachable panic. Catch the unwind and return the
     // list in its (safe, unspecified-order) post-sort state — std guarantees the
     // elements are all still present and no UB on a panicking comparator.
     let order = &mut result;
@@ -282,7 +282,7 @@ mod tests {
     use super::*;
 
     // Every HOF kernel in this file must accept the EXACT shape
-    // `ipe_backend_rust::emit_expr::emit_lambda` emits for every Sky closure
+    // `ipe_backend_rust::emit_expr::emit_lambda` emits for every Ipê closure
     // VALUE — a boxed, non-`Clone` trait object `Box<dyn Fn(..) -> .. + Send>`
     // — directly, with no `.clone()` at the call site. A
     // `f: impl Fn(T0) -> bool + Clone` (etc.) bound would reject this exact
@@ -326,7 +326,7 @@ mod tests {
     }
 
     // SOUNDNESS regression (no-panic thesis): a comparator that is NOT a strict
-    // weak ordering makes std's sort panic since Rust 1.81. A well-typed Sky
+    // weak ordering makes std's sort panic since Rust 1.81. A well-typed Ipê
     // `List.sortWith` can supply one, so the kernel must NOT panic — it returns
     // the elements in unspecified (but safe, complete) order instead.
     // SOUNDNESS regression: a multi-NaN float list makes cmp_total non-transitive,

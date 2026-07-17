@@ -1,4 +1,4 @@
-//! Property-based tests for the Sky Rust runtime.
+//! Property-based tests for the Ipê Rust runtime.
 
 use ipe_runtime_rust::*;
 use proptest::prelude::*;
@@ -315,7 +315,7 @@ proptest! {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Std.Email SMTP transport (require email feature) — deterministic error
+// Ipe.Email SMTP transport (require email feature) — deterministic error
 // paths. The positive path (delivery to a local SMTP catcher) is verified
 // out-of-band; here we lock in that the lettre-backed send_smtp is TOTAL:
 // bad config / bad address surface a clean Err, never a panic.

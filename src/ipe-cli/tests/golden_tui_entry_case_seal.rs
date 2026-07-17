@@ -1,4 +1,4 @@
-//! Regression for a `24-tui-kitchen-sink` SEAL violation: `skyc build` exits 0
+//! Regression for a `24-tui-kitchen-sink` SEAL violation: `ipe build` exits 0
 //! on the Ipe.Tui `argv`-dispatch entry-point idiom (`main = case List.head
 //! argsList of Just "live" -> Live.app {...} |> Task.run; _ -> Tui.app {...} |>
 //! Task.run`) while the emitted crate fails `cargo build` with two INDEPENDENT
@@ -69,7 +69,7 @@ fn built_main_rs(root: &Path, out: &Path) -> (Result<(), ipe::CliError>, Option<
     (built, main_rs)
 }
 
-/// Defect 1 pin: the fixture must be ACCEPTED (skyc exit 0) and the emitted
+/// Defect 1 pin: the fixture must be ACCEPTED (ipe exit 0) and the emitted
 /// `IpeMaybe::Just` arm must bind a fresh variable guarded by `== "live"`,
 /// never re-emit the bare `&str` literal pattern `IpeMaybe::Just("live")`
 /// that `cargo` rejects against the owned `String` payload.

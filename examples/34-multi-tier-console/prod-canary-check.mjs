@@ -19,7 +19,7 @@ const page = await ctx.newPage();
 const homeResp = await ctx.request.get(`${BASE}/`);
 if (homeResp.status() !== 200) fail(`home ${homeResp.status()}`);
 const homeBody = await homeResp.text();
-if (!homeBody.includes('Sky')) fail('home body missing "Sky"');
+if (!homeBody.includes('Ipê')) fail('home body missing "Ipê"');
 ok('sky-lang.org / renders HTTP 200');
 
 // Verify sky-id prefix is still "r" (host default)

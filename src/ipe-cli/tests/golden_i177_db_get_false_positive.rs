@@ -5,9 +5,9 @@
 //! false-positives on text that is NOT a
 //! runtime row accessor, appending `+ IpeRow` — a reference to the
 //! `#[cfg(feature = "db")]` trait `ipe_runtime::db::IpeRow` — to a crate that
-//! never imports `Ipe.Db`. Result: `skyc` exit 0, then `cargo` fails with
+//! never imports `Ipe.Db`. Result: `ipe` exit 0, then `cargo` fails with
 //! `error[E0433]: could not find db in ipe_runtime`. A SEAL violation
-//! (skyc-0-then-cargo-fail).
+//! (ipe-0-then-cargo-fail).
 //!
 //! Two minimal well-typed repros:
 //!   * probe C (`db_get_false_positive_string_literal`): a wildcard-`any`
@@ -25,7 +25,7 @@
 //!
 //! Run:
 //! ```text
-//! IPE_E2E=1 cargo test -p skyc --test golden_i177_db_get_false_positive
+//! IPE_E2E=1 cargo test -p ipe --test golden_i177_db_get_false_positive
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -44,7 +44,7 @@ fn entry_path(root: &Path, fixture: &str) -> PathBuf {
         .join("Main.ipe")
 }
 
-/// skyc-0 ∧ NO spurious `IpeRow` bound — checked unconditionally (cheap, no
+/// ipe-0 ∧ NO spurious `IpeRow` bound — checked unconditionally (cheap, no
 /// `cargo`). A `IpeRow` reference in the emitted Rust of a DB-less crate is the
 /// E0433 SEAL violation this probe guards against.
 // The `expect` guards a test-support invariant: a build asserted successful
@@ -65,7 +65,7 @@ fn assert_skyc_accepts_without_sky_row(fixture: &str) {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for {fixture}: {:?}",
+        "ipe build must succeed for {fixture}: {:?}",
         built.err()
     );
 
@@ -100,7 +100,7 @@ fn assert_cargo_builds_and_runs(fixture: &str, expected_stdout: &str) {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for {fixture}: {:?}",
+        "ipe build must succeed for {fixture}: {:?}",
         built.err()
     );
 

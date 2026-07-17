@@ -17,12 +17,12 @@
 //!   * `Task.fail e |> Task.andThen (\_ -> Task.succeed "unreachable")`
 //!   * `ignore : a -> Task Error String` with `_` as named binder
 //!
-//! Asserts skyc-0 ∧ cargo-0 ∧ run produces expected output.
+//! Asserts ipe-0 ∧ cargo-0 ∧ run produces expected output.
 //!
 //! Gated on `IPE_E2E=1`. Run:
 //!
 //! ```text
-//! IPE_E2E=1 cargo test -p skyc --test golden_l0102_wildcard_lambda_pany
+//! IPE_E2E=1 cargo test -p ipe --test golden_l0102_wildcard_lambda_pany
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -53,13 +53,13 @@ fn wildcard_lambda_pany_skyc_cargo_and_run_zero() {
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    // skyc-0: compiler must succeed.  Without the wildcard mapping this fails
+    // ipe-0: compiler must succeed.  Without the wildcard mapping this fails
     // with IPE-L0102 ("unsupported feature: Polymorphism") on the `\_ ->`
     // lambda parameter.
     let built = ipe::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for wildcard_lambda_pany (was: IPE-L0102 Polymorphism): {:?}",
+        "ipe build must succeed for wildcard_lambda_pany (was: IPE-L0102 Polymorphism): {:?}",
         built.err()
     );
 

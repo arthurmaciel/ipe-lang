@@ -12,7 +12,7 @@
 //!   x + sum rest` over `[1, 2, 3]`, printing `6`. The `case` lowers to a native
 //!   Rust slice match over the runtime's `Vec<T>` list repr (`match (xs).as_slice()
 //!   { [] => …, [x, rest @ ..] => … }`); the head element is rebound owned via
-//!   `.clone()` and the tail via `.to_vec()`, so the arm body sees the Sky `Int`
+//!   `.clone()` and the tail via `.to_vec()`, so the arm body sees the Ipê `Int`
 //!   / `List Int` types. Its emitted `main.rs` must be byte-identical to the
 //!   checked-in golden, and (behind `IPE_E2E=1`) the emitted project must build
 //!   and print the value the Go reference produces — captured in `expected_go.txt`
@@ -57,7 +57,7 @@ fn assert_byte_identical(name: &str) {
     // the emitted `src/main.rs` against the golden `main.rs`). `dir` IS the golden
     // dir (`golden` was `dir.join("main.rs")`, so `golden.parent()` was provably
     // `dir`) — pass it directly, no fallible `.parent().expect(...)` re-derivation
-    // (clippy::expect_used under the `-p skyc --tests -D warnings` gate).
+    // (clippy::expect_used under the `-p ipe --tests -D warnings` gate).
     support::assert_emitted_project_matches_golden_dir(&out, &dir);
 }
 

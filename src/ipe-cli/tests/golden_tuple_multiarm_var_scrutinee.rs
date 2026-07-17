@@ -11,12 +11,12 @@
 //! fail-closed on the non-literal path (the coercion machinery only exists for a
 //! literal-tuple scrutinee).
 //!
-//! Gate check (fast, always): `skyc build` succeeds — no IPE-L0115.
+//! Gate check (fast, always): `ipe build` succeeds — no IPE-L0115.
 //! Green check (`IPE_E2E=1`): the emitted Rust cargo-builds AND runs, proving the
-//! Seal (skyc-0 ⟹ cargo-0) for the by-value whole tuple-match codegen.
+//! Seal (ipe-0 ⟹ cargo-0) for the by-value whole tuple-match codegen.
 //!
 //! ```text
-//! IPE_E2E=1 cargo test -p skyc --test golden_tuple_multiarm_var_scrutinee
+//! IPE_E2E=1 cargo test -p ipe --test golden_tuple_multiarm_var_scrutinee
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -73,7 +73,7 @@ fn var_scrutinee_tuple_case_cargo_builds_and_runs() {
     let built = ipe::build(&fixture_entry(), &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for i_tuple_multiarm_var_scrutinee: {:?}",
+        "ipe build must succeed for i_tuple_multiarm_var_scrutinee: {:?}",
         built.err()
     );
 

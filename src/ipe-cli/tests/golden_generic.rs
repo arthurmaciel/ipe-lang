@@ -1,5 +1,5 @@
 //! Generic-instantiation gate: ONE generic enum used at two
-//! distinct element types in one module. `skyc` must emit `main.rs`
+//! distinct element types in one module. `ipe` must emit `main.rs`
 //! byte-identical to the checked-in golden, and (behind `IPE_E2E=1`) the emitted
 //! project must build and print `42`.
 //!

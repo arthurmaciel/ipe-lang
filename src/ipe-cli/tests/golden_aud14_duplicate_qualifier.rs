@@ -6,7 +6,7 @@
 //! is preserved in git history.
 //!
 //! ```text
-//! cargo test -p skyc --test golden_aud14_duplicate_qualifier
+//! cargo test -p ipe --test golden_aud14_duplicate_qualifier
 //! ```
 
 use std::fs;
@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 /// A runtime `false` the optimiser cannot fold, so `assert!(false_marker())`
 /// reads as a deliberate unconditional failure, not a suspicious constant
-/// condition — mirrors `crates/skyc/src/lib.rs`'s own test helper.
+/// condition — mirrors `crates/ipe/src/lib.rs`'s own test helper.
 const fn false_marker() -> bool {
     std::hint::black_box(false)
 }
@@ -66,7 +66,7 @@ fn distinct_modules_sharing_an_explicit_alias_is_rejected() {
         assert!(
             false_marker(),
             "expected DuplicateQualifier rejection for two modules sharing alias `Utils`, \
-             but skyc build SUCCEEDED — the last import silently won"
+             but ipe build SUCCEEDED — the last import silently won"
         );
         return;
     };

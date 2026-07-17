@@ -6,7 +6,7 @@
 //! produces real per-module output: the golden
 //! is the Spine-only `main.rs` (preamble + `SqlValue`/`SqlField` enums +
 //! DB-projection impls + kernel-wrapper prelude + `fn main()` + the
-//! `mod`/`pub(crate) use` barrel) PLUS one `ipe_mods/<ident>.rs` per Sky module
+//! `mod`/`pub(crate) use` barrel) PLUS one `ipe_mods/<ident>.rs` per Ipê module
 //! (`ipe_mod_lib.rs`, `ipe_mod_main.rs`). The home-qualified names
 //! (`lib_label`/`main_summary`, `LibStatus`) follow §1.3; the split
 //! emission is the file split itself.
@@ -43,7 +43,7 @@ fn runtime() -> PathBuf {
 /// Byte-diff every checked-in `ipe_mods/<name>.rs` golden against its
 /// counterpart under `<out>/src/ipe_mods/`. `emit_program` produces real
 /// per-module output, so the pilot golden carries
-/// one `ipe_mods/*.rs` file per Sky module (`ipe_mod_lib.rs`,
+/// one `ipe_mods/*.rs` file per Ipê module (`ipe_mod_lib.rs`,
 /// `ipe_mod_main.rs`) alongside the Spine-only `main.rs`. The shared
 /// `assert_emitted_project_matches_golden_dir` helper only diffs `main.rs` +
 /// `Cargo.toml`; this fixture-local check extends that to the split's new
@@ -137,7 +137,7 @@ fn emits_split_spine_and_per_module_files() {
     // barrel — NOT the user modules' own types/funcs).
     support::assert_emitted_project_matches_golden_dir(&out, &fixture);
 
-    // …plus the per-Sky-module files the split emits under
+    // …plus the per-Ipê-module files the split emits under
     // `src/ipe_mods/`. `ipe_mod_lib.rs`'s Db call site references
     // `MainSqlValue`/`MainSqlField` variants resolving via `use crate::*;`
     // back to the Spine's declarations — the file-level proof of §2.2's fix.

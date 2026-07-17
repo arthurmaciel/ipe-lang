@@ -9,7 +9,7 @@ import Ipe.Log exposing (println)
 
 -- BACKLOG #177 regression — `examples/27-multi-session-chat`'s cargo build.
 --
--- Pre-fix: `skyc build` exits 0, but the emitted Rust fails `cargo build`
+-- Pre-fix: `ipe build` exits 0, but the emitted Rust fails `cargo build`
 -- with E0277 (`the trait bound T1: SkyRow is not satisfied`) at every
 -- `db_get_string(field, &payload)` call site inside a function whose only
 -- generic is the wildcard `any` PARAM. The runtime's field accessors are

@@ -5,7 +5,7 @@ Date: 2026-07-10
 
 ## Context
 
-A batch of web-security gaps across the Sky.Live and Sky.Http.Server runtime
+A batch of web-security gaps across the Ipe.Live and Ipe.Http.Server runtime
 surfaces (backlog Security tier #63, AUD-09, #33) needed closing. The fixes are
 implemented (`runtime/src/sky_runtime/live/csrf.rs`, `.../server.rs`
 `MiddlewareWithCsrf` kernel + `golden_m6_middleware_csrf.rs`,
@@ -14,18 +14,18 @@ the *how*; this ADR preserves the security *why* and the invariants that must
 keep holding, since a stale procedural spec would mislead but the decisions
 below are durable.
 
-Note: Sky.Live's own CSRF (`live/csrf.rs`) was already complete and wired
+Note: Ipe.Live's own CSRF (`live/csrf.rs`) was already complete and wired
 end-to-end (`__Host-` prefixed double-submit cookie, constant-time compare,
-axum middleware layer); #63's Sky.Live half was never open. What these decisions
+axum middleware layer); #63's Ipe.Live half was never open. What these decisions
 cover is the surrounding surface.
 
 ## Decision
 
-### 1. Headless `Sky.Http.Middleware.withCsrf` is a separate, feature-safe impl
+### 1. Headless `Ipe.Http.Middleware.withCsrf` is a separate, feature-safe impl
 
-Sky.Live's `csrf.rs` **cannot be reused verbatim** for the headless
-`Sky.Http.Server` API. `csrf.rs` is gated by the `live` Cargo feature, which
-pulls in `aes-gcm`; the `server` feature alone does not. `Sky.Http.Middleware`
+Ipe.Live's `csrf.rs` **cannot be reused verbatim** for the headless
+`Ipe.Http.Server` API. `csrf.rs` is gated by the `live` Cargo feature, which
+pulls in `aes-gcm`; the `server` feature alone does not. `Ipe.Http.Middleware`
 kernels register under the `Server` region and must build standalone under
 `--features server`. So `withCsrf` has its own self-contained implementation in
 `server.rs` using only crates unconditional in the runtime: `subtle`
@@ -33,7 +33,7 @@ kernels register under the `Server` region and must build standalone under
 approved security-bearing randomness source per the runtime's own SECURITY
 INVARIANT convention).
 
-Intentional design differences from Sky.Live's CSRF (not shortcuts):
+Intentional design differences from Ipe.Live's CSRF (not shortcuts):
 
 - **How the client learns the token.** No page render exists for a headless API,
   so the cookie is **non-`HttpOnly`** — same-origin client JS reads it and
@@ -41,7 +41,7 @@ Intentional design differences from Sky.Live's CSRF (not shortcuts):
   cross-origin page because the Same-Origin Policy blocks that page from reading
   the victim-origin cookie.
 - **Opt-in, per-route** via `Middleware.withCsrf handler` (the wrapper-combinator
-  shape of `withCors`/`withBasicAuth`), not a blanket layer — `Sky.Http.Server`
+  shape of `withCors`/`withBasicAuth`), not a blanket layer — `Ipe.Http.Server`
   routes are 100% user-defined, so the user simply doesn't wrap routes that
   shouldn't require CSRF; no exempt-path list is needed.
 
@@ -84,12 +84,12 @@ the configured allowlist.
 `IPE_LIVE_MAX_BODY_BYTES=0` made every `/_sky/event` POST 413. It must
 `.filter(|&n| n > 0)` before falling back to the default, matching
 `server.rs::max_body()`. Both read the same env var (Go parity — the var is
-shared between the Sky.Live event endpoint and the Sky.Http.Server default), so
+shared between the Ipe.Live event endpoint and the Ipe.Http.Server default), so
 the floor behaviour must be identical on both sides.
 
 ## Consequences
 
-- The two CSRF implementations (Sky.Live blanket-layer with HttpOnly +
+- The two CSRF implementations (Ipe.Live blanket-layer with HttpOnly +
   page-embedded token; headless per-route double-submit with non-HttpOnly
   cookie) are deliberately different and must stay feature-partitioned: the
   headless path may only use crates unconditional under `--features server`.

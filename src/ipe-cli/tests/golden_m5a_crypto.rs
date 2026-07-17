@@ -1,7 +1,7 @@
 //! `Ipe.Crypto` parity gate — hashes, HMAC, AEAD, key-derivation,
 //! constant-time comparison, and random primitives.
 //!
-//! Every test compiles a Sky program through `skyc`, builds the emitted Rust
+//! Every test compiles a Ipê program through `ipe`, builds the emitted Rust
 //! project with the shared cargo target, runs the binary, and asserts its stdout
 //! matches the cached oracle (`tests/golden/m5a_crypto_*/expected_go.txt`).
 //! All tests are gated on `IPE_E2E=1`; without it they return early.

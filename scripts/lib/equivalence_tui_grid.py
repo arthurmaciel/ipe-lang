@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render a Sky.Tui ANSI capture to a STYLED cell grid for Go≡Rust equivalence.
+"""Render a Ipe.Tui ANSI capture to a STYLED cell grid for Go≡Rust equivalence.
 
 A Tui frame is ANSI written to the alternate screen. The behaviourally-meaningful
 surface is what the user SEES: the per-cell character AND its styling (fg/bg/bold/

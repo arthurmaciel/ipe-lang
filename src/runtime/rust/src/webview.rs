@@ -1,9 +1,9 @@
-//! Sky.Webview — native desktop window backend.
+//! Ipe.Webview — native desktop window backend.
 //!
 //! `Webview.app { init, update, view, subscriptions, window }` opens a native
 //! system webview (`wry` ≥0.55 + `tao` ≥0.35: WKWebView on macOS, WebView2 on
 //! Windows, WebKitGTK on Linux — webkit2gtk-4.1 + libsoup-3.0) and runs the same
-//! TEA loop as Sky.Live, reusing Sky.Live's `Html` renderer + event dispatch
+//! TEA loop as Ipe.Live, reusing Ipe.Live's `Html` renderer + event dispatch
 //! (`HandlerIndex`) — the view paints identically across web / terminal /
 //! desktop. The bridge is in-process: `with_html` for the initial paint, an IPC
 //! handler for DOM events, `evaluate_script` for re-renders. No HTTP server, SSE,
@@ -12,7 +12,7 @@
 //! Modern wry/tao use objc2 (macOS) + current windows-rs (Windows) and so build
 //! on macOS-15/Xcode-16 + Windows-2025 toolchains — unlike the legacy wry 0.24 /
 //! tao 0.16 stack this replaced. The event loop is created + run on the
-//! process's TRUE main thread on every OS: the generated Sky.Webview entry
+//! process's TRUE main thread on every OS: the generated Ipe.Webview entry
 //! drives this future via `block_on_current_thread` (a current-thread tokio
 //! runtime, no `std::thread::spawn` — see task.rs), so `event_loop.run(...)`
 //! never runs off the main thread. macOS REQUIRES this (tao/winit + Cocoa's
@@ -25,14 +25,14 @@
 //! Two builds: the real backend is behind the opt-in `webview` Cargo feature
 //! (needs the system webview dev libraries); otherwise a stub returning a graceful
 //! `Err` is compiled (mirrors Go's `webview_stub.go` on non-darwin), so a program
-//! that `import Std.Webview`s always links + never panics. No panic vectors: the
+//! that `import Ipe.Webview`s always links + never panics. No panic vectors: the
 //! stub returns `Err`; the real path routes every fallible call through `Err`.
 
 use super::core::IpeTask;
 use super::html::Html;
 use super::tea::{IpeCmd, IpeSub};
 
-/// Window configuration — mirrors Sky's closed `WindowCfg { title, size }`.
+/// Window configuration — mirrors Ipê's closed `WindowCfg { title, size }`.
 #[allow(non_snake_case)]
 #[derive(Clone, Debug)]
 pub struct WebviewWindowCfg {
@@ -40,7 +40,7 @@ pub struct WebviewWindowCfg {
     pub size: (i64, i64),
 }
 
-/// Phantom marker for Sky's `AppCfg model msg` record alias (destructured at the
+/// Phantom marker for Ipê's `AppCfg model msg` record alias (destructured at the
 /// call site, never built in Rust). See the codegen `markerCfgAliases`.
 pub struct WebviewAppCfg;
 
@@ -103,7 +103,7 @@ mod imp {
   document.addEventListener('click', function(e){ var id=idOf(e.target.closest('[sky-id]')); if(id) send(id,'click',[]); });
   document.addEventListener('input', function(e){ var id=idOf(e.target.closest('[sky-id]')); if(id) send(id,'input',[valOf(e.target)]); }, true);
   document.addEventListener('change', function(e){ var id=idOf(e.target.closest('[sky-id]')); if(id) send(id,'change',[valOf(e.target)]); }, true);
-  // INVARIANT: `html` is produced by `render_html` (the shared Sky.Live renderer),
+  // INVARIANT: `html` is produced by `render_html` (the shared Ipe.Live renderer),
   // which HTML-escapes every text + attribute node — so this innerHTML assignment
   // is not an XSS sink for user data. Any future RAW-html node added to the
   // renderer becomes the XSS boundary and must be audited there.
@@ -129,7 +129,7 @@ mod imp {
             WARNED.call_once(|| {
                 eprintln!(
                     "[sky.webview] warn: a non-`Cmd.none` command was returned but \
-                     Sky.Webview v0.1's synchronous event loop does not run \
+                     Ipe.Webview v0.1's synchronous event loop does not run \
                      Cmd.perform/Sub.every yet — the effect was dropped."
                 );
             });
@@ -212,7 +212,7 @@ mod imp {
                 Ipc(String),
             }
 
-            // The entry drives a Sky.Webview app via `block_on_current_thread`
+            // The entry drives a Ipe.Webview app via `block_on_current_thread`
             // (see task.rs), so this future is polled on the process's TRUE main
             // thread on EVERY OS. tao/winit's `EventLoop` + Cocoa's
             // `NSApplication` require the main thread on macOS (hard Cocoa

@@ -1,4 +1,4 @@
-//! Unit-value gate: the `()` literal as an expression. `skyc`
+//! Unit-value gate: the `()` literal as an expression. `ipe`
 //! must emit `main.rs` byte-identical to the checked-in golden, and (behind
 //! `IPE_E2E=1`) the emitted project must build and print `7`.
 //!

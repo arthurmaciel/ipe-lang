@@ -1,4 +1,4 @@
-//! Go≡Rust parity fixtures for Sky.Core.Regex kernels.
+//! Go≡Rust parity fixtures for Ipe.Regex kernels.
 //!
 //! Every assertion mirrors the Go oracle in `runtime-go/rt/rt.go`
 //! (Regex_match / Regex_find / Regex_findAll / Regex_replace / Regex_split)
@@ -13,7 +13,7 @@
 //! delegating to `Regex::split` — see `regex_split_zero_width_matches_go`.
 //! Named-group syntax and a handful of Perl-extension flags (lookahead,
 //! lookbehind) are the remaining known divergence points — none are exercised
-//! by the Sky stdlib surface.
+//! by the Ipê stdlib surface.
 
 use ipe_runtime_rust::*;
 

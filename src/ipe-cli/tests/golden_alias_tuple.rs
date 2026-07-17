@@ -3,7 +3,7 @@
 //! tuple (`whole`) alongside its two element binders (`a`, `b`), all in scope
 //! in the arm body. This lowers to Rust's binding-with-subpattern
 //! `whole @ (a, b)`. Re-destructuring `whole` proves the WHOLE value is bound,
-//! not just its parts. `skyc` must emit `main.rs` byte-identical to the
+//! not just its parts. `ipe` must emit `main.rs` byte-identical to the
 //! checked-in golden, and (behind `IPE_E2E=1`) the emitted project must build
 //! and print `20`.
 //!

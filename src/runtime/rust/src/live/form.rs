@@ -2,13 +2,13 @@
 //!
 //! The browser posts a form submit as a `{name: value, …}` object; the event
 //! handler turns it into a `FormData` (`HashMap<String, String>`). `decode_form`
-//! narrows that into the typed Sky record `T` the `onSubmit` handler expects.
+//! narrows that into the typed Ipê record `T` the `onSubmit` handler expects.
 
 use crate::live::html::FormData;
 
-/// Decode browser form data into a typed Sky record `T`.
+/// Decode browser form data into a typed Ipê record `T`.
 ///
-/// Form values are always strings; `T`'s fields are matched by name (Sky record
+/// Form values are always strings; `T`'s fields are matched by name (Ipê record
 /// fields are camelCase, matching the HTML `name=` attributes the view emits).
 /// A missing required field makes serde return an error → the caller dispatches
 /// no Msg (the `OnForm` closure maps `Err` to `None`).

@@ -1,4 +1,4 @@
-//! End-to-end gate: `skyc` must emit `main.rs` byte-identical to the
+//! End-to-end gate: `ipe` must emit `main.rs` byte-identical to the
 //! Haskell-reference golden, and (behind `IPE_E2E=1`) the emitted project must
 //! build and print `1`.
 
@@ -90,7 +90,7 @@ fn end_to_end_builds_and_prints_one() {
 /// A `CliError::Pipeline` must render as a coded, rustc/Elm-style report — not a
 /// `{:?}` debug dump. We feed `build` a deliberately ill-formed `.ipe` source and
 /// assert the displayed error carries an `error[IPE-…]` header and the
-/// `skyc explain` footer pointer.
+/// `ipe explain` footer pointer.
 #[test]
 fn pipeline_error_renders_with_code_and_explain_pointer() {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("pipeline_err");

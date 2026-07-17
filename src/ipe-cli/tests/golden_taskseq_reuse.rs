@@ -12,10 +12,10 @@
 //! Run:
 //! ```text
 //! # fast (no cargo):
-//! cargo test -p skyc --test golden_i193_taskseq_reuse
+//! cargo test -p ipe --test golden_i193_taskseq_reuse
 //!
 //! # full E2E:
-//! IPE_E2E=1 cargo test -p skyc --test golden_i193_taskseq_reuse
+//! IPE_E2E=1 cargo test -p ipe --test golden_i193_taskseq_reuse
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -34,7 +34,7 @@ fn entry_path(root: &Path) -> PathBuf {
         .join("Main.ipe")
 }
 
-/// skyc-0: the compiler must accept the pipeline-reuse program.
+/// ipe-0: the compiler must accept the pipeline-reuse program.
 #[test]
 fn i193_taskseq_skyc_accepts() {
     let root = repo_root();
@@ -50,7 +50,7 @@ fn i193_taskseq_skyc_accepts() {
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for taskseq_reuse: {:?}",
+        "ipe build must succeed for taskseq_reuse: {:?}",
         built.err()
     );
 
@@ -83,7 +83,7 @@ fn i193_taskseq_cargo_builds_and_runs() {
     let Ok(runtime) = runtime else { return };
 
     let built = ipe::build_with_sibling_discovery(&entry, &out, &runtime);
-    assert!(built.is_ok(), "skyc build must succeed: {:?}", built.err());
+    assert!(built.is_ok(), "ipe build must succeed: {:?}", built.err());
 
     let outcome = support::build_and_run_emitted("taskseq_reuse", &out);
     assert_eq!(

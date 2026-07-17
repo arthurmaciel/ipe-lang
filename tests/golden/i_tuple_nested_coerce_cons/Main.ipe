@@ -14,7 +14,7 @@ import Ipe.Log exposing (println)
 --
 -- Before the fix-up the coercion-needs gate inspected only the TOP-LEVEL columns,
 -- so this nested `PCons` slipped through to the coercion-free by-value path and
--- produced skyc-0-then-cargo-fail. The gate now recurses into the nested tuple,
+-- produced ipe-0-then-cargo-fail. The gate now recurses into the nested tuple,
 -- finds the `PCons` leaf, and fails closed to IPE-L0115.
 type Tag
     = A

@@ -12,11 +12,11 @@
 //!
 //! Without this gate a well-typed program storing a `Cmd` / `Sub` / `Task` /
 //! `Decoder` / `Db` / function — or, for `Ipe.Live`, an `Html` / `Element` /
-//! `Color` — in its Model `skyc`-succeeds and then `cargo`-fails on the missing
+//! `Color` — in its Model `ipe`-succeeds and then `cargo`-fails on the missing
 //! trait bound. This module extracts the Model type from the app cfg's `view`
 //! function and, if it fails the required predicate, returns a fail-closed
 //! `IPE-L0120` diagnostic naming the offending field — converting the
-//! `cargo`-fail into a clean `skyc` error (MAKE INVALID STATES UNREPRESENTABLE).
+//! `cargo`-fail into a clean `ipe` error (MAKE INVALID STATES UNREPRESENTABLE).
 
 use ipe_diagnostics::{AppShape, DResult, Diagnostic, LowerError, ModelLeaf, Span};
 use ipe_ir::{Expr, IrType, ir_type_is_derivable, ir_type_is_serde};
