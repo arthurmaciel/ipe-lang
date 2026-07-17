@@ -1097,7 +1097,7 @@ impl<'a> EmitCtx<'a> {
             && !self.enum_names.contains_key(&(home.clone(), ty))
             && matches!(
                 home.0.as_slice(),
-                [a, b] if self.interner.resolve(*a) == Some("Std")
+                [a, b] if self.interner.resolve(*a) == Some("Ipe")
                     && self.interner.resolve(*b) == Some("Cache")
             )
     }
