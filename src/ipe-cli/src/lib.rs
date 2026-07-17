@@ -1256,7 +1256,9 @@ const USAGE: &str = "usage:\n  \
      ipe build <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]\n  \
      \x20         [--static] [--target <triple>] [--allocator <auto|system|dlmalloc|talc|mimalloc>]\n  \
      \x20         [--allow-slow-allocator]\n  \
-     ipe run   <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [-- <args>...]\n  \
+     ipe run   <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>]\n  \
+     \x20         [--static] [--target <triple>] [--allocator <auto|system|dlmalloc|talc|mimalloc>]\n  \
+     \x20         [--allow-slow-allocator] [-- <args>...]\n  \
      ipe watch <entry.ipe|project-dir|sky.toml> [--out <dir>] [--runtime <dir>] [--port <n>]\n  \
      ipe add <crate> [--features a,b] [--yes]\n  \
      ipe remove <crate>\n  \
@@ -1319,6 +1321,98 @@ fn run_watch(rest: &[String]) -> Result<(), CliError> {
     watch::run(&opts)
 }
 
+/// The static-request CLI flags shared by `build` and `run` — one parser, so
+/// the two subcommands' static surfaces cannot drift.
+#[derive(Default)]
+struct StaticCliFlags {
+    static_flag: bool,
+    target: Option<String>,
+    allocator: Option<build_plan::AllocatorChoice>,
+    allow_slow_allocator: bool,
+}
+
+impl StaticCliFlags {
+    /// Consume `flag` (pulling a value from `it` where the flag takes one).
+    /// Returns `Ok(false)` when the flag is not a static-request flag.
+    fn consume(
+        &mut self,
+        flag: &str,
+        it: &mut std::slice::Iter<'_, String>,
+    ) -> Result<bool, CliError> {
+        match flag {
+            "--static" => self.static_flag = true,
+            "--target" => self.target = Some(it.next().ok_or(CliError::Usage(USAGE))?.clone()),
+            "--allocator" => {
+                let raw = it.next().ok_or(CliError::Usage(USAGE))?;
+                self.allocator = Some(build_plan::AllocatorChoice::parse(raw)?);
+            }
+            "--allow-slow-allocator" => self.allow_slow_allocator = true,
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    /// The CLI precedence layer these flags express.
+    fn layer(self) -> build_plan::StaticRequestLayer {
+        build_plan::StaticRequestLayer {
+            static_build: self.static_flag.then_some(true),
+            target: self.target,
+            allocator: self.allocator,
+            allow_slow_allocator: self.allow_slow_allocator.then_some(true),
+        }
+    }
+}
+
+/// Route an entry argument to its `sky.toml`, when one governs it:
+/// a directory must contain one, a `.toml` argument IS one, and a `.ipe`
+/// entry walks up the tree looking for one (falling back to sibling
+/// discovery when none exists).
+fn discover_manifest(entry_path: &Path) -> Result<Option<PathBuf>, CliError> {
+    if entry_path.is_dir() {
+        let candidate = entry_path.join("sky.toml");
+        if candidate.is_file() {
+            Ok(Some(candidate))
+        } else {
+            Err(CliError::Usage(
+                "directory supplied but no sky.toml found inside it",
+            ))
+        }
+    } else if entry_path.extension().and_then(|e| e.to_str()) == Some("toml") {
+        Ok(Some(entry_path.to_path_buf()))
+    } else {
+        Ok(find_manifest_for_sky_file(entry_path))
+    }
+}
+
+/// Resolve the static request with full precedence — CLI flags > env
+/// (`IPE_STATIC` / `IPE_TARGET` / `IPE_ALLOC`) > `sky.toml` `[rust]` > AUTO —
+/// into a typed plan (or a typed refusal — no artifact), run the toolchain
+/// preflight, and surface the mimalloc opt-in notice. Shared by `build` and
+/// `run`; resolved ONCE before any compilation starts.
+fn resolve_static_plan(
+    cli_layer: build_plan::StaticRequestLayer,
+    manifest: Option<&Path>,
+) -> Result<Option<ipe_backend_rust::static_build::StaticPlan>, CliError> {
+    let toml_layer = match manifest {
+        Some(m) => project::parse_manifest(m)?.static_request,
+        None => build_plan::StaticRequestLayer::default(),
+    };
+    let merged = cli_layer.or(build_plan::env_layer()?).or(toml_layer);
+    let static_plan = build_plan::resolve(&merged)?;
+    if let Some(plan) = &static_plan {
+        build_plan::preflight(plan)?;
+        if plan.allocator == ipe_backend_rust::static_build::StaticAllocator::Mimalloc {
+            // The design's explicit opt-in notice: the C cost is acknowledged,
+            // never silent.
+            eprintln!(
+                "note: mimalloc adds a C toolchain and unsafe FFI, vendors C source, and \
+                 freezes it into the artifact for CVE-rebuild purposes; chosen explicitly."
+            );
+        }
+    }
+    Ok(static_plan)
+}
+
 /// `ipe build <entry.ipe> [--out <dir>] [--runtime <dir>] [--emit-ir] [--fix]
 /// [--static] [--target <triple>] [--allocator <choice>]
 /// [--allow-slow-allocator]`.
@@ -1329,32 +1423,20 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
     let mut runtime: Option<String> = None;
     let mut emit_ir = false;
     let mut fix = false;
-    let mut static_flag = false;
-    let mut target: Option<String> = None;
-    let mut allocator: Option<build_plan::AllocatorChoice> = None;
-    let mut allow_slow_allocator = false;
+    let mut static_flags = StaticCliFlags::default();
     while let Some(flag) = it.next() {
+        if static_flags.consume(flag, &mut it)? {
+            continue;
+        }
         match flag.as_str() {
             "--out" => out = Some(it.next().ok_or(CliError::Usage(USAGE))?.clone()),
             "--runtime" => runtime = Some(it.next().ok_or(CliError::Usage(USAGE))?.clone()),
             "--emit-ir" => emit_ir = true,
             "--fix" => fix = true,
-            "--static" => static_flag = true,
-            "--target" => target = Some(it.next().ok_or(CliError::Usage(USAGE))?.clone()),
-            "--allocator" => {
-                let raw = it.next().ok_or(CliError::Usage(USAGE))?;
-                allocator = Some(build_plan::AllocatorChoice::parse(raw)?);
-            }
-            "--allow-slow-allocator" => allow_slow_allocator = true,
             _ => return Err(CliError::Usage(USAGE)),
         }
     }
-    let cli_layer = build_plan::StaticRequestLayer {
-        static_build: static_flag.then_some(true),
-        target,
-        allocator,
-        allow_slow_allocator: allow_slow_allocator.then_some(true),
-    };
+    let cli_layer = static_flags.layer();
 
     let entry_path = PathBuf::from(&entry);
 
@@ -1384,45 +1466,9 @@ fn run_build(rest: &[String]) -> Result<(), CliError> {
     //      multi-file projects built via the file-path shorthand). This mirrors
     //      the Haskell driver's `Graph.discoverModulesMulti srcRoot entryPath`
     //      call in `Sky.Build.Compile.hs`.
-    let manifest = if entry_path.is_dir() {
-        let candidate = entry_path.join("sky.toml");
-        if candidate.is_file() {
-            Some(candidate)
-        } else {
-            return Err(CliError::Usage(
-                "directory supplied but no sky.toml found inside it",
-            ));
-        }
-    } else if entry_path.extension().and_then(|e| e.to_str()) == Some("toml") {
-        Some(entry_path.clone())
-    } else {
-        // .ipe file: walk up the directory tree looking for a sky.toml. When
-        // found, build_project discovers all modules; when absent, fall through
-        // to build_with_sibling_discovery which uses the entry's directory as
-        // the source root.
-        find_manifest_for_sky_file(&entry_path)
-    };
+    let manifest = discover_manifest(&entry_path)?;
 
-    // Static-request precedence: CLI flags > env (IPE_STATIC / IPE_TARGET /
-    // IPE_ALLOC) > sky.toml [rust] > AUTO. Resolved ONCE into a typed plan
-    // (or a typed refusal — no artifact) before any compilation starts.
-    let toml_layer = match &manifest {
-        Some(m) => project::parse_manifest(m)?.static_request,
-        None => build_plan::StaticRequestLayer::default(),
-    };
-    let merged = cli_layer.or(build_plan::env_layer()?).or(toml_layer);
-    let static_plan = build_plan::resolve(&merged)?;
-    if let Some(plan) = &static_plan {
-        build_plan::preflight(plan)?;
-        if plan.allocator == ipe_backend_rust::static_build::StaticAllocator::Mimalloc {
-            // The design's explicit opt-in notice: the C cost is acknowledged,
-            // never silent.
-            eprintln!(
-                "note: mimalloc adds a C toolchain and unsafe FFI, vendors C source, and \
-                 freezes it into the artifact for CVE-rebuild purposes; chosen explicitly."
-            );
-        }
-    }
+    let static_plan = resolve_static_plan(cli_layer, manifest.as_deref())?;
     let options = BuildOptions { static_plan };
 
     // No sky.toml found: compile entry + all sibling .ipe files in the same
@@ -1461,13 +1507,18 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     let entry = it.next().ok_or(CliError::Usage(USAGE))?.clone();
     let mut out: Option<String> = None;
     let mut runtime: Option<String> = None;
+    let mut static_flags = StaticCliFlags::default();
     while let Some(flag) = it.next() {
+        if static_flags.consume(flag, &mut it)? {
+            continue;
+        }
         match flag.as_str() {
             "--out" => out = Some(it.next().ok_or(CliError::Usage(USAGE))?.clone()),
             "--runtime" => runtime = Some(it.next().ok_or(CliError::Usage(USAGE))?.clone()),
             _ => return Err(CliError::Usage(USAGE)),
         }
     }
+    let cli_layer = static_flags.layer();
 
     let entry_path = PathBuf::from(&entry);
     let out_dir = out.map_or_else(|| PathBuf::from("sky-out").join("rust"), PathBuf::from);
@@ -1477,35 +1528,29 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
     };
 
     // --- Step 1: ipe compile → emit the Rust project ---
-    let manifest = if entry_path.is_dir() {
-        let candidate = entry_path.join("sky.toml");
-        if candidate.is_file() {
-            Some(candidate)
-        } else {
-            return Err(CliError::Usage(
-                "directory supplied but no sky.toml found inside it",
-            ));
-        }
-    } else if entry_path.extension().and_then(|e| e.to_str()) == Some("toml") {
-        Some(entry_path.clone())
-    } else {
-        find_manifest_for_sky_file(&entry_path)
-    };
+    let manifest = discover_manifest(&entry_path)?;
+    let static_plan = resolve_static_plan(cli_layer, manifest.as_deref())?;
+    let options = BuildOptions { static_plan };
 
     manifest.map_or_else(
-        || build_with_sibling_discovery(&entry_path, &out_dir, &runtime_dir),
-        |m| build_project(&m, &out_dir, &runtime_dir),
+        || build_with_sibling_discovery_with_options(&entry_path, &out_dir, &runtime_dir, options),
+        |m| build_project_with_options(&m, &out_dir, &runtime_dir, options),
     )?;
 
     // --- Step 2: cargo build the emitted project ---
-    let cargo_status = std::process::Command::new("cargo")
-        .arg("build")
-        .current_dir(&out_dir)
-        .status()
-        .map_err(|e| CliError::Io {
-            path: out_dir.clone(),
-            source: e,
-        })?;
+    // CWD = the emitted crate dir, so the generated `.cargo/config.toml`
+    // (`+crt-static` under a static plan) is discovered. The static plan
+    // additionally selects the target triple explicitly — the config carries
+    // only rustflags, never a `[build] target` pin.
+    let mut cargo = std::process::Command::new("cargo");
+    cargo.arg("build").current_dir(&out_dir);
+    if let Some(plan) = &static_plan {
+        cargo.args(["--target", plan.triple.as_str()]);
+    }
+    let cargo_status = cargo.status().map_err(|e| CliError::Io {
+        path: out_dir.clone(),
+        source: e,
+    })?;
     if !cargo_status.success() {
         let code = cargo_status.code().unwrap_or(1);
         return Err(CliError::UsageOwned(format!(
@@ -1515,8 +1560,17 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
 
     // --- Step 3: exec the emitted binary, forwarding args and exit code ---
     // The binary name is always `sky-app` (the default package name used by
-    // `write_emitted_project`; see `ipe_backend_rust::EmittedProject`).
-    let bin = out_dir.join("target").join("debug").join("sky-app");
+    // `write_emitted_project`; see `ipe_backend_rust::EmittedProject`). The
+    // target directory is asked of cargo itself (`cargo metadata`) — a
+    // `CARGO_TARGET_DIR` env or a user-level `[build] target-dir` pin
+    // relocates the artifact, so a hardcoded `<out>/target` would exec a
+    // missing or stale binary.
+    let mut bin = cargo_target_directory(&out_dir)?;
+    if let Some(plan) = &static_plan {
+        bin.push(plan.triple.as_str());
+    }
+    bin.push("debug");
+    bin.push("sky-app");
     let mut cmd = std::process::Command::new(&bin);
     cmd.args(bin_args);
 
@@ -1554,6 +1608,37 @@ fn run_run(rest: &[String]) -> Result<(), CliError> {
         }
         Ok(())
     }
+}
+
+/// The target directory cargo will use for a build with CWD = `crate_dir`,
+/// resolved by cargo itself (`cargo metadata`) so every relocation source —
+/// `CARGO_TARGET_DIR`, a user-level `[build] target-dir` pin, a config in an
+/// ancestor dir — is honoured instead of guessed at.
+fn cargo_target_directory(crate_dir: &Path) -> Result<PathBuf, CliError> {
+    let output = std::process::Command::new("cargo")
+        .args(["metadata", "--format-version", "1", "--no-deps"])
+        .current_dir(crate_dir)
+        .output()
+        .map_err(|e| CliError::Io {
+            path: crate_dir.to_path_buf(),
+            source: e,
+        })?;
+    if !output.status.success() {
+        return Err(CliError::UsageOwned(format!(
+            "cargo metadata failed in {}: {}",
+            crate_dir.display(),
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    let meta: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|e| {
+        CliError::UsageOwned(format!("cargo metadata emitted unparseable JSON: {e}"))
+    })?;
+    meta.get("target_directory")
+        .and_then(serde_json::Value::as_str)
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            CliError::UsageOwned("cargo metadata reported no target_directory".to_owned())
+        })
 }
 
 /// `ipe explain [<CODE>]`. No argument prints the one-line index of every code

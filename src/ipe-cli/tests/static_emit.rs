@@ -228,6 +228,43 @@ fn cli_refusals_are_typed_and_artifact_free() {
     );
 }
 
+/// The `run` subcommand carries the same static surface as `build` (one
+/// shared flag parser + resolver) — refusals fire identically, before any
+/// compilation or filesystem write.
+#[test]
+fn run_subcommand_refuses_like_build() {
+    let err = ipe::run_cli(&[
+        "run".into(),
+        "NoSuch.ipe".into(),
+        "--static".into(),
+        "--allocator".into(),
+        "talc".into(),
+    ])
+    .expect_err("talc must refuse on run too");
+    assert!(
+        matches!(
+            err,
+            CliError::StaticRefusal(build_plan::Refusal::TalcRequiresArenaDesign)
+        ),
+        "wrong refusal"
+    );
+
+    let err = ipe::run_cli(&[
+        "run".into(),
+        "NoSuch.ipe".into(),
+        "--target".into(),
+        "x86_64-unknown-linux-musl".into(),
+    ])
+    .expect_err("--target without --static must refuse on run too");
+    assert!(
+        matches!(
+            err,
+            CliError::StaticRefusal(build_plan::Refusal::TargetRequiresStatic { .. })
+        ),
+        "wrong refusal"
+    );
+}
+
 /// `sky.toml [rust]` parses into the typed request layer; malformed values
 /// are refused at manifest-parse time.
 #[test]
@@ -284,6 +321,22 @@ fn sky_toml_rust_section_parses_and_rejects_typos() {
 /// surgery strings in the backend's `project.rs`. All three are scanned.
 #[test]
 fn tls_stays_rustls_with_bundled_roots_in_every_manifest_source() {
+    fn read(path: &Path) -> String {
+        let text = std::fs::read_to_string(path);
+        assert!(
+            text.is_ok(),
+            "read {}: {:?}",
+            path.display(),
+            text.as_ref().err()
+        );
+        text.unwrap_or_default()
+    }
+    fn dep_line<'a>(text: &'a str, dep: &str, path: &Path) -> &'a str {
+        let line = text.lines().find(|l| l.trim_start().starts_with(dep));
+        assert!(line.is_some(), "{}: no {dep} dep line", path.display());
+        line.unwrap_or_default()
+    }
+
     let root = repo_root();
     let sources = [
         root.join("tests/golden/basics/Cargo.toml"),
@@ -291,8 +344,7 @@ fn tls_stays_rustls_with_bundled_roots_in_every_manifest_source() {
         root.join("src/compiler/backend/rust/src/project.rs"),
     ];
     for path in &sources {
-        let text = std::fs::read_to_string(path)
-            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        let text = read(path);
         for forbidden in ["native-tls", "openssl", "rustls-tls-native-roots"] {
             assert!(
                 !text.contains(forbidden),
@@ -310,12 +362,8 @@ fn tls_stays_rustls_with_bundled_roots_in_every_manifest_source() {
         root.join("tests/golden/basics/Cargo.toml"),
         root.join("src/runtime/rust/Cargo.toml"),
     ] {
-        let text = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-        let reqwest = text
-            .lines()
-            .find(|l| l.trim_start().starts_with("reqwest"))
-            .unwrap_or_else(|| panic!("{}: no reqwest dep line", path.display()));
+        let text = read(&path);
+        let reqwest = dep_line(&text, "reqwest", &path);
         assert!(
             reqwest.contains("default-features = false") && reqwest.contains(r#""rustls-tls""#),
             "{}: reqwest must be default-features = false + rustls-tls: {reqwest}",
@@ -324,20 +372,14 @@ fn tls_stays_rustls_with_bundled_roots_in_every_manifest_source() {
     }
 
     // The other TLS-capable deps are pinned to their rustls arms.
-    let runtime = std::fs::read_to_string(root.join("src/runtime/rust/Cargo.toml"))
-        .unwrap_or_else(|e| panic!("read runtime manifest: {e}"));
-    let lettre = runtime
-        .lines()
-        .find(|l| l.trim_start().starts_with("lettre"))
-        .unwrap_or_else(|| panic!("runtime manifest: no lettre dep line"));
+    let runtime_path = root.join("src/runtime/rust/Cargo.toml");
+    let runtime = read(&runtime_path);
+    let lettre = dep_line(&runtime, "lettre", &runtime_path);
     assert!(
         lettre.contains("default-features = false") && lettre.contains(r#""tokio1-rustls-tls""#),
         "lettre must be default-features = false + tokio1-rustls-tls: {lettre}"
     );
-    let sqlx = runtime
-        .lines()
-        .find(|l| l.trim_start().starts_with("sqlx"))
-        .unwrap_or_else(|| panic!("runtime manifest: no sqlx dep line"));
+    let sqlx = dep_line(&runtime, "sqlx", &runtime_path);
     assert!(
         sqlx.contains(r#""runtime-tokio-rustls""#),
         "sqlx must use the runtime-tokio-rustls arm: {sqlx}"
@@ -418,4 +460,66 @@ fn end_to_end_static_binary_is_static_and_runs() {
         .expect("run binary");
     assert!(run.status.success(), "static binary exited non-zero");
     assert_eq!(String::from_utf8_lossy(&run.stdout), "Hello from Sky!\n");
+}
+
+/// `ipe run --static` end to end: the driver emits, cargo-builds for the
+/// musl triple, resolves the relocated target dir, and execs a genuinely
+/// static binary. Gated: `IPE_E2E_STATIC=1`.
+#[test]
+fn ipe_run_static_builds_and_executes_a_static_binary() {
+    if std::env::var("IPE_E2E_STATIC").is_err() {
+        return;
+    }
+    let root = repo_root();
+    let entry = root
+        .join("examples")
+        .join("01-hello-world")
+        .join("src")
+        .join("Main.ipe");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("static_run_e2e");
+    let _ = std::fs::remove_dir_all(&out);
+
+    // Reuse an ambient warm target when the caller provides one, else stay
+    // hermetic inside the scratch dir.
+    let target_dir =
+        std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| out.join("target"), PathBuf::from);
+
+    let run = std::process::Command::new(env!("CARGO_BIN_EXE_ipe"))
+        .args(["run"])
+        .arg(&entry)
+        .args(["--static", "--out"])
+        .arg(&out)
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .output()
+        .expect("spawn ipe run --static");
+    assert!(
+        run.status.success(),
+        "ipe run --static failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stdout).contains("Hello from Sky!"),
+        "expected program output, got: {}",
+        String::from_utf8_lossy(&run.stdout)
+    );
+
+    // The executed artifact must be genuinely static.
+    let bin = target_dir
+        .join("x86_64-unknown-linux-musl")
+        .join("debug")
+        .join("sky-app");
+    let ldd = std::process::Command::new("ldd")
+        .arg(&bin)
+        .output()
+        .expect("run ldd");
+    let ldd_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&ldd.stdout),
+        String::from_utf8_lossy(&ldd.stderr)
+    );
+    assert!(
+        ldd_text.contains("statically linked") || ldd_text.contains("not a dynamic executable"),
+        "ipe run --static executed a non-static binary: {ldd_text}"
+    );
 }

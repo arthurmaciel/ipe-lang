@@ -910,6 +910,10 @@ Current compiler limitations to work around when writing code.
 ipe init [name]                    # new project
 sky build src/Main.ipe             # compile → sky-out/app
 ipe run src/Main.ipe               # build + run
+ipe build|run … --static           # fully-static musl single binary (dlmalloc
+                                   #  default; --target <triple> --allocator
+                                   #  <auto|system|dlmalloc|talc|mimalloc>
+                                   #  --allow-slow-allocator)
 ipe watch src/Main.ipe             # file-watch rebuild + restart
 ipe check src/Main.ipe             # type-check + build
 ipe fmt src/Main.ipe               # opinionated formatter (run after editing .ipe/.skyi)
