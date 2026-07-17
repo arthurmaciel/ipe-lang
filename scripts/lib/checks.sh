@@ -111,7 +111,7 @@ scenario_for() {
 }
 
 # ── resolve_bin <example-dir>: the freshest Rust binary skyc just built ──────
-# skyc emits a Cargo project whose package/binary is `sky-app` (crates/skyc emits
+# skyc emits a Cargo project whose package/binary is `sky-app` (src/ipe-cli emits
 # a fixed `sky-app` bin). Because ~/.cargo/config.toml pins a shared target-dir,
 # each example's `cargo build` writes $CARGO_TARGET_DIR/{debug,release}/sky-app;
 # the sweep builds+runs one example at a time (rm -rf between), so overwrite is

@@ -45,7 +45,7 @@ for b in "${branches[@]}"; do
 done
 
 # Stale-binary hazard: force-rebuild every path-baking test binary.
-touch runtime/tests/*.rs crates/skyc/tests/*.rs
+touch runtime/tests/*.rs src/ipe-cli/tests/*.rs
 
 mkdir -p "$GATE_TARGET"
 CARGO_TARGET_DIR="$GATE_TARGET" timeout 3000 cargo test --workspace

@@ -1,0 +1,50 @@
+[package]
+name = "skyc"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[lib]
+name = "skyc"
+path = "src/lib.rs"
+
+[[bin]]
+name = "skyc"
+path = "src/main.rs"
+
+[dependencies]
+sky_intern = { path = "../compiler/sky_intern" }
+sky_diagnostics = { path = "../compiler/sky_diagnostics" }
+sky_parse = { path = "../compiler/sky_parse" }
+sky_db = { path = "../compiler/sky_db" }
+sky_canon = { path = "../compiler/sky_canon" }
+sky_types = { path = "../compiler/sky_types" }
+sky_lower = { path = "../compiler/sky_lower" }
+sky_ir = { path = "../compiler/sky_ir" }
+sky_backend = { path = "../compiler/sky_backend" }
+sky_backend_rust = { path = "../compiler/sky_backend_rust" }
+# Phase 7 (`crate::watch` — Tasks 21-25): the confined watcher + process
+# supervisor primitives, and the two crates `watch.rs` drives directly —
+# `salsa` for `Cancelled::catch`/`Setter` (Task 25's cancellation) and
+# `notify` for the raw filesystem watch (Task 21). Same salsa pin as
+# `sky_db` (`crates/sky_db/Cargo.toml`) — one version across the workspace.
+sky_watch = { path = "../compiler/sky_watch" }
+salsa = "=0.27.2"
+notify = "8"
+# Phase 6 (Task 19/20): the on-disk build cache (`src/cache.rs`) — content
+# hashing of the whole-project key + the compiler/toolchain version-epoch,
+# and JSON (de)serialization of the cached `EmittedProject`. Same version
+# pins as `tools/oracle` (already resolved in the workspace lockfile).
+sha2 = "0.10"
+hex = "0.4"
+serde_json = "1"
+
+[dev-dependencies]
+# Cached Go-oracle format + staleness gate + the shared build/run-emitted core
+# used by the golden parity tests (tests/support/mod.rs). The `cargo build
+# --message-format=json` parsing that locates the produced binary now lives in
+# the `oracle` crate, so serde_json is pulled in transitively, not directly.
+oracle = { path = "../../tools/oracle" }
+
+[lints]
+workspace = true

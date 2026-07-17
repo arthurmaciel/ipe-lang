@@ -14,7 +14,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 TARGET="${MASTER_GATE_TARGET:-$HOME/.cache/master-gate-target}"
-RUNTIME="$(pwd)/runtime/src/sky_runtime"
+RUNTIME="$(pwd)/src/runtime/rust/src/sky_runtime"
 SNAP="docs/architecture/remeasure-snapshot.tsv"
 
 echo "remeasure: building skyc (CARGO_TARGET_DIR=$TARGET) …"

@@ -17,7 +17,7 @@
 # skyc has NO `--backend` flag (it only targets Rust); it emits a self-contained
 # Cargo project under sky-out/rust/ with the runtime vendored into
 # src/sky_runtime, whose default package/binary is `sky-app`. Verified against
-# crates/skyc/src/lib.rs `run_build` (usage: `skyc build <entry.sky|project-dir|
+# src/ipe-cli/src/lib.rs `run_build` (usage: `skyc build <entry.sky|project-dir|
 # sky.toml> [--out <dir>] [--runtime <dir>]`) + the E2E test in the same file that
 # builds sky-out and runs target/debug/sky-app.
 #
@@ -122,7 +122,7 @@ say "=== ipê EXAMPLES sweep @ $STAMP (repo: $REPO · skyc: $SKYC_BIN) ==="
 [ "$NO_EQUIV" = 1 ] || [ "$WEB_OK" = 1 ] || say "  NOTE: browser stack incomplete — scenario equivalence falls back to normalised HTML body comparison (GET / → #sky-root diff via equivalence_normalize_html.py)."
 
 # ── skyc build target for an example dir — sky.toml if present, else src/Main.sky
-# skyc's project build (crates/skyc/src/lib.rs build_project) needs a sky.toml to
+# skyc's project build (src/ipe-cli/src/lib.rs build_project) needs a sky.toml to
 # discover multi-module projects; the single-file build takes an entry `.sky`.
 # All vendored examples ship sky.toml EXCEPT 26-ui-showcase (which is multi-module
 # but has no sky.toml — it will single-file-build and surface a real SKY-N0020 for
@@ -141,7 +141,7 @@ build_rust() {
   local skyclog cargolog; skyclog="$(diag "$n" skyc.log)"; cargolog="$(diag "$n" cargo.log)"
   tgt="$(skyc_build_target "$d")"
   for attempt in 1 2 3 4; do
-    # --runtime is left to skyc's auto-resolve (walks up to $REPO/runtime/src/
+    # --runtime is left to skyc's auto-resolve (walks up to $REPO/src/runtime/rust/src/
     # sky_runtime); SKY_RUNTIME_DIR is exported by env.sh as a belt-and-braces.
     if ( cd "$d" && timeout "$tmo" "$SKYC_BIN" build "$tgt" --out sky-out/rust >"$skyclog" 2>&1 ); then
       ok=1; break

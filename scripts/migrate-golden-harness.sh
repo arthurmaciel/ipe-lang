@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# migrate-golden-harness.sh — mechanically migrate `crates/skyc/tests/golden_*.rs`
+# migrate-golden-harness.sh — mechanically migrate `src/ipe-cli/tests/golden_*.rs`
 # byte-diff tests from the ad hoc `read_to_string(<out>/src/main.rs)` +
 # `assert_eq!(..)` pattern to the shared
 # `support::assert_emitted_project_matches_golden_dir` helper, and replace each
@@ -21,7 +21,7 @@
 #
 # Usage:
 #   scripts/migrate-golden-harness.sh [FILE ...]
-# With no arguments, operates on every `crates/skyc/tests/golden_*.rs` except
+# With no arguments, operates on every `src/ipe-cli/tests/golden_*.rs` except
 # `golden_m0.rs` (already migrated by hand). Pass explicit files to scope a batch.
 #
 # After running, ALWAYS:
@@ -31,7 +31,7 @@
 set -euo pipefail
 
 repo_root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-tests_dir="$repo_root_dir/crates/skyc/tests"
+tests_dir="$repo_root_dir/src/ipe-cli/tests"
 
 if [[ $# -gt 0 ]]; then
     files=("$@")
