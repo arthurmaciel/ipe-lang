@@ -119,6 +119,18 @@ scenario_for() {
 # `name` is tried too (harmless first probe; ipe names the bin sky-app regardless).
 resolve_bin() {
   local d="$1" name b
+  # Static sweep (IPE_SWEEP_STATIC=1): the artifact lives under the target
+  # triple's subdir. NEVER fall through to the dynamic probes — a stale
+  # dynamic sky-app would silently substitute for the static one.
+  if [ "${IPE_SWEEP_STATIC:-0}" = 1 ]; then
+    local triple="${IPE_STATIC_TRIPLE:-x86_64-unknown-linux-musl}"
+    for b in \
+      "$CARGO_TARGET_DIR/$triple/debug/sky-app" \
+      "$d/sky-out/rust/target/$triple/debug/sky-app"; do
+      [ -x "$b" ] && [ ! -d "$b" ] && { echo "$b"; return 0; }
+    done
+    return 1
+  fi
   name="$(rg -No '^name\s*=\s*"([^"]+)"' -r '$1' "$d/sky.toml" 2>/dev/null | head -1)"
   for b in \
     "$CARGO_TARGET_DIR/debug/sky-app" \
@@ -132,6 +144,17 @@ resolve_bin() {
         | xargs -r ls -t 2>/dev/null | head -1)"
   [ -n "$b" ] && { echo "$b"; return 0; }
   return 1
+}
+
+# ── assert_static_bin <bin>: ldd says the binary is genuinely static ─────────
+# ldd exits non-zero for a static binary on some platforms; the MESSAGE is the
+# contract ("statically linked" / "not a dynamic executable").
+assert_static_bin() {
+  local out; out="$(ldd "$1" 2>&1)"
+  case "$out" in
+    *"statically linked"*|*"not a dynamic executable"*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # ── browser_drivable <example-dir>: can web-verify.mjs locate this example? ──
