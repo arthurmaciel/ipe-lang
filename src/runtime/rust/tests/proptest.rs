@@ -1,7 +1,7 @@
 //! Property-based tests for the Sky Rust runtime.
 
-use proptest::prelude::*;
 use ipe_runtime_rust::*;
+use proptest::prelude::*;
 
 // ═══════════════════════════════════════════════════════════════════
 // Core types — direct from the runtime

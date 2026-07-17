@@ -3734,10 +3734,7 @@ impl<'a> Builder<'a> {
         let wsclientcfg = || {
             let mut m = BTreeMap::new();
             m.insert(self.builtins.ws_f_url, string());
-            m.insert(
-                self.builtins.ws_f_headers,
-                list(tuple2(string(), string())),
-            );
+            m.insert(self.builtins.ws_f_headers, list(tuple2(string(), string())));
             m.insert(self.builtins.ws_f_timeout, int());
             m.insert(self.builtins.ws_f_ping_interval, int());
             Ty::Record(m, RowTail::Closed)

@@ -660,10 +660,7 @@ fn and_map_cross_module_untyped_forwarder_curried_rejected() {
     if ipe::resolve_runtime().is_err() {
         return;
     }
-    let entry = fixture_src_entry(
-        &root,
-        "and_map_cross_module_untyped_forwarder_curried",
-    );
+    let entry = fixture_src_entry(&root, "and_map_cross_module_untyped_forwarder_curried");
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("l0114_and_map_cross_module_untyped_forwarder_curried_emit");
     let _ = std::fs::remove_dir_all(&out);

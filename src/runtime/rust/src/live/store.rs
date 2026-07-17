@@ -28,7 +28,10 @@ pub const LIVE_MODEL_SCHEMA_WIRE_VERSION: &str = "sky-live-model-schema-v1";
 /// BYTEA migration is ever needed). `None` when serialization fails (the
 /// caller skips the checkpoint write, same as the old JSON path's `if let Ok`).
 #[cfg(any(feature = "db", feature = "redis_store"))]
-fn encode_checkpoint<Model: serde::Serialize>(schema_tag: &[u8; 32], model: &Model) -> Option<String> {
+fn encode_checkpoint<Model: serde::Serialize>(
+    schema_tag: &[u8; 32],
+    model: &Model,
+) -> Option<String> {
     use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     let body = bincode::serialize(model).ok()?;
     let mut framed = Vec::with_capacity(32 + body.len());
@@ -194,11 +197,7 @@ pub struct SqliteStore<Model, Msg> {
 
 #[cfg(feature = "db")]
 impl<Model, Msg> SqliteStore<Model, Msg> {
-    pub async fn new(
-        path: &str,
-        ttl: Duration,
-        schema_tag: [u8; 32],
-    ) -> Result<Self, sqlx::Error> {
+    pub async fn new(path: &str, ttl: Duration, schema_tag: [u8; 32]) -> Result<Self, sqlx::Error> {
         let url = format!("sqlite:{path}?mode=rwc");
         let pool = sqlx::SqlitePool::connect(&url).await?;
         // A pre-existing table from before the schema-tag column existed is
@@ -852,18 +851,16 @@ mod tests {
         let p = path.to_str().unwrap();
         let _ = std::fs::remove_file(p);
         {
-            let s: SqliteStore<i32, ()> =
-                SqliteStore::new(p, Duration::from_secs(60), [0xAA; 32])
-                    .await
-                    .unwrap();
+            let s: SqliteStore<i32, ()> = SqliteStore::new(p, Duration::from_secs(60), [0xAA; 32])
+                .await
+                .unwrap();
             s.set("s1", handle_i32(42)).await;
         }
         {
             // "redeploy with a changed Model": same file, different tag.
-            let s: SqliteStore<i32, ()> =
-                SqliteStore::new(p, Duration::from_secs(60), [0xBB; 32])
-                    .await
-                    .unwrap();
+            let s: SqliteStore<i32, ()> = SqliteStore::new(p, Duration::from_secs(60), [0xBB; 32])
+                .await
+                .unwrap();
             assert!(
                 s.get("s1").await.is_none(),
                 "a foreign-schema checkpoint must be rejected before deserialize"
@@ -881,17 +878,15 @@ mod tests {
         let p = path.to_str().unwrap();
         let _ = std::fs::remove_file(p);
         {
-            let s: SqliteStore<i32, ()> =
-                SqliteStore::new(p, Duration::from_secs(60), [0xAA; 32])
-                    .await
-                    .unwrap();
+            let s: SqliteStore<i32, ()> = SqliteStore::new(p, Duration::from_secs(60), [0xAA; 32])
+                .await
+                .unwrap();
             s.set("s1", handle_i32(42)).await;
         }
         {
-            let s: SqliteStore<i32, ()> =
-                SqliteStore::new(p, Duration::from_secs(60), [0xAA; 32])
-                    .await
-                    .unwrap();
+            let s: SqliteStore<i32, ()> = SqliteStore::new(p, Duration::from_secs(60), [0xAA; 32])
+                .await
+                .unwrap();
             match s.get("s1").await {
                 Some(StoreHit::Cold(m)) => assert_eq!(m, 42),
                 _ => panic!("expected Cold(42) under the SAME schema tag"),
@@ -939,18 +934,16 @@ mod tests {
         };
         let sid = format!("redistest_h24_{}", std::process::id());
         {
-            let s: RedisStore<i32, ()> =
-                RedisStore::new(&url, Duration::from_secs(60), [0xAA; 32])
-                    .await
-                    .unwrap();
+            let s: RedisStore<i32, ()> = RedisStore::new(&url, Duration::from_secs(60), [0xAA; 32])
+                .await
+                .unwrap();
             s.delete(&sid).await;
             s.set(&sid, handle_i32(9)).await;
         }
         {
-            let s: RedisStore<i32, ()> =
-                RedisStore::new(&url, Duration::from_secs(60), [0xBB; 32])
-                    .await
-                    .unwrap();
+            let s: RedisStore<i32, ()> = RedisStore::new(&url, Duration::from_secs(60), [0xBB; 32])
+                .await
+                .unwrap();
             assert!(
                 s.get(&sid).await.is_none(),
                 "a foreign-schema checkpoint must be rejected before deserialize"
@@ -1006,19 +999,17 @@ mod tests {
         };
         let sid = format!("redistest_{}", std::process::id());
         {
-            let s: RedisStore<i32, ()> =
-                RedisStore::new(&url, Duration::from_secs(60), TEST_TAG)
-                    .await
-                    .unwrap();
+            let s: RedisStore<i32, ()> = RedisStore::new(&url, Duration::from_secs(60), TEST_TAG)
+                .await
+                .unwrap();
             s.delete(&sid).await;
             s.set(&sid, handle_i32(9)).await;
             assert!(matches!(s.get(&sid).await, Some(StoreHit::Live(_))));
         }
         {
-            let s: RedisStore<i32, ()> =
-                RedisStore::new(&url, Duration::from_secs(60), TEST_TAG)
-                    .await
-                    .unwrap();
+            let s: RedisStore<i32, ()> = RedisStore::new(&url, Duration::from_secs(60), TEST_TAG)
+                .await
+                .unwrap();
             match s.get(&sid).await {
                 Some(StoreHit::Cold(m)) => assert_eq!(m, 9),
                 _ => panic!("expected Cold(9) after restart"),
@@ -1073,10 +1064,7 @@ mod tests {
              (no SSE connection in this process) must be excluded"
         );
         // The cold row is still a valid checkpoint through get().
-        assert!(matches!(
-            s.get("cold_sid").await,
-            Some(StoreHit::Cold(41))
-        ));
+        assert!(matches!(s.get("cold_sid").await, Some(StoreHit::Cold(41))));
         let _ = std::fs::remove_file(p);
     }
 

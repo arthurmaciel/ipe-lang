@@ -186,7 +186,11 @@ fn assert_parity(label: &str, warm: &CompileOutcome, cold: &CompileOutcome) {
                 match c.files.get(rel) {
                     Some(c_text) if w_text == c_text => {}
                     Some(c_text) => {
-                        divergent.push(format!("{} — {}", rel.as_str(), first_diff(w_text, c_text)));
+                        divergent.push(format!(
+                            "{} — {}",
+                            rel.as_str(),
+                            first_diff(w_text, c_text)
+                        ));
                     }
                     None => missing_in_cold.push(rel.as_str()),
                 }

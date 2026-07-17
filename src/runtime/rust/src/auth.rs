@@ -187,9 +187,7 @@ pub fn auth_verify_token<E: From<String>>(
     // sibling `Jwt.decode` path (jwt.rs) already closed this exact gap with a
     // documented fix; mirror it exactly rather than re-deriving it.
     if crate::jwt::exp_is_zero(&token) {
-        return IpeResult::Err(
-            "auth.verifyToken: token has expired".to_string().into(),
-        );
+        return IpeResult::Err("auth.verifyToken: token has expired".to_string().into());
     }
     let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
     let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
@@ -515,8 +513,7 @@ mod tests {
         let header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256);
         let key = jsonwebtoken::EncodingKey::from_secret(secret.as_bytes());
         let token = jsonwebtoken::encode(&header, &claims, &key).expect("encode");
-        let verified: IpeResult<String, HashMap<String, String>> =
-            auth_verify_token(secret, token);
+        let verified: IpeResult<String, HashMap<String, String>> = auth_verify_token(secret, token);
         assert!(
             matches!(verified, IpeResult::Err(_)),
             "an Auth token expired 30s ago must be rejected (no clock-skew leeway)"

@@ -15,7 +15,7 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use ipe_backend_rust::DbDriver;
-use ipe_db::{BuildConfig, Db as _, ModuleOrigin, RustFileId, IpeDatabase, SourceFile, SourceRoot};
+use ipe_db::{BuildConfig, Db as _, IpeDatabase, ModuleOrigin, RustFileId, SourceFile, SourceRoot};
 use ipe_ir::ModPath;
 
 /// A shared, poison-safe log of executed-query debug keys — the same

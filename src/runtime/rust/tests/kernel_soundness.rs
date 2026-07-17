@@ -4,8 +4,8 @@
 //! never a Rust panic) plus the expected value, and the seeded-random kernels
 //! assert determinism (same seed ⇒ same output).
 
-use proptest::prelude::*;
 use ipe_runtime_rust::*;
+use proptest::prelude::*;
 
 // ── basics_mod_by — Elm positive-modulo, divisor 0 guarded ─────────────────
 
@@ -36,7 +36,10 @@ fn mod_by_negative_divisor_matches_go() {
 
 #[test]
 fn basics_fst_snd_identity_always() {
-    assert_eq!(ipe_runtime_rust::basics::basics_fst((1i64, "x".to_string())), 1);
+    assert_eq!(
+        ipe_runtime_rust::basics::basics_fst((1i64, "x".to_string())),
+        1
+    );
     assert_eq!(
         ipe_runtime_rust::basics::basics_snd((1i64, "x".to_string())),
         "x".to_string()

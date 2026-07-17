@@ -8,7 +8,9 @@
 //! match the `naming.rs` convention for kernel helpers (e.g. `ui_column_`)
 //! and to avoid shadowing the runtime's own `element` type names.
 
-use super::element::{Attribute, Color, Description, Element, HAlign, Length, Location, PseudoClass, VAlign};
+use super::element::{
+    Attribute, Color, Description, Element, HAlign, Length, Location, PseudoClass, VAlign,
+};
 use crate::core::IpeMaybe;
 use crate::html::Html;
 
@@ -101,10 +103,9 @@ pub fn ui_button_<M: Clone>(
     let mut full = Vec::with_capacity(attrs.len() + 2);
     match on_press {
         IpeMaybe::Just(msg) => {
-            full.push(Attribute::AttrEvent(HtmlAttribute::EventAttr(Event::OnMsg(
-                "click".into(),
-                msg,
-            ))));
+            full.push(Attribute::AttrEvent(HtmlAttribute::EventAttr(
+                Event::OnMsg("click".into(), msg),
+            )));
             full.push(Attribute::AttrPointer);
         }
         IpeMaybe::Nothing => {
@@ -122,20 +123,11 @@ pub fn ui_button_<M: Clone>(
 
 /// `Ui.link : List (Attribute msg) -> { url : String, label : Element msg } -> Element msg`
 /// Renders as `<a href=url>label</a>`.
-pub fn ui_link_<M: Clone>(
-    attrs: Vec<Attribute<M>>,
-    url: String,
-    label: Element<M>,
-) -> Element<M> {
+pub fn ui_link_<M: Clone>(attrs: Vec<Attribute<M>>, url: String, label: Element<M>) -> Element<M> {
     let mut full = Vec::with_capacity(attrs.len() + 1);
     full.push(Attribute::AttrAttribute("href".into(), url));
     full.extend(attrs);
-    Element::TaggedNode(
-        "a".into(),
-        Description::NoDescription,
-        full,
-        vec![label],
-    )
+    Element::TaggedNode("a".into(), Description::NoDescription, full, vec![label])
 }
 
 /// `Ui.image : List (Attribute msg) -> { src : String, description : String } -> Element msg`
@@ -499,16 +491,11 @@ pub fn html_raw_node_<M>(s: String) -> Html<M> {
 /// exactly once, HERE, so the `HRaw` it produces is already safe. The `<style>`
 /// render sink (`html::render_into_ctx`) strips again — defence in depth — so a
 /// `</style><script>` breakout in a `Std.Css` value cannot reach the DOM.
-pub fn html_style_node_<M>(
-    attrs: Vec<crate::html::Attribute<M>>,
-    css: String,
-) -> Html<M> {
+pub fn html_style_node_<M>(attrs: Vec<crate::html::Attribute<M>>, css: String) -> Html<M> {
     Html::HElement(
         "style".to_owned(),
         attrs,
-        vec![Html::HRaw(
-            crate::css_safety::strip_style_close(&css),
-        )],
+        vec![Html::HRaw(crate::css_safety::strip_style_close(&css))],
     )
 }
 
@@ -536,34 +523,22 @@ pub fn html_title_node_<M>(s: String) -> Html<M> {
 }
 
 /// `Html.div (and header) : List (Attribute msg) -> List (Html msg) -> Html msg`
-pub fn html_div_<M>(
-    attrs: Vec<crate::html::Attribute<M>>,
-    children: Vec<Html<M>>,
-) -> Html<M> {
+pub fn html_div_<M>(attrs: Vec<crate::html::Attribute<M>>, children: Vec<Html<M>>) -> Html<M> {
     Html::HElement("div".to_owned(), attrs, children)
 }
 
 /// `Html.span : List (Attribute msg) -> List (Html msg) -> Html msg`
-pub fn html_span_<M>(
-    attrs: Vec<crate::html::Attribute<M>>,
-    children: Vec<Html<M>>,
-) -> Html<M> {
+pub fn html_span_<M>(attrs: Vec<crate::html::Attribute<M>>, children: Vec<Html<M>>) -> Html<M> {
     Html::HElement("span".to_owned(), attrs, children)
 }
 
 /// `Html.a (and link) : List (Attribute msg) -> List (Html msg) -> Html msg`
-pub fn html_a_<M>(
-    attrs: Vec<crate::html::Attribute<M>>,
-    children: Vec<Html<M>>,
-) -> Html<M> {
+pub fn html_a_<M>(attrs: Vec<crate::html::Attribute<M>>, children: Vec<Html<M>>) -> Html<M> {
     Html::HElement("a".to_owned(), attrs, children)
 }
 
 /// `Html.button : List (Attribute msg) -> List (Html msg) -> Html msg`
-pub fn html_button_<M>(
-    attrs: Vec<crate::html::Attribute<M>>,
-    children: Vec<Html<M>>,
-) -> Html<M> {
+pub fn html_button_<M>(attrs: Vec<crate::html::Attribute<M>>, children: Vec<Html<M>>) -> Html<M> {
     Html::HElement("button".to_owned(), attrs, children)
 }
 
@@ -574,10 +549,7 @@ pub fn html_button_<M>(
 /// per-tag kernel variants or use `html_node_` with an injected tag-name arg;
 /// `p` is the primary tag, the other tag names are not yet exercised by any
 /// test.
-pub fn html_p_<M>(
-    attrs: Vec<crate::html::Attribute<M>>,
-    children: Vec<Html<M>>,
-) -> Html<M> {
+pub fn html_p_<M>(attrs: Vec<crate::html::Attribute<M>>, children: Vec<Html<M>>) -> Html<M> {
     Html::HElement("p".to_owned(), attrs, children)
 }
 
@@ -985,10 +957,7 @@ pub fn ui_font_active_color_<M>(c: Color) -> Attribute<M> {
 
 /// `Font.disabledColor : Color -> Attribute msg`
 pub fn ui_font_disabled_color_<M>(c: Color) -> Attribute<M> {
-    Attribute::AttrPseudoRule(
-        PseudoClass::Disabled,
-        format!("color:{}", color_to_css(&c)),
-    )
+    Attribute::AttrPseudoRule(PseudoClass::Disabled, format!("color:{}", color_to_css(&c)))
 }
 
 /// `Font.hoverSize : Int -> Attribute msg`
@@ -1098,10 +1067,7 @@ pub fn ui_desc_label_(s: String) -> Description {
 /// Mirrors `paragraph` in `Std/Ui.ipe`: a `<p>`-tagged node carrying
 /// `DescParagraph` plus the `__paragraph` marker (matching `paragraphMarker`),
 /// so text children wrap as inline flow.
-pub fn ui_paragraph_<M: Clone>(
-    attrs: Vec<Attribute<M>>,
-    children: Vec<Element<M>>,
-) -> Element<M> {
+pub fn ui_paragraph_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M>>) -> Element<M> {
     let mut full = Vec::with_capacity(attrs.len() + 1);
     full.push(Attribute::AttrStyle(
         "__paragraph".to_owned(),
@@ -1137,10 +1103,7 @@ pub fn ui_text_column_<M: Clone>(
 // ── Form ─────────────────────────────────────────────────────────────────────
 
 /// `Ui.form : List (Attribute msg) -> List (Element msg) -> Element msg`
-pub fn ui_form_<M: Clone>(
-    attrs: Vec<Attribute<M>>,
-    children: Vec<Element<M>>,
-) -> Element<M> {
+pub fn ui_form_<M: Clone>(attrs: Vec<Attribute<M>>, children: Vec<Element<M>>) -> Element<M> {
     Element::TaggedNode(
         "form".to_owned(),
         Description::NoDescription,

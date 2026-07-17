@@ -85,8 +85,7 @@ fn i138_empty_home_bridge_fails_n0002() {
 /// separate repro that caught a distinct ICE path in the original heuristic.
 #[test]
 fn i138_optbridge_fails_n0002() {
-    let err =
-        try_build("optbridge").expect_err("optbridge must fail (Token is not in scope)");
+    let err = try_build("optbridge").expect_err("optbridge must fail (Token is not in scope)");
     assert!(err.contains("IPE-N0002"), "expected IPE-N0002, got:\n{err}");
     assert!(
         !err.contains("IPE-I0001"),
@@ -115,7 +114,6 @@ fn i138_kernel_implicit_positive_exits_zero() {
 /// after the `enum_variants` guard.
 #[test]
 fn i138_kernel_implicit_value_exits_zero() {
-    try_build("kernel_implicit_value").expect(
-        "kernel_implicit_value must compile (Value is a kernel-implicit Prelude type)",
-    );
+    try_build("kernel_implicit_value")
+        .expect("kernel_implicit_value must compile (Value is a kernel-implicit Prelude type)");
 }

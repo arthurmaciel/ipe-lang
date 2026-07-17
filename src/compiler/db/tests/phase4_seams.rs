@@ -12,7 +12,7 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use ipe_db::{ModuleOrigin, IpeDatabase, SourceFile, SourceRoot};
+use ipe_db::{IpeDatabase, ModuleOrigin, SourceFile, SourceRoot};
 
 /// A shared, poison-safe log of executed-query debug keys.
 #[derive(Clone, Default)]

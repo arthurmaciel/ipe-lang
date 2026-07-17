@@ -30,7 +30,7 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use ipe_db::{BuildConfig, ModuleOrigin, IpeDatabase, SourceFile, SourceRoot};
+use ipe_db::{BuildConfig, IpeDatabase, ModuleOrigin, SourceFile, SourceRoot};
 
 const DEP_A: &str = "module A exposing (visible)\n\nvisible = 1\n";
 const ENTRY: &str =

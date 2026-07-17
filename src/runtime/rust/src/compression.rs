@@ -88,9 +88,11 @@ pub fn compression_gzip<E: From<String> + Send + 'static>(data: Vec<u8>) -> IpeT
         match tokio::task::spawn_blocking(move || gzip_bytes(&data)).await {
             Ok(Ok(b)) => ok_res(b),
             Ok(Err(e)) => IpeResult::Err(format!("Compression.gzip: {}", e).into()),
-            Err(_) => {
-                IpeResult::Err("Compression.gzip: compression task panicked".to_string().into())
-            }
+            Err(_) => IpeResult::Err(
+                "Compression.gzip: compression task panicked"
+                    .to_string()
+                    .into(),
+            ),
         }
     })
 }

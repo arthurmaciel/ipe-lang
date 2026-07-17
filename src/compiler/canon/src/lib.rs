@@ -2204,12 +2204,8 @@ mod tests {
         // And via the member-granular exception set.
         let member_excluded: std::collections::BTreeSet<(&str, &str)> =
             std::iter::once(("Totally.Fake", "madeUpKernel")).collect();
-        let violations_member_excluded = qual_vars_none_violations(
-            &qual_vars,
-            &interner,
-            &excluded_quals,
-            &member_excluded,
-        );
+        let violations_member_excluded =
+            qual_vars_none_violations(&qual_vars, &interner, &excluded_quals, &member_excluded);
         assert!(
             violations_member_excluded.is_empty(),
             "expected zero violations once the member is excluded, got {violations_member_excluded:?}",
@@ -2329,7 +2325,11 @@ mod tests {
             return;
         };
         let rnames: Vec<&str> = rfields.iter().filter_map(|(f, _)| i.resolve(*f)).collect();
-        assert_eq!(rnames, vec!["name", "age"], "record fields in declared order");
+        assert_eq!(
+            rnames,
+            vec!["name", "age"],
+            "record fields in declared order"
+        );
     }
 
     #[test]
@@ -2906,9 +2906,10 @@ mod tests {
         let kernel_of = |m: &ast::Module, i: &Interner| -> Option<(String, String)> {
             match find_def(m, i, "main") {
                 Some(Def::Untyped { body, .. } | Def::Typed { body, .. }) => match &body.value {
-                    Expr_::VarKernel { module, name, .. } => {
-                        Some((i.resolve(*module)?.to_string(), i.resolve(*name)?.to_string()))
-                    }
+                    Expr_::VarKernel { module, name, .. } => Some((
+                        i.resolve(*module)?.to_string(),
+                        i.resolve(*name)?.to_string(),
+                    )),
                     _ => None,
                 },
                 None => None,
@@ -2947,8 +2948,7 @@ mod tests {
         };
         assert_eq!(&**name, "text");
         assert!(
-            modules.iter().any(|m| &**m == "Ipe.Html")
-                && modules.iter().any(|m| &**m == "Ipe.Ui"),
+            modules.iter().any(|m| &**m == "Ipe.Html") && modules.iter().any(|m| &**m == "Ipe.Ui"),
             "both origins named, got {modules:?}"
         );
     }
@@ -3049,10 +3049,7 @@ mod tests {
     // ─────────────────────────────────────────────────────────────────────────
 
     /// Canonicalise `src` with an explicit [`ModuleOrigin`], returning the result.
-    fn canon_with_origin(
-        src: &str,
-        origin: ModuleOrigin,
-    ) -> DResult<(ast::Module, ModuleExports)> {
+    fn canon_with_origin(src: &str, origin: ModuleOrigin) -> DResult<(ast::Module, ModuleExports)> {
         let mut i = Interner::new();
         let parsed = ipe_parse::parse_module(src, &mut i).expect("spike source parses");
         let expected: Vec<Symbol> = parsed.name.value.clone();
@@ -3128,7 +3125,11 @@ mod tests {
             "module Main exposing (main)\nmain = 0\n",
             ModuleOrigin::User,
         );
-        assert!(res.is_ok(), "user unannotated main is fine: {:?}", res.err());
+        assert!(
+            res.is_ok(),
+            "user unannotated main is fine: {:?}",
+            res.err()
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -3255,10 +3256,7 @@ mod tests {
         assert!(parsed.is_ok(), "source must parse");
         let Ok(parsed) = parsed else { return };
         let m = canonicalise(&parsed, &mut i);
-        assert!(
-            m.is_ok(),
-            "must canonicalise cleanly; got {m:?}"
-        );
+        assert!(m.is_ok(), "must canonicalise cleanly; got {m:?}");
         let Ok(m) = m else { return };
         // `main = Overview` → the body should be a VarCtor, not a VarTopLevel.
         let Some(Def::Typed { body, .. }) = find_def(&m, &i, "main") else {
@@ -3271,7 +3269,13 @@ mod tests {
              not to the alias auto-ctor; got {:?}",
             body.value
         );
-        let Expr_::VarCtor { type_name, name, index, .. } = body.value else {
+        let Expr_::VarCtor {
+            type_name,
+            name,
+            index,
+            ..
+        } = body.value
+        else {
             return;
         };
         assert_eq!(i.resolve(type_name), Some("Tab"), "ctor belongs to `Tab`");
@@ -3306,7 +3310,7 @@ mod tests {
         // Use integer literals for extra args — bare names like `x` aren't
         // in scope inside a minimal canon fixture and produce ValueNotFound.
         for (name, extra_args) in [
-            ("lazy",  " 0"),
+            ("lazy", " 0"),
             ("lazy2", " 0 1"),
             ("lazy3", " 0 1 2"),
             ("lazy4", " 0 1 2 3"),

@@ -22,9 +22,7 @@
 //! then `cargo`-fail.
 
 use crate::core::IpeMaybe;
-use crate::css_safety::{
-    SafeCssPropertyName, SafeCssSelector, SafeCssValue, strip_style_close,
-};
+use crate::css_safety::{SafeCssPropertyName, SafeCssSelector, SafeCssValue, strip_style_close};
 
 /// Lift a policy `Option<String>` into the Sky `Maybe String` runtime
 /// representation (`IpeMaybe<String>`), matching every other `String -> Maybe

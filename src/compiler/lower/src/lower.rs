@@ -396,10 +396,7 @@ fn is_websocket_cfg_shape(fields: &mut [(&str, &Ty)], interner: &Interner) -> bo
 }
 
 /// The [`canon::Type`] twin of [`is_websocket_cfg_shape`].
-fn is_websocket_cfg_canon_shape(
-    fields: &mut [(&str, &canon::Type)],
-    interner: &Interner,
-) -> bool {
+fn is_websocket_cfg_canon_shape(fields: &mut [(&str, &canon::Type)], interner: &Interner) -> bool {
     if fields.len() != WEBSOCKET_CFG_FIELD_TYPES.len() {
         return false;
     }

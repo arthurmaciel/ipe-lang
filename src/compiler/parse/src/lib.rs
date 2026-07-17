@@ -102,9 +102,7 @@ pub fn scan_identifier_words(src: &str) -> Option<std::collections::BTreeSet<Str
                         break;
                     };
                     let body = after.get(..close).unwrap_or("");
-                    for word in
-                        body.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                    {
+                    for word in body.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
                         if !word.is_empty() {
                             words.insert(word.to_owned());
                         }
@@ -1190,7 +1188,11 @@ mod tests {
             Some(Expr_::Record(fields)) => Some(fields.len()),
             _ => None,
         };
-        assert_eq!(shape, Some(0), "empty record literal yields Record with 0 fields");
+        assert_eq!(
+            shape,
+            Some(0),
+            "empty record literal yields Record with 0 fields"
+        );
     }
 
     #[test]
@@ -1378,7 +1380,11 @@ mod tests {
             Some(Expr_::Record(fields)) => Some(fields.len()),
             _ => None,
         };
-        assert_eq!(shape, Some(0), "empty record literal yields Record with 0 fields");
+        assert_eq!(
+            shape,
+            Some(0),
+            "empty record literal yields Record with 0 fields"
+        );
     }
 
     #[test]
@@ -1646,7 +1652,10 @@ mod tests {
         let mut i = Interner::new();
         let src = format!("{HDR}v c =\n    if c < 0 then -c else c\n");
         let result = parse_module(&src, &mut i);
-        assert!(result.is_ok(), "if c < 0 then -c else c must parse: {result:?}");
+        assert!(
+            result.is_ok(),
+            "if c < 0 then -c else c must parse: {result:?}"
+        );
         let Ok(m) = result else { return };
         let v = find_value(&m, &i, "v");
         // Body is an `If`; the `then` branch is `negate c` (a Call).

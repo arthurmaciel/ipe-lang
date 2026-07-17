@@ -722,10 +722,7 @@ pub fn maybe_map5<A, B, C, D, E, V>(
 
 /// `Maybe.andMap : Maybe a -> Maybe (a -> b) -> Maybe b`. Function-Maybe
 /// inspected first (matches the `.ipe` definition).
-pub fn maybe_and_map<A, B, F: FnOnce(A) -> B>(
-    ma: IpeMaybe<A>,
-    mf: IpeMaybe<F>,
-) -> IpeMaybe<B> {
+pub fn maybe_and_map<A, B, F: FnOnce(A) -> B>(ma: IpeMaybe<A>, mf: IpeMaybe<F>) -> IpeMaybe<B> {
     match mf {
         IpeMaybe::Just(f) => match ma {
             IpeMaybe::Just(a) => IpeMaybe::Just(f(a)),

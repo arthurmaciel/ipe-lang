@@ -35,10 +35,10 @@
 //!   `emit_model_gate` walk uses) — the type checker forbids infinite value
 //!   types, so the bound only guards a compiler bug in THAT invariant.
 
-use sha2::{Digest, Sha256};
 use ipe_diagnostics::{DResult, Diagnostic};
 use ipe_intern::Symbol;
 use ipe_ir::{IrType, ModPath};
+use sha2::{Digest, Sha256};
 
 use crate::EmitCtx;
 
