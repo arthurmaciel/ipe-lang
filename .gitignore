@@ -51,3 +51,6 @@ scripts/progressive-development/backlog.mmd
 # FFI inspector run artifacts (coverage reports) — run outputs, never source
 tools/ipe-ffi-inspector/.ipe/
 tools/ipe-ffi-inspector/.skycache/
+skyshop_core.db
+skyshop_core.db-shm
+skyshop_core.db-wal
