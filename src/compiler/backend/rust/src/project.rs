@@ -1728,8 +1728,28 @@ fn ffi_cargo_toml(base: &str, ctx: &EmitCtx) -> DResult<String> {
                  emission inputs (RustBackend::with_ffi)"
             .to_owned(),
     })?;
+    // Keys the base manifest already declares under a `[...dependencies]`
+    // table: re-declaring one (uuid's transitive `futures-util`, say) is a
+    // hard `cargo` duplicate-key error, so those lines are skipped — the
+    // base pin governs and cargo's resolver unifies the shared graph.
+    let mut base_keys: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    let mut in_deps = false;
+    for raw in base.lines() {
+        let line = raw.trim();
+        if line.starts_with('[') {
+            in_deps = line.contains("dependencies");
+            continue;
+        }
+        if in_deps && let Some((name, _)) = line.split_once('=') {
+            base_keys.insert(name.trim());
+        }
+    }
     let mut dep_block = String::new();
     for line in &ffi.dep_lines {
+        let key = line.split('=').next().unwrap_or(line).trim();
+        if base_keys.contains(key) {
+            continue;
+        }
         dep_block.push_str(line);
         dep_block.push('\n');
     }

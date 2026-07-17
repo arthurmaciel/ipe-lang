@@ -224,6 +224,22 @@ fn valid_ipe_value_name(name: &str) -> bool {
         && !IPE_KEYWORDS.contains(&name)
 }
 
+/// `true` when an Ipê signature string contains a TUPLE — a parenthesised
+/// region with a top-level comma (`(Int, Int)`); `Maybe (List Int)` has no
+/// comma and stays clean.
+fn contains_tuple(sig: &str) -> bool {
+    let mut depth = 0_u32;
+    for c in sig.chars() {
+        match c {
+            '(' => depth = depth.saturating_add(1),
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth > 0 => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Build the consumer-side interface for one validated package.
 #[must_use]
 pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
@@ -268,6 +284,18 @@ pub fn crate_interface(pkg: &PkgInfo) -> CrateInterface {
             continue;
         }
         let sig = wrapper_ipe_signature(f);
+        // A tuple anywhere in the signature renders as a Rust tuple whose
+        // integer components keep their RAW widths (`(u64, u16)`), while the
+        // Ipê signature maps every integer to `Int` (i64) — the forwarder
+        // would be an E0308. Over-drop until tuple-component scalar coercion
+        // is wired into the wrapper emitter.
+        if contains_tuple(&sig) {
+            skip(
+                "tuple in signature needs component scalar coercion — not yet wired",
+                &mut skipped,
+            );
+            continue;
+        }
         let mut opaques = BTreeSet::new();
         opaque_names_in(&sig, &mut opaques);
         if let Some(bad) = opaques.iter().find(|n| poisoned.contains(*n)) {
