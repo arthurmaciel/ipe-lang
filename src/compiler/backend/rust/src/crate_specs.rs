@@ -174,8 +174,8 @@ mod tests {
     #[test]
     fn crate_specs_match_manifests() {
         let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let runtime_path = manifest.join("../../runtime/rust/Cargo.toml");
-        let golden_path = manifest.join("../../../tests/golden/basics/Cargo.toml");
+        let runtime_path = manifest.join("../../../runtime/rust/Cargo.toml");
+        let golden_path = manifest.join("../../../../tests/golden/basics/Cargo.toml");
 
         let runtime_txt = std::fs::read_to_string(&runtime_path)
             .expect("crate_specs drift guard: cannot read runtime/Cargo.toml");

@@ -14,8 +14,8 @@ use ipe_ir::{
     Module, OnFormKind, Pat, Program, TypeDef, Variant,
 };
 
-const GOLDEN_MAIN: &str = include_str!("../../../../tests/golden/basics/main.rs");
-const GOLDEN_CARGO: &str = include_str!("../../../../tests/golden/basics/Cargo.toml");
+const GOLDEN_MAIN: &str = include_str!("../../../../../tests/golden/basics/main.rs");
+const GOLDEN_CARGO: &str = include_str!("../../../../../tests/golden/basics/Cargo.toml");
 
 /// Build the golden program:
 /// ```sky

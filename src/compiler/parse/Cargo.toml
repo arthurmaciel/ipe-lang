@@ -5,9 +5,9 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
-ipe_intern = { path = "../ipe_intern" }
-ipe_diagnostics = { path = "../ipe_diagnostics" }
-ipe_syntax = { path = "../ipe_syntax" }
+ipe_intern = { path = "../intern" }
+ipe_diagnostics = { path = "../diagnostics" }
+ipe_syntax = { path = "../syntax" }
 
 [lints]
 workspace = true

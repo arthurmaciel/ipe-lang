@@ -1,0 +1,18 @@
+[package]
+name = "ipe_lower"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+ipe_intern = { path = "../intern" }
+ipe_diagnostics = { path = "../diagnostics" }
+ipe_canon = { path = "../canon" }
+ipe_types = { path = "../types" }
+ipe_ir = { path = "../ir" }
+
+[dev-dependencies]
+ipe_parse = { path = "../parse" }
+
+[lints]
+workspace = true
