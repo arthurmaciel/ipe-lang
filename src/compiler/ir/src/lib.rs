@@ -21,3 +21,7 @@ pub use ir::{
     is_dispatch_free, is_irrefutable,
 };
 pub use pretty::pretty;
+
+/// The compilation target (kernel-availability axis) — re-exported so
+/// backend/db consumers reach it through the IR crate like `KernelFn`.
+pub use ipe_kernels::Target;

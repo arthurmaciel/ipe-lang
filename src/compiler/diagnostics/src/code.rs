@@ -132,6 +132,8 @@ pub const IPE_N0026: Code = Code("IPE-N0026");
 pub const IPE_N0027: Code = Code("IPE-N0027");
 /// an `Ffi.kernel "Name"` alias names a kernel that is not registered
 pub const IPE_N0028: Code = Code("IPE-N0028");
+/// A server-only kernel named from a `--target wasm` build.
+pub const IPE_N0029: Code = Code("IPE-N0029");
 
 // ---------------------------------------------------------------------------
 // Type (IPE-T####)
@@ -236,6 +238,8 @@ pub const IPE_L0127: Code = Code("IPE-L0127");
 /// an `as`-alias in a refutable match-arm position whose inner pattern needs
 /// Rust-level runtime dispatch (a nested constructor / literal / list pattern)
 pub const IPE_L0128: Code = Code("IPE-L0128");
+/// A routed `Live.app` under `--target wasm` (client router not yet built).
+pub const IPE_L0129: Code = Code("IPE-L0129");
 /// expression nests too deeply for the backend
 pub const IPE_L0200: Code = Code("IPE-L0200");
 
@@ -331,6 +335,7 @@ pub fn title(c: Code) -> &'static str {
         IPE_N0026 => "type name reserved for a built-in",
         IPE_N0027 => "duplicate import qualifier",
         IPE_N0028 => "unknown kernel alias",
+        IPE_N0029 => "server-only effect in a wasm build",
         IPE_T0001 => "type mismatch",
         IPE_T0002 => "infinite type",
         IPE_T0003 => "type inference exceeded its step budget",
@@ -373,6 +378,7 @@ pub fn title(c: Code) -> &'static str {
         IPE_L0126 => "non-Clone capture in a closure is not yet supported",
         IPE_L0127 => "a value holding a function is used more than once",
         IPE_L0128 => "alias over a dispatch-needing nested pattern not supported yet",
+        IPE_L0129 => "routed Live.app not supported under --target wasm yet",
         IPE_L0200 => "expression nests too deeply for the backend",
         IPE_F4400 => "a foreign-call description cannot be rendered as valid Rust",
         IPE_F4401 => "a foreign binding's inspection data is malformed",
@@ -407,6 +413,13 @@ pub fn title(c: Code) -> &'static str {
 /// ```` ```sky ```` fences.
 #[must_use]
 pub fn explain_page(c: Code) -> Option<&'static str> {
+    front_end_explain_page(c).or_else(|| back_end_explain_page(c))
+}
+
+/// [`explain_page`]'s front-end half: parse (`IPE-P*`) / name (`IPE-N*`) /
+/// type (`IPE-T*`) codes.
+#[must_use]
+fn front_end_explain_page(c: Code) -> Option<&'static str> {
     match c {
         IPE_P0001 => Some(include_str!("../explain/IPE-P0001.md")),
         IPE_P0002 => Some(include_str!("../explain/IPE-P0002.md")),
@@ -447,6 +460,7 @@ pub fn explain_page(c: Code) -> Option<&'static str> {
         IPE_N0026 => Some(include_str!("../explain/IPE-N0026.md")),
         IPE_N0027 => Some(include_str!("../explain/IPE-N0027.md")),
         IPE_N0028 => Some(include_str!("../explain/IPE-N0028.md")),
+        IPE_N0029 => Some(include_str!("../explain/IPE-N0029.md")),
         IPE_T0001 => Some(include_str!("../explain/IPE-T0001.md")),
         IPE_T0002 => Some(include_str!("../explain/IPE-T0002.md")),
         IPE_T0003 => Some(include_str!("../explain/IPE-T0003.md")),
@@ -459,6 +473,15 @@ pub fn explain_page(c: Code) -> Option<&'static str> {
         IPE_T0015 => Some(include_str!("../explain/IPE-T0015.md")),
         IPE_T0016 => Some(include_str!("../explain/IPE-T0016.md")),
         IPE_T0017 => Some(include_str!("../explain/IPE-T0017.md")),
+        _ => None,
+    }
+}
+
+/// [`explain_page`]'s back-end half: lowering (`IPE-L*`), FFI (`IPE-F*`),
+/// and internal (`IPE-I*`) codes.
+#[must_use]
+fn back_end_explain_page(c: Code) -> Option<&'static str> {
+    match c {
         IPE_L0100 => Some(include_str!("../explain/IPE-L0100.md")),
         IPE_L0101 => Some(include_str!("../explain/IPE-L0101.md")),
         IPE_L0102 => Some(include_str!("../explain/IPE-L0102.md")),
@@ -487,6 +510,7 @@ pub fn explain_page(c: Code) -> Option<&'static str> {
         IPE_L0126 => Some(include_str!("../explain/IPE-L0126.md")),
         IPE_L0127 => Some(include_str!("../explain/IPE-L0127.md")),
         IPE_L0128 => Some(include_str!("../explain/IPE-L0128.md")),
+        IPE_L0129 => Some(include_str!("../explain/IPE-L0129.md")),
         IPE_L0200 => Some(include_str!("../explain/IPE-L0200.md")),
         IPE_F4400 => Some(include_str!("../explain/IPE-F4400.md")),
         IPE_F4401 => Some(include_str!("../explain/IPE-F4401.md")),
@@ -518,15 +542,15 @@ pub const ALL_CODES: &[Code] = &[
     IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031, IPE_P0040,
     IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_N0001, IPE_N0002, IPE_N0003,
     IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011, IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021,
-    IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_T0001,
-    IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014,
-    IPE_T0015, IPE_T0016, IPE_T0017, IPE_L0100, IPE_L0101, IPE_L0102, IPE_L0103, IPE_L0104,
-    IPE_L0105, IPE_L0106, IPE_L0107, IPE_L0108, IPE_L0110, IPE_L0111, IPE_L0112, IPE_L0113,
-    IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119, IPE_L0120, IPE_L0121,
-    IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127, IPE_L0128, IPE_L0200,
-    IPE_F4400, IPE_F4401, IPE_F4402, IPE_F4410, IPE_F4411, IPE_F4412, IPE_I0001, IPE_I0010,
-    IPE_I0011, IPE_I0100, IPE_I0101, IPE_I0102, IPE_I0103, IPE_I0200, IPE_I0201, IPE_I0202,
-    IPE_I0203,
+    IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025, IPE_N0026, IPE_N0027, IPE_N0028, IPE_N0029,
+    IPE_T0001, IPE_T0002, IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013,
+    IPE_T0014, IPE_T0015, IPE_T0016, IPE_T0017, IPE_L0100, IPE_L0101, IPE_L0102, IPE_L0103,
+    IPE_L0104, IPE_L0105, IPE_L0106, IPE_L0107, IPE_L0108, IPE_L0110, IPE_L0111, IPE_L0112,
+    IPE_L0113, IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118, IPE_L0119, IPE_L0120,
+    IPE_L0121, IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126, IPE_L0127, IPE_L0128,
+    IPE_L0129, IPE_L0200, IPE_F4400, IPE_F4401, IPE_F4402, IPE_F4410, IPE_F4411, IPE_F4412,
+    IPE_I0001, IPE_I0010, IPE_I0011, IPE_I0100, IPE_I0101, IPE_I0102, IPE_I0103, IPE_I0200,
+    IPE_I0201, IPE_I0202, IPE_I0203,
 ];
 
 #[cfg(test)]
@@ -534,8 +558,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn taxonomy_has_ninety_seven_codes() {
-        assert_eq!(ALL_CODES.len(), 97);
+    fn taxonomy_code_count_is_pinned() {
+        assert_eq!(ALL_CODES.len(), 99);
     }
 
     #[test]
@@ -553,7 +577,7 @@ mod tests {
             assert!(s.starts_with("IPE-"), "{s} bad prefix");
             assert!(seen.insert(s), "{s} duplicated");
         }
-        assert_eq!(seen.len(), 97);
+        assert_eq!(seen.len(), 99);
     }
 
     /// CI coverage gate: every taxonomy code has a conforming explain page.

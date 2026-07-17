@@ -38,10 +38,6 @@ pub const ASYNC_TRAIT: CrateSpec = CrateSpec {
     name: "async-trait",
     version: "0.1",
 };
-pub const SERDE_URLENCODED: CrateSpec = CrateSpec {
-    name: "serde_urlencoded",
-    version: "0.7",
-};
 pub const LIBC: CrateSpec = CrateSpec {
     name: "libc",
     version: "0.2",
@@ -83,7 +79,6 @@ pub const ALL: &[CrateSpec] = &[
     AXUM,
     TOWER_HTTP,
     ASYNC_TRAIT,
-    SERDE_URLENCODED,
     LIBC,
     CROSSTERM,
     UNICODE_WIDTH,
@@ -107,7 +102,7 @@ mod tests {
             assert!(!spec.name.is_empty(), "empty crate name in ALL");
             assert!(!spec.version.is_empty(), "empty version for {}", spec.name);
         }
-        assert_eq!(ALL.len(), 14, "expected 14 surgery-emitted crate specs");
+        assert_eq!(ALL.len(), 13, "expected 13 surgery-emitted crate specs");
     }
 
     /// Extract the version from a Cargo dependency value: `"0.4"` or

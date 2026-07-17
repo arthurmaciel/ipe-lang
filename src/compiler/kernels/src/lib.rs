@@ -4801,6 +4801,113 @@ pub enum KernelId {
     Ffi(FfiKernelId),
 }
 
+// ── Compilation target — kernel availability ──────────────────────────────────
+
+/// The compilation target a build resolves kernels against.
+///
+/// `WasmClient` is a public browser bundle: every kernel is DENIED there
+/// unless [`StdlibKernel::available_on`] explicitly allows it (default-deny —
+/// a newly added kernel is unrepresentable client-side until audited and
+/// allowed, so the forgotten state is the safe state; see
+/// `docs/architecture/wasm-target.md` Q5 Layer 1).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub enum Target {
+    /// The native host binary (server / CLI / TUI / desktop).
+    #[default]
+    Native,
+    /// A browser WASM bundle (`ipe build --target wasm`) — fully public,
+    /// `wasm2wat`-inspectable; no server effect or secret may compile in.
+    WasmClient,
+}
+
+impl StdlibKernel {
+    /// Whether this kernel has a denotation on `target`.
+    ///
+    /// Everything is available natively. The `WasmClient` arm is the
+    /// default-deny allowlist over the capability matrix
+    /// (`docs/architecture/wasm-target.md` Q3): the pure/fallible-pure
+    /// families plus the whole `Ipe.Ui`/`Ipe.Html`/`Ipe.Css` render surface
+    /// compile wholesale; effect kernels appear here ONLY once their browser
+    /// substitute exists in the runtime `wasm` module (tagging earlier would
+    /// break THE SEAL — the name would resolve with no symbol to link).
+    #[must_use]
+    pub fn available_on(self, target: Target) -> bool {
+        match target {
+            Target::Native => true,
+            Target::WasmClient => self.wasm_client_available(),
+        }
+    }
+
+    /// The `WasmClient` allowlist. The catch-all `false` arm IS the
+    /// default-deny invariant — never widen it to a family without a probe
+    /// build proving the family's runtime module compiles to wasm32.
+    fn wasm_client_available(self) -> bool {
+        let decl = self.decl();
+        match decl.class {
+            // The whole render surface (Ui/Html/Attr/Event/Font/Border/
+            // Background/Input/Region/Lazy/Keyed) — probe-verified to
+            // compile to wasm32 as part of the runtime floor.
+            KernelClass::Ui => true,
+            // `Live.app` gains a browser denotation via the runtime `wasm`
+            // sink (`wasm_app`). Routed apps (`Live.route` / the routed
+            // branch) stay out until the client router lands — tagging the
+            // route kernel now would emit `Route::new` against a runtime
+            // module the wasm crate does not vendor (a SEAL breach).
+            KernelClass::Live => matches!(self, Self::LiveApp),
+            // TEA wiring the wasm scheduler drives today. `Cmd.perform` runs
+            // on the browser microtask queue; timers/pub-sub land with their
+            // substitutes.
+            KernelClass::Tea => matches!(
+                self,
+                Self::CmdNone | Self::CmdBatch | Self::CmdPerform | Self::SubNone
+            ),
+            KernelClass::Pure => {
+                // Pure families whose runtime modules are in the proven wasm
+                // floor (no host I/O, no tokio, no un-shimmed entropy).
+                matches!(
+                    decl.qualifier,
+                    "String"
+                        | "Char"
+                        | "List"
+                        | "Basics"
+                        | "Math"
+                        | "Dict"
+                        | "Set"
+                        | "Maybe"
+                        | "Result"
+                        | "Error"
+                        | "Bytes"
+                        | "Encoding"
+                        | "JsonEnc"
+                        | "JsonDec"
+                        | "JsonDecP"
+                        | "Decimal"
+                        | "Regex"
+                        | "Path"
+                        | "Secret"
+                        | "CssSafety"
+                        | "Uuid"
+                ) ||
+                // Pure calendar helpers (chrono, no clock read). The clock/
+                // sleep/interval kernels stay out until the browser substitute
+                // (`Date.now` / timer bridge) lands.
+                matches!(
+                    self,
+                    Self::TimeTimeString | Self::TimeIsLeapYear | Self::TimeDaysInMonth
+                )
+            }
+            // Server-only surfaces: no browser denotation, ever (Db/Server)
+            // or until a dedicated backend exists (Tui/Webview/Cli/Ffi).
+            KernelClass::Db
+            | KernelClass::Server
+            | KernelClass::Tui
+            | KernelClass::Webview
+            | KernelClass::Cli
+            | KernelClass::Ffi => false,
+        }
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -4808,6 +4915,63 @@ mod tests {
     use std::collections::HashMap;
 
     use super::StdlibKernel;
+
+    /// The `WasmClient` allowlist is default-deny: every server-effect family
+    /// is denied and the pure floor + render surface is allowed.
+    #[test]
+    fn wasm_client_allowlist_is_default_deny() {
+        use super::Target;
+        // Crown-jewel denials (secret consumers / server surfaces / effects
+        // whose browser substitute has not landed).
+        for denied in [
+            StdlibKernel::AuthSignToken,
+            StdlibKernel::AuthVerifyToken,
+            StdlibKernel::DbQuery,
+            StdlibKernel::DbConnect,
+            StdlibKernel::FileReadFile,
+            StdlibKernel::SystemGetenv,
+            StdlibKernel::SystemExit,
+            StdlibKernel::ServerListen,
+            StdlibKernel::EmailSend,
+            StdlibKernel::IoReadLine,
+            StdlibKernel::LogPrintln,
+            StdlibKernel::HttpGet,
+            StdlibKernel::TaskPerform,
+            StdlibKernel::LiveRenderStatic,
+            StdlibKernel::LiveRoute,
+            StdlibKernel::CryptoSha256,
+        ] {
+            assert!(
+                !denied.available_on(Target::WasmClient),
+                "{denied:?} must have no wasm-client denotation"
+            );
+        }
+        // The floor + the headline render surface.
+        for allowed in [
+            StdlibKernel::StringFromInt,
+            StdlibKernel::ListMap,
+            StdlibKernel::DictInsert,
+            StdlibKernel::JsonDecDecodeString,
+            StdlibKernel::DecAdd,
+            StdlibKernel::UiLayout,
+            StdlibKernel::UiButton,
+            StdlibKernel::HtmlDiv,
+            StdlibKernel::CssSafetySafeValue,
+            StdlibKernel::LiveApp,
+            StdlibKernel::CmdNone,
+            StdlibKernel::CmdPerform,
+            StdlibKernel::SubNone,
+        ] {
+            assert!(
+                allowed.available_on(Target::WasmClient),
+                "{allowed:?} must be wasm-client-representable"
+            );
+        }
+        // Everything is available natively.
+        for &sk in StdlibKernel::ALL {
+            assert!(sk.available_on(Target::Native));
+        }
+    }
 
     /// Verifies that no two non-internal variants in [`StdlibKernel::ALL`] share
     /// the same `(qualifier, name)` pair.

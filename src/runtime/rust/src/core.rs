@@ -14,7 +14,15 @@ use std::pin::Pin;
 // ===========================================
 // Task type (generic over error type E)
 // ===========================================
+// The `Send` bound backs tokio `spawn`/`block_on` on native hosts. On wasm32
+// the runtime is single-threaded and browser futures (`JsFuture`, DOM-touching
+// async) are `!Send`, so the bound is relaxed there — one type, cfg-split,
+// never a fork or a `MaybeSend` trait (the native assertion in
+// `tests/wasm_floor_scope.rs` pins the native half).
+#[cfg(not(target_arch = "wasm32"))]
 pub type IpeTask<E, A> = Pin<Box<dyn Future<Output = IpeResult<E, A>> + Send + 'static>>;
+#[cfg(target_arch = "wasm32")]
+pub type IpeTask<E, A> = Pin<Box<dyn Future<Output = IpeResult<E, A>> + 'static>>;
 
 /// Construct Ok with generic error type.  Use `ok_res::<IpeError>` to
 /// instantiate with the project's concrete error type.

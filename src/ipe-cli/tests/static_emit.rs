@@ -63,6 +63,7 @@ fn static_emit_activates_dlmalloc_and_dynamic_rebuild_restores_baseline() {
 
     let statik = BuildOptions {
         static_plan: Some(dlmalloc_plan()),
+        ..BuildOptions::default()
     };
     ipe::build_with_options(&entry, &out, &runtime, statik).expect("static build");
 
@@ -132,6 +133,7 @@ fn static_emit_mimalloc_optin_activates_mimalloc() {
             triple: StaticTriple::X8664LinuxMusl,
             allocator: StaticAllocator::Mimalloc,
         }),
+        ..BuildOptions::default()
     };
     ipe::build_with_options(&entry, &out, &runtime, statik).expect("static build");
     let manifest = std::fs::read_to_string(out.join("Cargo.toml")).expect("emitted manifest");
@@ -414,6 +416,7 @@ fn end_to_end_static_binary_is_static_and_runs() {
         &runtime,
         BuildOptions {
             static_plan: Some(plan),
+            ..BuildOptions::default()
         },
     )
     .expect("static emit");

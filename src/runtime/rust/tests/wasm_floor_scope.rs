@@ -1,41 +1,25 @@
-//! WASM pure-kernel **floor tracer** — pins the documented first-slice
-//! EXPECTATION of the wasm-target epic without claiming the full target builds.
+//! WASM pure-kernel **floor guard** — native-side invariants of the enforced
+//! wasm floor.
 //!
-//! Spec: `docs/architecture/wasm-target.md`; phased execution plan (the floor
-//! is milestone M0): `docs/architecture/wasm-target-impl-plan.md`.
+//! Spec: `docs/architecture/wasm-target.md`; build order:
+//! `docs/architecture/wasm-target-impl-plan.md`. The floor itself is a live CI
+//! gate (`wasm-floor` job): `cargo build -p ipe-runtime-rust --target
+//! wasm32-unknown-unknown` (default and `--features json`) must exit 0 — the
+//! entire default kernel set, including the `Ipe.Ui` render surface
+//! (`ui/*`, `html.rs`, `css*`), compiles to wasm.
 //!
-//! ## What this file IS
-//! A documentation-and-invariant guard. The spec (Q7) names a single landable,
-//! in-boundary slice of the blocked wasm epic: the **pure-kernel wasm floor** —
-//! `List` / `String` / `Dict` / `Maybe` / `Result` + JSON, *no* Task I/O —
-//! plausibly already cross-compiles to `wasm32-unknown-unknown` once two
-//! blocking pieces land: (a) the `cfg`-gated `IpeTask` `Send` split, and (b) a
-//! wasm Cargo/entry branch that excludes the tokio modules.
+//! This file guards the floor's two native-side premises:
 //!
-//! ## What this file is NOT
-//! It is **not** proof that the full wasm target builds. The native test runner
-//! here cannot cross-compile to `wasm32-unknown-unknown` (no wasm toolchain is
-//! assumed, and `tests/` runs under the default native feature set). So instead
-//! of an actual wasm build, this file statically asserts the floor's two
-//! blocking FACTS so a regression is caught:
+//!   1. The floor kernels are synchronous, total, `std`-only — no Task /
+//!      tokio / async path. Proven by *calling* a representative pure fn from
+//!      each module (list / string / dict / json + Maybe / Result) with
+//!      concrete values. If any grows a Task return, an `await`, or a tokio
+//!      dependency, this file stops compiling / passing.
 //!
-//!   1. The pure kernels under test do NOT touch any Task / tokio / async path —
-//!      they are synchronous, total, `std`-only functions and therefore are
-//!      genuine candidates for the `cfg`-excluded wasm floor. We prove this by
-//!      *calling* a representative pure fn from each module (list / string /
-//!      dict / json + Maybe / Result) with concrete values and asserting the
-//!      concrete results. If any of these ever grows a Task return, an `await`,
-//!      or a tokio dependency, the floor's premise breaks and this file stops
-//!      compiling / passing.
-//!
-//!   2. `IpeTask`'s `Send` bound (`core.rs:17`) is the gate for the floor. The
-//!      spec's decision (Q2) is that the bound must be relaxed ONLY via
-//!      `#[cfg(target_arch = "wasm32")]`, never forked into a second type and
-//!      never hidden behind a `MaybeSend` marker trait. We anchor that here with
-//!      a comment pointing at the anchor line AND a compile-time assertion that
-//!      on the **native** target a `IpeTask` value really is `Send` (the bound
-//!      this file's host enforces). A future wasm cfg-split must keep this native
-//!      assertion true while relaxing the bound under the wasm cfg only.
+//!   2. `IpeTask`'s `Send` bound (`core.rs`) stays intact on native. Any wasm
+//!      relaxation must be `#[cfg(target_arch = "wasm32")]`-gated — never a
+//!      forked type, never a `MaybeSend` marker trait — leaving the native
+//!      assertion below untouched.
 //!
 //! Keep this small, deterministic, dependency-free, and panic-free on every
 //! Ipê-reachable path.
