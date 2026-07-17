@@ -54,6 +54,7 @@ set -uo pipefail
 source "$(dirname "$0")/../lib/env.sh"
 source "$(dirname "$0")/../lib/examples.sh"
 source "$(dirname "$0")/../lib/checks.sh"
+source "$(dirname "$0")/../lib/sky_mirror.sh"
 
 # ── Night gate (OPT-IN via IPE_SWEEP_NIGHT_GATE=1; off by default so CI runs) ─
 night_guard "examples-sweep"
@@ -132,6 +133,22 @@ say() { echo "$@" | tee -a "$RUNLOG"; }
 # across rows-$STAMP.tsv / sweep-$STAMP.table / the per-example logs.
 diag() { printf '%s/%s.%s.%s\n' "$HIST" "$1" "$STAMP" "$2"; }
 say "=== ipê EXAMPLES sweep @ $STAMP (repo: $REPO · ipe: $IPE_BIN) ==="
+
+# ── Mirror the upstream Sky examples into examples/sky/ (opt-in) ──────────────
+# IPE_SWEEP_MIRROR_SKY=1 materialises examples/sky/NN-* from ../sky/examples
+# (network fallback anzellai/sky), renames .sky->.ipe, and applies the syntactic
+# rename-map patch (lib/sky_mirror.sh). all_examples() then folds that set in.
+# A missing upstream source aborts the mirror (not the whole sweep) so the
+# first-party set still runs; the mirror set simply won't appear.
+if [ "${IPE_SWEEP_MIRROR_SKY:-0}" = 1 ]; then
+  if mirror_sky_examples; then
+    say "  (IPE_SWEEP_MIRROR_SKY=1 — mirrored upstream Sky examples into examples/sky/)"
+  else
+    echo "WARN: IPE_SWEEP_MIRROR_SKY=1 but no upstream Sky example source found — mirror set skipped." >&2
+    IPE_SWEEP_MIRROR_SKY=0
+  fi
+fi
+
 [ "$STATIC" = 1 ] && say "  (IPE_SWEEP_STATIC=1 — --static builds for $IPE_STATIC_TRIPLE; ldd-asserted; EQUIVALENCE off)"
 [ "$BUILD_ONLY" = 1 ] && say "  (IPE_SWEEP_BUILD_ONLY=1 — BUILD column only; RUN+EQUIVALENCE skipped)"
 [ "$BUILD_ONLY" != 1 ] && [ "$NO_EQUIV" = 1 ] && say "  (IPE_SWEEP_NO_EQUIV=1 — BUILD+RUN; EQUIVALENCE skipped — the phase-1 default)"

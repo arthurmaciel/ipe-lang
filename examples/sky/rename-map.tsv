@@ -1,0 +1,40 @@
+# Sky -> Ipe SYNTACTIC rename map — the declarative patch for the mirrored Sky examples.
+#
+# The examples-sweep mirrors each upstream Sky example (from ../sky/examples, or
+# anzellai/sky as a network fallback) into examples/sky/<name>/ at run time, then
+# applies THIS map via sky-to-ipe-transform.py. The map is the entire "patch": a
+# reviewable, order-independent list of module-qualifier rewrites. It is
+# preferred over per-file *.patch diffs because it rewrites TOKENS, not line
+# positions, so it survives the small line-level edits upstream makes between
+# releases (a *.patch would reject on any shifted context line).
+#
+# SCOPE — SYNTACTIC ONLY. Each row rewrites a module-qualifier PREFIX wherever it
+# appears as code (an `import` module path or a qualified value/type reference
+# like `Std.Ui.text`). The transform NEVER rewrites inside a string literal or a
+# comment, so user-visible prose ("Sky.Live Counter", the "Std.Ui showcase"
+# label, a window title) stays byte-identical — which is also REQUIRED for the
+# Go-vs-Rust equivalence diff, since the Go reference is built from the original
+# Sky source and prints those strings verbatim. A rewrite that changed program
+# behaviour would be a compiler/stdlib gap to FILE, not a patch.
+#
+# Longest-prefix wins (the transform sorts by descending source length), so the
+# specific Sky.Core.Http.Stream / Sky.Http.Server.WebSocket rows bind before the
+# broader Sky.Core. / Sky.Http. ones.
+#
+# Format:  <sky-prefix>\t<ipe-prefix>
+# A trailing dot means "prefix of a dotted module path"; a bare token (Sky.Ffi)
+# matches the whole qualifier.
+
+# ── Sky.Core.* -> Ipe.*  (the core language surface: Prelude, String, List, ...)
+Sky.Core.	Ipe.
+
+# ── Sky.Http.* -> Ipe.Http.*  (Server, Server.Stream, Server.WebSocket, RateLimit)
+Sky.Http.	Ipe.Http.
+
+# ── Sky.Ffi / Sky.Test -> Ipe.*
+Sky.Ffi	Ipe.Ffi
+Sky.Test	Ipe.Test
+
+# ── Std.* -> Ipe.*  (Log, Ui, Ui.*, Live, Live.Head, Db, Money, Cli, Cmd, Sub,
+#    Time, Css, Csv, Cache, PubSub, Decimal, Html, Html.*, Webview, Auth, ...)
+Std.	Ipe.

@@ -507,7 +507,16 @@ const RUNTIME_MOD_RS_EMAIL_APPEND: &str = "pub mod email;\npub use email::*;\n";
 /// those imports fail (E0432) — the caller preserves that ordering. Splitting
 /// css out lets a pure-`Ipe.Css` program (no render kernel ⇒ no `uses_ui`) still
 /// get the css declarations via `uses_css` alone.
-const RUNTIME_MOD_RS_UI_APPEND: &str = "pub mod html;\npub use html::*;\npub mod ui;\n";
+///
+/// `dom` (the target-neutral DOM data path) is declared here too, NOT in the
+/// base module set: it is mutually referential with `html` (`html.rs` calls
+/// `crate::dom::form::decode_form_or_warn`; `dom/{diff,dispatch,form}.rs`
+/// import `crate::html::*`), so the two MUST appear together. A non-render
+/// program (a plain CLI / headless server) declares neither — declaring `dom`
+/// unconditionally in the base while `html` was append-only left `dom`'s
+/// `use crate::html::*` unresolved, an `ipe`-exit-0-then-cargo-fail (E0432).
+const RUNTIME_MOD_RS_UI_APPEND: &str =
+    "pub mod html;\npub use html::*;\npub mod dom;\npub mod ui;\n";
 
 /// Lines appended to `ipe_runtime/mod.rs` when the program uses the `Ipe.Css`
 /// leaf security kernels (`Ipe.CssSafety.safeValue` / `safePropName` /

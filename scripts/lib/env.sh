@@ -86,7 +86,10 @@ export IPE_BIN="${IPE_BIN:-$CARGO_TARGET_DIR/release/ipe}"
 
 # ── Vendored runtime dir (ipe --runtime) ────────────────────────────────────
 # ipe's build vendors the runtime module tree into each emitted crate. Left
-# UNSET it auto-resolves by walking up to `$REPO/src/runtime/rust/src/sky_runtime`
+# UNSET it auto-resolves by walking up to `$REPO/src/runtime/rust/src`
 # (resolve_runtime() in src/ipe-cli/src/lib.rs). We export the explicit path so
-# the sweep is independent of the invocation CWD; callers may override.
-export IPE_RUNTIME_DIR="${IPE_RUNTIME_DIR:-$REPO/src/runtime/rust/src/sky_runtime}"
+# the sweep is independent of the invocation CWD; callers may override. The tree
+# is the `ipe-runtime-rust` crate's source root — the `.rs` module files sit
+# directly under it (no nested `sky_runtime`/`ipe_runtime` subdir); a wrong path
+# here makes `ipe build` mis-vendor the runtime and the emitted crate cargo-fails.
+export IPE_RUNTIME_DIR="${IPE_RUNTIME_DIR:-$REPO/src/runtime/rust/src}"
