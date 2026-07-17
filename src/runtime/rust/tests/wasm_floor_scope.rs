@@ -1,8 +1,8 @@
 //! WASM pure-kernel **floor tracer** — pins the documented first-slice
 //! EXPECTATION of the wasm-target epic without claiming the full target builds.
 //!
-//! Spec: `runtime-rust/docs/superpowers/specs/2026-06-15-wasm-target-design.md`
-//! (divergence `wasm-target`, disposition `DOCUMENT_BLOCKED`).
+//! Spec: `docs/architecture/wasm-target.md`; phased execution plan (the floor
+//! is milestone M0): `docs/architecture/wasm-target-impl-plan.md`.
 //!
 //! ## What this file IS
 //! A documentation-and-invariant guard. The spec (Q7) names a single landable,
