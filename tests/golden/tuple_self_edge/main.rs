@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -41,7 +41,10 @@ impl IpeStringify for MainChain {
     fn ipe_show(&self) -> String {
         match self {
             MainChain::ChainEnd => "ChainEnd".to_string(),
-            MainChain::ChainNode(p0) => format!("ChainNode {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch()),
+            MainChain::ChainNode(p0) => format!(
+                "ChainNode {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch()
+            ),
         }
     }
 }
@@ -259,7 +262,9 @@ pub fn main_depth(c: MainChain) -> i64 {
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(main_depth(MainChain::ChainNode(Box::new((MainChain::ChainNode(Box::new((MainChain::ChainEnd, 3))), 2))))))
+    log_println(string_from_int(main_depth(MainChain::ChainNode(Box::new(
+        (MainChain::ChainNode(Box::new((MainChain::ChainEnd, 3))), 2),
+    )))))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

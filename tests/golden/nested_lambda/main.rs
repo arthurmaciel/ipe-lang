@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -31,7 +31,6 @@ type Value = JsonVal;
 // ===========================================
 // USER TYPES
 // ===========================================
-
 
 pub use ipe_runtime::error::IpeError;
 pub fn str_err(s: &str) -> IpeError {
@@ -240,10 +239,23 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 }
 
 pub fn main_f(a: i64) -> Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> {
-    { let __sky_fn: Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> = Box::new(move |b: i64, c: i64| -> i64 { ((a + b) + c) }); __sky_fn }
+    {
+        let __sky_fn: Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> =
+            Box::new(move |b: i64, c: i64| -> i64 { ((a + b) + c) });
+        __sky_fn
+    }
 }
 pub fn ipe_main() -> IpeTask<()> {
-    ({ let h = main_f(1); ({ let exact = (h)(2, 3); ({ let over = (main_f(1))(2, 3); log_println(string_from_int((if (exact == over) { exact } else { 0 }))) }) }) })
+    ({
+        let h = main_f(1);
+        ({
+            let exact = (h)(2, 3);
+            ({
+                let over = (main_f(1))(2, 3);
+                log_println(string_from_int((if (exact == over) { exact } else { 0 })))
+            })
+        })
+    })
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

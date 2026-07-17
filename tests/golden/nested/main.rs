@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -53,7 +53,12 @@ pub enum MainTree {
 impl IpeStringify for MainTree {
     fn ipe_show(&self) -> String {
         match self {
-            MainTree::Node(p0, p1, p2) => format!("Node {} {} {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch(), (&ipe_runtime::stringify::Wrap(p1)).dispatch(), (&ipe_runtime::stringify::Wrap(p2)).dispatch()),
+            MainTree::Node(p0, p1, p2) => format!(
+                "Node {} {} {}",
+                (&ipe_runtime::stringify::Wrap(p0)).dispatch(),
+                (&ipe_runtime::stringify::Wrap(p1)).dispatch(),
+                (&ipe_runtime::stringify::Wrap(p2)).dispatch()
+            ),
             MainTree::Leaf => "Leaf".to_string(),
         }
     }
@@ -65,7 +70,11 @@ pub struct RecXY {
 }
 impl IpeStringify for RecXY {
     fn ipe_show(&self) -> String {
-        format!("{{{} {}}}", (&ipe_runtime::stringify::Wrap(&self.x)).dispatch(), (&ipe_runtime::stringify::Wrap(&self.y)).dispatch())
+        format!(
+            "{{{} {}}}",
+            (&ipe_runtime::stringify::Wrap(&self.x)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.y)).dispatch()
+        )
     }
 }
 
@@ -288,13 +297,31 @@ pub fn main_label(t: MainTree) -> i64 {
     }
 }
 pub fn main_rec_sum(r: RecXY) -> i64 {
-    ({ let RecXY { x, y, .. } = r; (x + y) })
+    ({
+        let RecXY { x, y, .. } = r;
+        (x + y)
+    })
 }
 pub fn main_let_parts() -> i64 {
-    ({ let (a, b) = (10, 20); ({ let RecXY { x, y, .. } = RecXY { x: 1, y: 2 }; (((a + b) + x) + y) }) })
+    ({
+        let (a, b) = (10, 20);
+        ({
+            let RecXY { x, y, .. } = RecXY { x: 1, y: 2 };
+            (((a + b) + x) + y)
+        })
+    })
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int((((main_box_sum(MainBox::Wrap((1, 2))) + main_label(MainTree::Node(Box::new(MainTree::Leaf), 5, Box::new(MainTree::Leaf)))) + main_rec_sum(RecXY { x: 20, y: 22 })) + main_let_parts())))
+    log_println(string_from_int(
+        (((main_box_sum(MainBox::Wrap((1, 2)))
+            + main_label(MainTree::Node(
+                Box::new(MainTree::Leaf),
+                5,
+                Box::new(MainTree::Leaf),
+            )))
+            + main_rec_sum(RecXY { x: 20, y: 22 }))
+            + main_let_parts()),
+    ))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

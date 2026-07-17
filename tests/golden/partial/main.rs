@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -31,7 +31,6 @@ type Value = JsonVal;
 // ===========================================
 // USER TYPES
 // ===========================================
-
 
 pub use ipe_runtime::error::IpeError;
 pub fn str_err(s: &str) -> IpeError {
@@ -246,10 +245,37 @@ pub fn main_apply_twice(f: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>, x: i
     (f)((f)(x))
 }
 pub fn main_over(a: i64) -> Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> {
-    { let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> = Box::new(move |b: i64| -> i64 { (a + b) }); __sky_fn }
+    {
+        let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+            Box::new(move |b: i64| -> i64 { (a + b) });
+        __sky_fn
+    }
 }
 pub fn ipe_main() -> IpeTask<()> {
-    ({ let f = { let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> = Box::new(move |eta_0: i64| -> i64 { main_add(2, eta_0) }); __sky_fn }; ({ let p = (f)(3); ({ let o = (main_over(1))(2); ({ let h = main_apply_twice({ let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> = Box::new(move |eta_0: i64| -> i64 { main_add(1, eta_0) }); __sky_fn }, 5); log_println(string_from_int(((p + o) + h))) }) }) }) })
+    ({
+        let f = {
+            let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+                Box::new(move |eta_0: i64| -> i64 { main_add(2, eta_0) });
+            __sky_fn
+        };
+        ({
+            let p = (f)(3);
+            ({
+                let o = (main_over(1))(2);
+                ({
+                    let h = main_apply_twice(
+                        {
+                            let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+                                Box::new(move |eta_0: i64| -> i64 { main_add(1, eta_0) });
+                            __sky_fn
+                        },
+                        5,
+                    );
+                    log_println(string_from_int(((p + o) + h)))
+                })
+            })
+        })
+    })
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;
