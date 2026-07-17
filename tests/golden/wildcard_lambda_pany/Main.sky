@@ -1,6 +1,6 @@
 module Main exposing (main)
 
--- SKY-L0102 regression fixture: wildcard lambda parameter `\_ -> expr`.
+-- IPE-L0102 regression fixture: wildcard lambda parameter `\_ -> expr`.
 --
 -- Before the fix, the lowerer raised `Feature::Polymorphism` when it
 -- encountered a `PAnything` lambda parameter whose type is a free `Ty::Var`.

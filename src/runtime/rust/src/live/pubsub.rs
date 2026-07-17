@@ -97,7 +97,7 @@ impl<T: Clone + Send + 'static> Broker<T> {
 /// Global per-type registry. The ONE `downcast_ref` is keyed by `TypeId`, so it
 /// is correct by construction; the impossible `None` arm rebuilds rather than
 /// `unwrap` (no panic). The payload type is never involved in this cast.
-// SKY-RUST-AUDIT:ACCEPTED (Arthur Maciel, 2026-06-13) — TypeId-keyed broker CONTAINER only; one Arc<Broker<T>> per TypeId, payload never erased; downcast can't fail, impossible None rebuilds [ledger #4]
+// IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel, 2026-06-13) — TypeId-keyed broker CONTAINER only; one Arc<Broker<T>> per TypeId, payload never erased; downcast can't fail, impossible None rebuilds [ledger #4]
 fn registry() -> &'static Mutex<HashMap<TypeId, Box<dyn Any + Send + Sync>>> {
     static R: OnceLock<Mutex<HashMap<TypeId, Box<dyn Any + Send + Sync>>>> = OnceLock::new();
     R.get_or_init(|| Mutex::new(HashMap::new()))

@@ -242,7 +242,7 @@ autopilot (until 2 dry passes = converged):
     every phase transition; watch.sh renders it fixed at top; also printed as a
     compact heartbeat line per transition; `cat` it any time:
     ```
-    task    [guardian-typesystem] 12-skyvote: SKY-T0012 record has no field …
+    task    [guardian-typesystem] 12-skyvote: IPE-T0012 record has no field …
     type    guardian/typesystem   attempt 1/2   started 04:06
     phase   REVIEW    model opus    elapsed 3m10s
     ```

@@ -234,7 +234,7 @@ fn resolve_imports_add_module() {
                 ..
             })
         ),
-        "missing dep must surface SKY-N0020, got {red:?}"
+        "missing dep must surface IPE-N0020, got {red:?}"
     );
 
     // Add A to the file set.
@@ -325,7 +325,7 @@ fn resolve_imports_rename_module() {
 }
 
 /// Shadow (driver trust tag): a USER file squatting on a
-/// `Std.…` path stays SKY-N0025-rejected, while the same path with the
+/// `Std.…` path stays IPE-N0025-rejected, while the same path with the
 /// driver-vouched `EmbeddedStdlib` origin canonicalises.
 #[test]
 fn stdlib_shadow_stays_rejected() {
@@ -345,7 +345,7 @@ fn stdlib_shadow_stays_rejected() {
                 ..
             })
         ),
-        "user file on a Std path must stay SKY-N0025-rejected, got {red:?}"
+        "user file on a Std path must stay IPE-N0025-rejected, got {red:?}"
     );
 
     // Same path, driver-vouched origin (and the annotation the stdlib gate

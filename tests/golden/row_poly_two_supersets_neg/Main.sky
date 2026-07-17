@@ -9,7 +9,7 @@ import Std.Log exposing (println)
 -- let-generalizes over record rows, so the first call site's field access
 -- pins `getName`'s record parameter to `{ name, age }`; the second call
 -- site's `{ name, id }` argument cannot unify against that pinned shape and
--- is rejected as SKY-T0001 (reference parity: E2001).
+-- is rejected as IPE-T0001 (reference parity: E2001).
 --
 -- This is the guard the class-1 "Boundary Scheme Promotion" work MUST NOT
 -- silently flip to accept: doing so without adding per-record-shape callee

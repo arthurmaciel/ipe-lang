@@ -17,7 +17,7 @@
 //!   * `Task.run (Task.fail …)`          — free (phantom) success type.
 //!
 //! The compile check is a PURE skyc build (no cargo) — the skyc-exit-0 half of
-//! the SEAL. The run check is `SKY_E2E`-gated: it builds the emitted project
+//! the SEAL. The run check is `IPE_E2E`-gated: it builds the emitted project
 //! (the cargo-exit-0 half) and runs it, asserting the RUNTIME behaviour is still
 //! correct (every discarded/empty shape yields its expected value, not just that
 //! it compiles with a default type).
@@ -63,7 +63,7 @@ fn ambiguous_kernel_turbofish_compiles() {
 /// (`List.length []`, `Dict.keys Dict.empty`, `Set.toList Set.empty`).
 #[test]
 fn ambiguous_kernel_turbofish_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let entry = golden_entry(FIXTURE);

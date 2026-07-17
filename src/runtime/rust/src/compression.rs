@@ -17,7 +17,7 @@
 //! # Decompression bomb protection
 //!
 //! Both gunzip and zstdDecompress cap decompressed output at
-//! `SKY_DECOMPRESS_MAX_BYTES` (default 256 MiB). Input that would expand
+//! `IPE_DECOMPRESS_MAX_BYTES` (default 256 MiB). Input that would expand
 //! beyond that limit is rejected with an error rather than allowed to OOM
 //! the process.
 
@@ -26,14 +26,14 @@ use std::io::{Read, Write};
 
 /// Returns the decompression output cap in bytes.
 ///
-/// Reads `SKY_DECOMPRESS_MAX_BYTES` from the environment once (lazily) and
+/// Reads `IPE_DECOMPRESS_MAX_BYTES` from the environment once (lazily) and
 /// caches the result. Falls back to 256 MiB when the variable is absent or
 /// unparseable.
 fn decompress_max_bytes() -> u64 {
     use std::sync::OnceLock;
     static CAP: OnceLock<u64> = OnceLock::new();
     *CAP.get_or_init(|| {
-        crate::system::read_env_var("SKY_DECOMPRESS_MAX_BYTES")
+        crate::system::read_env_var("IPE_DECOMPRESS_MAX_BYTES")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(256 * 1024 * 1024) // 256 MiB
@@ -65,7 +65,7 @@ fn gunzip_bytes(data: &[u8]) -> Result<Vec<u8>, String> {
         .map_err(|e| e.to_string())?;
     if out.len() as u64 > max {
         return Err(format!(
-            "decompressed output exceeds {} bytes (SKY_DECOMPRESS_MAX_BYTES)",
+            "decompressed output exceeds {} bytes (IPE_DECOMPRESS_MAX_BYTES)",
             max
         ));
     }
@@ -154,7 +154,7 @@ fn zstd_decompress_capped(data: &[u8]) -> Result<Vec<u8>, String> {
         .map_err(|e| e.to_string())?;
     if out.len() as u64 > max {
         return Err(format!(
-            "decompressed output exceeds {} bytes (SKY_DECOMPRESS_MAX_BYTES)",
+            "decompressed output exceeds {} bytes (IPE_DECOMPRESS_MAX_BYTES)",
             max
         ));
     }
@@ -224,7 +224,7 @@ mod tests {
     }
 
     /// Verify that gunzip rejects a payload that would expand beyond the cap.
-    /// We set SKY_DECOMPRESS_MAX_BYTES to a small value (16 bytes) so the test
+    /// We set IPE_DECOMPRESS_MAX_BYTES to a small value (16 bytes) so the test
     /// doesn't need to produce a real multi-GiB bomb.
     #[test]
     fn gunzip_rejects_decompression_bomb() {
@@ -250,7 +250,7 @@ mod tests {
             let _ = d.take(max.saturating_add(1)).read_to_end(&mut out);
             if out.len() as u64 > max {
                 Err(format!(
-                    "decompressed output exceeds {} bytes (SKY_DECOMPRESS_MAX_BYTES)",
+                    "decompressed output exceeds {} bytes (IPE_DECOMPRESS_MAX_BYTES)",
                     max
                 ))
             } else {
@@ -282,7 +282,7 @@ mod tests {
             let _ = d.take(max.saturating_add(1)).read_to_end(&mut out);
             if out.len() as u64 > max {
                 Err(format!(
-                    "decompressed output exceeds {} bytes (SKY_DECOMPRESS_MAX_BYTES)",
+                    "decompressed output exceeds {} bytes (IPE_DECOMPRESS_MAX_BYTES)",
                     max
                 ))
             } else {

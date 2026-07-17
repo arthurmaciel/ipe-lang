@@ -4,19 +4,19 @@
 //! Failed _ ) -> …`. The scrutinee `pair` is a VARIABLE, not a literal tuple, so
 //! the pre-tuple-match path (which needs the element expressions to apply
 //! per-column slice / `&str` coercions) did not apply and the arm fell
-//! fail-closed as SKY-L0115. It now lowers to a by-value whole `match pair { (_,
+//! fail-closed as IPE-L0115. It now lowers to a by-value whole `match pair { (_,
 //! Passed) => …, (name, Failed(_)) => … }` — no coercion, the tuple matches by
 //! value. A column that WOULD need coercion (a string literal, or a cons / list
 //! sub-pattern) still requires the literal-tuple scrutinee, so it stays
 //! fail-closed on the non-literal path (the coercion machinery only exists for a
 //! literal-tuple scrutinee).
 //!
-//! Gate check (fast, always): `skyc build` succeeds — no SKY-L0115.
-//! Green check (`SKY_E2E=1`): the emitted Rust cargo-builds AND runs, proving the
+//! Gate check (fast, always): `skyc build` succeeds — no IPE-L0115.
+//! Green check (`IPE_E2E=1`): the emitted Rust cargo-builds AND runs, proving the
 //! Seal (skyc-0 ⟹ cargo-0) for the by-value whole tuple-match codegen.
 //!
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_tuple_multiarm_var_scrutinee
+//! IPE_E2E=1 cargo test -p skyc --test golden_tuple_multiarm_var_scrutinee
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -37,7 +37,7 @@ fn fixture_entry() -> PathBuf {
 }
 
 /// Fast gate: a multi-arm refutable tuple `case` on a VARIABLE scrutinee builds
-/// cleanly — the SKY-L0115 product gap is closed for the `Sky.Test.summarise`
+/// cleanly — the IPE-L0115 product gap is closed for the `Sky.Test.summarise`
 /// shape.
 #[test]
 fn var_scrutinee_tuple_case_builds() {
@@ -50,7 +50,7 @@ fn var_scrutinee_tuple_case_builds() {
     let built = skyc::build(&fixture_entry(), &out, &runtime);
     assert!(
         built.is_ok(),
-        "variable-scrutinee multi-arm tuple `case` must build (SKY-L0115 close); got {:?}",
+        "variable-scrutinee multi-arm tuple `case` must build (IPE-L0115 close); got {:?}",
         built.err()
     );
 }
@@ -59,7 +59,7 @@ fn var_scrutinee_tuple_case_builds() {
 /// `7 + 0 + 10 + 20 + 30 + 105 + 200 == 372`.
 #[test]
 fn var_scrutinee_tuple_case_cargo_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -13,13 +13,13 @@
 ## Classes
 
 1. **Type-system inference & soundness oracles** — GUARDIAN-DESIGN-REQUIRED.
-   Inference cluster #2 (blocks Tier-1 sweep-green), ex27 SKY-L0102, AUD-09's
+   Inference cluster #2 (blocks Tier-1 sweep-green), ex27 IPE-L0102, AUD-09's
    Bug-29 any-return-matches-any-Con, #56, #66-T2, #66-N second half.
 2. **Tier-1 sweep/CI/push infrastructure** — MECHANICAL. #35, #110, #37.
 3. **Kernel-registry & emitted-name integrity** — MECHANICAL. AUD-08, #45,
    #70, #71, AUD-09's `Match::from_parts_unchecked` pub.
 4. **Pattern & lowering completeness bugs** — MECHANICAL (diagnosis-first).
-   SKY-I0001 interp ICE, #90, #158, #102, #32.
+   IPE-I0001 interp ICE, #90, #158, #102, #32.
 5. **Emitter clone/borrow discipline + typed-token backend** — split:
    #99/#125/#142/AUD-09's O(n²) clone are MECHANICAL; #53 is
    GUARDIAN-DESIGN-REQUIRED (whole-backend rewrite), scheduled last.

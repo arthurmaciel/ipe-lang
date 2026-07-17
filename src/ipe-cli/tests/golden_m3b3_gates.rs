@@ -2,14 +2,14 @@
 //!
 //! * Int / Char / String are OPEN types: literal arms with no wildcard / variable
 //!   catch-all do not cover every value, so the `case` is non-exhaustive →
-//!   SKY-T0010 (the soundness floor — a non-exhaustive Sky `case` MUST be caught
+//!   IPE-T0010 (the soundness floor — a non-exhaustive Sky `case` MUST be caught
 //!   before emit, never deferred to a rustc E0004 / `unreachable!()` fallback).
 //! * A literal arm AFTER a wildcard catch-all matches no value left open → the
-//!   redundant-branch warning SKY-T0011.
+//!   redundant-branch warning IPE-T0011.
 //!
 //! Each is driven through the full `skyc` pipeline and asserted to produce its
 //! exact code. The Go reference accepts a redundant branch silently; the Rust
-//! backend is deliberately stricter (it reports SKY-T0011) — a documented,
+//! backend is deliberately stricter (it reports IPE-T0011) — a documented,
 //! never-silently-wrong divergence.
 
 use std::path::{Path, PathBuf};
@@ -51,11 +51,11 @@ fn non_exhaustive_int_case_is_sky_t0010() {
     assert_gate(
         "gate_nonexhaustive_open_int",
         "m3b3_gate_nonexhaustive_emit",
-        ipe_diagnostics::SKY_T0010,
+        ipe_diagnostics::IPE_T0010,
     );
 }
 
-/// `SKY-T0011` is a WARNING (Go-reference parity — see the
+/// `IPE-T0011` is a WARNING (Go-reference parity — see the
 /// matching note in `golden_m3b2_gates`). The build must SUCCEED.
 #[test]
 fn redundant_branch_after_catch_all_is_sky_t0011_warning_build_succeeds() {
@@ -74,7 +74,7 @@ fn redundant_branch_after_catch_all_is_sky_t0011_warning_build_succeeds() {
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "redundant branch after catch-all must WARN (SKY-T0011) and build, got: {:?}",
+        "redundant branch after catch-all must WARN (IPE-T0011) and build, got: {:?}",
         built.err()
     );
 }

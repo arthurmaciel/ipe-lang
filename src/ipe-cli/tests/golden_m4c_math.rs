@@ -23,10 +23,10 @@
 //!    signs), `floor` / `ceil` / `trunc` on a negative (the three round
 //!    differently), `mod` vs `remainder`, and the `pi` / `nan` constants.
 //!
-//! Every test is gated on `SKY_E2E=1`; without it the test returns early. Run:
+//! Every test is gated on `IPE_E2E=1`; without it the test returns early. Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test golden_m4c_math
+//! IPE_E2E=1 cargo test golden_m4c_math
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -45,9 +45,9 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 /// Compile `tests/golden/<name>/Main.sky`, build the emitted Cargo project,
 /// run it, and assert its stdout matches the cached oracle (the Go reference
 /// for a parity case, or Sky-Rust's own recorded output for a `divergence:`
-/// entry). Gated on `SKY_E2E=1`.
+/// entry). Gated on `IPE_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

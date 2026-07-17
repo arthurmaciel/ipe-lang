@@ -600,7 +600,7 @@ binaries are genuinely multi-home and legitimately split**, each regenerated
 tests.) The pilot fixture (§5 Tasks 8/11/12) additionally exercises the
 real split against a Db-using user-module program; the stdlib-source split
 (css/grid/transition) is a NEW SEAL surface the pilot did NOT cover, closed
-in Task 13 by building each of those emitted projects under `SKY_E2E` and
+in Task 13 by building each of those emitted projects under `IPE_E2E` and
 confirming the relocated leaf kernels still resolve via `use crate::*;`.
 
 The `>= 2` split trigger was deliberately NOT narrowed to exclude stdlib
@@ -1505,14 +1505,14 @@ epilogue, and `fn main()`) and
 
 5. Run the pilot test again — green.
 
-6. Gated by `SKY_E2E=1`: run the pilot fixture's end-to-end
+6. Gated by `IPE_E2E=1`: run the pilot fixture's end-to-end
    build-and-run test (modelled on `golden_m0.rs`'s
    `end_to_end_builds_and_prints_one`) — confirms THE SEAL: the newly
    multi-file, `Std.Db`-using emitted project actually `cargo build`s and
    runs correctly, not just that its TEXT matches a golden.
 
 **Verify.** `cargo test -p skyc --test golden_multi_mod_split_pilot` green;
-`SKY_E2E=1 cargo test -p skyc --test golden_multi_mod_split_pilot
+`IPE_E2E=1 cargo test -p skyc --test golden_multi_mod_split_pilot
 end_to_end` green.
 **Done when.** The real per-Sky-module split exists, is proven correct
 against ONE pilot fixture at both the byte level and the `cargo build`
@@ -1572,7 +1572,7 @@ cargo test -p skyc --test 'golden_*' --no-fail-fast
      tree (`main.rs` + `sky_mods/*.rs`) via a new shared
      `support::read_all_emitted_src` helper — robust to future placement,
      preferred over hard-coding the new path. Build the css/grid/transition
-     emitted projects under `SKY_E2E=1` to confirm the relocated leaf kernels
+     emitted projects under `IPE_E2E=1` to confirm the relocated leaf kernels
      resolve via `use crate::*;` and the split project cargo-builds — the SEAL
      for the stdlib-home split, which the pilot (a Db/user-module case) did NOT
      cover.
@@ -1815,9 +1815,9 @@ salsa event-stream assertion, not inferred from the query graph's shape.
 | `sky_backend_rust::golden::*` (re-run, Task 5) | Routing `emit_program` through `partition_items` changes zero emitted bytes for every existing single-module golden, INCLUDING the `Std.Db` goldens (`golden_m5b_db`, `golden_m5b_db_gates`, `golden_db_wrapper_empty_params_165`) the Task-5 ordering rule protects |
 | `skyc::golden_m0::emits_byte_identical_main_rs_and_vendors_runtime` (Task 7) | The new directory-diff helper has identical discriminating power to the retired single-file `assert_eq!` |
 | `skyc::golden_harness_coverage::every_non_allowlisted_golden_test_calls_the_shared_helper` (Task 9) | Migration completeness is a machine-checked POSITIVE structural proof (every non-allowlisted golden calls the shared helper), not a negative grep a syntactically-different stale pattern could dodge, and not a one-time claim |
-| `skyc::golden_multi_mod_split_pilot::*` (Tasks 11-12) | The real split's byte-level output, the multi-module + `Std.Db` `SqlValue`/`SqlField`-routing interaction (§2.2's fix, previously unverified per independent review), AND (`SKY_E2E`-gated) `cargo build` success on the FIRST genuinely-split fixture |
+| `skyc::golden_multi_mod_split_pilot::*` (Tasks 11-12) | The real split's byte-level output, the multi-module + `Std.Db` `SqlValue`/`SqlField`-routing interaction (§2.2's fix, previously unverified per independent review), AND (`IPE_E2E`-gated) `cargo build` success on the FIRST genuinely-split fixture |
 | Full golden suite re-run, `git diff --stat tests/golden/` (Task 13) | Measured blast radius: the vast majority of the 155 goldens need no file changes, but ~6 tests / 5 binaries are genuinely multi-home (§3.3 table) and legitimately split — each regenerated to its correct multi-file shape and SEAL-verified (`cargo build` + run of the split project), not narrowed away. The ORIGINAL "zero blast radius / 154 of 155" claim was a false premise, corrected here in place. |
-| `skyc::{golden_mm,golden_class1_boundary_scheme_field_result,golden_css_source,golden_stdui_grid_seal,golden_stdui_transition_seal}` (Task 13, corrected) | Each genuinely-multi-home golden's post-split output: dir-diff goldens (`mm_diamond`/`mm_local_pkg`) byte-lock Spine-only `main.rs` + barrel + every `sky_mods/*.rs` (symmetric compare); substring goldens scan the whole emitted `src/` tree via `support::read_all_emitted_src`; the css/grid/transition splits `cargo build` under `SKY_E2E` (the stdlib-home SEAL the pilot did not cover) |
+| `skyc::{golden_mm,golden_class1_boundary_scheme_field_result,golden_css_source,golden_stdui_grid_seal,golden_stdui_transition_seal}` (Task 13, corrected) | Each genuinely-multi-home golden's post-split output: dir-diff goldens (`mm_diamond`/`mm_local_pkg`) byte-lock Spine-only `main.rs` + barrel + every `sky_mods/*.rs` (symmetric compare); substring goldens scan the whole emitted `src/` tree via `support::read_all_emitted_src`; the css/grid/transition splits `cargo build` under `IPE_E2E` (the stdlib-home SEAL the pilot did not cover) |
 | `sky_db::phase9_emit_rust_file::emit_spine_file_memoized_coarse_floor` / `emit_rust_file_memoized_per_file` / `program_rust_file_ids_tracks_module_add_delete` (Task 15) | Real salsa memoization + the module-add/delete visibility edge, matching every prior phase's proof-test rigor |
 | `sky_db::phase9_emit_rust_file::emit_manifest_matches_emit_project_for_single_module` (Task 16) | The Spine-collapse invariant holds at the SALSA layer, not just the backend layer |
 | `skyc::clean_vs_incremental_parity` + `adversarial_review_parity_probe` (re-run, Task 16) | THE SEAL and the parity gate hold after `compile_prepared` switches to `emit_manifest` |

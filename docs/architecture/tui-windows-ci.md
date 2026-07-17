@@ -180,7 +180,7 @@ forever* — the primary false-green this design forbids. Keep three
 distinct checks:
 
 ```
-windows-latest, shell: bash (Git Bash), SKY_HOST_OS=windows:
+windows-latest, shell: bash (Git Bash), IPE_HOST_OS=windows:
 
   tui-build   RUN  — skyc emit (assert exit 0, no panic / no CompilerBug)
                      + `cargo build --features tui` (MSVC; crossterm + tokio link).
@@ -205,7 +205,7 @@ windows-latest, shell: bash (Git Bash), SKY_HOST_OS=windows:
   invariant   — render-cone purity fence (§5.3). Violation = RED.
 ```
 
-`SKY_HOST_OS=windows` already resolves via `$OSTYPE`
+`IPE_HOST_OS=windows` already resolves via `$OSTYPE`
 (`msys*|cygwin*|win*`) in `checks.sh`; no extra detection needed.
 
 ### 5.2 RUN scope — per-host capability, not per-example (be precise)
@@ -327,7 +327,7 @@ Legend line:
   correct permanent guard. The RUN is sound today on the interim
   fence because §3's no-static-ctor premise holds at the pinned
   crossterm 0.28.
-- **OPEN-2 (per-example render coverage — `SKY_TUI_RENDER_ONCE`).**
+- **OPEN-2 (per-example render coverage — `IPE_TUI_RENDER_ONCE`).**
   Whether to add a headless one-shot to `tui_app` / `tui_app_ui`
   that early-returns before `TuiGuard::enter`, computes `init →
   render_with_focus(view(model)) → print frame → exit(0)`, giving
@@ -343,7 +343,7 @@ Legend line:
     shipped driver is rejected.
   - Cols/rows source is a latent console leak: it MUST come from the
     Tui cfg's `canvasWidth`/`canvasHeight` (or a fixed
-    `SKY_TUI_RENDER_COLS`/`ROWS`), **never**
+    `IPE_TUI_RENDER_COLS`/`ROWS`), **never**
     `crossterm::terminal::size()`.
   - The early-return MUST be provably the **first** statement of the
     driver, structurally before **any** crossterm call (including

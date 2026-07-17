@@ -7,7 +7,7 @@ import Std.Ui.Lazy as Lazy
 
 -- i146 regression: LazyLazy..LazyLazy5 emit arms.
 -- Lazy.lazy and Lazy.lazy2 must lower to sky_runtime::ui::lazy helpers
--- without SKY-I0001 "no emit arm".
+-- without IPE-I0001 "no emit arm".
 -- oracle_divergence = true: Go oracle does not expose Html.htmlRender.
 
 

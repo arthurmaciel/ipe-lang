@@ -1075,7 +1075,7 @@ pub enum StdlibKernel {
     // Std.Cli / Sky.Cli — line-oriented TEA app-entry (fully wired).
     CliProgram,
     // Std.Auth / Sky.Auth — authentication helpers (fail-closed: no lower arm
-    // yet → SKY-L0108 at lower time; qualified registration removes N0004).
+    // yet → IPE-L0108 at lower time; qualified registration removes N0004).
     AuthHashPassword,
     AuthHashPasswordCost,
     AuthVerifyPassword,

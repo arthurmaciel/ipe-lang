@@ -284,7 +284,7 @@ impl Pattern_ {
     ///
     /// This is the single, purely-**syntactic** contract shared by the
     /// exhaustiveness gate (which rejects a refutable *parameter* pattern with
-    /// SKY-T0015) and the lowerer (which `bug()`-asserts irrefutability before
+    /// IPE-T0015) and the lowerer (which `bug()`-asserts irrefutability before
     /// desugaring a param to an irrefutable `Destructure`). Keeping it one
     /// predicate makes the gate and the lowerer's capability set structurally
     /// impossible to desync.

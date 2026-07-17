@@ -5,10 +5,10 @@ module Main exposing (main)
 -- The Set element variable carries the Sky `comparable`-key obligation
 -- (`TyBounds::set_elem`, → Rust `Ord`), so the forwarder generalises to a Rust
 -- generic bounded by `Ord`.  Instantiating it at a RECORD — which Rust cannot
--- order — is rejected here at type-check (SKY-T0014) rather than emitting an
+-- order — is rejected here at type-check (IPE-T0014) rather than emitting an
 -- unbounded `singleton_set::<T>` that `cargo` cannot build.
 -- (Calling `Set.insert { x = 1 } Set.empty` directly is the eager-pin sibling
--- and surfaces SKY-T0001; both fail closed with no Rust emitted.)
+-- and surfaces IPE-T0001; both fail closed with no Rust emitted.)
 
 import Sky.Core.Set as Set
 

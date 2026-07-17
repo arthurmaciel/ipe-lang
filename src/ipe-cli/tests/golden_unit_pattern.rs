@@ -1,6 +1,6 @@
 //! Unit-value gate: the `()` literal as an expression. `skyc`
 //! must emit `main.rs` byte-identical to the checked-in golden, and (behind
-//! `SKY_E2E=1`) the emitted project must build and print `7`.
+//! `IPE_E2E=1`) the emitted project must build and print `7`.
 //!
 //! ```text
 //! useUnit u = 7
@@ -54,10 +54,10 @@ fn emits_byte_identical_main_rs() {
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
 /// unit-value program prints `7` — the same value the Go backend produces.
-/// Gated on `SKY_E2E=1` so the default `cargo test` stays fast.
+/// Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn end_to_end_builds_and_prints_seven() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

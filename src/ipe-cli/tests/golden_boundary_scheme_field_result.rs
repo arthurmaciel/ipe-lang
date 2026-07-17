@@ -41,7 +41,7 @@
 //!    every `obligation_roots` case has been (or ever will be) fully
 //!    enumerated.
 //!
-//! This test is deliberately an ACTUAL `cargo build` (gated `SKY_E2E=1`),
+//! This test is deliberately an ACTUAL `cargo build` (gated `IPE_E2E=1`),
 //! not just a `ipe_types` unit test — the prior attempt's own unit-test
 //! matrix (including
 //! `obligation_gated_untyped_def_single_record_type_cross_module_use_accepted`)
@@ -60,7 +60,7 @@
 //!
 //! Run:
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_class1_boundary_scheme_field_result
+//! IPE_E2E=1 cargo test -p skyc --test golden_class1_boundary_scheme_field_result
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -74,7 +74,7 @@ fn repo_root() -> PathBuf {
 
 /// skyc-0: the compiler must accept the 3-module program and emit a
 /// concrete (non-generic) `lib1_get_name`. Checked unconditionally (cheap,
-/// no `cargo`), independent of the `SKY_E2E` gate below.
+/// no `cargo`), independent of the `IPE_E2E` gate below.
 #[test]
 fn class1_field_result_skyc_accepts_and_emits_concrete_getter() {
     let root = repo_root();
@@ -129,12 +129,12 @@ fn class1_field_result_skyc_accepts_and_emits_concrete_getter() {
 }
 
 /// cargo-0 ∧ run-0: the emitted project actually compiles with `rustc` and
-/// prints the field it read. Gated on `SKY_E2E=1` — a real `cargo build`,
+/// prints the field it read. Gated on `IPE_E2E=1` — a real `cargo build`,
 /// the only check that would have caught the original SEAL violation (every
 /// `ipe_types` unit test in the prior attempt passed despite the bug).
 #[test]
 fn class1_field_result_cargo_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

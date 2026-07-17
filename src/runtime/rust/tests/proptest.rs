@@ -115,18 +115,18 @@ mod task_tests {
     #[test]
     fn system_getenv_present_is_ok() {
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("SKY_TEST_GETENV_PRESENT", "hello") };
+        unsafe { std::env::set_var("IPE_TEST_GETENV_PRESENT", "hello") };
         let t: SkyTask<SkyError, String> =
-            system_getenv::<SkyError>("SKY_TEST_GETENV_PRESENT".to_string());
+            system_getenv::<SkyError>("IPE_TEST_GETENV_PRESENT".to_string());
         assert_eq!(run(t), SkyResult::Ok("hello".to_string()));
     }
 
     #[test]
     fn system_getenv_unset_is_err() {
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("SKY_TEST_GETENV_UNSET_XYZ_42") };
+        unsafe { std::env::remove_var("IPE_TEST_GETENV_UNSET_XYZ_42") };
         let t: SkyTask<SkyError, String> =
-            system_getenv::<SkyError>("SKY_TEST_GETENV_UNSET_XYZ_42".to_string());
+            system_getenv::<SkyError>("IPE_TEST_GETENV_UNSET_XYZ_42".to_string());
         assert!(run(t).is_err());
     }
 
@@ -136,24 +136,24 @@ mod task_tests {
     #[test]
     fn system_getenv_int_ok_and_errs() {
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("SKY_TEST_INT_OK", "42") };
+        unsafe { std::env::set_var("IPE_TEST_INT_OK", "42") };
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("SKY_TEST_INT_BAD", "abc") };
+        unsafe { std::env::set_var("IPE_TEST_INT_BAD", "abc") };
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("SKY_TEST_INT_UNSET") };
+        unsafe { std::env::remove_var("IPE_TEST_INT_UNSET") };
         assert_eq!(
-            run(system_getenv_int::<SkyError>("SKY_TEST_INT_OK".to_string())),
+            run(system_getenv_int::<SkyError>("IPE_TEST_INT_OK".to_string())),
             SkyResult::Ok(42)
         );
         assert!(
             run(system_getenv_int::<SkyError>(
-                "SKY_TEST_INT_BAD".to_string()
+                "IPE_TEST_INT_BAD".to_string()
             ))
             .is_err()
         );
         assert!(
             run(system_getenv_int::<SkyError>(
-                "SKY_TEST_INT_UNSET".to_string()
+                "IPE_TEST_INT_UNSET".to_string()
             ))
             .is_err()
         );
@@ -162,34 +162,34 @@ mod task_tests {
     #[test]
     fn system_getenv_bool_truthy_falsy_unset() {
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("SKY_TEST_BOOL_T", "yes") };
+        unsafe { std::env::set_var("IPE_TEST_BOOL_T", "yes") };
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("SKY_TEST_BOOL_F", "0") };
+        unsafe { std::env::set_var("IPE_TEST_BOOL_F", "0") };
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("SKY_TEST_BOOL_BAD", "maybe") };
+        unsafe { std::env::set_var("IPE_TEST_BOOL_BAD", "maybe") };
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("SKY_TEST_BOOL_UNSET") };
+        unsafe { std::env::remove_var("IPE_TEST_BOOL_UNSET") };
         assert_eq!(
             run(system_getenv_bool::<SkyError>(
-                "SKY_TEST_BOOL_T".to_string()
+                "IPE_TEST_BOOL_T".to_string()
             )),
             SkyResult::Ok(true)
         );
         assert_eq!(
             run(system_getenv_bool::<SkyError>(
-                "SKY_TEST_BOOL_F".to_string()
+                "IPE_TEST_BOOL_F".to_string()
             )),
             SkyResult::Ok(false)
         );
         assert!(
             run(system_getenv_bool::<SkyError>(
-                "SKY_TEST_BOOL_BAD".to_string()
+                "IPE_TEST_BOOL_BAD".to_string()
             ))
             .is_err()
         );
         assert!(
             run(system_getenv_bool::<SkyError>(
-                "SKY_TEST_BOOL_UNSET".to_string()
+                "IPE_TEST_BOOL_UNSET".to_string()
             ))
             .is_err()
         );

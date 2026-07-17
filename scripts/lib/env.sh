@@ -34,21 +34,21 @@ mkdir -p "$CARGO_TARGET_DIR" || {
 
 # sccache (RUSTC_WRAPPER) caches each rustc by content hash — the big LOCAL win,
 # coupled to CARGO_INCREMENTAL=0 (sccache caches NOTHING with incremental=true).
-# SKY_NO_SCCACHE=1 force-disables it; CI sets that (GitHub retired the v1
+# IPE_NO_SCCACHE=1 force-disables it; CI sets that (GitHub retired the v1
 # Actions-Cache API sccache's GHA backend depends on) and relies on actions/cache
 # of CARGO_TARGET_DIR + ~/.cargo instead — leaving CARGO_INCREMENTAL at cargo's
 # default so a persisted target dir does incremental rebuilds.
-if [ -z "${SKY_NO_SCCACHE:-}" ] && command -v sccache >/dev/null 2>&1; then
+if [ -z "${IPE_NO_SCCACHE:-}" ] && command -v sccache >/dev/null 2>&1; then
     export RUSTC_WRAPPER="${RUSTC_WRAPPER:-sccache}"
     export CARGO_INCREMENTAL=0
 fi
 
 # ── Repo-root detection → REPO ───────────────────────────────────────────────
-# Honour an explicit SKY_REPO; else detect via this file's location (works from
-# any subdir of any clone). Don't cd — that's the caller's. Only SKY_REPO seeds
+# Honour an explicit IPE_REPO; else detect via this file's location (works from
+# any subdir of any clone). Don't cd — that's the caller's. Only IPE_REPO seeds
 # the root; REPO is a common var other tooling exports, so trusting an inherited
 # value would poison every "$REPO/…" path.
-REPO="${SKY_REPO:-}"
+REPO="${IPE_REPO:-}"
 [ -z "$REPO" ] && [ -f "$PWD/scripts/lib/examples.sh" ] && REPO="$PWD"
 if [ -z "$REPO" ]; then
   _env_sh_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
@@ -58,7 +58,7 @@ if [ -z "$REPO" ]; then
   unset _env_sh_dir
 fi
 if [ -z "$REPO" ]; then
-  echo "env.sh: could not locate repo root (set SKY_REPO to override)" >&2
+  echo "env.sh: could not locate repo root (set IPE_REPO to override)" >&2
   return 1 2>/dev/null || exit 1
 fi
 export REPO
@@ -89,4 +89,4 @@ export SKYC_BIN="${SKYC_BIN:-$CARGO_TARGET_DIR/release/skyc}"
 # UNSET it auto-resolves by walking up to `$REPO/src/runtime/rust/src/sky_runtime`
 # (resolve_runtime() in src/ipe-cli/src/lib.rs). We export the explicit path so
 # the sweep is independent of the invocation CWD; callers may override.
-export SKY_RUNTIME_DIR="${SKY_RUNTIME_DIR:-$REPO/src/runtime/rust/src/sky_runtime}"
+export IPE_RUNTIME_DIR="${IPE_RUNTIME_DIR:-$REPO/src/runtime/rust/src/sky_runtime}"

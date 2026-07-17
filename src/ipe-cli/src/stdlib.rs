@@ -222,7 +222,7 @@ const TOSTRING_CORE: &str = include_str!("../../stdlib/Sky/Core/ToString.sky");
 /// all assertion helpers.  `expectErrorKind` / `kindName` are OMITTED pending
 /// the `Sky.Core.Error` compiled-source migration; `summarise` is pure (no IO).
 /// Disjoint from `STDLIB_MODULE_QUALIFIERS` (no `"Test"` entry exists there).
-const SKY_TEST: &str = include_str!("../../stdlib/Sky/Test.sky");
+const IPE_TEST: &str = include_str!("../../stdlib/Sky/Test.sky");
 
 /// `Std.Live.Head` — typed `<head>` helpers for Sky.Live per-page injection.
 ///
@@ -260,7 +260,7 @@ const STD_UI_CHART: &str = include_str!("../../stdlib/Std/Ui/Chart.sky");
 /// Ported from `../sky/sky-stdlib/Std/Ui/Grid.sky`; divergence recorded in
 /// `docs/divergences-from-sky.md` (typed carrier vs reference's sentinel approach).
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
-/// Unblocks `26-ui-showcase` (SKY-N0004: Std.Ui.Grid — Grid.columns/fr/px).
+/// Unblocks `26-ui-showcase` (IPE-N0004: Std.Ui.Grid — Grid.columns/fr/px).
 const STD_UI_GRID: &str = include_str!("../../stdlib/Std/Ui/Grid.sky");
 
 /// `Std.Ui.Transition` — typed CSS transition `Step`/`Easing` ADTs +
@@ -273,13 +273,13 @@ const STD_UI_GRID: &str = include_str!("../../stdlib/Std/Ui/Grid.sky");
 /// `import Std.Ui exposing (transitionRaw)` is qualified to `Ui.transitionRaw`
 /// (mirrors the `Std.Ui.Grid` port's `Ui.style` call).
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
-/// Unblocks `26-ui-showcase` (SKY-N0004: Std.Ui.Transition).
+/// Unblocks `26-ui-showcase` (IPE-N0004: Std.Ui.Transition).
 const STD_UI_TRANSITION: &str = include_str!("../../stdlib/Std/Ui/Transition.sky");
 
 /// `Std.Ui.Transform` — typed CSS transform / opacity helpers for `Ui.animate`
 /// keyframes. Pure Sky; uses only `Sky.Core.*` internals — no
 /// native primitive needed. Not in `STDLIB_MODULE_QUALIFIERS` so disjointness
-/// invariant holds. Unblocks `26-ui-showcase` (SKY-N0004: Std.Ui.Transform).
+/// invariant holds. Unblocks `26-ui-showcase` (IPE-N0004: Std.Ui.Transform).
 const STD_UI_TRANSFORM: &str = include_str!("../../stdlib/Std/Ui/Transform.sky");
 
 /// `Std.Ui.Animation` — typed CSS keyframe-animation `Iterations`/`FillMode`
@@ -296,7 +296,7 @@ const STD_UI_TRANSFORM: &str = include_str!("../../stdlib/Std/Ui/Transform.sky")
 /// Depends on the sibling `Std.Ui.Transition` (`Easing`) and `Std.Ui.Transform`
 /// (`Prop`/`propsToCss`) ports.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
-/// Unblocks `26-ui-showcase` (SKY-N0004: Std.Ui.Animation — Animation.attribute).
+/// Unblocks `26-ui-showcase` (IPE-N0004: Std.Ui.Animation — Animation.attribute).
 const STD_UI_ANIMATION: &str = include_str!("../../stdlib/Std/Ui/Animation.sky");
 
 /// `Std.Money` — currency-typed Money on `Std.Decimal` + ISO 4217 enum.
@@ -316,11 +316,11 @@ const STD_MONEY: &str = include_str!("../../stdlib/Std/Money.sky");
 /// mechanism, `ipe_canon::resolve::detect_kernel_alias`).  ARITY-BLOCKED: the
 /// `uuidV4Kernel`/`uuidV7Kernel` helpers annotate an arity-0 `Task Error String`
 /// value over the arity-1 `Uuid_v4`/`Uuid_v7` kernels (`() -> Task Error String`),
-/// so they are rejected with SKY-T0001 at type-check until an
+/// so they are rejected with IPE-T0001 at type-check until an
 /// arity-0-alias-of-nullary-effect-kernel lowering exists.  See
 /// `docs/divergences-from-sky.md` §B-FfiKernelAliasSealed.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
-const SKY_CORE_PURE: &str = include_str!("../../stdlib/Sky/Core/Pure.sky");
+const IPE_CORE_PURE: &str = include_str!("../../stdlib/Sky/Core/Pure.sky");
 
 /// `Sky.Core.WebSocket` — outbound WebSocket client (compiled source).
 ///
@@ -335,7 +335,7 @@ const SKY_CORE_PURE: &str = include_str!("../../stdlib/Sky/Core/Pure.sky");
 /// gated behind the `websocket_client` feature the backend adds via
 /// `uses_websocket`. Resolved via the `Ffi.kernel` alias fast-path, so the
 /// `WebSocket` qualifier stays out of `STDLIB_MODULE_QUALIFIERS`.
-const SKY_CORE_WEBSOCKET: &str = include_str!("../../stdlib/Sky/Core/WebSocket.sky");
+const IPE_CORE_WEBSOCKET: &str = include_str!("../../stdlib/Sky/Core/WebSocket.sky");
 
 /// `Std.Cache` — in-memory LRU + TTL cache (compiled source).
 ///
@@ -353,7 +353,7 @@ const STD_CACHE: &str = include_str!("../../stdlib/Std/Cache.sky");
 /// `Std.Compression` — gzip + zstd compression (compiled source).
 ///
 /// KERNEL-BLOCKED: no `Compression_*` kernel variants exist — member use
-/// fails closed with SKY-N0028.
+/// fails closed with IPE-N0028.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_COMPRESSION: &str = include_str!("../../stdlib/Std/Compression.sky");
 
@@ -363,7 +363,7 @@ const STD_COMPRESSION: &str = include_str!("../../stdlib/Std/Compression.sky");
 /// (`IrType::Decoder`, runtime `ipe_runtime::json::Decoder<E, T>`), the same one
 /// `Sky.Core.Json.Decode` names as a bare reserved builtin. RESOLVES (skyc-0
 /// AND cargo-0): (a) `Std.Config`'s `Decoder` re-declaration is exempted
-/// from SKY-N0026 via `ipe_canon`'s `STDLIB_DEFINABLE_CARRIER_TYPES` (trusted
+/// from IPE-N0026 via `ipe_canon`'s `STDLIB_DEFINABLE_CARRIER_TYPES` (trusted
 /// `EmbeddedStdlib` origin only — user shadowing stays rejected); the ABOVE-guard
 /// `Decoder` lowerer arm + `is_opaque_boxed_wrapper` make the re-declaration
 /// lower to the shared carrier with no competing enum. (b) The 16 `Config_*`
@@ -377,7 +377,7 @@ const STD_CONFIG: &str = include_str!("../../stdlib/Std/Config.sky");
 /// `Std.Csv` — CSV encode + decode (compiled source).
 ///
 /// Defines `type alias Csv` + pure Sky builders.  KERNEL-BLOCKED: no
-/// `Csv_*` kernel variants exist — member use fails closed with SKY-N0028.
+/// `Csv_*` kernel variants exist — member use fails closed with IPE-N0028.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_CSV: &str = include_str!("../../stdlib/Std/Csv.sky");
 
@@ -385,7 +385,7 @@ const STD_CSV: &str = include_str!("../../stdlib/Std/Csv.sky");
 ///
 /// Defines `type EmailProvider` + `type alias EmailMessage` ADTs.  KERNEL-BLOCKED:
 /// no `Email_*` kernel variant exists — member use fails closed with
-/// SKY-N0028.
+/// IPE-N0028.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_EMAIL: &str = include_str!("../../stdlib/Std/Email.sky");
 
@@ -410,7 +410,7 @@ const STD_PUBSUB: &str = include_str!("../../stdlib/Std/PubSub.sky");
 /// `Std.Trace` — opt-in distributed-tracing spans (compiled source).
 ///
 /// KERNEL-BLOCKED: no `Trace_*` kernel variants exist — member use fails
-/// closed with SKY-N0028.
+/// closed with IPE-N0028.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_TRACE: &str = include_str!("../../stdlib/Std/Trace.sky");
 
@@ -443,7 +443,7 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     },
     CompiledStdModule {
         dotted: "Sky.Test",
-        source: SKY_TEST,
+        source: IPE_TEST,
     },
     CompiledStdModule {
         dotted: "Std.Live.Head",
@@ -479,11 +479,11 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
     },
     CompiledStdModule {
         dotted: "Sky.Core.Pure",
-        source: SKY_CORE_PURE,
+        source: IPE_CORE_PURE,
     },
     CompiledStdModule {
         dotted: "Sky.Core.WebSocket",
-        source: SKY_CORE_WEBSOCKET,
+        source: IPE_CORE_WEBSOCKET,
     },
     CompiledStdModule {
         dotted: "Std.Cache",

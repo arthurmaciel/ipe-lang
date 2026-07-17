@@ -37,7 +37,7 @@ emission in the lowerer, a much larger change through a concurrent lane.
   payloads are runtime-origin values.
 - Field access (`p.message`, `p.stack`) keeps working via fixed field tables.
 - Record *update* (`{ p | message = … }`) is rejected at `skyc` time with the
-  dedicated `SKY-T0017` ("built-in type — fields readable but cannot be rebuilt
+  dedicated `IPE-T0017` ("built-in type — fields readable but cannot be rebuilt
   with record-update syntax").
 - **Invariant that must keep holding:** one Sky type, one Rust lowering — the
   structural/nominal mismatch is unrepresentable by construction. An unannotated

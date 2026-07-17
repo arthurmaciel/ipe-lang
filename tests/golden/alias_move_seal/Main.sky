@@ -1,7 +1,7 @@
 module Main exposing (main)
 import Sky.Core.Prelude exposing (..)
 
--- SKY-L0105 by-VALUE alias binding — the partial-move (E0382) seal.
+-- IPE-L0105 by-VALUE alias binding — the partial-move (E0382) seal.
 --
 -- In every position below an `as`-alias over a destructure binds BOTH the whole
 -- (`whole` / `inner`) AND its sub-parts, and ALL of them are used in the body.

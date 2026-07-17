@@ -3,7 +3,7 @@
 //! `Email.send`, and the `EmailProvider` ADT is constructed via its `Resend`
 //! ctor.
 //!
-//! Before the fold, `Std.Email` fail-closed at skyc time with SKY-N0028 (no
+//! Before the fold, `Std.Email` fail-closed at skyc time with IPE-N0028 (no
 //! registered `Email_send` kernel). Registering the kernel across every
 //! anti-drift site AND folding the `EmailMessage` / `Attachment` record shapes
 //! (plus the `EmailProvider` ADT) to their nominal runtime types
@@ -15,10 +15,10 @@
 //!
 //! ## Why the emit-only assertions run in the DEFAULT gate
 //!
-//! `SKY_E2E`-gated tests do not run in the default `cargo nextest` gate. This
+//! `IPE_E2E`-gated tests do not run in the default `cargo nextest` gate. This
 //! file's first test inspects the emitted app modules (no cargo build) so it
-//! runs in the DEFAULT gate and pins the regression even when `SKY_E2E` is
-//! unset; the second test is the `SKY_E2E`-gated cargo-build proof that the
+//! runs in the DEFAULT gate and pins the regression even when `IPE_E2E` is
+//! unset; the second test is the `IPE_E2E`-gated cargo-build proof that the
 //! emitted crate (with the vendored `email` module + the `lettre` dep) actually
 //! compiles.
 
@@ -126,9 +126,9 @@ fn email_literals_emit_runtime_structs_and_provider_variant() {
     );
 }
 
-/// The load-bearing SEAL proof: under `SKY_E2E=1`, actually `cargo build` the
+/// The load-bearing SEAL proof: under `IPE_E2E=1`, actually `cargo build` the
 /// emitted crate. Without kernel backing `Std.Email` fail-closes at skyc time
-/// (SKY-N0028); with it, skyc-0 AND the emitted crate — with the vendored
+/// (IPE-N0028); with it, skyc-0 AND the emitted crate — with the vendored
 /// `email` module and the injected `lettre` dep — `cargo build`s exit 0.
 #[test]
 fn email_send_nominal_fold_seal_builds() {
@@ -145,7 +145,7 @@ fn email_send_nominal_fold_seal_builds() {
         "email_send_nominal_fold_seal: must be accepted (skyc-0), got: {built:?}"
     );
 
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     // The `email.send` kernel is network-effectful (no deterministic stdout
@@ -155,7 +155,7 @@ fn email_send_nominal_fold_seal_builds() {
     assert!(
         outcome.is_ok(),
         "email_send_nominal_fold_seal: emitted crate must `cargo build` exit 0 \
-         (pre-fix: SKY-N0028 fail-closed; the fold + kernel + `lettre` dep must \
+         (pre-fix: IPE-N0028 fail-closed; the fold + kernel + `lettre` dep must \
          seal it): {}",
         outcome.err().unwrap_or_default()
     );

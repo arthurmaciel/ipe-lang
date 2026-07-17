@@ -1,7 +1,7 @@
 module Main exposing (main)
 import Sky.Core.Prelude exposing (..)
 
--- SKY-L0105 lambda / function parameter patterns (#96), the positive surface.
+-- IPE-L0105 lambda / function parameter patterns (#96), the positive surface.
 -- Every binding position below is IRREFUTABLE, so each lowers to a synthetic
 -- parameter plus (for the destructuring shapes) an irrefutable `Destructure` —
 -- never a runtime match. The wildcard cases ride the emitted crate's

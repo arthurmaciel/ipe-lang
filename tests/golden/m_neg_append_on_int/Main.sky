@@ -4,7 +4,7 @@ import Sky.Core.Prelude exposing (..)
 import Std.Log exposing (println)
 
 
--- NEGATIVE: `++` on Int should fail with SKY-T0014 (Appendable obligation
+-- NEGATIVE: `++` on Int should fail with IPE-T0014 (Appendable obligation
 -- unsatisfied) — Int is neither String nor List _. This must be rejected at
 -- skyc type-check, never reaching the backend.
 v : Int

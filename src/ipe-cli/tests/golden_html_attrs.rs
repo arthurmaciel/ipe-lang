@@ -2,7 +2,7 @@
 //!
 //! Compiles `tests/golden/html_attrs/Main.sky` through `skyc`, builds the
 //! emitted Rust project with the shared cargo target, runs the binary, and
-//! asserts on the rendered HTML. Gated on `SKY_E2E=1`.
+//! asserts on the rendered HTML. Gated on `IPE_E2E=1`.
 //!
 //! ## What is proven
 //!
@@ -16,7 +16,7 @@
 //!   `"` → `&#34;`, `'` → `&#39;`) and DROPS a hostile event attribute name
 //!   (`attribute "onclick" "alert(1)"`) via `SafeAttrName` — no XSS reflection.
 //!
-//! Run: `SKY_E2E=1 cargo test golden_m7_html_attrs`
+//! Run: `IPE_E2E=1 cargo test golden_m7_html_attrs`
 
 use std::path::{Path, PathBuf};
 
@@ -29,7 +29,7 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn html_attributes_family_renders_and_escapes() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

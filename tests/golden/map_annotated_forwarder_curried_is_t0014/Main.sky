@@ -5,7 +5,7 @@ import Std.Log exposing (println)
 
 -- #90 T3 (5th attempt): annotated generic forwarder around `Result.map`,
 -- instantiated at a curried callback — the deferred SchemeApp path
--- (SKY-T0014, friendly message), mirroring the andMap forwarder fixture.
+-- (IPE-T0014, friendly message), mirroring the andMap forwarder fixture.
 mmap : (a -> b) -> Result e a -> Result e b
 mmap f x =
     Result.map f x

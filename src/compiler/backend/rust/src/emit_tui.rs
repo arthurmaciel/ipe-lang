@@ -92,13 +92,13 @@ pub fn emit_tui_call(
                 });
             };
             // Unreachable for well-typed source: a non-literal cfg is rejected
-            // at lower with SKY-L0119 (Feature::LetBoundAppCfg); this guard is a
+            // at lower with IPE-L0119 (Feature::LetBoundAppCfg); this guard is a
             // defensive invariant, mirroring the `LiveAppRouted` precedent.
             let Expr::Record(fields) = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_tui_call::TuiApp",
                     detail: "Tui.app cfg must be an inline record literal; \
-                             a non-literal cfg is rejected at lower with SKY-L0119"
+                             a non-literal cfg is rejected at lower with IPE-L0119"
                         .into(),
                 });
             };
@@ -117,13 +117,13 @@ pub fn emit_tui_call(
                 });
             };
             // Unreachable for well-typed source: a non-literal cfg is rejected
-            // at lower with SKY-L0119 (Feature::LetBoundAppCfg); this guard is a
+            // at lower with IPE-L0119 (Feature::LetBoundAppCfg); this guard is a
             // defensive invariant, mirroring the `LiveAppRouted` precedent.
             let Expr::Record(fields) = cfg_e else {
                 return Err(Diagnostic::CompilerBug {
                     where_: "ipe_backend_rust::emit_tui_call::TuiProgram",
                     detail: "Tui.program cfg must be an inline record literal; \
-                             a non-literal cfg is rejected at lower with SKY-L0119"
+                             a non-literal cfg is rejected at lower with IPE-L0119"
                         .into(),
                 });
             };
@@ -166,7 +166,7 @@ fn emit_tui_inner(
     // seal: gate the Model against `tui_app`'s `Clone` bound. A non-clonable
     // (non-derivable) Model — a field of type `Cmd`/`Sub`/`Task`/`Decoder`/`Db`/
     // function — would otherwise `skyc`-succeed then `cargo`-fail; the gate makes
-    // it a fail-closed `SKY-L0120` error. (Tui needs only `Clone`, not serde, so
+    // it a fail-closed `IPE-L0120` error. (Tui needs only `Clone`, not serde, so
     // an `Html`/`Color` field is admissible here.)
     if let Some(model_ty) = crate::emit_model_gate::model_ty_of_view(view_e) {
         crate::emit_model_gate::check_admissible_model(

@@ -85,7 +85,7 @@ unification (`unify.rs:259`: field-name sets must match, then field-by-field) an
 unification (`unify.rs:247`: same arity, elementwise recurse). `window` is fully concrete and does
 not participate in Model/Msg unification; the cfg-record literal unifies field-by-field, recursing
 into `window` and the `size` tuple2 automatically. A missing/extra/mistyped window field, or a
-non-2-tuple `size`, is a clean SKY-T structural mismatch at the call site.
+non-2-tuple `size`, is a clean IPE-T structural mismatch at the call site.
 
 FIREWALL (the exit-0-then-cargo-fail gate). The constrain qualifier set `(Some("Webview"),
 Some("app"))` MUST byte-match lower's resolved set `("Webview","app") → WebviewApp` (`lower.rs:4049`).
@@ -103,7 +103,7 @@ that drives Tier A MUST be added to the BLOCKING sweep the moment the constrain+
 the same change. Shipping the arm without its example in the blocking sweep leaves the firewall
 unguarded and the `Ty::Var(u32::MAX)` exit-0-then-cargo-fail regression class silently reopenable.
 
-Required-fields rule: closed record ⇒ every field is required; a missing field is a clean SKY-T
+Required-fields rule: closed record ⇒ every field is required; a missing field is a clean IPE-T
 error (no row var to absorb it), an extra field is likewise rejected.
 
 Non-literal `window` — rejected at LOWER (parse, don't validate). The lower gate must fail-closed on
@@ -254,7 +254,7 @@ DECISION — three tiers (verdict restated from the top of this doc):
 - Tier C — round-trip coverage without a production seam. A `#[cfg(feature="webview")]` runtime unit test drives `render()` → `HandlerIndex::resolve(sky_id, ev, args)` → `update()` → re-`render()` and asserts the model advances (counter 0→1). This is the click-is-a-no-op guard (CLAUDE.md §9: `--build-only` cannot catch it), deterministic, no display, no production pollution. Optionally, a compile-time-gated (`#[cfg(feature="webview_smoke")]`, NOT env-var-gated) driven synthetic-IPC smoke through the real event loop under xvfb (OPEN DECISION 3).
 
 Rationale on rejecting an env-gated seam. Injecting a synthetic `UserEvent::Ipc` through the real
-event loop via an `SKY_WEBVIEW_SMOKE` branch inside the shipped `webview_app` puts test scaffolding
+event loop via an `IPE_WEBVIEW_SMOKE` branch inside the shipped `webview_app` puts test scaffolding
 in the production hot path; a deployed binary that changes behavior on a stray env var is a
 security/correctness smell that violates MAKE INVALID STATES UNREPRESENTABLE. The round-trip is the
 composition of three near-pure pieces (`render`, `resolve`, `update`); test the pieces the loop
@@ -294,7 +294,7 @@ Callee::Kernel(KernelFn::WebviewApp) if args.len() == 1 => {
 ```
 
 A direct record-literal cfg routes through `lower_app_cfg_record` (function-typed fields do not trip
-SKY-L0107); the nested `window` record (no function fields) passes the per-field `reject_function_
+IPE-L0107); the nested `window` record (no function fields) passes the per-field `reject_function_
 valued_field` cleanly. A let-bound / builder-piped cfg stays fail-closed. Add the inline-`window`
 gate here (Q1).
 

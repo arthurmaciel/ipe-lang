@@ -3,7 +3,7 @@
 //! (`evenLen`/`oddLen : List a -> Bool`), used by an importer at TWO different
 //! element types (`List Int` and `List String`).
 //!
-//! Without the fix, `skyc build` FAILED with SKY-L0102 ("polymorphic value's type could
+//! Without the fix, `skyc build` FAILED with IPE-L0102 ("polymorphic value's type could
 //! not be determined") at the `[] ->` arm inside `Lib.sky`. The type-checker
 //! (`ipe_types`) correctly generalized the boundary scheme — its
 //! `untyped_type_params` entry listed the element var — but `ipe_lower`'s
@@ -18,7 +18,7 @@
 //! with `rest.to_vec()` builds fine — the gate rejected sound programs.
 //!
 //! Fix (`crates/ipe_lower/src/lower.rs`, `lower_case`): remove the stale
-//! generic-element list-binding SKY-L0102 gate. A `Generic` element that reaches
+//! generic-element list-binding IPE-L0102 gate. A `Generic` element that reaches
 //! `lower_case` is, by construction, a `Clone`-bounded declared type parameter,
 //! so the owned-rebind (`rest.to_vec()` / `x.clone()`) is sound. Cross-module
 //! polymorphic recursion (Boundary Scheme Promotion) now lowers to a real Rust
@@ -26,7 +26,7 @@
 //!
 //! Run:
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_i201_cross_module_poly_recursion
+//! IPE_E2E=1 cargo test -p skyc --test golden_i201_cross_module_poly_recursion
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -46,9 +46,9 @@ fn entry_path(root: &Path) -> PathBuf {
         .join("Main.sky")
 }
 
-/// skyc-0: the compiler must accept the 2-module program (no SKY-L0102) AND emit
+/// skyc-0: the compiler must accept the 2-module program (no IPE-L0102) AND emit
 /// `even_len` as a `Clone`-bounded Rust generic. Checked unconditionally (cheap,
-/// no `cargo`), independent of the `SKY_E2E` gate below.
+/// no `cargo`), independent of the `IPE_E2E` gate below.
 #[test]
 fn i201_skyc_accepts_and_emits_clone_bounded_generic() {
     let root = repo_root();
@@ -65,7 +65,7 @@ fn i201_skyc_accepts_and_emits_clone_bounded_generic() {
     let built = skyc::build_with_sibling_discovery(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for cross_module_poly_recursion (no SKY-L0102): {:?}",
+        "skyc build must succeed for cross_module_poly_recursion (no IPE-L0102): {:?}",
         built.err()
     );
 
@@ -74,7 +74,7 @@ fn i201_skyc_accepts_and_emits_clone_bounded_generic() {
     let emitted = support::read_all_emitted_src(&out);
 
     // The recursive pair must lower to a `Clone`-bounded Rust generic — the
-    // element var reached the generic path (not SKY-L0102) and the emitted
+    // element var reached the generic path (not IPE-L0102) and the emitted
     // `Vec<T1>` `rest.to_vec()` needs `T1: Clone`.
     assert!(
         emitted.contains("fn lib_even_len<T1: Clone>(xs: Vec<T1>) -> bool"),
@@ -84,12 +84,12 @@ fn i201_skyc_accepts_and_emits_clone_bounded_generic() {
 }
 
 /// cargo-0 ∧ run-0: the emitted project actually compiles with `rustc` (no
-/// SKY-L0102 fail-closed, no `cargo` error on the generic `rest.to_vec()`) and
-/// prints the two parity results. Gated on `SKY_E2E=1` — the check that proves
+/// IPE-L0102 fail-closed, no `cargo` error on the generic `rest.to_vec()`) and
+/// prints the two parity results. Gated on `IPE_E2E=1` — the check that proves
 /// the seal (skyc-0 ⇒ cargo-0) end to end.
 #[test]
 fn i201_cargo_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -113,7 +113,7 @@ fn i201_cargo_builds_and_runs() {
     assert_eq!(
         outcome.exit_code,
         Some(0),
-        "cross_module_poly_recursion binary must exit 0 (no SKY-L0102, no cargo error); \
+        "cross_module_poly_recursion binary must exit 0 (no IPE-L0102, no cargo error); \
          got {:?} (stdout: {:?})",
         outcome.exit_code,
         outcome.stdout

@@ -5,7 +5,7 @@ Date: 2026-07-11
 
 ## Context
 
-The original gate `SKY-L0114` rejected *all* function-valued constructor
+The original gate `IPE-L0114` rejected *all* function-valued constructor
 payloads (`Ok (\x -> x+1)`, `Just someFn`) to prevent emit-layer seal violations:
 function values render as `Box<dyn Fn>`, which cannot derive `Clone`, `Debug`,
 `PartialEq`, or serde. But the *construction* was never the hazard — runtime
@@ -18,7 +18,7 @@ non-derivable payloads in user enums.
 
 Replace the blanket construction ban with two narrower fail-closed gates:
 
-1. A **reuse gate** (`SKY-L0127`) rejecting multiple consuming uses of a
+1. A **reuse gate** (`IPE-L0127`) rejecting multiple consuming uses of a
    function-carrying value (`Box<dyn Fn>` is not `Clone`).
 2. An **`andMap` call-site arity gate** (designed in ADR 0016) rejecting curried
    payloads that would not satisfy `FnOnce(A) -> B` at runtime.

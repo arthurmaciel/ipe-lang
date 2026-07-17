@@ -13,7 +13,7 @@
 //!
 //! * PROBE G — a CONS sub-pattern (`PCons`) nested in a nested-tuple column:
 //!   `case v of ( ( x :: _, n ), A ) -> …` on `v : ((List Int,Int), Tag)`.
-//!   **Still fail-closed to SKY-L0115.** A slice pattern needs `&[T]` from an
+//!   **Still fail-closed to IPE-L0115.** A slice pattern needs `&[T]` from an
 //!   owned `Vec`, which only the literal-tuple coerced-column path can produce
 //!   (there are no element expressions to `.as_slice()`-wrap a variable tuple
 //!   column). So a `PList` / `PCons` column at any depth stays an honest
@@ -38,9 +38,9 @@ fn fixture_entry(fixture: &str) -> PathBuf {
         .join("Main.sky")
 }
 
-/// Build the named golden fixture and assert it surfaces exactly SKY-L0115 as a
+/// Build the named golden fixture and assert it surfaces exactly IPE-L0115 as a
 /// pipeline diagnostic. A build that SUCCEEDS (an exit-0 hole), or fails with any
-/// other error, makes `got` differ from `Some(SKY_L0115)` and fails with a
+/// other error, makes `got` differ from `Some(IPE_L0115)` and fails with a
 /// descriptive message — never a panic. A skip occurs only when the runtime
 /// cannot be resolved.
 fn assert_l0115_gate(fixture: &str, out_suffix: &str) {
@@ -58,9 +58,9 @@ fn assert_l0115_gate(fixture: &str, out_suffix: &str) {
     };
     assert_eq!(
         got,
-        Some(ipe_diagnostics::SKY_L0115),
+        Some(ipe_diagnostics::IPE_L0115),
         "fixture {fixture}: a list / cons sub-pattern nested in a nested-tuple column \
-         must fail closed to SKY-L0115 (never skyc-0-then-cargo-fail); got build \
+         must fail closed to IPE-L0115 (never skyc-0-then-cargo-fail); got build \
          result {built:?}"
     );
 }
@@ -84,11 +84,11 @@ fn nested_tuple_str_column_builds() {
     );
 }
 
-/// PROBE E seal (`SKY_E2E=1`): the emitted Rust cargo-builds and runs, the right
+/// PROBE E seal (`IPE_E2E=1`): the emitted Rust cargo-builds and runs, the right
 /// arm firing. `classify (("x", 5), A)` matches the first arm → prints `5`.
 #[test]
 fn nested_tuple_str_column_cargo_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let out = std::env::temp_dir().join("skyc_tuple_nested_coerce_str_e2e");
@@ -117,7 +117,7 @@ fn nested_tuple_str_column_cargo_builds_and_runs() {
 }
 
 /// PROBE G: a cons sub-pattern (`PCons`) nested inside a nested-tuple column stays
-/// fail-closed to SKY-L0115 — only the literal-tuple coerced-column path can
+/// fail-closed to IPE-L0115 — only the literal-tuple coerced-column path can
 /// lower a slice column soundly.
 #[test]
 fn nested_tuple_cons_column_is_sky_l0115() {

@@ -9,10 +9,10 @@
 //! stable via `Vec::sort_by`).
 //!
 //! Without a `StdlibKernel` variant for each, any call
-//! emits `error[SKY-L0108]: kernel function not available yet`.
+//! emits `error[IPE-L0108]: kernel function not available yet`.
 //!
-//! Gated on `SKY_E2E=1`. Run:
-//! `SKY_E2E=1 cargo test -p skyc --test golden_i119_list_batch_seal`
+//! Gated on `IPE_E2E=1`. Run:
+//! `IPE_E2E=1 cargo test -p skyc --test golden_i119_list_batch_seal`
 
 use std::path::{Path, PathBuf};
 
@@ -47,7 +47,7 @@ fn compile_golden(name: &str) -> PathBuf {
 /// inputs: `[-1, 2, 0, 5, -3, 10]` → `["2", "5", "10"]` → `"2,5,10"`
 #[test]
 fn filter_map_keeps_just_results() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let dir = compile_golden("filter_map_seal");
@@ -69,7 +69,7 @@ fn filter_map_keeps_just_results() {
 /// [Charlie/30, Alice/25, Bob/25] → [Alice/25, Bob/25, Charlie/30] → "Alice,Bob,Charlie"
 #[test]
 fn sort_by_stable_by_age() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let dir = compile_golden("sort_by_seal");

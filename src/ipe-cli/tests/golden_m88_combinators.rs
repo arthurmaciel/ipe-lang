@@ -45,10 +45,10 @@
 //! these kernels emits cargo-buildable Rust that runs with the correct
 //! short-circuit semantics — NOT Go byte-parity.
 //!
-//! Gated on `SKY_E2E=1`; without it the test returns early.  Run:
+//! Gated on `IPE_E2E=1`; without it the test returns early.  Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_m88_combinators
+//! IPE_E2E=1 cargo test -p skyc --test golden_m88_combinators
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -66,9 +66,9 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 
 /// Compile `tests/golden/<name>/Main.sky`, build the emitted Cargo project,
 /// run it, and assert its stdout matches the cached oracle.  Gated on
-/// `SKY_E2E=1`.
+/// `IPE_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -4,11 +4,11 @@
 //! to misbehave (or leak) at runtime, and never deferred to a `cargo`
 //! failure (the SEAL). Companion to `crates/skyc/tests/golden_secret.rs`
 //! (the positive goldens) and `crates/skyc/tests/model_admissibility.rs`
-//! (`live_model_with_secret_field_is_rejected`, the Model-gate SKY-L0120
+//! (`live_model_with_secret_field_is_rejected`, the Model-gate IPE-L0120
 //! case).
 //!
 //! Compile-only: these fixtures never run (there is nothing to execute — the
-//! program is ill-typed), so there is no oracle / `SKY_E2E` gate here.
+//! program is ill-typed), so there is no oracle / `IPE_E2E` gate here.
 
 use std::path::{Path, PathBuf};
 
@@ -49,15 +49,15 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code)
 /// `BinopClass::Append`'s doc comment in `ipe_types::constrain`). Both
 /// operands are `eq`'d to one shared appendable-bounded super-var; the
 /// concrete `String` literal on the left pins that var to `String` FIRST, so
-/// the `Secret` right operand surfaces as an ordinary `SKY-T0001` `Con`
+/// the `Secret` right operand surfaces as an ordinary `IPE-T0001` `Con`
 /// mismatch (`String` vs `Secret`) rather than the "no operand pins the
-/// obligation" `SKY-T0014` shape — either way, a compile-time rejection,
+/// obligation" `IPE-T0014` shape — either way, a compile-time rejection,
 /// never silently accepted and never deferred to a runtime concern.
 #[test]
 fn secret_concat_is_rejected() {
     assert_gate(
         "secret_concat_rejected",
         "secret_concat_rejected_emit",
-        ipe_diagnostics::SKY_T0001,
+        ipe_diagnostics::IPE_T0001,
     );
 }

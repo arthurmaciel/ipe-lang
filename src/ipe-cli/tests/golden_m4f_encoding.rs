@@ -50,10 +50,10 @@
 //! whose `Err _` arm yields a String literal (a different routing shape that Go
 //! handles), so they stay parity-clean — re-verified against the live Go oracle.
 //!
-//! Every test is gated on `SKY_E2E=1`; without it the test returns early. Run:
+//! Every test is gated on `IPE_E2E=1`; without it the test returns early. Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test golden_m4f
+//! IPE_E2E=1 cargo test golden_m4f
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -71,9 +71,9 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 
 /// Compile `tests/golden/<name>/Main.sky`, build the emitted Cargo project,
 /// run it, and assert its stdout matches the cached oracle.  Gated on
-/// `SKY_E2E=1`.
+/// `IPE_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -16,7 +16,7 @@
    under iframe/frame-ancestors), 32-byte CSPRNG token, **constant-time
    compare via `subtle::ConstantTimeEq`** (`:211-214`), header `X-Sky-Csrf`
    checked only on POST/PUT/DELETE/PATCH, exempt-path list for SSE/
-   observability/console, optional `SKY_LIVE_CSRF_ORIGIN_CHECK=on`.
+   observability/console, optional `IPE_LIVE_CSRF_ORIGIN_CHECK=on`.
    **Caveat:** `../sky/runtime-rust/docs/CODE-REVIEW.md:986` (2026-06-18)
    flagged that at audit time the module wasn't yet wired into
    `serve_live`'s actual request path — verify current wiring in that repo

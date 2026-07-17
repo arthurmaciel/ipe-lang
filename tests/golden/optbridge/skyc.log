@@ -1,8 +1,8 @@
-error[SKY-N0002]: cannot find this type in scope
+error[IPE-N0002]: cannot find this type in scope
   --> src/Main.sky:11:9
    |
 11 | relay : Token -> Int
    |         ^^^^^^^^^^^^ unknown type
    |
-   = note: run `skyc explain SKY-N0002` for more information
+   = note: run `skyc explain IPE-N0002` for more information
 

@@ -1,17 +1,17 @@
 //! Seal gate for the native `Std.Ui.transitionRaw` primitive + the compiled
-//! `Std.Ui.Transition` module (26-ui-showcase blocker: SKY-N0004 unknown
+//! `Std.Ui.Transition` module (26-ui-showcase blocker: IPE-N0004 unknown
 //! module `Transition`).
 //!
 //! `Std.Ui.Transition.attribute` / `attributeUnsafe` are pure-Sky wrappers over
 //! the native `Ui.transitionRaw : String -> Bool -> Attribute msg` kernel
 //! (`KernelFn::UiTransitionRaw`), which constructs `AttrTransition shorthand
 //! respect`.  This test proves the whole seam:
-//!   * `import Std.Ui.Transition` resolves (no SKY-N0004 regression);
+//!   * `import Std.Ui.Transition` resolves (no IPE-N0004 regression);
 //!   * `transitionRaw` type-checks as `String -> Bool -> Attribute msg`;
 //!   * the emit lowers both entry points to `ui_transition_raw_(<shorthand>,
 //!     <respect>)` with the CORRECT respect flag (`true` for `attribute`,
 //!     `false` for `attributeUnsafe`);
-//!   * (`SKY_E2E`) the emitted Cargo project builds — the seal: skyc exit-0 ⟹
+//!   * (`IPE_E2E`) the emitted Cargo project builds — the seal: skyc exit-0 ⟹
 //!     cargo exit-0 — and renders the CSS `transition:` shorthand.
 
 use std::path::PathBuf;
@@ -75,7 +75,7 @@ fn build_transition_project(slot: &str) -> (PathBuf, Result<(), skyc::CliError>)
     (emit, res)
 }
 
-/// `Std.Ui.Transition` resolves (no SKY-N0004), type-checks, and the emit
+/// `Std.Ui.Transition` resolves (no IPE-N0004), type-checks, and the emit
 /// lowers both wrappers to `ui_transition_raw_` with the correct respect flags.
 #[test]
 #[allow(clippy::expect_used)]
@@ -114,11 +114,11 @@ fn transition_module_resolves_and_emits_kernel() {
     );
 }
 
-/// The GREEN GATE: under `SKY_E2E=1` the emitted Cargo project builds and runs,
+/// The GREEN GATE: under `IPE_E2E=1` the emitted Cargo project builds and runs,
 /// rendering the CSS `transition:` shorthand — the seal, end to end.
 #[test]
 fn transition_e2e_builds_and_renders_shorthand() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let (emit, res) = build_transition_project("e2e");

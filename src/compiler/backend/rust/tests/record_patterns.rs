@@ -30,7 +30,7 @@
 //! ```
 //!
 //! to stdout `7\n` / `12\n`, exit 0 (hand-verified in a temp dir against the Go
-//! oracle). The `end_to_end_*` test (gated on `SKY_E2E=1`) drives the same
+//! oracle). The `end_to_end_*` test (gated on `IPE_E2E=1`) drives the same
 //! hand-built IR through the Rust backend, builds the emitted crate, runs it, and
 //! asserts the identical `7` — the soundness-floor regression for a value
 //! laundered through a record destructured by a record pattern.
@@ -258,10 +258,10 @@ fn record_pattern_with_unknown_shape_fails_fast() -> DResult<()> {
 /// Full spine: build the `getX` record-destructure IR, emit the Cargo project,
 /// vendor the runtime, `cargo build`, run, and assert the program prints `7` —
 /// the value the Go backend produces for the field-set-equivalent program. Gated
-/// on `SKY_E2E=1` so the default `cargo test` stays fast and offline.
+/// on `IPE_E2E=1` so the default `cargo test` stays fast and offline.
 #[test]
 fn end_to_end_builds_and_prints_seven() -> DResult<()> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -321,9 +321,9 @@ fn io_bug(path: &Path, e: &std::io::Error) -> Diagnostic {
 }
 
 /// Locate the Sky runtime module tree (`src/runtime/rust/src/ipe_runtime`), via
-/// `SKY_RUNTIME_DIR` or an upward search from the current directory.
+/// `IPE_RUNTIME_DIR` or an upward search from the current directory.
 fn resolve_runtime() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("SKY_RUNTIME_DIR") {
+    if let Ok(dir) = std::env::var("IPE_RUNTIME_DIR") {
         let p = PathBuf::from(dir);
         if p.is_dir() {
             return Some(p);

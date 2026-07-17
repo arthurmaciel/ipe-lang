@@ -5,33 +5,33 @@ prints nothing
 Console is poor - it is not run at a different port. Why? With Ctrl-C is the app gracefully shutting down?
 
 
-## 10-live-component   Got a warning[SKY-T0011]: redundant case branch
+## 10-live-component   Got a warning[IPE-T0011]: redundant case branch
   --> src/Counter.sky:71:23
    |
 71 |               [class "counter-buttons"]
    |                       ^ `_` is already handled
    |
-   = note: run `skyc explain SKY-T0011` for more information
+   = note: run `skyc explain IPE-T0011` for more information
 
 12-skyvote  Sign-up doesn't work. Sign in to vote too.
 14-task-demo    OK
 15-http-server  OK (is the server shutting down gracefully?)
 16-skychess OK
-17-skymon   Got a warning[SKY-T0011]: redundant case branch
+17-skymon   Got a warning[IPE-T0011]: redundant case branch
    --> src/Lib/Auth.sky:236:6
     |
 236 |     else
     |      ^ `_` is already handled
     |
-    = note: run `skyc explain SKY-T0011` for more information
+    = note: run `skyc explain IPE-T0011` for more information
 
-warning[SKY-T0011]: redundant case branch
+warning[IPE-T0011]: redundant case branch
    --> src/Page/MonitorDetail.sky:230:45
     |
 230 |               [ onClick (Navigate DashboardPage), class "btn btn-primary" ]
     |                                             ^ `_` is already handled
     |
-    = note: run `skyc explain SKY-T0011` for more information
+    = note: run `skyc explain IPE-T0011` for more information
    Other errors: "Add alert" doesn't work
 18-job-queue    Gross error: error[E0507]: cannot move out of `insertRow`, a captured variable in an `Fn` closure
    --> src/main.rs:424:682
@@ -74,27 +74,27 @@ For more information about this error, try `rustc --explain E0507`.
 ## 20-cli-counter
 Compare to Go
 
-## 24-tui-kitchen-sink Got a warning[SKY-L0124]: `Live.app` routes list is non-empty but Model has no `page` field
+## 24-tui-kitchen-sink Got a warning[IPE-L0124]: `Live.app` routes list is non-empty but Model has no `page` field
    --> src/Main.sky:497:13
     |
 497 |             Live.app
     |             ^^^^^^^^ 1 route(s) declared but the Model has no `page` field — routing is disabled and the routes are ignored
     |
     = note: the `routes` list has 1 route(s) but the Model has no `page` field, so routing is disabled and every URL serves the same app. The routed-page field must be named exactly `page` (of the `Page` ADT whose constructors appear as route destinations). Rename the field to `page`, or remove the `routes` list if routing is not needed.
-    = note: run `skyc explain SKY-L0124` for more information
+    = note: run `skyc explain IPE-L0124` for more information
 
 Multiline is not working. 
 Have to compare with Go
 
 25-sky-console  
-warning[SKY-L0124]: `Live.app` routes list is non-empty but Model has no `page` field
+warning[IPE-L0124]: `Live.app` routes list is non-empty but Model has no `page` field
   --> src/Main.sky:62:5
    |
 62 |     app
    |     ^^^ 1 route(s) declared but the Model has no `page` field — routing is disabled and the routes are ignored
    |
    = note: the `routes` list has 1 route(s) but the Model has no `page` field, so routing is disabled and every URL serves the same app. The routed-page field must be named exactly `page` (of the `Page` ADT whose constructors appear as route destinations). Rename the field to `page`, or remove the `routes` list if routing is not needed.
-   = note: run `skyc explain SKY-L0124` for more information
+   = note: run `skyc explain IPE-L0124` for more information
 
 
 ## 26-ui-showcase
@@ -334,14 +334,14 @@ OK, but compare with Go
 
 ## 38-composite-ui-multibackend
 "$SKYC_BIN" build src/Main.sky --out sky-out/rust && cargo +nightly build -Z unstable-options --manifest-path sky-out/rust/Cargo.toml --artifact-dir ./sky-out/rust/target/debug/ &&  ./sky-out/rust/target/debug/sky-app 
-warning[SKY-L0124]: `Live.app` routes list is non-empty but Model has no `page` field
+warning[IPE-L0124]: `Live.app` routes list is non-empty but Model has no `page` field
    --> src/View.sky:123:48
     |
 123 |             , statTile "7-day avg" (ToString.fromInt weekAvg ++ "%")
     |                                                ^^^^^^^^ 1 route(s) declared but the Model has no `page` field — routing is disabled and the routes are ignored
     |
     = note: the `routes` list has 1 route(s) but the Model has no `page` field, so routing is disabled and every URL serves the same app. The routed-page field must be named exactly `page` (of the `Page` ADT whose constructors appear as route destinations). Rename the field to `page`, or remove the `routes` list if routing is not needed.
-    = note: run `skyc explain SKY-L0124` for more information
+    = note: run `skyc explain IPE-L0124` for more information
 
     Updating crates.io index
      Locking 461 packages to latest Rust 1.99.0-nightly compatible versions

@@ -26,7 +26,7 @@
 //! cargo test -p skyc --test golden_i199_nested_capture_outer_arg
 //!
 //! # full E2E (skyc-0 ⇒ cargo-0 ⇒ run):
-//! SKY_E2E=1 cargo test -p skyc --test golden_i199_nested_capture_outer_arg
+//! IPE_E2E=1 cargo test -p skyc --test golden_i199_nested_capture_outer_arg
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -93,11 +93,11 @@ fn i199_skyc_accepts_and_hoists() {
     );
 }
 
-/// cargo-0 ∧ run-correct: gated on `SKY_E2E=1`. The SEAL — skyc-0 must imply the
+/// cargo-0 ∧ run-correct: gated on `IPE_E2E=1`. The SEAL — skyc-0 must imply the
 /// emitted Rust cargo-builds (no E0507/E0382) and runs to the expected output.
 #[test]
 fn i199_cargo_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

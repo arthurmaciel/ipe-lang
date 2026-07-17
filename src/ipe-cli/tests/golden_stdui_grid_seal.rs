@@ -6,11 +6,11 @@
 //! `Ui.gridTracksRaw : String -> String -> Attribute msg` kernel
 //! (`KernelFn::UiGridTracksRaw`), which constructs `AttrGridTracks(cols, rows)`.
 //! This test proves the whole seam:
-//!   * `import Std.Ui.Grid` resolves (no SKY-N0004 regression);
+//!   * `import Std.Ui.Grid` resolves (no IPE-N0004 regression);
 //!   * `gridTracksRaw` type-checks as `String -> String -> Attribute msg`;
 //!   * the emit lowers both `Grid.columns` and `Grid.tracks` to
 //!     `ui_grid_tracks_raw_(…)` — NO `__gridTracks` sentinel in emitted Rust;
-//!   * (`SKY_E2E`) the emitted Cargo project builds AND rendered web HTML carries
+//!   * (`IPE_E2E`) the emitted Cargo project builds AND rendered web HTML carries
 //!     `grid-template-columns:`, `grid-template-rows:`, and `display:grid` —
 //!     the mandated web-HTML grid-template assertion (the seal).
 
@@ -66,7 +66,7 @@ fn build_grid_project(slot: &str) -> (PathBuf, Result<(), skyc::CliError>) {
     (emit, res)
 }
 
-/// `Std.Ui.Grid` resolves (no SKY-N0004), type-checks, and the emit lowers
+/// `Std.Ui.Grid` resolves (no IPE-N0004), type-checks, and the emit lowers
 /// both `Grid.columns` and `Grid.tracks` to `ui_grid_tracks_raw_` — with NO
 /// `__gridTracks` sentinel leaking into the emitted Rust.
 #[test]
@@ -102,12 +102,12 @@ fn grid_module_resolves_and_emits_kernel() {
     );
 }
 
-/// The GREEN GATE: under `SKY_E2E=1` the emitted Cargo project builds and runs,
+/// The GREEN GATE: under `IPE_E2E=1` the emitted Cargo project builds and runs,
 /// rendering `grid-template-columns:`, `grid-template-rows:`, and `display:grid`
 /// in the HTML output — the seal, end to end.
 #[test]
 fn grid_e2e_builds_and_renders_grid_css() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let (emit, res) = build_grid_project("e2e");

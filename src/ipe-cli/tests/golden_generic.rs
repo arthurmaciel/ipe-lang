@@ -1,6 +1,6 @@
 //! Generic-instantiation gate: ONE generic enum used at two
 //! distinct element types in one module. `skyc` must emit `main.rs`
-//! byte-identical to the checked-in golden, and (behind `SKY_E2E=1`) the emitted
+//! byte-identical to the checked-in golden, and (behind `IPE_E2E=1`) the emitted
 //! project must build and print `42`.
 //!
 //! `type Opt a = Som a | Non` is constructed both as `Opt Int` (`Som 41`) and as
@@ -63,12 +63,12 @@ fn emits_byte_identical_main_rs() {
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
 /// ADT program prints `42` — the same value the Go backend produces. Gated on
-/// `SKY_E2E=1` so the default `cargo test` stays fast. This is the
+/// `IPE_E2E=1` so the default `cargo test` stays fast. This is the
 /// soundness-floor regression for a value laundered through a generic /
 /// payload-carrying enum.
 #[test]
 fn end_to_end_builds_and_prints_forty_two() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

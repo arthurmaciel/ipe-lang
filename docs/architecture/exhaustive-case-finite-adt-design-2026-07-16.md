@@ -6,7 +6,7 @@ infrastructure, the `Suggestion` fix machinery, and the LSP quick-fix surface.
 
 Related: `crates/sky_types/src/exhaust.rs` (the Maranget usefulness pass this
 rule extends), `ipe-lsp.md` Q3(b)/(c) + G2 (the code-action counterweight),
-`crates/sky_diagnostics/explain/SKY-T0010.md` (whose teaching narrative this
+`crates/sky_diagnostics/explain/IPE-T0010.md` (whose teaching narrative this
 rule makes true — see §2), `docs/divergences-from-elm.md` (ledger entry).
 
 This is a **departure from Elm** (and from the Sky reference, which follows
@@ -22,15 +22,15 @@ a variant is a compile error at every match site, never a silent fall-through.
 |---|---|
 | The rule | In `case scrut of`, an arm whose **top-level pattern** is a catch-all (`_` or a bare variable) is rejected when the scrutinee's solved type is a **closed union** (user-declared ADT, `Maybe`, `Result`) *and* the catch-all absorbs ≥ 1 constructor not matched by an earlier arm. |
 | Open domains | `Int` / `Float` / `String` / `Char` keep the wildcard (a finite literal set can never cover them). `Bool` and `List` are excluded from the rule in v1 (§3.3). |
-| Where | The compiler — `sky_types::exhaust`, alongside SKY-T0010/T0011, post-solve. Acceptance-changing rules live in the compiler, never in the (advisory) lint tool. |
+| Where | The compiler — `sky_types::exhaust`, alongside IPE-T0010/T0011, post-solve. Acceptance-changing rules live in the compiler, never in the (advisory) lint tool. |
 | Escape hatch | Yes — per-site `-- @allow(open-case) <reason>` directive (shared grammar/table with the lint tool). See §4 for the weighing. |
 | Recommendation | **Adopt-with-opt-out** (§5). |
-| Diagnostic | New **SKY-T0018** "catch-all hides constructors of a closed type", listing the absorbed constructors; progressive explain page; SKY-T0010's page corrected in the same change (§6). |
+| Diagnostic | New **IPE-T0018** "catch-all hides constructors of a closed type", listing the absorbed constructors; progressive explain page; IPE-T0010's page corrected in the same change (§6). |
 | Ergonomic counterweight | LSP code action + `skyc fix` suggestion that **expands the catch-all into one arm per absorbed constructor with the catch-all's own body** — semantics-preserving, `MachineApplicable` (§7). |
 
 ## 1. Why (the evolution-safety argument)
 
-Exhaustiveness checking (SKY-T0010) guarantees a `case` covers every value.
+Exhaustiveness checking (IPE-T0010) guarantees a `case` covers every value.
 A catch-all arm satisfies the checker while destroying the property teams
 actually rely on: **when a union grows a variant, every `case` that must now
 decide about it should fail to compile.** With `_ ->` present, the new variant
@@ -49,16 +49,16 @@ the strong default the language default, with an explicit, reasoned opt-out.
 
 - The parser accepts `_` (`Pattern_::PAnything`) and bare-variable patterns in
   any arm; `exhaust::to_upat` abstracts both to `UPat::Wild`, which covers
-  everything — so a catch-all always satisfies SKY-T0010 today.
+  everything — so a catch-all always satisfies IPE-T0010 today.
 - A catch-all that absorbs **zero** constructors (all variants already
-  matched) is already flagged **SKY-T0011** (redundant branch, Warning). The
+  matched) is already flagged **IPE-T0011** (redundant branch, Warning). The
   new rule targets the complementary case: a catch-all absorbing ≥ 1 variant.
 - `exhaust::check` runs inside `sky_types::infer` after the solver settles but
   **before** region types are read back — it currently judges a `case` from
   the arm patterns alone (`Sigs`, the per-module constructor tables) and never
   sees the scrutinee's type. A `case x of _ -> e` with no constructor arm is
   invisible to it today.
-- **The explain page already teaches this rule.** `explain/SKY-T0010.md`
+- **The explain page already teaches this rule.** `explain/IPE-T0010.md`
   states "Sky has no catch-all `_` pattern, so you handle each constructor
   explicitly… when you later add a new constructor… every `case` over it will
   point you right at the gap." That is aspiration, not implementation: the
@@ -87,21 +87,21 @@ the strong default the language default, with an explicit, reasoned opt-out.
 - **Absorbed constructors**: the constructors matched by the catch-all row
   that no earlier arm covers — computed with the machinery already present:
   the missing-pattern witnesses of the arm matrix *excluding* the catch-all
-  row (`useful(matrix_without_catchall, [Wild], …)`), exactly SKY-T0010's
+  row (`useful(matrix_without_catchall, [Wild], …)`), exactly IPE-T0010's
   witness computation reused.
 
 ### 3.2 The judgment
 
 For each `case`, for each catch-all arm over a closed-union scrutinee:
 
-- absorbed = 0 → **SKY-T0011** (redundant branch — unchanged behavior);
-- absorbed ≥ 1 → **SKY-T0018** (error): the arm hides those constructors.
+- absorbed = 0 → **IPE-T0011** (redundant branch — unchanged behavior);
+- absorbed ≥ 1 → **IPE-T0018** (error): the arm hides those constructors.
 
 The diagnostic lists the absorbed constructors (declaration order, capped by
 the existing `WITNESS_CAP` discipline) — the same list feeds the expansion fix
 (§7), so message and fix cannot disagree.
 
-An arm-site `-- @allow(open-case) <reason>` directive suppresses SKY-T0018
+An arm-site `-- @allow(open-case) <reason>` directive suppresses IPE-T0018
 for that arm only (§4).
 
 ### 3.3 Scope decisions (each an explicit trade, not an accident)
@@ -131,7 +131,7 @@ constructor set can actually change".
 
 **Type variables / unknown scrutinees.** A generic scrutinee (`Ty::Var`) or a
 constructor set the checker cannot resolve is never judged — the rule fails
-open (no SKY-T0018), consistent with `check_case`'s existing
+open (no IPE-T0018), consistent with `check_case`'s existing
 unknown-constructor skip. Wrongly *rejecting* a legal program would be a
 correctness bug; wrongly permitting a catch-all is only a missed lint.
 
@@ -143,27 +143,27 @@ correctness bug; wrongly permitting a catch-all is only a missed lint.
   before (or with) enforcement is strongly preferred (§8 phase order).
 - **Pattern guards** (§6.4): a guarded catch-all (`v if p v -> …`) does not
   count as covering (the guard may be false) per that design's soundness
-  floor; SKY-T0018 judges only unguarded catch-alls, and a guarded one never
+  floor; IPE-T0018 judges only unguarded catch-alls, and a guarded one never
   silences the rule for the arms below it.
 
 ## 4. The escape hatch — options weighed
 
 | Option | For | Against |
 |---|---|---|
-| **(a) No escape** (strict) | Maximum guarantee; simplest spec; matches the SKY-T0010 page's current absolutist phrasing | 50+-variant unions (`Std.Money`'s ISO-4217 currency enum is in our own stdlib) make full enumeration genuinely hostile: `case currency of USD -> "$" ; <49 more arms>`. Default-heavy domains (key dispatch, protocol opcodes as ADTs) become boilerplate farms. Ported Elm code breaks with no local remedy. Teams under deadline will encode the catch-all as `let v = scrut in` tricks — the rule loses and teaches circumvention. |
+| **(a) No escape** (strict) | Maximum guarantee; simplest spec; matches the IPE-T0010 page's current absolutist phrasing | 50+-variant unions (`Std.Money`'s ISO-4217 currency enum is in our own stdlib) make full enumeration genuinely hostile: `case currency of USD -> "$" ; <49 more arms>`. Default-heavy domains (key dispatch, protocol opcodes as ADTs) become boilerplate farms. Ported Elm code breaks with no local remedy. Teams under deadline will encode the catch-all as `let v = scrut in` tricks — the rule loses and teaches circumvention. |
 | **(b) Per-site opt-out** (directive) | Keeps the strong default; the exception is local, greppable, reasoned, and auditable (`unused-allow` fires when it rots); zero new syntax (reuses the lint directive grammar/table) | A suppressible error is weaker than an unsuppressible one; a team can blanket-`@allow` (mitigated by `forbidSuppression` config + review culture) |
-| **(c) Reject the feature** (keep Elm semantics + ship only the lint) | Zero migration; Elm parity | The guarantee only exists for teams running lint with the rule at deny — precisely the teams that least need it. The language's own stdlib and examples wouldn't uphold it. The SKY-T0010 explain page stays false. |
+| **(c) Reject the feature** (keep Elm semantics + ship only the lint) | Zero migration; Elm parity | The guarantee only exists for teams running lint with the rule at deny — precisely the teams that least need it. The language's own stdlib and examples wouldn't uphold it. The IPE-T0010 explain page stays false. |
 | (d) Size threshold (enforce only for unions ≤ N variants) | Softens the big-enum pain automatically | A magic number in the language semantics; adding the N+1th variant *changes whether other code compiles* — a spooky action the author of the union can't see. Rejected outright. |
 
 ## 5. Recommendation — **adopt-with-opt-out** (option b)
 
 Reasoning, in PRINCIPLES order:
 
-- **Correctness/soundness**: unaffected either way — exhaustiveness (SKY-T0010)
+- **Correctness/soundness**: unaffected either way — exhaustiveness (IPE-T0010)
   already guarantees no value escapes; this rule is about *evolution*
   robustness, not runtime safety. That is exactly why an opt-out is
   admissible here at all: `@allow(open-case)` can never make a program crash,
-  unlike a hypothetical opt-out on SKY-T0010 itself (which stays
+  unlike a hypothetical opt-out on IPE-T0010 itself (which stays
   unsuppressible, always).
 - **Completeness/ergonomics**: strict (a) is honest about its goal but fails
   the `Std.Money` test inside our own stdlib; the directive keeps the strong
@@ -180,9 +180,9 @@ Reasoning, in PRINCIPLES order:
   one honest amendment ("…unless you explicitly say the case is open, with a
   reason").
 
-## 6. Diagnostic design — SKY-T0018
+## 6. Diagnostic design — IPE-T0018
 
-- **Code**: `SKY-T0018` (next free in the T range), `TypeError` variant
+- **Code**: `IPE-T0018` (next free in the T range), `TypeError` variant
   `CatchAllOverClosedUnion { union: Box<str>, absorbed: Box<[Box<str>]> }`,
   `Severity::Error`.
 - **Span**: the catch-all arm's pattern (not the scrutinee — the fix is at
@@ -190,7 +190,7 @@ Reasoning, in PRINCIPLES order:
 - **Message anatomy** (rendered via the existing report renderer):
 
   ```
-  error[SKY-T0018]: this catch-all hides constructors of `Msg`
+  error[IPE-T0018]: this catch-all hides constructors of `Msg`
     --> src/Main.sky:41:9
      |
   41 |         _ -> ( model, Cmd.none )
@@ -204,7 +204,7 @@ Reasoning, in PRINCIPLES order:
         `-- @allow(open-case) <reason>` on the arm
   ```
 
-- **Explain page** (`explain/SKY-T0018.md`), per the compiler-as-kind-teacher
+- **Explain page** (`explain/IPE-T0018.md`), per the compiler-as-kind-teacher
   standard — progressive, ELI10 first:
   1. *The moment it protects you from*: add `Reset` to `Msg`, the app builds,
      the button does nothing — walk the silent-fall-through story.
@@ -218,18 +218,18 @@ Reasoning, in PRINCIPLES order:
      bad reason example.
   5. *Deep end*: what "closed" means (declaration-site constructor set), why
      `Int`/`String` arms still need `_`, top-level-column scoping and the
-     nested-position lint, the SKY-T0011 relationship (absorbed = 0).
-- **SKY-T0010 page correction (same change)**: its "Sky has no catch-all `_`
+     nested-position lint, the IPE-T0011 relationship (absorbed = 0).
+- **IPE-T0010 page correction (same change)**: its "Sky has no catch-all `_`
   pattern" paragraph is today false and after this change *almost* true —
   rewrite to state the real rule (no catch-all over closed unions; `_`
-  required/allowed over open domains) and cross-link SKY-T0018.
+  required/allowed over open domains) and cross-link IPE-T0018.
 
 ## 7. LSP pairing — the ergonomic counterweight
 
 Two code actions, both through `ipe-lsp.md`'s G2 `VerifiedEdit` gate (an
 offered edit that fails the parse→canon→type round-trip is unrepresentable):
 
-**(1) "Replace catch-all with the hidden arms"** — on SKY-T0018.
+**(1) "Replace catch-all with the hidden arms"** — on IPE-T0018.
 Rewrites the catch-all arm into one arm per absorbed constructor, each with
 the **catch-all arm's own body**:
 
@@ -251,7 +251,7 @@ Reset     -> ( model, Cmd.none )
 - Arms are emitted in declaration order, indentation copied from the replaced
   arm, and the result must be `ipe fmt`-idempotent (G2's fmt-clean clause).
 
-**(2) "Add missing arms"** — on SKY-T0010 (no catch-all present).
+**(2) "Add missing arms"** — on IPE-T0010 (no catch-all present).
 Inserts one arm per missing witness (the diagnostic already carries them) with
 placeholder bodies as LSP snippet tabstops — `HasPlaceholders`, never
 auto-applied by `skyc fix`, offered interactively in the editor. This is the
@@ -259,7 +259,7 @@ generator `ipe-lsp.md` Q3(b) already names ("Add missing arm(s)"); this spec
 pins its input to the witness list so the checker and the action cannot
 disagree about what is missing.
 
-A third quick-fix on SKY-T0018 offers the escape: *"Keep this case open
+A third quick-fix on IPE-T0018 offers the escape: *"Keep this case open
 (requires reason)"* — inserts `-- @allow(open-case) <tabstop>` above the arm
 (`HasPlaceholders`).
 
@@ -283,22 +283,22 @@ each green before the next:
   *Gate:* directive-parsing unit tests incl. malformed-directive rejection.
 - **Phase 3 — the rule + diagnostic.** `Head`-matrix computation of absorbed
   constructors (reuse `useful` on the matrix minus the catch-all row);
-  `TypeError::CatchAllOverClosedUnion`; SKY-T0018 code + title + explain page
-  + `ALL_CODES` count; SKY-T0010 page correction; `@allow(open-case)`
+  `TypeError::CatchAllOverClosedUnion`; IPE-T0018 code + title + explain page
+  + `ALL_CODES` count; IPE-T0010 page correction; `@allow(open-case)`
   suppression honoring Phase 2's table; the `Suggestion` (expansion text) on
   the diagnostic.
   *Gate:* fixture matrix — {user ADT, Maybe, Result} × {`_`, bare var,
   alias-of-var} × {absorbed 0 (→T0011), 1, many} × {allowed, not-allowed}
   × {Bool/List/Int scrutinee → no finding}; goldens for message rendering.
 - **Phase 4 — corpus migration (the honest cost).** Run the compiler over
-  `examples/` + `crates/skyc/stdlib` + `tests/golden/`; every SKY-T0018 is
+  `examples/` + `crates/skyc/stdlib` + `tests/golden/`; every IPE-T0018 is
   resolved by expansion (the machine-applicable fix), by a reasoned
   `@allow(open-case)` (expected: `Std.Money` currency dispatch, decoder
   fallbacks), or — where a golden deliberately tests catch-all lowering — a
   golden updated to a legal shape. **The enforcement commit and the migration
   land together**; the sweep must be green in the same change (§0: no
   skipped examples, no weakened gate).
-  *Gate:* full examples sweep + golden suite + `SKY_E2E=1` seal run.
+  *Gate:* full examples sweep + golden suite + `IPE_E2E=1` seal run.
 - **Phase 5 — LSP actions.** §7's three actions in `sky_lsp` (lands with the
   LSP plan's Phase 3; the `skyc fix` CLI path ships in Phase 3 above, so the
   ergonomic counterweight exists from the first enforcing release even
@@ -314,7 +314,7 @@ large.
 ## 9. Boundary with the lint tool (coherence contract)
 
 One sentence each way: **anything that changes what the compiler accepts
-lives in `sky_types` (this rule, SKY-T0018); anything advisory lives in
+lives in `sky_types` (this rule, IPE-T0018); anything advisory lives in
 `sky_lint`** (the nested-position variant of this same analysis,
 `wildcard-absorbs-variants`, default `warn`). Both consume the same witness
 machinery, the same directive table, the same `Suggestion` model, and the
@@ -326,7 +326,7 @@ rewriting its analysis.
 1. **Confirm the recommendation** (adopt-with-opt-out vs strict vs
    lint-only). Everything in §8 assumes opt-out.
 2. **Directive id**: `open-case` (proposed) vs the raw code
-   (`@allow(SKY-T0018)`) — proposal: the name; codes stay renderable but
+   (`@allow(IPE-T0018)`) — proposal: the name; codes stay renderable but
    names are the human surface, matching the lint tool's convention.
 3. **`Maybe`/`Result` inclusion**: proposed **in** (they are closed unions
    and two-variant enumeration costs one short line), but they are the

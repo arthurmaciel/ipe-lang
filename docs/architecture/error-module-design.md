@@ -6,7 +6,7 @@
 > `skyc::stdlib::source` (embedded `.sky` are parse-tested only; `build`/
 > `build_project` never inject stdlib source), and `golden_list_ops_wiring`
 > establishes that **kernel routing is the only exit-0-safe wiring** (a qualified
-> stdlib call lacking a `KernelFn`/lower-arm/scheme emits SKY-L0108). So the
+> stdlib call lacking a `KernelFn`/lower-arm/scheme emits IPE-L0108). So the
 > **KERNEL PATH (the doc's "fallback") is the real plan**: ~17 `Error.*` helper
 > kernels + the Error ADT emitted **project-side in `main.rs`** (the runtime is
 > generic over `E: From<String>` *because* it cannot name the project enum) +
@@ -15,7 +15,7 @@
 > a MULTI-CONTEXT effort). Already DONE + safe in-tree: runtime generic,
 > **B8 redaction (approved)**, HM channel typing (`Task String a` already fails
 > at skyc), `errorToString` prelude kernel. **PARKED / non-blocking** — Error-as-
-> String works today; land SKY-N0001 (#82) + #76 BATCH 0 first. See task for the
+> String works today; land IPE-N0001 (#82) + #76 BATCH 0 first. See task for the
 > corrected step-by-step.
 >
 > **Status:** design of record. Reconciles three independent fresh designs

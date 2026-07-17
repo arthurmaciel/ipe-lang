@@ -9,7 +9,7 @@ import Std.Log exposing (println)
 -- scrutinee. This is the `Sky.Test.summarise` shape (`case pair of ( _, Passed )
 -- -> … ; ( name, Failed _ ) -> …`). Before #174 only a LITERAL-tuple scrutinee
 -- could drive a tuple `match`, so a variable scrutinee fell fail-closed as
--- SKY-L0115. It now lowers to a by-value whole `match pair { (_, Passed) => …,
+-- IPE-L0115. It now lowers to a by-value whole `match pair { (_, Passed) => …,
 -- (name, Failed(_)) => … }` — no per-column coercion, matches the tuple value
 -- directly. skyc-0 ⟹ cargo-0.
 type Outcome

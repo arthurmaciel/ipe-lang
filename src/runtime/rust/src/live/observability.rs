@@ -50,11 +50,11 @@ pub async fn readyz() -> impl IntoResponse {
 }
 
 /// `GET /_sky/buildinfo` — build provenance. Values come from compile-time env
-/// (`SKY_BUILD_COMMIT` / `SKY_BUILD_AT` / `SKY_VERSION`), defaulting to `dev`.
+/// (`IPE_BUILD_COMMIT` / `IPE_BUILD_AT` / `IPE_VERSION`), defaulting to `dev`.
 pub async fn buildinfo() -> impl IntoResponse {
-    let commit = option_env!("SKY_BUILD_COMMIT").unwrap_or("dev");
-    let built_at = option_env!("SKY_BUILD_AT").unwrap_or("unknown");
-    let version = option_env!("SKY_VERSION").unwrap_or("dev");
+    let commit = option_env!("IPE_BUILD_COMMIT").unwrap_or("dev");
+    let built_at = option_env!("IPE_BUILD_AT").unwrap_or("unknown");
+    let version = option_env!("IPE_VERSION").unwrap_or("dev");
     let body =
         format!(r#"{{"commit":"{commit}","builtAt":"{built_at}","skyVersion":"{version}"}}"#);
     (StatusCode::OK, [JSON], body)
@@ -103,7 +103,7 @@ pub async fn track(
     // Auto request span + access log — but NOT for the internal observability
     // surface (SSE long-poll → multi-minute span; console proxy / metrics /
     // health → console's own polling noise) and NOT for a sub-app. A sub-app
-    // (`SKY_LIVE_BASE_PATH` set — e.g. the console child collector) must not
+    // (`IPE_LIVE_BASE_PATH` set — e.g. the console child collector) must not
     // self-instrument into the store it serves; it shows the PARENT's pushed
     // telemetry, not its own page renders.
     if !is_internal_path(&path) && !is_sub_app() {
@@ -204,15 +204,15 @@ fn sanitise_path(path: &str) -> String {
 /// events (the console's own traffic), and the health/metrics/build/ingest
 /// endpoints (operator polling noise).
 /// True when this process runs as a sub-app (mounted behind a parent's proxy,
-/// `SKY_LIVE_BASE_PATH` non-empty) — e.g. the bundled console child.
-/// `SKY_LIVE_BASE_PATH` is fixed for the process lifetime (set once at spawn by
+/// `IPE_LIVE_BASE_PATH` non-empty) — e.g. the bundled console child.
+/// `IPE_LIVE_BASE_PATH` is fixed for the process lifetime (set once at spawn by
 /// the parent's `MountSubApp`), so the env read is memoized: `track` runs this on
 /// every user-facing request, and `env::var` both locks the process-global env
 /// mutex and heap-allocates a `String` per call.
 fn is_sub_app() -> bool {
     static SUB_APP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *SUB_APP.get_or_init(|| {
-        crate::system::read_env_var("SKY_LIVE_BASE_PATH")
+        crate::system::read_env_var("IPE_LIVE_BASE_PATH")
             .map(|v| !v.is_empty())
             .unwrap_or(false)
     })

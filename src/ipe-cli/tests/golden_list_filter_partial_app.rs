@@ -23,11 +23,11 @@
 //! from the bug report (`List.filter (isVisible session) items`).
 //!
 //! ```text
-//! # compile-only check (fast, no SKY_E2E needed):
+//! # compile-only check (fast, no IPE_E2E needed):
 //! cargo test -p skyc --test golden_i161_list_filter_partial_app
 //!
 //! # full E2E (build the emitted crate with cargo AND run it):
-//! SKY_E2E=1 cargo test -p skyc --test golden_i161_list_filter_partial_app
+//! IPE_E2E=1 cargo test -p skyc --test golden_i161_list_filter_partial_app
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -40,7 +40,7 @@ fn repo_root() -> PathBuf {
 }
 
 /// Assert that `skyc::build(fixture)` SUCCEEDS (exit-0 from the lowerer).
-/// Runs without `SKY_E2E` so the compile check is always fast.
+/// Runs without `IPE_E2E` so the compile check is always fast.
 #[test]
 fn list_filter_partial_app_compiles() {
     let root = repo_root();
@@ -62,7 +62,7 @@ fn list_filter_partial_app_compiles() {
         built.err()
     );
 
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

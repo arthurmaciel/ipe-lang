@@ -6,11 +6,11 @@
 //! gate, a Model storing a non-admissible value (`Cmd` / `Sub` / `Task` /
 //! `Decoder` / `Db` / a function — or, for Live only, `Html` / `Element` /
 //! `Color`) made `skyc` exit 0 and then `cargo build` fail on the missing trait
-//! bound. The gate converts that into a fail-closed `SKY-L0120` diagnostic.
+//! bound. The gate converts that into a fail-closed `IPE-L0120` diagnostic.
 //!
 //! These tests are COMPILE-ONLY (they run the `skyc` pipeline + write the
 //! project, but never invoke `cargo`), so they are fast and NOT gated on
-//! `SKY_E2E`.
+//! `IPE_E2E`.
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
@@ -289,21 +289,21 @@ fn live_plain_data_model_is_accepted() -> Result<(), BoxError> {
 
 #[test]
 fn live_model_with_cmd_field_is_rejected() -> Result<(), BoxError> {
-    assert_rejected_with("live_cmd", LIVE_CMD_MODEL, "SKY-L0120")
+    assert_rejected_with("live_cmd", LIVE_CMD_MODEL, "IPE-L0120")
 }
 
 /// The CDPeq-but-not-serde case: `Html` is `Clone`/`PartialEq` but not `serde`,
 /// so a `Sky.Live` Model storing it is rejected (unlike Tui/Webview).
 #[test]
 fn live_model_with_html_field_is_rejected() -> Result<(), BoxError> {
-    assert_rejected_with("live_html", LIVE_HTML_MODEL, "SKY-L0120")
+    assert_rejected_with("live_html", LIVE_HTML_MODEL, "IPE-L0120")
 }
 
-/// `Secret` in a Live Model is a compile-time `SKY-L0120`, never
+/// `Secret` in a Live Model is a compile-time `IPE-L0120`, never
 /// a session-store leak — see `LIVE_SECRET_MODEL`'s doc comment.
 #[test]
 fn live_model_with_secret_field_is_rejected() -> Result<(), BoxError> {
-    assert_rejected_with("live_secret", LIVE_SECRET_MODEL, "SKY-L0120")
+    assert_rejected_with("live_secret", LIVE_SECRET_MODEL, "IPE-L0120")
 }
 
 #[test]
@@ -313,7 +313,7 @@ fn tui_plain_data_model_is_accepted() -> Result<(), BoxError> {
 
 #[test]
 fn tui_model_with_cmd_field_is_rejected() -> Result<(), BoxError> {
-    assert_rejected_with("tui_cmd", TUI_CMD_MODEL, "SKY-L0120")
+    assert_rejected_with("tui_cmd", TUI_CMD_MODEL, "IPE-L0120")
 }
 
 // ── lambda-`view` gate-bypass regressions ────────────────────────────────
@@ -329,7 +329,7 @@ fn tui_model_with_cmd_field_is_rejected() -> Result<(), BoxError> {
 
 /// Model has a `Cmd` field AND `view` is an inline lambda. A `FuncValue`-only
 /// gate would skip this (skyc-0 then cargo-fail); the Lambda-aware gate rejects
-/// it with SKY-L0120.
+/// it with IPE-L0120.
 const LIVE_LAMBDA_VIEW_CMD_MODEL: &str = r"module Main exposing (main)
 
 import Std.Live as Live
@@ -398,7 +398,7 @@ main =
 
 #[test]
 fn live_lambda_view_with_cmd_model_is_rejected() -> Result<(), BoxError> {
-    assert_rejected_with("live_lambda_cmd", LIVE_LAMBDA_VIEW_CMD_MODEL, "SKY-L0120")
+    assert_rejected_with("live_lambda_cmd", LIVE_LAMBDA_VIEW_CMD_MODEL, "IPE-L0120")
 }
 
 #[test]

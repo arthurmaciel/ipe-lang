@@ -11,7 +11,7 @@ import Std.Log exposing (println)
 -- Pre-fix: `eta_expand_partial` classified `Var(report)` in the partial
 -- application `Task.onError report` as slot-class `None` (because
 -- `ir_type_from_ty` failed on `Error -> Task Error a` when `a` is still
--- a free `Ty::Var`), triggering SKY-L0126.
+-- a free `Ty::Var`), triggering IPE-L0126.
 --
 -- Post-fix: a `Ty::Fun` slot that fails only due to a nested type variable
 -- maps to `Some(NonClone)` — forwarding the Var is a plain ownership

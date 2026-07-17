@@ -161,7 +161,7 @@ pub struct SourceFile {
     /// The driver-vouched trust tag. `EmbeddedStdlib` is only ever
     /// set by the driver for module paths it injected from the compiler's own
     /// embed table — a user file squatting on `Std.Foo` arrives as `User` and
-    /// stays SKY-N0025-rejected. Unforgeable from module text by construction:
+    /// stays IPE-N0025-rejected. Unforgeable from module text by construction:
     /// inputs are set exclusively at the driver boundary.
     pub origin: ModuleOrigin,
 }
@@ -211,7 +211,7 @@ pub fn parse(db: &dyn Db, file: SourceFile) -> ParseResult {
 ///
 /// Backed by [`extract_imports_from_source`] — a token-level scan (real
 /// lexer) whose edge set is a superset-or-equal of the AST's import edges,
-/// which is what makes the driver's SKY-N0021 cycle gate sound.
+/// which is what makes the driver's IPE-N0021 cycle gate sound.
 /// Deliberately pre-parse rather than derived from [`parse`]: the topo sort
 /// must still work on files whose parse would fail (a lex-failing file falls
 /// back to the line scan for ordering only — it contributes no AST edges),
@@ -240,7 +240,7 @@ pub enum ImportResolution {
     Resolved(SourceFile),
     /// Not in the file set: either a kernel module (canonicalisation resolves
     /// those against its built-in table) or a genuinely missing module
-    /// (canonicalisation emits SKY-N0020).
+    /// (canonicalisation emits IPE-N0020).
     Unresolved,
 }
 
@@ -306,7 +306,7 @@ pub type CanonResult = Result<Arc<CanonicalModule>, Diagnostic>;
 /// Canonicalise one module: `parse(self)` + `resolve_imports(self)` +
 /// `module_interface(dep)` for each resolved dep.
 ///
-/// Import cycles: the driver's topological sort rejects cycles (SKY-N0021)
+/// Import cycles: the driver's topological sort rejects cycles (IPE-N0021)
 /// before any `canonicalize` demand. That gate is sound because the topo
 /// sort's edge set ([`extract_imports_from_source`], a token-level scan via
 /// the real lexer) is a superset-or-equal of the AST import edges this query
@@ -330,7 +330,7 @@ pub fn canonicalize(db: &dyn Db, root: SourceRoot, file: SourceFile) -> CanonRes
         }
     }
 
-    // Known-module universe for the SKY-N0020 did-you-mean list. Strings
+    // Known-module universe for the IPE-N0020 did-you-mean list. Strings
     // only: interning module paths here (before their own canonicalize runs)
     // would perturb the build-wide symbol numbering the byte-identity SEAL
     // pins.
@@ -464,7 +464,7 @@ where
 
     // Start the DFS from `entry_path` so we only visit modules reachable from
     // the entry. Unknown modules (not in `module_set`) are skipped — the
-    // caller's canonicalisation emits SKY-N0020 for them.
+    // caller's canonicalisation emits IPE-N0020 for them.
     let entry_deps = imports_of(entry_path)
         .into_iter()
         .filter(|d| module_set.contains(d.as_slice()))
@@ -489,7 +489,7 @@ where
                 }
                 Some(Color::Black) | None => {
                     // Black: already fully visited — skip.
-                    // None: not in module_set (stdlib import) — skip; SKY-N0020
+                    // None: not in module_set (stdlib import) — skip; IPE-N0020
                     // fires later if it's a real local dep that's missing.
                 }
                 Some(Color::White) => {
@@ -531,7 +531,7 @@ where
 }
 
 /// The memoized dep-first module order of the whole project, or the
-/// SKY-N0021 import-cycle diagnostic.
+/// IPE-N0021 import-cycle diagnostic.
 pub type TopoOrderResult = Result<Arc<Vec<Vec<String>>>, Diagnostic>;
 
 /// The project's dependency-first module order, rooted at `entry`.
@@ -542,7 +542,7 @@ pub type TopoOrderResult = Result<Arc<Vec<Vec<String>>>, Diagnostic>;
 /// entry are appended after the reachable prefix in sorted module-path order
 /// (`SourceRoot.files` is a `BTreeMap`).
 ///
-/// Cycle handling: returns the SKY-N0021 diagnostic as a **value**. This
+/// Cycle handling: returns the IPE-N0021 diagnostic as a **value**. This
 /// query itself never recurses (the DFS is internal, `imports` is per-file),
 /// so demanding it on a cyclic graph is safe — which is exactly why
 /// [`linked_program`] routes through it BEFORE demanding any `canonicalize`.
@@ -593,7 +593,7 @@ pub type LinkedProgramResult = Result<Arc<LinkedProgram>, Diagnostic>;
 /// Demand order: modules are canonicalised in the [`topo_order`] dep-first
 /// order, which on a cold database reproduces the driver's interning
 /// sequence exactly (byte-identity SEAL). The cycle gate runs FIRST, so a
-/// cyclic graph yields the SKY-N0021 diagnostic as a value — never salsa's
+/// cyclic graph yields the IPE-N0021 diagnostic as a value — never salsa's
 /// dependency-cycle panic — even on a direct demand.
 #[salsa::tracked]
 pub fn linked_program(db: &dyn Db, root: SourceRoot, entry: SourceFile) -> LinkedProgramResult {
@@ -1078,7 +1078,7 @@ pub fn sync_source_root(
 /// the REAL lexer, so the returned edge set is a guaranteed
 /// superset-or-equal of the import edges in the parsed AST (the parser
 /// consumes the same token stream). That superset property is load-bearing:
-/// the driver's topological sort uses these edges for its SKY-N0021
+/// the driver's topological sort uses these edges for its IPE-N0021
 /// import-cycle gate, and a missed edge would let a cyclic
 /// `module_interface` demand reach salsa's dependency-cycle panic. A plain
 /// line scan that keyed on the literal prefix `"import "` would miss
@@ -1092,7 +1092,7 @@ pub fn sync_source_root(
 ///
 /// Kernel imports are included verbatim; the caller filters against its
 /// known-module set (unknown paths are skipped by the topo sort and later
-/// surface as SKY-N0020 in canonicalisation). Returns a `Vec<Vec<String>>`
+/// surface as IPE-N0020 in canonicalisation). Returns a `Vec<Vec<String>>`
 /// of path segments.
 #[must_use]
 pub fn extract_imports_from_source(source: &str) -> Vec<Vec<String>> {

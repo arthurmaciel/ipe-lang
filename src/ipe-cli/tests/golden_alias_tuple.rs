@@ -4,7 +4,7 @@
 //! in the arm body. This lowers to Rust's binding-with-subpattern
 //! `whole @ (a, b)`. Re-destructuring `whole` proves the WHOLE value is bound,
 //! not just its parts. `skyc` must emit `main.rs` byte-identical to the
-//! checked-in golden, and (behind `SKY_E2E=1`) the emitted project must build
+//! checked-in golden, and (behind `IPE_E2E=1`) the emitted project must build
 //! and print `20`.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
@@ -54,10 +54,10 @@ fn emits_byte_identical_main_rs() {
 }
 
 /// Full spine: compile, build, run, assert stdout `20` — the Go-backend value.
-/// Gated on `SKY_E2E=1` so the default `cargo test` stays fast.
+/// Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn end_to_end_builds_and_prints_twenty() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

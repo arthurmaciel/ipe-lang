@@ -1,7 +1,7 @@
 //! Boolean literal patterns: `case b of True -> … ; False -> …`.
 //! A `True` + `False` pair is a CLOSED, exhaustive cover of `Bool` (no wildcard
 //! required). `skyc` must emit `main.rs` byte-identical to the checked-in
-//! golden, and (behind `SKY_E2E=1`) the emitted project must build and print
+//! golden, and (behind `IPE_E2E=1`) the emitted project must build and print
 //! `1`.
 //!
 //! Behavioural-parity oracle: the Go reference compiler at
@@ -50,10 +50,10 @@ fn emits_byte_identical_main_rs() {
 }
 
 /// Full spine: compile, build, run, assert stdout `1` — the Go-backend value.
-/// Gated on `SKY_E2E=1` so the default `cargo test` stays fast.
+/// Gated on `IPE_E2E=1` so the default `cargo test` stays fast.
 #[test]
 fn end_to_end_builds_and_prints_one() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

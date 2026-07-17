@@ -8,7 +8,7 @@ import Counter
 -- unqualified scope.  The qualified annotation on `wrap` must still
 -- resolve `Counter.Msg` to Counter's home ([\"Counter\"]), not Main's
 -- ([\"Main\"]).  Without the qualifier_paths fix this would emit
--- SKY-T0001 because the canonicaliser looked up `type_home_map[\"Msg\"]`
+-- IPE-T0001 because the canonicaliser looked up `type_home_map[\"Msg\"]`
 -- which returned [\"Main\"] (the local type).
 type Msg
     = DoCount Counter.Msg

@@ -14,12 +14,12 @@
 //!   `let mapped = List.map (\x -> String.append prefix x) items in … prefix …`
 //!   The `move` closure steals `prefix`; the trailing `++ prefix ++ …` fails.
 //!
-//! Gated: the cargo build+run step requires `SKY_E2E=1`; without it the test
+//! Gated: the cargo build+run step requires `IPE_E2E=1`; without it the test
 //! is a no-op so the default CI pass stays fast.
 //!
 //! ```text
 //! # full E2E (cargo build + run):
-//! SKY_E2E=1 cargo test -p skyc --test golden_i104_seal
+//! IPE_E2E=1 cargo test -p skyc --test golden_i104_seal
 //!
 //! # gate only (fast, no cargo):
 //! cargo test -p skyc --test golden_i104_seal
@@ -40,7 +40,7 @@ fn repo_root() -> PathBuf {
 /// move `s`, making the branches' reuse E0382.
 #[test]
 fn f1_multiuse_let_clone() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -84,7 +84,7 @@ fn f1_multiuse_let_clone() {
 /// `++ "[" ++ prefix ++ "]"` is E0382.
 #[test]
 fn f2_closure_capture_reuse() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

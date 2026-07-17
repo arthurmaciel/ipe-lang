@@ -323,7 +323,7 @@ const RUNTIME_CONFIG_RS_DB_POSTGRES: &str =
     include_str!("../../../../../src/runtime/rust/src/config_postgres.rs");
 
 /// The `Diagnostic::CompilerBug` raised when a golden anchor is absent — a
-/// drifted-golden invariant violation, surfaced (SKY-I0203) instead of a silent
+/// drifted-golden invariant violation, surfaced (IPE-I0203) instead of a silent
 /// empty slice.
 fn anchor_missing(anchor: &str) -> Diagnostic {
     Diagnostic::CompilerBug {
@@ -363,7 +363,7 @@ fn bucket_or_bug<'p>(
 ///
 /// # Errors
 ///
-/// Returns [`Diagnostic::CompilerBug`] (SKY-I0203) if either anchor is absent
+/// Returns [`Diagnostic::CompilerBug`] (IPE-I0203) if either anchor is absent
 /// from the embedded golden — a drifted-golden invariant violation, surfaced
 /// instead of a silent empty slice.
 fn runtime_bindings() -> DResult<&'static str> {
@@ -627,7 +627,7 @@ fn assemble_project_files(
     //   • `mod.rs` — trimmed to the kernel set the program uses (non-db path
     //     keeps the default; db path appends `pub mod db; pub use db::*;`).
     //   • `config.rs` — the stub for non-db; the full db-type-alias file
-    //     for db programs (provides `DbPool`, `DbRow`, `SKY_DB_URL`, …).
+    //     for db programs (provides `DbPool`, `DbRow`, `IPE_DB_URL`, …).
     //   • `Cargo.toml` — adds `db` to default features + `sqlx` dep for db.
     // Build the manifest + runtime module selection based on which kernel groups
     // are used. Db, TEA, and Server are independent features; a program may use

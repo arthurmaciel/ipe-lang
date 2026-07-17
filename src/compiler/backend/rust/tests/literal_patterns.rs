@@ -23,7 +23,7 @@
 //!
 //! The alias case IS exhaustive (a binder matches anything), so its emitted
 //! crate builds and runs: `end_to_end_alias_binds_whole_value` (gated on
-//! `SKY_E2E=1`) drives the hand-built IR through the Rust backend and asserts
+//! `IPE_E2E=1`) drives the hand-built IR through the Rust backend and asserts
 //! `7`, matching the Go reference compiler at
 //! `/home/arthur/Documentos/comp/sky/sky-out/sky` on the shape-equivalent
 //!
@@ -382,7 +382,7 @@ fn alias_subpattern_renders_binding_with_subpattern() -> DResult<()> {
 
 /// Full spine: build the alias `Wrap` IR, emit, vendor the runtime, `cargo
 /// build`, run, and assert `7` — the Go-backend value for `f (MkWrap 7)` where
-/// the `as` binder rebinds the whole matched payload. Gated on `SKY_E2E=1`.
+/// the `as` binder rebinds the whole matched payload. Gated on `IPE_E2E=1`.
 #[test]
 fn end_to_end_alias_binds_whole_value() -> DResult<()> {
     let mut interner = Interner::new();
@@ -391,7 +391,7 @@ fn end_to_end_alias_binds_whole_value() -> DResult<()> {
 }
 
 /// Emit `prog`, vendor the runtime into a temp dir named `slot`, `cargo build`,
-/// run the binary, and assert its stdout equals `expected`. Gated on `SKY_E2E=1`
+/// run the binary, and assert its stdout equals `expected`. Gated on `IPE_E2E=1`
 /// so the default `cargo test` stays fast and offline.
 fn build_and_assert(
     interner: &Interner,
@@ -399,7 +399,7 @@ fn build_and_assert(
     slot: &str,
     expected: &str,
 ) -> DResult<()> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -456,7 +456,7 @@ fn io_bug(path: &Path, e: &std::io::Error) -> Diagnostic {
 }
 
 fn resolve_runtime() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("SKY_RUNTIME_DIR") {
+    if let Ok(dir) = std::env::var("IPE_RUNTIME_DIR") {
         let p = PathBuf::from(dir);
         if p.is_dir() {
             return Some(p);

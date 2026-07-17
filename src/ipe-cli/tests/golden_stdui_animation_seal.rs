@@ -1,18 +1,18 @@
 //! Seal gate for the native `Std.Ui.animateRaw` primitive + the compiled
-//! `Std.Ui.Animation` module (26-ui-showcase blocker #175: SKY-N0004 unknown
+//! `Std.Ui.Animation` module (26-ui-showcase blocker #175: IPE-N0004 unknown
 //! module `Animation`).
 //!
 //! `Std.Ui.Animation.attribute` is a pure-Sky wrapper over the native
 //! `Ui.animateRaw : String -> String -> String -> Bool -> Attribute msg` kernel
 //! (`KernelFn::UiAnimateRaw`), which constructs `AttrAnimation name shorthand
 //! keyframes respect`.  This test proves the whole seam:
-//!   * `import Std.Ui.Animation` resolves (no SKY-N0004 regression) — the module
+//!   * `import Std.Ui.Animation` resolves (no IPE-N0004 regression) — the module
 //!     also transitively pulls in its `Std.Ui.Transition` (`Easing`) and
 //!     `Std.Ui.Transform` (`Prop`/`propsToCss`) sibling ports;
 //!   * `Animation.attribute` type-checks against the `Spec` record;
 //!   * the emit lowers to `ui_animate_raw_(<name>, <shorthand>, <keyframes>,
 //!     <respect>)` — the four-arg native helper;
-//!   * (`SKY_E2E`) the emitted Cargo project builds — the seal: skyc exit-0 ⟹
+//!   * (`IPE_E2E`) the emitted Cargo project builds — the seal: skyc exit-0 ⟹
 //!     cargo exit-0 — and renders the CSS `animation:` shorthand.
 
 use std::path::PathBuf;
@@ -27,7 +27,7 @@ fn runtime() -> PathBuf {
 /// A minimal Std.Ui program exercising `Animation.attribute`. NOTE: the
 /// `keyframes` list is left EMPTY deliberately. A populated keyframe list routes
 /// through `Std.Ui.Transform.propsToCss`, whose refutable tuple patterns
-/// (`( "transform", v ) -> …`) hit the still-unimplemented `SKY-L0115
+/// (`( "transform", v ) -> …`) hit the still-unimplemented `IPE-L0115
 /// TuplePatternMatch` lowering — an INDEPENDENT blocker from this
 /// module's resolution + kernel wiring. Empty keyframes still fully
 /// exercise `Ui.animateRaw` (name + shorthand tail + empty body + respect flag),
@@ -75,7 +75,7 @@ fn build_animation_project(slot: &str) -> (PathBuf, Result<(), skyc::CliError>) 
     (emit, res)
 }
 
-/// `Std.Ui.Animation` resolves (no SKY-N0004), type-checks, and the emit lowers
+/// `Std.Ui.Animation` resolves (no IPE-N0004), type-checks, and the emit lowers
 /// `Animation.attribute` to the four-arg `ui_animate_raw_` native helper.
 ///
 /// Now supported: `Std.Ui.Transform`'s refutable tuple `case`s
@@ -112,13 +112,13 @@ fn animation_module_resolves_and_emits_kernel() {
     );
 }
 
-/// The GREEN GATE: under `SKY_E2E=1` the emitted Cargo project builds and runs,
+/// The GREEN GATE: under `IPE_E2E=1` the emitted Cargo project builds and runs,
 /// rendering the CSS `animation:` shorthand — the seal, end to end.
 ///
 /// Now supported (see `animation_module_resolves_and_emits_kernel`).
 #[test]
 fn animation_e2e_builds_and_renders_shorthand() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let (emit, res) = build_animation_project("e2e");

@@ -31,10 +31,10 @@ not yet built on one side, or tooling ergonomics).
 | # | Concept / pass / capability | Their approach | Our approach | Verdict | Deciding principle | Adoption + roadmap slot |
 |---|---|---|---|---|---|---|
 | 1 | Expression lowering shape | `Can.Expr_` → Rust string in one walker (`ExprEmitter.hs`) | `canon → typed sky_ir::Expr → Rust` (two-stage) | **O+** | soundness / invalid-states | keep typed IR checkpoint |
-| 2 | Kernel dispatch | `(mod,name)` string `case`; **fail-open** snake_case default | closed 406-variant `KernelFn`; **fail-closed** SKY-L0108 | **O+** | security → correctness | keep; add typed FFI arm at FFI-phase |
+| 2 | Kernel dispatch | `(mod,name)` string `case`; **fail-open** snake_case default | closed 406-variant `KernelFn`; **fail-closed** IPE-L0108 | **O+** | security → correctness | keep; add typed FFI arm at FFI-phase |
 | 3 | Case-arm pattern emission (top level) | raw `match`, slice patterns, Maybe/Result bridge | same + explicit ctor field-count `CompilerBug` guard | **O+** | soundness | keep |
 | 4 | Nested list/cons/record inside ctor payload | recurses, compiles | fail-closed `Err(NestedCtorDiscrimination/NestedPayloadPatterns)` | **~** (ours safer, less complete) | soundness > completeness | close completeness gap — **pre-sweep** |
-| 5 | Refutable function-arg patterns (`f (Just x) =`) | synthesize `let…else { panic! }` (reachable panic) | reject at lower (SKY-L0115/0116) | **O+** | soundness ("no panic from well-typed Sky") | close via front-end desugar, NOT their panic — **pre-sweep/before-push** |
+| 5 | Refutable function-arg patterns (`f (Just x) =`) | synthesize `let…else { panic! }` (reachable panic) | reject at lower (IPE-L0115/0116) | **O+** | soundness ("no panic from well-typed Sky") | close via front-end desugar, NOT their panic — **pre-sweep/before-push** |
 | 6 | Bare `.field` accessor-as-function | `Can.Accessor` → closure | not representable (no AST variant) | **~** (front-end gap) | completeness | front-end AST work — **pre-sweep** |
 | 7 | Tail-call optimization | `TailCallOpt.hs` analysis; **Go-only** emission; Rust backend has NO TCO | absent (task #49) | **T+** (vs Go); tie (vs their Rust) | soundness (constant stack vs uncatchable overflow trap) | port analysis, author Rust `loop` emission ourselves — **before-push (#49)** |
 | 8 | Kernel type source of truth (#45 root) | `.sky` annotation is the ONE typed source; unknown kernel = unbound-name error | duplicate hand-kept `kernel_ty` table + `Ty::Var(u32::MAX)` fallback | **T+** | parse-don't-validate / invalid-states | single fail-closed source + parity tripwire — **pre-sweep (#45)** |
@@ -137,7 +137,7 @@ to.
    call-site type (or, per the banked Phase-C bridge, move the scheme INTO
    `StdlibDecl` so the registry is the single source). Delete the duplicate
    `kernel_ty` arm set and the `_ => Ty::Var(u32::MAX)` fallback; replace the
-   fallback with a fail-closed `Err(SKY-L0108)` for any kernel lacking a
+   fallback with a fail-closed `Err(IPE-L0108)` for any kernel lacking a
    scheme, plus a `stdlib_scheme ≡ kernel_ty` parity tripwire. **Bundle the
    phantom-error turbofish + zero-arg pins (item 14)** into that same source as
    optional `turbofish: Option<&'static str>` / `zero_arg: bool` fields so a
@@ -167,7 +167,7 @@ to.
    or cache Go outputs as fixtures); port `equivalence-corpus.sh` first (pure-stdlib
    stdout byte-diff — cheapest, highest signal), then `equivalence-render.sh` (drives
    the already-vendored `equivalence_normalize_html.py` / `equivalence_tui_grid.py`
-   normalizers); flip `examples-sweep.sh` off `SKY_SWEEP_NO_EQUIV`; port the
+   normalizers); flip `examples-sweep.sh` off `IPE_SWEEP_NO_EQUIV`; port the
    harness self-tests. Author the non-FFI subset of `tests/sky/` as ipê
    fixtures now (they double as skyc goldens), prioritizing the
    silent-divergence classes: json HTML-escape, float display threshold,
@@ -254,7 +254,7 @@ pre-sweep; #47 + F7 before push; sweep; parity; push; FFI post-DONE):
 
 **Pre-DONE (literal endgame gate)**
 - Stand up Go oracle → port `equivalence-corpus.sh` → `equivalence-render.sh` → flip off
-  `SKY_SWEEP_NO_EQUIV` → port harness self-tests (items 20/24).
+  `IPE_SWEEP_NO_EQUIV` → port harness self-tests (items 20/24).
 
 **FFI-phase (post-DONE)**
 - #40 inspector wiring + `quoteShell` arg-quoting.
@@ -271,7 +271,7 @@ pre-sweep; #47 + F7 before push; sweep; parity; push; FFI post-DONE):
 
 - **Typed IR checkpoint** (`canon → sky_ir → Rust`) vs their AST→string single
   pass — malformed shapes are unrepresentable, not caught only at rustc.
-- **Closed 406-variant `KernelFn` + fail-closed SKY-L0108 dispatch** vs their
+- **Closed 406-variant `KernelFn` + fail-closed IPE-L0108 dispatch** vs their
   stringly-typed fail-open snake_case default — their default is the exact
   exit-0-then-cargo-fail class; the enum *is* the registry.
 - **`render_type : IrType → DResult` closed enum, no `"String"` default** vs

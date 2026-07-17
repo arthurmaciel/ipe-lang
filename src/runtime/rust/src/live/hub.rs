@@ -3,7 +3,7 @@
 //! The console (`sky-bundled/console`) is itself a `Sky.Live` app; its
 //! `HubStore.sky` declares twelve `Ffi.kernel "Hub_read*"` bindings that the
 //! Rust codegen lowers to the `hub_*` functions in this module. Each reads the
-//! SQLite telemetry **spill** (`SKY_CONSOLE_HUB_DB` / the `dbPath` arg, written
+//! SQLite telemetry **spill** (`IPE_CONSOLE_HUB_DB` / the `dbPath` arg, written
 //! by the dual-write) and returns the console's typed `State*` record shape.
 //!
 //! ## Why generic over the return type
@@ -51,7 +51,7 @@ use std::time::Duration;
 // What is NOT wired here (tracked as a follow-up, not a silent gap): the
 // PRODUCER side — deriving a tenant prefix from a live session's authenticated
 // identity (`id.Claims["tenant"]`) and calling `with_tenant_prefix` from the
-// request-dispatch loop. That depends on `SKY_CONSOLE_AUTH=app` (the row-poly
+// request-dispatch loop. That depends on `IPE_CONSOLE_AUTH=app` (the row-poly
 // `consoleAuth` callback that mints a per-session `Identity` with `claims`),
 // which is not yet implemented in this Rust runtime —
 // `src/runtime/rust/src/live/console.rs`'s `ConsoleAuthMode::App` arm is

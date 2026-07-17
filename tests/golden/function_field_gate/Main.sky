@@ -4,7 +4,7 @@ import Sky.Core.Prelude exposing (..)
 -- A function value reaching a record field THROUGH a type variable:
 -- `wrap`'s field `value : a` instantiates to `Int -> Int` at this call,
 -- so the synthesised struct would carry a `Box<dyn Fn>` field that cannot
--- derive Clone/Debug/PartialEq. The compiler must reject this (SKY-L0107),
+-- derive Clone/Debug/PartialEq. The compiler must reject this (IPE-L0107),
 -- never emit Rust that does not build.
 wrap : a -> { value : a }
 wrap x = { value = x }

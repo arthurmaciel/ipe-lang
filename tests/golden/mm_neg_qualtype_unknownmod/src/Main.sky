@@ -4,7 +4,7 @@ import Sky.Core.Prelude exposing (..)
 
 -- m-negative gate: the annotation references `Bogus.Box`, but no module named
 -- `Bogus` is imported or exists. Canonicalisation must reject this with
--- SKY-N0004 (unknown module) rather than pass it through to codegen.
+-- IPE-N0004 (unknown module) rather than pass it through to codegen.
 answer : Bogus.Box Int
 answer =
     42

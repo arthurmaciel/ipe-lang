@@ -16,7 +16,7 @@ The namespace *encodes the trust boundary*:
 
 - **`Ipe.*`** — first-party stdlib. **Reserved and compiler-owned**: it resolves
   only to the blessed stdlib; a user/third-party module can never *be* `Ipe.X`
-  (extends the existing SKY-N0025 hostile-std-squat gate to the whole prefix).
+  (extends the existing IPE-N0025 hostile-std-squat gate to the whole prefix).
 - **`Rust.*`** — the FFI boundary (native crate calls). **Invariant, not
   convention:** *every* native crossing is spelled `Rust.`, everywhere,
   regardless of which library ships it — so a third-party package that does FFI
@@ -82,7 +82,7 @@ deps). Adopt the Go model:
 
 | Rule | Enforced at |
 |---|---|
-| `Ipe.*` reserved / unsquattable (D1) | resolver — reject a user module resolving under `Ipe.` (generalize SKY-N0025) |
+| `Ipe.*` reserved / unsquattable (D1) | resolver — reject a user module resolving under `Ipe.` (generalize IPE-N0025) |
 | `Rust.*` = FFI, greppable invariant (D1) | resolver + FFI lowering — only `Rust.*` reaches the native-call path; sandbox/`Task` typing applied there |
 | auto-prelude set (D2) | resolver import-injection; fixed documented list |
 | no silent shadow of a prelude name (D3) | resolver — bare name binds `Ipe.*`; a colliding unaliased import is an error; `as` rebind allowed |

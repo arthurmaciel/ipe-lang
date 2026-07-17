@@ -23,7 +23,7 @@ const SUGGESTION_MAX_DISTANCE: usize = 2;
 
 /// Type-constructor names the compiler reserves for built-ins. A user `type` /
 /// `type alias` whose name is one of these is rejected at declaration
-/// ([`NameError::ReservedBuiltinType`], SKY-N0026).
+/// ([`NameError::ReservedBuiltinType`], IPE-N0026).
 ///
 /// This is the exact set that `ipe_lower`'s `ir_type_from_ty` matches *ahead of*
 /// its user-enum lookup (`enum_variants` guard). Because that match keys on the
@@ -186,7 +186,7 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
 /// they are resolved by the runtime as opaque handles.
 ///
 /// Without these entries, bare annotations
-/// like `handleHome : Handler` fail with `TypeNotFound` / SKY-N0002 even
+/// like `handleHome : Handler` fail with `TypeNotFound` / IPE-N0002 even
 /// though they are legitimate kernel builtins. Each entry receives the
 /// empty-home sentinel (`Vec::new()`) just like `RESERVED_BUILTIN_TYPES` and
 /// `EXTRA_BUILTIN_TYPE_NAMES`.
@@ -218,7 +218,7 @@ const KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES: &[&str] = &[
 
 /// The subset of [`RESERVED_BUILTIN_TYPES`] that a trusted
 /// [`ModuleOrigin::EmbeddedStdlib`] module is permitted to DEFINE, while a
-/// [`ModuleOrigin::User`] module stays rejected (SKY-N0026).
+/// [`ModuleOrigin::User`] module stays rejected (IPE-N0026).
 ///
 /// These are exactly the nullary Std.Ui / Sky.Live opaque names that sit
 /// BELOW the home-aware `enum_variants` guard in the lowerer
@@ -230,12 +230,12 @@ const KERNEL_IMPLICIT_PRELUDE_TYPE_NAMES: &[&str] = &[
 /// load-bearing for lowering-soundness on this exact set.
 ///
 /// The reservation is retained for [`ModuleOrigin::User`] as a defence-in-depth
-/// *user-facing guarantee* ("you cannot shadow `Length`" → a clean SKY-N0026
+/// *user-facing guarantee* ("you cannot shadow `Length`" → a clean IPE-N0026
 /// rather than a confusing dual-`Length` type-boundary error against the
 /// built-in `UiPlain::Length`). The carve-out is keyed on the UNFORGEABLE typed
 /// [`ModuleOrigin`], never on module text: a hostile user file named
 /// `Std.Css` is discovered as User source and gets NEITHER this exemption NOR
-/// the SKY-N0025 namespace exemption.
+/// the IPE-N0025 namespace exemption.
 ///
 /// NOTE: the load-bearing built-in names whose lowerer arms sit ABOVE the
 /// `enum_variants` guard (`Html` / `Attribute` / `Event` / `Element`, plus every
@@ -273,7 +273,7 @@ const STDLIB_DEFINABLE_UI_TYPES: &[&str] = &[
 /// `ipe_lower::is_opaque_boxed_wrapper` recognises it: every `Decoder a`
 /// annotation lowers to the shared `IrType::Decoder(a)` carrier and the
 /// `type Decoder a = Decoder` declaration injects no competing enum. A
-/// [`ModuleOrigin::User`] module stays rejected (SKY-N0026), so the shared
+/// [`ModuleOrigin::User`] module stays rejected (IPE-N0026), so the shared
 /// security-tier carrier cannot be shadowed by user code.
 const STDLIB_DEFINABLE_CARRIER_TYPES: &[&str] = &["Decoder"];
 
@@ -318,7 +318,7 @@ fn reject_reserved_builtin_type(
 /// module whose source came from `skyc`'s compile-time embed table, and never
 /// derivable from module text. A hostile user file literally named `Std.Palette`
 /// is discovered as ordinary user source, tagged [`Self::User`], and stays
-/// rejected by the reserved-namespace gate (SKY-N0025).
+/// rejected by the reserved-namespace gate (IPE-N0025).
 ///
 /// MAKE INVALID STATES UNREPRESENTABLE: "this module is trusted stdlib" is a
 /// typed value, not a string check on the module name.
@@ -328,7 +328,7 @@ pub enum ModuleOrigin {
     /// reserved-builtin-type gate.
     User,
     /// A compiled-source stdlib module injected from `skyc`'s embed table. Exempt
-    /// from SKY-N0025 (it legitimately declares `module Std.…`) and required to
+    /// from IPE-N0025 (it legitimately declares `module Std.…`) and required to
     /// be fully annotated (fail-closed gate below).
     EmbeddedStdlib,
 }
@@ -469,7 +469,7 @@ pub fn canonicalise_module(
 /// Canonicalise a module carrying an explicit trust [`ModuleOrigin`].
 ///
 /// Identical to [`canonicalise_module`] except that an [`ModuleOrigin::EmbeddedStdlib`]
-/// module is (a) exempt from the SKY-N0025 reserved-namespace gate — it
+/// module is (a) exempt from the IPE-N0025 reserved-namespace gate — it
 /// legitimately declares `module Std.…` — and (b) required to carry a type
 /// annotation on every top-level binding (fail-closed; see the gate at the end
 /// of this function). A [`ModuleOrigin::User`] module is treated exactly as
@@ -487,7 +487,7 @@ pub fn canonicalise_module_with_origin(
     interner: &mut Interner,
 ) -> DResult<(canon::Module, crate::ModuleExports)> {
     // Legacy entry point: dep exports arrive as an owned map and the
-    // known-module universe for SKY-N0020 did-you-mean IS that map's key set —
+    // known-module universe for IPE-N0020 did-you-mean IS that map's key set —
     // the pre-incremental behaviour, preserved for non-driver callers.
     let dep_refs: BTreeMap<Vec<Symbol>, &crate::ModuleExports> =
         deps.iter().map(|(k, v)| (k.clone(), v)).collect();
@@ -506,7 +506,7 @@ pub fn canonicalise_module_with_origin(
 ///   `module_interface` query memos) rather than owned clones, and is expected
 ///   to contain exactly this module's resolved imports — the only entries the
 ///   pre-incremental accumulated map ever observably consulted;
-/// * `known_modules` (dot-joined module paths) supplies the SKY-N0020
+/// * `known_modules` (dot-joined module paths) supplies the IPE-N0020
 ///   did-you-mean candidate list, decoupling the *suggestion universe* (all
 ///   modules in the project) from the *injection map* (this module's imports).
 ///   Strings only — suggestion building must never intern (interning here
@@ -525,7 +525,7 @@ pub fn canonicalise_module_in_project(
 ) -> DResult<(canon::Module, crate::ModuleExports)> {
     let home = m.name.value.clone();
 
-    // SKY-N0023: declared module name must match the path the build driver
+    // IPE-N0023: declared module name must match the path the build driver
     // computed from the file's location.
     if home.as_slice() != expected_path {
         let declared = path_to_dot_string(interner, &home);
@@ -536,7 +536,7 @@ pub fn canonicalise_module_in_project(
         });
     }
 
-    // SKY-N0025: `Sky` and `Std` are reserved for the compiler's own stdlib.
+    // IPE-N0025: `Sky` and `Std` are reserved for the compiler's own stdlib.
     // User modules whose first path segment matches either are rejected here so
     // they never shadow prelude symbols downstream. An EmbeddedStdlib module is
     // the ONE legitimate definer of a `Std.…` / `Sky.…` home, so it is exempt —
@@ -578,11 +578,11 @@ pub fn canonicalise_module_in_project(
     let mut unqual_ctor_origins: BTreeMap<Symbol, Vec<Symbol>> = BTreeMap::new();
     for import in &m.imports {
         let dep_path = &import.name.value;
-        // SKY-kernel vs compiled-source discrimination (fail-closed).
+        // IPE-kernel vs compiled-source discrimination (fail-closed).
         //
         // A `Sky.*` / `Std.*` import is EITHER a kernel module whose qualifiers
         // are pre-installed by `Env::initial` (absent from the user `deps` map —
-        // a `deps.get` on it would spuriously SKY-N0020 every importer of
+        // a `deps.get` on it would spuriously IPE-N0020 every importer of
         // `Sky.Core.Prelude`) OR a compiled-source stdlib module the build driver
         // injected into `deps` (e.g. `Std.Palette` / `Std.Css`). The former stays
         // on the qualifier-only `continue` path; the latter falls through to the
@@ -597,7 +597,7 @@ pub fn canonicalise_module_in_project(
         {
             continue;
         }
-        // SKY-N0020: dep module must have been discovered + canonicalised before
+        // IPE-N0020: dep module must have been discovered + canonicalised before
         // this module in topological order.
         let dep = *deps.get(dep_path).ok_or_else(|| {
             let name = path_to_dot_string(interner, dep_path);
@@ -844,7 +844,7 @@ fn register_stdlib_import_aliases(
 /// `import M exposing (member)` for a stdlib module registers value members
 /// into unqualified scope. Stdlib imports are skipped by the dep-injection loop
 /// ([`inject_dep_exports`] never runs for them), so without this a bare `member`
-/// reference would fall through to `SKY-N0001`. This is the exposing-list
+/// reference would fall through to `IPE-N0001`. This is the exposing-list
 /// counterpart of the stdlib
 /// alias registration ([`register_stdlib_import_aliases`]): it reuses the same
 /// authoritative path→qualifier table via [`Env::canonical_stdlib_qualifier`].
@@ -866,7 +866,7 @@ fn register_stdlib_import_aliases(
 ///   the module's actual members — never a silently invented unqualified
 ///   binding. A path that names no known/ported stdlib module registers nothing
 ///   (matching [`register_stdlib_import_aliases`]); a later unqualified use
-///   surfaces the ordinary `SKY-N0001` at its use site.
+///   surfaces the ordinary `IPE-N0001` at its use site.
 /// * Exposed names fold into `seen_values`, so a user top-level value (or a
 ///   synth record-alias ctor) of the same name surfaces
 ///   [`NameError::DuplicateValue`] rather than silently shadowing — matching the
@@ -1017,7 +1017,7 @@ const HOME_SENSITIVE_BUILTIN_TYPES: &[&str] = &["Attribute", "Event"];
 ///   leave the sentinel rather than silently pinning one home.
 /// * Runs BEFORE any value body is canonicalised.
 /// * A later LOCAL `type Attribute` is already rejected by
-///   `reject_reserved_builtin_type` (SKY-N0026); re-inserting the same `["Html"]`
+///   `reject_reserved_builtin_type` (IPE-N0026); re-inserting the same `["Html"]`
 ///   is idempotent (`entry(..).or_insert`).
 fn inject_stdlib_exposed_type_homes(
     m: &src::Module,
@@ -1165,7 +1165,7 @@ fn fold_html_stdlib_qualifier_homes(
 ///
 /// A path that names no known/ported stdlib module floods nothing (fail-closed,
 /// via [`Env::canonical_stdlib_qualifier`]); a later bare use surfaces the
-/// ordinary `SKY-N0001` at its use site.
+/// ordinary `IPE-N0001` at its use site.
 ///
 /// # Errors
 /// [`Diagnostic::CompilerBug`] if interning `Sky` / `Std` exhausts the interner.
@@ -1252,11 +1252,11 @@ fn canonicalise_with_env(
     // A LOCAL type/alias declaration whose name already has a
     // `type_home_map` entry from a DIFFERENT home is a dep-imported type being
     // shadowed. Reject it here, at the declaration, with the SAME
-    // `NameError::DuplicateType` (SKY-N0012) `inject_dep_type` already uses for a
+    // `NameError::DuplicateType` (IPE-N0012) `inject_dep_type` already uses for a
     // dep-vs-dep clash — closing the asymmetry where THAT clash was caught
     // cleanly but this one silently mis-registered the environment (the local
     // ctors won, but the type-home map kept pointing at the dep's home),
-    // surfacing three functions later as an unrelated SKY-T0001 type mismatch
+    // surfacing three functions later as an unrelated IPE-T0001 type mismatch
     // (docs/adr/0010-pattern-and-lowering-completeness.md, item D).
     //
     // This standalone pre-pass READS `type_home_map` but does NOT yet write this
@@ -1325,7 +1325,7 @@ fn canonicalise_with_env(
     for u in &m.unions {
         let type_name = u.value.name.value;
         let type_span = u.value.name.span;
-        // SKY-N0026: reject a user type whose name shadows a reserved built-in
+        // IPE-N0026: reject a user type whose name shadows a reserved built-in
         // before it can silently override the lowerer's builtin-name mapping.
         reject_reserved_builtin_type(type_name, type_span, origin, interner)?;
         if let Some(&first) = seen_types.get(&type_name) {
@@ -1356,7 +1356,7 @@ fn canonicalise_with_env(
     for a in &m.aliases {
         let alias_name = a.value.name.value;
         let alias_span = a.value.name.span;
-        // SKY-N0026: `type alias` names are gated the same as `type` names — an
+        // IPE-N0026: `type alias` names are gated the same as `type` names — an
         // alias shadowing a built-in would be silently overridden too.
         reject_reserved_builtin_type(alias_name, alias_span, origin, interner)?;
         if let Some(&first) = seen_types.get(&alias_name) {
@@ -1396,7 +1396,7 @@ fn canonicalise_with_env(
     }
 
     // Synthesize a value-level auto-constructor for every local record type
-    // alias (SKY-N0001). Built here — the single site where each alias's
+    // alias (IPE-N0001). Built here — the single site where each alias's
     // source-order fields are known — as an ordinary typed `Def`, so no later
     // stage special-cases it. Must run before the value pre-pass so the ctor
     // names participate in `seen_values` (a user value colliding with a ctor
@@ -1506,7 +1506,7 @@ fn canonicalise_with_env(
 }
 
 /// Synthesize the value-level auto-constructor for every LOCAL `type alias`
-/// whose declaration body is a *literal* record (SKY-N0001).
+/// whose declaration body is a *literal* record (IPE-N0001).
 ///
 /// For `type alias T p0..pk = { f0 : A0, …, fN : AN }` this produces the
 /// ordinary typed binding
@@ -1529,7 +1529,7 @@ fn canonicalise_with_env(
 ///   alias (`type alias U = T`) gets **no** constructor — matching Elm — because
 ///   its source body is a `TType`, not a `TRecord`.
 /// * A non-record alias (`type alias Count = Int`) gets no binding, so using it
-///   as a value stays an ordinary `SKY-N0001` name error.
+///   as a value stays an ordinary `IPE-N0001` name error.
 ///
 /// The result is a **closed** record: this compiler has no row variable, so a
 /// missing / extra / mis-typed field is a compile error, never silent
@@ -1685,7 +1685,7 @@ fn synthesize_record_alias_ctors(
         //     `{ p : (Int -> Int, Bool) }`, `{ g : Result e (Int -> Int) }`, a
         //     nested record). For a DIRECT arrow the lowerer's own
         //     `embeds_nonderivable_function` region gate would reject the (unused,
-        //     un-DCE'd) ctor body at SKY-L0107; a head-only gate over the nested
+        //     un-DCE'd) ctor body at IPE-L0107; a head-only gate over the nested
         //     shape would emit Rust that cargo then rejects.
         //   * an OPAQUE boxed-wrapper field (`{ dec : Decoder Int }`,
         //     `{ cmd : Cmd Msg }`, `Sub`, `Task`) — skyc accepts it but cargo
@@ -1723,7 +1723,7 @@ fn synthesize_record_alias_ctors(
         // winner, and there is no competing entry in `env.vars` that a user could
         // accidentally reference.
         //
-        // The old code emitted SKY-N0010 (DuplicateValue) here, which was wrong
+        // The old code emitted IPE-N0010 (DuplicateValue) here, which was wrong
         // and broke the `type Tab = Overview | …` + `type alias Overview = { … }`
         // pattern found in examples/25-sky-console/src/State.sky.
         //
@@ -1772,14 +1772,14 @@ fn synthesize_record_alias_ctors(
 
 /// Register a dep-imported type name into `type_home_map`, rejecting a clash
 /// with a DIFFERENT already-imported home under [`NameError::DuplicateType`]
-/// (SKY-N0012).
+/// (IPE-N0012).
 ///
 /// The two types are genuinely distinct nominal identities `(home, name)` —
 /// each emits its own Rust enum — but bringing both into scope
 /// under the same UNQUALIFIED type name (`import ModA exposing (ColorA)` +
 /// `import ModB exposing (ColorA)`) leaves `ColorA` unresolvable to a single
 /// type. This is the type-level analogue of the value-import ambiguity gate
-/// ([`check_and_inject_value`], SKY-N0024). A re-injection of the SAME
+/// ([`check_and_inject_value`], IPE-N0024). A re-injection of the SAME
 /// `(name, home)` — e.g. a diamond dependency reaching one home by two paths —
 /// is idempotent and accepted.
 fn inject_dep_type(
@@ -1810,9 +1810,9 @@ fn inject_dep_type(
 ///
 /// * Unqualified value/type/ctor injection for `exposing (..)` or an explicit
 ///   `exposing (name, Type(..))` list.
-/// * SKY-N0022 (`NameNotExposed`) when the exposing list names a value or type
+/// * IPE-N0022 (`NameNotExposed`) when the exposing list names a value or type
 ///   the dep does not export.
-/// * SKY-N0024 (`AmbiguousImport`) when the same unqualified name was already
+/// * IPE-N0024 (`AmbiguousImport`) when the same unqualified name was already
 ///   injected from a different dep module (applies to both VALUES and
 ///   CONSTRUCTORS — previously only values were checked).
 /// * Qualifier registration (`import M as Q` or auto-qualifier = last segment).
@@ -2053,7 +2053,7 @@ fn check_and_inject_value(
 }
 
 /// Inject all constructors belonging to `type_name` from `dep` into `env`,
-/// applying the same SKY-N0024 ambiguity check that [`check_and_inject_value`]
+/// applying the same IPE-N0024 ambiguity check that [`check_and_inject_value`]
 /// applies to values.
 ///
 /// `unqual_ctor_origins` is the parallel tracking map for constructors: each
@@ -2078,7 +2078,7 @@ fn inject_ctors_for_type(
             if let Some(prior_path) = unqual_ctor_origins.get(&ctor_home.name) {
                 if prior_path.as_slice() != dep_path.as_slice() {
                     // Two different dep modules both expose this constructor
-                    // unqualified — SKY-N0024 (same code as for value ambiguity).
+                    // unqualified — IPE-N0024 (same code as for value ambiguity).
                     let name_s = name_str(interner, ctor_home.name)?;
                     let prior_s = path_to_dot_string(interner, prior_path);
                     let dep_s = path_to_dot_string(interner, dep_path);
@@ -2730,12 +2730,12 @@ fn var_home_to_expr(name: Symbol, home: &VarHome) -> canon::Expr_ {
 }
 
 /// Resolve a bare name against the low-priority wildcard tier
-/// ([`Env::wildcard_vars`]), or fail with the ordinary `SKY-N0001` when it is
+/// ([`Env::wildcard_vars`]), or fail with the ordinary `IPE-N0001` when it is
 /// absent there too.
 ///
 /// * Exactly one surviving origin → resolve to its cloned kernel home (identical
 ///   to the qualified reference).
-/// * Two or more distinct origins → [`NameError::AmbiguousImport`] (SKY-N0024) at
+/// * Two or more distinct origins → [`NameError::AmbiguousImport`] (IPE-N0024) at
 ///   THIS use site, listing every contributing module — never a silent
 ///   last-wins.
 fn resolve_wildcard_var(
@@ -2770,7 +2770,7 @@ fn resolve_wildcard_var(
     Err(value_not_found(name, span, env, interner)?)
 }
 
-/// Build the ordinary `SKY-N0001` [`NameError::ValueNotFound`] for a bare name.
+/// Build the ordinary `IPE-N0001` [`NameError::ValueNotFound`] for a bare name.
 ///
 /// A bare value name can resolve to either a value binding or a constructor used
 /// as a value, so the suggestion pool spans both namespaces (value bindings
@@ -3084,10 +3084,10 @@ fn resolve_op_func(op: Symbol, interner: &mut Interner) -> DResult<Symbol> {
 /// 2. `RESERVED_BUILTIN_TYPES` / `EXTRA_BUILTIN_TYPE_NAMES` — known builtin
 ///    names that the lowerer handles by explicit arm; they receive the
 ///    empty-home sentinel (`Vec::new()`).
-/// 3. Anything else: emit `TypeNotFound` / `SKY-N0002` with a did-you-mean
+/// 3. Anything else: emit `TypeNotFound` / `IPE-N0002` with a did-you-mean
 ///    suggestion list.  This replaces the former `unwrap_or_default()` silent
 ///    fallback and the downstream `enum_variants` unique-match heuristic
-///    (removed in `ipe_lower`) that previously ICE'd with `SKY-I0001` on
+///    (removed in `ipe_lower`) that previously ICE'd with `IPE-I0001` on
 ///    ambiguous or absent names.
 #[allow(clippy::redundant_else)] // cascading early-returns need else for clarity
 fn resolve_unqualified_type_home(name: Symbol, ctx: &TypeCtx) -> DResult<Vec<Symbol>> {
@@ -3103,7 +3103,7 @@ fn resolve_unqualified_type_home(name: Symbol, ctx: &TypeCtx) -> DResult<Vec<Sym
         return Ok(Vec::new());
     }
     // Unknown type — fail closed at canon time so this never reaches the
-    // lowerer as an empty-home Con (former ICE path, SKY-I0001).
+    // lowerer as an empty-home Con (former ICE path, IPE-I0001).
     let candidates = ctx.type_home_map.keys().chain(ctx.aliases.keys()).copied();
     let sugg = suggestions(name, candidates, ctx.interner);
     Err(Diagnostic::Name {
@@ -3262,7 +3262,7 @@ fn canonicalise_type(
             // for a Html-family STDLIB qualifier, so `Attr.Attribute` →
             // `html::Attribute` while `Ui.Attribute` (not folded) falls through to
             // the empty Ui sentinel. Unqualified: delegate to
-            // `resolve_unqualified_type_home` which fails closed with SKY-N0002
+            // `resolve_unqualified_type_home` which fails closed with IPE-N0002
             // for unknown names (builtins get the empty-home sentinel).
             let home = if qualifier_str.is_empty() {
                 resolve_unqualified_type_home(name, ctx)?
@@ -3284,7 +3284,7 @@ fn canonicalise_type(
 /// Resolve a symbol to an owned name for a diagnostic payload.
 ///
 /// # Errors
-/// [`Diagnostic::CompilerBug`] (`SKY-I0010`) when the symbol is not backed by
+/// [`Diagnostic::CompilerBug`] (`IPE-I0010`) when the symbol is not backed by
 /// the interner — every name here came from the parser via this interner, so a
 /// miss is an impossible-invariant violation, surfaced rather than swallowed as
 /// an empty identifier.
@@ -3325,7 +3325,7 @@ pub struct KernelAlias {
 /// Returns:
 /// * `Ok(None)` — the binding is an ordinary value/function, not a kernel alias.
 /// * `Ok(Some(alias))` — a kernel alias whose target is a registered kernel.
-/// * `Err(SKY-N0028)` — the binding IS a kernel alias but its string names no
+/// * `Err(IPE-N0028)` — the binding IS a kernel alias but its string names no
 ///   registered kernel. This is the FAIL-CLOSED gate demanded by THE SEAL:
 ///   accepting it would let `skyc` emit a call to a non-existent kernel that
 ///   type-checks here yet fails the downstream `cargo build`. A kernel the
@@ -3333,7 +3333,7 @@ pub struct KernelAlias {
 ///   representable-but-illegal state, rejected at compile time.
 ///
 /// # Errors
-/// [`NameError::UnknownKernelAlias`] (SKY-N0028) when the split `(module,
+/// [`NameError::UnknownKernelAlias`] (IPE-N0028) when the split `(module,
 /// function)` pair is absent from the kernel registry.
 pub fn detect_kernel_alias(
     value: &src::Value,
@@ -3373,7 +3373,7 @@ pub fn detect_kernel_alias(
     // `_`, or an empty module/function half, is a malformed alias and fails
     // closed the same way an unknown kernel does.
     let split = raw.split_once('_').filter(|(m, f)| !m.is_empty() && !f.is_empty());
-    // A `SKY-N0028` for the alias — its `module` / `function` are the split
+    // A `IPE-N0028` for the alias — its `module` / `function` are the split
     // halves (empty when the string is malformed, so the message still renders).
     let unknown_alias = |module: Box<str>, function: Box<str>| Diagnostic::Name {
         span: value.body.span,
@@ -3642,7 +3642,7 @@ fn resolve_simple_interp_ref(
     // identifier (Sky identifiers never start with a digit), so it is an
     // integer or float literal — NOT a local reference. Emitting `VarLocal`
     // here (the fall-through below) would leak an unbound name past
-    // canonicalisation and fire the SKY-I0001 "unbound local `<n>`" ICE in
+    // canonicalisation and fire the IPE-I0001 "unbound local `<n>`" ICE in
     // `constrain`, which treats an unresolved local as a violated invariant
     // (the resolver is supposed to have resolved every local). Recognise the
     // literal instead, so e.g. `{{String.fromInt 54}}` lowers to
@@ -3779,7 +3779,7 @@ fn desugar_multiline(
 mod alias_ctor_gate_tests {
     //! Unit coverage for [`field_type_nonderivable`] — the STRUCT-derivability
     //! gate that decides whether a record `type alias` gets a synthesised
-    //! auto-constructor (SKY-N0001). It returns `true` (DECLINE synthesis)
+    //! auto-constructor (IPE-N0001). It returns `true` (DECLINE synthesis)
     //! when a field type could NOT be a field of a
     //! `#[derive(Clone, Debug, PartialEq)]` + `impl SkyStringify` struct — a raw
     //! function at ANY depth inside a derive carrier (the round-1 seal fix) OR an

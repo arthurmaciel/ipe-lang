@@ -1,4 +1,4 @@
-//! SKY-I0001 regression — `List LiveRoute` via a let-bound top-level binding.
+//! IPE-I0001 regression — `List LiveRoute` via a let-bound top-level binding.
 //!
 //! ## Background
 //!
@@ -19,7 +19,7 @@
 //! * No ICE — the full skyc pipeline (parse → canon → types → lower → emit) exits Ok.
 //!
 //! This is a pure skyc-pipeline check (no cargo build / runtime binary required)
-//! and runs without `SKY_E2E=1`.
+//! and runs without `IPE_E2E=1`.
 
 use std::path::{Path, PathBuf};
 
@@ -46,7 +46,7 @@ fn run_skyc() -> Option<Result<(), skyc::CliError>> {
     Some(skyc::build(&entry, &out, &runtime))
 }
 
-/// SKY-I0001 regression: a `Live.app` whose `routes` field references a
+/// IPE-I0001 regression: a `Live.app` whose `routes` field references a
 /// top-level `routeTable` binding (type `List LiveRoute`) MUST compile
 /// through the full skyc pipeline without an ICE.
 ///
@@ -62,7 +62,7 @@ fn live_let_bound_routes_compiles_no_ice() {
     };
     assert!(
         result.is_ok(),
-        "SKY-I0001 regression: let-bound routeTable must compile, got: {:?}",
+        "IPE-I0001 regression: let-bound routeTable must compile, got: {:?}",
         result.err(),
     );
 }
@@ -94,12 +94,12 @@ fn live_let_bound_routes_renders_route_page() {
     );
 }
 
-/// `SKY_E2E` tier: the emitted project must CARGO-build. Isolated
+/// `IPE_E2E` tier: the emitted project must CARGO-build. Isolated
 /// `CARGO_TARGET_DIR` per fixture — never shared (fingerprint reuse can mask
 /// an E0107/E0308 as a false pass).
 #[test]
 fn live_let_bound_routes_cargo_builds() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let Some(result) = run_skyc() else {

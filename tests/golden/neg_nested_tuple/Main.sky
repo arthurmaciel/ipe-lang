@@ -2,7 +2,7 @@ module Main exposing (main)
 import Sky.Core.Prelude exposing (..)
 
 -- A tuple param whose ELEMENT is refutable (`Just x`): the tuple as a whole is
--- refutable, so the SKY-T0015 gate blames the offending sub-pattern. This is the
+-- refutable, so the IPE-T0015 gate blames the offending sub-pattern. This is the
 -- case the new gate exists for — it PARSES (constructor sub-patterns are legal
 -- inside a parenthesised pattern) yet must be rejected before lowering.
 f : (Int, Maybe Int) -> Int

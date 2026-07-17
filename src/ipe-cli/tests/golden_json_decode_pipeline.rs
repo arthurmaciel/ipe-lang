@@ -21,7 +21,7 @@
 //!
 //! Run:
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_i195_json_decode_pipeline
+//! IPE_E2E=1 cargo test -p skyc --test golden_i195_json_decode_pipeline
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -42,7 +42,7 @@ fn entry_path(root: &Path) -> PathBuf {
 
 /// skyc-0: the compiler must accept the program AND render the function-typed
 /// `Decoder` payload as the runtime's Send-only `FnOnce` curry chain — checked
-/// unconditionally (cheap, no `cargo`), independent of the `SKY_E2E` gate. This
+/// unconditionally (cheap, no `cargo`), independent of the `IPE_E2E` gate. This
 /// is the exact assertion the E0308/E0277 SEAL break cannot recur: the partial
 /// decoder's payload must be `Box<dyn FnOnce(..) -> _ + Send>` (never a
 /// `+ Sync`-stamped `Box<dyn Fn>`).
@@ -89,11 +89,11 @@ fn i195_skyc_accepts_and_renders_send_only_fnonce_payload() {
 
 /// cargo-0 ∧ run-0: the emitted project actually compiles with `rustc` (no
 /// E0308 / E0277 from the decoder-payload `+ Sync` mismatch) and prints the
-/// decoded summary. Gated on `SKY_E2E=1` — the only check that would have caught
+/// decoded summary. Gated on `IPE_E2E=1` — the only check that would have caught
 /// the original SEAL violation (skyc-0, cargo-fail).
 #[test]
 fn i195_cargo_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

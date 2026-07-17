@@ -45,7 +45,7 @@ import Std.Sub as Sub
 
 -- ─── Mock upstream ──────────────────────────────────────────────
 -- The mock streaming server runs on :8765 (see ../mock/main.go).
--- Override via SKY_MOCK_STREAM_URL if you want to point at a real
+-- Override via IPE_MOCK_STREAM_URL if you want to point at a real
 -- upstream (LLM API, SSE endpoint, etc.).
 
 mockStreamUrl : String

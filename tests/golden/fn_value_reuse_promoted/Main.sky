@@ -8,7 +8,7 @@ import Sky.Core.Prelude exposing (..)
 -- reads are re-dispatched through fresh closures over the `Arc` carrier);
 -- `add`'s two partial applications synthesize TWO eta closures that each
 -- capture `add` — a reuse count that exists only post-lowering (was
--- SKY-L0127).
+-- IPE-L0127).
 apply : (Int -> Int) -> Int -> Int
 apply f x =
     f x

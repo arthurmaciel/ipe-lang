@@ -3,7 +3,7 @@
 //! Regression for the emit arms: the Lazy kernels are registered in
 //! naming/constrain/lower, and the `KernelFn::LazyLazy`..`LazyLazy5` arms in
 //! `emit_ui_call` (`emit_expr.rs`) must exist too.  Without them, the
-//! fail-closed wildcard at the bottom of `emit_ui_call` raises `SKY-I0001` on
+//! fail-closed wildcard at the bottom of `emit_ui_call` raises `IPE-I0001` on
 //! every program that uses `Lazy.lazy` or its multi-arg siblings.
 //!
 //! ## What is tested
@@ -13,16 +13,16 @@
 //! * `Lazy.lazy2 viewPair "first" "second"` — arity-2 closure with TWO
 //!   DISTINGUISHABLE args: emits `lazy_lazy2_(..., a, b)` (arg ORDER matters;
 //!   a swap is silent past the mechanical gate).
-//! * skyc exit 0 — prior diagnostic was SKY-I0001, this asserts it is gone.
+//! * skyc exit 0 — prior diagnostic was IPE-I0001, this asserts it is gone.
 //! * Emitted main.rs contains both `lazy_lazy_(` and `lazy_lazy2_(` call sites.
 //! * The emitted Rust project builds without errors (seal: no exit-0-then-cargo-fail).
 //! * The binary exits 0 and its stdout contains "hello", "first", and "second"
 //!   — confirms arg threading is correct (not just that the calls compiled).
 //!
-//! Gated on `SKY_E2E=1`. Run:
+//! Gated on `IPE_E2E=1`. Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_i146_lazy_emit_seal
+//! IPE_E2E=1 cargo test -p skyc --test golden_i146_lazy_emit_seal
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -36,7 +36,7 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn lazy_emit_seal_skyc_cargo_and_run_zero() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -53,11 +53,11 @@ fn lazy_emit_seal_skyc_cargo_and_run_zero() {
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    // skyc-0: prior diagnostic was SKY-I0001 LazyLazy no emit arm.
+    // skyc-0: prior diagnostic was IPE-I0001 LazyLazy no emit arm.
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),
-        "skyc build must succeed for lazy_emit_seal (SKY-I0001 must be gone): {:?}",
+        "skyc build must succeed for lazy_emit_seal (IPE-I0001 must be gone): {:?}",
         built.err()
     );
 

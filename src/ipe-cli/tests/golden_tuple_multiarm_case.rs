@@ -2,7 +2,7 @@
 //!
 //! A `case` on a LITERAL tuple with more than one arm (or a refutable column)
 //! lowers to a native Rust tuple `match`, matching each column against its own
-//! slice / `&str` coercion (rather than fail-closing as SKY-L0115, the "tuple
+//! slice / `&str` coercion (rather than fail-closing as IPE-L0115, the "tuple
 //! pattern not supported here yet" product gap):
 //!
 //! ```text
@@ -14,17 +14,17 @@
 //!
 //! This is the blocker `38-composite-ui-multibackend` hit at
 //! `State.seedHistoryHelp` (`case ( offsets, flags ) of ( i :: ix, b :: bs ) ->
-//! … ; _ -> …`). Coverage is proven UPSTREAM by the SKY-T0010 usefulness check
+//! … ; _ -> …`). Coverage is proven UPSTREAM by the IPE-T0010 usefulness check
 //! (product patterns decompose to `Head::Tuple`), so the backend never sees a
 //! non-exhaustive tuple `case`; the fix is purely additive — a variable-scrutinee
-//! or record product `case` stays fail-closed as SKY-L0115 (the m3b1/m3b2 gates).
+//! or record product `case` stays fail-closed as IPE-L0115 (the m3b1/m3b2 gates).
 //!
-//! Gate check (fast, always): `skyc build` succeeds — no SKY-L0115.
-//! Green check (`SKY_E2E=1`): the emitted Rust cargo-builds AND runs, proving the
+//! Gate check (fast, always): `skyc build` succeeds — no IPE-L0115.
+//! Green check (`IPE_E2E=1`): the emitted Rust cargo-builds AND runs, proving the
 //! Seal (skyc-0 ⟹ cargo-0) for the new tuple-match codegen.
 //!
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_tuple_multiarm_case
+//! IPE_E2E=1 cargo test -p skyc --test golden_tuple_multiarm_case
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -44,7 +44,7 @@ fn fixture_entry() -> PathBuf {
         .join("Main.sky")
 }
 
-/// Fast gate: a multi-arm LITERAL-tuple `case` builds cleanly — the SKY-L0115
+/// Fast gate: a multi-arm LITERAL-tuple `case` builds cleanly — the IPE-L0115
 /// product gap is closed for this shape.
 #[test]
 fn multi_arm_tuple_case_builds() {
@@ -57,7 +57,7 @@ fn multi_arm_tuple_case_builds() {
     let built = skyc::build(&fixture_entry(), &out, &runtime);
     assert!(
         built.is_ok(),
-        "multi-arm tuple `case` must build (SKY-L0115 close); got {:?}",
+        "multi-arm tuple `case` must build (IPE-L0115 close); got {:?}",
         built.err()
     );
 }
@@ -66,7 +66,7 @@ fn multi_arm_tuple_case_builds() {
 /// is `[11, 22, 33]` (length 3); `classify True False` is `2`; sum is `5`.
 #[test]
 fn multi_arm_tuple_case_cargo_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

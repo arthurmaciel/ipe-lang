@@ -19,18 +19,18 @@ use tokio::process::{Child, Command};
 
 /// Override for the pre-built console binary path. When unset, the cache path
 /// (`~/.cache/sky/rust-console/<sky-version>/sky-console`, written at build time) is used.
-const CONSOLE_BIN_ENV: &str = "SKY_CONSOLE_BIN";
+const CONSOLE_BIN_ENV: &str = "IPE_CONSOLE_BIN";
 
 /// The mount prefix. The parent proxies everything under this path to the child
 /// and STRIPS the prefix before forwarding (the strip convention — see the
 /// module doc): the child's router stays root-relative, identical to a
-/// standalone Live app. The child only learns the prefix via `SKY_LIVE_BASE_PATH`
+/// standalone Live app. The child only learns the prefix via `IPE_LIVE_BASE_PATH`
 /// (so its rendered `/_sky/event` / `/_sky/sse` URLs come back prefixed and we
 /// strip them again on the way in).
 const CONSOLE_BASE: &str = "/_sky/console";
 
 /// Request-body buffer cap for the proxy (16 MiB). Event POST bodies are far
-/// smaller (`SKY_LIVE_MAX_BODY_BYTES` defaults to 5 MiB); this is the hard
+/// smaller (`IPE_LIVE_MAX_BODY_BYTES` defaults to 5 MiB); this is the hard
 /// ceiling above which we 502 rather than buffer unboundedly. Responses are
 /// STREAMED, never buffered, so SSE is unaffected by this cap.
 const MAX_PROXY_BODY: usize = 16 * 1024 * 1024;
@@ -45,7 +45,7 @@ const READY_TIMEOUT: Duration = Duration::from_secs(8);
 /// the separate-process Rust path needs it back to avoid an orphan child).
 static CHILD: Mutex<Option<Child>> = Mutex::new(None);
 
-/// Resolve the pre-built console binary path: `SKY_CONSOLE_BIN`, else the
+/// Resolve the pre-built console binary path: `IPE_CONSOLE_BIN`, else the
 /// version-keyed cache path the build step populates. `None` when neither
 /// exists (→ the caller falls back to the in-process console; first build
 /// before the console is pre-built, or a build env where it couldn't be).
@@ -58,10 +58,10 @@ pub fn console_bin_path() -> Option<std::path::PathBuf> {
     }
     // Key on the SKY compiler version (same source as `/_sky/buildinfo`), NOT
     // the generated crate's CARGO_PKG_VERSION (always "0.1.0"). The sky build
-    // sets SKY_VERSION when compiling this app, and Sky.Build.Rust.Console
+    // sets IPE_VERSION when compiling this app, and Sky.Build.Rust.Console
     // caches the console binary under the SAME version — so both agree on the
     // `~/.cache/sky/rust-console/<ver>/sky-console` path.
-    let ver = option_env!("SKY_VERSION").unwrap_or("dev");
+    let ver = option_env!("IPE_VERSION").unwrap_or("dev");
     let home = crate::system::read_env_var("HOME").ok()?;
     let pb = std::path::Path::new(&home)
         .join(".cache/sky/rust-console")
@@ -77,7 +77,7 @@ pub fn console_bin_path() -> Option<std::path::PathBuf> {
 pub fn gate_allows() -> bool {
     // Sub-app context: the parent owns its own console; a nested app must not
     // recursively mount one.
-    if crate::system::read_env_var("SKY_LIVE_BASE_PATH")
+    if crate::system::read_env_var("IPE_LIVE_BASE_PATH")
         .map(|v| !v.is_empty())
         .unwrap_or(false)
     {
@@ -85,12 +85,12 @@ pub fn gate_allows() -> bool {
     }
     // Explicit opt-outs.
     if matches!(
-        crate::system::read_env_var("SKY_CONSOLE_EMBED").as_deref(),
+        crate::system::read_env_var("IPE_CONSOLE_EMBED").as_deref(),
         Ok("off") | Ok("0") | Ok("false")
     ) {
         return false;
     }
-    if crate::system::read_env_var("SKY_CONSOLE_AUTH")
+    if crate::system::read_env_var("IPE_CONSOLE_AUTH")
         .map(|v| v.trim().eq_ignore_ascii_case("off"))
         .unwrap_or(false)
     {
@@ -98,10 +98,10 @@ pub fn gate_allows() -> bool {
     }
     // Production without an admin token → no silent open-to-the-world mount.
     if super::super::telemetry::production_from_env()
-        && crate::system::read_env_var("SKY_ADMIN_TOKEN")
+        && crate::system::read_env_var("IPE_ADMIN_TOKEN")
             .map(|v| v.is_empty())
             .unwrap_or(true)
-        && crate::system::read_env_var("SKY_CONSOLE_TOKEN")
+        && crate::system::read_env_var("IPE_CONSOLE_TOKEN")
             .map(|v| v.is_empty())
             .unwrap_or(true)
     {
@@ -115,11 +115,11 @@ pub fn gate_allows() -> bool {
 /// `CHILD`); `None` when the binary is absent or the spawn fails — the caller
 /// falls back to the in-process console.
 ///
-/// `store` is the SQLite file the console renders from (`SKY_CONSOLE_HUB_DB` →
+/// `store` is the SQLite file the console renders from (`IPE_CONSOLE_HUB_DB` →
 /// hubStore). `child_collects` selects who WRITES it:
 ///   - `true`  — push-to-local-collector: a lean parent has no spill,
 ///     so the child is the collector — it also writes `store`
-///     (`SKY_CONSOLE_DB_PATH`) from the parent's pushed telemetry.
+///     (`IPE_CONSOLE_DB_PATH`) from the parent's pushed telemetry.
 ///   - `false` — the parent writes `store` directly (db parent's own spill); the
 ///     child reads only, and MUST NOT also write it (double-write).
 ///
@@ -130,24 +130,24 @@ pub fn gate_allows() -> bool {
 pub fn spawn_console(child_port: u16, store: &str, child_collects: bool) -> Option<()> {
     let bin = console_bin_path()?;
     let mut cmd = Command::new(&bin);
-    cmd.env("SKY_LIVE_PORT", child_port.to_string())
-        .env("SKY_LIVE_BASE_PATH", "/_sky/console")
+    cmd.env("IPE_LIVE_PORT", child_port.to_string())
+        .env("IPE_LIVE_BASE_PATH", "/_sky/console")
         // Belt-and-braces: suppress the child's own console auto-mount + banner.
-        .env("SKY_CONSOLE_EMBED", "off")
+        .env("IPE_CONSOLE_EMBED", "off")
         .kill_on_drop(true);
     // hubStore read source.
     if store.is_empty() {
-        cmd.env_remove("SKY_CONSOLE_HUB_DB");
+        cmd.env_remove("IPE_CONSOLE_HUB_DB");
     } else {
-        cmd.env("SKY_CONSOLE_HUB_DB", store);
+        cmd.env("IPE_CONSOLE_HUB_DB", store);
     }
     // Collector write source: only when the child collects (parent pushes).
-    // env_remove otherwise so an inherited SKY_CONSOLE_DB_PATH (the parent's own
+    // env_remove otherwise so an inherited IPE_CONSOLE_DB_PATH (the parent's own
     // spill path) doesn't make the child double-write it.
     if child_collects && !store.is_empty() {
-        cmd.env("SKY_CONSOLE_DB_PATH", store);
+        cmd.env("IPE_CONSOLE_DB_PATH", store);
     } else {
-        cmd.env_remove("SKY_CONSOLE_DB_PATH");
+        cmd.env_remove("IPE_CONSOLE_DB_PATH");
     }
     // Linux: parent-death signal. If the parent process dies for ANY reason
     // (SIGKILL, OOM, panic-abort) the kernel delivers SIGTERM to this child, so
@@ -279,7 +279,7 @@ async fn forward(
         if is_hop_by_hop(name) {
             continue;
         }
-        // The child performs NO auth (spawned with SKY_CONSOLE_EMBED=off). The
+        // The child performs NO auth (spawned with IPE_CONSOLE_EMBED=off). The
         // parent admin credential — validated by `console::gate_blocked` in the
         // `Authorization` header BEFORE this handler runs — is pure liability
         // downstream: the child can't act on it and would record it verbatim in
@@ -383,16 +383,16 @@ fn pick_free_port() -> Option<u16> {
 /// `false` on gate-closed / binary-absent / spawn-fail / readiness-timeout
 /// (caller mounts the in-process console fallback — no side effects left behind).
 ///
-/// Reads the parent's `SKY_CONSOLE_DB_PATH` (the telemetry spill D writes) and
-/// wires it to the child's `SKY_CONSOLE_HUB_DB` so the dashboard renders what
+/// Reads the parent's `IPE_CONSOLE_DB_PATH` (the telemetry spill D writes) and
+/// wires it to the child's `IPE_CONSOLE_HUB_DB` so the dashboard renders what
 /// the parent recorded. Decided BEFORE the router is built so both the proxy and
 /// the in-process fallback sit under the same observability middleware.
-/// The console child's data store path. The user's `SKY_CONSOLE_DB_PATH` when
+/// The console child's data store path. The user's `IPE_CONSOLE_DB_PATH` when
 /// set (durable history at their chosen location), else an internal per-process
 /// temp file so the console works zero-config (a lean app gets a live console
 /// without configuring durability).
 fn console_store_path() -> String {
-    match crate::system::read_env_var("SKY_CONSOLE_DB_PATH") {
+    match crate::system::read_env_var("IPE_CONSOLE_DB_PATH") {
         Ok(p) if !p.is_empty() => p,
         // Default to a per-process file in the temp dir, but add an UNGUESSABLE
         // suffix: a bare `sky-console-<pid>.db` is predictable, so a local
@@ -418,7 +418,7 @@ fn console_store_path() -> String {
 }
 
 /// Whether THIS (parent) process writes the telemetry store directly via its own
-/// spill (db app with `SKY_CONSOLE_DB_PATH`). When true the child reads only;
+/// spill (db app with `IPE_CONSOLE_DB_PATH`). When true the child reads only;
 /// when false the parent pushes to the child collector. Always false without the
 /// `db` feature (a lean live app can't spill).
 fn parent_spill_active() -> bool {
@@ -523,19 +523,19 @@ mod tests {
     #[test]
     fn gate_skips_in_subapp_context() {
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("SKY_LIVE_BASE_PATH", "/billing") };
+        unsafe { std::env::set_var("IPE_LIVE_BASE_PATH", "/billing") };
         assert!(!gate_allows());
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("SKY_LIVE_BASE_PATH") };
+        unsafe { std::env::remove_var("IPE_LIVE_BASE_PATH") };
     }
 
     #[test]
     fn gate_skips_on_explicit_off() {
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("SKY_CONSOLE_EMBED", "off") };
+        unsafe { std::env::set_var("IPE_CONSOLE_EMBED", "off") };
         assert!(!gate_allows());
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("SKY_CONSOLE_EMBED") };
+        unsafe { std::env::remove_var("IPE_CONSOLE_EMBED") };
     }
 
     #[test]

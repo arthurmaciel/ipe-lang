@@ -12,7 +12,7 @@ use super::*;
 // ── shared blocking-pool helper ───────────────────────────────────────
 //
 // `csv_parse_stream_from_file` does a blocking `std::fs::File::open` +
-// incremental CSV read (up to `SKY_CSV_MAX_ROWS`, default 10M rows, with NO
+// incremental CSV read (up to `IPE_CSV_MAX_ROWS`, default 10M rows, with NO
 // byte cap) inline. Pre-fix that work ran EAGERLY, before `Box::pin` was even
 // constructed — i.e. calling the kernel function itself blocked the caller,
 // not just polling the returned future. Offload to tokio's blocking pool so
@@ -81,9 +81,9 @@ fn parse_delim<E: From<String>>(text: &str, delim: u8) -> SkyResult<E, CsvDoc> {
         Err(e) => return SkyResult::Err(format!("Csv.parse: {}", e).into()),
     };
     // Row cap: a large/untrusted input would otherwise accumulate unbounded into
-    // `rows`. Bound it (SKY_CSV_MAX_ROWS, default 10M) → Err rather than OOM.
+    // `rows`. Bound it (IPE_CSV_MAX_ROWS, default 10M) → Err rather than OOM.
     // Mirrors csv_parse_stream_from_file's cap.
-    let max_rows: usize = crate::system::read_env_var("SKY_CSV_MAX_ROWS")
+    let max_rows: usize = crate::system::read_env_var("IPE_CSV_MAX_ROWS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|n| *n > 0)
@@ -95,7 +95,7 @@ fn parse_delim<E: From<String>>(text: &str, delim: u8) -> SkyResult<E, CsvDoc> {
                 if rows.len() >= max_rows {
                     return SkyResult::Err(
                         format!(
-                            "Csv.parse: exceeds row cap of {} (raise SKY_CSV_MAX_ROWS)",
+                            "Csv.parse: exceeds row cap of {} (raise IPE_CSV_MAX_ROWS)",
                             max_rows
                         )
                         .into(),
@@ -112,13 +112,13 @@ fn parse_delim<E: From<String>>(text: &str, delim: u8) -> SkyResult<E, CsvDoc> {
 /// Spreadsheet formula-injection guard (CWE-1236 / OWASP). A cell beginning with
 /// `=`, `+`, `-`, `@`, TAB, or CR is interpreted as a FORMULA by Excel/Sheets when
 /// the CSV is opened — an injection vector for attacker-controlled cell data.
-/// OPT-IN via `SKY_CSV_SANITIZE_FORMULAS` because the only mitigation (prefix the
+/// OPT-IN via `IPE_CSV_SANITIZE_FORMULAS` because the only mitigation (prefix the
 /// cell with `'`) is LOSSY: it alters exported data (e.g. `-5` → `'-5`) and breaks
 /// the lossless parse↔encode round-trip. Default OFF preserves round-trip; the
 /// caller opts in when serving CSV to spreadsheet users, accepting the tradeoff.
 fn csv_formula_guard_enabled() -> bool {
     matches!(
-        crate::system::read_env_var("SKY_CSV_SANITIZE_FORMULAS")
+        crate::system::read_env_var("IPE_CSV_SANITIZE_FORMULAS")
             .ok()
             .as_deref(),
         Some("1") | Some("on") | Some("true") | Some("yes")
@@ -202,8 +202,8 @@ fn csv_parse_stream_from_file_sync(path: &str) -> Result<Vec<Vec<String>>, Strin
         .from_reader(std::io::BufReader::new(file));
     // Row cap: although rows stream in, they all accumulate in `out`, so an
     // untrusted huge file is still an unbounded allocation. Bound it
-    // (SKY_CSV_MAX_ROWS, default 10M) → Err rather than OOM.
-    let max_rows: usize = crate::system::read_env_var("SKY_CSV_MAX_ROWS")
+    // (IPE_CSV_MAX_ROWS, default 10M) → Err rather than OOM.
+    let max_rows: usize = crate::system::read_env_var("IPE_CSV_MAX_ROWS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|n| *n > 0)
@@ -213,7 +213,7 @@ fn csv_parse_stream_from_file_sync(path: &str) -> Result<Vec<Vec<String>>, Strin
         let r = rec.map_err(|e| e.to_string())?;
         if out.len() >= max_rows {
             return Err(format!(
-                "exceeds row cap of {} (raise SKY_CSV_MAX_ROWS)",
+                "exceeds row cap of {} (raise IPE_CSV_MAX_ROWS)",
                 max_rows
             ));
         }
@@ -225,7 +225,7 @@ fn csv_parse_stream_from_file_sync(path: &str) -> Result<Vec<Vec<String>>, Strin
 /// Csv.parseStreamFromFile : String -> Task Error (List (List String))
 /// Returns every row (including the header).
 ///
-/// file I/O + incremental CSV parsing (up to `SKY_CSV_MAX_ROWS`, no
+/// file I/O + incremental CSV parsing (up to `IPE_CSV_MAX_ROWS`, no
 /// byte cap) is offloaded to tokio's blocking pool via `run_blocking` — see
 /// the module-level doc comment on `run_blocking` above.
 pub fn csv_parse_stream_from_file<E: From<String> + Send + 'static>(
@@ -251,14 +251,14 @@ mod tests {
         };
         // Default OFF: lossless (formula cell emitted verbatim, just CSV-quoted).
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("SKY_CSV_SANITIZE_FORMULAS") };
+        unsafe { std::env::remove_var("IPE_CSV_SANITIZE_FORMULAS") };
         assert!(encode_delim(&doc, b',').contains("=SUM(A1)"));
         // ON: dangerous-leading cell is prefixed with a single quote.
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("SKY_CSV_SANITIZE_FORMULAS", "1") };
+        unsafe { std::env::set_var("IPE_CSV_SANITIZE_FORMULAS", "1") };
         assert!(encode_delim(&doc, b',').contains("'=SUM(A1)"));
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("SKY_CSV_SANITIZE_FORMULAS") };
+        unsafe { std::env::remove_var("IPE_CSV_SANITIZE_FORMULAS") };
     }
 
     #[test]
@@ -329,11 +329,11 @@ mod tests {
         let p = std::env::temp_dir().join(format!("sky_csv_stream_cap_{}.csv", std::process::id()));
         std::fs::write(&p, "a\n1\n2\n3\n4\n5\n").unwrap();
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("SKY_CSV_MAX_ROWS", "2") };
+        unsafe { std::env::set_var("IPE_CSV_MAX_ROWS", "2") };
         let res: SkyResult<String, Vec<Vec<String>>> =
             block(csv_parse_stream_from_file(p.to_string_lossy().into_owned()));
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("SKY_CSV_MAX_ROWS") };
+        unsafe { std::env::remove_var("IPE_CSV_MAX_ROWS") };
         let _ = std::fs::remove_file(&p);
         assert!(
             matches!(res, SkyResult::Err(_)),

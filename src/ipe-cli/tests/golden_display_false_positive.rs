@@ -17,7 +17,7 @@
 //!
 //! Run:
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_i186_display_false_positive
+//! IPE_E2E=1 cargo test -p skyc --test golden_i186_display_false_positive
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -82,10 +82,10 @@ fn i186_false_positive_skyc_no_spurious_display() {
 }
 
 /// cargo-0 ∧ run-0 — the only check that would catch a spurious-`Display`-on-Dict
-/// E0277. Gated on `SKY_E2E=1`.
+/// E0277. Gated on `IPE_E2E=1`.
 #[test]
 fn i186_false_positive_cargo_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

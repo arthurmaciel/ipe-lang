@@ -138,14 +138,14 @@ pub fn spans_json(limit: usize) -> String {
     format!("[{}]", items.join(","))
 }
 
-/// Production gate (Go's `productionFromEnv`): `ENV` then `SKY_ENV`; unset OR a
+/// Production gate (Go's `productionFromEnv`): `ENV` then `IPE_ENV`; unset OR a
 /// dev marker (`dev`/`development`/`local`) → dev (false); anything else → true.
 pub fn production_from_env() -> bool {
     let mut e = crate::system::read_env_var("ENV")
         .unwrap_or_default()
         .to_ascii_lowercase();
     if e.is_empty() {
-        e = crate::system::read_env_var("SKY_ENV")
+        e = crate::system::read_env_var("IPE_ENV")
             .unwrap_or_default()
             .to_ascii_lowercase();
     }
@@ -163,9 +163,9 @@ pub fn production_from_env() -> bool {
 ///
 /// Suppressed for a sub-app (`base` non-empty — e.g. the bundled console child
 /// itself; a console link inside the console is recursive), in production
-/// (`ENV`/`SKY_ENV` non-dev), when the banner is turned off (`SKY_DEV_BANNER=off|0`,
-/// Go parity), and when the console surface is disabled (`SKY_CONSOLE_EMBED=off`
-/// / `SKY_CONSOLE_AUTH=off`). The union of Go's and the live path's gates —
+/// (`ENV`/`IPE_ENV` non-dev), when the banner is turned off (`IPE_DEV_BANNER=off|0`,
+/// Go parity), and when the console surface is disabled (`IPE_CONSOLE_EMBED=off`
+/// / `IPE_CONSOLE_AUTH=off`). The union of Go's and the live path's gates —
 /// suppression only ever makes bodies match MORE often across odd configs, and
 /// the sweep's env (nothing set) hits the injecting path either way.
 ///
@@ -177,15 +177,15 @@ pub fn dev_console_banner(base: &str) -> String {
         return String::new();
     }
     if matches!(
-        crate::system::read_env_var("SKY_DEV_BANNER").as_deref(),
+        crate::system::read_env_var("IPE_DEV_BANNER").as_deref(),
         Ok("off") | Ok("0")
     ) {
         return String::new();
     }
     if matches!(
-        crate::system::read_env_var("SKY_CONSOLE_EMBED").as_deref(),
+        crate::system::read_env_var("IPE_CONSOLE_EMBED").as_deref(),
         Ok("off") | Ok("0") | Ok("false")
-    ) || crate::system::read_env_var("SKY_CONSOLE_AUTH")
+    ) || crate::system::read_env_var("IPE_CONSOLE_AUTH")
         .map(|v| v == "off")
         .unwrap_or(false)
     {
@@ -193,9 +193,9 @@ pub fn dev_console_banner(base: &str) -> String {
     }
     // Byte-match Go's `devBannerHTML` (`dev_banner.go`): same id, target/rel/title,
     // monospace blue styling, and the `&#128269;` entity (NOT a literal emoji) so
-    // both backends emit identical bytes. href honours `SKY_CONSOLE_URL` (default
+    // both backends emit identical bytes. href honours `IPE_CONSOLE_URL` (default
     // `/_sky/console`), attribute-escaped against a hostile env value.
-    let url = crate::system::read_env_var("SKY_CONSOLE_URL")
+    let url = crate::system::read_env_var("IPE_CONSOLE_URL")
         .map(|v| v.trim().to_string())
         .ok()
         .filter(|v| !v.is_empty())
@@ -250,7 +250,7 @@ pub fn inject_dev_banner(body: &str, banner: &str) -> String {
 }
 
 /// `Some(value)` when responses run in cross-origin-iframe mode
-/// (`SKY_LIVE_FRAME_ANCESTORS` set — the SkyDeploy control-plane embeds the
+/// (`IPE_LIVE_FRAME_ANCESTORS` set — the SkyDeploy control-plane embeds the
 /// console). Snapshotted once into a `OnceLock` so env is read only once
 /// (eliminates the TOCTOU window where a dynamic env mutation could split the
 /// cookie name / CSP framing decision within a single request).
@@ -268,7 +268,7 @@ pub fn frame_ancestors() -> Option<&'static str> {
         // (HTTP response splitting); NUL is rejected by header encoders. The
         // remaining `frame-ancestors` source-list grammar is the operator's
         // responsibility — we only close the response-splitting vector.
-        crate::system::read_env_var("SKY_LIVE_FRAME_ANCESTORS")
+        crate::system::read_env_var("IPE_LIVE_FRAME_ANCESTORS")
             .unwrap_or_default()
             .chars()
             .filter(|c| !matches!(c, '\r' | '\n' | '\0'))
@@ -803,7 +803,7 @@ mod tests {
     fn dev_banner_byte_matches_go_dev_banner_markup() {
         // Go parity (dev_banner.go devBannerHTML): same id, target/rel/title,
         // monospace blue style, `&#128269;` ENTITY (not a literal emoji). Default
-        // test env is dev (ENV/SKY_ENV unset) → non-empty banner.
+        // test env is dev (ENV/IPE_ENV unset) → non-empty banner.
         let b = dev_console_banner("");
         let expected = "<a id=\"__sky-dev-console\" href=\"/_sky/console\" target=\"_blank\" \
             rel=\"noopener\" title=\"Sky Console (dev only)\" \

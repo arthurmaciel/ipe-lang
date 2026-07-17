@@ -123,7 +123,7 @@ codegen**, not runtime.
 | 14 | Nullary Error ctors → distinct hardcoded strings; `withMessage` = `fn(new,_)→new` (Error) | **SYNC** | Already have; no change. |
 | 15 | Source-module Error approach infeasible (circular dep); kernel-path breaks the cycle → #85 parked (Error) | **ADOPT** | **Close #85** with note: runtime stays String-backed kernel-dispatched; rich ADT lives in `Sky.Core.Error.sky` but ctors lower to kernels. |
 | 16 | `runtimeOpaqueTypes` registry `{M}` bridge; `RPubUseAlias` vs `RAliasDefGen` (Ui/Html) | **SYNC** | Verify `emit_types.rs` has all 10+ Std.Ui entries + correct alias-kind split. |
-| 17 | `synCtor` auto-ctors for non-opaque record aliases (Ui/Html) | **ADOPT** | Confirm SKY-N0001 (#82) covers it; else implement synCtor equivalent. **Validate our just-shipped SKY-N0001 vs theirs.** |
+| 17 | `synCtor` auto-ctors for non-opaque record aliases (Ui/Html) | **ADOPT** | Confirm IPE-N0001 (#82) covers it; else implement synCtor equivalent. **Validate our just-shipped IPE-N0001 vs theirs.** |
 | 18 | `SkyStringify` placeholder-string strategy on opaque containers, no `M` recursion (Ui/Html) | **SYNC** | Runtime done. Emitter must gate `#[derive(SkyStringify)]` off non-Clone fields → same **#87** gate. |
 | 19 | ~160 unbacked Std.Ui/Html members are pure-Sky builders + kernels, NOT runtime ADT gaps (Ui/Html) | **REJECT** (as runtime issue) | Reframe #76 as codegen/kernel wiring: audit `sky_canon` registry for `id=None` members; implement missing kernels. |
 | 20 | #84 `html_p_` wrong-tag is Std.Ui codegen tag-mapping, not runtime render (Ui/Html) | **REJECT** (as runtime issue) | Fix in the element-builder codegen; `render_into_ctx` is correct. |
@@ -193,7 +193,7 @@ codegen**, not runtime.
    source but constructors lower to kernels, never runtime constructors.
 
 6. **Wire #51 phase-2 EQUIVALENCE** once the Haskell `sky` binary is on PATH as
-   `SKY_GO_BIN` — flip `SKY_SWEEP_NO_EQUIV=0`. All normalizers, the AMBER
+   `IPE_GO_BIN` — flip `IPE_SWEEP_NO_EQUIV=0`. All normalizers, the AMBER
    `go-ref-broken` discrimination, and the per-route determinism gate are
    already ported; only the comparison step needs activation.
 
@@ -237,7 +237,7 @@ codegen**, not runtime.
 - **The SEAL generally:** **Strengthen the contract.** The exit-0-then-cargo-
   fail class is closed by the #87 derive gate + exhaustive kernel-scheme table
   (#45). **Revise the record-alias-ctor design (`record-alias-ctor-design.md`)**
-  to validate our just-shipped SKY-N0001 auto-ctors against upstream `synCtor`:
+  to validate our just-shipped IPE-N0001 auto-ctors against upstream `synCtor`:
   confirm we skip `runtimeOpaqueTypes` + marker-only AppCfg configs and guard
   duplicate names — the two exclusions their generator enforces.
 

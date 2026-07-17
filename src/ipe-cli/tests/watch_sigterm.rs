@@ -3,13 +3,13 @@
 //!
 //! Three scenarios around the `run()`-only SIGTERM forwarder:
 //!
-//! 1. `SKY_E2E=1`: a PID-only `kill -TERM <skyc>` (the systemd-style shape —
+//! 1. `IPE_E2E=1`: a PID-only `kill -TERM <skyc>` (the systemd-style shape —
 //!    NOT the whole foreground process group Ctrl-C signals) runs the full
 //!    orderly teardown, so the supervised child is reaped, never orphaned.
 //! 2. Always-on negative control: `spawn()` (the embedder path) must NEVER
 //!    install a process-wide SIGTERM handler — the embedding host's own
 //!    disposition stays untouched.
-//! 3. `SKY_E2E=1` proof: a SECOND SIGTERM during the teardown's bounded
+//! 3. `IPE_E2E=1` proof: a SECOND SIGTERM during the teardown's bounded
 //!    grace window is silently absorbed (the forwarder thread already
 //!    consumed the one registration; `signal-hook` does not restore the
 //!    default disposition) — a stuck `ipe watch` needs SIGKILL, never a
@@ -24,13 +24,13 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 /// The same minimal `Sky.Http.Server` fixture `watch_integration.rs` uses:
 /// long-running (never exits on its own), reads its port from
-/// `SKY_SERVER_PORT` (what `watch::child_env` injects from `--port`).
+/// `IPE_SERVER_PORT` (what `watch::child_env` injects from `--port`).
 fn server_fixture(body: &str) -> String {
     format!(
         "module Main exposing (main)\n\n\
          import Sky.Http.Server as Server\n\n\
          main =\n    \
-             let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr \"SKY_SERVER_PORT\" \"8080\"))\n    \
+             let port = Maybe.withDefault 8080 (String.toInt (System.getenvOr \"IPE_SERVER_PORT\" \"8080\"))\n    \
              in\n    \
              Server.listen port\n        \
                  [ Server.get \"/\" (\\req -> Task.succeed (Server.text \"{body}\")) ]\n"
@@ -101,7 +101,7 @@ fn sigterm(pid: u32) -> Result<(), BoxError> {
 }
 
 /// Same `/proc`-based black-box PID discovery `watch_integration.rs` uses:
-/// the supervised child carries `SKY_LIVE_PORT=<port>` in its environment
+/// the supervised child carries `IPE_LIVE_PORT=<port>` in its environment
 /// (injected by `watch::child_env`), unique to this test's port.
 #[cfg(target_os = "linux")]
 fn find_pid_by_environ_kv(key: &str, value: &str) -> Option<u32> {
@@ -177,8 +177,8 @@ fn wait_for_exit(
 #[test]
 fn watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_skyc_process()
 -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
-        eprintln!("skipping (set SKY_E2E=1 to run)");
+    if std::env::var("IPE_E2E").is_err() {
+        eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
     let (sky_dir, out_dir) = fresh_dirs("term_reaps_child")?;
@@ -193,7 +193,7 @@ fn watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_skyc_process()
         let _ = skyc_proc.wait();
         return Err("initial cold build+spawn must serve v1 within budget".into());
     }
-    let child_pid = find_pid_by_environ_kv("SKY_LIVE_PORT", &port.to_string())
+    let child_pid = find_pid_by_environ_kv("IPE_LIVE_PORT", &port.to_string())
         .ok_or("the supervised child must be discoverable via /proc once v1 is serving")?;
 
     sigterm(skyc_proc.id())?;
@@ -306,8 +306,8 @@ fn spawn_never_installs_a_sigterm_forwarder() -> Result<(), BoxError> {
 #[test]
 fn double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_sigkill()
 -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
-        eprintln!("skipping (set SKY_E2E=1 to run)");
+    if std::env::var("IPE_E2E").is_err() {
+        eprintln!("skipping (set IPE_E2E=1 to run)");
         return Ok(());
     }
     let (sky_dir, out_dir) = fresh_dirs("double_term")?;
@@ -322,7 +322,7 @@ fn double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_sigkill()
         let _ = skyc_proc.wait();
         return Err("initial cold build+spawn must serve v1 within budget".into());
     }
-    let child_pid = find_pid_by_environ_kv("SKY_LIVE_PORT", &port.to_string())
+    let child_pid = find_pid_by_environ_kv("IPE_LIVE_PORT", &port.to_string())
         .ok_or("the supervised child must be discoverable via /proc once v1 is serving")?;
 
     // First SIGTERM: starts the documented graceful teardown (bounded

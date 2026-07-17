@@ -3,7 +3,7 @@
 //! `docs/architecture/salsa-incremental-compilation-2026-07-11.md` §5 row 3).
 //!
 //! - [`ipe_db::topo_order`]: memoized dep-first order; an import cycle is a
-//!   SKY-N0021 **value**, never salsa's dependency-cycle panic.
+//!   IPE-N0021 **value**, never salsa's dependency-cycle panic.
 //! - [`ipe_db::linked_program`]: the coarse whole-program spine — assembles
 //!   every per-module `canonicalize` memo and links. Correct-but-coarse: any
 //!   semantic edit re-links; byte-equal re-saves and repeat demands do not.
@@ -119,7 +119,7 @@ fn topo_order_dep_first_and_memoized() {
     );
 }
 
-/// An import cycle is returned as the SKY-N0021 diagnostic value — this query
+/// An import cycle is returned as the IPE-N0021 diagnostic value — this query
 /// (and [`linked_program`], which gates on it) never reaches salsa's
 /// dependency-cycle panic even on a direct demand against a cyclic graph.
 #[test]
@@ -138,7 +138,7 @@ fn topo_order_cycle_is_a_value_not_a_panic() {
                 ..
             }
         ),
-        "cycle must surface as SKY-N0021, got: {err:?}"
+        "cycle must surface as IPE-N0021, got: {err:?}"
     );
 
     // The whole-program spine returns the same value-level diagnostic.
@@ -151,7 +151,7 @@ fn topo_order_cycle_is_a_value_not_a_panic() {
                 ..
             }
         ),
-        "linked_program must propagate SKY-N0021, got: {spine_err:?}"
+        "linked_program must propagate IPE-N0021, got: {spine_err:?}"
     );
 }
 

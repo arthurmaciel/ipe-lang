@@ -2,7 +2,7 @@ module Main exposing (main)
 import Sky.Core.Prelude exposing (..)
 
 -- #90 Stage 1: a DECLARED function-typed constructor payload used to trip
--- SKY-L0114 at the union declaration (`lower_enum`'s decl-site gate). #87's
+-- IPE-L0114 at the union declaration (`lower_enum`'s decl-site gate). #87's
 -- derive-demotion fixpoint already keeps the emitted enum sound (no derive,
 -- `<fn>` SkyStringify placeholder), so the declaration site needs no gate.
 type Retryish e = RetryAlways | RetryWhen (e -> Bool)

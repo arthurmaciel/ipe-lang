@@ -25,7 +25,7 @@
 //! cargo test -p skyc --test golden_i193_asymmetric_arms_cloneok
 //!
 //! # full E2E:
-//! SKY_E2E=1 cargo test -p skyc --test golden_i193_asymmetric_arms_cloneok
+//! IPE_E2E=1 cargo test -p skyc --test golden_i193_asymmetric_arms_cloneok
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -151,10 +151,10 @@ fn i193_idempotent() {
 }
 
 /// cargo-0 ∧ run-correct: the emitted project compiles with rustc (no E0382)
-/// and prints the correct formatted strings.  Gated on `SKY_E2E=1`.
+/// and prints the correct formatted strings.  Gated on `IPE_E2E=1`.
 #[test]
 fn i193_cargo_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

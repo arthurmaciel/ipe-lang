@@ -442,7 +442,7 @@ impl<'a> EmitCtx<'a> {
                 // in `home`, so they do not collide — each keys a distinct Rust
                 // enum. A genuine duplicate `(home, name)` (the SAME type
                 // declared twice) is caught upstream by the link-level gate; this
-                // stays as a fail-closed defence-in-depth backstop (SKY-I0202).
+                // stays as a fail-closed defence-in-depth backstop (IPE-I0202).
                 let key = (def.home.clone(), def.name);
                 if enum_names.contains_key(&key) {
                     return Err(Diagnostic::Name {
@@ -958,7 +958,7 @@ impl<'a> EmitCtx<'a> {
     /// argument renders as that function's Rust generic (`RecValue<T1>`).
     ///
     /// The prepass collected every `IrType::Record` reachable from a signature,
-    /// so a miss here is an internal invariant violation (SKY-I0204).
+    /// so a miss here is an internal invariant violation (IPE-I0204).
     fn render_record_use(
         &self,
         fields: &BTreeMap<Symbol, IrType>,
@@ -1013,7 +1013,7 @@ impl<'a> EmitCtx<'a> {
     /// The Rust struct name for a record LITERAL, keyed by its field names.
     ///
     /// A miss means the literal's shape never appeared in a signature — a
-    /// lowerer-contract violation (SKY-I0204), surfaced rather than mis-emitted.
+    /// lowerer-contract violation (IPE-I0204), surfaced rather than mis-emitted.
     fn record_name_for_literal(&self, field_names: &[String]) -> DResult<&str> {
         let mut key = field_names.to_vec();
         key.sort();
@@ -1066,7 +1066,7 @@ impl<'a> EmitCtx<'a> {
     /// Resolve a symbol that will be emitted as a Rust identifier, rejecting an
     /// absent *or* empty resolution. The lowerer is contracted never to hand the
     /// backend a dangling or empty-intended value/variant/param symbol, so a
-    /// failure here is an internal invariant violation (SKY-I0201) — surfaced as
+    /// failure here is an internal invariant violation (IPE-I0201) — surfaced as
     /// a [`Diagnostic::CompilerBug`] rather than silently emitting an empty (and
     /// uncompilable) Rust identifier.
     fn resolve_ident(&self, sym: Symbol) -> DResult<&str> {
@@ -1815,7 +1815,7 @@ fn skeleton_ty(ty: &IrType, idx: &mut BTreeMap<Symbol, usize>, out: &mut String)
 ///
 /// A mismatch means a use site that does not instantiate the struct template —
 /// an upstream-contract violation surfaced as a [`Diagnostic::CompilerBug`]
-/// (SKY-I0205), never a silent mis-emit.
+/// (IPE-I0205), never a silent mis-emit.
 #[allow(clippy::too_many_lines)]
 fn match_template(
     template: &IrType,
@@ -2033,7 +2033,7 @@ fn match_template(
 /// * No occurrence carries a type variable → a MONOMORPHIC struct (empty
 ///   parameter list). All occurrences must be identical; a second, differing
 ///   concrete shape is a "two types for one field set" upstream-contract
-///   violation, rejected as SKY-I0204.
+///   violation, rejected as IPE-I0204.
 /// * At least one occurrence is generic → a GENERIC struct. Every generic
 ///   occurrence must be alpha-equivalent (same [`skeleton_key`]); the first is
 ///   the canonical template, whose generic symbols name the parameters in

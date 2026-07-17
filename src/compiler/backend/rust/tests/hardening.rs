@@ -4,17 +4,17 @@
 //! *around* the byte-identical golden emission:
 //!
 //! * reserved-Rust-name mangling at variant / param emit sites,
-//! * the bounded emit-depth guard (SKY-L0200) instead of a native stack
+//! * the bounded emit-depth guard (IPE-L0200) instead of a native stack
 //!   overflow on a deeply nested expression,
-//! * the checked ident resolver (SKY-I0201) refusing to emit an empty Rust
+//! * the checked ident resolver (IPE-I0201) refusing to emit an empty Rust
 //!   identifier,
-//! * the cross-module type-name collision guard (SKY-N0012, formerly SKY-I0202).
+//! * the cross-module type-name collision guard (IPE-N0012, formerly IPE-I0202).
 //!
 //! The golden byte-equality contract itself lives in `golden.rs`.
 
 use ipe_backend::Backend;
 use ipe_backend_rust::RustBackend;
-use ipe_diagnostics::{DResult, Diagnostic, SKY_I0201, SKY_L0200, SKY_N0012};
+use ipe_diagnostics::{DResult, Diagnostic, IPE_I0201, IPE_L0200, IPE_N0012};
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{
     BinOp, EnumDef, Expr, Func, FuncId, IrType, ModPath, Module, Program, TypeDef, Variant,
@@ -106,7 +106,7 @@ fn reserved_names_are_mangled_in_emitted_output() -> DResult<()> {
     Ok(())
 }
 
-/// A deeply nested `BinOp` spine must fail fast with SKY-L0200, not overflow the
+/// A deeply nested `BinOp` spine must fail fast with IPE-L0200, not overflow the
 /// native stack. The chain is built well past the backend's emit-depth bound.
 #[test]
 fn deeply_nested_expr_fails_fast_not_stack_overflow() -> DResult<()> {
@@ -138,7 +138,7 @@ fn deeply_nested_expr_fails_fast_not_stack_overflow() -> DResult<()> {
     let res = emit(&interner, &prog);
     assert!(res.is_err(), "deep nesting must error, got {res:?}");
     if let Err(err) = res {
-        assert_eq!(err.code(), SKY_L0200, "wrong code for over-deep nesting");
+        assert_eq!(err.code(), IPE_L0200, "wrong code for over-deep nesting");
         assert!(
             matches!(err, Diagnostic::Lower { .. }),
             "expected a Lower diagnostic, got {err:?}"
@@ -179,7 +179,7 @@ fn nesting_at_the_bound_still_emits() -> DResult<()> {
 }
 
 /// A param symbol that resolves to the empty string is a dangling-symbol
-/// invariant violation: emit must fail with SKY-I0201, never produce an empty
+/// invariant violation: emit must fail with IPE-I0201, never produce an empty
 /// Rust identifier.
 #[test]
 fn empty_intended_symbol_is_rejected() -> DResult<()> {
@@ -203,14 +203,14 @@ fn empty_intended_symbol_is_rejected() -> DResult<()> {
     let res = emit(&interner, &prog);
     assert!(res.is_err(), "empty ident must error, got {res:?}");
     if let Err(err) = res {
-        assert_eq!(err.code(), SKY_I0201, "wrong code for dangling symbol");
+        assert_eq!(err.code(), IPE_I0201, "wrong code for dangling symbol");
     }
     Ok(())
 }
 
 /// Two modules declaring a same-named type intern to the same `Symbol`; the
 /// backend cannot tell them apart from the bare key, so it must fail fast with
-/// SKY-I0202 rather than silently overwrite one mapping.
+/// IPE-I0202 rather than silently overwrite one mapping.
 #[test]
 fn cross_module_type_name_collision_is_rejected() -> DResult<()> {
     let mut interner = Interner::new();
@@ -273,9 +273,9 @@ fn cross_module_type_name_collision_is_rejected() -> DResult<()> {
     let res = RustBackend::new(&interner).emit(&prog);
     assert!(res.is_err(), "type-name collision must error, got {res:?}");
     if let Err(err) = res {
-        // Pre-Defect-2-fix: SKY-I0202 (CompilerBug). Post-fix: clean SKY-N0012
+        // Pre-Defect-2-fix: IPE-I0202 (CompilerBug). Post-fix: clean IPE-N0012
         // (NameError::DuplicateType) so the user sees a structured error not an ICE.
-        assert_eq!(err.code(), SKY_N0012, "wrong code for type-name collision");
+        assert_eq!(err.code(), IPE_N0012, "wrong code for type-name collision");
     }
     Ok(())
 }

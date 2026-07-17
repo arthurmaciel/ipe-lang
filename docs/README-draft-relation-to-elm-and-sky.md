@@ -162,7 +162,7 @@ true:
   `rustc` — "make invalid states unrepresentable" moved earlier in the pipeline.
 - **A closed, fail-closed kernel registry.** Kernel dispatch goes through a
   closed typed `KernelFn` enum indexed anti-drift from a single registry; an
-  unknown kernel fails **closed** with a diagnostic (`SKY-L0108`). This
+  unknown kernel fails **closed** with a diagnostic (`IPE-L0108`). This
   structurally eliminates the "compiler exits 0, the emitted code then fails to
   build" class.
 - **Total type rendering.** The type renderer is a closed function with no

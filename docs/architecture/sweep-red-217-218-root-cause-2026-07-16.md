@@ -1,4 +1,4 @@
-# Sweep-red root-cause: #217 (36-composite-server SKY-T0001) + #218 (18-job-queue SEAL breach E0507)
+# Sweep-red root-cause: #217 (36-composite-server IPE-T0001) + #218 (18-job-queue SEAL breach E0507)
 
 Read-only diagnosis, 2026-07-16. No code/example/fixture edited; all bisection on
 `/tmp` copies. Reference behaviour verified against `../sky` (Haskell compiler +
@@ -6,7 +6,7 @@ Rust backend + Go runtime) per DEVELOPMENT.md §0a.
 
 ---
 
-## #217 — 36-composite-server: SKY-T0001 — VERDICT: not an HM-checker bug; three stdlib contracts drifted from the reference
+## #217 — 36-composite-server: IPE-T0001 — VERDICT: not an HM-checker bug; three stdlib contracts drifted from the reference
 
 ### (a) Repro
 
@@ -15,7 +15,7 @@ Rust backend + Go runtime) per DEVELOPMENT.md §0a.
 ```
 
 ```
-skyc: error[SKY-T0001]: type mismatch
+skyc: error[IPE-T0001]: type mismatch
   --> src/Auth.sky:47:42
    |
 47 |                 |> Jwt.withClaim "email" (JsonEnc.string payload.email)
@@ -26,7 +26,7 @@ skyc: error[SKY-T0001]: type mismatch
 
 ```elm
 Jwt.claims |> Jwt.withClaim "email" (JsonEnc.string "a@b.c")
--- SKY-T0001: expected String, found Value
+-- IPE-T0001: expected String, found Value
 ```
 
 ### (c) Root cause — kernel type-scheme contract drift, not inference
@@ -67,7 +67,7 @@ not just a rejection.
 ### Residual red (honest report, distinct blocker)
 
 After patching all 5 drift sites in the `/tmp` copy, the example STILL fails —
-`SKY-L0126` (non-Clone capture, fail-closed) at `src/Main.sky:73`
+`IPE-L0126` (non-Clone capture, fail-closed) at `src/Main.sky:73`
 (`\db -> Db.migrate db Migrations.all |> Task.andThen …`). That is a separate
 lowering-completeness gap in the same shared-capture machinery as #218 (fails
 closed here instead of mis-emitting — no SEAL breach). File it as its own
@@ -123,14 +123,14 @@ kernel signature move together (the anti-drift sites are type-checker-enforced).
   → encode → decode round-trip, byte-compared vs Go oracle (extends
   `golden_m5b_uuid_jwt.rs`).
 - Golden building `Response` and `Migration` as record literals (the exact
-  upstream idiom), `SKY_E2E=1`.
+  upstream idiom), `IPE_E2E=1`.
 - The stdlib-contract parity gate above (class-closer).
-- Sweep row 36-composite-server goes green only after the residual SKY-L0126 is
+- Sweep row 36-composite-server goes green only after the residual IPE-L0126 is
   also fixed — keep the row red until then (no shortcut).
 
-**CONFIDENCE: HIGH** on the root cause of every SKY-T0001 (all three symbols
+**CONFIDENCE: HIGH** on the root cause of every IPE-T0001 (all three symbols
 verified against reference source; minimal 1-expr trigger; bisect exhausted the
-class). Residual SKY-L0126 is reported, not root-caused (separate item).
+class). Residual IPE-L0126 is reported, not root-caused (separate item).
 
 ---
 
@@ -299,7 +299,7 @@ source-level intermediate closure).
 - New golden (i193 family, e.g. `golden_i193_clone_relay_intermediate_eta`):
   the 18-line trigger verbatim — let-bound fn read at depth ≥ 2 through a
   pipeline-synthesized eta closure with a non-Copy enclosing param — byte
-  golden + `SKY_E2E=1` (THE SEAL: skyc-0 ⇒ cargo-0).
+  golden + `IPE_E2E=1` (THE SEAL: skyc-0 ⇒ cargo-0).
 - A sibling variant with a SOURCE-level intermediate lambda (not
   eta-synthesized) that doesn't directly reference the symbol, pinning the
   class not the instance.
@@ -319,6 +319,6 @@ table* from the reference stdlib (checker rejects a valid program — fails
 closed, Correctness/Completeness); #218 drifts the *clone-relay invariant*
 inside one pass (emitter accepts and mis-emits — fails open, SEAL breach,
 Soundness). Per PRINCIPLES order #218 outranks #217 in urgency. The residual
-SKY-L0126 in 36-composite-server (`Main.sky:73`) lives in the same
+IPE-L0126 in 36-composite-server (`Main.sky:73`) lives in the same
 shared-capture machinery as #218 and should be filed + investigated when the
 relay fix lands (it may simply be the fail-closed face of the same gap).

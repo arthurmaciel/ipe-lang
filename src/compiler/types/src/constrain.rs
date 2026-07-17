@@ -279,7 +279,7 @@ struct Builtins {
     /// `"Handler"` — the `Request -> Task Error Response` alias from
     /// `Sky.Http.Server`. Pre-interned so `constrain_def` can detect a
     /// `handler : Handler` annotation and expand it to the full arrow type
-    /// before the parameter-loop runs (fixes SKY-T0004 for handler bindings).
+    /// before the parameter-loop runs (fixes IPE-T0004 for handler bindings).
     handler: Symbol,
     // ── Sky.Http.Server.Stream opaque type constructor symbol ───────────
     /// `"StreamWriter"` — the opaque stream writer handle passed to the
@@ -1220,7 +1220,7 @@ pub struct Builder<'a> {
     /// merges N source modules into a single flat def list: two different files
     /// may independently contain expressions at the same byte-offset span.  The
     /// bare-`Span` key (pre-fix) silently overwrote earlier entries, causing the
-    /// lowerer to read the wrong type and produce SKY-I0001.
+    /// lowerer to read the wrong type and produce IPE-I0001.
     regions: BTreeMap<(Vec<Symbol>, Span), VarId>,
     /// Home module path of the def currently being constrained.  Set at the
     /// start of each `constrain_def` call; read by every `regions.insert`.
@@ -1287,7 +1287,7 @@ pub struct Builder<'a> {
     /// concrete-pin soundness gate (a variable that pinned to a concrete type
     /// during solving must be one the operation truly supports — an equality
     /// obligation rejects a type containing a function, which Rust cannot
-    /// compare, with SKY-T0014 rather than emitting code `cargo` rejects).
+    /// compare, with IPE-T0014 rather than emitting code `cargo` rejects).
     super_vars: Vec<(VarId, TyBounds, Span)>,
     /// One entry per *cross-module* reference to an untyped top-level binding
     /// (`Builder::current_home != source.0`). A same-module reference keeps
@@ -1372,7 +1372,7 @@ pub struct FieldAccess {
     pub span: Span,
     /// The home module path of the def this access lives in. After `link::link`
     /// merges modules, a bare byte-offset span cannot identify the source file;
-    /// the home lets a post-solve error (SKY-T0012) attribute to the correct
+    /// the home lets a post-solve error (IPE-T0012) attribute to the correct
     /// module instead of the byte-offset heuristic's best guess (which can pick
     /// a numerically-closer def in a *different* file — the span-collision
     /// class, here surfacing as an `info.message` error blamed on an unrelated
@@ -1414,7 +1414,7 @@ pub struct RecordUpdate {
 ///
 /// * If Model's settled type has a `page` field → this is a routed app →
 ///   `notFound`'s type must match `Model.page`'s type (same `var(2)` share).
-///   A mismatch produces SKY-T0001 here instead of a cargo E0308 / E0631
+///   A mismatch produces IPE-T0001 here instead of a cargo E0308 / E0631
 ///   from the emitted `set_page` closure.
 /// * If Model has no `page` field → non-routed → no validation; passes.
 pub struct RoutedLiveCheck {
@@ -1439,7 +1439,7 @@ pub struct RoutedLiveCheck {
 ///   multi-`:param` routes curry further: `String -> String -> Page`, …).
 ///
 /// A single shared variable (the pre-round-4 scheme) forced
-/// `Page ≟ String -> Page` on every param route — a false SKY-T0001 on the
+/// `Page ≟ String -> Page` on every param route — a false IPE-T0001 on the
 /// canonical corpus shape.  A plain HM constraint cannot express the
 /// disjunction, so the constrain pass pushes one `RouteWitnessCheck` per
 /// `Live.route` reference and defers it to
@@ -1453,7 +1453,7 @@ pub struct RoutedLiveCheck {
 /// A nullary route therefore witnesses `page` directly, a param constructor
 /// witnesses it with its result type, and a wrong-ADT constructor
 /// (`Live.route "/" Increment` in a `Page`-routed app) still fails unification
-/// with SKY-T0001 at this route's span.  Runs BEFORE
+/// with IPE-T0001 at this route's span.  Runs BEFORE
 /// [`crate::resolve_routed_live_checks`] so route constructors pin the page
 /// variable before the `notFound ≟ Model.page` gate reads it.
 pub struct RouteWitnessCheck {
@@ -1558,7 +1558,7 @@ impl<'a> Builder<'a> {
             // `home`; `module.name` would always be the entry module's name
             // (e.g. `["Main"]`), causing cross-module constructor result types
             // (`Main.Color`) to diverge from cross-module type annotations
-            // (`Helper.Color`) and fail unification (SKY-T0001).
+            // (`Helper.Color`) and fail unification (IPE-T0001).
             let result = Ty::Con {
                 module: union.home.clone(),
                 name: union.name,
@@ -1574,7 +1574,7 @@ impl<'a> Builder<'a> {
                     // Pin `any` wildcard fields to Dict String String so every
                     // instantiation site (pattern binder, ctor-as-value,
                     // Sub.subscribeTopic) sees the concrete carrier, never a
-                    // free Ty::Var that the lowerer would reject (SKY-L0102).
+                    // free Ty::Var that the lowerer would reject (IPE-L0102).
                     arg_tys.push(pin_any_in_ty(
                         from_canon(ct),
                         &union.vars,
@@ -1838,7 +1838,7 @@ impl<'a> Builder<'a> {
                 // use (`p == q`) leaves it generic, so generalisation emits a
                 // `PartialEq` bound rather than an unbounded `T{n}` the backend
                 // could not compare. A function operand fails the pin and a
-                // function instantiation fails the post-solve gate (SKY-T0014).
+                // function instantiation fails the post-solve gate (IPE-T0014).
                 let s = self.super_var(TyBounds::eq(), lhs.span)?;
                 self.eq(lhs.span, lv, s);
                 self.eq(rhs.span, rv, s);
@@ -1856,7 +1856,7 @@ impl<'a> Builder<'a> {
                 // result share one super-typed variable carrying the appendable
                 // obligation. The unifier pins it to `String` or `List _` at
                 // the head; a non-appendable operand (Int, Bool, record, …)
-                // fails at the pin and surfaces as SKY-T0014 before reaching
+                // fails at the pin and surfaces as IPE-T0014 before reaching
                 // the backend.
                 let s = self.super_var(TyBounds::appendable(), lhs.span)?;
                 self.eq(lhs.span, lv, s);
@@ -2158,7 +2158,7 @@ impl<'a> Builder<'a> {
                         // The binding writes more parameter patterns than its
                         // annotation has arrows (`f a b = …` with `f : Int`).
                         // Parse-don't-validate: surface a user-facing
-                        // SKY-T0004 with the binding span + the written
+                        // IPE-T0004 with the binding span + the written
                         // signature, not a CompilerBug.
                         _ => return Err(self.too_many_parameters(name, ty)),
                     };
@@ -2166,7 +2166,7 @@ impl<'a> Builder<'a> {
                     let arg_var = self.instantiate_rigid(&arg, &mut rigid_vars)?;
                     self.constrain_pattern(&mut local, pat, arg_var)?;
                     // Record the param pattern's region so the lowerer can read the
-                    // solved param type (record-param field-set completion, SKY-T0015
+                    // solved param type (record-param field-set completion, IPE-T0015
                     // path). Keyed by `(current_home, pat.span)` to prevent collisions
                     // across dep modules (see `Builder::regions` doc comment).
                     self.regions
@@ -2234,7 +2234,7 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// Build the SKY-T0004 diagnostic for a binding with more parameter
+    /// Build the IPE-T0004 diagnostic for a binding with more parameter
     /// patterns than its annotation has arrows. Resolving the name / rendering
     /// the signature can itself only fail on a forged symbol, in which case
     /// that internal bug is surfaced instead.
@@ -2276,8 +2276,8 @@ impl<'a> Builder<'a> {
     ///
     /// # Errors
     ///
-    /// Returns `SKY-T0001` when the error channel is not `Error` (e.g.
-    /// `Task String a` or `Task Int a`).  Returns `SKY-T0016`
+    /// Returns `IPE-T0001` when the error channel is not `Error` (e.g.
+    /// `Task String a` or `Task Int a`).  Returns `IPE-T0016`
     /// ([`TypeError::TaskArity`]) when a `Task` annotation has a number of type
     /// arguments other than 1 or 2 — reachable from source (a bare `Task`, or
     /// `Task Error Int Bool`), because canonicalisation validates arity only for
@@ -2316,7 +2316,7 @@ impl<'a> Builder<'a> {
                                 detail: "Task 2-arg: second arg missing (internal)".into(),
                             })?;
                             if !self.is_error_ty(&e_ty) {
-                                // Render both sides for a clear SKY-T0001 diagnostic.
+                                // Render both sides for a clear IPE-T0001 diagnostic.
                                 let mut namer = VarNamer::new();
                                 let expected = ty_to_doc(
                                     &Ty::Con {
@@ -2350,7 +2350,7 @@ impl<'a> Builder<'a> {
                         // from source because canonicalisation validates arity
                         // only for type *aliases* (`NameError::AliasArity`), never
                         // for a non-alias type-constructor application like `Task`.
-                        // Fail closed with a clean SKY-T0016 diagnostic naming the
+                        // Fail closed with a clean IPE-T0016 diagnostic naming the
                         // found argument count instead of raising a `CompilerBug`.
                         n => Err(Diagnostic::Type {
                             span,
@@ -2366,8 +2366,8 @@ impl<'a> Builder<'a> {
                     // `Cmd` / `Sub` take exactly one message type. A mis-arity
                     // application (bare `Cmd`, `Cmd Int Bool`) would otherwise
                     // reach the lowerer's `ir_type_from_canon` catch-all and
-                    // ICE (SKY-I0001) — the Cmd/Sub sibling of the Task gate.
-                    // Fail closed here with the same clean SKY-T0016, symmetric
+                    // ICE (IPE-I0001) — the Cmd/Sub sibling of the Task gate.
+                    // Fail closed here with the same clean IPE-T0016, symmetric
                     // with the `Task` arm above.
                     let carrier = if name == self.builtins.cmd {
                         "Cmd"
@@ -2925,7 +2925,7 @@ impl<'a> Builder<'a> {
         // table carrying a `Ty::Var(u32::MAX)` exit-0 sentinel for un-typed
         // kernels. A `None` id (FFI `Rust.*`) or an excluded bucket
         // (`LiveAppRouted` — unlowered) misses the registry and is
-        // fail-closed with SKY-L0108 (loud) via `kernel_scheme_or_unsupported`,
+        // fail-closed with IPE-L0108 (loud) via `kernel_scheme_or_unsupported`,
         // never silently typed as a free variable that `cargo` later rejects.
         let _ = (module, name); // retained for diagnostics
         let registry = id.and_then(|k| self.stdlib_scheme(k));
@@ -2934,7 +2934,7 @@ impl<'a> Builder<'a> {
     }
 
     /// Combine the parse-once registry scheme (`id` path) with the legacy
-    /// string-table scheme, failing closed with SKY-L0108 (`Feature::Kernels`,
+    /// string-table scheme, failing closed with IPE-L0108 (`Feature::Kernels`,
     /// the same shape lower raises at `lower_callee`) when NEITHER supplies a
     /// type. Extracted as a pure fn so the fail-closed arm is unit-testable
     /// independently of the (currently total) legacy table — see
@@ -3265,7 +3265,7 @@ impl<'a> Builder<'a> {
                 if let Some(scheme) = self.ctors.get(name).cloned() {
                     // A constructor pattern binds exactly its declared fields. A
                     // mismatch (`Just` with no payload, `Node l r` for a three-field
-                    // `Node`) is a user error, surfaced as SKY-T0013 rather than
+                    // `Node`) is a user error, surfaced as IPE-T0013 rather than
                     // silently constraining a prefix.
                     if args.len() != scheme.arg_tys.len() {
                         return Err(self.ctor_pattern_arity(
@@ -3358,7 +3358,7 @@ impl<'a> Builder<'a> {
             }
             // A literal pattern pins the scrutinee to the literal's type. It
             // binds no names. A mismatch (`case n of "x" -> …` with `n : Int`)
-            // surfaces as the ordinary SKY-T0001 type mismatch.
+            // surfaces as the ordinary IPE-T0001 type mismatch.
             canon::Pattern_::PInt(_) => {
                 let lit = self.int_var()?;
                 self.eq(pat.span, lit, scrut_var);
@@ -3409,7 +3409,7 @@ impl<'a> Builder<'a> {
         }
     }
 
-    /// Build the SKY-T0013 diagnostic for a constructor pattern that binds the
+    /// Build the IPE-T0013 diagnostic for a constructor pattern that binds the
     /// wrong number of payload fields. A forged constructor symbol surfaces the
     /// underlying intern bug instead.
     fn ctor_pattern_arity(
@@ -3895,7 +3895,7 @@ impl<'a> Builder<'a> {
         // all share ONE page type variable.  A `notFound = 5` in a routed app
         // that also uses `Live.route "/" CounterPage` sets `var(2) = Page`
         // (through the per-route witness — see [`RouteWitnessCheck`]) and then
-        // forces `5 : Page` → SKY-T0001.  Seal fix — the
+        // forces `5 : Page` → IPE-T0001.  Seal fix — the
         // "exit-0-then-cargo-fail E0308" class.  Since round 4 the arg is no
         // longer phantom at the IR level: the lowerer threads it into
         // `IrType::LiveRoute(page)` so the backend renders `Route<Page>`.
@@ -4273,7 +4273,7 @@ impl<'a> Builder<'a> {
             K::TaskSequence | K::TaskParallel => fun(list(task(var(0))), task(list(var(0)))),
             // `Task.run : Task Error a -> Result Error a`.
             // The error channel is the fixed `Error` type — using `var(1)` here
-            // leaves the result's error type free, causing SKY-L0102 at the
+            // leaves the result's error type free, causing IPE-L0102 at the
             // `main` binding in programs that end with `|> Task.run` and have no
             // annotation that would pin `var(1)` to `Error`.
             K::TaskRun => fun(task(var(0)), result(error_ty(), var(0))),
@@ -4532,7 +4532,7 @@ impl<'a> Builder<'a> {
             // `unsafeFindWhere`. A caller can never pass a raw
             // `String` WHERE clause here: only the `Sql.*` combinators below
             // produce a `SqlFragment`, so a naive string-concatenated WHERE
-            // clause is a SKY-T0001 type mismatch, not a runtime risk.
+            // clause is a IPE-T0001 type mismatch, not a runtime risk.
             K::DbFindWhere => fun(
                 db(),
                 fun(string(), fun(sqlfragment(), task(list(dict(string(), string()))))),
@@ -4782,7 +4782,7 @@ impl<'a> Builder<'a> {
                         // Parametrising LiveRoute on the page type variable
                         // connects each route ctor's page type to `notFound`'s
                         // page type through the SAME var(2), so a type mismatch
-                        // between them is caught here (SKY-T0001) instead of
+                        // between them is caught here (IPE-T0001) instead of
                         // passing skyc and failing later in cargo (E0308).
                         m.insert(self.builtins.live_f_routes, list(live_route(var(2))));
                         // notFound : page
@@ -4803,7 +4803,7 @@ impl<'a> Builder<'a> {
             // String -> Page; multi-`:param` routes curry further).  Sharing
             // ONE variable for both (the pre-round-4 `fun(var(0),
             // live_route(var(0)))` shape) forced `Page ≟ String -> Page` on
-            // every param route — a false SKY-T0001 on the CANONICAL corpus
+            // every param route — a false IPE-T0001 on the CANONICAL corpus
             // shape (`route "/apps/:slug" AppDetailPage`).
             //
             // Instead the builder var is related to the page var by a deferred
@@ -4813,7 +4813,7 @@ impl<'a> Builder<'a> {
             // peel the builder's settled leading arrows, then unify the result
             // with `page`.  A nullary route witnesses `page` directly; a param
             // ctor witnesses it with its RESULT type; a wrong-ADT ctor still
-            // fails unification → SKY-T0001.
+            // fails unification → IPE-T0001.
             //
             // The result `LiveRoute page` places every route of a list in
             // `List (LiveRoute var(2))` (K::LiveApp scheme), so all routes AND
@@ -6465,7 +6465,7 @@ fn reachable_flex_roots(
 /// naming cursor, threaded across every quantified var of every scheme in one
 /// `promote_untyped_boundaries` run so names stay distinct program-wide (not
 /// required for soundness — each scheme's names only need to be distinct
-/// *within* that scheme — but keeps `SKY_DEBUG_UNTYPED` dumps unambiguous).
+/// *within* that scheme — but keeps `IPE_DEBUG_UNTYPED` dumps unambiguous).
 fn mint_synth_symbol(interner: &mut Interner, next: &mut u32) -> DResult<Symbol> {
     loop {
         let candidate = crate::doc::letters(*next);
@@ -6495,7 +6495,7 @@ fn mint_synth_symbol(interner: &mut Interner, next: &mut u32) -> DResult<Symbol>
 ///
 /// # Errors
 /// A cross-module reference's instantiated scheme failing to unify against
-/// local call-site structure is a genuine `SKY-T0001`, blamed on the
+/// local call-site structure is a genuine `IPE-T0001`, blamed on the
 /// referencing (`use_home`) module. A union-find invariant violation is a
 /// `Diagnostic::CompilerBug` with an empty home.
 pub fn promote_untyped_boundaries(
@@ -6850,7 +6850,7 @@ impl<'a> Builder<'a> {
 /// Every [`StdlibKernel`] variant paired with its inference scheme, in
 /// `StdlibKernel::ALL` order, skipping variants the registry deliberately
 /// never schemes (routed / unlowered buckets — those fail closed with
-/// SKY-L0108 at their call sites).
+/// IPE-L0108 at their call sites).
 ///
 /// This is the *lift* behind the salsa `kernel_types()` query: the table is
 /// read through the SAME [`Builder::stdlib_scheme`]
@@ -7408,7 +7408,7 @@ mod registry_phase_c_tests {
             // `concatMap`/`indexedMap`. Canon anchored every `List.x` to
             // `VarHome::Kernel`, but only 10 had a `KernelFn`+scheme — these nine
             // were holes (`kernel_ty` had no arm → `Ty::Var(u32::MAX)`) and
-            // emitted SKY-L0108 at lower. Now schemed from their runtime + `.sky`
+            // emitted IPE-L0108 at lower. Now schemed from their runtime + `.sky`
             // signatures; confirmed holes by `first_schemed_were_holes`.
             K::ListAppend,
             K::ListConcat,
@@ -8147,7 +8147,7 @@ mod registry_phase_c_tests {
     /// SEAL. The banned F1 exit-0 sentinel (`Ty::Var` at the
     /// reserved max id) is GONE from the code: `kernel_ty` and its
     /// `_ => <sentinel>` fallthrough are deleted, and `constrain_var_kernel`
-    /// fails closed with SKY-L0108 on a registry miss. This test freezes that by
+    /// fails closed with IPE-L0108 on a registry miss. This test freezes that by
     /// scanning this very source file: no NON-COMMENT line may contain the
     /// sentinel token, so any reintroduction (a new fallback, a resurrected
     /// legacy arm) is a compile-time-adjacent test failure. Comment/doc lines
@@ -8175,7 +8175,7 @@ mod registry_phase_c_tests {
 
     /// Condition 2 — the fail-closed path is REACHABLE. When the registry does
     /// not type a kernel, `kernel_scheme_or_unsupported` raises the
-    /// SKY-L0108-shaped `Err` (loud), NOT a silent `Ty::Var`. Also checks
+    /// IPE-L0108-shaped `Err` (loud), NOT a silent `Ty::Var`. Also checks
     /// registry-first precedence and single-source resolution.
     ///
     /// The legacy string table is DELETED and
@@ -8188,7 +8188,7 @@ mod registry_phase_c_tests {
         let a = Ty::Var(0);
         let b = Ty::Var(1);
 
-        // BOTH miss → fail-closed SKY-L0108.
+        // BOTH miss → fail-closed IPE-L0108.
         let err = Builder::kernel_scheme_or_unsupported(None, None, span)
             .expect_err("both-miss must fail closed, not type as Ty::Var");
         assert!(
@@ -8199,7 +8199,7 @@ mod registry_phase_c_tests {
                     ..
                 }
             ),
-            "expected SKY-L0108 (Feature::Kernels), got {err:?}",
+            "expected IPE-L0108 (Feature::Kernels), got {err:?}",
         );
 
         // Registry present → used.

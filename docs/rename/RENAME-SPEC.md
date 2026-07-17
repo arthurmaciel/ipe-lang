@@ -59,7 +59,7 @@ coordinated pass**, re-gated after, not as independent merges:
 1. **Rust surface** — crate dir+pkg renames (`sky_*`→`ipe_*`, `skyc`→`ipe`,
    `sky-runtime-rust`→`ipe-runtime-rust`), `use` paths, internal `Sky*` idents,
    `Cargo.toml` deps, workspace members.
-2. **Contracts** — `SKY-`→`IPE-` diagnostic codes; `SKY_`→`IPE_` env vars **with
+2. **Contracts** — `IPE-`→`IPE-` diagnostic codes; `IPE_`→`IPE_` env vars **with
    `scripts/lib/env.sh` + every script + memory updated in lockstep** (these are
    build-harness contracts — a mismatch silently skips E2E).
 3. **Artifacts** — `.sky`→`.ipe` extension (examples, goldens' `Main.sky`, stdlib

@@ -6,7 +6,7 @@
 //! `skyc`, builds the emitted Rust project with the shared cargo target, runs
 //! the binary, and checks its stdout against the cached oracle
 //! (`tests/golden/stdui_dualattr/oracle.meta` + `expected_go.txt`).
-//! The test is gated on `SKY_E2E=1`; without it it returns early.
+//! The test is gated on `IPE_E2E=1`; without it it returns early.
 //!
 //! ## Oracle provenance
 //!
@@ -30,13 +30,13 @@
 //!
 //! The full dual-Attribute+Event golden (mixing typed Std.Ui attributes and
 //! Html.Events event handlers) is blocked by the `UiCtor::HtmlEvent`
-//! emit-arm gap (SKY-I0###).  This reduced golden avoids event kernels and
+//! emit-arm gap (IPE-I0###).  This reduced golden avoids event kernels and
 //! exercises only the attribute + Html-node bridge.
 //!
 //! Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test golden_m7_stdui_dualattr
+//! IPE_E2E=1 cargo test golden_m7_stdui_dualattr
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -49,7 +49,7 @@ fn repo_root() -> PathBuf {
 }
 
 /// Compile / build / run `tests/golden/stdui_dualattr/Main.sky` and return
-/// the golden directory together with the run outcome. Gated on `SKY_E2E=1`.
+/// the golden directory together with the run outcome. Gated on `IPE_E2E=1`.
 fn build_run_dualattr() -> (PathBuf, support::RunOutcome) {
     let root = repo_root();
     let dir = root.join("tests").join("golden").join("stdui_dualattr");
@@ -84,7 +84,7 @@ fn build_run_dualattr() -> (PathBuf, support::RunOutcome) {
 /// Divergence golden — the expected value is skyc's own correct output.
 #[test]
 fn dualattr_stdui_attributes_and_html_node_bridge_render_correctly() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

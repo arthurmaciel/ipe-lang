@@ -48,8 +48,8 @@ Ipê" is nonsense; "ported from Ipê" is a lie. Protect them.
 | Runtime type names | `SkyResult` (1166), `SkyMaybe` (399), `SkyTask` (238), `SkyStringify` (133), `SkyError` (132), `SkyCmd` (84), `SkySub` (76), `SkyDict` (28), `SkyRow`, `SkySet`, `SkyEnv`, `SkyCacheHandle`, `SkyFluentSel`, `SkyID*` |
 | Runtime module dir | `runtime/src/sky_runtime/` → `runtime/src/ipe_runtime/` |
 | Stdlib namespace dir | `crates/skyc/stdlib/Sky/Core/` → `.../Ipe/Core/`; qualifiers `Sky.Core`, `Sky.Live`, `Sky.Http.Server(.Stream/.WebSocket)`, `Sky.Tui`, `Sky.Webview`, `Sky.Test` |
-| Error codes | prefix `SKY-` on ~90 distinct codes (`P/N/L/T/I` series + `F44xx` FFI docs); **90-ish `explain/SKY-*.md`** files + `sky_diagnostics/src/code.rs` enum + `diagnostic.rs`/`render.rs` + ~514 test/doc reference lines |
-| Env vars | `SKY_*` (documented ~50 in `CLAUDE.md` + internal `SKY_E2E`, `SKY_RUNTIME_DIR`, `SKY_DB_URL`, `SKY_DCE`, `SKY_SOLVER_BUDGET*`, `SKY_UI_LAZY_CAP`, `SKY_TUI_QUIET`, `SKY_LIVE_*`, `SKY_CONSOLE_*`, `SKY_AUTH_*`) |
+| Error codes | prefix `IPE-` on ~90 distinct codes (`P/N/L/T/I` series + `F44xx` FFI docs); **90-ish `explain/IPE-*.md`** files + `sky_diagnostics/src/code.rs` enum + `diagnostic.rs`/`render.rs` + ~514 test/doc reference lines |
+| Env vars | `IPE_*` (documented ~50 in `CLAUDE.md` + internal `IPE_E2E`, `IPE_RUNTIME_DIR`, `IPE_DB_URL`, `IPE_DCE`, `IPE_SOLVER_BUDGET*`, `IPE_UI_LAZY_CAP`, `IPE_TUI_QUIET`, `IPE_LIVE_*`, `IPE_CONSOLE_*`, `IPE_AUTH_*`) |
 | CLI binary | `sky` → `ipe`; compiler binary `skyc` → `ipec` |
 
 Everything is git-tracked, so directory/file renames use **`git mv`** to preserve history.
@@ -89,20 +89,20 @@ running; clean up background tasks; `rg` not `grep`.
 These name the **upstream Sky** project (the Haskell→Go compiler this repo was
 ported from) or the upstream Go binary/ecosystem. In them, the token `Sky` /
 `sky` referring to *that* project **stays**. Note the nuance: within these files,
-tokens that name **our own artifacts** — error codes (`SKY-L0108`), our source
+tokens that name **our own artifacts** — error codes (`IPE-L0108`), our source
 extension (`Main.sky`), our crate names — **still rename**; only the *upstream
 project name* is frozen. This is why the list is **line-level**, never file-level.
 
 | # | File | What stays `Sky` | What still renames in it |
 |---|---|---|---|
-| 1 | `docs/divergences-from-sky.md` | filename, title, "divergences from Sky", `../sky` paths, Go-reference prose | our error codes `SKY-*`→`IPE-*`, our crate/type names |
+| 1 | `docs/divergences-from-sky.md` | filename, title, "divergences from Sky", `../sky` paths, Go-reference prose | our error codes `IPE-*`→`IPE-*`, our crate/type names |
 | 2 | `docs/divergences-review.md` | upstream "Sky" prose, `../sky` | our codes/identifiers |
 | 3 | `docs/divergences-from-sky.md` §6 "Planned future divergences" (absorbed the former ideas-log of departures from Sky) | "departures from Sky" prose, codes discussed as upstream | our error codes when ours |
 | 4 | `docs/README-draft-relation-to-elm-and-sky.md` | §"Relationship to Sky", "ported from **Sky**" (L32), "Rust port of Sky" / parity-reference (L145-148) | **also fix**: this draft uses lowercase `ipê` for our language → must become `Ipê` (invariant 1); our identifiers keep code form |
 | 5 | `docs/architecture/sky-rust-backend-reference-audit.md` | in-content upstream "Sky" references, `../sky` | **filename renames** → `ipe-rust-backend-reference-audit.md` (the "sky-rust-backend" in the name is OUR backend) |
 | 6-18 | `docs/architecture/{repo-layout-and-mirroring, static-compilation, go-oracle-fixture-corpus-plan, examples-sweep-port, windows-ci-support, principled-decisions-audit, sweep-and-parity-plan, ffi-subsystem-design, ffi-sandbox-and-generator-impl-ready, ffi-port-spec, kernel-registry-design, ui-live-tui-webview-spec, tui-windows-ci}.md` | `../sky` sibling-checkout paths, "Go `sky`" binary, upstream-parity prose | our codes/crates/identifiers when named as ours |
 | 19 | `docs/superpowers/plans/*.md` (historical: `float-scinotation-verify`, `2026-06-26-...-m0-spine`, `phase4-...`, `examples-sweep-run`, `ci-and-push`, `secret-type`, `m5b-db-followups`, `let-bound-cfg-diagnostic`, `ffi-phase0-inspector`, `registry-phase-{D,E}`, `crate-spec-ssot`, `m5b-http-followups`, `m5a-task-followups`, `css-attr-injection-safe-emit`) | `../sky` paths + "Go reference" — these are frozen historical artifacts | **treat as frozen**: prefer to leave historical plans untouched except where they name a live path the harness reads |
-| 20 | `scripts/lib/env.sh` | `../sky` sibling-repo path variable (points at upstream checkout) | any `SKY_*` env var WE own that the script exports |
+| 20 | `scripts/lib/env.sh` | `../sky` sibling-repo path variable (points at upstream checkout) | any `IPE_*` env var WE own that the script exports |
 | 21 | `tools/oracle/src/lib.rs`, `tools/refresh-oracle/src/main.rs` | "Go `sky` version" / the upstream Go binary name captured by the oracle | `MAIN_SKY`/`"Main.sky"` (OUR extension → `Main.ipe`), crate identifiers |
 | 22 | `runtime/src/sky_runtime/{string,stringify}.rs` | any `../sky` provenance comment pointing at upstream | the module path itself renames (Task 2) |
 | 23 | `CLAUDE.md` (root) | passages describing the **upstream** Haskell→Go Sky compiler/release flow, `SkyDeploy` (upstream product), "Sky release" | our Rust tooling names, our env vars, our extension — **highest-ambiguity file, curate every line** |
@@ -202,12 +202,12 @@ goldens there).
   kernel-registry parity tripwire) before declaring green.
 
 ### Task 6 — Env vars + error codes + explain-page renames (closed-set lockstep)
-- **Env vars** `SKY_*`→`IPE_*`: `ipe_backend_rust/src/{emit_live,project}.rs`
-  (`SKY_LIVE_STORE`, `SKY_DB_URL`), test harness envs (`SKY_E2E`,
-  `SKY_RUNTIME_DIR`), runtime readers, all doc references. Keep the same
+- **Env vars** `IPE_*`→`IPE_*`: `ipe_backend_rust/src/{emit_live,project}.rs`
+  (`IPE_LIVE_STORE`, `IPE_DB_URL`), test harness envs (`IPE_E2E`,
+  `IPE_RUNTIME_DIR`), runtime readers, all doc references. Keep the same
   suffixes; only the prefix changes.
-- **Error codes** `SKY-<L/N/T/P/I/F>NNNN`→`IPE-<…>NNNN` in ONE lockstep move:
-  - `git mv crates/ipe_diagnostics/explain/SKY-*.md` → `IPE-*.md` (~90 files),
+- **Error codes** `IPE-<L/N/T/P/I/F>NNNN`→`IPE-<…>NNNN` in ONE lockstep move:
+  - `git mv crates/ipe_diagnostics/explain/IPE-*.md` → `IPE-*.md` (~90 files),
   - the `code.rs` enum + `Display`/parse, `diagnostic.rs`, `render.rs`,
   - every test-expected code string (~514 lines in `crates/*/tests/*`, golden `Main.ipe`, `unsupported.rs`, `hardening.rs`),
   - doc mentions of our codes (including inside the excluded upstream docs, per §Exclusion nuance — codes are ours).

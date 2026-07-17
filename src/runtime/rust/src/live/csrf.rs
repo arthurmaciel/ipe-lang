@@ -5,7 +5,7 @@
 //!   - the `__sky_csrf` cookie is `SameSite=Strict` + `Secure` (in production /
 //!     frame-ancestors mode) — SameSite=Strict is itself a strong CSRF defense,
 //!     the double-submit token is belt-and-suspenders;
-//!   - an OPT-IN `Origin`/`Host` same-origin check (`SKY_LIVE_CSRF_ORIGIN_CHECK=on`)
+//!   - an OPT-IN `Origin`/`Host` same-origin check (`IPE_LIVE_CSRF_ORIGIN_CHECK=on`)
 //!     for same-origin deployments that want a third layer (off by default so it
 //!     can't break reverse-proxied setups where the proxy rewrites `Host`);
 //!   - `X-Content-Type-Options: nosniff` + a restrictive `Permissions-Policy`
@@ -38,8 +38,8 @@ pub fn csrf_cookie_name() -> &'static str {
 /// The header the client echoes the token in (Go parity: `X-Sky-Csrf`).
 pub const CSRF_HEADER: &str = "x-sky-csrf";
 
-/// CSRF protection is ON by default; `SKY_CSRF=off|0|false` disables it
-/// (Go parity: the `SKY_CSRF` env switch / sky.toml `[security] csrf`).
+/// CSRF protection is ON by default; `IPE_CSRF=off|0|false` disables it
+/// (Go parity: the `IPE_CSRF` env switch / sky.toml `[security] csrf`).
 ///
 /// Snapshotted once into a `OnceLock` on first call (env is stable at process
 /// start; same rationale as `cookies_secure()` — eliminates a per-request
@@ -49,7 +49,7 @@ pub fn csrf_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
         !matches!(
-            crate::system::read_env_var("SKY_CSRF")
+            crate::system::read_env_var("IPE_CSRF")
                 .ok()
                 .as_deref(),
             Some("off") | Some("0") | Some("false")
@@ -152,7 +152,7 @@ pub fn is_exempt_path(path: &str) -> bool {
 }
 
 /// Optional same-origin `Origin`/`Host` check (opt-in via
-/// `SKY_LIVE_CSRF_ORIGIN_CHECK=on`; off by default so a reverse proxy that
+/// `IPE_LIVE_CSRF_ORIGIN_CHECK=on`; off by default so a reverse proxy that
 /// rewrites `Host` can't break legitimate POSTs). Skipped entirely in
 /// frame-ancestors mode (cross-origin embedding is intentional there). Returns
 /// `true` when the request should be REJECTED.
@@ -163,7 +163,7 @@ fn origin_mismatch(headers: &HeaderMap) -> bool {
         use std::sync::OnceLock;
         static CHECK: OnceLock<bool> = OnceLock::new();
         *CHECK.get_or_init(|| {
-            crate::system::read_env_var("SKY_LIVE_CSRF_ORIGIN_CHECK").as_deref()
+            crate::system::read_env_var("IPE_LIVE_CSRF_ORIGIN_CHECK").as_deref()
                 == Ok("on")
         })
     }

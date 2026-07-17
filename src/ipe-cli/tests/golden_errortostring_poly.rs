@@ -3,7 +3,7 @@
 //! Root cause: hard-typing `K::ErrorToString` as monomorphic `Error -> String`
 //! in `stdlib_scheme` (without the direct-build arm that `BasicsToString` has)
 //! forces the solver to unify a rigid annotation var `a` with the `Error` type →
-//! SKY-T0001.  Instead `errorToString : Stringify a => a -> String` (same
+//! IPE-T0001.  Instead `errorToString : Stringify a => a -> String` (same
 //! chokepoint as `Basics.toString`).
 //!
 //! The unify.rs super-super arm is extended to allow cross-rigidity merging for
@@ -21,7 +21,7 @@
 //!   - Building examples/00-standard-libs emits no "errorToString expected"
 //!     error at Sky/Test.sky:74.
 //!
-//! E2E (cargo build + run) is behind `SKY_E2E=1`.
+//! E2E (cargo build + run) is behind `IPE_E2E=1`.
 
 use std::path::{Path, PathBuf};
 
@@ -55,7 +55,7 @@ fn try_build(entry: &Path) -> Result<PathBuf, skyc::CliError> {
 }
 
 fn e2e_enabled() -> bool {
-    std::env::var("SKY_E2E").is_ok()
+    std::env::var("IPE_E2E").is_ok()
 }
 
 // ─── positive gate ────────────────────────────────────────────────────────────
@@ -80,7 +80,7 @@ fn errortostring_polymorphic_compiles() {
     );
 }
 
-/// Under `SKY_E2E=1`: the emitted project builds with cargo and runs correctly.
+/// Under `IPE_E2E=1`: the emitted project builds with cargo and runs correctly.
 #[test]
 fn errortostring_polymorphic_e2e() {
     if !e2e_enabled() {
@@ -118,7 +118,7 @@ fn eqshow_eq_plus_stringify_compiles() {
     );
 }
 
-/// Under `SKY_E2E=1`: the eqShow emitted project builds and runs.
+/// Under `IPE_E2E=1`: the eqShow emitted project builds and runs.
 #[test]
 fn eqshow_e2e() {
     if !e2e_enabled() {
@@ -176,7 +176,7 @@ fn annotation_rigid_plus_literal_still_fails() {
 
 /// Regression: building examples/00-standard-libs must NOT produce the original
 /// "errorToString expected" mismatch at Sky/Test.sky:74. The error was
-/// SKY-T0001 from the monomorphic `Error -> String` scheme being unified
+/// IPE-T0001 from the monomorphic `Error -> String` scheme being unified
 /// against a rigid annotation var `a` in `equal : a -> a -> TestResult`.
 ///
 /// After the fix, the build advances past Sky.Test — if a different error fires

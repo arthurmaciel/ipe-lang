@@ -1,7 +1,7 @@
 module Main exposing (main)
 import Sky.Core.Prelude exposing (..)
 
--- SKY-L0110 (#216) seal: partial + over-application of a first-class function
+-- IPE-L0110 (#216) seal: partial + over-application of a first-class function
 -- VALUE. The named-callee path already eta-expands (`add 2` -> `\n -> add(2,
 -- n)`); this fixture pins the VALUE path the reference (`../sky`) handles by
 -- emitting curried single-arg closures. Our IR flattens the curried chain into

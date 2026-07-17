@@ -1,5 +1,5 @@
 //! Gate: a record `type alias` introduces a value-level
-//! auto-constructor (SKY-N0001 fix). The `skyc` pipeline must emit a project
+//! auto-constructor (IPE-N0001 fix). The `skyc` pipeline must emit a project
 //! that builds and RUNS with the constructor binding fields **positionally in
 //! declared order** — including the decisive same-typed order oracle, partial
 //! application, a parametric record alias, and a bare reference reified into a
@@ -34,7 +34,7 @@ const EXPECTED_STDOUT: &str = "7/hi\n1,2\n4\n99n\n60\nok\n";
 
 #[test]
 fn record_ctor_end_to_end_field_order() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();
@@ -62,7 +62,7 @@ fn record_ctor_end_to_end_field_order() {
 
 /// A hand-written record literal and the alias's auto-constructor for the SAME
 /// shape must resolve to ONE synthesised struct — the constructor introduces no
-/// parallel representation. Emit-only (no `SKY_E2E` gate) so it runs in the
+/// parallel representation. Emit-only (no `IPE_E2E` gate) so it runs in the
 /// default suite. Both `viaLiteral` (record literal) and `viaCtor` (`Pt 1 2`)
 /// return `Pt`, so their emitted return type is the same `Rec…` struct declared
 /// exactly once.
@@ -121,7 +121,7 @@ fn record_ctor_and_literal_share_one_struct() {
 /// synthesised one, so the backend emitted a `#[derive(Clone, Debug, PartialEq)]`
 /// struct over a `Box<dyn Fn>` field — skyc exit-0 then a cargo failure. This
 /// emit-only check (default suite) confirms skyc succeeds AND that no struct for
-/// the alias is emitted (no ctor). The companion `…_builds_and_runs` (`SKY_E2E`)
+/// the alias is emitted (no ctor). The companion `…_builds_and_runs` (`IPE_E2E`)
 /// proves the emitted project actually cargo-builds — the decisive seal proof.
 #[test]
 fn seal_fn_field_alias_emits_no_struct() {
@@ -162,13 +162,13 @@ fn seal_fn_field_alias_emits_no_struct() {
     );
 }
 
-/// SEAL PROOF (`SKY_E2E`). The emitted project for the function-embedding
+/// SEAL PROOF (`IPE_E2E`). The emitted project for the function-embedding
 /// record alias must actually cargo-BUILD and run clean — skyc exit-0 AND cargo
 /// exit-0. This is the exact class that regressed: skyc-success without a matching
 /// cargo-success is the seal violation.
 #[test]
 fn seal_fn_field_alias_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();
@@ -202,7 +202,7 @@ fn seal_fn_field_alias_builds_and_runs() {
 /// non-derivable `Decoder` value — skyc exit-0 then cargo-101 (the seal hole).
 /// This emit-only check (default suite) confirms skyc succeeds AND that no struct
 /// for the alias is emitted (no ctor). The companion `…_builds_and_runs`
-/// (`SKY_E2E`) proves the emitted project actually cargo-builds.
+/// (`IPE_E2E`) proves the emitted project actually cargo-builds.
 #[test]
 fn seal_opaque_field_alias_emits_no_struct() {
     let root = repo_root();
@@ -243,13 +243,13 @@ fn seal_opaque_field_alias_emits_no_struct() {
     );
 }
 
-/// ROUND-2 SEAL PROOF (`SKY_E2E`). The emitted project for the
+/// ROUND-2 SEAL PROOF (`IPE_E2E`). The emitted project for the
 /// opaque-wrapper-field record alias must actually cargo-BUILD and run clean —
 /// skyc exit-0 AND cargo exit-0. Round-1 regressed exactly here: skyc-success
 /// without a matching cargo-success (E0277/E0369/E0599 over `Decoder`).
 #[test]
 fn seal_opaque_field_alias_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();
@@ -278,7 +278,7 @@ fn seal_opaque_field_alias_builds_and_runs() {
 /// ROUND-2 SEAL FAIL-CLOSED. The same opaque-wrapper-field alias, but the
 /// alias name is USED as a value constructor (`D Decode.int`). Because synthesis
 /// declined, no top-level value `D` exists, so this must fail CLOSED at skyc with
-/// SKY-N0001 — NEVER skyc-0-then-cargo-fail. `skyc::build` must return `Err` and
+/// IPE-N0001 — NEVER skyc-0-then-cargo-fail. `skyc::build` must return `Err` and
 /// emit nothing. This is the decisive contrast to the seal hole: the same source
 /// shape that round-1 emitted-then-cargo-failed is now rejected at skyc.
 #[test]
@@ -310,7 +310,7 @@ fn seal_opaque_field_used_as_ctor_fails_closed() {
 
 #[test]
 fn record_ctor_cross_module_end_to_end() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();

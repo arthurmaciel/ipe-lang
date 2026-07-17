@@ -6,7 +6,7 @@
 # PORTED from ../sky/runtime-rust/scripts/lib/checks.sh. The exercise_* contract
 # is backend-agnostic (it drives a built binary and asks "did it work?"), so it
 # ports almost unchanged. ADAPTATIONS for this repo:
-#   • night_guard is OPT-IN (SKY_SWEEP_NIGHT_GATE=1) so it NEVER blocks GitHub CI.
+#   • night_guard is OPT-IN (IPE_SWEEP_NIGHT_GATE=1) so it NEVER blocks GitHub CI.
 #   • the browser driver / scenarios paths point at this repo's scripts/ (absent
 #     for now → WEB_OK=0 → exercise_live degrades to a server boot check, which
 #     is exactly the BUILD+RUN phase-1 behaviour we want).
@@ -20,7 +20,7 @@
 # Server/live examples that use Std.Auth refuse to boot without a >=32-byte
 # secret (CORRECT production behaviour). Provide a test secret so those apps boot;
 # honoured only if the caller hasn't set their own.
-export SKY_AUTH_TOKEN_SECRET="${SKY_AUTH_TOKEN_SECRET:-sky-run-sweep-test-secret-0123456789-abcdef}"
+export IPE_AUTH_TOKEN_SECRET="${IPE_AUTH_TOKEN_SECRET:-sky-run-sweep-test-secret-0123456789-abcdef}"
 
 # ── Panic detection (shared) ────────────────────────────────────────────────
 # A Rust panic / abort string in a binary's output = a soundness failure (the
@@ -30,19 +30,19 @@ PANIC_RE="panicked|CompilerBug|RUST_BACKTRACE|index out of bounds|unwrap\(\) on|
 
 # ── Host OS detection (shared) ───────────────────────────────────────────────
 case "${OSTYPE:-}" in
-  linux*)            SKY_HOST_OS=linux   ;;
-  darwin*)           SKY_HOST_OS=macos   ;;
-  msys*|cygwin*|win*) SKY_HOST_OS=windows ;;
+  linux*)            IPE_HOST_OS=linux   ;;
+  darwin*)           IPE_HOST_OS=macos   ;;
+  msys*|cygwin*|win*) IPE_HOST_OS=windows ;;
   *)
     case "$(uname -s 2>/dev/null)" in
-      Linux)                       SKY_HOST_OS=linux   ;;
-      Darwin)                      SKY_HOST_OS=macos   ;;
-      MINGW*|MSYS*|CYGWIN*|Windows_NT) SKY_HOST_OS=windows ;;
-      *)                           SKY_HOST_OS=linux   ;;
+      Linux)                       IPE_HOST_OS=linux   ;;
+      Darwin)                      IPE_HOST_OS=macos   ;;
+      MINGW*|MSYS*|CYGWIN*|Windows_NT) IPE_HOST_OS=windows ;;
+      *)                           IPE_HOST_OS=linux   ;;
     esac
     ;;
 esac
-export SKY_HOST_OS
+export IPE_HOST_OS
 
 # ── EXERCISE_SKIP_RC: the rc an exercise_* returns when this HOST can't run the
 # shape at all (no pty / no display) — distinct from 0 (pass) and 1 (fail).
@@ -50,18 +50,18 @@ EXERCISE_SKIP_RC=125
 
 # ── night_guard <sweep-name>: OPT-IN local deferral window ───────────────────
 # PORT NOTE: upstream night-gated this heavy sweep to 22:00–08:00 America/Sao_Paulo
-# on a slim shared box AND that gate blocked nothing on CI (CI set SKY_SWEEP_FORCE).
+# on a slim shared box AND that gate blocked nothing on CI (CI set IPE_SWEEP_FORCE).
 # Here it is OFF BY DEFAULT so it can NEVER block GitHub CI. Set
-# SKY_SWEEP_NIGHT_GATE=1 to re-enable the local low-load window; SKY_SWEEP_FORCE=1
+# IPE_SWEEP_NIGHT_GATE=1 to re-enable the local low-load window; IPE_SWEEP_FORCE=1
 # still overrides it. When enabled + outside the window + not forced → exit 2.
 night_guard() {
   local sweep="${1:-sweep}" hour
-  [ "${SKY_SWEEP_NIGHT_GATE:-0}" = 1 ] || return 0   # gate disabled → no-op (default)
-  [ -n "${SKY_SWEEP_FORCE:-}" ] && return 0
+  [ "${IPE_SWEEP_NIGHT_GATE:-0}" = 1 ] || return 0   # gate disabled → no-op (default)
+  [ -n "${IPE_SWEEP_FORCE:-}" ] && return 0
   hour="$(TZ=America/Sao_Paulo date +%H 2>/dev/null)"
   hour="$((10#${hour:-12}))"
   if [ "$hour" -ge 22 ] || [ "$hour" -lt 8 ]; then return 0; fi
-  echo "deferred: $sweep runs 22:00–08:00 America/Sao_Paulo (SKY_SWEEP_NIGHT_GATE=1); set SKY_SWEEP_FORCE=1 to override" >&2
+  echo "deferred: $sweep runs 22:00–08:00 America/Sao_Paulo (IPE_SWEEP_NIGHT_GATE=1); set IPE_SWEEP_FORCE=1 to override" >&2
   exit 2
 }
 
@@ -85,12 +85,12 @@ reap() {
 # ported — phase 1 is BUILD+RUN, so the boot-check degrade is intended).
 NODE_BIN="$(for _nb in "$HOME"/.nvm/versions/node/*/bin; do [ -d "$_nb" ] && printf '%s\n' "$_nb"; done | sort -V | tail -1)"
 export PATH="${NODE_BIN:+$NODE_BIN:}$PATH"
-export SKY_CHROMIUM="${SKY_CHROMIUM:-/usr/bin/chromium}"
+export IPE_CHROMIUM="${IPE_CHROMIUM:-/usr/bin/chromium}"
 DRIVER="${DRIVER:-$REPO/scripts/equivalence-checks/web-verify.mjs}"
 SCENARIOS="${SCENARIOS:-$REPO/scripts/equivalence-checks/verify-scenarios.mjs}"
 WEB_OK=1
 command -v node >/dev/null 2>&1          || WEB_OK=0
-[ -x "$SKY_CHROMIUM" ]                    || WEB_OK=0
+[ -x "$IPE_CHROMIUM" ]                    || WEB_OK=0
 [ -f "$DRIVER" ]                          || WEB_OK=0
 [ -d "$REPO/node_modules/playwright" ]    || WEB_OK=0
 
@@ -169,7 +169,7 @@ exercise_server() {
   local bin="$1" port="$2" log="$3" pid i code lp code2 ok="" run_dir abin
   abin="$(cd "$(dirname "$bin")" && pwd)/$(basename "$bin")"
   run_dir="$(mktemp -d "${TMPDIR:-/tmp}/sky-serve.XXXXXX")"
-  ( cd "$run_dir" && exec env SKY_LIVE_PORT="$port" PORT="$port" "$abin" ) >"$log" 2>&1 </dev/null &
+  ( cd "$run_dir" && exec env IPE_LIVE_PORT="$port" PORT="$port" "$abin" ) >"$log" 2>&1 </dev/null &
   pid=$!
   for i in $(seq 1 30); do
     kill -0 "$pid" 2>/dev/null || break
@@ -186,7 +186,7 @@ exercise_server() {
   rm -rf "$run_dir" 2>/dev/null
   if grep -qiE "$PANIC_RE" "$log"; then return 1; fi
   [ -n "$ok" ] && return 0
-  if [ "${SKY_HOST_OS:-}" = macos ] && grep -qiE "listening on" "$log"; then
+  if [ "${IPE_HOST_OS:-}" = macos ] && grep -qiE "listening on" "$log"; then
     return "$EXERCISE_SKIP_RC"
   fi
   return 1
@@ -208,7 +208,7 @@ exercise_tui() {
   local bin="$1" log="$2" abin run_dir
   abin="$(_abs_bin "$bin")"
   run_dir="$(mktemp -d "${TMPDIR:-/tmp}/sky-tui.XXXXXX")"
-  case "$SKY_HOST_OS" in
+  case "$IPE_HOST_OS" in
     macos)
       if command -v script >/dev/null 2>&1; then
         ( cd "$run_dir" && script -q /dev/null timeout 8 "$abin" ) >"$log" 2>&1 </dev/null
@@ -239,7 +239,7 @@ exercise_webview() {
   local bin="$1" log="$2" abin run_dir
   abin="$(_abs_bin "$bin")"
   run_dir="$(mktemp -d "${TMPDIR:-/tmp}/sky-webview.XXXXXX")"
-  case "$SKY_HOST_OS" in
+  case "$IPE_HOST_OS" in
     macos)
       ( cd "$run_dir" && timeout 8 "$abin" ) >"$log" 2>&1 </dev/null
       ;;
@@ -262,7 +262,7 @@ exercise_webview() {
 _boot_server_at() {
   local bin="$1" port="$2" run_dir="$3" log="$4" abin pid i code lp
   abin="$(cd "$(dirname "$bin")" 2>/dev/null && pwd)/$(basename "$bin")"
-  ( cd "$run_dir" && exec env SKY_LIVE_PORT="$port" PORT="$port" "$abin" ) >"$log" 2>&1 </dev/null &
+  ( cd "$run_dir" && exec env IPE_LIVE_PORT="$port" PORT="$port" "$abin" ) >"$log" 2>&1 </dev/null &
   pid=$!
   for i in $(seq 1 30); do
     kill -0 "$pid" 2>/dev/null || { echo ""; return 1; }

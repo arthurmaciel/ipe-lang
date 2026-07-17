@@ -18,7 +18,7 @@
 //!
 //! Run:
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_i191_input_arc_capture
+//! IPE_E2E=1 cargo test -p skyc --test golden_i191_input_arc_capture
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -39,7 +39,7 @@ fn entry_path(root: &Path) -> PathBuf {
 
 /// skyc-0: the compiler must accept the program AND emit the capture-clone `let`
 /// OUTSIDE the `Arc`'s `move` closure — checked unconditionally (cheap, no
-/// `cargo`), independent of the `SKY_E2E` gate. This is the exact assertion that
+/// `cargo`), independent of the `IPE_E2E` gate. This is the exact assertion that
 /// the E0382 SEAL break cannot recur: the pre-clone must sit before `Arc::new`,
 /// never inside its `move |_x|` body.
 #[test]
@@ -82,11 +82,11 @@ fn i191_skyc_accepts_and_hoists_capture_clone() {
 }
 
 /// cargo-0 ∧ run-0: the emitted project actually compiles with `rustc` (no
-/// E0382) and renders the row. Gated on `SKY_E2E=1` — the only check that would
+/// E0382) and renders the row. Gated on `IPE_E2E=1` — the only check that would
 /// have caught the original SEAL violation (E0382, `skyc build` clean).
 #[test]
 fn i191_cargo_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

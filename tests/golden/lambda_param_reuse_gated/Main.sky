@@ -8,8 +8,8 @@ import Sky.Core.Prelude exposing (..)
 -- lambda's own body. `lower_lambda` builds its own `ir_params` separately
 -- from those 4 sites and, before the fix, never ran them through the reuse
 -- gate — this exact shape reached `cargo build` as E0382
--- (use of moved value: `mf`) instead of a clean SKY-L0127. Must stay
--- rejected with SKY-L0127, never silently accepted.
+-- (use of moved value: `mf`) instead of a clean IPE-L0127. Must stay
+-- rejected with IPE-L0127, never silently accepted.
 consume : Maybe (Int -> Int) -> Int
 consume mf =
     case mf of

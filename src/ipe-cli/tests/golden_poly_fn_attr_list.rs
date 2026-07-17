@@ -12,10 +12,10 @@
 //! type vars into `current_poly_tvars` before lowering the body, so
 //! `Attribute<T1>` is emitted instead of `Attribute<()>`.
 //!
-//! Gated on `SKY_E2E=1`:
+//! Gated on `IPE_E2E=1`:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_i139_poly_fn_attr_list
+//! IPE_E2E=1 cargo test -p skyc --test golden_i139_poly_fn_attr_list
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -36,7 +36,7 @@ fn repo_root() -> PathBuf {
 /// * run and print rendered HTML that contains "counter"
 #[test]
 fn poly_fn_attr_list_skyc_and_cargo_zero() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

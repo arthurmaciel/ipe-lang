@@ -10,10 +10,10 @@
 //! TCO is value-preserving, not merely non-crashing: every regression pairs a
 //! value assertion (and the parity fixtures also byte-diff the Go oracle).
 //!
-//! Every test is gated on `SKY_E2E=1`; without it the test returns early. Run:
+//! Every test is gated on `IPE_E2E=1`; without it the test returns early. Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test golden_tco
+//! IPE_E2E=1 cargo test golden_tco
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -48,7 +48,7 @@ fn compile_golden(name: &str) -> PathBuf {
 }
 
 fn e2e_enabled() -> bool {
-    std::env::var("SKY_E2E").is_ok()
+    std::env::var("IPE_E2E").is_ok()
 }
 
 /// The soundness proof — constant stack. 2,000,000 self-tail-recursive iterations

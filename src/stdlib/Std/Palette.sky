@@ -10,7 +10,7 @@ module Std.Palette exposing (Shade(..), toHex, Length(..), lengthPx)
 --
 -- `Length` (#103) is the opposite: it IS a reserved built-in type name (in the
 -- nullary-Std.Ui set). A USER module declaring `type Length` is still rejected
--- by SKY-N0026, but an `EmbeddedStdlib` module — the canonical definer, tagged
+-- by IPE-N0026, but an `EmbeddedStdlib` module — the canonical definer, tagged
 -- via the unforgeable `ModuleOrigin` — is exempt for that subset. This proves
 -- an `EmbeddedStdlib` module can define a reserved type end-to-end (the last
 -- prereq before compiled-source `Std.Css`, which defines `Length` / `Color` /

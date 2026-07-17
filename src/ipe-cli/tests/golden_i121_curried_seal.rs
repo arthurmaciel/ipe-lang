@@ -11,19 +11,19 @@
 //!
 //! * **T3** — `lower_lambda` / `lower_let` thunk-body: classifies captured
 //!   locals by [`CloneClass`]; replaces `CloneOk` reads with `CloneVar` (`.clone()`);
-//!   emits `SKY-L0126` for `NonClone` captures outside callee position.
+//!   emits `IPE-L0126` for `NonClone` captures outside callee position.
 //! * **T4** — `eta_expand_partial`: classifies supplied `Var` args; rewrites
 //!   `CloneOk` slots to `CloneVar` so the eta-lambda is `Fn`, not `FnOnce`.
 //! * **T6** — `lower_expr` `FuncValue` reify site: when def-arity `k < N`,
 //!   emits `eta_adapt_funcvalue` — a Lambda wrapper with N params whose body
 //!   is `Apply(Call(callee, [eta_0..eta_{k-1}]), [eta_k..eta_{N-1}])`.
 //!
-//! Gated: green fixtures (F1-F5, F7-F9) require `SKY_E2E=1` for the cargo
+//! Gated: green fixtures (F1-F5, F7-F9) require `IPE_E2E=1` for the cargo
 //! build+run step; gate fixtures (F6, F10) run the diagnostic check always.
 //!
 //! ```text
 //! # green suite (cargo-0 required):
-//! SKY_E2E=1 cargo test -p skyc --test golden_i121_curried_seal
+//! IPE_E2E=1 cargo test -p skyc --test golden_i121_curried_seal
 //!
 //! # gate checks only (no cargo, fast):
 //! cargo test -p skyc --test golden_i121_curried_seal
@@ -62,7 +62,7 @@ fn emitted_program_source(out: &Path) -> String {
 }
 
 /// Assert that `skyc::build(fixture)` surfaces `expected` as a
-/// `CliError::Pipeline` diagnostic.  Runs WITHOUT `SKY_E2E` so the gate
+/// `CliError::Pipeline` diagnostic.  Runs WITHOUT `IPE_E2E` so the gate
 /// checks remain fast in the default CI pass.
 fn assert_skyc_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::Code) {
     let root = repo_root();
@@ -98,7 +98,7 @@ fn assert_skyc_gate(fixture: &str, out_suffix: &str, expected: ipe_diagnostics::
 /// parameter, not the shadow (shadow reads stay bare).
 #[test]
 fn f1_firstclass_curried_and_shadow() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -161,7 +161,7 @@ fn f1_firstclass_curried_and_shadow() {
 /// T6 adapter: `\eta_0 -> (main_handler())(eta_0)`.
 #[test]
 fn f2_firstclass_arity0() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -205,7 +205,7 @@ fn f2_firstclass_arity0() {
 /// verify it is re-callable (`Fn`, not `FnOnce`).
 #[test]
 fn f3_partial_noncopy() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -256,7 +256,7 @@ fn f3_partial_noncopy() {
 /// capture (lambda was already lowered with the parameter's `prefix`).
 #[test]
 fn f4_lambda_capture_noncopy_and_f11_shadow() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -303,7 +303,7 @@ fn f4_lambda_capture_noncopy_and_f11_shadow() {
 /// Must be GREEN before and after the fix — byte-stable.
 #[test]
 fn f5_capture_fn_called_control() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -356,7 +356,7 @@ fn f5_capture_fn_called_control() {
 /// the param is shadow-rebound to the `Clone` `Arc<dyn Fn>` carrier
 /// and the read re-dispatched through a fresh `Box` closure, so the program
 /// compiles and runs (`compose (+1) 3` = `(+1)((+1) 3)` = `5`). A
-/// SKY-L0125/6 gate is sound only while the sole carrier is a non-`Clone`
+/// IPE-L0125/6 gate is sound only while the sole carrier is a non-`Clone`
 /// `Box<dyn Fn>` — the state it would reject is not invalid here, so keeping it
 /// would be over-rejection, not soundness.
 #[test]
@@ -380,7 +380,7 @@ fn f6_capture_fn_forwarded_promoted_accepts() {
         built.err()
     );
 
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = support::build_and_run_emitted("capture_fn_forwarded", &out);
@@ -395,7 +395,7 @@ fn f6_capture_fn_forwarded_promoted_accepts() {
 /// T6 eta-adapter inside `curry2`'s bound — E0593 without the arity-exact fix.
 #[test]
 fn f7_succeed_curried() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -440,7 +440,7 @@ fn f7_succeed_curried() {
 /// Both `let g = mk3` and `apply3 mk3` are tested.
 #[test]
 fn f8_curried_three_arrows() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -489,7 +489,7 @@ fn f8_curried_three_arrows() {
 /// `CloneVar(field)` so the thunk is `Fn` and both decodes succeed.
 #[test]
 fn f9_decoder_thunk_capture() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -526,7 +526,7 @@ fn f9_decoder_thunk_capture() {
     );
 }
 
-// ── F10 — generic curried fn → SKY-L0126 (T5 deferred) ───────────────────────
+// ── F10 — generic curried fn → IPE-L0126 (T5 deferred) ───────────────────────
 
 /// `pairWith : a -> b -> (a, b)`, def-arity 1.  `x`'s declared type `a` lowers
 /// cleanly at `pairWith`'s OWN def-head (the polymorphism gate,
@@ -534,21 +534,21 @@ fn f9_decoder_thunk_capture() {
 /// before `lower_def` recurses into the body — `poly_tvar_symbol` closes a
 /// tagged/untagged solver-var-ID mismatch that would make this
 /// SAME lookup miss for a captured-site (zonked, tagged) region read,
-/// masking this gate behind a spurious `SKY-L0102`). With the def-head
+/// masking this gate behind a spurious `IPE-L0102`). With the def-head
 /// lookup succeeding, lowering reaches the lambda body `\y -> (x, y)`,
 /// where `x : a` is captured `NonClone` (`clone_class(Generic) => NonClone`)
 /// and read outside callee position (inside a `Tuple`) — T3's capture-clone
-/// gate fires `SKY-L0126` (`Feature::NonCloneCapture`). With T5 implemented,
+/// gate fires `IPE-L0126` (`Feature::NonCloneCapture`). With T5 implemented,
 /// the generic `a` would gain a `Clone` bound and this gate would yield,
 /// allowing the lambda to compile cleanly. For now the expected diagnostic
-/// is `SKY-L0126` — still a clean error rather than a silent cargo-fail
+/// is `IPE-L0126` — still a clean error rather than a silent cargo-fail
 /// (E0507/E0525).
 #[test]
 fn f10_generic_curried_gate_l0126() {
     assert_skyc_gate(
         "generic_curried",
         "i121_generic_curried_gate",
-        ipe_diagnostics::SKY_L0126,
+        ipe_diagnostics::IPE_L0126,
     );
 }
 
@@ -564,7 +564,7 @@ fn f10_generic_curried_gate_l0126() {
 /// (`expected trait 'Fn', found trait 'FnOnce'`).
 #[test]
 fn f11_pipeline_custom_curried() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

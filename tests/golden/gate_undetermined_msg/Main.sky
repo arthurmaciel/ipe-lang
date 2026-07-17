@@ -1,10 +1,10 @@
 module Main exposing (main)
 
--- M5c under-determined-msg gate (SKY-L0102).
+-- M5c under-determined-msg gate (IPE-L0102).
 -- `Cmd.none` is used in isolation: nothing in the expression tree anchors the
 -- `msg` type parameter.  The HM solver leaves `msg` as a free type variable,
 -- so the emitter cannot produce inferrable Rust (`SkyCmd<_>` is ambiguous).
--- skyc must exit 1 with SKY-L0102 before generating any Rust project.
+-- skyc must exit 1 with IPE-L0102 before generating any Rust project.
 main =
     let
         _ = Cmd.none

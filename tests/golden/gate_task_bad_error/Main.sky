@@ -1,7 +1,7 @@
 module Main exposing (main)
 
 -- Task String Int must be REJECTED: the error channel must always be `Error`.
--- `normalize_annotation_ty` validates this and emits SKY-T0001
+-- `normalize_annotation_ty` validates this and emits IPE-T0001
 -- "expected Error, found String".
 doThing : String -> Task String Int
 doThing s =

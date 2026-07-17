@@ -9,7 +9,7 @@ module Main exposing (main)
 --
 -- Under the bare `Box<dyn Fn>` carrier the inner `move` closure consumed `f`
 -- from the outer env per call (E0525), so the depth-0-only callee exemption
--- fail-closed this with SKY-L0126. The promotion shadow-rebinds `f` to the
+-- fail-closed this with IPE-L0126. The promotion shadow-rebinds `f` to the
 -- `Clone` `Arc<dyn Fn>` carrier and relays a clone across each closure
 -- boundary, so the shape compiles and runs.
 composed : (Int -> Int) -> Int -> Int

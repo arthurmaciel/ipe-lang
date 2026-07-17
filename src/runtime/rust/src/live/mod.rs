@@ -171,9 +171,9 @@ pub fn render_page(body: &str) -> String {
 /// inline script to tighten CSP is deferred; it requires threading the nonce
 /// through the response pipeline and is outside the scope of this change.
 /// Server-side client-config templating (Go parity, live.go ~5993): read the
-/// `SKY_LIVE_*` tuning env vars and emit the `window.__SKY_*` assignments the
+/// `IPE_LIVE_*` tuning env vars and emit the `window.__SKY_*` assignments the
 /// client (`client.js`) reads with a hardcoded fallback. Without this the Rust
-/// client ignored every `SKY_LIVE_RETRY_*` / `QUEUE_MAX` / `HELLO_TIMEOUT_MS` /
+/// client ignored every `IPE_LIVE_RETRY_*` / `QUEUE_MAX` / `HELLO_TIMEOUT_MS` /
 /// `HEARTBEAT_TTL_MS` / `BANNER` override. Totally parsed: a malformed value
 /// falls back to Go's default; never panics.
 fn live_client_config_js() -> String {
@@ -183,9 +183,9 @@ fn live_client_config_js() -> String {
             .and_then(|s| s.trim().parse::<u64>().ok())
             .unwrap_or(default)
     }
-    // SKY_LIVE_BANNER: off/0/false → disabled (Go parity); anything else → on.
+    // IPE_LIVE_BANNER: off/0/false → disabled (Go parity); anything else → on.
     let banner = !matches!(
-        crate::system::read_env_var("SKY_LIVE_BANNER")
+        crate::system::read_env_var("IPE_LIVE_BANNER")
             .ok()
             .map(|s| s.trim().to_ascii_lowercase()),
         Some(ref v) if v == "off" || v == "0" || v == "false"
@@ -200,12 +200,12 @@ fn live_client_config_js() -> String {
          window.__SKY_HEARTBEAT_TTL_MS={};\
          window.__SKY_MSG_RECONNECTING=\"Reconnecting…\";\
          window.__SKY_MSG_OFFLINE=\"Connection lost — refresh to retry\";",
-        num("SKY_LIVE_RETRY_BASE_MS", 500),
-        num("SKY_LIVE_RETRY_MAX_MS", 16000),
-        num("SKY_LIVE_RETRY_MAX_ATTEMPTS", 10),
-        num("SKY_LIVE_QUEUE_MAX", 50),
-        num("SKY_LIVE_HELLO_TIMEOUT_MS", 8000),
-        num("SKY_LIVE_HEARTBEAT_TTL_MS", 35000),
+        num("IPE_LIVE_RETRY_BASE_MS", 500),
+        num("IPE_LIVE_RETRY_MAX_MS", 16000),
+        num("IPE_LIVE_RETRY_MAX_ATTEMPTS", 10),
+        num("IPE_LIVE_QUEUE_MAX", 50),
+        num("IPE_LIVE_HELLO_TIMEOUT_MS", 8000),
+        num("IPE_LIVE_HEARTBEAT_TTL_MS", 35000),
     )
 }
 
@@ -380,9 +380,9 @@ impl<Model, Msg, FInit, FUpdate, FView, FSubs> Clone
 
 /// Max concurrent live-session drivers (admission control). 0 = unlimited
 /// (opt-out). Default 50_000 — far above any single-instance real load, low
-/// enough to bound memory under a session-creation flood. Env SKY_LIVE_MAX_SESSIONS.
+/// enough to bound memory under a session-creation flood. Env IPE_LIVE_MAX_SESSIONS.
 fn max_sessions() -> usize {
-    crate::system::read_env_var("SKY_LIVE_MAX_SESSIONS")
+    crate::system::read_env_var("IPE_LIVE_MAX_SESSIONS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(50_000)
@@ -680,7 +680,7 @@ fn new_sid() -> String {
     s
 }
 
-/// Normalise a raw `SKY_LIVE_BASE_PATH` value: trim, drop a trailing slash,
+/// Normalise a raw `IPE_LIVE_BASE_PATH` value: trim, drop a trailing slash,
 /// ensure a single leading slash. `""` / `"/"` collapse to `""` (root-mounted —
 /// no prefix). Mirrors Go's `normaliseBasePath` (runtime-go/rt/live.go:5901).
 fn normalise_base_path(raw: &str) -> String {
@@ -739,7 +739,7 @@ fn cookie_path_for(base: &str) -> String {
     }
 }
 
-/// Normalised sub-app base path, read from `SKY_LIVE_BASE_PATH`. Empty when
+/// Normalised sub-app base path, read from `IPE_LIVE_BASE_PATH`. Empty when
 /// unset (root-mounted app → byte-identical to a standalone Live server). When
 /// set (this app runs as a reverse-proxied sub-app — e.g. the bundled console
 /// mounted at `/_sky/console`), the value is threaded into `render_page_full`
@@ -748,7 +748,7 @@ fn cookie_path_for(base: &str) -> String {
 /// before forwarding — so the child's own router stays root-relative.
 fn live_base_path() -> String {
     normalise_base_path(
-        &crate::system::read_env_var("SKY_LIVE_BASE_PATH").unwrap_or_default(),
+        &crate::system::read_env_var("IPE_LIVE_BASE_PATH").unwrap_or_default(),
     )
 }
 
@@ -764,7 +764,7 @@ fn cookie_path() -> String {
 }
 
 /// Whether to trust `X-Forwarded-Proto` for TLS-termination detection. Mirrors
-/// `server.rs`'s `SKY_TRUSTED_PROXY` gate (same env var, same rationale: a
+/// `server.rs`'s `IPE_TRUSTED_PROXY` gate (same env var, same rationale: a
 /// client-supplied header must never be trusted by default — an operator opts
 /// in only when a real reverse proxy sits in front of this process).
 ///
@@ -774,7 +774,7 @@ fn trust_proxy_headers() -> bool {
     use std::sync::OnceLock;
     static TRUST: OnceLock<bool> = OnceLock::new();
     *TRUST.get_or_init(|| {
-        crate::system::read_env_var("SKY_TRUSTED_PROXY")
+        crate::system::read_env_var("IPE_TRUSTED_PROXY")
             .map(|v| !v.is_empty() && v != "0" && v != "false")
             .unwrap_or(false)
     })
@@ -783,7 +783,7 @@ fn trust_proxy_headers() -> bool {
 /// Request-scoped HTTPS detection, parameterised on the trust decision so it's
 /// unit-testable without mutating the real (OnceLock-cached) process env —
 /// `trust_proxy_headers()` snapshots once per process, so a test that mutates
-/// `SKY_TRUSTED_PROXY` and expects `request_is_https` to observe the change
+/// `IPE_TRUSTED_PROXY` and expects `request_is_https` to observe the change
 /// would be flaky/order-dependent. Only consulted (via `request_is_https`)
 /// when `trust` is true — otherwise a client could forge `X-Forwarded-Proto`
 /// to fool the Secure-cookie decision (the same footgun `server.rs` already
@@ -818,13 +818,13 @@ fn page_response(
     let html = render_page_full(sid, &live_base_path(), body, csrf_token);
     // Session cookie carries `Secure` in production / frame-ancestors mode, OR
     // when this specific request arrived over TLS at a trusted proxy
-    // (`request_is_https`, opt-in via `SKY_TRUSTED_PROXY` — closes the gap where
+    // (`request_is_https`, opt-in via `IPE_TRUSTED_PROXY` — closes the gap where
     // `csrf::cookies_secure()` snapshots `production_from_env() ||
     // frame_ancestors().is_some()` ONCE at process start and never inspects this
     // request's TLS / `X-Forwarded-Proto`, so a dev process fronted by a TLS
     // proxy would otherwise emit a non-Secure session cookie even though the
     // browser connection was HTTPS). The untrusted-proxy case (operator hasn't
-    // set `SKY_TRUSTED_PROXY`) keeps ENV-only behaviour — still SOUND, just not
+    // set `IPE_TRUSTED_PROXY`) keeps ENV-only behaviour — still SOUND, just not
     // maximally precise, because it never marks a cookie Secure incorrectly,
     // only potentially fails to mark one Secure that could safely have been.
     //
@@ -842,7 +842,7 @@ fn page_response(
         ""
     };
     // SameSite (Go parity, live.go ~5653): a deploy opted into cross-origin
-    // embedding via SKY_LIVE_FRAME_ANCESTORS needs `SameSite=None; Secure` so the
+    // embedding via IPE_LIVE_FRAME_ANCESTORS needs `SameSite=None; Secure` so the
     // session cookie survives inside a third-party iframe; otherwise `Lax`
     // (top-level navigations keep the session). `cookies_secure()` is already true
     // in frame-ancestors mode, so `None` always pairs with `Secure`.
@@ -887,12 +887,12 @@ fn page_response(
     resp
 }
 
-/// Maximum request body bytes for `/_sky/event`: `SKY_LIVE_MAX_BODY_BYTES`,
+/// Maximum request body bytes for `/_sky/event`: `IPE_LIVE_MAX_BODY_BYTES`,
 /// default 5 MiB (5 << 20 = 5 242 880). Mirrors Go's `handleEvent` body cap
 /// (runtime-go/rt/live.go ~l3911). The default covers `Event.onFile` /
 /// `Event.onImage` data-URL payloads; override for larger file uploads.
 fn live_max_body_bytes() -> usize {
-    crate::system::read_env_var("SKY_LIVE_MAX_BODY_BYTES")
+    crate::system::read_env_var("IPE_LIVE_MAX_BODY_BYTES")
         .ok()
         .and_then(|s| s.trim().parse::<usize>().ok())
         .filter(|&n| n > 0)
@@ -901,13 +901,13 @@ fn live_max_body_bytes() -> usize {
 
 #[cfg(test)]
 mod live_max_body_bytes_tests {
-    // SKY_LIVE_MAX_BODY_BYTES=0 must floor at the default, not disable the
+    // IPE_LIVE_MAX_BODY_BYTES=0 must floor at the default, not disable the
     // body (matching server::max_body's `.filter(|&n| n > 0)`). Without the
     // floor a 0 value would 413 every /_sky/event POST.
     //
     // This tests the parsing/filtering formula directly rather than mutating
     // the real env var: `std::env::set_var` is not thread-safe under a
-    // parallel test harness, and `SKY_LIVE_MAX_BODY_BYTES` already has an
+    // parallel test harness, and `IPE_LIVE_MAX_BODY_BYTES` already has an
     // env-mutating test in server.rs (`max_body_env_override`) — a second
     // unsynchronized mutator of the same key would make both tests
     // intermittently flaky. Mirrors the established convention documented at
@@ -926,17 +926,17 @@ mod live_max_body_bytes_tests {
     }
 }
 
-/// Session idle-TTL: `SKY_LIVE_TTL` seconds, default 1800 (30 min) — matches the
+/// Session idle-TTL: `IPE_LIVE_TTL` seconds, default 1800 (30 min) — matches the
 /// Go `[live] ttl` default.
 fn live_ttl() -> std::time::Duration {
-    let secs = crate::system::read_env_var("SKY_LIVE_TTL")
+    let secs = crate::system::read_env_var("IPE_LIVE_TTL")
         .ok()
         .and_then(|s| parse_duration_secs(&s))
         .unwrap_or(1800u64);
     std::time::Duration::from_secs(secs)
 }
 
-/// Parse a Go-style duration (Go parity for `SKY_LIVE_TTL` / `[live] ttl`): a bare
+/// Parse a Go-style duration (Go parity for `IPE_LIVE_TTL` / `[live] ttl`): a bare
 /// integer is seconds (legacy), otherwise one or more `<number><unit>` segments
 /// with units `h` / `m` / `s` (e.g. `30m`, `1h`, `24h`, `90s`, `1h30m`). Total: any
 /// malformed input returns `None` (caller falls back to the default) — never panics.
@@ -989,9 +989,9 @@ fn parse_duration_secs(raw: &str) -> Option<u64> {
 /// completes) would hang the drain forever. This window lets ordinary in-flight
 /// requests finish, then force-exits 0 so SSE clients are dropped exactly as Go
 /// drops them (the browser banner flips to "Reconnecting…", same UX as a deploy).
-/// Tunable via `SKY_LIVE_SHUTDOWN_GRACE_MS` (default 1500 ms; 0 = exit at once).
+/// Tunable via `IPE_LIVE_SHUTDOWN_GRACE_MS` (default 1500 ms; 0 = exit at once).
 fn shutdown_grace() -> std::time::Duration {
-    let ms = crate::system::read_env_var("SKY_LIVE_SHUTDOWN_GRACE_MS")
+    let ms = crate::system::read_env_var("IPE_LIVE_SHUTDOWN_GRACE_MS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(1500);
@@ -1043,7 +1043,7 @@ where
 }
 
 /// The H23 production gate over [`push_reload_to_live_sessions`]: in
-/// production (`ENV`/`SKY_ENV` set to a non-dev marker) the push path is
+/// production (`ENV`/`IPE_ENV` set to a non-dev marker) the push path is
 /// UNREACHABLE — same one-`if` shape every other production gate in this
 /// module uses (dev-console mount, metrics auth). Split from
 /// `live_shutdown_signal` so the gate itself is unit-testable without
@@ -1335,7 +1335,7 @@ fn is_browser_noise_path(p: &str) -> bool {
 /// as `Err` → `None` → 404.
 async fn serve_noise_from_static_root(path: &str) -> Option<axum::response::Response> {
     use axum::response::IntoResponse;
-    let dir = crate::system::read_env_var("SKY_LIVE_STATIC_DIR")
+    let dir = crate::system::read_env_var("IPE_LIVE_STATIC_DIR")
         .ok()
         .filter(|d| !d.is_empty())?;
     let rel = path.trim_start_matches('/');
@@ -1852,7 +1852,7 @@ where
         }
 
         // Enable the telemetry SQLite spill when
-        // SKY_CONSOLE_DB_PATH is set — the console child reads it via the
+        // IPE_CONSOLE_DB_PATH is set — the console child reads it via the
         // hub kernels. db-gated; a no-op for live-without-db apps. Enabled
         // BEFORE the console child spawns so early telemetry lands in the spill
         // the child will read.
@@ -1860,7 +1860,7 @@ where
         crate::telemetry_spill::enable_from_env().await;
 
         // Observability export pipelines: federation push to a parent ingest
-        // (SKY_PARENT_URL) and remote-hub OTLP push (SKY_CONSOLE_HUB).
+        // (IPE_PARENT_URL) and remote-hub OTLP push (IPE_CONSOLE_HUB).
         // Both env-gated + inert by default.
         push_exporter::enable_from_env().await;
         hub_exporter::enable_from_env().await;
@@ -1940,7 +1940,7 @@ where
             // then the inline-mount line (console.go:328). The Rust in-process
             // console has no separate store, so we emit the matching SECOND store
             // line + the mount line here — but ONLY when the console actually
-            // mounts (gate open: not a sub-app, not `SKY_CONSOLE_AUTH=off`, not
+            // mounts (gate open: not a sub-app, not `IPE_CONSOLE_AUTH=off`, not
             // production-without-admin-token), mirroring Go's mount skip.
             if console_proxy::gate_allows() {
                 eprintln!("{}", store::memory_store_log_line(live_ttl()));
@@ -1961,7 +1961,7 @@ where
                 )
         };
 
-        // sky.toml `[live] static` (baked as SKY_LIVE_STATIC_DIR) → serve files at
+        // sky.toml `[live] static` (baked as IPE_LIVE_STATIC_DIR) → serve files at
         // /static/* via ServeDir (Go parity: live.go staticURL "/static"). MUST be
         // added before the `/*path` page catch-all so a /static/<file> request hits
         // ServeDir, not the page handler (which would return HTML). ServeDir blocks
@@ -1970,7 +1970,7 @@ where
         // dir — the dir is author-controlled (sky.toml [live] static), so that is the
         // intended contract + Go-parity, NOT a confinement guarantee. Absent/empty →
         // no static mount.
-        if let Some(dir) = crate::system::read_env_var("SKY_LIVE_STATIC_DIR")
+        if let Some(dir) = crate::system::read_env_var("IPE_LIVE_STATIC_DIR")
             .ok()
             .filter(|d| !d.is_empty())
         {
@@ -2021,7 +2021,7 @@ where
 
         pubsub::mark_live_running();
 
-        let port: i64 = crate::system::read_env_var("SKY_LIVE_PORT")
+        let port: i64 = crate::system::read_env_var("IPE_LIVE_PORT")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(8000);
@@ -2124,7 +2124,7 @@ mod reload_push_tests {
     async fn live_shutdown_signal_skips_the_reload_push_in_production() {
         use crate::system::{locked_remove_var, locked_set_var};
         let prior_env = std::env::var("ENV").ok();
-        let prior_sky_env = std::env::var("SKY_ENV").ok();
+        let prior_sky_env = std::env::var("IPE_ENV").ok();
 
         let store_impl: MemoryStore<(), ()> = MemoryStore::new(Duration::from_secs(60));
         let (sse_tx, mut sse_rx) = sse::channel();
@@ -2150,8 +2150,8 @@ mod reload_push_tests {
             None => locked_remove_var("ENV"),
         }
         match prior_sky_env {
-            Some(v) => locked_set_var("SKY_ENV", &v),
-            None => locked_remove_var("SKY_ENV"),
+            Some(v) => locked_set_var("IPE_ENV", &v),
+            None => locked_remove_var("IPE_ENV"),
         }
     }
 }
@@ -2200,7 +2200,7 @@ mod duration_parse_tests {
         assert_eq!(parse_duration_secs("24h"), Some(86400));
         assert_eq!(parse_duration_secs("90s"), Some(90));
         assert_eq!(parse_duration_secs("1h30m"), Some(5400));
-        assert_eq!(parse_duration_secs("45m"), Some(2700)); // the e2e check (SKY_LIVE_TTL=45m)
+        assert_eq!(parse_duration_secs("45m"), Some(2700)); // the e2e check (IPE_LIVE_TTL=45m)
         assert_eq!(parse_duration_secs("  1h  "), Some(3600));
     }
 
@@ -2225,7 +2225,7 @@ mod request_is_https_tests {
         h.insert("x-forwarded-proto", "https".parse().unwrap());
         assert!(
             !request_is_https_with_trust(&h, false),
-            "must ignore X-Forwarded-Proto without SKY_TRUSTED_PROXY opt-in"
+            "must ignore X-Forwarded-Proto without IPE_TRUSTED_PROXY opt-in"
         );
     }
 
@@ -2470,18 +2470,18 @@ mod admission_control_tests {
     #[test]
     fn max_sessions_parsing() {
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("SKY_LIVE_MAX_SESSIONS") };
+        unsafe { std::env::remove_var("IPE_LIVE_MAX_SESSIONS") };
         assert_eq!(max_sessions(), 50_000);
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("SKY_LIVE_MAX_SESSIONS", "7") };
+        unsafe { std::env::set_var("IPE_LIVE_MAX_SESSIONS", "7") };
         assert_eq!(max_sessions(), 7);
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("SKY_LIVE_MAX_SESSIONS", "0") };
+        unsafe { std::env::set_var("IPE_LIVE_MAX_SESSIONS", "0") };
         assert_eq!(max_sessions(), 0, "0 = unlimited opt-out");
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("SKY_LIVE_MAX_SESSIONS", "garbage") };
+        unsafe { std::env::set_var("IPE_LIVE_MAX_SESSIONS", "garbage") };
         assert_eq!(max_sessions(), 50_000, "unparseable falls back to default");
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("SKY_LIVE_MAX_SESSIONS") };
+        unsafe { std::env::remove_var("IPE_LIVE_MAX_SESSIONS") };
     }
 }

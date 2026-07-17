@@ -64,12 +64,12 @@ pub fn config_decode_toml<E: From<String> + 'static, T>(
 }
 
 /// Default cap on a YAML source string parsed directly via `Config.decodeYaml`
-/// (the file-load path enforces its own `SKY_CONFIG_MAX_BYTES` cap before reading).
-/// 4 MiB; override via `SKY_YAML_MAX_BYTES`.
+/// (the file-load path enforces its own `IPE_CONFIG_MAX_BYTES` cap before reading).
+/// 4 MiB; override via `IPE_YAML_MAX_BYTES`.
 const YAML_SOURCE_CAP_DEFAULT: usize = 4 * 1024 * 1024;
 
 fn yaml_source_cap() -> usize {
-    crate::system::read_env_var("SKY_YAML_MAX_BYTES")
+    crate::system::read_env_var("IPE_YAML_MAX_BYTES")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|&n| n > 0)
@@ -90,7 +90,7 @@ pub fn config_decode_yaml<E: From<String> + 'static, T>(
     let cap = yaml_source_cap();
     if s.len() > cap {
         return SkyResult::Err(str_err(&format!(
-            "yaml parse: input is {} bytes, over the {} byte cap (SKY_YAML_MAX_BYTES)",
+            "yaml parse: input is {} bytes, over the {} byte cap (IPE_YAML_MAX_BYTES)",
             s.len(),
             cap
         )));
@@ -104,7 +104,7 @@ pub fn config_decode_yaml<E: From<String> + 'static, T>(
 // ── shared blocking-pool helper ───────────────────────────────────────
 //
 // `config_load_from_file` does a blocking `std::fs::File::open` + capped
-// `read_to_string` (up to `SKY_CONFIG_MAX_BYTES`, default 16 MiB) inline.
+// `read_to_string` (up to `IPE_CONFIG_MAX_BYTES`, default 16 MiB) inline.
 // Offload it to tokio's blocking pool so a large/slow-filesystem config read
 // can't stall the tokio worker thread polling this future. This module is
 // gated on the `config` Cargo feature (`config = ["json", "toml",
@@ -147,7 +147,7 @@ fn config_read_capped(path: &str, cap: u64) -> Result<String, String> {
     }
     if meta.len() > cap {
         return Err(format!(
-            "config file {:?} is {} bytes, over the {} byte cap (SKY_CONFIG_MAX_BYTES)",
+            "config file {:?} is {} bytes, over the {} byte cap (IPE_CONFIG_MAX_BYTES)",
             path,
             meta.len(),
             cap
@@ -161,7 +161,7 @@ fn config_read_capped(path: &str, cap: u64) -> Result<String, String> {
         .map_err(|e| format!("{}", e))?;
     if contents.len() as u64 > cap {
         return Err(format!(
-            "config file {:?} exceeds the {} byte cap (SKY_CONFIG_MAX_BYTES)",
+            "config file {:?} exceeds the {} byte cap (IPE_CONFIG_MAX_BYTES)",
             path, cap
         ));
     }
@@ -183,8 +183,8 @@ pub fn config_load_from_file<E: From<String> + Send + 'static, T: Send + 'static
     Box::pin(async move {
         // Cap the file size before slurping it into memory so a Config.loadFromFile
         // on an attacker-influenced path can't force an unbounded in-memory copy
-        // (memory DoS). Default 16 MiB; override via SKY_CONFIG_MAX_BYTES.
-        let cap: u64 = crate::system::read_env_var("SKY_CONFIG_MAX_BYTES")
+        // (memory DoS). Default 16 MiB; override via IPE_CONFIG_MAX_BYTES.
+        let cap: u64 = crate::system::read_env_var("IPE_CONFIG_MAX_BYTES")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
             .filter(|n| *n > 0)
@@ -264,13 +264,13 @@ mod load_from_file_tests {
         let p = std::env::temp_dir().join(format!("sky_cfg_over_cap_{}.json", std::process::id()));
         std::fs::write(&p, vec![b'a'; 8192]).unwrap();
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("SKY_CONFIG_MAX_BYTES", "1024") };
+        unsafe { std::env::set_var("IPE_CONFIG_MAX_BYTES", "1024") };
         let res: SkyResult<String, String> = block(config_load_from_file(
             p.to_string_lossy().into_owned(),
             name_decoder(),
         ));
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("SKY_CONFIG_MAX_BYTES") };
+        unsafe { std::env::remove_var("IPE_CONFIG_MAX_BYTES") };
         let _ = std::fs::remove_file(&p);
         assert!(
             matches!(res, SkyResult::Err(_)),

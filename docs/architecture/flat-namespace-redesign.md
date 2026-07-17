@@ -93,8 +93,8 @@ commits. Rename #59 lands **first**; flatten lands **second**.
 - **F5. Kernel-backed defs emit no Rust body.** `Ffi.kernel "String_fromInt"` →
   runtime dispatch. Auto-importing kernel modules costs zero emitted source; only
   the runtime crate carries them, and LLVM strips the unused.
-- **F6. `Sky`/`Std` are reserved first path segments** (SKY-N0025,
-  `crates/sky_canon/src/resolve.rs:108`). `AmbiguousImport` (SKY-N0024,
+- **F6. `Sky`/`Std` are reserved first path segments** (IPE-N0025,
+  `crates/sky_canon/src/resolve.rs:108`). `AmbiguousImport` (IPE-N0024,
   `resolve.rs`) already errors when two deps expose the same unqualified name.
 - **F7. `Std.*` is not yet ported to the Rust fork.** Only 18 `Ipe.Core.*` modules
   ship. `Std.Db/Auth/Ui/Time` describe the Go/Haskell reference. This makes the
@@ -164,7 +164,7 @@ Four layers, each making an ambiguity class unrepresentable or loud:
    `Std.Time` ports, forcing a stdlib-author merge/rename decision at that moment
    rather than a silent last-writer-wins. Audit `Http` for the same overlap.
 
-3. **User qualifier vs stdlib qualifier — hard error `SKY-N0026`.** `module Db
+3. **User qualifier vs stdlib qualifier — hard error `IPE-N0026`.** `module Db
    exposing (..)` or `import MyLib as String` where the name equals an
    auto-imported stdlib qualifier → `NameError::QualifierShadowsStdlib` with a
    did-you-mean. This **generalises the existing N0025 `Sky`/`Std` reservation**
@@ -177,7 +177,7 @@ Four layers, each making an ambiguity class unrepresentable or loud:
    qualifier — never the reverse. Lowercase locals (`string`, `db`) are a distinct
    lexical class and never collide.
 
-4. **Bare-name user ambiguity — existing `SKY-N0024`.** Two user modules exposing
+4. **Bare-name user ambiguity — existing `IPE-N0024`.** Two user modules exposing
    the same unqualified name stays the current error, preserved and golden-tested
    against the auto-import widening.
 
@@ -344,13 +344,13 @@ Ordering rationale:
 
 Concrete order:
 
-1. **#59** — rename `Sky → ipê`/`Ipe`, extension `.sky → .ipe`, `SKY-N00xx → IPE-N00xx`,
+1. **#59** — rename `Sky → ipê`/`Ipe`, extension `.sky → .ipe`, `IPE-N00xx → IPE-N00xx`,
    reserved segments flip `{Sky, Std} → {Ipe, Std}`, de-abbreviation. Old public
    names kept as deprecated aliases through the flatten window. Own commit, green
    against the sweep.
 2. **Flatten** — build the `STDLIB_MANIFEST`; auto-install short qualifiers
    exhaustively from it; close the `extend` silent-merge into a checked insert; add
-   `SKY-N0026`/`IPE-N0026`; reseed reachability off referenced qualifiers. Gated by
+   `IPE-N0026`/`IPE-N0026`; reseed reachability off referenced qualifiers. Gated by
    new tests (uniqueness tripwire, N0026, differential-resolution, hello-world size
    gate).
 3. **Codemod** import-strip + differential test (Q4 step 2).

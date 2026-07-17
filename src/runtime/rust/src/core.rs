@@ -58,13 +58,13 @@ pub fn sky_error_from_foreign<ForeignE: std::fmt::Debug, E: From<String>>(e: For
 }
 
 /// [B8] Server-log a foreign FFI error's raw `Debug` detail under a correlation
-/// id, honouring `SKY_LOG_FORMAT=json`. The detail is for OPERATORS ONLY — it can
+/// id, honouring `IPE_LOG_FORMAT=json`. The detail is for OPERATORS ONLY — it can
 /// carry secrets / PII / internal paths from a transport error — so it goes to
 /// the SERVER LOG (stderr), never to the Sky-visible message. Mirrors the
 /// `classify_and_log_panic` log shape (kind `ForeignError`). Total — no
 /// unwrap/index/panic.
 fn log_foreign_error(err_id: &str, detail: &str) {
-    let json = crate::system::read_env_var("SKY_LOG_FORMAT")
+    let json = crate::system::read_env_var("IPE_LOG_FORMAT")
         .map(|v| v.eq_ignore_ascii_case("json"))
         .unwrap_or(false);
     if json {
@@ -757,7 +757,7 @@ pub fn maybe_combine<A>(maybes: Vec<SkyMaybe<A>>) -> SkyMaybe<Vec<A>> {
 // structurally with a short correlation id, and the process exits 1 — instead of
 // dumping a raw Rust backtrace. Mirrors Go's `defer rt.LogPanicAndExit()` on
 // every emitted `func main()` (CLAUDE.md "Synchronous-panic gate"). The hook is
-// total (no unwrap/index/panic of its own) and honours `SKY_LOG_FORMAT=json`.
+// total (no unwrap/index/panic of its own) and honours `IPE_LOG_FORMAT=json`.
 
 /// Map a Rust panic message to a Sky error classification (Go's panic-class
 /// taxonomy, restricted to the kinds reachable from well-typed Sky on the typed
@@ -788,7 +788,7 @@ fn short_err_id() -> String {
 }
 
 /// Extract a panic payload's message, classify it, emit the structured/plain
-/// server-side log line (honouring `SKY_LOG_FORMAT=json`), and RETURN the 8-hex
+/// server-side log line (honouring `IPE_LOG_FORMAT=json`), and RETURN the 8-hex
 /// correlation errId. SHARED by the exit-on-panic hook (`install_panic_classifier`,
 /// used for Sky.Cli/Tui binaries) and the server/live `CatchPanicLayer` responder
 /// (`server::panic_response`).
@@ -810,7 +810,7 @@ pub fn classify_and_log_panic(payload: &(dyn std::any::Any + Send)) -> String {
     };
     let kind = classify_panic(&msg);
     let err_id = short_err_id();
-    let json = crate::system::read_env_var("SKY_LOG_FORMAT")
+    let json = crate::system::read_env_var("IPE_LOG_FORMAT")
         .map(|v| v.eq_ignore_ascii_case("json"))
         .unwrap_or(false);
     if json {

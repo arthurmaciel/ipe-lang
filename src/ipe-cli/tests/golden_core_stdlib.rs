@@ -3,7 +3,7 @@
 //! Without a kernel binding, a qualified `Result.andThen` / `Result.mapError` /
 //! `String.containsIn` / `String.startsWithIn` / `String.endsWithIn` and the
 //! Prelude `clamp` would be canon members with `id = None` — failing closed with
-//! `error[SKY-L0108]: kernel function not available yet` at the first such call
+//! `error[IPE-L0108]: kernel function not available yet` at the first such call
 //! (there is no `Ty::Var(u32::MAX)` fallback typing them as free variables).
 //!
 //! Each is wired as a kernel — `KernelFn` variant + `d(...)` decl + lower
@@ -22,10 +22,10 @@
 //! `Basics.toString` (polymorphic `a -> String`, needs a `Display`/`Stringify`
 //! bound HM cannot express) and `String.toChar` (no runtime fn, ambiguous
 //! Char-vs-Maybe-Char semantics) are DELIBERATELY not wired — they stay loud
-//! SKY-L0108 holes rather than risk a miscompile.
+//! IPE-L0108 holes rather than risk a miscompile.
 //!
-//! Gated on `SKY_E2E=1`. Run:
-//! `SKY_E2E=1 cargo test -p skyc --test golden_core_stdlib`.
+//! Gated on `IPE_E2E=1`. Run:
+//! `IPE_E2E=1 cargo test -p skyc --test golden_core_stdlib`.
 
 use std::path::{Path, PathBuf};
 
@@ -42,7 +42,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 
 /// Compile `tests/golden/<name>/Main.sky` into an emitted Rust project and
 /// return its directory. Fails the test loudly on a compile error (so the
-/// SKY-L0108 regression, were it to return, fails here rather than silently
+/// IPE-L0108 regression, were it to return, fails here rather than silently
 /// skipping).
 fn compile_golden(name: &str) -> PathBuf {
     let root = repo_root();
@@ -61,7 +61,7 @@ fn compile_golden(name: &str) -> PathBuf {
 }
 
 fn e2e_enabled() -> bool {
-    std::env::var("SKY_E2E").is_ok()
+    std::env::var("IPE_E2E").is_ok()
 }
 
 /// The six newly-wired core-stdlib kernels compile and produce correct output.

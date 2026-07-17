@@ -23,7 +23,7 @@ machine**:
 
 | Reference | Toolchain needed | Available here? | Verdict |
 |---|---|---|---|
-| **Go, live** — Haskell `sky` builds each example's `sky-out/app` via its Go backend | `sky` on PATH + `go` | **YES** — `sky v0.16.29` at `/usr/local/bin/sky`; `go1.26.2` at `/usr/local/go/bin/go` | **ACTIVE** — this is `SKY_GO_BIN`; `build_go()` drives it. Proven `equivalence-stdout` below. |
+| **Go, live** — Haskell `sky` builds each example's `sky-out/app` via its Go backend | `sky` on PATH + `go` | **YES** — `sky v0.16.29` at `/usr/local/bin/sky`; `go1.26.2` at `/usr/local/go/bin/go` | **ACTIVE** — this is `IPE_GO_BIN`; `build_go()` drives it. Proven `equivalence-stdout` below. |
 | **Rust, via `../sky`** — `../sky`'s own Haskell compiler + Rust backend builds+runs the examples | built `sky` from `../sky` (needs GHC 9.4.8 + cabal) | **NO** — `../sky` has no `dist-newstyle`; host GHC is **8.8.4** (too old), **no `cabal`** | Blocked. Not needed — the live Go reference is sufficient and higher-value (byte-diff, not just "both boot"). |
 | **Go, cached snapshot** — committed `expected_go.txt` per fixture | none at diff time | **YES (already built)** — `tools/oracle` + `refresh-oracle`, cache under `tests/golden/*/` | **ACTIVE** for the **unit** golden suite (see §5, Tier A). |
 
@@ -34,21 +34,21 @@ parity target the whole harness was designed around (`equivalence-classification
 already reasons about `sky v0.16.29`'s Go codegen quirks, e.g. the `undefined: T1`
 regression on `00-standard-libs`).
 
-### 1.1 The one blocker found and fixed — `SKY_RUNTIME_DIR` leak
+### 1.1 The one blocker found and fixed — `IPE_RUNTIME_DIR` leak
 
-The EQUIVALENCE machinery was **fully ported but dormant** (`SKY_SWEEP_NO_EQUIV=1`
+The EQUIVALENCE machinery was **fully ported but dormant** (`IPE_SWEEP_NO_EQUIV=1`
 default). Turning it on surfaced exactly **one** activation bug, now fixed:
 
-- `scripts/lib/env.sh` exports `SKY_RUNTIME_DIR=$REPO/runtime/src/sky_runtime` so
+- `scripts/lib/env.sh` exports `IPE_RUNTIME_DIR=$REPO/runtime/src/sky_runtime` so
   **skyc**'s `--runtime` auto-resolve is CWD-independent. That variable is a
   **skyc-only** knob.
-- The Haskell `sky` (Go reference) **also honours `SKY_RUNTIME_DIR`** — and with
+- The Haskell `sky` (Go reference) **also honours `IPE_RUNTIME_DIR`** — and with
   it pointing at the repo's **Rust** runtime tree, `sky build` vendored the wrong
   runtime as its Go `rt/` package, so every `go build` died with
   `undefined: rt.SetPortDefault` / `rt.SkyADT` / `rt.RegisterAdtTag` … — reported
   by the sweep as the **AMBER `go-ref-broken`** cell (a false one).
 - **Fix (in `build_go()`, `scripts/equivalence-checks/examples-sweep.sh`):** run the Go reference
-  with the var scoped-unset — `env -u SKY_RUNTIME_DIR … "$go_bin" build …`. `sky`
+  with the var scoped-unset — `env -u IPE_RUNTIME_DIR … "$go_bin" build …`. `sky`
   has its own TH-embedded Go runtime; the skyc knob must not leak to it.
 
 This was a **scripts** fix — no compiler/runtime/crate change. After it,
@@ -81,7 +81,7 @@ fixed, no manual edit).
 
 ### 2.1 What I built / wired
 
-- **Fixed the activation blocker** (`build_go()` `SKY_RUNTIME_DIR` unset) — §1.1.
+- **Fixed the activation blocker** (`build_go()` `IPE_RUNTIME_DIR` unset) — §1.1.
 - **Verified the live Go oracle end-to-end** on this host (§3) — the harness now
   emits real `equivalence-stdout`, not a dormant `—`.
 - **This doc** — the reference verdict, activation state, run command, and the
@@ -96,7 +96,7 @@ was a **wiring fix, not a rebuild**, exactly as `examples-sweep-port.md` predict
 ## 3. Proof it works (sample run, this host)
 
 ```
-$ SKY_GO_BIN=sky bash scripts/equivalence-checks/examples-sweep.sh          # RUST_EXAMPLES=01-hello-world
+$ IPE_GO_BIN=sky bash scripts/equivalence-checks/examples-sweep.sh          # RUST_EXAMPLES=01-hello-world
 EXAMPLE                      BUILD      RUN       EQUIVALENCE            NOTE
 -------                      -----      ---       -----            ----
 01-hello-world               ok         ok        equivalence-stdout
@@ -167,7 +167,7 @@ convenience.
 | Tier | Mechanism | Scope | Reference | State |
 |---|---|---|---|---|
 | **A — unit goldens** | `tools/oracle` (`check_parity`) + `refresh-oracle`; cached `expected_go.txt` + `oracle.meta` (sha256 staleness gate) per `tests/golden/<name>/` | small single-file programs (kernel/codegen slices) | **cached** Go stdout (no live Go at diff time) | **DONE** — wired into the golden suite; staleness/missing/divergence all hard-fail. |
-| **B — example corpus** | `scripts/equivalence-checks/examples-sweep.sh` EQUIVALENCE column | the 33 in-scope example apps | **live** Go via `SKY_GO_BIN=sky` | **ACTIVE for `stdout`** (this doc); `body`/`pty`/`scenario` at boot-floor (§4). |
+| **B — example corpus** | `scripts/equivalence-checks/examples-sweep.sh` EQUIVALENCE column | the 33 in-scope example apps | **live** Go via `IPE_GO_BIN=sky` | **ACTIVE for `stdout`** (this doc); `body`/`pty`/`scenario` at boot-floor (§4). |
 
 Tier A already encodes the **divergence discipline** the whole strategy needs:
 `oracle_divergence=true` + a tagged `divergence_reason` (`sanctioned:` = ipê is
@@ -188,7 +188,7 @@ This is the ceremony-retirement contract. For any slice / example / aspect:
 A surface is oracle-covered when **all** hold:
 - It is a **faithful port** of `../sky`'s proven logic (behaviour is *supposed* to
   match the reference — no intentional divergence).
-- A **reference output is producible**: live Go (`SKY_GO_BIN`) for the example
+- A **reference output is producible**: live Go (`IPE_GO_BIN`) for the example
   corpus, or a cached `expected_go.txt` for a golden.
 - Its EQUIVALENCE mode is a **real diff today**: **`stdout`** (byte-diff) or a Tier-A
   golden. (`body`/`pty`/`scenario` qualify **only after** the §4 normalizers are
@@ -232,18 +232,18 @@ A surface needs the guardian when **any** hold:
 `go`, `curl`, `python3`, `rg`, a current `skyc`.
 
 ```bash
-# Full corpus, live Go oracle ON (drop SKY_SWEEP_NO_EQUIV to enable EQUIVALENCE):
+# Full corpus, live Go oracle ON (drop IPE_SWEEP_NO_EQUIV to enable EQUIVALENCE):
 cd /home/arthur/Documentos/comp/sky-rust
-SKY_GO_BIN=sky bash scripts/equivalence-checks/examples-sweep.sh
+IPE_GO_BIN=sky bash scripts/equivalence-checks/examples-sweep.sh
 
 # Single example / subset (paths or basenames):
-SKY_GO_BIN=sky RUST_EXAMPLES="01-hello-world 20-cli-counter" bash scripts/equivalence-checks/examples-sweep.sh
+IPE_GO_BIN=sky RUST_EXAMPLES="01-hello-world 20-cli-counter" bash scripts/equivalence-checks/examples-sweep.sh
 
 # Force the fresh compiler if the release skyc is stale (see §3 note):
-SKYC_BIN=~/.cache/sky-rust-target/debug/skyc SKY_GO_BIN=sky bash scripts/equivalence-checks/examples-sweep.sh
+SKYC_BIN=~/.cache/sky-rust-target/debug/skyc IPE_GO_BIN=sky bash scripts/equivalence-checks/examples-sweep.sh
 
 # Phase-1 (no oracle, BUILD+RUN only) — the CI default today:
-SKY_SWEEP_NO_EQUIV=1 bash scripts/equivalence-checks/examples-sweep.sh
+IPE_SWEEP_NO_EQUIV=1 bash scripts/equivalence-checks/examples-sweep.sh
 ```
 
 Output: an aligned table + `~/.cache/sky/examples-sweep/sweep-<stamp>.table`;
@@ -273,8 +273,8 @@ Ordered by leverage:
    current compiler (the stale release skyc `cargo-fail`s on the workspace-nesting
    error). Build-lane item.
 5. **Flip CI to phase-2**: uncomment the `examples-sweep-equivalence` job stub in
-   `.github/workflows/examples-sweep.yml`, set `SKY_GO_BIN`, drop
-   `SKY_SWEEP_NO_EQUIV`. Two supported reference modes there: (a) build/install the
+   `.github/workflows/examples-sweep.yml`, set `IPE_GO_BIN`, drop
+   `IPE_SWEEP_NO_EQUIV`. Two supported reference modes there: (a) build/install the
    Haskell `sky` on the runner (needs GHC ≥9.4.8 + cabal — **not** this host's
    8.8.4), or (b) the cached-snapshot oracle (no toolchain, à la Tier A) — mode
    (b) is the cheaper CI path and reuses `tools/oracle`'s format.

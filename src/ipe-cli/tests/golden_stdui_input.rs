@@ -8,10 +8,10 @@
 //! * `Ui.descHeading : Int -> Description`
 //! * `Ui.descLabel : String -> Description`
 //!
-//! Gated on `SKY_E2E=1`. Run:
+//! Gated on `IPE_E2E=1`. Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_m7_stdui_input
+//! IPE_E2E=1 cargo test -p skyc --test golden_m7_stdui_input
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -25,7 +25,7 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn ui_input_and_describe_skyc_and_cargo_zero() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

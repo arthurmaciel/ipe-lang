@@ -23,7 +23,7 @@
 //!
 //! to stdout `42\n`, exit 0 (hand-verified in a temp dir; the Go backend emits
 //! the matching `func identity[T1 any](x T1) T1`, confirming the `a` → `T1`
-//! naming convention). The `end_to_end_*` test (gated on `SKY_E2E=1`) drives
+//! naming convention). The `end_to_end_*` test (gated on `IPE_E2E=1`) drives
 //! the hand-built IR through the Rust backend, builds the emitted crate, and
 //! asserts the identical `42`.
 
@@ -344,11 +344,11 @@ fn emits_super_typed_bound_clauses() -> DResult<()> {
 
 /// Full spine: build the generic IR, emit the Cargo project, vendor the runtime,
 /// `cargo build`, run, and assert the program prints `42` — the value the Go
-/// backend produces for the equivalent program. Gated on `SKY_E2E=1` so the
+/// backend produces for the equivalent program. Gated on `IPE_E2E=1` so the
 /// default `cargo test` stays fast and offline.
 #[test]
 fn end_to_end_builds_and_prints_forty_two() -> DResult<()> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
@@ -408,9 +408,9 @@ fn io_bug(path: &Path, e: &std::io::Error) -> Diagnostic {
 }
 
 /// Locate the Sky runtime module tree (`src/runtime/rust/src/ipe_runtime`), via
-/// `SKY_RUNTIME_DIR` or an upward search from the current directory.
+/// `IPE_RUNTIME_DIR` or an upward search from the current directory.
 fn resolve_runtime() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("SKY_RUNTIME_DIR") {
+    if let Ok(dir) = std::env::var("IPE_RUNTIME_DIR") {
         let p = PathBuf::from(dir);
         if p.is_dir() {
             return Some(p);

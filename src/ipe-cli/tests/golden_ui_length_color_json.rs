@@ -19,10 +19,10 @@
 //! but the CSS fragments emitted for `Length` / `Color` values and the compact
 //! JSON line are byte-stable and are what this slice actually exercises.
 //!
-//! Gated on `SKY_E2E=1`. Run:
+//! Gated on `IPE_E2E=1`. Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test golden_m7_ui_length_color_json
+//! IPE_E2E=1 cargo test golden_m7_ui_length_color_json
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -36,10 +36,10 @@ fn repo_root() -> PathBuf {
 
 /// Compile / build / run `tests/golden/ui_length_color_json/Main.sky` and
 /// assert the emitted binary renders the `Length` / `Color` CSS fragments and
-/// the compact JSON line. Gated on `SKY_E2E=1`.
+/// the compact JSON line. Gated on `IPE_E2E=1`.
 #[test]
 fn ui_length_color_and_json_value_render_end_to_end() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

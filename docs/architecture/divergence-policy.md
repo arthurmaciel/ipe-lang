@@ -210,7 +210,7 @@ match Go exactly (`unicode.IsDigit`/`Nd`, `IsLower`/`Ll`, `IsUpper`/`Lu`,
    prefixed with the chosen tag (`divergence: …` / `sanctioned: …`). An untagged
    reason defaults to `sanctioned: `.
 3. Run `refresh-oracle <name>` (the runtime is resolved automatically from the
-   in-repo `runtime/src/sky_runtime`; set `SKY_RUNTIME_DIR` to override). It
+   in-repo `runtime/src/sky_runtime`; set `IPE_RUNTIME_DIR` to override). It
    captures Sky-Rust's output as the expected and writes
    `oracle_divergence = true` + `divergence_reason = <tag> <reason>` — WITHOUT
    requiring Go to fail.

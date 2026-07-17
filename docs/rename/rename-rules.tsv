@@ -16,16 +16,16 @@ skyc	crate+binary	crates/skyc (CLI crate); the produced binary `skyc`	crate `ipe
 sky-runtime-rust	crate	runtime/Cargo.toml pkg name + every dep ref	ipe-runtime-rust	1
 SkyError	rust-ident	error type across crates/**/*.rs + runtime	IpeError	1
 Sky* (other Rust idents)	rust-ident	SkyCall / SkyVal / Sky-prefixed types+fns in crates/** + runtime (case-preserving)	Ipe* (Sky->Ipe verbatim)	1
-SKY-NNNN	diag-code	every diagnostic code (SKY-L*/N*/T*/I*) in emit_*.rs + diagnostics + tests + docs + memory	IPE-NNNN	1
-SKY_RUNTIME_DIR	env-var	scripts/lib/env.sh + skyc/src/lib.rs + all E2E tests (BUILD-HARNESS CONTRACT — rename scripts in lockstep)	IPE_RUNTIME_DIR	1
-SKY_E2E	env-var	build-harness gate flag (scripts + tests + memory)	IPE_E2E	1
+IPE-NNNN	diag-code	every diagnostic code (IPE-L*/N*/T*/I*) in emit_*.rs + diagnostics + tests + docs + memory	IPE-NNNN	1
+IPE_RUNTIME_DIR	env-var	scripts/lib/env.sh + skyc/src/lib.rs + all E2E tests (BUILD-HARNESS CONTRACT — rename scripts in lockstep)	IPE_RUNTIME_DIR	1
+IPE_E2E	env-var	build-harness gate flag (scripts + tests + memory)	IPE_E2E	1
 SKYC_BIN	env-var	scripts/lib/env.sh	IPE_BIN	1
-SKY_* (all remaining)	env-var	SKY_LIVE_STORE(_PATH), SKY_DB_URL, SKY_BUILD_CACHE(_DIR), SKY_CONSOLE_AUTH, SKY_ENV, SKY_TUI_QUIET, SKY_UI_LAZY_CAP, SKY_LIVE_PORT, SKY_SERVER_PORT, SKY_TEST, SKY_CORE_PURE, SKY_CORE_WEBSOCKET, ...	IPE_* (SKY_->IPE_ verbatim)	1
+IPE_* (all remaining)	env-var	IPE_LIVE_STORE(_PATH), IPE_DB_URL, IPE_BUILD_CACHE(_DIR), IPE_CONSOLE_AUTH, IPE_ENV, IPE_TUI_QUIET, IPE_UI_LAZY_CAP, IPE_LIVE_PORT, IPE_SERVER_PORT, IPE_TEST, IPE_CORE_PURE, IPE_CORE_WEBSOCKET, ...	IPE_* (IPE_->IPE_ verbatim)	1
 .sky	source-ext	examples/**/*.sky, tests/golden/**/Main.sky, crates/skyc/stdlib/**/*.sky, compiler file-discovery, sky.toml `entry` (HIGH-IMPACT: regenerates every golden)	.ipe	1
 sky.toml	manifest	project manifest filename + its parser in skyc	ipe.toml	1
 sky-out/	build-dir	emitted-project output dir (skyc + scripts + .gitignore)	ipe-out/	1
 .skycache	build-dir	build cache dir (skyc/src/cache.rs + .gitignore)	.ipecache	1
-SKY_BUILD_CACHE(_DIR)	env-var	skyc/src/cache.rs	IPE_BUILD_CACHE(_DIR)	1
+IPE_BUILD_CACHE(_DIR)	env-var	skyc/src/cache.rs	IPE_BUILD_CACHE(_DIR)	1
 Sky (doc prose)	doc-prose	*.md prose naming the language (accented target)	Ipê	1
 sky (doc prose)	doc-prose	*.md lowercase prose / commands	ipe	1
 CLAUDE.md Sky.* refs	doc-ref	authoring reference — reconcile to code after the code rename	per stdlib-ns decision	1

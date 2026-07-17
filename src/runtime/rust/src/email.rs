@@ -14,9 +14,9 @@
 //! SMTP goes through the `lettre` transport (opportunistic/required STARTTLS or
 //! implicit TLS on 465), completing the provider surface.
 //!
-//! `SKY_EMAIL_DRY_RUN=1` short-circuits every provider and returns a synthetic
+//! `IPE_EMAIL_DRY_RUN=1` short-circuits every provider and returns a synthetic
 //! id — used by tests so they don't depend on third-party services.
-//! `SKY_EMAIL_ENDPOINT_<PROVIDER>` overrides per-provider URLs for fixtures.
+//! `IPE_EMAIL_ENDPOINT_<PROVIDER>` overrides per-provider URLs for fixtures.
 
 use super::*;
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
@@ -91,7 +91,7 @@ fn email_gen_id() -> String {
 }
 
 fn email_endpoint(provider: &str, def: &str) -> String {
-    let env = format!("SKY_EMAIL_ENDPOINT_{}", provider.to_uppercase());
+    let env = format!("IPE_EMAIL_ENDPOINT_{}", provider.to_uppercase());
     crate::system::read_env_var(&env).unwrap_or_else(|_| def.to_string())
 }
 
@@ -101,7 +101,7 @@ pub fn email_send<E: From<String> + Send + 'static>(
     msg: EmailMessage,
 ) -> SkyTask<E, String> {
     Box::pin(async move {
-        if crate::system::read_env_var("SKY_EMAIL_DRY_RUN").as_deref() == Ok("1") {
+        if crate::system::read_env_var("IPE_EMAIL_DRY_RUN").as_deref() == Ok("1") {
             return SkyResult::Ok(format!("dry-run-{}", email_gen_id()));
         }
         if msg.from.is_empty() {
@@ -131,8 +131,8 @@ async fn email_post_json<E: From<String>>(
     payload: Vec<u8>,
 ) -> Result<serde_json::Value, E> {
     // SSRF guard parity with the Http.* client. The provider endpoint is
-    // operator-supplied (SKY_EMAIL_ENDPOINT_<PROVIDER>) and the SES host is
-    // region-interpolated, so when SKY_HTTP_DENY_PRIVATE is set this pins DNS to
+    // operator-supplied (IPE_EMAIL_ENDPOINT_<PROVIDER>) and the SES host is
+    // region-interpolated, so when IPE_HTTP_DENY_PRIVATE is set this pins DNS to
     // a vetted non-private addr — otherwise a crafted endpoint could exfiltrate
     // the bearer token + payload to a metadata/loopback host. Email POSTs never
     // follow redirects (false / 0).
@@ -421,7 +421,7 @@ fn hex_sha256(b: &[u8]) -> String {
 fn hmac_bytes(key: &[u8], msg: &[u8]) -> Vec<u8> {
     // INFALLIBLE: HMAC accepts any key length (never Err); internal SES-signing
     // helper with no Result channel — a fallback MAC would be a wrong signature.
-    // SKY-RUST-AUDIT:ACCEPTED (Arthur Maciel, 2026-06-13) — infallible HMAC ctor; internal SES-signing helper, no Result channel; a fallback MAC is a wrong signature [ledger #2]
+    // IPE-RUST-AUDIT:ACCEPTED (Arthur Maciel, 2026-06-13) — infallible HMAC ctor; internal SES-signing helper, no Result channel; a fallback MAC is a wrong signature [ledger #2]
     #[allow(clippy::expect_used)]
     let mut mac = HmacSha256::new_from_slice(key).expect("hmac key");
     mac.update(msg);
@@ -670,7 +670,7 @@ mod tests {
     #[tokio::test]
     async fn dry_run_returns_synthetic_id() {
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::set_var("SKY_EMAIL_DRY_RUN", "1") };
+        unsafe { std::env::set_var("IPE_EMAIL_DRY_RUN", "1") };
         let msg = EmailMessage {
             from: "a@example.com".into(),
             to: vec!["b@example.com".into()],
@@ -689,7 +689,7 @@ mod tests {
             SkyResult::Err(e) => panic!("dry-run failed: {}", e),
         }
         // SAFETY: test-only env mutation; `std::env::set_var`/`remove_var` are `unsafe` in Rust 2024 due to the reader/mutator `environ` race.
-        unsafe { std::env::remove_var("SKY_EMAIL_DRY_RUN") };
+        unsafe { std::env::remove_var("IPE_EMAIL_DRY_RUN") };
     }
 
     #[test]

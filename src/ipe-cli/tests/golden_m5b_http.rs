@@ -5,7 +5,7 @@
 //! Every test compiles a Sky program through `skyc`, builds the emitted Rust
 //! project with the shared cargo target, runs the binary, and checks its stdout
 //! against the cached oracle (`tests/golden/m5b_http_*/oracle.meta` +
-//! `expected_go.txt`). All tests are gated on `SKY_E2E=1`; without it they
+//! `expected_go.txt`). All tests are gated on `IPE_E2E=1`; without it they
 //! return early.
 //!
 //! ## Oracle provenance
@@ -35,7 +35,7 @@
 //! Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test golden_m5b_http
+//! IPE_E2E=1 cargo test golden_m5b_http
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -53,7 +53,7 @@ fn golden_dir(root: &Path, name: &str) -> PathBuf {
 
 /// Compile `tests/golden/<name>/Main.sky` through skyc, build the emitted Rust
 /// project with the shared cargo target, run the binary, and return the golden
-/// directory plus the run outcome. Gated on `SKY_E2E=1`.
+/// directory plus the run outcome. Gated on `IPE_E2E=1`.
 fn build_run(name: &str) -> (PathBuf, support::RunOutcome) {
     let root = repo_root();
     let dir = golden_dir(&root, name);
@@ -80,9 +80,9 @@ fn build_run(name: &str) -> (PathBuf, support::RunOutcome) {
 }
 
 /// Compile/build/run the golden and assert its stdout matches the cached Go
-/// oracle. Gated on `SKY_E2E=1`.
+/// oracle. Gated on `IPE_E2E=1`.
 fn assert_runs_and_matches_oracle(name: &str) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let (dir, outcome) = build_run(name);
@@ -124,7 +124,7 @@ fn http_response_fields() {
 // ── `HttpRequest` opaque-type regression (no signature ever spells the
 // ── fieldset out) ─────────────────────────────────────────────────────────
 
-/// SKY-I0001 regression: `Http.defaultRequest url` builds an `HttpRequest`
+/// IPE-I0001 regression: `Http.defaultRequest url` builds an `HttpRequest`
 /// whose ONLY consumer is a field read (`req.url`) — no `Http.request` call,
 /// and no OTHER function signature in the program spells out the
 /// `{body, followRedirects, headers, maxRedirects, method, timeout, url}`
@@ -140,16 +140,16 @@ fn http_response_fields() {
 /// independently carries the same fieldset as a plain (non-opaque) record
 /// (e.g. `http_builders`'s explicitly-annotated `printReq` parameter).
 /// With no such signature anywhere in the program, no struct is
-/// registered and the lookup raises SKY-I0001, even though the value's
+/// registered and the lookup raises IPE-I0001, even though the value's
 /// runtime type is correctly known throughout. So the arm emits
 /// `ipe_runtime::HttpRequest { ... }` directly — the fixed, canonical name —
 /// instead of resolving a name through the record-shape registry.
 ///
-/// This is the default-gate (emit-only, no `SKY_E2E`) companion to
+/// This is the default-gate (emit-only, no `IPE_E2E`) companion to
 /// `http_response_fields` above: it needs only `skyc::build` to succeed and
 /// inspects the emitted Rust text, so it runs without a cargo build and
 /// cannot be silently reintroduced without failing `cargo nextest` (unlike
-/// the `SKY_E2E`-gated golden, which is invisible to the default gate).
+/// the `IPE_E2E`-gated golden, which is invisible to the default gate).
 #[test]
 fn http_default_request_emits_without_signature_consumer() {
     let root = repo_root();

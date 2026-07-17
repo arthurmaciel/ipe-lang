@@ -8,8 +8,8 @@
 //! `00-standard-libs`) exited 0 with EMPTY stdout — a stdout divergence from the
 //! Go oracle. This test pins the summary line so the divergence cannot return.
 //!
-//! Gated on `SKY_E2E=1`. Run:
-//! `SKY_E2E=1 cargo test -p skyc --test golden_test_summary_line_219`.
+//! Gated on `IPE_E2E=1`. Run:
+//! `IPE_E2E=1 cargo test -p skyc --test golden_test_summary_line_219`.
 
 use std::path::{Path, PathBuf};
 
@@ -41,7 +41,7 @@ fn compile_golden(name: &str) -> PathBuf {
 }
 
 fn e2e_enabled() -> bool {
-    std::env::var("SKY_E2E").is_ok()
+    std::env::var("IPE_E2E").is_ok()
 }
 
 /// A `Test.runMain` program with three passing tests prints the summary line

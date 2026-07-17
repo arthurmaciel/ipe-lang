@@ -15,7 +15,7 @@
 //! `Color` — in its Model `skyc`-succeeds and then `cargo`-fails on the missing
 //! trait bound. This module extracts the Model type from the app cfg's `view`
 //! function and, if it fails the required predicate, returns a fail-closed
-//! `SKY-L0120` diagnostic naming the offending field — converting the
+//! `IPE-L0120` diagnostic naming the offending field — converting the
 //! `cargo`-fail into a clean `skyc` error (MAKE INVALID STATES UNREPRESENTABLE).
 
 use ipe_diagnostics::{AppShape, DResult, Diagnostic, LowerError, ModelLeaf, Span};
@@ -100,7 +100,7 @@ pub fn msg_ty_of_update(update_e: &Expr) -> Option<&IrType> {
 /// Decoder/function-carrying variants are rejected.
 ///
 /// On failure returns [`Diagnostic::Lower`] carrying [`LowerError::
-/// InadmissibleAppMsg`] (`SKY-L0125`) with the offending variant/field and leaf
+/// InadmissibleAppMsg`] (`IPE-L0125`) with the offending variant/field and leaf
 /// kind. The IR carries no spans at emit, so the span is [`Span::DUMMY`] and
 /// the message is self-contained.
 pub fn check_admissible_msg(ctx: &EmitCtx, msg_ty: &IrType, app: AppShape) -> DResult<()> {
@@ -136,7 +136,7 @@ pub fn check_admissible_msg(ctx: &EmitCtx, msg_ty: &IrType, app: AppShape) -> DR
 ///   derivable, and Tui/Webview need only `Clone`).
 ///
 /// On failure returns [`Diagnostic::Lower`] carrying [`LowerError::
-/// InadmissibleAppModel`] (`SKY-L0120`) with the offending field and leaf kind.
+/// InadmissibleAppModel`] (`IPE-L0120`) with the offending field and leaf kind.
 /// The IR carries no spans at emit, so the span is [`Span::DUMMY`] and the
 /// message is self-contained (precedent: the backend's `Span::DUMMY` `Name`
 /// diagnostics). Normal plain-data Models pass unchanged.
@@ -281,7 +281,7 @@ fn leaf_of_bounded(ctx: &EmitCtx, ty: &IrType, app: AppShape, fuel: u32) -> Mode
         // store — not a valid Model leaf. This is the `blame()` classification
         // consulted ONLY after `admissible()` (which uses `ir_type_is_serde`,
         // `false` for `Secret`) has already rejected a Live Model containing
-        // one, so a `Secret` Model field is a compile-time SKY-L0120 naming
+        // one, so a `Secret` Model field is a compile-time IPE-L0120 naming
         // this leaf, never a session-store leak.
         | IrType::Secret
         // `Order` is a plain three-variant data enum — an admissible leaf.

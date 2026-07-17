@@ -65,7 +65,7 @@ and sharpens four things (§7):
    reference.~~ **STALE — corrected 2026-07-04 by the async-bridge
    conciliation** (`async-ffi-bridge-design.md`, verified in-repo): the
    reference binds async natively since #44 — firestore 0.49 direct +
-   shim-free (fixture 104, `SKY_DCE=0` residual 124 → 10), all stripe
+   shim-free (fixture 104, `IPE_DCE=0` residual 124 → 10), all stripe
    mechanisms proven on fixtures 93-96. `examples/rust/skyshop-rs` still
    *ships* its three shim crates, but that is an unfinished migration
    (pre-#44 fossil), not a capability boundary. The honest scope statement
@@ -165,7 +165,7 @@ feat/runtime-rust v0.17.2-1204 (`c818e081`).
   This is the 76k-symbol scale answer, together with per-crate
   `.kernel.json` caching (warm builds never re-run the inspector) and
   bounded-parallel inspection (`app/Main.hs:1013`, QSem +
-  `SKY_INSTALL_PARALLEL`).
+  `IPE_INSTALL_PARALLEL`).
 - **Generics — the (A)-model** (`src/Sky/Build/Rust/FfiInstance.hs:1-30`):
   ONE `<T: bounds>` generic Rust wrapper per generic FFI fn; **rustc
   monomorphises the call sites** (unlike the Go model's N per-instance
@@ -248,7 +248,7 @@ feat/runtime-rust v0.17.2-1204 (`c818e081`).
  ipe_ffi crate (#42 — pure function: JSON → files; no registry, no net)
    pkginfo.rs  wire DTO → TryFrom → domain PkgInfo   (M-A)
    num_coerce.rs  saturating scalar coercion, leaf   (M-C)
-   call.rs     Call AST decode, 7 checks, SKY-F4400  (M-B, keystone)
+   call.rs     Call AST decode, 7 checks, IPE-F4400  (M-B, keystone)
    emit/       <crate>_bindings.rs  +  <crate>.ipei  +  <crate>.kernel.json  (M-D)
    instance.rs (A)-model generic wrapper + per-instantiation gate (M-E)
    async_bridge.rs  async fn → Task Error a          (M-G, last)
@@ -298,12 +298,12 @@ Topology and build order exactly as banked (`ffi-subsystem-design.md`
 §crate topology; leaf-first DAG M-A → M-C → M-B → M-D → M-E → M-F → M-G per
 R0.5, mirroring the Haskell `FfiCall`/`NumCoerce` cycle-break). Every
 public fallible function returns `Result<T, Diagnostic>` with an
-`SKY-F####` code. The keystone is `call.rs`: the `Call` AST is
+`IPE-F####` code. The keystone is `call.rs`: the `Call` AST is
 unconstructible without passing the seven structural checks ported verbatim
 from the reference's `FfiCall.hs:256-333` (param-index bounds, method ⇔
 receiver, gap-free unique arg indices, arity match, no nested closures,
 iter-adapter targets are `Vec`), failing as a closed `CallDefect` enum →
-`SKY-F4400`.
+`IPE-F4400`.
 
 ### 3.4 Kernel-dispatch integration (no hand-registration)
 
@@ -320,7 +320,7 @@ resolve to a total none-of-these for every classifier (`is_tea`, `is_db`,
 Adopt the reference's kernel naming (`Rust_<Crate>`, import surface
 `Rust.<Crate>`) and its (A)-model for generics: one `<T: bounds>` wrapper,
 rustc monomorphises, per-instantiation bindability gate as a region-keyed
-diagnostic (reference E4400 → ours `SKY-F44xx`).
+diagnostic (reference E4400 → ours `IPE-F44xx`).
 
 ### 3.5 Effect + Task boundary
 
@@ -360,7 +360,7 @@ strictly better, §5).
   wall clock; full argv in `ffi-sandbox-and-generator-impl-ready.md`
   lines 91-121). Fallback `unshare` MUST pass the post-spawn isolation
   proof (pid==1, ns ids differ from parent, no non-loopback iface) before
-  exec'ing any payload; failure → hard refusal `SKY-F4410`. Escape hatch
+  exec'ing any payload; failure → hard refusal `IPE-F4410`. Escape hatch
   `IPE_FFI_ALLOW_UNSANDBOXED=1` prints a red trust warning; CI never sets
   it.
 - **Phase separation:** fetch with network ON into a scoped registry cache;
@@ -389,7 +389,7 @@ here + in `docs/divergences-from-sky.md` when implemented.
 | Cross-backend fallback | none — Rust registry empty ⇒ empty, Go deps inert (`Main.hs:1087-1095`) | N/A — we have no Go backend at all | **adopt** (simpler: only one registry dir) |
 | Kernel naming / import surface | `Rust_<Crate>` / `Rust.<Crate>` (`FfiGen.hs:419-433`) | same (post-rename: surface stays `Rust.<Crate>`) | **adopt** |
 | Registry integration | data-driven `.kernel.json` registry beside closed stdlib dispatch | two-tier `KernelId = Stdlib(enum) \| Ffi(u32)` | **adopt** semantics; our shape is stronger (F1 exhaustiveness kept) |
-| Generics | (A)-model: one generic wrapper, rustc monomorphises; E4400 per-instantiation gate (`FfiInstance.hs:1-30`) | same; diagnostic code `SKY-F44xx` | **adopt** |
+| Generics | (A)-model: one generic wrapper, rustc monomorphises; E4400 per-instantiation gate (`FfiInstance.hs:1-30`) | same; diagnostic code `IPE-F44xx` | **adopt** |
 | Effect classification | inspector emits `effect` per fn (`main.rs:50`) | same field, decoded into closed `Effect` enum, unknown string → hard error | **adopt** + fail-closed decode |
 | Error type at boundary | foreign `Result<T,E>` → error stringified | `Result Error a` — E erased to Ipê `Error`, never `Result String` | **diverge — strictly better** (repo non-regression rule: no `Result String`) |
 | Scalar coercion | Go-parity casts | saturating `NumCoerce` leaf, grep-fenced; > `i64::MAX` saturates | **diverge — recorded** (`oracle_divergence = true`; total + documented beats silent wrap) |
@@ -422,10 +422,10 @@ keeping the security gate ahead of anything a user can invoke.
 | Phase | Deliverables | Verify gate | Est. |
 |---|---|---|---|
 | **P0 — #40 inspector hardening** | De-workspace `tools/sky-ffi-inspect-rs` (own target/lock/toolchain); pinned nightly `rust-toolchain.toml` + committed `Cargo.lock`; lints allow→deny (~130 unwrap/expect/panic sites → error-`PkgInfo` + exit≠0); adversarial-JSON fuzz corpus; keystone comments preserved | Inspector self-tests green; fuzz corpus: zero panics, bounded RSS, error-`PkgInfo` out; `--help`/probe parity with vendored oracle binary | 2-3 sessions |
-| **P1 — #42g decode + coerce (M-A, M-C, M-B)** | `ipe_ffi` crate: wire→domain `PkgInfo` decode (identifier newtypes, closed enums, `FnShape`); `num_coerce.rs` leaf + grep-fence test (no bare `as i64/u64` outside it); `call.rs` seven-check `TryFrom` → `SKY-F4400` with accept/reject corpus mirroring `FfiCallSpec.hs` | Corpus green; injection strings cannot construct `RustIdent`; warm-cache re-validation test (hand-corrupted kernel.json rejected) | 3-4 sessions |
+| **P1 — #42g decode + coerce (M-A, M-C, M-B)** | `ipe_ffi` crate: wire→domain `PkgInfo` decode (identifier newtypes, closed enums, `FnShape`); `num_coerce.rs` leaf + grep-fence test (no bare `as i64/u64` outside it); `call.rs` seven-check `TryFrom` → `IPE-F4400` with accept/reject corpus mirroring `FfiCallSpec.hs` | Corpus green; injection strings cannot construct `RustIdent`; warm-cache re-validation test (hand-corrupted kernel.json rejected) | 3-4 sessions |
 | **P2 — #42g emitters (M-D)** | `emit/{ipei,kernel,bindings}.rs` with BEGIN/END sentinels; fallibility as single stored bit read by both emitters (R0.4); `.ipei → Ty` ≡ stdlib-projection structural-identity test | **Byte-diff vs reference artifacts for semver (fixture 107)**; golden fallibility diff-test | 2-3 sessions |
-| **P3 — #42g generics (M-E)** | `instance.rs`: (A)-model wrapper synth + per-instantiation bindability gate (closed-set × MODELLABLE_5 table) as region-keyed diagnostics | Byte-diff vs reference for the generic fixtures (multi/multi2); rejection cases produce `SKY-F44xx`, never silent drops | 2-3 sessions |
-| **P4 — #41 sandbox** | `ipe_sandbox` crate: bwrap argv builder; unshare fallback + post-spawn isolation proof; refusal `SKY-F4410` + `IPE_FFI_ALLOW_UNSANDBOXED=1`; phase-separated fetch/compile/inspect; resource caps; env scrub | Isolation proof tests (ns-id comparison, no-egress probe from inside jail); refusal path test; caps enforced (OOM-crate fixture killed at RSS cap) | 2-3 sessions |
+| **P3 — #42g generics (M-E)** | `instance.rs`: (A)-model wrapper synth + per-instantiation bindability gate (closed-set × MODELLABLE_5 table) as region-keyed diagnostics | Byte-diff vs reference for the generic fixtures (multi/multi2); rejection cases produce `IPE-F44xx`, never silent drops | 2-3 sessions |
+| **P4 — #41 sandbox** | `ipe_sandbox` crate: bwrap argv builder; unshare fallback + post-spawn isolation proof; refusal `IPE-F4410` + `IPE_FFI_ALLOW_UNSANDBOXED=1`; phase-separated fetch/compile/inspect; resource caps; env scrub | Isolation proof tests (ns-id comparison, no-egress probe from inside jail); refusal path test; caps enforced (OOM-crate fixture killed at RSS cap) | 2-3 sessions |
 | **P5 — #42d driver + consumer wiring** | `ipe add/install/remove` (argv-exec, trust gate, `--git` gating, dynamic `Cargo.toml` with locked versions + effective features, S4 sentinel DCE); `.ipei` HM seeding via `KernelId::Ffi` (needs M4); lowering + backend emission | **E2E rung 1:** `ipe add semver` → inspect-in-jail → emit → type-check → cargo build → run, matching reference behavior | 3-4 sessions (after M4) |
 | **P6 — E2E ladder** | All 10 shim-free crates (fixtures 107-114 + regressions 73/76/92/97/105/106) through the full pipeline; `ffi-audit` skill re-pointed at our inspector | **E2E rung 2:** 10/10 byte-diff (or recorded-divergence-diff) vs reference; audit-skill sweep produces verdict table | 2 sessions |
 | **P7 — M-G async bridge** | **SUPERSEDED 2026-07-04** — async emission is part of the base emitters (P2/P3) per `async-ffi-bridge-design.md` §9; M-G dissolves into M-D/M-E. New P6 = 10 sync crates + firestore parity + the real async-stripe E2E; new P7 = skyshop-rs zero-shim + used-set DCE (acceptance) | see `async-ffi-bridge-design.md` §9-§10 | — |
@@ -491,6 +491,6 @@ therefore mostly CONFIRMED, not obsoleted. Explicit dispositions:
   procedure (bump → fuzz corpus → fixture re-diff) needs a small runbook
   when P0 lands. Cache keys already include the nightly channel.
 - **Windows/macOS jails:** bwrap/unshare are Linux-only; `ipe add` on other
-  hosts refuses (SKY-F4410) until a per-OS jail (sandbox-exec /
+  hosts refuses (IPE-F4410) until a per-OS jail (sandbox-exec /
   AppContainer) is designed. The reference offers no precedent (it is
   unsandboxed everywhere).

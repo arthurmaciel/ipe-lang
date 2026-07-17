@@ -1,5 +1,5 @@
 //! Each unsupported feature must lower to a `Diagnostic::Lower` carrying the
-//! offending node's span and the right `SKY-L01##` code — never a `CompilerBug`.
+//! offending node's span and the right `IPE-L01##` code — never a `CompilerBug`.
 //!
 //! These build the canonical AST + solved types directly (rather than through
 //! the parser/checker) so each lowering arm is exercised in isolation: the
@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 
 use ipe_canon::ast as canon;
 use ipe_diagnostics::{
-    Code, DResult, Diagnostic, Feature, Located, LowerError, SKY_L0101, SKY_L0102, SKY_L0107,
-    SKY_L0108, SKY_L0114, SKY_L0119, Span,
+    Code, DResult, Diagnostic, Feature, Located, LowerError, IPE_L0101, IPE_L0102, IPE_L0107,
+    IPE_L0108, IPE_L0114, IPE_L0119, Span,
 };
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{BoundSet, Callee, Expr, FuncId, IrType, KernelFn};
@@ -141,7 +141,7 @@ fn func_named<'a>(
 
 /// An unannotated function whose solved type is polymorphic (`f : T0 -> T0`)
 /// cannot be lowered without a source-level name for the generic: the backend
-/// surfaces `Feature::Polymorphism` (SKY-L0102) rather than emitting unsound
+/// surfaces `Feature::Polymorphism` (IPE-L0102) rather than emitting unsound
 /// `any`-shaped parameters.
 #[test]
 fn unannotated_fn_with_polymorphic_solved_type_fails_with_polymorphism() -> DResult<()> {
@@ -167,7 +167,7 @@ fn unannotated_fn_with_polymorphic_solved_type_fails_with_polymorphism() -> DRes
     assert_unsupported(
         run(Vec::new(), vec![def], env, &mut i),
         Feature::Polymorphism,
-        SKY_L0102,
+        IPE_L0102,
         Span::new(10, 11),
     );
     Ok(())
@@ -175,7 +175,7 @@ fn unannotated_fn_with_polymorphic_solved_type_fails_with_polymorphism() -> DRes
 
 /// An unannotated function with a fully-concrete solved type (`f x = 0`,
 /// solved as `Int -> Int`) lowers cleanly without a type annotation — the
-/// SKY-L0106 gate does not apply to monomorphic bindings.
+/// IPE-L0106 gate does not apply to monomorphic bindings.
 #[test]
 fn unannotated_fn_with_concrete_solved_type_lowers_cleanly() -> DResult<()> {
     let mut i = Interner::new();
@@ -225,8 +225,8 @@ fn wildcard_parameter_lowers_to_a_fresh_binder() -> DResult<()> {
     let f = i.intern("f")?;
     let ty = canon::Type::Lambda(Box::new(con_int(&mut i)?), Box::new(con_int(&mut i)?));
     // `f _ = 0` — a wildcard parameter is now a valid IRREFUTABLE binding
-    // position (SKY-L0105 retired for param patterns; a refutable param is the
-    // separate SKY-T0015 gate). It lowers to a fresh unused parameter carrying
+    // position (IPE-L0105 retired for param patterns; a refutable param is the
+    // separate IPE-T0015 gate). It lowers to a fresh unused parameter carrying
     // the annotated type, with no destructure prologue.
     let patterns = vec![Located::new(Span::new(20, 21), canon::Pattern_::PAnything)];
     let def = canon::Def::Typed {
@@ -323,7 +323,7 @@ fn parametric_annotation_lowers_to_generic_func() -> DResult<()> {
 
 /// A type variable left unresolved in *value* position (the solver never pinned
 /// it to a concrete instance — e.g. an under-determined polymorphic value) is an
-/// polymorphism feature gap, not an invariant violation: it surfaces as `SKY-L0102`
+/// polymorphism feature gap, not an invariant violation: it surfaces as `IPE-L0102`
 /// (`Feature::Polymorphism`) carrying the binding span, never a `CompilerBug`.
 #[test]
 fn unresolved_type_variable_in_value_position() -> DResult<()> {
@@ -342,7 +342,7 @@ fn unresolved_type_variable_in_value_position() -> DResult<()> {
     assert_unsupported(
         run(Vec::new(), vec![def], env, &mut i),
         Feature::Polymorphism,
-        SKY_L0102,
+        IPE_L0102,
         Span::new(40, 41),
     );
     Ok(())
@@ -350,7 +350,7 @@ fn unresolved_type_variable_in_value_position() -> DResult<()> {
 
 #[test]
 fn task_with_non_unit_result() -> DResult<()> {
-    // There is no SKY-L0104 gate: `Task Int` (and all `Task a`) lower
+    // There is no IPE-L0104 gate: `Task Int` (and all `Task a`) lower
     // successfully to `IrType::Task(IrType::Int)`. This test checks the
     // positive path — the lowering must succeed and the function's return type
     // must be the parametric Task IR type.
@@ -491,7 +491,7 @@ fn bare_function_reference_lowers_to_func_value() -> DResult<()> {
 fn function_value_in_record_field_is_unsupported() -> DResult<()> {
     // Storing a function value in a record field can't compile (a boxed `dyn Fn`
     // satisfies none of the record struct's derived `Clone`/`Debug`/`PartialEq`),
-    // so it lowers to the SKY-L0107 first-class-function gap — blaming the field
+    // so it lowers to the IPE-L0107 first-class-function gap — blaming the field
     // value's span — rather than emitting Rust that does not build.
     let mut i = Interner::new();
     let f = i.intern("f")?;
@@ -536,7 +536,7 @@ fn function_value_in_record_field_is_unsupported() -> DResult<()> {
     assert_unsupported(
         run_with_regions(Vec::new(), vec![def], BTreeMap::new(), regions, &mut i),
         Feature::FirstClassFunctions,
-        SKY_L0107,
+        IPE_L0107,
         field_span,
     );
     Ok(())
@@ -550,7 +550,7 @@ fn function_in_record_field_via_type_variable_is_unsupported() -> DResult<()> {
     // is `{ value : Int -> Int }` — but the field value at that site is not
     // syntactically a function (it's a plain reference), so the per-field
     // `reject_function_valued_field` gate cannot see it. Only the region-based
-    // gate catches it, and it must surface as the SKY-L0107 first-class gap
+    // gate catches it, and it must surface as the IPE-L0107 first-class gap
     // (blaming the use-site span) rather than emitting Rust that does not build.
     let mut i = Interner::new();
     let boxed = i.intern("boxed")?;
@@ -587,7 +587,7 @@ fn function_in_record_field_via_type_variable_is_unsupported() -> DResult<()> {
     assert_unsupported(
         run_with_regions(Vec::new(), vec![def], BTreeMap::new(), regions, &mut i),
         Feature::FirstClassFunctions,
-        SKY_L0107,
+        IPE_L0107,
         body_span,
     );
     Ok(())
@@ -603,8 +603,8 @@ fn function_inside_opaque_boxed_wrapper_is_accepted() -> DResult<()> {
     // its payload behind a `Box<dyn Fn>` and derives nothing over `T`, so a
     // function `T` compiles and runs (`decode_succeed(curryN(f))`). The
     // region-based gate MUST NOT reject it the way it rejects a user-enum payload
-    // (`Opt (Int -> Int)`, SKY-L0114) or a record field (`{ v : Int -> Int }`,
-    // SKY-L0107). Regression for the json_dec_pipeline CtorPayloadFunction
+    // (`Opt (Int -> Int)`, IPE-L0114) or a record field (`{ v : Int -> Int }`,
+    // IPE-L0107). Regression for the json_dec_pipeline CtorPayloadFunction
     // false positive.
     let mut i = Interner::new();
     let boxed = i.intern("boxed")?;
@@ -652,7 +652,7 @@ fn function_inside_opaque_boxed_wrapper_is_accepted() -> DResult<()> {
 
 #[test]
 fn function_inside_maybe_via_type_variable_is_accepted() -> DResult<()> {
-    // #90 (SKY-L0114 narrowing, T1): a function reaching the type argument of
+    // #90 (IPE-L0114 narrowing, T1): a function reaching the type argument of
     // the built-in ENUM-LIKE `Maybe` is sound — `Just`/`Ok` construct the
     // RUNTIME `SkyMaybe`/`SkyResult` enums, whose derives are generic-bounded,
     // so the type compiles regardless of the payload; use (`==`/stringify/
@@ -708,7 +708,7 @@ fn function_inside_list_via_type_variable_is_still_unsupported() -> DResult<()> 
     // not COLLECTION heads (`List`/`Dict`/`Set`) — a `List (a -> b)` renders
     // to `Vec<Box<dyn Fn>>`, and collection kernels (e.g. `DictGet`)
     // blanket-`.clone()` their element, which `Box<dyn Fn>` cannot satisfy.
-    // Must stay SKY-L0114 (no regression from the #90 lift).
+    // Must stay IPE-L0114 (no regression from the #90 lift).
     let mut i = Interner::new();
     let boxed = i.intern("boxed")?;
     let r = i.intern("r")?;
@@ -744,7 +744,7 @@ fn function_inside_list_via_type_variable_is_still_unsupported() -> DResult<()> 
     assert_unsupported(
         run_with_regions(Vec::new(), vec![def], BTreeMap::new(), regions, &mut i),
         Feature::CtorPayloadFunction,
-        SKY_L0114,
+        IPE_L0114,
         body_span,
     );
     Ok(())
@@ -786,7 +786,7 @@ fn value_callee_lowers_to_apply() -> DResult<()> {
 #[test]
 fn unknown_kernel_call() -> DResult<()> {
     // M5a wired `Time.now` and many other kernels. Use a genuinely-unwired
-    // module name (`UnknownMod`) so the catch-all arm still fires SKY-L0108.
+    // module name (`UnknownMod`) so the catch-all arm still fires IPE-L0108.
     let mut i = Interner::new();
     let f = i.intern("f")?;
     let module = i.intern("UnknownMod")?;
@@ -815,7 +815,7 @@ fn unknown_kernel_call() -> DResult<()> {
     assert_unsupported(
         run(Vec::new(), vec![def], BTreeMap::new(), &mut i),
         Feature::Kernels,
-        SKY_L0108,
+        IPE_L0108,
         Span::new(92, 100),
     );
     Ok(())
@@ -854,14 +854,14 @@ fn unsupported_binary_operator() -> DResult<()> {
     assert_unsupported(
         run(Vec::new(), vec![def], BTreeMap::new(), &mut i),
         Feature::BinOps,
-        SKY_L0101,
+        IPE_L0101,
         Span::new(112, 117),
     );
     Ok(())
 }
 
 /// a single wildcard `case` arm is now a supported FLAT match (a trailing
-/// catch-all is structurally exhaustive), no longer the SKY-L0100 gap. The
+/// catch-all is structurally exhaustive), no longer the IPE-L0100 gap. The
 /// lowering succeeds and yields a `Match` body.
 #[test]
 fn wildcard_only_case_lowers_to_flat_match() -> DResult<()> {
@@ -895,7 +895,7 @@ fn wildcard_only_case_lowers_to_flat_match() -> DResult<()> {
 
 /// a constructor arm followed by a variable catch-all is now a supported
 /// FLAT match (the trailing variable is an irrefutable catch-all), no longer the
-/// SKY-L0100 gap.
+/// IPE-L0100 gap.
 #[test]
 fn ctor_then_variable_catch_all_lowers_to_flat_match() -> DResult<()> {
     let mut i = Interner::new();
@@ -970,7 +970,7 @@ fn ctor_then_variable_catch_all_lowers_to_flat_match() -> DResult<()> {
 fn partial_application_eta_expands_to_a_closure() -> DResult<()> {
     // `add` declares two parameters; `add 2` passes one. Partial application now
     // eta-expands into a boxed closure `\eta_0 -> add(2, eta_0)` — a first-class
-    // function value — rather than failing closed with SKY-L0110. (M1 b4 closed
+    // function value — rather than failing closed with IPE-L0110. (M1 b4 closed
     // the partial/over-application gate for named callees.)
     let mut i = Interner::new();
     let add = i.intern("add")?;
@@ -1086,7 +1086,7 @@ fn over_application_saturates_via_apply() -> DResult<()> {
     // `f` declares one parameter; `f 1 2` passes two — over-application across
     // the arity boundary. The first arg saturates the direct `Call(f, [1])`
     // (which returns a function value); the surplus `2` applies to that result
-    // through an `Apply`, rather than failing closed with SKY-L0110.
+    // through an `Apply`, rather than failing closed with IPE-L0110.
     let mut i = Interner::new();
     let f = i.intern("f")?;
     let caller = i.intern("caller")?;
@@ -1287,7 +1287,7 @@ fn partial_application_of_a_first_class_value_eta_expands() -> DResult<()> {
     // eta-expands an arity mismatch; the value path now does too, capturing the
     // value and the supplied arg into a residual closure `\eta_0 -> (value)(2,
     // eta_0)` : Int -> Int (matching the reference's curried-closure model),
-    // rather than failing closed with SKY-L0110.
+    // rather than failing closed with IPE-L0110.
     let mut i = Interner::new();
     let caller = i.intern("caller")?;
     let b = i.intern("b")?;
@@ -1397,7 +1397,7 @@ fn over_application_with_partial_surplus_eta_expands() -> DResult<()> {
     // eta-expands it (matching the reference's `SkyCall(f(1), 2)` residual):
     // `\eta_0 \eta_1 -> (f(1))(2, eta_0, eta_1)` — capturing the direct call and
     // the surplus arg, taking the two still-missing params, rather than failing
-    // closed with SKY-L0110. (`f 1 2 3 4` — surplus 3 == returned arity 3 —
+    // closed with IPE-L0110. (`f 1 2 3 4` — surplus 3 == returned arity 3 —
     // still saturates exactly and lowers to a single `Apply`; this test pins the
     // short-surplus case.)
     let mut i = Interner::new();
@@ -1524,8 +1524,8 @@ fn over_application_with_partial_surplus_eta_expands() -> DResult<()> {
 #[test]
 fn let_bound_live_app_cfg_is_unsupported() -> DResult<()> {
     // `Live.app cfg` where `cfg` is a plain local var (not a record literal)
-    // must lower to SKY-L0119 at the argument span — never an ICE, never the
-    // misleading SKY-L0107 first-class-function message.
+    // must lower to IPE-L0119 at the argument span — never an ICE, never the
+    // misleading IPE-L0107 first-class-function message.
     let mut i = Interner::new();
     let main = i.intern("main")?;
     let live = i.intern("Live")?;
@@ -1556,7 +1556,7 @@ fn let_bound_live_app_cfg_is_unsupported() -> DResult<()> {
     assert_unsupported(
         run(Vec::new(), vec![def], BTreeMap::new(), &mut i),
         Feature::LetBoundAppCfg,
-        SKY_L0119,
+        IPE_L0119,
         arg_span,
     );
     Ok(())
@@ -1565,7 +1565,7 @@ fn let_bound_live_app_cfg_is_unsupported() -> DResult<()> {
 #[test]
 fn let_bound_webview_window_is_unsupported() -> DResult<()> {
     // `Webview.app { …, window = win }` where `win` is a local var must lower
-    // to SKY-L0119 at the window value span, not an emit-stage CompilerBug.
+    // to IPE-L0119 at the window value span, not an emit-stage CompilerBug.
     let mut i = Interner::new();
     let main = i.intern("main")?;
     let webview = i.intern("Webview")?;
@@ -1609,7 +1609,7 @@ fn let_bound_webview_window_is_unsupported() -> DResult<()> {
     assert_unsupported(
         run(Vec::new(), vec![def], BTreeMap::new(), &mut i),
         Feature::LetBoundAppCfg,
-        SKY_L0119,
+        IPE_L0119,
         win_span,
     );
     Ok(())

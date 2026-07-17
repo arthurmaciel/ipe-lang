@@ -6,7 +6,7 @@ import Std.Ui.Input as Input
 
 
 -- i155 regression: Input.radio, Input.radioRow, and Input.option must
--- type-check and lower without SKY-N0005.
+-- type-check and lower without IPE-N0005.
 
 type Msg
     = ColorSelected String

@@ -9,7 +9,7 @@
 //!   Fn(ipe_runtime::ui::element::Color) -> _>` → skyc-0 / cargo-101 (E0433).
 //! * (ii) a record field literal `{ c = Cyan }` lowered the field via the
 //!   ty-path (→ `UiPlain::Color`) while the annotation lowered it via
-//!   `ir_type_from_canon` (→ `MainColor`) — the two disagreed → SKY-I0001.
+//!   `ir_type_from_canon` (→ `MainColor`) — the two disagreed → IPE-I0001.
 //!
 //! The `enum_variants.contains_key(&(home, name))` guard sits AHEAD of the
 //! nullary opaque arms (mirroring `ir_type_from_canon`), so a program union
@@ -20,10 +20,10 @@
 //! the user enum `MainColor` AND the runtime `ipe_runtime::ui::element::Color`
 //! (proof iii — the real Std.Ui Color is unchanged).
 //!
-//! Gated on `SKY_E2E=1`. Run:
+//! Gated on `IPE_E2E=1`. Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_i101_color_seal
+//! IPE_E2E=1 cargo test -p skyc --test golden_i101_color_seal
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -62,7 +62,7 @@ fn emitted_program_source(out: &Path) -> String {
 /// `Color` in the same module still lowers to `UiPlain::Color`.
 #[test]
 fn user_color_via_hof_resolves_to_own_enum() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -129,10 +129,10 @@ fn user_color_via_hof_resolves_to_own_enum() {
 }
 
 /// Proof (ii): a user `type Color` in a record FIELD (inferred record-literal
-/// path) agrees with the annotated (canon) path — was SKY-I0001.
+/// path) agrees with the annotated (canon) path — was IPE-I0001.
 #[test]
 fn user_color_in_record_field_agrees_across_paths() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -166,7 +166,7 @@ fn user_color_in_record_field_agrees_across_paths() {
     assert_eq!(
         outcome.exit_code,
         Some(0),
-        "must exit 0 (was SKY-I0001 ty-vs-canon disagreement)"
+        "must exit 0 (was IPE-I0001 ty-vs-canon disagreement)"
     );
     assert!(
         outcome.stdout.contains("sky:cyan"),

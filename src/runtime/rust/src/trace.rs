@@ -3,7 +3,7 @@
 // Mirrors the contract from the Go runtime: `span name task` runs `task` and
 // returns its result UNCHANGED (the value/error flow through untouched), plus a
 // span around it; `event` / `attr` mark a point / annotate the active span.
-// Output is opt-in via SKY_TRACE (off by default → zero noise), but the wrapped
+// Output is opt-in via IPE_TRACE (off by default → zero noise), but the wrapped
 // task ALWAYS runs regardless, so spans never change program behaviour.
 use super::*;
 use std::time::Instant;
@@ -18,7 +18,7 @@ fn scrub(s: &str) -> String {
 }
 
 fn trace_enabled() -> bool {
-    crate::system::read_env_var("SKY_TRACE")
+    crate::system::read_env_var("IPE_TRACE")
         .map(|v| !v.is_empty() && v != "0" && v != "false")
         .unwrap_or(false)
 }
@@ -38,7 +38,7 @@ pub fn trace_span<E: Send + 'static, A: Send + 'static>(
         let elapsed = start.elapsed();
         let ok = matches!(result, SkyResult::Ok(_));
         // Always record the span into the telemetry ring (the Sky Console reads
-        // it); the stderr line stays opt-in via SKY_TRACE.
+        // it); the stderr line stays opt-in via IPE_TRACE.
         super::telemetry::record_span(&name, elapsed.as_micros() as u64, ok);
         if on {
             let outcome = if ok { "ok" } else { "err" };

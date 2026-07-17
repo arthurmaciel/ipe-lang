@@ -3,7 +3,7 @@ import Sky.Core.Prelude exposing (..)
 
 -- `double` needs Number (its body adds `a` to itself). Instantiating it at Bool
 -- asks for `Bool + Bool`, which has no meaning, so the use is rejected here
--- (SKY-T0014) rather than emitting Rust that cargo cannot build.
+-- (IPE-T0014) rather than emitting Rust that cargo cannot build.
 double : a -> a
 double x = x + x
 

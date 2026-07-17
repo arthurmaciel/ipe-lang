@@ -7,7 +7,7 @@ module Main exposing (main)
 -- The pre-round-4 `Live.route : String -> page -> LiveRoute page` scheme
 -- shared ONE type variable between the builder argument and the page, so
 -- `Live.route "/u/:id" UserPage` (builder : String -> Page) forced
--- `Page ≟ String -> Page` → a false SKY-T0001 on every param-route app, and
+-- `Page ≟ String -> Page` → a false IPE-T0001 on every param-route app, and
 -- the emit tier's `route_param_get` conversion path was dead code.
 --
 -- Post-fix (per-route witness): nullary routes AND param routes type-check

@@ -3,11 +3,11 @@
 //! These lock every seam on the ~15-line `Std.Palette`:
 //!   * embed → inject → topo → canonicalise-as-stdlib → link → emit of a
 //!     Std-homed union constructor, with mixed kernel + source imports;
-//!   * a hostile user file named `Std.Palette` stays SKY-N0025-rejected;
+//!   * a hostile user file named `Std.Palette` stays IPE-N0025-rejected;
 //!   * an `EmbeddedStdlib` module DEFINES a reserved built-in type name
 //!     (`type Length`) that a user module could not — the prereq
 //!     for compiled-source `Std.Css`;
-//!   * (`SKY_E2E`) the emitted Cargo project builds and runs to `#000 42`.
+//!   * (`IPE_E2E`) the emitted Cargo project builds and runs to `#000 42`.
 
 use std::path::{Path, PathBuf};
 
@@ -31,7 +31,7 @@ fn spike_manifest() -> PathBuf {
 }
 
 /// The compiled-source module resolves IDENTICALLY to a user module: the
-/// project builds (no SKY-N0020 / N0025), and the emitted Rust carries the
+/// project builds (no IPE-N0020 / N0025), and the emitted Rust carries the
 /// Std-homed constructor + its case-match — the exact thing a kernel cannot do.
 /// Also proves the MIXED import set (kernel `Sky.Core.Prelude` + source
 /// `Std.Palette`) both resolve.
@@ -68,7 +68,7 @@ fn spike_project_builds_and_injects_compiled_source() {
     // (`type Length`). The lowerer keys it under its real home (`Std.Palette`),
     // so it lowers to its OWN enum + accessor — NOT the opaque runtime
     // `UiPlain::Length`. A user module declaring `type Length` would have been
-    // SKY-N0026-rejected before ever reaching lowering.
+    // IPE-N0026-rejected before ever reaching lowering.
     assert!(
         emitted.contains("std_palette_length_px"),
         "emitted Rust must carry the compiled Std.Palette `lengthPx` fn (reserved-name type defined by trusted stdlib):\n{emitted}"
@@ -80,7 +80,7 @@ fn spike_project_builds_and_injects_compiled_source() {
 }
 
 /// SECURITY: a user file literally named `Std.Palette` (`ModuleOrigin::User`)
-/// stays SKY-N0025-rejected — bundled stdlib is authoritative; a `Std.*` user
+/// stays IPE-N0025-rejected — bundled stdlib is authoritative; a `Std.*` user
 /// file is a hard error, never a silent supply-chain override of the audited
 /// implementation.
 #[test]
@@ -128,17 +128,17 @@ fn hostile_std_squat_is_sky_n0025() {
     };
     assert_eq!(
         code,
-        Some(ipe_diagnostics::SKY_N0025),
-        "hostile Std.Palette must be SKY-N0025 (not a silent override): {err}"
+        Some(ipe_diagnostics::IPE_N0025),
+        "hostile Std.Palette must be IPE-N0025 (not a silent override): {err}"
     );
 }
 
-/// The GREEN GATE end-to-end: under `SKY_E2E=1` the emitted Cargo project
+/// The GREEN GATE end-to-end: under `IPE_E2E=1` the emitted Cargo project
 /// compiles and RUNS, printing `#000` (`toHex Dark`) — proving the whole seam
 /// from Std-source to a running binary, matching the reference value.
 #[test]
 fn spike_e2e_runs_and_prints_hex() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("spike_std_source_e2e");

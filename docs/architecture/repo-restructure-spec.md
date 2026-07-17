@@ -15,11 +15,11 @@ green between steps (each ends on a full §6 gate + example sweep):
 - **Step A — pure relocation (THIS spec).** `git mv` only; NO renames, NO import
   changes. Rewire Cargo + scripts to the new paths. Fully bisectable; no semantic
   change. Land first.
-- **Step B — rename** (`docs/rename/`): `sky_*`→`ipe_*`, `SKY-`→`IPE-`, `SKY_`→
+- **Step B — rename** (`docs/rename/`): `sky_*`→`ipe_*`, `IPE-`→`IPE-`, `IPE_`→
   `IPE_`, `.sky`→`.ipe`, etc. Golden regen.
 - **Step C — namespace flatten** (`namespace-imports-and-packaging-spec.md`):
   merge the relocated `Sky/Core`+`Std` stdlib into `Ipe/`, rewrite imports.
-- **Step D — sanctioned fmt seal (#214), LAST.** The single `SKY_ALLOW_FMT=1
+- **Step D — sanctioned fmt seal (#214), LAST.** The single `IPE_ALLOW_FMT=1
   cargo fmt --all` pass, its own commit, immediately before the end-of-campaign
   full gate + CI. Runs LAST because B (rename) and C (flatten) churn `.rs`
   identifiers + import blocks and thus introduce their own rustfmt drift — a
@@ -74,13 +74,13 @@ pure compiler-unit test belongs under `src/compiler/<crate>/tests/` instead.
 4. **Stdlib embed path** — skyc locates its stdlib (currently
    `crates/skyc/stdlib`); update the resolver to `src/stdlib` (const/env in
    `src/ipe-cli/src/…`; check `stdlib.rs`).
-5. **`SKY_RUNTIME_DIR`** — default resolution + `scripts/lib/env.sh` +
+5. **`IPE_RUNTIME_DIR`** — default resolution + `scripts/lib/env.sh` +
    `skyc-runtime-dir` memory move from `runtime/src/sky_runtime` to
    `src/runtime/rust/src/sky_runtime`.
 
 ## Scripts + CI rewire (Step A)
 
-- `scripts/lib/env.sh` — `SKYC_BIN` candidate paths, `SKY_RUNTIME_DIR`,
+- `scripts/lib/env.sh` — `SKYC_BIN` candidate paths, `IPE_RUNTIME_DIR`,
   `REPO`-relative anchors.
 - `scripts/equivalence-checks/examples-sweep.sh` + `scripts/lib/examples.sh` — any `crates/`/
   `runtime/` path assumptions.
@@ -120,7 +120,7 @@ run the sweep). Match the gate to what each step can break:
   -p <runtime> --features full` + `clippy --workspace --all-targets -D warnings`
   — EXCEPT Step B (rename) touches runtime identifiers + feature-gated code, so
   run `--features full` there too.
-- **After C, before the final gate:** Step D — the `SKY_ALLOW_FMT=1 cargo fmt
+- **After C, before the final gate:** Step D — the `IPE_ALLOW_FMT=1 cargo fmt
   --all` seal (#214), own commit.
 - **End of the campaign (after D):** the complete §6 gate + `cargo fmt --all
   --check` green + example sweep 36/36 + cross-platform CI (fmt gate now on).

@@ -2,7 +2,7 @@
 //! surfaces (`Jwt.withClaim`, `Std.Db.Migration`/`Db.migrate`,
 //! `Sky.Http.Server.Response`) whose compiler contracts had drifted from the
 //! reference `../sky/sky-stdlib` signatures, so `skyc` rejected a
-//! verbatim-ported reference program with `SKY-T0001` ("expected String, found
+//! verbatim-ported reference program with `IPE-T0001` ("expected String, found
 //! Value" etc.).
 //!
 //! The reference Sky-source signature IS the contract:
@@ -18,13 +18,13 @@
 //!   had registered it as an opaque nominal, so a record literal was rejected.
 //!
 //! Each test compiles a fixture that uses the surface as the reference does.
-//! The cheap tier asserts `skyc` ACCEPTS the program (no SKY-T0001). The
-//! `SKY_E2E=1` tier is THE SEAL: the emitted Rust must `cargo build` and run.
+//! The cheap tier asserts `skyc` ACCEPTS the program (no IPE-T0001). The
+//! `IPE_E2E=1` tier is THE SEAL: the emitted Rust must `cargo build` and run.
 //!
 //! Run:
 //! ```text
 //! cargo test -p skyc --test golden_i217_stdlib_contract_drift
-//! SKY_E2E=1 cargo test -p skyc --test golden_i217_stdlib_contract_drift
+//! IPE_E2E=1 cargo test -p skyc --test golden_i217_stdlib_contract_drift
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -66,7 +66,7 @@ fn assert_skyc_accepts(name: &str) -> Option<PathBuf> {
 }
 
 fn e2e_build_and_run(name: &str, expect_stdout_contains: &str) {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let root = repo_root();

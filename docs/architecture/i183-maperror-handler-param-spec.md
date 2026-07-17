@@ -133,7 +133,7 @@ breakers, in priority order, are:
    disk-constrained lane the gate can be killed mid-run and surface as a
    non-specific failure with a truncated tail — exactly what the resume
    shows. The autopilot gate should run the fix's targeted golden under
-   `SKY_E2E=1` plus the two related golden suites, in an **isolated
+   `IPE_E2E=1` plus the two related golden suites, in an **isolated
    `CARGO_TARGET_DIR`**, not a full unbounded workspace test.
 
 The Sonnet impl agent must therefore (a) place the retype in `sky_lower`
@@ -228,7 +228,7 @@ not affect the `Less`/`Greater` arms.
   `map_error_arity1_accepted` fixture) is not an `Expr::Lambda`, so the
   guard skips it — that golden stays green.
 - **Single-binder only** (`[(_, ty)]`). A curried/multi-arg handler shape is
-  gated out (SKY-T0014) before lowering; the pattern match is defensive.
+  gated out (IPE-T0014) before lowering; the pattern match is defensive.
 - NO `dyn Any` / downcast / type-erasure. This is a root-cause IR-type fix
   matching the reference's semantic policy.
 
@@ -299,8 +299,8 @@ fn result_map_error_wildcard_handler() {
 ```
 
 The harness (`assert_runs_and_matches_oracle`, line 70) is E2E-gated on
-`SKY_E2E`: it builds the emitted project, runs it, and asserts stdout parity +
-exit 0. Without `SKY_E2E` it returns early (compile-only in CI's fast lane).
+`IPE_E2E`: it builds the emitted project, runs it, and asserts stdout parity +
+exit 0. Without `IPE_E2E` it returns early (compile-only in CI's fast lane).
 
 ## Verification (exact commands — isolated target, foreground, bounded)
 
@@ -324,14 +324,14 @@ main = println (Result.withDefault "def" (Result.mapError (\_ -> Error.invalidIn
 SKY
 printf 'name = "i183repro"\nversion = "0.1.0"\nentry = "src/Main.sky"\n' > /tmp/i183-repro/sky.toml
 rm -rf /tmp/i183-out
-SKY_RUNTIME_DIR="$RT" $TGT/debug/skyc build /tmp/i183-repro/src/Main.sky --out /tmp/i183-out --runtime "$RT" 2>&1 | tee /tmp/i183-emit.log
+IPE_RUNTIME_DIR="$RT" $TGT/debug/skyc build /tmp/i183-repro/src/Main.sky --out /tmp/i183-out --runtime "$RT" 2>&1 | tee /tmp/i183-emit.log
 # skyc exit 0
 ( cd /tmp/i183-out && CARGO_TARGET_DIR=$TGT timeout 400 cargo build 2>&1 | tee /tmp/i183-cargo.log )
 # expect: Finished, NO error[E0277]
 $TGT/debug/sky-app        # prints: concrete
 
 # 3. Golden E2E for the fixture (proves the recorded gate passes).
-CARGO_TARGET_DIR=$TGT SKY_E2E=1 timeout 600 cargo test -p skyc --test golden_m88_combinators result_map_error_wildcard_handler 2>&1 | tee /tmp/i183-golden.log
+CARGO_TARGET_DIR=$TGT IPE_E2E=1 timeout 600 cargo test -p skyc --test golden_m88_combinators result_map_error_wildcard_handler 2>&1 | tee /tmp/i183-golden.log
 # expect: 1 passed
 
 # 4. Non-regression on the neighbouring mapError goldens.

@@ -1,9 +1,9 @@
-//! Seal — `NonClone` Var forwarded as a HOF callback must not emit SKY-L0126.
+//! Seal — `NonClone` Var forwarded as a HOF callback must not emit IPE-L0126.
 //!
 //! Root cause (b): the slot type for `Task.andThen writeAll` IS resolved by
 //! `ir_type_from_ty`, but it resolves to `IrType::Fun` whose `clone_class` is
 //! `NonClone`.  Before this fix, any `Expr::Var` in a `NonClone` slot triggered
-//! `return Err(SKY-L0126)` — even when the Var is merely forwarded as a `FnOnce`
+//! `return Err(IPE-L0126)` — even when the Var is merely forwarded as a `FnOnce`
 //! callback that consumes it exactly once.
 //!
 //! In `eta_expand_partial`, the `Some(CloneClass::NonClone)` arm for a
@@ -15,11 +15,11 @@
 //! let-bound local of type `String -> Task Error String`.
 //!
 //! ```text
-//! # compile-only check (fast, no SKY_E2E needed):
+//! # compile-only check (fast, no IPE_E2E needed):
 //! cargo test -p skyc --test golden_i149_noncl_var_hof
 //!
 //! # full E2E (run emitted binary):
-//! SKY_E2E=1 cargo test -p skyc --test golden_i149_noncl_var_hof
+//! IPE_E2E=1 cargo test -p skyc --test golden_i149_noncl_var_hof
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -32,7 +32,7 @@ fn repo_root() -> PathBuf {
 }
 
 /// Assert that `skyc::build(fixture)` SUCCEEDS (exit-0 from the lowerer).
-/// Runs without `SKY_E2E` so the compile check is always fast.
+/// Runs without `IPE_E2E` so the compile check is always fast.
 fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
     let root = repo_root();
     let entry = root
@@ -58,13 +58,13 @@ fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
 
 /// `go = step` where `step : String -> Task Error String`, then
 /// `Task.succeed "hello" |> Task.andThen go`.  This must not emit
-/// SKY-L0126 ("non-Clone capture in a closure is not yet supported");
+/// IPE-L0126 ("non-Clone capture in a closure is not yet supported");
 /// it compiles and, when run, prints "hello!".
 #[test]
 fn a1_noncl_var_task_and_then_compiles() {
     assert_skyc_ok("noncl_var_hof", "i149_noncl_var_hof_emit");
 
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 
@@ -92,7 +92,7 @@ fn a1_noncl_var_task_and_then_compiles() {
     assert_eq!(
         outcome.exit_code,
         Some(0),
-        "A1: must exit 0 (was SKY-L0126 before #149)"
+        "A1: must exit 0 (was IPE-L0126 before #149)"
     );
     assert!(
         outcome.stdout.contains("hello!"),

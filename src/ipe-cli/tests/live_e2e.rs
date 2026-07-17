@@ -1,7 +1,7 @@
 //! Honest end-to-end tests for `Std.Live` / `Sky.Live` — `Live.app`, `Ui.layout`,
 //! `Ui.column`, `Ui.el`, `Ui.onClick`, `Ui.text`, and `String.fromInt`.
 //!
-//! All tests are gated on `SKY_E2E=1`.  Without it they return early so the
+//! All tests are gated on `IPE_E2E=1`.  Without it they return early so the
 //! default `cargo test` stays fast.
 //!
 //! ## Architecture
@@ -12,8 +12,8 @@
 //!    the shared Cargo target (`~/.cargo/config.toml`) lets axum/tokio/serde
 //!    compile once and be reused.
 //! 4. An ephemeral TCP port is reserved via `TcpListener::bind("0")` → drop.
-//! 5. The binary is spawned with `SKY_LIVE_PORT=<port>` and `SKY_CSRF=off`.
-//!    `SKY_CSRF=off` disables the double-submit cookie check so test GETs
+//! 5. The binary is spawned with `IPE_LIVE_PORT=<port>` and `IPE_CSRF=off`.
+//!    `IPE_CSRF=off` disables the double-submit cookie check so test GETs
 //!    exercise the full page render without cookie plumbing.
 //! 6. Readiness: reads the child's stderr until `[sky.live] listening on`.
 //! 7. `GET /` is sent via raw `TcpStream`; the response body must contain
@@ -24,7 +24,7 @@
 //! Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test live_e2e
+//! IPE_E2E=1 cargo test live_e2e
 //! ```
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -53,7 +53,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// The rendered initial page will contain the text `>0<` (the counter starts at
 /// zero, rendered inside a text element).  No `Ui.button` is used because that
 /// function is not a raw kernel — it is defined in sky-stdlib as a Sky function.
-const SKY_LIVE_COUNTER: &str = r#"module Main exposing (main)
+const IPE_LIVE_COUNTER: &str = r#"module Main exposing (main)
 
 import Std.Live as Live
 import Std.Ui as Ui
@@ -111,7 +111,7 @@ main =
 /// and the project is cargo-buildable. The Model (`{ count : Int }`)
 /// is plain data and still gets serde. The Model-admissibility gate is NOT
 /// tripped because the non-serde record is a view helper, not the Model.
-const SKY_LIVE_HTML_HELPER: &str = r#"module Main exposing (main)
+const IPE_LIVE_HTML_HELPER: &str = r#"module Main exposing (main)
 
 import Std.Live as Live
 import Std.Ui as Ui
@@ -181,7 +181,7 @@ main =
 /// # Errors
 ///
 /// Propagates any pipeline or Cargo build failure as a test error.
-const SKY_LIVE_LAMBDA_SUBS: &str = r#"module Main exposing (main)
+const IPE_LIVE_LAMBDA_SUBS: &str = r#"module Main exposing (main)
 
 import Std.Live as Live
 import Std.Ui as Ui
@@ -234,7 +234,7 @@ main =
 /// - `live_app_routed` runtime entry (already ported in `runtime/`)
 ///
 /// This is the same structure as `examples/09-live-counter/src/Main.sky`.
-const SKY_LIVE_ROUTED: &str = r#"module Main exposing (main)
+const IPE_LIVE_ROUTED: &str = r#"module Main exposing (main)
 
 import Std.Live as Live
 import Std.Ui as Ui
@@ -364,21 +364,21 @@ fn spawn_and_wait_ready(
     port: u16,
 ) -> Result<ProcessGuard, BoxError> {
     let mut child = Command::new(exe)
-        // Sky.Live reads its port from SKY_LIVE_PORT (default 8000).
-        .env("SKY_LIVE_PORT", port.to_string())
+        // Sky.Live reads its port from IPE_LIVE_PORT (default 8000).
+        .env("IPE_LIVE_PORT", port.to_string())
         // Disable the double-submit CSRF check so raw TcpStream GETs work.
-        .env("SKY_CSRF", "off")
+        .env("IPE_CSRF", "off")
         // Disable the dev console proxy. The console child binary is pre-built
         // and cached on this machine; without this gate it is spawned on its
         // own ephemeral port and emits its own `[sky.live] listening on`
         // to the inherited stderr pipe before the parent app has bound its
         // port. The test sees that line, declares the server ready, and then
         // immediately tries to connect to the parent's port — which is not
-        // bound yet — getting ECONNREFUSED. Setting SKY_CONSOLE_EMBED=off
+        // bound yet — getting ECONNREFUSED. Setting IPE_CONSOLE_EMBED=off
         // makes gate_allows() return false so no child is spawned and the
         // only `[sky.live] listening on` line in the stderr pipe is the
         // parent's own (emitted AFTER the TCP listener is bound).
-        .env("SKY_CONSOLE_EMBED", "off")
+        .env("IPE_CONSOLE_EMBED", "off")
         .stderr(Stdio::piped())
         .stdout(Stdio::null())
         .spawn()
@@ -596,12 +596,12 @@ fn extract_hid_for_open_tag(html: &str, tag: &str) -> Option<String> {
 /// Propagates any pipeline, build, spawn, or HTTP error as a test error.
 #[test]
 fn live_get_root_contains_initial_count() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
     let test_name = "live_get_root";
-    let exe = compile_and_build(test_name, SKY_LIVE_COUNTER)?;
+    let exe = compile_and_build(test_name, IPE_LIVE_COUNTER)?;
     let port = pick_ephemeral_port()?;
     let _guard = spawn_and_wait_ready(test_name, &exe, port)?;
 
@@ -642,12 +642,12 @@ fn live_get_root_contains_initial_count() -> Result<(), BoxError> {
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn live_counter_build_only() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
     // compile_and_build already does skyc + cargo build; success is the proof.
-    let _exe = compile_and_build("live_build_only", SKY_LIVE_COUNTER)?;
+    let _exe = compile_and_build("live_build_only", IPE_LIVE_COUNTER)?;
     Ok(())
 }
 
@@ -657,24 +657,24 @@ fn live_counter_build_only() -> Result<(), BoxError> {
 /// A successful `skyc` + `cargo build` IS the assertion. Gating serde on the
 /// record's `CDPeq` flag would make this `skyc` exit 0 then `cargo build` E0277
 /// (`Html<MainMsg>: Serialize` unsatisfied on the `Section` struct's forced
-/// serde derive). See `SKY_LIVE_HTML_HELPER` for the full rationale.
+/// serde derive). See `IPE_LIVE_HTML_HELPER` for the full rationale.
 ///
 /// # Errors
 ///
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn live_html_helper_record_build_only() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
-    let _exe = compile_and_build("live_html_helper", SKY_LIVE_HTML_HELPER)?;
+    let _exe = compile_and_build("live_html_helper", IPE_LIVE_HTML_HELPER)?;
     Ok(())
 }
 
 /// Inline-lambda subscriptions seal — BUILD-ONLY: an inline-lambda
 /// `subscriptions` cfg field on a routed `Live.app` must compile end-to-end.
-/// See `SKY_LIVE_LAMBDA_SUBS` for the full rationale — a lambda pinned to
+/// See `IPE_LIVE_LAMBDA_SUBS` for the full rationale — a lambda pinned to
 /// `Box<dyn Fn + Send>` (no `Sync`) instead of emitted unboxed into the generic
 /// `FSubs` slot makes this `skyc` exit 0 then `cargo build` E0277
 /// (`dyn Fn(..) -> SkySub<Msg> + Send cannot be shared between threads safely`).
@@ -684,11 +684,11 @@ fn live_html_helper_record_build_only() -> Result<(), BoxError> {
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn live_lambda_subscriptions_build_only() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
-    let _exe = compile_and_build("live_lambda_subs", SKY_LIVE_LAMBDA_SUBS)?;
+    let _exe = compile_and_build("live_lambda_subs", IPE_LIVE_LAMBDA_SUBS)?;
     Ok(())
 }
 
@@ -724,12 +724,12 @@ fn live_lambda_subscriptions_build_only() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, spawn, HTTP, or assertion error.
 #[test]
 fn live_onclick_increments_counter() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
     let test_name = "live_onclick";
-    let exe = compile_and_build(test_name, SKY_LIVE_COUNTER)?;
+    let exe = compile_and_build(test_name, IPE_LIVE_COUNTER)?;
     let port = pick_ephemeral_port()?;
     let _guard = spawn_and_wait_ready(test_name, &exe, port)?;
     let addr = format!("127.0.0.1:{port}");
@@ -823,11 +823,11 @@ fn live_onclick_increments_counter() -> Result<(), BoxError> {
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn live_routed_app_build_only() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
-    let _exe = compile_and_build("live_routed_build_only", SKY_LIVE_ROUTED)?;
+    let _exe = compile_and_build("live_routed_build_only", IPE_LIVE_ROUTED)?;
     Ok(())
 }
 
@@ -851,7 +851,7 @@ fn live_routed_app_build_only() -> Result<(), BoxError> {
 /// # Errors
 ///
 /// Propagates any pipeline or Cargo build failure as a test error.
-const SKY_PUBSUB_LIVE: &str = r#"module Main exposing (main)
+const IPE_PUBSUB_LIVE: &str = r#"module Main exposing (main)
 
 import Std.Live as Live
 import Std.Ui as Ui
@@ -920,11 +920,11 @@ main =
 
 #[test]
 fn live_pubsub_cmd_publish_and_sub_subscribe_topic_build_only() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
-    let _exe = compile_and_build("live_pubsub_build_only", SKY_PUBSUB_LIVE)?;
+    let _exe = compile_and_build("live_pubsub_build_only", IPE_PUBSUB_LIVE)?;
     Ok(())
 }
 
@@ -934,12 +934,12 @@ fn live_pubsub_cmd_publish_and_sub_subscribe_topic_build_only() -> Result<(), Bo
 /// The constrain scheme is `String -> any -> Cmd msg` (var(1) for payload),
 /// matching the reference runtime which is generic in T. A narrower `String ->
 /// Dict String String -> Cmd msg` scheme would reject publishing `{ count :
-/// Int, name : String }` with SKY-T0001 (type mismatch).
+/// Int, name : String }` with IPE-T0001 (type mismatch).
 ///
 /// This test also asserts `cargo build` succeeds — verifying the re-export
 /// (`cmd_publish`, `cmd_publish_no_echo` in `RUNTIME_MOD_RS_LIVE_APPEND`) is
 /// present; without it the emitted project would fail with E0425 (seal violation).
-const SKY_PUBSUB_RECORD_PAYLOAD: &str = r#"module Main exposing (main)
+const IPE_PUBSUB_RECORD_PAYLOAD: &str = r#"module Main exposing (main)
 
 import Std.Live as Live
 import Std.Ui as Ui
@@ -1003,13 +1003,13 @@ main =
 
 #[test]
 fn live_pubsub_publish_polymorphic_record_payload_build_only() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
     let _exe = compile_and_build(
         "live_pubsub_record_payload_build_only",
-        SKY_PUBSUB_RECORD_PAYLOAD,
+        IPE_PUBSUB_RECORD_PAYLOAD,
     )?;
     Ok(())
 }
@@ -1029,7 +1029,7 @@ fn live_pubsub_publish_polymorphic_record_payload_build_only() -> Result<(), Box
 /// boxed value in a freshly-declared closure at the `KernelFn::UiOnSubmit` /
 /// `HtmlEventShape::Raw` emit sites (`ipe_backend_rust::emit_expr`) instead of
 /// forwarding the box itself — see that arm's comment for the full mechanism.
-const SKY_ONSUBMIT_TYPED_RECORD: &str = r#"module Main exposing (main)
+const IPE_ONSUBMIT_TYPED_RECORD: &str = r#"module Main exposing (main)
 
 import Std.Live as Live
 import Std.Ui as Ui
@@ -1094,13 +1094,13 @@ main =
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn live_onsubmit_typed_record_build_only() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
     let _exe = compile_and_build(
         "live_onsubmit_typed_record_build_only",
-        SKY_ONSUBMIT_TYPED_RECORD,
+        IPE_ONSUBMIT_TYPED_RECORD,
     )?;
     Ok(())
 }
@@ -1128,12 +1128,12 @@ fn live_onsubmit_typed_record_build_only() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, spawn, HTTP, or assertion error.
 #[test]
 fn live_onsubmit_typed_record_dispatches_decoded_payload() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
     let test_name = "live_onsubmit_typed_record";
-    let exe = compile_and_build(test_name, SKY_ONSUBMIT_TYPED_RECORD)?;
+    let exe = compile_and_build(test_name, IPE_ONSUBMIT_TYPED_RECORD)?;
     let port = pick_ephemeral_port()?;
     let _guard = spawn_and_wait_ready(test_name, &exe, port)?;
     let addr = format!("127.0.0.1:{port}");
@@ -1224,7 +1224,7 @@ fn live_onsubmit_typed_record_dispatches_decoded_payload() -> Result<(), BoxErro
 /// the `html_on_raw_fixed_` runtime helper (dispatches the fixed value
 /// directly, no decode attempt) instead of `html_on_raw_`
 /// (`ipe_backend_rust::emit_expr`'s `is_definitely_not_callable` gate).
-const SKY_ONSUBMIT_BARE_MSG: &str = r#"module Main exposing (main)
+const IPE_ONSUBMIT_BARE_MSG: &str = r#"module Main exposing (main)
 
 import Std.Live as Live
 import Std.Html exposing (..)
@@ -1295,11 +1295,11 @@ main =
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn live_onsubmit_bare_msg_build_only() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
-    let _exe = compile_and_build("live_onsubmit_bare_msg_build_only", SKY_ONSUBMIT_BARE_MSG)?;
+    let _exe = compile_and_build("live_onsubmit_bare_msg_build_only", IPE_ONSUBMIT_BARE_MSG)?;
     Ok(())
 }
 
@@ -1332,12 +1332,12 @@ fn live_onsubmit_bare_msg_build_only() -> Result<(), BoxError> {
 /// Propagates any pipeline, build, spawn, HTTP, or assertion error.
 #[test]
 fn live_onsubmit_bare_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
     let test_name = "live_onsubmit_bare_msg";
-    let exe = compile_and_build(test_name, SKY_ONSUBMIT_BARE_MSG)?;
+    let exe = compile_and_build(test_name, IPE_ONSUBMIT_BARE_MSG)?;
     let port = pick_ephemeral_port()?;
     let _guard = spawn_and_wait_ready(test_name, &exe, port)?;
     let addr = format!("127.0.0.1:{port}");
@@ -1428,7 +1428,7 @@ fn live_onsubmit_bare_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
 // assertion.
 
 /// `onSubmit` payload is a RECORD literal, `Msg` is a record alias.
-const SKY_ONSUBMIT_RECORD_LITERAL: &str = r#"module Main exposing (main)
+const IPE_ONSUBMIT_RECORD_LITERAL: &str = r#"module Main exposing (main)
 
 import Std.Live as Live
 import Std.Html exposing (..)
@@ -1474,7 +1474,7 @@ main =
 "#;
 
 /// `onSubmit` payload is a TUPLE literal, `Msg` is a tuple alias.
-const SKY_ONSUBMIT_TUPLE_LITERAL: &str = r#"module Main exposing (main)
+const IPE_ONSUBMIT_TUPLE_LITERAL: &str = r#"module Main exposing (main)
 
 import Std.Live as Live
 import Std.Html exposing (..)
@@ -1524,7 +1524,7 @@ main =
 "#;
 
 /// `onSubmit` payload is a LIST literal, `Msg` is a list alias.
-const SKY_ONSUBMIT_LIST_LITERAL: &str = r#"module Main exposing (main)
+const IPE_ONSUBMIT_LIST_LITERAL: &str = r#"module Main exposing (main)
 
 import Std.Live as Live
 import Std.Html exposing (..)
@@ -1579,51 +1579,51 @@ main =
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn live_onsubmit_record_literal_build_only() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
     let _exe = compile_and_build(
         "live_onsubmit_record_literal_build_only",
-        SKY_ONSUBMIT_RECORD_LITERAL,
+        IPE_ONSUBMIT_RECORD_LITERAL,
     )?;
     Ok(())
 }
 
 /// Compound-literal onSubmit seal — BUILD-ONLY: a TUPLE-literal `onSubmit`
-/// payload must compile end-to-end (see [`SKY_ONSUBMIT_TUPLE_LITERAL`]).
+/// payload must compile end-to-end (see [`IPE_ONSUBMIT_TUPLE_LITERAL`]).
 ///
 /// # Errors
 ///
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn live_onsubmit_tuple_literal_build_only() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
     let _exe = compile_and_build(
         "live_onsubmit_tuple_literal_build_only",
-        SKY_ONSUBMIT_TUPLE_LITERAL,
+        IPE_ONSUBMIT_TUPLE_LITERAL,
     )?;
     Ok(())
 }
 
 /// Compound-literal onSubmit seal — BUILD-ONLY: a LIST-literal `onSubmit`
-/// payload must compile end-to-end (see [`SKY_ONSUBMIT_LIST_LITERAL`]).
+/// payload must compile end-to-end (see [`IPE_ONSUBMIT_LIST_LITERAL`]).
 ///
 /// # Errors
 ///
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn live_onsubmit_list_literal_build_only() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
     let _exe = compile_and_build(
         "live_onsubmit_list_literal_build_only",
-        SKY_ONSUBMIT_LIST_LITERAL,
+        IPE_ONSUBMIT_LIST_LITERAL,
     )?;
     Ok(())
 }
@@ -1651,7 +1651,7 @@ fn live_onsubmit_list_literal_build_only() -> Result<(), BoxError> {
 /// `onSubmit m` where `m : Msg` is a `let`-bound bare (non-function)
 /// value. The payload lowers to `Expr::Var`, the shape a purely syntactic
 /// classifier would misroute to the decoder path.
-const SKY_ONSUBMIT_VAR_BOUND_MSG: &str = r#"module Main exposing (main)
+const IPE_ONSUBMIT_VAR_BOUND_MSG: &str = r#"module Main exposing (main)
 
 import Std.Live as Live
 import Std.Html exposing (..)
@@ -1726,13 +1726,13 @@ main =
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn live_onsubmit_var_bound_msg_build_only() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
     let _exe = compile_and_build(
         "live_onsubmit_var_bound_msg_build_only",
-        SKY_ONSUBMIT_VAR_BOUND_MSG,
+        IPE_ONSUBMIT_VAR_BOUND_MSG,
     )?;
     Ok(())
 }
@@ -1750,12 +1750,12 @@ fn live_onsubmit_var_bound_msg_build_only() -> Result<(), BoxError> {
 /// Propagates any pipeline, Cargo build, server-spawn, or HTTP error.
 #[test]
 fn live_onsubmit_var_bound_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
     let test_name = "live_onsubmit_var_bound_msg";
-    let exe = compile_and_build(test_name, SKY_ONSUBMIT_VAR_BOUND_MSG)?;
+    let exe = compile_and_build(test_name, IPE_ONSUBMIT_VAR_BOUND_MSG)?;
     let port = pick_ephemeral_port()?;
     let _guard = spawn_and_wait_ready(test_name, &exe, port)?;
     let addr = format!("127.0.0.1:{port}");
@@ -1835,7 +1835,7 @@ fn live_onsubmit_var_bound_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
 /// MainMsg + Send` cannot be shared between threads safely). So
 /// `ipe_lower::lower_let_pvar` + `flows_into_sync_kernel_call` promote the
 /// let-bound closure to `Arc<dyn Fn + Send + Sync>` at its declaration.
-const SKY_ONSUBMIT_LET_BOUND_HANDLER: &str = r#"module Main exposing (main)
+const IPE_ONSUBMIT_LET_BOUND_HANDLER: &str = r#"module Main exposing (main)
 
 import Std.Live as Live
 import Std.Ui as Ui
@@ -1902,7 +1902,7 @@ main =
 /// closure literal to promote) and sufficient (Rust type inference propagates
 /// the `Arc` type through each single-owner move), so
 /// `flows_into_sync_kernel_call` must be alias-transparent to reach the root.
-const SKY_ONSUBMIT_LET_ALIAS_CHAIN: &str = r#"module Main exposing (main)
+const IPE_ONSUBMIT_LET_ALIAS_CHAIN: &str = r#"module Main exposing (main)
 
 import Std.Live as Live
 import Std.Ui as Ui
@@ -1971,20 +1971,20 @@ main =
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn live_onsubmit_let_bound_handler_build_only() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
     let _exe = compile_and_build(
         "live_onsubmit_let_bound_handler_build_only",
-        SKY_ONSUBMIT_LET_BOUND_HANDLER,
+        IPE_ONSUBMIT_LET_BOUND_HANDLER,
     )?;
     Ok(())
 }
 
 /// Let-alias chain onSubmit seal — BUILD-ONLY: a MULTI-HOP `let`-alias chain
 /// into `Ui.onSubmit` must compile end-to-end (see
-/// [`SKY_ONSUBMIT_LET_ALIAS_CHAIN`]). Guards the
+/// [`IPE_ONSUBMIT_LET_ALIAS_CHAIN`]). Guards the
 /// alias-transparent branch of `flows_into_sync_kernel_call`.
 ///
 /// # Errors
@@ -1992,13 +1992,13 @@ fn live_onsubmit_let_bound_handler_build_only() -> Result<(), BoxError> {
 /// Propagates any pipeline or Cargo build failure as a test error.
 #[test]
 fn live_onsubmit_let_alias_chain_build_only() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
     let _exe = compile_and_build(
         "live_onsubmit_let_alias_chain_build_only",
-        SKY_ONSUBMIT_LET_ALIAS_CHAIN,
+        IPE_ONSUBMIT_LET_ALIAS_CHAIN,
     )?;
     Ok(())
 }
@@ -2008,7 +2008,7 @@ fn live_onsubmit_let_alias_chain_build_only() -> Result<(), BoxError> {
 /// does NOT. The two pages must render DIFFERENT trees so a spurious
 /// re-route visibly destroys the form's handler index (same shape as
 /// `examples/12-skyvote`: form at `/auth/signup`, `notFound` = board).
-const SKY_ONSUBMIT_ROUTED_FORM: &str = r#"module Main exposing (main)
+const IPE_ONSUBMIT_ROUTED_FORM: &str = r#"module Main exposing (main)
 
 import Std.Live as Live
 import Std.Ui as Ui
@@ -2100,12 +2100,12 @@ main =
 /// Propagates any pipeline, spawn, or HTTP failure as a test error.
 #[test]
 fn live_unrouted_get_does_not_wipe_form_handlers() -> Result<(), BoxError> {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return Ok(());
     }
 
     let test_name = "live_unrouted_get_wipe";
-    let exe = compile_and_build(test_name, SKY_ONSUBMIT_ROUTED_FORM)?;
+    let exe = compile_and_build(test_name, IPE_ONSUBMIT_ROUTED_FORM)?;
     let port = pick_ephemeral_port()?;
     let _guard = spawn_and_wait_ready(test_name, &exe, port)?;
     let addr = format!("127.0.0.1:{port}");

@@ -40,7 +40,7 @@ use crate::ast;
 ///
 /// # Errors
 ///
-/// Returns [`NameError::DuplicateType`] (SKY-N0012) when two unions share the
+/// Returns [`NameError::DuplicateType`] (IPE-N0012) when two unions share the
 /// SAME nominal identity `(home, name)` — the same type declared twice in one
 /// home module. Two DIFFERENT homes declaring the same short name
 /// (`Std.Palette.Color` and `Main.Color`) are NOT a duplicate: they mangle to

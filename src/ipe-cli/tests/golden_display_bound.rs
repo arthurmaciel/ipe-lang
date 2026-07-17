@@ -23,7 +23,7 @@
 //!
 //! Run:
 //! ```text
-//! SKY_E2E=1 cargo test -p skyc --test golden_i186_display_bound
+//! IPE_E2E=1 cargo test -p skyc --test golden_i186_display_bound
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -44,7 +44,7 @@ fn entry_path(root: &Path) -> PathBuf {
 
 /// skyc-0: the compiler must accept the program AND emit `+ std::fmt::Display`
 /// on the wildcard-`any` renderer function's own generic — checked
-/// unconditionally (cheap, no `cargo`), independent of the `SKY_E2E` gate.
+/// unconditionally (cheap, no `cargo`), independent of the `IPE_E2E` gate.
 #[test]
 fn i186_skyc_accepts_and_bounds_fn_display() {
     let root = repo_root();
@@ -82,11 +82,11 @@ fn i186_skyc_accepts_and_bounds_fn_display() {
 }
 
 /// cargo-0 ∧ run-0: the emitted project actually compiles with `rustc` and
-/// prints the rendered value. Gated on `SKY_E2E=1` — the only check that would
+/// prints the rendered value. Gated on `IPE_E2E=1` — the only check that would
 /// have caught the original SEAL violation (E0277, `skyc build` clean).
 #[test]
 fn i186_cargo_builds_and_runs() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

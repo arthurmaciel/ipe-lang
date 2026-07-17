@@ -9,18 +9,18 @@ mod render;
 mod span;
 
 pub use code::{
-    ALL_CODES, Code, ISSUE_TRACKER_URL, SKY_I0001, SKY_I0010, SKY_I0011, SKY_I0100, SKY_I0101,
-    SKY_I0102, SKY_I0103, SKY_I0200, SKY_I0201, SKY_I0202, SKY_I0203, SKY_L0100, SKY_L0101,
-    SKY_L0102, SKY_L0103, SKY_L0104, SKY_L0105, SKY_L0106, SKY_L0107, SKY_L0108, SKY_L0110,
-    SKY_L0111, SKY_L0112, SKY_L0113, SKY_L0114, SKY_L0115, SKY_L0116, SKY_L0117, SKY_L0118,
-    SKY_L0119, SKY_L0120, SKY_L0121, SKY_L0122, SKY_L0123, SKY_L0124, SKY_L0125, SKY_L0126,
-    SKY_L0127, SKY_L0200, SKY_N0001, SKY_N0002, SKY_N0003, SKY_N0004, SKY_N0005, SKY_N0010, SKY_N0011,
-    SKY_N0012, SKY_N0013, SKY_N0020, SKY_N0021, SKY_N0022, SKY_N0023, SKY_N0024, SKY_N0025,
-    SKY_N0026, SKY_P0001, SKY_P0002, SKY_P0003, SKY_P0010, SKY_P0011, SKY_P0012, SKY_P0013,
-    SKY_P0014, SKY_P0015, SKY_P0016, SKY_P0017, SKY_P0020, SKY_P0021, SKY_P0030, SKY_P0031,
-    SKY_P0040, SKY_P0041, SKY_P0050, SKY_P0060, SKY_P0061, SKY_P0062, SKY_T0001, SKY_T0002,
-    SKY_T0003, SKY_T0004, SKY_T0010, SKY_T0011, SKY_T0012, SKY_T0013, SKY_T0014, SKY_T0015,
-    SKY_T0016, SKY_T0017, Severity, explain_page, title,
+    ALL_CODES, Code, ISSUE_TRACKER_URL, IPE_I0001, IPE_I0010, IPE_I0011, IPE_I0100, IPE_I0101,
+    IPE_I0102, IPE_I0103, IPE_I0200, IPE_I0201, IPE_I0202, IPE_I0203, IPE_L0100, IPE_L0101,
+    IPE_L0102, IPE_L0103, IPE_L0104, IPE_L0105, IPE_L0106, IPE_L0107, IPE_L0108, IPE_L0110,
+    IPE_L0111, IPE_L0112, IPE_L0113, IPE_L0114, IPE_L0115, IPE_L0116, IPE_L0117, IPE_L0118,
+    IPE_L0119, IPE_L0120, IPE_L0121, IPE_L0122, IPE_L0123, IPE_L0124, IPE_L0125, IPE_L0126,
+    IPE_L0127, IPE_L0200, IPE_N0001, IPE_N0002, IPE_N0003, IPE_N0004, IPE_N0005, IPE_N0010, IPE_N0011,
+    IPE_N0012, IPE_N0013, IPE_N0020, IPE_N0021, IPE_N0022, IPE_N0023, IPE_N0024, IPE_N0025,
+    IPE_N0026, IPE_P0001, IPE_P0002, IPE_P0003, IPE_P0010, IPE_P0011, IPE_P0012, IPE_P0013,
+    IPE_P0014, IPE_P0015, IPE_P0016, IPE_P0017, IPE_P0020, IPE_P0021, IPE_P0030, IPE_P0031,
+    IPE_P0040, IPE_P0041, IPE_P0050, IPE_P0060, IPE_P0061, IPE_P0062, IPE_T0001, IPE_T0002,
+    IPE_T0003, IPE_T0004, IPE_T0010, IPE_T0011, IPE_T0012, IPE_T0013, IPE_T0014, IPE_T0015,
+    IPE_T0016, IPE_T0017, Severity, explain_page, title,
 };
 pub use diagnostic::{
     AppShape, Applicability, CaseDefect, Construct, DResult, Diagnostic, Expected, ExpectedSet,
@@ -100,7 +100,7 @@ mod tests {
             span: Span::new(1, 2),
             msg: ParseError::UnknownChar('@'),
         };
-        assert_eq!(d.code(), SKY_P0010);
+        assert_eq!(d.code(), IPE_P0010);
         assert_eq!(d.severity(), Severity::Error);
         assert_eq!(d.primary_span(), Span::new(1, 2));
     }
@@ -120,8 +120,8 @@ mod tests {
                 path: Box::new([]),
             },
         };
-        assert_eq!(coarse.code(), SKY_T0001);
-        assert_eq!(rich.code(), SKY_T0001);
+        assert_eq!(coarse.code(), IPE_T0001);
+        assert_eq!(rich.code(), IPE_T0001);
     }
 
     #[test]
@@ -133,7 +133,7 @@ mod tests {
             },
         };
         assert_eq!(d.severity(), Severity::Warning);
-        assert_eq!(d.code(), SKY_T0011);
+        assert_eq!(d.code(), IPE_T0011);
     }
 
     #[test]
@@ -142,7 +142,7 @@ mod tests {
             span: Span::new(4, 9),
             msg: LowerError::Unsupported(Feature::BinOps),
         };
-        assert_eq!(d.code(), SKY_L0101);
+        assert_eq!(d.code(), IPE_L0101);
         assert_eq!(d.severity(), Severity::Error);
         assert_eq!(
             d.help(),
@@ -156,7 +156,7 @@ mod tests {
             where_: "lower",
             detail: "x".into(),
         };
-        assert_eq!(generic.code(), SKY_I0001);
+        assert_eq!(generic.code(), IPE_I0001);
         assert_eq!(generic.severity(), Severity::Bug);
         assert_eq!(generic.primary_span(), Span::DUMMY);
 
@@ -164,7 +164,7 @@ mod tests {
             where_: "intern.resolve",
             detail: "y".into(),
         };
-        assert_eq!(specific.code(), SKY_I0010);
+        assert_eq!(specific.code(), IPE_I0010);
     }
 
     #[test]
@@ -176,7 +176,7 @@ mod tests {
                 first: Span::new(2, 5),
             },
         };
-        assert_eq!(d.code(), SKY_N0010);
+        assert_eq!(d.code(), IPE_N0010);
         assert_eq!(
             d.help(),
             vec![HelpLine::SecondarySpan {
@@ -231,7 +231,7 @@ mod tests {
                 missing: Box::new(["Green".into(), "Blue".into()]),
             },
         };
-        assert_eq!(d.code(), SKY_T0010);
+        assert_eq!(d.code(), IPE_T0010);
         assert_eq!(
             d.help(),
             vec![

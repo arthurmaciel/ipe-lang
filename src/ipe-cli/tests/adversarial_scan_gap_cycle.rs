@@ -1,5 +1,5 @@
 //! Adversarial probe against the claim that
-//! "the driver's topological sort rejects cycles (SKY-N0021) before any
+//! "the driver's topological sort rejects cycles (IPE-N0021) before any
 //! `canonicalize` demand, so the production path never recurses into a
 //! cycle". That claim rests on `extract_imports_from_source` (a pre-parse
 //! STRING SCAN requiring a literal `"import "` prefix) seeing every edge the
@@ -8,7 +8,7 @@
 //! `import {- c -} B` are lexer-legal but scan-INVISIBLE.
 //!
 //! A scan-invisible edge that completes an import CYCLE therefore bypasses
-//! the driver's SKY-N0021 gate, and the `canonicalize` query recurses into
+//! the driver's IPE-N0021 gate, and the `canonicalize` query recurses into
 //! the cycle on the PRODUCTION build path. The cycle must surface as a
 //! diagnostic (as it did pre-salsa via the accumulated-map N0020 miss), never
 //! as a compiler panic.
@@ -66,7 +66,7 @@ fn scan_invisible_cycle_must_not_panic_the_driver() {
                 .unwrap_or("<non-string panic payload>");
             panic!(
                 "FINDING: the production driver PANICKED on a scan-invisible \
-                 import cycle (SKY-N0021 gate bypassed, salsa cycle unwind \
+                 import cycle (IPE-N0021 gate bypassed, salsa cycle unwind \
                  reached the user): {msg}"
             );
         }

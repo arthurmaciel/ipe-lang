@@ -328,7 +328,7 @@ where
 /// entry is inserted; if `sources` already holds the key (a user file squatting
 /// on `Std.Palette`, or an earlier injection), injection is skipped and the path
 /// is NOT tagged trusted. So a hostile `src/Std/Palette.sky` is canonicalised as
-/// `ModuleOrigin::User` and stays SKY-N0025-rejected.
+/// `ModuleOrigin::User` and stays IPE-N0025-rejected.
 ///
 /// Efficiency (design §7): the worklist is seeded only from imports that match a
 /// compiled-source module, so a build that imports none does zero work.
@@ -392,7 +392,7 @@ pub fn inject_compiled_std_closure(
 /// text, without a full parse.
 ///
 /// This is a token-level scan (real lexer — its edge set is a
-/// superset-or-equal of the AST's import edges, so the SKY-N0021 cycle gate
+/// superset-or-equal of the AST's import edges, so the IPE-N0021 cycle gate
 /// cannot be bypassed by lexer-legal-but-unusual spelling such as
 /// `import\tB`) used by the topo-sort driver to build the import graph
 /// before any canonicalisation runs. It recognises:
@@ -619,7 +619,7 @@ import String
     fn inject_closure_does_not_tag_user_squat_as_trusted() {
         // SECURITY: a user file already occupying the Std.Palette key is NOT
         // overwritten and NOT tagged trusted — it will canonicalise as User and
-        // hit SKY-N0025.
+        // hit IPE-N0025.
         let mut sources: BTreeMap<Vec<String>, (PathBuf, String)> = BTreeMap::new();
         sources.insert(
             vec!["Main".to_owned()],

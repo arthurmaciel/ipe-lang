@@ -2,19 +2,19 @@
 //!
 //! Historical context: `Ui/Charts.sky` in example 17 originally used `(Html Msg)`
 //! in annotations without `import State exposing (..)`.  The Rust compiler ICE'd
-//! with SKY-I0001 because `ir_type_from_canon` had a unique-match heuristic that
+//! with IPE-I0001 because `ir_type_from_canon` had a unique-match heuristic that
 //! searched `enum_variants` by name when `home = []` and no builtin matched.  The
 //! heuristic ICE'd when zero or multiple matches existed.
 //!
 //! **Total type-name resolution** (replaces the heuristic): unknown unqualified
-//! type names fail closed at canon time with SKY-N0002 (`TypeNotFound`).
+//! type names fail closed at canon time with IPE-N0002 (`TypeNotFound`).
 //! The heuristic in `ir_type_from_canon` and `ir_type_from_ty` is removed.
 //! Examples 16 and 17 were updated to add the missing `import State exposing (..)`
 //! so they compile cleanly without the heuristic.  See `golden_i138_total_resolution`
 //! for the error-path regression gate.
 //!
 //! These tests only check that `skyc::build` succeeds (exit 0); they do NOT
-//! build or run the emitted Rust project and do NOT require `SKY_E2E`.
+//! build or run the emitted Rust project and do NOT require `IPE_E2E`.
 //!
 //! Run:
 //! ```text
@@ -57,7 +57,7 @@ fn assert_skyc_exit0(label: &str, entry_rel: &str) {
 }
 
 /// Example 17 (skymon) — `Ui/Charts.sky` uses `(Html Msg)` in annotations
-/// without `import State`.  Regression for SKY-I0001 in `ir_type_from_canon`.
+/// without `import State`.  Regression for IPE-I0001 in `ir_type_from_canon`.
 #[test]
 fn ex17_skymon_exits_zero() {
     assert_skyc_exit0("ex17_skymon", "examples/17-skymon/src/Main.sky");
@@ -81,7 +81,7 @@ fn ex10_live_component_exits_zero() {
 ///    declared `K::FontFamily => fun(list(string()), attr(var(0)))` but the
 ///    Sky API is `Font.family : String -> Attribute msg`.  The wrong `List
 ///    String` scheme leaked a phantom `String = List String` constraint into
-///    the merged solve, which surfaced as a spurious SKY-T0001 at the `::` cons
+///    the merged solve, which surfaced as a spurious IPE-T0001 at the `::` cons
 ///    site in `State.sky:158` — a completely unrelated line.  Fixed by
 ///    correcting the scheme to `fun(string(), attr(var(0)))` and changing the
 ///    runtime helper from `Vec<String>` to `String`.

@@ -27,11 +27,11 @@ efficiency > completeness > readability.
    nominally as `Ty::Con { module, name }`. No downstream re-coercion to `any`.
 2. **Make invalid states unrepresentable.** Kernel origin is a sum type
    (`Origin::Stdlib | Origin::Ffi { crate }`). A foreign-call AST that cannot be
-   rendered is rejected **at decode** with a `SKY-F4400` diagnostic — never
-   emit-and-cargo-fail. Diagnostic codes follow the house scheme `SKY-X####`
-   (`SKY-I`/`SKY-L`/`SKY-N`/`SKY-P`/`SKY-T` already in use; there are no bare
-   `E####` codes). This port **reserves the `SKY-F` block for FFI diagnostics** —
-   `SKY-F4400` is its first member.
+   rendered is rejected **at decode** with a `IPE-F4400` diagnostic — never
+   emit-and-cargo-fail. Diagnostic codes follow the house scheme `IPE-X####`
+   (`IPE-I`/`IPE-L`/`IPE-N`/`IPE-P`/`IPE-T` already in use; there are no bare
+   `E####` codes). This port **reserves the `IPE-F` block for FFI diagnostics** —
+   `IPE-F4400` is its first member.
 
 ---
 
@@ -89,7 +89,7 @@ Every inspector invocation and every crate compile MUST run inside a jail with:
 |---|---|---|
 | **Network** | **Denied by default.** No egress during inspect/compile. Opt-in fetch is a *separate, explicit* phase (A.4). | `bwrap --unshare-net` (new empty net namespace, no loopback needed) |
 | **Filesystem** | Read-only bind of the toolchain + a **scoped, per-invocation tempdir** as the only writable mount. No `$HOME`, no `~/.cargo` writable, no project tree. | `bwrap --ro-bind / /`, `--tmpfs /home`, `--bind <scoped-tmp> <scoped-tmp>`, `--bind <ro cargo registry cache>` |
-| **Env** | Scrubbed. No secrets (`SKY_*`, `AWS_*`, tokens) pass in. `CARGO_NET_OFFLINE=1` set. | explicit env allowlist |
+| **Env** | Scrubbed. No secrets (`IPE_*`, `AWS_*`, tokens) pass in. `CARGO_NET_OFFLINE=1` set. | explicit env allowlist |
 | **Process/PID** | New PID namespace; no ptrace of host. | `bwrap --unshare-pid --unshare-uts --unshare-ipc` |
 | **Resources** | Wall-clock timeout, RSS cap, CPU cap, output-size cap on the JSON. | `timeout(1)` wrapper + rlimits (`--rlimit` via a prlimit pre-exec) + a max-bytes read on stdout |
 | **Syscall** | Optional seccomp profile denying the obvious escape/persist syscalls. | `bwrap --seccomp <fd>` (stretch; document as v2) |
@@ -218,7 +218,7 @@ M-0  inspector hardening ────────── parallel-safe (disjoint 
 M4   kernel registry ───────────── BLOCKS the consumer side entirely
         │
 M-A  PkgInfo decode (parse-don't-validate)
-M-B  Call AST decode + SKY-F4400 gate  (FfiCall)  ← the render-totality keystone
+M-B  Call AST decode + IPE-F4400 gate  (FfiCall)  ← the render-totality keystone
 M-C  scalar coercion (NumCoerce)   ← leaf, no deps beyond types
 M-D  sync wrapper emit (Ffi.emitRustFile) + .ipei + kernel.json
 M-E  generic monomorphisation (FfiInstance) + closure gates + MODELLABLE_5 fence
@@ -247,13 +247,13 @@ does not start M-D/M-E against a `KernelFn` enum that has to be re-keyed later.
 - **Opaque foreign types → `Ty::Con { module, name }`.** The `.ipei` catalogue is
   the type-env seed; opaque types unify nominally, never re-coerce to `any`.
 
-### M-B — `Call` AST decode + the `SKY-F4400` reject-at-decode gate (keystone)
+### M-B — `Call` AST decode + the `IPE-F4400` reject-at-decode gate (keystone)
 - **Port from:** `FfiCall.hs` in full — `data Call/CallKind/Receiver/ByKind/
   ClosureKind/TypeRef` (73-226), `validateCall` (256-333), `parseCall` (764-820),
   `renderCall`/`renderRetType`/`renderArgType`/`renderTypeRef` (382-756).
 - **This is the "invalid states unrepresentable" core.** `parseCall` runs
   `validateCall` inside the `serde` decode; a malformed `Call` is a **hard decode
-  error**, surfaced as diagnostic **`SKY-F4400`** ("foreign-call AST cannot be
+  error**, surfaced as diagnostic **`IPE-F4400`** ("foreign-call AST cannot be
   rendered"). It never reaches emission. The seven structural checks
   (`FfiCall.hs:246-333`, the seventh being the `iterAdapters` target-is-`Vec`
   check dispatched at `FfiCall.hs:299`) guarantee `renderCall` is **total** once decode
@@ -268,14 +268,14 @@ does not start M-D/M-E against a `KernelFn` enum that has to be re-keyed later.
   `parseCall`'s `fail String` are stringly-typed error carriers that MUST NOT
   port verbatim — a `Result String a` in a public surface violates the
   no-`Result String a` non-regression rule (CLAUDE.md §8). The Rust decoder
-  returns `Result<Call, Diagnostic>` where `Diagnostic` carries the `SKY-F4400`
+  returns `Result<Call, Diagnostic>` where `Diagnostic` carries the `IPE-F4400`
   code + structured span/reason; the serde error path is adapted into that typed
   `Diagnostic`, never surfaced as a bare `String`.
 - **Port `NumCoerce` first as a leaf dep** (`FfiCall`/`FfiInstance` import it;
   `Ffi → FfiInstance → FfiCall` import cycle means `NumCoerce` must be the leaf) —
   see M-C.
 - **Drift-fence test:** a decode corpus of accept/reject `Call` JSON (mirror
-  `FfiCallSpec.hs`) asserting each of the seven checks rejects with `SKY-F4400`
+  `FfiCallSpec.hs`) asserting each of the seven checks rejects with `IPE-F4400`
   and each well-formed call renders byte-stable.
 
 ### M-C — scalar numeric coercion (`NumCoerce`), correctness gate (risk #4)
@@ -323,7 +323,7 @@ does not start M-D/M-E against a `KernelFn` enum that has to be re-keyed later.
   `modellableTrait` (292), `rustTypeHasTrait` (297), `traitsOfRustType` (408),
   the closure-capture gate `closureCaptureGate`/`skyCaptureIsClone`/
   `rustTypeIsClone` (308-390), `synthesiseGenericWrapper` (518), `closureDropReason`
-  (897), and the `SKY-F4400`-family diagnostics (`mkClosedSetError:184`,
+  (897), and the `IPE-F4400`-family diagnostics (`mkClosedSetError:184`,
   `mkTraitBoundError:200`, `mkUnmodellableBoundError:227`, `mkUnmodellableFnError`).
 - **MODELLABLE_5 drift fence (explicit deliverable).** The inspector's
   `MODELLABLE_5 = {Hash, Eq, Ord, Clone, Default}` (`main.rs:411`; doc comment
@@ -340,7 +340,7 @@ does not start M-D/M-E against a `KernelFn` enum that has to be re-keyed later.
   the monomorphic wrapper. Keep foreign generic entries instantiable per call site.
 - **Closure soundness:** a Sky lambda captured into a multi-call `Fn`/`FnMut` slot
   must be `Clone` (`closureNeedsClone`, `FfiCall.hs:581`; capture gate
-  `FfiInstance.hs:322-390`) — else `SKY-F4400`. This is the boundary that keeps
+  `FfiInstance.hs:322-390`) — else `IPE-F4400`. This is the boundary that keeps
   "well-typed ipê never panics" across FFI.
 - **Acceptance:** fixtures **92** (generic-self open-T), **105** (generic struct
   accessor). Regression coverage: walls **60/66/73/76/92/105/106**.
@@ -453,7 +453,7 @@ Sandbox first (bubblewrap, network-denied, tempdir-scoped, trust-gated `ipe add`
 because compiling an untrusted crate is RCE; harden the inspector to fail-closed
 (no unwrap/panic on adversarial rustdoc JSON) while preserving the over-drop
 keystone; then port the Haskell generator to `ipe_ffi` milestone-by-milestone
-behind the M4 kernel registry, with the `Call`-AST decode gate (`SKY-F4400`,
+behind the M4 kernel registry, with the `Call`-AST decode gate (`IPE-F4400`,
 parse-don't-validate) and the saturating `NumCoerce` as the correctness/soundness
 keystones, proving shim-free on the 10 pure crates (107-114) by byte-diff and
 explicitly deferring the async-SDK shim-free claim.

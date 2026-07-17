@@ -24,7 +24,7 @@ example sweep — every non-Go-only example must **build ✓, run ✓, and match
 Go reference ✓**.
 
 **Sweep: one red left.** Every per-example blocker is closed except
-`36-composite-server` (#221, `SKY-L0126`). Its diagnostic-misattribution half
+`36-composite-server` (#221, `IPE-L0126`). Its diagnostic-misattribution half
 (Defect B) has landed; the substantive half (Fix A) is in flight — see below.
 
 **Stdlib: 4 deferred families (#210).** DONE — all four seal (skyc-0 ⇒ cargo-0).
@@ -57,7 +57,7 @@ an untrusted-crate compile must never run unsandboxed.
 ## IN-FLIGHT — Fix A: clonable function-value carrier (#221)
 
 The one open sweep red. `36-composite-server` legally partially-applies a
-captured let-bound function value; our lowerer fail-closes it `SKY-L0126`
+captured let-bound function value; our lowerer fail-closes it `IPE-L0126`
 because the general first-class-function carrier is non-`Clone` `Box<dyn Fn>`.
 The reference Rust backend handles the exact shape with a clonable `Arc<dyn Fn>`
 carrier + pre-cloned captures.
@@ -85,7 +85,7 @@ rollback point). Expect one re-diagnosis round on `36` after the flip (latent
 
 | Item | Priority | Status |
 |---|---|---|
-| #221 `36-composite-server` SKY-L0126 — Fix A carrier flip | High | in-flight (Defect B landed) |
+| #221 `36-composite-server` IPE-L0126 — Fix A carrier flip | High | in-flight (Defect B landed) |
 
 Every other per-example blocker (SEAL breaches, kernel gaps, HttpRequest
 false-fold, entry-point Task.run elision, clone-relay binder sites, stdlib
@@ -116,9 +116,9 @@ fmt seals a settled tree exactly once.
 | Step | What | Status | Backlog |
 |---|---|---|---|
 | **A** | Repo-layout relocation (`git mv` only; no renames, no import edits) | pending | — |
-| **B** | Sky → Ipê rename (`sky_*`→`ipe_*`, `SKY-`→`IPE-`); **user-review-gated** — classify every finding, user approves a TSV, only then apply; upstream `../sky` refs stay `Sky` | pending | #212 |
+| **B** | Sky → Ipê rename (`sky_*`→`ipe_*`, `IPE-`→`IPE-`); **user-review-gated** — classify every finding, user approves a TSV, only then apply; upstream `../sky` refs stay `Sky` | pending | #212 |
 | **C** | Namespace flatten — single flat stdlib, nothing imported by default, LSP auto-import on first use (`namespace-imports-and-packaging-spec.md`) | pending | — |
-| **D** | Sanctioned `cargo fmt` seal (`SKY_ALLOW_FMT=1`), **LAST** — one workspace-wide pass on the settled tree, pinned rustfmt so CI + local agree | pending | #214 |
+| **D** | Sanctioned `cargo fmt` seal (`IPE_ALLOW_FMT=1`), **LAST** — one workspace-wide pass on the settled tree, pinned rustfmt so CI + local agree | pending | #214 |
 
 Alongside / feeding the push:
 
@@ -191,7 +191,7 @@ shim-free async-SDK binding is the acceptance metric.
 |---|---|---|
 | Incremental compilation (salsa) across the compiler + LSP — foundation for fast watch + hotpatching | Low | `docs/architecture/incremental-compilation-and-watch.md` |
 | Standard-library behaviour audit vs Elm semantics (JSON key order, integer-decoder strictness, float formatting, null/oneOf/nullable) | Low | `docs/architecture/stdlib-elm-behaviour-audit-plan.md` |
-| Full floating-point Set/Dict keys (ordered-float) + locale-correct case mapping (lifts SKY-L0117) | Low | `docs/architecture/float-keys-and-locale-case-design.md` |
+| Full floating-point Set/Dict keys (ordered-float) + locale-correct case mapping (lifts IPE-L0117) | Low | `docs/architecture/float-keys-and-locale-case-design.md` |
 
 ---
 

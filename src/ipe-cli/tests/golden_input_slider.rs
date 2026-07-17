@@ -1,16 +1,16 @@
 //! `Input.slider` must type-check and lower without
-//! `SKY-N0005: Input has no member slider`.
+//! `IPE-N0005: Input has no member slider`.
 //!
 //! Before this fix, `InputSlider` had a `StdlibKernel` variant and a type
 //! scheme but was missing from `lower.rs`'s arity table (`callee_arity`) and
 //! from the "lower as app-cfg-record" dispatch arm.  The lowerer's exhaustive
-//! match rejected it with a compile-time error; user code triggered `SKY-N0005`
+//! match rejected it with a compile-time error; user code triggered `IPE-N0005`
 //! at resolution time (the name was unregistered in `STDLIB_MODULE_QUALIFIERS`
 //! in older builds) or a `CompilerBug` panic at lowering.
 //!
 //! This test asserts that `skyc::build` succeeds on the fixture — no pipeline
 //! diagnostic, no panic.  It does NOT run cargo or the emitted binary (no
-//! `SKY_E2E` required).
+//! `IPE_E2E` required).
 
 use std::path::{Path, PathBuf};
 

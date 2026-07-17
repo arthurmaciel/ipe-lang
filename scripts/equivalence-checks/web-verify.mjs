@@ -99,7 +99,7 @@ const PANIC_PATTERNS = [
 ];
 
 async function main() {
-    const env = { ...process.env, PORT: String(port), SKY_LIVE_PORT: String(port) };
+    const env = { ...process.env, PORT: String(port), IPE_LIVE_PORT: String(port) };
     const serverLogPath = path.join(runDir, 'server.log');
     const serverLog = fs.createWriteStream(serverLogPath);
     const child = spawn(binary, [], { env, cwd: runDir });
@@ -132,17 +132,17 @@ async function main() {
     }
 
     // Playwright — reuse the system/OS chromium checks.sh already gates on
-    // (SKY_CHROMIUM, default /usr/bin/chromium) rather than requiring a
+    // (IPE_CHROMIUM, default /usr/bin/chromium) rather than requiring a
     // separate `npx playwright install chromium` browser-binary download.
-    const executablePath = process.env.SKY_CHROMIUM && fs.existsSync(process.env.SKY_CHROMIUM)
-        ? process.env.SKY_CHROMIUM
+    const executablePath = process.env.IPE_CHROMIUM && fs.existsSync(process.env.IPE_CHROMIUM)
+        ? process.env.IPE_CHROMIUM
         : undefined;
     const browser = await chromium.launch({ headless: true, executablePath });
     const context = await browser.newContext({
         viewport: { width: 1280, height: 720 },
-        recordVideo: process.env.SKY_RECORD ? { dir: runDir } : undefined,
+        recordVideo: process.env.IPE_RECORD ? { dir: runDir } : undefined,
     });
-    if (process.env.SKY_TRACE) {
+    if (process.env.IPE_TRACE) {
         await context.tracing.start({ screenshots: true, snapshots: true });
     }
     const page = await context.newPage();
@@ -256,7 +256,7 @@ async function main() {
         await page.screenshot({ path: path.join(runDir, 'error.png'), fullPage: false }).catch(() => {});
     }
 
-    if (process.env.SKY_TRACE) {
+    if (process.env.IPE_TRACE) {
         await context.tracing.stop({ path: path.join(runDir, 'trace.zip') }).catch(() => {});
     }
     await browser.close();

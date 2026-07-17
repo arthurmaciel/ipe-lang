@@ -25,11 +25,11 @@
 //!
 //! ## Why the emit-only assertions run in the DEFAULT gate
 //!
-//! `SKY_E2E`-gated tests do not run in the default `cargo nextest` gate
+//! `IPE_E2E`-gated tests do not run in the default `cargo nextest` gate
 //! (documented BACKLOG "Gate blind spot" row). This file's first two tests
 //! inspect the emitted `src/main.rs` text (no cargo build) so they run in
-//! the DEFAULT gate and pin the regression even when `SKY_E2E` is unset; the
-//! third test is the `SKY_E2E`-gated cargo-build-and-run proof that the
+//! the DEFAULT gate and pin the regression even when `IPE_E2E` is unset; the
+//! third test is the `IPE_E2E`-gated cargo-build-and-run proof that the
 //! emitted crate actually compiles AND prints the right sum.
 
 use std::path::{Path, PathBuf};
@@ -130,7 +130,7 @@ fn name_only_shape_emits_a_synthesised_record_struct() {
     );
 }
 
-/// The load-bearing SEAL proof: under `SKY_E2E=1`, actually `cargo build`
+/// The load-bearing SEAL proof: under `IPE_E2E=1`, actually `cargo build`
 /// the emitted crate and run it. A name-only fold would fail `cargo build` with
 /// E0308 (Int values assigned into `HttpRequest`'s String/Bool/List fields);
 /// the type-aware fold builds and prints `28` (`1+2+3+4+5+6+7`).
@@ -149,7 +149,7 @@ fn http_request_name_only_fold_seal_builds_and_runs() {
         "http_request_name_only_fold_seal: must be accepted, got: {built:?}"
     );
 
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = support::build_and_run_emitted("http_request_name_only_fold_seal", &out);

@@ -6,7 +6,7 @@
 //! the emitted Rust project with the shared cargo target, runs the binary, and
 //! checks its stdout against the cached oracle
 //! (`tests/golden/stdui/oracle.meta` + `expected_go.txt`).
-//! The test is gated on `SKY_E2E=1`; without it it returns early.
+//! The test is gated on `IPE_E2E=1`; without it it returns early.
 //!
 //! ## Oracle provenance
 //!
@@ -31,7 +31,7 @@
 //! Run:
 //!
 //! ```text
-//! SKY_E2E=1 cargo test golden_m7_stdui
+//! IPE_E2E=1 cargo test golden_m7_stdui
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -44,7 +44,7 @@ fn repo_root() -> PathBuf {
 }
 
 /// Compile / build / run `tests/golden/stdui/Main.sky` and return the golden
-/// directory together with the run outcome. Gated on `SKY_E2E=1`.
+/// directory together with the run outcome. Gated on `IPE_E2E=1`.
 fn build_run_m7() -> (PathBuf, support::RunOutcome) {
     let root = repo_root();
     let dir = root.join("tests").join("golden").join("stdui");
@@ -79,7 +79,7 @@ fn build_run_m7() -> (PathBuf, support::RunOutcome) {
 /// value is skyc's own correct output, not the Go oracle.
 #[test]
 fn stdui_layout_column_el_text_renders_html() {
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
 

@@ -1,13 +1,13 @@
 module Dep exposing (Box, mkBox)
 
--- SKY-L0114 misattribution regression fixture.
+-- IPE-L0114 misattribution regression fixture.
 --
--- #90 (2026-07-10) lifted the SKY-L0114 gate for a function DIRECTLY in an
+-- #90 (2026-07-10) lifted the IPE-L0114 gate for a function DIRECTLY in an
 -- enum-like (`Maybe`/`Result`/user-union) constructor payload — `Mk (Int ->
 -- Int)` alone no longer trips this diagnostic (it lowers and runs; see
 -- `docs/architecture/ctor-payload-function-design.md`). The residual gate
 -- this fixture now exercises: a function inside a `List`/`Dict`/`Set`
--- COLLECTION element still trips SKY-L0114 (the emitted `Vec<T>` element is
+-- COLLECTION element still trips IPE-L0114 (the emitted `Vec<T>` element is
 -- a real Rust generic instantiation; collection kernels `.clone()` their
 -- element, which `Box<dyn Fn>` cannot satisfy). The diagnostic span is the
 -- list-literal construction site — which lives in Dep's byte-namespace.

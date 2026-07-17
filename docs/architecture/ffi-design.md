@@ -21,7 +21,7 @@ to a **committed invariant**:
   per-backend emission, origin: Stdlib | Ffi{crate} }`. The stdlib populates rows
   at startup; **FFI populates rows from `.skyi` catalogues.** Same lookup, same
   call shape, same exhaustiveness story (a registry-coverage test + the
-  `SKY-L0108` "kernel not available yet" fail-fast).
+  `IPE-L0108` "kernel not available yet" fail-fast).
 - Net: the IR needs **nothing FFI-specific** — an FFI call lowers to
   `Call { callee: Kernel(id), args }` exactly like a stdlib call. That is the
   payoff of designing the registry now instead of entrenching the enum.

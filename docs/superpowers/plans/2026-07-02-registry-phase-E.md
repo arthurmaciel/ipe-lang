@@ -81,7 +81,7 @@ surface AST  --canon-->  Expr_::VarKernel { id: StdlibKernel }   (parse, don't v
   keep it that way; the `no_colliding_qualifier_name_pairs` test already
   guards it).
 - Diagnostics: `Diagnostic::Lower { span, msg: LowerError::Unsupported(Feature::Kernels) }`
-  = **SKY-L0108** (`crates/sky_diagnostics/src/render.rs`: "this kernel
+  = **IPE-L0108** (`crates/sky_diagnostics/src/render.rs`: "this kernel
   function is not available yet [feature: kernels]"). Fail-closed everywhere;
   never `panic!`, never a silent wildcard.
 
@@ -100,7 +100,7 @@ surface AST  --canon-->  Expr_::VarKernel { id: StdlibKernel }   (parse, don't v
   "kernel reference without an id" (`VarKernel { id: StdlibKernel }` — no
   `Option`, no fallback string pair).
 - **Fail-closed, not panics/wildcards.** Any residual miss surfaces as an
-  SKY-L0108-shaped `Err`, never `Ty::Var(u32::MAX)` and never `unreachable!()`.
+  IPE-L0108-shaped `Err`, never `Ty::Var(u32::MAX)` and never `unreachable!()`.
 - **Go-parity is golden-pinned.** No arm body changes value in Phase E — it is
   pure deletion of transitional paths. The per-kernel parity tripwires
   (`stdlib_scheme(k) ≡ legacy kernel_ty(decl(k).qualifier, decl(k).name)`) that
@@ -164,7 +164,7 @@ optional and should be sequenced *after* both.
 | home | `sky_canon/src/env.rs` | `VarHome::Kernel(Option<StdlibKernel>, Symbol, Symbol)`; built in `install_prelude_qualifiers` (QUALIFIERS + `stdlib_index`) and `install_builtin_vars` (Basics) |
 | producers | `sky_canon/src/resolve.rs` | two `Ok(canon::Expr_::VarKernel { id: *id, module: *m, name: *f })` sites (`resolve_var`, `resolve_qual_var`) |
 | gate test | `sky_canon/src/lib.rs` | `mod tests::canon_equals_registry` — forward (registry→canon) + G1 reverse |
-| callee | `sky_lower/src/lower.rs` | `fn lower_callee`; VarKernel arm: `if let Some(sk) = id { return Ok(Callee::Kernel(*sk)) }` then ~399-arm `match (self.resolve(module), self.resolve(name))` legacy table, tail `(_,_) => Err(unsupported(callee.span, Feature::Kernels))` = SKY-L0108 |
+| callee | `sky_lower/src/lower.rs` | `fn lower_callee`; VarKernel arm: `if let Some(sk) = id { return Ok(Callee::Kernel(*sk)) }` then ~399-arm `match (self.resolve(module), self.resolve(name))` legacy table, tail `(_,_) => Err(unsupported(callee.span, Feature::Kernels))` = IPE-L0108 |
 | legacy tripwire | `sky_lower/src/lower.rs` | `mod tests::decl_equiv_legacy_match` (forces `id = None`) |
 | identity | `sky_kernels/src/lib.rs` | `StdlibKernel`; `pub const fn decl(self) -> StdlibDecl`; `pub const ALL`; `no_colliding_qualifier_name_pairs`; `is_db/is_tea/is_server/is_ui/is_live/is_tui/is_webview` |
 | ir alias | `sky_ir/src/ir.rs` | `pub type KernelFn = sky_kernels::StdlibKernel;`  `Callee::Kernel(KernelFn)` |
@@ -456,7 +456,7 @@ lookup in `constrain_var_kernel`. Add the sentinel-ban and arity tests.
    and the `let ty = self.kernel_ty(module, name);` step. The `id` is now
    always resolvable (E0). Any call reaching this fn without a scheme is a
    compiler-invariant break, not a user feature gap → if a residual guard is
-   wanted, use `Diagnostic::CompilerBug`, **not** SKY-L0108 and **not**
+   wanted, use `Diagnostic::CompilerBug`, **not** IPE-L0108 and **not**
    `Ty::Var`.
 
 6. **Retire superseded tests.** Delete
@@ -524,7 +524,7 @@ lookup in `constrain_var_kernel`. Add the sentinel-ban and arity tests.
 ## Task E3 — Drop `module`/`name` (and `Option`) from `VarKernel`
 
 Deliverable 2. Collapse the kernel node to `VarKernel { id: StdlibKernel }`;
-delete the legacy `lower_callee` string table and SKY-L0108 kernel tail; re-key
+delete the legacy `lower_callee` string table and IPE-L0108 kernel tail; re-key
 the constrain obligations off the id. Sound because E1 (subset gate) +
 `no_colliding` (injectivity) + `some_node_decl_equals_node` (redundancy) all
 pass.
@@ -616,7 +616,7 @@ pass.
    ```
    **Delete** the ~399-arm `match (self.resolve(*module)?, self.resolve(*name)?)`
    legacy string table and its `(_, _) => Err(unsupported(callee.span,
-   Feature::Kernels))` [SKY-L0108] tail. The `self.resolve(...)` calls in that
+   Feature::Kernels))` [IPE-L0108] tail. The `self.resolve(...)` calls in that
    arm vanish with it. **Delete** the `decl_equiv_legacy_match` test (it forces
    `id = None`, a state that no longer exists) and any helper that constructs a
    `VarKernel` with `id: None`.

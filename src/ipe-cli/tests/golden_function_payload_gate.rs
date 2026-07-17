@@ -14,7 +14,7 @@
 //!
 //! This pins the recurring soundness-floor class (the sibling of the M2C
 //! function-in-record gate): the driver must produce EITHER a clean Sky
-//! diagnostic (SKY-L0114, for a shape #90 does NOT cover — a collection-of-
+//! diagnostic (IPE-L0114, for a shape #90 does NOT cover — a collection-of-
 //! functions payload, or a curried `andMap` chain) OR Rust that builds and runs
 //! with the semantically-correct output. It must NEVER accept the program and
 //! then cargo-fail.
@@ -59,14 +59,14 @@ fn rejects_cleanly_or_builds_and_runs_never_silent_cargo_fail() {
     let built = skyc::build(&entry, &out, &runtime);
 
     // The minimal sound outcome: a clean constructor-payload-function
-    // diagnostic naming the constructor-payload carrier (SKY-L0114), distinct
-    // from the record-field gap (SKY-L0107).
+    // diagnostic naming the constructor-payload carrier (IPE-L0114), distinct
+    // from the record-field gap (IPE-L0107).
     if let Err(CliError::Pipeline { diag, .. }) = &built {
         assert_eq!(
             diag.code(),
-            ipe_diagnostics::SKY_L0114,
+            ipe_diagnostics::IPE_L0114,
             "a function value reaching a constructor payload through a type \
-             variable must surface SKY-L0114, got: {diag:?}"
+             variable must surface IPE-L0114, got: {diag:?}"
         );
         return;
     }
@@ -75,14 +75,14 @@ fn rejects_cleanly_or_builds_and_runs_never_silent_cargo_fail() {
     // driver error, and never a silent accept that later cargo-fails.
     assert!(
         built.is_ok(),
-        "must reject cleanly (SKY-L0114) or accept fully — never another error: {:?}",
+        "must reject cleanly (IPE-L0114) or accept fully — never another error: {:?}",
         built.err()
     );
 
     // With proper support (an eager `Box<dyn Fn>` coercion), the emitted crate
-    // MUST build and run with the semantically-correct output. Gated on SKY_E2E
+    // MUST build and run with the semantically-correct output. Gated on IPE_E2E
     // so default runs stay fast.
-    if std::env::var("SKY_E2E").is_err() {
+    if std::env::var("IPE_E2E").is_err() {
         return;
     }
     let outcome = support::build_and_run_emitted("function_payload_gate", &out);
