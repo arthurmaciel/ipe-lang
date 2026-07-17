@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# scripts/test-examples-sweep-concurrency.sh — automated regression test for #35b.
+# scripts/equivalence-checks/test-examples-sweep-concurrency.sh — automated regression test for #35b.
 #
 # #35 (commit 6d93e85) fixed a race where two examples-sweep.sh invocations
-# sharing the SAME $CARGO_TARGET_DIR could corrupt each other's RUN/EQUIV
+# sharing the SAME $CARGO_TARGET_DIR could corrupt each other's RUN/EQUIVALENCE
 # results because skyc emits a fixed `sky-app` binary name into that shared
 # dir. The fix: flock a per-CARGO_TARGET_DIR lock file around the
-# build->resolve->run->equiv critical section, plus PID-suffix the sweep-wide
+# build->resolve->run->equivalence critical section, plus PID-suffix the sweep-wide
 # rows/table report files.
 #
 # #35b is the residual gap ONE LAYER DOWN, found by independent review: every
 # PER-EXAMPLE diagnostic file ($HIST/$n.skyc.log, $n.cargo.log,
-# $n.go.build.log, $n.rust.run.log, $n.go.run.log, $n.diff.txt, $n.equiv,
+# $n.go.build.log, $n.rust.run.log, $n.go.run.log, $n.diff.txt, $n.equivalence,
 # $n.run.log) was still keyed ONLY by bare example name. Two invocations
 # pointed at DIFFERENT CARGO_TARGET_DIRs (so #35's flock never contends
 # between them) but sharing the SAME $HIST cache dir could still race on
 # these bare-named files: both processes open-and-truncate the SAME path at
 # overlapping times, genuinely interleaving bytes from both processes into
 # one file — not just "last write wins". That can produce a false DIFFER
-# (corrupted diff.txt/.equiv) or a false equivalence pass (corrupted
+# (corrupted diff.txt/.equivalence) or a false equivalence pass (corrupted
 # go.run.log read back as if it matched). The fix (see scripts/examples-
 # sweep.sh's `diag()` helper) STAMP-suffixes every one of these paths with
 # the same per-invocation $STAMP (which already carries the PID) used for
@@ -32,7 +32,7 @@
 # tags every line of build/run output with a per-invocation MARKER and
 # sleeps between lines to maximise any real overlapping-write window. A REAL
 # (trivial, zero-dependency) `cargo build` still runs for the Rust half, so
-# the test also exercises the genuine BUILD/RUN/EQUIV control flow, not a
+# the test also exercises the genuine BUILD/RUN/EQUIVALENCE control flow, not a
 # reimplementation of it.
 #
 # PASS criteria:
@@ -48,8 +48,8 @@
 # Exit: 0 = pass, 1 = a real corruption/regression, 2 = environment/setup issue.
 set -uo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SCRIPT="$REPO/scripts/examples-sweep.sh"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SCRIPT="$REPO/scripts/equivalence-checks/examples-sweep.sh"
 ORIG_HOME="$HOME"
 FAIL=0
 
@@ -253,11 +253,11 @@ verify_lane() {
     fail "$cargoA: CONTAINS the other lane's dir tag ($other_dir_tag) — interleave-corruption reproduced!"
   fi
 
-  # equiv-stdout is engineered to match (fake go/rust binaries emit identical
+  # equivalence-stdout is engineered to match (fake go/rust binaries emit identical
   # text) — diff.txt should exist and be empty; still confirm it's THIS
   # lane's own file (no content check needed beyond existence/emptiness).
   [ -f "$difftxt" ] || fail "$difftxt: missing"
-  [ -s "$difftxt" ] && fail "$difftxt: non-empty (expected equiv-stdout — engineered fixture mismatch, investigate fake toolchain output)"
+  [ -s "$difftxt" ] && fail "$difftxt: non-empty (expected equivalence-stdout — engineered fixture mismatch, investigate fake toolchain output)"
 }
 
 verify_lane A B "$pidA" lane-B

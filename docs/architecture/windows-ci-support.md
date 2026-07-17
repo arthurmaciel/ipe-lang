@@ -102,8 +102,8 @@ still reaped; verdict = no PANIC string in 8 s). Two conditions gate the claim:
   crate links WebView2. Verification-required before trusting the webview row.
 - D-D (headless Tui RUN, filed follow-up). A `SKY_TUI_HEADLESS` one-shot render mode
   (`init → view → element_to_cells → stdout → exit 0`, no crossterm/TTY) would flip the
-  sweep's tui RUN column green on ALL hosts and unlock a real cell-grid EQUIV via
-  `equiv_tui_grid.py`. This is a runtime change, out of scope for "add Windows CI" — filed
+  sweep's tui RUN column green on ALL hosts and unlock a real cell-grid EQUIVALENCE via
+  `equivalence_tui_grid.py`. This is a runtime change, out of scope for "add Windows CI" — filed
   as a tracked task, not smuggled into this job.
 
 ---
@@ -174,7 +174,7 @@ backslashes choking bash builtins; (g) `pkill`/`script`/`xvfb-run` absent.
 | B4 | MED (fail-closed) | `python3` name. `free_port` (`checks.sh:72`) and preflight (`examples-sweep.sh:77`) call `python3`; Windows exposes `python`. → preflight `exit 2` aborts the whole sweep. Loud but wrong. | Resolve once in `env.sh`: `export SKY_PYTHON="${SKY_PYTHON:-$(command -v python3 || command -v python)}"`; replace bare `python3` at both sites with `"$SKY_PYTHON"`. Belt: `actions/setup-python@v5` guarantees a `python`. Fail-closed preserved (empty `SKY_PYTHON` → exit 2). |
 | B5 | MED (bash-builtin break) | `CARGO_TARGET_DIR` backslashes. The yml sets it to `${{ github.workspace }}/.cache/…` → `D:\a\…` under bash; native `cargo.exe` tolerates mixed separators but `mkdir -p` (`env.sh:30`) and `[ -x … ]` builtins choke, and B2's `.exe` probe strings become malformed. | Normalize once at the top of `env.sh` when `SKY_HOST_OS=windows`: `CARGO_TARGET_DIR="$(cygpath -u "$CARGO_TARGET_DIR")"` (or set a forward-slash value in the Windows job env). |
 | B6 | LOW→verify | `timeout` availability. Harness uses bare `timeout` pervasively incl. `timeout -k 5 8` (needs GNU `-k`). Git for Windows BUNDLES coreutils `timeout.exe` (`../sky` relies on it, no install). | No install step. Add a fail-loud preflight: `command -v timeout >/dev/null || { echo "ERROR: timeout(1) missing"; exit 2; }` so a runner-image change fails loud rather than degrading a whole column to SKIP. |
-| B7 | (repo) | `.gitattributes` absent. | Commit at repo root: `*.sh text eol=lf`, `*.py text eol=lf`, `*.sky text eol=lf`, `*.mjs text eol=lf`, `scripts/equiv-classification.tsv text eol=lf`, and (phase-2) the oracle `*.txt`/`*.expected` → `text eol=lf`. Also pins the staleness-hash input cross-OS (Q4). |
+| B7 | (repo) | `.gitattributes` absent. | Commit at repo root: `*.sh text eol=lf`, `*.py text eol=lf`, `*.sky text eol=lf`, `*.mjs text eol=lf`, `scripts/equivalence-checks/equivalence-classification.tsv text eol=lf`, and (phase-2) the oracle `*.txt`/`*.expected` → `text eol=lf`. Also pins the staleness-hash input cross-OS (Q4). |
 | B8 | LOW (present but no-op) | MSYS argv path-mangling. Audit: skyc/cargo receive only RELATIVE forward-slash paths (`--out sky-out/rust`, `--manifest-path sky-out/rust/Cargo.toml`); curl uses schemed URLs. No leading-slash argv reaches a native exe today → no live bug. | Do NOT blanket-disable conversion (D-A: it breaks the `//F` reap). Keep conversion ON; document `MSYS2_ARG_CONV_EXCL` as a scoped per-call hatch. |
 | B9 | LOW (handled) | `pkill`/`script`/`xvfb-run` absent. Already: `reap` guards on `pkill` (no-op), `exercise_tui` Windows SKIP, `exercise_webview` Windows arm omits xvfb. | No fix — but note `reap` being a Windows no-op is WHY B3's kill must live in `build_rust`. |
 | B10 | LOW (guard) | ripgrep. `is_out_of_scope` needs `rg`; its absence hard-exits (loud). rg is preinstalled on `windows-latest`. | Rely on the preinstalled `rg` (`command -v rg`); the `choco install ripgrep -y` fallback exists only for a runner-image regression and fetches LATEST (NOT version-pinned — do not claim "pinned"). Supply-chain: prefer the trusted preinstalled binary; the fetch path is a fail-loud last resort, not the norm. |
@@ -222,15 +222,15 @@ Resolution (both adopted):
   sweep step (keeps the harness's single responsibility intact).
 - Filed (D-D): a runtime `SKY_TUI_HEADLESS` one-shot mode so the example binary renders one
   frame via `element_to_cells` and exits 0 without crossterm — flips the sweep tui RUN
-  column green on all hosts and unlocks `equiv_tui_grid.py` cell-EQUIV. Runtime change,
+  column green on all hosts and unlocks `equivalence_tui_grid.py` cell-EQUIVALENCE. Runtime change,
   out of scope here; tracked, not faked.
 
 ---
 
-## Q4 — oracle / EQUIV line-ending normalization
+## Q4 — oracle / EQUIVALENCE line-ending normalization
 
-EQUIV is dormant today (`SKY_SWEEP_NO_EQUIV=1`, `examples-sweep.yml:66`; this repo has no
-Haskell-`sky` Go reference). The normalization is designed airtight now so turning EQUIV
+EQUIVALENCE is dormant today (`SKY_SWEEP_NO_EQUIV=1`, `examples-sweep.yml:66`; this repo has no
+Haskell-`sky` Go reference). The normalization is designed airtight now so turning EQUIVALENCE
 on in phase-2 cannot introduce a spurious-DIFFER.
 
 Root fact: Rust `println!`/`print!` and Go `fmt.Print*` both emit `\n` (no text-mode
@@ -253,18 +253,18 @@ Defense in depth, three layers:
    stabilizes the `sha256(source)` staleness key cross-OS.
 2. Harness sink — change `norm()` (`examples-sweep.sh:151`) from
    `grep -v '^[[:space:]]*$'` to `grep -v '^[[:space:]]*$' | sed 's/\r$//'`. Lands NOW
-   even with EQUIV dormant (cheap; guarantees a future Windows-emitted stream can't
+   even with EQUIVALENCE dormant (cheap; guarantees a future Windows-emitted stream can't
    spuriously DIFFER regardless of how a fixture got its endings). Apply the same
    `\r`-strip to the server-body compare (`checks.sh:342`) as defense-in-depth.
-3. Python normalizers — `equiv_normalize_html.py:223` reads text mode `encoding='utf-8'`;
+3. Python normalizers — `equivalence_normalize_html.py:223` reads text mode `encoding='utf-8'`;
    add `.replace('\r\n','\n')` immediately after read and pin stdout to `\n`.
-   `equiv_tui_grid.py` reads `'rb'` + `rstrip()` (already CRLF-tolerant per row); add an
+   `equivalence_tui_grid.py` reads `'rb'` + `rstrip()` (already CRLF-tolerant per row); add an
    explicit `\r\n`→`\n` at ingest for interior CR. Moot while tui SKIPs; cheap correctness
    for D-D.
 
 Architectural rule: keep the Go≡Rust oracle ubuntu-only (`if: matrix.os ==
 'ubuntu-latest'`, as `../sky` does). Reference bytes are OS-invariant for deterministic
-programs, so a second EQUIV host adds cost, not coverage — and it removes the entire
+programs, so a second EQUIVALENCE host adds cost, not coverage — and it removes the entire
 Windows-CRLF-in-oracle surface from the GATING path. Windows' distinct value is
 cross-platform MSVC build+run soundness, not re-checking Go parity. The layer-2/3
 normalizers are therefore defense-in-depth for Windows, not load-bearing — keep them
@@ -314,7 +314,7 @@ flag or a calendar timebox.
 
 Green-neutral SKIPs do NOT block the gate: per the verdict logic
 (`examples-sweep.sh:375-377`), a `skip` row is neither RED nor counted GREEN, and `n/a`
-EQUIV doesn't fail. So Windows tui-SKIP and live-browser-SKIP will not spuriously fail the
+EQUIVALENCE doesn't fail. So Windows tui-SKIP and live-browser-SKIP will not spuriously fail the
 gate once it flips — Windows fails only on a genuine `skyc-fail`/`cargo-fail`/`panic`/
 `noserve`/`DIFFER`.
 
@@ -340,7 +340,7 @@ value of adding Windows now.
   the nightly-only live-Go boundary in `sweep-and-parity-plan.md`.
 - WebView2 runtime is Microsoft-shipped and preinstalled — a trusted, non-downloaded OS
   component. No third-party binary is fetched to enable the webview RUN.
-- No `sky add`, no Go toolchain, no Haskell `sky` on the Windows job (EQUIV stays phased
+- No `sky add`, no Go toolchain, no Haskell `sky` on the Windows job (EQUIVALENCE stays phased
   off; the live-Go reference stays nightly-only, ubuntu-only). The only possible new fetch is a
   ripgrep fallback (`choco install ripgrep`, unpinned/LATEST) that fires ONLY if the
   preinstalled `rg` ever disappears from the runner image; the preinstalled binary is the
@@ -378,15 +378,15 @@ Workflow — `.github/workflows/examples-sweep.yml`:
 4. Windows ripgrep guard: `command -v rg || choco install ripgrep -y` (preinstalled `rg` preferred; `choco` fallback is unpinned/LATEST, fires only on image regression — not "pinned").
 5. Windows Node install WITHOUT Playwright `--with-deps`.
 6. Windows job env: forward-slash `CARGO_TARGET_DIR`; MSYS conversion left ON (D-A).
-7. Keep the Go≡Rust EQUIV/corpus step `if: matrix.os == 'ubuntu-latest'`.
+7. Keep the Go≡Rust EQUIVALENCE/corpus step `if: matrix.os == 'ubuntu-latest'`.
 8. The Linux-only "Free disk space" step stays Linux-only; add a Windows reclaim/`df`
    check if the shared target + full dep tree pressures the runner.
 9. Run-sweep step is already `shell: bash` — no change.
 
 Harness:
-10. `scripts/examples-sweep.sh` `build_rust`: add `_win_reap_app` + pre-build call +
+10. `scripts/equivalence-checks/examples-sweep.sh` `build_rust`: add `_win_reap_app` + pre-build call +
     os-error-5 retry arm (port from `../sky`).
-11. `scripts/examples-sweep.sh` `norm()`: append `| sed 's/\r$//'`.
+11. `scripts/equivalence-checks/examples-sweep.sh` `norm()`: append `| sed 's/\r$//'`.
 12. `scripts/lib/env.sh`: `SKY_PYTHON` resolution; `cygpath -u` `CARGO_TARGET_DIR`
     normalization on Windows; `.exe` candidates AHEAD of the `find` fallback in the
     `SKYC_BIN` probe loop (`env.sh:73-85`), miss → `binmiss` RED not the freshest-file
@@ -395,7 +395,7 @@ Harness:
     `find` fallback (same miss → `binmiss` RED rule as env.sh:73-85);
     `free_port` uses `"$SKY_PYTHON"`; server-body compare `\r`-strip. (tui SKIP + webview
     RUN arms already present — keep.)
-14. `scripts/lib/equiv_normalize_html.py` + `equiv_tui_grid.py`: `\r\n`→`\n` at ingest;
+14. `scripts/lib/equivalence_normalize_html.py` + `equivalence_tui_grid.py`: `\r\n`→`\n` at ingest;
     stdout pinned to `\n`.
 
 Repo:

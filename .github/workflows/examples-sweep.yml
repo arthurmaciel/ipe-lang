@@ -1,15 +1,15 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # ipê EXAMPLES sweep — the cornerstone correctness gate for the vendored examples.
 #
-# Runs `scripts/examples-sweep.sh` (per in-scope example: BUILD `skyc build` +
-# `cargo build` · RUN headless per shape · EQUIV Go≡Rust — PHASED, off for now).
+# Runs `scripts/equivalence-checks/examples-sweep.sh` (per in-scope example: BUILD `skyc build` +
+# `cargo build` · RUN headless per shape · EQUIVALENCE Go≡Rust — PHASED, off for now).
 # The single OS-aware `scripts/lib/checks.sh` drives every host — no per-OS fork.
 #
 # ── PHASED Go-parity (READ THIS) ─────────────────────────────────────────────
-# EQUIV needs a Go reference built by the Haskell `sky` compiler, which this repo
+# EQUIVALENCE needs a Go reference built by the Haskell `sky` compiler, which this repo
 # does NOT have. The first iteration therefore runs BUILD+RUN only
-# (SKY_SWEEP_NO_EQUIV=1). The commented `examples-sweep-equiv` job stub at the
-# bottom shows how EQUIV turns on later (build/obtain the Haskell `sky` reference).
+# (SKY_SWEEP_NO_EQUIV=1). The commented `examples-sweep-equivalence` job stub at the
+# bottom shows how EQUIVALENCE turns on later (build/obtain the Haskell `sky` reference).
 #
 # ── NON-GATING FOR NOW ───────────────────────────────────────────────────────
 # skyc currently implements only `Sky.Core.*`; examples reaching for `Std.*` /
@@ -62,7 +62,7 @@ jobs:
       # API); actions/cache carries cross-run warmth instead. Leaving
       # CARGO_INCREMENTAL at cargo's default lets the cached target do incremental.
       SKY_NO_SCCACHE: '1'
-      # Phase 1: BUILD + RUN, no Go≡Rust EQUIV (no Haskell `sky` reference here).
+      # Phase 1: BUILD + RUN, no Go≡Rust EQUIVALENCE (no Haskell `sky` reference here).
       SKY_SWEEP_NO_EQUIV: '1'
       # Night gate is opt-in (off by default) — but set FORCE too, belt-and-braces.
       SKY_SWEEP_FORCE: '1'
@@ -131,11 +131,11 @@ jobs:
       - name: Pre-warm runtime deps
         run: cargo build -p sky-runtime-rust || cargo build --workspace || true
 
-      - name: Run examples sweep (BUILD + RUN, no EQUIV)
+      - name: Run examples sweep (BUILD + RUN, no EQUIVALENCE)
         shell: bash
-        run: bash scripts/examples-sweep.sh
+        run: bash scripts/equivalence-checks/examples-sweep.sh
 
-      # Per-OS job summary: the BUILD·RUN·EQUIV table inline on the run page.
+      # Per-OS job summary: the BUILD·RUN·EQUIVALENCE table inline on the run page.
       # always() so it renders even on a RED verdict. COSMETIC — never fails the job.
       - name: Job summary (sweep table)
         if: always()
@@ -148,7 +148,7 @@ jobs:
           {
             echo "## examples-sweep — ${{ matrix.os }}"
             echo
-            echo "_Phase 1: BUILD + RUN only (Go≡Rust EQUIV is phased in later)._"
+            echo "_Phase 1: BUILD + RUN only (Go≡Rust EQUIVALENCE is phased in later)._"
             echo
             [ -n "$verdict" ] && { echo "**${verdict}**"; echo; }
             if [ -n "$table" ] && [ -f "$table" ]; then
@@ -171,17 +171,17 @@ jobs:
           if-no-files-found: warn
 
   # ───────────────────────────────────────────────────────────────────────────
-  # PHASE 2 (COMMENTED STUB) — Go≡Rust EQUIV. Turn this on once a Go reference is
+  # PHASE 2 (COMMENTED STUB) — Go≡Rust EQUIVALENCE. Turn this on once a Go reference is
   # available. Two supported paths:
   #   (a) Build the Haskell `sky` compiler in the job (haskell-actions/setup +
   #       cabal build exe:sky), put it on PATH as SKY_GO_BIN, drop
   #       SKY_SWEEP_NO_EQUIV, and add setup-go for the reference `go build`.
   #   (b) Consume vendored Go reference outputs (expected_go.txt per example,
   #       à la docs/architecture/e2e-and-oracle-caching.md) so no Go toolchain is
-  #       needed — extend equiv_for() to diff against the cached reference.
+  #       needed — extend equivalence_for() to diff against the cached reference.
   # ───────────────────────────────────────────────────────────────────────────
-  # examples-sweep-equiv:
-  #   name: examples-sweep-equiv (ubuntu, Go≡Rust)
+  # examples-sweep-equivalence:
+  #   name: examples-sweep-equivalence (ubuntu, Go≡Rust)
   #   runs-on: ubuntu-latest
   #   env:
   #     CARGO_TARGET_DIR: ${{ github.workspace }}/.cache/sky-rust-target
@@ -202,5 +202,5 @@ jobs:
   #       run: |
   #         # (in the sky checkout) cabal build exe:sky && ln -sf "$(cabal list-bin exe:sky)" /usr/local/bin/sky
   #         echo "TODO: wire the Haskell sky reference build"
-  #     - name: Run examples sweep (BUILD + RUN + EQUIV)
-  #       run: bash scripts/examples-sweep.sh   # EQUIV on: SKY_SWEEP_NO_EQUIV unset
+  #     - name: Run examples sweep (BUILD + RUN + EQUIVALENCE)
+  #       run: bash scripts/equivalence-checks/examples-sweep.sh   # EQUIVALENCE on: SKY_SWEEP_NO_EQUIV unset

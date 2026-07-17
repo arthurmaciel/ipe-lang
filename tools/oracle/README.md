@@ -1,6 +1,6 @@
 # Go-reference oracle binary
 
-The equivalence oracle (`scripts/examples-sweep.sh`, EQUIV column) diffs skyc's
+The equivalence oracle (`scripts/equivalence-checks/examples-sweep.sh`, EQUIVALENCE column) diffs skyc's
 emitted-Rust **runtime output** against the reference Haskell `sky` compiler's
 **Go-backend runtime output**. For that diff to mean "parity," the reference
 must be pinned to our **port target version**, not whatever stale `sky` happens

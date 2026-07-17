@@ -6,7 +6,7 @@
 # LOGIC (is_out_of_scope / build_set) is preserved VERBATIM — it is the authority
 # on which examples belong to the Rust backend. Only two paths are adapted for
 # this repo: the sky-stdlib index scan (this repo's stdlib lives under
-# crates/skyc/stdlib, not sky-stdlib/) and the equiv-classification overrides
+# crates/skyc/stdlib, not sky-stdlib/) and the equivalence-classification overrides
 # path (scripts/, not runtime-rust/scripts/).
 #
 # DERIVED, NOT HARDCODED. Every set is computed at call time from the example
@@ -27,7 +27,7 @@
 #   example_shape   <dir>   → tui|webview|fyne|server|live|cli
 #   build_set               → all_examples − Go-FFI (the BUILD sweep set).
 #   run_set / perf_set      → == build_set.
-#   equiv_mode <dir>        → none|stdout|body|scenario|pty (DERIVED, overrides on top).
+#   equivalence_mode <dir>        → none|stdout|body|scenario|pty (DERIVED, overrides on top).
 
 # ── all_examples: every candidate dir on disk, trailing slash stripped ───────
 all_examples() {
@@ -152,15 +152,15 @@ build_set() {
 run_set()  { build_set; }
 perf_set() { build_set; }
 
-# ── equiv_mode <dir>: DERIVE the Go≡Rust equivalence mode from the shape ─────
+# ── equivalence_mode <dir>: DERIVE the Go≡Rust equivalence mode from the shape ─────
 #   Go-FFI / out-of-scope → none · cli → stdout · server → body ·
 #   live → scenario · tui → pty · webview → none · fyne → none.
-# An OVERRIDE from equiv-classification.tsv (keyed by basename) wins if present.
-equiv_mode() {
+# An OVERRIDE from equivalence-classification.tsv (keyed by basename) wins if present.
+equivalence_mode() {
   local dir="$1" base over
   base="$(basename "$dir")"
-  if [ -f "$EQUIV_TSV" ]; then
-    over="$(awk -v k="$base" '!/^#/ && $1==k {print $2; exit}' "$EQUIV_TSV" 2>/dev/null)"
+  if [ -f "$EQUIVALENCE_TSV" ]; then
+    over="$(awk -v k="$base" '!/^#/ && $1==k {print $2; exit}' "$EQUIVALENCE_TSV" 2>/dev/null)"
     [ -n "$over" ] && { printf '%s\n' "$over"; return 0; }
   fi
   if is_out_of_scope "$dir"; then printf 'none\n'; return 0; fi
@@ -175,13 +175,13 @@ equiv_mode() {
   esac
 }
 
-# equiv_override_reason <dir> → the .tsv reason column for an overridden example.
-equiv_override_reason() {
+# equivalence_override_reason <dir> → the .tsv reason column for an overridden example.
+equivalence_override_reason() {
   local base; base="$(basename "$1")"
-  [ -f "$EQUIV_TSV" ] || return 0
-  awk -v k="$base" '!/^#/ && $1==k {$1="";$2="";sub(/^[[:space:]]+/,"");print;exit}' "$EQUIV_TSV" 2>/dev/null
+  [ -f "$EQUIVALENCE_TSV" ] || return 0
+  awk -v k="$base" '!/^#/ && $1==k {$1="";$2="";sub(/^[[:space:]]+/,"");print;exit}' "$EQUIVALENCE_TSV" 2>/dev/null
 }
 
 # The overrides file (overrides-on-top-of-derived), resolved relative to REPO.
 # ADAPTED path: scripts/, not runtime-rust/scripts/.
-EQUIV_TSV="${EQUIV_TSV:-$REPO/scripts/equiv-classification.tsv}"
+EQUIVALENCE_TSV="${EQUIVALENCE_TSV:-$REPO/scripts/equivalence-checks/equivalence-classification.tsv}"

@@ -86,8 +86,8 @@ reap() {
 NODE_BIN="$(for _nb in "$HOME"/.nvm/versions/node/*/bin; do [ -d "$_nb" ] && printf '%s\n' "$_nb"; done | sort -V | tail -1)"
 export PATH="${NODE_BIN:+$NODE_BIN:}$PATH"
 export SKY_CHROMIUM="${SKY_CHROMIUM:-/usr/bin/chromium}"
-DRIVER="${DRIVER:-$REPO/scripts/web-verify.mjs}"
-SCENARIOS="${SCENARIOS:-$REPO/scripts/verify-scenarios.mjs}"
+DRIVER="${DRIVER:-$REPO/scripts/equivalence-checks/web-verify.mjs}"
+SCENARIOS="${SCENARIOS:-$REPO/scripts/equivalence-checks/verify-scenarios.mjs}"
 WEB_OK=1
 command -v node >/dev/null 2>&1          || WEB_OK=0
 [ -x "$SKY_CHROMIUM" ]                    || WEB_OK=0
@@ -285,7 +285,7 @@ _boot_server_at() {
 # behaviourally-meaningful divergences. For non-HTML responses (JSON, plain
 # text) the body is returned unmodified.
 #
-# Requires: python3 + $REPO/scripts/lib/equiv_normalize_html.py (always present
+# Requires: python3 + $REPO/scripts/lib/equivalence_normalize_html.py (always present
 # alongside this file). Normaliser exit != 0 → fall through to the raw body so
 # an unexpected Python error doesn't silently flip MATCH to DIFFER.
 _norm_body_for_equiv() {
@@ -294,14 +294,14 @@ _norm_body_for_equiv() {
     local tf rc normed
     tf="$(mktemp "${TMPDIR:-/tmp}/sky-eqvnorm.XXXXXX.html")"
     printf '%s' "$body" >"$tf"
-    normed="$(python3 "$REPO/scripts/lib/equiv_normalize_html.py" "$tf" 2>>"$log")"
+    normed="$(python3 "$REPO/scripts/lib/equivalence_normalize_html.py" "$tf" 2>>"$log")"
     rc=$?
     rm -f "$tf"
     if [ "$rc" = 0 ]; then
       printf '%s' "$normed"
     else
       # normaliser unexpectedly failed — return raw body, log the issue
-      printf 'WARN: equiv_normalize_html.py exit %s for sky-root page\n' "$rc" >>"$log"
+      printf 'WARN: equivalence_normalize_html.py exit %s for sky-root page\n' "$rc" >>"$log"
       printf '%s' "$body"
     fi
   else
@@ -314,14 +314,14 @@ _norm_body_for_equiv() {
 # compare comparable GET-route bodies.  HTML bodies containing id="sky-root" are
 # normalized via _norm_body_for_equiv before comparison (collapses sky-id format,
 # attribute order, event-encoding, style-delivery differences). PRINTS a result:
-#   equiv-body N · equiv-serve · DIFFER · go-ref-broken · rust-broken
-# Used only in the PHASED Go≡Rust equiv step (NO_EQUIV=0); dormant in phase 1.
+#   equivalence-body N · equivalence-serve · DIFFER · go-ref-broken · rust-broken
+# Used only in the PHASED Go≡Rust equivalence step (NO_EQUIV=0); dormant in phase 1.
 exercise_server_equiv() {
   local go_bin="$1" rust_bin="$2" dir="$3" log="$4"
   local gport rport grun rrun gpid rpid route routes=() comparable=() n=0 verdict=""
   gport="$(free_port)"; rport="$(free_port)"
   if [ -z "$gport" ] || [ -z "$rport" ]; then
-    printf 'free_port unavailable (python3 missing) — cannot allocate equiv ports\n' >>"$log" 2>/dev/null
+    printf 'free_port unavailable (python3 missing) — cannot allocate equivalence ports\n' >>"$log" 2>/dev/null
     echo "rust-broken"; return 0
   fi
   [ "$gport" = "$rport" ] && rport=$((rport + 1))
@@ -404,6 +404,6 @@ exercise_server_equiv() {
   rm -rf "$grun" "$rrun"
 
   if [ -n "$verdict" ]; then echo "DIFFER"; return 0; fi
-  if [ "$n" -ge 1 ]; then echo "equiv-body $n"; return 0; fi
-  echo "equiv-serve"; return 0
+  if [ "$n" -ge 1 ]; then echo "equivalence-body $n"; return 0; fi
+  echo "equivalence-serve"; return 0
 }

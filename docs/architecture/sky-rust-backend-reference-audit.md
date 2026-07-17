@@ -49,11 +49,11 @@ not yet built on one side, or tooling ergonomics).
 | 17 | FFI crate binding (FfiCall/FfiInstance) | typed `Call` ADT + `FromJSON`-time `validateCall`; per-instantiation bindability gate + `E4400`; `cargoProfilePanicIsUnwind` guard | absent | **T+** (ours absent) | security → correctness | port invariants verbatim, no string-hole template — **FFI-phase (#42)** |
 | 18 | FFI inspector runner / sandbox | `quoteShell` arg-quoting only; **no build sandbox** (RCE-on-`sky add` exposure) | absent | **~** (arg-quote worth porting; sandbox is a gap BOTH miss) | security (top) | port arg-quoting #40; sandbox is ipê net-new hardening — **#41 (exceeds reference)** |
 | 19 | Console mini-app pre-build | atomic tmp+rename publish, crash-safe fingerprint-last ordering | absent | **~** | build ergonomics | reuse patterns when built — **post-DONE** |
-| 20 | Go-parity oracle harness (rust-equiv/equiv-corpus/equiv-render) | 3-layer differential vs Go reference; render normalizers drive strict UI diff | normalizers vendored byte-identical but **undriven**; sweep defaults `NO_EQUIV=1` | **T+** | correctness (green build ≠ correct) | stand up Go oracle, port corpus then render — **pre-DONE (literal endgame gate)** |
+| 20 | Go-parity oracle harness (rust-equivalence/equivalence-corpus/equivalence-render) | 3-layer differential vs Go reference; render normalizers drive strict UI diff | normalizers vendored byte-identical but **undriven**; sweep defaults `NO_EQUIV=1` | **T+** | correctness (green build ≠ correct) | stand up Go oracle, port corpus then render — **pre-DONE (literal endgame gate)** |
 | 21 | Deterministic parity fixtures (`tests/sky/`, 140) | end-to-end Sky projects pinning kernel/codegen behaviour on both backends | none (only 8 vendored soundness + 3 numeric-parity tests) | **T+** | correctness | port non-FFI subset, prioritize silent-divergence classes — **pre-sweep** |
 | 22 | Security render fixtures (`69-html-render-parity`, `70-style-injection`) | executable `</style>`-breakout + script-verbatim assertions | prose in `css-attr-injection-safe-emit.md`; styleNode hole open | **T+** | security | port as stored-HTML snapshots (no oracle needed) — **pre-sweep, gates #47** |
 | 23 | Emitted-code soundness harvester (`quality-audit.sh`) | enumerates panic/unsafe/`dyn Any`/lossy-cast over generated code | clippy hard-deny on vendored runtime only; not over emitted projects | **T+** (partial) | soundness | port pointed at `sky-out/rust/` — **before-push** |
-| 24 | Harness self-tests (`examples_test.sh`, `keep_go_parity_test.sh`) | test the sweep classifier itself | absent | **T+** | correctness | port alongside equiv harness — **with equiv port** |
+| 24 | Harness self-tests (`examples_test.sh`, `keep_go_parity_test.sh`) | test the sweep classifier itself | absent | **T+** | correctness | port alongside equivalence harness — **with equivalence port** |
 | 25 | Numeric-parity unit tests (decimal/money/regex) | none | `runtime/tests/{decimal,money,regex}_parity.rs` (Go values inline, no oracle needed) | **O+** | correctness-per-cost | keep + extend to json-escape / float-threshold / Dict-Set |
 | 26 | Runtime within-module behaviour (env, decimal, json, http, auth, jwt, cache, regex, telemetry) | reference baseline | fork uniformly hardened ahead (see §Runtime) | **O+** | security/correctness/soundness | keep; do NOT cargo-cult reference runtime back |
 | 27 | `stringify.rs` float sci-notation threshold | `!(-4..21)` (switch at exp≥21) | `!(-4..6)` (switch at exp≥6) + pinning test | **O+** | correctness | **resolved** — Go 1.26.2 oracle confirms flat exp≥6 (ours); reference's 21 diverges. Pinned in stringify.rs::float_go_v_parity + string.rs::ff_go_g_threshold_is_six_not_twentyone |
@@ -164,15 +164,15 @@ to.
 
 4. **Go-parity oracle harness + parity fixtures (the literal DONE gate).**
    Stand up a Go reference build path (invoke `../sky --backend go` cross-repo,
-   or cache Go outputs as fixtures); port `equiv-corpus.sh` first (pure-stdlib
-   stdout byte-diff — cheapest, highest signal), then `equiv-render.sh` (drives
-   the already-vendored `equiv_normalize_html.py` / `equiv_tui_grid.py`
+   or cache Go outputs as fixtures); port `equivalence-corpus.sh` first (pure-stdlib
+   stdout byte-diff — cheapest, highest signal), then `equivalence-render.sh` (drives
+   the already-vendored `equivalence_normalize_html.py` / `equivalence_tui_grid.py`
    normalizers); flip `examples-sweep.sh` off `SKY_SWEEP_NO_EQUIV`; port the
    harness self-tests. Author the non-FFI subset of `tests/sky/` as ipê
    fixtures now (they double as skyc goldens), prioritizing the
    silent-divergence classes: json HTML-escape, float display threshold,
    Dict/Set determinism, money rounding, the 6 `kernel-parity-probe*`. *NEW:
-   "Go oracle + equiv harness". Roadmap: fixtures pre-sweep; oracle + render
+   "Go oracle + equivalence harness". Roadmap: fixtures pre-sweep; oracle + render
    flip pre-DONE.*
 
 5. **Security render fixtures + FFI binding invariants.**
@@ -253,7 +253,7 @@ pre-sweep; #47 + F7 before push; sweep; parity; push; FFI post-DONE):
   before push (item 12).
 
 **Pre-DONE (literal endgame gate)**
-- Stand up Go oracle → port `equiv-corpus.sh` → `equiv-render.sh` → flip off
+- Stand up Go oracle → port `equivalence-corpus.sh` → `equivalence-render.sh` → flip off
   `SKY_SWEEP_NO_EQUIV` → port harness self-tests (items 20/24).
 
 **FFI-phase (post-DONE)**

@@ -12,7 +12,7 @@
 # repo or pre-set CARGO_TARGET_DIR / RUSTC_WRAPPER / SKYC_BIN (all `${VAR:-…}`).
 
 # ── PATH: prepend the canonical dev dirs, PRESERVE the inherited PATH ────────
-# cargo (and go, kept for the PHASED Go≡Rust equiv step) resolve from their
+# cargo (and go, kept for the PHASED Go≡Rust equivalence step) resolve from their
 # canonical local dirs first. The trailing `$PATH` is LOAD-BEARING on CI:
 # GitHub's setup-go / setup-node put `go` / `node` / `curl` on the runner PATH at
 # non-canonical locations — clobbering it would abort the sweep at its

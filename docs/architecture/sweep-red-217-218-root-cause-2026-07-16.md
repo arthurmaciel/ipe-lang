@@ -303,7 +303,7 @@ source-level intermediate closure).
 - A sibling variant with a SOURCE-level intermediate lambda (not
   eta-synthesized) that doesn't directly reference the symbol, pinning the
   class not the instance.
-- Sweep row: 18-job-queue back to green (build+run+Go-equiv).
+- Sweep row: 18-job-queue back to green (build+run+Go-equivalence).
 
 **CONFIDENCE: HIGH** — mechanism traced end-to-end (promotion → wrap decision →
 emitted bytes), minimal trigger reproduces the exact example failure shape,

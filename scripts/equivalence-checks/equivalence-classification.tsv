@@ -1,6 +1,6 @@
 # Go≡Rust equivalence-mode OVERRIDES — overrides-on-top-of-DERIVED.
 #
-# The equiv mode is DERIVED from example_shape by `equiv_mode` in lib/examples.sh
+# The equivalence mode is DERIVED from example_shape by `equivalence_mode` in lib/examples.sh
 # (cli→stdout, server→body, live→scenario, tui→pty, webview/fyne/Go-FFI→none).
 # Derivation guarantees coverage, so an author-added example AUTO-CLASSIFIES with
 # no line here. This file is ONLY exceptions: an example whose derived mode is
@@ -20,7 +20,7 @@
 # so examples-sweep tries the Go reference build, it FAILS (upstream v0.16.29 Go
 # codegen emits `undefined: T1` at main.go — memory: upstream-v0-16-29-go-t1-
 # regression), and the sweep auto-reports amber `go-ref-broken` — honestly
-# surfacing the upstream Go bug live, and auto-flipping back to `equiv-stdout` the
+# surfacing the upstream Go bug live, and auto-flipping back to `equivalence-stdout` the
 # moment upstream fixes T1 (no manual .tsv edit needed). FINDING #2.
 07-todo-cli        none   Std.Log format gap CLOSED (task #5): Rust's Log.* now emits Go's exact `TIMESTAMP LEVEL message` plain line + matching JSON shape (plain + json verified byte-identical to Go after timestamp-normalize). Still pinned `none` PURELY because the RFC3339Nano timestamp the banner prints is non-deterministic by nature — the stdout determinism auto-probe would false-DIFFER on it. NOT a Log.* parity gap any more.
 

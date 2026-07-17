@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Regression tests for scripts/lib/equiv_normalize_html.py.
+"""Regression tests for scripts/lib/equivalence_normalize_html.py.
 
-Covers BACKLOG #110 sub-item 1: `equiv_normalize_html.py` used to mask every
+Covers BACKLOG #110 sub-item 1: `equivalence_normalize_html.py` used to mask every
 SVG coordinate attribute to the literal `'#'` before diffing Go-oracle output
 against skyc/Rust output. That is a Rule-1 false-green hole (see
 docs/architecture/go-oracle-fixture-corpus-plan.md §3.3 and
@@ -21,7 +21,7 @@ The tests below prove:
      since a fix to a false-green hole that isn't itself verified to catch
      the bug it targets is not actually fixed.
 
-Run: python3 scripts/lib/test_equiv_normalize_html.py
+Run: python3 scripts/lib/test_equivalence_normalize_html.py
      (or: python3 -m unittest scripts.lib.test_equiv_normalize_html -v)
 """
 import os
@@ -31,7 +31,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import equiv_normalize_html as m  # noqa: E402
+import equivalence_normalize_html as m  # noqa: E402
 
 
 def old_mask(v):
@@ -110,7 +110,7 @@ class OldMaskWasAFalseGreenHoleTests(unittest.TestCase):
     def _norm_with(self, fn, html):
         """Run the Norm HTMLParser pass with SVG_COORD routed through `fn`
         instead of the module's real norm_svg_coord — isolates exactly the
-        one line of behaviour under test (scripts/lib/equiv_normalize_html.py
+        one line of behaviour under test (scripts/lib/equivalence_normalize_html.py
         `_emit`'s `elif in_svg and k in SVG_COORD:` branch)."""
         orig = m.norm_svg_coord
         m.norm_svg_coord = fn

@@ -12,14 +12,14 @@ Determinism: the kitchen-sink view is static (no timestamps/random on screen), s
 two runs at the same winsize render identically. Capture the INITIAL frame at a
 fixed size (the harness sets 80×rows via TIOCSWINSZ).
 
-Usage:  equiv_tui_grid.py <capture.raw> [rows]   # prints text grid + style grid
+Usage:  equivalence_tui_grid.py <capture.raw> [rows]   # prints text grid + style grid
 """
 import sys
 
 try:
     import pyte
 except ImportError:
-    sys.stderr.write("equiv_tui_grid: pyte not installed (pip install pyte)\n")
+    sys.stderr.write("equivalence_tui_grid: pyte not installed (pip install pyte)\n")
     sys.exit(2)
 
 
@@ -95,9 +95,9 @@ if __name__ == '__main__':
         try:
             rows = int(sys.argv[2])
         except ValueError:
-            sys.stderr.write("equiv_tui_grid: rows must be an integer, got %r\n" % sys.argv[2])
+            sys.stderr.write("equivalence_tui_grid: rows must be an integer, got %r\n" % sys.argv[2])
             sys.exit(2)
         if rows <= 0:
-            sys.stderr.write("equiv_tui_grid: rows must be positive, got %d\n" % rows)
+            sys.stderr.write("equivalence_tui_grid: rows must be positive, got %d\n" % rows)
             sys.exit(2)
     sys.stdout.write(render(sys.argv[1], rows))

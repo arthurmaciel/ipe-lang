@@ -1,10 +1,10 @@
 # Go-Oracle Fixture Corpus — regression manifest + normalizer wiring plan (task #51)
 
-Read-only, doc-only planning artifact. Prepares task #51 (Go-oracle + equiv
+Read-only, doc-only planning artifact. Prepares task #51 (Go-oracle + equivalence
 harness) for drop-in implementation. It catalogues the reference parity corpus
 under `../sky/runtime-rust/tests/sky/` (140 fixtures) into a concrete ipê
 regression manifest, prioritizes the port by **silent-divergence danger**, and
-specifies how the already-vendored render normalizers get wired, the equiv gate
+specifies how the already-vendored render normalizers get wired, the equivalence gate
 flipped on, and CRLF handled for cross-OS CI.
 
 **PRINCIPLES order — Security > Correctness > Soundness.** Every ruling below is
@@ -14,7 +14,7 @@ ordered by that priority. Two blocking rules govern the harness itself:
   *behaviourally-meaningful* difference — so a real Go≠ipê divergence renders as
   an empty diff — is a **correctness defect**, not a convenience. It silently
   ships a wrong runtime. Every masking/collapsing step in
-  `equiv_normalize_html.py` / `equiv_tui_grid.py` / the stdout `norm()` is
+  `equivalence_normalize_html.py` / `equivalence_tui_grid.py` / the stdout `norm()` is
   audited below for this.
 - **Rule 2 (no false red).** A normalizer that reports a DIFFER for two outputs
   that are behaviourally identical (implementation-freedom surface, or a
@@ -49,7 +49,7 @@ The FFI/non-FFI split was derived mechanically: a fixture is FFI iff its
 
 ## 1. Enumerated manifest — the 65 non-FFI fixtures
 
-Shape drives the equiv mode (reference `equiv_mode` in `lib/examples.sh`):
+Shape drives the equivalence mode (reference `equivalence_mode` in `lib/examples.sh`):
 `cli→stdout`, `server→body`, `live→scenario`, `tui→pty`, `webview→none`.
 
 **Divergence class** = the specific Go-vs-ipê behaviour each fixture guards.
@@ -158,7 +158,7 @@ tick.
 ### Tier 0 — pure-stdlib deterministic-stdout silent classes (port FIRST)
 
 These need **no** Go oracle and **no** render normalizer — just build both
-backends, run, `norm()` the stdout, byte-diff. They are the `equiv-corpus.sh`
+backends, run, `norm()` the stdout, byte-diff. They are the `equivalence-corpus.sh`
 default set and map onto ipê's existing numeric-parity unit tests. **Top
 silent-divergence fixtures to port first:**
 
@@ -204,7 +204,7 @@ are lower danger, but they are ipê goldens today and gate lowering changes.
 
 `69-html-render-parity`, `70-style-injection`, `71-style-merge`, `40-live-ui`,
 `34-live-pubsub-dict`, `38-tui-ui`, `41-tui-input`. Silent at the render layer;
-require `equiv_normalize_html.py` / `equiv_tui_grid.py` driven against a Go
+require `equivalence_normalize_html.py` / `equivalence_tui_grid.py` driven against a Go
 reference (see §3). `70-style-injection` and `69/71` also serve as the #47/F7
 gate (§4) and can land as **stored-HTML snapshots first**, no oracle needed.
 
@@ -212,7 +212,7 @@ gate (§4) and can land as **stored-HTML snapshots first**, no oracle needed.
 
 `21/22/24/43/68-server-413`, the `27–35` live scenarios, `17/18/19/20/66/68`
 db/auth/config CLIs. Structural; port once the server-body and live-scenario
-equiv paths in `examples-sweep.sh` are driven.
+equivalence paths in `examples-sweep.sh` are driven.
 
 ### Tier 4 — build-only
 
@@ -222,13 +222,13 @@ equiv paths in `examples-sweep.sh` are driven.
 
 ## 3. Normalizer wiring plan
 
-**Current state (verified):** `equiv_normalize_html.py` and `equiv_tui_grid.py`
+**Current state (verified):** `equivalence_normalize_html.py` and `equivalence_tui_grid.py`
 are **already vendored byte-identical** into `scripts/lib/`, and
-`scripts/examples-sweep.sh` already carries the EQUIV column, `build_go()`,
-`equiv_for()`, and the `SKY_SWEEP_NO_EQUIV` flag (default `1` = phase-1: BUILD +
-RUN, EQUIV skipped). `scripts/equiv-classification.tsv` is also ported
+`scripts/equivalence-checks/examples-sweep.sh` already carries the EQUIVALENCE column, `build_go()`,
+`equivalence_for()`, and the `SKY_SWEEP_NO_EQUIV` flag (default `1` = phase-1: BUILD +
+RUN, EQUIVALENCE skipped). `scripts/equivalence-checks/equivalence-classification.tsv` is also ported
 byte-identical. **What is missing:** the two standalone drivers
-(`equiv-corpus.sh`, `equiv-render.sh`), the 65 fixtures themselves, a Go oracle,
+(`equivalence-corpus.sh`, `equivalence-render.sh`), the 65 fixtures themselves, a Go oracle,
 and CRLF handling.
 
 ### 3.1 Drop-in steps
@@ -236,12 +236,12 @@ and CRLF handling.
 1. **Author the 65 fixtures** under `crates/skyc/tests/sky/<name>/` (mirroring
    the reference layout `src/Main.sky` + `sky.toml`). They double as skyc
    goldens. Port in the Tier 0→4 order above.
-2. **Port `equiv-corpus.sh`** (pure-stdlib deterministic-stdout driver) into
+2. **Port `equivalence-corpus.sh`** (pure-stdlib deterministic-stdout driver) into
    `scripts/`. Point `FIXROOT` at ipê's fixture dir. Its `CORPUS_DEFAULT` = the
    Tier-0 silent set. Build both backends via ipê's `skyc` (Go backend needs the
    oracle — §3.2).
-3. **Port `equiv-render.sh`** (live-HTML + tui-grid driver) into `scripts/`;
-   it already references `lib/equiv_normalize_html.py` / `lib/equiv_tui_grid.py`.
+3. **Port `equivalence-render.sh`** (live-HTML + tui-grid driver) into `scripts/`;
+   it already references `lib/equivalence_normalize_html.py` / `lib/equivalence_tui_grid.py`.
    `pyte` gates the tui path (SKIP if absent — a correct skip, not a false pass).
 4. **Stand up the Go oracle** — two viable modes:
    - **Live-oracle:** point `SKY_GO_BIN` at an external Haskell `sky` that emits
@@ -263,13 +263,13 @@ and CRLF handling.
 None of the three normalizers currently strips CR. On a Windows runner every
 fixture would false-RED (Rule 2 violation). Add, in this exact scope:
 
-- **stdout `norm()` (equiv-corpus.sh):** after the timestamp `sed` and
+- **stdout `norm()` (equivalence-corpus.sh):** after the timestamp `sed` and
   blank-line strip, add `| sed 's/\r$//'` (or `tr -d '\r'`) so CRLF ≡ LF.
-- **`equiv_normalize_html.py`:** on read, `html = open(...).read()
+- **`equivalence_normalize_html.py`:** on read, `html = open(...).read()
   .replace('\r\n','\n').replace('\r','\n')` before parsing, so a CR inside a
   text node or attribute value can't produce a phantom diff. (HTMLParser does
   not normalize CR.)
-- **`equiv_tui_grid.py`:** pyte already interprets `\r` as a terminal carriage
+- **`equivalence_tui_grid.py`:** pyte already interprets `\r` as a terminal carriage
   return (cursor-to-col-0), which is correct for ANSI capture — do **not** strip
   CR there; the raw byte stream must stay intact. Only the html/stdout paths get
   CRLF folding.
@@ -283,7 +283,7 @@ potential Rule-1 (false-green) hole; each re-serialization a potential Rule-2
 (false-red) hole. Findings:
 
 - **[FALSE-GREEN, must address] SVG coordinate masking** —
-  `equiv_normalize_html.py` sets every SVG coord attr (`d/x/y/points/width/…`)
+  `equivalence_normalize_html.py` sets every SVG coord attr (`d/x/y/points/width/…`)
   to `'#'` to hide a *known Go* float→int truncation bug (reference PR #136).
   For ipê this is a hole: a genuine ipê coordinate regression is masked → empty
   diff → false green. ipê is **not** bound to reproduce Go's truncation bug.
@@ -316,7 +316,7 @@ potential Rule-1 (false-green) hole; each re-serialization a potential Rule-2
   "fixed" to match Go. (This is the same class as the float threshold.)
 - **[CLEAN] attribute-order sort** — both sides sort alphabetically; the
   arbitrary map/HashMap order is correctly neutralized. No false red.
-- **[CLEAN] tui blank-cell style collapse** — `equiv_tui_grid.py` collapses
+- **[CLEAN] tui blank-cell style collapse** — `equivalence_tui_grid.py` collapses
   fg/attrs on blank cells (invisible on a space) to default; correct — compares
   what is seen. `pyte` absence → SKIP (correct skip).
 
