@@ -1,8 +1,8 @@
-//! #63 `Sky.Http.Middleware.withCsrf` golden.
+//! `Sky.Http.Middleware.withCsrf` golden.
 //!
 //! Pins that a `Sky.Http.Server` route wrapped in `Middleware.withCsrf` emits
 //! `middleware_with_csrf(...)` and that the emitted crate `cargo build`s (the
-//! seal: `skyc` exit 0 implies `cargo build` exit 0).
+//! Seal: `skyc` exit 0 implies `cargo build` exit 0).
 //!
 //! Compile-only assertions always run; the cargo build is `SKY_E2E=1`-gated
 //! with an ISOLATED `CARGO_TARGET_DIR` (a shared dir's fingerprint reuse can

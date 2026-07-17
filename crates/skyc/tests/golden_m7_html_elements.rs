@@ -1,4 +1,4 @@
-//! #76 batch 2 — Std.Html ELEMENT family end-to-end golden.
+//! Batch 2 — Std.Html ELEMENT family end-to-end golden.
 //!
 //! Compiles `tests/golden/m7_html_elements/Main.sky` through `skyc`, builds the
 //! emitted Rust project with the shared cargo target, runs the binary, and
@@ -80,7 +80,7 @@ fn html_element_family_renders_correct_tags() {
         );
     }
 
-    // WRONG-RENDER GUARD (#84): nothing collapses to <p>. The source uses no `p`
+    // WRONG-RENDER GUARD: nothing collapses to <p>. The source uses no `p`
     // element, so no `<p>` / `<p ` may appear.
     assert!(
         !html.contains("<p>") && !html.contains("<p "),
@@ -105,7 +105,7 @@ fn html_element_family_renders_correct_tags() {
         html.contains("<br />") && html.contains("<hr />"),
         "m7_html_elements: br/hr must self-close as themselves\n--- actual ---\n{html}"
     );
-    // `link` is void `<link … />`, NOT the `<a>` it was formerly folded into.
+    // `link` is void `<link … />`, NOT an `<a>`.
     assert!(
         html.contains("<link"),
         "m7_html_elements: link must render as <link>, not <a>\n--- actual ---\n{html}"

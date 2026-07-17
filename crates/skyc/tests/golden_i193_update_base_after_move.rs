@@ -1,9 +1,9 @@
-//! #193 regression — record-UPDATE base borrow ordered AFTER a consuming use.
+//! Regression — record-UPDATE base borrow ordered AFTER a consuming use.
 //!
-//! **The bug (exposed by the #193 MAX-seed change):** `count_var_uses` did NOT
+//! **The bug (exposed by the MAX-seed change):** `count_var_uses` did NOT
 //! count the record-update BASE occurrence of `sym` (`{ rec | … }` lowers to
 //! `(rec).clone()` — a borrow, so it was deemed "not a move, don't count").
-//! Under the pre-#193 SUM seed the over-count accidentally kept an earlier
+//! Under the pre-SUM seed the over-count accidentally kept an earlier
 //! consuming use cloned; the MAX seed removed that slack, so the last *counted*
 //! use (a by-value function argument) was made a bare MOVE while the later
 //! update base still borrowed the (now moved) value → E0382.
@@ -78,9 +78,9 @@ fn i193_update_base_skyc_accepts_and_clones_consuming_use() {
          got:\n{emitted}"
     );
     // At least two `model.clone()` occurrences: the access `(model.clone()).tag`
-    // AND the consuming `describe(model.clone())` argument.  Pre-fix the
-    // consuming argument was a bare `model` move (ordered before the update
-    // base borrow) → this count would drop below 2 and cargo E0382'd.
+    // AND the consuming `describe(model.clone())` argument.  A bare `model` move
+    // for the consuming argument (ordered before the update base borrow) would
+    // drop this count below 2 and cargo E0382.
     let clone_hits = emitted.matches("model.clone()").count();
     assert!(
         clone_hits >= 2,

@@ -19,7 +19,7 @@
 //! position — `append` / `concat` / `concatMap` / `take` / `zip` /
 //! `indexedMap` — carry accumulator/CPS bodies in
 //! `crates/skyc/stdlib/Sky/Core/List.sky` (byte-identical to upstream
-//! `sky-stdlib/Sky/Core/List.sky`). Task #68 made them CALLABLE, but as
+//! `sky-stdlib/Sky/Core/List.sky`). They are CALLABLE, but as
 //! ITERATIVE Rust KERNELS (not by routing to those pure-Sky bodies): canon
 //! anchors every `List.x` to `VarHome::Kernel` unconditionally, so the kernel
 //! path is the only exit-0-safe wiring (see

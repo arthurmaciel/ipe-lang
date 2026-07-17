@@ -19,8 +19,8 @@
 //! This fixture is tuned so the failing `Dep.sky` access sits at a byte offset
 //! that the old heuristic mis-attributes to `Main.sky` (its `main` body span
 //! numerically contains the offset with a smaller `lo_dist` than `Dep`'s `bad`
-//! body). Pre-fix this rendered `--> Main.sky:9`; post-fix it renders
-//! `--> Dep.sky:15`.
+//! body). This must render `--> Dep.sky:15`, not the `--> Main.sky:9` the old
+//! heuristic produces.
 //!
 //! Run:
 //! ```text

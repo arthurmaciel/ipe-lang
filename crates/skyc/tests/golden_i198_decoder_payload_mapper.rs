@@ -1,14 +1,14 @@
-//! BACKLOG #198 regression — a decode-combinator mapper lambda whose PARAMETER
+//! A decode-combinator mapper lambda whose PARAMETER
 //! is a function-typed decoder payload (`Decoder (a -> b)`) and whose body
 //! INVOKES that payload.
 //!
-//! Follow-up to #195 (same root cause, deeper surface). #195 rendered the
-//! `Decoder (a -> b)` payload as the runtime's owned, Send-only curry chain
-//! `Box<dyn FnOnce(a) -> b + Send>` at the `Decoder<T>` TYPE position (the
+//! A deeper surface of the same root cause as the `Decoder<T>`-type case. The
+//! `Decoder (a -> b)` payload renders as the runtime's owned, Send-only curry
+//! chain `Box<dyn FnOnce(a) -> b + Send>` at the `Decoder<T>` TYPE position (the
 //! PRODUCER side — `emit_types::render_type`'s `Decoder(Fun)` arm). But when
 //! that payload flows OUT of the decoder into a mapper's parameter —
 //! `JsonDec.map (\f -> f x) d`, `JsonDec.andThen (\f -> succeed (f x)) d` — the
-//! parameter's inferred type is a bare `Ty::Fun`, so `lower_lambda` stamped it
+//! parameter's inferred type is a bare `Ty::Fun`, so `lower_lambda` stamps it
 //! as `IrType::Fun`, which `render_type` emits as the SHARED callback form
 //! `Box<dyn Fn(a) -> b + Send + Sync>`. The producer supplies `FnOnce + Send`;
 //! the consumer's param expected `Fn + Send + Sync` → wrong trait (`Fn` vs
@@ -20,8 +20,8 @@
 //! Db) call site — where the mapper's parameters ARE, by construction, the
 //! decoded payload value(s) — retype any single-parameter function-typed mapper
 //! param from `IrType::Fun` to the owned `IrType::FnOnceChain`, so it renders as
-//! the same `Box<dyn FnOnce(..) -> _ + Send>` shape the producer supplies. Same
-//! owned-fn-value-vs-shared-callback classification as #195, applied at the
+//! the same `Box<dyn FnOnce(..) -> _ + Send>` shape the producer supplies. The
+//! same owned-fn-value-vs-shared-callback classification, applied at the
 //! lambda-PARAM emission site rather than the `Decoder<T>` type site.
 //!
 //! Run:
@@ -82,7 +82,7 @@ fn i198_skyc_accepts_and_renders_send_only_fnonce_param() {
         "the decode-mapper payload param must render as a Send-only \
          `Box<dyn FnOnce(i64) -> i64 + Send>` (#198); got main.rs:\n{emitted}"
     );
-    // Guard against the pre-fix shape: the payload param must NOT be a
+    // Guard against the unfixed shape: the payload param must NOT be a
     // `+ Sync`-stamped `Box<dyn Fn>` (the shared-callback rendering that
     // mismatched the producer's `FnOnce + Send` on both trait and auto-trait).
     assert!(

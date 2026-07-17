@@ -41,9 +41,9 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 /// A minimal Sky.Live counter app.
 ///
 /// Kernels exercised:
-/// - `Live.app`     — Phase-1b B1/B2 fix: constrain scheme + serde derives
+/// - `Live.app`     — constrain scheme + serde derives
 /// - `Ui.layout`    — converts Element tree to HTML
-/// - `Ui.column`    — vertical layout (wired in M7 Phase 0)
+/// - `Ui.column`    — vertical layout
 /// - `Ui.el`        — generic element container with onClick attribute
 /// - `Ui.onClick`   — binds a click event to a Msg
 /// - `Ui.text`      — text leaf node
@@ -52,8 +52,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 ///
 /// The rendered initial page will contain the text `>0<` (the counter starts at
 /// zero, rendered inside a text element).  No `Ui.button` is used because that
-/// function is not a raw kernel — it is defined in sky-stdlib as a Sky function
-/// and is therefore outside Phase-1b scope.
+/// function is not a raw kernel — it is defined in sky-stdlib as a Sky function.
 const SKY_LIVE_COUNTER: &str = r#"module Main exposing (main)
 
 import Std.Live as Live
@@ -99,18 +98,18 @@ main =
         }
 "#;
 
-/// #93 seal: a `Std.Live` program with a NON-Model view-helper record that holds
-/// an `Html` field (`Section = { title : String, body : Html Msg }`) and a
-/// plain-data Model.
+/// Serde-derive gating seal: a `Std.Live` program with a NON-Model view-helper
+/// record that holds an `Html` field (`Section = { title : String, body : Html
+/// Msg }`) and a plain-data Model.
 ///
 /// `Section` is `CDPeq`-supporting (`Html<Msg>` derives Clone/Debug/PartialEq) but
-/// NOT serde-supporting. Before the #93 fix the emitter gated the serde derive on
-/// the `CDPeq` flag, so `Section` got `#[derive(..., serde::Serialize,
-/// serde::Deserialize)]` forced onto it under `uses_live` → `skyc` exit 0 then
-/// `cargo build` E0277 (`Html<MainMsg>: Serialize` unsatisfied). The fix gates the
-/// serde derive on the per-record serde flag, so `Section` keeps its `CDPeq` derive
-/// WITHOUT serde and the project is cargo-buildable. The Model (`{ count : Int }`)
-/// is plain data and still gets serde. `#91`'s Model-admissibility gate is NOT
+/// NOT serde-supporting. The emitter gates the serde derive on the per-record
+/// serde flag, not the `CDPeq` flag — gating it on `CDPeq` would force
+/// `#[derive(..., serde::Serialize, serde::Deserialize)]` onto `Section` under
+/// `uses_live` → `skyc` exit 0 then `cargo build` E0277 (`Html<MainMsg>:
+/// Serialize` unsatisfied). So `Section` keeps its `CDPeq` derive WITHOUT serde
+/// and the project is cargo-buildable. The Model (`{ count : Int }`)
+/// is plain data and still gets serde. The Model-admissibility gate is NOT
 /// tripped because the non-serde record is a view helper, not the Model.
 const SKY_LIVE_HTML_HELPER: &str = r#"module Main exposing (main)
 
@@ -159,24 +158,23 @@ main =
         }
 "#;
 
-/// #176 seal — BUILD-ONLY: a routed `Std.Live` app whose `subscriptions` cfg
-/// field is an INLINE LAMBDA (`\_ -> Sub.none`) rather than a top-level `fn`
-/// reference must compile end-to-end.
+/// Inline-lambda subscriptions seal — BUILD-ONLY: a routed `Std.Live` app whose
+/// `subscriptions` cfg field is an INLINE LAMBDA (`\_ -> Sub.none`) rather than
+/// a top-level `fn` reference must compile end-to-end.
 ///
 /// `live_app_routed`'s four function slots (`FInit`/`FUpdate`/`FView`/`FSubs`)
 /// are GENERIC type params bounded `Fn(..) -> R + Send + Sync + 'static`. A
 /// top-level `subscriptions` reference emits as a bare `fn` item (implicitly
-/// `Send + Sync`), so `examples/09` / `34` always built. But an inline lambda
-/// went through the general `emit_expr_at` path, which pins it to
-/// `Box<dyn Fn(..) -> R + Send + 'static>` — a trait object that carries `Send`
-/// but NOT `Sync`. That failed the slot's `Sync` bound: `skyc` exit 0 then
-/// `cargo build` E0277 (`dyn Fn(..) -> SkySub<Msg> + Send cannot be shared
-/// between threads safely`), the SEAL break `examples/10-live-component` hit.
+/// `Send + Sync`). An inline lambda emitted through the general `emit_expr_at`
+/// path as `Box<dyn Fn(..) -> R + Send + 'static>` — a trait object that
+/// carries `Send` but NOT `Sync` — would fail the slot's `Sync` bound: `skyc`
+/// exit 0 then `cargo build` E0277 (`dyn Fn(..) -> SkySub<Msg> + Send cannot be
+/// shared between threads safely`).
 ///
-/// The fix emits an inline-lambda live-cfg callback UNBOXED (`move |_| -> R
+/// So an inline-lambda live-cfg callback is emitted UNBOXED (`move |_| -> R
 /// { .. }`), so rustc monomorphizes the generic slot to the concrete closure
 /// type whose auto-derived `Send + Sync` satisfies the bound — the same shape
-/// the sibling `set_page` and `Route::new` builder closures already use.
+/// the sibling `set_page` and `Route::new` builder closures use.
 ///
 /// A successful `skyc` + `cargo build` IS the assertion.
 ///
@@ -570,7 +568,7 @@ fn extract_hid_for_open_tag(html: &str, tag: &str) -> Option<String> {
 /// `GET /` on a Sky.Live counter app returns an HTML page containing the
 /// initial counter value rendered as the text node `>0<`.
 ///
-/// This test proves the FULL Phase-1b pipeline end-to-end:
+/// This test proves the FULL Sky.Live pipeline end-to-end:
 ///
 /// ```text
 /// Sky source
@@ -589,9 +587,9 @@ fn extract_hid_for_open_tag(html: &str, tag: &str) -> Option<String> {
 /// the generated page markup.
 ///
 /// The `live` Cargo feature is injected by `emit_program` when `uses_live` is
-/// set (B1 + B2 fix for the Phase-1b blockers).  Without the Phase-1b fixes
-/// the build would fail with `exit 0 then cargo fail` (constraint scheme
-/// missing) or `cargo build error` (serde derives absent).
+/// set.  Without the constraint scheme the build would fail with `exit 0 then
+/// cargo fail` (constraint scheme missing) or `cargo build error` (serde
+/// derives absent).
 ///
 /// # Errors
 ///
@@ -635,10 +633,9 @@ fn live_get_root_contains_initial_count() -> Result<(), BoxError> {
 /// feature in the default feature list.
 ///
 /// This is a BUILD-ONLY test — it does not spawn the binary.  A successful
-/// `cargo build` is the assertion.  This specifically regression-tests the
-/// Phase-1b B2 fix: if `serde::Serialize / Deserialize` derives are absent on
-/// the `Msg` enum and `Model` struct, `cargo build` will fail with a trait-
-/// bound error from `sky_runtime::live::live_app`.
+/// `cargo build` is the assertion.  If `serde::Serialize / Deserialize` derives
+/// are absent on the `Msg` enum and `Model` struct, `cargo build` will fail
+/// with a trait-bound error from `sky_runtime::live::live_app`.
 ///
 /// # Errors
 ///
@@ -654,13 +651,13 @@ fn live_counter_build_only() -> Result<(), BoxError> {
     Ok(())
 }
 
-/// #93 seal — BUILD-ONLY: a Std.Live program with a NON-Model view-helper record
-/// holding an `Html` field must compile end-to-end.
+/// Serde-derive gating seal — BUILD-ONLY: a Std.Live program with a NON-Model
+/// view-helper record holding an `Html` field must compile end-to-end.
 ///
-/// A successful `skyc` + `cargo build` IS the assertion. Before the #93 fix this
-/// project was `skyc` exit 0 then `cargo build` E0277 (`Html<MainMsg>: Serialize`
-/// unsatisfied on the `Section` struct's forced serde derive). See
-/// `SKY_LIVE_HTML_HELPER` for the full rationale.
+/// A successful `skyc` + `cargo build` IS the assertion. Gating serde on the
+/// record's `CDPeq` flag would make this `skyc` exit 0 then `cargo build` E0277
+/// (`Html<MainMsg>: Serialize` unsatisfied on the `Section` struct's forced
+/// serde derive). See `SKY_LIVE_HTML_HELPER` for the full rationale.
 ///
 /// # Errors
 ///
@@ -675,12 +672,12 @@ fn live_html_helper_record_build_only() -> Result<(), BoxError> {
     Ok(())
 }
 
-/// #176 seal — BUILD-ONLY: an inline-lambda `subscriptions` cfg field on a
-/// routed `Live.app` must compile end-to-end. See `SKY_LIVE_LAMBDA_SUBS` for
-/// the full rationale — before the fix this was `skyc` exit 0 then `cargo build`
-/// E0277 (`dyn Fn(..) -> SkySub<Msg> + Send cannot be shared between threads
-/// safely`) because the lambda was pinned to `Box<dyn Fn + Send>` (no `Sync`)
-/// instead of being emitted unboxed into the generic `FSubs` slot.
+/// Inline-lambda subscriptions seal — BUILD-ONLY: an inline-lambda
+/// `subscriptions` cfg field on a routed `Live.app` must compile end-to-end.
+/// See `SKY_LIVE_LAMBDA_SUBS` for the full rationale — a lambda pinned to
+/// `Box<dyn Fn + Send>` (no `Sync`) instead of emitted unboxed into the generic
+/// `FSubs` slot makes this `skyc` exit 0 then `cargo build` E0277
+/// (`dyn Fn(..) -> SkySub<Msg> + Send cannot be shared between threads safely`).
 ///
 /// # Errors
 ///
@@ -834,18 +831,18 @@ fn live_routed_app_build_only() -> Result<(), BoxError> {
     Ok(())
 }
 
-/// M5e seal — BUILD-ONLY: a Sky.Live app that uses `Cmd.publish` and
+/// Pub/sub seal — BUILD-ONLY: a Sky.Live app that uses `Cmd.publish` and
 /// `Sub.subscribeTopic` must compile end-to-end without a `CompilerBug`
 /// diagnostic.
 ///
 /// Kernels exercised:
-/// - `Cmd.publish : String -> Dict String String -> Cmd msg`  (M5e wired)
+/// - `Cmd.publish : String -> Dict String String -> Cmd msg`
 /// - `Sub.subscribeTopic : String -> (Dict String String -> msg) -> Sub msg`
-///   (M5d wired — exercised here as the natural pair to `Cmd.publish`)
+///   (exercised here as the natural pair to `Cmd.publish`)
 ///
-/// A successful `skyc` + `cargo build` is the assertion.  Before the M5e wiring
-/// the compiler emitted a `CompilerBug` diagnostic when it encountered
-/// `Cmd.publish` or `Cmd.publishNoEcho` — exit-0 was structurally impossible.
+/// A successful `skyc` + `cargo build` is the assertion.  Without pub/sub
+/// wiring the compiler would emit a `CompilerBug` diagnostic on `Cmd.publish`
+/// or `Cmd.publishNoEcho` — exit-0 structurally impossible.
 ///
 /// The app structure mirrors `examples/27-multi-session-chat` at its simplest:
 /// one pub/sub topic `"chat"`, a `BroadcastMsg` that carries the payload dict,
@@ -934,11 +931,10 @@ fn live_pubsub_cmd_publish_and_sub_subscribe_topic_build_only() -> Result<(), Bo
 /// Regression: `Cmd.publish` / `Cmd.publishNoEcho` must accept a record payload
 /// (or any Sky value), not only `Dict String String`.
 ///
-/// Before the fix the constrain scheme was `String -> Dict String String -> Cmd
-/// msg`.  Publishing `{ count : Int, name : String }` produced SKY-T0001
-/// (type mismatch at examples/37-composite-live-shop/src/Update.sky:34:38).
-/// After the fix the scheme is `String -> any -> Cmd msg` (var(1) for payload),
-/// matching the reference runtime which is generic in T.
+/// The constrain scheme is `String -> any -> Cmd msg` (var(1) for payload),
+/// matching the reference runtime which is generic in T. A narrower `String ->
+/// Dict String String -> Cmd msg` scheme would reject publishing `{ count :
+/// Int, name : String }` with SKY-T0001 (type mismatch).
 ///
 /// This test also asserts `cargo build` succeeds — verifying the re-export
 /// (`cmd_publish`, `cmd_publish_no_echo` in `RUNTIME_MOD_RS_LIVE_APPEND`) is
@@ -1018,22 +1014,19 @@ fn live_pubsub_publish_polymorphic_record_payload_build_only() -> Result<(), Box
     Ok(())
 }
 
-/// #162 regression — the CANONICAL CLAUDE.md "forms with passwords" idiom:
+/// Typed-record onSubmit — the CANONICAL CLAUDE.md "forms with passwords" idiom:
 /// `Ui.form [Ui.onSubmit DoSignIn] [...]` where `DoSignIn : Creds -> Msg` is a
 /// TYPED-RECORD payload constructor (not a bare Msg). This is the exact shape
 /// `examples/19-skyforum`'s `View/Login.sky` and `examples/27-multi-session-chat`
 /// use in production.
 ///
-/// Before the fix: `skyc build` exits 0, but the emitted crate fails `cargo
-/// build` with E0277 — `ui_on_submit_`'s generic bound `F: Fn(T) -> M + Send +
-/// Sync + 'static` was never satisfiable because the emit site passed the
-/// codegen's boxed closure value (`Box<dyn Fn(T) -> M + Send + 'static>` — the
-/// generic `IrType::Fun` rendering, which never claims `+Sync`) straight
-/// through as `F`. A trait object's auto-trait set is exactly its bound list,
-/// so that box could never satisfy `+ Sync` regardless of what it captured —
-/// a genuine skyc-accept/cargo-reject SEAL violation on the single
-/// most-recommended Sky.Live form pattern. Fixed by re-wrapping the boxed
-/// value in a freshly-declared closure at the `KernelFn::UiOnSubmit` /
+/// Forwarding the codegen's boxed closure value (`Box<dyn Fn(T) -> M + Send +
+/// 'static>` — the generic `IrType::Fun` rendering, which never claims `+Sync`)
+/// straight through as `ui_on_submit_`'s generic `F: Fn(T) -> M + Send + Sync +
+/// 'static` would be unsatisfiable: a trait object's auto-trait set is exactly
+/// its bound list, so that box can never satisfy `+ Sync` regardless of what it
+/// captures — a skyc-accept/cargo-reject SEAL violation. The emit re-wraps the
+/// boxed value in a freshly-declared closure at the `KernelFn::UiOnSubmit` /
 /// `HtmlEventShape::Raw` emit sites (`sky_backend_rust::emit_expr`) instead of
 /// forwarding the box itself — see that arm's comment for the full mechanism.
 const SKY_ONSUBMIT_TYPED_RECORD: &str = r#"module Main exposing (main)
@@ -1091,10 +1084,10 @@ main =
         }
 "#;
 
-/// #162 seal — BUILD-ONLY: the typed-record `Ui.onSubmit` form must compile
-/// end-to-end. A successful `skyc` + `cargo build` IS the assertion — before
-/// the fix this was `skyc` exit 0 then `cargo build` E0277 (`dyn Fn(Creds) ->
-/// MainMsg + Send` cannot be shared between threads safely).
+/// Typed-record onSubmit seal — BUILD-ONLY: the typed-record `Ui.onSubmit` form
+/// must compile end-to-end. A successful `skyc` + `cargo build` IS the assertion
+/// — forwarding the bare box makes this `skyc` exit 0 then `cargo build` E0277
+/// (`dyn Fn(Creds) -> MainMsg + Send` cannot be shared between threads safely).
 ///
 /// # Errors
 ///
@@ -1112,10 +1105,10 @@ fn live_onsubmit_typed_record_build_only() -> Result<(), BoxError> {
     Ok(())
 }
 
-/// #162 seal — FULL E2E: submitting the typed-record form over the wire must
-/// dispatch `DoSignIn` with the DECODED `Creds` record, proving the fix is not
-/// merely a compile-time patch that leaves the handler undispatchable at
-/// runtime (the historical failure mode of the pre-#109/#156 `OnRaw` variant).
+/// Typed-record onSubmit seal — FULL E2E: submitting the typed-record form over
+/// the wire must dispatch `DoSignIn` with the DECODED `Creds` record, proving
+/// the compile-time wrapping does not leave the handler undispatchable at
+/// runtime (the failure mode of an `OnRaw`-style variant).
 ///
 /// ## Wire protocol exercised
 ///
@@ -1211,7 +1204,7 @@ fn live_onsubmit_typed_record_dispatches_decoded_payload() -> Result<(), BoxErro
     Ok(())
 }
 
-/// #167 regression — the "ignore form data, always dispatch this fixed
+/// Bare-Msg onSubmit — the "ignore form data, always dispatch this fixed
 /// action" idiom: `Std.Html.Events.onSubmit Confirm` where `Confirm : Msg`
 /// carries NO payload (a nullary constructor, not a decoder function). This
 /// is the exact shape `examples/12-skyvote`'s `Page/AuthPage.sky` /
@@ -1220,16 +1213,15 @@ fn live_onsubmit_typed_record_dispatches_decoded_payload() -> Result<(), BoxErro
 /// are already synced into `Model` via `onInput`/`onChange`; `onSubmit`
 /// just triggers the action, ignoring the posted `FormData` entirely.
 ///
-/// Before the fix: `skyc build` exits 0 (`HtmlOnSubmit`'s Sky-level scheme
+/// `skyc build` exits 0 here (`HtmlOnSubmit`'s Sky-level scheme
 /// deliberately leaves the argument type unconstrained — decoupled from
 /// `msg`, see `constrain.rs`'s `HtmlEventShape::Raw` arm — so a Msg-typed
-/// value type-checks fine there), but the emitted crate fails `cargo
-/// build` with E0618 ("expected function, found `MainMsg`") — the emit
-/// site unconditionally treated the argument as a callable decoder
-/// (`(payload_s)(_x)`), but a bare nullary constructor reference lowers to
-/// a plain `Expr::Ctor` VALUE (`lower_expr`'s `VarCtor` arm), never a
-/// function. Fixed by routing a provably-non-callable argument shape to
-/// the new `html_on_raw_fixed_` runtime helper (dispatches the fixed value
+/// value type-checks fine there). Emitting the argument unconditionally as a
+/// callable decoder (`(payload_s)(_x)`) would fail `cargo build` with E0618
+/// ("expected function, found `MainMsg`"), because a bare nullary constructor
+/// reference lowers to a plain `Expr::Ctor` VALUE (`lower_expr`'s `VarCtor`
+/// arm), never a function. So a provably-non-callable argument shape routes to
+/// the `html_on_raw_fixed_` runtime helper (dispatches the fixed value
 /// directly, no decode attempt) instead of `html_on_raw_`
 /// (`sky_backend_rust::emit_expr`'s `is_definitely_not_callable` gate).
 const SKY_ONSUBMIT_BARE_MSG: &str = r#"module Main exposing (main)
@@ -1293,9 +1285,10 @@ main =
         }
 "#;
 
-/// #167 seal — BUILD-ONLY: the bare-Msg `onSubmit` form must compile
-/// end-to-end. A successful `skyc` + `cargo build` IS the assertion —
-/// before the fix this was `skyc` exit 0 then `cargo build` E0618.
+/// Bare-Msg onSubmit seal — BUILD-ONLY: the bare-Msg `onSubmit` form must
+/// compile end-to-end. A successful `skyc` + `cargo build` IS the assertion —
+/// treating the bare Msg as callable makes this `skyc` exit 0 then `cargo
+/// build` E0618.
 ///
 /// # Errors
 ///
@@ -1310,10 +1303,10 @@ fn live_onsubmit_bare_msg_build_only() -> Result<(), BoxError> {
     Ok(())
 }
 
-/// #167 seal — FULL E2E: submitting the bare-Msg form over the wire must
-/// dispatch `Confirm` regardless of the posted `FormData` — proving the fix
-/// is not merely a compile-time patch that leaves the handler
-/// undispatchable (or, worse, silently swallowed by a decode failure — see
+/// Bare-Msg onSubmit seal — FULL E2E: submitting the bare-Msg form over the wire
+/// must dispatch `Confirm` regardless of the posted `FormData` — proving the
+/// dispatch is not left undispatchable (or, worse, silently swallowed by a
+/// decode failure — see
 /// `html_on_raw_fixed_`'s doc for why it deliberately does NOT route
 /// through `decode_form_or_warn`). The posted form body deliberately
 /// carries a REAL field value (`name=alice`, matching the `<input
@@ -1414,9 +1407,9 @@ fn live_onsubmit_bare_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
     Ok(())
 }
 
-// ── #170 — onSubmit COMPOUND-literal payloads (record / tuple / list) ─────────
+// ── onSubmit COMPOUND-literal payloads (record / tuple / list) ─────────
 //
-// #167 closed the bare nullary-`Ctor` onSubmit payload (`onSubmit Confirm`,
+// The bare nullary-`Ctor` onSubmit payload (`onSubmit Confirm`,
 // `Confirm : Msg`). The same emit gate (`is_definitely_not_callable`) left
 // three sibling literal shapes on the wrap-and-call path even though they are
 // EQUALLY provably-non-callable structural values: a record literal
@@ -1426,15 +1419,15 @@ fn live_onsubmit_bare_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
 // `HtmlEventShape::Raw` arm — decoupled from `msg`, hence UNCONSTRAINED — so
 // these shapes type-check in skyc; the well-typed, SEAL-relevant program is one
 // whose `Msg` type IS that record / tuple / list (`type alias Msg = { … }`
-// etc), where the literal is a genuine `Msg` value. Before #170 each such
-// program was `skyc` exit 0 then `cargo build` E0618 ("expected function,
-// found …") — the emit site unconditionally wrapped the value in
-// `(payload_s)(_x)`. #170 extends `is_definitely_not_callable` to the three
-// compound literal variants (`Expr::Record` / `Expr::Tuple` / `Expr::List`),
-// routing them to `html_on_raw_fixed_` (fixed dispatch, no decode) — sealing
-// the class. A successful `skyc` + `cargo build` IS the assertion.
+// etc), where the literal is a genuine `Msg` value. Wrapping the value in
+// `(payload_s)(_x)` would make each such program `skyc` exit 0 then `cargo
+// build` E0618 ("expected function, found …"). `is_definitely_not_callable`
+// covers the three compound literal variants (`Expr::Record` / `Expr::Tuple` /
+// `Expr::List`), routing them to `html_on_raw_fixed_` (fixed dispatch, no
+// decode) — sealing the class. A successful `skyc` + `cargo build` IS the
+// assertion.
 
-/// #170 — `onSubmit` payload is a RECORD literal, `Msg` is a record alias.
+/// `onSubmit` payload is a RECORD literal, `Msg` is a record alias.
 const SKY_ONSUBMIT_RECORD_LITERAL: &str = r#"module Main exposing (main)
 
 import Std.Live as Live
@@ -1480,7 +1473,7 @@ main =
         }
 "#;
 
-/// #170 — `onSubmit` payload is a TUPLE literal, `Msg` is a tuple alias.
+/// `onSubmit` payload is a TUPLE literal, `Msg` is a tuple alias.
 const SKY_ONSUBMIT_TUPLE_LITERAL: &str = r#"module Main exposing (main)
 
 import Std.Live as Live
@@ -1530,7 +1523,7 @@ main =
         }
 "#;
 
-/// #170 — `onSubmit` payload is a LIST literal, `Msg` is a list alias.
+/// `onSubmit` payload is a LIST literal, `Msg` is a list alias.
 const SKY_ONSUBMIT_LIST_LITERAL: &str = r#"module Main exposing (main)
 
 import Std.Live as Live
@@ -1576,9 +1569,10 @@ main =
         }
 "#;
 
-/// #170 seal — BUILD-ONLY: a RECORD-literal `onSubmit` payload must compile
-/// end-to-end. A successful `skyc` + `cargo build` IS the assertion — before
-/// the fix this was `skyc` exit 0 then `cargo build` E0618.
+/// Compound-literal onSubmit seal — BUILD-ONLY: a RECORD-literal `onSubmit`
+/// payload must compile end-to-end. A successful `skyc` + `cargo build` IS the
+/// assertion — the wrap-and-call path makes this `skyc` exit 0 then `cargo
+/// build` E0618.
 ///
 /// # Errors
 ///
@@ -1596,8 +1590,8 @@ fn live_onsubmit_record_literal_build_only() -> Result<(), BoxError> {
     Ok(())
 }
 
-/// #170 seal — BUILD-ONLY: a TUPLE-literal `onSubmit` payload must compile
-/// end-to-end (see [`SKY_ONSUBMIT_TUPLE_LITERAL`]).
+/// Compound-literal onSubmit seal — BUILD-ONLY: a TUPLE-literal `onSubmit`
+/// payload must compile end-to-end (see [`SKY_ONSUBMIT_TUPLE_LITERAL`]).
 ///
 /// # Errors
 ///
@@ -1615,8 +1609,8 @@ fn live_onsubmit_tuple_literal_build_only() -> Result<(), BoxError> {
     Ok(())
 }
 
-/// #170 seal — BUILD-ONLY: a LIST-literal `onSubmit` payload must compile
-/// end-to-end (see [`SKY_ONSUBMIT_LIST_LITERAL`]).
+/// Compound-literal onSubmit seal — BUILD-ONLY: a LIST-literal `onSubmit`
+/// payload must compile end-to-end (see [`SKY_ONSUBMIT_LIST_LITERAL`]).
 ///
 /// # Errors
 ///
@@ -1634,30 +1628,29 @@ fn live_onsubmit_list_literal_build_only() -> Result<(), BoxError> {
     Ok(())
 }
 
-// ── #228 — onSubmit VAR-bound bare-Msg payload (the last syntactic gap) ────────
+// ── onSubmit VAR-bound bare-Msg payload ────────
 //
-// #167/#170 closed the bare-`Ctor` / record / tuple / list LITERAL onSubmit
-// payloads by extending the emit-site `is_definitely_not_callable` classifier
-// to those Expr shapes. That classifier was SYNTACTIC — it inspected the
-// payload `Expr` variant. A `let`-bound bare `Msg` VALUE dispatched by
+// A SYNTACTIC `is_definitely_not_callable` classifier that inspects the payload
+// `Expr` variant covers the bare-`Ctor` / record / tuple / list LITERAL
+// onSubmit payloads, but a `let`-bound bare `Msg` VALUE dispatched by
 // `onSubmit` (`let m = DoSignUp in onSubmit m`) lowers the payload to a plain
-// `Expr::Var`, which is NOT in the classifier's fixed set, so the emit site
-// wrapped it as a decoder: `html_on_raw_("submit", move |_x| (m)(_x))`.
+// `Expr::Var`, which is NOT in such a classifier's fixed set, so it would be
+// wrapped as a decoder: `html_on_raw_("submit", move |_x| (m)(_x))`.
 // `m` is `MainMsg::DoSignUp`, a non-callable enum value → `(m)(_x)` is cargo
 // `E0618` ("expected function") AFTER `skyc` exit 0 — a SEAL violation.
 //
-// The fix makes classification TYPE-DIRECTED (mirroring `../sky`'s
+// Classification is TYPE-DIRECTED instead (mirroring `../sky`'s
 // `formTargetRustType`): the lowerer reads the handler's SOLVED type and
 // records `OnFormKind::{Decoder,FixedValue}` on the `Call`. A non-arrow value
 // (this shape) routes to `html_on_raw_fixed_` regardless of its syntax; an
-// arrow handler keeps the decode path. Acceptance no longer depends on the
+// arrow handler keeps the decode path. Acceptance does not depend on the
 // payload's `Expr` shape, so a `Var`/`Apply`/`Access`-bound bare `Msg` seals
 // identically to a bare-`Ctor` one. A successful `skyc` + `cargo build` IS the
 // assertion; the E2E companion proves the fixed value is actually dispatched.
 
-/// #228 — `onSubmit m` where `m : Msg` is a `let`-bound bare (non-function)
-/// value. The payload lowers to `Expr::Var`, the shape the pre-fix syntactic
-/// classifier misrouted to the decoder path.
+/// `onSubmit m` where `m : Msg` is a `let`-bound bare (non-function)
+/// value. The payload lowers to `Expr::Var`, the shape a purely syntactic
+/// classifier would misroute to the decoder path.
 const SKY_ONSUBMIT_VAR_BOUND_MSG: &str = r#"module Main exposing (main)
 
 import Std.Live as Live
@@ -1723,10 +1716,10 @@ main =
         }
 "#;
 
-/// #228 seal — BUILD-ONLY: the `Var`-bound bare-Msg `onSubmit` form must
-/// compile end-to-end. Before the fix this was `skyc` exit 0 then `cargo
-/// build` E0618 (`(m)(_x)` on a non-callable value). A successful `skyc` +
-/// `cargo build` IS the assertion.
+/// Var-bound bare-Msg onSubmit seal — BUILD-ONLY: the `Var`-bound bare-Msg
+/// `onSubmit` form must compile end-to-end. A syntactic classifier would make
+/// this `skyc` exit 0 then `cargo build` E0618 (`(m)(_x)` on a non-callable
+/// value). A successful `skyc` + `cargo build` IS the assertion.
 ///
 /// # Errors
 ///
@@ -1744,9 +1737,10 @@ fn live_onsubmit_var_bound_msg_build_only() -> Result<(), BoxError> {
     Ok(())
 }
 
-/// #228 seal — FULL E2E: submitting the `Var`-bound bare-Msg form over the
-/// wire must dispatch `DoSignUp` regardless of the posted `FormData`, proving
-/// the type-directed fix routes to the fixed-dispatch runtime helper (fires
+/// Var-bound bare-Msg onSubmit seal — FULL E2E: submitting the `Var`-bound
+/// bare-Msg form over the wire must dispatch `DoSignUp` regardless of the posted
+/// `FormData`, proving the type-directed classification routes to the
+/// fixed-dispatch runtime helper (fires
 /// unconditionally) rather than a decoder that could silently swallow the
 /// submit. The posted args carry a real field (`name=alice`) the fixed path
 /// ignores. Structurally mirrors [`live_onsubmit_bare_msg_dispatches_fixed_msg`].
@@ -1831,16 +1825,16 @@ fn live_onsubmit_var_bound_msg_dispatches_fixed_msg() -> Result<(), BoxError> {
     Ok(())
 }
 
-/// #168 fixture — a `let`-bound LOCAL closure dispatched via `Ui.onSubmit`.
+/// Let-bound closure onSubmit — a `let`-bound LOCAL closure dispatched via
+/// `Ui.onSubmit`.
 ///
-/// `let handler = \c -> DoSignIn c in ... Ui.onSubmit handler ...`. Before the
-/// fix, `skyc` exited 0 but the emitted `handler` was declared
-/// `Box<dyn Fn(Creds) -> MainMsg + Send + 'static>` (never `+ Sync`) and the
-/// `ui_on_submit_(move |_x| (handler)(_x))` wrapper captured that non-`Sync`
-/// box by move → `cargo build` E0277 (`dyn Fn(..) -> MainMsg + Send` cannot be
-/// shared between threads safely). The fix (`sky_lower::lower_let_pvar` +
-/// `flows_into_sync_kernel_call`) promotes the let-bound closure to
-/// `Arc<dyn Fn + Send + Sync>` at its declaration.
+/// `let handler = \c -> DoSignIn c in ... Ui.onSubmit handler ...`. A `handler`
+/// declared `Box<dyn Fn(Creds) -> MainMsg + Send + 'static>` (never `+ Sync`)
+/// captured by move into the `ui_on_submit_(move |_x| (handler)(_x))` wrapper
+/// would make this `skyc` exit 0 then `cargo build` E0277 (`dyn Fn(..) ->
+/// MainMsg + Send` cannot be shared between threads safely). So
+/// `sky_lower::lower_let_pvar` + `flows_into_sync_kernel_call` promote the
+/// let-bound closure to `Arc<dyn Fn + Send + Sync>` at its declaration.
 const SKY_ONSUBMIT_LET_BOUND_HANDLER: &str = r#"module Main exposing (main)
 
 import Std.Live as Live
@@ -1899,8 +1893,8 @@ main =
         }
 "#;
 
-/// #168 fixture — a MULTI-HOP `let`-alias chain from the root closure to the
-/// `Ui.onSubmit` call (`handler` → `inner` → `outer`).
+/// Let-alias chain onSubmit — a MULTI-HOP `let`-alias chain from the root
+/// closure to the `Ui.onSubmit` call (`handler` → `inner` → `outer`).
 ///
 /// The `onSubmit` argument (`outer`) is two aliases removed from the closure
 /// literal (`handler`). Only promoting the ROOT `handler` binding to
@@ -1967,9 +1961,10 @@ main =
         }
 "#;
 
-/// #168 seal — BUILD-ONLY: a single-hop `let`-bound `Ui.onSubmit` handler must
-/// compile end-to-end. A successful `skyc` + `cargo build` IS the assertion —
-/// before the fix this was `skyc` exit 0 then `cargo build` E0277.
+/// Let-bound closure onSubmit seal — BUILD-ONLY: a single-hop `let`-bound
+/// `Ui.onSubmit` handler must compile end-to-end. A successful `skyc` + `cargo
+/// build` IS the assertion — a non-`Sync` boxed handler makes this `skyc` exit 0
+/// then `cargo build` E0277.
 ///
 /// # Errors
 ///
@@ -1987,8 +1982,9 @@ fn live_onsubmit_let_bound_handler_build_only() -> Result<(), BoxError> {
     Ok(())
 }
 
-/// #168 seal — BUILD-ONLY: a MULTI-HOP `let`-alias chain into `Ui.onSubmit`
-/// must compile end-to-end (see [`SKY_ONSUBMIT_LET_ALIAS_CHAIN`]). Guards the
+/// Let-alias chain onSubmit seal — BUILD-ONLY: a MULTI-HOP `let`-alias chain
+/// into `Ui.onSubmit` must compile end-to-end (see
+/// [`SKY_ONSUBMIT_LET_ALIAS_CHAIN`]). Guards the
 /// alias-transparent branch of `flows_into_sync_kernel_call`.
 ///
 /// # Errors
@@ -2077,16 +2073,15 @@ main =
         }
 "#;
 
-/// Regression — FULL E2E for the live-reproduced "form submission does
-/// nothing" break. A real browser interleaves an automatic unrouted GET
-/// (`/favicon.ico` — headless Chromium fetches it without surfacing a
-/// request event, so browserless wire tests never saw it) between the page
-/// load and the user's submit. Before the fix, the page handler's Live-hit
-/// branch re-routed the session model for that GET (`/favicon.ico` matches
-/// no route → `notFound` page), re-rendered THAT view, and replaced the
-/// session's handler index + last_view — every subsequent event from the
-/// page the browser was actually showing (the form submit included)
-/// resolved against the wrong index and was silently dropped.
+/// FULL E2E for the "form submission does nothing" case. A real browser
+/// interleaves an automatic unrouted GET (`/favicon.ico` — headless Chromium
+/// fetches it without surfacing a request event, so browserless wire tests
+/// never see it) between the page load and the user's submit. If the page
+/// handler's Live-hit branch re-routed the session model for that GET
+/// (`/favicon.ico` matches no route → `notFound` page), re-rendered THAT view,
+/// and replaced the session's handler index + last_view, every subsequent
+/// event from the page the browser is actually showing (the form submit
+/// included) would resolve against the wrong index and be silently dropped.
 ///
 /// Go parity (live.go `handleInitial`): unrouted browser-noise paths 404
 /// before touching session state; an unrouted GET against an existing
@@ -2095,7 +2090,7 @@ main =
 /// Wire sequence (mirrors the real browser):
 ///  1. `GET /`             → session + typed-record form page.
 ///  2. `GET /favicon.ico`  (same cookie) → MUST 404 and leave the session
-///                           untouched (this is the step that used to wipe
+///                           untouched (the step that must not wipe
 ///                           the handler index).
 ///  3. `POST /_sky/event`  submit with form data → Msg must dispatch.
 ///  4. `GET /`             → re-rendered page must show the decoded value.

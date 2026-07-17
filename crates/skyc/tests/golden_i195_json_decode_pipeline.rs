@@ -1,8 +1,8 @@
-//! BACKLOG #195 regression — a Json.Decode pipeline whose accumulator value is
+//! A Json.Decode pipeline whose accumulator value is
 //! itself a function (`Decoder (a -> b)` curry chain) exercises the OWNED /
 //! linear decoder-payload path.
 //!
-//! Pre-fix: `skyc build` exits 0, but the emitted Rust fails `cargo build`. The
+//! Without the fix, `skyc build` exits 0, but the emitted Rust fails `cargo build`. The
 //! backend's `IrType::Fun` renderer stamped `Box<dyn Fn(..) -> R + Send + Sync>`
 //! on the decoder payload, but the runtime represents a `Decoder (a -> b)`
 //! payload as a Send-ONLY curry chain `Box<dyn FnOnce(a) -> b + Send>` (exactly
@@ -16,7 +16,7 @@
 //! (`Box<dyn FnOnce(..) -> _ + Send>`, Send-only, never `+ Sync`) — a decoder
 //! payload is owned/linear and never flows into an
 //! `Arc<dyn Fn + Send + Sync>` callback slot. The `+ Sync` shared-callback
-//! rendering is kept for the callback-param positions #184 needs (that path is
+//! rendering is kept for the callback-param positions that need it (that path is
 //! guarded by `golden_i190_static_bound` / `golden_i191_input_arc_capture`).
 //!
 //! Run:
@@ -70,14 +70,14 @@ fn i195_skyc_accepts_and_renders_send_only_fnonce_payload() {
 
     // The annotated partial decoder's function-typed payload must render as the
     // runtime's Send-only `FnOnce` curry chain — never the shared-callback
-    // `Box<dyn Fn + Send + Sync>` form (the pre-fix shape that E0308/E0277'd).
+    // `Box<dyn Fn + Send + Sync>` form (the unfixed shape that E0308/E0277'd).
     assert!(
         emitted
             .contains("main_partial_txn_decoder() -> Decoder<Box<dyn FnOnce(String) -> Box<dyn FnOnce(String) -> "),
         "the `Decoder (a -> b)` payload must render as a Send-only `Box<dyn FnOnce>` \
          curry chain (#195); got main.rs:\n{emitted}"
     );
-    // Guard against the pre-fix shape: the partial decoder's payload must NOT be
+    // Guard against the unfixed shape: the partial decoder's payload must NOT be
     // a `+ Sync`-stamped `Box<dyn Fn>` (the runtime `curryN` output is `FnOnce`,
     // Send-only, so `Fn + Send + Sync` mismatches on both trait and auto-trait).
     assert!(

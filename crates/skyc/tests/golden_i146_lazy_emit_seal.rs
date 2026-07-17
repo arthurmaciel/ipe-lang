@@ -1,10 +1,10 @@
-//! i146 seal — `Std.Ui.Lazy` emit arms, LazyLazy..LazyLazy5 end to end.
+//! `Std.Ui.Lazy` emit arms, LazyLazy..LazyLazy5 end to end.
 //!
-//! Regression for the missing emit arms: commit #146 registered the Lazy
-//! kernels in naming/constrain/lower but never added `KernelFn::LazyLazy`..
-//! `LazyLazy5` arms to `emit_ui_call` in `emit_expr.rs`.  The fail-closed
-//! wildcard at the bottom of `emit_ui_call` raised `SKY-I0001` on every
-//! program that used `Lazy.lazy` or its multi-arg siblings.
+//! Regression for the emit arms: the Lazy kernels are registered in
+//! naming/constrain/lower, and the `KernelFn::LazyLazy`..`LazyLazy5` arms in
+//! `emit_ui_call` (`emit_expr.rs`) must exist too.  Without them, the
+//! fail-closed wildcard at the bottom of `emit_ui_call` raises `SKY-I0001` on
+//! every program that uses `Lazy.lazy` or its multi-arg siblings.
 //!
 //! ## What is tested
 //!

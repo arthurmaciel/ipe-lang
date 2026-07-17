@@ -1,13 +1,13 @@
-//! #108 round 4 (hole 3) — `:param` routes with payload-constructor page
-//! builders, the CANONICAL corpus shape (`route "/apps/:slug" AppDetailPage`).
+//! `:param` routes with payload-constructor page builders, the CANONICAL corpus
+//! shape (`route "/apps/:slug" AppDetailPage`).
 //!
 //! ## Background
 //!
-//! The pre-round-4 `Live.route : String -> page -> LiveRoute page` scheme
-//! shared ONE type variable between the builder argument and the page type, so
-//! `Live.route "/u/:id" UserPage` (with `UserPage : String -> Page`) forced
+//! A `Live.route : String -> page -> LiveRoute page` scheme sharing ONE type
+//! variable between the builder argument and the page type would make
+//! `Live.route "/u/:id" UserPage` (with `UserPage : String -> Page`) force
 //! `Page ≟ String -> Page` — a false SKY-T0001 on EVERY param-route app, which
-//! also made the emit tier's `route_param_get` conversion path dead code.
+//! also makes the emit tier's `route_param_get` conversion path dead code.
 //!
 //! The fix types the builder with its own variable and relates it to the page
 //! by a deferred per-route witness (`RouteWitnessCheck`, resolved post-solve
@@ -130,8 +130,8 @@ main =
 "#;
 
 /// SOLO param route → skyc-0, and the emitted builder closure applies the
-/// type-directed `params.get(0)` conversion to the ctor (the previously-dead
-/// `route_param_get` path, now live). Compile-only — always runs.
+/// type-directed `params.get(0)` conversion to the ctor (the `route_param_get`
+/// path). Compile-only — always runs.
 #[test]
 fn param_route_solo_compiles_and_emits_param_conversion() {
     let Some(result) = compile_solo() else {

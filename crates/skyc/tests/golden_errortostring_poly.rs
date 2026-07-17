@@ -1,9 +1,9 @@
 //! errorToString polymorphic-Stringify regression suite.
 //!
-//! Root cause: `K::ErrorToString` was hard-typed as monomorphic `Error -> String`
-//! in `stdlib_scheme` and lacked the direct-build arm that `BasicsToString` has.
-//! The solver tried to unify a rigid annotation var `a` with the `Error` type →
-//! SKY-T0001.  The fix makes `errorToString : Stringify a => a -> String` (same
+//! Root cause: hard-typing `K::ErrorToString` as monomorphic `Error -> String`
+//! in `stdlib_scheme` (without the direct-build arm that `BasicsToString` has)
+//! forces the solver to unify a rigid annotation var `a` with the `Error` type →
+//! SKY-T0001.  Instead `errorToString : Stringify a => a -> String` (same
 //! chokepoint as `Basics.toString`).
 //!
 //! The unify.rs super-super arm is extended to allow cross-rigidity merging for
@@ -18,8 +18,8 @@
 //!   - `double : a -> a; double x = x + x` (no literal)  → still compiles
 //!
 //! Seal of the upstream 00-standard-libs blocker:
-//!   - Building examples/00-standard-libs no longer emits "errorToString expected"
-//!     at Sky/Test.sky:74.
+//!   - Building examples/00-standard-libs emits no "errorToString expected"
+//!     error at Sky/Test.sky:74.
 //!
 //! E2E (cargo build + run) is behind `SKY_E2E=1`.
 

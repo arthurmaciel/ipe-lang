@@ -52,7 +52,7 @@ fn run_skyc() -> Option<Result<(), skyc::CliError>> {
 ///
 /// Pre-regression: the emitter assumed all `routes` elements were inlined
 /// `Expr::Ctor` nodes and panicked (ICE) on a let-bound reference.
-/// Post-fix (#108 T5): the `routes` field is lowered as a normal expression;
+/// Post-fix (T5): the `routes` field is lowered as a normal expression;
 /// individual route-closure builders are only inspected at the call sites of
 /// `Live.route`, not at the list-collection level.
 #[test]
@@ -67,7 +67,7 @@ fn live_let_bound_routes_compiles_no_ice() {
     );
 }
 
-// ── #108 round 4 (hole 1) — the let-bound golden must also CARGO-build ───────
+// ── round-4 hole 1: the let-bound golden must also CARGO-build ───────
 //
 // `routeTable`'s top-level fn signature renders the binding's inferred type
 // `List (LiveRoute Page)`. Pre-round-4 `IrType::LiveRoute` rendered a bare

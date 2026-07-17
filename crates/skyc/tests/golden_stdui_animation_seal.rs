@@ -28,11 +28,11 @@ fn runtime() -> PathBuf {
 /// `keyframes` list is left EMPTY deliberately. A populated keyframe list routes
 /// through `Std.Ui.Transform.propsToCss`, whose refutable tuple patterns
 /// (`( "transform", v ) -> …`) hit the still-unimplemented `SKY-L0115
-/// TuplePatternMatch` lowering (backlog #174) — an INDEPENDENT blocker from this
-/// module's resolution + kernel wiring (#175). Empty keyframes still fully
+/// TuplePatternMatch` lowering — an INDEPENDENT blocker from this
+/// module's resolution + kernel wiring. Empty keyframes still fully
 /// exercise `Ui.animateRaw` (name + shorthand tail + empty body + respect flag),
 /// so the seal this test guards — `Std.Ui.Animation` resolves and its
-/// `attribute` lowers to the native kernel — is proven without depending on #174.
+/// `attribute` lowers to the native kernel — is proven without depending on it.
 const MAIN_SKY: &str = r#"module Main exposing (main)
 
 import Std.Html as Html
@@ -78,7 +78,7 @@ fn build_animation_project(slot: &str) -> (PathBuf, Result<(), skyc::CliError>) 
 /// `Std.Ui.Animation` resolves (no SKY-N0004), type-checks, and the emit lowers
 /// `Animation.attribute` to the four-arg `ui_animate_raw_` native helper.
 ///
-/// Un-ignored by #182: `Std.Ui.Transform`'s refutable tuple `case`s
+/// Now supported: `Std.Ui.Transform`'s refutable tuple `case`s
 /// (`( "transform", v ) -> …` — a VARIABLE tuple scrutinee with a string-literal
 /// column) now lower to a native `match pair { (__sg0, v) if __sg0.as_str() ==
 /// "transform" => … }` (a by-value binder + `as_str()` guard), so the whole
@@ -115,7 +115,7 @@ fn animation_module_resolves_and_emits_kernel() {
 /// The GREEN GATE: under `SKY_E2E=1` the emitted Cargo project builds and runs,
 /// rendering the CSS `animation:` shorthand — the seal, end to end.
 ///
-/// Un-ignored by #182 (see `animation_module_resolves_and_emits_kernel`).
+/// Now supported (see `animation_module_resolves_and_emits_kernel`).
 #[test]
 fn animation_e2e_builds_and_renders_shorthand() {
     if std::env::var("SKY_E2E").is_err() {

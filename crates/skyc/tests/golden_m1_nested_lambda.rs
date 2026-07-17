@@ -1,4 +1,4 @@
-//! Milestone-1 nested-lambda flattening: a one-parameter binding whose body is
+//! Nested-lambda flattening: a one-parameter binding whose body is
 //! a curried lambda chain (`f a = \b -> \c -> a + b + c`) declared with a
 //! multi-arrow type (`Int -> Int -> Int -> Int`). `skyc` must emit `main.rs`
 //! byte-identical to the checked-in golden, and (behind `SKY_E2E=1`) the emitted

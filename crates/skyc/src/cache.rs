@@ -1,24 +1,24 @@
-//! Phase 6 (Tasks 19/20) — the on-disk build cache.
+//! The on-disk build cache.
 //!
 //! Spec: `docs/architecture/salsa-incremental-compilation-2026-07-11.md`
 //! §12. Design doc: `docs/architecture/incremental-compilation-and-watch.md`
 //! §"Cross-session persistence" (**LOCKED, Option B**).
 //!
-//! Everything in-process from Phases 1-5 is proven memoized, but nothing
-//! survives ACROSS process invocations — every `skyc build` still starts a
-//! cold [`sky_db::SkyDatabase`]. This module closes that gap for the
-//! coarse, whole-project granularity that genuinely exists today
-//! (`sky_db::emit_project`'s output — see this module's own doc section
-//! below for why that is a deliberate, documented divergence from the
-//! design doc's literal "persist per-module lowered IR" wording).
+//! Everything in-process is memoized, but nothing survives ACROSS process
+//! invocations — every `skyc build` starts a cold [`sky_db::SkyDatabase`].
+//! This module closes that gap for the coarse, whole-project granularity
+//! that genuinely exists (`sky_db::emit_project`'s output — see this
+//! module's own doc section below for why that is a deliberate, documented
+//! divergence from the design doc's literal "persist per-module lowered IR"
+//! wording).
 //!
 //! ## What is cached, and why not literally "lowered IR"
 //!
 //! The design doc's Option-B locks in persisting `sky_ir` (the lowered IR)
-//! to `.ipe/lowered/`. Phase 4 already established that `sky_lower::lower`
-//! always produces exactly ONE whole-program [`sky_ir::Program`], so "per
-//! module" was never on the table (same finding, one phase later). The
-//! DEEPER blocker for persisting `sky_ir::Program` itself, specifically:
+//! to `.ipe/lowered/`. `sky_lower::lower` always produces exactly ONE
+//! whole-program [`sky_ir::Program`], so "per module" was never on the
+//! table. The DEEPER blocker for persisting `sky_ir::Program` itself,
+//! specifically:
 //! every [`sky_intern::Symbol`] embedded in the IR (`Var`, `Ctor`, record
 //! field names, `IrType::Generic`, …) is a raw index into THIS process's
 //! [`sky_intern::Interner`] — meaningless, and NOT merely "differently
@@ -31,9 +31,7 @@
 //! `Ctor`-only walk touches: `Var`, `CloneVar`, `Access`, record field
 //! keys, `FuncSig` params/generics, `EnumDef`/`TypeDef` fields, …) plus
 //! full `serde` coverage across ~20 IR types. That is a genuine, multi-
-//! session redesign — the SAME "looks like progress but isn't" trap Phase
-//! 5 §10.2 named for `emit_rust_file(RustFileId)`, not a corner to cut
-//! inside this session's budget.
+//! session redesign, not a corner to cut.
 //!
 //! **What ships instead**: [`sky_backend::EmittedProject`] — the output of
 //! [`sky_db::emit_project`] — is cached. It is pure `String` data (no
@@ -45,9 +43,9 @@
 //! parse -> canon -> link -> infer -> lower -> emit ENTIRELY, not just
 //! infer -> lower -> emit), at the cost of not serving a hypothetical
 //! future interpreter tier that wants to consume `sky_ir` directly (design
-//! doc §"Why `sky_ir` is the cut-point") — that tier does not exist yet
-//! (Q3, unscheduled), so the cost is paid by nobody today. This divergence
-//! is deliberate and recorded here, not silently substituted.
+//! doc §"Why `sky_ir` is the cut-point") — that tier does not exist yet,
+//! so the cost is paid by nobody today. This divergence is deliberate and
+//! recorded here, not silently substituted.
 //!
 //! ## Content address (the cache KEY)
 //!
@@ -69,7 +67,7 @@
 //! never cached; the runtime tree is copied by `write_emitted_project`
 //! independently of the cache, exactly as it always was).
 //!
-//! ## Version epoch (Task 20 — toolchain refuse-don't-guess)
+//! ## Version epoch (toolchain refuse-don't-guess)
 //!
 //! [`derive_epoch`] hashes the CURRENTLY RUNNING `skyc` binary's own bytes
 //! (`compiler_revision()`, matching the design doc's row verbatim: "content
@@ -93,9 +91,8 @@
 //! **Not yet ported**: `ipe watch`'s specific mid-session UX (hard-refuse a
 //! REBUILD with `toolchain changed (was A, now B) — restart 'ipe watch'`
 //! while keeping the last-good binary alive) needs a live watch session to
-//! refuse INTO — that session doesn't exist yet (design doc Phase 7,
-//! unscheduled here). What Task 20 delivers now is the sound FOUNDATION
-//! Phase 7 builds that UX on: the version-epoch gate itself.
+//! refuse INTO. The sound foundation that UX builds on is the version-epoch
+//! gate itself.
 //!
 //! ## Advisory semantics (never a build failure)
 //!
@@ -189,12 +186,12 @@ pub fn compute_project_key(
     hex::encode(hasher.finalize())
 }
 
-/// Domain-separation tag for the Phase 6.5 lowered-IR content-address key —
+/// Domain-separation tag for the lowered-IR content-address key —
 /// distinct from [`KEY_TAG`] because this tier's key excludes `db_driver`
 /// (see [`compute_ir_key`]'s doc for why).
 const IR_KEY_TAG: &[u8] = b"skyc-build-cache-ir-key-v1";
 
-/// Compute the content-address key for the Phase 6.5 lowered-IR cache tier:
+/// Compute the content-address key for the lowered-IR cache tier:
 /// a pure function of every input that determines
 /// [`sky_db::lower_program`]'s output.
 ///
@@ -355,7 +352,7 @@ pub fn store(cache_root: &Path, epoch: &str, key: &str, project: &EmittedProject
 }
 
 // ---------------------------------------------------------------------------
-// Phase 6.5: the lowered-IR cache tier
+// The lowered-IR cache tier
 // ---------------------------------------------------------------------------
 //
 // Sits ONE STAGE EARLIER than the `EmittedProject` tier above: a hit here
@@ -666,7 +663,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Phase 6.5 — the lowered-IR cache tier
+    // The lowered-IR cache tier
     // -----------------------------------------------------------------
 
     fn sample_ir_program(i: &mut Interner) -> sky_diagnostics::DResult<Program> {

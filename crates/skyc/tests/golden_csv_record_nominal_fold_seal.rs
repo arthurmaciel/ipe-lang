@@ -1,12 +1,12 @@
-//! Regression for the BACKLOG row "Std.Csv record literal vs nominal `CsvDoc`
-//! mismatch at the kernel boundary". A record literal of the canonical `Csv`
+//! Regression for the "Std.Csv record literal vs nominal `CsvDoc` mismatch at
+//! the kernel boundary". A record literal of the canonical `Csv`
 //! shape `{ header : List String, rows : List (List String) }` fed directly to
-//! `Csv.encode` used to be emitted as a backend-synthesised `RecHeaderRows`
-//! struct, while the `csv_encode` kernel takes `sky_runtime::csv::CsvDoc`:
-//! `skyc` exited 0, but the emitted `cargo build` failed with E0308
+//! `Csv.encode` must not be emitted as a backend-synthesised `RecHeaderRows`
+//! struct while the `csv_encode` kernel takes `sky_runtime::csv::CsvDoc`:
+//! that is `skyc` exit 0 then a `cargo build` E0308
 //! (`expected CsvDoc, found RecHeaderRows`).
 //!
-//! Fix: `sky_lower::lower::ir_type_from_ty` / `ir_type_from_canon` fold a
+//! So `sky_lower::lower::ir_type_from_ty` / `ir_type_from_canon` fold a
 //! record of that exact shape (field NAMES `header`/`rows` AND field TYPES
 //! `List String` / `List (List String)`) to the nominal `IrType::CsvDoc`
 //! (`is_csv_doc_shape` / `is_csv_doc_canon_shape`) — mirror of the
@@ -118,9 +118,10 @@ fn csv_record_literal_emits_runtime_csv_doc_struct() {
 }
 
 /// The load-bearing SEAL proof: under `SKY_E2E=1`, actually `cargo build` the
-/// emitted crate and run it. Pre-fix this would fail `cargo build` with E0308
-/// (`expected CsvDoc, found RecHeaderRows`); post-fix it builds and prints `2`
-/// (the parsed-back header has two columns, `id` + `name`).
+/// emitted crate and run it. A `RecHeaderRows` fold would fail `cargo build`
+/// with E0308 (`expected CsvDoc, found RecHeaderRows`); the nominal `CsvDoc`
+/// fold builds and prints `2` (the parsed-back header has two columns, `id` +
+/// `name`).
 #[test]
 fn csv_record_nominal_fold_seal_builds_and_runs() {
     let root = repo_root();

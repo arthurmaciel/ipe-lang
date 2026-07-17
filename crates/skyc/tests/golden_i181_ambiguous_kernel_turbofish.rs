@@ -1,4 +1,4 @@
-//! #181 regression: polymorphic-kernel turbofish on genuinely-free result types.
+//! Regression: polymorphic-kernel turbofish on genuinely-free result types.
 //!
 //! When the HM solver leaves a polymorphic kernel's result type parameter
 //! GENUINELY UNCONSTRAINED — a discarded / empty / phantom position — the
@@ -41,7 +41,7 @@ fn golden_entry(name: &str) -> PathBuf {
 
 const FIXTURE: &str = "i181_ambiguous_kernel_turbofish";
 
-/// skyc must ACCEPT the program (it always did — #181 was never a type error).
+/// skyc must ACCEPT the program (this is never a type error).
 /// Pure skyc compile: no cargo, always runs.
 #[test]
 fn ambiguous_kernel_turbofish_compiles() {

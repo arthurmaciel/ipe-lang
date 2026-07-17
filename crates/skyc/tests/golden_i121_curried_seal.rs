@@ -1,8 +1,8 @@
-//! #121 seal — curried `FuncValue` arity-exact invariant.
+//! Seal — curried `FuncValue` arity-exact invariant.
 //!
 //! A named def with def-arity `k < N` referenced at a slot type that flattens
-//! to `Fun([T0,…,T_{N-1}], R)` used to emit `Expr::FuncValue` with a
-//! mismatched arity, producing Rust that cargo rejects with E0593.  Companion
+//! to `Fun([T0,…,T_{N-1}], R)` must not emit `Expr::FuncValue` with a
+//! mismatched arity, which produces Rust that cargo rejects with E0593.  Companion
 //! hole: a non-`Copy` local captured inside a lambda or partial application
 //! would be moved into a `move` closure on first call, making the closure
 //! `FnOnce` when the slot expects `Fn` (E0507 / E0525).
@@ -352,12 +352,12 @@ fn f5_capture_fn_called_control() {
 // ── F6 — fn-typed capture forwarded (non-callee) → Arc-promoted, ACCEPTED ────
 
 /// `compose f = \x -> applyTwice f x` — `f : Int -> Int` forwarded in a
-/// non-callee position. RE-CLASSIFIED by the #221 fn-value `Arc`-carrier
-/// promotion: the param is shadow-rebound to the `Clone` `Arc<dyn Fn>` carrier
+/// non-callee position. Under the fn-value `Arc`-carrier promotion,
+/// the param is shadow-rebound to the `Clone` `Arc<dyn Fn>` carrier
 /// and the read re-dispatched through a fresh `Box` closure, so the program
-/// compiles and runs (`compose (+1) 3` = `(+1)((+1) 3)` = `5`). The old
-/// SKY-L0125/6 gate was sound only while the sole carrier was a non-`Clone`
-/// `Box<dyn Fn>` — the state it rejected is no longer invalid, so keeping it
+/// compiles and runs (`compose (+1) 3` = `(+1)((+1) 3)` = `5`). A
+/// SKY-L0125/6 gate is sound only while the sole carrier is a non-`Clone`
+/// `Box<dyn Fn>` — the state it would reject is not invalid here, so keeping it
 /// would be over-rejection, not soundness.
 #[test]
 fn f6_capture_fn_forwarded_promoted_accepts() {
@@ -392,7 +392,7 @@ fn f6_capture_fn_forwarded_promoted_accepts() {
 
 /// `mkPair : String -> (Int -> String)`, def-arity 1, used in
 /// `JsonDec.succeed mkPair |> Pipe.required … |> Pipe.required …`.
-/// T6 eta-adapter inside `curry2`'s bound — was E0593 before the fix.
+/// T6 eta-adapter inside `curry2`'s bound — E0593 without the arity-exact fix.
 #[test]
 fn f7_succeed_curried() {
     if std::env::var("SKY_E2E").is_err() {
@@ -531,11 +531,11 @@ fn f9_decoder_thunk_capture() {
 /// `pairWith : a -> b -> (a, b)`, def-arity 1.  `x`'s declared type `a` lowers
 /// cleanly at `pairWith`'s OWN def-head (the polymorphism gate,
 /// `current_poly_tvars`, is populated for `pairWith`'s own quantified vars
-/// before `lower_def` recurses into the body — #164's `poly_tvar_symbol` fix
-/// closed a tagged/untagged solver-var-ID mismatch that used to make this
-/// SAME lookup miss for a captured-site (zonked, tagged) region read, which
-/// masked this gate behind a spurious `SKY-L0102` here). With the def-head
-/// lookup now succeeding, lowering reaches the lambda body `\y -> (x, y)`,
+/// before `lower_def` recurses into the body — `poly_tvar_symbol` closes a
+/// tagged/untagged solver-var-ID mismatch that would make this
+/// SAME lookup miss for a captured-site (zonked, tagged) region read,
+/// masking this gate behind a spurious `SKY-L0102`). With the def-head
+/// lookup succeeding, lowering reaches the lambda body `\y -> (x, y)`,
 /// where `x : a` is captured `NonClone` (`clone_class(Generic) => NonClone`)
 /// and read outside callee position (inside a `Tuple`) — T3's capture-clone
 /// gate fires `SKY-L0126` (`Feature::NonCloneCapture`). With T5 implemented,
@@ -552,17 +552,16 @@ fn f10_generic_curried_gate_l0126() {
     );
 }
 
-// ── F11 — curried fn in `JsonDecP.custom` pipeline step (#164 follow-up) ─────
+// ── F11 — curried fn in `JsonDecP.custom` pipeline step ─────
 
 /// `mkPair : String -> (Int -> String)`, def-arity 1, same shape as F7 but the
 /// pipeline's second step is `Pipe.custom` (not `Pipe.required`).  Reproduces
 /// the independent-review-found gap: `is_pipeline_next_decoder_kernel`
 /// (`crates/sky_lower/src/lower.rs`) listed only five of the six
 /// `Decoder<E, Box<dyn FnOnce(_) -> _>>`-shaped kernels, omitting
-/// `KernelFn::JsonDecPCustom`.  Pre-fix: `skyc build` exited 0 but the emitted
-/// `decode_pipeline_custom` call site failed `cargo build` with 2×E0308
-/// (`expected trait 'Fn', found trait 'FnOnce'`) — reproduced and confirmed
-/// against this exact fixture before the one-line gate fix landed.
+/// `KernelFn::JsonDecPCustom`.  Without the fix, `skyc build` exits 0 but the emitted
+/// `decode_pipeline_custom` call site fails `cargo build` with 2×E0308
+/// (`expected trait 'Fn', found trait 'FnOnce'`).
 #[test]
 fn f11_pipeline_custom_curried() {
     if std::env::var("SKY_E2E").is_err() {

@@ -32,8 +32,8 @@ fn out(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name)
 }
 
-/// Negative: `f x = (x ++ x) + 1` must be rejected with SKY-T0014.
-/// Before the fix this returned exit 0 (seal violation).
+/// Negative: `f x = (x ++ x) + 1` must be rejected with SKY-T0014,
+/// never accepted at exit 0 (a seal violation).
 #[test]
 fn append_and_number_on_same_var_is_sky_t0014() {
     let Ok(rt) = skyc::resolve_runtime() else {

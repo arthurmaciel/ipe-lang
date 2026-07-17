@@ -1,4 +1,4 @@
-//! M4a stdlib-foundation parity gate: the Prelude-exposed built-in
+//! Stdlib-foundation parity gate: the Prelude-exposed built-in
 //! constructors (`True` / `False`, `Just` / `Nothing`, `Ok` / `Err`) usable as
 //! VALUE expressions and in `case` patterns (closing SKY-N0001 / SKY-N0003), and
 //! the built-in `List` type with `[]` / `[a, b, c]` literals and the `::` cons

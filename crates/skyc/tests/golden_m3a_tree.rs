@@ -1,4 +1,4 @@
-//! Milestone-3a recursive-ADT gate: a directly self-recursive enum whose
+//! Recursive-ADT gate: a directly self-recursive enum whose
 //! payload fields are the enum itself. `skyc` must emit `main.rs` byte-identical
 //! to the checked-in golden, and (behind `SKY_E2E=1`) the emitted project must
 //! build and print `12`.
@@ -16,7 +16,7 @@
 //! `/home/arthur/Documentos/comp/sky/sky-out/sky` compiles + runs the SAME
 //! `Main.sky` to stdout `12\n`, exit 0 — hand-verified in a temp dir. The
 //! hand-computed `12` is the in-test oracle, and this is the soundness-floor
-//! regression for a value laundered through a boxed-recursive payload.
+//! Regression for a value laundered through a boxed-recursive payload.
 use std::path::{Path, PathBuf};
 
 mod support;

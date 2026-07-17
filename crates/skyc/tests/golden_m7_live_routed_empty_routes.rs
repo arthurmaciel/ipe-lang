@@ -1,16 +1,16 @@
-//! #108 Part B regression — routed `Live.app` with `routes = []` and a wrong
-//! `notFound` type must be rejected by skyc with SKY-T0001.
+//! Routed `Live.app` with `routes = []` and a wrong `notFound` type must be
+//! rejected by skyc with SKY-T0001.
 //!
 //! ## Background
 //!
-//! Part A of #108 made `LiveRoute` phantom-parametric (`LiveRoute page`) so
-//! route CONSTRUCTORS force `var(2)` (the page type) to match.  But with an
-//! EMPTY `routes = []` list there is no constructor to witness `var(2)`, so
-//! `var(2)` was pinned only by `notFound` — any type satisfied it.  The result
-//! was that `notFound = 5` (Int) typed as skyc-Ok, then the emitted `set_page`
-//! closure (`__page: Page, __model: Model`) was rejected by cargo with E0308.
+//! `LiveRoute` is phantom-parametric (`LiveRoute page`) so route CONSTRUCTORS
+//! force `var(2)` (the page type) to match.  But with an EMPTY `routes = []`
+//! list there is no constructor to witness `var(2)`, so `var(2)` would be
+//! pinned only by `notFound` — any type would satisfy it.  Then `notFound = 5`
+//! (Int) would type as skyc-Ok, and the emitted `set_page` closure (`__page:
+//! Page, __model: Model`) would be rejected by cargo with E0308.
 //!
-//! Part B closes the hole by adding a post-solve `RoutedLiveCheck`:
+//! A post-solve `RoutedLiveCheck` closes the hole:
 //! * If the settled Model type has a `page` field → routed app → unify
 //!   `notFound`'s type with `Model.page`'s type → SKY-T0001 on mismatch.
 //! * If Model has no `page` field → non-routed app → no check.
@@ -129,11 +129,11 @@ main =
         }
 ";
 
-/// #153 regression: `Live.app` with a NON-EMPTY `routes` list but Model has
+/// `Live.app` with a NON-EMPTY `routes` list but Model has
 /// no `page` field.  The Go oracle (`tools/oracle/bin/sky`) compiles this fine
 /// (Go's `applyRoute` calls `RecordUpdate(model, {"Page": page})` which is a
-/// silent no-op when the `Page` field is absent).  Our #120 Item-2 gate was
-/// stricter than the reference — this shape must compile on the non-routed path.
+/// silent no-op when the `Page` field is absent).  This shape must compile on
+/// the non-routed path, matching the reference.
 ///
 /// Shape mirrors `examples/24-tui-kitchen-sink` (single nullary route, no
 /// `page` field in Model).
@@ -271,7 +271,7 @@ fn routed_correct_app_compiles() {
     );
 }
 
-// ── Previously-fixed (Part A) regressions — must still produce SKY-T0001 ──────
+// ── Non-empty routes with wrong notFound — must produce SKY-T0001 ──────
 
 /// T4d: non-empty routes (Part A fix), `notFound` from wrong ADT.
 ///
@@ -353,7 +353,7 @@ fn non_routed_live_app_compiles() {
     );
 }
 
-// ── #108 round 4 (hole 1) — WELL-TYPED empty-routes golden must CARGO-build ──
+// ── WELL-TYPED empty-routes golden must CARGO-build ──
 //
 // R1/R2 above pin the REJECTIONS; this pins the acceptance side of the same
 // empty-routes surface. `routes = []` emits a typed `Vec::<Route<…>>::new()`
@@ -433,15 +433,15 @@ fn routed_empty_routes_well_typed_cargo_builds() {
     );
 }
 
-// ── #153 regression ──────────────────────────────────────────────────────────
+// ── Non-empty routes, no `page` field → non-routed path ──────────────────────
 //
 // The Go oracle compiles a `Live.app` with non-empty `routes` but no `page`
 // field in Model — `applyRoute` calls `RecordUpdate(model, {"Page": page})`
-// which silently no-ops when `Page` is absent.  Our #120 Item-2 gate was
-// stricter than the reference and must be removed.  The non-routed path
-// (`live_app`) is emitted instead.
+// which silently no-ops when `Page` is absent.  This shape must not be gated
+// stricter than the reference; the non-routed path (`live_app`) is emitted
+// instead.
 
-/// #153: `Live.app` with a non-empty `routes` list but Model has no `page`
+/// `Live.app` with a non-empty `routes` list but Model has no `page`
 /// field must compile on the non-routed path (mirrors `examples/24-tui-
 /// kitchen-sink` and `examples/25-sky-console`).
 ///

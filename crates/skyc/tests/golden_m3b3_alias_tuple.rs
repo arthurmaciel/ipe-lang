@@ -1,4 +1,4 @@
-//! Milestone-3b-3 alias / `as` patterns over a DESTRUCTURING head:
+//! Alias / `as` patterns over a DESTRUCTURING head:
 //! `case pair of (a, b) as whole -> …`. The `as` binds the whole matched
 //! tuple (`whole`) alongside its two element binders (`a`, `b`), all in scope
 //! in the arm body. This lowers to Rust's binding-with-subpattern

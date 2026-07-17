@@ -1,4 +1,4 @@
-//! i155 regression lock — `Input.radio`, `Input.radioRow`, and `Input.option`
+//! `Input.radio`, `Input.radioRow`, and `Input.option`
 //! must type-check and lower without `SKY-N0005: Input has no member radio`.
 //!
 //! Before this fix, `InputRadio`, `InputRadioRow`, and `InputOption` had no

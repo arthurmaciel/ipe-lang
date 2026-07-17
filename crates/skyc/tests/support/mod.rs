@@ -48,8 +48,8 @@ pub fn repo_root() -> PathBuf {
 /// The directory holding a golden's `main.rs` — i.e. `golden.parent()` — with a
 /// non-panicking fallback (a golden path built as `<dir>/main.rs` always has a
 /// parent; the fallback keeps this `expect`-free under the workspace-wide
-/// `clippy::expect_used` deny). Centralises the derivation that 40+ golden tests
-/// previously copy-pasted as `golden.parent().expect(...)`.
+/// `clippy::expect_used` deny). Centralises the derivation for the 40+ golden
+/// tests that need it rather than copy-pasting `golden.parent().expect(...)`.
 #[allow(dead_code)] // shared helper: used by the 45 byte-diff goldens, not every binary
 pub fn golden_dir_of(golden: &Path) -> &Path {
     golden.parent().unwrap_or(golden)
@@ -75,14 +75,12 @@ pub fn golden_dir_of(golden: &Path) -> &Path {
 /// under-emission (a missing emitted file) and content drift fail loudly, each
 /// with the offending relative path.
 ///
-/// **Migration note — this BROADENS a `main.rs`-only assertion.** Because
-/// `Cargo.toml` is compared whenever the golden dir checks one in, migrating a
-/// test that previously byte-diffed ONLY `main.rs` onto this helper silently
-/// adds a `Cargo.toml` comparison. That is usually desirable (it catches
-/// manifest drift), but it can turn green-on-migration into a real red if the
-/// golden `Cargo.toml` was left stale by an earlier `main.rs`-only test — so a
-/// migration surfacing a `Cargo.toml` mismatch is a genuine finding to fix at
-/// root (refresh the stale manifest), not a helper bug to route around.
+/// **This compares `Cargo.toml` too, not only `main.rs`.** Because
+/// `Cargo.toml` is compared whenever the golden dir checks one in, a test using
+/// this helper gets a `Cargo.toml` comparison in addition to `main.rs`. That is
+/// usually desirable (it catches manifest drift), but a stale golden
+/// `Cargo.toml` surfaces as a `Cargo.toml` mismatch — a genuine finding to fix
+/// at root (refresh the stale manifest), not a helper bug to route around.
 ///
 /// # Panics
 ///
@@ -103,7 +101,7 @@ pub fn assert_emitted_project_matches_golden_dir(emitted_out: &Path, golden_dir:
         pairs.push(("Cargo.toml".to_owned(), emitted_out.join("Cargo.toml")));
     }
 
-    // Per-Sky-module split files (Phase 5 Milestone C): when the emitted
+    // Per-Sky-module split files: when the emitted
     // project splits into `src/sky_mods/<mod>.rs`, each is compared byte-for-byte
     // against `<golden_dir>/sky_mods/<mod>.rs`. The comparison is SYMMETRIC —
     // the union of the emitted set and the golden set is walked, so an emitted
@@ -170,7 +168,7 @@ pub fn assert_emitted_project_matches_golden_dir(emitted_out: &Path, golden_dir:
 
 /// Concatenate the text of every emitted Sky-side `.rs` file under
 /// `<emitted_out>/src` — `src/main.rs` plus every `src/sky_mods/*.rs` the
-/// per-Sky-module split (Phase 5 Milestone C) may have written — into ONE
+/// per-Sky-module split may have written — into ONE
 /// string, so a substring assertion is robust to WHICH file the split placed
 /// a symbol in.
 ///

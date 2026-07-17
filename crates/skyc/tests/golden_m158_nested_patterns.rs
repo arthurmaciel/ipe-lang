@@ -1,10 +1,10 @@
-//! #158 Class 4 item C — nested-constructor-payload function-argument patterns.
+//! Class 4 item C — nested-constructor-payload function-argument patterns.
 //!
-//! Two shapes that used to fail-closed (SKY-L0112 record / SKY-L0116 cons) where
-//! the reference (../sky) recurses and compiles are now ACCEPTED:
+//! Two shapes that the reference (../sky) recurses into and compiles are
+//! ACCEPTED (rather than fail-closing as SKY-L0112 record / SKY-L0116 cons):
 //!
 //! * A RECORD sub-pattern nested in a ctor payload (`Ok { name }`) — the
-//!   constraint generator now records a region on every `PCtor` (and `PTuple`)
+//!   constraint generator records a region on every `PCtor` (and `PTuple`)
 //!   sub-pattern, so the lowerer recovers the nested record's complete field set
 //!   exactly the way a top-level `case` / `let` binder already does. No backend
 //!   change (a `Pat::Record` nested in `Pat::Ctor.args` is already valid Rust).
@@ -158,8 +158,8 @@ fn nested_cons_no_fallback_stays_gated() {
 /// levels deep in a ctor payload (`Just (Just "x")`) — one hop past the
 /// direct-arg string-literal desugaring's scope (`Just "x"` at depth 1, which
 /// `nested_strlit_ctor_payload_accepted` below confirms still works). Must
-/// stay fail-closed with SKY-L0116, never accept-then-cargo-fail (was
-/// silently accepted pre-fix, emitting `SkyMaybe::Just(SkyMaybe::Just("x"))`
+/// stay fail-closed with SKY-L0116, never accept-then-cargo-fail (silent
+/// acceptance would emit `SkyMaybe::Just(SkyMaybe::Just("x"))`
 /// — E0308 at `cargo build`, expected `String` found `&str`).
 #[test]
 fn nested_strlit_two_levels_stays_gated() {
@@ -170,7 +170,7 @@ fn nested_strlit_two_levels_stays_gated() {
 }
 
 /// Companion positive control: the depth-1 direct-arg string-literal ctor
-/// payload (`Just "live"`) that the #158 C2 desugaring DOES support must still
+/// payload (`Just "live"`) that the C2 desugaring DOES support must still
 /// be accepted and run correctly — guards the sibling-gap fix above from
 /// over-tightening the gate.
 #[test]

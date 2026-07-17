@@ -1,4 +1,4 @@
-//! #178 regression lock — THE SEAL for `Std.Ui.Input.*` callback fields.
+//! Regression lock — THE SEAL for `Std.Ui.Input.*` callback fields.
 //!
 //! Every `Std.Ui.Input.*` runtime function (`input_text_`, `input_slider_`,
 //! `input_checkbox_`, `input_radio_row_`, …) takes its callback fields
@@ -77,7 +77,7 @@ fn build_run_input_callback() -> support::RunOutcome {
     support::build_and_run_emitted("m7_input_callback_maybe_field", &out)
 }
 
-/// #178: a bare-constructor `onChange` (and checkbox `icon`) on every
+/// A bare-constructor `onChange` (and checkbox `icon`) on every
 /// `Std.Ui.Input.*` cfg record must Arc-wrap so the emitted Rust `cargo build`s
 /// (exit 0) and the binary runs (exit 0), rendering all four Input controls.
 #[test]

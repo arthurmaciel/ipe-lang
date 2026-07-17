@@ -1,10 +1,9 @@
-//! #101 seal — the home-aware enum guard in `sky_lower::ir_type_from_ty` must
+//! Seal — the home-aware enum guard in `sky_lower::ir_type_from_ty` must
 //! win over the bare-name Std.Ui / Sky.Live opaque arms.
 //!
-//! Before #101, `ir_type_from_ty` matched the bare name `"Color"` (→
-//! `IrType::UiPlain(UiPlain::Color)`) BEFORE the `enum_variants` guard, so a
-//! program-defined `type Color` that flowed through the INFERRED lowering path
-//! was hijacked to the opaque Std.Ui `Color`:
+//! Matching the bare name `"Color"` (→ `IrType::UiPlain(UiPlain::Color)`)
+//! BEFORE the `enum_variants` guard would hijack a program-defined `type Color`
+//! that flows through the INFERRED lowering path to the opaque Std.Ui `Color`:
 //!
 //! * (i) a boxed `Fn(Color)` HOF argument emitted `Box<dyn
 //!   Fn(sky_runtime::ui::element::Color) -> _>` → skyc-0 / cargo-101 (E0433).
@@ -12,7 +11,7 @@
 //!   ty-path (→ `UiPlain::Color`) while the annotation lowered it via
 //!   `ir_type_from_canon` (→ `MainColor`) — the two disagreed → SKY-I0001.
 //!
-//! #101 moves the `enum_variants.contains_key(&(home, name))` guard AHEAD of the
+//! The `enum_variants.contains_key(&(home, name))` guard sits AHEAD of the
 //! nullary opaque arms (mirroring `ir_type_from_canon`), so a program union
 //! resolves to its OWN enum by `(home, name)` identity while the genuine Std.Ui
 //! builtin (no union entry) still falls through to `UiPlain`.
@@ -95,7 +94,7 @@ fn user_color_via_hof_resolves_to_own_enum() {
         "user `type Color` must emit its own `MainColor` enum"
     );
     // …and the HOF's boxed `Fn(Color)` argument now takes `MainColor` (THE fix);
-    // pre-#101 it was `Box<dyn Fn(sky_runtime::ui::element::Color) -> _>` → E0433.
+    // pre-it was `Box<dyn Fn(sky_runtime::ui::element::Color) -> _>` → E0433.
     assert!(
         program.contains("Fn(MainColor)"),
         "the inferred boxed HOF argument must take `MainColor`, not the opaque \

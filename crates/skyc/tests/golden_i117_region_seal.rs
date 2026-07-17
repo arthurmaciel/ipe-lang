@@ -1,4 +1,4 @@
-//! #117 seal — all 8 `Std.Ui.Region` kernel members exercised inside
+//! Seal — all 8 `Std.Ui.Region` kernel members exercised inside
 //! `Ui.layout`.  Asserts skyc-0 ∧ cargo-0.
 //!
 //! Kernels under test:

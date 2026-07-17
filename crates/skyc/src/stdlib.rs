@@ -7,13 +7,11 @@
 //! `sky-stdlib` sources; embedding a copy (rather than `include_str!`-ing an
 //! out-of-repo path) keeps the build portable and the toolchain hermetic.
 //!
-//! M4a embeds the foundational set — `Basics`, `Maybe`, `Result`, `List` — and
-//! resolves `Sky.Core.Prelude` to `Basics` (the Prelude re-exports the
-//! non-numeric basics, exactly as the reference compiler maps it). M4b adds
-//! `Sky.Core.String` and `Sky.Core.Char`. The source is ordinary Sky: the same
-//! parser that reads user code reads it (the `parses` test proves it), so it is
-//! the substrate the import resolver compiles once whole-program
-//! let-generalisation lands.
+//! `Sky.Core.Prelude` resolves to `Basics` (the Prelude re-exports the
+//! non-numeric basics, exactly as the reference compiler maps it). The source
+//! is ordinary Sky: the same parser that reads user code reads it (the
+//! `parses` test proves it), so it is the substrate the import resolver
+//! compiles.
 
 /// One embedded standard-library module: its dotted name and its Sky source.
 pub struct StdModule {
@@ -31,50 +29,50 @@ const MAYBE: &str = include_str!("../stdlib/Sky/Core/Maybe.sky");
 const RESULT: &str = include_str!("../stdlib/Sky/Core/Result.sky");
 /// `Sky.Core.List` — list combinators.
 const LIST: &str = include_str!("../stdlib/Sky/Core/List.sky");
-/// `Sky.Core.String` — string combinators (M4b).
+/// `Sky.Core.String` — string combinators.
 const STRING: &str = include_str!("../stdlib/Sky/Core/String.sky");
-/// `Sky.Core.Char` — single-character helpers (M4b).
+/// `Sky.Core.Char` — single-character helpers.
 const CHAR: &str = include_str!("../stdlib/Sky/Core/Char.sky");
-/// `Sky.Core.Dict` — string-keyed associative map (M4d).
+/// `Sky.Core.Dict` — string-keyed associative map.
 const DICT: &str = include_str!("../stdlib/Sky/Core/Dict.sky");
-/// `Sky.Core.Set` — unordered set of unique elements (M4d).
+/// `Sky.Core.Set` — unordered set of unique elements.
 const SET: &str = include_str!("../stdlib/Sky/Core/Set.sky");
-/// `Sky.Core.Bytes` — arbitrary byte buffer, distinct from `String` (M4e).
+/// `Sky.Core.Bytes` — arbitrary byte buffer, distinct from `String`.
 ///
 /// Divergence from Sky: Sky defines `type alias Bytes = String`; Sky-Rust
 /// makes `Bytes` a distinct primitive lowering to `Vec<u8>` (lossless for
 /// non-UTF-8 binary). See `docs/architecture/divergence-policy.md`.
 const BYTES: &str = include_str!("../stdlib/Sky/Core/Bytes.sky");
-/// `Sky.Core.Crypto` — hashes / HMAC / RSA / AEAD / key-derivation / random (M5a).
+/// `Sky.Core.Crypto` — hashes / HMAC / RSA / AEAD / key-derivation / random.
 const CRYPTO: &str = include_str!("../stdlib/Sky/Core/Crypto.sky");
-/// `Sky.Core.Task` — Task combinator surface (M5a).
+/// `Sky.Core.Task` — Task combinator surface.
 const TASK: &str = include_str!("../stdlib/Sky/Core/Task.sky");
-/// `Sky.Core.Io` — standard-I/O effect kernels (M5a).
+/// `Sky.Core.Io` — standard-I/O effect kernels.
 const IO: &str = include_str!("../stdlib/Sky/Core/Io.sky");
-/// `Sky.Core.Time` — time effect kernels (M5a).
+/// `Sky.Core.Time` — time effect kernels.
 const TIME: &str = include_str!("../stdlib/Sky/Core/Time.sky");
-/// `Sky.Core.System` — process / environment effect kernels (M5a).
+/// `Sky.Core.System` — process / environment effect kernels.
 const SYSTEM: &str = include_str!("../stdlib/Sky/Core/System.sky");
-/// `Sky.Core.Random` — entropy-backed randomness effect kernels (M5a).
+/// `Sky.Core.Random` — entropy-backed randomness effect kernels.
 const RANDOM: &str = include_str!("../stdlib/Sky/Core/Random.sky");
-/// `Sky.Core.File` — file-system effect kernels (M5a).
+/// `Sky.Core.File` — file-system effect kernels.
 const FILE: &str = include_str!("../stdlib/Sky/Core/File.sky");
-/// `Sky.Core.Http` — outbound HTTP client kernels + pure builders (M5b).
+/// `Sky.Core.Http` — outbound HTTP client kernels + pure builders.
 const HTTP: &str = include_str!("../stdlib/Sky/Core/Http.sky");
 
-/// `Sky.Core.Path` — pure filesystem-path helpers, compiled-source Layer-3 (#202).
+/// `Sky.Core.Path` — pure filesystem-path helpers, compiled-source Layer-3.
 ///
 /// The members are point-free `Ffi.kernel "Path_*"` aliases resolved by the
-/// #196 kernel-alias mechanism (`sky_canon::resolve::detect_kernel_alias`) to
+/// kernel-alias mechanism (`sky_canon::resolve::detect_kernel_alias`) to
 /// the pure `PathBase`/`PathDir`/`PathExt`/`PathIsAbsolute` `StdlibKernel`
 /// variants. Registered in [`COMPILED_STD_MODULES`] (NOT `MODULES`) so its body
 /// is actually compiled; NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness
 /// invariant holds.
 const PATH: &str = include_str!("../stdlib/Sky/Core/Path.sky");
-/// `Sky.Core.Regex` — RE2 regex helpers, compiled-source Layer-3 (#194).
+/// `Sky.Core.Regex` — RE2 regex helpers, compiled-source Layer-3.
 ///
 /// The members are point-free `Ffi.kernel "Regex_*"` aliases resolved by the
-/// #196 kernel-alias mechanism (`sky_canon::resolve::detect_kernel_alias`) to
+/// kernel-alias mechanism (`sky_canon::resolve::detect_kernel_alias`) to
 /// the pure `RegexMatch`/`RegexFind`/… `StdlibKernel` variants. Registered in
 /// [`COMPILED_STD_MODULES`] (NOT `MODULES`) so its body is actually compiled;
 /// NOT in `STDLIB_MODULE_QUALIFIERS`, so the disjointness invariant holds.
@@ -174,7 +172,7 @@ pub fn source(module_name: &str) -> Option<&'static str> {
 }
 
 // ===========================================================================
-// Compiled-source stdlib modules (#98) — DISJOINT from `MODULES` above.
+// Compiled-source stdlib modules — DISJOINT from `MODULES` above.
 // ===========================================================================
 //
 // `MODULES` above is a PARSE-TEST fixture: those `Sky.Core.*` files are shadow
@@ -198,18 +196,18 @@ pub struct CompiledStdModule {
     pub source: &'static str,
 }
 
-/// `Std.Palette` — the #98 spike: a Std-namespace module that defines `Shade`
+/// `Std.Palette` — a Std-namespace module that defines `Shade`
 /// and pattern-matches its own constructors in `toHex`.
 const PALETTE: &str = include_str!("../stdlib/Std/Palette.sky");
 
-/// `Std.Css` (#47) — the typed stylesheet DSL, compiled pure Sky source: it
+/// `Std.Css` — the typed stylesheet DSL, compiled pure Sky source: it
 /// defines AND pattern-matches its own `CssProp` / `CssRule` / `Length` /
 /// `Color` / keyword-enum ADTs and folds them to a CSS string.  Its only Rust
 /// surface is the four leaf security kernels under the `Sky.Core.CssSafety`
 /// kernel qualifier (NOT under `Std.Css`, so the disjointness invariant holds).
 const CSS: &str = include_str!("../stdlib/Std/Css.sky");
 
-/// `Sky.Core.ToString` (#80) — naming-consistency surface (v0.15.48+).
+/// `Sky.Core.ToString` — naming-consistency surface.
 ///
 /// Thin pure-Sky aliases to canonical kernels in their home modules so callers
 /// can write `ToString.fromInt n` without memorising the per-type kernel
@@ -218,7 +216,7 @@ const CSS: &str = include_str!("../stdlib/Std/Css.sky");
 /// exists in `STDLIB_MODULE_QUALIFIERS`).
 const TOSTRING_CORE: &str = include_str!("../stdlib/Sky/Core/ToString.sky");
 
-/// `Sky.Test` (#80) — lightweight in-process test framework.
+/// `Sky.Test` — lightweight in-process test framework.
 ///
 /// Compiled pure-Sky source that defines the `Test` / `TestResult` ADTs and
 /// all assertion helpers.  `expectErrorKind` / `kindName` are OMITTED pending
@@ -226,10 +224,10 @@ const TOSTRING_CORE: &str = include_str!("../stdlib/Sky/Core/ToString.sky");
 /// Disjoint from `STDLIB_MODULE_QUALIFIERS` (no `"Test"` entry exists there).
 const SKY_TEST: &str = include_str!("../stdlib/Sky/Test.sky");
 
-/// `Std.Live.Head` (#98) — typed `<head>` helpers for Sky.Live per-page injection.
+/// `Std.Live.Head` — typed `<head>` helpers for Sky.Live per-page injection.
 ///
 /// Faithfully ported from `../sky/sky-stdlib/Std/Live/Head.sky`.
-/// All helpers delegate to existing M7 kernel qualifiers (`Html` / `Attr`) —
+/// All helpers delegate to existing kernel qualifiers (`Html` / `Attr`) —
 /// no new kernel variants required.  `Std.Live.Head` is NOT in
 /// `STDLIB_MODULE_QUALIFIERS` (that table only has `Std.Live` → `"Live"`),
 /// so the disjointness invariant holds.
@@ -279,7 +277,7 @@ const STD_UI_GRID: &str = include_str!("../stdlib/Std/Ui/Grid.sky");
 const STD_UI_TRANSITION: &str = include_str!("../stdlib/Std/Ui/Transition.sky");
 
 /// `Std.Ui.Transform` — typed CSS transform / opacity helpers for `Ui.animate`
-/// keyframes (issue #378). Pure Sky; uses only `Sky.Core.*` internals — no
+/// keyframes. Pure Sky; uses only `Sky.Core.*` internals — no
 /// native primitive needed. Not in `STDLIB_MODULE_QUALIFIERS` so disjointness
 /// invariant holds. Unblocks `26-ui-showcase` (SKY-N0004: Std.Ui.Transform).
 const STD_UI_TRANSFORM: &str = include_str!("../stdlib/Std/Ui/Transform.sky");
@@ -314,7 +312,7 @@ const STD_MONEY: &str = include_str!("../stdlib/Std/Money.sky");
 /// `Sky.Core.Pure` — uniform `() -> Task Error a` companion surface.
 ///
 /// The point-free helpers `uuidV4`/`uuidV7` route through internal
-/// `Ffi.kernel "Uuid_v4"`/`"Uuid_v7"` aliases (resolved by the #196 kernel-alias
+/// `Ffi.kernel "Uuid_v4"`/`"Uuid_v7"` aliases (resolved by the kernel-alias
 /// mechanism, `sky_canon::resolve::detect_kernel_alias`).  ARITY-BLOCKED: the
 /// `uuidV4Kernel`/`uuidV7Kernel` helpers annotate an arity-0 `Task Error String`
 /// value over the arity-1 `Uuid_v4`/`Uuid_v7` kernels (`() -> Task Error String`),
@@ -341,7 +339,7 @@ const SKY_CORE_WEBSOCKET: &str = include_str!("../stdlib/Sky/Core/WebSocket.sky"
 
 /// `Std.Cache` — in-memory LRU + TTL cache (compiled source).
 ///
-/// Defines `type Cache k v = Cache Int` ADT.  RESOLVES (#210, skyc-0 AND
+/// Defines `type Cache k v = Cache Int` ADT.  RESOLVES (skyc-0 AND
 /// cargo-0): the seven `Cache_*` kernels are registered
 /// (`sky_runtime::cache::*`; a faithful port of the reference's Go+Rust cache
 /// kernels).  The opaque `Cache k v` is backed by the non-generic runtime
@@ -354,7 +352,7 @@ const STD_CACHE: &str = include_str!("../stdlib/Std/Cache.sky");
 
 /// `Std.Compression` — gzip + zstd compression (compiled source).
 ///
-/// KERNEL-BLOCKED (#196): no `Compression_*` kernel variants exist — member use
+/// KERNEL-BLOCKED: no `Compression_*` kernel variants exist — member use
 /// fails closed with SKY-N0028.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_COMPRESSION: &str = include_str!("../stdlib/Std/Compression.sky");
@@ -363,8 +361,8 @@ const STD_COMPRESSION: &str = include_str!("../stdlib/Std/Compression.sky");
 ///
 /// Defines `type Decoder a` — the SHARED opaque decoder carrier
 /// (`IrType::Decoder`, runtime `sky_runtime::json::Decoder<E, T>`), the same one
-/// `Sky.Core.Json.Decode` names as a bare reserved builtin. RESOLVES (#210,
-/// skyc-0 AND cargo-0): (a) `Std.Config`'s `Decoder` re-declaration is exempted
+/// `Sky.Core.Json.Decode` names as a bare reserved builtin. RESOLVES (skyc-0
+/// AND cargo-0): (a) `Std.Config`'s `Decoder` re-declaration is exempted
 /// from SKY-N0026 via `sky_canon`'s `STDLIB_DEFINABLE_CARRIER_TYPES` (trusted
 /// `EmbeddedStdlib` origin only — user shadowing stays rejected); the ABOVE-guard
 /// `Decoder` lowerer arm + `is_opaque_boxed_wrapper` make the re-declaration
@@ -378,15 +376,15 @@ const STD_CONFIG: &str = include_str!("../stdlib/Std/Config.sky");
 
 /// `Std.Csv` — CSV encode + decode (compiled source).
 ///
-/// Defines `type alias Csv` + pure Sky builders.  KERNEL-BLOCKED (#196): no
+/// Defines `type alias Csv` + pure Sky builders.  KERNEL-BLOCKED: no
 /// `Csv_*` kernel variants exist — member use fails closed with SKY-N0028.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_CSV: &str = include_str!("../stdlib/Std/Csv.sky");
 
 /// `Std.Email` — provider-abstract email send (compiled source).
 ///
-/// Defines `type EmailProvider` + `type alias EmailMessage` ADTs.  KERNEL-BLOCKED
-/// (#196): no `Email_*` kernel variant exists — member use fails closed with
+/// Defines `type EmailProvider` + `type alias EmailMessage` ADTs.  KERNEL-BLOCKED:
+/// no `Email_*` kernel variant exists — member use fails closed with
 /// SKY-N0028.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_EMAIL: &str = include_str!("../stdlib/Std/Email.sky");
@@ -400,7 +398,7 @@ const STD_LIVE_CONSOLE: &str = include_str!("../stdlib/Std/Live/Console.sky");
 /// `Std.PubSub` — Task-shaped publish, callable from any context (compiled source).
 ///
 /// Routes through `Ffi.kernel "PubSub_publish"` / `"PubSub_publishNoEcho"`.
-/// RESOLVES (backlog #215): `PubSubPublish`/`PubSubPublishNoEcho` now have a
+/// RESOLVES (skyc-0 AND cargo-0): `PubSubPublish`/`PubSubPublishNoEcho` have a
 /// type scheme (`String -> a -> Task Error Int`) and a dedicated emit arm
 /// (`pubsub_publish::<_, SkyError>(topic, payload)`).  A member use exits skyc-0
 /// AND cargo-0.  The payload `a` is a genuine monomorphized type var (concrete-
@@ -411,15 +409,15 @@ const STD_PUBSUB: &str = include_str!("../stdlib/Std/PubSub.sky");
 
 /// `Std.Trace` — opt-in distributed-tracing spans (compiled source).
 ///
-/// KERNEL-BLOCKED (#196): no `Trace_*` kernel variants exist — member use fails
+/// KERNEL-BLOCKED: no `Trace_*` kernel variants exist — member use fails
 /// closed with SKY-N0028.
 /// Not in `STDLIB_MODULE_QUALIFIERS` so disjointness invariant holds.
 const STD_TRACE: &str = include_str!("../stdlib/Std/Trace.sky");
 
 /// `Std.Ui.Events` — pure Sky re-exports of `Std.Ui` event helpers (compiled source).
 ///
-/// Pure Sky; no Ffi.kernel calls.  RESOLVES (#196, skyc-0 AND cargo-0): the
-/// `onSubmit`/`onInput` re-exports were re-typed to the Rust kernels'
+/// Pure Sky; no Ffi.kernel calls.  RESOLVES (skyc-0 AND cargo-0): the
+/// `onSubmit`/`onInput` re-exports are typed to the Rust kernels'
 /// function-arg schemes (`(a -> msg) -> Attribute msg` /
 /// `(String -> msg) -> Attribute msg`) — see `docs/divergences-from-sky.md`
 /// §B-UiEventsFnArg.
@@ -523,13 +521,13 @@ pub const COMPILED_STD_MODULES: &[CompiledStdModule] = &[
         dotted: "Std.Ui.Events",
         source: STD_UI_EVENTS,
     },
-    // #194: Sky.Core.Regex — Layer-3 source, `Ffi.kernel "Regex_*"` aliases route
+    // Sky.Core.Regex — Layer-3 source, `Ffi.kernel "Regex_*"` aliases route
     // to the registered pure `Regex*` kernels (`sky_runtime::regex_kernel::*`).
     CompiledStdModule {
         dotted: "Sky.Core.Regex",
         source: REGEX,
     },
-    // #202: Sky.Core.Path — Layer-3 source, `Ffi.kernel "Path_*"` aliases route
+    // Sky.Core.Path — Layer-3 source, `Ffi.kernel "Path_*"` aliases route
     // to the registered pure `Path*` kernels (`sky_runtime::path::*`).
     CompiledStdModule {
         dotted: "Sky.Core.Path",

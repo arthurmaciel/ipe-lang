@@ -1,7 +1,7 @@
-//! M4a cons / list PATTERN parity gate — the pattern engine's list shapes.
+//! Cons / list PATTERN parity gate — the pattern engine's list shapes.
 //!
-//! M4a-core landed the `List` type, its `[]` / `[a, b, c]` literals, and the
-//! `::` cons OPERATOR (value position). This gate covers the matching half: the
+//! The `List` type, its `[]` / `[a, b, c]` literals, and the
+//! `::` cons OPERATOR live in value position. This gate covers the matching half: the
 //! list shapes in PATTERN position — `[]`, `x :: xs`, `[a, b]`, and the
 //! right-nested `a :: b :: rest` — across the parser, canonicaliser, type
 //! constraints, Maranget exhaustiveness, and the Rust backend.

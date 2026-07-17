@@ -1,12 +1,11 @@
 //! AUD-04 regression — `sky_backend_rust::emit_expr`'s clone-capture and
-//! let-inlining rewrites moved from textual (rendered-Rust-source) passes to
-//! IR-level `Expr` tree rewrites. The textual passes had no string-literal
-//! or field-name awareness, so a captured-variable identifier that happened
-//! to also appear inside a string literal or as a record field key could get
+//! let-inlining rewrites operate at the IR-level `Expr` tree, not on textual
+//! (rendered-Rust-source) passes. A textual pass has no string-literal
+//! or field-name awareness, so a captured-variable identifier that also
+//! appears inside a string literal or as a record field key can be
 //! silently corrupted (wrong output) or turned into invalid Rust (build
 //! failure — a seal breach). See `docs/architecture/principles-audit-2026-07-09.md`
-//! (AUD-04) for the finding; the batch-b fix-spec's "B4" root-cause writeup
-//! is preserved in git history.
+//! (AUD-04) for the finding.
 //!
 //! Four witnesses, one per fixture, each named `aud04_*`:
 //!
@@ -18,7 +17,7 @@
 //! - `aud04_taskseq_list`: multi-use Task-list `let`-inlining (two
 //!   plain-argument uses, not closure captures) must not touch a nearby
 //!   string literal.
-//! - `aud04_taskseqsync_move`: `Expr::TaskSeqSync` (previously unhandled)
+//! - `aud04_taskseqsync_move`: `Expr::TaskSeqSync`
 //!   needs the same clone-capture rewrite `Expr::TaskSeq` gets, or a
 //!   trailing use of the effect's own argument is a use-after-move (E0382).
 //!
@@ -40,8 +39,9 @@ fn repo_root() -> PathBuf {
 }
 
 /// Build `fixture` and assert `skyc::build` succeeds (a fast, always-on
-/// compile check that alone proves the "invalid Rust" seal-breach witnesses
-/// — #2 and #4 — are fixed, since those failed at `cargo build` pre-fix).
+/// compile check that alone covers the "invalid Rust" seal-breach witnesses
+/// — the string-literal and record-field-collision cases — which otherwise
+/// fail at `cargo build`).
 fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
     let root = repo_root();
     let entry = root
@@ -65,8 +65,8 @@ fn assert_skyc_ok(fixture: &str, out_suffix: &str) {
 
 /// Under `SKY_E2E=1`, additionally build the emitted Rust project and run
 /// it, asserting exit 0 and that `expect_contains` appears verbatim in
-/// stdout (proving the wrong-output witnesses — #1 and #3 — are fixed, since
-/// those compiled fine pre-fix but printed a corrupted string).
+/// stdout (covering the wrong-output witnesses, which compile fine but print a
+/// corrupted string when the textual rewrite corrupts a shared word).
 fn assert_e2e_output(fixture: &str, expect_contains: &str) {
     if std::env::var("SKY_E2E").is_err() {
         return;
@@ -114,7 +114,7 @@ fn aud04_string_literal_not_corrupted() {
 }
 
 /// Witness 2 — a record literal's field NAME sharing text with a
-/// TaskSeq-captured var must not gain a spurious `.clone()` (pre-fix: E0xxx
+/// TaskSeq-captured var must not gain a spurious `.clone()` (without the fix, E0xxx
 /// invalid Rust at the struct-literal field-key position).
 #[test]
 fn aud04_record_field_collision_compiles_and_runs() {
@@ -137,7 +137,7 @@ fn aud04_taskseq_list_inlining_not_corrupted() {
 }
 
 /// Witness 4 — `TaskSeqSync` needs the same clone-capture rewrite as
-/// `TaskSeq`; pre-fix this arm had none, so the effect's own argument moved
+/// `TaskSeq`; without it the effect's own argument moves
 /// out from under the trailing read (E0382 use-after-move at `cargo build`).
 #[test]
 fn aud04_taskseqsync_move_compiles_and_runs() {

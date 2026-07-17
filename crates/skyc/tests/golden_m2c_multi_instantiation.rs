@@ -1,4 +1,4 @@
-//! Milestone-2C multi-instantiation parity gate: ONE generic record shape
+//! Multi-instantiation parity gate: ONE generic record shape
 //! (`{ value : a }`) used at TWO distinct concrete types in a single program —
 //! `wrap 40` instantiates `RecValue<i64>`, `wrap (1 == 1)` instantiates
 //! `RecValue<bool>` — must emit `main.rs` byte-identical to the checked-in
@@ -10,7 +10,7 @@
 //! one module, so the byte-identical golden pins that the struct is emitted ONCE
 //! (deduped by field set) and instantiated per use site (`RecValue<i64>` /
 //! `RecValue<bool>`). It locks the verified-by-hand parity into a permanent
-//! regression gate alongside m2a / m2b.
+//! Regression gate alongside m2a / m2b.
 //!
 //! `main` computes `let n = unwrap (wrap 40)` and
 //! `let flag = unwrap (wrap (1 == 1))`, then prints `if flag then n + 2 else n`

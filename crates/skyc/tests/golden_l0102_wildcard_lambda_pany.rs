@@ -1,11 +1,11 @@
 //! SKY-L0102 regression seal — wildcard lambda parameter `\_ -> expr`.
 //!
-//! Before the fix, the lowerer raised `Feature::Polymorphism` when it
-//! encountered a `PAnything` (wildcard `_`) lambda parameter whose type
-//! was left as a free `Ty::Var(_)` — a type variable that HM inference
-//! left unconstrained because the parameter is discarded.  The fix maps
-//! `Ty::Var(_)` to `IrType::Json` inside `ir_type_from_ty_json` and emits a
-//! fresh `_sky_wildcard_N` binder in `lower_lambda` / `eta_expand_partial`.
+//! A `PAnything` (wildcard `_`) lambda parameter whose type is a free
+//! `Ty::Var(_)` — a type variable HM inference leaves unconstrained because the
+//! parameter is discarded — would make the lowerer raise
+//! `Feature::Polymorphism`.  Instead, `ir_type_from_ty_json` maps `Ty::Var(_)`
+//! to `IrType::Json` and emits a fresh `_sky_wildcard_N` binder in
+//! `lower_lambda` / `eta_expand_partial`.
 //!
 //! Root cause: three call sites missed — `lower_lambda` (direct `\_ -> body`),
 //! `eta_expand_partial` (eta-expanded closure for partially-applied kernels),
@@ -53,8 +53,9 @@ fn wildcard_lambda_pany_skyc_cargo_and_run_zero() {
     assert!(runtime.is_ok(), "runtime must resolve for E2E");
     let Ok(runtime) = runtime else { return };
 
-    // skyc-0: compiler must succeed.  Pre-fix this failed with SKY-L0102
-    // ("unsupported feature: Polymorphism") on the `\_ ->` lambda parameter.
+    // skyc-0: compiler must succeed.  Without the wildcard mapping this fails
+    // with SKY-L0102 ("unsupported feature: Polymorphism") on the `\_ ->`
+    // lambda parameter.
     let built = skyc::build(&entry, &out, &runtime);
     assert!(
         built.is_ok(),

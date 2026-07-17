@@ -1,4 +1,4 @@
-//! Milestone-3b-2 irrefutable LET-destructure, end to end. The fixture is the
+//! Irrefutable LET-destructure, end to end. The fixture is the
 //! two canonical M3b-2 examples, each evaluating to 42:
 //!
 //! * `let (a, b) = (40, 2) in a + b`  → 42  (tuple binder → native Rust `let (a, b)`)
@@ -56,7 +56,7 @@ fn emits_byte_identical_main_rs() {
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
 /// program prints `84` — the same value the Go backend produces. Gated on
 /// `SKY_E2E=1` so the default `cargo test` stays fast. This is the soundness-floor
-/// regression for irrefutable let-destructure lowering.
+/// Regression for irrefutable let-destructure lowering.
 #[test]
 fn end_to_end_builds_and_prints_eighty_four() {
     if std::env::var("SKY_E2E").is_err() {

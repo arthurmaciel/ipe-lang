@@ -1,4 +1,4 @@
-//! i148 regression lock — `HttpStream.open` must return `Task Error StreamId`,
+//! `HttpStream.open` must return `Task Error StreamId`,
 //! not `Task Error Int`.
 //!
 //! Before this fix, `K::HttpStreamOpen`'s scheme was `fun(http_request(), task(int()))`.
@@ -52,7 +52,7 @@ fn http_stream_open_returns_stream_id_not_int() {
 /// Companion to the IR-text check above: `req = Http.defaultRequest url`
 /// here is passed straight to `HttpStream.open` and never read as a field
 /// nor passed through any signature that spells out the `HttpRequest`
-/// fieldset — the exact shape that used to raise SKY-I0001 during Rust
+/// fieldset — a shape prone to SKY-I0001 during Rust
 /// emission (see `golden_m5b_http.rs`'s
 /// `http_default_request_emits_without_signature_consumer`). Default-gate,
 /// emit-only (no `SKY_E2E`, no cargo build needed).

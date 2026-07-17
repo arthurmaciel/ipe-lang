@@ -1,12 +1,12 @@
-//! #130 seal — four residual `CopyLeaf` / depth / T4-hoist / T7-close holes from
-//! the post-#121 gate (ipe-121-postmerge-seal-round.md).
+//! Four residual `CopyLeaf` / depth / T4-hoist / T7-close holes in the
+//! clone-classification gate (see `ipe-121-postmerge-seal-round.md`).
 //!
 //! Fixes:
 //!
 //! * **Fix 1** — `clone_class_named_composite`: floors `CopyLeaf` → `CloneOk`
 //!   for named composite types (`IrType::Record` / `IrType::Enum`).  Emitted
-//!   Rust structs and enums derive `Clone` but NOT `Copy`, so `CopyLeaf` was
-//!   an active wrong claim that produced E0525.
+//!   Rust structs and enums derive `Clone` but NOT `Copy`, so `CopyLeaf` here
+//!   is a wrong claim that produces E0525.
 //! * **Fix 2** — `rewrite_captured_clones` depth guard: the `NonClone`
 //!   callee-position exemption fires only at `depth == 0`.  At depth > 0 the
 //!   symbol is consumed by an inner `move` closure → outer `FnOnce` → E0525.
@@ -15,7 +15,7 @@
 //!   lambda captures the named binding (Clone-wrapped) rather than inlining
 //!   the expression with its free vars captured bare.
 //! * **Fix 4 T7** — `eta_expand_partial` fail-close: `ir_type_from_ty` → None
-//!   now emits SKY-L0126 instead of silently passing a bare Var.
+//!   emits SKY-L0126 instead of silently passing a bare Var.
 //!
 //! Green fixtures (c01, c02, c13) require `SKY_E2E=1` for cargo build+run.
 //! Gate fixture (c14) runs the diagnostic check always.
@@ -70,7 +70,7 @@ fn assert_skyc_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::
 // ── c01 — enum capture (Fix 1: CopyLeaf misclass for named types) ────────────
 
 /// `List.map (\_ -> colorName color) [1,2,3]` — `color : Color` is an enum
-/// with no payload fields.  Pre-fix: `clone_class(Enum{args:[]})` returned
+/// with no payload fields.  Without the fix, `clone_class(Enum{args:[]})` returned
 /// `CopyLeaf` (composite over empty iterator); the bare capture made the
 /// lambda `FnOnce` → E0525 on the second element.
 /// Fix 1: `clone_class_named_composite` floors `CopyLeaf` → `CloneOk`;
@@ -118,7 +118,7 @@ fn c01_enum_capture_fix1() {
 // ── c02 — all-Int record capture (Fix 1: CopyLeaf misclass for named types) ──
 
 /// `List.map (\dx -> translate origin dx) [1,2,3]` — `origin : Point` is an
-/// all-Int record alias.  Pre-fix: `clone_class(Record{fields:[Int,Int]})`
+/// all-Int record alias.  Without the fix, `clone_class(Record{fields:[Int,Int]})`
 /// returned `CopyLeaf` (all fields `CopyLeaf`); emitted Rust struct derives
 /// `Clone` but NOT `Copy` → bare capture → `FnOnce` → `E0525` on second element.
 /// Fix 1: `clone_class_named_composite` floors to `CloneOk` for named types.
@@ -166,7 +166,7 @@ fn c02_record_capture_fix1() {
 
 /// `let f = mk (String.append base suffix) in f "!" ; f "?"` — the supplied
 /// arg `String.append base suffix` is a complex expression (not a bare Var).
-/// Pre-fix: the expr was inlined into the eta-lambda body; `base` and `suffix`
+/// Without the fix, the expr was inlined into the eta-lambda body; `base` and `suffix`
 /// (both String, `CloneOk`) were captured bare → `FnOnce` → `E0525` on second call.
 /// Fix 3 T4: hoist to `let __sky_cap_0 = <expr>` outside the lambda; lambda
 /// captures `CloneVar(__sky_cap_0)` → re-callable.
@@ -219,12 +219,12 @@ fn c13_complex_arg_hoist_t4() {
 
 /// `composed f = \p -> (\x -> f x) p` — `f : Int -> Int` called as the direct
 /// callee INSIDE a nested lambda (depth ≥ 2 from the param's scope).
-/// RE-CLASSIFIED by the #221 fn-value `Arc`-carrier promotion: `f` is
+/// Under the fn-value `Arc`-carrier promotion, `f` is
 /// shadow-rebound to the `Clone` `Arc<dyn Fn>` carrier and a clone relayed
 /// across each closure boundary, so the shape compiles and runs
-/// (`composed (*2) 3` = `6`). The old SKY-L0126 gate was sound only under the
-/// bare `Box<dyn Fn>` carrier (whose inner `move` closure consumed `f` per
-/// call, E0525); the state it rejected is no longer invalid.
+/// (`composed (*2) 3` = `6`). A SKY-L0126 gate is sound only under a
+/// bare `Box<dyn Fn>` carrier (whose inner `move` closure consumes `f` per
+/// call, E0525); the state it would reject is not invalid here.
 #[test]
 fn c14_nested_lambda_noncopy_promoted_accepts() {
     let root = repo_root();
@@ -259,7 +259,7 @@ fn c14_nested_lambda_noncopy_promoted_accepts() {
 /// `Stream.stream (\writer -> emitTick writer 1 |> Task.andThen (\_ ->
 /// emitTick writer 2))` — the exact shape of examples/30-sse-server-demo.
 ///
-/// Pre-fix: `clone_class(IrType::StreamWriter)` said `NonClone`, so
+/// Without the fix, `clone_class(IrType::StreamWriter)` said `NonClone`, so
 /// forwarding the captured handle as an argument (not calling it) tripped
 /// SKY-L0126.  The runtime type is `#[derive(Clone, Copy)]`
 /// (`server_stream.rs:38`) — the classification was an active wrong claim.
@@ -290,24 +290,24 @@ fn c05_streamwriter_capture_forward() {
     );
 }
 
-// ── c06 — Stream.stream handler capturing enclosing non-Copy Strings (#233) ──
+// ── c06 — Stream.stream handler capturing enclosing non-Copy Strings ──
 
 /// `Stream.stream (\writer -> Stream.emit header writer |> ...)` where
 /// `header`/`body` are `String`s bound in the handler-constructing function —
 /// the exact shape of examples/36-composite-server's Csv-stream export.
 ///
-/// Pre-fix: the `StreamStream` emit arm's `move |_x| (handler)(_x)` re-wrap
+/// The `StreamStream` emit arm's `move |_x| (handler)(_x)` re-wrap
 /// (which rebuilds the box per call to recover the runtime's `+Sync` bound)
-/// captured `header`/`body`, and the re-embedded box MOVED them out on the
-/// first call → the wrapper degraded to `FnOnce` → `server_stream_stream`'s
-/// `Fn` bound rejected it (2x `E0507: cannot move out of a captured variable
+/// captures `header`/`body`; if the re-embedded box MOVED them out on the
+/// first call the wrapper would degrade to `FnOnce` → `server_stream_stream`'s
+/// `Fn` bound rejects it (2x `E0507: cannot move out of a captured variable
 /// in an Fn closure`, AFTER `skyc` exit 0 — a SEAL break).
 ///
-/// Fix: the arm pre-clones every free local the handler captures INSIDE the
+/// So the arm pre-clones every free local the handler captures INSIDE the
 /// wrapper body, so the box moves fresh clones and the wrapper stays `Fn`.
 ///
 /// Unlike `c05` (skyc exit-0 only), this asserts the EMITTED CRATE cargo-builds
-/// — the layer that surfaced #233. A listening-server fixture cannot
+/// — the layer where this surfaces. A listening-server fixture cannot
 /// run-to-exit, so a successful `cargo build` IS the acceptance. E2E-gated
 /// (`SKY_E2E=1`) so the default fast pass stays emit-only.
 #[test]
@@ -335,7 +335,7 @@ fn c06_stream_string_capture_seal() {
         return;
     }
     // Build-only: the fixture is a listening server, so it cannot run-to-exit.
-    // A successful cargo build is the #233 seal (skyc-0 ⇒ cargo builds).
+    // A successful cargo build is the seal (skyc-0 ⇒ cargo builds).
     let built_bin = oracle::build_rust_binary("i233_stream_string_capture", &out);
     assert!(
         built_bin.is_ok(),

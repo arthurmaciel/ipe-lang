@@ -1,9 +1,9 @@
-//! BACKLOG #201 (fuzzer seed 31348, `mmrecpair`) — a mutually-recursive,
+//! A mutually-recursive,
 //! UNANNOTATED, cross-module function pair polymorphic in the list-element type
 //! (`evenLen`/`oddLen : List a -> Bool`), used by an importer at TWO different
 //! element types (`List Int` and `List String`).
 //!
-//! Pre-fix: `skyc build` FAILED with SKY-L0102 ("polymorphic value's type could
+//! Without the fix, `skyc build` FAILED with SKY-L0102 ("polymorphic value's type could
 //! not be determined") at the `[] ->` arm inside `Lib.sky`. The type-checker
 //! (`sky_types`) correctly generalized the boundary scheme — its
 //! `untyped_type_params` entry listed the element var — but `sky_lower`'s

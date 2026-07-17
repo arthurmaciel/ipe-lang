@@ -1,4 +1,4 @@
-//! Milestone-3b-1 tuple-pattern gate: tuple patterns in FUNCTION PARAMETERS
+//! Tuple-pattern gate: tuple patterns in FUNCTION PARAMETERS
 //! (`fst (a, b) = a`, `snd (a, b) = b`) and as a single irrefutable `case` arm
 //! (`case (1, 2) of (a, b) -> a + b`). `skyc` must emit `main.rs` byte-identical
 //! to the checked-in golden, and (behind `SKY_E2E=1`) the emitted project must

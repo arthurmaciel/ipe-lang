@@ -1,23 +1,22 @@
-//! #108 round 4 (hole 2) — a ROUTED app whose `view` is an inline LAMBDA must
-//! emit `live_app_routed`, not silently fall back to the non-routed `live_app`.
+//! A ROUTED app whose `view` is an inline LAMBDA must emit `live_app_routed`,
+//! not silently fall back to the non-routed `live_app`.
 //!
 //! ## Background
 //!
 //! `emit_live::routed_page_field` recovers the Model from the cfg's `view`
-//! field via `emit_model_gate::model_ty_of_view`. That helper used to match
-//! ONLY `Expr::FuncValue`, so a lambda `view` returned `None` and the emitter
-//! silently chose the single-page `live_app` — `routes` and `notFound` were
+//! field via `emit_model_gate::model_ty_of_view`. If that helper matched
+//! ONLY `Expr::FuncValue`, a lambda `view` would return `None` and the emitter
+//! silently choose the single-page `live_app` — `routes` and `notFound`
 //! DISCARDED with no diagnostic (skyc-0, cargo-0, wrong runtime behaviour: a
 //! silent wrong-accept, worse than a cargo failure). Meanwhile the type tier's
-//! `RoutedLiveCheck` reads the SOLVER's Model and correctly classified the
-//! same app as routed — the two tiers disagreed exactly on the lambda-view
-//! shape (design-coherence review C4).
+//! `RoutedLiveCheck` reads the SOLVER's Model and classifies the
+//! same app as routed — the two tiers would disagree exactly on the lambda-view
+//! shape.
 //!
-//! The #95 fix (`fn_param_ty`, matching both `Expr::FuncValue` and
-//! `Expr::Lambda`) is shared by the Model gate and `routed_page_field`, so
-//! the tiers agree again. The Model-gate side of #95 is pinned in
-//! `model_admissibility.rs` (`live_lambda_view_*`); THIS file pins the routed
-//! emit side.
+//! `fn_param_ty` (matching both `Expr::FuncValue` and `Expr::Lambda`) is shared
+//! by the Model gate and `routed_page_field`, so the tiers agree. The Model-gate
+//! side is pinned in `model_admissibility.rs` (`live_lambda_view_*`); THIS file
+//! pins the routed emit side.
 //!
 //! Compile-only assertions always run; the cargo build is `SKY_E2E=1`-gated
 //! with an ISOLATED `CARGO_TARGET_DIR` (a shared dir's fingerprint reuse can
@@ -26,7 +25,7 @@
 use std::path::PathBuf;
 
 /// Routed cfg (routes + notFound, Model has `page : Page`) with an inline
-/// LAMBDA `view`. Plain-data Model, so the #91/#95 admissibility gate passes —
+/// LAMBDA `view`. Plain-data Model, so the admissibility gate passes —
 /// isolating the routed-detection behaviour.
 const LIVE_LAMBDA_VIEW_ROUTED: &str = r#"module Main exposing (main)
 import Std.Live as Live
@@ -72,8 +71,8 @@ fn compile() -> Option<Result<(), skyc::CliError>> {
 }
 
 /// The lambda-view routed app must be skyc-0 AND emit `live_app_routed` with
-/// its routes wired — pre-fix it silently emitted the non-routed `live_app`
-/// and dropped `routes`/`notFound`.
+/// its routes wired — never silently emit the non-routed `live_app` and drop
+/// `routes`/`notFound`.
 #[test]
 fn lambda_view_routed_app_emits_live_app_routed() {
     let Some(result) = compile() else {

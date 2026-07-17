@@ -1,12 +1,10 @@
-//! #90 SKY-L0114 ctor-payload-function — Stage 1 lift (function values in
+//! SKY-L0114 ctor-payload-function — Stage 1 lift (function values in
 //! `Maybe`/`Result`/user-union constructor payloads) + the T3 `andMap`
 //! curried-payload gate + the T4 fn-value-reuse gate.
 //!
-//! See `docs/adr/0015-constructor-payload-functions-narrowed-gates.md` (Stage 1 overview)
-//! and `docs/adr/0016-andmap-arity-gate-type-obligation.md` (the
-//! revised, two-tier T3 design implemented here, after three same-day revert
-//! incidents on 2026-07-10 — see `BACKLOG.md`'s `#90` row for the incident
-//! log).
+//! See `docs/adr/0015-constructor-payload-functions-narrowed-gates.md` (Stage 1
+//! overview) and `docs/adr/0016-andmap-arity-gate-type-obligation.md` (the
+//! two-tier T3 design implemented here).
 //!
 //! ## What's covered
 //!
@@ -17,11 +15,11 @@
 //!   kernel (`map`, `map2..5`, `mapError`, `andMap` — 13 kernels, pinned by
 //!   `hof_result_slots_match_scheme_shapes` in `sky_types`) to a
 //!   `TyBounds::hof_kernel_result()` obligation, checked at type-check time
-//!   (`sky_types::infer`) BEFORE lowering ever runs. The 4th attempt scoped
-//!   this to `andMap` alone AND failed OPEN on a bare `Ty::Var`; the 5th
-//!   attempt (this one) generalizes the kernel set (the 13th bypass shape
-//!   went through `Result.map`) and fails CLOSED on a variable (the 12th
-//!   bypass shape escaped through an annotated double forwarder's skolem).
+//!   (`sky_types::infer`) BEFORE lowering ever runs. The obligation covers the
+//!   whole kernel set (a `Result.map` bypass otherwise slips through) and fails
+//!   CLOSED on a bare `Ty::Var` (an annotated double forwarder's skolem
+//!   otherwise escapes). Scoping it to `andMap` alone, or failing OPEN on a
+//!   variable, reopens those bypasses.
 //!   This is a TYPE-LEVEL check, so it survives arbitrary Sky-level
 //!   aliasing by construction. It
 //!   surfaces as ONE of two diagnostics depending on HOW the obligated
@@ -57,29 +55,29 @@
 //! going through `assert_hof_curried_rejected` (accepts SKY-T0001 /
 //! SKY-T0014 / SKY-L0114 — see that helper's doc comment):
 //!
-//! | Shape | Fixture | Origin | Observed code |
-//! |---|---|---|---|
-//! | Direct call / pipe-desugared | `l0114_and_map_curried_stays_gated` | pre-existing | SKY-T0001 |
-//! | `let`-bound partial application | `l0114_and_map_let_bound_alias_stays_gated` | Bug 2 (2nd revert) | SKY-T0001 |
-//! | Bare, point-free top-level re-export | `l0114_and_map_bare_alias_stays_gated` | Bug 3 (3rd revert) | SKY-T0001 |
-//! | Higher-order argument | `l0114_and_map_higher_order_arg_stays_gated` | new, 4th attempt | SKY-T0001 |
-//! | Record-field extraction | `l0114_and_map_record_field_stays_gated` | new, 4th attempt | SKY-T0001 (Tier 2 fires before the pipeline ever reaches the unrelated, pre-existing SKY-L0107 record-field gate — confirmed empirically, see the test's own doc comment) |
-//! | Annotated generic forwarder | `l0114_and_map_forwarder_curried_is_t0014` | new, 4th attempt | SKY-T0014 (the friendly-message path) |
-//! | **Annotated DOUBLE forwarder** | `l0114_and_map_annotated_double_forwarder_curried` | **the 12th shape — broke the 4th attempt (fail-open `Ty::Var` arm), revert 2a7b0d6** | SKY-T0014 (fail-closed at the inner `am1` reference) |
-//! | Annotated double forwarder, SAFE arity-1 payload | `l0114_and_map_annotated_double_forwarder_arity1` | 5th attempt — documented precision loss (matches `Math.min`'s conservatism on the identical shape) | SKY-T0014 (conservative reject; the alternative was the 12th shape's cargo-fail) |
-//! | Annotated TRIPLE forwarder | `l0114_and_map_triple_forwarder_curried` | new, 5th attempt | SKY-T0014 (rejected at the first hop) |
-//! | Eta-reduced annotated forwarder (`am2 = am1`) | `l0114_and_map_eta_reduced_forwarder_curried` | new, 5th attempt | SKY-T0014 |
-//! | Unannotated same-module double forwarder | `l0114_and_map_untyped_double_forwarder_curried` (+ green twin `…_arity1`) | new, 5th attempt | SKY-T0014 (concrete found-type via `CLocal`; green twin ACCEPTED, runs, prints 42) |
-//! | Cross-module UNANNOTATED double forwarder | `l0114_and_map_cross_module_untyped_forwarder_curried` | new, 5th attempt (Boundary-Scheme-Promotion escape) | SKY-T0014 |
-//! | **`Result.map` curried callback** | `l0114_map_curried_stays_gated` (Maybe variant) | **the 13th shape family — the 4th attempt gated `andMap` only; `map`/`map2..5`/`mapError` shared the identical FnOnce-vs-flattened hazard and reached cargo as E0277** | SKY-T0001 |
-//! | `Maybe.map2` arity-3 callback | `l0114_map2_extra_arity_stays_gated` (+ exact-arity green twin) | new, 5th attempt | SKY-T0001 |
-//! | `Result.mapError` curried callback | `l0114_map_error_curried_stays_gated` (+ arity-1 green twin) | new, 5th attempt | SKY-T0001 |
-//! | Bare re-export of `Result.map` | `l0114_map_bare_alias_stays_gated` | new, 5th attempt (Bug-3 replay on the map family) | SKY-T0001 |
-//! | **User applicative `map2` via `Result.map`+`andMap`** | `l0114_user_map2_via_andmap_stays_gated` | **the concrete 13th shape this pass's adversarial self-review found (cargo-failed under the 4th attempt even at a SAFE arity-2 use)** | SKY-T0001 |
-//! | Annotated `map` forwarder, curried | `l0114_map_annotated_forwarder_curried_is_t0014` (+ arity-1 green twin) | new, 5th attempt | SKY-T0014 |
-//! | `Result.andThen` returning `Ok fn` | `l0114_and_then_fn_payload_accepted` | new, 5th attempt — boundary pin: `andThen` needs NO obligation (Con-headed callback result), and a callback legitimately returning `Ok fn` stays ACCEPTED and computes 42 | n/a — accepted |
-//! | Import alias | *(not constructible)* | `Result`/`Maybe` are compiler-kernel qualifiers in `sky-rust`, not backed by an importable Sky-source module (`crates/sky_canon/src/resolve.rs`'s fixed kernel-qualifier list) — there is no module to `import … as …` in this milestone. Documented here rather than silently skipped. | n/a |
-//! | Cross-module annotated wrapper, reused at 2 different arity-1 types | `l0114_and_map_cross_module_wrapper_accepted` | design doc's `T3.residual` row — must stay ACCEPTED (proves Tier 2 does not over-reject) | n/a — accepted, confirmed; no `T3d` follow-up needed |
+//! | Shape | Fixture | Observed code |
+//! |---|---|---|
+//! | Direct call / pipe-desugared | `l0114_and_map_curried_stays_gated` | SKY-T0001 |
+//! | `let`-bound partial application | `l0114_and_map_let_bound_alias_stays_gated` | SKY-T0001 |
+//! | Bare, point-free top-level re-export | `l0114_and_map_bare_alias_stays_gated` | SKY-T0001 |
+//! | Higher-order argument | `l0114_and_map_higher_order_arg_stays_gated` | SKY-T0001 |
+//! | Record-field extraction | `l0114_and_map_record_field_stays_gated` | SKY-T0001 (Tier 2 fires before the pipeline reaches the unrelated SKY-L0107 record-field gate — see the test's own doc comment) |
+//! | Annotated generic forwarder | `l0114_and_map_forwarder_curried_is_t0014` | SKY-T0014 (the friendly-message path) |
+//! | **Annotated DOUBLE forwarder** | `l0114_and_map_annotated_double_forwarder_curried` | SKY-T0014 (fail-closed at the inner `am1` reference) |
+//! | Annotated double forwarder, SAFE arity-1 payload | `l0114_and_map_annotated_double_forwarder_arity1` | SKY-T0014 (conservative reject; a documented precision loss matching `Math.min`'s conservatism on the identical shape) |
+//! | Annotated TRIPLE forwarder | `l0114_and_map_triple_forwarder_curried` | SKY-T0014 (rejected at the first hop) |
+//! | Eta-reduced annotated forwarder (`am2 = am1`) | `l0114_and_map_eta_reduced_forwarder_curried` | SKY-T0014 |
+//! | Unannotated same-module double forwarder | `l0114_and_map_untyped_double_forwarder_curried` (+ green twin `…_arity1`) | SKY-T0014 (concrete found-type via `CLocal`; green twin ACCEPTED, runs, prints 42) |
+//! | Cross-module UNANNOTATED double forwarder | `l0114_and_map_cross_module_untyped_forwarder_curried` | SKY-T0014 |
+//! | **`Result.map` curried callback** | `l0114_map_curried_stays_gated` (Maybe variant) | SKY-T0001 (`map`/`map2..5`/`mapError` share the same FnOnce-vs-flattened hazard as `andMap`, otherwise reaching cargo as E0277) |
+//! | `Maybe.map2` arity-3 callback | `l0114_map2_extra_arity_stays_gated` (+ exact-arity green twin) | SKY-T0001 |
+//! | `Result.mapError` curried callback | `l0114_map_error_curried_stays_gated` (+ arity-1 green twin) | SKY-T0001 |
+//! | Bare re-export of `Result.map` | `l0114_map_bare_alias_stays_gated` | SKY-T0001 |
+//! | **User applicative `map2` via `Result.map`+`andMap`** | `l0114_user_map2_via_andmap_stays_gated` | SKY-T0001 (cargo-fails even at a SAFE arity-2 use without the generalized obligation) |
+//! | Annotated `map` forwarder, curried | `l0114_map_annotated_forwarder_curried_is_t0014` (+ arity-1 green twin) | SKY-T0014 |
+//! | `Result.andThen` returning `Ok fn` | `l0114_and_then_fn_payload_accepted` | n/a — accepted (`andThen` needs NO obligation, Con-headed callback result; a callback legitimately returning `Ok fn` stays ACCEPTED and computes 42) |
+//! | Import alias | *(not constructible)* | n/a (`Result`/`Maybe` are compiler-kernel qualifiers in `sky-rust`, not backed by an importable Sky-source module — `crates/sky_canon/src/resolve.rs`'s fixed kernel-qualifier list — so there is no module to `import … as …`) |
+//! | Cross-module annotated wrapper, reused at 2 different arity-1 types | `l0114_and_map_cross_module_wrapper_accepted` | design doc's `T3.residual` row — must stay ACCEPTED (proves Tier 2 does not over-reject) | n/a — accepted |
 
 use std::path::{Path, PathBuf};
 
@@ -123,8 +121,8 @@ fn built_code(root: &Path, name: &str) -> (Result<(), CliError>, PathBuf) {
 
 // ── T1/T2: direct construction now ACCEPTED ─────────────────────────────────
 
-/// `Ok f` holding a function used to trip SKY-L0114 unconditionally, making
-/// `Result.andMap` unusable. Construction is sound (#87 derive-demotion +
+/// `Ok f` holding a function must not trip SKY-L0114 unconditionally, which
+/// would make `Result.andMap` unusable. Construction is sound (derive-demotion +
 /// generic-bounded runtime `SkyResult` derives).
 #[test]
 fn result_and_map_fn_payload_accepted() {
@@ -151,8 +149,8 @@ fn result_and_map_fn_payload_accepted() {
     assert_eq!(outcome.stdout.trim(), "3");
 }
 
-/// `Just f` holding a function used to trip SKY-L0114 unconditionally, making
-/// `Maybe.andMap` unusable.
+/// `Just f` holding a function must not trip SKY-L0114 unconditionally, which
+/// would make `Maybe.andMap` unusable.
 #[test]
 fn maybe_and_map_fn_payload_accepted() {
     let root = repo_root();
@@ -178,16 +176,15 @@ fn maybe_and_map_fn_payload_accepted() {
     assert_eq!(outcome.stdout.trim(), "42");
 }
 
-/// #90 Stage-1 RESIDUAL seal hole (found by the 5th-attempt adversarial
-/// review, bisected to `cd9bb1c`): a LET-BOUND constructor-wrapped closure
+/// Stage-1 RESIDUAL seal hole: a LET-BOUND constructor-wrapped closure
 /// (`let f = Ok (\x -> x + 1)`) later passed to a `Box<dyn Fn>`-expecting
-/// position was a skyc-accept / cargo-reject E0308. The inline pipe form
+/// position would be a skyc-accept / cargo-reject E0308. The inline pipe form
 /// (`Ok (\x…) |> Result.andMap (Ok 2)`) works because the kernel call site
 /// supplies the `Box<dyn Fn>` coercion target; a bare `let` binding has none —
 /// `Ok` routes to the runtime `SkyResult` enum whose generic arg is inferred
-/// from the constructor arg, so `Box::new(closure)` pinned the CONCRETE closure
-/// type and the later use against `Box<dyn Fn>` failed to unsize-coerce across
-/// the `let` boundary. Fixed by pinning the trait-object type at the lambda's
+/// from the constructor arg, so `Box::new(closure)` would pin the CONCRETE
+/// closure type and the later use against `Box<dyn Fn>` fail to unsize-coerce
+/// across the `let` boundary. So the trait-object type is pinned at the lambda's
 /// own emission site (`{ let __sky_fn: Box<dyn Fn(..)->..> = Box::new(closure);
 /// __sky_fn }`), the same technique `emit_func_value` uses for a named fn value.
 /// Passing the fn-carrier through a type-annotated function boundary
@@ -219,8 +216,8 @@ fn let_bound_fn_payload_accepted() {
     assert_eq!(outcome.stdout.trim(), "42");
 }
 
-/// #90 let-bound seal hole — Maybe variant, exercising the same lambda
-/// trait-object-pin fix through the runtime `SkyMaybe` enum
+/// Let-bound seal hole — Maybe variant, exercising the same lambda
+/// trait-object-pin through the runtime `SkyMaybe` enum
 /// (`let f = Just (\x -> x * 2)`). Must build+run and print `42`.
 #[test]
 fn let_bound_maybe_fn_payload_accepted() {
@@ -248,8 +245,8 @@ fn let_bound_maybe_fn_payload_accepted() {
 }
 
 /// A DECLARED function-typed constructor payload (`RetryWhen (e -> Bool)`)
-/// used to trip SKY-L0114 at the union declaration itself. #87's
-/// derive-demotion fixpoint already keeps the emitted enum sound.
+/// must not trip SKY-L0114 at the union declaration itself. The
+/// derive-demotion fixpoint keeps the emitted enum sound.
 #[test]
 fn ctor_decl_fn_payload_accepted() {
     let root = repo_root();
@@ -472,12 +469,11 @@ fn and_map_forwarder_curried_is_sky_t0014() {
 
 // ── T4: fn-value reuse gate ─────────────────────────────────────────────────
 
-/// revert-incident Bug 1 (2nd revert): a fn-carrying, non-Clone LAMBDA
-/// parameter used in two consuming positions inside the lambda's own body.
-/// `lower_lambda` builds its own `ir_params` independently of the other four
-/// `reject_fn_value_reuse` call sites and, before the fix, never ran them
-/// through the gate — this reached `cargo build` as E0382 instead of a clean
-/// SKY-L0127.
+/// A fn-carrying, non-Clone LAMBDA parameter used in two consuming positions
+/// inside the lambda's own body. `lower_lambda` builds its own `ir_params`
+/// independently of the other four `reject_fn_value_reuse` call sites and must
+/// run them through the gate — otherwise this reaches `cargo build` as E0382
+/// instead of a clean SKY-L0127.
 #[test]
 fn lambda_param_reuse_gated() {
     let root = repo_root();
@@ -546,7 +542,7 @@ fn fn_carrier_reuse_gated() {
     );
 }
 
-// ── T3, 5th attempt: forwarder-escape family (the 12th shape and friends) ──
+// ── T3: forwarder-escape family ──
 
 /// Assert `name` is rejected with SKY-T0014 specifically (the deferred
 /// `check_scheme_applications` path — the fail-closed `Ty::Var` arm or a
@@ -597,15 +593,13 @@ fn assert_accepted_runs(name: &str, expected_stdout: &str) {
     );
 }
 
-/// THE 12TH SHAPE — the one that broke the 4th attempt (revert `2a7b0d6`):
-/// an ANNOTATED double forwarder (`am2 x f = am1 x f` over
+/// An ANNOTATED double forwarder (`am2 x f = am1 x f` over
 /// `am1 x f = Result.andMap x f`, both with explicit signatures) applied to
 /// an arity-2 payload. `am1`'s obligated `b` instantiates to `am2`'s own
 /// annotation skolem; `check_scheme_applications` is one-shot (no bound
-/// transfer), so the 4th attempt's fail-OPEN `Ty::Var` arm let the payload
+/// transfer), so a fail-OPEN `Ty::Var` arm would let the payload
 /// flow unguarded to `main`'s call of `am2` — reaching `cargo build` as
-/// E0308 (reproduced on the restored attempt-4 code before this fix). The
-/// fail-closed arm rejects the inner `am1` reference, exactly as
+/// E0308. The fail-closed arm rejects the inner `am1` reference, exactly as
 /// `Math.min`'s `ord` obligation does on the identical shape.
 #[test]
 fn and_map_annotated_double_forwarder_curried_rejected() {
@@ -618,11 +612,11 @@ fn and_map_annotated_double_forwarder_curried_rejected() {
 /// supported for ANY bound; `Math.min` behaves identically). This test pins
 /// the CLEAN diagnostic: the two sound outcomes are reject-both (this) or a
 /// genuine bound-transfer accepting arity-1 and rejecting arity-2 at
-/// `main`; accept-both (the 4th attempt) was a seal violation. If this test
+/// `main`; accept-both is a seal violation. If this test
 /// ever starts FAILING because the program is ACCEPTED, that is only
-/// correct if cross-binding propagation landed — in that case the curried
+/// correct if cross-binding propagation is implemented — in that case the curried
 /// sibling above MUST still be rejected AND this fixture's emitted crate
-/// MUST build and print 42; anything else is the 12th shape regressing.
+/// MUST build and print 42; anything else is this shape regressing.
 #[test]
 fn and_map_annotated_double_forwarder_arity1_conservatively_rejected() {
     assert_rejected_t0014("l0114_and_map_annotated_double_forwarder_arity1");
@@ -689,7 +683,7 @@ fn and_map_cross_module_untyped_forwarder_curried_rejected() {
     );
 }
 
-// ── T3, 5th attempt: the map/map2..5/mapError family (the 13th shape) ──────
+// ── T3: the map/map2..5/mapError family ──────
 
 /// `Maybe.map` with a curried callback — the 13th-shape FAMILY: the 4th
 /// attempt gated `andMap` only; `map` shares the identical
@@ -739,12 +733,11 @@ fn map_bare_alias_stays_gated() {
     assert_hof_curried_rejected("l0114_map_bare_alias_stays_gated");
 }
 
-/// THE CONCRETE 13TH SHAPE (found by this pass's adversarial self-review): a
-/// user-written applicative `map2` over `Result.map` + `Result.andMap`.
-/// Under the 4th attempt this cargo-failed as E0277 even at a SAFE arity-2
-/// use — `Result.map`'s callback result escaped into the annotation skolem
-/// chain unchecked, and `myMap2` itself carried no obligation. The
-/// generalized `Result.map` obligation now rejects the definition's kernel
+/// A user-written applicative `map2` over `Result.map` + `Result.andMap`.
+/// Without the generalized obligation this cargo-fails as E0277 even at a SAFE
+/// arity-2 use — `Result.map`'s callback result escapes into the annotation
+/// skolem chain unchecked, and `myMap2` itself carries no obligation. The
+/// generalized `Result.map` obligation rejects the definition's kernel
 /// reference itself (conservative: the same fail-closed treatment as every
 /// other forwarder-escape; the workaround is the built-in `Result.map2`).
 #[test]

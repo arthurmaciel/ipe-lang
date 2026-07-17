@@ -1,16 +1,15 @@
-//! Phase-5 Milestone-C pilot fixture: a deliberately MULTI-MODULE program
-//! (`Main` + `Lib`) that ALSO uses `Std.Db`, captured at TODAY's (pre-split)
-//! single-file `main.rs` shape.
+//! Multi-module split pilot fixture: a deliberately MULTI-MODULE program
+//! (`Main` + `Lib`) that ALSO uses `Std.Db`.
 //!
 //! This is the ONE fixture that exercises the multi-module split AND the
-//! `SqlValue`/`SqlField` Spine-routing (design doc §2.2) together. Milestone C
-//! (Task 12) has flipped `emit_program` to real per-module output: the golden
-//! is now the Spine-only `main.rs` (preamble + `SqlValue`/`SqlField` enums +
+//! `SqlValue`/`SqlField` Spine-routing (design doc §2.2) together. `emit_program`
+//! produces real per-module output: the golden
+//! is the Spine-only `main.rs` (preamble + `SqlValue`/`SqlField` enums +
 //! DB-projection impls + kernel-wrapper prelude + `fn main()` + the
 //! `mod`/`pub(crate) use` barrel) PLUS one `sky_mods/<ident>.rs` per Sky module
 //! (`sky_mod_lib.rs`, `sky_mod_main.rs`). The home-qualified names
-//! (`lib_label`/`main_summary`, `LibStatus`) are §1.3 existing behaviour; the
-//! new emission is the file split itself.
+//! (`lib_label`/`main_summary`, `LibStatus`) follow §1.3; the split
+//! emission is the file split itself.
 //!
 //! Modelled on `golden_m0.rs`, using the shared directory-diff helper
 //! `support::assert_emitted_project_matches_golden_dir` for `main.rs` +
@@ -42,8 +41,8 @@ fn runtime() -> PathBuf {
 }
 
 /// Byte-diff every checked-in `sky_mods/<name>.rs` golden against its
-/// counterpart under `<out>/src/sky_mods/`. Milestone C (Task 12) flips
-/// `emit_program` to real per-module output, so the pilot golden now carries
+/// counterpart under `<out>/src/sky_mods/`. `emit_program` produces real
+/// per-module output, so the pilot golden carries
 /// one `sky_mods/*.rs` file per Sky module (`sky_mod_lib.rs`,
 /// `sky_mod_main.rs`) alongside the Spine-only `main.rs`. The shared
 /// `assert_emitted_project_matches_golden_dir` helper only diffs `main.rs` +
@@ -132,13 +131,13 @@ fn emits_split_spine_and_per_module_files() {
 
     // Directory-diff the emitted project against the checked-in golden dir:
     // asserts the emitted Spine-only `src/main.rs` AND the golden `Cargo.toml`
-    // match byte-for-byte (Milestone C, Task 12 — `main.rs` is now the Spine
+    // match byte-for-byte (`main.rs` is the Spine
     // tier: preamble, SqlValue/SqlField enums + DB-projection impls, the
     // kernel-wrapper prelude, `fn main()`, and the `mod`/`pub(crate) use`
     // barrel — NOT the user modules' own types/funcs).
     support::assert_emitted_project_matches_golden_dir(&out, &fixture);
 
-    // …plus the per-Sky-module files the real split now emits under
+    // …plus the per-Sky-module files the split emits under
     // `src/sky_mods/`. `sky_mod_lib.rs`'s Db call site references
     // `MainSqlValue`/`MainSqlField` variants resolving via `use crate::*;`
     // back to the Spine's declarations — the file-level proof of §2.2's fix.

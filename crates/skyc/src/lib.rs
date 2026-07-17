@@ -1,5 +1,5 @@
 #![forbid(unsafe_code)]
-//! `skyc` — the Milestone-0 command-line driver.
+//! `skyc` — the command-line driver.
 //!
 //! Wires the pipeline end to end: read a `.sky` entry file, run it through
 //! [`sky_parse`] → [`sky_canon`] → [`sky_types`] → [`sky_lower`] → the
@@ -117,7 +117,7 @@ pub fn build(entry: &Path, out_dir: &Path, runtime_dir: &Path) -> Result<(), Cli
     // program through the SAME injection-aware pipeline as a project — so a
     // single file importing `Std.Palette` injects the compiled source instead of
     // 404-ing (design §2.6). For a program with no compiled-source import the
-    // core is emit-byte-identical to the pre-#98 single-module path (link over one
+    // core is emit-byte-identical to a plain single-module path (link over one
     // module is the identity — regression-covered by the golden suite).
     let mut name_interner = Interner::new();
     let pipeline_err = |diag: Diagnostic| CliError::Pipeline {
@@ -266,7 +266,7 @@ fn find_manifest_for_sky_file(sky_file: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Whether [`compile_modules_observed`] served a Phase-6 on-disk build-cache
+/// Whether [`compile_modules_observed`] served an on-disk build-cache
 /// hit or ran the full compile pipeline. Exists for tests and future CLI
 /// verbosity — [`compile_modules`] (used by every stable entry point) does
 /// not need it and discards it.
@@ -277,9 +277,9 @@ pub(crate) enum CacheOutcome {
     /// skipped.
     Hit,
     /// No `EmittedProject`-tier entry existed, but a matching, same-epoch
-    /// Phase 6.5 lowered-[`sky_ir::Program`] entry was — parse through
+    /// lowered-[`sky_ir::Program`] entry was — parse through
     /// lower were skipped; only `RustBackend::emit` ran over the relocated
-    /// IR (see `crate::cache`'s "Phase 6.5" module doc section).
+    /// IR (see `crate::cache`'s lowered-IR module doc section).
     IrHit,
     /// No usable entry existed at either tier (cache disabled, epoch
     /// undeterminable, key miss, or corrupt entry) — the full pipeline ran.
@@ -321,7 +321,7 @@ fn compile_modules(
     .0
 }
 
-/// [`compile_modules`]'s full implementation, with the Phase-6 on-disk build
+/// [`compile_modules`]'s full implementation, with the on-disk build
 /// cache's root made an EXPLICIT parameter (`None` disables the cache
 /// entirely) rather than read from the environment internally — the
 /// dependency-injection seam this module's tests use instead of
@@ -332,13 +332,13 @@ fn compile_modules(
 /// hazard by isolating tests into their own processes — the explicit
 /// parameter avoids both concerns at once).
 ///
-/// Cache flow (Phase 6, Tasks 19/20 — see `crate::cache`'s module doc for
-/// the full design): the content-address key and version-epoch are computed
+/// Cache flow (see `crate::cache`'s module doc for the full design): the
+/// content-address key and version-epoch are computed
 /// BEFORE any salsa database exists (driver-boundary only — INV-1: no
 /// `std::fs` on a tracked path). On a hit, the ENTIRE compile pipeline
 /// (parse through emit) is skipped; only [`write_emitted_project`] runs,
 /// materialising the cached [`sky_backend::EmittedProject`] verbatim. On a
-/// miss, the pipeline runs exactly as it always has, and a successful
+/// miss, the full pipeline runs, and a successful
 /// result is best-effort stored for the next invocation.
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn compile_modules_observed(
@@ -356,9 +356,9 @@ fn compile_modules_observed(
     // source — the ONLY inputs that earn `ModuleOrigin::EmbeddedStdlib` below.
     let injected = project::inject_compiled_std_closure(&mut sources, &mut discovered);
 
-    // Phase 6: the on-disk build cache. `epoch` folds in BOTH the running
+    // The on-disk build cache. `epoch` folds in BOTH the running
     // `skyc` binary's own content hash and the active `rustc`'s fingerprint
-    // (Task 20 — see `cache::derive_epoch`'s doc for why this makes
+    // (see `cache::derive_epoch`'s doc for why this makes
     // "refuse, don't guess" structural rather than a runtime check).
     let cache_key = cache::compute_project_key(&sources, &injected, entry_path, db_driver);
     let epoch = cache_dir.and_then(|_| cache::derive_epoch());
@@ -371,7 +371,7 @@ fn compile_modules_observed(
         );
     }
 
-    // Phase 6.5: the lowered-IR cache tier (see `crate::cache`'s module doc
+    // The lowered-IR cache tier (see `crate::cache`'s module doc
     // section for the full design). A hit here skips parse -> canon -> link
     // -> infer -> lower ENTIRELY — no `SkyDatabase` is constructed at all —
     // running only `RustBackend::emit` over the relocated `Program` before
@@ -412,17 +412,17 @@ fn compile_modules_observed(
         }
     }
 
-    // Salsa database (incremental Phase 1 — see
+    // Salsa database (see
     // docs/architecture/salsa-incremental-compilation-2026-07-11.md). The
     // driver parses external state ONCE into typed inputs here (`SourceFile`
     // per module + the `SourceRoot` file set); the front-end stages are
     // demanded as memoized queries inside `compile_prepared`. The database is
     // cold and per-invocation, and queries are demanded in the fixed topo
     // order, so the interning sequence — and therefore emitted bytes — is
-    // identical to the pre-salsa pipeline (golden-suite-enforced).
+    // deterministic across runs (golden-suite-enforced).
     let db = sky_db::SkyDatabase::new();
     let source_root = create_source_root(&db, &sources, &injected);
-    // The Task-17 config input (see `sky_db::BuildConfig`'s doc for why this
+    // The config input (see `sky_db::BuildConfig`'s doc for why this
     // is narrowed to `db_driver` rather than the full `sky.toml` shape). A
     // fresh `BuildConfig` per one-shot invocation is fine here — unlike the
     // clean-vs-incremental parity gate's warm sequence, this driver never
@@ -437,7 +437,7 @@ fn compile_modules_observed(
 
     if let (Some(root), Some(epoch)) = (cache_dir, epoch.as_deref()) {
         cache::store(root, epoch, &cache_key, &emitted);
-        // Phase 6.5: also store the lowered `Program` at the IR tier.
+        // Also store the lowered `Program` at the IR tier.
         // `sky_db::lower_program` is a PURE MEMO HIT here — it already ran
         // (transitively, via `compile_prepared`'s `emit_project` demand
         // chain) inside the salsa database above, so this costs nothing
@@ -499,23 +499,21 @@ pub fn create_source_root(
 /// The in-memory compile core over an already-populated database.
 ///
 /// topo order → per-module canonicalisation (memoized, blame-attributed) →
-/// [`sky_db::linked_program`] (the coarse Phase-3 spine) → infer → lower →
+/// [`sky_db::linked_program`] (the coarse whole-program spine) → infer → lower →
 /// emit. Returns the emitted project without touching the filesystem.
 ///
 /// This is THE production pipeline — [`compile_modules`] wraps it with input
-/// creation and disk writes, and the clean-vs-incremental parity gate (plan
-/// Task 18) drives it against both cold and warm databases, so the gate can
+/// creation and disk writes, and the clean-vs-incremental parity gate
+/// drives it against both cold and warm databases, so the gate can
 /// never test a divergent copy of the pipeline.
 ///
 /// `sources` is consulted for diagnostic blame only (module path → file/src).
 ///
-/// `config` is the Task-17 [`sky_db::BuildConfig`] handle — callers that
-/// re-demand `compile_prepared` across a warm sequence (the Task-18 parity
+/// `config` is the [`sky_db::BuildConfig`] handle — callers that
+/// re-demand `compile_prepared` across a warm sequence (the parity
 /// gate) MUST hold one stable `BuildConfig` across the sequence rather than
 /// constructing a fresh one per call, or `emit_project`'s memo key never
-/// matches between calls and the seam's memoization is silently defeated
-/// (Phase-5 §10.2's own recorded warning, now closed by threading `config`
-/// in from the caller instead of constructing it here).
+/// matches between calls and the seam's memoization is silently defeated.
 ///
 /// # Errors
 /// [`CliError::Pipeline`] carrying the first compiler diagnostic.
@@ -547,11 +545,11 @@ pub fn compile_prepared(
         })?;
 
     // Canonicalise each module in dep-first order through the salsa query
-    // graph (incremental Phase 2). Each `canonicalize` demand runs
+    // graph. Each `canonicalize` demand runs
     // parse → resolve_imports → module_interface(dep) → canon; demanding in
     // topo order keeps every dep memoized before its importers ask for it,
-    // so the interning sequence — and therefore emitted bytes — matches the
-    // pre-salsa driver exactly (golden-suite-enforced). This loop exists for
+    // so the interning sequence — and therefore emitted bytes — is
+    // deterministic across runs (golden-suite-enforced). This loop exists for
     // BLAME attribution (a module's own diagnostic renders against its own
     // file); `linked_program` below re-demands the same memos.
     for mod_path in topo.iter() {
@@ -579,7 +577,7 @@ pub fn compile_prepared(
 
     // Link → infer → lower → emit on the merged module. Blame link/lower/emit
     // errors on the entry file; infer errors and warnings are attributed to the
-    // dep module that owns the failing span (#144).
+    // dep module that owns the failing span.
     let entry_src_path = sources
         .get(entry_path)
         .map_or_else(|| blame_path.to_path_buf(), |(p, _)| p.clone());
@@ -593,10 +591,10 @@ pub fn compile_prepared(
         diag,
     };
 
-    // The coarse whole-program spine (incremental Phase 3, plan Task 11):
-    // every per-module canonical result assembled + linked inside salsa. All
+    // The coarse whole-program spine: every per-module canonical result
+    // assembled + linked inside salsa. All
     // `canonicalize` demands above are memo hits here. The link step gates
-    // cross-module type-identity duplicates `(home, name)` (#100), blamed on
+    // cross-module type-identity duplicates `(home, name)`, blamed on
     // the entry file like every other post-link diagnostic.
     let linked_program =
         sky_db::linked_program(db, source_root, entry_file).map_err(&pipeline_err)?;
@@ -607,7 +605,7 @@ pub fn compile_prepared(
     // lowering pools (`eta_*`, `cap_*`, …) mint the SAME names on a warm
     // (reused) database as on a cold one. Interner-membership minting would
     // skip the previous build's pool names and drift the emitted bytes — the
-    // exact divergence the Task-18 parity gate caught.
+    // exact divergence the clean-vs-incremental parity gate guards against.
     let mut fresh_avoid: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for file in source_root.files(db).values() {
         fresh_avoid.extend(sky_db::identifier_words(db, *file).iter().cloned());
@@ -615,12 +613,12 @@ pub fn compile_prepared(
 
     // Short lock scope: set the fresh-name avoid-set (must happen before
     // `lower_program` may execute below) and build the module-home →
-    // (file, src) blame map (#144) by interning each String module-path
+    // (file, src) blame map by interning each String module-path
     // segment — lookups against symbols `canonicalize` already interned, so
     // this cannot append a new symbol and cannot perturb interning order.
     // The guard is dropped before any further salsa query is demanded: the
     // interner mutex is not reentrant, and `typecheck`/`lower_program` each
-    // take their own lock internally (Phase 4 — see `sky_db::typecheck`).
+    // take their own lock internally (see `sky_db::typecheck`).
     let home_to_source: BTreeMap<Vec<sky_intern::Symbol>, (PathBuf, String)> = {
         let mut interner = shared_interner.lock();
         interner.set_fresh_avoid(fresh_avoid);
@@ -704,17 +702,16 @@ pub fn compile_prepared(
     // the correct source file via the `home` carried on the failing constraint,
     // rather than relying solely on the byte-offset heuristic (`source_for_span`)
     // which can mis-attribute when two merged modules share overlapping numeric
-    // span ranges (the original #144 bug class).
+    // span ranges.
     //
     // When `home` is non-empty we look it up in `home_to_source` directly —
     // O(log N) and exact.  When the home is empty (non-solver errors: constraint
-    // generation, field-access pass, exhaustiveness) we fall back to the existing
-    // heuristic, preserving the behaviour for every error class that pre-dates
-    // this fix.
+    // generation, field-access pass, exhaustiveness) we fall back to the
+    // byte-offset heuristic.
     //
-    // `sky_db::typecheck` (incremental Phase 4, plan Task 12) is the memoized
+    // `sky_db::typecheck` is the memoized
     // SEAM over `sky_types::infer_attributed`: same whole-program computation,
-    // now skippable on a warm no-op rebuild. No interner guard is held across
+    // skippable on a warm no-op rebuild. No interner guard is held across
     // this demand — the query takes its own lock internally.
     let types = sky_db::typecheck(db, source_root, entry_file).map_err(|(diag, home)| {
         let span = diag_span(&diag);
@@ -743,14 +740,13 @@ pub fn compile_prepared(
     // SKY-L0115 shown at an unrelated Main.sky line. `source_for_span` maps the
     // span back to its owning def's file, the same heuristic already used for
     // constraint-gen / exhaustiveness type errors.
-    // #221 fix B: lowering (and emit) errors now carry the owning def's `home`,
+    // Lowering (and emit) errors carry the owning def's `home`,
     // exactly like `typecheck` above. When `home` is non-empty we resolve the
     // source file DIRECTLY via `home_to_source` (O(log N), exact) — this is what
     // makes a Server.sky SKY-L0126 render against Server.sky, not against a
-    // Main.sky def whose byte range coincidentally overlaps the failing span
-    // (the misattribution `Main.sky:73` sighting). An empty `home` (homeless
-    // backend diagnostic, or a pre-def lowering error) falls back to the
-    // byte-offset heuristic `source_for_span`, preserving prior behaviour.
+    // Main.sky def whose byte range coincidentally overlaps the failing span.
+    // An empty `home` (homeless backend diagnostic, or a pre-def lowering
+    // error) falls back to the byte-offset heuristic `source_for_span`.
     let span_attributed_err =
         |(diag, home): (sky_diagnostics::Diagnostic, Vec<sky_intern::Symbol>)| {
             let (file, src) = if home.is_empty() {
@@ -763,8 +759,8 @@ pub fn compile_prepared(
             };
             CliError::Pipeline { file, src, diag }
         };
-    // `sky_db::program_metadata` (Phase 5, plan Task 14) — the whole-program
-    // DCE-reachability seam over `lower_program` (Phase 4, plan Task 13).
+    // `sky_db::program_metadata` — the whole-program DCE-reachability seam
+    // over `lower_program`.
     // Its own dependency on `lower_program` is what forces the lowering pass
     // to execute here; a standalone `lower_program` demand alongside this one
     // would be a redundant duplicate of the SAME memoized query (its error
@@ -772,25 +768,25 @@ pub fn compile_prepared(
     // Demanded here, on the production path, purely as a FORWARD SEAM:
     // nothing downstream consumes its value yet (no pruning pass exists —
     // see the query's own doc for the honestly-recorded scope), matching the
-    // Phase-3 `kernel_types` precedent (materialized and proven memoized
+    // `kernel_types` precedent (materialized and proven memoized
     // before it has a real consumer). The demand costs nothing observable in
     // emitted bytes — the point is to put the query on the same path the
     // clean-vs-incremental parity gate drives, so a future divergence in this
     // analysis cannot go undetected.
     sky_db::program_metadata(db, source_root, entry_file).map_err(span_attributed_err)?;
 
-    // `sky_db::emit_manifest` (Milestone D / Phase-5 §4.4) — the top-level
-    // emit demand, now assembled from the per-`RustFileId` query graph:
+    // `sky_db::emit_manifest` (design doc §4.4) — the top-level
+    // emit demand, assembled from the per-`RustFileId` query graph:
     // `program_rust_file_ids` + `emit_spine_file` + one `emit_rust_file` per
     // home. For a single-module program it routes straight to `emit_project`
     // (byte-identical Spine-collapse); for a genuine 2+-home program it
     // assembles the split from those per-file memos, so a body edit to an
     // UNRELATED module early-cuts that module's `emit_rust_file` (byte-identical
-    // value → salsa backdate → the on-disk write skips, §4.3). Same
-    // `EmitResult` SHAPE as the former `emit_project` demand, so
+    // value → salsa backdate → the on-disk write skips, §4.3). The
+    // `EmitResult` SHAPE matches a plain `emit_project` demand, so
     // `build_emit_manifest`/`reconcile_emitted_project`/`prune_orphaned_files`
     // need zero changes (§4.4). The no-op-rebuild + `db_driver`-only
-    // memoization properties `phase6_build_config.rs` proves still hold — the
+    // memoization properties `phase6_build_config.rs` proves hold — the
     // config field flows through unchanged.
     let emitted =
         sky_db::emit_manifest(db, source_root, entry_file, config).map_err(span_attributed_err)?;
@@ -800,7 +796,7 @@ pub fn compile_prepared(
 /// Write an emitted project to `out_dir`, vendoring the runtime module tree
 /// from `runtime_dir`.
 ///
-/// The emit→cargo bridge (incremental plan Task 16 — design doc H7/H8):
+/// The emit→cargo bridge (design doc H7/H8):
 /// assembles the COMPLETE intended project (`build_emit_manifest`) — the
 /// vendored runtime tree, `Cargo.toml`, and every backend-emitted file — then
 /// [`reconcile_emitted_project`] writes only what changed (content-gated,
@@ -1109,8 +1105,8 @@ pub fn run_cli(args: &[String]) -> Result<(), CliError> {
     }
 }
 
-/// `skyc watch <entry> [--out <dir>] [--runtime <dir>] [--port <n>]` — Phase
-/// 7 of the incremental-compilation plan (`crate::watch`). Never returns
+/// `skyc watch <entry> [--out <dir>] [--runtime <dir>] [--port <n>]`
+/// (`crate::watch`). Never returns
 /// `Err` for a build failure (INV-3: a red build is logged, not fatal);
 /// only misuse / setup failures propagate.
 fn run_watch(rest: &[String]) -> Result<(), CliError> {
@@ -1722,7 +1718,7 @@ fn read_yes_no() -> bool {
 ///
 /// Retries ONCE, recreating `target`'s parent directory, when the write or
 /// rename fails with `NotFound`. This closes a real race surfaced by the
-/// Phase-5 emit→cargo bridge (`reconcile_emitted_project`, this function's
+/// emit→cargo bridge (`reconcile_emitted_project`, this function's
 /// other caller besides `sky doctor --fix`): several `crates/skyc/tests/
 /// golden_*` integration-test files share ONE `CARGO_TARGET_TMPDIR`-rooted
 /// output directory across sibling `#[test]` functions, and `cargo-nextest`
@@ -1793,7 +1789,7 @@ mod tests {
     use super::*;
     use sky_diagnostics::{NameError, Span};
 
-    /// The golden M0 entry, located relative to this crate's manifest.
+    /// The golden entry, located relative to this crate's manifest.
     fn golden_entry() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
@@ -1838,9 +1834,8 @@ mod tests {
 
     #[test]
     fn explain_resolves_sky_t0014() {
-        // SKY-T0014 was previously absent from the hand-mirror and returned
-        // UnknownCode. After replacing the mirror with ALL_CODES from
-        // sky_diagnostics, it must resolve successfully.
+        // SKY-T0014 resolves via ALL_CODES from sky_diagnostics rather than
+        // a hand-mirror that could omit it.
         let result = explain_lookup("SKY-T0014");
         assert!(
             result.is_ok(),
@@ -2076,13 +2071,13 @@ mod tests {
     /// Regression for `SKY-L0102` (`Feature::Polymorphism`) on wildcard `_`
     /// lambda parameters.
     ///
-    /// Before the fix, `lower_lambda` called `ir_type_from_ty` on the `_`
-    /// param's type.  When the type was still an unconstrained `Ty::Var` (e.g.
-    /// the continuation of a `Task.andThen` after `Task.fail` where the ok-type
-    /// is never forced), `ir_type_from_ty` returned `Err(unsupported(…,
-    /// Feature::Polymorphism))` and the pipeline aborted.
+    /// Calling `ir_type_from_ty` on the `_` param's type is unsound: when the
+    /// type is still an unconstrained `Ty::Var` (e.g. the continuation of a
+    /// `Task.andThen` after `Task.fail` where the ok-type is never forced),
+    /// `ir_type_from_ty` returns `Err(unsupported(…, Feature::Polymorphism))`
+    /// and the pipeline aborts.
     ///
-    /// The fix routes `PAnything` params through `ir_type_from_ty_json` which
+    /// So `PAnything` params route through `ir_type_from_ty_json`, which
     /// maps `Ty::Var → IrType::Json` instead of failing.
     ///
     /// Source mirrors the failing pattern from `examples/14-task-demo`.
@@ -2135,15 +2130,14 @@ main =
 
     /// Regression for the `Task.run` elision in `emit_func`.
     ///
-    /// Before the fix, `main = someTask |> Task.run` lowered to:
+    /// `main = someTask |> Task.run` lowers to:
     ///   `func.ret  = IrType::Result(Error, A)`
     ///   `func.body = Call(TaskRun, [inner])`
-    /// and `emit_func` emitted `task_run(inner)` which returns
-    /// `SkyResult<E, A>`.  The epilogue calls `block_on(sky_main())`, which
-    /// requires `SkyTask<A>`.  This caused an `E0308 mismatched types` Rust
-    /// compile error.
+    /// Emitting `task_run(inner)` from `emit_func` returns `SkyResult<E, A>`,
+    /// but the epilogue calls `block_on(sky_main())`, which requires
+    /// `SkyTask<A>` — an `E0308 mismatched types` Rust compile error.
     ///
-    /// The fix detects the `Call(TaskRun|TaskPerform, [inner])` body in
+    /// So the emitter detects the `Call(TaskRun|TaskPerform, [inner])` body in
     /// `sky_main`, emits `inner` directly, and rewrites the return type from
     /// `Result(Error, A)` → `Task(A)`.
     ///
@@ -2153,7 +2147,7 @@ main =
     #[test]
     fn task_run_main_emits_skytask_not_skyresult() {
         // A minimal Sky.Cli-style program: main = task |> Task.run
-        // The shape that previously caused E0308 in the emitted Rust.
+        // A shape prone to E0308 in the emitted Rust.
         const SRC: &str = "\
 module Main exposing (main)
 import Sky.Core.Prelude exposing (..)
@@ -2265,15 +2259,13 @@ main =
     }
 
     // -----------------------------------------------------------------------
-    // Regression #144 — cross-module infer errors name the dep module's file
+    // Cross-module infer errors name the dep module's file
     // -----------------------------------------------------------------------
 
     /// When a type error originates in a dep module (`Helper.sky`), the rendered
     /// diagnostic must cite `Helper.sky` as the file, NOT the entry `Main.sky`.
-    ///
-    /// Before the fix, `compile_modules` had a single `pipeline_err` closure that
-    /// always captured the entry file path, so dep-module errors rendered with the
-    /// wrong source snippet and an incorrect file name.
+    /// A single `pipeline_err` closure capturing only the entry file path would
+    /// render dep-module errors with the wrong source snippet and file name.
     ///
     /// Runtime is not reached (infer aborts first), so we pass a dummy path.
     #[test]
@@ -2344,8 +2336,8 @@ main =
     /// closer `lo_dist` to the wrong def, so the heuristic blames the wrong file
     /// whenever the numerically-nearest def belongs to a different module.
     ///
-    /// The fix: every `Constraint` carries its source module's `home` path.
-    /// `compile_modules` now routes `Err((diag, home))` directly via
+    /// Every `Constraint` carries its source module's `home` path, so
+    /// `compile_modules` routes `Err((diag, home))` directly via
     /// `home_to_source.get(&home)`, bypassing the heuristic entirely when a home
     /// is available.
     ///
@@ -2435,7 +2427,7 @@ main =
     }
 
     // -----------------------------------------------------------------
-    // Phase 6 (Tasks 19/20) — on-disk build cache end-to-end proof
+    // On-disk build cache end-to-end proof
     // -----------------------------------------------------------------
 
     /// Walk `cache_root/<epoch>/*.json` and return the single entry file a
@@ -2563,7 +2555,7 @@ main =
         let _ = fs::remove_dir_all(&tmp);
     }
 
-    /// Walk `cache_root/<epoch>/*.ir.json` and return the single Phase 6.5
+    /// Walk `cache_root/<epoch>/*.ir.json` and return the single
     /// lowered-IR entry file a build just wrote. Mirrors
     /// [`find_single_cache_entry`], but matches on the `.ir.json` suffix
     /// specifically — `Path::extension()` alone cannot tell `key.json` from
@@ -2590,7 +2582,7 @@ main =
         None
     }
 
-    /// **End-to-end proof that a `db_driver`-only edit reuses the Phase 6.5
+    /// **End-to-end proof that a `db_driver`-only edit reuses the
     /// lowered-IR tier instead of a full recompile.** The `EmittedProject`
     /// tier's key folds in `db_driver` (a real dependency of the FINAL emit
     /// stage), so it correctly MISSES on a driver flip — but
@@ -2772,8 +2764,7 @@ main =
     }
 
     /// A cache disabled via `cache_dir: None` never touches disk for
-    /// caching purposes and always runs the full pipeline — the same
-    /// behaviour as the pre-Phase-6 driver.
+    /// caching purposes and always runs the full pipeline.
     #[test]
     fn cache_dir_none_disables_caching_entirely() {
         let Ok(runtime) = resolve_runtime() else {

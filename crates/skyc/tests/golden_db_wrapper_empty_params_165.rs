@@ -1,6 +1,6 @@
-//! BACKLOG #165 regression — `examples/17-skymon`'s `cargo build` failure.
+//! `examples/17-skymon`'s `cargo build` failure.
 //!
-//! Pre-fix: `skyc build` exits 0, but the emitted Rust fails `cargo build`
+//! Without the fix, `skyc build` exits 0, but the emitted Rust fails `cargo build`
 //! with 6x E0277 (the trait bound `SqlParam: From<T1>` is not satisfied)
 //! and 3x E0283 (`type annotations needed` / `cannot infer type of the type
 //! parameter T declared on the struct Vec`) at every
@@ -57,11 +57,11 @@
 //! - `Lib2.sky` — calls `Lib1.execOrLog` with a `List SqlValue` (typed
 //!   mixed-param path).
 //! - `Main.sky` — calls `Lib1.execOrLog` with BOTH the empty list `[]` (the
-//!   #165 trigger, twice — a DDL statement and a no-bind-params `DELETE`)
+//!   trigger, twice — a DDL statement and a no-bind-params `DELETE`)
 //!   AND a non-empty `List SqlValue`, then `Lib1.queryOrLog` with `[]` to
 //!   read the rows back. `args` stays `List SqlValue` at every non-empty
 //!   call site (across BOTH `Lib2` and `Main`) so the fixture isolates the
-//!   ONE variable #165 is actually about — empty vs. non-empty — rather
+//!   ONE variable this is actually about — empty vs. non-empty — rather
 //!   than cross-call-site type diversity, a separate, already-covered
 //!   concern (`tests/golden/m5b_db_poly_params`).
 //!
@@ -112,7 +112,7 @@ fn db_wrapper_empty_params_165_skyc_accepts_and_emits_sql_param_bound() {
         .expect("emitted main.rs must exist");
 
     // Every EMPTY-list call site must carry a concrete, non-`Vec::new()`
-    // argument (#165's E0283 half) — the type checker's `sql_param`
+    // argument (the E0283 half) — the type checker's `sql_param`
     // defaulting gives the dangling element variable a concrete `SqlValue`
     // type instead of falling through to the wildcard-`any`/`IrType::Json`
     // convention.
@@ -123,7 +123,7 @@ fn db_wrapper_empty_params_165_skyc_accepts_and_emits_sql_param_bound() {
          main.rs:\n{emitted}"
     );
 
-    // #165's E0277 half (a still-generic `Db.exec`/`Db.query` wrapper
+    // the E0277 half (a still-generic `Db.exec`/`Db.query` wrapper
     // needing `Into<sky_runtime::db::SqlParam>` on its own emitted generic)
     // is NOT asserted textually here: this fixture's `args` unifies to the
     // concrete `MainSqlValue` at every call site (same as

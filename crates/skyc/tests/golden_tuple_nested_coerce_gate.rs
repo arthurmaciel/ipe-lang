@@ -1,11 +1,11 @@
-//! #174 fix-up + #182 — a coercing leaf nested inside a nested-TUPLE column on a
+//! A coercing leaf nested inside a nested-TUPLE column on a
 //! VARIABLE (non-literal) tuple scrutinee.
 //!
 //! Two shapes, two outcomes (both SEAL-clean — never skyc-0-then-cargo-fail):
 //!
 //! * PROBE E — a string LITERAL (`PStr`) nested in a nested-tuple column:
 //!   `case v of ( ( "x", n ), A ) -> …` on `v : ((String,Int), Tag)`.
-//!   **#182 makes this SUPPORTED.** The backend renders each nested `PStr` leaf as
+//!   **This is SUPPORTED.** The backend renders each nested `PStr` leaf as
 //!   a fresh binder plus an `if __sgN.as_str() == "lit"` match guard, so it lowers
 //!   to `match v { ((__sg0, n), Tag::A) if __sg0.as_str() == "x" => … }` — a
 //!   by-value binder + `as_str()` guard, sound for a variable scrutinee (mirrors
@@ -66,7 +66,7 @@ fn assert_l0115_gate(fixture: &str, out_suffix: &str) {
 }
 
 /// PROBE E: a string literal (`PStr`) nested inside a nested-tuple column now
-/// LOWERS (fast gate — `skyc build` succeeds, #182).
+/// LOWERS (fast gate — `skyc build` succeeds).
 #[test]
 fn nested_tuple_str_column_builds() {
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("tuple_nested_coerce_str_gate");

@@ -1,6 +1,6 @@
-//! BACKLOG #189 regression — a reused-by-value generic param clone gap (SEAL).
+//! A reused-by-value generic param clone gap (SEAL).
 //!
-//! Pre-fix: `skyc build` exits 0, but the emitted Rust fails `cargo build` with
+//! Without the fix, `skyc build` exits 0, but the emitted Rust fails `cargo build` with
 //! E0382 (`use of moved value: x`) in the body of a function whose only generic
 //! is used MORE THAN ONCE in a by-value consuming position:
 //! `dup x = toString x ++ toString x` emits `basics_to_string(x)` TWICE with no

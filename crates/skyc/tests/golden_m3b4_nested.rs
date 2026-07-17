@@ -1,4 +1,4 @@
-//! Milestone-3b-4 same-top-constructor nested discrimination, end to end.
+//! Same-top-constructor nested discrimination, end to end.
 //!
 //! Several `case` arms head-match the SAME top-level constructor (`Som`) and
 //! discriminate on a nested constructor sub-pattern (`Som (Som x)` vs `Som Non`)
@@ -58,7 +58,7 @@ fn emits_byte_identical_main_rs() {
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
 /// program prints `52` — the same value the Go backend produces. Gated on
 /// `SKY_E2E=1` so the default `cargo test` stays fast. This is the soundness-floor
-/// regression for same-top-constructor nested discrimination.
+/// Regression for same-top-constructor nested discrimination.
 #[test]
 fn end_to_end_builds_and_prints_fifty_two() {
     if std::env::var("SKY_E2E").is_err() {

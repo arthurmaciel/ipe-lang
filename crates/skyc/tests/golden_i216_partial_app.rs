@@ -1,4 +1,4 @@
-//! SKY-L0110 (#216) seal — partial + over-application of a first-class function
+//! SKY-L0110 seal — partial + over-application of a first-class function
 //! VALUE. `skyc` must emit `main.rs` byte-identical to the checked-in golden,
 //! and (behind `SKY_E2E=1`) the emitted project must build and print
 //! `6\n33\n103\n`, exit 0 — the same values the Go reference produces.

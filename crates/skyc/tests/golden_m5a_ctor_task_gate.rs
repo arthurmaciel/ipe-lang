@@ -1,4 +1,4 @@
-//! #32 (E2 + E3): `Task`-in-constructor-payload gates.
+//! `Task`-in-constructor-payload gates (E2 + E3).
 //!
 //! E2 — a MIS-ARITY `Task` reached through a constructor FIELD type
 //! (`type Boxed a = Boxed (Task Error a Bool)`) never passes through
@@ -10,7 +10,7 @@
 //!
 //! E3 — a WELL-FORMED `Task Error Int` (arity 2) embedded in a constructor
 //! payload is ACCEPTED (spec's recommended branch, symmetric with Item B's
-//! function / Result / Maybe precedent): #87's derive-demotion fixpoint degrades
+//! function / Result / Maybe precedent): the derive-demotion fixpoint degrades
 //! the non-derivable enum gracefully, so the declaration builds cleanly rather
 //! than being rejected. This test pins that no new rejection was added.
 

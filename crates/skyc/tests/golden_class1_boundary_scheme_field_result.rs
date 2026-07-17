@@ -1,8 +1,6 @@
-//! Class-1 inference bug #2 ("Boundary Scheme Promotion") — regression for a
-//! real SEAL violation found by independent adversarial review after the fix
-//! first briefly landed as commit `29bab0d` (same-day reverted at `5e870b4`).
+//! Class-1 "Boundary Scheme Promotion" — regression for a SEAL violation.
 //!
-//! Pre-fix: `skyc build` exits 0, but the emitted Rust fails
+//! Without the fix, `skyc build` exits 0, but the emitted Rust fails
 //! `cargo build` with:
 //!
 //! ```text
@@ -103,18 +101,18 @@ fn class1_field_result_skyc_accepts_and_emits_concrete_getter() {
     );
 
     // `Lib1`'s getter lowers to its OWN Rust file under `src/sky_mods/` once
-    // the per-Sky-module split (Phase 5 Milestone C) fires — this is a genuine
+    // the per-Sky-module split fires — this is a genuine
     // 3-module program (`Lib1` + `Lib2` + `Main`). Scan the WHOLE emitted
     // Sky-side tree (main.rs + sky_mods/*.rs) so both the concrete-signature
     // assertion and the no-spurious-generic assertion hold wherever the split
     // correctly placed `lib1_get_name`.
     let emitted = support::read_all_emitted_src(&out);
 
-    // The getter must lower to a CONCRETE signature. Pre-fix this read
+    // The getter must lower to a CONCRETE signature, not
     // `pub fn lib1_get_name<T1: Clone>(r: RecAgeName) -> String {` — an
-    // unused Rust generic that made every call site fail E0283. Matched
-    // WITHOUT the visibility prefix: once the per-Sky-module split (Phase 5
-    // Milestone C) fires, `Lib1`'s getter lives in `src/sky_mods/sky_mod_lib1.rs`
+    // unused Rust generic that would make every call site fail E0283. Matched
+    // WITHOUT the visibility prefix: once the per-Sky-module split
+    // fires, `Lib1`'s getter lives in `src/sky_mods/sky_mod_lib1.rs`
     // as a `pub(crate) fn` (module items are crate-visible), no longer the
     // `pub fn` of the single-file layout — the visibility is orthogonal to the
     // concrete-signature property this line guards.

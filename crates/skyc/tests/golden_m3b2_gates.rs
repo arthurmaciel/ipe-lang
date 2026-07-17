@@ -1,4 +1,4 @@
-//! Milestone-3b-2 fail-closed gates — each unsupported shape must surface a
+//! Fail-closed gates — each unsupported shape must surface a
 //! clean, span-carrying diagnostic, never a panic / internal compiler bug /
 //! cargo-failing Rust:
 //!
@@ -58,13 +58,12 @@ fn assert_gate(fixture: &str, out_suffix: &str, expected: sky_diagnostics::Code)
     );
 }
 
-/// A RECORD sub-pattern nested in a constructor payload (`Box { x }`) used to be
-/// the SKY-L0112 nested-record-carrier gap. #158 (Class 4 item C) closed it: the
-/// constraint generator now records a region on every ctor sub-pattern, so the
-/// lowerer recovers the nested record's complete field set the way a top-level
-/// binder already does. This shape is now ACCEPTED and builds — the positive
-/// end-to-end regression (build + run + stdout) lives in
-/// `golden_m158_nested_patterns`.
+/// A RECORD sub-pattern nested in a constructor payload (`Box { x }`) — the
+/// SKY-L0112 nested-record-carrier gap. The constraint generator records a
+/// region on every ctor sub-pattern, so the lowerer recovers the nested
+/// record's complete field set the way a top-level binder does. This shape is
+/// ACCEPTED and builds — the positive end-to-end regression (build + run +
+/// stdout) lives in `golden_m158_nested_patterns`.
 #[test]
 fn record_pattern_in_ctor_payload_accepted() {
     let root = repo_root();
@@ -96,11 +95,10 @@ fn non_exhaustive_nested_case_is_sky_t0010() {
     );
 }
 
-/// `SKY-T0011` (redundant case branch) is a WARNING since batch-xm: the Go
+/// `SKY-T0011` (redundant case branch) is a WARNING: the Go
 /// reference COMPILES redundant-arm shapes (examples 17/10 carry them), so a
-/// hard error was stricter-than-reference and blocked parity. The build must
-/// now SUCCEED — the warning goes to stderr via the collected-warnings channel.
-/// Severity policy under adversarial review as task #136.
+/// hard error would be stricter-than-reference and block parity. The build must
+/// SUCCEED — the warning goes to stderr via the collected-warnings channel.
 #[test]
 fn redundant_nested_arm_is_sky_t0011_warning_build_succeeds() {
     let root = repo_root();

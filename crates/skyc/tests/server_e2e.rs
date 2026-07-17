@@ -157,7 +157,7 @@ fn spawn_and_wait_ready(
 }
 
 /// Same as `spawn_and_wait_ready`, plus caller-supplied extra environment
-/// variables on the child (e.g. `SKY_TRUSTED_PROXY` / `ENV` for the #63c
+/// variables on the child (e.g. `SKY_TRUSTED_PROXY` / `ENV` for the
 /// CSRF-cookie `Secure`-gating E2E tests, which need a real subprocess
 /// because the runtime's `SKY_TRUSTED_PROXY` trust decision is cached in a
 /// process-wide `OnceLock` — an in-process unit test cannot toggle it
@@ -290,7 +290,7 @@ main =
         (Db.open "sqlite" (System.getenvOr "DATABASE_URL" "sqlite::memory:"))
 "#;
 
-/// Sky server exercising `Middleware.withCsrf` end-to-end (#63b).  Mirrors
+/// Sky server exercising `Middleware.withCsrf` end-to-end.  Mirrors
 /// `tests/golden/m6_middleware_csrf/Main.sky` but adds a `GET /action` route
 /// (also wrapped in `Middleware.withCsrf`) so a real HTTP client can mint the
 /// double-submit cookie via a safe-method request before probing the
@@ -548,9 +548,8 @@ fn server_get_param() -> Result<(), BoxError> {
 
 /// `Server.body` reads the POST request body and echoes it verbatim.
 ///
-/// Proves the completeness gap (GAP 2) is closed: a POST handler CAN read
-/// the request body via `Server.body req`.  Before the fix, there was no
-/// `Server.body` kernel so POST bodies were unreadable — a completeness loss.
+/// A POST handler CAN read the request body via `Server.body req`.  Without a
+/// `Server.body` kernel POST bodies would be unreadable — a completeness loss.
 ///
 /// Full pipeline: Sky source → skyc (new `ServerBody` kernel) →
 /// emitted `server_body(req)` Rust call → axum populates `req.body` from the
@@ -621,10 +620,9 @@ fn request_introspection() -> Result<(), BoxError> {
 /// cargo-builds, and emits a manifest with BOTH `"server"` AND `"db"` in the
 /// default feature list.
 ///
-/// This is the GAP 1 regression test: before the fix, `server_cargo_toml`
-/// anchored on `"json"]` which is absent when `db_cargo_toml` has already run
-/// (the list becomes `"json", "db"]`), causing a `CompilerBug` ICE.  The
-/// generic anchor now finds the closing `]` regardless of what precedes it.
+/// The feature-list anchor finds the closing `]` regardless of what precedes
+/// it: anchoring on `"json"]` would break when `db_cargo_toml` has already run
+/// (the list becomes `"json", "db"]`), causing a `CompilerBug` ICE.
 ///
 /// Test is BUILD-ONLY — the compiled binary is not spawned (it would start a
 /// server and block).  A successful `cargo build` is the assertion.
@@ -643,18 +641,17 @@ fn server_and_db_compose() -> Result<(), BoxError> {
     Ok(())
 }
 
-/// #63b — real HTTP-level proof that `Middleware.withCsrf` rejects a forged
+/// Real HTTP-level proof that `Middleware.withCsrf` rejects a forged
 /// cross-site-style POST that carries neither the double-submit cookie nor
 /// the `X-Csrf-Token` header.
 ///
-/// This closes the gap left by #63's landing: `golden_m6_middleware_csrf.rs`
+/// Covers the gap other tests leave: `golden_m6_middleware_csrf.rs`
 /// only proves `skyc`/`cargo build` succeed (compile-level), and
 /// `server.rs`'s in-process unit tests call `middleware_with_csrf` directly
 /// as a bare Rust function — bypassing the full kernel-registry dispatch
-/// chain (canon → constrain → lower → naming → pretty → emit, the 12 sites
-/// listed in the fix spec's §1.2 table). This test proves the chain end to
-/// end: Sky source → `skyc` → emitted Rust → the actual served binary's
-/// real behavior over a real TCP connection.
+/// chain (canon → constrain → lower → naming → pretty → emit). This test proves
+/// the chain end to end: Sky source → `skyc` → emitted Rust → the actual served
+/// binary's real behavior over a real TCP connection.
 ///
 /// # Errors
 ///
@@ -682,7 +679,7 @@ fn csrf_forged_post_without_token_rejected() -> Result<(), BoxError> {
     Ok(())
 }
 
-/// #63b — real HTTP-level proof that `Middleware.withCsrf` rejects a POST
+/// Real HTTP-level proof that `Middleware.withCsrf` rejects a POST
 /// that carries the double-submit cookie (minted by a prior GET) but an
 /// `X-Csrf-Token` header that is either missing or does not match the
 /// cookie's value.
@@ -755,7 +752,7 @@ fn csrf_post_with_cookie_but_mismatched_header_rejected() -> Result<(), BoxError
     Ok(())
 }
 
-/// #63b — real HTTP-level proof of the legitimate flow: a GET mints the
+/// Real HTTP-level proof of the legitimate flow: a GET mints the
 /// double-submit cookie, and a same-origin-style POST that echoes the
 /// cookie's value in the `X-Csrf-Token` header is allowed through to the
 /// wrapped handler.
@@ -811,7 +808,7 @@ fn csrf_legit_post_with_matching_token_allowed() -> Result<(), BoxError> {
     Ok(())
 }
 
-/// #63c — real HTTP-level proof that `Middleware.withCsrf`'s minted cookie
+/// Real HTTP-level proof that `Middleware.withCsrf`'s minted cookie
 /// `Secure` attribute is gated on the REQUEST-scoped TLS signal
 /// (`X-Forwarded-Proto: https`, only honoured when the operator opts in via
 /// `SKY_TRUSTED_PROXY`), not just a process-wide `ENV` snapshot — closing
@@ -869,7 +866,7 @@ fn csrf_cookie_secure_behind_trusted_tls_proxy() -> Result<(), BoxError> {
     Ok(())
 }
 
-/// #63c scenario (b): same trusted-proxy opt-in as scenario (a), but THIS
+/// Scenario (b): same trusted-proxy opt-in as scenario (a), but THIS
 /// specific request does NOT carry `X-Forwarded-Proto: https` (the ordinary
 /// plain-HTTP loopback case) — the cookie must NOT get `Secure`.
 /// Dev-mode-correct: a plain-HTTP connection must never be told by the
@@ -918,8 +915,8 @@ fn csrf_cookie_not_secure_when_request_not_tls_detected() -> Result<(), BoxError
     Ok(())
 }
 
-/// #63c scenario (c) — the exact combined-gate semantics established by the
-/// session-cookie fix: `ENV=production` is an UNCONDITIONAL floor.  Even
+/// Scenario (c) — the combined-gate semantics of the session cookie:
+/// `ENV=production` is an UNCONDITIONAL floor.  Even
 /// when THIS specific request is not TLS-detected (no `SKY_TRUSTED_PROXY`
 /// opt-in here at all), a production deploy must still get `Secure` —
 /// production assumes TLS termination happens somewhere in front of it.
@@ -929,9 +926,8 @@ fn csrf_cookie_not_secure_when_request_not_tls_detected() -> Result<(), BoxError
 /// regardless of the request-scoped signal; the request-scoped signal only
 /// ADDS `Secure` in the non-production case (scenario (a) above). A
 /// same-request AND of "production" with "not TLS-detected" must NOT
-/// produce a non-Secure cookie — that would be a downgrade regression
-/// versus the PRE-fix behavior (which was ENV-only and always Secure in
-/// production).
+/// produce a non-Secure cookie — that would be a downgrade from the
+/// ENV-only rule that is always Secure in production.
 ///
 /// # Errors
 ///

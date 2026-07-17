@@ -1,13 +1,13 @@
-//! #222 match-arm clone relay at n == 1 — SEAL regression.
+//! Match-arm clone relay at n == 1 — SEAL regression.
 //!
 //! A match-arm-bound variable (`name`, CloneOk `String`) read EXACTLY ONCE but
-//! through TWO nested `move`-closure boundaries. Pre-fix the 5th binder site
-//! (match arms) nested type resolution inside an `if n > 1` guard, so at
-//! `n == 1` the arm var never resolved its type and the per-boundary relay
-//! never ran → the outer closure move-captured `name` out of the enclosing
-//! `Fn` env → skyc-0 but cargo-101 (E0507). The fix hoists type resolution out
-//! of the guard and routes the arm var through the shared `apply_move_ownership`
-//! entry point, whose `rewrite_multiuse_clones` installs the relay at n == 1.
+//! through TWO nested `move`-closure boundaries. Nesting the match-arm binder
+//! site's type resolution inside an `if n > 1` guard would leave the arm var's
+//! type unresolved at `n == 1`, so the per-boundary relay never runs → the
+//! outer closure move-captures `name` out of the enclosing `Fn` env → skyc-0
+//! but cargo-101 (E0507). So type resolution is hoisted out of the guard and
+//! the arm var routes through the shared `apply_move_ownership` entry point,
+//! whose `rewrite_multiuse_clones` installs the relay at n == 1.
 //!
 //! THE SEAL: skyc-0 ⇒ cargo-0.
 //!
@@ -67,7 +67,7 @@ fn i222_match_arm_skyc_accepts_and_relays() {
     );
 }
 
-/// cargo-0 ∧ run-correct: gated on `SKY_E2E=1` — THE SEAL for #222.
+/// cargo-0 ∧ run-correct: gated on `SKY_E2E=1` — THE SEAL.
 #[test]
 fn i222_match_arm_cargo_builds_and_runs() {
     if std::env::var("SKY_E2E").is_err() {

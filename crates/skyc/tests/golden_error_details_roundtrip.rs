@@ -1,11 +1,11 @@
-//! Backlog #85 follow-up — `ErrorInfo.details : Maybe ErrorDetails` + the
+//! `ErrorInfo.details : Maybe ErrorDetails` + the
 //! 5-variant `ErrorDetails`/`PanicInfo`/`TypeInfo` union, layered on top of
-//! the core `Error ErrorKind ErrorInfo` ADT landed by backlog #85/#160 (see
+//! the core `Error ErrorKind ErrorInfo` ADT (see
 //! `crates/skyc/tests/golden_error_adt_roundtrip.rs`).
 //!
 //! Proves the whole pipeline end-to-end: construction (`Error.withDetails`),
 //! the ctor-scheme registration for `ErrorDetails`'s 5 variants (closing the
-//! same canon/lowerer ctor-scheme gap class #160 closed for `ErrorKind`,
+//! same canon/lowerer ctor-scheme gap class closed for `ErrorKind`,
 //! applied here to `FfiPanic`/`TypeMismatch`/`HttpStatus`/`JsonDecode`/
 //! `Custom`), field access on `ErrorInfo.details` (a `Maybe ErrorDetails`),
 //! and exhaustive pattern matching over all 5 `ErrorDetails` variants.

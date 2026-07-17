@@ -1,6 +1,6 @@
-//! BACKLOG #186 regression — `toString` on a wildcard `any` param.
+//! `toString` on a wildcard `any` param.
 //!
-//! Pre-fix: `skyc build` exits 0, but the emitted Rust fails `cargo build`
+//! Without the fix, `skyc build` exits 0, but the emitted Rust fails `cargo build`
 //! with E0277 (`the trait bound T1: std::fmt::Display is not satisfied`) at the
 //! `basics_to_string(x)` call inside a function whose only generic is the
 //! wildcard `any` PARAM (`render : any -> String; render x = toString x`).
@@ -14,9 +14,9 @@
 //! `BoundSet::DISPLAY` flag, rendered by `render_bounds` as `std::fmt::Display`.
 //! The bound is decided STRUCTURALLY, at IR level, by the GENERAL kernel->bound
 //! map (`apply_kernel_type_param_bounds` / `body_calls_kernel_on_param`) that
-//! generalises #177's `Db.get*`->`SkyRow` machinery: it fires ONLY when the fn
+//! generalises the `Db.get*`->`SkyRow` machinery: it fires ONLY when the fn
 //! body contains an actual `Basics.toString` KERNEL application whose sole
-//! argument (arg 0) is a `Var`/`CloneVar` reference to the param. Unlike #177's
+//! argument (arg 0) is a `Var`/`CloneVar` reference to the param. Unlike the
 //! wildcard-only `SkyRow`, `Display` applies to wildcard `any` AND named tvars
 //! alike — `toString` is legitimate on any polymorphic value, and `T: Display`
 //! is satisfiable by every scalar caller (Int/Float/Bool/String).

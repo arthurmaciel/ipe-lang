@@ -1,4 +1,4 @@
-//! #143 — `++` must accept `List` operands (Elm/upstream semantics), not only
+//! `++` must accept `List` operands (Elm/upstream semantics), not only
 //! `String`. Before this task, `BinopClass::Append` pinned both operands and
 //! the result to `String`, so `[1,2] ++ [3,4]` failed at unification with
 //! `SKY-T0001` before reaching the backend.

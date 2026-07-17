@@ -1,7 +1,7 @@
-//! #194 / #197 / #202 regression — the ten stdlib modules whose runtime kernels
-//! exist but were NOT registered in the compiler's `Ffi.kernel`-resolvable
-//! registry, so `import`/member-use failed closed (SKY-N0028 unknown kernel,
-//! SKY-N0026 reserved-type collision, or SKY-T0001 annotation mismatch).
+//! The ten stdlib modules whose runtime kernels exist and are registered in the
+//! compiler's `Ffi.kernel`-resolvable registry. Without registration,
+//! `import`/member-use fails closed (SKY-N0028 unknown kernel, SKY-N0026
+//! reserved-type collision, or SKY-T0001 annotation mismatch).
 //!
 //! Each module below is a byte-identical reference Layer-3 port whose members
 //! are point-free `Ffi.kernel "Mod_fn"` aliases. Registering each family's
@@ -103,7 +103,7 @@ fn seal_module(slug: &str, main: &str, expected: &str) {
     );
 }
 
-// ── #194: Sky.Core.Regex ─────────────────────────────────────────────────────
+// ── Sky.Core.Regex ─────────────────────────────────────────────────────
 
 const REGEX_MAIN: &str = "module Main exposing (main)\n\
     import Sky.Core.Prelude exposing (..)\n\
@@ -137,7 +137,7 @@ fn regex_builds_and_runs() {
     seal_module("regex", REGEX_MAIN, "MATCH NOMATCH a#b# 42 1,2,3 a|b|c");
 }
 
-// ── #202: Sky.Core.Path ──────────────────────────────────────────────────────
+// ── Sky.Core.Path ──────────────────────────────────────────────────────
 
 const PATH_MAIN: &str = "module Main exposing (main)\n\
     import Sky.Core.Prelude exposing (..)\n\
@@ -157,7 +157,7 @@ fn path_builds_and_runs() {
     seal_module("path", PATH_MAIN, "c.txt /a/b .txt ABS");
 }
 
-// ── #197: Sky.Core.Pure — SKY-T0001 fix (point-free Uuid kernel aliases) ─────
+// ── Sky.Core.Pure — point-free Uuid kernel aliases ─────
 // The whole module failed to type-check because `uuidV4Kernel : Task Error
 // String` mis-annotated the `Uuid_v4` kernel (real scheme `() -> Task Error
 // String`). We only need it to RESOLVE + EMIT — a runtime UUID is nondeterministic
@@ -187,7 +187,7 @@ fn pure_builds_and_runs() {
     seal_module("pure", PURE_MAIN, "PURE_OK");
 }
 
-// ── #197: Std.Trace ──────────────────────────────────────────────────────────
+// ── Std.Trace ──────────────────────────────────────────────────────────
 
 const TRACE_MAIN: &str = "module Main exposing (main)\n\
     import Sky.Core.Prelude exposing (..)\n\
@@ -214,7 +214,7 @@ fn trace_builds_and_runs() {
     seal_module("trace", TRACE_MAIN, "TRACE_OK");
 }
 
-// ── #197: Std.Compression ────────────────────────────────────────────────────
+// ── Std.Compression ────────────────────────────────────────────────────
 
 const COMPRESSION_MAIN: &str = "module Main exposing (main)\n\
     import Sky.Core.Prelude exposing (..)\n\
@@ -239,7 +239,7 @@ fn compression_builds_and_runs() {
     seal_module("compression", COMPRESSION_MAIN, "GZ:hello");
 }
 
-// ── #197: Std.Csv ────────────────────────────────────────────────────────────
+// ── Std.Csv ────────────────────────────────────────────────────────────
 
 const CSV_MAIN: &str = "module Main exposing (main)\n\
     import Sky.Core.Prelude exposing (..)\n\
@@ -262,7 +262,7 @@ fn csv_builds_and_runs() {
     seal_module("csv", CSV_MAIN, "a|b");
 }
 
-// ── #210: Std.Cache ──────────────────────────────────────────────────────────
+// ── Std.Cache ──────────────────────────────────────────────────────────
 // Exercises the full surface example 36-composite-server uses: `defaultCfg` +
 // `withMaxEntries`/`withTTL` builders → `new` (a `CacheCfg` record literal
 // consumed by `Cache_newRaw`), `put`, then `get` (a `Cache String String`
@@ -302,7 +302,7 @@ fn cache_builds_and_runs() {
     seal_module("cache", CACHE_MAIN, "CACHE:hit");
 }
 
-// ── #215: Std.PubSub ─────────────────────────────────────────────────────────
+// ── Std.PubSub ─────────────────────────────────────────────────────────
 // PubSub.publish : String -> any -> Task Error Int.  No Live.app runs in this
 // probe so publish resolves to Err(Unavailable) — Task.onError swallows it and
 // the program prints the marker.  The test asserts skyc-0 ⇒ cargo-0 ⇒ exit-0.
@@ -330,17 +330,17 @@ fn pubsub_builds_and_runs() {
     seal_module("pubsub", PUBSUB_MAIN, "PUBSUB_OK");
 }
 
-// ── #210: Std.Config ─────────────────────────────────────────────────────────
+// ── Std.Config ─────────────────────────────────────────────────────────
 // Exercises the 16 `Config_*` kernels over the SHARED `Decoder` carrier: the
 // four primitives (string/int/float/bool), `field`/`at`/`list`/`nullable`,
 // `map`/`andThen`/`succeed`/`fail`, and all three format front-ends
-// (`decodeToml`/`decodeYaml`/`decodeJson`). Proves the two #210 fixes together:
+// (`decodeToml`/`decodeYaml`/`decodeJson`). Proves two properties together:
 // the `type Decoder a` re-declaration resolves (SKY-N0026 carrier exemption) with
 // no competing enum emitted, and every kernel emits the shared JSON `decode_*` /
 // `config_decode_*` runtime fns (skyc-0 ⇒ cargo-0). Uses SINGLE-decoder
 // composition — the multi-parameter applicative `succeed (\a b -> …)` builder is
 // the same documented distinct surface `Sky.Core.Json.Decode` has (divergences
-// §A8/#198), not a Config-specific gap.
+// §A8), not a Config-specific gap.
 
 const CONFIG_MAIN: &str = "module Main exposing (main)\n\
     import Sky.Core.Prelude exposing (..)\n\

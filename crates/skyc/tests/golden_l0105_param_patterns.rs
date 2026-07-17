@@ -1,4 +1,4 @@
-//! SKY-L0105 lambda / function parameter patterns (#96) — positive surface,
+//! SKY-L0105 lambda / function parameter patterns — positive surface,
 //! end to end. The fixture exercises every irrefutable binding-position shape in
 //! ONE program (each contributing to a hand-computed total of `112`):
 //!

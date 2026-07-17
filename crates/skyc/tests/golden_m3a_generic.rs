@@ -1,11 +1,11 @@
-//! Milestone-3a generic-instantiation gate: ONE generic enum used at two
+//! Generic-instantiation gate: ONE generic enum used at two
 //! distinct element types in one module. `skyc` must emit `main.rs`
 //! byte-identical to the checked-in golden, and (behind `SKY_E2E=1`) the emitted
 //! project must build and print `42`.
 //!
 //! `type Opt a = Som a | Non` is constructed both as `Opt Int` (`Som 41`) and as
 //! `Opt Bool` (`Som (1 == 1)`); the backend emits a single `MainOpt<T1>` that
-//! Rust monomorphises at each use site — the M3a generic-ADT spine.
+//! Rust monomorphises at each use site — the generic-ADT spine.
 //!
 //! ```text
 //! orElse o d = case o of Som x -> x ; Non -> d

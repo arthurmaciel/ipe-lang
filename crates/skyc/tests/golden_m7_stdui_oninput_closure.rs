@@ -1,4 +1,4 @@
-//! Phase-1a regression lock (#4): `Arc<dyn Fn(String) -> M + Send + Sync>` bound.
+//! Regression lock: `Arc<dyn Fn(String) -> M + Send + Sync>` bound.
 //!
 //! A CLOSURE (lambda, not a top-level fn item) passed to `Ui.onInput` must
 //! compile, build, and run.  This locks the emitter's T6 Arc-wrap path for
@@ -14,7 +14,7 @@
 //! closure does not satisfy `Arc<dyn Fn(String) -> M + Send + Sync + 'static>`
 //! and cargo rejects it with E0308.
 //!
-//! Pre-fix: fn-item handlers worked (captured no state, auto-coerced to fn ptr);
+//! Without the fix, fn-item handlers worked (captured no state, auto-coerced to fn ptr);
 //! closure handlers exposed the bare `Fn(String) -> M` → missing `Send + Sync`
 //! bounds (or the Arc wrap was absent entirely).
 //!
@@ -82,7 +82,7 @@ fn build_run_oninput_closure() -> (PathBuf, support::RunOutcome) {
     (dir, outcome)
 }
 
-/// Phase-1a regression lock (#4): `onInput` with a closure handler must
+/// Regression lock: `onInput` with a closure handler must
 /// compile (cargo exit 0), emit HTML with the event attribute wired, and
 /// the binary must exit 0.
 #[test]

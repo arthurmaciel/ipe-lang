@@ -1,4 +1,4 @@
-//! Milestone-3a recursion-soundness gate: a self-edge routed through a TUPLE
+//! Recursion-soundness gate: a self-edge routed through a TUPLE
 //! payload. `skyc` must emit `main.rs` byte-identical to the checked-in golden,
 //! and (behind `SKY_E2E=1`) the emitted project must build and print `5`.
 //!
@@ -8,10 +8,10 @@
 //!
 //! `ChainNode`'s payload is the tuple `(Chain, Int)`, which reaches `Chain`
 //! again — the type-size cycle is closed *through a tuple*, not as a bare
-//! self-field. The pre-fix backend boxed only a direct self-edge, so it emitted
+//! self-field. Boxing only a direct self-edge would emit
 //! `ChainNode((MainChain, i64))` — an infinite-sized Rust enum (E0072): `skyc`
-//! exited 0 and the crate then failed `cargo build`. The fix boxes the cyclic
-//! enum-payload edge (the whole tuple, `ChainNode(Box<(MainChain, i64)>)`),
+//! exits 0 and the crate then fails `cargo build`. So the backend boxes the
+//! cyclic enum-payload edge (the whole tuple, `ChainNode(Box<(MainChain, i64)>)`),
 //! balanced by `Box::new` at construction and a deref at pattern binding.
 //!
 //! Note: the Go reference parser does NOT accept a tuple type as a constructor
@@ -64,8 +64,8 @@ fn emits_byte_identical_main_rs() {
 
 /// Full spine: compile, build the emitted Cargo project, run it, and assert the
 /// tuple-self-edge ADT program prints `5`. Gated on `SKY_E2E=1`. This is the
-/// soundness-floor regression for a self-edge through a tuple: before the fix
-/// the crate did not build at all (E0072).
+/// soundness-floor regression for a self-edge through a tuple: without boxing
+/// it the crate does not build at all (E0072).
 #[test]
 fn end_to_end_builds_and_prints_five() {
     if std::env::var("SKY_E2E").is_err() {

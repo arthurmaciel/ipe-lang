@@ -6,8 +6,8 @@
 //! searched `enum_variants` by name when `home = []` and no builtin matched.  The
 //! heuristic ICE'd when zero or multiple matches existed.
 //!
-//! **#138 total-resolution fix** (replaces the heuristic): unknown unqualified
-//! type names now fail closed at canon time with SKY-N0002 (`TypeNotFound`).
+//! **Total type-name resolution** (replaces the heuristic): unknown unqualified
+//! type names fail closed at canon time with SKY-N0002 (`TypeNotFound`).
 //! The heuristic in `ir_type_from_canon` and `ir_type_from_ty` is removed.
 //! Examples 16 and 17 were updated to add the missing `import State exposing (..)`
 //! so they compile cleanly without the heuristic.  See `golden_i138_total_resolution`
@@ -86,10 +86,10 @@ fn ex10_live_component_exits_zero() {
 ///    correcting the scheme to `fun(string(), attr(var(0)))` and changing the
 ///    runtime helper from `Vec<String>` to `String`.
 ///
-/// 2. **Wildcard-`any` return-type** (this session): `view : Model -> any` in
-///    `Main.sky` caused the lowerer to include `any` in the function's generic
+/// 2. **Wildcard-`any` return-type**: `view : Model -> any` in
+///    `Main.sky` would make the lowerer include `any` in the function's generic
 ///    type parameters and emit `-> T1` as the return type, producing Rust
-///    E0308 because the body returns `Html<StateMsg>`.  Fixed in `lower.rs`:
+///    E0308 because the body returns `Html<StateMsg>`.  In `lower.rs`:
 ///    (a) `any` is filtered out of `type_params` so no `<T_any>` generic is
 ///    emitted; (b) when `split_typed_sig` returns `IrType::Generic(any_sym)`
 ///    for the return position, the lowerer substitutes the body expression's

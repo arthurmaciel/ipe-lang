@@ -1,10 +1,11 @@
-//! M4a stdlib-functions parity gate: the kernel-anchored `Sky.Core.List`,
+//! Stdlib-functions parity gate: the kernel-anchored `Sky.Core.List`,
 //! `Sky.Core.Maybe`, and `Sky.Core.Result` combinators compile and run with Go
 //! parity.
 //!
-//! M4a-core landed the `List` type + literals + `::`, the `Maybe` / `Result` /
-//! `Bool` builtins, and cons/list patterns. This gate covers the standard-library
-//! FUNCTIONS over them. As in the reference compiler, the higher-order ones
+//! The `List` type + literals + `::`, the `Maybe` / `Result` /
+//! `Bool` builtins, and cons/list patterns are covered elsewhere. This gate
+//! covers the standard-library FUNCTIONS over them. As in the reference
+//! compiler, the higher-order ones
 //! (`map` / `filter` / `foldl` / `foldr`) stay kernel-anchored — they route to the
 //! generic runtime functions (`list_foldl`, …) rather than to monomorphised user
 //! Sky code, which the front end cannot yet produce for a cross-module

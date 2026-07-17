@@ -1,4 +1,4 @@
-//! i148 regression lock — `Input.slider` must type-check and lower without
+//! `Input.slider` must type-check and lower without
 //! `SKY-N0005: Input has no member slider`.
 //!
 //! Before this fix, `InputSlider` had a `StdlibKernel` variant and a type

@@ -1,8 +1,8 @@
-//! Regression for the `24-tui-kitchen-sink` SEAL violation (BACKLOG "Sweep to
-//! green" row, found 2026-07-11): `skyc build` exited 0 on the Sky.Tui
-//! `argv`-dispatch entry-point idiom (`main = case List.head argsList of Just
-//! "live" -> Live.app {...} |> Task.run; _ -> Tui.app {...} |> Task.run`) but
-//! the emitted crate failed `cargo build` with two INDEPENDENT E0308 errors.
+//! Regression for a `24-tui-kitchen-sink` SEAL violation: `skyc build` exits 0
+//! on the Sky.Tui `argv`-dispatch entry-point idiom (`main = case List.head
+//! argsList of Just "live" -> Live.app {...} |> Task.run; _ -> Tui.app {...} |>
+//! Task.run`) while the emitted crate fails `cargo build` with two INDEPENDENT
+//! E0308 errors.
 //! The `tui_entry_case_taskrun` fixture minimises both defects down to plain
 //! `println`/`Task` calls so this test needs no Sky.Tui / Sky.Live
 //! dependency.
@@ -12,7 +12,7 @@
 //! `SkyMaybe::Just("live")` — Rust rejects a `&str` literal pattern against
 //! an owned `String` ctor field. Fixed by desugaring a direct `PStr` ctor-arg
 //! into a fresh `String` binder plus an arm guard (`binder == "live"`),
-//! mirroring the existing #158 C2 nested-cons-in-ctor-payload desugaring.
+//! mirroring the existingthe C2 nested-cons-in-ctor-payload desugaring.
 //!
 //! Defect 2: the entry-point `Task.run` elision in `emit_func`
 //! (`sky_backend_rust::emit_expr`) only recognised a FLAT `main = task |>

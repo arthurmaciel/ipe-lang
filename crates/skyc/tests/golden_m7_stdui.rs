@@ -1,4 +1,4 @@
-//! M7 `Std.Ui` / `Std.Html` Phase-0 gate —
+//! `Std.Ui` / `Std.Html` gate —
 //! `Ui.layout` / `Ui.column` / `Ui.el` / `Ui.text` / `Ui.spacing` /
 //! `Background.color` / `Font.bold` / `Html.htmlRender` end-to-end smoke test.
 //!
@@ -18,8 +18,8 @@
 //!
 //! ## What is tested
 //!
-//! * `Std.Html` qualifier (`Std.Html.htmlRender`) resolves correctly — Phase 0
-//!   qualifier-alias fix (env.rs `QUALIFIER_ALIASES`).
+//! * `Std.Html` qualifier (`Std.Html.htmlRender`) resolves correctly via the
+//!   qualifier-alias table (env.rs `QUALIFIER_ALIASES`).
 //! * `Std.Ui` qualifier (`Std.Ui.layout`, `Std.Ui.column`, etc.) resolves
 //!   correctly.
 //! * `Ui.column [Ui.spacing N]` emits `display:flex;flex-direction:column;gap:N`.

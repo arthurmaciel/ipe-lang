@@ -1,12 +1,12 @@
-//! Integration tests for the compiled-source stdlib subsystem (#98 SPIKE).
+//! Integration tests for the compiled-source stdlib subsystem.
 //!
-//! These lock every seam the spike validates on the ~15-line `Std.Palette`:
+//! These lock every seam on the ~15-line `Std.Palette`:
 //!   * embed → inject → topo → canonicalise-as-stdlib → link → emit of a
 //!     Std-homed union constructor, with mixed kernel + source imports;
 //!   * a hostile user file named `Std.Palette` stays SKY-N0025-rejected;
-//!   * (#103) an `EmbeddedStdlib` module DEFINES a reserved built-in type name
-//!     (`type Length`) that a user module could not — proving the last prereq
-//!     before compiled-source `Std.Css`;
+//!   * an `EmbeddedStdlib` module DEFINES a reserved built-in type name
+//!     (`type Length`) that a user module could not — the prereq
+//!     for compiled-source `Std.Css`;
 //!   * (`SKY_E2E`) the emitted Cargo project builds and runs to `#000 42`.
 
 use std::path::{Path, PathBuf};
@@ -30,7 +30,7 @@ fn spike_manifest() -> PathBuf {
         .join("sky.toml")
 }
 
-/// The compiled-source module resolves IDENTICALLY to a user module: the spike
+/// The compiled-source module resolves IDENTICALLY to a user module: the
 /// project builds (no SKY-N0020 / N0025), and the emitted Rust carries the
 /// Std-homed constructor + its case-match — the exact thing a kernel cannot do.
 /// Also proves the MIXED import set (kernel `Sky.Core.Prelude` + source
@@ -48,8 +48,8 @@ fn spike_project_builds_and_injects_compiled_source() {
     );
 
     // Read `main.rs` PLUS every `sky_mods/*.rs` the per-Sky-module split
-    // (Phase 5 Milestone C) may have written: the compiled `Std.Palette` source
-    // is now emitted into its own `sky_mods/sky_mod_std_palette.rs`, not inline
+    // may have written: the compiled `Std.Palette` source
+    // is emitted into its own `sky_mods/sky_mod_std_palette.rs`, not inline
     // in `main.rs`. The shared helper keeps the substring assertions below
     // robust to WHICH file the split placed each symbol in (same discrimination
     // the golden harness uses).
@@ -64,7 +64,7 @@ fn spike_project_builds_and_injects_compiled_source() {
         emitted.contains("\"#000\"") && emitted.contains("\"#fff\""),
         "emitted Rust must carry the case-match arms of toHex:\n{emitted}"
     );
-    // #103: the EmbeddedStdlib module defined a RESERVED built-in type name
+    // The EmbeddedStdlib module defines a RESERVED built-in type name
     // (`type Length`). The lowerer keys it under its real home (`Std.Palette`),
     // so it lowers to its OWN enum + accessor — NOT the opaque runtime
     // `UiPlain::Length`. A user module declaring `type Length` would have been
@@ -97,7 +97,7 @@ fn hostile_std_squat_is_sky_n0025() {
     .expect("write manifest");
     // The attacker's payload: a poisoned toHex that must NEVER win, AND an
     // attempt to squat a RESERVED built-in type name (`Length`) inside the
-    // reserved `Std.` namespace (#103). The unforgeable `ModuleOrigin::User` tag
+    // reserved `Std.` namespace. The unforgeable `ModuleOrigin::User` tag
     // means this file gets NEITHER the N0025 namespace exemption NOR the N0026
     // reserved-builtin exemption — the namespace gate (N0025) fires first, so a
     // hostile author can never obtain the `EmbeddedStdlib`-only capability.

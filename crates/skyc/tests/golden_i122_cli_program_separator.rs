@@ -1,4 +1,4 @@
-//! #122 — Go-oracle parity check for `Cli.program`'s view printer. A
+//! Go-oracle parity check for `Cli.program`'s view printer. A
 //! `view` that doesn't append its own trailing newline gets renders glued
 //! together with NOTHING in between, and exactly ONE trailing newline after
 //! the event loop exits. This matches `runtime-go/rt/cli.go`'s
@@ -6,13 +6,11 @@
 //! WITHOUT a trailing newline (the user's prompt formatting decides whether
 //! to add one)".
 //!
-//! #122 was originally filed as a bug ("lines: 0lines: 1" looked wrong) and
-//! briefly "fixed" by forcing a newline after every render — but that broke
-//! `examples/20-cli-counter`'s REPL-prompt UX (`view` returns
-//! `"count=... > "` with no trailing newline so the cursor stays on the
-//! prompt line) and was never checked against the Go reference. Reverted;
-//! this test now asserts the CORRECT (Go-parity) glued-together behavior so
-//! a future "fix" doesn't reintroduce the same divergence.
+//! Forcing a newline after every render would break `examples/20-cli-counter`'s
+//! REPL-prompt UX (`view` returns `"count=... > "` with no trailing newline so
+//! the cursor stays on the prompt line) and diverge from the Go reference.
+//! This test asserts the CORRECT (Go-parity) glued-together behavior so
+//! a future "fix" doesn't reintroduce that divergence.
 //!
 //! Gated on `SKY_E2E=1`. Run:
 //!

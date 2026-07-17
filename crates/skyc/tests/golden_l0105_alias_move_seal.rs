@@ -3,10 +3,10 @@
 //! An `as`-alias over a destructure (`(a, b) as whole`) in a by-VALUE binding
 //! position binds BOTH the whole and its sub-parts. Rust's `name @ (a, b)`
 //! spelling moves them from the SAME value — a partial move (E0382) for any
-//! non-`Copy` payload. Before the fix, `((a, b) as whole)` over `(String,
-//! String)` emitted `let whole @ (a, b) = arg;` and was `skyc`-0 then
-//! `cargo`-101. The fix binds the whole first and destructures the sub-parts
-//! from a CLONE, so every binder is independently owned:
+//! non-`Copy` payload. Emitting `let whole @ (a, b) = arg;` for `((a, b) as
+//! whole)` over `(String, String)` is `skyc`-0 then `cargo`-101. So the whole
+//! binds first and the sub-parts destructure from a CLONE, so every binder is
+//! independently owned:
 //!
 //! ```ignore
 //! let whole = arg;
@@ -16,7 +16,7 @@
 //! The fixture exercises ALL FOUR by-value binding shapes with the non-`Copy`
 //! `(String, String)` payload, every binder used in the body:
 //!
-//! * PARAM — `f ((a, b) as whole) = …` (a #96 function parameter pattern).
+//! * PARAM — `f ((a, b) as whole) = …` (a function parameter pattern).
 //! * CASE — a single-arm product `case`, an irrefutable destructure.
 //! * LET — an irrefutable `let` destructure with an alias.
 //! * NESTED — `(h, ((c, d) as inner))`, an alias nested inside a tuple, driving

@@ -1,4 +1,4 @@
-//! M4h `Sky.Core.Json.Decode` + `Sky.Core.Json.Decode.Pipeline` parity gate —
+//! `Sky.Core.Json.Decode` + `Sky.Core.Json.Decode.Pipeline` parity gate —
 //! JSON decoder combinators with byte-for-byte Go parity.
 //!
 //! Tests exercise the `JsonDec` and `JsonDecP` kernel families end-to-end:

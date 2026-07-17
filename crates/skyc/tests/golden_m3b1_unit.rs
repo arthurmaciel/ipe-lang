@@ -1,4 +1,4 @@
-//! Milestone-3b-1 unit-value gate: the `()` literal as an expression. `skyc`
+//! Unit-value gate: the `()` literal as an expression. `skyc`
 //! must emit `main.rs` byte-identical to the checked-in golden, and (behind
 //! `SKY_E2E=1`) the emitted project must build and print `7`.
 //!

@@ -14,8 +14,8 @@
 //! (the user-module-vs-kernel guard), so the shared identifier the collision
 //! guard reports is `user_ui_border_rounded`. Mirrors the sibling
 //! enum-name collision guard (`crates/sky_backend_rust/src/lib.rs`, the
-//! `enum_names.values().any(...)` check ~10 lines above the fix this
-//! regression covers).
+//! `enum_names.values().any(...)` check ~10 lines above the guard this
+//! test covers).
 //!
 //! ```text
 //! cargo test -p skyc --test golden_aud08_function_name_collision

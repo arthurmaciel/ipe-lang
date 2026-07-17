@@ -1,10 +1,10 @@
-//! Milestone-3a soundness gate: a function value reaching a CONSTRUCTOR PAYLOAD
+//! Soundness gate: a function value reaching a CONSTRUCTOR PAYLOAD
 //! THROUGH a type variable must NEVER emit cargo-failing Rust silently.
 //!
 //! The shape — `type Box a = Mk a`, with `Mk (\n -> n + 1)` — instantiates the
-//! payload field `a` to `Int -> Int` at the use site. #90 (Stage 1) lifted the
-//! blanket rejection for enum-like heads (`Maybe`/`Result`/user unions): the
-//! runtime/derive machinery already tolerates a function payload there — #87's
+//! payload field `a` to `Int -> Int` at the use site. There is no blanket
+//! rejection for enum-like heads (`Maybe`/`Result`/user unions): the
+//! runtime/derive machinery already tolerates a function payload there — the
 //! derive-demotion fixpoint drops `MainBox<T1>`'s `#[derive(Clone, Debug,
 //! PartialEq)]` when a field is not derivable, and its hand-written
 //! `SkyStringify` impl renders the non-derivable field as `<fn>` instead of
@@ -79,7 +79,7 @@ fn rejects_cleanly_or_builds_and_runs_never_silent_cargo_fail() {
         built.err()
     );
 
-    // Proper support landed (an eager `Box<dyn Fn>` coercion): the emitted crate
+    // With proper support (an eager `Box<dyn Fn>` coercion), the emitted crate
     // MUST build and run with the semantically-correct output. Gated on SKY_E2E
     // so default runs stay fast.
     if std::env::var("SKY_E2E").is_err() {

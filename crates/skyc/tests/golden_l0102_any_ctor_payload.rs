@@ -3,11 +3,11 @@
 //! ## Root cause
 //!
 //! `type Msg = … | CartTopicReceived any` has `any` as a **union-ctor payload
-//! field**.  Before the fix, `lower_enum` Gate 1 collected the `any` type
-//! variable via `collect_type_vars`, found it absent from `union.vars`
-//! (monomorphic `Msg` has no type params), and raised `Feature::Polymorphism`
-//! (SKY-L0102).  Examples 27 (`MessageReceived any`) and 37
-//! (`CartTopicReceived any`) were both blocked.
+//! field**.  If `lower_enum` Gate 1 collected the `any` type variable via
+//! `collect_type_vars`, found it absent from `union.vars` (monomorphic `Msg`
+//! has no type params), and raised `Feature::Polymorphism` (SKY-L0102), it
+//! would block examples 27 (`MessageReceived any`) and 37
+//! (`CartTopicReceived any`).
 //!
 //! ## Fix
 //!
@@ -26,7 +26,7 @@
 //!
 //! 1. `any_ctor_payload_skyc_and_cargo_zero` — build-only seal: `BroadcastMsg
 //!    any` compiles (skyc exit 0) and the emitted Rust builds (cargo exit 0).
-//!    Pre-fix: SKY-L0102.
+//!    Without the fix, SKY-L0102.
 //!
 //! 2. `any_ctor_payload_fail_closed` — using the `any` payload as a `String`
 //!    must surface `SKY-T0001` at skyc, never silently cargo-fail.
@@ -61,7 +61,7 @@ fn fixture_src_entry(root: &Path, name: &str) -> PathBuf {
 }
 
 /// Build-only seal: `BroadcastMsg any` — skyc exit 0 AND cargo build green.
-/// Pre-fix: SKY-L0102 (`Feature::Polymorphism` in `lower_enum` Gate 1).
+/// Without the fix, SKY-L0102 (`Feature::Polymorphism` in `lower_enum` Gate 1).
 #[test]
 fn any_ctor_payload_skyc_and_cargo_zero() {
     let root = repo_root();

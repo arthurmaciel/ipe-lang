@@ -1,4 +1,4 @@
-//! #102 regression gate — a LOCAL `type X` shadowing a dep-imported `X` must be
+//! Regression gate — a LOCAL `type X` shadowing a dep-imported `X` must be
 //! rejected AT THE DECLARATION with a clean SKY-N0012 (`DuplicateType`), not a
 //! confusing downstream SKY-T0001 type mismatch three functions later.
 //!
