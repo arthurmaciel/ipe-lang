@@ -1,6 +1,6 @@
 //! Match-arm clone relay at n == 1 — SEAL regression.
 //!
-//! A match-arm-bound variable (`name`, CloneOk `String`) read EXACTLY ONCE but
+//! A match-arm-bound variable (`name`, `CloneOk` `String`) read EXACTLY ONCE but
 //! through TWO nested `move`-closure boundaries. Nesting the match-arm binder
 //! site's type resolution inside an `if n > 1` guard would leave the arm var's
 //! type unresolved at `n == 1`, so the per-boundary relay never runs → the
