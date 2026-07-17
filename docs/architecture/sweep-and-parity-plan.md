@@ -4,7 +4,7 @@
 > runs on GitHub CI (A4)** and **how Go≡Rust parity is established there and
 > its red rows triaged into fixes (A5)** — the next critical-path phase after
 > the exit-0 registry pass. It touches no code; it fixes the plan the sweep
-> harness (`scripts/examples-sweep.sh`, already ported) will execute.
+> harness (`scripts/equivalence-checks/examples-sweep.sh`, already ported) will execute.
 
 Grounding. The whole sweep exists to serve two fundamental rules and the
 correctness principle:
@@ -16,7 +16,7 @@ correctness principle:
 - **Rule 2 — Go-parity is the default** (PRINCIPLES §2 Correctness). For the
   same well-typed program and input, Rust output matches the Go reference's
   observable behaviour, ideally byte-for-byte. Any deviation is either a bug to
-  fix or a **documented** divergence — never silent. The EQUIV column is the
+  fix or a **documented** divergence — never silent. The EQUIVALENCE column is the
   enforcement of Rule 2.
 
 A largely-RED first sweep is therefore the honest measurement, not a harness
@@ -28,21 +28,21 @@ failure: it is the to-do generator that drives the compiler to parity.
 
 ### The sweep harness — ported, phased, non-gating
 
-`scripts/examples-sweep.sh` emits one row per in-scope example with three
+`scripts/equivalence-checks/examples-sweep.sh` emits one row per in-scope example with three
 columns, and one VERDICT:
 
 | Column | Values | Meaning |
 |---|---|---|
 | BUILD | `ok` / `skyc-fail` / `cargo-fail` | `skyc build` then `cargo build` of the emitted crate |
 | RUN | `ok` / `panic` / `hang` / `noserve` / `notty` / `skip` | headless drive per shape |
-| EQUIV | `equiv-*` / `n/a` / `DIFFER` / `go-ref-broken` | Go≡Rust comparison (PHASED OFF now) |
+| EQUIVALENCE | `equivalence-*` / `n/a` / `DIFFER` / `go-ref-broken` | Go≡Rust comparison (PHASED OFF now) |
 
 - **Scope** = `build_set` (every candidate dir minus Go-FFI, filtered by
   `is_out_of_scope` in `lib/examples.sh`) — **33 vendored in-scope dirs**; 9
   Go-FFI dirs excluded (`03,05,07,08,11,13,35,36`, `rust/skyshop-rs`).
-- **Shape** (`example_shape`) derives EQUIV **mode** (`equiv_mode`):
+- **Shape** (`example_shape`) derives EQUIVALENCE **mode** (`equivalence_mode`):
   `cli→stdout`, `server→body`, `live→scenario`, `tui→pty`,
-  `webview/fyne→none`. `equiv-classification.tsv` holds only the *exceptions*
+  `webview/fyne→none`. `equivalence-classification.tsv` holds only the *exceptions*
   (non-deterministic clis, Rust-FFI apps): `00`(finding), `02`, `07`, `35`,
   `skyshop-rs` are pinned `none`.
 - **Verdict** — RED = any `*-fail` / `panic` / `hang` / `noserve` / `notty` /
@@ -71,21 +71,21 @@ columns, and one VERDICT:
    divergence) are unit-pinned. **This is already option (a), battle-tested —
    but at golden granularity, not example granularity.**
 
-2. **Examples-sweep EQUIV (ported but dormant).** A **separate** path:
-   `equiv_for()` builds the Go reference **live** via `build_go()` /
+2. **Examples-sweep EQUIVALENCE (ported but dormant).** A **separate** path:
+   `equivalence_for()` builds the Go reference **live** via `build_go()` /
    `SKY_GO_BIN` and compares per shape (stdout diff / route-body diff via
-   `equiv_normalize_html.py` / boot floor / pty via `equiv_tui_grid.py`). This
+   `equivalence_normalize_html.py` / boot floor / pty via `equivalence_tui_grid.py`). This
    is option (b), and it is **phased off** (`SKY_SWEEP_NO_EQUIV=1`) because the
    Haskell `sky` compiler is not present in this repo or in CI. **Examples
    carry NO oracle files today** (`find examples -name expected_go.txt` → none).
 
 So: the cached-oracle model is *already the accepted answer for goldens*; A5's
 undesigned piece is **extending that same model to the examples sweep**, so the
-examples EQUIV path also needs no Go toolchain in CI.
+examples EQUIVALENCE path also needs no Go toolchain in CI.
 
 ---
 
-## A4 — run the sweep on GitHub (BUILD+RUN, no EQUIV)
+## A4 — run the sweep on GitHub (BUILD+RUN, no EQUIVALENCE)
 
 **Goal:** turn on the honest measurement. The first CI runs of
 `examples-sweep.yml` execute BUILD+RUN over the 33 in-scope examples on
@@ -126,7 +126,7 @@ GitHub CI**, and we do not want to build it there. Three options:
 
 | Option | Mechanism | Go/Haskell in CI? | Verdict |
 |---|---|---|---|
-| **(a) Vendored cached reference** | commit `expected_go.txt` per example, generated once locally via the real Sky-Go / an example-level `refresh-oracle`; sweep EQUIV diffs Rust output against it | **No** | **Recommended (gating path)** |
+| **(a) Vendored cached reference** | commit `expected_go.txt` per example, generated once locally via the real Sky-Go / an example-level `refresh-oracle`; sweep EQUIVALENCE diffs Rust output against it | **No** | **Recommended (gating path)** |
 | (b) Live Go reference in CI | a dedicated job builds GHC/cabal `sky` + Go toolchain, generates references live, drops `SKY_SWEEP_NO_EQUIV` | Yes (heavy) | Rejected as the gate; kept as an audit |
 | (c) Hybrid | (a) gates every PR; a nightly non-gating (b) job **re-refreshes/audits** the cache against a live Go build to catch drift | Nightly only | **Recommended overall** |
 
@@ -137,7 +137,7 @@ examples. Rationale against the three lenses:
 
 - **Reproducibility / hermeticity.** The gating path (a) is a pure function of
   committed bytes: `check_parity`-style diff, no network, no toolchain, no
-  non-determinism. A PR's EQUIV result is identical on every runner and every
+  non-determinism. A PR's EQUIVALENCE result is identical on every runner and every
   replay. Option (b) as the gate couples ipê CI to upstream Haskell repo
   availability + GHC build flakiness + Go toolchain — a foreign failure domain
   on the critical path.
@@ -156,22 +156,22 @@ examples. Rationale against the three lenses:
 
 ### How the cached model maps onto example shapes
 
-Examples are not all stdout — the cache granularity follows `equiv_mode`:
+Examples are not all stdout — the cache granularity follows `equivalence_mode`:
 
 | Shape / mode | What is byte-comparable | Cache artifact | Normalization |
 |---|---|---|---|
 | `cli` → `stdout` | full program stdout | `expected_go.txt` (verbatim, as goldens) | determinism auto-probe (2-run diff); non-det → `.tsv` `none` |
-| `server` → `body` | each comparable GET route's response body | `expected_go/<route>.html` | `equiv_normalize_html.py` (strip sky-id / csrf / session / timestamps) |
-| `tui` → `pty` | terminal cell grid snapshot | `expected_go/tui.grid` (optional) | `equiv_tui_grid.py` (grid-normalize) |
+| `server` → `body` | each comparable GET route's response body | `expected_go/<route>.html` | `equivalence_normalize_html.py` (strip sky-id / csrf / session / timestamps) |
+| `tui` → `pty` | terminal cell grid snapshot | `expected_go/tui.grid` (optional) | `equivalence_tui_grid.py` (grid-normalize) |
 | `live` → `scenario` | *behaviour*, not bytes (server-driven patches) | none — **boot/scenario floor only** | n/a (both-drive-runtime check) |
 | `serve` | binds + serves | none — boot floor | n/a |
-| `webview` / `fyne` / rust-ffi | no Go reference exists | none | `equiv_mode none` |
+| `webview` / `fyne` / rust-ffi | no Go reference exists | none | `equivalence_mode none` |
 
 The two Python normalizers are already ported verbatim and backend-agnostic —
 they are the mechanism that lets "non-deterministic-but-equivalent" output
 (sky-ids, CSRF tokens, timestamps, session cookies) compare equal. For pure-
 stdout non-determinism that a normalizer can't reach (wall-clock, live HTTP,
-Dict iteration order) the escape hatch is the `equiv-classification.tsv` `none`
+Dict iteration order) the escape hatch is the `equivalence-classification.tsv` `none`
 override — **already applied** to `02`, `07`, `35`, `skyshop-rs` — plus the
 built-in 2-run determinism auto-probe that auto-reports `n/a` when Go's own
 stdout is non-reproducible.
@@ -184,11 +184,11 @@ source tree** (`**/*.sky` + `sky.toml`), not a single `Main.sky`; (2) it drives
 `server`/`tui` shapes to capture normalized route-body / grid snapshots, not
 only stdout; (3) it reuses the identical `oracle::Meta` format + divergence
 tags (`sanctioned:` / `divergence:` / auto Go-failure) so the divergence policy
-is one mechanism across goldens and examples. The sweep's `equiv_for()` then
+is one mechanism across goldens and examples. The sweep's `equivalence_for()` then
 gains a cached-compare branch (diff Rust output vs the committed reference)
 selected when `SKY_GO_BIN` is absent — mirroring `check_parity`. **Until that
-lands the EQUIV column stays `—` (phase 1).** The port already keeps
-`build_go()`/`equiv_for()` intact so this is a wiring change, not a rebuild.
+lands the EQUIVALENCE column stays `—` (phase 1).** The port already keeps
+`build_go()`/`equivalence_for()` intact so this is a wiring change, not a rebuild.
 
 ---
 
@@ -205,8 +205,8 @@ builds are fine, the full measurement is CI's job.
 | `cargo-fail` | **codegen defect** — emitted Rust ill-typed / references an unbuilt kernel. Higher severity: this is the Rule-1 *exit-0-then-cargo-fail* class (soundness) | same pipeline, prioritized; guardian review of the emission |
 | RUN `panic`/`hang` | runtime defect (reachable panic from well-typed code, non-termination) | file + fix; add regression |
 | RUN `noserve`/`notty` | server didn't bind / no TTY — env or runtime defect | fix (or confirm harness-env, not a Rust defect) |
-| EQUIV `DIFFER` | **a Go-parity correctness bug (Rule 2 / principle #2)** | **fix to byte-parity**; OR, iff Rust is deliberately more correct / Go is buggy, record a `sanctioned:` / `divergence:` marker (divergence-policy.md) + registry row — never silent |
-| EQUIV `go-ref-broken` | **AMBER** — upstream Go reference doesn't build/serve (e.g. the v0.16.29 `undefined: T1` regression). NOT a Rust regression | leave amber; auto-clears when upstream fixes (finding #2 in the `.tsv`) |
+| EQUIVALENCE `DIFFER` | **a Go-parity correctness bug (Rule 2 / principle #2)** | **fix to byte-parity**; OR, iff Rust is deliberately more correct / Go is buggy, record a `sanctioned:` / `divergence:` marker (divergence-policy.md) + registry row — never silent |
+| EQUIVALENCE `go-ref-broken` | **AMBER** — upstream Go reference doesn't build/serve (e.g. the v0.16.29 `undefined: T1` regression). NOT a Rust regression | leave amber; auto-clears when upstream fixes (finding #2 in the `.tsv`) |
 
 `DIFFER` is the load-bearing case: the default response is *fix the parity bug*.
 A divergence marker is allowed **only** when the difference is a genuine
@@ -228,8 +228,8 @@ row satisfies:
 ```
 BUILD == ok
 AND  RUN   ∈ { ok, skip }
-AND  EQUIV ∈ { equiv-stdout, equiv-body, equiv-scenario, equiv-serve,
-               equiv-pty, n/a, —, go-ref-broken(AMBER) }
+AND  EQUIVALENCE ∈ { equivalence-stdout, equivalence-body, equivalence-scenario, equivalence-serve,
+               equivalence-pty, n/a, —, go-ref-broken(AMBER) }
 ```
 
 Staged gating:
@@ -237,8 +237,8 @@ Staged gating:
 1. **A4 green** — first all-green **BUILD+RUN** sweep. Flip
    `examples-sweep.yml` `continue-on-error → false` for the BUILD+RUN columns:
    a RED build/run row now fails the workflow (matching upstream).
-2. **A5 green** — vendor the cached example references, wire the `equiv_for()`
-   cached-compare branch, drop `SKY_SWEEP_NO_EQUIV`. EQUIV goes live and gates:
+2. **A5 green** — vendor the cached example references, wire the `equivalence_for()`
+   cached-compare branch, drop `SKY_SWEEP_NO_EQUIV`. EQUIVALENCE goes live and gates:
    a `DIFFER` fails CI; `go-ref-broken` stays AMBER.
 3. **A6 — DONE** — push to `arthurmaciel/ipe-lang`; CI runs the full gating
    sweep; **green everywhere = the example-parity milestone is complete.** FFI
@@ -254,7 +254,7 @@ Staged gating:
    refresh discipline (no nightly Go build at all). *Decision: (c) vs pure-(a).*
 
 2. **When to gate CI on VERDICT.** Recommended staged flip: BUILD+RUN gating
-   after the first all-green BUILD+RUN sweep (step 1); EQUIV gating only after
+   after the first all-green BUILD+RUN sweep (step 1); EQUIVALENCE gating only after
    cached oracles are vendored and green (step 2). Alternative: keep
    `continue-on-error: true` until full parity, then flip once. *Decision:
    staged vs single flip.*

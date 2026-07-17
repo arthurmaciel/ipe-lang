@@ -23,34 +23,34 @@
 # reference drives ONE compiler with `--backend go|rust`; here there are TWO
 # binaries — the pinned Go-reference oracle (`SKY_GO_BIN`, default
 # tools/oracle/bin/sky) and `skyc` (env.sh's SKYC_BIN) + a `cargo build` of the
-# emitted crate. Deliberately NOT inlined into examples-sweep.sh's `pty` EQUIV
+# emitted crate. Deliberately NOT inlined into examples-sweep.sh's `pty` EQUIVALENCE
 # case — tui-grid equivalence lives in this standalone driver by the reference's
 # own architecture; the main sweep's `pty` mode stays at the boot-both floor.
 #
-# Normalisation rationale lives in lib/equiv_normalize_html.py + lib/equiv_tui_grid.py.
+# Normalisation rationale lives in lib/equivalence_normalize_html.py + lib/equivalence_tui_grid.py.
 # These compare BEHAVIOUR (what the user sees), not implementation — the backends
 # are committed to behavioural parity, not byte-identical emission.
 #
-# Usage:  equiv-render.sh live 26-ui-showcase
-#         equiv-render.sh tui  24-tui-kitchen-sink [rows]
-#         equiv-render.sh all                      # every wired example
-# Exit:   0 = equiv · 1 = DIFFER (regression) · 2 = setup/build error.
+# Usage:  equivalence-render.sh live 26-ui-showcase
+#         equivalence-render.sh tui  24-tui-kitchen-sink [rows]
+#         equivalence-render.sh all                      # every wired example
+# Exit:   0 = equivalence · 1 = DIFFER (regression) · 2 = setup/build error.
 # ─────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
 
 _dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd -P)"
 # shellcheck source=lib/env.sh
-source "$_dir/lib/env.sh"
+source "$_dir/../lib/env.sh"
 [ -n "${REPO:-}" ] && cd "$REPO" || { echo "ERROR: run from the ipê repo (set SKY_REPO)." >&2; exit 2; }
 # shellcheck source=lib/checks.sh
-source "$_dir/lib/checks.sh"   # resolve_bin (the freshest skyc-emitted binary)
+source "$_dir/../lib/checks.sh"   # resolve_bin (the freshest skyc-emitted binary)
 
 GO_ORACLE="${SKY_GO_BIN:-$REPO/tools/oracle/bin/sky}"
 [ -x "$GO_ORACLE" ] || { echo "ERROR: Go-reference oracle not found at $GO_ORACLE (set SKY_GO_BIN; see tools/oracle/README.md)." >&2; exit 2; }
 [ -x "$SKYC_BIN" ] || { echo "ERROR: skyc binary not at '$SKYC_BIN' — build it: cargo build --release -p skyc (or set SKYC_BIN)." >&2; exit 2; }
-NORM_HTML="$_dir/lib/equiv_normalize_html.py"
-NORM_TUI="$_dir/lib/equiv_tui_grid.py"
-HIST="${TMPDIR:-/tmp}/sky-equiv-render"; mkdir -p -m 700 "$HIST" 2>/dev/null || true
+NORM_HTML="$_dir/../lib/equivalence_normalize_html.py"
+NORM_TUI="$_dir/../lib/equivalence_tui_grid.py"
+HIST="${TMPDIR:-/tmp}/sky-equivalence-render"; mkdir -p -m 700 "$HIST" 2>/dev/null || true
 # Multi-user /tmp clobber guard: refuse a pre-existing symlink or a dir not owned
 # by the current user (a predictable shared path is otherwise symlink-attackable).
 if [ -L "$HIST" ] || [ ! -d "$HIST" ] || [ ! -O "$HIST" ]; then
@@ -90,7 +90,7 @@ serve_and_get() {
   local rd; rd="$(mktemp -d "$HIST/serve.XXXXXX")"
   ( cd "$rd" && exec env SKY_LIVE_PORT="$p" PORT="$p" \
       SKY_CONSOLE_EMBED=off \
-      SKY_AUTH_TOKEN_SECRET="sky-equiv-render-test-secret-0123456789-abcdef" \
+      SKY_AUTH_TOKEN_SECRET="sky-equivalence-render-test-secret-0123456789-abcdef" \
       "$bin" ) >"$HIST/serve.log" 2>&1 &
   local pid=$!
   local i
@@ -132,7 +132,7 @@ os.waitpid(pid, 0)
 PY
 }
 
-equiv_live() { # <example>
+equivalence_live() { # <example>
   local ex="$1" d="examples/$1"
   echo "live  $ex"
   [ -f "$d/src/Main.sky" ] || { echo "  no such example"; return 2; }
@@ -142,14 +142,14 @@ equiv_live() { # <example>
   python3 "$NORM_HTML" "$HIST/$ex.go.html"   > "$HIST/$ex.go.norm"   || return 2
   python3 "$NORM_HTML" "$HIST/$ex.rust.html" > "$HIST/$ex.rust.norm" || return 2
   if diff "$HIST/$ex.go.norm" "$HIST/$ex.rust.norm" > "$HIST/$ex.diff" 2>&1; then
-    echo "  ✓ equiv (normalised #sky-root identical)"; return 0
+    echo "  ✓ equivalence (normalised #sky-root identical)"; return 0
   else
     echo "  ✗ DIFFER — $(rg -c '^[<>]' "$HIST/$ex.diff" || echo '?') lines (see $HIST/$ex.diff)"
     head -20 "$HIST/$ex.diff"; return 1
   fi
 }
 
-equiv_tui() { # <example> [rows]
+equivalence_tui() { # <example> [rows]
   local ex="$1" rows="${2:-50}" cols=80 d="examples/$1"
   echo "tui   $ex (${cols}x${rows})"
   [ -f "$d/src/Main.sky" ] || { echo "  no such example"; return 2; }
@@ -160,7 +160,7 @@ equiv_tui() { # <example> [rows]
   python3 "$NORM_TUI" "$HIST/$ex.go.raw"   "$rows" > "$HIST/$ex.go.grid"   || return 2
   python3 "$NORM_TUI" "$HIST/$ex.rust.raw" "$rows" > "$HIST/$ex.rust.grid" || return 2
   if diff "$HIST/$ex.go.grid" "$HIST/$ex.rust.grid" > "$HIST/$ex.tdiff" 2>&1; then
-    echo "  ✓ equiv (styled cell grid identical)"; return 0
+    echo "  ✓ equivalence (styled cell grid identical)"; return 0
   else
     echo "  ✗ DIFFER — $(rg -c '^[<>]' "$HIST/$ex.tdiff" || echo '?') lines (see $HIST/$ex.tdiff)"
     head -20 "$HIST/$ex.tdiff"; return 1
@@ -169,11 +169,11 @@ equiv_tui() { # <example> [rows]
 
 fail=0
 case "${1:-}" in
-  live) equiv_live "${2:?usage: equiv-render.sh live <example>}" || fail=$? ;;
-  tui)  equiv_tui  "${2:?usage: equiv-render.sh tui <example> [rows]}" "${3:-}" || fail=$? ;;
+  live) equivalence_live "${2:?usage: equivalence-render.sh live <example>}" || fail=$? ;;
+  tui)  equivalence_tui  "${2:?usage: equivalence-render.sh tui <example> [rows]}" "${3:-}" || fail=$? ;;
   all)
-    for e in "${LIVE_EXAMPLES[@]}"; do equiv_live "$e" || fail=1; done
-    for e in "${TUI_EXAMPLES[@]}";  do equiv_tui  "$e" || fail=1; done ;;
-  *) echo "usage: equiv-render.sh {live <ex> | tui <ex> [rows] | all}" >&2; exit 2 ;;
+    for e in "${LIVE_EXAMPLES[@]}"; do equivalence_live "$e" || fail=1; done
+    for e in "${TUI_EXAMPLES[@]}";  do equivalence_tui  "$e" || fail=1; done ;;
+  *) echo "usage: equivalence-render.sh {live <ex> | tui <ex> [rows] | all}" >&2; exit 2 ;;
 esac
 exit "$fail"

@@ -9,7 +9,7 @@ sky.db
 sky.db-shm
 sky.db-wal
 
-# Playwright browser-scenario stack deps (scripts/web-verify.mjs).
+# Playwright browser-scenario stack deps (scripts/equivalence-checks/web-verify.mjs).
 # package-lock.json IS committed (reproducible installs, matches ../sky's
 # convention); node_modules/ + any fetched Playwright browser binaries are not.
 /node_modules/

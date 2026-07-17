@@ -5,7 +5,7 @@
 #
 #   BUILD   skyc build + cargo build                        → ok / skyc-fail / cargo-fail
 #   RUN     run the Rust binary headless, per shape         → ok / panic / hang / noserve / notty / skip
-#   EQUIV   build the Go reference + compare to Rust        → equiv-* / n/a / DIFFER / go-ref-broken
+#   EQUIVALENCE   build the Go reference + compare to Rust        → equivalence-* / n/a / DIFFER / go-ref-broken
 #
 # PORTED from ../sky/runtime-rust/scripts/examples-sweep.sh. KEY ADAPTATION: the
 # compiler here is `skyc` (Rust-only cargo workspace), not the Haskell `sky`. The
@@ -21,19 +21,19 @@
 # sky.toml> [--out <dir>] [--runtime <dir>]`) + the E2E test in the same file that
 # builds sky-out and runs target/debug/sky-app.
 #
-# PHASED Go-parity: EQUIV needs a Go reference built by the Haskell `sky`
+# PHASED Go-parity: EQUIVALENCE needs a Go reference built by the Haskell `sky`
 # compiler, which this repo does NOT have. The FIRST CI iteration runs BUILD+RUN
-# only (SKY_SWEEP_NO_EQUIV=1). The EQUIV column + build_go() below are kept intact
+# only (SKY_SWEEP_NO_EQUIV=1). The EQUIVALENCE column + build_go() below are kept intact
 # so parity can be turned on later (see docs/architecture/class2-tier1-sweep-fix-spec-2026-07-09.md §1).
 #
-# GREEN row  = BUILD ok AND RUN ok AND EQUIV ∈ {equiv-*, n/a, —, amber go-ref-broken}.
-# RED row    = BUILD/RUN/EQUIV failure (*-fail / panic / hang / noserve / notty /
-#              DIFFER) — UNLESS EQUIV = go-ref-broken (AMBER).
+# GREEN row  = BUILD ok AND RUN ok AND EQUIVALENCE ∈ {equivalence-*, n/a, —, amber go-ref-broken}.
+# RED row    = BUILD/RUN/EQUIVALENCE failure (*-fail / panic / hang / noserve / notty /
+#              DIFFER) — UNLESS EQUIVALENCE = go-ref-broken (AMBER).
 # VERDICT PASS iff no RED row.
 #
 # FLAGS:
-#   SKY_SWEEP_BUILD_ONLY=1  → BUILD column only (RUN + EQUIV = `—`). No `go`.
-#   SKY_SWEEP_NO_EQUIV=1    → BUILD + RUN; EQUIV skipped (`—`).  ← phase-1 default.
+#   SKY_SWEEP_BUILD_ONLY=1  → BUILD column only (RUN + EQUIVALENCE = `—`). No `go`.
+#   SKY_SWEEP_NO_EQUIV=1    → BUILD + RUN; EQUIVALENCE skipped (`—`).  ← phase-1 default.
 #   SKY_SWEEP_FORCE=1       → override the (opt-in) night gate + mem-guard warn.
 #   SKY_SWEEP_NIGHT_GATE=1  → re-enable the local 22:00–08:00 BRT deferral window.
 #   RUST_EXAMPLES="01-… 19-…" → subset override (paths or basenames).
@@ -42,14 +42,14 @@
 set -uo pipefail
 
 # ── Env + manifest + shared checks (SINGLE SOURCE OF TRUTH under lib/) ───────
-source "$(dirname "$0")/lib/env.sh"
-source "$(dirname "$0")/lib/examples.sh"
-source "$(dirname "$0")/lib/checks.sh"
+source "$(dirname "$0")/../lib/env.sh"
+source "$(dirname "$0")/../lib/examples.sh"
+source "$(dirname "$0")/../lib/checks.sh"
 
 # ── Night gate (OPT-IN via SKY_SWEEP_NIGHT_GATE=1; off by default so CI runs) ─
 night_guard "examples-sweep"
 
-if [ -z "$REPO" ] || [ ! -f "$REPO/scripts/examples-sweep.sh" ]; then
+if [ -z "$REPO" ] || [ ! -f "$REPO/scripts/equivalence-checks/examples-sweep.sh" ]; then
   echo "ERROR: can't locate the repo. cd into it, or set SKY_REPO=/path/to/sky-rust." >&2; exit 2
 fi
 cd "$REPO"
@@ -73,11 +73,11 @@ BUILD_ONLY="${SKY_SWEEP_BUILD_ONLY:-0}"
 NO_EQUIV="${SKY_SWEEP_NO_EQUIV:-0}"
 [ "$BUILD_ONLY" = 1 ] && NO_EQUIV=1
 if [ "$BUILD_ONLY" != 1 ]; then
-  command -v curl >/dev/null 2>&1 || { echo "ERROR: curl required for RUN/EQUIV (set SKY_SWEEP_BUILD_ONLY=1)." >&2; exit 2; }
+  command -v curl >/dev/null 2>&1 || { echo "ERROR: curl required for RUN/EQUIVALENCE (set SKY_SWEEP_BUILD_ONLY=1)." >&2; exit 2; }
   command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 required for free_port (set SKY_SWEEP_BUILD_ONLY=1)." >&2; exit 2; }
 fi
 if [ "$NO_EQUIV" != 1 ]; then
-  command -v go >/dev/null 2>&1 || { echo "ERROR: go required for Go≡Rust EQUIV (set SKY_SWEEP_NO_EQUIV=1 or SKY_SWEEP_BUILD_ONLY=1)." >&2; exit 2; }
+  command -v go >/dev/null 2>&1 || { echo "ERROR: go required for Go≡Rust EQUIVALENCE (set SKY_SWEEP_NO_EQUIV=1 or SKY_SWEEP_BUILD_ONLY=1)." >&2; exit 2; }
 fi
 # rg is required by is_out_of_scope (the build_set Go-FFI filter) in EVERY mode.
 command -v rg >/dev/null 2>&1 || { echo "ERROR: rg (ripgrep) required for the example-scope filter (is_out_of_scope). Install ripgrep." >&2; exit 2; }
@@ -89,7 +89,7 @@ command -v rg >/dev/null 2>&1 || { echo "ERROR: rg (ripgrep) required for the ex
 # fix would silently no-op with zero signal. Fail loudly up front instead.
 # util-linux ships it on Linux; macOS needs `brew install flock`; Windows/
 # Git-Bash carries it via MSYS.
-command -v flock >/dev/null 2>&1 || { echo "ERROR: flock required to serialize the cross-invocation shared-CARGO_TARGET_DIR build/run/equiv span (see #35's race fix). Install util-linux (Linux) / 'brew install flock' (macOS)." >&2; exit 2; }
+command -v flock >/dev/null 2>&1 || { echo "ERROR: flock required to serialize the cross-invocation shared-CARGO_TARGET_DIR build/run/equivalence span (see #35's race fix). Install util-linux (Linux) / 'brew install flock' (macOS)." >&2; exit 2; }
 
 HIST="$HOME/.cache/sky/examples-sweep"; mkdir -p "$HIST"
 # PID suffix: two invocations starting in the same UTC second (e.g. two
@@ -110,16 +110,16 @@ say() { echo "$@" | tee -a "$RUNLOG"; }
 # ($HIST/$n.skyc.log, etc.), so two such invocations could open-and-truncate
 # the SAME path at overlapping times — genuinely interleaving bytes from both
 # processes into one file (not just "last write wins"), producing a false
-# DIFFER (corrupted diff.txt/.equiv) or a false equivalence pass (corrupted
+# DIFFER (corrupted diff.txt/.equivalence) or a false equivalence pass (corrupted
 # go.run.log read back as if it matched). $STAMP already carries the PID ($$,
 # see above) — reusing it here (rather than a second, independent stamp)
 # keeps every artefact from one invocation grouped under the same STAMP
 # across rows-$STAMP.tsv / sweep-$STAMP.table / the per-example logs.
 diag() { printf '%s/%s.%s.%s\n' "$HIST" "$1" "$STAMP" "$2"; }
 say "=== ipê EXAMPLES sweep @ $STAMP (repo: $REPO · skyc: $SKYC_BIN) ==="
-[ "$BUILD_ONLY" = 1 ] && say "  (SKY_SWEEP_BUILD_ONLY=1 — BUILD column only; RUN+EQUIV skipped)"
-[ "$BUILD_ONLY" != 1 ] && [ "$NO_EQUIV" = 1 ] && say "  (SKY_SWEEP_NO_EQUIV=1 — BUILD+RUN; EQUIV skipped — the phase-1 default)"
-[ "$NO_EQUIV" = 1 ] || [ "$WEB_OK" = 1 ] || say "  NOTE: browser stack incomplete — scenario equiv falls back to normalised HTML body comparison (GET / → #sky-root diff via equiv_normalize_html.py)."
+[ "$BUILD_ONLY" = 1 ] && say "  (SKY_SWEEP_BUILD_ONLY=1 — BUILD column only; RUN+EQUIVALENCE skipped)"
+[ "$BUILD_ONLY" != 1 ] && [ "$NO_EQUIV" = 1 ] && say "  (SKY_SWEEP_NO_EQUIV=1 — BUILD+RUN; EQUIVALENCE skipped — the phase-1 default)"
+[ "$NO_EQUIV" = 1 ] || [ "$WEB_OK" = 1 ] || say "  NOTE: browser stack incomplete — scenario equivalence falls back to normalised HTML body comparison (GET / → #sky-root diff via equivalence_normalize_html.py)."
 
 # ── skyc build target for an example dir — sky.toml if present, else src/Main.sky
 # skyc's project build (crates/skyc/src/lib.rs build_project) needs a sky.toml to
@@ -199,12 +199,12 @@ go_stdout_deterministic() {
   diff <(norm "$l.1") <(norm "$l.2") >/dev/null 2>&1
 }
 
-# ── EQUIV for one example (PHASED — dormant while NO_EQUIV=1) ─────────────────
-equiv_for() {
+# ── EQUIVALENCE for one example (PHASED — dormant while NO_EQUIV=1) ─────────────────
+equivalence_for() {
   local d="$1" n="$2" mode="$3" rbin="$4"
   local rsl gol; rsl="$(diag "$n" rust.run.log)"; gol="$(diag "$n" go.run.log)"
   case "$mode" in
-    none) printf 'n/a\t%s\n' "$(equiv_override_reason "$d")"; return 0 ;;
+    none) printf 'n/a\t%s\n' "$(equivalence_override_reason "$d")"; return 0 ;;
   esac
   case "$mode" in
     stdout)
@@ -215,22 +215,22 @@ equiv_for() {
       fi
       local difftxt; difftxt="$(diag "$n" diff.txt)"
       if diff <(norm "$gol.1") <(norm "$rsl") >"$difftxt" 2>&1; then
-        printf 'equiv-stdout\t\n'
+        printf 'equivalence-stdout\t\n'
       else
         printf 'DIFFER\tstdout differs (see %s)\n' "$(basename "$difftxt")"
       fi
       ;;
     body)
       build_go "$d" "$n" || { printf 'go-ref-broken\tGo build failed\n'; return 0; }
-      local res equivlog; equivlog="$(diag "$n" equiv)"
-      res="$(exercise_server_equiv "$d/sky-out/app" "$rbin" "$d" "$equivlog")"
+      local res equivalencelog; equivalencelog="$(diag "$n" equivalence)"
+      res="$(exercise_server_equiv "$d/sky-out/app" "$rbin" "$d" "$equivalencelog")"
       reap
       case "$res" in
-        equiv-body\ *) printf '%s\t\n' "$res" ;;
-        equiv-serve)   printf 'equiv-serve\t0 comparable GET routes — both boot\n' ;;
+        equivalence-body\ *) printf '%s\t\n' "$res" ;;
+        equivalence-serve)   printf 'equivalence-serve\t0 comparable GET routes — both boot\n' ;;
         go-ref-broken) printf 'go-ref-broken\tGo reference did not boot+serve\n' ;;
         rust-broken)   printf 'DIFFER\tRust did not boot+serve where Go did\n' ;;
-        DIFFER)        printf 'DIFFER\troute body differs (see %s)\n' "$(basename "$equivlog")" ;;
+        DIFFER)        printf 'DIFFER\troute body differs (see %s)\n' "$(basename "$equivalencelog")" ;;
         *)             printf 'go-ref-broken\tequiv probe inconclusive (%s)\n' "$res" ;;
       esac
       ;;
@@ -240,7 +240,7 @@ equiv_for() {
       build_go "$d" "$n" || { printf 'go-ref-broken\tGo build failed\n'; return 0; }
       exercise_server "$d/sky-out/app" "$(free_port)" "$gol" || gok=0; reap
       if [ "$gok" = 0 ]; then printf 'go-ref-broken\tGo did not boot+serve\n'
-      elif [ "$rok" = 1 ]; then printf 'equiv-serve\t\n'
+      elif [ "$rok" = 1 ]; then printf 'equivalence-serve\t\n'
       else printf 'DIFFER\tRust did not boot+serve where Go did\n'; fi
       ;;
     pty)
@@ -251,7 +251,7 @@ equiv_for() {
       build_go "$d" "$n" || { printf 'go-ref-broken\tGo build failed\n'; return 0; }
       exercise_tui "$d/sky-out/app" "$gol" || gok=0
       if [ "$gok" = 0 ]; then printf 'go-ref-broken\tGo TUI panicked\n'
-      elif [ "$rok" = 1 ]; then printf 'equiv-pty\tboth drive runtime (NOT cell-identical)\n'
+      elif [ "$rok" = 1 ]; then printf 'equivalence-pty\tboth drive runtime (NOT cell-identical)\n'
       else printf 'DIFFER\tRust TUI panicked where Go did not\n'; fi
       ;;
     scenario)
@@ -261,7 +261,7 @@ equiv_for() {
         build_go "$d" "$n" || { printf 'go-ref-broken\tGo build failed\n'; return 0; }
         exercise_server "$d/sky-out/app" "$(free_port)" "$gol" || gok=0; reap
         if [ "$gok" = 0 ]; then printf 'go-ref-broken\tGo did not boot+serve\n'
-        elif [ "$rok" = 1 ]; then printf 'equiv-serve\tdriver cannot locate dir — boot-both floor\n'
+        elif [ "$rok" = 1 ]; then printf 'equivalence-serve\tdriver cannot locate dir — boot-both floor\n'
         else printf 'DIFFER\tRust did not boot+serve where Go did\n'; fi
         return 0
       fi
@@ -273,7 +273,7 @@ equiv_for() {
         exercise_live "$d/sky-out/app" "$n" "$(free_port)" "$scen" "$gol" || gok=0; reap
         if [ "$gok" = 0 ] && [ "$rok" = 0 ]; then printf 'go-ref-broken\tboth fail scenario\n'
         elif [ "$gok" = 0 ]; then printf 'go-ref-broken\tGo fails scenario %s\n' "$scen"
-        elif [ "$rok" = 1 ]; then printf 'equiv-scenario\t(scenario %s; APP-behaviour)\n' "$scen"
+        elif [ "$rok" = 1 ]; then printf 'equivalence-scenario\t(scenario %s; APP-behaviour)\n' "$scen"
         else printf 'DIFFER\tRust fails scenario %s where Go passes\n' "$scen"; fi
       else
         # No browser stack — fall back to normalised HTML body comparison.
@@ -283,15 +283,15 @@ equiv_for() {
         # behaviourally meaningful. Same exercise_server_equiv path used for
         # Sky.Http.Server body mode, but driven against a Live server.
         build_go "$d" "$n" || { printf 'go-ref-broken\tGo build failed\n'; return 0; }
-        local res equivlog; equivlog="$(diag "$n" equiv)"
-        res="$(exercise_server_equiv "$d/sky-out/app" "$rbin" "$d" "$equivlog")"
+        local res equivalencelog; equivalencelog="$(diag "$n" equivalence)"
+        res="$(exercise_server_equiv "$d/sky-out/app" "$rbin" "$d" "$equivalencelog")"
         reap
         case "$res" in
-          equiv-body\ *) printf '%s\t(HTML-norm; no browser stack)\n' "$res" ;;
-          equiv-serve)   printf 'equiv-serve\t0 comparable GET routes — both boot (no browser)\n' ;;
+          equivalence-body\ *) printf '%s\t(HTML-norm; no browser stack)\n' "$res" ;;
+          equivalence-serve)   printf 'equivalence-serve\t0 comparable GET routes — both boot (no browser)\n' ;;
           go-ref-broken) printf 'go-ref-broken\tGo reference did not boot+serve\n' ;;
           rust-broken)   printf 'DIFFER\tRust did not boot+serve where Go did\n' ;;
-          DIFFER)        printf 'DIFFER\tHTML body differs after normalisation (see %s)\n' "$(basename "$equivlog")" ;;
+          DIFFER)        printf 'DIFFER\tHTML body differs after normalisation (see %s)\n' "$(basename "$equivalencelog")" ;;
           *)             printf 'go-ref-broken\tequiv probe inconclusive (%s)\n' "$res" ;;
         esac
       fi
@@ -365,8 +365,8 @@ else
   while IFS= read -r d; do EXAMPLES+=("$d"); done < <(build_set)
 fi
 
-# ── Sweep: one row per example, columns BUILD·RUN·EQUIV (+ NOTE) ─────────────
-say ""; say ">>> EXAMPLES SWEEP  (build_set DERIVED in lib/examples.sh; equiv modes DERIVED + overrides in equiv-classification.tsv)"
+# ── Sweep: one row per example, columns BUILD·RUN·EQUIVALENCE (+ NOTE) ─────────────
+say ""; say ">>> EXAMPLES SWEEP  (build_set DERIVED in lib/examples.sh; equivalence modes DERIVED + overrides in equivalence-classification.tsv)"
 ROWS="$HIST/rows-$STAMP.tsv"; : >"$ROWS"
 WARNS="$HIST/warnings-$STAMP.tsv"; : >"$WARNS"
 DCUR=""
@@ -378,9 +378,9 @@ DCUR=""
 # invocations race against the SAME CARGO_TARGET_DIR (e.g. two
 # progressive-development lanes sharing ~/.cache/sky-rust-target), one's cargo
 # build can overwrite sky-app between another's build_rust and its
-# resolve_bin/RUN/EQUIV step — RUN then silently executes the WRONG example's
+# resolve_bin/RUN/EQUIVALENCE step — RUN then silently executes the WRONG example's
 # binary (verified empirically: concurrent lanes made 01-hello-world's RUN
-# print an unrelated example's stdout). flock the build→resolve→run→equiv span
+# print an unrelated example's stdout). flock the build→resolve→run→equivalence span
 # per example so concurrent sweeps interleave safely instead of racing.
 SWEEP_LOCK_FILE="$CARGO_TARGET_DIR/.examples-sweep-build.lock"
 exec {SWEEP_LOCK_FD}>"$SWEEP_LOCK_FILE"
@@ -390,10 +390,10 @@ for d in "${EXAMPLES[@]}"; do
   [ -f "$d/src/Main.sky" ] || continue
   DCUR="$d"
   shape="$(example_shape "$d")"
-  mode="$(equiv_mode "$d")"
+  mode="$(equivalence_mode "$d")"
   ( cd "$d" && rm -rf sky-out .skycache .skydeps )
 
-  build_cell=""; run_cell="—"; equiv_cell="—"; note=""
+  build_cell=""; run_cell="—"; equivalence_cell="—"; note=""
 
   flock -x "$SWEEP_LOCK_FD"
 
@@ -408,29 +408,29 @@ for d in "${EXAMPLES[@]}"; do
 
   if [ "$BUILD_ONLY" = 1 ] || [ -z "$rbin" ]; then
     [ -z "$rbin" ] && { run_cell="noserve"; note="no binary resolved after build"; }
-    printf '%s\t%s\t%s\t%s\t%s\n' "$n" "$build_cell" "$run_cell" "$equiv_cell" "$note" >>"$ROWS"
+    printf '%s\t%s\t%s\t%s\t%s\n' "$n" "$build_cell" "$run_cell" "$equivalence_cell" "$note" >>"$ROWS"
     ( cd "$d" && rm -rf sky-out .skycache .skydeps ); flock -u "$SWEEP_LOCK_FD"; continue
   fi
 
   IFS=$'\t' read -r run_cell run_note < <(run_for "$n" "$shape" "$rbin")
 
   if [ "$NO_EQUIV" = 1 ]; then
-    equiv_cell="—"; equiv_note=""
+    equivalence_cell="—"; equivalence_note=""
   else
-    IFS=$'\t' read -r equiv_cell equiv_note < <(equiv_for "$d" "$n" "$mode" "$rbin")
+    IFS=$'\t' read -r equivalence_cell equivalence_note < <(equivalence_for "$d" "$n" "$mode" "$rbin")
   fi
 
   flock -u "$SWEEP_LOCK_FD"
 
-  note="$run_note"; [ -n "$equiv_note" ] && note="${note:+$note; }$equiv_note"
-  printf '%s\t%s\t%s\t%s\t%s\n' "$n" "$build_cell" "$run_cell" "$equiv_cell" "$note" >>"$ROWS"
+  note="$run_note"; [ -n "$equivalence_note" ] && note="${note:+$note; }$equivalence_note"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$n" "$build_cell" "$run_cell" "$equivalence_cell" "$note" >>"$ROWS"
   reap
   ( cd "$d" && rm -rf sky-out .skycache .skydeps )
 done
 
 # ── Render the aligned table ─────────────────────────────────────────────────
 {
-  printf "%-28s %-10s %-9s %-16s %s\n" "EXAMPLE" "BUILD" "RUN" "EQUIV" "NOTE"
+  printf "%-28s %-10s %-9s %-16s %s\n" "EXAMPLE" "BUILD" "RUN" "EQUIVALENCE" "NOTE"
   printf "%-28s %-10s %-9s %-16s %s\n" "-------" "-----" "---" "-----" "----"
   while IFS=$'\t' read -r n b r e note; do
     printf "%-28s %-10s %-9s %-16s %s\n" "$n" "$b" "$r" "$e" "$note"
@@ -447,11 +447,11 @@ while IFS=$'\t' read -r n b r e note; do
   case "$e" in DIFFER) row_red=1 ;; esac
   if [ "$e" = go-ref-broken ]; then AMBER=$((AMBER+1)); row_red=0; fi
   case "$e" in
-    equiv-stdout)   EQ_COUNT[stdout]=$(( ${EQ_COUNT[stdout]:-0} + 1 )) ;;
-    equiv-body*)    EQ_COUNT[body]=$(( ${EQ_COUNT[body]:-0} + 1 )) ;;
-    equiv-serve)    EQ_COUNT[serve]=$(( ${EQ_COUNT[serve]:-0} + 1 )) ;;
-    equiv-scenario) EQ_COUNT[scenario]=$(( ${EQ_COUNT[scenario]:-0} + 1 )) ;;
-    equiv-pty)      EQ_COUNT[pty]=$(( ${EQ_COUNT[pty]:-0} + 1 )) ;;
+    equivalence-stdout)   EQ_COUNT[stdout]=$(( ${EQ_COUNT[stdout]:-0} + 1 )) ;;
+    equivalence-body*)    EQ_COUNT[body]=$(( ${EQ_COUNT[body]:-0} + 1 )) ;;
+    equivalence-serve)    EQ_COUNT[serve]=$(( ${EQ_COUNT[serve]:-0} + 1 )) ;;
+    equivalence-scenario) EQ_COUNT[scenario]=$(( ${EQ_COUNT[scenario]:-0} + 1 )) ;;
+    equivalence-pty)      EQ_COUNT[pty]=$(( ${EQ_COUNT[pty]:-0} + 1 )) ;;
     n/a)            EQ_COUNT[na]=$(( ${EQ_COUNT[na]:-0} + 1 )) ;;
     go-ref-broken)  EQ_COUNT[goref]=$(( ${EQ_COUNT[goref]:-0} + 1 )) ;;
   esac
@@ -476,7 +476,7 @@ WARN_FAIL=0
 
 say ""
 say "  summary: $GREEN green · $RED red · $SKIP skipped (of $TOTAL) · amber go-ref-broken=$AMBER"
-say "  equiv-mode breakdown: $EQ_BREAK"
+say "  equivalence-mode breakdown: $EQ_BREAK"
 say "  cargo warnings (past #![allow]): $WARN_TOTAL total${WARN_ROWS:+ —$WARN_ROWS}"
 say "  full table: $TABLE · warnings: $WARNS"
 
@@ -484,7 +484,7 @@ SCORE="$HIST/scoreboard.tsv"
 printf '%s\tgreen=%s\tred=%s\tskip=%s\tamber=%s\t%s\n' "$STAMP" "$GREEN" "$RED" "$SKIP" "$AMBER" "$EQ_BREAK" >>"$SCORE"
 
 if [ "$RED" -gt 0 ] || [ "$WARN_FAIL" = 1 ]; then
-  [ "$RED" -gt 0 ] && say "  RED rows (build/run/equiv failure — investigate):${RED_ROWS}"
+  [ "$RED" -gt 0 ] && say "  RED rows (build/run/equivalence failure — investigate):${RED_ROWS}"
   [ "$WARN_FAIL" = 1 ] && say "  WARNING rows (codegen defect past #![allow]):${WARN_ROWS}"
   say ""; say "=== VERDICT: FAIL ($RED red row(s), $WARN_TOTAL cargo warning(s)) ==="
   exit 1

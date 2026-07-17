@@ -140,8 +140,8 @@ codegen**, not runtime.
 | 31 | CLI determinism auto-probe (run Go twice, downgrade not false-DIFFER) (build-verify) | **SYNC** | Already ported (`examples-sweep.sh`); phase-2 wiring under #51. |
 | 32 | Server per-route determinism gate (curl Go twice per route) (build-verify) | **SYNC** | Already ported (`checks.sh:276–355`); phase-2 under #51. **Deepest correctness win — non-negotiable.** |
 | 33 | HTML normalizer canonicalises legitimate backend freedom (build-verify) | **SYNC** | Ported verbatim; phase-2. |
-| 34 | DERIVED equiv-mode + overrides-only manifest (build-verify) | **ADOPT** | Ported; wire phase-2 comparison step. #51. |
-| 35 | `go-ref-broken` AMBER clause (upstream bug ≠ Rust regression) (build-verify) | **ADOPT** | Verdict logic ported; triggers when EQUIV≠—. #51. |
+| 34 | DERIVED equivalence-mode + overrides-only manifest (build-verify) | **ADOPT** | Ported; wire phase-2 comparison step. #51. |
+| 35 | `go-ref-broken` AMBER clause (upstream bug ≠ Rust regression) (build-verify) | **ADOPT** | Verdict logic ported; triggers when EQUIVALENCE≠—. #51. |
 | 36 | Resumable numbered-phase state file (not commit-derived) (build-verify) | **ADOPT** | Adopt for a future phase-2 `keep-go-parity.sh`. #51. |
 | 37 | Night-gate as soft opt-in (our adaptation) (build-verify) | **ADAPT (keep ours)** | CI shouldn't be soft-gated; opt-in default is correct. No change. |
 
@@ -192,7 +192,7 @@ codegen**, not runtime.
    String-backed, kernel-dispatched; rich ADT lives in `Sky.Core.Error.sky`
    source but constructors lower to kernels, never runtime constructors.
 
-6. **Wire #51 phase-2 EQUIV** once the Haskell `sky` binary is on PATH as
+6. **Wire #51 phase-2 EQUIVALENCE** once the Haskell `sky` binary is on PATH as
    `SKY_GO_BIN` — flip `SKY_SWEEP_NO_EQUIV=0`. All normalizers, the AMBER
    `go-ref-broken` discrimination, and the per-route determinism gate are
    already ported; only the comparison step needs activation.
@@ -229,7 +229,7 @@ codegen**, not runtime.
   the derive gate part of the seal contract: *no exit-0 without a proven
   cargo-buildable derive set.*
 
-- **#51 (Go-oracle equiv harness):** **Unchanged plan, de-risked.** v0.17.2's
+- **#51 (Go-oracle equivalence harness):** **Unchanged plan, de-risked.** v0.17.2's
   full-parity sweep (37/0) plus our already-ported normalizers means phase-2 is
   a wiring step, not a design task. Keep the per-route determinism gate as
   non-negotiable.
