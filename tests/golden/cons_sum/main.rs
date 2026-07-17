@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -31,7 +31,6 @@ type Value = JsonVal;
 // ===========================================
 // USER TYPES
 // ===========================================
-
 
 pub use ipe_runtime::error::IpeError;
 pub fn str_err(s: &str) -> IpeError {
@@ -242,7 +241,11 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 pub fn main_sum(xs: Vec<i64>) -> i64 {
     match (xs).as_slice() {
         [] => 0,
-        [x, rest @ ..] => { let x = x.clone(); let rest = rest.to_vec(); (x + main_sum(rest)) },
+        [x, rest @ ..] => {
+            let x = x.clone();
+            let rest = rest.to_vec();
+            (x + main_sum(rest))
+        }
     }
 }
 pub fn ipe_main() -> IpeTask<()> {

@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -38,7 +38,10 @@ pub struct RecX {
 }
 impl IpeStringify for RecX {
     fn ipe_show(&self) -> String {
-        format!("{{{}}}", (&ipe_runtime::stringify::Wrap(&self.x)).dispatch())
+        format!(
+            "{{{}}}",
+            (&ipe_runtime::stringify::Wrap(&self.x)).dispatch()
+        )
     }
 }
 
@@ -249,10 +252,16 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 }
 
 pub fn main_tuple_parts() -> i64 {
-    ({ let (a, b) = (40, 2); (a + b) })
+    ({
+        let (a, b) = (40, 2);
+        (a + b)
+    })
 }
 pub fn main_record_part() -> i64 {
-    ({ let RecX { x, .. } = RecX { x: 42 }; x })
+    ({
+        let RecX { x, .. } = RecX { x: 42 };
+        x
+    })
 }
 pub fn ipe_main() -> IpeTask<()> {
     log_println(string_from_int((main_tuple_parts() + main_record_part())))

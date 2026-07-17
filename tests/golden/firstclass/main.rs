@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -31,7 +31,6 @@ type Value = JsonVal;
 // ===========================================
 // USER TYPES
 // ===========================================
-
 
 pub use ipe_runtime::error::IpeError;
 pub fn str_err(s: &str) -> IpeError {
@@ -246,10 +245,39 @@ pub fn main_inc(n: i64) -> i64 {
     (n + 1)
 }
 pub fn main_make_inc(base: i64) -> Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> {
-    { let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> = Box::new(main_inc); __sky_fn }
+    {
+        let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> = Box::new(main_inc);
+        __sky_fn
+    }
 }
 pub fn ipe_main() -> IpeTask<()> {
-    ({ let a = main_apply_twice({ let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> = Box::new(move |n: i64| -> i64 { (n + 3) }); __sky_fn }, 1); ({ let b = main_apply_twice({ let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> = Box::new(main_inc); __sky_fn }, 1); ({ let g = main_make_inc(0); ({ let c = (g)(40); log_println(string_from_int(((a + b) + c))) }) }) }) })
+    ({
+        let a = main_apply_twice(
+            {
+                let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+                    Box::new(move |n: i64| -> i64 { (n + 3) });
+                __sky_fn
+            },
+            1,
+        );
+        ({
+            let b = main_apply_twice(
+                {
+                    let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+                        Box::new(main_inc);
+                    __sky_fn
+                },
+                1,
+            );
+            ({
+                let g = main_make_inc(0);
+                ({
+                    let c = (g)(40);
+                    log_println(string_from_int(((a + b) + c)))
+                })
+            })
+        })
+    })
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

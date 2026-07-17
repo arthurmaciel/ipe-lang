@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -39,7 +39,11 @@ pub struct RecXY {
 }
 impl IpeStringify for RecXY {
     fn ipe_show(&self) -> String {
-        format!("{{{} {}}}", (&ipe_runtime::stringify::Wrap(&self.x)).dispatch(), (&ipe_runtime::stringify::Wrap(&self.y)).dispatch())
+        format!(
+            "{{{} {}}}",
+            (&ipe_runtime::stringify::Wrap(&self.x)).dispatch(),
+            (&ipe_runtime::stringify::Wrap(&self.y)).dispatch()
+        )
     }
 }
 
@@ -250,7 +254,17 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 }
 
 pub fn ipe_main() -> IpeTask<()> {
-    ({ let p = RecXY { x: 1, y: 2 }; ({ let q = { let mut __sky_rec = (p.clone()).clone(); __sky_rec.x = 41; __sky_rec }; log_println(string_from_int(((q).x + (p).y))) }) })
+    ({
+        let p = RecXY { x: 1, y: 2 };
+        ({
+            let q = {
+                let mut __sky_rec = (p.clone()).clone();
+                __sky_rec.x = 41;
+                __sky_rec
+            };
+            log_println(string_from_int(((q).x + (p).y)))
+        })
+    })
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

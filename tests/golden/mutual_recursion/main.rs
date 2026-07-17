@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -41,7 +41,9 @@ impl IpeStringify for MainEven {
     fn ipe_show(&self) -> String {
         match self {
             MainEven::EZero => "EZero".to_string(),
-            MainEven::ESucc(p0) => format!("ESucc {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch()),
+            MainEven::ESucc(p0) => {
+                format!("ESucc {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
         }
     }
 }
@@ -52,7 +54,9 @@ pub enum MainOdd {
 impl IpeStringify for MainOdd {
     fn ipe_show(&self) -> String {
         match self {
-            MainOdd::OSucc(p0) => format!("OSucc {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch()),
+            MainOdd::OSucc(p0) => {
+                format!("OSucc {}", (&ipe_runtime::stringify::Wrap(p0)).dispatch())
+            }
         }
     }
 }
@@ -265,17 +269,27 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 
 pub fn main_count_odd(o: MainOdd) -> i64 {
     match o {
-        MainOdd::OSucc(e) => { let e = *e; (1 + main_count_even(e)) },
+        MainOdd::OSucc(e) => {
+            let e = *e;
+            (1 + main_count_even(e))
+        }
     }
 }
 pub fn main_count_even(e: MainEven) -> i64 {
     match e {
         MainEven::EZero => 0,
-        MainEven::ESucc(o) => { let o = *o; (1 + main_count_odd(o)) },
+        MainEven::ESucc(o) => {
+            let o = *o;
+            (1 + main_count_odd(o))
+        }
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(main_count_odd(MainOdd::OSucc(Box::new(MainEven::ESucc(Box::new(MainOdd::OSucc(Box::new(MainEven::ESucc(Box::new(MainOdd::OSucc(Box::new(MainEven::EZero)))))))))))))
+    log_println(string_from_int(main_count_odd(MainOdd::OSucc(Box::new(
+        MainEven::ESucc(Box::new(MainOdd::OSucc(Box::new(MainEven::ESucc(
+            Box::new(MainOdd::OSucc(Box::new(MainEven::EZero))),
+        ))))),
+    )))))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -38,7 +38,10 @@ pub struct RecValue<T1> {
 }
 impl<T1: IpeStringify + std::fmt::Debug> IpeStringify for RecValue<T1> {
     fn ipe_show(&self) -> String {
-        format!("{{{}}}", (&ipe_runtime::stringify::Wrap(&self.value)).dispatch())
+        format!(
+            "{{{}}}",
+            (&ipe_runtime::stringify::Wrap(&self.value)).dispatch()
+        )
     }
 }
 
@@ -255,7 +258,13 @@ pub fn main_unwrap<T1: Clone>(r: RecValue<T1>) -> T1 {
     (r).value.clone()
 }
 pub fn ipe_main() -> IpeTask<()> {
-    ({ let n = main_unwrap(main_wrap(40)); ({ let flag = main_unwrap(main_wrap((1 == 1))); log_println(string_from_int((if flag { (n + 2) } else { n }))) }) })
+    ({
+        let n = main_unwrap(main_wrap(40));
+        ({
+            let flag = main_unwrap(main_wrap((1 == 1)));
+            log_println(string_from_int((if flag { (n + 2) } else { n })))
+        })
+    })
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

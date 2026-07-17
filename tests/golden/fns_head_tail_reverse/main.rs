@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -31,7 +31,6 @@ type Value = JsonVal;
 // ===========================================
 // USER TYPES
 // ===========================================
-
 
 pub use ipe_runtime::error::IpeError;
 pub fn str_err(s: &str) -> IpeError {
@@ -240,7 +239,13 @@ pub fn http_parse_query(raw: String) -> HashMap<String, String> {
 }
 
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(maybe_with_default(0, list_head(list_reverse(maybe_with_default(Vec::<i64>::new(), list_tail(vec![1, 2, 3])))))))
+    log_println(string_from_int(maybe_with_default(
+        0,
+        list_head(list_reverse(maybe_with_default(
+            Vec::<i64>::new(),
+            list_tail(vec![1, 2, 3]),
+        ))),
+    )))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -260,7 +260,10 @@ pub fn main_f(oo: MainOpt<MainOpt<i64>>) -> i64 {
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(((main_f(MainOpt::Som(MainOpt::Som(42))) + main_f(MainOpt::Som(MainOpt::Non))) + main_f(MainOpt::Non))))
+    log_println(string_from_int(
+        ((main_f(MainOpt::Som(MainOpt::Som(42))) + main_f(MainOpt::Som(MainOpt::Non)))
+            + main_f(MainOpt::Non)),
+    ))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

@@ -15,8 +15,8 @@ pub use ipe_runtime::*;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
-use std::future::ready;
 use std::future::Future;
+use std::future::ready;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
@@ -31,7 +31,6 @@ type Value = JsonVal;
 // ===========================================
 // USER TYPES
 // ===========================================
-
 
 pub use ipe_runtime::error::IpeError;
 pub fn str_err(s: &str) -> IpeError {
@@ -243,10 +242,50 @@ pub fn main_apply(f: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>, x: i64) ->
     (f)(x)
 }
 pub fn main_compose2(f: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>, a: i64, b: i64) -> i64 {
-    ({ let f = { let __sky_fn: ::std::sync::Arc<dyn Fn(i64) -> i64 + Send + Sync + 'static> = ::std::sync::Arc::new(move |eta_0: i64| -> i64 { (f)(eta_0) }); __sky_fn }; ({ let g = ({ let f = f.clone(); { let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> = Box::new(move |eta_0: i64| -> i64 { main_apply(({ let f = f.clone(); { let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> = Box::new(move |eta_0: i64| -> i64 { (f.clone())(eta_0) }); __sky_fn } }), eta_0) }); __sky_fn } }); ((g)(a) + (g)(b)) }) })
+    ({
+        let f = {
+            let __sky_fn: ::std::sync::Arc<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+                ::std::sync::Arc::new(move |eta_0: i64| -> i64 { (f)(eta_0) });
+            __sky_fn
+        };
+        ({
+            let g = ({
+                let f = f.clone();
+                {
+                    let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+                        Box::new(move |eta_0: i64| -> i64 {
+                            main_apply(
+                                ({
+                                    let f = f.clone();
+                                    {
+                                        let __sky_fn: Box<
+                                            dyn Fn(i64) -> i64 + Send + Sync + 'static,
+                                        > = Box::new(move |eta_0: i64| -> i64 {
+                                            (f.clone())(eta_0)
+                                        });
+                                        __sky_fn
+                                    }
+                                }),
+                                eta_0,
+                            )
+                        });
+                    __sky_fn
+                }
+            });
+            ((g)(a) + (g)(b))
+        })
+    })
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(main_compose2({ let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> = Box::new(move |n: i64| -> i64 { (n + 5) }); __sky_fn }, 1, 2)))
+    log_println(string_from_int(main_compose2(
+        {
+            let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
+                Box::new(move |n: i64| -> i64 { (n + 5) });
+            __sky_fn
+        },
+        1,
+        2,
+    )))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;
