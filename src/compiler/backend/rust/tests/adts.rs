@@ -376,10 +376,11 @@ fn generic_enum_def_construction_and_pattern_emit() -> DResult<()> {
         out.contains("impl<T1: IpeStringify + std::fmt::Debug> IpeStringify for MainMaybe<T1> {"),
         "generic IpeStringify impl clause missing:\n{out}"
     );
+    // rustfmt wraps the single-field format! arm into a block.
     assert!(
         out.contains(
-            "MainMaybe::Just(p0) => format!(\"Just {}\", \
-             (&ipe_runtime::stringify::Wrap(p0)).dispatch()),"
+            "MainMaybe::Just(p0) => {\n                format!(\"Just {}\", \
+             (&ipe_runtime::stringify::Wrap(p0)).dispatch())\n            }"
         ),
         "payload stringify arm missing or wrong:\n{out}"
     );
@@ -510,12 +511,12 @@ fn concrete_multi_field_enum_emits() -> DResult<()> {
         out.contains("impl IpeStringify for MainShape {"),
         "non-generic enum must have an unparameterised impl:\n{out}"
     );
-    // Two-field stringify arm: `Rect <f0> <f1>`.
+    // Two-field stringify arm: `Rect <f0> <f1>`; rustfmt wraps the format! args.
     assert!(
         out.contains(
-            "MainShape::Rect(p0, p1) => format!(\"Rect {} {}\", \
-             (&ipe_runtime::stringify::Wrap(p0)).dispatch(), \
-             (&ipe_runtime::stringify::Wrap(p1)).dispatch()),"
+            "MainShape::Rect(p0, p1) => format!(\n                \"Rect {} {}\",\n                \
+             (&ipe_runtime::stringify::Wrap(p0)).dispatch(),\n                \
+             (&ipe_runtime::stringify::Wrap(p1)).dispatch()\n            )"
         ),
         "multi-field stringify arm missing or wrong:\n{out}"
     );
@@ -540,15 +541,16 @@ fn recursive_enum_boxes_self_edges() -> DResult<()> {
         ),
         "recursive enum must box its direct self-edges:\n{out}"
     );
-    // Construction wraps the self-edge arguments in Box::new, not the Int.
+    // Construction wraps the self-edge arguments in Box::new; rustfmt splits long arg lists.
     assert!(
-        out.contains("MainTree::Node(Box::new(MainTree::Leaf), 3, Box::new(MainTree::Leaf))"),
+        out.contains(
+            "MainTree::Node(\n        Box::new(MainTree::Node(\n            Box::new(MainTree::Leaf),\n            3,\n            Box::new(MainTree::Leaf),\n        ))"
+        ),
         "construction must box self-edge args:\n{out}"
     );
-    // Pattern unboxes the self-edge binders (so the body sees an owned MainTree),
-    // leaving the Int binder alone.
+    // Pattern unboxes the self-edge binders; rustfmt puts each unbox on its own line.
     assert!(
-        out.contains("MainTree::Node(l, n, r) => { let l = *l; let r = *r; "),
+        out.contains("MainTree::Node(l, n, r) => {\n            let l = *l;\n            let r = *r;"),
         "pattern must unbox self-edge binders:\n{out}"
     );
     Ok(())
