@@ -772,14 +772,21 @@ pub fn emit_program(ctx: &EmitCtx, program: &Program) -> DResult<EmittedProject>
         }
     }
 
+    // Fail closed if two DISTINCT module homes fold to the same `mod_ident`
+    // BEFORE any `mod` decl / source file is written. The `home -> mod_ident`
+    // fold is injective (`naming::module_prefix` escapes in-segment `_`), so
+    // this can only fire on a genuine internal bug — but it MUST be wired: an
+    // unwired gate would let a collision write two identical `mod` decls (E0428)
+    // and silently overwrite the first module's source file.
+    rust_file::assert_mod_idents_unique(&module_homes, ctx.interner)?;
+
     // (design doc §2.2): fail closed if a
     // synthesised record struct's name collides with a user enum's name, a
     // function name, or a `mod_ident`. In the single-file collapse case no
     // `mod` declarations are written, so the honest set is empty; in the real
-    // split every `IpeModule` bucket contributes its `mod_ident` (§2.1.1's new
-    // namespace, whose intra-set uniqueness `assert_mod_idents_unique` already
-    // guarantees — this check is the DISJOINTNESS obligation against the
-    // record-struct namespace).
+    // split every `IpeModule` bucket contributes its `mod_ident` — its
+    // intra-set uniqueness is proven by the gate above; this check is the
+    // DISJOINTNESS obligation against the record-struct namespace.
     let mod_idents: BTreeSet<String> = if module_homes.len() >= 2 {
         module_homes
             .iter()
@@ -1448,6 +1455,10 @@ pub fn assemble_split_manifest(
             module_homes.push(id.clone());
         }
     }
+
+    // Fail closed if two distinct homes fold to the same `mod_ident` before any
+    // file is written (same fail-closed gate as `emit_program`'s split branch).
+    rust_file::assert_mod_idents_unique(&module_homes, ctx.interner)?;
 
     // Fail closed if a synthesised record struct's name collides with a
     // `mod_ident` (every IpeModule home contributes its ident in the split).

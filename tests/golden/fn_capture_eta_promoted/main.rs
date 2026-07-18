@@ -272,7 +272,7 @@ pub fn ipe_main() -> IpeTask<()> {
                                                     let __sky_fn: Box<
                                                         dyn Fn(i64) -> i64 + Send + Sync + 'static,
                                                     > = Box::new(move |eta_0: i64| -> i64 {
-                                                        main_inc(f, eta_0)
+                                                        crate::main_inc(f, eta_0)
                                                     });
                                                     __sky_fn
                                                 },

@@ -250,7 +250,7 @@ pub fn main_add3(a: i64, b: i64, c: i64) -> i64 {
 }
 pub fn ipe_main() -> IpeTask<()> {
     ({
-        let g = main_f(1);
+        let g = crate::main_f(1);
         ({
             let h = {
                 let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
@@ -262,12 +262,12 @@ pub fn ipe_main() -> IpeTask<()> {
                 ({
                     let overPartial = ({
                         let eta_0: i64 = 3;
-                        (main_f(10))(20, eta_0)
+                        (crate::main_f(10))(20, eta_0)
                     });
                     ({
                         let pipePartial = ({
                             let eta_0: i64 = 100;
-                            main_add3(1, 2, eta_0)
+                            crate::main_add3(1, 2, eta_0)
                         });
                         task_and_then(
                             log_println(string_from_int(boundPartial)),
