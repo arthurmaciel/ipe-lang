@@ -41,3 +41,16 @@ todo = "deny"
 unimplemented = "deny"
 pedantic = "deny"
 nursery = "deny"
+
+# The workspace's ~180 golden test binaries each statically link the full
+# compiler rlib set. With debuginfo on, `ld` must relocate a debug-symbol table
+# per binary — the peak allocation OOMs a 7 GB CI linker (`ld terminated with
+# signal 7 [Bus error]`). Test debuginfo is never consumed (goldens assert on
+# emitted bytes / process output, not under a debugger), so dropping it removes
+# the OOM without losing any test signal. `dev` keeps debuginfo for local
+# interactive debugging of the library crates.
+[profile.test]
+debug = 0
+
+[profile.dev]
+debug = 1

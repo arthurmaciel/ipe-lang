@@ -3,7 +3,7 @@
 // config.rs (generated at build time per sky.toml [database] driver).
 use super::json::{Decoder, JsonVal, decode_and_map, decode_err_str, decode_field, decode_ok};
 use super::*;
-use sqlx::{Column, Row};
+use sqlx::{Column, Row, TypeInfo};
 use std::collections::HashMap;
 
 pub type Db = DbPool;
@@ -179,17 +179,40 @@ async fn fetch_one_routed<'q>(pool: &Db, query: DbQuery<'q>) -> Result<DbRow, sq
     }
 }
 
+/// True when column `i`'s runtime type is a genuine boolean, so the `bool`
+/// reader must run before the integer reader.
+///
+/// The decision is keyed on the driver-reported storage type, NOT on a
+/// speculative `try_get::<bool>`. That probe is the bug's generative cause: on
+/// SQLite a `bool` decode succeeds for EVERY integer cell (any non-zero → true),
+/// so a bool-first probe silently stole `qty = 7` and rendered it `"true"`.
+/// Postgres `BOOL` and SQLite `BOOLEAN` report a boolean type name; a SQLite
+/// INTEGER cell reports `INTEGER` (its runtime storage class) even when it was
+/// bound from a Rust `bool` — which matches the Go oracle, whose driver returns
+/// `int64` for those cells.
+fn column_is_boolean(row: &DbRow, i: usize) -> bool {
+    row.columns()
+        .get(i)
+        .map(sqlx::Column::type_info)
+        .map(|ti| {
+            let name = ti.name().to_ascii_uppercase();
+            name == "BOOL" || name == "BOOLEAN"
+        })
+        .unwrap_or(false)
+}
+
 /// Decode column `i` into a `String` for the untyped `row_to_map` path.
 ///
-/// Probe order (first `Ok(Some(_))` wins; `Ok(None)` at any arm = SQL NULL → `""`):
-///   bool → i64 → f64 → String → bytes-as-hex.
-/// Ordering ensures a postgres `BOOLEAN` cell is not stolen by a numeric reader.
-/// The final fallback is `String::new()` — the untyped path has no typed consumer
-/// to distinguish NULL from empty (documented at call site).
+/// A boolean-typed column reads via `bool` first; every other column reads
+/// numeric-first (i64 → f64) so a SQLite INTEGER is never stolen by the bool
+/// reader. `Ok(None)` at any arm = SQL NULL → `""`. The final fallback is
+/// `String::new()` — the untyped path has no typed consumer to distinguish NULL
+/// from empty (documented at call site).
 fn column_to_string(row: &DbRow, i: usize) -> String {
-    // bool before i64: postgres BOOLEAN won't decode as i64.
-    if let Ok(Some(b)) = row.try_get::<Option<bool>, _>(i) {
-        return b.to_string();
+    if column_is_boolean(row, i)
+        && let Ok(opt) = row.try_get::<Option<bool>, _>(i)
+    {
+        return opt.map_or_else(String::new, |b| b.to_string());
     }
     // NULL at any arm → ""; continue to next probe only on decode error.
     if let Ok(opt) = row.try_get::<Option<i64>, _>(i) {
@@ -211,18 +234,17 @@ fn column_to_string(row: &DbRow, i: usize) -> String {
 
 /// Decode column `i` into a `JsonVal` for the typed-decoder path.
 ///
-/// Probe order (first `Ok(Some(_))` wins):
-///   bool → i64 → f64 → String → bytes-as-hex-string.
-/// `Ok(None)` at any arm = SQL NULL → `JsonVal::Null`.
-/// The final arm returns `Err` for driver types none of the probes cover;
-/// callers surface it as a decode error rather than a phantom Null.
-///
-/// `bool` precedes `i64` so a postgres `BOOLEAN` cell is not stolen by the
-/// numeric reader (postgres refuses a cross-type cast; sqlite stores booleans
-/// as `0`/`1` INTEGER which decodes fine via `i64` if `bool` probe fails,
-/// and `db_decode_bool` accepts numeric `0`/`1` — no sqlite regression).
+/// A boolean-typed column reads via `bool` first; every other column reads
+/// numeric-first (i64 → f64) so a SQLite INTEGER is never stolen by the bool
+/// reader (`db_decode_bool` still accepts numeric `0`/`1`, so a SQLite bool
+/// round-trips through its INTEGER storage without loss). `Ok(None)` at any arm
+/// = SQL NULL → `JsonVal::Null`. The final arm returns `Err` for driver types
+/// none of the probes cover; callers surface it as a decode error rather than a
+/// phantom Null.
 fn column_to_json(row: &DbRow, i: usize) -> Result<JsonVal, sqlx::Error> {
-    if let Ok(opt) = row.try_get::<Option<bool>, _>(i) {
+    if column_is_boolean(row, i)
+        && let Ok(opt) = row.try_get::<Option<bool>, _>(i)
+    {
         return Ok(opt.map_or(JsonVal::Null, JsonVal::Bool));
     }
     if let Ok(opt) = row.try_get::<Option<i64>, _>(i) {

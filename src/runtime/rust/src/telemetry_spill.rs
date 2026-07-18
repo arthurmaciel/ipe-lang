@@ -248,6 +248,7 @@ pub fn offer_span(ts_ms: u64, name: &str, dur_us: u64, ok: bool) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "live")]
     use super::super::core::IpeResult;
     use super::*;
     use sqlx::Row;
@@ -322,13 +323,18 @@ mod tests {
         );
 
         // The reader (open_spill mode=rw) sees the same rows — the read↔write
-        // contract end-to-end.
-        let n: IpeResult<String, Vec<String>> =
-            super::super::live::hub::hub_list_services(path.clone()).await;
-        assert!(
-            matches!(n, IpeResult::Ok(ref v) if v == &vec!["tsvc".to_string()]),
-            "{n:?}"
-        );
+        // contract end-to-end. `hub_list_services` is a `live`-gated reader, so
+        // this leg only runs when `live` is compiled in (a `db`-only build has
+        // no hub); the write/mapping asserts above hold in either configuration.
+        #[cfg(feature = "live")]
+        {
+            let n: IpeResult<String, Vec<String>> =
+                super::super::live::hub::hub_list_services(path.clone()).await;
+            assert!(
+                matches!(n, IpeResult::Ok(ref v) if v == &vec!["tsvc".to_string()]),
+                "{n:?}"
+            );
+        }
 
         let _ = std::fs::remove_file(&path);
     }

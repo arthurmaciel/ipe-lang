@@ -18,6 +18,7 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
+#[allow(clippy::expect_used)] // test helper: a failed scratch-dir setup IS the failure
 fn write_entry(dir: &Path, source: &str) -> PathBuf {
     std::fs::create_dir_all(dir).expect("mkdir scratch");
     let entry = dir.join("Main.ipe");
@@ -32,6 +33,7 @@ fn wasm_options() -> BuildOptions {
     }
 }
 
+#[allow(clippy::expect_used)] // test helper: an unresolvable runtime IS the failure
 fn build_wasm(entry: &Path, out: &Path) -> Result<(), CliError> {
     let runtime = ipe::resolve_runtime().expect("runtime must resolve");
     ipe::build_with_options(entry, out, &runtime, wasm_options())
@@ -123,6 +125,7 @@ fn pure_ui_app_emits_wasm_project() {
 /// (IPE-N0029) — the kernel has no denotation, so no secret can gain a
 /// client consumer and no cargo-time failure can occur (THE SEAL).
 #[test]
+#[allow(clippy::panic)] // test assertion: a non-pipeline error variant IS the failure
 fn server_only_kernel_fails_at_compile_time() {
     let dir = scratch("wasm_gate_red");
     let entry = write_entry(

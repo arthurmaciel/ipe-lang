@@ -339,6 +339,19 @@ fn tls_stays_rustls_with_bundled_roots_in_every_manifest_source() {
         line.unwrap_or_default()
     }
 
+    // Scan only effective (non-comment) content: a comment DOCUMENTING that a
+    // backend is deliberately excluded (e.g. "the `native-tls` feature is NOT
+    // listed") is not a violation. TOML comments start with `#`, Rust with `//`.
+    fn effective(text: &str) -> String {
+        text.lines()
+            .filter(|l| {
+                let t = l.trim_start();
+                !t.starts_with('#') && !t.starts_with("//")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     let root = repo_root();
     let sources = [
         root.join("tests/golden/basics/Cargo.toml"),
@@ -346,7 +359,7 @@ fn tls_stays_rustls_with_bundled_roots_in_every_manifest_source() {
         root.join("src/compiler/backend/rust/src/project.rs"),
     ];
     for path in &sources {
-        let text = read(path);
+        let text = effective(&read(path));
         for forbidden in ["native-tls", "openssl", "rustls-tls-native-roots"] {
             assert!(
                 !text.contains(forbidden),
