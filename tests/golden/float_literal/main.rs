@@ -242,7 +242,7 @@ pub fn main_half() -> f64 {
     (3.0 / 2.0)
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_float(main_half()))
+    log_println(string_from_float(crate::main_half()))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

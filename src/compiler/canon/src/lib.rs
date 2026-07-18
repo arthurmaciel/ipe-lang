@@ -10,6 +10,7 @@
 //! `Sky.Canonicalise.{Module,Expression,Pattern,Type,Environment}`.
 
 pub mod ast;
+pub mod builtins;
 mod env;
 pub mod link;
 mod resolve;

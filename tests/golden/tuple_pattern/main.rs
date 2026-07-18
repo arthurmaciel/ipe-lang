@@ -258,7 +258,7 @@ pub fn main_pair_sum() -> i64 {
 }
 pub fn ipe_main() -> IpeTask<()> {
     log_println(string_from_int(
-        ((main_fst((41, 99)) + main_snd((7, 2))) + main_pair_sum()),
+        ((crate::main_fst((41, 99)) + crate::main_snd((7, 2))) + crate::main_pair_sum()),
     ))
 }
 

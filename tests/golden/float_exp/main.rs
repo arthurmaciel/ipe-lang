@@ -247,8 +247,12 @@ pub fn main_large() -> f64 {
 pub fn ipe_main() -> IpeTask<()> {
     log_println(format!(
         "{}{}",
-        string_from_float(main_small()),
-        format!("{}{}", "|".to_string(), string_from_float(main_large()))
+        string_from_float(crate::main_small()),
+        format!(
+            "{}{}",
+            "|".to_string(),
+            string_from_float(crate::main_large())
+        )
     ))
 }
 

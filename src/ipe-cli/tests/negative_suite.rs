@@ -438,6 +438,43 @@ fn type_non_exhaustive_case() {
     assert_rejected("type_non_exhaustive", &src, "IPE-T0010");
 }
 
+/// A `case` over a Prelude built-in ADT (`ErrorKind` NESTED under `Maybe`) that
+/// omits variants must be caught as non-exhaustive at `ipe` time (IPE-T0010),
+/// not slip to cargo as E0004. Guards CO-TYPES-001 — `types::exhaust` must
+/// analyse EVERY built-in union (via the shared `ipe_canon::builtins` table),
+/// not just Maybe/Result. Before the fix the nested `ErrorKind` arm set was
+/// skipped as an "unknown constructor" and the missing 9 variants shipped to
+/// rustc.
+#[test]
+fn exhaust_builtin_adt_nested_nonexhaustive() {
+    let src = format!(
+        "{HEAD}import Ipe.Log exposing (println)\n\
+         describe : Maybe ErrorKind -> String\n\
+         describe m =\n    case m of\n        \
+         Just Io      -> \"io\"\n        \
+         Just Network -> \"net\"\n        \
+         Nothing      -> \"none\"\n\n\
+         main = println (describe Nothing)\n"
+    );
+    assert_rejected("exhaust_builtin_adt_nested", &src, "IPE-T0010");
+}
+
+/// A TOP-level `case` over a Prelude built-in ADT (`ErrorKind`) that omits
+/// variants must ALSO be IPE-T0010 — not a `Diagnostic::CompilerBug` ("top
+/// constructors cover 2 of 11"), the shape the pre-fix lower backstop produced.
+/// Guards the second CO-TYPES-001 variant.
+#[test]
+fn exhaust_builtin_adt_toplevel_nonexhaustive() {
+    let src = format!(
+        "{HEAD}import Ipe.Log exposing (println)\n\
+         classify : ErrorKind -> String\n\
+         classify k =\n    case k of\n        \
+         Io      -> \"io\"\n        Network -> \"net\"\n\n\
+         main = println (classify Io)\n"
+    );
+    assert_rejected("exhaust_builtin_toplevel", &src, "IPE-T0010");
+}
+
 // NOTE: IPE-T0011 (redundant case branch) is intentionally `Severity::Warning`
 // (see `types::exhaust` — "collect it but do not abort"), so a redundant arm
 // does NOT reject compilation. It is therefore out of scope for a

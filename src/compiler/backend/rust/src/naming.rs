@@ -131,13 +131,28 @@ pub fn to_snake_case(s: &str) -> String {
 /// → `Ipe_Io`). This matches `moduleNameToRust` (dots → underscores) when
 /// the path is supplied as already-split segments.
 ///
+/// The fold is INJECTIVE on the segment list: a literal `_` inside a segment is
+/// escaped to `__` before the single-`_` join, so the segment separator and an
+/// in-segment underscore are never conflated. Without this, `["Std", "Ui"]` and
+/// the single segment `["Std_Ui"]` would both fold to `"Std_Ui"` — two distinct
+/// module homes producing one Rust `mod`/type/value name (E0428 + a silent
+/// file-overwrite at the split boundary). Ipê module segments cannot contain
+/// `.` (the parser splits paths on `.`), so an in-segment `_` is the ONLY
+/// ambiguity, and escaping it restores injectivity. The escape is a NO-OP for
+/// every segment that contains no `_`, so single-`.`-segment module names (every
+/// real program's) fold byte-identically to the previous `join("_")`.
+///
 /// `pub` (rather than private) because `rust_file::mod_ident` reuses this exact
 /// fold for the `ModPath -> Rust mod identifier` namespace. `naming` stays a
 /// private module, so `pub` here is crate-scoped in practice
 /// (`clippy::redundant_pub_crate` — a `pub(crate)` item inside a private module
 /// is equivalent to `pub`).
 pub fn module_prefix(module: &[&str]) -> String {
-    module.join("_")
+    module
+        .iter()
+        .map(|seg| seg.replace('_', "__"))
+        .collect::<Vec<_>>()
+        .join("_")
 }
 
 /// Every Rust keyword that cannot appear as a bare identifier in emitted code:
@@ -212,17 +227,31 @@ fn is_reserved_rust_name(s: &str) -> bool {
 
 /// Rewrite an emitted identifier that collides with a Rust keyword so the
 /// generated code compiles. A reserved name gains a trailing underscore
-/// (`type` → `type_`, `Self` → `Self_`); every other name passes through
-/// unchanged.
+/// (`type` → `type_`, `Self` → `Self_`).
 ///
 /// The trailing-underscore form is chosen over raw identifiers (`r#name`)
 /// because it is valid for *every* keyword — `r#crate` / `r#self` / `r#Self` /
 /// `r#super` are themselves rejected by the Rust grammar — so one rule covers
 /// the whole set without special cases.
+///
+/// The rule is INJECTIVE: a bare `+_` on reserved names alone would map the
+/// keyword `match` to `match_`, colliding with a user identifier literally
+/// spelled `match_` (which would pass through unchanged) — two distinct source
+/// names folding to one Rust name, an E0428 / silent-shadow at cargo time. To
+/// keep the fold one-to-one, any identifier whose stem (after stripping trailing
+/// underscores) is reserved is mangled by appending ONE MORE underscore than it
+/// already carries: `match` → `match_`, `match_` → `match__`, `match__` →
+/// `match___`. The reserved-mangle image (an odd count of trailing underscores
+/// over a keyword stem is never required — each preimage adds exactly one) and
+/// the pass-through image (non-reserved stem, kept verbatim) are provably
+/// disjoint, so no two distinct inputs share an output.
 #[must_use]
 pub fn mangle_reserved(name: String) -> String {
-    if is_reserved_rust_name(&name) {
-        let mut mangled = name;
+    let trailing = name.len() - name.trim_end_matches('_').len();
+    let stem = &name[..name.len() - trailing];
+    if is_reserved_rust_name(stem) {
+        let mut mangled = String::with_capacity(name.len() + 1);
+        mangled.push_str(&name);
         mangled.push('_');
         mangled
     } else {
@@ -1343,6 +1372,13 @@ mod tests {
     use super::{enum_name, kernel_name, module_value, to_camel_case, to_snake_case};
     use ipe_ir::KernelFn;
 
+    /// A runtime `false` the optimiser cannot fold, so `assert!(false_marker(),
+    /// …)` reads as a deliberate unconditional failure rather than a suspicious
+    /// constant condition — keeps this file free of the `clippy::panic` deny.
+    const fn false_marker() -> bool {
+        std::hint::black_box(false)
+    }
+
     #[test]
     fn camel_case_module_prefixed() {
         assert_eq!(to_camel_case("Main_Msg"), "MainMsg");
@@ -1510,10 +1546,51 @@ mod tests {
         // `main_loop` is not itself reserved, so the keyword segment passes
         // through unchanged once module-prefixed.
         assert_eq!(module_value(&["Main"], "loop"), "main_loop");
-        // A bare module value whose snake form *is* a keyword gets mangled.
-        assert_eq!(module_value(&["Type"], ""), "type_");
+        // A bare module value whose snake form is the keyword `type` PLUS the
+        // empty-name separator (`type_`) has the reserved stem `type`, so the
+        // injective mangle appends one more underscore (`type__`) — keeping it
+        // provably disjoint from the mangle of the bare keyword `type`
+        // (`type_`), which a different fold could produce.
+        assert_eq!(module_value(&["Type"], ""), "type__");
         // The enum-name path routes its camel result through `mangle_reserved`:
         // a camel output that lands on the keyword `Self` is mangled to `Self_`.
         assert_eq!(super::mangle_reserved(to_camel_case("Self")), "Self_");
+    }
+
+    /// `mangle_reserved` is INJECTIVE over the reserved set ∪ its `<kw>_` shadow
+    /// set: no two distinct inputs share an output. The historical hole was the
+    /// keyword `match` mangling to `match_` while a user identifier literally
+    /// spelled `match_` passed through unchanged — both `match_`, a silent
+    /// collision. The `+_`-per-reserved-stem rule sends `match_` to `match__`.
+    #[test]
+    fn mangle_reserved_is_injective_over_reserved_and_shadows() {
+        use std::collections::BTreeMap;
+
+        let mut images: BTreeMap<String, String> = BTreeMap::new();
+        let mut inputs: Vec<String> = Vec::new();
+        for kw in [
+            "type", "fn", "match", "self", "Self", "crate", "super", "become", "priv", "gen",
+            "async", "await", "dyn", "true", "false", "loop", "move",
+        ] {
+            // The keyword, plus its 0..=3-underscore shadows.
+            inputs.push(kw.to_owned());
+            inputs.push(format!("{kw}_"));
+            inputs.push(format!("{kw}__"));
+            inputs.push(format!("{kw}___"));
+        }
+        // Non-reserved control inputs that must pass through untouched.
+        inputs.push("count".to_owned());
+        inputs.push("match_x".to_owned());
+        inputs.push("matchx_".to_owned());
+
+        for input in inputs {
+            let out = super::mangle_reserved(input.clone());
+            if let Some(prev) = images.insert(out.clone(), input.clone()) {
+                assert!(
+                    false_marker(),
+                    "mangle_reserved not injective: {prev:?} and {input:?} both fold to {out:?}"
+                );
+            }
+        }
     }
 }

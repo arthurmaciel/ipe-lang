@@ -249,7 +249,7 @@ pub fn main_combine(pair: (i64, i64)) -> i64 {
     })
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(main_combine((10, 3))))
+    log_println(string_from_int(crate::main_combine((10, 3))))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

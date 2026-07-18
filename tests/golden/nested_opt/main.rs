@@ -261,8 +261,9 @@ pub fn main_f(oo: MainOpt<MainOpt<i64>>) -> i64 {
 }
 pub fn ipe_main() -> IpeTask<()> {
     log_println(string_from_int(
-        ((main_f(MainOpt::Som(MainOpt::Som(42))) + main_f(MainOpt::Som(MainOpt::Non)))
-            + main_f(MainOpt::Non)),
+        ((crate::main_f(MainOpt::Som(MainOpt::Som(42)))
+            + crate::main_f(MainOpt::Som(MainOpt::Non)))
+            + crate::main_f(MainOpt::Non)),
     ))
 }
 

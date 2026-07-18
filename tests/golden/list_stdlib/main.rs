@@ -242,7 +242,7 @@ pub fn main_first_or(d: i64, xs: Vec<i64>) -> i64 {
     d
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(main_first_or(
+    log_println(string_from_int(crate::main_first_or(
         7,
         ipe_runtime::list::ipe_list_cons(1, ipe_runtime::list::ipe_list_cons(2, vec![3, 4, 5])),
     )))

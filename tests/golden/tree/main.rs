@@ -263,12 +263,12 @@ pub fn main_sum_tree(t: MainTree) -> i64 {
         MainTree::Node(l, n, r) => {
             let l = *l;
             let r = *r;
-            ((main_sum_tree(l) + n) + main_sum_tree(r))
+            ((crate::main_sum_tree(l) + n) + crate::main_sum_tree(r))
         }
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(main_sum_tree(MainTree::Node(
+    log_println(string_from_int(crate::main_sum_tree(MainTree::Node(
         Box::new(MainTree::Node(
             Box::new(MainTree::Leaf),
             3,

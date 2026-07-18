@@ -246,7 +246,7 @@ pub fn main_greet(name: String) -> String {
     )
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(main_greet("world".to_string()))
+    log_println(crate::main_greet("world".to_string()))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

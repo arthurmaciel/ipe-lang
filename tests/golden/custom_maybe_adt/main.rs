@@ -259,7 +259,7 @@ pub fn main_unwrap(m: MainOpt<i64>) -> i64 {
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(main_unwrap(MainOpt::Som(41))))
+    log_println(string_from_int(crate::main_unwrap(MainOpt::Som(41))))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;
