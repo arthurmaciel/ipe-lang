@@ -254,6 +254,28 @@ runtime (each either matches Go or is more correct):
   Rust runtime uses raw `std::env`. *Soundness (env data-race).*
 - **telemetry/trace** — ipê strips CRLF from CSP frame-ancestors and scrubs log
   controls + U+2028/9. *Security.*
+- **render/diff depth cap (RT-UI-001)** — `ui/render.rs::render_element` and
+  `dom/diff.rs::diff_node` now cap descent at `MAX_HTML_DEPTH = 1024` (matching
+  the sibling `html.rs` walkers already bounded there); a tree deeper than 1024
+  is silently truncated rather than stack-overflowing the process. The reference's
+  runtime recurses without a cap. *Soundness (no stack abort on deep Model-derived
+  UI trees).*
+- **TUI fillPortion area cap (RT-TUI-001)** — `tui/layout.rs::fill_spec` clamps
+  each `Length::Fill(p)` portion at `MAX_CELLS = 100_000` at construction; the
+  distribution folds (`distribute_row_fill`, `distribute_col_fill`) use
+  `saturating_add`; `Block::set_width` clamps the repeat count. A program-Int
+  `fillPortion i64::MAX` row now renders bounded rather than wrapping the sum
+  and allocating ~9e18 bytes. The reference's runtime is unclamped. *Soundness
+  (no OOM/panic on adversarial fill weights).*
+- **TUI padding area cap (RT-TUI-002)** — `tui/layout.rs` applies a
+  terminal-proportional row cap (`clamp_pad_rows(rows, canvas) = rows.min(
+  canvas.rows × PAD_ROW_SLACK)`, `PAD_ROW_SLACK = 4`) at every pad/gap
+  row-allocation site (`apply_padding` top/bottom, `vstack` gap,
+  `apply_self_height`). Per-axis caps alone could still produce a
+  `rows × width ≈ 10 GB` product; the row cap bounds the area to roughly
+  `(canvas.rows × 4) × MAX_CELLS ≤ 96 × 100_000 ≈ 10 MB` worst case.
+  The reference's runtime clamps per-axis only. *Soundness (no OOM on huge
+  paddingEach values).*
 - **Sanctioned:** these are runtime-fork differences, not source-program
   divergences; they are captured in `docs/architecture/sky-rust-backend-reference-audit.md` §Runtime.
 
