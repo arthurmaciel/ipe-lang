@@ -32,6 +32,10 @@ fn minor_units_match_go() {
     assert_eq!(money_minor_units("KRW".to_string()), 0);
     assert_eq!(money_minor_units("BHD".to_string()), 3);
     assert_eq!(money_minor_units("BTC".to_string()), 8);
+    // Crypto minor units mirror the Go oracle: ETH=18, USDT=6, USDC=6.
+    assert_eq!(money_minor_units("ETH".to_string()), 18);
+    assert_eq!(money_minor_units("USDT".to_string()), 6);
+    assert_eq!(money_minor_units("USDC".to_string()), 6);
     // Unknown code falls back to 2 (Go: `lookupCurrency` fallback {Minor: 2})
     assert_eq!(money_minor_units("XYZ".to_string()), 2);
 }
@@ -213,7 +217,7 @@ fn rate_test_lock() -> std::sync::MutexGuard<'static, ()> {
 #[test]
 fn fx_rate_round_trip_matches_go() {
     let _g = rate_test_lock();
-    let _: IpeResult<IpeError, ()> = money_clear_rates();
+    let _: IpeResult<IpeError, ()> = money_clear_rates(());
 
     // setRate: USD→EUR = 0.92
     let set: IpeResult<IpeError, ()> =
@@ -247,13 +251,13 @@ fn fx_rate_round_trip_matches_go() {
         money_get_rate("USD".to_string(), "GBP".to_string());
     assert!(missing.is_err(), "getRate for unregistered pair must Err");
 
-    let _: IpeResult<IpeError, ()> = money_clear_rates();
+    let _: IpeResult<IpeError, ()> = money_clear_rates(());
 }
 
 #[test]
 fn fx_auto_inverse_rate_capped_to_16_dp_matches_go() {
     let _g = rate_test_lock();
-    let _: IpeResult<IpeError, ()> = money_clear_rates();
+    let _: IpeResult<IpeError, ()> = money_clear_rates(());
 
     // setRate USD→EUR = 3 ⇒ auto-inverse EUR→USD = 1/3. Go derives the inverse
     // with shopspring's `Div` (DivisionPrecision = 16, half-away-from-zero), so
@@ -275,18 +279,18 @@ fn fx_auto_inverse_rate_capped_to_16_dp_matches_go() {
         assert_eq!(decimal_to_string(v), "0.3333333333333333");
     }
 
-    let _: IpeResult<IpeError, ()> = money_clear_rates();
+    let _: IpeResult<IpeError, ()> = money_clear_rates(());
 }
 
 #[test]
 fn set_rate_zero_and_negative_rejected_matches_go() {
     let _g = rate_test_lock();
-    let _: IpeResult<IpeError, ()> = money_clear_rates();
+    let _: IpeResult<IpeError, ()> = money_clear_rates(());
     // Go oracle: "rate must be positive" → Err on zero or negative
     let r: IpeResult<IpeError, ()> = money_set_rate("USD".to_string(), "EUR".to_string(), d("0"));
     assert!(r.is_err(), "setRate(0) must fail");
     let r2: IpeResult<IpeError, ()> =
         money_set_rate("USD".to_string(), "EUR".to_string(), d("-0.5"));
     assert!(r2.is_err(), "setRate(-0.5) must fail");
-    let _: IpeResult<IpeError, ()> = money_clear_rates();
+    let _: IpeResult<IpeError, ()> = money_clear_rates(());
 }

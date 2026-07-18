@@ -14103,6 +14103,27 @@ impl<'a> Lowerer<'a> {
             // ── Ipe.Decimal — arity 4 ────────────────────────────────────────
             // `Decimal.formatWith : String -> String -> Int -> Decimal -> String`
             Callee::Kernel(KernelFn::DecFormatWith) => Ok(4),
+            // ── Ipe.Money — arity 1 ──────────────────────────────────────────
+            // Property lookups take one code String; `clearRates` takes one unit
+            // argument (`() -> Result Error ()`).
+            Callee::Kernel(
+                KernelFn::MoneyMinorUnits
+                | KernelFn::MoneySymbol
+                | KernelFn::MoneyCurrencyName
+                | KernelFn::MoneyIsKnownCurrency
+                | KernelFn::MoneyClearRates,
+            ) => Ok(1),
+            // ── Ipe.Money — arity 2 ──────────────────────────────────────────
+            Callee::Kernel(
+                KernelFn::MoneyFormat
+                | KernelFn::MoneyFormatWithCode
+                | KernelFn::MoneyGetRate
+                | KernelFn::MoneyHasRate,
+            ) => Ok(2),
+            // ── Ipe.Money — arity 3 ──────────────────────────────────────────
+            // `allocate : Int -> Int -> Decimal -> List Decimal`;
+            // `setRate : Code -> Code -> Decimal -> Result Error ()`.
+            Callee::Kernel(KernelFn::MoneyAllocate | KernelFn::MoneySetRate) => Ok(3),
             // ── Ipe.Db.Sql — SqlFragment builder, arity 1 ──────
             // `column : String -> SqlFragment`, `param : SqlValue -> SqlFragment`,
             // `int`/`string`/`float`/`bool : _ -> SqlFragment` (sugar over
@@ -17460,6 +17481,21 @@ mod tests {
         KernelFn::SubSubscribeWebSocket,
         // Ipe.Email
         KernelFn::EmailSend,
+        // Ipe.Money — compiled-source Layer-3 module; every kernel is reached
+        // exclusively through the `Ffi.kernel "Money_*"` alias fast-path (the
+        // `Money` qualifier is a compiled-source module name, not a legacy
+        // `QUALIFIERS` entry), so no legacy `lower_callee` string-match arm exists.
+        KernelFn::MoneyMinorUnits,
+        KernelFn::MoneySymbol,
+        KernelFn::MoneyCurrencyName,
+        KernelFn::MoneyIsKnownCurrency,
+        KernelFn::MoneyFormat,
+        KernelFn::MoneyFormatWithCode,
+        KernelFn::MoneyAllocate,
+        KernelFn::MoneySetRate,
+        KernelFn::MoneyGetRate,
+        KernelFn::MoneyHasRate,
+        KernelFn::MoneyClearRates,
     ];
 
     /// Verifies that for every non-excluded variant in `KernelFn::ALL`, the

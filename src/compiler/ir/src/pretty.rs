@@ -1217,6 +1217,17 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::DecAddPercent => "Decimal.addPercent",
         KernelFn::DecSubPercent => "Decimal.subPercent",
         KernelFn::DecFormatWith => "Decimal.formatWith",
+        KernelFn::MoneyMinorUnits => "Money.minorUnits",
+        KernelFn::MoneySymbol => "Money.symbol",
+        KernelFn::MoneyCurrencyName => "Money.currencyName",
+        KernelFn::MoneyIsKnownCurrency => "Money.isKnownCurrency",
+        KernelFn::MoneyFormat => "Money.format",
+        KernelFn::MoneyFormatWithCode => "Money.formatWithCode",
+        KernelFn::MoneyAllocate => "Money.allocate",
+        KernelFn::MoneySetRate => "Money.setRate",
+        KernelFn::MoneyGetRate => "Money.getRate",
+        KernelFn::MoneyHasRate => "Money.hasRate",
+        KernelFn::MoneyClearRates => "Money.clearRates",
     }
 }
 
