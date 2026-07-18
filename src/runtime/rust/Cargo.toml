@@ -93,12 +93,21 @@ libc = "0.2"
 # native feature graph identical.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 uuid = { version = "1", features = ["v4", "v7", "js"] }
+# `Random.*` / `Crypto.randomBytes` / `Crypto.randomToken` browser substitute:
+# the `js` feature backs `getrandom()` with `crypto.getRandomValues` (the exact
+# mechanism `docs/architecture/wasm-target.md` Q3 names). Direct dep (not just
+# transitively via uuid) so `random.rs`/`crypto.rs` can call it without pulling
+# `aes-gcm` just for its `OsRng` re-export.
+getrandom = { version = "0.2", features = ["js"] }
 # Browser sink (`wasm` module, feature `wasm-client`). Pinned exact
 # wasm-bindgen: the emitted-project glue is produced by the wasm-bindgen CLI,
 # which requires a byte-matching crate version.
 wasm-bindgen = { version = "=0.2.126", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 js-sys = { version = "0.3", optional = true }
+# `Sub.every` / `Time.sleep` / `Time.every` browser substitute — `setInterval`
+# / `setTimeout` wrapped as futures/callbacks (M4 Cmd/Sub bridge).
+gloo-timers = { version = "0.3", features = ["futures"], optional = true }
 web-sys = { version = "0.3", optional = true, features = [
     "Window",
     "Document",
@@ -117,6 +126,21 @@ web-sys = { version = "0.3", optional = true, features = [
     "KeyboardEvent",
     "Location",
     "HtmlDocument",
+    # M4 Cmd/Sub browser bridge: fetch (Http.get/post/request) + WebSocket
+    # client (Ipe.WebSocket).
+    "Request",
+    "RequestInit",
+    "RequestMode",
+    "RequestRedirect",
+    "Response",
+    "Headers",
+    "AbortController",
+    "AbortSignal",
+    "WebSocket",
+    "MessageEvent",
+    "CloseEvent",
+    "ErrorEvent",
+    "BinaryType",
 ] }
 console_error_panic_hook = { version = "0.1", optional = true }
 
@@ -175,6 +199,13 @@ wasm-client = [
     "dep:js-sys",
     "dep:web-sys",
     "dep:console_error_panic_hook",
+    "dep:gloo-timers",
+    # `crypto.rs`'s wasm32 arm (`crypto_random_bytes`/`crypto_random_token`)
+    # plus the pure hash family (`crypto_sha256`/`crypto_hmac_sha256`/…) need
+    # `sha2` regardless of the (native-only) `crypto` feature; the emitted
+    # WASM project's own Cargo.toml already lists `sha2` unconditionally —
+    # this mirrors that for the source crate's own wasm-client build/tests.
+    "sha2",
 ]
 
 [dev-dependencies]

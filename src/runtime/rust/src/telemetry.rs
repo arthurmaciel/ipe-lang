@@ -12,6 +12,7 @@
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(not(all(target_arch = "wasm32", feature = "wasm-client")))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const LOG_CAP: usize = 1000;
@@ -41,11 +42,25 @@ static SPANS: Mutex<VecDeque<SpanEntry>> = Mutex::new(VecDeque::new());
 static REQUESTS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static ERRORS_TOTAL: AtomicU64 = AtomicU64::new(0);
 
+// `SystemTime::now()` COMPILES on `wasm32-unknown-unknown` (part of std) but
+// TRAPS at runtime — no clock without `wasmbind`. That's harmless for the bare
+// pure-kernel floor (nothing there calls `record_log`), but once the
+// `wasm-client` browser sink makes `Ipe.Log.*` reachable it would be a
+// well-typed-program-reachable trap. Route through `js_sys::Date::now()`
+// (`Date.now()`) specifically when `wasm-client` is on; the floor-only wasm32
+// build (no `wasm-client`, `js-sys` not even a resolvable dependency there)
+// keeps the original std path unchanged.
+#[cfg(not(all(target_arch = "wasm32", feature = "wasm-client")))]
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
+fn now_ms() -> u64 {
+    js_sys::Date::now() as u64
 }
 
 fn push_bounded<T>(ring: &Mutex<VecDeque<T>>, cap: usize, e: T) {

@@ -1,7 +1,8 @@
-// Time kernel — basic helpers (tokio-gated) + Ipe.Time advanced (always available).
+// Time kernel — basic helpers (tokio-gated on native, wasm-client-gated in the
+// browser) + Ipe.Time advanced (always available).
 use super::*;
 
-#[cfg(feature = "tokio")]
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 pub fn time_now<E: Send + 'static>(_: ()) -> IpeTask<E, i64> {
     Box::pin(async move {
         let ms = std::time::SystemTime::now()
@@ -12,7 +13,7 @@ pub fn time_now<E: Send + 'static>(_: ()) -> IpeTask<E, i64> {
     })
 }
 
-#[cfg(feature = "tokio")]
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 pub fn time_sleep<E: Send + 'static>(ms: i64) -> IpeTask<E, ()> {
     Box::pin(async move {
         // Clamp negative ms to 0: `ms as u64` on a negative wraps to a near-
@@ -22,8 +23,36 @@ pub fn time_sleep<E: Send + 'static>(ms: i64) -> IpeTask<E, ()> {
     })
 }
 
-#[cfg(feature = "tokio")]
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 pub fn time_unix_millis<E: Send + 'static>(_: ()) -> IpeTask<E, i64> {
+    time_now(())
+}
+
+// ── wasm32 browser substitute — `Date.now()` / `setTimeout` (gloo-timers) ──
+//
+// `SystemTime::now()`/`tokio::time::sleep` have no denotation on
+// `wasm32-unknown-unknown` (the former traps at runtime — no clock without
+// `wasmbind`; the latter doesn't compile at all — no OS threads/reactor).
+// `js_sys::Date::now()` reads `Date.now()` directly; `gloo_timers` wraps
+// `setTimeout` as an awaitable future. Both keep the SAME `IpeTask<E, _>`
+// signature the native arm exposes, so the emitted wrapper prelude's call
+// site is unchanged across targets (Q2: `emit_expr.rs` stays target-agnostic).
+#[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
+pub fn time_now<E: 'static>(_: ()) -> IpeTask<E, i64> {
+    Box::pin(async move { ok_res(js_sys::Date::now() as i64) })
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
+pub fn time_sleep<E: 'static>(ms: i64) -> IpeTask<E, ()> {
+    Box::pin(async move {
+        // Clamp negative ms to 0, matching the native arm's deadlock guard.
+        gloo_timers::future::TimeoutFuture::new(ms.max(0) as u32).await;
+        ok_res(())
+    })
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm-client"))]
+pub fn time_unix_millis<E: 'static>(_: ()) -> IpeTask<E, i64> {
     time_now(())
 }
 
