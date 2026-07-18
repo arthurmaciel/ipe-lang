@@ -228,7 +228,7 @@ pub fn prepare_ffi(
     blame_path: &Path,
 ) -> Result<FfiPrep, CliError> {
     let catalog = load_catalog_for(blame_path)?;
-    let cache_hint = find_cache_root(blame_path).unwrap_or_default();
+    let cache_hint = find_cache_root(blame_path)?.unwrap_or_default();
     let injected = inject_interfaces(sources, &catalog, &cache_hint)?;
     let emit = assemble_emit(&catalog)?;
     Ok(FfiPrep { catalog, injected, emit })
