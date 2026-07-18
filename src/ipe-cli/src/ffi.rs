@@ -29,9 +29,7 @@ const PROJECT_MANIFEST: &str = "sky.toml";
 #[cfg(unix)]
 fn current_uid() -> u32 {
     use std::os::unix::fs::MetadataExt as _;
-    std::fs::metadata("/proc/self")
-        .map(|m| m.uid())
-        .unwrap_or(u32::MAX)
+    std::fs::metadata("/proc/self").map_or(u32::MAX, |m| m.uid())
 }
 
 /// Whether a path is owned by the current uid and not world-writable — an FFI
