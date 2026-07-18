@@ -2251,7 +2251,7 @@ mod tests {
         let index = code_index();
         let lines = index.lines().count();
         assert_eq!(lines, ALL_CODES.len(), "one line per code");
-        assert_eq!(ALL_CODES.len(), 97, "taxonomy is 97 codes");
+        assert_eq!(ALL_CODES.len(), 99, "taxonomy is 99 codes");
         assert!(
             index.contains("IPE-T0001  type mismatch"),
             "index pairs code with title"
@@ -2803,10 +2803,13 @@ main =
     // On-disk build cache end-to-end proof
     // -----------------------------------------------------------------
 
-    /// Walk `cache_root/<epoch>/*.json` and return the single entry file a
-    /// fresh build just wrote. The epoch name is unpredictable from a test's
-    /// perspective (it folds in the running binary's own content hash), so
-    /// this has to search rather than construct the path directly.
+    /// Walk `cache_root/<epoch>/` and return the single `EmittedProject`-tier
+    /// entry (`<key>.json`) a fresh build just wrote. The epoch name is
+    /// unpredictable from a test's perspective (it folds in the running binary's
+    /// own content hash), so this has to search rather than construct the path
+    /// directly. The co-resident IR tier writes `<key>.ir.json` under the same
+    /// epoch dir — that file's extension is also `json`, so it is excluded by
+    /// name to keep this matcher pinned to the `EmittedProject` tier.
     fn find_single_cache_entry(cache_root: &Path) -> Option<PathBuf> {
         for epoch_entry in fs::read_dir(cache_root).ok()?.flatten() {
             let epoch_dir = epoch_entry.path();
@@ -2815,7 +2818,12 @@ main =
             }
             for file_entry in fs::read_dir(&epoch_dir).ok()?.flatten() {
                 let path = file_entry.path();
-                if path.extension().and_then(std::ffi::OsStr::to_str) == Some("json") {
+                let is_json = path.extension().and_then(std::ffi::OsStr::to_str) == Some("json");
+                let is_ir_tier = path
+                    .file_name()
+                    .and_then(std::ffi::OsStr::to_str)
+                    .is_some_and(|n| n.ends_with(".ir.json"));
+                if is_json && !is_ir_tier {
                     return Some(path);
                 }
             }
