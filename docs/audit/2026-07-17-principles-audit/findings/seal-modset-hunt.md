@@ -176,3 +176,22 @@ Build environment: ipe debug binary + emitted crates built with dedicated
 - fix direction: pre-emptively map `PubSubPublish|PubSubPublishNoEcho -> Live` in the SSOT (in
   progress); wire the `PubSub` qualifier + resolve the class question as a separate change; add a
   server+PubSub.publish row to the seal_modset matrix once nameable.
+## SSOT gap — `required_runtime_module` did not cover PubSub kernels
+
+`PubSubPublish` / `PubSubPublishNoEcho` have `class = Tea` and their emitted
+symbols (`pubsub_publish`, `pubsub_publish_no_echo`) live in
+`ipe_runtime::live::pubsub` — same as `CmdPublish`/`SubSubscribeTopic`. They
+were correctly listed in `is_live()` (so the lowerer's `uses_live` flag already
+fires), which is why `w1-pubsub` built green. However, `required_runtime_module`
+— the SSOT function documenting every kernel whose emit-class diverges from its
+runtime-module home — returned `None` for them, breaking the invariant that the
+function is complete. Any future code path that consults only
+`required_runtime_module` (not `is_live`) to derive the module set would silently
+omit the `live` append and produce E0425 at `cargo build` time.
+
+Fix: added `Self::PubSubPublish | Self::PubSubPublishNoEcho =>
+Some(RuntimeModule::Live)` arm to `required_runtime_module` in
+`src/compiler/kernels/src/lib.rs`, and a `pubsub_kernels_require_live_module`
+unit test in the same file's `mod tests` block asserting the return value.
+Runtime-modset closure tests (`runtime_modset_closure`, 3/3) and kernels unit
+tests (3/3) all pass.
