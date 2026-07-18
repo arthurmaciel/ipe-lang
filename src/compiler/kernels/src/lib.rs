@@ -3969,6 +3969,13 @@ impl StdlibKernel {
             Self::CmdPublish | Self::CmdPublishNoEcho | Self::SubSubscribeTopic => {
                 Some(RuntimeModule::Live)
             }
+            // `pubsub_publish` / `pubsub_publish_no_echo` are `class = Tea` and
+            // also `is_live`, so the `live` append fires via the `is_live` path in
+            // the lowerer. Recording them here too keeps this function the complete
+            // SSOT: every kernel whose emitted symbol diverges from its class's
+            // module home is listed, whether or not a parallel predicate already
+            // covers it.
+            Self::PubSubPublish | Self::PubSubPublishNoEcho => Some(RuntimeModule::Live),
             // `HttpStream.chunks` is `class = Pure` but emits `sub_subscribe_stream`
             // and the `IpeStreamId` type, both defined in `ipe_runtime::http_stream`
             // — declared only by the `server` append. Its siblings
@@ -5088,6 +5095,31 @@ mod tests {
             "HashMap len ({}) != non-internal variant count ({}); loop accounting broken",
             seen.len(),
             non_internal_count,
+        );
+    }
+
+    /// `PubSub.publish` / `publishNoEcho` have `class = Tea` and their emitted
+    /// symbols (`pubsub_publish`, `pubsub_publish_no_echo`) live in
+    /// `ipe_runtime::live::pubsub` — the `live` feature-module.  This test is
+    /// the SSOT invariant: `required_runtime_module` MUST return
+    /// `Some(RuntimeModule::Live)` for both so that any future code path relying
+    /// solely on this function (rather than `is_live`) cannot silently omit the
+    /// `live` append and produce an E0425 at `cargo build` time.
+    #[test]
+    fn pubsub_kernels_require_live_module() {
+        use super::RuntimeModule;
+
+        assert_eq!(
+            StdlibKernel::PubSubPublish.required_runtime_module(),
+            Some(RuntimeModule::Live),
+            "PubSubPublish must map to RuntimeModule::Live — \
+             pubsub_publish is defined in ipe_runtime::live::pubsub"
+        );
+        assert_eq!(
+            StdlibKernel::PubSubPublishNoEcho.required_runtime_module(),
+            Some(RuntimeModule::Live),
+            "PubSubPublishNoEcho must map to RuntimeModule::Live — \
+             pubsub_publish_no_echo is defined in ipe_runtime::live::pubsub"
         );
     }
 }
