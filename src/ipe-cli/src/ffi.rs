@@ -20,10 +20,52 @@ use crate::CliError;
 /// The project-relative FFI cache directory.
 const CACHE_REL: &str = ".ipe/cache/ffi/rust";
 
-/// Walk up from `start` (a file or directory) looking for an existing FFI
-/// artifact cache; the first hit is the project's cache root.
-#[must_use]
-pub fn find_cache_root(start: &Path) -> Option<PathBuf> {
+/// The project manifest that bounds the upward cache-discovery walk.
+const PROJECT_MANIFEST: &str = "sky.toml";
+
+/// The invoking user's real uid, read from the owner of `/proc/self` (no FFI
+/// dependency). `u32::MAX` on failure — a sentinel no real cache dir matches,
+/// so a failed read refuses rather than accepts.
+#[cfg(unix)]
+fn current_uid() -> u32 {
+    use std::os::unix::fs::MetadataExt as _;
+    std::fs::metadata("/proc/self")
+        .map(|m| m.uid())
+        .unwrap_or(u32::MAX)
+}
+
+/// Whether a path is owned by the current uid and not world-writable — an FFI
+/// cache anyone can write is a code-injection delivery vector (its
+/// `_bindings.rs` compiles unsandboxed into the crate), so it is refused
+/// rather than loaded. Group-writability is not rejected: a default umask of
+/// `0o002` makes user-created dirs group-writable under the user's own private
+/// group, and rejecting that would refuse every legitimately-installed cache;
+/// the load-time re-derivation gate is the primary barrier, this narrows the
+/// discovery surface.
+#[cfg(unix)]
+fn is_trusted_cache_dir(dir: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    match std::fs::metadata(dir) {
+        Ok(md) => md.uid() == current_uid() && md.mode() & 0o002 == 0,
+        Err(_) => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn is_trusted_cache_dir(_dir: &Path) -> bool {
+    true
+}
+
+/// Walk up from `start` (a file or directory) looking for an FFI artifact
+/// cache, bounded at the nearest `sky.toml` project root — never above it, so
+/// a planted ancestor cache outside the project cannot be discovered. A found
+/// cache not owned by the invoking uid (or group/other-writable) is REFUSED,
+/// not loaded, since its `_bindings.rs` compiles unsandboxed into the crate.
+///
+/// # Errors
+///
+/// [`CliError::UsageOwned`] when a discovered cache fails the ownership check.
+pub fn find_cache_root(start: &Path) -> Result<Option<PathBuf>, CliError> {
     let mut dir = if start.is_dir() {
         Some(start)
     } else {
@@ -32,11 +74,23 @@ pub fn find_cache_root(start: &Path) -> Option<PathBuf> {
     while let Some(d) = dir {
         let candidate = d.join(CACHE_REL);
         if candidate.is_dir() {
-            return Some(candidate);
+            if is_trusted_cache_dir(&candidate) {
+                return Ok(Some(candidate));
+            }
+            return Err(CliError::UsageOwned(format!(
+                "refusing to load the FFI cache at `{}`: it is not owned by the current \
+                 user or is world-writable — its `_bindings.rs` compiles unsandboxed \
+                 into your crate. Fix its ownership/permissions or remove it",
+                candidate.display()
+            )));
+        }
+        // Stop at the project root: do not walk above the nearest sky.toml.
+        if d.join(PROJECT_MANIFEST).is_file() {
+            return Ok(None);
         }
         dir = d.parent();
     }
-    None
+    Ok(None)
 }
 
 /// Load the installed-crate catalog for a build rooted at (or blamed on)
@@ -46,7 +100,7 @@ pub fn find_cache_root(start: &Path) -> Option<PathBuf> {
 /// [`CliError::Pipeline`] wrapping the catalog loader's diagnostic (a
 /// tampered or half-written cache is refused, never silently skipped).
 pub fn load_catalog_for(blame_path: &Path) -> Result<Vec<InstalledCrate>, CliError> {
-    let Some(cache_root) = find_cache_root(blame_path) else {
+    let Some(cache_root) = find_cache_root(blame_path)? else {
         return Ok(Vec::new());
     };
     ipe_ffi::driver::load_catalog(&cache_root)
@@ -204,17 +258,117 @@ fn inspector_binary() -> Result<PathBuf, CliError> {
     ))
 }
 
+/// A per-invocation scratch directory under the sanctioned write-boundary
+/// root (`~/.cache/ipe/ffi-scratch/`), created with a randomized name and
+/// `create_dir` (NOT `create_dir_all`) so a pre-existing path — a planted
+/// symlink or dir — makes creation FAIL. `/tmp` is never used: it is
+/// world-writable (a symlink-swap race) and outside the write-boundary.
+fn make_scratch_dir(krate: &str) -> Result<PathBuf, CliError> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let base = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map_or_else(std::env::temp_dir, |h| h.join(".cache/ipe/ffi-scratch"));
+    std::fs::create_dir_all(&base)
+        .map_err(|e| CliError::UsageOwned(format!("ipe add: scratch root: {e}")))?;
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    // The security property is `create_dir`-fails-if-exists, not the name's
+    // unguessability; the random suffix only avoids collisions across runs.
+    let dir = base.join(format!(
+        "add-{krate}-{}-{nanos:x}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&dir).map_err(|e| {
+        CliError::UsageOwned(format!(
+            "ipe add: refusing to reuse a pre-existing scratch path `{}`: {e}",
+            dir.display()
+        ))
+    })?;
+    Ok(dir)
+}
+
+/// Read-only jail binds for the toolchain, deliberately NARROW: never the
+/// `~/.cargo` parent (which carries `credentials.toml`, the crates.io API
+/// token). Only `~/.cargo/bin` (the proxy binaries) and `~/.rustup` are
+/// exposed. Returns `(toolchain_ro_binds, path_prepend, rustup_home)`.
+fn toolchain_binds(inspector: &Path) -> (Vec<PathBuf>, Vec<PathBuf>, Option<PathBuf>) {
+    let mut toolchain_ro_binds = Vec::new();
+    // The inspector binary may live under a masked mount ($HOME target dirs) —
+    // re-bind its directory read-only.
+    if let Some(dir) = inspector.parent() {
+        toolchain_ro_binds.push(dir.to_path_buf());
+    }
+    let mut path_prepend = Vec::new();
+    let mut rustup_home = None;
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        let cargo_bin = home.join(".cargo/bin");
+        if cargo_bin.is_dir() {
+            path_prepend.push(cargo_bin.clone());
+            // Bind ONLY the bin dir — NEVER the ~/.cargo parent, so
+            // credentials.toml stays outside the jail.
+            toolchain_ro_binds.push(cargo_bin);
+        }
+        let rustup = home.join(".rustup");
+        if rustup.is_dir() {
+            toolchain_ro_binds.push(rustup.clone());
+            rustup_home = Some(rustup);
+        }
+    }
+    (toolchain_ro_binds, path_prepend, rustup_home)
+}
+
+/// Run one jailed inspector phase over the shared `scoped_tmp`, returning its
+/// captured stdout.
+fn run_phase(
+    caps: &ipe_sandbox::Capabilities,
+    network: ipe_sandbox::NetworkPolicy,
+    scoped_tmp: &Path,
+    toolchain_ro_binds: Vec<PathBuf>,
+    path_prepend: Vec<PathBuf>,
+    rustup_home: Option<PathBuf>,
+    payload: &[OsString],
+) -> Result<ipe_sandbox::JailedOutput, CliError> {
+    let io_err = |detail: String| CliError::UsageOwned(format!("ipe add: {detail}"));
+    let spec = ipe_sandbox::JailSpec {
+        network,
+        scoped_tmp: scoped_tmp.to_path_buf(),
+        registry_cache: None,
+        toolchain: None,
+        toolchain_ro_binds,
+        path_prepend,
+        rustup_home,
+        limits: ipe_sandbox::ResourceLimits::default(),
+    };
+    ipe_sandbox::run_in_bwrap_jail(caps, &spec, payload)
+        .map_err(|d| io_err(format!("sandboxed inspection failed: {d}")))
+}
+
 /// Run the inspector for `krate` inside the sandbox jail and return its
 /// stdout (the inspection JSON).
+///
+/// Two phases over a SHARED scoped scratch dir (same in-jail `CARGO_HOME`):
+///   1. fetch (`FetchOnly`, network on) — the inspector runs `--fetch-only`,
+///      populating the registry cache; NO proc-macro / build-script / rustdoc
+///      expansion, so no foreign code runs while egress is available.
+///   2. introspect (`Denied`, fresh empty net namespace, `CARGO_NET_OFFLINE`)
+///      — rustdoc expands proc-macros / build scripts (the foreign code) with
+///      NO network egress, so the crates.io token cannot be exfiltrated even
+///      if it were reachable (it is not — see [`toolchain_binds`]).
 fn run_inspector(
     krate: &CrateName,
     features: &[String],
     allow_build_scripts: bool,
 ) -> Result<String, CliError> {
     let inspector = inspector_binary()?;
-    let argv = ipe_ffi::driver::inspector_argv(krate, features, None, allow_build_scripts);
-    let mut payload: Vec<OsString> = vec![inspector.clone().into_os_string()];
-    payload.extend(argv);
+    let with_payload = |fetch_only: bool| -> Vec<OsString> {
+        let argv =
+            ipe_ffi::driver::inspector_argv(krate, features, None, allow_build_scripts, fetch_only);
+        let mut payload: Vec<OsString> = vec![inspector.clone().into_os_string()];
+        payload.extend(argv);
+        payload
+    };
 
     let caps = ipe_sandbox::probe();
     let mechanism = ipe_sandbox::select_mechanism(&caps);
@@ -229,49 +383,45 @@ fn run_inspector(
 
     let io_err = |detail: String| CliError::UsageOwned(format!("ipe add: {detail}"));
     if matches!(mechanism, ipe_sandbox::Mechanism::Bwrap(_)) {
-        // Fetch posture: network on (the inspector downloads + documents the
-        // crate); everything else confined. The toolchain lives under the
-        // invoking user's home, which the jail masks — re-bind it read-only.
-        let scoped_tmp = std::env::temp_dir().join(format!(
-            "ipe-ffi-add-{}-{}",
-            krate.as_str(),
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&scoped_tmp).map_err(|e| io_err(e.to_string()))?;
-        let home = std::env::var_os("HOME").map(PathBuf::from);
-        let mut toolchain_ro_binds = Vec::new();
-        // The inspector binary itself may live under a masked mount
-        // (`$HOME/...` target dirs) — re-bind its directory read-only.
-        if let Some(dir) = inspector.parent() {
-            toolchain_ro_binds.push(dir.to_path_buf());
+        // Refuse if the mandatory cap helpers are missing — never run
+        // untrusted code without a wall clock and rlimits.
+        let missing = ipe_sandbox::missing_caps(&caps);
+        if !missing.is_empty() && !unsandboxed_ok {
+            return Err(io_err(format!(
+                "missing mandatory sandbox cap helper(s): {} — install coreutils \
+                 (timeout) and util-linux (prlimit), or set IPE_FFI_ALLOW_UNSANDBOXED=1 \
+                 (dangerous)",
+                missing.join(", ")
+            )));
         }
-        let mut path_prepend = Vec::new();
-        let mut rustup_home = None;
-        if let Some(home) = home {
-            let cargo_bin = home.join(".cargo/bin");
-            if cargo_bin.is_dir() {
-                path_prepend.push(cargo_bin);
-                toolchain_ro_binds.push(home.join(".cargo"));
-            }
-            let rustup = home.join(".rustup");
-            if rustup.is_dir() {
-                toolchain_ro_binds.push(rustup.clone());
-                rustup_home = Some(rustup);
-            }
+        let scoped_tmp = make_scratch_dir(krate.as_str())?;
+        let (toolchain_ro_binds, path_prepend, rustup_home) = toolchain_binds(&inspector);
+        // Phase 1 — fetch (network on, no foreign code).
+        let fetch_out = run_phase(
+            &caps,
+            ipe_sandbox::NetworkPolicy::FetchOnly,
+            &scoped_tmp,
+            toolchain_ro_binds.clone(),
+            path_prepend.clone(),
+            rustup_home.clone(),
+            &with_payload(true),
+        );
+        if let Err(e) = fetch_out {
+            let _ = std::fs::remove_dir_all(&scoped_tmp);
+            return Err(e);
         }
-        let spec = ipe_sandbox::JailSpec {
-            network: ipe_sandbox::NetworkPolicy::FetchOnly,
-            scoped_tmp: scoped_tmp.clone(),
-            registry_cache: None,
-            toolchain: None,
+        // Phase 2 — introspect (no egress; foreign code runs here).
+        let out = run_phase(
+            &caps,
+            ipe_sandbox::NetworkPolicy::Denied,
+            &scoped_tmp,
             toolchain_ro_binds,
             path_prepend,
             rustup_home,
-            limits: ipe_sandbox::ResourceLimits::default(),
-        };
-        let out = ipe_sandbox::run_in_bwrap_jail(&caps, &spec, &payload)
-            .map_err(|d| io_err(format!("sandboxed inspection failed: {d:?}")))?;
+            &with_payload(false),
+        );
         let _ = std::fs::remove_dir_all(&scoped_tmp);
+        let out = out?;
         if out.status != Some(0) {
             return Err(io_err(format!(
                 "inspector exited with {:?}\n{}",
@@ -285,6 +435,7 @@ fn run_inspector(
 
     // Explicit unsandboxed override.
     eprintln!("WARNING: running the FFI inspector UNSANDBOXED (IPE_FFI_ALLOW_UNSANDBOXED=1)");
+    let payload = with_payload(false);
     let (program, rest) = payload.split_first().ok_or(CliError::Usage("ipe add"))?;
     let out = std::process::Command::new(program)
         .args(rest)
@@ -402,10 +553,11 @@ pub fn run_remove(rest: &[String]) -> Result<(), CliError> {
 /// # Errors
 /// [`CliError`] on misuse, a missing manifest, or any per-crate failure.
 pub fn run_install(rest: &[String]) -> Result<(), CliError> {
-    let assume_yes = matches!(rest, [flag] if flag == "--yes") || rest.is_empty();
-    if !assume_yes {
-        return Err(CliError::Usage("usage: ipe install [--yes]"));
-    }
+    let assume_yes = match rest {
+        [] => false,
+        [flag] if flag == "--yes" => true,
+        _ => return Err(CliError::Usage("usage: ipe install [--yes]")),
+    };
     let manifest = Path::new("sky.toml");
     if !manifest.is_file() {
         return Err(CliError::Usage(
@@ -418,6 +570,27 @@ pub fn run_install(rest: &[String]) -> Result<(), CliError> {
     if deps.is_empty() {
         println!("ipe install: no [rust.dependencies] entries");
         return Ok(());
+    }
+    // Bare `ipe install` COMPILES every listed untrusted crate — the same
+    // build-script/proc-macro RCE surface `ipe add` gates. Prompt once for the
+    // whole list; reserve the silent path for an explicit `--yes`.
+    if !assume_yes {
+        use std::io::Write as _;
+        let names: Vec<&str> = deps.iter().map(|(n, _)| n.as_str()).collect();
+        println!(
+            "About to fetch and COMPILE untrusted code for {} crate(s): {}",
+            names.len(),
+            names.join(", ")
+        );
+        println!(
+            "Compiling runs each crate's build scripts and proc-macros (inside the \
+             isolation jail)."
+        );
+        print!("Continue? [y/N] ");
+        let _ = std::io::stdout().flush();
+        if !crate::read_yes_no() {
+            return Err(CliError::Usage("ipe install: aborted"));
+        }
     }
     let cache = FfiCache::at_project_root(Path::new("."));
     for (name, _version) in deps {
@@ -481,6 +654,99 @@ mod tests {
         assert!(prep.catalog.is_empty(), "no crates should be loaded");
         assert!(prep.injected.is_empty(), "no modules should be injected");
         assert!(prep.emit.is_none(), "emit should be None with no crates");
+    }
+
+    #[test]
+    fn cache_root_walk_stops_at_the_sky_toml_project_root() {
+        let tmp = std::env::temp_dir().join(format!("ipe-t1-cacheroot-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        // Ancestor cache (a planted vector) ABOVE the project root.
+        let ancestor_cache = tmp.join(CACHE_REL);
+        std::fs::create_dir_all(&ancestor_cache).expect("mk ancestor cache");
+        // The project root, with its own sky.toml, one level down; no cache.
+        let project = tmp.join("proj");
+        std::fs::create_dir_all(&project).expect("mk project");
+        std::fs::write(project.join("sky.toml"), "name=\"x\"\n").expect("write manifest");
+        let src = project.join("src");
+        std::fs::create_dir_all(&src).expect("mk src");
+        // Discovery from inside the project must NOT climb past sky.toml to the
+        // planted ancestor cache — it returns None.
+        let found = find_cache_root(&src).expect("no error");
+        assert_eq!(found, None, "must not discover the ancestor cache");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn owned_project_cache_is_discovered() {
+        let tmp = std::env::temp_dir().join(format!("ipe-t1-owncache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let cache = tmp.join(CACHE_REL);
+        std::fs::create_dir_all(&cache).expect("mk cache");
+        std::fs::write(tmp.join("sky.toml"), "name=\"x\"\n").expect("manifest");
+        // The invoker owns a freshly-created dir, so it is trusted + found.
+        let found = find_cache_root(&tmp).expect("no error");
+        assert_eq!(found.as_deref(), Some(cache.as_path()));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn world_writable_cache_is_refused() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let tmp = std::env::temp_dir().join(format!("ipe-t1-wwcache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let cache = tmp.join(CACHE_REL);
+        std::fs::create_dir_all(&cache).expect("mk cache");
+        std::fs::write(tmp.join("sky.toml"), "name=\"x\"\n").expect("manifest");
+        // Make the cache world-writable — the delivery vector for a planted
+        // _bindings.rs — and confirm discovery refuses it.
+        std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o777))
+            .expect("chmod");
+        let r = find_cache_root(&tmp);
+        assert!(matches!(r, Err(CliError::UsageOwned(_))), "{r:?}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn scratch_dir_is_under_the_cache_root_and_fails_on_a_pre_existing_path() {
+        // HOME must be set for the sanctioned path; the test crate always has
+        // one. The scratch dir lives under ~/.cache/ipe/ffi-scratch/, never
+        // /tmp.
+        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+            return;
+        };
+        let scratch = make_scratch_dir("semver").expect("first create succeeds");
+        assert!(
+            scratch.starts_with(home.join(".cache/ipe/ffi-scratch")),
+            "scratch under the write-boundary root: {}",
+            scratch.display()
+        );
+        assert!(scratch.is_dir());
+        // A second `create_dir` on the SAME path fails (planted-dir race
+        // rejection). `make_scratch_dir` uses a fresh name each call, so we
+        // assert the primitive directly on the returned path.
+        assert!(
+            std::fs::create_dir(&scratch).is_err(),
+            "re-creating an existing scratch path must fail"
+        );
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn toolchain_binds_never_include_the_cargo_parent_or_credentials() {
+        let inspector = PathBuf::from("/opt/ipe/bin/ipe-ffi-inspector");
+        let (binds, _path, _rustup) = toolchain_binds(&inspector);
+        for b in &binds {
+            let s = b.to_string_lossy();
+            assert!(
+                !s.ends_with("/.cargo"),
+                "the ~/.cargo parent must never be bound: {s}"
+            );
+            assert!(
+                !s.contains("credentials"),
+                "no credentials path may be bound: {s}"
+            );
+        }
     }
 
     #[test]

@@ -705,3 +705,111 @@ fn lower_let_bound_app_cfg() {
          \x20   app cfg\n";
     assert_rejected("lower_let_bound_cfg", src, "IPE-L0119");
 }
+
+// ===========================================================================
+// FFI trust boundary (T1) — the decode/emit gate rejects injection-bearing
+// inspector data, and the warm-cache load re-derives `_bindings.rs` from the
+// validated inspection document so a planted `_bindings.rs` is inert. These
+// guard the CONTRAPOSITIVE of THE SEAL at the FFI seam: an injection-bearing
+// type/path/selector string can never reach the unsandboxed `<slug>_bindings.rs`
+// that compiles into the user crate, and a representable-but-illegal type (an
+// unbalanced `<`) rejects at decode rather than exit-0-then-cargo-fail.
+// ===========================================================================
+
+use ipe_ffi::diag::{Diagnostic, WireDefect};
+use ipe_ffi::driver::{FfiCache, load_catalog};
+use ipe_ffi::pkginfo::PkgInfo;
+
+/// A `PkgInfo` inspection document with one function carrying the given
+/// `rustType` on its sole parameter.
+fn pkg_json_with_param_rust_type(rust_type: &str) -> String {
+    format!(
+        "{{\"pkg\":\"x\",\"name\":\"x\",\"version\":\"1.0.0\",\
+          \"functions\":[{{\"name\":\"f\",\
+          \"params\":[{{\"name\":\"a\",\"type\":\"u64\",\"rustType\":{rt}}}],\
+          \"results\":[{{\"name\":\"\",\"type\":\"u64\"}}],\
+          \"effect\":\"pure\"}}],\"errors\":[]}}",
+        rt = serde_json::to_string(rust_type).unwrap_or_else(|_| "\"\"".to_owned())
+    )
+}
+
+/// An injection-bearing `rustType` drops its binding at decode with the typed
+/// `InvalidType` defect — the raw string never reaches emission.
+#[test]
+fn ffi_injection_bearing_rust_type_is_refused_at_decode() {
+    let doc = pkg_json_with_param_rust_type("u64; std::process::Command::new(\"sh\")");
+    let pkg = PkgInfo::decode_json(&doc).expect("package header survives");
+    assert!(
+        pkg.fns().is_empty(),
+        "the injection-bearing binding must be dropped"
+    );
+    assert!(
+        matches!(
+            pkg.dropped().first(),
+            Some(Diagnostic::WireMalformed {
+                defect: WireDefect::InvalidType { .. },
+                ..
+            })
+        ),
+        "expected InvalidType, got {:?}",
+        pkg.dropped().first()
+    );
+}
+
+/// SEAL corollary: an unbalanced `<` in a `rustType` is a representable but
+/// illegal Rust type. It rejects at DECODE (drops the binding), never
+/// producing an `ipe`-exit-0 emission that a later `cargo build` would reject.
+#[test]
+fn ffi_unbalanced_angle_rust_type_rejects_at_decode_not_cargo() {
+    let doc = pkg_json_with_param_rust_type("Vec<u64");
+    let pkg = PkgInfo::decode_json(&doc).expect("package header survives");
+    assert!(pkg.fns().is_empty(), "the unbalanced type drops its binding");
+    assert!(
+        matches!(
+            pkg.dropped().first(),
+            Some(Diagnostic::WireMalformed {
+                defect: WireDefect::InvalidType { .. },
+                ..
+            })
+        ),
+        "expected InvalidType at decode, got {:?}",
+        pkg.dropped().first()
+    );
+}
+
+/// A hand-planted `_bindings.rs` carrying an injected wrapper body is INERT:
+/// `load_catalog` re-derives the wrappers from the validated `pkg.json`, so the
+/// planted text never reaches the emitted `src/ffi.rs`.
+#[test]
+fn ffi_planted_bindings_file_is_ignored_on_load() {
+    let doc = "{\"pkg\":\"semver\",\"name\":\"semver\",\"version\":\"1.0.0\",\
+        \"functions\":[{\"name\":\"parse\",\
+        \"params\":[{\"name\":\"text\",\"type\":\"String\",\"ipeType\":\"String\",\"rustType\":\"&str\"}],\
+        \"results\":[{\"name\":\"\",\"type\":\"Result Error Version\",\"rustType\":\"Result<Version, Error>\"}],\
+        \"effect\":\"fallible\"}],\"errors\":[]}";
+    let Some(dir) = write_entry("ffi_planted_cache", "") else {
+        return;
+    };
+    let root = dir.parent().map(std::path::Path::to_path_buf).unwrap_or(dir);
+    let cache = FfiCache::at_project_root(&root);
+    let Ok((_pkg, paths)) = ipe_ffi::driver::install_from_inspection(&cache, doc) else {
+        return;
+    };
+    // Plant an injected item into a reached wrapper region of _bindings.rs.
+    if let Ok(text) = std::fs::read_to_string(&paths.bindings) {
+        let planted = text.replace(
+            "pub fn semver_parse",
+            "pub fn pwned(){ std::process::Command::new(\"sh\"); } pub fn semver_parse",
+        );
+        let _ = std::fs::write(&paths.bindings, planted);
+    }
+    let catalog = load_catalog(cache.root()).expect("loads");
+    for c in &catalog {
+        assert!(
+            !c.bindings_source.contains("pwned"),
+            "a planted _bindings.rs must not survive re-derivation:\n{}",
+            c.bindings_source
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}

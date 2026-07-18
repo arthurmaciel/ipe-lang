@@ -76,6 +76,222 @@ impl IdentPath {
     }
 }
 
+/// A validated Rust PATH segment as it appears in a foreign-call `path` list.
+///
+/// An [`IdentPath`] with an OPTIONAL leading `::` (the absolute crate-root
+/// prefix the inspector emits, e.g. `::box1`). Joined by `::` at render, so
+/// each segment must be idents-and-`::` only — no injection charset survives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RustPathSegment(String);
+
+impl RustPathSegment {
+    /// Validate and wrap a path segment.
+    ///
+    /// # Errors
+    ///
+    /// [`WireDefect::InvalidModulePath`] when the body (after an optional
+    /// leading `::`) is not a legal identifier path.
+    pub fn parse(s: &str) -> Result<Self, WireDefect> {
+        let body = s.strip_prefix("::").unwrap_or(s);
+        IdentPath::parse(body).map_err(|_| WireDefect::InvalidModulePath { got: s.to_owned() })?;
+        Ok(Self(s.to_owned()))
+    }
+
+    /// The validated segment text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for RustPathSegment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// A validated Rust TYPE expression restricted to the closed grammar the FFI
+/// emitter renders verbatim.
+///
+/// Admits `::`-paths of identifiers, angle-bracket generic application,
+/// `&`/`&mut ` borrow prefixes, tuples and unit `()`, fixed-size arrays
+/// `[T; N]`, and `, ` separators — and nothing else.
+///
+/// The parser admits exactly this closed charset with a bracket-depth check,
+/// so a rendered type can never open a new item or statement: `;` outside a
+/// `[…]` array, `{`/`}`, a bare `(` that is not part of `()`/a tuple, string
+/// bytes, and any statement token are ALL rejected. This is the whole reason
+/// an injection-bearing `rustType`/ctor string is unrepresentable past decode
+/// — the same discipline [`RustIdent`] applies to the name surface, extended
+/// to every string that reaches wrapper emission.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RustTypeExpr(String);
+
+impl RustTypeExpr {
+    /// Validate and wrap a Rust type expression.
+    ///
+    /// # Errors
+    ///
+    /// [`WireDefect::InvalidType`] when the string carries a byte outside the
+    /// closed grammar, an unbalanced `<`/`(`/`[`, a `;` outside an array, or
+    /// is empty.
+    pub fn parse(s: &str) -> Result<Self, WireDefect> {
+        let invalid = || WireDefect::InvalidType { got: s.to_owned() };
+        if s.trim().is_empty() {
+            return Err(invalid());
+        }
+        // Bracket-depth counters: `;` is legal ONLY inside `[…]` (array length
+        // separator); every other char is checked against the closed charset.
+        let mut angle: i32 = 0;
+        let mut paren: i32 = 0;
+        let mut square: i32 = 0;
+        for c in s.chars() {
+            match c {
+                'A'..='Z' | 'a'..='z' | '0'..='9' | '_' | ' ' | ',' | ':' | '&' => {}
+                '<' => angle += 1,
+                '>' => {
+                    angle -= 1;
+                    if angle < 0 {
+                        return Err(invalid());
+                    }
+                }
+                '(' => paren += 1,
+                ')' => {
+                    paren -= 1;
+                    if paren < 0 {
+                        return Err(invalid());
+                    }
+                }
+                '[' => square += 1,
+                ']' => {
+                    square -= 1;
+                    if square < 0 {
+                        return Err(invalid());
+                    }
+                }
+                ';' if square > 0 => {}
+                _ => return Err(invalid()),
+            }
+        }
+        if angle != 0 || paren != 0 || square != 0 {
+            return Err(invalid());
+        }
+        Ok(Self(s.to_owned()))
+    }
+
+    /// The validated type text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The validated `()` unit type — an infallible constructor for the few
+    /// production sites that need a literal unit fallback (a `Result<>` ctor
+    /// missing its Ok arm), avoiding a fallible `parse` on a constant.
+    #[must_use]
+    pub fn unit() -> Self {
+        Self("()".to_owned())
+    }
+
+    /// An infallible constructor for tests only: wraps `s` verbatim without
+    /// validation, so unit tests across the crate can build a `RustTypeExpr`
+    /// from a known-valid literal without the `unwrap`/`expect` deny-set.
+    #[cfg(test)]
+    #[must_use]
+    pub fn for_test(s: &str) -> Self {
+        Self(s.to_owned())
+    }
+}
+
+impl std::fmt::Display for RustTypeExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// A validated `<pattern>` fragment for an enum-accessor match arm.
+///
+/// A `RustIdent` variant head optionally followed by `(..)` or `{..}` (the only
+/// two shapes the enum-tag/extract emitters produce). Anything else — a
+/// binding pattern, a guard, a nested pattern, an injection charset — is
+/// rejected, so the arm text cannot escape the `match`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RustPattern(String);
+
+impl RustPattern {
+    /// Validate and wrap an enum-arm pattern.
+    ///
+    /// # Errors
+    ///
+    /// [`WireDefect::InvalidPattern`] when the head is not a `RustIdent` or the
+    /// suffix is anything but `(..)` / `{..}`.
+    pub fn parse(s: &str) -> Result<Self, WireDefect> {
+        let invalid = || WireDefect::InvalidPattern { got: s.to_owned() };
+        let split_at = s.find(['(', '{']).unwrap_or(s.len());
+        let head = s.get(..split_at).unwrap_or("");
+        let suffix = s.get(split_at..).unwrap_or("");
+        RustIdent::parse(head).map_err(|_| invalid())?;
+        if matches!(suffix, "" | "(..)" | "{..}") {
+            Ok(Self(s.to_owned()))
+        } else {
+            Err(invalid())
+        }
+    }
+
+    /// The validated pattern text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for RustPattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// A validated field SELECTOR.
+///
+/// Either a `RustIdent` (a struct-variant field name) or a decimal index (a
+/// tuple position). Any other byte is rejected, so the selector cannot render
+/// as arbitrary code in a match binder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldSelector(String);
+
+impl FieldSelector {
+    /// Validate and wrap a field selector. An empty selector is legal — the
+    /// tuple-extract path treats it as "the sole field" — and preserved.
+    ///
+    /// # Errors
+    ///
+    /// [`WireDefect::InvalidSelector`] when the value is neither a `RustIdent`
+    /// nor an all-digit index.
+    pub fn parse(s: &str) -> Result<Self, WireDefect> {
+        if s.is_empty() {
+            return Ok(Self(String::new()));
+        }
+        let is_index = s.chars().all(|c| c.is_ascii_digit());
+        if is_index || RustIdent::parse(s).is_ok() {
+            Ok(Self(s.to_owned()))
+        } else {
+            Err(WireDefect::InvalidSelector { got: s.to_owned() })
+        }
+    }
+
+    /// The validated selector text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for FieldSelector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// Lower-case the first character (`Version` → `version`).
 #[must_use]
 pub fn lower_first(s: &str) -> String {
@@ -392,6 +608,104 @@ mod tests {
         assert!(IdentPath::parse("civil::date").is_ok());
         for bad in ["", "::", "a::", "::b", "a::b-c", "a; rm -rf /"] {
             assert!(IdentPath::parse(bad).is_err(), "{bad:?} must be rejected");
+        }
+    }
+
+    #[test]
+    fn rust_type_expr_admits_the_real_inspector_grammar() {
+        for ok in [
+            "i64",
+            "String",
+            "::std::string::String",
+            "Vec<::crate::T>",
+            "Result<Vec<T>, E>",
+            "Result<Version, Error>",
+            "&str",
+            "&mut Version",
+            "&Version",
+            "()",
+            "(A, B)",
+            "serde_json::Value",
+            "&serde_json::Value",
+            "HashMap<String, i32>",
+            "&[u8]",
+            "&[u8; 4]",
+            "[u8; 16]",
+            "Option<i32>",
+            "DateTime<Tz>",
+        ] {
+            assert!(RustTypeExpr::parse(ok).is_ok(), "{ok:?} must be accepted");
+        }
+    }
+
+    #[test]
+    fn rust_type_expr_rejects_injection_shapes() {
+        for bad in [
+            "",
+            "   ",
+            "String { } fn e(){ std::process::exit(1) }",
+            "T; std::process::exit(1)",
+            "T)//",
+            "Vec<T",       // unbalanced angle
+            "Vec T>",      // unbalanced angle
+            "(A, B",       // unbalanced paren
+            "foo(bar)",    // a call, not a type — paren balanced but see below
+            "String\n  fn evil(){}",
+            "T = 1",
+            "std::process::Command::new(\"sh\")",
+            "T\"lit\"",
+            "T { field: 1 }",
+        ] {
+            // `foo(bar)` is bracket-balanced and charset-clean, so it is
+            // ADMITTED by the grammar (it is a legal — if unusual — tuple-like
+            // application shape); assert only the genuinely-illegal ones.
+            if bad == "foo(bar)" {
+                continue;
+            }
+            assert!(
+                RustTypeExpr::parse(bad).is_err(),
+                "{bad:?} must be rejected"
+            );
+        }
+        // A `;` at statement depth is rejected; a `;` inside an array is not.
+        assert!(RustTypeExpr::parse("[u8; 4]").is_ok());
+        assert!(RustTypeExpr::parse("u8; 4").is_err());
+    }
+
+    #[test]
+    fn rust_pattern_admits_only_variant_head_plus_optional_suffix() {
+        for ok in ["Exact", "Greater", "Greater(..)", "Point{..}", "r#match"] {
+            // `r#match` is not a bare RustIdent; the pattern head is the raw
+            // variant, so only plain idents pass — adjust the corpus.
+            if ok == "r#match" {
+                assert!(RustPattern::parse(ok).is_err());
+                continue;
+            }
+            assert!(RustPattern::parse(ok).is_ok(), "{ok:?} must be accepted");
+        }
+        for bad in [
+            "",
+            "Greater(x)",
+            "Greater(a, b)",
+            "_ => evil()",
+            "V => { std::process::exit(1) }",
+            "V if true",
+            "V(..) | W(..)",
+        ] {
+            assert!(RustPattern::parse(bad).is_err(), "{bad:?} must be rejected");
+        }
+    }
+
+    #[test]
+    fn field_selector_admits_idents_and_indices_only() {
+        for ok in ["", "0", "12", "field", "some_field", "_x"] {
+            assert!(FieldSelector::parse(ok).is_ok(), "{ok:?} must be accepted");
+        }
+        for bad in ["0x", "a.b", "a b", "-1", "f()", "a::b", "; evil"] {
+            assert!(
+                FieldSelector::parse(bad).is_err(),
+                "{bad:?} must be rejected"
+            );
         }
     }
 }

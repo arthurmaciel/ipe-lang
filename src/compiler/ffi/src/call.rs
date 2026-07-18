@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 
 use crate::diag::{CallDefect, Diagnostic, WireDefect};
-use crate::naming::arg_name;
+use crate::naming::{RustIdent, RustPathSegment, RustTypeExpr, arg_name};
 use crate::num_coerce::{num_carrier, num_saturate};
 use crate::typeref::{ArgTypeRef, ClosureKind, InnerTypeRef, WireTypeRef};
 
@@ -104,9 +104,9 @@ struct WireReceiver {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Call {
     kind: CallKind,
-    path: Vec<String>,
+    path: Vec<RustPathSegment>,
     type_args: Vec<InnerTypeRef>,
-    method: Option<String>,
+    method: Option<RustIdent>,
     receiver: Option<Receiver>,
     args: Vec<usize>,
     arg_types: Vec<ArgTypeRef>,
@@ -114,7 +114,7 @@ pub struct Call {
     assoc_on_type: bool,
     iter_adapters: Vec<usize>,
     borrow_as_ref_args: Vec<usize>,
-    trait_qualifier: Option<(String, String)>,
+    trait_qualifier: Option<(RustTypeExpr, RustTypeExpr)>,
     is_async: bool,
     method_turbofish: Vec<InnerTypeRef>,
 }
@@ -188,11 +188,34 @@ impl Call {
             .collect::<Result<_, _>>()
             .map_err(unrenderable)?;
 
+        // Every path segment / method / trait-qualifier renders VERBATIM into
+        // the wrapper body, so each is parsed into a validated newtype at
+        // decode — an injection-bearing segment drops the binding (over-drop)
+        // rather than reaching emission.
+        let path: Vec<RustPathSegment> = w
+            .path
+            .iter()
+            .map(|seg| RustPathSegment::parse(seg))
+            .collect::<Result<_, _>>()
+            .map_err(wire_malformed)?;
+        let method = match &w.method {
+            None => None,
+            Some(m) => Some(RustIdent::parse(m).map_err(wire_malformed)?),
+        };
+        let trait_qualifier = match &w.trait_qualifier {
+            None => None,
+            Some((self_path, trait_path)) => {
+                let s = RustTypeExpr::parse(self_path).map_err(wire_malformed)?;
+                let t = RustTypeExpr::parse(trait_path).map_err(wire_malformed)?;
+                Some((s, t))
+            }
+        };
+
         let call = Self {
             kind,
-            path: w.path,
+            path,
             type_args,
-            method: w.method,
+            method,
             receiver,
             args: w.args,
             arg_types,
@@ -200,7 +223,7 @@ impl Call {
             assoc_on_type: w.assoc_on_type,
             iter_adapters: w.iter_adapters,
             borrow_as_ref_args: w.borrow_as_ref_args,
-            trait_qualifier: w.trait_qualifier,
+            trait_qualifier,
             is_async: w.is_async,
             method_turbofish,
         };
@@ -272,7 +295,8 @@ impl Call {
             CallKind::Function => "function",
         };
         o.insert("kind".into(), kind.into());
-        o.insert("path".into(), serde_json::json!(self.path));
+        let path: Vec<&str> = self.path.iter().map(RustPathSegment::as_str).collect();
+        o.insert("path".into(), serde_json::json!(path));
         if !self.type_args.is_empty() {
             let ts: Vec<serde_json::Value> = self
                 .type_args
@@ -282,7 +306,7 @@ impl Call {
             o.insert("typeArgs".into(), ts.into());
         }
         if let Some(m) = &self.method {
-            o.insert("method".into(), m.clone().into());
+            o.insert("method".into(), m.as_str().into());
         }
         if let Some(r) = self.receiver {
             let by = match r.by {
@@ -320,7 +344,10 @@ impl Call {
             );
         }
         if let Some((s, t)) = &self.trait_qualifier {
-            o.insert("traitQualifier".into(), serde_json::json!([s, t]));
+            o.insert(
+                "traitQualifier".into(),
+                serde_json::json!([s.as_str(), t.as_str()]),
+            );
         }
         if self.is_async {
             o.insert("isAsync".into(), true.into());
@@ -403,7 +430,12 @@ impl Call {
     /// generic param names, positional with `Param` indices.
     #[must_use]
     pub fn render_body(&self, params: &[String]) -> String {
-        let path_str = self.path.join("::");
+        let path_str = self
+            .path
+            .iter()
+            .map(RustPathSegment::as_str)
+            .collect::<Vec<_>>()
+            .join("::");
         let render_list = |trs: &[InnerTypeRef]| -> String {
             let rendered: Vec<String> = trs.iter().map(|t| t.render(params)).collect();
             rendered.join(", ")
@@ -443,18 +475,27 @@ impl Call {
             // typed value-arg; the serde-driven method turbofish still fires
             // (without it Rust cannot infer the reduced `T`).
             (Some((self_path, trait_path)), m) => {
-                let m = m.as_deref().unwrap_or("");
-                format!("<{self_path} as {trait_path}>::{m}{method_turbofish}")
+                let m = m.as_ref().map_or("", RustIdent::as_str);
+                format!(
+                    "<{} as {}>::{m}{method_turbofish}",
+                    self_path.as_str(),
+                    trait_path.as_str()
+                )
             }
             // An assoc fn / method on a TYPE: the turbofish binds the impl
             // Self type BEFORE the method; the method's own generics go after.
             (None, Some(m)) if self.assoc_on_type => {
-                format!("{path_str}{turbofish}::{m}{explicit_method_turbofish}")
+                format!(
+                    "{path_str}{turbofish}::{}{explicit_method_turbofish}",
+                    m.as_str()
+                )
             }
             // A FREE function in a crate/module: the path turbofish is
             // OMITTED (partial `::<A, B>` is E0107; a turbofish on the crate
             // path is E0109) — Rust infers every type-param from the args.
-            (None, Some(m)) => format!("{path_str}::{m}{explicit_method_turbofish}"),
+            (None, Some(m)) => {
+                format!("{path_str}::{}{explicit_method_turbofish}", m.as_str())
+            }
             (None, None) => format!("{path_str}{turbofish}"),
         };
         let mut all_args: Vec<String> = Vec::with_capacity(self.arity());
@@ -486,8 +527,8 @@ impl Call {
             Some(ArgTypeRef::Inner(InnerTypeRef::SerdeValueRef)) => format!("&sv_{j}"),
             // A concrete numeric param travels as the Ipê carrier; narrow to
             // the foreign width at the call site (identity for i64/f64).
-            Some(ArgTypeRef::Inner(InnerTypeRef::Prim(w))) if num_carrier(w).is_some() => {
-                num_saturate(w, &arg_name(j))
+            Some(ArgTypeRef::Inner(InnerTypeRef::Prim(w))) if num_carrier(w.as_str()).is_some() => {
+                num_saturate(w.as_str(), &arg_name(j))
             }
             _ => {
                 if self.iter_adapters.contains(&j) {
@@ -517,7 +558,7 @@ impl Call {
     pub fn render_arg_type_at(&self, params: &[String], j: usize) -> String {
         match self.arg_types.get(j) {
             Some(ArgTypeRef::Closure { .. }) => format!("F{j}"),
-            Some(ArgTypeRef::Inner(InnerTypeRef::Prim(w))) => num_carrier(w).map_or_else(
+            Some(ArgTypeRef::Inner(InnerTypeRef::Prim(w))) => num_carrier(w.as_str()).map_or_else(
                 || InnerTypeRef::Prim(w.clone()).render(params),
                 str::to_owned,
             ),

@@ -430,7 +430,10 @@ fn compile_modules_observed(
         Ok(c) => c,
         Err(e) => return (Err(e), CacheOutcome::Miss),
     };
-    let ffi_cache_hint = ffi::find_cache_root(blame_path).unwrap_or_default();
+    let ffi_cache_hint = match ffi::find_cache_root(blame_path) {
+        Ok(hint) => hint.unwrap_or_default(),
+        Err(e) => return (Err(e), CacheOutcome::Miss),
+    };
     let ffi_injected = match ffi::inject_interfaces(&mut sources, &ffi_catalog, &ffi_cache_hint) {
         Ok(set) => set,
         Err(e) => return (Err(e), CacheOutcome::Miss),
