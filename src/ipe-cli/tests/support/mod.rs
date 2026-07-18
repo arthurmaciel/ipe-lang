@@ -55,6 +55,38 @@ pub fn golden_dir_of(golden: &Path) -> &Path {
     golden.parent().unwrap_or(golden)
 }
 
+/// Collapse rustfmt's whitespace-driven line-wrap noise out of emitted Rust
+/// source, so a golden substring assertion tracks *token adjacency*, not one
+/// specific line layout.
+///
+/// Once a call, type, or struct literal exceeds rustfmt's line-width limit it
+/// wraps: every run of whitespace becomes a newline + indentation, and a
+/// wrapped call/generic/struct list gets a trailing comma before its closing
+/// `)`/`]`/`}`/`>` that the compact single-line rendering never has. Neither
+/// changes the code's meaning, so both are erased here — every whitespace run
+/// collapses away, and a comma immediately preceding a closing bracket is
+/// dropped. The compact and wrapped renderings of the same code converge on
+/// one identical normalized string, so `contains` on the normalized text
+/// checks the thing that actually matters (this token sequence occurs,
+/// adjacent, in this order) rather than a rustfmt version's specific wrap
+/// point — the stale-substring-assertion class fixed piecemeal for #269,
+/// #191, #193, #195, #175 (`Ipe.Ui.Transition`) before this helper existed.
+#[must_use]
+#[allow(dead_code)] // adopted incrementally as fragile golden substring checks migrate to it
+pub fn normalize_rustfmt_whitespace(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_whitespace() {
+            continue;
+        }
+        if matches!(c, ')' | ']' | '}' | '>') && out.ends_with(',') {
+            out.pop();
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// Assert every byte-comparable golden output under `golden_dir` matches its
 /// counterpart in the emitted project rooted at `emitted_out`, byte-for-byte.
 ///

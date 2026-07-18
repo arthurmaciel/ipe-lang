@@ -103,13 +103,20 @@ fn transition_module_resolves_and_emits_kernel() {
     );
     // `attribute` gates on reduced-motion (respect = true); `attributeUnsafe`
     // opts out (respect = false). Both flags must reach the emit as the
-    // second argument of the helper — proving the flag is threaded, not dropped.
+    // second argument of the helper — proving the flag is threaded, not
+    // dropped. rustfmt wraps each call's args on their own line (adding a
+    // trailing comma the compact `, true)` span never has) once the line
+    // exceeds its width limit, so match on rustfmt-normalized text
+    // (`support::normalize_rustfmt_whitespace`) rather than the raw source —
+    // same stale-substring class as #269/#191/#195.
+    let normalized = support::normalize_rustfmt_whitespace(&emitted);
     assert!(
-        emitted.contains("ui_transition_raw_(") && emitted.contains(", true)"),
+        emitted.contains("ui_transition_raw_(")
+            && normalized.contains(&support::normalize_rustfmt_whitespace(", true)")),
         "the a11y-gated `attribute` must emit `ui_transition_raw_(…, true)`:\n{emitted}"
     );
     assert!(
-        emitted.contains(", false)"),
+        normalized.contains(&support::normalize_rustfmt_whitespace(", false)")),
         "`attributeUnsafe` must emit `ui_transition_raw_(…, false)`:\n{emitted}"
     );
 }

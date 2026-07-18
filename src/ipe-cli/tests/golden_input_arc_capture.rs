@@ -64,18 +64,32 @@ fn i191_skyc_accepts_and_hoists_capture_clone() {
     let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
         .expect("emitted main.rs must exist");
 
+    // Post-emit rustfmt reflows long lines, so the two statements can land on
+    // separate (indented) lines rather than the single-line span skyc first
+    // emits — match on rustfmt-normalized text (`support::
+    // normalize_rustfmt_whitespace`) so the check tracks *token adjacency*,
+    // not a fixed line layout (same stale-substring class as #269), while
+    // still verifying the exact thing #191 requires: order and immediate
+    // adjacency between the clone and the `Arc::new` it precedes.
+    let normalized = support::normalize_rustfmt_whitespace(&emitted);
+
     // The pre-clone must be HOISTED outside the `Arc`'s `move` closure — the
-    // `let habit = habit.clone();` immediately precedes `::std::sync::Arc::new`
-    // (the fix), so the Arc owns the clone and the original survives.
+    // `let habit = habit.clone();` statement immediately precedes
+    // `::std::sync::Arc::new` (the fix), so the Arc owns the clone and the
+    // original survives.
     assert!(
-        emitted.contains("let habit = habit.clone(); ::std::sync::Arc::new"),
+        normalized.contains(&support::normalize_rustfmt_whitespace(
+            "let habit = habit.clone(); ::std::sync::Arc::new"
+        )),
         "the capture-clone must be hoisted OUTSIDE the Arc `move` closure (#191); \
          got main.rs:\n{emitted}"
     );
     // Guard against the unfixed shape: the clone must NOT sit inside the Arc's
     // `move |_x|` body (which would re-move the free outer `habit`).
     assert!(
-        !emitted.contains("Arc::new(move |_x| (({ let habit = habit.clone();"),
+        !normalized.contains(&support::normalize_rustfmt_whitespace(
+            "Arc::new(move |_x| (({ let habit = habit.clone();"
+        )),
         "the capture-clone must NOT sit inside the Arc `move` closure (the #191 \
          use-after-move shape); got main.rs:\n{emitted}"
     );
