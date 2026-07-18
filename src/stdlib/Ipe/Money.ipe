@@ -1,11 +1,12 @@
--- | Ipe.Money — currency-typed Money on `Ipe.Decimal` (compiled pure Sky source).
+-- | Ipe.Money — currency-typed Money on `Ipe.Decimal`.
 --
--- Ported from `../sky/sky-stdlib/Std/Money.sky`.
--- All `Ffi.callPure` calls have been replaced with pure Sky implementations:
--- `minorUnits`, `symbol`, `currencyName`, `isKnownCode`, `format`,
--- `formatWithCode`, and `allocate` are now pure Sky case-expressions /
--- recursions.  The FX rate registry (`setRate`/`getRate`/`hasRate`/
--- `clearRates`) is stubbed — not exercised by `ex00-standard-libs`.
+-- `Money` carries both magnitude and ISO-4217 currency code in one typed
+-- value.  The `Money` / `Currency` ADTs and the pure combinators (arithmetic,
+-- comparison, percent, `currencyCode`, `parseCurrency`) live here as Ipê
+-- source; the currency-property table, formatter, fair-split `allocate`, and
+-- FX rate registry route through the guarded `Money_*` runtime kernels via
+-- point-free `Ffi.kernel` aliases (each wrapper converts its `Currency` arg to
+-- an ISO 4217 code first, since the kernels take the code as a `String`).
 module Ipe.Money exposing
     ( Money(..), Currency(..)
     , fromMinor, fromMajor, fromString
@@ -23,8 +24,9 @@ module Ipe.Money exposing
     )
 
 import Ipe.Prelude exposing (..)
+import Ipe.Ffi as Ffi
 import Ipe.List as List
-import Ipe.Error as Error
+import Ipe.Error exposing (Error)
 import Ipe.Decimal as Dec exposing (Decimal)
 
 
@@ -159,153 +161,41 @@ currencyCode c =
         CurrencyRaw s -> s
 
 
--- ─── Currency property lookups ────────────────────────────────────
+-- ─── Currency property lookups (kernel-backed) ────────────────────
+--
+-- The runtime `money.rs` table is the single source of truth for minor
+-- units / symbol / name (JPY=0dp, USD=2dp, BHD=3dp, BTC=8dp; unknown → 2dp,
+-- code-as-symbol). Each wrapper converts its `Currency` to the ISO 4217 code
+-- before the `String`-taking kernel.
+
+minorUnitsForCode : String -> Int
+minorUnitsForCode = Ffi.kernel "Money_minorUnits"
+
+
+symbolForCode : String -> String
+symbolForCode = Ffi.kernel "Money_symbol"
+
+
+nameForCode : String -> String
+nameForCode = Ffi.kernel "Money_currencyName"
+
 
 -- | Number of decimal places for the currency's minor unit.
--- JPY/KRW/VND/CLP/IDR = 0; BHD/KWD/OMR/JOD = 3; all others = 2.
 minorUnits : Currency -> Int
 minorUnits c =
-    case c of
-        JPY -> 0
-        KRW -> 0
-        VND -> 0
-        CLP -> 0
-        IDR -> 0
-        BHD -> 3
-        KWD -> 3
-        OMR -> 3
-        JOD -> 3
-        _ -> 2
+    minorUnitsForCode (currencyCode c)
 
 
--- | Common currency symbols.
+-- | Common currency symbol.
 symbol : Currency -> String
 symbol c =
-    case c of
-        USD -> "$"
-        EUR -> "€"
-        GBP -> "£"
-        JPY -> "¥"
-        CHF -> "Fr"
-        AUD -> "A$"
-        CAD -> "C$"
-        NZD -> "NZ$"
-        SEK -> "kr"
-        NOK -> "kr"
-        DKK -> "kr"
-        CNY -> "¥"
-        HKD -> "HK$"
-        SGD -> "S$"
-        KRW -> "₩"
-        TWD -> "NT$"
-        INR -> "₹"
-        THB -> "฿"
-        MYR -> "RM"
-        IDR -> "Rp"
-        PHP -> "₱"
-        VND -> "₫"
-        BRL -> "R$"
-        MXN -> "MX$"
-        ARS -> "$"
-        CLP -> "$"
-        ZAR -> "R"
-        TRY -> "₺"
-        RUB -> "₽"
-        UAH -> "₴"
-        PLN -> "zł"
-        CZK -> "Kč"
-        HUF -> "Ft"
-        RON -> "lei"
-        BGN -> "лв"
-        AED -> "د.إ"
-        SAR -> "﷼"
-        QAR -> "﷼"
-        KWD -> "د.ك"
-        BHD -> ".د.ب"
-        OMR -> "﷼"
-        JOD -> "JD"
-        ILS -> "₪"
-        EGP -> "£"
-        NGN -> "₦"
-        KES -> "KSh"
-        GHS -> "₵"
-        MAD -> "MAD"
-        TND -> "د.ت"
-        DZD -> "دج"
-        PKR -> "₨"
-        BDT -> "৳"
-        LKR -> "₨"
-        NPR -> "₨"
-        BTC -> "₿"
-        ETH -> "Ξ"
-        USDT -> "₮"
-        USDC -> "USDC"
-        CurrencyRaw s -> s
+    symbolForCode (currencyCode c)
 
 
 -- | Human-readable currency name.
 currencyName : Currency -> String
 currencyName c =
-    case c of
-        USD -> "US Dollar"
-        EUR -> "Euro"
-        GBP -> "British Pound"
-        JPY -> "Japanese Yen"
-        CHF -> "Swiss Franc"
-        AUD -> "Australian Dollar"
-        CAD -> "Canadian Dollar"
-        NZD -> "New Zealand Dollar"
-        SEK -> "Swedish Krona"
-        NOK -> "Norwegian Krone"
-        DKK -> "Danish Krone"
-        CNY -> "Chinese Yuan"
-        HKD -> "Hong Kong Dollar"
-        SGD -> "Singapore Dollar"
-        KRW -> "South Korean Won"
-        TWD -> "New Taiwan Dollar"
-        INR -> "Indian Rupee"
-        THB -> "Thai Baht"
-        MYR -> "Malaysian Ringgit"
-        IDR -> "Indonesian Rupiah"
-        PHP -> "Philippine Peso"
-        VND -> "Vietnamese Dong"
-        BRL -> "Brazilian Real"
-        MXN -> "Mexican Peso"
-        ARS -> "Argentine Peso"
-        CLP -> "Chilean Peso"
-        ZAR -> "South African Rand"
-        TRY -> "Turkish Lira"
-        RUB -> "Russian Ruble"
-        UAH -> "Ukrainian Hryvnia"
-        PLN -> "Polish Zloty"
-        CZK -> "Czech Koruna"
-        HUF -> "Hungarian Forint"
-        RON -> "Romanian Leu"
-        BGN -> "Bulgarian Lev"
-        AED -> "UAE Dirham"
-        SAR -> "Saudi Riyal"
-        QAR -> "Qatari Riyal"
-        KWD -> "Kuwaiti Dinar"
-        BHD -> "Bahraini Dinar"
-        OMR -> "Omani Rial"
-        JOD -> "Jordanian Dinar"
-        ILS -> "Israeli New Shekel"
-        EGP -> "Egyptian Pound"
-        NGN -> "Nigerian Naira"
-        KES -> "Kenyan Shilling"
-        GHS -> "Ghanaian Cedi"
-        MAD -> "Moroccan Dirham"
-        TND -> "Tunisian Dinar"
-        DZD -> "Algerian Dinar"
-        PKR -> "Pakistani Rupee"
-        BDT -> "Bangladeshi Taka"
-        LKR -> "Sri Lankan Rupee"
-        NPR -> "Nepalese Rupee"
-        BTC -> "Bitcoin"
-        ETH -> "Ethereum"
-        USDT -> "Tether"
-        USDC -> "USD Coin"
-        CurrencyRaw s -> s
+    nameForCode (currencyCode c)
 
 
 -- | True for every named Currency variant (USD, JPY, BTC, …).
@@ -320,10 +210,15 @@ knownCurrency c =
             True
 
 
--- | Check whether an ISO 4217 code string maps to a named Currency variant.
+isKnownCurrencyForCode : String -> Bool
+isKnownCurrencyForCode = Ffi.kernel "Money_isKnownCurrency"
+
+
+-- | Check whether an ISO 4217 code string is a recognised currency, via the
+-- runtime currency table (the single source of truth for known codes).
 isKnownCode : String -> Bool
 isKnownCode code =
-    knownCurrency (parseCurrency code)
+    isKnownCurrencyForCode code
 
 
 parseCurrency : String -> Currency
@@ -430,46 +325,28 @@ abs m =
     Money (Dec.abs (amount m)) (currency m)
 
 
--- | Allocate a Money value across N parts as evenly as possible,
--- with any remainder distributed 1 cent at a time to the front.
--- The sum of returned parts equals the input exactly.
--- Returns [] when parts <= 0 (no parts to allocate).
+allocateDecimals : Int -> Int -> Decimal -> List Decimal
+allocateDecimals = Ffi.kernel "Money_allocate"
+
+
+-- | Allocate a Money value across N parts as evenly as possible, with any
+-- residue distributed toward zero (positive totals step up, negative totals
+-- step down) so the returned parts sum to the input exactly.
+--
+-- Returns [] when parts <= 0, and (via the kernel's guard) when parts exceeds
+-- 100k or the amount overflows — the cap prevents a caller-controlled `parts`
+-- from exhausting memory / the call stack.
 --
 --   allocate 3 ($100.00)  -> [$33.34, $33.33, $33.33]
 --   allocate 3 (-$1.00)   -> [-$0.34, -$0.33, -$0.33]
 --   allocate 0 ($100.00)  -> []
 allocate : Int -> Money -> List Money
 allocate parts m =
-    if parts <= 0 then
-        []
-    else
-        let
-            c = currency m
-            dp = minorUnits c
-            totalMinor = Dec.toMinor dp (amount m)
-            base = totalMinor // parts
-            remainder = totalMinor - base * parts
-        in
-        List.reverse (allocateHelp c parts base remainder [])
-
-
--- Distributes the residue toward zero, one cent per slot, matching the
--- sign of the remainder so negative totals step down and positive totals
--- step up.
-allocateHelp : Currency -> Int -> Int -> Int -> List Money -> List Money
-allocateHelp c remaining base remainder acc =
-    if remaining <= 0 then
-        acc
-    else
-        let
-            step = if remainder < 0 then -1 else 1
-            piece = if remainder /= 0 then base + step else base
-            newRem =
-                if remainder > 0 then remainder - 1
-                else if remainder < 0 then remainder + 1
-                else 0
-        in
-        allocateHelp c (remaining - 1) base newRem (fromMinor c piece :: acc)
+    let
+        c = currency m
+        decimals = allocateDecimals (minorUnits c) parts (amount m)
+    in
+    List.map (\d -> Money d c) decimals
 
 
 -- WARNING: same-currency only. `sumOf` uses `add` internally; entries whose
@@ -571,16 +448,27 @@ subPercent pct m =
 
 -- ─── Formatting + minor extraction ────────────────────────────────
 
--- | Default symbol-prefixed form: "$12.34", "¥1234" (JPY).
+formatForCode : String -> Decimal -> String
+formatForCode = Ffi.kernel "Money_format"
+
+
+formatWithCodeForCode : String -> Decimal -> String
+formatWithCodeForCode = Ffi.kernel "Money_formatWithCode"
+
+
+-- | Default symbol-prefixed form: "$12.34", "¥1234" (JPY). The amount is
+-- rounded half-away-from-zero to the currency's minor units (so "$2.545"
+-- renders "$2.55", not the truncated "$2.54").
 format : Money -> String
 format m =
-    symbol (currency m) ++ Dec.toStringFixed (minorUnits (currency m)) (amount m)
+    formatForCode (currencyCode (currency m)) (amount m)
 
 
--- | ISO-code suffix form: "12.34 USD". Preferred for B2B.
+-- | ISO-code suffix form: "12.34 USD". Preferred for B2B. Same
+-- half-away-from-zero rounding as `format`.
 formatWithCode : Money -> String
 formatWithCode m =
-    Dec.toStringFixed (minorUnits (currency m)) (amount m) ++ " " ++ currencyCode (currency m)
+    formatWithCodeForCode (currencyCode (currency m)) (amount m)
 
 
 -- | Integer-cents representation, for DB persistence.
@@ -589,26 +477,45 @@ toMinor m =
     Dec.toMinor (minorUnits (currency m)) (amount m)
 
 
--- ─── FX rate registry (stubs — runtime registry not available in pure-Sky port) ─
+-- ─── FX rate registry (kernel-backed, process-global) ─────────────
+--
+-- The registry is a process-local mutex-guarded table (positive-only rates,
+-- auto-registered inverse, bounded to prevent unbounded growth). Multi-
+-- instance deployments need a shared source for consistency.
 
+setRateForCodes : String -> String -> Decimal -> Result Error ()
+setRateForCodes = Ffi.kernel "Money_setRate"
+
+
+getRateForCodes : String -> String -> Result Error Decimal
+getRateForCodes = Ffi.kernel "Money_getRate"
+
+
+hasRateForCodes : String -> String -> Bool
+hasRateForCodes = Ffi.kernel "Money_hasRate"
+
+
+-- | Register an FX rate. Rejects a non-positive rate; auto-registers the
+-- inverse so consumers need not set both directions.
 setRate : Currency -> Currency -> Decimal -> Result Error ()
-setRate _ _ _ =
-    Err (Error.unexpected "Money.setRate: FX registry not available in this build")
+setRate from to rate =
+    setRateForCodes (currencyCode from) (currencyCode to) rate
 
 
+-- | Look up a registered rate (identity for from == to; missing → Err).
 getRate : Currency -> Currency -> Result Error Decimal
-getRate _ _ =
-    Err (Error.unexpected "Money.getRate: FX registry not available in this build")
+getRate from to =
+    getRateForCodes (currencyCode from) (currencyCode to)
 
 
 hasRate : Currency -> Currency -> Bool
-hasRate _ _ =
-    False
+hasRate from to =
+    hasRateForCodes (currencyCode from) (currencyCode to)
 
 
+-- | Drop every registered rate (test / admin).
 clearRates : () -> Result Error ()
-clearRates _ =
-    Err (Error.unexpected "Money.clearRates: FX registry not available in this build")
+clearRates = Ffi.kernel "Money_clearRates"
 
 
 -- | Convert Money to a target currency using the registered rate.
