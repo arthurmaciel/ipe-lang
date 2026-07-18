@@ -839,6 +839,22 @@ tokio::task_local! {
     static WS_RESPONSE: std::cell::Cell<Option<axum::response::Response>>;
 }
 
+/// Resolve the configured per-message byte cap, mirroring Go's `SetReadLimit`:
+/// treat 0/negative as "unset" and apply the 1 MiB default
+/// (`wsDefaultMaxMessageBytes = 1 << 20` in `runtime-go/rt/websocket.go`).
+/// `try_from` avoids a wrapping/truncating cast on a caller-controlled `i64`.
+/// Shared by `server_web_socket_upgrade` (framing-layer enforcement, applied
+/// to the `WebSocketUpgrade` builder before the frame is even buffered) and
+/// `ws_loop` (application-layer defense in depth on the already-decoded
+/// message).
+fn ws_max_message_bytes(max_message_bytes: i64) -> usize {
+    if max_message_bytes > 0 {
+        usize::try_from(max_message_bytes).unwrap_or(1 << 20)
+    } else {
+        1 << 20 // 1 MiB
+    }
+}
+
 async fn ws_loop<E: From<String> + Send + 'static>(
     mut socket: axum::extract::ws::WebSocket,
     cfg: WsServerCfg<E>,
@@ -846,17 +862,13 @@ async fn ws_loop<E: From<String> + Send + 'static>(
 ) {
     use axum::extract::ws::Message;
     use std::time::Duration;
-    // Mirror Go's SetReadLimit: treat 0/negative as "unset" → apply the 1 MiB
-    // default (wsDefaultMaxMessageBytes = 1 << 20 in runtime-go/rt/websocket.go).
-    // Use try_from to avoid a wrapping/truncating cast on a caller-controlled i64.
-    let max_bytes: usize = if cfg.maxMessageBytes > 0 {
-        usize::try_from(cfg.maxMessageBytes).unwrap_or(1 << 20)
-    } else {
-        1 << 20 // 1 MiB
-    };
-    // axum 0.7 does not expose WebSocketUpgrade::max_message_size() / max_frame_size()
-    // builder methods (those landed in axum 0.8+). The in-loop size checks below
-    // (Text/Binary arms) are the framing-layer enforcement for this version.
+    let max_bytes: usize = ws_max_message_bytes(cfg.maxMessageBytes);
+    // Framing-layer enforcement lives on the `WebSocketUpgrade` builder, applied
+    // at upgrade time in `server_web_socket_upgrade` (`.max_message_size()` /
+    // `.max_frame_size()` — axum 0.7.9 exposes both). A frame over the cap is
+    // rejected by tokio-tungstenite before it reaches this loop. The Text/Binary
+    // size checks below are application-layer defense in depth (belt-and-braces
+    // against a future axum/tungstenite version silently dropping the cap).
     let (tx, mut rx) = tokio::sync::mpsc::channel::<WsOut>(ws_send_buffer());
     ws_registry()
         .lock()
@@ -1068,6 +1080,11 @@ pub fn server_web_socket_upgrade<E: From<String> + Send + 'static>(
         match upgrader {
             Some(up) => {
                 let id = WS_NEXT_ID.fetch_add(1, Ordering::Relaxed);
+                // Enforce the cap at the framing layer: tokio-tungstenite rejects
+                // an over-cap frame/message before it is ever fully buffered, so
+                // the limit holds even before `ws_loop`'s in-loop check runs.
+                let max_bytes = ws_max_message_bytes(cfg.maxMessageBytes);
+                let up = up.max_message_size(max_bytes).max_frame_size(max_bytes);
                 let resp = up.on_upgrade(move |socket| ws_loop(socket, cfg, id));
                 let _ = WS_RESPONSE.try_with(|c| c.set(Some(resp)));
                 // Sentinel — method_router returns WS_RESPONSE instead of this.
@@ -1319,6 +1336,17 @@ mod ws_adapter_tests {
         // 0 → ws_loop applies the 1 MiB default; NOT a hard limit of 0.
         let cfg = ws_server_default_cfg::<String>();
         assert_eq!(cfg.maxMessageBytes, 0);
+    }
+
+    #[test]
+    fn ws_max_message_bytes_zero_or_negative_is_1mib_default() {
+        assert_eq!(ws_max_message_bytes(0), 1 << 20);
+        assert_eq!(ws_max_message_bytes(-1), 1 << 20);
+    }
+
+    #[test]
+    fn ws_max_message_bytes_positive_passes_through() {
+        assert_eq!(ws_max_message_bytes(4096), 4096);
     }
 
     #[test]
