@@ -333,6 +333,11 @@ pub struct ArtifactPaths {
     /// The consumer manifest (`<slug>.consumer.json`) — module/kernel names,
     /// opaque-type paths, pinned Cargo dep lines, and the included bindings.
     pub consumer: PathBuf,
+    /// The validated inspection document (`<slug>.pkg.json`) — the raw
+    /// inspector wire JSON that decoded through the [`PkgInfo`] gate. The
+    /// TRUSTED source `load_catalog` re-derives `_bindings.rs` from: the
+    /// stored `_bindings.rs` text is never trusted, only regenerated.
+    pub pkg_json: PathBuf,
 }
 
 /// The project-local FFI artifact cache (`<project>/.ipe/cache/ffi/rust`).
@@ -366,15 +371,24 @@ impl FfiCache {
             coverage: self.root.join(format!("{slug}.coverage.md")),
             interface: self.root.join(format!("{slug}.ipe")),
             consumer: self.root.join(format!("{slug}.consumer.json")),
+            pkg_json: self.root.join(format!("{slug}.pkg.json")),
         }
     }
 
-    /// Emit and write all four artifacts for a validated package.
+    /// Emit and write all artifacts for a validated package. `inspection_json`
+    /// is the raw inspector wire text that decoded into `pkg`; it is persisted
+    /// as `<slug>.pkg.json` so a warm build can RE-DERIVE `_bindings.rs` from
+    /// it through the validated decode gate rather than trusting the stored
+    /// `_bindings.rs` text.
     ///
     /// # Errors
     ///
     /// `IPE-F4412` naming the first path that could not be written.
-    pub fn write_package(&self, pkg: &PkgInfo) -> Result<ArtifactPaths, Diagnostic> {
+    pub fn write_package(
+        &self,
+        pkg: &PkgInfo,
+        inspection_json: &str,
+    ) -> Result<ArtifactPaths, Diagnostic> {
         let io_err = |path: &Path, e: &std::io::Error| Diagnostic::ArtifactIo {
             path: path.to_string_lossy().into_owned(),
             detail: e.to_string(),
@@ -383,13 +397,14 @@ impl FfiCache {
         let paths = self.artifact_paths(&slugify(pkg.name()));
         let iface = crate::interface::crate_interface(pkg);
         let consumer_json = emit_consumer_json(pkg, &iface)?;
-        let writes: [(&Path, String); 6] = [
+        let writes: [(&Path, String); 7] = [
             (&paths.ipei, crate::emit::emit_ipei(pkg)),
             (&paths.kernel_json, crate::emit::emit_kernel_json(pkg)),
             (&paths.bindings, crate::bindings::emit_bindings(pkg)),
             (&paths.coverage, emit_coverage(pkg)),
             (&paths.interface, iface.source),
             (&paths.consumer, consumer_json),
+            (&paths.pkg_json, inspection_json.to_owned()),
         ];
         for (path, contents) in &writes {
             std::fs::write(path, contents).map_err(|e| io_err(path, &e))?;
@@ -412,6 +427,7 @@ impl FfiCache {
             &paths.coverage,
             &paths.interface,
             &paths.consumer,
+            &paths.pkg_json,
         ] {
             match std::fs::remove_file(path) {
                 Ok(()) => {}
@@ -451,7 +467,7 @@ pub fn install_from_inspection(
             },
         });
     }
-    let paths = cache.write_package(&pkg)?;
+    let paths = cache.write_package(&pkg, inspection_json)?;
     Ok((pkg, paths))
 }
 
@@ -516,15 +532,22 @@ pub struct InstalledCrate {
 /// Load every installed crate from a project's FFI artifact cache.
 ///
 /// An absent cache directory is an empty catalog (a project with no FFI).
-/// Each crate is validated on load: every wrapper identifier the interface
-/// module forwards to must exist as a `pub fn` in the stored bindings source
-/// — a tampered or half-written cache is refused here, before it can produce
-/// an `ipe`-exit-0 build whose emitted Rust dangles (THE SEAL).
+///
+/// The `_bindings.rs` file on disk is NEVER trusted as text: its
+/// `bindings_source` is RE-DERIVED by decoding the stored `<slug>.pkg.json`
+/// inspection document through the validated [`PkgInfo`] gate and re-running
+/// [`crate::bindings::emit_bindings`]. A hand-edited or planted `_bindings.rs`
+/// is therefore inert — an injected wrapper body cannot survive, because the
+/// emit derives only from decode-validated newtypes (no raw type/path/selector
+/// string reaches the rendered code). A tampered `pkg.json` re-runs the full
+/// decode gate, so it can only ever produce injection-free wrappers or fail
+/// closed.
 ///
 /// # Errors
 ///
 /// `IPE-F4412` for an unreadable artifact; a wire-defect diagnostic for a
-/// malformed consumer manifest or a missing wrapper.
+/// malformed consumer manifest, a malformed inspection document, or a missing
+/// wrapper.
 pub fn load_catalog(cache_root: &Path) -> Result<Vec<InstalledCrate>, Diagnostic> {
     if !cache_root.is_dir() {
         return Ok(Vec::new());
@@ -554,7 +577,11 @@ pub fn load_catalog(cache_root: &Path) -> Result<Vec<InstalledCrate>, Diagnostic
         };
         let consumer_text = read(&paths.consumer)?;
         let interface_source = read(&paths.interface)?;
-        let bindings_source = read(&paths.bindings)?;
+        // RE-DERIVE the wrappers from the validated inspection document — the
+        // on-disk `_bindings.rs` is never trusted as text (door (a) close).
+        let pkg_text = read(&paths.pkg_json)?;
+        let pkg = PkgInfo::decode_json(&pkg_text)?;
+        let bindings_source = crate::bindings::emit_bindings(&pkg);
         let malformed = |detail: String| Diagnostic::WireMalformed {
             context: format!("consumer manifest `{}`", paths.consumer.display()),
             defect: crate::diag::WireDefect::Json { detail },
@@ -903,39 +930,40 @@ mod tests {
 
     // ── cache + artifacts ───────────────────────────────────────────────
 
+    fn semver_json() -> String {
+        json!({
+            "pkg": "semver",
+            "name": "semver",
+            "version": "1.0.26",
+            "functions": [
+                {
+                    "name": "parse",
+                    "params": [{"name": "text", "type": "String", "ipeType": "String", "rustType": "&str"}],
+                    "results": [{"name": "", "type": "Result Error Version", "rustType": "Result<Version, Error>"}],
+                    "effect": "fallible"
+                },
+                {
+                    "name": "confused",
+                    "effect": "pure",
+                    "isField": true,
+                    "isEnumCtor": true,
+                    "enumVariant": "V",
+                    "enumKind": "unit"
+                }
+            ],
+            "errors": [],
+            "notes": ["facade guidance"],
+            "transitiveDeps": [
+                {"ident": "semver", "name": "semver", "version": "1.0.26"},
+                {"ident": "serde_json", "name": "serde-json", "version": "1.0.145"}
+            ],
+            "features": ["std"]
+        })
+        .to_string()
+    }
+
     fn semver_pkg() -> PkgInfo {
-        PkgInfo::decode_json(
-            &json!({
-                "pkg": "semver",
-                "name": "semver",
-                "version": "1.0.26",
-                "functions": [
-                    {
-                        "name": "parse",
-                        "params": [{"name": "text", "type": "String", "ipeType": "String", "rustType": "&str"}],
-                        "results": [{"name": "", "type": "Result Error Version", "rustType": "Result<Version, Error>"}],
-                        "effect": "fallible"
-                    },
-                    {
-                        "name": "confused",
-                        "effect": "pure",
-                        "isField": true,
-                        "isEnumCtor": true,
-                        "enumVariant": "V",
-                        "enumKind": "unit"
-                    }
-                ],
-                "errors": [],
-                "notes": ["facade guidance"],
-                "transitiveDeps": [
-                    {"ident": "semver", "name": "semver", "version": "1.0.26"},
-                    {"ident": "serde_json", "name": "serde-json", "version": "1.0.145"}
-                ],
-                "features": ["std"]
-            })
-            .to_string(),
-        )
-        .expect("decodes")
+        PkgInfo::decode_json(&semver_json()).expect("decodes")
     }
 
     #[test]
@@ -943,7 +971,7 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("ipe-ffi-cache-test-{}", std::process::id()));
         let cache = FfiCache::at_project_root(&tmp);
         let pkg = semver_pkg();
-        let paths = cache.write_package(&pkg).expect("writes");
+        let paths = cache.write_package(&pkg, &semver_json()).expect("writes");
         for p in [
             &paths.ipei,
             &paths.kernel_json,
@@ -982,6 +1010,83 @@ mod tests {
         assert!(
             !cache.root().exists(),
             "a refused install must write nothing"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn load_catalog_ignores_a_planted_bindings_file_and_re_derives() {
+        let tmp = std::env::temp_dir().join(format!("ipe-ffi-plant-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let cache = FfiCache::at_project_root(&tmp);
+        let (_pkg, paths) =
+            install_from_inspection(&cache, &semver_json()).expect("installs");
+        // Plant an injected wrapper body into the stored _bindings.rs (door (a)
+        // — a hand-edited cache file). It reaches a REACHED wrapper region.
+        let planted = std::fs::read_to_string(&paths.bindings)
+            .expect("readable")
+            .replace(
+                "pub fn semver_parse",
+                "pub fn pwned(){ std::process::Command::new(\"sh\"); } pub fn semver_parse",
+            );
+        std::fs::write(&paths.bindings, &planted).expect("plant");
+        // load_catalog re-derives from pkg.json, so the planted text is inert.
+        let catalog = load_catalog(cache.root()).expect("loads");
+        let c = catalog.first().expect("one crate");
+        assert!(
+            !c.bindings_source.contains("pwned"),
+            "the planted injection must NOT survive re-derivation:\n{}",
+            c.bindings_source
+        );
+        assert!(
+            c.bindings_source.contains("pub fn semver_parse"),
+            "the real wrapper is re-derived"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn load_catalog_rejects_an_injection_bearing_planted_pkg_json() {
+        let tmp = std::env::temp_dir().join(format!("ipe-ffi-badpkg-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let cache = FfiCache::at_project_root(&tmp);
+        let (_pkg, paths) =
+            install_from_inspection(&cache, &semver_json()).expect("installs");
+        // Overwrite pkg.json with an inspection doc carrying an injection in a
+        // rustType — the re-decode must fail closed (the whole crate refuses,
+        // never emits the injection).
+        let evil = json!({
+            "pkg": "semver",
+            "name": "semver",
+            "version": "1.0.26",
+            "functions": [{
+                "name": "parse",
+                "params": [{"name": "text", "type": "String", "rustType": "&str; std::process::exit(1)"}],
+                "results": [{"name": "", "type": "u64"}],
+                "effect": "pure"
+            }],
+            "errors": []
+        })
+        .to_string();
+        std::fs::write(&paths.pkg_json, &evil).expect("plant pkg.json");
+        // Two guarantees hold regardless of which artifacts an attacker
+        // controls: (1) if the load succeeds, the injection never reaches the
+        // re-derived bindings (the rustType drops its binding at decode); (2)
+        // if the consumer manifest still forwards to the now-missing wrapper,
+        // the cross-check fails the load closed. Either way the injection is
+        // never emitted — assert the injection text is absent from any emitted
+        // bindings and that the outcome is one of the two safe shapes.
+        let loaded = load_catalog(cache.root());
+        let injection_absent = match &loaded {
+            Ok(catalog) => catalog
+                .iter()
+                .all(|c| !c.bindings_source.contains("std::process::exit")),
+            Err(Diagnostic::WireMalformed { .. }) => true,
+            Err(_) => false,
+        };
+        assert!(
+            injection_absent,
+            "an injection-bearing pkg.json must never emit the injection: {loaded:?}"
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }
