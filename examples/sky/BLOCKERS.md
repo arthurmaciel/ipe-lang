@@ -66,43 +66,105 @@ lane.
 ## Sky→Ipê language divergences (a mirrored example needs a BEHAVIOURAL change to build)
 
 These are NOT syntactic patches — the mirrored upstream source is faithful and
-the Ipê compiler rejects a shape Sky accepted. Per §0 they are FILED gaps, not
-patched. The affected examples show `ipe-fail` in the mirror sweep (honestly),
-not a doctored green.
+the Ipê compiler rejected a shape Sky accepted. Four are now ROOT-CAUSE FIXED
+(D1, D2); the rest stay FILED (§0) with the exact blocker.
 
-### D1. `Css.zero` (and the other zero-arg `Css.*` keyword constants)
-Upstream Sky writes `margin zero`; Ipê requires `Css.zero ()` (CLAUDE.md Active
-Limitation #9). The mirrored 09-live-counter / 26-ui-showcase /
-31-webview-stopwatch-ui hit `IPE-T0001: expected Ipe.Css.Length, found () ->
-Ipe.Css.Length`. NOTE the pinned Go oracle (`sky` v0.16.29) ALSO rejects this
-against the v0.17.9 sources (`Foreign 'Std.Css.zero': () -> Length vs Length`),
-so it is a v0.16↔v0.17 stdlib-shape skew, not an Ipê-only gap — the fix is to
-teach the emitter/stdlib to accept the bare zero-arg form (matching v0.17 Sky),
-tracked as a completeness gap.
+### D1. `Css.zero` / `auto` / `none` / `systemFont` — bare zero-arg keyword constants — FIXED
+Upstream v0.17.9 declares these as BARE values (`zero : Length`, `none : String`)
+and writes `margin zero`; the Ipê stdlib had shipped them as unit-arg
+(`zero : () -> Length`), so `margin zero` hit `IPE-T0001: expected
+Ipe.Css.Length, found () -> Ipe.Css.Length`.
+**Root cause + fix:** the stdlib SHAPE was wrong, not the compiler. `src/stdlib/Ipe/Css.ipe`
+`zero`/`auto`/`none`/`systemFont` are now bare values matching v0.17 Sky (`monoFont`
+stays `() -> String`, matching upstream). The four first-party examples that used the
+old `(zero ())` call form (`examples/{09,10,12}-*`, `examples/16-skychess`) were
+migrated to the bare form. CLAUDE.md Active Limitation #9 dropped.
+**SEAL:** mirrored 09/10/12 → `ipe build` exit 0 → emitted `cargo build` exit 0.
 
-### D2. Value binding shares a name with a type alias
-06-json defines `type alias Profile` AND a function `Profile name age active`
-(a record-constructor helper). Sky allows the shadow; Ipê rejects it
-(`IPE-N0010: value defined more than once`). A completeness/parity gap to close
-in name resolution.
+### D2. Value binding shares a name with a record-alias auto-ctor — FIXED
+06-json declares `type alias Profile = { … }` AND an explicit
+`Profile name age active = { … }` record-constructor helper. Ipê synthesised the
+record-alias auto-ctor unconditionally, seeded its name into `seen_values`, then
+rejected the user's explicit binding as `IPE-N0010: value defined more than once`.
+**Root cause + fix:** the explicit user binding IS the constructor — it must
+SUPPRESS synthesis, exactly as the upstream Rust emitter's `existingNames` guard
+(`Sky.Generate.Rust.Builder.ModuleEmitter`, `synCtor … if Set.member ctorName
+existingNames then []`). `synthesize_record_alias_ctors`
+(`src/compiler/canon/src/resolve.rs`) now declines synthesis when a top-level
+value of the same name exists. Test updated:
+`explicit_binding_suppresses_record_alias_ctor_synthesis`.
+**SEAL:** mirrored 06-json → `ipe build` exit 0 → `cargo build` exit 0 → runs,
+emits correct JSON incl. the decoded `Profile` record.
 
-### D3. Other v0.17.9 parity gaps surfaced by the mirror
-The remaining in-scope reds (below) are distinct compiler/stdlib parity gaps,
-each honestly surfaced as `ipe-fail` — none patched:
+### D3. Remaining v0.17.9 parity gaps
 
-| Example | Diagnostic | Gap |
-|---|---|---|
-| 16-skychess, 17-skymon | `IPE-N0002: cannot find this type in scope` | a type the upstream module defines that Ipê name resolution can't find (v0.17 module/type shape). |
-| 18-job-queue | `IPE-T0012: this record has no such field` | record-field surface skew vs the v0.17 stdlib record. |
-| 26-ui-showcase | `IPE-T0001: expected LiveReq, found {}` | the `init req` LiveReq shape — the empty-record init the example uses no longer unifies with `LiveReq`. |
-| 31-webview-stopwatch-ui | `IPE-T0001: expected Html, found Html Main.Msg` | `Html` vs `Html msg` type-arity / alias divergence in the webview view path. |
+**18-job-queue — type layer FIXED, lowering FILED.**
+`viewJob job = … job.running …` is an UNCALLED, un-annotated helper (dead code).
+Ipê deferred the `job.running` field access and, because no call site ever pinned
+`job` to a concrete record, reported `IPE-T0012: type a has no field running`.
+**Type-layer root cause + fix:** the reference constrains a field access as an
+open row on the spot (`Sky.Type.Constrain.Expression` `Access` →
+`{ field : ρ | ext }`); Ipê's deferred pass never grew the record. The deferred
+resolver (`src/compiler/types/src/lib.rs` `resolve_deferred`) now settles a stuck
+`Flex` base to a singleton open record and GROWS the open row for sibling accesses
+(`job.result`/`job.id`/`job.name`) — matching Sky's row-polymorphic inference (106
+`ipe_types` tests + 17 record goldens stay green). This advances 18 from the WRONG
+`IPE-T0012` to the honest **`IPE-L0102` (polymorphism)**: the lowerer emits every
+top-level def and cannot monomorphise a fully-polymorphic (open-record) value that
+no call site instantiates.
+**Remaining blocker (FILED):** Ipê has no whole-program DCE, so it lowers the
+unreachable `viewJob`; Sky tree-shakes it (`SKY_DCE`, `Dce.Ref`,
+`Mono.ReachableSet`). Closing 18 needs reachability-based dead-def elimination
+before lowering — a backend feature, out of this cycle's boundary. (An
+un-annotated open-record helper that IS reachable would additionally need generic
+row-poly Rust emission; DCE removes the dead case Sky relies on here.)
+
+**26-ui-showcase — FILED (sanctioned divergence).**
+`init : {  } -> ( Model, Cmd Msg )` annotates the per-session request as an empty
+record. Sky types `Live.app`'s `init` field with a FREE polymorphic `req` var
+(`Sky.Type.Constrain.Expression`, `("Live","app")` → `init : req -> …`), so `{}`
+unifies trivially. Ipê DELIBERATELY types it as an opaque `LiveReq` `Con`
+(`src/compiler/types/src/lib.rs` `LiveReqFields` — "no bare record literal can
+masquerade as the runtime struct"), so `{}` fails `IPE-T0001: expected LiveReq,
+found {}`. This is a sanctioned security divergence (Parse-don't-validate), not a
+bug. Closing 26 without reverting the hardening needs a NARROW bridge: an EMPTY
+record annotation (no spoofable fields) may unify with the opaque request `Con`.
+Deferred — the bridge lives in the hot `unify` path and warrants its own soundness
+review + tests.
+
+**31-webview-stopwatch-ui — FILED.**
+`view : Model -> Html` annotates the view with a BARE `Html` (0 type args). Sky's
+`Ui.layout` returns the wildcard `any` (`sky-stdlib/Std/Ui.sky:1697` —
+`layout : … -> any`), which unifies with any `Html` arity, so the bare annotation
+holds. Ipê's `Ui.layout` scheme returns the fully-parameterised `Html msg`
+(`src/compiler/types/src/constrain.rs` `K::UiLayout → html_t(var(0))`), and the
+bare-`Html` annotation stays 0-arg, so the body's `Html Main.Msg` clashes:
+`IPE-T0001: expected Html, found Html Main.Msg`. The principled fix is arity-fill:
+an under-applied parametric type in an annotation fills its missing trailing args
+with fresh vars up to the type's declared arity (strictly better than Sky's `any`
+return). Deferred — canon has no builtin-type arity table at the `TType` arm, so
+the fill needs that table threaded in first.
+
+**16-skychess / 17-skymon — FILED (project-wide type resolution).**
+`Chess/Move.ipe` writes `Model` (and 17 writes `Html` in a `(Html Msg)`
+annotation) in signatures WITHOUT importing the module that defines it (`State.ipe`
+for `Model`). Sky resolves an unqualified unknown type to the empty-home sentinel
+(`Sky.Canonicalise.Type` `resolveTypeName` → `Map.findWithDefault (Canonical "")`),
+which then unifies by name via the empty-home bridge. Ipê deliberately FAILS CLOSED
+(`src/compiler/canon/src/resolve.rs` `resolve_unqualified_type_home` → `IPE-N0002`)
+to avoid the former empty-home-Con ICE (`IPE-I0001`). Matching Sky SOUNDLY (not its
+lax empty-home fallback) requires resolving the unqualified name against a
+PROJECT-WIDE type index (name → real home) so it unifies with the genuine
+`State.Model`. That index must be threaded through the salsa module-resolution
+firewall (`src/compiler/db`), which is invasive and risks the incremental
+early-cut invariant — out of this cycle's boundary.
 
 ### Full-mirror build tally (build-only, IPE_SWEEP_MIRROR_SKY=1)
-39 upstream examples → **25 build green**; 14 red = **5 out-of-scope Go-FFI**
-(03-tea-external, 05-mux-server, 08-notes-app, 11-fyne-stopwatch, 13-skyshop —
-excluded by the normal sweep's `is_out_of_scope` filter) + **9 in-scope
-divergences** (D1: 09/10/12; D2: 06; D3: 16/17/18/26/31). So of the 34 in-scope
-examples, 25 build and 9 are the filed parity gaps above.
+Of the 34 in-scope examples: **D1 (09/10/12) + D2 (06) now build + SEAL** (was 25
+green → **29 green**). Remaining reds: **5 out-of-scope Go-FFI** (03-tea-external,
+05-mux-server, 08-notes-app, 11-fyne-stopwatch, 13-skyshop — `is_out_of_scope`) +
+**5 filed D3 gaps** (16/17: project-wide types; 18: DCE; 26: LiveReq hardening;
+31: parametric-annotation arity-fill).
 
 ## Equivalence design — Go reference builds from PRISTINE upstream, not the patch
 
@@ -125,8 +187,7 @@ Two independent constraints gate the visual pixel-diff:
 1. **Go-oracle version skew.** The `sky` binary on PATH is **v0.16.29**; the
    mirrored examples are **v0.17.9**. The v0.16.29 oracle builds only the subset
    of examples that avoid v0.16↔v0.17 stdlib skew (01-hello-world, 15-http-server
-   build; 09/26/31 fail the SAME `Css.zero` skew as D1 — confirmed:
-   `Foreign 'Std.Css.zero': () -> Length vs Length`). Full visual coverage needs
+   build; the mirrored 26/31 fail the OTHER D3 gaps above). Full visual coverage needs
    a v0.17.x `sky` oracle pinned under `tools/oracle/bin/sky` (the sweep's
    documented resolution slot).
 
