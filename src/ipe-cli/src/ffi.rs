@@ -45,9 +45,7 @@ fn current_uid() -> u32 {
 #[cfg(unix)]
 fn is_trusted_cache_dir(dir: &Path) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-    std::fs::metadata(dir).map_or(false, |md| {
-        md.uid() == current_uid() && md.mode() & 0o002 == 0
-    })
+    std::fs::metadata(dir).is_ok_and(|md| md.uid() == current_uid() && md.mode() & 0o002 == 0)
 }
 
 #[cfg(not(unix))]
@@ -277,8 +275,7 @@ fn make_scratch_dir(krate: &str) -> Result<PathBuf, CliError> {
         .map_err(|e| CliError::UsageOwned(format!("ipe add: scratch root: {e}")))?;
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_nanos());
     // The security property is `create_dir`-fails-if-exists, not the name's
     // unguessability; the random suffix only avoids collisions across runs.
     let dir = base.join(format!("add-{krate}-{}-{nanos:x}", std::process::id()));

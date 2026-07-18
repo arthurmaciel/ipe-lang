@@ -15,9 +15,9 @@
 //! pass stays emit-only: without `IPE_E2E` the tests assert only `ipe` exit 0.
 //!
 //! Run the full seal (`ipe` + cargo + run):
-//!   IPE_E2E=1 cargo test -p ipe --test seal_regression
+//!   `IPE_E2E=1 cargo test -p ipe --test seal_regression`
 //! Emit-only (fast):
-//!   cargo test -p ipe --test seal_regression
+//!   `cargo test -p ipe --test seal_regression`
 
 use std::path::PathBuf;
 
@@ -119,10 +119,10 @@ fn assert_accepted_project(name: &str, files: &[(&str, &str)], expected_stdout: 
     }
     for (fname, contents) in files {
         let path = src.join(fname);
-        if let Some(parent) = path.parent() {
-            if std::fs::create_dir_all(parent).is_err() {
-                return;
-            }
+        if let Some(parent) = path.parent()
+            && std::fs::create_dir_all(parent).is_err()
+        {
+            return;
         }
         if std::fs::write(&path, contents).is_err() {
             return;
