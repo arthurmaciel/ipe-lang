@@ -1158,28 +1158,25 @@ API-shape review):
 - **Go-oracle relationship:** for `String`-payload constructors the output is
   byte-identical. For `Int`/`Float`/`Bool` payloads the Go oracle coerces at
   runtime (opaque to the type checker); ipê emits explicit `.parse::<i64>()`/
-  `.parse::<f64>()`/`s == "true"` expressions that decode at the call site. For
-  payloads of any other type, the reference emits a String and relies on the
-  Go runtime to coerce; ipê rejects at compile time with a `Diagnostic::CompilerBug`
-  (to be upgraded to the reserved diagnostic code `IPE-L0123` in a follow-up
-  task — NOT `IPE-L0121`, which is owned by the #94 `InadmissibleAppMsg` gate;
-  see `docs/architecture/design-coherence-review.md` §C1). The same follow-up
-  covers the sibling fail-closed arm added in #108 round 4: a route page
-  builder that is neither a page constructor, an inline lambda, nor a named
-  function (a let-bound or computed builder value) is rejected at emit with
-  the same interim `CompilerBug` shape — pre-round-4 that arm silently
-  emitted an untyped `(builder)(params)` call that cargo-failed
+  `.parse::<f64>()`/`parse::<bool>()` expressions that decode at the call site.
+  A malformed capture (e.g. `"abc"` for an `Int` slot) causes ipê to route to
+  `not_found` — the Go reference silently substitutes `0` via reflect-coercion.
+  For payloads of any other type, the reference emits a String and relies on the
+  Go runtime to coerce; ipê rejects at compile time (to be upgraded to diagnostic
+  code `IPE-L0123` — NOT `IPE-L0121`, which is owned by the #94
+  `InadmissibleAppMsg` gate; see `docs/architecture/design-coherence-review.md`
+  §C1). A route page builder that is neither a page constructor, an inline
+  lambda, nor a named function is rejected at emit — pre-round-4 that arm
+  silently emitted an untyped `(builder)(params)` call that cargo-failed
   (E0308/E0618) for every realistic shape.
 - **Rationale:** parse, don't validate — a `:param` segment is inherently a URL
   string; feeding it to a constructor payload without an explicit decode is a
-  type contract violation. Catching it at emit time gives the user a Ipê error
-  instead of an opaque downstream `rustc` E0308 or a runtime coercion panic.
-  The `unwrap_or_default` fallback on parse failure keeps the "never panic"
-  spirit of the reference's `unwrap_or_default` for missing captures.
-- **Sanctioned:** yes (`sanctioned:`). Reference: `emit_live.rs::route_param_get`.
-  Residual: malformed numeric captures silently degrade to `0`/`0.0`/`false`
-  (same as reference's missing-capture behavior); routing to `not_found` on
-  bad parse is a future refinement (not yet designed in the reference either).
+  type contract violation. The `Route.build` closure now returns `Option<Page>`
+  so a decode failure falls through to `not_found` rather than silently landing
+  on a zero-value page. `match_routes` calls the builder and treats `None` as a
+  pattern-level miss — identical to how an arity mismatch is handled.
+- **Sanctioned:** yes (`sanctioned:`). References: `emit_live.rs::route_param_get`,
+  `live/route.rs::Route::build`, `live/route.rs::match_routes`.
 
 
 ### B-AnyCtorPayload — `any` ctor payload field → `Dict String String` (pub/sub wire carrier)
@@ -1570,6 +1567,51 @@ API-shape review):
 - **Sanctioned:** yes, tagged `divergence` — an API-shape difference emergent
   from ipê's function-arg event-kernel schemes; the re-export must match the
   kernel it forwards to.
+
+### B-Keyed — `Ipe.Ui.Keyed`: key attached as `sky-key` DOM attribute (stamp approach)
+
+- **Differs:** `Keyed.column` / `Keyed.row` attach the supplied key as a
+  `sky-key` HTML attribute on each child element (or wrap `Text`/`Empty`/`Raw`
+  children in a keyed `el`). The sky-id stamper (`assign_sky_ids_depth` /
+  `ipe_id_key` in `html.rs`) reads that attribute to derive a stable `sky-id`
+  for the child regardless of its list position. The Go reference runtime uses
+  VNode-level key tracking inside the diff/patch layer — the key is a first-class
+  field on the VNode struct, never a DOM attribute.
+- **Go-oracle relationship:** rendered HTML byte output is identical for any
+  single render (both produce the same element tree). On subsequent *patch*
+  renders, the Go reference diff uses the key to pair old and new children and
+  issue minimal DOM moves; ipê v1 uses positional sky-ids but the `sky-key`
+  attribute lets a future diff upgrade adopt stable identity without an API
+  change.
+- **Rationale:** ipê v1 ships no VNode struct — the render surface works with
+  plain `Element<M>` trees serialised as HTML strings. Carrying the key as a
+  `sky-key` DOM attribute costs zero abstraction overhead and keeps the public
+  API (key ≠ discarded) correct. A VNode-level key differ is a v2 upgrade,
+  not an API change.
+- **Sanctioned:** yes, tagged `divergence`. Reference: `ui/keyed.rs::attach_key`,
+  `ui/keyed.rs::keyed_column_`, `ui/keyed.rs::keyed_row_`.
+
+### B-WS-TLS — `Ipe.WebSocket` client: rustls backend for `wss://` (no native-TLS)
+
+- **Differs:** `WebSocket.connect` / `WebSocket.connectWith` dial `wss://` URLs
+  using the rustls backend (`tokio-tungstenite` feature
+  `rustls-tls-webpki-roots`) rather than the platform native-TLS stack (OpenSSL
+  / Schannel / SecureTransport). The Go reference runtime uses Go's
+  `crypto/tls`, which routes to the platform TLS stack on each OS.
+- **Go-oracle relationship:** observable wire output is byte-identical for a
+  successful `wss://` handshake to a public CA-signed endpoint. Certificate
+  validation policy differs for self-signed or private-CA certs: rustls enforces
+  WebPKI trust roots (no `InsecureSkipVerify`); Go trusts the OS cert store and
+  accepts `InsecureSkipVerify = true`.
+- **Rationale:** ipê already uses rustls for `reqwest` (HTTP client), `sqlx`
+  (database), and `lettre` (email). A uniform TLS backend means one root-store,
+  one audit surface, and no OpenSSL linking — aligned with the no-native-deps
+  goal of the runtime. The `native-tls` feature of `tokio-tungstenite` is
+  deliberately NOT enabled. When `IPE_HTTP_DENY_PRIVATE` (SSRF guard) is active,
+  `wss://` is refused in the pinned-dial arm because a raw TCP socket carries no
+  TLS context; the user must disable the guard or use `ws://` on that endpoint.
+- **Sanctioned:** yes, tagged `divergence`. Reference: `ws_client.rs::do_connect`,
+  `Cargo.toml` (`tokio-tungstenite` features).
 
 ---
 

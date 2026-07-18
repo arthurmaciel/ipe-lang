@@ -137,6 +137,49 @@ pub fn assemble_emit(
     }))
 }
 
+/// All FFI seam outputs produced from a single project-scoped catalog load.
+///
+/// Returned by [`prepare_ffi`]; consumed by the build pipeline, `ipe watch`,
+/// and `ipe lsp` so all three go through exactly the same injection steps.
+pub struct FfiPrep {
+    /// The parsed per-crate entries — used to assemble [`ipe_backend_rust::FfiEmit`].
+    pub catalog: Vec<InstalledCrate>,
+    /// The module paths injected into the source map (earn
+    /// `ModuleOrigin::FfiInterface` at [`crate::create_source_root`]).
+    pub injected: BTreeSet<Vec<String>>,
+    /// The assembled backend emission inputs, or `None` when no crates are
+    /// installed. Mirrors the `ffi_emit` local in `run_build_inner`.
+    pub emit: Option<ipe_backend_rust::FfiEmit>,
+}
+
+/// Load, inject, and assemble the FFI catalog for a project in one step.
+///
+/// This is the shared seam used by `run_build`, `ipe watch`, and `ipe lsp` so
+/// all three compilation paths go through the SAME catalog-load → interface-
+/// inject → emit-assemble sequence. Each caller was previously duplicating
+/// these steps independently, or (in `watch`/`lsp`) skipping them entirely —
+/// both are bugs (CO-INCR-005).
+///
+/// `blame_path` is the project entry file or manifest: the catalog search
+/// walks up from it looking for `.ipe/cache/ffi/rust`.
+///
+/// `sources` is mutated in-place: one `Rust.<Crate>` interface module is
+/// inserted per installed crate.
+///
+/// # Errors
+/// [`CliError`] when the catalog is tampered/unreadable, or two installed
+/// crates pin the same dependency to conflicting version lines.
+pub fn prepare_ffi(
+    sources: &mut BTreeMap<Vec<String>, (PathBuf, String)>,
+    blame_path: &Path,
+) -> Result<FfiPrep, CliError> {
+    let catalog = load_catalog_for(blame_path)?;
+    let cache_hint = find_cache_root(blame_path).unwrap_or_default();
+    let injected = inject_interfaces(sources, &catalog, &cache_hint)?;
+    let emit = assemble_emit(&catalog)?;
+    Ok(FfiPrep { catalog, injected, emit })
+}
+
 /// Locate the `ipe-ffi-inspector` binary: beside the running `ipe`
 /// executable first, then `$PATH`.
 fn inspector_binary() -> Result<PathBuf, CliError> {
@@ -424,6 +467,20 @@ mod tests {
             rust_dependencies_from_manifest(text2),
             vec![("uuid".to_owned(), "1.10".to_owned())]
         );
+    }
+
+    /// `prepare_ffi` with a blame path that has no `.ipe/cache/ffi/rust`
+    /// directory up-tree returns an empty `FfiPrep` (no crates installed).
+    /// This is the common case for every project that has never run `ipe add`.
+    #[test]
+    fn prepare_ffi_no_cache_returns_empty_prep() {
+        let tmp = std::env::temp_dir();
+        let mut sources: BTreeMap<Vec<String>, (std::path::PathBuf, String)> = BTreeMap::new();
+        let prep = super::prepare_ffi(&mut sources, &tmp.join("Main.ipe"))
+            .expect("prepare_ffi on a no-cache path must not error");
+        assert!(prep.catalog.is_empty(), "no crates should be loaded");
+        assert!(prep.injected.is_empty(), "no modules should be injected");
+        assert!(prep.emit.is_none(), "emit should be None with no crates");
     }
 
     #[test]

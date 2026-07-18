@@ -777,6 +777,7 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::DbDecRequired => "db_decode_required",
         KernelFn::DbDecOptional => "db_decode_optional",
         KernelFn::DbDecMoney => "db_decode_money",
+        KernelFn::DbDecBytes => "db_decode_bytes",
         // ── Ipe.Db.Sql — SqlFragment builder ───────────────────
         // `int`/`string`/`float`/`bool` share `sql_param`'s runtime symbol —
         // each is a Ipê-level type narrowing of the same generic
