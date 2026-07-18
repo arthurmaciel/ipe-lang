@@ -25,6 +25,11 @@
 //!
 //! `StreamWriter` is bridged (runtimeOpaqueTypes) so the runtime can construct
 //! it and the stdlib's `case writer of StreamWriter raw` lowers onto it.
+//!
+//! `pending_handlers` entries are reaped on a TTL (`PENDING_HANDLER_TTL`) so a
+//! `stream()` call whose sentinel response never reaches
+//! `serve_streaming_sentinel` (a middleware replaced/discarded it) does not
+//! pin its handler closure in the registry for the life of the process.
 
 use super::*;
 use std::collections::HashMap;
@@ -45,8 +50,15 @@ pub enum StreamWriter {
 type ErasedStreamHandler =
     Arc<dyn Fn(StreamWriter) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
-fn pending_handlers() -> &'static Mutex<HashMap<i64, ErasedStreamHandler>> {
-    static R: OnceLock<Mutex<HashMap<i64, ErasedStreamHandler>>> = OnceLock::new();
+/// Every entry is stamped with its insertion time so an abandoned one (the
+/// response carrying its sentinel never reached `serve_streaming_sentinel` —
+/// e.g. a middleware replaced/discarded it before it reached the axum bridge)
+/// can be reaped instead of living for the life of the process (memory-DoS:
+/// each leaked entry pins its `ErasedStreamHandler` closure, which may itself
+/// capture app state). See `reap_expired_pending_handlers` below.
+fn pending_handlers() -> &'static Mutex<HashMap<i64, (std::time::Instant, ErasedStreamHandler)>> {
+    static R: OnceLock<Mutex<HashMap<i64, (std::time::Instant, ErasedStreamHandler)>>> =
+        OnceLock::new();
     R.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -57,6 +69,33 @@ fn stream_senders() -> &'static Mutex<HashMap<i64, tokio::sync::mpsc::Sender<Str
 
 static NEXT_TOKEN: AtomicI64 = AtomicI64::new(1);
 static NEXT_STREAM_ID: AtomicI64 = AtomicI64::new(1);
+
+/// How long a `stream()`-registered handler waits in `pending_handlers` for
+/// its sentinel response to reach `serve_streaming_sentinel` before it is
+/// considered abandoned. On the normal path the sentinel is consumed within
+/// the same request's response handling (effectively immediate); this is a
+/// generous upper bound so a slow-but-legitimate middleware chain is never
+/// reaped out from under a request actually in flight.
+const PENDING_HANDLER_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// How often (in `stream()` calls) the pending-handler map runs its full-map
+/// expiry sweep. Mirrors `server.rs`'s `RL_SWEEP_EVERY`: an O(n) `retain` on
+/// every call would let a caller registering many streams turn each call into
+/// a full-map scan (CPU amplification), so the sweep is amortized.
+const PENDING_HANDLER_SWEEP_EVERY: u64 = 256;
+static PENDING_HANDLER_TICK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Evict any `pending_handlers` entry older than [`PENDING_HANDLER_TTL`].
+/// Called from `server_stream_stream` on insert, amortized to every
+/// `PENDING_HANDLER_SWEEP_EVERY` calls. Assumes the caller already holds no
+/// lock on `pending_handlers` (it acquires its own).
+fn reap_expired_pending_handlers() {
+    let now = std::time::Instant::now();
+    pending_handlers()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(|_, (inserted, _)| now.duration_since(*inserted) < PENDING_HANDLER_TTL);
+}
 
 const SENTINEL_PREFIX: &str = "__sky_stream:";
 
@@ -113,10 +152,16 @@ where
         content_type
     };
     let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
+    if PENDING_HANDLER_TICK
+        .fetch_add(1, Ordering::Relaxed)
+        .is_multiple_of(PENDING_HANDLER_SWEEP_EVERY)
+    {
+        reap_expired_pending_handlers();
+    }
     pending_handlers()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(token, erased);
+        .insert(token, (std::time::Instant::now(), erased));
     Box::pin(async move {
         IpeResult::Ok(ServerResponse {
             status: 200,
@@ -193,7 +238,7 @@ pub fn serve_streaming_sentinel(r: &ServerResponse) -> Option<axum::response::Re
     let rest = r.body.strip_prefix(SENTINEL_PREFIX)?;
     let token_str = rest.strip_prefix(sentinel_nonce())?.strip_prefix(':')?;
     let token: i64 = token_str.parse().ok()?;
-    let handler = pending_handlers()
+    let (_, handler) = pending_handlers()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .remove(&token)?;
@@ -257,5 +302,44 @@ pub fn serve_streaming_sentinel(r: &ServerResponse) -> Option<axum::response::Re
                 .body(axum::body::Body::empty())
                 .unwrap_or_else(|_| axum::response::Response::new(axum::body::Body::empty())),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An expired `pending_handlers` entry is reaped; a fresh one survives.
+    /// Uses distinctive high tokens (never issued by `NEXT_TOKEN`, which starts
+    /// at 1) so this test cannot collide with concurrently-running tests that
+    /// exercise the real `server_stream_stream` → `serve_streaming_sentinel`
+    /// path against the same process-global registry.
+    #[test]
+    fn reap_evicts_only_expired_entries() {
+        let noop: ErasedStreamHandler = Arc::new(|_w: StreamWriter| {
+            Box::pin(async {}) as Pin<Box<dyn Future<Output = ()> + Send>>
+        });
+        let stale_token = i64::MAX - 1;
+        let fresh_token = i64::MAX - 2;
+        let stale_at = std::time::Instant::now()
+            .checked_sub(PENDING_HANDLER_TTL + std::time::Duration::from_secs(1))
+            .unwrap_or_else(std::time::Instant::now);
+        {
+            let mut g = pending_handlers().lock().unwrap_or_else(|e| e.into_inner());
+            g.insert(stale_token, (stale_at, noop.clone()));
+            g.insert(fresh_token, (std::time::Instant::now(), noop));
+        }
+
+        reap_expired_pending_handlers();
+
+        let g = pending_handlers().lock().unwrap_or_else(|e| e.into_inner());
+        assert!(
+            !g.contains_key(&stale_token),
+            "an entry older than PENDING_HANDLER_TTL must be reaped"
+        );
+        assert!(
+            g.contains_key(&fresh_token),
+            "a fresh entry must survive the sweep"
+        );
     }
 }
