@@ -1430,9 +1430,17 @@ fn canonicalise_with_env(
     // Synthesize a value-level auto-constructor for every local record type
     // alias (IPE-N0001). Built here — the single site where each alias's
     // source-order fields are known — as an ordinary typed `Def`, so no later
-    // stage special-cases it. Must run before the value pre-pass so the ctor
-    // names participate in `seen_values` (a user value colliding with a ctor
-    // name surfaces `DuplicateValue`, never a silent skip).
+    // stage special-cases it.
+    //
+    // A user-written top-level value of the same name IS the constructor: an
+    // explicit `Profile name age active = { … }` binding SUPPRESSES synthesis of
+    // the auto-ctor for `type alias Profile = { … }`, exactly as the upstream
+    // Rust emitter's `existingNames` guard skips a synthesized ctor whose name a
+    // user function already occupies. The two do NOT collide — the explicit def
+    // provides the implementation, the auto-ctor is redundant. Computed here
+    // (the sole point over `m.values`) and threaded into synthesis.
+    let user_value_names: BTreeSet<Symbol> =
+        m.values.iter().map(|v| v.value.name.value).collect();
     let synth_ctor_defs = synthesize_record_alias_ctors(
         m,
         &home,
@@ -1441,6 +1449,7 @@ fn canonicalise_with_env(
         qualifier_paths,
         &aliases,
         &seen_ctors,
+        &user_value_names,
         interner,
     )?;
 
@@ -1668,6 +1677,7 @@ fn synthesize_record_alias_ctors(
     qualifier_paths: &BTreeMap<Symbol, Vec<Symbol>>,
     aliases: &BTreeMap<Symbol, AliasDef>,
     seen_ctors: &BTreeMap<Symbol, Span>,
+    user_value_names: &BTreeSet<Symbol>,
     interner: &Interner,
 ) -> DResult<Vec<canon::Def>> {
     let mut synth = Vec::new();
@@ -1678,6 +1688,16 @@ fn synthesize_record_alias_ctors(
         };
         let alias_name = a.value.name.value;
         let alias_span = a.value.name.span;
+
+        // An explicit user top-level value of the same name IS the constructor
+        // (`Profile name age active = { … }` alongside `type alias Profile`).
+        // Decline synthesis — the user's def is the implementation, and letting
+        // both through would double-emit the value. Mirrors the upstream Rust
+        // emitter's `existingNames` guard (`Sky.Generate.Rust.Builder.ModuleEmitter`,
+        // `synCtor … if Set.member ctorName existingNames then []`).
+        if user_value_names.contains(&alias_name) {
+            continue;
+        }
 
         // Canonicalise every field type ONCE, in declared (source) order. The
         // alias's own params fall through to `Type::Var` (empty `subst`), so a

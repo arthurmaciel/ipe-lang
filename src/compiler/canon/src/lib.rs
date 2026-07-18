@@ -2542,22 +2542,40 @@ mod tests {
     }
 
     #[test]
-    fn record_alias_ctor_colliding_with_a_user_value_is_rejected() {
-        // A user top-level value sharing the ctor name is a hard DuplicateValue,
-        // never a silent skip. (Uppercase value names are unusual, but the gate
-        // must hold defensively.)
-        let err = canon_err(
+    fn explicit_binding_suppresses_record_alias_ctor_synthesis() {
+        // A user-written top-level value sharing a record alias's name IS the
+        // constructor — the explicit binding provides the implementation and
+        // SUPPRESSES synthesis of the auto-ctor (upstream Rust emitter's
+        // `existingNames` guard). The two do NOT collide as DuplicateValue; the
+        // module canonicalises, and the single `Mk` def is the user's binding.
+        //
+        // This is the `06-json` pattern: `type alias Profile = { … }` plus an
+        // explicit `Profile name age active = { … }` record-constructor helper.
+        let mut i = Interner::new();
+        let m = canon_ok(
+            &mut i,
             "module Main exposing (main)\n\
              type alias Mk =\n    { x : Int }\n\n\
-             Mk = 0\n\
+             Mk n =\n    { x = n }\n\n\
              main = 0\n",
         );
-        // Either the parser rejects an uppercase binding name, or canon rejects
-        // the duplicate — both are acceptable fail-closed outcomes; a SILENT
-        // accept (no error) is not.
         assert!(
-            err.is_some(),
-            "an uppercase value colliding with a record-alias ctor must be rejected"
+            m.is_some(),
+            "an explicit record-ctor binding sharing the alias name must \
+             canonicalise (synthesis suppressed), not fail with DuplicateValue"
+        );
+        let Some(m) = m else { return };
+        // Exactly ONE `Mk` def — the user's binding, not a synthesized ctor
+        // duplicated alongside it.
+        let mk_defs = m
+            .defs
+            .iter()
+            .filter(|d| i.resolve(d.name().value) == Some("Mk"))
+            .count();
+        assert_eq!(
+            mk_defs, 1,
+            "the user's explicit `Mk` binding is the sole def; the auto-ctor \
+             must be suppressed, not emitted alongside it"
         );
     }
 
