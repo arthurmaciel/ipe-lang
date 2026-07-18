@@ -245,15 +245,15 @@ pub fn main_ne2<T1: PartialEq + Clone>(p: T1, q: T1) -> bool {
     (p != q)
 }
 pub fn main_eq_bool(x: bool, y: bool) -> bool {
-    main_eq2(x, y)
+    crate::main_eq2(x, y)
 }
 pub fn ipe_main() -> IpeTask<()> {
     ({
-        let same = main_eq2(21, 21);
+        let same = crate::main_eq2(21, 21);
         ({
-            let diff = main_ne2(1, 2);
+            let diff = crate::main_ne2(1, 2);
             ({
-                let flag = main_eq_bool((0 == 0), (1 == 1));
+                let flag = crate::main_eq_bool((0 == 0), (1 == 1));
                 ({
                     let n = (if (same && (diff && flag)) { 42 } else { 0 });
                     log_println(string_from_int(n))

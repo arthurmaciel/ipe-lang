@@ -242,10 +242,10 @@ pub fn main_bigger() -> bool {
     (2.5 > 1.5)
 }
 pub fn main_chosen() -> f64 {
-    (if main_bigger() { 1500.0 } else { 0.02 })
+    (if crate::main_bigger() { 1500.0 } else { 0.02 })
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_float(main_chosen()))
+    log_println(string_from_float(crate::main_chosen()))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

@@ -242,10 +242,10 @@ pub fn main_double<T1: ::core::ops::Add<Output = T1> + Copy + Clone>(x: T1) -> T
     (x.clone() + x)
 }
 pub fn main_double_float(x: f64) -> f64 {
-    main_double(x)
+    crate::main_double(x)
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(main_double(21)))
+    log_println(string_from_int(crate::main_double(21)))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

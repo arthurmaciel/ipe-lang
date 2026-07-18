@@ -164,10 +164,13 @@ const EXTRA_BUILTIN_TYPE_NAMES: &[&str] = &[
     // expands the name to the record; the lowerer keeps it a synthesised struct
     // (no opaque arm), so it is user-shadowable-safe like `HttpRequest`.
     "Migration",
-    // `Ipe.Error`'s `ErrorDetails` union.
-    // Lowerer arm: `ir_type_from_canon` `"ErrorDetails" => IrType::ErrorDetails`.
-    // (`ErrorKind` — registered the same way at the same lowerer site — is a
-    // gap in this list.)
+    // `Ipe.Error`'s `ErrorKind` / `ErrorDetails` unions. Both have an
+    // `ir_type_from_canon` arm (`"ErrorKind" => IrType::ErrorKind` /
+    // `"ErrorDetails" => IrType::ErrorDetails`) and are declared in the shared
+    // built-in table (`crate::builtins::BUILTIN_UNIONS`), so an annotation such
+    // as `classify : ErrorKind -> String` must resolve to the empty-home
+    // sentinel rather than IPE-N0002.
+    "ErrorKind",
     "ErrorDetails",
     // `Ipe.Error`'s NOMINAL payload types (see
     // `docs/adr/0017-error-payload-nominal-identity.md`).

@@ -262,9 +262,9 @@ pub fn main_depth(c: MainChain) -> i64 {
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(main_depth(MainChain::ChainNode(Box::new(
-        (MainChain::ChainNode(Box::new((MainChain::ChainEnd, 3))), 2),
-    )))))
+    log_println(string_from_int(crate::main_depth(MainChain::ChainNode(
+        Box::new((MainChain::ChainNode(Box::new((MainChain::ChainEnd, 3))), 2)),
+    ))))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

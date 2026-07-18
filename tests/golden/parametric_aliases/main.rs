@@ -242,7 +242,7 @@ pub fn main_add_pair(p: (i64, i64)) -> i64 {
     (if (p == (20, 22)) { 42 } else { 0 })
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(main_add_pair((20, 22))))
+    log_println(string_from_int(crate::main_add_pair((20, 22))))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

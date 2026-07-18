@@ -259,9 +259,9 @@ pub fn main_unwrap<T1: Clone>(r: RecValue<T1>) -> T1 {
 }
 pub fn ipe_main() -> IpeTask<()> {
     ({
-        let n = main_unwrap(main_wrap(40));
+        let n = crate::main_unwrap(crate::main_wrap(40));
         ({
-            let flag = main_unwrap(main_wrap((1 == 1)));
+            let flag = crate::main_unwrap(crate::main_wrap((1 == 1)));
             log_println(string_from_int((if flag { (n + 2) } else { n })))
         })
     })

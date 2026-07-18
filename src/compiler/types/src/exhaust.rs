@@ -77,33 +77,29 @@ impl Sigs {
         let mut union_ctors = BTreeMap::new();
         let mut ctor_arity = BTreeMap::new();
 
-        // Seed the Prelude-built-in closed unions `Maybe a` (`Just` / `Nothing`)
-        // and `Result e a` (`Ok` / `Err`) so a `case` over them is ANALYSED for
-        // exhaustiveness rather than skipped as an unknown-ctor scrutinee. Without
-        // this, a non-exhaustive `case m of Just x -> …` would slip past the
-        // soundness floor. `Bool` (`True` / `False`) is handled by the dedicated
-        // [`Head::Bool`] literal path and needs no union entry.
-        let maybe = interner.intern("Maybe")?;
-        let result = interner.intern("Result")?;
-        let just = interner.intern("Just")?;
-        let nothing = interner.intern("Nothing")?;
-        let ok = interner.intern("Ok")?;
-        let err = interner.intern("Err")?;
+        // Seed EVERY Prelude-built-in closed union from the ONE shared table
+        // (`ipe_canon::builtins`) that canon and lower also consume, so a `case`
+        // over ANY of them — `Maybe` / `Result` / `SqlValue` / `ErrorKind` /
+        // `ChunkEvent` / … — is ANALYSED for exhaustiveness rather than skipped
+        // as an unknown-constructor scrutinee. A hand-kept subset here was the
+        // drift that let a non-exhaustive `case` over a built-in ADT other than
+        // Maybe/Result slip past this soundness floor and reach cargo as E0004.
+        // `Bool` (`True` / `False`) is judged through the dedicated
+        // [`Head::Bool`] literal path, so the shared table excludes it from the
+        // exhaust unions (`exhaust_union == false`).
+        //
         // Prelude built-ins carry the empty home (matching how canonicalisation
-        // registers `Just`/`Nothing`/`Ok`/`Err` with `home: Vec::new()`), so a
-        // `Just` pattern's `(home=[], name=Just)` identity keys these entries.
+        // registers them with `home: Vec::new()`), so a `Just` pattern's
+        // `(home=[], name=Just)` identity keys these entries.
+        let builtins = ipe_canon::builtins::intern_builtins(interner)?;
         let ph: Vec<Symbol> = Vec::new();
-        for (ctor, union, arity) in [
-            (just, maybe, 1usize),
-            (nothing, maybe, 0),
-            (ok, result, 1),
-            (err, result, 1),
-        ] {
-            ctor_to_union.insert((ph.clone(), ctor), (ph.clone(), union));
-            ctor_arity.insert((ph.clone(), ctor), arity);
+        for (&union, ctors) in &builtins.exhaust_union_ctors {
+            for &(ctor, arity) in ctors {
+                ctor_to_union.insert((ph.clone(), ctor), (ph.clone(), union));
+                ctor_arity.insert((ph.clone(), ctor), arity);
+            }
+            union_ctors.insert((ph.clone(), union), ctors.clone());
         }
-        union_ctors.insert((ph.clone(), maybe), vec![(just, 1), (nothing, 0)]);
-        union_ctors.insert((ph, result), vec![(ok, 1), (err, 1)]);
 
         for union in &module.unions {
             // The union's DEFINING module — its nominal identity is `(home, name)`,

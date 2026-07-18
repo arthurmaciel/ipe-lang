@@ -246,7 +246,7 @@ pub fn main_grade(c: char) -> i64 {
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(main_grade('b')))
+    log_println(string_from_int(crate::main_grade('b')))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;
