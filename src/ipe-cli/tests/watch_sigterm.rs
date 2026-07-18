@@ -188,7 +188,7 @@ fn watch_shuts_down_the_supervised_child_on_sigterm_to_only_the_ipe_process() ->
     let port = 19157;
     let mut ipe_proc = spawn_ipe_watch(&ipe_dir.join("Main.ipe"), &out_dir, port)?;
 
-    if !wait_for_body(port, "v1", Duration::from_secs(180)) {
+    if !wait_for_body(port, "v1", Duration::from_mins(3)) {
         let _ = ipe_proc.kill();
         let _ = ipe_proc.wait();
         return Err("initial cold build+spawn must serve v1 within budget".into());
@@ -321,7 +321,7 @@ fn double_sigterm_after_forwarder_consumed_is_silently_absorbed_use_sigkill() ->
     let port = 19158;
     let mut ipe_proc = spawn_ipe_watch(&ipe_dir.join("Main.ipe"), &out_dir, port)?;
 
-    if !wait_for_body(port, "v1", Duration::from_secs(180)) {
+    if !wait_for_body(port, "v1", Duration::from_mins(3)) {
         let _ = ipe_proc.kill();
         let _ = ipe_proc.wait();
         return Err("initial cold build+spawn must serve v1 within budget".into());

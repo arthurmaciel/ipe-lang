@@ -86,15 +86,18 @@ fn no_by_value_alias_uses_at_subpattern() {
         !src.contains("@ ("),
         "a by-value alias must never render as the moving `name @ (…)`:\n{src}"
     );
-    // Top-level alias → bind whole, then clone the sub-shape.
+    // Top-level alias → bind whole, then clone the sub-shape. Post-emit
+    // rustfmt puts each `let` on its own line, so match the stable fragments
+    // rather than a single-line span.
     assert!(
-        src.contains("let whole = arg_0; let (a, b) = whole.clone();"),
+        src.contains("let whole = arg_0;") && src.contains("let (a, b) = whole.clone();"),
         "PARAM alias must bind the whole then clone-destructure:\n{src}"
     );
     // Nested alias inside a tuple → fresh temps, then clone the inner shape.
     assert!(
         src.contains("let (__sky_bind_0, __sky_bind_1) = arg_1;")
-            && src.contains("let inner = __sky_bind_1; let (c, d) = inner.clone();"),
+            && src.contains("let inner = __sky_bind_1;")
+            && src.contains("let (c, d) = inner.clone();"),
         "NESTED alias must bind fresh temps then clone the inner shape:\n{src}"
     );
 }

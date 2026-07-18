@@ -230,13 +230,13 @@ fn watch_rebuild_on_save_swaps_the_running_binary() -> Result<(), BoxError> {
     let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
 
     assert!(
-        wait_for_body(port, "v1", Duration::from_secs(120)),
+        wait_for_body(port, "v1", Duration::from_mins(2)),
         "initial cold build+spawn must serve v1 within budget"
     );
 
     write_main(&ipe_dir, &server_fixture("v2"))?;
     assert!(
-        wait_for_body(port, "v2", Duration::from_secs(60)),
+        wait_for_body(port, "v2", Duration::from_mins(1)),
         "warm rebuild must swap the running binary to serve v2"
     );
 
@@ -257,7 +257,7 @@ fn watch_keeps_last_good_binary_alive_on_a_syntax_error() -> Result<(), BoxError
     let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
 
     assert!(
-        wait_for_body(port, "v1", Duration::from_secs(120)),
+        wait_for_body(port, "v1", Duration::from_mins(2)),
         "initial cold build+spawn must serve v1"
     );
 
@@ -276,7 +276,7 @@ fn watch_keeps_last_good_binary_alive_on_a_syntax_error() -> Result<(), BoxError
     // restart onto it.
     write_main(&ipe_dir, &server_fixture("v2"))?;
     assert!(
-        wait_for_body(port, "v2", Duration::from_secs(60)),
+        wait_for_body(port, "v2", Duration::from_mins(1)),
         "watch must recover once the syntax error is fixed"
     );
 
@@ -297,7 +297,7 @@ fn watch_coalesces_a_rapid_double_save_into_one_rebuild() -> Result<(), BoxError
     let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
 
     assert!(
-        wait_for_body(port, "v1", Duration::from_secs(120)),
+        wait_for_body(port, "v1", Duration::from_mins(2)),
         "initial cold build+spawn must serve v1"
     );
 
@@ -311,7 +311,7 @@ fn watch_coalesces_a_rapid_double_save_into_one_rebuild() -> Result<(), BoxError
     write_main(&ipe_dir, &server_fixture("v3"))?;
 
     assert!(
-        wait_for_body(port, "v3", Duration::from_secs(60)),
+        wait_for_body(port, "v3", Duration::from_mins(1)),
         "the LAST write in the coalesced burst must be what ships"
     );
 
@@ -350,7 +350,7 @@ fn dropping_a_watch_handle_without_stop_still_reaps_the_supervised_child() -> Re
     let (join, handle) = start_watch(&ipe_dir.join("Main.ipe"), &out_dir, port, &sink)?;
 
     assert!(
-        wait_for_body(port, "v1", Duration::from_secs(120)),
+        wait_for_body(port, "v1", Duration::from_mins(2)),
         "initial cold build+spawn must serve v1"
     );
 
