@@ -458,21 +458,34 @@ fn tag_for_description(desc: &Description) -> &'static str {
 
 // ── Element → Html (recursive) ───────────────────────────────────────────────
 
+/// Depth-0 entry point. All callers outside this module use this wrapper.
+fn render_element<M: Clone>(elem: Element<M>) -> Html<M> {
+    render_element_depth(elem, 0)
+}
+
 /// Recursively convert a `Ipe.Ui` `Element<M>` to `Html<M>`.
 ///
 /// Security: all attribute values flow through `build_style_string` (which
 /// calls `sanitise_css_value`) or `collect_html_attrs` (which passes values to
 /// `html::Attribute::Attr` where `render_html` applies `SafeAttrName` +
 /// `sanitise_url_attr`).  No value reaches the HTML sink without one of these gates.
-fn render_element<M: Clone>(elem: Element<M>) -> Html<M> {
+///
+/// Bounded descent: at `MAX_HTML_DEPTH` the subtree is dropped (empty text
+/// node) rather than recursed into — a truncated render is strictly better than
+/// overflowing the thread stack. Same ceiling as `html.rs::render_into_ctx` and
+/// `html.rs::assign_sky_ids_depth`.
+fn render_element_depth<M: Clone>(elem: Element<M>, depth: usize) -> Html<M> {
+    if depth >= crate::html::MAX_HTML_DEPTH {
+        return Html::HText(String::new());
+    }
     match elem {
         Element::Empty => Html::HText(String::new()),
         Element::Text(s) => Html::HText(s),
         Element::Raw(html) => html,
         Element::Node(desc, attrs, kids) => {
-            render_node_as(tag_for_description(&desc), &attrs, kids)
+            render_node_as(tag_for_description(&desc), &attrs, kids, depth)
         }
-        Element::TaggedNode(tag, _desc, attrs, kids) => render_node_as(&tag, &attrs, kids),
+        Element::TaggedNode(tag, _desc, attrs, kids) => render_node_as(&tag, &attrs, kids, depth),
     }
 }
 
@@ -488,7 +501,12 @@ fn render_element<M: Clone>(elem: Element<M>) -> Html<M> {
 ///   {nearby overlays (position:absolute)}
 /// </{tag}>
 /// ```
-fn render_node_as<M: Clone>(tag: &str, attrs: &[Attribute<M>], kids: Vec<Element<M>>) -> Html<M> {
+fn render_node_as<M: Clone>(
+    tag: &str,
+    attrs: &[Attribute<M>],
+    kids: Vec<Element<M>>,
+    depth: usize,
+) -> Html<M> {
     let style_str = build_style_string(attrs);
     let mut html_attrs = collect_html_attrs(attrs);
 
@@ -497,8 +515,12 @@ fn render_node_as<M: Clone>(tag: &str, attrs: &[Attribute<M>], kids: Vec<Element
         html_attrs.insert(0, HtmlAttribute::Attr("style".to_owned(), style_str));
     }
 
-    // Rendered children in source order.
-    let mut html_kids: Vec<Html<M>> = kids.into_iter().map(render_element).collect();
+    // Rendered children in source order, each one level deeper.
+    let child_depth = depth.saturating_add(1);
+    let mut html_kids: Vec<Html<M>> = kids
+        .into_iter()
+        .map(|k| render_element_depth(k, child_depth))
+        .collect();
 
     // Nearby overlays appended after the regular children (they are absolutely
     // positioned, so their DOM order is irrelevant for layout).
@@ -1216,5 +1238,43 @@ mod tests {
                 panic!("expected AttrEvent(EventAttr(OnString(\"sky-file\", _))), got {other:?}")
             }
         }
+    }
+
+    // RT-UI-001: depth cap — render_element must return (not abort/stack-overflow)
+    // when given a tree deeper than MAX_HTML_DEPTH = 1024. We build a chain at
+    // depth 1200 and run the render in a 48 MB thread (debug-mode frame sizes are
+    // ~10–20× release-mode sizes, so the cap depth × frame needs a larger stack
+    // than the 8 MB default to reach). The key property: render returns instead of
+    // recursing forever; the cap silently truncates at depth 1024.
+    #[test]
+    fn render_element_depth_cap_does_not_overflow() {
+        // Build Node([], [Node([], [Node([], [... Text("leaf") ...])])]) 1200 deep.
+        const DEPTH: usize = 1_200;
+        let is_valid = std::thread::Builder::new()
+            .stack_size(48 * 1024 * 1024) // 48 MB — enough for debug-mode frames
+            .spawn(|| {
+                let mut elem: Element<TestMsg> = Element::Text("leaf".to_owned());
+                for _ in 0..DEPTH {
+                    elem = Element::Node(
+                        super::super::element::Description::NoDescription,
+                        vec![],
+                        vec![elem],
+                    );
+                }
+                // This call must return, not recurse forever. The depth cap at 1024
+                // truncates the remaining 176 levels and returns an empty text node.
+                let html = render_element(elem);
+                let valid = matches!(
+                    &html,
+                    crate::html::Html::HElement(_, _, _) | crate::html::Html::HText(_)
+                );
+                // Leak to avoid recursive drop overflow at this depth.
+                std::mem::forget(html);
+                valid
+            })
+            .expect("spawn thread")
+            .join()
+            .expect("thread did not panic");
+        assert!(is_valid, "render_element must return a valid Html variant");
     }
 }
