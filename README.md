@@ -26,7 +26,7 @@ ipe run src/Main.ipe        # compile + run in one step
 ```
 
 Prefer building from source? `git clone https://github.com/arthurmaciel/ipe
-&& cd ipe-lang && cargo build --release`.
+&& cd ipe && cargo build --release`.
 
 ## Contents
 
