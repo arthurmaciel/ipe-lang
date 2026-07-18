@@ -1364,6 +1364,18 @@ pub const fn kernel_name(k: KernelFn) -> &'static str {
         KernelFn::DecAddPercent => "decimal_add_percent",
         KernelFn::DecSubPercent => "decimal_sub_percent",
         KernelFn::DecFormatWith => "decimal_format_with",
+        // ── Ipe.Money ───────────────────────────────────────────────────────────
+        KernelFn::MoneyMinorUnits => "money_minor_units",
+        KernelFn::MoneySymbol => "money_symbol",
+        KernelFn::MoneyCurrencyName => "money_currency_name",
+        KernelFn::MoneyIsKnownCurrency => "money_is_known_currency",
+        KernelFn::MoneyFormat => "money_format",
+        KernelFn::MoneyFormatWithCode => "money_format_with_code",
+        KernelFn::MoneyAllocate => "money_allocate",
+        KernelFn::MoneySetRate => "money_set_rate",
+        KernelFn::MoneyGetRate => "money_get_rate",
+        KernelFn::MoneyHasRate => "money_has_rate",
+        KernelFn::MoneyClearRates => "money_clear_rates",
     }
 }
 
