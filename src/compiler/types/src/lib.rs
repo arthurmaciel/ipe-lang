@@ -1080,7 +1080,13 @@ enum FieldState {
     /// The base is a record (or a fixed-field builtin Con) and has the
     /// field; the payload is the field's type var.
     Found(VarId),
-    /// The base is resolved but does not have the field (or is not a record
+    /// The base is an OPEN record (Flex tail) that does not yet carry the
+    /// field. Row-polymorphic access grows the record with the field rather
+    /// than erroring (Sky's `Access` constrain unifies the target with a fresh
+    /// open record `{ field : ρ | ext }`). The caller re-reads the root's field
+    /// map, inserts `field ↦ result`, and re-seats a fresh open tail.
+    GrowOpen,
+    /// The base is resolved (closed record missing the field, or not a record
     /// at all) — an immediate IPE-T0012.
     Missing,
 }
@@ -1093,7 +1099,9 @@ enum FieldState {
 /// outcome instead releases the `&uf` borrow before the `&mut uf` table
 /// lookups that follow.
 enum Peek {
-    Record(Option<VarId>),
+    /// `(field-var-if-present, tail-var)` — the tail lets the caller tell an
+    /// open record (Flex tail, growable) from a closed one (`EmptyRecord`).
+    Record(Option<VarId>, VarId),
     Req,
     LiveReq,
     ErrCon(Symbol),
@@ -1130,8 +1138,8 @@ fn field_access_state(
 ) -> DResult<FieldState> {
     let found_or_missing = |v: Option<VarId>| v.map_or(FieldState::Missing, FieldState::Found);
     let peek = match uf.root_content(root)? {
-        Content::Structure(FlatType::Record(fields, _ext)) => {
-            Peek::Record(fields.get(&field).copied())
+        Content::Structure(FlatType::Record(fields, ext)) => {
+            Peek::Record(fields.get(&field).copied(), *ext)
         }
         // The opaque server `Request` Con is not a structural record, but
         // its field set is fixed (see [`RequestFields`]). Resolve the
@@ -1165,7 +1173,20 @@ fn field_access_state(
         _ => Peek::Missing,              // rigid / super / non-record structure — error
     };
     Ok(match peek {
-        Peek::Record(v) => found_or_missing(v),
+        // Present → Found. Missing on an OPEN tail (Flex root) → GrowOpen (the
+        // record is row-polymorphic and absorbs the new field); missing on a
+        // CLOSED tail (`EmptyRecord` / any non-Flex) → Missing (IPE-T0012).
+        Peek::Record(Some(v), _) => FieldState::Found(v),
+        Peek::Record(None, ext) => {
+            // Resolve the tail's root (mutable `find`) BEFORE the immutable
+            // `root_content` read so the two borrows don't overlap.
+            let ext_root = uf.find(ext)?;
+            if matches!(uf.root_content(ext_root)?, Content::Flex) {
+                FieldState::GrowOpen
+            } else {
+                FieldState::Missing
+            }
+        }
         Peek::Req => found_or_missing(tables.req.field_var(uf, field)?),
         Peek::LiveReq => found_or_missing(tables.live_req.field_var(uf, field)?),
         Peek::ErrCon(name) => found_or_missing(tables.err.field_var(uf, name, field)?),
@@ -1219,6 +1240,26 @@ fn resolve_deferred(
                     made_progress = true;
                     lift!(unify(uf, budget, interner, fa.span, fa.result, v));
                 }
+                FieldState::GrowOpen => {
+                    // Row-poly growth: the base is an open record missing this
+                    // field. Add it (value var = the access's result var) and
+                    // keep the tail open for further growth. Re-read the root's
+                    // field map (the `field_access_state` borrow has ended),
+                    // insert, and re-seat with a FRESH open tail.
+                    made_progress = true;
+                    let mut fields = match lift!(uf.root_content(root)).clone() {
+                        Content::Structure(FlatType::Record(fs, _)) => fs,
+                        // Unreachable: `GrowOpen` is only produced from a
+                        // `Record` root above; treat any drift as a fresh map.
+                        _ => BTreeMap::new(),
+                    };
+                    fields.insert(fa.field, fa.result);
+                    let new_ext = lift!(uf.fresh(Content::Flex));
+                    lift!(uf.set_content(
+                        root,
+                        Content::Structure(FlatType::Record(fields, new_ext)),
+                    ));
+                }
                 FieldState::Missing => {
                     return Err((
                         no_such_field(uf, budget, interner, fa.record, fa.field, fa.span),
@@ -1242,13 +1283,37 @@ fn resolve_deferred(
         pending_ru = next_ru;
 
         if !made_progress {
-            // Nothing was discharged this pass — the remaining items are stuck
-            // (their base vars are `Flex` and cannot be pinned to any record
-            // type).  Report the first stuck item as the error.
-            // `pending_fa.first()` / `pending_ru.first()` are `None` only when
-            // the respective list is empty; we are guaranteed at least one is
-            // non-empty because the outer `is_empty()` check did not return.
+            // Nothing was discharged this pass — every remaining item's base var
+            // is still `Flex` (no closed record ever pinned it).
+            //
+            // A `Flex` base is NOT an error: it is a field access on a parameter
+            // no call site constrained (an un-called `viewJob job = … job.running`),
+            // which the reference infers row-polymorphically — Sky's `Access`
+            // constrain (`Sky.Type.Constrain.Expression`) unifies the target with
+            // a fresh open record `{ field : ρ | ext }` on the spot. Our deferred
+            // pass reproduces that here: settle the first stuck flex base to the
+            // singleton open record carrying the accessed field (its result var IS
+            // the field's type var), then re-loop. Sibling accesses on the same
+            // base (`job.result`, `job.id`) absorb into the open tail via the
+            // open-record unify path; the loop makes progress and terminates.
+            //
+            // A base that has settled to a NON-record structure (rigid var, a
+            // concrete non-record type) still falls through to IPE-T0012 — those
+            // are genuine "not a record" errors, never reached here because a
+            // settled non-record makes `field_access_state` return `Missing`
+            // during the pass (handled above), not `Deferred`.
             if let Some(fa) = pending_fa.first() {
+                let root = lift!(uf.find(fa.record));
+                if matches!(lift!(uf.root_content(root)), Content::Flex) {
+                    let mut fields = BTreeMap::new();
+                    fields.insert(fa.field, fa.result);
+                    let ext = lift!(uf.fresh(Content::Flex));
+                    lift!(uf.set_content(
+                        root,
+                        Content::Structure(FlatType::Record(fields, ext)),
+                    ));
+                    continue;
+                }
                 return Err((
                     no_such_field(uf, budget, interner, fa.record, fa.field, fa.span),
                     fa.home.clone(),
