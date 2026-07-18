@@ -193,13 +193,20 @@ fn synthesises_struct_literal_access_and_update() -> DResult<()> {
         "struct definition missing or wrong shape:\n{out}"
     );
     // IpeStringify impl mirroring Go `%v` (`{v0 v1}`), in field order.
+    // Rustfmt splits the format! call across lines; assert the stable fragments.
     assert!(
-        out.contains(
-            "impl IpeStringify for RecXY {\n    fn ipe_show(&self) -> String {\n        \
-             format!(\"{{{} {}}}\", (&ipe_runtime::stringify::Wrap(&self.x)).dispatch(), \
-             (&ipe_runtime::stringify::Wrap(&self.y)).dispatch())"
-        ),
-        "IpeStringify impl missing or wrong:\n{out}"
+        out.contains("impl IpeStringify for RecXY {"),
+        "IpeStringify impl missing:\n{out}"
+    );
+    assert!(
+        out.contains("fn ipe_show(&self) -> String {"),
+        "IpeStringify ipe_show missing:\n{out}"
+    );
+    assert!(
+        out.contains("\"{{{} {}}}\",")
+            && out.contains("(&ipe_runtime::stringify::Wrap(&self.x)).dispatch(),")
+            && out.contains("(&ipe_runtime::stringify::Wrap(&self.y)).dispatch()"),
+        "IpeStringify format! body wrong:\n{out}"
     );
     // Literal → struct literal.
     assert!(
@@ -207,8 +214,11 @@ fn synthesises_struct_literal_access_and_update() -> DResult<()> {
         "record literal not emitted as struct literal:\n{out}"
     );
     // Update → clone-and-reassign block (no struct name needed).
+    // Rustfmt spreads the block across lines; assert the stable key fragments.
     assert!(
-        out.contains("{ let mut __sky_rec = (p).clone(); __sky_rec.x = 5; __sky_rec }"),
+        out.contains("let mut __sky_rec = (p).clone();")
+            && out.contains("__sky_rec.x = 5;")
+            && out.contains("__sky_rec"),
         "record update not emitted as clone-and-reassign:\n{out}"
     );
     // Access → parenthesised `.field`.

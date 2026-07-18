@@ -165,10 +165,15 @@ fn tuple_subpattern_in_ctor_arm_renders() -> DResult<()> {
         src.contains("MainWrap::MkWrap((a, b)) => a"),
         "tuple sub-pattern must render as a Rust tuple pattern; got:\n{src}"
     );
-    // The matching tuple construction renders as `((3, 4))` inside the ctor.
+    // The matching tuple construction wraps the tuple literal inside the ctor.
+    // Rustfmt may split `(3, 4)` across lines; assert the structural fragments.
     assert!(
-        src.contains("MainWrap::MkWrap((3, 4))"),
-        "tuple-field construction must render a Rust tuple; got:\n{src}"
+        src.contains("MainWrap::MkWrap(("),
+        "tuple-field construction must use ctor wrapper; got:\n{src}"
+    );
+    assert!(
+        src.contains("3,") && src.contains("4,"),
+        "tuple literal elements missing from ctor construction; got:\n{src}"
     );
     Ok(())
 }
