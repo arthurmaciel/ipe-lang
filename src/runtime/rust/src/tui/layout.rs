@@ -31,6 +31,26 @@ const CANVAS_H: usize = 720;
 /// panic. 100_000 is far above any real terminal (Go's tui cap is 50_000).
 const MAX_CELLS: usize = 100_000;
 
+/// Slack factor applied on top of the live terminal row count when clamping
+/// pad/gap row allocations. A pad block taller than a few screens serves no
+/// display purpose; its area (rows × width) is the OOM vector. The factor of 4
+/// permits scroll-region padding without permitting a 100k-row block on a
+/// 24-row terminal. Matches Go's terminal-proportional cap model.
+const PAD_ROW_SLACK: usize = 4;
+
+/// Cap a pad/gap row count terminal-proportionally. Used at every allocation
+/// site that pushes blank rows (`apply_padding` top/bottom, `vstack` gap,
+/// `apply_self_height` pad rows) so the product (rows × width) is bounded
+/// to roughly `(canvas.rows × PAD_ROW_SLACK) × MAX_CELLS` — negligible.
+fn clamp_pad_rows(rows: usize, canvas: Canvas) -> usize {
+    rows.min(
+        canvas
+            .rows
+            .saturating_mul(PAD_ROW_SLACK)
+            .max(PAD_ROW_SLACK),
+    )
+}
+
 /// Hard recursion-depth bound for the Element/Html tree walk. A deeply-nested
 /// (program- or input-built) tree would otherwise overflow the native stack in
 /// `render_node` / `extract_text` / `html_text` (no tail-call elimination). At the
@@ -267,7 +287,12 @@ type FillSpec = (i64, Option<usize>, Option<usize>);
 /// sized by the parent ROW's fill-distribution pass, not by its own content.
 fn fill_spec(l: &Length, canvas: Canvas) -> Option<FillSpec> {
     match l {
-        Length::Fill(p) => Some(((*p).max(1), None, None)),
+        // Clamp the portion at MAX_CELLS at the parse-don't-validate boundary where
+        // the program `Int` becomes a `FillSpec`. A portion ≥ MAX_CELLS already
+        // claims the entire leftover (ratio is preserved), so no legitimate layout
+        // changes. Both fill-distribution consumers (`distribute_row_fill`,
+        // `distribute_col_fill`) inherit this bound automatically.
+        Length::Fill(p) => Some(((*p).clamp(1, MAX_CELLS as i64), None, None)),
         Length::Min(n, inner) => fill_spec(inner, canvas)
             .map(|(p, mn, mx)| (p, Some(mn.unwrap_or(0).max(canvas.cells_x(*n))), mx)),
         Length::Max(n, inner) => fill_spec(inner, canvas).map(|(p, mn, mx)| {
@@ -353,6 +378,9 @@ impl Block {
     /// Constrain every line to EXACTLY `w` display cells — pad shorter lines with
     /// `bg`-styled spaces, clip longer ones. For explicit `Ui.width (Ui.px n)`.
     fn set_width(&mut self, w: usize, bg: Option<(u8, u8, u8)>) {
+        // Defence-in-depth: cap the target width so no caller (present or future)
+        // can drive `" ".repeat(w)` to an OOM-sized count.
+        let w = w.min(MAX_CELLS);
         for line in &mut self.lines {
             let lw: usize = line.iter().map(Run::width).sum();
             if lw > w {
@@ -747,10 +775,19 @@ fn walk_attrs<M>(attrs: &[Attribute<M>], inherited: Style) -> Walked {
     w
 }
 
-fn vstack(children: Vec<Rendered>, gap: usize, bg: Option<(u8, u8, u8)>) -> Rendered {
+fn vstack(
+    children: Vec<Rendered>,
+    gap: usize,
+    bg: Option<(u8, u8, u8)>,
+    canvas: Canvas,
+) -> Rendered {
     // When the column carries a bg, the inter-child gap ROWS must take that bg too
     // (else they render terminal-default — the wrong-colour-gap bug, audit #5). A
     // bg gap row spans the stack width; with no bg, keep the empty row (default).
+    // Terminal-proportional row clamp: `gap` derives from `Ui.spacing` (arbitrary
+    // Ipê Int already converted to cells); cap it terminal-proportionally so the
+    // row count × stack_w product cannot OOM.
+    let gap = clamp_pad_rows(gap, canvas);
     let stack_w = children.iter().map(|r| r.block.width()).max().unwrap_or(0);
     let gap_row = |w: &mut Block| {
         for _ in 0..gap {
@@ -904,8 +941,11 @@ fn overlay_blocks(base: Rendered, top: Rendered, top_wins: bool) -> Rendered {
 }
 
 fn apply_padding(inner: Rendered, w: &Walked, canvas: Canvas, self_style: Style) -> Rendered {
-    let top = canvas.cells_y(w.pad_top);
-    let bottom = canvas.cells_y(w.pad_bottom);
+    // Terminal-proportional row clamp: `cells_y` caps each dimension at MAX_CELLS,
+    // but their product (rows × total_w) can still reach ~10 GB. Cap row counts to
+    // a small multiple of the live terminal height so the area stays bounded.
+    let top = clamp_pad_rows(canvas.cells_y(w.pad_top), canvas);
+    let bottom = clamp_pad_rows(canvas.cells_y(w.pad_bottom), canvas);
     let left = canvas.cells_x(w.pad_left);
     let right = canvas.cells_x(w.pad_right);
     let inner_w = inner.block.width();
@@ -1385,7 +1425,7 @@ fn render_node<M: Clone>(
                 .map(|k| render_node(k, label_style, ctx, content_avail))
                 .collect();
             let mut inner = match w.dir {
-                Dir::Column => vstack(child_blocks, 0, label_style.bg),
+                Dir::Column => vstack(child_blocks, 0, label_style.bg, ctx.canvas),
                 Dir::Row => hstack(
                     child_blocks,
                     ctx.canvas.cells_x(w.spacing_px),
@@ -1543,7 +1583,12 @@ fn render_node<M: Clone>(
                 } else {
                     match w.dir {
                         Dir::Column => {
-                            vstack(children, ctx.canvas.cells_y(w.spacing_px), w.style.bg)
+                            vstack(
+                                children,
+                                ctx.canvas.cells_y(w.spacing_px),
+                                w.style.bg,
+                                ctx.canvas,
+                            )
                         }
                         Dir::Row => hstack(children, ctx.canvas.cells_x(w.spacing_px), w.style.bg),
                     }
@@ -1603,8 +1648,8 @@ fn render_node<M: Clone>(
                 for (loc, el) in nearby {
                     let ov = render_node(el, w.style, ctx, content_avail);
                     result = match loc {
-                        Location::Above => vstack(vec![ov, result], 0, w.style.bg),
-                        Location::Below => vstack(vec![result, ov], 0, w.style.bg),
+                        Location::Above => vstack(vec![ov, result], 0, w.style.bg, ctx.canvas),
+                        Location::Below => vstack(vec![result, ov], 0, w.style.bg, ctx.canvas),
                         Location::OnLeft => hstack(vec![ov, result], 0, w.style.bg),
                         Location::OnRight => hstack(vec![result, ov], 0, w.style.bg),
                         Location::InFront => overlay_blocks(result, ov, true),
@@ -1788,7 +1833,7 @@ fn render_grid<M: Clone>(
         }
         rows.push(hstack(sized, 0, w.style.bg));
     }
-    vstack(rows, gap_y, w.style.bg)
+    vstack(rows, gap_y, w.style.bg, ctx.canvas)
 }
 
 /// Explicit-track grid (`Ipe.Ui.Grid.columns`/`tracks`): size each column from its
@@ -1855,7 +1900,7 @@ fn render_grid_tracked<M: Clone>(
         }
         rows.push(hstack(sized, gap_x, w.style.bg));
     }
-    vstack(rows, gap_y, w.style.bg)
+    vstack(rows, gap_y, w.style.bg, canvas)
 }
 
 /// The cell's own background, read from its rendered runs — the bg a grid cell
@@ -2028,6 +2073,10 @@ fn apply_self_height(block: &mut Block, w: &Walked, canvas: Canvas) {
         },
         None => return,
     };
+    // Terminal-proportional clamp: `resolve_fixed_h` → `cells_y` caps at MAX_CELLS
+    // but `rows × width` can still reach ~10 GB. Cap the pad-row count the same way
+    // as `apply_padding` top/bottom so the product stays bounded.
+    let rows = clamp_pad_rows(rows, canvas);
     let width = block.width();
     if block.lines.len() > rows {
         block.lines.truncate(rows.max(1));
@@ -2078,12 +2127,14 @@ fn distribute_col_fill(
         return;
     }
     let is_fill = |i: usize| specs.get(i).copied().flatten().is_some();
+    // Portions are already clamped at MAX_CELLS by `fill_spec`; `.min(MAX_CELLS)`
+    // is belt-and-braces in case a future caller feeds an unclamped spec.
     let portion = |i: usize| {
         specs
             .get(i)
             .copied()
             .flatten()
-            .map_or(1usize, |(p, _, _)| p.max(1) as usize)
+            .map_or(1usize, |(p, _, _)| (p.max(1) as usize).min(MAX_CELLS))
     };
     let fill_idx: Vec<usize> = (0..n).filter(|i| is_fill(*i)).collect();
     if fill_idx.is_empty() {
@@ -2097,17 +2148,22 @@ fn distribute_col_fill(
         .map(|(_, r)| r.block.height())
         .sum();
     let leftover = total_h.saturating_sub(fixed + gaps);
-    let portion_total: usize = fill_idx.iter().map(|i| portion(*i)).sum::<usize>().max(1);
+    // Saturating fold: portions are clamped at MAX_CELLS, but a column with
+    // many fill children could still wrap with plain `.sum()`.
+    let portion_total: usize = fill_idx
+        .iter()
+        .map(|i| portion(*i))
+        .fold(0usize, usize::saturating_add)
+        .max(1);
     let last = fill_idx.last().copied().unwrap_or(0);
     let mut used = 0usize;
     for &i in &fill_idx {
         let share = if i == last {
             leftover.saturating_sub(used)
         } else {
-            // saturating_mul: `portion(i)` is caller-controlled (Ui.fillPortion),
-            // so `leftover * portion` can overflow usize. portion_total >= portion(i),
-            // so the quotient stays <= leftover and the saturation never changes a
-            // valid result.
+            // saturating_mul: `portion(i)` ≤ MAX_CELLS; `leftover` ≤ total_h which
+            // derives from `cells_y` (already ≤ MAX_CELLS). The product fits within
+            // usize on any realistic canvas; saturation guards against extremes.
             leftover.saturating_mul(portion(i)) / portion_total
         };
         used += share;
@@ -2227,10 +2283,14 @@ fn distribute_row_fill(
     content_avail: usize,
     gap: usize,
 ) {
-    let total_portion: i64 = specs.iter().filter_map(|s| s.map(|(p, _, _)| p)).sum();
-    if total_portion <= 0 {
-        return;
-    }
+    // Portions are already clamped at MAX_CELLS by `fill_spec`; saturating-fold
+    // the sum so a pathological all-max-portion row cannot wrap `total_portion`
+    // to a tiny divisor and drive per-child widths to ~usize::MAX.
+    let total_portion: usize = specs
+        .iter()
+        .filter_map(|s| s.map(|(p, _, _)| p.max(0) as usize))
+        .fold(0usize, usize::saturating_add)
+        .max(1);
     let n = children.len();
     // saturating_mul/add: `gap` derives from `Ui.spacing` (caller-controlled), so
     // `(n - 1) * gap` and `non_fill + gaps` can overflow usize. The result only
@@ -2249,10 +2309,11 @@ fn distribute_row_fill(
     for (r, s) in children.iter_mut().zip(specs) {
         if let Some((p, mn, mx)) = s {
             done += 1;
+            let p_usize = (*p).max(0) as usize;
             let share = if done == fill_count {
                 remaining.saturating_sub(used)
             } else {
-                remaining.saturating_mul(*p as usize) / total_portion as usize
+                remaining.saturating_mul(p_usize) / total_portion
             };
             used = used.saturating_add(share);
             let mut target = share;
@@ -2986,5 +3047,82 @@ mod tests {
         assert!(h >= 40);
         assert!(frame.contains("row20"), "scrolled to row20: {frame:?}");
         assert!(!frame.contains("row0\r\n"), "row0 scrolled off");
+    }
+
+    // RT-TUI-001: fill-portion i64 overflow — three Fill(i64::MAX) siblings in
+    // a row must render without panic (the saturating fold + MAX_CELLS clamp in
+    // fill_spec / distribute_col_fill guard the multiplication path).
+    #[test]
+    fn fill_portion_max_i64_does_not_overflow() {
+        let child = |label: &'static str| {
+            node(
+                vec![Attribute::AttrWidth(Length::Fill(i64::MAX))],
+                vec![Element::Text(label.into())],
+            )
+        };
+        // Wrap children in an explicit row (AttrSpacing 0 to stay minimal).
+        // The default column direction is fine here — distribute_col_fill fires.
+        let row: Element<()> = node(
+            vec![
+                Attribute::AttrWidth(Length::Fill(i64::MAX)),
+                Attribute::AttrSpacing(0),
+            ],
+            vec![child("A"), child("B"), child("C")],
+        );
+        // 80×24 canvas — small enough to be fast, large enough to exercise layout.
+        let frame = element_to_cells(&row, 80, 24);
+        // The frame must be a valid (non-empty, bounded) ANSI string.
+        // Any non-crash result means the fix held.
+        assert!(
+            frame.len() <= 80 * 24 * 16,
+            "frame too large — likely unbounded allocation: {} bytes",
+            frame.len()
+        );
+    }
+
+    // RT-TUI-002: padding area product — huge AttrPadding values on a small canvas
+    // must not cause an OOM / str::repeat panic. The terminal-proportional clamp
+    // (clamp_pad_rows) gates each allocation so total rows stay ≤ canvas.rows *
+    // PAD_ROW_SLACK.
+    #[test]
+    fn huge_padding_does_not_oom() {
+        const COLS: usize = 80;
+        const ROWS: usize = 24;
+        let t: Element<()> = node(
+            // AttrPadding(top, right, bottom, left) — all huge values.
+            vec![Attribute::AttrPadding(3_000_000, 1_600_000, 3_000_000, 1_600_000)],
+            vec![Element::Text("hi".into())],
+        );
+        // This call must return; if the clamp is missing it allocates ~10 GB and
+        // either panics (capacity overflow) or gets OOM-killed.
+        let frame = element_to_cells(&t, COLS, ROWS);
+        // The resulting frame must fit within a small multiple of the canvas.
+        // PAD_ROW_SLACK = 4, so rendered block rows ≤ ROWS * 4 = 96.
+        let line_count = frame.lines().count();
+        assert!(
+            line_count <= ROWS * (PAD_ROW_SLACK + 2),
+            "frame line count {line_count} exceeded terminal-proportional cap on {ROWS}-row canvas"
+        );
+    }
+
+    // RT-TUI-002 (spacing variant): Ui.spacing with a huge gap value inside a column
+    // must also be bounded via clamp_pad_rows in vstack.
+    #[test]
+    fn huge_spacing_does_not_oom() {
+        const COLS: usize = 80;
+        const ROWS: usize = 24;
+        let t: Element<()> = node(
+            vec![Attribute::AttrSpacing(3_000_000)],
+            vec![
+                node(vec![], vec![Element::Text("a".into())]),
+                node(vec![], vec![Element::Text("b".into())]),
+            ],
+        );
+        let frame = element_to_cells(&t, COLS, ROWS);
+        let line_count = frame.lines().count();
+        assert!(
+            line_count <= ROWS * (PAD_ROW_SLACK + 2),
+            "frame line count {line_count} exceeded terminal-proportional cap on {ROWS}-row canvas (spacing)"
+        );
     }
 }

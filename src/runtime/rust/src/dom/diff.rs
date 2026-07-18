@@ -44,7 +44,7 @@ impl Patch {
 ///   reordered keyed item keeps its sky-id and only its moved attrs patch.
 pub fn diff<M>(old: &Html<M>, new: &Html<M>) -> Vec<Patch> {
     let mut out = vec![];
-    diff_node(old, new, &mut out);
+    diff_node_depth(old, new, &mut out, 0);
     out
 }
 
@@ -73,7 +73,13 @@ fn push_html_replace<M>(id: &str, new_kids: &[Html<M>], out: &mut Vec<Patch>) {
     out.push(p);
 }
 
-fn diff_node<M>(old: &Html<M>, new: &Html<M>, out: &mut Vec<Patch>) {
+/// Bounded-descent diff. Stops at `MAX_HTML_DEPTH` (same ceiling as
+/// `html.rs::render_into_ctx`) rather than recursing into an arbitrarily deep
+/// Model-derived tree that would overflow the thread stack.
+fn diff_node_depth<M>(old: &Html<M>, new: &Html<M>, out: &mut Vec<Patch>, depth: usize) {
+    if depth >= crate::html::MAX_HTML_DEPTH {
+        return;
+    }
     let (ot, oa, ok, _nt, na, nk) = match (old, new) {
         (Html::HElement(ot, oa, ok), Html::HElement(nt, na, nk)) if ot == nt => {
             (ot, oa, ok, nt, na, nk)
@@ -115,6 +121,7 @@ fn diff_node<M>(old: &Html<M>, new: &Html<M>, out: &mut Vec<Patch>) {
         return;
     }
 
+    let child_depth = depth.saturating_add(1);
     // Per-position structural diff.
     for (oc, nc) in ok.iter().zip(nk.iter()) {
         match (oc, nc) {
@@ -131,7 +138,7 @@ fn diff_node<M>(old: &Html<M>, new: &Html<M>, out: &mut Vec<Patch>) {
             // patched. Match that quirk rather than emitting a spurious replace.
             (Html::HRaw(_), Html::HRaw(_)) => {}
             (Html::HElement(t1, _, _), Html::HElement(t2, _, _)) if t1 == t2 => {
-                diff_node(oc, nc, out);
+                diff_node_depth(oc, nc, out, child_depth);
             }
             // Tag / kind mismatch → replace the subtree at the parent.
             _ => {
@@ -484,5 +491,31 @@ mod tests {
         assert_eq!(p.len(), 1);
         // Removal sentinel: empty string (Go convention).
         assert_eq!(p[0].attrs.get("disabled").map(String::as_str), Some(""));
+    }
+
+    // RT-UI-001: depth cap — diff must return (not abort/stack-overflow) when
+    // diffing two trees that are deeper than MAX_HTML_DEPTH (1024). We build
+    // chains of depth 5000 and assert diff completes.
+    #[test]
+    fn diff_depth_cap_does_not_overflow() {
+        const DEPTH: usize = 5_000;
+
+        fn make_chain(depth: usize) -> Html<()> {
+            let mut h: Html<()> = Html::HText("leaf".into());
+            for _ in 0..depth {
+                h = Html::HElement("div".into(), vec![], vec![h]);
+            }
+            h
+        }
+
+        let mut old = make_chain(DEPTH);
+        let mut new = make_chain(DEPTH);
+        assign_sky_ids(&mut old, "r");
+        assign_sky_ids(&mut new, "r");
+        // This call must return, not overflow the stack.
+        let patches = diff(&old, &new);
+        // Identical trees produce no patches (or only structural no-ops).
+        // The exact count is less important than the call completing.
+        let _ = patches;
     }
 }
