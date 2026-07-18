@@ -1,0 +1,35 @@
+module Main exposing (main)
+
+import Ipe.Prelude exposing (..)
+import Ipe.Log exposing (println)
+
+
+type Shape
+    = Circle Int
+    | Empty
+
+
+type alias Point =
+    { x : Int, y : Int }
+
+
+point : Point
+point =
+    { x = 1, y = 2 }
+
+
+main =
+    let
+        scalar =
+            toString 42
+
+        record =
+            toString point
+
+        adtPayload =
+            toString (Circle 5)
+
+        adtNullary =
+            toString Empty
+    in
+    println (scalar ++ " | " ++ record ++ " | " ++ adtPayload ++ " | " ++ adtNullary)

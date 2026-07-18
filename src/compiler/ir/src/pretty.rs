@@ -1407,8 +1407,8 @@ fn bound_suffix(bounds: BoundSet) -> String {
     if bounds.has_clone() {
         parts.push("Clone");
     }
-    if bounds.has_display() {
-        parts.push("Display");
+    if bounds.has_show() {
+        parts.push("Stringify");
     }
     format!(": {}", parts.join("+"))
 }

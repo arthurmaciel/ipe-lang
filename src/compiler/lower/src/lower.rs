@@ -3816,7 +3816,7 @@ const fn is_db_row_accessor(k: KernelFn) -> bool {
 /// `matcher(tracked, k, args)` answers, for the currently-tracked symbol
 /// `tracked`, whether the call `Callee::Kernel(k)` applied to `args` obligates
 /// it — e.g. `IpeRow`'s `is_db_row_accessor(k) && args[1] is Var(tracked)` (`IpeRow`),
-/// or Display's `k == BasicsToString && args[0] is Var(tracked)` (`Display`). Every
+/// or stringify's `k == BasicsToString && args[0] is Var(tracked)` (`IpeStringify`). Every
 /// distinct kernel→bound obligation is expressed as one such matcher; the
 /// STRUCTURAL walk (shadow discipline + alias-transparency) is shared, so a new
 /// bound reuses this whole traversal by supplying only its own matcher.
@@ -4167,12 +4167,12 @@ fn apply_kernel_type_param_bounds(
     let ipe_row_matcher = |tracked: Symbol, k: KernelFn, args: &[Expr]| -> bool {
         is_db_row_accessor(k) && arg_is_tracked_var(args, 1, tracked)
     };
-    // Display: a `Basics.toString(x)` application whose sole arg (index 0)
+    // Stringify: a `Basics.toString(x)` application whose sole arg (index 0)
     // is the tracked param. Applies to wildcard `any` AND named tvars — `toString`
-    // is legitimate on a polymorphic value, and `T: Display` is satisfiable by
-    // every scalar caller; a composite argument fails at COMPILE time either way
-    // (see `BoundSet::DISPLAY`).
-    let display_matcher = |tracked: Symbol, k: KernelFn, args: &[Expr]| -> bool {
+    // is legitimate on a polymorphic value, and `IpeStringify` is satisfiable by
+    // every scalar AND every composite caller (record/ADT/list/map), so no
+    // composite call site can exit-0-then-cargo-fail (see `BoundSet::SHOW`).
+    let stringify_matcher = |tracked: Symbol, k: KernelFn, args: &[Expr]| -> bool {
         matches!(k, KernelFn::BasicsToString) && arg_is_tracked_var(args, 0, tracked)
     };
     // `Sub.subscribeWebSocket raw kind msg` — the bare `msg` (arg index 2) is
@@ -4203,9 +4203,9 @@ fn apply_kernel_type_param_bounds(
         if is_wildcard && fires_on(&ipe_row_matcher) {
             *bounds = bounds.with_sky_row();
         }
-        // Display — wildcard OR named.
-        if fires_on(&display_matcher) {
-            *bounds = bounds.with_display();
+        // Stringify (`IpeStringify`) — wildcard OR named.
+        if fires_on(&stringify_matcher) {
+            *bounds = bounds.with_show();
         }
         // `Send + 'static` — the bare `onOpen` msg moved into the
         // `sub_subscribe_ws_open` Source closure. Wildcard OR named (the msg is a
