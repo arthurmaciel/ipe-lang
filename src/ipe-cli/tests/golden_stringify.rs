@@ -51,6 +51,38 @@ fn tostring_scalars_run() {
     assert_eq!(out.stdout.trim(), "42 true 3");
 }
 
+/// SEAL regression: `toString` on a concrete RECORD and ADT (alongside a scalar)
+/// must ipe-accept AND the emitted crate must `cargo build`. Before the fix,
+/// `basics_to_string<T: std::fmt::Display>` had no `Display` impl for a
+/// record/ADT, so `ipe build` exited 0 but the emitted crate failed `cargo
+/// build` with E0277 — an exit-0-then-cargo-fail SEAL breach. Routing the whole
+/// stringify family through `IpeStringify` (which every scalar AND every emitted
+/// composite implements) closes the class.
+///
+/// ipe-0 half runs unconditionally (cheap, no cargo); cargo-0 ∧ run-0 half is
+/// `IPE_E2E`-gated — the only check that would have caught the original breach.
+#[test]
+fn tostring_record_and_adt_run() {
+    // ipe-0: the compiler must accept `toString` on a record + ADT + scalar.
+    let dir = compile_golden("m_tostring_composite");
+    if !e2e_enabled() {
+        return;
+    }
+    // cargo-0 ∧ run-0: the emitted crate builds and prints the composites.
+    let out = support::build_and_run_emitted("m_tostring_composite", &dir);
+    assert_eq!(
+        out.exit_code,
+        Some(0),
+        "composite-toString crate must cargo-build AND exit 0 (no E0277); got {:?} \
+         (stdout: {:?})",
+        out.exit_code,
+        out.stdout
+    );
+    // scalar `42`; record `{1 2}` (Go `%v`, `_fieldIndex` order); ADT payload
+    // `Circle 5`; ADT nullary `Empty`.
+    assert_eq!(out.stdout.trim(), "42 | {1 2} | Circle 5 | Empty");
+}
+
 /// `Log.infoWith : String -> List a -> Task Error ()` with Stringify attrs
 /// compiles (the obligation on the list element) — a pure ipe compile.
 #[test]

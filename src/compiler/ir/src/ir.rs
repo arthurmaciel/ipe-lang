@@ -293,30 +293,8 @@ impl BoundSet {
     /// wildcard `any` variable and ONLY when the body actually calls a `db_get_*`
     /// — no blast radius on genuine named type variables (`a`, `msg`).
     const IPE_ROW: u16 = 1 << 11;
-    /// The `std::fmt::Display` bound: a generic type-param that flows into
-    /// a `Basics.toString` kernel application (runtime `basics_to_string<T:
-    /// std::fmt::Display>`) gains `std::fmt::Display` so the emitted body's
-    /// `basics_to_string(x)` call type-checks and monomorphises per call site.
-    /// Without it the enclosing generic carries only `<T{n}: Clone>` and the
-    /// body's `basics_to_string(x)` cannot prove `T{n}: Display` (E0277).
-    ///
-    /// This is the SAME structural machinery as [`Self::IPE_ROW`] — a
-    /// kernel applied, alias-transparently, to a Var/CloneVar reference to a
-    /// param whose type is `Generic(tv)` obliges the kernel's Rust bound on that
-    /// tv — generalised to a kernel→bound map. Unlike `IPE_ROW`, the bound lands
-    /// on WILDCARD `any` AND genuine named tvars alike: `toString` is legitimate
-    /// on a polymorphic value, and the resulting `T: Display` is satisfiable by
-    /// every scalar caller (Int/Float/Bool/String) — the overwhelming common
-    /// case, matching Go exactly. A composite (record/ADT) argument has no
-    /// `Display` impl and fails at COMPILE time (E0277 at the caller's
-    /// instantiation), never at runtime — the runtime's deliberate policy (see
-    /// `src/runtime/rust/src/basics.rs:174-182`). NOT a new SEAL violation:
-    /// `ipe` already exit-0'd on composite-`toString` before this bound existed
-    /// (the monomorphic `basics_to_string` call already required `Display`); the
-    /// bound only relocates that pre-existing cargo error from the callee body
-    /// to the caller's instantiation, never introducing one where there was
-    /// none.
-    const DISPLAY: u16 = 1 << 12;
+    // 1 << 12 is free — the former `DISPLAY` (`Basics.toString`) bound folded
+    // into `SHOW` (`IpeStringify`), which covers scalar AND composite arguments.
     /// The `'static` lifetime bound: a generic type-param that flows,
     /// INSIDE the function body, into a value boxed as a boxed `dyn Fn` trait
     /// object (`Box<dyn Fn(..) -> .. + Send + 'static>`, or the `Arc` +Sync
@@ -451,13 +429,6 @@ impl BoundSet {
         Self(self.0 | Self::IPE_ROW)
     }
 
-    /// This set with the `std::fmt::Display` (`Basics.toString`) bound — see
-    /// [`Self::DISPLAY`].
-    #[must_use]
-    pub const fn with_display(self) -> Self {
-        Self(self.0 | Self::DISPLAY)
-    }
-
     /// This set with the `'static` (boxed-callback trait-object) lifetime bound —
     /// see [`Self::STATIC`].
     #[must_use]
@@ -538,13 +509,6 @@ impl BoundSet {
     #[must_use]
     pub const fn has_sky_row(self) -> bool {
         self.0 & Self::IPE_ROW != 0
-    }
-
-    /// Whether the `std::fmt::Display` (`Basics.toString`) bound is set — see
-    /// [`Self::DISPLAY`].
-    #[must_use]
-    pub const fn has_display(self) -> bool {
-        self.0 & Self::DISPLAY != 0
     }
 
     /// Whether the `'static` (boxed-callback trait-object) lifetime bound is set
