@@ -1,12 +1,11 @@
 # CLAUDE.md — Ipê language authoring reference
 
-> **Ipê** — an Elm-family, pure-functional language compiling to Rust;
-> compiler + stdlib modules are currently `Ipê.*`-prefixed pending a final
-> rename, so use those names verbatim in code. Self-contained authoring
-> reference: every import path, module, kernel, type, and function name below
-> is the exact identifier the current compiler accepts. Compiler/runtime
-> *development* rules live in `PRINCIPLES.md` (enforcement SSOT) +
-> `DEVELOPMENT.md`, not here.
+> **Ipê** — Elm-family pure-functional language, compiles to Rust.
+> Compiler + stdlib modules currently `Ipê.*`-prefixed pending rename — use
+> those names verbatim. Self-contained authoring reference: every import
+> path, module, kernel, type, function name below = exact identifier current
+> compiler accepts. Compiler/runtime *development* rules in `PRINCIPLES.md`
+> (enforcement SSOT) + `DEVELOPMENT.md`, not here.
 
 ## Language syntax
 
@@ -41,14 +40,14 @@ html = """<div class="card">
 </div>"""
 ```
 
-Single `{` is literal. Interpolation exprs can be identifiers, field
-access (`{{record.field}}`), qualified names (`{{String.fromInt n}}`),
-or function calls.
+Single `{` literal. Interpolation exprs = identifiers, field access
+(`{{record.field}}`), qualified names (`{{String.fromInt n}}`), or
+function calls.
 
 Escape w/ backslash: `\{{` emits literal `{{` (no interpolation). Use to
-ship Mustache/Handlebars/shell-script placeholders downstream without
-Ipê hijacking them. `\\` collapses to single literal backslash; other
-`\X` sequences preserved verbatim (regex `\d+`, paths `\test`, etc).
+ship Mustache/Handlebars/shell-script placeholders downstream without Ipê
+hijacking. `\\` collapses to single literal backslash; other `\X`
+sequences preserved verbatim (regex `\d+`, paths `\test`, etc).
 
 ### Prelude (autoloaded via `Ipe.Prelude exposing (..)`)
 
@@ -57,24 +56,24 @@ Ipê hijacking them. `\\` collapses to single literal backslash; other
 
 ## When users ask for an app — the architecture decision matrix
 
-Before writing more than a one-file PoC, align with the user on the six
-decisions below. Production-grade code does not survive guesswork.
+Before more than one-file PoC, align w/ user on six decisions below.
+Production-grade code no survive guesswork.
 
 ### The six decisions to confirm
 
-1. **App shape** — match the matrix. Ipe.Live=web UI, Ipe.Http.Server=headless
+1. **App shape** — match matrix. Ipe.Live=web UI, Ipe.Http.Server=headless
    API, Ipe.Cli=one-shot/cron, Ipe.Tui=terminal UI, Ipe.Webview=desktop.
 2. **Persistence** — SQLite (single-file, embeds) / PostgreSQL / Firestore /
    Redis / none.
 3. **Auth** — none / `Ipe.Auth` (cookies+JWT, you own users) / OAuth
    (Google/GitHub) / external (Auth0/Clerk/Cognito).
 4. **Ipe.Live session store** — memory (dev only) / sqlite / redis / postgres
-   / firestore. Required even when the user picks a different primary DB.
+   / firestore. Required even when user picks different primary DB.
 5. **Deployment target** — local binary / Docker / Cloud Run / Kubernetes / VM.
 6. **Observability scope** — local logs only / per-app embedded console / OTel
    collector (`OTEL_EXPORTER_OTLP_ENDPOINT`).
 
-Ask one focused question per ambiguity; don't guess heroically.
+Ask one focused question per ambiguity; no guess heroically.
 
 ### App shape matrix
 
@@ -90,7 +89,7 @@ Ask one focused question per ambiguity; don't guess heroically.
 | WebSocket-driven feed                    | **Ipe.Http.Server.WebSocket** | `Server.upgrade req` | Bidirectional. |
 | Server-sent stream (LLM tokens, SSE)     | **Ipe.Http.Server.Stream** | `Server.Stream.emit` | Mirror of `Ipe.Http.Stream`. |
 
-### Pinned defaults (always apply unless the user overrules)
+### Pinned defaults (always apply unless user overrules)
 
 | Concern              | Default                                                          |
 |----------------------|------------------------------------------------------------------|
@@ -106,9 +105,9 @@ Ask one focused question per ambiguity; don't guess heroically.
 
 ### `sky.toml` shape per decision
 
-An author configures at most these sections. Precedence: **process env >
-`.env` > `sky.toml`**. Secrets never go in `sky.toml` — auth secret comes
-from `IPE_AUTH_TOKEN_SECRET` (≥32 bytes).
+Author configures at most these sections. Precedence: **process env >
+`.env` > `sky.toml`**. Secrets never in `sky.toml` — auth secret from
+`IPE_AUTH_TOKEN_SECRET` (≥32 bytes).
 
 ```toml
 name = "<project>"
@@ -137,18 +136,18 @@ level  = "info"                 # debug / info / warn / error
 ### Production gate — surface to the user
 
 Dev console + banner + metrics endpoint lock down when `ENV` (then
-`IPE_ENV`) is anything other than unset/`dev`/`development`/`local`. When
-the user mentions "deploy"/"production"/"Cloud Run"/"Kubernetes":
+`IPE_ENV`) anything other than unset/`dev`/`development`/`local`. When user
+mentions "deploy"/"production"/"Cloud Run"/"Kubernetes":
 
 * Confirm `ENV=production` will be set on runtime.
 * Confirm `IPE_AUTH_TOKEN_SECRET` ≥32 bytes.
 * Confirm `IPE_CONSOLE_AUTH` set (`token` or `app`) — production + unset
   refuses to mount `/_sky/console`.
-* Confirm session store is NOT `memory` when >1 replica.
+* Confirm session store NOT `memory` when >1 replica.
 
-Production-grade = survives restart, scales horizontally without losing
-state, refuses cross-tenant reads (SQL-WHERE gate), no permanent error
-banner on transient failures, structured logs every operator can trace.
+Production-grade = survives restart, scales horizontally w/o losing state,
+refuses cross-tenant reads (SQL-WHERE gate), no permanent error banner on
+transient failures, structured logs every operator can trace.
 
 ## Effect boundary — Task-everywhere
 
@@ -163,10 +162,10 @@ Single rule: **every observable side effect returns `Task Error a`.**
 
 **Default-supplied helpers stay bare** — `System.getenvOr key def : String`,
 `Maybe.withDefault`, `Result.withDefault`, `Db.getString`/`getInt`/`getBool`:
-default plugs the failure case at the call site.
+default plugs failure case at call site.
 
-**Auto-force `let _ = TaskExpr`.** The compiler forces the discarded
-expression so the side effect fires:
+**Auto-force `let _ = TaskExpr`.** Compiler forces discarded expression so
+side effect fires:
 
 ```elm
 let
@@ -194,9 +193,8 @@ apiKey =
 | `Task.mapError` | `(e -> e2) -> Task e a -> Task e2 a` |
 | `Task.onError` | `(e -> Task e2 a) -> Task e a -> Task e2 a` |
 
-No `Result.fromTask` by design — keep effectful pipelines in Task; the
-runtime entry boundary (CLI `main`, `Cmd.perform`, HTTP handler return)
-executes them.
+No `Result.fromTask` by design — keep effectful pipelines in Task; runtime
+entry boundary (CLI `main`, `Cmd.perform`, HTTP handler return) executes them.
 
 **Two-level error pattern:**
 
@@ -205,7 +203,7 @@ executes them.
 3. `Task.fail (Error.unexpected ("Operation failed (ref " ++ errId ++ ")"))` — user-facing message.
 
 Per app shape: CLI → `Task.run … |> Task.onError reportError`;
-Ipe.Http.Server → `Task.onError` recovers to a 4xx/5xx Response;
+Ipe.Http.Server → `Task.onError` recovers to 4xx/5xx Response;
 Ipe.Live → `Cmd.perform task ResultMsg`, dispatch updates
 `notification` / `historyError` in Model.
 
@@ -214,12 +212,12 @@ Ipe.Live → `Cmd.perform task ResultMsg`, dispatch updates
 Source: `sky-stdlib/{Ipê/Core,Std,Ipê/Http}/*.ipe`. `ipe doc Module`
 surfaces every entry.
 
-Each stdlib binding is either pure Ipê (a recursive/case-based impl) or an
-`Ffi.kernel "Name"` alias — a Ipê-source decl with an HM signature whose body is
-`Ffi.kernel "Mod_func"`; the compiler routes such call sites directly to the
-existing typed runtime kernel (no runtime overhead, `ipe doc` still lists it).
-You only touch `Ffi.kernel` when authoring/registering stdlib modules, not in
-normal app code.
+Each stdlib binding = pure Ipê (recursive/case-based impl) or
+`Ffi.kernel "Name"` alias — Ipê-source decl w/ HM signature whose body is
+`Ffi.kernel "Mod_func"`; compiler routes such call sites directly to existing
+typed runtime kernel (no runtime overhead, `ipe doc` still lists it). Only
+touch `Ffi.kernel` when authoring/registering stdlib modules, not in normal
+app code.
 
 ### Pure (no I/O, no Task wrap)
 
@@ -286,9 +284,9 @@ normal app code.
 
 `System.exit : Int -> a` — process termination, polymorphic return.
 
-**Stdlib typed-record convention.** Every typed-record surface ships a
+**Stdlib typed-record convention.** Every typed-record surface ships
 `default*` ctor + `with*` builder per field — always compose via builders
-so future field additions don't break call sites.
+so future field additions no break call sites.
 
 ## Ipe.Live + Ipe.Http.Server
 
@@ -307,16 +305,16 @@ HTTP-first (full HTML on load, patches on events), SSE subscriptions,
 session stores (memory/sqlite/redis/postgres/firestore), type-safe events,
 VNode diffing.
 
-**`init` is per-session, not per-page-reload.** First request from a
-browser with no `sky_sid` cookie fires `init`. Browser reload while the
-session is alive RESTORES Model from the session store — `init` does NOT
-run. Force fresh `init` (demo reset/e2e bootstrap): `Cmd.perform
-(Cookie.expire "sky_sid")` then reload. If the goal is "my other tab missed
-an update", use `Cmd.publish` instead.
+**`init` is per-session, not per-page-reload.** First request from browser
+w/ no `sky_sid` cookie fires `init`. Browser reload while session alive
+RESTORES Model from session store — `init` does NOT run. Force fresh `init`
+(demo reset/e2e bootstrap): `Cmd.perform
+(Cookie.expire "sky_sid")` then reload. If goal = "my other tab missed an
+update", use `Cmd.publish` instead.
 
 ### init's `req` shape
 
-`init` receives a `req` value carrying full request context:
+`init` receives `req` value carrying full request context:
 
 | Field | Type | Source |
 |---|---|---|
@@ -327,7 +325,7 @@ an update", use `Cmd.publish` instead.
 | `req.headers` | `Dict String String` | request headers, canonical case |
 | `req.cookies` | `Dict String String` | parsed cookies |
 
-Session bootstrap in init is a one-line read:
+Session bootstrap in init = one-line read:
 
 ```elm
 init req =
@@ -340,10 +338,10 @@ Apps ignoring `req` build unchanged (row-poly extension).
 ### Per-page `<head>` injection
 
 Optional `head : Model -> List (Html msg)` field on `Live.app` cfg.
-Runtime calls it once per full GET (initial load + sky-nav navigation),
-splices the returned list into `<head>` after required `<meta charset>`/
-`<meta viewport>`/`<meta sky-base>` tags. HM sig is row-open — apps
-omitting the field type-check and build unchanged.
+Runtime calls once per full GET (initial load + sky-nav navigation),
+splices returned list into `<head>` after required `<meta charset>`/
+`<meta viewport>`/`<meta sky-base>` tags. HM sig row-open — apps omitting
+field type-check and build unchanged.
 
 ```elm
 import Ipe.Live.Head as Head
@@ -383,20 +381,19 @@ headFor model =
 | `themeColor : String -> Html msg` | `<meta name="theme-color" content="…">` |
 | `rss : String -> String -> Html msg` | `<link rel="alternate" type="application/rss+xml" …>` |
 
-Pair with `Ipe.Html.node "link" […] []` for cases the helpers don't cover.
+Pair w/ `Ipe.Html.node "link" […] []` for cases helpers no cover.
 
-**SSE patches scope to `<body>`** — head updates require a full reload.
-For UI swapping `<head>` on every Msg: drop the `head` field and emit
-`<title>`/`<meta>` inside `view` via `Html.node` — the diff layer patches
-normal DOM nodes regardless of position.
+**SSE patches scope to `<body>`** — head updates require full reload. For
+UI swapping `<head>` on every Msg: drop `head` field and emit `<title>`/
+`<meta>` inside `view` via `Html.node` — diff layer patches normal DOM
+nodes regardless of position.
 
 ### URL routing + history
 
-`routes` maps URL paths to Page values. The runtime matches incoming URLs
-in declaration order, captures `:param` segments, and constructs the Page
-with captured values (always `String`). Declaration order matters —
-literals before patterns (`/apps/new` before `/apps/:slug`, or "new"
-matches as a slug).
+`routes` maps URL paths to Page values. Runtime matches incoming URLs in
+declaration order, captures `:param` segments, constructs Page w/ captured
+values (always `String`). Declaration order matters — literals before
+patterns (`/apps/new` before `/apps/:slug`, or "new" matches as slug).
 
 ```elm
 type Page
@@ -417,9 +414,9 @@ routes =
 notFound = LoginPage
 ```
 
-**URL-from-Page** (address bar in step with programmatic `Navigate` Msgs):
-emit a sentinel `<div>` w/ `data-sky-path` on every render. The runtime
-pushes/replaces history when the value differs from `location.pathname`.
+**URL-from-Page** (address bar in step w/ programmatic `Navigate` Msgs):
+emit sentinel `<div>` w/ `data-sky-path` on every render. Runtime
+pushes/replaces history when value differs from `location.pathname`.
 
 ```elm
 import Ipe.Html as Html
@@ -436,29 +433,29 @@ urlSync model =
 -- Place urlSync inside the view's top-level column, next to the shell.
 ```
 
-`data-sky-path` is typed (no JS-in-string, works under strict CSP, no XSS
-surface). Leave the element in the DOM after the runtime processes it —
-removing it orphans its `sky-id`. The path-check keeps the call idempotent.
+`data-sky-path` typed (no JS-in-string, works under strict CSP, no XSS
+surface). Leave element in DOM after runtime processes it — removing
+orphans its `sky-id`. Path-check keeps call idempotent.
 
-For **link navigation**, add `sky-nav` to `<a>` — the runtime intercepts
-the click, fetches the URL, full-body-patches, pushes history. No app code
-needed. **Back/Forward** is handled by the runtime's popstate listener.
+For **link navigation**, add `sky-nav` to `<a>` — runtime intercepts click,
+fetches URL, full-body-patches, pushes history. No app code needed.
+**Back/Forward** handled by runtime's popstate listener.
 
 ```elm
 Html.a [ Attr.href "/apps", Attr.attribute "sky-nav" "" ] [ Html.text "Dashboard" ]
 ```
 
-`data-sky-eval` (runs an attribute via `new Function()`) is
-CSP-incompatible — use `data-sky-path` for URL updates.
+`data-sky-eval` (runs attribute via `new Function()`) CSP-incompatible —
+use `data-sky-path` for URL updates.
 
 **Auth gates around routes.** For public-vs-authenticated apps:
 
-- Let Ipe.Live route the URL to a page as usual.
+- Let Ipe.Live route URL to page as usual.
 - In `pageBody`/view, outer-case on `model.session`: signed-out always
-  renders the sign-in surface regardless of page.
-- Use a single `currentPath : Model -> String` (not per-page
-  `pathForPage`) returning the sign-in URL when `session = Nothing`, else
-  dispatching on `model.page` — the address bar follows what the user sees.
+  renders sign-in surface regardless of page.
+- Use single `currentPath : Model -> String` (not per-page `pathForPage`)
+  returning sign-in URL when `session = Nothing`, else dispatching on
+  `model.page` — address bar follows what user sees.
 
 ```elm
 currentPath : Model -> String
@@ -475,15 +472,15 @@ currentPath model =
                 AdminUsersPage     -> "/users"
 ```
 
-**Slug ↔ subdomain convention.** Apps under a wildcard domain
+**Slug ↔ subdomain convention.** Apps under wildcard domain
 (`*.platform.app`) → prefer slug-keyed URLs (`/apps/<slug>`) — bookmarkable,
-follows renames. Carry the slug on the Page constructor; handlers needing
-a numeric id resolve via a `findBySlug` helper.
+follows renames. Carry slug on Page constructor; handlers needing numeric
+id resolve via `findBySlug` helper.
 
 ### Async commands
 
 `update msg model` returns `(Model, Cmd Msg)`. `Cmd.perform task toMsg`
-runs the task asynchronously; the result dispatches back as a Msg.
+runs task asynchronously; result dispatches back as Msg.
 
 ```elm
 update msg model =
@@ -510,8 +507,8 @@ update msg model =
 
 ### Radio convention — `onClick` per label, not `onInput`
 
-A radio's `input` event reports `checked=True` (Bool), not the chosen
-value. Bind a fully-applied Msg per choice via `onClick`:
+Radio's `input` event reports `checked=True` (Bool), not chosen value.
+Bind fully-applied Msg per choice via `onClick`:
 
 ```elm
 label [ for "role-guardian", onClick (UpdateRole "guardian") ]
@@ -520,8 +517,8 @@ label [ for "role-guardian", onClick (UpdateRole "guardian") ]
     ]
 ```
 
-`for`/`id` pairing lets the browser toggle the radio natively; `onClick`
-carries the typed Msg.
+`for`/`id` pairing lets browser toggle radio natively; `onClick` carries
+typed Msg.
 
 ### Forms with passwords (mandatory pattern)
 
@@ -540,35 +537,35 @@ view model =
         ]
 ```
 
-Why: password managers re-prompt on server-driven `value=…` mutations; the
-secret never enters Model (no `onInput UpdatePassword` Msg → no Model field →
-never serialised into the session store); submit reads the live DOM value,
-race-free. The `DoSignIn AuthCreds` ctor takes a typed record — form data
-decodes into it case-insensitively, no per-Msg decoder boilerplate.
+Why: password managers re-prompt on server-driven `value=…` mutations;
+secret never enters Model (no `onInput UpdatePassword` Msg → no Model field
+→ never serialised into session store); submit reads live DOM value,
+race-free. `DoSignIn AuthCreds` ctor takes typed record — form data decodes
+into it case-insensitively, no per-Msg decoder boilerplate.
 
 ### Connection status banner
 
 Bottom-pinned, three states:
 
 - **connected** — hidden.
-- **reconnecting** — amber `Reconnecting…`. Shown when SSE drops or a POST
+- **reconnecting** — amber `Reconnecting…`. Shown when SSE drops or POST
   fails; 500 ms grace before painting.
-- **offline** — red `Connection lost — refresh to retry`. The runtime keeps
-  retrying in the background so a healed proxy recovers without a refresh.
+- **offline** — red `Connection lost — refresh to retry`. Runtime keeps
+  retrying in background so healed proxy recovers w/o refresh.
 
 Localise via `status = { reconnecting = "Reconnexion…", offline =
-"Connexion perdue" }` on the `Live.app` cfg record. Partial overrides fall
-back to English defaults. Strings are rendered via `textContent` (never
+"Connexion perdue" }` on `Live.app` cfg record. Partial overrides fall
+back to English defaults. Strings rendered via `textContent` (never
 `innerHTML`).
 
 ### Input preservation across re-renders
 
-The runtime preserves uncontrolled inputs across patches: empty patches
-are JSON-acked (preserving password/uncontrolled fields), full-body swaps
-preserve every uncontrolled INPUT/TEXTAREA/SELECT, and patches targeting a
-focused/open `<select>` are skipped and reconciled on the next
-interaction. Author takeaway: leave password fields uncontrolled (no
-`value`, no `onInput`) and they survive re-renders.
+Runtime preserves uncontrolled inputs across patches: empty patches
+JSON-acked (preserving password/uncontrolled fields), full-body swaps
+preserve every uncontrolled INPUT/TEXTAREA/SELECT, patches targeting
+focused/open `<select>` skipped and reconciled on next interaction. Author
+takeaway: leave password fields uncontrolled (no `value`, no `onInput`) and
+they survive re-renders.
 
 ### Ipe.Http.Server
 
@@ -587,7 +584,7 @@ Secure, SameSite) | extractors: `param`, `queryParam`, `header`,
 `getCookie` | responses: `text`, `json`, `html`, `withStatus`, `redirect`
 | middleware: `Handler -> Handler`.
 
-**Handler annotation.** Named handlers ascribe at head position w/ the
+**Handler annotation.** Named handlers ascribe at head position w/
 `Handler` alias:
 
 ```elm
@@ -597,17 +594,17 @@ getUser : Handler
 getUser req = ...
 ```
 
-`Handler` is a transparent alias for `Request -> Task Error Response`,
+`Handler` = transparent alias for `Request -> Task Error Response`,
 exported from `Ipe.Http.Server`. Long-form `: Request -> Task Error
-Response` still works. The same pattern works for any function-typed alias:
+Response` still works. Same pattern works for any function-typed alias:
 `view : Renderer Msg`, `decodeUser : Decoder User`, etc.
 
 ### Dev console
 
-Every Ipe.Live/Ipe.Http.Server app auto-mounts a `Ipe.Ui` dev console at
-`/_sky/console` in dev mode, alongside structured logging, a Prometheus
-`/_sky/metrics` endpoint, and distributed tracing. In production
-(`ENV`≠dev) the console + banner are removed and metrics require auth.
+Every Ipe.Live/Ipe.Http.Server app auto-mounts `Ipe.Ui` dev console at
+`/_sky/console` in dev mode, alongside structured logging, Prometheus
+`/_sky/metrics` endpoint, distributed tracing. In production (`ENV`≠dev)
+console + banner removed and metrics require auth.
 
 ## Ipe.Ui — typed no-CSS layout DSL
 
@@ -637,37 +634,37 @@ view model =
 ### Four idioms to get right
 
 1. **Forms with sensitive inputs use `Ui.form` + `onSubmit DoSignIn`, NOT
-   `onInput` per keystroke on password fields.** See the password pattern
-   in the Ipe.Live section.
+   `onInput` per keystroke on password fields.** See password pattern in
+   Ipe.Live section.
 
 2. **Real `<input>` elements use `Ui.input`, NOT `Ui.el [htmlAttribute
-   "type" "text"]`.** `Ui.el` builds a Node rendering as `<div>` — browsers
+   "type" "text"]`.** `Ui.el` builds Node rendering as `<div>` — browsers
    ignore `type=`/`value=` on non-inputs.
 
 3. **Ipe.Ui-heavy modules (~25+ polymorphic `Element Msg` helpers) MUST be
-   split across multiple modules.** A monolithic `Main.ipe` can blow the HM
+   split across multiple modules.** Monolithic `Main.ipe` can blow HM
    type-checker heap. Canonical split: `State.ipe` (types, no Ipe.Ui
    imports) / `Update.ipe` / `View/Common.ipe` / one View module per page /
    `Main.ipe` dispatcher.
 
-4. **`Input.*` size/layout attrs apply to the wrapper; form attrs stay on
-   the inner control.** Every `Ipe.Ui.Input.*` call
+4. **`Input.*` size/layout attrs apply to wrapper; form attrs stay on inner
+   control.** Every `Ipe.Ui.Input.*` call
    (text/multiline/email/username/search/currentPassword/newPassword/
    slider/checkbox/radio/radioRow) routes layout attrs
    (`Ui.width`/`Ui.height`/`Ui.padding`/`Ui.spacing`/`Ui.alignX`/
-   `Ui.alignY`/`Ui.nearby`/`Ui.pointer`/`Ui.overflow`) to the outer
-   wrapper, while form/event/visual attrs stay on the inner
-   `<input>`/`<textarea>`. So `Input.multiline [Ui.height Ui.fill] {...}`
-   inside a column-fill parent fills the parent, and
-   `Background.color (Ui.rgb 240 240 240)` colours the textarea itself.
+   `Ui.alignY`/`Ui.nearby`/`Ui.pointer`/`Ui.overflow`) to outer wrapper,
+   while form/event/visual attrs stay on inner `<input>`/`<textarea>`. So
+   `Input.multiline [Ui.height Ui.fill] {...}` inside column-fill parent
+   fills parent, and `Background.color (Ui.rgb 240 240 240)` colours
+   textarea itself.
 
 ### `Ui.fill` semantics
 
-`Ui.fill` lowers asymmetrically per the parent's flex direction: main-axis
-fill grows; cross-axis HEIGHT fill (row child) stretches by default;
-cross-axis WIDTH fill (column/el/textColumn child) sets `width: 100%`.
-Authoring takeaway: `[Ui.width fill, Ui.centerX]` is the canonical
-centred-page-content shape and works as expected.
+`Ui.fill` lowers asymmetrically per parent's flex direction: main-axis fill
+grows; cross-axis HEIGHT fill (row child) stretches by default; cross-axis
+WIDTH fill (column/el/textColumn child) sets `width: 100%`. Authoring
+takeaway: `[Ui.width fill, Ui.centerX]` = canonical centred-page-content
+shape and works as expected.
 
 ### `Ui.layoutWith` — wrapper customisation
 
@@ -675,12 +672,12 @@ centred-page-content shape and works as expected.
 Ui.layoutWith { wrapperAttrs : [Attr msg], rootAttrs : [Attr msg] } -> Element msg -> Html
 ```
 
-`wrapperAttrs` reach the outer 100vh `<div>` page wrapper (Background.color
-for page-wide dark mode, Font.color/Font.family for document-wide
-typography, Border/class/aria-*/data-*). `rootAttrs` apply to the root
-element (same as `Ui.layout`'s argument). `Ui.layout attrs el` ≡
+`wrapperAttrs` reach outer 100vh `<div>` page wrapper (Background.color for
+page-wide dark mode, Font.color/Font.family for document-wide typography,
+Border/class/aria-*/data-*). `rootAttrs` apply to root element (same as
+`Ui.layout`'s argument). `Ui.layout attrs el` ≡
 `Ui.layoutWith { wrapperAttrs = [], rootAttrs = attrs } el`. Reach for
-`layoutWith` when the wrapper needs visual styles (dark page, custom font
+`layoutWith` when wrapper needs visual styles (dark page, custom font
 cascade, page background image).
 
 ### Surface highlights
@@ -728,40 +725,39 @@ cascade, page background image).
   `PseudoClass`: `Ui.hover`, `Ui.focus`, `Ui.focusVisible`, `Ui.active`,
   `Ui.disabled`. `focusColor` targets `:focus-visible` (fires only on
   keyboard nav); use `Ui.onPseudo Ui.focus [...]` for sticky-focus.
-  `:hover` rules are auto-wrapped in `@media (hover: hover)` (no
-  sticky-hover on touch). Works on void elements (`<input>`, `<img>`, etc)
-  too. Composes w/ `Ui.breakpoint` via nesting.
+  `:hover` rules auto-wrapped in `@media (hover: hover)` (no sticky-hover on
+  touch). Works on void elements (`<input>`, `<img>`, etc) too. Composes w/
+  `Ui.breakpoint` via nesting.
 - **Media queries + breakpoints** (`Ui.mediaQuery`/`Ui.breakpoint`/
-  `Breakpoint` ADT) — CSS-driven viewport-conditional styling with no JS
+  `Breakpoint` ADT) — CSS-driven viewport-conditional styling w/ no JS
   round-trip, no Model field, no re-render. Typed `Breakpoint`: `Mobile`,
   `Tablet`, `Desktop`, `SmAndUp`, `MdAndUp`, `LgAndUp`, `XlAndUp`,
   `DarkMode`, `LightMode`, `ReducedMotion`, `TouchDevice`, `Portrait`,
   `Landscape`, `Custom Int Int` (minPx maxPx; 0=unset). `Ui.mediaQuery
-  query [attrs] child` = escape hatch for a raw CSS media-query string.
+  query [attrs] child` = escape hatch for raw CSS media-query string.
   Ipe.Tui ignores `<style>`; Ipe.Webview honours media queries identically
-  to Ipe.Live. Pick `Ui.breakpoint` when the transition needs no typed Msg;
+  to Ipe.Live. Pick `Ui.breakpoint` when transition needs no typed Msg;
   pick `Ipe.Ui.Responsive` when it does.
 - **Transitions + animations** (`Ipe.Ui.Transition`/`Ipe.Ui.Animation`/
-  `Ipe.Ui.Transform`) — typed CSS transitions + keyframe animations on a
-  Ipe.Ui element; the browser handles frame timing. Both are auto-wrapped
-  in `@media (prefers-reduced-motion: no-preference)` by default; opt out
-  via `Transition.attributeUnsafe`/`respectReducedMotion = False` only when
-  motion is semantically required (spinner, progress). `Transition.attribute
-  [property "background-color", duration 200, easing easeOut]` builds a
+  `Ipe.Ui.Transform`) — typed CSS transitions + keyframe animations on
+  Ipe.Ui element; browser handles frame timing. Both auto-wrapped in
+  `@media (prefers-reduced-motion: no-preference)` by default; opt out via
+  `Transition.attributeUnsafe`/`respectReducedMotion = False` only when
+  motion semantically required (spinner, progress). `Transition.attribute
+  [property "background-color", duration 200, easing easeOut]` builds
   transition; pair w/ `Background.hoverColor`. `Animation.attribute { name,
   duration, easing, delay, iterations, fillMode, respectReducedMotion,
-  keyframes }` builds a keyframe spec; `keyframes : List (Int, List
-  Transform.Prop)` is `[(percent, [Transform.opacity 0.0,
+  keyframes }` builds keyframe spec; `keyframes : List (Int, List
+  Transform.Prop)` = `[(percent, [Transform.opacity 0.0,
   Transform.translateY 10]), ...]`. `Transform.{translateX, translateY,
-  translate, scale, scaleXY, rotate, skewX, skewY, opacity}` are typed
-  helpers.
+  translate, scale, scaleXY, rotate, skewX, skewY, opacity}` = typed helpers.
 - **Aspect ratio + grid tracks** (`Ui.aspectRatio`/`Ui.aspectRatioWH`/
   `Ui.square`/`Ui.widescreen`/`Ui.fullHd`/`Ui.cinemascope` +
   `Ipe.Ui.Grid.tracks`/`Grid.columns`/`Grid.rows`). `Ui.aspectRatio 1.777`/
-  `Ui.aspectRatioWH 16 9` lock a width-to-height ratio (pair w/ `Ui.width
-  Ui.fill`). `Ipe.Ui.Grid` exposes a typed `Track` ADT (`fr`, `px`, `auto`,
+  `Ui.aspectRatioWH 16 9` lock width-to-height ratio (pair w/ `Ui.width
+  Ui.fill`). `Ipe.Ui.Grid` exposes typed `Track` ADT (`fr`, `px`, `auto`,
   `minContent`, `maxContent`, `minmax`, `repeat`, `repeatAutoFit`,
-  `repeatAutoFill`). Lighter-weight `Ui.gridColumns N` stays for the
+  `repeatAutoFill`). Lighter-weight `Ui.gridColumns N` stays for
   common-case product-card grid.
 
 | Need | Reach for |
@@ -803,8 +799,8 @@ Ui.input
     ]
 ```
 
-The callback receives a data URL. Decode w/ `Ipe.Encoding.base64Decode` →
-upload via `Http.post`. Ensure `[live] maxBodyBytes` ≥ your `fileMaxSize`.
+Callback receives data URL. Decode w/ `Ipe.Encoding.base64Decode` → upload
+via `Http.post`. Ensure `[live] maxBodyBytes` ≥ your `fileMaxSize`.
 
 ## Ipe.Tui
 
@@ -826,21 +822,20 @@ type alias Cfg model msg =
 main = Tui.app cfg |> Task.run
 ```
 
-**Logical-pixel canvas** — `canvasWidth × canvasHeight` defines the design
-surface; the runtime converts `Ui.padding 8`/`Ui.px N` to cells. Covers
-~95%+ of Ipe.Ui primitives; unsupported attrs (gradients, fine
-letter-spacing, image fills) emit a deduped warning (`IPE_TUI_QUIET=1`
-suppresses). Wide chars (CJK+emoji+ZWJ) supported.
+**Logical-pixel canvas** — `canvasWidth × canvasHeight` defines design
+surface; runtime converts `Ui.padding 8`/`Ui.px N` to cells. Covers ~95%+
+of Ipe.Ui primitives; unsupported attrs (gradients, fine letter-spacing,
+image fills) emit deduped warning (`IPE_TUI_QUIET=1` suppresses). Wide chars
+(CJK+emoji+ZWJ) supported.
 
 **Ipe.Cli password mode** — `Cli.readPassword : () -> Task Error String`
-reads stdin with echo disabled; the password never echoes and never lands
-in scrollback.
+reads stdin w/ echo disabled; password never echoes and never lands in
+scrollback.
 
 ## Ipe.Webview (desktop)
 
 Cross-backend mirror of `Live.app`+`Tui.app` — same TEA shape, native
-desktop window via the system webview. No HTTP server, no SSE, no session
-store.
+desktop window via system webview. No HTTP server, no SSE, no session store.
 
 ```elm
 import Ipe.Webview as Webview
@@ -856,32 +851,32 @@ main =
         |> Task.run
 ```
 
-The same `view` fn paints identically across Ipe.Live (web), Ipe.Tui
-(terminal), and Ipe.Webview (desktop). `WindowCfg` is closed (`{ title :
-String, size : (Int, Int) }`) today; macOS is supported first.
+Same `view` fn paints identically across Ipe.Live (web), Ipe.Tui
+(terminal), Ipe.Webview (desktop). `WindowCfg` closed (`{ title :
+String, size : (Int, Int) }`) today; macOS supported first.
 
-**Ipe.Ui convention** — the `view` fn MUST wrap its output in `Ui.layout []
-(...)` to convert `Element` → `Html` before rendering. A raw `Ui.column
-[...]` body produces a blank window (same convention as Ipe.Live).
+**Ipe.Ui convention** — `view` fn MUST wrap output in `Ui.layout []
+(...)` to convert `Element` → `Html` before rendering. Raw `Ui.column
+[...]` body produces blank window (same convention as Ipe.Live).
 
 ## Browser-WASM target (`--target wasm`)
 
-`ipe build --target wasm` compiles a single-page `Live.app` program to a
-browser bundle: the emitted project is a `cdylib` crate (wasm-bindgen glue,
-no tokio/axum/sqlx) plus a static `www/` shell (CSP `script-src 'self'
-'wasm-unsafe-eval'` — no JS eval). Bundle it with
-`cargo build --target wasm32-unknown-unknown --release` + the `wasm-bindgen`
-CLI (the build prints the exact commands).
+`ipe build --target wasm` compiles single-page `Live.app` program to
+browser bundle: emitted project = `cdylib` crate (wasm-bindgen glue, no
+tokio/axum/sqlx) plus static `www/` shell (CSP `script-src 'self'
+'wasm-unsafe-eval'` — no JS eval). Bundle w/
+`cargo build --target wasm32-unknown-unknown --release` + `wasm-bindgen`
+CLI (build prints exact commands).
 
 Per-target capability: pure kernels (`String`/`List`/`Dict`/`Math`/`Json`/
-`Decimal`/`Regex`/…) and the whole `Ipe.Ui`/`Ipe.Html`/`Ipe.Css` render
-surface compile; `Cmd.none`/`Cmd.batch`/`Cmd.perform`/`Sub.none` run on the
-browser scheduler. Server-only effects (`Db.*`, `File.*`, `Auth.*`,
+`Decimal`/`Regex`/…) and whole `Ipe.Ui`/`Ipe.Html`/`Ipe.Css` render surface
+compile; `Cmd.none`/`Cmd.batch`/`Cmd.perform`/`Sub.none` run on browser
+scheduler. Server-only effects (`Db.*`, `File.*`, `Auth.*`,
 `System.getenv`, `Server.*`, `Log.*`, `Http.*`, `Time.now`, …) have NO wasm
-denotation — naming one is IPE-N0029 at compile time; route them through a
-native server and call it over HTTP once the fetch substitute lands. Routed
-apps (Model with a `page` field) are IPE-L0129 until the client router
-ships; use `routes = []` + a page-free Model.
+denotation — naming one = IPE-N0029 at compile time; route them through
+native server and call over HTTP once fetch substitute lands. Routed apps
+(Model w/ `page` field) = IPE-L0129 until client router ships; use
+`routes = []` + page-free Model.
 
 ## Active limitations
 
@@ -895,34 +890,33 @@ Current compiler limitations to work around when writing code.
 5. **`Dict.toList` typed-key inference is inline-only.** `Dict.toList
    (Dict.fromList [(1, "a")])` chained in one expression returns real `Int`
    keys. For let-bound intermediates — `let d = Dict.fromList […] in
-   Dict.toList d` — routing falls back to the String-key path. Workaround:
+   Dict.toList d` — routing falls back to String-key path. Workaround:
    inline the chain, or pipe (`d |> Dict.toList`).
 6. **`ipe check` does not fully model FFI interface satisfaction.** Opaque
-   FFI types unify with each other; concrete-satisfies-interface checks
-   fall through.
-7. **Zero-arg calls follow the binding's declared type.** Bare `Uuid.v4`
-   works because its sig is `v4 : String`. `Time.now ()`/`Time.unixMillis
-   ()` are needed because their sigs are `() -> Task Error a`. Calling a `:
-   String` binding with `()` triggers a codegen bug for arity-0 kernels
-   (`Uuid.v4 ()` mis-applies the unit); stick to the declared shape.
+   FFI types unify w/ each other; concrete-satisfies-interface checks fall
+   through.
+7. **Zero-arg calls follow binding's declared type.** Bare `Uuid.v4` works
+   because sig is `v4 : String`. `Time.now ()`/`Time.unixMillis
+   ()` needed because sigs are `() -> Task Error a`. Calling `:
+   String` binding w/ `()` triggers codegen bug for arity-0 kernels
+   (`Uuid.v4 ()` mis-applies unit); stick to declared shape.
    Dict/Set/Maybe/Result stay bare for `empty`/`none` etc. For uniform
-   `() -> Task Error a` shape, import `Ipe.Pure as Pure` and call the
-   additive companions — `Pure.uuidV4 ()`/`Pure.uuidV7 ()`/`Pure.timeNow
+   `() -> Task Error a` shape, import `Ipe.Pure as Pure` and call additive
+   companions — `Pure.uuidV4 ()`/`Pure.uuidV7 ()`/`Pure.timeNow
    ()`/`Pure.timeUnixMillis ()`/`Pure.systemArgs ()`/`Pure.systemCwd ()`/
    `Pure.systemLoadEnv ()`/`Pure.ioReadLine ()`/`Pure.dbConnect ()`.
-8. **Non-tail-recursive list ops are O(N) on the call stack.** `map`,
-   `filter`, `foldr`, `length`, `concat`, `take`, `append`, `range`, `zip`,
+8. **Non-tail-recursive list ops are O(N) on call stack.** `map`, `filter`,
+   `foldr`, `length`, `concat`, `take`, `append`, `range`, `zip`,
    `concatMap`, `indexedMap`, `Maybe.combine`, `Result.combine` recurse.
-   Tail-recursive ops (`foldl`, `find`, `any`, `all`, `member`, `drop`) are
-   constant-stack. For very large lists (200k+ elements) prefer a
+   Tail-recursive ops (`foldl`, `find`, `any`, `all`, `member`, `drop`)
+   constant-stack. For very large lists (200k+ elements) prefer
    tail-recursive accumulator pattern.
 9. **`Css.*` keyword constants are bare values** — `margin Css.zero`,
    `top Css.auto`, `border Css.none`, `fontFamily Css.systemFont` (matching
    v0.17 Sky). Only `Css.monoFont ()` keeps its unit argument.
-10. **Multi-line function signatures.** `name\n    : T` (`:` on the
-    continuation line) parses cleanly. Continuation INSIDE the type body
-    (`T1\n    -> T2`) is unsupported — extract a `type alias` for the whole
-    arrow type.
+10. **Multi-line function signatures.** `name\n    : T` (`:` on
+    continuation line) parses cleanly. Continuation INSIDE type body
+    (`T1\n    -> T2`) unsupported — extract `type alias` for whole arrow type.
 
 ## Build & test CLI
 
@@ -956,13 +950,12 @@ ipe lsp                            # JSON-RPC LSP server (stdio)
 sky --version
 ```
 
-**Never run `ipe build` from the repo root** — it overwrites the compiler
-binary in `sky-out/`. Always `cd` into the project/example dir first:
+**Never run `ipe build` from repo root** — overwrites compiler binary in
+`sky-out/`. Always `cd` into project/example dir first:
 
 ```bash
 cd examples/01-hello-world && ipe build src/Main.ipe
 ```
 
-`ipe check` ≡ `ipe build` (both invoke the Rust build on the emitted code).
-Run `ipe fmt` after editing `.ipe`/`.skyi` files (the formatter is
-idempotent).
+`ipe check` ≡ `ipe build` (both invoke Rust build on emitted code). Run
+`ipe fmt` after editing `.ipe`/`.skyi` files (formatter idempotent).
