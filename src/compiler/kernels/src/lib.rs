@@ -620,6 +620,9 @@ pub enum StdlibKernel {
     DbDecRequired,
     DbDecOptional,
     DbDecMoney,
+    /// `Db.Decode.bytes : String -> Decoder (List Int)` — hex-decodes a
+    /// BYTEA/BLOB column written by `SqlBytes` back to raw bytes.
+    DbDecBytes,
     // ── TEA: Cmd / Sub / Time.every ─────────────────────────────────────────
     CmdNone,
     CmdBatch,
@@ -2078,6 +2081,7 @@ impl StdlibKernel {
             Self::DbDecRequired => d("Db.Decode", "required", 3, Db, "db_decode_required"),
             Self::DbDecOptional => d("Db.Decode", "optional", 4, Db, "db_decode_optional"),
             Self::DbDecMoney => d("Db.Decode", "money", 1, Db, "db_decode_money"),
+            Self::DbDecBytes => d("Db.Decode", "bytes", 1, Db, "db_decode_bytes"),
             // ── TEA: Cmd / Sub / Time.every ─────────────────────────────────
             Self::CmdNone => d("Cmd", "none", 0, Tea, "cmd_none"),
             Self::CmdBatch => d("Cmd", "batch", 1, Tea, "cmd_batch"),
@@ -3288,6 +3292,7 @@ impl StdlibKernel {
         Self::DbDecRequired,
         Self::DbDecOptional,
         Self::DbDecMoney,
+        Self::DbDecBytes,
         // TEA: Cmd / Sub / Time.every
         Self::CmdNone,
         Self::CmdBatch,
@@ -3883,6 +3888,7 @@ impl StdlibKernel {
                 | Self::DbDecRequired
                 | Self::DbDecOptional
                 | Self::DbDecMoney
+                | Self::DbDecBytes
                 // ── Ipe.Db.Sql — classified `Db` like
                 // `Db.Decode.*` above: no live connection is touched by the
                 // combinators, but the runtime types they build on

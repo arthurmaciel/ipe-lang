@@ -179,6 +179,79 @@ async fn fetch_one_routed<'q>(pool: &Db, query: DbQuery<'q>) -> Result<DbRow, sq
     }
 }
 
+/// Decode column `i` into a `String` for the untyped `row_to_map` path.
+///
+/// Probe order (first `Ok(Some(_))` wins; `Ok(None)` at any arm = SQL NULL → `""`):
+///   bool → i64 → f64 → String → bytes-as-hex.
+/// Ordering ensures a postgres `BOOLEAN` cell is not stolen by a numeric reader.
+/// The final fallback is `String::new()` — the untyped path has no typed consumer
+/// to distinguish NULL from empty (documented at call site).
+fn column_to_string(row: &DbRow, i: usize) -> String {
+    // bool before i64: postgres BOOLEAN won't decode as i64.
+    if let Ok(Some(b)) = row.try_get::<Option<bool>, _>(i) {
+        return b.to_string();
+    }
+    // NULL at any arm → ""; continue to next probe only on decode error.
+    if let Ok(opt) = row.try_get::<Option<i64>, _>(i) {
+        return opt.map_or_else(String::new, |n| n.to_string());
+    }
+    if let Ok(opt) = row.try_get::<Option<f64>, _>(i) {
+        return opt.map_or_else(String::new, |f| f.to_string());
+    }
+    if let Ok(opt) = row.try_get::<Option<String>, _>(i) {
+        return opt.unwrap_or_default();
+    }
+    // BYTEA / BLOB: encode as lowercase hex so the value survives round-trip
+    // through `db_decode_bytes` (which hex-decodes back to `Vec<u8>`).
+    if let Ok(Some(bytes)) = row.try_get::<Option<Vec<u8>>, _>(i) {
+        return hex::encode(bytes);
+    }
+    String::new()
+}
+
+/// Decode column `i` into a `JsonVal` for the typed-decoder path.
+///
+/// Probe order (first `Ok(Some(_))` wins):
+///   bool → i64 → f64 → String → bytes-as-hex-string.
+/// `Ok(None)` at any arm = SQL NULL → `JsonVal::Null`.
+/// The final arm returns `Err` for driver types none of the probes cover;
+/// callers surface it as a decode error rather than a phantom Null.
+///
+/// `bool` precedes `i64` so a postgres `BOOLEAN` cell is not stolen by the
+/// numeric reader (postgres refuses a cross-type cast; sqlite stores booleans
+/// as `0`/`1` INTEGER which decodes fine via `i64` if `bool` probe fails,
+/// and `db_decode_bool` accepts numeric `0`/`1` — no sqlite regression).
+fn column_to_json(row: &DbRow, i: usize) -> Result<JsonVal, sqlx::Error> {
+    if let Ok(opt) = row.try_get::<Option<bool>, _>(i) {
+        return Ok(opt.map_or(JsonVal::Null, JsonVal::Bool));
+    }
+    if let Ok(opt) = row.try_get::<Option<i64>, _>(i) {
+        return Ok(opt.map_or(JsonVal::Null, |n| {
+            JsonVal::Number(serde_json::Number::from(n))
+        }));
+    }
+    if let Ok(opt) = row.try_get::<Option<f64>, _>(i) {
+        return Ok(opt.map_or(JsonVal::Null, |f| {
+            serde_json::Number::from_f64(f)
+                .map_or(JsonVal::Null, JsonVal::Number)
+        }));
+    }
+    if let Ok(opt) = row.try_get::<Option<String>, _>(i) {
+        return Ok(opt.map_or(JsonVal::Null, JsonVal::String));
+    }
+    // BYTEA / BLOB: hex-encode for a lossless, driver-neutral text form
+    // that pairs with `db_decode_bytes`.
+    if let Ok(opt) = row.try_get::<Option<Vec<u8>>, _>(i) {
+        return Ok(opt.map_or(JsonVal::Null, |b| JsonVal::String(hex::encode(b))));
+    }
+    // Driver type not covered by any probe — return a decode error so the
+    // caller can surface it instead of silently returning Null.
+    Err(sqlx::Error::ColumnDecode {
+        index: i.to_string(),
+        source: "unsupported column type (not bool/i64/f64/String/bytes)".into(),
+    })
+}
+
 // needless_range_loop (accepted, cosmetic): the loop indexes by position to pair
 // column name[i] with value[i] across two parallel slices — an iterator can't
 // thread both. Not a soundness concern.
@@ -188,56 +261,32 @@ fn row_to_map(row: &DbRow) -> HashMap<String, String> {
     let cols = row.columns();
     for (i, col) in cols.iter().enumerate() {
         let name = col.name().to_string();
-        let value: String = match row.try_get::<Option<String>, _>(i) {
-            Ok(Some(v)) => v,
-            Ok(None) => String::new(),
-            _ => match row.try_get::<Option<i64>, _>(i) {
-                Ok(Some(v)) => v.to_string(),
-                _ => match row.try_get::<Option<f64>, _>(i) {
-                    Ok(Some(v)) => v.to_string(),
-                    _ => String::new(),
-                },
-            },
-        };
-        map.insert(name, value);
+        map.insert(name, column_to_string(row, i));
     }
     map
 }
 
-/// NULL-preserving row → JsonVal bridge for the typed-decoder path.
+/// NULL-preserving row → `JsonVal` bridge for the typed-decoder path.
 ///
 /// `row_to_map` (the untyped `db_query` path) collapses SQL NULL → `String::new()`,
 /// making NULL and empty-string indistinguishable. `db_query_decode` and
 /// `db_get_by_id_decode` MUST use this function instead so `db_decode_nullable`
 /// can correctly distinguish NULL from an empty value.
 ///
-/// Per-column strategy (first match wins):
-///  1. `Option<String>` → `Ok(None)` = `JsonVal::Null`, `Ok(Some(s))` = `JsonVal::String(s)`
-///  2. `Option<i64>`    → `Ok(None)` = `JsonVal::Null`, `Ok(Some(n))` = `JsonVal::String(n.to_string())`
-///  3. `Option<f64>`    → `Ok(None)` = `JsonVal::Null`, `Ok(Some(f))` = `JsonVal::String(f.to_string())`
-///  4. fallback         → `JsonVal::Null` (driver type we can't read; never panics)
+/// Probe order per column: bool → i64 → f64 → String → bytes-hex.
+/// An unreadable driver type (none of the five probes) surfaces as
+/// `Err(ColumnDecode)` — the caller converts via `ipe_err`, giving a
+/// structural error message rather than a phantom Null.
 #[allow(clippy::needless_range_loop)]
-fn row_to_json(row: &DbRow) -> JsonVal {
+fn row_to_json(row: &DbRow) -> Result<JsonVal, sqlx::Error> {
     let cols = row.columns();
     let mut map = serde_json::Map::with_capacity(cols.len());
     for (i, col) in cols.iter().enumerate() {
         let name = col.name().to_string();
-        let val = match row.try_get::<Option<String>, _>(i) {
-            Ok(None) => JsonVal::Null,
-            Ok(Some(s)) => JsonVal::String(s),
-            Err(_) => match row.try_get::<Option<i64>, _>(i) {
-                Ok(None) => JsonVal::Null,
-                Ok(Some(n)) => JsonVal::String(n.to_string()),
-                Err(_) => match row.try_get::<Option<f64>, _>(i) {
-                    Ok(None) => JsonVal::Null,
-                    Ok(Some(f)) => JsonVal::String(f.to_string()),
-                    Err(_) => JsonVal::Null,
-                },
-            },
-        };
+        let val = column_to_json(row, i)?;
         map.insert(name, val);
     }
-    JsonVal::Object(map)
+    Ok(JsonVal::Object(map))
 }
 
 // ─── DB-specific typed decoder primitives ─────────────────────────────────────
@@ -442,6 +491,39 @@ pub fn db_decode_money<E: From<String> + 'static>(col: String) -> Decoder<E, (De
                         col, s
                     )),
                 }
+            }),
+            vec![],
+        ),
+    )
+}
+
+/// `DbDec.bytes col` — read column `col` as raw bytes (`Vec<u8>`).
+///
+/// The DB column stores hex-encoded bytes written by `SqlBytes` on the bind
+/// side (via `column_to_json`'s hex encoding). Hex-decodes the string value
+/// back to `Vec<u8>`, closing the `SqlBytes` write-without-read asymmetry.
+///
+/// Totality: missing column, NULL, or non-hex string → `Err`.
+pub fn db_decode_bytes<E: From<String> + 'static>(col: String) -> Decoder<E, Vec<u8>> {
+    decode_field(
+        col.clone(),
+        Decoder::new(
+            Box::new(move |v| match v {
+                JsonVal::String(s) => match hex::decode(s) {
+                    Ok(b) => decode_ok(b),
+                    Err(e) => decode_err_str(format!(
+                        "column {}: expected hex-encoded bytes, got {:?}: {}",
+                        col, s, e
+                    )),
+                },
+                JsonVal::Null => {
+                    decode_err_str(format!("column {}: expected bytes, got NULL", col))
+                }
+                _ => decode_err_str(format!(
+                    "column {}: expected hex-encoded bytes, got {:?}",
+                    col,
+                    v.to_string()
+                )),
             }),
             vec![],
         ),
@@ -1472,16 +1554,24 @@ pub fn db_find_by_conditions<E: Send + From<String> + 'static>(
             }
         };
         let qfields: Vec<&str> = qfield_idents.iter().map(SqlIdent::as_str).collect();
-        let sql = db_format_sql(if keys.is_empty() {
-            format!("SELECT * FROM {}", qtable.as_str())
-        } else {
-            let wheres: Vec<String> = qfields.iter().map(|c| format!("{} = ?", c)).collect();
-            format!(
-                "SELECT * FROM {} WHERE {}",
-                qtable.as_str(),
-                wheres.join(" AND ")
-            )
-        });
+        // Refuse an unscoped SELECT: an empty condition set would return every
+        // row in the table — a cross-tenant read when conditions come from
+        // request-derived filters. Mirrors the `db_update_fields` empty-WHERE
+        // guard. Callers wanting all rows must use `db_query` / `db_query_raw`.
+        if keys.is_empty() {
+            return IpeResult::Err(
+                "db.findByConditions: refusing unscoped SELECT (no conditions); \
+                 pass at least one condition"
+                    .to_string()
+                    .into(),
+            );
+        }
+        let wheres: Vec<String> = qfields.iter().map(|c| format!("{} = ?", c)).collect();
+        let sql = db_format_sql(format!(
+            "SELECT * FROM {} WHERE {}",
+            qtable.as_str(),
+            wheres.join(" AND ")
+        ));
         let mut q = sqlx::query(&sql);
         for k in &keys {
             q = q.bind(conditions.get(*k).cloned().unwrap_or_default());
@@ -1519,7 +1609,10 @@ pub fn db_query_decode<E: Send + From<String> + 'static, A: Send + 'static>(
         };
         let mut out = Vec::with_capacity(rows.len());
         for row in &rows {
-            let jv = row_to_json(row);
+            let jv = match row_to_json(row) {
+                Ok(v) => v,
+                Err(e) => return IpeResult::Err(ipe_err(&e)),
+            };
             match (decoder.run)(&jv) {
                 IpeResult::Ok(a) => out.push(a),
                 IpeResult::Err(e) => return IpeResult::Err(e),
@@ -1553,7 +1646,10 @@ pub fn db_query_decode_params<E: Send + From<String> + 'static, A: Send + 'stati
         };
         let mut out = Vec::with_capacity(rows.len());
         for row in &rows {
-            let jv = row_to_json(row);
+            let jv = match row_to_json(row) {
+                Ok(v) => v,
+                Err(e) => return IpeResult::Err(ipe_err(&e)),
+            };
             match (decoder.run)(&jv) {
                 IpeResult::Ok(a) => out.push(a),
                 IpeResult::Err(e) => return IpeResult::Err(e),
@@ -1592,7 +1688,10 @@ pub fn db_get_by_id_decode<E: Send + From<String> + 'static, A: Send + 'static>(
         match fetch_optional_routed(&conn, sqlx::query(&sql).bind(id)).await {
             Ok(None) => ok_res(IpeMaybe::Nothing),
             Ok(Some(row)) => {
-                let jv = row_to_json(&row);
+                let jv = match row_to_json(&row) {
+                    Ok(v) => v,
+                    Err(e) => return IpeResult::Err(ipe_err(&e)),
+                };
                 match (decoder.run)(&jv) {
                     IpeResult::Ok(a) => ok_res(IpeMaybe::Just(a)),
                     IpeResult::Err(e) => IpeResult::Err(e),
@@ -2385,7 +2484,10 @@ pub fn db_insert_fields_returning<E: Send + From<String> + 'static, A: Send + 's
         };
         let mut out = Vec::with_capacity(rows.len());
         for row in &rows {
-            let jv = row_to_json(row);
+            let jv = match row_to_json(row) {
+                Ok(v) => v,
+                Err(e) => return IpeResult::Err(ipe_err(&e)),
+            };
             match (decoder.run)(&jv) {
                 IpeResult::Ok(a) => out.push(a),
                 IpeResult::Err(e) => return IpeResult::Err(e),
@@ -2830,10 +2932,30 @@ mod tests {
         cond.insert("done".to_string(), "1".to_string());
         cond.insert("title".to_string(), "b".to_string());
         let one: IpeResult<String, Vec<HashMap<String, String>>> =
-            db_find_by_conditions(db, "todos".into(), cond).await;
+            db_find_by_conditions(db.clone(), "todos".into(), cond).await;
         match one {
             IpeResult::Ok(v) => assert_eq!(v.len(), 1),
             _ => panic!("conds"),
+        }
+
+        // Empty condition set MUST be refused (would otherwise return every
+        // row — a cross-tenant read when request-derived filters come back empty).
+        let empty_cond: HashMap<String, String> = HashMap::new();
+        let refused: IpeResult<String, Vec<HashMap<String, String>>> =
+            db_find_by_conditions(db.clone(), "todos".into(), empty_cond).await;
+        assert!(
+            matches!(refused, IpeResult::Err(_)),
+            "empty conditions must be refused, got {refused:?}"
+        );
+
+        // Non-empty conditions still return filtered rows (happy-path regression).
+        let mut only_done = HashMap::new();
+        only_done.insert("done".to_string(), "1".to_string());
+        let filtered: IpeResult<String, Vec<HashMap<String, String>>> =
+            db_find_by_conditions(db, "todos".into(), only_done).await;
+        match filtered {
+            IpeResult::Ok(v) => assert_eq!(v.len(), 3, "expected 3 done rows"),
+            _ => panic!("non-empty conditions should return rows"),
         }
     }
 
@@ -3458,10 +3580,113 @@ mod tests {
             .fetch_one(&pool)
             .await
             .expect("fetch");
-        let jv = row_to_json(&row);
+        let jv = row_to_json(&row).unwrap_or_else(|e| panic!("row_to_json: {e}"));
         match jv.get("v") {
             Some(JsonVal::Null) => { /* correct */ }
             other => panic!("expected JsonVal::Null, got {:?}", other),
+        }
+    }
+
+    // ─── RT-DATA-001: row_to_json/column_to_json probe chain ──────────────
+
+    /// BLOB column written via `SqlBytes` decodes as a hex `JsonVal::String`,
+    /// not `JsonVal::Null`. Exercises the bytes arm of `column_to_json`.
+    #[tokio::test]
+    async fn test_row_to_json_blob_decodes_as_hex() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .min_connections(1)
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap_or_else(|e| panic!("connect: {e}"));
+        sqlx::query("CREATE TABLE blobs (id INTEGER PRIMARY KEY, data BLOB)")
+            .execute(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("create: {e}"));
+        sqlx::query("INSERT INTO blobs (id, data) VALUES (1, ?)")
+            .bind(vec![0xde_u8, 0xad, 0xbe, 0xef])
+            .execute(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("insert: {e}"));
+        let row = sqlx::query("SELECT data FROM blobs WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("fetch: {e}"));
+        let jv = row_to_json(&row).unwrap_or_else(|e| panic!("row_to_json: {e}"));
+        match jv.get("data") {
+            Some(JsonVal::String(s)) => {
+                assert_eq!(s, "deadbeef", "expected hex encoding of bytes");
+            }
+            other => panic!("expected JsonVal::String(hex), got {:?}", other),
+        }
+    }
+
+    /// Bool column decodes as `JsonVal::Bool`, not `JsonVal::Null`. Exercises
+    /// the bool-first probe ordering in `column_to_json`.
+    #[tokio::test]
+    async fn test_row_to_json_bool_column() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .min_connections(1)
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap_or_else(|e| panic!("connect: {e}"));
+        sqlx::query("CREATE TABLE flags (id INTEGER PRIMARY KEY, active BOOLEAN NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("create: {e}"));
+        sqlx::query("INSERT INTO flags (id, active) VALUES (1, TRUE)")
+            .execute(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("insert: {e}"));
+        let row = sqlx::query("SELECT active FROM flags WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("fetch: {e}"));
+        let jv = row_to_json(&row).unwrap_or_else(|e| panic!("row_to_json: {e}"));
+        // On sqlite, BOOLEAN stores as 0/1 INTEGER; column_to_json probes bool
+        // first, so we get Bool(true) rather than Number(1).
+        match jv.get("active") {
+            Some(JsonVal::Bool(b)) => assert!(*b, "expected true"),
+            // sqlite may surface as integer — accept Number(1) as correct too
+            Some(JsonVal::Number(n)) => assert_eq!(n.as_i64(), Some(1), "expected 1"),
+            other => panic!("expected Bool or Number(1), got {:?}", other),
+        }
+    }
+
+    /// `db_decode_bytes` round-trip: write `SqlBytes`, read back via
+    /// `db_decode_bytes`, assert the original bytes survive.
+    #[tokio::test]
+    async fn test_db_decode_bytes_roundtrip() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .min_connections(1)
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap_or_else(|e| panic!("connect: {e}"));
+        sqlx::query("CREATE TABLE blobs (id INTEGER PRIMARY KEY, data BLOB)")
+            .execute(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("create: {e}"));
+        let original: Vec<u8> = vec![0x01, 0x02, 0x03, 0xff];
+        sqlx::query("INSERT INTO blobs (id, data) VALUES (1, ?)")
+            .bind(original.clone())
+            .execute(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("insert: {e}"));
+        let decoded: IpeResult<String, Vec<Vec<u8>>> = db_query_decode(
+            pool,
+            "SELECT data FROM blobs WHERE id = 1".to_string(),
+            vec![],
+            db_decode_bytes("data".to_string()),
+        )
+        .await;
+        match decoded {
+            IpeResult::Ok(rows) => {
+                assert_eq!(rows.len(), 1, "expected one row");
+                assert_eq!(rows[0], original, "bytes did not survive round-trip");
+            }
+            IpeResult::Err(e) => panic!("decode failed: {e:?}"),
         }
     }
 

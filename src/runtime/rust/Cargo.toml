@@ -30,7 +30,11 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # exact crate as `reqwest::Url`). Resolves to the same lockfile node as reqwest's.
 url = { version = "2", optional = true }
 lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "smtp-transport", "pool", "tokio1", "tokio1-rustls-tls"], optional = true }
-tokio-tungstenite = { version = "0.24", optional = true }
+# `rustls-tls-webpki-roots`: enables `MaybeTlsStream::Rustls` so `wss://`
+# connections use the same rustls backend as reqwest/sqlx/lettre — no native
+# TLS dependency added. The `native-tls` feature is deliberately NOT listed;
+# see `docs/divergences-from-sky.md §B-WS-TLS` for the rationale.
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"], optional = true }
 futures-util = { version = "0.3", optional = true }
 # NON-optional: the always-compiled `core.rs` derives `serde::Serialize`/`Deserialize`
 # on `SkyMaybe`/`SkyResult` unconditionally, so serde is needed by EVERY feature subset
