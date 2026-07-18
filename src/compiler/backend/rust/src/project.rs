@@ -1141,17 +1141,27 @@ fn assemble_project_files(
         if ctx.uses_db {
             mod_rs.push_str(RUNTIME_MOD_RS_DB_APPEND);
         }
-        // `tea` must be included whenever user code uses TEA kernels directly,
-        // OR whenever `uses_server` is true — because `http_stream.rs` (included
-        // via SERVER_APPEND) uses `IpeSub` from `tea.rs` via `use super::*;`.
-        // Guarded as a union so a program using both emits `pub mod tea;` exactly
-        // once (E0428). Transitive-closure invariant: any module depended on by an
-        // included module MUST itself be included (same rule as http_header).
-        // `uses_websocket` also forces `tea`: `ws_client.rs`'s `sub_subscribe_ws_*`
-        // fns return `IpeSub<M>` (from `tea.rs`) via `use super::*`, so a
-        // connect/send-only program (no explicit Sub kernel ⇒ no `uses_tea`) still
-        // needs `tea` declared — same transitive-closure rule as `uses_server`.
-        if ctx.uses_tea || ctx.uses_server || ctx.uses_websocket {
+        // `tea` must be declared whenever any included module's `use crate::tea`
+        // closure references it — NOT only when user code names a TEA kernel
+        // directly. Every appended module that imports `IpeCmd`/`IpeSub` forces it:
+        //   • `uses_server` → `http_stream.rs` (`use super::*;` → `IpeSub`);
+        //   • `uses_websocket` → `ws_client.rs`'s `sub_subscribe_ws_*` (`IpeSub<M>`);
+        //   • `uses_live` → `live/mod.rs` + `live/pubsub.rs` (`use crate::tea::{IpeCmd, IpeSub}`);
+        //   • `uses_tui` → `tui/app.rs` (`use super::super::tea::{…, IpeCmd, IpeSub, …}`);
+        //   • `uses_webview` → `webview.rs` (`use super::tea::{IpeCmd, IpeSub}`).
+        // These imports are unconditional in the runtime source (not feature-gated),
+        // so a live/tui/webview program with no explicit `Cmd`/`Sub` kernel (e.g.
+        // `Live.renderStatic` from a CLI) still needs `tea`. Guarded as ONE union so
+        // a program hitting several paths emits `pub mod tea;` exactly once (E0428).
+        // This is the transitive-closure invariant: any module a declared module
+        // depends on MUST itself be declared (same rule as `http_header`).
+        if ctx.uses_tea
+            || ctx.uses_server
+            || ctx.uses_websocket
+            || ctx.uses_live
+            || ctx.uses_tui
+            || ctx.uses_webview
+        {
             mod_rs.push_str(RUNTIME_MOD_RS_TEA_APPEND);
         }
         if ctx.uses_server {

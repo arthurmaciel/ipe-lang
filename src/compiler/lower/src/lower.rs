@@ -22,7 +22,7 @@ use ipe_diagnostics::{DResult, Diagnostic, Feature, Located, LowerError, Span};
 use ipe_intern::{Interner, Symbol};
 use ipe_ir::{
     Arm, BinOp, BoundSet, CallPin, Callee, EnumDef, Expr, Func, FuncId, IrType, KernelFn, Match,
-    ModPath, Module, OnFormKind, Pat, Program, TypeDef, UiCtor, UiPlain, Variant,
+    ModPath, Module, OnFormKind, Pat, Program, RuntimeModule, TypeDef, UiCtor, UiPlain, Variant,
     fun_value_arc_promotable, is_dispatch_free, is_irrefutable,
 };
 use ipe_types::{SolvedTypes, Ty, TyBounds};
@@ -5651,6 +5651,16 @@ impl KernelUsage {
         self.webview |= k.is_webview();
         self.websocket |= k.is_websocket_client();
         self.email |= matches!(k, KernelFn::EmailSend);
+        // A kernel whose emitted symbol lives in a feature-module its emit-class
+        // does not pull in (e.g. `Cmd.publish`'s `cmd_publish` in `live::pubsub`,
+        // `HttpStream.chunks`'s `sub_subscribe_stream` in `http_stream`) forces
+        // that module here — decoupled from the `is_*` emit-dispatch predicates so
+        // the module-set stays closed without perturbing codegen routing.
+        match k.required_runtime_module() {
+            Some(RuntimeModule::Live) => self.live = true,
+            Some(RuntimeModule::Server) => self.server = true,
+            None => {}
+        }
     }
 }
 
