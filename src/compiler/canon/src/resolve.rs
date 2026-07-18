@@ -2973,41 +2973,67 @@ fn canonicalise_binops(
             where_: "ipe_canon::canonicalise_binops",
             detail: "binop chain with operators but no operands".to_owned(),
         })?;
-    let tree = climb_binops(0, left, &mut operands, &mut ops, basics, interner)?;
+    let tree = climb_binops(left, &mut operands, &mut ops, basics, interner)?;
     Ok(tree.value)
 }
 
-/// Precedence-climbing core. Consumes operators of precedence ≥ `min_prec` from
-/// the front of `ops`, each paired with the next operand from `operands`, and
-/// folds them around `left`. Direct port of the Haskell `climb` helper.
+/// Precedence-climbing core. Consumes all operators from `ops`, pairing each
+/// with the next operand from `operands`, and folds them into `left` according
+/// to precedence and associativity.
+///
+/// Call-stack depth is O(1) in chain length: a `pending` heap-stack holds
+/// reduce-deferred `(left, op, prec)` frames so no native frame is opened per
+/// operator. Mirrors `target_gate::check_expr`'s heap-work-stack discipline.
+///
+/// Reduce predicate (reproduces the recursive semantics byte-for-byte):
+/// - Left/non-assoc: reduce when a pending op is at least as tight as the
+///   incoming one (`top_prec >= prec`), restricting its right subtree to
+///   strictly-higher precedence.
+/// - Right-assoc: reduce only when the pending op is strictly tighter
+///   (`top_prec > prec`), leaving equal-precedence ops on the stack so they
+///   nest rightward.
 fn climb_binops(
-    min_prec: i32,
-    mut left: canon::Expr,
+    left0: canon::Expr,
     operands: &mut VecDeque<canon::Expr>,
     ops: &mut VecDeque<(Located<Symbol>, i32, Assoc)>,
     basics: Symbol,
     interner: &mut Interner,
 ) -> DResult<canon::Expr> {
+    // Pending frames: left operand + operator + its precedence, awaiting their
+    // right subtree once higher-precedence operators to the right are reduced.
+    let mut pending: Vec<(canon::Expr, Located<Symbol>, i32)> = Vec::new();
+    let mut left = left0;
     while let Some(&(op, prec, assoc)) = ops.front() {
-        if prec < min_prec {
-            break;
+        // Reduce any pending frame whose operator binds at least as tightly as
+        // the incoming `op` (left/non-assoc) or strictly tighter (right-assoc).
+        while let Some(&(_, _, top_prec)) = pending.last() {
+            let should_reduce = match assoc {
+                Assoc::Left | Assoc::None => top_prec >= prec,
+                Assoc::Right => top_prec > prec,
+            };
+            if !should_reduce {
+                break;
+            }
+            let (l, top_op, _) = pending.pop().ok_or_else(|| Diagnostic::CompilerBug {
+                where_: "ipe_canon::climb_binops",
+                detail: "pending stack empty after last() confirmed non-empty".to_owned(),
+            })?;
+            left = combine_binop(l, top_op, left, basics, interner)?;
         }
         ops.pop_front();
-        let next_operand = operands
+        let next = operands
             .pop_front()
             .ok_or_else(|| Diagnostic::CompilerBug {
                 where_: "ipe_canon::climb_binops",
                 detail: "operator without a right operand".to_owned(),
             })?;
-        // A left- (or non-) associative operator restricts its right subtree to
-        // strictly-higher precedence; a right-associative one admits equal
-        // precedence so it nests rightward.
-        let next_min = match assoc {
-            Assoc::Left | Assoc::None => prec + 1,
-            Assoc::Right => prec,
-        };
-        let right = climb_binops(next_min, next_operand, operands, ops, basics, interner)?;
-        left = combine_binop(left, op, right, basics, interner)?;
+        pending.push((left, op, prec));
+        left = next;
+    }
+    // Drain remaining pending frames right-to-left (rightmost operator was
+    // pushed last; LIFO pop folds left correctly).
+    while let Some((l, op, _)) = pending.pop() {
+        left = combine_binop(l, op, left, basics, interner)?;
     }
     Ok(left)
 }

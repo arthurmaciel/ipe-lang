@@ -166,7 +166,11 @@ pub fn render_html<M>(node: &Html<M>) -> String {
 /// descending (deeper nodes are not emitted / not stamped) rather than recurse
 /// further: a truncated render is strictly better than a process abort, and no
 /// legitimate UI nests anywhere near this deep.
-const MAX_HTML_DEPTH: usize = 1024;
+///
+/// `pub(crate)` so the render and diff walkers in the same Live data path
+/// (`ui/render.rs`, `dom/diff.rs`) share the identical ceiling — one constant,
+/// no drift.
+pub(crate) const MAX_HTML_DEPTH: usize = 1024;
 
 /// Render `node` directly into an existing accumulator. `pub(crate)` so the
 /// SSE diff's whole-subtree replace (`live/diff.rs::render_children`) can
