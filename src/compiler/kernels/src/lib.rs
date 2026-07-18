@@ -44,6 +44,33 @@ pub enum KernelClass {
     Ffi,
 }
 
+/// A conditionally-vendored runtime feature-module that a kernel's emitted
+/// symbol lives in but whose emit-`class` does NOT already pull in.
+///
+/// The backend trims the emitted `ipe_runtime/mod.rs` to a base set and appends
+/// feature-modules per `uses_*` flag. A kernel's emit [`KernelClass`] drives its
+/// codegen dispatch, but is NOT the same fact as "which vendored module defines
+/// the symbol I emit": `Cmd.publish` is `class = Tea` yet its `cmd_publish`
+/// symbol lives in `live::pubsub`; `HttpStream.chunks` is `class = Pure` yet its
+/// `sub_subscribe_stream` symbol lives in `http_stream`. When those two facts
+/// diverge, the module the symbol needs must be declared independently of the
+/// class — otherwise `ipe` accepts the program (exit 0) but the emitted crate
+/// fails `cargo build` (E0425/E0412), the module-set SEAL breach class.
+///
+/// This is the SINGLE source of truth for that divergence: [`KernelFn::required_runtime_module`]
+/// returns it, and the lowerer's per-program kernel scan sets the matching
+/// `uses_*` flag from it. A kernel whose symbol lives in the module its class
+/// already pulls in returns `None` — no second table to keep in sync.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RuntimeModule {
+    /// The `live` feature-module (`ipe_runtime::live::*`, incl. `pubsub`).
+    /// Declared by the `uses_live` `mod.rs` append.
+    Live,
+    /// The `server` feature-module set (`ipe_runtime::server` +
+    /// `server_stream` + `http_stream`). Declared by the `uses_server` append.
+    Server,
+}
+
 /// The event-payload shape of a `Ipe.Html.Events` builder.
 ///
 /// Drives both the constrain scheme (the argument type) and the backend emit
@@ -3911,6 +3938,40 @@ impl StdlibKernel {
                 | Self::DbFindWhere
                 | Self::DbDeleteWhere
         )
+    }
+
+    /// The conditionally-vendored runtime module this kernel's emitted symbol
+    /// needs, when that module is NOT already pulled in by the kernel's emit
+    /// [`KernelClass`]. `None` for the common case (symbol lives in the module
+    /// the class declares, or in the always-present base set).
+    ///
+    /// This closes the module-set SEAL breach class: a kernel whose `rust_name`
+    /// resolves to a feature-module the class does not declare MUST report that
+    /// module here so the lowerer sets the matching `uses_*` flag. Keep this in
+    /// lockstep with the emit table (`decl().emit`) — the `runtime_module_closure`
+    /// backend test asserts every emitted crate is module-closed for every
+    /// reachable flag combination, so a missing entry fails at `ipe` build time,
+    /// never as a downstream `cargo` E0425/E0412.
+    #[must_use]
+    pub const fn required_runtime_module(self) -> Option<RuntimeModule> {
+        match self {
+            // `cmd_publish` / `cmd_publish_no_echo` / `sub_subscribe_topic` are
+            // `class = Tea` (they dispatch through the standard TEA emit path) but
+            // their runtime symbols are defined ONLY in `ipe_runtime::live::pubsub`
+            // — the `live` module. Without this the `live` append never fires and
+            // the emitted `main.rs` references undefined `cmd_publish` (E0425).
+            Self::CmdPublish | Self::CmdPublishNoEcho | Self::SubSubscribeTopic => {
+                Some(RuntimeModule::Live)
+            }
+            // `HttpStream.chunks` is `class = Pure` but emits `sub_subscribe_stream`
+            // and the `IpeStreamId` type, both defined in `ipe_runtime::http_stream`
+            // — declared only by the `server` append. Its siblings
+            // (`open`/`forEachChunk`/`close`) are `is_server` and ride along, but
+            // `chunks` can be reached with a param-supplied `StreamId` and no `open`
+            // in the same module set (E0412 `IpeStreamId` + E0425 otherwise).
+            Self::HttpStreamChunks => Some(RuntimeModule::Server),
+            _ => None,
+        }
     }
 
     /// `true` when this variant belongs to the TEA (`Cmd` / `Sub` /
