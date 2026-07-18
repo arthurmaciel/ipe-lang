@@ -266,7 +266,7 @@ pub fn main_area(s: MainShape) -> i64 {
 }
 pub fn ipe_main() -> IpeTask<()> {
     log_println(string_from_int(
-        (main_area(MainShape::Rect(4, 5)) + main_area(MainShape::Circle(2))),
+        (crate::main_area(MainShape::Rect(4, 5)) + crate::main_area(MainShape::Circle(2))),
     ))
 }
 

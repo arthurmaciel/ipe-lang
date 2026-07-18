@@ -242,7 +242,7 @@ pub fn main_area(r: f64) -> f64 {
     ((3.14 * r) * r)
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_float(main_area(2.0)))
+    log_println(string_from_float(crate::main_area(2.0)))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

@@ -247,11 +247,11 @@ pub fn main_f(a: i64) -> Box<dyn Fn(i64, i64) -> i64 + Send + Sync + 'static> {
 }
 pub fn ipe_main() -> IpeTask<()> {
     ({
-        let h = main_f(1);
+        let h = crate::main_f(1);
         ({
             let exact = (h)(2, 3);
             ({
-                let over = (main_f(1))(2, 3);
+                let over = (crate::main_f(1))(2, 3);
                 log_println(string_from_int((if (exact == over) { exact } else { 0 })))
             })
         })

@@ -271,7 +271,7 @@ pub fn main_count_odd(o: MainOdd) -> i64 {
     match o {
         MainOdd::OSucc(e) => {
             let e = *e;
-            (1 + main_count_even(e))
+            (1 + crate::main_count_even(e))
         }
     }
 }
@@ -280,16 +280,16 @@ pub fn main_count_even(e: MainEven) -> i64 {
         MainEven::EZero => 0,
         MainEven::ESucc(o) => {
             let o = *o;
-            (1 + main_count_odd(o))
+            (1 + crate::main_count_odd(o))
         }
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(main_count_odd(MainOdd::OSucc(Box::new(
-        MainEven::ESucc(Box::new(MainOdd::OSucc(Box::new(MainEven::ESucc(
-            Box::new(MainOdd::OSucc(Box::new(MainEven::EZero))),
+    log_println(string_from_int(crate::main_count_odd(MainOdd::OSucc(
+        Box::new(MainEven::ESucc(Box::new(MainOdd::OSucc(Box::new(
+            MainEven::ESucc(Box::new(MainOdd::OSucc(Box::new(MainEven::EZero)))),
         ))))),
-    )))))
+    ))))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

@@ -1,12 +1,11 @@
 //! Backend-internal file-id domain for per-Ipê-module Rust emission.
 //!
 //! `mod_ident`/`resolve_mod_ident`/`assert_mod_idents_unique` form a
-//! fail-closed duplicate-`mod`-name gate. They have no production caller while
-//! `emit_program` writes at most one file — no `mod` items exist for two of
-//! them to collide over (see `project.rs::emit_program`'s own comment on this
-//! point). Their caller appears once `emit_program` partitions output across
-//! multiple `IpeModule` files.
-#![allow(dead_code)]
+//! fail-closed duplicate-`mod`-name gate. `emit_program`'s split branch and
+//! `assemble_split_manifest` call `assert_mod_idents_unique` before writing any
+//! `mod` decl or per-module source file, so two homes folding to one
+//! `mod_ident` are rejected at `ipe` time (IPE-N0010) rather than shipped as a
+//! duplicate `mod` (E0428) plus a silent file overwrite.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -220,11 +219,18 @@ pub fn partition_items<'p>(program: &'p Program, interner: &Interner) -> Partiti
 
 #[cfg(test)]
 mod tests {
-    use ipe_diagnostics::DResult;
+    use ipe_diagnostics::{DResult, Diagnostic, NameError};
     use ipe_intern::Interner;
     use ipe_ir::{EnumDef, Func, FuncId, IrType, Module, Variant};
 
     use super::*;
+
+    /// A runtime `false` the optimiser cannot fold, so `assert!(false_marker(),
+    /// …)` reads as a deliberate unconditional failure rather than a suspicious
+    /// constant condition — keeps this file free of the `clippy::panic` deny.
+    const fn false_marker() -> bool {
+        std::hint::black_box(false)
+    }
 
     #[test]
     fn spine_is_not_a_sky_module() {
@@ -241,15 +247,24 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_mod_idents_fail_closed() -> DResult<()> {
-        // Two DISTINCT `ModPath`s that fold to the SAME `mod_ident` under
-        // the current `module_prefix` fold ("_"-joined segments, then
-        // snake-cased): a single segment spelled "Std_Ui" and a two-segment
-        // path ["Std", "Ui"] both join to "Std_Ui" before snake-casing —
-        // a real, constructible collision, not a hedged placeholder (mirrors
-        // the AUD-08 collision class `crate::lib.rs` already documents for
-        // func/enum names, e.g. `["Std","Ui"]/borderRounded` vs
-        // `["Std","Ui","Border"]/rounded`).
+    fn mod_ident_distinguishes_dotted_path_from_underscore_segment() {
+        // The historical collision class: a single segment literally spelled
+        // "Std_Ui" versus the two-segment path ["Std", "Ui"]. The injective
+        // fold (`module_prefix` escapes in-segment `_` to `__`) keeps them
+        // DISTINCT, so both can coexist as `mod` idents.
+        let dotted = mod_ident(&["Std", "Ui"]);
+        let underscored = mod_ident(&["Std_Ui"]);
+        assert_ne!(
+            dotted, underscored,
+            "a dotted path and an underscore-in-segment name must not fold to one mod_ident"
+        );
+    }
+
+    #[test]
+    fn source_reachable_dot_vs_underscore_pair_does_not_fail_closed() -> DResult<()> {
+        // Post-injective-fold, the pair that USED to collide (a single segment
+        // "Std_Ui" and the two-segment ["Std", "Ui"]) folds to DISTINCT idents,
+        // so the gate passes — both are legal, distinct module homes.
         let mut interner = Interner::new();
         let combined = interner.intern("Std_Ui")?;
         let std_seg = interner.intern("Std")?;
@@ -258,12 +273,38 @@ mod tests {
             RustFileId::IpeModule(ModPath(vec![combined])),
             RustFileId::IpeModule(ModPath(vec![std_seg, ui_seg])),
         ];
-        let result = assert_mod_idents_unique(&ids, &interner);
-        assert!(
-            result.is_err(),
-            "expected a fail-closed collision, got {result:?}"
-        );
-        Ok(())
+        assert_mod_idents_unique(&ids, &interner)
+    }
+
+    #[test]
+    fn duplicate_mod_idents_fail_closed() -> DResult<()> {
+        // The gate is live: two `RustFileId::IpeModule` entries carrying the
+        // SAME home fold to one `mod_ident`, and the gate rejects them with
+        // `NameError::DuplicateValue` (IPE-N0010). Source can no longer reach a
+        // collision (the fold is injective), so this exercises the fail-closed
+        // path with a genuine duplicate to prove the wire diagnostic.
+        let mut interner = Interner::new();
+        let std_seg = interner.intern("Std")?;
+        let ui_seg = interner.intern("Ui")?;
+        let home = ModPath(vec![std_seg, ui_seg]);
+        let ids = vec![
+            RustFileId::IpeModule(home.clone()),
+            RustFileId::IpeModule(home),
+        ];
+        match assert_mod_idents_unique(&ids, &interner) {
+            Err(Diagnostic::Name {
+                msg: NameError::DuplicateValue { .. },
+                ..
+            }) => Ok(()),
+            other => {
+                assert!(
+                    false_marker(),
+                    "expected IPE-N0010 DuplicateValue on a genuine mod_ident collision, got \
+                     {other:?}"
+                );
+                Ok(())
+            }
+        }
     }
 
     #[test]

@@ -245,7 +245,7 @@ pub fn main_to_int(b: bool) -> i64 {
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(main_to_int((0 == 0))))
+    log_println(string_from_int(crate::main_to_int((0 == 0))))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

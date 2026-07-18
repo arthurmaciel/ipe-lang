@@ -940,7 +940,14 @@ fn float_literal(f: f64) -> String {
 /// The Rust name of a call target.
 pub fn callee_name(ctx: &EmitCtx, callee: &Callee) -> DResult<String> {
     match callee {
-        Callee::Func(id) => Ok(ctx.func_name(*id)?.to_owned()),
+        // Absolute `crate::` path so the call ALWAYS binds to the top-level
+        // `fn`, never to a local `let` binder of the same folded name. A local
+        // cannot shadow an absolute path, so a local spelled like a top-level
+        // fn's Rust name (`let main_update = …` vs `fn main_update`) can no
+        // longer intercept the call — closing the E0618 / silent-wrong-call
+        // shadow class for every name at once. The `ipe_main` entry point and
+        // FFI wrappers are already crate-root, so this is uniform.
+        Callee::Func(id) => Ok(format!("crate::{}", ctx.func_name(*id)?)),
         Callee::Kernel(k) => Ok(kernel_name(*k).to_owned()),
         // A foreign wrapper lives in the emitted `src/ffi.rs` module; the
         // absolute `crate::ffi::` path keeps it unambiguous from every

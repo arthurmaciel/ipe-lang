@@ -17288,6 +17288,82 @@ mod tests {
         }
     }
 
+    /// The lowerer's built-in `enum_variants` / `ctor_arity` seeding MUST agree
+    /// with the ONE shared table (`ipe_canon::builtins`) that canon and
+    /// `types::exhaust` also consume — otherwise the three drift and a `case`
+    /// over a built-in ADT is judged against different constructor sets in
+    /// different stages (the CO-TYPES-001 class). This forcing function fails
+    /// the moment lower's hand-written seeding diverges from the shared table.
+    ///
+    /// `ChunkEvent` / `StreamId` are the two exhaust unions lower intentionally
+    /// does NOT seed into its coverage backstop (they are emitted as enum TYPES
+    /// but their `case` exhaustiveness is `types::exhaust`'s responsibility), so
+    /// they are excluded from the comparison.
+    #[test]
+    fn lower_builtin_seeding_matches_shared_table() {
+        use ipe_ir::ModPath;
+
+        // Pre-intern EVERYTHING before `Lowerer::new` takes the immutable
+        // interner borrow (`Interner::intern` needs `&mut`).
+        let mut interner = Interner::new();
+        let builtins = build_test_builtin_ctors(&mut interner);
+        let shared = ipe_canon::builtins::intern_builtins(&mut interner)
+            .expect("intern shared built-in table");
+        let chunk_event = interner.intern("ChunkEvent").expect("intern");
+        let stream_id = interner.intern("StreamId").expect("intern");
+        let module = canon::Module {
+            name: vec![],
+            unions: vec![],
+            defs: vec![],
+        };
+        let types = empty_solved_types();
+        let lowerer = Lowerer::new(
+            &module,
+            &types,
+            &interner,
+            SymbolPools {
+                eta_params: vec![],
+                cap_params: vec![],
+                param_binders: vec![],
+                any_param_binders: vec![],
+                destructure_thunk_binders: vec![],
+                nested_cons_binders: vec![],
+                nested_strlit_binders: vec![],
+            },
+            &builtins,
+        );
+
+        let prelude_home = ModPath(Vec::new());
+        for (&union, ctors) in &shared.exhaust_union_ctors {
+            if union == chunk_event || union == stream_id {
+                continue;
+            }
+            let seeded_variants = lowerer
+                .enum_variants
+                .get(&(prelude_home.clone(), union))
+                .expect("lower must seed every built-in union the shared table declares");
+            let expected: Vec<ipe_intern::Symbol> = ctors.iter().map(|&(name, _)| name).collect();
+            assert_eq!(
+                seeded_variants,
+                &expected,
+                "lower's variant set for {:?} drifted from the shared built-in table",
+                interner.resolve(union)
+            );
+            for &(ctor, arity) in ctors {
+                let seeded_arity = lowerer
+                    .ctor_arity
+                    .get(&(prelude_home.clone(), ctor))
+                    .copied();
+                assert_eq!(
+                    seeded_arity,
+                    Some(arity),
+                    "lower's arity for {:?} drifted from the shared built-in table",
+                    interner.resolve(ctor)
+                );
+            }
+        }
+    }
+
     // ── Registry-only allowlist ──────────────────────────────────────────────
     //
     // These variants appear in `KernelFn::ALL` (and are therefore present in

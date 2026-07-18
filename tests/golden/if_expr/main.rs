@@ -250,11 +250,11 @@ pub fn main_classify(n: i64) -> i64 {
 }
 pub fn ipe_main() -> IpeTask<()> {
     ({
-        let a = main_abs_val((0 - 7));
+        let a = crate::main_abs_val((0 - 7));
         ({
-            let b = main_classify(5);
+            let b = crate::main_classify(5);
             ({
-                let c = main_classify((0 - 3));
+                let c = crate::main_classify((0 - 3));
                 ({
                     let total = ((a + b) + c);
                     log_println(string_from_int(total))

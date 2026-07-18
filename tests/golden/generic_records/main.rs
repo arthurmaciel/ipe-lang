@@ -258,7 +258,7 @@ pub fn main_unwrap<T1: Clone>(r: RecValue<T1>) -> T1 {
     (r).value.clone()
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(main_unwrap(main_wrap(42))))
+    log_println(string_from_int(crate::main_unwrap(crate::main_wrap(42))))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;
