@@ -435,14 +435,15 @@ num n =
     Num n
 
 
--- Unit-argument bare constants (Ipe corpus arity — `Css.zero ()`).
-zero : () -> Length
-zero _ =
+-- Pure-literal keyword constants ship as bare values: `margin zero`,
+-- `top auto`. A `Length`-valued binding needs no unit argument.
+zero : Length
+zero =
     LenZero
 
 
-auto : () -> Length
-auto _ =
+auto : Length
+auto =
     LenAuto
 
 
@@ -588,15 +589,17 @@ shadow offsetX offsetY blur c =
         ++ colorToString c
 
 
--- ─── Bare keyword constants (String-valued, unit-arg) ──────────
+-- ─── Bare keyword constants ───────────────────────────────────
+-- String-valued literals ship as bare values (`border none`,
+-- `fontFamily systemFont`); `monoFont` keeps its unit arg.
 
-none : () -> String
-none _ =
+none : String
+none =
     "none"
 
 
-systemFont : () -> String
-systemFont _ =
+systemFont : String
+systemFont =
     "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif"
 
 
