@@ -257,12 +257,18 @@ async fn do_connect<E: From<String> + Send + 'static>(
     let connect_fut: std::pin::Pin<Box<dyn std::future::Future<Output = WsConnOut> + Send>> =
         match pinned {
             Some(addr) => {
-                // No TLS feature is built, so a pinned connection can only be a
-                // plain ws:// stream; refuse wss under the guard rather than dial
-                // plaintext to a TLS endpoint.
+                // When SSRF-pinning is active (IPE_HTTP_DENY_PRIVATE), we dial
+                // the already-vetted IP directly via a raw TCP socket, bypassing
+                // the name-resolution step. A raw TCP socket carries no TLS
+                // context, so a `wss://` URL cannot be serviced here — TLS
+                // requires the full resolver path (`connect_async_with_config`,
+                // the `None` arm below). Refuse rather than dial plaintext to
+                // what the caller believes is a secure endpoint.
                 if url.starts_with("wss://") {
                     return IpeResult::Err(format!(
-                        "WebSocket.connect {}: wss with IPE_HTTP_DENY_PRIVATE is unsupported (no TLS feature to pin the connection)",
+                        "WebSocket.connect {}: wss:// with IPE_HTTP_DENY_PRIVATE is \
+                         unsupported (SSRF-pinned dial bypasses TLS; disable \
+                         IPE_HTTP_DENY_PRIVATE or use ws:// for this endpoint)",
                         safe_url
                     ).into());
                 }

@@ -1,32 +1,180 @@
 //! `Ipe.Ui.Keyed` kernel helpers — sky-key diff identity.
 //!
-//! **ipê v1 semantics: KEY DISCARDED.** Ipê's Go runtime uses the key string to
-//! stabilise the VNode diff (similar to Elm's `Html.Keyed`); ipê v1 does not yet
-//! have a key-aware differ.  The key is accepted but dropped, which is semantically
-//! correct (keys are a performance hint, not a behavioural contract).
-//! The divergence is recorded in `docs/divergences-from-sky.md` §B-Keyed.
+//! Each `(key, child)` pair has the key attached to the child element as a
+//! `sky-key` attribute.  The sky-id stamper (`assign_sky_ids_depth` /
+//! `ipe_id_key` in `html.rs`) reads that attribute to produce a STABLE sky-id
+//! for the child — the same identity it would have regardless of its position in
+//! the list.  Without the attribute the stamper falls back to positional ids,
+//! which shift on reorder and mis-patch uncontrolled-input state / focus.
+//!
+//! See `docs/divergences-from-sky.md §B-Keyed` for the sky-key-stamp approach
+//! vs the reference's VNode-key differ.
 //!
 //! Every function carries a trailing underscore per the `naming.rs` convention.
 
-use super::element::{Attribute, Element};
+use super::element::{Attribute, Description, Element};
 use super::helpers::{ui_column_, ui_row_};
+
+/// Attach a `sky-key` attribute to a child element so the sky-id stamper can
+/// stabilise its identity across list reorders.
+///
+/// `Node`/`TaggedNode` carry an attribute list; the key is prepended there.
+/// `Text`/`Empty`/`Raw` have no attribute slot, so they are wrapped in a keyed
+/// `el` (`Node` with one child) — the wrapper carries the key and the child
+/// retains its own identity inside it.  This matches the Go runtime's
+/// keyed-wrapper behaviour.
+fn attach_key<M: Clone>(key: String, child: Element<M>) -> Element<M> {
+    let key_attr = Attribute::AttrAttribute("sky-key".to_owned(), key.clone());
+    match child {
+        Element::Node(desc, mut attrs, kids) => {
+            attrs.insert(0, key_attr);
+            Element::Node(desc, attrs, kids)
+        }
+        Element::TaggedNode(tag, desc, mut attrs, kids) => {
+            attrs.insert(0, key_attr);
+            Element::TaggedNode(tag, desc, attrs, kids)
+        }
+        other => {
+            // Wrap Text/Empty/Raw in a plain el so the key has a DOM node to
+            // live on — identical to how `Ui.el [] child` renders.
+            Element::Node(Description::NoDescription, vec![key_attr], vec![other])
+        }
+    }
+}
 
 /// `Keyed.column : List (Attribute msg) -> List (String, Element msg) -> Element msg`
 ///
-/// Keys are dropped; children are forwarded to `ui_column_`.
+/// Attaches each key as a `sky-key` attribute on its child, then forwards to
+/// `ui_column_`.  The `sky-key` is consumed by `ipe_id_key` /
+/// `assign_sky_ids_depth` to produce stable sky-ids across reorder.
 pub fn keyed_column_<M: Clone>(
     attrs: Vec<Attribute<M>>,
     children: Vec<(String, Element<M>)>,
 ) -> Element<M> {
-    ui_column_(attrs, children.into_iter().map(|(_, e)| e).collect())
+    ui_column_(
+        attrs,
+        children.into_iter().map(|(k, e)| attach_key(k, e)).collect(),
+    )
 }
 
 /// `Keyed.row : List (Attribute msg) -> List (String, Element msg) -> Element msg`
 ///
-/// Keys are dropped; children are forwarded to `ui_row_`.
+/// Attaches each key as a `sky-key` attribute on its child, then forwards to
+/// `ui_row_`.
 pub fn keyed_row_<M: Clone>(
     attrs: Vec<Attribute<M>>,
     children: Vec<(String, Element<M>)>,
 ) -> Element<M> {
-    ui_row_(attrs, children.into_iter().map(|(_, e)| e).collect())
+    ui_row_(
+        attrs,
+        children.into_iter().map(|(k, e)| attach_key(k, e)).collect(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::element::{Attribute, Element};
+
+    fn has_sky_key(attrs: &[Attribute<()>], expected: &str) -> bool {
+        attrs.iter().any(|a| {
+            matches!(a, Attribute::AttrAttribute(k, v)
+                if k == "sky-key" && v == expected)
+        })
+    }
+
+    /// Each child in a `keyed_column_` carries the `sky-key` attribute.
+    #[test]
+    fn keyed_column_attaches_sky_key_to_node_children() {
+        let children = vec![
+            (
+                "alpha".to_string(),
+                Element::Node(
+                    crate::ui::element::Description::NoDescription,
+                    vec![],
+                    vec![],
+                ),
+            ),
+            (
+                "beta".to_string(),
+                Element::Node(
+                    crate::ui::element::Description::NoDescription,
+                    vec![],
+                    vec![],
+                ),
+            ),
+        ];
+        let col = keyed_column_(vec![], children);
+        let kids = match col {
+            Element::Node(_, _, kids) => kids,
+            other => panic!("expected Node, got {other:?}"),
+        };
+        assert_eq!(kids.len(), 2);
+        for (kid, key) in kids.iter().zip(["alpha", "beta"]) {
+            match kid {
+                Element::Node(_, attrs, _) => {
+                    assert!(
+                        has_sky_key(attrs, key),
+                        "expected sky-key={key} on child, got {attrs:?}"
+                    );
+                }
+                other => panic!("expected Node child, got {other:?}"),
+            }
+        }
+    }
+
+    /// `Text` children (no attribute slot) are wrapped in a keyed `el`.
+    #[test]
+    fn keyed_column_wraps_text_child_with_sky_key() {
+        let children = vec![("wrap-me".to_string(), Element::Text("hello".to_string()))];
+        let col = keyed_column_(vec![], children);
+        let kids = match col {
+            Element::Node(_, _, kids) => kids,
+            other => panic!("expected Node, got {other:?}"),
+        };
+        assert_eq!(kids.len(), 1);
+        match &kids[0] {
+            Element::Node(_, attrs, inner) => {
+                assert!(
+                    has_sky_key(attrs, "wrap-me"),
+                    "wrapper must carry sky-key, got {attrs:?}"
+                );
+                assert_eq!(inner.len(), 1, "wrapper must have exactly one child");
+                assert!(
+                    matches!(&inner[0], Element::Text(s) if s == "hello"),
+                    "inner child must be the original Text"
+                );
+            }
+            other => panic!("expected wrapper Node, got {other:?}"),
+        }
+    }
+
+    /// `keyed_row_` also attaches `sky-key` attributes.
+    #[test]
+    fn keyed_row_attaches_sky_key() {
+        let children = vec![(
+            "row-key".to_string(),
+            Element::Node(
+                crate::ui::element::Description::NoDescription,
+                vec![],
+                vec![],
+            ),
+        )];
+        let row = keyed_row_(vec![], children);
+        // The outer row Node has the `__row` style marker; its children carry keys.
+        let kids = match row {
+            Element::Node(_, _, kids) => kids,
+            other => panic!("expected Node, got {other:?}"),
+        };
+        assert_eq!(kids.len(), 1);
+        match &kids[0] {
+            Element::Node(_, attrs, _) => {
+                assert!(
+                    has_sky_key(attrs, "row-key"),
+                    "expected sky-key on row child, got {attrs:?}"
+                );
+            }
+            other => panic!("expected Node child, got {other:?}"),
+        }
+    }
 }
