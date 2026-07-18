@@ -156,3 +156,23 @@ closure for every reachable flag combination).
 Build environment: ipe debug binary + emitted crates built with dedicated
 `CARGO_TARGET_DIR`s (`~/.cache/ipe/sealhunt-target-wt`,
 `~/.cache/ipe/sealhunt-emitted-target`), `IPE_RUNTIME_DIR=src/runtime/rust/src`.
+
+## SEAL-MODSET-005 · PubSub.publish server-path — doc/impl gap + latent SSOT trap
+- severity: medium (latent) / documentation (immediate)
+- axis: completeness + soundness(SEAL, latent)
+- surfaced-by: user 2026-07-17 ("can't a server shape use publish?")
+- problem: CLAUDE.md documents `PubSub.publish`/`publishNoEcho` as Task-shaped, callable from raw
+  `api` handlers/post-init/scheduled jobs (the server-side publish path). But (a) the `PubSub`
+  qualifier is NOT registered in the canon QUALIFIERS table (`src/compiler/canon/src/env.rs:~900`),
+  so `PubSub.publish` fails name-resolution — documented-but-unwired; and (b) `PubSubPublish`/
+  `PubSubPublishNoEcho` return `None` from `KernelFn::required_runtime_module()` while their runtime
+  symbol `pubsub_publish` lives in `ipe_runtime::live::pubsub` (the `live` module). So the instant the
+  qualifier is wired, a server-shape program (`uses_server`, no tea/live) calling `PubSub.publish`
+  emits `pubsub_publish` without vendoring `live` → E0425 — the same module-set SEAL class as
+  SEAL-MODSET-001..004, this time reachable from a headless server (not covered by the seal_modset
+  matrix, which only tests Cmd.publish-no-Live).
+- also: `PubSubPublish` is `class = Tea` despite being Task-shaped/handler-callable — separate
+  dispatch-soundness question under investigation (pubsub-class-investigation.md).
+- fix direction: pre-emptively map `PubSubPublish|PubSubPublishNoEcho -> Live` in the SSOT (in
+  progress); wire the `PubSub` qualifier + resolve the class question as a separate change; add a
+  server+PubSub.publish row to the seal_modset matrix once nameable.
