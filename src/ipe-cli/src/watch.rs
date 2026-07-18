@@ -718,11 +718,30 @@ fn run_inner(
                 let mut sources = resolved.sources;
                 let mut discovered = resolved.discovered;
                 let injected = project::inject_compiled_std_closure(&mut sources, &mut discovered);
+
+                // Load the FFI catalog and inject installed-crate interface
+                // modules — the same seam `run_build` uses (CO-INCR-005).
+                // An error logs and skips the cycle (same policy as a
+                // resolution failure above) rather than tearing down the
+                // whole watch session.
+                let ffi_prep = match crate::ffi::prepare_ffi(
+                    &mut sources,
+                    &resolved.blame_path,
+                ) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("[ipe watch] FFI catalog error: {e}");
+                        continue;
+                    }
+                };
+
                 let desired: BTreeMap<Vec<String>, (String, ipe_db::ModuleOrigin)> = sources
                     .iter()
                     .map(|(p, (_, text))| {
                         let origin = if injected.contains(p) {
                             ipe_db::ModuleOrigin::EmbeddedStdlib
+                        } else if ffi_prep.injected.contains(p) {
+                            ipe_db::ModuleOrigin::FfiInterface
                         } else {
                             ipe_db::ModuleOrigin::User
                         };
@@ -741,7 +760,7 @@ fn run_inner(
                         &db_main,
                         &sources,
                         &injected,
-                        &std::collections::BTreeSet::new(),
+                        &ffi_prep.injected,
                     );
                     source_root = Some(root);
                     root
@@ -754,10 +773,13 @@ fn run_inner(
                     }
                     cfg
                 } else {
+                    // Pass ffi_prep.emit so the backend can write FFI
+                    // bindings (src/ffi.rs) into the emitted project — the
+                    // same slot `run_build` fills via BuildConfig (CO-INCR-005).
                     let cfg = ipe_db::BuildConfig::new(
                         &db_main,
                         resolved.db_driver,
-                        None,
+                        ffi_prep.emit,
                         ipe_ir::Target::Native,
                     );
                     config = Some(cfg);

@@ -13,8 +13,10 @@
 //! # Correctness constraints (MAKE INVALID STATES UNREPRESENTABLE)
 //!
 //! * Required cfg fields are looked up with `lookup_field` (fail-closed on miss).
-//! * Route params are accessed via `.get(i).cloned().unwrap_or_default()` — never
-//!   by index (panic vector eliminated).
+//! * Route params are accessed via fallible `.get(i)…?` expressions — never
+//!   by index (panic vector eliminated). A decode failure returns `None` from
+//!   the `Option<Page>` builder so `match_routes` routes to `not_found`
+//!   rather than silently substituting a zero-value default (§B-route-param).
 //! * Store kind / path are read from process env at call time, not compiled in.
 //! * `Live.appRouted` is a vestigial alias routed through the same
 //!   `lower_app_entry_cfg` path as `Live.app`; its arm here is a
@@ -192,9 +194,14 @@ fn emit_live_route(
             // — `{ let __c = ctor; move |_p| __c.clone() }`).  Constructing it
             // inside the body would move any captured payload out of an `Fn`
             // closure (E0507); every page ADT derives `Clone`.
+            //
+            // Returns `Some(…)` — the builder signature is now
+            // `Fn(Vec<String>) -> Option<Page>` so decode failures in other
+            // routes fall through to `not_found` (§B-route-param).
             format!(
                 "{{ let __c = {ctor_s}; \
-                 move |_params: ::std::vec::Vec<::std::string::String>| __c.clone() }}"
+                 move |_params: ::std::vec::Vec<::std::string::String>| \
+                 ::std::option::Option::Some(__c.clone()) }}"
             )
         } else {
             // Partial-ctor with N payload fields.
@@ -219,15 +226,18 @@ fn emit_live_route(
                     });
                 }
             }
-            // Emit type-directed `params.get(i)` conversions matching each
-            // field's IrType.
+            // Emit type-directed fallible `params.get(i)` conversions using
+            // `?`-propagation inside a closure that returns `Option<Page>`.
+            // A decode failure for any slot returns `None`, which `match_routes`
+            // maps to `not_found` (§B-route-param — sanctioned divergence from
+            // the reference which silently substitutes a default value).
             let mut param_gets = Vec::with_capacity(variant_tys.len());
             for (i, field_ty) in variant_tys.iter().enumerate() {
                 param_gets.push(route_param_get(field_ty, i)?);
             }
             format!(
                 "move |params: ::std::vec::Vec<::std::string::String>| \
-                 {ctor_s}({})",
+                 ::std::option::Option::Some({ctor_s}({}))",
                 param_gets.join(", ")
             )
         }
@@ -249,7 +259,7 @@ fn emit_live_route(
             format!(
                 "{{ let __b = {builder_s}; \
                  move |params: ::std::vec::Vec<::std::string::String>| \
-                 (__b)(params) }}"
+                 ::std::option::Option::Some((__b)(params)) }}"
             )
         } else {
             let mut param_gets = Vec::with_capacity(param_tys.len());
@@ -259,7 +269,7 @@ fn emit_live_route(
             format!(
                 "{{ let __b = {builder_s}; \
                  move |params: ::std::vec::Vec<::std::string::String>| \
-                 (__b)({}) }}",
+                 ::std::option::Option::Some((__b)({})) }}",
                 param_gets.join(", ")
             )
         }
@@ -449,38 +459,41 @@ fn emit_live_app_inner(
 }
 
 /// Emit a `params.get(i)` expression that decodes the `i`-th route `:param`
-/// string into the Rust type corresponding to `field_ty` (T6).
+/// string into the Rust type corresponding to `field_ty`, using `?`-propagation
+/// so a failed decode returns `None` from the enclosing `Option<Page>` closure
+/// rather than silently substituting a default value.
 ///
-/// Route captures are always URL strings; this function converts them to the
-/// expected Rust primitive with a graceful `unwrap_or_default` fallback on
-/// parse failure so a malformed URL segment never panics the runtime.
+/// The generated expressions are valid inside a closure that returns
+/// `Option<Page>` — each slot is a `?`-terminated sub-expression so any
+/// decode failure short-circuits the closure to `None`, which `match_routes`
+/// maps to `not_found` (§B-route-param).
 ///
-/// Supported types and their decode expressions:
+/// Supported types and their emitted decode expressions:
 ///
-/// | `IrType`  | emitted expression |
-/// |-----------|-------------------|
-/// | `Str`     | `.cloned().unwrap_or_default()` |
-/// | `Int`     | `.and_then(|s| s.parse::<i64>().ok()).unwrap_or_default()` |
-/// | `Float`   | `.and_then(|s| s.parse::<f64>().ok()).unwrap_or_default()` |
-/// | `Bool`    | `.map(|s| s == "true").unwrap_or_default()` |
-/// | other     | compile-time [`Diagnostic::CompilerBug`] (unsupported payload) |
+/// | `IrType`  | emitted expression (inside `Option<Page>` closure) |
+/// |-----------|---------------------------------------------------|
+/// | `Str`     | `params.get({i}).cloned()?` |
+/// | `Int`     | `params.get({i}).and_then(\|s\| s.parse::<i64>().ok())?` |
+/// | `Float`   | `params.get({i}).and_then(\|s\| s.parse::<f64>().ok())?` |
+/// | `Bool`    | `params.get({i})?.parse::<bool>().ok()?` |
+/// | other     | compile-time error (unsupported payload type) |
 ///
 /// This is a sanctioned divergence from the Go/Haskell reference, which assumes
-/// all route payloads are `String`. See `docs/divergences-from-sky.md`.
+/// all route payloads are `String` and silently substitutes zero-values on
+/// decode failure. See `docs/divergences-from-sky.md §B-route-param`.
 fn route_param_get(field_ty: &IrType, i: usize) -> DResult<String> {
     Ok(match field_ty {
-        IrType::Str => format!("params.get({i}).cloned().unwrap_or_default()"),
+        IrType::Str => format!("params.get({i}).cloned()?"),
         IrType::Int => {
-            format!("params.get({i}).and_then(|s| s.parse::<i64>().ok()).unwrap_or_default()")
+            format!("params.get({i}).and_then(|s| s.parse::<i64>().ok())?")
         }
         IrType::Float => {
-            format!("params.get({i}).and_then(|s| s.parse::<f64>().ok()).unwrap_or_default()")
+            format!("params.get({i}).and_then(|s| s.parse::<f64>().ok())?")
         }
-        IrType::Bool => format!("params.get({i}).map(|s| s == \"true\").unwrap_or_default()"),
+        // `parse::<bool>()` accepts "true"/"false" exactly (Rust stdlib),
+        // which matches the Ipê runtime's Bool string convention.
+        IrType::Bool => format!("params.get({i})?.parse::<bool>().ok()?"),
         other => {
-            // Item 3b: upgrade to IPE-L0123. Item 4: replace
-            // `{other:?}` (which leaks internal IR representation like
-            // `Enum { home: ModPath([…]) }`) with a user-facing type name.
             return Err(Diagnostic::Lower {
                 span: Span::DUMMY,
                 msg: LowerError::RouteParamUnsupportedType {

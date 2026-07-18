@@ -165,9 +165,9 @@ mod tests {
 // with `model.count = 0`, so `String.fromInt 0 = "0"`.
 #[cfg(all(test, feature = "tui"))]
 mod tui_headless {
-    use crate::tui::layout::element_to_cells;
-    use crate::ui::Attribute;
-    use crate::ui::helpers::{ui_column_, ui_el_, ui_text_};
+    use ipe_runtime_rust::tui::layout::element_to_cells;
+    use ipe_runtime_rust::ui::Attribute;
+    use ipe_runtime_rust::ui::helpers::{ui_column_, ui_el_, ui_text_};
 
     /// Render a `Ui.column [] [ Ui.el [] (Ui.text "0") ]` tree to a headless
     /// 80×24 ANSI cell frame and verify it contains the digit `"0"`.

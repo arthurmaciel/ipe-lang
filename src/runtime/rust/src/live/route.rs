@@ -5,20 +5,35 @@
 //! `build` closure applies the captured `:param` strings to the page
 //! constructor. `match_routes` picks the first matching route in declaration
 //! order and builds its page, falling back to `not_found`.
+//!
+//! The builder returns `Option<Page>` so that a `:param` segment that fails to
+//! decode into the expected payload type (e.g. `"abc"` for an `Int` param)
+//! returns `None` and `match_routes` falls through to `not_found` rather than
+//! silently substituting a default value. See `docs/divergences-from-sky.md
+//! §B-route-param`.
 
 use std::sync::Arc;
 
 /// A declared route: a URL pattern + a builder that applies the captured
-/// `:param` strings (in pattern order) to the page constructor. `Page: Clone`
-/// at the match site because `not_found` is cloned on a miss.
+/// `:param` strings (in pattern order) to the page constructor.
+///
+/// `build` returns `Option<Page>` — `None` when a `:param` segment cannot be
+/// decoded into the constructor's expected payload type (e.g. `"abc"` for an
+/// `Int` slot). `match_routes` treats `None` as a miss and falls through to the
+/// next route or `not_found`.
+///
+/// `Page: Clone` at the match site because `not_found` is cloned on a miss.
 #[derive(Clone)]
 pub struct Route<Page> {
     pub pattern: String,
-    pub build: Arc<dyn Fn(Vec<String>) -> Page + Send + Sync>,
+    pub build: Arc<dyn Fn(Vec<String>) -> Option<Page> + Send + Sync>,
 }
 
 impl<Page> Route<Page> {
-    pub fn new(pattern: &str, build: impl Fn(Vec<String>) -> Page + Send + Sync + 'static) -> Self {
+    pub fn new(
+        pattern: &str,
+        build: impl Fn(Vec<String>) -> Option<Page> + Send + Sync + 'static,
+    ) -> Self {
         Route {
             pattern: pattern.to_string(),
             build: Arc::new(build),
@@ -57,12 +72,21 @@ pub fn match_route(pattern: &str, path: &str) -> Option<Vec<String>> {
     Some(params)
 }
 
-/// First route (declaration order) whose pattern matches `path` → its built
-/// page; else `not_found` (cloned). Go `applyRouteWithParams` parity.
+/// First route (declaration order) whose pattern matches `path` AND whose
+/// builder successfully decodes all `:param` segments → its built page; else
+/// `not_found` (cloned). Go `applyRouteWithParams` parity.
+///
+/// A route whose pattern matches but whose builder returns `None` (a `:param`
+/// segment failed to decode into the expected type, e.g. `"abc"` for an `Int`
+/// slot) is skipped and matching continues. This mirrors how `match_routes`
+/// handles a pattern-level miss, routing the user to `not_found` instead of
+/// silently substituting a zero-value default.
 pub fn match_routes<Page: Clone>(routes: &[Route<Page>], not_found: &Page, path: &str) -> Page {
     for rt in routes {
         if let Some(params) = match_route(&rt.pattern, path) {
-            return (rt.build)(params);
+            if let Some(page) = (rt.build)(params) {
+                return page;
+            }
         }
     }
     not_found.clone()
@@ -117,9 +141,9 @@ mod tests {
 
     fn routes() -> Vec<Route<Page>> {
         vec![
-            Route::new("/", |_| Page::Home),
-            Route::new("/apps/:slug", |p| Page::App(p[0].clone())),
-            Route::new("/x/:a/:b", |p| Page::Two(p[0].clone(), p[1].clone())),
+            Route::new("/", |_| Some(Page::Home)),
+            Route::new("/apps/:slug", |p| Some(Page::App(p[0].clone()))),
+            Route::new("/x/:a/:b", |p| Some(Page::Two(p[0].clone(), p[1].clone()))),
         ]
     }
 
@@ -142,6 +166,30 @@ mod tests {
         assert_eq!(match_routes(&rs, &Page::NF, "/nope"), Page::NF); // notFound
         assert_eq!(match_routes(&rs, &Page::NF, "/apps"), Page::NF); // arity mismatch
         assert_eq!(match_routes(&rs, &Page::NF, "/apps/"), Page::NF); // trailing slash trims -> 1 seg
+    }
+
+    /// A builder returning `None` (simulates a failed `:param` decode, e.g.
+    /// `"abc"` for an `Int` slot) causes `match_routes` to fall through to
+    /// `not_found` rather than returning a zero-value default.
+    #[test]
+    fn build_none_routes_to_not_found() {
+        // Route whose builder always returns None (decode failure).
+        let routes: Vec<Route<Page>> = vec![
+            Route::new("/items/:id", |_p| None), // always fails decode
+            Route::new("/items/:id", |p| Some(Page::App(p[0].clone()))), // fallback
+        ];
+        // The first route matches the pattern but returns None; the second
+        // matches and succeeds.
+        assert_eq!(
+            match_routes(&routes, &Page::NF, "/items/42"),
+            Page::App("42".into())
+        );
+        // No route succeeds → not_found.
+        let only_failing: Vec<Route<Page>> = vec![Route::new("/items/:id", |_p| None)];
+        assert_eq!(
+            match_routes(&only_failing, &Page::NF, "/items/abc"),
+            Page::NF
+        );
     }
 
     #[test]
