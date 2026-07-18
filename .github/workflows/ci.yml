@@ -204,4 +204,14 @@ jobs:
         env:
           IPE_E2E: "1"
           IPE_RUNTIME_DIR: ${{ github.workspace }}/src/runtime/rust/src
+          # Without this, `tools/oracle`'s `resolve_emitted_target` fail-safe
+          # default (isolate) means EVERY golden's emitted crate builds into its
+          # own throwaway `target/` under `CARGO_TARGET_TMPDIR`, each compiling
+          # the full runtime dep tree (tokio/hyper/rsa/chrono/…) from scratch —
+          # the per-golden trees accumulate unbounded across a shard's ~100+
+          # goldens and exhaust runner disk (regex-automata/zerocopy ENOSPC).
+          # An absolute path here opts every emitted build in this shard into
+          # ONE target, so the dep tree compiles once and every later golden
+          # only links its own `main.rs`.
+          IPE_ORACLE_SHARED_TARGET: ${{ github.workspace }}/.cache/oracle-shared-target
         run: cargo nextest run --workspace --partition count:${{ matrix.shard }}/4
