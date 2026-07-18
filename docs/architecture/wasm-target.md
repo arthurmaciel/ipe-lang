@@ -828,5 +828,5 @@ Phased milestones + gates: `docs/architecture/wasm-target-impl-plan.md`.
   `--target wasm`).
 - Docs to sync on landing: `ROADMAP.md` (add a WASM/browser section),
   `docs/architecture/ui-live-tui-webview-spec.md` (add `is_client_wasm` to the
-  exhaustive target discrimination), `CLAUDE.md` (the `[wasm]` `sky.toml`
+  exhaustive target discrimination), `AGENTS.md` (the `[wasm]` `sky.toml`
   section + per-target stdlib capability notes in the authoring reference).

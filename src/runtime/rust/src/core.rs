@@ -761,7 +761,7 @@ pub fn maybe_combine<A>(maybes: Vec<IpeMaybe<A>>) -> IpeMaybe<Vec<A>> {
 // arithmetic overflow, etc. — is CLASSIFIED into a Ipê error kind, logged
 // structurally with a short correlation id, and the process exits 1 — instead of
 // dumping a raw Rust backtrace. Mirrors Go's `defer rt.LogPanicAndExit()` on
-// every emitted `func main()` (CLAUDE.md "Synchronous-panic gate"). The hook is
+// every emitted `func main()` (AGENTS.md "Synchronous-panic gate"). The hook is
 // total (no unwrap/index/panic of its own) and honours `IPE_LOG_FORMAT=json`.
 
 /// Map a Rust panic message to a Ipê error classification (Go's panic-class

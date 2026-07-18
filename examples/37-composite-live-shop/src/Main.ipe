@@ -6,7 +6,7 @@ module Main exposing (main)
 -- layout / Background / Border / Font / Region / Input / Chart /
 -- Lazy / Keyed / Responsive + Ipe.Live.Head + pub/sub via
 -- Cmd.publish + Sub.subscribeTopic in a single fixture. Multi-module
--- mandatory per CLAUDE.md Limitation #17.
+-- mandatory per AGENTS.md Limitation #17.
 import Ipe.Prelude exposing (..)
 import Ipe.Cmd as Cmd
 import Ipe.Live exposing (app, route)

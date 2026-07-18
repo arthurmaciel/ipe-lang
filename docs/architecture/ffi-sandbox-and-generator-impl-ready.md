@@ -394,7 +394,7 @@ side-effect-free bound local (`isize` arm evaluates twice):
 
 **Sanctioned divergence (record `oracle_divergence = true` + reason).** A value
 above `i64::MAX` **saturates** — not wraps, not errors. This satisfies "no silent
-numeric coercion" (CLAUDE.md §8) because the clamp is *total and documented*, not
+numeric coercion" (AGENTS.md §8) because the clamp is *total and documented*, not
 a `-1 → 3.4e38` sign-flip. `usize`/`isize` routing through `try_from` is
 32-bit-correct **by construction** — a bare `as` truncates on 32-bit, which an
 all-64-bit CI can never catch.

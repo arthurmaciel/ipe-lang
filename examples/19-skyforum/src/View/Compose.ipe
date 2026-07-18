@@ -51,7 +51,7 @@ replyContext replyTo =
         "Replying to comment #" ++ String.fromInt replyTo
 
 
--- Inline input — no helper indirection (CLAUDE.md Limitation #18:
+-- Inline input — no helper indirection (AGENTS.md Limitation #18:
 -- typed (String -> Msg) helper params get monomorphised to
 -- (String -> any) by the typed codegen, breaking go build).
 -- Uses `Ui.input` (real <input>) — `Ui.el` would render as <div>

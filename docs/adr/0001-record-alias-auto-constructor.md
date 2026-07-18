@@ -43,7 +43,7 @@ node + a `CtorScheme` registration + new `constrain` / `lower` / `backend`
 arms. Both are *sound*, but they lose to the synthesized-`Def` approach on the
 higher-and-equal principles:
 
-* **Soundness (P3) + MAKE INVALID STATES UNREPRESENTABLE.** CLAUDE.md §8: *"New
+* **Soundness (P3) + MAKE INVALID STATES UNREPRESENTABLE.** AGENTS.md §8: *"New
   AST nodes require explicit walker arms … don't rely on `_ -> []`
   catchalls."* A dedicated `RecordCtor` node reintroduces exactly that burden —
   every walker (constrain, exhaustiveness, lower, backend, and any LSP
@@ -212,7 +212,7 @@ re-derived at a second site. The following alternatives were considered and
 
 * **Dedicated `Expr_::RecordCtor` canon node + `CtorScheme` registration + new
   constrain/lower/backend arms** (fresh designs A2, A3). Sound, but reintroduces
-  the CLAUDE.md §8 "new node ⇒ N walker arms + `_ =>` catchall drift" burden for
+  the AGENTS.md §8 "new node ⇒ N walker arms + `_ =>` catchall drift" burden for
   no benefit the synthesized-`Def` approach doesn't already get from existing
   machinery. Loses on soundness/completeness/readability. A3's *per-reference
   synthesis at lowering* additionally re-derives field order in lower's zip —

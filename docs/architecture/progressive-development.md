@@ -26,7 +26,7 @@ is possible by construction.
 2. **Stop-and-escalate on the hard class.** Security tier (Secret/SqlFragment/CSRF/fuzzer), feature gaps needing type-system+backend+runtime co-design (e.g. erased-`any` payloads), oracle *divergences*, `unsafe`/FFI, or anything relaxing a soundness gate → the iteration refuses, writes an escalation, and moves on. This is the ex27 lesson encoded: a fresh agent under "pressure-cooker" pressure will otherwise produce a plausible **unsound** hack. The loop only touches mechanical, reference-backed wiring.
 3. **Per-item attempt cap (anti-thrash).** 3 failed attempts on one item → mark BLOCKED, escalate, move on. Prevents infinite grinding on an intractable item.
 4. **Concurrent authoring, serial integration.** A lockfile guards against a second autopilot. Within one run, up to `PROGDEV_LANES` lanes AUTHOR in parallel (each in its own worktree + its own cargo target — never the shared one), but the git-mutating GATE runs SERIALLY, one lane at a time, on the shared checkout (single-writer where it matters). A lane that loses a merge race with an earlier-landed lane is requeued (no penalty). Landed lanes commit straight to the base branch through the green gate.
-5. **Resource preconditions every iteration.** mem-guard alive, free disk ≥ 15 GB, timeout-bounded builds, no background processes. The CLAUDE.md non-negotiables become loop invariants.
+5. **Resource preconditions every iteration.** mem-guard alive, free disk ≥ 15 GB, timeout-bounded builds, no background processes. The AGENTS.md non-negotiables become loop invariants.
 6. **Kill-switch + caps.** `touch progressive-development.stop` for a clean exit; `PROGDEV_MAX_ITERS` and per-iteration `timeout` bound the blast radius; `--once` validates a single iteration before unleashing the loop.
 7. **Isolated gate target.** Always `~/.cache/master-gate-target`, never the shared lane target — the stale-rlib thrash cannot fool the gate.
 8. **Idempotent / crash-safe.** All state is on disk; a crash mid-run just means the next iteration re-reads `BACKLOG.md` + `progressive-development-log.md` and continues. Nothing lives only in memory.
@@ -72,12 +72,12 @@ scripts/progressive-development/autopilot.sh
 scripts/progressive-development/watch.sh
 ```
 
-## The CLAUDE.md cost — the central economic question
+## The AGENTS.md cost — the central economic question
 
 **The problem.** A fresh `claude -p` process auto-loads project memory at
-SessionStart: the repo `CLAUDE.md` (this project's is very large — the app-shape
+SessionStart: the repo `AGENTS.md` (this project's is very large — the app-shape
 matrix, the full stdlib reference, env-var tables, the effect-boundary tier
-list, …), the global `~/.claude/CLAUDE.md`, the memory index, and skill blobs.
+list, …), the global `~/.claude/AGENTS.md`, the memory index, and skill blobs.
 For an *interactive* session that pays off — you might do anything. For a Progressive Development
 iteration whose entire job is "wire one known-missing kernel," ~90% of that
 preamble is dead weight, and — this is the crux — it is billed **cold, at full
@@ -100,9 +100,9 @@ fixed part** if `F` is large and N is high: a 25k-token `F` over 50 iterations i
 
 **What we do about it (in priority order):**
 
-1. **Stop CLAUDE.md loading at the CLI — you cannot "ignore" it.** An auto-loaded
-   `CLAUDE.md` is injected into the fresh agent's system prompt *before it acts*,
-   so a prompt instruction to "ignore CLAUDE.md" is futile (the tokens are already
+1. **Stop AGENTS.md loading at the CLI — you cannot "ignore" it.** An auto-loaded
+   `AGENTS.md` is injected into the fresh agent's system prompt *before it acts*,
+   so a prompt instruction to "ignore AGENTS.md" is futile (the tokens are already
    billed) AND counter-productive (naming the file can trigger a wasteful re-`Read`).
    The only real fix is to change *what loads*, and the Claude CLI has flags for
    exactly this. autopilot's `agent()` invokes each lane stage (design/impl/review)
@@ -118,10 +118,10 @@ fixed part** if `F` is large and N is high: a 25k-token `F` over 50 iterations i
    auto-approval classifier while still gating dangerous ops. If it blocks a
    routine command, append an `--allowedTools 'Bash(cargo *) Bash(git *) …'`
    allowlist via `PROGDEV_CLAUDE_ARGS`.)
-   - **`--safe-mode`** disables CLAUDE.md auto-discovery (project AND global),
+   - **`--safe-mode`** disables AGENTS.md auto-discovery (project AND global),
      skills, plugins, and **hooks** — while keeping normal auth (OAuth/keychain),
      so it works with a subscription login. (`--bare` is leaner — keeps skills,
-     still drops CLAUDE.md + hooks + auto-memory — but requires `ANTHROPIC_API_KEY`;
+     still drops AGENTS.md + hooks + auto-memory — but requires `ANTHROPIC_API_KEY`;
      override via `PROGDEV_CLAUDE_ARGS` if you auth that way.)
    - **`--append-system-prompt-file`** injects the lean contract
      (`context.md`, ~1–2k tokens: six principles, two

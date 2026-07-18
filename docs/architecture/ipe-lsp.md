@@ -346,7 +346,7 @@ buffer. Each is speculatively verified before it is surfaced/applied (Q5).
 Inserts a coherent `Live.app` / `Tui.app` / `Webview.app` skeleton (offered as
 separate action titles per app shape from the matrix). Because it reads the
 module, it seeds `Model`/`Msg` from existing decls rather than duplicating them.
-For the Ipe.Ui-heavy case the CLAUDE.md guidance to split State/Update/View
+For the Ipe.Ui-heavy case the AGENTS.md guidance to split State/Update/View
 applies: the action offers a *single-module* skeleton by default and a
 *multi-module split* variant for larger apps.
 
@@ -455,7 +455,7 @@ C.2 flat-namespace redesign.
    through the `Format` crate so it is fmt-clean and idempotent with format-on-
    save. Not-yet-imported items sort below in-scope names.
 2. **Quick-fix on the unresolved-name diagnostic.** The canonicaliser already
-   emits an unresolved-name / did-you-mean diagnostic (CLAUDE.md §3.1). The LSP
+   emits an unresolved-name / did-you-mean diagnostic (AGENTS.md §3.1). The LSP
    attaches "Import `X` from `Ipe.Y`" quick-fixes — one per candidate module,
    using the same shared import-insertion helper as the completion path.
 
@@ -616,7 +616,7 @@ new AST nodes from semantic tokens / references. In Rust the walkers
 `refs_in_expr`, `collect_sem_tokens`) `match` on the AST/IR enums with **no
 wildcard arm**. Adding a new AST variant produces a non-exhaustive-match *compile
 error* in `ipe_lsp_features` until every walker gets its arm — the type system
-enforces the CLAUDE.md "new AST node requires explicit walker arms" rule, strictly
+enforces the AGENTS.md "new AST node requires explicit walker arms" rule, strictly
 stronger than the grep-audited `_ -> []` convention. Belt-and-braces:
 `#![deny(clippy::wildcard_enum_match_arm)]` on the walker modules, a CI grep for
 `_ =>` in AST matches, and a golden snapshot test of the semantic-token stream +

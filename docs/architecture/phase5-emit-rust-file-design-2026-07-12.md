@@ -1581,7 +1581,7 @@ cargo test -p ipe --test 'golden_*' --no-fail-fast
    is a Spine-collapse-invariant violation (§3.3) — STOP, do not "fix" the
    golden; find and fix the bug in Task 12's `partition_items` branch (the
    `<= 1` distinct-`SkyModule`-bucket collapse case) instead. This is exactly
-   the kind of finding CLAUDE.md's no-deferral principle requires entering the
+   the kind of finding AGENTS.md's no-deferral principle requires entering the
    pipeline immediately, not worked around. (In practice Task 13's execution
    found ZERO single-home regressions — every red test was a correctly-firing
    multi-home split.)

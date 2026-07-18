@@ -146,7 +146,7 @@ recorded reference.
 ### B7 — Bare arity-0 `Uuid.v4` / `Uuid.v7` evaluate
 - **Differs:** the import-less bare reference `Uuid.v4` / `Uuid.v7` evaluates to a
   fresh `String` on ipê (the documented bare-reference form). The Go reference
-  leaves the bare reference as a kernel function value (CLAUDE.md Limitation #7 —
+  leaves the bare reference as a kernel function value (AGENTS.md Limitation #7 —
   arity-0 kernel codegen), so its length/version-nibble checks differ.
 - **Go-oracle relationship:** Go succeeds; checks differ on this shape.
 - **Rationale:** arity-0 kernel codegen. **Sanctioned:** yes (`sanctioned:`).
@@ -336,7 +336,7 @@ runtime (each either matches Go or is more correct):
 `Decimal.round` uses banker's rounding (Go `RoundBank`) and
 `Decimal.toStringFixed`/`formatWith` use half-away-from-zero (Go `StringFixed`);
 both match Go exactly and are therefore *not* divergences from Ipê. Recorded here
-only to pre-empt mis-listing (see CLAUDE.md "Agent learnings").
+only to pre-empt mis-listing (see AGENTS.md "Agent learnings").
 
 ### B18 — WS `sendBinary` (server + client) takes `Vec<u8>`, not `String`
 - **Differs:** Ipê defines `type alias Bytes = String`, so the Go reference's
@@ -1400,7 +1400,7 @@ API-shape review):
   string-concatenated WHERE clause is now a `ipe` compile-time `IPE-T0001`
   type mismatch, never a runtime value. `Db.unsafeFindWhere` (and its runtime
   `db_unsafe_find_where`) is REMOVED, not deprecated — the security-tier
-  no-deferral rule (`CLAUDE.md` / `PRINCIPLES.md`) treats "keep the raw-SQL
+  no-deferral rule (`AGENTS.md` / `PRINCIPLES.md`) treats "keep the raw-SQL
   escape hatch a brand-new safe API supersedes, at zero migration cost" as a
   forbidden shipping excuse. Zero fixtures called `unsafeFindWhere` outside
   its own golden, which was rewritten to `Db.findWhere`.

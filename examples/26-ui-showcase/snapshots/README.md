@@ -34,7 +34,7 @@ TMPDIR=/tmp bash scripts/verify-ui-showcase.sh --update-baseline
 
 `±3` px pixel tolerance + 1 % per-pixel colour delta + 1 % total-
 pixel budget — see `scripts/verify-ui-showcase.mjs` § constants.
-This matches CLAUDE.md §"Critical constraints" for cross-platform
+This matches AGENTS.md §"Critical constraints" for cross-platform
 Chromium renders (macOS vs Linux text differs by 1-2 px). On CI we
 only run the runner on macOS today; Linux Chromium's different font
 stack would false-positive every baseline.

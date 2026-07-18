@@ -1,7 +1,7 @@
 module State exposing (..)
 
 -- Pure types + same-shape helpers. No Ipe.Ui imports here, so the
--- type-checker stays well below the heap-exhaustion limit (CLAUDE.md
+-- type-checker stays well below the heap-exhaustion limit (AGENTS.md
 -- Limitation #17): the heavy unification load is in the per-View
 -- modules.
 import Ipe.Prelude exposing (..)

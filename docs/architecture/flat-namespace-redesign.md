@@ -279,7 +279,7 @@ escape hatch, *not* a migration shim. `import Db as Database` for user renaming 
 Churn scope: because nearly all existing code already accesses `Qualifier.member`,
 the delta is import-line deletion + root-prefix stripping. The one non-mechanical
 change is the `Time` merge (Q2), and it surfaces mechanically via the tripwire.
-Template-sync is a project non-negotiable: `CLAUDE.md`, `templates/CLAUDE.md`, and
+Template-sync is a project non-negotiable: `AGENTS.md`, `templates/AGENTS.md`, and
 `docs/stdlib.md` import examples are rewritten in the same commit as the terminal cut.
 
 ---

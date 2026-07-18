@@ -446,7 +446,7 @@ fn radio_core_<M: Clone + Send + Sync + 'static>(
             // Use on_bool_ (the bool-valued change event on radio) to deliver
             // the wire value. The closure ignores the Bool payload and always
             // emits the message for THIS option — matches Ipê's onClick-per-label
-            // convention from CLAUDE.md §Radio convention.
+            // convention from AGENTS.md §Radio convention.
             ui_on_bool_(Arc::new(move |_b: bool| on_click_msg.clone())),
         ];
         let radio_input = ui_input_(radio_attrs);

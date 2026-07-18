@@ -161,7 +161,7 @@ Build environment: ipe debug binary + emitted crates built with dedicated
 - severity: medium (latent) / documentation (immediate)
 - axis: completeness + soundness(SEAL, latent)
 - surfaced-by: user 2026-07-17 ("can't a server shape use publish?")
-- problem: CLAUDE.md documents `PubSub.publish`/`publishNoEcho` as Task-shaped, callable from raw
+- problem: AGENTS.md documents `PubSub.publish`/`publishNoEcho` as Task-shaped, callable from raw
   `api` handlers/post-init/scheduled jobs (the server-side publish path). But (a) the `PubSub`
   qualifier is NOT registered in the canon QUALIFIERS table (`src/compiler/canon/src/env.rs:~900`),
   so `PubSub.publish` fails name-resolution — documented-but-unwired; and (b) `PubSubPublish`/

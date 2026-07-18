@@ -217,7 +217,7 @@ Record bundle size; decide the size-budget gate (spec Open decision 6).
 
 **Files.** `examples/` (new wasm SPA example), sweep tooling, `ROADMAP.md` +
 `docs/architecture/ui-live-tui-webview-spec.md` (`is_client_wasm`) +
-`CLAUDE.md` (`[wasm]` section, per-target capability notes).
+`AGENTS.md` (`[wasm]` section, per-target capability notes).
 **Gate.** Example builds, boots headless, and passes a real-interaction
 scenario; all three gate layers each have a red-team test; sweep stays green.
 

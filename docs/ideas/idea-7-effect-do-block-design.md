@@ -209,7 +209,7 @@ already happened — `Task` has no transaction semantics (reach for
 
 This is the ergonomic win: write the happy path top-to-bottom; the first failing
 effect exits with its error, no per-step `case … of Err …`. It is exactly what
-the CLAUDE.md two-level error pattern rides on — the block propagates `Err` to
+the AGENTS.md two-level error pattern rides on — the block propagates `Err` to
 the boundary (`Task.onError` / `Cmd.perform … ResultMsg`), where the errId +
 structured log are attached.
 
@@ -282,7 +282,7 @@ Moderate, front-loaded on the parser:
   **type-inference / lower / emit / LSP are essentially untouched**.
 - **Formatter** (`sky_format`): render the block form.
 - **Compiler suggestions** (§9): the effect-visibility checks + hints.
-- **Docs / `templates/CLAUDE.md`**: syntax reference + the auto-force retirement.
+- **Docs / `templates/AGENTS.md`**: syntax reference + the auto-force retirement.
 
 No new IR, no runtime, no oracle divergence at the value level (emitted Task
 behaviour is identical to hand-written `andThen`).
@@ -294,7 +294,7 @@ behaviour is identical to hand-written `andThen`).
 at the source level, so it must not compete with the examples-sweep-green push.
 Sequence it after parity, alongside the other macro-roadmap syntactic
 departures (Ideas 5 or-patterns, 6 guards, 8 field-punning). When implemented,
-update `templates/CLAUDE.md` + `docs/` in the same commit (template-sync rule).
+update `templates/AGENTS.md` + `docs/` in the same commit (template-sync rule).
 
 ## 14. Open sub-questions (small; settle at implementation)
 

@@ -5,7 +5,7 @@
 //! and is NEVER erased or downcast — the only `dyn Any` is the broker-container
 //! indirection, which is correct by construction (a `Broker<T>` is only ever
 //! stored under `TypeId::of::<T>()`). This is the no-runtime-errors design from
-//! runtime-rust/CLAUDE.md: a statically-typed broker, not Go's reflect registry.
+//! runtime-rust/AGENTS.md: a statically-typed broker, not Go's reflect registry.
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
