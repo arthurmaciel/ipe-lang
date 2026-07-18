@@ -579,9 +579,17 @@ pub fn load_catalog(cache_root: &Path) -> Result<Vec<InstalledCrate>, Diagnostic
         let interface_source = read(&paths.interface)?;
         // RE-DERIVE the wrappers from the validated inspection document — the
         // on-disk `_bindings.rs` is never trusted as text (door (a) close).
-        let pkg_text = read(&paths.pkg_json)?;
-        let pkg = PkgInfo::decode_json(&pkg_text)?;
-        let bindings_source = crate::bindings::emit_bindings(&pkg);
+        // A legacy cache written before the `pkg.json` artifact existed has no
+        // document to re-derive from; it falls back to the stored text, whose
+        // trust then rests on the discovery-time ownership/write-boundary gate
+        // (`find_cache_root`) plus the injection-free-by-construction emitter.
+        let bindings_source = if paths.pkg_json.is_file() {
+            let pkg_text = read(&paths.pkg_json)?;
+            let pkg = PkgInfo::decode_json(&pkg_text)?;
+            crate::bindings::emit_bindings(&pkg)
+        } else {
+            read(&paths.bindings)?
+        };
         let malformed = |detail: String| Diagnostic::WireMalformed {
             context: format!("consumer manifest `{}`", paths.consumer.display()),
             defect: crate::diag::WireDefect::Json { detail },
@@ -1031,6 +1039,25 @@ mod tests {
             c.bindings_source, on_disk,
             "warm re-derivation must be byte-identical to the installed _bindings.rs"
         );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn legacy_cache_without_pkg_json_falls_back_to_stored_bindings() {
+        // A cache written before the pkg.json artifact existed still loads: the
+        // re-derivation gracefully falls back to the stored _bindings.rs text
+        // (trust then rests on the discovery ownership gate + the injection-free
+        // emitter). Removing pkg.json models the legacy layout.
+        let tmp = std::env::temp_dir().join(format!("ipe-ffi-legacy-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let cache = FfiCache::at_project_root(&tmp);
+        let (_pkg, paths) =
+            install_from_inspection(&cache, &semver_json()).expect("installs");
+        let stored = std::fs::read_to_string(&paths.bindings).expect("readable");
+        std::fs::remove_file(&paths.pkg_json).expect("drop pkg.json");
+        let catalog = load_catalog(cache.root()).expect("loads legacy layout");
+        let c = catalog.first().expect("one crate");
+        assert_eq!(c.bindings_source, stored, "legacy path serves the stored text");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
