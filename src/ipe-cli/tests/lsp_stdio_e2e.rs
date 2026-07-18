@@ -66,7 +66,7 @@ fn await_diagnostics(
 ) -> Vec<serde_json::Value> {
     loop {
         let msg = rx
-            .recv_timeout(Duration::from_secs(60))
+            .recv_timeout(Duration::from_mins(1))
             .expect("diagnostics push within deadline");
         if msg.get("method").and_then(serde_json::Value::as_str)
             != Some("textDocument/publishDiagnostics")
@@ -92,7 +92,7 @@ fn await_diagnostics(
 fn await_response(rx: &mpsc::Receiver<serde_json::Value>, id: i64) -> serde_json::Value {
     loop {
         let msg = rx
-            .recv_timeout(Duration::from_secs(60))
+            .recv_timeout(Duration::from_mins(1))
             .expect("response within deadline");
         if msg.get("id").and_then(serde_json::Value::as_i64) == Some(id) {
             assert!(
