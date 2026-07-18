@@ -342,11 +342,19 @@ fn let_if_and_extended_binops_emit_total_rust() -> DResult<()> {
     };
 
     let out = emit(&interner, &program(main_mod, vec![], vec![f_fn]))?;
-    let expected_body =
-        "({ let x = (n * 2); (if ((x >= 10) && (x != 0)) { (x / 2) } else { (x + 1) }) })";
+    // Rustfmt reformats the emitted let/if block onto multiple lines; assert the
+    // key semantic fragments rather than a single-line snapshot.
     assert!(
-        out.contains(expected_body),
-        "let/if/binops did not emit as expected:\n{out}"
+        out.contains("let x = (n * 2);"),
+        "let binding not emitted:\n{out}"
+    );
+    assert!(
+        out.contains("(if ((x >= 10) && (x != 0))"),
+        "if condition not emitted:\n{out}"
+    );
+    assert!(
+        out.contains("(x / 2)") && out.contains("(x + 1)"),
+        "if branches not emitted:\n{out}"
     );
     Ok(())
 }
