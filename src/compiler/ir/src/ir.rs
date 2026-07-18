@@ -2006,6 +2006,12 @@ pub type KernelFn = ipe_kernels::StdlibKernel;
 /// without taking a direct `ipe_kernels` dependency.
 pub use ipe_kernels::HtmlEventShape;
 
+/// Re-export of the runtime-module requirement ADT returned by
+/// [`KernelFn::required_runtime_module`], so `ipe_lower` (and any `ipe_ir`
+/// consumer) can drive the `uses_*` module-set flags from it without a direct
+/// `ipe_kernels` dependency.
+pub use ipe_kernels::RuntimeModule;
+
 /// Binary operators.
 ///
 /// Covers the arithmetic, comparison, and boolean operators. `Append` (`++`)
