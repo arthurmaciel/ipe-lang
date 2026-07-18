@@ -104,11 +104,19 @@ fn animation_module_resolves_and_emits_kernel() {
         calls >= 1,
         "emitted Rust must carry the animateRaw helper call (got {calls}):\n{emitted}"
     );
-    // `Animation.attribute` with `respectReducedMotion = True` threads the flag
-    // through as the fourth argument — proving it is not dropped.
+    // `Ipe.Ui.Animation.attribute` (`src/stdlib/Ipe/Ui/Animation.ipe`) is a
+    // stdlib function of `spec : Spec`, compiled ONCE — it calls
+    // `Ui.animateRaw spec.name (buildShorthandTail spec) (buildKeyframesBody
+    // spec.keyframes) spec.respectReducedMotion`, so `respectReducedMotion`
+    // threads through as a genuine field READ on the runtime `spec` value,
+    // never as a literal baked in from THIS fixture's `respectReducedMotion =
+    // True` call site (this function is not specialised/inlined per caller).
+    // The fourth argument must be the `spec` record's field access, proving
+    // the flag is threaded rather than dropped or defaulted.
     assert!(
-        emitted.contains("ui_animate_raw_(") && emitted.contains(", true)"),
-        "the a11y-gated `attribute` must emit `ui_animate_raw_(…, true)`:\n{emitted}"
+        emitted.contains("ui_animate_raw_(") && emitted.contains("(spec).respectReducedMotion"),
+        "the a11y-gated `attribute` must thread `spec.respectReducedMotion` into \
+         `ui_animate_raw_`'s fourth argument:\n{emitted}"
     );
 }
 
