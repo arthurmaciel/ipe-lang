@@ -257,7 +257,7 @@ pub fn main_wrap(n: i64) -> RecValue {
 pub fn ipe_main() -> IpeTask<()> {
     ({
         let r = RecValue { value: 1 };
-        log_println(string_from_int(((main_wrap(41)).value + (r).value)))
+        log_println(string_from_int(((crate::main_wrap(41)).value + (r).value)))
     })
 }
 pub fn main_Box(value: i64) -> RecValue {

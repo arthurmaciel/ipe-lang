@@ -284,12 +284,12 @@ pub fn ipe_main() -> IpeTask<()> {
     log_println(string_append(
         string_append(
             string_append(
-                main_param_pos(("p".to_string(), "q".to_string())),
-                main_case_pos(("r".to_string(), "s".to_string())),
+                crate::main_param_pos(("p".to_string(), "q".to_string())),
+                crate::main_case_pos(("r".to_string(), "s".to_string())),
             ),
-            main_let_pos(("t".to_string(), "u".to_string())),
+            crate::main_let_pos(("t".to_string(), "u".to_string())),
         ),
-        main_nested_pos(("h".to_string(), ("c".to_string(), "d".to_string()))),
+        crate::main_nested_pos(("h".to_string(), ("c".to_string(), "d".to_string()))),
     ))
 }
 

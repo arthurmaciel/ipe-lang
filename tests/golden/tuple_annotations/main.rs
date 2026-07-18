@@ -246,7 +246,7 @@ pub fn main_second_of(t: (i64, i64)) -> i64 {
 }
 pub fn ipe_main() -> IpeTask<()> {
     log_println(string_from_int(
-        (main_first_of((41, 7)) + main_second_of((41, 7))),
+        (crate::main_first_of((41, 7)) + crate::main_second_of((41, 7))),
     ))
 }
 

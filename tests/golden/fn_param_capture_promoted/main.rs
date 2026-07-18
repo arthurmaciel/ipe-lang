@@ -254,7 +254,7 @@ pub fn main_compose2(f: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>, a: i64,
                 {
                     let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
                         Box::new(move |eta_0: i64| -> i64 {
-                            main_apply(
+                            crate::main_apply(
                                 ({
                                     let f = f.clone();
                                     {
@@ -277,7 +277,7 @@ pub fn main_compose2(f: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static>, a: i64,
     })
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(main_compose2(
+    log_println(string_from_int(crate::main_compose2(
         {
             let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
                 Box::new(move |n: i64| -> i64 { (n + 5) });

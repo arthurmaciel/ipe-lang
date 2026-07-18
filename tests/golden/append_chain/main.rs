@@ -250,7 +250,7 @@ pub fn main_sentence() -> String {
     )
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(main_sentence())
+    log_println(crate::main_sentence())
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

@@ -273,20 +273,20 @@ pub fn main_sum_r(c: MainRChain) -> i64 {
         MainRChain::REnd => 0,
         MainRChain::RNode(rec) => {
             let rec = *rec;
-            ((rec).val + main_sum_r((rec).rest.clone()))
+            ((rec).val + crate::main_sum_r((rec).rest.clone()))
         }
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(main_sum_r(MainRChain::RNode(Box::new(
-        RecRestVal {
+    log_println(string_from_int(crate::main_sum_r(MainRChain::RNode(
+        Box::new(RecRestVal {
             rest: MainRChain::RNode(Box::new(RecRestVal {
                 rest: MainRChain::REnd,
                 val: 2,
             })),
             val: 3,
-        },
-    )))))
+        }),
+    ))))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

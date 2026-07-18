@@ -245,7 +245,7 @@ pub fn main_unwrap(m: IpeMaybe<i64>) -> i64 {
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(main_unwrap(IpeMaybe::Just(42))))
+    log_println(string_from_int(crate::main_unwrap(IpeMaybe::Just(42))))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;
