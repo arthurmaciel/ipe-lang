@@ -2,6 +2,7 @@
 name = "ipe_watch"
 edition.workspace = true
 version.workspace = true
+license.workspace = true
 
 [dependencies]
 # Task 21 (confined watcher). Directory-level (not inode-level) watching —
