@@ -661,6 +661,7 @@ const fn kernel_name(kernel: KernelFn) -> &'static str {
         KernelFn::DbDecRequired => "Db.Decode.required",
         KernelFn::DbDecOptional => "Db.Decode.optional",
         KernelFn::DbDecMoney => "Db.Decode.money",
+        KernelFn::DbDecBytes => "Db.Decode.bytes",
         // ── Ipe.Db.Sql — SqlFragment builder ───────────────────
         KernelFn::SqlColumn => "Sql.column",
         KernelFn::SqlParam => "Sql.param",
