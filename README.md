@@ -1,6 +1,6 @@
 # Ipê
 
-[![CI](https://github.com/arthurmaciel/ipe-lang/actions/workflows/ci.yml/badge.svg)](https://github.com/arthurmaciel/ipe-lang/actions/workflows/ci.yml)
+[![CI](https://github.com/arthurmaciel/ipe/actions/workflows/ci.yml/badge.svg)](https://github.com/arthurmaciel/ipe/actions/workflows/ci.yml)
 
 **Ipê** pairs **Elm's syntax** with **Sky's batteries-included runtime** — the
 standard library, effect system, and application framework (web, API, CLI,
@@ -8,7 +8,7 @@ terminal, desktop) that turn a pure-functional language into a full-stack one.
 It compiles to readable, `rustfmt`-clean Rust.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe-lang/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/arthurmaciel/ipe/main/scripts/install.sh | sh
 ```
 
 ```elm
@@ -25,7 +25,7 @@ main =
 ipe run src/Main.ipe        # compile + run in one step
 ```
 
-Prefer building from source? `git clone https://github.com/arthurmaciel/ipe-lang
+Prefer building from source? `git clone https://github.com/arthurmaciel/ipe
 && cd ipe-lang && cargo build --release`.
 
 ## Contents
@@ -77,4 +77,4 @@ real work. If Ipê is useful to you, [support its development](https://ko-fi.com
 Contributions are welcome and **every PR is human-reviewed** before merge.
 The most valuable contributions are **bug reports and security/soundness
 fixes** — a mis-compilation, a panic on valid input, or an unsound emit is
-always worth an [issue](https://github.com/arthurmaciel/ipe-lang/issues).
+always worth an [issue](https://github.com/arthurmaciel/ipe/issues).
