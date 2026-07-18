@@ -71,17 +71,30 @@ fn i195_skyc_accepts_and_renders_send_only_fnonce_payload() {
     // The annotated partial decoder's function-typed payload must render as the
     // runtime's Send-only `FnOnce` curry chain — never the shared-callback
     // `Box<dyn Fn + Send + Sync>` form (the unfixed shape that E0308/E0277'd).
+    //
+    // Match on the innermost curry-chain fragment rather than spanning the
+    // whole `Decoder<Box<...>>` return type in one substring: rustfmt wraps
+    // that outer generic nesting across several indented lines once it
+    // exceeds the line-width limit, so a substring spanning `Decoder<Box<dyn
+    // FnOnce...` is a stale assertion the moment the wrap point shifts (same
+    // stale-substring class as #269/#191). The inner `dyn FnOnce(..) -> ... +
+    // Send + 'static>` leaf stays on one line and is the exact span that
+    // flips between the fixed/unfixed shapes.
     assert!(
-        emitted
-            .contains("main_partial_txn_decoder() -> Decoder<Box<dyn FnOnce(String) -> Box<dyn FnOnce(String) -> "),
+        emitted.contains("pub fn main_partial_txn_decoder() -> Decoder<")
+            && emitted.contains(
+                "dyn FnOnce(String) -> Box<dyn FnOnce(String) -> RecAccountAmountId + Send + 'static>"
+            ),
         "the `Decoder (a -> b)` payload must render as a Send-only `Box<dyn FnOnce>` \
          curry chain (#195); got main.rs:\n{emitted}"
     );
-    // Guard against the unfixed shape: the partial decoder's payload must NOT be
-    // a `+ Sync`-stamped `Box<dyn Fn>` (the runtime `curryN` output is `FnOnce`,
+    // Guard against the unfixed shape: the curry-chain leaf must NOT be a
+    // `+ Sync`-stamped `Box<dyn Fn>` (the runtime `curryN` output is `FnOnce`,
     // Send-only, so `Fn + Send + Sync` mismatches on both trait and auto-trait).
     assert!(
-        !emitted.contains("main_partial_txn_decoder() -> Decoder<Box<dyn Fn(String)"),
+        !emitted.contains(
+            "dyn Fn(String) -> Box<dyn FnOnce(String) -> RecAccountAmountId + Send + Sync"
+        ),
         "the `Decoder (a -> b)` payload must NOT render as a `Box<dyn Fn + Send + Sync>` \
          (the #195 over-constrained shape); got main.rs:\n{emitted}"
     );

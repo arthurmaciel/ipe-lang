@@ -124,14 +124,18 @@ fn ws_on_error_callback_boxes_with_arc_not_box() {
     let main_rs = std::fs::read_to_string(out.join("src").join("main.rs"))
         .expect("emitted src/main.rs must exist");
 
+    // `callee_name` (`emit_expr.rs`) emits every top-level function reference
+    // as an absolute `crate::`-qualified path (closes the E0618 local-shadow
+    // class — a `let` binder can never shadow an absolute path), so the
+    // reference reads `crate::main_on_error`, not the bare name.
     assert!(
-        main_rs.contains("Arc::new(main_on_error)"),
+        main_rs.contains("Arc::new(crate::main_on_error)"),
         "onError callback must box with `Arc::new` (setter takes Arc<dyn Fn>).\n\
          --- on_error lines ---\n{}",
         ws_onerror_lines(&main_rs)
     );
     assert!(
-        !main_rs.contains("Box::new(main_on_error)"),
+        !main_rs.contains("Box::new(crate::main_on_error)"),
         "onError boxed with `Box::new` into the Arc<dyn Fn> setter slot = E0308 \
          SEAL break.\n--- on_error lines ---\n{}",
         ws_onerror_lines(&main_rs)

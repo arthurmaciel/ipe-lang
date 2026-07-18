@@ -78,9 +78,16 @@ fn i190_skyc_accepts_and_bounds_fn_static() {
     // The boxed mapper slot the bound serves. (Every boxed first-class fn value
     // carries `+ Send + Sync + 'static` so a user callback can forward into the
     // runtime's `Arc<dyn Fn + Send + Sync>` UI slots; the `'static` half
-    // propagates onto T1.)
+    // propagates onto T1.) rustfmt wraps this `Box<dyn Fn(..) -> .. + Send +
+    // Sync + 'static>` bound list across several indented lines once it
+    // exceeds the line-width limit, so match on rustfmt-normalized text
+    // (`support::normalize_rustfmt_whitespace`) rather than the raw source —
+    // same stale-substring class as #269/#191/#195.
+    let normalized = support::normalize_rustfmt_whitespace(&emitted);
     assert!(
-        emitted.contains("Box<dyn Fn((String, String)) -> ipe_runtime::html::Attribute<T1> + Send + Sync + 'static>"),
+        normalized.contains(&support::normalize_rustfmt_whitespace(
+            "Box<dyn Fn((String, String)) -> ipe_runtime::html::Attribute<T1> + Send + Sync + 'static>"
+        )),
         "the mapper callback must box into a `+ Send + Sync + 'static` trait object (#190/#184); got \
          main.rs:\n{emitted}"
     );

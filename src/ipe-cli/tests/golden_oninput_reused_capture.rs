@@ -75,12 +75,23 @@ fn i193_oninput_skyc_accepts_and_hoists_capture_clone() {
     let emitted = std::fs::read_to_string(out.join("src").join("main.rs"))
         .expect("emitted main.rs must exist");
 
+    // Post-emit rustfmt reflows long lines, so the two statements can land on
+    // separate (indented) lines rather than the single-line span skyc first
+    // emits — match on rustfmt-normalized text (`support::
+    // normalize_rustfmt_whitespace`) so the check tracks *token adjacency*,
+    // not a fixed line layout (same stale-substring class as #269 / #191),
+    // while still verifying order and immediate adjacency between the clone
+    // and the `Arc::new` it precedes.
+    let normalized = support::normalize_rustfmt_whitespace(&emitted);
+
     // The capture-clone `let` must be HOISTED outside the `ui_on_input_` Arc
     // closure — `let item = item.clone(); ::std::sync::Arc::new(…)`.
     // The same hoist the onChange FIELD path uses, applied to the UiOnInput
     // inline-wrap path.
     assert!(
-        emitted.contains("let item = item.clone(); ::std::sync::Arc::new"),
+        normalized.contains(&support::normalize_rustfmt_whitespace(
+            "let item = item.clone(); ::std::sync::Arc::new"
+        )),
         "capture-clone must be hoisted OUTSIDE the Arc `move` closure (#193 D5); \
          got main.rs:\n{emitted}"
     );
@@ -88,7 +99,9 @@ fn i193_oninput_skyc_accepts_and_hoists_capture_clone() {
     // Guard against the unfixed shape: the clone must NOT sit inside the Arc's
     // `move |_x|` body, which would re-move the free outer `item`.
     assert!(
-        !emitted.contains("Arc::new(move |_x| (({ let item = item.clone();"),
+        !normalized.contains(&support::normalize_rustfmt_whitespace(
+            "Arc::new(move |_x| (({ let item = item.clone();"
+        )),
         "capture-clone must NOT sit inside the Arc `move` closure (the pre-fix \
          E0382 shape); got main.rs:\n{emitted}"
     );
