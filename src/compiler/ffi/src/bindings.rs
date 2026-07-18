@@ -19,9 +19,9 @@
 //! binding it cannot render soundly emits NOTHING (over-drop), never a
 //! wrapper cargo would reject.
 
-use crate::naming::{arg_name, rust_kernel_name, rust_safe_ident, wrapper_fn_ident};
+use crate::naming::{RustIdent, arg_name, rust_kernel_name, rust_safe_ident, wrapper_fn_ident};
 use crate::num_coerce::{is_numeric_rust, num_saturate, num_widen_scalar};
-use crate::pkginfo::{Effect, EnumArm, EnumVariantKind, FnInfo, FnShape, PkgInfo};
+use crate::pkginfo::{Effect, EnumArm, EnumVariantKind, FnInfo, FnShape, Param, PkgInfo};
 
 /// A rendered coercion lifting an expression of the raw foreign type into the
 /// wrapper's declared type.
@@ -572,7 +572,11 @@ impl<'a> WrapperCx<'a> {
     fn new(krate: &'a str, kernel_name: &str, f: &'a FnInfo) -> Self {
         let ref_name = f.wrapper_ref_name();
         let surface_types: Vec<String> = f.params().iter().map(|p| p.ipe_type.clone()).collect();
-        let raw_param_types: Vec<String> = f.params().iter().map(|p| p.rust_type.clone()).collect();
+        let raw_param_types: Vec<String> = f
+            .params()
+            .iter()
+            .map(|p| p.rust_type_str().to_owned())
+            .collect();
         let declared_raw: Vec<String> = surface_types
             .iter()
             .enumerate()
@@ -729,7 +733,7 @@ impl<'a> WrapperCx<'a> {
             .f
             .results()
             .first()
-            .map_or("", |r| r.rust_type.as_str());
+            .map_or("", Param::rust_type_str);
         if raw.is_empty() {
             let sky = self.f.results().first().map_or("()", |r| {
                 if r.foreign_ty.is_empty() {
@@ -967,7 +971,7 @@ fn emit_fn_region(krate: &str, kernel_name: &str, f: &FnInfo) -> Vec<String> {
             &cx,
             variant.as_str(),
             *kind,
-            selector,
+            selector.as_str(),
             *field_count,
             *wildcard,
         ),
@@ -1084,7 +1088,7 @@ fn field_get_lines(cx: &WrapperCx<'_>) -> Vec<String> {
     let f = cx.f;
     let recv_rust = cx.resolve_recv();
     let field = f.method_name();
-    let raw_ty = f.results().first().map_or("", |r| r.rust_type.as_str());
+    let raw_ty = f.results().first().map_or("", Param::rust_type_str);
     let well_formed = f.results().len() == 1
         && !raw_ty.trim().is_empty()
         && !field.is_empty()
@@ -1184,7 +1188,7 @@ fn enum_ctor_lines(
     cx: &WrapperCx<'_>,
     variant: &str,
     kind: EnumVariantKind,
-    struct_fields: &[String],
+    struct_fields: &[RustIdent],
 ) -> Vec<String> {
     let recv_rust = cx.resolve_recv();
     if recv_rust.trim().is_empty() || variant.is_empty() {
@@ -1200,7 +1204,7 @@ fn enum_ctor_lines(
             let assigns: Vec<String> = struct_fields
                 .iter()
                 .zip(&ctor_args)
-                .map(|(field, a)| format!("{}: {a}", rust_safe_ident(field)))
+                .map(|(field, a)| format!("{}: {a}", rust_safe_ident(field.as_str())))
                 .collect();
             format!("{path} {{ {} }}", assigns.join(", "))
         }
@@ -1233,9 +1237,10 @@ fn enum_tag_lines(cx: &WrapperCx<'_>, arms: &[EnumArm], wildcard: bool) -> Vec<S
     for arm in arms {
         // The pattern is `<variant><suffix>`, suffix ∈ {"", "(..)", "{..}"};
         // raw-escape just the leading variant ident.
-        let split_at = arm.pattern.find(['(', '{']).unwrap_or(arm.pattern.len());
-        let vid = arm.pattern.get(..split_at).unwrap_or("");
-        let suffix = arm.pattern.get(split_at..).unwrap_or("");
+        let pat = arm.pattern.as_str();
+        let split_at = pat.find(['(', '{']).unwrap_or(pat.len());
+        let vid = pat.get(..split_at).unwrap_or("");
+        let suffix = pat.get(split_at..).unwrap_or("");
         out.push(format!(
             "        {recv_rust}::{}{suffix} => {},",
             rust_safe_ident(vid),
@@ -1263,7 +1268,7 @@ fn enum_extract_lines(
 ) -> Vec<String> {
     let f = cx.f;
     let recv_rust = cx.resolve_recv();
-    let raw_result = f.results().first().map_or("", |r| r.rust_type.as_str());
+    let raw_result = f.results().first().map_or("", Param::rust_type_str);
     let inner_raw = strip_generic1("Option", raw_result)
         .unwrap_or(raw_result)
         .trim()

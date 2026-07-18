@@ -16,7 +16,7 @@ use serde::Deserialize;
 
 use crate::call::Call;
 use crate::diag::{Diagnostic, WireDefect};
-use crate::naming::{RustIdent, wrapper_ref_name};
+use crate::naming::{FieldSelector, RustIdent, RustPattern, RustTypeExpr, wrapper_ref_name};
 
 // ── wire layer ──────────────────────────────────────────────────────────────
 
@@ -155,9 +155,12 @@ pub enum EnumVariantKind {
 /// One arm of an enum tag accessor's generated `match`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnumArm {
-    /// The Rust pattern (`A`, `B(..)`, `C{..}`).
-    pub pattern: String,
-    /// The tag string the arm returns.
+    /// The validated Rust pattern (`A`, `B(..)`, `C{..}`) — a variant head
+    /// with an optional `(..)`/`{..}` suffix, so it renders inside the `match`
+    /// without escaping.
+    pub pattern: RustPattern,
+    /// The tag string the arm returns (rendered as a Rust string LITERAL, so
+    /// it stays plain data).
     pub tag: String,
 }
 
@@ -181,8 +184,9 @@ pub enum FnShape {
         variant: RustIdent,
         /// The variant's payload kind.
         kind: EnumVariantKind,
-        /// Struct-variant field names in declaration order.
-        struct_fields: Vec<String>,
+        /// Struct-variant field names in declaration order (each a validated
+        /// identifier, rendered verbatim as a field name).
+        struct_fields: Vec<RustIdent>,
     },
     /// An enum tag accessor (exhaustive `match` returning the variant name).
     EnumTag {
@@ -197,9 +201,9 @@ pub enum FnShape {
         variant: RustIdent,
         /// The variant's payload kind.
         kind: EnumVariantKind,
-        /// The selected binder: the field NAME (struct variant) or the
-        /// positional index as a string (tuple variant).
-        selector: String,
+        /// The selected binder: a validated field NAME (struct variant) or a
+        /// decimal positional index (tuple variant).
+        selector: FieldSelector,
         /// The variant's total field arity (tuple extractors bind every
         /// position before returning the selected one).
         field_count: u64,
@@ -211,15 +215,29 @@ pub enum FnShape {
 /// One foreign parameter or result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Param {
-    /// The parameter name (may be empty).
+    /// The parameter name (may be empty). Ipê-facing data, never rendered as
+    /// Rust code.
     pub name: String,
-    /// The foreign Rust type string, verbatim from the inspector.
+    /// The foreign Rust type string, verbatim from the inspector. Ipê-facing
+    /// data: it drives `foreign_to_ipe` and the opaque-path map, never renders
+    /// as Rust code.
     pub foreign_ty: String,
     /// The inspector's Ipê-side type override (empty ⇒ derive from
-    /// `foreign_ty`).
+    /// `foreign_ty`). Ipê-facing data, never rendered as Rust code.
     pub ipe_type: String,
-    /// The inspector's Rust-side type override for wrapper emission.
-    pub rust_type: String,
+    /// The inspector's Rust-side type override for wrapper emission — a
+    /// validated type expression when present, so it renders verbatim without
+    /// opening a statement. `None` ⇒ no override.
+    pub rust_type: Option<RustTypeExpr>,
+}
+
+impl Param {
+    /// The Rust-type override as a string, or `""` when absent — the shape the
+    /// wrapper emitter's string-level helpers consume.
+    #[must_use]
+    pub fn rust_type_str(&self) -> &str {
+        self.rust_type.as_ref().map_or("", RustTypeExpr::as_str)
+    }
 }
 
 /// A parametric generic block: type-param names, per-param trait bounds, and
@@ -243,7 +261,7 @@ pub struct FnInfo {
     variadic: bool,
     effect: Effect,
     recv_type: String,
-    recv_rust_type: String,
+    recv_rust_type: Option<RustTypeExpr>,
     method_name: String,
     shape: FnShape,
     fallibility: Fallibility,
@@ -274,7 +292,7 @@ impl FnInfo {
     /// The receiver's Rust type override (empty when unknown).
     #[must_use]
     pub fn recv_rust_type(&self) -> &str {
-        &self.recv_rust_type
+        self.recv_rust_type.as_ref().map_or("", RustTypeExpr::as_str)
     }
 
     /// The host method name (empty for a free function).
@@ -505,19 +523,23 @@ fn decode_variant_kind(function: &str, s: &str) -> Result<EnumVariantKind, Diagn
 }
 
 fn decode_arms(function: &str, arms: Vec<String>) -> Result<Vec<EnumArm>, Diagnostic> {
+    let context = |defect: WireDefect| Diagnostic::WireMalformed {
+        context: format!("function `{function}`"),
+        defect,
+    };
     arms.into_iter()
         .map(|raw| {
-            raw.split_once('\t')
-                .map(|(pattern, tag)| EnumArm {
-                    pattern: pattern.to_owned(),
-                    tag: tag.to_owned(),
+            let (pattern, tag) = raw.split_once('\t').ok_or_else(|| {
+                context(WireDefect::Json {
+                    detail: format!("enum tag arm {raw:?} is not \"<pattern>\\t<tag>\"-shaped"),
                 })
-                .ok_or_else(|| Diagnostic::WireMalformed {
-                    context: format!("function `{function}`"),
-                    defect: WireDefect::Json {
-                        detail: format!("enum tag arm {raw:?} is not \"<pattern>\\t<tag>\"-shaped"),
-                    },
-                })
+            })?;
+            // The pattern renders as code inside the match; validate it.
+            let pattern = RustPattern::parse(pattern).map_err(context)?;
+            Ok(EnumArm {
+                pattern,
+                tag: tag.to_owned(),
+            })
         })
         .collect()
 }
@@ -539,33 +561,49 @@ fn decode_shape(w: &WireFunction) -> Result<FnShape, Diagnostic> {
             flags: set,
         });
     }
+    let wire_err = |defect: WireDefect| Diagnostic::WireMalformed {
+        context: format!("function `{}`", w.name),
+        defect,
+    };
     let ident_field = |s: &str| -> Result<RustIdent, Diagnostic> {
-        RustIdent::parse(s).map_err(|defect| Diagnostic::WireMalformed {
-            context: format!("function `{}`", w.name),
-            defect,
-        })
+        RustIdent::parse(s).map_err(wire_err)
     };
     Ok(match set.first().copied() {
         None => FnShape::Plain,
         Some("isField") => FnShape::FieldGet,
         Some("isFieldSet") => FnShape::FieldSet,
         Some("isPkgVar") => FnShape::PkgVar,
-        Some("isEnumCtor") => FnShape::EnumCtor {
-            variant: ident_field(&w.enum_variant)?,
-            kind: decode_variant_kind(&w.name, &w.enum_kind)?,
-            struct_fields: w.enum_struct_fields.clone(),
-        },
+        Some("isEnumCtor") => {
+            // Struct-variant field names render verbatim as Rust field idents.
+            let struct_fields: Vec<RustIdent> = w
+                .enum_struct_fields
+                .iter()
+                .map(|f| RustIdent::parse(f))
+                .collect::<Result<_, _>>()
+                .map_err(wire_err)?;
+            FnShape::EnumCtor {
+                variant: ident_field(&w.enum_variant)?,
+                kind: decode_variant_kind(&w.name, &w.enum_kind)?,
+                struct_fields,
+            }
+        }
         Some("isEnumTag") => FnShape::EnumTag {
             arms: decode_arms(&w.name, w.enum_arms.clone())?,
             wildcard: w.enum_wildcard,
         },
-        Some(_) => FnShape::EnumExtract {
-            variant: ident_field(&w.enum_variant)?,
-            kind: decode_variant_kind(&w.name, &w.enum_kind)?,
-            selector: w.enum_struct_fields.first().cloned().unwrap_or_default(),
-            field_count: w.enum_field_count,
-            wildcard: w.enum_wildcard,
-        },
+        Some(_) => {
+            let selector = FieldSelector::parse(
+                w.enum_struct_fields.first().map_or("", String::as_str),
+            )
+            .map_err(wire_err)?;
+            FnShape::EnumExtract {
+                variant: ident_field(&w.enum_variant)?,
+                kind: decode_variant_kind(&w.name, &w.enum_kind)?,
+                selector,
+                field_count: w.enum_field_count,
+                wildcard: w.enum_wildcard,
+            }
+        }
     })
 }
 
@@ -580,13 +618,26 @@ const fn shape_fallibility(shape: &FnShape) -> Fallibility {
     }
 }
 
-fn param_from_wire(w: WireParam) -> Param {
-    Param {
+fn param_from_wire(function: &str, w: WireParam) -> Result<Param, Diagnostic> {
+    // `rustType` renders verbatim into the wrapper; validate it at decode so an
+    // injection-bearing override is unrepresentable past this point. Empty ⇒
+    // no override.
+    let rust_type = if w.rust_type.is_empty() {
+        None
+    } else {
+        Some(
+            RustTypeExpr::parse(&w.rust_type).map_err(|defect| Diagnostic::WireMalformed {
+                context: format!("function `{function}`"),
+                defect,
+            })?,
+        )
+    };
+    Ok(Param {
         name: w.name,
         foreign_ty: w.ty,
         ipe_type: w.ipe_type,
-        rust_type: w.rust_type,
-    }
+        rust_type,
+    })
 }
 
 impl TryFrom<WireFunction> for FnInfo {
@@ -619,14 +670,30 @@ impl TryFrom<WireFunction> for FnInfo {
                 })
             }
         };
+        // The receiver's Rust-type override renders verbatim — validate it.
+        let recv_rust_type = if w.recv_rust_type.is_empty() {
+            None
+        } else {
+            Some(RustTypeExpr::parse(&w.recv_rust_type).map_err(&context)?)
+        };
+        let params = w
+            .params
+            .into_iter()
+            .map(|p| param_from_wire(&w.name, p))
+            .collect::<Result<_, _>>()?;
+        let results = w
+            .results
+            .into_iter()
+            .map(|p| param_from_wire(&w.name, p))
+            .collect::<Result<_, _>>()?;
         Ok(Self {
             name,
-            params: w.params.into_iter().map(param_from_wire).collect(),
-            results: w.results.into_iter().map(param_from_wire).collect(),
+            params,
+            results,
             variadic: w.variadic,
             effect,
             recv_type: w.recv_type,
-            recv_rust_type: w.recv_rust_type,
+            recv_rust_type,
             method_name: w.method_name,
             shape,
             fallibility,
@@ -794,13 +861,9 @@ mod tests {
         };
         let (arms, wildcard) = tag.expect("decoded as EnumTag");
         assert!(wildcard);
-        assert_eq!(
-            arms.first().expect("arm present"),
-            &EnumArm {
-                pattern: "Exact".into(),
-                tag: "Exact".into()
-            }
-        );
+        let first_arm = arms.first().expect("arm present");
+        assert_eq!(first_arm.pattern.as_str(), "Exact");
+        assert_eq!(first_arm.tag, "Exact");
         let extract = match fn_at(&pkg, 2).shape() {
             FnShape::EnumExtract {
                 selector,
@@ -810,7 +873,7 @@ mod tests {
             _ => None,
         };
         let (selector, field_count) = extract.expect("decoded as EnumExtract");
-        assert_eq!(selector, "0");
+        assert_eq!(selector.as_str(), "0");
         assert_eq!(field_count, 2);
         // Every accessor shape is infallible — the single stored bit.
         for f in pkg.fns() {
@@ -874,6 +937,110 @@ mod tests {
             pkg.dropped().first().expect("dropped diagnostic"),
             Diagnostic::WireMalformed {
                 defect: WireDefect::InvalidIdent { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn an_injection_bearing_rust_type_drops_the_binding() {
+        let pkg = decode(&base_pkg(&json!([{
+            "name": "evil",
+            "params": [{"name": "x", "type": "u64", "rustType": "u64; std::process::exit(1)"}],
+            "results": [{"name": "", "type": "u64"}],
+            "effect": "pure"
+        }])))
+        .expect("package survives");
+        assert!(pkg.fns().is_empty());
+        assert!(matches!(
+            pkg.dropped().first().expect("dropped diagnostic"),
+            Diagnostic::WireMalformed {
+                defect: WireDefect::InvalidType { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn an_injection_bearing_recv_rust_type_drops_the_binding() {
+        let pkg = decode(&base_pkg(&json!([{
+            "name": "major_field",
+            "params": [],
+            "results": [{"name": "", "type": "u64"}],
+            "effect": "pure",
+            "recvType": "Version",
+            "recvRustType": "Version { } fn e(){}",
+            "isField": true
+        }])))
+        .expect("package survives");
+        assert!(pkg.fns().is_empty());
+        assert!(matches!(
+            pkg.dropped().first().expect("dropped diagnostic"),
+            Diagnostic::WireMalformed {
+                defect: WireDefect::InvalidType { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn an_injection_bearing_enum_struct_field_drops_the_binding() {
+        let pkg = decode(&base_pkg(&json!([{
+            "name": "make_point",
+            "effect": "pure",
+            "isEnumCtor": true,
+            "enumVariant": "Point",
+            "enumKind": "struct",
+            "enumStructFields": ["x: i32, } std::process::exit(1); struct P { y"]
+        }])))
+        .expect("package survives");
+        assert!(pkg.fns().is_empty());
+        assert!(matches!(
+            pkg.dropped().first().expect("dropped diagnostic"),
+            Diagnostic::WireMalformed {
+                defect: WireDefect::InvalidIdent { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn an_injection_bearing_selector_drops_the_binding() {
+        let pkg = decode(&base_pkg(&json!([{
+            "name": "value_of",
+            "effect": "pure",
+            "isEnumExtract": true,
+            "enumVariant": "V",
+            "enumKind": "struct",
+            "enumStructFields": ["field, .. } => evil(); if let V { real"],
+            "enumFieldCount": 1
+        }])))
+        .expect("package survives");
+        assert!(pkg.fns().is_empty());
+        assert!(matches!(
+            pkg.dropped().first().expect("dropped diagnostic"),
+            Diagnostic::WireMalformed {
+                defect: WireDefect::InvalidSelector { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn an_injection_bearing_enum_tag_pattern_drops_the_binding() {
+        let pkg = decode(&base_pkg(&json!([{
+            "name": "tag_of",
+            "effect": "pure",
+            "isEnumTag": true,
+            "enumArms": ["A => 1, _ if evil()\tA"],
+            "enumWildcard": false
+        }])))
+        .expect("package survives");
+        assert!(pkg.fns().is_empty());
+        assert!(matches!(
+            pkg.dropped().first().expect("dropped diagnostic"),
+            Diagnostic::WireMalformed {
+                defect: WireDefect::InvalidPattern { .. },
                 ..
             }
         ));
