@@ -5441,6 +5441,30 @@ impl<'a> Builder<'a> {
                 fun(string(), fun(string(), fun(int(), fun(decimal(), string()))))
             }
 
+            // ── Ipe.Money ──────────────────────────────────────────────────────
+            // Every kernel takes the currency's ISO 4217 code (a `String`); the
+            // compiled-source `Ipe.Money` wrappers do the `Currency -> code`
+            // conversion before the call. `Error` here is the runtime `IpeError`
+            // channel (`error_ty()`), matching the `Result Error _` runtime sigs.
+            K::MoneyMinorUnits => fun(string(), int()),
+            K::MoneySymbol | K::MoneyCurrencyName => fun(string(), string()),
+            K::MoneyIsKnownCurrency => fun(string(), bool_ty()),
+            K::MoneyHasRate => fun(string(), fun(string(), bool_ty())),
+            K::MoneyFormat | K::MoneyFormatWithCode => {
+                fun(string(), fun(decimal(), string()))
+            }
+            K::MoneyAllocate => {
+                fun(int(), fun(int(), fun(decimal(), list(decimal()))))
+            }
+            K::MoneySetRate => fun(
+                string(),
+                fun(string(), fun(decimal(), result(error_ty(), Ty::Unit))),
+            ),
+            K::MoneyGetRate => {
+                fun(string(), fun(string(), result(error_ty(), decimal())))
+            }
+            K::MoneyClearRates => fun(Ty::Unit, result(error_ty(), Ty::Unit)),
+
             // ── Ipe.Ui.Region ──────────────────────────────────────────
             // Nullary region landmark attrs — `Attribute msg`.
             K::RegionMainContent
@@ -7886,6 +7910,18 @@ mod registry_phase_c_tests {
             K::DecAddPercent,
             K::DecSubPercent,
             K::DecFormatWith,
+            // ── Ipe.Money (11) ─────────────────────────────────────────────────
+            K::MoneyMinorUnits,
+            K::MoneySymbol,
+            K::MoneyCurrencyName,
+            K::MoneyIsKnownCurrency,
+            K::MoneyFormat,
+            K::MoneyFormatWithCode,
+            K::MoneyAllocate,
+            K::MoneySetRate,
+            K::MoneyGetRate,
+            K::MoneyHasRate,
+            K::MoneyClearRates,
             // ── Textarea rows attr ─────────────────────────────────────────────
             K::HtmlAttrRows,
             // ── Ipe.Db.Sql — SqlFragment builder (19) ──────────────
