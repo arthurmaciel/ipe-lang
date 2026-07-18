@@ -5,21 +5,17 @@ import Ipe.Task as Task
 import Ipe.Log exposing (println)
 
 
--- BACKLOG #186 regression — `toString` on a wildcard `any` param.
+-- Regression — `toString` on a wildcard `any` param.
 --
--- Pre-fix: `skyc build` exits 0, but the emitted Rust fails `cargo build`
--- with E0277 (`the trait bound T1: std::fmt::Display is not satisfied`) at the
--- `basics_to_string(x)` call inside a function whose only generic is the
--- wildcard `any` PARAM. The runtime's `basics_to_string<T: std::fmt::Display>`
--- needs `Display`; the emitted enclosing function carried an unbounded
--- `<T1: Clone>` param, so its body's `basics_to_string(x)` could not prove
--- `x: Display`.
---
--- Fix (general kernel->bound map, `apply_kernel_type_param_bounds`): the
--- `BasicsToString` kernel applied to a Var/CloneVar of a generic param obliges
--- `std::fmt::Display` (BoundSet::DISPLAY) on that generic — the SAME structural
--- machinery as #177's SkyRow, generalised. `T: Display` is satisfiable by every
--- scalar (Int/Float/Bool/String), the overwhelming common case.
+-- The runtime stringifier `basics_to_string<T: IpeStringify>` needs its arg to
+-- be `IpeStringify`. The general kernel->bound map
+-- (`apply_kernel_type_param_bounds`) obliges `IpeStringify` (BoundSet::SHOW) on
+-- any generic param a `BasicsToString` kernel is applied to — the same
+-- structural machinery as the `Db.get*`->`IpeRow` obligation, generalised.
+-- `IpeStringify` is satisfiable by every scalar AND every composite, so the
+-- emitted `main_render` body's `basics_to_string(x)` type-checks and the crate
+-- cargo-builds (without the bound the enclosing `<T1: Clone>` param could not
+-- prove the obligation → E0277 at cargo, an exit-0-then-cargo-fail breach).
 render : any -> String
 render x =
     "value=" ++ toString x

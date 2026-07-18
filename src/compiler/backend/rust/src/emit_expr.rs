@@ -8197,19 +8197,6 @@ fn render_bounds(bounds: BoundSet, n: usize) -> String {
         // var and ONLY when the body calls `db_get_*` (see [`emit_func`]).
         traits.push("ipe_runtime::db::IpeRow".to_owned());
     }
-    if bounds.has_display() {
-        // `Basics.toString` obligation: a generic type-param that flows
-        // into a `basics_to_string<T: std::fmt::Display>` kernel call gains
-        // `std::fmt::Display` so the emitted body's `basics_to_string(x)` proves
-        // its bound and monomorphises per call site. Fully qualified — `Display`
-        // IS in the Rust prelude, but the fully-qualified path is chosen for
-        // consistency with the other non-operator bounds above and immunity to
-        // any prelude-shadowing in emitted code. Added to the exact generic the
-        // `toString` argument resolves to (wildcard `any` OR named tvar), and
-        // ONLY when the body actually applies `toString` to it (see the general
-        // `apply_kernel_type_param_bounds` in `ipe_lower`).
-        traits.push("std::fmt::Display".to_owned());
-    }
     format!(": {}", traits.join(" + "))
 }
 
