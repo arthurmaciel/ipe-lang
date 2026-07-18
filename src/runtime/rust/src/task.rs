@@ -2,6 +2,7 @@
 use super::*;
 use std::future::ready;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn block_on<E, A>(future: IpeTask<E, A>) -> IpeResult<E, A>
 where
     E: From<String> + Send + 'static,
@@ -44,6 +45,7 @@ where
 // webview path itself is total (window/webview construction failure returns
 // `IpeResult::Err`), so a panic would be a genuine compiler/runtime bug, not a
 // well-typed-Ipê-reachable abort.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn block_on_current_thread<E, A>(future: IpeTask<E, A>) -> IpeResult<E, A>
 where
     E: From<String> + Send + 'static,
@@ -188,6 +190,7 @@ pub fn task_sequence<E: Send + 'static, A: Send + 'static>(
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn task_run<E: From<String> + Send + 'static, A: Send + 'static>(
     task: IpeTask<E, A>,
 ) -> IpeResult<E, A> {
@@ -232,6 +235,7 @@ pub fn task_run<E: From<String> + Send + 'static, A: Send + 'static>(
 // panic inside the spawned task (we never `.await` a handle after issuing its
 // abort, so the cancelled-handle case is unreachable on this path); it is
 // mapped to the same `Err` the previous implementation surfaced.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn task_parallel<E: From<String> + Send + 'static, A: Send + 'static>(
     tasks: Vec<IpeTask<E, A>>,
 ) -> IpeTask<E, Vec<A>> {
@@ -293,6 +297,7 @@ pub fn task_parallel<E: From<String> + Send + 'static, A: Send + 'static>(
 // TOTALITY: no unwrap / expect / panic / indexing. Jitter randomness comes from
 // the runtime's existing total `lcg_next()` LCG (same source as Random.*),
 // never `thread_rng` (which could panic on a poisoned global).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn task_retry_with<E, A>(
     max_attempts: i64,
     base_ms: i64,
@@ -374,6 +379,7 @@ fn retry_compute_delay(kind: i64, base_ms: i64, attempt: i64, jitter: bool) -> i
     d
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod retry_tests {
     use super::*;
@@ -579,6 +585,7 @@ mod retry_tests {
 //      non-vacuous.)
 //   2. An all-`Ok` run returns the results in INPUT order regardless of the
 //      order in which the tasks actually complete.
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod parallel_abort_tests {
     use super::*;

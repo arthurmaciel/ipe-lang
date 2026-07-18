@@ -20,10 +20,14 @@
 //! contract the reachable `sub_subscribe_stream` uses.
 
 use super::*;
+#[cfg(not(target_arch = "wasm32"))]
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicI64, Ordering};
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Mutex, OnceLock};
+#[cfg(not(target_arch = "wasm32"))]
 use tokio_tungstenite::tungstenite::Message;
 
 /// Ipe.WebSocket.WebSocketMessage — bridged so the runtime can build frames.
@@ -67,6 +71,7 @@ fn ws_close_code(code: i64) -> WsCloseCode {
 
 /// Internal per-socket event broadcast to onMessage/onClose/onError subs.
 #[derive(Clone, Debug)]
+#[cfg(not(target_arch = "wasm32"))]
 enum WsEvent {
     Message(WsClientMessage),
     Closed(i64),
@@ -83,6 +88,7 @@ pub struct WsClientCfg {
     pub pingInterval: i64,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 enum WsCmd {
     Text(String),
     Binary(Vec<u8>),
@@ -90,6 +96,7 @@ enum WsCmd {
     CloseWithCode(u16, String),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct ClientEntry {
     // Bounded (not unbounded) so a remote peer that stalls reads — wedging the
     // writer task on `write.send().await` — can't make this outbound queue grow
@@ -105,6 +112,7 @@ struct ClientEntry {
     reader_abort: tokio::task::AbortHandle,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn registry() -> &'static Mutex<HashMap<i64, ClientEntry>> {
     static R: OnceLock<Mutex<HashMap<i64, ClientEntry>>> = OnceLock::new();
     R.get_or_init(|| Mutex::new(HashMap::new()))
@@ -112,6 +120,7 @@ fn registry() -> &'static Mutex<HashMap<i64, ClientEntry>> {
 
 /// Remove a socket from the registry and drop its subscribe-once markers so the
 /// associated tasks wind down and the maps don't grow across reconnects.
+#[cfg(not(target_arch = "wasm32"))]
 fn deregister(id: i64) {
     registry()
         .lock()
@@ -123,6 +132,7 @@ fn deregister(id: i64) {
         .retain(|&(sid, _)| sid != id);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 static WS_CLIENT_NEXT_ID: AtomicI64 = AtomicI64::new(1);
 
 /// Redact any `user:pass@` userinfo from a URL before it is echoed in an error
@@ -132,6 +142,7 @@ static WS_CLIENT_NEXT_ID: AtomicI64 = AtomicI64::new(1);
 /// Parse-and-rebuild via the `url` crate when possible; fall back to a manual
 /// `scheme://...@` strip so a URL the parser rejects (the bad-url error path)
 /// still never echoes credentials. Total — no unwrap/index/panic.
+#[cfg(not(target_arch = "wasm32"))]
 fn redact_ws_url(url: &str) -> String {
     if let Ok(mut u) = url::Url::parse(url) {
         if !u.username().is_empty() || u.password().is_some() {
@@ -158,6 +169,7 @@ fn redact_ws_url(url: &str) -> String {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn do_connect<E: From<String> + Send + 'static>(
     url: String,
     headers: Vec<(String, String)>,
@@ -427,6 +439,7 @@ async fn do_connect<E: From<String> + Send + 'static>(
 }
 
 /// WebSocket.connect : String -> Task Error Int (raw id; Ipê wraps in WebSocket)
+#[cfg(not(target_arch = "wasm32"))]
 pub fn web_socket_connect<E: From<String> + Send + 'static>(url: String) -> IpeTask<E, i64> {
     Box::pin(do_connect(url, Vec::new(), 30000, 0))
 }
@@ -435,6 +448,7 @@ pub fn web_socket_connect<E: From<String> + Send + 'static>(url: String) -> IpeT
 /// custom headers, handshake timeout, and pingInterval (when > 0, the client
 /// sends a periodic Ping frame to keep the connection alive through idle proxies;
 /// tungstenite auto-pongs inbound pings on the read side).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn web_socket_connect_with<E: From<String> + Send + 'static>(
     cfg: WsClientCfg,
 ) -> IpeTask<E, i64> {
@@ -446,6 +460,7 @@ pub fn web_socket_connect_with<E: From<String> + Send + 'static>(
     ))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn send_cmd(id: i64, cmd: WsCmd) -> bool {
     let is_close = matches!(cmd, WsCmd::Close | WsCmd::CloseWithCode(..));
     // Clone what we need, then RELEASE the registry lock before try_send / abort /
@@ -487,6 +502,7 @@ fn send_cmd(id: i64, cmd: WsCmd) -> bool {
 }
 
 /// WebSocket.send : Int -> String -> Task Error ()
+#[cfg(not(target_arch = "wasm32"))]
 pub fn web_socket_send<E: From<String> + Send + 'static>(id: i64, msg: String) -> IpeTask<E, ()> {
     Box::pin(async move {
         if send_cmd(id, WsCmd::Text(msg)) {
@@ -498,6 +514,7 @@ pub fn web_socket_send<E: From<String> + Send + 'static>(id: i64, msg: String) -
 }
 
 /// WebSocket.sendBinary : Int -> Bytes -> Task Error ()
+#[cfg(not(target_arch = "wasm32"))]
 pub fn web_socket_send_binary<E: From<String> + Send + 'static>(
     id: i64,
     msg: Vec<u8>,
@@ -512,6 +529,7 @@ pub fn web_socket_send_binary<E: From<String> + Send + 'static>(
 }
 
 /// WebSocket.close : Int -> Task Error () (idempotent)
+#[cfg(not(target_arch = "wasm32"))]
 pub fn web_socket_close<E: From<String> + Send + 'static>(id: i64) -> IpeTask<E, ()> {
     Box::pin(async move {
         let _ = send_cmd(id, WsCmd::Close);
@@ -521,6 +539,7 @@ pub fn web_socket_close<E: From<String> + Send + 'static>(id: i64) -> IpeTask<E,
 }
 
 /// WebSocket.closeWithCode : Int -> String -> Int -> Task Error ()
+#[cfg(not(target_arch = "wasm32"))]
 pub fn web_socket_close_with_code<E: From<String> + Send + 'static>(
     code: i64,
     reason: String,
@@ -544,6 +563,7 @@ pub fn web_socket_close_with_code<E: From<String> + Send + 'static>(
 // override needed). Each subscribes to the per-socket WsEvent broadcast and
 // filters the events it cares about.
 
+#[cfg(not(target_arch = "wasm32"))]
 fn subscribe_events(socket_id: i64) -> Option<tokio::sync::broadcast::Receiver<WsEvent>> {
     registry()
         .lock()
@@ -560,6 +580,7 @@ fn subscribe_events(socket_id: i64) -> Option<tokio::sync::broadcast::Receiver<W
 // are no-ops". The emit callback funnels into the loop channel, stable for the
 // program's lifetime.
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug)]
+#[cfg(not(target_arch = "wasm32"))]
 enum WsSubKind {
     Message,
     Open,
@@ -567,10 +588,12 @@ enum WsSubKind {
     Error,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn ws_subscribed() -> &'static Mutex<std::collections::HashSet<(i64, WsSubKind)>> {
     static S: OnceLock<Mutex<std::collections::HashSet<(i64, WsSubKind)>>> = OnceLock::new();
     S.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
 }
+#[cfg(not(target_arch = "wasm32"))]
 fn ws_mark_subscribed(socket_id: i64, kind: WsSubKind) -> bool {
     ws_subscribed()
         .lock()
@@ -583,6 +606,7 @@ fn ws_mark_subscribed(socket_id: i64, kind: WsSubKind) -> bool {
 // (socket ids are monotonic, so a leaked marker is never reclaimed by
 // deregister). The guard drops at return, so the registry + ws_subscribed locks
 // are never held simultaneously.
+#[cfg(not(target_arch = "wasm32"))]
 fn ws_registered(socket_id: i64) -> bool {
     registry()
         .lock()
@@ -607,6 +631,7 @@ fn ws_registered(socket_id: i64) -> bool {
 /// variant routes codegen to them yet (the whole `Ipe.WebSocket` client
 /// surface is unwired) — so the future wiring commit does not ship
 /// exit-0-then-cargo-fail on day one.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn sub_subscribe_ws_message<M, F>(socket_id: i64, to_msg: F) -> IpeSub<M>
 where
     M: Send + 'static,
@@ -637,6 +662,7 @@ where
 }
 
 /// onOpen : msg -> Sub msg — dispatch `msg` once when connected.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn sub_subscribe_ws_open<M>(socket_id: i64, msg: M) -> IpeSub<M>
 where
     M: Send + 'static,
@@ -656,6 +682,7 @@ where
 /// `tokio::spawn` below and never shared behind an `Arc`, so `Send + 'static`
 /// is the exact contract and `+ Sync` was over-strict. Currently unreachable
 /// (no `KernelFn` arm routes here yet); relaxing dead code can't regress.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn sub_subscribe_ws_close<M, F>(socket_id: i64, to_msg: F) -> IpeSub<M>
 where
     M: Send + 'static,
@@ -693,6 +720,7 @@ where
 /// `tokio::spawn` below and never shared behind an `Arc`, so `Send + 'static`
 /// is the exact contract and `+ Sync` was over-strict. Currently unreachable
 /// (no `KernelFn` arm routes here yet); relaxing dead code can't regress.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn sub_subscribe_ws_error<E, M, F>(socket_id: i64, to_msg: F) -> IpeSub<M>
 where
     E: From<String> + Send + 'static,
@@ -724,6 +752,7 @@ where
     }))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -757,3 +786,163 @@ mod tests {
         assert!(r4.contains("a@b"), "path '@' wrongly stripped: {r4}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// wasm32 browser substitute — `web_sys::WebSocket`
+// ---------------------------------------------------------------------------
+//
+// Task-tier only (connect/connectWith/send/sendBinary/close/closeWithCode) —
+// the native onOpen/onMessage/onClose/onError receive surface
+// (`sub_subscribe_ws_*`) is unreachable on EVERY target today (no `KernelFn`
+// wires codegen to it yet, per this file's module doc); wiring it for wasm is
+// left for the same follow-up that wires it natively, not a wasm-specific gap.
+//
+// No SSRF guard here (unlike the native `do_connect`, which resolves + pins
+// the host): a browser tab cannot open a raw socket or bypass the browser's
+// own network stack, so `IPE_HTTP_DENY_PRIVATE`'s DNS-pin mechanism has no
+// browser analogue — same rationale as the `fetch` substitute in
+// `http_client.rs`. A connect failure (refused, CORS-equivalent origin block,
+// TLS error, DNS failure) surfaces through the socket's `error`/`close` event,
+// which this substitute maps to `Task.fail` on `send`/`close` calls against a
+// never-opened id — never a panic/trap.
+#[cfg(target_arch = "wasm32")]
+mod wasm_client {
+    use super::{HashMap, IpeResult, IpeTask, ok_res};
+    use std::cell::{Cell, RefCell};
+
+    thread_local! {
+        static SOCKETS: RefCell<HashMap<i64, web_sys::WebSocket>> = RefCell::new(HashMap::new());
+    }
+    thread_local! {
+        static NEXT_ID: Cell<i64> = const { Cell::new(1) };
+    }
+
+    fn next_id() -> i64 {
+        NEXT_ID.with(|c| {
+            let id = c.get();
+            c.set(id + 1);
+            id
+        })
+    }
+
+    /// `IpeResult` has no `From<Result<A, E>>` impl (the ADT is Ipê-shaped, not
+    /// a `std::result` newtype) — this is the total bridge every fn below uses.
+    fn to_ipe<E, A>(r: Result<A, E>) -> IpeResult<E, A> {
+        match r {
+            Ok(a) => IpeResult::Ok(a),
+            Err(e) => IpeResult::Err(e),
+        }
+    }
+
+    fn open_socket<E: From<String> + 'static>(url: &str) -> Result<i64, E> {
+        let ws = web_sys::WebSocket::new(url)
+            .map_err(|e| E::from(format!("WebSocket.connect {url}: {e:?}")))?;
+        ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
+        let id = next_id();
+        SOCKETS.with(|s| s.borrow_mut().insert(id, ws));
+        Ok(id)
+    }
+
+    /// `WebSocket.connect : String -> Task Error Int` — `web_sys::WebSocket::new`
+    /// starts connecting asynchronously and returns immediately (readyState
+    /// `CONNECTING`), matching the native surface's raw-id contract; `send`
+    /// before the handshake completes is rejected below rather than trapping.
+    pub fn web_socket_connect<E: From<String> + 'static>(url: String) -> IpeTask<E, i64> {
+        Box::pin(async move { to_ipe(open_socket(&url)) })
+    }
+
+    /// `WebSocket.connectWith : WebSocketCfg -> Task Error Int`. `cfg.headers`
+    /// cannot be attached: the browser `WebSocket` constructor has no header
+    /// parameter (a real platform limitation, not a dropped feature on our
+    /// side) — surfaced as a console warning rather than a silent drop.
+    /// `cfg.timeout`/`cfg.pingInterval` have no browser-substitute wiring yet
+    /// (the browser auto-manages ping/pong at the protocol level).
+    pub fn web_socket_connect_with<E: From<String> + 'static>(
+        cfg: super::WsClientCfg,
+    ) -> IpeTask<E, i64> {
+        Box::pin(async move {
+            if !cfg.headers.is_empty() {
+                crate::wasm::console_warn(
+                    "Ipe.WebSocket.connectWith: custom headers are not settable via the \
+                     browser WebSocket API; ignored",
+                );
+            }
+            to_ipe(open_socket(&cfg.url))
+        })
+    }
+
+    fn with_open_socket<E: From<String> + 'static, R>(
+        id: i64,
+        op_name: &str,
+        f: impl FnOnce(&web_sys::WebSocket) -> Result<R, wasm_bindgen::JsValue>,
+    ) -> Result<R, E> {
+        SOCKETS.with(|s| {
+            let sockets = s.borrow();
+            let Some(ws) = sockets.get(&id) else {
+                return Err(E::from(format!("{op_name}: no socket {id}")));
+            };
+            if ws.ready_state() != web_sys::WebSocket::OPEN {
+                return Err(E::from(format!("{op_name}: socket {id} is not open")));
+            }
+            f(ws).map_err(|e| E::from(format!("{op_name}: {e:?}")))
+        })
+    }
+
+    /// `WebSocket.send : Int -> String -> Task Error ()`.
+    pub fn web_socket_send<E: From<String> + 'static>(id: i64, msg: String) -> IpeTask<E, ()> {
+        Box::pin(async move {
+            to_ipe(with_open_socket(id, "WebSocket.send", |ws| {
+                ws.send_with_str(&msg)
+            }))
+        })
+    }
+
+    /// `WebSocket.sendBinary : Int -> Bytes -> Task Error ()`.
+    pub fn web_socket_send_binary<E: From<String> + 'static>(
+        id: i64,
+        msg: Vec<u8>,
+    ) -> IpeTask<E, ()> {
+        Box::pin(async move {
+            to_ipe(with_open_socket(id, "WebSocket.sendBinary", |ws| {
+                ws.send_with_u8_array(&msg)
+            }))
+        })
+    }
+
+    fn close_socket(id: i64, code: Option<(u16, &str)>) {
+        SOCKETS.with(|s| {
+            if let Some(ws) = s.borrow_mut().remove(&id) {
+                let _ = match code {
+                    Some((c, reason)) => ws.close_with_code_and_reason(c, reason),
+                    None => ws.close(),
+                };
+            }
+        });
+    }
+
+    /// `WebSocket.close : Int -> Task Error ()` (idempotent, matches native).
+    pub fn web_socket_close<E: 'static>(id: i64) -> IpeTask<E, ()> {
+        Box::pin(async move {
+            close_socket(id, None);
+            ok_res(())
+        })
+    }
+
+    /// `WebSocket.closeWithCode : Int -> String -> Int -> Task Error ()`. Same
+    /// truncation guard as the native arm — an out-of-range code falls back to
+    /// 1000 (normal closure) rather than silently wrapping.
+    pub fn web_socket_close_with_code<E: 'static>(
+        code: i64,
+        reason: String,
+        id: i64,
+    ) -> IpeTask<E, ()> {
+        Box::pin(async move {
+            let ws_code = u16::try_from(code).unwrap_or(1000);
+            close_socket(id, Some((ws_code, &reason)));
+            ok_res(())
+        })
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub use wasm_client::*;

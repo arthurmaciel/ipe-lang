@@ -1,0 +1,199 @@
+module Main exposing (main)
+
+-- M4 Cmd/Sub browser-effects bridge, exercised end-to-end in a real browser:
+--   * Sub.every          -> gloo-timers interval  (ticks counter)
+--   * Log.info            -> console.info          (via Cmd.perform)
+--   * Random.int           -> crypto.getRandomValues (via Cmd.perform)
+--   * PubSub.publish / Sub.subscribeTopic -> the in-tab pub/sub broker
+--   * Http.get              -> fetch                (same-origin index.html)
+--
+-- `Ipe.WebSocket` is deliberately NOT imported here: the M1 target-keyed
+-- gate (`ipe_canon::target_gate`) walks every function LINKED into a module
+-- once any name from it is imported, not just the ones this program actually
+-- calls (reachability pruning is M5's client-entry closure, not yet landed).
+-- `Ipe.WebSocket`'s `onOpen`/`onMessage`/`onClose`/`onError` route through
+-- `Sub_subscribeWebSocket`, which is unreachable on EVERY target today (no
+-- `KernelFn` wires codegen to it — see `ws_client.rs`'s module doc), so
+-- importing the module at all currently fails under `--target wasm` even
+-- though `connect`/`send`/`close` have real browser substitutes. The M4
+-- `web_sys::WebSocket` substitute is instead proven directly at the Rust
+-- level (`src/runtime/rust/tests/wasm_effects_bridge.rs`, run in headless
+-- Chromium via `wasm-bindgen-test`), and this gap is closed structurally by
+-- M5's reachability closure, not by a per-module workaround here.
+
+import Ipe.Prelude exposing (..)
+import Ipe.String as String
+import Ipe.Live exposing (app)
+import Ipe.Cmd as Cmd
+import Ipe.Sub as Sub
+import Ipe.Log as Log
+import Ipe.Random as Random
+import Ipe.Http as Http
+import Ipe.PubSub as PubSub
+import Ipe.Task as Task
+import Ipe.Ui as Ui
+import Ipe.Ui.Background as Background
+import Ipe.Ui.Border as Border
+import Ipe.Ui.Font as Font
+
+
+type Page
+    = EffectsPage
+
+
+type Msg
+    = Tick
+    | LogClicked
+    | LogDone (Result Error ())
+    | RollDice
+    | GotDice (Result Error Int)
+    | PingClicked
+    | GotPingCount (Result Error Int)
+    | GotPing String
+    | FetchClicked
+    | GotFetch (Result Error String)
+
+
+type alias Model =
+    { ticks : Int
+    , dice : Int
+    , lastLog : String
+    , pings : Int
+    , lastPing : String
+    , fetchStatus : String
+    }
+
+
+init : a -> ( Model, Cmd Msg )
+init _req =
+    ( { ticks = 0
+      , dice = 0
+      , lastLog = "(not logged yet)"
+      , pings = 0
+      , lastPing = "(none)"
+      , fetchStatus = "(not fetched yet)"
+      }
+    , Cmd.none
+    )
+
+
+update : Msg -> Model -> ( Model, Cmd Msg )
+update msg model =
+    case msg of
+        Tick ->
+            ( { model | ticks = model.ticks + 1 }, Cmd.none )
+
+        LogClicked ->
+            ( model
+            , Cmd.perform (Log.info ("wasm-effects tick " ++ String.fromInt model.ticks)) LogDone
+            )
+
+        LogDone result ->
+            case result of
+                Ok _ ->
+                    ( { model | lastLog = "logged (see devtools console)" }, Cmd.none )
+
+                Err e ->
+                    ( { model | lastLog = "log failed: " ++ errorToString e }, Cmd.none )
+
+        RollDice ->
+            ( model, Cmd.perform (Random.int 1 6) GotDice )
+
+        GotDice result ->
+            case result of
+                Ok n ->
+                    ( { model | dice = n }, Cmd.none )
+
+                Err _ ->
+                    ( model, Cmd.none )
+
+        PingClicked ->
+            ( model
+            , Cmd.perform (PubSub.publish "wasm-effects-ping" "hello-from-ping") GotPingCount
+            )
+
+        GotPingCount result ->
+            case result of
+                Ok n ->
+                    ( { model | lastPing = "published to " ++ String.fromInt n ++ " subscriber(s)" }, Cmd.none )
+
+                Err e ->
+                    ( { model | lastPing = "publish failed: " ++ errorToString e }, Cmd.none )
+
+        GotPing payload ->
+            ( { model | pings = model.pings + 1, lastPing = "received: " ++ payload }, Cmd.none )
+
+        FetchClicked ->
+            ( { model | fetchStatus = "fetching..." }
+            , Cmd.perform (Task.map summarizeResponse (Http.get "./index.html")) GotFetch
+            )
+
+        GotFetch result ->
+            case result of
+                Ok summary ->
+                    ( { model | fetchStatus = summary }, Cmd.none )
+
+                Err e ->
+                    ( { model | fetchStatus = "fetch failed: " ++ errorToString e }, Cmd.none )
+
+
+subscriptions : Model -> Sub Msg
+subscriptions _model =
+    Sub.batch
+        [ Sub.every 1000 Tick
+        , Sub.subscribeTopic "wasm-effects-ping" GotPing
+        ]
+
+
+summarizeResponse resp =
+    "status=" ++ String.fromInt resp.status ++ " bytes=" ++ String.fromInt (String.length resp.body)
+
+
+labelled : String -> Ui.Element Msg -> Ui.Element Msg
+labelled label content =
+    Ui.row [ Ui.spacing 12 ] [ Ui.el [ Font.bold ] (Ui.text label), content ]
+
+
+actionButton : Msg -> String -> Ui.Element Msg
+actionButton msg label =
+    Ui.button
+        [ Ui.padding 8, Background.color (Ui.rgb 37 99 235), Font.color (Ui.rgb 255 255 255), Border.rounded 6 ]
+        { onPress = Just msg, label = Ui.text label }
+
+
+view : Model -> Html Msg
+view model =
+    Ui.layout []
+        (Ui.column
+            [ Ui.spacing 14, Ui.padding 32 ]
+            [ Ui.el [ Font.size 20, Font.bold ] (Ui.text "M4 Cmd/Sub browser-effects bridge")
+            , labelled "ticks (Sub.every):" (Ui.el [] (Ui.text (String.fromInt model.ticks)))
+            , Ui.row [ Ui.spacing 12 ]
+                [ actionButton LogClicked "Log.info"
+                , Ui.el [] (Ui.text model.lastLog)
+                ]
+            , Ui.row [ Ui.spacing 12 ]
+                [ actionButton RollDice "Random.int 1 6"
+                , Ui.el [] (Ui.text ("dice: " ++ String.fromInt model.dice))
+                ]
+            , Ui.row [ Ui.spacing 12 ]
+                [ actionButton PingClicked "PubSub.publish"
+                , Ui.el [] (Ui.text ("pings received: " ++ String.fromInt model.pings ++ " / " ++ model.lastPing))
+                ]
+            , Ui.row [ Ui.spacing 12 ]
+                [ actionButton FetchClicked "Http.get"
+                , Ui.el [] (Ui.text model.fetchStatus)
+                ]
+            ]
+        )
+
+
+main =
+    app
+        { init = init
+        , update = update
+        , view = view
+        , subscriptions = subscriptions
+        , routes = []
+        , notFound = EffectsPage
+        }

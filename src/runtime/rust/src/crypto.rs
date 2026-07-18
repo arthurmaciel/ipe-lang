@@ -1,4 +1,15 @@
 // Crypto kernel stubs — generic over E where needed.
+//
+// wasm32: only `crypto_random_bytes`/`crypto_random_token` (this file's
+// entropy pair) and the pure hash/HMAC family below compile for the browser
+// target — the AEAD/RSA/PBKDF2 functions further down are each individually
+// `cfg(not(target_arch = "wasm32"))` (a stated M4 exclusion, same class as
+// the M0 floor's crypto-feature exclusion: untested getrandom-js support
+// across the whole RustCrypto stack, and no browser-bundle reason to pull
+// `aes-gcm`/`rsa`/`bcrypt`/`chacha20poly1305`/`pbkdf2` for symmetric AEAD that
+// isn't in the M4 scope). `Ipe.Crypto.aesGcmEncrypt`/friends therefore stay
+// UNTAGGED in the `WasmClient` kernel registry — the wrapper is compiled out
+// entirely, not merely unreachable.
 use super::*;
 
 // `Crypto.randomBytes : Int -> Task Error String`. Go returns the entropy as a
@@ -6,6 +17,7 @@ use super::*;
 // the Ipê signature is `String`, so the Rust side must return a hex `String` too.
 // (A prior `Vec<i64>` return diverged from both the Ipê type and Go: a Ipê call
 // site treating the result as a String/Bytes mismatched at codegen.)
+#[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_random_bytes<E: From<String> + Send + 'static>(n: i64) -> IpeTask<E, String> {
     use aes_gcm::aead::{OsRng, rand_core::RngCore};
     Box::pin(async move {
@@ -22,6 +34,35 @@ pub fn crypto_random_bytes<E: From<String> + Send + 'static>(n: i64) -> IpeTask<
         let count = n as usize;
         let mut buf = vec![0u8; count];
         OsRng.fill_bytes(&mut buf);
+        ok_res(hex_lower(&buf))
+    })
+}
+
+/// Browser substitute: `crypto.getRandomValues` via the `getrandom` crate's
+/// `js` backend (Q3: "`Random.*` / `Crypto.randomBytes` | SUBSTITUTE |
+/// `crypto.getRandomValues`") — no `aes-gcm`/`OsRng` dependency pulled into
+/// the bundle just for entropy. Same size guard + hex encoding as the native
+/// arm (Go-oracle parity is a native-only contract, but the size guard is a
+/// real DoS control worth keeping on both targets).
+#[cfg(target_arch = "wasm32")]
+pub fn crypto_random_bytes<E: From<String> + 'static>(n: i64) -> IpeTask<E, String> {
+    Box::pin(async move {
+        if n <= 0 || n > 1024 {
+            return IpeResult::Err(
+                "Crypto.randomBytes: size must be 1..1024"
+                    .to_string()
+                    .into(),
+            );
+        }
+        let count = n as usize;
+        let mut buf = vec![0u8; count];
+        if getrandom::getrandom(&mut buf).is_err() {
+            return IpeResult::Err(
+                "Crypto.randomBytes: browser entropy source unavailable"
+                    .to_string()
+                    .into(),
+            );
+        }
         ok_res(hex_lower(&buf))
     })
 }
@@ -43,6 +84,7 @@ fn hex_lower(buf: &[u8]) -> String {
 // WITHOUT padding (rt.go ~l6560: `base64.RawURLEncoding.EncodeToString(b)`) — the
 // `-_` alphabet, no `=` pad. Width `n` is bytes of ENTROPY; the returned string is
 // longer (ceil(n*4/3) chars). (A prior hex encoding diverged from Go's base64.)
+#[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_random_token<E: From<String> + Send + 'static>(n: i64) -> IpeTask<E, String> {
     use aes_gcm::aead::{OsRng, rand_core::RngCore};
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -60,6 +102,32 @@ pub fn crypto_random_token<E: From<String> + Send + 'static>(n: i64) -> IpeTask<
         let count = n as usize;
         let mut buf = vec![0u8; count];
         OsRng.fill_bytes(&mut buf);
+        ok_res(URL_SAFE_NO_PAD.encode(&buf))
+    })
+}
+
+/// Browser substitute — same `getrandom(js)` entropy source as
+/// `crypto_random_bytes`, URL-safe-no-pad base64 encoded.
+#[cfg(target_arch = "wasm32")]
+pub fn crypto_random_token<E: From<String> + 'static>(n: i64) -> IpeTask<E, String> {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    Box::pin(async move {
+        if n <= 0 || n > 1024 {
+            return IpeResult::Err(
+                "Crypto.randomToken: size must be 1..1024"
+                    .to_string()
+                    .into(),
+            );
+        }
+        let count = n as usize;
+        let mut buf = vec![0u8; count];
+        if getrandom::getrandom(&mut buf).is_err() {
+            return IpeResult::Err(
+                "Crypto.randomToken: browser entropy source unavailable"
+                    .to_string()
+                    .into(),
+            );
+        }
         ok_res(URL_SAFE_NO_PAD.encode(&buf))
     })
 }
@@ -259,6 +327,7 @@ pub fn crypto_constant_time_equal(a: String, b: String) -> bool {
 // (which must be valid UTF-8). aesKeyFromPassword emits the base64 form; the
 // AEAD fns base64-decode it back to 32 raw bytes.
 
+#[cfg(not(target_arch = "wasm32"))]
 const AEAD_KEY_BYTES: usize = 32;
 // PBKDF2-HMAC-SHA256 work factor. PINNED to the Go backend's value: a
 // password-derived key/blob produced on one backend must verify/decrypt on the
@@ -267,9 +336,11 @@ const AEAD_KEY_BYTES: usize = 32;
 // COORDINATED cross-backend migration (re-derive + re-encrypt existing data),
 // not a unilateral Rust change. (Audit finding: low/weak-crypto — accepted,
 // parity/key-compat-locked.)
+#[cfg(not(target_arch = "wasm32"))]
 const PBKDF2_ITERS: u32 = 100_000;
 
 // Decode a base64 key string to exactly 32 bytes, or an error message.
+#[cfg(not(target_arch = "wasm32"))]
 fn aead_read_key(name: &str, key: &str) -> Result<Vec<u8>, String> {
     use base64::{Engine, engine::general_purpose::STANDARD};
     let k = STANDARD.decode(key.as_bytes()).map_err(|_| {
@@ -290,6 +361,7 @@ fn aead_read_key(name: &str, key: &str) -> Result<Vec<u8>, String> {
 }
 
 // Crypto.aesGcmEncrypt : String -> String -> Result Error String
+#[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_aes_gcm_encrypt<E: From<String>>(
     key: String,
     plaintext: String,
@@ -323,6 +395,7 @@ pub fn crypto_aes_gcm_encrypt<E: From<String>>(
 }
 
 // Crypto.aesGcmDecrypt : String -> String -> Result Error String
+#[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_aes_gcm_decrypt<E: From<String>>(
     key: String,
     encoded: String,
@@ -369,6 +442,7 @@ pub fn crypto_aes_gcm_decrypt<E: From<String>>(
 }
 
 // Crypto.chacha20Encrypt : String -> String -> Result Error String
+#[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_chacha20_encrypt<E: From<String>>(
     key: String,
     plaintext: String,
@@ -400,6 +474,7 @@ pub fn crypto_chacha20_encrypt<E: From<String>>(
 }
 
 // Crypto.chacha20Decrypt : String -> String -> Result Error String
+#[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_chacha20_decrypt<E: From<String>>(
     key: String,
     encoded: String,
@@ -445,6 +520,7 @@ pub fn crypto_chacha20_decrypt<E: From<String>>(
 
 // Crypto.aesKeyFromPassword : String -> String -> String
 // PBKDF2-HMAC-SHA256, 100k iters, 32-byte key, returned base64-encoded.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_aes_key_from_password(password: String, salt: String) -> String {
     use base64::{Engine, engine::general_purpose::STANDARD};
     let mut key = [0u8; AEAD_KEY_BYTES];
@@ -458,6 +534,7 @@ pub fn crypto_aes_key_from_password(password: String, salt: String) -> String {
 }
 
 // Crypto.chachaKeyFromPassword : String -> String -> String  (same derivation)
+#[cfg(not(target_arch = "wasm32"))]
 pub fn crypto_chacha_key_from_password(password: String, salt: String) -> String {
     crypto_aes_key_from_password(password, salt)
 }
@@ -474,6 +551,7 @@ pub fn crypto_chacha_key_from_password(password: String, salt: String) -> String
 // up-front, eliminating the ambiguity without changing runtime semantics.
 
 /// Generated-code alias for `crypto_aes_gcm_encrypt` with `E = String`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn ipe_aes_gcm_encrypt(
     key: String,
     plaintext: String,
@@ -482,6 +560,7 @@ pub fn ipe_aes_gcm_encrypt(
 }
 
 /// Generated-code alias for `crypto_aes_gcm_decrypt` with `E = String`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn ipe_aes_gcm_decrypt(
     key: String,
     encoded: String,
@@ -490,6 +569,7 @@ pub fn ipe_aes_gcm_decrypt(
 }
 
 /// Generated-code alias for `crypto_chacha20_encrypt` with `E = String`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn ipe_chacha20_encrypt(
     key: String,
     plaintext: String,
@@ -498,6 +578,7 @@ pub fn ipe_chacha20_encrypt(
 }
 
 /// Generated-code alias for `crypto_chacha20_decrypt` with `E = String`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn ipe_chacha20_decrypt(
     key: String,
     encoded: String,

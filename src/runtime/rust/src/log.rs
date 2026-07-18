@@ -44,6 +44,7 @@ fn log_json() -> bool {
 /// (`2006-01-02T15:04:05.999999999Z07:00`): nanosecond precision with trailing
 /// zeros trimmed, UTC rendered as `Z`. Matches Go's
 /// `now.UTC().Format(time.RFC3339Nano)`.
+#[cfg(not(target_arch = "wasm32"))]
 fn rfc3339_nano_now() -> String {
     let now = chrono::Utc::now();
     let nanos = now.format("%9f").to_string();
@@ -54,6 +55,16 @@ fn rfc3339_nano_now() -> String {
     } else {
         format!("{date}.{trimmed}Z")
     }
+}
+
+/// Browser substitute: `chrono::Utc::now()` has no denotation on
+/// `wasm32-unknown-unknown` without the extra `wasmbind` feature this target
+/// does not carry. `Date.now()` (via `js_sys`) gives millisecond, not
+/// nanosecond, precision — an accepted divergence: this line feeds
+/// `console.*`, never the Go-oracle byte-diff the native format is pinned to.
+#[cfg(target_arch = "wasm32")]
+fn rfc3339_nano_now() -> String {
+    js_sys::Date::new_0().to_iso_string().into()
 }
 
 /// Minimal JSON string escaping for the hand-built plain/JSON records, matching
@@ -70,14 +81,31 @@ fn json_str(s: &str) -> String {
 /// hanging up (`sky-app | head`) would panic from a well-typed `Log.*` call.
 /// These helpers perform the write fallibly and intentionally drop the `Result`,
 /// turning a broken pipe into a silently-skipped line instead of an abort.
+#[cfg(not(target_arch = "wasm32"))]
 fn write_stdout_line(line: &str) {
     use std::io::Write;
     let _ = writeln!(std::io::stdout().lock(), "{line}");
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn write_stderr_line(line: &str) {
     use std::io::Write;
     let _ = writeln!(std::io::stderr().lock(), "{line}");
+}
+
+/// Browser substitute: there is no stdout/stderr in a tab — `Log.*` routes to
+/// `console.log` / `console.error` (Q3: "`Log.*` | SUBSTITUTE |
+/// `console.{debug,info,warn,error}`"). `write_stdout_line`/`write_stderr_line`
+/// keep the SAME two-way (out/err) split `log_emit` already computes, so no
+/// caller above this line needs to change per target.
+#[cfg(target_arch = "wasm32")]
+fn write_stdout_line(line: &str) {
+    web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(line));
+}
+
+#[cfg(target_arch = "wasm32")]
+fn write_stderr_line(line: &str) {
+    web_sys::console::error_1(&wasm_bindgen::JsValue::from_str(line));
 }
 
 /// Strip ASCII control characters from a log message for the plain-text path,

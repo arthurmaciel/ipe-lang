@@ -4997,15 +4997,39 @@ impl StdlibKernel {
             // module the wasm crate does not vendor (a SEAL breach).
             KernelClass::Live => matches!(self, Self::LiveApp),
             // TEA wiring the wasm scheduler drives today. `Cmd.perform` runs
-            // on the browser microtask queue; timers/pub-sub land with their
-            // substitutes.
+            // on the browser microtask queue; `Sub.every`/`Time.every` run on
+            // `gloo-timers` (`wasm::subs::SubManager`); `Cmd.publish` /
+            // `Cmd.publishNoEcho` / `Sub.subscribeTopic` / `PubSub.publish` /
+            // `PubSub.publishNoEcho` route through the in-tab broker
+            // (`wasm::pubsub`) — the M4 Cmd/Sub browser-effects bridge.
             KernelClass::Tea => matches!(
                 self,
-                Self::CmdNone | Self::CmdBatch | Self::CmdPerform | Self::SubNone
+                Self::CmdNone
+                    | Self::CmdBatch
+                    | Self::CmdPerform
+                    | Self::SubNone
+                    | Self::SubBatch
+                    | Self::SubEvery
+                    | Self::TimeEvery
+                    | Self::CmdPublish
+                    | Self::CmdPublishNoEcho
+                    | Self::SubSubscribeTopic
+                    | Self::PubSubPublish
+                    | Self::PubSubPublishNoEcho
             ),
             KernelClass::Pure => {
                 // Pure families whose runtime modules are in the proven wasm
-                // floor (no host I/O, no tokio, no un-shimmed entropy).
+                // floor (no host I/O, no tokio, no un-shimmed entropy) OR
+                // whose M4 browser substitute has landed:
+                //   - `Log` → `console.{debug,info,warn,error}` (log.rs).
+                //   - `Random` → `crypto.getRandomValues` via getrandom(js)
+                //     (random.rs's `lcg_init` wasm arm) — all 3 registered
+                //     kernels (int/float/choice) share the one entropy fix.
+                //   - `Http` → `fetch` (http_client.rs); this qualifier ALSO
+                //     covers the header/UninitialisedRequest builder kernels
+                //     (`defaultRequest`/`withMethod`/…), which have no
+                //     runtime symbol at all (inline `HttpRequest{..}` struct
+                //     literals in `emit_expr.rs`) and so carry no wasm risk.
                 matches!(
                     decl.qualifier,
                     "String"
@@ -5029,13 +5053,63 @@ impl StdlibKernel {
                         | "Secret"
                         | "CssSafety"
                         | "Uuid"
+                        | "Log"
+                        | "Random"
+                        | "Http"
                 ) ||
-                // Pure calendar helpers (chrono, no clock read). The clock/
-                // sleep/interval kernels stay out until the browser substitute
-                // (`Date.now` / timer bridge) lands.
+                // Pure calendar helpers (chrono, no clock read) PLUS the M4
+                // `Date.now()`/`setTimeout` clock+sleep substitutes.
                 matches!(
                     self,
-                    Self::TimeTimeString | Self::TimeIsLeapYear | Self::TimeDaysInMonth
+                    Self::TimeTimeString
+                        | Self::TimeIsLeapYear
+                        | Self::TimeDaysInMonth
+                        | Self::TimeNow
+                        | Self::TimeSleep
+                        | Self::TimeUnixMillis
+                ) ||
+                // `Crypto.randomBytes`/`randomToken` — `crypto.getRandomValues`
+                // via getrandom(js) (crypto.rs's wasm32 arm). Every OTHER
+                // `Crypto` kernel (hashing, AEAD, RSA, PBKDF2) stays denied —
+                // deliberately NOT a qualifier-wide allow.
+                matches!(self, Self::CryptoRandomBytes | Self::CryptoRandomToken) ||
+                // `Ipe.WebSocket` client Task-tier — `web_sys::WebSocket`
+                // (ws_client.rs's wasm32 arm). `SubSubscribeWebSocket` (the
+                // onMessage/onOpen/onClose/onError receive surface) is
+                // deliberately excluded: unreachable on EVERY target today
+                // (no `KernelFn` wires codegen to it), so it has no wasm
+                // substitute to tag — allowing it would be a SEAL hole
+                // (a resolvable name with no linkable symbol).
+                matches!(
+                    self,
+                    Self::WebSocketConnect
+                        | Self::WebSocketConnectWith
+                        | Self::WebSocketSend
+                        | Self::WebSocketSendBinary
+                        | Self::WebSocketClose
+                        | Self::WebSocketCloseWithCode
+                ) ||
+                // `Task.*` pure future combinators (`task.rs`'s ungated half —
+                // no tokio dependency, just `Box::pin(async move { .. })` over
+                // an already-`IpeTask`). Required for the M4 bridge to be
+                // usable at all: `Ipe.WebSocket.connect`/`Http.get`'s own
+                // stdlib wrappers (`Task.map`, …) call these, so every
+                // Cmd.perform pipeline routes through at least `Task.map`.
+                // `Task.run`/`Task.parallel`/`Task.retryWith`/`Task.perform`
+                // stay denied — their runtime bodies are tokio-bound
+                // (`block_on`/`tokio::spawn`/`tokio::time::sleep`) and have no
+                // wasm arm.
+                matches!(
+                    self,
+                    Self::TaskSucceed
+                        | Self::TaskFail
+                        | Self::TaskMap
+                        | Self::TaskAndThen
+                        | Self::TaskMapError
+                        | Self::TaskOnError
+                        | Self::TaskFromResult
+                        | Self::TaskAndThenResult
+                        | Self::TaskSequence
                 )
             }
             // Server-only surfaces: no browser denotation, ever (Db/Server)
@@ -5076,19 +5150,28 @@ mod tests {
             StdlibKernel::ServerListen,
             StdlibKernel::EmailSend,
             StdlibKernel::IoReadLine,
-            StdlibKernel::LogPrintln,
-            StdlibKernel::HttpGet,
             StdlibKernel::TaskPerform,
             StdlibKernel::LiveRenderStatic,
             StdlibKernel::LiveRoute,
+            // Crypto: only the entropy pair (`randomBytes`/`randomToken`) has
+            // a wasm substitute; hashing/AEAD/RSA stay denied (M4 scope cut,
+            // NOT a qualifier-wide allow — see `wasm_client_available`).
             StdlibKernel::CryptoSha256,
+            StdlibKernel::CryptoAesGcmEncrypt,
+            StdlibKernel::CryptoAesKeyFromPassword,
+            // WebSocket: only the Task-tier client is substituted; the
+            // receive surface is unreachable on every target (no `KernelFn`
+            // wires it), so it stays untagged too.
+            StdlibKernel::SubSubscribeWebSocket,
         ] {
             assert!(
                 !denied.available_on(Target::WasmClient),
                 "{denied:?} must have no wasm-client denotation"
             );
         }
-        // The floor + the headline render surface.
+        // The floor + the headline render surface + the M4 Cmd/Sub browser
+        // effects bridge (Log/Random/Http/WebSocket substitutes, timers,
+        // in-tab pub/sub).
         for allowed in [
             StdlibKernel::StringFromInt,
             StdlibKernel::ListMap,
@@ -5103,6 +5186,31 @@ mod tests {
             StdlibKernel::CmdNone,
             StdlibKernel::CmdPerform,
             StdlibKernel::SubNone,
+            StdlibKernel::LogPrintln,
+            StdlibKernel::LogInfo,
+            StdlibKernel::LogErrorWith,
+            StdlibKernel::RandomInt,
+            StdlibKernel::RandomFloat,
+            StdlibKernel::RandomChoice,
+            StdlibKernel::CryptoRandomBytes,
+            StdlibKernel::CryptoRandomToken,
+            StdlibKernel::HttpGet,
+            StdlibKernel::HttpPost,
+            StdlibKernel::HttpRequest,
+            StdlibKernel::HttpParseQuery,
+            StdlibKernel::TimeNow,
+            StdlibKernel::TimeSleep,
+            StdlibKernel::TimeUnixMillis,
+            StdlibKernel::SubEvery,
+            StdlibKernel::TimeEvery,
+            StdlibKernel::CmdPublish,
+            StdlibKernel::CmdPublishNoEcho,
+            StdlibKernel::SubSubscribeTopic,
+            StdlibKernel::PubSubPublish,
+            StdlibKernel::PubSubPublishNoEcho,
+            StdlibKernel::WebSocketConnect,
+            StdlibKernel::WebSocketSend,
+            StdlibKernel::WebSocketClose,
         ] {
             assert!(
                 allowed.available_on(Target::WasmClient),

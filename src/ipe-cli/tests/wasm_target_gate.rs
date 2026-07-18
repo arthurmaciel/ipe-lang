@@ -98,18 +98,19 @@ fn pure_ui_app_emits_wasm_project() {
     }
     let mod_rs =
         std::fs::read_to_string(out.join("src/ipe_runtime/mod.rs")).expect("emitted mod.rs");
-    for absent in [
-        "pub mod task;",
-        "pub mod live;",
-        "pub mod db;",
-        "pub mod server;",
-    ] {
+    // `task` IS present as of M4 (the module's pure future-combinator half —
+    // `Task.map`/`andThen`/… — has no tokio dependency; the tokio-bound half
+    // stays `cfg(not(target_arch = "wasm32"))` INSIDE the file — see
+    // `task.rs`'s module doc). `live`/`db`/`server` stay genuinely absent —
+    // no substitute, no module declared.
+    for absent in ["pub mod live;", "pub mod db;", "pub mod server;"] {
         assert!(
             !mod_rs.contains(absent),
             "wasm runtime module set must not declare `{absent}`:\n{mod_rs}"
         );
     }
     assert!(mod_rs.contains("pub mod wasm;"), "{mod_rs}");
+    assert!(mod_rs.contains("pub mod task;"), "{mod_rs}");
     // The static browser shell is emitted beside the crate.
     assert!(out.join("www/index.html").is_file());
     assert!(out.join("www/boot.js").is_file());
