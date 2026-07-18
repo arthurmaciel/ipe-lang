@@ -1,82 +1,51 @@
-//! Floor-lock for the `composite-tostring` divergence (disposition: DOCUMENT_BLOCKED).
+//! Floor-lock for `Basics.toString` / `Debug.toString` — the whole `%v` surface.
 //!
-//! Spec: runtime-rust/docs/superpowers/specs/2026-06-15-composite-tostring-design.md
-//!
-//! ## What this fixture is for
-//!
-//! `Basics.toString` / `Debug.toString` (the `{{interp}}` stringifier) are
-//! `Display`-bound in the Rust runtime (`src/ipe_runtime/basics.rs`):
+//! `Basics.toString` and `Debug.toString` (the `{{interp}}` stringifier) route
+//! through the total `IpeStringify` trait, the SAME path as
+//! `Basics.errorToString`:
 //!
 //! ```ignore
-//! pub fn basics_to_string<T: std::fmt::Display>(v: T) -> String { format!("{}", v) }
-//! pub fn debug_to_string<T:  std::fmt::Display>(v: T) -> String { format!("{}", v) }
+//! pub fn basics_to_string<T: IpeStringify>(v: T) -> String { v.ipe_show() }
+//! pub fn debug_to_string<T:  IpeStringify>(v: T) -> String { v.ipe_show() }
 //! ```
 //!
-//! For SCALARS, `Display` == Go's `fmt.Sprintf("%v", …)` byte-for-byte, so the
-//! Rust backend already matches the Go reference backend exactly. This file PINS
-//! that scalar floor so a future refactor (e.g. switching `toString` to `Debug`,
-//! which would quote strings and add field names) can't silently regress it.
+//! `IpeStringify` renders Go's `fmt.Sprintf("%v", …)` totally — every scalar and
+//! every composite (record / ADT / list / map). This file pins both halves:
 //!
-//! It deliberately does NOT assert that a record/ADT renders like Go — that is
-//! precisely the BLOCKED shape (see "Why composite Display is intentionally
-//! absent" below). Asserting it would mean fabricating Go's reflected struct
-//! layout in Rust; the design decision is to leave composites as a clean
-//! compile-time error instead.
+//! 1. SCALARS keep their exact Go-`%v` bytes (a refactor to `Debug` would quote
+//!    strings and rename this a regression).
+//! 2. COMPOSITES stringify correctly — no `Display` bound, so there is no
+//!    exit-0-then-cargo-fail hole (a composite has no `Display` impl; it DOES
+//!    have an `IpeStringify` impl, runtime-provided here and codegen-provided for
+//!    every emitted record/ADT).
 //!
-//! ## Go `%v` reference table (the parity oracle — empirically captured)
+//! ## Go `%v` reference (the parity oracle — empirically captured)
 //!
-//! Ipê values lower to Go as: record → anonymous struct sorted by `_fieldIndex`;
-//! ADT → a SINGLE flattened struct (`Tag int` + every variant's payload fields).
-//! `Debug_toString` deref's pointers, then `Sprintf("%v", v)`:
+//! | value                            | Go `%v`        | Notes                                            |
+//! |----------------------------------|----------------|--------------------------------------------------|
+//! | scalar Int `5`                   | `5`            |                                                  |
+//! | scalar Float `42.5`              | `42.5`         |                                                  |
+//! | scalar Bool `true`               | `true`         |                                                  |
+//! | scalar String `"hi"`             | `hi`           | UNQUOTED / identity                              |
+//! | record `{ x = 1, y = 2 }`        | `{1 2}`        | brace-wrapped, space-joined, `_fieldIndex` order |
+//! | tuple `(1, "q")`                 | `{1 q}`        | identical to a 2-field struct                    |
+//! | List `[1, 2, 3]`                 | `[1 2 3]`      | space-joined, square brackets                    |
+//! | map `{ a: 1, b: 2 }`             | `map[a:1 b:2]` | Go-sorted keys                                   |
 //!
-//! | Ipê shape                        | Go `%v` output | Notes                                                  |
-//! |----------------------------------|----------------|--------------------------------------------------------|
-//! | scalar Int `5`                   | `5`            | matched here                                           |
-//! | scalar Float `42.5`              | `42.5`         | matched here                                           |
-//! | scalar Bool `true`               | `true`         | matched here                                           |
-//! | scalar String `"hi"`             | `hi`           | UNQUOTED / identity — matched here                     |
-//! | record `{ x = 1, y = 2, z = 3 }` | `{1 2 3}`      | brace-wrapped, space-joined VALUES, `_fieldIndex` order, no field names, no type name |
-//! | nested record-in-record          | `{{2 z} 9}`    | inner struct recursively `%v`'d                        |
-//! | nullary ADT variant              | `{0 0}`        | leaks Go's `Tag` int + zero-valued payload slots of OTHER variants |
-//! | payload ADT variant `Foo 42`     | `{1 42}`       | `{tag payload…}` — constructor NAME never appears      |
-//! | List `[1, 2, 3]`                 | `[1 2 3]`      | space-joined, square brackets                          |
-//! | Dict / map                       | `map[a:1 b:2]` | `map[k:v …]`, Go-sorted keys                            |
-//! | tuple `(1, "q")`                 | `{1 q}`        | identical to a 2-field struct                          |
-//! | `nil` pointer / Nothing          | `<nil>`        |                                                        |
-//! | function-typed field             | `0x<addr>`     | NON-DETERMINISTIC process address — unmatchable        |
+//! A codegen-emitted ADT renders `Vname f0 f1 …` (variant name, space-joined
+//! fields) — the `../sky` Rust backend's `IpeStringify` enum shape — verified by
+//! the `m_tostring_composite` golden's end-to-end output (`Circle 5` / `Empty`),
+//! not here (this file tests the runtime primitives, not codegen).
 //!
-//! ## Why composite `Display` is intentionally absent (DOCUMENT_BLOCKED)
-//!
-//! 1. **No runtime panic — clean compile-time error.** A composite (record/ADT)
-//!    has no `Display` impl, so `basics_to_string(record)` fails at COMPILE time
-//!    with `E0277` (trait bound not satisfied), never at runtime. That is MORE in
-//!    line with "no runtime errors from well-typed Ipê code" than Go's runtime
-//!    reflection: Rust catches it before a binary exists.
-//!
-//! 2. **The ADT shape is unmatchable in Rust's type system.** Go's `{1 42}` /
-//!    `{0 0}` leaks a flattened-struct memory layout (Tag int + zero-init
-//!    inactive-variant fields). Rust enums are sum types — there is no Tag-int +
-//!    zero-init-inactive-fields value to render from. Reproducing the string
-//!    would mean FABRICATING Go's layout (symptom-masking, not a meaning).
-//!
-//! 3. **The function-field subset is non-deterministic by construction.** Go
-//!    renders a func-typed field as `0x<addr>` — a process address that changes
-//!    per run (the same non-deterministic class as `35-composite-generics`,
-//!    which is excluded from equiv). Rust cannot reproduce a Go func address.
-//!
-//! 4. **Unverifiable here.** Zero upstream `examples/` interpolate or `toString`
-//!    a record/ADT into stdout (every `{{…}}` site is a pre-stringified scalar),
-//!    `examples/` is read-only, and the equiv-sweep can't diff a shape no example
-//!    exercises. We never ship what we cannot verify.
-//!
-//! If an upstream example later interpolates a Sky RECORD (not ADT) into stdout,
-//! the record-only sub-case becomes a verifiable, in-boundary IMPLEMENT and
-//! should be promoted then (see spec §"Disposition rationale"). The ADT shape
-//! stays blocked until Go stops leaking its struct layout.
+//! The one residual: a bare function-typed value has no meaningful `%v` (Go
+//! prints a non-deterministic address); `toString` on a function is rejected at
+//! ipe type-check (the Stringify obligation's `Fun` head-rejection — see
+//! `m_tostring_fn_rejected`), so it never reaches this runtime path.
 
 use ipe_runtime_rust::basics::{basics_to_string, debug_to_string};
+use std::collections::HashMap;
 
-// --- Positive floor: scalars match Go `%v` byte-for-byte via the Display path. ---
+// --- Scalars match Go `%v` byte-for-byte. ---
 
 #[test]
 fn to_string_int_matches_go_percent_v() {
@@ -88,6 +57,11 @@ fn to_string_int_matches_go_percent_v() {
 fn to_string_float_matches_go_percent_v() {
     // Go: fmt.Sprintf("%v", 42.5) == "42.5"
     assert_eq!(basics_to_string(42.5f64), "42.5");
+    // Go `%v` == strconv.FormatFloat(f,'g',-1,64): cuts to scientific at exp >= 6
+    // and for infinities/NaN. The `IpeStringify` f64 impl reproduces this; the
+    // former `Display` path did NOT (it printed "1000000" / "inf").
+    assert_eq!(basics_to_string(1e6f64), "1e+06");
+    assert_eq!(basics_to_string(f64::INFINITY), "+Inf");
 }
 
 #[test]
@@ -99,13 +73,13 @@ fn to_string_bool_true_matches_go_percent_v() {
 
 #[test]
 fn to_string_string_renders_unquoted_identity() {
-    // Go: Debug_toString returns the String verbatim (no surrounding quotes),
-    // and so must Rust's Display path — NOT Debug (which would yield "\"hi\"").
+    // Go: a String returns verbatim (no surrounding quotes) — NOT Debug (which
+    // would yield "\"hi\"").
     assert_eq!(basics_to_string("hi".to_string()), "hi");
     assert_eq!(basics_to_string("hi"), "hi");
 }
 
-// --- debug_to_string (the `{{expr}}` interpolation entry) shares the floor. ---
+// --- debug_to_string (the `{{expr}}` interpolation entry) shares the path. ---
 
 #[test]
 fn debug_to_string_scalars_match_go_percent_v() {
@@ -117,18 +91,25 @@ fn debug_to_string_scalars_match_go_percent_v() {
     assert_eq!(debug_to_string("hi".to_string()), "hi");
 }
 
-// --- Documentation-as-code: composites are intentionally a compile error. ---
-//
-// The following, if uncommented, MUST fail to compile with E0277 (no `Display`
-// impl for a record/ADT/Vec composite) — never produce a binary, never panic.
-// This is the BLOCKED shape; it is left as a comment because a `#[test]` cannot
-// assert "does not compile" without a separate trybuild harness, and the design
-// decision is precisely that no composite path exists to test.
-//
-//   #[derive(Clone)]
-//   struct Point_R { x: i64, y: i64 }   // a lowered Ipê record
-//   let _ = basics_to_string(Point_R { x: 1, y: 2 });  // E0277: Point_R: !Display
-//   let _ = basics_to_string(vec![1i64, 2, 3]);        // E0277: Vec<i64>: !Display
-//
-// Go would reflect these at runtime to `{1 2}` / `[1 2 3]`; Rust refuses them at
-// compile time. That refusal IS the principled floor this fixture locks.
+// --- Composites now stringify correctly (no exit-0-then-cargo-fail hole). ---
+
+#[test]
+fn to_string_list_matches_go_percent_v() {
+    // Go: fmt.Sprintf("%v", []int64{1,2,3}) == "[1 2 3]"
+    assert_eq!(basics_to_string(vec![1i64, 2, 3]), "[1 2 3]");
+}
+
+#[test]
+fn to_string_tuple_matches_go_percent_v() {
+    // Go: a Ipê tuple lowers to a struct — `%v` is `{a b}`.
+    assert_eq!(basics_to_string((1i64, "q".to_string())), "{1 q}");
+}
+
+#[test]
+fn to_string_map_matches_go_percent_v() {
+    // Go: fmt.Sprintf("%v", map) == "map[a:1 b:2]" (keys sorted).
+    let mut m: HashMap<String, i64> = HashMap::new();
+    m.insert("b".to_string(), 2);
+    m.insert("a".to_string(), 1);
+    assert_eq!(basics_to_string(m), "map[a:1 b:2]");
+}
