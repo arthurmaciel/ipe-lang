@@ -91,7 +91,7 @@ fn foreign_path_map(pkg: &PkgInfo) -> (BTreeMap<String, String>, BTreeSet<String
     for f in pkg.fns() {
         visit(f.recv_rust_type());
         for p in f.params().iter().chain(f.results().iter()) {
-            visit(&p.rust_type);
+            visit(p.rust_type_str());
             visit(&p.foreign_ty);
         }
     }
@@ -190,7 +190,7 @@ fn result_ok_arm(raw: &str) -> &str {
 fn foreign_reserved_collision(f: &FnInfo) -> Option<String> {
     let mut bases = BTreeSet::new();
     for p in f.params().iter().chain(f.results().iter()) {
-        foreign_nominal_bases(result_ok_arm(&p.rust_type), &mut bases);
+        foreign_nominal_bases(result_ok_arm(p.rust_type_str()), &mut bases);
         foreign_nominal_bases(result_ok_arm(&p.foreign_ty), &mut bases);
     }
     foreign_nominal_bases(f.recv_rust_type(), &mut bases);
