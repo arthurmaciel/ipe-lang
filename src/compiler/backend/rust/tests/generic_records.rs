@@ -173,12 +173,13 @@ fn synthesises_generic_struct_and_signatures() -> DResult<()> {
         ),
         "generic struct definition missing or wrong shape:\n{out}"
     );
-    // Generic IpeStringify impl, bounded so the autoref dispatch resolves.
+    // Generic IpeStringify impl, bounded so the autoref dispatch resolves; rustfmt wraps format!.
     assert!(
         out.contains(
             "impl<T1: IpeStringify + std::fmt::Debug> IpeStringify for RecValue<T1> {\n    \
              fn ipe_show(&self) -> String {\n        \
-             format!(\"{{{}}}\", (&ipe_runtime::stringify::Wrap(&self.value)).dispatch())"
+             format!(\n            \"{{{}}}\",\n            \
+             (&ipe_runtime::stringify::Wrap(&self.value)).dispatch()\n        )"
         ),
         "generic IpeStringify impl missing or wrong:\n{out}"
     );
@@ -298,10 +299,11 @@ fn two_type_parameter_record() -> DResult<()> {
         out.contains("pub struct RecFirstSecond<T1, T2> {\n    first: T1,\n    second: T2,\n}"),
         "two-parameter struct missing or wrong shape:\n{out}"
     );
+    // rustfmt line-wraps the long impl header before `for`.
     assert!(
         out.contains(
-            "impl<T1: IpeStringify + std::fmt::Debug, T2: IpeStringify + std::fmt::Debug> \
-             IpeStringify for RecFirstSecond<T1, T2> {"
+            "impl<T1: IpeStringify + std::fmt::Debug, T2: IpeStringify + std::fmt::Debug> IpeStringify\n    \
+             for RecFirstSecond<T1, T2>\n{"
         ),
         "two-parameter IpeStringify impl missing or wrong:\n{out}"
     );
