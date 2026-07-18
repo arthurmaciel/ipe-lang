@@ -212,10 +212,19 @@ fn nested_tuple_in_record_field_renders_recursively() -> DResult<()> {
     let out = emit(&interner, &prog)?;
 
     // The renderer recurses through the record field into the tuple sub-pattern;
-    // `tag` is punned to shorthand.
+    // `tag` is punned to shorthand. Rustfmt may split the struct pattern across
+    // lines, so assert the key field-binding fragments individually.
     assert!(
-        out.contains("let RecPointTag { point: (a, b), tag, .. } ="),
-        "nested tuple-in-record pattern not rendered recursively:\n{out}"
+        out.contains("let RecPointTag {"),
+        "record destructure binder missing:\n{out}"
+    );
+    assert!(
+        out.contains("point: (a, b),"),
+        "nested tuple sub-pattern not rendered recursively:\n{out}"
+    );
+    assert!(
+        out.contains("tag,") && out.contains(".."),
+        "tag pun or wildcard missing:\n{out}"
     );
     Ok(())
 }
