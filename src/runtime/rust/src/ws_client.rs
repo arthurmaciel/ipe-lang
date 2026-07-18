@@ -265,12 +265,15 @@ async fn do_connect<E: From<String> + Send + 'static>(
                 // the `None` arm below). Refuse rather than dial plaintext to
                 // what the caller believes is a secure endpoint.
                 if url.starts_with("wss://") {
-                    return IpeResult::Err(format!(
-                        "WebSocket.connect {}: wss:// with IPE_HTTP_DENY_PRIVATE is \
+                    return IpeResult::Err(
+                        format!(
+                            "WebSocket.connect {}: wss:// with IPE_HTTP_DENY_PRIVATE is \
                          unsupported (SSRF-pinned dial bypasses TLS; disable \
                          IPE_HTTP_DENY_PRIVATE or use ws:// for this endpoint)",
-                        safe_url
-                    ).into());
+                            safe_url
+                        )
+                        .into(),
+                    );
                 }
                 // Dial INSIDE the future so the single handshake timeout below
                 // also bounds the pinned TCP connect — otherwise an unreachable

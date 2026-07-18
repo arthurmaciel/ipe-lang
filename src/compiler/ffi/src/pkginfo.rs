@@ -292,7 +292,9 @@ impl FnInfo {
     /// The receiver's Rust type override (empty when unknown).
     #[must_use]
     pub fn recv_rust_type(&self) -> &str {
-        self.recv_rust_type.as_ref().map_or("", RustTypeExpr::as_str)
+        self.recv_rust_type
+            .as_ref()
+            .map_or("", RustTypeExpr::as_str)
     }
 
     /// The host method name (empty for a free function).
@@ -565,9 +567,8 @@ fn decode_shape(w: &WireFunction) -> Result<FnShape, Diagnostic> {
         context: format!("function `{}`", w.name),
         defect,
     };
-    let ident_field = |s: &str| -> Result<RustIdent, Diagnostic> {
-        RustIdent::parse(s).map_err(wire_err)
-    };
+    let ident_field =
+        |s: &str| -> Result<RustIdent, Diagnostic> { RustIdent::parse(s).map_err(wire_err) };
     Ok(match set.first().copied() {
         None => FnShape::Plain,
         Some("isField") => FnShape::FieldGet,
@@ -592,10 +593,9 @@ fn decode_shape(w: &WireFunction) -> Result<FnShape, Diagnostic> {
             wildcard: w.enum_wildcard,
         },
         Some(_) => {
-            let selector = FieldSelector::parse(
-                w.enum_struct_fields.first().map_or("", String::as_str),
-            )
-            .map_err(wire_err)?;
+            let selector =
+                FieldSelector::parse(w.enum_struct_fields.first().map_or("", String::as_str))
+                    .map_err(wire_err)?;
             FnShape::EnumExtract {
                 variant: ident_field(&w.enum_variant)?,
                 kind: decode_variant_kind(&w.name, &w.enum_kind)?,

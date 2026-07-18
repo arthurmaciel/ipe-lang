@@ -43,12 +43,7 @@ const PAD_ROW_SLACK: usize = 4;
 /// `apply_self_height` pad rows) so the product (rows × width) is bounded
 /// to roughly `(canvas.rows × PAD_ROW_SLACK) × MAX_CELLS` — negligible.
 fn clamp_pad_rows(rows: usize, canvas: Canvas) -> usize {
-    rows.min(
-        canvas
-            .rows
-            .saturating_mul(PAD_ROW_SLACK)
-            .max(PAD_ROW_SLACK),
-    )
+    rows.min(canvas.rows.saturating_mul(PAD_ROW_SLACK).max(PAD_ROW_SLACK))
 }
 
 /// Hard recursion-depth bound for the Element/Html tree walk. A deeply-nested
@@ -1582,14 +1577,12 @@ fn render_node<M: Clone>(
                     }
                 } else {
                     match w.dir {
-                        Dir::Column => {
-                            vstack(
-                                children,
-                                ctx.canvas.cells_y(w.spacing_px),
-                                w.style.bg,
-                                ctx.canvas,
-                            )
-                        }
+                        Dir::Column => vstack(
+                            children,
+                            ctx.canvas.cells_y(w.spacing_px),
+                            w.style.bg,
+                            ctx.canvas,
+                        ),
                         Dir::Row => hstack(children, ctx.canvas.cells_x(w.spacing_px), w.style.bg),
                     }
                 };
@@ -3090,7 +3083,9 @@ mod tests {
         const ROWS: usize = 24;
         let t: Element<()> = node(
             // AttrPadding(top, right, bottom, left) — all huge values.
-            vec![Attribute::AttrPadding(3_000_000, 1_600_000, 3_000_000, 1_600_000)],
+            vec![Attribute::AttrPadding(
+                3_000_000, 1_600_000, 3_000_000, 1_600_000,
+            )],
             vec![Element::Text("hi".into())],
         );
         // This call must return; if the clamp is missing it allocates ~10 GB and
