@@ -8956,9 +8956,10 @@ impl<'a> Lowerer<'a> {
                     Ok(IrType::Json)
                 }
                 // ── JWT builder types ─────────────────────────────
-                // `Algorithm` — JWT signing algorithm descriptor encoded as a
-                // `String` ("HS256:<secret>" or "RS256:<pem>").
-                "Algorithm" => Ok(IrType::Str),
+                // `Algorithm` — JWT signing algorithm descriptor, sealed in a
+                // `Secret` wrapping "HS256:<secret>" or "RS256:<pem>" (no
+                // Debug/Display/stringify surface on the key material).
+                "Algorithm" => Ok(IrType::Secret),
                 // ── Nullary Ipe.Ui plain types (no message parameter) ─────
                 // Mirror of the `ir_type_from_ty` arms below.  Reached when a
                 // type annotation writes `Color`, `Length`, etc. at a position
@@ -9574,11 +9575,13 @@ impl<'a> Lowerer<'a> {
                 // `SqlFragment` is `Ipe.Db.Sql`'s opaque WHERE-fragment type
                 // Backed by `ipe_runtime::db::SqlFragment`.
                 "SqlFragment" => Ok(IrType::SqlFragment),
-                // `Secret` is `Ipe.Secret`'s opaque sealed secret-string
-                // type. Backed by `ipe_runtime::secret::Secret`.
-                "Secret" => Ok(IrType::Secret),
-                // `Algorithm` shares the `String` IR representation.
-                "String" | "Algorithm" => Ok(IrType::Str),
+                // `Secret` is `Ipe.Secret`'s opaque sealed secret-string type,
+                // backed by `ipe_runtime::secret::Secret`. `Algorithm` (the
+                // `Ipe.Jwt` builder's signing-key descriptor) shares the same
+                // representation — the JWT key material gets the same sealed
+                // no-stringify treatment.
+                "Secret" | "Algorithm" => Ok(IrType::Secret),
+                "String" => Ok(IrType::Str),
                 // `Error` — backed by the real `ipe_runtime::error::IpeError` ADT
                 // no longer merged with `String`. Lambda
                 // parameters typed as `Error` (e.g. the `e` in `\e -> ...` when

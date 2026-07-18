@@ -175,15 +175,15 @@ pub fn jwt_decode_hs256<E: From<String>>(secret: String, token: String) -> IpeRe
     // reproduces Go's `now >= exp` / `now < nbf` on every numeric spelling.
     if let Some(payload) = decode_payload(&token) {
         let now = now_unix_seconds();
-        if let Some(exp) = numeric_date(&payload, "exp") {
-            if now >= exp {
-                return IpeResult::Err("jwt-decode: token has expired".to_string().into());
-            }
+        if let Some(exp) = numeric_date(&payload, "exp")
+            && now >= exp
+        {
+            return IpeResult::Err("jwt-decode: token has expired".to_string().into());
         }
-        if let Some(nbf) = numeric_date(&payload, "nbf") {
-            if now < nbf {
-                return IpeResult::Err("jwt-decode: token is not yet valid".to_string().into());
-            }
+        if let Some(nbf) = numeric_date(&payload, "nbf")
+            && now < nbf
+        {
+            return IpeResult::Err("jwt-decode: token is not yet valid".to_string().into());
         }
     }
     let key = DecodingKey::from_secret(secret.as_bytes());
@@ -266,15 +266,15 @@ pub fn jwt_decode_rs256<E: From<String>>(key_pem: String, token: String) -> IpeR
     // path; see `jwt_decode_hs256` for the detailed rationale.
     if let Some(payload) = decode_payload(&token) {
         let now = now_unix_seconds();
-        if let Some(exp) = numeric_date(&payload, "exp") {
-            if now >= exp {
-                return IpeResult::Err("jwt-decode-rs: token has expired".to_string().into());
-            }
+        if let Some(exp) = numeric_date(&payload, "exp")
+            && now >= exp
+        {
+            return IpeResult::Err("jwt-decode-rs: token has expired".to_string().into());
         }
-        if let Some(nbf) = numeric_date(&payload, "nbf") {
-            if now < nbf {
-                return IpeResult::Err("jwt-decode-rs: token is not yet valid".to_string().into());
-            }
+        if let Some(nbf) = numeric_date(&payload, "nbf")
+            && now < nbf
+        {
+            return IpeResult::Err("jwt-decode-rs: token is not yet valid".to_string().into());
         }
     }
     let key = match DecodingKey::from_rsa_pem(key_pem.as_bytes()) {
@@ -389,16 +389,24 @@ pub fn ipe_jwt_claims() -> JsonValue {
 }
 
 /// `Jwt.hs256 : String -> Algorithm` — builds an HS256 algorithm descriptor.
-/// The algorithm is encoded as `"HS256:<secret>"` so `ipe_jwt_encode` /
-/// `ipe_jwt_decode` can parse out the algorithm and the key in one pass.
-pub fn ipe_jwt_hs256(secret: String) -> String {
-    format!("HS256:{}", secret)
+/// The algorithm is encoded as `"HS256:<secret>"` and sealed inside a
+/// [`super::secret::Secret`] so `Algorithm` (the `Ipe.Jwt` builder's IR type)
+/// carries none of `Secret`'s excluded surfaces — no `Debug`/`Display`/
+/// `IpeStringify`/serde — the moment the key leaves this function. Without
+/// the seal, `Algorithm` shared the plain `String` IR representation, so a
+/// well-typed program could `println (Jwt.hs256 secret)` or log the
+/// descriptor and leak the key verbatim. `ipe_jwt_encode` / `ipe_jwt_decode`
+/// are the only two call sites that `secret_reveal` it, to parse out the
+/// algorithm tag and the key in one pass.
+pub fn ipe_jwt_hs256(secret: String) -> super::secret::Secret {
+    super::secret::secret_from_string(format!("HS256:{}", secret))
 }
 
 /// `Jwt.rs256 : String -> Algorithm` — builds an RS256 algorithm descriptor.
-/// Encoded as `"RS256:<pem>"`.
-pub fn ipe_jwt_rs256(key_pem: String) -> String {
-    format!("RS256:{}", key_pem)
+/// Encoded as `"RS256:<pem>"` and sealed the same way as [`ipe_jwt_hs256`] —
+/// an RS256 private key is exactly as sensitive as an HS256 shared secret.
+pub fn ipe_jwt_rs256(key_pem: String) -> super::secret::Secret {
+    super::secret::secret_from_string(format!("RS256:{}", key_pem))
 }
 
 /// Helper: insert (or overwrite) a key-value pair in a JSON object.
@@ -485,12 +493,16 @@ pub fn ipe_jwt_with_claim(key: String, value: JsonValue, claims: JsonValue) -> J
 /// Delegates to `jwt_encode_hs256` / `jwt_encode_rs256` after serialising the
 /// claims through the Go-parity JSON encoder (sorted keys).
 pub fn ipe_jwt_encode(
-    algorithm_descriptor: String,
+    algorithm_descriptor: super::secret::Secret,
     claims: JsonValue,
 ) -> IpeResult<crate::error::IpeError, String> {
     // Serialise the claims through the Go-parity encoder so the payload bytes
     // match those produced by `Jwt.encode` in the Go backend.
     let claims_json = super::json_enc_encode(0, claims);
+    // THE single reveal on this path — unwraps the sealed descriptor back to
+    // a plain `String` only long enough to strip the algorithm-tag prefix and
+    // hand the key material to the flat `jwt_encode_*` kernels below.
+    let algorithm_descriptor = super::secret::secret_reveal(algorithm_descriptor);
     if let Some(secret) = algorithm_descriptor.strip_prefix("HS256:") {
         jwt_encode_hs256(secret.to_string(), claims_json)
     } else if let Some(pem) = algorithm_descriptor.strip_prefix("RS256:") {
@@ -516,7 +528,7 @@ pub fn ipe_jwt_encode(
 /// Returns the raw payload JSON string (base64url-decoded middle segment).
 /// No wall-clock access; deterministic on `now`.
 pub fn ipe_jwt_decode(
-    algorithm_descriptor: String,
+    algorithm_descriptor: super::secret::Secret,
     now: i64,
     token: String,
 ) -> IpeResult<crate::error::IpeError, String> {
@@ -525,6 +537,9 @@ pub fn ipe_jwt_decode(
     if parts.len() != 3 {
         return IpeResult::Err("jwt-decode: malformed token (expected 3 segments)".into());
     }
+
+    // THE single reveal on this path — see `ipe_jwt_encode`'s comment.
+    let algorithm_descriptor = super::secret::secret_reveal(algorithm_descriptor);
 
     // 2. Verify the signature only — disable jsonwebtoken's built-in time checks.
     //    We apply reference-exact time validation manually below.
@@ -925,7 +940,8 @@ mod tests {
     #[test]
     fn ipe_jwt_decode_valid_window() {
         let tok = make_token_with_time(Some(1000), Some(100));
-        let desc = "HS256:test-secret-key-0123456789abcdef".to_string();
+        let desc =
+            crate::secret::secret_from_string("HS256:test-secret-key-0123456789abcdef".to_string());
         assert!(
             matches!(ipe_jwt_decode(desc, 500, tok), IpeResult::Ok(_)),
             "now=500 inside [nbf=100, exp=1000) must succeed"
@@ -936,7 +952,8 @@ mod tests {
     #[test]
     fn ipe_jwt_decode_expired_at_boundary() {
         let tok = make_token_with_time(Some(1000), None);
-        let desc = "HS256:test-secret-key-0123456789abcdef".to_string();
+        let desc =
+            crate::secret::secret_from_string("HS256:test-secret-key-0123456789abcdef".to_string());
         assert!(
             matches!(ipe_jwt_decode(desc, 1000, tok), IpeResult::Err(_)),
             "now==exp must be rejected (now >= exp semantics)"
@@ -947,7 +964,8 @@ mod tests {
     #[test]
     fn ipe_jwt_decode_nbf_future() {
         let tok = make_token_with_time(None, Some(100));
-        let desc = "HS256:test-secret-key-0123456789abcdef".to_string();
+        let desc =
+            crate::secret::secret_from_string("HS256:test-secret-key-0123456789abcdef".to_string());
         assert!(
             matches!(ipe_jwt_decode(desc, 99, tok), IpeResult::Err(_)),
             "now=99 < nbf=100 must be rejected"
@@ -958,7 +976,8 @@ mod tests {
     #[test]
     fn ipe_jwt_decode_nbf_at_boundary() {
         let tok = make_token_with_time(Some(1000), Some(100));
-        let desc = "HS256:test-secret-key-0123456789abcdef".to_string();
+        let desc =
+            crate::secret::secret_from_string("HS256:test-secret-key-0123456789abcdef".to_string());
         assert!(
             matches!(ipe_jwt_decode(desc, 100, tok), IpeResult::Ok(_)),
             "now==nbf must be accepted (now < nbf is false)"
@@ -969,7 +988,8 @@ mod tests {
     #[test]
     fn ipe_jwt_decode_no_time_claims() {
         let tok = make_token_with_time(None, None);
-        let desc = "HS256:test-secret-key-0123456789abcdef".to_string();
+        let desc =
+            crate::secret::secret_from_string("HS256:test-secret-key-0123456789abcdef".to_string());
         assert!(
             matches!(ipe_jwt_decode(desc, 9999999999, tok), IpeResult::Ok(_)),
             "token without exp/nbf must be accepted regardless of now"
@@ -980,7 +1000,8 @@ mod tests {
     #[test]
     fn ipe_jwt_decode_wrong_key() {
         let tok = make_token_with_time(Some(9999999999), None);
-        let desc = "HS256:wrong-secret-key-0123456789abcde".to_string();
+        let desc =
+            crate::secret::secret_from_string("HS256:wrong-secret-key-0123456789abcde".to_string());
         assert!(
             matches!(ipe_jwt_decode(desc, 500, tok), IpeResult::Err(_)),
             "wrong key must be rejected"
@@ -991,7 +1012,8 @@ mod tests {
     #[test]
     fn ipe_jwt_decode_returns_payload_json() {
         let tok = make_token_with_time(Some(9999999999), None);
-        let desc = "HS256:test-secret-key-0123456789abcdef".to_string();
+        let desc =
+            crate::secret::secret_from_string("HS256:test-secret-key-0123456789abcdef".to_string());
         match ipe_jwt_decode(desc, 500, tok) {
             IpeResult::Ok(payload) => {
                 assert!(
@@ -1083,7 +1105,7 @@ mod tests {
             "flat HS256: exp=1.5 (past) must be rejected"
         );
 
-        let desc = format!("HS256:{secret}");
+        let desc = crate::secret::secret_from_string(format!("HS256:{secret}"));
         let builder = ipe_jwt_decode(desc, now_unix(), token); // now_unix() from test module
         assert!(
             matches!(builder, IpeResult::Err(_)),
