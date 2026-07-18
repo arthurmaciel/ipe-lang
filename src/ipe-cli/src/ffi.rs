@@ -45,8 +45,9 @@ fn current_uid() -> u32 {
 #[cfg(unix)]
 fn is_trusted_cache_dir(dir: &Path) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-    std::fs::metadata(dir)
-        .map_or(false, |md| md.uid() == current_uid() && md.mode() & 0o002 == 0)
+    std::fs::metadata(dir).map_or(false, |md| {
+        md.uid() == current_uid() && md.mode() & 0o002 == 0
+    })
 }
 
 #[cfg(not(unix))]

@@ -1308,10 +1308,7 @@ fn resolve_deferred(
                     let mut fields = BTreeMap::new();
                     fields.insert(fa.field, fa.result);
                     let ext = lift!(uf.fresh(Content::Flex));
-                    lift!(uf.set_content(
-                        root,
-                        Content::Structure(FlatType::Record(fields, ext)),
-                    ));
+                    lift!(uf.set_content(root, Content::Structure(FlatType::Record(fields, ext)),));
                     continue;
                 }
                 return Err((

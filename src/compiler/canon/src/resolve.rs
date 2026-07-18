@@ -1439,8 +1439,7 @@ fn canonicalise_with_env(
     // user function already occupies. The two do NOT collide — the explicit def
     // provides the implementation, the auto-ctor is redundant. Computed here
     // (the sole point over `m.values`) and threaded into synthesis.
-    let user_value_names: BTreeSet<Symbol> =
-        m.values.iter().map(|v| v.value.name.value).collect();
+    let user_value_names: BTreeSet<Symbol> = m.values.iter().map(|v| v.value.name.value).collect();
     let synth_ctor_defs = synthesize_record_alias_ctors(
         m,
         &home,
