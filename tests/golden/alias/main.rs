@@ -249,7 +249,7 @@ pub fn main_f(n: i64) -> i64 {
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(main_f(7)))
+    log_println(string_from_int(crate::main_f(7)))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

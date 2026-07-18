@@ -266,9 +266,9 @@ pub fn main_pick(o: MainOpt<bool>) -> bool {
 }
 pub fn ipe_main() -> IpeTask<()> {
     ({
-        let n = main_or_else(MainOpt::Som(41), 0);
+        let n = crate::main_or_else(MainOpt::Som(41), 0);
         ({
-            let flag = main_pick(MainOpt::Som((1 == 1)));
+            let flag = crate::main_pick(MainOpt::Som((1 == 1)));
             log_println(string_from_int((if flag { (n + 1) } else { n })))
         })
     })

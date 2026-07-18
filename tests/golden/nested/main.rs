@@ -313,14 +313,14 @@ pub fn main_let_parts() -> i64 {
 }
 pub fn ipe_main() -> IpeTask<()> {
     log_println(string_from_int(
-        (((main_box_sum(MainBox::Wrap((1, 2)))
-            + main_label(MainTree::Node(
+        (((crate::main_box_sum(MainBox::Wrap((1, 2)))
+            + crate::main_label(MainTree::Node(
                 Box::new(MainTree::Leaf),
                 5,
                 Box::new(MainTree::Leaf),
             )))
-            + main_rec_sum(RecXY { x: 20, y: 22 }))
-            + main_let_parts()),
+            + crate::main_rec_sum(RecXY { x: 20, y: 22 }))
+            + crate::main_let_parts()),
     ))
 }
 

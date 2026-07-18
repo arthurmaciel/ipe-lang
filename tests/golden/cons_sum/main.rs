@@ -244,12 +244,12 @@ pub fn main_sum(xs: Vec<i64>) -> i64 {
         [x, rest @ ..] => {
             let x = x.clone();
             let rest = rest.to_vec();
-            (x + main_sum(rest))
+            (x + crate::main_sum(rest))
         }
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(main_sum(vec![1, 2, 3])))
+    log_println(string_from_int(crate::main_sum(vec![1, 2, 3])))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

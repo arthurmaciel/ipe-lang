@@ -264,7 +264,9 @@ pub fn main_record_part() -> i64 {
     })
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int((main_tuple_parts() + main_record_part())))
+    log_println(string_from_int(
+        (crate::main_tuple_parts() + crate::main_record_part()),
+    ))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

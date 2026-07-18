@@ -255,18 +255,18 @@ pub fn ipe_main() -> IpeTask<()> {
     ({
         let f = {
             let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                Box::new(move |eta_0: i64| -> i64 { main_add(2, eta_0) });
+                Box::new(move |eta_0: i64| -> i64 { crate::main_add(2, eta_0) });
             __sky_fn
         };
         ({
             let p = (f)(3);
             ({
-                let o = (main_over(1))(2);
+                let o = (crate::main_over(1))(2);
                 ({
-                    let h = main_apply_twice(
+                    let h = crate::main_apply_twice(
                         {
                             let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
-                                Box::new(move |eta_0: i64| -> i64 { main_add(1, eta_0) });
+                                Box::new(move |eta_0: i64| -> i64 { crate::main_add(1, eta_0) });
                             __sky_fn
                         },
                         5,

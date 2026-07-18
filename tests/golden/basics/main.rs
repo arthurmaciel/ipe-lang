@@ -259,7 +259,7 @@ pub fn main_update(msg: MainMsg, count: i64) -> i64 {
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(main_update(MainMsg::Increment, 0)))
+    log_println(string_from_int(crate::main_update(MainMsg::Increment, 0)))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

@@ -253,109 +253,27 @@ impl Env {
     /// # Errors
     /// [`ipe_diagnostics::Diagnostic::CompilerBug`] if the interner is exhausted.
     fn install_builtin_ctors(&mut self, interner: &mut Interner) -> DResult<()> {
-        let maybe = interner.intern("Maybe")?;
-        let result = interner.intern("Result")?;
-        let bool_ = interner.intern("Bool")?;
-        // Db ADTs.
-        let sqlvalue = interner.intern("SqlValue")?;
-        let sqlfield = interner.intern("SqlField")?;
-        // Ipe.Http.Stream ADTs (HttpStream kernel qualifier — not a compiled
-        // source module, so their constructors are never registered via
-        // `build_module_exports`; they must be pre-registered here instead).
-        let chunkev = interner.intern("ChunkEvent")?;
-        let streamid = interner.intern("StreamId")?;
-        // Ipe.Error ADTs.
-        //
-        // `Error` is both a type name (currently `IpeError = String` in the runtime)
-        // and a constructor `Error ErrorKind ErrorInfo` — arity 2.  Registering the
-        // constructor here fixes N0003 when a pattern `Error kind info ->` appears in
-        // user code.  `ErrorKind` is a separate ADT with 11 nullary constructors.
-        //
-        // NOTE: full Error ADT migration is PARKED; the runtime still represents
-        // `IpeError` as `String`.  These registrations advance canon past N0003;
-        // the lowerer/backend may surface a new error until the migration lands.
-        let error_type = interner.intern("Error")?;
-        let errorkind = interner.intern("ErrorKind")?;
-        // `ErrorDetails` — the 5-variant enrichment union carried optionally on
-        // `ErrorInfo.details : Maybe ErrorDetails` (same
-        // registration recipe as `ErrorKind`).
-        let errordetails = interner.intern("ErrorDetails")?;
-        // (constructor name, owning built-in type, index within the type, arity).
-        for (name, type_name, index, arity) in [
-            ("True", bool_, 0, 0),
-            ("False", bool_, 1, 0),
-            ("Just", maybe, 0, 1),
-            ("Nothing", maybe, 1, 0),
-            ("Ok", result, 0, 1),
-            ("Err", result, 1, 1),
-            // ── SqlValue variants ─────────────────────────────────────────────
-            // Index order matches the `StdDbSqlValue` enum emitted by the backend
-            // and the `into_sql_param()` dispatch in the runtime; DO NOT reorder.
-            ("SqlString", sqlvalue, 0, 1),
-            ("SqlInt", sqlvalue, 1, 1),
-            ("SqlFloat", sqlvalue, 2, 1),
-            ("SqlBool", sqlvalue, 3, 1),
-            ("SqlBytes", sqlvalue, 4, 1),
-            ("SqlTime", sqlvalue, 5, 1),    // millis: i64
-            ("SqlDecimal", sqlvalue, 6, 1), // lossless TEXT decimal representation
-            ("SqlMoney", sqlvalue, 7, 1),   // "ISO_CODE AMOUNT" format (TEXT)
-            ("SqlNull", sqlvalue, 8, 1),    // type-witness inner value → Null
-            // ── SqlField variants ─────────────────────────────────────────────
-            ("SetField", sqlfield, 0, 1), // SetField : SqlValue -> SqlField
-            ("OmitField", sqlfield, 1, 0), // OmitField : SqlField (nullary)
-            // ── ChunkEvent variants (Ipe.Http.Stream) ───────────────────
-            // Chunk : String -> ChunkEvent
-            ("Chunk", chunkev, 0, 1),
-            // Done : ChunkEvent
-            ("Done", chunkev, 1, 0),
-            // Errored : Error -> ChunkEvent
-            ("Errored", chunkev, 2, 1),
-            // ── StreamId (Ipe.Http.Stream) ──────────────────────────────
-            // StreamId : Int -> StreamId (opaque wrapper used in Stream.open return)
-            ("StreamId", streamid, 0, 1),
-            // ── Error / ErrorKind ─────────────────────────────────────────────
-            // `Error : ErrorKind -> ErrorInfo -> Error` — arity 2.
-            // Registering this fixes N0003 for patterns `Error kind info ->`.
-            ("Error", error_type, 0, 2),
-            // `ErrorKind` — 11 nullary constructors (index order matches the
-            // `ErrorKind` enum order in the PARKED Error ADT design).
-            ("Io", errorkind, 0, 0),
-            ("Network", errorkind, 1, 0),
-            ("Ffi", errorkind, 2, 0),
-            ("Decode", errorkind, 3, 0),
-            ("Timeout", errorkind, 4, 0),
-            ("NotFound", errorkind, 5, 0),
-            ("PermissionDenied", errorkind, 6, 0),
-            ("InvalidInput", errorkind, 7, 0),
-            ("Conflict", errorkind, 8, 0),
-            ("Unavailable", errorkind, 9, 0),
-            ("Unexpected", errorkind, 10, 0),
-            // ── ErrorDetails variants ─────────────────────────────────────────
-            // `FfiPanic : PanicInfo -> ErrorDetails`
-            // `TypeMismatch : TypeInfo -> ErrorDetails`
-            // `HttpStatus : Int -> ErrorDetails`
-            // `JsonDecode : String -> ErrorDetails`
-            // `Custom : String -> ErrorDetails`
-            // Index order matches `ipe_types::constrain`'s ctor scheme
-            // registration and `src/runtime/rust/src/error.rs`'s
-            // `IpeErrorDetails` enum — DO NOT reorder.
-            ("FfiPanic", errordetails, 0, 1),
-            ("TypeMismatch", errordetails, 1, 1),
-            ("HttpStatus", errordetails, 2, 1),
-            ("JsonDecode", errordetails, 3, 1),
-            ("Custom", errordetails, 4, 1),
-        ] {
-            let name = interner.intern(name)?;
-            Rc::make_mut(&mut self.ctors).insert(
-                name,
-                CtorHome {
-                    home: Vec::new(),
-                    type_name,
+        // The full built-in constructor set is drawn from the ONE shared table
+        // (`crate::builtins::BUILTIN_UNIONS`) that `types::exhaust` and `lower`
+        // also consume, so the three can never disagree. Every built-in type
+        // carries no user `type` declaration, so `home` is left empty (matching
+        // how the built-in type names carry no user module); `type_name` is the
+        // built-in type's interned symbol so downstream stages recognise it.
+        for union in crate::builtins::BUILTIN_UNIONS {
+            let type_name = interner.intern(union.type_name)?;
+            for &(name, index, arity) in union.ctors {
+                let name = interner.intern(name)?;
+                Rc::make_mut(&mut self.ctors).insert(
                     name,
-                    index,
-                    arity,
-                },
-            );
+                    CtorHome {
+                        home: Vec::new(),
+                        type_name,
+                        name,
+                        index,
+                        arity,
+                    },
+                );
+            }
         }
         Ok(())
     }

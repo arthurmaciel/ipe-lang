@@ -252,13 +252,13 @@ pub fn main_apply<T1: Clone + Send + 'static, T2: Clone + Send + 'static>(
 }
 pub fn ipe_main() -> IpeTask<()> {
     ({
-        let n = main_identity(40);
+        let n = crate::main_identity(40);
         ({
-            let flag = main_identity((1 == 1));
+            let flag = crate::main_identity((1 == 1));
             ({
-                let c = main_const(2, (5 == 5));
+                let c = crate::main_const(2, (5 == 5));
                 ({
-                    let r = main_apply(
+                    let r = crate::main_apply(
                         {
                             let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
                                 Box::new(move |k: i64| -> i64 { (k + 0) });

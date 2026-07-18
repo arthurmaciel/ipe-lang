@@ -246,7 +246,7 @@ pub fn main_classify(n: i64) -> String {
     }
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(main_classify(1))
+    log_println(crate::main_classify(1))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

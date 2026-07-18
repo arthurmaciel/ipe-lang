@@ -308,14 +308,14 @@ pub fn main_countdown(arg_4: (i64, i64)) -> i64 {
 }
 pub fn ipe_main() -> IpeTask<()> {
     log_println(string_from_int(
-        ((((((((main_apply_i(
+        ((((((((crate::main_apply_i(
             {
                 let __sky_fn: Box<dyn Fn(i64) -> i64 + Send + Sync + 'static> =
                     Box::new(move |arg_5: i64| -> i64 { 42 });
                 __sky_fn
             },
             0,
-        ) + main_apply_p(
+        ) + crate::main_apply_p(
             {
                 let __sky_fn: Box<dyn Fn((i64, i64)) -> i64 + Send + Sync + 'static> =
                     Box::new(move |arg_6: (i64, i64)| -> i64 {
@@ -327,7 +327,7 @@ pub fn ipe_main() -> IpeTask<()> {
                 __sky_fn
             },
             (1, 2),
-        )) + main_apply_r(
+        )) + crate::main_apply_r(
             {
                 let __sky_fn: Box<dyn Fn(RecXY) -> i64 + Send + Sync + 'static> =
                     Box::new(move |arg_7: RecXY| -> i64 {
@@ -339,7 +339,7 @@ pub fn ipe_main() -> IpeTask<()> {
                 __sky_fn
             },
             RecXY { x: 10, y: 5 },
-        )) + main_apply_m({
+        )) + crate::main_apply_m({
             let __sky_fn: Box<dyn Fn(i64, i64, (i64, i64)) -> i64 + Send + Sync + 'static> =
                 Box::new(move |arg_8: i64, x: i64, arg_9: (i64, i64)| -> i64 {
                     ({
@@ -348,11 +348,11 @@ pub fn ipe_main() -> IpeTask<()> {
                     })
                 });
             __sky_fn
-        })) + main_ignore_arg(99))
-            + main_sum_pair((4, 5)))
-            + main_get_y(RecXY { x: 1, y: 8 }))
-            + main_first_of_alias((6, 7)))
-            + main_countdown((5, 0))),
+        })) + crate::main_ignore_arg(99))
+            + crate::main_sum_pair((4, 5)))
+            + crate::main_get_y(RecXY { x: 1, y: 8 }))
+            + crate::main_first_of_alias((6, 7)))
+            + crate::main_countdown((5, 0))),
     ))
 }
 

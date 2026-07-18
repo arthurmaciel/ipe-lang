@@ -242,7 +242,7 @@ pub fn main_increment(n: i64) -> i64 {
     (n + 1)
 }
 pub fn ipe_main() -> IpeTask<()> {
-    log_println(string_from_int(main_increment(41)))
+    log_println(string_from_int(crate::main_increment(41)))
 }
 
 // Ffi.kernel polyfill — should be unreachable in Rust target;

@@ -255,7 +255,7 @@ pub fn main_triple(n: i64) -> i64 {
 }
 pub fn ipe_main() -> IpeTask<()> {
     ({
-        let total = (main_double(5) + main_triple(4));
+        let total = (crate::main_double(5) + crate::main_triple(4));
         log_println(string_from_int(total))
     })
 }
