@@ -63,17 +63,55 @@ static SENDER: OnceLock<mpsc::Sender<Entry>> = OnceLock::new();
 /// Enable the push exporter from env. No-op unless `IPE_PARENT_URL` is set
 /// (i.e. this process runs as a sub-app pushing UP to its parent's ingest —
 /// federation). Idempotent. Call once at Live boot.
+///
+/// Secrets-in-transit: `enable` (below) sends `IPE_INGEST_TOKEN` as a header
+/// on every push. A misconfigured `http://` parent URL would leak that token
+/// on the wire, so this gate mirrors `hub_exporter::enable_from_env`: refuse
+/// to push to anything but `https://`, or `http://` when the host is exactly
+/// a loopback name/address. PARSE the URL rather than string-prefix-matching
+/// it — a prefix check on `"http://localhost"` also matches
+/// `"http://localhost.evil.com"`.
 pub async fn enable_from_env() {
+    // Trim ONCE so the URL we validate is the exact one we push to (same fix
+    // as hub_exporter: a leading-whitespace value otherwise passes the scheme
+    // check yet leaves the space in the built URL).
     let parent = match crate::system::read_env_var(PARENT_ENV) {
-        Ok(p) if !p.is_empty() => p,
+        Ok(p) if !p.trim().is_empty() => p.trim().to_string(),
         _ => return,
     };
+    if !url_allows_cleartext_token(&parent) {
+        eprintln!(
+            "[sky.push] refusing to push ingest token over non-https {PARENT_ENV}={parent}; \
+             use https:// (or a localhost loopback); exporter disabled"
+        );
+        return;
+    }
     let interval_ms = crate::system::read_env_var(INTERVAL_ENV)
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(DEFAULT_INTERVAL_MS);
     let ingest_url = format!("{}/_sky/observability/ingest", parent.trim_end_matches('/'));
     enable("federation", ingest_url, interval_ms);
+}
+
+/// Whether `url` is safe to carry `IPE_INGEST_TOKEN` on the wire: `https://`
+/// unconditionally, or `http://` only when the host is EXACTLY a loopback
+/// name/address. PARSE the URL rather than string-prefix-matching it — a
+/// prefix check on `"http://localhost"` also matches
+/// `"http://localhost.evil.com"`. Mirrors `hub_exporter::enable_from_env`'s
+/// inline gate as a standalone, directly-testable predicate.
+fn url_allows_cleartext_token(url: &str) -> bool {
+    match reqwest::Url::parse(url) {
+        Ok(u) => {
+            u.scheme() == "https"
+                || (u.scheme() == "http"
+                    && matches!(
+                        u.host_str(),
+                        Some("localhost") | Some("127.0.0.1") | Some("[::1]")
+                    ))
+        }
+        Err(_) => false,
+    }
 }
 
 /// Enable pushing THIS app's telemetry to a LOCAL console-child collector
@@ -258,6 +296,35 @@ mod tests {
     fn offer_without_enable_is_noop() {
         offer_log(0, "info", "ignored");
         offer_span(0, "noop", 0, true);
+    }
+
+    // ── url_allows_cleartext_token — the secrets-in-transit gate ────────────
+
+    #[test]
+    fn https_is_always_allowed() {
+        assert!(url_allows_cleartext_token("https://parent.example.com"));
+        assert!(url_allows_cleartext_token("https://127.0.0.1:9000"));
+    }
+
+    #[test]
+    fn http_loopback_is_allowed() {
+        assert!(url_allows_cleartext_token("http://localhost:9000"));
+        assert!(url_allows_cleartext_token("http://127.0.0.1:9000"));
+        assert!(url_allows_cleartext_token("http://[::1]:9000"));
+    }
+
+    #[test]
+    fn http_non_loopback_is_refused() {
+        assert!(!url_allows_cleartext_token("http://parent.example.com"));
+        // A hostname that merely STARTS WITH "localhost" is a distinct host —
+        // a naive prefix check would wrongly allow this.
+        assert!(!url_allows_cleartext_token("http://localhost.evil.com"));
+    }
+
+    #[test]
+    fn malformed_url_is_refused() {
+        assert!(!url_allows_cleartext_token("not-a-url"));
+        assert!(!url_allows_cleartext_token(""));
     }
 
     #[test]
