@@ -195,3 +195,17 @@ Some(RuntimeModule::Live)` arm to `required_runtime_module` in
 unit test in the same file's `mod tests` block asserting the return value.
 Runtime-modset closure tests (`runtime_modset_closure`, 3/3) and kernels unit
 tests (3/3) all pass.
+
+## SEAL-006 · Basics.toString on concrete ADT/record — exit-0-then-cargo-fail
+- severity: high · axis: soundness(SEAL) · prior: new (found by #269 lane)
+- problem: type-checker ACCEPTS `toString` on record/ADT (constrain.rs:2744-2758 STRINGIFY
+  obligation) but backend emits `basics_to_string(x)` where runtime is
+  `basics_to_string<T: std::fmt::Display>` (basics.rs:183). User ADTs/records impl `IpeStringify`,
+  NOT `Display` -> emitted crate cargo-fails E0277. Display-bound propagation (lower.rs:4170-4209)
+  only covers TYPE PARAMS, not a concrete composite arg. Undetected: no golden exercises toString
+  on a user ADT/record. Runtime doc (basics.rs:174-182) claims composite toString should fail at
+  compile — stale; type-checker contract is authoritative.
+- fix direction: route Basics.toString + ErrorToString/Debug.toString stringify family through the
+  IpeStringify path (.ipe_show()/stringify::Wrap(...).dispatch() autoref) at every call site so
+  scalar/record/ADT/generic resolve against IpeStringify (all emitted types + scalars impl it);
+  drop the Display bound. Regression: an ADT-toString example/golden.
