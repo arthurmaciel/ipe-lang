@@ -1312,6 +1312,43 @@ pub enum StdlibKernel {
     DecSubPercent,
     /// `Decimal.formatWith : String -> String -> Int -> Decimal -> String`
     DecFormatWith,
+    // ── Ipe.Money — currency table + FX registry + fair-split allocate ────
+    // The Ipê-side `Money` ADT carries a typed `Currency` enum; the
+    // compiled-source `Ipe.Money` wrappers convert `Currency` to its ISO 4217
+    // code (a `String`) before invoking these kernels, so every property /
+    // format / rate kernel takes the code as a plain `String`. Runtime bodies:
+    // `ipe_runtime::money::*`.
+    /// `Money.minorUnits : String -> Int` — decimal places for a currency's
+    /// minor unit (JPY=0, USD=2, BHD=3, BTC=8; unknown → 2).
+    MoneyMinorUnits,
+    /// `Money.symbol : String -> String` — currency symbol ("$", "€", "₿").
+    MoneySymbol,
+    /// `Money.currencyName : String -> String` — human-readable name.
+    MoneyCurrencyName,
+    /// `Money.isKnownCurrency : String -> Bool` — is the code a recognised
+    /// ISO 4217 / crypto ticker?
+    MoneyIsKnownCurrency,
+    /// `Money.format : String -> Decimal -> String` — symbol-prefixed, rounded
+    /// half-away-from-zero to the currency's minor units ("$2.55").
+    MoneyFormat,
+    /// `Money.formatWithCode : String -> Decimal -> String` — ISO-code suffix
+    /// form ("2.55 USD").
+    MoneyFormatWithCode,
+    /// `Money.allocate : Int -> Int -> Decimal -> List Decimal` — fair split of
+    /// an amount across N parts (minor-unit places, parts, amount); residue
+    /// distributed toward zero. Caps `parts` at 100k (memory-amplification
+    /// guard) and returns `[]` on overflow / non-positive parts.
+    MoneyAllocate,
+    /// `Money.setRate : String -> String -> Decimal -> Result Error ()` —
+    /// register an FX rate (positive-only; auto-inverse; bounded registry).
+    MoneySetRate,
+    /// `Money.getRate : String -> String -> Result Error Decimal` — look up a
+    /// registered rate (identity for from==to; missing → Err).
+    MoneyGetRate,
+    /// `Money.hasRate : String -> String -> Bool`.
+    MoneyHasRate,
+    /// `Money.clearRates : () -> Result Error ()` — drop every registered rate.
+    MoneyClearRates,
     // ── Ipe.Db.Sql — SqlFragment builder ───────────────────────
     // Typed, parameterized WHERE-fragment combinators. Replace the removed
     // `Db.unsafeFindWhere` raw-string escape hatch: a `SqlFragment` can only be
@@ -2747,6 +2784,26 @@ impl StdlibKernel {
             Self::DecAddPercent => d("Decimal", "addPercent", 2, Pure, "decimal_add_percent"),
             Self::DecSubPercent => d("Decimal", "subPercent", 2, Pure, "decimal_sub_percent"),
             Self::DecFormatWith => d("Decimal", "formatWith", 4, Pure, "decimal_format_with"),
+            // ── Ipe.Money — currency table + FX registry + allocate ───────────
+            Self::MoneyMinorUnits => d("Money", "minorUnits", 1, Pure, "money_minor_units"),
+            Self::MoneySymbol => d("Money", "symbol", 1, Pure, "money_symbol"),
+            Self::MoneyCurrencyName => d("Money", "currencyName", 1, Pure, "money_currency_name"),
+            Self::MoneyIsKnownCurrency => d(
+                "Money",
+                "isKnownCurrency",
+                1,
+                Pure,
+                "money_is_known_currency",
+            ),
+            Self::MoneyFormat => d("Money", "format", 2, Pure, "money_format"),
+            Self::MoneyFormatWithCode => {
+                d("Money", "formatWithCode", 2, Pure, "money_format_with_code")
+            }
+            Self::MoneyAllocate => d("Money", "allocate", 3, Pure, "money_allocate"),
+            Self::MoneySetRate => d("Money", "setRate", 3, Pure, "money_set_rate"),
+            Self::MoneyGetRate => d("Money", "getRate", 2, Pure, "money_get_rate"),
+            Self::MoneyHasRate => d("Money", "hasRate", 2, Pure, "money_has_rate"),
+            Self::MoneyClearRates => d("Money", "clearRates", 1, Pure, "money_clear_rates"),
             // ── Ipe.Db.Sql — SqlFragment builder ───────────────
             Self::SqlColumn => d("Sql", "column", 1, Db, "sql_column"),
             // `int` / `string` / `float` / `bool` are Ipê-level type
@@ -3790,6 +3847,17 @@ impl StdlibKernel {
         Self::DecAddPercent,
         Self::DecSubPercent,
         Self::DecFormatWith,
+        Self::MoneyMinorUnits,
+        Self::MoneySymbol,
+        Self::MoneyCurrencyName,
+        Self::MoneyIsKnownCurrency,
+        Self::MoneyFormat,
+        Self::MoneyFormatWithCode,
+        Self::MoneyAllocate,
+        Self::MoneySetRate,
+        Self::MoneyGetRate,
+        Self::MoneyHasRate,
+        Self::MoneyClearRates,
         Self::SqlColumn,
         Self::SqlParam,
         Self::SqlInt,

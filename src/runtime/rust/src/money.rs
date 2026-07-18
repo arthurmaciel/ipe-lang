@@ -81,6 +81,9 @@ fn lookup_currency(code: &str) -> Option<CurrencyInfo> {
         "RUB" => (2, "₽", "Russian Ruble"),
         "UAH" => (2, "₴", "Ukrainian Hryvnia"),
         "BTC" => (8, "₿", "Bitcoin"),
+        "ETH" => (18, "Ξ", "Ether"),
+        "USDT" => (6, "₮", "Tether"),
+        "USDC" => (6, "$", "USD Coin"),
         _ => return None,
     };
     Some(CurrencyInfo {
@@ -247,10 +250,10 @@ pub fn money_has_rate(from: String, to: String) -> bool {
 }
 
 /// `clearRates : () -> Result Error ()` — test/admin only.
-/// Ipê source calls `Ffi.callPure "Money_clearRates" []` — empty args list,
-/// the peephole emits `money_clear_rates()` with no args. The runtime
-/// takes no params accordingly.
-pub fn money_clear_rates<E: From<String>>() -> IpeResult<E, ()> {
+/// The compiled-source `Ipe.Money.clearRates` is a point-free `Ffi.kernel`
+/// alias of type `() -> Result Error ()`, so the emit passes a unit argument
+/// (matching the arity-1 unit-kernel convention, e.g. `uuid_v4(_: ())`).
+pub fn money_clear_rates<E: From<String>>(_: ()) -> IpeResult<E, ()> {
     let mut map = rates().lock().unwrap_or_else(|e| e.into_inner());
     map.clear();
     IpeResult::Ok(())
@@ -474,7 +477,7 @@ mod tests {
     fn test_money_rates_roundtrip() {
         let _guard = rate_test_lock();
         // Clear any rates from prior tests
-        let _: IpeResult<String, ()> = money_clear_rates();
+        let _: IpeResult<String, ()> = money_clear_rates(());
         // Set USD->EUR = 0.9; auto-registers EUR->USD ≈ 1.111
         let _: IpeResult<String, ()> = money_set_rate("USD".into(), "EUR".into(), d("0.9"));
         assert!(money_has_rate("USD".into(), "EUR".into()));
@@ -499,7 +502,7 @@ mod tests {
     #[test]
     fn test_money_set_rate_negative_rejected() {
         let _guard = rate_test_lock();
-        let _: IpeResult<String, ()> = money_clear_rates();
+        let _: IpeResult<String, ()> = money_clear_rates(());
         let r: IpeResult<String, ()> = money_set_rate("USD".into(), "EUR".into(), d("-1"));
         assert!(matches!(r, IpeResult::Err(_)));
         let r: IpeResult<String, ()> = money_set_rate("USD".into(), "EUR".into(), d("0"));
