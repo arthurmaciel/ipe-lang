@@ -45,10 +45,8 @@ fn current_uid() -> u32 {
 #[cfg(unix)]
 fn is_trusted_cache_dir(dir: &Path) -> bool {
     use std::os::unix::fs::MetadataExt as _;
-    match std::fs::metadata(dir) {
-        Ok(md) => md.uid() == current_uid() && md.mode() & 0o002 == 0,
-        Err(_) => false,
-    }
+    std::fs::metadata(dir)
+        .map_or(false, |md| md.uid() == current_uid() && md.mode() & 0o002 == 0)
 }
 
 #[cfg(not(unix))]
@@ -56,11 +54,13 @@ fn is_trusted_cache_dir(_dir: &Path) -> bool {
     true
 }
 
-/// Walk up from `start` (a file or directory) looking for an FFI artifact
-/// cache, bounded at the nearest `sky.toml` project root — never above it, so
-/// a planted ancestor cache outside the project cannot be discovered. A found
-/// cache not owned by the invoking uid (or group/other-writable) is REFUSED,
-/// not loaded, since its `_bindings.rs` compiles unsandboxed into the crate.
+/// Walk up from `start` looking for an FFI artifact cache, bounded at the
+/// nearest `sky.toml` project root.
+///
+/// Never walks above the nearest `sky.toml`, so a planted ancestor cache
+/// outside the project cannot be discovered. A found cache not owned by the
+/// invoking uid (or group/other-writable) is REFUSED, not loaded, since its
+/// `_bindings.rs` compiles unsandboxed into the crate.
 ///
 /// # Errors
 ///
