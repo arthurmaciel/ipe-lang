@@ -248,11 +248,13 @@ pub fn bwrap_argv(
     spec: &JailSpec,
     payload: &[OsString],
 ) -> Vec<OsString> {
-    let mut argv: Vec<OsString> = Vec::new();
-    argv.push(timeout.into());
-    argv.push("--kill-after=5s".into());
-    argv.push(spec.limits.wall_secs.to_string().into());
-    argv.push(bwrap.into());
+    // The wall clock wraps everything: `timeout --kill-after=5s <wall> bwrap …`.
+    let mut argv: Vec<OsString> = vec![
+        timeout.into(),
+        "--kill-after=5s".into(),
+        spec.limits.wall_secs.to_string().into(),
+        bwrap.into(),
+    ];
     if spec.network == NetworkPolicy::Denied {
         argv.push("--unshare-net".into());
     }

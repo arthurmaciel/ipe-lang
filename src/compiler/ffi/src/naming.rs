@@ -76,8 +76,9 @@ impl IdentPath {
     }
 }
 
-/// A validated Rust PATH segment as it appears in a foreign-call `path` list:
-/// an [`IdentPath`] with an OPTIONAL leading `::` (the absolute crate-root
+/// A validated Rust PATH segment as it appears in a foreign-call `path` list.
+///
+/// An [`IdentPath`] with an OPTIONAL leading `::` (the absolute crate-root
 /// prefix the inspector emits, e.g. `::box1`). Joined by `::` at render, so
 /// each segment must be idents-and-`::` only — no injection charset survives.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,10 +110,12 @@ impl std::fmt::Display for RustPathSegment {
     }
 }
 
-/// A validated Rust TYPE expression, restricted to the closed grammar the FFI
-/// emitter actually produces and renders VERBATIM: `::`-paths of identifiers,
-/// angle-bracket generic application, `&`/`&mut ` borrow prefixes, tuples and
-/// unit `()`, fixed-size arrays `[T; N]`, and `, ` separators.
+/// A validated Rust TYPE expression restricted to the closed grammar the FFI
+/// emitter renders verbatim.
+///
+/// Admits `::`-paths of identifiers, angle-bracket generic application,
+/// `&`/`&mut ` borrow prefixes, tuples and unit `()`, fixed-size arrays
+/// `[T; N]`, and `, ` separators — and nothing else.
 ///
 /// The parser admits exactly this closed charset with a bracket-depth check,
 /// so a rendered type can never open a new item or statement: `;` outside a
@@ -206,8 +209,9 @@ impl std::fmt::Display for RustTypeExpr {
     }
 }
 
-/// A validated `<pattern>` fragment for an enum-accessor match arm: a
-/// `RustIdent` variant head optionally followed by `(..)` or `{..}` (the only
+/// A validated `<pattern>` fragment for an enum-accessor match arm.
+///
+/// A `RustIdent` variant head optionally followed by `(..)` or `{..}` (the only
 /// two shapes the enum-tag/extract emitters produce). Anything else — a
 /// binding pattern, a guard, a nested pattern, an injection charset — is
 /// rejected, so the arm text cannot escape the `match`.
@@ -247,9 +251,11 @@ impl std::fmt::Display for RustPattern {
     }
 }
 
-/// A validated field SELECTOR: either a `RustIdent` (a struct-variant field
-/// name) or a decimal index (a tuple position). Any other byte is rejected, so
-/// the selector cannot render as arbitrary code in a match binder.
+/// A validated field SELECTOR.
+///
+/// Either a `RustIdent` (a struct-variant field name) or a decimal index (a
+/// tuple position). Any other byte is rejected, so the selector cannot render
+/// as arbitrary code in a match binder.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldSelector(String);
 
